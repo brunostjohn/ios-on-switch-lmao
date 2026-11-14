@@ -86,3 +86,16 @@ TEST(TegraDfllLanding, ARowLandsTheSameFromAboveAndFromBelow)
 			<< "1785 MHz from 1683 and from 918";
 	});
 }
+
+TEST(TegraDfllLanding, ALoopStillComingDownAtTheFirstLookIsLookedAtAgain)
+{
+	switch_ios::test::ExpectPassesInFreshProcess([] {
+		tegra_dfll_landing_set_slew(100);  // one LUT step in 10 ms: still over MIN at the first look, 41 ms on
+		ASSERT_EQ(tegra_dfll_landing_start(1797 * kMHz, kPerLutStep, 1785 * kMHz), 0);
+		tegra_dfll_landing_run_ms(1000);
+		expectLanded(1785 * kMHz, "1785 MHz at enable, the loop coming down from 945 mV");
+		askAndSettle(1683 * kMHz);
+		tegra_dfll_landing_run_ms(800);
+		expectLanded(1683 * kMHz, "1683 MHz from 1785, the loop coming down");
+	});
+}

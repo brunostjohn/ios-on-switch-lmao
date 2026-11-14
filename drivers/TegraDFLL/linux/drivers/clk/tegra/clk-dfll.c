@@ -1280,7 +1280,7 @@ static void dfll_calibrate(struct tegra_dfll *td)
 {
 	u32 val, data;
 	ktime_t now;
-	unsigned long rate;
+	unsigned long rate, pinned_rate;
 	unsigned long rate_min = td->dvco_rate_min;
 	u8 out_min = dfll_get_output_min(td);
 
@@ -1292,12 +1292,11 @@ static void dfll_calibrate(struct tegra_dfll *td)
 	 *  - last request engaged clock skipper
 	 *  - at least specified time after the last calibration attempt
 	 *
-	 * SWITCH: or the last request's loop sits at DFLL_OUTPUT_CFG MIN: its DVCO runs from a floor over the request,
-	 * so rate_min is under that floor too.
+	 * SWITCH: with the I2C PMIC, every request: one over rate_min may come to rest at DFLL_OUTPUT_CFG MIN too,
+	 * its DVCO then running from a floor over the request, and only a look once its loop has settled tells.
 	 */
 	if ((td->mode != DFLL_CLOSED_LOOP) ||
-	    ((td->last_req.dvco_target_rate > rate_min) &&
-	     ((td->pmu_if != TEGRA_DFLL_PMU_I2C) || (READ_LAST_I2C_VAL(td) != out_min))))
+	    ((td->last_req.dvco_target_rate > rate_min) && (td->pmu_if != TEGRA_DFLL_PMU_I2C)))
 		return;
 
 	now = ktime_get();
@@ -1417,13 +1416,17 @@ static void dfll_calibrate(struct tegra_dfll *td)
 	 * its target, so a request skipped from rate_min runs from the floor instead: up to a step fast under L4T's
 	 * rule, which settled anywhere within a step of the floor and stepped down whenever the loop sat above MIN.
 	 * Pinned there, rate_min rises to the request step at or above the measured rate plus one monitor unit (one
-	 * sample's quantisation); above MIN the loop holds rate_min itself, so it stands.
+	 * sample's quantisation). Above MIN and a step or more over its target, the loop is still coming down from the
+	 * request's forced output: looked at again a period later. Otherwise the loop holds rate_min, so it stands.
 	 */
 	rate = dfll_calc_monitored_rate(data, td->ref_rate);
-	rate = ROUND_DVCO_MIN_RATE(rate + td->ref_rate / REF_CLK_CYC_PER_DVCO_SAMPLE, td->ref_rate);
-	if ((val == out_min) && (rate > rate_min))
-		rate_min = rate;
-	else {
+	pinned_rate = ROUND_DVCO_MIN_RATE(rate + td->ref_rate / REF_CLK_CYC_PER_DVCO_SAMPLE, td->ref_rate);
+	if ((val == out_min) && (pinned_rate > rate_min)) {
+		rate_min = pinned_rate;
+	} else if ((val > out_min) && (rate > td->last_req.dvco_target_rate + td->ref_rate / 2)) {
+		calibration_timer_update(td);
+		return;
+	} else {
 		int t_floor_out, t_floor_idx = td->thermal_floor_index;
 		struct thermal_tv tv;
 

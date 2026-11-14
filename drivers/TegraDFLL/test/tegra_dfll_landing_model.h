@@ -22,6 +22,9 @@ int tegra_dfll_landing_start(unsigned long floor_hz, unsigned long per_step_hz,
 int tegra_dfll_landing_request(unsigned long rate_hz);
 void tegra_dfll_landing_run_ms(unsigned int ms);
 void tegra_dfll_landing_set_floor(unsigned long floor_hz);
+// From the next request on, the output comes down from the request's forced value (DFLL_FREQ_REQ FORCE_VAL) at
+// `steps_per_s` LUT steps a second instead of at once, the oscillator running at that output meanwhile.
+void tegra_dfll_landing_set_slew(unsigned long steps_per_s);
 unsigned long tegra_dfll_landing_cpu_hz(void);
 bool tegra_dfll_landing_pinned(void);  // at OUTPUT_CFG MIN with the oscillator over its target
 unsigned long tegra_dfll_landing_dvco_rate_min(void);

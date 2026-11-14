@@ -22,6 +22,10 @@ static uint64_t now_ns;
 static unsigned long irqs_off;
 static unsigned int blocking;
 static unsigned long floor_hz, per_step_hz;
+static unsigned long slew_per_s; /* 0: the output reaches its rest at once */
+static unsigned int forced_out;  /* a request's forced output, coming down from forced_at */
+static uint64_t forced_at;
+static bool forced;
 
 struct call {
 	void (*fn)(void *arg);
@@ -87,6 +91,16 @@ static struct loop settle(void)
 	}
 	while (l.out < hi && dvco_at(l.out) < target)
 		l.out++;
+	if (forced) {
+		const uint64_t steps = (now_ns - forced_at) * slew_per_s / 1000000000ull;
+
+		if (forced_out > l.out + steps) {
+			l.out = forced_out - (unsigned int)steps;
+			l.dvco = (unsigned long)dvco_at(l.out);
+			return l;
+		}
+		forced = false;
+	}
 	l.pinned = l.out == lo && dvco_at(l.out) > target;
 	/* between two LUT steps the loop holds its target on average */
 	l.dvco = (unsigned long)(l.pinned || dvco_at(l.out) < target ? dvco_at(l.out) : target);
@@ -114,6 +128,14 @@ void switch_mmio_model_write32(uintptr_t address, uint32_t value)
 	if (off >= sizeof(regs))
 		__builtin_trap();
 	regs[off / 4] = value;
+	if (off == DFLL_FREQ_REQ && (value & DFLL_FREQ_REQ_FORCE_ENABLE) && slew_per_s) {
+		const int force = (int32_t)(value << 4) >> 20; /* FORCE_VAL, 27:16, signed */
+		const int out = (int)model.lut_safe + force * model.cg / 128;
+
+		forced_out = out < 0 ? 0 : out > (int)OUT_MASK ? OUT_MASK : (unsigned int)out;
+		forced_at = now_ns;
+		forced = true;
+	}
 }
 
 void _disable_preemption(void)
@@ -326,6 +348,11 @@ void tegra_dfll_landing_run_ms(unsigned int ms)
 void tegra_dfll_landing_set_floor(unsigned long floor)
 {
 	floor_hz = floor;
+}
+
+void tegra_dfll_landing_set_slew(unsigned long steps_per_s)
+{
+	slew_per_s = steps_per_s;
 }
 
 unsigned long tegra_dfll_landing_cpu_hz(void)
