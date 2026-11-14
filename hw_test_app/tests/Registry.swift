@@ -81,7 +81,7 @@ public enum Registry {
         + [DisplayBufferTest()]
         // The shader compiler's generation covers every test before it.
         + [CompilerAliveTest()]
-        // May stop NVJPG's host1x channel for 50 ms: last.
+        // May stop the display's host1x channel for 50 ms: last.
         + [DcHost1xClassTest()]
         // Leaves this app for Settings and opens it again: last, so no other test runs while it is away.
         + [LaunchHitchTest()]

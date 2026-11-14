@@ -24,11 +24,13 @@ enum {
     TEGRA_HOST1X_EAGAIN = -35,     // no command arena room until earlier jobs' fences pass
 };
 
-// Host1x class IDs (Linux include/linux/host1x.h: HOST1X_CLASS_HOST1X, ..._NVENC, ..._VIC, ..._NVJPG, ..._NVDEC).
+// Host1x class IDs (Linux include/linux/host1x.h: HOST1X_CLASS_HOST1X, ..._NVENC, ..._VIC, ..._NVJPG, ..._NVDEC; L4T
+// dc_common.c NV_DISPLAY_CLASS_ID for DC A, whose method offsets are its register indices).
 enum {
     TEGRA_HOST1X_CLASS_HOST1X = 0x01,
     TEGRA_HOST1X_CLASS_NVENC = 0x21,
     TEGRA_HOST1X_CLASS_VIC = 0x5d,
+    TEGRA_HOST1X_CLASS_DC = 0x70,
     TEGRA_HOST1X_CLASS_NVJPG = 0xc0,
     TEGRA_HOST1X_CLASS_NVDEC = 0xf0,
 };
@@ -115,13 +117,15 @@ void tegra_host1x_set_strict(void);
 
 // Command DMA channels, one per engine as mainline gives every client its own (vic.c, nvdec.c, nvjpg.c
 // host1x_channel_request; T210 has 14): a stream that waits for another engine (WAIT_SYNCPT) holds up only its own
-// engine. NVDEC keeps channel 0.
+// engine, and a teardown drops only its own channel's jobs. NVDEC keeps channel 0; the display's class 0x70 streams to
+// DC A have their own.
 enum {
     TEGRA_HOST1X_CHANNEL_DEFAULT = 0,
     TEGRA_HOST1X_CHANNEL_VIC = 1,
     TEGRA_HOST1X_CHANNEL_NVENC = 2,
     TEGRA_HOST1X_CHANNEL_NVJPG = 3,
-    TEGRA_HOST1X_CHANNELS = 4
+    TEGRA_HOST1X_CHANNEL_DISPLAY = 4,
+    TEGRA_HOST1X_CHANNELS = 5
 };
 
 // A job's stream is written in place in its channel's command arena (below 4 GiB) and host1x gathers it from there, so
