@@ -87,7 +87,7 @@ void switch_fsctl_failed(vnode_t vp, unsigned long cmd, const void *data, int er
     } else {
         strlcpy(fork, "no resource fork", sizeof(fork));
     }
-    if (vnode_isreg(vp) && vn_rdwr(UIO_READ, vp, (caddr_t)head, sizeof(head), 0, UIO_SYSSPACE, IO_NOAUTH,
+    if (vnode_isreg(vp) && vn_rdwr(UIO_READ, vp, (caddr_t)head, (int)sizeof(head), 0, UIO_SYSSPACE, IO_NOAUTH,
                                    vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx)) == 0) {
         switch_fsctl_describe_content(head, sizeof(head) - (size_t)resid, content, sizeof(content));
     } else {
