@@ -27,16 +27,20 @@ struct cpu_data {
 };
 typedef struct cpu_data cpu_data_t;
 
+// Each read-modify-write the idle code issues is counted (defined by the test).
+void idle_test_count_rmw(void);
+
 #define idle_test_order_relaxed  __ATOMIC_RELAXED
 #define idle_test_order_acquire  __ATOMIC_ACQUIRE
 #define idle_test_order_release  __ATOMIC_RELEASE
 #define idle_test_order_acq_rel  __ATOMIC_ACQ_REL
 #define os_atomic_load(p, m)     __atomic_load_n((p), idle_test_order_##m)
 #define os_atomic_store(p, v, m) __atomic_store_n((p), (v), idle_test_order_##m)
-#define os_atomic_xchg(p, v, m)  __atomic_exchange_n((p), (v), idle_test_order_##m)
+#define os_atomic_xchg(p, v, m)  (idle_test_count_rmw(), __atomic_exchange_n((p), (v), idle_test_order_##m))
 #define os_atomic_cmpxchg(p, e, v, m)                                                                             \
     ({                                                                                                            \
         __typeof__(*(p)) idle_test_expected = (e);                                                                \
+        idle_test_count_rmw();                                                                                    \
         __atomic_compare_exchange_n((p), &idle_test_expected, (v), false, idle_test_order_##m, __ATOMIC_RELAXED); \
     })
 

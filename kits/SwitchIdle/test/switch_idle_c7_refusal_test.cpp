@@ -52,6 +52,9 @@ void record(const char *format, va_list args)
 }  // namespace
 
 extern "C" {
+void idle_test_count_rmw(void)
+{}
+
 uint64_t mach_absolute_time(void)
 {
     return idle_test_now;
