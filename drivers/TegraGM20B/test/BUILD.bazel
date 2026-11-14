@@ -2056,6 +2056,21 @@ host_test(
     ],
 )
 
+# The writer promises' sleepers list: with the registry it takes no locks in a cycle (the host IOLock records the
+# order), and a waiting snapshot that orders behind a promise on the GPU wakes when its CPU writer leaves.
+host_test(
+    name = "switch_gpu_promise_sleepers_test",
+    srcs = [
+        "switch_gpu_backing_fixture.h",
+        "switch_gpu_promise_sleepers_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuWriterPromise.cpp",
+    ],
+    deps = [
+        ":backing",
+        ":coherency_kernel",
+    ],
+)
+
 host_shims(
     name = "ready_kernel",
     headers = [

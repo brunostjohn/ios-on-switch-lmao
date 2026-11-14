@@ -61,7 +61,7 @@ struct switch_gpu_backing {
 	uint32_t promise_count, promised_readers;
 	// CPU threads asleep on it behind a pending promise (SwitchGpuPromiseSleepers.cpp, under its lock)
 	switch_gpu_backing *promise_sleep_next, *promise_sleep_prev;
-	uint32_t promise_sleepers, promise_woken;
+	uint32_t promise_sleepers;
 	const void *host_acquire_handle;  // host_acquire's timeline, as a record's handle
 };
 
