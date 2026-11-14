@@ -14,6 +14,8 @@
 #   switch_monotonic_base_test       SwitchMonotonicBase.h: kern.monotonicclock never reads below the previous boot's
 #   switch_thermal_dfll_test         SwitchThermalDfll.h against a stand-in SwitchThermal: a DFLL failure fails that
 #                                    raise and the next raise runs the same path; only -ENODEV ends the DFLL mode
+#   switch_pllx_start_test           SwitchPllxStart.h: PLLX started again in the TRM's order (5.1.5: IDDQ, dividers,
+#                                    lock detection, enable, lock)
 # The headers are C: each is compiled as C11 with -Wconversion -Wsign-conversion in a harness (its static inline
 # functions as exported ones) and driven by a GoogleTest test.
 #
@@ -171,4 +173,12 @@ host_test(
         "//drivers/TegraDFLL:TegraDFLL.h",
     ],
     data = ["//drivers/SwitchPower:SwitchThermal.cpp"],
+)
+
+host_test(
+    name = "switch_pllx_start_test",
+    srcs = [
+        "switch_pllx_start_test.cpp",
+        "//drivers/SwitchPower:SwitchPllxStart.h",
+    ],
 )
