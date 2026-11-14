@@ -13,7 +13,6 @@
 #include <sys/xattr.h>
 
 #include <switch/fsctl_diag.h>
-#include <switch/xnu.h>
 
 #include <kern/kalloc.h>
 #include <os/log.h>
@@ -56,7 +55,7 @@ void switch_fsctl_failed(vnode_t vp, unsigned long cmd, const void *data, int er
     if (data != NULL) {
         memcpy(words, data, MIN(sizeof(words), (size_t)IOCPARM_LEN(cmd)));
     }
-    switch_task_name(current_task(), process, sizeof(process));
+    proc_selfname(process, sizeof(process));
     path = kalloc_data(MAXPATHLEN, Z_WAITOK);
     if (path != NULL && vn_getpath(vp, path, &len) == 0) {
         tail = strlen(path) > FSCTL_DIAG_PATH ? path + strlen(path) - FSCTL_DIAG_PATH : path;
