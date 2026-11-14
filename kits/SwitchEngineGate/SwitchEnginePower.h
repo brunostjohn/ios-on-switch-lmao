@@ -107,6 +107,19 @@ inline void ungatePulse(const SwitchEnginePower &p)
             switch_car_clock_disable(p.ungateClocks[i]);
 }
 
+// Only after a real ungate: a partition already on has no clamp left to remove, and what the command does then is
+// documented nowhere (TRM 12.2.7: software must not un-gate a unit already un-gated; L4T returns early for one).
+inline bool unclamp(const SwitchEnginePower &p)
+{
+    switch_pmc_remove_clamping(p.partition);
+    for (uint32_t i = 0; i < 100; i++) {
+        if (!(switch_pmc_read(kPmcRemoveClamping) & (1u << p.partition)))
+            return true;
+        IODelay(1);
+    }
+    return false;
+}
+
 inline void mbistWorkaround(const SwitchEnginePower &p)
 {
     if (b01())
@@ -158,7 +171,8 @@ inline bool switch_engine_power_down(const SwitchEnginePower &p)
     return switch_engine_quiesce(p) && switch_pmc_partition_off(p.partition);
 }
 
-// false: the partition did not power on, its clamps stayed, or the clock or reset did not take.
+// false: the partition did not power on, its clamps stayed (it is powered back off, so the next power-up ungates it
+// again), or the clock or reset did not take.
 inline bool switch_engine_power_up(const SwitchEnginePower &p, bool *wasOn)
 {
     using namespace switch_engine_power;
@@ -171,16 +185,19 @@ inline bool switch_engine_power_up(const SwitchEnginePower &p, bool *wasOn)
     switch_car_clock_enable(p.clock);
     switch_car_reset_assert(p.clock);
     IODelay(kStepUs);
-    if (!*wasOn)
+    if (!*wasOn) {
         ungatePulse(p);
-    switch_pmc_remove_clamping(p.partition);
-    bool unclamped = false;
-    for (uint32_t i = 0; i < 100 && !unclamped; i++) {
-        unclamped = !(switch_pmc_read(kPmcRemoveClamping) & (1u << p.partition));
-        if (!unclamped)
-            IODelay(1);
+        if (!unclamp(p)) {
+            IOLog("%s: partition %u kept its clamps: REMOVE_CLAMPING_CMD %#x CLAMP_STATUS %#x after 100 us; powered "
+                  "back off\n",
+                  p.name, p.partition, switch_pmc_read(kPmcRemoveClamping), switch_pmc_read(kPmcClampStatus));
+            switch_car_clock_disable(p.clock);
+            IODelay(kStepUs);
+            (void)switch_pmc_partition_off(p.partition);
+            return false;
+        }
+        IODelay(kStepUs);
     }
-    IODelay(kStepUs);
     switch_car_reset_deassert(p.clock);
     IODelay(kStepUs);
     unflush(p);
@@ -188,7 +205,7 @@ inline bool switch_engine_power_up(const SwitchEnginePower &p, bool *wasOn)
     mbistWorkaround(p);
     moduleReset(p);
     p.moduleTeardown(p.host1xModule);
-    return unclamped && switch_car_clock_enabled(p.clock) && !switch_car_reset_asserted(p.clock);
+    return switch_car_clock_enabled(p.clock) && !switch_car_reset_asserted(p.clock);
 }
 
 // t210/cg_regs.c: the module's clock-gating prod values, after its reset and before its falcon boots.

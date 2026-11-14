@@ -61,6 +61,9 @@ protected:
 TEST_F(FalconInterrupt, TheFilterOnlyReadsTheParkedErrorAndTheActionTurnsTheLineOff)
 {
     line.on();
+    EXPECT_EQ(gWrites, (std::vector<std::pair<uint32_t, uint32_t>>{{SWITCH_FALCON_THI_INT_MASK, 1}}))
+        << "on() enables THI's falcon interrupt";
+    gWrites.clear();
     raise();
     ASSERT_TRUE(source->fire());
     EXPECT_TRUE(gWrites.empty()) << "the falcon must stay parked: nothing is cleared before the cancellation";

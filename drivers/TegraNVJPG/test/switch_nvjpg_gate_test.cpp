@@ -154,8 +154,28 @@ TEST_F(NVJPGGate, APowerOnWaitsForTheRemoveClampingCommandNotTheLegacyClampStatu
     gEngine.clampStuck = true;
     EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), -19);
     EXPECT_TRUE(logged("did not come up (PWRGATE_STATUS 0 REMOVE_CLAMPING_CMD 0x4000000 CLAMP_STATUS 0x4000000"));
+    EXPECT_TRUE(logged("TegraNVJPG: partition 26 kept its clamps: REMOVE_CLAMPING_CMD 0x4000000 CLAMP_STATUS 0x4000000"));
+    EXPECT_FALSE(gEngine.partitionOn) << "powered back off, so the next power-up ungates it again";
     gEngine.clampStuck = false;
     EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0) << "the next decode powers it on again";
+}
+
+// A partition already on (NVDEC's keeps NVJPG's on, or the boot chain left it on) has no clamp to remove: no command is
+// sent to it, so a REMOVE_CLAMPING_CMD bit that would stay set for such a partition cannot fail the power-on.
+TEST_F(NVJPGGate, APartitionAlreadyOnIsNotSentTheRemoveClampingCommand)
+{
+    gEngine.nvdecPartitionOn = true;
+    gEngine.removeSticksWhenUnclamped = true;
+    idle();
+    const size_t from = gEngine.events.size();
+    TegraNVJPGJob job = decodeJob();
+    nvjpg_dec_status status = {};
+    EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    EXPECT_TRUE(gEngine.steps(from, {"unclamp"}).empty());
+    EXPECT_FALSE(logged("power-on FAIL"));
+    gEngine.nvdecPartitionOn = false;
+    gEngine.removeSticksWhenUnclamped = false;
+    gEngine.removePending = false;
 }
 
 // STATUS reads done for a client with no flush requested, so a request another writer dropped looks drained unless

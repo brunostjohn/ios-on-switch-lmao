@@ -89,6 +89,7 @@ void SwitchFalconInterrupt::on()
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock_);
     powered_ = true;
     onAt_ = taken_;
+    switch_mmio_write32(engine_, SWITCH_FALCON_THI_INT_MASK, SWITCH_FALCON_THI_FALCON_INT);
     IOSimpleLockUnlockEnableInterrupt(lock_, state);
     source_->enable();
 }
@@ -131,7 +132,8 @@ void SwitchFalconInterrupt::lostCheckStart()
 void SwitchFalconInterrupt::lostCheckEnd()
 {
     if (!source_ || !checkPending_ || !switch_falcon_error_pending(engine_) || taken() != onAt_ ||
-        !__atomic_load_n(&powered_, __ATOMIC_ACQUIRE))
+        !__atomic_load_n(&powered_, __ATOMIC_ACQUIRE) ||
+        !(switch_mmio_read32(engine_, SWITCH_FALCON_THI_INT_MASK) & SWITCH_FALCON_THI_FALCON_INT))
         return;
     char gic[192];
     char error[256];

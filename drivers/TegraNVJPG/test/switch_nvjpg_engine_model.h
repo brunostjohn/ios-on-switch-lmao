@@ -29,9 +29,11 @@ namespace {
 struct Engine {
     bool partitionOn = true, clamped = false, clockOn = false, inReset = true, falconRunning = false;
     bool flushed = false, nvdecPartitionOn = false;
-    bool requestDropped = false;       // another writer clears NVJPG's request bit after it is set
-    bool clampStatusStale = false;     // CLAMP_STATUS keeps reading set (a legacy register, TRM 12.6.12)
-    bool clampStuck = false;           // REMOVE_CLAMPING_CMD never clears
+    bool requestDropped = false;             // another writer clears NVJPG's request bit after it is set
+    bool clampStatusStale = false;           // CLAMP_STATUS keeps reading set (a legacy register, TRM 12.6.12)
+    bool clampStuck = false;                 // REMOVE_CLAMPING_CMD never clears
+    bool removeSticksWhenUnclamped = false;  // a command to a partition with no clamp leaves its bit set
+    bool removePending = false;
     bool falconErrorInDecode = false;  // the falcon raises MSDECOS_ERROR_APPLICATION and parks during a decode
     std::string decodeWaitEnded;       // "falcon": the decode's wait ended on the error, not at its bound
     std::vector<std::string> events;
@@ -347,6 +349,7 @@ bool switch_pmc_partition_off(unsigned partition)
 
 void switch_pmc_remove_clamping(unsigned)
 {
+    gEngine.removePending = gEngine.removeSticksWhenUnclamped && !gEngine.clamped;
     gEngine.clamped = gEngine.clampStuck;
     gEngine.events.push_back("unclamp");
 }
@@ -354,7 +357,7 @@ void switch_pmc_remove_clamping(unsigned)
 uint32_t switch_pmc_read(uint32_t offset)
 {
     if (offset == 0x34)
-        return gEngine.clamped ? 1u << 26 : 0;
+        return gEngine.clamped || gEngine.removePending ? 1u << 26 : 0;
     return offset == 0x2c && (gEngine.clamped || gEngine.clampStatusStale) ? 1u << 26 : 0;
 }
 
