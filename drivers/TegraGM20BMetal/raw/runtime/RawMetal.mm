@@ -382,9 +382,9 @@ id<MTLDevice> raw_metal_device_open_lazy(const char *packPath, uint64_t stack, u
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             logGivenBack(relieved, passes, kept);
 #else
-            (void)relieved;
-            (void)passes;
-            (void)kept;
+        (void)relieved;
+        (void)passes;
+        (void)kept;
 #endif
         },
         nullptr, &r->rangesInFlight);

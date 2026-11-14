@@ -4,8 +4,7 @@
 #include "switch_gpu_pin_stubs.h"
 #include "drivers/TegraGM20B/SwitchGpuPin.h"
 
-struct switch_gpu_backing {
-};
+struct switch_gpu_backing {};
 
 struct switch_gpu_cached_mapping {
 	unsigned identity;
