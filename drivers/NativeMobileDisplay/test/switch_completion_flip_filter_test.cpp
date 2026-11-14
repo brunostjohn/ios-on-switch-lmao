@@ -31,7 +31,6 @@ protected:
         gVicStatus = 1;
         gWaits = 0;
         gLog.clear();
-        d.completionFlipsProven = true;
         d.startCompletionFlip();
     }
 

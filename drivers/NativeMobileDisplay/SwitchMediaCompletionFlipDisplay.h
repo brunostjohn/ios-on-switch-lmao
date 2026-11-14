@@ -55,16 +55,7 @@ bool mediaFlipIdle() const
 
 static bool sameWindowLayout(const switch_display::Overlay &a, const switch_display::Overlay &b)
 {
-    if (a.on != b.on)
-        return false;
-    if (!a.on)
-        return true;
-    const native_planes::Image &x = a.image, &y = b.image;
-    return a.depth == b.depth && x.surfaceKind == y.surfaceKind && x.vOffset == y.vOffset &&
-           x.colorDepth == y.colorDepth && x.position == y.position && x.size == y.size && x.prescaled == y.prescaled &&
-           x.dda == y.dda && x.lineStride == y.lineStride && x.hOffset == y.hOffset && x.options == y.options &&
-           x.hInitial == y.hInitial && x.vInitial == y.vInitial && x.yuv == y.yuv && x.matrix == y.matrix &&
-           x.fullRange == y.fullRange && x.byteSwap == y.byteSwap && !y.convert;
+    return switch_display::sameGeometry(a, b) && !(a.on && b.image.convert);
 }
 
 uint32_t windowAddress(const switch_display::Overlay &overlay, unsigned plane) const
