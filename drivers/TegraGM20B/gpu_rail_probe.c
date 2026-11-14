@@ -53,10 +53,11 @@ int tgm_probe_fence(u32 *chid, u64 *us)
 
 		if ((s32)(tgm_chan_completed(chan) - seqno) >= 0)
 			break;
-		if (nvxnu_nanotime() >= end)
+		if (nvxnu_nanotime() >= end) {
 			ret = -ETIMEDOUT;
-		else
+		} else {
 			nvxnu_idle(seq, end);
+		}
 	}
 	gate_leave();
 	*us = (nvxnu_nanotime() - start) / 1000;
