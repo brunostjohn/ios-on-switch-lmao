@@ -49,9 +49,10 @@ path, and the worker advertises that Xcode's build as the `xcode` exec property.
    LaunchAgents (`com.brunostjohn.switch.bazel-runner`, `-worker`, `-floor`) and starts them.
 
 Inputs are cached in `~/Library/Caches/switch-ios-worker/cache`, up to the given size. Each executor runs its actions in
-`build/<number>/` next to it, and the last action's input root stays there until the executor's next action. Logs go to `runner.log` and `worker.log`. While free disk is under the floor
-(20 GiB by default), the floor job takes the runner out of service, and the worker takes no new work until there is
-room again. Restarting the worker empties its cache.
+`build/<number>/` next to it, and the last action's input root stays there until the executor's next action. Logs go
+to `runner.log` and `worker.log`. While free disk is under the floor (20 GiB by default), the floor job takes the
+runner out of service, and the worker takes no new work until there is room again. Restarting the worker empties its
+cache and its build directory.
 
 To stop a worker, boot out its three jobs: `launchctl bootout gui/$(id -u)/com.brunostjohn.switch.bazel-worker`,
 then the same for `-runner` and `-floor`.
