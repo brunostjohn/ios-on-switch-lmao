@@ -608,7 +608,8 @@ int tgm_order_waits(struct tgm_chan *chan);
  * three frames ago). For a reader outside the GPU client, NativeLegacyDisplay's copy of a swapped IOSurface: wait until
  * every submission made so far on every live channel has completed (or its channel died), then clean+invalidate
  * [va, va + bytes) to the point of coherency. With no user channel it returns at once and touches no cache, so the CPU
- * renderer's path pays nothing. Returns 0, or -ETIMEDOUT after timeout_ns (the range is invalidated either way). */
+ * renderer's path pays nothing. Returns 0, or -ETIMEDOUT after timeout_ns (the range is invalidated either way), or
+ * -ENOMEM with no wait when its snapshot of the channels' seqnos cannot be allocated. */
 #define TGM_SYNC_MAX 512 /* 64 connections x 8 channels */
 
 /* Host methods of MAXWELL_CHANNEL_GPFIFO_A not in the trimmed cl906f.h (open-gpu-doc classes/host/clb06f.h) */

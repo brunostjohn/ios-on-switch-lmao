@@ -715,6 +715,68 @@ host_test(
     cxx_std = "c++17",
 )
 
+# gpu_sync.c whole, its #include lines left out for gm20b_sync_stubs.h's stand-ins: CPU syncs on threads.
+genrule(
+    name = "sync_source",
+    testonly = True,
+    srcs = ["//drivers/TegraGM20B:gpu_sync.c"],
+    outs = ["sync_source.h"],
+    cmd = """
+set -e
+grep -v '^#include' $< > $@
+grep -q '^int tegra_gm20b_sync_for_cpu(' $@
+""",
+)
+
+SYNC_UNIT_HDRS = [
+    "gm20b_sync_stubs.h",
+    "//drivers/TegraGM20B:TegraGM20BABI.h",
+    "//drivers/TegraGM20B:TegraGM20BFences.h",
+    "//drivers/TegraGM20B:TegraGM20BGpu.h",
+]
+
+host_library(
+    name = "sync_unit",
+    srcs = [
+        "gm20b_sync_unit.c",
+        ":sync_source",
+    ],
+    hdrs = SYNC_UNIT_HDRS,
+    c_std = "gnu11",
+    copts = ["-Wno-unused-function"],
+)
+
+host_test(
+    name = "gm20b_sync_test",
+    srcs = ["gm20b_sync_test.cpp"],
+    deps = [":sync_unit"],
+)
+
+# The same CPU syncs under ThreadSanitizer
+host_library(
+    name = "sync_unit_tsan",
+    srcs = [
+        "gm20b_sync_unit.c",
+        ":sync_source",
+    ],
+    hdrs = SYNC_UNIT_HDRS,
+    c_std = "gnu11",
+    copts = [
+        "-Wno-unused-function",
+        "-fsanitize=thread",
+    ],
+    sanitize = False,
+)
+
+host_test(
+    name = "gm20b_sync_tsan_test",
+    srcs = ["gm20b_sync_test.cpp"],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+    deps = [":sync_unit_tsan"],
+)
+
 host_test(
     name = "gm20b_source_test",
     srcs = ["gm20b_source_test.cpp"],
