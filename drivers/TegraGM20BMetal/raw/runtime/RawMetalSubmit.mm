@@ -386,9 +386,11 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
         countDriver(1);
         {
             RAW_ENCODE_SPAN(Retire);
-            retireRawRange(cb, range.from, range.to);
+            // Core Animation's waitUntilScheduled returns before the retirement's bookkeeping: a waitUntilCompleted that
+            // follows finds its range in flight or wakes the completion thread for it (retireRawRange)
             if (last)
                 scheduled(cb);
+            retireRawRange(cb, range.from, range.to);
         }
 #if SWITCH_FRAME_TIMELINE
         folded();

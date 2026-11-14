@@ -48,7 +48,7 @@ public:
         node->item = std::move(item);
         count_.fetch_add(1, std::memory_order_relaxed);
         node->next = given_.load(std::memory_order_relaxed);
-        while (!given_.compare_exchange_weak(node->next, node, std::memory_order_release, std::memory_order_relaxed))
+        while (!given_.compare_exchange_weak(node->next, node, std::memory_order_seq_cst, std::memory_order_relaxed))
             ;
         if (wake)
             dispatch_semaphore_signal(wake_);
@@ -215,10 +215,12 @@ private:
         return node;
     }
 
-    // The taker looks on every pass of its loop: a look with nothing given is a load, no exchange
+    // The taker looks on every pass of its loop: a look with nothing given is a load, no exchange. Sequentially
+    // consistent with the push, so a waker that counted itself after a push (and a giver that pushed, then loaded that
+    // count) leaves the look it wakes seeing the push.
     void take()
     {
-        if (!given_.load(std::memory_order_relaxed))
+        if (!given_.load(std::memory_order_seq_cst))
             return;
         Node *given = given_.exchange(nullptr, std::memory_order_acquire);
         Node *first = nullptr, *last = given;

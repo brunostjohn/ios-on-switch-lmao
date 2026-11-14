@@ -19,27 +19,7 @@ namespace {
 using namespace harness;
 using Clock = std::chrono::steady_clock;
 
-struct Opened {
-    id<MTLDevice> device;
-    id<MTLRenderPipelineState> state;
-};
-
-const Opened &opened()
-{
-    static const Opened made = [] {
-        const std::string pack = writePack(packKey(MTLPixelFormatBGRA8Unorm));
-        const std::string metallib = writeMetallib();
-        id<MTLDevice> device = open(pack);
-        if (!device)
-            return Opened{};
-        NSError *error = nil;
-        id<MTLLibrary> library = [device newLibraryWithURL:[NSURL fileURLWithPath:@(metallib.c_str())] error:&error];
-        id<MTLRenderPipelineState> state =
-            [device newRenderPipelineStateWithDescriptor:descriptor(library, MTLPixelFormatBGRA8Unorm) error:&error];
-        return Opened{device, state};
-    }();
-    return made;
-}
+using scale_frames::opened;
 
 double percentileOf(std::vector<double> v, double p)
 {

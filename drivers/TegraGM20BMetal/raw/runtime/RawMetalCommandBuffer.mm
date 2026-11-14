@@ -722,7 +722,7 @@ void rmPoolCommandBuffers()
     const BlockedWait blocked(gRM->stats.completedWaits, gRM->stats.completedWaitUs);
 #endif
     // a range of it in flight may have ended quiet: the completion thread waits for the newest one
-    gRM->completionWaiters.fetch_add(1, std::memory_order_release);
+    gRM->completionWaiters.fetch_add(1, std::memory_order_seq_cst);
     gRM->inflight.wake();
     waitFor(self, [&] {
         return _completedDone.load();
