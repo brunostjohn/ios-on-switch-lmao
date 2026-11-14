@@ -83,8 +83,11 @@ std::string copiesAndLaunches(size_t first)
         for (size_t i = 0; i < w.size();) {
             const uint32_t h = w[i++], op = h >> 29, count = (h >> 16) & 0x1fff, sub = (h >> 13) & 7,
                            method = (h & 0xfff) << 2;
-            if (op == 4)  // immediate data: no payload words
+            if (op == 4) {  // immediate data (Push::m below 0x2000, the copy engine's launches among them): no payload
+                if (sub == kCopy && method == kLaunchDma && (count & 3))
+                    out += 'C';
                 continue;
+            }
             for (uint32_t k = 0; k < count && i < w.size(); ++k, ++i) {
                 const uint32_t m = op == 1 ? method + 4 * k : op == 5 ? method + (k ? 4 : 0) : method;
                 if (sub == kCopy && m == kLaunchDma && (w[i] & 3))
