@@ -1534,11 +1534,8 @@ private:
     void vsyncTick()
     {
         if (vblankSource) {
-            // A polled panel command that overlapped the start may have restored INT_ENABLE without our bits; it is over by now.
-            if (frameEnds) {
-                dc[kDcIntEnable] = dc[kDcIntEnable] | kVblankInt | kFrameEndInt | (vpulseProgrammed ? kVpulse2Int : 0);
+            if (frameEnds)
                 return;
-            }
             char gic[192];
             switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
             panic("SwitchDisplay: no DC A frame end in 250 ms: INT_STATUS %#x MASK %#x ENABLE %#x, %s",

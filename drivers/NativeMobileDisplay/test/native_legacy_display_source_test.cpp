@@ -316,6 +316,17 @@ TEST(FrameEndSource, MaskedWhileNothingWaits)
 
 // A blank swap blacks the head through the colour unit only while no flip is out, and the first flip latched after it
 // ends the black: an older flip's latch must never show a frame the blank swap replaced.
+// The start's 250 ms check only proves frame ends arrive: INT_ENABLE has no writer outside the display's own start,
+// stop, resume and the routes it enables (TegraPanel's DSI steps read it), so nothing re-applies it.
+TEST(FrameEndSource, TheStartCheckWritesNoInterruptEnable)
+{
+    EXPECT_FALSE(method("void vsyncTick()").Has("dc[kDcIntEnable] ="));
+    EXPECT_TRUE(method("void vsyncTick()").Has("no DC A frame end in 250 ms"));
+    const CodeText panel(SourceText("../../SwitchBrightness/TegraPanel.cpp"));
+    EXPECT_TRUE(panel.Has("gDc[DC_CMD_INT_ENABLE]"));
+    EXPECT_FALSE(panel.Has("gDc[DC_CMD_INT_ENABLE] ="));
+}
+
 TEST(BlankSource, ColourBlankEndsAtTheNextLatch)
 {
     EXPECT_TRUE(code().Has("rotated && rotationLatched && doubleBuffer && ring.pending == kNoBuffer &&"));
