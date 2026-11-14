@@ -1,4 +1,4 @@
-import Darwin
+import Foundation
 import HWTestCore
 
 /// Window A flipped by host1x instead of the CPU (drivers/NativeMobileDisplay/SwitchHost1xFlipDisplay.h, debug
