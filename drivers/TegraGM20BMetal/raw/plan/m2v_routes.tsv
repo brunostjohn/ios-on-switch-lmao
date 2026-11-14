@@ -76,61 +76,59 @@ product	pred	tex.surf.plane	RawMetalDevice.mm	form	-	x1-m2v-open	open	0	a plane 
 product	pred	tex.view	RawMetalTexture.mm	form	-	-	open	procs=1	views of another texel size or of a part of a 3D texture: TIC views made at view creation
 product	need	HW Test's m2v device	RawMetalDevice.mm	dead	-	x1-oracle2	open	asked=1,opened=0	HW Test's comparison arms open the m2v device (switchRawM2V): the tests move off it first
 product	need	a Core Image filter library	RawMetalStates.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a Core Image filter library (D2)
-product	need	a YCbCr target state's twin	RawMetalYcbcrTargets.mm	dead	-	cut	cut	asked=2,opened=0	a YCbCr target state's m2v twin; the state raw refuses is the raw:state.ycbcr row
-product	need	a buffer over an IOSurface the kernel would not import	RawMetalDevice.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a buffer over an IOSurface the kernel would not import (POST-MERGE D3)
+product	need	a YCbCr target state's twin	RawMetalYcbcrTargets.mm	form	-	x1-m2v-forms	open	asked=2,opened=0	a YCbCr target state raw refuses (blended, channel-masked, formats ycbcrTargetRefusal names) is m2v's alone; with reflection, m2v's reflection (D1); the stand-in state's twin is replay's
+product	need	a buffer over an IOSurface the kernel would not import	RawMetalDevice.mm	error	raw:buffer.surface	-	open	asked=0,opened=0	SPI newBufferWithIOSurface: of a one-plane, page-aligned untiled surface whose import the kernel refused: an m2v buffer handed to the client. Without m2v nil, as the method already answers for planar, unaligned or tiled surfaces (needs its line)
 product	need	a buffer the pool had no room for	RawMetalDevice.mm	error	raw:buffer.pool	x1-m2v-open	open	asked=0,opened=0	the pool had no room: m2v's buffer; the pool grows or nil as Metal answers with no memory (POST-MERGE D5)
 product	need	a buffer's twin	RawMetalBuffer.mm	dead	-	cut	cut	asked=5,opened=0	a buffer's m2v twin for replay
-product	need	a bundle's default library raw does not read	RawMetalLibraries.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a bundle's default library raw does not read (D2)
+product	need	a bundle's default library raw does not read	RawMetalLibraries.mm	form	-	x1-m2v-open	open	asked=0,opened=0	newDefaultLibraryWithBundle:error:: a bundle's default.metallib raw does not read; nil and Metal's error where there is none (D2)
 product	need	a command buffer replayed on m2v	RawMetalSubmit.mm	dead	-	cut	cut	asked=5,opened=0	a command buffer range replayed on m2v; its reasons are the pred rows
 product	need	a command queue for a command buffer replayed on it	RawMetalCommandBuffer.mm	dead	-	cut	cut	asked=5,opened=0	the m2v command queue replays run on
-product	need	a compute state the pack has no facts of	RawMetalComputeState.mm	form	-	x1-m2v-open	open	asked=6,opened=4	a compute state the pack has no facts of: made on m2v (boot 21: 6 processes, 4 opened m2v for it)
-product	need	a compute state's reflection	RawMetalComputeState.mm	form	-	x1-m2v-open	open	asked=2,opened=0	a compute state's reflection made on m2v (POST-MERGE D1)
-product	need	a compute state's twin	RawMetalComputeState.mm	form	-	-	open	asked=2,opened=0	a raw compute state's m2v twin: replay, and RMComputePipeline forwards every selector it lacks to it (forwardingTargetForSelector), so raw must answer each
+product	need	a compute state the pack has no facts of	RawMetalComputeState.mm	form	-	-	open	asked=6,opened=4	compute state creation whose key has no pack facts, or unkeyed (linked functions, a function not raw's): m2v answers its facts, or is the state and its dispatches replay (boot 21: 6 processes, 4 opened m2v: cameracaptured, mediaanalysisd, Maps, ScreenshotServicesService)
+product	need	a compute state's reflection	RawMetalComputeState.mm	form	-	-	open	asked=2,opened=0	compute state creation with a reflection pointer: m2v's reflection handed to the client (D1 names render reflection only)
+product	need	a compute state's twin	RawMetalComputeState.mm	dead	-	cut	cut	asked=2,opened=0	replay's twin, and the target of RMComputeState's forwardingTargetForSelector: for every selector it lacks; those then answer zero (selcover lists what kinds send)
 product	need	a depth/stencil state's twin	RawMetalDepthStencil.mm	dead	-	cut	cut	asked=3,opened=0	a depth/stencil state's m2v twin for replay (POST-MERGE D6)
 product	need	a fence's twin	RawMetalFences.mm	dead	-	cut	cut	asked=0,opened=0	a fence's m2v twin for replay (POST-MERGE D6)
-product	need	a function of a kind raw does not list	RawMetalLibrary.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a function of a kind raw does not list, made by the m2v twin
-product	need	a function raw does not list	RawMetalLibrary.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a function raw does not list, made by the m2v twin
-product	need	a function's argument encoder	RawMetalArgumentEncoder.mm	form	-	x1-m2v-open	open	asked=1,opened=0	an argument encoder's layouts read from the function's m2v twin (bridge native_bridge_metal_argument_layouts)
-product	need	a function's constants	RawMetalLibrary.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a function's functionConstantsDictionary answered from its m2v twin
-product	need	a function's options	RawMetalLibrary.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a function's options answered from its m2v twin
-product	need	a function's stage input attributes	RawMetalLibrary.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a function's stageInputAttributes answered from its m2v twin
-product	need	a function's twin	RawMetalLibrary.mm	form	-	x1-m2v-open	open	asked=8,opened=0	a function's m2v twin (boot 21: 8 processes)
-product	need	a function's type	RawMetalLibrary.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a function's type answered from its m2v twin when the metallib did not give one
-product	need	a function's vertex attributes	RawMetalLibrary.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a function's vertexAttributes answered from its m2v twin
-product	need	a heap texture's size the raw path does not place	RawMetalHeap.mm	form	-	x1-m2v-open	open	asked=0,opened=0	heapTextureSizeAndAlignWithDescriptor: for a texture raw does not place in a heap
+product	need	a function of a kind raw does not list	RawMetalLibrary.mm	form	-	-	open	asked=0,opened=0	newFunctionWithName: of a listed name raw gives no type: the m2v twin's function handed out
+product	need	a function raw does not list	RawMetalLibrary.mm	form	-	-	open	asked=0,opened=0	newFunctionWithDescriptor:error: with a nil name or a listed name raw gives no type (dynamic export, extern, unknown): the m2v twin's function handed out
+product	need	a function's argument encoder	RawMetalArgumentEncoder.mm	form	-	-	open	asked=1,opened=0	an argument encoder's layouts read from the function's m2v twin (bridge native_bridge_metal_argument_layouts)
+product	need	a function's constants	RawMetalLibrary.mm	form	-	-	open	asked=0,opened=0	a function's functionConstantsDictionary answered from its m2v twin
+product	need	a function's options	RawMetalLibrary.mm	form	-	-	open	asked=0,opened=0	a function's options answered from its m2v twin
+product	need	a function's stage input attributes	RawMetalLibrary.mm	form	-	-	open	asked=0,opened=0	a function's stageInputAttributes answered from its m2v twin
+product	need	a function's twin	RawMetalLibrary.mm	dead	-	cut	cut	asked=8,opened=0	a function's m2v twin, read by the rows that make m2v states and libraries and by the in-process compile (debug builds with no compiler only)
+product	need	a function's vertex attributes	RawMetalLibrary.mm	form	-	-	open	asked=0,opened=0	a function's vertexAttributes answered from its m2v twin
+product	need	a heap texture's size the raw path does not place	RawMetalHeap.mm	form	-	-	open	asked=0,opened=0	heapTextureSizeAndAlignWithDescriptor: of a descriptor raw does not place in an arena: m2v's answer handed out; every descriptor a heap can make needs raw's answer
 product	need	a library from a URL raw does not read	RawMetalLibraries.mm	form	-	x1-m2v-open	open	asked=3,opened=1	a library from a URL raw does not read (POST-MERGE D2)
 product	need	a library from a file raw does not read	RawMetalLibraries.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a library from a file raw does not read (D2)
 product	need	a library from data raw does not read	RawMetalLibraries.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a library from data raw does not read (D2)
 product	need	a library from source	RawMetalLibraries.mm	form	-	x1-m2v-open	open	asked=1,opened=0	a library from source: compiled in the daemon (D2)
-product	need	a library's extern function names	RawMetalLibrary.mm	form	-	x1-m2v-open	open	asked=5,opened=2	a library's extern function names answered from its m2v twin (boot 21: 5 processes, 2 opened m2v for it)
-product	need	a library's function names	RawMetalLibrary.mm	form	-	x1-m2v-open	open	asked=5,opened=0	a library's function names answered from its m2v twin (boot 21: 5 processes)
-product	need	a library's twin	RawMetalLibrary.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a library's m2v twin, made for what raw does not answer from the metallib it read
-product	need	a library's type	RawMetalLibrary.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a library's type answered from its m2v twin
+product	need	a library's extern function names	RawMetalLibrary.mm	form	-	-	open	asked=5,opened=2	-externFunctionNames from the m2v twin (Core Image; boot 21: 5 processes, 2 opened m2v for it): MetallibEntries.h metallibExternNames over the AIR slice
+product	need	a library's function names	RawMetalLibrary.mm	form	-	-	open	asked=5,opened=0	-functionNames from the m2v twin (boot 21: 5 processes): every non-extern entry of the AIR slice (drivers/NativeMetal/MetallibEntries.h has the walk)
+product	need	a library's twin	RawMetalLibrary.mm	dead	-	cut	cut	asked=0,opened=0	-[RMLibrary rmTwin], reached only through twinOf (replay); a function's twin calls twinOn under its own need
+product	need	a library's type	RawMetalLibrary.mm	form	-	-	open	asked=0,opened=0	-type answered from the m2v twin: MTLLibraryTypeExecutable for what raw reads (dynamic libraries are refused)
 product	need	a linear row of a format raw does not lay out	RawMetalDeviceAnswers.mm	form	-	-	open	asked=0,opened=0	minimumLinearTextureAlignmentForPixelFormat: of a format raw does not lay out
 product	need	a no-copy buffer the raw path refused	RawMetalDevice.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a no-copy buffer raw refused (POST-MERGE D3)
 product	need	a no-copy texture the raw path does not take	RawMetalNoCopy.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a no-copy texture raw does not take (POST-MERGE D4)
-product	need	a packed render state's twin	RawMetalStates.mm	dead	-	cut	cut	asked=0,opened=0	a packed render state's lazy m2v twin for replay
+product	need	a packed render state's twin	RawMetalStates.mm	form	-	x1-m2v-open	open	asked=0,opened=0	as a render state's twin, for a state the descriptor's archives declare (lazy)
 product	need	a raw state's twin, at its first m2v replay	RawMetalStates.mm	dead	-	cut	cut	asked=4,opened=3	a raw state's m2v twin, made at its first replay
-product	need	a render state's twin	RawMetalStates.mm	dead	-	cut	cut	asked=0,opened=0	a render state's m2v twin for replay
+product	need	a render state's twin	RawMetalStates.mm	form	-	x1-m2v-open	open	asked=0,opened=0	the only drawing form of a state raw has no record of: vertex-only states (RenderBox path_edges), compiler-refused ones (C7); else nil and Metal's error
 product	need	a render state's twin with its reflection	RawMetalStates.mm	form	-	x1-m2v-open	open	asked=1,opened=0	a render state's reflection made on m2v (POST-MERGE D1)
 product	need	a replay's argument-buffer check	RawMetalReplay.mm	dead	-	cut	cut	asked=0,opened=0	whether a replayed function takes an argument buffer
-product	need	a sampler's twin	RawMetalStates.mm	dead	-	cut	cut	asked=3,opened=0	a sampler's m2v twin for replay (POST-MERGE D6)
-product	need	a specialized function raw does not list	RawMetalLibrary.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a specialized function raw does not list, made by the m2v twin
+product	need	a sampler's twin	RawMetalStates.mm	form	-	x1-m2v-forms	open	asked=3,opened=0	a sampler raw::takeSampler refuses is m2v's alone (an RMTwinObject); its draws are call.sampler's; also replay's twin
+product	need	a specialized function raw does not list	RawMetalLibrary.mm	form	-	-	open	asked=0,opened=0	newFunctionWithName:constantValues: with nil values or a typeless name: raw's function:as:values:specialized: covers owned names with nil values; typeless kinds as NeedLibraryFunction
 product	need	a stitched library	RawMetalStates.mm	form	-	x1-m2v-open	open	asked=4,opened=0	a stitched library (D2; boot 21 Maps, iconservicesagent)
 product	need	a texture layout the raw path does not take	RawMetalNoCopy.mm	form	-	x1-m2v-open	open	asked=0,opened=0	a texture layout raw does not take (heap- and buffer-backed no-copy layouts, POST-MERGE D4)
 product	need	a texture of a shape the raw path does not take	RawMetalDevice.mm	form	-	x1-m2v-forms	open	asked=0,opened=0	a texture of a shape raw does not keep (tex.shape)
 product	need	a texture the raw path made no memory for	RawMetalDevice.mm	error	raw:tex.pool	x1-m2v-open	open	asked=0,opened=0	no raw memory for a texture: the pool grows or nil as Metal answers with no memory (POST-MERGE D5)
-product	need	a texture's twin	RawMetalTexture.mm	dead	-	cut	cut	asked=6,opened=0	a texture's m2v twin for replay and CPU writes into twins (boot 21: 6 processes)
+product	need	a texture's twin	RawMetalTexture.mm	form	-	-	open	asked=6,opened=0	(a) creation of surface, buffer and view textures raw refuses needs the twin (D4, x1-m2v-open); (b) replaceRegion/getBytes of a raw texture with no CPU path writes the twin: no owner; (c) replay (boot 21: 6 processes)
 product	need	a tile render state	RawMetalStates.mm	error	raw:state.unsupported	x1-m2v-forms	open	asked=0,opened=0	a tile render state: Apple4 tile shaders, not advertised; made on m2v today (POST-MERGE C6)
 product	need	an extern function	RawMetalLibrary.mm	form	-	x1-m2v-open	open	asked=0,opened=0	an extern function made by the m2v twin
-product	need	an indirect command buffer of dispatches replayed on it	RawMetalIndirectExecute.mm	dead	-	cut	cut	asked=0,opened=0	an indirect command buffer of dispatches copied into m2v for a replay
-product	need	m2v's -[MTLDevice selector]	RawMetalM2V.mm	dead	-	cut	cut	asked=0,opened=0	a device selector forwarded to m2v's device method; the sel rows name the ones kinds send
-product	need	the main bundle's default library raw does not read	RawMetalLibraries.mm	form	-	x1-m2v-open	open	asked=2,opened=0	the main bundle's default library raw does not read (D2)
+product	need	m2v's -[MTLDevice selector]	RawMetalM2V.mm	dead	-	cut	cut	asked=0,opened=0	a device selector only m2v's device class has: none left statically (all 75 NBDeviceMethods selectors and the bridge's 98 answer selectors have raw methods or answer rows); switchRawM2V forwarders on device confirms
+product	need	the main bundle's default library raw does not read	RawMetalLibraries.mm	form	-	x1-m2v-open	open	asked=2,opened=0	newDefaultLibrary: the main bundle's default.metallib raw does not read (boot 21: Photos, Spotlight); nil where the bundle has none (D2)
 product	tag	frontend:sharedevent.handle	TegraGM20BMetalPlugin.mm	dead	-	cut	cut	procs=0	the plugin's answer for the frontend's cross-process shared event selectors; goes with the frontend
 product	tag	raw:buffer.pool	RawMetalDevice.mm	error	raw:buffer.pool	x1-m2v-open	open	procs=0	the pool could not grow: the buffer is an m2v buffer and its users go to m2v (call.buf); once m2v is gone the pool grows or the buffer is nil as Metal answers with no memory (POST-MERGE D5)
 product	tag	raw:call.cbinvocation	RawMetalCommandBuffer.mm	form	-	x1-m2v-forms	open	procs=0	a command buffer selector raw lacks and m2v's command buffer has: recorded for m2v (call.cbinv); with m2v's class gone it would be answered zero: each such selector needs raw's method (inventory.tsv lists none sent today)
 product	tag	raw:call.counter_sample	RawMetalCounterEncode.mm	none	-	-	main	procs=0	sampleCountersInBuffer: on an encoder: not supported, as supportsCounterSampling: answers
-product	tag	raw:call.invocation	RawMetalEncoder.mm	form	-	x1-m2v-forms	open	procs=1	an encoder selector raw lacks and m2v's encoder has: recorded for m2v (call.inv); the sel rows name the ones the kinds send (indirect dispatch, stage-in, tile dispatch)
+product	tag	raw:call.invocation	RawMetalEncoder.mm	form	-	x1-m2v-forms	open	procs=1	an encoder selector raw lacks and m2v's encoder has: recorded for m2v (call.inv). Raw also forwards setPrimitiveRestartEnabled:NO, setViewportTransformEnabled:NO, setProvokingVertexMode: other than 0 and setLineWidth: other than 1 here (RawMetalRenderEncoder.mm), which with m2v's classes gone would be answered zero, a silent wrong draw: each needs raw's form. The sel rows name what kinds send
 product	tag	raw:call.pointer	RawMetalCommandBuffer.mm,RawMetalEncoder.mm	dead	-	cut	cut	procs=0	an invocation recorded for m2v with a pointer argument of unknown extent; goes with invocation recording
 product	tag	raw:comp.private	RawMetalPrivateComp.mm	none	-	-	main	procs=0	a compressed texture's pages asked inside a raw encode: refused, raw's own
 product	tag	raw:counter.anchors	RawMetalCounters.mm	none	-	-	main	procs=0	raw's counters: no clock anchors from the kernel
@@ -151,13 +149,12 @@ product	tag	raw:icb.memory	RawMetalIndirect.mm,RawMetalIndirectCompute.mm	none	-
 product	tag	raw:icb.patches	RawMetalIndirectPatches.mm	none	-	-	main	procs=0	patch arguments on an indirect buffer with no patch commands: ignored, logged
 product	tag	raw:icb.range	RawMetalIndirect.mm,RawMetalIndirectBlit.mm,RawMetalIndirectExecute.mm	none	-	-	main	procs=0	an execute range outside its buffer: none run, logged
 product	tag	raw:icb.region	RawMetalIndirectCompute.mm	none	-	-	main	procs=0	an indirect dispatch command whose regions raw cannot lay out: the command is empty, logged
-product	tag	raw:icb.replay	RawMetalIndirect.mm,RawMetalIndirectExecute.mm	dead	-	cut	cut	procs=0	an execute of a GPU-read range replayed on m2v draws nothing; goes with replay
 product	tag	raw:layout.copy	RawMetalNoCopy.mm	none	-	-	main	procs=0	a block-layout copy outside the image: refused, raw's own
 product	tag	raw:library.dag	RawMetalDeviceBase.mm	none	-	-	main	procs=0	newLibraryWithDAG: refused with an NSError, as m2v refused it
 product	tag	raw:limits.layout	RawMetalDeviceBase.mm	none	-	-	main	procs=0	a limits field _MTLDevice does not read where raw writes it
 product	tag	raw:pass.ycbcr	RawMetalYcbcrTargets.mm	form	-	x1-m2v-forms	open	procs=0	a YCbCr or packed 10-bit (588/589) attachment loaded: the pass goes to m2v (POST-MERGE C4, Load on the packed formats)
 product	tag	raw:pipelinelibrary	RawMetalDeviceAnswers.mm	none	-	-	main	procs=2	a pipeline library: none for this GPU, file not found as Metal answers
-product	tag	raw:planar.target	RawMetalDevice.mm	form	-	x1-m2v-forms	open	procs=0	no stand-in for a 4:4:4 planar render target: its passes go to m2v (enc.planarrt)
+product	tag	raw:planar.target	RawMetalDevice.mm	none	-	-	main	procs=0	no stand-in for a 4:4:4 planar render target: logged; the texture stays raw for sampling and a pass into it is enc.planarrt's row
 product	tag	raw:queue.priority	RawMetalQueuePriority.mm	none	-	-	main	procs=0	the kernel did not take the queues' GPU priority
 product	tag	raw:replay.arguments	RawMetalReplay.mm	dead	-	cut	cut	procs=0	a range replayed on m2v reads raw's argument buffer or heap: the command buffer fails; goes with replay
 product	tag	raw:replay.attachment	RawMetalReplay.mm	dead	-	cut	cut	procs=0	a range replayed on m2v whose attachment has no m2v twin: the command buffer fails; goes with replay
@@ -166,9 +163,9 @@ product	tag	raw:replay.zeta	RawMetalMultisample.mm	dead	-	cut	cut	procs=0	a rang
 product	tag	raw:selector.missing	RawMetalPredicates.mm	dead	-	cut	cut	procs=0	a selector m2v's object answers and raw lacks: answered zero with a fault line; with m2v's classes gone every such selector is selector.zero's (selcover selgaps.txt lists raw's gaps)
 product	tag	raw:selector.zero	RawMetalPredicates.mm	none	-	-	main	procs=0	a selector no Metal object of the kind answers: zero, logged once per selector and class
 product	tag	raw:state.tests_unpacked	RawMetalCubic.mm	none	-	-	main	procs=0	a packed state's test class the pack builder could not make: drawn on raw without it, logged
-product	tag	raw:state.unpacked	RawMetalStates.mm	form	-	x1-m2v-forms	open	procs=0	a state neither in the pack nor made at creation: m2v draws it (state.pack, state.notpack); POST-MERGE C7: a form or Metal's failure, never m2v
+product	tag	raw:state.unpacked	RawMetalStates.mm	form	-	x1-m2v-forms	open	procs=0	a state neither in the pack nor made at creation (compiler refused, no key, a nil fragment function: vertex- or depth-only states never get a record, States.mm _completable): m2v draws it. Without m2v rmFinishState answers nil with *error unset: it must set Metal's error and log
 product	tag	raw:state.unsupported	RawMetalUnsupported.mm	none	-	-	main	procs=0	a state refused at creation with MTLLibraryErrorUnsupported
-product	tag	raw:state.variant_unpacked	RawMetalCubic.mm	form	-	x1-m2v-forms	open	procs=0	a packed state's variant the pack lacks: its draws are refused to m2v (POST-MERGE C7)
+product	tag	raw:state.variant_unpacked	RawMetalCubic.mm	form	-	x1-m2v-forms	open	procs=0	a packed state's variant the pack lacks: published refused, so variantReadiness sends the range to m2v with no predicate (ident range.raw=false); POST-MERGE C7
 product	tag	raw:state.ycbcr	RawMetalYcbcrTargets.mm	form	-	x1-m2v-forms	open	procs=0	a blended, channel-masked or unconverted YCbCr colour attachment: the state is left to m2v
 product	tag	raw:tex.swizzle	RawMetalTexture.mm	dead	-	cut	cut	procs=0	m2v's twin of a swizzled view samples unswizzled; goes with twins
 product	tag	raw:texture.bytesnocopy	RawMetalNoCopy.mm	form	-	x1-m2v-open	open	procs=0	a no-copy texture raw does not take: m2v's (need a no-copy texture the raw path does not take; POST-MERGE D4)
@@ -178,20 +175,20 @@ product	tag	raw:texture.shared.device	RawMetalSharedTextures.mm	none	-	-	main	pr
 product	tag	raw:texture.shared.handle	RawMetalSharedTextures.mm	none	-	-	main	procs=0	Metal's MTLSharedTextureHandle lacks initWithIOSurface:label:
 product	tag	raw:texture.shared.open	RawMetalSharedTextures.mm	none	-	-	main	procs=0	a shared texture handle with no IOSurface, or one raw cannot open: nil
 product	tag	raw:texture.shared.surface	RawMetalSharedTextures.mm	none	-	-	main	procs=0	IOSurfaceCreate refused a shared texture's surface: nil
-product	tag	raw:twin.texture	RawMetalTexture.mm	dead	-	cut	cut	procs=3	no m2v twin for a texture (boot 21: cameracaptured, mediaanalysisd, HW Test); goes with twins
+product	tag	raw:twin.texture	RawMetalTexture.mm	dead	-	cut	cut	procs=3	no m2v twin for a texture (boot 21: cameracaptured, mediaanalysisd, HW Test). Textures raw keeps no form of answer nil once m2v is gone: the tex.* pred rows carry those forms
 product	tag	raw:xr.planes	RawMetalXrPlanes.mm	form	-	x1-m2v-forms	open	procs=0	no raw texture over a two-plane extended-range surface: m2v's (POST-MERGE C2)
 product	tag	raw:xr.planes_pass	RawMetalEncoder.mm	form	-	x1-m2v-forms	open	procs=0	an extended-range two-plane pass raw refuses: m2v's (pass.fmt 550; POST-MERGE C2)
-product	tag	raw:ycbcr.target	RawMetalYcbcrTargets.mm	form	-	x1-m2v-forms	open	procs=0	no stand-in or store state for a YCbCr render target: its passes go to m2v (enc.planarrt)
+product	tag	raw:ycbcr.target	RawMetalYcbcrTargets.mm	none	-	-	main	procs=0	no stand-in or store state for a YCbCr render target: logged; passes into it are pass.ycbcr's and enc.planarrt's rows
 product	tag	raw:zeta.owned	RawMetalMultisample.mm	error	raw:zeta.owned	x1-m2v-forms	open	procs=0	a stored depth/stencil texture with no zeta memory stays m2v's: once m2v is gone, nil as Metal answers with no memory (POST-MERGE C1)
 product	sel	MTLComputeCommandEncoder dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:	inventory.tsv	form	-	x1-m2v-forms	open	-	recorded for m2v (call.inv): indirect dispatch on raw (POST-MERGE C, the fallback-encoder forms)
 product	sel	MTLComputeCommandEncoder setStageInRegionWithIndirectBuffer:indirectBufferOffset:	inventory.tsv	form	-	x1-m2v-forms	open	-	recorded for m2v (call.inv), iOS 27 only: stage-in on raw
-product	sel	MTLDevice currentAllocatedSize	inventory.tsv	native	-	cut	cut	-	forwarded: raw's own bytes plus the m2v device's if open (RawMetalDeviceBase.mm); raw's alone once m2v is gone
-product	sel	MTLDevice newBufferWithIOSurface:	inventory.tsv	form	-	x1-m2v-open	open	-	forwarded to m2v: a buffer over an IOSurface (need a buffer over an IOSurface the kernel would not import)
-product	sel	MTLDevice newLibraryWithDAG:functions:error:	inventory.tsv	form	-	x1-m2v-open	open	-	forwarded to m2v (raw:library.dag): a library from a function DAG
-product	sel	MTLDevice newLibraryWithDescriptorSPI:error:	inventory.tsv	form	-	x1-m2v-open	open	-	forwarded to m2v, iOS 17 only: a stitched library through the SPI
-product	sel	MTLDevice newLibraryWithImageFilterFunctionsSPI:imageFilterFunctionInfo:error:	inventory.tsv	form	-	x1-m2v-open	open	-	forwarded to m2v: Core Image's filter library
-product	sel	MTLDevice newResidencySetWithDescriptor:error:	inventory.tsv	form	-	-	open	-	forwarded to m2v, iOS 27 only: residency sets (raw's memory is always resident: an object that tracks its allocations)
-product	sel	MTLDevice registryID	inventory.tsv	native	-	cut	cut	-	selcover counts it m2v's (the inherited method), but raw_metal_device_open_lazy answers the registry ID it is given
+product	sel	MTLDevice currentAllocatedSize	inventory.tsv	native	-	-	main	-	inventory.tsv is stale: the raw device class has this method now (RawMetalDeviceBase.mm, RawMetalDevice.mm); selcover's next run drops the row
+product	sel	MTLDevice newBufferWithIOSurface:	inventory.tsv	native	-	-	main	-	inventory.tsv is stale: the raw device class has this method now (RawMetalDeviceBase.mm, RawMetalDevice.mm); selcover's next run drops the row
+product	sel	MTLDevice newLibraryWithDAG:functions:error:	inventory.tsv	native	-	-	main	-	inventory.tsv is stale: the raw device class has this method now (RawMetalDeviceBase.mm, RawMetalDevice.mm); selcover's next run drops the row
+product	sel	MTLDevice newLibraryWithDescriptorSPI:error:	inventory.tsv	native	-	-	main	-	inventory.tsv is stale: the raw device class has this method now (RawMetalDeviceBase.mm, RawMetalDevice.mm); selcover's next run drops the row
+product	sel	MTLDevice newLibraryWithImageFilterFunctionsSPI:imageFilterFunctionInfo:error:	inventory.tsv	native	-	-	main	-	inventory.tsv is stale: the raw device class has this method now (RawMetalDeviceBase.mm, RawMetalDevice.mm); selcover's next run drops the row
+product	sel	MTLDevice newResidencySetWithDescriptor:error:	inventory.tsv	native	-	-	main	-	inventory.tsv is stale: the raw device class has this method now (RawMetalDeviceBase.mm, RawMetalDevice.mm); selcover's next run drops the row
+product	sel	MTLDevice registryID	inventory.tsv	native	-	-	main	-	inventory.tsv is stale: the raw device class has this method now (RawMetalDeviceBase.mm, RawMetalDevice.mm); selcover's next run drops the row
 product	sel	MTLRenderCommandEncoder dispatchThreadsPerTile:inRegion:	inventory.tsv	error	raw:call.tile	x1-m2v-forms	open	-	tile dispatch: Apple4 tile shaders, not among the families advertised (refused.txt); recorded for m2v today: POST-MERGE C6 decides form or the Metal-specified failure
 product	bridge	native_bridge_metal_answer_unimplemented	TegraGM20BMetalPlugin.mm	dead	-	cut	cut	-	installs zero answers on the frontend's NB classes; goes with the frontend
 product	bridge	native_bridge_metal_argument_layouts	RawMetalArgumentEncoder.mm,RawMetalReplay.mm	form	-	x1-m2v-open	open	-	an argument encoder's buffer layouts come from the function's m2v twin (RawMetalArgumentEncoder.mm newArgumentEncoderWithBufferIndex, replay's check): raw reads argument-buffer layouts from the metallib's reflection itself
@@ -246,20 +243,22 @@ product	class	NBTexture	RawMetalTexture.mm	dead	-	cut	cut	-	twinClass, as NBArgu
 product	class	NBTextureLayout	RawMetalNoCopy.mm	dead	-	cut	cut	-	twinClass of a no-copy texture layout, as NBArgumentEncoder
 product	ident	RMTwinObject	RawMetalDevice.mm,RawMetalObjects.h,RawMetalStates.mm	dead	-	cut	cut	-	a facade object carrying an m2v object (tile states, buffers the pool had no room for, samplers raw cannot express): goes with the needs that make them
 product	ident	_compatibility	RawMetalComputeState.h,RawMetalComputeState.mm	dead	-	cut	cut	-	RMComputePipeline's m2v twin
-product	ident	_m2v	RawMetalCommandBuffer.mm,RawMetalFinish.mm,RawMetalIndirectCompute.h,RawMetalIndirectExecute.mm,RawMetalObjects.h,RawMetalSubmit.mm	dead	-	cut	cut	-	an ICB's m2v copy and a command buffer's m2v flag (RawMetalIndirectExecute.mm, RawMetalSubmit.mm, RawMetalFinish.mm)
+product	ident	_m2v	RawMetalCommandBuffer.mm,RawMetalFinish.mm,RawMetalObjects.h,RawMetalSubmit.mm	dead	-	cut	cut	-	an ICB's m2v copy and a command buffer's m2v flag (RawMetalIndirectExecute.mm, RawMetalSubmit.mm, RawMetalFinish.mm)
 product	ident	_objc_msgForward	RawMetalM2V.mm	dead	-	cut	cut	-	the device class's forwarders to m2v's device methods (installM2VForwarders, adopt's IMP swap)
 product	ident	_twin	RawCompleteRemote.mm,RawMetal.mm,RawMetalArgumentEncoder.mm,RawMetalBuffer.mm,RawMetalCommandBuffer.mm,RawMetalDepthStencil.mm,RawMetalDevice.mm,RawMetalFences.mm,RawMetalLibrary.mm,RawMetalMultisample.mm,RawMetalObjectProbe.mm,RawMetalObjects.h,RawMetalProbe.mm,RawMetalReplay.mm,RawMetalStates.mm,RawMetalTexture.mm,RawMetalYcbcrTargets.mm	dead	-	cut	cut	-	every facade object's m2v twin; the reads that answer a client (function attributes, libraries) are need rows
 product	ident	answerMissing	RawMetal.mm,RawMetalInternal.h,RawMetalPredicates.mm	dead	-	cut	cut	-	a selector m2v's object has and raw lacks: answered zero with a fault line; once m2v's classes are gone every such selector is answerZero's
 product	ident	fallback	RawMetal.h,RawMetal.mm,RawMetalInternal.h,RawMetalM2V.mm	dead	-	cut	cut	-	RawState::fallback, the m2v device (read only in RawMetalM2V.mm), and raw_metal_device_open's m2v device argument
 product	ident	installM2VForwarders	RawMetal.mm,RawMetalInternal.h,RawMetalM2V.mm	dead	-	cut	cut	-	the device selectors forwarded to m2v (need m2v's -[MTLDevice selector], sel rows)
+product	ident	range.raw=false	RawMetalSchedule.mm,RawMetalSubmit.mm	form	-	x1-m2v-forms	open	-	a range sent to m2v with no predicate: a variant the raw compiler refused or a dispatch admission refused at readiness (RawMetalSchedule.mm), and a raw channel being made again after m2v work (RawMetalSubmit.mm, dead with m2v); POST-MERGE C7
 product	ident	replay	RawMetalInternal.h,RawMetalReplay.mm,RawMetalSubmit.mm	dead	-	cut	cut	-	a command buffer range replayed on m2v (RawMetalReplay.mm); its reasons are the pred rows
 product	ident	replayPlannedState	RawMetalPlanAdapters.h,RawMetalPlanReplay.mm,RawMetalReplay.mm	dead	-	cut	cut	-	the planner's state replayed onto an m2v encoder
 product	ident	rmM2VIfOpen	RawMetalDeviceBase.mm,RawMetalInternal.h,RawMetalM2V.mm,RawMetalStates.mm	dead	-	cut	cut	-	the m2v device if open: currentAllocatedSize's m2v share, the render journal
 product	ident	rmM2vMissingState	RawMetalComputeState.mm,RawMetalInternal.h,RawMetalM2vGuard.mm,RawMetalStates.mm	dead	-	cut	cut	-	what of a state or kernel m2v has no form of (replay.m2v_missing): goes with replay
 product	ident	rmRefuseM2vRange	RawMetalInternal.h,RawMetalM2vGuard.mm,RawMetalReplay.mm	dead	-	cut	cut	-	fails a range m2v cannot draw (replay.m2v_missing); goes with replay
 product	ident	rmTwin	RawMetal.mm,RawMetalBuffer.mm,RawMetalCommandBuffer.mm,RawMetalComputeState.mm,RawMetalDepthStencil.mm,RawMetalDevice.mm,RawMetalEncoder.mm,RawMetalFences.mm,RawMetalHeap.mm,RawMetalLibrary.mm,RawMetalMultisample.mm,RawMetalNoCopy.mm,RawMetalObjects.h,RawMetalReplay.mm,RawMetalStates.mm,RawMetalTexture.mm	dead	-	cut	cut	-	a facade object's m2v twin, made on demand (CPU writes into twin textures, replay)
+product	ident	takeReason	RawMetalBindings.mm,RawMetalBlit.mm,RawMetalCommandBuffer.mm,RawMetalCompute.mm,RawMetalEncoder.mm,RawMetalEvents.mm,RawMetalIndirect.mm,RawMetalIndirectExecute.mm,RawMetalObjects.h,RawMetalRenderEncoder.mm,RawMetalStrides.mm,RawMetalTessellation.mm	dead	-	cut	cut	-	marks a command buffer or encoder for m2v at record time (takeReason, takeWholeReason); its reasons are the pred rows
 product	ident	twinAnswers	RawMetal.mm,RawMetalCommandBuffer.mm,RawMetalEncoder.mm,RawMetalInternal.h,RawMetalPredicates.mm	dead	-	cut	cut	-	whether m2v's class answers a selector: decides recording for m2v (call.inv, call.cbinv) or zero
-product	ident	twinOf	RawMetalCompute.mm,RawMetalComputeState.mm,RawMetalIndirectExecute.mm,RawMetalObjects.h,RawMetalPlanReplay.mm,RawMetalReplay.mm,RawMetalSchedule.mm,RawMetalStates.mm	dead	-	cut	cut	-	maps a facade object to its m2v twin at replay
+product	ident	twinOf	RawMetalCompute.mm,RawMetalComputeState.mm,RawMetalObjects.h,RawMetalPlanReplay.mm,RawMetalReplay.mm,RawMetalSchedule.mm,RawMetalStates.mm	dead	-	cut	cut	-	maps a facade object to its m2v twin at replay
 product	ident	wrapCarried	RawMetalStates.mm	dead	-	cut	cut	-	wraps an m2v state (tile render state) as a facade object
 product	nvk	libvulkan_nouveau.dylib	TegraGM20BMetalPlugin.mm,compiler_engine.mm,raw_kernel.cpp	form	-	-	open	-	the plugin loads NVK for m2v's open, the compiler daemon for its compile, raw_kernel.cpp to share its connection: the compile's NAK must load without NVK (as native_bridge_metal_nvk_symbol)
 product	nvk	switch_nak_compile_ranked_stage	RawDirect.mm	form	-	-	open	-	NAK's ranked stage compile, found through NVK's image: NAK as a library of its own

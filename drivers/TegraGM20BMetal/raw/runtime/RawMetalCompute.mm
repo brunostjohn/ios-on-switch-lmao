@@ -462,9 +462,6 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
             [e dispatchThreadgroups:grid threadsPerThreadgroup:threads];
         break;
     }
-    case OpExecuteKernels:
-        replayKernelCommands(e, (__bridge RMKernelExecute *)c.obj, buffers);
-        break;
     default:
         break;
     }

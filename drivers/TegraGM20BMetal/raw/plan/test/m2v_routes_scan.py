@@ -37,6 +37,8 @@ M2V_IDENTS = {
     'replayPlannedState': r'\breplayPlannedState\b',
     'rmRefuseM2vRange': r'\brmRefuseM2vRange\b',
     'rmM2vMissingState': r'\brmM2vMissing(?:State|Kernel)\b',
+    'range.raw=false': r'\brange\.raw\s*=\s*false\b',
+    'takeReason': r'\btake(?:Whole)?Reason\b',
 }
 # The kernel's submission entries only NVK calls (TegraGM20BABI.h)
 KERNEL_LEGACY = ('Exec', 'ExecSurfaces', 'Submit', 'SubmitAddress')

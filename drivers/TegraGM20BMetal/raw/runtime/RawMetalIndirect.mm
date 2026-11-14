@@ -389,11 +389,6 @@ bool encodeCommands(raw::RenderEncoder *re, raw::CommandBuffer *rc, const RMPlan
 void replayCommands(id<MTLRenderCommandEncoder> encoder, const RMPlanDraw &draw, const std::function<id(void *)> &use)
 {
     RMIndirectCommandBuffer *b = (__bridge RMIndirectCommandBuffer *)draw.arguments;
-    if (draw.indices) {
-        SWITCH_REFUSE("raw", "icb.replay",
-                      "an execute of a range the GPU reads, replayed on m2v: the CPU reads no GPU range, none drawn");
-        return;
-    }
     std::vector<RMICBCommand> commands;
     {
         std::lock_guard<raw::Mutex> hold(b->_lock);

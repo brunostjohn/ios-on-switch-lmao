@@ -52,7 +52,7 @@ static bool ownTess(RMFunction *f, switch_metal::FunctionTess &tess)
 
 - (MTLFunctionType)functionType
 {
-    return _type ? MTLFunctionType(_type) : [(id<MTLFunction>)RM_FUNCTION_TWIN(self, NeedFunctionType) functionType];
+    return _type ? MTLFunctionType(_type) : [(id<MTLFunction>)_twin functionType];
 }
 
 // Reflection: the AIR's, as m2v's function decodes it
