@@ -1281,7 +1281,6 @@ static void dfll_calibrate(struct tegra_dfll *td)
 	u32 val, data;
 	ktime_t now;
 	unsigned long rate;
-	unsigned long step = td->ref_rate / 2;
 	unsigned long rate_min = td->dvco_rate_min;
 	u8 out_min = dfll_get_output_min(td);
 
@@ -1292,9 +1291,13 @@ static void dfll_calibrate(struct tegra_dfll *td)
 	 *  - closed loop operations
 	 *  - last request engaged clock skipper
 	 *  - at least specified time after the last calibration attempt
+	 *
+	 * SWITCH: or the last request's loop sits at DFLL_OUTPUT_CFG MIN: its DVCO runs from a floor over the request,
+	 * so rate_min is under that floor too.
 	 */
 	if ((td->mode != DFLL_CLOSED_LOOP) ||
-	    (td->last_req.dvco_target_rate > rate_min))
+	    ((td->last_req.dvco_target_rate > rate_min) &&
+	     ((td->pmu_if != TEGRA_DFLL_PMU_I2C) || (READ_LAST_I2C_VAL(td) != out_min))))
 		return;
 
 	now = ktime_get();
@@ -1409,12 +1412,17 @@ static void dfll_calibrate(struct tegra_dfll *td)
 		return;
 	}
 
-	/* Adjust minimum rate */
+	/*
+	 * SWITCH: rate_min never stays under the DVCO floor. At DFLL_OUTPUT_CFG MIN the loop cannot slow the DVCO to
+	 * its target, so a request skipped from rate_min runs from the floor instead: up to a step fast under L4T's
+	 * rule, which settled anywhere within a step of the floor and stepped down whenever the loop sat above MIN.
+	 * Pinned there, rate_min rises to the request step at or above the measured rate plus one monitor unit (one
+	 * sample's quantisation); above MIN the loop holds rate_min itself, so it stands.
+	 */
 	rate = dfll_calc_monitored_rate(data, td->ref_rate);
-	if ((val > out_min) || (rate < (rate_min - step)))
-		rate_min -= step;
-	else if (rate > (rate_min + step))
-		rate_min += step;
+	rate = ROUND_DVCO_MIN_RATE(rate + td->ref_rate / REF_CLK_CYC_PER_DVCO_SAMPLE, td->ref_rate);
+	if ((val == out_min) && (rate > rate_min))
+		rate_min = rate;
 	else {
 		int t_floor_out, t_floor_idx = td->thermal_floor_index;
 		struct thermal_tv tv;
@@ -1985,7 +1993,7 @@ static int dfll_request_rate(struct tegra_dfll *td, unsigned long rate)
 {
 	int ret;
 	struct dfll_rate_req req;
-	bool dvco_min_crossed, dvco_min_updated;
+	bool dvco_min_updated;
 
 	if (td->mode == DFLL_UNINITIALIZED) {
 		dev_err(td->dev, "%s: Cannot set DFLL rate in %s mode\n",
@@ -2015,17 +2023,14 @@ static int dfll_request_rate(struct tegra_dfll *td, unsigned long rate)
 		return ret;
 	}
 
-	dvco_min_crossed = (rate == td->dvco_rate_min) &&
-			   (td->last_req.rate > td->dvco_rate_min);
-
 	td->last_unrounded_rate = rate;
 	td->last_req = req;
 
 	if (td->mode == DFLL_CLOSED_LOOP) {
 		dfll_set_close_loop_config(td, &td->last_req);
 		dfll_set_frequency_request(td, &td->last_req);
-		if (dvco_min_updated || dvco_min_crossed)
-			calibration_timer_update(td);
+		/* SWITCH: every request, so each is checked against its DVCO floor once settled */
+		calibration_timer_update(td);
 	}
 
 	return 0;

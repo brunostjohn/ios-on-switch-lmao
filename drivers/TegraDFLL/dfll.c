@@ -24,7 +24,9 @@
 /* clk-dfll.c register offsets used for status (DFLL_CTRL, DFLL_FREQ_REQ, DFLL_MONITOR_*, DFLL_I2C_STS, LUT RAM) */
 #define DFLL_CTRL 0x00
 #define DFLL_CTRL_CLOSED_LOOP 2 /* DFLL_CLOSED_LOOP - 1, as dfll_set_mode writes it */
+#define DFLL_TUNE1 0x10
 #define DFLL_FREQ_REQ 0x14
+#define DFLL_OUTPUT_CFG 0x20
 #define DFLL_MONITOR_CTRL 0x28
 #define DFLL_MONITOR_CTRL_FREQ 6
 #define DFLL_MONITOR_DATA 0x2c
@@ -424,6 +426,22 @@ void tegra_dfll_cpu_status(unsigned long *target_hz, unsigned long *measured, un
 	}
 	unlock();
 }
+
+#if DEVELOPMENT || DEBUG
+void tegra_dfll_cpu_loop_registers(struct tegra_dfll_cpu_loop *loop)
+{
+	*loop = (struct tegra_dfll_cpu_loop){0};
+	lock();
+	if (st.enabled) {
+		loop->freq_req = tdfll_platform_dfll_readl(DFLL_FREQ_REQ);
+		loop->tune1 = tdfll_platform_dfll_readl(DFLL_TUNE1);
+		loop->output_cfg = tdfll_platform_dfll_readl(DFLL_OUTPUT_CFG);
+		loop->monitor = tdfll_platform_dfll_readl(DFLL_MONITOR_DATA);
+		loop->i2c_sts = tdfll_platform_dfll_readl(DFLL_I2C_STS);
+	}
+	unlock();
+}
+#endif
 
 void tegra_dfll_cpu_describe(unsigned long rate_hz, char *buf, size_t len)
 {
