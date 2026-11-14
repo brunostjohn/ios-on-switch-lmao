@@ -285,6 +285,8 @@ TEST(RawRecordCost, CompositorScaleFrame)
     EXPECT_EQ(difference(repeated, one).counts.sends, 300u);
     EXPECT_LE(encoders.counts.sends, uint64_t(7 * kEncoders));
     EXPECT_EQ(frame.counts.mallocs, 0u);
+    // an encoder of a kept pass shape takes no lock: the pass cache is its thread's alone (rmPassTrim stops the thread)
+    EXPECT_EQ(encoders.counts.locks, 0u);
 }
 
 // Each call of a compositor draw, its instructions apart (less what two counter reads cost), over a frame's 90 draws

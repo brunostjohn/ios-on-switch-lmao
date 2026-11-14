@@ -111,3 +111,21 @@ TEST(GM20BPrefault, HeldWiringsGoToTheirImportOrBackOldestFirst)
 	EXPECT_EQ(dropped, kTegraGM20BPrefaultHeld - 2) << "memory pressure gives every one back";
 	EXPECT_EQ(held.next(), 0u);
 }
+
+// A CPU writer that stored into a fresh surface without IOSurfaceLock (its seed still 0) left dirty lines a skipped clean
+// would let a later CPU lock's invalidate write back over the GPU's pixels. The prefault cleared the pages' modified bits
+// before its clean, so that store set one again: the import cleans.
+TEST(GM20BPrefault, AnUnlockedWriterSinceTheCleanMakesTheImportClean)
+{
+	std::vector<bool> modified(900, false);
+	const auto read = [&](uint32_t page) {
+		return bool(modified[page]);
+	};
+	EXPECT_TRUE(tegra_gm20b_unwritten(900, read));
+	EXPECT_FALSE(
+		tegra_gm20b_import_cleans(false, tegra_gm20b_unwritten(900, read), true, true));
+	modified[517] = true;
+	EXPECT_FALSE(tegra_gm20b_unwritten(900, read));
+	EXPECT_TRUE(tegra_gm20b_import_cleans(false, tegra_gm20b_unwritten(900, read), true, true))
+		<< "an unlocked store since the prefault's clean";
+}

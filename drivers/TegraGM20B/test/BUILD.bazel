@@ -67,9 +67,10 @@
 #                            written while the save of the switched-out channel is in flight still holds after a job
 #   gm20b_acquire_test       TegraGM20BAcquire.h: the RAMFC ACQUIRE word as nvgpu computes it, CCSR's parked states, the
 #                            semaphore or syncpoint a parked channel's RAMFC names
-#   gm20b_sleep_test         TegraGM20BSleepGate.h (system sleep's gate and plan): every transition, and on threads with
-#                            gpu_power.c's sleeping protocol around it, no caller inside between the drain and the wake, a
-#                            submission waiting at the gate goes on at the wake, a caller that never leaves fails the drain
+#   gm20b_sleep_test         TegraGM20BSleepGate.h (system sleep's gate and plan): every transition, and on threads moving
+#                            between CPUs with gpu_power.c's sleeping protocol around it, no caller inside between the drain
+#                            and the wake, a submission waiting at the gate goes on at the wake, a caller that never leaves
+#                            fails the drain
 #   gm20b_source_test        how the user client and gpu_*.c use both, the pool's zeroing (nvkm shim, scrubber), the
 #                            fence-only present, and which paths go through the sleep gate in what order (none of which a
 #                            host model runs); NVK's stencil copy temp on the bind alignment
@@ -813,6 +814,7 @@ host_test(
 host_test(
     name = "gm20b_rail_test",
     srcs = [
+        "gm20b_gate_cpus.h",
         "gm20b_rail_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BRail.h",
         "//drivers/TegraGM20B:TegraGM20BSleepGate.h",
@@ -871,6 +873,7 @@ host_test(
 host_test(
     name = "gm20b_sleep_test",
     srcs = [
+        "gm20b_gate_cpus.h",
         "gm20b_sleep_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BSleepGate.h",
     ],
@@ -881,6 +884,7 @@ host_test(
 host_test(
     name = "gm20b_sleep_tsan_test",
     srcs = [
+        "gm20b_gate_cpus.h",
         "gm20b_sleep_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BSleepGate.h",
     ],
@@ -1357,6 +1361,7 @@ host_test(
     name = "gm20b_submit_locks_source_test",
     srcs = ["gm20b_submit_locks_source_test.cpp"],
     data = [
+        "//drivers/TegraGM20B:TegraGM20BSleepGate.h",
         "//drivers/TegraGM20B:TegraGM20BUserClientJobSubmit.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientSubmit.cpp",
         "//drivers/TegraGM20B:gpu_sources",

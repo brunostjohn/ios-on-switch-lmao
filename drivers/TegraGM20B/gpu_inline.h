@@ -11,14 +11,25 @@ static inline int badf(u32 v)
 static inline void gate_wake_closer(void)
 {
 	mutex_lock(&tgm_gate_lock);
-	nvxnu_wakeup(&tgm_sc7_gate.inside);
+	nvxnu_wakeup(TGM_GATE_DRAINED);
 	mutex_unlock(&tgm_gate_lock);
+}
+
+/* The gate counts on this CPU's cell, so the caller stays on it until the count is in (TegraGM20BSleepGate.h). */
+static inline enum tgm_gate_entry gate_try_enter(void)
+{
+	enum tgm_gate_entry entry = TGM_GATE_IN;
+
+	_disable_preemption();
+	entry = tgm_gate_try_enter(&tgm_sc7_gate, (unsigned int)cpu_number());
+	_enable_preemption();
+	return entry;
 }
 
 /* In (1), or refused while the gate is shut (0). */
 static inline int gate_try(void)
 {
-	enum tgm_gate_entry entry = tgm_gate_try_enter(&tgm_sc7_gate);
+	enum tgm_gate_entry entry = gate_try_enter();
 
 	if (entry == TGM_GATE_SHUT_WAKE)
 		gate_wake_closer();
@@ -27,7 +38,12 @@ static inline int gate_try(void)
 
 static inline void gate_leave(void)
 {
-	if (tgm_gate_leave(&tgm_sc7_gate))
+	int wake = 0;
+
+	_disable_preemption();
+	wake = tgm_gate_leave(&tgm_sc7_gate, (unsigned int)cpu_number());
+	_enable_preemption();
+	if (wake)
 		gate_wake_closer();
 }
 

@@ -62,6 +62,41 @@ IOReturn collectPages(IOMemoryDescriptor *md, uint64_t bytes, uint64_t *pas)
 }
 }  // namespace tgm_uc
 
+namespace
+{
+// The prefault's held wiring of an imported surface's memory (tegra_gm20b_prefault_take), kept until the import is done
+class CreationWiring
+{
+public:
+	CreationWiring(uint32_t surfaceId, task_t task)
+	{
+		OSObject *surface = surfaceId ? tgm_surface_lookup(surfaceId, task) : nullptr;
+		memory_ = surface ? tegra_gm20b_prefault_take(surface) : nullptr;
+		if (surface)
+			surface->release();
+	}
+
+	~CreationWiring()
+	{
+		if (memory_) {
+			memory_->complete(kIODirectionInOut);
+			memory_->release();
+		}
+	}
+
+	CreationWiring(const CreationWiring &) = delete;
+	CreationWiring &operator=(const CreationWiring &) = delete;
+
+	bool held() const
+	{
+		return memory_ != nullptr;
+	}
+
+private:
+	IOMemoryDescriptor *memory_ = nullptr;
+};
+}  // namespace
+
 // No lock_ until publishBo: the wiring (the VM's zero-fill of pages never touched), page list, memory object, coherency
 // entry and clean are this BO's alone until then, so neither the connection's other calls nor its submissions wait.
 IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
@@ -69,6 +104,8 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 {
 	if (!in->bytes || ((in->address | in->bytes) & 0xfff) || in->bytes > kMaxBoBytes)
 		return kIOReturnBadArgument;
+	// before this import's own wiring, which sets the pages' modified bits
+	const CreationWiring creation(in->surface_id, task_);
 	const uint64_t start = statsNowNs();
 	uint64_t phase[TGM_PHASES] = {};
 	uint64_t mark = start;  // the stats: wiring, pages, nvkm, clean
@@ -171,28 +208,22 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 		return ioreturn(pinned ? pinned : adopted ? adopted : tracked);
 	}
 	int fresh = 0;
-	IOMemoryDescriptor *creation = nullptr;
 	if (bo->surface) {
 		tgm_record *record = tgm_record_of(bo->surface);
 		fresh = record && tgm_record_first_import(record) &&
 			tgm_surface_unwritten(bo->surface);
 		tgm_coherency_import(bo->coh, record, fresh);
-		creation = tegra_gm20b_prefault_take(bo->surface);
 	}
 	const uint64_t added = TGM_STATS ? statsNowNs() : 0;
 	// The GPU does not snoop the CPU caches: what the task wrote must be in DRAM before the GPU reads it, and no dirty
 	// line (fresh pages are zeroed through the cache) may be written back later over what the GPU wrote. The prefault's
-	// clean of a fresh surface's pages, wired since, already did that (TegraGM20BSurfacePrefault.cpp).
+	// clean of a fresh surface's pages, wired and unwritten since, already did that (TegraGM20BSurfacePrefault.cpp).
 	const bool cleans =
-		tegra_gm20b_import_cleans(covered, creation != nullptr, fresh != 0, gpuWrites != 0);
+		tegra_gm20b_import_cleans(covered, creation.held(), fresh != 0, gpuWrites != 0);
 	if (cleans)
 		tgm_cpu_clean_pages(bo->pas, bo->npages);
 	if (!covered)
 		tgm_coherency_cleaned(bo->coh);
-	if (creation) {
-		creation->complete(kIODirectionInOut);
-		creation->release();
-	}
 	lap(3);
 	const int readOnly = static_cast<int>(bo->readOnly);
 	const uint64_t first = bo->pas[0];

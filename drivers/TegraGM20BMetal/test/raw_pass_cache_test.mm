@@ -7,6 +7,7 @@
 #include "../raw/runtime/RawMetalPassCache.h"
 #include <gtest/gtest.h>
 #include <cstdint>
+#include <chrono>
 #include <future>
 #include <thread>
 #include <vector>
@@ -188,3 +189,56 @@ TEST_F(RawPassCache, TrimLetsAnIdleThreadsPassesGo)
 }
 
 }  // namespace
+
+// A trim that meets a thread inside a pass it found takes nothing of that thread's: the thread is reading the copy. The
+// thread lets its copies go at its next lookup instead.
+TEST_F(RawPassCache, ATrimLeavesAPassItsThreadIsReadingForItsNextLookup)
+{
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    __weak id<MTLTexture> weakTarget;
+    std::promise<void> reading, trimmed, looked;
+    std::promise<void> done;
+    std::thread encoder([&] {
+        Key k;
+        @autoreleasepool {
+            MTLTextureDescriptor *t = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                         width:64
+                                                                                        height:64
+                                                                                     mipmapped:NO];
+            t.storageMode = MTLStorageModePrivate;
+            t.usage = MTLTextureUsageRenderTarget;
+            id<MTLTexture> target = [device newTextureWithDescriptor:t];
+            weakTarget = target;
+            MTLRenderPassDescriptor *d = [MTLRenderPassDescriptor renderPassDescriptor];
+            d.colorAttachments[0].texture = target;
+            d.colorAttachments[0].loadAction = MTLLoadActionClear;
+            d.colorAttachments[0].storeAction = MTLStoreActionStore;
+            ASSERT_TRUE(rmPassKey(d, k.bytes, k.hash));
+            RMPass facts{};
+            facts.color[0].texture = target;
+            rmPassKeep(k.bytes, k.hash, [d copy], facts, [RMRenderEncoder new]);
+        }
+        const RMPassEntry *kept = rmPassFind(k.bytes, k.hash);
+        ASSERT_NE(kept, nullptr);
+        reading.set_value();
+        trimmed.get_future().wait();
+        EXPECT_NE(kept->pass, nil) << "the copy this thread reads went under it";
+        rmPassDone();
+        EXPECT_EQ(rmPassFind(k.bytes, k.hash), nullptr) << "the trim's ask is met at the next lookup";
+        looked.set_value();
+        done.get_future().wait();
+    });
+    reading.get_future().wait();
+    auto trim = std::async(std::launch::async, [] {
+        return rmPassTrim();
+    });
+    const bool returned = trim.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    EXPECT_TRUE(returned) << "the trim waited for the thread inside its pass";
+    EXPECT_NE(weakTarget, nil);
+    trimmed.set_value();
+    trim.wait();
+    looked.get_future().wait();
+    EXPECT_EQ(weakTarget, nil) << "the thread let its copies go at its next lookup";
+    done.set_value();
+    encoder.join();
+}
