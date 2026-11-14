@@ -246,14 +246,17 @@ bool loadConfig(const Bus &b)
     return waitClear(b, CONFIG_LOAD, MSTR_CONFIG_LOAD, 2000);
 }
 
-// hekate clock_enable(): reset, gate, select CLK_M / divider, ungate, release reset.
+// Tegra X1 TRM 5.1.7, "To set up a non-boot device": reset asserted, clock on, the divisor, 2 us, the source (CLK_M,
+// 31:29 = 6, as at reset: 5.2.60), 2 us, reset released, every bit through the CAR's _SET/_CLR registers.
 void clockEnable(const BusInfo &info)
 {
     const uint32_t bit = 1u << info.bit;
+    const uint32_t divisor = info.divider - 1u;
     w32(gCar, info.reset, bit);
-    w32(gCar, info.enable + 4, bit);
-    w32(gCar, info.source, (6u << 29) | (info.divider - 1u));
     w32(gCar, info.enable, bit);
+    w32(gCar, info.source, (r32(gCar, info.source) & ~0xffffu) | divisor);
+    IODelay(2);
+    w32(gCar, info.source, (6u << 29) | divisor);
     IODelay(2);
     w32(gCar, info.reset + 4, bit);
     (void)r32(gCar, info.reset);
