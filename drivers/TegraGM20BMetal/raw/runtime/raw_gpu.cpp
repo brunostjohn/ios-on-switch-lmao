@@ -1090,29 +1090,45 @@ void Device::forgetSampler(const Sampler &s, Sampler &twin)
 
 // lock_ held: what `pl`'s reads through argument buffers take of every draw: each stage's root table address (a stage whose
 // root table holds buffer slots takes its own per draw: RenderEncoder::rootTable) and ExecutionStatus address in its push
-// words, and its set 1. Its draws are refused where the device has no memory for them.
+// words, and its set 1. Where the device has no memory for them its draws are refused until one binds them
+// (rebindArguments); the flag is published last, so a draw that reads it clear reads the words.
 void Device::bindArguments(Pipeline &pl, const PackPipeline &pp)
 {
     const bool roots = pp.rootTableWord[0] || pp.rootTableWord[1] || pp.statusWord[0] || pp.statusWord[1];
     if (!roots && !pp.heapArrays)
         return;
-    if (!heapMemory()) {
-        pl.heapMissing = true;
-        return;
+    const HeapSet *set = nullptr;
+    const bool bound = heapMemory() && (!pp.heapArrays || (set = heapSet(heapLayout(pp))));
+    if (bound) {
+        const auto address = [&](uint8_t word, uint64_t va) {
+            if (!word || word > 31)
+                return;
+            pl.push[word - 1] = uint32_t(va);
+            pl.push[word] = uint32_t(va >> 32);
+            pl.pushMask |= 3u << (word - 1);
+        };
+        for (uint32_t k = 0; k < 2; k++) {
+            address(pp.rootTableWord[k], pp.rootSlots[k] ? 0 : heapTables_.rootTableVa());
+            address(pp.statusWord[k], heapTables_.statusVa());
+        }
+        pl.heapSet = set;
     }
-    const auto address = [&](uint8_t word, uint64_t va) {
-        if (!word || word > 31)
-            return;
-        pl.push[word - 1] = uint32_t(va);
-        pl.push[word] = uint32_t(va >> 32);
-        pl.pushMask |= 3u << (word - 1);
-    };
-    for (uint32_t k = 0; k < 2; k++) {
-        address(pp.rootTableWord[k], pp.rootSlots[k] ? 0 : heapTables_.rootTableVa());
-        address(pp.statusWord[k], heapTables_.statusVa());
-    }
-    if (pp.heapArrays && !(pl.heapSet = heapSet(heapLayout(pp))))
-        pl.heapMissing = true;
+    __atomic_store_n(&pl.heapMissing, !bound, __ATOMIC_RELEASE);
+}
+
+bool Device::rebindArguments(Pipeline &pl)
+{
+    RAW_ENCODE_LOCK(l, lock_);
+    if (!__atomic_load_n(&pl.heapMissing, __ATOMIC_ACQUIRE))
+        return true;
+    if (!pl.rec)
+        return false;
+    bindArguments(pl, *pl.rec);
+    const bool bound = !__atomic_load_n(&pl.heapMissing, __ATOMIC_RELAXED);
+    if (!bound)
+        os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                     "raw: no memory for a state's argument tables: this draw is refused");
+    return bound;
 }
 
 // A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers
@@ -6329,7 +6345,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         cb_->refusal = {};
         return false;
     }
-    if (pl->heapMissing) {
+    if (__atomic_load_n(&pl->heapMissing, __ATOMIC_ACQUIRE) && !dev_->rebindArguments(*pl)) {
         *why = "no memory for the tables a state reads argument buffers through";
         cb_->refusal = {};
         return false;

@@ -2781,6 +2781,13 @@ private:
     const HeapSet *heapSet(const HeapLayout &layout);
     void bindKernelArguments(ComputeState &c, const PackKernel &k);
     void bindArguments(Pipeline &pl, const PackPipeline &pp);
+
+public:
+    // A draw or dispatch that met heapMissing binds its state's argument reads afresh: true where they are bound now
+    bool rebindArguments(Pipeline &pl);
+    bool rebindKernelArguments(const ComputeState &c);
+
+private:
     void tablesWritten();
 
     struct HeapPart {
