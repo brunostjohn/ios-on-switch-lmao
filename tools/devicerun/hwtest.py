@@ -293,6 +293,7 @@ TESTS: dict[str, bool] = {
     'system.identity': False,
     'system.power': False,
     'system.thermal': False,
+    'system.soctherm_throttle': False,
     'system.memory': False,
     'cpu.clock': False,
     'cpu.sustained': False,
