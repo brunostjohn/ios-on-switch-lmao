@@ -122,7 +122,9 @@ TEST_F(McHotReset, TheGpuRailDownKeepsTheNvjpgReleaseThatLandsInsideIt)
     landsAtTheNextRead(kCtrl1, [] {
         tegra_mc_hot_reset(kCtrl1, kNvjpg, false);
     });
-    EXPECT_EQ(tegra_gm20b_rail_enable(0), 0);
+    int vdd = -1;
+    EXPECT_EQ(tegra_gm20b_rail_gate(&vdd), 0);
+    EXPECT_EQ(vdd, 0);
     EXPECT_TRUE(gSecondRan);
     EXPECT_EQ(gEnCtrl, kEnM4);
     EXPECT_EQ(mc(kCtrl1), kGpu)

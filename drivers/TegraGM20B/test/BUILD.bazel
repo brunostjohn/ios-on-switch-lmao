@@ -66,6 +66,8 @@
 #   gm20b_rail_test          TegraGM20BRail.h: the rail goes down with the display off and the GPU idle, once a demand's
 #                            hold has run out, up on its thread call only for the display, never while system sleep holds it;
 #                            gpu_bringup.c's lock protocol on threads; GPU time never backwards across rail cycles
+#   gm20b_rail_sequence_test platform.c's rail-gating and ungating against the TRM's GPU procedure (12.2.7.17) step for step,
+#                            on a register file of CAR, PMC, MC and the MAX77812, from a cold boot and after a gate
 #   gm20b_clkgate_test       TegraGM20BClkgate.h against nvgpu's gm20b_gating_reglist.c (nvidia/, verbatim): the SLCG and
 #                            BLCG writes are nvgpu's prod lists in its load order; ELCG's gate control; where gpu_bringup.c
 #                            applies them; GR's reset in a recovery with gating off; TegraGM20BTherm.h's slowdown arming
@@ -704,6 +706,51 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BSleepGate.h",
     ],
     cxx_std = "c++17",
+)
+
+host_shims(
+    name = "rail_sequence_kernel",
+    headers = [
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+        "kern/clock.h",
+        "libkern/libkern.h",
+    ],
+    stubs = "gm20b_rail_sequence_stubs.h",
+)
+
+host_library(
+    name = "rail_sequence",
+    srcs = [
+        "//drivers/TegraGM20B:platform.c",
+        "//drivers/TegraGM20B:shim/include/nvxnu.h",
+        "//drivers/TegraI2C:TegraI2C.h",
+        "//drivers/TegraSMMU:SwitchSmmuRegisters.h",
+        "//drivers/TegraSMMU:TegraSMMU.cpp",
+        "//drivers/TegraSMMU:TegraSMMU.h",
+        "//drivers/TegraSMMU:TegraSMMUAttachments.h",
+        "//kits/SwitchLinux:SwitchLinux.h",
+        "//kits/SwitchLinux:SwitchLinuxLock.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+        "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+    ],
+    defines = ["SWITCH_MMIO_HOST_MODEL=1"],
+    deps = [":rail_sequence_kernel"],
+)
+
+host_test(
+    name = "gm20b_rail_sequence_test",
+    srcs = [
+        "gm20b_rail_sequence_test.cpp",
+        "//drivers/TegraGM20B:shim/include/nvxnu.h",
+        "//drivers/TegraI2C:TegraI2C.h",
+        "//kits/SwitchLinux:SwitchLinux.h",
+        "//kits/SwitchLinux:SwitchLinuxLock.h",
+    ],
+    deps = [
+        ":rail_sequence",
+        ":rail_sequence_kernel",
+    ],
 )
 
 host_test(

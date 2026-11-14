@@ -14,12 +14,14 @@
  *         preempt that saves it, each channel blocked, preempted and off its runlist, events blocked), the L2's dirty
  *         lines written back (the GPU writes RAMFC and contexts through it: nvkm's gk20a instmem flushes it before every
  *         CPU look, instmem/gk20a.c), nvkm_device_fini(NVKM_SUSPEND) (what nvkm_udevice_fini would run if m2() held no
- *         device reference), interrupts off, the MC client drained, then nvkm_device_tegra_power_down()'s steps.
- *  wake   nvkm_device_tegra_power_up()'s steps, interrupts on, then the boot's order: M1's PRI ring, timer and GPCPLL,
- *         tgm_clk_raise() (the relock under M1's quiet conditions, before any falcon runs), tgm_m2_device_init() (ACR's HS load
- *         again, which checks the GPU still reports the WPR it was built for; the PMU; every engine with a user, GR's
- *         FECS/GPCCS through the PMU), nvif_client_resume (channels bound and back on their runlists, GR contexts
- *         rebound, events allowed), one fence on a kernel channel, the idle clock, tgm_gpu.lock, the gate. */
+ *         device reference), interrupts off, then the rail gate (TRM 12.2.7.17: the MC client drained, clamp, reset,
+ *         clocks off; VDD_GPU off).
+ *  wake   the rail ungate (VDD_GPU, then TRM 12.2.7.17's steps, M1's power-up), interrupts on, then the boot's order:
+ *         M1's PRI ring, timer and GPCPLL, tgm_clk_raise() (the relock under M1's quiet conditions, before any falcon
+ *         runs), tgm_m2_device_init() (ACR's HS load again, which checks the GPU still reports the WPR it was built for;
+ *         the PMU; every engine with a user, GR's FECS/GPCCS through the PMU), nvif_client_resume (channels bound and
+ *         back on their runlists, GR contexts rebound, events allowed), one fence on a kernel channel, the idle clock,
+ *         tgm_gpu.lock, the gate. */
 static struct {
 	enum tgm_sleep_plan plan; /* the last sleep's, until its wake */
 	int khz; /* the GPC clock before sleep: its run rate, also when the idle clock had it low */
@@ -171,19 +173,13 @@ static void sleep_nvkm(void)
 
 static void sleep_power_down(void)
 {
-	struct nvkm_device_tegra *tdev = tgm_gpu.device->func->tegra(tgm_gpu.device);
 	u64 start = TGM_STATS ? nvxnu_nanotime() : 0;
 	int drained = 0;
 	int ret = 0;
 
 	nvxnu_irq_suspend();
 	tgm_recover_suspend();
-	drained = tegra_gm20b_mc_flush(1); /* nvgpu's railgate order: the client drained first */
-	clk_disable_unprepare(tdev->clk_pwr);
-	clk_disable_unprepare(tdev->clk_ref);
-	clk_disable_unprepare(tdev->clk);
-	udelay(10);
-	ret = tdev->vdd ? regulator_disable(tdev->vdd) : 0;
+	drained = tegra_gm20b_rail_gate(&ret);
 	if (drained)
 		nvxnu_log("tegra-gm20b: sleep: the MC's GPU client did not drain (%d)\n", drained);
 	if (ret)
@@ -194,38 +190,10 @@ static void sleep_power_down(void)
 		    us_since(start));
 }
 
-/* nvkm_device_tegra_power_up() (engine/device/tegra.c, static there): what M1's nvkm_device_tegra_new() ran. */
-static int power_up(struct nvkm_device_tegra *tdev)
-{
-	int ret = tdev->vdd ? regulator_enable(tdev->vdd) : 0;
-
-	if (!ret)
-		ret = clk_prepare_enable(tdev->clk);
-	if (!ret)
-		ret = clk_prepare_enable(tdev->clk_ref);
-	if (!ret)
-		ret = clk_prepare_enable(tdev->clk_pwr);
-	if (ret)
-		return ret;
-	clk_set_rate(tdev->clk_pwr, 204000000);
-	udelay(10);
-	if (!tdev->pdev->dev.pm_domain) {
-		reset_control_assert(tdev->rst);
-		udelay(10);
-		ret = tegra_pmc_powergate_remove_clamping(tdev->pmc, TEGRA_POWERGATE_3D);
-		if (ret)
-			return ret;
-		udelay(10);
-		reset_control_deassert(tdev->rst);
-		udelay(10);
-	}
-	return 0;
-}
-
 static void wake_power_up(void)
 {
 	u64 start = TGM_STATS ? nvxnu_nanotime() : 0;
-	int ret = power_up(tgm_gpu.device->func->tegra(tgm_gpu.device));
+	int ret = tegra_gm20b_rail_ungate();
 	int uv = 0;
 
 	if (ret) {

@@ -11,6 +11,8 @@ nvkm/engine/gr/gk20a.c floorsweeps (gf100_grctx_generate_floorsweep: SM ids, PD/
 init, as nvgpu's gk20a_init_gr_setup_hw calls init_fs_state at every power-on, not only for the golden context.
 nvkm/engine/gr/gf100.c tells the kext of each channel error gf100_gr_intr reports, before acknowledging it
 (tgm_gr_fault, ../../TegraGM20BGrFault.h), so the kill names the job GR stopped in.
+nvkm/engine/device/tegra.c powers the GPU up and down with ../../platform.c's rail ungate and gate, the Tegra X1 TRM's
+GM20b sequence (12.2.7.17), in place of mainline's clock, reset and clamp calls.
 
 include/nvfw/acr.h
 include/nvfw/flcn.h

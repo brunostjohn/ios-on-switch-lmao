@@ -196,7 +196,6 @@ int tgm_clk_raise(char *line, unsigned int len)
  * divider not reading back, the PLL not locked, the clock not at the rate) logs the PLL's registers, puts the run rate
  * back and leaves the idle clock in use for the next idle period (SwitchGpuClockControl.h idle_fail). */
 #define IDLE_DROP_NS (500ULL * 1000000ULL)
-#define GPCPLL_CFG_R 0x137000  /* 0 enable, 17 lock */
 #define GPC2CLK_OUT_R 0x137250 /* VCO divider 13:8: 0 = 1:1, 2 = 1:2 */
 #define SEL_VCO_R 0x137100     /* 0 = GPU on bypass, 1 = on GPCPLL */
 #define PLL_REF_KHZ 38400

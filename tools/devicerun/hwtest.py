@@ -304,6 +304,7 @@ TESTS: dict[str, bool] = {
     'gpu.recover.kill_one': False,
     'gpu.recover.kill_under_compositor': False,
     'gpu.x1.dc_host1x_class': False,
+    'gpu.rail_cycle': False,
     'gpu.recover.busy_engine': False,
     'gpu.recover.kernel_second_timeout': False,
     'input.controllers': False,

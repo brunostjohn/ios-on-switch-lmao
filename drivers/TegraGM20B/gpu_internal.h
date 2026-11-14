@@ -526,6 +526,7 @@ void tgm_stats_gr_unbind(struct tgm_chan *chan);
 void tgm_stats_gr_context(void);
 void tgm_stats_tick(void);
 #define IDLE_LOG_NS (10ULL * 1000000000ULL)
+#define GPCPLL_CFG_R 0x137000   /* 0 enable, 17 lock */
 #define GPCPLL_COEFF_R 0x137004 /* M 7:0, N 15:8, PL 21:16 */
 
 struct idle_state {

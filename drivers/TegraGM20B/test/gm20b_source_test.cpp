@@ -977,7 +977,7 @@ TEST(GM20BSleepSource, SleepAndWakeOrder)
 	EXPECT_TRUE(nvkm.Before("nvkm_wr32(device, 0x07000c, 0x00000001);", "nvkm_ltc_flush("));
 	EXPECT_TRUE(nvkm.Before("nvkm_ltc_flush(", "nvkm_device_fini(device, NVKM_SUSPEND)"));
 	EXPECT_TRUE(Block(gpu(), "static void sleep_power_down(void)")
-			    .Before("nvxnu_irq_suspend();", "regulator_disable("));
+			    .Before("nvxnu_irq_suspend();", "tegra_gm20b_rail_gate("));
 	// the boot's order: the GPCPLL relock (tgm_clk_raise) before ACR, the PMU and GR (tgm_m2_device_init); interrupts on before
 	// nvkm's first init that may wait for one
 	const CodeText wake = Block(gpu(), "void tgm_wake(void)").After("case TGM_SLEEP_FULL:");
@@ -988,7 +988,7 @@ TEST(GM20BSleepSource, SleepAndWakeOrder)
 	EXPECT_TRUE(wake.Before("wake_nvkm();", "wake_fence();"));
 	EXPECT_TRUE(wake.Before("wake_fence();", "wake_open();"));
 	EXPECT_TRUE(Block(gpu(), "static void wake_power_up(void)")
-			    .Before("power_up(", "nvxnu_irq_resume();"));
+			    .Before("tegra_gm20b_rail_ungate(", "nvxnu_irq_resume();"));
 	EXPECT_TRUE(
 		Block(gpu(), "static void wake_clock(void)").Has("clk_raise(line, sizeof(line))"));
 	EXPECT_TRUE(
@@ -1191,7 +1191,7 @@ TEST(GM20BRailSource, RailDownStopsTheGpuCallouts)
 				    "tgm_deadline_resume();"));
 	const CodeText power = Block(gpu(), "static void sleep_power_down(void)");
 	EXPECT_TRUE(power.Before("nvxnu_irq_suspend();", "tgm_recover_suspend();"));
-	EXPECT_TRUE(power.Before("tgm_recover_suspend();", "regulator_disable("));
+	EXPECT_TRUE(power.Before("tgm_recover_suspend();", "tegra_gm20b_rail_gate("));
 }
 
 // IOGPUDeviceSetDisplayParams is scalar method 0x21 in iOS 17's IOGPU.framework and IOConnectTrap2 index 8 in iOS 27's;

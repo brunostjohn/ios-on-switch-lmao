@@ -84,6 +84,8 @@ public enum Registry {
         + [CompilerAliveTest()]
         // May stop NVJPG's host1x channel for 50 ms: last.
         + [DcHost1xClassTest()]
+        // Rail-gates the GPU under every other client four times: after the shared tests.
+        + [GpuRailCycleTest()]
         // Leaves this app for Settings and opens it again: last, so no other test runs while it is away.
         + [LaunchHitchTest()]
 
