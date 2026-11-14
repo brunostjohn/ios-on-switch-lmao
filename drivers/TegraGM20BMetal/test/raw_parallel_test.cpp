@@ -66,7 +66,7 @@ TEST(RawParallel, ShadowedBytesNameTheirCopyInTheParallelCommandBuffer)
 TEST(RawParallel, ExtraWordsAreTheRecordedOnes)
 {
     EXPECT_EQ(raw::extraWords(cmd(OpViewport)), 6u);
-    EXPECT_EQ(raw::extraWords(cmd(OpDispatch)), 12u);
+    EXPECT_EQ(raw::extraWords(cmd(OpDispatch)), 16u);
     EXPECT_EQ(raw::extraWords(cmd(OpBlendColor)), 4u);
     EXPECT_EQ(raw::extraWords(cmd(OpDepthBias)), 3u);
     EXPECT_EQ(raw::extraWords(cmd(OpDrawIndexed)), 3u);

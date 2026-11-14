@@ -221,18 +221,20 @@ TEST_F(DeviceIndirectDispatch, TheCpuWritesNoGridTheGpuReadsTheBuffersWordsAfter
     memcpy(&cpu, hostBytes(l.qmds[0] + 4 * kQmdRasterWidth, 4), 4);
     EXPECT_EQ(cpu, 0u) << "the QMD the CPU wrote holds no grid";
     EXPECT_TRUE(l.waitedBeforeInline) << "a wait for idle and SET_REFERENCE before the inline writes";
-    bool fetched = false;
+    // the root table's group count, then the QMD's width, height and depth
+    const std::vector<std::pair<uint64_t, uint32_t>> want = {
+        {arguments.va, 3}, {arguments.va, 1}, {arguments.va + 4, 1}, {arguments.va + 8, 1}};
+    std::vector<std::pair<uint64_t, uint32_t>> fetched;
     for (size_t i = 0; i < job->pushes.size(); i++) {
         const TegraGM20BAbiPush &p = job->pushes[i];
-        if (p.va != arguments.va)
+        if (p.va < arguments.va || p.va >= arguments.va + 64)
             continue;
-        fetched = true;
-        EXPECT_EQ(p.dwords, 3u);
+        fetched.push_back({p.va, p.dwords});
         EXPECT_TRUE(p.flags & TegraGM20BPushNoPrefetch) << "fetched only when the stream reaches it";
         ASSERT_GT(i, 0u);
         EXPECT_TRUE(job->pushes[i - 1].flags & TegraGM20BPushIncomplete) << "the header's push runs on into it";
     }
-    EXPECT_TRUE(fetched) << "the arguments are a push of their own";
+    EXPECT_EQ(fetched, want) << "the arguments' words are pushes of their own";
 }
 
 TEST_F(DeviceIndirectDispatch, AStageInRegionFromABufferReachesTheRootTablesRegionWords)

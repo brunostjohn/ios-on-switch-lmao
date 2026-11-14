@@ -5344,6 +5344,52 @@ host_test(
     ] + RAW_HOST_DEPS,
 )
 
+host_test(
+    name = "raw_facade_indirect_dispatch_test",
+    srcs = [
+        "made_metallib.h",
+        "model_gpu.h",
+        "predication_model.h",
+        "raw_facade_compute.h",
+        "raw_facade_harness.h",
+        "raw_job_methods.h",
+        "raw_facade_indirect_dispatch_test.cpp",
+        "raw_frontend_absent.cpp",
+        "raw_kernel_model.h",
+        "empty_pack.h",
+        "raw_facade_standins.h",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    data = [":fake_nvk/libvulkan_nouveau.dylib"],
+    env = {"SWITCH_FAKE_NVK": "$(rootpath :fake_nvk/libvulkan_nouveau.dylib)"},
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
+        ":raw_facade_plugin_host",
+        ":raw_runtime_plugin_host",
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
+    ] + RAW_HOST_DEPS,
+)
+
 # The corpus's render states made on the raw facade with a device build's pack and the IPSW crawl's libraries, which name
 # what opens m2v. Manual: it needs SWITCH_REAL_PACK (a pack.bin of this build's version) and SWITCH_LIB_ROOT (the crawl's
 # root/), passed with --test_env.
