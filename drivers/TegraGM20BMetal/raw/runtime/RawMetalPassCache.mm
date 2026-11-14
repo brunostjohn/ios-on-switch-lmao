@@ -285,6 +285,22 @@ void rmPassDone()
     os_unfair_lock_unlock(&tCache.lock);
 }
 
+RMPassTrim rmPassHeld()
+{
+    RMPassTrim held = {};
+    std::lock_guard<std::mutex> registry(gCachesLock);
+    for (Cache *c : gCaches) {
+        os_unfair_lock_lock(&c->lock);
+        for (const RMPassEntry &e : c->entries)
+            if (e.pass) {
+                ++held.passes;
+                held.textures += texturesOf(e.facts);
+            }
+        os_unfair_lock_unlock(&c->lock);
+    }
+    return held;
+}
+
 RMPassTrim rmPassTrim()
 {
     RMPassTrim trimmed = {};

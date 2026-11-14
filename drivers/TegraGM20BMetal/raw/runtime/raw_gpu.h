@@ -1983,6 +1983,8 @@ public:
     };
 
     Trimmed trim();
+    // The kept surface imports trim would give back now (debug builds' rates line)
+    Trimmed keptImports();
 
     // Whether the device's resource lock is free now (try, never waits: the stall line's)
     bool lockFree()

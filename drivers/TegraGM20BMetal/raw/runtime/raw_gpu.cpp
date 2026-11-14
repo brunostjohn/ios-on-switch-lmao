@@ -1788,6 +1788,12 @@ void Device::keepImport(Import *i)
     }
 }
 
+Device::Trimmed Device::keptImports()
+{
+    std::lock_guard<raw::Mutex> l(lock_);
+    return {keptImports_.size(), keptImportBytes_};
+}
+
 Device::Trimmed Device::dropKeptImports()
 {
     const Trimmed trimmed = {keptImports_.size(), keptImportBytes_};

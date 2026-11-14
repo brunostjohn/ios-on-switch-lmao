@@ -39,3 +39,5 @@ struct RMPassTrim {
 };
 
 RMPassTrim rmPassTrim();
+// What every thread's kept passes hold now, letting none go (debug builds' rates line)
+RMPassTrim rmPassHeld();
