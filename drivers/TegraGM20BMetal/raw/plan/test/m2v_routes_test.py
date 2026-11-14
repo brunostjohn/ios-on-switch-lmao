@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """raw/plan/m2v_routes.tsv is the closed list of every way work still reaches m2v.
 
-Its product rows are exactly the routes m2v_routes_scan.py reads from the plugin's sources, each with the files that raise
-it; a route with no row, a row whose route is gone and a row whose files moved all fail. The open rows of each kind are
-pinned here and may only be lowered. A row that, once m2v is gone, returns Metal's error names the refusal line it logs
-(an error line kept in release, kits/SwitchRefusal); a row main already closes must raise that line in its files.
+Its product rows are exactly the routes m2v_routes_scan.py reads from the plugin's sources, each with the files that
+raise it; a route with no row, a row whose route is gone and a row whose files moved all fail. The open rows of each
+kind are pinned here and may only be lowered. A row that, once m2v is gone, returns Metal's error names the refusal line
+it logs (an error line kept in release, kits/SwitchRefusal); a row main already closes must raise that line in its
+files. The identifiers that name an m2v twin are counted and pinned too: after the cut the count is 0, and every twin
+row left is raw's own form, which the rename step (S4) renames.
 """
 
 import csv
 import unittest
 from collections import Counter
-from pathlib import Path
 
 from m2v_routes_scan import ROOT, Census
 
@@ -19,7 +20,9 @@ COLUMNS = ('kind', 'route', 'name', 'raised_in', 'gone', 'logs', 'owner', 'statu
 KINDS = ('product', 'test', 'tool')
 GONE = ('native', 'form', 'error', 'dead', 'none')
 # Open rows per kind: lower these as rows close, never raise them
-OPEN = {'product': 128, 'test': 19, 'tool': 2}
+OPEN = {'product': 126, 'test': 19, 'tool': 4}
+# Identifiers naming an m2v twin in the plugin's code (route twin, gone other than none): the cut leaves none
+M2V_TWINS = 54
 
 
 def table() -> list[dict[str, str]]:
@@ -42,7 +45,7 @@ class Routes(unittest.TestCase):
 
     def test_vocabulary(self) -> None:
         for row in self.rows:
-            where = f"{row['route']} {row['name']}"
+            where = f'{row["route"]} {row["name"]}'
             self.assertIn(row['kind'], KINDS, where)
             self.assertIn(row['gone'], GONE, where)
             status = row['status']
@@ -70,6 +73,11 @@ class Routes(unittest.TestCase):
         open_rows = Counter(row['kind'] for row in self.rows if row['status'] == 'open')
         self.assertEqual({kind: open_rows.get(kind, 0) for kind in KINDS}, OPEN)
 
+    def test_m2v_twins_pinned(self) -> None:
+        product = [r for r in self.rows if r['kind'] == 'product' and r['route'] == 'twin']
+        twins = [r['name'] for r in product if r['gone'] != 'none']
+        self.assertEqual(len(twins), M2V_TWINS, twins)
+
     def test_closed_error_rows_log_their_line(self) -> None:
         tags = {name: files for (route, name), files in self.census.routes.items() if route == 'tag'}
         tags.update({'raw:' + name: files for (route, name), files in self.census.routes.items() if route == 'pred'})
@@ -77,8 +85,10 @@ class Routes(unittest.TestCase):
             if row['kind'] != 'product' or row['gone'] != 'error' or row['status'] != 'main' or row['route'] == 'sel':
                 continue
             files = set(row['raised_in'].split(','))
-            self.assertTrue(tags.get(row['logs'], set()) & files,
-                            f"{row['route']} {row['name']}: closed, but {row['logs']} is not raised in {files}")
+            self.assertTrue(
+                tags.get(row['logs'], set()) & files,
+                f'{row["route"]} {row["name"]}: closed, but {row["logs"]} is not raised in {files}',
+            )
 
 
 if __name__ == '__main__':

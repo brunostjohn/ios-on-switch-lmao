@@ -249,9 +249,9 @@ struct RawState {
 
 extern RawState *gRM;
 
-// RawMetalM2V.mm: the m2v device, for something the raw path has no own for (`need`; `selector` names a forwarded device
-// selector's), opened now if this is the process's first need (nil: none can be had). Debug builds name each need once a
-// process and keep their count (switchRawM2V): what made its m2v device open.
+// RawMetalM2V.mm: the m2v device, for something the raw path has no own for (`need`; `selector` names a forwarded
+// device selector's), opened now if this is the process's first need (nil: none can be had). Debug builds name each
+// need once a process and keep their count (switchRawM2V): what made its m2v device open.
 id<MTLDevice> rmM2V(RMNeed need, SEL selector = nullptr);
 // The m2v device if something opened it already, else nil: what holds no need of its own (a twin made already, the
 // counters)
