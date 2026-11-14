@@ -13,13 +13,18 @@ void establishFresh(RMTexture *t, MTLTextureDescriptor *d);
 class FreshWrites {
 public:
     FreshWrites(RMCommandBuffer *cb, size_t from, size_t to, raw::CommandBuffer &rc);
+    FreshWrites() = default;
     FreshWrites(const FreshWrites &) = delete;
     FreshWrites &operator=(const FreshWrites &) = delete;
     ~FreshWrites();
+    // An encode ahead's encoder [from, to): the fresh textures it names first taken; whether one of them needs its contents
+    // written (written(): in a blit of its own, after the encoder before it ended and ahead of this one)
+    bool claim(RMCommandBuffer *cb, size_t from, size_t to);
+    void written(raw::CommandBuffer &rc);
     void submitted(RMCommandBuffer *cb);
 
 private:
-    std::vector<id> handled_;
+    std::vector<id> handled_, pending_;
     bool submitted_ = false;
 };
 

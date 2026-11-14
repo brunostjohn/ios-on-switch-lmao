@@ -215,11 +215,12 @@ private:
         return node;
     }
 
+    // The taker looks on every pass of its loop: a look with nothing given is a load, no exchange
     void take()
     {
-        Node *given = given_.exchange(nullptr, std::memory_order_acquire);
-        if (!given)
+        if (!given_.load(std::memory_order_relaxed))
             return;
+        Node *given = given_.exchange(nullptr, std::memory_order_acquire);
         Node *first = nullptr, *last = given;
         while (given) {
             Node *next = given->next;

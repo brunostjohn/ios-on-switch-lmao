@@ -179,6 +179,7 @@ TESTS: dict[str, bool] = {
             'gpu.path.cpu_locks_side_by_side',
             'gpu.path.cpu_locks_side_by_side_pitch',
             'gpu.path.import_beside_submits',
+            'gpu.path.commit_latency',
             'metal.native.depth_stencil',
             'metal.native.shared_event',
             'metal.native.fence',

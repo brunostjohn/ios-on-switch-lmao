@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <vector>
+#include "raw_grow_list.h"
 
 namespace raw {
 
@@ -184,9 +185,9 @@ private:
     uint64_t generation_ = 0;
     uint64_t captured_ = std::numeric_limits<uint64_t>::max();
     uint32_t index_ = std::numeric_limits<uint32_t>::max();
-    std::vector<Header> headers_;
-    std::vector<Chunk> chunks_;
-    std::vector<uint32_t> changed_;
+    GrowList<Header> headers_;
+    GrowList<Chunk> chunks_;
+    GrowList<uint32_t> changed_;
     uint32_t pending_ = ~0u;
     uint32_t edited_ = 0;
 };
@@ -276,7 +277,7 @@ public:
 
 private:
     Objects objects_;
-    std::vector<uint32_t> sets_;
+    GrowList<uint32_t> sets_;
     uint32_t set_ = 0;
 };
 

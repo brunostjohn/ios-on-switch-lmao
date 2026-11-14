@@ -118,6 +118,11 @@ struct Stats {
     // waitUntilScheduled / waitUntilCompleted calls that blocked, and the time they blocked: CPU waits on the caller's thread
     // (Core Animation's render thread flushes with waitUntilScheduled every frame)
     std::atomic<uint64_t> scheduledWaits{0}, scheduledWaitUs{0}, completedWaits{0}, completedWaitUs{0};
+    // encoders the worker encoded before their command buffer's commit (RawMetalPipeline.mm), of the encoders of the raw
+    // command buffers it sealed; encodes ahead given back, by the first reason (RMPipelineVeto's bit)
+    std::atomic<uint64_t> pipelinedEncoders{0}, sealedEncoders{0}, pipelineAbandons[15]{};
+    // command buffers handed to the worker as encoders ended, and those hand-offs that found it asleep (woken by them)
+    std::atomic<uint64_t> handoffs{0}, handoffWakes{0};
 #if SWITCH_FRAME_TIMELINE
     // the m2v replay's parts (noteReplay)
     std::atomic<uint64_t> replaySlotUs{0}, replayTwinUs{0}, replayCommitUs{0}, replayMaxUs{0};
@@ -189,10 +194,11 @@ struct RMScheduleChange {
     enum Kind : uint8_t {
         Enqueue,
         Commit,
-        Wake
+        Wake,
+        Encoded  // more of its tape is final (rmPublishEncoder)
     } kind = Wake;
 
-    RMCommandBuffer *buffer = nil;  // Enqueue, Commit
+    RMCommandBuffer *buffer = nil;  // Enqueue, Commit, Encoded
     void *queue = nullptr;          // Wake: the queue whose head it wakes (null: none)
     uint32_t dependencies = 0;      // Wake: the progress it reports (RMReadyDependency)
 };
@@ -238,6 +244,12 @@ struct RawState {
     dispatch_queue_t handlers;           // where scheduled handlers run (in order, never inside commit)
     raw::ProgressGate progress;          // whether a completion wakes the submit worker (raw_progress_gate.h)
     std::atomic<uint32_t> committed{0};  // command buffers committed and not finished (the arenas' purge)
+    std::atomic<uint64_t> moves{0};      // texture memory moves other threads made (rmExcludingSubmissions)
+    std::atomic<bool> orphanCheck{
+        false};  // the device idled: an encode ahead no one can commit goes (rmPipelineOrphans)
+    // the submit worker is about to wait or waits for a change: a command buffer's hand-offs after its first wake it only
+    // then (rmPublishEncoder; with its _published, a store then a load on each side, both sequentially consistent)
+    std::atomic<bool> submitAsleep{false};
     // ranges handed to the kernel or m2v and not completed (rmRangeHandedOff): gRawRelease's drain and its idle rule's
     // in-flight count, which a command buffer parked on an event the CPU has not signalled holds no part of
     std::atomic<uint32_t> rangesInFlight{0};
@@ -516,7 +528,30 @@ bool rmInSubmission();
 // `move` with no submission running: at once on the submit worker inside its own submission
 template <typename Move> auto rmExcludingSubmissions(Move &&move) -> decltype(move())
 {
-    return rmInSubmission() ? move() : rmSubmitGate().exclude(move);
+    if (rmInSubmission())
+        return move();
+    return rmSubmitGate().exclude([&] {
+        // a texture's memory may move: an encode ahead that named it goes again (RawMetalPipeline.mm)
+        gRM->moves.fetch_add(1, std::memory_order_release);
+        return move();
+    });
+}
+
+void rmMarkSubmission(bool submitting);
+
+// `run` on the submit worker as a submission of its own (moves excluded): an encode ahead's step
+template <typename Run> auto rmSubmission(Run &&run) -> decltype(run())
+{
+    rmMarkSubmission(true);
+
+    struct Unmark {
+        ~Unmark()
+        {
+            rmMarkSubmission(false);
+        }
+    } unmark;
+
+    return rmSubmitGate().submit(run);
 }
 
 extern thread_local bool tRawEncoding;

@@ -264,8 +264,8 @@ TEST(RawPrivateComp, TheCheckIsAFlagTestPerPassAtRecordAndTheMoveRunsBeforeTheRa
 {
     const std::string record = SourceText("../raw/runtime/RawMetalCommandBuffer.mm");
     EXPECT_THAT(record, HasSubstr("if (cmd.op == OpPipeline && _recordedPass < _passes.size() && "
-                                  "_passes[_recordedPass].compressed)\n        rmNoteStorageTargets(self, "
-                                  "_passes[_recordedPass], cmd);"));
+                                  "_passes.own(_recordedPass).compressed)\n        rmNoteStorageTargets(self, "
+                                  "_passes.own(_recordedPass), cmd);"));
     const std::string pass = SourceText("../raw/runtime/RawMetalEncoder.mm");
     EXPECT_THAT(pass, HasSubstr("facts.compressed |= uint8_t(1u << c);"));
     const std::string submit = SourceText("../raw/runtime/RawMetalSubmit.mm");
@@ -292,7 +292,7 @@ TEST(RawPrivateComp, TheCheckIsAFlagTestPerPassAtRecordAndTheMoveRunsBeforeTheRa
     EXPECT_THAT(move, HasSubstr("gPlainShapes.add("));
     EXPECT_THAT(move, HasSubstr("rmTexturePlain(t)"));
     EXPECT_THAT(Body(facade, "uint32_t privateCompressedKind("), HasSubstr("gPlainShapes.holds("));
-    EXPECT_THAT(SourceText("../raw/runtime/RawMetalEncode.mm"), HasSubstr("tRawEncoding = true;"));
+    EXPECT_THAT(SourceText("../raw/runtime/RawMetalRangeEncode.h"), HasSubstr("tRawEncoding = true;"));
 }
 
 TEST(RawPrivateComp, AStoredZetaTakesCompressedMemoryInEveryBuildAndKeepsItsTwinMove)

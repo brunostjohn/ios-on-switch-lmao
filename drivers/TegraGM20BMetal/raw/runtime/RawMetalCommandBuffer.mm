@@ -6,6 +6,9 @@
 #include "raw_compute.h"
 #include "raw_scheduled_wait.h"
 #include "raw_take_pool.h"
+#import "RawMetalPipeline.h"
+#import "RawMetalCounters.h"
+#include "raw_counter_kernel.h"
 
 // ---- the device's submission machinery ----
 
@@ -15,11 +18,11 @@
 // with no lock (raw_take_pool.h): a command buffer takes one where it is made and keeps it where it is freed.
 struct RMRecording {
     RMCommandPlan plan;
-    std::vector<RMPass> passes;
+    raw::GrowList<RMPass> passes;
     RMBytes bytes;
     std::deque<raw::RetirementWrites> retirements;
-    std::vector<uint8_t> shadow;
-    std::vector<uint64_t> extra;
+    raw::GrowList<uint8_t> shadow;
+    raw::GrowList<uint64_t> extra;
     std::vector<id> owners;
     raw::PointerMap<bool> ownerKeys;
     std::vector<RMSegment> segs;
@@ -315,22 +318,22 @@ void rmPoolCommandBuffers()
     if (_commandLog) {
         RMSubCommand s{cmd, {}};
         if (const size_t words = raw::extraWords(cmd))
-            s.extra.assign(_extra.begin() + ptrdiff_t(cmd.x), _extra.begin() + ptrdiff_t(cmd.x + words));
+            s.extra.assign(_extra.ownData() + cmd.x, _extra.ownData() + cmd.x + words);
         _commandLog->push_back(s);
     }
-    if (cmd.op == OpPipeline && _recordedPass < _passes.size() && _passes[_recordedPass].compressed)
-        rmNoteStorageTargets(self, _passes[_recordedPass], cmd);
+    if (cmd.op == OpPipeline && _recordedPass < _passes.size() && _passes.own(_recordedPass).compressed)
+        rmNoteStorageTargets(self, _passes.own(_recordedPass), cmd);
     if (cmd.op == OpCompute)
         _predicates.computeEncoder(cmd.a);
     else if (cmd.op == OpRender || cmd.op == OpBlit || cmd.op == OpSignalEvent || cmd.op == OpWaitEvent)
         _predicates.otherWork();
-    if (_plan.record(cmd, _extra)) {
+    if (_plan.record(cmd, _extra.ownData())) {
         std::vector<raw::ResourceUse> &uses = _plan.recordUses();
         if (isPlanDraw(cmd.op)) {
-            const uint32_t index = _plan.draw(_plan.size() - 1).state;
-            const auto &state = _plan.renderStates[index];
+            const uint32_t index = _plan.ownDraw(_plan.size() - 1).state;
+            const auto &state = _plan.renderStates.own(index);
             if (!state.usesFinal) {
-                const auto &raster = _plan.raster[state.raster];
+                const auto &raster = _plan.raster.own(state.raster);
                 RMPipeline *pipeline = (__bridge RMPipeline *)raster.pipeline;
                 const raw::Pipeline *native = static_cast<const raw::Pipeline *>(raster.nativePipeline);
                 if (!native && [(id)pipeline isKindOfClass:[RMPipeline class]])
@@ -389,7 +392,7 @@ void rmPoolCommandBuffers()
                 [self takeReason:WhyCompute why:[NSString stringWithUTF8String:why]];
         } else if (cmd.op == OpRender) {
             _recordedPass = uint32_t(cmd.x);
-            const RMPass &pass = _passes[cmd.x];
+            const RMPass &pass = _passes.own(cmd.x);
             for (const RMPass::Color &a : pass.color)
                 if (a.texture)
                     uses.push_back({(__bridge void *)a.texture,
@@ -420,8 +423,12 @@ void rmPoolCommandBuffers()
         }
         if (!uses.empty())
             _plan.addUses(_plan.size() - 1, uses);
-        if (cmd.op == OpEnd && _encOpen)
+        if (cmd.op == OpEnd && _encOpen) {
             _plan.prepareRange(_encAt, _plan.size());
+            // its refusal is final now, into its first command before the worker may read it
+            [self closeEncoder];
+            rmPublishEncoder(self);
+        }
     }
     const size_t consumed = raw::extraWords(cmd);
     if (consumed && cmd.x + consumed == _extra.size())
@@ -442,6 +449,7 @@ void rmPoolCommandBuffers()
         _encRefused = true;  // this encoder goes to m2v
     else
         _whole = true;
+    rmPipelineVeto(self, _active ? VetoRefused : VetoWhole);
     if (_reason != WhyRaw)
         return;
     _reason = reason;
@@ -451,6 +459,7 @@ void rmPoolCommandBuffers()
 // A refusal of the command buffer's own (an event m2v must see, a call on the command buffer): the whole of it goes to m2v
 - (void)takeWholeReason:(RMReason)reason why:(NSString *)why
 {
+    rmPipelineVeto(self, VetoWhole);
     _whole = true;
     [self takeReason:reason why:why];
 }
@@ -657,6 +666,9 @@ void rmPoolCommandBuffers()
         return;
     _status = MTLCommandBufferStatusCommitted;
     _kernelStart = hostSeconds();
+#if SWITCH_RAW_DIAGNOSTICS
+    _committedTicks = mach_absolute_time();
+#endif
 #if SWITCH_FRAME_TIMELINE
     static thread_local switch_frame::Since since;
     const raw::Device::Stats &k = gRM->raw->stats;
@@ -724,6 +736,7 @@ void rmPoolCommandBuffers()
     std::lock_guard<raw::Mutex> lock(_lock);
     if (_committed)
         return @NO;
+    rmPipelineVeto(self, VetoProbes);
     _forceWholePrograms = true;
     return @YES;
 }
@@ -734,6 +747,7 @@ void rmPoolCommandBuffers()
     std::lock_guard<raw::Mutex> lock(_lock);
     if (_committed)
         return @NO;
+    rmPipelineVeto(self, VetoProbes);
     _inlineStates = true;
     return @YES;
 }
@@ -763,6 +777,36 @@ void rmPoolCommandBuffers()
     if (!route.onlyCompatibility() && !_m2v)
         return @"raw";
     return [NSString stringWithFormat:@"m2v:%s:%s", kReasonNames[_reason], kPredNames[_pred0]];
+}
+
+// hw_test_app's gpu.path.commit_latency, final once it completed: of its raw ranges' encoders, those the worker encoded
+// ahead of its commit; the encodes ahead of it the worker gave back and why (given_back), the reasons the recording gave
+// (veto, both RMPipelineVeto); and, while its stamps' slot still holds them (kStampSlots command buffers on), the time
+// from its commit to its submission's start on the GPU (its start stamp's PTIMER on the CPU's clock through the
+// kernel's anchors)
+- (NSDictionary<NSString *, NSNumber *> *)switchRawPipelined
+{
+    if (!_completedSent)
+        return nil;
+    NSMutableDictionary *out = [@{
+        @"encoders" : @(_pipelineEncoders),
+        @"pipelined" : @(_pipelinedEncoders),
+        @"abandons" : @(_pipelineAbandons),
+        @"veto" : @(_pipelineVeto.load(std::memory_order_relaxed)),
+        @"given_back" : @(_pipelineGivenBack),
+    } mutableCopy];
+#if SWITCH_RAW_DIAGNOSTICS
+    uint64_t units = 0;
+    const TegraGM20BAbiClockAnchors anchors = rmClockAnchorsNow();
+    if (gRM->raw->gpuStartUnits(_stamp, units))
+        if (const raw::counters::Anchor a = raw::counters::anchorOf(anchors, units); a.valid) {
+            mach_timebase_info_data_t tb;
+            mach_timebase_info(&tb);
+            const double committedNs = double(_committedTicks) * tb.numer / tb.denom;
+            out[@"commit_to_gpu_start_us"] = @((double(raw::counters::nanoseconds(a, units)) - committedNs) / 1000.0);
+        }
+#endif
+    return out;
 }
 
 // facadecost's held-chunk check: the GPU addresses of its setBytes chunks, read while its job is held in flight (they go

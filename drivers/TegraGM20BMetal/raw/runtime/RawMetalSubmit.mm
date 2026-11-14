@@ -7,6 +7,7 @@
 #include "raw_loop_ranges.h"
 #include "raw_order.h"
 #include "raw_completion_source.h"
+#import "RawMetalPipeline.h"
 
 // ---- commit: order between the two drivers ----
 // With the kernel's Order (TegraGM20BABI.h method 14), the two drivers' command buffers are ordered on the GPU: before a raw
@@ -236,6 +237,11 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
     }
     // a present is added before its command buffer is committed, a completed handler's flag before it is added
     const bool observed = cb->_hasCompletedHandlers.load() || cb->_presents;
+    {
+        const bool more = !priorError && cb->_segNext < cb->_segs.size();
+        const RMSegment *next = more ? &cb->_segs[cb->_segNext] : nullptr;
+        rmPipelineYield(cb, next ? next->from : SIZE_MAX, next && next->raw && !next->event && !next->held);
+    }
     if (priorError) {
         finish(cb, priorError);
         return true;

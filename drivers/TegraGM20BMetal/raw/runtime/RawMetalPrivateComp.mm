@@ -29,6 +29,11 @@ bool submitRangeExclusive(RMCommandBuffer *cb, bool followed)
     return submitted;
 }
 
+void rmMarkSubmission(bool submitting)
+{
+    tSubmitting = submitting;
+}
+
 raw::SubmitGate &rmSubmitGate()
 {
     return gSubmitGate;
@@ -140,6 +145,7 @@ static void notePipeline(RMCommandBuffer *cb, const RMPass &pass, const raw::Pip
                          const raw::FetchDraw *draw)
 {
     if (pending) {
+        rmPipelineVeto(cb, VetoStorage);
         cb->_scanStorageTargets = true;
         return;
     }
@@ -159,8 +165,10 @@ static void notePipeline(RMCommandBuffer *cb, const RMPass &pass, const raw::Pip
     for (uint32_t slot = 0; slots >> slot; ++slot) {
         RMTexture *t = (RMTexture *)pass.color[slot].texture;
         if ((slots >> slot & 1) && fitsOncePlain(*pl, slot, t->_raw) &&
-            std::find(cb->_plainForStorage.begin(), cb->_plainForStorage.end(), t) == cb->_plainForStorage.end())
+            std::find(cb->_plainForStorage.begin(), cb->_plainForStorage.end(), t) == cb->_plainForStorage.end()) {
+            rmPipelineVeto(cb, VetoStorage);
             cb->_plainForStorage.push_back(t);
+        }
     }
 }
 

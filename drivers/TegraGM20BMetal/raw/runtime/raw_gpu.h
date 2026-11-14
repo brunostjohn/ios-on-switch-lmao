@@ -1519,6 +1519,13 @@ public:
     std::shared_ptr<ResourceReadyCompletion> resourceReadiness(std::function<void()> ready, int &result);
     const Texture *readTexture(const Texture *texture);
     void requirePitch(const Import *source);
+    // An import required pitch after a texture over it was read through its native image
+    bool pitchAfterNativeRead() const;
+    // Encoded before its command buffer's commit (RawMetalRangeEncode.h): the CPU may still write a buffer, so the encode
+    // reads no buffer's contents; one that would have is `contentsDeferred` (the encode then stops, and goes again at the
+    // commit)
+    bool deferContents = false;
+    bool contentsDeferred = false;
     void invalidateNativeReads();
     void releaseNativeReads();
 
@@ -2235,6 +2242,12 @@ public:
         return generations_.current();
     }
 
+    // The channel an encode began on (channelGeneration() then) is the one begin() would hand out now
+    bool channelCurrent(uint64_t generation) const
+    {
+        return channelGeneration() == generation && !contextless_ && !k_.lost(channel_);
+    }
+
     uint32_t completed() const
     {
         return *fence_;
@@ -2274,6 +2287,10 @@ public:
 
     // A completed command buffer's GPU time from its stamps; false when its slot holds a later one's
     bool gpuNanoseconds(uint32_t stamp, uint64_t &ns) const;
+#if SWITCH_RAW_DIAGNOSTICS
+    // The PTIMER value its submission started at, while its slot still holds its stamps
+    bool gpuStartUnits(uint32_t stamp, uint64_t &units) const;
+#endif
     // a committed command buffer's measured draws, kept until the GPU has run them (raw_band_rates.h)
     void noteCommittedTimings(std::vector<DrawTiming> &timings);
     // the measured draws the GPU has run, each teaching its state's rate: every command buffer's completer calls it

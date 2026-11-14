@@ -92,12 +92,24 @@ FirstUse firstUse(RMCommandBuffer *cb, size_t from, size_t to, RMTexture *t)
             return FirstUse::Other;
         const RMPass &pass = cb->_passes[cb->_plan.legacy(at).x];
         const raw::Texture &x = t->_raw;
+        uint32_t smallestWidth = UINT32_MAX, smallestHeight = UINT32_MAX;
+        const auto attachment = [&](__unsafe_unretained id object, NSUInteger level) {
+            if (__unsafe_unretained RMTexture *a = (RMTexture *)object) {
+                smallestWidth = std::min(smallestWidth, std::max(a->_raw.width >> level, 1u));
+                smallestHeight = std::min(smallestHeight, std::max(a->_raw.height >> level, 1u));
+            }
+        };
+        for (const RMPass::Color &c : pass.color)
+            attachment(c.texture, c.level);
+        attachment(pass.depth, 0);
+        const uint32_t areaWidth = raw::renderAreaSide(uint32_t(pass.width), smallestWidth),
+                       areaHeight = raw::renderAreaSide(uint32_t(pass.height), smallestHeight);
         for (const RMPass::Color &c : pass.color)
             if (c.texture == t && c.level == 0 &&
                 raw::firstPassWritesAll(x.width, x.height, x.chain ? x.chain->layout.levels : 1,
                                         x.type == raw::fx::kTexThreeD ? x.depth : x.layers,
                                         c.load == MTLLoadActionClear, c.store == MTLStoreActionStore,
-                                        access & raw::ResourceUse::Sample, uint32_t(pass.width), uint32_t(pass.height)))
+                                        access & raw::ResourceUse::Sample, areaWidth, areaHeight))
                 return FirstUse::ClearsAll;
         return FirstUse::Other;
     }
@@ -163,6 +175,44 @@ FreshWrites::FreshWrites(RMCommandBuffer *cb, size_t from, size_t to, raw::Comma
     gFresh.settle(std::move(later), false);
 }
 
+bool FreshWrites::claim(RMCommandBuffer *cb, size_t from, size_t to)
+{
+    if (!gFresh.any())
+        return false;
+    std::vector<FreshEntry> taken = gFresh.take(), later;
+    for (FreshEntry &e : taken) {
+        RMTexture *t = e.texture;
+        if (!t || t->_heap)
+            continue;
+        const FirstUse use = firstUse(cb, from, to, t);
+        if (use == FirstUse::None) {
+            later.push_back({t});
+            continue;
+        }
+        (use == FirstUse::ClearsAll ? handled_ : pending_).push_back(t);
+        RAW_DIAGNOSTIC(gCleared.fetch_add(use == FirstUse::ClearsAll, std::memory_order_relaxed));
+    }
+    gFresh.settle(std::move(later), false);
+    return !pending_.empty();
+}
+
+void FreshWrites::written(raw::CommandBuffer &rc)
+{
+    if (pending_.empty())
+        return;
+    raw::BlitEncoder *b = rc.blit();
+    for (id t : pending_) {
+        const uint64_t bytes = writeFresh(*b, (RMTexture *)t);
+        RAW_DIAGNOSTIC(gFilledBytes.fetch_add(bytes, std::memory_order_relaxed));
+        RAW_DIAGNOSTIC(gFilled.fetch_add(1, std::memory_order_relaxed));
+        (void)bytes;
+    }
+    b->barrier();
+    b->end();
+    handled_.insert(handled_.end(), pending_.begin(), pending_.end());
+    pending_.clear();
+}
+
 void FreshWrites::submitted(RMCommandBuffer *cb)
 {
     submitted_ = true;
@@ -171,11 +221,12 @@ void FreshWrites::submitted(RMCommandBuffer *cb)
 
 FreshWrites::~FreshWrites()
 {
-    if (submitted_ || handled_.empty())
+    if (submitted_ || (handled_.empty() && pending_.empty()))
         return;
     std::vector<FreshEntry> back;
-    for (id t : handled_)
-        back.push_back({(RMTexture *)t});
+    for (const std::vector<id> *list : {&handled_, &pending_})
+        for (id t : *list)
+            back.push_back({(RMTexture *)t});
     gFresh.settle(std::move(back), false);
 }
 

@@ -296,9 +296,9 @@ struct RMPass {
 // (m2v's replay reads them back), each copy 256-byte aligned and zero to the next 256 bytes as an upload chunk is. The chunks go
 // with the recording (giveRecording), so they outlive every submission that reads them.
 struct RMBytes {
-    std::vector<raw::Buffer> chunks;  // va 0: heap memory (the GPU pool had none; the command buffer is m2v's)
-    size_t at = 0;                    // the chunk being filled
-    uint32_t used = 0;                // its bytes taken
+    raw::GrowList<raw::Buffer> chunks;  // va 0: heap memory (the GPU pool had none; the command buffer is m2v's)
+    size_t at = 0;                      // the chunk being filled
+    uint32_t used = 0;                  // its bytes taken
 };
 
 // A command buffer's first error, set under its lock; whether it has one is readable with no lock
@@ -376,7 +376,7 @@ struct RMSharedEventWait {
     bool _encOpen, _encRefused, _whole;
     raw::PredicateRecords _predicates;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    bool _forceWholePrograms, _inlineStates;
+    std::atomic<bool> _forceWholePrograms, _inlineStates;
     // hw_test_app's probes (RawMetalProbe.mm): its barriers' forms, where they took effect, and its 2D-engine work, each
     // at the blit encoder whose first command is at `at`
     raw::ProbeForms _probeForms;
@@ -423,8 +423,8 @@ struct RMSharedEventWait {
     // variant for them (raw_xr_pass.h): only these of that format get their stand-in drawn
     std::set<RMTexture *> _xrStandIns;
     RMCommandPlan _plan;
-    std::vector<RMPass> _passes;  // OpRender's (Cmd::x)
-    uint32_t _recordedPass;       // the OpRender the draws being recorded belong to
+    raw::GrowList<RMPass> _passes;  // OpRender's (Cmd::x)
+    uint32_t _recordedPass;         // the OpRender the draws being recorded belong to
     // compressed attachments a recorded draw binds as storage images with no barrier form: plain before the raw encode
     std::vector<RMTexture *> _plainForStorage;
     bool _scanStorageTargets;  // a pipeline bound in such a pass was a variant still being made
@@ -437,8 +437,8 @@ struct RMSharedEventWait {
     size_t _retired;
     // a pass's vertex setBytes before its first draw, again in cached memory (Cmd::x: offset + 1): the draw's geometry
     // the encode reads (the first draw's cover test) is not read from the write-combined chunk
-    std::vector<uint8_t> _shadow;
-    std::vector<uint64_t> _extra;
+    raw::GrowList<uint8_t> _shadow;
+    raw::GrowList<uint64_t> _extra;
     std::vector<id> _owners;
     raw::PointerMap<bool> _ownerKeys;  // everything the tape names, retained until completion
     RMReason _reason;
@@ -469,6 +469,23 @@ struct RMSharedEventWait {
     // its queue's head waits on a shared event Metal's GPU would wait for: waitUntilScheduled returns, its scheduled
     // handlers still wait for its submission (raw_scheduled_wait.h)
     std::atomic<bool> _held;
+    // What the submit worker may encode before the commit (RawMetalPipeline.mm). `_published`: where the worker may encode
+    // up to (the first command of the encoder ended before the last one: an encoder's end looks at the two encoders after
+    // it) << 32 | the tape's length, stored as each encoder ends; everything of the tape before that length is written for
+    // good. `_pipelineVeto`: why it is encoded at its commit instead (RMPipelineVeto), set as the reason is recorded.
+    // `_endedAt`: the last ended encoder's first command; `_handedCommands`: commands since the worker was last handed it.
+    std::atomic<uint64_t> _published;
+    std::atomic<uint32_t> _pipelineVeto;
+    size_t _endedAt;
+    uint32_t _handedCommands;
+    bool _handedOnce;  // the worker was handed it (its one RMScheduleChange::Encoded)
+    // the worker's (the caller reads it): it gave up encoding this one ahead; and how many of its encoders it encoded so
+    // (of how many)
+    std::atomic<bool> _pipelineDeclined;
+    uint32_t _pipelinedEncoders, _pipelineEncoders, _pipelineAbandons, _pipelineGivenBack;
+#if SWITCH_RAW_DIAGNOSTICS
+    uint64_t _committedTicks;  // mach_absolute_time as its commit began
+#endif
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     std::atomic<uint64_t> _heldReturnUs;  // when waitUntilScheduled returned for it held, until it was submitted
 #endif
@@ -526,6 +543,33 @@ static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b
     }
     if (!predLogged(p))
         logPred(p, a, b, nil);
+}
+
+// Why a command buffer's tape is encoded at its commit, not as its encoders end (RMCommandBuffer::_pipelineVeto, and the
+// worker's own findings): what the encode reads that the recording may still change, or work it is not built for
+enum RMPipelineVeto : uint32_t {
+    VetoWhole = 1u << 0,       // a refusal outside any encoder: all of it goes to m2v
+    VetoCounters = 1u << 1,    // counter samples
+    VetoShadows = 1u << 2,     // a texture sampled through a pool image, an extended-range stand-in
+    VetoStorage = 1u << 3,     // compressed attachments bound as storage images (raw_private_comp.h)
+    VetoProbes = 1u << 4,      // HW Test's probes
+    VetoParallel = 1u << 5,    // a parallel render encoder's sub-encoders
+    VetoOps = 1u << 6,         // an event, a compute encoder, an indirect command buffer, patches, an invocation
+    VetoRefused = 1u << 7,     // an encoder that goes to m2v
+    VetoPlanar = 1u << 8,      // a planar texture converted for its draws
+    VetoContents = 1u << 9,    // the encode read buffer contents the CPU may write until the commit
+    VetoNative = 1u << 10,     // a surface read through its native image before a later encoder wrote it
+    VetoFailed = 1u << 11,     // its encode failed ahead (the commit's encode meets the failure again, as before)
+    VetoOtherWork = 1u << 12,  // the worker needed the device for another command buffer
+    VetoDevice = 1u << 13,     // a purge, a texture's memory moved or a channel made again since it began
+    VetoZcull = 1u << 14,      // a pass loads a depth an earlier pass stored (raw_zcull_planes.h)
+    VetoKinds = 15
+};
+
+static inline void rmPipelineVeto(RMCommandBuffer *cb, uint32_t reason)
+{
+    if (!(cb->_pipelineVeto.load(std::memory_order_relaxed) & reason))
+        cb->_pipelineVeto.fetch_or(reason, std::memory_order_release);
 }
 
 // ---- encoders: they record ----
