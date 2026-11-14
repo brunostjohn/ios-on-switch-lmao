@@ -11,6 +11,19 @@
 
 #include <gtest/gtest.h>
 
+// A post-tessellation vertex function as pipelineKey sees it: its patch type is all it reads off the function
+@interface PatchFunction : NSObject
+@property (readonly) MTLPatchType patchType;
+@end
+@implementation PatchFunction
+
+- (MTLPatchType)patchType
+{
+    return MTLPatchTypeQuad;
+}
+
+@end
+
 namespace {
 
 constexpr uint64_t kStack = 0x5357495443480003ull;
@@ -158,19 +171,6 @@ TEST(CompileRequest, ItsPackKeyIsTheFacadesForFrameworkAndOwnLibraries)
     EXPECT_EQ(raw::requestPackKey(data, own), raw::pipelineKey(descriptor(), &v, &f, "", ""));
     EXPECT_TRUE(own);
 }
-
-// A post-tessellation vertex function as pipelineKey sees it: its patch type is all it reads off the function
-@interface PatchFunction : NSObject
-@property (readonly) MTLPatchType patchType;
-@end
-@implementation PatchFunction
-
-- (MTLPatchType)patchType
-{
-    return MTLPatchTypeQuad;
-}
-
-@end
 
 // The facade's key of a state's variant (RawMetalCubic.mm renderVariant's name after RawMetalStates.mm's key)
 std::string facadeKey(MTLRenderPipelineDescriptor *d, const raw::CompileRequest &r)
