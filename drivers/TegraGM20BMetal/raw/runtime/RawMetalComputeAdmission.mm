@@ -223,9 +223,21 @@ bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKern
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             viewRefused = view == raw::SlotView::View && rmHalfViewRefused();
 #endif
-            if (view == raw::SlotView::None || viewRefused) {
-                noteRefusal(cb, PredComputeView, x.slot, view == raw::SlotView::None ? x.window : 0, t,
-                            k->rec->keyHash);
+            // a record that views a slot in texels of another size is a pack or compiler defect (neither pack holds
+            // one): the command buffer fails, naming it
+            if (view == raw::SlotView::None) {
+                NSString *reason = [NSString stringWithFormat:@"Kernel %016llx's record views texture slot %u in "
+                                                              @"texels of another size (header word 0 %08x): %@",
+                                                              (unsigned long long)k->rec->keyHash, x.slot, x.window,
+                                                              textureFacts(t)];
+                os_log_error(rawLog(), "raw: %{public}s", reason.UTF8String);
+                failCommandBuffer(cb, reason, MTLCommandBufferErrorInternal);
+                if (why)
+                    *why = "a kernel record that views a texture slot in texels of another size";
+                return false;
+            }
+            if (viewRefused) {
+                noteRefusal(cb, PredComputeView, x.slot, 0, t, k->rec->keyHash);
                 if (why)
                     *why = "a kernel m2v binds a view of another texel size at a texture slot";
                 return false;
