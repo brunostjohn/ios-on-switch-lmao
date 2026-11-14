@@ -88,7 +88,7 @@ bool ComputeEncoder::dispatchIndirect(const Buffer *arguments, uint64_t offset, 
     }
     if (!prepareDescriptors(why))
         return false;
-    cb_.buffersWritten_ = true;
+    cb_.bufferWrites_.anything();
     if (serial_ && dispatched_)
         barrier();
     dispatched_ = true;

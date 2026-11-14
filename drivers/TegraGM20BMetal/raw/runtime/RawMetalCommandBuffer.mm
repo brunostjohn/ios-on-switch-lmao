@@ -455,7 +455,7 @@ static const raw::Pipeline *recordedPipeline(const raw::RasterState &raster)
 {
     if (_commandLog)
         _commandLog->push_back({cmd, {}});
-    _plan.bind(cmd, _extra);
+    _plan.bind(cmd, _extra.ownData());
 }
 
 // The encoder recorded last: whether it goes to m2v, into its first command

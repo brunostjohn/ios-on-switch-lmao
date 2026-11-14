@@ -238,7 +238,7 @@ public:
     bool record(const Cmd &c, const uint64_t *extra, size_t extraWords = 0, bool resolvesUses = false);
 
     // A binding or raster command (record's setters, one that takes no operation), as record takes it
-    void bind(const Cmd &c, const std::vector<uint64_t> &extra)
+    void bind(const Cmd &c, const uint64_t *extra)
     {
         setter(c, extra);
     }
