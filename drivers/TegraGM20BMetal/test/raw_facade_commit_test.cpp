@@ -47,6 +47,7 @@ TEST(RawFacadeCommit, ScaleShapedJobWords)
     for (const auto &shape : shapes)
         into.push_back(scale_frames::targets(opened.device, shape));
     std::vector<job_words::Run> runs;
+    const uint64_t mark = job_words::handleMark();
     for (uint32_t frame = 0; frame < 3; frame++)
         for (size_t s = 0; s < std::size(shapes); s++) {
             id<MTLCommandBuffer> cb = scale_frames::record(queue, opened.state, into[s], shapes[s], frame);
@@ -56,7 +57,7 @@ TEST(RawFacadeCommit, ScaleShapedJobWords)
             EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
             EXPECT_EQ(std::string([[(id)cb performSelector:@selector(switchRawPath)] UTF8String]), "raw");
         }
-    const std::string words = job_words::words(runs);
+    const std::string words = job_words::words(runs, mark);
     std::ofstream(outputs() + "/words.txt") << words;
     printf("scale words: %zu bytes, hash %016llx\n", words.size(), (unsigned long long)job_words::fnv(words));
     EXPECT_FALSE(words.empty());

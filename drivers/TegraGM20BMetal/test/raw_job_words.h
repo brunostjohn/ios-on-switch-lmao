@@ -3,8 +3,8 @@
 // setBytes chunks from a pool a utility queue grows ahead and completions refill after waking waitUntilCompleted
 // (RawMetalCommandBuffer.mm), so which chunk, and whether one coalesced chunk or two, varies from run to run; every
 // chunk alive is in the device's resource set, so in every job's uses. Each address in a chunk reads as its offset in
-// the command buffer's chunks laid end to end, and the BOs made since the first command buffer began read in a job's
-// uses as one name.
+// the command buffer's chunks laid end to end; a job's uses leave out the driver's coherent control memory (chunks, push
+// rings) and name the BOs made since the test's mark as one.
 #pragma once
 #include "raw_kernel_model.h"
 #import <Metal/Metal.h>
@@ -27,9 +27,15 @@ struct Chunk {
 // A command buffer's jobs, from `firstJob` to the next run's, and its setBytes chunks in the order it filled them
 struct Run {
     size_t firstJob = 0;
-    uint64_t firstHandle = 0;  // the model's next BO handle as it was recorded
     std::vector<Chunk> chunks;
 };
+
+// The model's next BO handle: taken before the first command buffer is recorded
+inline uint64_t handleMark()
+{
+    std::lock_guard<std::mutex> l(kernel_model::callLock);
+    return kernel_model::model.nextHandle;
+}
 
 // `cb` recorded and not yet committed: its jobs are the model's next ones
 inline Run run(id<MTLCommandBuffer> cb)
@@ -38,7 +44,6 @@ inline Run run(id<MTLCommandBuffer> cb)
     {
         std::lock_guard<std::mutex> l(kernel_model::callLock);
         r.firstJob = kernel_model::model.jobs.size();
-        r.firstHandle = kernel_model::model.nextHandle;
     }
     NSArray<NSNumber *> *vas = [(id)cb switchRawBytesChunks], *lengths = [(id)cb switchRawBytesChunkLengths];
     uint64_t at = 0;
@@ -58,9 +63,9 @@ inline const Chunk *chunkAt(const Run &r, uint64_t va)
 }
 
 // The model's jobs of `runs` (in order, the last one's to the model's last job): one line a job, its words in hex with each
-// (high, low) address pair in a chunk as "bytes+<offset in the run>", then its uses, those of BOs made since the first
-// run began as "made"
-inline std::string words(const std::vector<Run> &runs)
+// (high, low) address pair in a chunk as "bytes+<offset in the run>", then its uses but coherent ones, those of BOs made
+// since `mark` (handleMark) as "made"
+inline std::string words(const std::vector<Run> &runs, uint64_t mark)
 {
     std::lock_guard<std::mutex> l(kernel_model::callLock);
     const auto &jobs = kernel_model::model.jobs;
@@ -87,7 +92,10 @@ inline std::string words(const std::vector<Run> &runs)
             out += " | uses";
             bool madeNamed = false;
             for (const TegraGM20BAbiSurfaceUse &u : jobs[j].uses) {
-                if (u.handle >= runs[0].firstHandle) {
+                const auto bo = kernel_model::model.bos.find(u.handle);
+                if (bo != kernel_model::model.bos.end() && !bo->second.import && !bo->second.cached)
+                    continue;
+                if (u.handle >= mark) {
                     if (!madeNamed)
                         out += " made";
                     madeNamed = true;

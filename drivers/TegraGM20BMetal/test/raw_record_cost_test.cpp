@@ -12,6 +12,7 @@
 #include <mach/mach_time.h>
 #include <algorithm>
 #include <cstdio>
+#include <fstream>
 #include <functional>
 
 extern "C" {
@@ -374,6 +375,7 @@ TEST(RawRecordCost, CompositorFrameWords)
     const uint16_t quad[6] = {0, 1, 2, 2, 1, 3};
     id<MTLBuffer> indices = [b.device newBufferWithBytes:quad length:sizeof quad options:MTLResourceStorageModeShared];
     std::vector<job_words::Run> runs;
+    const uint64_t mark = job_words::handleMark();
     for (uint32_t frame = 0; frame < 3; frame++)
         @autoreleasepool {
             id<MTLCommandBuffer> cb = [b.queue commandBuffer];
@@ -395,7 +397,9 @@ TEST(RawRecordCost, CompositorFrameWords)
             EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
             EXPECT_EQ(std::string([[(id)cb performSelector:@selector(switchRawPath)] UTF8String]), "raw");
         }
-    const std::string words = job_words::words(runs);
+    const std::string words = job_words::words(runs, mark);
+    const char *outputs = getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+    std::ofstream(std::string(outputs ? outputs : harness::dir().c_str()) + "/compositor_words.txt") << words;
     printf("compositor words: %zu bytes, hash %016llx\n", words.size(), (unsigned long long)job_words::fnv(words));
     EXPECT_FALSE(words.empty());
 }
