@@ -90,6 +90,12 @@ uint32_t tegra_host1x_syncpt_read(uint32_t id);
 // Only after the exclusive producer stopped and retained completion records say failed; this never publishes success.
 int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshold, uint32_t max_increments);
 
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+// One CPU increment of a syncpoint no engine increments (SwitchHost1xCpuIncrement.h), so the stream waiting on it goes
+// on: a HW Test's gate (TegraVIC's SwitchVICGate.h).
+int tegra_host1x_syncpt_cpu_increment(uint32_t id);
+#endif
+
 // A stopped engine's cancelled jobs' increments, done by the CPU up to `threshold` (two at a time, the most
 // tegra_host1x_syncpt_release_failed takes): another engine's stream waiting on one of them goes on, and the engine's
 // queue renumbers from the syncpoint.

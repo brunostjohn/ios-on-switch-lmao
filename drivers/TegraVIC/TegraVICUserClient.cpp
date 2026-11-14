@@ -63,6 +63,8 @@
 #include "SwitchVICStats.h"
 #include "SwitchVICTurn.h"
 #include "SwitchVICTurnRun.h"
+#include "SwitchVICGate.h"
+#include "SwitchVICGateABI.h"
 #include "../NativeMobileDisplay/SwitchLandscapeRunABI.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
 
@@ -622,6 +624,8 @@ static IOReturn kernelTest(const Conn *conn, const IOExternalMethodArguments *a)
         memcpy(&magic, a->structureInput, sizeof(magic));
     if (magic == SWITCH_DISPLAY_LANDSCAPE_RUN_MAGIC)
         return switch_vic_landscape_call(conn, a);
+    if (magic == SWITCH_VIC_GATE_MAGIC)
+        return switch_vic_gate_call(conn, a);
     if (magic == SWITCH_DISPLAY_WINDOW_PROBE_MAGIC)
         return switch_display_window_probe_call ? switch_display_window_probe_call(a) : kIOReturnUnsupported;
     return switch_vic_kernel_test_call(a);
@@ -698,6 +702,7 @@ IOReturn tegra_vic_client_close(IOUserClient *self)
     if (Conn *conn = connOf(self)) {
 #if TEGRA_VIC_STATS
         switch_display_traits_release(conn);
+        switch_vic_gate_close(conn);
 #endif
         __atomic_store_n(&conn->closing, true, __ATOMIC_RELEASE);
         IOLockLock(gQueueLock);
