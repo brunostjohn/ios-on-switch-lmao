@@ -2,6 +2,9 @@
 // BoImport: a task's pages wired for the GPU.
 #include "TegraGM20BUserClientInternal.h"
 #include "TegraGM20BRecord.h"
+#include "TegraGM20BSurfacePrefault.h"
+
+extern "C" IOMemoryDescriptor *tegra_gm20b_prefault_take(OSObject *surface);
 
 namespace
 {
@@ -167,18 +170,27 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 		releaseBo(bo);
 		return ioreturn(pinned ? pinned : adopted ? adopted : tracked);
 	}
+	int fresh = 0;
+	IOMemoryDescriptor *creation = nullptr;
 	if (bo->surface) {
 		tgm_record *record = tgm_record_of(bo->surface);
-		const int fresh = record && tgm_record_first_import(record) &&
-				  tgm_surface_unwritten(bo->surface);
+		fresh = record && tgm_record_first_import(record) &&
+			tgm_surface_unwritten(bo->surface);
 		tgm_coherency_import(bo->coh, record, fresh);
+		creation = tegra_gm20b_prefault_take(bo->surface);
 	}
 	const uint64_t added = TGM_STATS ? statsNowNs() : 0;
 	// The GPU does not snoop the CPU caches: what the task wrote must be in DRAM before the GPU reads it, and no dirty
-	// line (fresh pages are zeroed through the cache) may be written back later over what the GPU wrote.
-	if (!covered) {
+	// line (fresh pages are zeroed through the cache) may be written back later over what the GPU wrote. The prefault's
+	// clean of a fresh surface's pages, wired since, already did that (TegraGM20BSurfacePrefault.cpp).
+	const bool cleans = tegra_gm20b_import_cleans(covered, creation != nullptr, fresh != 0);
+	if (cleans)
 		tgm_cpu_clean_pages(bo->pas, bo->npages);
+	if (!covered)
 		tgm_coherency_cleaned(bo->coh);
+	if (creation) {
+		creation->complete(kIODirectionInOut);
+		creation->release();
 	}
 	lap(3);
 	const int readOnly = static_cast<int>(bo->readOnly);
@@ -197,7 +209,7 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 		releaseBo(bo);
 		return published;
 	}
-	tgm_stats_bo_import(in->bytes, readOnly, covered, mark - start, phase);
+	tgm_stats_bo_import(in->bytes, readOnly, !cleans, mark - start, phase);
 	if (TGM_STATS) {
 		cost.bytes = in->bytes;
 		cost.total_ns = mark - start;

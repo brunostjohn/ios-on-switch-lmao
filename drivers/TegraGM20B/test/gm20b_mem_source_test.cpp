@@ -127,3 +127,27 @@ TEST(GM20BMemSource, RetirementFreesWhatLeftTheTablesAfterEverySubmitLock)
 		<< "retireBatch's, after the pass, and reap's at close, with the gate closed and "
 		   "drained";
 }
+
+// A new surface's zero-filled pages are cleaned by the prefault's thread call, which keeps them wired for the first
+// import; that import cleans on the CPU only when tegra_gm20b_import_cleans says so (gm20b_prefault_test).
+TEST(GM20BMemSource, TheFirstImportOfASurfaceCleanedAtCreationCleansNothing)
+{
+	const std::string prefault = unit("TegraGM20BSurfacePrefault.cpp");
+	const CodeText fault = Block(prefault, "void faultIn(Prefault *p, const Created &c)");
+	EXPECT_TRUE(fault.Before("memory->prepare(kIODirectionInOut)", "clean(memory)"));
+	EXPECT_TRUE(
+		fault.Has("if (record && !pressure() && clean(memory)) hold(p, memory, record); "
+			  "else memory->complete(kIODirectionInOut);"));
+	const CodeText hold = Block(prefault, "void hold(Prefault *p, IOMemoryDescriptor *memory,");
+	EXPECT_TRUE(hold.Before("p->held.hold(memory, deadline)", "tgm_record_imported(record)"));
+	const CodeText import = Block(unit("TegraGM20BUserClientImport.cpp"),
+				      "IOReturn AGXDeviceUserClient::boImport(");
+	EXPECT_TRUE(import.Before("tgm_record_first_import(record)",
+				  "creation = tegra_gm20b_prefault_take(bo->surface);"));
+	EXPECT_TRUE(import.Has("const bool cleans = tegra_gm20b_import_cleans(covered, creation != "
+			       "nullptr, fresh != 0); if (cleans) tgm_cpu_clean_pages(bo->pas, "
+			       "bo->npages);"));
+	EXPECT_TRUE(import.Before("tgm_cpu_clean_pages(bo->pas, bo->npages);",
+				  "creation->complete(kIODirectionInOut);"));
+	EXPECT_EQ(CodeText(unit("TegraGM20BRecord.cpp")).Count("__ATOMIC_SEQ_CST"), 2u);
+}

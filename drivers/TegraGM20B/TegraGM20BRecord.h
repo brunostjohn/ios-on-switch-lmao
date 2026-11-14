@@ -18,6 +18,8 @@ struct tgm_record;
 struct tgm_record *tgm_record_of(void *surface);
 /* 1 at the first call for the record (no GPU import of this memory came before), 0 after */
 int tgm_record_first_import(struct tgm_record *record);
+/* Whether a GPU import of the record's memory came */
+int tgm_record_imported(struct tgm_record *record);
 /* The coherency registry's lock held: the entry deferred on the record (null: none), and taking it back */
 void tgm_record_park(struct tgm_record *record, struct tgm_coh *c);
 struct tgm_coh *tgm_record_take(struct tgm_record *record);
