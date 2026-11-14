@@ -344,7 +344,7 @@ refresh:
 			error = switch_gpu_chan_exec_events(
 				chan, pushes, count, job.dependencies, dependencies, siblings,
 				siblingCount, events->words(), events->wordCount(), &seqno, profile,
-				jobVisibility, releases, keptCount);
+				jobVisibility, releases, keptCount, &transaction);
 			job.phases.end(TGM_SUBMIT_EXEC);
 		}
 		if (error != -11)
@@ -356,9 +356,7 @@ refresh:
 		if (error)
 			break;
 	}
-	if (count && !error)
-		switch_gpu_backing_commit(&transaction);
-	else
+	if (error)
 		switch_gpu_backing_abort(&transaction);
 	if (keptCount && !error)
 		keptPromises(record.promises, slot, completion);

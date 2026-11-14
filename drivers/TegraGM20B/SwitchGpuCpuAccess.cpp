@@ -98,7 +98,8 @@ bool cpu_conflicts(const switch_gpu_backing *backing, uint32_t access)
 
 void reserve_cpu_locked(switch_gpu_backing *backing, uint32_t access)
 {
-	++((access & kWrite) ? backing->cpu_writers : backing->cpu_readers);
+	switch_gpu_backing_cpu_owners_add(
+		(access & kWrite) ? backing->cpu_writers : backing->cpu_readers, 1);
 	if (access & kConcurrent)
 		++((access & kWrite) ? backing->concurrent_writers : backing->concurrent_readers);
 }
@@ -107,10 +108,8 @@ void release_cpu_locked(switch_gpu_backing *backing, uint32_t access)
 {
 	if (access & kConcurrent)
 		--((access & kWrite) ? backing->concurrent_writers : backing->concurrent_readers);
-	if (access & kWrite)
-		--backing->cpu_writers;
-	else
-		--backing->cpu_readers;
+	switch_gpu_backing_cpu_owners_sub(
+		(access & kWrite) ? backing->cpu_writers : backing->cpu_readers, 1);
 	if (access & SWITCH_GPU_BACKING_PROMISED)
 		--backing->promised_readers;
 	IOLockWakeup(backing->lock, &backing->cpu_writers, false);
@@ -352,9 +351,9 @@ extern "C" int switch_gpu_backing_cpu_adopt(switch_gpu_backing *backing, uint32_
 		     : cpu_conflicts(backing, access) ? -16
 						      : wait_locked(backing, access);
 	if (!result) {
-		backing->cpu_readers += readers;
+		switch_gpu_backing_cpu_owners_add(backing->cpu_readers, readers);
 		backing->concurrent_readers += readers;
-		backing->cpu_writers += writers;
+		switch_gpu_backing_cpu_owners_add(backing->cpu_writers, writers);
 		backing->concurrent_writers += writers;
 		if (writers)
 			backing->dirty |= SWITCH_GPU_BACKING_CPU_DIRTY;

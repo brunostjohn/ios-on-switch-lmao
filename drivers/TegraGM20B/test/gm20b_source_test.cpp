@@ -369,14 +369,14 @@ TEST(GM20BPushScanSource, EverySubmissionPathScansItsPushes)
 	EXPECT_TRUE(
 		job.Before("const tgm_prof *profile = scanSubmission(pushes, count, prof, true);",
 			   "switch_gpu_chan_exec_events("));
-	EXPECT_TRUE(job.Has("&seqno, profile, jobVisibility, releases, keptCount);"));
+	EXPECT_TRUE(job.Has("&seqno, profile, jobVisibility, releases, keptCount, &transaction);"));
 	const CodeText exec = Block(
 		client(),
 		"IOReturn AGXDeviceUserClient::exec(uint32_t channel, TegraGM20BAbiPush *input,");
 	EXPECT_TRUE(
 		exec.Before("const tgm_prof *profile = scanSubmission(pushes, count, prof, false);",
 			    "switch_gpu_chan_exec_events("));
-	EXPECT_TRUE(exec.Has("&seqno, profile, jobVisibility, nullptr, 0);"));
+	EXPECT_TRUE(exec.Has("&seqno, profile, jobVisibility, nullptr, 0, &transaction);"));
 	EXPECT_EQ(clientCode().Count("scanPushes(pushes, count,"), 1u);
 	EXPECT_TRUE(Block(client(), "const tgm_prof *AGXDeviceUserClient::scanSubmission(")
 			    .Has("__atomic_fetch_add(&pushSubmits_, 1u, __ATOMIC_RELAXED) % "
@@ -688,7 +688,8 @@ TEST(GM20BRoomSource, NativePublicationNeverSleepsWithBackingLocksHeld)
 				"switch_gpu_backing_begin_checked("));
 	EXPECT_TRUE(exec.Before("switch_gpu_backing_abort(&transaction);",
 				"switch_gpu_chan_wait_submission_room("));
-	EXPECT_TRUE(exec.Before("switch_gpu_backing_commit(&transaction);",
+	EXPECT_FALSE(exec.Has("switch_gpu_backing_commit("));
+	EXPECT_TRUE(exec.Before("if (error) switch_gpu_backing_abort(&transaction);",
 				"switch_gpu_chan_submit_leave();"));
 	const CodeText emit = Block(gpu(), "int chan_exec_body(");
 	EXPECT_TRUE(emit.Has("if (!may_wait && !chan_room(chan, entries, words)) return -EAGAIN;"));
@@ -706,7 +707,8 @@ TEST(GM20BRoomSource, SubmitJobNeverSleepsWithBackingLocksHeld)
 			       "switch_gpu_backing_begin_held("));
 	EXPECT_TRUE(job.Before("switch_gpu_backing_abort(&transaction);",
 			       "switch_gpu_chan_wait_submission_room("));
-	EXPECT_TRUE(job.Before("switch_gpu_backing_commit(&transaction);",
+	EXPECT_FALSE(job.Has("switch_gpu_backing_commit("));
+	EXPECT_TRUE(job.Before("if (error) switch_gpu_backing_abort(&transaction);",
 			       "switch_gpu_chan_submit_leave();"));
 	EXPECT_TRUE(job.Before("switch_gpu_set_note_job(set, slot, &completion);",
 			       "switch_gpu_chan_submit_leave();"));
@@ -799,7 +801,7 @@ TEST(GM20BL2Source, InvalidateOnTheGpu)
 				"NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);"));
 	// a pending bind's acquire comes before the TLB invalidate that makes its new PTEs seen
 	EXPECT_TRUE(exec.Before(
-		"bind = !ret && !chan->kernel && bind_pending(chan->vm, &bind_target, &bind_va);",
+		"bind = !chan->kernel && bind_pending(chan->vm, &bind_target, &bind_va);",
 		"tlb = tgm_tlb_take(&chan->tlb, &chan->vm->tlb) || bind;"));
 	EXPECT_TRUE(exec.Before(
 		"NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);",
@@ -818,8 +820,7 @@ TEST(GM20BCoherencySource, ExecNamesTheWriterOnceTheSubmissionHasItsSeqno)
 	EXPECT_TRUE(exec.Before(
 		"error = switch_gpu_chan_exec_events(",
 		"surfaces_.after(listed, importsWritten_, tgm_chan_uid(chan), seqno);"));
-	EXPECT_TRUE(exec.Before("error = switch_gpu_chan_exec_events(",
-				"switch_gpu_backing_commit(&transaction);"));
+	EXPECT_TRUE(exec.Has("jobVisibility, nullptr, 0, &transaction);"));
 	const CodeText after =
 		Block(SourceText("../TegraGM20BExecSurfaces.cpp"), "void ExecSurfaces::after(");
 	EXPECT_TRUE(after.Has("tgm_coherency_wrote(refs_[i].coh, always, uid, seqno);"));
