@@ -343,6 +343,8 @@ host_test(
     name = "display_planes_source_test",
     srcs = ["display_planes_source_test.cpp"],
     data = [
+        "//drivers/NativeMobileDisplay:SwitchFlipDeadlineDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchFrameEndDisplay.h",
         "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
         "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
         "//drivers/NativeMobileDisplay:SwitchDirectSlots.h",
