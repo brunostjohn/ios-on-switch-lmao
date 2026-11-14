@@ -307,8 +307,8 @@ bool host1xFlipAliasIsFront(int entry, int k) const
     for (uint64_t n = 0; n < count; ++n) {
         IOByteCount length = 0;
         const uint64_t mapped = plane.memory->getPhysicalSegment(plane.low + n * 4096, &length, kIOMemoryMapperNone);
-        const uint64_t scanned = read ? read->allocation.pages[plane.low / 4096 + n]
-                                      : uint64_t(surfaceAddress(entry)) + n * 4096;
+        const uint64_t scanned =
+            read ? read->allocation.pages[plane.low / 4096 + n] : uint64_t(surfaceAddress(entry)) + n * 4096;
         if (mapped != scanned)
             return false;
     }
