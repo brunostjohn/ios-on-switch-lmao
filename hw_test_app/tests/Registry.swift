@@ -53,6 +53,8 @@ public enum Registry {
             ScanoutRoutesTest(), PlainSurfacesTest(), DisplaySnapshotTest(), WakeTest(),
             PlanesCroppedTest(),
         ] + DisplayWindowProbeTest.all + [LandscapeVideoTest()]
+        // Holds the swaps for a second each; the forced producer failure last.
+        + [Host1xFlipTest.trial, Host1xFlipTest.teardown]
 
     static let sensorsAndInput: [any HWTest] = [
         AccelerometerTest(), GyroscopeTest(), DeviceMotionTest(), AmbientLightTest(), ControllersTest(), RailTest(),
@@ -83,7 +85,7 @@ public enum Registry {
         + [DisplayBufferTest()]
         // The shader compiler's generation covers every test before it.
         + [CompilerAliveTest()]
-        // May stop NVJPG's host1x channel for 50 ms: last.
+        // May stop the display's host1x channel for 50 ms: last.
         + [DcHost1xClassTest()]
         // Leaves this app for Settings and opens it again: last, so no other test runs while it is away.
         + [LaunchHitchTest()]

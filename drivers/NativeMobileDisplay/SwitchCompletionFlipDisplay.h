@@ -82,7 +82,7 @@ bool completionFlipMay(int entry)
 {
     if (!rotated || !rotationLatched || !doubleBuffer || (entry >= kSlot0 && !directAttached) || hwSuspended ||
         gPanicRestore.panicking || planeNextSet || probeRequest || probe.active() || columnScanBusy() ||
-        windowProbeBusy() || landscapeOn() || landscapeHoldsKicks() || !mediaFlipIdle())
+        windowProbeBusy() || host1xFlipBusy() || landscapeOn() || landscapeHoldsKicks() || !mediaFlipIdle())
         return false;
     if (ring.held != kNoBuffer || ring.superseded != kNoBuffer)
         return false;

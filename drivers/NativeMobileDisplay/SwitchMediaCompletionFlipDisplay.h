@@ -84,7 +84,7 @@ bool mediaFlipMay(const PlaneSet &p, PlaneSet &assigned)
     if (!planesOn || !planesAttached || planeRecovering || planeHeldSet || planeProbe.active() || copyPlaneJoined ||
         hwSuspended || gPanicRestore.panicking || ring.held != kNoBuffer || !planeLatch.mayWrite() ||
         !planeLatch.armedRequested || p.on() != planeBlending || !completionFlipIdle() || !mediaFlipIdle() ||
-        p.landscape || landscapeOn() || landscapeHoldsKicks() || windowProbeBusy())
+        p.landscape || landscapeOn() || landscapeHoldsKicks() || windowProbeBusy() || host1xFlipBusy())
         return false;
     const switch_display::WindowState windows[2] = {planeWindowState(switch_landscape::kB),
                                                     planeWindowState(switch_landscape::kC)};

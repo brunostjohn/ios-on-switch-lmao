@@ -149,8 +149,6 @@ extern "C" uint32_t tegra_smmu_read(uint32_t offset)
     return ready() ? r32(offset) : 0;
 }
 
-// One register holds the hot-reset bits of clients different drivers power (NVDEC, NVJPG and the GPU share
-// MC_CLIENT_HOTRESET_CTRL_1; VIC and NVENC CTRL): each read-modify-write is under the MC's lock.
 extern "C" void tegra_mc_hot_reset(uint32_t ctrl, uint32_t bit, bool on)
 {
     if (!ready())

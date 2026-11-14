@@ -77,6 +77,7 @@
 #include <sys/sysctl.h>
 #include "NativeColumnScan.h"
 #include "DisplayWindowProbeRun.h"
+#include "SwitchHost1xFlipRun.h"
 #include "SwitchWindowAperture.h"
 #include "SwitchLandscapeRunABI.h"
 #include "../TegraVIC/SwitchVICTurnRun.h"
@@ -1669,6 +1670,7 @@ private:
         if (status & kFrameEndInt) {
             columnScanFrameEnd();
             windowProbeFrameEnd();
+            host1xFlipFrameEnd();
         }
         // After the compositor's vsync, since a latched flip starts the next frame's copy right here. A flip is also looked for at
         // V_BLANK (unmasked while a vsync client is registered), in case the controller latches after its FRAME_END.
@@ -1692,7 +1694,7 @@ private:
             underflowFrameEnd();
         if (status & kFrameEndInt) {
             const bool mayRequest = ring.pending == kNoBuffer && !probeRequest && (!rotated || rotationLatched) &&
-                                    !columnScanBusy() && !windowProbeHolds();
+                                    !columnScanBusy() && !windowProbeHolds() && !host1xFlipBusy();
             color->frameEndAction(mayRequest);
             paletteFrameEnd(mayRequest);
         }
@@ -3156,6 +3158,7 @@ private:
         withdrawCompletionFlip();
         columnScanAbort("the display stopped");
         windowProbeAbort("the display stopped");
+        host1xFlipAbort("the display stopped");
         landscapeRunAbort();
         abortProbe("the display stopped");
         if (dc && !hwSuspended)
@@ -3212,6 +3215,7 @@ public:
         if (!on && !hwSuspended) {
             columnScanAbort("the display went off");
             windowProbeAbort("the display went off");
+            host1xFlipAbort("the display went off");
             landscapeRunAbort();
         }
         if (!on && !hwSuspended && planeProbe.active()) {  // r18-planes: no frame end comes once the scan stops
@@ -3282,6 +3286,7 @@ public:
         suspendCompletionFlip();
         columnScanAbort("the display suspended (SC7)");
         windowProbeAbort("the display suspended (SC7)");
+        host1xFlipAbort("the display suspended (SC7)");
         landscapeRunAbort();
         abortProbe("the display suspended (SC7)");
         const uint64_t shown = suspendShownSeq();
@@ -3472,6 +3477,7 @@ public:
             __atomic_store_n(&primaryDisplay, this, __ATOMIC_RELEASE);
             columnScanRegister();
             dcClassRegister();
+            host1xFlipRegister();
             planeTotalsRegister();
             frameInfoTimedRegister();
         }
@@ -3600,7 +3606,7 @@ public:
             kickDeferred = true;
             return;
         }
-        if (columnScanBusy() || windowProbeHolds()) {  // windows A and B are a display experiment's (debug kernels)
+        if (columnScanBusy() || windowProbeHolds() || host1xFlipBusy()) {  // a display experiment's (debug kernels)
             kickDeferred = true;
             return;
         }
@@ -4845,6 +4851,7 @@ public:
 #include "SwitchVICScanoutDisplay.h"
 #include "NativeColumnScanDisplay.h"
 #include "SwitchDcHost1xClassProbe.h"
+#include "SwitchHost1xFlipDisplay.h"
 #include "DisplayWindowProbeDisplay.h"
 #include "SwitchWindowApertureDisplay.h"
 #include "SwitchLandscapeRunDisplay.h"
@@ -5415,6 +5422,7 @@ constinit NativeLegacyDisplay::LandscapeState NativeLegacyDisplay::landscapeStat
 constinit NativeLegacyDisplay::ColumnScanState NativeLegacyDisplay::columnScan;
 constinit struct sysctl_oid NativeLegacyDisplay::columnScanOid = {};
 constinit NativeLegacyDisplay::WindowProbeState NativeLegacyDisplay::windowProbe;
+constinit NativeLegacyDisplay::Host1xFlipState NativeLegacyDisplay::host1xFlip;
 constinit NativeLegacyDisplay::LandscapeRunState NativeLegacyDisplay::landscapeRun = {};
 
 // HW Test's landscape run (SwitchLandscapeRunABI.h): its SAMPLE and QUERY requests, from TegraVIC's kernel-test

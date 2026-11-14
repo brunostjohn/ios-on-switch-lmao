@@ -349,7 +349,8 @@ TEST(CompletionFlipSource, WindowAsOtherWritersWithdrawFirst)
                     .Has("if (w == switch_landscape::kA) withdrawCompletionFlip();"));
     const std::string flips = SourceText("../SwitchCompletionFlipDisplay.h");
     const CodeText may = Block(flips, "bool completionFlipMay(");
-    for (const char *owner : {"columnScanBusy()", "windowProbeBusy()", "landscapeOn()", "landscapeHoldsKicks()"})
+    for (const char *owner :
+         {"columnScanBusy()", "windowProbeBusy()", "host1xFlipBusy()", "landscapeOn()", "landscapeHoldsKicks()"})
         EXPECT_TRUE(may.Has(owner));
     EXPECT_FALSE(Block(flips, "LatchState latchState()").Has("windowActive("));
 }

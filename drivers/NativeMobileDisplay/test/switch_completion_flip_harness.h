@@ -535,6 +535,11 @@ struct Display {
         return false;
     }
 
+    static bool host1xFlipBusy()
+    {
+        return false;
+    }
+
     void flipLatched()
     {
         if (const int held = ring.flipHeld(); held != kNoBuffer)
