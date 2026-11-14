@@ -206,7 +206,7 @@ TEST(GM20BPoolPolicySource, CompressibleBosArePoolChunksNoTaskMaps)
 	const CodeText release = Block(client(), "void AGXDeviceUserClient::releaseBo(Bo *bo)");
 	EXPECT_TRUE(release.Before("tgm_mem_del(&bo->mem);",
 				   "tgm_pool_free_chunks(bo->pas, bo->npages);"));
-	EXPECT_TRUE(Block(client(), "IOReturn AGXDeviceUserClient::clientMemoryForType(")
+	EXPECT_TRUE(Block(client(), "IOReturn AGXDeviceUserClient::memoryForType(")
 			    .Has("bo && bo->view"));
 	EXPECT_TRUE(Block(SourceText("../shim/linux.c"),
 			  "int nvxnu_pool_alloc_chunks(unsigned long count, unsigned "
