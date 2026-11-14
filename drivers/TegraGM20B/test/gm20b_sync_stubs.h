@@ -20,7 +20,6 @@ typedef unsigned int gfp_t;
 
 #define GFP_KERNEL 0x01u
 #define NSEC_PER_MSEC 1000000ULL
-#define TGM_STATS 0
 #define TGM_WAITERS 128
 #define TGM_SYNC_MAX 512
 #define TGM_FENCE_BYTES ((size_t)65 * 16 * 1024)

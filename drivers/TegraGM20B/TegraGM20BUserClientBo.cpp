@@ -542,6 +542,9 @@ IOReturn AGXDeviceUserClient::boImportPrepare(const TegraGM20BAbiBoImport *in, B
 		cost.owner = owner_;
 		tgm_stats_import_cost(&cost);
 	}
+#if TGM_STATS
+	tgm_stats_unlocked(TGM_UNLOCKED_IMPORT, statsNowNs() - start);
+#endif
 	*out = bo;
 	return kIOReturnSuccess;
 }

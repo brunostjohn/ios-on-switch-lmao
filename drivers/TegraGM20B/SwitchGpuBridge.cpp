@@ -302,6 +302,9 @@ extern "C" int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, 
 			if (error != -11)
 				break;
 			error = queue.turn.waitForRoom(queue.lock, [&] {
+#if TGM_STATS
+				tgm_stats_unlocked(TGM_UNLOCKED_BRIDGE_ROOM, 0);
+#endif
 				return switch_gpu_chan_wait_submission_room(chan, &push, 1,
 									    job.count, nullptr);
 			});

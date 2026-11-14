@@ -58,6 +58,9 @@ void releaseSlot(uint32_t slot)
 template <typename Wait> void waitUnlocked(Wait wait)
 {
 	Relayout &r = gRelayout;
+#if TGM_STATS
+	tgm_stats_unlocked(TGM_UNLOCKED_RELAYOUT, 0);
+#endif
 	++r.users;
 	IOLockUnlock(r.lock);
 	wait();
@@ -166,6 +169,10 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 		const tgm_push push = {
 			pushVa, tgm_relayout_push(words, &l, &m, waits, nwaits), 0, 0, 0, 0};
 		uint32_t seqno = 0;
+#if TGM_STATS
+		if (r.users)
+			tgm_stats_unlocked(TGM_UNLOCKED_RELAYOUT_BESIDE, 0);
+#endif
 		ret = tgm_chan_exec(chan, &push, 1, &seqno, nullptr);
 		if (!ret) {
 			tgm_relayout_writer acquired[TGM_RELAYOUT_MAX_WAITS];

@@ -468,6 +468,7 @@ void tgm_stats_tick(void)
 	stats_exec_owners(line, sizeof(line), rate);
 	tgm_stats_mem(ms);
 	tgm_stats_waits(ms);
+	tgm_stats_unlocked_window();
 	/* The IOSurface lock/unlock traps' cache maintenance this window (TegraGM20BCoherency.cpp): GPU-written imports
 	 * invalidated at a CPU lock, CPU-written imports cleaned at an unlock. */
 	{

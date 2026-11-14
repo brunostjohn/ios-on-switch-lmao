@@ -615,6 +615,22 @@ void tgm_coherency_tiled_bind(struct tgm_coh *c, int add);
 #else
 #define TGM_STATS 0
 #endif
+/* Debug kernels: waits that used to hold a lock (a queue's, the relayout's, the connection's, a CPU sync's), counted by
+ * where they now run without it, and the stats tick's "unlocked waits" line. */
+enum tgm_unlocked {
+	TGM_UNLOCKED_SYNC_BESIDE, /* a CPU sync that started while another one was in flight */
+	TGM_UNLOCKED_COPY_ROOM, /* a kernel copy's wait for ring room, the copy queue's lock let go */
+	TGM_UNLOCKED_BRIDGE_ROOM, /* a host1x bridge job's wait for ring room, the bridge queue's lock let go */
+	TGM_UNLOCKED_RELAYOUT, /* a relayout move's or flush's GPU wait, the relayout lock let go */
+	TGM_UNLOCKED_RELAYOUT_BESIDE, /* a relayout move kicked while another one waited */
+	TGM_UNLOCKED_IMPORT, /* a BoImport wired and cleaned before lock_ and the submit gate (ns: how long) */
+	TGM_UNLOCKED_PRESENT_ROOM, /* a copy present that found no push room under tgm_present.lock */
+	TGM_UNLOCKED_KINDS
+};
+
+void tgm_stats_unlocked(enum tgm_unlocked kind, uint64_t ns);
+void tgm_stats_unlocked_window(void);
+
 /* Debug kernels: copies a present runs after its frame's copy and before its fence (TegraGM20BReadback.cpp), each into a
  * pitch-linear destination dst_pitch bytes across, width x 4 bytes of height lines, from a pitch source (src_block_log2
  * < 0: src_pitch bytes per row) or a block-linear one (8-line GOBs, blocks one GOB wide and 2^src_block_log2 high,
