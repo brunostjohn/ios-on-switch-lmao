@@ -15,7 +15,7 @@ constexpr uint64_t kHintHold = 500 * kMs;   // SWITCH_EMC_HINT_HOLD_US
 constexpr uint64_t kTickMs = 8;             // the CPU governor's window
 
 struct Loop {
-    switch_emc_hold hold = {kFrameHold};
+    switch_emc_hold hold = {kFrameHold, 0, 0, 0};
     bool governed = true;
     uint64_t hintUntil = 0, lastFrame = 0, timerAt = 0;
     bool keep = false;
@@ -120,4 +120,19 @@ TEST(SwitchEMCHold, WithoutTheTickTheTimerEndsTheHold)
     EXPECT_FALSE(loop.keep);
     EXPECT_GE(loop.released, loop.lastFrame + kFrameHold);
     EXPECT_LE(loop.released, loop.lastFrame + kFrameHold + kMs);
+}
+
+// The tick read the stamp just before a frame landed: the loop finds the hold still on, starts a new generation, and
+// the tick reports that one's end in turn.
+TEST(SwitchEMCHold, AnEndTheLoopFindsWasNotOneIsReportedAgain)
+{
+    switch_emc_hold hold = {kFrameHold, 0, 0, 0};
+    ASSERT_TRUE(switch_emc_hold_program(&hold, 1000, 0, 1000, true).keep);
+    EXPECT_TRUE(switch_emc_hold_tick(&hold, 1104, 0, 1000));
+    EXPECT_FALSE(switch_emc_hold_tick(&hold, 1112, 0, 1000)) << "one wake per end";
+    EXPECT_TRUE(switch_emc_hold_program(&hold, 1105, 0, 1101, true).keep);
+    EXPECT_FALSE(switch_emc_hold_tick(&hold, 1112, 0, 1101));
+    EXPECT_TRUE(switch_emc_hold_tick(&hold, 1208, 0, 1101));
+    EXPECT_FALSE(switch_emc_hold_program(&hold, 1209, 0, 1101, true).keep);
+    EXPECT_FALSE(switch_emc_hold_tick(&hold, 1216, 0, 1101));
 }

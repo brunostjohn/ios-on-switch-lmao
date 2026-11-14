@@ -14,6 +14,8 @@
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <kern/clock.h>
+#include <kern/cpu_number.h>
+#include <machine/machine_routines.h>
 #include <os/log.h>
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../TegraBPMP/TegraBPMP.h"
@@ -26,6 +28,7 @@
 #include "SwitchEMC.h"
 #include "SwitchEMCGovernor.h"
 #include "SwitchEMCHold.h"
+#include "SwitchPerfGovernor.h"
 #include "SwitchDisplayBandwidth.h"
 #include "SwitchPower.h"
 
@@ -49,7 +52,10 @@ constexpr uint32_t kActmonIntid = 32 + 45, kActmonClock = 119;
 class SwitchEMC : public OSObject {
     // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(SwitchEMC) IOWorkLoop *loop = nullptr;
-    IOInterruptEventSource *actmon = nullptr, *signal = nullptr;
+    IOInterruptEventSource *actmon = nullptr;
+    // Hints' wakes: one source per CPU, signalled only from that CPU with interrupts masked, so interruptOccurred's
+    // producer count has one producer each.
+    IOInterruptEventSource *signal[switchperf::kSignalCpus] = {};
     IOTimerEventSource *hold = nullptr;
     volatile uint8_t *regs = nullptr;
     SwitchMMIOWords mcRegs;
@@ -60,14 +66,23 @@ class SwitchEMC : public OSObject {
     uint32_t khz[SWITCH_EMC_MAX_RATES] = {};
     unsigned count = 0, cur = 0;
     bool governing = false, refusalLogged = false;
-    uint64_t hintUntil = 0;
+
+    // A hint's deadline in the slot of the CPU it ran on, written only there with interrupts masked.
+    struct HintSlot {
+        uint64_t until;
+#if DEVELOPMENT || DEBUG
+        uint64_t asked;  // the first hint that found the EMC below its top rate, cleared by the loop that raised it
+#endif
+    };
+
+    HintSlot hints[switchperf::kSignalCpus] = {};
     uint64_t holdTicks = 0;
     switch_emc_hold holdState = {};
 #if DEVELOPMENT || DEBUG
     uint64_t residency[SWITCH_EMC_MAX_RATES] = {}, since = 0;
     unsigned moves = 0;
     // Hints that found the EMC below its top rate: from the first such hint to the BPMP's answer at the top rate.
-    uint64_t raiseAsked = 0, raiseTicks = 0, raiseMax = 0, bpmpMax = 0;
+    uint64_t raiseTicks = 0, raiseMax = 0, bpmpMax = 0;
     unsigned raises = 0;
 #endif
 
@@ -75,6 +90,10 @@ class SwitchEMC : public OSObject {
     static void signalFired(OSObject *owner, IOInterruptEventSource *, int);
     static void holdFired(OSObject *owner, IOTimerEventSource *);
     bool held(uint64_t now);
+    uint64_t hintUntil() const;
+#if DEVELOPMENT || DEBUG
+    uint64_t takeAsked();
+#endif
     void program();
     bool moveTo(unsigned asked, switch_emc_reason reason);
     unsigned reconcileRate(uint32_t observed, bool quiesced = false);
@@ -98,6 +117,7 @@ class SwitchEMC : public OSObject {
     void free() override;
     static IOReturn governAction(OSObject *owner, void *, void *, void *, void *);
     static IOReturn pauseAction(OSObject *owner, void *, void *, void *, void *);
+    static IOReturn retickAction(OSObject *owner, void *, void *, void *, void *);
 
 public:
     // Thread context, once: the governor ready but not yet governing; nullptr with `why` filled when it cannot run.
@@ -105,7 +125,8 @@ public:
     void govern(bool resume = false);
     void pause();
     void hint();
-    void deadline(uint64_t until);
+    void tick(uint64_t now);
+    void retick();
     int reserveDisplay(uint64_t bytes);
     int reserveMemory(const switch_display_memory_head &request);
 
@@ -159,7 +180,7 @@ SwitchEMC *SwitchEMC::create(char *why, size_t size)
 
 void SwitchEMC::free()
 {
-    IOEventSource *sources[] = {actmon, signal, hold};
+    IOEventSource *sources[] = {actmon, signal[0], signal[1], signal[2], signal[3], hold};
     for (IOEventSource *source : sources) {
         if (!source)
             continue;
@@ -210,31 +231,36 @@ bool SwitchEMC::setup(char *why, size_t size)
     loop = IOWorkLoop::workLoop();
     IOService *nub = switch_interrupt_nub(kActmonIntid, false);
     actmon = IOInterruptEventSource::interruptEventSource(this, &SwitchEMC::actmonFired, nub, 0);
-    signal = IOInterruptEventSource::interruptEventSource(this, &SwitchEMC::signalFired);
     hold = IOTimerEventSource::timerEventSource(this, &SwitchEMC::holdFired);
-    if (!regs || !loop || !actmon || !signal || !hold || loop->addEventSource(actmon) != kIOReturnSuccess ||
-        loop->addEventSource(signal) != kIOReturnSuccess || loop->addEventSource(hold) != kIOReturnSuccess) {
+    if (!regs || !loop || !actmon || !hold || loop->addEventSource(actmon) != kIOReturnSuccess ||
+        loop->addEventSource(hold) != kIOReturnSuccess) {
         snprintf(why, size, "no ACTMON mapping or work loop");
         return false;
     }
+    for (IOInterruptEventSource *&source : signal) {
+        source = IOInterruptEventSource::interruptEventSource(this, &SwitchEMC::signalFired);
+        if (!source || loop->addEventSource(source) != kIOReturnSuccess) {
+            snprintf(why, size, "no work loop source");
+            return false;
+        }
+        source->enable();
+    }
     nanoseconds_to_absolutetime(uint64_t{SWITCH_EMC_HINT_HOLD_US} * NSEC_PER_USEC, &holdTicks);
     nanoseconds_to_absolutetime(uint64_t{100} * NSEC_PER_MSEC, &holdState.frame_ticks);
-    signal->enable();
     return true;
 }
 
 bool SwitchEMC::held(uint64_t now)
 {
-    return now <
-           switch_emc_hold_end(&holdState, __atomic_load_n(&hintUntil, __ATOMIC_ACQUIRE), switch_idle_last_frame());
+    return now < switch_emc_hold_end(&holdState, hintUntil(), switch_idle_last_frame());
 }
 
 // ACTMON's watermarks for the rate now; its sample count restarts there.
 void SwitchEMC::program()
 {
     const uint64_t now = mach_absolute_time();
-    const switch_emc_hold_step step = switch_emc_hold_program(
-        &holdState, now, __atomic_load_n(&hintUntil, __ATOMIC_ACQUIRE), switch_idle_last_frame(), false);
+    const switch_emc_hold_step step =
+        switch_emc_hold_program(&holdState, now, hintUntil(), switch_idle_last_frame(), switchperf::running());
     const bool keep = step.keep;
     switch_emc_wmarks w = switch_emc_watermarks(khz, count, cur, keep);
     if (cur <= memoryFloor(0))
@@ -304,7 +330,7 @@ void SwitchEMC::signalFired(OSObject *owner, IOInterruptEventSource *, int)
 #endif
     self->moveTo(self->count - 1, SWITCH_EMC_REASON_HINT);
 #if DEVELOPMENT || DEBUG
-    const uint64_t asked = __atomic_exchange_n(&self->raiseAsked, 0, __ATOMIC_RELAXED);
+    const uint64_t asked = self->takeAsked();
     if (before != self->cur && asked) {
         const uint64_t now = mach_absolute_time();
         self->raises++;
@@ -323,27 +349,7 @@ void SwitchEMC::holdFired(OSObject *owner, IOTimerEventSource *)
         self->program();
 }
 
-// Any context (the scheduler's callout, an interrupt filter, a thread): the top rate at once, kept for the hold.
-void SwitchEMC::hint()
-{
-    deadline(mach_absolute_time() + holdTicks);
-}
-
-void SwitchEMC::deadline(uint64_t until)
-{
-    uint64_t was = __atomic_load_n(&hintUntil, __ATOMIC_RELAXED);
-    while (until > was &&
-           !__atomic_compare_exchange_n(&hintUntil, &was, until, true, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
-    }
-    if (!__atomic_load_n(&gTopHeld, __ATOMIC_ACQUIRE)) {
-#if DEVELOPMENT || DEBUG
-        uint64_t none = 0;
-        __atomic_compare_exchange_n(&raiseAsked, &none, mach_absolute_time(), false, __ATOMIC_RELAXED,
-                                    __ATOMIC_RELAXED);
-#endif
-        signal->interruptOccurred(nullptr, nullptr, 0);
-    }
-}
+#include "SwitchEMCHints.h"
 
 void SwitchEMC::startActmon()
 {
@@ -443,6 +449,18 @@ extern "C" void switch_emc_start(void)
     __atomic_store_n(&gEMC, emc, __ATOMIC_RELEASE);
     switch_idle_set_frames_started(framesStarted);
     IOLog("SwitchEMC: on demand from System Boot Complete (ACTMON MC_ALL, INTID %u)\n", kActmonIntid);
+}
+
+extern "C" void switch_emc_tick(uint64_t now)
+{
+    if (SwitchEMC *emc = __atomic_load_n(&gEMC, __ATOMIC_ACQUIRE))
+        emc->tick(now);
+}
+
+extern "C" void switch_emc_retick(void)
+{
+    if (SwitchEMC *emc = __atomic_load_n(&gEMC, __ATOMIC_ACQUIRE))
+        emc->retick();
 }
 
 extern "C" void switch_emc_hint(unsigned int hint)

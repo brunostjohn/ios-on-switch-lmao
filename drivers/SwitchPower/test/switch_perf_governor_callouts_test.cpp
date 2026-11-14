@@ -252,6 +252,12 @@ void tegra_gm20b_idle_tick(void)
 void switch_emc_hint(unsigned int)
 {}
 
+void switch_emc_tick(uint64_t)
+{}
+
+void switch_emc_retick(void)
+{}
+
 int switch_battery_avg_ma(bool *)
 {
     return INT32_MIN;

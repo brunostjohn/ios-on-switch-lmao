@@ -181,6 +181,7 @@ void deadlinePassed(uint64_t)
     // until then the GPU never leaves its full clock.
     if (!boot)
         tegra_gm20b_idle_tick();
+    switch_emc_tick(now);
     __atomic_thread_fence(__ATOMIC_RELEASE);
     sched_perfcontrol_update_callback_deadline(now + config.window);
 }
@@ -314,6 +315,7 @@ bool switchperf::start(const uint32_t *khz, const uint32_t *mv, unsigned count, 
         signalHere();  // a ceiling thermalmonitord set before this start: the clock moves down
     sched_perfcontrol_register_callbacks(&gCallbacks, 0);
     sched_perfcontrol_update_callback_deadline(now + next.window);
+    switch_emc_retick();
     return true;
 }
 
@@ -325,6 +327,7 @@ void switchperf::stop()
     __atomic_store_n(&gAppliedKhz, 0u, __ATOMIC_RELEASE);
     sched_perfcontrol_update_callback_deadline(0);
     sched_perfcontrol_register_callbacks(nullptr, 0);  // XNU's defaults again
+    switch_emc_retick();
 }
 
 bool switchperf::running()
