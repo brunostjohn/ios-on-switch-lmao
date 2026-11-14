@@ -315,7 +315,8 @@ extern "C" void switch_gpu_timeline_close(switch_gpu_timeline *timeline)
 				 __ATOMIC_RELEASE);
 	__atomic_compare_exchange_n(&timeline->terminal, &expected, (uint64_t(1) << 32) | completed,
 				    false, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
-	timeline->fence = nullptr;
+	// the present filter reads the fence with no lock (physical_now)
+	__atomic_store_n(&timeline->fence, nullptr, __ATOMIC_RELEASE);
 	timeline->semantic_public = nullptr;
 	put_locked(timeline);
 	IOLockUnlock(lock);
