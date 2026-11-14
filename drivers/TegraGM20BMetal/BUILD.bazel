@@ -252,7 +252,6 @@ ios_binary(
         "raw/runtime/raw_private_comp.cpp",
         "raw/runtime/raw_draw_bands.cpp",
         "raw/runtime/raw_job_uses.cpp",
-        "raw/runtime/raw_draw_shortcuts.cpp",
         "raw/runtime/raw_resolve_twod.cpp",
         "raw/runtime/raw_tessellation.cpp",
         "raw/runtime/raw_transfer.cpp",

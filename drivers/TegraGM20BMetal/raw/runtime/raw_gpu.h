@@ -1066,9 +1066,8 @@ private:
     void finishDraw(uint32_t vertices, uint32_t instances, bool indirect = false);
     void cutBatch();
     // the prepared draw's words, whole or in scissor bands (raw_draw_bands.h)
-    struct Shortcut;
     void emitDraw(bool indexed, uint32_t first, uint32_t count, uint32_t instances, uint32_t root,
-                  uint32_t baseInstance, const Shortcut &cut);
+                  uint32_t baseInstance);
     uint64_t drawUnits(uint32_t instances) const;
     uint32_t drawBands(uint32_t vertices, uint32_t instances, uint64_t units) const;
     void noteCandidate(uint64_t units);
@@ -1238,18 +1237,6 @@ private:
     // colors the pass's first draw overwrites whole and opaquely: their clears inside the render area are not needed
     uint8_t covered_ = 0;
     using Runs = std::vector<std::pair<uint32_t, uint32_t>>;
-
-    // raw_draw_shortcuts.cpp: the ROP shortcuts a draw takes (constant colour, a quad as one bounding-box triangle) and a
-    // blur-chain pass drawn by the 2D engine, each behind its rule
-    struct Shortcut {
-        bool bbox = false;
-    };
-
-    bool cpuStream(const Pipeline &pl, uint32_t first, FillStream &s) const;
-    bool cpuIndices(uint32_t count, uint32_t out[6]) const;
-    Shortcut shortcut(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count, bool indexed);
-    void shortcutBegin(const Shortcut &s);
-    void shortcutEnd(const Shortcut &s);
 
 public:
     // [x0, x1) x [y0, y1) of colour target 0 set to `rgba` (fillTexture:...): CLEAR_SURFACE over the region, with the ZBC
@@ -1768,9 +1755,6 @@ public:
     {
         return pack_;
     }
-
-    // `rec`'s state key where it is one of the pack's records, else null (a state the runtime made)
-    const char *packKey(const PackPipeline &rec) const;
 
     // a storage form may view a compressed attachment (raw_storage_form.h storageReadsCompressed, or its probe's switch)
     bool storageCompressedOk() const

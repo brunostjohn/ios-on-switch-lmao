@@ -170,8 +170,6 @@ constexpr uint32_t kInvalidateInstruction = NVDEF(NVB197, INVALIDATE_SHADER_CACH
                    kInvalidateConstant = NVDEF(NVB197, INVALIDATE_SHADER_CACHES, CONSTANT, TRUE);
 // An instance of a draw: BEGIN with INSTANCE_ID SUBSEQUENT (two words), the first vertex or index and the count (three), END
 constexpr uint32_t kInstanceWords = 6;
-// a draw's shortcuts around its BEGIN/END (raw_draw_shortcuts.cpp): constant colour on and off, fill via triangle on and off
-constexpr uint32_t kShortcutWords = 2 * SWITCH_GM20B_FILL_VIA_TRIANGLE_WORDS;
 // NVK's copies of pitch memory (nouveau_copy_rect)
 constexpr uint32_t kLaunchPitch =
     NVDEF(NVB0B5, LAUNCH_DMA, DATA_TRANSFER_TYPE, PIPELINED) | NVDEF(NVB0B5, LAUNCH_DMA, FLUSH_ENABLE, TRUE) |
@@ -5320,27 +5318,24 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
                 wholeDraw(*pl, false, first + begin, end - begin, 1, first + begin, baseInstance);
                 finishDraw(end - begin, 1);
             } else {
-                emitDraw(false, first + begin, end - begin, 1, first + begin, baseInstance, Shortcut{});
+                emitDraw(false, first + begin, end - begin, 1, first + begin, baseInstance);
             }
         }
         cb_->draws++;
         return true;
     }
-    const Shortcut cut = instances == 1 && !amplifies() ? shortcut(*pl, primitive, first, count, false) : Shortcut{};
     if (!prepare(pl, primitive, first, first, count, false, why))
         return false;
     cb_->draws += amplifies() ? amplifications_ : 1;
     const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (const auto probe = instances == 1 ? dev_->armedProbe() : nullptr) {
-        if (p_.room() < kInstanceWords + probe->before.size() + probe->after.size() + kShortcutWords)
+        if (p_.room() < kInstanceWords + probe->before.size() + probe->after.size())
             reserve();
         if (!probe->before.empty())
             p_.raw(probe->before.data(), uint32_t(probe->before.size()));
         dev_->probeEmitted.fetch_add(1, std::memory_order_relaxed);
-        shortcutBegin(cut);
-        wholeDraw(*pl, false, first, cut.bbox ? 3 : count, instances, first, baseInstance);
-        shortcutEnd(cut);
+        wholeDraw(*pl, false, first, count, instances, first, baseInstance);
         if (!probe->after.empty())
             p_.raw(probe->after.data(), uint32_t(probe->after.size()));
         finishDraw(count, drawnInstances);
@@ -5351,7 +5346,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
         wholeDraw(*pl, false, first, count, instances, first, baseInstance);
         finishDraw(count, drawnInstances);
     } else {
-        emitDraw(false, first, count, instances, first, baseInstance, cut);
+        emitDraw(false, first, count, instances, first, baseInstance);
     }
     return true;
 }
@@ -5602,8 +5597,6 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         return false;
     }
     const Runs &runs = *ordered;
-    const bool whole = runs.empty() && instances == 1 && baseVertex >= 0 && !amplifies();
-    const Shortcut cut = whole ? shortcut(*pl, primitive, uint32_t(baseVertex), count, true) : Shortcut{};
     const uint32_t parts = runs.empty() ? 1 : uint32_t(runs.size());
     for (uint32_t r = 0; r < parts; r++) {
         const uint32_t begin = runs.empty() ? 0 : runs[r].first, end = runs.empty() ? count : runs[r].second;
@@ -5637,7 +5630,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
             wholeDraw(*pl, true, begin, end - begin, instances, uint32_t(baseVertex), baseInstance);
             finishDraw(end - begin, amplifies() ? instances * amplifications_ : instances);
         } else {
-            emitDraw(true, begin, end - begin, instances, uint32_t(baseVertex), baseInstance, cut);
+            emitDraw(true, begin, end - begin, instances, uint32_t(baseVertex), baseInstance);
         }
     }
     cb_->draws += amplifies() ? amplifications_ : 1;

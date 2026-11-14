@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Core Animation's blur-chain and one-colour fill draws (raw_ca_route.h) take their state's fragment program. Choosing the
-// 2D engine's blit or the ROP's constant colour for them needs their per-draw bytes (taps, texture matrix, corners,
-// indices, every vertex's colour), which the encoder would read on the CPU every frame, so neither route exists.
+// Core Animation's blur-chain and fill draws (raw_ca_route.h) take their state's own program. Choosing the 2D engine's
+// blit, the ROP's constant colour or one bounding-box triangle for them needs their per-draw bytes (taps, texture matrix,
+// corners, indices, every vertex's colour), which the encoder would read on the CPU every frame, so none of those routes
+// exists.
 #include <gtest/gtest.h>
 #include <type_traits>
 #include <utility>
@@ -10,7 +11,15 @@
 
 namespace raw {
 struct EncoderHarness {
-    using Shortcut = RenderEncoder::Shortcut;
+    template <class E> static constexpr auto shortcuts(int) -> decltype(sizeof(typename E::Shortcut), true)
+    {
+        return true;
+    }
+
+    template <class E> static constexpr bool shortcuts(...)
+    {
+        return false;
+    }
 };
 }  // namespace raw
 
@@ -21,14 +30,9 @@ template <class T, class = void> struct NamesABlurRoute : std::false_type {};
 template <class T>
 struct NamesABlurRoute<T, std::void_t<decltype(std::declval<T &>().blurFunction)>> : std::true_type {};
 
-template <class T, class = void> struct NamesAConstantColour : std::false_type {};
-
-template <class T>
-struct NamesAConstantColour<T, std::void_t<decltype(std::declval<T &>().constant)>> : std::true_type {};
-
-TEST(BlurDraw, OneColourFillsCarryNoConstantColourShortcut)
+TEST(BlurDraw, FillDrawsTakeNoShortcutTheCpuChooses)
 {
-    EXPECT_FALSE(NamesAConstantColour<raw::EncoderHarness::Shortcut>::value);
+    EXPECT_FALSE(raw::EncoderHarness::shortcuts<raw::RenderEncoder>(0));
 }
 
 TEST(BlurDraw, BlurChainStatesCarryNoDrawRoute)
