@@ -77,11 +77,11 @@ public:
 
     // The kernel of compute key `key` (raw_compute_key.h) for `descriptor` (over m2v's functions) at `dispatch`, placed:
     // this process's, the disk's, or made now on the caller's thread, the dispatch that first needs it. Null: refused (named
-    // once in the raw log), or temporarily unavailable. retryAtUs is the earliest next attempt after a transient failure.
+    // once in the raw log), or not made this time (*retry: the dispatch fails and the next one asks afresh).
     // *gone: no compiler made it and none will (the dispatch fails, as a kernel Metal could not compile)
     const ComputeState *kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
-                               const std::string &key, bool *retry = nullptr, uint64_t *retryAtUs = nullptr,
-                               id facadeFunction = nil, bool *gone = nullptr);
+                               const std::string &key, bool *retry = nullptr, id facadeFunction = nil,
+                               bool *gone = nullptr);
 
     void backgroundKernel(std::function<void()> work);
 

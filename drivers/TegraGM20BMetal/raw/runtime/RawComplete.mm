@@ -120,7 +120,6 @@ struct Completion::Pending {
     Ready ready;
     // a state's creation, which a failure ends (Metal's error) where a variant's ask tries again
     const bool creation;
-    VariantPlacement<Pipeline> placement;
 };
 
 void Completion::ask(Ask asked, std::function<void(Pipeline *)> ready)
@@ -204,24 +203,13 @@ void Completion::place(const CacheKey &key, const RuntimeRecord *record, bool ca
             pending->ready(nullptr, std::string());
             return;
         }
-        std::string full;
-        const uint64_t delay = pending->placement.attempt(
-            [&](bool &retry) {
-                std::string why;
-                Pipeline *made = device_.addRecord(*record, caTransform, why, &retry);
-                if (!made && retry && pending->creation) {
-                    full = why;
-                    retry = false;
-                }
-                return made;
-            },
-            [&](Pipeline *made) {
-                pending->ready(made, full);
-            });
-        if (delay)
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(delay) * 1000), queue_, ^{
-                place(keptKey, record, caTransform, pending);
-            });
+        std::string why;
+        bool full = false;
+        Pipeline *made = device_.addRecord(*record, caTransform, why, &full);
+        if (!made && full)
+            os_log_error(rawLog(), "raw: %{public}s: the state that needs %016llx fails", why.c_str(),
+                         (unsigned long long)keptKey.name());
+        pending->ready(made, full ? why : std::string());
     });
 }
 
@@ -274,8 +262,7 @@ void Completion::backgroundKernel(std::function<void()> work)
 }
 
 const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor, const NmbDirectDispatch &dispatch,
-                                       const std::string &key, bool *retry, uint64_t *retryAtUs, id facadeFunction,
-                                       bool *gone)
+                                       const std::string &key, bool *retry, id facadeFunction, bool *gone)
 {
     CacheKey k;
     k.stack = stack_;
@@ -293,9 +280,6 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
     std::string why;
     bool attempted = false;
     const auto result = job->build.make(
-        [] {
-            return nowUs();
-        },
         [&](ComputeRecord &record) {
             attempted = true;
             Compiler::Outcome outcome = Compiler::Outcome::Failed;
@@ -329,8 +313,6 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
         });
     if (retry)
         *retry = result.retry;
-    if (retryAtUs)
-        *retryAtUs = result.retryAtUs;
     if (gone)
         *gone = result.gone;
     if (!result.state && attempted)
