@@ -217,6 +217,8 @@ enum class RMShareable : uint8_t {
     bool _twinLater;                 // replay (rmTwin), with these options
     raw::Mutex _variantLock;
     std::map<std::string, std::shared_ptr<raw::Variant<raw::Pipeline>>> _variants;
+    // a failed variant asked afresh by a later draw: the one it replaced stays alive for the plans that name it
+    std::vector<std::shared_ptr<raw::Variant<raw::Pipeline>>> _replacedVariants;
     raw::Obtained _obtained;  // debug builds: how its creation got its record
 }
 @end

@@ -3455,6 +3455,7 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_lock.h",
     ],
     cxx_std = "c++17",
+    data = ["//drivers/TegraGM20BMetal:raw/runtime/RawMetalCubic.mm"],
 )
 
 host_test(
