@@ -623,8 +623,6 @@ struct PlacedProgram {
     uint32_t program = 0;
     uint64_t data = 0;
     const uint8_t *header = nullptr;  // its shader header, as the CPU holds it
-    // its code can write memory a buffer binding names (raw_program_stores.h): where its placer read the code, else true
-    bool writesMemory = true;
 };
 
 // What a state's split twin is made of: the pack's split (its programs by index) or a runtime record's programs, and the

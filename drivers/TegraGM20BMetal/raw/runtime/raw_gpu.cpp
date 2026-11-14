@@ -1238,8 +1238,6 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
     fs.record = &progs[pp.fs];
     vs.header = pack_.section<uint8_t>(PackHeap) + progs[pp.vs].program;
     fs.header = pack_.section<uint8_t>(PackHeap) + progs[pp.fs].program;
-    vs.writesMemory = placedWritesMemory(vs.header, *vs.record);
-    fs.writesMemory = placedWritesMemory(fs.header, *fs.record);
     if (!slmNeed(std::max(slmPerWarpOfHeader(vs.header), slmPerWarpOfHeader(fs.header)))) {
         stats.heapFull++;
         return nullptr;
@@ -1273,8 +1271,13 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     };
     pl.vertexInstructions = instructions(*vs.record);
     pl.fragmentInstructions = instructions(*fs.record);
-    pl.writesMemory[0] = vs.writesMemory;
-    pl.writesMemory[1] = fs.writesMemory;
+    // the code as the heap holds it (a runtime record's CPU copy is its header alone)
+    const auto writesMemory = [&](const PlacedProgram &p) {
+        const uint8_t *header = heapCpu(p.program);
+        return !header || placedWritesMemory(header, *p.record);
+    };
+    pl.writesMemory[0] = writesMemory(vs);
+    pl.writesMemory[1] = writesMemory(fs);
     pl.memoryEntries = pp.memoryEntries;
     std::vector<uint32_t> words(64 + 16 + (tess ? 64 : 0) + pp.blobDwords * 2);
     Push w{words.data(), words.data() + words.size()};

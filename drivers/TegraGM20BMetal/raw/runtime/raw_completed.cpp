@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cstring>
 #include "raw_gpu.h"
-#include "raw_program_stores.h"
 #include "raw_dynamic_push.h"
 #include "raw_record.h"
 #include "raw_slm.h"
@@ -33,8 +32,7 @@ bool Device::placeCompleted(const CapturedProgram &p, PlacedProgram &out)
     placed.info = info;
     memcpy(placed.header, p.image.data(), sizeof placed.header);
     placed.placed = {&placed.info, uint32_t(at) + info.program, info.dataBytes ? heap_.va + at + info.dataOffset : 0,
-                     placed.header,
-                     programWritesMemory(p.image.data() + sizeof placed.header, p.image.size() - sizeof placed.header)};
+                     placed.header};
     RAW_DIAGNOSTIC(stats.programsPlaced++);
     out = placed.placed;
     return true;
