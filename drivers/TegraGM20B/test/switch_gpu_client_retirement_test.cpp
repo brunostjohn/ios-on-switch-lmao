@@ -631,3 +631,25 @@ TEST_F(ClientRetirement, ACutsSnapshotIsTakenBeforeItsEpochIsPublished)
 	EXPECT_FALSE(newWorkBlocked());
 	EXPECT_EQ(gpuRead(0x209000), 0x5a);
 }
+
+// A SubmitJob holds its submit lock across a full ring's wait, which waits for the GPU, which may wait for the bind epoch
+// retireBatch releases: retireBatch never waits for a submit lock. A freed BO a job may still hold goes back on the
+// release call, once that job left.
+TEST_F(ClientRetirement, RetirementNeverWaitsForASubmitLock)
+{
+	client.add(1);
+	free(1);
+	chan.completed = chan.submitted;
+	IOLockLock(client.submitLocks_[3]);
+	auto batch = std::async(std::launch::async, [&] {
+		client.retireBatch();
+	});
+	EXPECT_EQ(batch.wait_for(2s), std::future_status::ready)
+		<< "retireBatch waited for a submit lock";
+	batch.get();
+	EXPECT_EQ(client.releases, 0u) << "a BO given back while a job may still hold it";
+	EXPECT_GT(client.releaseStorage.entries.load(), 0u);
+	IOLockUnlock(client.submitLocks_[3]);
+	client.releaseLeft();
+	EXPECT_EQ(client.releases, 1u);
+}

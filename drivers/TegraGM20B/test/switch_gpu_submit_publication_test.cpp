@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // SubmitJob's reads of its connection's BOs and bindings with the submit gate open, under ThreadSanitizer: a job on each
 // channel finds a BO by handle (the index) and by GPU address (the published bindings) and reads it, while the
-// connection imports and binds BOs, maps over and unmaps live ranges, frees BOs, and retirement releases what left
-// (retireBatch, after its pass of the submit locks).
+// connection imports and binds BOs, maps over and unmaps live ranges, frees BOs, and retirement gives back what left
+// (retireBatch when every submit lock is free at once, else releaseLeft after waiting for each).
 #include "switch_gpu_client_fixture.h"
 
 #include <random>
@@ -97,6 +97,12 @@ TEST(SubmitPublication, JobsReadBosAndBindingsWhileTheConnectionChangesAndRetire
 			std::this_thread::yield();
 		}
 	});
+	std::thread release([&c] {
+		while (!c.stop.load()) {
+			c.client.releaseLeft();
+			std::this_thread::yield();
+		}
+	});
 	std::mt19937 random(99);
 	for (uint32_t step = 0; step < kSteps; ++step) {
 		const uint32_t pick = random() % 8;
@@ -111,7 +117,9 @@ TEST(SubmitPublication, JobsReadBosAndBindingsWhileTheConnectionChangesAndRetire
 	for (auto &reader : readers)
 		reader.join();
 	retirement.join();
+	release.join();
 	c.client.retireBatch();
+	c.client.releaseLeft();
 	EXPECT_GT(c.byHandle.load(), 0u);
 	EXPECT_GT(c.byAddress.load(), 0u);
 	EXPECT_GT(c.client.releases.load(), 0u) << "retirement released freed BOs while jobs ran";

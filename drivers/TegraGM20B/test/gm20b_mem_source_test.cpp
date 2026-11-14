@@ -110,22 +110,24 @@ TEST(GM20BMemSource, RetirementFreesWhatLeftTheTablesAfterEverySubmitLock)
 {
 	const std::string retirement = unit("SwitchGpuClientRetirement.h");
 	const CodeText batch = Block(retirement, "void AGXDeviceUserClient::retireBatch()");
-	EXPECT_TRUE(batch.Before("auto *indexes = boIndex_.takeRetired();", "passSubmitters();"));
-	EXPECT_TRUE(
-		batch.Before("auto *bindings = bindTable_.takeRetired();", "passSubmitters();"));
-	EXPECT_TRUE(batch.Between("IOLockUnlock(lock_); if (release || indexes || bindings)",
-				  "releaseBo(release);")
-			    .Has("passSubmitters();"));
-	EXPECT_TRUE(batch.Before("passSubmitters();", "boIndex_.releaseRetired(indexes);"));
-	EXPECT_TRUE(batch.Before("passSubmitters();", "BindingTable::releaseRetired(bindings);"));
-	EXPECT_FALSE(Block(retirement, "void AGXDeviceUserClient::passSubmitters()").Has("lock_"));
+	EXPECT_TRUE(batch.Before(
+		"Left left = {release, boIndex_.takeRetired(), bindTable_.takeRetired()};",
+		"IOLockUnlock(lock_); if (!left.bos && !left.indexes && !left.bindings)"));
+	EXPECT_TRUE(batch.Has("if (passSubmitters(false)) { dropLeft(left); return; }"));
+	EXPECT_TRUE(batch.Before("keepLeft(left);", "thread_call_enter(releaseCall_);"));
+	EXPECT_FALSE(batch.Has("passSubmitters(true)"))
+		<< "retireBatch never waits for a submit lock";
+	const CodeText left = Block(retirement, "void AGXDeviceUserClient::releaseLeft()");
+	EXPECT_TRUE(left.Before("left_ = {};", "IOLockUnlock(lock_);"));
+	EXPECT_TRUE(left.Before("passSubmitters(true);", "dropLeft(left);"));
+	EXPECT_FALSE(Block(retirement, "bool AGXDeviceUserClient::passSubmitters(bool wait)")
+			     .Has("lock_"));
 	const CodeText free = Block(retirement, "IOReturn AGXDeviceUserClient::boFree(");
 	EXPECT_TRUE(free.Before("boIndex_.erase(bo->handle);", "queueZombie(bo);"));
 	EXPECT_TRUE(free.Before("publishBindings(snapshot);", "queueZombie(bo);"));
 	EXPECT_TRUE(free.Before("BindingTable::prepare(nbinds_)", "*p = bo->next;"));
 	EXPECT_EQ(CodeText(retirement).Count("releaseBo("), 2u)
-		<< "retireBatch's, after the pass, and reap's at close, with the gate closed and "
-		   "drained";
+		<< "dropLeft's, after a pass of the submit locks, and reap's at close";
 }
 
 // A new surface's zero-filled pages are cleaned by the prefault's thread call, which keeps them wired for the first

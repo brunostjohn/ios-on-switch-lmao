@@ -45,6 +45,11 @@ void IOLockUnlock(IOLock *lock) __attribute__((no_thread_safety_analysis))
 	lock->mutex.unlock();
 }
 
+bool IOLockTryLock(IOLock *lock) __attribute__((no_thread_safety_analysis))
+{
+	return lock->mutex.try_lock();
+}
+
 void IOLockSleep(IOLock *lock, void *, int) __attribute__((no_thread_safety_analysis))
 {
 	std::unique_lock<std::mutex> held(lock->mutex, std::adopt_lock);
@@ -433,7 +438,9 @@ public:
 		}
 	};
 
-	struct Index : SwitchGpuBoIndex<Bo, HostMemory> {
+	using BoIndex = SwitchGpuBoIndex<Bo, HostMemory>;
+
+	struct Index : BoIndex {
 		~Index()
 		{
 			destroy();
@@ -449,6 +456,15 @@ public:
 		}
 	} bindTable_;
 
+	struct Left {
+		Bo *bos;
+		BoIndex::Table *indexes;
+		BindingTable::Snapshot *bindings;
+	};
+
+	Left left_ = {};
+	Call releaseStorage;
+	thread_call_t releaseCall_ = &releaseStorage;
 	IOLock submitStorage[kMaxChannels];
 	IOLock *submitLocks_[kMaxChannels] = {
 		&submitStorage[0], &submitStorage[1], &submitStorage[2], &submitStorage[3],
@@ -538,7 +554,11 @@ public:
 	IOReturn boFree(const TegraGM20BAbiBoFree *);
 	void unbindOverlaps(uint64_t, uint64_t, Bo *);
 	void publishBindings(BindingTable::Snapshot *);
-	void passSubmitters();
+	bool passSubmitters(bool);
+	void dropLeft(const Left &);
+	void keepLeft(const Left &);
+	void releaseLeft();
+	static void releaseWork(thread_call_param_t, thread_call_param_t);
 
 	Bo *findBo(uint64_t handle)
 	{

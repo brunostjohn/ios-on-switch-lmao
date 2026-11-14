@@ -127,8 +127,7 @@ void AGXDeviceUserClient::retireBatch()
 		bo->next = release;
 		release = bo;
 	}
-	auto *indexes = boIndex_.takeRetired();
-	auto *bindings = bindTable_.takeRetired();
+	Left left = {release, boIndex_.takeRetired(), bindTable_.takeRetired()};
 	__atomic_store_n(&retirementPending_, unsigned(retired_ || readyBos_), __ATOMIC_RELEASE);
 	const bool again = readyBos_ || retireRemaining_ ||
 			   retireScanEpoch_ != __atomic_load_n(&retirementEpoch_, __ATOMIC_ACQUIRE);
@@ -136,26 +135,75 @@ void AGXDeviceUserClient::retireBatch()
 		thread_call_enter(retireCall_);
 	IOLockWakeup(lock_, &retired_, false);
 	IOLockUnlock(lock_);
-	if (release || indexes || bindings)
-		passSubmitters();
-	while (release) {
-		auto *next = release->next;
-		releaseBo(release);
-		release = next;
+	if (!left.bos && !left.indexes && !left.bindings)
+		return;
+	if (passSubmitters(false)) {
+		dropLeft(left);
+		return;
 	}
-	boIndex_.releaseRetired(indexes);
-	BindingTable::releaseRetired(bindings);
+	IOLockLock(lock_);
+	keepLeft(left);
+	IOLockUnlock(lock_);
+	thread_call_enter(releaseCall_);
 }
 
 // Every SubmitJob finds the connection's BOs and bindings inside its channel's submit lock, without lock_: once each
 // submit lock was taken after something left the tables, no job can still hold it. Not under lock_ (SubmitJob takes
-// lock_ inside its submit lock).
-void AGXDeviceUserClient::passSubmitters()
+// lock_ inside its submit lock). Without `wait`, false at the first lock held: a submit lock is held across a full
+// ring's wait, which waits for the GPU, which may wait for the bind epoch only retireBatch releases.
+bool AGXDeviceUserClient::passSubmitters(bool wait)
 {
 	for (IOLock *lock : submitLocks_) {
-		IOLockLock(lock);
+		if (wait)
+			IOLockLock(lock);
+		else if (!IOLockTryLock(lock))
+			return false;
 		IOLockUnlock(lock);
 	}
+	return true;
+}
+
+void AGXDeviceUserClient::dropLeft(const Left &left)
+{
+	for (Bo *bo = left.bos; bo;) {
+		Bo *next = bo->next;
+		releaseBo(bo);
+		bo = next;
+	}
+	boIndex_.releaseRetired(left.indexes);
+	BindingTable::releaseRetired(left.bindings);
+}
+
+// lock_ held: `left` waits for releaseLeft
+void AGXDeviceUserClient::keepLeft(const Left &left)
+{
+	const auto append = [](auto *&chain, auto *more, auto link) {
+		auto **at = &chain;
+		while (*at)
+			at = &((*at)->*link);
+		*at = more;
+	};
+	append(left_.bos, left.bos, &Bo::next);
+	append(left_.indexes, left.indexes, &BoIndex::Table::retired);
+	append(left_.bindings, left.bindings, &BindingTable::Snapshot::retired);
+}
+
+// releaseCall_'s: what retireBatch could not give back without waiting for a submit lock
+void AGXDeviceUserClient::releaseLeft()
+{
+	IOLockLock(lock_);
+	const Left left = left_;
+	left_ = {};
+	IOLockUnlock(lock_);
+	if (!left.bos && !left.indexes && !left.bindings)
+		return;
+	passSubmitters(true);
+	dropLeft(left);
+}
+
+void AGXDeviceUserClient::releaseWork(thread_call_param_t owner, thread_call_param_t)
+{
+	static_cast<AGXDeviceUserClient *>(owner)->releaseLeft();
 }
 
 // lock_ held: the bindings as they are now become what SubmitJob reads; the copy they replace waits for retireBatch.
@@ -259,6 +307,8 @@ void AGXDeviceUserClient::drainResources()
 		thread_call_cancel_wait(retireCall_);
 	if (wakeCall_)
 		thread_call_cancel_wait(wakeCall_);
+	if (releaseCall_)
+		thread_call_cancel_wait(releaseCall_);
 	IOLockLock(lock_);
 	while (nbinds_)
 		unbindOverlaps(binds_[0].va, binds_[0].range, nullptr);
@@ -270,7 +320,10 @@ void AGXDeviceUserClient::drainResources()
 		queueZombie(bo);
 	}
 	reap(true);
+	const Left left = left_;
+	left_ = {};
 	IOLockUnlock(lock_);
+	dropLeft(left);
 	scheduleOrphanRelease();
 }
 

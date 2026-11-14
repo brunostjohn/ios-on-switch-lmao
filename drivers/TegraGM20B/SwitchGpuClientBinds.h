@@ -108,20 +108,29 @@ IOReturn AGXDeviceUserClient::mapRange(const TegraGM20BAbiBindOp &op, Bo *bo,
 }
 
 // lock_ held. Whether [va, va + range) has PTEs, live or retiring, that work queued now could still use (a killed or
-// replaced channel's work counts as done, as bindingIdle counts it). A range nothing held maps at once.
+// replaced channel's work counts as done, as bindingIdle counts it). A range nothing held maps at once. The records
+// retireBatch is unmapping lose their mappings under unmapLock_ alone, so they are read under it.
 bool AGXDeviceUserClient::workQueued(uint64_t va, uint64_t range) const
 {
 	bool held = false;
 	for (uint32_t i = 0; i < nbinds_ && !held; ++i)
 		held = binds_[i].va < va + range && va < binds_[i].va + binds_[i].range;
-	const RetiredBinding *const lists[] = {retired_, unmapping_};
-	for (const auto *list : lists)
-		for (const auto *record = list; record && !held; record = record->next) {
+	const auto holds = [&](const RetiredBinding *list) {
+		for (const auto *record = list; record; record = record->next) {
 			uint64_t from = 0, bytes = 0;
-			held = switch_gpu_mapping_installed(record->mapping) &&
-			       !switch_gpu_mapping_span(record->mapping, &from, &bytes) &&
-			       from < va + range && va < from + bytes;
+			if (switch_gpu_mapping_installed(record->mapping) &&
+			    !switch_gpu_mapping_span(record->mapping, &from, &bytes) &&
+			    from < va + range && va < from + bytes)
+				return true;
 		}
+		return false;
+	};
+	held = held || holds(retired_);
+	if (!held && unmapping_) {
+		IOLockLock(unmapLock_);
+		held = holds(unmapping_);
+		IOLockUnlock(unmapLock_);
+	}
 	if (!held)
 		return false;
 	for (uint32_t slot = 0; slot < kMaxChannels; ++slot)

@@ -419,9 +419,20 @@ class AGXDeviceUserClient : public IOUserClient
 	uint32_t channelLevels_[kMaxChannels] = {};
 	bool leanChannels_[kMaxChannels] = {};
 	Bo *bos_ = nullptr, *zombies_ = nullptr, *readyBos_ = nullptr;
-	SwitchGpuBoIndex<Bo, KernelMemory> boIndex_;
+	using BoIndex = SwitchGpuBoIndex<Bo, KernelMemory>;
+	BoIndex boIndex_;
 	using BindingTable = SwitchGpuBindingTable<Bo, KernelMemory>;
 	BindingTable bindTable_;
+
+	// What left the BO index and the bindings, to give back once no SubmitJob can hold it (passSubmitters)
+	struct Left {
+		Bo *bos;
+		BoIndex::Table *indexes;
+		BindingTable::Snapshot *bindings;
+	};
+
+	Left left_ = {};  // lock_: for releaseCall_
+	thread_call_t releaseCall_ = nullptr;
 	RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
 	// a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
 	IOLock *unmapLock_ = nullptr;
@@ -514,7 +525,11 @@ class AGXDeviceUserClient : public IOUserClient
 	void pushWakes();
 	void unbindOverlaps(uint64_t va, uint64_t range, Bo *only);
 	void publishBindings(BindingTable::Snapshot *made);
-	void passSubmitters();
+	bool passSubmitters(bool wait);
+	void dropLeft(const Left &left);
+	void keepLeft(const Left &left);
+	void releaseLeft();
+	static void releaseWork(thread_call_param_t, thread_call_param_t);
 	IOReturn publishBo(Bo *bo, bool mapped);
 	bool bindCuts(const TegraGM20BAbiVmBind *in, uint32_t count);
 	IOReturn bindOp(const TegraGM20BAbiBindOp &op, bool &changed);

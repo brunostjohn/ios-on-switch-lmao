@@ -745,6 +745,19 @@ host_test(
     cxx_std = "c++17",
 )
 
+# The same, its submitters and closer under ThreadSanitizer.
+host_test(
+    name = "gm20b_sleep_tsan_test",
+    srcs = [
+        "gm20b_sleep_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BSleepGate.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    cxx_std = "c++17",
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+)
+
 host_test(
     name = "gm20b_source_test",
     srcs = ["gm20b_source_test.cpp"],
