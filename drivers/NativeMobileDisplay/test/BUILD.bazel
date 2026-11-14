@@ -179,6 +179,16 @@ host_test(
     ],
 )
 
+# SwitchWindowAperture.h (display.completion_flip winbuf_alias): window A's direct apertures written and read back both
+# ways against a model of DC A that aliases them and one that does not, every word and the access state put back.
+host_test(
+    name = "switch_window_aperture_test",
+    srcs = [
+        "switch_window_aperture_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchWindowAperture.h",
+    ],
+)
+
 # TegraMipiCal.h (TegraDisplayPower.cpp's SC7 resume): one calibration waited for by its status bits against a model of
 # MIPI_CAL, bounded at 10 ms, never started twice.
 host_test(

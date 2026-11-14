@@ -2,8 +2,8 @@
 // SwitchCompletionFlipDisplay.h: a direct frame's completion writes window A's flip itself, through window A's own
 // aperture and nothing the gate's reads switch, and the gate's ring, latch check and SC7 path see that flip at the
 // boundary that took it, whatever order the completion, its own pass, the frame boundaries and the frame-end action
-// run in (switch_completion_flip_harness.h has the model). Window A's aperture is taken as proven here, as it is
-// after the first completion flip latched as written; switch_completion_flip_proof_test has the unit that refuses.
+// run in (switch_completion_flip_harness.h has the model). Window A's apertures alias the WINDOW_HEADER copy (TRM
+// 24.10-24.11); switch_completion_flip_proof_test has a model that refuses, for the latch check that remains.
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -32,7 +32,6 @@ protected:
     {
         gOffer = nullptr;
         gLog.clear();
-        d.completionFlipsProven = true;
     }
 
     void TearDown() override
@@ -313,7 +312,7 @@ TEST(CompletionFlipSource, TheDisplayCallsItWhereTheOrderingNeedsIt)
     EXPECT_TRUE(Block(display, "void vblankTick()").StartsWith("takeCompletionFlip();"));
     EXPECT_TRUE(Block(display, "void quiesceForSuspend()").StartsWith("suspendCompletionFlip();"));
     EXPECT_TRUE(Block(display, "void stopRotation()").StartsWith("withdrawCompletionFlip();"));
-    EXPECT_TRUE(Block(display, "void settleStopped()").StartsWith("flipUnverifiedFromGate();"));
+    EXPECT_FALSE(Block(display, "void settleStopped()").Has("flipUnverifiedFromGate"));
     const CodeText check = Block(display, "void checkFlip(bool atFrameEnd)");
     EXPECT_TRUE(check.Has("const auto [control, start] = latchState();"));
     EXPECT_FALSE(check.Has("windowActive("));

@@ -77,6 +77,7 @@
 #include <sys/sysctl.h>
 #include "NativeColumnScan.h"
 #include "DisplayWindowProbeRun.h"
+#include "SwitchWindowAperture.h"
 #include "SwitchLandscapeRunABI.h"
 #include "../TegraVIC/SwitchVICTurnRun.h"
 extern "C" void native_legacy_frame_end_hold(void);
@@ -3027,7 +3028,6 @@ private:
     // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
     void settleStopped()
     {
-        flipUnverifiedFromGate();
         const int asked = ring.pending;
         uint64_t seq = asked != kNoBuffer ? entrySeq[asked] : 0;
         ring.settle();
@@ -4843,6 +4843,7 @@ public:
 #include "NativeColumnScanDisplay.h"
 #include "SwitchDcHost1xClassProbe.h"
 #include "DisplayWindowProbeDisplay.h"
+#include "SwitchWindowApertureDisplay.h"
 #include "SwitchLandscapeRunDisplay.h"
 #include "SwitchPaletteDisplay.h"
 #include "SwitchPlaneAdmissionDrop.h"
@@ -5435,13 +5436,22 @@ extern "C" IOReturn switch_display_landscape_run_call(const IOExternalMethodArgu
 extern "C" IOReturn switch_display_window_probe_call(const IOExternalMethodArguments *a)
 {
     const auto *request = static_cast<const SwitchDisplayWindowProbeRequest *>(a->structureInput);
+    const bool aperture = request && request->op == SWITCH_DISPLAY_WINDOW_PROBE_APERTURE;
     if (a->scalarInputCount || a->scalarOutputCount || a->structureInputSize != sizeof(*request) || !request ||
-        request->magic != SWITCH_DISPLAY_WINDOW_PROBE_MAGIC || request->reserved ||
-        a->structureOutputSize != sizeof(SwitchDisplayWindowProbeReply) || !a->structureOutput)
+        request->magic != SWITCH_DISPLAY_WINDOW_PROBE_MAGIC || request->reserved || !a->structureOutput ||
+        a->structureOutputSize !=
+            (aperture ? sizeof(SwitchDisplayWindowApertureReply) : sizeof(SwitchDisplayWindowProbeReply)))
         return kIOReturnBadArgument;
     NativeLegacyDisplay *display = __atomic_load_n(&NativeLegacyDisplay::primaryDisplay, __ATOMIC_ACQUIRE);
     if (!display)
         return kIOReturnNotReady;
+    if (aperture) {
+        SwitchDisplayWindowApertureReply reply;
+        const IOReturn status = display->windowApertureCall(reply);
+        if (status == kIOReturnSuccess)
+            memcpy(a->structureOutput, &reply, sizeof(reply));
+        return status;
+    }
     SwitchDisplayWindowProbeReply reply;
     const IOReturn status = display->windowProbeCall(*request, reply);
     if (status == kIOReturnSuccess)
