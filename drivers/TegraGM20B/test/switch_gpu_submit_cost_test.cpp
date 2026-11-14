@@ -311,4 +311,23 @@ TEST_F(SubmitCost, ACpuWriteLockedTextureCostsTheJobItsLockAlone)
 	composite();
 	EXPECT_EQ(ownership_takes() - after, 1u);
 }
+
+// A job over its resource set alone, no shared use: no ownership lock.
+TEST_F(SubmitCost, AJobWithNoSharedUseTakesNoOwnershipLock)
+{
+	scene(6);
+	const switch_gpu_backing_token completion = compositor.token(++frame);
+	const uint64_t owned = ownership_takes();
+	switch_gpu_backing_transaction transaction = {};
+	ASSERT_EQ(switch_gpu_backing_begin_held(nullptr, 0, nullptr, 0, nullptr, 0, &completion,
+						&transaction),
+		  0);
+	uint32_t needed = 0;
+	EXPECT_EQ(switch_gpu_backing_dependencies(&transaction, dependencies.data(),
+						  TegraGM20BMaxJobUses, &needed),
+		  0);
+	switch_gpu_backing_commit(&transaction);
+	EXPECT_EQ(ownership_takes() - owned, 0u);
+	compositor.fence = frame;
+}
 }  // namespace

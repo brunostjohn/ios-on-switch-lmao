@@ -28,7 +28,7 @@ IOLock *switch_gpu_backing_order(void)
 
 void switch_gpu_backing_order_lock(void)
 {
-	IOLockLock(gOrder);
+	IOLockLock(switch_gpu_backing_order());
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 	__atomic_store_n(&gOrderOwner, current_thread(), __ATOMIC_RELAXED);
 #endif
@@ -157,15 +157,16 @@ static bool lock_needed_uses(switch_gpu_backing_transaction *transaction)
 }
 
 // A CPU-dirty use is cleaned under its lock alone, so no cleaning holds the order: needing its lock, it is held, and it
-// stays dirty until this transaction cleans it while everyone else waits for that lock. Begin then finds nothing left to
-// clean. False when there was nothing to clean and the order was never let go.
+// stays dirty until this transaction ends while everyone else waits for that lock. Begin skips a use marked cleaned; a
+// begin refused before it leaves clean_start as it was, so the next one cleans again what a CPU writer wrote since.
+// False when there was nothing to clean and the order was never let go.
 static bool clean_outside_order(switch_gpu_backing_transaction *transaction)
 {
 	auto *uses = transaction->uses;
 	bool dirty = false;
 	for (uint32_t i = 0; i < transaction->count; ++i) {
 		const auto *backing = uses[i].backing;
-		if ((uses[i].reserved & kUseLocked) &&
+		if ((uses[i].reserved & kUseLocked) && !(uses[i].reserved & kUseCleaned) &&
 		    (backing->dirty & SWITCH_GPU_BACKING_CPU_DIRTY) &&
 		    backing->clean_start < (uint64_t(backing->pages->count) << 12)) {
 			uses[i].reserved |= kUseDirty;
@@ -178,12 +179,11 @@ static bool clean_outside_order(switch_gpu_backing_transaction *transaction)
 	for (uint32_t i = 0; i < transaction->count; ++i) {
 		if (!(uses[i].reserved & kUseDirty))
 			continue;
-		uses[i].reserved &= ~kUseDirty;
-		auto *backing = uses[i].backing;
+		uses[i].reserved = (uses[i].reserved & ~kUseDirty) | kUseCleaned;
+		const auto *backing = uses[i].backing;
 		const uint64_t size = uint64_t(backing->pages->count) << 12;
 		switch_gpu_backing_cache(backing->pages->addresses, backing->pages->count,
 					 backing->clean_start, size - backing->clean_start, 0);
-		backing->clean_start = size;
 	}
 	switch_gpu_backing_order_lock();
 	return true;

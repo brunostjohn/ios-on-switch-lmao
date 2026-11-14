@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: MIT
 // switch_gpu_chan_exec_events, compiled from gpu_exec.c, against the real backing layer: a job's records go up after
 // everything that can still fail it and before its first GPFIFO entry or doorbell.
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
+#include <thread>
 #include <vector>
 #include <gtest/gtest.h>
 #include <IOKit/IOLib.h>
@@ -192,6 +195,34 @@ TEST_F(ExecCommit, PublishesTheJobsWriteBeforeItsFirstKick)
 	EXPECT_FALSE(held());
 	switch_exec_backing::complete(completion);
 	EXPECT_EQ(switch_exec_backing::pending(written), 0u) << "the record was the job's own";
+}
+
+// A use a CPU lock is asleep on (its claim) and CPU-written: the job holds that use's lock until its commit, and lets it go
+// with the order before its first kick.
+TEST_F(ExecCommit, AClaimedUsesLockIsLetGoBeforeTheFirstKick)
+{
+	constexpr uint32_t kRead = SWITCH_GPU_BACKING_READ, kWrite = SWITCH_GPU_BACKING_WRITE;
+	switch_gpu_backing *claimed = switch_exec_backing::make();
+	producer(0x103, 3, claimed);
+	switch_exec_backing::complete(switch_exec_backing::token(0x103, 1));
+	ASSERT_EQ(switch_gpu_backing_cpu_acquire(claimed, 0, 4096, kWrite), 0);
+	std::atomic<int> locked{1};
+	std::thread sleeper([&] {
+		locked = switch_gpu_backing_cpu_acquire(claimed, 0, 4096, kRead);
+	});
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	ASSERT_EQ(locked.load(), 1) << "the CPU lock did not wait for the CPU writer";
+	ASSERT_EQ(begin({{claimed, kRead | SWITCH_GPU_BACKING_NO_CPU_EXCLUSION, 0},
+			 {written, kWrite, 0}}),
+		  0);
+
+	ASSERT_EQ(exec(&kPush, 1), 0);
+
+	expect_every_kick_after_commit();
+	EXPECT_EQ(switch_gpu_backing_cpu_release(claimed, 0, 4096, kWrite), 0);
+	sleeper.join();
+	EXPECT_EQ(locked.load(), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(claimed, 0, 4096, kRead), 0);
 }
 
 TEST_F(ExecCommit, NoRoomPublishesNothingAndKeepsTheTransaction)

@@ -54,8 +54,8 @@ inline bool host_acquire_wanted(const switch_gpu_backing &backing,
 }
 
 // An ordered transaction's marks in its uses' reserved words (zero again when it ends): the use's lock is held, it was
-// found to need it, it is to be cleaned.
-constexpr uint32_t kUseLocked = 1, kUseGrown = 2, kUseDirty = 4;
+// found to need it, it is to be cleaned, it was cleaned with the order let go.
+constexpr uint32_t kUseLocked = 1, kUseGrown = 2, kUseDirty = 4, kUseCleaned = 8;
 
 // How begin holds the transaction's uses (SwitchGpuBackingOrder.cpp): in the order with the locks of the uses that need
 // them, or every use claimed.

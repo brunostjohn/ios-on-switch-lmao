@@ -215,6 +215,33 @@ TEST_F(Backing, ACpuDirtyBackingsFirstCleanHoldsNoJobOnAnotherBacking)
 	switch_gpu_backing_release(b);
 }
 
+// A job cleans a CPU writer's bytes with the order let go, then its guard refuses it: the next job cleans again what the
+// writer wrote since.
+TEST_F(Backing, AJobRefusedAfterItsCleanLeavesTheNextOneToCleanAgain)
+{
+	auto *b = drawn(3);
+	ASSERT_EQ(switch_gpu_backing_cpu_acquire(b, 0, kBytes, kWrite), 0);
+	ASSERT_TRUE(dirty(b) & SWITCH_GPU_BACKING_CPU_DIRTY);
+	alignas(8) static volatile uint64_t generation = 2;
+	const switch_gpu_backing_guard guard = {b, &generation, 1};
+	switch_gpu_backing_use use = {b, kRead | kBeside, 0};
+	switch_gpu_backing_transaction transaction = {};
+	const auto refused = token(7, 1);
+	cache.clear();
+	EXPECT_EQ(switch_gpu_backing_begin_held(&use, 1, nullptr, 0, &guard, 1, &refused,
+						&transaction),
+		  SWITCH_GPU_BACKING_STALE);
+	ASSERT_EQ(cache.size(), 1u) << "the refused job made no clean pass";
+	cache.clear();
+	job(b, kRead, token(7, 2));
+	ASSERT_EQ(cache.size(), 1u)
+		<< "the writer's bytes since the refused job's clean stay dirty";
+	EXPECT_EQ(cache[0].offset, 0u);
+	EXPECT_EQ(cache[0].bytes, kBytes);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(b, 0, kBytes, kWrite), 0);
+	switch_gpu_backing_release(b);
+}
+
 TEST_F(Backing, ACpuLockAsleepBehindACpuWriterHoldsNoJob)
 {
 	auto *a = drawn(3), *b = drawn(4);

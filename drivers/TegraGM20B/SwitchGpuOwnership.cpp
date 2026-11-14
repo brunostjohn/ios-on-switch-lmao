@@ -224,9 +224,9 @@ int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_lease *co
 	int result = 0;
 	uint32_t matched_leases = 0, refs = 0;
 	const void *replaced = nullptr;
-	if (ordered)
+	if (unique && ordered)
 		hold_ordered(transaction);
-	else
+	else if (unique)
 		hold_claimed(transaction);
 	for (uint32_t i = 0; !result && i < guard_count; ++i)
 		if (__atomic_load_n(guards[i].generation, __ATOMIC_ACQUIRE) != guards[i].expected)
@@ -284,7 +284,7 @@ int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_lease *co
 		if (backing->dirty & SWITCH_GPU_BACKING_CPU_DIRTY) {
 			transaction->host_written = 1;
 			const uint64_t size = uint64_t(backing->pages->count) << 12;
-			if (backing->clean_start < size)
+			if (!(uses[i].reserved & kUseCleaned) && backing->clean_start < size)
 				switch_gpu_backing_cache(
 					backing->pages->addresses, backing->pages->count,
 					backing->clean_start, size - backing->clean_start, 0);
