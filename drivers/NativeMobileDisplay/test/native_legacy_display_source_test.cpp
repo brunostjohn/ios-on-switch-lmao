@@ -218,7 +218,9 @@ TEST(DisplayRoutesSource, NoFailureHoldsARouteOff)
 TEST(VsyncPhaseSource, NeverFiringVpulse2CostsOneLine)
 {
     const CodeText present = method("void notePhasePresent(uint64_t stamp, const FrameMark &mark)");
-    EXPECT_TRUE(present.Has("phaseProbe.flip(vpulseProgrammed, vpulse2Routed(), vpulseSeen)"));
+    EXPECT_TRUE(present.Has("if (vpulseProgrammed && !vpulseSeen && dc && !hwSuspended) {"))
+        << "DC A read only while probing, and never powered down";
+    EXPECT_TRUE(present.Has("phaseProbe.flip(true, vpulse2Routed(), false)"));
     EXPECT_TRUE(present.Has("phaseProbeEnded(step);"));
     EXPECT_FALSE(present.Has("panic(")) << "a V_PULSE2 that never fired costs one line, not the boot";
     const CodeText ended = method("void phaseProbeEnded(VsyncPhaseProbe::Step step)");

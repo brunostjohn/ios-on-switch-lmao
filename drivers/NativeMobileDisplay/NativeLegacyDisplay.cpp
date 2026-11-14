@@ -2087,10 +2087,12 @@ private:
     {
         if (!mark.submit || !mark.ready || !vsyncOf(mark))
             return;
-        const VsyncPhaseProbe::Step step = phaseProbe.flip(vpulseProgrammed, vpulse2Routed(), vpulseSeen);
-        if (step != VsyncPhaseProbe::kRun) {
-            phaseProbeEnded(step);
-            return;
+        if (vpulseProgrammed && !vpulseSeen && dc && !hwSuspended) {
+            const VsyncPhaseProbe::Step step = phaseProbe.flip(true, vpulse2Routed(), false);
+            if (step != VsyncPhaseProbe::kRun) {
+                phaseProbeEnded(step);
+                return;
+            }
         }
         if (vsyncInterval)
             phase.setPeriod(static_cast<uint32_t>(Span::ticksToUs(vsyncInterval)));
