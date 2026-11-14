@@ -141,9 +141,11 @@ protected:
         frameEndAction();
     }
 
+    // kickSwapQueue's steps before kickOnce, with no swap queued behind an offer out.
     void kick()
     {
         d.kickUnmaskFrameEnd();
+        d.kickCompletionPass(false);
     }
 
     // A swap whose producer's writes are in DRAM: the kick flips window A to its slot.
@@ -277,6 +279,68 @@ TEST_F(DisplayPeriod, TheFiltersCountsReachTheActionOnce)
     d.frameEndInterrupt(false);
     EXPECT_EQ(d.takeFrameEndStatus(), Display::kFrameEndInt | Display::kVpulse2Int);
     EXPECT_EQ(d.vblankSource.signals, d.feTaken + d.vpulseTaken - 1u) << "one signal per filter run";
+}
+
+// A written flip's pass waits for the frame end, which runs it before it reads the latch: the swap retires at that
+// latch. The gate wants the pass now when a swap waits behind the offer, before or after the completion wrote.
+TEST_F(DisplayPeriod, AWrittenFlipsPassRunsAtTheFrameEndUnlessTheGateWantsItNow)
+{
+    kick();
+    ASSERT_EQ(d.offer(kSlot), 0);
+    d.complete(0);
+    EXPECT_EQ(d.gpuDoneStore.signals, d.donePasses) << "no work-loop pass of its own";
+    const size_t retired = d.retired.size();
+    frameEnd();
+    EXPECT_EQ(d.retired.size(), retired + 1) << "retired at the latch that showed it";
+
+    kick();
+    ASSERT_EQ(d.offer(kSlot + 1), 0);
+    d.kickCompletionPass(true);
+    d.complete(0);
+    EXPECT_NE(d.gpuDoneStore.signals, d.donePasses) << "a swap waits behind it: signalled";
+    d.donePass();
+    frameEnd();
+
+    kick();
+    ASSERT_EQ(d.offer(kSlot), 0);
+    d.complete(0);
+    ASSERT_EQ(d.gpuDoneStore.signals, d.donePasses);
+    d.kickCompletionPass(true);
+    EXPECT_NE(d.gpuDoneStore.signals, d.donePasses) << "the gate saw the flip written and signalled the pass itself";
+    d.donePass();
+    frameEnd();
+
+    d.kickCompletionPass(false);
+    d.scanoutStopped = true;
+    d.publishCompletionPass();
+    ASSERT_EQ(d.offer(kSlot + 1), 0);
+    d.complete(0);
+    EXPECT_NE(d.gpuDoneStore.signals, d.donePasses) << "no frame end comes to a stopped scanout";
+    d.donePass();
+}
+
+// One deadline while anything is out: armed once, re-armed at its fire while frame ends come, and a panic when one
+// fires with a flip out and no frame end since (DC A's interrupt lost), the completion's flip included.
+TEST_F(DisplayPeriod, OneDeadlineThatStillCatchesALostFrameEnd)
+{
+    kick();
+    ASSERT_EQ(d.offer(kSlot), 0);
+    d.complete(0);
+    ASSERT_TRUE(d.flipDeadlineArmed);
+    frameEnd();
+    const unsigned arms = d.flipTimerStore.arms;
+    d.checkFlipDeadline();
+    EXPECT_EQ(d.flipTimerStore.arms, arms) << "nothing out: not armed again";
+    kick();
+    ASSERT_EQ(d.offer(kSlot + 1), 0);
+    d.complete(0);
+    EXPECT_EQ(d.flipTimerStore.arms, arms + 1) << "armed at the offer";
+    d.frameEndInterrupt(false);
+    frameEndAction();
+    ASSERT_NE(d.ring.pending, Display::kNoBuffer) << "a frame end whose boundary did not take the flip";
+    d.checkFlipDeadline();
+    EXPECT_EQ(d.flipTimerStore.arms, arms + 2) << "frame ends came: armed again";
+    EXPECT_THROW(d.checkFlipDeadline(), std::runtime_error) << "a flip out and no frame end since the last look";
 }
 
 // The DC A filter runs the colour unit's and TegraPanel's steps with interrupts off: no simple lock, mutex, sleep, log or

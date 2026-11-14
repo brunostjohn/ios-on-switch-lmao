@@ -259,6 +259,11 @@ struct IOWorkLoop {
 inline unsigned gThreadWakeups = 0, gPanelFrameEnds = 0;
 inline uint32_t gFrameEndHolds = 0;
 
+inline void switch_interrupt_describe(uint32_t, char *text, size_t size)
+{
+    snprintf(text, size, "GIC");
+}
+
 inline void thread_wakeup(event_t)
 {
     ++gThreadWakeups;
@@ -434,11 +439,22 @@ struct Display : OSObject {
     };
 
     struct Probe {
+        bool onIova = false;
+
         bool active() const
         {
             return false;
         }
     } probe;
+
+    int probeSurface = 0;
+    unsigned settles = 0;
+    static constexpr uint32_t kDisplayAInterrupt = 105;
+
+    void settleStopped()
+    {
+        ++settles;
+    }
 
     DcModel model;
     Words dc{&model};
@@ -497,6 +513,16 @@ struct Display : OSObject {
 
     static void flipInterruptsOn(bool)
     {}
+
+    static uint64_t gpuDeadlineTicks()
+    {
+        return 1000000;
+    }
+
+    [[noreturn]] void gpuDeadlineCheck()
+    {
+        throw std::runtime_error("an offer's completion looked for past its deadline");
+    }
 
     static bool planeRecoveryWaits()
     {
@@ -734,8 +760,6 @@ struct Display : OSObject {
     {
         if (const int held = ring.flipHeld(); held != kNoBuffer)
             writeFlip(held);
-        else
-            flipDeadlineIdle();
     }
 
     // NativeLegacyDisplay's checkFlip, with every reading the ring cannot explain a failure.

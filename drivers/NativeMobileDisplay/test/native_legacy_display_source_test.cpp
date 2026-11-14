@@ -97,8 +97,8 @@ TEST(DirectScanoutSource, NoEarlyRetireOrCollapseOnceRetiringAtTheLatch)
 // frame whose rendering was lost is neither flipped to nor copied on the CPU.
 TEST(DirectScanoutSource, LateOffersAreTheDriversAndLostFramesAreNotShown)
 {
-    const CodeText deadline = method("static void gpuDeadlineFired(");
-    EXPECT_TRUE(deadline.Before("tegra_gm20b_scanout_outstanding(self)", "panic("));
+    const CodeText deadline = method("void gpuDeadlineCheck()");
+    EXPECT_TRUE(deadline.Before("tegra_gm20b_scanout_outstanding(this)", "panic("));
     EXPECT_TRUE(deadline.Has("fence only, direct slot"));
     EXPECT_TRUE(method("void finishGpuCopy(int status)")
                     .Before("if (status == TEGRA_SCANOUT_SOURCE_LOST) {", "gpuBypass = true;"));
@@ -256,7 +256,7 @@ TEST(DisplayProbeSource, Wiring)
 
 TEST(DisplayProbeSource, AcceptedSwapTableNeverDropsThePendingHead)
 {
-    const CodeText add = method("bool addValidated(");
+    const CodeText add = method("int addValidated(");
     EXPECT_FALSE(add.Has("if (slot == 8) slot = 0;"));
     EXPECT_TRUE(add.Has("validatedAt[i] < validatedAt[slot]"));
     EXPECT_TRUE(method("void kickOnce()").Has("pruneValidated();"));
@@ -312,8 +312,8 @@ TEST(FrameEndSource, MaskedWhileNothingWaits)
         EXPECT_TRUE(method(helper).Has("IOSimpleLockLockDisableInterrupt(intMaskLock)")) << helper;
     EXPECT_TRUE(method("void kickSwapQueue() override").StartsWith("kickUnmaskFrameEnd();"));
     EXPECT_TRUE(method("void vblankTick()")
-                    .EndsWith("if ((status & kFrameEndInt) && !frameEndNeeded() && tegra_panel_holds_frame_end()) "
-                              "maskIdleFrameEnd();"));
+                    .EndsWith("if ((status & kFrameEndInt) && !frameEndNeeded() && tegra_panel_holds_frame_end()) { "
+                              "maskIdleFrameEnd(); idleFlipDeadline(); }"));
     EXPECT_TRUE(method("void maskIdleFrameEnd()").Has("if (!__atomic_load_n(&gFrameEndHolds"));
     // The kick's shadow: set with the lock held, cleared only by the gate.
     EXPECT_TRUE(method("void kickUnmaskFrameEnd()")
@@ -434,4 +434,38 @@ TEST(FrameEndSource, TheFilterHandsOffWithoutReadModifyWrites)
     EXPECT_FALSE(code().Has("dcPending"));
     EXPECT_TRUE(method("int waitTapeFrame()").Has("frameEndPending(kVblankInt | kFrameEndInt | kVpulse2Int)"));
     EXPECT_TRUE(method("void checkFlipDeadline()").Has("frameEndPending(kFrameEndInt)"));
+}
+
+// One gate pass a period: a completion that wrote window A's flip leaves its pass to the frame end's takeCompletionFlip
+// unless the gate wants it now; one deadline while anything is out, never armed or cancelled per flip or per offer.
+TEST(FrameEndSource, OnePassAndOneDeadlineAPeriod)
+{
+    const CodeText complete = method("void gpuComplete(int status)");
+    EXPECT_TRUE(complete.Before("writeCompletionFlip(status);", "if (!completionFlipCarries() ||"));
+    EXPECT_TRUE(method("void kickSwapQueue() override").Has("kickCompletionPass("));
+    EXPECT_TRUE(method("bool setScanout(bool on)").Before("scanoutStopped = !on;", "publishCompletionPass();"));
+    EXPECT_FALSE(method("void flipLatched()").Has("cancelTimeout"));
+    EXPECT_FALSE(method("void cancelGpuDeadline()").Has("cancelTimeout"));
+    EXPECT_TRUE(method("void armDeadlineTimer()").StartsWith("if (flipDeadlineArmed || !flipTimer) return;"));
+    EXPECT_TRUE(method("void checkFlipDeadline()")
+                    .Has("if (frameEnds != flipDeadlineFrames || frameEndPending(kFrameEndInt))"));
+    EXPECT_TRUE(method("bool frameEndNeeded()").Has("(offerAged && gpuScanout)"));
+    EXPECT_FALSE(code().Has("__atomic_store_n(&gpuScanout"));
+    EXPECT_FALSE(code().Has("__atomic_exchange_n(&gpuDonePending"));
+    EXPECT_FALSE(code().Has("__atomic_exchange_n(&self->gpuDonePending"));
+}
+
+// validateSwap runs off the family's gate (21H461 and 24B119 swap_submit call it between their gated actions): it
+// touches no table, its verdict goes through the ring, and the gate drains the ring before it reads the table.
+TEST(FrameEndSource, VerdictsReachTheTableThroughTheGate)
+{
+    const CodeText validate = method("bool validateSwap(const OriginalLegacySwapRequest *request) override");
+    EXPECT_TRUE(validate.Has("publishVerdict(request, accepted);"));
+    for (const char *table : {"noteSubmitted(", "removeValidated(", "addValidated(", "validated["})
+        EXPECT_FALSE(validate.Has(table)) << table;
+    EXPECT_FALSE(method("void publishVerdict(").Has("validated"));
+    EXPECT_TRUE(method("void kickSwapQueue() override").Before("drainVerdicts();", "kickOnce();"));
+    EXPECT_TRUE(method("void vblankTick()").StartsWith("drainVerdicts();"));
+    EXPECT_FALSE(code().Has("__atomic_fetch_add(&validatedEvicted"));
+    EXPECT_FALSE(code().Has("__atomic_exchange_n(&validatedEvicted"));
 }

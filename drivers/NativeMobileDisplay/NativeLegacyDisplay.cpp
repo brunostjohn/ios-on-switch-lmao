@@ -44,6 +44,7 @@
 #include "SwitchDisplayRetirement.h"
 #include "SwitchScanoutBuffer.h"
 #include "SwitchUnderflowAccounting.h"
+#include "SwitchVerdictRing.h"
 #include "../TegraVIC/SwitchNativeVICImage.h"
 #include "../TegraVIC/SwitchVICScanoutConvert.h"
 #include "SwitchPlaneComposite.h"
@@ -713,7 +714,24 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     const OriginalLegacySwapRequest *validated[kValidated] = {};
     uint64_t validatedAt[kValidated] = {};  // when each was first accepted (mach time): the client's submission
     FrameTimeline validatedTl[kValidated] = {};
-    uint32_t validatedEvicted = 0, validatedStale = 0;
+    uint32_t validatedEvicted = 0, validatedStale = 0;  // the gate's
+
+    // validateSwap runs on the client's thread outside the family's gate (21H461's and 24B119's swap_submit call it
+    // between their gated actions), so its verdicts reach the table through this ring and only the gate touches the
+    // table. Any IOMobileFramebuffer client may be in swap_submit, so each verdict takes its slot with one fetch_add
+    // (no single producer to own the ring); the slot's sequence, 0 while it is written and the ticket + 1 once it is,
+    // publishes it, and the gate drains the slots in ticket order. Static: the instance is at the 16 KiB a kalloc_type
+    // class may have.
+    struct Verdict {
+        const OriginalLegacySwapRequest *request;
+        uint64_t at;
+        uint64_t accepted;
+        FrameTimeline tl;
+    };
+
+    static inline switch_display::VerdictRing<Verdict, 32> verdicts;
+    static inline uint32_t verdictsDropped = 0;  // the publishers': verdicts a full ring dropped
+    uint32_t verdictsDroppedSeen = 0;            // the gate's
 
     bool isValidated(const OriginalLegacySwapRequest *request) const
     {
@@ -735,11 +753,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         }
     }
 
-    // True when the request is new (not a second validation of one already pending).
-    bool addValidated(const OriginalLegacySwapRequest *request, uint64_t now)
+    // Under the gate. The request's slot when it is new (not a second validation of one already pending), else -1.
+    int addValidated(const OriginalLegacySwapRequest *request, uint64_t now)
     {
         if (isValidated(request))
-            return false;
+            return -1;
         unsigned slot = 0;
         while (slot < kValidated && validated[slot])
             ++slot;
@@ -749,7 +767,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                 if (validatedAt[i] < validatedAt[slot])
                     slot = i;
             }
-            __atomic_fetch_add(&validatedEvicted, 1u, __ATOMIC_RELAXED);
+            ++validatedEvicted;
         }
         if (validated[slot])
             frameInfo->tickets.retire(validated[slot]);
@@ -761,7 +779,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         memcpy(&id, bytes + swapId, sizeof(id));
         memcpy(&requested, bytes + swapRequestedPresentation, sizeof(requested));
         frameInfo->tickets.accept(request, id, requested, now);
-        return true;
+        return static_cast<int>(slot);
     }
 
     // Under the gate: entries older than a second whose swap is neither in the family's queue, nor its current swap, nor in
@@ -788,7 +806,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             entry = nullptr;
             ++validatedStale;
         }
-        if (const uint32_t evicted = __atomic_exchange_n(&validatedEvicted, 0u, __ATOMIC_RELAXED)) {
+        if (const uint32_t evicted = validatedEvicted) {
+            validatedEvicted = 0;
             IOLog("SwitchDisplay: the accepted-swap table was full: %u entries replaced (%u stale ones dropped so "
                   "far)\n",
                   evicted, validatedStale);
@@ -1452,7 +1471,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                ring.held != kNoBuffer || (rotated && !rotationLatched) || probeRequest || probe.active() ||
                (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) || (planesOn && planeLatch.requested()) ||
                planeProbe.active() || planeHeldSet || planeRecoveryWaits() || landscapeState.wanted ||
-               completionFlipOut() || scanoutAttachHoldsFrameEnds();
+               completionFlipOut() || (offerAged && gpuScanout) || scanoutAttachHoldsFrameEnds();
     }
 
 public:
@@ -1551,6 +1570,7 @@ private:
 
     void vblankTick()
     {
+        drainVerdicts();
         takeCompletionFlip();
         const uint32_t status = takeFrameEndStatus();
         if (hwSuspended)
@@ -1615,11 +1635,16 @@ private:
             checkInteraction();
             noteStatsWindow();
         }
-        if (status & kFrameEndInt)
+        if (status & kFrameEndInt) {
             kickAtIdleFrameEnd();
+            checkOfferAge();
+        }
         landscapeRunCharge(tickFrom);
-        if ((status & kFrameEndInt) && !frameEndNeeded() && tegra_panel_holds_frame_end())
+        // r16-idle: nothing out at the last frame end of a burst, so its deadline has nothing left to check either.
+        if ((status & kFrameEndInt) && !frameEndNeeded() && tegra_panel_holds_frame_end()) {
             maskIdleFrameEnd();
+            idleFlipDeadline();
+        }
     }
 
     // At a frame end, under the gate: after 5 s, the one stats line for the window, then a new window. The line is formatted here and
@@ -2455,42 +2480,6 @@ private:
         static_cast<NativeLegacyDisplay *>(owner)->checkFlipDeadline();
     }
 
-    // kFlipDeadlineMS after a flip, under the gate. With the scanout running, six frame ends have come by now and four settle a
-    // flip (latched, or checkFlip panics): one still out means DC A's interrupt is lost or window A never latches. A frame end
-    // taken by the filter but not yet handled (the gate was busy, e.g. with a copy) only moves the deadline.
-    void checkFlipDeadline()
-    {
-        if (settleArmed) {
-            settleArmed = false;
-            if (!scanoutStopped) {
-                flipTimer->setTimeoutMS(kFlipDeadlineMS);  // restarted before the settle: the deadline runs from now
-            } else if (!hwSuspended && !gPanicRestore.panicking) {
-                settleStopped();
-            }
-            return;
-        }
-        if ((ring.pending == kNoBuffer && !probeRequest && !(planesOn && planeLatch.requested()) &&
-             !planeRecoveryWaits()) ||
-            hwSuspended || scanoutStopped || gPanicRestore.panicking)
-            return;
-        if (frameEndPending(kFrameEndInt)) {
-            flipTimer->setTimeoutMS(kFlipDeadlineMS);
-            return;
-        }
-        if (planeRecoveryWaits())
-            panic("SwitchDisplay: overlay recovery has no completed stop after %u ms", kFlipDeadlineMS);
-        char gic[192];
-        switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
-        panic("SwitchDisplay: window A flip to %#x not settled in %u ms (%llu frame ends since): STATE_CONTROL %#x "
-              "INT_STATUS %#x MASK %#x ENABLE %#x, %s",
-              ring.pending != kNoBuffer ? surfaceAddress(ring.pending)
-              : probe.onIova            ? (uint32_t)kProbeSlot
-                                        : surfaceAddress(probeSurface),
-              kFlipDeadlineMS, frameEnds - flipRequested, static_cast<uint32_t>(dc[kDcStateControl]),
-              static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
-              static_cast<uint32_t>(dc[kDcIntEnable]), gic);
-    }
-
     // Surface i's physical address (window A's START_ADDR); 0 is the boot framebuffer, also the pitch console's.
 #include "SwitchScanoutAddress.h"
 
@@ -2896,13 +2885,8 @@ private:
             blanked = false;
             color->setBlank(false);
         }
-        if (const int held = ring.flipHeld(); held != kNoBuffer) {
+        if (const int held = ring.flipHeld(); held != kNoBuffer)
             writeFlip(held);
-            // r16-idle: nothing is out any more, so the deadline has nothing to check; left armed it woke the CPU 100 ms after
-            // the last flip of every burst. The next writeFlip arms it again.
-        } else {
-            flipDeadlineIdle();
-        }
         if (kickDeferred) {
             kickDeferred = false;
             kickSwapQueue();
@@ -3137,6 +3121,7 @@ public:
         clearUnderflowCounts();
         underflowRun = 0;
         scanoutStopped = !on;
+        publishCompletionPass();
         if (on) {
             writeIntMask(0, kFrameEndInt | (vsyncArmed ? kVblankInt : 0));
         } else {
@@ -3420,6 +3405,8 @@ public:
             return;
         }
         kicking = true;
+        drainVerdicts();
+        kickCompletionPass((latchRetire ? firstUntaken() : pendingSwapRequest()) != nullptr);
         const uint64_t kickFrom = landscapeRunClock();
         do {
             rekick = false;
@@ -4186,7 +4173,7 @@ public:
     // Outside the gate. The GPU would still write a buffer that goes away with the rotation, and call back: no stop with a copy out.
     void stopGpuCopy()
     {
-        if (__atomic_load_n(&gpuScanout, __ATOMIC_ACQUIRE))
+        if (__atomic_load_n(&gpuScanout, __ATOMIC_RELAXED))
             panic("SwitchDisplay: stopped with GPU frame copy %llu outstanding", gpuSequence);
         IOWorkLoop *loop = getWorkLoop();
         IOEventSource *sources[] = {gpuDoneSource, gpuDeadline};
@@ -4254,7 +4241,7 @@ public:
         gpuSource = memory;
         gpuOfferedAt = mach_absolute_time();
         ring.claim(target);  // the GPU writes it until finishGpuCopy
-        __atomic_store_n(&gpuScanout, true, __ATOMIC_RELEASE);
+        gpuScanout = true;
         armGpuDeadline();
         native_legacy_swap_stage(1);
         gpuRequest = request;
@@ -4273,33 +4260,43 @@ public:
     // completion is looked for again after the driver's answer, which may come between its release and the signal.
     static void gpuDeadlineFired(OSObject *owner, IOTimerEventSource *)
     {
-        NativeLegacyDisplay *self = static_cast<NativeLegacyDisplay *>(owner);
-        if (!self->gpuScanout)
+        static_cast<NativeLegacyDisplay *>(owner)->gpuDeadlineCheck();
+    }
+
+    void gpuDeadlineCheck()
+    {
+        if (!gpuScanout)
             return;
-        if (self->vicCopyLate())
+        if (vicCopyLate())
             return;
-        const bool held = tegra_gm20b_scanout_outstanding(self) != 0 || self->planeFencePending;
+        const bool held = tegra_gm20b_scanout_outstanding(this) != 0 || planeFencePending;
         if (held)
-            self->gpuDeadlines += 1;
-        if (__atomic_load_n(&self->gpuDonePending, __ATOMIC_SEQ_CST) ||
-            (held && self->gpuDeadlines < kGpuCopyDeadlines)) {
-            self->gpuDeadline->setTimeoutMS(kGpuCopyDeadlineMS);
+            gpuDeadlines += 1;
+        if (__atomic_load_n(&gpuDonePending, __ATOMIC_ACQUIRE) || (held && gpuDeadlines < kGpuCopyDeadlines)) {
+            extendGpuDeadline();
             return;
         }
-        const unsigned waited = (held ? self->gpuDeadlines : self->gpuDeadlines + 1) * kGpuCopyDeadlineMS;
-        if (self->planeFencePending) {
-            panic("SwitchDisplay: GPU present %llu (overlay fence, take %llu) not completed in %u ms: %s",
-                  self->gpuSequence, planeFencing.seq, waited,
+        const unsigned waited = (held ? gpuDeadlines : gpuDeadlines + 1) * kGpuCopyDeadlineMS;
+        if (planeFencePending) {
+            panic("SwitchDisplay: GPU present %llu (overlay fence, take %llu) not completed in %u ms: %s", gpuSequence,
+                  planeFencing.seq, waited,
                   held ? "the GPU driver still holds it" : "the GPU driver released it with no completion");
         }
-        if (self->gpuDirect != kNoBuffer) {
+        if (gpuDirect != kNoBuffer) {
             panic("SwitchDisplay: GPU present %llu (fence only, direct slot %d) not completed in %u ms: %s",
-                  self->gpuSequence, self->gpuDirect - kSlot0, waited,
+                  gpuSequence, gpuDirect - kSlot0, waited,
                   held ? "the GPU driver still holds it" : "the GPU driver released it with no completion");
         }
-        panic("SwitchDisplay: GPU frame copy %llu into %#x not completed in %u ms: %s", self->gpuSequence,
-              self->surfaceAddress(self->ring.drawing), waited,
+        panic("SwitchDisplay: GPU frame copy %llu into %#x not completed in %u ms: %s", gpuSequence,
+              surfaceAddress(ring.drawing), waited,
               held ? "the GPU driver still holds it" : "the GPU driver released it with no completion");
+    }
+
+    uint64_t gpuDeadlineTicks() const
+    {
+        uint64_t ticks = 0;
+        nanoseconds_to_absolutetime(static_cast<uint64_t>(kGpuCopyDeadlineMS) * 1000000ULL, &ticks);
+        return ticks;
     }
 
     // Under the gate: the GPU frame copy is done (status 0) or failed. Done, window A flips to it (after SC7: at the resume) and the swap
@@ -4310,7 +4307,7 @@ public:
     {
         const OriginalLegacySwapRequest *request = gpuRequest;
         cancelGpuDeadline();
-        __atomic_store_n(&gpuScanout, false, __ATOMIC_RELEASE);
+        gpuScanout = false;
         gpuRequest = nullptr;
         OSSafeReleaseNULL(gpuSource);
         if (stats) {
@@ -4621,7 +4618,7 @@ public:
         gpuSequence = copy.sequence;
         gpuSource = memory;
         gpuOfferedAt = mach_absolute_time();
-        __atomic_store_n(&gpuScanout, true, __ATOMIC_RELEASE);
+        gpuScanout = true;
         armGpuDeadline();
         gpuRequest = request;
         gpuLength = static_cast<uint64_t>(width) * height * 4;
@@ -4795,11 +4792,7 @@ public:
                 }
             }
         }
-        if (accepted) {
-            noteSubmitted(request);
-        } else {
-            removeValidated(request);
-        }
+        publishVerdict(request, accepted);
         if (!accepted && stats) {
             __atomic_fetch_add(&stRejected, 1u, __ATOMIC_RELAXED);
             __atomic_store_n(&stRejectReason, reason, __ATOMIC_RELAXED);
@@ -4808,69 +4801,91 @@ public:
         return accepted;
     }
 
-    // An accepted swap: remembered for the kick, and for the stats its submission time, the interval since the previous one and the
-    // compositor's own time since the last retire (0 when the previous swap was still on its way).
-    void noteSubmitted(const OriginalLegacySwapRequest *request)
+    // On the client's thread: the verdict, for the gate to take (drainVerdicts).
+    void publishVerdict(const OriginalLegacySwapRequest *request, bool accepted)
     {
-        const uint64_t now = mach_absolute_time();
-        if (!addValidated(request, now))
-            return;
-        if (SWITCH_FRAME_TIMELINE)
-            noteSwapTimeline(request);
-        if (!stats)
-            return;
-        if (lastSubmit) {
-            stInterval.add(now - lastSubmit);
-            stClient.add(lastRetire > lastSubmit && now > lastRetire ? now - lastRetire : 0);
-        }
-        lastSubmit = now;
+        Verdict verdict = {request, mach_absolute_time(), accepted, {}};
+        if (SWITCH_FRAME_TIMELINE && accepted)
+            verdict.tl = swapTimeline(verdict.at);
+        if (!verdicts.publish(verdict))
+            __atomic_fetch_add(&verdictsDropped, 1u, __ATOMIC_RELAXED);
     }
 
-    // Debug kernels: the newly accepted swap's timeline, on the swapping thread.
-    void noteSwapTimeline(const OriginalLegacySwapRequest *request)
+    // Under the gate, before anything reads the table: every verdict published so far, in order. One a full ring
+    // dropped (32 verdicts with no gated kick between) counts as an eviction.
+    void drainVerdicts()
     {
-        for (unsigned i = 0; i < kValidated; ++i) {
-            if (validated[i] != request)
-                continue;
-            const uint64_t submitNs = ticksNs(validatedAt[i]);
-            SwitchFrameGpu gpu;
-            tegra_gm20b_frame_take(&gpu);
-            int base = 0;
-            int sched = 0;
-            int mode = 0;
-            int qos = 0;
-            switch_thread_sched(current_thread(), &base, &sched, &mode, &qos);
-            FrameTimeline &tl = validatedTl[i];
-            tl.vsyncUs = kNotSeen;
-            tl.doneUs = kNotSeen;
-            tl.firstUs = gpu.firstSubmit ? usFrom(submitNs, gpu.firstSubmit) : kNotSeen;
-            tl.lastUs = gpu.lastSubmit ? usFrom(submitNs, gpu.lastSubmit) : kNotSeen;
-            tl.execUs = us32(gpu.execNs);
-            tl.importUs = us32(gpu.importNs);
-            tl.bindUs = us32(gpu.bindNs);
-            tl.allocUs = us32(gpu.allocNs);
-            tl.cleanUs = us32(gpu.cleanNs);
-            tl.cleanKiB = static_cast<uint32_t>(gpu.cleanBytes >> 10);
-            tl.submits = sat16(gpu.submits);
-            tl.others = sat16(gpu.others);
-            tl.imports = sat16(gpu.imports);
-            tl.binds = sat16(gpu.binds);
-            tl.allocs = sat16(gpu.allocs);
-            tl.frees = sat16(gpu.frees);
-            tl.mhzVsync = sat16(__atomic_load_n(&vsyncSentKhz, __ATOMIC_RELAXED) / 1000);
-            tl.mhzSwap = sat16(switch_perf_cpu_khz() / 1000);
-            tl.basePri = static_cast<int8_t>(base);
-            tl.schedPri = static_cast<int8_t>(sched);
-            tl.mode = static_cast<int8_t>(mode);
-            tl.qos = static_cast<int8_t>(qos);
+        verdicts.drain([this](const Verdict &verdict) {
+            if (verdict.accepted)
+                noteSubmitted(verdict.request, verdict.at, verdict.tl);
+            else
+                removeValidated(verdict.request);
+        });
+        const uint32_t dropped = __atomic_load_n(&verdictsDropped, __ATOMIC_RELAXED);
+        validatedEvicted += dropped - verdictsDroppedSeen;
+        verdictsDroppedSeen = dropped;
+    }
+
+    // Under the gate: an accepted swap remembered for the kick, and for the stats its submission time, the interval since
+    // the previous one and the compositor's own time since the last retire (0 when the previous swap was still on its way).
+    void noteSubmitted(const OriginalLegacySwapRequest *request, uint64_t at, const FrameTimeline &tl)
+    {
+        const int i = addValidated(request, at);
+        if (i < 0)
+            return;
+        if (SWITCH_FRAME_TIMELINE) {
+            validatedTl[i] = tl;
 #if SWITCH_FRAME_TIMELINE
             const auto *ticket = frameInfo->tickets.find(request);
             KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_SWAP), ticket ? ticket->id : 0, ticket ? ticket->swapId : 0,
                  ticket ? ticket->requested : 0, frameEnds);
 #endif
-            switch_sched_render_swapped();
-            return;
         }
+        if (!stats)
+            return;
+        if (lastSubmit) {
+            stInterval.add(at - lastSubmit);
+            stClient.add(lastRetire > lastSubmit && at > lastRetire ? at - lastRetire : 0);
+        }
+        lastSubmit = at;
+    }
+
+    // Debug kernels: a newly accepted swap's timeline, on the swapping thread.
+    FrameTimeline swapTimeline(uint64_t at)
+    {
+        const uint64_t submitNs = ticksNs(at);
+        SwitchFrameGpu gpu;
+        tegra_gm20b_frame_take(&gpu);
+        int base = 0;
+        int sched = 0;
+        int mode = 0;
+        int qos = 0;
+        switch_thread_sched(current_thread(), &base, &sched, &mode, &qos);
+        FrameTimeline tl = {};
+        tl.vsyncUs = kNotSeen;
+        tl.doneUs = kNotSeen;
+        tl.firstUs = gpu.firstSubmit ? usFrom(submitNs, gpu.firstSubmit) : kNotSeen;
+        tl.lastUs = gpu.lastSubmit ? usFrom(submitNs, gpu.lastSubmit) : kNotSeen;
+        tl.execUs = us32(gpu.execNs);
+        tl.importUs = us32(gpu.importNs);
+        tl.bindUs = us32(gpu.bindNs);
+        tl.allocUs = us32(gpu.allocNs);
+        tl.cleanUs = us32(gpu.cleanNs);
+        tl.cleanKiB = static_cast<uint32_t>(gpu.cleanBytes >> 10);
+        tl.submits = sat16(gpu.submits);
+        tl.others = sat16(gpu.others);
+        tl.imports = sat16(gpu.imports);
+        tl.binds = sat16(gpu.binds);
+        tl.allocs = sat16(gpu.allocs);
+        tl.frees = sat16(gpu.frees);
+        tl.mhzVsync = sat16(__atomic_load_n(&vsyncSentKhz, __ATOMIC_RELAXED) / 1000);
+        tl.mhzSwap = sat16(switch_perf_cpu_khz() / 1000);
+        tl.basePri = static_cast<int8_t>(base);
+        tl.schedPri = static_cast<int8_t>(sched);
+        tl.mode = static_cast<int8_t>(mode);
+        tl.qos = static_cast<int8_t>(qos);
+        switch_sched_render_swapped();
+        return tl;
     }
 
     // The original slot-188 caller passes a uint32_t output and consumes an

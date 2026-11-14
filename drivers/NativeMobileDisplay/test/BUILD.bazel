@@ -70,6 +70,7 @@
 #                                       backboardd's CA_DISABLE_DETACHED gate), and the plane accessors are TegraVIC's
 #   tegra_display_color_publish_test    TegraDisplayColorPublish.h's writers on their own threads (and _tsan_test)
 #   switch_completion_flip_claim_test   SwitchCompletionFlip.h's claim word on three threads (and _tsan_test)
+#   switch_verdict_ring_test            SwitchVerdictRing.h: validateSwap's verdicts to the gate (and _tsan_test)
 #   switch_display_period_test          one display period counted: locks, atomic RMWs, hand-offs and work-loop passes
 #                                       of the DC A filter, the frame-end action, the kick, a direct or completion flip
 #
@@ -236,6 +237,7 @@ host_test(
     name = "native_legacy_display_source_test",
     srcs = ["native_legacy_display_source_test.cpp"],
     data = [
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlipDisplay.h",
         "//drivers/NativeMobileDisplay:SwitchScanoutRetirement.h",
         "//drivers/NativeMobileDisplay:SwitchFlipDeadlineDisplay.h",
         "//drivers/NativeMobileDisplay:SwitchFrameEndDisplay.h",
@@ -1194,4 +1196,26 @@ host_test(
     ],
     defines = ["SWITCH_MMIO_HOST_MODEL"],
     deps = [":display_colour_unit"],
+)
+
+# SwitchVerdictRing.h: validateSwap's verdicts from any client thread to the display's gate, every one once and whole, in
+# each publisher's order; a full ring refuses the newest.
+host_test(
+    name = "switch_verdict_ring_test",
+    srcs = [
+        "switch_verdict_ring_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchVerdictRing.h",
+    ],
+)
+
+# The same under ThreadSanitizer.
+host_test(
+    name = "switch_verdict_ring_tsan_test",
+    srcs = [
+        "switch_verdict_ring_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchVerdictRing.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
 )

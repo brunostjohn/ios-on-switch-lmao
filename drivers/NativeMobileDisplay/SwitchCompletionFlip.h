@@ -93,7 +93,7 @@ struct SwitchFlipWord {
 
     bool swap(uint32_t &from, uint8_t to)
     {
-        return __atomic_compare_exchange_n(&bits, &from, (from & ~0xffu) | to, false, __ATOMIC_ACQ_REL,
+        return __atomic_compare_exchange_n(&bits, &from, (from & ~0xffu) | to, false, __ATOMIC_SEQ_CST,
                                            __ATOMIC_ACQUIRE);
     }
 
@@ -107,7 +107,7 @@ struct SwitchFlipWord {
     // The claimer, its stores done.
     void claimed(uint8_t to)
     {
-        __atomic_store_n(&bits, (generationOf(__atomic_load_n(&bits, __ATOMIC_RELAXED)) << 8) | to, __ATOMIC_RELEASE);
+        __atomic_store_n(&bits, (generationOf(__atomic_load_n(&bits, __ATOMIC_RELAXED)) << 8) | to, __ATOMIC_SEQ_CST);
     }
 
     // A producer's interrupt filter, its job certainly done, for the arm it was set up for.

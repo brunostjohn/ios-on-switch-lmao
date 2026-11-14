@@ -1,6 +1,33 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// The GPU client's completion of an offer and the work-loop pass it signals. Included in the class body (and in the
-// host harness).
+// The GPU client's completion of an offer and its work-loop pass. A completion that wrote window A's flip for a frame end
+// to come signals nothing: that frame end's action runs the pass first (takeCompletionFlip), so the swap retires at the
+// latch it always did. A kick waiting behind the offer, a stopped or suspended scanout, or retirement at the offer (no
+// latch to wait for) want the pass now: the gate publishes that (completionPassFolds false) and the completion signals.
+// The gate stores that word and then reads the flip's, the completion publishes the flip's and then reads that word
+// (both sequentially consistent), so a pass the gate wants is signalled by one of them. gpuDonePending has one writer
+// per offer (the completion) and one reader (the gate's pass), and the next offer comes only after that pass. Included
+// in the class body (and in the host harness).
+
+bool completionPassFolds = false;  // the gate's: a written flip's pass may wait for the frame end
+bool kickWaiting = false;          // the gate's: a swap is queued behind the offer out
+
+void publishCompletionPass()
+{
+    const bool folds = latchRetire && !kickWaiting && !scanoutStopped && !hwSuspended;
+    if (folds == completionPassFolds)
+        return;
+    __atomic_store_n(&completionPassFolds, folds, __ATOMIC_SEQ_CST);
+    if (!folds && gpuDoneSource &&
+        SwitchFlipWord::stateOf(__atomic_load_n(&completionFlip.bits, __ATOMIC_SEQ_CST)) == SwitchFlipWord::kWritten)
+        gpuDoneSource->interruptOccurred(nullptr, nullptr, 0);
+}
+
+// The kick's first step: a swap waiting behind the offer out.
+void kickCompletionPass(bool swapWaiting)
+{
+    kickWaiting = transferred && swapWaiting;
+    publishCompletionPass();
+}
 
 // Called by the GPU client's completion (any thread): the swap is finished on the framebuffer's work loop. The GPU frame copy's
 // completion (any context, even the GPU's interrupt filter) records its status, writes a direct frame's armed window A flip
@@ -16,7 +43,8 @@ void gpuComplete(int status)
         __atomic_store_n(&gpuStatus, status, __ATOMIC_RELAXED);
         __atomic_store_n(&gpuDonePending, true, __ATOMIC_RELEASE);
         writeCompletionFlip(status);
-        gpuDoneSource->interruptOccurred(nullptr, nullptr, 0);
+        if (!completionFlipCarries() || !__atomic_load_n(&completionPassFolds, __ATOMIC_SEQ_CST))
+            gpuDoneSource->interruptOccurred(nullptr, nullptr, 0);
         return;
     }
 
@@ -43,7 +71,8 @@ void gpuComplete(int status)
 template <class Self> static void gpuDoneFired(OSObject *owner, IOInterruptEventSource *, int)
 {
     Self self = static_cast<Self>(owner);
-    if (!__atomic_exchange_n(&self->gpuDonePending, false, __ATOMIC_ACQUIRE))
+    if (!__atomic_load_n(&self->gpuDonePending, __ATOMIC_ACQUIRE))
         return;
+    __atomic_store_n(&self->gpuDonePending, false, __ATOMIC_RELAXED);
     self->finishGpuSwap(__atomic_load_n(&self->gpuStatus, __ATOMIC_RELAXED));
 }

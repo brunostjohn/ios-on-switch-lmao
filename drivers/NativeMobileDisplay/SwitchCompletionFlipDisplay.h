@@ -71,6 +71,14 @@ bool completionFlipIdle() const
     return SwitchFlipWord::stateOf(__atomic_load_n(&completionFlip.bits, __ATOMIC_RELAXED)) == SwitchFlipWord::kIdle;
 }
 
+// The completion's: its window A flip is written, and the frame-end action will run its pass.
+bool completionFlipCarries() const
+{
+    return SwitchFlipWord::stateOf(__atomic_load_n(&completionFlip.bits, __ATOMIC_SEQ_CST)) ==
+               SwitchFlipWord::kWritten &&
+           mediaFlipIdle();
+}
+
 bool completionFlipOut() const
 {
     return !completionFlipIdle() || !mediaFlipIdle();
@@ -176,9 +184,10 @@ void flipFromGate()
 // comes first must see the flip in the ring.
 void runCompletionPass()
 {
-    if (!__atomic_exchange_n(&gpuDonePending, false, __ATOMIC_ACQUIRE))
+    if (!__atomic_load_n(&gpuDonePending, __ATOMIC_ACQUIRE))
         panic("SwitchDisplay: window A was flipped to %#x by its producer's completion, which signalled nothing",
               completionFlip.start);
+    __atomic_store_n(&gpuDonePending, false, __ATOMIC_RELAXED);
     finishGpuSwap(__atomic_load_n(&gpuStatus, __ATOMIC_RELAXED));
 }
 

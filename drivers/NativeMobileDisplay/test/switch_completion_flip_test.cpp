@@ -310,7 +310,7 @@ TEST(CompletionFlipSource, TheDisplayCallsItWhereTheOrderingNeedsIt)
     EXPECT_TRUE(
         complete.Before("__atomic_store_n(&gpuDonePending, true, __ATOMIC_RELEASE);", "writeCompletionFlip(status);"));
     EXPECT_TRUE(complete.Before("writeCompletionFlip(status);", "gpuDoneSource->interruptOccurred("));
-    EXPECT_TRUE(Block(display, "void vblankTick()").StartsWith("takeCompletionFlip();"));
+    EXPECT_TRUE(Block(display, "void vblankTick()").StartsWith("drainVerdicts(); takeCompletionFlip();"));
     EXPECT_TRUE(Block(display, "void quiesceForSuspend()").StartsWith("suspendCompletionFlip();"));
     EXPECT_TRUE(Block(display, "void stopRotation()").StartsWith("withdrawCompletionFlip();"));
     EXPECT_TRUE(Block(display, "void settleStopped()").StartsWith("flipUnverifiedFromGate();"));
