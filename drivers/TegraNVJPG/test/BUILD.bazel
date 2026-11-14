@@ -54,7 +54,11 @@ host_test(
 host_test(
     name = "tegra_nvjpg_layout_source_test",
     srcs = ["tegra_nvjpg_layout_source_test.cpp"],
-    data = ["//drivers/TegraNVJPG:TegraNVJPGUserClient.cpp"],
+    data = [
+        "//drivers/TegraNVJPG:TegraNVJPG.cpp",
+        "//drivers/TegraNVJPG:TegraNVJPGRepack.cpp",
+        "//drivers/TegraNVJPG:TegraNVJPGUserClient.cpp",
+    ],
 )
 
 host_test(

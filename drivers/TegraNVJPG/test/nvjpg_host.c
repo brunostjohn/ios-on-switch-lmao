@@ -314,21 +314,32 @@ static void targets(void)
     t = (TegraNVJPGTarget){TEGRA_NVJPG_OUT_I420, 0, {128, 64, 128}, 0, 0, 0};
     CHECK(tegra_nvjpg_setup_output(&img, &t, 1, &s, &e) != NULL, "I420 with different chroma strides accepted");
     // CMPhoto's interchange-format destinations ('422f', '444f', 'yuvf': 24B119 and 21H461 alike since the client's
-    // format filter went): 'yuvf' packed at 4:2:2; '422f' and '444f' are refused (semi-planar above 4:2:0 hung NVJPG
-    // on every job that asked for it).
+    // format filter went): 'yuvf' packed at 4:2:2; '422f' and '444f' as three planes at the file's own sampling, which
+    // VIC re-packs (semi-planar above 4:2:0 hung NVJPG on every job that asked for it), and only from a file sampled so.
     {
         TegraNVJPGImage four22 = img, four44 = img;
         four22.chroma = TEGRA_NVJPG_CHROMA_422H, four22.mcuW = 16, four22.mcuH = 8, four22.mcusY = 10;
         four44.chroma = TEGRA_NVJPG_CHROMA_444, four44.mcuW = four44.mcuH = 8, four44.mcusX = 13, four44.mcusY = 10;
-        TegraNVJPGTarget n16 = {TEGRA_NVJPG_OUT_NV16, 0, {128, 128, 0}, 0, 0, 0};
-        CHECK(tegra_nvjpg_setup_output(&four22, &n16, 1, &s, &e) != NULL, "422 to 422f set up");
+        TegraNVJPGTarget n16 = {TEGRA_NVJPG_OUT_NV16, 0, {128, 64, 64}, 0, 0, 0};
+        CHECK(!tegra_nvjpg_setup_output(&four22, &n16, 1, &s, &e), "422 to 422f refused");
+        CHECK(s.output_pixel_format == TEGRA_NVJPG_PIXEL_YUV && s.output_chroma_mode == TEGRA_NVJPG_CHROMA_422H &&
+                  s.memory_mode == TEGRA_NVJPG_MEMORY_PLANAR && s.output_stride_luma == 128 &&
+                  s.output_stride_chroma == 64 && e.planes == 3 && e.rows[0] == 80 && e.rows[1] == 80 &&
+                  e.rows[2] == 80 && e.rowBytes[0] == 128 && e.rowBytes[1] == 64 && e.rowBytes[2] == 64,
+              "422f setup: planar 4:2:2, chroma halved across only");
         TegraNVJPGTarget yuy2 = {TEGRA_NVJPG_OUT_YUY2, 0, {256, 0, 0}, 0, 0, 0};
         CHECK(!tegra_nvjpg_setup_output(&four22, &yuy2, 1, &s, &e), "422 to yuvf refused");
         CHECK(s.output_chroma_mode == TEGRA_NVJPG_CHROMA_422H && s.memory_mode == TEGRA_NVJPG_MEMORY_YUY2 &&
                   e.planes == 1 && e.rowBytes[0] == 256,
               "yuvf setup: one packed plane, two bytes a sample");
-        TegraNVJPGTarget n24 = {TEGRA_NVJPG_OUT_NV24, 0, {128, 256, 0}, 0, 0, 0};
-        CHECK(tegra_nvjpg_setup_output(&four44, &n24, 1, &s, &e) != NULL, "444 to 444f set up");
+        TegraNVJPGTarget n24 = {TEGRA_NVJPG_OUT_NV24, 0, {128, 128, 128}, 0, 0, 0};
+        CHECK(!tegra_nvjpg_setup_output(&four44, &n24, 1, &s, &e), "444 to 444f refused");
+        CHECK(s.output_pixel_format == TEGRA_NVJPG_PIXEL_YUV && s.output_chroma_mode == TEGRA_NVJPG_CHROMA_444 &&
+                  s.memory_mode == TEGRA_NVJPG_MEMORY_PLANAR && e.planes == 3 && e.rowBytes[1] == 128 &&
+                  e.rows[1] == 80,
+              "444f setup: planar 4:4:4");
+        CHECK(tegra_nvjpg_setup_output(&four22, &n24, 1, &s, &e) != NULL, "422 file to 444f set up");
+        CHECK(tegra_nvjpg_setup_output(&four44, &n16, 1, &s, &e) != NULL, "444 file to 422f set up");
     }
     // No target, sampling or scale sets up semi-planar output at a chroma other than 4:2:0: that pair never completed
     // on this unit (SpringBoard's 205x83 4:4:4 file into '444f' at 1/1 hung it five times a boot).

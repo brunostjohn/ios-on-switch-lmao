@@ -14,7 +14,7 @@
 //   sel 1  decode (0x58 bytes in and out), sel 5 decode with Apple's codec extensions (0x1000), sel 7 the 2024 decode
 //          (0xda0; every decode on 24B119): the JPEG file in the
 //          source IOSurface (looked up in the caller's task, like Apple's driver), the picture into the destination
-//          IOSurface in its pixel format ('420f', 'yuvf', 'BGRA', 'RGBA', 32ARGB; '422f' and '444f' refused), at the
+//          IOSurface in its pixel format ('420f', 'yuvf', 'BGRA', 'RGBA', 32ARGB; '422f' and '444f' through VIC), at the
 //          request's DCT scale and offset. The kernel parses the file (TegraNVJPGJpeg.h; Apple's hardware parses the
 //          stream itself, so userland sends no tables) and plans the decode (TegraNVJPGRequest.h) in the calling
 //          thread: a refusal is the call's own
@@ -51,8 +51,10 @@
 #include "../../kits/SwitchDMA/SwitchHwPage.h"
 #include "../../kits/SwitchMath/SwitchMath.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
+#include "TegraNVJPGRepack.h"
 #include "TegraNVJPGRequest.h"
 #include "TegraNVJPGStats.h"
+#include "../TegraVIC/SwitchVICDecodeOutput.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
 
 // TegraGM20B: a surface the GPU left block-linear after its last import (TegraGM20BRecord.h) has its texels moved back
@@ -203,10 +205,60 @@ const char *takeLayout(Job *job, uint64_t firstPage, void **hold)
                                          layout.y_log2, &job->plan, &job->engine.setup);
 }
 
+// The scan's pages, and the sink page after them: the engine may read a little past the scan's end.
+void listBits(Job *job)
+{
+    for (uint32_t i = 0; i < job->bitPages; i++) {
+        IOByteCount length = 0;
+        gInList[i] = job->bits->getPhysicalSegment(static_cast<IOByteCount>(i) << SWITCH_HW_PAGE_SHIFT, &length,
+                                                   kIOMemoryMapperNone) &
+                     ~SWITCH_HW_PAGE_MASK;
+    }
+    gInList[job->bitPages] = gSink.pa;
+}
+
+IOReturn ended(Job *job, int error, const nvjpg_dec_status &status, uint64_t busy)
+{
+    IOReturn ret = ioreturn(error);
+    if (!ret && (status.error_status || !status.bytes_offset))
+        ret = kIOReturnIOError;
+    // AppleJPEGDriver ends its destination's write with IOSurface's device write end, as VIC does: the seed moves, so a
+    // surface a decode wrote never reads as one nothing wrote (TegraGM20BRecord.h) and seed-keyed caches see the picture
+    if (!ret)
+        tegra_vic_surface_written(&job->dst);
+    job->engineUs = busy;
+    job->bytesUsed = status.bytes_offset;
+    job->cycles = status.reserved0;  // the cycle count (DUMP_CYCLE_COUNT)
+    if (ret == kIOReturnIOError && status.error_status) {
+        IOLog("TegraNVJPG: decode error %#x after %u bytes (MCU %u,%u) of a %ux%u picture\n", status.error_status,
+              status.bytes_offset, status.mcu_x, status.mcu_y, static_cast<unsigned>(job->engine.setup.frame_width),
+              static_cast<unsigned>(job->engine.setup.frame_height));
+    }
+    return ret;
+}
+
+// Engine thread: a '422f' or '444f' decode, its planes re-packed by VIC (TegraNVJPGRepack.h).
+IOReturn runRepack(Job *job)
+{
+    listBits(job);
+    nvjpg_dec_status status = {};
+    uint64_t busy = 0;
+    const char *why = nullptr;
+    const int error = tegra_nvjpg_repack(&job->engine, &job->plan, &job->request.base, &job->dst, gInList,
+                                         job->bitPages + 1, &status, &busy, &why);
+    if (why) {
+        refused(why, job->plan.target.format);
+        return kIOReturnUnsupported;
+    }
+    return ended(job, error, status, busy);
+}
+
 // Engine thread: one decode.
 IOReturn runJob(Job *job)
 {
     const TegraNVJPGPlan &p = job->plan;
+    if (p.repack)
+        return runRepack(job);
     uint32_t pages = 0;
     const uint64_t surfaceBytes = switch_align_up(job->dst.desc.length, SWITCH_HW_PAGE_SIZE);
     IOReturn ret = tegra_vic_surface_prepare(&job->dst, job->dst.desc.length, gOutList, kOutPages, &pages);
@@ -232,13 +284,7 @@ IOReturn runJob(Job *job)
         tegra_vic_surface_complete(&job->dst);
         return kIOReturnBadArgument;
     }
-    for (uint32_t i = 0; i < job->bitPages; i++) {
-        IOByteCount length = 0;
-        gInList[i] = job->bits->getPhysicalSegment(static_cast<IOByteCount>(i) << SWITCH_HW_PAGE_SHIFT, &length,
-                                                   kIOMemoryMapperNone) &
-                     ~SWITCH_HW_PAGE_MASK;
-    }
-    gInList[job->bitPages] = gSink.pa;  // the engine may read a little past the scan's end
+    listBits(job);
     tegra_nvjpg_lock();
     const uint64_t out = tegra_nvjpg_window_map(TEGRA_NVJPG_WINDOW_OUT, gOutList, mapped, true);
     const uint64_t in = tegra_nvjpg_window_map(TEGRA_NVJPG_WINDOW_IN, gInList, job->bitPages + 1, false);
@@ -251,13 +297,12 @@ IOReturn runJob(Job *job)
     }
     nvjpg_dec_status status = {};
     uint64_t busy = 0;
+    int error = 0;
     if (!ret) {
         job->engine.bitstream = in;
         for (uint32_t i = 0; i < p.planes; i++)
             job->engine.plane[i] = out + p.planeStart[i];
-        ret = ioreturn(tegra_nvjpg_run(&job->engine, &status, &busy));
-        if (!ret && (status.error_status || !status.bytes_offset))
-            ret = kIOReturnIOError;
+        error = tegra_nvjpg_run(&job->engine, &status, &busy);
     }
     // The CPU may have pulled destination lines in while NVJPG wrote: readers must see DRAM.
     switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, gOutList, pages);
@@ -267,22 +312,14 @@ IOReturn runJob(Job *job)
     tegra_nvjpg_unlock();
     if (hold)
         tegra_gm20b_surface_unhold(hold);
-    if (!ret && p.fillChroma)
+    if (ret) {
+        tegra_vic_surface_complete(&job->dst);
+        return ret;
+    }
+    if (!error && p.fillChroma && !status.error_status && status.bytes_offset)
         fillChroma(p, pages);
     tegra_vic_surface_complete(&job->dst);
-    // AppleJPEGDriver ends its destination's write with IOSurface's device write end, as VIC does: the seed moves, so a
-    // surface a decode wrote never reads as one nothing wrote (TegraGM20BRecord.h) and seed-keyed caches see the picture
-    if (!ret)
-        tegra_vic_surface_written(&job->dst);
-    job->engineUs = busy;
-    job->bytesUsed = status.bytes_offset;
-    job->cycles = status.reserved0;  // the cycle count (DUMP_CYCLE_COUNT)
-    if (ret == kIOReturnIOError && status.error_status) {
-        IOLog("TegraNVJPG: decode error %#x after %u bytes (MCU %u,%u) of a %ux%u picture\n", status.error_status,
-              status.bytes_offset, status.mcu_x, status.mcu_y, static_cast<unsigned>(job->engine.setup.frame_width),
-              static_cast<unsigned>(job->engine.setup.frame_height));
-    }
-    return ret;
+    return ended(job, error, status, busy);
 }
 
 void finish(Job *job);
@@ -427,7 +464,10 @@ const char *readSource(TegraVICSurface *src, uint64_t size, TegraNVJPGImage *img
 TegraNVJPGAbility ability()
 {
     const TegraNVJPGTraits *t = tegra_nvjpg_traits();
-    return TegraNVJPGAbility{t->formats, t->chroma, t->scales, t->clipped ? 1u : 0u, t->greyRgb ? 1u : 0u};
+    uint32_t formats = t->formats;
+    if (!switch_vic_decode_output_ready())
+        formats &= ~(1u << TEGRA_NVJPG_OUT_NV16 | 1u << TEGRA_NVJPG_OUT_NV24);
+    return TegraNVJPGAbility{formats, t->chroma, t->scales, t->clipped ? 1u : 0u, t->greyRgb ? 1u : 0u};
 }
 }  // namespace
 

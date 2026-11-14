@@ -23,8 +23,8 @@
 // written past the picture. 1/4 and 1/8 scaling decode too, up to 7 and 15 steps off libjpeg-turbo's BGRA at their
 // worst sample (its scaled IDCT and chroma upsampling are not NVJPG's), so they are judged as CMPhoto's thumbnails
 // are used, by their mean against ImageIO's software decode (image.jpeg_420). 'yuvf' is the 4:2:0 path's packed memory
-// mode; '422f' and '444f' are not written (TegraNVJPGJpeg.h: semi-planar output above 4:2:0 never completed on this
-// unit).
+// mode; '422f' and '444f' are planar YUV that VIC re-packs (TegraNVJPGJpeg.h: semi-planar output above 4:2:0 never
+// completed on this unit).
 //
 // Why the SMMU: a decode's destination is another process's IOSurface (scattered pages, half of the Switch's RAM above
 // the 32-bit boundary) and NVJPG has no scatter-gather, so each job maps the destination page by page into a window of
@@ -156,7 +156,7 @@ bool gUp, gWedged, gSuspended, gAttached;
 TegraNVJPGBuffer gSetup, gStatus;
 const TegraNVJPGTraits kTraits = {
     .clipped = false,
-    .formats = ((1u << TEGRA_NVJPG_OUT_COUNT) - 1) & ~(1u << TEGRA_NVJPG_OUT_NV16 | 1u << TEGRA_NVJPG_OUT_NV24),
+    .formats = (1u << TEGRA_NVJPG_OUT_COUNT) - 1,
     .chroma = 1u << TEGRA_NVJPG_CHROMA_MONO | 1u << TEGRA_NVJPG_CHROMA_420 | 1u << TEGRA_NVJPG_CHROMA_422H |
               1u << TEGRA_NVJPG_CHROMA_444,
     .scales = 0xf,
@@ -577,7 +577,8 @@ extern "C" void tegra_nvjpg_window_clear(uint32_t window)
 // decoder's methods through THI METHOD0/METHOD1 in averne's order (application, control with the GP timer on, picture
 // index, setup, bitstream, status, output planes, EXECUTE with AWAKEN), then an OP_DONE increment of NVJPG's
 // syncpoint, waited for by interrupt.
-extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *status, uint64_t *busyUs)
+extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *status, uint64_t *busyUs,
+                               const TegraNVJPGFollow *follow)
 {
     if (!gUp || !job->planes || job->planes > 3)
         return -19;
@@ -629,6 +630,8 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     int ret = switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_NVJPG, words, n, gSyncpt, fence);
     if (!ret) {
         gNext = fence;
+        if (follow)
+            follow->queue(follow->context, gSyncpt, fence);
         ret = tegra_host1x_syncpt_wait(gSyncpt, fence, jobBoundUs(job->pixels));
         if (ret == TEGRA_HOST1X_ETIMEDOUT)
             ret = cancelled(job, fence, switch_now_us() - start);
