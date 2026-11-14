@@ -70,6 +70,7 @@
     d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
     d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());
     d[@"state_segment_extras_losses"] = @(gRM->raw->stats.segmentExtrasLosses.load());
+    d[@"state_segment_copies"] = @(gRM->raw->stats.segmentCopies.load());
     {
         const raw::EncodeTotals &encode = gRM->raw->stats.encode;
         const double perUs = raw::encodeTicksPerUs();

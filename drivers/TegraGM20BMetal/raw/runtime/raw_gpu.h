@@ -1661,8 +1661,8 @@ private:
     // the encode's per-draw and per-bind counts, kept plainly and added to the device's at the next begin(): an atomic
     // add per draw for each was a measurable share of a debug build's draw
     struct DrawCounts {
-        uint64_t uploadBytes = 0, segmentBinds = 0, segmentWords = 0, segmentSkips = 0, blendKillBinds = 0,
-                 interlockDraws = 0, interlocked = 0, interlockedBlends = 0, twinRule = 0;
+        uint64_t uploadBytes = 0, segmentBinds = 0, segmentWords = 0, segmentSkips = 0, segmentCopies = 0,
+                 blendKillBinds = 0, interlockDraws = 0, interlocked = 0, interlockedBlends = 0, twinRule = 0;
     } counts_;
 
     void foldCounts();
@@ -1705,7 +1705,7 @@ private:
     DepthStencilRegs ds_;                   // and its depth/stencil registers
     const Pipeline *extrasLive_ = nullptr;  // and the state whose extras it holds (Pipeline::restore)
     HeldSegment heldSegment_;               // and the state segment its registers hold
-    uint32_t segmentBinds_ = 0;             // its own (kSegmentBindsPerCommandBuffer)
+    uint32_t segmentBinds_ = 0;             // its own (segmentBindBudget)
     bool drawn_ = false;  // a draw was encoded (NVK resets the restart index at a command buffer's first)
     // the prologue's INVALIDATE_SHADER_CACHES_NO_WFI data word, which commit gives the INSTRUCTION bit when programs were placed
     // in the heap since the last submission that invalidated the instruction cache
@@ -2536,6 +2536,8 @@ public:
         // from the pass or command buffer before (no words; raw_state_segment.h), and passes that could not keep it because
         // their prologue set back the last state's extras (Pipeline::restore)
         std::atomic<uint64_t> segmentBinds{0}, segmentWords{0}, segmentSkips{0}, segmentExtrasLosses{0};
+        // binds of a state or depth/stencil state that has a segment, copied into the push ring instead
+        std::atomic<uint64_t> segmentCopies{0};
         ReplayTally replay;
         // binding slots the encode compared applying recorded state, and the slots of the tables it compared
         // (RawMetalPlanApply.h): what a comparison of every slot of each changed table looked at

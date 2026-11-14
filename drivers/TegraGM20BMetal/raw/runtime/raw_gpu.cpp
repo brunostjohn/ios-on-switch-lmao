@@ -4656,6 +4656,7 @@ void CommandBuffer::foldCounts()
     stats.segmentBinds += counts_.segmentBinds;
     stats.segmentWords += counts_.segmentWords;
     stats.segmentSkips += counts_.segmentSkips;
+    stats.segmentCopies += counts_.segmentCopies;
     stats.blendKillBinds += counts_.blendKillBinds;
     stats.interlockDraws += counts_.interlockDraws;
     stats.fetch.interlocked += counts_.interlocked;
