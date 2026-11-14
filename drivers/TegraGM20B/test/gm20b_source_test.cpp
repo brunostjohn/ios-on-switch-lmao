@@ -27,7 +27,7 @@ const std::string &client()
 {
 	static const std::string source = [] {
 		std::string units;
-		for (const char *unit : {"", "Pool", "Bo", "Import", "Channel", "Submit",
+		for (const char *unit : {"", "Pool", "Spares", "Bo", "Import", "Channel", "Submit",
 					 "Dispatch", "Present", "Job", "JobSubmit"})
 			units += SourceText(std::string("../TegraGM20BUserClient") + unit + ".cpp");
 		return units + SourceText("../TegraGM20BPushScanRun.cpp") +

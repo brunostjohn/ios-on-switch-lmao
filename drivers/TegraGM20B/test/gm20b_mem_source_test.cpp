@@ -23,7 +23,7 @@ std::string unit(const char *name)
 
 TEST(GM20BMemSource, OnlyTheRefillThreadMakesSparesOfUnits)
 {
-	const std::string pool = unit("TegraGM20BUserClientPool.cpp");
+	const std::string pool = unit("TegraGM20BUserClientSpares.cpp");
 	const CodeText make = Block(pool, "Spare *spareMake(SparePool *p, uint64_t bytes)");
 	EXPECT_TRUE(make.Before("switch_gpu_cached_buffer_units(bytes, &buffer)",
 				"switch_gpu_cached_buffer_pages(bytes, &buffer)"));
