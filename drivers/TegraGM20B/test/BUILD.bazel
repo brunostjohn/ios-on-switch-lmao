@@ -914,6 +914,7 @@ host_test(
 # The backing registry and what records on it: :backing's units, which the ThreadSanitizer build compiles again.
 BACKING_SRCS = [
     "//drivers/TegraGM20B:SwitchGpuBacking.cpp",
+    "//drivers/TegraGM20B:SwitchGpuBackingOrder.cpp",
     "//drivers/TegraGM20B:SwitchGpuDependencyTrace.h",
     "//drivers/TegraGM20B:SwitchGpuBackingMemory.cpp",
     "//drivers/TegraGM20B:SwitchGpuAdmission.cpp",
@@ -1017,6 +1018,8 @@ host_test(
     srcs = [
         "switch_gpu_submit_cost_test.cpp",
         "switch_gpu_submit_stubs.h",
+        "//drivers/TegraGM20B:SwitchGpuPresentTokens.h",
+        "//drivers/TegraGM20B:SwitchGpuScanoutSnapshot.h",
     ],
     deps = [
         ":backing",
@@ -2142,6 +2145,23 @@ host_test(
         "switch_gpu_promise_backing_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuPresentTokens.h",
         "//drivers/TegraGM20B:SwitchGpuWriterPromise.cpp",
+    ],
+    deps = [
+        ":backing",
+        ":coherency_kernel",
+    ],
+)
+
+# The ownership order: a job's uses take no lock of their own, and each party that keeps a backing's lock (a CPU lock's
+# cache pass and sleep, another engine's kick inside its transaction, a CPU-dirty backing's clean) holds jobs on that
+# backing only.
+host_test(
+    name = "switch_gpu_backing_order_test",
+    srcs = [
+        "switch_gpu_backing_fixture.h",
+        "switch_gpu_backing_order_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuPresentTokens.h",
+        "//drivers/TegraGM20B:SwitchGpuScanoutSnapshot.h",
     ],
     deps = [
         ":backing",

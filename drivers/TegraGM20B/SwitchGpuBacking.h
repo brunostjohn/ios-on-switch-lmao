@@ -196,10 +196,16 @@ struct switch_gpu_backing_transaction {
 	uint32_t refs;
 	const struct switch_gpu_backing_timeline_refs *timeline;
 	const void *handle;
+	/* an ordered transaction holds the ownership order, and `locked` its uses' locks when one was claimed or CPU-dirty;
+	 * any other holds every use's lock as a claim */
+	uint32_t ordered, claimed;
 };
 
-/* begin sorts/merges the caller's use array and locks its backings in allocation order. Keep those locks only through
- * dependency encoding and publication; every success must end with commit or abort. No token can be lost at commit.
+/* begin sorts/merges the caller's use array and claims its backings in allocation order: their locks, held across
+ * dependency encoding, the kick and publication. An ordered begin (begin_held, begin_ordered) holds the ownership order
+ * instead, and its uses' locks only while one of them is claimed or CPU-dirty: for a job that commits before its kick
+ * (switch_gpu_chan_exec_events), whose hold ends before any long work. Every success must end with commit or abort. No
+ * token can be lost at commit.
  * The transaction keeps the caller's array, not a copy: commit and abort find the backings to record and unlock in it,
  * so it must stay as begin left it until then (an array in a frame that returns before the commit is a dangling one;
  * debug kernels refuse it with one line). A begin that fails leaves the transaction empty, and commit and abort of an
@@ -234,15 +240,23 @@ int switch_gpu_backing_begin_conversion_checked(struct switch_gpu_backing_use *u
 						uint32_t guard_count,
 						const struct switch_gpu_backing_token *completion,
 						struct switch_gpu_backing_transaction *transaction);
-/* begin_conversion_checked, any lease count, for a caller whose own references keep every use's backing from begin
- * through commit or abort (a connection's BOs inside its submit gate): the transaction takes and drops none, so a job's
- * uses never wait on the registry's lock. */
+/* begin_conversion_checked, any lease count, ordered, for a caller whose own references keep every use's backing from
+ * begin through commit or abort (a connection's BOs inside its submit gate): the transaction takes and drops none, so a
+ * job's uses never wait on the registry's lock. */
 int switch_gpu_backing_begin_held(struct switch_gpu_backing_use *uses, uint32_t count,
 				  struct switch_gpu_cpu_lease *const *leases, uint32_t lease_count,
 				  const struct switch_gpu_backing_guard *guards,
 				  uint32_t guard_count,
 				  const struct switch_gpu_backing_token *completion,
 				  struct switch_gpu_backing_transaction *transaction);
+/* begin_conversion_checked, any lease count, ordered, taking its own references on the uses */
+int switch_gpu_backing_begin_ordered(struct switch_gpu_backing_use *uses, uint32_t count,
+				     struct switch_gpu_cpu_lease *const *leases,
+				     uint32_t lease_count,
+				     const struct switch_gpu_backing_guard *guards,
+				     uint32_t guard_count,
+				     const struct switch_gpu_backing_token *completion,
+				     struct switch_gpu_backing_transaction *transaction);
 int switch_gpu_backing_dependencies(const struct switch_gpu_backing_transaction *transaction,
 				    struct switch_gpu_backing_token *out, uint32_t capacity,
 				    uint32_t *needed);

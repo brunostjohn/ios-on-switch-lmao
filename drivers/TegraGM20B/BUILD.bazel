@@ -129,6 +129,7 @@ kernel_driver(
         "TegraGM20BDeviceClient.cpp",
         "TegraGM20BCoherency.cpp",
         "SwitchGpuBacking.cpp",
+        "SwitchGpuBackingOrder.cpp",
         "SwitchGpuBackingRefs.cpp",
         "SwitchGpuBackingMemory.cpp",
         "SwitchGpuAdmission.cpp",
