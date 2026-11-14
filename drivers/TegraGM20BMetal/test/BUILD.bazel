@@ -4705,6 +4705,7 @@ host_test(
     data = [
         "//drivers/TegraGM20B:SwitchGpuVmMap.h",
         "//drivers/TegraGM20B:gpu_exec.c",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalSharedEvents.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
     ],
     deps = ["//kits/SwitchGM20B:classes"],

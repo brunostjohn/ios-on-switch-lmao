@@ -109,4 +109,15 @@ TEST(RawInlineSignals, PayloadIsTheValueAboveTheBaseInsideTheWindow)
     EXPECT_EQ(eventReleasePayload(3, ~uint64_t(0) - 4, 0), 8u);
 }
 
+// A refused word fails that signal's mid-job release alone (it signals at its job's end, one error line); nothing
+// latches, so the next signal asks the kernel afresh
+TEST(RawInlineSignals, ARefusedEventWordLatchesNothing)
+{
+    const std::string events = switch_ios::test::SourceText("../raw/runtime/RawMetalSharedEvents.mm");
+    const std::string word = switch_ios::test::Body(events, "bool sharedEventWord(id event,");
+    EXPECT_THAT(word, testing::HasSubstr("gRM->raw->eventWord(b->lease->handle(), address, base, floor)"));
+    EXPECT_THAT(word, testing::Not(testing::HasSubstr("wordRefusals")));
+    EXPECT_THAT(events, testing::Not(testing::HasSubstr("wordSpent")));
+}
+
 }  // namespace
