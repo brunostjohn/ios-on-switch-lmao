@@ -56,9 +56,23 @@ finds no Xcode.
 Logs are `~/Library/Caches/switch-ios-buildbarn/<service>.log`. `sudo launchctl kickstart -k
 system/com.brunostjohn.switch.bb-<service>` restarts one; restarting the worker empties its input cache.
 
-Every action gets new APFS clones of its tools, and macOS assesses each new executable or library the first time it
-runs (syspolicyd and XProtect, one at a time, 0.4-2 s each). On 14 Nov that capped the host at about 3 actions a
-second with half its CPU idle.
+What sets the host's speed, measured on 14 Nov (10-core M4, 16 executors):
+
+- Gatekeeper. Every action gets new APFS clones of its tools, and macOS assesses each new executable or library the
+  first time it runs (syspolicyd and XProtect, one at a time, 0.4-2 s each): about 2 actions a second with half the
+  CPU idle. The host runs with assessments off (`spctl --global-disable`, confirmed once in System Settings over
+  Screen Sharing through an SSH forward).
+- IOPS. Creating and deleting every input of every action held the 5,000-IOPS root volume at its ceiling; at 16,000
+  IOPS the host does about 4 actions a second, CPU-bound, half of it in the kernel (bb_worker and fseventsd).
+  `setup-volume.sh` moves that churn to the instance store once the daemons have Full Disk Access.
+- Automatic macOS updates are off, so the host never installs one and reboots in the middle of a build.
+
+Bluetooth has no working controller on an EC2 Mac and bluetoothd restarts every ten seconds, which keeps audiomxd and
+configd at about a core between them; SIP does not let launchd disable it.
+
+`@gpu_device_data` comes from the host's own `~/Library/Application Support/switch-ios/gpu-device-data/` (gpu/deps.bzl).
+A client without the pinned tar there gives the seed's probe actions other inputs and keys, so every Mac and the host
+keep the same tar.
 
 ### Another host
 

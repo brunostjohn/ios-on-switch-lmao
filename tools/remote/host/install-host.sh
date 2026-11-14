@@ -18,6 +18,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 user=$(id -un)
 home="$HOME/Library/Application Support/switch-ios/buildbarn"
 data="$HOME/Library/Caches/switch-ios-buildbarn"
+# The worker's build and cache directories: the instance store setup-volume.sh prepares, where the host has one.
+work=${SWITCH_BB_WORKER_DIR:-$data/worker}
 
 if [ -n "$first" ]; then
     roles="runner worker"
@@ -32,7 +34,7 @@ else
     [ -n "${SWITCH_BB_PRIVATE_IP:-}" ] && listen="$listen, '$SWITCH_BB_PRIVATE_IP'"
 fi
 
-mkdir -p "$home" "$data/worker/build" "$data/worker/cache"
+mkdir -p "$home" "$work/build" "$work/cache"
 for store in cs cms ac; do
     mkdir -p "$data/storage/$store/persistent_state"
 done
@@ -50,6 +52,7 @@ cat >"$home/.host.libsonnet.new" <<EOF
 {
   name: '$name',
   dataDir: '$data',
+  workerDir: '$work',
   listenAddresses: [$listen],
   storageAddress: '$storage',
   schedulerAddress: '$scheduler',
@@ -86,6 +89,8 @@ for role in $roles; do
 		<string>$HOME</string>
 		<key>PATH</key>
 		<string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>SWITCH_BB_WORKER_DIR</key>
+		<string>$work</string>
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>

@@ -13,6 +13,11 @@ refuse() {
     exit 1
 }
 
+# An instance store comes back empty after a stop/start (setup-volume.sh).
+worker_dirs() {
+    mkdir -p "${SWITCH_BB_WORKER_DIR:?}/build" "$SWITCH_BB_WORKER_DIR/cache"
+}
+
 xcode_env() {
     plist=$xcode/Contents/version.plist
     build=$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "$plist" 2>/dev/null) || refuse "no $plist"
@@ -35,10 +40,12 @@ case ${1:-} in
     storage) exec "$here/bb_storage" "$here/storage.jsonnet" ;;
     scheduler) exec "$here/bb_scheduler" "$here/scheduler.jsonnet" ;;
     runner)
+        worker_dirs
         xcode_env
         exec "$here/bb_runner" "$here/runner.jsonnet"
         ;;
     worker)
+        worker_dirs
         xcode_env
         exec "$here/bb_worker" "$here/worker.jsonnet"
         ;;
