@@ -11,8 +11,9 @@ import Metal
 /// back through every later clear that hits it. The RGBA16Float target cleared to the BGRA8 one's floats must get its
 /// own halves, not the BGRA8 texel (the GPU matches an entry by format and value). The facade must make compressed
 /// memory, add the entries and hit them. Then the shadow cases (CompressedShadowCases: the copy engine through
-/// compressed memory), the ZBC arms of the other formats (CompressedZbcArms: sRGB8, RGB10A2, RGBA16Unorm, Depth16),
-/// and a 4x BGRA8 target cleared to a value the table holds and to 0.5 (a ROP tie, never added): the GPU time of each.
+/// compressed memory), the ZBC arms of the other formats (CompressedZbcArms: sRGB8, RGB10A2, RGBA16Unorm, RGBA32Float,
+/// Depth16), and a 4x BGRA8 target cleared to a value the table holds and to 0.5 (a ROP tie, never added): the GPU time
+/// of each.
 struct CompressedTargetsTest: HWTest {
     let id = "gpu.raw.compressed_targets"
     let name = "Multisampled and depth memoryless targets compress; repeated clears become zero-bandwidth"

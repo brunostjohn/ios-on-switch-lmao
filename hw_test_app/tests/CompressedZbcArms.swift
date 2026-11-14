@@ -3,15 +3,14 @@ import HWTestCore
 import HWTestGPU
 import Metal
 
-/// gpu.raw.compressed_targets' ZBC arms (drivers/TegraGM20BMetal/raw/runtime/raw_zbc.h zbcColorEntry, zbcDepthEntry):
-/// a private one-sample target of each 4- and 8-byte format (compressed memory once the facade has made some of its
-/// shape: raw_private_comp.h, so a first texture asks and the arm's own comes after) cleared again and again to a value
-/// the boot table lacks, read back through the copy engine; for Depth16, a memoryless depth and an EQUAL-tested quad at
-/// the clear depth over a private BGRA8 target. The first round's clear writes texels (the facade asks for the entry at
-/// the third), so every later round must read back the first round's bytes: an entry's L2 texel is what the ROP writes
-/// for the value. `zbc_<arm>=<first round texels off the value>:<last round texels off the first>:<ZBC hits>`; FAIL on
-/// either count, on no hit, or on an arm that could not run (`zbc_<arm>_error`). RGBA32Float has no arm: a compressed
-/// one is a memoryless target, which only framebuffer fetch reads, whose storage form takes plain memory.
+/// gpu.raw.compressed_targets' ZBC arms (drivers/TegraGM20BMetal/raw/runtime/raw_zbc.h zbcColorEntry, zbcDepthEntry): a
+/// private one-sample target of each format (compressed memory once the facade has made some of its shape:
+/// raw_private_comp.h, C32, C64 or C128, so a first texture asks and the arm's own comes after) cleared again and again
+/// to a value the boot table lacks, read back through the copy engine; for Depth16, a memoryless depth and an
+/// EQUAL-tested quad at the clear depth over a private BGRA8 target. The first round's clear writes texels (the facade
+/// asks for the entry at the third), so every later round must read back the first round's bytes: an entry's L2 texel
+/// is what the ROP writes for the value. `zbc_<arm>=<first round texels off the value>:<last round texels off the
+/// first>:<ZBC hits>`; FAIL on either count, on no hit, or on an arm that could not run (`zbc_<arm>_error`).
 enum CompressedZbcArms {
     static let width = 256, height = 128, rounds = 12
 
@@ -38,6 +37,9 @@ enum CompressedZbcArms {
             name: "rgba16unorm", format: .rgba16Unorm,
             clear: [10000.0 / 65535, 20000.0 / 65535, 40000.0 / 65535, 1],
             texel: le(10000, 2) + le(20000, 2) + le(40000, 2) + le(65535, 2)),
+        Arm(
+            name: "rgba32f", format: .rgba32Float, clear: [0.3, -1.5, 7.25, 0.5],
+            texel: [Float(0.3), -1.5, 7.25, 0.5].flatMap { le($0.bitPattern, 4) }),
     ]
 
     static let depth16 = Float(39321) / 65535
