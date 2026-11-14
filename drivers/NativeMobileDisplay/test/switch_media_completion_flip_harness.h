@@ -318,6 +318,11 @@ struct Display {
         return false;
     }
 
+    static bool host1xFlipBusy()
+    {
+        return false;
+    }
+
     void getDisplayDimensions(uint32_t *width, uint32_t *height)
     {
         *width = 720;

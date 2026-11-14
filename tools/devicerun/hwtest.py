@@ -257,6 +257,8 @@ TESTS: dict[str, bool] = {
     'display.x1.window_wide': False,
     'display.x1.window_palette': False,
     'display.x1.landscape_video': False,
+    'display.x1.host1x_flip': False,
+    'display.x1.host1x_flip_teardown': False,
     'ui.text': False,
     'ui.blur': False,
     'ui.list': False,
