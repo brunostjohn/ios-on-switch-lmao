@@ -2605,6 +2605,48 @@ host_test(
 )
 
 host_library(
+    name = "deadline_unit_tsan",
+    srcs = DEADLINE_UNIT_SRCS,
+    hdrs = DEADLINE_UNIT_HDRS,
+    c_std = "gnu11",
+    copts = [
+        "-Wno-unused-function",
+        "-fsanitize=thread",
+    ],
+    defines = ["DEVELOPMENT=1"],
+    sanitize = False,
+)
+
+host_library(
+    name = "hold_unit_tsan",
+    srcs = HOLD_UNIT_SRCS,
+    hdrs = HOLD_UNIT_HDRS,
+    c_std = "gnu11",
+    copts = [
+        "-Wno-unused-function",
+        "-fsanitize=thread",
+    ],
+    defines = ["DEVELOPMENT=1"],
+    sanitize = False,
+)
+
+# deadline.c and hold.c between the frame end, the pass, the kicks, teardown, sleep and the owner's thread calls,
+# under ThreadSanitizer
+host_test(
+    name = "gm20b_period_tsan_test",
+    srcs = ["gm20b_period_tsan_test.cpp"],
+    copts = ["-fsanitize=thread"],
+    cxx_std = "c++17",
+    defines = ["DEVELOPMENT=1"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+    deps = [
+        ":deadline_unit_tsan",
+        ":hold_unit_tsan",
+    ],
+)
+
+host_library(
     name = "switch_gpu_gpfifo_kick",
     srcs = ["//drivers/TegraGM20B:nouveau/nvif/chan506f.c"],
     hdrs = [
