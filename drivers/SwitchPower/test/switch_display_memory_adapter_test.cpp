@@ -89,7 +89,7 @@ public:
     unsigned count = 3, cur = 0, starts = 0, watermarks = 0;
     uint64_t residency[3] = {}, since = 0;
     unsigned moves = 0;
-    bool governing = false, refusalLogged = false;
+    bool governing = false, refusalLogged = false, bpmpChangeLogged = false;
     uint64_t floorBytes() const;
     unsigned memoryFloor(unsigned) const;
     void uncoveredDisplayMemory(uint32_t, const char *);
@@ -105,6 +105,7 @@ public:
     unsigned reconcileRate(uint32_t, bool = false);
     bool moveTo(unsigned, switch_emc_reason);
     void logMove(unsigned, unsigned, unsigned, switch_emc_reason) const;
+    bool logBpmpChange(unsigned, unsigned, uint32_t, uint32_t);
     int reserveMemory(const switch_display_memory_head &);
     bool useFixedRate(unsigned);
     IOReturn holdFixedRate();
@@ -134,11 +135,14 @@ std::vector<unsigned> requestedRates;
 std::vector<uint64_t> activeDemandsAtSet;
 int getResult;
 unsigned getRate;
+uint32_t bpmpLatencyAllowance;
 }
 
 int tegra_bpmp_emc_set(unsigned requested, unsigned *actual)
 {
     requestedRates.push_back(requested);
+    if (bpmpLatencyAllowance)
+        gEMC->mcRegs.values[0x2e8 / 4] = bpmpLatencyAllowance;
     activeDemandsAtSet.push_back(gEMC->memoryState.owned[0] ? gEMC->memoryState.heads[0].peak_bytes_per_second : 0);
     if (setResults.empty()) {
         *actual = requested;
@@ -191,6 +195,7 @@ protected:
         gErrors.clear();
         getResult = 0;
         getRate = 204000;
+        bpmpLatencyAllowance = 0;
     }
 
     void TearDown() override
@@ -231,6 +236,30 @@ TEST_F(MemoryAdapter, EachRateMoveLogsOneLine)
     ASSERT_EQ(gLines.size(), 1u);
     EXPECT_EQ(gLines[0], "SwitchEMC: 204000 -> 1331200 kHz, display memory asked 1331200 kHz; display floor 204000 kHz "
                          "for 312 MB/s");
+}
+
+TEST_F(MemoryAdapter, ABpmpRateChangeThatRewritesTheLatencyAllowanceIsLoggedOnce)
+{
+    ASSERT_EQ(emc.reserveMemory(request()), 0);
+    bpmpLatencyAllowance = 0x80;
+    ASSERT_EQ(emc.reserveMemory(request(2000000000)), 0);
+    ASSERT_TRUE(emc.moveTo(2, SWITCH_EMC_REASON_GOVERN));
+    ASSERT_EQ(requestedRates.size(), 2u);
+    unsigned changes = 0;
+    for (const auto &line : gLines)
+        changes += line.find("SwitchEMC: the BPMP rate change asked 1331200 kHz and set 1331200 kHz; MC "
+                             "LATENCY_ALLOWANCE_DC_0") == 0;
+    EXPECT_EQ(changes, 1u);
+    EXPECT_EQ(gLines.size(), 3u);
+}
+
+TEST_F(MemoryAdapter, ABpmpRateChangeThatSetsAnotherRateNamesBoth)
+{
+    ASSERT_EQ(emc.reserveMemory(request()), 0);
+    setResults.push_back({0, 1320000});
+    ASSERT_EQ(emc.reserveMemory(request(2000000000)), 0);
+    ASSERT_FALSE(gLines.empty());
+    EXPECT_EQ(gLines[0].find("SwitchEMC: the BPMP rate change asked 1331200 kHz and set 1320000 kHz;"), 0u);
 }
 
 TEST_F(MemoryAdapter, WarmIdenticalAdmissionDoesNoRegisterOrClockWork)

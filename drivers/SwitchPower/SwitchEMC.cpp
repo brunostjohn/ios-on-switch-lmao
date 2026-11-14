@@ -64,6 +64,7 @@ class SwitchEMC : public OSObject {
 #if DEVELOPMENT || DEBUG
     uint64_t residency[SWITCH_EMC_MAX_RATES] = {}, since = 0;
     unsigned moves = 0;
+    bool bpmpChangeLogged = false;
     // Hints that found the EMC below its top rate: from the first such hint to the BPMP's answer at the top rate.
     uint64_t raiseAsked = 0, raiseTicks = 0, raiseMax = 0, bpmpMax = 0;
     unsigned raises = 0;
@@ -116,6 +117,7 @@ public:
     static IOReturn statsAction(OSObject *owner, void *line, void *size, void *written, void *);
     size_t stats(char *line, size_t size);
     void logMove(unsigned from, unsigned to, unsigned asked, switch_emc_reason reason) const;
+    bool logBpmpChange(unsigned asked, unsigned set, uint32_t laBefore, uint32_t ptsaBefore);
 
     void runStats(char *line, size_t size, size_t *written)
     {
