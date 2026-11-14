@@ -7735,7 +7735,8 @@ void RenderEncoder::noteLargePass(const PixelBox &drawn, bool drawnKnown) const
         return;
     const Texture *c1 = pass_.count > 1 ? pass_.color[1].texture : nullptr;
     os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
-           "raw: large target pass %ux%u f%u%s area %ux%u box %s%u,%u-%u,%u rects %zu load %c c1 %u%s",
+           "raw: large target pass %ux%u f%u%{public}s area %ux%u box %{public}s%u,%u-%u,%u rects %zu load %c c1 "
+           "%u%{public}s",
            t->width, t->height, t->format, t->comptags ? " comp" : "", areaW_, areaH_, drawnKnown ? "" : "unknown ",
            drawn.x0, drawn.y0, drawn.x1, drawn.y1, rects_.size(), "dlc"[pass_.color[0].load], c1 ? c1->format : 0u,
            c1 && memoryless_[1] ? "+ml" : "");
