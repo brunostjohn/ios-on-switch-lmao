@@ -29,7 +29,7 @@ state.notpack	record	m2v	-	functions from another device's library: with one bac
 state.pack	record	layer	L4	a state the pack lacks: made at creation (compiler daemon) or the archive-miss error FailOnBinaryArchiveMiss asks for
 call.vis	record	gap	-	Counting and Boolean results on the copy engine (raw_visibility.h); accumulated results (MTLVisibilityResultTypeAccumulate): REPORT_SEMAPHORE with reduction ADD (probe gpu.x1.visibility, d17), no planner node yet
 call.buf	record	m2v	-	an m2v buffer
-call.sampler	record	gap	sampler_address_mode	mirror-clamp-to-edge and opaque borders: an address-lowering program variant (L4)
+call.sampler	record	gap	sampler_address_mode	pixel coordinates mirrored once on s or t, and a cubic filter with a mip filter, anisotropy or a mirror-clamp axis: an address-lowering program variant (L4); opaque borders are headers per sampled texture (Sampler::bordered)
 call.vsampler	record	layer	L4	a cubic vertex sampler, which m2v filters in the shader: a vertex-stage cubic variant (raw records bind every other vertex sampler)
 call.dbias	record	layer	L4	an infinite or NaN depth bias: the state program's viewport Z offset, as m2v's render_state.rs does
 call.inv	record	layer	L6	an encoder selector raw does not implement: implemented, or failed at creation per Metal
@@ -51,7 +51,7 @@ mipmaps	record	layer	L3	a mipmapped texture made with no chain: every mipmapped 
 mipmaps.fmt	record	rule	mip.twod,mip.twod_probed,mip.draw	formats with neither engine nor a pack mip state stay gap mip_format
 event	record	rule	recorded	MTLEvent waits and signals: Wait and Signal nodes (GPU semaphore acquire, release)
 enc.planarcopy	record	gap	-	copies to or from a planar texture move its planes' bytes: copy.ce per plane, not built
-enc.planarclamp	encode	gap	sampler_address_mode	a sampler header under a planar texture's address map
+enc.planarclamp	encode	layer	L3	a sampler state's header under a planar texture's address map with no header entry left (a constexpr sampler's are placed with it, Device::constexprMapped_)
 enc.planarrt	encode	rule	planar.standin_load,planar.standin_store	a planar target through its stand-in; sampled and rendered in one command buffer: its codes converted again after the store (edges order it)
 enc.pass	encode	rule	resolve.draw,ycbcr.image,xr.standin	a pass raw could not begin: resolve, YCbCr and extended-range targets are nodes with their rule decided before emission
 enc.kernel	encode	cb-error	-	the kernel refused the submission: a commit-time outcome, the command buffer's error (MTLCommandBufferErrorInternal)

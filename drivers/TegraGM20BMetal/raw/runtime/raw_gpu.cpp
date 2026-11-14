@@ -654,8 +654,13 @@ bool Device::init(std::string &err)
     }
     for (uint32_t i = 0; i < pack_.header()->samplers; i++) {
         memcpy(tsc_.cpu + 32 * nextTsc_, cs + 8 * i, 32);
-        constexprTsc_[constexprCount_++] = nextTsc_++;
+        constexprTsc_[constexprCount_] = nextTsc_++;
+        if (!placeConstexprMaps(constexprCount_++, cs + 8 * i)) {
+            err = "no sampler header left for the pack's constexpr samplers under planar address maps";
+            return false;
+        }
     }
+    constexprMappedCount_ = constexprCount_;
     // SET_CT_WRITE(i), as the baseline leaves it where a state's registers do not set it
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
     for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
@@ -3293,6 +3298,8 @@ void samplerHeader(const SamplerDesc &d, uint32_t w[8])
     maxLod = std::max(maxLod, minLod);
     setField(w + 2, 11, 0, lodField(minLod));
     setField(w + 2, 23, 12, lodField(maxLod));
+    if (d.border)
+        borderHeader(w, ownBorderTexel(d.border));
 }
 
 // lock_ held: a free entry of the sampler header pool
@@ -3339,6 +3346,9 @@ void Device::destroySampler(Sampler &s)
     for (uint32_t m : s.mapped)
         if (m && m != s.tsc && std::find(freeTsc_.begin(), freeTsc_.end(), m) == freeTsc_.end())
             freeTsc_.push_back(m);
+    for (uint32_t b : s.bordered)
+        if (b)
+            freeTsc_.push_back(b);
     s = {};
 }
 
@@ -3353,23 +3363,82 @@ bool Device::samplerVariant(Sampler &s, uint8_t map)
         return false;
     if (s.mapped[map])
         return true;
-    SamplerDesc d = s.desc;
-    const bool wrapped = map == 1 || map == 3, clamps = map == 2 || map == 3;
-    for (uint8_t *m : {&d.sAddress, &d.tAddress, &d.rAddress})
-        if ((wrapped && *m >= 1 && *m <= 3) || (clamps && (*m == 4 || *m == 5)))
-            *m = 0;
-    if (d.sAddress == s.desc.sAddress && d.tAddress == s.desc.tAddress && d.rAddress == s.desc.rAddress) {
+    uint32_t own[8], w[8];
+    samplerHeader(s.desc, own);
+    memcpy(w, own, sizeof w);
+    mapSamplerAddresses(w, map);
+    if (!memcmp(w, own, sizeof w)) {
         s.mapped[map] = s.tsc;
         return true;
     }
-    uint32_t w[8];
-    samplerHeader(d, w);
     RAW_ENCODE_LOCK(l, lock_);
     uint32_t tsc = 0;
     if (!takeTsc(tsc))
         return false;
     memcpy(tsc_.cpu + 32 * tsc, w, 32);
     s.mapped[map] = tsc;
+    return true;
+}
+
+uint8_t samplerBorderTexel(const Sampler &s, const Texture &t)
+{
+    constexpr uint32_t kA8Unorm = 1;
+    const FormatInfo *f = formatInfo(t.format);
+    return f ? borderTexel(f->tic0, t.swizzle, t.format == kA8Unorm, s.desc.border) : ownBorderTexel(s.desc.border);
+}
+
+bool Device::borderVariant(Sampler &s, const Texture &t)
+{
+    const uint8_t texel = samplerBorderTexel(s, t);
+    if (!s.desc.border || texel == ownBorderTexel(s.desc.border) || s.bordered[texel])
+        return true;
+    uint32_t w[8];
+    samplerHeader(s.desc, w);
+    borderHeader(w, texel);
+    RAW_ENCODE_LOCK(l, lock_);
+    uint32_t tsc = 0;
+    if (!takeTsc(tsc))
+        return false;
+    memcpy(tsc_.cpu + 32 * tsc, w, 32);
+    s.bordered[texel] = tsc;
+    return true;
+}
+
+bool Device::constexprMapsPlaced()
+{
+    RAW_ENCODE_LOCK(l, lock_);
+    for (; constexprMappedCount_ < constexprCount_; constexprMappedCount_++) {
+        const auto placed = std::find_if(completedSamplers_.begin(), completedSamplers_.end(), [&](const auto &s) {
+            return s.second == constexprMappedCount_;
+        });
+        if (placed == completedSamplers_.end() || !placeConstexprMaps(constexprMappedCount_, placed->first.data()))
+            return false;
+    }
+    return true;
+}
+
+bool Device::placeConstexprMaps(uint32_t index, const uint32_t words[8])
+{
+    const uint32_t own = constexprTsc_[index];
+    uint32_t taken[4] = {};
+    for (uint8_t map = 1; map < 4; map++) {
+        uint32_t w[8];
+        memcpy(w, words, sizeof w);
+        mapSamplerAddresses(w, map);
+        if (!memcmp(w, words, sizeof w)) {
+            constexprMapped_[index][map] = own;
+            continue;
+        }
+        if (!takeTsc(taken[map])) {
+            for (uint32_t tsc : taken)
+                if (tsc)
+                    freeTsc_.push_back(tsc);
+            return false;
+        }
+        memcpy(tsc_.cpu + 32 * taken[map], w, sizeof w);
+        constexprMapped_[index][map] = taken[map];
+    }
+    constexprMapped_[index][0] = own;
     return true;
 }
 
@@ -6224,7 +6293,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         // A pass that declares no attachment tests depth and stencil against its hidden one (PassDesc::hiddenZeta), which the
         // pass is given when its recorded states need it; the pipeline was made for the attachment the pass declares
         const Texture *declared = hiddenZeta_ ? nullptr : zeta;
-        if (pl->depthFormat != (declared ? declared->format : 0) || (!zeta && testsHiddenZeta(ds_))) {
+        if (!depthStencilFits(pl->depthFormat, declared ? declared->format : 0, zeta != nullptr, ds_)) {
             *why = "a depth/stencil state or format the pass's depth/stencil attachment does not take";
             cb_->refusal = {RefDepthStencil, pl->depthFormat, declared ? declared->format : 0, ds_.active()};
             return false;
@@ -6473,19 +6542,20 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                     }
                     tsc = s          ? (map        ? s->mapped[map]
                                         : compares ? s->compareTsc
-                                                   : s->tsc)
+                                                   : borderedTsc(*s, mapped))
                           : compares ? d.neutralCompareTsc_
                                      : d.neutralTsc_;
-                    if (s && map && !tsc) {
-                        *why = "a planar texture's sampler without its address map";
+                    if (s && !tsc) {
+                        *why = map ? "a planar texture's sampler without its address map"
+                                   : "a sampler without its opaque border's header for the texture";
                         return false;
                     }
                 } else if (e.samplerKind == SamplerConstexpr) {
-                    if (map) {  // m2v compiles a variant of the function for it (RuntimeFact::ConstexprSampled)
-                        *why = "a planar texture sampled through a constexpr sampler";
+                    tsc = map ? d.constexprMapped_[e.sampler][map] : d.constexprTsc_[e.sampler];
+                    if (!tsc) {
+                        *why = "a planar texture's constexpr sampler without its address map";
                         return false;
                     }
-                    tsc = d.constexprTsc_[e.sampler];
                 }
                 at[0] = tic | tsc << 20;
             }

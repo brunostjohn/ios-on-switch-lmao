@@ -354,8 +354,8 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
     // the planar textures its draws sample: their images from their planes first, once (m2v converts at each encoder that uses
     // one; nothing between this command buffer's passes writes the planes, refused below), then the passes, whose prologue's
     // full barrier orders the copies before their reads. A texture bound where no draw's state reads it is not converted: the
-    // image is made when a draw samples it. A sampler that clamps to zero or to the border reads a 4:4:4 code texture as clamp to
-    // edge (m2v's address map), which the raw path does not derive: such a command buffer is m2v's.
+    // image is made when a draw samples it. Its samplers read it under its address map (Texture::addressMap): a sampler state
+    // through its header made here, a constexpr sampler through the one placed with it (Device::constexprMapped_).
     struct Conversion {
         __unsafe_unretained RMTexture *t;
         uint32_t seed;
@@ -363,6 +363,22 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
     };
 
     std::vector<Conversion> converted;  // planar images converted here, at their surfaces' seeds and write counts
+    if (cb->_borderSamplers) {
+        // opaque borders' headers for the textures the range samples (Sampler::bordered), which the draws' handles take
+        std::vector<__unsafe_unretained RMSampler *> bordered;
+        cb->_plan.forEachResource(from, to, RMResourceKind::Sampler, [&](const RMRangeResource &use) {
+            if (RMSampler *s = (__bridge RMSampler *)use.object; s->_raw.desc.border)
+                bordered.push_back(s);
+        });
+        bool made = true;
+        textures([&](const RMRangeResource &use) {
+            if (use.access & raw::ResourceUse::Sample)
+                for (__unsafe_unretained RMSampler *s : bordered)
+                    made &= d.borderVariant(s->_raw, ((__bridge RMTexture *)use.object)->_raw);
+        });
+        if (!made)
+            return fail(PredCallSamplerForeign, "no sampler header for an opaque border");
+    }
     {
         std::vector<__unsafe_unretained RMTexture *> planar;
         std::vector<__unsafe_unretained RMSampler *> samplers;
@@ -376,6 +392,8 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             });
         if (!planar.empty()) {
             // the samplers' headers under the planar textures' address maps (m2v's), which the draws' handles take
+            if (!d.constexprMapsPlaced())
+                return fail(PredEncPlanarClamp, "no constexpr sampler header for an address map");
             for (__unsafe_unretained RMTexture *t : planar)
                 for (__unsafe_unretained RMSampler *sm : samplers)
                     if (t->_raw.addressMap && !d.samplerVariant(sm->_raw, t->_raw.addressMap))

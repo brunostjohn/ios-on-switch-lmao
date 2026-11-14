@@ -119,6 +119,8 @@ using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
     if (sampler && ![(id)sampler isKindOfClass:[RMSampler class]])
         [self refuse:PredCompute value:index why:@"a kernel's sampler not made by this device"];
     RMSampler *s = [(id)sampler isKindOfClass:[RMSampler class]] ? (RMSampler *)sampler : nil;
+    if (s && s->_raw.desc.border)
+        _cb->_borderSamplers = true;
     if (index < 16 && _samplers[index] != s) {
         _samplers[index] = s;
         raw::BoundSampler bound = {};
@@ -408,25 +410,17 @@ void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuff
     case OpKernelState:
         [e setComputePipelineState:twinOf(object)];
         break;
+    // a stride form's stride is a stage-in kernel's alone, which m2v never runs (rmM2vMissingKernel): the plain forms
     case OpKernelBytes:
-        if (c.x)
-            [e setBytes:cb->_bytes.chunks[c.c].cpu + c.a length:c.b attributeStride:commandStride(c) atIndex:c.index];
-        else
-            [e setBytes:cb->_bytes.chunks[c.c].cpu + c.a length:c.b atIndex:c.index];
+        [e setBytes:cb->_bytes.chunks[c.c].cpu + c.a length:c.b atIndex:c.index];
         break;
     case OpKernelBuffer:
         if ([object isKindOfClass:[RMBuffer class]])
             buffers.insert((RMBuffer *)object);
-        if (c.x)
-            [e setBuffer:twinOf(object) offset:c.c attributeStride:commandStride(c) atIndex:c.index];
-        else
-            [e setBuffer:twinOf(object) offset:c.c atIndex:c.index];
+        [e setBuffer:twinOf(object) offset:c.c atIndex:c.index];
         break;
     case OpKernelBufferOffset:
-        if (c.x)
-            [e setBufferOffset:c.c attributeStride:commandStride(c) atIndex:c.index];
-        else
-            [e setBufferOffset:c.c atIndex:c.index];
+        [e setBufferOffset:c.c atIndex:c.index];
         break;
     case OpKernelClockAnchors: {
         const TegraGM20BAbiClockAnchors anchors = rmClockAnchorsNow();

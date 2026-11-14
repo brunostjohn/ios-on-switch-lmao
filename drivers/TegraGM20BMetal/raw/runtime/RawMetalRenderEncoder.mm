@@ -11,12 +11,14 @@
 static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger count, NSUInteger instances, bool indirect,
                        bool indexed)
 {
-    const raw::Pipeline *pl = e->_drawn;
+    raw::Pipeline *pl = e->_drawn;
     if (!pl || !e->_pipe || !e->_pipe->_raw || e->_cb->_encRefused)
         return;
+    const raw::FetchDraw shape = {uint32_t(type), uint32_t(count), uint32_t(instances), indirect, indexed};
+    if (const RMPass &pass = e->_cb->_passes[e->_passAt]; pass.compressed)
+        rmNoteStorageDraw(e->_cb, pass, pl, e->_drawnVariant, shape);
     const raw::FetchRefusal refusal =
-        raw::fetchRefusal(raw::fetchesOwnColor(pl->fetchBits, pl->writeBits, pl->storageBits), pl->primitiveId,
-                          {uint32_t(type), uint32_t(count), uint32_t(instances), indirect, indexed});
+        raw::fetchRefusal(raw::fetchesOwnColor(pl->fetchBits, pl->writeBits, pl->storageBits), pl->primitiveId, shape);
     if (refusal == raw::FetchRefusal::None)
         return;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -238,7 +240,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
             return hit(_cb, PredEncColorFormats, j, f);
         }
     }
-    if (pl.depthFormat != _zeta || (!_zeta && _ds.active())) {  // (raw::RenderEncoder::prepare's test)
+    if (!raw::recordedDepthStencilFits(pl.depthFormat, _zeta, _ds)) {
         [_cb takeReason:WhyEncode why:@"a depth/stencil state or format the pass's attachment does not take"];
         return hit(_cb, PredEncDepthStencil, pl.depthFormat, _zeta | uint64_t(_ds.active()) << 32);
     }
@@ -267,11 +269,6 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
                                         : @"a uniform buffer bound at an offset that is not a multiple of 256"];
                 return hit(_cb, PredEncUboOffset, uint64_t(e.stage) << 8 | e.slot, residual);
             }
-        } else if (e.kind == raw::EntryTexture && e.samplerKind == raw::SamplerConstexpr &&
-                   e.slot < raw::kStageTextures && _tex[raw::handleStage(e)][e.slot] &&
-                   _tex[raw::handleStage(e)][e.slot]->_raw.addressMap) {
-            [_cb takeReason:WhyEncode why:@"a planar texture sampled through a constexpr sampler"];
-            return hit(_cb, PredEncPlanarClamp, e.slot, _tex[raw::handleStage(e)][e.slot]->_raw.addressMap);
         }
     }
     [self drawnRecord];

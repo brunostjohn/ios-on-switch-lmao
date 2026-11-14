@@ -30,7 +30,7 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
 {
     constexpr NSUInteger kShadowed = 1024;  // a Core Animation draw's vertices and its transform
     if (shadow && length <= kShadowed) {
-        m.x = cb->_shadow.size() + 1;
+        m.shadow = uint32_t(cb->_shadow.size() + 1);
         cb->_shadow.insert(cb->_shadow.end(), static_cast<const uint8_t *>(bytes),
                            static_cast<const uint8_t *>(bytes) + length);
     }
@@ -194,6 +194,8 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
         [_cb takeReason:WhyCall why:@"a cubic vertex sampler"];
         hit(_cb, PredCallVertexSampler, index);
     }
+    if ([(id)s isKindOfClass:[RMSampler class]] && ((RMSampler *)s)->_raw.desc.border)
+        _cb->_borderSamplers = true;
     if (stage == 2 && index < 16) {
         RMSampler *r = [(id)s isKindOfClass:[RMSampler class]] ? (RMSampler *)s : nil;
         _samp[index] = r;

@@ -529,6 +529,11 @@ void rmRangePlain(RMCommandBuffer *cb, size_t from, size_t to);
 // as storage images with no barrier form to take (raw_private_comp.h storageSlotsToPlain) join the command buffer's
 // _plainForStorage; a variant still being made marks the command buffer for a look at its draws before the encode
 void rmNoteStorageTargets(RMCommandBuffer *cb, const RMPass &pass, const Cmd &binding);
+// A draw of shape `draw` recorded in `pass`, which has compressed attachments, of `pl` (or of `variant`, the variant of it
+// the draw takes): the attachments its state binds as storage images join _plainForStorage where its barrier form cannot
+// draw that shape
+void rmNoteStorageDraw(RMCommandBuffer *cb, const RMPass &pass, raw::Pipeline *pl, raw::Variant<raw::Pipeline> *variant,
+                       const raw::FetchDraw &draw);
 // Before a raw range encodes, which may not ask for a move: those move to plain memory, and their shape is made plain
 // from then on
 void rmStorageTargetsPlain(RMCommandBuffer *cb, size_t from, size_t to);

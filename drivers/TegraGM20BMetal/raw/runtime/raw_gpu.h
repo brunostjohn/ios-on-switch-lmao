@@ -460,7 +460,22 @@ struct Sampler {
     // its headers under a planar texture's address map (Texture::addressMap 1 to 3): m2v samples those textures through the
     // sampler with the map applied (Device::samplerVariant makes them; the same header where the map changes nothing)
     uint32_t mapped[4] = {};
+    // an opaque border's headers by the texel a texture reads at it (borderTexel), where that is not tsc's
+    // (Device::borderVariant makes them before the work that samples the texture through the sampler)
+    uint32_t bordered[32] = {};
 };
+
+// The border texel a draw sampling `t` through `s` reads (raw_sampler.h borderTexel), 0 for a sampler of no opaque border
+uint8_t samplerBorderTexel(const Sampler &s, const Texture &t);
+
+// The header a draw sampling `t` through `s` takes: its own, or its border's for `t` (0: not made yet)
+inline uint32_t borderedTsc(const Sampler &s, const Texture *t)
+{
+    if (!s.desc.border || !t)
+        return s.tsc;
+    const uint8_t texel = samplerBorderTexel(s, *t);
+    return texel == ownBorderTexel(s.desc.border) ? s.tsc : s.bordered[texel];
+}
 
 struct SplitState;
 struct SplitSource;
@@ -1835,6 +1850,10 @@ public:
     Pipeline *reachTwin(Pipeline &pl, const char **why);
     // s's header under address map `map` (Texture::addressMap), made now if it is not yet
     bool samplerVariant(Sampler &s, uint8_t map);
+    // Every constexpr sampler's headers under the address maps, those of samplers placed since made now; false: no room
+    bool constexprMapsPlaced();
+    // s's header for sampling `t` at an opaque border (Sampler::bordered), made now if it is not yet
+    bool borderVariant(Sampler &s, const Texture &t);
     // A two-plane 4:4:4 surface's texture of RGB8_444_2P (542): its planes at `luma`/`chroma` (offsets in the allocation,
     // with their pitches), sampled through an RGBA8 image of the pool (Texture::planar)
     bool createPlanarTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t luma,
@@ -2834,7 +2853,12 @@ private:
     // once, before the state that names it is published, and never moves: a draw reads it without lock_.
     static constexpr uint32_t kConstexprSamplers = 256;  // PackEntry::sampler is a byte
     uint32_t constexprTsc_[kConstexprSamplers] = {};
-    uint32_t constexprCount_ = 0;
+    // and each one's headers under a planar texture's address maps 1 to 3 (mapSamplerAddresses): the pack's placed with
+    // them, a runtime record's by constexprMapsPlaced before the work that samples a planar texture
+    uint32_t constexprMapped_[kConstexprSamplers][4] = {};
+    uint32_t constexprCount_ = 0, constexprMappedCount_ = 0;
+    // constexprMapped_[index] from its header `words` (lock_ held, or the device not yet open); false: no room
+    bool placeConstexprMaps(uint32_t index, const uint32_t words[8]);
 
     // the states the runtime made (addRecord), never removed: Pipeline::rec points into them
     struct Completed {
