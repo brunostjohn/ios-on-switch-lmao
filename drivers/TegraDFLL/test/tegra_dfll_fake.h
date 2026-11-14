@@ -16,7 +16,21 @@ struct tegra_dfll_fake {
 	int pmic_answer;   // TegraI2C's result for each MAX77812 read
 	int probe_answer;  // the L4T probe's
 	unsigned pmic_reads, probes, maps, lines;
+	// TRM 35.4: an I2C5 transfer while CL-DVFS is out of reset with its clock stopped hangs the bus
+	unsigned i2c5_hangs;
+	// CAR: CL-DVFS out of reset with its clock stopped after a write (TRM 35.4), and a write of CLK_OUT_ENB_x or
+	// RST_DEVICES_x itself instead of its _SET/_CLR register
+	unsigned cl_dvfs_unsafe, car_direct_writes;
 };
+
+// Every CAR write and delay in order: a delay is offset TEGRA_DFLL_FAKE_DELAY with its microseconds as the value.
+#define TEGRA_DFLL_FAKE_DELAY 0xffffffffu
+
+struct tegra_dfll_fake_write {
+	uint32_t offset, value;
+};
+extern struct tegra_dfll_fake_write tegra_dfll_fake_car_log[512];
+extern unsigned tegra_dfll_fake_car_writes;
 
 extern struct tegra_dfll_fake tegra_dfll_fake;
 
@@ -34,8 +48,12 @@ enum tegra_dfll_fake_block {
 volatile uint32_t *tegra_dfll_fake_reg(enum tegra_dfll_fake_block block, uint32_t offset);
 extern bool tegra_dfll_fake_refuse_map[TEGRA_DFLL_FAKE_BLOCKS];
 
-// A T210B01 A01 with I2C5 clocked, the CPU on PLLX in RUN, the DFLL disabled, speedo fused and the PMIC answering.
+// A T210B01 A01 with I2C5 clocked, the CPU on PLLX in RUN, speedo fused and the PMIC answering, CL-DVFS as hekate
+// leaves it (clock on, out of reset, its sources at their reset value clk_m / 1) with the DFLL disabled.
 void tegra_dfll_fake_console(void);
+
+// The CAR's CL-DVFS bits and sources at their reset values (TRM 5.2.115, 5.2.117, 5.2.245-246), as after SC7.
+void tegra_dfll_fake_cl_dvfs_reset(void);
 
 #ifdef __cplusplus
 }
