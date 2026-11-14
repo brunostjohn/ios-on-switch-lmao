@@ -138,3 +138,18 @@ host_test(
         ":owner_kernel",
     ],
 )
+
+host_test(
+    name = "switch_pmc_dpd_owner_test",
+    srcs = [
+        "switch_car_owner_model.cpp",
+        "switch_car_owner_model.h",
+        "switch_pmc_dpd_owner_test.cpp",
+        "//kits/SwitchCAR:SwitchPMC.h",
+    ],
+    data = ["//kernel:lint_sources"],
+    deps = [
+        ":owner_car",
+        ":owner_kernel",
+    ],
+)
