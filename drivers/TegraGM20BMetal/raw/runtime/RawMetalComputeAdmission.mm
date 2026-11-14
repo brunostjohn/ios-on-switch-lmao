@@ -10,18 +10,15 @@ namespace {
 
 // Which of a texture's terms refused it: compute.image's b, named in its first line
 enum ImageTerm : uint8_t {
-    TermTwoPlanesWritten = 1,  // the record stores RGB10A8_2P_XR10, which no record splits into its two planes
-    TermTwoPlanesBare,         // RGB10A8_2P_XR10 read with no stand-in drawn from its planes
+    TermTwoPlanesBare = 2,     // RGB10A8_2P_XR10 read where the record's view is not its stand-in's format
     TermConvertedSampler,      // a converted texture beside a sampler its address map would change (draws take its variant)
 };
 
 const char *imageTermName(uint64_t term)
 {
     switch (term) {
-    case TermTwoPlanesWritten:
-        return "a kernel stores an RGB10A8_2P_XR10 texture";
     case TermTwoPlanesBare:
-        return "an RGB10A8_2P_XR10 texture read with no stand-in";
+        return "an RGB10A8_2P_XR10 texture read through a view other than its stand-in's";
     case TermConvertedSampler:
         return "a converted texture beside a sampler that does not clamp to its edge";
     }
@@ -204,8 +201,23 @@ bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKern
             // a load of an extended-range texture binds its stand-in where the record's view is the stand-in's own,
             // else its codes (raw_compute.cpp)
             const bool standIn = t && !writes && t->_raw.standIn && viewOf(*t->_raw.standIn) == raw::SlotView::Own;
-            if (form == raw::KernelTextureForm::TwoPlanes && (writes || !standIn)) {
-                const uint64_t term = writes ? TermTwoPlanesWritten : TermTwoPlanesBare;
+            // RGB10A8_2P_XR10 is made with no usage but ShaderRead and RenderTarget (xrPlanesShape): a kernel's store to
+            // it, or a load of one made without ShaderRead, is outside its usage, which Metal's validation stops
+            const bool outsideUsage = form == raw::KernelTextureForm::TwoPlanes &&
+                                      (writes || !(t->_descriptor.usage & MTLTextureUsageShaderRead));
+            if (outsideUsage) {
+                NSString *reason =
+                    [NSString stringWithFormat:@"A kernel %@ an RGB10A8_2P_XR10 texture outside its usage 0x%lx: %@",
+                                               writes ? @"stores" : @"loads", (unsigned long)t->_descriptor.usage,
+                                               textureFacts(t)];
+                os_log_error(rawLog(), "raw: %{public}s", reason.UTF8String);
+                failCommandBuffer(cb, reason, MTLCommandBufferErrorInvalidResource);
+                if (why)
+                    *why = "a kernel reaches an RGB10A8_2P_XR10 texture outside its usage";
+                return false;
+            }
+            if (form == raw::KernelTextureForm::TwoPlanes && !standIn) {
+                const uint64_t term = TermTwoPlanesBare;
                 noteRefusal(cb, PredComputeImage, x.slot, term, t, k->rec->keyHash);
                 if (why)
                     *why = imageTermName(term);

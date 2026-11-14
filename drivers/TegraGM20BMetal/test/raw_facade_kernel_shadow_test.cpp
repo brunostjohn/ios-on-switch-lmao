@@ -130,6 +130,7 @@ protected:
         gDevice = open(writePack(packKey(MTLPixelFormatBGRA8Unorm), {conversionRecord(maxThreads)}),
                        [HarnessM2VMethods class], [HarnessComputeM2V class]);
         ASSERT_TRUE(gDevice != nil);
+        raw_metal_complete_states(dir().c_str());
         const std::string bytes = kernelLibrary();
         dispatch_data_t data =
             dispatch_data_create(bytes.data(), bytes.size(), nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
