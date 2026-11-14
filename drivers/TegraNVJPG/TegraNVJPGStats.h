@@ -22,6 +22,9 @@ void tegra_nvjpg_count_job(int pid, uint32_t format, bool failed, uint64_t engin
 void tegra_nvjpg_counts_of(int pid, TegraNVJPGRouteCounts *out);
 // The window's line once 5 s have passed with work in them.
 void tegra_nvjpg_stats_line(void);
+// TegraNVJPG.cpp's, taken and zeroed: the jobs whose engine wait ran with gStateLock free, and the longest a
+// cancellation or an idle gate call waited to take gStateLock. Takes gJobLock, then gStateLock.
+void tegra_nvjpg_lock_counts(uint64_t *waitsUnlocked, uint64_t *stateWaitMaxUs);
 #endif
 
 #endif

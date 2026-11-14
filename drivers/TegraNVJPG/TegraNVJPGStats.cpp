@@ -105,16 +105,20 @@ void tegra_nvjpg_stats_line(void)
         IOLockUnlock(gLock);
         return;
     }
-    char line[220];
-    const uint64_t n = gWindow.decodes ? gWindow.decodes : 1;
-    snprintf(line, sizeof(line),
-             "TegraNVJPG: %llus decodes=%llu refused=%llu failed=%llu engine=%lluus/decode cpu=%lluus/decode "
-             "pixels=%lluK/decode scan=%lluKB/decode",
-             (now - gWindow.windowStart) / 1000000, gWindow.decodes, gWindow.refused, gWindow.failed,
-             gWindow.engineUs / n, gWindow.cpuUs / n, gWindow.pixels / n / 1000, gWindow.bytes / n / 1024);
+    const auto w = gWindow;
     bzero(&gWindow, sizeof(gWindow));
     gWindow.windowStart = now;
     IOLockUnlock(gLock);
+    uint64_t waitsUnlocked = 0;
+    uint64_t stateWaitMaxUs = 0;
+    tegra_nvjpg_lock_counts(&waitsUnlocked, &stateWaitMaxUs);
+    char line[280];
+    const uint64_t n = w.decodes ? w.decodes : 1;
+    snprintf(line, sizeof(line),
+             "TegraNVJPG: %llus decodes=%llu refused=%llu failed=%llu engine=%lluus/decode cpu=%lluus/decode "
+             "pixels=%lluK/decode scan=%lluKB/decode unlocked_waits=%llu state_lock_wait_max=%lluus",
+             (now - w.windowStart) / 1000000, w.decodes, w.refused, w.failed, w.engineUs / n, w.cpuUs / n,
+             w.pixels / n / 1000, w.bytes / n / 1024, waitsUnlocked, stateWaitMaxUs);
     os_log(OS_LOG_DEFAULT, "%s", line);
 }
 #endif
