@@ -783,6 +783,15 @@ static const raw::Pipeline *recordedPipeline(const raw::RasterState &raster)
     return vas;
 }
 
+// raw_job_words.h's: the lengths the recording filled those chunks to before taking the next
+- (NSArray<NSNumber *> *)switchRawBytesChunkLengths
+{
+    NSMutableArray<NSNumber *> *lengths = [NSMutableArray array];
+    for (const raw::Buffer &k : _bytes.chunks)
+        [lengths addObject:@(k.length)];
+    return lengths;
+}
+
 // facadecost's: the setBytes chunks' misses and those made ahead since the process began, and their live bytes now
 + (NSDictionary<NSString *, NSNumber *> *)switchRawBytesChunkStats
 {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Core Animation shaped command buffers through the raw facade over the kernel model: the words each job carries, written
 // to the test's outputs (words.txt) for a comparison with another build's, and one hash of them.
+#include "raw_job_words.h"
 #include "raw_scale_frames.h"
 
 #include <gtest/gtest.h>
@@ -30,14 +31,6 @@ Opened openScale()
     return {device, state};
 }
 
-uint64_t fnv(const std::string &text)
-{
-    uint64_t h = 1469598103934665603ull;
-    for (unsigned char c : text)
-        h = (h ^ c) * 1099511628211ull;
-    return h;
-}
-
 std::string outputs()
 {
     const char *at = getenv("TEST_UNDECLARED_OUTPUTS_DIR");
@@ -53,21 +46,19 @@ TEST(RawFacadeCommit, ScaleShapedJobWords)
     std::vector<std::vector<id<MTLTexture>>> into;
     for (const auto &shape : shapes)
         into.push_back(scale_frames::targets(opened.device, shape));
-    const size_t first = [] {
-        std::lock_guard<std::mutex> l(kernel_model::callLock);
-        return kernel_model::model.jobs.size();
-    }();
+    std::vector<job_words::Run> runs;
     for (uint32_t frame = 0; frame < 3; frame++)
         for (size_t s = 0; s < std::size(shapes); s++) {
             id<MTLCommandBuffer> cb = scale_frames::record(queue, opened.state, into[s], shapes[s], frame);
+            runs.push_back(job_words::run(cb));
             [cb commit];
             [cb waitUntilCompleted];
             EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
             EXPECT_EQ(std::string([[(id)cb performSelector:@selector(switchRawPath)] UTF8String]), "raw");
         }
-    const std::string words = scale_frames::jobWords(first);
+    const std::string words = job_words::words(runs);
     std::ofstream(outputs() + "/words.txt") << words;
-    printf("scale words: %zu bytes, hash %016llx\n", words.size(), (unsigned long long)fnv(words));
+    printf("scale words: %zu bytes, hash %016llx\n", words.size(), (unsigned long long)job_words::fnv(words));
     EXPECT_FALSE(words.empty());
 }
 
