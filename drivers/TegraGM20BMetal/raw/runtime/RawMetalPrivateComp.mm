@@ -44,11 +44,15 @@ uint32_t privateCompressedKind(MTLTextureDescriptor *d)
     const raw::FormatInfo *f = raw::formatInfo(uint32_t(d.pixelFormat));
     raw::PrivateTextureFacts facts;
     facts.privateStorage = d.storageMode == MTLStorageModePrivate;
-    facts.oneLevel = d.mipmapLevelCount == 1;
-    facts.oneSample = d.sampleCount <= 1;
-    facts.twoD = d.textureType == MTLTextureType2D;
-    facts.renderedAndSampledOnly = d.usage != MTLTextureUsageUnknown &&
-                                   !(d.usage & ~NSUInteger(MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead));
+    facts.levels = uint32_t(d.mipmapLevelCount);
+    facts.samples = uint32_t(std::max<NSUInteger>(d.sampleCount, 1));
+    facts.shape = d.textureType == MTLTextureType2D              ? raw::PrivateShape2D::Plain
+                  : d.textureType == MTLTextureType2DArray       ? raw::PrivateShape2D::Array
+                  : d.textureType == MTLTextureType2DMultisample ? raw::PrivateShape2D::Multisample
+                                                                 : raw::PrivateShape2D::Other;
+    facts.compressibleUsage =
+        d.usage != MTLTextureUsageUnknown &&
+        !(d.usage & ~NSUInteger(MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite));
     facts.plainColour =
         f && f->rt && !raw::blockCompressed(f) && raw::xrForm(uint32_t(d.pixelFormat)) == raw::XrForm::None;
     facts.bpp = f ? f->bpp : 0;
@@ -149,7 +153,9 @@ static void notePipeline(RMCommandBuffer *cb, const RMPass &pass, const raw::Pip
     const bool twinDraws =
         !twin || !draw || fetchFree ||
         raw::barrierFormDraws(twin->fetchBits, twin->writeBits, twin->storageBits, twin->primitiveId, *draw);
-    const uint8_t slots = raw::storageSlotsToPlain(pl->storageBits, twin != nullptr, twinDraws) & pass.compressed;
+    const uint8_t slots =
+        raw::storageSlotsToPlain(pl->storageBits, twin != nullptr, twinDraws, gRM->raw->storageCompressedOk()) &
+        pass.compressed;
     for (uint32_t slot = 0; slots >> slot; ++slot) {
         RMTexture *t = (RMTexture *)pass.color[slot].texture;
         if ((slots >> slot & 1) && fitsOncePlain(*pl, slot, t->_raw) &&

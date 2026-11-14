@@ -10,12 +10,9 @@ import UIKit
 /// Variants: still (only a dot far from the glass changes, the control), appear (the glass shows at the first display
 /// frame read, the dot toggling on: the frames ui.glass_first's unchanged-tree snapshot reuses the backdrop of), server
 /// (Core Animation animates the stripes in the render server), scroll (the app scrolls the stripes every display
-/// frame), glass (the glass moves over still stripes), slow (scroll every fourth frame), plain (scroll without the
-/// read-back: the frame rate it costs), and appear_whole and glass_whole: appear and glass with every raw process drawing
-/// whole programs (debug switch whole-programs), the control for the split draws. The switch stays on across the two
-/// variants that share it: its -off and -on, posted back to back, may arrive in either order. After each
-/// variant `<variant>_rest=<last>/<after>`: the glass left on screen when the motion stopped against the glass once the
-/// backdrop under it is captured again.
+/// frame), glass (the glass moves over still stripes), slow (scroll every fourth frame) and plain (scroll without the
+/// read-back: the frame rate it costs). After each variant `<variant>_rest=<last>/<after>`: the glass left on screen
+/// when the motion stopped against the glass once the backdrop under it is captured again.
 ///
 /// Each frame is black (R, G, B <= 2 over 90% of the band), partial (over 2%), dark or good, at its present and, with a
 /// live kernel, at the end of its time on screen (the next present reads it again); changed= counts frames whose pixels
@@ -43,10 +40,7 @@ struct UIGlassLiveTest: HWTest {
         var pngs: [String] = []
         var stopped: String?
         let variants = LiveVariant.allCases
-        for (index, variant) in variants.enumerated() where stopped == nil {
-            let forced = variant.forced
-            let next = index + 1 < variants.count ? variants[index + 1].forced : nil
-            if let forced, index == 0 || variants[index - 1].forced != forced { GlassProbe.post(forced + "-on") }
+        for variant in variants where stopped == nil {
             let scene = await context.onStage(fullScreen: true) { stage in LiveScene(stage, hidden: variant.appears)
             }
             await Snapshots.settle()
@@ -70,7 +64,6 @@ struct UIGlassLiveTest: HWTest {
             summaries.append(summary)
             pngs += reader?.saved ?? []
             stopped = reader?.failure.map { "\(variant.rawValue):\($0)" }
-            if let forced, next != forced || stopped != nil { GlassProbe.post(forced + "-off") }
         }
         return Self.outcome(summaries, live: session.live, stopped: stopped, pngs: pngs, directory: directory)
     }
@@ -138,21 +131,11 @@ struct UIGlassLiveTest: HWTest {
 
 enum LiveVariant: String, CaseIterable {
     case still, appear, server, scroll, glass, slow, plain
-    case appearWhole = "appear_whole"
-    case glassWhole = "glass_whole"
 
     var readsBack: Bool { self != .plain }
     var changeless: Bool { self == .still || self == .server || self == .scroll }
-    var appears: Bool { self == .appear || self == .appearWhole }
-    var moves: Bool { self == .glass || self == .glassWhole }
-
-    /// The raw path's debug switch the variant runs under (RawMetalGlassProbe.mm)
-    var forced: String? {
-        switch self {
-        case .appearWhole, .glassWhole: return "whole-programs"
-        default: return nil
-        }
-    }
+    var appears: Bool { self == .appear }
+    var moves: Bool { self == .glass }
 }
 
 /// The stage of ui.glass_live, laid out symmetric about the screen's centre (LiveImage): stripes in a scroll view

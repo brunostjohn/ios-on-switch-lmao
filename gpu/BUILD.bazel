@@ -227,7 +227,6 @@ metal_plugin(
         GM20B_METAL + ":raw/runtime/raw_predication.cpp",
         GM20B_METAL + ":raw/runtime/raw_predicate_loops.cpp",
         GM20B_METAL + ":raw/runtime/raw_private_comp.cpp",
-        GM20B_METAL + ":raw/runtime/raw_draw_shortcuts.cpp",
         GM20B_METAL + ":raw/runtime/raw_resolve_twod.cpp",
         GM20B_METAL + ":raw/runtime/raw_multisample.cpp",
         GM20B_METAL + ":raw/runtime/raw_object_pool.cpp",

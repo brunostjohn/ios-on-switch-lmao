@@ -25,25 +25,26 @@ bool m2vClear()
     return gRM->gpuOrder ? gRM->m2vUnscheduled == 0 : gRM->m2vPending == 0;
 }
 
-// The kernel refused an Order: the drivers are ordered on the CPU until the kernel makes the raw channel again (one line).
-void orderRefused(const char *what, int kr)
+// The kernel refused an Order: the command buffer that needed it fails with this (one error line); the next command buffer
+// is ordered afresh
+NSString *orderRefused(const char *what, int kr)
 {
-    once([NSString stringWithFormat:@"CPU-ordered: the kernel refused Order (%s, 0x%x)", what, kr]);
+    os_log_error(rawLog(), "raw: the kernel refused Order (%{public}s, 0x%x): its command buffer fails", what, kr);
     RAW_DIAGNOSTIC(gRM->stats.cpuOrdered++);
-    std::lock_guard<raw::Mutex> m(gRM->m2vLock);
-    gRM->gpuOrder = false;
-    gRM->orderRefusedAt = gRM->raw->stats.reopens.load(std::memory_order_relaxed);
+    return [NSString stringWithFormat:@"The kernel refused to order the work of two drivers (%s, 0x%x)", what, kr];
 }
 
-// A raw submission went through on a channel the kernel made since it refused an Order: GPU order again
-static void orderReturned()
+// `cb` failed for `reason`, finished: what a submission that cannot go on returns
+static bool failSubmission(RMCommandBuffer *cb, NSString *reason)
 {
-    RawState &r = *gRM;
-    if (!raw::orderReturns(r.gpuOrder, r.raw->canOrder(), r.raw->stats.reopens.load(std::memory_order_relaxed),
-                           r.orderRefusedAt))
-        return;
-    std::lock_guard<raw::Mutex> m(r.m2vLock);
-    r.gpuOrder = true;
+    failCommandBuffer(cb, reason);
+    NSError *error = nil;
+    {
+        std::lock_guard<raw::Mutex> l(cb->_lock);
+        error = cb->_segError;
+    }
+    finish(cb, error);
+    return true;
 }
 
 static void countDriver(int driver)
@@ -310,10 +311,8 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
                 cb->_why = @"the raw channel is being made again";
                 return false;
             }
-            if (answer == raw::OrderAnswer::refused) {
-                orderRefused("raw after m2v", kr);
-                return false;
-            }
+            if (answer == raw::OrderAnswer::refused)
+                return failSubmission(cb, orderRefused("raw after m2v", kr));
             r.m2vSinceRaw = false;
             RAW_DIAGNOSTIC(r.stats.acquires += waits);
         }
@@ -378,8 +377,6 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
         }
         RAW_DIAGNOSTIC(r.stats.raw++);
         r.rawSinceM2v = true;
-        if (!r.gpuOrder)
-            orderReturned();
         countDriver(1);
         {
             RAW_ENCODE_SPAN(Retire);
@@ -403,10 +400,8 @@ bool submitRange(RMCommandBuffer *cb, bool followed)
         if (r.gpuOrder && r.rawSinceM2v) {
             uint32_t waits = 0;
             const int kr = r.raw->orderOthersAfter(waits);
-            if (kr != KERN_SUCCESS) {
-                orderRefused("m2v after raw", kr);
-                return false;
-            }
+            if (kr != KERN_SUCCESS)
+                return failSubmission(cb, orderRefused("m2v after raw", kr));
             RAW_DIAGNOSTIC(r.stats.acquires += waits);
         }
 #if SWITCH_FRAME_TIMELINE

@@ -12,6 +12,7 @@
 #include "raw_stamps.h"
 #include "raw_icb_compute.h"
 #include "raw_residual.h"
+#include <os/log.h>
 #include "raw_slm.h"
 #include "raw_view.h"
 
@@ -123,7 +124,8 @@ const ComputeState *placeCompute(Device &dev, const ComputeRecord &r)
 
 // What a kernel's reads through argument buffers take of every dispatch, as bindArguments for a state: its root table
 // address (a kernel whose root table holds buffer slots takes its own per dispatch) and ExecutionStatus address words,
-// and its set 1. Its dispatches are refused where the device has no memory for them.
+// and its set 1. Where the device has no memory for them its dispatches are refused until one binds them
+// (rebindKernelArguments); the flag is published last.
 void Device::bindKernelArguments(ComputeState &c, const PackKernel &k)
 {
     const PackKernelEntry *end = k.entry + std::min<uint32_t>(k.entries, kKernelEntries);
@@ -133,21 +135,35 @@ void Device::bindKernelArguments(ComputeState &c, const PackKernel &k)
     if (!k.rootTableWord && !k.statusWord && !k.heapArrays && !tables)
         return;
     std::lock_guard<raw::Mutex> l(lock_);
-    if (!heapMemory()) {
-        c.heapMissing = true;
-        return;
+    const HeapSet *set = nullptr;
+    const bool bound = heapMemory() && (!k.heapArrays || (set = heapSet(heapLayout(k))));
+    if (bound) {
+        const auto address = [&](uint8_t word, uint64_t va) {
+            if (!word || word > 31)
+                return;
+            c.argumentPush[word - 1] = uint32_t(va);
+            c.argumentPush[word] = uint32_t(va >> 32);
+            c.argumentMask |= 3u << (word - 1);
+        };
+        address(k.rootTableWord, k.rootSlots ? 0 : heapTables_.rootTableVa());
+        address(k.statusWord, heapTables_.statusVa());
+        c.heapSet = set;
     }
-    const auto address = [&](uint8_t word, uint64_t va) {
-        if (!word || word > 31)
-            return;
-        c.argumentPush[word - 1] = uint32_t(va);
-        c.argumentPush[word] = uint32_t(va >> 32);
-        c.argumentMask |= 3u << (word - 1);
-    };
-    address(k.rootTableWord, k.rootSlots ? 0 : heapTables_.rootTableVa());
-    address(k.statusWord, heapTables_.statusVa());
-    if (k.heapArrays && !(c.heapSet = heapSet(heapLayout(k))))
-        c.heapMissing = true;
+    __atomic_store_n(&c.heapMissing, !bound, __ATOMIC_RELEASE);
+}
+
+// A placed kernel is never moved (gStates' node), and only this binds its argument words after its placement
+bool Device::rebindKernelArguments(const ComputeState &placed)
+{
+    auto &c = const_cast<ComputeState &>(placed);
+    if (!c.rec)
+        return false;
+    bindKernelArguments(c, *c.rec);
+    const bool bound = !__atomic_load_n(&c.heapMissing, __ATOMIC_ACQUIRE);
+    if (!bound)
+        os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                     "raw: no memory for a kernel's argument tables: this dispatch is refused");
+    return bound;
 }
 
 ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(dev)
@@ -157,12 +173,12 @@ ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(d
     start_ = reinterpret_cast<uint32_t *>(dev_.alloc(dev_.push_, kEncoderWords * 4, 256, va));
     p_ = Push{start_, start_ + kEncoderWords};
     cb_.loops_.openSegment(stream());
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    probeComputeOpening(p_, cb.forms_, cb.lastEngine_, cb.taken_);
-    cb.lastEngine_ = ProbeEngine::Compute;
-#else
-    computeOpening(p_);
-#endif
+    const BarrierForms forms = cb.barrierForms();
+    [[maybe_unused]] const Opened opened =
+        computeEncoderOpening(p_, switchFormFor(forms.switchForm, cb.lastEngine_, BarrierEngine::Compute),
+                              entryFormFor(forms.entry), cb.lastEngine_);
+    cb.lastEngine_ = BarrierEngine::Compute;
+    RAW_DIAGNOSTIC(cb.taken_.count(opened));
 }
 
 void ComputeEncoder::room(uint32_t words)
@@ -543,7 +559,7 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
         *why = "a threadgroup m2v's dispatch region cannot name";
         return false;
     }
-    if (state_->heapMissing) {
+    if (__atomic_load_n(&state_->heapMissing, __ATOMIC_ACQUIRE) && !dev_.rebindKernelArguments(*state_)) {
         *why = "no memory for the tables a kernel reads argument buffers through";
         return false;
     }

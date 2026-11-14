@@ -232,10 +232,11 @@ void installDeviceAnswers(Class cls)
     return NSUInteger((uint64_t(d.width) * f->bpp + align - 1) / align * align);
 }
 
-// The linear alignment m2v's texel rows take (IconRendering's textures over buffers)
+// A texture buffer's start is a linear texture's: the pitch texture header's 32 bytes (IconRendering's textures over
+// buffers)
 - (NSUInteger)minimumTextureBufferAlignmentForPixelFormat:(MTLPixelFormat)format
 {
-    return NSUInteger(deviceAnswer(@selector(minimumLinearTextureAlignmentForPixelFormat:), format));
+    return [(id<MTLDevice>)self minimumLinearTextureAlignmentForPixelFormat:format];
 }
 
 - (BOOL)supportsDynamicLibraries

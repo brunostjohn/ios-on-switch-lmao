@@ -214,6 +214,36 @@ bool writeFreshAhead(RMCommandBuffer *cb, size_t from, size_t to)
     });
 }
 
+bool freshBeforeTransfer(RMTexture *t)
+{
+    t = ownerOf(t);
+    if (!t || !gFresh.extract([t](const FreshEntry &e) {
+            return e.texture == t;
+        }))
+        return true;
+    return rmExcludingSubmissions([t]() -> bool {
+        raw::CommandBuffer *rc = gRM->raw->begin();
+        bool submitted = rc != nullptr;
+        if (submitted) {
+            rc->internalCompletion();
+            raw::BlitEncoder *b = rc->blit();
+            writeFresh(*b, t);
+            b->barrier();
+            b->end();
+            uint32_t seqno = 0;
+            submitted = rc->commit(seqno);
+            if (!submitted)
+                rc->abandon();
+        }
+        if (!submitted) {
+            gFresh.add({t});
+            return false;
+        }
+        gRM->rawSinceM2v = true;
+        return true;
+    });
+}
+
 #if SWITCH_RAW_DIAGNOSTICS
 void traceFreshUses(RMCommandBuffer *cb, size_t begin)
 {

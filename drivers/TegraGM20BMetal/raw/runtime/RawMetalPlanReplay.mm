@@ -2,6 +2,7 @@
 #import "RawMetalPlanAdapters.h"
 #import "RawMetalCounters.h"
 #include "TegraGM20BClockABI.h"
+#include "raw_m2v_views.h"
 
 namespace {
 
@@ -107,15 +108,32 @@ struct ReplayPlanSink {
         if (rasterChanged(next, previous, R::Scissor, &R::scissor) ||
             rasterChanged(next, previous, R::Scissor, &R::scissors) ||
             rasterChanged(next, previous, R::Scissor, &R::scissorsAt)) {
-            [encoder
-                setScissorRect:(MTLScissorRect){next.scissor[0], next.scissor[1], next.scissor[2], next.scissor[3]}];
+            MTLScissorRect rects[raw::kMaxViewports];
+            const uint32_t count = std::clamp<uint32_t>(next.scissors, 1, raw::kMaxViewports);
+            rects[0] = (MTLScissorRect){next.scissor[0], next.scissor[1], next.scissor[2], next.scissor[3]};
+            for (uint32_t j = 1; j < count; j++) {
+                const uint64_t *at = cb->_plan.viewArrays.data() + next.scissorsAt + 4 * j;
+                rects[j] = (MTLScissorRect){at[0], at[1], at[2], at[3]};
+            }
+            if (raw::m2vSingleView(count))
+                [encoder setScissorRect:rects[0]];
+            else
+                [encoder setScissorRects:rects count:count];
         }
         if (rasterChanged(next, previous, R::Viewport, &R::viewport) ||
             rasterChanged(next, previous, R::Viewport, &R::viewports) ||
             rasterChanged(next, previous, R::Viewport, &R::viewportsAt)) {
-            const uint64_t *v = next.viewport.data();
-            [encoder setViewport:(MTLViewport){raw::stateDouble(v[0]), raw::stateDouble(v[1]), raw::stateDouble(v[2]),
-                                               raw::stateDouble(v[3]), raw::stateDouble(v[4]), raw::stateDouble(v[5])}];
+            MTLViewport viewports[raw::kMaxViewports];
+            const uint32_t count = std::clamp<uint32_t>(next.viewports, 1, raw::kMaxViewports);
+            for (uint32_t j = 0; j < count; j++) {
+                const uint64_t *v = j ? cb->_plan.viewArrays.data() + next.viewportsAt + 6 * j : next.viewport.data();
+                viewports[j] = (MTLViewport){raw::stateDouble(v[0]), raw::stateDouble(v[1]), raw::stateDouble(v[2]),
+                                             raw::stateDouble(v[3]), raw::stateDouble(v[4]), raw::stateDouble(v[5])};
+            }
+            if (raw::m2vSingleView(count))
+                [encoder setViewport:viewports[0]];
+            else
+                [encoder setViewports:viewports count:count];
         }
         if (rasterChanged(next, previous, R::Cull, &R::cull))
             [encoder setCullMode:MTLCullMode(next.cull)];

@@ -27,6 +27,11 @@ private:
 // submission is then ordered after (RawMetalSubmit.mm); false when one is pending and the raw path could not submit it
 bool writeFreshAhead(RMCommandBuffer *cb, size_t from, size_t to);
 
+// Before a CPU transfer into or out of `t` (replaceRegion, getBytes): a fresh texture's first contents written now, in a
+// raw submission the transfer follows (its job names the resource set), not by a later one over what the transfer wrote;
+// false when that submission failed (the texture stays fresh)
+bool freshBeforeTransfer(RMTexture *t);
+
 #if SWITCH_RAW_DIAGNOSTICS
 // The encoder at `begin`: a fresh texture it reads before any command wrote it is counted and logged with the encoder that
 // wrote it first (a producer encoded after its consumer)

@@ -58,6 +58,8 @@ struct SurfaceBufferTest: HWTest {
         metrics.set("bgra8_row_100", bgraRow)
         metrics.set("astc_row", astcRow)
         metrics.set("path", path)
+        let answer = NativeUnsupportedTest.answer(gpu.device, "supportsBufferWithIOSurface") ?? -1
+        metrics.set("answer", answer)
         let asked = Set(needsAfter.keys).subtracting(needsBefore.keys).sorted()
         metrics.set("m2v_needs_asked", asked.isEmpty ? "-" : asked.joined(separator: ","))
         var wrong: [String] = []
@@ -69,6 +71,7 @@ struct SurfaceBufferTest: HWTest {
         if astcRow != 0 { wrong.append("astc_row") }
         if path != "raw" { wrong.append("path") }
         if !asked.isEmpty { wrong.append("m2v") }
+        if answer != 1 { wrong.append("answer") }
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
     }
 }

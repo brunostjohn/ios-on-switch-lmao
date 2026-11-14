@@ -81,6 +81,13 @@ kernel void read_float_texture(texture2d<float, access::read> texture [[texture(
         out[id.y * texture.get_width() + id.x] = texture.read(id);
 }
 
+kernel void read_texture_buffer(texture_buffer<float> texels [[texture(0)]], device float4 *out [[buffer(0)]],
+                                uint id [[thread_position_in_grid]])
+{
+    if (id < texels.get_width())
+        out[id] = texels.read(id);
+}
+
 /// Samples at texel centres with nearest filtering: the only way to read a block-compressed texture back.
 kernel void sample_texture(texture2d<float> texture [[texture(0)]], device float4 *out [[buffer(0)]],
                            uint2 id [[thread_position_in_grid]])

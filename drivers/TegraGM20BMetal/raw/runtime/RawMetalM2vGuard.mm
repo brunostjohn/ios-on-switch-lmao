@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: MIT
 // What m2v has no form of: its frontend's encoders implement no drawPatches:, setTessellationFactorBuffer:,
-// setVertexAmplificationCount:viewMappings: or attribute stride forms (NativeBridgeMetalFrontend.mm answers each zero,
-// so m2v draws without them) and it makes no indirect command buffer; a state the raw path made of tessellation,
-// amplification, a dynamic attribute stride or stage-in is drawn by raw alone (a stride form's stride is read by such
-// states only, so the replay binds every other state's buffers by the plain forms); the replay of indirect draw commands
-// reads no range the GPU wrote (replayCommands); m2v has no layered form of a state the raw path made for one layer only
-// (raw_layers.h layeredDrawMissing). A range of a command buffer the raw path refused that holds any of these never
-// replays there: the command buffer fails as Metal reports an error, naming the refusal.
+// setVertexAmplificationCount:viewMappings:, viewport or scissor arrays (raw_m2v_views.h) or attribute stride forms
+// (NativeBridgeMetalFrontend.mm answers each zero, so m2v draws without them) and it makes no indirect command buffer;
+// a state the raw path made of tessellation, amplification, a dynamic attribute stride or stage-in is drawn by raw
+// alone (a stride form's stride is read by such states only, so the replay binds every other state's buffers by the
+// plain forms); the replay of indirect draw commands reads no range the GPU wrote (replayCommands); m2v has no layered
+// form of a state the raw path made for one layer only (raw_layers.h layeredDrawMissing). A range of a command buffer
+// the raw path refused that holds any of these never replays there: the command buffer fails as Metal reports an
+// error, naming the refusal.
 #import "RawMetalIndirectCompute.h"
 #include "raw_layers.h"
+#include "raw_m2v_views.h"
 
 namespace {
 
@@ -25,6 +27,8 @@ const char *drawMissing(RMCommandBuffer *cb, size_t at, Op op, uint32_t layers)
     const raw::RasterState &raster = plan.raster[state.raster];
     if (raster.amplification[0] > 1)
         return "a vertex amplification count above 1";
+    if (const char *missing = raw::m2vViewsMissing(raster.viewports, raster.scissors))
+        return missing;
     id pipeline = (__bridge id)raster.pipeline;
     if ([pipeline isKindOfClass:[RMPipeline class]] && ((RMPipeline *)pipeline)->_m2vMissing)
         return ((RMPipeline *)pipeline)->_m2vMissing;

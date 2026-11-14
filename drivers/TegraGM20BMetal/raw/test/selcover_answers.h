@@ -55,6 +55,7 @@ inline unsigned differ(id raw, id m2v, unsigned &compared)
     static const std::set<std::string> rawOwn = {"minConstantBufferAlignmentBytes",
                                                  "deviceLinearReadOnlyTextureAlignmentBytes",
                                                  "minimumLinearTextureAlignmentForPixelFormat:",
+                                                 "minimumTextureBufferAlignmentForPixelFormat:",
                                                  "supports32BitFloatFiltering",
                                                  "maxVertexAmplificationCount",
                                                  "maxVertexAmplificationFactor",
@@ -64,7 +65,16 @@ inline unsigned differ(id raw, id m2v, unsigned &compared)
                                                  "supportsTessellation",
                                                  "supportsIndirectTessellation",
                                                  "maxTessellationFactor",
-                                                 "supportsCommandBufferJump"};
+                                                 "supportsCommandBufferJump",
+                                                 "supportsBufferWithIOSurface",
+                                                 "supportsSIMDReduction",
+                                                 "supportsSIMDShuffleAndFill",
+                                                 "supportsSIMDGroup",
+                                                 "areRasterOrderGroupsSupported",
+                                                 "supportsRasterOrderGroups",
+                                                 "supportsNativeHardwareFP16",
+                                                 "isFramebufferReadSupported",
+                                                 "supportsProgrammableBlending"};
     unsigned bad = 0;
     auto check = [&](const char *name, NSUInteger a, uint64_t r, uint64_t m) {
         compared++;

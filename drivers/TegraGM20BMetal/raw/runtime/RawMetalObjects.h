@@ -206,6 +206,8 @@ enum class RMShareable : uint8_t {
     bool _completable;  // both its functions are this device's (the runtime makes its record if the pack has none)
     bool _archived;     // an archive its creation listed declares it: its twin is made as a packed one's
     bool _caTransform;
+    // its alpha to coverage and alpha to one (raw_alpha_control.h), which its key does not hold
+    uint32_t _alphaControl;
     std::string _failure;  // why its creation failed (Completion::makeNow), as Metal's would
     std::string _key;      // its pack key (completable states')
     MTLRenderPipelineDescriptor
@@ -215,6 +217,8 @@ enum class RMShareable : uint8_t {
     bool _twinLater;                 // replay (rmTwin), with these options
     raw::Mutex _variantLock;
     std::map<std::string, std::shared_ptr<raw::Variant<raw::Pipeline>>> _variants;
+    // a failed variant asked afresh by a later draw: the one it replaced stays alive for the plans that name it
+    std::vector<std::shared_ptr<raw::Variant<raw::Pipeline>>> _replacedVariants;
     raw::Obtained _obtained;  // debug builds: how its creation got its record
 }
 @end

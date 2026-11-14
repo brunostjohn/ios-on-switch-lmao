@@ -100,6 +100,18 @@ final class SceneTests: XCTestCase {
         XCTAssertTrue(result.passed, result.reasons(limit: 8).joined(separator: "; "))
     }
 
+    func testSimdGroupOnThisMac() async throws {
+        let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.compute.simd_group" })
+        let result = try await scene.run(makeGPU())
+        XCTAssertTrue(result.passed, result.reasons(limit: 8).joined(separator: "; "))
+    }
+
+    func testRasterOrderOnThisMac() async throws {
+        let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.raw.raster_order" })
+        let result = try await scene.run(makeGPU())
+        XCTAssertTrue(result.passed, result.reasons(limit: 8).joined(separator: "; "))
+    }
+
     func testSM53CandidateSemantics() {
         XCTAssertEqual(SM53Reference.flushedHalf(Float16(bitPattern: 1)).bitPattern, 0)
         XCTAssertEqual(SM53Reference.flushedHalf(Float16(bitPattern: 0x8001)).bitPattern, 0x8000_0000)

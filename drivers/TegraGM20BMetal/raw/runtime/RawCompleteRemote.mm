@@ -77,13 +77,6 @@ void Completion::noteObtained(const Obtained &o)
     tObtained = o;
 }
 
-void Completion::compiledHere(InProcess::Why why)
-{
-    if (inProcess_.compiled(why))
-        os_log_error(rawLog(), "raw: %{public}s compiles a state itself: %{public}s", getprogname(),
-                     InProcess::text(why));
-}
-
 bool Completion::renderRequest(const Ask &a, const CacheKey &k, bool bytes, CompileRequest &r, Digest &name, bool every)
 {
     MTLRenderPipelineDescriptor *d = a.facade;
@@ -291,21 +284,28 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
     if (!request(false))
         return Compiler::Outcome::Failed;
     RecordCache::Found found = stored();
+    AskFailure failure = AskFailure::None;
     for (const bool again : {false, true}) {
         if (found != RecordCache::Found::None || !remote_->taking() || (again && !request(true)))
             break;
         const Remote::Answer answer = remote_->compile(encodeRequest(r));
         if (answer == Remote::Answer::Made || answer == Remote::Answer::Refused)
             found = stored();
-        if (askFailure(answer, found != RecordCache::Found::None, false) == AskFailure::CouldNotRun) {
+        failure = askFailure(answer, found != RecordCache::Found::None, remote_->declined());
+        if (failure == AskFailure::CouldNotRun) {
             taken = true;
             return Compiler::Outcome::Failed;
         }
         if (askNext(answer, found != RecordCache::Found::None, again, remote_->declined()) != AskNext::AskAgain)
             break;
     }
-    if (found == RecordCache::Found::None)
+    if (found == RecordCache::Found::None) {
+        why = failure == AskFailure::NotTaken          ? kNotTaken
+              : failure == AskFailure::NotStored       ? kNotStored
+              : failure == AskFailure::NoCompilerComes ? kNoCompilerComes
+                                                       : "";
         return Compiler::Outcome::Failed;
+    }
     taken = true;
     return found == RecordCache::Found::Record ? Compiler::Outcome::Made : Compiler::Outcome::Refused;
 }

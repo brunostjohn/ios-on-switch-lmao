@@ -110,3 +110,16 @@ fragment float4 fetch_blend_resolve_fragment(float4 second [[color(1)]])
 {
     return second;
 }
+
+struct FetchPosition {
+    float4 position [[position]];
+};
+
+/// RenderBox's coverage takes fwidth of a distance (RB::Shader::primitive_shape): a fetching program's derivatives of
+/// x / 4 + y / 2 in its window, scaled to codes the target holds exactly (dfdx 0.25 as 0.5, |dfdy| 0.5, fwidth 0.75 as
+/// 0.375), alpha the fetched one so the colour is read
+fragment float4 fetch_derivative_fragment(FetchPosition v [[stage_in]], float4 previous [[color(0)]])
+{
+    const float f = v.position.x * 0.25f + v.position.y * 0.5f;
+    return float4(dfdx(f) * 2.0f, abs(dfdy(f)), fwidth(f) * 0.5f, previous.a);
+}

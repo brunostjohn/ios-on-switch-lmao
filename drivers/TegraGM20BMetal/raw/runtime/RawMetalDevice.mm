@@ -46,6 +46,8 @@
     }
     d[@"cpu_ordered"] = @(s.cpuOrdered.load());
     d[@"split_prologues"] = @(gRM->raw->stats.splitLaunches.load());
+    d[@"split_room_refusals"] = @(gRM->raw->stats.splitRoomRefusals.load());
+    d[@"heap_full"] = @(gRM->raw->stats.heapFull.load());
     d[@"interlock_draws"] = @(gRM->raw->stats.interlockDraws.load());
     d[@"banded_draws"] = @(gRM->raw->stats.bandedDraws.load());
     d[@"bands"] = @(gRM->raw->stats.bands.load());
@@ -58,14 +60,17 @@
     d[@"blend_kill_states"] = @(gRM->raw->stats.blendKillStates.load());
     d[@"blend_kill_binds"] = @(gRM->raw->stats.blendKillBinds.load());
     d[@"resolve_twod"] = @(gRM->raw->stats.resolveTwod.load());
+    d[@"fill_twod"] = @(gRM->raw->stats.fillTwod.load());
     d[@"resolve_exact"] = @(gRM->raw->stats.resolveExact.load());
-    d[@"blur_twod_passes"] = @(gRM->raw->stats.blurTwodPasses.load());
+    d[@"resolve_twod_compressed"] = @(gRM->raw->stats.resolveTwodCompressed.load());
     d[@"zcull_passes"] = @(gRM->raw->stats.zcullPasses.load());
     d[@"zcull_invalidations"] = @(gRM->raw->stats.zcullInvalidations.load());
+    d[@"zcull_loads"] = @(gRM->raw->stats.zcullLoads.load());
     d[@"state_segment_binds"] = @(gRM->raw->stats.segmentBinds.load());
     d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
     d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());
     d[@"state_segment_extras_losses"] = @(gRM->raw->stats.segmentExtrasLosses.load());
+    d[@"state_segment_copies"] = @(gRM->raw->stats.segmentCopies.load());
     {
         const raw::EncodeTotals &encode = gRM->raw->stats.encode;
         const double perUs = raw::encodeTicksPerUs();
@@ -84,7 +89,6 @@
     d[@"mip_3d_levels"] = @(gRM->raw->stats.mip3dLevels.load());
     d[@"private_compressed"] = @(gRM->raw->privateMade());
     d[@"private_moves"] = @(gRM->raw->privateTransitions());
-    d[@"compiled_here"] = @(gRM->completion ? gRM->completion->compiledHere() : 0);
 #if SWITCH_RAW_DIAGNOSTICS
     d[@"loop_continuations"] = @(gRM->stats.loopContinuations.load());
 #endif
@@ -98,6 +102,7 @@
     d[@"fetch_rung2"] = @(fetch.fetchFree[0].load());
     d[@"fetch_rung3"] = @(fetch.fetchFree[1].load());
     d[@"fetch_blend_twin"] = @(fetch.blendTwin.load());
+    d[@"fetch_twin_rule"] = @(fetch.twinRule.load());
     for (size_t r = 1; r < raw::kFetchRefusals; r++) {
         if (const uint64_t n = fetch.refusedAtRecord[r].load())
             d[[NSString stringWithFormat:@"fetch_record.%s", raw::kFetchRefusalNames[r]]] = @(n);
@@ -245,13 +250,6 @@
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
     b->_raw.hostVisible = (o & MTLResourceStorageModeMask) != MTLResourceStorageModePrivate;
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (rmZeroNewBuffers() && b->_raw.cpu) {
-        memset(b->_raw.cpu, 0, b->_raw.length);
-        if (!b->_raw.wc)
-            cacheLines(b->_raw.cpu, b->_raw.length, false);
-    }
-#endif
     return (id<MTLBuffer>)b;
 }
 
@@ -342,11 +340,15 @@
     return (id<MTLTexture>)t;
 }
 
-// A private texture the CPU never touches is block-linear (TegraGM20BLayout.h), as NVK lays out an optimal image and m2v's
-// view of it is (texture_tiled_in_place).
+// A private or shared texture of its own memory is block-linear (TegraGM20BLayout.h), as NVK lays out an optimal image and
+// m2v's view of it is (texture_tiled_in_place). The CPU reaches a shared one only through replaceRegion and getBytes,
+// which go through the copy engine (transferTexture) or swizzle (cpuTiled); textures over buffers, IOSurfaces and
+// caller pages stay pitch, as another binding names those bytes.
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
 {
-    return swizzled([self rmNewTexture:d tiled:d.storageMode == MTLStorageModePrivate], d.swizzle);
+    return swizzled([self rmNewTexture:d
+                                 tiled:d.storageMode == MTLStorageModePrivate || d.storageMode == MTLStorageModeShared],
+                    d.swizzle);
 }
 
 #if SWITCH_RAW_DIAGNOSTICS
@@ -381,8 +383,9 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
         t->_device = self;
         t->_descriptor = [d copy];
         t->_kind = RMTexturePool;
-        t->_rawOk = gRM->raw->createMipTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
-                                               uint32_t(d.mipmapLevelCount), t->_raw);
+        t->_rawOk =
+            gRM->raw->createMipTexture(uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat),
+                                       uint32_t(d.mipmapLevelCount), t->_raw, nullptr, privateCompressedKind(d));
         if (t->_rawOk) {
 #if SWITCH_RAW_DIAGNOSTICS
             reportNonFiniteStart(t, d);
@@ -443,7 +446,8 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
         t->_rawOk = gRM->raw->createArray(
             uint32_t(d.width), uint32_t(d.height),
             raw::textureLayers(uint32_t(d.textureType), uint32_t(std::min<NSUInteger>(d.arrayLength, 2048))),
-            uint32_t(d.pixelFormat), array, t->_raw, uint32_t(std::max<NSUInteger>(d.mipmapLevelCount, 1)));
+            uint32_t(d.pixelFormat), array, t->_raw, uint32_t(std::max<NSUInteger>(d.mipmapLevelCount, 1)), nullptr,
+            privateCompressedKind(d));
     } else if (d.storageMode != MTLStorageModeMemoryless && zetaDescriptor(d)) {
         t->_kind = RMTexturePool;
         t->_rawOk = makeStoredZeta(d, t->_raw);
@@ -456,7 +460,8 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
             t->_rawOk = gRM->raw->createXrMemoryless(t->_raw);
     } else {
         t->_kind = RMTexturePool;
-        // a shared texture (the CPU writes it: replaceRegion) in write-combined memory: its rows need no clean after
+        // a shared texture of a shape that does not tile (the CPU writes it: replaceRegion) in write-combined memory: its
+        // rows need no clean after
         const uint32_t kind = tiled ? privateCompressedKind(d) : 0;
         t->_rawOk = (kind && gRM->raw->createCompressedTexture(uint32_t(d.width), uint32_t(d.height),
                                                                uint32_t(d.pixelFormat), kind, t->_raw)) ||

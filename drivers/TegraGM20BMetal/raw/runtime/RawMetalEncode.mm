@@ -3,6 +3,7 @@
 #import "RawMetalCounters.h"
 #import "RawMetalPlanAdapters.h"
 #import "RawMetalPassFusion.h"
+#import "RawMetalPassUses.h"
 #import "RawMetalReach.h"
 #import "RawMetalResolveAsk.h"
 #import "RawMetalSplitPlan.h"
@@ -52,7 +53,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
     rc->internalCompletion();
     beginInlineSignals(cb);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    rc->forceWholePrograms(cb->_forceWholePrograms || rmWholePrograms());
+    rc->forceWholePrograms(cb->_forceWholePrograms);
     rc->inlineStates(cb->_inlineStates);
 #endif
     if (validateNativeEventWaits(cb, generation) != raw::EventDependencyState::ready) {
@@ -118,6 +119,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
     raw::StateCursor stateCursor;
     raw::FusionPass fused;
     size_t fusedAt = SIZE_MAX;
+    raw::PassUses planned;
     RMCounterEmit counters(cb, from, to, *rc);
     size_t renderBegin = to;
     bool continuing = false;
@@ -274,7 +276,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             if (d.probeResolveDraw.load(std::memory_order_relaxed))
                 route = raw::ResolveByPass;
-            else if (raw::twodResolveShape(ask) && d.probeResolveExact.load(std::memory_order_relaxed))
+            else if (raw::twodResolveComplementShape(ask) && d.probeResolveExact.load(std::memory_order_relaxed))
                 route = raw::ResolveByComplement;
 #endif
             // a turned target's resolve is its state's turned variant, which reads the frame's position
@@ -627,6 +629,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                         stores |= uint8_t(1u << i);
                 re->continuePass(stores);
                 planSplitPrograms(cb, at, *re);
+                planPassUses(cb, at, planned);
                 break;
             }
             raw::PassDesc p;
@@ -721,6 +724,10 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                 p.depthStencil.loaded = pass.depthLoad == MTLLoadActionLoad || pass.stencilLoad == MTLLoadActionLoad;
                 p.depthStencil.stored =
                     pass.zeta[0].store != MTLStoreActionDontCare || pass.zeta[1].store != MTLStoreActionDontCare;
+                p.depthStencil.loadedLater =
+                    std::any_of(cb->_passes.begin() + c.x + 1, cb->_passes.end(), [&](const RMPass &later) {
+                        return later.depth == pass.depth && later.depthLoad == MTLLoadActionLoad;
+                    });
                 p.depthStencil.depth = float(std::clamp(pass.clearDepth, 0.0, 1.0));
                 p.depthStencil.stencil = pass.clearStencil;
             }
@@ -741,6 +748,9 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                 return fail(PredEncPassRender, "a pass the raw path cannot render to", p.count);
             counters.started(at, *re);
             planSplitPrograms(cb, at, *re);
+            planned = raw::PassUses{};
+            planned.known = !cb->_sampledShadows && !cb->_standIns;
+            planPassUses(cb, at, planned);
             break;
         }
         case OpBlit:
@@ -774,8 +784,10 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                     }
                 }
             }
-            if (re)
+            if (re) {
+                re->plan(planned);
                 re->end();
+            }
             standInBackings();
             if (re && !resolvePasses())
                 return false;

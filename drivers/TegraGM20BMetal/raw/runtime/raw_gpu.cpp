@@ -29,6 +29,7 @@
 #include "../../../../kits/SwitchGM20BEmit/SwitchGM20BEmitRaster.h"
 #include "raw_mme.h"
 #include "raw_mip.h"
+#include "../fx/fx_mip_probe.h"
 #include "../fx/fx_mip_route.h"
 #include "raw_owned.h"
 #include "raw_cbuf.h"
@@ -46,6 +47,7 @@
 #include "raw_storage.h"
 #include "raw_surface_view.h"
 #include "raw_native_surface.h"
+#include "raw_pass_uses.h"
 #include "raw_target.h"
 #include "raw_tiled_cache.h"
 #include "raw_view.h"
@@ -168,8 +170,6 @@ constexpr uint32_t kInvalidateInstruction = NVDEF(NVB197, INVALIDATE_SHADER_CACH
                    kInvalidateConstant = NVDEF(NVB197, INVALIDATE_SHADER_CACHES, CONSTANT, TRUE);
 // An instance of a draw: BEGIN with INSTANCE_ID SUBSEQUENT (two words), the first vertex or index and the count (three), END
 constexpr uint32_t kInstanceWords = 6;
-// a draw's shortcuts around its BEGIN/END (raw_draw_shortcuts.cpp): constant colour on and off, fill via triangle on and off
-constexpr uint32_t kShortcutWords = 2 * (SWITCH_GM20B_CONSTANT_COLOR_WORDS + SWITCH_GM20B_FILL_VIA_TRIANGLE_WORDS);
 // NVK's copies of pitch memory (nouveau_copy_rect)
 constexpr uint32_t kLaunchPitch =
     NVDEF(NVB0B5, LAUNCH_DMA, DATA_TRANSFER_TYPE, PIPELINED) | NVDEF(NVB0B5, LAUNCH_DMA, FLUSH_ENABLE, TRUE) |
@@ -554,11 +554,14 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
     if (role == Role::RenderServer)
         glassMem = std::make_unique<GlassMem>();
 #endif
+    openFailure_ = OpenFailure::Structural;
     if (!pack_.load(packPath, stack, err))
         return false;
+    openFailure_ = OpenFailure::Transient;
     if (!k_.open(err))
         return false;
     if (k_.info().cls_eng3d != 0xb197 || k_.info().cls_copy != 0xb0b5) {
+        openFailure_ = OpenFailure::Structural;
         err = "not a MAXWELL_B with MAXWELL_DMA_COPY_A";
         return false;
     }
@@ -649,6 +652,7 @@ bool Device::init(std::string &err)
     }
     const uint32_t *cs = pack_.section<uint32_t>(PackSamplers);
     if (pack_.header()->samplers > kConstexprSamplers) {
+        openFailure_ = OpenFailure::Structural;
         err = "the pack's constexpr samplers do not fit its entries' sampler byte";
         return false;
     }
@@ -1093,29 +1097,45 @@ void Device::forgetSampler(const Sampler &s, Sampler &twin)
 
 // lock_ held: what `pl`'s reads through argument buffers take of every draw: each stage's root table address (a stage whose
 // root table holds buffer slots takes its own per draw: RenderEncoder::rootTable) and ExecutionStatus address in its push
-// words, and its set 1. Its draws are refused where the device has no memory for them.
+// words, and its set 1. Where the device has no memory for them its draws are refused until one binds them
+// (rebindArguments); the flag is published last, so a draw that reads it clear reads the words.
 void Device::bindArguments(Pipeline &pl, const PackPipeline &pp)
 {
     const bool roots = pp.rootTableWord[0] || pp.rootTableWord[1] || pp.statusWord[0] || pp.statusWord[1];
     if (!roots && !pp.heapArrays)
         return;
-    if (!heapMemory()) {
-        pl.heapMissing = true;
-        return;
+    const HeapSet *set = nullptr;
+    const bool bound = heapMemory() && (!pp.heapArrays || (set = heapSet(heapLayout(pp))));
+    if (bound) {
+        const auto address = [&](uint8_t word, uint64_t va) {
+            if (!word || word > 31)
+                return;
+            pl.push[word - 1] = uint32_t(va);
+            pl.push[word] = uint32_t(va >> 32);
+            pl.pushMask |= 3u << (word - 1);
+        };
+        for (uint32_t k = 0; k < 2; k++) {
+            address(pp.rootTableWord[k], pp.rootSlots[k] ? 0 : heapTables_.rootTableVa());
+            address(pp.statusWord[k], heapTables_.statusVa());
+        }
+        pl.heapSet = set;
     }
-    const auto address = [&](uint8_t word, uint64_t va) {
-        if (!word || word > 31)
-            return;
-        pl.push[word - 1] = uint32_t(va);
-        pl.push[word] = uint32_t(va >> 32);
-        pl.pushMask |= 3u << (word - 1);
-    };
-    for (uint32_t k = 0; k < 2; k++) {
-        address(pp.rootTableWord[k], pp.rootSlots[k] ? 0 : heapTables_.rootTableVa());
-        address(pp.statusWord[k], heapTables_.statusVa());
-    }
-    if (pp.heapArrays && !(pl.heapSet = heapSet(heapLayout(pp))))
-        pl.heapMissing = true;
+    __atomic_store_n(&pl.heapMissing, !bound, __ATOMIC_RELEASE);
+}
+
+bool Device::rebindArguments(Pipeline &pl)
+{
+    RAW_ENCODE_LOCK(l, lock_);
+    if (!__atomic_load_n(&pl.heapMissing, __ATOMIC_ACQUIRE))
+        return true;
+    if (!pl.rec)
+        return false;
+    bindArguments(pl, *pl.rec);
+    const bool bound = !__atomic_load_n(&pl.heapMissing, __ATOMIC_RELAXED);
+    if (!bound)
+        os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+                     "raw: no memory for a state's argument tables: this draw is refused");
+    return bound;
 }
 
 // A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers
@@ -1123,7 +1143,7 @@ void Device::bindArguments(Pipeline &pl, const PackPipeline &pp)
 // the pipeline's blend has no barrier twin to fall back on: its barrier form leaves the blend to the ROP after a fetch
 // outside the interlock, which keeps Metal's result only drawn a triangle at a time. A pass it cannot view as its storage
 // images refuses its draws (RenderEncoder::prepare), as Metal fails a state drawn into attachments it was not made for.
-// Debug builds place that form as its blendTwin, which only the probe draws, to measure it against the storage form.
+// That form is its blendTwin, which a draw takes a triangle at a time where rule fetch.twin holds (raw_twin_rule.h).
 Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 {
     Pipeline *pl = placePipeline(keyHash, form, caTransform);
@@ -1135,10 +1155,6 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
     }
     if (form != PackForm::Default || !pl || !pl->storageBits)
         return pl;
-#if defined(SWITCH_DEBUG) && !SWITCH_DEBUG
-    if (pl->storageBlendBits)
-        return pl;
-#endif
     Pipeline *twin = placePipeline(keyHash, PackForm::Barrier, caTransform);
     std::lock_guard<raw::Mutex> l(lock_);
     if (twin && twin != pl && !twin->storageBits)
@@ -1183,14 +1199,13 @@ std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(uint64_
             pl = placeRecord(*rec, caTransform);
         }
         // a storage form's barrier twin, as Device::pipeline gives a state's own
-        const PackPipeline *barrier = pl && pl->storageBits && !pl->storageBlendBits
-                                          ? pack_.variantRecord(keyHash, name, PackForm::Barrier)
-                                          : nullptr;
+        const PackPipeline *barrier =
+            pl && pl->storageBits ? pack_.variantRecord(keyHash, name, PackForm::Barrier) : nullptr;
         if (usableRecord(barrier)) {
             std::lock_guard<raw::Mutex> l(lock_);
             Pipeline *twin = placeRecord(*barrier, caTransform);
             if (twin && twin != pl && !twin->storageBits)
-                pl->barrierTwin = twin;
+                (pl->storageBlendBits ? pl->blendTwin : pl->barrierTwin) = twin;
         }
         out.emplace_back(name, pl);
     }
@@ -1415,6 +1430,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
         tests |= (m == DEPTH_TEST || m == STENCIL_TEST || m == ANTI_ALIAS_ALPHA_CONTROL) && (v & 1);
+        pl.namesAlphaControl |= m == ANTI_ALIAS_ALPHA_CONTROL;
         if (m == HYBRID_ANTI_ALIAS_CONTROL)
             pl.samplePasses = uint8_t(std::max(1u, v & 0xf));
     }
@@ -1993,9 +2009,9 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
     std::lock_guard<raw::Mutex> l(lock_);
     const uint64_t bytes = uint64_t(t.pitch) * t.height;
     tgm_layout bl;
-    const bool laid = !wc && plainTiled(t, tiled, bl);
+    const bool laid = plainTiled(t, tiled, bl);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (probeCompressNext.exchange(false) && laid && !blocks && compressedKind(t.bpp, 0))
+    if (probeCompressNext.exchange(false) && laid && !wc && !blocks && compressedKind(t.bpp, 0))
         return probeCompressible(bl, t);
 #endif
     if (laid && blAlloc(bl.bytes, bl.align, t.span)) {
@@ -2157,9 +2173,11 @@ bool Device::createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at)
     const uint32_t z = zetaFormatIndex(ask.format);
     std::lock_guard<raw::Mutex> l(lock_);
     Span owned;
-    const bool placed = at     ? arenaSpan(*at, bytes, align, kind, t)
-                        : zeta ? tiledAlloc(zChunks_[z], kind, bytes, align, owned)
-                               : blAlloc(bytes, align, t.span);
+    Bo comp;
+    const bool compressed = ask.compressKind && !at && !zeta && takeCompressed(bytes, ask.compressKind, comp);
+    const bool placed = compressed || (at     ? arenaSpan(*at, bytes, align, kind, t)
+                                       : zeta ? tiledAlloc(zChunks_[z], kind, bytes, align, owned)
+                                              : blAlloc(bytes, align, t.span));
     if (!placed) {
         delete chain;
         return false;
@@ -2167,7 +2185,9 @@ bool Device::createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at)
     const Span &span = zeta && !at ? owned : t.span;
     if ((!zeta || ask.sampled || ask.samples > 1) && !(t.tic = allocTic())) {
         Lease *none = nullptr;
-        if (zeta && !at)
+        if (compressed)
+            comp_.ready.push_back({comp, ask.compressKind, commits(), compClock()});
+        else if (zeta && !at)
             tiledFree(zChunks_[z], owned);
         else
             freeSpan(t.span, memoryOf(t), none);
@@ -2175,7 +2195,9 @@ bool Device::createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at)
         return false;
     }
     t.va = span.va;
-    if (zeta) {
+    if (compressed) {
+        noteCompressed(ask, comp, bytes, t);
+    } else if (zeta) {
         t.storage = {span.va, bytes, false};
         if (!at)
             ownedZeta_[span.va] = {z, owned};
@@ -2185,7 +2207,7 @@ bool Device::createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at)
     if (chain) {
         const FormatInfo *f = formatInfo(ask.format);
         chain->va = t.va;
-        chain->fmt2d = fx::twodFormat(ask.format);
+        chain->fmt2d = fx::twodChainFormat(ask.format);
         uint32_t w[8];
         fx::mipChainTic(chain->layout, chain->va, f->tic0, f->srgb, 0, ask.levels, w);
         // the texture's header: the chain's (visible at the next header invalidate)
@@ -2225,10 +2247,11 @@ bool Device::createVolume(uint32_t width, uint32_t height, uint32_t depth, uint3
 }
 
 bool Device::createArray(uint32_t width, uint32_t height, uint32_t layers, uint32_t format, uint32_t type, Texture &t,
-                         uint32_t levels, const ArenaAt *at)
+                         uint32_t levels, const ArenaAt *at, uint32_t compressKind)
 {
     TextureAsk ask;
     ask.kind = TextureAsk::Array;
+    ask.compressKind = compressKind;
     ask.width = width;
     ask.height = height;
     ask.layers = layers;
@@ -2256,7 +2279,7 @@ void Device::layImage(const fx::MipChain &c, const FormatInfo *f, uint8_t type, 
     t.chain = new Texture::Chain;
     t.chain->layout = c;
     t.chain->va = t.va;
-    t.chain->fmt2d = volume ? 0 : fx::twodFormat(t.format);
+    t.chain->fmt2d = volume ? 0 : fx::twodChainFormat(t.format);
     uint32_t w[8];
     fx::mipChainTic(c, t.va, f->tic0, f->srgb, 0, c.levels, w, type);
     memcpy(tic_.cpu + 32 * t.tic, w, 32);  // visible at the next submission's header invalidate
@@ -2478,6 +2501,7 @@ bool Device::createView(const Texture &of, uint32_t format, Texture &t)
     t.chain = nullptr;  // a mipmapped texture's view: every level sampled, level 0 rendered and copied
     if (!(t.tic = allocTic()))
         return false;
+    noteView(of, t);
     if (of.chain) {
         uint32_t w[8];
         fx::mipChainTic(of.chain->layout, of.va, f->tic0, f->srgb, 0, of.chain->layout.levels, w, of.type);
@@ -2540,6 +2564,7 @@ bool Device::createPartView(const Texture &of, uint32_t format, uint32_t type, u
     t.wc = false;
     if (!(t.tic = allocTic()))
         return false;
+    noteView(of, t);
     uint32_t w[8];
     fx::mipChainTic(c, va, f->tic0, f->srgb, baseLevel, levels, w, type);
     memcpy(tic_.cpu + 32 * t.tic, w, 32);
@@ -2791,10 +2816,11 @@ uint64_t Device::blPitchVa(const Span &s)
 }
 
 bool Device::createMipTexture(uint32_t width, uint32_t height, uint32_t format, uint32_t levels, Texture &t,
-                              const ArenaAt *at)
+                              const ArenaAt *at, uint32_t compressKind)
 {
     TextureAsk ask;
     ask.kind = TextureAsk::Mips;
+    ask.compressKind = compressKind;
     ask.width = width;
     ask.height = height;
     ask.levels = levels;
@@ -2904,6 +2930,7 @@ void Device::destroyTexture(Texture &t)
 #endif
     if (t.view) {
         std::lock_guard<raw::Mutex> l(lock_);
+        forgetView(t);
         if (t.tic) {
             freeTic(t.tic);
         }
@@ -3710,7 +3737,7 @@ Texture *Device::lastBacking(const Texture &m, uint32_t tag, bool blockLinear, b
 {
     const uint64_t epoch = backingEpoch_.load(std::memory_order_seq_cst);
     for (const BackingAsk &ask : asks_) {
-        if (ask.epoch != epoch || !ask.same(m, tag, blockLinear, compression, copied, zetaKindsProbed()))
+        if (ask.epoch != epoch || !ask.same(m, tag, blockLinear, compression, copied, kindProbes()))
             continue;
         Backing *b = ask.backing;
         b->lastCommit.store(commitCount_, std::memory_order_relaxed);
@@ -3723,8 +3750,8 @@ Texture *Device::lastBacking(const Texture &m, uint32_t tag, bool blockLinear, b
 
 Texture *Device::backing(const Texture &m, uint32_t tag, bool blockLinear, bool compression, bool copied)
 {
-    BackingAsk ask{m.width, m.height,    m.format,    tag,    std::max(m.layers, 1u), m.samples,
-                   m.zeta,  blockLinear, compression, copied, zetaKindsProbed()};
+    BackingAsk ask{m.width,     m.height,    m.format, tag,         std::max(m.layers, 1u), m.samples, m.zeta,
+                   blockLinear, compression, copied,   kindProbes()};
     blockLinear |= m.zeta;
     // a layered pass's backing: plain memory of its layers (compressed backings are one layer's)
     const uint32_t kind = compression && m.layers <= 1 ? compKind(m, blockLinear, copied) : 0;
@@ -4083,6 +4110,7 @@ bool Device::newContext(uint32_t channel, uint32_t &seq)
     memset(rootPush_, 0, sizeof rootPush_);
     restart_ = 0;
     rtLayer_ = ~0u;
+    alphaHeld_ = kAlphaControlUnknown;
     const uint32_t words = contextWords() + uint32_t(fx::twodInitWords());
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, words * 4, 256, va));
@@ -4174,6 +4202,7 @@ CommandBuffer *Device::begin()
     cb.backings_.clear();
     cb.heaps_.clear();
     cb.surfaces_.clear();
+    cb.zcullPlanes_.clear();
     set_.view(setView_);
     cb.memberUses_.clear();
     cb.memberRemovals_ = setView_.removals;
@@ -4214,6 +4243,7 @@ CommandBuffer *Device::begin()
     memcpy(cb.rootPush_, rootPush_, sizeof rootPush_);
     cb.restart_ = restart_;
     cb.rtLayer_ = rtLayer_;
+    cb.alphaHeld_ = alphaHeld_;
     cb.ds_ = ds_;
     cb.extrasLive_ = extrasLive_;
     cb.heldSegment_ = heldSegment_;
@@ -4229,6 +4259,7 @@ CommandBuffer *Device::begin()
         }
     }
     cb.stamp = stampOf(commits());
+    cb.serial = ++begun_;
     RAW_DIAGNOSTIC(spans_.begin(cb.stamp));
     cb.timings.clear();
     cb.loopsLaid = false;
@@ -4238,16 +4269,17 @@ CommandBuffer *Device::begin()
     uint32_t *start = reinterpret_cast<uint32_t *>(alloc(push_, 64 * 4, 256, va));
     Push p{start, start + 64};
     emitStartStamp(p, stamps_.va, cb.stamp);
+    cb.lastEngine_ = BarrierEngine::None;
+    cb.chain_ = {};
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     cb.forms_ = nextForms;
     nextForms = {};
     cb.taken_ = {};
-    cb.lastEngine_ = ProbeEngine::None;
-    if (cb.forms_.entry != EntryForm::Today) {
-        cb.shaderInvalidate_ = probeEntry(p, cb.forms_.entry, cb.taken_);
-    } else
 #endif
-    {
+    if (const EntryForm entry = entryFormFor(cb.barrierForms().entry); relaxed(entry)) {
+        cb.shaderInvalidate_ = entryOpening(p, entry);
+        RAW_DIAGNOSTIC(cb.taken_.entries++);
+    } else {
         p.m(INVALIDATE_SAMPLER_CACHE_NO_WFI, 0);
         p.m(INVALIDATE_TEXTURE_HEADER_CACHE_NO_WFI, 0);
         p.inc(INVALIDATE_SHADER_CACHES_NO_WFI, {kInvalidateConstant});
@@ -4417,7 +4449,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
                 RAW_DIAGNOSTIC(dev_->stats.rtUnalignedPitch = t->pitch);
                 RAW_DIAGNOSTIC(dev_->stats.rtUnalignedVa = uint32_t(t->va & 255));
             }
-            Texture *b = backing(*t, scratchTags[j], blockLinear, !(pass.storageMask >> j & 1), true);
+            Texture *b = backing(*t, scratchTags[j], blockLinear,
+                                 dev_->storageCompressedOk() || !(pass.storageMask >> j & 1), true);
             if (!b || !b->renderable)
                 return nullptr;
             e.pass_.color[j].texture = b;
@@ -4445,6 +4478,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
     }
     if (backingLock.owns_lock())
         backingLock.unlock();
+    // the depth's stored region (raw_zcull_planes.h), taken before this pass's own write leaves it stale
+    const ZcullStored zcullHeld = zeta ? zcullPlanes_.held(zeta->va) : ZcullStored();
     for (uint32_t j = 0; j < e.pass_.count && j < 8; ++j)
         if (const Texture *texture = e.pass_.color[j].texture)
             use(*texture, true);
@@ -4466,10 +4501,22 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         e.areaW_ = std::min(e.areaW_, pass.width);
     if (pass.height)
         e.areaH_ = std::min(e.areaH_, pass.height);
-    // (raw_zcull.h's region is one plane's: an array's zeta, or a layer of one, keeps zcull off)
-    e.zcull_.candidate = dev_->zcullOn_ && zeta && zetaHasDepth(zeta->format) && e.samples_ == 1 &&
-                         pass.depthStencil.clearDepth && layers == 1 && zeta->layers <= 1 &&
-                         (!zeta->storage.va || zeta->va == zeta->storage.va);
+    ZcullAsk zask;
+    zask.on = dev_->zcullOn_;
+    zask.depth = zeta && zetaHasDepth(zeta->format);
+    zask.cleared = pass.depthStencil.clearDepth;
+    zask.layers = layers;
+    zask.zetaLayers = zeta ? std::max(zeta->layers, 1u) : 1;
+    zask.atStorageBase = zeta && (!zeta->storage.va || zeta->va == zeta->storage.va);
+    const Rect zcullArea = e.planeArea();
+    const bool zcullKeep =
+        zeta && e.pass_.depthStencil.texture == zeta && pass.depthStencil.stored && pass.depthStencil.loadedLater;
+    zcullBegin(e.zcull_, zask, dev_->zcullInfo_, zcullArea.x0, zcullArea.y0, zcullArea.x1 - zcullArea.x0,
+               zcullArea.y1 - zcullArea.y0, layers, zcullHeld, zcullKeep, [this](uint64_t bytes) {
+                   uint64_t va = 0;
+                   dev_->alloc(dev_->upload_, uint32_t(bytes), kZcullStorageAlign, va);
+                   return va;
+               });
     // DontCare can become a clear after later draws establish readBits_. Treat its deferred prologue write like Clear.
     for (uint32_t j = 0; j < pass.count && j < 8; j++)
         if (e.pass_.color[j].texture && e.pass_.color[j].load != ColorAttachment::Load)
@@ -4491,6 +4538,12 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         heldSegment_.passBoundary();
     }
     extrasLive_ = nullptr;
+    // a target the pass does not load starts over: no earlier rung-2 blend is under what it draws (rule fetch.blend)
+    for (uint32_t j = 0; j < pass.count && j < 8; j++)
+        if (pass.color[j].texture && pass.color[j].load != ColorAttachment::Load)
+            for (const Texture *t : {static_cast<const Texture *>(pass.color[j].texture), e.shadowOf_[j]})
+                if (t)
+                    __atomic_store_n(&t->ropBlendSerial, uint64_t(0), __ATOMIC_RELAXED);
     passes++;
     return &e;
 }
@@ -4523,12 +4576,14 @@ BlitEncoder *CommandBuffer::blit()
     loops_.openSegment(e.stream());
     // what the render work before wrote is complete before the copy engine reads it (NVK: a WFI on the 3D subchannel; the
     // switch to the copy subchannel then waits for the 3D engine anyway)
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    probeBlitOpening(e.p_, forms_, lastEngine_, taken_);
-    lastEngine_ = ProbeEngine::Copy;
-#else
-    e.p_.m(WAIT_FOR_IDLE, 0);
-#endif
+    const BarrierForms forms = barrierForms();
+    [[maybe_unused]] const Opened opened =
+        blitOpening(e.p_, switchFormFor(forms.switchForm, lastEngine_, BarrierEngine::Copy), entryFormFor(forms.entry),
+                    lastEngine_);
+    e.before_ = lastEngine_;
+    e.opened_ = e.p_.at;
+    lastEngine_ = BarrierEngine::Copy;
+    RAW_DIAGNOSTIC(taken_.count(opened));
     blits++;
     return &e;
 }
@@ -4672,10 +4727,12 @@ void CommandBuffer::foldCounts()
     stats.segmentBinds += counts_.segmentBinds;
     stats.segmentWords += counts_.segmentWords;
     stats.segmentSkips += counts_.segmentSkips;
+    stats.segmentCopies += counts_.segmentCopies;
     stats.blendKillBinds += counts_.blendKillBinds;
     stats.interlockDraws += counts_.interlockDraws;
     stats.fetch.interlocked += counts_.interlocked;
     stats.fetch.interlockedBlends += counts_.interlockedBlends;
+    stats.fetch.twinRule += counts_.twinRule;
     counts_ = {};
 }
 #endif
@@ -4917,6 +4974,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     memcpy(d.rootPush_, rootPush_, sizeof rootPush_);
     d.restart_ = restart_;
     d.rtLayer_ = rtLayer_;
+    d.alphaHeld_ = alphaHeld_;
     d.ds_ = ds_;
     d.extrasLive_ = extrasLive_;
     d.heldSegment_ = heldSegment_;
@@ -5297,7 +5355,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
             return draw(primitive, first, count, instances, baseInstance, why);
         });
     RAW_ENCODE_SPAN(Draw);
-    Pipeline *pl = formFor(pipeline_);
+    Pipeline *pl = formFor(pipeline_, {primitive, count, instances, false, false});
     if (!pl)
         return true;  // m2v drops a draw without a pipeline (parity 0006) the same way
     called_ = true;
@@ -5329,31 +5387,24 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
                 wholeDraw(*pl, false, first + begin, end - begin, 1, first + begin, baseInstance);
                 finishDraw(end - begin, 1);
             } else {
-                emitDraw(false, first + begin, end - begin, 1, first + begin, baseInstance, Shortcut{});
+                emitDraw(false, first + begin, end - begin, 1, first + begin, baseInstance);
             }
         }
         cb_->draws++;
         return true;
     }
-    if (instances == 1 && !amplifies() && blurTwod(*pl, primitive, first, count, false)) {
-        cb_->draws++;
-        return true;
-    }
-    const Shortcut cut = instances == 1 && !amplifies() ? shortcut(*pl, primitive, first, count, false) : Shortcut{};
     if (!prepare(pl, primitive, first, first, count, false, why))
         return false;
     cb_->draws += amplifies() ? amplifications_ : 1;
     const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (const auto probe = instances == 1 ? dev_->armedProbe() : nullptr) {
-        if (p_.room() < kInstanceWords + probe->before.size() + probe->after.size() + kShortcutWords)
+        if (p_.room() < kInstanceWords + probe->before.size() + probe->after.size())
             reserve();
         if (!probe->before.empty())
             p_.raw(probe->before.data(), uint32_t(probe->before.size()));
         dev_->probeEmitted.fetch_add(1, std::memory_order_relaxed);
-        shortcutBegin(cut);
-        wholeDraw(*pl, false, first, cut.bbox ? 3 : count, instances, first, baseInstance);
-        shortcutEnd(cut);
+        wholeDraw(*pl, false, first, count, instances, first, baseInstance);
         if (!probe->after.empty())
             p_.raw(probe->after.data(), uint32_t(probe->after.size()));
         finishDraw(count, drawnInstances);
@@ -5364,7 +5415,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
         wholeDraw(*pl, false, first, count, instances, first, baseInstance);
         finishDraw(count, drawnInstances);
     } else {
-        emitDraw(false, first, count, instances, first, baseInstance, cut);
+        emitDraw(false, first, count, instances, first, baseInstance);
     }
     return true;
 }
@@ -5397,9 +5448,12 @@ const RenderEncoder::Runs *RenderEncoder::selfRuns(const Pipeline &pl, uint32_t 
 const RenderEncoder::Runs *RenderEncoder::sequentialRuns(const Pipeline &pl, const FetchDraw &shape, Runs &runs,
                                                          const char **why)
 {
-    const FetchRefusal refusal = sequentialRefusal(pl.primitiveId, shape);
+    FetchDraw draw = shape;
+    const Texture *zeta = pass_.depthStencil.texture;
+    draw.facing = facingDecides(raster_.cull, dsState_->desc(), stencilRef_, zeta && zetaHasStencil(zeta->format));
+    const FetchRefusal refusal = sequentialRefusal(pl.primitiveId, draw);
     if (refusal != FetchRefusal::None ||
-        !TriangleRuns::sequential(shape.primitive, shape.count, shape.instances, shape.indexed, runs, runWinding_))
+        !TriangleRuns::sequential(shape.primitive, shape.count, shape.instances, runs, runWinding_))
         return refuseFetch(pl, refusal != FetchRefusal::None ? refusal : FetchRefusal::Geometry, shape.primitive,
                            shape.count, shape.instances, why);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -5435,7 +5489,8 @@ uint32_t RenderEncoder::colorTargets() const
 }
 
 // The state's fetch-free form where this draw takes it (raw_fetch_free.h): the blended colour's target in the pass,
-// CPU-visible memory that is not a surface, and the rung-2 blends already over it decide rule fetch.blend
+// CPU-visible memory that is not a surface, the rung-2 blends already over it, whether every image its program samples
+// is of unorm8 codes, and whether the pass loads it over an earlier command buffer's rung-2 blends decide rule fetch.blend
 Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
 {
     Pipeline *free = pl.fetchFree;
@@ -5447,7 +5502,11 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
         t = shadowOf_[f.colour];  // the texture the client holds, not the pool image the pass renders it through
     if (!t)
         return nullptr;
-    const FetchFreeDraw draw = {t->format, t->storage.hostVisible && !t->import, ropLayers_[f.colour]};
+    const uint64_t blended = __atomic_load_n(&t->ropBlendSerial, __ATOMIC_RELAXED);
+    FetchFreeDraw draw = {t->format, t->storage.hostVisible && !t->import, ropLayers_[f.colour]};
+    draw.eightBitSources = eightBitSamples(f.sampledSlots, textures_[1]);
+    draw.accumulates = pass_.color[f.colour].load == ColorAttachment::Load && !(covered_ >> f.colour & 1) && blended &&
+                       blended != cb_->serial;
     uint8_t forced = 0;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
@@ -5456,15 +5515,18 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
         return nullptr;
     if (f.rung == FetchBlend && ropLayers_[f.colour] < 255)
         ropLayers_[f.colour]++;
+    if (f.rung == FetchBlend)
+        __atomic_store_n(&t->ropBlendSerial, cb_->serial, __ATOMIC_RELAXED);
     RAW_DIAGNOSTIC(dev_->stats.fetch.fetchFree[f.rung == FetchBlend ? 0 : 1]++);
     return free;
 }
 
-Pipeline *RenderEncoder::formFor(Pipeline *pl)
+Pipeline *RenderEncoder::formFor(Pipeline *pl, const FetchDraw &shape)
 {
+    uint8_t forced = 0;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (const uint8_t forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
-        pl && (forced == kProbeBlendTwinTriangles || forced == kProbeBlendTwinWhole))
+    forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
+    if (pl && (forced == kProbeBlendTwinTriangles || forced == kProbeBlendTwinWhole))
         if (Pipeline *twin = pl->blendTwin ? pl->blendTwin : pl->barrierTwin) {
             dev_->stats.fetch.blendTwin++;
             return twin;
@@ -5480,8 +5542,13 @@ Pipeline *RenderEncoder::formFor(Pipeline *pl)
         return pl->barrierTwin;
 #endif
     const StorageFallback reason = storageFallback(*pl);
-    if (reason == StorageFallback::None)
-        return pl;
+    if (reason == StorageFallback::None) {
+        Pipeline *twin = pl->blendTwin ? pl->blendTwin : pl->barrierTwin;
+        if (forced || !twin || !twinTaken({shape, twin->primitiveId, uint64_t(areaW_) * areaH_, amplifications_ > 1}))
+            return pl;
+        RAW_DIAGNOSTIC(cb_->counts_.twinRule++);
+        return twin;
+    }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     const StorageFallback counted = pl->barrierTwin ? reason : StorageFallback::NoTwin;
     dev_->stats.fetch.storageFallback[size_t(counted)]++;
@@ -5517,7 +5584,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
             return drawIndexed(primitive, count, indexSize, ib, offset, instances, baseVertex, baseInstance, why);
         });
     RAW_ENCODE_SPAN(Draw);
-    Pipeline *pl = formFor(pipeline_);
+    Pipeline *pl = formFor(pipeline_, {primitive, count, instances, false, true});
     if (!pl)
         return true;
     called_ = true;
@@ -5599,13 +5666,6 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         return false;
     }
     const Runs &runs = *ordered;
-    const bool whole = runs.empty() && instances == 1 && baseVertex >= 0 && !amplifies();
-    if (whole && blurTwod(*pl, primitive, uint32_t(baseVertex), count, true)) {
-        drawIndices_ = nullptr;
-        cb_->draws++;
-        return true;
-    }
-    const Shortcut cut = whole ? shortcut(*pl, primitive, uint32_t(baseVertex), count, true) : Shortcut{};
     const uint32_t parts = runs.empty() ? 1 : uint32_t(runs.size());
     for (uint32_t r = 0; r < parts; r++) {
         const uint32_t begin = runs.empty() ? 0 : runs[r].first, end = runs.empty() ? count : runs[r].second;
@@ -5639,7 +5699,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
             wholeDraw(*pl, true, begin, end - begin, instances, uint32_t(baseVertex), baseInstance);
             finishDraw(end - begin, amplifies() ? instances * amplifications_ : instances);
         } else {
-            emitDraw(true, begin, end - begin, instances, uint32_t(baseVertex), baseInstance, cut);
+            emitDraw(true, begin, end - begin, instances, uint32_t(baseVertex), baseInstance);
         }
     }
     cb_->draws += amplifies() ? amplifications_ : 1;
@@ -5654,7 +5714,7 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     RAW_ENCODE_SPAN(Draw);
     if (!pipeline_)
         return true;
-    Pipeline *form = formFor(pipeline_);
+    Pipeline *form = formFor(pipeline_, {primitive, 0, 1, true, indexed});
     const Pipeline &pl = *form;
     const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
     if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.primitiveId, {primitive, 0, 1, true});
@@ -5741,7 +5801,7 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
     RAW_ENCODE_SPAN(Draw);
     if (!pipeline_ || !x.count)
         return true;
-    Pipeline *form = formFor(pipeline_);
+    Pipeline *form = formFor(pipeline_, {x.primitive, 0, 1, true, true});
     const Pipeline &pl = *form;
     const bool fetchesOwn = fetchesOwnColor(pl.fetchBits, pl.writeBits, pl.storageBits);
     if (const FetchRefusal refusal = fetchRefusal(fetchesOwn, pl.primitiveId, {x.primitive, 0, 1, true});
@@ -5806,6 +5866,7 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
     if (patches)
         icbPatchesDone();
     topology_ = restart_ = ~0u;
+    cb_->alphaHeld_ = kAlphaControlUnknown;
     ibVa_ = ibEnd_ = ~uint64_t(0);
     ibSize_ = 0;
     params_.unknown = true;
@@ -6331,6 +6392,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     if (dsDirty_) {
         RAW_ENCODE_SPAN(Bind);
         const bool depth = zeta && zetaHasDepth(zeta->format), stencil = zeta && zetaHasStencil(zeta->format);
+        RAW_DIAGNOSTIC(cb_->counts_.segmentCopies += !shaderTestsActive_ && !measuringInline() && !bindsBySegment() &&
+                                                     dsState_->segment(depth, stencil));
         if (shaderTestsActive_)
             emitDepthStencil(p, shaderDepthStencilRegs(depth), cb_->ds_);
         else if (bindDepthStencil(p, bodies_, bodyStart_,
@@ -6357,7 +6420,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         cb_->refusal = {};
         return false;
     }
-    if (pl->heapMissing) {
+    if (__atomic_load_n(&pl->heapMissing, __ATOMIC_ACQUIRE) && !dev_->rebindArguments(*pl)) {
         *why = "no memory for the tables a state reads argument buffers through";
         cb_->refusal = {};
         return false;
@@ -6592,6 +6655,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                                    pl->amplificationViewportWord) &&
                                   amplificationDirty_) ||
                                  r.pulledStride[0][1] || r.arrayLengthWord || r.viewportCountWord;
+    const bool rebinds = pl != emitted_;
     if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_) ||
         r.shaderTests.flags || slotRoots || (patches && tessWordsDirty_) || drawnWordsDirty) {
         if (pl != emitted_) {
@@ -6658,6 +6722,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         emitted_ = pl;
         residualsPushed_ = residualMask != 0;
     }
+    writeAlphaControl(p, cb_->alphaHeld_, alphaWanted_, rebinds, pl->namesAlphaControl, pl->ownsAlphaControl,
+                      pl->blendKill);
     RAW_ENCODE_END(bindSpan);
     if (!writeClipControl(p, *pl, why))
         return false;
@@ -6760,7 +6826,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     RAW_ENCODE_BEGIN(barrierSpan, Barriers);
     const AttachmentAccess access{pl->readBits, pl->writeBits, uint8_t(pl->fetchBits & ~pl->storageBits),
                                   pl->storageBits};
-    if (firstDraw && !indirectGeometry_ && !pl->dropsPixels) {
+    if (firstDraw && !indirectGeometry_ && !pl->dropsPixels && !(alphaWanted_ & kAlphaToCoverage)) {
         const uint8_t opaque = pl->writeBits & ~(pl->readBits | pl->fetchBits | pl->storageBits);
         if (opaque && geometryAnalysis.covers(primitive == 3, areaW_, areaH_))
             covered_ = opaque;
@@ -6951,8 +7017,6 @@ const char *Device::fetchBarrierName(FetchBarrier b)
         return "wfi";
     case FetchBarrier::PixelShaderOnly:
         return "psonly";
-    case FetchBarrier::PixelShaderNoWfiInvalidate:
-        return "psnowfi";
     case FetchBarrier::None:
         return "none";
     }
@@ -6972,10 +7036,6 @@ void RenderEncoder::fetchBarrier(Push &p)
         return;
     case Device::FetchBarrier::PixelShaderOnly:
         p.m(PIXEL_SHADER_BARRIER, 0);
-        return;
-    case Device::FetchBarrier::PixelShaderNoWfiInvalidate:
-        p.m(PIXEL_SHADER_BARRIER, 0);
-        p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
         return;
     case Device::FetchBarrier::PixelShader:
         break;
@@ -7566,6 +7626,7 @@ static bool chainLevelView(const Texture &t, uint32_t level, uint32_t rtFormat, 
     out = Texture();
     out.storage = t.storageRange();
     out.va = d.va;
+    out.comptags = t.comptags;  // a level is rendered and filled with the chain's compression
     out.width = t.chain->layout.level[level].width;
     out.height = d.height;
     out.format = t.format;
@@ -7750,6 +7811,12 @@ void RenderEncoder::end()
     endShaderTests();
     if (p_.room() < 64 + kSampleWords + 2 * kMaxViewports + kDrawStampWords)
         reserve();
+    if (zcull_.store && !zcull_.invalidated) {
+        p_.m(kStoreZcull, 0);
+        const Texture &zeta = *pass_.depthStencil.texture;
+        const auto memory = zeta.storageRange();
+        cb_->zcullPlanes_.stored(zcullStoredBy(zcull_, zeta.va, memory.va, memory.bytes));
+    }
     writeRaster(p_, Raster());
     unclampDepthRange(p_);
     if (rot_.turned()) {
@@ -7779,12 +7846,10 @@ void RenderEncoder::end()
         p_.m(CT_SELECT, targetSelect(colorTargets()));
         narrowed_ = false;
     }
+    const bool flush = keepsTiledFlush(cb_->barrierForms().switchForm);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    const bool flush = cb_->forms_.keepsTiledFlush();
     if (drew_ && !flush && tiledCache(d.k_.info()))
         cb_->taken_.flushes++;
-#else
-    constexpr bool flush = true;
 #endif
     const bool measured = measurePass(drew_ && flush);
     if (drew_ && flush)
@@ -7818,12 +7883,15 @@ void RenderEncoder::end()
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
     p.raw(restore.data(), uint32_t(restore.size()));
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    probePassPrologue(p, cb_->forms_, cb_->lastEngine_, cb_->taken_);
-    cb_->lastEngine_ = ProbeEngine::ThreeD;
-#else
-    kit(p, switch_gm20b_pass_barrier, false);
-#endif
+    const BarrierEngine before = cb_->lastEngine_;
+    const BarrierForms forms = cb_->barrierForms();
+    const PassUses uses = passUses();
+    const PassForm pass = forms.pass != PassForm::Rule ? forms.pass : passRule(before, uses);
+    const Opened opened = passOpening(p, pass, switchFormFor(forms.switchForm, before, BarrierEngine::ThreeD),
+                                      entryFormFor(forms.entry), before);
+    advanceChain(cb_->chain_, uses, opened != Opened::Pass);
+    cb_->lastEngine_ = BarrierEngine::ThreeD;
+    RAW_DIAGNOSTIC(cb_->taken_.count(opened));
     for (uint8_t i = 0; i < startStampCount_; i++)
         counters::emit(p, startStamps_[i]);
     if (rot_.turned()) {
@@ -7888,12 +7956,13 @@ void RenderEncoder::end()
     kit(p, switch_gm20b_render_area, count, planeArea().x1, planeArea().y1);
     const DepthStencilAttachment &zs = pass_.depthStencil;
     zetaTargetWords(p, zs.texture, layers);
-    // ahead of the depth clear, which sets the region; over the plane the pass renders (a turned drawable's own axes)
-    const Rect plane = planeArea();
-    if (ZcullRegion region; zcull_.candidate && zcullRegion(d.zcullInfo_, plane.x0, plane.y0, plane.x1 - plane.x0,
-                                                            plane.y1 - plane.y0, region)) {
-        zcullRegionWords(p, region, zs.texture->format, zcull_.dir);
-        RAW_DIAGNOSTIC(d.stats.zcullPasses++);
+    // ahead of the depth clear, which sets the region, or the load of a stored one; over the plane the pass renders (a
+    // turned drawable's own axes, zcullBegin)
+    if (zcull_.candidate) {
+        zcullRegionWords(p, zcull_.region, zs.texture->format, zcull_.dir, zcull_.storage, zcull_.storageBytes);
+        if (zcull_.load)
+            p.m(kLoadZcull, 0);
+        RAW_DIAGNOSTIC(d.stats.zcullPasses++; d.stats.zcullLoads += zcull_.load);
     } else if (d.zcullOn_) {
         zcullOffWords(p);
     }
@@ -7966,6 +8035,7 @@ void RenderEncoder::end()
         }
         checkRoom(q, "a pass's shadow stores");
         cb_->segment(at, q.at);
+        cb_->lastEngine_ = BarrierEngine::Copy;
         d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(q.at) - d.push_.bo.cpu);
         RAW_DIAGNOSTIC(d.stats.pushBytes += uint64_t(q.at - at) * 4);
     }
@@ -8347,6 +8417,8 @@ void BlitEncoder::generate(Texture &t, uint32_t fmt2d, uint32_t first, uint32_t 
 
 void BlitEncoder::end()
 {
+    if (p_.at == opened_)
+        cb_->lastEngine_ = before_;
     checkRoom(p_, "a blit encoder");
     cb_->loops_.closeSegment(stream());
     dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
@@ -8354,6 +8426,18 @@ void BlitEncoder::end()
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+bool Device::probeRetarget(const Texture &a, const Texture *to)
+{
+    std::lock_guard<raw::Mutex> l(lock_);
+    if (!a.tic || (to && !to->tic))
+        return false;
+    if (to)
+        memcpy(tic_.cpu + 32 * a.tic, tic_.cpu + 32 * to->tic, 32);
+    else
+        writeTic(a);
+    return true;
+}
+
 bool Device::probeCompressible(const tgm_layout &bl, Texture &t)
 {
     const uint32_t kind = compressedKind(t.bpp, 0);
@@ -8392,8 +8476,16 @@ static ProbeSurface probeSurface(const Texture &t, uint32_t fmt2d, uint32_t widt
     return s;
 }
 
-void BlitEncoder::probe(const ProbeOp &op, const Texture *read, const Texture &written)
+// The op's surfaces from the textures' memory at encode, which a private texture's move to plain memory may have changed
+// since the op was recorded; its formats and sizes as recorded
+void BlitEncoder::probe(const ProbeOp &recorded, const Texture *read, const Texture &written)
 {
+    ProbeOp op = recorded;
+    if (op.kind != ProbeOpKind::Method) {
+        op.dst = probeSurface(written, op.dst.fmt2d, op.dst.width, op.dst.height);
+        if (read)
+            op.src = probeSurface(*read, op.src.fmt2d, op.src.width, op.src.height);
+    }
     room(uint32_t(probeOpWords(op)) + kProbeBracketWords);
     if (read)
         cb_->use(*read, false);

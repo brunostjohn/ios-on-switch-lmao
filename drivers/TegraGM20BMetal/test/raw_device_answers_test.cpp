@@ -71,6 +71,60 @@ TEST(RawDeviceAnswers, PredicationNestsAsDeepAsTheLoopsLaidDown)
         EXPECT_EQ(count(k, "maxPredicatedNestingDepth"), 8u) << k.kind;
 }
 
+// RawMetalDevice.mm newBufferWithIOSurface: makes the buffer over the surface's pages (gpu.raw.surface_buffer)
+TEST(RawDeviceAnswers, BuffersOverIOSurfacesAreMade)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds)
+        EXPECT_EQ(count(k, "supportsBufferWithIOSurface"), 1u) << k.kind;
+}
+
+// The translator lowers SIMD-group permutes, votes, reductions, prefix sums and shuffle-and-fill to SHFL and VOTE
+// (gpu.compute.simd_group)
+TEST(RawDeviceAnswers, SimdGroupRowsAreYes)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds) {
+        EXPECT_EQ(count(k, "supportsSIMDReduction"), 1u) << k.kind;
+        EXPECT_EQ(count(k, "supportsSIMDShuffleAndFill"), 1u) << k.kind;
+        EXPECT_EQ(count(k, "supportsSIMDGroup"), 1u) << k.kind;
+    }
+}
+
+// The pixel interlock the storage form draws in orders a raster order group's accesses (gpu.raw.raster_order)
+TEST(RawDeviceAnswers, RasterOrderGroupsAreYes)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds) {
+        EXPECT_EQ(count(k, "areRasterOrderGroupsSupported"), 1u) << k.kind;
+        EXPECT_EQ(count(k, "supportsRasterOrderGroups"), 1u) << k.kind;
+    }
+}
+
+// GM20B (SM53) has HADD2, HMUL2 and HFMA2 (gpu.compute.half_alu)
+TEST(RawDeviceAnswers, HalfArithmeticIsNative)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds)
+        EXPECT_EQ(count(k, "supportsNativeHardwareFP16"), 1u) << k.kind;
+}
+
+// Every Apple family reads its colour attachments in the shader; the raw path does it inside the pixel interlock
+// (gpu.raw.framebuffer_fetch)
+TEST(RawDeviceAnswers, FramebufferReadsAreYes)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds) {
+        EXPECT_EQ(count(k, "isFramebufferReadSupported"), 1u) << k.kind;
+        EXPECT_EQ(count(k, "supportsProgrammableBlending"), 1u) << k.kind;
+    }
+}
+
+// A linear texture's rows and a texture buffer's start take the pitch texture header's 32 bytes (RawMetalDevice.mm,
+// RawMetalDeviceAnswers.mm answer both from this row)
+TEST(RawDeviceAnswers, LinearAlignmentIsThePitchHeaders)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds)
+        for (uint64_t format : {10, 70, 80, 115, 125})
+            EXPECT_EQ(argument(k, "minimumLinearTextureAlignmentForPixelFormat:", format), 32u)
+                << k.kind << " format " << format;
+}
+
 // Apple1's, which both identities' AGX drivers answer (RawMetalSharedTextures.mm makes them)
 TEST(RawDeviceAnswers, SharedTextureHandlesAreYes)
 {
