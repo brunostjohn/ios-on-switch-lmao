@@ -3,8 +3,9 @@
 // setBytes chunks from a pool a utility queue grows ahead and completions refill after waking waitUntilCompleted
 // (RawMetalCommandBuffer.mm), so which chunk, and whether one coalesced chunk or two, varies from run to run; every
 // chunk alive is in the device's resource set, so in every job's uses. Each address in a chunk reads as its offset in
-// the command buffer's chunks laid end to end; a job's uses leave out the driver's coherent control memory (chunks, push
-// rings) and the BOs made since the test's mark (spares and backings made or not as the threads meet).
+// the command buffer's chunks laid end to end, and any other address in the driver's coherent control memory (its upload
+// and push rings, whose place moves with completions) as "ctl"; a job's uses leave out that memory and the BOs made since
+// the test's mark (spares and backings made or not as the threads meet).
 #pragma once
 #include "raw_kernel_model.h"
 #import <Metal/Metal.h>
@@ -60,6 +61,20 @@ inline Run run(id<MTLCommandBuffer> cb)
     return r;
 }
 
+// Whether `va` lies in a coherent BO the model bound (the driver's control memory)
+inline bool controlAt(uint64_t va)
+{
+    const auto &binds = kernel_model::model.binds;
+    auto bound = binds.upper_bound(va);
+    if (!va || bound == binds.begin())
+        return false;
+    --bound;
+    if (va - bound->first >= bound->second.second)
+        return false;
+    const auto bo = kernel_model::model.bos.find(bound->second.first);
+    return bo != kernel_model::model.bos.end() && !bo->second.import && !bo->second.cached;
+}
+
 inline const Chunk *chunkAt(const Run &r, uint64_t va)
 {
     for (const Chunk &c : r.chunks)
@@ -109,6 +124,11 @@ inline std::string words(const std::vector<Run> &runs, uint64_t mark, const std:
                     snprintf(text, sizeof text, c ? " bytes+%llx" : " bytes.le+%llx",
                              (unsigned long long)(c ? c->at + high - c->va : data->at + low - data->va));
                     out += text;
+                    i++;
+                    continue;
+                }
+                if ((w[i] && controlAt(high)) || (w[i + 1 < w.size() ? i + 1 : i] && controlAt(low))) {
+                    out += " ctl";
                     i++;
                     continue;
                 }
