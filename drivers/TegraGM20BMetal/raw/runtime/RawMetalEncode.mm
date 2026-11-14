@@ -587,6 +587,14 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             const auto &state = cb->_plan.kernelStates[dispatch.state];
             const auto &textures = cb->_plan.textures[2][state.textures].objects;
             uses.clear();
+            if (dispatch.surfaceSlots && !encoderShadows) {  // a range that begins inside its encoder
+                ce->end();
+                ce.reset();
+                beginKernelShadows(dispatch.encoderBegin);
+                ce.emplace(*rc, d);
+                ce->setSerial(serialCompute);
+                stateCursor.reset();
+            }
             if (encoderShadows) {
                 kernelUses(cb, at, uses);
                 localShadows(uses);
