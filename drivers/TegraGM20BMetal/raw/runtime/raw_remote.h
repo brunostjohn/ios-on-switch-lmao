@@ -7,6 +7,7 @@
 // kernel says none will come this boot.
 #pragma once
 #include "raw_lock.h"
+#include <IOKit/IOReturn.h>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -20,6 +21,22 @@
 #include "raw_kernel_transport.h"
 
 namespace raw {
+
+// The kernel's CompilerInfo call as a client takes it. A kernel without the compiler's methods answers
+// kIOReturnUnsupported, a process with no connection never gets one: neither changes in the process's life. Any other
+// failed call fails that ask alone (one error line), and the next ask calls afresh.
+enum class CompilerMethods : uint8_t {
+    Unknown,
+    Present,
+    Absent
+};
+
+constexpr CompilerMethods compilerMethods(int called, uint32_t flags)
+{
+    if (called == kIOReturnSuccess)
+        return (flags & TegraGM20BCompilerCapable) ? CompilerMethods::Present : CompilerMethods::Absent;
+    return called == kIOReturnUnsupported || called == kIOReturnNotOpen ? CompilerMethods::Absent
+}
 
 class Remote {
 public:
@@ -85,7 +102,7 @@ private:
 
     const Call call_;
     const uint64_t stack_;
-    bool capable_ = false;
+    std::atomic<CompilerMethods> methods_{CompilerMethods::Unknown};
     std::atomic<bool> expected_{false}, declined_{false};
     std::atomic<bool> absent_{false};
     std::atomic<const Mapping *> mapping_{nullptr};
@@ -99,6 +116,7 @@ private:
 
     // asyncLock_ held: the request asked, or held past the bound; false: neither
     bool ask(Held &&held);
+    bool capable();
     void refresh(const TegraGM20BAbiCompilerInfoReply &info);
     void recheck();
     int call(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize, uint64_t *reference = nullptr);
