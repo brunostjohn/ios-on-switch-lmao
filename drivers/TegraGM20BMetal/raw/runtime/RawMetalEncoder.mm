@@ -37,9 +37,8 @@ uint64_t nextTraceId()
     return c && [c instancesRespondToSelector:selector];
 }
 
-// A selector this encoder does not record itself (one the m2v encoder implements, or some MTL protocol declares): recorded as an
-// invocation (objects mapped to twins at replay) and the command buffer goes to m2v; answered zero here when the m2v encoder
-// has no method for it either (its answer is zero too).
+// A selector no method of this encoder answers: the signature its caller expects, so the invocation reaches
+// forwardInvocation: and is answered zero there
 - (NSMethodSignature *)methodSignatureForSelector:(SEL)selector
 {
     if (NSMethodSignature *s = [super methodSignatureForSelector:selector])
@@ -57,31 +56,30 @@ uint64_t nextTraceId()
     return nil;
 }
 
+// Tile shading and imageblocks (tile dispatches, tile bindings, imageblock sizes) are Apple4's (Metal feature set tables),
+// a family the device does not claim (raw_device_answers.h supportsFamily:, raw/test/refused.txt); every other Metal
+// selector of the claimed families is a method of the encoder. One that reaches here is the caller's error past a NO:
+// answered zero, as m2v's encoder answered it, with an error line
+static bool tileShading(const char *selector)
+{
+    for (const char *prefix : {"dispatchThreadsPerTile", "setTile", "setImageblockWidth", "setThreadgroupMemoryLength:offset:"})
+        if (!strncmp(selector, prefix, strlen(prefix)))
+            return true;
+    return false;
+}
+
 - (void)forwardInvocation:(NSInvocation *)inv
 {
-    if (!twinAnswers([[self class] twinClass], inv.selector)) {
-        answerZero(self, inv);
-        return;
-    }
-    [inv retainArguments];
-    if (!raw::keepPointedArguments(inv))
-        SWITCH_REFUSE_DETAIL("raw", "call.pointer", uintptr_t(inv.selector),
-                             "-[%s %s] recorded with a pointer argument of no known extent",
-                             class_getName(object_getClass(self)), sel_getName(inv.selector));
-    [_cb retain:inv];
-    Cmd c = cmd(OpInvocation);
-    c.obj = (__bridge void *)inv;
-    [_cb record:c];
-    [_cb takeReason:WhyCall why:@"an encoder call recorded as an invocation"];
-    hit(_cb, PredCallInvocation, uintptr_t(inv.selector));
-    SWITCH_REFUSE_DETAIL("raw", "call.invocation", uintptr_t(inv.selector), "-[%s %s] recorded as an invocation",
-                         class_getName(object_getClass(self)), sel_getName(inv.selector));
-    const NSUInteger n = inv.methodSignature.methodReturnLength;
-    if (n) {
-        void *zero = calloc(1, n);
-        [inv setReturnValue:zero];
-        free(zero);
-    }
+    const char *selector = sel_getName(inv.selector);
+    if (tileShading(selector))
+        SWITCH_REFUSE_DETAIL("raw", "call.tile", uintptr_t(inv.selector),
+                             "-[%s %s]: tile shading is Apple4's, a family this device does not claim: answered zero",
+                             class_getName(object_getClass(self)), selector);
+    else
+        SWITCH_REFUSE_DETAIL("raw", "call.invocation", uintptr_t(inv.selector),
+                             "-[%s %s]: no method of this device's encoder: answered zero",
+                             class_getName(object_getClass(self)), selector);
+    answerZero(self, inv);
 }
 
 + (Class)twinClass

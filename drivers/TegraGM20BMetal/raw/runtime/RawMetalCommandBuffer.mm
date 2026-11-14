@@ -813,32 +813,14 @@ void rmPoolCommandBuffers()
     return c && [c instancesRespondToSelector:selector];
 }
 
+// Every MTLCommandBuffer selector is a method of the command buffer: one that reaches here is no Metal selector, answered zero
+// with an error line
 - (void)forwardInvocation:(NSInvocation *)inv
 {
-    if (!twinAnswers(NSClassFromString(@"NBCommandBuffer"), inv.selector)) {
-        answerZero(self, inv);
-        return;
-    }
-    [inv retainArguments];
-    if (!raw::keepPointedArguments(inv))
-        SWITCH_REFUSE_DETAIL("raw", "call.pointer", uintptr_t(inv.selector),
-                             "-[MTLCommandBuffer %s] recorded with a pointer argument of no known extent",
-                             sel_getName(inv.selector));
-    [self retain:inv];
-    Cmd c = cmd(OpInvocation);
-    c.obj = (__bridge void *)inv;
-    c.stage = 0xff;  // the command buffer's own, not an encoder's
-    [self record:c];
-    [self takeWholeReason:WhyCall why:@"a command buffer call recorded as an invocation"];
-    hit(self, PredCallCBInvocation, uintptr_t(inv.selector));
-    SWITCH_REFUSE_DETAIL("raw", "call.cbinvocation", uintptr_t(inv.selector), "-[MTLCommandBuffer %s] answered zero",
+    SWITCH_REFUSE_DETAIL("raw", "call.cbinvocation", uintptr_t(inv.selector),
+                         "-[MTLCommandBuffer %s]: no method of this device's command buffer: answered zero",
                          sel_getName(inv.selector));
-    const NSUInteger n = inv.methodSignature.methodReturnLength;
-    if (n) {
-        void *zero = calloc(1, n);
-        [inv setReturnValue:zero];
-        free(zero);
-    }
+    answerZero(self, inv);
 }
 
 @end

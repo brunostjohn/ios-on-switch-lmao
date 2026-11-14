@@ -54,7 +54,6 @@ enum RMNeed : uint8_t {
     NeedRenderStateTwin,
     NeedPackedRenderStateTwin,
     NeedRenderStateReflection,
-    NeedTileRenderState,
     NeedYcbcrStateTwin,
     // twins of objects the raw path keeps itself
     NeedBufferTwin,
@@ -112,7 +111,6 @@ static constexpr const char *kNeedNames[] = {
     "a render state's twin",
     "a packed render state's twin",
     "a render state's twin with its reflection",
-    "a tile render state",
     "a YCbCr target state's twin",
     "a buffer's twin",
     "a texture's twin",

@@ -19,7 +19,7 @@ COLUMNS = ('kind', 'route', 'name', 'raised_in', 'gone', 'logs', 'owner', 'statu
 KINDS = ('product', 'test', 'tool')
 GONE = ('native', 'form', 'error', 'dead', 'none')
 # Open rows per kind: lower these as rows close, never raise them
-OPEN = {'product': 133, 'test': 0, 'tool': 0}
+OPEN = {'product': 125, 'test': 0, 'tool': 0}
 
 
 def table() -> list[dict[str, str]]:

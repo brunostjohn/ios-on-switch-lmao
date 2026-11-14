@@ -534,14 +534,12 @@ static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineD
                                                             reflection:(MTLAutoreleasedRenderPipelineReflection *)r
                                                                  error:(NSError **)error
 {
-    MTLTileRenderPipelineDescriptor *t = [d copy];
-    t.tileFunction = twinOf(d.tileFunction);
-    if (!rmTileArchiveAnswer(t, d, o, error))
-        return nil;
-    return [self wrapCarried:[RM_M2V(NeedTileRenderState) newRenderPipelineStateWithTileDescriptor:t
-                                                                                             options:o
-                                                                                          reflection:r
-                                                                                               error:error]];
+    (void)d, (void)o;
+    if (r)
+        *r = nil;
+    return rmRefuseUnsupported("a tile render state: tile shaders are Apple4's (Metal feature set tables), a family this "
+                               "device does not claim",
+                               error);
 }
 
 // The m2v device links these libraries from its own functions' bitcode: the functions here are their twins. Its methods, inherited

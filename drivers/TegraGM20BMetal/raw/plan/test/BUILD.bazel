@@ -101,5 +101,6 @@ py_test(
         "//drivers/TegraGM20BMetal:m2v_route_sources",
         "//drivers/TegraGM20BMetal/raw/plan:m2v_routes.tsv",
     ],
+    imports = ["."],
     main = "m2v_routes_test.py",
 )
