@@ -653,3 +653,20 @@ TEST_F(ClientRetirement, RetirementNeverWaitsForASubmitLock)
 	client.releaseLeft();
 	EXPECT_EQ(client.releases, 1u);
 }
+
+// A resource set member's free ends the set's generation and waits for the jobs inside it: that BoFree alone closes the
+// submit gate; any other leaves it open.
+TEST_F(ClientRetirement, OnlyASetMembersFreeClosesTheGate)
+{
+	auto *member = reinterpret_cast<switch_gpu_backing *>(uintptr_t(0x1000));
+	auto *other = reinterpret_cast<switch_gpu_backing *>(uintptr_t(0x2000));
+	client.add(1)->backing = member;
+	client.add(2, 0x20000)->backing = other;
+	setMembers = {member};
+	free(2);
+	EXPECT_EQ(client.submitGate_.mutations, 0u);
+	free(1);
+	EXPECT_EQ(client.submitGate_.mutations, 1u);
+	EXPECT_FALSE(client.submitGate_.mutating());
+	setMembers.clear();
+}

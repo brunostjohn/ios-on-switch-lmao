@@ -328,7 +328,8 @@ TEST(SubmitGate, ASubmitJobRunsWhileAnImportWires)
 {
 	for (const uint32_t method :
 	     {TegraGM20BMethodBoAlloc, TegraGM20BMethodBoImport, TegraGM20BMethodBoFree,
-	      TegraGM20BMethodVmBind, TegraGM20BMethodGetInfo, TegraGM20BMethodGetStatus})
+	      TegraGM20BMethodVmBind, TegraGM20BMethodSurfaceWrites, TegraGM20BMethodGetInfo,
+	      TegraGM20BMethodGetStatus})
 		EXPECT_FALSE(switch_gpu_method_closes_gate(method)) << method;
 	for (const uint32_t method :
 	     {TegraGM20BMethodChannelCreate, TegraGM20BMethodChannelDestroy, TegraGM20BMethodExec,

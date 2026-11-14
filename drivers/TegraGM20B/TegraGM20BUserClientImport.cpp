@@ -183,7 +183,8 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	// The GPU does not snoop the CPU caches: what the task wrote must be in DRAM before the GPU reads it, and no dirty
 	// line (fresh pages are zeroed through the cache) may be written back later over what the GPU wrote. The prefault's
 	// clean of a fresh surface's pages, wired since, already did that (TegraGM20BSurfacePrefault.cpp).
-	const bool cleans = tegra_gm20b_import_cleans(covered, creation != nullptr, fresh != 0);
+	const bool cleans =
+		tegra_gm20b_import_cleans(covered, creation != nullptr, fresh != 0, gpuWrites != 0);
 	if (cleans)
 		tgm_cpu_clean_pages(bo->pas, bo->npages);
 	if (!covered)

@@ -558,6 +558,8 @@ class AGXDeviceUserClient : public IOUserClient
 	static void adoptWiring(Bo *bo, SharedWiring *w);
 	void publishWiring(Bo *bo, const TegraGM20BAbiBoImport *in);
 	IOReturn boFree(const TegraGM20BAbiBoFree *in);
+	Bo **findLink(uint64_t handle);
+	IOReturn freeBo(Bo **p);
 	IOReturn cpuComplete(const TegraGM20BAbiCpuComplete *, TegraGM20BAbiCpuCompleteReply *);
 	IOReturn cpuAccess(const TegraGM20BAbiCpuAccess *in, bool release);
 	void releaseCpuLeases();

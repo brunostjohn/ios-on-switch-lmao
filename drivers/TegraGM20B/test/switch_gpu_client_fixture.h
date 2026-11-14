@@ -3,6 +3,7 @@
 // stand-ins for the GPU's page tables and channels, and a client of only the members those use.
 #pragma once
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -28,7 +29,9 @@
 using namespace std::chrono_literals;
 constexpr uint32_t kMaxChannels = 8;
 using IOReturn = int;
-constexpr IOReturn kIOReturnSuccess = 0, kIOReturnBadArgument = -2, kIOReturnNoMemory = -3;
+constexpr IOReturn kIOReturnSuccess = 0, kIOReturnBadArgument = -2, kIOReturnNoMemory = -3,
+		   kIOReturnNotOpen = -4;
+constexpr int THREAD_UNINT = 0;
 
 struct IOLock {
 	std::mutex mutex;
@@ -332,6 +335,18 @@ using thread_t = void *;
 
 unsigned membersFreed = 0;
 
+struct switch_gpu_resource_set;
+// The BOs' backings that are a resource set's members
+std::vector<switch_gpu_backing *> setMembers;
+
+switch_gpu_resource_set *switch_gpu_backing_set(switch_gpu_backing *backing)
+{
+	return backing && std::find(setMembers.begin(), setMembers.end(), backing) !=
+				       setMembers.end()
+		       ? reinterpret_cast<switch_gpu_resource_set *>(backing)
+		       : nullptr;
+}
+
 void switch_gpu_backing_member_freed(switch_gpu_backing *)
 {
 	++membersFreed;
@@ -378,7 +393,8 @@ public:
 	};
 
 	struct Gate {
-		bool value = false;
+		bool value = false, mutation = false;
+		unsigned mutations = 0;
 
 		bool closed() const
 		{
@@ -388,6 +404,23 @@ public:
 		void close(IOLock *)
 		{
 			value = true;
+		}
+
+		bool beginMutation(IOLock *)
+		{
+			++mutations;
+			mutation = true;
+			return !value;
+		}
+
+		void endMutation(IOLock *)
+		{
+			mutation = false;
+		}
+
+		bool mutating() const
+		{
+			return mutation;
 		}
 	} submitGate_;
 
@@ -552,6 +585,8 @@ public:
 	void reap(bool);
 	void drainResources();
 	IOReturn boFree(const TegraGM20BAbiBoFree *);
+	Bo **findLink(uint64_t);
+	IOReturn freeBo(Bo **);
 	void unbindOverlaps(uint64_t, uint64_t, Bo *);
 	void publishBindings(BindingTable::Snapshot *);
 	bool passSubmitters(bool);

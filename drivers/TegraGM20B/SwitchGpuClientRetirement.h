@@ -128,6 +128,7 @@ void AGXDeviceUserClient::retireBatch()
 		release = bo;
 	}
 	Left left = {release, boIndex_.takeRetired(), bindTable_.takeRetired()};
+	const bool mutation = submitGate_.mutating();
 	__atomic_store_n(&retirementPending_, unsigned(retired_ || readyBos_), __ATOMIC_RELEASE);
 	const bool again = readyBos_ || retireRemaining_ ||
 			   retireScanEpoch_ != __atomic_load_n(&retirementEpoch_, __ATOMIC_ACQUIRE);
@@ -137,7 +138,7 @@ void AGXDeviceUserClient::retireBatch()
 	IOLockUnlock(lock_);
 	if (!left.bos && !left.indexes && !left.bindings)
 		return;
-	if (passSubmitters(false)) {
+	if (!mutation && passSubmitters(false)) {
 		dropLeft(left);
 		return;
 	}
@@ -188,12 +189,15 @@ void AGXDeviceUserClient::keepLeft(const Left &left)
 	append(left_.bindings, left.bindings, &BindingTable::Snapshot::retired);
 }
 
-// releaseCall_'s: what retireBatch could not give back without waiting for a submit lock
+// releaseCall_'s: what retireBatch could not give back without waiting, for a submit lock or for a gated method, which
+// may hold a BO across a drop of lock_ (exec's resolved uses, nativeSurfaceView's source)
 void AGXDeviceUserClient::releaseLeft()
 {
 	IOLockLock(lock_);
 	const Left left = left_;
 	left_ = {};
+	while ((left.bos || left.indexes || left.bindings) && submitGate_.mutating())
+		IOLockSleep(lock_, &submitGate_, THREAD_UNINT);
 	IOLockUnlock(lock_);
 	if (!left.bos && !left.indexes && !left.bindings)
 		return;
@@ -327,16 +331,40 @@ void AGXDeviceUserClient::drainResources()
 	scheduleOrphanRelease();
 }
 
-// lock_ held, the submit gate open: the BO leaves the index and the published bindings at once, and goes only after its
-// bindings retire and every job that may have found it left (retireBatch).
+// lock_ held. The BO leaves the index and the published bindings at once, and goes only after its bindings retire and
+// every job that may have found it left (retireBatch). The submit gate stays open unless the BO is a resource set's
+// member: its free ends the set's generation, waits for the jobs inside the set (switch_gpu_set_reached) and rewrites
+// the member list they read.
 IOReturn AGXDeviceUserClient::boFree(const TegraGM20BAbiBoFree *in)
 {
 	const uint64_t start = nowNs();
-	Bo **p = &bos_;
-	while (*p && (*p)->handle != in->handle)
-		p = &(*p)->next;
+	Bo **p = findLink(in->handle);
 	if (!*p)
 		return kIOReturnBadArgument;
+	const bool member = switch_gpu_backing_set((*p)->backing) != nullptr;
+	if (member) {
+		if (!submitGate_.beginMutation(lock_))
+			return kIOReturnNotOpen;
+		p = findLink(in->handle);
+	}
+	const IOReturn freed = *p ? freeBo(p) : kIOReturnBadArgument;
+	if (member)
+		submitGate_.endMutation(lock_);
+	if (!freed)
+		tgm_stats_bo_free(nowNs() - start);
+	return freed;
+}
+
+AGXDeviceUserClient::Bo **AGXDeviceUserClient::findLink(uint64_t handle)
+{
+	Bo **p = &bos_;
+	while (*p && (*p)->handle != handle)
+		p = &(*p)->next;
+	return p;
+}
+
+IOReturn AGXDeviceUserClient::freeBo(Bo **p)
+{
 	Bo *bo = *p;
 	bool bound = false;
 	for (uint32_t i = 0; i < nbinds_ && !bound; i++)
@@ -359,7 +387,6 @@ IOReturn AGXDeviceUserClient::boFree(const TegraGM20BAbiBoFree *in)
 		publishBindings(snapshot);
 	queueZombie(bo);
 	scheduleRetirement();
-	tgm_stats_bo_free(nowNs() - start);
 	return kIOReturnSuccess;
 }
 

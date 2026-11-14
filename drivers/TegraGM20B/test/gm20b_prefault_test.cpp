@@ -64,10 +64,14 @@ TEST(GM20BPrefault, OnlyLargeSurfacesAtNormalPressure)
 // and keeps them wired; the first import of a surface nothing wrote cleans nothing.
 TEST(GM20BPrefault, AFreshSurfaceCleanedAtCreationIsNotCleanedAtImport)
 {
-	EXPECT_FALSE(tegra_gm20b_import_cleans(false, true, true));
-	EXPECT_TRUE(tegra_gm20b_import_cleans(false, false, true)) << "the import came first";
-	EXPECT_TRUE(tegra_gm20b_import_cleans(false, true, false)) << "written, or imported before";
-	EXPECT_FALSE(tegra_gm20b_import_cleans(true, false, false)) << "another import cleaned it";
+	EXPECT_FALSE(tegra_gm20b_import_cleans(false, true, true, true));
+	EXPECT_TRUE(tegra_gm20b_import_cleans(false, false, true, true)) << "the import came first";
+	EXPECT_TRUE(tegra_gm20b_import_cleans(false, true, false, true))
+		<< "written, or imported before";
+	EXPECT_TRUE(tegra_gm20b_import_cleans(false, true, true, false))
+		<< "the GPU only samples it: what it reads is the CPU's";
+	EXPECT_FALSE(tegra_gm20b_import_cleans(true, false, false, false))
+		<< "another import cleaned it";
 }
 
 TEST(GM20BPrefault, HeldWiringsGoToTheirImportOrBackOldestFirst)

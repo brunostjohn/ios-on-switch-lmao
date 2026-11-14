@@ -148,7 +148,7 @@ TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 	EXPECT_TRUE(Block(client(), "bool spareKeep(const SwitchGpuCachedBuffer &buffer, "
 				    "uint64_t *pas, uint64_t bytes,")
 			    .Has("switch_gpu_cached_buffer_alone(buffer)"));
-	const CodeText free = Block(client(), "IOReturn AGXDeviceUserClient::boFree(");
+	const CodeText free = Block(client(), "IOReturn AGXDeviceUserClient::freeBo(Bo **p)");
 	EXPECT_TRUE(free.Before("unbindOverlaps(binds_[i].va, binds_[i].range, bo);",
 				"queueZombie(bo);"));
 }
@@ -192,9 +192,9 @@ TEST(GM20BPoolPolicySource, CompressibleBosArePoolChunksNoTaskMaps)
 	const CodeText chunks = alloc.Between("if (!ret && compressible) {",
 					      "if (!ret && (in->flags & TegraGM20BBoCoherent)) {");
 	EXPECT_TRUE(chunks.Has("ret = charge.refused ? kIOReturnNoMemory : takeChunks("));
-	EXPECT_TRUE(
-		Block(client(), "AGXDeviceUserClient::BoCharge AGXDeviceUserClient::chargeBo(")
-			.Has("c.refused = compressibleRefusal(in->bytes, pool_bytes_, critical_);"));
+	EXPECT_TRUE(Block(client(), "AGXDeviceUserClient::BoCharge AGXDeviceUserClient::chargeBo(")
+			    .Has("c.refused = compressibleRefusal(in->bytes, pool_bytes_, "
+				 "critical_);"));
 	EXPECT_TRUE(Block(client(), "const char *compressibleRefusal(uint64_t bytes, "
 				    "uint64_t held, bool compositor)")
 			    .Has("tgm_pool::compressibleRefusal(bytes, held, avail, limits, "
@@ -1633,7 +1633,7 @@ TEST(GM20BBoIndexSource, EveryBoListChangeKeepsTheIndex)
 	EXPECT_EQ(CodeText(sources).Count("boIndex_.reserve()"), 2u)
 		<< "publishBo (BoAlloc, BoImport) and nativeSurfaceView";
 	EXPECT_TRUE(Block(SourceText("../SwitchGpuClientRetirement.h"),
-			  "IOReturn AGXDeviceUserClient::boFree(")
+			  "IOReturn AGXDeviceUserClient::freeBo(Bo **p)")
 			    .Before("*p = bo->next;", "boIndex_.erase(bo->handle);"));
 }
 

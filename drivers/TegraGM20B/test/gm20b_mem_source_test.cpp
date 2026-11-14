@@ -113,16 +113,25 @@ TEST(GM20BMemSource, RetirementFreesWhatLeftTheTablesAfterEverySubmitLock)
 	EXPECT_TRUE(batch.Before(
 		"Left left = {release, boIndex_.takeRetired(), bindTable_.takeRetired()};",
 		"IOLockUnlock(lock_); if (!left.bos && !left.indexes && !left.bindings)"));
-	EXPECT_TRUE(batch.Has("if (passSubmitters(false)) { dropLeft(left); return; }"));
+	EXPECT_TRUE(batch.Has("const bool mutation = submitGate_.mutating();"));
+	EXPECT_TRUE(
+		batch.Has("if (!mutation && passSubmitters(false)) { dropLeft(left); return; }"));
 	EXPECT_TRUE(batch.Before("keepLeft(left);", "thread_call_enter(releaseCall_);"));
 	EXPECT_FALSE(batch.Has("passSubmitters(true)"))
 		<< "retireBatch never waits for a submit lock";
 	const CodeText left = Block(retirement, "void AGXDeviceUserClient::releaseLeft()");
 	EXPECT_TRUE(left.Before("left_ = {};", "IOLockUnlock(lock_);"));
+	EXPECT_TRUE(left.Between("left_ = {};", "IOLockUnlock(lock_);")
+			    .Has("submitGate_.mutating()) IOLockSleep(lock_, &submitGate_, "
+				 "THREAD_UNINT);"));
 	EXPECT_TRUE(left.Before("passSubmitters(true);", "dropLeft(left);"));
 	EXPECT_FALSE(Block(retirement, "bool AGXDeviceUserClient::passSubmitters(bool wait)")
 			     .Has("lock_"));
-	const CodeText free = Block(retirement, "IOReturn AGXDeviceUserClient::boFree(");
+	const CodeText free = Block(retirement, "IOReturn AGXDeviceUserClient::freeBo(Bo **p)");
+	const CodeText gated = Block(retirement, "IOReturn AGXDeviceUserClient::boFree(");
+	EXPECT_TRUE(gated.Before("switch_gpu_backing_set((*p)->backing) != nullptr",
+				 "submitGate_.beginMutation(lock_)"));
+	EXPECT_TRUE(gated.Before("submitGate_.beginMutation(lock_)", "freeBo(p)"));
 	EXPECT_TRUE(free.Before("boIndex_.erase(bo->handle);", "queueZombie(bo);"));
 	EXPECT_TRUE(free.Before("publishBindings(snapshot);", "queueZombie(bo);"));
 	EXPECT_TRUE(free.Before("BindingTable::prepare(nbinds_)", "*p = bo->next;"));
@@ -147,8 +156,8 @@ TEST(GM20BMemSource, TheFirstImportOfASurfaceCleanedAtCreationCleansNothing)
 	EXPECT_TRUE(import.Before("tgm_record_first_import(record)",
 				  "creation = tegra_gm20b_prefault_take(bo->surface);"));
 	EXPECT_TRUE(import.Has("const bool cleans = tegra_gm20b_import_cleans(covered, creation != "
-			       "nullptr, fresh != 0); if (cleans) tgm_cpu_clean_pages(bo->pas, "
-			       "bo->npages);"));
+			       "nullptr, fresh != 0, gpuWrites != 0); if (cleans) "
+			       "tgm_cpu_clean_pages(bo->pas, bo->npages);"));
 	EXPECT_TRUE(import.Before("tgm_cpu_clean_pages(bo->pas, bo->npages);",
 				  "creation->complete(kIODirectionInOut);"));
 	EXPECT_EQ(CodeText(unit("TegraGM20BRecord.cpp")).Count("__ATOMIC_SEQ_CST"), 2u);

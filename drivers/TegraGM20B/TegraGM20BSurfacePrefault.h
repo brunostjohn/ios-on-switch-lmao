@@ -100,10 +100,13 @@ template <typename Memory> struct TegraGM20BPrefaultHeld {
 };
 
 /* Whether a GPU import cleans the surface's pages on the CPU: not when another import's clean covers them, nor when it is
- * the surface's first, nothing wrote it (its seed is 0), and the prefault cleaned its pages after their zero-fill with
- * them wired since. Those three are every way a dirty line gets there: a zero-fill, a fault after the pages were unwired,
- * and a CPU store, which IOSurface makes through IOSurfaceLock/Unlock and its seed. */
-inline bool tegra_gm20b_import_cleans(bool covered, bool cleanedAtCreation, bool fresh)
+ * the surface's first, the GPU may write it, nothing wrote it (its seed is 0), and the prefault cleaned its pages after
+ * their zero-fill with them wired since. Those are every way a dirty line gets there: a zero-fill, a fault after the
+ * pages were unwired, and a CPU store, which IOSurface makes through IOSurfaceLock/Unlock and its seed. An import the GPU
+ * only reads still cleans: what it samples is what a CPU put there, and a writer that skipped IOSurfaceLock would leave
+ * it in the cache. */
+inline bool tegra_gm20b_import_cleans(bool covered, bool cleanedAtCreation, bool fresh,
+				      bool gpuWrites)
 {
-	return !covered && !(cleanedAtCreation && fresh);
+	return !covered && !(cleanedAtCreation && fresh && gpuWrites);
 }
