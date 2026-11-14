@@ -162,8 +162,6 @@ static bool m2vAnswers(RMComputeState *s, MTLPipelineOption options,
 id rmComputeState(id device, MTLComputePipelineDescriptor *descriptor, MTLPipelineOption options,
                   MTLAutoreleasedComputePipelineReflection *reflection, NSError **error)
 {
-    if (const char *why = rmUnsupportedComputeState(descriptor))
-        return rmRefuseUnsupported(why, error);
     id<MTLFunction> function = descriptor.computeFunction;
     RMComputeState *s = [RMComputeState new];
     s->_device = device;

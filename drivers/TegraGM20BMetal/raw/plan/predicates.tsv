@@ -22,7 +22,7 @@ tex.foreign	record	m2v	-	m2v's own texture
 pass.fmt	record	gap	rotated_target,stored_multisample,two_plane_extended_range,planar_target	R1 (~1,400 HW Test cbs), R2, R3, R4 as tex.shape
 pass.level	record	layer	L3	levels, slices and depth planes of the textures the raw path keeps, and levels of format views of mipmapped ones, are attachment targets (raw_attachment_target.h), for attachments and resolves alike; left: a resolve into a texture the raw path does not keep or render, a planar or YCbCr one, or a format with no resolve state, a resolve from a part of a texture, and what Metal's validation refuses (past the texture, a slice of a 3D texture or a plane of an array)
 pass.ds	record	gap	stored_multisample	a stored depth/stencil attachment (zetaDescriptor keeps one-sample depth only)
-pass.other	record	query	layered_rendering,rasterization_rate_map,sample_positions	the device answers no for all three at the claimed family
+pass.other	record	query	rasterization_rate_map,sample_positions	the device answers no for both at the claimed family
 pass.rotated	record	gap	rotated_target	a turned attachment beside one of another rotation or size or a loaded or stored one not turned, a rotation-4 Load, and at encode a state whose turned variant could not be made (PipelineTurnRefused)
 state.foreign	record	m2v	-	an m2v pipeline state
 state.notpack	record	m2v	-	functions from another device's library: with one backend every function is this device's

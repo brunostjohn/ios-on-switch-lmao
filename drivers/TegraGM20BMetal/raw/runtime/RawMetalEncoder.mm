@@ -5,7 +5,6 @@
 #import "RawMetalPassCache.h"
 #import "RawMetalRotated.h"
 #import "RawMetalTargetViews.h"
-#include "raw_device_answers.h"
 
 // One count for every kind, as IOAccelDeviceGetNextGlobalTraceID is the device's
 uint64_t nextTraceId()
@@ -504,10 +503,10 @@ void rmPoolEncoders()
     [self retain:e->_visibility];
     const NSUInteger positions = [pass getSamplePositions:nullptr count:0];
     facts.layers = uint32_t(std::clamp<NSUInteger>(pass.renderTargetArrayLength, 1, 2048));
-    if ((facts.layers > 1 && !raw::answers::kThisKind.layeredRendering) || pass.rasterizationRateMap ||
+    if (pass.rasterizationRateMap ||
         (positions && !passSamplePositions(pass, positions, e->_samples, facts.positions))) {
-        [self takeReason:WhyPass why:@"layers, a rate map or sample positions of its own"];
-        hit(self, PredPassOther, pass.renderTargetArrayLength | positions << 32, pass.rasterizationRateMap != nil);
+        [self takeReason:WhyPass why:@"a rate map or sample positions of its own"];
+        hit(self, PredPassOther, positions, pass.rasterizationRateMap != nil);
     }
     e->_renderAt = _plan.size();
     Cmd m = cmd(OpRender);

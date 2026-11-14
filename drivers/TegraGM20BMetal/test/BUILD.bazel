@@ -128,9 +128,10 @@
 #   raw_device_identity_test  raw/runtime/raw_device_answers.h: the identity's GPU subtype (MTLDevice.architecture) is
 #                     the one the selected IPSW ships AGX binaries for, its QuartzCore's
 #   raw_device_answers_test  raw/runtime/raw_device_answers.h, every kind: YES for shared texture handles and
-#                     buffers over IOSurfaces, the target's tessellation, amplification and dynamic attribute stride,
-#                     predication nested as deep as the raw path lays its loops, and counter sampling at stage
-#                     boundaries alone
+#                     buffers over IOSurfaces, GM20B's counts (caps) where raw draws them (layers, viewports,
+#                     tessellation, amplification, dynamic stride, threadgroup memory, interpolants, framebuffer bits,
+#                     tier-2 argument buffers), predication nested as deep as the raw path lays its loops, and counter
+#                     sampling at stage boundaries alone
 #   raw_shared_texture_test  raw/runtime/raw_shared_texture.h, raw_surface_image.h and RawMetalSharedTexture.h, every kind:
 #                     a shared texture's IOSurface creation properties from its descriptor (Metal's keys; a one-level 2D
 #                     one's rows and room for the kernel's block-linear layout, any other's image as the raw path lays
@@ -4302,6 +4303,7 @@ host_test(
         "raw_device_identity_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_archive.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_device_answers.h",
+        "//kits/SwitchGM20BEmit:SwitchGM20BMacroSlots.h",
     ],
     copts = ["-I$(GENDIR)/kits/SwitchGM20B"],
     cxx_std = "c++17",
@@ -4318,6 +4320,7 @@ host_test(
     srcs = [
         "raw_device_answers_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_device_answers.h",
+        "//kits/SwitchGM20BEmit:SwitchGM20BMacroSlots.h",
     ],
     copts = ["-I$(GENDIR)/kits/SwitchGM20B"],
     cxx_std = "c++17",
@@ -5602,6 +5605,52 @@ host_test(
         "raw_facade_standins.h",
         "raw_frontend_absent.cpp",
         "raw_kernel_model.h",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    data = [":fake_nvk/libvulkan_nouveau.dylib"],
+    env = {"SWITCH_FAKE_NVK": "$(rootpath :fake_nvk/libvulkan_nouveau.dylib)"},
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
+        ":raw_facade_plugin_host",
+        ":raw_runtime_plugin_host",
+        "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
+    ] + RAW_HOST_DEPS,
+)
+
+# The answers above the identity through the facade device's selectors, on the kind of the build's config, and the paths
+# behind them raw: a layered pass that draws, eight RGBA32Float targets, eight amplifications, patches in an indirect
+# command buffer
+host_test(
+    name = "raw_facade_answers_test",
+    srcs = [
+        "empty_pack.h",
+        "made_metallib.h",
+        "raw_facade_harness.h",
+        "raw_job_methods.h",
+        "raw_facade_answers_test.cpp",
+        "raw_facade_standins.h",
+        "raw_frontend_absent.cpp",
+        "raw_kernel_model.h",
+        "//kits/SwitchGM20BEmit:SwitchGM20BMacroSlots.h",
     ] + RAW_HOST_HEADERS,
     copts = [
         "-x",

@@ -8,20 +8,19 @@
 // form draws in (gpu.raw.raster_order); framebuffer reads (programmable blending), the storage form's fetch inside the
 // interlock (gpu.raw.framebuffer_fetch); native half arithmetic, SM53's HADD2, HMUL2 and HFMA2 (gpu.compute.half_alu).
 // maxPredicatedNestingDepth is the loop depth the raw path lays down
-// (raw_loop_copies.h LoopCopies::kMaxDepth). Vertex amplification and dynamic attribute stride are
-// the target's: the A13's supportsVertexAmplificationCount: takes 0 to 8 (AGXA13FamilyDevice, `cmp w2,#9; cset lo`),
-// its limits table's maxVertexAmplificationCount 2 and maxVertexAmplificationFactor 8, supportsDynamicAttributeStride
-// supportsFamily:Apple4; the A10X takes a count of 0 or 1 (`tst x2,#~1`) and no dynamic stride. Tessellation is the
-// target's: _MTLDevice's supportsTessellation is supportsFamily:Apple3 and supportsIndirectTessellation
-// supportsFamily:Apple5, maxTessellationFactor its limits table's 16 (A10X) or 64 (A13), as the Metal Feature Set
-// Tables list them. raw/test/selcover holds every other capability equal to the m2v device's on the host, for the kind
-// its bridge was built for.
+// (raw_loop_copies.h LoopCopies::kMaxDepth). Tessellation is _MTLDevice's supportsTessellation (supportsFamily:Apple3).
+// Above the identity, on purpose (NativeMetalTarget.rs): the counts GM20B has (kits/SwitchGM20B caps), each answered
+// where raw draws it on both kinds: layered passes, 16 viewports, tessellation factor 64, indirect patches, dynamic
+// attribute stride, the amplification the amplify macro keeps (SWITCH_GM20B_AMP_MAX), 48 KiB of threadgroup memory,
+// eight targets of the widest colour a pixel, tier-2 argument buffers through the handle tables (raw_heap_tables.h),
+// and 128 interpolated components on 21H461 (24B119 keeps Metal 27's ceiling of 124).
 // An argument answer holds `value` for every argument in [first, last] and 0 elsewhere.
 #pragma once
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
 #include <string_view>
+#include "../../../../kits/SwitchGM20BEmit/SwitchGM20BMacroSlots.h"
 #include "MetalABI.h"
 #include "SwitchGM20BCaps.h"
 
@@ -33,6 +32,19 @@ constexpr uint64_t chipFeature(switch_gm20b_feature f)
 {
     return switch_gm20b_features[f].present && switch_gm20b_features[f].grade == SWITCH_GM20B_GRADE_CHIP;
 }
+
+// The bits of a pixel in its widest colour target: the largest texel of a format the hardware renders
+constexpr uint64_t widestTargetBits()
+{
+    uint64_t widest = 0;
+    for (const switch_gm20b_format &f : switch_gm20b_formats)
+        if ((f.flags & SWITCH_GM20B_FORMAT_RENDER) && f.block_w == 1 && f.block_h == 1 && 8u * f.bytes > widest)
+            widest = 8u * f.bytes;
+    return widest;
+}
+
+// An immediate-mode GPU keeps no tile: every colour target may hold the widest format
+constexpr uint64_t kFramebufferBits = SWITCH_GM20B_LIMIT_COLOR_TARGETS * widestTargetBits();
 
 struct Count {
     const char *selector;
@@ -61,14 +73,11 @@ struct Kind {
     // the target's Metal driver (NativeMetalTarget.rs), the domain its errors take: a creation's binary archive miss is code 3
     // in it (an M4 answers AGXMetalG16X)
     const char *driver;
-    // a render pass of several layers (renderTargetArrayLength): the A13 (Apple6) renders one, the A10X (Apple3) has
-    // no layered rendering in Apple's feature tables
-    bool layeredRendering;
 };
 
 inline constexpr Count kCounts21H461[] = {
     {"gpuCoreCount", 2, false},
-    {"maxVertexAmplificationCount", 1, false},
+    {"maxVertexAmplificationCount", SWITCH_GM20B_AMP_MAX, false},
     {"deviceLinearTextureAlignmentBytes", 32, false},
     {"linearTextureAlignmentBytes", 32, false},
     {"iosurfaceTextureAlignmentBytes", 32, false},
@@ -86,7 +95,7 @@ inline constexpr Count kCounts21H461[] = {
     {"maxComputeSamplers", 16, false},
     {"maxTileSamplers", 0, false},
     {"maxComputeLocalMemorySizes", 31, false},
-    {"maxComputeThreadgroupMemory", 16384, false},
+    {"maxComputeThreadgroupMemory", SWITCH_GM20B_LIMIT_THREADGROUP_MEMORY_BYTES, false},
     {"maxComputeThreadgroupMemoryAlignmentBytes", 16, false},
     {"maxPredicatedNestingDepth", 8, false},
     {"maxRasterizationRateLayerCount", 2, false},
@@ -94,7 +103,7 @@ inline constexpr Count kCounts21H461[] = {
     {"maxTextureHeight2D", 16384, false},
     {"maxTextureLayers", 2048, false},
     {"maxTotalComputeThreadsPerThreadgroup", 1024, false},
-    {"maxViewportCount", 1, false},
+    {"maxViewportCount", SWITCH_GM20B_LIMIT_VIEWPORTS, false},
     {"isFramebufferReadSupported", 1, true},
     {"supportsProgrammableBlending", 1, true},
     {"isLargeMRTSupported", 0, true},
@@ -104,7 +113,7 @@ inline constexpr Count kCounts21H461[] = {
     {"supportsCommandBufferJump", 1, true},
     {"supportsComputeCompressedTextureWrite", 0, true},
     {"supportsConditionalLoadStore", 0, true},
-    {"supportsDynamicAttributeStride", 0, true},
+    {"supportsDynamicAttributeStride", 1, true},
     {"supportsExtendedXR10Formats", 1, true},
     {"supportsFloat16BCubicFiltering", 1, true},
     {"supportsHeapWithAddressRanges", 0, true},
@@ -119,8 +128,8 @@ inline constexpr Count kCounts21H461[] = {
     {"supportsSIMDShuffleAndFill", 1, true},
     {"supportsTexture2DMultisampleArray", 0, true},
     {"supportsTileShaders", 0, true},
-    {"maxThreadgroupMemoryLength", 16384, false},
-    {"argumentBuffersSupport", 0, false},
+    {"maxThreadgroupMemoryLength", SWITCH_GM20B_LIMIT_THREADGROUP_MEMORY_BYTES, false},
+    {"argumentBuffersSupport", 1, false},
     {"readWriteTextureSupport", 2, false},
     {"maxColorAttachments", 8, false},
     {"minConstantBufferAlignmentBytes", 4, false},
@@ -135,13 +144,13 @@ inline constexpr Count kCounts21H461[] = {
     {"supportsYCBCRFormats12", 0, true},
     {"supportsYCBCRPackedFormats12", 0, true},
     {"supportsSIMDGroup", 1, true},
-    {"maxFramebufferStorageBits", 256, false},
+    {"maxFramebufferStorageBits", kFramebufferBits, false},
     {"maxVertexAttributes", 31, false},
     {"maxVertexInlineDataSize", 4096, false},
     {"maxFragmentInlineDataSize", 4096, false},
     {"maxComputeInlineDataSize", 4096, false},
-    {"maxInterpolants", 60, false},
-    {"maxInterpolatedComponents", 60, false},
+    {"maxInterpolants", SWITCH_GM20B_LIMIT_INTERPOLATED_COMPONENTS, false},
+    {"maxInterpolatedComponents", SWITCH_GM20B_LIMIT_INTERPOLATED_COMPONENTS, false},
     {"maxVisibilityQueryOffset", 65528, false},
     {"maxTextureWidth1D", 16384, false},
     {"maxTextureWidth3D", 2048, false},
@@ -150,18 +159,19 @@ inline constexpr Count kCounts21H461[] = {
     {"maxTextureDimensionCube", 16384, false},
     {"maxTextureBufferWidth", 134217728, false},
     {"maxFunctionConstantIndices", 65536, false},
-    {"maxIndirectBuffers", 31, false},
-    {"maxIndirectTextures", 31, false},
-    {"maxIndirectSamplers", 16, false},
+    {"maxIndirectBuffers", 500000, false},
+    {"maxIndirectTextures", 500000, false},
+    {"maxIndirectSamplers", 500000, false},
     {"maxIndirectSamplersPerDevice", 96, false},
     {"maxFenceInstances", 32768, false},
     {"maxCustomSamplePositions", 4, false},
-    {"maxVertexAmplificationFactor", 1, false},
+    {"maxVertexAmplificationFactor", SWITCH_GM20B_AMP_MAX, false},
     {"maxComputeAttributes", 31, false},
     {"maxConstantBufferArguments", 31, false},
     {"supportsTessellation", 1, true},
-    {"supportsIndirectTessellation", 0, true},
-    {"maxTessellationFactor", 16, false},
+    {"supportsLayeredRendering", 1, true},
+    {"supportsIndirectTessellation", 1, true},
+    {"maxTessellationFactor", SWITCH_GM20B_LIMIT_TESSELLATION_LEVEL, false},
 };
 
 inline constexpr ArgRange kArgs21H461[] = {
@@ -196,7 +206,7 @@ inline constexpr ArgRange kArgs21H461[] = {
     {"minimumLinearTextureAlignmentForPixelFormat:", false, 651, 652, 32},
     {"supportsTextureSampleCount:", true, 1, 2, 1},
     {"supportsTextureSampleCount:", true, 4, 4, 1},
-    {"supportsVertexAmplificationCount:", true, 0, 1, 1},
+    {"supportsVertexAmplificationCount:", true, 0, SWITCH_GM20B_AMP_MAX, 1},
     {"supportsRasterizationRateMapWithLayerCount:", true, 1, 2, 1},
     {"supportsCounterSampling:", true, 0, 0, 1},
     {"supportsFamily:", true, 1001, 1003, 1},
@@ -225,7 +235,7 @@ inline constexpr Count kCounts24B119[] = {
     {"maxComputeSamplers", 16, false},
     {"maxTileSamplers", 0, false},
     {"maxComputeLocalMemorySizes", 31, false},
-    {"maxComputeThreadgroupMemory", 32768, false},
+    {"maxComputeThreadgroupMemory", SWITCH_GM20B_LIMIT_THREADGROUP_MEMORY_BYTES, false},
     {"maxComputeThreadgroupMemoryAlignmentBytes", 16, false},
     {"maxPredicatedNestingDepth", 8, false},
     {"maxRasterizationRateLayerCount", 2, false},
@@ -233,7 +243,7 @@ inline constexpr Count kCounts24B119[] = {
     {"maxTextureHeight2D", 16384, false},
     {"maxTextureLayers", 2048, false},
     {"maxTotalComputeThreadsPerThreadgroup", 1024, false},
-    {"maxViewportCount", 16, false},
+    {"maxViewportCount", SWITCH_GM20B_LIMIT_VIEWPORTS, false},
     {"isFramebufferReadSupported", 1, true},
     {"supportsProgrammableBlending", 1, true},
     {"isLargeMRTSupported", 0, true},
@@ -258,7 +268,7 @@ inline constexpr Count kCounts24B119[] = {
     {"supportsSIMDShuffleAndFill", 1, true},
     {"supportsTexture2DMultisampleArray", 0, true},
     {"supportsTileShaders", 0, true},
-    {"maxThreadgroupMemoryLength", 32768, false},
+    {"maxThreadgroupMemoryLength", SWITCH_GM20B_LIMIT_THREADGROUP_MEMORY_BYTES, false},
     {"argumentBuffersSupport", 1, false},
     {"readWriteTextureSupport", 2, false},
     {"maxColorAttachments", 8, false},
@@ -274,7 +284,7 @@ inline constexpr Count kCounts24B119[] = {
     {"supportsYCBCRFormats12", 0, true},
     {"supportsYCBCRPackedFormats12", 0, true},
     {"supportsSIMDGroup", 1, true},
-    {"maxFramebufferStorageBits", 512, false},
+    {"maxFramebufferStorageBits", kFramebufferBits, false},
     {"maxVertexAttributes", 31, false},
     {"maxVertexInlineDataSize", 4096, false},
     {"maxFragmentInlineDataSize", 4096, false},
@@ -295,12 +305,12 @@ inline constexpr Count kCounts24B119[] = {
     {"maxIndirectSamplersPerDevice", 96, false},
     {"maxFenceInstances", 32768, false},
     {"maxCustomSamplePositions", 4, false},
-    {"maxVertexAmplificationFactor", 8, false},
+    {"maxVertexAmplificationFactor", SWITCH_GM20B_AMP_MAX, false},
     {"maxComputeAttributes", 31, false},
     {"maxConstantBufferArguments", 31, false},
     {"supportsTessellation", 1, true},
     {"supportsIndirectTessellation", 1, true},
-    {"maxTessellationFactor", 64, false},
+    {"maxTessellationFactor", SWITCH_GM20B_LIMIT_TESSELLATION_LEVEL, false},
 };
 
 inline constexpr ArgRange kArgs24B119[] = {
@@ -335,7 +345,7 @@ inline constexpr ArgRange kArgs24B119[] = {
     {"minimumLinearTextureAlignmentForPixelFormat:", false, 651, 652, 32},
     {"supportsTextureSampleCount:", true, 1, 2, 1},
     {"supportsTextureSampleCount:", true, 4, 4, 1},
-    {"supportsVertexAmplificationCount:", true, 0, 8, 1},
+    {"supportsVertexAmplificationCount:", true, 0, SWITCH_GM20B_AMP_MAX, 1},
     {"supportsRasterizationRateMapWithLayerCount:", true, 1, 2, 1},
     {"supportsCounterSampling:", true, 0, 0, 1},
     {"supportsFamily:", true, 1001, 1003, 1},
@@ -346,9 +356,9 @@ inline constexpr ArgRange kArgs24B119[] = {
 
 inline constexpr Kind kKinds[] = {
     {"21H461", kCounts21H461, std::size(kCounts21H461), kArgs21H461, std::size(kArgs21H461), 0x61, "Apple", "A10X",
-     "GPU", "AGXMetalA10", false},
+     "GPU", "AGXMetalA10"},
     {"24B119", kCounts24B119, std::size(kCounts24B119), kArgs24B119, std::size(kArgs24B119), 0xd2, "Apple", "A13",
-     "GPU", "AGXMetalA13", true},
+     "GPU", "AGXMetalA13"},
 };
 
 // The kind this build is for (MetalABI.h): its table's index, or the table count when it has none
