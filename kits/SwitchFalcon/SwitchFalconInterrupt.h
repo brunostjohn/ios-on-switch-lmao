@@ -11,10 +11,10 @@
 // nothing rewrites before the next on()); failed() describes the error taken since the last on(), if one was.
 #pragma once
 #include <stdint.h>
+#include <IOKit/IOLocks.h>
 #include "SwitchFalconError.h"
 
 class IOFilterInterruptEventSource;
-struct IOSimpleLock;
 
 class SwitchFalconInterrupt {
 public:
