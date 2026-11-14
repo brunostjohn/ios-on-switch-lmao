@@ -865,7 +865,10 @@ host_shims(
         "kern/thread.h",
     ],
     stubs = "gm20b_coherency_stubs.h",
-    visibility = ["//drivers/TegraNVENC/test:__pkg__"],
+    visibility = [
+        "//drivers/TegraGM20B/test/exec:__pkg__",
+        "//drivers/TegraNVENC/test:__pkg__",
+    ],
 )
 
 host_shims(
@@ -958,7 +961,10 @@ host_library(
     name = "backing",
     srcs = ["switch_gpu_backing_completion_stub.cpp"] + BACKING_SRCS,
     hdrs = BACKING_HDRS,
-    visibility = ["//drivers/TegraNVENC/test:__pkg__"],
+    visibility = [
+        "//drivers/TegraGM20B/test/exec:__pkg__",
+        "//drivers/TegraNVENC/test:__pkg__",
+    ],
     deps = [
         ":dependency_trace",
         ":coherency_kernel",
