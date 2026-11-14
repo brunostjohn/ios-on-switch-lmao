@@ -560,12 +560,6 @@ py_binary(
 )
 
 py_binary(
-    name = "ordercheck",
-    srcs = ["raw/test/ordercheck.py"],
-    main = "raw/test/ordercheck.py",
-)
-
-py_binary(
     name = "check_dyld_cache_imports",
     srcs = ["check-dyld-cache-imports.py"],
     main = "check-dyld-cache-imports.py",

@@ -5,15 +5,15 @@ import Metal
 
 /// Stored one-sample depth/stencil textures in the raw path's own zeta memory: each of Metal's four formats made private
 /// (render target and sampled), cleared and drawn into on the left half, and read back by the copy engine, exact; and a
-/// Depth32Float_Stencil8 2D array (its slice 1) and cube (its face 4) the same way; every command buffer raw and no m2v
-/// twin made for any of them (switchRawProbeFacts twin=0). Then Depth32Float targets as the device makes them on
+/// Depth32Float_Stencil8 2D array (its slice 1) and cube (its face 4) the same way; every command buffer raw and each
+/// texture in raw memory (switchRawProbeFacts raw=1). Then Depth32Float targets as the device makes them on
 /// compressed zeta memory (raw_comp.h storedZetaKind): a 64x64 one drawn and read back by the copy engine and sampled by
 /// the texture unit, exact, and a 1280x720 one taking 16 clear-only passes (ZBC's case), timed against one held on plain
 /// memory where a debug facade can (switchRawProbePlainPrivate:). The d32f case is sampled too, as the reference read.
 /// Each other format storedZetaKind compresses (compressedCases) is drawn, read back and sampled on compressed memory.
 struct StoredDepthTest: HWTest {
     let id = "gpu.raw.stored_depth"
-    let name = "Stored depth/stencil in raw zeta memory: no m2v twin, exact readback, ZBC clear cost"
+    let name = "Stored depth/stencil in raw zeta memory: exact readback, ZBC clear cost"
     let subsystem = Subsystem.metal
 
     static let size = 64
@@ -72,7 +72,7 @@ struct StoredDepthTest: HWTest {
             }
             if (ran.sampledWrong ?? 0) > 0 { wrong.append(c.name + "_sampled") }
             if ran.paths.contains(where: { $0 != "raw" }) { wrong.append(c.name + "_path") }
-            if !ran.facts.contains("raw=1") || !ran.facts.contains("twin=0") { wrong.append(c.name + "_facts") }
+            if !ran.facts.contains("raw=1") { wrong.append(c.name + "_facts") }
             if ran.wrongDepth + ran.wrongStencil > 0 { wrong.append(c.name) }
         }
         try await compressedArm(gpu, &metrics, &wrong)

@@ -1538,8 +1538,6 @@ host_test(
         "gm20b_record_model.h",
         "gm20b_tiled_stubs.cpp",
     ],
-    # m2v: method 17 (ExecSurfaces), which only NVK calls
-    tags = ["m2v"],
     deps = [
         ":coherency",
         ":coherency_kernel",

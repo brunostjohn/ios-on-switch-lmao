@@ -86,7 +86,7 @@ public enum Registry {
         [CPUAsyncTimersTest(), RegDumpQuietTest()] + gpuScenes + metal + GPUPathTests.all + NativeObjectTests.all
         + NativeCallTests.all + video + images + audio
         + display + compositor + sensorsAndInput + connectivityAndStorage
-        + cpuAndSystem + [RawShareTest()]
+        + cpuAndSystem
         // Drives an NVDEC output mode nothing else uses: after every shared test.
         + [DisplayBufferTest()]
         // The shader compiler's generation covers every test before it.

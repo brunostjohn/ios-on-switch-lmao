@@ -30,16 +30,12 @@ rust_test(
     name = "native_variants_test",
     srcs = ["//drivers/NativeMetal:bridge/NativeMetalVariants.rs"],
     edition = "2024",
-    # m2v: the bridge's own Rust
-    tags = ["m2v"],
 )
 
 rust_test(
     name = "native_tess_modes_test",
     srcs = ["//drivers/NativeMetal:bridge/NativeMetalTessModes.rs"],
     edition = "2024",
-    # m2v: the bridge's own Rust
-    tags = ["m2v"],
 )
 
 host_test(

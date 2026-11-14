@@ -69,6 +69,9 @@ struct StorageCompressedTest: HWTest {
             metrics.set("\(arm)_compressed_fallbacks", fallbacks)
         }
         var wrong: [String] = []
+        for arm in ["plain", "storage", "barrier"] where metrics["\(arm)_path"] != .text("raw") {
+            wrong.append("\(arm)_off_raw")
+        }
         for arm in ["storage", "barrier"] {
             let differ = zip(runs[arm] ?? [], runs["plain"] ?? []).filter { $0 != $1 }.count
             metrics.set("\(arm)_bytes_differ", differ)

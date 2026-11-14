@@ -1,4 +1,5 @@
 import Foundation
+import HWTestCore
 import Metal
 
 /// What the Switch's Metal stack tells a process about its GPU paths (drivers/TegraGM20BMetal/raw/runtime/RawMetal.mm,
@@ -133,5 +134,19 @@ public enum RawFacade {
         let selector = NSSelectorFromString(name)
         guard let object = object as? NSObject, object.responds(to: selector) else { return nil }
         return object.perform(selector)?.takeUnretainedValue()
+    }
+}
+
+extension Outcome {
+    /// On the facade, FAIL naming the command buffers `gpu` ran off the raw path (their paths name the refusal), ahead of
+    /// whatever else the test found; unchanged off the facade and when every one ran raw. paths= on the line.
+    public func onRawPath(_ gpu: GPU) -> Outcome {
+        guard RawFacade.kind(of: gpu.device) == "raw" else { return self }
+        var metrics = self.metrics
+        metrics.set("paths", gpu.paths.isEmpty ? "-" : gpu.paths.text)
+        let off = gpu.paths.offRaw
+        guard !off.isEmpty else { return Outcome(verdict, metrics, detail: detail, proof: proof) }
+        let reason = "command buffers off the raw path: \(off.text)"
+        return Outcome(.fail, metrics, detail: detail.isEmpty ? reason : reason + "; " + detail, proof: proof)
     }
 }

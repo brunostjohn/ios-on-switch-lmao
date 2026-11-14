@@ -3314,13 +3314,15 @@ host_test(
     name = "raw_linked_source_test",
     srcs = ["raw_linked_source_test.cpp"],
     data = [
+        "//drivers/NativeMetal:bridge/NativeMetalObjects.h",
+        "//drivers/NativeMetal:bridge/NativeMetalObjects.rs",
         "//drivers/TegraGM20BMetal:raw/pack/probe_states.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawComplete.mm",
-        "//drivers/TegraGM20BMetal:raw/runtime/RawRenderKey.mm",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_render_key.h",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalLibrary.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawMetalStates.mm",
         "//drivers/TegraGM20BMetal:raw/runtime/RawPipelineKey.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawRenderKey.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_render_key.h",
     ],
 )
 

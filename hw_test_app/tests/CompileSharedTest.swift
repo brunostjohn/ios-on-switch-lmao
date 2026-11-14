@@ -67,7 +67,7 @@ struct CompileSharedTest: HWTest {
         metrics.set("kernel_wrong", wrong)
         checks.append(("the salted kernel's every element exact", wrong == 0))
 
-        return .judged(checks, metrics, proof: "salt \(salt)")
+        return .judged(checks, metrics, proof: "salt \(salt)").onRawPath(gpu)
     }
 
     func pipeline(_ gpu: GPU, salt: UInt32) throws -> MTLRenderPipelineState {
