@@ -515,7 +515,12 @@ extern "C" void tegra_display_power_up(void)
     write(gDsi, kDsiPadCal);
     write(gMipiCal, kMipiDsiCal);
     unsigned waited = 0;
-    if (!tegra_mipi_cal::calibrate(gMipiCal, [] { IOSleep(1); }, waited)) {
+    if (!tegra_mipi_cal::calibrate(
+            gMipiCal,
+            [] {
+                IOSleep(1);
+            },
+            waited)) {
         IOLog("TegraDisplay: DSI pad calibration not done in %u ms (CIL_MIPI_CAL_STATUS %#x STATUS_2 %#x): the panel "
               "link runs on what it reached\n",
               waited, static_cast<uint32_t>(gMipiCal[tegra_mipi_cal::kStatus]),

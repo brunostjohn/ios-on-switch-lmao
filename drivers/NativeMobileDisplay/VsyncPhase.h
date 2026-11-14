@@ -293,4 +293,3 @@ public:
 private:
     unsigned flips = 0;
 };
-

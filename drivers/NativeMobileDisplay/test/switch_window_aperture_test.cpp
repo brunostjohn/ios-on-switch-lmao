@@ -56,8 +56,8 @@ Dc loaded(bool aliased)
 {
     Dc dc;
     dc.aliased = aliased;
-    dc.words[kStateAccess] = 1u << 0;    // READ_MUX ACTIVE, as a gate read leaves it
-    dc.words[kWindowHeader] = 1u << 5;   // window B selected
+    dc.words[kStateAccess] = 1u << 0;   // READ_MUX ACTIVE, as a gate read leaves it
+    dc.words[kWindowHeader] = 1u << 5;  // window B selected
     dc.words[0x800] = 0xc0000000;
     dc.words[0x806] = 0x40;
     dc.words[0x80b] = 0x12;

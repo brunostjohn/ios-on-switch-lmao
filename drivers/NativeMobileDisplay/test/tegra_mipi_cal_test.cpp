@@ -22,7 +22,9 @@ struct MipiCal {
 
         operator uint32_t() const
         {
-            return index == tegra_mipi_cal::kStatus ? cal.status : index == tegra_mipi_cal::kStatus2 ? cal.status2 : cal.ctrl;
+            return index == tegra_mipi_cal::kStatus    ? cal.status
+                   : index == tegra_mipi_cal::kStatus2 ? cal.status2
+                                                       : cal.ctrl;
         }
 
         Word &operator=(uint32_t value)
@@ -66,7 +68,12 @@ TEST(TegraMipiCal, OneStartWaitsForEveryDoneBit)
     cal.status2 = tegra_mipi_cal::kClockDoneDsia;  // left from an earlier calibration
     cal.steps = 3;
     unsigned waited = 99;
-    EXPECT_TRUE(tegra_mipi_cal::calibrate(cal, [&] { cal.millisecond(); }, waited));
+    EXPECT_TRUE(tegra_mipi_cal::calibrate(
+        cal,
+        [&] {
+            cal.millisecond();
+        },
+        waited));
     EXPECT_EQ(cal.starts, 1u);
     EXPECT_EQ(waited, 3u) << "done once the state machine finished, not before and not a fixed time";
     EXPECT_EQ(cal.ctrl, tegra_mipi_cal::kStart & ~1u);
@@ -97,7 +104,12 @@ TEST(TegraMipiCal, StillActiveIsNotDone)
     MipiCal cal;
     cal.steps = 0;
     unsigned waited = 0;
-    EXPECT_FALSE(tegra_mipi_cal::calibrate(cal, [&] { cal.millisecond(); }, waited));
+    EXPECT_FALSE(tegra_mipi_cal::calibrate(
+        cal,
+        [&] {
+            cal.millisecond();
+        },
+        waited));
     EXPECT_TRUE(cal.status & tegra_mipi_cal::kActive);
     EXPECT_EQ(cal.starts, 1u);
 }

@@ -2123,13 +2123,14 @@ private:
         dropVpulse2();
         char gic[192];
         switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
-        IOLog("SwitchDisplay: V_PULSE2 %s (line %u; SIGNAL_OPTIONS0 %#x V_PULSE2 %#x/%#x INT_STATUS %#x MASK %#x ENABLE "
-              "%#x, %s): vsync at V_BLANK\n",
-              step == VsyncPhaseProbe::kFailed ? "never reached the CPU in its probe's flips"
-                                               : "was programmed without its route to the CPU",
-              phaseLine, static_cast<uint32_t>(dc[kDcDispSignalOptions0]),
-              static_cast<uint32_t>(dc[kDcDispVpulse2Control]), static_cast<uint32_t>(dc[kDcDispVpulse2Position]),
-              static_cast<uint32_t>(dc[kDcIntStatus]), mask, enable, gic);
+        IOLog(
+            "SwitchDisplay: V_PULSE2 %s (line %u; SIGNAL_OPTIONS0 %#x V_PULSE2 %#x/%#x INT_STATUS %#x MASK %#x ENABLE "
+            "%#x, %s): vsync at V_BLANK\n",
+            step == VsyncPhaseProbe::kFailed ? "never reached the CPU in its probe's flips"
+                                             : "was programmed without its route to the CPU",
+            phaseLine, static_cast<uint32_t>(dc[kDcDispSignalOptions0]),
+            static_cast<uint32_t>(dc[kDcDispVpulse2Control]), static_cast<uint32_t>(dc[kDcDispVpulse2Position]),
+            static_cast<uint32_t>(dc[kDcIntStatus]), mask, enable, gic);
     }
 
     // The frame's lines, for the vsync phase's V_PULSE2 line (its constants' comment). One error line when DC A's timing
