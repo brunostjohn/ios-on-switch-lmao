@@ -100,7 +100,7 @@ enum X1Probes {
         X1PassBarrierProbe.probe, X1JobBoundaryProbe.probe, X1SwitchDrainProbe.probe,
         X1RawProbes.blendKills, X1RawProbes.viewportSwizzle, X1PrecisionProbe.probe, X1IteratedBlendProbe.probe,
         X1CompressedCopyProbe.probe, X1CompressedDepthProbe.probe, X1TwodProbes.scale, X1TwodProbes.clear,
-        X1TwodProbes.resolve, X1ConstantColourProbe.probe, X1FillBoxProbe.probe, M2VMSAAFetchProbe.probe,
+        X1TwodProbes.resolve, X1ConstantColourProbe.probe, X1FillBoxProbe.probe,
         X1VICPitchProbe.probe, X1VICLayoutProbe.probe, X1VICFractionProbe.probe,
         X1VICPackedProbe.probe, X1VICTransposeProbe.probe, X1VICLargeProbe.probe, X1VICComposeProbe.probe,
         X1VICComposeProbe.display,
