@@ -105,10 +105,10 @@ void SwitchThermal::dfllLanding()
             IOSleep(ms - slept);
             slept = ms;
             const uint32_t khz = probeCpuKhz();
-            tegra_dfll_cpu_loop loop;
-            tegra_dfll_cpu_loop_registers(&loop);
-            dfllLandingAppend(n, " %u.%u=%u,%x,%x,%x,%x,%x", c, ms, khz, loop.freq_req, loop.tune1, loop.output_cfg,
-                              loop.monitor, loop.i2c_sts);
+            tegra_dfll_cpu_loop regs;
+            tegra_dfll_cpu_loop_registers(&regs);
+            dfllLandingAppend(n, " %u.%u=%u,%x,%x,%x,%x,%x", c, ms, khz, regs.freq_req, regs.tune1, regs.output_cfg,
+                              regs.monitor, regs.i2c_sts);
         }
     }
     const int err = restore ? tegra_dfll_cpu_set_rate(restore) : -EINVAL;
