@@ -35,6 +35,11 @@ path, and the worker advertises that Xcode's build as the `xcode` exec property.
      directory, and macOS can report a hard-linked executable under any of its names. The hermetic Python and rustc
      find their libraries next to themselves, so they looked in the cache directory and failed. An APFS clone is a
      separate file that takes no space.
+   - `bb_worker-slots.diff` from this directory, on top of the clonefile one. Upstream builds every action's inputs in
+     a new directory and deletes them afterwards. On the EC2 host that churn kept about 4 of its 10 cores busy in the
+     worker, fseventsd and XProtect, which scans every new copy of a tool. With the patch, each executor keeps its input
+     root between actions and fetches only what changed. A file that an action wrote, chmodded or replaced is fetched
+     again. `//gpu:raw_stack` (1,309 remote actions) then took 109-121 s there instead of 169-172 s.
 2. Put two tokens, minted with the cache's key (homelab `make-cache-token.sh`), in
    `~/Library/Application Support/switch-ios/bazel-worker/`: `cache.token` (audience `bazel-cache`) and
    `worker.token` (audience `bazel-worker`).
@@ -43,8 +48,8 @@ path, and the worker advertises that Xcode's build as the `xcode` exec property.
    within a minute. The Studio runs with a 2 GiB cache, 12 actions and a 17 GiB floor. The script installs three
    LaunchAgents (`com.brunostjohn.switch.bazel-runner`, `-worker`, `-floor`) and starts them.
 
-Inputs are cached in `~/Library/Caches/switch-ios-worker/cache`, up to the given size. Actions run in `build/` next to
-it and are deleted when they finish. Logs go to `runner.log` and `worker.log`. While free disk is under the floor
+Inputs are cached in `~/Library/Caches/switch-ios-worker/cache`, up to the given size. Each executor runs its actions in
+`build/<number>/` next to it, and the last action's input root stays there until the executor's next action. Logs go to `runner.log` and `worker.log`. While free disk is under the floor
 (20 GiB by default), the floor job takes the runner out of service, and the worker takes no new work until there is
 room again. Restarting the worker empties its cache.
 
