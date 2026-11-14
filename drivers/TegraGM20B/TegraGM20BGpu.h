@@ -697,8 +697,9 @@ void tgm_pool_breakdown(uint64_t *client_bytes, uint64_t *orphan_bytes, uint64_t
 			uint64_t *system_bytes, uint64_t *systems);
 unsigned long tgm_owner_stats(char *out, unsigned long size);
 /* Debug kernels: what each process's GPU connections hold now (TegraGM20BOwnerMemory.cpp, SwitchGpuOwnerMemory.h); 0 when
- * none holds anything */
-unsigned long tgm_owner_memory(char *out, unsigned long size);
+ * none holds anything. *imported: the bytes of imports they hold together, which the live imports exceed by those of
+ * connections already gone whose BOs still retire */
+unsigned long tgm_owner_memory(char *out, unsigned long size, uint64_t *imported);
 void tgm_stats_bo_import(uint64_t bytes, int read_only, int skipped, uint64_t ns,
 			 const uint64_t phase_ns[TGM_PHASES]);
 

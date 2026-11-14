@@ -437,8 +437,16 @@ void tgm_stats_tick(void)
 		lnew ? lns / lnew / 1000 : 0, lnm / 1000, lnew, lfree ? lfs / lfree / 1000 : 0,
 		lfm / 1000, lfree);
 	nvxnu_stats("tegra-gm20b: stats2 %s", line);
-	if (tgm_owner_memory(line, sizeof(line)))
-		nvxnu_stats("tegra-gm20b: memory by process: %s", line);
+	{
+		uint64_t held = 0;
+		const unsigned long written = tgm_owner_memory(line, sizeof(line), &held);
+		const s64 live = __atomic_load_n(&tgm_stats.live_bytes, __ATOMIC_RELAXED);
+
+		if (written || live)
+			nvxnu_stats("tegra-gm20b: memory by process: %s; imports no connection "
+				    "holds %lld KiB",
+				    written ? line : "none", (long long)(live - (s64)held) / 1024);
+	}
 	{
 		const u64 small = __atomic_exchange_n(&tgm_stats.map_small, 0, __ATOMIC_RELAXED);
 		const u64 big = __atomic_exchange_n(&tgm_stats.map_big, 0, __ATOMIC_RELAXED);

@@ -18,8 +18,9 @@ void tgm_owner_memory_provider(IOService *provider)
 	__atomic_store_n(&gProvider, provider, __ATOMIC_RELEASE);
 }
 
-extern "C" unsigned long tgm_owner_memory(char *out, unsigned long size)
+extern "C" unsigned long tgm_owner_memory(char *out, unsigned long size, uint64_t *imported)
 {
+	*imported = 0;
 	IOService *provider = __atomic_load_n(&gProvider, __ATOMIC_ACQUIRE);
 	OSIterator *clients = provider && size ? provider->getClientIterator() : nullptr;
 	SwitchGpuOwnerEntry *entries = clients ? IONew(SwitchGpuOwnerEntry, kEntries) : nullptr;
@@ -28,8 +29,10 @@ extern "C" unsigned long tgm_owner_memory(char *out, unsigned long size)
 		OSObject *object = clients->getNextObject();
 		if (!object)
 			break;
-		if (const auto *client = OSDynamicCast(AGXDeviceUserClient, object))
-			entries[n++] = client->ownerEntry();
+		if (const auto *client = OSDynamicCast(AGXDeviceUserClient, object)) {
+			entries[n] = client->ownerEntry();
+			*imported += entries[n++].memory.bytes[SWITCH_GPU_OWNER_IMPORTED];
+		}
 	}
 	const unsigned long written = n ? switch_gpu_owner_line(entries, n, kShown, out, size) : 0;
 	if (entries)
