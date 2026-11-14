@@ -22,6 +22,8 @@ public:
     {
         if (!bytes)
             return;
+        if (count_ && va_[count_ - 1] == va && bytes_[count_ - 1] == bytes)
+            return;
         if (!va || count_ == kRanges) {
             unknown_ = true;
             return;
@@ -54,11 +56,11 @@ private:
 
 // Why a draw of a state with a split did not take its twin (RenderEncoder::splitTwin), debug builds' counts
 enum class SplitWhole : uint8_t {
-    Forced,     // a probe forced whole programs
-    Box,        // its pixel limit is empty, or the pass's plan did not admit it at that size
-    Unbound,    // a uniform buffer the prologue reads is not bound
-    Written,    // work before it in the command buffer wrote that buffer's memory
-    Unmade,     // its twin could not be made
+    Forced,   // a probe forced whole programs
+    Box,      // its pixel limit is empty, or the pass's plan did not admit it at that size
+    Unbound,  // a uniform buffer the prologue reads is not bound
+    Written,  // work before it in the command buffer wrote that buffer's memory
+    Unmade,   // its twin could not be made
     Count
 };
 

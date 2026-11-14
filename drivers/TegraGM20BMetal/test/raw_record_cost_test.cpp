@@ -237,14 +237,12 @@ Sample measure(const Record &record)
 
 void print(const char *name, const Sample &s, double per, const char *unit)
 {
-    printf(
-        "record cost %-22s %8.1f us %10.0f instr %10.0f cycles | sends %6llu locks %4llu mallocs %4llu frees %4llu "
-        "weaks %4llu retains %5llu | per %s: %.3f us %.0f instr %.2f sends %.2f locks %.2f mallocs\n",
-        name, s.us, s.instructions, s.cycles, (unsigned long long)s.counts.sends, (unsigned long long)s.counts.locks,
-        (unsigned long long)s.counts.mallocs, (unsigned long long)s.counts.frees, (unsigned long long)s.counts.weaks,
-        (unsigned long long)s.counts.retains, unit, s.us / per,
-        s.instructions / per, double(s.counts.sends) / per, double(s.counts.locks) / per,
-        double(s.counts.mallocs) / per);
+    printf("record cost %-22s %8.1f us %10.0f instr %10.0f cycles | sends %6llu locks %4llu mallocs %4llu frees %4llu "
+           "weaks %4llu retains %5llu | per %s: %.3f us %.0f instr %.2f sends %.2f locks %.2f mallocs\n",
+           name, s.us, s.instructions, s.cycles, (unsigned long long)s.counts.sends, (unsigned long long)s.counts.locks,
+           (unsigned long long)s.counts.mallocs, (unsigned long long)s.counts.frees, (unsigned long long)s.counts.weaks,
+           (unsigned long long)s.counts.retains, unit, s.us / per, s.instructions / per, double(s.counts.sends) / per,
+           double(s.counts.locks) / per, double(s.counts.mallocs) / per);
 }
 
 Sample difference(const Sample &a, const Sample &b)
@@ -253,9 +251,8 @@ Sample difference(const Sample &a, const Sample &b)
     d.us = a.us - b.us;
     d.instructions = a.instructions - b.instructions;
     d.cycles = a.cycles - b.cycles;
-    d.counts = {a.counts.sends - b.counts.sends,     a.counts.locks - b.counts.locks,
-                a.counts.mallocs - b.counts.mallocs, a.counts.frees - b.counts.frees,
-                a.counts.weaks - b.counts.weaks,     a.counts.retains - b.counts.retains};
+    d.counts = {a.counts.sends - b.counts.sends, a.counts.locks - b.counts.locks, a.counts.mallocs - b.counts.mallocs,
+                a.counts.frees - b.counts.frees, a.counts.weaks - b.counts.weaks, a.counts.retains - b.counts.retains};
     return d;
 }
 
@@ -292,6 +289,9 @@ TEST(RawRecordCost, CompositorScaleFrame)
     // no weak reference (each a side-table lock), and the binding path's retains gone: two a draw at most (the first
     // bind of a texture in a command buffer keeps it, and its release at completion)
     EXPECT_EQ(frame.counts.weaks, 0u);
+    // the device's lock (imports, creates, backings) and every other lock stay off the recording of a frame whose
+    // resources exist
+    EXPECT_EQ(frame.counts.locks, 0u);
     EXPECT_LE(difference(doubled, frame).counts.retains, uint64_t(2 * kDraws));
     EXPECT_EQ(difference(repeated, one).counts.retains, 0u);
 }
@@ -369,10 +369,10 @@ TEST(RawRecordCost, ChangedStateDrawByCall)
     printf("record cost by call %-26s %8.0f instr a draw\n", "all", total);
     EXPECT_GT(draws, 0u);
     // Core Animation's texture and sampler with the sampler bound already, and a draw whose bindings leave its check as
-    // it was (raw_record_cost_test's measured 839 and 2250 a draw in a release build, 1020 and 2345 in a debug one)
-    EXPECT_LT(sums[TextureSampler] / draws, 1200);
-    EXPECT_LT(sums[Draw] / draws, 2500);
-    EXPECT_LT(total, 6000);
+    // it was (measured 745 and 1,924 a draw in a release build, 926 and 2,023 in a debug one; all calls 3,959 and 4,666)
+    EXPECT_LT(sums[TextureSampler] / draws, 1100);
+    EXPECT_LT(sums[Draw] / draws, 2300);
+    EXPECT_LT(total, 5200);
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

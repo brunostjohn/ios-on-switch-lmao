@@ -289,7 +289,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     m.a = uint32_t(r.x);
     m.b = uint32_t(r.y);
     m.c = uint64_t(r.width) << 32 | uint32_t(r.height);
-    [_cb record:m];
+    [_cb recordBinding:m];
 }
 
 - (void)setViewport:(MTLViewport)v

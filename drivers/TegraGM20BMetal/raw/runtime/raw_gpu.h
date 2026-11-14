@@ -476,6 +476,8 @@ void armKeylineProbe();
 struct Pipeline {
     const PackPipeline *rec = nullptr;
     uint32_t vertexInstructions = 1, fragmentInstructions = 1;
+    // vertex, fragment: its program can write memory a buffer binding names (raw_program_stores.h)
+    bool writesMemory[2] = {true, true};
     std::vector<uint32_t> methods;  // the state's registers as ready push words (program offsets relocated)
     uint32_t viewportClip = 0;      // its SET_VIEWPORT_CLIP_CONTROL
     bool namesViewportClip = false;
@@ -621,6 +623,8 @@ struct PlacedProgram {
     uint32_t program = 0;
     uint64_t data = 0;
     const uint8_t *header = nullptr;  // its shader header, as the CPU holds it
+    // its code can write memory a buffer binding names (raw_program_stores.h): where its placer read the code, else true
+    bool writesMemory = true;
 };
 
 // What a state's split twin is made of: the pack's split (its programs by index) or a runtime record's programs, and the
@@ -1142,7 +1146,7 @@ private:
     Texture *shaderDepth_ = nullptr, *shaderStencil_ = nullptr, *shaderStencilTemp_ = nullptr;
     uint8_t shaderTestsActive_ = 0;
     bool prepareShaderTests(const Pipeline &pipeline, const char **why);
-    uint64_t rootTable(const PackPipeline &r, uint32_t k);
+    uint64_t rootTable(const PackPipeline &r, uint32_t k, bool writes);
     void copyShaderTests(uint8_t flags, bool toAttachment);
     void endShaderTests();
 
@@ -1563,7 +1567,9 @@ public:
     }
 
     bool useMember(uint64_t va, uint64_t bytes, bool write, bool hostWritten);
-    void use(const Buffer &buffer, bool write);
+    // `noted`: a write the command buffer's later reads must see (bufferWrites_); false where the GPU may write the
+    // memory but no program of the draw does
+    void use(const Buffer &buffer, bool write, bool noted = true);
     void use(const Texture &texture, bool write);
 
     uint32_t draws = 0, passes = 0, blits = 0, bands = 0;

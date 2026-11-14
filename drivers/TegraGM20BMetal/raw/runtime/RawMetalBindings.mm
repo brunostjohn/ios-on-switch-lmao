@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include "raw_draw_check.h"
 
 @implementation RMRenderEncoder (Bindings)
 
@@ -53,7 +54,7 @@ void recordBytes(__unsafe_unretained RMCommandBuffer *cb, Cmd m, const void *byt
     m.a = offset;
     m.b = uint32_t(length);
     m.c = chunk;
-    [cb record:m];
+    [cb recordBinding:m];
 }
 
 static void bindBytes(__unsafe_unretained RMRenderEncoder *e, int stage, const void *bytes, NSUInteger length,
@@ -137,10 +138,9 @@ static void bindBytes(__unsafe_unretained RMRenderEncoder *e, int stage, const v
         [self buffer:2 object:b[k] offset:o[k] index:r.location + k];
 }
 
-// Whether a draw's check (checkDraw) reads more of `t` than that it is bound: its address map, its planes
-static bool checkedTexture(__unsafe_unretained RMTexture *t)
+static raw::CheckedTexture checkedTexture(__unsafe_unretained RMTexture *t)
 {
-    return t && (t->_raw.addressMap || t->_raw.xrPlanes);
+    return t ? raw::CheckedTexture{t->_raw.addressMap != 0, t->_raw.xrPlanes} : raw::CheckedTexture{};
 }
 
 void rmBindTexture(__unsafe_unretained RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLTexture> t,
@@ -162,10 +162,9 @@ void rmBindTexture(__unsafe_unretained RMRenderEncoder *e, int stage, __unsafe_u
                 x->_descriptor.pixelFormat, x->_kind);
     }
     if ((stage == 1 || stage == 2) && index < raw::kStageTextures) {
-        // a draw's variant reads its fragment textures' formats where its state writes them, and its cubic samplers'
-        // textures
         const raw::Pipeline *pl = e->_pipe ? e->_pipe->_raw : nullptr;
-        if (checkedTexture(x) || checkedTexture(e->_tex[stage - 1][index]) || e->_cubicMask || (pl && pl->writtenSlots))
+        if (raw::textureBindChecks(checkedTexture(e->_tex[stage - 1][index]), checkedTexture(x), e->_cubicMask,
+                                   pl && pl->writtenSlots))
             e->_eligibility++;
         e->_tex[stage - 1][index] = x;
     }
@@ -225,7 +224,7 @@ void rmBindSampler(__unsafe_unretained RMRenderEncoder *e, int stage, __unsafe_u
         hit(e->_cb, PredCallVertexSampler, index);
     }
     if (stage == 2 && bit) {
-        if ((r && r->_raw.desc.cubic) || (e->_cubicMask & bit))
+        if (raw::samplerBindChecks(e->_cubicMask & bit, r && r->_raw.desc.cubic))
             e->_eligibility++;
         e->_samp[index] = r;
         e->_cubicMask = uint16_t(r && r->_raw.desc.cubic ? e->_cubicMask | bit : e->_cubicMask & ~bit);

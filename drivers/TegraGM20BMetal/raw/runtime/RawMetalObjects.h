@@ -509,6 +509,9 @@ struct RMSharedEventWait {
 // direct (no message): every recorded command and every object a command names goes through them
 - (void)record:(const Cmd &)cmd __attribute__((objc_direct));
 - (void)retain:(__unsafe_unretained id)object __attribute__((objc_direct));
+// record: of a binding or raster command no other duty of record: concerns (a buffer, bytes, texture, sampler,
+// depth/stencil state or one scissor; not a render state, whose pass may note storage targets)
+- (void)recordBinding:(const Cmd &)cmd __attribute__((objc_direct));
 @end
 
 // A refusal predicate hit while recording (or encoding) `cb`: into its mask; the first one's values kept; the process's first hit
@@ -625,7 +628,10 @@ static inline void setBinding(__unsafe_unretained RMCommandBuffer *cb, Op op, in
     Cmd m = cmd(op, uint8_t(stage), uint16_t(index));
     m.obj = (__bridge void *)object;
     m.c = c;
-    [cb record:m];
+    if (op == OpBuffer || op == OpBufferOffset || op == OpTexture || op == OpSampler || op == OpDepthStencil)
+        [cb recordBinding:m];
+    else
+        [cb record:m];
 }
 
 // The encoder `e` records into this command buffer from now on, the one before it ended (RawMetalEncoder.mm)

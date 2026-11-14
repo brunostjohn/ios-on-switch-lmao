@@ -10,6 +10,7 @@
 #include "raw_cbuf.h"
 #include "../../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "raw_compute_visibility.h"
+#include "raw_program_stores.h"
 #include "raw_set_reads.h"
 #include "raw_slm.h"
 #include "raw_split_metadata.h"
@@ -84,6 +85,7 @@ bool Device::placeSplitPrograms(const SplitSource &source, PlacedProgram &fs, ui
             return false;
         fs.record = &progs[source.rec.fs];
         fs.header = pack_.section<uint8_t>(PackHeap) + progs[source.rec.fs].program;
+        fs.writesMemory = placedWritesMemory(fs.header, *fs.record);
         prologueDataBytes = std::min(progs[source.rec.prologue].dataBytes, kMaxCbufBytes);
         return true;
     }
@@ -96,6 +98,7 @@ bool Device::placeSplitPrograms(const SplitSource &source, PlacedProgram &fs, ui
     fs.program = uint32_t(pixel) + source.fsInfo.program;
     fs.data = source.fsInfo.dataBytes ? heap_.va + pixel + source.fsInfo.dataOffset : 0;
     fs.header = source.fsSlot.data() + source.fsInfo.program;
+    fs.writesMemory = placedWritesMemory(fs.header, source.fsInfo);
     prologue = uint32_t(compute);
     prologueData = source.prologueDataBytes ? heap_.va + compute + source.prologueDataAt : 0;
     prologueDataBytes = std::min(source.prologueDataBytes, kMaxCbufBytes);

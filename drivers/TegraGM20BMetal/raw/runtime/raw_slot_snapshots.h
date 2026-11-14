@@ -126,12 +126,13 @@ public:
         if (captured_ == generation_)
             return index_;
         Header header;
-        const bool first = headers_.empty();
-        for (size_t c = 0; c < kChunks; ++c) {
-            if (!first && !(pending_ & chunkSlots(c))) {
-                header[c] = headers_.back()[c];
-                continue;
-            }
+        uint32_t chunks = (1u << kChunks) - 1;
+        if (!headers_.empty()) {
+            header = headers_.back();
+            chunks = editedChunks(pending_);
+        }
+        for (; chunks; chunks &= chunks - 1) {
+            const size_t c = size_t(__builtin_ctz(chunks));
             header[c] = static_cast<uint32_t>(chunks_.size());
             Chunk &chunk = chunks_.emplace_back();
             for (size_t k = 0; k < K; ++k)
@@ -178,6 +179,18 @@ private:
     static constexpr uint32_t chunkSlots(size_t chunk)
     {
         return chunk * K >= 32 ? ~0u : uint32_t(((uint64_t(1) << K) - 1) << (chunk * K));
+    }
+
+    // the chunks holding a slot of `slots`, visited by the set slots alone
+    static constexpr uint32_t editedChunks(uint32_t slots)
+    {
+        uint32_t chunks = 0;
+        while (slots) {
+            const size_t c = size_t(__builtin_ctz(slots)) / K;
+            chunks |= 1u << c;
+            slots &= ~chunkSlots(c);
+        }
+        return chunks & ((1u << kChunks) - 1);
     }
 
     Table current_{};

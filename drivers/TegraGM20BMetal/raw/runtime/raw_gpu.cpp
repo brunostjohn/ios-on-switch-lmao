@@ -43,6 +43,7 @@
 #include "raw_slm.h"
 #include "raw_srgb_table.h"
 #include "raw_stamps.h"
+#include "raw_program_stores.h"
 #include "raw_storage.h"
 #include "raw_surface_view.h"
 #include "raw_native_surface.h"
@@ -1237,6 +1238,8 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
     fs.record = &progs[pp.fs];
     vs.header = pack_.section<uint8_t>(PackHeap) + progs[pp.vs].program;
     fs.header = pack_.section<uint8_t>(PackHeap) + progs[pp.fs].program;
+    vs.writesMemory = placedWritesMemory(vs.header, *vs.record);
+    fs.writesMemory = placedWritesMemory(fs.header, *fs.record);
     if (!slmNeed(std::max(slmPerWarpOfHeader(vs.header), slmPerWarpOfHeader(fs.header)))) {
         stats.heapFull++;
         return nullptr;
@@ -1270,6 +1273,8 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     };
     pl.vertexInstructions = instructions(*vs.record);
     pl.fragmentInstructions = instructions(*fs.record);
+    pl.writesMemory[0] = vs.writesMemory;
+    pl.writesMemory[1] = fs.writesMemory;
     pl.memoryEntries = pp.memoryEntries;
     std::vector<uint32_t> words(64 + 16 + (tess ? 64 : 0) + pp.blobDwords * 2);
     Push w{words.data(), words.data() + words.size()};
@@ -6131,7 +6136,7 @@ static void logEdgeMiss(const char *what, const Texture &t, const PixelBox &r, c
 
 // Stage `k`'s (0 vertex, 1 fragment) root table for this draw, in the upload ring: m2v's {null, sink, an entry per buffer slot
 // it reaches through the table} over the identity resident set (raw_heap_tables.h). A buffer reached so may be written.
-uint64_t RenderEncoder::rootTable(const PackPipeline &r, uint32_t k)
+uint64_t RenderEncoder::rootTable(const PackPipeline &r, uint32_t k, bool writes)
 {
     Device &d = *dev_;
     const uint32_t slots = r.rootSlots[k], entries = drawRootEntries(slots);
@@ -6142,7 +6147,7 @@ uint64_t RenderEncoder::rootTable(const PackPipeline &r, uint32_t k)
         if (!(slots >> n & 1) || !b.va)
             continue;
         if (b.buffer) {
-            cb_->use(*b.buffer, true);
+            cb_->use(*b.buffer, true, writes);
             slot[n] = {b.buffer->va, b.buffer->length, b.offset};
         } else {
             cb_->useAddress(b.va, b.size, true);
@@ -6611,7 +6616,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         patchShaderTestPush(r.shaderTests, ds_, stencilRef_, depthRange_, false, want);
         for (uint32_t k = 0; k < 2; k++)
             if (const uint8_t word = r.rootTableWord[k]; r.rootSlots[k] && word && word <= 31) {
-                const uint64_t table = rootTable(r, k);
+                const uint64_t table = rootTable(r, k, pl->writesMemory[k]);
                 want[word - 1] = uint32_t(table);
                 want[word] = uint32_t(table >> 32);
             }
