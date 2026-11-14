@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // sched.c and deadline.c on the host: nvkm's runlist, channel and register calls they make, each register read counted.
 #pragma once
+#include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -204,6 +205,11 @@ struct nvkm_chan {
 	spinlock_t lock;
 	atomic_t blocked, errored;
 };
+
+/* sched.c tgm_sched_ramfc's channel steps (TegraGM20BRamfcOrder.h): the unit's weak no-ops unless a test defines them */
+void nvkm_chan_block(struct nvkm_chan *chan);
+void nvkm_chan_allow(struct nvkm_chan *chan);
+int nvkm_chan_preempt_locked(struct nvkm_chan *chan, bool wait);
 
 #define nvkm_runl_foreach(runl, fifo) list_for_each_entry((runl), &(fifo)->runls, head)
 #define nvkm_runl_foreach_engn(engn, runl) list_for_each_entry((engn), &(runl)->engns, head)

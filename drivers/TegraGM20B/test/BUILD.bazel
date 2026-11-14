@@ -2654,6 +2654,7 @@ SCHED_UNIT_HDRS = [
     "//drivers/TegraGM20B:TegraGM20BGpu.h",
     "//drivers/TegraGM20B:TegraGM20BHost.h",
     "//drivers/TegraGM20B:TegraGM20BKernelHang.h",
+    "//drivers/TegraGM20B:TegraGM20BRamfcOrder.h",
     "//drivers/TegraGM20B:TegraGM20BRecover.h",
     "//drivers/TegraGM20B:TegraGM20BSched.h",
     "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",
