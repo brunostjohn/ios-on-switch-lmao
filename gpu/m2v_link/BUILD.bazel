@@ -5,7 +5,7 @@
 #                      m2v, with the units that reference it, per IPSW kind
 #   deps_<binary>.txt  the m2v rules in the binary's build graph and the m2v frontend and bridge files it compiles (a
 #                      genquery, every select() branch)
-#   pack_refused_<kind>.txt  the states the raw pack refuses (pack_refusals_test; tagged pack and m2v, it builds the pack)
+#   pack_refused_<kind>.txt  the states the raw pack refuses (pack_refusals_test, over a report given to it)
 #
 # A list changes only with the code: rewrite one from the failing test's output (bazel-bin/gpu/m2v_link/<name>.txt).
 load("@rules_python//python:py_test.bzl", "py_test")
@@ -59,17 +59,14 @@ py_test(
         ":plugin_pin",
         "//gpu:plugin_m2v_edges",
     ] + [":deps_" + name for name in BINARIES] + ["deps_%s.txt" % name for name in BINARIES],
+    # m2v: the plugin's, the bundle's and the pack tools' genqueries reach the packages --config=nom2v deletes until the
+    # cut; the cut drops the tag
+    tags = ["m2v"],
 )
 
-# The raw pack's refused states for the configured IPSW kind (its link's report.txt). Tagged as the other tests over
-# //gpu/seed:raw_pack: it builds the full pack, whose probe still runs NVK.
-filegroup(
-    name = "pack_report",
-    srcs = ["//gpu/seed:raw_pack"],
-    output_group = "report",
-    tags = ["manual"],
-)
-
+# The raw pack's refused states for the configured IPSW kind, against a pack report built elsewhere (the pack is too
+# large to build here): bazel test --config=ios27 //gpu/m2v_link:pack_refusals_test --test_arg=<pack>/report.txt.
+# Re-pin from a report: grep -E '^  (refused \(|skipped kernel )' report.txt | sed 's/^  //' | sort
 alias(
     name = "pack_pin",
     actual = select({
@@ -81,16 +78,10 @@ alias(
 py_test(
     name = "pack_refusals_test",
     srcs = ["pack_refusals_test.py"],
-    args = [
-        "$(rootpath :pack_pin)",
-        "$(rootpaths :pack_report)",
-    ],
-    data = [
-        ":pack_pin",
-        ":pack_report",
-    ],
+    args = ["$(rootpath :pack_pin)"],
+    data = [":pack_pin"],
     tags = [
-        "m2v",
+        "manual",
         "pack",
     ],
 )

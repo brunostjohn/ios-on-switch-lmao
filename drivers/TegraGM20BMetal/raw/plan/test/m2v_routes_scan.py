@@ -36,6 +36,7 @@ M2V_IDENTS = {
     '_objc_msgForward': r'\b_objc_msgForward\b',
     'replay': r'(?<![.:>\w])replay\s*\(\s*(?:RMCommandBuffer\b|cb\s*,)',
     'replayPlannedState': r'\breplayPlannedState\b',
+    'replay*': r'\breplay(?!PlannedState\b|TwinUs\b)[A-Z]\w*',
     'rmRefuseM2vRange': r'\brmRefuseM2vRange\b',
     'rmM2vMissingState': r'\brmM2vMissing(?:State|Kernel)\b',
     'range.raw=false': r'\brange\.raw\s*=\s*false\b',
