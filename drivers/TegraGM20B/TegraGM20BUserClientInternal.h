@@ -40,6 +40,7 @@
 #include "SwitchGpuSubmitGate.h"
 #include "SwitchGpuNativeSurface.h"
 #include "SwitchGpuNativeUse.h"
+#include "SwitchGpuOwnerMemory.h"
 #include "SwitchGpuScanoutSnapshot.h"
 #include "SwitchGpuSurfaceRefresh.h"
 #include "SwitchGpuCpuSurface.h"
@@ -88,6 +89,9 @@ constexpr IOOptionBits kPoolCacheMode = static_cast<IOOptionBits>(kIOWriteCombin
 					<< kIOMemoryBufferCacheShift;
 
 extern "C" void proc_selfname(char *buf, int size);
+extern "C" int proc_selfpid(void);
+/* TegraGM20BOwnerMemory.cpp: the accelerator whose connections tgm_owner_memory reads */
+void tgm_owner_memory_provider(IOService *provider);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 extern "C" vm_offset_t ml_vtophys(vm_offset_t vaddr);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
@@ -292,12 +296,14 @@ class AGXDeviceUserClient : public IOUserClient
 		tgm_mem *mem;
 		bool backingMemory;
 		tgm_coh *coh;  // imports: the surface's coherency entry, held (TegraGM20BCoherency)
+		bool layoutAsked;  // imports: this BO asked the surface's layout before (TGM_LAYOUT_ASK_FIRST)
 		switch_gpu_backing *backing;
 		switch_gpu_native_surface_view *nativeView;
 		SharedWiring *
 			wiring;  // a surface import's pages, mem and wiring, shared with the task's other imports
 		uint32_t bindings;
 		Bo **zombieLink;
+		SwitchGpuOwnerKind ownerKind;
 	};
 
 	struct RetiredBinding {
@@ -456,6 +462,8 @@ class AGXDeviceUserClient : public IOUserClient
 	uint32_t next_token_ = 1;
 	bool counted_ = false;
 	char owner_[17] = {};  // the opening process
+	int32_t ownerPid_ = 0;
+	SwitchGpuOwnerMemory ownerMemory_ = {};  // debug kernels: what its BOs hold, under lock_
 	uint32_t pushSubmits_ =
 		0;  // the stats: its submissions, every kScanEvery-th read (scanPushes)
 	uint32_t pushScans_ =
@@ -587,6 +595,13 @@ public:
 	void countConnection()
 	{
 		counted_ = true;
+	}
+
+	SwitchGpuOwnerEntry ownerEntry() const
+	{
+		SwitchGpuOwnerEntry e = {ownerPid_, {}, ownerMemory_.snapshot()};
+		memcpy(e.name, owner_, sizeof(e.name));
+		return e;
 	}
 
 	IOReturn clientClose() APPLE_KEXT_OVERRIDE;

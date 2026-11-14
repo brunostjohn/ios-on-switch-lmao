@@ -127,8 +127,8 @@ TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 	EXPECT_TRUE(work.Has("switch_gpu_cached_zero(s->pas"));
 	EXPECT_FALSE(work.Has("cleanZeros(s->bmd"));
 	const CodeText completed = Block(client(), "void spareZeroed(void *context, int result)");
-	EXPECT_TRUE(completed.Before("const bool keep = !result && !memoryPressure();",
-				     "p->ready[c] = s;"));
+	EXPECT_TRUE(
+		completed.Before("const bool keep = !result && spareRoom();", "p->ready[c] = s;"));
 	const CodeText zeros = Block(client(), "void cleanZeros(void *va, uint64_t bytes)");
 	EXPECT_TRUE(zeros.Has("switch_dcache_clean_invalidate(va, bytes);"));
 	EXPECT_FALSE(zeros.Has("bzero"));
@@ -964,6 +964,27 @@ TEST(GM20BRailSource, GpuLockWakesARailGatedGpu)
 				"nvxnu_wakeup(&tgm_sc7_gate.shut);"));
 }
 
+// PMC_ENABLE's lock (TegraGM20BPmcEnable.h) is in nvkm's mc functions from M1, before nvkm's first init, and the
+// kernel's own code never writes the register past it.
+TEST(GM20BPmcSource, EveryPmcEnableChangeTakesItsLockFromM1)
+{
+	const CodeText m1 = Block(gpu(), "static int m1(char *line, unsigned int len)");
+	EXPECT_TRUE(m1.Before("tgm_gpu.device = device;", "tgm_pmc_own(device);"));
+	EXPECT_TRUE(m1.Before("tgm_pmc_own(device);", "nvkm_subdev_init(device->privring)"));
+	const CodeText own =
+		Block(SourceText("../gpu_pmc.c"), "void tgm_pmc_own(struct nvkm_device *device)");
+	EXPECT_TRUE(own.Has("pmc_device.enable = pmc_enable;"));
+	EXPECT_TRUE(own.Has("pmc_device.disable = pmc_disable;"));
+	EXPECT_TRUE(own.Has("if (mc->func->init == nv50_mc_init)"));
+	EXPECT_FALSE(gpuCode().Has(", 0x000200,"));
+	const CodeText ring =
+		Block(SourceText("../nouveau/nvkm/subdev/privring/gk20a.c"),
+		      "gk20a_privring_init_privring_ring(struct nvkm_subdev *privring)");
+	EXPECT_TRUE(ring.Before("tgm_pmc_change(device, 0x20, 0);",
+				"tgm_pmc_change(device, 0x20, 0x20);"));
+	EXPECT_FALSE(ring.Has("0x000200"));
+}
+
 TEST(GM20BSleepSource, SleepAndWakeOrder)
 {
 	const CodeText sleep = Block(gpu(), "void tgm_sleep(void)").After("case TGM_SLEEP_FULL:");
@@ -977,7 +998,7 @@ TEST(GM20BSleepSource, SleepAndWakeOrder)
 	EXPECT_TRUE(nvkm.Before("nvkm_wr32(device, 0x07000c, 0x00000001);", "nvkm_ltc_flush("));
 	EXPECT_TRUE(nvkm.Before("nvkm_ltc_flush(", "nvkm_device_fini(device, NVKM_SUSPEND)"));
 	EXPECT_TRUE(Block(gpu(), "static void sleep_power_down(void)")
-			    .Before("nvxnu_irq_suspend();", "regulator_disable("));
+			    .Before("nvxnu_irq_suspend();", "tegra_gm20b_rail_gate("));
 	// the boot's order: the GPCPLL relock (tgm_clk_raise) before ACR, the PMU and GR (tgm_m2_device_init); interrupts on before
 	// nvkm's first init that may wait for one
 	const CodeText wake = Block(gpu(), "void tgm_wake(void)").After("case TGM_SLEEP_FULL:");
@@ -988,7 +1009,7 @@ TEST(GM20BSleepSource, SleepAndWakeOrder)
 	EXPECT_TRUE(wake.Before("wake_nvkm();", "wake_fence();"));
 	EXPECT_TRUE(wake.Before("wake_fence();", "wake_open();"));
 	EXPECT_TRUE(Block(gpu(), "static void wake_power_up(void)")
-			    .Before("power_up(", "nvxnu_irq_resume();"));
+			    .Before("tegra_gm20b_rail_ungate(", "nvxnu_irq_resume();"));
 	EXPECT_TRUE(
 		Block(gpu(), "static void wake_clock(void)").Has("clk_raise(line, sizeof(line))"));
 	EXPECT_TRUE(
@@ -1088,9 +1109,11 @@ TEST(GM20BAcquireSource, EveryChannelIsArmedBeforeItsFirstKickAndReArmedWhenIdle
 	const CodeText create = Block(gpu(), "static int chan_new(");
 	EXPECT_TRUE(create.Before("chan->chid = args.chan.chid;", "tgm_acquire_arm(chan->chid);"));
 	EXPECT_TRUE(create.Before("tgm_acquire_arm(chan->chid);", "PUSH_KICK(push);"));
-	const CodeText due = Block(gpu(), "void tgm_chan_ramfc_due(struct tgm_chan *chan)");
-	EXPECT_TRUE(due.Before("tgm_sched_loaded(tgm_gpu.device, chan->chid)",
-			       "tgm_acquire_arm(chan->chid);"));
+	EXPECT_TRUE(Block(gpu(), "static void ramfc_due_write(void *arg)")
+			    .Has("tgm_acquire_arm(due->chid);"));
+	EXPECT_TRUE(Block(gpu(), "void tgm_chan_ramfc_due(struct tgm_chan *chan)")
+			    .Has("tgm_sched_ramfc(tgm_gpu.device, chan->chid, ramfc_due_write, "
+				 "&due, 0)"));
 	EXPECT_EQ(gpuCode().Count("tgm_chan_ramfc_due(chan);"), 2u);
 }
 
@@ -1191,7 +1214,7 @@ TEST(GM20BRailSource, RailDownStopsTheGpuCallouts)
 				    "tgm_deadline_resume();"));
 	const CodeText power = Block(gpu(), "static void sleep_power_down(void)");
 	EXPECT_TRUE(power.Before("nvxnu_irq_suspend();", "tgm_recover_suspend();"));
-	EXPECT_TRUE(power.Before("tgm_recover_suspend();", "regulator_disable("));
+	EXPECT_TRUE(power.Before("tgm_recover_suspend();", "tegra_gm20b_rail_gate("));
 }
 
 // IOGPUDeviceSetDisplayParams is scalar method 0x21 in iOS 17's IOGPU.framework and IOConnectTrap2 index 8 in iOS 27's;

@@ -191,6 +191,18 @@ static inline unsigned tgm_interleave(const uint8_t *level, const uint16_t *entr
 	return n;
 }
 
+/* sched_update's half of its runlist memory: the one the host is not reading. While the previous submit is still pending
+ * (PFIFO_RUNLIST_SUBMIT_INFO bit 20 set past nvkm's wait) the host may be reading either half, so the update is not
+ * written: 0, `next` left as it was. Else 1, *segment the half to write, `next` the other. */
+static inline int tgm_runlist_segment(unsigned *next, int pending, unsigned *segment)
+{
+	if (pending)
+		return 0;
+	*segment = *next;
+	*next ^= 1;
+	return 1;
+}
+
 /* The deadline: the display's vsyncs to Core Animation give the vblank each frame aims for and the interval. */
 #define TGM_INTERVAL_MAX_NS (100ull * 1000 * 1000)
 

@@ -27,8 +27,6 @@
 //   * Thermal: SwitchThermal's DFLL floor/cap indices (L4T's T210B01 trips) become the governor's lowest/highest
 //     points (limits()), applied at once, boot window included (one line if they clip it). The DFLL's own voltage cap
 //     stays in force underneath in hardware.
-//   * Rows held down (SwitchGovernor.h switch_gov_rows): a ceiling row the DFLL ran high at, measured by SwitchThermal,
-//     is skipped as the ceiling until it is re-tried from below at a later periodic window and measures right.
 //   * iPadOS's thermal ceiling: thermalmonitord (CLTM) caps the CPU with the DVD factor it writes on ApplePMGR
 //     (kits/qemu/ShengPlatformPower.cpp hands it to switch_perf_cltm_ceiling, SwitchPower.h): the highest point is
 //     also at or below that share of the top clock (SwitchGovernor.h switch_gov_index_at_fraction), whichever ceiling
@@ -92,8 +90,6 @@ void *gCtx;
 uint64_t gWindow, gBootUntil, gLogStart, gLogDue;
 uint32_t gFloorMv, gCapMv;  // the DFLL's thermal floor and cap last given to limits() (0: none)
 uint32_t gCltm = 0x10000u;  // thermalmonitord's CPU ceiling, a 16.16 share of the top clock (atomic loads)
-switch_gov_rows gRows;      // rows held down: ceilings the DFLL ran high at (hold, retryHeld)
-unsigned gLimitHi;          // the ceiling the thermal limits allow, before held rows
 bool gBootDone;             // System Boot Complete came or the fallback passed: no boot window again this boot (atomic)
 // A thermal limit clipped the boot window: noted under the lock, logged once after it (noteClip).
 uint32_t gClipNote;  // atomic
@@ -179,8 +175,8 @@ bool claimSignal(uint64_t now)
     return __atomic_exchange_n(&gPending, 1u, __ATOMIC_ACQ_REL) == 0;
 }
 
-// Under gLock: the limits in force from the DFLL's thermal floor/cap and thermalmonitord's ceiling, then the rows held
-// down below that. Returns whether the clock must move (the signal claimed).
+// Under gLock: the limits in force from the DFLL's thermal floor/cap and thermalmonitord's ceiling. Returns whether the
+// clock must move (the signal claimed).
 bool applyLimits(uint64_t now)
 {
     const unsigned lo = switch_gov_index_at_mv(gMv, gGov.count, gFloorMv);
@@ -191,7 +187,6 @@ bool applyLimits(uint64_t now)
     const unsigned cltm = switch_gov_index_at_fraction(gGov.khz, gGov.count, share);
     if (cltm < hi)
         hi = cltm;
-    gLimitHi = hi;
     if (hi < top && now < gBootUntil && !gClipNoted) {  // thermal limits clip the boot window: one line (noteClip)
         gClipNoted = true;
         gClipKhz = gGov.khz[hi];
@@ -200,7 +195,7 @@ bool applyLimits(uint64_t now)
         gClipAt = now;
         __atomic_store_n(&gClipNote, 1u, __ATOMIC_RELEASE);
     }
-    switch_gov_limit(&gGov, lo, switch_gov_rows_ceiling(&gRows, hi), now);
+    switch_gov_limit(&gGov, lo, hi, now);
     return gRunning && claimSignal(now);
 }
 
@@ -259,8 +254,8 @@ struct sched_perfcontrol_callbacks gCallbacks = {
 
 }  // namespace
 
-bool switchperf::start(const uint32_t *khz, const uint32_t *mv, unsigned count, unsigned startIndex, uint32_t held,
-                       Signal signal, void *ctx, char *why, size_t len)
+bool switchperf::start(const uint32_t *khz, const uint32_t *mv, unsigned count, unsigned startIndex, Signal signal,
+                       void *ctx, char *why, size_t len)
 {
     if (__atomic_load_n(&gRunning, __ATOMIC_ACQUIRE)) {
         snprintf(why, len, "already running");
@@ -300,7 +295,6 @@ bool switchperf::start(const uint32_t *khz, const uint32_t *mv, unsigned count, 
     gPrevNow = now;
     gFloorMv = gCapMv = 0;
     gApplied = gGov.cur;
-    switch_gov_rows_init(&gRows, held);
     __atomic_store_n(&gAppliedKhz, gGov.khz[gGov.cur], __ATOMIC_RELEASE);
     gSignal = signal;
     gCtx = ctx;
@@ -367,8 +361,6 @@ unsigned switchperf::take(char *line, size_t len)
     uint32_t clamped = 0;
     uint32_t windows = 0;
     uint32_t peak = 0;
-    uint32_t held = 0;
-    uint32_t trial = 0;
     unsigned count = 0;
     unsigned lo = 0;
     unsigned hi = 0;
@@ -384,7 +376,6 @@ unsigned switchperf::take(char *line, size_t len)
     const unsigned index = gGov.cur;
     if (gRunning && now >= gLogDue) {
         logDue = true;
-        switch_gov_rows_tick(&gRows);  // a line: held rows' waits count it (retryHeld after its measurement)
         switch_gov_account(&gGov, now);
         count = gGov.count;
         lo = gGov.lo;
@@ -404,8 +395,6 @@ unsigned switchperf::take(char *line, size_t len)
         gBusySum = 0;
         span = now - gLogStart;
         boot = now < gBootUntil;
-        held = gRows.held;
-        trial = gRows.trial;
         gLogStart = now;
         gLogDue = now + absUs(kLogWindowUs);
     }
@@ -419,11 +408,6 @@ unsigned switchperf::take(char *line, size_t len)
     if (!logDue || !line || !len)
         return index;
 #if !(DEVELOPMENT || DEBUG)
-    // Release: the tick is still due (the caller's ceiling check), the line is not made.
-    if (len > 1) {
-        line[0] = '-';
-        line[1] = 0;
-    }
     return index;
 #endif
 
@@ -451,19 +435,6 @@ unsigned switchperf::take(char *line, size_t len)
                      ups, downs, jumps, boosted, clamped, windows ? busySum / windows / 10 : 0, peak / 10, windows,
                      hints[1], hints[2], hints[3], boot ? ", boot floor" : "", gGov.khz[lo] / 1000, gGov.khz[hi] / 1000,
                      gGov.khz[index] / 1000, target / 1000000, measured / 1000000, vdd));
-    }
-    // Rows held down (the DFLL ran high at them as the ceiling) and rows back on trial, not yet measured right.
-    for (unsigned pass = 0; pass < 2; ++pass) {
-        const uint32_t rows = pass ? trial : held;
-        if (!rows || n >= len)
-            continue;
-        n += static_cast<size_t>(snprintf(line + n, len - n, "; %s", pass ? "on trial" : "held down"));
-        for (unsigned i = 0; i < count && n < len; ++i) {
-            if (rows >> i & 1u)
-                n += static_cast<size_t>(snprintf(line + n, len - n, " %u", gGov.khz[i] / 1000));
-        }
-        if (n < len)
-            n += static_cast<size_t>(snprintf(line + n, len - n, " MHz"));
     }
     bool external = false;
     const int ma = switch_battery_avg_ma(&external);
@@ -495,66 +466,6 @@ void switchperf::limits(unsigned floorMv, unsigned capMv)
     if (wake)
         gSignal(gCtx);
     noteClip();
-}
-
-unsigned switchperf::indexAt(uint32_t khz)
-{
-    unsigned i = 0;
-    while (i + 1 < gGov.count && gGov.khz[i + 1] <= khz)
-        ++i;
-    return i;
-}
-
-unsigned switchperf::ceiling()
-{
-    if (!gLock)
-        return 0;
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
-    const unsigned hi = gGov.hi;
-    IOSimpleLockUnlockEnableInterrupt(gLock, state);
-    return hi;
-}
-
-unsigned switchperf::hold(unsigned index, bool *again)
-{
-    if (again)
-        *again = false;
-    if (!gLock || !running())
-        return 0;
-    const uint64_t now = mach_absolute_time();
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
-    if (again && index < SWITCH_GOV_MAX_OPPS)
-        *again = (gRows.trial >> index & 1u) != 0;
-    const unsigned wait = switch_gov_rows_hold(&gRows, index);
-    const bool wake = applyLimits(now);
-    IOSimpleLockUnlockEnableInterrupt(gLock, state);
-    if (wake)
-        gSignal(gCtx);
-    return wait;
-}
-
-bool switchperf::landed(unsigned index)
-{
-    if (!gLock)
-        return false;
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
-    const bool back = switch_gov_rows_landed(&gRows, index) != 0;
-    IOSimpleLockUnlockEnableInterrupt(gLock, state);
-    return back;
-}
-
-uint32_t switchperf::retryHeld()
-{
-    if (!gLock || !running())
-        return 0;
-    const uint64_t now = mach_absolute_time();
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(gLock);
-    const uint32_t back = switch_gov_rows_retry(&gRows, gLimitHi);
-    const bool wake = (back != 0u) && applyLimits(now);
-    IOSimpleLockUnlockEnableInterrupt(gLock, state);
-    if (wake)
-        gSignal(gCtx);
-    return back;
 }
 
 extern "C" unsigned int switch_perf_cltm_ceiling(uint32_t fraction16)

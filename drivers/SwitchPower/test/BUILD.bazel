@@ -10,8 +10,16 @@
 #   switch_sensors_hid_source_test   the HID descriptor and IOHIDFamily vtable slots the sensors are published through
 #   switch_emc_governor_test         SwitchEMCGovernor.h: the EMC rates used, ACTMON's watermarks and the governor's moves
 #   switch_soctherm_window_test      SwitchSocThermWindow.h: SOC_THERM's one-degree LVL0 window and the groups' registers
+#   switch_soctherm_throttle_test    SwitchSocThermThrottle.h: L4T's T210B01 hardware throttle on a model of SOC_THERM,
+#                                    its state line, and the GPU clock count's thermal sample
 #   switch_thermal_shutdown_test     software shutdown below the hardware trip, its RTC record, the reset cause decoding
 #   switch_monotonic_base_test       SwitchMonotonicBase.h: kern.monotonicclock never reads below the previous boot's
+#   switch_thermal_dfll_test         SwitchThermalDfll.h against a stand-in SwitchThermal: a DFLL failure fails that
+#                                    raise and the next raise runs the same path; only -ENODEV ends the DFLL mode
+#   switch_pllx_start_test           SwitchPllxStart.h: PLLX started again in the TRM's order (5.1.5: IDDQ, dividers,
+#                                    lock detection, enable, lock)
+#   switch_tegra_rtc_test            SwitchTegraRTC.h: the RTC's latched seconds and milliseconds, its one reader and
+#                                    that reader's two callers
 # The headers are C: each is compiled as C11 with -Wconversion -Wsign-conversion in a harness (its static inline
 # functions as exported ones) and driven by a GoogleTest test.
 #
@@ -106,6 +114,23 @@ host_test(
 )
 
 host_test(
+    name = "switch_soctherm_throttle_test",
+    srcs = [
+        "switch_soctherm_throttle_test.cpp",
+        "//drivers/SwitchPower:SwitchSocThermThrottle.h",
+        "//drivers/SwitchPower:SwitchSocThermWindow.h",
+        "//drivers/SwitchPower:SwitchThermalLimits.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+    ],
+    data = [
+        "//drivers/SwitchPower:SwitchSensors.cpp",
+        "//drivers/SwitchPower:SwitchSocTherm.cpp",
+        "//drivers/TegraGM20B:gpu_stats_clock.c",
+    ],
+    defines = ["SWITCH_MMIO_HOST_MODEL=1"],
+)
+
+host_test(
     name = "switch_thermal_shutdown_test",
     srcs = [
         "switch_thermal_shutdown_test.cpp",
@@ -147,6 +172,7 @@ host_test(
     name = "switch_display_memory_adapter_test",
     srcs = [
         "switch_display_memory_adapter_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDisplayMemoryEnvelope.h",
         "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
         "//drivers/SwitchPower:SwitchDisplayMemory.h",
         "//drivers/SwitchPower:SwitchDisplayMemoryMath.h",
@@ -158,4 +184,33 @@ host_test(
         "//drivers/SwitchPower:SwitchEMCFixed.h",
     ],
     defines = ["DEVELOPMENT=1"],
+)
+
+host_test(
+    name = "switch_thermal_dfll_test",
+    srcs = [
+        "switch_thermal_dfll_test.cpp",
+        "//drivers/SwitchPower:SwitchThermalDfll.h",
+        "//drivers/TegraDFLL:TegraDFLL.h",
+    ],
+    data = ["//drivers/SwitchPower:SwitchThermal.cpp"],
+)
+
+host_test(
+    name = "switch_pllx_start_test",
+    srcs = [
+        "switch_pllx_start_test.cpp",
+        "//drivers/SwitchPower:SwitchPllxStart.h",
+    ],
+)
+
+host_test(
+    name = "switch_tegra_rtc_test",
+    srcs = [
+        "switch_tegra_rtc_test.cpp",
+        "//drivers/SwitchPower:SwitchTegraRTC.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+    ],
+    data = ["//kernel:lint_sources"],
+    defines = ["SWITCH_MMIO_HOST_MODEL=1"],
 )

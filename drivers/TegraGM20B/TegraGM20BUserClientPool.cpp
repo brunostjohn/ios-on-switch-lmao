@@ -125,10 +125,35 @@ namespace
 SparePool *gSpares;
 // XNU's vm_pressure_level_t: 0 normal, 1 warning, 2 urgent, 4 critical.
 extern "C" int memorystatus_vm_pressure_level;
+#if XNU_12377_121_6
+extern "C" uint32_t memorystatus_available_pages;
+extern "C" uint32_t memstat_reaper_threshold;
+#endif
 
+// Within `capPages` of the reaper's threshold (xnu-12377), or at a raised pressure level
+bool belowReaperBy(uint64_t capPages)
+{
+	const int level = __atomic_load_n(&memorystatus_vm_pressure_level, __ATOMIC_RELAXED);
+#if XNU_12377_121_6
+	return switch_gpu_spares_give_back(
+		level, __atomic_load_n(&memorystatus_available_pages, __ATOMIC_RELAXED),
+		__atomic_load_n(&memstat_reaper_threshold, __ATOMIC_RELAXED), capPages);
+#else
+	(void)capPages;
+	return switch_gpu_spares_give_back(level, 0, 0, 0);
+#endif
+}
+
+// Spares go back within one cap of the reaper's threshold, and none is kept or made again until available pages are two
+// caps above it: what a give-back frees cannot by itself bring the refill back
 bool memoryPressure()
 {
-	return __atomic_load_n(&memorystatus_vm_pressure_level, __ATOMIC_RELAXED) != 0;
+	return belowReaperBy(kSpareCapBytes / PAGE_SIZE);
+}
+
+bool spareRoom()
+{
+	return !belowReaperBy(2 * (kSpareCapBytes / PAGE_SIZE));
 }
 
 // The class a spare of `bytes` serves: the largest class not past it.
@@ -209,7 +234,7 @@ void spareZeroed(void *context, int result)
 	IOLockLock(p->lock);
 	--p->zeroing[c];
 	p->cleaningBytes -= s->bytes;
-	const bool keep = !result && !memoryPressure();
+	const bool keep = !result && spareRoom();
 	if (keep) {
 		s->next = p->ready[c];
 		p->ready[c] = s;
@@ -242,7 +267,8 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 		if (Spare *s = p->dirty) {
 			p->dirty = s->next;
 			p->dirtyBytes -= s->bytes;
-			const bool keep = !pressure && p->clean + s->bytes <= kSpareCapBytes;
+			const bool keep =
+				!pressure && spareRoom() && p->clean + s->bytes <= kSpareCapBytes;
 			if (keep) {
 				p->clean += s->bytes;
 				p->cleaningBytes += s->bytes;
@@ -391,7 +417,8 @@ Spare *spareTake(uint64_t bytes)
 		++p->misses[why];
 #endif
 	}
-	const bool kick = !memoryPressure() ? p->count[c] < p->target[c] : p->clean != 0;
+	const bool kick =
+		memoryPressure() ? p->clean != 0 : spareRoom() && p->count[c] < p->target[c];
 	IOLockUnlock(p->lock);
 	if (kick)
 		thread_call_enter(p->call);

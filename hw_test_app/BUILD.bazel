@@ -101,6 +101,7 @@ MEDIA = [
     "jpeg_420.jpg",
     "jpeg_422.jpg",
     "jpeg_444.jpg",
+    "jpeg_444_small.jpg",
     "png.png",
     "heic.heic",
     "heic_grid.heic",
@@ -452,6 +453,8 @@ ios_binary(
         "-lc++",
         "-framework",
         "Foundation",
+        "-framework",
+        "IOSurface",
         "-framework",
         "Metal",
     ] + select({

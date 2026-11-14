@@ -14,6 +14,9 @@ bool switch_nvdec_jobs_park(bool drain);
 int switch_nvdec_power_use();
 void switch_nvdec_power_done();
 void switch_nvdec_power_idle();
+// The engine a cancellation's reset did not bring back, handed to the gate once the cancelled jobs have all ended (its
+// power-on rebases the queue, which needs it empty): the next decode powers it on. Takes no lock.
+void switch_nvdec_power_lost();
 void switch_nvdec_jobs_resume(bool ready, uint32_t completed);
 // A job's fence or bridge could not be armed.
 [[noreturn]] void switch_nvdec_job_fault(uint32_t fence, int error, uint64_t elapsedUs);
@@ -21,6 +24,9 @@ void switch_nvdec_jobs_resume(bool ready, uint32_t completed);
 // A stalled job's cancellation (TegraNVDECCancel.cpp). Stalled: the first failed fence of a stall, on host1x's work
 // loop; new jobs wait from then until the cancellation has renumbered the queue.
 void switch_nvdec_job_stalled(uint32_t fence, int error, uint64_t elapsedUs);
+// The falcon's error interrupt: the cancellation starts at once for the oldest job in flight, as for a stalled fence.
+// False: one is already under way.
+bool switch_nvdec_jobs_falcon_failed();
 // The engine has stopped: every queued job the syncpoint has not reached fails, recorded as failed. Returns the last
 // job's fence, through which the caller then releases the syncpoint.
 uint32_t switch_nvdec_jobs_cancel(uint32_t reached);

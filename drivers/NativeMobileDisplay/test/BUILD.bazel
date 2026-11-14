@@ -54,13 +54,20 @@
 #   switch_completion_flip_proof_test   the same on a unit whose window A WINBUF aperture refuses the stores: one
 #                                       line, completion flips off, the frame flips from the gate, no latch misread
 #   switch_dc_host1x_class_probe_test   SwitchDcHost1xClassProbe.h is debug-only and its class 0x70 stream uses opcodes
-#                                       T210 has, through host1x's job API
+#                                       T210 has, through host1x's job API on the display's own channel
+#   switch_host1x_flip_run_test         SwitchHost1xFlipRun.h: window A flipped by streams held behind a producer's
+#                                       syncpoint; a failed producer, a stuck channel, a refused or missing latch and a
+#                                       stopping display each end with the stream torn down before the gate writes
+#   switch_host1x_flip_display_test     SwitchHost1xFlipDisplay.h is debug-only, on the display's channel, and nothing
+#                                       else writes window A or a request while it runs
 #   switch_media_completion_flip_test   SwitchMediaCompletionFlipDisplay.h: a media plane set staged at its offer and
 #                                       written by its producers' completion or host1x's filter; never taken before
 #                                       its request, never a surface scanned before its producer finished, whatever
 #                                       the order
 #   switch_media_completion_flip_filter_test  host1x's filter writes the set first: the completion writes nothing, a
 #                                       frame end, gate writer or SC7 between adopts it, a stale waiter claims nothing
+#   switch_scanout_attach_test          SwitchScanoutAttach.h: a window firmware left on is turned off and the scanout
+#                                       domain attaches at the first frame end that reads it off, never before
 #   switch_completion_flip_filter_test  the producers' interrupt filters write the flip first: their completion writes
 #                                       nothing, a frame end or SC7 between adopts it, a stale waiter claims nothing
 #   switch_page_return_test             Core Animation's three pages scanned in place or copied: no page goes back
@@ -183,6 +190,26 @@ host_test(
     ],
 )
 
+# SwitchWindowAperture.h (display.completion_flip winbuf_alias): window A's direct apertures written and read back both
+# ways against a model of DC A that aliases them and one that does not, every word and the access state put back.
+host_test(
+    name = "switch_window_aperture_test",
+    srcs = [
+        "switch_window_aperture_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchWindowAperture.h",
+    ],
+)
+
+# TegraMipiCal.h (TegraDisplayPower.cpp's SC7 resume): one calibration waited for by its status bits against a model of
+# MIPI_CAL, bounded at 10 ms, never started twice.
+host_test(
+    name = "tegra_mipi_cal_test",
+    srcs = [
+        "tegra_mipi_cal_test.cpp",
+        "//drivers/NativeMobileDisplay:TegraMipiCal.h",
+    ],
+)
+
 host_test(
     name = "tegra_display_color_test",
     srcs = [
@@ -206,6 +233,9 @@ host_test(
     name = "native_legacy_display_source_test",
     srcs = ["native_legacy_display_source_test.cpp"],
     data = [
+        "//drivers/SwitchBrightness:TegraPanel.cpp",
+        "//drivers/NativeMobileDisplay:SwitchScanoutHalt.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayPower.cpp",
         "//drivers/NativeMobileDisplay:SwitchOverlayRegisters.h",
         "//drivers/NativeMobileDisplay:SwitchPlaneSelection.h",
         "//diagnostics/switch:SwitchDiag.c",
@@ -216,6 +246,7 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchDirectSlots.h",
         "//drivers/NativeMobileDisplay:SwitchRetireDisplay.h",
         "//drivers/NativeMobileDisplay:SwitchScanoutSetup.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeSelection.h",
         "//kits/SwitchABI:kinds/21H461/IOMobileFramebufferLegacy.json",
     ],
 )
@@ -789,6 +820,30 @@ host_test(
 )
 
 host_test(
+    name = "switch_host1x_flip_run_test",
+    srcs = [
+        "switch_host1x_flip_run_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchHost1xFlipRun.h",
+        "//drivers/TegraHost1x:TegraHost1x.h",
+    ],
+)
+
+host_test(
+    name = "switch_host1x_flip_display_test",
+    srcs = ["switch_host1x_flip_display_test.cpp"],
+    data = [
+        "//drivers/NativeMobileDisplay:DisplayWindowProbeDisplay.h",
+        "//drivers/NativeMobileDisplay:NativeColumnScanDisplay.h",
+        "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlipDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchDcHost1xClassProbe.h",
+        "//drivers/NativeMobileDisplay:SwitchHost1xFlipDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchMediaCompletionFlipDisplay.h",
+    ],
+)
+
+host_test(
     name = "switch_media_completion_flip_test",
     srcs = [
         "switch_media_completion_flip_harness.h",
@@ -1089,4 +1144,12 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchDirectSlots.h",
     ],
     deps = [":native_scanout_kernel"],
+)
+
+host_test(
+    name = "switch_scanout_attach_test",
+    srcs = [
+        "switch_scanout_attach_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchScanoutAttach.h",
+    ],
 )

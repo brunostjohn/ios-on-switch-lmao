@@ -177,29 +177,28 @@ TEST_F(MediaFlipFilter, AStaleWaiterClaimsNothingOfTheNextOffer)
     EXPECT_EQ(d.mediaFlip.state, SwitchCompletionFlip::kArmed);
 }
 
-// The producers' contract broken: a set the filter wrote whose completion then failed is shown as done, logged once,
-// and the filter writes no set after it.
-TEST_F(MediaFlipFilter, AFilterSetWhoseCompletionFailsIsShownAndTurnsTheFilterOff)
+// The producers' contract broken: a set the filter wrote whose completion then failed is shown as done with one line,
+// and the next set's filter writes it as usual: nothing is held.
+TEST_F(MediaFlipFilter, AFilterSetWhoseCompletionFailsIsOneLineAndTheNextFilterWrites)
 {
     ASSERT_TRUE(armed(2));
     d.filter();
     d.complete(-5);
     EXPECT_EQ(d.gpuStatus, 0);
-    ASSERT_EQ(gLog.size(), 1u);
-    EXPECT_NE(gLog[0].find("whose completion then failed (-5)"), std::string::npos) << gLog[0];
     d.donePass();
     frame();
     EXPECT_EQ(d.shown.back(), seq);
+    ASSERT_EQ(gLog.size(), 1u);
+    EXPECT_NE(gLog[0].find("whose completion then failed (-5)"), std::string::npos) << gLog[0];
     ASSERT_TRUE(armed(3));
     d.model.written.clear();
     d.filter();
-    EXPECT_TRUE(d.model.written.empty());
-    EXPECT_EQ(d.mediaFlip.state, SwitchCompletionFlip::kArmed);
+    EXPECT_FALSE(d.model.written.empty());
 }
 
-// A filter's stores that never reach the assembly copy are judged as the completion's: one line, these flips and the
-// filter's writes off, the set from the gate.
-TEST_F(MediaFlipFilter, AFilterSetThatDoesNotLatchIsWrittenFromTheGateAndTurnsTheFilterOff)
+// A filter's stores that never reach the assembly copy are judged as the completion's: one line, that set from the
+// gate, the next set armed as usual.
+TEST_F(MediaFlipFilter, AFilterSetThatDoesNotLatchIsWrittenFromTheGate)
 {
     ASSERT_TRUE(armed(2));
     d.model.completionDropsAddresses = true;
@@ -209,11 +208,10 @@ TEST_F(MediaFlipFilter, AFilterSetThatDoesNotLatchIsWrittenFromTheGateAndTurnsTh
     ASSERT_NO_THROW(frame());
     ASSERT_EQ(gLog.size(), 1u);
     EXPECT_NE(gLog[0].find("windows B and C's completion flip did not latch"), std::string::npos);
-    EXPECT_TRUE(d.mediaFlipsRefused);
-    EXPECT_TRUE(d.mediaFilterOff);
     ASSERT_NO_THROW(frame());
     EXPECT_EQ(d.model.active[kStartB], address(2));
-    EXPECT_FALSE(armed(3));
+    d.model.completionDropsAddresses = false;
+    EXPECT_TRUE(armed(3));
 }
 
 TEST_F(MediaFlipFilter, SuspendAdoptsAnEarlySet)

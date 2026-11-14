@@ -31,7 +31,7 @@ CLIPS = (
     'h264_paff_256p',
     'h264_mbaff_1080p',
 )
-STILLS = ('jpeg_420', 'jpeg_422', 'jpeg_444', 'png', 'heic', 'heic_grid')
+STILLS = ('jpeg_420', 'jpeg_422', 'jpeg_444', 'jpeg_444_small', 'png', 'heic', 'heic_grid')
 
 # The app's test IDs in its run order; True marks the interactive ones (a person plugs, presses or picks something).
 TESTS: dict[str, bool] = {
@@ -99,6 +99,8 @@ TESTS: dict[str, bool] = {
             'metal.texture_view',
             'metal.iosurface',
             'gpu.surface.tiled_default',
+            'gpu.iosurface.cross_process',
+            'gpu.raw.readback_routes',
             'gpu.ycbcr_target',
             'gpu.ycbcr_packed_target',
             'gpu.packed_plane_target',
@@ -221,6 +223,7 @@ TESTS: dict[str, bool] = {
     'encode.h264_bframes': False,
     'encode.nvenc_input_layouts': False,
     'encode.h264_from_nvdec': False,
+    'encode.h264_from_gpu': False,
     **{f'image.{still}': False for still in STILLS},
     'image.jpeg_after_idle': False,
     'image.heic_encode': False,
@@ -238,6 +241,7 @@ TESTS: dict[str, bool] = {
     'display.completion_flip': False,
     'display.media_completion_flip': False,
     'display.scan_returned': False,
+    'display.media_completion_flip_gated': False,
     'display.brightness': False,
     'display.colour': False,
     'display.planes': False,
@@ -249,6 +253,7 @@ TESTS: dict[str, bool] = {
     'display.plain_surfaces': False,
     'display.snapshot': False,
     'display.wake_gpu': True,
+    'display.planes_cropped': False,
     'display.x1.overlay_block_yuv': False,
     'display.x1.column_scan_yuv': False,
     'display.x1.offset_crop': False,
@@ -256,6 +261,8 @@ TESTS: dict[str, bool] = {
     'display.x1.window_wide': False,
     'display.x1.window_palette': False,
     'display.x1.landscape_video': False,
+    'display.x1.host1x_flip': False,
+    'display.x1.host1x_flip_teardown': False,
     'ui.text': False,
     'ui.blur': False,
     'ui.list': False,
@@ -290,8 +297,10 @@ TESTS: dict[str, bool] = {
     'system.identity': False,
     'system.power': False,
     'system.thermal': False,
+    'system.soctherm_throttle': False,
     'system.memory': False,
     'cpu.clock': False,
+    'cpu.dfll_landing': False,
     'cpu.sustained': False,
     'cpu.sched': False,
     'system.dispatch_sync': False,
@@ -304,6 +313,8 @@ TESTS: dict[str, bool] = {
     'gpu.recover.kill_one': False,
     'gpu.recover.kill_under_compositor': False,
     'gpu.x1.dc_host1x_class': False,
+    'gpu.ramfc_timeslice': False,
+    'gpu.rail_cycle': False,
     'gpu.recover.busy_engine': False,
     'gpu.recover.kernel_second_timeout': False,
     'input.controllers': False,
@@ -378,6 +389,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'gpu.x1.vic_transpose422': False,
         'gpu.x1.vic_4k': False,
         'gpu.x1.vic_compose': False,
+        'gpu.x1.vic_odd_size': False,
         'gpu.x1.index_past_limit': False,
     },
 }

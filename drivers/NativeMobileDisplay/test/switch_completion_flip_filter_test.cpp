@@ -31,7 +31,6 @@ protected:
         gVicStatus = 1;
         gWaits = 0;
         gLog.clear();
-        d.completionFlipsProven = true;
         d.startCompletionFlip();
     }
 
@@ -190,8 +189,8 @@ TEST_F(CompletionFlipFilter, APassBetweenTheCompletionsStoresAndItsClaimEntersTh
 }
 
 // The producers' contract broken: a flip their filter wrote whose completion then failed is shown as done, logged once,
-// and no filter writes a flip after it.
-TEST_F(CompletionFlipFilter, AFilterFlipWhoseCompletionFailsIsShownAndTurnsTheFiltersOff)
+// with one line.
+TEST_F(CompletionFlipFilter, AFilterFlipWhoseCompletionFailsIsShownWithOneLine)
 {
     ASSERT_EQ(d.offer(kSlot), 0);
     d.gpuFilter();
@@ -201,13 +200,23 @@ TEST_F(CompletionFlipFilter, AFilterFlipWhoseCompletionFailsIsShownAndTurnsTheFi
     EXPECT_NE(gLog[0].find("whose completion then failed (-5)"), std::string::npos) << gLog[0];
     d.donePass();
     EXPECT_EQ(d.ring.pending, kSlot);
+}
+
+// After the failed one, the next armed flip's filter writes it as usual: nothing is held.
+TEST_F(CompletionFlipFilter, TheNextFlipsFilterWritesAsUsual)
+{
+    ASSERT_EQ(d.offer(kSlot), 0);
+    d.gpuFilter();
+    d.complete(-5);
+    d.donePass();
     frame();
     ASSERT_EQ(d.offer(kSlot + 1), 0);
     d.model.written.clear();
     d.gpuFilter();
-    EXPECT_TRUE(d.model.written.empty());
-    d.complete(0);
     EXPECT_EQ(d.model.written, kSixStores);
+    d.complete(0);
+    d.donePass();
+    EXPECT_EQ(gLog.size(), 1u);
 }
 
 TEST_F(CompletionFlipFilter, NoFilterWritesAWithdrawnOrUnarmedFlip)

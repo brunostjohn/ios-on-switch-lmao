@@ -31,6 +31,7 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 {
 	task_ = task;
 	proc_selfname(owner_, sizeof(owner_));
+	ownerPid_ = proc_selfpid();
 
 	lock_ = IOLockAlloc();
 	unmapLock_ = IOLockAlloc();
@@ -610,6 +611,7 @@ extern "C" IOReturn tegra_gm20b_new_user_client(IOService *provider, task_t task
 		client->release();
 		return kIOReturnError;
 	}
+	tgm_owner_memory_provider(provider);
 	*handler = client;
 	static volatile int opened;
 	if (!__atomic_exchange_n(&opened, 1,

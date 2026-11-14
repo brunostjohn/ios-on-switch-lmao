@@ -34,7 +34,7 @@ template <class Self> static void vicFilterFlip(void *ctx)
 void armCompletionFlipWaiter(const switch_gpu_backing_token &producer)
 {
     IOSimpleLock *lock = __atomic_load_n(&completionFlipLock, __ATOMIC_ACQUIRE);
-    if (!lock || __atomic_load_n(&completionFilterOff, __ATOMIC_RELAXED))
+    if (!lock)
         return;
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
     const bool armed = completionFlip.state == SwitchCompletionFlip::kArmed;
@@ -55,8 +55,10 @@ void armCompletionFlipWaiter(const switch_gpu_backing_token &producer)
 // log, nothing but this lock.
 void writeEarlyCompletionFlip(uint32_t armed, uint8_t by)
 {
+    if (SWITCH_FRAME_TIMELINE)
+        noteFlipTotal(8, 1);
     IOSimpleLock *lock = __atomic_load_n(&completionFlipLock, __ATOMIC_ACQUIRE);
-    if (!lock || __atomic_load_n(&completionFilterOff, __ATOMIC_RELAXED))
+    if (!lock)
         return;
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
     const bool write = !gPanicRestore.panicking && completionFlip.claimEarly(armed, by);
@@ -71,8 +73,8 @@ void writeEarlyCompletionFlip(uint32_t armed, uint8_t by)
 }
 
 // gpuComplete's first step: a flip its producer's filter already wrote is on screen, so its completion is a success
-// (the filter wrote only for a job certain to end so). A failure here breaks that: one line, and no filter writes
-// from then on.
+// (the filter wrote only for a job certain to end so). A failure here breaks that: one error line; the next flip's filter
+// runs as usual.
 int completionFlipVerdict(int status)
 {
     status = mediaFlipVerdict(status);
@@ -84,9 +86,8 @@ int completionFlipVerdict(int status)
     IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
     if (!early)
         return status;
-    if (!__atomic_exchange_n(&completionFilterOff, true, __ATOMIC_RELAXED))
-        IOLog("SwitchDisplay: window A was flipped to entry %d from its producer's interrupt filter, whose completion "
-              "then failed (%d): shown as done; producers' filters write no flips from here\n",
-              entry, status);
+    IOLog("SwitchDisplay: window A was flipped to entry %d from its producer's interrupt filter, whose completion then "
+          "failed (%d): shown as done\n",
+          entry, status);
     return 0;
 }

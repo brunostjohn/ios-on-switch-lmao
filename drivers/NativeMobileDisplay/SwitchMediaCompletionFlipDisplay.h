@@ -14,18 +14,18 @@
 // Every other writer of windows B and C (planeStage, the recovery, the stop) first runs a written flip's pass and
 // withdraws an armed one, which leaves the latch as it was before the offer; that set then goes out through planeOut as
 // before, as does one whose producer failed. A frame end that sees the completion's request taken with windows B and C
-// scanning another set logs once, turns these flips off for the boot and writes that set from the gate. Included in the
-// class body after SwitchMediaPlaneFence.h.
+// scanning another set writes that set from the gate with one error line; a set that cannot be staged at its offer is one
+// line and goes out through planeOut. The next set is armed as usual. Included in the class body after
+// SwitchMediaPlaneFence.h.
 //
 // Earlier still, host1x's syncpoint filter writes the set (writeEarlyMediaFlip) once every producer's job is certainly
 // done (switch_gpu_backing_token_filter_status), from a filter waiter on each producer. A frame end or a gate writer
 // that comes before the completion adopts it: the latch requests it then, and the completion's pass leaves it be.
-// The judging and the turn-off above cover these sets as well.
+// The judging above covers these sets as well. A filter-written set whose completion then fails is shown as done with one
+// error line.
 
 // Static, as window A's completion flip: the instance is at the 16 KiB a kalloc_type class may have.
 static inline SwitchPlaneCompletionFlip mediaFlip;
-static inline bool mediaFlipsRefused = false;
-static inline bool mediaFilterOff = false;  // host1x's filter writes no set: read in its interrupt context
 static inline int mediaFlipUnverified = PlaneCommits::kNone;  // the latch entry the completion requested, unjudged
 static inline uint64_t mediaFlipRequestedSeq = 0;  // the set finishPlaneFence requested: planeOut writes nothing for it
 // A set's host1x filter waiters (one on each producer), one per arm parity: a waiter outlives its offer only by the
@@ -41,8 +41,9 @@ struct MediaFilterWaiter {
 
 static inline MediaFilterWaiter mediaFilterWaiters[2] = {};
 #if SWITCH_FRAME_TIMELINE
-static constexpr unsigned kMediaFlipTotals = 7;
-// completion, withdrawn, refused, lead us, armed, filter, filter waiters declined
+static constexpr unsigned kMediaFlipTotals = 10;
+// completion, withdrawn, refused, lead us, armed, filter, filter waiters declined; video sets whose producers were done
+// at their swap, sets that waited for VIC or NVDEC, of those the ones not armed
 static inline uint32_t mediaFlipTotals[kMediaFlipTotals] = {};
 static inline struct sysctl_oid mediaFlipTotalOids[kMediaFlipTotals] = {};
 #endif
@@ -54,16 +55,7 @@ bool mediaFlipIdle() const
 
 static bool sameWindowLayout(const switch_display::Overlay &a, const switch_display::Overlay &b)
 {
-    if (a.on != b.on)
-        return false;
-    if (!a.on)
-        return true;
-    const native_planes::Image &x = a.image, &y = b.image;
-    return a.depth == b.depth && x.surfaceKind == y.surfaceKind && x.vOffset == y.vOffset &&
-           x.colorDepth == y.colorDepth && x.position == y.position && x.size == y.size && x.prescaled == y.prescaled &&
-           x.dda == y.dda && x.lineStride == y.lineStride && x.hOffset == y.hOffset && x.options == y.options &&
-           x.hInitial == y.hInitial && x.vInitial == y.vInitial && x.yuv == y.yuv && x.matrix == y.matrix &&
-           x.fullRange == y.fullRange && x.byteSwap == y.byteSwap && !y.convert;
+    return switch_display::sameGeometry(a, b) && !(a.on && b.image.convert);
 }
 
 uint32_t windowAddress(const switch_display::Overlay &overlay, unsigned plane) const
@@ -80,10 +72,10 @@ const PlaneSet &newestRequestedSet() const
 // planeStage would write p at once, whatever latches before the completion: assigned is p as it would place it.
 bool mediaFlipMay(const PlaneSet &p, PlaneSet &assigned)
 {
-    if (mediaFlipsRefused || !planesOn || !planesAttached || planesAbandoned || planeRecovering || planeHeldSet ||
-        planeProbe.active() || copyPlaneJoined || hwSuspended || gPanicRestore.panicking || ring.held != kNoBuffer ||
-        !planeLatch.mayWrite() || !planeLatch.armedRequested || p.on() != planeBlending || !completionFlipIdle() ||
-        !mediaFlipIdle() || p.landscape || landscapeOn() || landscapeHoldsKicks() || windowProbeBusy())
+    if (!planesOn || !planesAttached || planeRecovering || planeHeldSet || planeProbe.active() || copyPlaneJoined ||
+        hwSuspended || gPanicRestore.panicking || ring.held != kNoBuffer || !planeLatch.mayWrite() ||
+        !planeLatch.armedRequested || p.on() != planeBlending || !completionFlipIdle() || !mediaFlipIdle() ||
+        p.landscape || landscapeOn() || landscapeHoldsKicks() || windowProbeBusy() || host1xFlipBusy())
         return false;
     const switch_display::WindowState windows[2] = {planeWindowState(switch_landscape::kB),
                                                     planeWindowState(switch_landscape::kC)};
@@ -106,17 +98,19 @@ bool armMediaFlip(const PlaneSet &p)
     if (!completionFlipLock)
         startCompletionFlip();
     PlaneSet assigned = {};
-    if (!mediaFlipMay(p, assigned))
+    if (!mediaFlipMay(p, assigned)) {
+        if (SWITCH_FRAME_TIMELINE)
+            noteMediaFlipTotal(9, 1);
         return false;
+    }
     const PlaneSet now = newestRequestedSet();
     const PlaneSet target = planeTarget;
     uint32_t update = 0, request = 0;
     if (!planeStage(p, update, request)) {
         planeHeldSet = false;
         planeTarget = target;
-        mediaFlipsRefused = true;
-        IOLog("SwitchDisplay: windows B and C's set (take %llu) could not be staged at its offer: they flip from the "
-              "display's work loop from here on\n",
+        IOLog("SwitchDisplay: windows B and C's set (take %llu) could not be staged at its offer: it flips from the "
+              "display's work loop\n",
               static_cast<unsigned long long>(p.seq));
         return false;
     }
@@ -156,7 +150,7 @@ int planeFenceWithMediaFlip(const PlaneSet &p, const switch_gpu_backing_token *p
 // Once the token fence is armed: a waiter on each producer, any of which writes the set when all are done.
 void armMediaFlipWaiters(const switch_gpu_backing_token *producers, unsigned count)
 {
-    if (__atomic_load_n(&mediaFilterOff, __ATOMIC_RELAXED) || count > kMediaFilterProducers)
+    if (count > kMediaFilterProducers)
         return;
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
     const bool armed = mediaFlip.state == SwitchCompletionFlip::kArmed;
@@ -200,7 +194,7 @@ template <class Self> static void mediaFilterFlip(void *ctx)
 void writeEarlyMediaFlip(uint32_t generation)
 {
     IOSimpleLock *lock = __atomic_load_n(&completionFlipLock, __ATOMIC_ACQUIRE);
-    if (!lock || __atomic_load_n(&mediaFilterOff, __ATOMIC_RELAXED))
+    if (!lock)
         return;
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
     const bool write = !gPanicRestore.panicking && mediaFlip.claimEarly(generation);
@@ -212,7 +206,7 @@ void writeEarlyMediaFlip(uint32_t generation)
 }
 
 // completionFlipVerdict's: a set host1x's filter wrote is on screen, so its completion is a success. A failure breaks
-// the producers' contract: one line, and that filter writes no set from then on.
+// the producers' contract: one error line.
 int mediaFlipVerdict(int status)
 {
     if (!status || !__atomic_load_n(&completionFlipLock, __ATOMIC_ACQUIRE))
@@ -222,10 +216,10 @@ int mediaFlipVerdict(int status)
     IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
     if (!early)
         return status;
-    if (!__atomic_exchange_n(&mediaFilterOff, true, __ATOMIC_RELAXED))
-        IOLog("SwitchDisplay: windows B and C's set was written from host1x's syncpoint filter, whose completion then "
-              "failed (%d): shown as done; the filter writes no sets from here\n",
-              status);
+    IOLog(
+        "SwitchDisplay: windows B and C's set was written from host1x's syncpoint filter, whose completion then failed "
+        "(%d): shown as done\n",
+        status);
     return 0;
 }
 
@@ -368,12 +362,9 @@ bool mediaFlipRefused(bool out, int scanned)
     if (out)
         return false;
     mediaFlipUnverified = PlaneCommits::kNone;
-    if (!mediaFlipsRefused)
-        IOLog("SwitchDisplay: windows B and C's completion flip did not latch (set %d written, set %d scanned): they "
-              "flip from the display's work loop from here on\n",
-              id, scanned);
-    mediaFlipsRefused = true;
-    __atomic_store_n(&mediaFilterOff, true, __ATOMIC_RELAXED);
+    IOLog("SwitchDisplay: windows B and C's completion flip did not latch (set %d written, set %d scanned): that set "
+          "flips from the display's work loop\n",
+          id, scanned);
     if (SWITCH_FRAME_TIMELINE)
         noteMediaFlipTotal(2, 1);
     withdrawMediaFlip();
@@ -424,9 +415,10 @@ static int mediaFlipTotalSysctl(struct sysctl_oid *, void *, int which, struct s
 static void mediaFlipTotalsRegister()
 {
     static const char *const names[kMediaFlipTotals] = {
-        "switch_media_flips_completion",     "switch_media_flips_withdrawn", "switch_media_flips_refused",
-        "switch_media_flips_lead_us",        "switch_media_flips_armed",     "switch_media_flips_filter",
-        "switch_media_flips_filter_declined"};
+        "switch_media_flips_completion",      "switch_media_flips_withdrawn",    "switch_media_flips_refused",
+        "switch_media_flips_lead_us",         "switch_media_flips_armed",        "switch_media_flips_filter",
+        "switch_media_flips_filter_declined", "switch_media_flips_done_at_swap", "switch_media_flips_fenced",
+        "switch_media_flips_declined"};
     for (unsigned i = 0; i < kMediaFlipTotals; ++i) {
         switch_sysctl_oid(&mediaFlipTotalOids[i], &sysctl__kern_children, names[i],
                           static_cast<int>(CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED), mediaFlipTotalSysctl, "I",
@@ -434,7 +426,8 @@ static void mediaFlipTotalsRegister()
                           "withdrawn before their completion, ones that did not latch as written, microseconds the "
                           "completions' writes came before the gate took them, sets armed for their completion, "
                           "sets host1x's syncpoint filter wrote, producers whose job was done or whose waiter host1x "
-                          "refused at the arm");
+                          "refused at the arm, overlay sets whose producers were done at their swap, overlay sets that "
+                          "waited for VIC or NVDEC, of those the ones not armed");
         mediaFlipTotalOids[i].oid_arg2 = static_cast<int>(i);
         sysctl_register_oid(&mediaFlipTotalOids[i]);
     }

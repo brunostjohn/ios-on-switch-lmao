@@ -12,7 +12,7 @@
 //   - once the cancelled jobs have ended, the queue renumbers from the syncpoint and the next job runs.
 // All under the power lock, as at power-on: NVJPG's power path writes MC_HOTRESET_CTRL_1 too. An engine sleep has
 // already powered off is not touched; its next power-on boots it. An engine the reset does not bring back is parked and
-// NVDEC refuses work. One line per cancellation.
+// the idle gate powers it on at a later decode. One line per cancellation.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <kern/thread_call.h>
@@ -33,10 +33,12 @@ struct Stall {
 
 void cancel(thread_call_param_t, thread_call_param_t)
 {
-    char host[200], engine[480];
+    char host[200], engine[480], reason[288];
     IOLock *power = tegra_nvdec_power_lock();
     IOLockLock(power);
     const bool powered = switch_nvdec_engine_powered();
+    if (!powered || !switch_nvdec_engine_falcon_failed(reason, sizeof(reason)))
+        snprintf(reason, sizeof(reason), "not reached in %llu ms (%d)", gStall.elapsedUs / 1000, gStall.error);
     const uint32_t syncpt = gStall.syncpt;
     const uint32_t reached = tegra_host1x_syncpt_read(syncpt);
     if (powered)
@@ -53,11 +55,10 @@ void cancel(thread_call_param_t, thread_call_param_t)
     const bool back = reset && !released && (!powered || switch_nvdec_engine_boot());
     const char *why = back ? "" : released ? "its fences were not released" : switch_nvdec_engine_wedge();
     IOLockUnlock(power);
-    IOLog("TegraNVDEC: job fence %u not reached in %llu ms (%d; syncpoint %u at %u); %s; %s; cancelled through fence "
-          "%u, memory client %s, engine reset: %s%s\n",
-          gStall.fence, gStall.elapsedUs / 1000, gStall.error, syncpt, reached, engine, host, through,
-          drained ? "drained" : "did not drain in 10 ms",
-          back ? "running again" : "it did not come back, NVDEC refuses work: ", why);
+    IOLog("TegraNVDEC: job fence %u %s (syncpoint %u at %u); %s; %s; cancelled through fence %u, memory client %s, "
+          "engine reset: %s%s\n",
+          gStall.fence, reason, syncpt, reached, engine, host, through, drained ? "drained" : "did not drain in 10 ms",
+          back ? "running again" : "it did not come back, the next decode powers it on again: ", why);
     switch_nvdec_jobs_recovered(back);
 }
 }  // namespace

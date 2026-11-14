@@ -12,6 +12,7 @@ static void present_typed_complete(void *unused)
 	void *arg;
 	int status;
 	(void)unused;
+	tgm_present_filter_detach();
 	mutex_lock(&tgm_present.lock);
 	done = tgm_present.done;
 	arg = tgm_present.arg;
@@ -356,6 +357,15 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 	/* before the kick, so the completion cancels it */
 	nvxnu_work_schedule_after(tgm_present.deadline_work, tgm_present.recheck);
 	tgm_chan_park_promises(chan, tgm_present.tokens.tokens, dependency_count);
+	/* The present job's own fence, on this kernel channel whose completion is its visibility: the nonstall filter runs
+	 * the display's callout as it passes, ahead of the completion work item. A direct present of a producer that ended
+	 * without external visibility (a compositor job's) comes here through present_watch_flush, so this is the filter's
+	 * only chance at that frame. Before the kick: its nonstall interrupt can come before chan_fence returns. */
+	{
+		struct switch_gpu_backing_token own = {0};
+		switch_gpu_chan_next_token(chan, &own);
+		tgm_present_filter_attach(&own);
+	}
 	/* A copy's flush above put the frame's source in DRAM, and the copy and its read-backs write through the present's
 	 * volatile PTEs (tgm_present_map); a fence-only present is direct scanout of a surface the GPU drew through the L2. */
 	if (dst_va)

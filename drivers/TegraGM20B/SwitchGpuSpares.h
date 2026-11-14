@@ -23,6 +23,17 @@ inline switch_gpu_spare_miss switch_gpu_spare_miss_of(uint16_t target, uint16_t 
 	return zeroing ? SWITCH_GPU_SPARE_ZEROING : SWITCH_GPU_SPARE_DRAINED;
 }
 
+// Whether the spares go back to the VM: a VM pressure level above normal, or available pages within `cap_pages` of the
+// long-idle reaper's threshold (0: no reaper). xnu-12377's memorystatus kills every process idle past its minimum age
+// once available pages fall below that threshold (five times the critical level), while the pressure level still reads
+// normal: zeroed spares kept wired then cost idle daemons and extensions their lives.
+constexpr bool switch_gpu_spares_give_back(int pressure_level, uint64_t available_pages,
+					   uint64_t reaper_threshold_pages, uint64_t cap_pages)
+{
+	return pressure_level != 0 || (reaper_threshold_pages != 0 &&
+				       available_pages < reaper_threshold_pages + cap_pages);
+}
+
 constexpr uint16_t SWITCH_GPU_SPARE_DEPTH_MAX = 8;
 
 // A class learns a depth of 1 at its first miss and doubles it at each later one, to SWITCH_GPU_SPARE_DEPTH_MAX: a burst

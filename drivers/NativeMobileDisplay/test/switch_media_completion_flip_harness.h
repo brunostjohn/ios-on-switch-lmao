@@ -282,7 +282,6 @@ struct Display {
         gPreemptionOff = 0;
         landscapeState = {};
         mediaFlip = {};
-        mediaFlipsRefused = mediaFilterOff = false;
         mediaFlipUnverified = PlaneCommits::kNone;
         mediaFlipRequestedSeq = 0;
         planeLatch.values = sets;
@@ -315,6 +314,11 @@ struct Display {
     }
 
     static bool windowProbeBusy()
+    {
+        return false;
+    }
+
+    static bool host1xFlipBusy()
     {
         return false;
     }
@@ -480,16 +484,21 @@ struct Display {
     }
 
     // NativePlanesDisplay.h retireUnshown: carried by the set still out, or retired now.
+    void retireUnshown(uint64_t seq)
+    {
+        if (planeLatch.requested())
+            planeSetOf(planeLatch.armed).seq = seq;
+        else if (planeHeldSet)
+            planeHeld.seq = seq;
+        else
+            retireThrough(seq, mach_absolute_time());
+    }
+
     void planeNotShown()
     {
         ++notShown;
         planeTarget = planeSetOf(planeLatch.requested() ? planeLatch.armed : planeLatch.active);
-        if (planeLatch.requested())
-            planeSetOf(planeLatch.armed).seq = planeFencing.seq;
-        else if (planeHeldSet)
-            planeHeld.seq = planeFencing.seq;
-        else
-            retireThrough(planeFencing.seq, mach_absolute_time());
+        retireUnshown(planeFencing.seq);
     }
 
     void planeOut(const PlaneSet &p)

@@ -204,13 +204,45 @@ TEST(VsyncPhaseSource, OneVsyncAFrame)
                             "if (status & kFrameEndInt) frameEnds = frameEnds + 1;"));
 }
 
+// A failed change of mode, a refused completion flip or an underflow run holds no route off: whether landscape, direct
+// scanout and completion flips are tried reads no failure state.
+TEST(DisplayRoutesSource, NoFailureHoldsARouteOff)
+{
+    const CodeText selection(SourceText("../SwitchLandscapeSelection.h"));
+    EXPECT_TRUE(selection.Has("return planesReady() && directAttached && !landscapeRunHoldsPortrait();"));
+    EXPECT_TRUE(
+        CodeText(SourceText("../SwitchScanoutStart.h")).Has("bool directScanChosen() const { return directOn; }"));
+    EXPECT_FALSE(code().Has("Hold.on()"));
+}
+
 TEST(VsyncPhaseSource, NeverFiringVpulse2CostsOneLine)
 {
     const CodeText present = method("void notePhasePresent(uint64_t stamp, const FrameMark &mark)");
-    EXPECT_TRUE(present.Has("phaseFailed = true;"));
+    EXPECT_TRUE(present.Has("if (vpulseProgrammed && !vpulseSeen && dc && !hwSuspended) {"))
+        << "DC A read only while probing, and never powered down";
+    EXPECT_TRUE(present.Has("phaseProbe.flip(true, vpulse2Routed(), false)"));
+    EXPECT_TRUE(present.Has("phaseProbeEnded(step);"));
     EXPECT_FALSE(present.Has("panic(")) << "a V_PULSE2 that never fired costs one line, not the boot";
-    EXPECT_TRUE(present.Has("IOLog(\"SwitchDisplay: vsync phase off for this boot"));
+    const CodeText ended = method("void phaseProbeEnded(VsyncPhaseProbe::Step step)");
+    EXPECT_TRUE(ended.Has("vsync at V_BLANK"));
+    EXPECT_TRUE(ended.Has("dropVpulse2();"));
+    EXPECT_TRUE(method("void dropVpulse2()").Has("vpulseProgrammed = false;"));
     EXPECT_TRUE(method("unsigned noteLong(uint32_t frames, const FrameMark &mark)").Has("kLongRate"));
+}
+
+// The probe asks whether V_PULSE2 reaches the CPU, so it only counts flips with V_PULSE2 routed (enabled and unmasked):
+// V_PULSE2 is programmed only with a vsync client and unmasked in the same step, and goes with the last client, so a
+// masked V_PULSE2 never fails a probe.
+TEST(VsyncPhaseSource, Vpulse2IsProbedOnlyWhileRouted)
+{
+    const CodeText program = method("void programPhase(uint32_t leadUs)");
+    EXPECT_TRUE(program.Has("(!vpulseProgrammed && !vsyncArmed)"));
+    EXPECT_TRUE(program.Before("dc[kDcIntEnable] = dc[kDcIntEnable] | kVpulse2Int;", "writeIntMask(0, kVpulse2Int);"));
+    EXPECT_FALSE(program.Has("else armVsync unmasks it"));
+    EXPECT_TRUE(method("bool vpulse2Routed()").Has("dc[kDcIntEnable] & dc[kDcIntMask] & kVpulse2Int"));
+    const CodeText notify = method("void vblankNotify()");
+    EXPECT_TRUE(notify.Before("writeIntMask(kVblankInt, 0);", "dropVpulse2();"));
+    EXPECT_TRUE(method("bool phaseDelivering() const").Has("vpulseProgrammed"));
 }
 
 TEST(VsyncPhaseSource, ReplacementsAndResume)
@@ -303,6 +335,41 @@ TEST(FrameEndSource, MaskedWhileNothingWaits)
 
 // A blank swap blacks the head through the colour unit only while no flip is out, and the first flip latched after it
 // ends the black: an older flip's latch must never show a frame the blank swap replaced.
+// The start's 250 ms check only proves frame ends arrive: INT_ENABLE has no writer outside the display's own start,
+// stop, resume and the routes it enables (TegraPanel's DSI steps read it), so nothing re-applies it.
+TEST(FrameEndSource, TheStartCheckWritesNoInterruptEnable)
+{
+    EXPECT_FALSE(method("void vsyncTick()").Has("dc[kDcIntEnable] ="));
+    EXPECT_TRUE(method("void vsyncTick()").Has("no DC A frame end in 250 ms"));
+    const CodeText panel(SourceText("../../SwitchBrightness/TegraPanel.cpp"));
+    EXPECT_TRUE(panel.Has("gDc[DC_CMD_INT_ENABLE]"));
+    EXPECT_FALSE(panel.Has("gDc[DC_CMD_INT_ENABLE] ="));
+}
+
+// SC7 powers DC A down once its STOP is in force: the active DISPLAY_COMMAND reads mode 0 (TRM 24.6.16), waited for on
+// the last frame's FRAME_END and bounded by two frame periods with one error line, in place of a 20 ms sleep. The DSI
+// pads are calibrated once and waited for by MIPI_CAL's status (TegraMipiCal.h), in place of two back-to-back starts and a
+// 10 ms sleep.
+TEST(Sc7Source, StatusReadsNotFixedSleeps)
+{
+    EXPECT_FALSE(Block(display(), "extern \"C\" void tegra_display_suspend(void)").Has("IOSleep"));
+    EXPECT_TRUE(method("void quiesceForSuspend()").Before("setScanout(false);", "waitScanoutHalted();"));
+    EXPECT_TRUE(method("void quiesceForSuspend()").Before("waitScanoutHalted();", "vblankSource->disable();"));
+    const std::string halt = SourceText("../SwitchScanoutHalt.h");
+    const CodeText halted = Block(halt, "void waitScanoutHalted()");
+    EXPECT_TRUE(Block(halt, "bool scanoutHalted()").Has("kReadMuxActive"));
+    EXPECT_TRUE(halted.Has("assert_wait_deadline(reinterpret_cast<event_t>(&scanoutStopFrames)"));
+    EXPECT_TRUE(halted.Has("2 * period"));
+    EXPECT_TRUE(halted.Has("IOLog("));
+    EXPECT_FALSE(halted.Has("panic("));
+    const std::string power = SourceText("../TegraDisplayPower.cpp");
+    const CodeText up = Block(power, "extern \"C\" void tegra_display_power_up(void)");
+    EXPECT_FALSE(up.Has("for (unsigned pass"));
+    EXPECT_EQ(CodeText(power).Count("0x2A000001"), 0u);
+    EXPECT_TRUE(up.Before("write(gMipiCal, kMipiDsiCal);", "tegra_mipi_cal::calibrate(gMipiCal"));
+    EXPECT_TRUE(up.Before("tegra_mipi_cal::calibrate(gMipiCal", "write(gDc, kDcTimings);"));
+}
+
 TEST(BlankSource, ColourBlankEndsAtTheNextLatch)
 {
     EXPECT_TRUE(code().Has("rotated && rotationLatched && doubleBuffer && ring.pending == kNoBuffer &&"));

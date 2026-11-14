@@ -38,6 +38,7 @@
 #   gm20b_preempt_landing_test SwitchGpuPreemptLanding.h: where a kick's preempt landed (a band's release, a job's end)
 #   gm20b_compositor_sync_test SwitchGpuCompositorSync.h: the compositor's sync pushes, kicks behind an app apart
 #   gm20b_cost_hist_test     TegraGM20BCostHist.h: the debug lines' buckets, and a p95 a single slow frame leaves alone
+#   switch_gpu_owner_memory_test SwitchGpuOwnerMemory.h: a connection's BO counts, the debug line summing them by process
 #   gm20b_sched_test         TegraGM20BSchedPolicy.h and tgm_hang_blame over deploy-2045's hang registers: what a
 #                            compositor kick preempts, the interleaved runlist (full, empty, one level), which channel a
 #                            late wait kills (the context GR cannot switch, a self-hung channel, never slow work)
@@ -60,6 +61,10 @@
 #                            its step with interrupts off takes no lock, sleep or allocation
 #   gm20b_view_merge_test    TegraGM20BViewMerge.h: a CPU write lock's unlock keeps the bytes a GPU write left where the
 #                            CPU wrote none, byte by byte
+#   gm20b_pmc_enable_test    TegraGM20BPmcEnable.h with a recovery's GR reset and an engine's first use on PMC_ENABLE: no
+#                            change made inside another is lost
+#   gm20b_ramfc_order_test   TegraGM20BRamfcOrder.h over a model of the host's RAMFC save: a level change's timeslice
+#                            written while the save of the switched-out channel is in flight still holds after a job
 #   gm20b_acquire_test       TegraGM20BAcquire.h: the RAMFC ACQUIRE word as nvgpu computes it, CCSR's parked states, the
 #                            semaphore or syncpoint a parked channel's RAMFC names
 #   gm20b_sleep_test         TegraGM20BSleepGate.h (system sleep's gate and plan): every transition, and on threads with
@@ -71,6 +76,8 @@
 #   gm20b_rail_test          TegraGM20BRail.h: the rail goes down with the display off and the GPU idle, once a demand's
 #                            hold has run out, up on its thread call only for the display, never while system sleep holds it;
 #                            gpu_bringup.c's lock protocol on threads; GPU time never backwards across rail cycles
+#   gm20b_rail_sequence_test platform.c's rail-gating and ungating against the TRM's GPU procedure (12.2.7.17) step for step,
+#                            on a register file of CAR, PMC, MC and the MAX77812, from a cold boot and after a gate
 #   gm20b_clkgate_test       TegraGM20BClkgate.h against nvgpu's gm20b_gating_reglist.c (nvidia/, verbatim): the SLCG and
 #                            BLCG writes are nvgpu's prod lists in its load order; ELCG's gate control; where gpu_bringup.c
 #                            applies them; GR's reset in a recovery with gating off; TegraGM20BTherm.h's slowdown arming
@@ -114,6 +121,7 @@ host_test(
         "switch_gpu_client_retirement_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuBoIndex.h",
         "//drivers/TegraGM20B:SwitchGpuClientRetirement.h",
+        "//drivers/TegraGM20B:SwitchGpuOwnerMemory.h",
         "//drivers/TegraGM20B:SwitchGpuBindings.h",
         "//drivers/TegraGM20B:TegraGM20BBindHistory.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
@@ -277,6 +285,15 @@ host_test(
         "gm20b_hang_detail_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BHangDecode.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "switch_gpu_owner_memory_test",
+    srcs = [
+        "switch_gpu_owner_memory_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuOwnerMemory.h",
     ],
     cxx_std = "c++17",
 )
@@ -636,6 +653,23 @@ host_test(
 )
 
 host_test(
+    name = "gm20b_pmc_enable_test",
+    srcs = [
+        "gm20b_pmc_enable_test.cpp",
+        "switch_gpu_interrupts_off_stubs.h",
+        "//drivers/TegraGM20B:TegraGM20BPmcEnable.h",
+    ],
+)
+
+host_test(
+    name = "gm20b_ramfc_order_test",
+    srcs = [
+        "gm20b_ramfc_order_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BRamfcOrder.h",
+    ],
+)
+
+host_test(
     name = "gm20b_acquire_test",
     srcs = [
         "gm20b_acquire_test.cpp",
@@ -744,6 +778,54 @@ host_test(
     cxx_std = "c++17",
 )
 
+host_shims(
+    name = "rail_sequence_kernel",
+    headers = [
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+        "kern/clock.h",
+        "libkern/libkern.h",
+    ],
+    stubs = "gm20b_rail_sequence_stubs.h",
+)
+
+host_library(
+    name = "rail_sequence",
+    srcs = [
+        "//drivers/TegraGM20B:platform.c",
+        "//drivers/TegraGM20B:shim/include/nvxnu.h",
+        "//drivers/TegraI2C:TegraI2C.h",
+        "//drivers/TegraSMMU:SwitchSmmuRegisters.h",
+        "//drivers/TegraSMMU:TegraMCNames.h",
+        "//drivers/TegraSMMU:TegraSMMU.cpp",
+        "//drivers/TegraSMMU:TegraSMMU.h",
+        "//drivers/TegraSMMU:TegraSMMUAttachments.h",
+        "//kits/SwitchCAR:SwitchCAR.h",
+        "//kits/SwitchCAR:SwitchPMC.h",
+        "//kits/SwitchLinux:SwitchLinux.h",
+        "//kits/SwitchLinux:SwitchLinuxLock.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+        "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+    ],
+    defines = ["SWITCH_MMIO_HOST_MODEL=1"],
+    deps = [":rail_sequence_kernel"],
+)
+
+host_test(
+    name = "gm20b_rail_sequence_test",
+    srcs = [
+        "gm20b_rail_sequence_test.cpp",
+        "//drivers/TegraGM20B:shim/include/nvxnu.h",
+        "//drivers/TegraI2C:TegraI2C.h",
+        "//kits/SwitchLinux:SwitchLinux.h",
+        "//kits/SwitchLinux:SwitchLinuxLock.h",
+    ],
+    deps = [
+        ":rail_sequence",
+        ":rail_sequence_kernel",
+    ],
+)
+
 host_test(
     name = "gm20b_sleep_test",
     srcs = [
@@ -798,6 +880,7 @@ host_test(
         "//drivers/TegraGM20B:recover_engine.c",
         "//drivers/TegraGM20B:recover_held.c",
         "//drivers/TegraGM20B:nouveau/nvkm/subdev/ltc/base.c",
+        "//drivers/TegraGM20B:nouveau/nvkm/subdev/privring/gk20a.c",
         "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/gm20b.c",
         "//drivers/TegraGM20B:sched.c",
         "//drivers/TegraGM20B:shim/include/nvif/os.h",
@@ -1065,6 +1148,7 @@ host_library(
         "//drivers/TegraGM20B:TegraGM20BFences.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BLayoutAsk.h",
         "//drivers/TegraGM20B:TegraGM20BLayoutFit.h",
         "//drivers/TegraGM20B:TegraGM20BRecord.h",
         "//drivers/TegraGM20B:TegraGM20BRelayout.h",
@@ -1077,6 +1161,14 @@ host_library(
     deps = [
         ":coherency_kernel",
         ":copy_emit",
+    ],
+)
+
+host_test(
+    name = "gm20b_layout_flags_test",
+    srcs = [
+        "gm20b_layout_flags_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BLayoutAsk.h",
     ],
 )
 

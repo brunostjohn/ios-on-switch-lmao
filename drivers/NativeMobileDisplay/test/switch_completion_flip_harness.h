@@ -337,7 +337,6 @@ struct Display {
             completionFlipLock->held = false;
         completionFlip = {};
         completionUnverified = {kNoBuffer, 0};
-        completionFlipsProven = completionFlipsRefused = completionFilterOff = false;
         ring.reset(3);
         model.general[DcModel::kHeader] = kWindowASelect;
         model.assembly[kWinbufStartAddr] = surfaceAddress(0);
@@ -532,6 +531,11 @@ struct Display {
     }
 
     static bool windowProbeBusy()
+    {
+        return false;
+    }
+
+    static bool host1xFlipBusy()
     {
         return false;
     }

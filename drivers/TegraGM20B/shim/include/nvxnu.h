@@ -216,7 +216,7 @@ int nvxnu_word_idle(const volatile nvxnu_u32 *word, nvxnu_u32 seq, nvxnu_u64 dea
 void nvxnu_word_wake_due(const volatile nvxnu_u32 *word, nvxnu_u32 seq, const char *what,
 			 nvxnu_u32 value);
 
-/* Tegra210 platform pieces (platform.c), used by the clk/regulator/reset/pmc shims */
+/* Tegra210 platform pieces (platform.c), used by the clk/regulator shims, tegra.c and gpu_power.c */
 int tegra_gm20b_platform_map(void);
 int tegra_gm20b_rail_enable(int on);
 int tegra_gm20b_rail_get_uv(int *uv);
@@ -225,15 +225,16 @@ int tegra_gm20b_rail_max_uv(void);
 nvxnu_u32 tegra_gm20b_dvfs_khz(int row); /* L4T B01 GPU rate of table row, 0 past the end */
 int tegra_gm20b_dvfs_na_uv(
 	nvxnu_u32 khz, int speedo); /* its NAPLL voltage, worst over temperature; -22 off-table */
-int tegra_gm20b_clk_enable(int id, int on);
 unsigned long tegra_gm20b_clk_get_rate(int id);
 int tegra_gm20b_clk_set_rate(int id, unsigned long rate);
-void tegra_gm20b_reset(int assert);
-int tegra_gm20b_unclamp(void);
 int tegra_gm20b_mc_flush(int flush);
+/* Tegra X1 TRM 12.2.7.17, step for step. The ungate brings VDD_GPU up first and returns 0 or the PMIC's error. The gate
+ * returns 0 or the MC drain's -110 and puts the PMIC's result in *vdd. */
+int tegra_gm20b_rail_ungate(void);
+int tegra_gm20b_rail_gate(int *vdd);
 nvxnu_u32 tegra_gm20b_fuse_read(nvxnu_u32 offset); /* Linux tegra_fuse_readl() offsets */
-/* MC_INTSTATUS (cleared after the read), MC_ERR_STATUS, MC_ERR_ADR (Linux drivers/memory/tegra/mc.h): what the memory
- * controller refused since the previous call */
+/* The memory controller's latest refused access as its error interrupt took it (MC_INTSTATUS bits, MC_ERR_STATUS,
+ * MC_ERR_ADR; TegraSMMU's tegra_mc_error_latest), zeros when none came since the previous call */
 void tegra_gm20b_mc_errors(nvxnu_u32 *intstatus, nvxnu_u32 *status, nvxnu_u32 *addr);
 /* The MC's carveout 2, the GPU's WPR1: CFG0, BOM, SIZE_128KB, CLIENT_ACCESS2, CLIENT_ACCESS4 */
 void tegra_gm20b_mc_gpu_wpr(nvxnu_u32 v[5]);
