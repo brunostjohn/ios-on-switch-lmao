@@ -94,6 +94,18 @@ TEST(RawDeviceAnswers, ThreadgroupMemoryIsACtasWhole48KiB)
     }
 }
 
+// Tier 2 on both kinds: IDs read through the device's handle tables (raw_heap_tables.h), 500000 of each kind of
+// resource an argument buffer holds, as 24B119's A13 answers; distinct live textures stay bounded by the texture
+// header pool (Device kTicCount), as every texture's are
+TEST(RawDeviceAnswers, ArgumentBuffersAreTier2)
+{
+    for (const raw::answers::Kind &k : raw::answers::kKinds) {
+        EXPECT_EQ(count(k, "argumentBuffersSupport"), 1u) << k.kind;
+        for (const char *s : {"maxIndirectBuffers", "maxIndirectTextures", "maxIndirectSamplers"})
+            EXPECT_EQ(count(k, s), 500000u) << k.kind << " " << s;
+    }
+}
+
 // The identity's AGX driver samples counters at stage boundaries (MTLCounterSamplingPointAtStageBoundary, 0) alone
 TEST(RawDeviceAnswers, CountersAreSampledAtStageBoundariesAlone)
 {

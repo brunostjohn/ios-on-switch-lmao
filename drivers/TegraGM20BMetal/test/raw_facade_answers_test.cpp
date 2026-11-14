@@ -55,6 +55,9 @@ void answers()
     EXPECT_EQ(count(device, "maxFramebufferStorageBits"), SWITCH_GM20B_LIMIT_COLOR_TARGETS * 128u);
     EXPECT_EQ(count(device, "maxInterpolatedComponents"),
               kA13 ? 124u : uint64_t(SWITCH_GM20B_LIMIT_INTERPOLATED_COMPONENTS));
+    EXPECT_EQ(count(device, "argumentBuffersSupport"), uint64_t(MTLArgumentBuffersTier2));
+    EXPECT_EQ(count(device, "maxIndirectTextures"), 500000u);
+    EXPECT_EQ(count(device, "maxIndirectSamplers"), 500000u);
     EXPECT_EQ(count(device, "maxVertexAmplificationFactor"), uint64_t(SWITCH_GM20B_AMP_MAX));
     for (NSUInteger n = 1; n <= SWITCH_GM20B_AMP_MAX; n++)
         EXPECT_TRUE([device supportsVertexAmplificationCount:n]) << n;

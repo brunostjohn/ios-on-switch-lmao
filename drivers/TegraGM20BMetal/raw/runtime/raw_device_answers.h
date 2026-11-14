@@ -12,8 +12,8 @@
 // Above the identity, on purpose (NativeMetalTarget.rs): the counts GM20B has (kits/SwitchGM20B caps), each answered
 // where raw draws it on both kinds: layered passes, 16 viewports, tessellation factor 64, indirect patches, dynamic
 // attribute stride, the amplification the amplify macro keeps (SWITCH_GM20B_AMP_MAX), 48 KiB of threadgroup memory,
-// eight targets of the widest colour a pixel, and 128 interpolated components on 21H461 (24B119 keeps Metal 27's
-// ceiling of 124).
+// eight targets of the widest colour a pixel, tier-2 argument buffers through the handle tables (raw_heap_tables.h),
+// and 128 interpolated components on 21H461 (24B119 keeps Metal 27's ceiling of 124).
 // An argument answer holds `value` for every argument in [first, last] and 0 elsewhere.
 #pragma once
 #include <cstddef>
@@ -129,7 +129,7 @@ inline constexpr Count kCounts21H461[] = {
     {"supportsTexture2DMultisampleArray", 0, true},
     {"supportsTileShaders", 0, true},
     {"maxThreadgroupMemoryLength", SWITCH_GM20B_LIMIT_THREADGROUP_MEMORY_BYTES, false},
-    {"argumentBuffersSupport", 0, false},
+    {"argumentBuffersSupport", 1, false},
     {"readWriteTextureSupport", 2, false},
     {"maxColorAttachments", 8, false},
     {"minConstantBufferAlignmentBytes", 4, false},
@@ -159,9 +159,9 @@ inline constexpr Count kCounts21H461[] = {
     {"maxTextureDimensionCube", 16384, false},
     {"maxTextureBufferWidth", 134217728, false},
     {"maxFunctionConstantIndices", 65536, false},
-    {"maxIndirectBuffers", 31, false},
-    {"maxIndirectTextures", 31, false},
-    {"maxIndirectSamplers", 16, false},
+    {"maxIndirectBuffers", 500000, false},
+    {"maxIndirectTextures", 500000, false},
+    {"maxIndirectSamplers", 500000, false},
     {"maxIndirectSamplersPerDevice", 96, false},
     {"maxFenceInstances", 32768, false},
     {"maxCustomSamplePositions", 4, false},

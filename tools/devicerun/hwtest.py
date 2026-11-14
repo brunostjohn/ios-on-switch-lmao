@@ -208,6 +208,7 @@ TESTS: dict[str, bool] = {
             'metal.native.wide_targets',
             'metal.native.interpolants',
             'metal.native.threadgroup_memory',
+            'metal.native.argument_tier2',
         ],
         False,
     ),

@@ -19,6 +19,10 @@ enum NativeAnswers {
     static let framebufferBits = 8 * 128
     /// GM20B's 32 generic vec4 inputs; 124 is Metal 27's own ceiling
     static var interpolants: Int { ios17 ? 128 : 124 }
+    /// MTLArgumentBuffersTier2 (as Metal's tiers count, from 1), its IDs read through the handle tables
+    static let argumentBuffersTier = 2
+    /// maxIndirectTextures and maxIndirectSamplers: 24B119's A13's, which 21H461 answers too
+    static let indirectResources = 500000
     /// 24B119's supportsLayeredRendering is _MTLDevice's base answer, which raw does not give (nil: logged, not checked)
     static var layeredRendering: Int? { ios17 ? 1 : nil }
 
