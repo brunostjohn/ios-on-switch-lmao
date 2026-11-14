@@ -46,7 +46,9 @@ TEST(CompilerRepro, TheLinesStateThroughTheCompileContext)
     std::string entry;
     const int32_t result = engine.compile(p, entry, why);
     fprintf(stderr, "repro: result %d (%s), entry %zu bytes, why: %s\n", result,
-            result == TegraGM20BCompileMade ? "made" : result == TegraGM20BCompileRefused ? "refused" : "failed",
+            result == TegraGM20BCompileMade      ? "made"
+            : result == TegraGM20BCompileRefused ? "refused"
+                                                 : "failed",
             entry.size(), why.c_str());
     EXPECT_EQ(result, TegraGM20BCompileMade) << why;
 }
