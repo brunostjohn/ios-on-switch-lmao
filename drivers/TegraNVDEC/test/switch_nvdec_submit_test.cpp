@@ -417,7 +417,7 @@ bool switch_nvdec_engine_reset(bool *drained)
 
 bool switch_nvdec_engine_boot()
 {
-    EXPECT_TRUE(powerLock->locked);
+    EXPECT_FALSE(powerLock->locked) << "the falcon's boot and proof run without the power lock NVJPG shares";
     engineSteps.emplace_back("boot");
     if (engineBoots)
         hardware += 2;
@@ -426,6 +426,7 @@ bool switch_nvdec_engine_boot()
 
 const char *switch_nvdec_engine_wedge()
 {
+    EXPECT_TRUE(powerLock->locked);
     engineSteps.emplace_back("wedge");
     return "falcon did not answer";
 }

@@ -147,7 +147,8 @@ IOSimpleLock *IOSimpleLockAlloc(void)
     return reinterpret_cast<IOSimpleLock *>(new std::mutex);
 }
 
-IOInterruptState IOSimpleLockLockDisableInterrupt(IOSimpleLock *lock)
+// The kernel locks' stand-ins lock and unlock in separate calls, which thread-safety analysis cannot pair.
+__attribute__((no_thread_safety_analysis)) IOInterruptState IOSimpleLockLockDisableInterrupt(IOSimpleLock *lock)
 {
     ++tCounts.locks;
     mayNotBlock("IOSimpleLockLockDisableInterrupt");
@@ -155,7 +156,7 @@ IOInterruptState IOSimpleLockLockDisableInterrupt(IOSimpleLock *lock)
     return 0;
 }
 
-void IOSimpleLockUnlockEnableInterrupt(IOSimpleLock *lock, IOInterruptState)
+__attribute__((no_thread_safety_analysis)) void IOSimpleLockUnlockEnableInterrupt(IOSimpleLock *lock, IOInterruptState)
 {
     reinterpret_cast<std::mutex *>(lock)->unlock();
 }
@@ -165,14 +166,14 @@ IOLock *IOLockAlloc(void)
     return reinterpret_cast<IOLock *>(new std::mutex);
 }
 
-void IOLockLock(IOLock *lock)
+__attribute__((no_thread_safety_analysis)) void IOLockLock(IOLock *lock)
 {
     ++tCounts.locks;
     mayNotBlock("IOLockLock");
     reinterpret_cast<std::mutex *>(lock)->lock();
 }
 
-void IOLockUnlock(IOLock *lock)
+__attribute__((no_thread_safety_analysis)) void IOLockUnlock(IOLock *lock)
 {
     reinterpret_cast<std::mutex *>(lock)->unlock();
 }
