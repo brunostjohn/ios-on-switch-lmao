@@ -2417,6 +2417,10 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_order.h",
     ],
     cxx_std = "c++17",
+    data = [
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalEventJobs.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawMetalSubmit.mm",
+    ],
     tags = ["m2v"],
 )
 
