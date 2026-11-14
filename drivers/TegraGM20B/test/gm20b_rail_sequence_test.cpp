@@ -32,6 +32,7 @@ std::map<uintptr_t, uint32_t> gRegisters;
 std::vector<Step> gSteps;
 uint8_t gEnCtrl, gVout;
 bool gPmicFails;
+unsigned gPmicTransfers;
 
 uint32_t &reg(uintptr_t base, uint32_t offset)
 {
@@ -176,6 +177,18 @@ TEST(Gm20bRailSequence, RailCyclesEndWhereTheyStarted)
 		ASSERT_EQ(tegra_gm20b_rail_gate(&vdd), 0);
 		ASSERT_EQ(vdd, 0);
 	}
+}
+
+// A transfer TegraI2C fails (it reports lost arbitration once, with its own line) fails that PMIC step: no second try
+TEST(Gm20bRailSequence, AFailedPmicTransferIsNotRepeated)
+{
+	coldBoot();
+	ASSERT_EQ(tegra_gm20b_rail_ungate(), 0);
+	gPmicFails = true;
+	gPmicTransfers = 0;
+	int vdd = 0;
+	EXPECT_EQ(tegra_gm20b_rail_gate(&vdd), 0);
+	EXPECT_EQ(gPmicTransfers, 1u);
 }
 
 TEST(Gm20bRailSequence, TheGateClampsAndResetsTheGpuEvenWhenThePmicCannotBeRead)
@@ -340,6 +353,7 @@ int tegra_i2c_init(unsigned)
 
 int tegra_i2c_read(unsigned, uint8_t, uint8_t reg, void *buf, size_t len)
 {
+	++gPmicTransfers;
 	if (gPmicFails || len != 1)
 		return TEGRA_I2C_EIO;
 	if (reg != kEnCtrl && reg != kM1Vout)
@@ -350,6 +364,7 @@ int tegra_i2c_read(unsigned, uint8_t, uint8_t reg, void *buf, size_t len)
 
 int tegra_i2c_write(unsigned, uint8_t, uint8_t reg, const void *buf, size_t len)
 {
+	++gPmicTransfers;
 	if (gPmicFails || len != 1)
 		return TEGRA_I2C_EIO;
 	const uint8_t value = *static_cast<const uint8_t *>(buf);

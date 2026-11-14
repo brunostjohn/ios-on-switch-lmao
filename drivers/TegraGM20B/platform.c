@@ -127,20 +127,12 @@ static int pmic_rd(uint8_t reg, uint8_t *v)
 		MAX77812_BUS); /* idempotent; the first PMIC access may precede every other I2C5 user */
 	if (ret)
 		return ret;
-	ret = tegra_i2c_read(MAX77812_BUS, max77812_addr, reg, v, 1);
-	if (ret) {
-		ret = tegra_i2c_read(MAX77812_BUS, max77812_addr, reg, v,
-				     1); /* one retry: arbitration */
-	}
-	return ret;
+	return tegra_i2c_read(MAX77812_BUS, max77812_addr, reg, v, 1);
 }
 
 static int pmic_wr(uint8_t reg, uint8_t v)
 {
-	int ret = tegra_i2c_write(MAX77812_BUS, max77812_addr, reg, &v, 1);
-	if (ret)
-		ret = tegra_i2c_write(MAX77812_BUS, max77812_addr, reg, &v, 1);
-	return ret;
+	return tegra_i2c_write(MAX77812_BUS, max77812_addr, reg, &v, 1);
 }
 
 /* EN_CTRL also switches vdd-cpu (M4) and, on the 0x33 part, vddio-ddr (M3); every write keeps their bits as read.
