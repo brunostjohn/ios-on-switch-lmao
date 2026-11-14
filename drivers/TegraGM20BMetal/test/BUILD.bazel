@@ -6041,6 +6041,65 @@ host_test(
     ] + RAW_HOST_DEPS,
 )
 
+# One device failure's state through the compile context (compiler_repro_test.cpp). Manual: it takes the state by --test_env.
+host_test(
+    name = "compiler_repro_test",
+    size = "medium",
+    srcs = [
+        "compiler_repro_test.cpp",
+        "compiler_requests.h",
+        ":libmock_iokit.dylib",
+        "//drivers/TegraGM20BMetal:raw/pack/kernel_shapes.h",
+        "//drivers/TegraGM20BMetal:raw/pack/probe_states.h",
+        "//gpu:bridge_darwin",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS + select({
+        # the corpus's states of private linked functions are iOS 27's libraries' alone, and so is a refused state:
+        # iOS 27's PencilKit made sixChannelBlend's constant 6 a bool where iOS 17's states set a uint. iOS 17's
+        # libraries refuse none of the corpus states the test can ask of them. (copts are Bourne-tokenized: the single
+        # quotes keep the string's.)
+        "//ipsw:24B119": [
+            "-DSWITCH_LIBRARIES_LINK_PRIVATE_FUNCTIONS=1",
+            "'-DSWITCH_REFUSED_FRAGMENT_FUNCTION=\"sixChannelBlend_fragment\"'",
+        ],
+        "//conditions:default": [],
+    }),
+    cxx_std = "c++17",
+    data = [
+        "//gpu/nvk:host_dylib",
+        "@ipsw//:crawl_qc",
+        "@ipsw//:crawl_tree",
+    ],
+    env = {
+        "SWITCH_NVK": "$(rootpath //gpu/nvk:host_dylib)",
+        "SWITCH_QUARTZCORE": "$(rootpath @ipsw//:crawl_qc)",
+    },
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    tags = ["manual"],
+    deps = [
+        ":frontend_host",
+        ":raw_facade_plugin_host",
+        ":raw_runtime_plugin_host",
+    ] + RAW_HOST_DEPS,
+)
+
 # What the system shader compiler holds as it serves boot 12's requests (compiler_boot12.log), with the m2v device it opened
 # before and with its compile context, each step's heap, footprint and peak (compiler_footprint_test.cpp)
 host_test(
