@@ -4,8 +4,9 @@ import HWTestCore
 /// The DFLL's rows asked from above and from below (drivers/SwitchPower/SwitchThermalDfllLanding.h, debug kernels):
 /// the kernel asks each case's first rate, lets it settle, asks the row and measures the CPU's clock where it runs
 /// 2, 10, 50 and 200 ms later, with the loop's registers beside each reading. Judged at 200 ms (clk-dfll.c's Vmin
-/// calibration has run): every row within 0.5 % of the rate asked, and each row the same from above and from below.
-/// The earlier readings are the settling, reported only.
+/// calibration has run): every row at most 0.25 % over the rate asked and at most 0.8 % under it, and each row the
+/// same from above and from below. The skipper lands up to 1/256 under and the probe reads up to 0.3 % low; boot 21's
+/// one-step-fast landings read 0.48 % and 0.56 % over. The earlier readings are the settling, reported only.
 struct CPUDfllLandingTest: HWTest {
     let id = "cpu.dfll_landing"
     let name = "DFLL rows land on the rate asked, from above and from below"
@@ -53,11 +54,14 @@ struct CPUDfllLandingTest: HWTest {
         ]
         for (asked, readings) in landed.sorted(by: { $0.key < $1.key }) {
             let target = Double(asked)
-            let off = readings.map { abs($0 - target) / target * 100 }.max() ?? 0
+            let over = ((readings.max() ?? 0) - target) / target * 100
+            let under = (target - (readings.min() ?? 0)) / target * 100
             let spread = ((readings.max() ?? 0) - (readings.min() ?? 0)) / target * 100
-            metrics.set("off_pct_\(asked)", off, digits: 2)
+            metrics.set("over_pct_\(asked)", over, digits: 2)
+            metrics.set("under_pct_\(asked)", under, digits: 2)
             metrics.set("spread_pct_\(asked)", spread, digits: 2)
-            checks.append(("\(asked) MHz within 0.5% of the rate asked at \(Self.settledMs) ms", off <= 0.5))
+            checks.append(("\(asked) MHz at most 0.25% over the rate asked at \(Self.settledMs) ms", over <= 0.25))
+            checks.append(("\(asked) MHz at most 0.8% under the rate asked at \(Self.settledMs) ms", under <= 0.8))
             checks.append(("\(asked) MHz the same from above and below (within 0.5%)", spread <= 0.5))
         }
         return .judged(checks, metrics)
