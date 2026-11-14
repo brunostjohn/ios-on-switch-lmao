@@ -25,3 +25,17 @@ __attribute__((weak)) int nvkm_chan_preempt_locked(struct nvkm_chan *chan, bool 
 	(void)wait;
 	return 0;
 }
+
+__attribute__((weak)) struct nvkm_chan *nvkm_runl_chan_get_chid(struct nvkm_runl *runl, int id, unsigned long *flags)
+{
+	(void)runl;
+	(void)id;
+	(void)flags;
+	return NULL;
+}
+
+__attribute__((weak)) void nvkm_chan_put(struct nvkm_chan **chan, unsigned long flags)
+{
+	(void)flags;
+	*chan = NULL;
+}

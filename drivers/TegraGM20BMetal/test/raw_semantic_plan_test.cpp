@@ -1280,7 +1280,7 @@ TEST(SemanticPlan, AnIndexedDrawOfAFinalStateNamesItsIndexBufferThoughItsCallerR
     Cmd indexed = binding(OpDrawIndexed, 3, 0, 21);
     indexed.a = 6;
     indexed.b = 1;
-    ASSERT_TRUE(plan.record(indexed, {1, 0, 0}, true));
+    ASSERT_TRUE(plan.record(indexed, words({1, 0, 0}), 3, true));
     const uint32_t state = plan.draw(plan.size() - 1).state;
     uint32_t builds = 0;
     plan.resolveRenderUses(state, object(90), [&](std::vector<raw::ResourceUse> &out) {
@@ -1288,7 +1288,7 @@ TEST(SemanticPlan, AnIndexedDrawOfAFinalStateNamesItsIndexBufferThoughItsCallerR
         out = {{object(43), uint8_t(raw::ResourceUse::Read | raw::ResourceUse::Sample)}};
     });
     ASSERT_TRUE(plan.renderStates[state].usesFinal);
-    ASSERT_TRUE(plan.record(indexed, {1, 0, 0}, true));
+    ASSERT_TRUE(plan.record(indexed, words({1, 0, 0}), 3, true));
     const size_t second = plan.size() - 1;
     EXPECT_EQ(plan.draw(second).state, state);
     EXPECT_EQ(builds, 1u);
