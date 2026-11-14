@@ -144,10 +144,10 @@ TEST(TegraDfllPrepare, ADfllLeftRunningIsTriedAgainWithItsGateSetAgain)
 			},
 			[] {
 				reg(TEGRA_DFLL_FAKE_DFLL, 0x000) = 0;
-				reg(TEGRA_DFLL_FAKE_CAR, 0x448) =
-					0;  // CLK_ENB_W_SET: an SC7 between the two reset the gate
+				tegra_dfll_fake_cl_dvfs_reset();  // an SC7 between the two
 			});
-		EXPECT_EQ(reg(TEGRA_DFLL_FAKE_CAR, 0x448), 1u << 27);
+		EXPECT_EQ(reg(TEGRA_DFLL_FAKE_CAR, 0x364) & (1u << 27), 1u << 27);  // CLK_OUT_ENB_W
+		EXPECT_EQ(reg(TEGRA_DFLL_FAKE_CAR, 0x35c) & (1u << 27), 0u);        // RST_DEVICES_W
 	});
 }
 
