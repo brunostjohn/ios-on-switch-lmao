@@ -84,6 +84,7 @@
 #include "raw_heap_tables.h"
 #include "raw_order.h"
 #include "raw_variants.h"
+#include "raw_device_open.h"
 #include "raw_pack.h"
 #include "raw_program_pages.h"
 #include "raw_push.h"
@@ -1737,6 +1738,12 @@ public:
     ~Device();
     bool open(const char *packPath, uint64_t stack, std::string &err, Role role = Role::RenderServer);
 
+    // What made open() fail (raw_device_open.h)
+    OpenFailure openFailure() const
+    {
+        return openFailure_;
+    }
+
     Role role() const
     {
         return role_;
@@ -2698,6 +2705,7 @@ private:
 
     static const Sizes kSizes[2];
     Role role_ = Role::RenderServer;
+    OpenFailure openFailure_ = OpenFailure::Structural;
     std::atomic<bool> highPriority_{false};
     Sizes sizes_ = kSizes[0];
     raw::Mutex lock_;

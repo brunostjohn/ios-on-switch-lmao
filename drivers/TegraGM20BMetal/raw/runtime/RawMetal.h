@@ -74,3 +74,5 @@ struct RawM2V {
 // *error.
 id<MTLDevice> raw_metal_device_open_lazy(const char *packPath, uint64_t stack, uint64_t registryID, RawM2V m2v,
                                          NSString **error);
+// What the last raw_metal_device_open_lazy that returned nil met (raw_device_open.h): "structural" or "transient"
+const char *raw_metal_open_failure(void);

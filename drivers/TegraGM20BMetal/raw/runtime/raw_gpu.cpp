@@ -556,11 +556,14 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
     if (role == Role::RenderServer)
         glassMem = std::make_unique<GlassMem>();
 #endif
+    openFailure_ = OpenFailure::Structural;
     if (!pack_.load(packPath, stack, err))
         return false;
+    openFailure_ = OpenFailure::Transient;
     if (!k_.open(err))
         return false;
     if (k_.info().cls_eng3d != 0xb197 || k_.info().cls_copy != 0xb0b5) {
+        openFailure_ = OpenFailure::Structural;
         err = "not a MAXWELL_B with MAXWELL_DMA_COPY_A";
         return false;
     }
@@ -651,6 +654,7 @@ bool Device::init(std::string &err)
     }
     const uint32_t *cs = pack_.section<uint32_t>(PackSamplers);
     if (pack_.header()->samplers > kConstexprSamplers) {
+        openFailure_ = OpenFailure::Structural;
         err = "the pack's constexpr samplers do not fit its entries' sampler byte";
         return false;
     }
