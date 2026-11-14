@@ -529,7 +529,10 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
         for (raw::KernelUse &u : list)
             if (u.shadowed && !u.writes) {
                 const raw::Texture &x = ((__bridge RMTexture *)u.object)->_raw;
-                u.shadowed = rc->readTexture(&x) == &x;
+                if (const raw::Texture *native = rc->readTexture(&x); native != &x) {
+                    u.shadowed = false;
+                    u.object = native;  // another resource over its bytes: an image written before is copied back first
+                }
             }
     };
     auto shadowCopies = [&](const std::vector<const void *> &back, const std::vector<const void *> &fill) {
