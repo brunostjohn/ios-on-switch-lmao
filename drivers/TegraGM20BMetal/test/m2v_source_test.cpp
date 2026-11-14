@@ -174,7 +174,8 @@ TEST(M2VSource, APackedStatesTwinNeverFailsOnTheArchive)
 
 TEST(M2VSource, TheTwinLinksTheTwinsOfItsLinkedFunctions)
 {
-    const std::string twin = Body(SourceText("../raw/runtime/RawMetalStates.mm"), "MTLRenderPipelineDescriptor *twinDescriptor(");
+    const std::string twin =
+        Body(SourceText("../raw/runtime/RawMetalStates.mm"), "MTLRenderPipelineDescriptor *twinDescriptor(");
     EXPECT_THAT(twin, HasSubstr("t.vertexLinkedFunctions = twinLinked(d.vertexLinkedFunctions);"));
     EXPECT_THAT(twin, HasSubstr("t.fragmentLinkedFunctions = twinLinked(d.fragmentLinkedFunctions);"));
     // a specialized function's AIR is its library function's entry, named by its m2v twin
