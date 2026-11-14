@@ -100,9 +100,9 @@ protected:
 
     Counts now() const
     {
-        return {gSimpleLockTakes.load(),
+        return {::gSimpleLockTakes.load(),
                 d.intMaskLock->takes,
-                d.completionFlipLock->takes,
+                gHarnessSimpleLocks - d.intMaskLock->takes,
                 gRmws,
                 d.vblankSource.signals,
                 d.gpuDoneStore.signals,
@@ -196,6 +196,7 @@ TEST_F(DisplayPeriod, AFenceOnlyCompletionPeriod)
     EXPECT_EQ(c.colourLocks, 0u) << "colour unit: filter, action, windowOptions";
     EXPECT_EQ(c.intMaskLocks, 0u) << "the kick's INT_MASK";
     EXPECT_EQ(c.flipLocks, 0u) << "completionFlipLock: arm, write, pass";
+
     EXPECT_EQ(c.rmws, 1u) << "the hand-off, the completion's pass; one claim stays";
     EXPECT_EQ(c.signals, 1u);
     EXPECT_EQ(c.wakeOccurred, 0u) << "the completion's own work-loop pass";

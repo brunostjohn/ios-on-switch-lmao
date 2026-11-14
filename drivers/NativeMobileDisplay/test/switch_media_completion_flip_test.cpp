@@ -56,7 +56,7 @@ protected:
 
     bool armed(int slot)
     {
-        return d.offer(video(slot), ++seq) && d.mediaFlip.state == SwitchCompletionFlip::kArmed;
+        return d.offer(video(slot), ++seq) && d.mediaFlip.state() == SwitchCompletionFlip::kArmed;
     }
 };
 
@@ -436,8 +436,8 @@ TEST(MediaFlipSource, TheDisplayCallsItWhereTheOrderingNeedsIt)
     EXPECT_EQ(fence.find("switch_host1x_token_fence(producers"), std::string::npos);
     const std::string flip = SourceText("../SwitchCompletionFlipDisplay.h");
     const std::string write = Between(flip, "void writeCompletionFlip(int status)", "\n}\n");
-    EXPECT_LT(write.find("IOSimpleLockLockDisableInterrupt(lock)"), write.find("writeMediaFlipLocked(status);"));
-    EXPECT_LT(write.find("writeMediaFlipLocked(status);"), write.find("IOSimpleLockUnlockEnableInterrupt(lock"));
+    EXPECT_LT(write.find("flipInterruptsOff()"), write.find("writeMediaFlip(status);"));
+    EXPECT_LT(write.find("writeMediaFlip(status);"), write.find("flipInterruptsOn(interrupts);"));
     EXPECT_NE(Between(flip, "void takeCompletionFlip()", "\n}\n").find("takeMediaFlip();"), std::string::npos);
     EXPECT_NE(Between(flip, "void suspendCompletionFlip()", "\n}\n").find("mediaFlipFromGate();"), std::string::npos);
     EXPECT_NE(Between(flip, "bool completionFlipOut() const", "\n}\n").find("!mediaFlipIdle()"), std::string::npos);

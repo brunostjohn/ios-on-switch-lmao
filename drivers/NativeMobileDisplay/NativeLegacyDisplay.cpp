@@ -4550,6 +4550,17 @@ public:
 
 #include "SwitchDirectSlots.h"
 #include "SwitchDirectVisibleDisplay.h"
+
+    static bool flipInterruptsOff()
+    {
+        return ml_set_interrupts_enabled(FALSE) != 0;
+    }
+
+    static void flipInterruptsOn(bool enabled)
+    {
+        ml_set_interrupts_enabled(enabled ? TRUE : FALSE);
+    }
+
 #include "SwitchCompletionFlipDisplay.h"
 #include "SwitchCompletionFlipFilter.h"
 

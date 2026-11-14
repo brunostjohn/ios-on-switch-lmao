@@ -69,6 +69,7 @@
 #                                       STATE_CONTROL pair, retire at the latch, the panic hook, the published limits,
 #                                       backboardd's CA_DISABLE_DETACHED gate), and the plane accessors are TegraVIC's
 #   tegra_display_color_publish_test    TegraDisplayColorPublish.h's writers on their own threads (and _tsan_test)
+#   switch_completion_flip_claim_test   SwitchCompletionFlip.h's claim word on three threads (and _tsan_test)
 #   switch_display_period_test          one display period counted: locks, atomic RMWs, hand-offs and work-loop passes
 #                                       of the DC A filter, the frame-end action, the kick, a direct or completion flip
 #
@@ -503,10 +504,36 @@ host_test(
         "display_filter_context.h",
     ],
     data = [
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlip.h",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlipDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlipFilter.h",
+        "//drivers/NativeMobileDisplay:SwitchMediaCompletionFlipDisplay.h",
         "//drivers/NativeMobileDisplay:SwitchGpuDoneDisplay.h",
         "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
         "//drivers/NativeMobileDisplay:SwitchVICScanoutDisplay.h",
     ],
+)
+
+# SwitchCompletionFlip.h's word with a filter, the completion and the gate on their own threads: one write per arm,
+# none after a withdraw, none by a stale claimer.
+host_test(
+    name = "switch_completion_flip_claim_test",
+    srcs = [
+        "switch_completion_flip_claim_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlip.h",
+    ],
+)
+
+# The same under ThreadSanitizer.
+host_test(
+    name = "switch_completion_flip_claim_tsan_test",
+    srcs = [
+        "switch_completion_flip_claim_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlip.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
 )
 
 host_test(

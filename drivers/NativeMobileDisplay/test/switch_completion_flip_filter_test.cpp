@@ -48,16 +48,16 @@ TEST_F(CompletionFlipFilter, TheGpuFilterWritesTheFlipAndItsCompletionWritesNoth
     d.model.written.clear();
     d.gpuFilter();
     EXPECT_EQ(d.model.written, kSixStores);
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kEarly);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kEarly);
     EXPECT_EQ(d.completionFlip.writer, SwitchCompletionFlip::kFromGpuFilter);
     d.model.written.clear();
     d.gpuFilter();
     d.complete(0);
     EXPECT_TRUE(d.model.written.empty());
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kWritten);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kWritten);
     d.donePass();
     EXPECT_EQ(d.ring.pending, kSlot);
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kIdle);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kIdle);
     frame();
     EXPECT_EQ(d.ring.front, kSlot);
     EXPECT_EQ(d.retired, std::vector<uint64_t>{d.flipRequest});
@@ -75,15 +75,15 @@ TEST_F(CompletionFlipFilter, AFrameEndBeforeTheCompletionAdoptsTheFlipAndThePass
     ASSERT_EQ(d.shown.size(), 1u);
     EXPECT_EQ(d.shown[0], std::make_pair(kSlot, stamp));
     EXPECT_EQ(d.ring.front, kSlot);
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kAdopted);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kAdopted);
     EXPECT_TRUE(d.retired.empty()) << "its completion is still out";
     EXPECT_TRUE(d.transferred);
     d.model.written.clear();
     d.complete(0);
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kAdopted);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kAdopted);
     d.donePass();
     EXPECT_TRUE(d.model.written.empty());
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kIdle);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kIdle);
     EXPECT_EQ(d.retired, std::vector<uint64_t>{d.flipRequest});
     EXPECT_FALSE(d.transferred);
     EXPECT_EQ(d.ring.front, kSlot);
@@ -108,7 +108,7 @@ TEST_F(CompletionFlipFilter, AnAdoptedCopyIsNotFlippedAgainByItsPass)
     EXPECT_TRUE(d.model.written.empty());
     EXPECT_EQ(d.ring.front, target);
     EXPECT_EQ(d.ring.pending, Display::kNoBuffer);
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kIdle);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kIdle);
 }
 
 TEST_F(CompletionFlipFilter, AVicJobNotCertainlyDoneIsLeftToItsCompletion)
@@ -119,7 +119,7 @@ TEST_F(CompletionFlipFilter, AVicJobNotCertainlyDoneIsLeftToItsCompletion)
     d.model.written.clear();
     d.vicFilter();
     EXPECT_TRUE(d.model.written.empty());
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kArmed);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kArmed);
     d.complete(0);
     EXPECT_EQ(d.model.written, kSixStores);
 }
@@ -148,11 +148,11 @@ TEST_F(CompletionFlipFilter, AStaleWaiterClaimsNothingOfTheNextOffer)
     d.donePass();
     frame();
     ASSERT_EQ(d.offer(kSlot), 0);
-    ASSERT_EQ(d.completionFlip.state, SwitchCompletionFlip::kArmed);
+    ASSERT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kArmed);
     d.model.written.clear();
     stale(staleContext);
     EXPECT_TRUE(d.model.written.empty());
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kArmed);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kArmed);
 }
 
 // SC7 between the filter's write and its completion: the flip is in the ring before the controller is saved, and the
@@ -163,12 +163,12 @@ TEST_F(CompletionFlipFilter, SuspendAdoptsAnEarlyFlipAndTheDeferredPassRetiresIt
     d.gpuFilter();
     d.suspend();
     EXPECT_EQ(d.ring.front, kSlot);
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kAdopted);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kAdopted);
     EXPECT_NO_THROW(d.complete(0));
     d.donePass();
     EXPECT_TRUE(d.deferred);
     d.resume();
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kIdle);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kIdle);
     EXPECT_EQ(d.retired, std::vector<uint64_t>{d.flipRequest});
     frame();
     EXPECT_EQ(d.ring.front, kSlot);
@@ -181,9 +181,9 @@ TEST_F(CompletionFlipFilter, APassBetweenTheCompletionsStoresAndItsClaimEntersTh
     d.gpuFilter();
     d.gpuStatus = 0;
     d.gpuDonePending = true;
-    d.donePass();
+    Display::gpuDoneFired<Display *>(&d, &d.gpuDoneStore, 0);
     EXPECT_EQ(d.ring.pending, kSlot);
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kIdle);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kIdle);
     d.model.written.clear();
     d.writeCompletionFlip(0);
     EXPECT_TRUE(d.model.written.empty());
@@ -232,6 +232,60 @@ TEST_F(CompletionFlipFilter, NoFilterWritesAWithdrawnOrUnarmedFlip)
     EXPECT_TRUE(d.model.written.empty());
 }
 
+// x1-framekern's GPU filter can pass its last check of a present, stall with interrupts off while that present's claim
+// delivers done on another CPU, and call the display's callout after the next offer was armed. The callout carries the
+// generation of the arm it was registered for, so it claims nothing of the next one.
+TEST_F(CompletionFlipFilter, AStaleCalloutAfterTheNextArmWritesNothing)
+{
+    ASSERT_EQ(d.offer(kSlot), 0);
+    void (*const callout)(void *, int) = gGpuCallout;
+    void *const context = gGpuContext;
+    ASSERT_NE(callout, nullptr);
+    d.complete(0);
+    d.donePass();
+    frame();
+    ASSERT_EQ(d.offer(kSlot + 1), 0);
+    ASSERT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kArmed);
+    d.model.written.clear();
+    {
+        const FilterContext filter;
+        callout(context, 0);
+    }
+    EXPECT_TRUE(d.model.written.empty()) << "a callout for the previous offer wrote the next one's flip";
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kArmed);
+    d.gpuFilter();
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kEarly) << "the current registration writes it";
+}
+
+// The gate reads window A's latch with no lock: a filter that claims and writes the armed flip between the gate's reads
+// moves the flip's word, and the gate adopts that flip and reads the latch again rather than judge it without it.
+TEST_F(CompletionFlipFilter, AFilterWriteDuringTheLatchReadIsAdoptedAndReadAgain)
+{
+    d.flipRequest = ++d.nextSwap;
+    d.swaps.push_back({d.flipRequest});
+    d.presentEntry(kSlot);
+    ASSERT_EQ(d.ring.pending, kSlot);
+    ASSERT_EQ(d.offer(kSlot + 1), 0);
+    ASSERT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kArmed) << "it replaces the gate's flip still out";
+    unsigned writes = 0;
+    d.model.beforeRead = [&](uint32_t word) {
+        if (word != DcModel::kStateControl || writes)
+            return;
+        ++writes;
+        d.gpuFilter();
+    };
+    EXPECT_NO_THROW(d.tick());
+    d.model.beforeRead = nullptr;
+    EXPECT_EQ(writes, 1u);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kAdopted);
+    EXPECT_EQ(d.ring.pending, kSlot + 1) << "the filter's flip is the ring's before the latch is judged";
+    d.complete(0);
+    d.donePass();
+    frame();
+    EXPECT_EQ(d.ring.front, kSlot + 1);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kIdle);
+}
+
 // The display's hook sites for the filters: gpuComplete takes the verdict first, a copy's flip() asks before it takes
 // the ring's target, and VIC's copy thread registers its waiter once the job's fence is armed.
 TEST(CompletionFlipFilterSource, TheDisplayAsksWhereTheFiltersNeedIt)
@@ -244,6 +298,9 @@ TEST(CompletionFlipFilterSource, TheDisplayAsksWhereTheFiltersNeedIt)
               4u);
     EXPECT_EQ(Between(display, "    void flip()\n    {\n", ")").find("if (flippedByCompletion("), 8u);
     EXPECT_NE(display.find("#include \"../TegraHost1x/SwitchHost1xFence.h\""), std::string::npos);
+    for (const char *header : {"../SwitchCompletionFlip.h", "../SwitchCompletionFlipDisplay.h",
+                               "../SwitchCompletionFlipFilter.h", "../SwitchMediaCompletionFlipDisplay.h"})
+        EXPECT_EQ(SourceText(header).find("IOSimpleLock"), std::string::npos) << header;
     const std::string vic = Between(SourceText("../SwitchVICScanoutDisplay.h"), "bool vicCopyWork()", "\n}\n");
     EXPECT_LT(vic.find("switch_host1x_token_fence("), vic.find("armCompletionFlipWaiter(job.output.view.producer);"));
 }
@@ -263,7 +320,7 @@ TEST_F(CompletionFlipFilter, ACopyIntoTheBootFramebufferArmsWithNothingThatBlock
     int offered = -1;
     ASSERT_NO_THROW(offered = d.offerCopy());
     ASSERT_EQ(offered, 0);
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kArmed);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kArmed);
     EXPECT_EQ(d.completionFlip.entry, 0);
     EXPECT_EQ(d.completionFlip.start, Display::kBootFramebuffer);
     ASSERT_NO_THROW(d.complete(0));

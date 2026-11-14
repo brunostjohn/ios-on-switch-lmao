@@ -19,7 +19,58 @@
 #include "../../TegraDisplayFlip/TegraScanoutRing.h"
 #include "../../TegraGM20B/SwitchGpuBacking.h"
 #include "../../TegraHost1x/SwitchHost1xFence.h"
+// Atomic read-modify-writes in the display's headers, counted (the macros below route them here).
+inline unsigned gRmws = 0;
+
+template <class T, class V> T countedFetchAdd(T *p, V v, int o)
+{
+    ++gRmws;
+    return __atomic_fetch_add(p, v, o);
+}
+
+template <class T, class V> T countedFetchSub(T *p, V v, int o)
+{
+    ++gRmws;
+    return __atomic_fetch_sub(p, v, o);
+}
+
+template <class T, class V> T countedFetchOr(T *p, V v, int o)
+{
+    ++gRmws;
+    return __atomic_fetch_or(p, v, o);
+}
+
+template <class T, class V> T countedFetchAnd(T *p, V v, int o)
+{
+    ++gRmws;
+    return __atomic_fetch_and(p, v, o);
+}
+
+template <class T, class V> T countedExchange(T *p, V v, int o)
+{
+    ++gRmws;
+    return __atomic_exchange_n(p, static_cast<T>(v), o);
+}
+
+template <class T, class V> bool countedCompareExchange(T *p, T *expected, V desired, bool weak, int s, int f)
+{
+    ++gRmws;
+    return __atomic_compare_exchange_n(p, expected, static_cast<T>(desired), weak, s, f);
+}
+
+#define __atomic_fetch_add(p, v, o)                   countedFetchAdd(p, v, o)
+#define __atomic_fetch_sub(p, v, o)                   countedFetchSub(p, v, o)
+#define __atomic_fetch_or(p, v, o)                    countedFetchOr(p, v, o)
+#define __atomic_fetch_and(p, v, o)                   countedFetchAnd(p, v, o)
+#define __atomic_exchange_n(p, v, o)                  countedExchange(p, v, o)
+#define __atomic_compare_exchange_n(p, e, v, w, s, f) countedCompareExchange(p, e, v, w, s, f)
 #include "../SwitchCompletionFlip.h"
+#undef __atomic_compare_exchange_n
+#undef __atomic_exchange_n
+#undef __atomic_fetch_and
+#undef __atomic_fetch_or
+#undef __atomic_fetch_sub
+#undef __atomic_fetch_add
 #include "display_filter_context.h"
 
 class TegraDisplayColor;
@@ -29,6 +80,7 @@ namespace completion_flip_test {
 // The producers' filters as the display registers with them: the GPU's present callout, host1x's last filter waiter
 // (with what its VIC job's record says when the filter runs it).
 inline void (*gGpuCallout)(void *, int) = nullptr;
+inline void *gGpuContext = nullptr;
 inline void (*gWaiterFn)(void *) = nullptr;
 inline void *gWaiterContext = nullptr;
 inline switch_gpu_backing_token gWaiterToken{};
@@ -131,9 +183,12 @@ inline IOSimpleLock *IOSimpleLockAlloc()
     return new IOSimpleLock;
 }
 
+inline unsigned gHarnessSimpleLocks = 0;
+
 inline IOInterruptState IOSimpleLockLockDisableInterrupt(IOSimpleLock *lock)
 {
     filterMayNot("IOSimpleLock");
+    ++gHarnessSimpleLocks;
     if (lock->held)
         throw std::runtime_error("a simple lock taken while held");
     lock->held = true;
@@ -151,45 +206,6 @@ inline void IOSimpleLockUnlockEnableInterrupt(IOSimpleLock *lock, IOInterruptSta
 inline void IOSleep(unsigned)
 {
     mayBlock("IOSleep");
-}
-
-// Atomic read-modify-writes in the display's headers, counted (the macros below route them here).
-inline unsigned gRmws = 0;
-
-template <class T, class V> T countedFetchAdd(T *p, V v, int o)
-{
-    ++gRmws;
-    return __atomic_fetch_add(p, v, o);
-}
-
-template <class T, class V> T countedFetchSub(T *p, V v, int o)
-{
-    ++gRmws;
-    return __atomic_fetch_sub(p, v, o);
-}
-
-template <class T, class V> T countedFetchOr(T *p, V v, int o)
-{
-    ++gRmws;
-    return __atomic_fetch_or(p, v, o);
-}
-
-template <class T, class V> T countedFetchAnd(T *p, V v, int o)
-{
-    ++gRmws;
-    return __atomic_fetch_and(p, v, o);
-}
-
-template <class T, class V> T countedExchange(T *p, V v, int o)
-{
-    ++gRmws;
-    return __atomic_exchange_n(p, static_cast<T>(v), o);
-}
-
-template <class T, class V> bool countedCompareExchange(T *p, T *expected, V desired, bool weak, int s, int f)
-{
-    ++gRmws;
-    return __atomic_compare_exchange_n(p, expected, static_cast<T>(desired), weak, s, f);
 }
 
 // The kernel's hand-offs a display period may pay: a work-loop event source's signal, a timer's arm and cancel.
@@ -292,7 +308,8 @@ struct DcModel {
     Aperture winbuf = kLands;
     unsigned selectorWrites = 0, boundaries = 0;
     std::vector<uint32_t> written;
-    std::function<void()> beforeWrite;  // another CPU's work landing just ahead of the next write
+    std::function<void()> beforeWrite;         // another CPU's work landing just ahead of the next write
+    std::function<void(uint32_t)> beforeRead;  // or just ahead of a read
 
     static int aperture(uint32_t word)
     {
@@ -341,6 +358,8 @@ struct DcModel {
 
     uint32_t read(uint32_t word)
     {
+        if (beforeRead)
+            beforeRead(word);
         if (word == kStateControl)
             return requested;
         if (const int a = aperture(word); a >= 0)
@@ -471,6 +490,14 @@ struct Display : OSObject {
         return &loop;
     }
 
+    static bool flipInterruptsOff()
+    {
+        return true;
+    }
+
+    static void flipInterruptsOn(bool)
+    {}
+
     static bool planeRecoveryWaits()
     {
         return false;
@@ -506,9 +533,8 @@ struct Display : OSObject {
     Display()
     {
         gPreemptionOff = 0;
-        if (completionFlipLock)
-            completionFlipLock->held = false;
         completionFlip = {};
+        completionFlipOwner = nullptr;
         completionUnverified = {kNoBuffer, 0};
         completionFlipsProven = false;
         ring.reset(3);
@@ -625,7 +651,7 @@ struct Display : OSObject {
         return true;
     }
 
-    void writeMediaFlipLocked(int)
+    void writeMediaFlip(int)
     {}
 
     void takeMediaFlip()
@@ -784,7 +810,7 @@ struct Display : OSObject {
         const FilterContext filter;
         ++gPreemptionOff;
         if (gGpuCallout)
-            gGpuCallout(this, 0);
+            gGpuCallout(gGpuContext, 0);
         --gPreemptionOff;
     }
 
@@ -950,9 +976,10 @@ extern "C" inline int tegra_gm20b_scanout_copy(const TegraScanoutCopy *copy)
     return completion_flip_test::gOffer ? completion_flip_test::gOffer(copy) : 0;
 }
 
-extern "C" inline void tgm_present_filter_callout(void (*fn)(void *, int), void *)
+extern "C" inline void tgm_present_filter_callout(void (*fn)(void *, int), void *ctx)
 {
     completion_flip_test::gGpuCallout = fn;
+    completion_flip_test::gGpuContext = ctx;
 }
 
 extern "C" inline int switch_host1x_filter_wait(uint32_t, uint32_t threshold, void (*fn)(void *), void *ctx,

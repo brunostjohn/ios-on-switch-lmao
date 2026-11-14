@@ -53,7 +53,7 @@ inline std::set<uint64_t> gUncertain, gDoneAtArm;  // producers' fences: still r
     throw std::runtime_error(text);
 }
 
-// Interrupts or preemption off: completionFlipLock held, or host1x's syncpoint filter running. Nothing that blocks or
+// Interrupts or preemption off: a simple lock held, or host1x's syncpoint filter running. Nothing that blocks or
 // logs may run then (XNU panics on a mutex with preemption disabled); IOLog throws here.
 inline int gPreemptionOff = 0;
 
@@ -276,7 +276,7 @@ struct Display {
     uint64_t planeRequestedAt = 0, frameEnds = 10;
     unsigned stPlaneFlips = 0, stPlaneDropped = 0, deadlines = 0, releases = 0, planeUnderflowRun = 0;
     unsigned notShown = 0;
-    IOSimpleLock lock, *completionFlipLock = nullptr;
+    bool flipStarted = false;
     std::vector<uint64_t> shown;  // the take sequence of every set the latch saw taken
     std::function<void()> midFrameEnd;
 
@@ -352,7 +352,12 @@ struct Display {
 
     void startCompletionFlip()
     {
-        completionFlipLock = &lock;
+        flipStarted = true;
+    }
+
+    bool completionFlipStarted() const
+    {
+        return flipStarted;
     }
 
     static bool completionFlipIdle()
@@ -412,9 +417,7 @@ struct Display {
         gpuStatus = status;
         gpuDonePending = true;
         model.completing = true;
-        const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
-        writeMediaFlipLocked(status);
-        IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
+        writeMediaFlip(status);
         model.completing = false;
     }
 
