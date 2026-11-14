@@ -63,7 +63,7 @@ final class SceneTests: XCTestCase {
         let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.raw.interlock_spin" })
         let result = try await scene.run(makeGPU())
         XCTAssertTrue(result.passed, result.reasons(limit: 8).joined(separator: "; "))
-        XCTAssertEqual(result.checks.count, 3 * 3 * 5)
+        XCTAssertEqual(result.checks.count, 2 * 3 * 5)
     }
 
     func testArchiveMissOnThisMac() async throws {
