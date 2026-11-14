@@ -59,6 +59,9 @@ py_test(
         ":plugin_pin",
         "//gpu:plugin_m2v_edges",
     ] + [":deps_" + name for name in BINARIES] + ["deps_%s.txt" % name for name in BINARIES],
+    # m2v: the plugin's, the bundle's and the pack tools' genqueries reach the packages --config=nom2v deletes until the
+    # cut; the cut drops the tag
+    tags = ["m2v"],
 )
 
 # The raw pack's refused states for the configured IPSW kind, against a pack report built elsewhere (the pack is too
