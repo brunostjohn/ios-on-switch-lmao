@@ -20,7 +20,7 @@ struct SurfaceLocksSideBySideTest: GPUPathTest {
     let name: String
     let pitch: Bool
     let counters: [String] = []
-    static let side = 1024, warmDraws = 32, targetMs = 40.0, staggerMs = 2.0
+    static let side = 1024, warmDraws = 64, targetMs = 40.0, staggerMs = 2.0
     static let colourA: [Float] = [0, 0, 1, 1], colourB: [Float] = [0, 1, 0, 1]
 
     static let blockLinear = SurfaceLocksSideBySideTest(
@@ -100,8 +100,10 @@ struct SurfaceLocksSideBySideTest: GPUPathTest {
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
         let pipeline = try gpu.render(fragment: "solid_fragment", format: .bgra8Unorm)
         let probe = try Self.target(gpu, pitch: pitch)
-        let warm = try await gpu.run { Self.encode($0, probe.texture, pipeline, Self.colourA, draws: Self.warmDraws) }
-        let perDrawMs = max(warm.wallMilliseconds, warm.gpuMilliseconds) / Double(Self.warmDraws)
+        var warm = try await gpu.run { Self.encode($0, probe.texture, pipeline, Self.colourB, draws: Self.warmDraws) }
+        // the second, without the first's one-time costs
+        warm = try await gpu.run { Self.encode($0, probe.texture, pipeline, Self.colourA, draws: Self.warmDraws) }
+        let perDrawMs = (warm.gpuTimed ? warm.gpuMilliseconds : warm.wallMilliseconds) / Double(Self.warmDraws)
         let draws = min(8000, max(Self.warmDraws, Int(Self.targetMs / max(perDrawMs, 0.001))))
         let jobMs = perDrawMs * Double(draws)
         metrics.set("draws", draws)
