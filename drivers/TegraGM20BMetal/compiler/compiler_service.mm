@@ -29,6 +29,7 @@
 #include "compiler_engine.h"
 #include "compiler_log.h"
 #include "compiler_pool.h"
+#include "compiler_restart.h"
 #include "compiler_sandbox.h"
 #include "compiler_store.h"
 #include "../raw/runtime/raw_cache_io.h"
