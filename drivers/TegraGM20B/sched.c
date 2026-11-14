@@ -311,11 +311,17 @@ struct ramfc_chan {
 	struct nvkm_chan *chan;
 	void (*write)(void *arg);
 	void *arg;
+	int wait;
 };
 
 static int ramfc_own(void *arg)
 {
-	return mutex_trylock(&((struct ramfc_chan *)arg)->chan->cgrp->runl->mutex);
+	struct ramfc_chan *c = arg;
+
+	if (!c->wait)
+		return mutex_trylock(&c->chan->cgrp->runl->mutex);
+	mutex_lock(&c->chan->cgrp->runl->mutex);
+	return 1;
 }
 
 static void ramfc_release(void *arg)
@@ -346,9 +352,9 @@ static void ramfc_write(void *arg)
 }
 
 int tgm_sched_ramfc(struct nvkm_device *device, unsigned int chid, void (*write)(void *arg),
-		    void *arg)
+		    void *arg, int wait)
 {
-	struct ramfc_chan c = {NULL, write, arg};
+	struct ramfc_chan c = {NULL, write, arg, wait};
 	const struct tgm_ramfc_steps steps = {
 		&c,           ramfc_own,     ramfc_release, ramfc_disable,
 		ramfc_enable, ramfc_preempt, ramfc_write};

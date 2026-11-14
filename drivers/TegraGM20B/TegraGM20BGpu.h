@@ -654,10 +654,14 @@ int tgm_rail_cycle_once(void);
 void tgm_rail_cycle_register(void);
 
 /* Debug kernels: every live client channel whose RAMFC timeslice was last written before a job it has completed since,
- * with RAMFC 0xf8 read back against that value (gpu_ramfc_probe.c, for TegraGM20BRamfcProbe.cpp's
- * debug.switch_gpu_ramfc); the first mismatch's channel, value and expected value. 0, or -EBUSY before M3. */
+ * with RAMFC 0xf8 read back against that value, the first mismatch's channel, value and expected value; then a
+ * timeslice change on the kernel probe channel and back (gpu_ramfc_probe.c, for TegraGM20BRamfcProbe.cpp's
+ * debug.switch_gpu_ramfc). 0, or -EBUSY before M3. */
 struct tgm_ramfc_look {
 	uint32_t channels, checked, high, mismatched, chid, ramfc, expected;
+	/* the kernel probe channel's timeslice written to flip_to and back to flip_from, each read after a job */
+	uint32_t flip_chid, flip_from, flip_to, flip_read, back_read;
+	int flip_ret;
 };
 
 int tgm_ramfc_probe(struct tgm_ramfc_look *look);

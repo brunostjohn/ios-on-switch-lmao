@@ -154,7 +154,7 @@ void tgm_chan_ramfc_due(struct tgm_chan *chan)
 		return;
 	due.timeslice = __atomic_exchange_n(&chan->timeslice_due, 0, __ATOMIC_ACQ_REL);
 	due.acquire = __atomic_exchange_n(&chan->acquire_due, 0, __ATOMIC_ACQ_REL);
-	ret = tgm_sched_ramfc(tgm_gpu.device, chan->chid, ramfc_due_write, &due);
+	ret = tgm_sched_ramfc(tgm_gpu.device, chan->chid, ramfc_due_write, &due, 0);
 	if (ret) {
 		if (due.timeslice)
 			__atomic_compare_exchange_n(&chan->timeslice_due, &none, due.timeslice, 0,

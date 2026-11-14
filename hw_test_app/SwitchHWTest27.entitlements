@@ -81,6 +81,7 @@
 		<string>debug.switch_display_dc_host1x_class</string>
 		<string>debug.switch_display_host1x_flip</string>
 		<string>debug.switch_gpu_rail_cycle</string>
+		<string>debug.switch_gpu_ramfc</string>
 		<string>debug.switch_joycon_probe</string>
 	</array>
 	<key>com.apple.security.exception.shared-preference.read-only</key>
