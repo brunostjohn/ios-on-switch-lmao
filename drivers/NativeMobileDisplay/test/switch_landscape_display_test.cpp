@@ -149,6 +149,11 @@ struct Display {
         return false;
     }
 
+    static bool host1xFlipBusy()
+    {
+        return false;
+    }
+
     void withdrawCompletionFlip()
     {
         ++withdrawals;

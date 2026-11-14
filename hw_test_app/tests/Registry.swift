@@ -51,6 +51,8 @@ public enum Registry {
             ScanoutRoutesTest(), PlainSurfacesTest(), DisplaySnapshotTest(), WakeTest(),
             PlanesCroppedTest(),
         ] + DisplayWindowProbeTest.all + [LandscapeVideoTest()]
+        // Holds the swaps for a second each; the forced producer failure last.
+        + [Host1xFlipTest.trial, Host1xFlipTest.teardown]
 
     static let sensorsAndInput: [any HWTest] = [
         AccelerometerTest(), GyroscopeTest(), DeviceMotionTest(), AmbientLightTest(), ControllersTest(), RailTest(),

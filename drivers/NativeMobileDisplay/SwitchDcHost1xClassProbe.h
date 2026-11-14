@@ -13,8 +13,9 @@
 // 0x70's INCR of the scratch word with the complement of its value and IMM of DC_CMD_GENERAL_INCR_SYNCPT (0x000,
 // IMMEDIATE) on the DC syncpoint. Nothing of it may land before the gate (held); after, the channel syncpoint says
 // host1x ran past the class 0x70 words, the DC syncpoint and the scratch word say DC A took them. A channel that
-// stopped is torn down and restarted, which drops its jobs; the scratch word gets its value back. Included in the class
-// body after NativeColumnScanDisplay.h.
+// stopped is torn down and restarted, which drops its jobs; the scratch word gets its value back. The channel is the
+// host1x flip trial's too (SwitchHost1xFlipDisplay.h): one of them owns it at a time. Included in the class body after
+// NativeColumnScanDisplay.h.
 
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 static constexpr uint32_t kDcScratchA = 0x325, kDcGeneralIncrSyncpt = 0x000, kDcHost1xClass = TEGRA_HOST1X_CLASS_DC;

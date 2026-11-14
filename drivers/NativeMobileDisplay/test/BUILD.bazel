@@ -54,7 +54,12 @@
 #   switch_completion_flip_proof_test   the same on a unit whose window A WINBUF aperture refuses the stores: one
 #                                       line, completion flips off, the frame flips from the gate, no latch misread
 #   switch_dc_host1x_class_probe_test   SwitchDcHost1xClassProbe.h is debug-only and its class 0x70 stream uses opcodes
-#                                       T210 has, through host1x's job API
+#                                       T210 has, through host1x's job API on the display's own channel
+#   switch_host1x_flip_run_test         SwitchHost1xFlipRun.h: window A flipped by streams held behind a producer's
+#                                       syncpoint; a failed producer, a stuck channel, a refused or missing latch and a
+#                                       stopping display each end with the stream torn down before the gate writes
+#   switch_host1x_flip_display_test     SwitchHost1xFlipDisplay.h is debug-only, on the display's channel, and nothing
+#                                       else writes window A or a request while it runs
 #   switch_media_completion_flip_test   SwitchMediaCompletionFlipDisplay.h: a media plane set staged at its offer and
 #                                       written by its producers' completion or host1x's filter; never taken before
 #                                       its request, never a surface scanned before its producer finished, whatever
@@ -747,6 +752,30 @@ host_test(
     data = [
         "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
         "//drivers/NativeMobileDisplay:SwitchDcHost1xClassProbe.h",
+    ],
+)
+
+host_test(
+    name = "switch_host1x_flip_run_test",
+    srcs = [
+        "switch_host1x_flip_run_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchHost1xFlipRun.h",
+        "//drivers/TegraHost1x:TegraHost1x.h",
+    ],
+)
+
+host_test(
+    name = "switch_host1x_flip_display_test",
+    srcs = ["switch_host1x_flip_display_test.cpp"],
+    data = [
+        "//drivers/NativeMobileDisplay:DisplayWindowProbeDisplay.h",
+        "//drivers/NativeMobileDisplay:NativeColumnScanDisplay.h",
+        "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlipDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchDcHost1xClassProbe.h",
+        "//drivers/NativeMobileDisplay:SwitchHost1xFlipDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchLandscapeDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchMediaCompletionFlipDisplay.h",
     ],
 )
 
