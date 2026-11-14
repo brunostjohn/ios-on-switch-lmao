@@ -28,8 +28,13 @@ inline void IOLockFree(IOLock *lock)
     delete lock;
 }
 
+// Called before each IOLockLock, so a test sees which locks are held when another is taken.
+inline void (*switch_test_lock_taken)(IOLock *) = nullptr;
+
 inline void IOLockLock(IOLock *lock)
 {
+    if (switch_test_lock_taken)
+        switch_test_lock_taken(lock);
     if (lock->locked)
         throw std::runtime_error("lock taken twice: a deadlock on the device");
     lock->locked = true;

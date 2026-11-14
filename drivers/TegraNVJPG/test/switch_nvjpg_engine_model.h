@@ -31,6 +31,8 @@ struct Engine {
     std::vector<std::string> events;
     bool stallDecodes = false, deadAfterReset = false;
     int boots = 0, partitionPowerOns = 0, teardowns = 0, restarts = 0;
+    // a job's host1x waits taken with gStateLock held; the power lock taken inside gStateLock
+    int waitsUnderStateLock = 0, powerUnderStateLock = 0;
     uint32_t syncpt = 369427729, lastBoundUs = 0;
     std::vector<std::vector<uint32_t>> streams;
     std::map<unsigned, bool> clocks, resets;
@@ -106,6 +108,7 @@ uint32_t tegra_host1x_syncpt_read(uint32_t)
 
 int tegra_host1x_syncpt_wait(uint32_t, uint32_t threshold, uint32_t boundUs)
 {
+    gEngine.waitsUnderStateLock += gStateLock && gStateLock->locked;
     gEngine.lastBoundUs = boundUs;
     return static_cast<int32_t>(gEngine.syncpt - threshold) >= 0 ? 0 : TEGRA_HOST1X_ETIMEDOUT;
 }
@@ -139,6 +142,7 @@ int tegra_host1x_submit_on(uint32_t channel, const uint32_t *words, uint32_t cou
 int switch_host1x_job_begin(uint32_t channel, uint32_t capacity, uint32_t **words)
 {
     static std::vector<uint32_t> arena;
+    gEngine.waitsUnderStateLock += gStateLock && gStateLock->locked;
     EXPECT_EQ(channel, uint32_t(TEGRA_HOST1X_CHANNEL_NVJPG));
     arena.assign(capacity, 0);
     *words = arena.data();
