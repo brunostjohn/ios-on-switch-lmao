@@ -14,12 +14,14 @@ import QuartzCore
 /// an event must have all but the encoders recorded since the worker was last handed the buffer (24 tape commands, 3
 /// of these passes) and the two held for the look-ahead encoded ahead; its median from commit to GPU start must stay
 /// under what the remainder, the kernel's SubmitJob and a thread hop take (the encode was 2.2-4.6 ms of a scale frame
-/// before, boot 21); the event's shape is encoded at its commit, as before.
+/// before, boot 21); the event's shape is encoded at its commit, as before. Each pass draws into BGRA8 beside a
+/// memoryless colour 1, as the state's line has it. A pack without the state (24B119's) sends its first command buffers
+/// to m2v while the runtime makes its record: those warm it before any shape runs.
 struct CommitLatencyPathTest: HWTest {
     let id = "gpu.path.commit_latency"
     let name = "A Core Animation shaped command buffer's commit returns at once and its GPU work starts soon after"
     var subsystem: Subsystem { .metal }
-    static let width = 256, height = 256, targets = 4, warmups = 6, measured = 16
+    static let width = 256, height = 256, targets = 4, warmups = 6, measured = 16, stateWarmups = 20
     static let paceMicroseconds: UInt32 = 400
     /// The median from commit to the GPU's start a shape may take: the last encoders' encode (about a fifth of a
     /// 90-draw buffer's 0.9-1.4 ms loop), the job's SubmitJob (0.45-0.83 ms on boot 21's scale frames, being cut by
@@ -44,12 +46,27 @@ struct CommitLatencyPathTest: HWTest {
         guard let line = CACorpus.state("PBGRAXm_A2Xhf") else { return .fail("CACorpus has no PBGRAXm_A2Xhf") }
         let pipeline = try CAState.pipeline(line, library: library, device: gpu.device)
         let targets = try (0..<Self.targets).map { _ in try gpu.texture(.bgra8Unorm, Self.width, Self.height) }
+        let scratch = try gpu.texture(
+            .bgra8Unorm, Self.width, Self.height, usage: [.renderTarget], storage: .memoryless)
         guard let event = gpu.device.makeSharedEvent() else { return .fail("makeSharedEvent returned nil") }
         let layer = CAMetalLayer()
         layer.device = gpu.device
         layer.pixelFormat = .bgra8Unorm
         layer.drawableSize = CGSize(width: Self.width, height: Self.height)
         var metrics = Metrics()
+        var warm = 0
+        while warm < Self.stateWarmups {
+            guard let commands = gpu.queue.makeCommandBuffer() else { return .fail("makeCommandBuffer nil") }
+            Self.encodePass(
+                commands, pipeline: pipeline, target: targets[0], scratch: scratch, pass: 0, round: 0, clear: true,
+                draws: 6)
+            commands.commit()
+            commands.waitUntilCompleted()
+            if RawFacade.path(of: commands) == "raw" { break }
+            warm += 1
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        metrics.set("warm", warm)
         var failures: [String] = []
         var signalled: UInt64 = 0
         for shape in Self.shapes {
@@ -63,7 +80,7 @@ struct CommitLatencyPathTest: HWTest {
                     let last = pass == shape.passes - 1
                     let target = last && drawable != nil ? drawable!.texture : targets[pass % Self.targets]
                     Self.encodePass(
-                        commands, pipeline: pipeline, target: target, pass: pass, round: round,
+                        commands, pipeline: pipeline, target: target, scratch: scratch, pass: pass, round: round,
                         clear: pass < Self.targets || target !== targets[pass % Self.targets],
                         draws: shape.draws / shape.passes + (pass < shape.draws % shape.passes ? 1 : 0))
                     if shape.event && pass == 7 {
@@ -144,13 +161,16 @@ struct CommitLatencyPathTest: HWTest {
     }
 
     static func encodePass(
-        _ commands: MTLCommandBuffer, pipeline: MTLRenderPipelineState, target: MTLTexture, pass: Int, round: Int,
-        clear: Bool, draws: Int
+        _ commands: MTLCommandBuffer, pipeline: MTLRenderPipelineState, target: MTLTexture, scratch: MTLTexture,
+        pass: Int, round: Int, clear: Bool, draws: Int
     ) {
         let descriptor = MTLRenderPassDescriptor()
         descriptor.colorAttachments[0].texture = target
         descriptor.colorAttachments[0].loadAction = clear ? .clear : .load
         descriptor.colorAttachments[0].storeAction = .store
+        descriptor.colorAttachments[1].texture = scratch
+        descriptor.colorAttachments[1].loadAction = .clear
+        descriptor.colorAttachments[1].storeAction = .dontCare
         let encoder = commands.makeRenderCommandEncoder(descriptor: descriptor)!
         encoder.setRenderPipelineState(pipeline)
         for draw in 0..<draws {
