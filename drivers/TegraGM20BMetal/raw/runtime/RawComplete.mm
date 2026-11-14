@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cstring>
 #include "NativeBridgeMetalFrontend.h"
-#include "RawDirect.h"
 #include "RawMetalInternal.h"
 #include "RawRenderKey.h"
 #include "raw_compute.h"
@@ -15,36 +14,6 @@ namespace raw {
 namespace {
 
 constexpr uint64_t kCacheCap = 8u << 20;
-
-#if SWITCH_RAW_DIAGNOSTICS
-// The compiling thread's class, from its pthread TSD. No thread CPU clock or thread_info: system sandboxes, such as
-// backboardd's, kill a process that makes thread_selfusage (syscall 482, the thread clock's); some refuse thread_info.
-const char *threadClass()
-{
-    const qos_class_t c = qos_class_self();
-    return c == QOS_CLASS_USER_INTERACTIVE ? "UI"
-           : c == QOS_CLASS_USER_INITIATED ? "IN"
-           : c == QOS_CLASS_DEFAULT        ? "DF"
-           : c == QOS_CLASS_UTILITY        ? "UT"
-           : c == QOS_CLASS_BACKGROUND     ? "BG"
-                                           : "fixed";
-}
-
-// One runtime compile's wall time and its thread's class, for the line that names it
-class CompileCost {
-public:
-    CompileCost() : wallUs_(nowUs())
-    {}
-
-    std::string text() const
-    {
-        return std::to_string((nowUs() - wallUs_) / 1000) + " ms (" + threadClass() + ")";
-    }
-
-private:
-    uint64_t wallUs_;
-};
-#endif
 
 // A compute key (raw_compute_key.h) with its function constants moved last: a log line cut short keeps its shape and bindings
 std::string constantsLast(const std::string &key)
@@ -85,8 +54,9 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, con
     const bool writable = cacheDir && *cacheDir && cache_.attach(cacheDir, stack_, kCacheCap);
     if (seedDir && *seedDir)
         cache_.attachSeed(seedDir, stack_);
-    compiler_ = std::make_unique<Compiler>(&cache_, [this](const CacheKey &k, RuntimeRecord &record, std::string &why) {
-        return make(k, record, why);
+    compiler_ = std::make_unique<Compiler>(&cache_, [](const CacheKey &, RuntimeRecord &, std::string &why) {
+        why = "a client makes no state";
+        return Compiler::Outcome::Failed;
     });
     const raw::Kernel &kernel = device_.kernel();
     remote_ = std::make_unique<Remote>(
@@ -99,7 +69,8 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, con
     });
     if (!remote_->serving())
         os_log_error(rawLog(),
-                     "raw: %{public}s has no shader compiler this boot: the states its pack lacks are made here",
+                     "raw: %{public}s has no shader compiler this boot: a state its pack, seed and store lack fails "
+                     "its creation",
                      getprogname());
     // the directory taken at once, for the lookups at state creation; its scan (another build's entries removed, the bytes
     // kept counted) on the queue, before any store there
@@ -199,46 +170,28 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
             pending->ready(nullptr, std::string());
             return;
         }
-        // the installed seed's, this process's or the disk's answer, which compiler_->ask then gives at once
+        const bool caTransform = a.caTransform;
+        // the installed seed's, this process's or the disk's answer, kept in the process table
         RuntimeRecord known;
         std::string why;
-        const bool found = compiler_->lookup(k, known, why) != RecordCache::Found::None;
-        const bool remote = !found && remote_->serving();
-        if (!found && !remote && (!kCompilesHere || remote_->declined())) {
+        if (compiler_->lookup(k, known, why) != RecordCache::Found::None) {
+            const RuntimeRecord *kept = nullptr;
+            if (compiler_->ask(k, nullptr, &kept) == Compiler::State::Ready && kept)
+                place(k, kept, caTransform, pending);
+            else
+                pending->ready(nullptr, std::string());
+            return;
+        }
+        if (!remote_->serving()) {
             pending->ready(nullptr, kNoCompilerComes);
             return;
         }
-        {
-            std::lock_guard<raw::Mutex> l(lock_);
-            asked_[k.name()] = a;
-        }
-        const bool caTransform = a.caTransform;
-        if (remote && remoteLater(a, k, [this, k, caTransform, pending](const RuntimeRecord *record) {
-                if (record)
-                    place(k, record, caTransform, pending);
-                else
-                    pending->ready(nullptr, failureOf(k));
-            }))
-            return;
-        auto done = [this, k, asked, pending, caTransform](const RuntimeRecord *record, const std::string &) {
-            if (record) {
+        remoteLater(a, k, [this, k, caTransform, pending](const RuntimeRecord *record) {
+            if (record)
                 place(k, record, caTransform, pending);
-                return;
-            }
-            uint64_t us = 0;
-            if (!pending->creation && !stopping_.load(std::memory_order_acquire) && compiler_->retryAfter(k, us))
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, int64_t(us) * 1000), queue_, ^{
-                    request(asked, pending);
-                });
             else
                 pending->ready(nullptr, failureOf(k));
-        };
-        const RuntimeRecord *made = nullptr;
-        const Compiler::State state = compiler_->ask(k, done, &made);
-        if (state == Compiler::State::Ready && made)
-            done(made, std::string());
-        else if (state == Compiler::State::Refused || state == Compiler::State::Failed)
-            done(nullptr, std::string());
+        });
     });
 }
 
@@ -278,10 +231,6 @@ Pipeline *Completion::makeNow(Ask a, std::string &failure)
     CacheKey k;
     if (!keyOf(a, k))
         return nullptr;
-    {
-        std::lock_guard<raw::Mutex> l(lock_);
-        asked_[k.name()] = a;
-    }
     RuntimeRecord record;
     std::string why;
     Compiler::State state = Compiler::State::Refused;
@@ -295,11 +244,6 @@ Pipeline *Completion::makeNow(Ask a, std::string &failure)
         break;
     case RecordCache::Found::None:
         if (!remote_->serving()) {
-            if (kCompilesHere && !remote_->declined()) {
-                compiledHere(InProcess::NoCompiler);
-                state = madeHere(k, record, why);
-                break;
-            }
             failure = kNoCompilerComes;
             return nullptr;
         }
@@ -318,63 +262,6 @@ Pipeline *Completion::makeNow(Ask a, std::string &failure)
     if (!made && heapFull)
         failure = why;
     return made;
-}
-
-Compiler::State Completion::madeHere(const CacheKey &k, RuntimeRecord &record, std::string &why)
-{
-    RAW_DIAGNOSTIC(noteObtained({"here", 0, uint32_t(qos_class_self()), 0}));
-    const Compiler::State state = compiler_->makeNow(k, record, why);
-    return state == Compiler::State::Failed ? compiler_->makeNow(k, record, why, true) : state;
-}
-
-Direct &Completion::direct()
-{
-    std::call_once(directMade_, [this] {
-        direct_ = std::make_unique<Direct>(device_.pack());
-    });
-    return *direct_;
-}
-
-Compiler::Outcome Completion::make(const CacheKey &k, RuntimeRecord &record, std::string &why)
-{
-    Ask a;
-    {
-        std::lock_guard<raw::Mutex> l(lock_);
-        const auto it = asked_.find(k.name());
-        if (it == asked_.end()) {
-            why = "asked for no state";
-            return Compiler::Outcome::Failed;
-        }
-        a = it->second;
-    }
-    ProbeTextures textures;
-    textures.cubic = a.cubic;
-    textures.fragmentTests = a.fragmentTests;
-    textures.twoPlane = a.twoPlane;
-    textures.xrSlots = a.xrSlots;
-    textures.written = a.written;
-#if SWITCH_RAW_DIAGNOSTICS
-    const CompileCost cost;
-#endif
-    // m2v's translation reads m2v's functions: the twins are made only for a state compiled in this process
-    MTLRenderPipelineDescriptor *twins = a.resolveDescriptor ? twinDescriptor(a.descriptor) : a.descriptor;
-    const Compiler::Outcome outcome = direct().make(twins, a.key, record, why, textures);
-#if SWITCH_RAW_DIAGNOSTICS
-    os_log(
-        rawLog(),
-        "raw: a state the pack lacks %{public}s in %{public}s after %llu ms for a compile slot: %016llx %{public}.400s",
-        outcome == Compiler::Outcome::Made      ? "made"
-        : outcome == Compiler::Outcome::Refused ? "refused"
-                                                : "not made",
-        cost.text().c_str(), (unsigned long long)(Compiler::slotWaitUs() / 1000), (unsigned long long)k.name(),
-        a.key.c_str());
-    logHarvestParts(k.name(), a.descriptor.label, a.key);
-#endif
-    if (outcome != Compiler::Outcome::Made)
-        once([NSString stringWithFormat:@"a state the pack lacks %s: %s | %.600s",
-                                        outcome == Compiler::Outcome::Refused ? "is refused" : "was not made",
-                                        why.c_str(), a.key.c_str()]);
-    return outcome;
 }
 
 void Completion::backgroundKernel(std::function<void()> work)
@@ -421,42 +308,11 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
                 break;
             case RecordCache::Found::None: {
                 bool taken = false;
-                if (remote_->serving()) {
-                    outcome = remoteKernel(facadeFunction, descriptor, dispatch, k, record, why, taken);
-                    if (!taken)
-                        return Build::Outcome::Gone;
-                    break;
-                }
-                if (!kCompilesHere || remote_->declined())
+                if (!remote_->serving())
                     return Build::Outcome::Gone;
-                compiledHere(InProcess::NoCompiler);
-#if SWITCH_RAW_DIAGNOSTICS
-                const uint64_t began = nowUs();
-#endif
-                // m2v's translation reads m2v's functions: the twins are made only for a kernel compiled in this process
-                if (MTLComputePipelineDescriptor *twin = twinComputeDescriptor(descriptor))
-                    outcome = direct().kernel(twin, dispatch, key, record, why);
-                else
-                    why = "its function has no m2v twin to compile here";
-                if (outcome != Compiler::Outcome::Failed) {
-                    const auto saved =
-                        outcome == Compiler::Outcome::Made ? std::make_shared<ComputeRecord>(record) : nullptr;
-                    const CacheKey key = k;
-                    const std::string refusal = why;
-                    dispatch_async(persistenceQueue_, ^{
-                        cache_.storeKernel(key, saved.get(), refusal);
-                    });
-                }
-#if SWITCH_RAW_DIAGNOSTICS
-                if (outcome == Compiler::Outcome::Made)
-                    once([NSString
-                        stringWithFormat:@"a kernel the pack lacks, made at its first dispatch of %u,%u,%u threads in "
-                                         @"%llu us (%s): %s %s",
-                                         dispatch.threads[0], dispatch.threads[1], dispatch.threads[2],
-                                         (unsigned long long)(nowUs() - began), threadClass(),
-                                         descriptor.computeFunction.name.UTF8String ?: "-",
-                                         constantsLast(key).c_str()]);
-#endif
+                outcome = remoteKernel(facadeFunction, descriptor, dispatch, k, record, why, taken);
+                if (!taken)
+                    return Build::Outcome::Gone;
                 break;
             }
             }

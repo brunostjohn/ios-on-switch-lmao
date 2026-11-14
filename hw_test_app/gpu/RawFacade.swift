@@ -106,7 +106,7 @@ public enum RawFacade {
     }
 
     /// How the facade got a render state's record (debug builds; nil elsewhere): "how" (pack, table, store, compiled,
-    /// joined, stored, here, none), "wait_us" and "qos" (the creating thread's wait for the shader compiler and its
+    /// joined, stored, none), "wait_us" and "qos" (the creating thread's wait for the shader compiler and its
     /// class), "ran_class" (the compiler's band for it, 4 user-interactive).
     public static func compile(of state: MTLRenderPipelineState) -> [String: Any]? {
         ask(state, "switchRawCompile") as? [String: Any]

@@ -304,15 +304,6 @@ bool Remote::ask(Held &&held)
     return true;
 }
 
-const char *InProcess::text(Why why)
-{
-    switch (why) {
-    case NoCompiler:
-        return "no shader compiler runs this boot";
-    }
-    return "?";
-}
-
 void Remote::delivered(void *refcon, int result, void *cookie, void *word)
 {
     auto *remote = static_cast<Remote *>(refcon);

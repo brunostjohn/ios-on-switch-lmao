@@ -77,13 +77,6 @@ void Completion::noteObtained(const Obtained &o)
     tObtained = o;
 }
 
-void Completion::compiledHere(InProcess::Why why)
-{
-    if (inProcess_.compiled(why))
-        os_log_error(rawLog(), "raw: %{public}s compiles a state itself: %{public}s", getprogname(),
-                     InProcess::text(why));
-}
-
 bool Completion::renderRequest(const Ask &a, const CacheKey &k, bool bytes, CompileRequest &r, Digest &name, bool every)
 {
     MTLRenderPipelineDescriptor *d = a.facade;

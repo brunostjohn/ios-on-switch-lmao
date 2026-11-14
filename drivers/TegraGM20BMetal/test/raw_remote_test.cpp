@@ -429,12 +429,4 @@ TEST_F(RemoteCompile, ARemoteThatGoesEndsWhatItWaitsFor)
     EXPECT_EQ(waiting.got, std::vector<raw::Remote::Answer>{raw::Remote::Answer::Unavailable});
 }
 
-TEST(InProcess, ItsReasonIsLoggedOnceAndEveryCompileCounted)
-{
-    raw::InProcess tally;
-    EXPECT_TRUE(tally.compiled(raw::InProcess::NoCompiler));
-    EXPECT_FALSE(tally.compiled(raw::InProcess::NoCompiler));
-    EXPECT_EQ(tally.count(), 2u);
-}
-
 }  // namespace

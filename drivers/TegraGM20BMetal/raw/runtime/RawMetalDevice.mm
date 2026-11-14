@@ -86,7 +86,6 @@
     d[@"mip_3d_levels"] = @(gRM->raw->stats.mip3dLevels.load());
     d[@"private_compressed"] = @(gRM->raw->privateMade());
     d[@"private_moves"] = @(gRM->raw->privateTransitions());
-    d[@"compiled_here"] = @(gRM->completion ? gRM->completion->compiledHere() : 0);
 #if SWITCH_RAW_DIAGNOSTICS
     d[@"loop_continuations"] = @(gRM->stats.loopContinuations.load());
 #endif

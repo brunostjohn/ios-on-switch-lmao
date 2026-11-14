@@ -5419,7 +5419,12 @@ host_test(
         "-fobjc-arc",
     ] + RAW_HOST_COPTS,
     cxx_std = "c++17",
-    data = [":fake_nvk/libvulkan_nouveau.dylib"],
+    data = [
+        ":fake_nvk/libvulkan_nouveau.dylib",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawComplete.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawComplete.mm",
+        "//drivers/TegraGM20BMetal:raw/runtime/RawCompleteRemote.mm",
+    ],
     env = {"SWITCH_FAKE_NVK": "$(rootpath :fake_nvk/libvulkan_nouveau.dylib)"},
     linkopts = [
         "-framework",
