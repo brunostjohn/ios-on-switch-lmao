@@ -57,13 +57,13 @@ template <class Cpu> void acknowledgeLoop(Cpu &cpu)
     }
 }
 
-// One SGI: `write` stores GICD_SGIR.
+// One SGI: `write` stores GICD_SGIR. One store barrier before it and none after (Linux gic_ipi_send_mask): a sender
+// that then waits for the target's answer (XNU's xcall acknowledge loop, the boot cross-IPI qualification) polls
+// normal memory, which the posted SGIR write does not hold up.
 template <class Write> void sendSgi(Write write)
 {
-    SWITCH_GIC_BARRIER("dsb ishst");
+    SWITCH_GIC_BARRIER("dmb ishst");
     write();
-    SWITCH_GIC_BARRIER("dsb sy");
-    SWITCH_GIC_BARRIER("isb");
 }
 
 // An SPI's IOKit vector (IOInterruptVector), in ArmCpu's acknowledge loop: interruptActive brackets the handler for
