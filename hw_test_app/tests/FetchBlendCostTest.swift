@@ -8,8 +8,9 @@ import Metal
 /// made: us_per_draw. The same draws with the same shader and blending off (us_per_draw_noblend), and with a shader that
 /// fetches nothing under the same blend (us_per_draw_nofetch). path<variant> is where each was drawn, fetch= how the
 /// raw facade's fetch counters say it kept order, gpu_clock as gpu.ca.hot_states (m2v's timestamps are PTIMER units).
-/// A measurement: it passes once the draws ran, and skips where the device makes no such pipeline or keeps no GPU
-/// timestamps.
+/// It skips where the device makes no such pipeline or keeps no GPU timestamps. Then FetchBlendHeavy times
+/// QuartzCore's full-screen TimgBvcm, TgsaA3 and Xghfc states (gpu_ms_<state>, us_per_draw_<state>, fetch_<state>),
+/// and the case fails where one of them leaves the raw path or has no GPU timestamp.
 struct FetchBlendCostTest: HWTest {
     let id = "gpu.raw.fetch_blend_cost"
     let name = "Self-blending framebuffer fetch: GPU time per full-screen draw"

@@ -43,6 +43,9 @@
 #                            scale keeping the shipped calls and exit; both copies of WidgetKit's placeholder deadline;
 #                            WidgetKit's archived image limit at 2x; the scroll edge keyline's two ladders sending every
 #                            scale but 3 to the 2x row; only the grid and WidgetKit's two applied at scale 1
+#   xnu_ui_scale_page_test   both trees' switch_ui_scale_page over 24B119's table focus site: the shipped bytes take
+#                            both edits and nothing else; a difference anywhere in either checked window leaves the
+#                            chunk as read and logs one line; a chunk without the edits is copied as read
 #   xnu_page_ratio_test      16 KiB VM pages over the 4 KiB granule: pmap.c's write_pte_fast (both trees) writes a
 #                            VM page as four consecutive 4 KiB frames, repeats empty and compressed entries, refuses an
 #                            unaligned PTE
@@ -405,6 +408,44 @@ host_test(
     srcs = _UI_SCALE_SITES_HDRS + ["xnu_ui_scale_sites_24B119_test.cpp"],
     data = _UI_SCALE_SITES_DATA,
     includes = ["."],
+)
+
+# switch_ui_scale_page_<tree>.h: vm_unix.c from "static int\nswitch_ui_scale_page(" through its closing brace.
+[
+    genrule(
+        name = "switch_ui_scale_page_" + tree,
+        srcs = ["//kernel/xnu-{}/bsd:vm/vm_unix.c".format(version)],
+        outs = ["switch_ui_scale_page_{}.h".format(tree)],
+        cmd = """awk '
+            prev == "static int" && $$0 ~ /^switch_ui_scale_page\\(/ { on = 1; print prev }
+            on { print }
+            on && $$0 == "}" { done = 1; exit }
+            { prev = $$0 }
+            END { if (!done) exit 1 }
+        ' $< > $@""",
+    )
+    for tree, version in [
+        ("10063", "10063.141.1"),
+        ("12377", "12377.121.6"),
+    ]
+]
+
+host_library(
+    name = "ui_scale_page",
+    srcs = _UI_SCALE_SITES_HDRS + [
+        "switch_ui_scale_page_10063.h",
+        "switch_ui_scale_page_12377.h",
+        "xnu_ui_scale_page_harness.c",
+    ],
+    hdrs = ["xnu_ui_scale_page_harness.h"],
+    includes = ["."],
+)
+
+host_test(
+    name = "xnu_ui_scale_page_test",
+    srcs = _UI_SCALE_SITES_HDRS + ["xnu_ui_scale_page_test.cpp"],
+    includes = ["."],
+    deps = [":ui_scale_page"],
 )
 
 # --- 16 KiB VM pages over the 4 KiB granule -------------------------------------------------------------------------

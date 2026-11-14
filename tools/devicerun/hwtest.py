@@ -372,6 +372,8 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'ui.glass_settings': False,
         'display.pocket_strip': False,
         'ui.pocket_keyline': False,
+        'input.focus_reload': False,
+        'input.focus_reload_nav': True,
         'display.true_tone_default': False,
         'pacing.glass_over': False,
         'pacing.glass_under': False,
