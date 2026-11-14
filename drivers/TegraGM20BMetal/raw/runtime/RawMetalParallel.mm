@@ -53,7 +53,7 @@ static void splice(RMCommandBuffer *cb, RMSubRecorder *s, bool refused)
     for (id object : s->_owners)
         [cb retain:object];
     const size_t chunkBase = cb->_bytes.chunks.size(), passBase = cb->_passes.size(), shadowBase = cb->_shadow.size();
-    cb->_shadow.insert(cb->_shadow.end(), s->_shadow.begin(), s->_shadow.end());
+    cb->_shadow.append(s->_shadow.ownData(), s->_shadow.ownData() + s->_shadow.size());
     cb->_plainForStorage.insert(cb->_plainForStorage.end(), s->_plainForStorage.begin(), s->_plainForStorage.end());
     cb->_borderSamplers |= s->_borderSamplers;
     if (!s->_bytes.chunks.empty()) {
