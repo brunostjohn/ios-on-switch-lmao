@@ -30,7 +30,7 @@ enum RMPred : uint8_t {
     PredPassAttFormat,  // a color attachment not kept or not renderable: a = format, b = attachment index | kind << 8
     PredPassAttLevel,   // slice, depth plane or resolve, or a level of a texture with no chain
     PredPassDepthStencil,  // a = depth format, b = stencil format
-    PredPassOther,  // a = its own sample positions, b = a rasterization rate map
+    PredPassOther,         // a = its own sample positions, b = a rasterization rate map
     // states and calls
     PredStateForeign,
     PredStateNotPackable,  // a state whose functions are not this device's (neither in the pack nor made by the runtime)
@@ -39,7 +39,7 @@ enum RMPred : uint8_t {
     PredCallBufForeign,      // a = stage << 8 | index (0xffff: an index buffer)
     PredCallSamplerForeign,  // a sampler the raw path does not express (its reason logged when it was made)
     PredCallVertexSampler,
-    PredCallDepthBias,     // a = bias, b = slope (float bits)
+    PredCallDepthBias,  // a = bias, b = slope (float bits)
     PredCallBlitOptions,
     PredCallBufCopyRange,
     PredBlitTexCopy,

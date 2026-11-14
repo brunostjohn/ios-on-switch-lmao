@@ -203,7 +203,8 @@ struct MetalHalfRoundingTest: HWTest {
         let text = halves.map { String(format: "%04x", $0) }.joined(separator: "_")
         var metrics = Metrics()
         metrics.set("halves", text)
-        return .judged([("reads 3800_3800_37ff_3800", halves == Self.expected)], metrics, proof: gpu.proof).onRawPath(gpu)
+        return .judged([("reads 3800_3800_37ff_3800", halves == Self.expected)], metrics, proof: gpu.proof).onRawPath(
+            gpu)
     }
 }
 

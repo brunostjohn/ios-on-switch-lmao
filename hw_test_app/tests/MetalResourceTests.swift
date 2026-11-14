@@ -69,7 +69,8 @@ struct MetalBlitTest: HWTest {
                 ("texture region copy exact", regionWrong == 0),
                 ("fillBuffer exact, range respected", fillWrong == 0),
                 ("generateMipmaps averages to grey", abs(Int(smallest[0]) - 128) <= 1 && smallest[3] == 255),
-            ], metrics, proof: gpu.proof).onRawPath(gpu)
+            ], metrics, proof: gpu.proof
+        ).onRawPath(gpu)
     }
 }
 
@@ -141,7 +142,8 @@ struct MetalTextureViewTest: HWTest {
                 ("r32Uint view reads the rgba8 bytes", read == bytes),
                 ("mip 1 / slice 1 view reads its own data", viewWrong == 0),
             ],
-            metrics, proof: gpu.proof).onRawPath(gpu)
+            metrics, proof: gpu.proof
+        ).onRawPath(gpu)
     }
 }
 
@@ -158,7 +160,9 @@ struct MetalIOSurfaceTest: HWTest {
         let properties: [IOSurfacePropertyKey: Any] = [
             .width: size, .height: size, .bytesPerElement: 4, .pixelFormat: kCVPixelFormatType_32BGRA,
         ]
-        guard let surface = IOSurface(properties: properties) else { return .fail("IOSurface creation failed").onRawPath(gpu) }
+        guard let surface = IOSurface(properties: properties) else {
+            return .fail("IOSurface creation failed").onRawPath(gpu)
+        }
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm, width: size, height: size, mipmapped: false)
         descriptor.usage = [.renderTarget, .shaderRead]
@@ -206,7 +210,8 @@ struct MetalIOSurfaceTest: HWTest {
                 ("GPU clear visible to the CPU", cpuSees == [153, 102, 51, 255]),
                 ("CPU writes visible to the GPU", surfaceWrong == 0),
                 ("NV12 planes through CVMetalTextureCache", nv12Wrong == 0),
-            ], metrics, proof: gpu.proof).onRawPath(gpu)
+            ], metrics, proof: gpu.proof
+        ).onRawPath(gpu)
     }
 
     func unorm8(_ texel: SIMD4<Float>) -> [Int] { (0..<4).map { Int((texel[$0] * 255).rounded()) } }

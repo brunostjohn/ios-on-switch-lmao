@@ -19,4 +19,3 @@ uint64_t rmArchiveKey(const std::string &key);
 bool rmPackHoldsKernels(const std::string &stateKey);
 // The pack's answers for the compute state of `stateKey` (raw_compute_key.h computeStateKey): null where it has none
 const raw::PackComputeFacts *rmPackComputeFacts(const std::string &stateKey);
-

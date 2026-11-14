@@ -85,8 +85,8 @@ public:
             w = written_.erase(w);
         }
         for (size_t i = 0; i < count; ++i) {
-            if (!uses[i].shadowed || std::find(steps_.fill.begin(), steps_.fill.end(), uses[i].object) !=
-                                         steps_.fill.end())
+            if (!uses[i].shadowed ||
+                std::find(steps_.fill.begin(), steps_.fill.end(), uses[i].object) != steps_.fill.end())
                 continue;
             Shadowed *s = find(uses[i].object);
             const bool stale = !s || std::any_of(writes_.begin(), writes_.end(), [&](const Write &w) {
@@ -112,8 +112,9 @@ public:
                 continue;
             if (!uses[i].shadowed)
                 writes_.push_back({uses[i].object, uses[i].span, clock_});
-            else if (std::none_of(written_.begin(), written_.end(),
-                                  [&](const Write &w) { return w.object == uses[i].object; }))
+            else if (std::none_of(written_.begin(), written_.end(), [&](const Write &w) {
+                         return w.object == uses[i].object;
+                     }))
                 written_.push_back({uses[i].object, uses[i].span, clock_});
         }
         ++clock_;

@@ -5142,11 +5142,11 @@ void RenderEncoder::markSpan(Push &p, uint32_t index, SpanKind kind)
     if (kind == SpanKind::Draws && emitted_) {
         label = drawSpanLabel(*emitted_, emitted_->rec ? emitted_->rec->keyHash : 0, kpx, samples_);
         const Pipeline &pl = *emitted_;
-        label.form = pl.splitOf                         ? SpanForm::Twin
-                     : pl.freeForm.rung != FetchNone    ? SpanForm::FetchFree
-                     : pl.storageBits                   ? SpanForm::Interlock
-                     : pipeline_ && &pl != pipeline_    ? SpanForm::Variant
-                                                        : SpanForm::Whole;
+        label.form = pl.splitOf                      ? SpanForm::Twin
+                     : pl.freeForm.rung != FetchNone ? SpanForm::FetchFree
+                     : pl.storageBits                ? SpanForm::Interlock
+                     : pipeline_ && &pl != pipeline_ ? SpanForm::Variant
+                                                     : SpanForm::Whole;
         label.pixels = uint32_t(std::min<uint64_t>(drawPixels_, UINT32_MAX));
         if (t) {
             label.format = t->format;
@@ -7968,7 +7968,8 @@ void RenderEncoder::probeEdges() const
         logEdgeMiss("pass.area", *a.texture, {0, 0, areaW_, areaH_}, detail);
         if (drawnKnown)
             logEdgeMiss("pass.draws", *a.texture, drawn, detail);
-    }    noteLargePass(drawn, drawnKnown);
+    }
+    noteLargePass(drawn, drawnKnown);
 }
 
 // A pass over a colour target of more pixels than the panel's (boot 21: Core Animation's 1792x1472 on every app open):
@@ -8117,8 +8118,8 @@ void RenderEncoder::end()
         p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     }
     if (separate_.depth)
-        copySeparateZeta(p, (separate_.loadDepth ? kShaderTestDepth : 0) | (separate_.loadStencil ? kShaderTestStencil : 0),
-                         true);
+        copySeparateZeta(
+            p, (separate_.loadDepth ? kShaderTestDepth : 0) | (separate_.loadStencil ? kShaderTestStencil : 0), true);
     // the clears m2v makes by passes of their own first (Clear loads reaching past the render area): each its attachment alone
     // as target 0, over its reach, then the barrier between passes
     bool own = false;
@@ -8238,7 +8239,8 @@ void RenderEncoder::end()
         d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(q.at) - d.push_.bo.cpu);
         RAW_DIAGNOSTIC(d.stats.pushBytes += uint64_t(q.at - at) * 4);
     }
-    if (const uint8_t aspects = (separate_.storeDepth ? kShaderTestDepth : 0) | (separate_.storeStencil ? kShaderTestStencil : 0);
+    if (const uint8_t aspects =
+            (separate_.storeDepth ? kShaderTestDepth : 0) | (separate_.storeStencil ? kShaderTestStencil : 0);
         separate_.depth && aspects) {
         constexpr uint32_t room3 = 192;
         uint32_t *at = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room3 * 4, 256, va));

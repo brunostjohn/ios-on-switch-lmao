@@ -10,8 +10,8 @@ namespace {
 
 // Which of a texture's terms refused it: compute.image's b, named in its first line
 enum ImageTerm : uint8_t {
-    TermTwoPlanesBare = 2,     // RGB10A8_2P_XR10 read where the record's view is not its stand-in's format
-    TermConvertedSampler,      // a converted texture beside a sampler its address map would change (draws take its variant)
+    TermTwoPlanesBare = 2,  // RGB10A8_2P_XR10 read where the record's view is not its stand-in's format
+    TermConvertedSampler,  // a converted texture beside a sampler its address map would change (draws take its variant)
 };
 
 const char *imageTermName(uint64_t term)
@@ -33,10 +33,9 @@ NSString *textureFacts(RMTexture *t)
         stringWithFormat:@"%lux%lu format %lu type %lu levels %lu array %lu usage 0x%lx storage %lu kind %d pitch %u "
                          @"va&31 %llu form %s",
                          (unsigned long)d.width, (unsigned long)d.height, (unsigned long)d.pixelFormat,
-                         (unsigned long)d.textureType, (unsigned long)d.mipmapLevelCount,
-                         (unsigned long)d.arrayLength, (unsigned long)d.usage, (unsigned long)d.storageMode,
-                         int(t->_kind), x.pitch, (unsigned long long)(x.va & 31),
-                         raw::kernelTextureFormName(raw::kernelTextureForm(x))];
+                         (unsigned long)d.textureType, (unsigned long)d.mipmapLevelCount, (unsigned long)d.arrayLength,
+                         (unsigned long)d.usage, (unsigned long)d.storageMode, int(t->_kind), x.pitch,
+                         (unsigned long long)(x.va & 31), raw::kernelTextureFormName(raw::kernelTextureForm(x))];
     if (IOSurfaceRef surface = t->_surface) {
         const OSType f = IOSurfaceGetPixelFormat(surface);
         [s appendFormat:@" surface '%c%c%c%c' plane %lu of %zu rows %zu", char(f >> 24), char(f >> 16), char(f >> 8),
@@ -92,7 +91,9 @@ raw::KernelUse textureUse(RMTexture *t, bool writes)
 raw::KernelUse bufferUse(RMBuffer *b, uint64_t offset, bool writes)
 {
     const uint64_t length = b->_raw.length;
-    return {(__bridge const void *)b, {b->_raw.va + std::min(offset, length), length - std::min(offset, length)}, false,
+    return {(__bridge const void *)b,
+            {b->_raw.va + std::min(offset, length), length - std::min(offset, length)},
+            false,
             writes};
 }
 
@@ -116,7 +117,8 @@ void kernelUses(RMCommandBuffer *cb, size_t at, std::vector<raw::KernelUse> &use
                 uses.push_back(textureUse((__bridge RMTexture *)textures[e.slot], writes));
             else if (e.kind == raw::KernelBuffer && e.slot < 31 &&
                      bindings[e.slot].source == raw::BufferBinding::Source::Buffer && bindings[e.slot].object)
-                uses.push_back(bufferUse((__bridge RMBuffer *)bindings[e.slot].object, bindings[e.slot].offset, writes));
+                uses.push_back(
+                    bufferUse((__bridge RMBuffer *)bindings[e.slot].object, bindings[e.slot].offset, writes));
         }
     }
     for (size_t use = dispatch.encoderBegin; use < at; ++use) {
@@ -234,10 +236,10 @@ bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKern
             // a record that views a slot in texels of another size is a pack or compiler defect (neither pack holds
             // one): the command buffer fails, naming it
             if (view == raw::SlotView::None) {
-                NSString *reason = [NSString stringWithFormat:@"Kernel %016llx's record views texture slot %u in "
-                                                              @"texels of another size (header word 0 %08x): %@",
-                                                              (unsigned long long)k->rec->keyHash, x.slot, x.window,
-                                                              textureFacts(t)];
+                NSString *reason =
+                    [NSString stringWithFormat:@"Kernel %016llx's record views texture slot %u in "
+                                               @"texels of another size (header word 0 %08x): %@",
+                                               (unsigned long long)k->rec->keyHash, x.slot, x.window, textureFacts(t)];
                 os_log_error(rawLog(), "raw: %{public}s", reason.UTF8String);
                 failCommandBuffer(cb, reason, MTLCommandBufferErrorInternal);
                 if (why)
@@ -274,7 +276,8 @@ bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKern
         }
     });
     if (dispatch.arguments || dispatch.stageInBuffer)
-        plan.addUses(at, {{dispatch.arguments, raw::ResourceUse::Read}, {dispatch.stageInBuffer, raw::ResourceUse::Read}});
+        plan.addUses(at,
+                     {{dispatch.arguments, raw::ResourceUse::Read}, {dispatch.stageInBuffer, raw::ResourceUse::Read}});
     plan.resolveDispatch(at, kernels, shadowSlots);
     return true;
 }

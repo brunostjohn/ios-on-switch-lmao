@@ -206,10 +206,10 @@ static id functionNotFound(NSString *name, NSError **error)
         return (id<MTLFunction>)[self function:name as:nil values:nil specialized:false];
     if (![self listsFunction:name])
         return nil;
-    return (id<MTLFunction>)[self wrap:[(id<MTLLibrary>)RM_LIBRARY_TWIN(self, NeedLibraryFunctionKind)
-                                           newFunctionWithName:name]
-                                  name:name
-                             constants:nil];
+    return (id<MTLFunction>)[self
+             wrap:[(id<MTLLibrary>)RM_LIBRARY_TWIN(self, NeedLibraryFunctionKind) newFunctionWithName:name]
+             name:name
+        constants:nil];
 }
 
 - (id<MTLFunction>)newFunctionWithName:(NSString *)name
@@ -224,10 +224,9 @@ static id functionNotFound(NSString *name, NSError **error)
     if (![self listsFunction:name])
         return functionNotFound(name, error);
     return (id<MTLFunction>)[self
-             wrap:[(id<MTLLibrary>)RM_LIBRARY_TWIN(self, NeedLibrarySpecializedFunction)
-                      newFunctionWithName:name
-                           constantValues:values
-                                    error:error]
+             wrap:[(id<MTLLibrary>)RM_LIBRARY_TWIN(self, NeedLibrarySpecializedFunction) newFunctionWithName:name
+                                                                                              constantValues:values
+                                                                                                       error:error]
              name:name
         constants:values];
 }
@@ -263,11 +262,10 @@ static id functionNotFound(NSString *name, NSError **error)
     }
     if (d.name && ![self listsFunction:d.name])
         return functionNotFound(d.name, error);
-    return (id<MTLFunction>)[self wrap:[(id<MTLLibrary>)RM_LIBRARY_TWIN(self, NeedLibraryFunction)
-                                           newFunctionWithDescriptor:d
-                                                               error:error]
-                                  name:d.specializedName.length ? d.specializedName : d.name
-                             constants:d.constantValues];
+    return (id<MTLFunction>)[self
+             wrap:[(id<MTLLibrary>)RM_LIBRARY_TWIN(self, NeedLibraryFunction) newFunctionWithDescriptor:d error:error]
+             name:d.specializedName.length ? d.specializedName : d.name
+        constants:d.constantValues];
 }
 
 // Made at once, as m2v's library makes it: through the descriptor, so the function is this library's (its states keyed by

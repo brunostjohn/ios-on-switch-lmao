@@ -38,7 +38,8 @@ struct MetalColorPassTest: HWTest {
         metrics.set("gpu_ms", timing.gpuMilliseconds, digits: 3)
         return .judged(
             [("every pixel exact (corner reads \(Array(pixels.pixel(0, 0, width: size))))", wrong == 0)], metrics,
-            proof: gpu.proof).onRawPath(gpu)
+            proof: gpu.proof
+        ).onRawPath(gpu)
     }
 }
 
@@ -121,7 +122,8 @@ struct MetalDepthStencilTest: HWTest {
             [
                 ("colour exact", wrongColor == 0), ("depth exact (0.5 | 0.7)", wrongDepth == 0),
                 ("stencil exact (1 | 0)", wrongStencil == 0),
-            ], metrics, proof: gpu.proof).onRawPath(gpu)
+            ], metrics, proof: gpu.proof
+        ).onRawPath(gpu)
     }
 }
 
@@ -178,6 +180,7 @@ struct MetalMSAATest: HWTest {
                 ("interior and exterior exact", wrong == 0 && inside > 0 && outside > 0),
                 ("edge pixels resolve to a blend", edge >= size / 2),
             ],
-            metrics, proof: gpu.proof).onRawPath(gpu)
+            metrics, proof: gpu.proof
+        ).onRawPath(gpu)
     }
 }

@@ -15,7 +15,7 @@ void hostBarrier(const char *instruction);
 
 #define SWITCH_GIC_BARRIER(instruction) ::switchgic::hostBarrier(instruction)
 #else
-#define SWITCH_GIC_BARRIER(instruction) __asm__ volatile(instruction ::: "memory")
+#define SWITCH_GIC_BARRIER(instruction) __asm__ volatile(instruction::: "memory")
 #endif
 
 namespace switchgic {

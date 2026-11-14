@@ -41,13 +41,10 @@ struct Texture {
 
     Texture(uint64_t surfaceVa, Bytes &surface, uint64_t offset, uint32_t width, uint32_t height, uint32_t bpp,
             uint32_t pitch)
-        : base(surfaceVa),
-          rows{&surface, offset, width, height, bpp, pitch},
+        : base(surfaceVa), rows{&surface, offset, width, height, bpp, pitch},
           imageBytes(size_t((width * bpp + 31) & ~31u) * height, 0xee),
-          image{&imageBytes, 0, width, height, bpp, (width * bpp + 31) & ~31u},
-          shadowed(pitch & 31)
-    {
-    }
+          image{&imageBytes, 0, width, height, bpp, (width * bpp + 31) & ~31u}, shadowed(pitch & 31)
+    {}
 
     const Rows &reached() const
     {
@@ -111,8 +108,7 @@ TEST(KernelShadow, MediaanalysisdsConversionReachesTheSurfaceAsInPlace)
     ASSERT_TRUE(shadowed.rgba.shadowed && shadowed.luma.shadowed && shadowed.chroma.shadowed);
     convert(direct.rgba.rows, direct.luma.rows, direct.chroma.rows);
 
-    const raw::KernelUse uses[] = {use(shadowed.luma, true), use(shadowed.rgba, false),
-                                   use(shadowed.chroma, true)};
+    const raw::KernelUse uses[] = {use(shadowed.luma, true), use(shadowed.rgba, false), use(shadowed.chroma, true)};
     raw::KernelShadows plan;
     plan.begin(uses, 3);
     for (const auto &u : uses)

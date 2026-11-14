@@ -282,7 +282,9 @@ extern "C" int switch_gpu_chan_exec_visibility(tgm_chan *, const tgm_push *push,
 		int result = nextError;
 		nextError = 0;
 		if (retireAtFullRing)
-			std::async(std::launch::async, [] { switch_gpu_copy_retire(); }).get();
+			std::async(std::launch::async, [] {
+				switch_gpu_copy_retire();
+			}).get();
 		return result;
 	}
 	if (emulate) {
@@ -757,7 +759,8 @@ TEST_F(CheckedCopy, ARetirementAskedBeforeARoomWaitRunsDuringIt)
 	retireAtFullRing = true;
 	ASSERT_EQ(copy(c, d), 0);
 	EXPECT_EQ(roomWaits, 1u);
-	EXPECT_EQ(retirementPendingAtRoomWait, 1u) << "the asked retirement waited for the copy's end";
+	EXPECT_EQ(retirementPendingAtRoomWait, 1u)
+		<< "the asked retirement waited for the copy's end";
 	pump();
 	EXPECT_EQ(calls, 1u);
 }

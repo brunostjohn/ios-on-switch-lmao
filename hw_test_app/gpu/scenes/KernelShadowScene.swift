@@ -45,7 +45,8 @@ struct KernelShadowScene: GPUScene {
             ])
         else { throw TestFailure("IOSurface creation failed") }
         result.metrics.set(
-            "rows", "\(rgbaSurface.bytesPerRow),\(planes.bytesPerRowOfPlane(at: 0)),\(planes.bytesPerRowOfPlane(at: 1))")
+            "rows", "\(rgbaSurface.bytesPerRow),\(planes.bytesPerRowOfPlane(at: 0)),\(planes.bytesPerRowOfPlane(at: 1))"
+        )
         result.expect(
             rgbaSurface.bytesPerRow % 32 == 16 && planes.bytesPerRowOfPlane(at: 0) % 32 == 16
                 && planes.bytesPerRowOfPlane(at: 1) % 32 == 16, "the surfaces' rows are not 16 bytes off 32")
@@ -81,13 +82,15 @@ struct KernelShadowScene: GPUScene {
                 encoder.setTexture(chroma, index: 2)
                 encoder.setSamplerState(sampler, index: 0)
                 encoder.dispatchThreads(
-                    MTLSize(width: w, height: h, depth: 1), threadsPerThreadgroup: MTLSize(width: 32, height: 8, depth: 1))
+                    MTLSize(width: w, height: h, depth: 1),
+                    threadsPerThreadgroup: MTLSize(width: 32, height: 8, depth: 1))
                 encoder.endEncoding()
             }
             paths.append(timing.path)
             let wrong = Self.wrongBytes(planes, pixels)
             result.metrics.set("run\(run)_wrong", wrong.count)
-            result.expect(wrong.isEmpty, "run \(run): \(wrong.count) surface bytes wrong, the first at \(wrong.first ?? -1)")
+            result.expect(
+                wrong.isEmpty, "run \(run): \(wrong.count) surface bytes wrong, the first at \(wrong.first ?? -1)")
         }
         result.metrics.set("paths", paths.joined(separator: ","))
         if RawFacade.kind(of: gpu.device) == "raw" {

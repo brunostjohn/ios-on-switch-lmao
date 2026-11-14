@@ -58,13 +58,10 @@ IOSurfaceRef surface(uint32_t width, uint32_t height, uint32_t bytesPerElement, 
     });
 }
 
-id<MTLTexture> texture(MTLPixelFormat format, uint32_t width, uint32_t height, MTLTextureUsage usage,
-                       IOSurfaceRef from)
+id<MTLTexture> texture(MTLPixelFormat format, uint32_t width, uint32_t height, MTLTextureUsage usage, IOSurfaceRef from)
 {
-    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
-                                                                                 width:width
-                                                                                height:height
-                                                                             mipmapped:NO];
+    MTLTextureDescriptor *d =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:width height:height mipmapped:NO];
     d.usage = usage;
     if (!from) {
         d.storageMode = MTLStorageModeMemoryless;
@@ -142,10 +139,8 @@ protected:
         ASSERT_TRUE(library != nil) << (error.description.UTF8String ?: "");
         MTLComputePipelineDescriptor *d = [MTLComputePipelineDescriptor new];
         d.computeFunction = [library newFunctionWithName:@(kernelName(0).c_str())];
-        gState = [gDevice newComputePipelineStateWithDescriptor:d
-                                                        options:MTLPipelineOptionNone
-                                                     reflection:nil
-                                                          error:&error];
+        gState =
+            [gDevice newComputePipelineStateWithDescriptor:d options:MTLPipelineOptionNone reflection:nil error:&error];
         ASSERT_TRUE(gState != nil) << (error.description.UTF8String ?: "");
     }
 
@@ -186,9 +181,8 @@ TEST_F(FacadeKernelShadow, MediaanalysisdsConversionRunsRawThroughTheImages)
 TEST_F(FacadeKernelShadow, AMemorylessTextureIsReadThroughHeaderZero)
 {
     id<MTLTexture> luma = texture(MTLPixelFormatR8Unorm, kWidth, kHeight, MTLTextureUsageShaderWrite, lumaRows);
-    id<MTLTexture> rgba =
-        texture(MTLPixelFormatRGBA8Unorm, kWidth, kHeight, MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget,
-                nullptr);
+    id<MTLTexture> rgba = texture(MTLPixelFormatRGBA8Unorm, kWidth, kHeight,
+                                  MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget, nullptr);
     id<MTLTexture> chroma =
         texture(MTLPixelFormatRG8Unorm, kWidth / 2, kHeight / 2, MTLTextureUsageShaderWrite, chromaRows);
     ASSERT_TRUE(luma && rgba && chroma);

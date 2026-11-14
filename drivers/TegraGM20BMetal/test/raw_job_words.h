@@ -138,7 +138,8 @@ inline std::string words(const std::vector<Run> &runs, uint64_t mark, const std:
             out += " | uses";
             for (const TegraGM20BAbiSurfaceUse &u : jobs[j].uses) {
                 const auto bo = kernel_model::model.bos.find(u.handle);
-                if (u.handle >= mark || (bo != kernel_model::model.bos.end() && !bo->second.import && !bo->second.cached))
+                if (u.handle >= mark ||
+                    (bo != kernel_model::model.bos.end() && !bo->second.import && !bo->second.cached))
                     continue;
                 snprintf(text, sizeof text, " %llx/%x", (unsigned long long)u.handle, u.access);
                 out += text;

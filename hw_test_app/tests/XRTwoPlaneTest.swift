@@ -128,7 +128,10 @@ struct XRTwoPlaneTest: HWTest {
                     directShadows == 0 && cellShadows == 0
                 ),
                 ("a surface 60 wide is drawn through shadows", narrow == 0 && narrowShadows > 0),
-                ("blended draws are source-over of the codes, within one code", blend.wrong == 0 && blend.interlocked > 0),
+                (
+                    "blended draws are source-over of the codes, within one code",
+                    blend.wrong == 0 && blend.interlocked > 0
+                ),
                 (
                     "Core Animation's blended fills in the storage form are source-over, within one code",
                     storage.wrong == 0 && storage.interlocked > 0

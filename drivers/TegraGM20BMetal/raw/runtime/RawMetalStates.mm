@@ -412,9 +412,9 @@ static id<MTLRenderPipelineState> pipelineTwin(MTLRenderPipelineDescriptor *d, M
         return native_bridge_metal_render_pipeline_lazy(RM_M2V(NeedPackedRenderStateTwin),
                                                         packedTwinDescriptor(d, true), packedTwinOptions(o, true));
     return [RM_M2V(NeedRenderStateTwin) newRenderPipelineStateWithDescriptor:twinDescriptor(d)
-                                                                         options:packedTwinOptions(o, packed)
-                                                                      reflection:nil
-                                                                           error:error];
+                                                                     options:packedTwinOptions(o, packed)
+                                                                  reflection:nil
+                                                                       error:error];
 }
 
 // The twin of a state raw drew from its creation, made when a command buffer that sets it first goes to m2v
@@ -536,9 +536,10 @@ static id<MTLRenderPipelineState> makeState(RMDevice *device, MTLRenderPipelineD
     (void)d, (void)o;
     if (r)
         *r = nil;
-    return rmRefuseUnsupported("a tile render state: tile shaders are Apple4's (Metal feature set tables), a family this "
-                               "device does not claim",
-                               error);
+    return rmRefuseUnsupported(
+        "a tile render state: tile shaders are Apple4's (Metal feature set tables), a family this "
+        "device does not claim",
+        error);
 }
 
 // The m2v device links these libraries from its own functions' bitcode: the functions here are their twins. Its methods, inherited

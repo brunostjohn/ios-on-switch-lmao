@@ -185,7 +185,8 @@ Pipeline *RenderEncoder::splitTwin(Pipeline *pl, WrittenRegion::Analysis &analys
         if (!b.va)
             return whole(SplitWhole::Unbound);
         // the prologue's constant buffer of it (launchSplit): its first kMaxCbufBytes at most
-        if (b.buffer && cb_->bufferWrites_.meets(b.va, std::min<uint64_t>(b.size ? b.size : kMaxCbufBytes, kMaxCbufBytes)))
+        if (b.buffer &&
+            cb_->bufferWrites_.meets(b.va, std::min<uint64_t>(b.size ? b.size : kMaxCbufBytes, kMaxCbufBytes)))
             return whole(SplitWhole::Written);
     }
     SplitState *s = __atomic_load_n(&pl->split, __ATOMIC_ACQUIRE);

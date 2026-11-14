@@ -60,7 +60,8 @@ struct IndirectDispatchTest: NativeObjectTest {
                 var v = SIMD4<UInt32>(counts.x, counts.y, counts.z, 0)
                 encoder.setBytes(&v, length: 16, index: 1)
                 encoder.dispatchThreadgroups(
-                    MTLSize(width: 1, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
+                    MTLSize(width: 1, height: 1, depth: 1),
+                    threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
                 encoder.setComputePipelineState(grid)
                 encoder.setBuffer(out, offset: 0, index: 0)
                 encoder.setBuffer(seen, offset: 0, index: 1)
@@ -87,7 +88,8 @@ struct IndirectDispatchTest: NativeObjectTest {
     /// A stage-in kernel over elements [5, 5 + 16) of its input, the region a kernel wrote
     func stageIn(_ gpu: GPU, _ library: MTLLibrary, _ metrics: inout Metrics, _ work: inout NativeWork) async throws {
         let device = gpu.device
-        guard let f = library.makeFunction(name: "indirect_stage_in"), let w = library.makeFunction(name: "indirect_region")
+        guard let f = library.makeFunction(name: "indirect_stage_in"),
+            let w = library.makeFunction(name: "indirect_region")
         else { throw TestFailure("no stage-in functions") }
         let d = MTLComputePipelineDescriptor()
         d.computeFunction = f
@@ -98,7 +100,10 @@ struct IndirectDispatchTest: NativeObjectTest {
         input.layouts[1].stepFunction = .threadPositionInGridX
         d.stageInputDescriptor = input
         let make = { () throws -> (MTLComputePipelineState, MTLComputePipelineState) in
-            (try device.makeComputePipelineState(descriptor: d, options: []).0, try device.makeComputePipelineState(function: w))
+            (
+                try device.makeComputePipelineState(descriptor: d, options: []).0,
+                try device.makeComputePipelineState(function: w)
+            )
         }
         let (state, writer) = try make()
         work.objects += [state, writer]

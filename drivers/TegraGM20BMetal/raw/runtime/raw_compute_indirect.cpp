@@ -26,7 +26,8 @@ void ComputeEncoder::inlineFrom(uint64_t dst, uint64_t src, uint32_t bytes)
     room(8);
     p_.inc(NVB1C0_LINE_LENGTH_IN, {bytes, 1, uint32_t(dst >> 32), uint32_t(dst)}, SUBC_COMPUTE);
     *p_.at++ = Push::hdr(5, SUBC_COMPUTE, NVB1C0_LAUNCH_DMA, 1 + (bytes + 3) / 4);
-    *p_.at++ = NVDEF(NVB1C0, LAUNCH_DMA, DST_MEMORY_LAYOUT, PITCH) | NVDEF(NVB1C0, LAUNCH_DMA, COMPLETION_TYPE, FLUSH_ONLY);
+    *p_.at++ =
+        NVDEF(NVB1C0, LAUNCH_DMA, DST_MEMORY_LAYOUT, PITCH) | NVDEF(NVB1C0, LAUNCH_DMA, COMPLETION_TYPE, FLUSH_ONLY);
     cb_.segment(start_, p_.at);
     cb_.segments_.back().flags |= TegraGM20BPushIncomplete;
     cb_.segments_.append({src, (bytes + 3) / 4, TegraGM20BPushNoPrefetch}, false);

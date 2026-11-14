@@ -80,7 +80,9 @@ struct FetchBlendCostTest: HWTest {
             metrics.set("us_per_draw" + variant.suffix, Stats.percentile(perDraw, 0.5), digits: 1)
             let paths = Set(timings.map(\.path)).sorted()
             metrics.set("path" + variant.suffix, paths.joined(separator: ","))
-            if kind == "raw" && paths != ["raw"] { offRaw.append("\(variant.suffix.isEmpty ? "fetch" : variant.suffix): \(paths.joined(separator: ","))") }
+            if kind == "raw" && paths != ["raw"] {
+                offRaw.append("\(variant.suffix.isEmpty ? "fetch" : variant.suffix): \(paths.joined(separator: ","))")
+            }
         }
         if kind == "raw" {
             metrics.set("fetch", RawFacade.fetchRoutes(before: before, after: RawFacade.counters(of: gpu.device)))

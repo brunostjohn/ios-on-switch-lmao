@@ -61,7 +61,8 @@ uint64_t nextTraceId()
 // answered zero, as m2v's encoder answered it, with an error line
 static bool tileShading(const char *selector)
 {
-    for (const char *prefix : {"dispatchThreadsPerTile", "setTile", "setImageblockWidth", "setThreadgroupMemoryLength:offset:"})
+    for (const char *prefix :
+         {"dispatchThreadsPerTile", "setTile", "setImageblockWidth", "setThreadgroupMemoryLength:offset:"})
         if (!strncmp(selector, prefix, strlen(prefix)))
             return true;
     return false;
@@ -245,10 +246,11 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     for (MTLRenderPassAttachmentDescriptor *a : aspects) {
         RMTexture *own = separate ? (RMTexture *)a.texture : t;
         const MTLStoreAction kept = keptStore(a.storeAction);
-        if (a && (a.level || a.slice != slice || slice >= std::max(own->_raw.layers, 1u) || a.depthPlane ||
-                  (own->_raw.memoryless && (kept != MTLStoreActionDontCare || (a.loadAction != MTLLoadActionClear &&
-                                                                               a.loadAction != MTLLoadActionDontCare))) ||
-                  (kept != MTLStoreActionDontCare && kept != MTLStoreActionStore)))
+        if (a &&
+            (a.level || a.slice != slice || slice >= std::max(own->_raw.layers, 1u) || a.depthPlane ||
+             (own->_raw.memoryless && (kept != MTLStoreActionDontCare || (a.loadAction != MTLLoadActionClear &&
+                                                                          a.loadAction != MTLLoadActionDontCare))) ||
+             (kept != MTLStoreActionDontCare && kept != MTLStoreActionStore)))
             return false;
     }
     return true;

@@ -21,7 +21,8 @@ size_t raw_metal_split_rates(char *out, size_t size)
     bool any = false;
     for (size_t w = 0; w < std::size(whys); w++)
         if (whole[w] && at > 0 && size_t(at) < size) {
-            at += snprintf(out + at, size - size_t(at), "%s%s:%llu", any ? "," : "", whys[w], (unsigned long long)whole[w]);
+            at += snprintf(out + at, size - size_t(at), "%s%s:%llu", any ? "," : "", whys[w],
+                           (unsigned long long)whole[w]);
             any = true;
         }
     if (!any && at > 0 && size_t(at) < size)

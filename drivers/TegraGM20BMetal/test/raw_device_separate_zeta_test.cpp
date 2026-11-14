@@ -178,14 +178,24 @@ TEST_F(DeviceSeparateZeta, LoadedAspectsAreCopiedInBeforeTheDrawAndStoredOnesOut
     const auto after = [&](auto pred) {
         return std::any_of(drawAt, s.events.end(), pred);
     };
-    EXPECT_TRUE(before([&](const Event &e) { return !e.draw && e.from == depth.va && e.to == s.zeta; }))
-        << "depth into the backing before the draw";
-    EXPECT_TRUE(before([&](const Event &e) { return !e.draw && e.from == stencil.va; })) << "stencil read before the draw";
-    EXPECT_TRUE(after([&](const Event &e) { return !e.draw && e.from == s.zeta && e.to == depth.va; }))
-        << "depth back after the draw";
-    EXPECT_TRUE(after([&](const Event &e) { return !e.draw && e.to == stencil.va; })) << "stencil back after the draw";
-    EXPECT_FALSE(after([&](const Event &e) { return !e.draw && e.from == depth.va; }));
-    EXPECT_FALSE(before([&](const Event &e) { return !e.draw && e.to == depth.va; }));
+    EXPECT_TRUE(before([&](const Event &e) {
+        return !e.draw && e.from == depth.va && e.to == s.zeta;
+    })) << "depth into the backing before the draw";
+    EXPECT_TRUE(before([&](const Event &e) {
+        return !e.draw && e.from == stencil.va;
+    })) << "stencil read before the draw";
+    EXPECT_TRUE(after([&](const Event &e) {
+        return !e.draw && e.from == s.zeta && e.to == depth.va;
+    })) << "depth back after the draw";
+    EXPECT_TRUE(after([&](const Event &e) {
+        return !e.draw && e.to == stencil.va;
+    })) << "stencil back after the draw";
+    EXPECT_FALSE(after([&](const Event &e) {
+        return !e.draw && e.from == depth.va;
+    }));
+    EXPECT_FALSE(before([&](const Event &e) {
+        return !e.draw && e.to == depth.va;
+    }));
 }
 
 TEST_F(DeviceSeparateZeta, AnAspectNeitherLoadedNorStoredIsLeftAsItIs)
@@ -194,7 +204,9 @@ TEST_F(DeviceSeparateZeta, AnAspectNeitherLoadedNorStoredIsLeftAsItIs)
     ASSERT_EQ(draw(false, true, false, true, s), "");
     for (const Event &e : s.events)
         EXPECT_FALSE(touches(e, depth)) << "a copy of the depth texture neither loaded nor stored";
-    EXPECT_TRUE(std::any_of(s.events.begin(), s.events.end(), [&](const Event &e) { return touches(e, stencil); }));
+    EXPECT_TRUE(std::any_of(s.events.begin(), s.events.end(), [&](const Event &e) {
+        return touches(e, stencil);
+    }));
     ASSERT_EQ(draw(false, false, false, false, s), "");
     for (const Event &e : s.events)
         EXPECT_FALSE(touches(e, depth) || touches(e, stencil));

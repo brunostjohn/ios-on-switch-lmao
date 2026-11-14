@@ -79,7 +79,8 @@ uint32_t switch_mmio_model_read32(uintptr_t address)
 void switch_mmio_model_write32(uintptr_t address, uint32_t value)
 {
 	for (u32 i = 0; i < chan_count; i++)
-		if (hooks.doorbell && address == (uintptr_t)&chans[i]->userd[SWITCH_EXEC_USERD_GP_PUT / 4])
+		if (hooks.doorbell &&
+		    address == (uintptr_t)&chans[i]->userd[SWITCH_EXEC_USERD_GP_PUT / 4])
 			hooks.doorbell(hooks.context, chans[i], value);
 	*(volatile uint32_t *)address = value;
 }

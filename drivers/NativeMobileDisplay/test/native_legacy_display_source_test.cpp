@@ -555,7 +555,6 @@ TEST(FrameEndSource, ValidateSwapTouchesNoGateState)
     EXPECT_FALSE(observed.Has("native_legacy_swap_stage("));
 }
 
-
 // Core Animation never arms the vsync (its frame clock is its own), so the frame end stands in for the frame timeline as it
 // does for the GPU deadline: each swap's timeline then carries the vsync before it, the slow-frame line its phase, and
 // render.c a frame begin for SwitchFrameRender (boot 21 had none, and every SwitchFrame line read "origin swap").

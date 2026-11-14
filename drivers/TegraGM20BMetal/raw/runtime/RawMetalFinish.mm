@@ -14,7 +14,8 @@ static void reportLongSpans(uint32_t stamp, uint64_t gpuNs)
         char text[192];
         raw::formatSpan(text, sizeof text, s);
         strlcpy(note.text, text, sizeof note.text);
-        os_log(rawLog(), "raw: long span %{public}s in a %llu us command buffer", text, (unsigned long long)(gpuNs / 1000));
+        os_log(rawLog(), "raw: long span %{public}s in a %llu us command buffer", text,
+               (unsigned long long)(gpuNs / 1000));
         gRM->raw->kernelDebugCall(TegraGM20BMethodPaths, &note, sizeof note, nullptr, 0);
     }
 }

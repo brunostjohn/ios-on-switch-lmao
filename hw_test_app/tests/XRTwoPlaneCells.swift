@@ -44,7 +44,8 @@ struct XRTwoPlaneCells {
             encoder.setRenderPipelineState(draw)
             for b in Self.blends {
                 let r = b.rect
-                GPU.draw(encoder, corners: GPU.pixelQuad(r.0, r.1, r.2, r.3, width: width, height: height), color: b.color)
+                GPU.draw(
+                    encoder, corners: GPU.pixelQuad(r.0, r.1, r.2, r.3, width: width, height: height), color: b.color)
             }
             encoder.endEncoding()
         }
@@ -54,7 +55,9 @@ struct XRTwoPlaneCells {
             let half = SIMD4<Float16>(b.color)
             let source = SIMD4<Double>(Double(half.x), Double(half.y), Double(half.z), Double(half.w))
             let r = b.rect
-            for y in r.1..<r.3 { for x in r.0..<r.2 { want[y * width + x] = XRTwoPlaneModel.over(source, want[y * width + x]) } }
+            for y in r.1..<r.3 {
+                for x in r.0..<r.2 { want[y * width + x] = XRTwoPlaneModel.over(source, want[y * width + x]) }
+            }
         }
         let (wrong, offByOne) = XRTwoPlaneModel.apart(XRTwoPlaneTest.planes(buffer), want)
         return (wrong, offByOne, interlocked)

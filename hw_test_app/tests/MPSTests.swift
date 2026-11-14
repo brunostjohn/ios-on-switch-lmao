@@ -40,7 +40,8 @@ struct MPSBlurTest: HWTest {
                 ("flat areas stay 128", flat.allSatisfy { abs($0 - 128) <= 1 }),
                 ("the spike spreads (128 < peak < 255)", peak > 128 && peak < 255),
                 ("the kernel is symmetric", symmetric),
-            ], metrics, proof: gpu.proof).onRawPath(gpu)
+            ], metrics, proof: gpu.proof
+        ).onRawPath(gpu)
     }
 }
 

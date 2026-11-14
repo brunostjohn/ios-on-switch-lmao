@@ -26,9 +26,9 @@
             NSError *error = nil;
             _compatibility =
                 [RM_M2V(NeedComputeStateTwin) newComputePipelineStateWithDescriptor:twinComputeDescriptor(_direct)
-                                                                                options:MTLPipelineOptionNone
-                                                                             reflection:nil
-                                                                                  error:&error];
+                                                                            options:MTLPipelineOptionNone
+                                                                         reflection:nil
+                                                                              error:&error];
             if (!_compatibility)
                 once([NSString stringWithFormat:@"a deferred compute pipeline could not be created: %@", error]);
         }
@@ -129,8 +129,7 @@ static bool archivesAnswer(RMComputeState *s, RMFunction *f, MTLPipelineOption &
 static bool m2vAnswers(RMComputeState *s, MTLPipelineOption options,
                        MTLAutoreleasedComputePipelineReflection *reflection, NSError **error)
 {
-    id<MTLDevice> m2v =
-        reflection ? RM_M2V(NeedComputeStateReflection) : RM_M2V(NeedComputeStateUnpacked);
+    id<MTLDevice> m2v = reflection ? RM_M2V(NeedComputeStateReflection) : RM_M2V(NeedComputeStateUnpacked);
     MTLComputePipelineDescriptor *twin = m2v ? twinComputeDescriptor(s->_direct) : nil;
     if (!twin) {
         if (error)

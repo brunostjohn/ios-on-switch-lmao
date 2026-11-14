@@ -24,8 +24,11 @@ struct SeparateDepthStencilTest: HWTest {
         let colour = try gpu.texture(.rgba8Unorm, n, n)
         let depth = try gpu.texture(.depth32Float, n, n, usage: [.renderTarget])
         let stencil = try gpu.texture(.stencil8, n, n, usage: [.renderTarget])
-        let state = try gpu.render(fragment: "solid_fragment", format: .rgba8Unorm, depth: .depth32Float, stencil: .stencil8)
-        func depthStencil(_ compare: MTLCompareFunction, write: Bool, stencil: MTLCompareFunction, replace: Bool)
+        let state = try gpu.render(
+            fragment: "solid_fragment", format: .rgba8Unorm, depth: .depth32Float, stencil: .stencil8)
+        func depthStencil(
+            _ compare: MTLCompareFunction, write: Bool, stencil: MTLCompareFunction, replace: Bool
+        )
             throws -> MTLDepthStencilState
         {
             let d = MTLDepthStencilDescriptor()
@@ -98,7 +101,9 @@ struct SeparateDepthStencilTest: HWTest {
             }
         }
         metrics.set("colour_wrong", colourWrong)
-        metrics.set("colour_left_right", "\(pixels[4 * 2]).\(pixels[4 * 2 + 1])/\(pixels[4 * (n - 2)]).\(pixels[4 * (n - 2) + 1])")
+        metrics.set(
+            "colour_left_right",
+            "\(pixels[4 * 2]).\(pixels[4 * 2 + 1])/\(pixels[4 * (n - 2)]).\(pixels[4 * (n - 2) + 1])")
         if colourWrong != 0 { failures.append("\(colourWrong) colour pixels wrong") }
         let depthBytes = try gpu.buffer(n * n * 4)
         let stencilBytes = try gpu.buffer(n * n)
