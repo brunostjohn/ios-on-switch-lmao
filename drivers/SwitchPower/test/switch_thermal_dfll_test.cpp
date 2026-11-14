@@ -285,7 +285,8 @@ TEST(ThermalDfllSource, SwitchThermalFailsOneStepAndNeverLatches)
     EXPECT_NE(raise.find("if (!perfTop) {\n        perfSettled = true;"), std::string::npos);
     EXPECT_NE(raise.find("if (dfllMode)\n            return false;"), std::string::npos);
     EXPECT_EQ(raise.find("dfllMode = "), std::string::npos);
-    const std::string fired = switch_ios::test::Body(source, "void SwitchThermal::governorFired(");
+    const std::string fired = switch_ios::test::Body(source, "void SwitchThermal::governorFired(") +
+                              switch_ios::test::Body(source, "void SwitchThermal::applyGovernor(");
     EXPECT_NE(fired.find("dfllRefused(hz, err)"), std::string::npos);
     EXPECT_EQ(fired.find("setTimeoutMS"), std::string::npos);
     EXPECT_NE(switch_ios::test::Body(source, "void SwitchThermal::resume(").find("resumeDfll()"), std::string::npos);
