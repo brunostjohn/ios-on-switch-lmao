@@ -22,7 +22,7 @@ struct ImportBesideSubmitsTest: GPUPathTest {
     let name = "Command buffers are scheduled without waiting for another thread's IOSurface imports"
     let counters = ["submit_jobs"]
     static let width = 720, height = 1280, rowBytes = 3072, imports = 16, quiet = 160, minimumBeside = 40
-    static let calibrations = 3, fillBytes = 256, shortestWireMs = 0.5
+    static let calibrations = 3, fillBytes = 256, shortestWireMs = 0.5, warmFills = 8
     static let boImportGpuReads: UInt32 = 1
 
     /// One timed span on DispatchTime's clock, in ms
@@ -99,6 +99,7 @@ struct ImportBesideSubmitsTest: GPUPathTest {
             throw TestFailure("no private buffer")
         }
         let (wireMs, firstMs, secondMs) = try Self.wiring(connection)
+        for _ in 0..<Self.warmFills { _ = try Self.submit(gpu, target) }
         let quiet = try (0..<Self.quiet).map { _ in try Self.submit(gpu, target) }
         let importer = Importer()
         importer.start(gpu.device)
