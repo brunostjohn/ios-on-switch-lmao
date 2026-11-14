@@ -103,6 +103,10 @@ extern "C" void *tgm_pool_alloc(uint64_t bytes, uint64_t, uint64_t *pa)
 	return poolBytes;
 }
 
+extern "C" void tgm_stats_unlocked(enum tgm_unlocked, uint64_t)
+{
+}
+
 extern "C" void tgm_pool_free(void *va, uint64_t, uint64_t)
 {
 	++poolFrees;

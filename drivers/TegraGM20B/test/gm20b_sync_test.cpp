@@ -98,13 +98,14 @@ protected:
 }  // namespace
 
 extern "C" {
-void mutex_lock(struct mutex *m)
+// The kernel mutex's stand-in locks and unlocks in separate calls, which thread-safety analysis cannot pair.
+__attribute__((no_thread_safety_analysis)) void mutex_lock(struct mutex *m)
 {
 	impl(m).lock();
 	++held;
 }
 
-void mutex_unlock(struct mutex *m)
+__attribute__((no_thread_safety_analysis)) void mutex_unlock(struct mutex *m)
 {
 	--held;
 	impl(m).unlock();

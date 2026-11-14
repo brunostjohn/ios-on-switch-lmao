@@ -166,6 +166,10 @@ extern "C" int tgm_vm_new(tgm_vm **out)
 	return 0;
 }
 
+extern "C" void tgm_stats_unlocked(enum tgm_unlocked, uint64_t)
+{
+}
+
 extern "C" void tgm_vm_del(tgm_vm **vm)
 {
 	*vm = nullptr;
