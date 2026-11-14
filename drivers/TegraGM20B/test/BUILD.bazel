@@ -1059,11 +1059,37 @@ host_test(
     ],
 )
 
+# A job whose records go up at exec's point of no return kicks with none of its backings' locks held: the interrupt
+# pass's scanout lease release, the display's next snapshot and a CPU lock trap go on during the kick, and the same
+# actors run in a loop under ThreadSanitizer.
+host_test(
+    name = "switch_gpu_kick_race_test",
+    srcs = [
+        "switch_gpu_backing_completion_stub.cpp",
+        "switch_gpu_dependency_stub.cpp",
+        "switch_gpu_kick_race_test.cpp",
+        "switch_gpu_submit_stubs.h",
+        "//drivers/TegraGM20B:SwitchGpuBridge.h",
+        "//drivers/TegraGM20B:SwitchGpuPresentTokens.h",
+        "//drivers/TegraGM20B:SwitchGpuScanoutSnapshot.h",
+        "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
+        "//drivers/TegraGM20B:SwitchGpuTimeline.cpp",
+        "//drivers/TegraGM20B:SwitchGpuTimeline.h",
+        "//drivers/TegraGM20B:SwitchGpuTimelineInternal.h",
+        "//drivers/TegraGM20B:SwitchGpuTimelineRefs.cpp",
+    ] + BACKING_SRCS + BACKING_HDRS,
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+    deps = [":coherency_kernel"],
+)
+
 host_test(
     name = "gm20b_submit_locks_source_test",
     srcs = ["gm20b_submit_locks_source_test.cpp"],
     data = [
         "//drivers/TegraGM20B:TegraGM20BUserClientJobSubmit.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientSubmit.cpp",
         "//drivers/TegraGM20B:gpu_sources",
     ],
 )
@@ -2048,6 +2074,21 @@ host_test(
         "switch_gpu_backing_fixture.h",
         "switch_gpu_promise_backing_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuPresentTokens.h",
+        "//drivers/TegraGM20B:SwitchGpuWriterPromise.cpp",
+    ],
+    deps = [
+        ":backing",
+        ":coherency_kernel",
+    ],
+)
+
+# The writer promises' sleepers list: with the registry it takes no locks in a cycle (the host IOLock records the
+# order), and a waiting snapshot that orders behind a promise on the GPU wakes when its CPU writer leaves.
+host_test(
+    name = "switch_gpu_promise_sleepers_test",
+    srcs = [
+        "switch_gpu_backing_fixture.h",
+        "switch_gpu_promise_sleepers_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuWriterPromise.cpp",
     ],
     deps = [

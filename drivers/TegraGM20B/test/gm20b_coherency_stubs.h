@@ -3,14 +3,19 @@
 // concurrency test runs traps against releases on two threads), IONew/IODelete, IOLog counted, and tgm_cpu_clean_pages
 // recording each call's pages.
 #pragma once
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <map>
 #include <mutex>
+#include <set>
 #include <thread>
+#include <utility>
 #include <vector>
 
 class IOUserClient
@@ -54,6 +59,74 @@ inline IOLock *IOLockAlloc()
 	return new IOLock;
 }
 
+// While a test records (ioLockOrder().recording), every IOLock a thread takes while it holds others adds the edges
+// held -> taken. A cycle among them is a lock-order inversion, whether or not the run happened to deadlock.
+struct IOLockOrder {
+	std::mutex m;
+	std::set<std::pair<const IOLock *, const IOLock *>> edges;
+	std::atomic<bool> recording{false};
+};
+
+inline IOLockOrder &ioLockOrder()
+{
+	static IOLockOrder order;
+	return order;
+}
+
+inline std::vector<const IOLock *> &ioLocksHeld()
+{
+	static thread_local std::vector<const IOLock *> held;
+	return held;
+}
+
+inline void ioLockOrderTake(const IOLock *lock)
+{
+	if (ioLockOrder().recording.load(std::memory_order_relaxed)) {
+		std::lock_guard<std::mutex> hold(ioLockOrder().m);
+		for (const IOLock *held : ioLocksHeld())
+			ioLockOrder().edges.insert({held, lock});
+	}
+	ioLocksHeld().push_back(lock);
+}
+
+inline void ioLockOrderDrop(const IOLock *lock)
+{
+	auto &held = ioLocksHeld();
+	const auto at = std::find(held.begin(), held.end(), lock);
+	if (at != held.end())
+		held.erase(at);
+}
+
+// The locks along one cycle of the recorded edges; empty when there is none.
+inline std::vector<const IOLock *> ioLockOrderCycle()
+{
+	std::lock_guard<std::mutex> hold(ioLockOrder().m);
+	std::map<const IOLock *, std::vector<const IOLock *>> next;
+	for (const auto &edge : ioLockOrder().edges)
+		next[edge.first].push_back(edge.second);
+	std::map<const IOLock *, int> state;
+	std::vector<const IOLock *> path;
+	const std::function<bool(const IOLock *)> visit = [&](const IOLock *at) {
+		state[at] = 1;
+		path.push_back(at);
+		for (const IOLock *to : next[at]) {
+			if (state[to] == 1) {
+				path.erase(path.begin(), std::find(path.begin(), path.end(), to));
+				return true;
+			}
+			if (!state[to] && visit(to))
+				return true;
+		}
+		state[at] = 2;
+		path.pop_back();
+		return false;
+	};
+	for (const auto &entry : next)
+		if (!state[entry.first] && visit(entry.first))
+			return path;
+	return {};
+}
+
 // The CPU a thread runs on (a test may move it), and its preemption level, which no IOLock may be taken under
 inline int &hostCpu()
 {
@@ -84,6 +157,12 @@ extern "C" inline void _enable_preemption(void)
 
 inline void IOLockFree(IOLock *lock)
 {
+	if (ioLockOrder().recording.load(std::memory_order_relaxed)) {
+		std::lock_guard<std::mutex> hold(ioLockOrder().m);
+		auto &edges = ioLockOrder().edges;
+		for (auto at = edges.begin(); at != edges.end();)
+			at = at->first == lock || at->second == lock ? edges.erase(at) : ++at;
+	}
 	delete lock;
 }
 
@@ -98,6 +177,7 @@ inline void IOLockLock(IOLock *lock) __attribute__((no_thread_safety_analysis))
 		std::fputs("IOLockLock: preemption is off\n", stderr);
 		std::abort();
 	}
+	ioLockOrderTake(lock);
 	lock->m.lock();
 	lock->owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
 	++lock->takes;
@@ -106,6 +186,7 @@ inline void IOLockLock(IOLock *lock) __attribute__((no_thread_safety_analysis))
 
 inline void IOLockUnlock(IOLock *lock) __attribute__((no_thread_safety_analysis))
 {
+	ioLockOrderDrop(lock);
 	lock->owner.store(std::thread::id(), std::memory_order_relaxed);
 	lock->m.unlock();
 }
@@ -113,10 +194,12 @@ inline void IOLockUnlock(IOLock *lock) __attribute__((no_thread_safety_analysis)
 inline void IOLockSleep(IOLock *lock, void *, int) __attribute__((no_thread_safety_analysis))
 {
 	std::unique_lock<std::mutex> held(lock->m, std::adopt_lock);
+	ioLockOrderDrop(lock);
 	lock->owner.store(std::thread::id(), std::memory_order_relaxed);
 	lock->condition.wait(held);
 	lock->owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
 	held.release();
+	ioLockOrderTake(lock);
 }
 
 inline void IOLockWakeup(IOLock *lock, void *, bool)
