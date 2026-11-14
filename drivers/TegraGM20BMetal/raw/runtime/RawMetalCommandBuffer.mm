@@ -871,7 +871,7 @@ void rmPoolCommandBuffers()
         if (_twin)
             return _twin;
     }
-    return twinPublish(self, _twin, [RM_M2V("a command queue for a command buffer replayed on it") newCommandQueue]);
+    return twinPublish(self, _twin, [RM_M2V(NeedReplayQueue) newCommandQueue]);
 }
 
 - (id<MTLCommandBuffer>)commandBuffer
