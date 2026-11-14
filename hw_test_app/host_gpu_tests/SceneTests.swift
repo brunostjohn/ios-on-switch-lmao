@@ -30,6 +30,12 @@ final class SceneTests: XCTestCase {
         }
     }
 
+    func testKernelShadowOnThisMac() async throws {
+        let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.raw.kernel_shadow" })
+        let result = try await scene.run(makeGPU())
+        XCTAssertTrue(result.passed, result.reasons(limit: 8).joined(separator: "; "))
+    }
+
     func testFramebufferFetchOnThisMac() async throws {
         let scene = try XCTUnwrap(Scenes.all.first { $0.id == "gpu.raw.framebuffer_fetch" })
         let result = try await scene.run(makeGPU())
