@@ -220,10 +220,10 @@ inline uint32_t intid(unsigned bus)
 
 // I2C5 runs in MULTI_MASTER_MODE unless switch-no-dfll: the CPU may go on the DFLL (SwitchThermal's governed
 // default), whose integrated I2C master writes VDD_CPU over the same PWR_I2C pads. L4T sets
-// the bit on every T210 controller (i2c-tegra.c tegra_i2c_init, tegra210_i2c_hw.has_multi_master_mode). The two masters
-// never meet on the wire: CL-DVFS grants PWR_I2C to one of them at a time, round robin (Tegra X1 TRM 35.4), and keeps
-// granting while it is clocked, which TegraDFLL holds whenever it is out of reset. So a lost arbitration is a fault: one
-// line and that transfer fails, with no bus clear (it would cut into the other master's transfer).
+// the bit on every T210 controller (i2c-tegra.c tegra_i2c_init, tegra210_i2c_hw.has_multi_master_mode). CL-DVFS grants
+// PWR_I2C to one of the two masters at a time, round robin (Tegra X1 TRM 35.4), while it is clocked, which TegraDFLL
+// holds whenever it is out of reset; so a lost arbitration is not expected and is not repeated: one line and that
+// transfer fails, with no bus clear (it would cut into the other master's transfer).
 bool multiMasterBus(unsigned bus)
 {
     unsigned noDfll = 0;
