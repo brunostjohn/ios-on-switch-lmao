@@ -19,10 +19,18 @@ struct AttributeFields {
     uint64_t format = 0, offset = 0, buffer = 0, stride = 0, step = 0, rate = 0;
 };
 
+// A tessellation state's tessellator state (MTLPatchType of its vertex function, which Metal reads off the function)
+struct TessellationFields {
+    uint64_t patch = 0, partition = 0, factorFormat = 0, factorStep = 0, winding = 0, indexType = 0, maxFactor = 16,
+             factorScale = 0;
+};
+
 struct PipelineFields {
     uint64_t samples = 1, topology = 0, depthFormat = 0, stencilFormat = 0, rasterization = 1;
     ColorFields color[8];
     AttributeFields attributes[31];
+    TessellationFields tessellation;
+    uint64_t amplification = 1;
 };
 
 // The framework a library at `path` is the default library of ("RenderBox" for .../RenderBox.framework/default.metallib),

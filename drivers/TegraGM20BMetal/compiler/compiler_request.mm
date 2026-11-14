@@ -2,6 +2,7 @@
 // See compiler_request.h.
 #import "compiler_request.h"
 
+#include <algorithm>
 #include <limits.h>
 #include <stdlib.h>
 #include "../raw/runtime/RawCompileRequest.h"
@@ -76,6 +77,23 @@ bool kernelKey(Prepared &p, const std::vector<std::map<std::string, raw::AirHash
     return true;
 }
 
+// Where two keys first differ, as each one's text there: the rest of the longer where one ends first, else the field
+// (space to space) around that point
+std::string differingField(const std::string &asked, const std::string &made)
+{
+    size_t at = 0;
+    while (at < asked.size() && at < made.size() && asked[at] == made[at])
+        ++at;
+    const bool ended = at == asked.size() || at == made.size();
+    const size_t space = at && !ended ? asked.rfind(' ', at - 1) : std::string::npos;
+    const size_t from = ended ? at : space == std::string::npos ? 0 : space + 1;
+    const auto field = [from, at, ended](const std::string &key) {
+        const size_t end = ended ? std::string::npos : key.find(' ', at);
+        return from >= key.size() ? std::string() : key.substr(from, std::min<size_t>(end - from, 80));
+    };
+    return "the request's '" + field(asked) + "' where its fields give '" + field(made) + "'";
+}
+
 }  // namespace
 
 bool SystemLibraries::resolve(const std::string &root, const std::string &path, std::string &real, std::string &why)
@@ -137,7 +155,10 @@ bool prepare(const std::string &bytes, uint64_t stack, SystemLibraries &system, 
     if (!(kernel ? kernelKey(p, air, stack, why) : renderKey(p, air, stack, why)))
         return false;
     if (p.key.key != p.request.key)
-        return why = "a request whose fields give another key than its own: " + p.key.key.substr(0, 300), false;
+        return why =
+                   "a request whose fields give another key than its own: " + differingField(p.request.key, p.key.key) +
+                   " | " + p.key.key.substr(0, 300),
+               false;
     p.name = raw::storeName(p.key, p.request, identities);
     out = std::move(p);
     return true;

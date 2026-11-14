@@ -108,6 +108,9 @@ int32_t render(const Prepared &p, const Libraries &libraries, raw::Direct &direc
     raw::ProbeTextures textures;
     textures.cubic = p.request.cubic;
     textures.fragmentTests = p.request.fragmentTests;
+    textures.twoPlane = p.request.twoPlane;
+    textures.xrSlots = p.request.xrSlots;
+    textures.written = p.request.written;
     raw::RuntimeRecord record;
     const raw::CompileOutcome outcome = direct.make(d, p.packKey, record, why, textures);
     if (outcome != raw::CompileOutcome::Failed)

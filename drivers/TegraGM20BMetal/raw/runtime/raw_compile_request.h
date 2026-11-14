@@ -14,6 +14,7 @@
 #include "raw_cache.h"
 #include "raw_cubic.h"
 #include "raw_pipeline_fields.h"
+#include "raw_written_textures.h"
 
 namespace raw {
 
@@ -86,6 +87,9 @@ struct CompileRequest {
     std::vector<RequestLibrary> libraries;
     CubicBinds cubic;
     uint8_t fragmentTests = 0;
+    bool twoPlane = false;                // its " | xr2p" variant (raw_xr_pass.h)
+    uint16_t xrSlots = 0;                 // its " | xrs=" variant's sampled two-plane slots
+    std::vector<WrittenTexture> written;  // its " | wtex=" variant's written textures (raw_written_textures.h)
     KernelRequest kernel;
     std::string key;  // the CacheKey text the client made (a kernel's starts "kernel | ")
 };

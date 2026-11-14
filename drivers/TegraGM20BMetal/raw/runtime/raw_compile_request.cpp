@@ -53,6 +53,37 @@ void writeKernel(Writer &w, const KernelRequest &k)
 
 // After everything else, so a request logged before kernels carried it reads as one without: the store name leaves it out
 // (the key names it)
+// What a request carries past its kernel's stage input, last as that is (a request logged before these reads as one
+// without): a render state's tessellator state and amplification count, and its variant's forms
+void writeLater(Writer &w, const CompileRequest &r)
+{
+    w.bytes(&r.fields.tessellation, sizeof r.fields.tessellation);
+    w.value(r.fields.amplification);
+    w.value(uint8_t(r.twoPlane));
+    w.value(r.xrSlots);
+    w.value(uint32_t(r.written.size()));
+    for (const WrittenTexture &t : r.written) {
+        w.value(t.slot);
+        w.value(t.format);
+    }
+}
+
+bool readLater(Reader &r, CompileRequest &q)
+{
+    r.bytes(&q.fields.tessellation, sizeof q.fields.tessellation);
+    q.fields.amplification = r.value<uint64_t>();
+    q.twoPlane = r.value<uint8_t>() != 0;
+    q.xrSlots = r.value<uint16_t>();
+    const uint32_t written = r.value<uint32_t>();
+    if (!r.ok() || written > kRequestBindLimit)
+        return false;
+    for (uint32_t i = 0; i < written; ++i) {
+        const uint8_t slot = r.value<uint8_t>();
+        q.written.push_back({slot, r.value<uint32_t>()});
+    }
+    return r.ok();
+}
+
 void writeStageIn(Writer &w, const StageInFields &in)
 {
     for (const AttributeFields &a : in.attributes)
@@ -191,6 +222,7 @@ std::string encodeRequest(const CompileRequest &r)
     w.value(r.fragmentTests);
     writeKernel(w, r.kernel);
     writeStageIn(w, r.kernel.stageIn);
+    writeLater(w, r);
     return w.out;
 }
 
@@ -248,6 +280,8 @@ bool decodeRequest(const std::string &bytes, CompileRequest &out)
     readKernel(r, q.kernel);
     if (r.ok() && r.at() < bytes.size())
         readStageIn(r, q.kernel.stageIn);
+    if (r.ok() && r.at() < bytes.size() && !readLater(r, q))
+        return false;
     if (!r.ok() || r.at() != bytes.size() || !sane(q))
         return false;
     out = std::move(q);

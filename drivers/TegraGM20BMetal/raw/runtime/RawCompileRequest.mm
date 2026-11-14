@@ -2,6 +2,7 @@
 // See RawCompileRequest.h.
 #import "RawCompileRequest.h"
 #import "RawPipelineKey.h"
+#include "raw_xr_pass.h"
 
 #include <cstdlib>
 
@@ -64,6 +65,15 @@ PipelineFields fieldsOf(MTLRenderPipelineDescriptor *d)
             MTLVertexBufferLayoutDescriptor *l = v.layouts[a.bufferIndex < 31 ? a.bufferIndex : 0];
             f.attributes[i] = {a.format, a.offset, a.bufferIndex, l.stride, l.stepFunction, l.stepRate};
         }
+    f.tessellation = {d.vertexFunction ? uint64_t(d.vertexFunction.patchType) : 0,
+                      d.tessellationPartitionMode,
+                      d.tessellationFactorFormat,
+                      d.tessellationFactorStepFunction,
+                      d.tessellationOutputWindingOrder,
+                      d.tessellationControlPointIndexType,
+                      d.maxTessellationFactor,
+                      d.tessellationFactorScaleEnabled ? 1u : 0u};
+    f.amplification = d.maxVertexAmplificationCount;
     return f;
 }
 
@@ -103,6 +113,28 @@ void applyFields(const PipelineFields &f, MTLRenderPipelineDescriptor *d)
         l.stepRate = a.rate;
     }
     d.vertexDescriptor = v;
+    const TessellationFields &t = f.tessellation;
+    d.tessellationPartitionMode = MTLTessellationPartitionMode(t.partition);
+    d.tessellationFactorFormat = MTLTessellationFactorFormat(t.factorFormat);
+    d.tessellationFactorStepFunction = MTLTessellationFactorStepFunction(t.factorStep);
+    d.tessellationOutputWindingOrder = MTLWinding(t.winding);
+    d.tessellationControlPointIndexType = MTLTessellationControlPointIndexType(t.indexType);
+    d.maxTessellationFactor = t.maxFactor;
+    d.tessellationFactorScaleEnabled = t.factorScale != 0;
+    d.maxVertexAmplificationCount = f.amplification;
+}
+
+// pipelineKey's tessellator segment, which it reads off the vertex function's patch type: a descriptor made of fields
+// has no function
+static std::string tessellationSegment(const TessellationFields &t)
+{
+    if (t.patch == MTLPatchTypeNone)
+        return std::string();
+    char segment[160];
+    snprintf(segment, sizeof segment, "t=%lu:%lu:%lu:%lu:%lu:%lu:%d ", (unsigned long)t.partition,
+             (unsigned long)t.factorFormat, (unsigned long)t.factorStep, (unsigned long)t.winding,
+             (unsigned long)t.indexType, (unsigned long)t.maxFactor, (int)(t.factorScale != 0));
+    return segment;
 }
 
 StageInFields stageInOf(MTLStageInputOutputDescriptor *in)
@@ -165,11 +197,19 @@ std::string requestPackKey(const CompileRequest &r, bool &own)
     MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
     applyFields(r.fields, d);
     std::string key = pipelineKey(d, &v, &f, linked, framework);
+    if (const std::string tess = tessellationSegment(r.fields.tessellation); !tess.empty()) {
+        const size_t amp = key.find("amp="), stages = key.find(" | v ");
+        key.insert(amp != std::string::npos && amp < stages ? amp : stages, tess);
+    }
     if (!r.cubic.empty())
         key += r.cubic.key();
     if (r.fragmentTests)
         key += " | tests=" + std::to_string(r.fragmentTests);
-    return key;
+    if (r.twoPlane)
+        key += kXrPlanesVariant;
+    if (r.xrSlots)
+        key += xrSampledVariant(r.xrSlots);
+    return key + writtenVariant(r.written);
 }
 
 }  // namespace raw

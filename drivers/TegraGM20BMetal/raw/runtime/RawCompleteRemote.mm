@@ -88,6 +88,9 @@ bool Completion::renderRequest(const Ask &a, const CacheKey &k, bool bytes, Comp
     r.fields = fieldsOf(d);
     r.cubic = a.cubic;
     r.fragmentTests = a.fragmentTests;
+    r.twoPlane = a.twoPlane;
+    r.xrSlots = a.xrSlots;
+    r.written = a.written;
     std::vector<LibraryIdentity> ids;
     std::map<const LibrarySource *, uint32_t> seen;
     @autoreleasepool {
