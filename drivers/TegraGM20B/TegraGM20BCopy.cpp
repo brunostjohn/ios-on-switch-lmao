@@ -9,6 +9,7 @@
 #include "SwitchGpuCopyMappings.h"
 #include "SwitchGpuEventClient.h"
 #include "SwitchGpuKqueue.h"
+#include "SwitchGpuSubmitTurn.h"
 
 namespace
 {
@@ -27,6 +28,7 @@ struct Job {
 struct Copier {
 	IOLock *lock;
 	SwitchGpuKqueue space;
+	SwitchGpuSubmitTurn turn;
 	thread_call_t retirement;
 	bool semanticFailed, replaceChannel;
 	uint32_t waitingSources, order;
@@ -237,9 +239,10 @@ int submit(Job &job, const tgm_push &push, switch_gpu_backing *source,
 	if (!result)
 		result = queue.events.sequence(queue.authority);
 	switch_gpu_backing_transaction transaction{};
-	switch_gpu_chan_submit_enter(queue.space.channel);
+	tgm_chan *const chan = queue.space.channel;
+	switch_gpu_chan_submit_enter(chan);
 	for (; !result;) {
-		switch_gpu_chan_next_token(queue.space.channel, &job.completion);
+		switch_gpu_chan_next_token(chan, &job.completion);
 		switch_gpu_backing_use uses[] = {{source, SWITCH_GPU_BACKING_READ, 0},
 						 {destination, SWITCH_GPU_BACKING_WRITE, 0}};
 		const auto *guards = ownership ? ownership->guards : nullptr;
@@ -278,8 +281,7 @@ int submit(Job &job, const tgm_push &push, switch_gpu_backing *source,
 		uint32_t sequence = 0;
 		if (!result)
 			result = switch_gpu_chan_exec_visibility(
-				queue.space.channel, &push, 1, queue.dependencies, count, &sequence,
-				nullptr,
+				chan, &push, 1, queue.dependencies, count, &sequence, nullptr,
 				SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT |
 					SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY |
 					(transaction.host_written ? SWITCH_GPU_SUBMIT_HOST_WRITTEN
@@ -294,8 +296,9 @@ int submit(Job &job, const tgm_push &push, switch_gpu_backing *source,
 		switch_gpu_backing_abort(&transaction);
 		if (result != -11)
 			break;
-		result = switch_gpu_chan_wait_submission_room(queue.space.channel, &push, 1, count,
-							      nullptr);
+		result = queue.turn.waitForRoom(queue.lock, [&] {
+			return switch_gpu_chan_wait_submission_room(chan, &push, 1, count, nullptr);
+		});
 	}
 	switch_gpu_backing_abort(&transaction);
 	queue.events.clear();
@@ -326,6 +329,7 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(
 	if (!initialize())
 		return -12;
 	IOLockLock(queue.lock);
+	queue.turn.enter(queue.lock);
 	uint32_t slot = 0;
 	while (slot < Jobs && queue.jobs[slot].busy)
 		++slot;

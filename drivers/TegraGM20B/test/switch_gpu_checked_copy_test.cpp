@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <future>
 #include <map>
 #include <memory>
 #include "switch_gpu_copy_stubs.h"
@@ -41,7 +42,8 @@ constexpr uint64_t PoolPa = 0x100000;
 tgm_vm space;
 tgm_chan gpu;
 volatile uint32_t fence;
-unsigned maps, unmaps, execs, commits, aborts, tokenRefs, roomWaits, adoptions, binds;
+unsigned maps, unmaps, execs, commits, aborts, tokenRefs, roomWaits, roomWaitsUnderQueueLock,
+	adoptions, binds;
 // Each channel's tokens carry its id; a replaced channel keeps answering for them.
 uint32_t channelId;
 unsigned channelsMade, resets;
@@ -279,6 +281,13 @@ extern "C" int switch_gpu_chan_wait_submission_room(tgm_chan *, const tgm_push *
 {
 	EXPECT_FALSE(locked);
 	++roomWaits;
+	const bool queueFree = std::async(std::launch::async, [] {
+				       if (!queue.lock->try_lock())
+					       return false;
+				       queue.lock->unlock();
+				       return true;
+			       }).get();
+	roomWaitsUnderQueueLock += queueFree ? 0 : 1;
 	return 0;
 }
 
@@ -499,8 +508,9 @@ protected:
 
 	void SetUp() override
 	{
-		maps = unmaps = execs = commits = aborts = tokenRefs = roomWaits = adoptions =
-			binds = leaseCount = channelsMade = resets = 0;
+		maps = unmaps = execs = commits = aborts = tokenRefs = roomWaits =
+			roomWaitsUnderQueueLock = adoptions = binds = leaseCount = channelsMade =
+				resets = 0;
 		replaced.clear();
 		nextError = guardError = 0;
 		memoryCalls = memoryFailure = poolFrees = 0;
@@ -644,6 +654,16 @@ TEST_F(CheckedCopy, RingWaitAndSemanticCaptureOccurOutsideOwnershipLocks)
 	EXPECT_TRUE(covered);
 	EXPECT_EQ(commits, 1u);
 	EXPECT_EQ(execs, 2u);
+}
+
+TEST_F(CheckedCopy, TheQueueLockIsFreeWhileACopyWaitsForRoom)
+{
+	auto a = allocation(), b = allocation();
+	nextError = -11;
+	ASSERT_EQ(copy(a, b), 0);
+	EXPECT_EQ(roomWaits, 1u);
+	// base 1: queue.lock held across the wait for ring room
+	EXPECT_EQ(roomWaitsUnderQueueLock, 0u);
 }
 
 TEST_F(CheckedCopy, GuardFailurePublishesNothingAndCallsNobody)

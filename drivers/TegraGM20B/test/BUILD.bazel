@@ -1918,6 +1918,7 @@ host_shims(
         "IOKit/IOLib.h",
         "IOKit/IOLocks.h",
         "IOKit/IOMemoryDescriptor.h",
+        "kern/thread.h",
         "kern/thread_call.h",
     ],
     stubs = "switch_gpu_copy_stubs.h",
@@ -1951,6 +1952,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BCopy.cpp",
         "//drivers/TegraGM20B:TegraGM20BCopy.h",
         "//drivers/TegraGM20B:SwitchGpuKqueue.h",
+        "//drivers/TegraGM20B:SwitchGpuSubmitTurn.h",
         "//drivers/TegraGM20B:TegraGM20BCopyPush.h",
         "//drivers/TegraGM20B:TegraGM20BRelayout.h",
         "//drivers/TegraGM20B:TegraGM20BTiled.h",
@@ -1967,6 +1969,79 @@ host_test(
         ":copy_mappings",
         ":copy_kernel",
         ":copy_emit",
+    ],
+)
+
+# The copy queue under ThreadSanitizer: a copy sleeping for ring room lets the queue's lock go
+host_library(
+    name = "copy_mappings_tsan",
+    srcs = [
+        "//drivers/TegraGM20B:SwitchGpuCopyMappings.cpp",
+        "//drivers/TegraGM20B:SwitchGpuRelayoutCache.cpp",
+    ],
+    hdrs = [
+        "//drivers/TegraGM20B:SwitchGpuCopyMappings.h",
+        "//drivers/TegraGM20B:SwitchGpuRelayoutCache.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    sanitize = False,
+    deps = [":copy_kernel"],
+)
+
+host_library(
+    name = "copy_emit_tsan",
+    srcs = [
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BCopyEmit.c",
+        "//drivers/TegraGM20B:TegraGM20BFences.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BRelayout.h",
+    ],
+    hdrs = ["//drivers/TegraGM20B:TegraGM20BCopyEmit.h"],
+    copts = [
+        "-Ikits/SwitchGM20BEmit",
+        "-fsanitize=thread",
+    ],
+    sanitize = False,
+    deps = ["//kits/SwitchGM20BEmit:copy_rect"],
+)
+
+host_test(
+    name = "switch_gpu_checked_copy_tsan_test",
+    srcs = [
+        "switch_gpu_checked_copy_test.cpp",
+        "gm20b_ce_model.h",
+        "gm20b_gpu_memory.h",
+    ],
+    additional_compiler_inputs = [
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BCopy.cpp",
+        "//drivers/TegraGM20B:TegraGM20BCopy.h",
+        "//drivers/TegraGM20B:SwitchGpuKqueue.h",
+        "//drivers/TegraGM20B:SwitchGpuSubmitTurn.h",
+        "//drivers/TegraGM20B:TegraGM20BCopyPush.h",
+        "//drivers/TegraGM20B:TegraGM20BRelayout.h",
+        "//drivers/TegraGM20B:TegraGM20BTiled.h",
+        "//drivers/TegraGM20B:TegraGM20BSyncpt.h",
+        "//drivers/TegraGM20B:TegraGM20BFences.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:SwitchGpuEventClient.h",
+        "//drivers/TegraGM20B:SwitchGpuEventChannel.h",
+        "//drivers/TegraGM20B:SwitchGpuWordWait.h",
+        "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
+        "//drivers/TegraGM20B:SwitchGpuTimeline.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+    deps = [
+        ":copy_emit_tsan",
+        ":copy_kernel",
+        ":copy_mappings_tsan",
     ],
 )
 
