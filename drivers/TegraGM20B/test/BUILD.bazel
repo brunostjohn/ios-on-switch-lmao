@@ -1378,6 +1378,7 @@ host_library(
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuBridge.h",
         "//drivers/TegraGM20B:SwitchGpuKqueue.h",
+        "//drivers/TegraGM20B:SwitchGpuSubmitTurn.h",
         "//drivers/TegraGM20B:SwitchGpuTimeline.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -1393,6 +1394,37 @@ host_test(
     deps = [
         ":bridge",
         ":bridge_kernel",
+    ],
+)
+
+# The bridge queue under ThreadSanitizer: a submission sleeping for ring room against the queue's other users
+host_library(
+    name = "bridge_tsan",
+    srcs = ["//drivers/TegraGM20B:SwitchGpuBridge.cpp"],
+    hdrs = [
+        "//drivers/TegraGM20B:SwitchGpuBridge.h",
+        "//drivers/TegraGM20B:SwitchGpuKqueue.h",
+        "//drivers/TegraGM20B:SwitchGpuSubmitTurn.h",
+        "//drivers/TegraGM20B:SwitchGpuTimeline.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BSyncpt.h",
+        "//drivers/TegraHost1x:TegraHost1x.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    sanitize = False,
+    deps = [":bridge_kernel"],
+)
+
+host_test(
+    name = "switch_gpu_bridge_tsan_test",
+    srcs = ["switch_gpu_bridge_test.cpp"],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+    deps = [
+        ":bridge_kernel",
+        ":bridge_tsan",
     ],
 )
 
