@@ -63,6 +63,11 @@ void switch_nvdec_engine_describe(char *text, size_t size)
     snprintf(text, size, "falcon");
 }
 
+bool switch_nvdec_engine_falcon_failed(char *, size_t)
+{
+    return false;
+}
+
 bool switch_nvdec_engine_reset(bool *drained)
 {
     *drained = true;

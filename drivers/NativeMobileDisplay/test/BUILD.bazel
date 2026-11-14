@@ -537,8 +537,12 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchScanoutAddress.h",
         "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
         "//drivers/NativeMobileDisplay:SwitchSuspendRetire.h",
+        "//drivers/NativeMobileDisplay:SwitchFrameEndDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchFlipDeadlineDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchGpuDoneDisplay.h",
         "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
         "//drivers/TegraDisplayFlip:TegraScanoutRing.h",
+        "display_filter_context.h",
     ],
 )
 
