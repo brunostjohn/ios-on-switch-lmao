@@ -204,6 +204,7 @@ host_test(
     name = "native_legacy_display_source_test",
     srcs = ["native_legacy_display_source_test.cpp"],
     data = [
+        "//drivers/NativeMobileDisplay:SwitchScanoutRetirement.h",
         "//drivers/NativeMobileDisplay:SwitchFlipDeadlineDisplay.h",
         "//drivers/NativeMobileDisplay:SwitchFrameEndDisplay.h",
         "//drivers/NativeMobileDisplay:SwitchGpuDoneDisplay.h",

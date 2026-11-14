@@ -387,3 +387,22 @@ TEST(DisplayResumeSource, RestoreRunsOnTheFamilyGateBeforeCompletionCallbacks)
     EXPECT_TRUE(resume.Before("planesResume();", "presentCopied()"));
     EXPECT_TRUE(resume.Before("planesResume();", "presentGpuCopy()"));
 }
+
+// retireScanoutStorage sleeps up to kFlipDeadlineMS with the family's gate held, woken by the DC A filter (which needs no
+// gate): only the display's teardown (stop, free, through stopVsync's gated stopVblank) may reach it, never a swap, a
+// frame end or SC7.
+TEST(ScanoutRetirementSource, OnlyTheDisplaysTeardownWaitsUnderTheGate)
+{
+    EXPECT_EQ(code().Count("retireScanoutStorage();"), 1u);
+    EXPECT_TRUE(method("void stopRotation()").Has("retireScanoutStorage();"));
+    EXPECT_EQ(code().Count("stopRotation();"), 1u);
+    EXPECT_TRUE(method("void stopVblank()").Has("stopRotation();"));
+    EXPECT_EQ(code().Count("->stopVblank();"), 1u);
+    EXPECT_TRUE(method("void stopVsync()").Has("->stopVblank();"));
+    EXPECT_EQ(code().Count("stopVsync();"), 2u);
+    EXPECT_TRUE(method("void stop(IOService *provider) override").Has("stopVsync();"));
+    EXPECT_TRUE(method("void free() override").Has("stopVsync();"));
+    const CodeText wait(SourceText("../SwitchScanoutRetirement.h"));
+    EXPECT_TRUE(wait.Before("assert_wait_deadline(", "if (scanoutStorageRetired() ||"));
+    EXPECT_TRUE(code().Has("thread_wakeup(reinterpret_cast<event_t>(&self->scanoutStopFrames));"));
+}
