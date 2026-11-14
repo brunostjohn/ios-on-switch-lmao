@@ -404,31 +404,6 @@ bool spareKeep(const SwitchGpuCachedBuffer &buffer, uint64_t *pas, uint64_t byte
 	thread_call_enter(p->call);
 	return true;
 }
-
-// A freed pool BO's range (no task maps it) to be zeroed and given back clean: by the GPU's copy engine (gpu_scrub.c "pool
-// scrub", no CPU time), else by the thread call: true if taken.
-bool poolZeroLater(void *va, uint64_t pa, uint64_t bytes)
-{
-	const int scrubbed = tgm_pool_scrub(pa, bytes);
-	if (!scrubbed)
-		return true;
-	if (scrubbed == -16) {
-		tgm_pool_free(va, bytes, pa);
-		return true;
-	}
-	SparePool *p = spares();
-	PoolZero *z = p ? IONew(PoolZero, 1) : nullptr;
-	if (!z)
-		return false;
-	*z = {nullptr, va, pa, bytes};
-	IOLockLock(p->lock);
-	z->next = p->poolDirty;
-	p->poolDirty = z;
-	p->poolZeroing += bytes;
-	IOLockUnlock(p->lock);
-	thread_call_enter(p->call);
-	return true;
-}
 }  // namespace tgm_uc
 
 void switch_gpu_cached_retire(SwitchGpuCachedBuffer buffer, uint64_t *pages, uint32_t count,
