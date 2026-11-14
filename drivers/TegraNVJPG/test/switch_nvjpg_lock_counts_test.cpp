@@ -3,6 +3,8 @@
 // ran with gStateLock free, and the longest a cancellation or an idle gate call waited to take gStateLock. A wait is the
 // model's clock moved on while the lock is being taken.
 #include "switch_nvjpg_engine_model.h"
+#include <atomic>
+#include <thread>
 #include "../TegraNVJPGStats.h"
 
 namespace {
@@ -51,6 +53,25 @@ TEST_F(NVJPGLockCounts, EachJobsEngineWaitIsCountedAndTakingTheCountsZeroesThem)
     ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
     EXPECT_EQ(taken().waitsUnlocked, 2u);
     EXPECT_EQ(taken().waitsUnlocked, 0u);
+}
+
+// A client's refused decode takes the counts on its own thread while the engine thread runs jobs.
+TEST_F(NVJPGLockCounts, CountsTakenOnAnotherThreadWhileJobsRunLoseNone)
+{
+    constexpr uint64_t kJobs = 200;
+    std::atomic<bool> running{true};
+    uint64_t seen = 0;
+    std::thread client([&] {
+        while (running.load(std::memory_order_acquire))
+            seen += taken().waitsUnlocked;
+    });
+    TegraNVJPGJob job = decodeJob();
+    nvjpg_dec_status status = {};
+    for (uint64_t i = 0; i < kJobs; i++)
+        ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    running.store(false, std::memory_order_release);
+    client.join();
+    EXPECT_EQ(seen + taken().waitsUnlocked, kJobs);
 }
 
 TEST_F(NVJPGLockCounts, AnIdleGateCallsWaitForTheStateLockIsKeptAtItsLongest)

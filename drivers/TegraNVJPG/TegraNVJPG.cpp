@@ -150,8 +150,8 @@ inline uint32_t jobBoundUs(uint64_t pixels)
 IOLock *gJobLock;    // one job at a time: map, run, unmap
 IOLock *gStateLock;  // power transitions against jobs
 #if TEGRA_NVJPG_STATS
-uint64_t gWaitsUnlocked;   // gJobLock
-uint64_t gStateWaitMaxUs;  // gStateLock
+// Written by jobs and under gStateLock, taken by the decode line's caller holding neither (relaxed).
+uint64_t gWaitsUnlocked, gStateWaitMaxUs;
 #endif
 SwitchEngineGate<SwitchEngineGateKernel> gGate;
 uint32_t gSyncpt, gNext, gPicture;
@@ -183,8 +183,8 @@ void lockState()
     const uint64_t asked = switch_now_us();
     IOLockLock(gStateLock);
     const uint64_t waited = switch_now_us() - asked;
-    if (waited > gStateWaitMaxUs)
-        gStateWaitMaxUs = waited;
+    if (waited > __atomic_load_n(&gStateWaitMaxUs, __ATOMIC_RELAXED))
+        __atomic_store_n(&gStateWaitMaxUs, waited, __ATOMIC_RELAXED);
 #else
     IOLockLock(gStateLock);
 #endif
@@ -571,14 +571,8 @@ extern "C" void tegra_nvjpg_unlock(void)
 #if TEGRA_NVJPG_STATS
 void tegra_nvjpg_lock_counts(uint64_t *waitsUnlocked, uint64_t *stateWaitMaxUs)
 {
-    IOLockLock(gJobLock);
-    *waitsUnlocked = gWaitsUnlocked;
-    gWaitsUnlocked = 0;
-    IOLockLock(gStateLock);
-    *stateWaitMaxUs = gStateWaitMaxUs;
-    gStateWaitMaxUs = 0;
-    IOLockUnlock(gStateLock);
-    IOLockUnlock(gJobLock);
+    *waitsUnlocked = __atomic_exchange_n(&gWaitsUnlocked, 0, __ATOMIC_RELAXED);
+    *stateWaitMaxUs = __atomic_exchange_n(&gStateWaitMaxUs, 0, __ATOMIC_RELAXED);
 }
 #endif
 
@@ -672,7 +666,7 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
             follow->queue(follow->context, gSyncpt, fence);
         ret = tegra_host1x_syncpt_wait(gSyncpt, fence, jobBoundUs(job->pixels));
 #if TEGRA_NVJPG_STATS
-        gWaitsUnlocked++;
+        __atomic_fetch_add(&gWaitsUnlocked, 1, __ATOMIC_RELAXED);
 #endif
         if (ret == TEGRA_HOST1X_ETIMEDOUT)
             ret = cancelled(job, fence, switch_now_us() - start);
