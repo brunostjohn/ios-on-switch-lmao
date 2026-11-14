@@ -9,8 +9,8 @@
 //     L4T's soctherm.c does for "nvidia,tegra210b01-soctherm" (tegra210-soctherm.c tegra210b01_tsensors, fuse
 //     calibration from tsensor-fuse.c; clocks 51 MHz from PLLP and 400 kHz from CLK_M, tegra210-soc-base.dtsi). The
 //     hardware converts continuously; a read is the TS_*_STATUS1 register at the moment thermalmonitord asks (its own
-//     5 s cadence, through its read path: no timer here). Once up, SOC_THERM's group thresholds and their interrupt
-//     belong to SwitchSocTherm.cpp; no throttle or THERMTRIP is set up.
+//     5 s cadence, through its read path: no timer here). Once up, SOC_THERM's group thresholds and their interrupt,
+//     THERMTRIP and the hardware throttle belong to SwitchSocTherm.cpp.
 //   * TMP451 (SwitchThermal): SwitchThermal's last good reading of the SoC diode and the PCB, which it takes on every
 //     ALERT (the sensor's window around the fan levels) and every degree SOC_THERM's die groups move; once SwitchThermal
 //     loses the sensor it is a read failure. One reader of the chip, the fan's.
