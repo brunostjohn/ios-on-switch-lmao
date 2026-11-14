@@ -1289,12 +1289,12 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
     ],
+    copts = ["-fsanitize=thread"],
     data = [
         "//drivers/TegraGM20B:gpu_present.c",
         "//drivers/TegraGM20B:gpu_promise.c",
         "//drivers/TegraGM20B:shim/xnu_glue.cpp",
     ],
-    copts = ["-fsanitize=thread"],
     linkopts = ["-fsanitize=thread"],
     sanitize = False,
     deps = [":timeline_kernel"],

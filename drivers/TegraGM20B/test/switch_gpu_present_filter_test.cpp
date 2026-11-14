@@ -41,6 +41,17 @@ extern "C" int switch_gpu_backing_register_engine(uint32_t, const switch_gpu_bac
 	return 0;
 }
 
+// SwitchGpuBacking.cpp's dispatch, to the one engine here
+extern "C" int switch_gpu_backing_token_retain(const switch_gpu_backing_token *token)
+{
+	return operations.retain_token(token);
+}
+
+extern "C" void switch_gpu_backing_token_release(const switch_gpu_backing_token *token)
+{
+	operations.release_token(token);
+}
+
 extern "C" int switch_gpu_backing_register_visibility(uint32_t,
 						      const switch_gpu_backing_visibility *)
 {
