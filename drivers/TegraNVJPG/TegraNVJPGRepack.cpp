@@ -12,6 +12,8 @@ namespace {
 // VIC has read the buffer, so the next may write it.
 switch_dma_pages *gPages;
 switch_gpu_backing *gBacking;
+// Only what IOLockSleep needs to sleep on VIC's completion: the engine thread and that completion's thread call are its
+// only takers, so nothing else contends for it.
 IOLock *gWaitLock;
 
 void releasePages(void *owner)
