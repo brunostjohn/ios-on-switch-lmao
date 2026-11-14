@@ -401,6 +401,10 @@ void rmPoolCommandBuffers()
                                         (pass.depthLoad == MTLLoadActionLoad || pass.stencilLoad == MTLLoadActionLoad
                                              ? raw::ResourceUse::Read
                                              : 0))});
+            if (id stencil = pass.zeta[1].texture; stencil && stencil != pass.depth)
+                uses.push_back({(__bridge void *)stencil,
+                                uint8_t(raw::ResourceUse::Write |
+                                        (pass.stencilLoad == MTLLoadActionLoad ? raw::ResourceUse::Read : 0))});
             for (const RMPass::Color &a : pass.color)
                 if (a.resolve)
                     uses.push_back({(__bridge void *)a.resolve, raw::ResourceUse::Write});

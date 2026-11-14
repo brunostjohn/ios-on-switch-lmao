@@ -207,6 +207,20 @@ static bool rawStencilResolve(MTLRenderPassDescriptor *pass, RMTexture *from)
            gRM->raw->stencilBitsPipeline(from->_raw.format, from->_raw.samples, stencilPick(pass));
 }
 
+// A Depth32Float texture and a Stencil8 texture as the depth and stencil attachments, of one extent and sample count, whole
+// and not turned: the pass renders a Depth32Float_Stencil8 backing of theirs (raw::PassDesc::separate). GM20B's zeta formats
+// pair stencil only with a 24-bit or 32-bit float depth (SET_ZT_FORMAT), so a Depth16Unorm beside a Stencil8 has none.
+static bool separateZeta(MTLRenderPassDescriptor *pass)
+{
+    RMTexture *d = (RMTexture *)pass.depthAttachment.texture, *s = (RMTexture *)pass.stencilAttachment.texture;
+    if (!d || !s || d == s || ![(id)d isKindOfClass:[RMTexture class]] || ![(id)s isKindOfClass:[RMTexture class]] ||
+        !d->_rawOk || !s->_rawOk)
+        return false;
+    const raw::Texture &x = d->_raw, &y = s->_raw;
+    return x.zeta && y.zeta && x.format == 252 && y.format == 253 && x.width == y.width && x.height == y.height &&
+           x.samples == y.samples && x.layers <= 1 && y.layers <= 1 && !x.rotation && !y.rotation;
+}
+
 static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
 {
     MTLRenderPassDepthAttachmentDescriptor *d = pass.depthAttachment;
@@ -214,9 +228,14 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     RMTexture *t = (RMTexture *)zetaAttachment(pass);
     if (!t || ![(id)t isKindOfClass:[RMTexture class]] || !t->_rawOk || !t->_raw.zeta)
         return false;
-    const bool depth = raw::zetaHasDepth(t->_raw.format), stencil = raw::zetaHasStencil(t->_raw.format);
-    if ((RMTexture *)d.texture != (depth ? t : nil) || (RMTexture *)s.texture != (stencil ? t : nil) ||
-        (depth && std::isnan(d.clearDepth)))
+    const bool separate = separateZeta(pass);
+    const bool depth = separate || raw::zetaHasDepth(t->_raw.format),
+               stencil = separate || raw::zetaHasStencil(t->_raw.format);
+    if (!separate && ((RMTexture *)d.texture != (depth ? t : nil) || (RMTexture *)s.texture != (stencil ? t : nil)))
+        return false;
+    if (depth && std::isnan(d.clearDepth))
+        return false;
+    if (separate && (d.resolveTexture || s.resolveTexture || resolves(d.storeAction) || resolves(s.storeAction)))
         return false;
     if (depth && (d.resolveTexture || resolves(d.storeAction)) && !rawDepthResolve(d, t))
         return false;
@@ -225,10 +244,11 @@ static bool rawDepthStencil(MTLRenderPassDescriptor *pass)
     MTLRenderPassAttachmentDescriptor *aspects[2] = {depth ? d : nil, stencil ? s : nil};
     const NSUInteger slice = depth ? d.slice : s.slice;
     for (MTLRenderPassAttachmentDescriptor *a : aspects) {
+        RMTexture *own = separate ? (RMTexture *)a.texture : t;
         const MTLStoreAction kept = keptStore(a.storeAction);
-        if (a && (a.level || a.slice != slice || slice >= std::max(t->_raw.layers, 1u) || a.depthPlane ||
-                  (t->_raw.memoryless && (kept != MTLStoreActionDontCare || (a.loadAction != MTLLoadActionClear &&
-                                                                             a.loadAction != MTLLoadActionDontCare))) ||
+        if (a && (a.level || a.slice != slice || slice >= std::max(own->_raw.layers, 1u) || a.depthPlane ||
+                  (own->_raw.memoryless && (kept != MTLStoreActionDontCare || (a.loadAction != MTLLoadActionClear &&
+                                                                               a.loadAction != MTLLoadActionDontCare))) ||
                   (kept != MTLStoreActionDontCare && kept != MTLStoreActionStore)))
             return false;
     }
@@ -485,8 +505,8 @@ void rmPoolEncoders()
     if (pass.depthAttachment.texture || pass.stencilAttachment.texture) {
         [self retain:pass.depthAttachment.texture];
         [self retain:pass.stencilAttachment.texture];
-        if (rawDepthStencil(pass)) {
-            e->_zeta = ((RMTexture *)facts.depth)->_raw.format;
+        if (rawDepthStencil(pass) && !(e->_turn && separateZeta(pass))) {
+            e->_zeta = separateZeta(pass) ? raw::kZetaFormat : ((RMTexture *)facts.depth)->_raw.format;
             if (!e->_count)
                 e->_samples = ((RMTexture *)facts.depth)->_raw.samples;
         } else {

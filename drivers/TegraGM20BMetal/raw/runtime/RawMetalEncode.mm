@@ -732,6 +732,16 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                     pass.zeta[0].store != MTLStoreActionDontCare || pass.zeta[1].store != MTLStoreActionDontCare;
                 p.depthStencil.depth = float(std::clamp(pass.clearDepth, 0.0, 1.0));
                 p.depthStencil.stencil = pass.clearStencil;
+                if (__unsafe_unretained RMTexture *s = (RMTexture *)pass.zeta[1].texture; s && s != z) {
+                    p.separate = {&z->_raw,
+                                  &s->_raw,
+                                  pass.depthLoad == MTLLoadActionLoad,
+                                  pass.stencilLoad == MTLLoadActionLoad,
+                                  pass.zeta[0].store == MTLStoreActionStore,
+                                  pass.zeta[1].store == MTLStoreActionStore};
+                    useTexture(rc, z, true);
+                    useTexture(rc, s, true);
+                }
             }
             p.width = uint32_t(std::min<NSUInteger>(pass.width, UINT32_MAX));
             p.height = uint32_t(std::min<NSUInteger>(pass.height, UINT32_MAX));
