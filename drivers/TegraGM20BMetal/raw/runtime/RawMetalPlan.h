@@ -400,6 +400,12 @@ public:
         return eligibilityGeneration_;
     }
 
+    // moves where the encoder's bindings start over: a new encoder, an opaque call
+    uint64_t stateEpoch() const
+    {
+        return stateEpoch_;
+    }
+
     const std::vector<void *> &renderPipelines(size_t from, size_t to) const
     {
         return rangeAt(from, to).pipelines;

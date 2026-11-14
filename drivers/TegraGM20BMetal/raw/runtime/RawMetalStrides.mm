@@ -39,6 +39,7 @@ static void stridedBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger ind
     if (index < 31) {
         _buf[1][index] = x;
         _bufVa[1][index] = x ? x->_raw.va + offset : 0;
+        _eligibility++;
     }
     stridedBinding(_cb, OpBuffer, 1, index, b, offset, stride);
 }
@@ -46,8 +47,10 @@ static void stridedBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger ind
 - (void)setVertexBufferOffset:(NSUInteger)offset attributeStride:(NSUInteger)stride atIndex:(NSUInteger)index
 {
     SWITCH_API(ApiBind);
-    if (index < 31 && _buf[1][index])
+    if (index < 31 && _buf[1][index]) {
         _bufVa[1][index] = _buf[1][index]->_raw.va + offset;
+        _eligibility++;
+    }
     stridedBinding(_cb, OpBufferOffset, 1, index, nil, offset, stride);
 }
 

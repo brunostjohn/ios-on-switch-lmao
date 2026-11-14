@@ -271,6 +271,9 @@ template <typename Done> static void waitFor(RMCommandBuffer *cb, Done &&done)
 static void commandBufferDropped(void *object)
 {
     RMCommandBuffer *__unsafe_unretained b = (__bridge RMCommandBuffer *)object;
+    if (RMEncoder *__unsafe_unretained e = (RMEncoder *)b->_active)
+        e->_cb = nil;
+    b->_active = nil;
     giveRecording(b);
 }
 
@@ -285,24 +288,25 @@ void rmPoolCommandBuffers()
 
 @implementation RMCommandBuffer
 
-- (void)retain:(id)object
+- (void)retain:(__unsafe_unretained id)object
 {
     if (!object || !_ownerKeys.insert((__bridge void *)object, true).second)
         return;
     _owners.push_back(object);
     RMResourceFacts facts;
-    facts.cpuBuffer = (__bridge void *)cpuBufferOfResource(object);
-    if ([object isKindOfClass:[RMBuffer class]])
-        facts.kind = RMResourceKind::Buffer;
-    else if ([object isKindOfClass:[RMTexture class]]) {
+    if ([object isKindOfClass:[RMTexture class]]) {
         facts.kind = RMResourceKind::Texture;
-        RMTexture *texture = (RMTexture *)object;
+        __unsafe_unretained RMTexture *texture = (RMTexture *)object;
         facts.roles = uint8_t((texture->_raw.converted() ? RMResourceFacts::Converted : 0) |
                               (texture->_raw.planarStandIn ? RMResourceFacts::PlanarTarget : 0));
         __unsafe_unretained RMTexture *root = texture;
         while (root->_kind == RMTextureView && root->_parent)
             root = root->_parent;
         facts.surfaceWrites = root->_surfaceWrites;
+        facts.cpuBuffer = (__bridge void *)root->_buffer;
+    } else if ([object isKindOfClass:[RMBuffer class]]) {
+        facts.kind = RMResourceKind::Buffer;
+        facts.cpuBuffer = (__bridge void *)object;
     } else if ([object isKindOfClass:[RMSampler class]])
         facts.kind = RMResourceKind::Sampler;
     else if ([object isKindOfClass:[RMHeap class]])
@@ -315,7 +319,7 @@ static const raw::Pipeline *recordedPipeline(const raw::RasterState &raster)
 {
     if (const raw::Pipeline *native = static_cast<const raw::Pipeline *>(raster.nativePipeline))
         return native;
-    RMPipeline *pipeline = (__bridge RMPipeline *)raster.pipeline;
+    __unsafe_unretained RMPipeline *pipeline = (__bridge RMPipeline *)raster.pipeline;
     return [(id)pipeline isKindOfClass:[RMPipeline class]] ? pipeline->_raw : nullptr;
 }
 

@@ -289,6 +289,11 @@ TEST(RawRecordCost, CompositorScaleFrame)
     EXPECT_EQ(difference(repeated, one).counts.sends, 300u);
     EXPECT_LE(encoders.counts.sends, uint64_t(7 * kEncoders));
     EXPECT_EQ(frame.counts.mallocs, 0u);
+    // no weak reference (each a side-table lock), and the binding path's retains gone: two a draw at most (the first
+    // bind of a texture in a command buffer keeps it, and its release at completion)
+    EXPECT_EQ(frame.counts.weaks, 0u);
+    EXPECT_LE(difference(doubled, frame).counts.retains, uint64_t(2 * kDraws));
+    EXPECT_EQ(difference(repeated, one).counts.retains, 0u);
 }
 
 // Each call of a compositor draw, its instructions apart (less what two counter reads cost), over a frame's 90 draws
@@ -363,6 +368,11 @@ TEST(RawRecordCost, ChangedStateDrawByCall)
     }
     printf("record cost by call %-26s %8.0f instr a draw\n", "all", total);
     EXPECT_GT(draws, 0u);
+    // Core Animation's texture and sampler with the sampler bound already, and a draw whose bindings leave its check as
+    // it was (raw_record_cost_test's measured 839 and 2250 a draw in a release build, 1020 and 2345 in a debug one)
+    EXPECT_LT(sums[TextureSampler] / draws, 1200);
+    EXPECT_LT(sums[Draw] / draws, 2500);
+    EXPECT_LT(total, 6000);
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

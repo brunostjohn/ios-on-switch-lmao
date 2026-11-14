@@ -61,7 +61,8 @@ private:
 // then, so a CPU lock of a surface the GPU never writes invalidates nothing.
 void declareGpuWrites(RMTexture *t)
 {
-    if (!t->_surface || t->_gpuWrites.exchange(true))
+    // every pass over a surface target asks: only the first may exchange
+    if (!t->_surface || t->_gpuWrites.load(std::memory_order_acquire) || t->_gpuWrites.exchange(true))
         return;
     if (gRM && gRM->raw && gRM->raw->surfaceGpuWrites(IOSurfaceGetID(t->_surface)))
         return;
