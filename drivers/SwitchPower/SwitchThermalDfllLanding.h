@@ -142,7 +142,7 @@ void SwitchThermal::dfllLandingStep()
 void SwitchThermal::dfllLanding()
 {
     DfllLandingRun &run = gDfllLandingRun;
-    const auto step = [this, &run](DfllLandingStepKind kind) {
+    const auto step = [this](DfllLandingStepKind kind) {
         run.step = kind;
         loop->runAction(
             [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
