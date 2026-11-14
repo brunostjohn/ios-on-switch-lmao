@@ -69,9 +69,11 @@ void spin_unlock_irqrestore_stub(spinlock_t *l);
 #define spin_lock_irqsave(l, f) ((void)(f), spin_lock_irqsave_stub(l))
 #define spin_unlock_irqrestore(l, f) ((void)(f), spin_unlock_irqrestore_stub(l))
 
-#define READ_ONCE(x) (*(const volatile __typeof__(x) *)&(x))
-#define WRITE_ONCE(x, v) (*(volatile __typeof__(x) *)&(x) = (v))
-#define atomic_set(p, v) (*(p) = (v))
+/* The shim's are single-copy-atomic volatile accesses (nvif/os.h); here relaxed atomics, which ThreadSanitizer reads alike */
+#define READ_ONCE(x) __atomic_load_n(&(x), __ATOMIC_RELAXED)
+#define WRITE_ONCE(x, v) __atomic_store_n(&(x), (v), __ATOMIC_RELAXED)
+#define atomic_set(p, v) __atomic_store_n((p), (v), __ATOMIC_RELAXED)
+#define atomic_read(p) __atomic_load_n((p), __ATOMIC_RELAXED)
 #define max_t(type, a, b) ((type)(a) > (type)(b) ? (type)(a) : (type)(b))
 #define ALIGN(x, a) (((x) + (a) - 1) & ~((__typeof__(x))(a) - 1))
 #define scnprintf snprintf
@@ -116,6 +118,8 @@ struct nvkm_runl;
 
 struct nvkm_chan_func {
 	void (*preempt)(struct nvkm_chan *);
+	void (*stop)(struct nvkm_chan *);
+	void (*start)(struct nvkm_chan *);
 };
 
 struct nvkm_fifo_func {
@@ -189,12 +193,16 @@ struct nvkm_cgrp {
 	int chan_nr;
 	struct nvkm_runl *runl;
 	struct list_head chans, head;
+	atomic_t rc;
 };
 
 struct nvkm_chan {
 	int id;
 	struct nvkm_cgrp *cgrp;
 	struct list_head head;
+	const struct nvkm_chan_func *func;
+	spinlock_t lock;
+	atomic_t blocked, errored;
 };
 
 #define nvkm_runl_foreach(runl, fifo) list_for_each_entry((runl), &(fifo)->runls, head)
@@ -224,6 +232,12 @@ void *nvxnu_work_alloc(void (*fn)(void *), void *arg);
 void nvxnu_work_schedule(void *work);
 void nvxnu_work_schedule_after(void *work, u64 ns);
 void nvxnu_work_cancel_wait(void *work);
+void nvxnu_work_cancel(void *work);
+/* The GPU interrupt work loop's gate (shim/xnu_glue.cpp) */
+void nvxnu_pass_run(void (*fn)(void *), void *arg);
+int nvxnu_pass_try(void (*fn)(void *), void *arg);
+struct nvkm_chan *nvkm_runl_chan_get_chid(struct nvkm_runl *runl, int id, unsigned long *flags);
+void nvkm_chan_put(struct nvkm_chan **chan, unsigned long flags);
 
 #ifdef __cplusplus
 }

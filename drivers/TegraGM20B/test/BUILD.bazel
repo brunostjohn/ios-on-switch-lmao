@@ -2524,6 +2524,50 @@ host_test(
     deps = [":deadline_unit"],
 )
 
+# hold.c whole, its #include lines left out for gm20b_hold_stubs.h's stand-ins.
+genrule(
+    name = "hold_source",
+    testonly = True,
+    srcs = ["//drivers/TegraGM20B:hold.c"],
+    outs = ["hold_source.h"],
+    cmd = """
+set -e
+grep -v '^#include' $< > $@
+grep -q '^uint64_t tgm_hold_due(' $@
+""",
+)
+
+HOLD_UNIT_HDRS = SCHED_UNIT_HDRS + [
+    "gm20b_hold_stubs.h",
+    "//drivers/TegraGM20B:SwitchGpuChanTable.h",
+    "//drivers/TegraGM20B:SwitchGpuPreemptLanding.h",
+]
+
+host_library(
+    name = "hold_unit",
+    srcs = [
+        "gm20b_hold_unit.c",
+        ":hold_source",
+    ],
+    hdrs = HOLD_UNIT_HDRS,
+    c_std = "gnu11",
+    copts = ["-Wno-unused-function"],
+    defines = ["DEVELOPMENT=1"],
+)
+
+# deadline.c and hold.c over whole display periods: the locks, read-modify-writes and thread calls one costs, and the
+# order of a frame end, the holds, a preempt's check, the present and the expiry
+host_test(
+    name = "gm20b_period_test",
+    srcs = ["gm20b_period_test.cpp"],
+    cxx_std = "c++17",
+    defines = ["DEVELOPMENT=1"],
+    deps = [
+        ":deadline_unit",
+        ":hold_unit",
+    ],
+)
+
 host_library(
     name = "switch_gpu_gpfifo_kick",
     srcs = ["//drivers/TegraGM20B:nouveau/nvif/chan506f.c"],
