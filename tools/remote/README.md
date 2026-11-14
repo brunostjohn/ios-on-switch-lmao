@@ -98,8 +98,10 @@ An extra host runs only the worker and the runner against the first host's stora
 network: reinstall the first host with `SWITCH_BB_PRIVATE_IP=<its private IP>` in the environment, so its storage
 (8980) and the scheduler's worker port (8983) also listen there, and run `install-host.sh <bins> <name> <actions>
 <first host's private IP>` on the new one. The security group then needs TCP 8980-8983 from itself. Those ports take
-no credentials. The extra host's bb_worker runs as root: macOS keeps a non-Apple binary in a user's LaunchDaemon off
-the local network ("no route to host"), and root daemons are exempt.
+no credentials. macOS keeps a non-Apple binary in a user's LaunchDaemon off the local network ("no route to host"), so
+the extra host's worker talks to 127.0.0.1, where launchd hands each connection to `/usr/bin/nc` (exempt) relaying to the
+first host. Running the worker as root instead would make the output directories root's, and actions that chmod their
+own output directory (the native seed) fail.
 
 ## The cluster cache (until 14 Nov)
 

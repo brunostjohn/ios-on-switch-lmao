@@ -23,8 +23,8 @@ work=${SWITCH_BB_WORKER_DIR:-$data/worker}
 
 if [ -n "$first" ]; then
     roles="runner worker"
-    storage="$first:8980"
-    scheduler="$first:8983"
+    storage=127.0.0.1:8980
+    scheduler=127.0.0.1:8983
     listen="'127.0.0.1'"
 else
     roles="storage scheduler runner worker"
@@ -62,19 +62,58 @@ cat >"$home/.host.libsonnet.new" <<EOF
 EOF
 mv -f "$home/.host.libsonnet.new" "$home/host.libsonnet"
 
+# macOS keeps a non-Apple binary in a user's LaunchDaemon off the local network (Local Network privacy: "no route to
+# host"), and a root worker would own the output directories its actions must chmod. So an extra host's worker runs as
+# the user and reaches the first host through loopback, where launchd hands each connection to /usr/bin/nc (an Apple
+# binary, exempt).
+if [ -n "$first" ]; then
+    for port in 8980 8983; do
+        label=com.brunostjohn.switch.bb-relay-$port
+        sudo tee "/Library/LaunchDaemons/$label.plist" >/dev/null <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>$label</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/nc</string>
+		<string>$first</string>
+		<string>$port</string>
+	</array>
+	<key>inetdCompatibility</key>
+	<dict>
+		<key>Wait</key>
+		<false/>
+	</dict>
+	<key>Sockets</key>
+	<dict>
+		<key>Listeners</key>
+		<dict>
+			<key>SockNodeName</key>
+			<string>127.0.0.1</string>
+			<key>SockServiceName</key>
+			<string>$port</string>
+			<key>SockType</key>
+			<string>stream</string>
+			<key>SockFamily</key>
+			<string>IPv4</string>
+		</dict>
+	</dict>
+</dict>
+</plist>
+EOF
+        sudo launchctl bootout "system/$label" 2>/dev/null || true
+        while sudo launchctl print "system/$label" >/dev/null 2>&1; do
+            sleep 0.2
+        done
+        sudo launchctl bootstrap system "/Library/LaunchDaemons/$label.plist"
+    done
+fi
+
 for role in $roles; do
     label=com.brunostjohn.switch.bb-$role
-    # macOS blocks a non-Apple binary in a LaunchDaemon run as a user from the local network (Local Network privacy);
-    # a root daemon may reach the first host. Actions still run as the user under bb_runner; the umask lets them
-    # write in the directories the root worker makes.
-    identity="<key>UserName</key>
-	<string>$user</string>
-	<key>GroupName</key>
-	<string>staff</string>"
-    if [ -n "$first" ] && [ "$role" = worker ]; then
-        identity="<key>Umask</key>
-	<integer>0</integer>"
-    fi
     plist=/Library/LaunchDaemons/$label.plist
     sudo tee "$plist" >/dev/null <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -83,7 +122,10 @@ for role in $roles; do
 <dict>
 	<key>Label</key>
 	<string>$label</string>
-	$identity
+	<key>UserName</key>
+	<string>$user</string>
+	<key>GroupName</key>
+	<string>staff</string>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/sh</string>
