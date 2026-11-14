@@ -78,7 +78,6 @@
 #                     sent before, the rules relax only the probed changes, the relaxed forms never idle and are the
 #                     planner's, the 2D work copies and resolves as the 2D engine model does
 #   raw_private_comp_test  raw/runtime/raw_private_comp.h: which private textures bind compressed memory, and of which kind
-#   raw_constant_colour_test  raw/runtime/raw_constant_colour.h: which fills the ROP's constant colour may draw
 #   raw_fetch_free_test   raw/runtime/raw_fetch_free.h: a fetch-free form's rung and words, and the draws that take it
 #   raw_fetch_rungs_test  raw/runtime/raw_fetch_rungs.h: where the ROP's blend and iterated blend may stand for an
 #                     in-shader blend
@@ -3864,15 +3863,6 @@ host_test(
 )
 
 host_test(
-    name = "raw_constant_colour_test",
-    srcs = [
-        "raw_constant_colour_test.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_constant_colour.h",
-    ],
-    cxx_std = "c++17",
-)
-
-host_test(
     name = "raw_draw_hooks_test",
     srcs = [
         "raw_draw_hooks_test.cpp",
@@ -5958,11 +5948,11 @@ host_test(
     cxx_std = "c++17",
 )
 
-# Blur-chain draws keep their fragment program: no state carries a route the draw path would classify on the CPU
+# Blur-chain and one-colour fill draws keep their fragment program: no route the draw path would classify on the CPU
 host_test(
     name = "raw_blur_draw_test",
     srcs = ["raw_blur_draw_test.cpp"] + RAW_HOST_HEADERS,
-    copts = RAW_HOST_COPTS,
+    copts = RAW_HOST_COPTS + ["-DSWITCH_RAW_HARNESS_MARKS"],
     cxx_std = "c++17",
     deps = RAW_HOST_DEPS + ["//kits/SwitchGM20B:classes"],
 )

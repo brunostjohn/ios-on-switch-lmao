@@ -10,7 +10,7 @@
 namespace raw {
 
 // a draw's shortcuts around its words (raw_draw_shortcuts.cpp), as raw_gpu.cpp reserves them
-constexpr uint32_t kShortcutWords = 2 * (SWITCH_GM20B_CONSTANT_COLOR_WORDS + SWITCH_GM20B_FILL_VIA_TRIANGLE_WORDS);
+constexpr uint32_t kShortcutWords = 2 * SWITCH_GM20B_FILL_VIA_TRIANGLE_WORDS;
 
 uint64_t RenderEncoder::drawUnits(uint32_t instances) const
 {

@@ -1,28 +1,15 @@
 // SPDX-License-Identifier: MIT
-// A draw's fixed-function shortcuts behind their rules (raw_constant_colour.h, raw_quad_fill.h): each
+// A draw's fixed-function shortcut behind its rule (raw_quad_fill.h): it
 // reads only what the CPU owns (setVertexBytes and setFragmentBytes uploads, indices under the command buffer's lease)
 // and takes the draw's own route where anything it needs is missing.
 #include "../../../../kits/SwitchGM20BEmit/SwitchGM20BEmitRaster.h"
 #include "raw_ca_route.h"
-#include "raw_constant_colour.h"
 #include "raw_draw_hooks.h"
 #include "raw_gpu.h"
 #include "raw_kit.h"
 #include "raw_quad_fill.h"
 
 namespace raw {
-
-namespace {
-
-bool bindsTexture(const PackPipeline &rec)
-{
-    for (uint32_t k = 0; k < rec.entries && k < kPackEntries; k++)
-        if (rec.entry[k].kind == EntryTexture || rec.entry[k].kind == EntryTexture3d)
-            return true;
-    return false;
-}
-
-}  // namespace
 
 const char *Device::packKey(const PackPipeline &rec) const
 {
@@ -65,7 +52,7 @@ RenderEncoder::Shortcut RenderEncoder::shortcut(const Pipeline &pl, uint32_t pri
                                                 bool indexed)
 {
     Shortcut out;
-    if (!(ropConstantColour() || fillViaTriangleBox()) || CaRoute(pl.caRoute) != CaRoute::Fill || !pl.rec)
+    if (!fillViaTriangleBox() || CaRoute(pl.caRoute) != CaRoute::Fill || !pl.rec)
         return out;
     FillStream s;
     if (!cpuStream(pl, indexed ? 0 : first, s))
@@ -79,13 +66,6 @@ RenderEncoder::Shortcut RenderEncoder::shortcut(const Pipeline &pl, uint32_t pri
             list[i] = i;
     const Bound &matrix = bufs_[1][2];
     const uint8_t *m = !matrix.buffer && matrix.cpu && matrix.size >= 64 ? matrix.cpu : nullptr;
-    FillDraw d;
-    d.fillState = true;
-    d.samplesTexture = bindsTexture(*pl.rec);
-    d.shapesCoverage = pl.dropsPixels || (alphaWanted_ & kAlphaToCoverage);
-    d.oneTarget = pass_.count == 1 && pl.writeBits == 1;
-    d.oneColour = uniformColour(s, quadList ? list : nullptr, quadList ? 6 : count, out.rgba);
-    out.constant = constantColourFill(d);
     uint32_t corners[4] = {0, 1, 2, 3};
     float window[8];
     if (fillViaTriangleBox() && (quadStrip || (quadList && quadOfIndices(list, corners))) &&
@@ -99,16 +79,12 @@ RenderEncoder::Shortcut RenderEncoder::shortcut(const Pipeline &pl, uint32_t pri
 
 void RenderEncoder::shortcutBegin(const Shortcut &s)
 {
-    if (s.constant)
-        kit(p_, switch_gm20b_constant_color, s.rgba);
     if (s.bbox)
         kit(p_, switch_gm20b_fill_via_triangle, uint32_t(NVB197_SET_FILL_VIA_TRIANGLE_MODE_FILL_BBOX));
 }
 
 void RenderEncoder::shortcutEnd(const Shortcut &s)
 {
-    if (s.constant)
-        kit(p_, switch_gm20b_constant_color_off);
     if (s.bbox)
         kit(p_, switch_gm20b_fill_via_triangle, uint32_t(NVB197_SET_FILL_VIA_TRIANGLE_MODE_DISABLED));
 }

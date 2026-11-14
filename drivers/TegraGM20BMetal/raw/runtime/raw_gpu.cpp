@@ -171,7 +171,7 @@ constexpr uint32_t kInvalidateInstruction = NVDEF(NVB197, INVALIDATE_SHADER_CACH
 // An instance of a draw: BEGIN with INSTANCE_ID SUBSEQUENT (two words), the first vertex or index and the count (three), END
 constexpr uint32_t kInstanceWords = 6;
 // a draw's shortcuts around its BEGIN/END (raw_draw_shortcuts.cpp): constant colour on and off, fill via triangle on and off
-constexpr uint32_t kShortcutWords = 2 * (SWITCH_GM20B_CONSTANT_COLOR_WORDS + SWITCH_GM20B_FILL_VIA_TRIANGLE_WORDS);
+constexpr uint32_t kShortcutWords = 2 * SWITCH_GM20B_FILL_VIA_TRIANGLE_WORDS;
 // NVK's copies of pitch memory (nouveau_copy_rect)
 constexpr uint32_t kLaunchPitch =
     NVDEF(NVB0B5, LAUNCH_DMA, DATA_TRANSFER_TYPE, PIPELINED) | NVDEF(NVB0B5, LAUNCH_DMA, FLUSH_ENABLE, TRUE) |

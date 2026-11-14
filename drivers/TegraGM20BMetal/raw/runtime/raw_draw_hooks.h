@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
-// The CPU's reading of a draw that the ROP shortcuts need (raw_constant_colour.h, raw_quad_fill.h): one quad's corners
-// from its six indices or four strip vertices, and whether every vertex the draw reads carries one colour. Read only from
+// The CPU's reading of a draw that the fill-via-triangle shortcut needs (raw_quad_fill.h): one quad's corners from its
+// six indices or four strip vertices. Read only from
 // bytes the CPU owns (setVertexBytes uploads, indices under the command buffer's read lease), at most kFillScanVertices.
 #pragma once
 #include <cstdint>
@@ -41,31 +41,6 @@ inline bool quadOfIndices(const uint32_t i[6], uint32_t out[4])
     out[1] = shared[0];
     out[2] = shared[1];
     out[3] = own;
-    return true;
-}
-
-// The half4 colour every one of `count` vertices (or `indices` of them) carries, as float bits; false where two differ,
-// the stream has no colour, or the draw reads more than kFillScanVertices
-inline bool uniformColour(const FillStream &s, const uint32_t *indices, uint32_t count, uint32_t out[4])
-{
-    if (s.colorOffset < 0 || !s.stride || !count || count > kFillScanVertices)
-        return false;
-    uint16_t first[4] = {};
-    for (uint32_t k = 0; k < count; k++) {
-        const uint64_t at = uint64_t(indices ? indices[k] : k) * s.stride + uint64_t(s.colorOffset);
-        if (at + sizeof first > s.size)
-            return false;
-        uint16_t h[4];
-        memcpy(h, s.bytes + at, sizeof h);
-        if (k == 0)
-            memcpy(first, h, sizeof first);
-        else if (memcmp(first, h, sizeof h) != 0)
-            return false;
-    }
-    for (int c = 0; c < 4; c++) {
-        const float f = fillHalf(first[c]);
-        memcpy(&out[c], &f, sizeof f);
-    }
     return true;
 }
 

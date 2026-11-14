@@ -1238,8 +1238,7 @@ private:
     // raw_draw_shortcuts.cpp: the ROP shortcuts a draw takes (constant colour, a quad as one bounding-box triangle) and a
     // blur-chain pass drawn by the 2D engine, each behind its rule
     struct Shortcut {
-        bool constant = false, bbox = false;
-        uint32_t rgba[4] = {};
+        bool bbox = false;
     };
 
     bool cpuStream(const Pipeline &pl, uint32_t first, FillStream &s) const;
