@@ -24,7 +24,9 @@ struct FreshSurfaceImportPathTest: GPUPathTest {
         ]
         var surfaces: [IOSurface] = []
         for _ in 0..<Self.surfaces {
-            guard let surface = IOSurface(properties: properties) else { throw TestFailure("IOSurface creation failed") }
+            guard let surface = IOSurface(properties: properties) else {
+                throw TestFailure("IOSurface creation failed")
+            }
             surfaces.append(surface)
         }
         try await Task.sleep(nanoseconds: 100_000_000)
