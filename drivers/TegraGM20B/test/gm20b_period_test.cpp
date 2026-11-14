@@ -677,3 +677,90 @@ TEST_F(DisplayPeriod, AnUntrackedChannelIsReleasedAndLeftAlone)
 	advance(next + 2 * kPeriod);
 	tgm_hold_track(&device, kApps[1], 1);
 }
+
+// A frame end that finds a pass in the work loop's gate wakes the owner, which opens the window: the holds come at their
+// time as before.
+TEST_F(DisplayPeriod, AFrameEndBesideAPass)
+{
+	for (unsigned chid : kApps)
+		appWork(chid, true);
+	const u64 target = now + kPeriod;
+	gateBusy = true;
+	frameEnd();
+	gateBusy = false;
+	EXPECT_EQ(c.schedules, 1u) << "the owner's wake";
+	advance(target - kLatency);
+	EXPECT_EQ(held(), 3u);
+	advance(target + 2 * kPeriod);
+	EXPECT_EQ(held(), 0u);
+}
+
+// High work needs a held channel while a pass holds the gate: the owner's next run releases it.
+TEST_F(DisplayPeriod, HighWorkNeedsAHeldChannelBesideAPass)
+{
+	for (unsigned chid : kApps)
+		appWork(chid, true);
+	const u64 target = now + kPeriod;
+	frameEnd();
+	advance(target - kLatency);
+	ASSERT_EQ(held(), 3u);
+	gateBusy = true;
+	tgm_hold_need(&device, kApps[0]);
+	EXPECT_TRUE(stopped[kApps[0]]) << "released outside the gate";
+	gateBusy = false;
+	advance(now);
+	EXPECT_FALSE(stopped[kApps[0]]) << "high work waits behind a held channel";
+	advance(target - kMs);
+	presentCompleted(now);
+	EXPECT_EQ(held(), 0u);
+	EXPECT_FALSE(tgm_hold_needed(kApps[0]));
+}
+
+// A held channel rises to the high level while a pass holds the gate: the owner's next run releases it.
+TEST_F(DisplayPeriod, AnUntrackedChannelBesideAPass)
+{
+	for (unsigned chid : kApps)
+		appWork(chid, true);
+	const u64 target = now + kPeriod;
+	frameEnd();
+	advance(target - kLatency);
+	ASSERT_EQ(held(), 3u);
+	gateBusy = true;
+	tgm_hold_track(&device, kApps[2], 0);
+	EXPECT_TRUE(stopped[kApps[2]]) << "released outside the gate";
+	gateBusy = false;
+	advance(now);
+	EXPECT_FALSE(stopped[kApps[2]]);
+	advance(target + 2 * kPeriod);
+	EXPECT_EQ(held(), 0u);
+	tgm_hold_track(&device, kApps[2], 1);
+}
+
+// A held channel is isolated (its kill under way) while a pass holds the gate: its hold ends without a release, at the
+// owner's next run, and no present or teardown starts it; nvkm's recovery owns it.
+TEST_F(DisplayPeriod, AnIsolationBesideAPass)
+{
+	const unsigned chid = kApps[1];
+	for (unsigned app : kApps)
+		appWork(app, true);
+	const u64 start = now;
+	const u64 target = start + kPeriod;
+	frameEnd();
+	advance(target - kLatency);
+	ASSERT_EQ(held(), 3u);
+	gateBusy = true;
+	tgm_hold_drop(chid);
+	gateBusy = false;
+	advance(now + kMs);
+	const u64 heldNs = tgm_hold_held_ns(chid, now);
+	advance(target - kMs);
+	EXPECT_EQ(tgm_hold_held_ns(chid, now), heldNs) << "an isolated channel still counted held";
+	presentCompleted(start + kMs);
+	EXPECT_TRUE(stopped[chid]) << "the hold started a channel nvkm's recovery owns";
+	EXPECT_EQ(held(), 1u);
+	tgm_hold_forget(chid);
+	EXPECT_TRUE(stopped[chid]);
+	stopped[chid] = 0;
+	chans[chid].blocked = 0;
+	tgm_hold_track(&device, chid, 1);
+}
