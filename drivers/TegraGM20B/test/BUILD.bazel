@@ -967,6 +967,8 @@ host_test(
         "switch_gpu_legacy_uses_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuLegacyUses.h",
     ],
+    # m2v: the uses of methods 8, 17 and 20, which only NVK calls
+    tags = ["m2v"],
     deps = [
         ":backing",
         ":coherency_kernel",
@@ -1069,6 +1071,8 @@ host_test(
         "gm20b_record_model.h",
         "gm20b_tiled_stubs.cpp",
     ],
+    # m2v: method 17 (ExecSurfaces), which only NVK calls
+    tags = ["m2v"],
     deps = [
         ":coherency",
         ":coherency_kernel",
