@@ -27,12 +27,13 @@ const std::string &client()
 {
 	static const std::string source = [] {
 		std::string units;
-		for (const char *unit : {"", "Pool", "Bo", "Channel", "Submit", "Dispatch",
-					 "Present", "Job", "JobSubmit"})
+		for (const char *unit : {"", "Pool", "Bo", "Import", "Channel", "Submit",
+					 "Dispatch", "Present", "Job", "JobSubmit"})
 			units += SourceText(std::string("../TegraGM20BUserClient") + unit + ".cpp");
 		return units + SourceText("../TegraGM20BPushScanRun.cpp") +
 		       SourceText("../TegraGM20BUserClientInternal.h") +
-		       SourceText("../SwitchGpuClientRetirement.h");
+		       SourceText("../SwitchGpuClientRetirement.h") +
+		       SourceText("../SwitchGpuClientBinds.h");
 	}();
 	return source;
 }
@@ -75,9 +76,11 @@ TEST(GM20BPoolPolicySource, BoAllocNeverRefusesACoherentBoForPoolRoom)
 	EXPECT_TRUE(refusal.Has("tgm_pool::refusal("));
 	EXPECT_TRUE(refusal.Has("compositor);"));  // the compositor keeps nvkm's floor
 	const CodeText alloc = Block(client(), "IOReturn AGXDeviceUserClient::boAlloc(");
-	EXPECT_TRUE(alloc.Has(
-		"refused = control ? nullptr : poolRefusal(in->bytes, pool_bytes_, critical_);"));
-	EXPECT_TRUE(alloc.Has("tgm_pool::coherentSource(refused, bo->pool_va != nullptr)"));
+	EXPECT_TRUE(
+		Block(client(), "AGXDeviceUserClient::BoCharge AGXDeviceUserClient::chargeBo(")
+			.Has("c.refused = control ? nullptr : poolRefusal(in->bytes, pool_bytes_, "
+			     "critical_);"));
+	EXPECT_TRUE(alloc.Has("tgm_pool::coherentSource(charge.refused, bo->pool_va != nullptr)"));
 	// A refusal does not fail the BO: no NoMemory between the tier check and the pool allocation.
 	EXPECT_FALSE(alloc.Between("if (!ret && (in->flags & TegraGM20BBoCoherent)) {",
 				   "if (!ret && bo->pool_va)")
@@ -188,8 +191,10 @@ TEST(GM20BPoolPolicySource, CompressibleBosArePoolChunksNoTaskMaps)
 	const CodeText alloc = Block(client(), "IOReturn AGXDeviceUserClient::boAlloc(");
 	const CodeText chunks = alloc.Between("if (!ret && compressible) {",
 					      "if (!ret && (in->flags & TegraGM20BBoCoherent)) {");
+	EXPECT_TRUE(chunks.Has("ret = charge.refused ? kIOReturnNoMemory : takeChunks("));
 	EXPECT_TRUE(
-		chunks.Has("refused = compressibleRefusal(in->bytes, pool_bytes_, critical_);"));
+		Block(client(), "AGXDeviceUserClient::BoCharge AGXDeviceUserClient::chargeBo(")
+			.Has("c.refused = compressibleRefusal(in->bytes, pool_bytes_, critical_);"));
 	EXPECT_TRUE(Block(client(), "const char *compressibleRefusal(uint64_t bytes, "
 				    "uint64_t held, bool compositor)")
 			    .Has("tgm_pool::compressibleRefusal(bytes, held, avail, limits, "
@@ -401,7 +406,7 @@ TEST(GM20BPushScanSource, OnlyAProfiledSubmissionIsReadOnItsThread)
 	EXPECT_TRUE(
 		Block(client(), "void deferredWork(").Has("scanRead(r->push, r->count, nullptr,"));
 	EXPECT_TRUE(Block(client(), "IOReturn AGXDeviceUserClient::boImport(")
-			    .Has("if (critical_) switch_gpu_compositor_import(cost.total_ns);"));
+			    .Has("if (critical) switch_gpu_compositor_import(cost.total_ns);"));
 }
 
 // A copying present flushes the L2 once, before the copy reads the frame; its copy writes around the L2, so its fence
@@ -1619,11 +1624,14 @@ TEST(GM20BBoIndexSource, EveryBoListChangeKeepsTheIndex)
 	const CodeText find =
 		Block(client(), "AGXDeviceUserClient::Bo *AGXDeviceUserClient::findBo(");
 	EXPECT_TRUE(find.Has("return boIndex_.find(handle);"));
-	const std::string sources = client() + SourceText("../SwitchGpuNativeImport.h") +
+	const std::string sources = SourceText("../TegraGM20BUserClientBo.cpp") +
+				    SourceText("../TegraGM20BUserClientImport.cpp") +
+				    SourceText("../SwitchGpuNativeImport.h") +
 				    SourceText("../SwitchGpuClientRetirement.h");
 	EXPECT_EQ(CodeText(sources).Count("bos_ = bo;"),
 		  CodeText(sources).Count("boIndex_.insert(bo->handle, bo);"));
-	EXPECT_EQ(CodeText(sources).Count("boIndex_.reserve()"), 3u);
+	EXPECT_EQ(CodeText(sources).Count("boIndex_.reserve()"), 2u)
+		<< "publishBo (BoAlloc, BoImport) and nativeSurfaceView";
 	EXPECT_TRUE(Block(SourceText("../SwitchGpuClientRetirement.h"),
 			  "IOReturn AGXDeviceUserClient::boFree(")
 			    .Before("*p = bo->next;", "boIndex_.erase(bo->handle);"));
@@ -1745,8 +1753,11 @@ TEST(GM20BLayoutSource, LayoutDecisionHoldsNeitherTheConnectionLockNorItsGate)
 	EXPECT_TRUE(info.Before("IOLockUnlock(lock_);", "tgm_coherency_layout(coh,"));
 	EXPECT_TRUE(info.Before("tgm_coh_put_asker(coh);", "IOLockLock(lock_);"));
 	const CodeText run = Block(client(), "IOReturn AGXDeviceUserClient::run(");
-	EXPECT_TRUE(run.Has("method != TegraGM20BMethodSurfaceLayout &&"));
-	EXPECT_TRUE(run.Has("method != TegraGM20BMethodSurfaceLayoutInfo;"));
+	EXPECT_TRUE(run.Has("const bool mutation = switch_gpu_method_closes_gate(method);"));
+	const CodeText gated = Block(SourceText("../SwitchGpuGatedMethods.h"),
+				     "static inline bool switch_gpu_method_closes_gate(");
+	EXPECT_TRUE(gated.Before("case TegraGM20BMethodSurfaceLayout:", "return false;"));
+	EXPECT_TRUE(gated.Before("case TegraGM20BMethodSurfaceLayoutInfo:", "return false;"));
 }
 
 // The asker's hold (gm20b_layout_ask_test) is the only reference the decision does not count as another user: it is

@@ -67,7 +67,8 @@ IOReturn AGXDeviceUserClient::submitJob(const TegraGM20BAbiSubmitAddress *in,
 	return result;
 }
 
-// Inside the submit gate (channels, BOs, bindings and sets stay as they are) and the channel's submit lock.
+// Inside the submit gate (channels and sets stay as they are) and the channel's submit lock, which keeps every BO and
+// binding table it finds published or not yet freed (retireBatch's passSubmitters).
 IOReturn AGXDeviceUserClient::runJob(const SwitchGpuJobRecord &record, JobScratch &job,
 				     TegraGM20BAbiExecReply *out)
 {
@@ -181,10 +182,8 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 		    (!bytes && use.reserved))
 			return kIOReturnBadArgument;
 		rangedUses += bytes != 0;
-		const Binding *binding =
-			addressed ? switch_gpu_binding_find(binds_, nbinds_, use.handle,
-							    bytes ? bytes : 1)
-				  : nullptr;
+		const BindingTable::Entry *binding =
+			addressed ? bindTable_.find(use.handle, bytes ? bytes : 1) : nullptr;
 		const Bo *bo = addressed ? (binding ? binding->bo : nullptr) : findBo(use.handle);
 		uint64_t offset = 0;
 		if (!bo || !bo->backing || switch_gpu_backing_set(bo->backing) ||

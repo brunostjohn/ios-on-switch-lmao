@@ -90,6 +90,7 @@ void AGXDeviceUserClient::free()
 		for (auto &job : channelJobs_)
 			freeJob(job);
 		boIndex_.destroy();
+		bindTable_.destroy();
 		for (auto &submitLock : submitLocks_)
 			if (submitLock)
 				IOLockFree(submitLock);

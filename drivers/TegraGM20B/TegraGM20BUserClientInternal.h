@@ -37,6 +37,8 @@
 #include "SwitchGpuBindings.h"
 #include "SwitchGpuWriterPromise.h"
 #include "SwitchGpuBoIndex.h"
+#include "SwitchGpuBindingTable.h"
+#include "SwitchGpuGatedMethods.h"
 #include "SwitchGpuLegacyUses.h"
 #include "SwitchGpuSubmitGate.h"
 #include "SwitchGpuNativeSurface.h"
@@ -418,6 +420,8 @@ class AGXDeviceUserClient : public IOUserClient
 	bool leanChannels_[kMaxChannels] = {};
 	Bo *bos_ = nullptr, *zombies_ = nullptr, *readyBos_ = nullptr;
 	SwitchGpuBoIndex<Bo, KernelMemory> boIndex_;
+	using BindingTable = SwitchGpuBindingTable<Bo, KernelMemory>;
+	BindingTable bindTable_;
 	RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
 	// a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
 	IOLock *unmapLock_ = nullptr;
@@ -509,15 +513,31 @@ class AGXDeviceUserClient : public IOUserClient
 	static void wakeWork(thread_call_param_t owner, thread_call_param_t);
 	void pushWakes();
 	void unbindOverlaps(uint64_t va, uint64_t range, Bo *only);
+	void publishBindings(BindingTable::Snapshot *made);
+	void passSubmitters();
+	IOReturn publishBo(Bo *bo, bool mapped);
+	bool bindCuts(const TegraGM20BAbiVmBind *in, uint32_t count);
+	IOReturn bindOp(const TegraGM20BAbiBindOp &op, bool &changed);
 	void scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof, bool rawMacros);
 	void deferScan(const tgm_push *pushes, uint32_t count, bool rawMacros);
 	const tgm_prof *scanSubmission(const tgm_push *pushes, uint32_t count, tgm_prof &prof,
 				       bool rawMacros);
-	const uint32_t *pushView(uint64_t va, uint64_t bytes, const Binding *&hit) const;
+	const uint32_t *pushView(uint64_t va, uint64_t bytes,
+				 const BindingTable::Entry *&hit) const;
 	IOReturn run(uint32_t method, const void *in, uint32_t inSize, void *out,
 		     const uint32_t *outSize);
 
 	static IOReturn getInfo(TegraGM20BAbiInfo *out);
+
+	struct BoCharge {
+		const char *refused;  // the pool tiers' refusal, or null
+		uint64_t readyReserve, pool, control;
+		bool critical;
+	};
+
+	BoCharge chargeBo(const TegraGM20BAbiBoAlloc *in);
+	IOReturn settleBo(const TegraGM20BAbiBoAlloc *in, const BoCharge &charge, Bo *bo,
+			  IOReturn ret, bool chunksRefused, bool system);
 	IOReturn boAlloc(const TegraGM20BAbiBoAlloc *in, TegraGM20BAbiBoAllocReply *out);
 	IOReturn boImport(const TegraGM20BAbiBoImport *in, TegraGM20BAbiBoAllocReply *out);
 	static void adoptWiring(Bo *bo, SharedWiring *w);
