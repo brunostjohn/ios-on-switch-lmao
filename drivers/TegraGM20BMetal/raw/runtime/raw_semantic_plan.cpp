@@ -202,10 +202,12 @@ bool RMCommandPlan::record(const Cmd &c, const std::vector<uint64_t> &extra)
         std::copy_n(extra.begin() + c.x, 3, dispatch.grid.begin());
         std::copy_n(extra.begin() + c.x + 3, 3, dispatch.groups.begin());
         std::copy_n(extra.begin() + c.x + 6, 6, dispatch.stageIn.begin());
-        dispatch.arguments = reinterpret_cast<void *>(uintptr_t(extra[c.x + 12]));
-        dispatch.argumentsOffset = extra[c.x + 13];
-        dispatch.stageInBuffer = reinterpret_cast<void *>(uintptr_t(extra[c.x + 14]));
-        dispatch.stageInOffset = extra[c.x + 15];
+        if (extra.size() >= c.x + 16) {  // the indirect forms' words (RMComputeEncoder records them with every dispatch)
+            dispatch.arguments = reinterpret_cast<void *>(uintptr_t(extra[c.x + 12]));
+            dispatch.argumentsOffset = extra[c.x + 13];
+            dispatch.stageInBuffer = reinterpret_cast<void *>(uintptr_t(extra[c.x + 14]));
+            dispatch.stageInOffset = extra[c.x + 15];
+        }
         dispatch.regions = raw::computeDispatch(dispatch.grid, dispatch.threads, dispatch.perThread);
         operation.uses = kernelStates[dispatch.state].uses;
         operation.payload = append(dispatches_, dispatch);
