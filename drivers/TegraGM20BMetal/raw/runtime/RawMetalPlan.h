@@ -62,6 +62,10 @@ struct RMPlanDispatch {
     std::array<uint64_t, 3> grid{}, groups{};
     std::array<uint32_t, 3> threads{};
     std::array<uint32_t, 6> stageIn{};  // setStageInRegion:'s origin and size
+    // dispatchThreadgroupsWithIndirectBuffer:'s buffer (null: a grid of the CPU's) and setStageInRegionWithIndirectBuffer:'s
+    // (null: stageIn), each an RMBuffer, and their offsets
+    void *arguments = nullptr, *stageInBuffer = nullptr;
+    uint64_t argumentsOffset = 0, stageInOffset = 0;
     bool perThread = false;
     raw::ComputeDispatch regions;
 };

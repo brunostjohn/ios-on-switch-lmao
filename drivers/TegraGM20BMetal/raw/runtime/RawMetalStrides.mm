@@ -84,6 +84,20 @@ static void stridedBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger ind
 - (void)setStageInRegion:(MTLRegion)region
 {
     _stageIn = region;
+    _stageInBuffer = nil;
+}
+
+- (void)setStageInRegionWithIndirectBuffer:(id<MTLBuffer>)buffer indirectBufferOffset:(NSUInteger)offset
+{
+    RMBuffer *b = [(id)buffer isKindOfClass:[RMBuffer class]] ? (RMBuffer *)buffer : nil;
+    if (!b || (offset & 3) || offset > b->_raw.length || b->_raw.length - offset < 24) {
+        [_cb takeReason:WhyCompute why:@"a stage-in region buffer not this device's, or the region outside it"];
+        hit(_cb, PredCompute, offset);
+        return;
+    }
+    [_cb retain:buffer];
+    _stageInBuffer = b;
+    _stageInOffset = offset;
 }
 
 - (void)setBuffer:(id<MTLBuffer>)buffer

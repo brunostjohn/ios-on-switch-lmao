@@ -579,9 +579,18 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             encodePlannedState(cb, at, *rc, re, &*ce, stateCursor);
             const auto &regions = dispatch.regions;
             ce->setStageInRegion(dispatch.stageIn);
+            ce->setStageInRegionIndirect(
+                dispatch.stageInBuffer ? &((__bridge RMBuffer *)dispatch.stageInBuffer)->_raw : nullptr,
+                dispatch.stageInOffset);
             if (!kernels || kernels->count != regions.count)
                 return fail(PredCompute, "a dispatch with an incomplete region plan", c.op);
-            for (uint8_t region = 0; region < regions.count; ++region) {
+            if (dispatch.arguments) {
+                ce->setState(kernels->jobs[0]->value());
+                if (const char *w = nullptr;
+                    !ce->dispatchIndirect(&((__bridge RMBuffer *)dispatch.arguments)->_raw, dispatch.argumentsOffset, &w))
+                    return fail(PredCompute, w, c.op);
+            }
+            for (uint8_t region = 0; region < regions.count && !dispatch.arguments; ++region) {
                 ce->setState(kernels->jobs[region]->value());
                 if (const char *w = nullptr; !ce->dispatchRegion(regions.regions[region], regions.grid, regions.nominal,
                                                                  !region, region + 1 == regions.count, &w))

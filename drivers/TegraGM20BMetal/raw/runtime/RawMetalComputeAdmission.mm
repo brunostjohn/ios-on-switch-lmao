@@ -121,6 +121,8 @@ bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKern
             }
         }
     });
+    if (dispatch.arguments || dispatch.stageInBuffer)
+        plan.addUses(at, {{dispatch.arguments, raw::ResourceUse::Read}, {dispatch.stageInBuffer, raw::ResourceUse::Read}});
     plan.resolveDispatch(at, kernels, surfaceSlots);
     return true;
 }
