@@ -20,11 +20,13 @@ struct TwinAsk {
     bool amplified = false;    // drawn once per vertex amplification
 };
 
-// The shapes selfRuns draws a triangle at a time, of the triangle counts and areas the device measured
+// The shapes selfRuns draws a triangle at a time, of the triangle counts and areas the device measured. An indexed
+// strip is not one: whether its faces decide its pixels (FetchDraw::facing) is known only once the draw is prepared,
+// and a draw that took the twin there would be refused where the storage form draws it.
 constexpr bool twinTaken(const TwinAsk &a)
 {
     const FetchDraw &d = a.shape;
-    if (a.amplified || (d.primitive != 3 && d.primitive != 4) ||
+    if (a.amplified || (d.primitive != 3 && d.primitive != 4) || (d.indexed && d.primitive == 4) ||
         fetchRefusal(true, a.primitiveId, d) != FetchRefusal::None)
         return false;
     const uint32_t n = triangles(d);

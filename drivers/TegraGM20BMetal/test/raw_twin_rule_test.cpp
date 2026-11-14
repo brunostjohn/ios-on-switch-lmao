@@ -50,9 +50,8 @@ TEST(RawTwinRule, NoShapeTheTwinTakesIsOneSelfRunsRefuses)
                             EXPECT_EQ(raw::fetchRefusal(true, primitiveId, a.shape), raw::FetchRefusal::None);
                             std::vector<std::pair<uint32_t, uint32_t>> runs;
                             std::array<bool, raw::TriangleRuns::kMaxTriangles> winding;
-                            EXPECT_TRUE(
-                                raw::singlePrimitive(a.shape) ||
-                                raw::TriangleRuns::sequential(primitive, count, instances, indexed, runs, winding))
+                            EXPECT_TRUE(raw::singlePrimitive(a.shape) ||
+                                        raw::TriangleRuns::sequential(primitive, count, instances, runs, winding))
                                 << primitive << " " << count << " " << instances << " " << indexed;
                         }
 }
