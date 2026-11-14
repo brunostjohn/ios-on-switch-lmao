@@ -180,10 +180,10 @@ static inline size_t switch_busy_format(char *out, size_t size, const struct swi
             break;
         }
         used[best] = true;
-        at = switch_busy_put(size, at,
-                             snprintf(out + at, size - at, "%s%s %llu us/%u", k ? ", " : "", switch_stall_wait_name(best),
-                                      (unsigned long long)switch_busy_us(e->hint_ticks[best], numer, denom),
-                                      e->hint_waits[best]));
+        at = switch_busy_put(
+            size, at,
+            snprintf(out + at, size - at, "%s%s %llu us/%u", k ? ", " : "", switch_stall_wait_name(best),
+                     (unsigned long long)switch_busy_us(e->hint_ticks[best], numer, denom), e->hint_waits[best]));
     }
     at = switch_busy_put(size, at,
                          snprintf(out + at, size - at, "), waiting for a core %llu us, %u preemptions; longest waits:",
@@ -194,11 +194,11 @@ static inline size_t switch_busy_format(char *out, size_t size, const struct swi
 
         switch_busy_where(pc, sizeof(pc), w->pc_where, w->pc);
         switch_busy_where(lr, sizeof(lr), w->lr_where, w->lr);
-        at = switch_busy_put(size, at,
-                             snprintf(out + at, size - at, " %llu us %s, user pc %s lr %s, kernel 0x%llx, event 0x%llx;",
-                                      (unsigned long long)switch_busy_us(w->ticks, numer, denom),
-                                      switch_stall_wait_name(w->hint), pc, lr, (unsigned long long)w->kernel,
-                                      (unsigned long long)w->event));
+        at = switch_busy_put(
+            size, at,
+            snprintf(out + at, size - at, " %llu us %s, user pc %s lr %s, kernel 0x%llx, event 0x%llx;",
+                     (unsigned long long)switch_busy_us(w->ticks, numer, denom), switch_stall_wait_name(w->hint), pc,
+                     lr, (unsigned long long)w->kernel, (unsigned long long)w->event));
     }
     return at;
 }

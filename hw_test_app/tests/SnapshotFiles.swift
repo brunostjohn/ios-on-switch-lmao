@@ -18,7 +18,9 @@ enum SnapshotFiles {
     static func describe(_ path: String) -> Description {
         var metrics = Metrics()
         var info = stat()
-        guard stat(path, &info) == 0 else { return Description(content: "missing", compressed: false, metrics: metrics) }
+        guard stat(path, &info) == 0 else {
+            return Description(content: "missing", compressed: false, metrics: metrics)
+        }
         let compressed = info.st_flags & UInt32(UF_COMPRESSED) != 0
         metrics.set("bytes", Int(info.st_size))
         metrics.set("st_flags", String(format: "0x%x", info.st_flags))
@@ -40,7 +42,8 @@ enum SnapshotFiles {
                 le32(b, 0x44))
         }
         if b.count >= 0x2c, b.prefix(8) == [0xab, 0x4b, 0x54, 0x58, 0x20, 0x31, 0x31, 0xbb] {
-            return String(format: "KTX 1 texture internal format 0x%x %ux%u", le32(b, 0x1c), le32(b, 0x24), le32(b, 0x28))
+            return String(
+                format: "KTX 1 texture internal format 0x%x %ux%u", le32(b, 0x1c), le32(b, 0x24), le32(b, 0x28))
         }
         return b.prefix(8).map { String(format: "%02x", $0) }.joined()
     }

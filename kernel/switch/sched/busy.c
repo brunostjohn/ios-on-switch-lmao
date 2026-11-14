@@ -118,9 +118,10 @@ static void busy_wait_of(thread_t thread, struct switch_busy_wait *w)
 
     w->hint = (uint8_t)thread->block_hint;
     w->event = VM_KERNEL_UNSLIDE_OR_PERM(thread->wait_event);
-    w->kernel = thread->continuation != NULL
-                    ? VM_KERNEL_UNSLIDE((uintptr_t)ptrauth_strip((void *)thread->continuation, ptrauth_key_function_pointer))
-                    : 0;
+    w->kernel =
+        thread->continuation != NULL
+            ? VM_KERNEL_UNSLIDE((uintptr_t)ptrauth_strip((void *)thread->continuation, ptrauth_key_function_pointer))
+            : 0;
     if (user == NULL) {
         return;
     }
@@ -215,8 +216,10 @@ static void busy_write(__unused thread_call_param_t p0, __unused thread_call_par
             os_atomic_store(&s->tail, ++tail, release);
             absolutetime_to_nanoseconds(e.woke, &woke_ns);
             absolutetime_to_nanoseconds(e.end - e.woke, &len_ns);
-            n = snprintf(line, sizeof(line), "%s[%d] main thread 0x%llx busy %llu ms from its run loop's wake at %llu.%03llu s "
-                         "(%u not logged): ", s->name, pid, tid, len_ns / NSEC_PER_MSEC, woke_ns / NSEC_PER_SEC,
+            n = snprintf(line, sizeof(line),
+                         "%s[%d] main thread 0x%llx busy %llu ms from its run loop's wake at %llu.%03llu s "
+                         "(%u not logged): ",
+                         s->name, pid, tid, len_ns / NSEC_PER_MSEC, woke_ns / NSEC_PER_SEC,
                          woke_ns % NSEC_PER_SEC / NSEC_PER_MSEC, os_atomic_load(&s->dropped, relaxed));
             if (n > 0 && (size_t)n < sizeof(line)) {
                 switch_busy_format(line + n, sizeof(line) - (size_t)n, &e, tb.numer, tb.denom, BUSY_KINDS);

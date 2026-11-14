@@ -31,7 +31,11 @@ struct Thread {
         if (switch_busy_departed(&b, now, cpu, waiting, idle, &w, kMin, &done))
             ended++;
     }
-    void run(uint64_t now, uint64_t made) { switch_busy_dispatched(&b, now, made); }
+
+    void run(uint64_t now, uint64_t made)
+    {
+        switch_busy_dispatched(&b, now, made);
+    }
 };
 
 std::string Line(const switch_busy_episode &e, size_t size = 900)
@@ -128,10 +132,17 @@ TEST(XnuSchedBusy, TheLineNamesKindsLargestFirstAndTheLongestWaits)
     e.hint_waits[2] = 12;
     e.hint_ticks[10] = 8;
     e.hint_waits[10] = 15;
-    e.longest[0] = {.ticks = 25, .pc = 0x1a2b, .lr = 0x40, .kernel = 0xfff, .event = 0x77,
-                    .pc_where = SWITCH_STALL_DSC, .lr_where = SWITCH_STALL_MAIN, .hint = 2};
+    e.longest[0] = {.ticks = 25,
+                    .pc = 0x1a2b,
+                    .lr = 0x40,
+                    .kernel = 0xfff,
+                    .event = 0x77,
+                    .pc_where = SWITCH_STALL_DSC,
+                    .lr_where = SWITCH_STALL_MAIN,
+                    .hint = 2};
     const std::string line = Line(e);
-    EXPECT_THAT(line, HasSubstr("on core 540 us, blocked 52 us in 31 waits (mach_msg receive 40 us/12, ulock 8 us/15)"));
+    EXPECT_THAT(line,
+                HasSubstr("on core 540 us, blocked 52 us in 31 waits (mach_msg receive 40 us/12, ulock 8 us/15)"));
     EXPECT_THAT(line, HasSubstr("waiting for a core 20 us, 12 preemptions"));
     EXPECT_THAT(line, HasSubstr("25 us mach_msg receive, user pc dsc 0x1a2b lr main+0x40, kernel 0xfff, event 0x77;"));
 }
@@ -163,9 +174,9 @@ TEST(XnuSchedBusySource, BothKernelsFeedItUnderTheThreadsLock)
         const std::string prim = switch_ios::test::SourceText(std::string(tree) + "/osfmk/kern/sched_prim.c");
         const std::string dispatch = switch_ios::test::Body(prim, "\nthread_dispatch(\n");
         const size_t lock = dispatch.find("\t\t\tthread_lock(thread);\n");
-        const size_t hook = dispatch.find(
-            "thread->computation_metered += (processor->last_dispatch - thread->computation_epoch);\n"
-            "\t\t\tswitch_sched_off_core(thread, processor->last_dispatch);\n");
+        const size_t hook =
+            dispatch.find("thread->computation_metered += (processor->last_dispatch - thread->computation_epoch);\n"
+                          "\t\t\tswitch_sched_off_core(thread, processor->last_dispatch);\n");
         const size_t wait = dispatch.find("if (!(thread->state & TH_WAIT)) {");
         ASSERT_NE(lock, std::string::npos) << tree;
         ASSERT_NE(hook, std::string::npos) << tree;
@@ -173,19 +184,21 @@ TEST(XnuSchedBusySource, BothKernelsFeedItUnderTheThreadsLock)
         EXPECT_LT(hook, wait) << tree;
     }
     const std::string header = switch_ios::test::SourceText("../switch/include/switch/sched.h");
-    EXPECT_THAT(switch_ios::test::Body(header, "static inline void switch_sched_on_core(thread_t thread, uint64_t now)"),
-                HasSubstr("switch_sched_busy_dispatched(thread, now);"));
+    EXPECT_THAT(
+        switch_ios::test::Body(header, "static inline void switch_sched_on_core(thread_t thread, uint64_t now)"),
+        HasSubstr("switch_sched_busy_dispatched(thread, now);"));
 }
 
 TEST(XnuSchedBusySource, NothingUnderTheThreadLockLocksSleepsAllocatesOrLogs)
 {
     const std::string source = switch_ios::test::SourceText("../switch/sched/busy.c");
     const std::string header = switch_ios::test::SourceText("../switch/sched/busy.h");
-    const std::string hot = switch_ios::test::Body(source, "\nstatic struct busy_slot *busy_slot_of(") +
-                            switch_ios::test::Body(source, "\nstatic void busy_wait_of(") +
-                            switch_ios::test::Body(source, "\nvoid switch_sched_busy_departed(") +
-                            switch_ios::test::Body(source, "\nvoid switch_sched_busy_dispatched(") +
-                            switch_ios::test::Between(header, "struct switch_busy {", "static inline uint64_t switch_busy_us(");
+    const std::string hot =
+        switch_ios::test::Body(source, "\nstatic struct busy_slot *busy_slot_of(") +
+        switch_ios::test::Body(source, "\nstatic void busy_wait_of(") +
+        switch_ios::test::Body(source, "\nvoid switch_sched_busy_departed(") +
+        switch_ios::test::Body(source, "\nvoid switch_sched_busy_dispatched(") +
+        switch_ios::test::Between(header, "struct switch_busy {", "static inline uint64_t switch_busy_us(");
     ASSERT_FALSE(hot.empty());
     for (const char *call : {"lock(", "lck_", "alloc", "kfree", "os_log", "printf", "thread_call", "IOLock", "IOSleep",
                              "assert_wait", "thread_block", "copyin", "msleep", "zalloc"})
