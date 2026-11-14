@@ -246,6 +246,10 @@ xcrun clang++ -O1 -std=c++17 -fobjc-arc -I "$TREE/drivers/TegraGM20B" -I "$TREE/
     -x c++ "$RAW/fx/fx_mip.cpp" -framework Metal -framework Foundation -framework CoreVideo -framework IOSurface \
     -o "$OUT/ycbcrstoreoracle"
 echo "built $OUT/ycbcrstoreoracle"
+# ycbcrloadoracle: raw_ycbcr_store_rule.h's rule of what a Load of a two-plane YCbCr code target holds, against this Mac's Metal
+xcrun clang++ -O1 -std=c++17 -fobjc-arc "$HERE/ycbcrloadoracle.mm" -framework Metal -framework Foundation \
+    -framework CoreVideo -framework IOSurface -o "$OUT/ycbcrloadoracle"
+echo "built $OUT/ycbcrloadoracle"
 # packedplaneoracle: R10Unorm_PACKED and RG10Unorm_PACKED: the conversion and store states against this Mac's Metal's reads
 # ($OUT/packedplaneoracle pack)
 xcrun clang++ -O1 -std=c++17 -fobjc-arc "$HERE/packedplaneoracle.mm" "$RAW/runtime/raw_ycbcr.cpp" -framework Metal \
