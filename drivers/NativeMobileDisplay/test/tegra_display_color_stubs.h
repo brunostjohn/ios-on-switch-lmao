@@ -40,7 +40,7 @@ inline void IOSimpleLockFree(IOSimpleLock *lock)
     delete lock;
 }
 
-inline void IOSimpleLockLock(IOSimpleLock *lock)
+__attribute__((no_thread_safety_analysis)) inline void IOSimpleLockLock(IOSimpleLock *lock)
 {
     filterMayNot("IOSimpleLockLock");
     lock->mutex.lock();
@@ -48,18 +48,19 @@ inline void IOSimpleLockLock(IOSimpleLock *lock)
     ++gSimpleLockTakes;
 }
 
-inline void IOSimpleLockUnlock(IOSimpleLock *lock)
+__attribute__((no_thread_safety_analysis)) inline void IOSimpleLockUnlock(IOSimpleLock *lock)
 {
     lock->mutex.unlock();
 }
 
-inline IOInterruptState IOSimpleLockLockDisableInterrupt(IOSimpleLock *lock)
+__attribute__((no_thread_safety_analysis)) inline IOInterruptState IOSimpleLockLockDisableInterrupt(IOSimpleLock *lock)
 {
     IOSimpleLockLock(lock);
     return 0;
 }
 
-inline void IOSimpleLockUnlockEnableInterrupt(IOSimpleLock *lock, IOInterruptState)
+__attribute__((no_thread_safety_analysis)) inline void IOSimpleLockUnlockEnableInterrupt(IOSimpleLock *lock,
+                                                                                         IOInterruptState)
 {
     IOSimpleLockUnlock(lock);
 }
@@ -74,7 +75,7 @@ inline void IOLockFree(IOLock *lock)
     delete lock;
 }
 
-inline void IOLockLock(IOLock *lock)
+__attribute__((no_thread_safety_analysis)) inline void IOLockLock(IOLock *lock)
 {
     filterMayNot("IOLockLock");
     lock->mutex.lock();
@@ -82,7 +83,7 @@ inline void IOLockLock(IOLock *lock)
     ++gLockTakes;
 }
 
-inline void IOLockUnlock(IOLock *lock)
+__attribute__((no_thread_safety_analysis)) inline void IOLockUnlock(IOLock *lock)
 {
     lock->mutex.unlock();
 }

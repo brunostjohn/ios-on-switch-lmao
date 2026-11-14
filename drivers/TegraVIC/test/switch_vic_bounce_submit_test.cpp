@@ -139,7 +139,7 @@ extern "C" void switch_gpu_backing_describe(switch_gpu_backing *, switch_gpu_bac
     info->page_count = 1;
 }
 
-int switch_vic_surface_access(const TegraVICSurface *s, bool, SwitchVICSurfaceAccess *a, bool)
+int switch_vic_surface_access(const TegraVICSurface *s, bool, SwitchVICSurfaceAccess *a, bool, switch_gpu_backing *)
 {
     ++gates;
     const bool source = s->memory == &sourceMemory;

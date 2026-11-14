@@ -564,6 +564,11 @@ struct Display : OSObject {
         gPreemptionOff = 0;
         completionFlip = {};
         completionFlipOwner = nullptr;
+        frameEndUnmasked = false;
+        intMaskTakes = feTaken = vblankTaken = vpulseTaken = feHandled = vblankHandled = vpulseHandled = 0;
+        flipDeadlineArmed = offerAged = false;
+        flipDeadlineFrames = gpuOfferDeadline = 0;
+        completionPassFolds = kickWaiting = false;
         completionUnverified = {kNoBuffer, 0};
         completionFlipsProven = false;
         ring.reset(3);
