@@ -873,8 +873,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint64_t vblankTime = 0, vblankContinuous = 0, vblankLast = 0, frameEnds = 0;
     // r17-touch: the compositor's vsync phase (VsyncPhase.h, the pacing line's "phase"). While its lead is in effect the vsync
     // goes out at V_PULSE2, programmed `lead` before the frame end; otherwise at V_BLANK as before, and at most one goes out a
-    // frame. V_BLANK carries the vsync until V_PULSE2 has reached the CPU once; if it has not after VsyncPhaseProbe::kFlips
-    // latched flips with it programmed, one error line and V_PULSE2 is unprogrammed; the next lead probes it again. Once it
+    // frame. V_PULSE2 is programmed only while a vsync client routes it to the CPU, and dropped with the last client. V_BLANK
+    // carries the vsync until V_PULSE2 has reached the CPU once; if it has not after VsyncPhaseProbe::kFlips latched flips
+    // with it programmed and routed, one error line and V_PULSE2 is unprogrammed; the next lead probes it again. Once it
     // has, a silent one panics as a silent V_BLANK does. The phase runs on the frame marks, which every kernel keeps (the
     // stats are debug only). Core Animation registers no vsync client on a J120 or a J181 (watchVsync).
     VsyncPhase phase;
@@ -1924,7 +1925,9 @@ private:
         if (!vsyncArmed)
             return;
         if (!vsyncWanted()) {
-            writeIntMask(kVblankInt | kVpulse2Int, 0);  // no client: no wakeup of its own a frame
+            writeIntMask(kVblankInt, 0);  // no client: no wakeup of its own a frame
+            if (vpulseProgrammed)
+                dropVpulse2();
             vsyncArmed = false;
             native_legacy_vsync_observed(2, vsyncHz);
             noteVsyncIdle();
@@ -1936,10 +1939,10 @@ private:
     }
 
     // r17-touch: the vsync phase (VsyncPhase.h, the phase members above). V_PULSE2 carries the vsync once it has reached the CPU,
-    // while a lead is in effect and nothing turned the phase off.
+    // while it is programmed (a vsync client routes it), a lead is in effect and nothing turned the phase off.
     bool phaseDelivering() const
     {
-        return vpulseSeen && (phase.lead() != 0u);
+        return vpulseSeen && vpulseProgrammed && (phase.lead() != 0u);
     }
 
     void vpulseNotify()
@@ -2050,9 +2053,11 @@ private:
         dc[kDcDispSignalOptions0] = dc[kDcDispSignalOptions0] | kVpulse2Enable;
     }
 
+    // V_PULSE2 is programmed only while a vsync client routes it to the CPU: without one it would latch masked, which no
+    // probe could tell from a V_PULSE2 that never fires.
     void programPhase(uint32_t leadUs)
     {
-        if (!dc || hwSuspended || !phaseTiming || !lineNs())
+        if (!dc || hwSuspended || !phaseTiming || !lineNs() || (!vpulseProgrammed && !vsyncArmed))
             return;
         const int64_t back = (static_cast<int64_t>(leadUs) * 1000 - feAfterVblankNs) / static_cast<int64_t>(lineNs());
         int64_t line = static_cast<int64_t>(vblankLine) - back - phaseCorrection;
@@ -2069,8 +2074,7 @@ private:
         if (!vpulseProgrammed) {
             dc[kDcIntStatus] = kVpulse2Int;
             dc[kDcIntEnable] = dc[kDcIntEnable] | kVpulse2Int;
-            if (vsyncArmed)
-                writeIntMask(0, kVpulse2Int);  // else armVsync unmasks it
+            writeIntMask(0, kVpulse2Int);
             vpulseProgrammed = true;
             phaseProbe.programmed();
         }
@@ -2082,8 +2086,9 @@ private:
     {
         if (!mark.submit || !mark.ready || !vsyncOf(mark))
             return;
-        if (phaseProbe.flip(vpulseProgrammed, vpulseSeen) == VsyncPhaseProbe::kFailed) {
-            phaseProbeMissed();
+        const VsyncPhaseProbe::Step step = phaseProbe.flip(vpulseProgrammed, vpulse2Routed(), vpulseSeen);
+        if (step != VsyncPhaseProbe::kRun) {
+            phaseProbeEnded(step);
             return;
         }
         if (vsyncInterval)
@@ -2095,21 +2100,35 @@ private:
             programPhase(phase.lead());
     }
 
-    // V_PULSE2 programmed and not seen in VsyncPhaseProbe::kFlips flips: unprogrammed, the vsync at V_BLANK; the next lead
-    // programs it again.
-    void phaseProbeMissed()
+    // DC A raises V_PULSE2 to the CPU only while it is both enabled and unmasked (TRM 24.6.20 DC_CMD_INT_MASK_0 and 24.6.21
+    // DC_CMD_INT_ENABLE_0, bit 5).
+    bool vpulse2Routed()
+    {
+        return (dc[kDcIntEnable] & dc[kDcIntMask] & kVpulse2Int) != 0u;
+    }
+
+    void dropVpulse2()
     {
         writeIntMask(kVpulse2Int, 0);
         dc[kDcIntEnable] = dc[kDcIntEnable] & ~kVpulse2Int;
         vpulseProgrammed = false;
+    }
+
+    // V_PULSE2 not seen in VsyncPhaseProbe::kFlips routed flips (kFailed), or programmed without its route (kUnrouted):
+    // unprogrammed, one line, the vsync at V_BLANK; the next lead programs it again.
+    void phaseProbeEnded(VsyncPhaseProbe::Step step)
+    {
+        const uint32_t enable = dc[kDcIntEnable], mask = dc[kDcIntMask];
+        dropVpulse2();
         char gic[192];
         switch_interrupt_describe(kDisplayAInterrupt, gic, sizeof(gic));
-        IOLog("SwitchDisplay: V_PULSE2 never reached the CPU in %u flips (line %u; SIGNAL_OPTIONS0 %#x V_PULSE2 "
-              "%#x/%#x INT_STATUS %#x MASK %#x ENABLE %#x, %s): vsync at V_BLANK\n",
-              VsyncPhaseProbe::kFlips, phaseLine, static_cast<uint32_t>(dc[kDcDispSignalOptions0]),
+        IOLog("SwitchDisplay: V_PULSE2 %s (line %u; SIGNAL_OPTIONS0 %#x V_PULSE2 %#x/%#x INT_STATUS %#x MASK %#x ENABLE "
+              "%#x, %s): vsync at V_BLANK\n",
+              step == VsyncPhaseProbe::kFailed ? "never reached the CPU in its probe's flips"
+                                               : "was programmed without its route to the CPU",
+              phaseLine, static_cast<uint32_t>(dc[kDcDispSignalOptions0]),
               static_cast<uint32_t>(dc[kDcDispVpulse2Control]), static_cast<uint32_t>(dc[kDcDispVpulse2Position]),
-              static_cast<uint32_t>(dc[kDcIntStatus]), static_cast<uint32_t>(dc[kDcIntMask]),
-              static_cast<uint32_t>(dc[kDcIntEnable]), gic);
+              static_cast<uint32_t>(dc[kDcIntStatus]), mask, enable, gic);
     }
 
     // The frame's lines, for the vsync phase's V_PULSE2 line (its constants' comment). One error line when DC A's timing

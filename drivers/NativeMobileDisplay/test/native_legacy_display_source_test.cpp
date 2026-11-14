@@ -218,12 +218,29 @@ TEST(DisplayRoutesSource, NoFailureHoldsARouteOff)
 TEST(VsyncPhaseSource, NeverFiringVpulse2CostsOneLine)
 {
     const CodeText present = method("void notePhasePresent(uint64_t stamp, const FrameMark &mark)");
-    EXPECT_TRUE(present.Has("phaseProbe.flip(vpulseProgrammed, vpulseSeen)"));
-    EXPECT_TRUE(present.Has("phaseProbeMissed();"));
+    EXPECT_TRUE(present.Has("phaseProbe.flip(vpulseProgrammed, vpulse2Routed(), vpulseSeen)"));
+    EXPECT_TRUE(present.Has("phaseProbeEnded(step);"));
     EXPECT_FALSE(present.Has("panic(")) << "a V_PULSE2 that never fired costs one line, not the boot";
-    EXPECT_TRUE(method("void phaseProbeMissed()").Has("vsync at V_BLANK"));
-    EXPECT_TRUE(method("void phaseProbeMissed()").Has("vpulseProgrammed = false;"));
+    const CodeText ended = method("void phaseProbeEnded(VsyncPhaseProbe::Step step)");
+    EXPECT_TRUE(ended.Has("vsync at V_BLANK"));
+    EXPECT_TRUE(ended.Has("dropVpulse2();"));
+    EXPECT_TRUE(method("void dropVpulse2()").Has("vpulseProgrammed = false;"));
     EXPECT_TRUE(method("unsigned noteLong(uint32_t frames, const FrameMark &mark)").Has("kLongRate"));
+}
+
+// The probe asks whether V_PULSE2 reaches the CPU, so it only counts flips with V_PULSE2 routed (enabled and unmasked):
+// V_PULSE2 is programmed only with a vsync client and unmasked in the same step, and goes with the last client, so a
+// masked V_PULSE2 never fails a probe.
+TEST(VsyncPhaseSource, Vpulse2IsProbedOnlyWhileRouted)
+{
+    const CodeText program = method("void programPhase(uint32_t leadUs)");
+    EXPECT_TRUE(program.Has("(!vpulseProgrammed && !vsyncArmed)"));
+    EXPECT_TRUE(program.Before("dc[kDcIntEnable] = dc[kDcIntEnable] | kVpulse2Int;", "writeIntMask(0, kVpulse2Int);"));
+    EXPECT_FALSE(program.Has("else armVsync unmasks it"));
+    EXPECT_TRUE(method("bool vpulse2Routed()").Has("dc[kDcIntEnable] & dc[kDcIntMask] & kVpulse2Int"));
+    const CodeText notify = method("void vblankNotify()");
+    EXPECT_TRUE(notify.Before("writeIntMask(kVblankInt, 0);", "dropVpulse2();"));
+    EXPECT_TRUE(method("bool phaseDelivering() const").Has("vpulseProgrammed"));
 }
 
 TEST(VsyncPhaseSource, ReplacementsAndResume)
