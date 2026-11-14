@@ -35,23 +35,24 @@ static void sleep_gate(void)
 {
 	u64 start = nvxnu_nanotime();
 	u64 end = start + TGM_HANG_NS;
-	u32 inside = 0;
+	u64 inside = 0;
 
 	mutex_lock(&tgm_gate_lock);
 	tgm_gate_close(&tgm_sc7_gate);
-	inside = __atomic_load_n(&tgm_sc7_gate.inside, __ATOMIC_SEQ_CST);
+	inside = tgm_gate_inside(&tgm_sc7_gate);
 	while (!tgm_gate_drained(&tgm_sc7_gate)) {
-		if (!nvxnu_mutex_sleep(tgm_gate_lock.lck, &tgm_sc7_gate.inside, end) &&
+		if (!nvxnu_mutex_sleep(tgm_gate_lock.lck, TGM_GATE_DRAINED, end) &&
 		    !tgm_gate_drained(&tgm_sc7_gate)) {
-			nvxnu_panic("tegra-gm20b: sleep: %u callers still in the GPU %llu ms after "
-				    "its gate shut",
-				    __atomic_load_n(&tgm_sc7_gate.inside, __ATOMIC_SEQ_CST),
-				    (unsigned long long)(TGM_HANG_NS / 1000000));
+			nvxnu_panic(
+				"tegra-gm20b: sleep: %llu callers still in the GPU %llu ms after "
+				"its gate shut",
+				(unsigned long long)tgm_gate_inside(&tgm_sc7_gate),
+				(unsigned long long)(TGM_HANG_NS / 1000000));
 		}
 	}
 	mutex_unlock(&tgm_gate_lock);
-	tgm_journal("tegra-gm20b: sleep: submissions held (%u were in the driver): %llu us", inside,
-		    us_since(start));
+	tgm_journal("tegra-gm20b: sleep: submissions held (%llu were in the driver): %llu us",
+		    (unsigned long long)inside, us_since(start));
 }
 
 #define SLEEP_RECOVERIES 3

@@ -143,7 +143,10 @@ struct wstat_state {
 extern struct wstat_state tgm_wstat;
 extern struct tgm_gate tgm_sc7_gate;
 extern struct mutex tgm_gate_lock;
+/* tgm_gate_lock's two events: the closer sleeps on this one, callers turned back on &tgm_sc7_gate.shut */
+#define TGM_GATE_DRAINED ((void *)tgm_sc7_gate.cells)
 void tgm_gate_enter(void);
+int cpu_number(void);
 int tgm_clk_raise(char *line, unsigned int len);
 int tgm_m2_device_init(struct nvkm_device *device, const char **at);
 extern u64 tgm_cpu_zeroes, tgm_cpu_zero_bytes;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // SubmitJob's global locks that switch_gpu_submit_cost_test cannot run: its exec's producer channels resolved under one
-// tgm_live_lock a pass, every status read before it, and the job's ownership transaction taking no reference of its
-// own on its uses (the connection's BOs hold them inside the submit gate).
+// tgm_live_lock a pass, every status read before it, the job's ownership transaction taking no reference of its own on
+// its uses (the connection's BOs hold them inside the submit gate), and system sleep's gate counting per CPU.
 #include <gtest/gtest.h>
 
 #include <string>
@@ -72,4 +72,33 @@ TEST(GM20BSubmitLocksSource, AJobsRecordsGoUpBeforeItsKick)
 				      "IOReturn AGXDeviceUserClient::exec(");
 	EXPECT_TRUE(legacy.Has("jobVisibility, nullptr, 0, &transaction);"));
 	EXPECT_FALSE(legacy.Has("switch_gpu_backing_commit("));
+}
+
+// System sleep's gate is on every submission's path: an open enter or leave counts on the caller's own CPU's cell with
+// preemption off, a plain store and a fence, so it writes no line another CPU writes. gm20b_sleep_test runs the counts
+// with callers moving between CPUs.
+TEST(GM20BSubmitLocksSource, TheSleepGateCountsOnTheCallersCpu)
+{
+	const std::string gate = unit("TegraGM20BSleepGate.h");
+	for (const char *step :
+	     {"static inline enum tgm_gate_entry tgm_gate_try_enter(",
+	      "static inline int tgm_gate_leave(", "static inline void tgm_gate_count("}) {
+		const CodeText body = Block(gate, step);
+		for (const char *shared :
+		     {"_fetch", "fetch_", "compare_exchange", "__atomic_exchange", "mutex", "lock"})
+			EXPECT_FALSE(body.Has(shared)) << step;
+	}
+	const std::string inl = unit("gpu_inline.h");
+	const CodeText enter = Block(inl, "static inline enum tgm_gate_entry gate_try_enter(void)");
+	const CodeText leave = Block(inl, "static inline void gate_leave(void)");
+	EXPECT_TRUE(enter.Before("_disable_preemption();",
+				 "tgm_gate_try_enter(&tgm_sc7_gate, (unsigned int)cpu_number());"));
+	EXPECT_TRUE(enter.Before("tgm_gate_try_enter(", "_enable_preemption();"));
+	EXPECT_TRUE(leave.Before("_disable_preemption();",
+				 "tgm_gate_leave(&tgm_sc7_gate, (unsigned int)cpu_number());"));
+	EXPECT_TRUE(leave.Before("tgm_gate_leave(", "_enable_preemption();"));
+	EXPECT_TRUE(leave.Before("_enable_preemption();", "gate_wake_closer();"));
+	EXPECT_EQ(CodeText(inl + unit("gpu_bringup.c")).Count("tgm_gate_try_enter("), 1u);
+	EXPECT_TRUE(Block(unit("gpu_bringup.c"), "void tgm_gate_enter(void)")
+			    .Has("while ((entry = gate_try_enter()) != TGM_GATE_IN)"));
 }

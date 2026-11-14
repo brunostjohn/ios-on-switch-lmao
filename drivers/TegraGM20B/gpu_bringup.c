@@ -99,7 +99,7 @@ void tgm_gate_enter(void)
 {
 	enum tgm_gate_entry entry = TGM_GATE_IN;
 
-	while ((entry = tgm_gate_try_enter(&tgm_sc7_gate)) != TGM_GATE_IN) {
+	while ((entry = gate_try_enter()) != TGM_GATE_IN) {
 		if (READ_ONCE(tgm_gpu.railed)) {
 			if (entry == TGM_GATE_SHUT_WAKE)
 				gate_wake_closer();
@@ -109,7 +109,7 @@ void tgm_gate_enter(void)
 		}
 		mutex_lock(&tgm_gate_lock);
 		if (entry == TGM_GATE_SHUT_WAKE)
-			nvxnu_wakeup(&tgm_sc7_gate.inside);
+			nvxnu_wakeup(TGM_GATE_DRAINED);
 		while (tgm_gate_is_shut(&tgm_sc7_gate) && !READ_ONCE(tgm_gpu.railed))
 			nvxnu_mutex_sleep(tgm_gate_lock.lck, &tgm_sc7_gate.shut, ~0ULL);
 		mutex_unlock(&tgm_gate_lock);
