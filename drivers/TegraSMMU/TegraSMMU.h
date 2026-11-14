@@ -85,7 +85,9 @@ uint32_t tegra_smmu_read(uint32_t offset);
 // Sets or clears a memory client's hot-reset bit in MC_CLIENT_HOTRESET_CTRL (0x200) or CTRL_1 (0x970); the flush has
 // drained once its bit reads set in the matching STATUS register (tegra_smmu_read). The only writer of both registers:
 // each holds the bits of clients that different drivers power (CTRL: VIC, NVENC, HC, DCB; CTRL_1: GPU, NVDEC, NVJPG),
-// and a read-modify-write anywhere else can put back a bit another driver just changed.
+// and a read-modify-write anywhere else can put back a bit another driver just changed. STATUS reads done for a client
+// with no flush requested (TRM 18.11.1.114), so the bit is read back: one error line names the client when it did not
+// take, and a flush trusts STATUS only while its request bit still reads set.
 void tegra_mc_hot_reset(uint32_t ctrl, uint32_t bit, bool on);
 // After SC7, before any translated client runs (SwitchSuspend's wake): every attached swgroup programmed again.
 // Returns how many could not be (one line each); their clients then fault at the MC instead of translating.

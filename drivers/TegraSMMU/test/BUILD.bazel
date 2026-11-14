@@ -5,6 +5,7 @@
 #   smmu_attachments_test     the swgroups tegra_smmu_resume programs again after SC7 (TegraSMMUAttachments.h)
 #   smmu_space_test           an engine's IOVA allocation (TegraSMMUSpace.h)
 #   mc_hot_reset_owner_test   tegra_mc_hot_reset is the one writer of the MC's hot-reset registers
+#   mc_hot_reset_request_test a hot-reset bit that does not read back is one line naming the client
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
 
@@ -101,5 +102,33 @@ host_test(
     deps = [
         ":mc_kernel",
         ":mc_owner",
+    ],
+)
+
+host_library(
+    name = "mc_smmu",
+    srcs = [
+        "//drivers/TegraSMMU:SwitchSmmuRegisters.h",
+        "//drivers/TegraSMMU:TegraMCNames.h",
+        "//drivers/TegraSMMU:TegraSMMU.cpp",
+        "//drivers/TegraSMMU:TegraSMMU.h",
+        "//drivers/TegraSMMU:TegraSMMUAttachments.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+        "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+    ],
+    defines = ["SWITCH_MMIO_HOST_MODEL=1"],
+    deps = [":mc_kernel"],
+)
+
+# tegra_mc_hot_reset reads its request bit back and names the client in one line when it did not take.
+host_test(
+    name = "mc_hot_reset_request_test",
+    srcs = [
+        "mc_hot_reset_request_test.cpp",
+        "//drivers/TegraSMMU:TegraSMMU.h",
+    ],
+    deps = [
+        ":mc_kernel",
+        ":mc_smmu",
     ],
 )

@@ -249,9 +249,19 @@ void smmuDetach()
 // slcg clock) runs only on T210 before B01, as powergate-t21x.c's. NVDEC's partition (25) needs NVJPG's (26) on
 // (powergate-t21x.c powers 26 before 25 and keeps it while 25 is on): an idle power-off leaves 26 on while 25 is.
 constexpr unsigned kSlcgClocks[] = {kNvdecClock};
-const SwitchEnginePower kPower = {kPartition,         kClock,           MC_HOTRESET_CTRL_1, MC_HOTRESET_STATUS_1,
-                                  MC_HOTRESET_NVJPG,  OVRE_NVJPG_MBIST, kSlcgClocks,        1,
-                                  tegra_mc_hot_reset, tegra_smmu_read};
+const SwitchEnginePower kPower = {
+    .name = "TegraNVJPG",
+    .partition = kPartition,
+    .clock = kClock,
+    .hotResetCtrl = MC_HOTRESET_CTRL_1,
+    .hotResetStatus = MC_HOTRESET_STATUS_1,
+    .hotResetBit = MC_HOTRESET_NVJPG,
+    .lvl2Mask = OVRE_NVJPG_MBIST,
+    .slcgClocks = kSlcgClocks,
+    .slcgCount = 1,
+    .hotReset = tegra_mc_hot_reset,
+    .mcRead = tegra_smmu_read,
+};
 constexpr SwitchEngineProd kProd[] = {
     {0xe00, 0},         // THI_CLK_OVERRIDE
     {0x88, 0},          // THI_SLCG_OVERRIDE_HIGH_A

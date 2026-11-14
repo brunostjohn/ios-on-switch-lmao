@@ -246,8 +246,19 @@ void smmuDetach()
 // THI SLCG overridden for the pulse (it needs host1x's clock, which the boot chain left on), then the module reset
 // again, as the kit's own workaround would. A partition the boot chain left on keeps its state; the engine is still
 // reset so the falcon starts from scratch.
-const SwitchEnginePower kPower = {kPartition, kClock, MC_HOTRESET_CTRL,   MC_HOTRESET_STATUS, MC_HOTRESET_VIC, 0,
-                                  nullptr,    0,      tegra_mc_hot_reset, tegra_smmu_read};
+const SwitchEnginePower kPower = {
+    .name = "TegraVIC",
+    .partition = kPartition,
+    .clock = kClock,
+    .hotResetCtrl = MC_HOTRESET_CTRL,
+    .hotResetStatus = MC_HOTRESET_STATUS,
+    .hotResetBit = MC_HOTRESET_VIC,
+    .lvl2Mask = 0,
+    .slcgClocks = nullptr,
+    .slcgCount = 0,
+    .hotReset = tegra_mc_hot_reset,
+    .mcRead = tegra_smmu_read,
+};
 
 void mbistWorkaround()
 {

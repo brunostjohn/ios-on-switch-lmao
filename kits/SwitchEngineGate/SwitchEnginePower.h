@@ -17,6 +17,7 @@
 #include "../SwitchMMIO/SwitchMMIOKernel.h"
 
 struct SwitchEnginePower {
+    const char *name;           // the driver's log prefix
     unsigned partition, clock;  // PMC partition; CAR clock, also the module's reset
     uint32_t hotResetCtrl, hotResetStatus, hotResetBit;
     uint32_t lvl2Mask;           // LVL2_CLK_GATE_OVRE bits of the T210 MBIST workaround
@@ -49,12 +50,19 @@ inline bool b01()
     return known == 1;
 }
 
-// mc.c tegra_mc_flush: the client's requests stop and those in flight drain; its STATUS bit then holds set.
+// mc.c tegra_mc_flush: the client's requests stop and those in flight drain; its STATUS bit then holds set. STATUS also
+// reads done for a client with no flush requested (TRM 18.11.1.114), so it counts only while the request bit reads set.
 inline bool flush(const SwitchEnginePower &p)
 {
     p.hotReset(p.hotResetCtrl, p.hotResetBit, true);
     uint32_t settled = 0;
     for (uint32_t i = 0; i < 1000 && settled < 5; i++) {
+        if (!(p.mcRead(p.hotResetCtrl) & p.hotResetBit)) {
+            IOLog("%s: MC hot reset request bit %#x of MC %#x reads clear while its flush was awaited: the client "
+                  "was not flushed\n",
+                  p.name, p.hotResetBit, p.hotResetCtrl);
+            return false;
+        }
         settled = (p.mcRead(p.hotResetStatus) & p.hotResetBit) ? settled + 1 : 0;
         if (settled < 5)
             IODelay(kStepUs);

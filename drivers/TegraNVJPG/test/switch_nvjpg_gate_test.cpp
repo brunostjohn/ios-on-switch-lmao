@@ -60,6 +60,22 @@ TEST_F(NVJPGGate, AJobPastItsBoundIsCancelledAndTheNextJobRuns)
     EXPECT_EQ(gEngine.syncpt, before + 1);
 }
 
+// STATUS reads done for a client with no flush requested, so a request another writer dropped looks drained unless
+// the request bit is read with it (TRM 18.11.1.114): the cancellation says the client was not flushed.
+TEST_F(NVJPGGate, ACancellationWhoseFlushRequestWasDroppedSaysTheClientWasNotFlushed)
+{
+    gEngine.stallDecodes = true;
+    gEngine.requestDropped = true;
+    TegraNVJPGJob job = decodeJob();
+    nvjpg_dec_status status = {};
+    EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), -5);
+    EXPECT_TRUE(logged("TegraNVJPG: MC hot reset request bit 0x100 of MC 0x970 reads clear while its flush was awaited"));
+    EXPECT_TRUE(logged("memory client did not drain")) << "the line must not say drained";
+    EXPECT_FALSE(logged("memory client drained"));
+    gEngine.stallDecodes = false;
+    gEngine.requestDropped = false;
+}
+
 // Channel 3 is NVJPG's alone and one job runs at a time, so a job waits only on itself: 50 ms plus a microsecond per 16
 // pixels of its MCU grid. SpringBoard's 205x83 file that hung the engine is cancelled in 51 ms (it took 2 s).
 TEST_F(NVJPGGate, AJobIsBoundedByItsOwnPixelsAndASmallMargin)

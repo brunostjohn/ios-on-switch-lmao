@@ -28,6 +28,7 @@ namespace {
 struct Engine {
     bool partitionOn = true, clamped = false, clockOn = false, inReset = true, falconRunning = false;
     bool flushed = false, nvdecPartitionOn = false;
+    bool requestDropped = false;  // another writer clears NVJPG's request bit after it is set
     std::vector<std::string> events;
     bool stallDecodes = false, deadAfterReset = false;
     int boots = 0, partitionPowerOns = 0, teardowns = 0, restarts = 0;
@@ -177,13 +178,16 @@ void tegra_mc_hot_reset(uint32_t ctrl, uint32_t bit, bool on)
 {
     EXPECT_EQ(ctrl, 0x970u);
     EXPECT_EQ(bit, 1u << 8);
-    gEngine.flushed = on;
+    gEngine.flushed = on && !gEngine.requestDropped;
     gEngine.events.push_back(on ? "flush" : "release");
 }
 
+// The client drains at once, and STATUS reads done whenever no flush is requested (TRM 18.11.1.114).
 uint32_t tegra_smmu_read(uint32_t offset)
 {
-    return offset == 0x974 && gEngine.flushed ? 1u << 8 : 0;
+    if (offset == 0x970)
+        return gEngine.flushed ? 1u << 8 : 0;
+    return offset == 0x974 ? 1u << 8 : 0;
 }
 
 int tegra_smmu_attach(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, char *, size_t)

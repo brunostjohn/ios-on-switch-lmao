@@ -6,6 +6,7 @@
 #include "TegraSMMU.h"
 #include "TegraSMMUAttachments.h"
 #include "SwitchSmmuRegisters.h"
+#include "TegraMCNames.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 namespace {
@@ -155,9 +156,13 @@ extern "C" void tegra_mc_hot_reset(uint32_t ctrl, uint32_t bit, bool on)
         return;
     IOSimpleLockLock(gLock);
     const uint32_t value = r32(ctrl);
-    w32(ctrl, on ? value | bit : value & ~bit);
-    (void)r32(ctrl);
+    const uint32_t wrote = on ? value | bit : value & ~bit;
+    w32(ctrl, wrote);
+    const uint32_t now = r32(ctrl);
     IOSimpleLockUnlock(gLock);
+    if ((now ^ wrote) & bit)
+        IOLog("TegraSMMU: MC hot reset %s of %s did not take: MC %#x reads %#x after %#x was written\n",
+              on ? "request" : "release", switch_mc::hotResetClient(ctrl, bit), ctrl, now, wrote);
 }
 
 extern "C" int tegra_smmu_resume(void)

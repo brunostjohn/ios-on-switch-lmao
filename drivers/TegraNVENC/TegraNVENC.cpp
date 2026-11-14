@@ -143,9 +143,19 @@ const char *falconState()
 // The MPE partition and NVENC's memory client in L4T's order (SwitchEnginePower.h), then its clock-gating prod registers
 // (t210/cg_regs.c t21x_msenc_gating_registers). The MBIST workaround (LVL2 bit 29, no slcg clock) runs only on T210
 // before B01, as powergate-t21x.c's.
-const SwitchEnginePower kPower = {kPartition,         kClock,         MC_HOTRESET_CTRL, MC_HOTRESET_STATUS,
-                                  MC_HOTRESET_NVENC,  OVRE_MPE_MBIST, nullptr,          0,
-                                  tegra_mc_hot_reset, tegra_smmu_read};
+const SwitchEnginePower kPower = {
+    .name = "TegraNVENC",
+    .partition = kPartition,
+    .clock = kClock,
+    .hotResetCtrl = MC_HOTRESET_CTRL,
+    .hotResetStatus = MC_HOTRESET_STATUS,
+    .hotResetBit = MC_HOTRESET_NVENC,
+    .lvl2Mask = OVRE_MPE_MBIST,
+    .slcgClocks = nullptr,
+    .slcgCount = 0,
+    .hotReset = tegra_mc_hot_reset,
+    .mcRead = tegra_smmu_read,
+};
 constexpr SwitchEngineProd kProd[] = {
     {0xe00, 0},            // THI_CLK_OVERRIDE
     {0x88, 0},             // THI_SLCG_OVERRIDE_HIGH_A

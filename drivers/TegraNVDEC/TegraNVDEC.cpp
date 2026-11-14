@@ -137,12 +137,32 @@ const char *falconState()
 // NVJPG's idle power-off keeps it on while 25 is): 26 comes up here if it is off, with NVJPG's clock left off. A
 // partition the boot chain left on keeps its state; the engine is still reset so the falcon starts from scratch.
 constexpr unsigned kSlcgClocks[] = {kNvjpgClock}, kNvjpgSlcgClocks[] = {kClock};
-const SwitchEnginePower kPower = {kPartition,         kClock,           MC_HOTRESET_CTRL_1, MC_HOTRESET_STATUS_1,
-                                  MC_HOTRESET_NVDEC,  OVRE_NVDEC_MBIST, kSlcgClocks,        1,
-                                  tegra_mc_hot_reset, tegra_smmu_read};
-const SwitchEnginePower kNvjpgPower = {kNvjpgPartition,    kNvjpgClock,      MC_HOTRESET_CTRL_1, MC_HOTRESET_STATUS_1,
-                                       MC_HOTRESET_NVJPG,  OVRE_NVDEC_MBIST, kNvjpgSlcgClocks,   1,
-                                       tegra_mc_hot_reset, tegra_smmu_read};
+const SwitchEnginePower kPower = {
+    .name = "TegraNVDEC",
+    .partition = kPartition,
+    .clock = kClock,
+    .hotResetCtrl = MC_HOTRESET_CTRL_1,
+    .hotResetStatus = MC_HOTRESET_STATUS_1,
+    .hotResetBit = MC_HOTRESET_NVDEC,
+    .lvl2Mask = OVRE_NVDEC_MBIST,
+    .slcgClocks = kSlcgClocks,
+    .slcgCount = 1,
+    .hotReset = tegra_mc_hot_reset,
+    .mcRead = tegra_smmu_read,
+};
+const SwitchEnginePower kNvjpgPower = {
+    .name = "TegraNVDEC (NVJPG's partition)",
+    .partition = kNvjpgPartition,
+    .clock = kNvjpgClock,
+    .hotResetCtrl = MC_HOTRESET_CTRL_1,
+    .hotResetStatus = MC_HOTRESET_STATUS_1,
+    .hotResetBit = MC_HOTRESET_NVJPG,
+    .lvl2Mask = OVRE_NVDEC_MBIST,
+    .slcgClocks = kNvjpgSlcgClocks,
+    .slcgCount = 1,
+    .hotReset = tegra_mc_hot_reset,
+    .mcRead = tegra_smmu_read,
+};
 constexpr SwitchEngineProd kProd[] = {
     {0xe00, 0},                      // THI_CLK_OVERRIDE
     {0x88, 0},                       // THI_SLCG_OVERRIDE_HIGH_A
