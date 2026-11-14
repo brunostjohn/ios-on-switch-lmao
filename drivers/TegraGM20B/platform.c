@@ -41,6 +41,7 @@
 #include <stdint.h>
 #include "shim/include/nvxnu.h"
 #include "../TegraI2C/TegraI2C.h"
+#include "../TegraSMMU/TegraSMMU.h"
 #include "../../kits/SwitchMMIO/SwitchMMIO.h"
 
 #define CAR_PA 0x60006000ULL
@@ -215,9 +216,7 @@ int tegra_gm20b_rail_enable(int on)
 	if (!on) {
 		/* nvgpu gm20b_tegra_railgate() (platform_gk20a_tegra.c:315-325): block the GPU's MC client, clamp and hold
 		 * the GPU in reset before its rail goes away. tegra.c has already gated the clocks, so no drain wait. */
-		switch_mmio_write32_flush(mc, MC_HOTRESET_CTRL_1,
-					  switch_mmio_read32(mc, MC_HOTRESET_CTRL_1) |
-						  MC_HOTRESET_GPU);
+		tegra_mc_hot_reset(MC_HOTRESET_CTRL_1, MC_HOTRESET_GPU, true);
 		switch_mmio_write32_flush(pmc, PMC_GPU_RG_CNTRL, 1);
 		nvxnu_udelay(10);
 		switch_mmio_write32_flush(car, RST_DEV_X_SET, X_GPU);
@@ -419,15 +418,12 @@ void tegra_gm20b_mc_gpu_wpr(uint32_t v[5])
  * bounded spin like tegra_mc_flush(), which takes the status only after 5 identical reads (L4T mc.c:158-176,208-230). */
 int tegra_gm20b_mc_flush(int flush)
 {
-	uint32_t v = switch_mmio_read32(mc, MC_HOTRESET_CTRL_1);
 	uint32_t s = 0;
 	int i = 0;
 	int j = 0;
-	if (!flush) {
-		switch_mmio_write32_flush(mc, MC_HOTRESET_CTRL_1, v & ~MC_HOTRESET_GPU);
+	tegra_mc_hot_reset(MC_HOTRESET_CTRL_1, MC_HOTRESET_GPU, flush != 0);
+	if (!flush)
 		return 0;
-	}
-	switch_mmio_write32_flush(mc, MC_HOTRESET_CTRL_1, v | MC_HOTRESET_GPU);
 	for (i = 0; i < 1000; i++) {
 		nvxnu_udelay(10);
 		s = switch_mmio_read32(mc, MC_HOTRESET_STATUS_1);
