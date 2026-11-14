@@ -83,10 +83,14 @@ void tgm_deadline_stats(char *buf, unsigned int len)
 		  "%u compositor frames, %u missed their vblank with an app on the GPU at a "
 		  "compositor kick, %u without; compositor GPU time a frame: mean %llu us, "
 		  "p95 %llu us, max %llu us over %llu learned frames, peak tracker %llu us; "
-		  "%u windows (%u with no frame, %u expired)",
+		  "%u windows (%u with no frame, %u expired, %u opened by an app's kick); in the "
+		  "work "
+		  "loop's gate: %u frame ends, %u owner runs timed, %u woken",
 		  now.frames - was->frames, now.missed_app - was->missed_app,
 		  now.missed_clear - was->missed_clear, mean, p95, max, learned,
 		  now.expected / 1000, now.windows - was->windows, now.empty - was->empty,
-		  now.expired - was->expired);
+		  now.expired - was->expired, now.kick_opens - was->kick_opens,
+		  now.frame_end_runs - was->frame_end_runs, now.timer_runs - was->timer_runs,
+		  now.wake_runs - was->wake_runs);
 	*was = now;
 }

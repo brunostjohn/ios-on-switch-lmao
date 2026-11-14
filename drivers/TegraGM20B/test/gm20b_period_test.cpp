@@ -6,6 +6,7 @@
 // kept window an app's kick opens, high work that needs a held channel, and system sleep in the middle.
 #include <gtest/gtest.h>
 #include <cstdio>
+#include <string>
 #include <vector>
 #include "drivers/TegraGM20B/test/gm20b_hold_stubs.h"
 extern "C" {
@@ -439,6 +440,34 @@ TEST_F(DisplayPeriod, AWindowOpenedAtTheFrameEnd)
 	EXPECT_LE(c.runs, 2u) << "thread-call runs beyond the holds and the check";
 	EXPECT_EQ(c.statusReads, 2 * kStatusReads)
 		<< "the resident look at the holds and at the check";
+}
+
+// The deadline's stats line (debug kernels) counts what a period took in the work loop's gate: the frame end's run,
+// the owner's timed runs for the holds and the check, and none woken.
+TEST_F(DisplayPeriod, TheDeadlineLineCountsTheGate)
+{
+	char line[512];
+	for (unsigned chid : kApps)
+		appWork(chid, true);
+	tgm_deadline_stats(line, sizeof(line));
+	const u64 start = now;
+	const u64 target = start + kPeriod;
+	frameEnd();
+	resident = (int)kApps[0];
+	advance(target - kLatency);
+	resident = TGM_VICTIM_NONE;
+	tgm_deadline_kicked(1, 0);
+	advance(target - kMs);
+	presentCompleted(start + kMs);
+	advance(target);
+	tgm_deadline_stats(line, sizeof(line));
+	const std::string text(line);
+	EXPECT_NE(
+		text.find(
+			"1 windows (0 with no frame, 0 expired, 0 opened by an app's kick); in the "
+			"work loop's gate: 1 frame ends, 2 owner runs timed, 0 woken"),
+		std::string::npos)
+		<< text;
 }
 
 // The frame end found no slow channel with work and kept the window; an app's kick after the holds' time opens it and

@@ -6,6 +6,8 @@
 
 struct tgm_deadline_counts {
 	uint32_t frames, missed_app, missed_clear, windows, empty, expired;
+	/* debug kernels: windows an app's kick opened; the gate's runs at a frame end, from the owner's timer, from a wake */
+	uint32_t kick_opens, frame_end_runs, timer_runs, wake_runs;
 	uint64_t expected;
 };
 

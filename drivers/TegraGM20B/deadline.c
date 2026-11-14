@@ -58,7 +58,8 @@ static struct {
 	u64 target, opened, expire_at, hold_at, check_at, armed_at;
 	int check_chid;
 	/* counts that only grow (deadline_stats.h) */
-	u32 frames, missed_app, missed_clear, windows, empty, expired;
+	u32 frames, missed_app, missed_clear, windows, empty, expired, kick_opens, frame_end_runs,
+		timer_runs, wake_runs;
 } dl;
 
 static void wake_work(void *arg);
@@ -180,6 +181,8 @@ static void frame_end_open(void *arg)
 {
 	const u64 now = *(const u64 *)arg;
 
+	if (TGM_STATS)
+		WRITE_ONCE(dl.frame_end_runs, dl.frame_end_runs + 1);
 	if (dl.target || READ_ONCE(dl.suspended))
 		return;
 	window_from_frame_end(now);
@@ -274,6 +277,11 @@ static void period_run(int fired)
 		dl.armed_at = 0;
 	if (READ_ONCE(dl.suspended))
 		return;
+	if (TGM_STATS && fired) {
+		WRITE_ONCE(dl.timer_runs, dl.timer_runs + 1);
+	} else if (TGM_STATS) {
+		WRITE_ONCE(dl.wake_runs, dl.wake_runs + 1);
+	}
 	tgm_hold_settle(dl.device, now);
 	if (dl.target && now >= dl.expire_at)
 		window_expire(now);
@@ -353,6 +361,8 @@ static void kept_open(void *arg)
 	w.interval = READ_ONCE(dl.interval);
 	w.expected = dl.expected;
 	dl.hold_at = tgm_hold_due(dl.device, &w, TGM_VICTIM_NONE, &preempt);
+	if (TGM_STATS)
+		WRITE_ONCE(dl.kick_opens, dl.kick_opens + 1);
 	arm(k->now);
 	k->opened = 1;
 }
@@ -542,6 +552,10 @@ int tgm_deadline_counts(struct tgm_deadline_counts *c)
 	c->windows = READ_ONCE(dl.windows);
 	c->empty = READ_ONCE(dl.empty);
 	c->expired = READ_ONCE(dl.expired);
+	c->kick_opens = READ_ONCE(dl.kick_opens);
+	c->frame_end_runs = READ_ONCE(dl.frame_end_runs);
+	c->timer_runs = READ_ONCE(dl.timer_runs);
+	c->wake_runs = READ_ONCE(dl.wake_runs);
 	c->expected = READ_ONCE(dl.expected);
 	return 1;
 }
