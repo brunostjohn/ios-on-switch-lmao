@@ -112,13 +112,24 @@ final class GatedRun {
 /// (drivers/NativeMobileDisplay/SwitchMediaCompletionFlipDisplay.h). Nothing iOS presents waits so: the decoder emits a
 /// picture once NVDEC is done and Core Animation's VIC turns finish before it presents them (display.media_completion_flip
 /// skips with d_armed 0). The test makes one with TegraVIC's gate: `gated` then `shown` go on window B, so both are
-/// mapped and neither is scanned; a VIC copy of `source` into `gated` is queued behind the gate and `gated` presented;
-/// once the display has armed that set (kern.switch_media_flips_armed) the gate is released. The copy's completion has to
-/// write the set and windows B and C latch it as written (d_completion, refused 0).
+/// mapped. Each round queues a VIC copy of `source` behind the gate into whichever of the two is not on screen, presents
+/// it, and releases the gate once the display has armed that set (kern.switch_media_flips_armed) or a second has passed.
+/// A set the display declines (one of the media flip's preconditions not met at that swap) is d_declined; rounds go on,
+/// at most Self.rounds, until one is armed and written. The copy's completion has to write the set and windows B and C
+/// latch it as written (d_completion, refused 0).
 struct MediaCompletionFlipGatedTest: HWTest {
     let id = "display.media_completion_flip_gated"
     let name = "A video set waiting for its VIC copy is written by the copy's completion"
     let subsystem = Subsystem.display
+    static let rounds = 4
+
+    struct Round {
+        var armError: Int32 = -1
+        var releaseError: Int32 = -1
+        var copy = VICGate.Reply()
+        var armWaitMs = -1.0
+        var completed: Bool { armError == 0 && releaseError == 0 && copy.state == VICGate.done && copy.status == 0 }
+    }
 
     func run(_ context: TestContext) async throws -> Outcome {
         let (first, unread) = MediaCompletionFlipTest.totals()
@@ -153,55 +164,75 @@ struct MediaCompletionFlipGatedTest: HWTest {
         try await Task.sleep(nanoseconds: 300_000_000)
 
         let before = MediaCompletionFlipTest.totals().values
-        let armed = VICGate.call(session, VICGate.arm, source: ids[GatedRun.source], destination: ids[GatedRun.gated])
-        guard case .success(let held) = armed else { return .fail("no gate reply") }
-        var metrics = Metrics()
-        metrics.set("arm_error", Int(held.error))
-        guard held.error == 0, held.state == VICGate.held else {
-            return .fail("the gate did not hold the copy (errno \(held.error))", metrics)
+        var onScreen = GatedRun.shown
+        var rounds: [Round] = []
+        for _ in 0..<Self.rounds {
+            let target = onScreen == GatedRun.shown ? GatedRun.gated : GatedRun.shown
+            let round = try await gatedRound(
+                session, run, source: ids[GatedRun.source], target: target, ids: ids, frame)
+            rounds.append(round)
+            frame += 1
+            onScreen = target
+            let now = MediaCompletionFlipTest.totals().values
+            let armed = (now["armed"] ?? 0) - (before["armed"] ?? 0)
+            let written = (now["completion"] ?? 0) - (before["completion"] ?? 0)
+            if round.armError != 0 || (armed > 0 && written > 0) { break }
+            try await Task.sleep(nanoseconds: 300_000_000)
         }
+        let after = MediaCompletionFlipTest.totals().values
+        let delta = { (name: String) in (after[name] ?? 0) - (before[name] ?? 0) }
+
+        var metrics = Metrics()
+        for name in MediaCompletionFlipTest.counters { metrics.set("d_" + name, delta(name)) }
+        metrics.set("refused", after["refused"] ?? 0)
+        metrics.set("rounds", rounds.count)
+        if let last = rounds.last {
+            metrics.set("arm_error", Int(last.armError))
+            metrics.set("release_error", Int(last.releaseError))
+            metrics.set("copy_state", Int(last.copy.state))
+            metrics.set("copy_status", Int(last.copy.status))
+            metrics.set("arm_wait_ms", last.armWaitMs, digits: 1)
+        }
+        return .judged(
+            [
+                (
+                    "every gated copy was held, released and completed (arm_error, release_error, copy_status 0)",
+                    !rounds.isEmpty && rounds.allSatisfy(\.completed)
+                ),
+                ("the sets waited for VIC at their swaps (d_fenced > 0)", delta("fenced") > 0),
+                ("the display armed one for its producer's completion (d_armed > 0)", delta("armed") > 0),
+                ("the copy's completion wrote it (d_completion > 0)", delta("completion") > 0),
+                ("windows B and C latched it as written (d_refused 0)", delta("refused") == 0),
+            ], metrics)
+    }
+
+    /// One gated copy into `target` (off screen), presented, released once armed or after a second, run to its end.
+    func gatedRound(
+        _ session: VICKernelTest.Session, _ run: GatedRun, source: UInt32, target: Int, ids: [UInt32], _ frame: Int
+    ) async throws -> Round {
+        var round = Round()
+        let before = MediaCompletionFlipTest.totals().values["armed"] ?? 0
+        guard case .success(let held) = VICGate.call(session, VICGate.arm, source: source, destination: ids[target])
+        else { return round }
+        round.armError = held.state == VICGate.held ? held.error : max(held.error, 1)
+        guard round.armError == 0 else { return round }
         let presented = DispatchTime.now()
-        let last = frame
-        await MainActor.run { run.enqueue(GatedRun.gated, frame: last) }
-        var armedAt: DispatchTime?
+        await MainActor.run { run.enqueue(target, frame: frame) }
         for _ in 0..<100 {
             try await Task.sleep(nanoseconds: 10_000_000)
-            if (MediaCompletionFlipTest.totals().values["armed"] ?? 0) > (before["armed"] ?? 0) {
-                armedAt = DispatchTime.now()
+            if (MediaCompletionFlipTest.totals().values["armed"] ?? 0) > before {
+                round.armWaitMs = Double(DispatchTime.now().uptimeNanoseconds - presented.uptimeNanoseconds) / 1e6
                 break
             }
         }
-        let released = VICGate.call(session, VICGate.release)
-        var final = VICGate.Reply()
+        if case .success(let released) = VICGate.call(session, VICGate.release) { round.releaseError = released.error }
         for _ in 0..<100 {
             guard case .success(let reply) = VICGate.call(session, VICGate.query) else { break }
-            final = reply
+            round.copy = reply
             if reply.state == VICGate.done { break }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         try await Task.sleep(nanoseconds: 200_000_000)
-        let after = MediaCompletionFlipTest.totals().values
-        let delta = { (name: String) in (after[name] ?? 0) - (before[name] ?? 0) }
-
-        for name in MediaCompletionFlipTest.counters { metrics.set("d_" + name, delta(name)) }
-        metrics.set("refused", after["refused"] ?? 0)
-        let waited = armedAt.map { Double($0.uptimeNanoseconds - presented.uptimeNanoseconds) / 1e6 } ?? -1
-        metrics.set("arm_wait_ms", waited, digits: 1)
-        var releaseOK = false
-        if case .success(let reply) = released {
-            metrics.set("release_error", Int(reply.error))
-            releaseOK = reply.error == 0
-        }
-        metrics.set("copy_state", Int(final.state))
-        metrics.set("copy_status", Int(final.status))
-        return .judged(
-            [
-                ("the gate released the copy (release_error 0)", releaseOK),
-                ("the set waited for VIC at its swap (d_fenced > 0)", delta("fenced") > 0),
-                ("the display armed it for its producer's completion (d_armed > 0)", delta("armed") > 0),
-                ("the copy's completion wrote it (d_completion > 0)", delta("completion") > 0),
-                ("windows B and C latched it as written (d_refused 0)", delta("refused") == 0),
-                ("the copy completed (copy_state 3, copy_status 0)", final.state == VICGate.done && final.status == 0),
-            ], metrics)
+        return round
     }
 }
