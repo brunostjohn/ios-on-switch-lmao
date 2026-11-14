@@ -297,13 +297,14 @@ TEST(Host1xFlipRun, AFailedProducersStreamIsTornDownBeforeTheGateWritesItsFlip)
     EXPECT_EQ(m.shown.start, kFront.start);
 }
 
-// A stream host1x runs only after the first frame end is still host1x's: the run tears down nothing.
+// A stream host1x runs only after the first frame end that follows its issue (a frame-end pass that ran late, the next
+// one at once) is still host1x's: the run tears down nothing.
 TEST(Host1xFlipRun, AStreamOneFrameLateIsNotTornDown)
 {
     Model m;
     m.run.begin(4, false);
     m.frameEnd();
-    m.delayFrames = 1;
+    m.delayFrames = 2;
     m.runToEnd();
     ASSERT_TRUE(m.done);
     EXPECT_EQ(m.run.totals.teardowns, 0u);
