@@ -964,6 +964,18 @@ TEST(GM20BRailSource, GpuLockWakesARailGatedGpu)
 				"nvxnu_wakeup(&tgm_sc7_gate.shut);"));
 }
 
+// T210B01's GPCPLL is NVIDIA's C1 PLL, whose PL nvgpu changes in one write (get_interim_pldiv gives C1 none): the idle
+// clock's divider change writes COEFF once, between the VCO divider's 1:2 and 1:1.
+TEST(GM20BClockSource, ThePlChangeIsOneWriteAsNvgpuMakesItOnC1)
+{
+	const CodeText pl = Block(gpu(), "static int pl_switch(u32 pl)");
+	EXPECT_EQ(pl.Count("nvkm_wr32(device, GPCPLL_COEFF_R"), 1u);
+	EXPECT_TRUE(pl.Before("nvkm_mask(device, GPC2CLK_OUT_R, 0x3f00, 2 << 8);",
+			      "nvkm_wr32(device, GPCPLL_COEFF_R"));
+	EXPECT_TRUE(pl.Before("nvkm_wr32(device, GPCPLL_COEFF_R",
+			      "nvkm_mask(device, GPC2CLK_OUT_R, 0x3f00, 0);"));
+}
+
 // PMC_ENABLE's lock (TegraGM20BPmcEnable.h) is in nvkm's mc functions from M1, before nvkm's first init, and the
 // kernel's own code never writes the register past it.
 TEST(GM20BPmcSource, EveryPmcEnableChangeTakesItsLockFromM1)

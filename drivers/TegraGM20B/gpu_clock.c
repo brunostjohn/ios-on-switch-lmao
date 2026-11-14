@@ -189,8 +189,10 @@ int tgm_clk_raise(char *line, unsigned int len)
  *     touch, missed-frame and launch hints, so the clock is usually back before the frame's first submission.
  * The change is the output divider alone, VCO left running and locked (1536 MHz: M 1, N 40 from the 38.4 MHz
  * reference), PL 1 <-> 10. GM20B's GPCPLL changes PL without a glitch (nvgpu clk_gm20b.c: PLDIV_GLITCHLESS; nouveau
- * gm20b.c gm20b_pllg_program_mnp's pdiv_only path, whose sequence this is: VCO divider 1:2 around it, an interim PL
- * sharing a bit with both ends). No NDIV slide, no relock, no bypass, no VDD_GPU write (the rail stays at tgm_clk_raise's
+ * gm20b.c gm20b_pllg_program_mnp's pdiv_only path: VCO divider 1:2 around it). T210B01's is the C1 PLL (nvgpu
+ * platform_gk20a_tegra.c:815-817: tegra_chip_get_revision() is id_and_rev, TEGRA210B01_REVISION_A01, past
+ * TEGRA210_REVISION_A04p), which takes the new PL directly: get_interim_pldiv (clk_gm20b.c:120-133) gives C1 no
+ * interim PL, the step nouveau's B1 path adds when old and new share no bit. No NDIV slide, no relock, no bypass, no VDD_GPU write (the rail stays at tgm_clk_raise's
  * 800 mV): a few register writes and two 2 us delays, timed on every raise and logged (raise mean/max).
  * Before first use, gov_start runs one drop and raise at stage 3 (no client yet) and logs both times. A failure (the
  * divider not reading back, the PLL not locked, the clock not at the rate) logs the PLL's registers, puts the run rate
@@ -206,8 +208,8 @@ struct idle_state tgm_idle;
 
 #include "SwitchGpuIdleDeadline.h"
 
-/* GM20B's glitchless PL change (nouveau gm20b.c gm20b_pllg_program_mnp, pdiv_only): returns 0 when the GPCPLL is
- * locked, on the VCO, at PL `pl`. Under tgm_idle.clk. */
+/* GM20B's glitchless PL change (nvgpu clk_gm20b.c clk_program_gpc_pll, path A, on the C1 PLL): returns 0 when the
+ * GPCPLL is locked, on the VCO, at PL `pl`. Under tgm_idle.clk. */
 static int pl_switch(u32 pl)
 {
 	struct nvkm_device *device = tgm_gpu.device;
@@ -225,12 +227,6 @@ static int pl_switch(u32 pl)
 		nvkm_mask(device, GPC2CLK_OUT_R, 0x3f00, 2 << 8);
 		nvkm_rd32(device, GPC2CLK_OUT_R);
 		udelay(2);
-		if (!(old & pl)) { /* an interim PL that shares a set bit with both ends */
-			u32 a = old | (1u << (unsigned int)(__builtin_ffs((int)pl) - 1));
-			u32 b = pl | (1u << (unsigned int)(__builtin_ffs((int)old) - 1));
-			nvkm_wr32(device, GPCPLL_COEFF_R,
-				  (coeff & ~(0x3fu << 16)) | ((a < b ? a : b) << 16));
-		}
 		nvkm_wr32(device, GPCPLL_COEFF_R, (coeff & ~(0x3fu << 16)) | (pl << 16));
 		udelay(2);
 		/* nouveau's nvkm_mask computes in int and declares two locals. */
