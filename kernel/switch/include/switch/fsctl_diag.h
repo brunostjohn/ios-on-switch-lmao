@@ -30,6 +30,30 @@ static inline void switch_fsctl_failed(__unused struct vnode *vp, __unused unsig
 {}
 #endif
 
+#define SWITCH_FSCTL_MARK_PURGEABLE 111u /* APFS's 'J' 111: mark a file or directory purgeable */
+#define SWITCH_FSCTL_MARK_LINES     128u /* boot 21 refused 106 marks */
+#define SWITCH_FSCTL_OTHER_LINES    32u
+
+enum switch_fsctl_line {
+    SWITCH_FSCTL_FULL,  /* the file described */
+    SWITCH_FSCTL_BRIEF, /* the caller, command and path only */
+    SWITCH_FSCTL_LAST,  /* the budget is spent: say so once */
+    SWITCH_FSCTL_NONE,
+};
+
+/* The line for the n-th refused APFS fsctl (from 0) of its budget: the purgeable mark has its own, so routine refusals of
+ * other commands before the first app snapshot cannot use it up. */
+static inline enum switch_fsctl_line switch_fsctl_line_for(unsigned long cmd, uint32_t n)
+{
+    const int mark = (cmd & 0xff) == SWITCH_FSCTL_MARK_PURGEABLE;
+    const uint32_t cap = mark ? SWITCH_FSCTL_MARK_LINES : SWITCH_FSCTL_OTHER_LINES;
+
+    if (n < cap) {
+        return mark ? SWITCH_FSCTL_FULL : SWITCH_FSCTL_BRIEF;
+    }
+    return n == cap ? SWITCH_FSCTL_LAST : SWITCH_FSCTL_NONE;
+}
+
 static inline uint32_t switch_fsctl_le32(const uint8_t *b)
 {
     return (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;

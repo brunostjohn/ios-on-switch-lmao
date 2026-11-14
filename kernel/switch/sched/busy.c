@@ -104,6 +104,8 @@ void switch_sched_busy_exec(thread_t thread)
         os_atomic_store(&s->tid, thread->thread_id, release);
         simple_unlock(&busy_lock);
         os_atomic_store(&switch_sched_busy_watching, 1, relaxed);
+        os_log(OS_LOG_DEFAULT, "SwitchBusy: watching %s[%d] main thread 0x%llx for stretches of %d ms or more", s->name,
+               s->pid, thread_tid(thread), SWITCH_BUSY_MIN_MS);
         return;
     }
 }

@@ -67,6 +67,21 @@ TEST(SwitchFsctlDiag, TheTextStaysInsideItsBuffer)
     }
 }
 
+TEST(SwitchFsctlDiag, ThePurgeableMarkHasItsOwnBudgetAndEachEndIsToldOnce)
+{
+    const unsigned long mark = 0xc0304a6f, other = 0x40084a47;
+    for (uint32_t n = 0; n < SWITCH_FSCTL_MARK_LINES; n++)
+        EXPECT_EQ(switch_fsctl_line_for(mark, n), SWITCH_FSCTL_FULL) << n;
+    EXPECT_EQ(switch_fsctl_line_for(mark, SWITCH_FSCTL_MARK_LINES), SWITCH_FSCTL_LAST);
+    EXPECT_EQ(switch_fsctl_line_for(mark, SWITCH_FSCTL_MARK_LINES + 1), SWITCH_FSCTL_NONE);
+    for (uint32_t n = 0; n < SWITCH_FSCTL_OTHER_LINES; n++)
+        EXPECT_EQ(switch_fsctl_line_for(other, n), SWITCH_FSCTL_BRIEF) << n;
+    EXPECT_EQ(switch_fsctl_line_for(other, SWITCH_FSCTL_OTHER_LINES), SWITCH_FSCTL_LAST);
+    EXPECT_EQ(switch_fsctl_line_for(other, 4000), SWITCH_FSCTL_NONE);
+    const std::string source = switch_ios::test::SourceText("../switch/vfs/fsctl_diag.c");
+    EXPECT_THAT(source, HasSubstr("? &fsctl_diag_marks"));
+}
+
 TEST(SwitchFsctlDiagSource, BothKernelsReportAFilesystemFsctlAfterItsAnswer)
 {
     for (const char *tree : {"../xnu-10063.141.1", "../xnu-12377.121.6"}) {

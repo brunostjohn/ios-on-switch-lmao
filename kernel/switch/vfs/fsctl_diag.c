@@ -19,10 +19,9 @@
 
 #if DEVELOPMENT || DEBUG
 
-#define FSCTL_DIAG_LINES 128 /* a boot's worth: boot 21 refused 106 */
-#define FSCTL_DIAG_PATH  96
+#define FSCTL_DIAG_PATH 96
 
-static uint32_t fsctl_diag_lines;
+static uint32_t fsctl_diag_marks, fsctl_diag_others;
 
 static int fsctl_diag_xattr(vnode_t vp, const char *name, void *buf, size_t len, size_t *size, vfs_context_t ctx)
 {
@@ -48,8 +47,20 @@ void switch_fsctl_failed(vnode_t vp, unsigned long cmd, const void *data, int er
     struct vnode_attr va;
     int len = MAXPATHLEN, resid = 0;
     void *xattr = NULL;
+    enum switch_fsctl_line line;
 
-    if (error == 0 || IOCGROUP(cmd) != 'J' || os_atomic_inc_orig(&fsctl_diag_lines, relaxed) >= FSCTL_DIAG_LINES) {
+    if (error == 0 || IOCGROUP(cmd) != 'J') {
+        return;
+    }
+    line = switch_fsctl_line_for(
+        cmd, os_atomic_inc_orig((cmd & 0xff) == SWITCH_FSCTL_MARK_PURGEABLE ? &fsctl_diag_marks : &fsctl_diag_others,
+                                relaxed));
+    if (line == SWITCH_FSCTL_NONE) {
+        return;
+    }
+    if (line == SWITCH_FSCTL_LAST) {
+        os_log(OS_LOG_DEFAULT, "SwitchFsctl: no more lines for refused APFS fsctls %s this boot",
+               (cmd & 0xff) == SWITCH_FSCTL_MARK_PURGEABLE ? "'J' 111" : "other than 'J' 111");
         return;
     }
     if (data != NULL) {
@@ -59,6 +70,14 @@ void switch_fsctl_failed(vnode_t vp, unsigned long cmd, const void *data, int er
     path = kalloc_data(MAXPATHLEN, Z_WAITOK);
     if (path != NULL && vn_getpath(vp, path, &len) == 0) {
         tail = strlen(path) > FSCTL_DIAG_PATH ? path + strlen(path) - FSCTL_DIAG_PATH : path;
+    }
+    if (line == SWITCH_FSCTL_BRIEF) {
+        os_log(OS_LOG_DEFAULT, "SwitchFsctl: %s[%d] fsctl 0x%lx ('J' %lu) refused %d on ...%s", process, proc_selfpid(),
+               cmd, cmd & 0xff, error, tail);
+        if (path != NULL) {
+            kfree_data(path, MAXPATHLEN);
+        }
+        return;
     }
     VATTR_INIT(&va);
     VATTR_WANTED(&va, va_data_size);
