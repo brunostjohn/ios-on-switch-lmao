@@ -30,6 +30,12 @@ struct Run {
     std::vector<Chunk> chunks;
 };
 
+// A test's own resource, which a pool suballocates where the threads leave room: its addresses read by name
+struct Named {
+    const char *name;
+    uint64_t va = 0, bytes = 0;
+};
+
 // The model's next BO handle: taken before the first command buffer is recorded
 inline uint64_t handleMark()
 {
@@ -64,10 +70,16 @@ inline const Chunk *chunkAt(const Run &r, uint64_t va)
 
 // The model's jobs of `runs` (in order, the last one's to the model's last job): one line a job, its words in hex with each
 // (high, low) address pair in a chunk as "bytes+<offset in the run>" and each (low, high) one, an address as data words
-// hold it, as "bytes.le+<offset>", then its uses of BOs neither coherent nor made since
-// `mark` (handleMark)
-inline std::string words(const std::vector<Run> &runs, uint64_t mark)
+// hold it, as "bytes.le+<offset>", one in a `named` resource as "<name>+<offset>", then its uses of BOs neither coherent
+// nor made since `mark` (handleMark)
+inline std::string words(const std::vector<Run> &runs, uint64_t mark, const std::vector<Named> &named = {})
 {
+    const auto nameOf = [&](uint64_t va) -> const Named * {
+        for (const Named &n : named)
+            if (va >= n.va && va - n.va < n.bytes)
+                return &n;
+        return nullptr;
+    };
     std::lock_guard<std::mutex> l(kernel_model::callLock);
     const auto &jobs = kernel_model::model.jobs;
     std::string out;
@@ -84,6 +96,15 @@ inline std::string words(const std::vector<Run> &runs, uint64_t mark)
                                low = i + 1 < w.size() ? uint64_t(w[i + 1]) << 32 | w[i] : 0;
                 const Chunk *c = w[i] ? chunkAt(run, high) : nullptr;
                 const Chunk *data = !c && w[i + 1 < w.size() ? i + 1 : i] ? chunkAt(run, low) : nullptr;
+                const Named *n = c || data || !w[i] ? nullptr : nameOf(high);
+                const Named *nl = c || data || n || !w[i + 1 < w.size() ? i + 1 : i] ? nullptr : nameOf(low);
+                if (n || nl) {
+                    snprintf(text, sizeof text, " %s%s+%llx", n ? n->name : nl->name, n ? "" : ".le",
+                             (unsigned long long)(n ? high - n->va : low - nl->va));
+                    out += text;
+                    i++;
+                    continue;
+                }
                 if (c || data) {
                     snprintf(text, sizeof text, c ? " bytes+%llx" : " bytes.le+%llx",
                              (unsigned long long)(c ? c->at + high - c->va : data->at + low - data->va));

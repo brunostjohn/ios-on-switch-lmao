@@ -397,7 +397,7 @@ TEST(RawRecordCost, CompositorFrameWords)
             EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
             EXPECT_EQ(std::string([[(id)cb performSelector:@selector(switchRawPath)] UTF8String]), "raw");
         }
-    const std::string words = job_words::words(runs, mark);
+    const std::string words = job_words::words(runs, mark, {{"indices", indices.gpuAddress, sizeof quad}});
     const char *outputs = getenv("TEST_UNDECLARED_OUTPUTS_DIR");
     std::ofstream(std::string(outputs ? outputs : harness::dir().c_str()) + "/compositor_words.txt") << words;
     printf("compositor words: %zu bytes, hash %016llx\n", words.size(), (unsigned long long)job_words::fnv(words));
