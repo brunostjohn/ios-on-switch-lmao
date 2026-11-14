@@ -647,9 +647,11 @@ int computeReadiness(RMCommandBuffer *cb, const RMSegment &range);
 // RawMetalComputeAdmission.mm: an admitted dispatch's textures and buffers, and the encoder's resources it may reach
 void kernelUses(RMCommandBuffer *cb, size_t at, std::vector<raw::KernelUse> &uses);
 
-// RawMetalFootprint.mm: the idle give-back's line, `relieved` the bytes malloc gave back
+// RawMetalFootprint.mm: the idle give-back's line, `relieved` the bytes malloc gave back, `passes` and `kept` what the
+// passes' copies and the kept surface imports held until then
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-void logGivenBack(size_t relieved);
+struct RMPassTrim;
+void logGivenBack(size_t relieved, const RMPassTrim &passes, const raw::Device::Trimmed &kept);
 #endif
 
 // RawMetalRates.mm

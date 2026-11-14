@@ -61,7 +61,7 @@ struct switch_gpu_backing {
 	uint32_t promise_count, promised_readers;
 	// CPU threads asleep on it behind a pending promise (SwitchGpuPromiseSleepers.cpp, under its lock)
 	switch_gpu_backing *promise_sleep_next, *promise_sleep_prev;
-	uint32_t promise_sleepers, promise_woken;
+	uint32_t promise_sleepers;
 	const void *host_acquire_handle;  // host_acquire's timeline, as a record's handle
 };
 
@@ -163,6 +163,18 @@ inline bool switch_gpu_backing_promise_pending_locked(const switch_gpu_backing *
 {
 	return backing->promise_count &&
 	       switch_gpu_backing_promises_locked(backing, 0, 0, nullptr, 0) > 0;
+}
+
+// cpu_readers and cpu_writers change only under the backing's lock, and a job reads them before it takes that lock
+// (SwitchGpuOwnership.cpp sweep_wanted): each change is one store the lock's holder alone makes.
+inline void switch_gpu_backing_cpu_owners_add(uint32_t &owners, uint32_t count)
+{
+	__atomic_store_n(&owners, owners + count, __ATOMIC_RELAXED);
+}
+
+inline void switch_gpu_backing_cpu_owners_sub(uint32_t &owners, uint32_t count)
+{
+	__atomic_store_n(&owners, owners - count, __ATOMIC_RELAXED);
 }
 
 // CPU readers a GPU write is held off by: a display lease taken behind writer promises is not one, as its reader orders

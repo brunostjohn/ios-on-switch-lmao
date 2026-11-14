@@ -13,6 +13,7 @@
 #include <kern/thread_call.h>
 #include <mach/vm_region.h>
 #include "SwitchGpuSpares.h"
+#include "SwitchGpuCachedBuffer.h"
 #include <stddef.h>
 #include <string.h>
 #include <sys/systm.h>
@@ -36,6 +37,8 @@
 #include "SwitchGpuBindings.h"
 #include "SwitchGpuWriterPromise.h"
 #include "SwitchGpuBoIndex.h"
+#include "SwitchGpuBindingTable.h"
+#include "SwitchGpuGatedMethods.h"
 #include "SwitchGpuLegacyUses.h"
 #include "SwitchGpuSubmitGate.h"
 #include "SwitchGpuNativeSurface.h"
@@ -155,7 +158,7 @@ uint32_t classUp(uint64_t bytes);
 
 struct Spare {
 	Spare *next;
-	IOBufferMemoryDescriptor *bmd;  // prepared; ours alone (no view, no task mapping)
+	SwitchGpuCachedBuffer buffer;  // ours alone (no view, no task mapping)
 	uint64_t *pas;
 	uint64_t bytes;
 	switch_gpu_cached_mapping *mapping;
@@ -186,17 +189,15 @@ struct SparePool {
 		poolZeroing;  // bytes ready, freed and waiting, pool bytes waiting
 #if TGM_STATS
 	OwnerStat owners[kOwners];
-	uint32_t misses[SWITCH_GPU_SPARE_MISSES], zeroBusy, zeroFailed, refillRefused;
+	uint32_t misses[SWITCH_GPU_SPARE_MISSES], zeroBusy, zeroFailed, refillRefused, notUnits;
 #endif
 };
 
 void cleanZeros(void *va, uint64_t bytes);
 SparePool *spares();
 Spare *spareTake(uint64_t bytes);
-Spare *spareTakeOrMake(uint64_t bytes);
-void spareReturn(Spare *s);
 void spareIneligible();
-bool spareKeep(IOBufferMemoryDescriptor *bmd, uint64_t *pas, uint64_t bytes,
+bool spareKeep(const SwitchGpuCachedBuffer &buffer, uint64_t *pas, uint64_t bytes,
 	       switch_gpu_cached_mapping *mapping = nullptr);
 
 // With the stats (also gpu_stats_tick.c's stats lines): the method stream of every kScanEvery-th submission of each
@@ -286,14 +287,14 @@ class AGXDeviceUserClient : public IOUserClient
 		uint64_t pool_pa;
 		bool chunked;  // Compressible BOs: pas are pool chunks (tgm_pool_alloc_chunks); no view, never CPU-mapped
 		switch_gpu_cached_mapping *cachedMapping;
-		IOBufferMemoryDescriptor *bmd;  // cached BOs
-		IOMemoryDescriptor *wired;      // imports
+		SwitchGpuCachedBuffer buffer;  // cached and system BOs
+		IOMemoryDescriptor *wired;     // imports
 		OSObject
 			*surface;  // Keeps its global ID alive through the import's GPU retirement.
 		const volatile uint64_t *representation;
 		uint64_t representationValue;
 		IOMemoryDescriptor *view;  // cached clientMemoryForType descriptor
-		bool system;  // a coherent BO from ordinary pages (tgm_pool::FromSystem): a write-combined bmd
+		bool system;  // a coherent BO from ordinary pages (tgm_pool::FromSystem): a write-combined buffer
 		bool compositorPool;  // a pool BO counted as the compositor's (critical_ when it was made)
 		tgm_mem *mem;
 		bool backingMemory;
@@ -424,7 +425,20 @@ class AGXDeviceUserClient : public IOUserClient
 	uint32_t channelLevels_[kMaxChannels] = {};
 	bool leanChannels_[kMaxChannels] = {};
 	Bo *bos_ = nullptr, *zombies_ = nullptr, *readyBos_ = nullptr;
-	SwitchGpuBoIndex<Bo, KernelMemory> boIndex_;
+	using BoIndex = SwitchGpuBoIndex<Bo, KernelMemory>;
+	BoIndex boIndex_;
+	using BindingTable = SwitchGpuBindingTable<Bo, KernelMemory>;
+	BindingTable bindTable_;
+
+	// What left the BO index and the bindings, to give back once no SubmitJob can hold it (passSubmitters)
+	struct Left {
+		Bo *bos;
+		BoIndex::Table *indexes;
+		BindingTable::Snapshot *bindings;
+	};
+
+	Left left_ = {};  // lock_: for releaseCall_
+	thread_call_t releaseCall_ = nullptr;
 	RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
 	// a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
 	IOLock *unmapLock_ = nullptr;
@@ -518,23 +532,42 @@ class AGXDeviceUserClient : public IOUserClient
 	static void wakeWork(thread_call_param_t owner, thread_call_param_t);
 	void pushWakes();
 	void unbindOverlaps(uint64_t va, uint64_t range, Bo *only);
+	void publishBindings(BindingTable::Snapshot *made);
+	bool passSubmitters(bool wait);
+	void dropLeft(const Left &left);
+	void keepLeft(const Left &left);
+	void releaseLeft();
+	static void releaseWork(thread_call_param_t, thread_call_param_t);
+	IOReturn publishBo(Bo *bo, bool mapped);
+	bool bindCuts(const TegraGM20BAbiVmBind *in, uint32_t count);
+	IOReturn bindOp(const TegraGM20BAbiBindOp &op, bool &changed);
 	void scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof, bool rawMacros);
 	void deferScan(const tgm_push *pushes, uint32_t count, bool rawMacros);
 	const tgm_prof *scanSubmission(const tgm_push *pushes, uint32_t count, tgm_prof &prof,
 				       bool rawMacros);
-	const uint32_t *pushView(uint64_t va, uint64_t bytes, const Binding *&hit) const;
+	const uint32_t *pushView(uint64_t va, uint64_t bytes,
+				 const BindingTable::Entry *&hit) const;
 	IOReturn run(uint32_t method, const void *in, uint32_t inSize, void *out,
 		     const uint32_t *outSize);
 
 	static IOReturn getInfo(TegraGM20BAbiInfo *out);
-	// `taken`: a cached BO's backing made before lock_ (nullptr once used)
-	IOReturn boAlloc(const TegraGM20BAbiBoAlloc *in, TegraGM20BAbiBoAllocReply *out,
-			 Spare *&taken);
-	IOReturn boImportPrepare(const TegraGM20BAbiBoImport *in, Bo **out);
-	IOReturn boImportInsert(Bo *bo, TegraGM20BAbiBoAllocReply *out);
+
+	struct BoCharge {
+		const char *refused;  // the pool tiers' refusal, or null
+		uint64_t readyReserve, pool, control;
+		bool critical;
+	};
+
+	BoCharge chargeBo(const TegraGM20BAbiBoAlloc *in);
+	IOReturn settleBo(const TegraGM20BAbiBoAlloc *in, const BoCharge &charge, Bo *bo,
+			  IOReturn ret, bool chunksRefused, bool system);
+	IOReturn boAlloc(const TegraGM20BAbiBoAlloc *in, TegraGM20BAbiBoAllocReply *out);
+	IOReturn boImport(const TegraGM20BAbiBoImport *in, TegraGM20BAbiBoAllocReply *out);
 	static void adoptWiring(Bo *bo, SharedWiring *w);
 	void publishWiring(Bo *bo, const TegraGM20BAbiBoImport *in);
 	IOReturn boFree(const TegraGM20BAbiBoFree *in);
+	Bo **findLink(uint64_t handle);
+	IOReturn freeBo(Bo **p);
 	IOReturn cpuComplete(const TegraGM20BAbiCpuComplete *, TegraGM20BAbiCpuCompleteReply *);
 	IOReturn cpuAccess(const TegraGM20BAbiCpuAccess *in, bool release);
 	void releaseCpuLeases();

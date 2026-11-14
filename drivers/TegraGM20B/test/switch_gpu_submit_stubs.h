@@ -11,6 +11,9 @@ struct switch_gpu_event_waits {
 	std::atomic<int> result{0};
 };
 
+// A CPU wait for a job (tgm_writer_wait) goes here when a test's GPU completes jobs; it returns at once otherwise.
+inline void (*writerWait)(uint32_t queue, uint32_t value);
+
 extern "C" {
 struct tgm_coh;
 
@@ -116,7 +119,9 @@ void switch_gpu_fence_put(const volatile uint32_t *)
 	--fenceHolds;
 }
 
-void tgm_writer_wait(uint32_t, uint32_t)
+void tgm_writer_wait(uint32_t queue, uint32_t value)
 {
+	if (writerWait)
+		writerWait(queue, value);
 }
 }

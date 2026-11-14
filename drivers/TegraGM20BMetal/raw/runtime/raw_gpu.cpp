@@ -1706,10 +1706,10 @@ void Device::freeChunk(Chunk &ch)
     ch = Chunk();
 }
 
-void Device::trim()
+Device::Trimmed Device::trim()
 {
     std::lock_guard<raw::Mutex> l(lock_);
-    dropKeptImports();
+    const Trimmed trimmed = dropKeptImports();
     reapNativeSurfaces();
     for (const Spare &sp : spares_)
         freeChunk(chunks_[sp.chunk]);
@@ -1732,6 +1732,7 @@ void Device::trim()
             k_.free(ch.bo);
             ch = Chunk();
         }
+    return trimmed;
 }
 
 // A surface's one import in this task. A new one asks the kernel its layout (`ask`: the first texture's shape and whether it
@@ -1809,12 +1810,20 @@ void Device::keepImport(Import *i)
     }
 }
 
-void Device::dropKeptImports()
+Device::Trimmed Device::keptImports()
 {
+    std::lock_guard<raw::Mutex> l(lock_);
+    return {keptImports_.size(), keptImportBytes_};
+}
+
+Device::Trimmed Device::dropKeptImports()
+{
+    const Trimmed trimmed = {keptImports_.size(), keptImportBytes_};
     for (Import *i : keptImports_)
         dropImport(i);
     keptImports_.clear();
     keptImportBytes_ = 0;
+    return trimmed;
 }
 
 void Device::dropImport(Import *i)

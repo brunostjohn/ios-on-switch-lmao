@@ -83,8 +83,11 @@ TEST_F(KeptImport, EightAreKeptAndTrimGivesThemBack)
     EXPECT_EQ(freed[0], handles[0]);
     EXPECT_EQ(freed[1], handles[1]);
     EXPECT_EQ(frame(surfaces[9]), handles[9]);
-    dev.trim();
+    const raw::Device::Trimmed trimmed = dev.trim();
     EXPECT_EQ(freed.size(), 10u);
+    EXPECT_EQ(trimmed.keptImports, 8u);
+    EXPECT_EQ(trimmed.keptImportBytes, 8 * kBytes);
+    EXPECT_EQ(dev.trim().keptImports, 0u) << "trim gave every one back";
 }
 
 }  // namespace

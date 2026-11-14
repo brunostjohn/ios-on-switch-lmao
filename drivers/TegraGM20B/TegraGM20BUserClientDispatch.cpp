@@ -313,7 +313,14 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	if (method == TegraGM20BMethodCpuAcquire || method == TegraGM20BMethodCpuRelease)
 		return cpuAccess(static_cast<const TegraGM20BAbiCpuAccess *>(in),
 				 method == TegraGM20BMethodCpuRelease);
-	// Map and Unmap take lock_ themselves (Map's clientMemoryForType must run without it).
+	// BoAlloc and BoImport make the BO without lock_ (the wiring, zero-fill and clean are the calling thread's own) and
+	// take it to publish the BO. Map and Unmap take lock_ themselves (Map's clientMemoryForType must run without it).
+	if (method == TegraGM20BMethodBoAlloc)
+		return boAlloc(static_cast<const TegraGM20BAbiBoAlloc *>(in),
+			       static_cast<TegraGM20BAbiBoAllocReply *>(out));
+	if (method == TegraGM20BMethodBoImport)
+		return boImport(static_cast<const TegraGM20BAbiBoImport *>(in),
+				static_cast<TegraGM20BAbiBoAllocReply *>(out));
 	if (method == TegraGM20BMethodMap) {
 		return mapToken(static_cast<const TegraGM20BAbiMap *>(in),
 				static_cast<TegraGM20BAbiMapReply *>(out));
@@ -381,33 +388,11 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		return kIOReturnSuccess;
 	}
 #endif
-	Bo *imported = nullptr;
-	Spare *backing = nullptr;
-	if (method == TegraGM20BMethodBoAlloc) {
-		const auto *alloc = static_cast<const TegraGM20BAbiBoAlloc *>(in);
-		if (alloc->bytes && !(alloc->bytes & 0xfff) && alloc->bytes <= kMaxBoBytes &&
-		    !(alloc->flags &
-		      (TegraGM20BBoCoherent | TegraGM20BBoCompressible | TegraGM20BBoContiguous)))
-			backing = spareTakeOrMake(alloc->bytes);
-	}
-	if (method == TegraGM20BMethodBoImport) {
-		const IOReturn prepared =
-			boImportPrepare(static_cast<const TegraGM20BAbiBoImport *>(in), &imported);
-		if (prepared)
-			return prepared;
-	}
 	IOLockLock(lock_);
 	// A layout decision holds what it uses itself and drops lock_ while the copy engine may move the surface.
-	const bool mutation = method != TegraGM20BMethodGetInfo &&
-			      method != TegraGM20BMethodGetStatus &&
-			      method != TegraGM20BMethodSurfaceLayout &&
-			      method != TegraGM20BMethodSurfaceLayoutInfo;
+	const bool mutation = switch_gpu_method_closes_gate(method);
 	if (submitGate_.closed() || (mutation && !submitGate_.beginMutation(lock_))) {
 		IOLockUnlock(lock_);
-		if (imported)
-			releaseBo(imported);
-		if (backing)
-			spareReturn(backing);
 		return kIOReturnNotOpen;
 	}
 	// A channel killed for a GPU fault or hang (client fault isolation) refuses only what names it (Exec, Order and
@@ -417,15 +402,6 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	switch (method) {
 	case TegraGM20BMethodGetInfo:
 		ret = getInfo(static_cast<TegraGM20BAbiInfo *>(out));
-		break;
-	case TegraGM20BMethodBoAlloc:
-		ret = boAlloc(static_cast<const TegraGM20BAbiBoAlloc *>(in),
-			      static_cast<TegraGM20BAbiBoAllocReply *>(out), backing);
-		break;
-	case TegraGM20BMethodBoImport:
-		ret = boImportInsert(imported, static_cast<TegraGM20BAbiBoAllocReply *>(out));
-		if (ret == kIOReturnSuccess)
-			imported = nullptr;
 		break;
 	case TegraGM20BMethodNativeSurfaceView:
 		ret = nativeSurfaceView(static_cast<const TegraGM20BAbiNativeSurfaceView *>(in),
@@ -510,9 +486,5 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	if (mutation)
 		submitGate_.endMutation(lock_);
 	IOLockUnlock(lock_);
-	if (imported)
-		releaseBo(imported);
-	if (backing)
-		spareReturn(backing);
 	return ret;
 }

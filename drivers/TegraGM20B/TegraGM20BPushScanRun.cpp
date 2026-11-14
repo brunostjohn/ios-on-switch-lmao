@@ -267,7 +267,7 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 	if (!TGM_STATS || count > TGM_PROF_MAX)
 		return;
 	switch_gpu_scan_words words[TGM_PROF_MAX];
-	const Binding *hit = nullptr;
+	const BindingTable::Entry *hit = nullptr;
 	for (uint32_t i = 0; i < count; i++)
 		words[i] = {
 			pushView(pushes[i].va, static_cast<uint64_t>(pushes[i].dwords) * 4, hit),
@@ -275,14 +275,14 @@ void AGXDeviceUserClient::scanPushes(const tgm_push *pushes, uint32_t count, tgm
 	scanRead(words, count, prof, rawMacros, owner_, critical_);
 }
 
-// Inside the submit gate (bindings stay as they are): where each push's words lie in the pool, whose kernel mapping lives
-// as long as the kernel, for the thread call to read. A push in any other BO is not read: its mapping may go first.
+// Inside the channel's submit lock (the published bindings it reads stay until it leaves): where each push's words lie in
+// the pool, whose kernel mapping lives as long as the kernel, for the thread call to read. A push in any other BO is not read: its mapping may go first.
 void AGXDeviceUserClient::deferScan(const tgm_push *pushes, uint32_t count, bool rawMacros)
 {
 	Deferral *d = deferral();
 	if (!d)
 		return;
-	const Binding *hit = nullptr;
+	const BindingTable::Entry *hit = nullptr;
 	IOLockLock(d->lock);
 	ScanQueue::Record *r = gQueue.reserve();
 	if (r) {

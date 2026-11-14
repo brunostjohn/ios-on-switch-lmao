@@ -259,9 +259,12 @@ static int backing_dependency(struct tgm_chan *chan, const struct switch_gpu_bac
 		struct tgm_chan *source = live_by_uid(token->queue);
 		u64 va;
 
-		if (!source || token->reset_generation != (source->id >> 32) + 1 ||
-		    !chan->vm->fences_va || token->value > UINT32_MAX)
+		if (!chan->vm->fences_va || token->value > UINT32_MAX)
 			return -ENODEV;
+		/* gone or reset since the first pass found it: its work ended or was killed, and the emitting pass runs past
+		 * the point where the job may still fail */
+		if (!source || token->reset_generation != (source->id >> 32) + 1)
+			return emit ? 0 : -ENODEV;
 		va = chan->vm->fences_va +
 		     ((uintptr_t)source->fence_cpu - (uintptr_t)tgm_fence_pages.va);
 		if (emit) {
@@ -306,7 +309,8 @@ static int backing_dependency(struct tgm_chan *chan, const struct switch_gpu_bac
 
 /* Every status first, outside tgm_live_lock (a timeline's status may take its engine's state), then one hold of it for
  * all the producer channels: a job over many producers takes it once. A producer that failed after the ownership layer
- * collected it leaves nothing to wait for; that layer logs it, and its readers go on. */
+ * collected it leaves nothing to wait for; that layer logs it, and its readers go on. The emitting pass (emit) never
+ * fails on tokens the checking pass passed. */
 int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
 			     u32 count, int emit)
 {
@@ -473,14 +477,16 @@ static int words_valid(const struct tgm_chan *chan, const struct switch_gpu_word
 	return 1;
 }
 
-/* chan_exec and switch_gpu_chan_exec_events: one body, inlined into each, so chan_exec keeps its code. */
+/* chan_exec and switch_gpu_chan_exec_events: one body, inlined into each, so chan_exec keeps its code. `owned` is
+ * committed at the point past which nothing fails the job, before its kick. */
 static inline __attribute__((always_inline)) int
 chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count,
 	       uint32_t *seqno, const struct tgm_prof *prof,
 	       const struct switch_gpu_backing_token *dependencies, u32 dependency_count,
 	       int may_wait, u32 visibility, const struct switch_gpu_sibling_wait *siblings,
 	       u32 sibling_count, const struct switch_gpu_word_wait *word_waits,
-	       u32 word_wait_count, const struct switch_gpu_release *releases, u32 release_count)
+	       u32 word_wait_count, const struct switch_gpu_release *releases, u32 release_count,
+	       struct switch_gpu_backing_transaction *owned)
 {
 	u64 start = SWITCH_FRAME_TIMELINE ? nvxnu_nanotime() : 0;
 	u32 i = 0;
@@ -518,6 +524,8 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 	if (ret)
 		return ret;
 	if (!count && !(visibility & SWITCH_GPU_SUBMIT_FORCE_FENCE)) {
+		if (owned)
+			switch_gpu_backing_commit(owned);
 		*seqno = chan->submitted;
 		return 0;
 	}
@@ -566,20 +574,6 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 	push_seg = chan->chan.push.seg;
 	chan->chan.defer_kick = true;
 	ret = nvif_chan_gpfifo_wait(&chan->chan, entries, words);
-	if (!ret)
-		ret = tgm_backing_dependencies(chan, dependencies, dependency_count, 1);
-	if (!ret) {
-		chan_sibling_waits(chan, siblings, sibling_count);
-		chan_word_waits(chan, word_waits, word_wait_count);
-	}
-	/* a VA rebound over work still queued: nothing after the bind runs before retirement switched its PTEs; the TLB
-	 * invalidate below runs after this acquire */
-	bind = !ret && !chan->kernel && bind_pending(chan->vm, &bind_target, &bind_va);
-	if (bind)
-		PUSH_MTHD(&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(bind_va), SEMAPHOREB,
-			  lower_32_bits(bind_va), SEMAPHOREC, bind_target, SEMAPHORED,
-			  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
-				  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
 	if (ret) {
 		chan->chan.gpfifo.cur = ring_cur;
 		chan->chan.gpfifo.free = ring_free;
@@ -590,6 +584,21 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 		chan->chan.defer_kick = false;
 		return ret;
 	}
+	/* The job's records go up here, with its seqno fixed and its room reserved: whoever finds one waits for a job that is
+	 * kicked below, and tgm_live_lock, the GPFIFO writes and the doorbell run with none of its backings' locks held. */
+	if (owned)
+		switch_gpu_backing_commit(owned);
+	tgm_backing_dependencies(chan, dependencies, dependency_count, 1);
+	chan_sibling_waits(chan, siblings, sibling_count);
+	chan_word_waits(chan, word_waits, word_wait_count);
+	/* a VA rebound over work still queued: nothing after the bind runs before retirement switched its PTEs; the TLB
+	 * invalidate below runs after this acquire */
+	bind = !chan->kernel && bind_pending(chan->vm, &bind_target, &bind_va);
+	if (bind)
+		PUSH_MTHD(&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(bind_va), SEMAPHOREB,
+			  lower_32_bits(bind_va), SEMAPHOREC, bind_target, SEMAPHORED,
+			  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
+				  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
 	PUSH_KICK(&chan->chan.push);
 	tgm_chan_park_promises(chan, dependencies, dependency_count);
 	if (READ_ONCE(chan->norder)) {
@@ -680,7 +689,7 @@ static int chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint3
 		     int may_wait, u32 visibility)
 {
 	return chan_exec_body(chan, pushes, count, seqno, prof, dependencies, dependency_count,
-			      may_wait, visibility, NULL, 0, NULL, 0, NULL, 0);
+			      may_wait, visibility, NULL, 0, NULL, 0, NULL, 0, NULL);
 }
 
 int tgm_chan_exec(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t count,
@@ -749,11 +758,12 @@ int switch_gpu_chan_exec_events(struct tgm_chan *chan, const struct tgm_push *pu
 				const struct switch_gpu_sibling_wait *siblings, u32 sibling_count,
 				const struct switch_gpu_word_wait *words, u32 word_count,
 				u32 *seqno, const struct tgm_prof *prof, u32 visibility,
-				const struct switch_gpu_release *releases, u32 release_count)
+				const struct switch_gpu_release *releases, u32 release_count,
+				struct switch_gpu_backing_transaction *owned)
 {
 	return chan_exec_body(chan, pushes, count, seqno, prof, dependencies, dependency_count, 0,
 			      visibility, siblings, sibling_count, words, word_count, releases,
-			      release_count);
+			      release_count, owned);
 }
 
 int switch_gpu_chan_exec_job(struct tgm_chan *chan, const struct tgm_push *pushes, u32 count,
@@ -765,7 +775,7 @@ int switch_gpu_chan_exec_job(struct tgm_chan *chan, const struct tgm_push *pushe
 {
 	return switch_gpu_chan_exec_events(chan, pushes, count, dependencies, dependency_count,
 					   siblings, sibling_count, NULL, 0, seqno, prof,
-					   visibility, releases, release_count);
+					   visibility, releases, release_count, NULL);
 }
 
 void switch_gpu_chan_event_releases(struct tgm_chan *chan, u32 seqno)

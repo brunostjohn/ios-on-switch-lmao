@@ -534,7 +534,7 @@ refresh:
 			error = switch_gpu_chan_exec_events(
 				chan, pushes, count, job.dependencies, dependencies, nullptr, 0,
 				events->words(), events->wordCount(), &seqno, profile,
-				jobVisibility, nullptr, 0);
+				jobVisibility, nullptr, 0, &transaction);
 			if (scratch)
 				scratch->phases.end(TGM_SUBMIT_EXEC);
 		}
@@ -546,9 +546,7 @@ refresh:
 		if (error)
 			break;
 	}
-	if (count && !error)
-		switch_gpu_backing_commit(&transaction);
-	else
+	if (error)
 		switch_gpu_backing_abort(&transaction);
 	if (!error && events)
 		events->commit();

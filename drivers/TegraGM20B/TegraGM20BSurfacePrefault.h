@@ -54,3 +54,75 @@ inline bool tegra_gm20b_prefault_wanted(uint64_t bytes, int pressureLevel)
 {
 	return pressureLevel == 0 && bytes >= kTegraGM20BPrefaultMinBytes;
 }
+
+/* A new surface's pages are zero-filled by the prefault through the cacheable physical aperture: it cleans them out to
+ * DRAM, then keeps them wired until the surface's first GPU import (at most kTegraGM20BPrefaultHeld surfaces, the oldest
+ * given back first, each for kTegraGM20BPrefaultHeldNs at most). */
+constexpr uint32_t kTegraGM20BPrefaultHeld = 8;
+constexpr uint64_t kTegraGM20BPrefaultHeldNs = 1000000000ULL;
+
+template <typename Memory> struct TegraGM20BPrefaultHeld {
+	struct Entry {
+		Memory *memory;
+		uint64_t deadline;
+	};
+
+	Entry entries[kTegraGM20BPrefaultHeld] = {};
+
+	/* `memory` held until `deadline`; what that pushed out (the oldest), or null */
+	Memory *hold(Memory *memory, uint64_t deadline)
+	{
+		Entry *slot = &entries[0];
+		for (Entry &e : entries)
+			if (!e.memory || (slot->memory && e.deadline < slot->deadline))
+				slot = &e;
+		Memory *out = slot->memory;
+		*slot = {memory, deadline};
+		return out;
+	}
+
+	Memory *take(const Memory *memory)
+	{
+		for (Entry &e : entries)
+			if (e.memory && e.memory == memory) {
+				Memory *held = e.memory;
+				e = {};
+				return held;
+			}
+		return nullptr;
+	}
+
+	/* One entry past its deadline at `now` (all of them under pressure), or null */
+	Memory *expire(uint64_t now, bool pressure)
+	{
+		for (Entry &e : entries)
+			if (e.memory && (pressure || e.deadline <= now)) {
+				Memory *held = e.memory;
+				e = {};
+				return held;
+			}
+		return nullptr;
+	}
+
+	/* The earliest deadline held, 0 for none */
+	uint64_t next() const
+	{
+		uint64_t first = 0;
+		for (const Entry &e : entries)
+			if (e.memory && (!first || e.deadline < first))
+				first = e.deadline;
+		return first;
+	}
+};
+
+/* Whether a GPU import cleans the surface's pages on the CPU: not when another import's clean covers them, nor when it is
+ * the surface's first, the GPU may write it, nothing wrote it (its seed is 0), and the prefault cleaned its pages after
+ * their zero-fill with them wired since. Those are every way a dirty line gets there: a zero-fill, a fault after the
+ * pages were unwired, and a CPU store, which IOSurface makes through IOSurfaceLock/Unlock and its seed. An import the GPU
+ * only reads still cleans: what it samples is what a CPU put there, and a writer that skipped IOSurfaceLock would leave
+ * it in the cache. */
+inline bool tegra_gm20b_import_cleans(bool covered, bool cleanedAtCreation, bool fresh,
+				      bool gpuWrites)
+{
+	return !covered && !(cleanedAtCreation && fresh && gpuWrites);
+}

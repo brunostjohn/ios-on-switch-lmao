@@ -181,7 +181,7 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 	// between begin and commit the transaction holds every use's backing lock: a promise read that takes one again
 	// (switch_gpu_backing_promise_tokens) never returns on XNU
 	EXPECT_FALSE(job.Has("switch_gpu_backing_promise_tokens("));
-	EXPECT_TRUE(job.Before("switch_gpu_backing_commit(&transaction);",
+	EXPECT_TRUE(job.Before("jobVisibility, releases, keptCount, &transaction);",
 			       "keptPromises(record.promises, slot, completion);"));
 	const std::string exec = unit("gpu_exec.c");
 	EXPECT_TRUE(Block(exec, "static u32 chan_fence_job(")
@@ -193,9 +193,9 @@ TEST(GM20BPromiseSource, PresentsAndJobsOrderBehindWriterPromises)
 	EXPECT_FALSE(acquire.Has("tgm_chan_note_promise("));
 	const CodeText kick =
 		Block(exec, "static inline __attribute__((always_inline)) int chan_exec_body(");
-	EXPECT_TRUE(kick.Before(
-		"ret = tgm_backing_dependencies(chan, dependencies, dependency_count, 1);",
-		"PUSH_KICK(&chan->chan.push);"));
+	EXPECT_TRUE(
+		kick.Before("tgm_backing_dependencies(chan, dependencies, dependency_count, 1);",
+			    "PUSH_KICK(&chan->chan.push);"));
 	EXPECT_TRUE(kick.Before("PUSH_KICK(&chan->chan.push);",
 				"tgm_chan_park_promises(chan, dependencies, dependency_count);"));
 	const CodeText copy = Block(unit("gpu_present.c"), "static int present_copy(");

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalPassCache.h"
 #include <objc/runtime.h>
+#include <os/lock.h>
+#include <algorithm>
 #include <cstring>
+#include <mutex>
 #include "raw_objc_layout.h"
 
 namespace {
@@ -135,19 +138,55 @@ uint64_t hashBytes(const uint8_t *p, size_t n)
     return a ^ (b * 0x9e3779b97f4a7c15ull);
 }
 
-// The entries' hashes and last lookups apart from the entries, so a lookup reads two small arrays and one entry
+struct Cache;
+std::mutex gCachesLock;
+std::vector<Cache *> gCaches;  // every thread's, for rmPassTrim
+
+// The entries' hashes and last lookups apart from the entries, so a lookup reads two small arrays and one entry. The
+// thread finds and keeps under `lock`, and rmPassTrim lets every entry go under it from another thread: a thread that
+// encodes nothing more after an animation never looks up again to let its copies go, and they hold the textures of
+// its last passes.
 struct Cache {
+    os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
     std::array<RMPassEntry, kEntries> entries;
     std::array<uint64_t, kEntries> hashes{}, used{};
     uint64_t clock = 0;
+
+    Cache()
+    {
+        std::lock_guard<std::mutex> held(gCachesLock);
+        gCaches.push_back(this);
+    }
+
+    ~Cache()
+    {
+        std::lock_guard<std::mutex> held(gCachesLock);
+        gCaches.erase(std::find(gCaches.begin(), gCaches.end(), this));
+    }
 };
 
-// Every kEntries lookups, the entries no pass took for kIdleLookups are let go
+// Every kEntries lookups, the entries no pass took for kIdleLookups are let go: their copies are released once the lock
+// is, so a texture's last release never runs under it
 void dropIdle(Cache &c)
 {
+    MTLRenderPassDescriptor *gone[kEntries] = {};
+    os_unfair_lock_lock(&c.lock);
     for (size_t i = 0; i < kEntries; i++)
-        if (c.entries[i].pass && c.clock - c.used[i] > kIdleLookups)
+        if (c.entries[i].pass && c.clock - c.used[i] > kIdleLookups) {
+            gone[i] = c.entries[i].pass;
             c.entries[i].pass = nil;
+        }
+    os_unfair_lock_unlock(&c.lock);
+}
+
+size_t texturesOf(const RMPass &facts)
+{
+    size_t n = 0;
+    for (const RMPass::Color &c : facts.color)
+        n += (c.texture != nil) + (c.resolve != nil);
+    for (const RMPass::Zeta &z : facts.zeta)
+        n += z.texture != nil;
+    return n + (facts.depthResolve != nil) + (facts.stencilResolve != nil);
 }
 
 thread_local Cache tCache;
@@ -231,18 +270,64 @@ RMPassEntry *rmPassFind(const std::vector<uint8_t> &key, uint64_t hash)
     Cache &c = tCache;
     if (++c.clock % kEntries == 0)
         dropIdle(c);
+    os_unfair_lock_lock(&c.lock);
     for (size_t i = 0; i < kEntries; i++)
         if (c.hashes[i] == hash && c.entries[i].pass && c.entries[i].key == key) {
             c.used[i] = c.clock;
             return &c.entries[i];
         }
+    os_unfair_lock_unlock(&c.lock);
     return nullptr;
+}
+
+void rmPassDone()
+{
+    os_unfair_lock_unlock(&tCache.lock);
+}
+
+RMPassTrim rmPassHeld()
+{
+    RMPassTrim held = {};
+    std::lock_guard<std::mutex> registry(gCachesLock);
+    for (Cache *c : gCaches) {
+        os_unfair_lock_lock(&c->lock);
+        for (const RMPassEntry &e : c->entries)
+            if (e.pass) {
+                ++held.passes;
+                held.textures += texturesOf(e.facts);
+            }
+        os_unfair_lock_unlock(&c->lock);
+    }
+    return held;
+}
+
+RMPassTrim rmPassTrim()
+{
+    RMPassTrim trimmed = {};
+    std::vector<MTLRenderPassDescriptor *> gone;
+    std::lock_guard<std::mutex> held(gCachesLock);
+    for (Cache *c : gCaches) {
+        os_unfair_lock_lock(&c->lock);
+        for (size_t i = 0; i < kEntries; i++) {
+            RMPassEntry &e = c->entries[i];
+            if (!e.pass)
+                continue;
+            ++trimmed.passes;
+            trimmed.textures += texturesOf(e.facts);
+            gone.push_back(e.pass);
+            e.pass = nil;
+            c->hashes[i] = 0;
+        }
+        os_unfair_lock_unlock(&c->lock);
+    }
+    return trimmed;
 }
 
 void rmPassKeep(const std::vector<uint8_t> &key, uint64_t hash, MTLRenderPassDescriptor *copy, const RMPass &facts,
                 const RMRenderEncoder *e)
 {
     Cache &c = tCache;
+    os_unfair_lock_lock(&c.lock);
     size_t at = 0;
     for (size_t i = 0; i < kEntries; i++) {
         if (!c.entries[i].pass) {
@@ -253,6 +338,7 @@ void rmPassKeep(const std::vector<uint8_t> &key, uint64_t hash, MTLRenderPassDes
             at = i;
     }
     RMPassEntry *slot = &c.entries[at];
+    MTLRenderPassDescriptor *gone = slot->pass;
     slot->pass = copy;
     slot->facts = facts;
     std::copy(std::begin(e->_formats), std::end(e->_formats), slot->formats.begin());
@@ -264,4 +350,6 @@ void rmPassKeep(const std::vector<uint8_t> &key, uint64_t hash, MTLRenderPassDes
     slot->key = key;
     c.hashes[at] = hash;
     c.used[at] = c.clock;
+    os_unfair_lock_unlock(&c.lock);
+    (void)gone;
 }

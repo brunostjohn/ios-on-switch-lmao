@@ -159,7 +159,7 @@ static int snapshot_read(switch_gpu_backing *backing, switch_gpu_backing_token *
 			backing->dirty &= ~uint32_t(SWITCH_GPU_BACKING_CPU_DIRTY);
 			backing->initial_clean = true;
 		}
-		++backing->cpu_readers;
+		switch_gpu_backing_cpu_owners_add(backing->cpu_readers, 1);
 		backing->promised_readers += pending > 0;
 		*lease = {backing->cpu_leases,
 			  backing,
@@ -252,7 +252,7 @@ extern "C" int switch_gpu_backing_conversion_reserve(switch_gpu_backing *backing
 	if (!result && users == UINT32_MAX)
 		result = -75;
 	if (!result) {
-		++users;
+		switch_gpu_backing_cpu_owners_add(users, 1);
 		*lease = {backing->cpu_leases,
 			  backing,
 			  0,

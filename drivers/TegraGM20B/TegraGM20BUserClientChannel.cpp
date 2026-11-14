@@ -4,78 +4,117 @@
 #include "TegraGM20BLayoutAsk.h"
 #include "TegraGM20BRecord.h"
 
+// lock_ held. A Map into VA no binding holds publishes its binding with the submit gate open: no job in flight can have
+// resolved that VA. A cut (an Unmap, or a Map over a live binding) closes the gate first: its retirement snapshot and the
+// bind epoch it publishes must have no kick between them (tgm_vm_bind_wait), which a job inside the gate could make.
 IOReturn AGXDeviceUserClient::vmBind(const TegraGM20BAbiVmBind *in, uint32_t count)
+{
+	const bool cuts = bindCuts(in, count);
+	if (cuts && !submitGate_.beginMutation(lock_))
+		return kIOReturnNotOpen;
+	BindingTable::Snapshot *snapshot = BindingTable::prepare(nbinds_ + 2 * count);
+	IOReturn ret = snapshot ? kIOReturnSuccess : kIOReturnNoMemory;
+	bool changed = false;
+	for (uint32_t i = 0; !ret && i < count; i++)
+		ret = bindOp(in->ops[i], changed);
+	if (changed)
+		publishBindings(snapshot);
+	else
+		BindingTable::discard(snapshot);
+	if (cuts)
+		submitGate_.endMutation(lock_);
+	return ret;
+}
+
+// lock_ held: whether an op would take VA from a live binding (one that is the same binding again changes nothing).
+bool AGXDeviceUserClient::bindCuts(const TegraGM20BAbiVmBind *in, uint32_t count)
 {
 	for (uint32_t i = 0; i < count; i++) {
 		const TegraGM20BAbiBindOp &op = in->ops[i];
-		if (((op.va | op.range | op.bo_offset) & 0xfff) || !op.range ||
-		    op.va < TGM_USER_VA_START || op.range > TGM_KERNEL_VA ||
-		    op.va > TGM_KERNEL_VA - op.range || op.kind > 0xff)
-			return kIOReturnBadArgument;
-		if (op.op == TegraGM20BBindMapSparse)
-			return kIOReturnUnsupported;  // InfoSparse is not advertised in v1
-		const uint64_t start = statsNowNs();
-		const bool unmap = op.op == TegraGM20BBindUnmap;
-		if (!unmap && op.op != TegraGM20BBindMap && op.op != TegraGM20BBindMapVolatile)
-			return kIOReturnBadArgument;
-		Bo *bo = unmap ? nullptr : findBo(op.handle);
-		if (!unmap &&
-		    (!bo || op.bo_offset > bo->bytes || op.range > bo->bytes - op.bo_offset)) {
-			noteBind(TGM_BIND_REFUSED, op.va, op.range, bo, op.bo_offset,
-				 uint8_t(op.kind));
-			return kIOReturnBadArgument;
-		}
-		const Binding *same = switch_gpu_binding_find(binds_, nbinds_, op.va, op.range);
-		if (!unmap && same && same->va == op.va && same->range == op.range &&
-		    same->bo == bo && same->bo_offset == op.bo_offset &&
-		    same->retirement->kind == op.kind &&
-		    same->retirement->vol == (op.op == TegraGM20BBindMapVolatile))
+		if (!op.range || op.va > UINT64_MAX - op.range)
 			continue;
-		// Everything a cut and the new binding need, before any binding changes.
-		if (nbinds_ + 2 > cap_binds_) {
-			uint32_t cap = cap_binds_ ? cap_binds_ * 2 : 64;
-			while (cap < nbinds_ + 2)
-				cap *= 2;
-			Binding *grown = IONew(Binding, cap);
-			if (!grown)
-				return kIOReturnNoMemory;
-			if (binds_) {
-				memcpy(grown, binds_, sizeof(Binding) * nbinds_);
-				IODelete(binds_, Binding, cap_binds_);
-			}
-			binds_ = grown;
-			cap_binds_ = cap;
-		}
-		RetiredBinding *spare[2] = {IONew(RetiredBinding, 1), IONew(RetiredBinding, 1)};
-		auto *record = unmap ? nullptr : IONew(RetiredBinding, 1);
-		const auto freeSpare = [&] {
-			for (auto *each : spare)
-				if (each)
-					IODelete(each, RetiredBinding, 1);
-		};
-		IOReturn cut = !spare[0] || !spare[1] || (!unmap && !record) ? kIOReturnNoMemory
-									     : kIOReturnSuccess;
-		// Work queued now may still use what the range held: its PTEs stay until that work completes, and a Map's
-		// new PTEs wait for retirement behind the bind epoch. With none queued, both happen here.
-		const bool queued = workQueued(op.va, op.range);
-		if (!cut)
-			cut = cutOverlaps(op.va, op.range, !queued, !unmap, spare);
-		freeSpare();
-		if (unmap || cut) {
-			if (record)
-				IODelete(record, RetiredBinding, 1);
-			if (unmap && !cut)
-				tgm_stats_bind(0, op.range >> 12, statsNowNs() - start);
-			if (cut)
-				return cut;
+		const uint32_t after =
+			switch_gpu_binding_upper(binds_, nbinds_, op.va + op.range - 1);
+		const Binding *b = after ? &binds_[after - 1] : nullptr;
+		if (!b || b->va + b->range <= op.va)
 			continue;
-		}
-		if (const IOReturn mapped = mapRange(op, bo, record, queued))
-			return mapped;
-		switch_gpu_path_taken(SWITCH_GPU_PATH_VOLATILE_BIND,
-				      op.op == TegraGM20BBindMapVolatile ? 1 : 0);
-		tgm_stats_bind(1, op.range >> 12, statsNowNs() - start);
+		const bool same = op.op != TegraGM20BBindUnmap && b->va == op.va &&
+				  b->range == op.range && b->bo == findBo(op.handle) &&
+				  b->bo_offset == op.bo_offset && b->retirement->kind == op.kind &&
+				  b->retirement->vol == (op.op == TegraGM20BBindMapVolatile);
+		if (!same)
+			return true;
 	}
+	return false;
+}
+
+IOReturn AGXDeviceUserClient::bindOp(const TegraGM20BAbiBindOp &op, bool &changed)
+{
+	if (((op.va | op.range | op.bo_offset) & 0xfff) || !op.range || op.va < TGM_USER_VA_START ||
+	    op.range > TGM_KERNEL_VA || op.va > TGM_KERNEL_VA - op.range || op.kind > 0xff)
+		return kIOReturnBadArgument;
+	if (op.op == TegraGM20BBindMapSparse)
+		return kIOReturnUnsupported;  // InfoSparse is not advertised in v1
+	const uint64_t start = statsNowNs();
+	const bool unmap = op.op == TegraGM20BBindUnmap;
+	if (!unmap && op.op != TegraGM20BBindMap && op.op != TegraGM20BBindMapVolatile)
+		return kIOReturnBadArgument;
+	Bo *bo = unmap ? nullptr : findBo(op.handle);
+	if (!unmap && (!bo || op.bo_offset > bo->bytes || op.range > bo->bytes - op.bo_offset)) {
+		noteBind(TGM_BIND_REFUSED, op.va, op.range, bo, op.bo_offset, uint8_t(op.kind));
+		return kIOReturnBadArgument;
+	}
+	const Binding *same = switch_gpu_binding_find(binds_, nbinds_, op.va, op.range);
+	if (!unmap && same && same->va == op.va && same->range == op.range && same->bo == bo &&
+	    same->bo_offset == op.bo_offset && same->retirement->kind == op.kind &&
+	    same->retirement->vol == (op.op == TegraGM20BBindMapVolatile))
+		return kIOReturnSuccess;
+	// Everything a cut and the new binding need, before any binding changes.
+	if (nbinds_ + 2 > cap_binds_) {
+		uint32_t cap = cap_binds_ ? cap_binds_ * 2 : 64;
+		while (cap < nbinds_ + 2)
+			cap *= 2;
+		Binding *grown = IONew(Binding, cap);
+		if (!grown)
+			return kIOReturnNoMemory;
+		if (binds_) {
+			memcpy(grown, binds_, sizeof(Binding) * nbinds_);
+			IODelete(binds_, Binding, cap_binds_);
+		}
+		binds_ = grown;
+		cap_binds_ = cap;
+	}
+	RetiredBinding *spare[2] = {IONew(RetiredBinding, 1), IONew(RetiredBinding, 1)};
+	auto *record = unmap ? nullptr : IONew(RetiredBinding, 1);
+	const auto freeSpare = [&] {
+		for (auto *each : spare)
+			if (each)
+				IODelete(each, RetiredBinding, 1);
+	};
+	IOReturn cut = !spare[0] || !spare[1] || (!unmap && !record) ? kIOReturnNoMemory
+								     : kIOReturnSuccess;
+	// Work queued now may still use what the range held: its PTEs stay until that work completes, and a Map's
+	// new PTEs wait for retirement behind the bind epoch. With none queued, both happen here.
+	const bool queued = workQueued(op.va, op.range);
+	const uint32_t after = switch_gpu_binding_upper(binds_, nbinds_, op.va + op.range - 1);
+	changed = changed ||
+		  (!cut && after && binds_[after - 1].va + binds_[after - 1].range > op.va);
+	if (!cut)
+		cut = cutOverlaps(op.va, op.range, !queued, !unmap, spare);
+	freeSpare();
+	if (unmap || cut) {
+		if (record)
+			IODelete(record, RetiredBinding, 1);
+		if (unmap && !cut)
+			tgm_stats_bind(0, op.range >> 12, statsNowNs() - start);
+		return cut;
+	}
+	if (const IOReturn mapped = mapRange(op, bo, record, queued))
+		return mapped;
+	changed = true;
+	switch_gpu_path_taken(SWITCH_GPU_PATH_VOLATILE_BIND,
+			      op.op == TegraGM20BBindMapVolatile ? 1 : 0);
+	tgm_stats_bind(1, op.range >> 12, statsNowNs() - start);
 	return kIOReturnSuccess;
 }
 
@@ -271,18 +310,18 @@ IOReturn AGXDeviceUserClient::channelDestroy(const TegraGM20BAbiChannel *in)
 
 // The kernel's view of the push at [va, va + bytes) through the binding that holds it (`hit`: the last one found, tried
 // first): pool BOs write-combined, cached and system BOs their kernel mapping. Null for a host import (no kernel mapping).
-// lock_ held.
+// lock_ held, or a channel's submit lock: it reads the published bindings.
 const uint32_t *AGXDeviceUserClient::pushView(uint64_t va, uint64_t bytes,
-					      const Binding *&hit) const
+					      const BindingTable::Entry *&hit) const
 {
 	if (!hit || !switch_gpu_binding_contains(*hit, va, bytes))
-		hit = switch_gpu_binding_find(binds_, nbinds_, va, bytes);
+		hit = bindTable_.find(va, bytes);
 	const void *base = nullptr;
 	if (hit) {
 		if (hit->bo->pool_va) {
 			base = hit->bo->pool_va;
-		} else if (hit->bo->bmd) {
-			base = hit->bo->bmd->getBytesNoCopy();
+		} else {
+			base = hit->bo->buffer.cpu;
 		}
 	}
 	return base ? reinterpret_cast<const uint32_t *>(static_cast<const uint8_t *>(base) +
@@ -301,7 +340,7 @@ int AGXDeviceUserClient::hungInterlocks(const uint64_t *va, const uint32_t *dwor
 		return -1;
 	PushCounts c = {};
 	PushParse p = {};
-	const Binding *hit = nullptr;
+	const BindingTable::Entry *hit = nullptr;
 	int read = 0;
 	for (uint32_t i = 0; i < n; i++) {
 		const uint32_t *words = pushView(va[i], static_cast<uint64_t>(dwords[i]) * 4, hit);

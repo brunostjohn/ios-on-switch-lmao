@@ -7,6 +7,8 @@
 #include "../raw/runtime/RawMetalPassCache.h"
 #include <gtest/gtest.h>
 #include <cstdint>
+#include <future>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -91,12 +93,14 @@ TEST_F(RawPassCache, PassesOfTwoDepthResolveFiltersAreTwoEntries)
         facts.depthFilter = uint32_t(filters[i]);
         rmPassKeep(keys[i].bytes, keys[i].hash, resolvingPass(depth, resolve, filters[i]), facts, e);
     }
-    const RMPassEntry *kept[2] = {rmPassFind(keys[0].bytes, keys[0].hash), rmPassFind(keys[1].bytes, keys[1].hash)};
-    ASSERT_NE(kept[0], nullptr);
-    ASSERT_NE(kept[1], nullptr);
-    EXPECT_NE(kept[0], kept[1]);
-    for (int i = 0; i < 2; i++)
+    const RMPassEntry *kept[2] = {};
+    for (int i = 0; i < 2; i++) {
+        kept[i] = rmPassFind(keys[i].bytes, keys[i].hash);
+        ASSERT_NE(kept[i], nullptr);
         EXPECT_EQ(kept[i]->facts.depthFilter, uint32_t(filters[i])) << i;
+        rmPassDone();
+    }
+    EXPECT_NE(kept[0], kept[1]);
 }
 
 TEST_F(RawPassCache, AFrameOfFortyPassesIsKeptForTheNext)
@@ -123,13 +127,64 @@ TEST_F(RawPassCache, AFrameOfFortyPassesIsKeptForTheNext)
     std::vector<Key> keys(passes.size());
     for (size_t i = 0; i < passes.size(); i++) {
         ASSERT_TRUE(rmPassKey(passes[i], keys[i].bytes, keys[i].hash));
-        if (!rmPassFind(keys[i].bytes, keys[i].hash))
+        if (rmPassFind(keys[i].bytes, keys[i].hash))
+            rmPassDone();
+        else
             rmPassKeep(keys[i].bytes, keys[i].hash, [passes[i] copy], RMPass {}, e);
     }
     size_t found = 0;
     for (const Key &k : keys)
-        found += rmPassFind(k.bytes, k.hash) != nullptr;
+        if (rmPassFind(k.bytes, k.hash)) {
+            ++found;
+            rmPassDone();
+        }
     EXPECT_EQ(found, passes.size());
+}
+
+// After an animation the render server's encoding thread may encode nothing for a long while, and its kept passes'
+// copies hold the textures of its last frame: memory pressure's trim (gRawRelease, on its own queue) lets them go with
+// no lookup on that thread.
+TEST_F(RawPassCache, TrimLetsAnIdleThreadsPassesGo)
+{
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    __weak id<MTLTexture> targets[3];
+    std::promise<void> kept, done;
+    std::thread encoder([&] {
+        @autoreleasepool {
+            MTLTextureDescriptor *t = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                         width:64
+                                                                                        height:64
+                                                                                     mipmapped:NO];
+            t.storageMode = MTLStorageModePrivate;
+            t.usage = MTLTextureUsageRenderTarget;
+            RMRenderEncoder *e = [RMRenderEncoder new];
+            for (int i = 0; i < 3; i++) {
+                id<MTLTexture> target = [device newTextureWithDescriptor:t];
+                targets[i] = target;
+                MTLRenderPassDescriptor *d = [MTLRenderPassDescriptor renderPassDescriptor];
+                d.colorAttachments[0].texture = target;
+                d.colorAttachments[0].loadAction = MTLLoadActionClear;
+                d.colorAttachments[0].storeAction = MTLStoreActionStore;
+                Key k;
+                ASSERT_TRUE(rmPassKey(d, k.bytes, k.hash));
+                RMPass facts{};
+                facts.color[0].texture = target;
+                rmPassKeep(k.bytes, k.hash, [d copy], facts, e);
+            }
+        }
+        kept.set_value();
+        done.get_future().wait();
+    });
+    kept.get_future().wait();
+    for (int i = 0; i < 3; i++)
+        EXPECT_NE(targets[i], nil) << "kept by the encoding thread's pass copy " << i;
+    const RMPassTrim trimmed = rmPassTrim();
+    EXPECT_GE(trimmed.passes, 3u);
+    EXPECT_GE(trimmed.textures, 3u);
+    for (int i = 0; i < 3; i++)
+        EXPECT_EQ(targets[i], nil) << "texture " << i << " still held after trim";
+    done.set_value();
+    encoder.join();
 }
 
 }  // namespace
