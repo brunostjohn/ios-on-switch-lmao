@@ -159,8 +159,11 @@ void switch_idle_note_frame(void)
         idle_cores[cpu].counts.frame_wakes++;
     }
 #endif
+    /* Only the frame core (ArmGIC frameTarget) writes the stamp. While the frame lines move to it (a core coming
+     * online, SC7) two cores may both read an old stamp and both report the start, which started() takes twice. */
     const uint64_t now = mach_absolute_time();
-    const uint64_t before = os_atomic_xchg(&idle_frame_at, now, relaxed);
+    const uint64_t before = os_atomic_load(&idle_frame_at, relaxed);
+    os_atomic_store(&idle_frame_at, now, relaxed);
     if (now - before >= SWITCH_IDLE_FRAME_WINDOW) {
         void (*started)(void) = os_atomic_load(&idle_frames_started, acquire);
         if (started) {
