@@ -113,7 +113,6 @@ TEST(KernelShadow, MediaanalysisdsConversionReachesTheSurfaceAsInPlace)
 
     const raw::KernelUse uses[] = {use(shadowed.luma, true), use(shadowed.rgba, false),
                                    use(shadowed.chroma, true)};
-    EXPECT_TRUE(raw::kernelShadowsExact(uses, 3)) << "the two planes are disjoint bytes of one surface";
     raw::KernelShadows plan;
     plan.begin(uses, 3);
     for (const auto &u : uses)
@@ -194,14 +193,21 @@ TEST(KernelShadow, AnImageIsFilledAgainAfterAnotherResourceWroteItsRows)
     EXPECT_TRUE(plan.before(read, 1).empty()) << "filled once per write, not before every dispatch";
 }
 
-TEST(KernelShadow, AStoreThroughAnImageBesideAnotherStoreToItsBytesIsNotExact)
+TEST(KernelShadow, TwoStoresToTheSameBytesInOneDispatchLeaveTheImages)
 {
     Frame f;
     const raw::KernelUse buffer = {f.planes.data(), {kPlanesVa, f.planes.size()}, false, true};
     const raw::KernelUse stores[] = {use(f.luma, true), buffer};
-    EXPECT_FALSE(raw::kernelShadowsExact(stores, 2));
-    const raw::KernelUse loads[] = {use(f.luma, true), {buffer.object, buffer.span, false, false}};
-    EXPECT_TRUE(raw::kernelShadowsExact(loads, 2));
+    const raw::KernelUse later[] = {{buffer.object, buffer.span, false, false}, use(f.chroma, false)};
+    raw::KernelShadows plan;
+    plan.begin(stores, 2);
+    EXPECT_TRUE(plan.before(stores, 2).empty());
+    plan.after(stores, 2);
+    const auto &next = plan.before(later, 2);
+    ASSERT_EQ(next.copyBack.size(), 1u) << "the luma image goes back after the buffer's stores, so its values stand";
+    EXPECT_EQ(next.copyBack[0], &f.luma);
+    ASSERT_EQ(next.fill.size(), 1u) << "the chroma image is filled again over the bytes the buffer wrote";
+    EXPECT_EQ(next.fill[0], &f.chroma);
 }
 
 }  // namespace

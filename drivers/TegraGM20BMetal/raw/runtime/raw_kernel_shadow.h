@@ -37,20 +37,11 @@ struct KernelUse {
     bool shadowed = false, writes = false;
 };
 
-// Whether the dispatch's result can be Metal's: a texture written through its image is copied back whole, so no other
-// resource of the same dispatch may write any of its bytes
-inline bool kernelShadowsExact(const KernelUse *uses, size_t count)
-{
-    for (size_t i = 0; i < count; ++i) {
-        if (!uses[i].shadowed || !uses[i].writes)
-            continue;
-        for (size_t j = 0; j < count; ++j)
-            if (uses[j].writes && uses[j].object != uses[i].object && uses[j].span.overlaps(uses[i].span))
-                return false;
-    }
-    return true;
-}
-
+// A dispatch that stores to the same bytes through a texture's image and through another resource leaves the image's
+// values there: the image is copied back after it, and a shadowed texture over those bytes is filled again before its
+// next use. Metal promises nothing for that dispatch ("that data may not be coherent within a single render pass ... a
+// texture you create from the method may not be able to immediately reflect changes to the underlying buffer that come
+// from a render or kernel function": MTLBuffer makeTexture(descriptor:offset:bytesPerRow:)).
 // The copies around one compute encoder's dispatches. Every write reaching texels in place (a dispatch's, or an image's
 // copy back) takes the next tick of the encoder's clock; an image filled at tick t holds every write before t.
 class KernelShadows {

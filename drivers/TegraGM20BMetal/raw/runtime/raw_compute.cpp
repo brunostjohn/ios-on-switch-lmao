@@ -313,6 +313,12 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
         *why = "an argument table whose words the kernel's record does not hold";
         return false;
     }
+    // a planar or YCbCr texture's address map: its samplers' headers with the map applied, as a draw's handle takes them
+    // (admission keeps a kernel here only where every texture it binds is under one map, or the map changes no sampler)
+    uint8_t map = 0;
+    for (uint32_t i = 0; i < r.entries; i++)
+        if (r.entry[i].kind == KernelTexture && r.entry[i].slot < 31 && textures_[r.entry[i].slot])
+            map = std::max(map, textures_[r.entry[i].slot]->addressMap);
     for (uint32_t i = 0; i < r.entries; i++) {
         const PackKernelEntry &e = r.entry[i];
         const bool writes = kernelEntryWrites(r, i);
@@ -393,7 +399,8 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
             at[0] |= dev_.constexprTsc_[index] << 20;
         } else {
             const Sampler *s = e.slot < 16 ? samplers_[e.slot] : nullptr;
-            at[0] |= (s ? s->tsc : dev_.neutralTsc_) << 20;
+            const uint32_t mapped = s && map ? s->mapped[map] : 0;
+            at[0] |= (s ? (mapped ? mapped : s->tsc) : dev_.neutralTsc_) << 20;
         }
     }
     if (r.spillEntry && r.spillEntry <= r.entries) {
