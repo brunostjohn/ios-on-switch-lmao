@@ -46,6 +46,14 @@ static void logCsc(const Tables &tables, const Inputs &in)
 }
 #endif
 
+// Under the lock.
+void TegraDisplayColor::noteLock()
+{
+#if DEVELOPMENT || DEBUG
+    __atomic_store_n(&takes, takes + 1, __ATOMIC_RELAXED);
+#endif
+}
+
 void TegraDisplayColor::Platform::hold()
 {
     native_legacy_frame_end_hold();
@@ -91,6 +99,7 @@ void TegraDisplayColor::free()
 void TegraDisplayColor::attach(SwitchMMIOWords registers)
 {
     IOLockLock(lock);
+    noteLock();
     dc = registers;
     unit.reset(registers[kDcDispColorControl] & ~kCmuEnable);
     IOLockUnlock(lock);
@@ -99,6 +108,7 @@ void TegraDisplayColor::attach(SwitchMMIOWords registers)
 void TegraDisplayColor::detach()
 {
     IOLockLock(lock);
+    noteLock();
     if (dc)
         unit.stop(dc);
     dc = SwitchMMIOWords();
@@ -120,9 +130,10 @@ void TegraDisplayColor::commit(bool paletteChanged)
     unit.publish(paletteOn, paletteChanged, static_cast<bool>(dc));
 }
 
-template <typename Change> static IOReturn change(IOLock *lock, Change body)
+template <typename Change> IOReturn TegraDisplayColor::change(Change body)
 {
     IOLockLock(lock);
+    noteLock();
     const IOReturn status = body();
     IOLockUnlock(lock);
     return status;
@@ -132,7 +143,7 @@ IOReturn TegraDisplayColor::getGammaTable(void *table)
 {
     if (!table)
         return kIOReturnBadArgument;
-    return change(lock, [&] {
+    return change([&] {
         memcpy(table, gammaTable, sizeof(gammaTable));
         return kIOReturnSuccess;
     });
@@ -160,7 +171,7 @@ IOReturn TegraDisplayColor::setGammaTable(const void *table)
         for (unsigned i = 0; i < 256; ++i)
             curve[i] = switch_color::gammaByte(gammaWord(table, i));
     }
-    return change(lock, [&] {
+    return change([&] {
         memcpy(gammaTable, table, sizeof(gammaTable));
         memcpy(inputs.gamma, curve, sizeof(curve));
         if (perChannel)
@@ -175,7 +186,7 @@ IOReturn TegraDisplayColor::getMatrix(uint32_t location, void *matrix)
 {
     if (!matrix || (location != kLocationHarmony && location != kLocationAccessibility))
         return kIOReturnBadArgument;
-    return change(lock, [&] {
+    return change([&] {
         memcpy(matrix, location == kLocationHarmony ? &inputs.harmony : &inputs.accessibility, sizeof(Matrix));
         return kIOReturnSuccess;
     });
@@ -190,7 +201,7 @@ IOReturn TegraDisplayColor::setMatrix(uint32_t location, const void *matrix)
 #if DEVELOPMENT || DEBUG
     logMatrix("setMatrix", location, value);
 #endif
-    return change(lock, [&] {
+    return change([&] {
         (location == kLocationHarmony ? inputs.harmony : inputs.accessibility) = value;
         commit(false);
         return kIOReturnSuccess;
@@ -206,7 +217,7 @@ IOReturn TegraDisplayColor::setContrast(const void *contrast)
     memcpy(&bits, contrast, sizeof(bits));
     if (!floatToUnity16(bits, &value))
         return kIOReturnBadArgument;
-    return change(lock, [&] {
+    return change([&] {
         inputs.contrast = value;
         commit(false);
         return kIOReturnSuccess;
@@ -218,7 +229,7 @@ IOReturn TegraDisplayColor::setColorRemapMode(uint32_t mode)
     if (mode >= kRemapModes)
         return kIOReturnBadArgument;
     uint32_t previous = 0;
-    const IOReturn status = change(lock, [&] {
+    const IOReturn status = change([&] {
         previous = inputs.remapMode;
         inputs.remapMode = mode;
         commit(false);
@@ -233,7 +244,7 @@ IOReturn TegraDisplayColor::getColorRemapMode(uint32_t *mode)
 {
     if (!mode)
         return kIOReturnBadArgument;
-    return change(lock, [&] {
+    return change([&] {
         *mode = inputs.remapMode;
         return kIOReturnSuccess;
     });
@@ -241,7 +252,7 @@ IOReturn TegraDisplayColor::getColorRemapMode(uint32_t *mode)
 
 IOReturn TegraDisplayColor::setBrightnessCorrection(uint32_t correction)
 {
-    return change(lock, [&] {
+    return change([&] {
         inputs.correction = correction;
         commit(false);
         return kIOReturnSuccess;
@@ -265,7 +276,7 @@ IOReturn TegraDisplayColor::swapSetColorMatrix(const void *matrix, uint32_t loca
 #if DEVELOPMENT || DEBUG
     logMatrix("swapSetColorMatrix", location, value);
 #endif
-    return change(lock, [&] {
+    return change([&] {
         inputs.accessibility = value;
         commit(false);
         return kIOReturnSuccess;
@@ -274,7 +285,7 @@ IOReturn TegraDisplayColor::swapSetColorMatrix(const void *matrix, uint32_t loca
 
 void TegraDisplayColor::setBlank(bool blank)
 {
-    (void)change(lock, [&] {
+    (void)change([&] {
         if (inputs.blank != blank) {
             inputs.blank = blank;
             commit(false);
@@ -285,7 +296,7 @@ void TegraDisplayColor::setBlank(bool blank)
 
 IOReturn TegraDisplayColor::setAccessibilityScale(uint32_t scale)
 {
-    return change(lock, [&] {
+    return change([&] {
         inputs.accessibilityScale = scale;
         commit(false);
         return kIOReturnSuccess;
@@ -295,7 +306,7 @@ IOReturn TegraDisplayColor::setAccessibilityScale(uint32_t scale)
 void TegraDisplayColor::setEdrFactor(float factor)
 {
     const uint32_t scale = switch_edr_display_scale(factor);
-    (void)change(lock, [&] {
+    (void)change([&] {
         if (inputs.edrScale != scale) {
             inputs.edrScale = scale;
             commit(false);
@@ -344,6 +355,7 @@ void TegraDisplayColor::frameEndAction(bool mayRequest)
 void TegraDisplayColor::restoreAfterPowerUp()
 {
     IOLockLock(lock);
+    noteLock();
     if (dc)
         unit.restore(dc);
     IOLockUnlock(lock);

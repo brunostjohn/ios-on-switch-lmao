@@ -128,6 +128,12 @@ extern "C" __attribute__((weak)) const TegraVICTraits *tegra_vic_traits(void)
     return nullptr;
 }
 
+// TegraVIC's IOSurface cache: its lock's takes since boot (debug kernels; 0 without them or without TegraVIC).
+extern "C" __attribute__((weak)) uint64_t switch_vic_surface_cache_locks(void)
+{
+    return 0;
+}
+
 extern "C" void native_legacy_frame_observed(unsigned kind, uint64_t count, uint64_t minx, uint64_t miny, uint64_t maxx,
                                              uint64_t maxy);
 extern "C" void native_legacy_frame_colors_observed(const uint32_t *colors, const uint64_t *counts, uint64_t other);
@@ -1565,7 +1571,14 @@ private:
 
     static void vblankFired(OSObject *owner, IOInterruptEventSource *, int)
     {
+        static_cast<NativeLegacyDisplay *>(owner)->notePass();
         static_cast<NativeLegacyDisplay *>(owner)->vblankTick();
+    }
+
+    void notePass()
+    {
+        if (stats)
+            ++stPasses;
     }
 
     void vblankTick()
@@ -1862,6 +1875,39 @@ private:
         statsStart = now;
         stReadDue = true;
         stRead = 0;
+        noteLocksWindow();
+    }
+
+    // Debug kernels: the frame path's locks per 100 frame ends this window, by lock (the colour unit's setters' lock,
+    // INT_MASK's, TegraVIC's IOSurface cache's; completion flips take none, their claims counted instead), and the
+    // display's work-loop passes per 100 frame ends (frame-end actions, completion passes, deadlines).
+    uint64_t stLockFrameEnds = 0, stLockVic = 0;
+    uint32_t stLockColour = 0, stLockIntMask = 0, stLockClaims = 0, stPasses = 0;
+
+    void noteLocksWindow()
+    {
+        if (!stats)
+            return;
+        const uint64_t ends = frameEnds - stLockFrameEnds;
+        const uint32_t colour = color->lockTakes() - stLockColour;
+        const uint32_t mask = __atomic_load_n(&intMaskTakes, __ATOMIC_RELAXED) - stLockIntMask;
+        const uint64_t vic = switch_vic_surface_cache_locks() - stLockVic;
+        const uint32_t claims = flipClaims() - stLockClaims;
+        stLockFrameEnds += ends;
+        stLockColour += colour;
+        stLockIntMask += mask;
+        stLockVic += vic;
+        stLockClaims += claims;
+        const auto per = [ends](uint64_t n) {
+            return static_cast<unsigned long long>(ends ? n * 100 / ends : 0);
+        };
+        char line[256];
+        snprintf(line, sizeof(line),
+                 "%llu frame ends; per 100: colour %llu, INT_MASK %llu, VIC surface cache %llu, completion flip 0 "
+                 "(claims %llu); work-loop passes %llu",
+                 static_cast<unsigned long long>(ends), per(colour), per(mask), per(vic), per(claims), per(stPasses));
+        stPasses = 0;
+        os_log(OS_LOG_DEFAULT, "SwitchDisplay locks: %s", line);
     }
 
     void vblankNotify()
@@ -2477,6 +2523,7 @@ private:
 
     static void flipDeadline(OSObject *owner, IOTimerEventSource *)
     {
+        static_cast<NativeLegacyDisplay *>(owner)->notePass();
         static_cast<NativeLegacyDisplay *>(owner)->checkFlipDeadline();
     }
 
@@ -4260,6 +4307,7 @@ public:
     // completion is looked for again after the driver's answer, which may come between its release and the signal.
     static void gpuDeadlineFired(OSObject *owner, IOTimerEventSource *)
     {
+        static_cast<NativeLegacyDisplay *>(owner)->notePass();
         static_cast<NativeLegacyDisplay *>(owner)->gpuDeadlineCheck();
     }
 

@@ -45,6 +45,12 @@ public:
     // CP_ENABLE once a per-channel gamma table is in the windows' palettes (TegraDisplayPalette.h), else 0. No lock.
     uint32_t windowOptions();
 
+    // Debug kernels: the setters' lock's takes since init (counted under it), for the display's stats line.
+    uint32_t lockTakes() const
+    {
+        return __atomic_load_n(&takes, __ATOMIC_RELAXED);
+    }
+
     // Under the gate: a blank swap's black, from the next frame on, and its end at the first flip latched after it.
     void setBlank(bool blank);
 
@@ -69,8 +75,11 @@ private:
     };
 
     void commit(bool paletteChanged);
+    template <typename Change> IOReturn change(Change body);
+    void noteLock();
 
     IOLock *lock = nullptr;  // the setters' (and attach, detach, restoreAfterPowerUp): never at a frame end
+    uint32_t takes = 0;
     SwitchMMIOWords dc;
     switch_color::ColourPublication<Platform> unit;
     bool announced = false;  // the last enable was logged (a blank alone is not); the action's

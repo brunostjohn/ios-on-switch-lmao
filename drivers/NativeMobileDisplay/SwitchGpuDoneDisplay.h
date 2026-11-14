@@ -71,6 +71,7 @@ void gpuComplete(int status)
 template <class Self> static void gpuDoneFired(OSObject *owner, IOInterruptEventSource *, int)
 {
     Self self = static_cast<Self>(owner);
+    self->notePass();
     if (!__atomic_load_n(&self->gpuDonePending, __ATOMIC_ACQUIRE))
         return;
     __atomic_store_n(&self->gpuDonePending, false, __ATOMIC_RELAXED);

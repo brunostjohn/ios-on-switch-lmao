@@ -469,3 +469,16 @@ TEST(FrameEndSource, VerdictsReachTheTableThroughTheGate)
     EXPECT_FALSE(code().Has("__atomic_fetch_add(&validatedEvicted"));
     EXPECT_FALSE(code().Has("__atomic_exchange_n(&validatedEvicted"));
 }
+
+// Debug kernels log the frame path's locks per 100 frame ends by lock, and the work-loop passes, with the 5 s stats; a
+// release kernel counts nothing (stats is SWITCH_FRAME_TIMELINE: DEVELOPMENT || DEBUG).
+TEST(DisplayStatsSource, LocksPerFrameEndLine)
+{
+    const CodeText window = method("void noteLocksWindow()");
+    EXPECT_TRUE(window.StartsWith("if (!stats) return;"));
+    EXPECT_TRUE(window.Has("os_log(OS_LOG_DEFAULT, \"SwitchDisplay locks: %s\", line);"));
+    for (const char *count : {"color->lockTakes()", "intMaskTakes", "switch_vic_surface_cache_locks()", "flipClaims()"})
+        EXPECT_TRUE(window.Has(count)) << count;
+    EXPECT_TRUE(method("void noteStatsWindow()").Has("noteLocksWindow();"));
+    EXPECT_TRUE(method("void notePass()").StartsWith("if (stats) ++stPasses;"));
+}

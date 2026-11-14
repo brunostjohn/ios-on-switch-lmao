@@ -514,6 +514,9 @@ struct Display : OSObject {
     static void flipInterruptsOn(bool)
     {}
 
+    static void notePass()
+    {}
+
     static uint64_t gpuDeadlineTicks()
     {
         return 1000000;

@@ -387,6 +387,12 @@ void retireLatchedThrough(uint64_t seq)
 }
 
 #if SWITCH_FRAME_TIMELINE
+// Window A flips its producers' completions or filters claimed and wrote.
+static uint32_t flipClaims()
+{
+    return __atomic_load_n(&flipTotals[0], __ATOMIC_RELAXED);
+}
+
 void noteCompletionFlip(const SwitchCompletionFlip::View &flip)
 {
     const uint64_t now = mach_absolute_time();
@@ -444,6 +450,11 @@ static void flipTotalsRegister()
     }
 }
 #else
+static uint32_t flipClaims()
+{
+    return 0;
+}
+
 void noteCompletionFlip(const SwitchCompletionFlip::View &)
 {}
 
