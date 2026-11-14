@@ -6112,6 +6112,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                             bool indexed, const char **why)
 {
     RAW_ENCODE_SPAN(Prepare);
+#if SWITCH_RAW_DIAGNOSTICS
+    const bool genericMerge = pl->genericState;
+#endif
     if (pl->strideTwin && bindStridePastStream(*pl->rec))
         pl = pl->strideTwin;
     if (tessellates(*pl->rec) != (primitive == icb::kPatchPrimitive)) {
@@ -6185,7 +6188,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         pl = pl->turnedTwin;
     else if (!pl->splitOf && !generic)
         pl = dev_->variant(*pl, bindingFacts(*pl) | (rot_.turned() ? AssumeTurned : 0u));
-    RAW_DIAGNOSTIC(logUniformTuple(*pl));
+#if SWITCH_RAW_DIAGNOSTICS
+    if (genericMerge)
+        logUniformTuple(*pl);
+#endif
     RAW_ENCODE_END(variantSpan);
     if (!whole_) {
         if (x[1] > x[0] && y[1] > y[0]) {

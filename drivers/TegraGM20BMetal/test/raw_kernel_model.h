@@ -30,6 +30,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -141,7 +142,8 @@ struct Model {
     uint32_t compilerFlags = 0;
     std::vector<int32_t> compileResults = {TegraGM20BCompileUnavailable};
     unsigned compiles = 0;
-    unsigned refuse = 0;  // submissions refused from now, with `refusal`
+    std::vector<std::string> compileRequests;  // each compile's request bytes, as the client sent them
+    unsigned refuse = 0;                       // submissions refused from now, with `refusal`
     // GetInfo's client VA end: a raw::Device's shader heap reserves a 4 GiB program window in its quarter
     uint64_t vaEnd = uint64_t(1) << 40;
     uint32_t infoFlags = 0;  // GetInfo's flags beyond the model's own (TegraGM20BInfoTiledCache)
@@ -650,6 +652,8 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         return KERN_SUCCESS;
     }
     case TegraGM20BMethodCompile: {
+        const auto &in = *static_cast<const TegraGM20BAbiCompile *>(input);
+        model.compileRequests.emplace_back(reinterpret_cast<const char *>(uintptr_t(in.address)), size_t(in.bytes));
         const size_t at = std::min<size_t>(model.compiles++, model.compileResults.size() - 1);
         auto &reply = *static_cast<TegraGM20BAbiCompileReply *>(output);
         reply = {};

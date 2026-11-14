@@ -5,6 +5,9 @@
 // of the same metallib (raw_facade_compute.h), so the facade keys the state as on the device.
 #include "raw_facade_compute.h"
 #include "bazel/testing/fresh_process.h"
+#include "../compiler/compiler_request.h"
+#include "../raw/runtime/raw_compile_request.h"
+#include "../raw/runtime/raw_device_answers.h"
 
 #include <gtest/gtest.h>
 
@@ -140,6 +143,33 @@ TEST(RawFacadeCreation, ACompletionHandlersCreationFailsAsTheSynchronousOneDoes)
         ASSERT_EQ(dispatch_semaphore_wait(answered, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))), 0);
         EXPECT_EQ(state, nil);
         EXPECT_FALSE(text(error.localizedDescription).empty()) << text(error);
+    });
+}
+
+// The requests the client sent for a state of the most vertex amplification this kind answers YES for: the compiler keys
+// each as the client did (boot 21 refused every amplified state's: its fields carried no amplification count)
+TEST(RawFacadeCreation, TheCompilerKeysAnAmplifiedStatesRequestAsTheClientDoes)
+{
+    switch_ios::test::ExpectPassesInFreshProcess([] {
+        const auto [device, library] = opened(kServing, {TegraGM20BCompileUnavailable});
+        ASSERT_TRUE(library != nil);
+        MTLRenderPipelineDescriptor *d = unpacked(library);
+        const uint64_t most = raw::answers::thisKindLastYes("supportsVertexAmplificationCount:");
+        d.maxVertexAmplificationCount = most > 1 ? most : 1;
+        created(device, d);
+        ASSERT_FALSE(kernel_model::model.compileRequests.empty());
+        for (const std::string &bytes : kernel_model::model.compileRequests) {
+            raw::CompileRequest r;
+            ASSERT_TRUE(raw::decodeRequest(bytes, r));
+            EXPECT_EQ(r.fields.amplification, d.maxVertexAmplificationCount);
+            switch_compiler::SystemLibraries system;
+            switch_compiler::Prepared p;
+            std::string why;
+            EXPECT_TRUE(switch_compiler::prepare(bytes, r.stack, system, p, why)) << why;
+            EXPECT_EQ(p.key.key, r.key);
+            if (most > 1)
+                EXPECT_NE(r.key.find(" amp=" + std::to_string(most) + " "), std::string::npos) << r.key;
+        }
     });
 }
 

@@ -18,11 +18,10 @@
 #include <string>
 #include "raw_compiler.h"
 #include "raw_compute_lookup.h"
-#include "raw_cubic.h"
 #include "raw_metallib.h"
 #include "raw_obtained.h"
 #include "raw_remote.h"
-#include "raw_written_textures.h"
+#include "raw_render_variant.h"
 
 struct NmbDirectDispatch;
 
@@ -49,12 +48,7 @@ public:
         // its functions are not a framework's default library's: no pack names the key, so the record is kept under the
         // key and both functions' AIR (two apps' alike-named functions are not one state)
         bool own = false;
-        // its cubic variant's binds (raw_cubic.h), whose name the key ends with; empty: the state itself
-        CubicBinds cubic;
-        uint8_t fragmentTests = 0;
-        bool twoPlane = false;                // its " | xr2p" variant (raw_xr_pass.h)
-        uint16_t xrSlots = 0;                 // its " | xrs=" variant's sampled two-plane slots (raw_xr_pass.h)
-        std::vector<WrittenTexture> written;  // its " | wtex=" variant's written textures (raw_written_textures.h)
+        RenderVariant variant;  // whose name the key ends with; none: the state itself
         bool resolveDescriptor = false;
         // the descriptor over this facade's own functions, which a compile request names (nil: none can)
         MTLRenderPipelineDescriptor *facade = nil;
