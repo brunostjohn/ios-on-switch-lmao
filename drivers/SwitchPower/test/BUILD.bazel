@@ -16,6 +16,8 @@
 #                                    raise and the next raise runs the same path; only -ENODEV ends the DFLL mode
 #   switch_pllx_start_test           SwitchPllxStart.h: PLLX started again in the TRM's order (5.1.5: IDDQ, dividers,
 #                                    lock detection, enable, lock)
+#   switch_cpu_load_test             SwitchCpuLoad.h: a CPU's busy time from its context-switch callout, exact read
+#                                    alone, off by one interval per racing switch at most (also under TSAN)
 #   switch_perf_governor_callouts_test SwitchPerfGovernor.cpp itself over stand-ins for XNU: the locks, read-modify-
 #                                    writes and fences of a context switch, a tick and a touch interrupt, none of which
 #                                    may lock; a touch and the thermal limits still reach the clock at once; every
@@ -202,10 +204,15 @@ host_shims(
 PERF_GOVERNOR_SRCS = [
     "//drivers/NativeSwitchBlock:SwitchCryptex.h",
     "//drivers/SwitchBattery:SwitchBattery.h",
+    "//drivers/SwitchPower:SwitchCpuLoad.h",
     "//drivers/SwitchPower:SwitchEMC.h",
     "//drivers/SwitchPower:SwitchGovernor.h",
     "//drivers/SwitchPower:SwitchPerfGovernor.cpp",
     "//drivers/SwitchPower:SwitchPerfGovernor.h",
+    "//drivers/SwitchPower:SwitchPerfGovernorLimits.cpp",
+    "//drivers/SwitchPower:SwitchPerfGovernorLine.cpp",
+    "//drivers/SwitchPower:SwitchPerfGovernorLine.h",
+    "//drivers/SwitchPower:SwitchPerfGovernorState.h",
     "//drivers/SwitchPower:SwitchPower.h",
     "//drivers/TegraDFLL:TegraDFLL.h",
     "//drivers/TegraGM20B:TegraGM20BGpu.h",
@@ -257,4 +264,23 @@ host_test(
         ":perf_governor_tsan",
         ":perf_kernel",
     ],
+)
+
+host_test(
+    name = "switch_cpu_load_test",
+    srcs = [
+        "switch_cpu_load_test.cpp",
+        "//drivers/SwitchPower:SwitchCpuLoad.h",
+    ],
+)
+
+host_test(
+    name = "switch_cpu_load_tsan_test",
+    srcs = [
+        "switch_cpu_load_test.cpp",
+        "//drivers/SwitchPower:SwitchCpuLoad.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
 )

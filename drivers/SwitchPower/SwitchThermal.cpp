@@ -441,8 +441,9 @@ class SwitchThermal : public IOService {
     bool dfllResume = false;                         // SC7 lost the DFLL's registers and restoring them failed
     unsigned long dfllRefusedHz = 0;                 // the last rate the DFLL refused, logged once until a rate lands
     int dfllRefusedErr = 0;
-    unsigned long dfllTopHz = kDfllRateHz;       // the top this boot measured at or under 1785 MHz
-    IOInterruptEventSource *governor = nullptr;  // switchperf's signal: a software interrupt of this work loop
+    unsigned long dfllTopHz = kDfllRateHz;  // the top this boot measured at or under 1785 MHz
+    // switchperf's signal: software interrupts of this work loop, one per CPU (switchperf::Signal).
+    IOInterruptEventSource *governor[switchperf::kSignalCpus] = {};
     unsigned dfllFloor = TEGRA_DFLL_FLOOR_COLD, dfllCap = TEGRA_DFLL_CAP_1010MV;  // the driver's boot defaults
     unsigned perfRaises = 0, perfSteps = ~0u;
     unsigned perfTop = 0, perfRung = 0;  // rungs this chip may use; the rung running now (0: boot clock)
@@ -480,7 +481,7 @@ class SwitchThermal : public IOService {
     static unsigned long settleDfllTop();
     static bool dfllOverCeiling(uint32_t *measuredKHz);
     static void governorLimits();
-    static void governorSignal(void *ctx);
+    static void governorSignal(void *ctx, unsigned cpu);
     static void governorFired(OSObject *owner, IOInterruptEventSource *sender, int count);
     void trace(const char *format, ...) const __printflike(2, 3);
     void updateDfllThermal(int soc);
@@ -1303,14 +1304,16 @@ bool SwitchThermal::startGovernor(char *why, size_t len)
         snprintf(why, len, "the DFLL table ends at %u kHz, not %lu", count ? khz[count - 1] : 0, kDfllRateHz / 1000);
         return false;
     }
-    if (!governor) {
-        governor = IOInterruptEventSource::interruptEventSource(this, &SwitchThermal::governorFired);
-        if (!governor || loop->addEventSource(governor) != kIOReturnSuccess) {
-            OSSafeReleaseNULL(governor);
+    for (IOInterruptEventSource *&source : governor) {
+        if (source)
+            continue;
+        source = IOInterruptEventSource::interruptEventSource(this, &SwitchThermal::governorFired);
+        if (!source || loop->addEventSource(source) != kIOReturnSuccess) {
+            OSSafeReleaseNULL(source);
             snprintf(why, len, "no work loop source");
             return false;
         }
-        governor->enable();
+        source->enable();
     }
     unsigned top = count - 1;
     while (top && khz[top] > dfllTopHz / 1000)
@@ -1334,12 +1337,15 @@ bool SwitchThermal::startGovernor(char *why, size_t len)
     return true;
 }
 
-// From any context (switchperf's decisions: the scheduler's callout, a hint's interrupt or thread): wake the work loop.
-void SwitchThermal::governorSignal(void *ctx)
+// From any context (switchperf's decisions: the scheduler's callout, a hint's interrupt or thread), on `cpu` with
+// interrupts masked: wake the work loop through that CPU's own source, whose producer count it alone increments.
+void SwitchThermal::governorSignal(void *ctx, unsigned cpu)
 {
     const auto *self = static_cast<SwitchThermal *>(ctx);
-    if (self->governor)
-        self->governor->interruptOccurred(nullptr, nullptr, 0);
+    if (cpu >= switchperf::kSignalCpus)
+        panic("SwitchPerf: a signal from CPU %u, beyond the %u the governor has sources for", cpu,
+              switchperf::kSignalCpus);
+    self->governor[cpu]->interruptOccurred(nullptr, nullptr, 0);
 }
 
 // Work loop: the point switchperf decided, onto the DFLL. A rate it refuses fails that request alone (dfllRefused).
@@ -1791,11 +1797,13 @@ bool SwitchThermal::start(IOService *provider)
 void SwitchThermal::free()
 {
     switchperf::stop();
-    if (governor) {
-        governor->disable();
+    for (IOInterruptEventSource *source : governor) {
+        if (!source)
+            continue;
+        source->disable();
         if (loop)
-            loop->removeEventSource(governor);
-        governor->release();
+            loop->removeEventSource(source);
+        source->release();
     }
     if (alert) {
         alert->disable();

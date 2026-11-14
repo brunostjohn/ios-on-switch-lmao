@@ -30,6 +30,7 @@ std::atomic<uint64_t> gNow{1'000'000'000};
 std::atomic<sched_perfcontrol_callbacks *> gCallbacks;
 std::atomic<uint64_t> gDeadline;
 std::atomic<unsigned> gSignals;
+unsigned gTouchSent;
 
 constexpr uint64_t kMs = 1'000'000;  // the stand-in timebase counts nanoseconds
 constexpr uint32_t kKhz[] = {918000, 1020000, 1122000, 1224000, 1326000, 1428000, 1581000, 1683000, 1785000};
@@ -284,7 +285,7 @@ TEST_F(SwitchPerfCallouts, ATickTakesNoLockAndNoReadModifyWrite)
     EXPECT_EQ(blocked, "");
     EXPECT_EQ(tCounts.locks, 0u) << "locks over 10 ticks";
     EXPECT_EQ(tCounts.rmws, 0u) << "read-modify-writes over 10 ticks";
-    EXPECT_LE(tCounts.fences, 20u) << "fences over 10 ticks";
+    EXPECT_EQ(tCounts.fences, 20u) << "fences over 10 ticks: an acquire as each starts, a release before it re-arms";
 }
 
 TEST_F(SwitchPerfCallouts, TheTouchFilterTakesNoLockAndNoReadModifyWrite)
@@ -392,4 +393,27 @@ TEST_F(SwitchPerfCallouts, EveryContextAtOnce)
     for (std::thread &thread : threads)
         thread.join();
     EXPECT_EQ(outOfRange.load(), 0u);
+}
+
+// The periodic line: the tick publishes it once per 10 s, the owner's take() makes it, with who woke the owner.
+TEST_F(SwitchPerfCallouts, TheTenSecondLineCountsTheOwnersWakes)
+{
+    char line[760] = "";
+    for (unsigned lines = 0; lines < 2;) {
+        gNow += 8 * kMs;
+        if (lines == 1 && line[0] == 0 && gTouchSent == 0) {
+            switch_perf_hint(SWITCH_PERF_HINT_TOUCH);
+            gTouchSent = 1;
+        }
+        line[0] = 0;
+        tick(gNow);
+        switchperf::applied(switchperf::take(line, sizeof(line)));
+        if (line[0])
+            ++lines;
+    }
+    const std::string text = line;
+    EXPECT_EQ(text.rfind("SwitchPerf governor: 10", 0), 0u) << text;
+    EXPECT_NE(text.find("boosts touch 1 frame 0 launch 0"), std::string::npos) << text;
+    EXPECT_NE(text.find("; owner wakes: tick "), std::string::npos) << text;
+    EXPECT_NE(text.find(", touch 1, frame 0, launch 0"), std::string::npos) << text;
 }
