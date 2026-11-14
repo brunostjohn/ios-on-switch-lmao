@@ -91,15 +91,13 @@ std::vector<Site> sitesMatching(const std::vector<std::string> &names, const std
     return sites;
 }
 
-// TegraGM20B's platform.c still sets the bit itself, as it maps the fuses for the GPU.
 TEST(FuseOwnerSource, OnlyTheKitWritesMiscClkEnb)
 {
     const std::regex call(R"((write32\w*|rmw32|\bw32|\.modify|nvkm_wr32|nvkm_mask)\s*\()");
     const std::regex misc(R"(MISC_CLK_ENB|MiscClkEnb)");
     std::vector<std::string> writers;
     for (const Site &site : sitesMatching({"MISC_CLK_ENB", "MiscClkEnb"}, call, misc))
-        if (site.where.find("kits/SwitchCAR/SwitchCAR.cpp") == std::string::npos &&
-            site.where.find("TegraGM20B/platform.c") == std::string::npos)
+        if (site.where.find("kits/SwitchCAR/SwitchCAR.cpp") == std::string::npos)
             writers.push_back(site.where + ": " + site.line);
     EXPECT_THAT(writers, testing::IsEmpty());
 }

@@ -749,6 +749,8 @@ host_library(
         "//drivers/TegraSMMU:TegraSMMU.cpp",
         "//drivers/TegraSMMU:TegraSMMU.h",
         "//drivers/TegraSMMU:TegraSMMUAttachments.h",
+        "//kits/SwitchCAR:SwitchCAR.h",
+        "//kits/SwitchCAR:SwitchPMC.h",
         "//kits/SwitchLinux:SwitchLinux.h",
         "//kits/SwitchLinux:SwitchLinuxLock.h",
         "//kits/SwitchMMIO:SwitchMMIO.h",

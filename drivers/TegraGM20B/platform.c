@@ -22,9 +22,9 @@
  *   MC    0x70019000  hekate t210.h:70; GPU = MC client 34 -> CLIENT_HOTRESET_CTRL_1 0x970 / STATUS_1 0x974 bit 2
  *         (nvgpu platform_gk20a_tegra.c:64; L4T kernel-nvidia mc.c:158-259 + mc-regs-t21x.h:122-125, in
  *         gpu/power-src/gh/knv; linux drivers/memory/tegra/tegra210.c TEGRA210_MC_RESET(GPU, 0x970, 0x974, 2))
- *   FUSE  0x7000f800  hekate t210.h:65; readable with CLK_ENB_H_SET 0x328 bit 7 (fuse clock) and MISC_CLK_ENB 0x48
- *         bit 28 (fuse register visibility), which hekate hw_init sets and leaves on (bdk/soc/hw_init.c:274,399;
- *         clock.c:199-203); set again before reading, idempotent. Linux tegra_fuse_readl() offsets are relative to +0x100
+ *   FUSE  0x7000f800  hekate t210.h:65; readable once kits/SwitchCAR's switch_car_fuse_readable (the FUSE clock and
+ *         MISC_CLK_ENB's CFG_ALL_VISIBLE, whose one writer the kit is) has run, before every read: CAR is back at its
+ *         reset values after LP0 (TRM 12.4.7.2). Linux tegra_fuse_readl() offsets are relative to +0x100
  *         (L4T fuse-tegra30.c:32,47,61; hekate FUSE() offsets already include it); ODM28 = hekate 0x240 (fuse.h:177)
  *   MAX77812 on I2C5: 0x31 if !(ODM28 & 1) else 0x33 (hekate bdk/power/max7762x.c:98-109; U-Boot
  *         board/nintendo/switch/nintendo-switch.c:25,57-66: retail = 0x33, as DT tegra210b01-nx-pmic.dtsi:26-28).
@@ -43,6 +43,7 @@
 #include "shim/include/nvxnu.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "../TegraSMMU/TegraSMMU.h"
+#include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchMMIO/SwitchMMIO.h"
 
 #define CAR_PA 0x60006000ULL
@@ -69,10 +70,6 @@
 #define MC_HOTRESET_CTRL_1 0x970
 #define MC_HOTRESET_STATUS_1 0x974
 #define MC_HOTRESET_GPU (1u << 2)
-#define CLK_ENB_H_SET 0x328
-#define CLK_H_FUSE (1u << 7)
-#define MISC_CLK_ENB 0x48
-#define MISC_FUSE_VISIBLE (1u << 28)
 #define FUSE_CACHE 0x100
 #define FUSE_ODM28_B01 0x240
 
@@ -111,15 +108,14 @@ int tegra_gm20b_platform_map(void)
 		car = NULL;
 		return -12;
 	}
-	switch_mmio_write32_flush(car, CLK_ENB_H_SET, CLK_H_FUSE);
-	switch_mmio_write32_flush(car, MISC_CLK_ENB,
-				  switch_mmio_read32(car, MISC_CLK_ENB) | MISC_FUSE_VISIBLE);
+	switch_car_fuse_readable();
 	max77812_addr = (switch_mmio_read32(fuse, FUSE_ODM28_B01) & 1) ? MAX77812_PHASE211 : 0x31;
 	return 0;
 }
 
 uint32_t tegra_gm20b_fuse_read(uint32_t offset)
 {
+	switch_car_fuse_readable();
 	return switch_mmio_read32(fuse, FUSE_CACHE + offset);
 }
 

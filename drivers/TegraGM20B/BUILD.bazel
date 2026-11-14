@@ -205,6 +205,7 @@ kernel_driver(
         "drivers/TegraI2C",
         "drivers/TegraHost1x",
         "drivers/TegraSMMU",
+        "kits/SwitchCAR",
         "kits/SwitchDMA",
         "kits/SwitchGM20BEmit",
         "kits/SwitchIdle",
