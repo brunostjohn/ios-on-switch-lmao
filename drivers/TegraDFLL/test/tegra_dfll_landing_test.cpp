@@ -90,7 +90,8 @@ TEST(TegraDfllLanding, ARowLandsTheSameFromAboveAndFromBelow)
 TEST(TegraDfllLanding, ALoopStillComingDownAtTheFirstLookIsLookedAtAgain)
 {
 	switch_ios::test::ExpectPassesInFreshProcess([] {
-		tegra_dfll_landing_set_slew(100);  // one LUT step in 10 ms: still over MIN at the first look, 41 ms on
+		// One LUT step in 10 ms: still over MIN at the first look, 41 ms on.
+		tegra_dfll_landing_set_slew(100);
 		ASSERT_EQ(tegra_dfll_landing_start(1797 * kMHz, kPerLutStep, 1785 * kMHz), 0);
 		tegra_dfll_landing_run_ms(1000);
 		expectLanded(1785 * kMHz, "1785 MHz at enable, the loop coming down from 945 mV");

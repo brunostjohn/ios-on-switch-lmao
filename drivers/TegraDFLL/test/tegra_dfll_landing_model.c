@@ -132,7 +132,7 @@ void switch_mmio_model_write32(uintptr_t address, uint32_t value)
 		const int force = (int32_t)(value << 4) >> 20; /* FORCE_VAL, 27:16, signed */
 		const int out = (int)model.lut_safe + force * model.cg / 128;
 
-		forced_out = out < 0 ? 0 : out > (int)OUT_MASK ? OUT_MASK : (unsigned int)out;
+		forced_out = (unsigned int)clamp(out, 0, (int)OUT_MASK);
 		forced_at = now_ns;
 		forced = true;
 	}
