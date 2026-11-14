@@ -55,6 +55,8 @@
 #                            back, its live channel preempted, a killed one's method dropped
 #   gm20b_view_merge_test    TegraGM20BViewMerge.h: a CPU write lock's unlock keeps the bytes a GPU write left where the
 #                            CPU wrote none, byte by byte
+#   gm20b_pmc_enable_test    TegraGM20BPmcEnable.h with a recovery's GR reset and an engine's first use on PMC_ENABLE: no
+#                            change made inside another is lost
 #   gm20b_ramfc_order_test   TegraGM20BRamfcOrder.h over a model of the host's RAMFC save: a level change's timeslice
 #                            written while the save of the switched-out channel is in flight still holds after a job
 #   gm20b_acquire_test       TegraGM20BAcquire.h: the RAMFC ACQUIRE word as nvgpu computes it, CCSR's parked states, the
@@ -599,6 +601,14 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BViewMerge.h",
     ],
     cxx_std = "c++17",
+)
+
+host_test(
+    name = "gm20b_pmc_enable_test",
+    srcs = [
+        "gm20b_pmc_enable_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BPmcEnable.h",
+    ],
 )
 
 host_test(

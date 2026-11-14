@@ -103,6 +103,7 @@ kernel_driver(
         "gpu_power.c",
         "gpu_rail_probe.c",
         "gpu_ramfc_probe.c",
+        "gpu_pmc.c",
         "gpu_zcull.c",
         "clkgate.c",
         "recover.c",

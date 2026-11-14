@@ -964,6 +964,21 @@ TEST(GM20BRailSource, GpuLockWakesARailGatedGpu)
 				"nvxnu_wakeup(&tgm_sc7_gate.shut);"));
 }
 
+// PMC_ENABLE's lock (TegraGM20BPmcEnable.h) is in nvkm's mc functions from M1, before nvkm's first init, and the
+// kernel's own code never writes the register past it.
+TEST(GM20BPmcSource, EveryPmcEnableChangeTakesItsLockFromM1)
+{
+	const CodeText m1 = Block(gpu(), "static int m1(char *line, unsigned int len)");
+	EXPECT_TRUE(m1.Before("tgm_gpu.device = device;", "tgm_pmc_own(device);"));
+	EXPECT_TRUE(m1.Before("tgm_pmc_own(device);", "nvkm_subdev_init(device->privring)"));
+	const CodeText own =
+		Block(SourceText("../gpu_pmc.c"), "void tgm_pmc_own(struct nvkm_device *device)");
+	EXPECT_TRUE(own.Has("pmc_device.enable = pmc_enable;"));
+	EXPECT_TRUE(own.Has("pmc_device.disable = pmc_disable;"));
+	EXPECT_TRUE(own.Has("pmc_func.init = pmc_init_nvkm ? pmc_init : NULL;"));
+	EXPECT_FALSE(gpuCode().Has(", 0x000200,"));
+}
+
 TEST(GM20BSleepSource, SleepAndWakeOrder)
 {
 	const CodeText sleep = Block(gpu(), "void tgm_sleep(void)").After("case TGM_SLEEP_FULL:");
