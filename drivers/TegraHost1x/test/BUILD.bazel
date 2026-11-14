@@ -11,6 +11,14 @@ host_test(
     ],
 )
 
+host_test(
+    name = "switch_host1x_cpu_increment_test",
+    srcs = [
+        "switch_host1x_cpu_increment_test.cpp",
+        "//drivers/TegraHost1x:SwitchHost1xCpuIncrement.h",
+    ],
+)
+
 host_shims(
     name = "results_kernel",
     headers = [

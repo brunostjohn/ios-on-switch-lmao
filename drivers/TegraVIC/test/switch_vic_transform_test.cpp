@@ -20,6 +20,7 @@ int admission = 0, mappings = 0, gates = 0, pitchInputs = 0, notifications = 0;
 void (*pending)(void *, int);
 void *pendingContext;
 TegraVICJob submittedJob;
+TegraVICAcquire submittedAcquire;
 std::vector<switch_gpu_backing_use> declaredUses;
 std::vector<switch_gpu_backing_guard> declaredGuards;
 }
@@ -130,11 +131,12 @@ uint64_t switch_vic_mapping_address(const SwitchVICMapping *mapping)
     return mapping->address;
 }
 
-int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *,
+int switch_vic_submit_checked(const TegraVICJob *jobs, uint32_t count, const TegraVICAcquire *acquire,
                               const SwitchVICOwnership &ownership, void (*completion)(void *, int), void *context,
                               uint32_t *, SwitchVICEvents *)
 {
     EXPECT_EQ(count, 1u);
+    submittedAcquire = acquire ? *acquire : TegraVICAcquire{};
     EXPECT_TRUE(gates > 0 || ownership.leaseCount > 0) << "a submission holds its surfaces";
     submittedJob = jobs[0];
     declaredUses.assign(ownership.uses, ownership.uses + ownership.useCount);
@@ -350,6 +352,18 @@ TEST_F(SwitchVICTransformTest, DetachedVideoCopyInto422vRunsDirect)
     EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_OUTPUT, OUT_TRANSPOSE), 1u);
 }
 
+// A copy held behind a syncpoint (display.media_completion_flip_gated's gate): VIC's channel waits for it first.
+TEST_F(SwitchVICTransformTest, AnAcquireIsTheJobsFirstWait)
+{
+    immediate = true;
+    const TegraVICAcquire gate = {172, 9};
+    EXPECT_EQ(switch_vic_transform(&source, &destination, &plan, 0, done, nullptr, nullptr, &gate), 1);
+    EXPECT_EQ(submittedAcquire.syncpt, 172u);
+    EXPECT_EQ(submittedAcquire.threshold, 9u);
+    EXPECT_EQ(submit(), 1);
+    EXPECT_EQ(submittedAcquire.syncpt, 0u);
+}
+
 TEST_F(SwitchVICTransformTest, OverlappingDescriptorFallsBackBeforeTakingReservations)
 {
     source.memory = destination.memory;
@@ -436,6 +450,7 @@ TEST_F(TurnDefer, APitchSourcePartOfTheDestinationOrNoTurnIsCopied)
     EXPECT_EQ(defer(nullptr), 0);
     EXPECT_EQ(publishedTurns, 0u);
 }
+
 // Leaving landscape (display.x1.landscape_video crc_back): the portrait route's first read of a destination TegraVIC
 // recorded as a turn has VIC make its rows (SwitchNativeSurface.cpp prepare), with the very job a copy of that request
 // would have run, so window B shows the copy route's picture again. iPadOS 27's full-screen shape: a quarter turn into a

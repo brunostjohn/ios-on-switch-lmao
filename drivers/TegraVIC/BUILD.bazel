@@ -50,6 +50,7 @@ kernel_driver(
         "SwitchVICBouncePool.cpp",
         "SwitchVICBounceSubmit.cpp",
         "SwitchVICKernelTest.cpp",
+        "SwitchVICGate.cpp",
         "SwitchVICPitchProbe.cpp",
         "SwitchVICLayoutProbe.cpp",
         "SwitchVICFractionProbe.cpp",
