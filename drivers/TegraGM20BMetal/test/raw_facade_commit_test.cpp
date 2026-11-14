@@ -69,13 +69,14 @@ size_t jobCount()
     return kernel_model::model.jobs.size();
 }
 
-// `shape` recorded on `queue` a pass every `pace`
+// `shape` recorded on `queue` a pass every `pace`, each pass beside `beside` where there is one
 id<MTLCommandBuffer> paced(id<MTLCommandQueue> queue, const std::vector<id<MTLTexture>> &into,
-                           const scale_frames::Shape &shape, uint32_t frame, std::chrono::microseconds pace)
+                           const scale_frames::Shape &shape, uint32_t frame, std::chrono::microseconds pace,
+                           id<MTLTexture> beside = nil)
 {
     id<MTLCommandBuffer> cb = [queue commandBuffer];
     for (int p = 0; p < shape.passes; p++) {
-        scale_frames::pass(cb, opened().state, into, shape, p, frame);
+        scale_frames::pass(cb, opened().state, into, shape, p, frame, beside);
         std::this_thread::sleep_for(pace);
     }
     return cb;
@@ -99,14 +100,17 @@ TEST(RawFacadeCommit, ScaleShapedJobWords)
 {
     ASSERT_TRUE(opened().device != nil && opened().state != nil);
     id<MTLCommandQueue> queue = [opened().device newCommandQueue];
-    const scale_frames::Shape shapes[] = {{1, 6, 1}, {15, 90, 4}, {12, 134, 3}, {7, 20, 2}};
+    // the last beside a memoryless colour 1
+    const scale_frames::Shape shapes[] = {{1, 6, 1}, {15, 90, 4}, {12, 134, 3}, {7, 20, 2}, {15, 90, 4}};
     std::vector<std::vector<id<MTLTexture>>> into;
     for (const auto &shape : shapes)
         into.push_back(scale_frames::targets(opened().device, shape));
+    const id<MTLTexture> beside = scale_frames::scratch(opened().device, shapes[4]);
     const size_t first = jobCount();
     for (uint32_t frame = 0; frame < 3; frame++)
         for (size_t s = 0; s < std::size(shapes); s++) {
-            id<MTLCommandBuffer> cb = paced(queue, into[s], shapes[s], frame, std::chrono::microseconds(300));
+            id<MTLCommandBuffer> cb =
+                paced(queue, into[s], shapes[s], frame, std::chrono::microseconds(300), s == 4 ? beside : nil);
             [cb commit];
             [cb waitUntilCompleted];
             EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
@@ -147,6 +151,72 @@ TEST(RawFacadeCommit, EncodersEndedBeforeTheCommitAreEncodedAhead)
     };
     printf("hand-offs over 4 frames: %lld, %lld of them woke the worker\n", delta(@"pipeline_handoffs"),
            delta(@"pipeline_handoff_wakes"));
+}
+
+TEST(RawFacadeCommit, PassesBesideAMemorylessColourAreEncodedAhead)
+{
+    ASSERT_TRUE(opened().device != nil);
+    id<MTLCommandQueue> queue = [opened().device newCommandQueue];
+    const scale_frames::Shape shape{15, 90, 4};
+    const auto into = scale_frames::targets(opened().device, shape);
+    const id<MTLTexture> beside = scale_frames::scratch(opened().device, shape);
+    ASSERT_NE(beside, nil);
+    for (uint32_t frame = 0; frame < 4; frame++) {
+        id<MTLCommandBuffer> cb = paced(queue, into, shape, frame, std::chrono::milliseconds(1), beside);
+        [cb commit];
+        [cb waitUntilCompleted];
+        ASSERT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+        EXPECT_EQ(path(cb), "raw");
+        NSDictionary *p = pipelined(cb);
+        ASSERT_NE(p, nil);
+        EXPECT_GE([p[@"pipelined"] intValue], 10) << [[p description] UTF8String];
+        EXPECT_EQ([p[@"abandons"] intValue], 0);
+        EXPECT_EQ([p[@"veto"] intValue], 0);
+    }
+}
+
+// Pass 9 of 15 into a target whose format the state does not draw: that encoder goes to m2v, refused as it records,
+// after the worker was handed (and may be encoding) the ones before it. The device comes back whole: the next command
+// buffer is encoded ahead as any other.
+TEST(RawFacadeCommit, AnEncoderRefusedAfterTheHandOffsGivesTheDeviceBack)
+{
+    ASSERT_TRUE(opened().device != nil);
+    id<MTLCommandQueue> queue = [opened().device newCommandQueue];
+    const scale_frames::Shape shape{15, 90, 4};
+    const auto into = scale_frames::targets(opened().device, shape);
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                  width:shape.width
+                                                                                 height:shape.height
+                                                                              mipmapped:NO];
+    td.storageMode = MTLStorageModePrivate;
+    td.usage = MTLTextureUsageRenderTarget;
+    const id<MTLTexture> other = [opened().device newTextureWithDescriptor:td];
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    for (int p = 0; p < shape.passes; p++) {
+        if (p == 9)
+            scale_frames::pass(cb, opened().state, {other}, {1, 6, 1}, 0, 0);
+        else
+            scale_frames::pass(cb, opened().state, into, shape, p, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    [cb commit];
+    [cb waitUntilCompleted];
+    NSDictionary *p = pipelined(cb);
+    ASSERT_NE(p, nil);
+    printf("refused at pass 9: %s, path %s\n",
+           [[p description] stringByReplacingOccurrencesOfString:@"\n" withString:@" "].UTF8String, path(cb).c_str());
+    EXPECT_NE([p[@"veto"] intValue] & int(VetoRefused), 0);
+    EXPECT_EQ([p[@"pipelined"] intValue], 0);
+    EXPECT_LE([p[@"abandons"] intValue], 1);
+    id<MTLCommandBuffer> next = paced(queue, into, shape, 1, std::chrono::milliseconds(1));
+    [next commit];
+    [next waitUntilCompleted];
+    ASSERT_EQ(next.status, MTLCommandBufferStatusCompleted);
+    EXPECT_EQ(path(next), "raw");
+    NSDictionary *q = pipelined(next);
+    ASSERT_NE(q, nil);
+    EXPECT_GE([q[@"pipelined"] intValue], 10) << [[q description] UTF8String];
+    EXPECT_EQ([q[@"abandons"] intValue], 0);
 }
 
 // Copy-engine launches in the model's jobs from `first` on: a fresh texture's fill is one (RawMetalFresh.mm writeFresh)

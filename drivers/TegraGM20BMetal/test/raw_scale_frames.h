@@ -30,14 +30,32 @@ inline std::vector<id<MTLTexture>> targets(id<MTLDevice> device, const Shape &sh
     return made;
 }
 
-// Pass `p` of `shape`: its encoder begun on `cb`, drawn, ended
+// The memoryless colour 1 Core Animation's states draw beside (boot 21's PBGRAXm_A2Xhf: c1 BGRA8, nothing written)
+inline id<MTLTexture> scratch(id<MTLDevice> device, const Shape &shape)
+{
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                  width:shape.width
+                                                                                 height:shape.height
+                                                                              mipmapped:NO];
+    td.storageMode = MTLStorageModeMemoryless;
+    td.usage = MTLTextureUsageRenderTarget;
+    return [device newTextureWithDescriptor:td];
+}
+
+// Pass `p` of `shape`: its encoder begun on `cb`, drawn, ended; with `beside`, that memoryless colour 1 cleared and
+// not stored
 inline void pass(id<MTLCommandBuffer> cb, id<MTLRenderPipelineState> state, const std::vector<id<MTLTexture>> &into,
-                 const Shape &shape, int p, uint32_t frame)
+                 const Shape &shape, int p, uint32_t frame, id<MTLTexture> beside = nil)
 {
     MTLRenderPassDescriptor *d = [MTLRenderPassDescriptor renderPassDescriptor];
     d.colorAttachments[0].texture = into[size_t(p) % into.size()];
     d.colorAttachments[0].loadAction = p < shape.targets ? MTLLoadActionClear : MTLLoadActionLoad;
     d.colorAttachments[0].storeAction = MTLStoreActionStore;
+    if (beside) {
+        d.colorAttachments[1].texture = beside;
+        d.colorAttachments[1].loadAction = MTLLoadActionClear;
+        d.colorAttachments[1].storeAction = MTLStoreActionDontCare;
+    }
     id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:d];
     [e setRenderPipelineState:state];
     const int draws = shape.draws / shape.passes + (p < shape.draws % shape.passes ? 1 : 0);
