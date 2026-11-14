@@ -14,6 +14,8 @@
 #   switch_monotonic_base_test       SwitchMonotonicBase.h: kern.monotonicclock never reads below the previous boot's
 #   switch_thermal_dfll_test         SwitchThermalDfll.h against a stand-in SwitchThermal: a DFLL failure fails that
 #                                    raise and the next raise runs the same path; only -ENODEV ends the DFLL mode
+#   switch_tegra_rtc_test            SwitchTegraRTC.h: the RTC's latched seconds and milliseconds, its one reader and
+#                                    that reader's two callers
 # The headers are C: each is compiled as C11 with -Wconversion -Wsign-conversion in a harness (its static inline
 # functions as exported ones) and driven by a GoogleTest test.
 #
@@ -171,4 +173,15 @@ host_test(
         "//drivers/TegraDFLL:TegraDFLL.h",
     ],
     data = ["//drivers/SwitchPower:SwitchThermal.cpp"],
+)
+
+host_test(
+    name = "switch_tegra_rtc_test",
+    srcs = [
+        "switch_tegra_rtc_test.cpp",
+        "//drivers/SwitchPower:SwitchTegraRTC.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+    ],
+    data = ["//kernel:lint_sources"],
+    defines = ["SWITCH_MMIO_HOST_MODEL=1"],
 )
