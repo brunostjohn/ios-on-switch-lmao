@@ -556,6 +556,28 @@ TEST_F(DisplayPeriod, APresentEndsTheKeptWindow)
 	EXPECT_EQ(held(), 0u);
 }
 
+// A newer frame end that keeps its window too replaces the one before (whose vblank is still ahead, with a lead): a
+// kick after the old window's holds were due opens the new one, whose holds come at their own time.
+TEST_F(DisplayPeriod, ANewerFrameEndReplacesTheKeptWindow)
+{
+	constexpr u32 kLeadUs = 2000;
+	const u64 first = now;
+	tegra_gm20b_compositor_vsync(first, kLeadUs, kPeriod);
+	tgm_deadline_kicked(1, 0);
+	advance(first + kPeriod);
+	tegra_gm20b_compositor_vsync(now, kLeadUs, kPeriod);
+	const u64 target = now + kLeadUs * 1000ULL + kPeriod;
+	advance(now + kMs);
+	appWork(kApps[0], true);
+	tgm_deadline_app_kicked();
+	advance(now);
+	EXPECT_EQ(held(), 0u) << "held for the replaced window";
+	advance(target - kLatency);
+	EXPECT_EQ(held(), 3u);
+	advance(target + 2 * kPeriod);
+	EXPECT_EQ(held(), 0u);
+}
+
 // The app's kick finds a pass under way (the work loop's gate held): the kept window still opens, and its holds come
 // once the pass is done; the present releases them.
 TEST_F(DisplayPeriod, AnAppKickBesideAPass)

@@ -2470,6 +2470,18 @@ grep -q '^void tegra_gm20b_compositor_vsync(' $@
 """,
 )
 
+genrule(
+    name = "deadline_stats_source",
+    testonly = True,
+    srcs = ["//drivers/TegraGM20B:deadline_stats.c"],
+    outs = ["deadline_stats_source.h"],
+    cmd = """
+set -e
+grep -v '^#include' $< > $@
+grep -q '^void tgm_deadline_stats(' $@
+""",
+)
+
 SCHED_UNIT_HDRS = [
     "gm20b_sched_stubs.h",
     "//drivers/TegraGM20B:SwitchGpuBusy.h",
@@ -2496,13 +2508,21 @@ host_library(
     defines = ["DEVELOPMENT=1"],
 )
 
+DEADLINE_UNIT_SRCS = [
+    "gm20b_deadline_unit.c",
+    ":deadline_source",
+    ":deadline_stats_source",
+]
+
+DEADLINE_UNIT_HDRS = SCHED_UNIT_HDRS + [
+    "//drivers/TegraGM20B:SwitchGpuKeptWindow.h",
+    "//drivers/TegraGM20B:deadline_stats.h",
+]
+
 host_library(
     name = "deadline_unit",
-    srcs = [
-        "gm20b_deadline_unit.c",
-        ":deadline_source",
-    ],
-    hdrs = SCHED_UNIT_HDRS,
+    srcs = DEADLINE_UNIT_SRCS,
+    hdrs = DEADLINE_UNIT_HDRS,
     c_std = "gnu11",
     copts = ["-Wno-unused-function"],
     defines = ["DEVELOPMENT=1"],
@@ -2524,7 +2544,7 @@ host_test(
     deps = [":deadline_unit"],
 )
 
-# hold.c whole, its #include lines left out for gm20b_hold_stubs.h's stand-ins.
+# hold.c and hold_stats.c whole, their #include lines left out for gm20b_hold_stubs.h's stand-ins.
 genrule(
     name = "hold_source",
     testonly = True,
@@ -2537,18 +2557,34 @@ grep -q '^uint64_t tgm_hold_due(' $@
 """,
 )
 
+genrule(
+    name = "hold_stats_source",
+    testonly = True,
+    srcs = ["//drivers/TegraGM20B:hold_stats.c"],
+    outs = ["hold_stats_source.h"],
+    cmd = """
+set -e
+grep -v '^#include' $< > $@
+grep -q '^void tgm_hold_stats(' $@
+""",
+)
+
+HOLD_UNIT_SRCS = [
+    "gm20b_hold_unit.c",
+    ":hold_source",
+    ":hold_stats_source",
+]
+
 HOLD_UNIT_HDRS = SCHED_UNIT_HDRS + [
     "gm20b_hold_stubs.h",
     "//drivers/TegraGM20B:SwitchGpuChanTable.h",
     "//drivers/TegraGM20B:SwitchGpuPreemptLanding.h",
+    "//drivers/TegraGM20B:deadline_stats.h",
 ]
 
 host_library(
     name = "hold_unit",
-    srcs = [
-        "gm20b_hold_unit.c",
-        ":hold_source",
-    ],
+    srcs = HOLD_UNIT_SRCS,
     hdrs = HOLD_UNIT_HDRS,
     c_std = "gnu11",
     copts = ["-Wno-unused-function"],

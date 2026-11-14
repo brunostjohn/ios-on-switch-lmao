@@ -239,6 +239,14 @@ static inline uint64_t tgm_hold_time(uint64_t vblank, uint64_t interval, uint64_
 	return now;
 }
 
+/* Where tgm_hold_time's first case ends: before it, whether the channel is on the GPU makes no difference. */
+static inline uint64_t tgm_hold_lead_start(uint64_t vblank, uint64_t expected, uint64_t preempt)
+{
+	const uint64_t lead = expected + preempt;
+
+	return vblank > lead ? vblank - lead : 0;
+}
+
 /* PTIMER counts at its own rate (deploy logs: 1.627 ns a unit): the kernel clock's nanoseconds per PTIMER unit in 16.16
  * fixed point over a span of both clocks (0 until the span is long enough to tell), and a PTIMER span in nanoseconds. */
 #define TGM_PT_CAL_MIN_NS (100ull * 1000 * 1000)

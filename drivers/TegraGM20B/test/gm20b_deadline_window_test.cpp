@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
-// deadline.c over a display period at a time: the thread calls a frame end schedules (hold_work, expire_work), the
-// resident look's register reads, and whether an app channel slow enough to be held is held, by what has work in flight.
-// Under dl.lock (a spinlock: XNU panics on a mutex, sleep or allocation there) nothing schedules, allocates or nests.
+// deadline.c over a display period at a time: the thread calls a frame end schedules (the owner's timer and wake), and
+// whether an app channel slow enough to be held is held, by what has work in flight. The holds are taken in the
+// interrupt work loop's gate; nothing takes a spinlock, and nothing waits for the gate under one.
 #include <gtest/gtest.h>
 #include <string>
 #include <vector>
@@ -16,7 +16,7 @@ namespace
 {
 constexpr u64 kPeriod = 16666667, kStatusReads = 3;
 u64 now;
-unsigned schedules, statusReads, dues, spinDepth, releases, spinLocks;
+unsigned schedules, statusReads, dues, spinDepth, releases, spinLocks, gateDepth;
 int workAsksUntilKick = -1;  // tgm_hold_wanted(1) calls before an app's kick lands (-1: none lands)
 u64 dueVblank;
 int lastResident;
@@ -111,6 +111,25 @@ void nvxnu_work_cancel_wait(void *work)
 	static_cast<Work *>(work)->pending = false;
 }
 
+void nvxnu_work_cancel(void *work)
+{
+	static_cast<Work *>(work)->pending = false;
+}
+
+void nvxnu_pass_run(void (*fn)(void *), void *arg)
+{
+	mayBlock("the work loop's gate");
+	++gateDepth;
+	fn(arg);
+	--gateDepth;
+}
+
+int nvxnu_pass_try(void (*fn)(void *), void *arg)
+{
+	nvxnu_pass_run(fn, arg);
+	return 1;
+}
+
 int tgm_sched_resident(nvkm_device *)
 {
 	mayBlock("the resident look's register reads");
@@ -125,9 +144,19 @@ int tgm_hold_wanted(int withWork)
 	return slow && (!withWork || appWork);
 }
 
+uint64_t tgm_hold_plan(const struct tgm_window *w)
+{
+	EXPECT_EQ(gateDepth, 1u) << "a window planned outside the gate";
+	return w->now;
+}
+
+void tgm_hold_settle(nvkm_device *, uint64_t)
+{
+}
+
 uint64_t tgm_hold_due(nvkm_device *, const struct tgm_window *w, int resident, int *preempt)
 {
-	EXPECT_EQ(spinDepth, 1u) << "the holds are taken under dl.lock, as hold_work takes them";
+	EXPECT_EQ(gateDepth, 1u) << "the holds are taken in the work loop's gate";
 	lastResident = resident;
 	++dues;
 	dueVblank = w->vblank;
@@ -204,7 +233,7 @@ TEST_F(DeadlineWindow, NoAppWorkSchedulesNothing)
 		<< "hold_work and expire_work scheduled with no app work in flight";
 	EXPECT_EQ(statusReads, 0u);
 	EXPECT_EQ(dues, 0u);
-	EXPECT_EQ(spinLocks, 4u) << "dl.lock: each frame end's, nothing else";
+	EXPECT_EQ(spinLocks, 0u);
 }
 
 // No app channel slow enough to be held: no window, before and after.
@@ -224,11 +253,11 @@ TEST_F(DeadlineWindow, AppWorkAtTheFrameEndOpensTheWindow)
 	appWork = true;
 	const u64 vblank = now + kPeriod;
 	frameEnd();
-	EXPECT_EQ(schedules, 2u) << "hold_work now, expire_work at the vblank";
+	EXPECT_EQ(schedules, 1u) << "the owner's timer, at the first hold";
 	runDue();
 	EXPECT_EQ(dues, 1u);
 	EXPECT_EQ(dueVblank, vblank);
-	EXPECT_EQ(statusReads, kStatusReads);
+	EXPECT_EQ(lastResident, TGM_RESIDENT_LOOK) << "the hold looks at what the GPU runs";
 }
 
 // The app's own first kick inside the frame, before its doorbell: the window kept at the frame end opens and the holds
@@ -305,7 +334,7 @@ TEST_F(DeadlineWindow, AKickBetweenTheLookAndTheKeepIsSeen)
 {
 	workAsksUntilKick = 1;
 	frameEnd();
-	EXPECT_EQ(schedules, 2u) << "hold_work and expire_work, as for app work at the frame end";
+	EXPECT_EQ(schedules, 1u) << "the owner's timer, as for app work at the frame end";
 	runDue();
 	EXPECT_EQ(dues, 1u);
 }

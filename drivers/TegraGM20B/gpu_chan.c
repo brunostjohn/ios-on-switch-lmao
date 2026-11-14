@@ -441,8 +441,8 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	if (!chan)
 		return;
 	waiter = tgm_chan_waiter(chan);
-	if (chan->tracked)
-		tgm_hold_track(tgm_gpu.device, chan->chid, 0);
+	if (chan->app)
+		tgm_hold_forget(chan->chid);
 	/* bounded wait for idle (CONTRACT.md: <= 1 s), then nvkm tears the channel down (preempt + runlist). The caller owns
 	 * the channel's submissions: a quiet last job gets its wake entry here. */
 	end = nvxnu_nanotime() + NSEC_PER_SEC;
