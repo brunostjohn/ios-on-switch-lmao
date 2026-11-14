@@ -32,6 +32,7 @@
 #include "raw_split_cost.h"
 #include "raw_attachment_order.h"
 #include "raw_attachment_view.h"
+#include "raw_buffer_writes.h"
 #include "raw_probe_forms.h"
 #include "raw_probe_ops.h"
 #include "raw_private_comp.h"
@@ -1234,6 +1235,7 @@ private:
     StorageFallback storageFallback(const Pipeline &pl) const;
 #if SWITCH_RAW_DIAGNOSTICS
     void probeEdges() const;
+    void noteLargePass(const PixelBox &drawn, bool drawnKnown) const;
     void probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t primitive, int32_t first, uint32_t count,
                    bool indexed, const PixelBox &limit);
     void probeGlassDraw(const Pipeline &bound, const Pipeline &drawn, const PixelBox &limit);
@@ -1607,6 +1609,7 @@ private:
     struct DrawCounts {
         uint64_t uploadBytes = 0, segmentBinds = 0, segmentWords = 0, segmentSkips = 0, blendKillBinds = 0,
                  interlockDraws = 0, interlocked = 0, interlockedBlends = 0;
+        uint64_t splitTwins = 0, splitWhole[size_t(SplitWhole::Count)] = {};
     } counts_;
 
     void foldCounts();
@@ -1661,7 +1664,7 @@ private:
     SplitBatchPlanner splitBatches_;
     SplitReuse splitReuse_;
     // GPU work encoded before may have written a buffer: a prologue, run ahead of it, reads only what the CPU wrote
-    bool buffersWritten_ = false;
+    BufferWrites bufferWrites_;
     void segment(uint32_t *from, uint32_t *to);
     // An encoder's words from `start` as segments of the unit's open loops (raw_loop_copies.h), or plain ones
     LoopStream loopStream(Push &p, uint32_t *&start);
@@ -2461,6 +2464,8 @@ public:
         // stencil plane draws encoded: the eight-draw route's (raw_stencil_bits.h) and the one-draw route's
         // (raw_zeta_colour.h)
         std::atomic<uint64_t> stencilBitDraws{0}, zetaColourDraws{0};
+        // draws of states with a split that took their twin, and those that did not by why (RenderEncoder::splitTwin)
+        std::atomic<uint64_t> splitTwins{0}, splitWhole[size_t(SplitWhole::Count)]{};
         std::atomic<uint64_t> splitPrologues{0};         // split draws' prologue launches (raw_split.cpp)
         std::atomic<uint64_t> reopenTicks{0};            // the last reopen that made a channel, mach_absolute_time
         std::atomic<uint64_t> bandedDraws{0}, bands{0};  // raw_draw_bands.h

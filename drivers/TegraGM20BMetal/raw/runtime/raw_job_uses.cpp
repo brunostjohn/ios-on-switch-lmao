@@ -75,7 +75,8 @@ void CommandBuffer::use(const Buffer &buffer, bool write)
     if (named_.named(&buffer, buffer.va, buffer.length, buffer.import, write))
         return;
     RAW_ENCODE_SPAN(Use);
-    buffersWritten_ |= write;
+    if (write)
+        bufferWrites_.note(buffer.va, buffer.length);
     externalWrites_ |= write && buffer.hostVisible;
     const bool ranged = dev_->k_.exactJobs() && buffer.length && buffer.length <= UINT32_MAX;
     if (!ranged || !importContains(buffer.import, buffer.va, buffer.length))

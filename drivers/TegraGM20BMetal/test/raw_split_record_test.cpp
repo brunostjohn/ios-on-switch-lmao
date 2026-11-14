@@ -100,3 +100,47 @@ TEST_F(SplitRecords, EachDrawsPrologueReadsItsOwnResidual)
     uint32_t seqno = 0;
     EXPECT_TRUE(cb->commit(seqno));
 }
+
+// A split prologue runs ahead of all of its command buffer's 3D work, so a draw keeps its whole program only where work
+// before it in the command buffer wrote the uniform memory the prologue reads: a fill of another buffer leaves the twin
+TEST_F(SplitRecords, OnlyAWriteOfTheBoundUniformsKeepsTheWholeProgram)
+{
+    std::string why;
+    raw::RuntimeRecord record = shapeRecord(0x618b45175101cd21ull);
+    record.splitRecord.uboCount = 1;  // its prologue reads the fragment program's uniform buffer, constant buffer 1
+    record.splitRecord.uboCbuf[0] = 1;
+    raw::Pipeline *pl = dev.addRecord(record, false, why);
+    ASSERT_NE(pl, nullptr) << why;
+    raw::Buffer other;
+    ASSERT_TRUE(dev.createBuffer(0x4000, other));
+    raw::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    cb->forceSplit(true);
+    const auto drawOnce = [&](uint64_t offset) {
+        raw::PassDesc pass;
+        pass.color[0].texture = &target;
+        pass.color[0].load = raw::ColorAttachment::Clear;
+        pass.count = 1;
+        raw::RenderEncoder *e = cb->render(pass);
+        ASSERT_NE(e, nullptr);
+        e->setViewport(0, 0, 256, 256, 0, 1);
+        e->setScissor(0, 0, 256, 256);
+        e->setPipeline(pl);
+        e->setBuffer(2, 1, &uniforms, offset);
+        const char *refused = nullptr;
+        ASSERT_TRUE(e->draw(kStrip, 0, 4, 1, 0, &refused)) << (refused ? refused : "?");
+        e->end();
+    };
+    raw::BlitEncoder *b = cb->blit();
+    b->fillBytes(other.va, 0x1000, 0x5a);
+    b->end();
+    drawOnce(0x1040);
+    EXPECT_EQ(cb->splitRecords().size(), 1u) << "another buffer's fill";
+    b = cb->blit();
+    b->fillBytes(uniforms.va + 0x1000, 0x100, 0x5a);
+    b->end();
+    drawOnce(0x10c8);
+    EXPECT_EQ(cb->splitRecords().size(), 1u) << "a fill of the bound uniforms' memory";
+    uint32_t seqno = 0;
+    EXPECT_TRUE(cb->commit(seqno));
+}
