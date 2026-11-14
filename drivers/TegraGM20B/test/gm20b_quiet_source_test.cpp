@@ -137,7 +137,6 @@ TEST(GM20BQuietSource, WakeEntriesKeepTheSubmissionOrder)
 			    .Before("tgm_gate_enter();", "tgm_chan_wake_push(chan);"));
 	const CodeText push = Block(quiet, "void tgm_chan_wake_push(");
 	EXPECT_TRUE(push.Before("NON_STALL_INTERRUPT", "PUSH_KICK(push);"));
-	EXPECT_TRUE(push.Before("switch_gpu_irq_arm(", "PUSH_KICK(push);"));
 	EXPECT_TRUE(push.Has("nvxnu_panic("));
 	EXPECT_TRUE(Block(unit("TegraGM20BUserClientChannel.cpp"),
 			  "IOReturn AGXDeviceUserClient::channelCreate(")

@@ -372,7 +372,7 @@ host_test(
     srcs = [
         "switch_gpu_quiet_model.h",
         "switch_gpu_quiet_test.cpp",
-        "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
+        "//drivers/TegraGM20B:SwitchGpuFenceWaiter.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:SwitchGpuJobFences.h",
         "//drivers/TegraGM20B:SwitchGpuQuiet.h",
@@ -744,7 +744,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuVmMap.h",
         "//drivers/TegraGM20B:SwitchGpuChannelCompletion.h",
         "//drivers/TegraGM20B:SwitchGpuPresentTokens.h",
-        "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
+        "//drivers/TegraGM20B:SwitchGpuFenceWaiter.h",
         "//drivers/TegraGM20B:recover.c",
         "//drivers/TegraGM20B:recover_engine.c",
         "//drivers/TegraGM20B:recover_held.c",
@@ -1352,7 +1352,7 @@ host_test(
         "switch_gpu_present_model.h",
         "switch_gpu_present_quiet_test.cpp",
         "switch_gpu_quiet_model.h",
-        "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
+        "//drivers/TegraGM20B:SwitchGpuFenceWaiter.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:SwitchGpuJobFences.h",
         "//drivers/TegraGM20B:SwitchGpuPresentWatch.h",
@@ -1369,7 +1369,7 @@ host_test(
         "switch_gpu_present_model.h",
         "switch_gpu_present_promise_test.cpp",
         "switch_gpu_quiet_model.h",
-        "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
+        "//drivers/TegraGM20B:SwitchGpuFenceWaiter.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:SwitchGpuJobFences.h",
         "//drivers/TegraGM20B:SwitchGpuPresentWatch.h",
@@ -1386,7 +1386,7 @@ host_test(
         "switch_gpu_present_deadline_test.cpp",
         "switch_gpu_present_model.h",
         "switch_gpu_quiet_model.h",
-        "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
+        "//drivers/TegraGM20B:SwitchGpuFenceWaiter.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:SwitchGpuJobFences.h",
         "//drivers/TegraGM20B:SwitchGpuPresentWatch.h",
@@ -1483,8 +1483,9 @@ host_test(
     srcs = [
         "switch_gpu_completion_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuChannelCompletion.h",
-        "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
+        "//drivers/TegraGM20B:SwitchGpuFenceWaiter.h",
         "//drivers/TegraGM20B:SwitchGpuBusy.h",
+        "//drivers/TegraGM20B:SwitchGpuChanTable.h",
     ],
 )
 
@@ -1776,28 +1777,35 @@ exports_files(
 )
 
 host_library(
-    name = "active_irq",
+    name = "event_wait",
     srcs = [
         "//drivers/TegraGM20B:nouveau/nvkm/core/event.c",
-        "switch_gpu_active_irq_fixture.c",
+        "nvkm_event_wait_fixture.c",
     ],
     hdrs = [
-        "switch_gpu_active_irq_fixture.h",
-        "active_irq_include/core/event.h",
-        "active_irq_include/core/os.h",
-        "active_irq_include/core/subdev.h",
+        "event_wait_include/core/event.h",
+        "event_wait_include/core/os.h",
+        "event_wait_include/core/subdev.h",
+        "nvkm_event_wait_fixture.h",
         "//drivers/TegraGM20B:nouveau/include/nvkm/core/event.h",
-        "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
     ],
     c_std = "gnu11",
     copts = ["-Wno-unused-parameter"],
-    includes = ["active_irq_include"],
+    includes = ["event_wait_include"],
 )
 
 host_test(
-    name = "switch_gpu_active_irq_test",
-    srcs = ["switch_gpu_active_irq_test.cpp"],
-    deps = [":active_irq"],
+    name = "nvkm_event_wait_test",
+    srcs = ["nvkm_event_wait_test.cpp"],
+    deps = [":event_wait"],
+)
+
+host_test(
+    name = "switch_gpu_fence_waiter_test",
+    srcs = [
+        "switch_gpu_fence_waiter_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuFenceWaiter.h",
+    ],
 )
 
 host_shims(
@@ -2158,6 +2166,7 @@ host_test(
     data = [
         "//drivers/TegraGM20B:SwitchGpuChannelCompletion.h",
         "//drivers/TegraGM20B:gpu_sources",
+        "//drivers/TegraGM20B:nouveau/nvkm/engine/fifo/gk104.c",
         "//drivers/TegraGM20B:shim/xnu_glue.cpp",
     ],
 )
@@ -2195,6 +2204,25 @@ host_test(
     srcs = [
         "switch_gpu_wake_word_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuWakeWord.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+)
+
+host_test(
+    name = "switch_gpu_chan_table_test",
+    srcs = [
+        "switch_gpu_chan_table_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuChanTable.h",
+    ],
+)
+
+host_test(
+    name = "switch_gpu_chan_table_tsan_test",
+    srcs = [
+        "switch_gpu_chan_table_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuChanTable.h",
     ],
     copts = ["-fsanitize=thread"],
     linkopts = ["-fsanitize=thread"],

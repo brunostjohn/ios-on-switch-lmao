@@ -82,9 +82,6 @@ void tgm_chan_wake_push(struct tgm_chan *chan)
 	PUSH_MTHD(push, NV906F, NON_STALL_INTERRUPT, 0);
 	switch_gpu_quiet_announce(&chan->quiet, chan->submitted);
 	switch_gpu_jobs_announce_newest(&chan->jobs);
-	if (switch_gpu_irq_arm(&chan->irq_state, chan->submitted) &&
-	    nvif_event_allow(&chan->nonstall))
-		nvxnu_panic("SwitchGpu: cannot arm channel completion");
 	if (stats_on())
 		__atomic_fetch_add(&tgm_wstat.pushed, 1, __ATOMIC_RELAXED);
 	PUSH_KICK(push);

@@ -36,7 +36,14 @@ int tgm_chan_announced(struct tgm_chan *chan, uint32_t seqno)
 	return announced && (s32)(tgm_chan_completed(chan) - end) >= 0;
 }
 
+struct switch_gpu_chan_table tgm_chan_table;
+
 #include "SwitchGpuChannelCompletion.h"
+
+void tgm_chans_completed(void)
+{
+	chans_completed();
+}
 
 void tgm_chan_on_fence(struct tgm_chan *chan, void (*fenced)(void *arg), void *arg)
 {
@@ -52,7 +59,6 @@ static void chan_free(struct tgm_chan *chan)
 		tgm_stats_gr_unbind(chan);
 	if (chan->high || chan->tracked)
 		tgm_sched_forget(tgm_gpu.device, chan->chid);
-	nvif_event_dtor(&chan->nonstall);
 	nvif_event_dtor(&chan->kill);
 	switch_gpu_timeline_close(chan->timeline);
 	chan->timeline = NULL;
@@ -116,7 +122,7 @@ void tgm_chan_set_level(struct tgm_chan *chan, unsigned int level)
 		}
 		WRITE_ONCE(chan->tracked, 0);
 		chan->critical = 1;
-		/* chan_nonstall reads the job records once it sees high */
+		/* chan_completion reads the job records once it sees high */
 		__atomic_store_n(&chan->high, 1, __ATOMIC_RELEASE);
 		switch_gpu_busy_level(&tgm_busy, chan->chid, 0);
 		tgm_sched_level(tgm_gpu.device, chan->chid, TGM_LEVEL_HIGH);
@@ -288,13 +294,6 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 		ret = nvif_event_allow(&chan->kill);
 	if (ret)
 		goto fail;
-	/* nouveau_fence_context_new(): the fence's nonstall interrupt (uchan.c NVIF_CHAN_EVENT_V0_NON_STALL_INTR); its
-	 * allow sets PFIFO_INTR_EN_0 bit 31 (gf100_fifo_nonstall_allow). Without it, fences are still seen by polling. */
-	host->type = NVIF_CHAN_EVENT_V0_NON_STALL_INTR;
-	ret = nvif_event_ctor(&chan->user, "fenceNonStallIntr", args.chan.chid, chan_nonstall, true,
-			      &kargs.ev, sizeof(kargs), &chan->nonstall);
-	if (ret)
-		goto fail;
 	ret = nvif_chan906f_ctor(&chan->chan, chan->user.map.ptr,
 				 (u8 *)chan->ring + CHAN_PUSH_BYTES, CHAN_GPFIFO_BYTES, chan->ring,
 				 chan->ring_va, CHAN_PUSH_BYTES,
@@ -339,6 +338,7 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	list_add_tail(&chan->live, &tgm_live_chans);
 	switch_gpu_busy_open(&tgm_busy, chan->chid, chan->submitted);
 	switch_gpu_busy_level(&tgm_busy, chan->chid, 1);
+	switch_gpu_chan_table_set(&tgm_chan_table, chan->chid, chan);
 	tgm_fault_publish(chan);
 	mutex_unlock(&tgm_live_lock);
 	*pchan = chan;
@@ -433,6 +433,8 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	list_del(&chan->live);
 	order_forget(chan);
 	mutex_unlock(&tgm_live_lock);
+	switch_gpu_chan_table_set(&tgm_chan_table, chan->chid, NULL);
+	nvxnu_pass_barrier();
 	tgm_gpu_lock();
 	held = stats_on() ? nvxnu_nanotime() : 0;
 	chan_free(chan);

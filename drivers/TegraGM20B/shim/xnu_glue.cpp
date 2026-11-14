@@ -38,9 +38,10 @@ void pmap_set_cache_attributes(ppnum_t pn, unsigned int cacheattr);
 void IOLogv(const char *format, va_list ap);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 int vsnprintf(char *, size_t, const char *, va_list);
-void tgm_present_pass(void);    // gpu_present.c
-void tgm_present_filter(void);  // SwitchGpuPresentFilter.cpp
-void tgm_promise_pass(void);    // gpu_promise_giveup.c
+void tgm_present_pass(void);     // gpu_present.c
+void tgm_chans_completed(void);  // gpu_chan.c
+void tgm_present_filter(void);   // SwitchGpuPresentFilter.cpp
+void tgm_promise_pass(void);     // gpu_promise_giveup.c
 }
 
 #if DEVELOPMENT || DEBUG
@@ -267,6 +268,7 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 	gIrqErrors[0] = 0;
 	__atomic_store_n(&gIrqThread, current_thread(), __ATOMIC_RELAXED);
 	const int handled = nvxnu_poll_irqs();
+	tgm_chans_completed();
 	__atomic_store_n(&gIrqThread, static_cast<thread_t>(nullptr), __ATOMIC_RELAXED);
 	if (gIrqErrorsLen && __atomic_load_n(&gErrorsFatal, __ATOMIC_ACQUIRE) &&
 	    !(gErrorsContained && gErrorsContained(gIrqErrors)))
@@ -536,6 +538,19 @@ extern "C" void nvxnu_irq_suspend(void)
 	gIrqLoop->runAction(
 		[](OSObject *, void *, void *, void *, void *) -> IOReturn {
 			__atomic_store_n(&gGpuOff, 1, __ATOMIC_RELEASE);
+			return kIOReturnSuccess;
+		},
+		nullptr);
+}
+
+// A channel's teardown, after it cleared its slot of tgm_chan_table: an empty action on the pass's work loop, which runs
+// once any pass that may hold the channel has ended. On the work loop itself it runs at once.
+extern "C" void nvxnu_pass_barrier(void)
+{
+	if (!__atomic_load_n(&gIrqActive, __ATOMIC_ACQUIRE))
+		return;
+	gIrqLoop->runAction(
+		[](OSObject *, void *, void *, void *, void *) -> IOReturn {
 			return kIOReturnSuccess;
 		},
 		nullptr);

@@ -73,6 +73,7 @@
 #include "SwitchGpuJobFences.h"
 #include "SwitchGpuQuiet.h"
 #include "SwitchGpuWakeWord.h"
+#include "SwitchGpuChanTable.h"
 #include "SwitchGpuWriterPromise.h"
 #include "SwitchGpuPromiseGiveUp.h"
 #include "SwitchGpuJobTiming.h"
@@ -250,7 +251,6 @@ struct tgm_chan {
 	struct nvif_object user;
 	struct nvif_object obj[5];
 	struct nvif_event kill;
-	struct nvif_event nonstall;
 	struct nvif_chan chan;
 	void *ring; /* push | gpfifo | sema, pool memory */
 	u64 ring_pa, ring_va;
@@ -263,7 +263,6 @@ struct tgm_chan {
 	u64 fence_gpu;
 	u32 submitted;
 	u32 event_through; /* its jobs through this seqno release event signals mid-job (SwitchGpuEventWord.h) */
-	u64 irq_state;
 	u32 error;
 	u32 chid;
 	int nobj;
@@ -385,6 +384,9 @@ struct tgm_chan {
 
 #define CHAN_SCRUB 2 /* the pool scrubber's */
 extern struct list_head tgm_live_chans;
+extern struct switch_gpu_chan_table tgm_chan_table;
+/* The interrupt pass, after nvkm's handlers (shim/xnu_glue.cpp gpuInterrupt): every channel with work in flight. */
+void tgm_chans_completed(void);
 extern struct mutex tgm_live_lock;
 extern u64 tgm_live_ids;
 void tgm_chan_describe(struct tgm_chan *chan, char *buf, unsigned int len);
@@ -823,7 +825,7 @@ void tgm_rail_up_locked(const void *site);
 void tgm_zcull_init(struct nvkm_device *device);
 #pragma GCC visibility pop
 
-#include "SwitchGpuActiveIrq.h"
+#include "SwitchGpuFenceWaiter.h"
 #include "SwitchGpuIdleCount.h"
 #include "gpu_inline.h"
 #include "gpu_fenced.h"

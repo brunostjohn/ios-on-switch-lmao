@@ -91,13 +91,38 @@ TEST(GM20BFrameCpuSource, TheKickAndThePassKeepNoSharedCounters)
 {
 	EXPECT_FALSE(Block(unit("gpu_exec.c"), "static u32 chan_fence_job(").Has("idle_kicked("));
 	const CodeText pass =
-		Block(unit("SwitchGpuChannelCompletion.h"), "static int chan_nonstall(");
+		Block(unit("SwitchGpuChannelCompletion.h"), "static void chan_completion(");
 	EXPECT_FALSE(pass.Has("idle_fenced("));
 	EXPECT_TRUE(
 		Block(unit("gpu_chan.c"), "static void chan_wake_waiters(struct tgm_chan *chan)")
 			.Has("chan_wake_all_waiters(chan, 1);"));
 	EXPECT_TRUE(Block(unit("gpu_inline.h"), "static inline void chan_wake_all_waiters(")
 			    .Has("nvxnu_wword_wake(&tgm_waiter_words[waiter], pass);"));
+}
+
+// A job's kick arms no per-channel completion event and the pass completes no event: the pass scans tgm_busy.
+TEST(GM20BFrameCpuSource, NoPerJobCompletionEvent)
+{
+	const CodeText fence = Block(unit("gpu_exec.c"), "static u32 chan_fence_job(");
+	EXPECT_FALSE(fence.Has("switch_gpu_irq_arm(")) << "an exchange per kick";
+	EXPECT_FALSE(fence.Has("nvif_event_allow(")) << "nvkm's event lock per kick";
+	EXPECT_FALSE(
+		Block(unit("gpu_quiet.c"), "void tgm_chan_wake_push(").Has("nvif_event_allow("));
+	const CodeText completion(unit("SwitchGpuChannelCompletion.h"));
+	EXPECT_FALSE(completion.Has("switch_gpu_irq_complete(")) << "a compare-and-swap per pass";
+	EXPECT_FALSE(completion.Has("NVIF_EVENT_DROP")) << "nvkm's event lock per pass";
+	EXPECT_FALSE(Block(unit("nouveau/nvkm/engine/fifo/gk104.c"),
+			   "gk104_fifo_intr(struct nvkm_inth *inth)")
+			     .Has("nvkm_event_ntfy"))
+		<< "nvkm's event list lock per interrupt";
+	EXPECT_TRUE(Block(unit("shim/xnu_glue.cpp"),
+			  "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)")
+			    .Before("nvxnu_poll_irqs();", "tgm_chans_completed();"));
+	EXPECT_TRUE(Block(unit("gpu_chan.c"), "void tgm_chan_del(struct tgm_chan **pchan)")
+			    .Before("switch_gpu_chan_table_set(&tgm_chan_table, chan->chid, NULL);",
+				    "nvxnu_pass_barrier();"));
+	EXPECT_TRUE(Block(unit("gpu_chan.c"), "void tgm_chan_del(struct tgm_chan **pchan)")
+			    .Before("nvxnu_pass_barrier();", "chan_free(chan);"));
 }
 
 // A present job's frame is learned at the pass's end, after the scan: a compositor channel the scan completes after the
@@ -112,5 +137,5 @@ TEST(GM20BFrameCpuSource, APresentJobsFrameIsLearnedAfterTheScan)
 			       "nvxnu_work_schedule(tgm_present.completion_work);"));
 	EXPECT_TRUE(Block(unit("shim/xnu_glue.cpp"),
 			  "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)")
-			    .Before("nvxnu_poll_irqs();", "tgm_present_pass();"));
+			    .Before("tgm_chans_completed();", "tgm_present_pass();"));
 }

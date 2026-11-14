@@ -58,6 +58,16 @@ static inline int switch_gpu_busy_chan(const struct switch_gpu_busy *b, uint32_t
 	return kicked != done && kicked != settled ? 1 : 0;
 }
 
+/* The interrupt pass: a kick it has not seen done (a quiet end the settle read counts: the pass completes it) */
+static inline int switch_gpu_busy_pending(const struct switch_gpu_busy *b, uint32_t chid)
+{
+	if (chid >= SWITCH_GPU_BUSY_CHIDS) {
+		return 0;
+	}
+	const uint32_t done = __atomic_load_n(&b->done[chid], __ATOMIC_ACQUIRE);
+	return __atomic_load_n(&b->kicked[chid], __ATOMIC_ACQUIRE) != done ? 1 : 0;
+}
+
 /* Whether one of the channels in `mask` (SWITCH_GPU_BUSY_CHIDS bits) has work in flight. */
 static inline int switch_gpu_busy_among(const struct switch_gpu_busy *b, const uint64_t *mask)
 {

@@ -6,13 +6,10 @@ using u32 = uint32_t;
 using u64 = uint64_t;
 using s32 = int32_t;
 
-struct nvif_event {};
-
 struct tgm_chan {
-	nvif_event nonstall;
 	uint32_t completed = 0, submitted = 0, progress_done = 0, high = 0, chid = 1, kernel = 0,
 		 event_through = 0;
-	uint64_t progress_held = 0, progress_ns = 0, irq_state = 0;
+	uint64_t progress_held = 0, progress_ns = 0;
 	void (*fenced)(void *) = nullptr;
 	void *fenced_arg = nullptr;
 };
@@ -21,7 +18,7 @@ struct tgm_chan {
 	reinterpret_cast<type *>(reinterpret_cast<char *>(pointer) - offsetof(type, member))
 #define WRITE_ONCE(target, value) ((target) = (value))
 #define READ_ONCE(target) (target)
-constexpr int NVIF_EVENT_KEEP = 0, NVIF_EVENT_DROP = 1, CHAN_SCRUB = 2;
+constexpr int CHAN_SCRUB = 2;
 unsigned highCalls, idleCalls, statsCalls, presentCalls, scrubCalls, wakeCalls, channelWakes,
 	watchCalls, callbacks, timestamps, eventPasses;
 int tgm_sc7_gate;
@@ -93,9 +90,10 @@ void present_watch_fenced(tgm_chan *, int)
 	++watchCalls;
 }
 
-#include "drivers/TegraGM20B/SwitchGpuActiveIrq.h"
 #include "drivers/TegraGM20B/SwitchGpuBusy.h"
+#include "drivers/TegraGM20B/SwitchGpuChanTable.h"
 switch_gpu_busy tgm_busy;
+switch_gpu_chan_table tgm_chan_table;
 #include "drivers/TegraGM20B/SwitchGpuChannelCompletion.h"
 
 void switch_gpu_events_completed()
@@ -120,8 +118,7 @@ protected:
 
 	void interrupt()
 	{
-		switch_gpu_irq_arm(&channel.irq_state, channel.completed + 1);
-		EXPECT_EQ(chan_nonstall(&channel.nonstall, nullptr, 0), NVIF_EVENT_KEEP);
+		chan_completion(&channel);
 	}
 };
 
@@ -235,4 +232,27 @@ TEST_F(Completion, ThePassPublishesTheChannelsDoneSeqno)
 	interrupt();
 	EXPECT_FALSE(switch_gpu_busy_chan(&tgm_busy, channel.chid));
 	EXPECT_FALSE(switch_gpu_busy_low(&tgm_busy));
+}
+
+// The pass completes the live channels with a kick it has not seen done, from their tgm_chan_table slots: no per-job
+// event to arm, allow, complete or drop. A channel with nothing pending, or no slot, is not touched.
+TEST_F(Completion, ThePassCompletesOnlyChannelsWithWorkPending)
+{
+	tgm_busy = {};
+	tgm_chan_table = {};
+	switch_gpu_busy_open(&tgm_busy, channel.chid, 0);
+	switch_gpu_chan_table_set(&tgm_chan_table, channel.chid, &channel);
+	chans_completed();
+	EXPECT_EQ(timestamps, 0u) << "nothing kicked";
+	switch_gpu_busy_kick(&tgm_busy, channel.chid, 2);
+	channel.completed = 2;
+	chans_completed();
+	EXPECT_EQ(channel.progress_done, 2u);
+	EXPECT_EQ(callbacks, 1u);
+	chans_completed();
+	EXPECT_EQ(callbacks, 1u) << "seen done: not touched again";
+	switch_gpu_busy_kick(&tgm_busy, channel.chid, 3);
+	switch_gpu_chan_table_set(&tgm_chan_table, channel.chid, nullptr);
+	chans_completed();
+	EXPECT_EQ(callbacks, 1u) << "torn down";
 }

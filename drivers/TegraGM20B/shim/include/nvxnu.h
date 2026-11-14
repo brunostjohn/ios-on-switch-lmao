@@ -200,6 +200,8 @@ void nvxnu_irq_start(void);
 /* System sleep: nvxnu_irq_suspend() before the GPU's power goes (both lines masked, no pass reads the GPU from then on,
  * nvxnu_idle() no longer looks at PMC); nvxnu_irq_resume() once it is back, before nvkm arms its interrupts. */
 void nvxnu_irq_suspend(void);
+/* Returns once no interrupt pass that began before the call is still running. Thread context, no lock the pass takes. */
+void nvxnu_pass_barrier(void);
 void nvxnu_irq_resume(void);
 /* A frame timeline kdebug tracepoint (SwitchFrameTimeline.h): debug kernels only, free while tracing is off. */
 void nvxnu_kdebug(nvxnu_u32 code, nvxnu_u64 a, nvxnu_u64 b, nvxnu_u64 c);
