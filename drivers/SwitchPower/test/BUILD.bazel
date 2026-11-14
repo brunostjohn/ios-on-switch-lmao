@@ -123,6 +123,7 @@ host_test(
         "//kits/SwitchMMIO:SwitchMMIO.h",
     ],
     data = [
+        "//drivers/SwitchPower:SwitchSensors.cpp",
         "//drivers/SwitchPower:SwitchSocTherm.cpp",
         "//drivers/TegraGM20B:gpu_stats_clock.c",
     ],

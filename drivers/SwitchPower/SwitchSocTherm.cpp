@@ -180,6 +180,9 @@ IOReturn SwitchSocTherm::armAction(OSObject *owner, void *mapped, void *, void *
     if (regs) {
         self->armThermtrip(regs);
         self->armThrottle(regs);
+    } else {
+        // The wake's bring-up resets SOC_THERM next: the CPU's divider leaves its pulse skipper first, as at boot.
+        switch_car_rmw(SWITCH_CAR_SUPER_CCLKG_DIVIDER, SWITCH_CAR_CDIV_USE_THERM, 0);
     }
     for (unsigned group = 0; regs && group < SWITCH_SOCTHERM_GROUPS; ++group) {
         const int millic = groupMillic(regs, group);

@@ -189,6 +189,23 @@ TEST(SwitchSocThermThrottleSource, ArmedWithThermtripOnEveryBringUp)
     EXPECT_LT(armed, arm.find("centre(regs, group, millic)"));
 }
 
+// SC7 wakes with SOC_THERM reset again (SwitchSensors' bring-up): the CPU's divider is handed back before that reset, so
+// SOC_THERM is reset and reprogrammed with the bit clear, as at boot (L4T sets it once SOC_THERM is programmed).
+TEST(SwitchSocThermThrottleSource, TheWakeHandsTheCpuDividerBackBeforeTheReset)
+{
+    const std::string arm = switch_ios::test::Body(switch_ios::test::SourceText("../SwitchSocTherm.cpp"),
+                                                   "IOReturn SwitchSocTherm::armAction(");
+    const size_t down = arm.find("} else {");
+    ASSERT_NE(down, std::string::npos);
+    EXPECT_THAT(arm.substr(down),
+                testing::HasSubstr("switch_car_rmw(SWITCH_CAR_SUPER_CCLKG_DIVIDER, SWITCH_CAR_CDIV_USE_THERM, 0)"));
+    const std::string resume = switch_ios::test::Body(switch_ios::test::SourceText("../SwitchSensors.cpp"),
+                                                      "extern \"C\" void switch_sensors_resume(void)");
+    const size_t gone = resume.find("switch_soctherm_armed(nullptr)");
+    ASSERT_NE(gone, std::string::npos);
+    EXPECT_LT(gone, resume.find("socThermStart()"));
+}
+
 // The GPU's clock count carries SOC_THERM's GPU throttle at its start: a /8 count with depth 7 is thermal, with 0 it is
 // on the clock side.
 TEST(SwitchSocThermThrottleSource, TheGpuClockCountSamplesTheThermalSide)
