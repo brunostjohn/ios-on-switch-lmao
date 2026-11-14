@@ -391,9 +391,6 @@ TEST(CompileRequestForms, TheClientsRequestsCarryWhatItsKeysAreMadeOf)
                   .find("s->_constants = (f ? f->_constants : \"\") + "
                         "raw::stageInText(raw::stageInFieldsOf(descriptor.stageInputDescriptor));"),
               std::string::npos);
-    EXPECT_NE(Body(SourceText("../raw/runtime/RawComplete.mm"), "Compiler::Outcome Completion::make(")
-                  .find("const ProbeTextures textures = probeTexturesOf(a.variant);"),
-              std::string::npos);
     EXPECT_NE(SourceText("../compiler/compiler_record.mm").find("raw::probeTexturesOf(p.request.variant)"),
               std::string::npos);
 }

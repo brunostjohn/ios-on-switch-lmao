@@ -198,18 +198,21 @@ TEST(RawPrivateComp, StorageViewsOfCompressedMemoryMoveNothing)
 
 // Boot 21 iconservicesagent (RenderBox filter_color 2218a4f4d2231d46, uber 43017f3f15e41157, both drawn in the pixel
 // interlock elsewhere): a quad drawn as an indexed strip of four over a compressed private target took the barrier
-// form, which cannot order an indexed strip's triangles (restart), and the encode refused it as enc.geometry. Rule
-// storage.compressed draws it with the storage form over the compressed target; with storage views of compressed memory
-// off, the target moves plain and the storage form draws it, whatever the shape.
+// form, and the encode refused it as enc.geometry. The barrier form draws an indexed strip a triangle at a time now,
+// unless its faces decide its pixels (raw_fetch_order.h). Such a strip, and every other shape the barrier form cannot
+// draw, takes the storage form: over the compressed target under rule storage.compressed, over a plain target with
+// storage views of compressed memory off.
 TEST(RawPrivateComp, AShapeTheBarrierFormCannotDrawTakesTheStorageForm)
 {
     const raw::FetchDraw indexedStrip = {4, 4, 1, false, true};
-    EXPECT_FALSE(raw::barrierFormDraws(0x1, 0x1, 0, false, indexedStrip));
+    EXPECT_TRUE(raw::barrierFormDraws(0x1, 0x1, 0, false, indexedStrip)) << "drawn a triangle at a time";
+    const raw::FetchDraw facing = {4, 4, 1, false, true, true};
+    EXPECT_FALSE(raw::barrierFormDraws(0x1, 0x1, 0, false, facing));
     Target shipped{4, 1, true};
-    EXPECT_EQ(route(0x1, true, shipped, indexedStrip), "raw");
+    EXPECT_EQ(route(0x1, true, shipped, facing), "raw");
     EXPECT_TRUE(shipped.comptags);
     Target t{4, 1, true};
-    EXPECT_EQ(route(0x1, true, t, indexedStrip, false), "raw");
+    EXPECT_EQ(route(0x1, true, t, facing, false), "raw");
     EXPECT_FALSE(t.comptags);
     const raw::FetchDraw shapes[] = {
         {3, 6, 2, false, false}, {3, 0, 1, true, false}, {1, 4, 1, false, false}, {3, 3 * 97, 1, false, false}};

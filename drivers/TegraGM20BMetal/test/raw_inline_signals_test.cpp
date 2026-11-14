@@ -92,7 +92,9 @@ TEST(RawInlineSignals, OnlyHostVisibleWritesSinceTheLastFlushMakeAReleaseFlush)
     EXPECT_FALSE(p.take());
     // Noted ahead of the use memo, which names an object once a command buffer however often it is written
     const std::string use = SourceText("../raw/runtime/raw_job_uses.cpp");
-    EXPECT_THAT(use, HasSubstr("publication_.wrote(write && buffer.hostVisible);\n    if (named_.named(&buffer"));
+    const size_t bufferWrote = use.find("publication_.wrote(write && buffer.hostVisible);");
+    ASSERT_NE(bufferWrote, std::string::npos);
+    EXPECT_LT(bufferWrote, use.find("if (named_.named(&buffer"));
     const size_t textureWrote = use.find("publication_.wrote(range.hostVisible || (texture.import && "
                                          "!texture.import->id) || texture.callerPages);");
     ASSERT_NE(textureWrote, std::string::npos);

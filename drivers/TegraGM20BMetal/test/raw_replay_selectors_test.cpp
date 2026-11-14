@@ -122,11 +122,14 @@ TEST(ReplaySelectors, TheReplaySendsM2vOnlyWhatItsFrontendImplements)
 
     // What m2v has no form of that a range it replays can still hold: an indirect draw of an encoder the raw path
     // refused for any reason (enc.geometry's Indirect among them: a fetching state with no storage form), and a render
-    // encoder's memory barrier
+    // encoder's memory barrier. The viewport and scissor arrays are sent only for more than one view, and a range that
+    // holds such arrays never replays (RawMetalM2vGuard.mm, raw_m2v_views.h)
     const std::set<std::string> left = {
         "drawPrimitives:indirectBuffer:indirectBufferOffset:",
         "drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:",
         "memoryBarrierWithScope:afterStages:beforeStages:",
+        "setScissorRects:count:",
+        "setViewports:count:",
     };
     std::set<std::string> unanswered;
     size_t messages = 0;
