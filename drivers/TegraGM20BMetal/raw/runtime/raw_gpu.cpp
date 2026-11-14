@@ -237,7 +237,7 @@ void turnWordsInto(Push &p, uint64_t root, const Rotation &r)
 }
 
 // Texture header word 0 per MTLPixelFormat as NVK writes it (pack/mkformats.py over the twin, 11-04), and the color target format
-// NVK writes for a target of it (raw/test/targetcheck.py over the probe's PROBE_TARGETS run; 0 where m2v's NVK renders none).
+// NVK writes for a target of it (0 where m2v's NVK renders none): both NIL's rows (test/raw_tic_words_test.py).
 // The integer formats' are NIL's rows (nil_formats.csv: the class's RU*/RS* target, UINT or SINT components, alpha ONE_INT).
 const FormatInfo kFormats[] = {
     {1, 0xf7, 0x2002491d, 1, false},     // A8Unorm

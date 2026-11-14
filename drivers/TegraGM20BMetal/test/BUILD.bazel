@@ -114,7 +114,6 @@
 #                     plane formats, a Clear's plane words, raw_emit's alpha targets, and the header pair's join
 #                     (nvk_switch_xr_planes.c) giving each code's half
 #   raw_clear_test    raw/runtime/raw_clear.h: the clear values the raw path hands NVK, m2v's for every format it renders
-#                     (raw/test/targetcheck.py: its target formats against NVK's)
 #   raw_sampler_test  raw/runtime/raw_sampler.h: the Metal samplers the raw path takes, as m2v samples them on NVK
 #                     (raw/test/samplercheck: their headers against NVK's)
 #   raw_archive_test  raw/runtime/raw_archive.h: the binary archive files the device opens where m2v's reader does not
@@ -2190,9 +2189,10 @@ host_test(
     srcs = [
         "raw_execution_plan_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_execution_plan.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_submit_queue.h",
     ],
     cxx_std = "c++17",
+    # m2v: the split of a command buffer into native and compatibility (m2v) ranges
+    tags = ["m2v"],
 )
 
 host_test(
@@ -2780,6 +2780,7 @@ py_test(
     name = "raw_tic_words_test",
     srcs = ["raw_tic_words_test.py"],
     data = [
+        "//kits/SwitchGM20B:caps/formats.tsv",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_stencil_bits.h",
