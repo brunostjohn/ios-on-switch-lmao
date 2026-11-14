@@ -1974,9 +1974,15 @@ public:
         return k_.shared();
     }
 
-    // The memory no resource holds goes back to the kernel: empty chunks of the pool, of images and of buffers, and the kept
-    // dedicated ones (the kernel keeps their pages until the work submitted before has completed)
-    void trim();
+    // The memory no resource holds goes back to the kernel: empty chunks of the pool, of images and of buffers, the kept
+    // dedicated ones (the kernel keeps their pages until the work submitted before has completed) and the kept surface
+    // imports, which it counts
+    struct Trimmed {
+        size_t keptImports = 0;
+        uint64_t keptImportBytes = 0;
+    };
+
+    Trimmed trim();
 
     // Whether the device's resource lock is free now (try, never waits: the stall line's)
     bool lockFree()
@@ -3199,7 +3205,7 @@ private:
     void release(Import *i);
     void keepImport(Import *i);
     void dropImport(Import *i);
-    void dropKeptImports();
+    Trimmed dropKeptImports();
     // lock_ held (raw_alias.cpp): a hold on a span's lease, made at its first alias; the last drop frees what the lease holds
     Lease *leaseSpan(Lease *&lease, const Span &span, Memory from);
     void dropLocked(Lease *lease);

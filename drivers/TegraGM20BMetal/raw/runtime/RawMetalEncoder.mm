@@ -382,8 +382,11 @@ void rmPoolEncoders()
     uint64_t hash = 0;
     const bool keyed = !rmCounterBuffersMade() && rmPassKey(d, key, hash);
     if (keyed)
-        if (const RMPassEntry *kept = rmPassFind(key, hash))
-            return openKeptPass(self, e, *kept);
+        if (const RMPassEntry *kept = rmPassFind(key, hash)) {
+            id<MTLRenderCommandEncoder> opened = openKeptPass(self, e, *kept);
+            rmPassDone();
+            return opened;
+        }
     MTLRenderPassDescriptor *pass = [d copy];
     [self retain:pass];
     e->_pass = pass;
