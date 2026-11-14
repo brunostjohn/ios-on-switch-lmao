@@ -4,19 +4,18 @@ import HWTestGPU
 import IOSurface
 import Metal
 
-/// A connection's SubmitJob beside its BoImport (drivers/TegraGM20B/TegraGM20BUserClientDispatch.cpp, KA-31): an
-/// import's wiring, zero-fill faults, page walk and clean run before the connection's lock and submit gate, so a
-/// command buffer committed while another thread makes textures over fresh IOSurfaces is scheduled without waiting for
-/// them (boot 21: 3.5 to 9 ms in waitUntilScheduled behind each import). One thread makes textures over new 720x1280
-/// surfaces back to back; this one commits fills of a private buffer meanwhile, timing each from commit to
-/// waitUntilScheduled, and the same with no imports first. A submission is beside the imports when its time overlaps
-/// one. An import's own wiring is timed on the test's own connection: a fresh surface's BoImport less a second BoImport
-/// of it, which adopts the first's wiring (TegraGM20BUserClientBo.cpp sharedWiringFind) and so skips the zero-fill,
-/// page walk, nvkm memory and clean (`wire_ms`; both imports' times are logged). Fails when imports add more than that
-/// to the submissions' p99. The fills are private because the raw runtime holds its device lock across a surface
-/// texture's import (raw_gpu.cpp createSurfaceTexture) and takes it again before a command buffer that wrote a
-/// CPU-cached buffer is scheduled (raw_alias.cpp captureCpuCompletion); a private fill's encode and submission never
-/// take it, so the two threads meet only in the kernel.
+/// A connection's SubmitJob beside its BoImport (drivers/TegraGM20B/TegraGM20BUserClientDispatch.cpp): an import's
+/// wiring, zero-fill faults, page walk and clean run before the connection's lock and submit gate, so a command buffer
+/// committed while another thread makes textures over fresh IOSurfaces is scheduled without waiting for them. One
+/// thread makes textures over new 720x1280 surfaces back to back; this one commits fills of a private buffer meanwhile,
+/// timing each from commit to waitUntilScheduled, and the same with no imports first. A submission is beside the
+/// imports when its time overlaps one. An import's own wiring is timed on the test's own connection: a fresh surface's
+/// BoImport less a second BoImport of it, which adopts the first's wiring (TegraGM20BUserClientBo.cpp sharedWiringFind)
+/// and so skips the zero-fill, page walk, nvkm memory and clean (`wire_ms`; both imports' times are logged). Fails when
+/// imports add more than that to the submissions' p99. The fills are private because the raw runtime holds its device
+/// lock across a surface texture's import (raw_gpu.cpp createSurfaceTexture) and takes it again before a command buffer
+/// that wrote a CPU-cached buffer is scheduled (raw_alias.cpp captureCpuCompletion); a private fill's encode and
+/// submission never take it, so the two threads meet only in the kernel.
 struct ImportBesideSubmitsTest: GPUPathTest {
     let id = "gpu.path.import_beside_submits"
     let name = "Command buffers are scheduled without waiting for another thread's IOSurface imports"

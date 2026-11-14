@@ -4,17 +4,18 @@ import HWTestGPU
 import IOSurface
 import Metal
 
-/// Two threads CPU-lock two IOSurfaces the GPU is still writing, at the same time: each lock waits for its own surface's
-/// writer and no longer, as on Apple's GPUs, so neither sleeps through the other surface's GPU work. One queue runs both
-/// writers in order, B's long render then A's, each about `targetMs` of full-surface draws (sized by a timed render of a
-/// third surface made the same way). One thread locks A; 2 ms later another locks B. B's writer ends where A's starts, so
-/// B's lock must return before A's by at least half of A's GPU time. Reported: each lock's wait, how long both waited at
-/// once (`overlap_ms`) and the pixel each lock read (the render's colour, or the lock did not wait for its writer).
-/// The kernel's system-wide CPU sync (gpu_sync.c tegra_gm20b_sync_for_cpu, whose global sync_lock KB-784 removed) takes
-/// over only for a surface whose writer slots overflowed, five channels with unfinished writes of it, which one process
-/// cannot make; the debug line "tegra-gm20b: unlocked waits: N CPU syncs beside another" counts those on a device.
-/// The surfaces: block-linear as the GPU's first write decides them (TegraGM20BTiled.cpp), or (`_pitch`) pitch, each
-/// first imported by a texture that only samples it.
+/// Two threads CPU-lock two IOSurfaces the GPU is still writing, at the same time: each lock waits for its own
+/// surface's writer and no longer, as on Apple's GPUs, so neither sleeps through the other surface's GPU work. One
+/// queue runs both writers in order, B's long render then A's, each about `targetMs` of full-surface draws (sized by a
+/// timed render of a third surface made the same way). One thread locks A; 2 ms later another locks B. B's writer ends
+/// where A's starts, so B's lock must return before A's by at least half of A's GPU time. Reported: each lock's wait,
+/// how long both waited at once (`overlap_ms`) and the pixel each lock read (the render's colour, or the lock did not
+/// wait for its writer). A lock waits on every live channel's work (gpu_sync.c tegra_gm20b_sync_for_cpu) only for a
+/// surface whose writer slots overflowed, five channels with unfinished writes of it, which one process cannot make;
+/// the debug line "tegra-gm20b: unlocked waits: N CPU syncs beside another" counts those syncs on a device. The
+/// surfaces: block-linear, as the GPU's first write decides a fresh one (TegraGM20BTiled.cpp), or (`_pitch`) pitch:
+/// written once under a CPU lock, so its seed has moved, then first imported by a texture that only samples it, which
+/// decides pitch for good.
 struct SurfaceLocksSideBySideTest: GPUPathTest {
     let id: String
     let name: String
@@ -198,6 +199,10 @@ struct SurfaceLocksSideBySideTest: GPUPathTest {
             .pixelFormat: 0x4247_5241,
         ]
         guard let surface = IOSurface(properties: properties) else { throw TestFailure("IOSurface not made") }
+        if pitch {
+            surface.lock(options: [], seed: nil)
+            surface.unlock(options: [], seed: nil)
+        }
         let sampler = pitch ? try texture(gpu, surface, [.shaderRead]) : nil
         return Target(
             surface: surface, texture: try texture(gpu, surface, [.renderTarget, .shaderRead]), sampler: sampler)
