@@ -1762,6 +1762,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuTimeline.cpp",
         "//drivers/TegraGM20B:SwitchGpuTimelineInternal.h",
         "//drivers/TegraGM20B:SwitchGpuTimeline.h",
+        "//drivers/TegraGM20B:SwitchGpuTimelineRefs.cpp",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
     ],

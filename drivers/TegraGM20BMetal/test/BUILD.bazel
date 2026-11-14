@@ -6162,6 +6162,7 @@ host_test(
         "raw_facade_harness.h",
         "raw_job_methods.h",
         "raw_facade_commit_test.cpp",
+        "raw_job_words.h",
         "raw_scale_frames.h",
         "timed_gpu.h",
         "raw_facade_standins.h",
