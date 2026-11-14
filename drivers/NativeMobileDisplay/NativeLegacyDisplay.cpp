@@ -3144,6 +3144,7 @@ private:
     }
 
 #include "SwitchScanoutRetirement.h"
+#include "SwitchScanoutHalt.h"
 
     // Under the gate, before the controller is unmapped: back to hekate's pitch window over a black frame, or, from the console
     // tape, over the console's screen (it redraws it in the boot framebuffer first; the tape may be read once more, never written).
@@ -3284,6 +3285,7 @@ public:
         planesQuiesce();  // r18-planes
         resumeLit = !scanoutStopped;
         setScanout(false);
+        waitScanoutHalted();
         dc[kDcStateAccess] = dc[kDcStateAccess] & ~(kReadMuxActive | kWriteMuxActive);
         dc[kDcWindowHeader] = kWindowASelect;
         for (size_t i = 0; i < sizeof(kWindowAState) / sizeof(kWindowAState[0]); ++i)
@@ -5535,7 +5537,6 @@ extern "C" void tegra_display_suspend(void)
         return true;
     });
     switch_sleep_mark(SWITCH_STEP_DISPLAY_QUIESCED);
-    IOSleep(20);  // DC A stops at the end of the frame it was scanning
     tegra_display_power_down();
 }
 

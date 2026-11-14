@@ -344,6 +344,30 @@ TEST(FrameEndSource, TheStartCheckWritesNoInterruptEnable)
     EXPECT_FALSE(panel.Has("gDc[DC_CMD_INT_ENABLE] ="));
 }
 
+// SC7 powers DC A down once its STOP is in force: the active DISPLAY_COMMAND reads mode 0 (TRM 24.6.16), waited for on
+// the last frame's FRAME_END and bounded by two frame periods with one error line, in place of a 20 ms sleep. The DSI
+// pads are calibrated once and waited for by MIPI_CAL's status (TegraMipiCal.h), in place of two back-to-back starts and a
+// 10 ms sleep.
+TEST(Sc7Source, StatusReadsNotFixedSleeps)
+{
+    EXPECT_FALSE(Block(display(), "extern \"C\" void tegra_display_suspend(void)").Has("IOSleep"));
+    EXPECT_TRUE(method("void quiesceForSuspend()").Before("setScanout(false);", "waitScanoutHalted();"));
+    EXPECT_TRUE(method("void quiesceForSuspend()").Before("waitScanoutHalted();", "vblankSource->disable();"));
+    const std::string halt = SourceText("../SwitchScanoutHalt.h");
+    const CodeText halted = Block(halt, "void waitScanoutHalted()");
+    EXPECT_TRUE(Block(halt, "bool scanoutHalted()").Has("kReadMuxActive"));
+    EXPECT_TRUE(halted.Has("assert_wait_deadline(reinterpret_cast<event_t>(&scanoutStopFrames)"));
+    EXPECT_TRUE(halted.Has("2 * period"));
+    EXPECT_TRUE(halted.Has("IOLog("));
+    EXPECT_FALSE(halted.Has("panic("));
+    const std::string power = SourceText("../TegraDisplayPower.cpp");
+    const CodeText up = Block(power, "extern \"C\" void tegra_display_power_up(void)");
+    EXPECT_FALSE(up.Has("for (unsigned pass"));
+    EXPECT_EQ(CodeText(power).Count("0x2A000001"), 0u);
+    EXPECT_TRUE(up.Before("write(gMipiCal, kMipiDsiCal);", "tegra_mipi_cal::calibrate(gMipiCal"));
+    EXPECT_TRUE(up.Before("tegra_mipi_cal::calibrate(gMipiCal", "write(gDc, kDcTimings);"));
+}
+
 TEST(BlankSource, ColourBlankEndsAtTheNextLatch)
 {
     EXPECT_TRUE(code().Has("rotated && rotationLatched && doubleBuffer && ring.pending == kNoBuffer &&"));
