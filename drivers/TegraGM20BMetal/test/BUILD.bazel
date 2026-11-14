@@ -2993,6 +2993,16 @@ host_test(
 )
 
 host_test(
+    name = "compiler_refusals_test",
+    srcs = [
+        "compiler_refusals_test.cpp",
+        "//drivers/TegraGM20BMetal:compiler/compiler_refusals.h",
+    ],
+    cxx_std = "c++17",
+    data = ["//drivers/TegraGM20BMetal:compiler/compiler_service.mm"],
+)
+
+host_test(
     name = "compiler_restart_test",
     srcs = [
         "compiler_restart_test.cpp",

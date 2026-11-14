@@ -29,6 +29,7 @@
 #include "compiler_engine.h"
 #include "compiler_log.h"
 #include "compiler_pool.h"
+#include "compiler_refusals.h"
 #include "compiler_restart.h"
 #include "compiler_sandbox.h"
 #include "compiler_store.h"
@@ -124,6 +125,7 @@ private:
     Engine engine_;
     Store store_;
     RequestLog log_;
+    std::unique_ptr<ConfirmedRefusals> refusals_;  // this build's refusals (compiler_refusals.h), made at open
     SystemLibraries system_;
     std::unique_ptr<Pool> pool_;
     size_t bufferBytes_ = 1u << 20;
@@ -217,8 +219,10 @@ int32_t Service::run(Work &work)
     int32_t result = engine_.compile(p, entry, why);
     if (!entry.empty() && !publish(&p.name, p.key, entry, result == TegraGM20BCompileMade, why))
         result = TegraGM20BCompileFailed;
-    if (result == TegraGM20BCompileMade && !asked.request.empty())
+    if ((result == TegraGM20BCompileMade || result == TegraGM20BCompileRefused) && !asked.request.empty())
         log_.add(p.name, asked.request);
+    if (result == TegraGM20BCompileRefused)
+        refusals_->confirm(p.name);
     if (result == TegraGM20BCompileFailed || result == TegraGM20BCompileUnavailable)
         os_log_error(logger(), "SwitchShaderCompiler: pid %d's state not made: %{public}s | %{public}.300s", asked.pid,
                      why.c_str(), p.key.key.c_str());
@@ -375,12 +379,17 @@ void Service::open(uint64_t stack)
 {
     root_ = geteuid() ? kMobileRoot : kSystemRoot;
     std::string why;
-    if (!connect(why) || !engine_.open(stack, EngineInputs::installed(), why) ||
-        !store_.open(root_, stack, engine_.rules(), why) || !registerStore(stack, why)) {
-        os_log_error(logger(), "SwitchShaderCompiler: not serving: %{public}s", why.c_str());
-        decline();
-        return false;
-    }
+    StartFailure failure = StartFailure::Transient;
+    if (!connect(why, failure))
+        notServing(why, failure);
+    if (!engine_.open(stack, EngineInputs::installed(), why))
+        notServing(why, StartFailure::Structural);
+    if (!store_.open(root_, stack, engine_.rules(), why))
+        notServing(why, StartFailure::Transient);
+    if (!registerStore(stack, why, &failure))
+        notServing(why, failure);
+    refusals_ = std::make_unique<ConfirmedRefusals>(store_.path().substr(0, store_.path().rfind('/')),
+                                                    imageBuild(reinterpret_cast<const void *>(&logger)));
     if (!log_.open(root_ + "/requests"))
         os_log_error(logger(), "SwitchShaderCompiler: no request log in %{public}s: an update compiles on demand",
                      root_.c_str());
@@ -396,10 +405,11 @@ void Service::open(uint64_t stack)
 // The requests an earlier store was made from, made again as background work nobody waits for, one at a time: the pool
 // runs one background compile at once, and a queued request would hold its libraries' bytes until it ran. A store
 // already holding one gets the record's program slots it lacks (a store written before they were kept, or one that
-// dropped them)
+// dropped them). A stored refusal this compiler build has not confirmed is made again too (compiler_refusals.h).
 void Service::warm(uint64_t stack)
 {
-    uint32_t again = 0, dropped = 0;
+    uint32_t again = 0, dropped = 0, refusals = 0;
+    ConfirmedRefusals &confirmed = *refusals_;
     dispatch_semaphore_t ran = dispatch_semaphore_create(0);
     log_.replay([&](const std::string &request, raw::Digest &name) {
         Prepared prepared;
@@ -409,10 +419,14 @@ void Service::warm(uint64_t stack)
             return false;
         }
         name = prepared.name;
+        const raw::CacheKey key = prepared.key;
         std::string bytes;
-        const int32_t stored = store_.find(name, bytes) ? storedResult(bytes, prepared.key) : -1;
-        if (stored < 0) {
-            again++;
+        const int32_t stored = store_.find(name, bytes) ? storedResult(bytes, key) : -1;
+        const bool unconfirmed = stored == TegraGM20BCompileRefused && !confirmed.confirmed(name);
+        if (stored < 0 || unconfirmed) {
+            if (unconfirmed)
+                store_.retire(name);
+            (unconfirmed ? refusals : again)++;
             if (submit(std::move(prepared), std::string(), {0, 0, Band::Background, false}, 0, ran))
                 dispatch_semaphore_wait(ran, DISPATCH_TIME_FOREVER);
         } else if (stored == TegraGM20BCompileMade && !publish(nullptr, prepared.key, bytes, true, why)) {
@@ -421,11 +435,11 @@ void Service::warm(uint64_t stack)
         }
         return true;
     });
-    if (again || dropped)
+    if (again || dropped || refusals)
         os_log(logger(),
                "SwitchShaderCompiler: %u states an earlier build made are made again in the background, %u "
-               "requests dropped",
-               again, dropped);
+               "refusals this build had not confirmed, %u requests dropped",
+               again, refusals, dropped);
 }
 
 void Service::serve()
