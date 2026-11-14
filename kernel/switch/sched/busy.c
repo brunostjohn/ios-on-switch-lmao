@@ -100,7 +100,6 @@ void switch_sched_busy_exec(thread_t thread)
         simple_lock(&busy_lock, LCK_GRP_NULL);
         os_atomic_store(&s->tid, 0, release);
         s->state = (struct switch_busy){0};
-        s->head = s->tail = s->dropped = 0;
         s->pid = task_pid(get_threadtask(thread));
         os_atomic_store(&s->tid, thread->thread_id, release);
         simple_unlock(&busy_lock);

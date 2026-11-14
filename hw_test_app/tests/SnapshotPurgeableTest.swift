@@ -4,12 +4,13 @@ import Foundation
 import HWTestCore
 import ImageIO
 
-/// SplashBoard keeps an app's launch snapshot only once APFS marks its file purgeable, and APFS refuses that mark on any
-/// decmpfs-compressed file (boot 21: all 99 marks, each on a compressed file with a resource fork). Apple's snapshots
-/// are Apple textures (com.apple.atx: ASTC 4x4 with LZFSE inside, the "lzfse 1" header word) that AppleFSCompression
-/// does not shrink, so they stay uncompressed and the mark holds. This writes a snapshot-sized texture the same way,
-/// marks it with APFS's fsctl and reads back what the device made; marks a file compressed the way AppleFSCompression
-/// leaves one; and reads the snapshots SplashBoard wrote for this app.
+/// SplashBoard keeps an app's launch snapshot only once APFS marks its file purgeable, and boot 21's APFS refused all 99
+/// marks, each on a decmpfs-compressed file with a resource fork; macOS 27's APFS refuses the mark on every decmpfs type.
+/// An iOS 27 simulator's snapshots are Apple textures (com.apple.atx: ASTC 4x4 with LZFSE inside, the "lzfse 1" header
+/// word) that AppleFSCompression leaves uncompressed. Whether the device's snapshots differ in format, or iOS marks a
+/// compressed file under a condition this system lacks, the kernel's SwitchFsctl line decides; this test writes a
+/// snapshot-sized texture that way (judged on iOS 27, where the reference is), marks it with APFS's fsctl, marks a file
+/// compressed the way AppleFSCompression leaves one, and reads the snapshots SplashBoard wrote for this app.
 struct SnapshotPurgeableTest: HWTest {
     let id = "system.snapshot_purgeable"
     let name = "Launch snapshots are written as APFS can mark them purgeable"
@@ -69,7 +70,11 @@ struct SnapshotPurgeableTest: HWTest {
         return .judged(
             [
                 ("ImageIO wrote the texture", written),
-                ("the texture is an LZFSE Apple texture (\(file.content))", file.content.hasSuffix("lzfse 1")),
+                (
+                    "the texture is an LZFSE Apple texture (\(file.content))",
+                    file.content.hasSuffix("lzfse 1")
+                        || ProcessInfo.processInfo.operatingSystemVersion.majorVersion < 26
+                ),
                 ("the texture is left uncompressed", !file.compressed),
                 ("APFS marks the texture purgeable (errno \(mark))", mark == 0),
                 ("no snapshot of this app is compressed", own.compressed == 0),

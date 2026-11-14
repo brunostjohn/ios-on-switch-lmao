@@ -147,6 +147,18 @@ TEST(XnuSchedBusy, TheLineNamesKindsLargestFirstAndTheLongestWaits)
     EXPECT_THAT(line, HasSubstr("25 us mach_msg receive, user pc dsc 0x1a2b lr main+0x40, kernel 0xfff, event 0x77;"));
 }
 
+TEST(XnuSchedBusy, AHintStallHasNoNameForGivesItsNumber)
+{
+    switch_busy_episode e = {};
+    e.waits = 1;
+    e.hint_ticks[0x1c] = 9;
+    e.hint_waits[0x1c] = 1;
+    e.longest[0] = {.ticks = 9, .hint = 0x1c};
+    const std::string line = Line(e);
+    EXPECT_THAT(line, HasSubstr("(wait kind 0x1c 9 us/1)"));
+    EXPECT_THAT(line, HasSubstr(" 9 us wait kind 0x1c, user pc"));
+}
+
 TEST(XnuSchedBusy, TheLineStaysInsideItsBuffer)
 {
     switch_busy_episode e = {};

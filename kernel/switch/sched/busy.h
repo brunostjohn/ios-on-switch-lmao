@@ -148,6 +148,16 @@ static inline void switch_busy_where(char *out, size_t size, uint8_t where, uint
     }
 }
 
+/* block_hint.h's name for a hint, or its number past the ones stall.h names (the page waits among them). */
+static inline void switch_busy_kind(char *out, size_t size, unsigned int hint)
+{
+    if (hint < SWITCH_STALL_WAIT_NAMES) {
+        snprintf(out, size, "%s", switch_stall_wait_name(hint));
+    } else {
+        snprintf(out, size, "wait kind 0x%x", hint);
+    }
+}
+
 /*
  * A finished stretch, after the caller's head (thread and length): on a core, blocked by kind (largest first, at most
  * `kinds` of them), waiting for a core, then the longest waits. Times in the timebase numer/denom. Returns the length
@@ -157,6 +167,7 @@ static inline size_t switch_busy_format(char *out, size_t size, const struct swi
                                         uint32_t denom, unsigned int kinds)
 {
     bool used[SWITCH_BUSY_HINTS] = {false};
+    char kind[40];
     size_t at = 0;
 
     if (size == 0) {
@@ -180,10 +191,11 @@ static inline size_t switch_busy_format(char *out, size_t size, const struct swi
             break;
         }
         used[best] = true;
-        at = switch_busy_put(
-            size, at,
-            snprintf(out + at, size - at, "%s%s %llu us/%u", k ? ", " : "", switch_stall_wait_name(best),
-                     (unsigned long long)switch_busy_us(e->hint_ticks[best], numer, denom), e->hint_waits[best]));
+        switch_busy_kind(kind, sizeof(kind), best);
+        at = switch_busy_put(size, at,
+                             snprintf(out + at, size - at, "%s%s %llu us/%u", k ? ", " : "", kind,
+                                      (unsigned long long)switch_busy_us(e->hint_ticks[best], numer, denom),
+                                      e->hint_waits[best]));
     }
     at = switch_busy_put(size, at,
                          snprintf(out + at, size - at, "), waiting for a core %llu us, %u preemptions; longest waits:",
@@ -194,11 +206,12 @@ static inline size_t switch_busy_format(char *out, size_t size, const struct swi
 
         switch_busy_where(pc, sizeof(pc), w->pc_where, w->pc);
         switch_busy_where(lr, sizeof(lr), w->lr_where, w->lr);
-        at = switch_busy_put(
-            size, at,
-            snprintf(out + at, size - at, " %llu us %s, user pc %s lr %s, kernel 0x%llx, event 0x%llx;",
-                     (unsigned long long)switch_busy_us(w->ticks, numer, denom), switch_stall_wait_name(w->hint), pc,
-                     lr, (unsigned long long)w->kernel, (unsigned long long)w->event));
+        switch_busy_kind(kind, sizeof(kind), w->hint);
+        at =
+            switch_busy_put(size, at,
+                            snprintf(out + at, size - at, " %llu us %s, user pc %s lr %s, kernel 0x%llx, event 0x%llx;",
+                                     (unsigned long long)switch_busy_us(w->ticks, numer, denom), kind, pc, lr,
+                                     (unsigned long long)w->kernel, (unsigned long long)w->event));
     }
     return at;
 }

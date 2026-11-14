@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * A filesystem fsctl that fails (vfs/fsctl_diag.c, debug kernels): one "SwitchFsctl:" line naming the caller, the command
- * and its first argument words, and the file as the filesystem holds it (size, BSD flags, decmpfs compression and
- * resource fork) and as a reader sees its first bytes. APFS's purgeable mark refuses a compressed file, and SplashBoard
- * drops every app snapshot whose mark fails, so the line says what the snapshot writer handed APFS.
+ * and its six argument words, and the file as the filesystem holds it (size, BSD flags, decmpfs compression and
+ * resource fork) and as a reader sees its first bytes. SplashBoard drops every app snapshot whose purgeable mark fails,
+ * and APFS refused each of boot 21's marks on a compressed file: the line says which file SplashBoard compressed (an
+ * Apple texture without LZFSE inside, or another format) and what it asked APFS for.
  *
  * The content description is plain C, so kernel/tests runs it on the host.
  */

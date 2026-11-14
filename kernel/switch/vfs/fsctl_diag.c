@@ -43,7 +43,7 @@ void switch_fsctl_failed(vnode_t vp, unsigned long cmd, const void *data, int er
     char *path = NULL;
     const char *tail = "?";
     uint8_t head[0x48] = {0};
-    uint64_t words[3] = {0};
+    uint64_t words[6] = {0};
     size_t xattr_size = 0;
     struct vnode_attr va;
     int len = MAXPATHLEN, resid = 0;
@@ -93,10 +93,12 @@ void switch_fsctl_failed(vnode_t vp, unsigned long cmd, const void *data, int er
         strlcpy(content, vnode_isdir(vp) ? "a directory" : "unread", sizeof(content));
     }
     os_log(OS_LOG_DEFAULT,
-           "SwitchFsctl: %s[%d] fsctl 0x%lx ('J' %lu) refused %d on ...%s: words 0x%llx 0x%llx 0x%llx; %lld bytes, "
+           "SwitchFsctl: %s[%d] fsctl 0x%lx ('J' %lu) refused %d on ...%s: words 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx "
+           "0x%llx; "
+           "%lld bytes, "
            "st_flags 0x%x, %s, %s; content %s",
-           process, proc_selfpid(), cmd, cmd & 0xff, error, tail, words[0], words[1], words[2],
-           (long long)va.va_data_size, va.va_flags, compression, fork, content);
+           process, proc_selfpid(), cmd, cmd & 0xff, error, tail, words[0], words[1], words[2], words[3], words[4],
+           words[5], (long long)va.va_data_size, va.va_flags, compression, fork, content);
     if (path != NULL) {
         kfree_data(path, MAXPATHLEN);
     }
