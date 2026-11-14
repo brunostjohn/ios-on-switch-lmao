@@ -89,38 +89,63 @@ host_shims(
     stubs = "switch_nvjpg_gate_stubs.h",
 )
 
+# TegraNVJPG.cpp's model of the engine (switch_nvjpg_engine_model.h) and every header it reaches
+ENGINE_MODEL = [
+    "switch_nvjpg_engine_model.h",
+    "//drivers/TegraHost1x:TegraHost1x.h",
+    "//drivers/TegraNVJPG:TegraNVJPG.h",
+    "//drivers/TegraNVJPG:TegraNVJPGJpeg.h",
+    "//drivers/TegraNVJPG:TegraNVJPGRequest.h",
+    "//drivers/TegraNVJPG:TegraNVJPGStats.h",
+    "//drivers/TegraNVJPG:nvidia/cle7d0.h",
+    "//drivers/TegraNVJPG:nvidia/nvjpg_drv.h",
+    "//drivers/TegraSMMU:TegraSMMU.h",
+    "//drivers/TegraSMMU:TegraSMMUDomain.h",
+    "//kits/SwitchCAR:SwitchCAR.h",
+    "//kits/SwitchCAR:SwitchEngineClock.h",
+    "//kits/SwitchCAR:SwitchEngineClockPlan.h",
+    "//kits/SwitchCAR:SwitchPMC.h",
+    "//kits/SwitchDMA:SwitchDMABuffer.h",
+    "//kits/SwitchDMA:SwitchDcache.h",
+    "//kits/SwitchDMA:SwitchHwPage.h",
+    "//kits/SwitchEngineGate:SwitchEngineGate.h",
+    "//kits/SwitchEngineGate:SwitchEngineGateKernel.h",
+    "//kits/SwitchEngineGate:SwitchEnginePower.h",
+    "//kits/SwitchFalcon:SwitchFalcon.h",
+    "//kits/SwitchMath:SwitchMath.h",
+    "//kits/SwitchMMIO:SwitchMMIO.h",
+    "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+    "//kits/SwitchTime:SwitchTime.h",
+]
+
 # TegraNVJPG.cpp against a model of the engine: a job after the idle power-off powers the partition on, boots and
 # proves the falcon and runs; a job past its bound is cancelled (channel torn down, engine reset and rebooted) and the
 # next job runs; an engine the reset does not bring back refuses the next job.
 host_test(
     name = "switch_nvjpg_gate_test",
-    srcs = [
-        "switch_nvjpg_engine_model.h",
-        "switch_nvjpg_gate_test.cpp",
-        "//drivers/TegraHost1x:TegraHost1x.h",
-        "//drivers/TegraNVJPG:TegraNVJPG.h",
-        "//drivers/TegraNVJPG:TegraNVJPGJpeg.h",
-        "//drivers/TegraNVJPG:TegraNVJPGRequest.h",
-        "//drivers/TegraNVJPG:nvidia/cle7d0.h",
-        "//drivers/TegraNVJPG:nvidia/nvjpg_drv.h",
-        "//drivers/TegraSMMU:TegraSMMU.h",
-        "//drivers/TegraSMMU:TegraSMMUDomain.h",
-        "//kits/SwitchCAR:SwitchCAR.h",
-        "//kits/SwitchCAR:SwitchEngineClock.h",
-        "//kits/SwitchCAR:SwitchEngineClockPlan.h",
-        "//kits/SwitchCAR:SwitchPMC.h",
-        "//kits/SwitchDMA:SwitchDMABuffer.h",
-        "//kits/SwitchDMA:SwitchDcache.h",
-        "//kits/SwitchDMA:SwitchHwPage.h",
-        "//kits/SwitchEngineGate:SwitchEngineGate.h",
-        "//kits/SwitchEngineGate:SwitchEngineGateKernel.h",
-        "//kits/SwitchEngineGate:SwitchEnginePower.h",
-        "//kits/SwitchFalcon:SwitchFalcon.h",
-        "//kits/SwitchMath:SwitchMath.h",
-        "//kits/SwitchMMIO:SwitchMMIO.h",
-        "//kits/SwitchMMIO:SwitchMMIOKernel.h",
-        "//kits/SwitchTime:SwitchTime.h",
-    ],
+    srcs = ["switch_nvjpg_gate_test.cpp"] + ENGINE_MODEL,
     additional_compiler_inputs = ["//drivers/TegraNVJPG:TegraNVJPG.cpp"],
+    deps = [":gate_kernel"],
+)
+
+# The same model with a debug kernel's counts on the periodic decode line: each job's engine wait run with gStateLock
+# free, and the longest a cancellation or an idle gate call waited to take gStateLock; the counts taken on another
+# thread while jobs run, under ThreadSanitizer too.
+host_test(
+    name = "switch_nvjpg_lock_counts_test",
+    srcs = ["switch_nvjpg_lock_counts_test.cpp"] + ENGINE_MODEL,
+    additional_compiler_inputs = ["//drivers/TegraNVJPG:TegraNVJPG.cpp"],
+    defines = ["DEVELOPMENT=1"],
+    deps = [":gate_kernel"],
+)
+
+host_test(
+    name = "switch_nvjpg_lock_counts_tsan_test",
+    srcs = ["switch_nvjpg_lock_counts_test.cpp"] + ENGINE_MODEL,
+    additional_compiler_inputs = ["//drivers/TegraNVJPG:TegraNVJPG.cpp"],
+    copts = ["-fsanitize=thread"],
+    defines = ["DEVELOPMENT=1"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
     deps = [":gate_kernel"],
 )

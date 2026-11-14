@@ -60,6 +60,7 @@
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "TegraNVJPG.h"
+#include "TegraNVJPGStats.h"
 #include "nvidia/cle7d0.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchCAR/SwitchEngineClock.h"
@@ -148,6 +149,10 @@ inline uint32_t jobBoundUs(uint64_t pixels)
 
 IOLock *gJobLock;    // one job at a time: map, run, unmap
 IOLock *gStateLock;  // power transitions against jobs
+#if TEGRA_NVJPG_STATS
+// Written by jobs and under gStateLock, taken by the decode line's caller holding neither (relaxed).
+uint64_t gWaitsUnlocked, gStateWaitMaxUs;
+#endif
 SwitchEngineGate<SwitchEngineGateKernel> gGate;
 uint32_t gSyncpt, gNext, gPicture;
 uint32_t gPowerOns;     // by the idle gate, since boot
@@ -169,6 +174,20 @@ const char *falconState()
     if (gUp && !gGate.powered())
         return "falcon powered off (idle)";
     return switch_falcon_state(gJpg, text, sizeof(text));
+}
+
+// A cancellation's or an idle gate call's gStateLock; debug kernels keep the longest wait for it.
+void lockState()
+{
+#if TEGRA_NVJPG_STATS
+    const uint64_t asked = switch_now_us();
+    IOLockLock(gStateLock);
+    const uint64_t waited = switch_now_us() - asked;
+    if (waited > __atomic_load_n(&gStateWaitMaxUs, __ATOMIC_RELAXED))
+        __atomic_store_n(&gStateWaitMaxUs, waited, __ATOMIC_RELAXED);
+#else
+    IOLockLock(gStateLock);
+#endif
 }
 
 // One physically contiguous buffer below 4 GiB, zeroed and clean in the caches.
@@ -378,7 +397,7 @@ int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
     const bool back = reset && bootFalcon() && !answer(gSyncpt, from, &stage);
     IOLockUnlock(power);
     const uint32_t next = tegra_host1x_syncpt_read(gSyncpt);
-    IOLockLock(gStateLock);
+    lockState();
     gNext = next;
     gWedged = !back;
     IOLockUnlock(gStateLock);
@@ -549,6 +568,14 @@ extern "C" void tegra_nvjpg_unlock(void)
     IOLockUnlock(gJobLock);
 }
 
+#if TEGRA_NVJPG_STATS
+void tegra_nvjpg_lock_counts(uint64_t *waitsUnlocked, uint64_t *stateWaitMaxUs)
+{
+    *waitsUnlocked = __atomic_exchange_n(&gWaitsUnlocked, 0, __ATOMIC_RELAXED);
+    *stateWaitMaxUs = __atomic_exchange_n(&gStateWaitMaxUs, 0, __ATOMIC_RELAXED);
+}
+#endif
+
 // Job lock held. The window's tables are fixed; pages past `count` are left (or made) unmapped, so an access beyond
 // the job's memory faults in the SMMU instead of reaching memory.
 extern "C" uint64_t tegra_nvjpg_window_map(uint32_t window, const uint64_t *pages, uint32_t count, bool writable)
@@ -638,6 +665,9 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
         if (follow)
             follow->queue(follow->context, gSyncpt, fence);
         ret = tegra_host1x_syncpt_wait(gSyncpt, fence, jobBoundUs(job->pixels));
+#if TEGRA_NVJPG_STATS
+        __atomic_fetch_add(&gWaitsUnlocked, 1, __ATOMIC_RELAXED);
+#endif
         if (ret == TEGRA_HOST1X_ETIMEDOUT)
             ret = cancelled(job, fence, switch_now_us() - start);
     }
@@ -659,7 +689,7 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
 namespace {
 int gateOn(void *)
 {
-    IOLockLock(gStateLock);
+    lockState();
     bool wasOn = false;
     bool answered = false;
     gLine[0] = 0;
@@ -691,7 +721,7 @@ int gateOn(void *)
 
 int gateOff(void *, bool)
 {
-    IOLockLock(gStateLock);
+    lockState();
     gSuspended = true;
     const bool off =
         switch_pmc_partition_is_on(kNvdecPartition) ? switch_engine_quiesce(kPower) : switch_engine_power_down(kPower);
