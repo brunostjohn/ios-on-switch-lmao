@@ -97,8 +97,10 @@ struct IndirectDispatchTest: NativeObjectTest {
         input.layouts[1].stride = 4
         input.layouts[1].stepFunction = .threadPositionInGridX
         d.stageInputDescriptor = input
-        let state = try device.makeComputePipelineState(descriptor: d, options: []).0
-        let writer = try device.makeComputePipelineState(function: w)
+        let make = { () throws -> (MTLComputePipelineState, MTLComputePipelineState) in
+            (try device.makeComputePipelineState(descriptor: d, options: []).0, try device.makeComputePipelineState(function: w))
+        }
+        let (state, writer) = try make()
         work.objects += [state, writer]
         let values = try gpu.buffer((0..<64).map { Float($0) * 2 + 1 })
         let region = try gpu.buffer([UInt32](repeating: 0, count: 6))
@@ -114,7 +116,7 @@ struct IndirectDispatchTest: NativeObjectTest {
             encoder.setComputePipelineState(state)
             encoder.setBuffer(out, offset: 0, index: 0)
             encoder.setBuffer(values, offset: 0, index: 1)
-            encoder.setStageInRegion(indirectBuffer: region, indirectBufferOffset: 0)
+            encoder.setStageInRegionWithIndirectBuffer(region, indirectBufferOffset: 0)
             encoder.dispatchThreadgroups(
                 MTLSize(width: 16, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: 1, height: 1, depth: 1))
             encoder.endEncoding()
