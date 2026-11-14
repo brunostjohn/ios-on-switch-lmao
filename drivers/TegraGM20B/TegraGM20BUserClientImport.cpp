@@ -225,8 +225,12 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	if (!covered)
 		tgm_coherency_cleaned(bo->coh);
 	lap(3);
+#if TGM_STATS
+	tgm_stats_unlocked(TGM_UNLOCKED_IMPORT, mark - start);
+#endif
 	const int readOnly = static_cast<int>(bo->readOnly);
 	const uint64_t first = bo->pas[0];
+	bo->ownerKind = SWITCH_GPU_OWNER_IMPORTED;
 	IOLockLock(lock_);
 	const IOReturn published = publishBo(bo, false);
 	const uint64_t handle = bo->handle;

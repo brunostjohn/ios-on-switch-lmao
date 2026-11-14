@@ -121,9 +121,9 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsCachedBosDo)
 TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 {
 	const CodeText alloc = Block(client(), "IOReturn AGXDeviceUserClient::boAlloc(");
-	EXPECT_TRUE(alloc.Has("if (!ret && !bo->pool_va && !compressible && !system && "
-			      "!(in->flags & TegraGM20BBoContiguous)) { spare = taken ? taken : "
-			      "spareTake(in->bytes); taken = nullptr; }"));
+	EXPECT_TRUE(
+		alloc.Has("if (!ret && !bo->pool_va && !compressible && !system && "
+			  "!(in->flags & TegraGM20BBoContiguous)) spare = spareTake(in->bytes);"));
 	EXPECT_TRUE(alloc.Has("(in->flags & TegraGM20BBoContiguous) || system ? kClasses : "
 			      "classUp(in->bytes);"));
 	EXPECT_TRUE(alloc.Has("cleanZeros(va, backing);"));
@@ -164,7 +164,7 @@ TEST(GM20BImportCostSource, ImportCostsAreDebugOnly)
 	EXPECT_TRUE(Block(Configured(SourceText("../TegraGM20BGpu.h"), "TGM_STATS", false),
 			  "static inline uint64_t tgm_stats_cpu_ns(void)")
 			    .Has("return 0;"));
-	const CodeText import = Block(client(), "IOReturn AGXDeviceUserClient::boImportPrepare(");
+	const CodeText import = Block(client(), "IOReturn AGXDeviceUserClient::boImport(");
 	EXPECT_TRUE(import.Has("#if TGM_STATS describeRegion(task_, in->address, region, "
 			       "sizeof(region)); #endif"));
 	EXPECT_TRUE(import.Has("tgm_mem_new_waited(vm_, bo->pas, bo->npages, &bo->mem, "
@@ -869,7 +869,7 @@ TEST(GM20BFencesSource, ExecQueuesItsWritersAcquiresBeforeItSubmits)
 // IOSurface over its creator's memory, which IOSurface's own field names at the import, as one that ends External.
 TEST(GM20BVisibilitySource, AJobWritingCreatorMemoryIsExternal)
 {
-	const CodeText imported = Block(client(), "IOReturn AGXDeviceUserClient::boImportPrepare(");
+	const CodeText imported = Block(client(), "IOReturn AGXDeviceUserClient::boImport(");
 	EXPECT_TRUE(imported.Before(
 		"bo->surface = switch_gpu_surface_hold(",
 		"bo->unlockedReads = switch_gpu_surface_client_memory(bo->surface) != 0;"));
@@ -1343,7 +1343,7 @@ TEST(GM20BRelayoutSource, KernelCopiesOrderOnTheGpu)
 
 TEST(GM20BSurfaceIdentitySource, ImportedSurfaceIdentityOutlivesLegacyCoherency)
 {
-	const CodeText imported = Block(client(), "IOReturn AGXDeviceUserClient::boImportPrepare(");
+	const CodeText imported = Block(client(), "IOReturn AGXDeviceUserClient::boImport(");
 	EXPECT_TRUE(
 		imported.Before("bo->surface = switch_gpu_surface_hold(", "tgm_coherency_add("));
 	const CodeText released = Block(client(), "void AGXDeviceUserClient::releaseBo(Bo *bo)");

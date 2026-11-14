@@ -23,6 +23,8 @@
 #include "drivers/TegraGM20B/SwitchGpuBindings.h"
 #include "drivers/TegraGM20B/SwitchGpuBoIndex.h"
 #include "drivers/TegraGM20B/SwitchGpuBindingTable.h"
+#define SWITCH_GPU_OWNER_COUNTS 1  // the debug kernel's BO counts (SwitchGpuOwnerMemory.h)
+#include "drivers/TegraGM20B/SwitchGpuOwnerMemory.h"
 #include "drivers/TegraGM20B/TegraGM20BBindHistory.h"
 #include "gm20b_gpu_memory.h"
 
@@ -372,6 +374,7 @@ public:
 		uint32_t bindings = 0, flags = 0;
 		Bo **zombieLink = nullptr;
 		switch_gpu_backing *backing = nullptr;
+		SwitchGpuOwnerKind ownerKind = SWITCH_GPU_OWNER_IMPORTED;
 	};
 
 	struct RetiredBinding {
@@ -521,6 +524,7 @@ public:
 	uint32_t retiredCount_ = 0, retireRemaining_ = 0, retirementPending_ = 0,
 		 retirementStopped_ = 0;
 	uint64_t retirementEpoch_ = 0, retireScanEpoch_ = 0, pool_bytes_ = 0, control_bytes_ = 0;
+	SwitchGpuOwnerMemory ownerMemory_ = {};
 	Binding binds_[256] = {};
 	uint32_t nbinds_ = 0;
 	thread_t hangHolder_ = nullptr;
