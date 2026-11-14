@@ -155,13 +155,19 @@ SplitState *Device::makeSplit(Pipeline &pl)
 
 Pipeline *RenderEncoder::splitTwin(Pipeline *pl, WrittenRegion::Analysis &analysis) const
 {
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (cb_->forceWholePrograms_)
-        return pl;
-#endif
     const SplitSource *source = __atomic_load_n(&pl->splitSource, __ATOMIC_ACQUIRE);
     if (!source)
         return pl;
+    [[maybe_unused]] const auto whole = [&](SplitWhole why) {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        cb_->counts_.splitWhole[size_t(why)]++;
+#endif
+        return pl;
+    };
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (cb_->forceWholePrograms_)
+        return whole(SplitWhole::Forced);
+#endif
     // priced by its pixel limit, as the pass's plan admitted its state (RawMetalSplitPlan.h): no vertex is read
     const PixelBox box = analysis.geometry().limit;
     bool forced = false;
@@ -169,20 +175,28 @@ Pipeline *RenderEncoder::splitTwin(Pipeline *pl, WrittenRegion::Analysis &analys
     forced = cb_->splitForced_;
 #endif
     if (box.empty() || (!forced && !splitPlan_.accepts(pl, source->rec, uint64_t(box.x1 - box.x0) * (box.y1 - box.y0))))
-        return pl;
+        return whole(SplitWhole::Box);
     for (uint8_t k = 0; k < source->rec.uboCount; k++) {
         const int entry = pixelUboEntry(*pl, source->rec.uboCbuf[k]);
         if (entry < 0)
-            return pl;
+            return whole(SplitWhole::Unbound);
         const PackEntry &e = pl->rec->entry[entry];
         const Bound &b = bufs_[e.stage][e.slot];
-        if (!b.va || (b.buffer && cb_->buffersWritten_))
-            return pl;
+        if (!b.va)
+            return whole(SplitWhole::Unbound);
+        // the prologue's constant buffer of it (launchSplit): its first kMaxCbufBytes at most
+        if (b.buffer && cb_->bufferWrites_.meets(b.va, std::min<uint64_t>(b.size ? b.size : kMaxCbufBytes, kMaxCbufBytes)))
+            return whole(SplitWhole::Written);
     }
     SplitState *s = __atomic_load_n(&pl->split, __ATOMIC_ACQUIRE);
     if (!s)
         s = dev_->makeSplit(*pl);
-    return s ? &s->pipeline : pl;
+    if (!s)
+        return whole(SplitWhole::Unmade);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    cb_->counts_.splitTwins++;
+#endif
+    return &s->pipeline;
 }
 
 void RenderEncoder::launchSplit(Push &p, const Pipeline &twin, const uint32_t *set)

@@ -237,6 +237,12 @@ public:
     // bound resource are not listed
     bool record(const Cmd &c, const uint64_t *extra, size_t extraWords = 0, bool resolvesUses = false);
 
+    // A binding or raster command (record's setters, one that takes no operation), as record takes it
+    void bind(const Cmd &c, const std::vector<uint64_t> &extra)
+    {
+        setter(c, extra);
+    }
+
     // `build` fills the list it is handed with the dispatch's uses, where the kernel and resource revision are new
     template <typename Build> void setKernelUses(size_t at, const void *nativeKernel, Build build)
     {
@@ -426,6 +432,12 @@ public:
     uint64_t eligibilityGeneration() const
     {
         return eligibilityGeneration_;
+    }
+
+    // moves where the encoder's bindings start over: a new encoder, an opaque call
+    uint64_t stateEpoch() const
+    {
+        return stateEpoch_;
     }
 
     const std::vector<void *> &renderPipelines(size_t from, size_t to) const

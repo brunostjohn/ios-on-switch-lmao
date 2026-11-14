@@ -558,7 +558,7 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
 {
     const auto *groups = part.groups.data();
     const auto *threads = part.local.data();
-    cb_.buffersWritten_ = true;
+    cb_.bufferWrites_.anything();
     if (!state_) {
         *why = "a dispatch without a kernel";
         return false;

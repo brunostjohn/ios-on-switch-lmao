@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalInternal.h"
+#include "raw_draw_check.h"
 
 @implementation RMRenderEncoder (Bindings)
 
@@ -26,7 +27,7 @@ static bool bytesRoom(RMBytes &s, uint32_t padded, uint32_t &chunk, uint32_t &of
     return s.chunks.own(s.at).va != 0;
 }
 
-void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger length, bool shadow)
+void recordBytes(__unsafe_unretained RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger length, bool shadow)
 {
     constexpr NSUInteger kShadowed = 1024;  // a Core Animation draw's vertices and its transform
     if (shadow && length <= kShadowed) {
@@ -52,10 +53,11 @@ void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger lengt
     m.a = offset;
     m.b = uint32_t(length);
     m.c = chunk;
-    [cb record:m];
+    [cb recordBinding:m];
 }
 
-static void bindBytes(RMRenderEncoder *e, int stage, const void *bytes, NSUInteger length, NSUInteger index)
+static void bindBytes(__unsafe_unretained RMRenderEncoder *e, int stage, const void *bytes, NSUInteger length,
+                      NSUInteger index)
 {
     SWITCH_API(ApiBind);
     if (stage >= 1 && stage <= 2 && index < 31) {
@@ -83,9 +85,10 @@ static void bindBytes(RMRenderEncoder *e, int stage, const void *bytes, NSUInteg
         hit(_cb, PredCallBufForeign, uint64_t(stage) << 8 | index, b.length);
     }
     if (stage >= 1 && stage <= 2 && index < 31) {
-        RMBuffer *x = [(id)b isKindOfClass:[RMBuffer class]] ? (RMBuffer *)b : nil;
+        __unsafe_unretained RMBuffer *x = [(id)b isKindOfClass:[RMBuffer class]] ? (RMBuffer *)b : nil;
         _buf[stage][index] = x;
         _bufVa[stage][index] = x ? x->_raw.va + offset : 0;
+        _eligibility++;
     }
     setBinding(_cb, OpBuffer, stage, index, b, offset);
 }
@@ -103,8 +106,10 @@ static void bindBytes(RMRenderEncoder *e, int stage, const void *bytes, NSUInteg
 - (void)bufferOffset:(int)stage offset:(NSUInteger)offset index:(NSUInteger)index
 {
     SWITCH_API(ApiBind);
-    if (index < 31 && _buf[stage][index])
+    if (index < 31 && _buf[stage][index]) {
         _bufVa[stage][index] = _buf[stage][index]->_raw.va + offset;
+        _eligibility++;
+    }
     setBinding(_cb, OpBufferOffset, stage, index, nil, offset);
 }
 
@@ -132,10 +137,16 @@ static void bindBytes(RMRenderEncoder *e, int stage, const void *bytes, NSUInteg
         [self buffer:2 object:b[k] offset:o[k] index:r.location + k];
 }
 
-void rmBindTexture(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLTexture> t, NSUInteger index)
+static raw::CheckedTexture checkedTexture(__unsafe_unretained RMTexture *t)
+{
+    return t ? raw::CheckedTexture{t->_raw.addressMap != 0, t->_raw.xrPlanes} : raw::CheckedTexture{};
+}
+
+void rmBindTexture(__unsafe_unretained RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLTexture> t,
+                   NSUInteger index)
 {
     SWITCH_API(ApiBind);
-    RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
+    __unsafe_unretained RMTexture *x = [(id)t isKindOfClass:[RMTexture class]] ? (RMTexture *)t : nil;
     // an extended-range texture is sampled through its stand-in (raw_xr.h): one without (no ShaderRead usage) is m2v's to sample
     const bool unsampled = x && !x->_raw.standIn && raw::xrForm(x->_raw.format) != raw::XrForm::None;
     if (t && (!x || !x->_rawOk || !x->_raw.tic || unsampled || x->_raw.rotation)) {
@@ -149,8 +160,13 @@ void rmBindTexture(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLText
             hit(e->_cb, RMPred(x->_pred ?: (x->_rawOk && !x->_raw.rotation ? PredEncNoTic : PredTexShape)),
                 x->_descriptor.pixelFormat, x->_kind);
     }
-    if ((stage == 1 || stage == 2) && index < raw::kStageTextures)
+    if ((stage == 1 || stage == 2) && index < raw::kStageTextures) {
+        const raw::Pipeline *pl = e->_pipe ? e->_pipe->_raw : nullptr;
+        if (raw::textureBindChecks(checkedTexture(e->_tex[stage - 1][index]), checkedTexture(x), e->_cubicMask,
+                                   pl && pl->writtenSlots))
+            e->_eligibility++;
         e->_tex[stage - 1][index] = x;
+    }
     if (x && x->_raw.sampled) {
         rmPipelineVeto(e->_cb, VetoShadows);
         e->_cb->_sampledShadows = true;
@@ -184,26 +200,40 @@ void rmBindTexture(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLText
         rmBindTexture(self, 1, t[k], r.location + k);
 }
 
-void rmBindSampler(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLSamplerState> s, NSUInteger index)
+void rmBindSampler(__unsafe_unretained RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLSamplerState> s,
+                   NSUInteger index)
 {
     SWITCH_API(ApiBind);
-    if (s && ![(id)s isKindOfClass:[RMSampler class]]) {
+    __unsafe_unretained RMSampler *r = [(id)s isKindOfClass:[RMSampler class]] ? (RMSampler *)s : nil;
+    const uint16_t bit = uint16_t(index < 16 ? 1u << index : 0);
+    if (stage == 2 && bit) {
+        // Core Animation binds the same sampler with each texture: the plan holds it bound already, and the
+        // command buffer retained it
+        if (const uint64_t epoch = e->_cb->_plan.stateEpoch(); e->_sampEpoch != epoch) {
+            e->_sampEpoch = epoch;
+            e->_sampRecorded = 0;
+        }
+        if (r && e->_samp[index] == r && (e->_sampRecorded & bit))
+            return;
+    }
+    if (s && !r) {
         [e->_cb takeReason:WhyCall why:@"a sampler not made by this device"];
         hit(e->_cb, PredCallSamplerForeign, index);
     }
     // m2v filters through a cubic sampler in the shader, which only the fragment stage's records have variants of
     // (RawMetalCubic.mm)
-    if (stage == 1 && [(id)s isKindOfClass:[RMSampler class]] && ((RMSampler *)s)->_raw.desc.cubic) {
+    if (stage == 1 && r && r->_raw.desc.cubic) {
         [e->_cb takeReason:WhyCall why:@"a cubic vertex sampler"];
         hit(e->_cb, PredCallVertexSampler, index);
     }
-    if ([(id)s isKindOfClass:[RMSampler class]] && ((RMSampler *)s)->_raw.desc.border)
+    if (r && r->_raw.desc.border)
         e->_cb->_borderSamplers = true;
-    if (stage == 2 && index < 16) {
-        RMSampler *r = [(id)s isKindOfClass:[RMSampler class]] ? (RMSampler *)s : nil;
+    if (stage == 2 && bit) {
+        if (raw::samplerBindChecks(e->_cubicMask & bit, r && r->_raw.desc.cubic))
+            e->_eligibility++;
         e->_samp[index] = r;
-        e->_cubicMask =
-            uint16_t(r && r->_raw.desc.cubic ? e->_cubicMask | 1u << index : e->_cubicMask & ~(1u << index));
+        e->_cubicMask = uint16_t(r && r->_raw.desc.cubic ? e->_cubicMask | bit : e->_cubicMask & ~bit);
+        e->_sampRecorded = uint16_t(r ? e->_sampRecorded | bit : e->_sampRecorded & ~bit);
     }
     setBinding(e->_cb, OpSampler, stage, index, s, 0);
 }

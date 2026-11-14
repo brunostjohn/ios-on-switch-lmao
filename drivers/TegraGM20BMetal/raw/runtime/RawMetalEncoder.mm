@@ -103,7 +103,7 @@ static void endDropped(void *object)
 - (void)endEncoding
 {
     SWITCH_API(ApiEncoder);
-    if (_ended)
+    if (_ended || !_cb)
         return;
     _ended = true;
     if (!_counterPending.empty())

@@ -1269,3 +1269,33 @@ TEST(SemanticPlan, ASnapshotNotNextAfterTheAppliedOneComparesEverySlot)
     }
     EXPECT_EQ(masked.calls, every.calls);
 }
+
+// A draw whose caller resolves its state's uses after it (resolvesUses) leaves them to the caller only while the state
+// is not final: an indexed draw of a state resolved already names that state's uses and its index buffer
+TEST(SemanticPlan, AnIndexedDrawOfAFinalStateNamesItsIndexBufferThoughItsCallerResolves)
+{
+    RMCommandPlan plan;
+    plan.record(cmd(OpRender), {});
+    plan.record(binding(OpTexture, 2, 0, 43), {});
+    Cmd indexed = binding(OpDrawIndexed, 3, 0, 21);
+    indexed.a = 6;
+    indexed.b = 1;
+    ASSERT_TRUE(plan.record(indexed, {1, 0, 0}, true));
+    const uint32_t state = plan.draw(plan.size() - 1).state;
+    uint32_t builds = 0;
+    plan.resolveRenderUses(state, object(90), [&](std::vector<raw::ResourceUse> &out) {
+        ++builds;
+        out = {{object(43), uint8_t(raw::ResourceUse::Read | raw::ResourceUse::Sample)}};
+    });
+    ASSERT_TRUE(plan.renderStates[state].usesFinal);
+    ASSERT_TRUE(plan.record(indexed, {1, 0, 0}, true));
+    const size_t second = plan.size() - 1;
+    EXPECT_EQ(plan.draw(second).state, state);
+    EXPECT_EQ(builds, 1u);
+    std::map<void *, uint8_t> uses;
+    plan.forEachUse(second, second + 1, [&](void *resource, uint8_t access) {
+        uses[resource] = access;
+    });
+    EXPECT_EQ(uses, (std::map<void *, uint8_t>{{object(43), uint8_t(raw::ResourceUse::Read | raw::ResourceUse::Sample)},
+                                               {object(21), raw::ResourceUse::Read}}));
+}

@@ -4,6 +4,7 @@
 // (RawMetalPipeline.mm): the words each job carries, written to the test's outputs (words.txt) for a comparison with
 // another build's; what was encoded ahead and what took it back; and, with a GPU that holds each job, the time from the
 // commit to its return, to waitUntilScheduled's and to the first job's submission (commit_latency.txt).
+#include "raw_job_words.h"
 #include "raw_scale_frames.h"
 #include "timed_gpu.h"
 
@@ -27,14 +28,6 @@ double percentileOf(std::vector<double> v, double p)
         return 0;
     std::sort(v.begin(), v.end());
     return v[std::min(v.size() - 1, size_t(p * double(v.size())))];
-}
-
-uint64_t fnv(const std::string &text)
-{
-    uint64_t h = 1469598103934665603ull;
-    for (unsigned char c : text)
-        h = (h ^ c) * 1099511628211ull;
-    return h;
 }
 
 std::string outputs()
@@ -86,11 +79,13 @@ TEST(RawFacadeCommit, ScaleShapedJobWords)
     for (const auto &shape : shapes)
         into.push_back(scale_frames::targets(opened().device, shape));
     const id<MTLTexture> beside = scale_frames::scratch(opened().device, shapes[4]);
-    const size_t first = jobCount();
+    std::vector<job_words::Run> runs;
+    const uint64_t mark = job_words::handleMark();
     for (uint32_t frame = 0; frame < 3; frame++)
         for (size_t s = 0; s < std::size(shapes); s++) {
             id<MTLCommandBuffer> cb =
                 paced(queue, into[s], shapes[s], frame, std::chrono::microseconds(300), s == 4 ? beside : nil);
+            runs.push_back(job_words::run(cb));
             [cb commit];
             [cb waitUntilCompleted];
             EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
@@ -99,9 +94,9 @@ TEST(RawFacadeCommit, ScaleShapedJobWords)
                 printf("shape %zu frame %u: %s\n", s, frame,
                        [[p description] stringByReplacingOccurrencesOfString:@"\n" withString:@" "].UTF8String);
         }
-    const std::string words = scale_frames::jobWords(first);
+    const std::string words = job_words::words(runs, mark);
     std::ofstream(outputs() + "/words.txt") << words;
-    printf("scale words: %zu bytes, hash %016llx\n", words.size(), (unsigned long long)fnv(words));
+    printf("scale words: %zu bytes, hash %016llx\n", words.size(), (unsigned long long)job_words::fnv(words));
     EXPECT_FALSE(words.empty());
 }
 

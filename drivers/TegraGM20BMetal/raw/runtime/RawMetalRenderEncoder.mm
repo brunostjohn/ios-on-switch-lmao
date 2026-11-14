@@ -8,8 +8,8 @@
 
 // What raw::RenderEncoder::selfRuns refuses of a draw that fetches a color it writes before it reads any geometry
 // (raw_fetch_order.h), decided as the draw is recorded: its encoder goes to m2v, the command buffer's others stay raw
-static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger count, NSUInteger instances, bool indirect,
-                       bool indexed)
+static void checkFetch(__unsafe_unretained RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger count,
+                       NSUInteger instances, bool indirect, bool indexed)
 {
     raw::Pipeline *pl = e->_drawn;
     if (!pl || !e->_pipe || !e->_pipe->_raw || e->_cb->_encRefused)
@@ -37,9 +37,9 @@ static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger cou
 }
 
 // Core Animation's texture-and-sampler SPI (CA::OGL::MetalContext::draw, every textured draw), as the frontend answers it
-- (void)setFragmentTexture:(id<MTLTexture>)t
+- (void)setFragmentTexture:(__unsafe_unretained id<MTLTexture>)t
             atTextureIndex:(NSUInteger)ti
-              samplerState:(id<MTLSamplerState>)s
+              samplerState:(__unsafe_unretained id<MTLSamplerState>)s
             atSamplerIndex:(NSUInteger)si
 {
     rmBindTexture(self, 2, t, ti);
@@ -219,6 +219,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     _pipe = [(id)p isKindOfClass:[RMPipeline class]] ? p : nil;
     _drawn = _pipe ? _pipe->_raw : nullptr;
     _drawnVariant = nullptr;
+    _eligibility++;
     setBinding(_cb, OpPipeline, 0, 0, state, 0);
 }
 
@@ -230,7 +231,8 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     // formats are not recorded, and every draw would hit enc.colorfmt for nothing, r7p5's "a=0 b=0")
     if (!_pipe || !_pipe->_raw || _cb->_encRefused)
         return;
-    if (_checkedGeneration == _cb->_plan.eligibilityGeneration() && _checkedPipeline == _pipe->_raw)
+    if (_checkedEligibility == _eligibility && _checkedEpoch == _cb->_plan.stateEpoch() &&
+        _checkedPipeline == _pipe->_raw)
         return;
     const raw::Pipeline &pl = *_pipe->_raw;
     for (uint32_t j = 0; j < 8; j++) {
@@ -272,7 +274,8 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         }
     }
     [self drawnRecord];
-    _checkedGeneration = _cb->_plan.eligibilityGeneration();
+    _checkedEligibility = _eligibility;
+    _checkedEpoch = _cb->_plan.stateEpoch();
     _checkedPipeline = _pipe->_raw;
 }
 
@@ -283,7 +286,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     m.a = uint32_t(r.x);
     m.b = uint32_t(r.y);
     m.c = uint64_t(r.width) << 32 | uint32_t(r.height);
-    [_cb record:m];
+    [_cb recordBinding:m];
 }
 
 - (void)setViewport:(MTLViewport)v
@@ -321,6 +324,7 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
         hit(_cb, PredStateForeign);
     }
     _ds = [(id)s isKindOfClass:[RMDepthStencil class]] ? ((RMDepthStencil *)s)->_raw.desc() : raw::DepthStencilDesc();
+    _eligibility++;
     if (raw::testsHiddenZeta(_ds))
         _cb->_passes[_passAt].testsHiddenZeta = true;
     setBinding(_cb, OpDepthStencil, 0, 0, s, 0);
@@ -406,8 +410,8 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     [_cb record:m];
 }
 
-static void recordDraw(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger start, NSUInteger count,
-                       NSUInteger instances, NSUInteger base)
+static void recordDraw(__unsafe_unretained RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger start,
+                       NSUInteger count, NSUInteger instances, NSUInteger base)
 {
     SWITCH_API(ApiDraw);
     [e checkDraw];

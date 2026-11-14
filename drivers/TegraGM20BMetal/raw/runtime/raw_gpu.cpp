@@ -44,6 +44,7 @@
 #include "raw_slm.h"
 #include "raw_srgb_table.h"
 #include "raw_stamps.h"
+#include "raw_program_stores.h"
 #include "raw_storage.h"
 #include "raw_surface_view.h"
 #include "raw_native_surface.h"
@@ -1290,6 +1291,13 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     };
     pl.vertexInstructions = instructions(*vs.record);
     pl.fragmentInstructions = instructions(*fs.record);
+    // the code as the heap holds it (a runtime record's CPU copy is its header alone)
+    const auto writesMemory = [&](const PlacedProgram &p) {
+        const uint8_t *header = heapCpu(p.program);
+        return !header || placedWritesMemory(header, *p.record);
+    };
+    pl.writesMemory[0] = writesMemory(vs);
+    pl.writesMemory[1] = writesMemory(fs);
     pl.memoryEntries = pp.memoryEntries;
     std::vector<uint32_t> words(64 + 16 + (tess ? 64 : 0) + pp.blobDwords * 2);
     Push w{words.data(), words.data() + words.size()};
@@ -4350,7 +4358,7 @@ CommandBuffer *Device::begin()
     cb.splits_.clear();
     cb.splitRecords_.clear();
     cb.splitReuse_.clear();
-    cb.buffersWritten_ = false;
+    cb.bufferWrites_.clear();
     cb.geometryBudget_ = {};
     cb.geometryPool_.clear();
     cb.geometryRefusedBuffers_.clear();
@@ -4814,6 +4822,9 @@ void CommandBuffer::foldCounts()
     stats.fetch.interlocked += counts_.interlocked;
     stats.fetch.interlockedBlends += counts_.interlockedBlends;
     stats.fetch.twinRule += counts_.twinRule;
+    stats.splitTwins += counts_.splitTwins;
+    for (size_t k = 0; k < size_t(SplitWhole::Count); k++)
+        stats.splitWhole[k] += counts_.splitWhole[k];
     counts_ = {};
 }
 #endif
@@ -5128,8 +5139,23 @@ void RenderEncoder::markSpan(Push &p, uint32_t index, SpanKind kind)
     const Texture *t = pass_.color[0].texture;
     const uint32_t kpx = t ? uint32_t(uint64_t(t->width) * t->height * t->samples / 1000) : 0;
     SpanLabel label;
-    if (kind == SpanKind::Draws && emitted_)
+    if (kind == SpanKind::Draws && emitted_) {
         label = drawSpanLabel(*emitted_, emitted_->rec ? emitted_->rec->keyHash : 0, kpx, samples_);
+        const Pipeline &pl = *emitted_;
+        label.form = pl.splitOf                         ? SpanForm::Twin
+                     : pl.freeForm.rung != FetchNone    ? SpanForm::FetchFree
+                     : pl.storageBits                   ? SpanForm::Interlock
+                     : pipeline_ && &pl != pipeline_    ? SpanForm::Variant
+                                                        : SpanForm::Whole;
+        label.pixels = uint32_t(std::min<uint64_t>(drawPixels_, UINT32_MAX));
+        if (t) {
+            label.format = t->format;
+            label.width = uint16_t(std::min<uint32_t>(t->width, 0xffff));
+            label.height = uint16_t(std::min<uint32_t>(t->height, 0xffff));
+            label.blockLinear = t->blockLinear;
+            label.compressed = t->comptags;
+        }
+    }
     label.kind = kind;
     label.kpx = uint16_t(std::min<uint32_t>(kpx, 0xffff));
     label.samples = samples_;
@@ -6305,7 +6331,7 @@ static void logEdgeMiss(const char *what, const Texture &t, const PixelBox &r, c
 
 // Stage `k`'s (0 vertex, 1 fragment) root table for this draw, in the upload ring: m2v's {null, sink, an entry per buffer slot
 // it reaches through the table} over the identity resident set (raw_heap_tables.h). A buffer reached so may be written.
-uint64_t RenderEncoder::rootTable(const PackPipeline &r, uint32_t k)
+uint64_t RenderEncoder::rootTable(const PackPipeline &r, uint32_t k, bool writes)
 {
     Device &d = *dev_;
     const uint32_t slots = r.rootSlots[k], entries = drawRootEntries(slots);
@@ -6316,7 +6342,7 @@ uint64_t RenderEncoder::rootTable(const PackPipeline &r, uint32_t k)
         if (!(slots >> n & 1) || !b.va)
             continue;
         if (b.buffer) {
-            cb_->use(*b.buffer, true);
+            cb_->use(*b.buffer, true, writes);
             slot[n] = {b.buffer->va, b.buffer->length, b.offset};
         } else {
             cb_->useAddress(b.va, b.size, true);
@@ -6564,7 +6590,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 }
                 if (e.kind == EntryUbo || e.kind == EntryTessBuffer) {
                     const Bound b = e.kind == EntryUbo ? bufs_[e.stage][e.slot] : tessBuffer(e.slot);
-                    cb_->buffersWritten_ |= bufferStorage(e);
+                    if (bufferStorage(e))
+                        cb_->bufferWrites_.note(b.va, b.size);
                     if (b.buffer)
                         cb_->use(*b.buffer, bufferStorage(e));
                     else if (!b.named || bufferStorage(e))
@@ -6794,7 +6821,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         patchShaderTestPush(r.shaderTests, ds_, stencilRef_, depthRange_, false, want);
         for (uint32_t k = 0; k < 2; k++)
             if (const uint8_t word = r.rootTableWord[k]; r.rootSlots[k] && word && word <= 31) {
-                const uint64_t table = rootTable(r, k);
+                const uint64_t table = rootTable(r, k, pl->writesMemory[k]);
                 want[word - 1] = uint32_t(table);
                 want[word] = uint32_t(table >> 32);
             }
@@ -7941,7 +7968,34 @@ void RenderEncoder::probeEdges() const
         logEdgeMiss("pass.area", *a.texture, {0, 0, areaW_, areaH_}, detail);
         if (drawnKnown)
             logEdgeMiss("pass.draws", *a.texture, drawn, detail);
+    }    noteLargePass(drawn, drawnKnown);
+}
+
+// A pass over a colour target of more pixels than the panel's (boot 21: Core Animation's 1792x1472 on every app open):
+// its render area and the box its draws reached, so a boot names what was drawn there; 20 lines a second a thread at most
+void RenderEncoder::noteLargePass(const PixelBox &drawn, bool drawnKnown) const
+{
+    constexpr uint64_t kPanelPixels = 1280 * 720;
+    const Texture *t = shadowOf_[0] ? shadowOf_[0] : pass_.color[0].texture;
+    if (!t || uint64_t(t->width) * t->height <= kPanelPixels)
+        return;
+    thread_local int64_t second = -1;
+    thread_local uint32_t inSecond = 0;
+    const int64_t now =
+        std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (now != second) {
+        second = now;
+        inSecond = 0;
     }
+    if (inSecond++ >= 20)
+        return;
+    const Texture *c1 = pass_.count > 1 ? pass_.color[1].texture : nullptr;
+    os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "raw"),
+           "raw: large target pass %ux%u f%u%{public}s area %ux%u box %{public}s%u,%u-%u,%u rects %zu load %c c1 "
+           "%u%{public}s",
+           t->width, t->height, t->format, t->comptags ? " comp" : "", areaW_, areaH_, drawnKnown ? "" : "unknown ",
+           drawn.x0, drawn.y0, drawn.x1, drawn.y1, rects_.size(), "dlc"[pass_.color[0].load], c1 ? c1->format : 0u,
+           c1 && memoryless_[1] ? "+ml" : "");
 }
 #endif
 
@@ -8326,7 +8380,7 @@ void BlitEncoder::copyBytes(uint64_t src, uint64_t dst, uint64_t bytes)
         cb_->useAddress(src, bytes, false);
         cb_->useAddress(dst, bytes, true);
     }
-    cb_->buffersWritten_ = true;
+    cb_->bufferWrites_.note(dst, bytes);
     for (uint64_t done = 0; done < bytes;) {
         room();
         const uint32_t n = uint32_t(std::min<uint64_t>(bytes - done, 1u << 17));
@@ -8362,7 +8416,7 @@ void BlitEncoder::fillWords(uint64_t dst, uint64_t bytes, uint32_t word)
 {
     if (bytes)
         cb_->useAddress(dst, bytes, true);
-    cb_->buffersWritten_ = true;
+    cb_->bufferWrites_.note(dst, bytes);
     if (bytes < 4)
         return;
     room();
@@ -8384,7 +8438,7 @@ void BlitEncoder::fillBytes(uint64_t dst, uint64_t bytes, uint8_t value)
 {
     if (bytes)
         cb_->useAddress(dst, bytes, true);
-    cb_->buffersWritten_ = true;
+    cb_->bufferWrites_.note(dst, bytes);
     auto bytesOf = [&](uint64_t at, uint64_t n) {
         if (!n)
             return;
@@ -8404,7 +8458,7 @@ void BlitEncoder::fillBytes(uint64_t dst, uint64_t bytes, uint8_t value)
 void BlitEncoder::copyRect(uint64_t src, uint32_t srcPitch, uint64_t dst, uint32_t dstPitch, uint32_t width,
                            uint32_t lines, uint32_t bpp)
 {
-    cb_->buffersWritten_ = true;
+    cb_->bufferWrites_.note(dst, rowStorageBytes(dstPitch, width, lines, bpp));
     if (!width || !lines || !bpp)
         return;
     cb_->useAddress(src, rowStorageBytes(srcPitch, width, lines, bpp), false);
@@ -8442,7 +8496,8 @@ void BlitEncoder::copyBufferTexels(uint64_t va, uint32_t pitch, const Texture &t
 {
     if (t.xrPlanes && t.luma)  // plane 0's words alone (raw_xr.h bufferTexelBytes): the alpha plane stays as it is
         return copyBufferTexels(va, pitch, *t.luma, x, y, z, w, h, toTexture, aspect);
-    cb_->buffersWritten_ |= !toTexture;
+    if (!toTexture)
+        cb_->bufferWrites_.note(va, uint64_t(pitch) * h + uint64_t(w) * 16);
     const uint32_t element = t.zeta && aspect == kAspectStencil ? 1
                              : t.zeta && aspect == kAspectDepth ? 4
                                                                 : bufferTexelBytes(t.format, t.bpp);

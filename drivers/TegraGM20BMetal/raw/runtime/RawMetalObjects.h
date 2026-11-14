@@ -55,7 +55,9 @@ static inline id twinPublish(id object, __strong id &slot, id made)
 // ---- the common base: an m2v twin and the selectors this facade does not answer itself ----
 @interface RMObject : NSObject {
 @public
-    __weak id _device;
+    // the raw device, which gRM holds for the life of the process (raw_metal_device_open_lazy: one per process): no weak
+    // reference, whose side-table lock every object's creation, dealloc and encoder begin took
+    __unsafe_unretained id _device;
     id _twin;  // the m2v object over the same memory (made on first need)
 }
 @property (nonatomic, copy) NSString *label;
@@ -515,7 +517,8 @@ struct RMSharedEventWait {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     bool _gpuStamped;  // GPUStartTime/GPUEndTime are its submission's GPU stamps, not the host's window
 #endif
-    __weak id _active;        // the encoder being recorded (weak: it holds the command buffer, its caller holds it)
+    // the encoder being recorded: its end, its drop (endDropped) and this command buffer's drop clear it
+    __unsafe_unretained id _active;
     uint64_t _preds;          // every refusal predicate it hit (1 << RMPred)
     uint64_t _predA, _predB;  // the first one's values
     uint8_t _pred0;           // the first one
@@ -528,12 +531,15 @@ struct RMSharedEventWait {
 - (void)closeEncoder __attribute__((objc_direct));
 // direct (no message): every recorded command and every object a command names goes through them
 - (void)record:(const Cmd &)cmd __attribute__((objc_direct));
-- (void)retain:(id)object __attribute__((objc_direct));
+- (void)retain:(__unsafe_unretained id)object __attribute__((objc_direct));
+// record: of a binding or raster command no other duty of record: concerns (a buffer, bytes, texture, sampler,
+// depth/stencil state or one scissor; not a render state, whose pass may note storage targets)
+- (void)recordBinding:(const Cmd &)cmd __attribute__((objc_direct));
 @end
 
 // A refusal predicate hit while recording (or encoding) `cb`: into its mask; the first one's values kept; the process's first hit
 // of `p` logged with them
-static inline void hit(RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b = 0)
+static inline void hit(__unsafe_unretained RMCommandBuffer *cb, RMPred p, uint64_t a = 0, uint64_t b = 0)
 {
     cb->_preds |= 1ull << p;
     if (!cb->_pred0) {
@@ -575,7 +581,9 @@ static inline void rmPipelineVeto(RMCommandBuffer *cb, uint32_t reason)
 // ---- encoders: they record ----
 @interface RMEncoder : RMObject {
 @public
-    RMCommandBuffer *_cb;
+    // its command buffer's caller holds it while it records (Metal); a command buffer dropped first clears it
+    // (commandBufferDropped)
+    __unsafe_unretained RMCommandBuffer *_cb;
     bool _ended;
     uint64_t _traceId;
     std::vector<RMCounterMark> _counterPending;  // its descriptor's samples not yet placed on the tape
@@ -601,7 +609,14 @@ uint64_t nextTraceId();
     // fragment samplers; `_cubicMask`: the slots of those that are cubic (raw_cubic.h)
     __unsafe_unretained RMSampler *_samp[16];
     uint16_t _cubicMask;
-    uint64_t _checkedGeneration;
+    // `_samp` slots whose sampler the plan holds bound since `_sampEpoch` (RMCommandPlan::stateEpoch): binding the same
+    // one again records nothing
+    uint16_t _sampRecorded;
+    uint64_t _sampEpoch;
+    // moves with each bind that can change what checkDraw decides (setBytes and a plain texture's or sampler's cannot);
+    // checkDraw's last full check was at `_checkedEligibility`, `_checkedEpoch` and `_checkedPipeline`
+    uint32_t _eligibility, _checkedEligibility;
+    uint64_t _checkedEpoch;
     const raw::Pipeline *_checkedPipeline;
     raw::Pipeline *_drawn;
     raw::Variant<raw::Pipeline> *_drawnVariant;
@@ -651,20 +666,25 @@ id rmComputeState(id device, MTLComputePipelineDescriptor *descriptor, MTLPipeli
 // encode where it refuses one (*why)
 bool isKernelCommand(Op op);
 // OpBytes and OpKernelBytes (`m`): the bytes into the command buffer's RMBytes, m.a/b/c set (RawMetalBindings.mm)
-void recordBytes(RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger length, bool shadow = false);
+void recordBytes(__unsafe_unretained RMCommandBuffer *cb, Cmd m, const void *bytes, NSUInteger length,
+                 bool shadow = false);
 void replayKernel(id encoder, RMCommandBuffer *cb, const Cmd &c, std::set<RMBuffer *> &buffers);
 // `at`: the command's tape index, a loop's tag (raw_loop_ranges.h)
 bool encodeKernel(raw::ComputeEncoder &e, raw::CommandBuffer &rc, RMCommandBuffer *cb, const Cmd &c, size_t at,
                   const char **why);
 
-static inline void setBinding(RMCommandBuffer *cb, Op op, int stage, NSUInteger index, id object, uint64_t c)
+static inline void setBinding(__unsafe_unretained RMCommandBuffer *cb, Op op, int stage, NSUInteger index,
+                              __unsafe_unretained id object, uint64_t c)
 {
     if (object)
         [cb retain:object];
     Cmd m = cmd(op, uint8_t(stage), uint16_t(index));
     m.obj = (__bridge void *)object;
     m.c = c;
-    [cb record:m];
+    if (op == OpBuffer || op == OpBufferOffset || op == OpTexture || op == OpSampler || op == OpDepthStencil)
+        [cb recordBinding:m];
+    else
+        [cb record:m];
 }
 
 // The encoder `e` records into this command buffer from now on, the one before it ended (RawMetalEncoder.mm)
@@ -691,8 +711,10 @@ void rmOwnPass(RMRenderEncoder *e);
 
 // A texture or sampler bound at slot `index` of stage `stage` (1 vertex, 2 fragment), as its setter binds it
 // (RawMetalBindings.mm)
-void rmBindTexture(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLTexture> t, NSUInteger index);
-void rmBindSampler(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLSamplerState> s, NSUInteger index);
+void rmBindTexture(__unsafe_unretained RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLTexture> t,
+                   NSUInteger index);
+void rmBindSampler(__unsafe_unretained RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLSamplerState> s,
+                   NSUInteger index);
 
 @interface RMRenderEncoder (Cubic)
 - (const raw::Pipeline *)drawnRecord __attribute__((objc_direct));  // (RawMetalCubic.mm)

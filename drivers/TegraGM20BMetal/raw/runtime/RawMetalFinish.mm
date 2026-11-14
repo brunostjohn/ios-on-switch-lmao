@@ -11,9 +11,10 @@ static void reportLongSpans(uint32_t stamp, uint64_t gpuNs)
 {
     for (const raw::StateSpan &s : gRM->raw->longSpans(stamp)) {
         TegraGM20BAbiPathsSpan note = {TegraGM20BPathsOpNoteSpan, 0, {}};
-        raw::formatSpan(note.text, sizeof note.text, s);
-        os_log(rawLog(), "raw: long span %{public}s in a %llu us command buffer", note.text,
-               (unsigned long long)(gpuNs / 1000));
+        char text[192];
+        raw::formatSpan(text, sizeof text, s);
+        strlcpy(note.text, text, sizeof note.text);
+        os_log(rawLog(), "raw: long span %{public}s in a %llu us command buffer", text, (unsigned long long)(gpuNs / 1000));
         gRM->raw->kernelDebugCall(TegraGM20BMethodPaths, &note, sizeof note, nullptr, 0);
     }
 }

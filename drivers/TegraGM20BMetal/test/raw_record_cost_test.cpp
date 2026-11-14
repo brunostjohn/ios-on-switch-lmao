@@ -6,16 +6,18 @@
 // scenario: the recording thread's time, instructions and cycles, and its Objective-C messages, locks and allocations
 // (record_count.c). The counts are the test; times are printed.
 #include "raw_facade_harness.h"
+#include "raw_job_words.h"
 
 #include <gtest/gtest.h>
 #include <mach/mach_time.h>
 #include <algorithm>
 #include <cstdio>
+#include <fstream>
 #include <functional>
 
 extern "C" {
 struct record_count {
-    uint64_t sends, locks, mallocs, frees;
+    uint64_t sends, locks, mallocs, frees, weaks, retains;
 };
 
 void record_count_start(void);
@@ -235,13 +237,12 @@ Sample measure(const Record &record)
 
 void print(const char *name, const Sample &s, double per, const char *unit)
 {
-    printf(
-        "record cost %-22s %8.1f us %10.0f instr %10.0f cycles | sends %6llu locks %4llu mallocs %4llu frees %4llu | "
-        "per %s: %.3f us %.0f instr %.2f sends %.2f locks %.2f mallocs\n",
-        name, s.us, s.instructions, s.cycles, (unsigned long long)s.counts.sends, (unsigned long long)s.counts.locks,
-        (unsigned long long)s.counts.mallocs, (unsigned long long)s.counts.frees, unit, s.us / per,
-        s.instructions / per, double(s.counts.sends) / per, double(s.counts.locks) / per,
-        double(s.counts.mallocs) / per);
+    printf("record cost %-22s %8.1f us %10.0f instr %10.0f cycles | sends %6llu locks %4llu mallocs %4llu frees %4llu "
+           "weaks %4llu retains %5llu | per %s: %.3f us %.0f instr %.2f sends %.2f locks %.2f mallocs\n",
+           name, s.us, s.instructions, s.cycles, (unsigned long long)s.counts.sends, (unsigned long long)s.counts.locks,
+           (unsigned long long)s.counts.mallocs, (unsigned long long)s.counts.frees, (unsigned long long)s.counts.weaks,
+           (unsigned long long)s.counts.retains, unit, s.us / per, s.instructions / per, double(s.counts.sends) / per,
+           double(s.counts.locks) / per, double(s.counts.mallocs) / per);
 }
 
 Sample difference(const Sample &a, const Sample &b)
@@ -251,7 +252,7 @@ Sample difference(const Sample &a, const Sample &b)
     d.instructions = a.instructions - b.instructions;
     d.cycles = a.cycles - b.cycles;
     d.counts = {a.counts.sends - b.counts.sends, a.counts.locks - b.counts.locks, a.counts.mallocs - b.counts.mallocs,
-                a.counts.frees - b.counts.frees};
+                a.counts.frees - b.counts.frees, a.counts.weaks - b.counts.weaks, a.counts.retains - b.counts.retains};
     return d;
 }
 
@@ -287,6 +288,14 @@ TEST(RawRecordCost, CompositorScaleFrame)
     EXPECT_EQ(frame.counts.mallocs, 0u);
     // an encoder of a kept pass shape takes no lock: the pass cache is its thread's alone (rmPassTrim stops the thread)
     EXPECT_EQ(encoders.counts.locks, 0u);
+    // no weak reference (each a side-table lock), and the binding path's retains gone: two a draw at most (the first
+    // bind of a texture in a command buffer keeps it, and its release at completion)
+    EXPECT_EQ(frame.counts.weaks, 0u);
+    // the device's lock (imports, creates, backings) and every other lock stay off the recording of a frame whose
+    // resources exist
+    EXPECT_EQ(frame.counts.locks, 0u);
+    EXPECT_LE(difference(doubled, frame).counts.retains, uint64_t(2 * kDraws));
+    EXPECT_EQ(difference(repeated, one).counts.retains, 0u);
 }
 
 // Each call of a compositor draw, its instructions apart (less what two counter reads cost), over a frame's 90 draws
@@ -361,6 +370,51 @@ TEST(RawRecordCost, ChangedStateDrawByCall)
     }
     printf("record cost by call %-26s %8.0f instr a draw\n", "all", total);
     EXPECT_GT(draws, 0u);
+    // Core Animation's texture and sampler with the sampler bound already, and a draw whose bindings leave its check as
+    // it was (measured 745 and 1,924 a draw in a release build, 926 and 2,023 in a debug one; all calls 3,959 and 4,666)
+    EXPECT_LT(sums[TextureSampler] / draws, 1100);
+    EXPECT_LT(sums[Draw] / draws, 2300);
+    EXPECT_LT(total, 5200);
 }
+
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// The jobs of compositor frames, each with an encoder of indexed draws after them (the first of a new state, the rest of
+// the same one), as raw_job_words.h's text: what a change of the recording path must leave as it is
+TEST(RawRecordCost, CompositorFrameWords)
+{
+    Bench &b = bench();
+    ASSERT_TRUE(b.device != nil && b.state != nil);
+    const uint16_t quad[6] = {0, 1, 2, 2, 1, 3};
+    id<MTLBuffer> indices = [b.device newBufferWithBytes:quad length:sizeof quad options:MTLResourceStorageModeShared];
+    std::vector<job_words::Run> runs;
+    const uint64_t mark = job_words::handleMark();
+    for (uint32_t frame = 0; frame < 3; frame++)
+        @autoreleasepool {
+            id<MTLCommandBuffer> cb = [b.queue commandBuffer];
+            const std::vector<MTLRenderPassDescriptor *> into = passes(b, kEncoders + 1);
+            compositorFrame(cb, b, into, kDraws, frame);
+            id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:into[kEncoders]];
+            [e setRenderPipelineState:b.state];
+            compositorDraw(e, b, 0, frame);
+            for (int i = 0; i < 4; i++)
+                [e drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                              indexCount:6
+                               indexType:MTLIndexTypeUInt16
+                             indexBuffer:indices
+                       indexBufferOffset:0];
+            [e endEncoding];
+            runs.push_back(job_words::run(cb));
+            [cb commit];
+            [cb waitUntilCompleted];
+            EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+            EXPECT_EQ(std::string([[(id)cb performSelector:@selector(switchRawPath)] UTF8String]), "raw");
+        }
+    const std::string words = job_words::words(runs, mark, {{"indices", indices.gpuAddress, sizeof quad}});
+    const char *outputs = getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+    std::ofstream(std::string(outputs ? outputs : harness::dir().c_str()) + "/compositor_words.txt") << words;
+    printf("compositor words: %zu bytes, hash %016llx\n", words.size(), (unsigned long long)job_words::fnv(words));
+    EXPECT_FALSE(words.empty());
+}
+#endif
 
 }  // namespace

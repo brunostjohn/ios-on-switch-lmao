@@ -274,6 +274,9 @@ template <typename Done> static void waitFor(RMCommandBuffer *cb, Done &&done)
 static void commandBufferDropped(void *object)
 {
     RMCommandBuffer *__unsafe_unretained b = (__bridge RMCommandBuffer *)object;
+    if (RMEncoder *__unsafe_unretained e = (RMEncoder *)b->_active)
+        e->_cb = nil;
+    b->_active = nil;
     giveRecording(b);
 }
 
@@ -288,24 +291,25 @@ void rmPoolCommandBuffers()
 
 @implementation RMCommandBuffer
 
-- (void)retain:(id)object
+- (void)retain:(__unsafe_unretained id)object
 {
     if (!object || !_ownerKeys.insert((__bridge void *)object, true).second)
         return;
     _owners.push_back(object);
     RMResourceFacts facts;
-    facts.cpuBuffer = (__bridge void *)cpuBufferOfResource(object);
-    if ([object isKindOfClass:[RMBuffer class]])
-        facts.kind = RMResourceKind::Buffer;
-    else if ([object isKindOfClass:[RMTexture class]]) {
+    if ([object isKindOfClass:[RMTexture class]]) {
         facts.kind = RMResourceKind::Texture;
-        RMTexture *texture = (RMTexture *)object;
+        __unsafe_unretained RMTexture *texture = (RMTexture *)object;
         facts.roles = uint8_t((texture->_raw.converted() ? RMResourceFacts::Converted : 0) |
                               (texture->_raw.planarStandIn ? RMResourceFacts::PlanarTarget : 0));
         __unsafe_unretained RMTexture *root = texture;
         while (root->_kind == RMTextureView && root->_parent)
             root = root->_parent;
         facts.surfaceWrites = root->_surfaceWrites;
+        facts.cpuBuffer = (__bridge void *)root->_buffer;
+    } else if ([object isKindOfClass:[RMBuffer class]]) {
+        facts.kind = RMResourceKind::Buffer;
+        facts.cpuBuffer = (__bridge void *)object;
     } else if ([object isKindOfClass:[RMSampler class]])
         facts.kind = RMResourceKind::Sampler;
     else if ([object isKindOfClass:[RMHeap class]])
@@ -318,7 +322,7 @@ static const raw::Pipeline *recordedPipeline(const raw::RasterState &raster)
 {
     if (const raw::Pipeline *native = static_cast<const raw::Pipeline *>(raster.nativePipeline))
         return native;
-    RMPipeline *pipeline = (__bridge RMPipeline *)raster.pipeline;
+    __unsafe_unretained RMPipeline *pipeline = (__bridge RMPipeline *)raster.pipeline;
     return [(id)pipeline isKindOfClass:[RMPipeline class]] ? pipeline->_raw : nullptr;
 }
 
@@ -445,6 +449,13 @@ static const raw::Pipeline *recordedPipeline(const raw::RasterState &raster)
     const size_t consumed = raw::extraWords(cmd);
     if (consumed && cmd.x + consumed == _extra.size())
         _extra.resize(cmd.x);
+}
+
+- (void)recordBinding:(const Cmd &)cmd
+{
+    if (_commandLog)
+        _commandLog->push_back({cmd, {}});
+    _plan.bind(cmd, _extra);
 }
 
 // The encoder recorded last: whether it goes to m2v, into its first command
@@ -829,6 +840,15 @@ static const raw::Pipeline *recordedPipeline(const raw::RasterState &raster)
     for (const raw::Buffer &k : _bytes.chunks)
         [vas addObject:@(k.va)];
     return vas;
+}
+
+// raw_job_words.h's: the lengths the recording filled those chunks to before taking the next
+- (NSArray<NSNumber *> *)switchRawBytesChunkLengths
+{
+    NSMutableArray<NSNumber *> *lengths = [NSMutableArray array];
+    for (const raw::Buffer &k : _bytes.chunks)
+        [lengths addObject:@(k.length)];
+    return lengths;
 }
 
 // facadecost's: the setBytes chunks' misses and those made ahead since the process began, and their live bytes now
