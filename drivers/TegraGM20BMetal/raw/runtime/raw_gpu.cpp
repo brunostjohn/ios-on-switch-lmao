@@ -6319,6 +6319,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     if (dsDirty_) {
         RAW_ENCODE_SPAN(Bind);
         const bool depth = zeta && zetaHasDepth(zeta->format), stencil = zeta && zetaHasStencil(zeta->format);
+        RAW_DIAGNOSTIC(cb_->counts_.segmentCopies += !shaderTestsActive_ && !measuringInline() && !bindsBySegment() &&
+                                                     dsState_->segment(depth, stencil));
         if (shaderTestsActive_)
             emitDepthStencil(p, shaderDepthStencilRegs(depth), cb_->ds_);
         else if (bindDepthStencil(p, bodies_, bodyStart_,

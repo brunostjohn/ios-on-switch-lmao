@@ -46,6 +46,8 @@
     }
     d[@"cpu_ordered"] = @(s.cpuOrdered.load());
     d[@"split_prologues"] = @(gRM->raw->stats.splitLaunches.load());
+    d[@"split_room_refusals"] = @(gRM->raw->stats.splitRoomRefusals.load());
+    d[@"heap_full"] = @(gRM->raw->stats.heapFull.load());
     d[@"interlock_draws"] = @(gRM->raw->stats.interlockDraws.load());
     d[@"banded_draws"] = @(gRM->raw->stats.bandedDraws.load());
     d[@"bands"] = @(gRM->raw->stats.bands.load());

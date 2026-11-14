@@ -145,6 +145,7 @@ struct Model {
     // BoAllocs of control memory (TegraGM20BBoControl) made, and whether they are answered kIOReturnNoMemory
     unsigned controlAllocs = 0;
     bool refuseControl = false;
+    bool refuseAllocs = false;  // every BoAlloc answered kIOReturnNoMemory
     // GetInfo's client VA end: a raw::Device's shader heap reserves a 4 GiB program window in its quarter
     uint64_t vaEnd = uint64_t(1) << 40;
     uint32_t infoFlags = 0;  // GetInfo's flags beyond the model's own (TegraGM20BInfoTiledCache)
@@ -552,6 +553,8 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
             if (model.refuseControl)
                 return kIOReturnNoMemory;
         }
+        if (model.refuseAllocs)
+            return kIOReturnNoMemory;
         const uint32_t token = uint32_t(model.nextHandle);
         model.memory[token].assign(in.bytes, 0);
         model.bos[model.nextHandle] = {false, !(in.flags & TegraGM20BBoCoherent), 0};

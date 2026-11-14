@@ -650,6 +650,9 @@ struct SplitSource {
     const char *keyString = nullptr;
     PlacedProgram vs;
     bool caTransform = false;
+    // a runtime record's slots once placed (heap offsets, ~0: not yet), so a twin asked again after no room places neither
+    // twice; under the device's lock
+    mutable uint64_t fsPlaced = ~0ull, prologuePlaced = ~0ull;
 };
 
 struct RuntimeRecord;
@@ -2526,6 +2529,8 @@ public:
         std::atomic<uint64_t> bandedDispatches{0};       // raw_dispatch_bands.h
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         std::atomic<uint64_t> splitLaunches{0};
+        // split twins that found no room in the heap or local memory at a draw that took them
+        std::atomic<uint64_t> splitRoomRefusals{0};
         std::atomic<uint64_t> interlockDraws{0}, storageBarriers{0};
         // state segment binds, the inline words they replaced, a pass's first binds of the segment the channel still held
         // from the pass or command buffer before (no words; raw_state_segment.h), and passes that could not keep it because
