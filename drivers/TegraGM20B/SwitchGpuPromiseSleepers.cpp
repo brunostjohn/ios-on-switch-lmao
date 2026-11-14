@@ -114,9 +114,12 @@ void park(switch_gpu_backing *backing, switch_gpu_promise_parked *parked, const 
 // A promise given up on before the listing is seen by the check after it: the give-up is published before its wake
 // takes the list's lock. One given up on after that check finds this sleeper listed, and its wake takes the backing's
 // lock, which the sleeper holds from the check until it is asleep. A wake for a CPU owner that leaves while the lock is
-// dropped is not lost, as the pending promise alone keeps such a caller waiting. A reader that orders behind the promise
-// on the GPU (no `who`) waits for CPU writers only: it is never listed and keeps the lock from its caller's check to its
-// sleep. The park is once a promise for the reader's whole wait: a wake for another reason does not restart its second.
+// dropped is not lost, as the pending promise alone keeps such a caller waiting. The park is made in that same hold, on
+// the promises pending at the sleep: one made and one kept while the lock was dropped would otherwise leave the sleeper
+// behind a promise nothing gives up on, the kept one's wake gone with nobody asleep. A reader that orders behind the
+// promise on the GPU (no `who`) waits for CPU writers only: it is never listed and keeps the lock from its caller's
+// check to its sleep. The park is once a promise for the reader's whole wait: a wake for another reason does not restart
+// its second.
 void switch_gpu_backing_sleep_promised_locked(switch_gpu_backing *backing,
 					      switch_gpu_promise_parked *parked, const char *who)
 {
@@ -126,14 +129,15 @@ void switch_gpu_backing_sleep_promised_locked(switch_gpu_backing *backing,
 		switch_gpu_backing_sleep_cpu_locked(backing);
 		return;
 	}
-	park(backing, parked, who);
 	IOLockUnlock(backing->lock);
 	IOLockLock(lock);
 	link(backing);
 	IOLockUnlock(lock);
 	IOLockLock(backing->lock);
-	if (switch_gpu_backing_promise_pending_locked(backing))
+	if (switch_gpu_backing_promise_pending_locked(backing)) {
+		park(backing, parked, who);
 		switch_gpu_backing_sleep_cpu_locked(backing);
+	}
 	IOLockUnlock(backing->lock);
 	IOLockLock(lock);
 	unlink(backing);

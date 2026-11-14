@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 // The writer promises' sleepers list (SwitchGpuPromiseSleepers.cpp). From every IOLock the host model sees taken while
 // others are held: a CPU reader asleep behind a promise, the give-up's wake and the registry finding the backing again
-// by its pages take no locks in a cycle (each edge alone deadlocked nothing, so no run of them hung). And a reader that
-// does not wait for the promise is never listed, so no wake meant for it is lost while the list is busy.
+// by its pages take no locks in a cycle (each edge alone deadlocked nothing, so no run of them hung). While the list is
+// busy, a reader that does not wait for the promise misses no wake, and one that does parks on the promises pending
+// when it goes to sleep.
+#include <set>
 #include <string>
 
 #include "switch_gpu_backing_fixture.h"
@@ -31,6 +33,24 @@ extern "C" void switch_gpu_fence_put(const volatile uint32_t *)
 extern "C" int tgm_promise_open(void)
 {
 	return 0;
+}
+
+namespace
+{
+std::mutex parkLock;
+std::set<uint64_t> parked;  // offset << 32 | value of each promise a CPU reader parked on
+}  // namespace
+
+extern "C" int tgm_promise_park(uint32_t offset, uint32_t value, const char *, const char *,
+				const void *, int)
+{
+	std::lock_guard<std::mutex> hold(parkLock);
+	parked.insert(uint64_t(offset) << 32 | value);
+	return 1;
+}
+
+extern "C" void tgm_promise_leave(uint32_t, uint32_t, int)
+{
 }
 
 namespace
@@ -145,6 +165,62 @@ TEST_F(Backing, AWaitingSnapshotBehindAPromiseWakesWhenTheCpuWriterLeaves)
 	source.join();
 	EXPECT_EQ(result.load(), 0);
 	EXPECT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
+	switch_gpu_backing_promise_drop(listed, kOther);
+	reader.join();
+	EXPECT_EQ(locked.load(), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(listed, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
+	switch_gpu_backing_release(listed);
+	switch_gpu_backing_release(b);
+}
+
+// A writer that keeps promising makes its next promise and keeps the last one while a CPU lock waits for the list held
+// by a give-up wake stuck on another listed backing: the lock sleeps behind the next promise, and parks on it, since
+// the give-up knows a promise only through a park.
+TEST_F(Backing, ACpuLockParksOnThePromiseMadeWhileItWaitedForTheList)
+{
+	constexpr uint32_t kOther = kOffset + 8, kNext = kOffset + 4;
+	{
+		std::lock_guard<std::mutex> hold(parkLock);
+		parked.clear();
+	}
+	auto *listed = backing(), *b = backing();
+	fence[kOther / 4] = fence[kOffset / 4] = fence[kNext / 4] = 0;
+	const switch_gpu_promise_ref other = {tgm_fence_word(kOther), kOther, 1};
+	ASSERT_EQ(switch_gpu_backing_promise_add(listed, &other), 0);
+	std::atomic<int> locked{1}, waited{1};
+	std::thread reader([&] {
+		locked = switch_gpu_backing_cpu_acquire(listed, 0, 4096, SWITCH_GPU_BACKING_READ);
+	});
+	ASSERT_TRUE(sleeping(1));
+	const switch_gpu_promise_ref kept = {tgm_fence_word(kOffset), kOffset, 1};
+	ASSERT_EQ(switch_gpu_backing_promise_add(b, &kept), 0);
+	IOLockLock(listed->lock);
+	std::thread wake([] {
+		switch_gpu_backing_promise_sleepers_wake();
+	});
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	std::thread lock([&] {
+		waited = switch_gpu_backing_cpu_acquire(b, 0, 4096, SWITCH_GPU_BACKING_READ);
+	});
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	const switch_gpu_promise_ref next = {tgm_fence_word(kNext), kNext, 1};
+	ASSERT_EQ(switch_gpu_backing_promise_add(b, &next), 0);
+	fence[kOffset / 4] = 1;
+	switch_gpu_backing_promise_drop(b, kOffset);
+	IOLockUnlock(listed->lock);
+	wake.join();
+	ASSERT_TRUE(sleeping(2)) << "the CPU lock did not go to sleep behind the next promise";
+	{
+		std::lock_guard<std::mutex> hold(parkLock);
+		EXPECT_TRUE(parked.count(uint64_t(kNext) << 32 | 1))
+			<< "asleep behind a promise it never parked on";
+	}
+	EXPECT_EQ(waited.load(), 1);
+	fence[kNext / 4] = 1;
+	switch_gpu_backing_promise_drop(b, kNext);
+	lock.join();
+	EXPECT_EQ(waited.load(), 0);
+	EXPECT_EQ(switch_gpu_backing_cpu_release(b, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
 	switch_gpu_backing_promise_drop(listed, kOther);
 	reader.join();
 	EXPECT_EQ(locked.load(), 0);
