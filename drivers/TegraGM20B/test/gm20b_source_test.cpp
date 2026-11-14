@@ -989,6 +989,12 @@ TEST(GM20BPmcSource, EveryPmcEnableChangeTakesItsLockFromM1)
 	EXPECT_TRUE(own.Has("pmc_device.disable = pmc_disable;"));
 	EXPECT_TRUE(own.Has("if (mc->func->init == nv50_mc_init)"));
 	EXPECT_FALSE(gpuCode().Has(", 0x000200,"));
+	const CodeText ring =
+		Block(SourceText("../nouveau/nvkm/subdev/privring/gk20a.c"),
+		      "gk20a_privring_init_privring_ring(struct nvkm_subdev *privring)");
+	EXPECT_TRUE(ring.Before("tgm_pmc_change(device, 0x20, 0);",
+				"tgm_pmc_change(device, 0x20, 0x20);"));
+	EXPECT_FALSE(ring.Has("0x000200"));
 }
 
 TEST(GM20BSleepSource, SleepAndWakeOrder)

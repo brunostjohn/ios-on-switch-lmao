@@ -830,6 +830,7 @@ host_test(
         "//drivers/TegraGM20B:recover_engine.c",
         "//drivers/TegraGM20B:recover_held.c",
         "//drivers/TegraGM20B:nouveau/nvkm/subdev/ltc/base.c",
+        "//drivers/TegraGM20B:nouveau/nvkm/subdev/privring/gk20a.c",
         "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/gm20b.c",
         "//drivers/TegraGM20B:sched.c",
         "//drivers/TegraGM20B:shim/include/nvif/os.h",

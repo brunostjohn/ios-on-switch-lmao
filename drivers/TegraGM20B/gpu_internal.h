@@ -537,8 +537,10 @@ void tgm_stats_gr_unbind(struct tgm_chan *chan);
 void tgm_stats_gr_context(void);
 void tgm_stats_tick(void);
 #define IDLE_LOG_NS (10ULL * 1000000000ULL)
-/* gpu_pmc.c: every PMC_ENABLE change under one lock from M1 on (TegraGM20BPmcEnable.h) */
+/* gpu_pmc.c: every PMC_ENABLE change under one lock from M1 on (TegraGM20BPmcEnable.h): nvkm's mc functions wrapped,
+ * and tgm_pmc_change for nvkm's direct writers (privring/gk20a.c's PRI ring reset) */
 void tgm_pmc_own(struct nvkm_device *device);
+void tgm_pmc_change(struct nvkm_device *device, u32 mask, u32 value);
 #define GPCPLL_CFG_R 0x137000   /* 0 enable, 17 lock */
 #define GPCPLL_COEFF_R 0x137004 /* M 7:0, N 15:8, PL 21:16 */
 

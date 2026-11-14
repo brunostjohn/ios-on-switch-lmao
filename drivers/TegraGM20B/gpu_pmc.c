@@ -35,7 +35,7 @@ static void pmc_unlock(void *ctx, unsigned long flags)
 	spin_unlock_irqrestore(&pmc_lock, flags);
 }
 
-static void pmc_change(struct nvkm_device *device, u32 mask, u32 value)
+void tgm_pmc_change(struct nvkm_device *device, u32 mask, u32 value)
 {
 	const struct tgm_pmc_enable_io io = {device, pmc_read, pmc_write, pmc_lock_irqsave,
 					     pmc_unlock};
@@ -45,18 +45,18 @@ static void pmc_change(struct nvkm_device *device, u32 mask, u32 value)
 
 static void pmc_disable(struct nvkm_mc *mc, u32 mask)
 {
-	pmc_change(mc->subdev.device, mask, 0);
+	tgm_pmc_change(mc->subdev.device, mask, 0);
 }
 
 static void pmc_enable(struct nvkm_mc *mc, u32 mask)
 {
-	pmc_change(mc->subdev.device, mask, mask);
+	tgm_pmc_change(mc->subdev.device, mask, mask);
 }
 
 /* nv50_mc_init, gk20a's mc init: every engine out of reset, the word written whole */
 static void pmc_init(struct nvkm_mc *mc)
 {
-	pmc_change(mc->subdev.device, 0xffffffff, 0xffffffff);
+	tgm_pmc_change(mc->subdev.device, 0xffffffff, 0xffffffff);
 }
 
 void tgm_pmc_own(struct nvkm_device *device)
