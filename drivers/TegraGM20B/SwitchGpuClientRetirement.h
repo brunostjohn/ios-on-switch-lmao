@@ -263,10 +263,11 @@ IOReturn AGXDeviceUserClient::mapRange(const TegraGM20BAbiBindOp &op, Bo *bo,
 	if (!queued)
 		takeRetiredOverlaps(op.va, op.range);
 	const int err =
-		queued ? switch_gpu_vm_prepare(vm_, op.va, op.range, bo->mem, op.bo_offset, kind,
-					       &mapping)
-		       : switch_gpu_vm_map_volatile(vm_, op.va, op.range, bo->mem, op.bo_offset,
-						    kind, int(bo->readOnly), vol, &mapping);
+		!switch_gpu_vm_volatile_kind_ok(kind, vol) ? -22
+		: queued ? switch_gpu_vm_prepare(vm_, op.va, op.range, bo->mem, op.bo_offset, kind,
+						 &mapping)
+			 : switch_gpu_vm_map_volatile(vm_, op.va, op.range, bo->mem, op.bo_offset,
+						      kind, int(bo->readOnly), vol, &mapping);
 	noteBind(err ? TGM_BIND_REFUSED : TGM_BIND_MAP, op.va, op.range, bo, op.bo_offset, kind);
 	if (err) {
 		IODelete(record, RetiredBinding, 1);

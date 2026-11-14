@@ -276,8 +276,8 @@ const uint32_t *AGXDeviceUserClient::pushView(uint64_t va, uint64_t bytes,
 	if (hit) {
 		if (hit->bo->pool_va) {
 			base = hit->bo->pool_va;
-		} else if (hit->bo->bmd) {
-			base = hit->bo->bmd->getBytesNoCopy();
+		} else {
+			base = hit->bo->buffer.cpu;
 		}
 	}
 	return base ? reinterpret_cast<const uint32_t *>(static_cast<const uint8_t *>(base) +

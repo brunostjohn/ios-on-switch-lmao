@@ -258,7 +258,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		IODelete(bo->pas, uint64_t, bo->npages);
 		bo->pas = spare->pas;
 		bo->backing_pages = static_cast<uint32_t>(spare->bytes >> 12);
-		bo->bmd = spare->bmd;
+		bo->buffer = spare->buffer;
 		bo->cachedMapping = spare->mapping;
 		IODelete(spare, Spare, 1);
 		kind = TGM_BO_SPARE;
@@ -297,21 +297,22 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		const uint64_t mask = (in->flags & TegraGM20BBoContiguous)
 					      ? 0x3ffffffffULL & ~((1ULL << in->align_log2) - 1)
 					      : 0x3ffffffffULL;
-		bo->bmd = bo->pas ? IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-					    kernel_task, options, backing, mask)
-				  : nullptr;
-		if (!bo->bmd || bo->bmd->prepare() != kIOReturnSuccess) {
-			if (bo->bmd)
-				bo->bmd->release();
-			bo->bmd = nullptr;
+		IOBufferMemoryDescriptor *bmd =
+			bo->pas ? IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+					  kernel_task, options, backing, mask)
+				: nullptr;
+		if (!bmd || bmd->prepare() != kIOReturnSuccess) {
+			if (bmd)
+				bmd->release();
 			ret = kIOReturnNoMemory;
 		} else {
+			bo->buffer = switch_gpu_cached_buffer_of(bmd);
 			lap(0);
 			// The pages come zeroed: the mask makes IOKit allocate with KMA_ZERO (IOKernelAllocateWithPhysicalRestrict),
 			// and vm_page_alloc_list zero-fills each page through the cacheable physical aperture. Clean those zeros to
 			// DRAM and drop the lines, so the GPU and a fresh client view see zeros and no dirty line is written back
 			// later over what the GPU wrote. (A bzero here would be a second pass over the whole buffer.)
-			void *va = bo->bmd->getBytesNoCopy();
+			void *va = bo->buffer.cpu;
 			cleanZeros(va, backing);
 			lap(1);
 			ret = collectKernelPages(va, backing, bo->pas);
@@ -320,13 +321,13 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	}
 	// A cached or system BO's view, which its task maps: the descriptor itself, or its first in->bytes when it is a
 	// spare's or a class's larger buffer.
-	if (!ret && bo->bmd) {
+	if (!ret && bo->buffer.memory) {
 		bo->view = bo->backing_pages == bo->npages
-				   ? static_cast<IOMemoryDescriptor *>(bo->bmd)
-				   : IOSubMemoryDescriptor::withSubRange(bo->bmd, 0, in->bytes,
-									 kIODirectionInOut);
-		if (bo->view == bo->bmd) {
-			bo->bmd->retain();
+				   ? bo->buffer.memory
+				   : IOSubMemoryDescriptor::withSubRange(
+					     bo->buffer.memory, 0, in->bytes, kIODirectionInOut);
+		if (bo->view == bo->buffer.memory) {
+			bo->buffer.memory->retain();
 		} else if (!bo->view) {
 			ret = kIOReturnNoMemory;
 		}
@@ -334,15 +335,18 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	if (!ret) {
 		if (bo->chunked)
 			bo->backing = switch_gpu_pin_chunks(bo->pas, bo->npages);
-		else if (bo->bmd && !system && !(in->flags & TegraGM20BBoContiguous)) {
+		else if (bo->buffer.memory && !system && !(in->flags & TegraGM20BBoContiguous)) {
 			bo->backing = switch_gpu_pin_cached(bo->pas, bo->backing_pages, bo->npages,
-							    bo->bmd, bo->cachedMapping);
-			if (bo->backing)
+							    bo->buffer, bo->cachedMapping);
+			if (bo->backing) {
 				bo->cachedMapping = nullptr;
+				bo->buffer.map = nullptr;
+			}
 		} else
 			bo->backing = switch_gpu_pin_memory(bo->pas, bo->npages, 0,
-							    bo->bmd ? bo->bmd : bo->view,
-							    bo->bmd != nullptr);
+							    bo->buffer.memory ? bo->buffer.memory
+									      : bo->view,
+							    bo->buffer.memory != nullptr);
 		if (!bo->backing)
 			ret = kIOReturnNoMemory;
 	}

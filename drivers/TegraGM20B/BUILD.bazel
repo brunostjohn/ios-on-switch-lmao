@@ -152,6 +152,7 @@ kernel_driver(
         "TegraGM20BRelayout.cpp",
         "SwitchGpuRelayoutCache.cpp",
         "SwitchGpuCachedZero.cpp",
+        "SwitchGpuCachedBuffer.cpp",
         "SwitchGpuEventClient.cpp",
         "SwitchGpuShaderCompiler.cpp",
         "SwitchGpuShaderCompilerQueue.cpp",

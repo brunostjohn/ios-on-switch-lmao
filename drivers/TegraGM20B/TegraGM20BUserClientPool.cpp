@@ -141,8 +141,7 @@ uint32_t spareClass(uint64_t bytes)
 void spareFree(Spare *s)
 {
 	switch_gpu_cached_mapping_drop(&s->mapping);
-	s->bmd->complete();
-	s->bmd->release();
+	switch_gpu_cached_buffer_free(&s->buffer);
 	IODelete(s->pas, uint64_t, s->bytes >> 12);
 	IODelete(s, Spare, 1);
 }
@@ -173,27 +172,33 @@ bool kernelPages(const void *va, uint64_t bytes, uint64_t *pas)
 	return true;
 }
 
-// A wired, zeroed, clean cached BO of `bytes` (what BoAlloc's own path makes), or nullptr.
-Spare *spareMake(uint64_t bytes)
+// A wired, zeroed, clean cached BO of `bytes`, of 128 KiB units where its layout has them (each one GMMU big page), or
+// nullptr. The refill thread alone makes these: BoAlloc's own path on the allocating thread never searches for units.
+Spare *spareMake(SparePool *p, uint64_t bytes)
 {
 	Spare *s = IONew(Spare, 1);
 	uint64_t *pas = IONew(uint64_t, bytes >> 12);
-	IOBufferMemoryDescriptor *bmd = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-		kernel_task,
-		static_cast<IOOptionBits>(kIODirectionInOut) |
-			static_cast<IOOptionBits>(kIOMemoryMapperNone),
-		bytes, 0x3ffffffffULL);
-	if (s && pas && bmd && bmd->prepare() == kIOReturnSuccess) {
+	SwitchGpuCachedBuffer buffer = {};
+	bool made = switch_gpu_cached_buffer_units(bytes, &buffer);
+	if (!made && switch_gpu_spare_layout(bytes).units) {
+#if TGM_STATS
+		IOLockLock(p->lock);
+		++p->notUnits;
+		IOLockUnlock(p->lock);
+#else
+		(void)p;
+#endif
+	}
+	made = made || switch_gpu_cached_buffer_pages(bytes, &buffer);
+	if (s && pas && made) {
 		// KMA_ZERO zero-filled it through the cacheable aperture: clean the zeros out
-		cleanZeros(bmd->getBytesNoCopy(), bytes);
-		if (kernelPages(bmd->getBytesNoCopy(), bytes, pas)) {
-			*s = {nullptr, bmd, pas, bytes, nullptr};
+		cleanZeros(buffer.cpu, bytes);
+		if (kernelPages(buffer.cpu, bytes, pas)) {
+			*s = {nullptr, buffer, pas, bytes, nullptr};
 			return s;
 		}
-		bmd->complete();
 	}
-	if (bmd)
-		bmd->release();
+	switch_gpu_cached_buffer_free(&buffer);
 	if (pas)
 		IODelete(pas, uint64_t, bytes >> 12);
 	if (s)
@@ -254,9 +259,9 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 					s);  // past the cap or under pressure: back to the VM, unzeroed
 				continue;
 			}
-			const int result = switch_gpu_cached_zero(s->pas, uint32_t(s->bytes >> 12),
-								  s->bmd->getBytesNoCopy(),
-								  &s->mapping, spareZeroed, s);
+			const int result =
+				switch_gpu_cached_zero(s->pas, uint32_t(s->bytes >> 12),
+						       s->buffer.cpu, &s->mapping, spareZeroed, s);
 			if (result == -16) {
 				// every scrub slot busy: a retiring scrub's completion runs this again
 				IOLockLock(p->lock);
@@ -337,7 +342,7 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 		}
 		if (c == kClasses)
 			return;
-		Spare *s = spareMake(classBytes(c));
+		Spare *s = spareMake(p, classBytes(c));
 		IOLockLock(p->lock);
 		if (!s) {  // the VM could not give it: try again at the next event, not now
 			p->clean -= classBytes(c);
@@ -440,16 +445,16 @@ void spareIneligible()
 #endif
 }
 
-// A freed cached BO (its prepared descriptor, which nothing else holds, with its `bytes` and page list) to the spares:
-// true if taken, then the caller must not touch bmd, pas or its persistent mapping again.
-bool spareKeep(IOBufferMemoryDescriptor *bmd, uint64_t *pas, uint64_t bytes,
+// A freed cached BO (its prepared buffer, which nothing else holds, with its `bytes` and page list) to the spares:
+// true if taken, then the caller must not touch the buffer, pas or its persistent mapping again.
+bool spareKeep(const SwitchGpuCachedBuffer &buffer, uint64_t *pas, uint64_t bytes,
 	       switch_gpu_cached_mapping *mapping)
 {
 	SparePool *p = spares();
-	Spare *s = p && bmd->getRetainCount() == 1 ? IONew(Spare, 1) : nullptr;
+	Spare *s = p && switch_gpu_cached_buffer_alone(buffer) ? IONew(Spare, 1) : nullptr;
 	if (!s)
 		return false;
-	*s = {nullptr, bmd, pas, bytes, mapping};
+	*s = {nullptr, buffer, pas, bytes, mapping};
 	IOLockLock(p->lock);
 	s->next = p->dirty;
 	p->dirty = s;
@@ -485,15 +490,13 @@ bool poolZeroLater(void *va, uint64_t pa, uint64_t bytes)
 }
 }  // namespace tgm_uc
 
-extern "C" void switch_gpu_cached_retire(IOMemoryDescriptor *memory, uint64_t *pages,
-					 uint32_t count, switch_gpu_cached_mapping *mapping)
+void switch_gpu_cached_retire(SwitchGpuCachedBuffer buffer, uint64_t *pages, uint32_t count,
+			      switch_gpu_cached_mapping *mapping)
 {
-	auto *buffer = OSDynamicCast(IOBufferMemoryDescriptor, memory);
-	if (buffer && spareKeep(buffer, pages, uint64_t(count) << 12, mapping))
+	if (buffer.cpu && spareKeep(buffer, pages, uint64_t(count) << 12, mapping))
 		return;
 	switch_gpu_cached_mapping_drop(&mapping);
-	memory->complete();
-	memory->release();
+	switch_gpu_cached_buffer_free(&buffer);
 	IODelete(pages, uint64_t, count);
 }
 
@@ -548,26 +551,26 @@ extern "C" unsigned long tgm_owner_stats(char *out, unsigned long size)
 		if (n > 0)
 			at = at + n < size ? at + n : size - 1;
 	}
-	uint32_t missed = p->zeroBusy + p->zeroFailed + p->refillRefused;
+	uint32_t missed = p->zeroBusy + p->zeroFailed + p->refillRefused + p->notUnits;
 	for (const uint32_t m : p->misses)
 		missed += m;
 	const int n =
 		missed ? snprintf(out + at, size - at,
 				  "%sspare misses: first %u, zeroing %u, drained %u, pressure %u, "
 				  "ineligible %u; copy-engine zero busy %u, failed %u; refill "
-				  "refused %u",
+				  "refused %u, not in 128 KiB units %u",
 				  at ? "; " : "", p->misses[SWITCH_GPU_SPARE_FIRST],
 				  p->misses[SWITCH_GPU_SPARE_ZEROING],
 				  p->misses[SWITCH_GPU_SPARE_DRAINED],
 				  p->misses[SWITCH_GPU_SPARE_PRESSURE],
 				  p->misses[SWITCH_GPU_SPARE_INELIGIBLE], p->zeroBusy,
-				  p->zeroFailed, p->refillRefused)
+				  p->zeroFailed, p->refillRefused, p->notUnits)
 		       : 0;
 	if (n > 0)
 		at = at + n < size ? at + n : size - 1;
 	bzero(p->owners, sizeof(p->owners));
 	bzero(p->misses, sizeof(p->misses));
-	p->zeroBusy = p->zeroFailed = p->refillRefused = 0;
+	p->zeroBusy = p->zeroFailed = p->refillRefused = p->notUnits = 0;
 	IOLockUnlock(p->lock);
 	return at;
 #else

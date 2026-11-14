@@ -1060,6 +1060,16 @@ host_test(
 )
 
 host_test(
+    name = "gm20b_mem_source_test",
+    srcs = ["gm20b_mem_source_test.cpp"],
+    data = [
+        "//drivers/TegraGM20B:SwitchGpuCachedBuffer.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientBo.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientPool.cpp",
+    ],
+)
+
+host_test(
     name = "gm20b_submit_locks_source_test",
     srcs = ["gm20b_submit_locks_source_test.cpp"],
     data = [
@@ -1776,6 +1786,7 @@ host_library(
     srcs = ["//drivers/TegraGM20B:SwitchGpuPin.cpp"],
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuPin.h",
+        "//drivers/TegraGM20B:SwitchGpuCachedBuffer.h",
         "//drivers/TegraGM20B:SwitchGpuCachedZero.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",

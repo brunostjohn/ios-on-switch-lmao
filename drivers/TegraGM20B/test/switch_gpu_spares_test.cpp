@@ -78,6 +78,27 @@ TEST(Spares, RoomComesFromTheLargestClassKeptPastItsDepth)
 
 // A class that would not fit even with every spare past its depth given back gives none back: the spares that serve
 // other classes' takes stay
+// Boot 21 mapped every spare-backed BO (2,535,220 KiB of spare and cached BoAllocs) in 4 KiB PTEs: a spare was one
+// buffer of scattered pages. A refilled spare of 512 KiB or more is whole 128 KiB units, each a big page.
+TEST(Spares, ARefilledSpareIsWhole128KiBUnits)
+{
+	const switch_gpu_spare_units chunk = switch_gpu_spare_layout(16ULL << 20);
+	EXPECT_EQ(chunk.units, 128u);
+	EXPECT_EQ(chunk.tail, 0u);
+	const switch_gpu_spare_units dedicated = switch_gpu_spare_layout(9856ULL << 10);
+	EXPECT_EQ(dedicated.units, 77u);
+	EXPECT_EQ(dedicated.tail, 0u);
+	const switch_gpu_spare_units odd = switch_gpu_spare_layout(640ULL << 10);
+	EXPECT_EQ(odd.units, 5u);
+	EXPECT_EQ(odd.tail, 0u);
+	const switch_gpu_spare_units tail = switch_gpu_spare_layout((1ULL << 20) + (64ULL << 10));
+	EXPECT_EQ(tail.units, 8u);
+	EXPECT_EQ(tail.tail, 64ULL << 10);
+	const switch_gpu_spare_units small = switch_gpu_spare_layout(320ULL << 10);
+	EXPECT_EQ(small.units, 0u);
+	EXPECT_EQ(small.tail, 320ULL << 10);
+}
+
 TEST(Spares, NoSpareIsGivenBackForAClassThatStillWouldNotFit)
 {
 	constexpr uint64_t kCap = 96ULL << 20;

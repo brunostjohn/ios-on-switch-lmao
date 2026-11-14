@@ -13,6 +13,7 @@
 #include <kern/thread_call.h>
 #include <mach/vm_region.h>
 #include "SwitchGpuSpares.h"
+#include "SwitchGpuCachedBuffer.h"
 #include <stddef.h>
 #include <string.h>
 #include <sys/systm.h>
@@ -151,7 +152,7 @@ uint32_t classUp(uint64_t bytes);
 
 struct Spare {
 	Spare *next;
-	IOBufferMemoryDescriptor *bmd;  // prepared; ours alone (no view, no task mapping)
+	SwitchGpuCachedBuffer buffer;  // ours alone (no view, no task mapping)
 	uint64_t *pas;
 	uint64_t bytes;
 	switch_gpu_cached_mapping *mapping;
@@ -182,7 +183,7 @@ struct SparePool {
 		poolZeroing;  // bytes ready, freed and waiting, pool bytes waiting
 #if TGM_STATS
 	OwnerStat owners[kOwners];
-	uint32_t misses[SWITCH_GPU_SPARE_MISSES], zeroBusy, zeroFailed, refillRefused;
+	uint32_t misses[SWITCH_GPU_SPARE_MISSES], zeroBusy, zeroFailed, refillRefused, notUnits;
 #endif
 };
 
@@ -190,7 +191,7 @@ void cleanZeros(void *va, uint64_t bytes);
 SparePool *spares();
 Spare *spareTake(uint64_t bytes);
 void spareIneligible();
-bool spareKeep(IOBufferMemoryDescriptor *bmd, uint64_t *pas, uint64_t bytes,
+bool spareKeep(const SwitchGpuCachedBuffer &buffer, uint64_t *pas, uint64_t bytes,
 	       switch_gpu_cached_mapping *mapping = nullptr);
 
 // With the stats (also gpu_stats_tick.c's stats lines): the method stream of every kScanEvery-th submission of each
@@ -280,14 +281,14 @@ class AGXDeviceUserClient : public IOUserClient
 		uint64_t pool_pa;
 		bool chunked;  // Compressible BOs: pas are pool chunks (tgm_pool_alloc_chunks); no view, never CPU-mapped
 		switch_gpu_cached_mapping *cachedMapping;
-		IOBufferMemoryDescriptor *bmd;  // cached BOs
-		IOMemoryDescriptor *wired;      // imports
+		SwitchGpuCachedBuffer buffer;  // cached and system BOs
+		IOMemoryDescriptor *wired;     // imports
 		OSObject
 			*surface;  // Keeps its global ID alive through the import's GPU retirement.
 		const volatile uint64_t *representation;
 		uint64_t representationValue;
 		IOMemoryDescriptor *view;  // cached clientMemoryForType descriptor
-		bool system;  // a coherent BO from ordinary pages (tgm_pool::FromSystem): a write-combined bmd
+		bool system;  // a coherent BO from ordinary pages (tgm_pool::FromSystem): a write-combined buffer
 		bool compositorPool;  // a pool BO counted as the compositor's (critical_ when it was made)
 		tgm_mem *mem;
 		bool backingMemory;

@@ -247,6 +247,11 @@ int switch_gpu_vm_install(void *, switch_gpu_mapping *mapping, tgm_mem *, uint8_
 	return 0;
 }
 
+int switch_gpu_vm_volatile_kind_ok(uint8_t, int)
+{
+	return 1;
+}
+
 int switch_gpu_vm_prepare(void *, uint64_t va, uint64_t range, tgm_mem *mem, uint64_t offset,
 			  uint8_t, switch_gpu_mapping **out)
 {

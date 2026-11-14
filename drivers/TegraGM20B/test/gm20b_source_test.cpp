@@ -85,11 +85,13 @@ TEST(GM20BPoolPolicySource, BoAllocNeverRefusesACoherentBoForPoolRoom)
 	EXPECT_FALSE(clientCode().Has("GPU pool BoAlloc of %llu KiB refused"));
 	// A system BO: a write-combined buffer of its own, mapped as itself. A physical view over its managed pages would set
 	// their cache attribute through a device pager whose private pages reset it to cacheable whenever they are freed.
-	EXPECT_TRUE(alloc.Between("} else if (!ret && !compressible) {", "if (!ret && bo->bmd) {")
+	EXPECT_TRUE(alloc.Between("} else if (!ret && !compressible) {",
+				  "if (!ret && bo->buffer.memory) {")
 			    .Has("if (system) options |= kIOMapWriteCombineCache;"));
 	EXPECT_FALSE(alloc.Has(
 		"kIOMemoryTypePhysical64) | kPoolCacheMode, TASK_NULL); IODelete(ranges"));
-	EXPECT_TRUE(alloc.Has("if (!ret && bo->bmd) { bo->view = bo->backing_pages == bo->npages"));
+	EXPECT_TRUE(alloc.Has(
+		"if (!ret && bo->buffer.memory) { bo->view = bo->backing_pages == bo->npages"));
 }
 
 TEST(GM20BPoolPolicySource, SystemBosGoAsCachedBosDo)
@@ -98,7 +100,7 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsCachedBosDo)
 	EXPECT_TRUE(release.Has("if (bo->pool_va && bo->view) orphan = IONew(PoolOrphan, "
 				"1); if (orphan) {"));
 	EXPECT_TRUE(release.Has("!bo->system && !(bo->flags & TegraGM20BBoContiguous) &&"));
-	EXPECT_TRUE(release.Before("spareKeep(", "bo->bmd->release();"));
+	EXPECT_TRUE(release.Before("spareKeep(", "switch_gpu_cached_buffer_free(&bo->buffer);"));
 	EXPECT_FALSE(Block(client(), "void releaseOrphans()").Has("spareKeep"));
 	// The kernel's mapping of a system BO is write-combined as its task's is: pushView reads it as a cached BO's.
 	EXPECT_TRUE(Block(client(), "const uint32_t *AGXDeviceUserClient::pushView(")
@@ -122,12 +124,12 @@ TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 	EXPECT_TRUE(alloc.Has("(in->flags & TegraGM20BBoContiguous) || system ? kClasses : "
 			      "classUp(in->bytes);"));
 	EXPECT_TRUE(alloc.Has("cleanZeros(va, backing);"));
-	EXPECT_TRUE(Block(client(), "Spare *spareMake(uint64_t bytes)")
-			    .Has("cleanZeros(bmd->getBytesNoCopy(), bytes);"));
+	EXPECT_TRUE(Block(client(), "Spare *spareMake(SparePool *p, uint64_t bytes)")
+			    .Has("cleanZeros(buffer.cpu, bytes);"));
 	const CodeText work =
 		Block(client(), "void spareWork(thread_call_param_t param, thread_call_param_t)");
 	EXPECT_TRUE(work.Has("switch_gpu_cached_zero(s->pas"));
-	EXPECT_FALSE(work.Has("cleanZeros(s->bmd"));
+	EXPECT_FALSE(work.Has("cleanZeros(s->buffer"));
 	const CodeText completed = Block(client(), "void spareZeroed(void *context, int result)");
 	EXPECT_TRUE(completed.Before("const bool keep = !result && !memoryPressure();",
 				     "p->ready[c] = s;"));
@@ -140,9 +142,9 @@ TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 	EXPECT_TRUE(orphans.Before("if (orphan->view->getRetainCount() > 1) {",
 				   "orphan->view->release();"));
 	EXPECT_TRUE(orphans.Has("orphan->zero &&"));
-	EXPECT_TRUE(Block(client(), "bool spareKeep(IOBufferMemoryDescriptor *bmd, "
+	EXPECT_TRUE(Block(client(), "bool spareKeep(const SwitchGpuCachedBuffer &buffer, "
 				    "uint64_t *pas, uint64_t bytes,")
-			    .Has("bmd->getRetainCount() == 1"));
+			    .Has("switch_gpu_cached_buffer_alone(buffer)"));
 	const CodeText free = Block(client(), "IOReturn AGXDeviceUserClient::boFree(");
 	EXPECT_TRUE(free.Before("unbindOverlaps(binds_[i].va, binds_[i].range, bo);",
 				"queueZombie(bo);"));
