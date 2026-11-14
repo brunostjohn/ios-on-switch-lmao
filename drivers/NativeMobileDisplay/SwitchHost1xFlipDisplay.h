@@ -284,12 +284,35 @@ const char *host1xFlipSurfaces(switch_host1x_flip::Surface &front, switch_host1x
     } else if (IOMemoryMap *map = surfaceMapping(entry)) {
         memory = map->getMemoryDescriptor();
     }
-    host1xFlip.aliasSlot = planeSlotFor(memory, low, high, false, surface, tiled);
-    if (host1xFlip.aliasSlot < 0)
+    const int k = planeSlotFor(memory, low, high, false, surface, tiled);
+    if (k < 0)
         return "no_alias_slot";
+    if (!host1xFlipAliasIsFront(entry, k))
+        return "alias_not_the_front";
+    host1xFlip.aliasSlot = k;
     alias = front;
-    alias.start = planeSlotIova(host1xFlip.aliasSlot);
+    alias.start = planeSlotIova(k);
     return nullptr;
+}
+
+// The plane slot maps the descriptor's pages and the front's own mapping another list (a direct slot: its scanout
+// snapshot's; a scan buffer: its identity range), so the alias is the front only when every page is the same one.
+bool host1xFlipAliasIsFront(int entry, int k) const
+{
+    const auto &plane = planeSlots[k];
+    const SwitchNativeScanout *read = entry >= kSlot0 ? slots[entry - kSlot0].read : nullptr;
+    const uint64_t count = entry >= kSlot0 ? slots[entry - kSlot0].pages : kNativeBlockBytes / 4096;
+    if (plane.high - plane.low != count * 4096 || (entry >= kSlot0 && (!read || !read->allocation.pages)))
+        return false;
+    for (uint64_t n = 0; n < count; ++n) {
+        IOByteCount length = 0;
+        const uint64_t mapped = plane.memory->getPhysicalSegment(plane.low + n * 4096, &length, kIOMemoryMapperNone);
+        const uint64_t scanned = read ? read->allocation.pages[plane.low / 4096 + n]
+                                      : uint64_t(surfaceAddress(entry)) + n * 4096;
+        if (mapped != scanned)
+            return false;
+    }
+    return true;
 }
 
 // STATE_CONTROL before the window's words, as latchState reads them: a boundary between the reads then shows the
@@ -335,7 +358,8 @@ void host1xFlipFinished()
     auto &s = host1xFlip;
     const auto &r = s.run;
     const switch_host1x_flip::Active seen = host1xFlipActive();
-    if (s.aliasSlot >= 0 && seen.window.start == r.front.start && !(seen.control & kWinAActReq))
+    if (s.aliasSlot >= 0 && seen.window.start == r.front.start && !(seen.control & kWinAActReq) &&
+        !planeSlotBusy(s.aliasSlot))
         planeDropSlot(static_cast<unsigned>(s.aliasSlot));
     s.aliasSlot = -1;
     const auto &t = r.totals;

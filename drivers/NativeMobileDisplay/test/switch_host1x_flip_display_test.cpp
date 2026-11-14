@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchHost1xFlipDisplay.h: debug kernels only, on the display's own host1x channel (claimed as the class probe
-// claims it), driven at the frame end before checkRotation reads the underflow, and while it runs nothing else of the
-// display writes window A or a request: the swaps are held, completion and media flips are not armed, no change of mode
-// goes out, the colour and palette units ask for nothing, and no other experiment starts. It ends at every way the
-// display stops.
+// claims it), flipping only to an alias every page of which is the front's, driven at the frame end before
+// checkRotation reads the underflow. While it runs nothing else of the display writes window A or a request: the
+// swaps are held, completion and media flips are not armed, no change of mode goes out, the colour and palette units
+// ask for nothing, and no other experiment starts. It ends at every way the display stops.
 #include <gtest/gtest.h>
 
 #include <string>
@@ -34,6 +34,10 @@ TEST(Host1xFlipDisplay, ItIsDebugOnlyOnTheDisplaysOwnChannel)
     EXPECT_TRUE(
         Block(trial, "void host1xFlipFinished()").Before("planeDropSlot(", "native_legacy_frame_end_release();"));
     EXPECT_EQ(code.Count("host1xFlipsLatched + 1"), 1u);
+    EXPECT_TRUE(Block(trial, "const char *host1xFlipSurfaces(")
+                    .Before("if (!host1xFlipAliasIsFront(entry, k))", "host1xFlip.aliasSlot = k;"));
+    EXPECT_TRUE(Block(trial, "bool host1xFlipAliasIsFront(int entry, int k) const").Has("if (mapped != scanned)"));
+    EXPECT_TRUE(Block(trial, "void host1xFlipFinished()").Has("!planeSlotBusy(s.aliasSlot)"));
 
     const std::string probe = SourceText("../SwitchDcHost1xClassProbe.h");
     EXPECT_NE(probe.find("kDcClassChannel = TEGRA_HOST1X_CHANNEL_DISPLAY"), std::string::npos);
