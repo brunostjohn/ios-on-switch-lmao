@@ -484,7 +484,8 @@ TEST(MediaFlipSource, TheLandscapeAndWindowProbeWritersTakeItFirst)
     const std::string post = Between(probe, "int windowProbePost(", "\n}\n");
     EXPECT_LT(post.find("mediaFlipFromGate();"), post.find("planeReserveBandwidth("));
     const std::string may = Between(SourceText("../SwitchMediaCompletionFlipDisplay.h"), "bool mediaFlipMay(", "\n}\n");
-    for (const char *owner : {"p.landscape", "landscapeOn()", "landscapeHoldsKicks()", "windowProbeBusy()"})
+    for (const char *owner :
+         {"p.landscape", "landscapeOn()", "landscapeHoldsKicks()", "windowProbeBusy()", "host1xFlipBusy()"})
         EXPECT_NE(may.find(owner), std::string::npos) << owner;
 }
 

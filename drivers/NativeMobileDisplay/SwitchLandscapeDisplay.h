@@ -95,7 +95,8 @@ const char *landscapeBusy()
         return "a UI flip is out";
     if (planeLatch.requested() || planeHeldSet || planeRecovering || !mediaFlipIdle())
         return "an overlay change is out";
-    if (probeRequest || probe.active() || planeProbe.active() || columnScanBusy() || windowProbeHolds())
+    if (probeRequest || probe.active() || planeProbe.active() || columnScanBusy() || windowProbeHolds() ||
+        host1xFlipBusy())
         return "a display experiment runs";
     if (tapeAttached || tapeSettle)
         return "the console tape is on";

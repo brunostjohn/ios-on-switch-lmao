@@ -266,42 +266,54 @@ TEST(Vic422Model, QuarterTurnsOfBgraInto422v)
     }
 }
 
-// The refused shape on the model: one colour in, so the 4:2:0 to 4:2:2 pass-through must give exactly it back on
-// every luma sample and CbCr pair of 300x534, and nothing in the rows' padding or past the planes.
+// The refused shape on the model, and the full-screen landscape video's (720x1280, what a recorded turn's first reader
+// has VIC make when the display leaves landscape: display.x1.landscape_video crc_back): one colour in, so the 4:2:0 to
+// 4:2:2 pass-through must give exactly it back on every luma sample and CbCr pair, and nothing in the rows' padding or
+// past the planes. A pair left unwritten keeps what the destination held before, which a copy into another buffer of
+// the pool does not (boots 19 and 21's N422R description left 640 of the 1280 chroma rows).
 TEST(Vic422Model, TheDetachedLayerCopyCoversItsPlanes)
 {
-    constexpr uint32_t SW = 1920, SH = 1080, SP = 2048, DW = 300, DH = 534, DP = 512;
+    constexpr uint32_t SW = 1920, SH = 1080, SP = 2048;
     constexpr uint8_t Y = 81, CB = 90, CR = 240;
-    const uint64_t sOff = chromaOffset(SP, SH), cOff = chromaOffset(DP, DH);
-    for (uint32_t tr : {4u, 7u}) {
-        Bench b(sOff + size_t(SP) * SH / 2, cOff + size_t(DP) * DH + 4096);
-        memset(b.src.data(), Y, sOff);
-        for (size_t i = sOff; i < b.src.size(); i += 2) {
-            b.src[i] = CB;
-            b.src[i + 1] = CR;
-        }
-        const TegraVICImage src = planes(k420v, SW, SH, SP, kSrcIova);
-        const TegraVICImage dst = planes(k422v, DW, DH, DP, kDstIova);
-        TegraVICOp op = tegra_vic_probe_op(SW, SH, DW, DH, tr);
-        op.nearest = 0;
-        TegraVICJob job;
-        const char *why = tegra_vic_build(&src, &dst, &op, &kTegraVICTraits, kConfig, kFilter, &job);
-        ASSERT_EQ(why, nullptr) << why;
-        vic_model_run(&b.model, &job);
-        EXPECT_EQ(b.model.writes, uint64_t(DW) * DH + uint64_t(DW / 2) * DH);
-        EXPECT_EQ(b.model.clipped + b.model.faults, 0u);
-        uint32_t off = 0, padding = 0;
-        for (uint32_t v = 0; v < DH; v++)
-            for (uint32_t u = 0; u < DP; u++) {
-                const uint8_t l = b.dst[size_t(v) * DP + u], c = b.dst[cOff + size_t(v) * DP + u];
-                if (u < DW) {
-                    off += l != Y || c != (u & 1 ? CR : CB);
-                } else {
-                    padding += l != TEGRA_VIC_POISON_BYTE || c != TEGRA_VIC_POISON_BYTE;
-                }
+
+    struct Shape {
+        uint32_t w, h, pitch;
+    };
+
+    const uint64_t sOff = chromaOffset(SP, SH);
+    for (const Shape shape : {Shape{300, 534, 512}, Shape{720, 1280, 768}}) {
+        const uint32_t DW = shape.w, DH = shape.h, DP = shape.pitch;
+        const uint64_t cOff = chromaOffset(DP, DH);
+        for (uint32_t tr : {4u, 7u}) {
+            Bench b(sOff + size_t(SP) * SH / 2, cOff + size_t(DP) * DH + 4096);
+            memset(b.src.data(), Y, sOff);
+            for (size_t i = sOff; i < b.src.size(); i += 2) {
+                b.src[i] = CB;
+                b.src[i + 1] = CR;
             }
-        EXPECT_EQ(off, 0u) << "transform " << tr;
-        EXPECT_EQ(padding, 0u) << "transform " << tr;
+            const TegraVICImage src = planes(k420v, SW, SH, SP, kSrcIova);
+            const TegraVICImage dst = planes(k422v, DW, DH, DP, kDstIova);
+            TegraVICOp op = tegra_vic_probe_op(SW, SH, DW, DH, tr);
+            op.nearest = 0;
+            TegraVICJob job;
+            const char *why = tegra_vic_build(&src, &dst, &op, &kTegraVICTraits, kConfig, kFilter, &job);
+            ASSERT_EQ(why, nullptr) << why;
+            vic_model_run(&b.model, &job);
+            EXPECT_EQ(b.model.writes, uint64_t(DW) * DH + uint64_t(DW / 2) * DH) << DW << "x" << DH << " " << tr;
+            EXPECT_EQ(b.model.clipped + b.model.faults, 0u) << DW << "x" << DH << " " << tr;
+            uint32_t off = 0, padding = 0;
+            for (uint32_t v = 0; v < DH; v++)
+                for (uint32_t u = 0; u < DP; u++) {
+                    const uint8_t l = b.dst[size_t(v) * DP + u], c = b.dst[cOff + size_t(v) * DP + u];
+                    if (u < DW) {
+                        off += l != Y || c != (u & 1 ? CR : CB);
+                    } else {
+                        padding += l != TEGRA_VIC_POISON_BYTE || c != TEGRA_VIC_POISON_BYTE;
+                    }
+                }
+            EXPECT_EQ(off, 0u) << DW << "x" << DH << " transform " << tr;
+            EXPECT_EQ(padding, 0u) << DW << "x" << DH << " transform " << tr;
+        }
     }
 }
 

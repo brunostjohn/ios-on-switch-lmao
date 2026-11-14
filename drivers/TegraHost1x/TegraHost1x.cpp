@@ -17,9 +17,11 @@
 #include <IOKit/IOWorkLoop.h>
 #include "TegraHost1x.h"
 #include "SwitchHost1xChannels.h"
+#include "SwitchHost1xCpuIncrement.h"
 #include "SwitchHost1xFailureRelease.h"
 #include "SwitchHost1xIntr.h"
 #include "../ArmGIC/SwitchInterrupts.h"
+#include "../TegraSMMU/TegraSMMU.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
@@ -160,8 +162,7 @@ int bringUp()
         return fail("clock or reset stuck, CAR CLK_OUT_ENB_L", switch_car_read(CLK_OUT_ENB_L));
     if (switch_mmio_read32(gMc, MC_SMMU_HC_ASID) & SMMU_ENABLE)
         return fail("SMMU translation is on for HC, MC 0x250", switch_mmio_read32(gMc, MC_SMMU_HC_ASID));
-    if (switch_mmio_read32(gMc, MC_HOTRESET_CTRL) & MC_HOTRESET_HC)
-        switch_mmio_write32(gMc, MC_HOTRESET_CTRL, switch_mmio_read32(gMc, MC_HOTRESET_CTRL) & ~MC_HOTRESET_HC);
+    tegra_mc_hot_reset(MC_HOTRESET_CTRL, MC_HOTRESET_HC, false);
     syncConfigure();
     if (!attachInterrupt())
         return fail("cannot attach the syncpoint interrupt, INTID", kIntid);
@@ -244,6 +245,38 @@ extern "C" int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshol
     IOLockUnlock(gSubmitLock);
     return result;
 }
+
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+extern "C" int tegra_host1x_syncpt_cpu_increment(uint32_t id)
+{
+    if (!gHost || !gSubmitLock)
+        return TEGRA_HOST1X_ENODEV;
+
+    struct Registers {
+        uint32_t read(uint32_t offset)
+        {
+            return sync(offset);
+        }
+
+        void write(uint32_t offset, uint32_t value)
+        {
+            syncWrite(offset, value);
+        }
+
+        void barrier()
+        {
+            __asm__ volatile("dsb sy" ::: "memory");
+        }
+    } registers;
+
+    IOLockLock(gSubmitLock);
+    const int result = gState == 1
+                           ? switch_host1x_cpu_increment(registers, id, __atomic_load_n(&gNextSyncpt, __ATOMIC_ACQUIRE))
+                           : TEGRA_HOST1X_ENODEV;
+    IOLockUnlock(gSubmitLock);
+    return result;
+}
+#endif
 
 // Clients have quiesced (their last fences reached) before this. SC7 powers the sync unit and channels down, so the
 // syncpoint values handed out are saved (Linux host1x_syncpt_save) and the channels are stopped.
