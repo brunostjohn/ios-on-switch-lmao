@@ -13,9 +13,29 @@ refuse() {
     exit 1
 }
 
-# An instance store comes back empty after a stop/start (setup-volume.sh).
+# The worker's build directory: SWITCH_BB_WORKER_DIR, or SWITCH_BB_WORKER_FALLBACK_DIR when that is missing. On an
+# instance store only bb_worker and bb_runner may write (their Full Disk Access), so nothing here can make the
+# directories again after a stop/start empties the store: setup-volume.sh over SSH does. Until then both use the
+# fallback, decided the same way by both. A store that is not mounted yet (boot) stops the job cleanly; launchd starts
+# it again when the store mounts (StartOnMount).
 worker_dirs() {
-    mkdir -p "${SWITCH_BB_WORKER_DIR:?}/build" "$SWITCH_BB_WORKER_DIR/cache"
+    dir=${SWITCH_BB_WORKER_DIR:?}
+    case $dir in
+        /Volumes/*)
+            volume=/Volumes/$(echo "${dir#/Volumes/}" | cut -d/ -f1)
+            if ! /sbin/mount | grep -q " on $volume ("; then
+                echo "switch-buildbarn: $volume is not mounted yet" >&2
+                exit 0
+            fi
+            ;;
+    esac
+    if [ ! -d "$dir/build" ] || [ ! -d "$dir/cache" ]; then
+        echo "switch-buildbarn: no $dir/build or $dir/cache: run setup-volume.sh; using ${SWITCH_BB_WORKER_FALLBACK_DIR:?}" >&2
+        dir=$SWITCH_BB_WORKER_FALLBACK_DIR
+        mkdir -p "$dir/build" "$dir/cache"
+    fi
+    SWITCH_BB_WORKER_DIR=$dir
+    export SWITCH_BB_WORKER_DIR
 }
 
 xcode_env() {

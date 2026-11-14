@@ -52,7 +52,6 @@ cat >"$home/.host.libsonnet.new" <<EOF
 {
   name: '$name',
   dataDir: '$data',
-  workerDir: '$work',
   listenAddresses: [$listen],
   storageAddress: '$storage',
   schedulerAddress: '$scheduler',
@@ -65,6 +64,17 @@ mv -f "$home/.host.libsonnet.new" "$home/host.libsonnet"
 
 for role in $roles; do
     label=com.brunostjohn.switch.bb-$role
+    # macOS blocks a non-Apple binary in a LaunchDaemon run as a user from the local network (Local Network privacy);
+    # a root daemon may reach the first host. Actions still run as the user under bb_runner; the umask lets them
+    # write in the directories the root worker makes.
+    identity="<key>UserName</key>
+	<string>$user</string>
+	<key>GroupName</key>
+	<string>staff</string>"
+    if [ -n "$first" ] && [ "$role" = worker ]; then
+        identity="<key>Umask</key>
+	<integer>0</integer>"
+    fi
     plist=/Library/LaunchDaemons/$label.plist
     sudo tee "$plist" >/dev/null <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -73,10 +83,7 @@ for role in $roles; do
 <dict>
 	<key>Label</key>
 	<string>$label</string>
-	<key>UserName</key>
-	<string>$user</string>
-	<key>GroupName</key>
-	<string>staff</string>
+	$identity
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/sh</string>
@@ -91,10 +98,18 @@ for role in $roles; do
 		<string>/usr/bin:/bin:/usr/sbin:/sbin</string>
 		<key>SWITCH_BB_WORKER_DIR</key>
 		<string>$work</string>
+		<key>SWITCH_BB_WORKER_FALLBACK_DIR</key>
+		<string>$data/worker</string>
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>
+	<!-- A clean exit (the worker's store not mounted yet) waits for StartOnMount instead of a restart loop. -->
 	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>StartOnMount</key>
 	<true/>
 	<!-- Without it launchd throttles a daemon's CPU and I/O as background work. -->
 	<key>ProcessType</key>

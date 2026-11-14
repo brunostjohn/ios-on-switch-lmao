@@ -2,7 +2,7 @@
 // private network), runs them through bb_runner in a native build directory and keeps their inputs in a bounded cache
 // of APFS clones. Host values come from host.libsonnet and the LaunchDaemon's environment (switch-worker).
 local host = import 'host.libsonnet';
-local dir = host.workerDir;
+local dir = std.extVar('SWITCH_BB_WORKER_DIR');
 local storage = { grpc: { client: { address: host.storageAddress } } };
 
 {

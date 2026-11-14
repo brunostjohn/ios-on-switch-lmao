@@ -1,6 +1,6 @@
 // bb_runner on a build host: runs each action bb_worker hands it, in its directory below the build directory.
 local host = import 'host.libsonnet';
-local dir = host.workerDir;
+local dir = std.extVar('SWITCH_BB_WORKER_DIR');
 
 {
   buildDirectoryPath: dir + '/build',
