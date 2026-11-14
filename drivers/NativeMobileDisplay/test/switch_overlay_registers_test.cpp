@@ -240,6 +240,44 @@ TEST(OverlayRegisters, BothWindowLatchesAndIdentityAreRequiredBeforeOldMappingRe
     EXPECT_TRUE(display.planeLatch.uses(2));
 }
 
+// DC_WIN is double-buffered (TRM 24.5.4, p.1910-1912): with window B's request out, a set that moves or resizes the
+// overlay writes no word of window B (a boundary taking that request inside the stores would latch the new geometry
+// with the old DC_WINBUF addresses); it waits for that latch and goes out after it, geometry and addresses in one
+// request. A set with the same geometry still replaces the pending request's addresses at once.
+TEST(OverlayRegisters, AGeometryChangeWaitsForThePendingLatch)
+{
+    Display display;
+    ASSERT_TRUE(display.stage(video(native_planes::kBt709, 1)));
+    ASSERT_TRUE(display.planeLatch.requested());
+    auto moved = video(native_planes::kBt709, 2);
+    moved.seq = 2;
+    moved.window[0].image.position = (100u << 16) | 40;
+    moved.window[0].image.size = (640u << 16) | 360;
+    const auto before = display.registers;
+    EXPECT_FALSE(display.stage(moved));
+    EXPECT_TRUE(display.planeHeldSet);
+    for (uint32_t word = Display::kWinBBase; word < Display::kWinBBase + 0x70; ++word)
+        EXPECT_EQ(display.registers[word], before[word]) << "window B word " << std::hex << word;
+
+    display.latch();
+    ASSERT_TRUE(display.planeHeldSet);
+    display.planeHeldSet = false;
+    ASSERT_TRUE(display.stage(display.planeHeld)) << "planeFrameEnd's restage after the latch";
+    EXPECT_EQ(display.dc[Display::kWinBBase + native_planes::kPosition], (100u << 16) | 40);
+    EXPECT_EQ(display.dc[Display::kWinBBase + native_planes::kSize], (640u << 16) | 360);
+}
+
+TEST(OverlayRegisters, ANewAddressWithTheSameGeometryReplacesThePendingRequest)
+{
+    Display display;
+    ASSERT_TRUE(display.stage(video(native_planes::kBt709, 1)));
+    auto next = video(native_planes::kBt709, 2);
+    next.seq = 2;
+    EXPECT_TRUE(display.stage(next));
+    EXPECT_FALSE(display.planeHeldSet);
+    EXPECT_EQ(display.planeSetOf(display.planeLatch.armed).window[0].slot, 2);
+}
+
 // The video column-scanned on window A behind the UI on B (SwitchLandscape.h): 1920x1080 turned onto the 720x1280 panel.
 Display::PlaneSet landscapeVideo(int slot = 1)
 {
@@ -639,7 +677,10 @@ TEST(OverlayRecovery, WindowsThatDoNotReadOffAreOneLineAndOverlaysResumeOnceThey
     EXPECT_TRUE(d.planesOn);
     EXPECT_FALSE(d.planeLatch.uses(1));
     EXPECT_EQ(d.releases, 1u);
-    EXPECT_TRUE(d.stage(video(native_planes::kBt601, 4)));
+    EXPECT_FALSE(d.stage(video(native_planes::kBt601, 4))) << "another matrix waits for the restored set's latch";
+    d.latch();
+    d.planeHeldSet = false;
+    EXPECT_TRUE(d.stage(d.planeHeld));
 }
 
 TEST(OverlayRecovery, UnderflowOnTheFirstOverlayRecoversItAndKeepsOverlaysOn)
