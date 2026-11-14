@@ -61,6 +61,7 @@ kernel_driver(
         "kits/SwitchIdle",
         "kits/SwitchMMIO",
         "kits/SwitchRefusal",
+        "kits/SwitchSysctl",
     ],
 )
 

@@ -18,11 +18,12 @@
 
 namespace {
 constexpr int kLinuxEAGAIN = -11, kLinuxEIO = -5;
-constexpr unsigned long kDfllSafeHz = 1683000000UL;
+constexpr unsigned long kDfllRateHz = 1785000000UL;
 
 std::vector<std::string> gLines;
 int gPrepare, gEnable, gResume;
 unsigned gPrepares, gEnables, gResumes;
+unsigned long gEnabledHz;
 
 bool has(const char *text)
 {
@@ -51,9 +52,10 @@ int tegra_dfll_cpu_prepare(char *why, size_t len)
     return gPrepare;
 }
 
-int tegra_dfll_cpu_enable(unsigned long, char *why, size_t len)
+int tegra_dfll_cpu_enable(unsigned long hz, char *why, size_t len)
 {
     ++gEnables;
+    gEnabledHz = hz;
     snprintf(why, len, "enable %d", gEnable);
     return gEnable;
 }
@@ -96,7 +98,6 @@ public:
     int dfllRefusedErr = 0;
     bool perfRaised = false;
     unsigned perfRaises = 0, dfllFloor = 0, dfllCap = 0;
-    unsigned long dfllTopHz = 0;
     bool governorStarts = true;
     unsigned restores = 0, ladderRaises = 0;
     CpuDown lastDown = CpuDown::Hold;
@@ -137,11 +138,6 @@ public:
     void updateDfllThermal(int)
     {}
 
-    static unsigned long settleDfllTop()
-    {
-        return 1785000000UL;
-    }
-
     void publish(const char *, int64_t)
     {}
 
@@ -165,6 +161,17 @@ protected:
         gPrepares = gEnables = gResumes = 0;
     }
 };
+
+// The DFLL closes its loop at the top row and is asked nothing else before the governor starts: clk-dfll.c's Vmin
+// calibration lands each rate from either direction (test/tegra_dfll_landing_test.cpp), so no rate is re-asked.
+TEST_F(ThermalDfll, TheLoopClosesAtTheTopRow)
+{
+    gEnabledHz = 0;
+    EXPECT_TRUE(thermal.raiseCpu(40000));
+    EXPECT_EQ(gEnabledHz, kDfllRateHz);
+    EXPECT_EQ(gEnables, 1u);
+    EXPECT_TRUE(has("SwitchPerf: CPU on the DFLL at 1785 MHz, on demand from here"));
+}
 
 TEST_F(ThermalDfll, AFailedPrepareFailsThatRaiseAndTheNextRaiseRunsTheSamePath)
 {

@@ -292,6 +292,7 @@ TESTS: dict[str, bool] = {
     'system.thermal': False,
     'system.memory': False,
     'cpu.clock': False,
+    'cpu.dfll_landing': False,
     'cpu.sustained': False,
     'cpu.sched': False,
     'system.dispatch_sync': False,
