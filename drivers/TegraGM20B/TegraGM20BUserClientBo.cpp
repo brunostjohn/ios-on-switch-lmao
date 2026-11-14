@@ -392,6 +392,10 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	ownerNote(owner_, bo->bytes, mark - start, kind == TGM_BO_CACHED);
 	bo->handle = next_handle_++;
 	bo->token = next_token_++;
+	bo->ownerKind =
+		bo->pool_va || bo->chunked ? SWITCH_GPU_OWNER_POOL : SWITCH_GPU_OWNER_ALLOCATED;
+	if (SWITCH_GPU_OWNER_COUNTS)
+		ownerMemory_.change(bo->ownerKind, bo->bytes, true);
 	bo->next = bos_;
 	bos_ = bo;
 	boIndex_.insert(bo->handle, bo);
@@ -543,6 +547,9 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 		vm_, bo->pas[0],
 		1);  // this connection may draw into what it imports (the GPU present asks)
 	bo->handle = next_handle_++;
+	bo->ownerKind = SWITCH_GPU_OWNER_IMPORTED;
+	if (SWITCH_GPU_OWNER_COUNTS)
+		ownerMemory_.change(bo->ownerKind, bo->bytes, true);
 	bo->next = bos_;
 	bos_ = bo;
 	boIndex_.insert(bo->handle, bo);
