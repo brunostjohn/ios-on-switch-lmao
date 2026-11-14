@@ -46,8 +46,6 @@ std::vector<std::string> engineSteps;
 bool enginePowered = true, engineBoots = true;
 IOLock *powerLock;
 
-uint64_t gateNowUs;
-
 struct TestGatePlatform {
     void (*fire)(void *) = nullptr;
     void *context = nullptr;
@@ -85,7 +83,7 @@ struct TestGatePlatform {
 
     uint64_t nowUs()
     {
-        return gateNowUs;
+        return 0;
     }
 
     void log(const char *line)
@@ -964,8 +962,8 @@ TEST_F(SwitchNVDECSubmitTest, EveryFenceOfOneStallJoinsOneCancellation)
 }
 
 // An engine the cancellation's reset does not bring back is parked, and handed to the idle gate once the cancelled jobs
-// have ended (switch_nvdec_power_lost): the next decode tries a power-on at once, decodes within the back-off are
-// refused, and the first after it whose power-on boots the engine runs on the rebased queue.
+// have ended (switch_nvdec_power_lost): each later decode runs the normal power-on, and the first whose power-on boots
+// the engine runs on the rebased queue.
 TEST_F(SwitchNVDECSubmitTest, AnEngineTheResetDoesNotBringBackIsPoweredOnByALaterDecode)
 {
     SwitchEngineGate<TestGatePlatform> gate;
@@ -985,7 +983,6 @@ TEST_F(SwitchNVDECSubmitTest, AnEngineTheResetDoesNotBringBackIsPoweredOnByALate
     };
     ASSERT_TRUE(gate.start(ops));
     testGate = &gate;
-    gateNowUs = 5000000;
     ASSERT_EQ(submit(), 0);
     semantic(gQueue.submitted);
     engineBoots = false;
@@ -1008,8 +1005,8 @@ TEST_F(SwitchNVDECSubmitTest, AnEngineTheResetDoesNotBringBackIsPoweredOnByALate
     EXPECT_EQ(engineSteps.back(), "power on") << "the next decode tried the engine";
     engineSteps.clear();
     EXPECT_EQ(run(&request, resolve, nullptr, check, nullptr, &fence, &waitedForRoom, &why), -19);
-    EXPECT_TRUE(engineSteps.empty()) << "within the back-off nothing touches it";
-    gateNowUs += 2000000;
+    ASSERT_FALSE(engineSteps.empty());
+    EXPECT_EQ(engineSteps.back(), "power on") << "the decode after it runs the power-on again, with no wait";
     engineBoots = true;
     EXPECT_EQ(run(&request, resolve, nullptr, check, nullptr, &fence, &waitedForRoom, &why), 0);
     EXPECT_EQ(engineSteps.back(), "power on");
@@ -1044,7 +1041,6 @@ TEST_F(SwitchNVDECSubmitTest, AWedgedEngineIsHandedToTheGateOnlyOnceItsCancelled
     };
     ASSERT_TRUE(gate.start(ops));
     testGate = &gate;
-    gateNowUs = 5000000;
     ASSERT_EQ(submit(), 0);
     ASSERT_EQ(submit(), 0);
     semantic(gQueue.submitted - 1);

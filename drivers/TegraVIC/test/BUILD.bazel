@@ -509,6 +509,40 @@ host_test(
     deps = [":backing_kernel"],
 )
 
+# NVJPG's planar 4:2:2 and 4:4:4 decodes re-packed into a client's '422f' or '444f' surface, after the decoder.
+host_test(
+    name = "switch_vic_decode_output_test",
+    srcs = [
+        "switch_vic_decode_output_test.cpp",
+        "//drivers/TegraVIC:SwitchVICDecodeOutput.h",
+        "//drivers/TegraVIC:SwitchVICBouncePool.h",
+        "//drivers/TegraVIC:TegraVICBounce.h",
+        "//drivers/TegraGM20B:TegraGM20BCopy.h",
+        "//drivers/TegraVIC:SwitchVICTransform.h",
+        "//drivers/TegraVIC:SwitchVICSurfaceAccess.h",
+        "//drivers/TegraVIC:SwitchNativeSurface.h",
+        "//drivers/TegraVIC:SwitchNativePicture.h",
+        "//drivers/TegraVIC:SwitchNativeVICImage.h",
+        "//drivers/TegraVIC:SwitchVICPicture.h",
+        "//drivers/TegraVIC:SwitchVICJobs.h",
+        "//drivers/TegraVIC:SwitchVICEvents.h",
+        "//drivers/TegraVIC:SwitchVICSemantics.h",
+        "//drivers/TegraVIC:TegraVICRequest.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
+        "//drivers/TegraVIC:SwitchVICQueue.h",
+        "//drivers/TegraVIC:SwitchVICMapping.h",
+        "//drivers/TegraVIC:TegraVIC.h",
+        "//drivers/TegraVIC:TegraVICSurface.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//kits/SwitchDMA:SwitchDcache.h",
+    ],
+    additional_compiler_inputs = ["//drivers/TegraVIC:SwitchVICDecodeOutput.cpp"],
+    deps = [":backing_kernel"],
+)
+
 host_test(
     name = "switch_vic_access_test",
     srcs = [

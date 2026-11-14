@@ -23,8 +23,8 @@
 // written past the picture. 1/4 and 1/8 scaling decode too, up to 7 and 15 steps off libjpeg-turbo's BGRA at their
 // worst sample (its scaled IDCT and chroma upsampling are not NVJPG's), so they are judged as CMPhoto's thumbnails
 // are used, by their mean against ImageIO's software decode (image.jpeg_420). 'yuvf' is the 4:2:0 path's packed memory
-// mode; '422f' and '444f' are not written (TegraNVJPGJpeg.h: semi-planar output above 4:2:0 never completed on this
-// unit).
+// mode; '422f' and '444f' are planar YUV that VIC re-packs (TegraNVJPGJpeg.h: semi-planar output above 4:2:0 never
+// completed on this unit).
 //
 // Why the SMMU: a decode's destination is another process's IOSurface (scattered pages, half of the Switch's RAM above
 // the 32-bit boundary) and NVJPG has no scatter-gather, so each job maps the destination page by page into a window of
@@ -156,7 +156,7 @@ bool gUp, gWedged, gSuspended, gAttached;
 TegraNVJPGBuffer gSetup, gStatus;
 const TegraNVJPGTraits kTraits = {
     .clipped = false,
-    .formats = ((1u << TEGRA_NVJPG_OUT_COUNT) - 1) & ~(1u << TEGRA_NVJPG_OUT_NV16 | 1u << TEGRA_NVJPG_OUT_NV24),
+    .formats = (1u << TEGRA_NVJPG_OUT_COUNT) - 1,
     .chroma = 1u << TEGRA_NVJPG_CHROMA_MONO | 1u << TEGRA_NVJPG_CHROMA_420 | 1u << TEGRA_NVJPG_CHROMA_422H |
               1u << TEGRA_NVJPG_CHROMA_444,
     .scales = 0xf,
@@ -577,7 +577,8 @@ extern "C" void tegra_nvjpg_window_clear(uint32_t window)
 // decoder's methods through THI METHOD0/METHOD1 in averne's order (application, control with the GP timer on, picture
 // index, setup, bitstream, status, output planes, EXECUTE with AWAKEN), then an OP_DONE increment of NVJPG's
 // syncpoint, waited for by interrupt.
-extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *status, uint64_t *busyUs)
+extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *status, uint64_t *busyUs,
+                               const TegraNVJPGFollow *follow)
 {
     if (!gUp || !job->planes || job->planes > 3)
         return -19;
@@ -629,6 +630,8 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     int ret = switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_NVJPG, words, n, gSyncpt, fence);
     if (!ret) {
         gNext = fence;
+        if (follow)
+            follow->queue(follow->context, gSyncpt, fence);
         ret = tegra_host1x_syncpt_wait(gSyncpt, fence, jobBoundUs(job->pixels));
         if (ret == TEGRA_HOST1X_ETIMEDOUT)
             ret = cancelled(job, fence, switch_now_us() - start);
@@ -645,11 +648,10 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
 // Idle power gating (SwitchEngineGate.h), as mainline's runtime PM does for VIC and NVDEC: off 500 ms after the last
 // decode, on at the next. On is J1 and J2 again on the kept image and SMMU domain (an idle power-off does not reset the
 // MC; a resume that could not attach the domain attaches it here): partition, clock, reset and the MBIST workaround,
-// the falcon reloaded and proven with J2's stream. It also brings back an engine a cancellation's reset lost (the gate
-// retries it at a later decode). A failure there is one line and that decode goes to the CPU. Off waits for no job (a
-// decode holds the gate) and
-// powers the partition down. NVDEC's gate shares the lock (tegra_nvdec_power_lock): each one's power-up borrows the
-// other's clock for its MBIST workaround.
+// the falcon reloaded and proven with J2's stream. It also powers on an engine a cancellation's reset left off. A
+// failure there is one line and that decode goes to the CPU; the next decode runs the power-on again. Off waits for no
+// job (a decode holds the gate) and powers the partition down. NVDEC's gate shares the lock (tegra_nvdec_power_lock):
+// each one's power-up borrows the other's clock for its MBIST workaround.
 namespace {
 int gateOn(void *)
 {
@@ -671,7 +673,7 @@ int gateOn(void *)
     gWedged = !answered;
     if (!answered) {
         engineOff();
-        IOLog("TegraNVJPG: power-on FAIL %s; decodes go to the CPU until a later decode powers NVJPG on\n",
+        IOLog("TegraNVJPG: power-on FAIL %s; this decode goes to the CPU, the next one powers NVJPG on again\n",
               gLine[0] ? gLine : "J1");
     }
     gPowerOns++;
@@ -717,7 +719,7 @@ void engineResume()
         IOLockUnlock(gStateLock);
         IOLog("TegraNVJPG: resume FAIL %s; the next decode tries again\n", gLine);
     }
-    gGate.resume(attached);
+    gGate.resume();
 }
 }  // namespace
 

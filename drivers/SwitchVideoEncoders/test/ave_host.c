@@ -49,7 +49,7 @@ static int gRefuseSurfaces;  // 1: every surface (kIOReturnUnsupported); 2: ever
 static int gOpens, gSubmits, gRefused, gSkipped, gPcm, gIdr, gP, gB, gVIC;
 static int gRefuseB;  // the engine answers the first gRefuseB B pictures it is given from when it is set with an
 static int gBSeen;    // error, as NVENC would ones it cannot code (gBSeen counts them)
-static int gRefuseP;  // and the gRefuseP-th P picture from when it is set (gPSeen counts them)
+static int gRefusePFirst, gRefusePLast;  // and P pictures gRefusePFirst..gRefusePLast from when they are set (gPSeen)
 static int gPSeen;
 static uint32_t gFailWait;  // the job whose Wait answers a failure: a producer of its input was cancelled
 static const char *gRefusal;
@@ -168,7 +168,8 @@ static int engine(NVENCClient *c, const TegraNVENCSubmit *s)
     const bool bPicture = pc->pic_type == H264ENC_B;
     if (p->pps_data.entropy_coding_mode_flag)
         return -1;  // CAVLC only (see above)
-    if ((bPicture && gBSeen++ < gRefuseB) || (pPicture && gRefuseP && ++gPSeen == gRefuseP)) {
+    if ((bPicture && gBSeen++ < gRefuseB) ||
+        (pPicture && gRefusePLast && ++gPSeen >= gRefusePFirst && gPSeen <= gRefusePLast)) {
         const TegraNVENCEntry *record = find(s, NVC5B7_SET_OUT_ENC_STATUS);
         nvenc_pic_stat_s *refusal = (nvenc_pic_stat_s *)(c->va[record->value] + record->offset);
         memset(refusal, 0, sizeof(*refusal));
@@ -898,15 +899,26 @@ int main(void)
     printf("a frame whose input's producer failed: %s\n", failedLine);
     // NVENC refuses one P picture (the 4th): it is coded again as an IDR, and P pictures go on from the next frame, the
     // key interval counted from that IDR.
-    gRefuseP = 4;
+    gRefusePFirst = gRefusePLast = 4;
     gPSeen = 0;
     char refusedPLine[512];
     encode_check(spec, kVTH264EntropyMode_CAVLC, 99.0, refusedPLine, sizeof(refusedPLine));
-    gRefuseP = 0;
+    gRefusePFirst = gRefusePLast = 0;
     printf("one P picture refused: %s\n", refusedPLine);
     EXPECT(strstr(refusedPLine, "30/30 frames encoded (0 errors)") &&
                strstr(refusedPLine, "sync samples 0 4 14 15 25,"),
            "a refused P picture is coded again as an IDR and the next picture is a P picture");
+    // Three P pictures refused in a row: each coded again as an IDR, and the fourth picture is a P picture as usual
+    // (nothing holds the session on IDRs for having been refused).
+    gRefusePFirst = 1;
+    gRefusePLast = 3;
+    gPSeen = 0;
+    encode_check(spec, kVTH264EntropyMode_CAVLC, 99.0, refusedPLine, sizeof(refusedPLine));
+    gRefusePFirst = gRefusePLast = 0;
+    printf("three P pictures refused: %s\n", refusedPLine);
+    EXPECT(strstr(refusedPLine, "30/30 frames encoded (0 errors)") &&
+               strstr(refusedPLine, "sync samples 0 1 2 3 13 15 25,"),
+           "P pictures refused in a row are each coded again as an IDR and the next picture is a P picture");
     EXPECT(strstr(failedLine, "29/30 frames encoded (1 errors)") && strstr(failedLine, "sync samples 0 6 "),
            "a failed Wait fails its frame, the next is an IDR and the session goes on");
     // AllowFrameReordering unset (true), MaxFrameDelayCount 1, AllowFrameReordering false; held frames coded later
@@ -927,8 +939,8 @@ int main(void)
         EXPECT(ok && gRefused == refused, "reorder check, %d B pictures", kReorder[r][2]);
     }
     // The first group's B picture refused: it and the other frame of its group come out as I pictures and every later
-    // group has its B pictures (16 in the clip's pattern, 14 coded). Every B picture refused: three groups of I pictures in a row, then anchors
-    // only for 8 groups, one group tried again and refused, anchors only to the end.
+    // group has its B pictures (16 in the clip's pattern, 14 coded). Every B picture refused: every group tries its B
+    // pictures and codes them as I pictures (all 16); nothing stops a group from trying.
     char refusalLine[256];
     gRefuseB = 1;
     gBSeen = 0;
@@ -937,10 +949,10 @@ int main(void)
     EXPECT(refusalOk, "a refused B picture is coded as an I picture and the next group has B pictures again");
     gRefuseB = 1000;
     gBSeen = 0;
-    const bool backedOff = reorder_refusal_check(spec, 0, 8, refusalLine, sizeof(refusalLine));
+    const bool everyGroup = reorder_refusal_check(spec, 0, 16, refusalLine, sizeof(refusalLine));
     gRefuseB = 0;
     printf("every B picture refused: %s\n", refusalLine);
-    EXPECT(backedOff, "B pictures refused in a row back off to anchors only, and are tried again after the run");
+    EXPECT(everyGroup, "every group tries its B pictures again: no run of anchors-only groups");
     EXPECT(gVIC - vicBefore >= 90, "reordering sessions' pictures written by VIC, %d", gVIC - vicBefore);
     char probeLine[256];
     const bool probed = probe_check(spec, probeLine, sizeof(probeLine));

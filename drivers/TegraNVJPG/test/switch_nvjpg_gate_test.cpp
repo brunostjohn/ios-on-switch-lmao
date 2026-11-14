@@ -118,9 +118,8 @@ TEST_F(NVJPGGate, TheStreamIsTheSameWhicheverSelectorTheJobCameThrough)
     }
 }
 
-// An engine the cancellation's reset does not bring back is off until the idle gate powers it on: the next decode tries
-// at once, a decode within the back-off is refused without touching it, and the first after it that powers the engine
-// on runs.
+// An engine the cancellation's reset does not bring back is off to the idle gate: each later decode runs the normal
+// power-on (a failed one fails that decode, with its line), and the first whose power-on boots the engine runs.
 TEST_F(NVJPGGate, AnEngineTheResetDoesNotBringBackIsPoweredOnByALaterDecode)
 {
     gEngine.stallDecodes = true;
@@ -136,13 +135,12 @@ TEST_F(NVJPGGate, AnEngineTheResetDoesNotBringBackIsPoweredOnByALaterDecode)
     EXPECT_EQ(gEngine.boots, boots + 1) << "the next decode tried a power-on";
     EXPECT_TRUE(logged("power-on FAIL"));
     EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), -19);
-    EXPECT_EQ(gEngine.boots, boots + 1) << "within the back-off nothing touches the engine";
-    switch_test_now() += 2000000000ull;
+    EXPECT_EQ(gEngine.boots, boots + 2) << "the decode after it runs the power-on again, with no wait";
     gEngine.stallDecodes = false;
     gEngine.deadAfterReset = false;
     const uint32_t before = gEngine.syncpt;
     EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
-    EXPECT_EQ(gEngine.boots, boots + 2);
+    EXPECT_EQ(gEngine.boots, boots + 3);
     EXPECT_EQ(gEngine.syncpt, before + 3) << "the power-on's proof, then the decode";
 }
 

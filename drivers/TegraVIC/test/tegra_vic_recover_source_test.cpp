@@ -29,7 +29,7 @@ TEST(VICRecoverWiring, APowerOnAttachesWhatAResumeCouldNot)
     const std::string gateOn = Body(source, "int gateOn(void *)\n{");
     EXPECT_THAT(gateOn, HasSubstr("if (!gAttached)\n        gAttached = smmuAttach();"));
     EXPECT_THAT(gateOn, HasSubstr("gAttached && powerUp(&wasOn) && switch_vic_engine_boot()"));
-    EXPECT_THAT(gateOn, HasSubstr("VIC jobs fail until a later job powers VIC on"));
+    EXPECT_THAT(gateOn, HasSubstr("this job fails, the next one powers VIC on again"));
     const std::string resume = Body(source, "void engineResume()\n{");
     EXPECT_THAT(resume, HasSubstr("gAttached = attached;"));
     EXPECT_THAT(resume, HasSubstr("the next job tries again"));
