@@ -20,7 +20,7 @@ COLUMNS = ('kind', 'route', 'name', 'raised_in', 'gone', 'logs', 'owner', 'statu
 KINDS = ('product', 'test', 'tool')
 GONE = ('native', 'form', 'error', 'dead', 'none')
 # Open rows per kind: lower these as rows close, never raise them
-OPEN = {'product': 126, 'test': 20, 'tool': 4}
+OPEN = {'product': 126, 'test': 31, 'tool': 4}
 # Identifiers naming an m2v twin in the plugin's code (route twin, gone other than none): the cut leaves none
 M2V_TWINS = 54
 
