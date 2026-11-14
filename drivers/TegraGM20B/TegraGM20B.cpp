@@ -217,6 +217,7 @@ void registerClkgateSysctl()
 		regdumpSysctl, "A", "GM20B registers for the L4T diff");
 	sysctl_register_oid(&gRegdumpOid);
 	tgm_rail_cycle_register();
+	tgm_ramfc_probe_register();
 }
 #endif
 

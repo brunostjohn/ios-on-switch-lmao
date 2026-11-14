@@ -79,11 +79,7 @@ static void chan_free(struct tgm_chan *chan)
  * gk104_chan_ramfc_write, RAMFC 0xf8 = PFIFO 0x2310: enable 28, scale 15:12, timeout 7:0), as nvgpu's default
  * (gk20a/fifo_gk20a.c gk20a_fifo_default_timeslice_us). nvgpu gives high-priority work 4x its low timeslice
  * (os/linux/driver_common.c nvgpu_init_timeslice: 5200 vs 1300 us); critical channels get scale 5, 4x, written before
- * their first submission (the host reads RAMFC when it first loads the channel). */
-#define RAMFC_TIMESLICE 0xf8
-#define RAMFC_TIMESLICE_DEFAULT 0x10003080
-#define RAMFC_TIMESLICE_HIGH 0x10005080
-
+ * their first submission (the host reads RAMFC when it first loads the channel). RAMFC_TIMESLICE: gpu_internal.h. */
 static int compositor_timeslice_on(void)
 {
 	return 1;
@@ -128,24 +124,58 @@ void tgm_chan_set_level(struct tgm_chan *chan, unsigned int level)
 		chan->timeslice_due = high ? RAMFC_TIMESLICE_HIGH : RAMFC_TIMESLICE_DEFAULT;
 }
 
-/* chan_exec, before a submission is kicked: the host saves a channel's RAMFC when it leaves it, so a level change's
- * timeslice, and the acquire timeout an ACQUIRE interrupt turned off, are written while the channel is idle and on
- * neither GR nor the PBDMA. */
+struct ramfc_due {
+	u32 chid, timeslice;
+	int acquire;
+};
+
+static void ramfc_due_write(void *arg)
+{
+	struct ramfc_due *due = arg;
+
+	if (due->timeslice)
+		chan_timeslice(due->chid, due->timeslice);
+	if (due->acquire)
+		tgm_acquire_arm(due->chid);
+}
+
+/* chan_exec, before a submission is kicked, with the channel's own work done: a level change's timeslice and the
+ * acquire timeout an ACQUIRE interrupt turned off go into RAMFC after a preempt of the channel has completed
+ * (tgm_sched_ramfc). The level setter and the acquire work hand them over through the due words; one not written
+ * stays due for the next submission. */
 void tgm_chan_ramfc_due(struct tgm_chan *chan)
 {
-	u32 value = chan->timeslice_due;
-	int acquire = READ_ONCE(chan->acquire_due);
+	struct ramfc_due due = {chan->chid, 0, 0};
+	u32 none = 0;
+	int ret = 0;
 
-	if ((!value && !acquire) || (s32)(tgm_chan_completed(chan) - chan->submitted) < 0 ||
-	    tgm_sched_loaded(tgm_gpu.device, chan->chid))
+	if ((!READ_ONCE(chan->timeslice_due) && !READ_ONCE(chan->acquire_due)) ||
+	    (s32)(tgm_chan_completed(chan) - chan->submitted) < 0)
 		return;
-	if (value)
-		chan_timeslice(chan->chid, value);
-	chan->timeslice_due = 0;
-	if (acquire) {
-		tgm_acquire_arm(chan->chid);
-		WRITE_ONCE(chan->acquire_due, 0);
+	due.timeslice = __atomic_exchange_n(&chan->timeslice_due, 0, __ATOMIC_ACQ_REL);
+	due.acquire = __atomic_exchange_n(&chan->acquire_due, 0, __ATOMIC_ACQ_REL);
+	ret = tgm_sched_ramfc(tgm_gpu.device, chan->chid, ramfc_due_write, &due);
+	if (ret) {
+		if (due.timeslice)
+			__atomic_compare_exchange_n(&chan->timeslice_due, &none, due.timeslice, 0,
+						    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+		if (due.acquire)
+			WRITE_ONCE(chan->acquire_due, 1);
+		if (ret != -EBUSY) {
+			nvxnu_log("tegra-gm20b: channel %u (%s): RAMFC timeslice/acquire not "
+				  "written, "
+				  "the preempt before it did not complete (PFIFO_PREEMPT 0x2634: "
+				  "%d)\n",
+				  chan->chid, chan->owner, ret);
+		}
+		return;
 	}
+#if TGM_STATS
+	if (due.timeslice) {
+		chan->timeslice = due.timeslice;
+		chan->timeslice_at = chan->submitted;
+	}
+#endif
 }
 
 static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *fence_cpu,
@@ -193,6 +223,10 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	/* a fence word only moves forward: a channel made in a slot continues its predecessor's sequence, so a semaphore
 	 * acquire on the old seqno (the GPU present) is never left waiting for a word that went back to 0 */
 	chan->submitted = READ_ONCE(*fence_cpu);
+#if TGM_STATS
+	chan->timeslice = RAMFC_TIMESLICE_DEFAULT;
+	chan->timeslice_at = chan->submitted;
+#endif
 	chan->event_through = chan->submitted;
 	switch_gpu_jobs_init(&chan->jobs, chan->submitted);
 	switch_gpu_quiet_init(&chan->quiet, chan->submitted);
@@ -258,8 +292,12 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	chan->chid = args.chan.chid;
 	if (!ret)
 		tgm_acquire_arm(chan->chid);
-	if (!ret && critical && tgm_all_clients() && compositor_timeslice_on())
+	if (!ret && critical && tgm_all_clients() && compositor_timeslice_on()) {
 		chan_timeslice(chan->chid, RAMFC_TIMESLICE_HIGH);
+#if TGM_STATS
+		chan->timeslice = RAMFC_TIMESLICE_HIGH;
+#endif
+	}
 	if (!ret && stats_on())
 		tgm_stats_gr_bind(chan);
 	if (!ret && critical && vm_owner)

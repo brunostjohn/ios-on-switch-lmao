@@ -297,6 +297,8 @@ struct tgm_chan {
 	/* the ACQUIRE probe: the first look that found it parked on an acquire, and what it had completed then */
 	u64 acquire_probe_ns;
 	u32 acquire_probe_done;
+	/* RAMFC's timeslice as last written, and the seqno submitted then (gpu_ramfc_probe.c) */
+	u32 timeslice, timeslice_at;
 #endif
 	u32 acquire_unread; /* checks since its interrupt that found RAMFC naming nothing yet */
 
@@ -389,7 +391,13 @@ void tgm_engine_state(char *buf, unsigned int len);
 /* gpu_acquire.c: a semaphore or syncpoint acquire still waiting this long after it began interrupts (RAMFC ACQUIRE).
  * Above any wait a working GPU makes (TGM_STUCK_NS), at the present's own limit (TGM_PRESENT_NS). */
 #define TGM_ACQUIRE_NS (2 * TGM_STUCK_NS)
+#define RAMFC_TIMESLICE 0xf8
+#define RAMFC_TIMESLICE_DEFAULT 0x10003080
+#define RAMFC_TIMESLICE_HIGH 0x10005080
 void tgm_ramfc_write(u32 chid, u32 offset, u32 value);
+#if TGM_STATS
+u32 tgm_ramfc_read(u32 chid, u32 offset);
+#endif
 void tgm_acquire_arm(u32 chid);
 
 enum tgm_wait_source {

@@ -15,8 +15,11 @@ void tgm_sched_level(struct nvkm_device *device, unsigned int chid, unsigned int
 /* Before nvkm removes a channel: its level goes back to foreground (nvkm's own runlist update then drops it) and the hold
  * forgets it. */
 void tgm_sched_forget(struct nvkm_device *device, unsigned int chid);
-/* Whether the host holds `chid`: on the PBDMA, or GR's channel or the one GR switches to (its RAMFC is the host's). */
-int tgm_sched_loaded(struct nvkm_device *device, unsigned int chid);
+/* write(arg) puts words in `chid`'s RAMFC once the channel is disabled and a preempt of it has completed, under
+ * runl->mutex (TegraGM20BRamfcOrder.h); the channel is enabled again after. 0, -EBUSY when the runlist's lock is held
+ * (a runlist update or a recovery: nothing done), -ENOENT, or the preempt's -ETIMEDOUT (nothing written). */
+int tgm_sched_ramfc(struct nvkm_device *device, unsigned int chid, void (*write)(void *arg),
+		    void *arg);
 /* What the GPU runs: the app channel on GR, else on the PBDMA; TGM_VICTIM_SWITCHING or TGM_VICTIM_NONE. */
 int tgm_sched_resident(struct nvkm_device *device);
 

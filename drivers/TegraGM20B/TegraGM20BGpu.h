@@ -650,6 +650,16 @@ int tgm_rail_look(struct tgm_rail_look *look);
 int tgm_rail_cycle_once(void);
 void tgm_rail_cycle_register(void);
 
+/* Debug kernels: every live client channel whose RAMFC timeslice was last written before a job it has completed since,
+ * with RAMFC 0xf8 read back against that value (gpu_ramfc_probe.c, for TegraGM20BRamfcProbe.cpp's
+ * debug.switch_gpu_ramfc); the first mismatch's channel, value and expected value. 0, or -EBUSY before M3. */
+struct tgm_ramfc_look {
+	uint32_t channels, checked, high, mismatched, chid, ramfc, expected;
+};
+
+int tgm_ramfc_look(struct tgm_ramfc_look *look);
+void tgm_ramfc_probe_register(void);
+
 /* Debug kernels: the GM20B registers L4T's capture reads (TegraGM20BRegDump.h, regdump.c), as text into buf; *len its
  * length. 0, -EBUSY before M3, -ENOMEM, -ENOSPC when cap is short of tgm_regdump_bytes(). */
 size_t tgm_regdump_bytes(void);

@@ -1088,9 +1088,11 @@ TEST(GM20BAcquireSource, EveryChannelIsArmedBeforeItsFirstKickAndReArmedWhenIdle
 	const CodeText create = Block(gpu(), "static int chan_new(");
 	EXPECT_TRUE(create.Before("chan->chid = args.chan.chid;", "tgm_acquire_arm(chan->chid);"));
 	EXPECT_TRUE(create.Before("tgm_acquire_arm(chan->chid);", "PUSH_KICK(push);"));
-	const CodeText due = Block(gpu(), "void tgm_chan_ramfc_due(struct tgm_chan *chan)");
-	EXPECT_TRUE(due.Before("tgm_sched_loaded(tgm_gpu.device, chan->chid)",
-			       "tgm_acquire_arm(chan->chid);"));
+	EXPECT_TRUE(Block(gpu(), "static void ramfc_due_write(void *arg)")
+			    .Has("tgm_acquire_arm(due->chid);"));
+	EXPECT_TRUE(
+		Block(gpu(), "void tgm_chan_ramfc_due(struct tgm_chan *chan)")
+			.Has("tgm_sched_ramfc(tgm_gpu.device, chan->chid, ramfc_due_write, &due)"));
 	EXPECT_EQ(gpuCode().Count("tgm_chan_ramfc_due(chan);"), 2u);
 }
 

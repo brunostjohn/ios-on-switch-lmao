@@ -26,6 +26,7 @@
 #include "TegraGM20BRecover.h"
 #include "TegraGM20BSched.h"
 #include "TegraGM20BSchedPolicy.h"
+#include "TegraGM20BRamfcOrder.h"
 
 #define SCHED_CHIDS 4096
 #define SCHED_RUNLS 4
@@ -298,30 +299,67 @@ static int sched_victim(struct nvkm_device *device, struct nvkm_runl *runl)
 	return tgm_kick_victim(eng, is_high(PFIFO_ENG_ID(eng)), pbdma != 0, chid, is_high(chid));
 }
 
-int tgm_sched_loaded(struct nvkm_device *device, unsigned int chid)
+struct ramfc_chan {
+	struct nvkm_chan *chan;
+	void (*write)(void *arg);
+	void *arg;
+};
+
+static int ramfc_own(void *arg)
 {
+	return mutex_trylock(&((struct ramfc_chan *)arg)->chan->cgrp->runl->mutex);
+}
+
+static void ramfc_release(void *arg)
+{
+	mutex_unlock(&((struct ramfc_chan *)arg)->chan->cgrp->runl->mutex);
+}
+
+static void ramfc_disable(void *arg)
+{
+	nvkm_chan_block(((struct ramfc_chan *)arg)->chan);
+}
+
+static void ramfc_enable(void *arg)
+{
+	nvkm_chan_allow(((struct ramfc_chan *)arg)->chan);
+}
+
+static int ramfc_preempt(void *arg)
+{
+	return nvkm_chan_preempt_locked(((struct ramfc_chan *)arg)->chan, true);
+}
+
+static void ramfc_write(void *arg)
+{
+	struct ramfc_chan *c = arg;
+
+	c->write(c->arg);
+}
+
+int tgm_sched_ramfc(struct nvkm_device *device, unsigned int chid, void (*write)(void *arg),
+		    void *arg)
+{
+	struct ramfc_chan c = {NULL, write, arg};
+	const struct tgm_ramfc_steps steps = {
+		&c,           ramfc_own,     ramfc_release, ramfc_disable,
+		ramfc_enable, ramfc_preempt, ramfc_write};
 	struct nvkm_runl *runl = NULL;
-	struct nvkm_engn *engn = NULL;
-	u32 eng = 0;
+	unsigned long flags = 0;
 
 	nvkm_runl_foreach(runl, device->fifo)
 	{
-		if (runl->runq_nr && runl->runq[0] &&
-		    PBDMA_CHID(nvkm_rd32(device, PBDMA_CHANNEL(runl->runq[0]->id))) == chid)
-			return 1;
-		/* Only engines with a context have a status register: SW's id 15 reads 0x0026b8, which PRI-times out */
-		/* nouveau's runlist walk takes each engine by container_of. */
-		/* NOLINTNEXTLINE(clang-analyzer-security.ArrayBound) */
-		nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid)
-		{
-			eng = nvkm_rd32(device, PFIFO_ENG_STATUS(engn->id));
-			if (!(eng & PFIFO_ENG_ID_TSG) && PFIFO_ENG_ID(eng) == chid)
-				return 1;
-			if (!(eng & PFIFO_ENG_NEXT_ID_TSG) && PFIFO_ENG_NEXT_ID(eng) == chid)
-				return 1;
+		struct nvkm_chan *found = nvkm_runl_chan_get_chid(runl, chid, &flags);
+
+		if (found) {
+			c.chan = found;
+			nvkm_chan_put(&found, flags);
+			break;
 		}
 	}
-	return 0;
+	if (!c.chan || !c.chan->func->preempt)
+		return -ENOENT;
+	return tgm_ramfc_write_quiesced(&steps);
 }
 
 int tgm_sched_resident(struct nvkm_device *device)
