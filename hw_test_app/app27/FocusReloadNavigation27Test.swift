@@ -3,8 +3,8 @@ import HWTestCore
 import HWTestKit
 import UIKit
 
-struct FocusSearch27Test: HWTest {
-    let id = "input.focus_search"
+struct FocusReloadNavigation27Test: HWTest {
+    let id = "input.focus_reload_nav"
     let name = "List reload focus cost and controller navigation"
     let subsystem = Subsystem.input
     let interactive = true
@@ -146,32 +146,5 @@ struct FocusSearch27Test: HWTest {
                 ("editing respects allowsFocusDuringEditing", editingRequests == 0 && editingAllowedRequests > 0),
                 ("controller moves focus between sidebar collection rows", moved == true),
             ], metrics)
-    }
-}
-
-@MainActor
-private final class FocusReloadTable: UITableView, UITableViewDataSource {
-    var requests = 0
-
-    override func setNeedsFocusUpdate() {
-        requests += 1
-        super.setNeedsFocusUpdate()
-    }
-
-    func reloadRequests() -> Int {
-        let before = requests
-        reloadData()
-        layoutIfNeeded()
-        return requests - before
-    }
-
-    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { 60 }
-
-    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "row", for: indexPath)
-        var content = cell.defaultContentConfiguration()
-        content.text = "Row \(indexPath.row + 1)"
-        cell.contentConfiguration = content
-        return cell
     }
 }
