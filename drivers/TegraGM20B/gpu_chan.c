@@ -40,9 +40,9 @@ struct switch_gpu_chan_table tgm_chan_table;
 
 #include "SwitchGpuChannelCompletion.h"
 
-void tgm_chans_completed(void)
+unsigned tgm_chans_completed(void)
 {
-	chans_completed();
+	return chans_completed();
 }
 
 void tgm_chan_on_fence(struct tgm_chan *chan, void (*fenced)(void *arg), void *arg)

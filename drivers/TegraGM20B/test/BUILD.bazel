@@ -2111,6 +2111,22 @@ host_test(
 )
 
 host_test(
+    name = "switch_gpu_nonstall_test",
+    srcs = [
+        "switch_gpu_nonstall_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuNonstall.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+    ],
+    data = [
+        "//drivers/TegraGM20B:gpu_bringup.c",
+        "//drivers/TegraGM20B:nouveau/nvkm/engine/fifo/gk104.c",
+        "//drivers/TegraGM20B:nouveau/nvkm/subdev/mc/gk104.c",
+        "//drivers/TegraGM20B:shim/xnu_glue.cpp",
+    ],
+    defines = ["SWITCH_MMIO_HOST_MODEL=1"],
+)
+
+host_test(
     name = "switch_gpu_fence_waiter_test",
     srcs = [
         "switch_gpu_fence_waiter_test.cpp",

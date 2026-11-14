@@ -161,6 +161,11 @@ static int m1(char *line, unsigned int len)
 	}
 	tgm_gpu.device = device;
 	tgm_pmc_own(device);
+	ret = tgm_nonstall_init(device);
+	if (ret) {
+		scnprintf(line, len, "M1 FAIL nonstall tree %d", ret);
+		return ret;
+	}
 	nvxnu_step("tegra-gm20b: M1 step: device constructed, claim GPU interrupts\n");
 	/* nvkm's handler is recorded (request_irq in nvkm_device_ctor) and nothing is armed yet: claim the GPU lines
 	 * before the first nvkm init that may wait */

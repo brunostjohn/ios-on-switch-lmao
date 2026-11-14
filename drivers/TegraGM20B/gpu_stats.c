@@ -362,10 +362,11 @@ void tgm_stats_waits(u64 ms)
 	u64 filters[4] = {0};
 	u64 global = 0;
 	u64 d[9] = {0};
+	u64 job[2] = {0};
 	u32 loud[SWITCH_GPU_LOUD_REASONS] = {0};
 	u32 unread = 0;
 	u32 i = 0;
-	char line[700];
+	char line[800];
 
 	nvxnu_irq_cpus(cpus, filters, &global);
 	for (i = 0; i < 4; i++) {
@@ -377,6 +378,13 @@ void tgm_stats_waits(u64 ms)
 	d[8] = global - tgm_wstat.global_wakeups;
 	tgm_wstat.global_wakeups = global;
 	unread = waits_unread(loud);
+	nvxnu_irq_job_passes(&job[0], &job[1]);
+	for (i = 0; i < 2; i++) {
+		const u64 total = job[i];
+
+		job[i] -= tgm_wstat.job_passes[i];
+		tgm_wstat.job_passes[i] = total;
+	}
 	nvxnu_irq_passes(&stall, &nonstall);
 	ds = stall - tgm_wstat.stall;
 	dn = nonstall - tgm_wstat.nonstall;
@@ -395,25 +403,25 @@ void tgm_stats_waits(u64 ms)
 	sum = __atomic_exchange_n(&tgm_wstat.lat_sum, 0, __ATOMIC_RELAXED);
 	max = __atomic_exchange_n(&tgm_wstat.lat_max, 0, __ATOMIC_RELAXED);
 	per_job = jobs ? (ds + dn) * 100 / jobs : 0;
-	scnprintf(
-		line, sizeof(line),
-		"%llu ms: interrupt passes %llu/s stall, %llu/s nonstall, %llu.%02llu per job "
-		"(%u jobs); channel wakes %llu/s; fence waits slept %llu/s: %u woken, %u at their "
-		"seqno (wake to waiter mean %llu us max %llu us), %u at their deadline; %u quiet "
-		"jobs, %u wake asks, %u wake entries, %u idle settles; passes by cpu "
-		"%llu/%llu/%llu/%llu, "
-		"filters by cpu %llu/%llu/%llu/%llu, %llu global-word wakeups, %u high "
-		"kicks "
-		"read no PFIFO status; jobs ending with their own interrupt: %u not asked quiet, "
-		"%u "
-		"events, %u semantic fence, %u scanout producer, %u no wake entries",
-		ms, ds * 1000 / per, dn * 1000 / per, per_job / 100, per_job % 100, jobs,
-		(u64)wakes * 1000 / per, (u64)slept * 1000 / per, woken, woken - other,
-		woken > other ? sum / (woken - other) / 1000 : 0, max / 1000, deadline, quiet,
-		asked, pushed, settled, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8],
-		unread, loud[SWITCH_GPU_LOUD_UNASKED], loud[SWITCH_GPU_LOUD_EVENTS],
-		loud[SWITCH_GPU_LOUD_SEMANTIC], loud[SWITCH_GPU_LOUD_SCANOUT],
-		loud[SWITCH_GPU_LOUD_NO_WAKE]);
+	scnprintf(line, sizeof(line),
+		  "%llu ms: interrupt passes %llu/s stall, %llu/s nonstall, %llu.%02llu per job "
+		  "(%u jobs); job interrupts by line: %llu stall, %llu nonstall; channel wakes "
+		  "%llu/s; fence waits slept %llu/s: %u woken, %u at their "
+		  "seqno (wake to waiter mean %llu us max %llu us), %u at their deadline; %u quiet "
+		  "jobs, %u wake asks, %u wake entries, %u idle settles; passes by cpu "
+		  "%llu/%llu/%llu/%llu, "
+		  "filters by cpu %llu/%llu/%llu/%llu, %llu global-word wakeups, %u high "
+		  "kicks "
+		  "read no PFIFO status; jobs ending with their own interrupt: %u not asked quiet, "
+		  "%u "
+		  "events, %u semantic fence, %u scanout producer, %u no wake entries",
+		  ms, ds * 1000 / per, dn * 1000 / per, per_job / 100, per_job % 100, jobs, job[0],
+		  job[1], (u64)wakes * 1000 / per, (u64)slept * 1000 / per, woken, woken - other,
+		  woken > other ? sum / (woken - other) / 1000 : 0, max / 1000, deadline, quiet,
+		  asked, pushed, settled, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8],
+		  unread, loud[SWITCH_GPU_LOUD_UNASKED], loud[SWITCH_GPU_LOUD_EVENTS],
+		  loud[SWITCH_GPU_LOUD_SEMANTIC], loud[SWITCH_GPU_LOUD_SCANOUT],
+		  loud[SWITCH_GPU_LOUD_NO_WAKE]);
 	nvxnu_stats("tegra-gm20b: waits %s", line);
 }
 

@@ -242,17 +242,17 @@ TEST_F(Completion, ThePassCompletesOnlyChannelsWithWorkPending)
 	tgm_chan_table = {};
 	switch_gpu_busy_open(&tgm_busy, channel.chid, 0);
 	switch_gpu_chan_table_set(&tgm_chan_table, channel.chid, &channel);
-	chans_completed();
+	EXPECT_EQ(chans_completed(), 0u);
 	EXPECT_EQ(timestamps, 0u) << "nothing kicked";
 	switch_gpu_busy_kick(&tgm_busy, channel.chid, 2);
 	channel.completed = 2;
-	chans_completed();
+	EXPECT_EQ(chans_completed(), 1u) << "one channel progressed: a job interrupt";
 	EXPECT_EQ(channel.progress_done, 2u);
 	EXPECT_EQ(callbacks, 1u);
-	chans_completed();
+	EXPECT_EQ(chans_completed(), 0u);
 	EXPECT_EQ(callbacks, 1u) << "seen done: not touched again";
 	switch_gpu_busy_kick(&tgm_busy, channel.chid, 3);
 	switch_gpu_chan_table_set(&tgm_chan_table, channel.chid, nullptr);
-	chans_completed();
+	EXPECT_EQ(chans_completed(), 0u);
 	EXPECT_EQ(callbacks, 1u) << "torn down";
 }

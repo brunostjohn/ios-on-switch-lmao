@@ -20,6 +20,7 @@
 #include <sys/kdebug.h>
 #include "include/nvxnu.h"
 #include "../SwitchGpuBacking.h"
+#include "../SwitchGpuNonstall.h"
 #include "../SwitchGpuOrdered.h"
 #include "../SwitchGpuWakeWord.h"
 #include "../../../kits/SwitchDMA/SwitchDcache.h"
@@ -39,16 +40,16 @@ void pmap_set_cache_attributes(ppnum_t pn, unsigned int cacheattr);
 void IOLogv(const char *format, va_list ap);
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 int vsnprintf(char *, size_t, const char *, va_list);
-void tgm_present_pass(void);     // gpu_present.c
-void tgm_chans_completed(void);  // gpu_chan.c
-void tgm_present_filter(void);   // SwitchGpuPresentFilter.cpp
-void tgm_promise_pass(void);     // gpu_promise_giveup.c
+void tgm_present_pass(void);         // gpu_present.c
+unsigned tgm_chans_completed(void);  // gpu_chan.c
+void tgm_present_filter(void);       // SwitchGpuPresentFilter.cpp
+void tgm_promise_pass(void);         // gpu_promise_giveup.c
 }
 
 #if DEVELOPMENT || DEBUG
 extern "C" void nvxnu_stats(const char *fmt, ...)
 {
-	char line[768];
+	char line[1024];
 	va_list ap;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
 	va_start(ap, fmt);
 	vsnprintf(line, sizeof(line), fmt, ap);
@@ -192,8 +193,10 @@ nvxnu_poll_irqs(void);  // shim/linux.c: the nvkm handler's irqreturn_t, -1 if n
 
 namespace
 {
-constexpr uint32_t kGpuIntids[2] = {32 + 157,
-				    32 + 158};  // "stall", "nonstall" (Linux tegra210.dtsi:427-428)
+// GPU_STALL and GPU_NONSTALL: global interrupts 157 and 158 (Tegra X1 TRM table 11; Linux tegra210.dtsi:427-428)
+constexpr uint32_t kGpuIntids[2] = {32 + 157, 32 + 158};
+constexpr const char *kLines[2] = {"stall", "nonstall"};
+constexpr int kJobLine = 1;  // the job interrupts' (SwitchGpuNonstall.h)
 constexpr uint64_t kGpuBar0 = 0x57000000;
 constexpr uint32_t PMC_INTR_0 = 0x100, PMC_INTR_1 = 0x104, PMC_INTR_EN_0 = 0x140,
 		   PMC_INTR_EN_1 = 0x144;
@@ -205,6 +208,8 @@ switch_gpu_wake_word gWake;
 void wakeAfterPass();
 #if DEVELOPMENT || DEBUG
 uint64_t gIrqPasses[2];  // by line: stall, nonstall
+uint64_t gJobPasses
+	[2];  // by line, the passes that found a channel's fence moved: the work loop thread's alone
 // passes and filters by the CPU that ran them: each written by the pass's work loop thread, or by the filter on the
 // frame CPU the lines are routed to, alone
 uint64_t gIrqCpus[4], gFilterCpus[4];
@@ -242,15 +247,21 @@ bool pmcPending()
 		      "down for system sleep: %s | %s",
 		      why, what, value, kGpuIntids[0], kGpuIntids[1], stall, nonstall);
 	}
-	panic("tegra-gm20b: GPU interrupt %s (%s %u, INTID %u/%u): PMC INTR %#x/%#x EN %#x/%#x, %s "
-	      "| %s",
-	      why, what, value, kGpuIntids[0], kGpuIntids[1], pmc(PMC_INTR_0), pmc(PMC_INTR_1),
-	      pmc(PMC_INTR_EN_0), pmc(PMC_INTR_EN_1), stall, nonstall);
+	panic("tegra-gm20b: GPU interrupt %s (%s %u; job interrupts on the %s line, INTID %u; "
+	      "stall/nonstall "
+	      "INTID %u/%u): PMC INTR %#x/%#x EN %#x/%#x MASK %#x/%#x, PFIFO INTR %#x EN %#x/%#x, "
+	      "%s | %s",
+	      why, what, value, kLines[kJobLine], kGpuIntids[kJobLine], kGpuIntids[0],
+	      kGpuIntids[1], pmc(PMC_INTR_0), pmc(PMC_INTR_1), pmc(PMC_INTR_EN_0),
+	      pmc(PMC_INTR_EN_1), pmc(SWITCH_GPU_PMC_INTR_MASK_0), pmc(SWITCH_GPU_PMC_INTR_MASK_1),
+	      pmc(SWITCH_GPU_PFIFO_INTR_0), pmc(SWITCH_GPU_PFIFO_INTR_EN_0),
+	      pmc(SWITCH_GPU_PFIFO_INTR_EN_1), stall, nonstall);
 }
 
-// Work loop action for either GPU line (level; the GIC masks it while this runs). nvkm_intr unarms the GPU's
-// top-level interrupt enables, runs the subdev handlers and rearms, so the line is quiet on return. A line nvkm
-// keeps finding nothing on is stuck: panic rather than spin. Errors nvkm reported in the pass panic (nvxnu_error).
+// Work loop action for either GPU line (level; the GIC masks it while this runs). On the stall line nvkm_intr unarms
+// the GPU's top-level interrupt enables, runs the subdev handlers and rearms; on the nonstall line the channel bit is
+// acknowledged (SwitchGpuNonstall.h); either way the line is quiet on return and the channels are scanned. A line that
+// keeps finding nothing is stuck: panic rather than spin. Errors nvkm reported in the pass panic (nvxnu_error).
 // NOLINTNEXTLINE(misc-const-correctness): IOInterruptEventSource::Action's signature
 void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 {
@@ -269,19 +280,31 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 #else
 	(void)source;
 #endif
+	const int line = source == gIrqSources[1] ? 1 : 0;
 	gIrqErrorsLen = 0;
 	gIrqErrors[0] = 0;
 	__atomic_store_n(&gIrqThread, current_thread(), __ATOMIC_RELAXED);
-	const int handled = nvxnu_poll_irqs();
-	tgm_chans_completed();
+	// the nonstall line carries the job interrupts alone: no nvkm pass, its lock or its tree reads
+	const int handled = line ? switch_gpu_nonstall_ack(gPmc) : nvxnu_poll_irqs();
+	const unsigned moved = tgm_chans_completed();
 	__atomic_store_n(&gIrqThread, static_cast<thread_t>(nullptr), __ATOMIC_RELAXED);
+#if DEVELOPMENT || DEBUG
+	if (moved)
+		__atomic_store_n(&gJobPasses[line],
+				 __atomic_load_n(&gJobPasses[line], __ATOMIC_RELAXED) + 1,
+				 __ATOMIC_RELAXED);
+#else
+	(void)moved;
+#endif
 	if (gIrqErrorsLen && __atomic_load_n(&gErrorsFatal, __ATOMIC_ACQUIRE) &&
 	    !(gErrorsContained && gErrorsContained(gIrqErrors)))
 		panic("tegra-gm20b: GPU error: %s", gIrqErrors);
 	if (handled == 1) {
 		gUnhandled = 0;
 	} else if (++gUnhandled >= kStorm) {
-		gpuPanic("storm", "unhandled", gUnhandled);
+		gpuPanic("storm",
+			 line ? "channel bit still set after its acknowledgement" : "unhandled",
+			 gUnhandled);
 	}
 	tgm_present_pass();
 	tgm_promise_pass();
@@ -290,10 +313,9 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 }
 
 // Both lines' primary filter: the present watch's producer, read from memory alone (the GPU may be powered down); true,
-// as the plain event source on a level line does, masks the line until the work loop's pass has run nvkm, which alone
-// quiets it. nvkm routes every FIFO interrupt, the jobs' NON_STALL_INTERRUPT included, to the stall tree: its
-// gf100_fifo_nonstall_allow unmasks PFIFO_INTR_0's channel bit in PFIFO_INTR_EN_0 and its MC table lists PFIFO on leaf 0
-// alone, so the job interrupts come on the stall line and the filter has to be there.
+// as the plain event source on a level line does, masks the line until the work loop's pass has quieted it. The job
+// interrupts come on the nonstall line (SwitchGpuNonstall.h); a stall pass also completes jobs whose channel bit it
+// found pending on both trees (gpu_nonstall.c), so the stall line keeps the filter too.
 // NOLINTNEXTLINE(misc-const-correctness): IOFilterInterruptEventSource::Filter's signature
 bool gpuFilter(OSObject *, IOFilterInterruptEventSource *)
 {
@@ -441,6 +463,14 @@ extern "C" void nvxnu_irq_passes(nvxnu_u64 *stall, nvxnu_u64 *nonstall)
 }
 
 #if DEVELOPMENT || DEBUG
+extern "C" void nvxnu_irq_job_passes(nvxnu_u64 *stall, nvxnu_u64 *nonstall)
+{
+	*stall = __atomic_load_n(&gJobPasses[0], __ATOMIC_RELAXED);
+	*nonstall = __atomic_load_n(&gJobPasses[1], __ATOMIC_RELAXED);
+}
+#endif
+
+#if DEVELOPMENT || DEBUG
 extern "C" void nvxnu_irq_cpus(nvxnu_u64 passes[4], nvxnu_u64 filters[4], nvxnu_u64 *global_wakeups)
 {
 	for (int cpu = 0; cpu < 4; cpu++) {
@@ -512,7 +542,7 @@ extern "C" void nvxnu_irq_start(void)
 {
 	if (__atomic_load_n(&gIrqActive, __ATOMIC_ACQUIRE))
 		return;
-	gPmc = switch_mmio_map(kGpuBar0, 0x1000);
+	gPmc = switch_mmio_map(kGpuBar0, 0x3000);
 	gIrqLoop = IOWorkLoop::workLoop();
 	for (int i = 0; i < 2; i++) {
 		IOService *nub = switch_interrupt_nub(kGpuIntids[i], false);

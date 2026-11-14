@@ -283,7 +283,7 @@ TEST(GM20BPoolScrubSource, ScrubberFreesOnlyFromItsFence)
 	EXPECT_TRUE(submit.Has("nvxnu_work_schedule_after(tgm_scrub.deadline, SCRUB_NS)"));
 	EXPECT_FALSE(submit.Has("nvxnu_idle"));  // no CPU wait for the copy engine
 	EXPECT_TRUE(Block(gpu(), "static void scrub_deadline(void *arg)").Has("nvxnu_panic("));
-	EXPECT_TRUE(Block(gpu(), "static void chan_completion(struct tgm_chan *chan)")
+	EXPECT_TRUE(Block(gpu(), "static int chan_completion(struct tgm_chan *chan)")
 			    .Has("chan->kernel == CHAN_SCRUB"));
 }
 
@@ -517,7 +517,7 @@ TEST(GM20BSleepSource, GpuTouchingPathsGoThroughTheGate)
 		EXPECT_TRUE(body.Before("if (!gate_try())", "gate_leave();"));
 	}
 	// the drain's and the wake's fence waits are woken by the scrubber's fences too
-	EXPECT_TRUE(Block(gpu(), "static void chan_completion(struct tgm_chan *chan)")
+	EXPECT_TRUE(Block(gpu(), "static int chan_completion(struct tgm_chan *chan)")
 			    .Has("if (tgm_gate_is_shut(&tgm_sc7_gate)) nvxnu_wake();"));
 	// a pass for an interrupt taken before the GPU's power went reads nothing
 	EXPECT_TRUE(Block(SourceText("../shim/xnu_glue.cpp"),
@@ -530,8 +530,7 @@ TEST(GM20BSleepSource, GpuTouchingPathsGoThroughTheGate)
 // left to the kernel's waits.
 TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
 {
-	const CodeText nonstall =
-		Block(gpu(), "static void chan_completion(struct tgm_chan *chan)");
+	const CodeText nonstall = Block(gpu(), "static int chan_completion(struct tgm_chan *chan)");
 	EXPECT_TRUE(nonstall.Before("WRITE_ONCE(chan->progress_ns, now); chan_wake_waiters(chan);",
 				    "if (chan->kernel == CHAN_SCRUB) {"));
 	EXPECT_TRUE(nonstall.Has("} else { present_watch_fenced(chan, 0); }"));

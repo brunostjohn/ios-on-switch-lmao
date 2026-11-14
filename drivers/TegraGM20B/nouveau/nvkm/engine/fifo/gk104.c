@@ -748,7 +748,8 @@ gk104_fifo_init(struct nvkm_fifo *fifo)
 		nvkm_wr32(device, 0x002254, 0x10000000 | fifo->userd.bar1->addr >> 12);
 
 	nvkm_wr32(device, 0x002100, 0xffffffff);
-	nvkm_wr32(device, 0x002140, 0xffffffff);
+	nvkm_wr32(device, 0x002140, 0x7fffffff);
+	nvkm_wr32(device, 0x002528, 0x80000000);
 }
 
 int

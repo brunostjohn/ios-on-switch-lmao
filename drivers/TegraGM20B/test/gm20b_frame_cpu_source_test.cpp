@@ -91,7 +91,7 @@ TEST(GM20BFrameCpuSource, TheKickAndThePassKeepNoSharedCounters)
 {
 	EXPECT_FALSE(Block(unit("gpu_exec.c"), "static u32 chan_fence_job(").Has("idle_kicked("));
 	const CodeText pass =
-		Block(unit("SwitchGpuChannelCompletion.h"), "static void chan_completion(");
+		Block(unit("SwitchGpuChannelCompletion.h"), "static int chan_completion(");
 	EXPECT_FALSE(pass.Has("idle_fenced("));
 	EXPECT_TRUE(
 		Block(unit("gpu_chan.c"), "static void chan_wake_waiters(struct tgm_chan *chan)")

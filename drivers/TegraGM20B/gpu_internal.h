@@ -141,7 +141,8 @@ struct wstat_state {
 	/* quiet job ends; waiters' asks, wake entries pushed, idle settles (gpu_quiet.c) */
 	u32 quiet, asked, pushed, settled;
 	u64 lat_sum, lat_max;
-	u64 stall, nonstall;     /* the interrupt passes at the window's start */
+	u64 stall, nonstall; /* the interrupt passes at the window's start */
+	u64 job_passes[2];   /* the passes that completed a job, by line, at the window's start */
 	u64 cpus[4], filters[4]; /* the passes and the nonstall filters by CPU at its start */
 	u64 global_wakeups;      /* the global word's wakeups at its start */
 };
@@ -387,8 +388,11 @@ struct tgm_chan {
 #define CHAN_SCRUB 2 /* the pool scrubber's */
 extern struct list_head tgm_live_chans;
 extern struct switch_gpu_chan_table tgm_chan_table;
-/* The interrupt pass, after nvkm's handlers (shim/xnu_glue.cpp gpuInterrupt): every channel with work in flight. */
-void tgm_chans_completed(void);
+/* The interrupt pass, after nvkm's handlers or the nonstall line's acknowledgement (shim/xnu_glue.cpp gpuInterrupt):
+ * every channel with work in flight; how many of them progressed. */
+unsigned tgm_chans_completed(void);
+/* gpu_nonstall.c, M1: the job interrupts' tree 1 (SwitchGpuNonstall.h) */
+int tgm_nonstall_init(struct nvkm_device *device);
 extern struct mutex tgm_live_lock;
 extern u64 tgm_live_ids;
 void tgm_chan_describe(struct tgm_chan *chan, char *buf, unsigned int len);
