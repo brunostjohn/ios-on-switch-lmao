@@ -76,7 +76,8 @@ static u8 cgrp_level(struct nvkm_cgrp *cgrp)
 
 /* runl->func->update, under runl->mutex as nvkm calls it. The wait for the host's last update comes first: it may run
  * nvkm's recovery (nvkm_runl_update_pending), which removes the channels it kills and updates the runlist itself, so the
- * groups listed after it are the ones left, and the segment written last time is free. */
+ * groups listed after it are the ones left, and the segment written last time is free. A submit still pending after
+ * the wait fails this update, which stays changed for the next one (nvkm_runl_update_locked cleared it). */
 static int sched_update(struct nvkm_runl *runl)
 {
 	const u32 size = runl->func->size;
@@ -89,9 +90,17 @@ static int sched_update(struct nvkm_runl *runl)
 	u32 i = 0;
 	u32 start = 0;
 	u32 offset = 0;
+	unsigned int segment = 0;
 
-	if (runl->func->pending(runl))
-		runl->func->wait(runl);
+	if (!tgm_runlist_segment(&rl[runl->id].next,
+				 runl->func->pending(runl) && runl->func->wait(runl), &segment)) {
+		nvxnu_log("tegra-gm20b: runlist %d: the previous submit is still pending "
+			  "(PFIFO_RUNLIST_SUBMIT_INFO 0x%06x bit 20) after %u ms: this update is "
+			  "not written\n",
+			  runl->id, 0x002284 + runl->id * 0x08, runl->fifo->timeout.chan_msec);
+		atomic_set(&runl->changed, 1);
+		return -ETIMEDOUT;
+	}
 	if (runl->cgrp_nr > SCHED_UNITS)
 		return nv50_runl_update(runl);
 	nvkm_runl_foreach_cgrp(cgrp, runl)
@@ -104,8 +113,7 @@ static int sched_update(struct nvkm_runl *runl)
 	}
 	n = tgm_interleave(rl[runl->id].level, rl[runl->id].entries, units,
 			   rl[runl->id].segment / size, rl[runl->id].order, SCHED_ORDER);
-	start = rl[runl->id].next * rl[runl->id].segment;
-	rl[runl->id].next ^= 1;
+	start = segment * rl[runl->id].segment;
 	offset = start;
 	nvkm_kmap(mem);
 	for (i = 0; i < n; i++) {
