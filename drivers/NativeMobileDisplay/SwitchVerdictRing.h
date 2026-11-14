@@ -12,6 +12,8 @@
 namespace switch_display {
 
 template <class Record, unsigned kSlots> class VerdictRing {
+    static_assert(__is_trivially_copyable(Record), "records are copied in and out as bytes");
+
 public:
     // Any thread. False: the ring was full and the record is dropped.
     bool publish(const Record &record)
