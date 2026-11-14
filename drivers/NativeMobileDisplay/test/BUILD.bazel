@@ -68,10 +68,15 @@
 #   display_planes_source_test         the driver and XNU follow those rules (validateSwap, the kick, one
 #                                       STATE_CONTROL pair, retire at the latch, the panic hook, the published limits,
 #                                       backboardd's CA_DISABLE_DETACHED gate), and the plane accessors are TegraVIC's
+#   tegra_display_color_publish_test    TegraDisplayColorPublish.h's writers on their own threads (and _tsan_test)
+#   switch_completion_flip_claim_test   SwitchCompletionFlip.h's claim word on three threads (and _tsan_test)
+#   switch_verdict_ring_test            SwitchVerdictRing.h: validateSwap's verdicts to the gate (and _tsan_test)
+#   switch_display_period_test          one display period counted: locks, atomic RMWs, hand-offs and work-loop passes
+#                                       of the DC A filter, the frame-end action, the kick, a direct or completion flip
 #
 #   bazel test //drivers/NativeMobileDisplay/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
-load("//bazel/testing:defs.bzl", "host_shims", "host_test")
+load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
 
 lint_files()
 
@@ -198,10 +203,45 @@ host_test(
     ],
 )
 
+# TegraDisplayColorPublish.h: the setters, the filter and the action on their own threads against DC A's CMU: no
+# snapshot reused under the filter, no enable under a whole-table write, no LUT word under the scan, every hold released.
+host_test(
+    name = "tegra_display_color_publish_test",
+    srcs = [
+        "tegra_display_color_publish_test.cpp",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorMath.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorPublish.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorSequence.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorTables.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayPalette.h",
+    ],
+)
+
+# The same under ThreadSanitizer.
+host_test(
+    name = "tegra_display_color_publish_tsan_test",
+    srcs = [
+        "tegra_display_color_publish_test.cpp",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorMath.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorPublish.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorSequence.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorTables.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayPalette.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+)
+
 host_test(
     name = "native_legacy_display_source_test",
     srcs = ["native_legacy_display_source_test.cpp"],
     data = [
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlipDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchScanoutRetirement.h",
+        "//drivers/NativeMobileDisplay:SwitchFlipDeadlineDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchFrameEndDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchGpuDoneDisplay.h",
         "//drivers/NativeMobileDisplay:SwitchOverlayRegisters.h",
         "//drivers/NativeMobileDisplay:SwitchPlaneSelection.h",
         "//diagnostics/switch:SwitchDiag.c",
@@ -303,6 +343,8 @@ host_test(
     name = "display_planes_source_test",
     srcs = ["display_planes_source_test.cpp"],
     data = [
+        "//drivers/NativeMobileDisplay:SwitchFlipDeadlineDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchFrameEndDisplay.h",
         "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
         "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
         "//drivers/NativeMobileDisplay:SwitchDirectSlots.h",
@@ -424,10 +466,15 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchScanoutAddress.h",
         "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
         "//drivers/NativeMobileDisplay:SwitchSuspendRetire.h",
+        "//drivers/NativeMobileDisplay:SwitchFrameEndDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchFlipDeadlineDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchGpuDoneDisplay.h",
         "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
         "//drivers/TegraDisplayFlip:TegraScanoutRing.h",
+        "display_filter_context.h",
     ],
     data = [
+        "//drivers/NativeMobileDisplay:SwitchGpuDoneDisplay.h",
         "//drivers/NativeMobileDisplay:DisplayWindowProbeDisplay.h",
         "//drivers/NativeMobileDisplay:NativeColumnScanDisplay.h",
         "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
@@ -453,13 +500,44 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchScanoutAddress.h",
         "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
         "//drivers/NativeMobileDisplay:SwitchSuspendRetire.h",
+        "//drivers/NativeMobileDisplay:SwitchFrameEndDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchFlipDeadlineDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchGpuDoneDisplay.h",
         "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
         "//drivers/TegraDisplayFlip:TegraScanoutRing.h",
+        "display_filter_context.h",
     ],
     data = [
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlip.h",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlipDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlipFilter.h",
+        "//drivers/NativeMobileDisplay:SwitchMediaCompletionFlipDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchGpuDoneDisplay.h",
         "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
         "//drivers/NativeMobileDisplay:SwitchVICScanoutDisplay.h",
     ],
+)
+
+# SwitchCompletionFlip.h's word with a filter, the completion and the gate on their own threads: one write per arm,
+# none after a withdraw, none by a stale claimer.
+host_test(
+    name = "switch_completion_flip_claim_test",
+    srcs = [
+        "switch_completion_flip_claim_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlip.h",
+    ],
+)
+
+# The same under ThreadSanitizer.
+host_test(
+    name = "switch_completion_flip_claim_tsan_test",
+    srcs = [
+        "switch_completion_flip_claim_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlip.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
 )
 
 host_test(
@@ -476,8 +554,12 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchScanoutAddress.h",
         "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
         "//drivers/NativeMobileDisplay:SwitchSuspendRetire.h",
+        "//drivers/NativeMobileDisplay:SwitchFrameEndDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchFlipDeadlineDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchGpuDoneDisplay.h",
         "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
         "//drivers/TegraDisplayFlip:TegraScanoutRing.h",
+        "display_filter_context.h",
     ],
 )
 
@@ -753,6 +835,7 @@ host_test(
 host_test(
     name = "switch_media_completion_flip_test",
     srcs = [
+        "display_filter_context.h",
         "switch_media_completion_flip_harness.h",
         "switch_media_completion_flip_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchLandscapeState.h",
@@ -797,6 +880,7 @@ host_test(
 host_test(
     name = "switch_media_completion_flip_filter_test",
     srcs = [
+        "display_filter_context.h",
         "//drivers/NativeMobileDisplay:SwitchLandscapeState.h",
         "//drivers/NativeMobileDisplay:SwitchLandscapeWindows.h",
         "switch_media_completion_flip_harness.h",
@@ -1059,4 +1143,81 @@ host_test(
         "switch_scanout_attach_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchScanoutAttach.h",
     ],
+)
+
+# One display period, counted by lock, atomic read-modify-write, hand-off and work-loop pass: the DC A filter and the
+# frame-end action, the kick, a direct flip or a fence-only completion; TegraDisplayColor.cpp as the kernel builds it.
+host_shims(
+    name = "colour_kernel",
+    headers = [
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+        "IOKit/IOReturn.h",
+    ],
+    stubs = "tegra_display_color_stubs.h",
+)
+
+host_library(
+    name = "display_colour_unit",
+    srcs = [
+        "display_filter_context.h",
+        "//drivers/NativeMobileDisplay:EDRDisplayFactor.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColor.cpp",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorMath.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorPublish.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorSequence.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayColorTables.h",
+        "//drivers/NativeMobileDisplay:TegraDisplayPalette.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+        "//kits/SwitchMMIO:SwitchMMIOWords.h",
+    ],
+    hdrs = ["//drivers/NativeMobileDisplay:TegraDisplayColor.h"],
+    defines = ["SWITCH_MMIO_HOST_MODEL"],
+    deps = [":colour_kernel"],
+)
+
+host_test(
+    name = "switch_display_period_test",
+    srcs = [
+        "display_filter_context.h",
+        "switch_completion_flip_harness.h",
+        "switch_display_period_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlip.h",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlipDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlipFilter.h",
+        "//drivers/NativeMobileDisplay:SwitchFlipDeadlineDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchFrameEndDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchGpuDoneDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchScanoutAddress.h",
+        "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
+        "//drivers/NativeMobileDisplay:SwitchSuspendRetire.h",
+        "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
+        "//drivers/TegraDisplayFlip:TegraScanoutRing.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraHost1x:SwitchHost1xFence.h",
+    ],
+    defines = ["SWITCH_MMIO_HOST_MODEL"],
+    deps = [":display_colour_unit"],
+)
+
+# SwitchVerdictRing.h: validateSwap's verdicts from any client thread to the display's gate, every one once and whole, in
+# each publisher's order; a full ring refuses the newest.
+host_test(
+    name = "switch_verdict_ring_test",
+    srcs = [
+        "switch_verdict_ring_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchVerdictRing.h",
+    ],
+)
+
+# The same under ThreadSanitizer.
+host_test(
+    name = "switch_verdict_ring_tsan_test",
+    srcs = [
+        "switch_verdict_ring_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchVerdictRing.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
 )

@@ -49,7 +49,7 @@ protected:
     {
         EXPECT_EQ(d.offerCopy(), 0);
         const int target = d.ring.drawing;
-        EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kArmed);
+        EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kArmed);
         d.complete(0);
         d.donePass();
         return target;
@@ -85,7 +85,7 @@ TEST_P(Refusing, TheFirstFrameEndLogsOnceAndTheGateFlipsTheFrame)
 
     for (int i = 0; i < 6; ++i) {
         ASSERT_EQ(d.offerCopy(), 0);
-        EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kArmed) << "the next frame is armed as usual";
+        EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kArmed) << "the next frame is armed as usual";
         const int next = d.ring.drawing;
         d.complete(0);
         d.donePass();
@@ -102,12 +102,12 @@ TEST_P(Refusing, TheFirstFrameEndLogsOnceAndTheGateFlipsTheFrame)
 TEST_P(Refusing, AReplacedGateFlipIsShownFirst)
 {
     ASSERT_EQ(d.offer(kSlot), 0);
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kIdle) << "a pitch slot after a block-linear front";
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kIdle) << "a pitch slot after a block-linear front";
     d.complete(0);
     d.donePass();
     ASSERT_EQ(d.ring.pending, kSlot);
     ASSERT_EQ(d.offer(kSlot + 1), 0);
-    ASSERT_EQ(d.completionFlip.state, SwitchCompletionFlip::kArmed);
+    ASSERT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kArmed);
     d.complete(0);
     d.donePass();
     ASSERT_EQ(d.ring.superseded, kSlot);
@@ -139,10 +139,10 @@ TEST_P(Refusing, AnOfferArmedBeforeTheRefusalIsWithdrawn)
     copied();
     ASSERT_EQ(d.offerCopy(), 0);
     const int next = d.ring.drawing;
-    ASSERT_EQ(d.completionFlip.state, SwitchCompletionFlip::kArmed);
+    ASSERT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kArmed);
     frame();
     ASSERT_EQ(gLog.size(), 1u);
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kIdle);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kIdle);
     d.model.written.clear();
     d.complete(0);
     EXPECT_TRUE(d.model.written.empty());
@@ -222,13 +222,13 @@ protected:
 TEST_F(Unproven, AFlipKeepsWindowAsLayoutUntilOneLatchedAsWritten)
 {
     ASSERT_EQ(d.offer(kSlot), 0);
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kIdle);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kIdle);
     d.complete(0);
     d.donePass();
     frame();
     ASSERT_EQ(d.ring.front, kSlot);
     ASSERT_EQ(d.offer(kSlot + 1), 0);
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kArmed);
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kArmed);
     d.complete(0);
     d.donePass();
     EXPECT_FALSE(d.completionFlipsProven);
@@ -236,7 +236,7 @@ TEST_F(Unproven, AFlipKeepsWindowAsLayoutUntilOneLatchedAsWritten)
     EXPECT_TRUE(d.completionFlipsProven);
     EXPECT_EQ(d.ring.front, kSlot + 1);
     ASSERT_EQ(d.offer(kSlot + 3), 0);
-    EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kArmed) << "a tiled slot once proven";
+    EXPECT_EQ(d.completionFlip.state(), SwitchCompletionFlip::kArmed) << "a tiled slot once proven";
     EXPECT_TRUE(gLog.empty());
 }
 
