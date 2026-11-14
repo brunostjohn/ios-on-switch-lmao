@@ -52,11 +52,12 @@ host_library(
     copts = GPU_HOST_COPTS,
 )
 
+# Its MMIO through the harness's model (switch_gpu_exec_channel.c), which sees the doorbell's GP_PUT write to USERD
 host_library(
     name = "gpu_exec",
     srcs = ["//drivers/TegraGM20B:gpu_exec.c"] + GPU_HEADERS,
     c_std = "gnu11",
-    copts = GPU_HOST_COPTS,
+    copts = GPU_HOST_COPTS + ["-DSWITCH_MMIO_HOST_MODEL"],
 )
 
 EXEC_TEST_SRCS = [
