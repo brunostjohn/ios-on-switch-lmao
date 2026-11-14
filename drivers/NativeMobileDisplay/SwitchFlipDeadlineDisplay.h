@@ -5,10 +5,12 @@
 // since its last look; an offer's completion is looked for at frame ends and there, by the offer's age. Included in the
 // class body (and in the host harness).
 
-bool flipDeadlineArmed = false;
-uint64_t flipDeadlineFrames = 0;  // frameEnds when the deadline was last armed
-bool offerAged = false;           // a direct or GPU-copy offer is out, its completion due by gpuOfferDeadline
-uint64_t gpuOfferDeadline = 0;
+// Static, as the completion flip's state: the instance is at the 16 KiB a kalloc_type class may have, and one display
+// runs it.
+static inline bool flipDeadlineArmed = false;
+static inline uint64_t flipDeadlineFrames = 0;  // frameEnds when the deadline was last armed
+static inline bool offerAged = false;           // a direct or GPU-copy offer is out, due by gpuOfferDeadline
+static inline uint64_t gpuOfferDeadline = 0;
 
 // Under the gate, a request just written: checkFlipDeadline looks at it within kFlipDeadlineMS, or settles it at once
 // while the scanout is stopped.

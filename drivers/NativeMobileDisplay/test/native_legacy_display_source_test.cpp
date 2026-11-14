@@ -310,7 +310,7 @@ TEST(FrameEndSource, MaskedWhileNothingWaits)
     for (const char *helper :
          {"void writeIntMask(uint32_t clear, uint32_t set)", "void unmaskFrameEnd()", "void maskIdleFrameEnd()"})
         EXPECT_TRUE(method(helper).Has("IOSimpleLockLockDisableInterrupt(intMaskLock)")) << helper;
-    EXPECT_TRUE(method("void kickSwapQueue() override").StartsWith("kickUnmaskFrameEnd();"));
+    EXPECT_TRUE(method("void kickSwapQueue() override").StartsWith("if (primary) kickUnmaskFrameEnd();"));
     EXPECT_TRUE(method("void vblankTick()")
                     .EndsWith("if ((status & kFrameEndInt) && !frameEndNeeded() && tegra_panel_holds_frame_end()) { "
                               "maskIdleFrameEnd(); idleFlipDeadline(); }"));
@@ -319,7 +319,7 @@ TEST(FrameEndSource, MaskedWhileNothingWaits)
     EXPECT_TRUE(method("void kickUnmaskFrameEnd()")
                     .Has("if (!__atomic_load_n(&frameEndUnmasked, __ATOMIC_RELAXED)) unmaskFrameEnd();"));
     EXPECT_EQ(code().Count("__atomic_store_n(&frameEndUnmasked, false"), 2u);
-    EXPECT_EQ(code().Count("noteFrameEndMask("), 3u);
+    EXPECT_EQ(code().Count("noteFrameEndMask("), 2u);
 }
 
 // A blank swap blacks the head through the colour unit only while no flip is out, and the first flip latched after it

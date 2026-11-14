@@ -740,9 +740,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         native_planes::Layer layers[native_planes::kLayers];
     };
 
-    static inline switch_display::VerdictRing<Verdict, 32> verdicts;
-    static inline uint32_t verdictsDropped = 0;  // the publishers': verdicts a full ring dropped
-    uint32_t verdictsDroppedSeen = 0;            // the gate's
+    // Defined after the class: instantiated here, the ring would need Verdict's default member initializers before
+    // the class is complete.
+    static switch_display::VerdictRing<Verdict, 32> verdicts;
+    static inline uint32_t verdictsDropped = 0;      // the publishers': verdicts a full ring dropped
+    static inline uint32_t verdictsDroppedSeen = 0;  // the gate's
 
     bool isValidated(const OriginalLegacySwapRequest *request) const
     {
@@ -1164,8 +1166,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     Span stFeLate = {};
     uint64_t feStamp = 0, feLast = 0, fePeriodSum = 0, fePeriodMin = UINT64_MAX, fePeriodMax = 0;
     uint32_t fePeriodN = 0, stFeFolded = 0;
-    uint64_t fePeriodSumSeen = 0;  // fePeriodSum and fePeriodN at the last stats line: the filter's counts only grow
-    uint32_t fePeriodNSeen = 0;
+    static inline uint64_t fePeriodSumSeen = 0;  // fePeriodSum and fePeriodN at the last stats line: they only grow
+    static inline uint32_t fePeriodNSeen = 0;
     // r6-lows (r6h): swaps validateSwap refused this window and the last refusal's reason (2: not one IOSurface in layer 0 alone,
     // a multi-layer or detached-layer swap; 3: geometry; 4: surface; see validateSwap), counted by the gate as it drains the
     // verdicts.
@@ -1886,8 +1888,8 @@ private:
     // Debug kernels: the frame path's locks per 100 frame ends this window, by lock (the colour unit's setters' lock,
     // INT_MASK's, TegraVIC's IOSurface cache's; completion flips take none, their claims counted instead), and the
     // display's work-loop passes per 100 frame ends (frame-end actions, completion passes, deadlines).
-    uint64_t stLockFrameEnds = 0, stLockVic = 0;
-    uint32_t stLockColour = 0, stLockIntMask = 0, stLockClaims = 0, stPasses = 0;
+    static inline uint64_t stLockFrameEnds = 0, stLockVic = 0;
+    static inline uint32_t stLockColour = 0, stLockIntMask = 0, stLockClaims = 0, stPasses = 0;
 
     void noteLocksWindow()
     {
@@ -3450,15 +3452,18 @@ public:
     // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
     void kickSwapQueue() override
     {
-        kickUnmaskFrameEnd();
+        if (primary)
+            kickUnmaskFrameEnd();
         armVsync();
         if (kicking) {
             rekick = true;
             return;
         }
         kicking = true;
-        drainVerdicts();
-        kickCompletionPass((latchRetire ? firstUntaken() : pendingSwapRequest()) != nullptr);
+        if (primary) {
+            drainVerdicts();
+            kickCompletionPass((latchRetire ? firstUntaken() : pendingSwapRequest()) != nullptr);
+        }
         const uint64_t kickFrom = landscapeRunClock();
         do {
             rekick = false;
@@ -4855,7 +4860,8 @@ public:
         verdict.request = request;
         verdict.accepted = accepted;
         verdict.reason = reason;
-        publishVerdict(verdict);
+        if (primary)
+            publishVerdict(verdict);
         native_legacy_swap_validation_observed(accepted, reason, request, surface);
         return accepted;
     }
@@ -5345,6 +5351,7 @@ OSDefineMetaClassWithInit(NativeLegacyDisplay, IOMobileFramebufferLegacy, ) Nati
 OSDefineDefaultStructors(NativeLegacyDisplay,
                          IOMobileFramebufferLegacy) NativeLegacyDisplay *NativeLegacyDisplay::primaryDisplay;
 constinit uint32_t NativeLegacyDisplay::stPlaneNative = 0;
+constinit switch_display::VerdictRing<NativeLegacyDisplay::Verdict, 32> NativeLegacyDisplay::verdicts;
 constinit NativeLegacyDisplay::LandscapeState NativeLegacyDisplay::landscapeState;
 #if SWITCH_FRAME_TIMELINE
 constinit NativeLegacyDisplay::ColumnScanState NativeLegacyDisplay::columnScan;

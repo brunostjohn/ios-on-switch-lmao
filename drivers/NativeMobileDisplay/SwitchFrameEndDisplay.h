@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // DC A's frame end between its primary filter and the gate: INT_MASK's FRAME_END routing, the filter, and what it hands
 // the frame-end action: per-cause counts only the filter writes, which the action compares with the counts it handled.
-// Included in the class body (and in the host harness).
+// Included in the class body (and in the host harness). Its words are static, as the completion flip's: the instance
+// is at the 16 KiB a kalloc_type class may have, and only the primary display runs the frame end.
 
 // FRAME_END's INT_MASK bit as last written while the scanout is live: set under intMaskLock by whoever unmasks it (the
 // masked->unmasked edge, any context), cleared only by the gate (the idle mask, a stopped or suspended scanout, the
 // stop). The gate reading it set knows FRAME_END stays unmasked until the gate itself masks it, so the kick takes no lock.
-bool frameEndUnmasked = false;
-uint32_t intMaskTakes = 0;  // debug kernels: intMaskLock's takes (counted under it), for the stats line
+static inline bool frameEndUnmasked = false;
+static inline uint32_t intMaskTakes = 0;  // debug kernels: intMaskLock's takes (counted under it), for the stats line
 
 void noteIntMaskLock()
 {
@@ -38,11 +39,13 @@ void unmaskFrameEnd()
 {
     const IOInterruptState state = IOSimpleLockLockDisableInterrupt(intMaskLock);
     noteIntMaskLock();
-    if (intMaskLive && !scanoutStopped && !hwSuspended && !(dc[kDcIntMask] & kFrameEndInt)) {
-        dc[kDcIntStatus] = kFrameEndInt;
-        dc[kDcIntMask] = dc[kDcIntMask] | kFrameEndInt;
+    if (intMaskLive && !scanoutStopped && !hwSuspended) {
+        if (!(dc[kDcIntMask] & kFrameEndInt)) {
+            dc[kDcIntStatus] = kFrameEndInt;
+            dc[kDcIntMask] = dc[kDcIntMask] | kFrameEndInt;
+        }
+        __atomic_store_n(&frameEndUnmasked, true, __ATOMIC_RELAXED);
     }
-    noteFrameEndMask(dc[kDcIntMask]);
     IOSimpleLockUnlockEnableInterrupt(intMaskLock, state);
 }
 
@@ -147,8 +150,8 @@ template <typename Count, typename By> static void bump(Count &count, By by)
 }
 
 // What the filter took per cause, and what the gate has handled of it (the gate's own words, read by the console).
-uint32_t feTaken = 0, vblankTaken = 0, vpulseTaken = 0;
-uint32_t feHandled = 0, vblankHandled = 0, vpulseHandled = 0;
+static inline uint32_t feTaken = 0, vblankTaken = 0, vpulseTaken = 0;
+static inline uint32_t feHandled = 0, vblankHandled = 0, vpulseHandled = 0;
 
 static uint32_t newSince(const uint32_t &taken, uint32_t &handled, uint32_t &folded)
 {

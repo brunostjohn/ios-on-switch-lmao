@@ -8,8 +8,9 @@
 // per offer (the completion) and one reader (the gate's pass), and the next offer comes only after that pass. Included
 // in the class body (and in the host harness).
 
-bool completionPassFolds = false;  // the gate's: a written flip's pass may wait for the frame end
-bool kickWaiting = false;          // the gate's: a swap is queued behind the offer out
+// Static, as the frame end's words: one display offers to the GPU.
+static inline bool completionPassFolds = false;  // the gate's: a written flip's pass may wait for the frame end
+static inline bool kickWaiting = false;          // the gate's: a swap is queued behind the offer out
 
 void publishCompletionPass()
 {
