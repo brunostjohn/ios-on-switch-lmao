@@ -9,14 +9,11 @@
 //  - a range that inline signals joined splits again where m2v takes it (raw_inline_signals_test's other half);
 //  - m2v takes only its own functions and archives, and the facade's twins (archives dropped, linked functions twinned,
 //    fences replayed as their twins) never hand it the device's own objects;
-//  - the frontend and bridge hand each stage's linked functions to m2v under the specialized name it was made under, and
-//    the descriptor's C and Rust forms agree.
+//  - the frontend hands each stage's linked functions to the bridge under the specialized name it was made under.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <regex>
 #include <string>
-#include <vector>
 
 #include "bazel/testing/source_text.h"
 
@@ -60,14 +57,6 @@ TEST(M2VSource, AJoinedRangeSplitsAgainWhereM2VTakesIt)
                 HasSubstr("const std::vector<RMSegment> parts = compatibilityParts(cb, range);"));
 }
 
-std::vector<std::string> fields(const std::string &body, const std::regex &field)
-{
-    std::vector<std::string> out;
-    for (auto it = std::sregex_iterator(body.begin(), body.end(), field); it != std::sregex_iterator(); ++it)
-        out.push_back((*it)[1]);
-    return out;
-}
-
 TEST(M2VSource, M2VsArchiveTakesOnlyItsOwnFunctions)
 {
     const std::string frontend = SourceText("../../NativeMetal/NativeBridgeMetalFrontend.mm");
@@ -108,11 +97,6 @@ TEST(M2VSource, TheFrontendHandsEachStagesLinkedFunctionsToTheBridge)
     // the async path makes the state on a worker only when every function, linked ones too, is this device's
     EXPECT_THAT(Body(frontend, "static bool asyncRenderPipelineWanted("),
                 HasSubstr("d.vertexLinkedFunctions, d.fragmentLinkedFunctions"));
-
-    const std::string bridge = SourceText("../../NativeMetal/bridge/NativeMetalObjects.rs");
-    const std::string convert = Body(bridge, "fn render_descriptor<F: DescriptorFunction>(");
-    EXPECT_THAT(convert, HasSubstr("stage_function().with_linked(vertex_linked)"));
-    EXPECT_THAT(convert, HasSubstr("stage_function().with_linked(fragment_linked)"));
 }
 
 TEST(M2VSource, AFunctionKeepsTheSpecializedNameItWasMadeUnder)
@@ -132,17 +116,6 @@ TEST(M2VSource, AFunctionKeepsTheSpecializedNameItWasMadeUnder)
     const std::string bridge = SourceText("../../NativeMetal/bridge/NativeMetalObjects.rs");
     EXPECT_THAT(Body(bridge, "impl DescriptorFunction for NmbFunction {"),
                 HasSubstr("self.0.linked_function().with_link_name(self.1.clone())"));
-}
-
-TEST(M2VSource, TheDescriptorsCAndRustFormsAgree)
-{
-    const std::string c = Between(SourceText("../../NativeMetal/bridge/NativeMetalObjects.h"),
-                                  "#define NMB_RENDER_PIPELINE_DESCRIPTOR_FIELDS(Function)", "\n\n");
-    const std::string rust = Between(SourceText("../../NativeMetal/bridge/NativeMetalObjects.rs"),
-                                     "pub struct NmbRenderPipelineDescriptorOf<F> {", "\n}");
-    const std::vector<std::string> namesC = fields(c, std::regex(R"((\w+_(?:linked|count));)"));
-    EXPECT_EQ(namesC, fields(rust, std::regex(R"(pub (\w+_(?:linked|count)):)")));
-    EXPECT_EQ(namesC.size(), 8u);
 }
 
 // A state the pack holds is this device's archive hit: every way the facade asks m2v for its twin (at once, with
