@@ -20,6 +20,8 @@
 #                                    wake-ups per burst, the hold's end within a tick of the frames' or the hint's
 #   switch_perf_hint_source_test     the touch filter's GPU and EMC hints as their sources stand: no lock, no
 #                                    read-modify-write, no sequentially consistent access
+#   switch_thermal_ceiling_test      SwitchThermalCeiling.h: the DFLL ceiling check as timer steps against a model DFLL;
+#                                    no sleep left in SwitchThermal.cpp where governor signals or ALERT wait
 #   switch_cpu_load_test             SwitchCpuLoad.h: a CPU's busy time from its context-switch callout, exact read
 #                                    alone, off by one interval per racing switch at most (also under TSAN)
 #   switch_perf_governor_callouts_test SwitchPerfGovernor.cpp itself over stand-ins for XNU: the locks, read-modify-
@@ -305,4 +307,14 @@ host_test(
         "//drivers/SwitchPower:SwitchEMCHints.h",
         "//drivers/TegraGM20B:gpu_clock.c",
     ],
+)
+
+host_test(
+    name = "switch_thermal_ceiling_test",
+    srcs = [
+        "switch_thermal_ceiling_test.cpp",
+        "//drivers/SwitchPower:SwitchGovernor.h",
+        "//drivers/SwitchPower:SwitchThermalCeiling.h",
+    ],
+    data = ["//drivers/SwitchPower:SwitchThermal.cpp"],
 )
