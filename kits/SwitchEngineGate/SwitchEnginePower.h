@@ -5,8 +5,10 @@
 // t210/cg_regs.c). Mainline's tegra_powergate_power_up/down does neither the memory-client flush nor the second reset.
 //   off: clock on; the memory client flushed and drained, and held in hot reset while the partition is off; module
 //        reset; clock off; partition off
-//   on:  partition on; clock on; module reset; clamps removed (until CLAMP_STATUS clears); reset released; the client's
-//        hot reset released; on T210 before B01 only, the MBIST workaround's LVL2 pulse; the module reset again
+//   on:  partition on; clock on; module reset; clamps removed (until the partition's REMOVE_CLAMPING_CMD bit clears, the
+//        handshake every procedure of Tegra X1 TRM 12.2.7 polls: CLAMP_STATUS is a legacy register, 12.6.12); reset
+//        released; the client's hot reset released; on T210 before B01 only, the MBIST workaround's LVL2 pulse; the
+//        module reset again
 // The caller writes its prod registers (switch_engine_prod) and boots its falcon after on. Waits are bounded reads of
 // hardware handshakes that raise no interrupt.
 #pragma once
@@ -33,7 +35,7 @@ struct SwitchEngineProd {
 
 namespace switch_engine_power {
 constexpr uint32_t kStepUs = 10;
-constexpr uint32_t kLvl2ClockGateOverride = 0x554, kPmcClampStatus = 0x2c;
+constexpr uint32_t kLvl2ClockGateOverride = 0x554, kPmcClampStatus = 0x2c, kPmcRemoveClamping = 0x34;
 constexpr uint64_t kApbMiscPA = 0x70000000;
 constexpr uint32_t kHidrev = 0x804;
 
@@ -144,7 +146,7 @@ inline bool switch_engine_power_up(const SwitchEnginePower &p, bool *wasOn)
     switch_pmc_remove_clamping(p.partition);
     bool unclamped = false;
     for (uint32_t i = 0; i < 100 && !unclamped; i++) {
-        unclamped = !(switch_pmc_read(kPmcClampStatus) & (1u << p.partition));
+        unclamped = !(switch_pmc_read(kPmcRemoveClamping) & (1u << p.partition));
         if (!unclamped)
             IODelay(1);
     }

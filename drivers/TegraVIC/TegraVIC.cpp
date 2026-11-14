@@ -282,9 +282,10 @@ bool powerUp(bool *wasOn)
     IODelay(2);
     if (!switch_engine_power_up(kPower, wasOn)) {
         snprintf(gLine, sizeof(gLine),
-                 "V1 FAIL partition %u did not come up (PWRGATE_TOGGLE %#x STATUS %#x CLAMP_STATUS %#x "
-                 "CLK_OUT_ENB_X %#x RST_DEVICES_X %#x)",
+                 "V1 FAIL partition %u did not come up (PWRGATE_TOGGLE %#x STATUS %#x REMOVE_CLAMPING_CMD %#x "
+                 "CLAMP_STATUS %#x CLK_OUT_ENB_X %#x RST_DEVICES_X %#x)",
                  kPartition, switch_pmc_read(PWRGATE_TOGGLE), switch_pmc_read(PWRGATE_STATUS),
+                 switch_pmc_read(switch_engine_power::kPmcRemoveClamping),
                  switch_pmc_read(switch_engine_power::kPmcClampStatus), switch_car_read(CLK_OUT_ENB_X),
                  switch_car_read(RST_DEVICES_X));
         return false;

@@ -176,9 +176,10 @@ bool powerUp(bool *wasOn)
 {
     const auto failed = [](unsigned partition) {
         snprintf(gLine, sizeof(gLine),
-                 "N1 FAIL partition %u did not come up (PWRGATE_TOGGLE %#x STATUS %#x CLAMP_STATUS %#x "
-                 "CLK_OUT_ENB_Y %#x RST_DEVICES_Y %#x)",
+                 "N1 FAIL partition %u did not come up (PWRGATE_TOGGLE %#x STATUS %#x REMOVE_CLAMPING_CMD %#x "
+                 "CLAMP_STATUS %#x CLK_OUT_ENB_Y %#x RST_DEVICES_Y %#x)",
                  partition, switch_pmc_read(PWRGATE_TOGGLE), switch_pmc_read(PWRGATE_STATUS),
+                 switch_pmc_read(switch_engine_power::kPmcRemoveClamping),
                  switch_pmc_read(switch_engine_power::kPmcClampStatus), switch_car_read(CLK_OUT_ENB_Y),
                  switch_car_read(RST_DEVICES_Y));
         return false;

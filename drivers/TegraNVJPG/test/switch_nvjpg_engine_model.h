@@ -29,6 +29,8 @@ struct Engine {
     bool partitionOn = true, clamped = false, clockOn = false, inReset = true, falconRunning = false;
     bool flushed = false, nvdecPartitionOn = false;
     bool requestDropped = false;  // another writer clears NVJPG's request bit after it is set
+    bool clampStatusStale = false;  // CLAMP_STATUS keeps reading set (a legacy register, TRM 12.6.12)
+    bool clampStuck = false;        // REMOVE_CLAMPING_CMD never clears
     std::vector<std::string> events;
     bool stallDecodes = false, deadAfterReset = false;
     int boots = 0, partitionPowerOns = 0, teardowns = 0, restarts = 0;
@@ -294,13 +296,15 @@ bool switch_pmc_partition_off(unsigned partition)
 
 void switch_pmc_remove_clamping(unsigned)
 {
-    gEngine.clamped = false;
+    gEngine.clamped = gEngine.clampStuck;
     gEngine.events.push_back("unclamp");
 }
 
 uint32_t switch_pmc_read(uint32_t offset)
 {
-    return offset == 0x2c && gEngine.clamped ? 1u << 26 : 0;
+    if (offset == 0x34)
+        return gEngine.clamped ? 1u << 26 : 0;
+    return offset == 0x2c && (gEngine.clamped || gEngine.clampStatusStale) ? 1u << 26 : 0;
 }
 
 switch_falcon_result switch_falcon_load(volatile uint8_t *, uint64_t, const switch_falcon_image *)

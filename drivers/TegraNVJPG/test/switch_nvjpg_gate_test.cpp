@@ -60,6 +60,27 @@ TEST_F(NVJPGGate, AJobPastItsBoundIsCancelledAndTheNextJobRuns)
     EXPECT_EQ(gEngine.syncpt, before + 1);
 }
 
+// Every partition procedure of the TRM (12.2.7) waits for the partition's REMOVE_CLAMPING_CMD bit to clear; CLAMP_STATUS
+// is kept only for backward compatibility (12.6.12). A power-on whose CLAMP_STATUS reads set once the command has
+// cleared comes up, and one whose command never clears fails with both registers in its line.
+TEST_F(NVJPGGate, APowerOnWaitsForTheRemoveClampingCommandNotTheLegacyClampStatus)
+{
+    idle();
+    gEngine.clampStatusStale = true;
+    TegraNVJPGJob job = decodeJob();
+    nvjpg_dec_status status = {};
+    EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    EXPECT_FALSE(logged("power-on FAIL"));
+    gEngine.clampStatusStale = false;
+
+    idle();
+    gEngine.clampStuck = true;
+    EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), -19);
+    EXPECT_TRUE(logged("did not come up (PWRGATE_STATUS 0 REMOVE_CLAMPING_CMD 0x4000000 CLAMP_STATUS 0x4000000"));
+    gEngine.clampStuck = false;
+    EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0) << "the next decode powers it on again";
+}
+
 // STATUS reads done for a client with no flush requested, so a request another writer dropped looks drained unless
 // the request bit is read with it (TRM 18.11.1.114): the cancellation says the client was not flushed.
 TEST_F(NVJPGGate, ACancellationWhoseFlushRequestWasDroppedSaysTheClientWasNotFlushed)
