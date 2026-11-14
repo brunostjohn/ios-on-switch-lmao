@@ -4,7 +4,11 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#ifdef KERNEL
+#include <libkern/libkern.h>
+#else
 #include <stdio.h>
+#endif
 #include "TegraMCNames.h"
 
 namespace switch_mc {

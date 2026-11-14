@@ -10,7 +10,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#ifdef KERNEL
+#include <libkern/libkern.h>
+#else
 #include <stdio.h>
+#endif
 #include "../SwitchMMIO/SwitchMMIO.h"
 
 #ifdef __cplusplus
