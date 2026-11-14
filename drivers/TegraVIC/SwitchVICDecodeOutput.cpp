@@ -11,8 +11,9 @@
 #include "TegraVICRequest.h"
 
 namespace {
-// VIC's planar Y'CbCr inputs. No IOSurface pixel format is described as them (TegraVICFormats.h lists those): only a
-// decoder's buffer.
+// VIC's planar Y'CbCr inputs, which it reads into 4:4:4 and 4:2:2 semi-planar outputs (TRM chapter 15, Table 51: both
+// input and output support, three surface pointers a slot). No IOSurface pixel format is described as them
+// (TegraVICFormats.h lists those): only a decoder's buffer.
 const TegraVICFormat kPlanar422 = {0, TEGRA_VIC_T_Y8___U8___V8_N422,  3, TEGRA_VIC_KIND_YCC_FULL, 0, {1, 1, 1}, 1,
                                    0, TEGRA_VIC_T_Y8___U8___V8_N422R, 0};
 const TegraVICFormat kPlanar444 = {0, TEGRA_VIC_T_Y8___U8___V8_N444, 3, TEGRA_VIC_KIND_YCC_FULL, 0, {1, 1, 1}, 0,
