@@ -69,12 +69,17 @@ host_library(
         "//drivers/SwitchDisplayPort:TegraDisplayB.cpp",
         "//drivers/SwitchDisplayPort:TegraDisplayB.h",
         "//drivers/TegraDisplayFlip:SwitchDisplayPriority.h",
+        "//drivers/TegraGM20B:platform.c",
+        "//drivers/TegraGM20B:shim/include/nvxnu.h",
+        "//drivers/TegraI2C:TegraI2C.h",
         "//drivers/TegraSMMU:SwitchSmmuRegisters.h",
         "//drivers/TegraSMMU:TegraSMMU.cpp",
         "//drivers/TegraSMMU:TegraSMMU.h",
         "//drivers/TegraSMMU:TegraSMMUAttachments.h",
         "//kits/SwitchCAR:SwitchCAR.h",
         "//kits/SwitchCAR:SwitchPMC.h",
+        "//kits/SwitchLinux:SwitchLinux.h",
+        "//kits/SwitchLinux:SwitchLinuxLock.h",
         "//kits/SwitchMMIO:SwitchMMIO.h",
         "//kits/SwitchMMIO:SwitchMMIOKernel.h",
     ],
@@ -82,17 +87,21 @@ host_library(
     deps = [":mc_kernel"],
 )
 
-# MC_CLIENT_HOTRESET_CTRL/_1 have one writer, tegra_mc_hot_reset: display B's power-up against VIC's power steps on a
-# register file, and every driver's and kit's source.
+# MC_CLIENT_HOTRESET_CTRL/_1 have one writer, tegra_mc_hot_reset: display B's power-up against VIC's power steps and
+# the GPU's flush and rail-down against NVDEC's and NVJPG's on a register file, and every driver's and kit's source.
 host_test(
     name = "mc_hot_reset_owner_test",
     srcs = [
         "mc_hot_reset_owner_test.cpp",
         "//drivers/SwitchDisplayPort:SwitchDPModes.h",
         "//drivers/SwitchDisplayPort:TegraDisplayB.h",
+        "//drivers/TegraGM20B:shim/include/nvxnu.h",
+        "//drivers/TegraI2C:TegraI2C.h",
         "//drivers/TegraSMMU:TegraSMMU.h",
         "//kits/SwitchCAR:SwitchCAR.h",
         "//kits/SwitchCAR:SwitchPMC.h",
+        "//kits/SwitchLinux:SwitchLinux.h",
+        "//kits/SwitchLinux:SwitchLinuxLock.h",
     ],
     data = [
         "//drivers/SwitchDisplayPort:all_files",

@@ -2,10 +2,13 @@
 // VIC 18, NVENC 11, HC 6, DCB 3; CTRL_1 GPU 2, NVDEC 5, NVJPG 8 (Tegra X1 TRM 18.11.1.56, 18.11.1.114). Two drivers
 // powering their engines at once must not lose each other's bit, so tegra_mc_hot_reset is their one writer.
 //
-// The model runs the real TegraSMMU.cpp and TegraDisplayB.cpp on a register file. A second driver's power step
-// (tegra_mc_hot_reset for VIC) lands at the first read of CTRL by anyone else: at once if that read is outside the
-// MC's lock, or, as a second CPU spinning on the lock would, right after the lock is released.
+// The model runs the real TegraSMMU.cpp, TegraDisplayB.cpp and the GM20B's platform.c on a register file. A second
+// driver's power step (tegra_mc_hot_reset for VIC, NVDEC or NVJPG) lands at the first read of its register by anyone
+// else: at once if that read is outside the MC's lock, or, as a second CPU spinning on the lock would, right after the
+// lock is released.
 #include "drivers/SwitchDisplayPort/TegraDisplayB.h"
+#include "drivers/TegraGM20B/shim/include/nvxnu.h"
+#include "drivers/TegraI2C/TegraI2C.h"
 #include "drivers/TegraSMMU/TegraSMMU.h"
 #include "kits/SwitchCAR/SwitchCAR.h"
 #include "kits/SwitchCAR/SwitchPMC.h"
@@ -26,22 +29,27 @@
 
 namespace {
 constexpr uintptr_t kMc = 0x70019000;
-constexpr uint32_t kCtrl = 0x200;
+constexpr uint32_t kCtrl = 0x200, kCtrl1 = 0x970, kStatus1 = 0x974;
 constexpr uint32_t kVic = 1u << 18, kDcb = 1u << 3;
+constexpr uint32_t kGpu = 1u << 2, kNvdec = 1u << 5, kNvjpg = 1u << 8;
+constexpr uint8_t kEnCtrl = 0x06, kEnM1 = 0x01, kEnM4 = 0x40;
 
 std::map<uintptr_t, uint32_t> gRegisters;
 int gLocksHeld;
 std::vector<std::function<void()>> gSpinning;
 std::function<void()> gSecond;
+uint32_t gSecondAt;
 bool gSecondRan;
+uint8_t gEnCtrl;
 
 uint32_t &mc(uint32_t offset)
 {
     return gRegisters[kMc + offset];
 }
 
-void landsAtTheNextRead(std::function<void()> step)
+void landsAtTheNextRead(uint32_t offset, std::function<void()> step)
 {
+    gSecondAt = offset;
     gSecond = std::move(step);
     gSecondRan = false;
 }
@@ -54,6 +62,7 @@ protected:
         gSpinning.clear();
         gSecond = nullptr;
         gSecondRan = false;
+        gEnCtrl = kEnM4 | kEnM1;
     }
 
     TegraDisplayB displayB;
@@ -63,7 +72,7 @@ protected:
 TEST_F(McHotReset, ADpPowerUpKeepsTheVicFlushThatLandsInsideIt)
 {
     mc(kCtrl) = kDcb;
-    landsAtTheNextRead([] {
+    landsAtTheNextRead(kCtrl, [] {
         tegra_mc_hot_reset(kCtrl, kVic, true);
     });
     ASSERT_TRUE(displayB.powerUp(why, sizeof(why))) << why;
@@ -74,7 +83,7 @@ TEST_F(McHotReset, ADpPowerUpKeepsTheVicFlushThatLandsInsideIt)
 TEST_F(McHotReset, ADpPowerUpKeepsTheVicReleaseThatLandsInsideIt)
 {
     mc(kCtrl) = kDcb | kVic;
-    landsAtTheNextRead([] {
+    landsAtTheNextRead(kCtrl, [] {
         tegra_mc_hot_reset(kCtrl, kVic, false);
     });
     ASSERT_TRUE(displayB.powerUp(why, sizeof(why))) << why;
@@ -82,8 +91,45 @@ TEST_F(McHotReset, ADpPowerUpKeepsTheVicReleaseThatLandsInsideIt)
     EXPECT_EQ(mc(kCtrl), 0u) << "VIC powered on while display B powered up: its client must not stay in hot reset";
 }
 
-// Every other driver and kit names the hot-reset registers only to hand them to tegra_mc_hot_reset. TegraGM20B's
-// platform.c still writes CTRL_1 itself for the GPU's flush and rail-down.
+TEST_F(McHotReset, AGpuFlushKeepsTheNvjpgReleaseThatLandsInsideIt)
+{
+    ASSERT_EQ(tegra_gm20b_platform_map(), 0);
+    mc(kCtrl1) = kNvjpg;
+    landsAtTheNextRead(kCtrl1, [] {
+        tegra_mc_hot_reset(kCtrl1, kNvjpg, false);
+    });
+    EXPECT_EQ(tegra_gm20b_mc_flush(1), 0);
+    EXPECT_TRUE(gSecondRan);
+    EXPECT_EQ(mc(kCtrl1), kGpu) << "NVJPG powered on while the GPU flushed: its client must not stay in hot reset";
+}
+
+TEST_F(McHotReset, AGpuReleaseKeepsTheNvdecFlushThatLandsInsideIt)
+{
+    ASSERT_EQ(tegra_gm20b_platform_map(), 0);
+    mc(kCtrl1) = kGpu;
+    landsAtTheNextRead(kCtrl1, [] {
+        tegra_mc_hot_reset(kCtrl1, kNvdec, true);
+    });
+    EXPECT_EQ(tegra_gm20b_mc_flush(0), 0);
+    EXPECT_TRUE(gSecondRan);
+    EXPECT_EQ(mc(kCtrl1), kNvdec) << "NVDEC flushed while the GPU was released: its client must stay blocked";
+}
+
+TEST_F(McHotReset, TheGpuRailDownKeepsTheNvjpgReleaseThatLandsInsideIt)
+{
+    ASSERT_EQ(tegra_gm20b_platform_map(), 0);
+    mc(kCtrl1) = kGpu | kNvjpg;
+    landsAtTheNextRead(kCtrl1, [] {
+        tegra_mc_hot_reset(kCtrl1, kNvjpg, false);
+    });
+    EXPECT_EQ(tegra_gm20b_rail_enable(0), 0);
+    EXPECT_TRUE(gSecondRan);
+    EXPECT_EQ(gEnCtrl, kEnM4);
+    EXPECT_EQ(mc(kCtrl1), kGpu)
+        << "NVJPG powered on while the GPU rail went down: its client must not stay in hot reset";
+}
+
+// Every other driver and kit names the hot-reset registers only to hand them to tegra_mc_hot_reset.
 TEST(McHotResetSource, OnlyTheOwnerWritesTheHotResetRegisters)
 {
     const std::regex write(R"((write32\w*|rmw32|\bw32|nvkm_wr32|nvkm_mask)\s*\()");
@@ -98,7 +144,7 @@ TEST(McHotResetSource, OnlyTheOwnerWritesTheHotResetRegisters)
             const std::string ext = path.extension().string();
             const std::string name = path.generic_string();
             if ((ext != ".c" && ext != ".cpp" && ext != ".h") || name.find("/test/") != std::string::npos ||
-                name.ends_with("TegraSMMU/TegraSMMU.cpp") || name.ends_with("TegraGM20B/platform.c"))
+                name.ends_with("TegraSMMU/TegraSMMU.cpp"))
                 continue;
             ++units;
             std::ifstream file(path, std::ios::binary);
@@ -156,8 +202,10 @@ void IOSimpleLockUnlock(IOSimpleLock *lock)
 extern "C" {
 uint32_t switch_mmio_model_read32(uintptr_t address)
 {
+    if (address == kMc + kStatus1)
+        return gRegisters[kMc + kCtrl1];
     const uint32_t value = gRegisters[address];
-    if (address == kMc + kCtrl && gSecond) {
+    if (address == kMc + gSecondAt && gSecond) {
         std::function<void()> second = std::move(gSecond);
         gSecond = nullptr;
         std::function<void()> run = [second] {
@@ -238,4 +286,42 @@ void switch_car_clock_disable(unsigned)
 
 void switch_car_reset_assert(unsigned)
 {}
+
+volatile void *switch_linux_ioremap(uint64_t pa, uint64_t, int)
+{
+    return reinterpret_cast<volatile void *>(static_cast<uintptr_t>(pa));
+}
+
+void switch_linux_udelay(uint64_t)
+{}
+
+void switch_linux_usleep_range(uint64_t, uint64_t)
+{}
+
+void nvxnu_log(const char *, ...)
+{}
+
+void nvxnu_step_impl(const char *, ...)
+{}
+
+int tegra_i2c_init(unsigned)
+{
+    return 0;
+}
+
+int tegra_i2c_read(unsigned, uint8_t, uint8_t reg, void *buf, size_t len)
+{
+    if (reg != kEnCtrl || len != 1)
+        return TEGRA_I2C_EIO;
+    *static_cast<uint8_t *>(buf) = gEnCtrl;
+    return 0;
+}
+
+int tegra_i2c_write(unsigned, uint8_t, uint8_t reg, const void *buf, size_t len)
+{
+    if (reg != kEnCtrl || len != 1)
+        return TEGRA_I2C_EIO;
+    gEnCtrl = *static_cast<const uint8_t *>(buf);
+    return 0;
+}
 }

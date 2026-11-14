@@ -198,6 +198,7 @@ kernel_driver(
         "drivers/TegraDisplayFlip",
         "drivers/TegraI2C",
         "drivers/TegraHost1x",
+        "drivers/TegraSMMU",
         "kits/SwitchDMA",
         "kits/SwitchGM20BEmit",
         "kits/SwitchIdle",
