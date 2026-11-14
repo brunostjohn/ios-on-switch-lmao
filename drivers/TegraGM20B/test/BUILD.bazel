@@ -1706,6 +1706,7 @@ host_shims(
         "IOKit/IOMemoryDescriptor.h",
         "IOKit/IOBufferMemoryDescriptor.h",
         "kern/task.h",
+        "kern/thread.h",
         "mach/mach_types.h",
     ],
     stubs = "switch_gpu_relayout_control_stubs.h",
@@ -1735,6 +1736,38 @@ host_test(
     additional_compiler_inputs = ["//drivers/TegraGM20B:TegraGM20BRelayout.cpp"],
     deps = [
         ":copy_emit",
+        ":relayout_control_kernel",
+    ],
+)
+
+# Relayout moves on threads under ThreadSanitizer: a move waits for the GPU in its own push slot, without the lock
+host_test(
+    name = "switch_gpu_relayout_control_tsan_test",
+    srcs = [
+        "switch_gpu_relayout_control_test.cpp",
+        "switch_gpu_copy_stubs.h",
+        "gm20b_ce_model.h",
+        "gm20b_gpu_memory.h",
+        "//drivers/TegraGM20B:TegraGM20BRelayout.h",
+        "//drivers/TegraGM20B:TegraGM20BFences.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BTiled.h",
+        "//drivers/TegraGM20B:SwitchGpuPin.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuCachedZero.h",
+        "//drivers/TegraGM20B:SwitchGpuRelayoutCache.h",
+        "//kits/SwitchRefusal:SwitchRefusal.h",
+        "//kits/SwitchScratch:SwitchScratch.h",
+        "//drivers/TegraGM20B:SwitchGpuKqueue.h",
+    ],
+    additional_compiler_inputs = ["//drivers/TegraGM20B:TegraGM20BRelayout.cpp"],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+    deps = [
+        ":copy_emit_tsan",
         ":relayout_control_kernel",
     ],
 )

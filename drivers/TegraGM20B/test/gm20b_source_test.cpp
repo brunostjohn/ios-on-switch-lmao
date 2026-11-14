@@ -1273,7 +1273,7 @@ TEST(GM20BRelayoutSource, KernelCopiesOrderOnTheGpu)
 			.Has("chan = late_writer(uid, seqno, acquired, nacquired, &late); if "
 			     "(chan) verdict = tgm_hang_recover(chan, \"IOSurface lock\", late, "));
 	EXPECT_TRUE(CodeText(relayout).Has(
-		"{\"relayout\", TGM_FENCE_KERNEL_RELAYOUT, 1, kPushVa, 0, 1}"));
+		"{\"relayout\", TGM_FENCE_KERNEL_RELAYOUT, kSlots, kPushVa, 0, 1}"));
 	EXPECT_TRUE(Block(SourceText("../SwitchGpuKqueue.h"), "bool openSpace(")
 			    .Has("tgm_fence_kernel(shape.fenceSlot, &fenceCpu, &fencePage, "
 				 "&fenceOffset)"));
