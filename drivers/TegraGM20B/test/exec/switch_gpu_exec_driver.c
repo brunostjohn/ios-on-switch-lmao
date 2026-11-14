@@ -6,6 +6,7 @@
 
 struct gpu_state tgm_gpu;
 struct idle_state tgm_idle;
+struct switch_gpu_busy tgm_busy;
 struct wstat_state tgm_wstat;
 struct frame_gpu_state tgm_frame_gpu;
 struct fences_state tgm_fence_pages;
@@ -42,6 +43,19 @@ void tgm_gate_enter(void)
 {
 }
 
+int cpu_number(void)
+{
+	return 0;
+}
+
+void _disable_preemption(void)
+{
+}
+
+void _enable_preemption(void)
+{
+}
+
 u64 tgm_idle_raise(void)
 {
 	return 0;
@@ -61,6 +75,11 @@ void tgm_chan_wake_push(struct tgm_chan *chan)
 
 void tgm_deadline_kicked(int compositor, int app)
 {
+}
+
+int tgm_deadline_app_kicked(void)
+{
+	return 0;
 }
 
 uint64_t tgm_hold_held_ns(unsigned int chid, uint64_t now)
@@ -89,6 +108,10 @@ enum tgm_sched_kick tgm_sched_kicked(struct nvkm_device *dev, unsigned int chid,
 }
 
 void tgm_stats_tick(void)
+{
+}
+
+void tgm_stats_loud(struct tgm_chan *chan, uint32_t reason)
 {
 }
 
