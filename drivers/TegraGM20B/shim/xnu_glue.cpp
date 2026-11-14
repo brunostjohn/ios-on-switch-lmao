@@ -255,9 +255,12 @@ void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)
 	// a line taken before nvxnu_irq_suspend() whose pass runs after it: the GPU is off now
 	if (__atomic_load_n(&gGpuOff, __ATOMIC_ACQUIRE))
 		return;
-	__atomic_fetch_add(&gIrqRuns, 1, __ATOMIC_RELAXED);
+	// the work loop's runs never overlap: its counts are a load and a store
+	__atomic_store_n(&gIrqRuns, __atomic_load_n(&gIrqRuns, __ATOMIC_RELAXED) + 1,
+			 __ATOMIC_RELAXED);
 #if DEVELOPMENT || DEBUG
-	__atomic_fetch_add(&gIrqPasses[source == gIrqSources[1]], 1, __ATOMIC_RELAXED);
+	uint64_t &passes = gIrqPasses[source == gIrqSources[1]];
+	__atomic_store_n(&passes, __atomic_load_n(&passes, __ATOMIC_RELAXED) + 1, __ATOMIC_RELAXED);
 	const unsigned cpu = static_cast<unsigned>(cpu_number()) % 4;
 	__atomic_store_n(&gIrqCpus[cpu], __atomic_load_n(&gIrqCpus[cpu], __ATOMIC_RELAXED) + 1,
 			 __ATOMIC_RELAXED);

@@ -1203,6 +1203,7 @@ host_shims(
     headers = [
         "IOKit/IOLib.h",
         "IOKit/IOLocks.h",
+        "kern/cpu_number.h",
     ],
     stubs = "switch_gpu_timeline_stubs.h",
 )
@@ -1267,6 +1268,36 @@ host_test(
         ":timeline",
         ":timeline_kernel",
     ],
+)
+
+# The view's publication and reclamation against filter runs on other CPUs, under ThreadSanitizer: the filter and the
+# timeline built into the test, instrumented with it.
+host_test(
+    name = "switch_gpu_present_filter_tsan_test",
+    srcs = [
+        "switch_gpu_dependency_stub.cpp",
+        "switch_gpu_present_filter_test.cpp",
+        "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuBridge.h",
+        "//drivers/TegraGM20B:SwitchGpuDependencyTrace.h",
+        "//drivers/TegraGM20B:SwitchGpuPresentFilter.cpp",
+        "//drivers/TegraGM20B:SwitchGpuPresentWatch.h",
+        "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
+        "//drivers/TegraGM20B:SwitchGpuTimeline.cpp",
+        "//drivers/TegraGM20B:SwitchGpuTimeline.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+    ],
+    data = [
+        "//drivers/TegraGM20B:gpu_present.c",
+        "//drivers/TegraGM20B:gpu_promise.c",
+        "//drivers/TegraGM20B:shim/xnu_glue.cpp",
+    ],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+    deps = [":timeline_kernel"],
 )
 
 host_test(
@@ -2167,6 +2198,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuChannelCompletion.h",
         "//drivers/TegraGM20B:gpu_sources",
         "//drivers/TegraGM20B:nouveau/nvkm/engine/fifo/gk104.c",
+        "//drivers/TegraGM20B:shim/linux.c",
         "//drivers/TegraGM20B:shim/xnu_glue.cpp",
     ],
 )

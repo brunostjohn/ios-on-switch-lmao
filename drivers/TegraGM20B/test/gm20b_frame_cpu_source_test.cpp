@@ -139,3 +139,16 @@ TEST(GM20BFrameCpuSource, APresentJobsFrameIsLearnedAfterTheScan)
 			  "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)")
 			    .Before("tgm_chans_completed();", "tgm_present_pass();"));
 }
+
+// The interrupt pass's own counts have one writer, the work loop, whose runs never overlap: a load and a store, and no
+// exchange guarding nvkm's handler against a second caller there is none of.
+TEST(GM20BFrameCpuSource, ThePassTakesNoRmwOfItsOwn)
+{
+	EXPECT_FALSE(Block(unit("shim/linux.c"), "int nvxnu_poll_irqs(void)")
+			     .Has("__atomic_compare_exchange_n"));
+	const CodeText pass =
+		Block(unit("shim/xnu_glue.cpp"),
+		      "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)");
+	EXPECT_FALSE(pass.Has("__atomic_fetch_add"));
+	EXPECT_FALSE(pass.Has("__atomic_exchange_n"));
+}

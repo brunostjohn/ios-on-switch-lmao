@@ -4,6 +4,12 @@
 #include <mutex>
 
 inline thread_local bool switchTimelineAtomicContext;
+inline thread_local int switchCpu;  // cpu_number(): the CPU a test thread stands for
+
+inline int cpu_number()
+{
+	return switchCpu;
+}
 
 inline void switchTimelineMayBlock()
 {
