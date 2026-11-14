@@ -52,6 +52,7 @@ namespace {
 struct DfllLandingCase {
     unsigned long from, to;
 };
+
 // 1581 and 1683 from above and below, 1785 from the row below and from the bottom: 1683 and 1785 are high-tune rows,
 // 1581 and below low-tune, so a request from below 1683 crosses from the low tune to the high.
 constexpr DfllLandingCase kDfllLandingCases[] = {

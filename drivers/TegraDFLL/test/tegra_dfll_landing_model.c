@@ -51,7 +51,7 @@ static unsigned long rate_floors[2], tune_high_floors[2];
 
 /* The CVB rows of speedo 1659 (MHz at mV), as boot 21's governor table printed them, and the top of the table. */
 static const unsigned long opps[][2] = {
-	{918, 620},  {1020, 630}, {1122, 655}, {1224, 690},  {1326, 730},
+	{918, 620},  {1020, 630}, {1122, 655}, {1224, 690}, {1326, 730},
 	{1428, 770}, {1581, 835}, {1683, 885}, {1785, 940}, {2295, 1235},
 };
 
@@ -76,7 +76,8 @@ static struct loop settle(void)
 	const uint32_t cfg = regs[DFLL_OUTPUT_CFG / 4];
 	const unsigned int lo = (cfg >> DFLL_OUTPUT_CFG_MIN_SHIFT) & OUT_MASK;
 	const unsigned int hi = (cfg >> DFLL_OUTPUT_CFG_MAX_SHIFT) & OUT_MASK;
-	const long target = (long)(regs[DFLL_FREQ_REQ / 4] & DFLL_FREQ_REQ_MULT_MASK) * (REF_CLOCK_RATE / 2);
+	const long target =
+		(long)(regs[DFLL_FREQ_REQ / 4] & DFLL_FREQ_REQ_MULT_MASK) * (REF_CLOCK_RATE / 2);
 	struct loop l = {.out = lo};
 
 	if (force & DFLL_OUTPUT_FORCE_ENABLE) {
@@ -261,7 +262,8 @@ int tegra_dfll_landing_start(unsigned long floor, unsigned long per_step, unsign
 	td->tune_high_out_start = td->tune_high_out_min + DFLL_TUNE_HIGH_MARGIN_STEPS;
 	td->dvco_rate_floors = rate_floors;
 	td->tune_high_dvco_rate_floors = tune_high_floors;
-	tune_high_floors[soc.thermal_floor_table_size] = get_dvco_rate_above(td, td->tune_high_out_start);
+	tune_high_floors[soc.thermal_floor_table_size] =
+		get_dvco_rate_above(td, td->tune_high_out_start);
 	td->tune_high_target_rate_min = get_dvco_rate_above(td, td->tune_high_out_min);
 	td->thermal_floor_index = 0;
 	td->thermal_floor_output = find_mv_out_cap(td, floor_table[0].millivolts);
@@ -307,7 +309,8 @@ void tegra_dfll_landing_run_ms(unsigned int ms)
 		unsigned int i;
 
 		for (i = 0; i < ncalls; i++) {
-			if (calls[i].armed && calls[i].due <= end && (!next || calls[i].due < next->due))
+			if (calls[i].armed && calls[i].due <= end &&
+			    (!next || calls[i].due < next->due))
 				next = &calls[i];
 		}
 		if (!next)
@@ -327,7 +330,9 @@ void tegra_dfll_landing_set_floor(unsigned long floor)
 
 unsigned long tegra_dfll_landing_cpu_hz(void)
 {
-	const uint64_t scale = ((regs[DFLL_FREQ_REQ / 4] & DFLL_FREQ_REQ_SCALE_MASK) >> DFLL_FREQ_REQ_SCALE_SHIFT) + 1;
+	const uint64_t scale = ((regs[DFLL_FREQ_REQ / 4] & DFLL_FREQ_REQ_SCALE_MASK) >>
+				DFLL_FREQ_REQ_SCALE_SHIFT) +
+			       1;
 
 	return (unsigned long)(settle().dvco * scale / DFLL_FREQ_REQ_SCALE_MAX);
 }

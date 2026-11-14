@@ -13,7 +13,7 @@ namespace
 {
 constexpr unsigned long kMHz = 1000000;
 constexpr unsigned long kPerLutStep = 30 * kMHz;  // 15 mV
-constexpr unsigned int kSettleMs = 200;           // five Vmin calibration periods (DFLL_CALIBR_TIME)
+constexpr unsigned int kSettleMs = 200;  // five Vmin calibration periods (DFLL_CALIBR_TIME)
 
 // Within one skipper step (1/256) of `hz`, the loop off its floor, nothing blocking with interrupts off.
 void expectLanded(unsigned long hz, const char *how)
@@ -82,6 +82,7 @@ TEST(TegraDfllLanding, ARowLandsTheSameFromAboveAndFromBelow)
 		const unsigned long topFromBelow = askAndSettle(1785 * kMHz);
 		expectLanded(1785 * kMHz, "1785 MHz from 918");
 		askAndSettle(1683 * kMHz);
-		EXPECT_EQ(askAndSettle(1785 * kMHz), topFromBelow) << "1785 MHz from 1683 and from 918";
+		EXPECT_EQ(askAndSettle(1785 * kMHz), topFromBelow)
+			<< "1785 MHz from 1683 and from 918";
 	});
 }

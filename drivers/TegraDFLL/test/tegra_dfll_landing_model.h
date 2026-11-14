@@ -16,8 +16,10 @@ extern "C" {
 
 // A T210B01-shaped DFLL closed at `rate_hz`, high tune, its oscillator at `floor_hz` with the output at the tune-high
 // floor (850 mV, LUT 855 mV) and `per_step_hz` faster per 15 mV LUT step.
-int tegra_dfll_landing_start(unsigned long floor_hz, unsigned long per_step_hz, unsigned long rate_hz);
-int tegra_dfll_landing_request(unsigned long rate_hz);  // as clk_set_rate's path: under the DFLL lock
+int tegra_dfll_landing_start(unsigned long floor_hz, unsigned long per_step_hz,
+			     unsigned long rate_hz);
+// As clk_set_rate's path asks it: under the DFLL lock.
+int tegra_dfll_landing_request(unsigned long rate_hz);
 void tegra_dfll_landing_run_ms(unsigned int ms);
 void tegra_dfll_landing_set_floor(unsigned long floor_hz);
 unsigned long tegra_dfll_landing_cpu_hz(void);

@@ -136,6 +136,7 @@ void tegra_dfll_cpu_status(unsigned long *target_hz, unsigned long *measured_hz,
 struct tegra_dfll_cpu_loop {
 	uint32_t freq_req, tune1, output_cfg, monitor, i2c_sts;
 };
+
 void tegra_dfll_cpu_loop_registers(struct tegra_dfll_cpu_loop *loop);
 #endif
 
