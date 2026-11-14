@@ -519,6 +519,7 @@ class AGXDeviceUserClient : public IOUserClient
 	void pushWakes();
 	void unbindOverlaps(uint64_t va, uint64_t range, Bo *only);
 	void scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof, bool rawMacros);
+	void deferScan(const tgm_push *pushes, uint32_t count, bool rawMacros);
 	const tgm_prof *scanSubmission(const tgm_push *pushes, uint32_t count, tgm_prof &prof,
 				       bool rawMacros);
 	const uint32_t *pushView(uint64_t va, uint64_t bytes, const Binding *&hit) const;

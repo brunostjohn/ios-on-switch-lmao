@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // The pass cache's key (RawMetalPassCache.mm) over Metal's own descriptor objects: passes that differ only in their
 // depth attachment's resolve filter are two keys and two kept entries, so a kept pass never hands a later one its depth
-// resolve facts (RMPass::depthFilter). The textures are the host's Metal device's: the key reads only their addresses.
+// resolve facts (RMPass::depthFilter); a compositor frame's passes (boot 21: 29-40 render targets a command buffer) are
+// all kept from one frame to the next. The textures are the host's Metal device's: the key reads only their addresses.
 #import <Metal/Metal.h>
 #include "../raw/runtime/RawMetalPassCache.h"
 #include <gtest/gtest.h>
@@ -96,6 +97,39 @@ TEST_F(RawPassCache, PassesOfTwoDepthResolveFiltersAreTwoEntries)
     EXPECT_NE(kept[0], kept[1]);
     for (int i = 0; i < 2; i++)
         EXPECT_EQ(kept[i]->facts.depthFilter, uint32_t(filters[i])) << i;
+}
+
+TEST_F(RawPassCache, AFrameOfFortyPassesIsKeptForTheNext)
+{
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    MTLTextureDescriptor *t = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                 width:64
+                                                                                height:64
+                                                                             mipmapped:NO];
+    t.storageMode = MTLStorageModePrivate;
+    t.usage = MTLTextureUsageRenderTarget;
+    std::vector<MTLRenderPassDescriptor *> passes;
+    for (int i = 0; i < 20; i++) {
+        id<MTLTexture> target = [device newTextureWithDescriptor:t];
+        for (MTLLoadAction load : {MTLLoadActionClear, MTLLoadActionLoad}) {
+            MTLRenderPassDescriptor *d = [MTLRenderPassDescriptor renderPassDescriptor];
+            d.colorAttachments[0].texture = target;
+            d.colorAttachments[0].loadAction = load;
+            d.colorAttachments[0].storeAction = MTLStoreActionStore;
+            passes.push_back(d);
+        }
+    }
+    RMRenderEncoder *e = [RMRenderEncoder new];
+    std::vector<Key> keys(passes.size());
+    for (size_t i = 0; i < passes.size(); i++) {
+        ASSERT_TRUE(rmPassKey(passes[i], keys[i].bytes, keys[i].hash));
+        if (!rmPassFind(keys[i].bytes, keys[i].hash))
+            rmPassKeep(keys[i].bytes, keys[i].hash, [passes[i] copy], RMPass {}, e);
+    }
+    size_t found = 0;
+    for (const Key &k : keys)
+        found += rmPassFind(k.bytes, k.hash) != nullptr;
+    EXPECT_EQ(found, passes.size());
 }
 
 }  // namespace

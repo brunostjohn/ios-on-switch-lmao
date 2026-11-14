@@ -186,7 +186,8 @@ const FormatInfo *formatInfo(uint32_t mtlPixelFormat);
 // A texture of this size and format the raw path can lay out: `t` reset to it, with no memory yet
 bool shape(uint32_t width, uint32_t height, uint32_t format, Texture &t);
 
-constexpr uint64_t kBlAlign = 16384;  // NVK's image alignment here (r12-cafx niloracle), a multiple of NIL's
+constexpr uint64_t kBlAlign = 16384;         // NVK's image alignment here (r12-cafx niloracle), a multiple of NIL's
+constexpr uint64_t kChunkVaAlign = 0x10000;  // the GMMU big page, a multiple of kBlAlign
 
 // An import of this task's pages into the GPU VM, shared by everything over them.
 struct Import {
@@ -2726,7 +2727,8 @@ private:
         std::map<uint64_t, uint64_t> free;  // offset -> bytes, coalesced
         uint64_t used = 0;
         bool dedicated = false;
-        uint64_t pitchVa = 0;  // a block-linear chunk's kind-0 view (blPitchVa), made at its first ask
+        bool hostPages = false;  // memory is this task's anonymous pages, imported (chunkMemory)
+        uint64_t pitchVa = 0;    // a block-linear chunk's kind-0 view (blPitchVa), made at its first ask
     };
 
     // A role's memory steps: the shared pool chunk (a span over half of one gets its own), a chunk of block-linear images, a
@@ -2998,6 +3000,14 @@ private:
     uint32_t alphaHeld_ = ~0u;    // and SET_ANTI_ALIAS_ALPHA_CONTROL (~0: not known)
     DepthStencilRegs ds_;         // and its depth/stencil registers
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, Import *> surfaces_;
+    // Surface imports no texture holds, kept for the surface's next texture: Core Animation makes a texture over its
+    // pooled surface every frame after it drops the last, and an import made again is bound, untiled, cleaned and laid
+    // out again (boot 21: 3.4-4 ms of each app-close frame). Oldest first, at most kKeptImports and kKeptImportBytes;
+    // trim (idle, memory pressure) gives them all back. Each holds its surface (Import::owner) until then.
+    static constexpr size_t kKeptImports = 8;
+    static constexpr uint64_t kKeptImportBytes = 64ull << 20;
+    std::vector<Import *> keptImports_;
+    uint64_t keptImportBytes_ = 0;
     std::vector<std::unique_ptr<NativeSurface>> nativeSurfaces_;
     uint64_t nativeGeneration_ = 0;
     const Texture *nativeRead(const Texture &source, NativeSurface *&owner, int &error);
@@ -3226,6 +3236,7 @@ private:
     bool growing_ = false, stopping_ = false;
     raw::CondVar grow_, grown_;
     std::thread grower_;
+    bool chunkMemory(uint64_t size, uint32_t kind, std::unique_lock<raw::Mutex> *unlocked, Chunk &ch);
     bool newChunk(uint64_t size, bool dedicated, std::unique_lock<raw::Mutex> *unlocked, uint32_t &index);
     void growLoop();
     // Written by the submitting thread alone; a command buffer's backings are marked used before closedCount_ moves
@@ -3316,7 +3327,11 @@ private:
     bool tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch, Texture &t,
                              Texture *sampled);
     Import *importSurface(uint64_t id, void *base, uint64_t bytes, const void *owner, const LayoutAsk *ask = nullptr);
+    // lock_ held: a texture's hold on its import goes. A surface's import no texture holds is kept (keepImport)
     void release(Import *i);
+    void keepImport(Import *i);
+    void dropImport(Import *i);
+    void dropKeptImports();
     // lock_ held (raw_alias.cpp): a hold on a span's lease, made at its first alias; the last drop frees what the lease holds
     Lease *leaseSpan(Lease *&lease, const Span &span, Memory from);
     void dropLocked(Lease *lease);

@@ -554,3 +554,19 @@ TEST(FrameEndSource, ValidateSwapTouchesNoGateState)
         Block(SourceText("../../../kits/qemu/LegacyDisplayProbe.cpp"), "void native_legacy_swap_validation_observed(");
     EXPECT_FALSE(observed.Has("native_legacy_swap_stage("));
 }
+
+
+// Core Animation never arms the vsync (its frame clock is its own), so the frame end stands in for the frame timeline as it
+// does for the GPU deadline: each swap's timeline then carries the vsync before it, the slow-frame line its phase, and
+// render.c a frame begin for SwitchFrameRender (boot 21 had none, and every SwitchFrame line read "origin swap").
+TEST(FrameTimelineSource, TheFrameEndStandsInForAnUnarmedVsync)
+{
+    const CodeText tick = method("void vblankTick()");
+    EXPECT_TRUE(tick.Before("tegra_gm20b_compositor_vsync(frameEnd, 0, refreshTicks());",
+                            "noteTimelineVsync(frameEnd, refreshTicks());"));
+    EXPECT_TRUE(method("void deliverVsync(").Has("noteTimelineVsync(stamp, interval);"));
+    const CodeText note = method("void noteTimelineVsync(");
+    EXPECT_TRUE(note.Has("if (!SWITCH_FRAME_TIMELINE) return;"));
+    EXPECT_TRUE(note.Has("switch_sched_render_vsync(stamp, interval);"));
+    EXPECT_TRUE(method("FrameTimeline swapTimeline(uint64_t at)").Has("tl.vsyncUs = timelineVsyncUs(at);"));
+}

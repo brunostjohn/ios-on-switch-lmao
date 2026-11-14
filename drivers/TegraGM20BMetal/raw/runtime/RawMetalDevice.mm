@@ -4,6 +4,7 @@
 #import "RawMetalXrPlanes.h"
 #import "RawMetalFresh.h"
 #include "raw_nonfinite.h"
+#include "raw_surface_note.h"
 #include <mach/vm_page_size.h>
 #include "NativeBridgeMetalFrontend.h"
 #import "RawMetalMultisample.h"
@@ -359,6 +360,9 @@
 // caller pages stay pitch, as another binding names those bytes.
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d
 {
+#if SWITCH_FRAME_TIMELINE
+    noteCompositorTarget(d, __builtin_frame_address(0));
+#endif
     return swizzled([self rmNewTexture:d
                                  tiled:d.storageMode == MTLStorageModePrivate || d.storageMode == MTLStorageModeShared],
                     d.swizzle);
@@ -566,6 +570,28 @@ static bool producesTexture(MTLTextureDescriptor *d)
     return d.usage & (MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite);
 }
 
+#if SWITCH_FRAME_TIMELINE
+static void noteCompositorSurface(MTLTextureDescriptor *d, IOSurfaceRef s, const void *frame)
+{
+    constexpr size_t kHalfScreen = 1280 * 720 / 2;
+    if (!producesTexture(d) || IOSurfaceGetWidth(s) * IOSurfaceGetHeight(s) < kHalfScreen || !gRM || !gRM->raw ||
+        gRM->raw->role() != raw::Device::Role::RenderServer || !raw::noteAllowed())
+        return;
+    raw::postSurfaceNote(s, frame);
+}
+
+static void noteCompositorTarget(MTLTextureDescriptor *d, const void *frame)
+{
+    constexpr NSUInteger kPanel = 1280 * 720;
+    if (!(d.usage & MTLTextureUsageRenderTarget) || d.width * d.height <= kPanel || !gRM || !gRM->raw ||
+        gRM->raw->role() != raw::Device::Role::RenderServer || !raw::noteAllowed())
+        return;
+    raw::postTargetNote({uint32_t(d.width), uint32_t(d.height), uint32_t(d.pixelFormat), uint32_t(d.usage),
+                         uint32_t(d.storageMode), uint32_t(d.sampleCount), uint32_t(d.textureType),
+                         switch_frame::callers(frame)});
+}
+#endif
+
 - (id<MTLTexture>)newTextureWithDescriptor:(MTLTextureDescriptor *)d iosurface:(IOSurfaceRef)s plane:(NSUInteger)plane
 {
     return swizzled([self rmSurfaceTexture:d iosurface:s plane:plane], d.swizzle);
@@ -578,6 +604,7 @@ static bool producesTexture(MTLTextureDescriptor *d)
         return nil;
 #if SWITCH_FRAME_TIMELINE
     gSurfaceTextures.fetch_add(1, std::memory_order_relaxed);
+    noteCompositorSurface(d, s, __builtin_frame_address(0));
 #endif
     RMTexture *t = [RMTexture new];
     t->_device = self;

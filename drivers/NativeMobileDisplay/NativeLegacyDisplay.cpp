@@ -1619,8 +1619,11 @@ private:
             vblankNotify();
         // Core Animation never registers for vsync on either kind (its frame clock is a CADisplayTimer): the frame end
         // stands in for the compositor's vsync so the GPU deadline's window still opens.
-        if ((status & kFrameEndInt) && !vsyncArmed)
-            tegra_gm20b_compositor_vsync(__atomic_load_n(&feStamp, __ATOMIC_ACQUIRE), 0, refreshTicks());
+        if ((status & kFrameEndInt) && !vsyncArmed) {
+            const uint64_t frameEnd = __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE);
+            tegra_gm20b_compositor_vsync(frameEnd, 0, refreshTicks());
+            noteTimelineVsync(frameEnd, refreshTicks());
+        }
         watchVsync(status);
         if (status & kFrameEndInt)
             underflowRead();
@@ -1963,6 +1966,19 @@ private:
         deliverVsync(vpulseTime, vpulseContinuous, measuredLeadUs ? measuredLeadUs : phase.lead());
     }
 
+    // Debug kernels: the frame timeline's vsync, sent to the compositor or not. Core Animation's frame clock is its own
+    // (it never arms the vsync on iOS 17 or 27), so the frame end stands in: without it no SwitchFrame line has a vsync
+    // origin and SwitchFrameRender (render.c) never sees a frame begin.
+    void noteTimelineVsync(uint64_t stamp, uint64_t interval)
+    {
+        if (!SWITCH_FRAME_TIMELINE)
+            return;
+        __atomic_store_n(&vsyncSentAt, stamp, __ATOMIC_RELAXED);
+        __atomic_store_n(&vsyncSentKhz, switch_perf_cpu_khz(), __ATOMIC_RELAXED);
+        KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_VSYNC), frameEnds);
+        switch_sched_render_vsync(stamp, interval);
+    }
+
     // One vsync a frame (a switch between V_BLANK and V_PULSE2 never gives the compositor two in one), at `stamp`; `lead` is the
     // phase it carries (0: at V_BLANK).
     void deliverVsync(uint64_t stamp, uint64_t continuous, uint32_t lead)
@@ -1979,12 +1995,7 @@ private:
                                       ? stamp - vblankLast
                                       : vsyncInterval;
         vblankLast = stamp;
-        if (SWITCH_FRAME_TIMELINE) {
-            __atomic_store_n(&vsyncSentAt, stamp, __ATOMIC_RELAXED);
-            __atomic_store_n(&vsyncSentKhz, switch_perf_cpu_khz(), __ATOMIC_RELAXED);
-            KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_VSYNC), frameEnds);
-            switch_sched_render_vsync(stamp, interval);
-        }
+        noteTimelineVsync(stamp, interval);
         native_legacy_vsync_notify(this, stamp, continuous, interval);
         tegra_gm20b_compositor_vsync(stamp, lead, interval);
         native_legacy_vsync_observed(1, vsyncHz);
@@ -4922,6 +4933,15 @@ public:
             __atomic_fetch_add(&verdictsDropped, 1u, __ATOMIC_RELAXED);
     }
 
+    // The last timeline vsync before a swap submitted at `submit`, in microseconds from it (negative), if within two periods
+    int32_t timelineVsyncUs(uint64_t submit) const
+    {
+        const uint64_t vsync = __atomic_load_n(&vsyncSentAt, __ATOMIC_RELAXED);
+        if (!vsync || vsync > submit || Span::ticksToUs(submit - vsync) > 2 * Span::ticksToUs(refreshTicks()))
+            return kNotSeen;
+        return -static_cast<int32_t>(Span::ticksToUs(submit - vsync));
+    }
+
     // Under the gate, before anything reads the table: every verdict published so far, in order. One a full ring
     // dropped (32 verdicts with no gated kick between) counts as an eviction.
     void drainVerdicts()
@@ -4981,7 +5001,7 @@ public:
         int qos = 0;
         switch_thread_sched(current_thread(), &base, &sched, &mode, &qos);
         FrameTimeline tl = {};
-        tl.vsyncUs = kNotSeen;
+        tl.vsyncUs = timelineVsyncUs(at);
         tl.doneUs = kNotSeen;
         tl.firstUs = gpu.firstSubmit ? usFrom(submitNs, gpu.firstSubmit) : kNotSeen;
         tl.lastUs = gpu.lastSubmit ? usFrom(submitNs, gpu.lastSubmit) : kNotSeen;

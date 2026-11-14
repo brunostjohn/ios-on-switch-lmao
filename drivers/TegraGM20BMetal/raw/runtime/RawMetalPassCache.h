@@ -18,7 +18,6 @@ struct RMPassEntry {
     std::array<uint32_t, 8> formats;
     uint32_t count, zeta, samples;
     uint8_t turn;
-    uint64_t hash = 0, used = 0;
     std::vector<uint8_t> key;
 };
 

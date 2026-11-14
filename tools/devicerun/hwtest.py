@@ -291,6 +291,7 @@ TESTS: dict[str, bool] = {
     'pacing.blur_over': False,
     'pacing.blur_under': False,
     'pacing.list': False,
+    'ui.scale_pacing': False,
     'sensor.accelerometer': False,
     'sensor.gyroscope': False,
     'sensor.device_motion': False,

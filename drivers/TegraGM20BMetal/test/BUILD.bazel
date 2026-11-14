@@ -1197,6 +1197,82 @@ host_test(
     ],
 )
 
+# A render server's pool and block-linear chunks on raw::Device (raw_device_harness.h): cached BoAllocs the kernel serves
+# from its zeroed spares, never imports of anonymous pages
+host_test(
+    name = "raw_device_chunk_memory_test",
+    srcs = [
+        "raw_device_harness.h",
+        "raw_job_methods.h",
+        "raw_device_chunk_memory_test.cpp",
+        "raw_kernel_model.h",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BHost.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_loops.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_loop_copies.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_predication.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_predicate_loops.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_draw_bands.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_draw_shortcuts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_multisample.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_private_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+        "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-Wl,-U,_switch_nmb_blend_color_words",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
+    ],
+)
+
 # Fetching draws on raw::Device (raw_device_harness.h), a state made from a record as the runtime makes one: in its storage
 # form a strip, an indexed strip with restarts, an instanced list and indirect draws are each one draw, never split or
 # refused; in its barrier form a strip and an indexed strip are drawn a triangle at a time and the shapes that cannot be
@@ -3814,6 +3890,28 @@ host_test(
     deps = ["//kits/SwitchGM20B:classes"],
 )
 
+# raw/runtime/raw_surface_note.h: the render server's note of a big IOSurface it draws into takes the surface's scalars
+# and caller frames and no reference; its name, use count and purgeable state are read by id when the note is logged
+host_test(
+    name = "raw_surface_note_test",
+    srcs = [
+        "raw_surface_note_test.cpp",
+        "//drivers/NativeMetal:SwitchFrameTimeline.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_surface_note.h",
+    ],
+    copts = [
+        "-Idrivers/NativeMetal",
+        "-Idrivers/TegraGM20BMetal/raw/runtime",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "CoreFoundation",
+    ],
+)
+
 host_test(
     name = "raw_span_marks_test",
     srcs = [
@@ -4639,6 +4737,82 @@ host_test(
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_loops.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_draw_bands.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_job.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_loop_copies.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_multisample.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_pack.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_predicate_loops.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_predication.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_private_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_record_parts.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_resource_set.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_shared_events.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_split.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_state_segment.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_surface_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_tessellation.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_transfer.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_variants.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_vertex_streams.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_visibility_pass.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_zeta.cpp",
+        "//drivers/TegraGM20BMetal:raw_runtime_headers",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20B",
+        "-DSWITCH_RAW_HARNESS_MARKS",
+    ],
+    cxx_std = "c++17",
+    linkopts = [
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+    ],
+    deps = [
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchGM20BEmit:emit_ndebug",
+        "//kits/SwitchGM20BEmit:macros_h",
+        "//kits/SwitchGM20BEmit/test:method_checks",
+    ],
+)
+
+# raw::Device kept surface imports (raw_kept_import_test.cpp): a surface's texture made again after its last one went
+# takes the same import, eight are kept at most, oldest given back first, and trim gives back every one
+host_test(
+    name = "raw_kept_import_test",
+    srcs = [
+        "raw_device_harness.h",
+        "raw_job_methods.h",
+        "raw_kernel_model.h",
+        "raw_kept_import_test.cpp",
+        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BCompilerABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BHost.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_image.cpp",
+        "//drivers/TegraGM20BMetal:raw/fx/fx_mip.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_alias.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_amplification.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_arena.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_comp.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_completed.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_compute_loops.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_draw_bands.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_draw_shortcuts.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_encoder_state.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_gpu.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_job_uses.cpp",
@@ -6118,6 +6292,113 @@ host_test(
         "//kits/SwitchGM20BEmit/test:method_checks",
     ] + RAW_HOST_DEPS,
 )
+
+# The recording thread's messages, locks and allocations (record_count.c), interposed by a library the test links
+cc_binary(
+    name = "librecord_count.dylib",
+    testonly = True,
+    srcs = ["record_count.c"],
+    linkopts = [
+        "-lobjc",
+        "-Wl,-install_name,@rpath/librecord_count.dylib",
+    ],
+    linkshared = True,
+)
+
+RECORD_COST_SRCS = [
+    "empty_pack.h",
+    "made_metallib.h",
+    "raw_facade_harness.h",
+    "raw_job_methods.h",
+    "raw_record_cost_test.cpp",
+    "raw_facade_standins.h",
+    "raw_frontend_absent.cpp",
+    "raw_kernel_model.h",
+    ":librecord_count.dylib",
+] + RAW_HOST_HEADERS
+
+RECORD_COST_BUILDS = [
+    (
+        "_o2",
+        ["-O2"],
+    ),
+    # release builds are not compiled yet (their unused debug-only names are not errors here)
+    (
+        "_o2_release",
+        [
+            "-O2",
+            "-DSWITCH_DEBUG=0",
+            "-Wno-error",
+        ],
+    ),
+]
+
+RECORD_COST_LINKOPTS = [
+    "-framework",
+    "Foundation",
+    "-framework",
+    "Metal",
+    "-framework",
+    "IOSurface",
+    "-framework",
+    "IOKit",
+    "-framework",
+    "CoreFoundation",
+    "-lobjc",
+]
+
+# The facade and runtime at the plugin's -O2 (gpu/defs.bzl _PLUGIN_CFLAGS), as debug builds have them and with
+# SWITCH_DEBUG=0 as release builds do: what raw_record_cost_test times the recording thread over
+[host_library(
+    name = "raw_facade_plugin_host" + suffix,
+    srcs = [":raw_facade_units"],
+    additional_compiler_inputs = [
+        "//drivers/TegraGM20BMetal:compiler_srcs",
+        "//drivers/TegraGM20BMetal:raw_facade_srcs",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+        "-Wno-nullability-completeness",
+        "-Wno-nullability-completeness-on-arrays",
+    ] + RAW_HOST_COPTS + extra,
+    cxx_std = "c++17",
+    sanitize = False,
+    deps = RAW_HOST_DEPS,
+) for suffix, extra in RECORD_COST_BUILDS]
+
+[host_library(
+    name = "raw_runtime_plugin_host" + suffix,
+    srcs = RAW_HOST_UNITS + RAW_HOST_HEADERS,
+    copts = RAW_HOST_COPTS + extra,
+    cxx_std = "c++17",
+    sanitize = False,
+    deps = RAW_HOST_DEPS + ["//kits/SwitchGM20BEmit:emit_ndebug"],
+) for suffix, extra in RECORD_COST_BUILDS]
+
+# What recording a compositor scale frame costs the recording thread through the facade over the kernel model
+# (raw_record_cost_test.cpp): with the plugin's debug diagnostics, and without them
+[host_test(
+    name = "raw_record_cost" + suffix.replace("_o2", "") + "_test",
+    srcs = RECORD_COST_SRCS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS + extra,
+    cxx_std = "c++17",
+    data = [":fake_nvk/libvulkan_nouveau.dylib"],
+    env = {"SWITCH_FAKE_NVK": "$(rootpath :fake_nvk/libvulkan_nouveau.dylib)"},
+    linkopts = RECORD_COST_LINKOPTS,
+    sanitize = False,
+    deps = [
+        ":raw_facade_plugin_host" + suffix,
+        ":raw_runtime_plugin_host" + suffix,
+        "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
+    ] + RAW_HOST_DEPS,
+) for suffix, extra in RECORD_COST_BUILDS]
 
 # Every texture <-> buffer copy layout Metal takes, recorded on the raw facade: none refused but what Metal refuses itself
 host_test(

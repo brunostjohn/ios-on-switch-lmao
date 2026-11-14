@@ -42,8 +42,8 @@ static void checkFetch(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger cou
               samplerState:(id<MTLSamplerState>)s
             atSamplerIndex:(NSUInteger)si
 {
-    [self texture:2 object:t index:ti];
-    [self sampler:2 object:s index:si];
+    rmBindTexture(self, 2, t, ti);
+    rmBindSampler(self, 2, s, si);
 }
 
 // A store action the pass left Unknown, decided by the encoder: the pass's descriptor takes it before either driver encodes it
@@ -406,20 +406,26 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
     [_cb record:m];
 }
 
+static void recordDraw(RMRenderEncoder *e, MTLPrimitiveType type, NSUInteger start, NSUInteger count,
+                       NSUInteger instances, NSUInteger base)
+{
+    SWITCH_API(ApiDraw);
+    [e checkDraw];
+    checkFetch(e, type, count, instances, false, false);
+    Cmd m = cmd(OpDraw, uint8_t(type));
+    m.a = uint32_t(start);
+    m.b = uint32_t(count);
+    m.c = uint64_t(instances) << 32 | uint32_t(base);
+    [e->_cb record:m];
+}
+
 - (void)drawPrimitives:(MTLPrimitiveType)type
            vertexStart:(NSUInteger)start
            vertexCount:(NSUInteger)count
          instanceCount:(NSUInteger)instances
           baseInstance:(NSUInteger)base
 {
-    SWITCH_API(ApiDraw);
-    [self checkDraw];
-    checkFetch(self, type, count, instances, false, false);
-    Cmd m = cmd(OpDraw, uint8_t(type));
-    m.a = uint32_t(start);
-    m.b = uint32_t(count);
-    m.c = uint64_t(instances) << 32 | uint32_t(base);
-    [_cb record:m];
+    recordDraw(self, type, start, count, instances, base);
 }
 
 - (void)drawPrimitives:(MTLPrimitiveType)type
@@ -427,13 +433,12 @@ static void forwardCall(RMEncoder *e, SEL selector, const void *argument)
            vertexCount:(NSUInteger)count
          instanceCount:(NSUInteger)instances
 {
-    SWITCH_API(ApiDraw);
-    [self drawPrimitives:type vertexStart:start vertexCount:count instanceCount:instances baseInstance:0];
+    recordDraw(self, type, start, count, instances, 0);
 }
 
 - (void)drawPrimitives:(MTLPrimitiveType)type vertexStart:(NSUInteger)start vertexCount:(NSUInteger)count
 {
-    [self drawPrimitives:type vertexStart:start vertexCount:count instanceCount:1 baseInstance:0];
+    recordDraw(self, type, start, count, 1, 0);
 }
 
 - (void)drawPrimitives:(MTLPrimitiveType)type

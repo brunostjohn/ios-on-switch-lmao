@@ -18,6 +18,8 @@ struct switch_gpu_backing_access {
 	uint64_t content;
 	uint32_t access;
 	bool noted;  // its failure was already logged, or needs no log
+	// the token's timeline (switch_gpu_backing_timeline_refs), held by the record's reference; null: the engine's status
+	const void *handle;
 };
 
 struct switch_gpu_backing {
@@ -60,6 +62,7 @@ struct switch_gpu_backing {
 	// CPU threads asleep on it behind a pending promise (SwitchGpuPromiseSleepers.cpp, under its lock)
 	switch_gpu_backing *promise_sleep_next, *promise_sleep_prev;
 	uint32_t promise_sleepers, promise_woken;
+	const void *host_acquire_handle;  // host_acquire's timeline, as a record's handle
 };
 
 struct switch_gpu_cpu_lease {
@@ -71,6 +74,10 @@ struct switch_gpu_cpu_lease {
 };
 
 const switch_gpu_backing_engine *switch_gpu_backing_engine_ops(uint32_t engine);
+const switch_gpu_backing_timeline_refs *switch_gpu_backing_timeline_ops(uint32_t engine);
+// A token's status through its timeline's handle where it has one (switch_gpu_backing_timeline_refs)
+int switch_gpu_backing_held_status(const switch_gpu_backing_token &token, const void *handle);
+int switch_gpu_backing_access_status(const switch_gpu_backing_access &access);
 bool switch_gpu_backing_same_timeline(const switch_gpu_backing_token &a,
 				      const switch_gpu_backing_token &b);
 bool switch_gpu_backing_later(const switch_gpu_backing_token &a, const switch_gpu_backing_token &b);

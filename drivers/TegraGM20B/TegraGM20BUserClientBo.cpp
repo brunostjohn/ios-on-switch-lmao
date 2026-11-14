@@ -390,6 +390,8 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		__atomic_add_fetch(&gSystemCoherentBytes, bo->bytes, __ATOMIC_RELAXED);
 	}
 	tgm_stats_bo_alloc(bo->bytes, kind, mark - start, phase, owner_);
+	if (critical_)
+		switch_gpu_compositor_alloc(mark - start, kind == TGM_BO_CACHED);
 	ownerNote(owner_, bo->bytes, mark - start, kind == TGM_BO_CACHED);
 	bo->handle = next_handle_++;
 	bo->token = next_token_++;
@@ -542,6 +544,8 @@ IOReturn AGXDeviceUserClient::boImportPrepare(const TegraGM20BAbiBoImport *in, B
 		cost.read_only = static_cast<int>(bo->readOnly);
 		cost.owner = owner_;
 		tgm_stats_import_cost(&cost);
+		if (critical_)
+			switch_gpu_compositor_import(cost.total_ns);
 	}
 #if TGM_STATS
 	tgm_stats_unlocked(TGM_UNLOCKED_IMPORT, statsNowNs() - start);

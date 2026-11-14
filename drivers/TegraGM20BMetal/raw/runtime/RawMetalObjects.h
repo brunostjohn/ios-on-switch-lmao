@@ -591,12 +591,15 @@ uint64_t nextTraceId();
 // reason then, so encodeRaw never meets it (a fallback costs no encoding).
 @interface RMRenderEncoder : RMEncoder {
 @public
-    RMPipeline *_pipe;
+    // Unretained, as the bound objects below: the command buffer retains each (setBinding), so a bind stores no
+    // reference count and a pooled encoder's end releases none of its 172 slots
+    __unsafe_unretained RMPipeline *_pipe;
     uint64_t _bufVa[3]
                    [31];  // stage 1 vertex, 2 fragment: the bound buffer's address plus offset (setBytes: 0, aligned)
-    RMBuffer *_buf[3][31];
-    RMTexture *_tex[2][raw::kStageTextures];  // vertex, fragment textures (unretained: the command buffer retains them)
-    RMSampler *_samp[16];  // fragment samplers, alike; `_cubicMask`: the slots of those that are cubic (raw_cubic.h)
+    __unsafe_unretained RMBuffer *_buf[3][31];
+    __unsafe_unretained RMTexture *_tex[2][raw::kStageTextures];  // vertex, fragment textures
+    // fragment samplers; `_cubicMask`: the slots of those that are cubic (raw_cubic.h)
+    __unsafe_unretained RMSampler *_samp[16];
     uint16_t _cubicMask;
     uint64_t _checkedGeneration;
     const raw::Pipeline *_checkedPipeline;
@@ -686,10 +689,10 @@ id<MTLSamplerState> clampedSampler(id<MTLSamplerState> s, float lodMin, float lo
 // RawMetalEncoder.mm: the encoder's own copy of its pass, where it shares the thread's, before it changes it
 void rmOwnPass(RMRenderEncoder *e);
 
-@interface RMRenderEncoder (Bindings)
-- (void)texture:(int)stage object:(id<MTLTexture>)t index:(NSUInteger)index;
-- (void)sampler:(int)stage object:(id<MTLSamplerState>)s index:(NSUInteger)index;
-@end
+// A texture or sampler bound at slot `index` of stage `stage` (1 vertex, 2 fragment), as its setter binds it
+// (RawMetalBindings.mm)
+void rmBindTexture(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLTexture> t, NSUInteger index);
+void rmBindSampler(RMRenderEncoder *e, int stage, __unsafe_unretained id<MTLSamplerState> s, NSUInteger index);
 
 @interface RMRenderEncoder (Cubic)
 - (const raw::Pipeline *)drawnRecord __attribute__((objc_direct));  // (RawMetalCubic.mm)

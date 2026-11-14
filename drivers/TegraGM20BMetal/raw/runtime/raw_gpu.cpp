@@ -496,6 +496,7 @@ Device::~Device()
     {
         std::lock_guard<raw::Mutex> l(lock_);
         stopping_ = true;
+        dropKeptImports();
     }
     grow_.notify_all();
     if (grower_.joinable())
@@ -1463,8 +1464,7 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
 
 // ---- device: memory ----
 
-// A span of `bytes` (page multiple) from the pool: first fit in a chunk, else a new chunk (one BoImport of fresh anonymous
-// memory; its pages are wired and their zeros cleaned to memory by the kext: ~10 ms for 16 MiB on the device, r7l). A span of more
+// A span of `bytes` (page multiple) from the pool: first fit in a chunk, else a new chunk (newChunk). A span of more
 // than half a chunk gets a chunk of its own, given back whole when the span is freed. The shared chunks grow ahead of need: once their
 // free bytes fall below a chunk's worth the grower thread makes the next one, so this (the render thread's resource creation) finds room;
 // one that does not waits for a chunk the grower is making, or makes one itself (Stats::poolStalls: a burst outran the mark).
@@ -1485,25 +1485,43 @@ uint64_t Device::chunkSize(const std::vector<Chunk> &chunks, uint64_t cap, uint6
     return (size + align - 1) & ~(align - 1);
 }
 
-// lock_ held (`unlocked`: the caller's lock, let go for the kernel's wiring and taken again); the chunk's index in chunks_
-bool Device::newChunk(uint64_t size, bool dedicated, std::unique_lock<raw::Mutex> *unlocked, uint32_t &index)
+// The render server's chunks are cached BoAllocs, which the kernel serves from its spares: pages wired, zeroed by the
+// copy engine and cleaned ahead of time, so a chunk costs a BO and a bind, not a wiring of fresh anonymous pages that the
+// CPU zero-fills (r7l, boot 21: ~9 ms for 16 MiB, on the render thread when a burst outran the grower). A chunk given back
+// returns to those spares. A client's stay imports of its own anonymous pages: m2v twins a client's raw memory by importing
+// its CPU range, and a kernel BO's view must not be freed under another import of its mapping (TegraGM20BUserClientPool.cpp).
+bool Device::chunkMemory(uint64_t size, uint32_t kind, std::unique_lock<raw::Mutex> *unlocked, Chunk &ch)
 {
-    vm_address_t memory = 0;
-    if (vm_allocate(mach_task_self(), &memory, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
+    vm_address_t host = 0;
+    const bool kernelMemory = role_ == Role::RenderServer;
+    if (!kernelMemory && vm_allocate(mach_task_self(), &host, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
         return false;
-    Chunk ch;
-    ch.memory = reinterpret_cast<void *>(memory);
-    ch.bytes = size;
-    ch.dedicated = dedicated;
     if (unlocked)
         unlocked->unlock();
-    const bool wired = k_.importPages(ch.memory, size, ch.bo);
+    const bool made = kernelMemory ? k_.alloc(size, false, ch.bo, kind, kChunkVaAlign)
+                                   : k_.importPages(reinterpret_cast<void *>(host), size, ch.bo);
     if (unlocked)
         unlocked->lock();
-    if (!wired || !k_.bindImport(ch.memory, ch.bo, kPteKindPitch)) {
-        vm_deallocate(mach_task_self(), memory, size);
+    if (!made || (!kernelMemory && !k_.bindImport(reinterpret_cast<void *>(host), ch.bo, kind))) {
+        if (ch.bo.handle)
+            k_.free(ch.bo);
+        if (host)
+            vm_deallocate(mach_task_self(), host, size);
         return false;
     }
+    ch.memory = kernelMemory ? ch.bo.cpu : reinterpret_cast<void *>(host);
+    ch.bytes = size;
+    ch.hostPages = !kernelMemory;
+    return true;
+}
+
+// lock_ held (`unlocked`: the caller's lock, let go for the kernel's call and taken again); the chunk's index in chunks_
+bool Device::newChunk(uint64_t size, bool dedicated, std::unique_lock<raw::Mutex> *unlocked, uint32_t &index)
+{
+    Chunk ch;
+    ch.dedicated = dedicated;
+    if (!chunkMemory(size, kPteKindPitch, unlocked, ch))
+        return false;
     uint32_t c = 0;
     while (c < chunks_.size() && chunks_[c].memory)
         c++;
@@ -1679,16 +1697,19 @@ void Device::freeChunk(Chunk &ch)
     RAW_DIAGNOSTIC(stats.poolBytes -= ch.bytes);
     RAW_DIAGNOSTIC(stats.poolChunks--);
     RAW_DIAGNOSTIC(glassMemEvent("chunk freed", ch.bytes));
+    const bool host = ch.hostPages;
     k_.free(ch.bo);
     if (ch.pitchVa)
         k_.releaseVa(ch.pitchVa, ch.bytes);
-    vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
+    if (host)
+        vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
     ch = Chunk();
 }
 
 void Device::trim()
 {
     std::lock_guard<raw::Mutex> l(lock_);
+    dropKeptImports();
     reapNativeSurfaces();
     for (const Spare &sp : spares_)
         freeChunk(chunks_[sp.chunk]);
@@ -1722,9 +1743,13 @@ Import *Device::importSurface(uint64_t id, void *base, uint64_t bytes, const voi
     if (id) {
         auto it = surfaces_.find(key);
         if (it != surfaces_.end()) {
-            it->second->refs++;
+            Import *kept = it->second;
+            if (!kept->refs++) {
+                keptImports_.erase(std::find(keptImports_.begin(), keptImports_.end(), kept));
+                keptImportBytes_ -= kept->bo.bytes;
+            }
             RAW_DIAGNOSTIC(stats.importHits++);
-            return it->second;
+            return kept;
         }
     }
     Import *i = new Import;
@@ -1766,6 +1791,34 @@ void Device::release(Import *i)
 {
     if (!i || --i->refs)
         return;
+    if (i->id && i->owner)
+        keepImport(i);
+    else
+        dropImport(i);
+}
+
+void Device::keepImport(Import *i)
+{
+    keptImports_.push_back(i);
+    keptImportBytes_ += i->bo.bytes;
+    while (keptImports_.size() > kKeptImports || keptImportBytes_ > kKeptImportBytes) {
+        Import *oldest = keptImports_.front();
+        keptImports_.erase(keptImports_.begin());
+        keptImportBytes_ -= oldest->bo.bytes;
+        dropImport(oldest);
+    }
+}
+
+void Device::dropKeptImports()
+{
+    for (Import *i : keptImports_)
+        dropImport(i);
+    keptImports_.clear();
+    keptImportBytes_ = 0;
+}
+
+void Device::dropImport(Import *i)
+{
     if (i->id)
         if (auto it = surfaces_.find(std::make_tuple(i->id, i->base, i->bytes));
             it != surfaces_.end() && it->second == i)
@@ -2661,22 +2714,14 @@ bool Device::tiledWanted(const std::vector<Chunk> &chunks) const
 bool Device::newTiledChunk(std::vector<Chunk> &chunks, uint32_t kind, uint64_t size, bool dedicated,
                            std::unique_lock<raw::Mutex> *unlocked, uint32_t &index)
 {
-    vm_address_t memory = 0;
-    if (vm_allocate(mach_task_self(), &memory, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
-        return false;
     Chunk ch;
-    ch.memory = reinterpret_cast<void *>(memory);
-    ch.bytes = size;
     ch.dedicated = dedicated;
-    if (unlocked)
-        unlocked->unlock();
-    const bool wired = k_.importPages(ch.memory, size, ch.bo);
-    if (unlocked)
-        unlocked->lock();
-    if (!wired || !k_.bindImport(ch.memory, ch.bo, kind) || (ch.bo.va & (kBlAlign - 1))) {
-        if (ch.bo.handle)
-            k_.free(ch.bo);
-        vm_deallocate(mach_task_self(), memory, size);
+    if (!chunkMemory(size, kind, unlocked, ch))
+        return false;
+    if (ch.bo.va & (kBlAlign - 1)) {
+        k_.free(ch.bo);
+        if (ch.hostPages)
+            vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
         return false;
     }
     uint32_t c = 0;
