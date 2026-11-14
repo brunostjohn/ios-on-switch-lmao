@@ -122,6 +122,8 @@ int switch_gpu_vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm
 int switch_gpu_vm_map_volatile(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
 			       uint64_t offset, uint8_t kind, int read_only, int vol,
 			       struct switch_gpu_mapping **mapping);
+/* Whether a map of `kind` may be volatile: every map path (now, prepared, installed) refuses a compressed one. */
+int switch_gpu_vm_volatile_kind_ok(uint8_t kind, int vol);
 void switch_gpu_vm_unmap(struct tgm_vm *vm, struct switch_gpu_mapping **mapping);
 /* Cuts [va, va + range) out of *mapping, made by switch_gpu_vm_map_volatile or _prepare of mem with kind, and consumes
  * it, changing no PTE. What stays below and above the range comes back as *below and *above, the range's own entries as

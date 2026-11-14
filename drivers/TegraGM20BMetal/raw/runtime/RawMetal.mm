@@ -19,6 +19,7 @@
 //    copy (which waits on the GPU for every channel that imports the surface) never runs before the frame's work is submitted.
 #include "raw_lock.h"
 #import "RawMetalIndirect.h"
+#import "RawMetalPassCache.h"
 #include "raw_device_answers.h"
 #include "raw_limits_fill.h"
 
@@ -369,7 +370,9 @@ id<MTLDevice> raw_metal_device_open_lazy(const char *packPath, uint64_t stack, u
     r->listener = [[MTLSharedEventListener alloc] initWithDispatchQueue:r->handlers];
     gRawRelease.start(
         [](void *) {
-            gRM->raw->trim();
+            // the textures only kept pass copies hold go first, so trim gives back the chunks they held
+            const RMPassTrim passes = rmPassTrim();
+            const raw::Device::Trimmed kept = gRM->raw->trim();
             gRM->raw->purgeArenas(gRM->committed);
             gRM->raw->trimArenas(gRM->committed);
             releaseRecordings();
@@ -377,9 +380,11 @@ id<MTLDevice> raw_metal_device_open_lazy(const char *packPath, uint64_t stack, u
             // would have made malloc give back the dirty pages its zones keep free (a compile's working memory)
             const size_t relieved = malloc_zone_pressure_relief(nullptr, 0);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-            logGivenBack(relieved);
+            logGivenBack(relieved, passes, kept);
 #else
             (void)relieved;
+            (void)passes;
+            (void)kept;
 #endif
         },
         nullptr, &r->rangesInFlight);

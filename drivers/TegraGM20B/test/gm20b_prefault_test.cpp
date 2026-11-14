@@ -58,3 +58,41 @@ TEST(GM20BPrefault, OnlyLargeSurfacesAtNormalPressure)
 	for (int level : {1, 2, 4})
 		EXPECT_FALSE(tegra_gm20b_prefault_wanted(1280 * 720 * 4, level));
 }
+
+// Boot 21: each new 1280x720 surface Core Animation made on a close frame was cleaned on its render thread at its first
+// import (`imp 1 1.8ms ... clean 3600 KiB 1.6 ms`), its pages already faulted in by the prefault. The prefault cleans them
+// and keeps them wired; the first import of a surface nothing wrote cleans nothing.
+TEST(GM20BPrefault, AFreshSurfaceCleanedAtCreationIsNotCleanedAtImport)
+{
+	EXPECT_FALSE(tegra_gm20b_import_cleans(false, true, true, true));
+	EXPECT_TRUE(tegra_gm20b_import_cleans(false, false, true, true)) << "the import came first";
+	EXPECT_TRUE(tegra_gm20b_import_cleans(false, true, false, true))
+		<< "written, or imported before";
+	EXPECT_TRUE(tegra_gm20b_import_cleans(false, true, true, false))
+		<< "the GPU only samples it: what it reads is the CPU's";
+	EXPECT_FALSE(tegra_gm20b_import_cleans(true, false, false, false))
+		<< "another import cleaned it";
+}
+
+TEST(GM20BPrefault, HeldWiringsGoToTheirImportOrBackOldestFirst)
+{
+	int memory[kTegraGM20BPrefaultHeld + 1];
+	TegraGM20BPrefaultHeld<int> held;
+	EXPECT_EQ(held.next(), 0u);
+	for (uint32_t i = 0; i < kTegraGM20BPrefaultHeld; ++i)
+		EXPECT_EQ(held.hold(&memory[i], 100 + i), nullptr);
+	EXPECT_EQ(held.next(), 100u);
+	EXPECT_EQ(held.hold(&memory[kTegraGM20BPrefaultHeld], 200), &memory[0])
+		<< "a ninth pushes the oldest out";
+	EXPECT_EQ(held.take(&memory[0]), nullptr);
+	EXPECT_EQ(held.take(&memory[3]), &memory[3]);
+	EXPECT_EQ(held.take(&memory[3]), nullptr) << "taken once";
+	EXPECT_EQ(held.expire(101, false), &memory[1]);
+	EXPECT_EQ(held.expire(101, false), nullptr);
+	EXPECT_EQ(held.next(), 102u);
+	unsigned dropped = 0;
+	while (held.expire(0, true))
+		++dropped;
+	EXPECT_EQ(dropped, kTegraGM20BPrefaultHeld - 2) << "memory pressure gives every one back";
+	EXPECT_EQ(held.next(), 0u);
+}

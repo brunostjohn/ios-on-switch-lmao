@@ -13,6 +13,24 @@ enum switch_gpu_spare_miss : uint8_t {
 	SWITCH_GPU_SPARE_MISSES
 };
 
+constexpr uint64_t SWITCH_GPU_SPARE_UNIT_BYTES = 128ULL << 10;
+constexpr uint64_t SWITCH_GPU_SPARE_UNITS_FROM = 512ULL << 10;
+
+struct switch_gpu_spare_units {
+	uint32_t units;
+	uint64_t tail;
+};
+
+// A spare of `bytes` made by the refill thread: physically contiguous, 128 KiB-aligned units (one GMMU big page each),
+// then the rest in pages. A class below SWITCH_GPU_SPARE_UNITS_FROM would gain at most three big pages, and its BOs are
+// the ones mapped with kIOMapPrefault, which wants one buffer.
+inline switch_gpu_spare_units switch_gpu_spare_layout(uint64_t bytes)
+{
+	if (bytes < SWITCH_GPU_SPARE_UNITS_FROM)
+		return {0, bytes};
+	return {uint32_t(bytes / SWITCH_GPU_SPARE_UNIT_BYTES), bytes % SWITCH_GPU_SPARE_UNIT_BYTES};
+}
+
 inline switch_gpu_spare_miss switch_gpu_spare_miss_of(uint16_t target, uint16_t zeroing,
 						      bool pressure)
 {

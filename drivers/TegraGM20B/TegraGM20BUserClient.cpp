@@ -46,7 +46,9 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 		retirementWork, this, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
 	wakeCall_ = thread_call_allocate_with_options(wakeWork, this, THREAD_CALL_PRIORITY_KERNEL,
 						      THREAD_CALL_OPTIONS_ONCE);
-	if (!retireCall_ || !wakeCall_)
+	releaseCall_ = thread_call_allocate_with_options(
+		releaseWork, this, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+	if (!retireCall_ || !wakeCall_ || !releaseCall_)
 		return false;
 	if (tgm_vm_new(&vm_))
 		return false;
@@ -84,12 +86,15 @@ void AGXDeviceUserClient::free()
 			thread_call_free(retireCall_);
 		if (wakeCall_)
 			thread_call_free(wakeCall_);
+		if (releaseCall_)
+			thread_call_free(releaseCall_);
 		if (binds_)
 			IODelete(binds_, Binding, cap_binds_);
 		freeJob(job_);
 		for (auto &job : channelJobs_)
 			freeJob(job);
 		boIndex_.destroy();
+		bindTable_.destroy();
 		for (auto &submitLock : submitLocks_)
 			if (submitLock)
 				IOLockFree(submitLock);
@@ -179,18 +184,16 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 		    !(bo->handle && poolZeroLater(bo->pool_va, bo->pool_pa, bo->bytes)))
 			tgm_pool_free(bo->pool_va, bo->bytes, bo->pool_pa);
 	}
-	if (bo->bmd && bo->handle && !bo->system && !(bo->flags & TegraGM20BBoContiguous) &&
-	    spareKeep(bo->bmd, bo->pas, static_cast<uint64_t>(bo->backing_pages) << 12,
+	if (bo->buffer.memory && bo->handle && !bo->system &&
+	    !(bo->flags & TegraGM20BBoContiguous) &&
+	    spareKeep(bo->buffer, bo->pas, static_cast<uint64_t>(bo->backing_pages) << 12,
 		      bo->cachedMapping)) {
-		bo->bmd = nullptr;
+		bo->buffer = {};
 		bo->pas = nullptr;
 		bo->cachedMapping = nullptr;
 	}
 	switch_gpu_cached_mapping_drop(&bo->cachedMapping);
-	if (bo->bmd) {
-		bo->bmd->complete();
-		bo->bmd->release();
-	}
+	switch_gpu_cached_buffer_free(&bo->buffer);
 	if (bo->wired) {
 		if (bo->handle) {
 			tgm_stats_import(-static_cast<int64_t>(bo->bytes), bo->pas[0]);
@@ -558,7 +561,7 @@ IOReturn AGXDeviceUserClient::clientMemoryForType(UInt32 type, IOOptionBits *opt
 		// (populateDevicePager), but enters them in the pmap only for kernel_map, so a task's first CPU touch of each
 		// 4 KiB still faults (the "device" class on the kprof faults line), and IOKit drops kIOMapPrefault for device
 		// pager memory. A cached BO's buffer is prepared (BoAlloc), which kIOMapPrefault requires.
-		if (bo->bmd && bo->view == bo->bmd && !bo->system &&
+		if (bo->buffer.memory && bo->view == bo->buffer.memory && !bo->system &&
 		    bo->bytes <= kPrefaultMaxBytes) {
 			*options |= kIOMapPrefault;
 			tgm_stats_prefault(bo->bytes);

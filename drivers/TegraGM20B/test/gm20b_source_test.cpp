@@ -27,12 +27,13 @@ const std::string &client()
 {
 	static const std::string source = [] {
 		std::string units;
-		for (const char *unit : {"", "Pool", "Bo", "Channel", "Submit", "Dispatch",
-					 "Present", "Job", "JobSubmit"})
+		for (const char *unit : {"", "Pool", "Spares", "Bo", "Import", "Channel", "Submit",
+					 "Dispatch", "Present", "Job", "JobSubmit"})
 			units += SourceText(std::string("../TegraGM20BUserClient") + unit + ".cpp");
 		return units + SourceText("../TegraGM20BPushScanRun.cpp") +
 		       SourceText("../TegraGM20BUserClientInternal.h") +
-		       SourceText("../SwitchGpuClientRetirement.h");
+		       SourceText("../SwitchGpuClientRetirement.h") +
+		       SourceText("../SwitchGpuClientBinds.h");
 	}();
 	return source;
 }
@@ -75,9 +76,11 @@ TEST(GM20BPoolPolicySource, BoAllocNeverRefusesACoherentBoForPoolRoom)
 	EXPECT_TRUE(refusal.Has("tgm_pool::refusal("));
 	EXPECT_TRUE(refusal.Has("compositor);"));  // the compositor keeps nvkm's floor
 	const CodeText alloc = Block(client(), "IOReturn AGXDeviceUserClient::boAlloc(");
-	EXPECT_TRUE(alloc.Has(
-		"refused = control ? nullptr : poolRefusal(in->bytes, pool_bytes_, critical_);"));
-	EXPECT_TRUE(alloc.Has("tgm_pool::coherentSource(refused, bo->pool_va != nullptr)"));
+	EXPECT_TRUE(
+		Block(client(), "AGXDeviceUserClient::BoCharge AGXDeviceUserClient::chargeBo(")
+			.Has("c.refused = control ? nullptr : poolRefusal(in->bytes, pool_bytes_, "
+			     "critical_);"));
+	EXPECT_TRUE(alloc.Has("tgm_pool::coherentSource(charge.refused, bo->pool_va != nullptr)"));
 	// A refusal does not fail the BO: no NoMemory between the tier check and the pool allocation.
 	EXPECT_FALSE(alloc.Between("if (!ret && (in->flags & TegraGM20BBoCoherent)) {",
 				   "if (!ret && bo->pool_va)")
@@ -85,11 +88,13 @@ TEST(GM20BPoolPolicySource, BoAllocNeverRefusesACoherentBoForPoolRoom)
 	EXPECT_FALSE(clientCode().Has("GPU pool BoAlloc of %llu KiB refused"));
 	// A system BO: a write-combined buffer of its own, mapped as itself. A physical view over its managed pages would set
 	// their cache attribute through a device pager whose private pages reset it to cacheable whenever they are freed.
-	EXPECT_TRUE(alloc.Between("} else if (!ret && !compressible) {", "if (!ret && bo->bmd) {")
+	EXPECT_TRUE(alloc.Between("} else if (!ret && !compressible) {",
+				  "if (!ret && bo->buffer.memory) {")
 			    .Has("if (system) options |= kIOMapWriteCombineCache;"));
 	EXPECT_FALSE(alloc.Has(
 		"kIOMemoryTypePhysical64) | kPoolCacheMode, TASK_NULL); IODelete(ranges"));
-	EXPECT_TRUE(alloc.Has("if (!ret && bo->bmd) { bo->view = bo->backing_pages == bo->npages"));
+	EXPECT_TRUE(alloc.Has(
+		"if (!ret && bo->buffer.memory) { bo->view = bo->backing_pages == bo->npages"));
 }
 
 TEST(GM20BPoolPolicySource, SystemBosGoAsCachedBosDo)
@@ -98,7 +103,7 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsCachedBosDo)
 	EXPECT_TRUE(release.Has("if (bo->pool_va && bo->view) orphan = IONew(PoolOrphan, "
 				"1); if (orphan) {"));
 	EXPECT_TRUE(release.Has("!bo->system && !(bo->flags & TegraGM20BBoContiguous) &&"));
-	EXPECT_TRUE(release.Before("spareKeep(", "bo->bmd->release();"));
+	EXPECT_TRUE(release.Before("spareKeep(", "switch_gpu_cached_buffer_free(&bo->buffer);"));
 	EXPECT_FALSE(Block(client(), "void releaseOrphans()").Has("spareKeep"));
 	// The kernel's mapping of a system BO is write-combined as its task's is: pushView reads it as a cached BO's.
 	EXPECT_TRUE(Block(client(), "const uint32_t *AGXDeviceUserClient::pushView(")
@@ -122,12 +127,12 @@ TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 	EXPECT_TRUE(alloc.Has("(in->flags & TegraGM20BBoContiguous) || system ? kClasses : "
 			      "classUp(in->bytes);"));
 	EXPECT_TRUE(alloc.Has("cleanZeros(va, backing);"));
-	EXPECT_TRUE(Block(client(), "Spare *spareMake(uint64_t bytes)")
-			    .Has("cleanZeros(bmd->getBytesNoCopy(), bytes);"));
+	EXPECT_TRUE(Block(client(), "Spare *spareMake(SparePool *p, uint64_t bytes)")
+			    .Has("cleanZeros(buffer.cpu, bytes);"));
 	const CodeText work =
 		Block(client(), "void spareWork(thread_call_param_t param, thread_call_param_t)");
 	EXPECT_TRUE(work.Has("switch_gpu_cached_zero(s->pas"));
-	EXPECT_FALSE(work.Has("cleanZeros(s->bmd"));
+	EXPECT_FALSE(work.Has("cleanZeros(s->buffer"));
 	const CodeText completed = Block(client(), "void spareZeroed(void *context, int result)");
 	EXPECT_TRUE(completed.Before("const bool keep = !result && !memoryPressure();",
 				     "p->ready[c] = s;"));
@@ -140,10 +145,10 @@ TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 	EXPECT_TRUE(orphans.Before("if (orphan->view->getRetainCount() > 1) {",
 				   "orphan->view->release();"));
 	EXPECT_TRUE(orphans.Has("orphan->zero &&"));
-	EXPECT_TRUE(Block(client(), "bool spareKeep(IOBufferMemoryDescriptor *bmd, "
+	EXPECT_TRUE(Block(client(), "bool spareKeep(const SwitchGpuCachedBuffer &buffer, "
 				    "uint64_t *pas, uint64_t bytes,")
-			    .Has("bmd->getRetainCount() == 1"));
-	const CodeText free = Block(client(), "IOReturn AGXDeviceUserClient::boFree(");
+			    .Has("switch_gpu_cached_buffer_alone(buffer)"));
+	const CodeText free = Block(client(), "IOReturn AGXDeviceUserClient::freeBo(Bo **p)");
 	EXPECT_TRUE(free.Before("unbindOverlaps(binds_[i].va, binds_[i].range, bo);",
 				"queueZombie(bo);"));
 }
@@ -186,8 +191,10 @@ TEST(GM20BPoolPolicySource, CompressibleBosArePoolChunksNoTaskMaps)
 	const CodeText alloc = Block(client(), "IOReturn AGXDeviceUserClient::boAlloc(");
 	const CodeText chunks = alloc.Between("if (!ret && compressible) {",
 					      "if (!ret && (in->flags & TegraGM20BBoCoherent)) {");
-	EXPECT_TRUE(
-		chunks.Has("refused = compressibleRefusal(in->bytes, pool_bytes_, critical_);"));
+	EXPECT_TRUE(chunks.Has("ret = charge.refused ? kIOReturnNoMemory : takeChunks("));
+	EXPECT_TRUE(Block(client(), "AGXDeviceUserClient::BoCharge AGXDeviceUserClient::chargeBo(")
+			    .Has("c.refused = compressibleRefusal(in->bytes, pool_bytes_, "
+				 "critical_);"));
 	EXPECT_TRUE(Block(client(), "const char *compressibleRefusal(uint64_t bytes, "
 				    "uint64_t held, bool compositor)")
 			    .Has("tgm_pool::compressibleRefusal(bytes, held, avail, limits, "
@@ -399,7 +406,7 @@ TEST(GM20BPushScanSource, OnlyAProfiledSubmissionIsReadOnItsThread)
 	EXPECT_TRUE(
 		Block(client(), "void deferredWork(").Has("scanRead(r->push, r->count, nullptr,"));
 	EXPECT_TRUE(Block(client(), "IOReturn AGXDeviceUserClient::boImport(")
-			    .Has("if (critical_) switch_gpu_compositor_import(cost.total_ns);"));
+			    .Has("if (critical) switch_gpu_compositor_import(cost.total_ns);"));
 }
 
 // A copying present flushes the L2 once, before the copy reads the frame; its copy writes around the L2, so its fence
@@ -1618,13 +1625,16 @@ TEST(GM20BBoIndexSource, EveryBoListChangeKeepsTheIndex)
 	const CodeText find =
 		Block(client(), "AGXDeviceUserClient::Bo *AGXDeviceUserClient::findBo(");
 	EXPECT_TRUE(find.Has("return boIndex_.find(handle);"));
-	const std::string sources = client() + SourceText("../SwitchGpuNativeImport.h") +
+	const std::string sources = SourceText("../TegraGM20BUserClientBo.cpp") +
+				    SourceText("../TegraGM20BUserClientImport.cpp") +
+				    SourceText("../SwitchGpuNativeImport.h") +
 				    SourceText("../SwitchGpuClientRetirement.h");
 	EXPECT_EQ(CodeText(sources).Count("bos_ = bo;"),
 		  CodeText(sources).Count("boIndex_.insert(bo->handle, bo);"));
-	EXPECT_EQ(CodeText(sources).Count("boIndex_.reserve()"), 3u);
+	EXPECT_EQ(CodeText(sources).Count("boIndex_.reserve()"), 2u)
+		<< "publishBo (BoAlloc, BoImport) and nativeSurfaceView";
 	EXPECT_TRUE(Block(SourceText("../SwitchGpuClientRetirement.h"),
-			  "IOReturn AGXDeviceUserClient::boFree(")
+			  "IOReturn AGXDeviceUserClient::freeBo(Bo **p)")
 			    .Before("*p = bo->next;", "boIndex_.erase(bo->handle);"));
 }
 
@@ -1744,8 +1754,11 @@ TEST(GM20BLayoutSource, LayoutDecisionHoldsNeitherTheConnectionLockNorItsGate)
 	EXPECT_TRUE(info.Before("IOLockUnlock(lock_);", "tgm_coherency_layout(coh,"));
 	EXPECT_TRUE(info.Before("tgm_coh_put_asker(coh);", "IOLockLock(lock_);"));
 	const CodeText run = Block(client(), "IOReturn AGXDeviceUserClient::run(");
-	EXPECT_TRUE(run.Has("method != TegraGM20BMethodSurfaceLayout &&"));
-	EXPECT_TRUE(run.Has("method != TegraGM20BMethodSurfaceLayoutInfo;"));
+	EXPECT_TRUE(run.Has("const bool mutation = switch_gpu_method_closes_gate(method);"));
+	const CodeText gated = Block(SourceText("../SwitchGpuGatedMethods.h"),
+				     "static inline bool switch_gpu_method_closes_gate(");
+	EXPECT_TRUE(gated.Before("case TegraGM20BMethodSurfaceLayout:", "return false;"));
+	EXPECT_TRUE(gated.Before("case TegraGM20BMethodSurfaceLayoutInfo:", "return false;"));
 }
 
 // The asker's hold (gm20b_layout_ask_test) is the only reference the decision does not count as another user: it is
