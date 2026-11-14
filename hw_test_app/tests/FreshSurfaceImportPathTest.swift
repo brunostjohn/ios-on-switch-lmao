@@ -11,8 +11,9 @@ import Metal
 /// texture over it), cleared whole by the GPU and read back under IOSurfaceLock: a dirty zero line written back over the
 /// GPU's pixels would read black. Half the surfaces are written by the CPU without IOSurfaceLock after the prefault's
 /// clean: the import must find those pages modified and clean them, or the written lines land over the GPU's clear
-/// (wrong_pixels_unlocked_writer). The imports' times are the metrics (import_us_mean, import_us_max: under the 1.6 ms
-/// clean when it is skipped); the debug kernel's `mem2` line counts the skipped cleans.
+/// (wrong_pixels_unlocked_writer). The unwritten imports' times are the metrics (import_us_mean, import_us_max: under
+/// the 1.6 ms clean when it is skipped; import_us_unlocked_writer_max includes the clean); the debug kernel's `mem2` line
+/// counts the skipped cleans.
 struct FreshSurfaceImportPathTest: GPUPathTest {
     let id = "gpu.path.fresh_surface_import"
     let name = "A fresh IOSurface's first import needs no CPU clean and the GPU's pixels read back whole"
@@ -48,8 +49,10 @@ struct FreshSurfaceImportPathTest: GPUPathTest {
             importNs.append(DispatchTime.now().uptimeNanoseconds - start)
             textures.append(texture)
         }
-        metrics.set("import_us_mean", Int(importNs.reduce(0, +) / UInt64(importNs.count) / 1000))
-        metrics.set("import_us_max", Int((importNs.max() ?? 0) / 1000))
+        let unwritten = importNs[..<(Self.surfaces / 2)], written = importNs[(Self.surfaces / 2)...]
+        metrics.set("import_us_mean", Int(unwritten.reduce(0, +) / UInt64(unwritten.count) / 1000))
+        metrics.set("import_us_max", Int((unwritten.max() ?? 0) / 1000))
+        metrics.set("import_us_unlocked_writer_max", Int((written.max() ?? 0) / 1000))
         try await gpu.run { commands in
             for texture in textures {
                 let pass = MTLRenderPassDescriptor()
