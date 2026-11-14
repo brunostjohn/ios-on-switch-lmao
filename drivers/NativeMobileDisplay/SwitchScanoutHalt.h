@@ -42,6 +42,11 @@ void waitScanoutHalted()
     }
     writeIntMask(kFrameEndInt, 0);
     __atomic_store_n(&scanoutQuiescing, false, __ATOMIC_RELEASE);
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+    if (halted)
+        IOLog("SwitchDisplay: DC A stopped %llu us after the SC7 stop\n",
+              static_cast<unsigned long long>(Span::ticksToUs(mach_absolute_time() - asked)));
+#endif
     if (!halted)
         IOLog("SwitchDisplay: DC A still scanning %llu us after the SC7 stop (DISPLAY_COMMAND active %#x, INT_STATUS "
               "%#x): it is powered down now\n",

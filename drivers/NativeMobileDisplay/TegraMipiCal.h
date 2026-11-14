@@ -2,8 +2,8 @@
 // The DSI pads' MIPI calibration, once its configuration is written (TRM 30.1.3; registers 30.2.1-30.2.4, word offsets):
 // one STARTCAL, then the calibration is done once MIPI_CAL_ACTIVE reads 0 with MIPI_AUTO_CAL_DONE set for every selected
 // brick and the clock lane's MIPI_CLK_AUTO_CAL_DONE_DSIA set (the only clock lane the configuration selects). No interrupt
-// reports it, so the status is read each millisecond for at most the 10 ms hekate's sequence gives it. Plain logic over a
-// register accessor, no IOKit.
+// reports it, so the status is read each millisecond for at most 10 ms: hekate's settle after its calibration (the TRM
+// gives no time). Plain logic over a register accessor, no IOKit.
 #pragma once
 #include <stdint.h>
 
