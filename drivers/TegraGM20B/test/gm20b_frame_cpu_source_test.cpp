@@ -99,3 +99,18 @@ TEST(GM20BFrameCpuSource, TheKickAndThePassKeepNoSharedCounters)
 	EXPECT_TRUE(Block(unit("gpu_inline.h"), "static inline void chan_wake_all_waiters(")
 			    .Has("nvxnu_wword_wake(&tgm_waiter_words[waiter], pass);"));
 }
+
+// A present job's frame is learned at the pass's end, after the scan: a compositor channel the scan completes after the
+// present's channel (a higher chid) still adds its GPU time to the frame it belongs to.
+TEST(GM20BFrameCpuSource, APresentJobsFrameIsLearnedAfterTheScan)
+{
+	const CodeText fenced = Block(unit("gpu_fenced.h"), "static inline void present_fenced(");
+	EXPECT_FALSE(fenced.Has("tgm_deadline_presented("));
+	EXPECT_FALSE(fenced.Has("nvxnu_work_schedule(tgm_present.completion_work);"));
+	const CodeText end = Block(unit("gpu_present.c"), "void tgm_present_pass(void)");
+	EXPECT_TRUE(end.Before("tgm_deadline_presented(tgm_present.fenced_queued, 1);",
+			       "nvxnu_work_schedule(tgm_present.completion_work);"));
+	EXPECT_TRUE(Block(unit("shim/xnu_glue.cpp"),
+			  "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)")
+			    .Before("nvxnu_poll_irqs();", "tgm_present_pass();"));
+}

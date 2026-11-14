@@ -1429,12 +1429,12 @@ TEST(GM20BPresentSource, ACopyEngineResetRedoesThePresentOnTheGpu)
 	const CodeText fenced = Block(gpu(), "static inline void present_fenced(");
 	EXPECT_TRUE(fenced.Before(
 		"redo = pending; if (__atomic_compare_exchange_n(&tgm_present.redo, &redo, 0,",
-		"nvxnu_work_schedule(tgm_present.completion_work);"));
+		"tgm_present.fenced_due = 1;"));
 	EXPECT_TRUE(
 		fenced.Before("__atomic_load_n(&tgm_present.redoing, __ATOMIC_ACQUIRE)) return;",
 			      "redo = pending; if ("));
 	EXPECT_TRUE(fenced.Before("nvxnu_work_schedule(tgm_present.redo_work); return; }",
-				  "nvxnu_work_schedule(tgm_present.completion_work);"));
+				  "tgm_present.fenced_due = 1;"));
 	const CodeText redo = Block(gpu(), "void tgm_present_redo_work(");
 	EXPECT_TRUE(redo.Before("|| !gate_try()) return;", "tgm_present_push_copy(push);"));
 	EXPECT_TRUE(redo.Before("tgm_present_push_copy(push);", "chan_fence_volatile(chan);"));
@@ -1516,8 +1516,10 @@ TEST(GM20BRecoverSource, ASecondStuckLoadKillsTheClientOrGoesToTheKernelStallRul
 TEST(GM20BPresentSource, TypedProducerValidationAndReleaseNeverRunUnderTheIrqEventLock)
 {
 	const CodeText irq = Block(gpu(), "static inline void present_fenced(");
-	EXPECT_TRUE(irq.Has("nvxnu_work_schedule(tgm_present.completion_work)"));
+	EXPECT_TRUE(irq.Has("tgm_present.fenced_due = 1;"));
 	EXPECT_FALSE(irq.Has("switch_gpu_present_tokens_finish"));
+	EXPECT_TRUE(Block(gpu(), "void tgm_present_pass(void)")
+			    .Has("nvxnu_work_schedule(tgm_present.completion_work);"));
 	const CodeText complete = Block(gpu(), "static void present_typed_complete(");
 	EXPECT_TRUE(complete.Before("mutex_unlock(&tgm_present.lock);",
 				    "switch_gpu_present_tokens_finish_visible("));

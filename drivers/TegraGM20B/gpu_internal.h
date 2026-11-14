@@ -712,6 +712,9 @@ struct present_state {
 	u32 typed_pending;
 	u32 pending; /* seqno of the present in flight, 0: none (atomic: the interrupt pass completes it) */
 	u64 queued;
+	/* the interrupt pass's own: a present job its scan completed, delivered at the pass's end (tgm_present_pass) */
+	u64 fenced_queued;
+	int fenced_due;
 	void (*done)(void *, int);
 	void *arg;
 	u32 completing; /* completions claimed whose callback has not returned yet */

@@ -3,6 +3,7 @@
 // resident look's register reads, and whether an app channel slow enough to be held is held, by what has work in flight.
 // Under dl.lock (a spinlock: XNU panics on a mutex, sleep or allocation there) nothing schedules, allocates or nests.
 #include <gtest/gtest.h>
+#include <string>
 #include <vector>
 #include "drivers/TegraGM20B/test/gm20b_sched_stubs.h"
 extern "C" {
@@ -290,7 +291,7 @@ TEST_F(DeadlineWindow, APresentEndsTheKeptWindow)
 	frameEnd();
 	tgm_deadline_kicked(1, 0);
 	now += kPeriod / 4;
-	tgm_deadline_presented(now);
+	tgm_deadline_presented(now, 1);
 	now += 1000;
 	appWork = true;
 	tgm_deadline_app_kicked();
@@ -319,4 +320,33 @@ TEST_F(DeadlineWindow, TheKickAndThePassTakeNoLock)
 	tgm_deadline_clock(now, 12345);
 	tgm_deadline_clock(now + 1000000, 13345);
 	EXPECT_EQ(spinLocks, before);
+}
+
+// A present a work item completes (a kill's, a late look's) learns no frame time, and neither does the next frame: a pass
+// may still be adding the first frame's last job, to either. A frame after a pass's present is learned.
+TEST_F(DeadlineWindow, OnlyThePassLearnsAFramesTime)
+{
+	char line[512];
+	const auto frame = [&](int pass) {
+		frameEnd();
+		tgm_deadline_kicked(1, 0);
+		tgm_deadline_progress(3000000, 0);
+		now += 1000;
+		tgm_deadline_presented(now, pass);
+		now += kPeriod;
+	};
+	const auto learned = [&] {
+		tgm_deadline_stats(line, sizeof(line));
+		const std::string text(line);
+		const size_t over = text.find(" learned frames");
+		EXPECT_NE(over, std::string::npos) << text;
+		return std::stoul(text.substr(text.rfind(' ', over - 1) + 1));
+	};
+	learned();
+	frame(0);
+	EXPECT_EQ(learned(), 0u);
+	frame(1);
+	EXPECT_EQ(learned(), 0u) << "the frame after a work item's present";
+	frame(1);
+	EXPECT_EQ(learned(), 1u);
 }

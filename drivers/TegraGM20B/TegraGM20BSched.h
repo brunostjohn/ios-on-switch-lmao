@@ -109,8 +109,10 @@ void tgm_deadline_progress(uint64_t ns, int biased);
 /* gpu_fenced.h, interrupt pass: both clocks now (PTIMER calibration), and a PTIMER span in nanoseconds (0 until calibrated). */
 void tgm_deadline_clock(uint64_t ns, uint64_t pt);
 uint64_t tgm_deadline_pt_ns(uint64_t pt_span);
-/* gpu_fenced.h, interrupt pass: the present queued at `queued` completed. */
-void tgm_deadline_presented(uint64_t queued);
+/* The present queued at `queued` completed: at the interrupt pass's end (gpu_present.c tgm_present_pass; `pass` 1), or in
+ * a work item (0: a kill, a late look), whose frame and the next learn no time: a pass may still be adding that frame's
+ * last job, to it or to the next. */
+void tgm_deadline_presented(uint64_t queued, int pass);
 /* gpu_power.c: system sleep and rail-down (every hold released, no callout touching the GPU until the wake or rail-up), and
  * the wake and rail-up. */
 void tgm_deadline_suspend(void);

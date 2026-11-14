@@ -60,7 +60,7 @@ static void present_watch_complete(int status, int from_pass)
 #endif
 
 	nvxnu_work_cancel(tgm_present.deadline_work);
-	tgm_deadline_presented(tgm_present.queued);
+	tgm_deadline_presented(tgm_present.queued, from_pass);
 	switch_gpu_present_watch_reset(&tgm_present.watch);
 	__atomic_store_n(&tgm_present.typed_pending, 0, __ATOMIC_RELEASE);
 #if TGM_STATS
@@ -127,14 +127,20 @@ static void present_watch_work(void *unused)
 	present_watch_complete(status, 0);
 }
 
-/* The end of every GPU interrupt pass (shim/xnu_glue.cpp gpuInterrupt), nvkm's locks released: a watch the pass made due
- * is delivered here when its producer's writes are in DRAM; anything else goes to the watch work item. Nothing here may
+/* The end of every GPU interrupt pass (shim/xnu_glue.cpp gpuInterrupt), nvkm's locks released and every channel's GPU time
+ * of the pass added: a present job the scan completed is learned and handed to its completion work item, and a watch the
+ * pass made due is delivered here when its producer's writes are in DRAM; anything else goes to the watch work item. Nothing here may
  * wait for the GPU, as no GPU interrupt is taken until this returns: the tokens finish without waiting, the snapshot's
  * leases (SwitchGpuScanoutSnapshot::complete) release under their backings' locks, and done only signals. The
  * nonstall line's filter may already have run the display's callout for it (SwitchGpuPresentFilter.cpp); each claim
  * detaches the filter's view first. */
 void tgm_present_pass(void)
 {
+	if (tgm_present.fenced_due) {
+		tgm_present.fenced_due = 0;
+		tgm_deadline_presented(tgm_present.fenced_queued, 1);
+		nvxnu_work_schedule(tgm_present.completion_work);
+	}
 	if (__atomic_load_n(&tgm_present.watch.state, __ATOMIC_ACQUIRE) !=
 	    SWITCH_GPU_PRESENT_WATCH_DUE)
 		return;

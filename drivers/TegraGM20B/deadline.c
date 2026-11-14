@@ -38,9 +38,11 @@ static struct {
 	u64 pass_ns, cal_ns, cal_pt, pt_rate;
 	u32 pass_epoch, recal_seen;
 	int pass_biased;
-	/* a present's (dl.lock): when the last one completed, and the frame epoch it closed */
+	/* a present's (dl.lock): when the last one completed, the frame epoch it closed, and whether a work item completed it
+	 * (a kill's, a late look's): a pass may still add that frame's last job to the next frame's time */
 	u64 presented_at;
 	u32 frame_epoch, recal;
+	int tail;
 
 	/* the window: the vblank it aims for (0: none), when it opened (the compositor kicked in it when kick_last is
 	 * later); the vblank of one no app's work in flight opened (0: none), which an app's first kick opens
@@ -333,7 +335,7 @@ void tgm_deadline_progress(uint64_t ns, int biased)
 /* The present completed: the frame's GPU time is learned (unless an app held the GPU at one of its kicks), and the window
  * whose frame this is ends (a present queued before it opened is an earlier frame's). If CA has started the next frame
  * since, its window opens now. */
-void tgm_deadline_presented(uint64_t queued)
+void tgm_deadline_presented(uint64_t queued, int pass)
 {
 	u64 now = nvxnu_nanotime();
 	u64 target = 0;
@@ -342,8 +344,11 @@ void tgm_deadline_presented(uint64_t queued)
 	if (!READ_ONCE(dl.device))
 		return;
 	spin_lock_irqsave(&dl.lock, flags);
-	/* a compositor kick since the last present: a frame; the pass's time is this frame's while its epoch is ours (a
-	 * present a kill hands to the work item may miss a pass's last addition) */
+	/* a compositor kick since the last present: a frame; the pass's time is this frame's while its epoch is ours, whole
+	 * only at the pass's end, and only its own after a present the pass completed */
+	const int tail = dl.tail;
+
+	dl.tail = !pass;
 	if (READ_ONCE(dl.kick_last) > dl.presented_at) {
 		const u64 frame_target = READ_ONCE(dl.frame_target);
 		const u64 frame_ns = READ_ONCE(dl.pass_ns);
@@ -358,7 +363,7 @@ void tgm_deadline_presented(uint64_t queued)
 				dl.missed_clear++;
 			}
 		}
-		if (ours && !READ_ONCE(dl.pass_biased) && frame_ns) {
+		if (pass && !tail && ours && !READ_ONCE(dl.pass_biased) && frame_ns) {
 			dl.expected = tgm_expect(dl.expected, frame_ns);
 #if TGM_STATS
 			frame_cost_add(frame_ns);
