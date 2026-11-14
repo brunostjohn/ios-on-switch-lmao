@@ -63,6 +63,12 @@
 #                                       frame end, gate writer or SC7 between adopts it, a stale waiter claims nothing
 #   switch_completion_flip_filter_test  the producers' interrupt filters write the flip first: their completion writes
 #                                       nothing, a frame end or SC7 between adopts it, a stale waiter claims nothing
+#   switch_page_return_test             Core Animation's three pages scanned in place or copied: no page goes back
+#                                       while window A scans, asks for, holds or may latch it, or its copy still reads
+#                                       it, in any order of offers, flips from the kick, filters, completions, passes,
+#                                       boundaries, frame ends and SC7; the debug kernels' check sees the same hand-backs
+#   switch_scan_return_test             SwitchScanReturn.h, and where the display checks it; the read-back forgets the
+#                                       frame before when window A shows one no offer carried
 #   display_planes_source_test         the driver and XNU follow those rules (validateSwap, the kick, one
 #                                       STATE_CONTROL pair, retire at the latch, the panic hook, the published limits,
 #                                       backboardd's CA_DISABLE_DETACHED gate), and the plane accessors are TegraVIC's
@@ -434,6 +440,41 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchPaletteDisplay.h",
         "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
         "//drivers/NativeMobileDisplay:SwitchVICScanoutDisplay.h",
+    ],
+)
+
+host_test(
+    name = "switch_page_return_test",
+    srcs = [
+        "switch_completion_flip_harness.h",
+        "switch_completion_flip_walk.h",
+        "switch_page_return_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlip.h",
+        "//drivers/NativeMobileDisplay:SwitchScanReturn.h",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlipDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchCompletionFlipFilter.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraHost1x:SwitchHost1xFence.h",
+        "//drivers/NativeMobileDisplay:SwitchScanoutAddress.h",
+        "//drivers/NativeMobileDisplay:SwitchScanoutStart.h",
+        "//drivers/NativeMobileDisplay:SwitchSuspendRetire.h",
+        "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
+        "//drivers/TegraDisplayFlip:TegraScanoutRing.h",
+    ],
+)
+
+host_test(
+    name = "switch_scan_return_test",
+    srcs = [
+        "switch_scan_return_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchScanReturn.h",
+    ],
+    data = [
+        "//drivers/NativeMobileDisplay:NativeLegacyDisplay.cpp",
+        "//drivers/NativeMobileDisplay:SwitchDirectVisibleDisplay.h",
+        "//drivers/NativeMobileDisplay:SwitchReadbackShownDisplay.h",
+        "//drivers/TegraGM20B:TegraGM20BReadback.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientPresent.cpp",
     ],
 )
 

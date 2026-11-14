@@ -42,6 +42,7 @@
 #include "SwitchDisplayMemoryEnvelope.h"
 #include "SwitchDisplayMemoryTiming.h"
 #include "SwitchDisplayRetirement.h"
+#include "SwitchScanReturn.h"
 #include "SwitchScanoutBuffer.h"
 #include "SwitchUnderflowAccounting.h"
 #include "../TegraVIC/SwitchNativeVICImage.h"
@@ -164,6 +165,9 @@ extern "C" __attribute__((weak)) int tegra_gm20b_scanout_outstanding(const void 
 {
     return 0;
 }
+
+extern "C" __attribute__((weak)) void tegra_gm20b_scanout_bypassed(void)
+{}
 
 extern "C" __attribute__((weak)) void *tegra_gm20b_surface_hold(uint64_t, int *tiled)
 {
@@ -1671,6 +1675,7 @@ private:
         // V_BLANK (unmasked while a vsync client is registered), in case the controller latches after its FRAME_END.
         if ((status & kFrameEndInt) && rotated) {
             checkRotation();
+            scanReturnFrameEnd();
         } else if ((status & kVblankInt) && rotationLatched && ring.pending != kNoBuffer) {
             checkFlip(false);
         }
@@ -3432,6 +3437,7 @@ public:
             columnScanRegister();
             dcClassRegister();
             planeTotalsRegister();
+            scanTotalsRegister();
         }
         return true;
     }
@@ -3584,6 +3590,7 @@ public:
             return;
         }
         if (!pd.uiNew) {
+            scanReturnKick(request, switch_display::ScanReturn::kUnchanged);
             kickPlaneOnly(request, pd, mach_absolute_time());
             return;
         }
@@ -3621,6 +3628,7 @@ public:
             if (request != first) {  // the newest swap goes: its own layers (planes are off here: no window B change)
                 planeDecide(request, pd);
                 if (!pd.uiNew) {
+                    scanReturnKick(request, switch_display::ScanReturn::kUnchanged);
                     kickPlaneOnly(request, pd, mach_absolute_time());
                     return;
                 }
@@ -3684,6 +3692,7 @@ public:
                 return;
             }
             __asm__ volatile("dsb sy" ::: "memory");
+            scanReturnBlank(request);
             noteTaken(request, kickAt);  // before the flip, which carries it to the present
             if (block && !colourBlank)
                 presentBlock();
@@ -3702,6 +3711,7 @@ public:
             return;
         planeShownUi = surface;
         IOMemoryDescriptor *memory = native_legacy_surface_descriptor(surface);
+        scanReturnKick(request, memory);
         PE_Video video = {};
         uint32_t width = 0;
         uint32_t height = 0;
@@ -3913,6 +3923,8 @@ public:
     void noteTaken(const OriginalLegacySwapRequest *request, uint64_t kickAt)
     {
         take(request);
+        scanReturnTaken(request);
+        readbackTaken();
         flipRequest = request;
         // r6-lows/r14-pacing: carried to the flip of this frame (flip, markFlip), then to its present (notePresent).
         taken = {submittedAt(request), kickAt, 0, 0, timelineOf(request)};
@@ -4366,6 +4378,7 @@ public:
         gpuRequest = request;
         gpuLength = static_cast<uint64_t>(width) * height * 4;
         transferred = true;
+        readbackOffer();
         noteTaken(request, kickAt);
         if (!latchRetire && retireSwap(request, true)) {
             gpuRetired = true;
@@ -4527,6 +4540,7 @@ public:
     {
         if (!activateOnlyPendingSwap(request))
             return false;
+        scanReturnRetired(request);
         untake(request);
         const uint64_t submitted = stats ? submittedAt(request) : 0;
         removeValidated(request);
@@ -4663,6 +4677,8 @@ public:
 #include "SwitchDirectVisibleDisplay.h"
 #include "SwitchCompletionFlipDisplay.h"
 #include "SwitchCompletionFlipFilter.h"
+#include "SwitchScanReturnDisplay.h"
+#include "SwitchReadbackShownDisplay.h"
 
     // The table entries just written, to memory, then the SMMU's caches for the display's ASID.
     void cleanDomain()
@@ -4728,6 +4744,7 @@ public:
         gpuLength = static_cast<uint64_t>(width) * height * 4;
         gpuDirect = entry;
         transferred = true;
+        readbackOffer();
         noteTaken(request, kickAt);
         if (stats)
             ++stDirect;

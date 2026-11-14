@@ -19,17 +19,19 @@ import UIKit
 ///
 /// Each frame is black (R, G, B <= 2 over 90% of the band), partial (over 2%), dark or good, at its present and, with a
 /// live kernel, at the end of its time on screen (the next present reads it again); changed= counts frames whose pixels
-/// changed while shown (an older kernel: between two reads of one present). The result line: black=, partial=,
-/// changed=, then per variant frames/black/partial/changed, its black frames' sequence gaps (gap 2: every other frame)
-/// and backdrop changed/still/unknown, its render server command buffers a second and how many regenerated the backdrop
-/// pyramid. Every frame is in Documents/ui/ui.glass_live/ frames.json; the first black frame of a variant and its
-/// neighbours are saved as PNGs there.
+/// changed while shown (an older kernel: between two reads of one present). still, server and scroll must compare at
+/// least 30 frames each (<variant>_compared) and see none change: a change there is a buffer written while the panel
+/// shows it. The result line: black=, partial=, changed=, then per variant frames/black/partial/changed, its black
+/// frames' sequence gaps (gap 2: every other frame) and backdrop changed/still/unknown, its render server command
+/// buffers a second and how many regenerated the backdrop pyramid. Every frame is in Documents/ui/ui.glass_live/
+/// frames.json; the first black frame of a variant and its neighbours are saved as PNGs there.
 struct UIGlassLiveTest: HWTest {
     let id = "ui.glass_live"
     let name = "Liquid Glass on screen over a moving backdrop, read back per presented frame"
     let subsystem = Subsystem.compositor
     var timeout: TimeInterval { 150 }
     static let seconds: TimeInterval = 3.5
+    static let compared = 30
 
     func run(_ context: TestContext) async throws -> Outcome {
         let (opened, why) = ScanoutSession.open()
@@ -117,6 +119,14 @@ struct UIGlassLiveTest: HWTest {
             return .skip("the read-back caught no presented frame", metrics)
         }
         var reasons: [String] = []
+        for s in summaries where LiveVariant(rawValue: s.name)?.changeless == true {
+            metrics.set(s.name + "_compared", s.compared)
+            if s.changedOnScreen > 0 {
+                reasons.append("\(s.name): \(s.changedOnScreen) of \(s.compared) frames changed while on screen")
+            } else if s.compared < Self.compared {
+                reasons.append("\(s.name): \(s.compared) frames compared")
+            }
+        }
         for s in summaries where !s.black.isEmpty {
             reasons.append("\(s.name): \(s.black.count) of \(s.frames.count) frames show the glass black")
         }
@@ -132,6 +142,7 @@ enum LiveVariant: String, CaseIterable {
     case glassWhole = "glass_whole"
 
     var readsBack: Bool { self != .plain }
+    var changeless: Bool { self == .still || self == .server || self == .scroll }
     var appears: Bool { self == .appear || self == .appearWhole }
     var moves: Bool { self == .glass || self == .glassWhole }
 

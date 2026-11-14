@@ -49,6 +49,9 @@
 		<string>kern.switch_flips_filter</string>
 		<string>kern.switch_flips_filter_lead_us</string>
 		<string>kern.switch_flips_filter_declined</string>
+		<string>kern.switch_scan_checks</string>
+		<string>kern.switch_scan_handed</string>
+		<string>kern.switch_scan_overlaps</string>
 		<string>kern.switch_media_flips_completion</string>
 		<string>kern.switch_media_flips_withdrawn</string>
 		<string>kern.switch_media_flips_refused</string>
