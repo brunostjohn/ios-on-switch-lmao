@@ -237,6 +237,7 @@ host_test(
     name = "native_legacy_display_source_test",
     srcs = ["native_legacy_display_source_test.cpp"],
     data = [
+        "//kits/qemu:LegacyDisplayProbe.cpp",
         "//drivers/NativeMobileDisplay:SwitchCompletionFlipDisplay.h",
         "//drivers/NativeMobileDisplay:SwitchScanoutRetirement.h",
         "//drivers/NativeMobileDisplay:SwitchFlipDeadlineDisplay.h",

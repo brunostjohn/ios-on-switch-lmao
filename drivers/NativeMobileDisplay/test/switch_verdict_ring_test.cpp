@@ -77,4 +77,52 @@ TEST(VerdictRing, AFullRingRefusesTheNewestAndKeepsTheRest)
     EXPECT_EQ(got, std::vector<uint64_t>{34});
 }
 
+// An accepted overlay swap's verdict carries its layers to the gate: a swapping thread publishes, the gate thread drains
+// and runs its admission between its own kicks and frame ends, and only the gate ever touches what the admission owns.
+TEST(VerdictRing, AnOverlaySwapsLayersReachTheGateWhole)
+{
+    struct Overlay {
+        uint64_t index, admit;
+        uint64_t layers[64];
+    };
+
+    static switch_display::VerdictRing<Overlay, 32> ring;
+    constexpr uint64_t kSwaps = 20000;
+    std::atomic<bool> done{false};
+    uint64_t dropped = 0;
+    std::thread swapping([&] {
+        for (uint64_t i = 1; i <= kSwaps; ++i) {
+            Overlay o = {i, i % 3 == 0, {}};
+            for (uint64_t w = 0; w < 64; ++w)
+                o.layers[w] = i * 64 + w;
+            if (!ring.publish(o))
+                ++dropped;
+        }
+        done = true;
+    });
+    // The gate's own: what the admission reserved and what its kicks and frame ends read of it.
+    uint64_t reserved = 0, kicks = 0, frameEnds = 0, received = 0, last = 0;
+    bool torn = false;
+    const auto take = [&](const Overlay &o) {
+        for (uint64_t w = 0; w < 64; ++w)
+            torn = torn || o.layers[w] != o.index * 64 + w;
+        if (o.admit)
+            reserved += o.layers[0];
+        torn = torn || o.index <= last;
+        last = o.index;
+        ++received;
+    };
+    while (!done) {
+        ring.drain(take);
+        kicks += reserved != 0u;
+        ++frameEnds;
+    }
+    swapping.join();
+    ring.drain(take);
+    EXPECT_FALSE(torn);
+    EXPECT_EQ(received + dropped, kSwaps);
+    EXPECT_GT(frameEnds, 0u);
+    EXPECT_GE(frameEnds, kicks);
+}
+
 }  // namespace

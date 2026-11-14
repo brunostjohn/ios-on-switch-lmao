@@ -728,11 +728,16 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // (no single producer to own the ring); the slot's sequence, 0 while it is written and the ticket + 1 once it is,
     // publishes it, and the gate drains the slots in ticket order. Static: the instance is at the 16 KiB a kalloc_type
     // class may have.
+    // What the gate needs of a verdict: the swap, when it came, the decision and the refusal's reason, the swap's
+    // timeline, and an accepted overlay swap's layers for the gate's bandwidth admission.
     struct Verdict {
         const OriginalLegacySwapRequest *request;
         uint64_t at;
-        uint64_t accepted;
+        bool accepted, admit;
+        uint32_t reason, width, height;
         FrameTimeline tl;
+        bool present[native_planes::kLayers];
+        native_planes::Layer layers[native_planes::kLayers];
     };
 
     static inline switch_display::VerdictRing<Verdict, 32> verdicts;
@@ -1162,7 +1167,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     uint64_t fePeriodSumSeen = 0;  // fePeriodSum and fePeriodN at the last stats line: the filter's counts only grow
     uint32_t fePeriodNSeen = 0;
     // r6-lows (r6h): swaps validateSwap refused this window and the last refusal's reason (2: not one IOSurface in layer 0 alone,
-    // a multi-layer or detached-layer swap; 3: geometry; 4: surface; see validateSwap), relaxed atomics: the client's swap path.
+    // a multi-layer or detached-layer swap; 3: geometry; 4: surface; see validateSwap), counted by the gate as it drains the
+    // verdicts.
     // A frozen screen with CA still rendering shows here as ~300 a window and 0 swaps.
     uint32_t stRejected = 0, stRejectReason = 0;
 
@@ -1686,8 +1692,7 @@ private:
             underflows.take(0), underflows.take(1), underflows.take(2)};
         const bool quiet = (stSwaps == 0u) && (stPresents == 0u) && (stUnderflows == 0u) && (stGpuTimeouts == 0u) &&
                            (stNewMaps == 0u) && (stFallbacks == 0u) && (stVsyncIdle == 0u) &&
-                           ((counted[0].frames | counted[1].frames | counted[2].frames) == 0u) &&
-                           (__atomic_load_n(&stRejected, __ATOMIC_RELAXED) == 0u);
+                           ((counted[0].frames | counted[1].frames | counted[2].frames) == 0u) && (stRejected == 0u);
         const bool logged = !(quiet && statsQuiet);
         statsQuiet = quiet;
         // Logged every time, quiet or not: the render server took frames and committed none, which is what a hung
@@ -1774,8 +1779,8 @@ private:
             static_cast<unsigned long long>(stFeLate.meanUs()), static_cast<unsigned long long>(stFeLate.maxUs()),
             stFeFolded, stFlipWait.count, stLatch[0], stLatch[1]);
         stFeFolded = 0;
-        add(", rejected %u (reason %u)", __atomic_exchange_n(&stRejected, 0u, __ATOMIC_RELAXED),
-            __atomic_load_n(&stRejectReason, __ATOMIC_RELAXED));
+        add(", rejected %u (reason %u)", stRejected, stRejectReason);
+        stRejected = 0;
         if (logged)
             os_log(OS_LOG_DEFAULT, "SwitchDisplay stats: %s", line);  // log only, never the boot console
         // r14-pacing: swap-to-scan by stage, long presents by cause (presents/frames lost), vsync delivery (see FrameMark).
@@ -4775,6 +4780,7 @@ public:
         OSObject *surface = nullptr;
         unsigned reason = 1;
         bool accepted = false;
+        Verdict verdict = {};
         if (logicalPM && primary && bootMapping && request) {
             OSObject *surfaces[native_planes::kLayers] = {};
             memcpy(surfaces, bytes + swapSurfaces, sizeof(surfaces));
@@ -4826,8 +4832,14 @@ public:
                         surface = surfaces[i];
                     }
                 }
-                if (!reason)
-                    admitPlaneBandwidth(hasSurface, layers, width, height);
+                if (!reason) {
+                    verdict.admit = true;
+                    verdict.width = width;
+                    verdict.height = height;
+                    memcpy(verdict.present, hasSurface, sizeof(verdict.present));
+                    for (unsigned i = 0; i < native_planes::kLayers; ++i)
+                        verdict.layers[i] = layers[i];
+                }
                 accepted = (reason == 0u);
                 if (reason == 4 || reason == native_planes::kFormat || reason == native_planes::kAlignment) {
                     native_legacy_surface_rejected(
@@ -4840,20 +4852,19 @@ public:
                 }
             }
         }
-        publishVerdict(request, accepted);
-        if (!accepted && stats) {
-            __atomic_fetch_add(&stRejected, 1u, __ATOMIC_RELAXED);
-            __atomic_store_n(&stRejectReason, reason, __ATOMIC_RELAXED);
-        }
+        verdict.request = request;
+        verdict.accepted = accepted;
+        verdict.reason = reason;
+        publishVerdict(verdict);
         native_legacy_swap_validation_observed(accepted, reason, request, surface);
         return accepted;
     }
 
     // On the client's thread: the verdict, for the gate to take (drainVerdicts).
-    void publishVerdict(const OriginalLegacySwapRequest *request, bool accepted)
+    void publishVerdict(Verdict &verdict)
     {
-        Verdict verdict = {request, mach_absolute_time(), accepted, {}};
-        if (SWITCH_FRAME_TIMELINE && accepted)
+        verdict.at = mach_absolute_time();
+        if (SWITCH_FRAME_TIMELINE && verdict.accepted)
             verdict.tl = swapTimeline(verdict.at);
         if (!verdicts.publish(verdict))
             __atomic_fetch_add(&verdictsDropped, 1u, __ATOMIC_RELAXED);
@@ -4864,10 +4875,18 @@ public:
     void drainVerdicts()
     {
         verdicts.drain([this](const Verdict &verdict) {
-            if (verdict.accepted)
+            if (verdict.admit)
+                admitPlaneBandwidth(verdict.present, verdict.layers, verdict.width, verdict.height);
+            if (verdict.accepted) {
+                native_legacy_swap_stage(0);
                 noteSubmitted(verdict.request, verdict.at, verdict.tl);
-            else
-                removeValidated(verdict.request);
+                return;
+            }
+            removeValidated(verdict.request);
+            if (stats) {
+                ++stRejected;
+                stRejectReason = verdict.reason;
+            }
         });
         const uint32_t dropped = __atomic_load_n(&verdictsDropped, __ATOMIC_RELAXED);
         validatedEvicted += dropped - verdictsDroppedSeen;

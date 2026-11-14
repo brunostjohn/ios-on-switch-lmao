@@ -460,10 +460,10 @@ TEST(FrameEndSource, OnePassAndOneDeadlineAPeriod)
 TEST(FrameEndSource, VerdictsReachTheTableThroughTheGate)
 {
     const CodeText validate = method("bool validateSwap(const OriginalLegacySwapRequest *request) override");
-    EXPECT_TRUE(validate.Has("publishVerdict(request, accepted);"));
+    EXPECT_TRUE(validate.Has("publishVerdict(verdict);"));
     for (const char *table : {"noteSubmitted(", "removeValidated(", "addValidated(", "validated["})
         EXPECT_FALSE(validate.Has(table)) << table;
-    EXPECT_FALSE(method("void publishVerdict(").Has("validated"));
+    EXPECT_FALSE(method("void publishVerdict(").Has("validated["));
     EXPECT_TRUE(method("void kickSwapQueue() override").Before("drainVerdicts();", "kickOnce();"));
     EXPECT_TRUE(method("void vblankTick()").StartsWith("drainVerdicts();"));
     EXPECT_FALSE(code().Has("__atomic_fetch_add(&validatedEvicted"));
@@ -481,4 +481,22 @@ TEST(DisplayStatsSource, LocksPerFrameEndLine)
         EXPECT_TRUE(window.Has(count)) << count;
     EXPECT_TRUE(method("void noteStatsWindow()").Has("noteLocksWindow();"));
     EXPECT_TRUE(method("void notePass()").StartsWith("if (stats) ++stPasses;"));
+}
+
+// validateSwap runs on the client's thread: it decides and observes, and everything the gate owns (the overlay's
+// bandwidth admission, the rejection stats, the swap timeline's first stage) happens where the gate drains its verdict.
+TEST(FrameEndSource, ValidateSwapTouchesNoGateState)
+{
+    const CodeText validate = method("bool validateSwap(const OriginalLegacySwapRequest *request) override");
+    for (const char *gate : {"admitPlaneBandwidth(", "stRejected", "stRejectReason", "native_legacy_swap_stage("})
+        EXPECT_FALSE(validate.Has(gate)) << gate;
+    EXPECT_TRUE(validate.Has("verdict.admit = true;"));
+    const CodeText drain = method("void drainVerdicts()");
+    EXPECT_TRUE(drain.Before("admitPlaneBandwidth(verdict.present, verdict.layers, verdict.width, verdict.height);",
+                             "noteSubmitted(verdict.request, verdict.at, verdict.tl);"));
+    EXPECT_TRUE(drain.Has("native_legacy_swap_stage(0);"));
+    EXPECT_TRUE(drain.Has("++stRejected;"));
+    const CodeText observed =
+        Block(SourceText("../../../kits/qemu/LegacyDisplayProbe.cpp"), "void native_legacy_swap_validation_observed(");
+    EXPECT_FALSE(observed.Has("native_legacy_swap_stage("));
 }
