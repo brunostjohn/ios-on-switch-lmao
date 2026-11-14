@@ -32,6 +32,10 @@ struct SnapshotPurgeableTest: HWTest {
         defer { try? FileManager.default.removeItem(atPath: directory) }
         guard let image = Self.screen() else { return .fail("could not draw the test image", metrics) }
 
+        let types = (CGImageDestinationCopyTypeIdentifiers() as? [String] ?? []).filter {
+            ["ktx", "atx", "astc"].contains(where: $0.lowercased().contains)
+        }
+        metrics.set("texture_types", types.isEmpty ? "-" : types.joined(separator: ","))
         let texture = directory + "/snapshot@2x.ktx"
         let written = Self.writeTexture(image, to: texture)
         let file = SnapshotFiles.describe(texture)
