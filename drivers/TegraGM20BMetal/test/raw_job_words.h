@@ -4,7 +4,7 @@
 // (RawMetalCommandBuffer.mm), so which chunk, and whether one coalesced chunk or two, varies from run to run; every
 // chunk alive is in the device's resource set, so in every job's uses. Each address in a chunk reads as its offset in
 // the command buffer's chunks laid end to end; a job's uses leave out the driver's coherent control memory (chunks, push
-// rings) and name the BOs made since the test's mark as one.
+// rings) and the BOs made since the test's mark (spares and backings made or not as the threads meet).
 #pragma once
 #include "raw_kernel_model.h"
 #import <Metal/Metal.h>
@@ -63,8 +63,8 @@ inline const Chunk *chunkAt(const Run &r, uint64_t va)
 }
 
 // The model's jobs of `runs` (in order, the last one's to the model's last job): one line a job, its words in hex with each
-// (high, low) address pair in a chunk as "bytes+<offset in the run>", then its uses but coherent ones, those of BOs made
-// since `mark` (handleMark) as "made"
+// (high, low) address pair in a chunk as "bytes+<offset in the run>", then its uses of BOs neither coherent nor made since
+// `mark` (handleMark)
 inline std::string words(const std::vector<Run> &runs, uint64_t mark)
 {
     std::lock_guard<std::mutex> l(kernel_model::callLock);
@@ -90,17 +90,10 @@ inline std::string words(const std::vector<Run> &runs, uint64_t mark)
                 out += text;
             }
             out += " | uses";
-            bool madeNamed = false;
             for (const TegraGM20BAbiSurfaceUse &u : jobs[j].uses) {
                 const auto bo = kernel_model::model.bos.find(u.handle);
-                if (bo != kernel_model::model.bos.end() && !bo->second.import && !bo->second.cached)
+                if (u.handle >= mark || (bo != kernel_model::model.bos.end() && !bo->second.import && !bo->second.cached))
                     continue;
-                if (u.handle >= mark) {
-                    if (!madeNamed)
-                        out += " made";
-                    madeNamed = true;
-                    continue;
-                }
                 snprintf(text, sizeof text, " %llx/%x", (unsigned long long)u.handle, u.access);
                 out += text;
             }
