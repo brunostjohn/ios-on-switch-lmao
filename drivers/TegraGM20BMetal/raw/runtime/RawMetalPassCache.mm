@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 #import "RawMetalPassCache.h"
+#include <mach/mach.h>
 #include <objc/runtime.h>
-#include <os/lock.h>
+#include <pthread.h>
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <mutex>
 #include "raw_objc_layout.h"
@@ -142,15 +144,20 @@ struct Cache;
 std::mutex gCachesLock;
 std::vector<Cache *> gCaches;  // every thread's, for rmPassTrim
 
-// The entries' hashes and last lookups apart from the entries, so a lookup reads two small arrays and one entry. The
-// thread finds and keeps under `lock`, and rmPassTrim lets every entry go under it from another thread: a thread that
-// encodes nothing more after an animation never looks up again to let its copies go, and they hold the textures of
-// its last passes.
+// The entries' hashes and last lookups apart from the entries, so a lookup reads two small arrays and one entry. Only its
+// thread touches a cache, with no lock: rmPassTrim, on another thread, takes a cache's copies only while that thread is
+// stopped (thread_suspend) outside rmPassFind..rmPassDone and rmPassKeep (`inside` false), and else asks the thread to
+// let them go at its next lookup (`dropAsked`). A thread that encodes nothing more after an animation never looks up
+// again, and its copies hold the textures of its last passes.
 struct Cache {
-    os_unfair_lock lock = OS_UNFAIR_LOCK_INIT;
-    std::array<RMPassEntry, kEntries> entries;
+    std::array<RMPassEntry, kEntries> entries{};
     std::array<uint64_t, kEntries> hashes{}, used{};
     uint64_t clock = 0;
+    // stored and loaded relaxed: plain stores and loads, never a read-modify-write
+    std::atomic<bool> inside{false}, dropAsked{false};
+    // the copies kept and the textures they name, for the rates line: stored by whoever holds the cache, read by anyone
+    std::atomic<uint32_t> passes{0}, textures{0};
+    const mach_port_t thread = pthread_mach_thread_np(pthread_self());
 
     Cache()
     {
@@ -160,24 +167,15 @@ struct Cache {
 
     ~Cache()
     {
-        std::lock_guard<std::mutex> held(gCachesLock);
-        gCaches.erase(std::find(gCaches.begin(), gCaches.end(), this));
+        {
+            std::lock_guard<std::mutex> held(gCachesLock);
+            gCaches.erase(std::find(gCaches.begin(), gCaches.end(), this));
+        }
+        for (RMPassEntry &e : entries)
+            if (e.pass)
+                CFRelease((__bridge CFTypeRef)e.pass);
     }
 };
-
-// Every kEntries lookups, the entries no pass took for kIdleLookups are let go: their copies are released once the lock
-// is, so a texture's last release never runs under it
-void dropIdle(Cache &c)
-{
-    MTLRenderPassDescriptor *gone[kEntries] = {};
-    os_unfair_lock_lock(&c.lock);
-    for (size_t i = 0; i < kEntries; i++)
-        if (c.entries[i].pass && c.clock - c.used[i] > kIdleLookups) {
-            gone[i] = c.entries[i].pass;
-            c.entries[i].pass = nil;
-        }
-    os_unfair_lock_unlock(&c.lock);
-}
 
 size_t texturesOf(const RMPass &facts)
 {
@@ -187,6 +185,55 @@ size_t texturesOf(const RMPass &facts)
     for (const RMPass::Zeta &z : facts.zeta)
         n += z.texture != nil;
     return n + (facts.depthResolve != nil) + (facts.stencilResolve != nil);
+}
+
+void count(Cache &c, int64_t passes, int64_t textures)
+{
+    c.passes.store(uint32_t(c.passes.load(std::memory_order_relaxed) + passes), std::memory_order_relaxed);
+    c.textures.store(uint32_t(c.textures.load(std::memory_order_relaxed) + textures), std::memory_order_relaxed);
+}
+
+// Entry `i`'s copy out of the cache, for its taker to release (plain stores: the cache's thread may be stopped holding
+// any lock, the allocator's and the Objective-C runtime's among them)
+CFTypeRef take(Cache &c, size_t i)
+{
+    RMPassEntry &e = c.entries[i];
+    CFTypeRef gone = (__bridge CFTypeRef)e.pass;
+    count(c, -1, -int64_t(texturesOf(e.facts)));
+    e.pass = nil;
+    c.hashes[i] = 0;
+    return gone;
+}
+
+// The window rmPassTrim must not take a cache's copies in. The compiler keeps the cache's reads and writes inside it.
+void enter(Cache &c)
+{
+    c.inside.store(true, std::memory_order_relaxed);
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+}
+
+void leave(Cache &c)
+{
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+    c.inside.store(false, std::memory_order_relaxed);
+}
+
+void release(const CFTypeRef (&gone)[kEntries])
+{
+    for (CFTypeRef p : gone)
+        if (p)
+            CFRelease(p);
+}
+
+// Every kEntries lookups, the entries no pass took for kIdleLookups are let go; all of them when rmPassTrim asked
+void dropIdle(Cache &c, CFTypeRef (&gone)[kEntries])
+{
+    const bool all = c.dropAsked.load(std::memory_order_relaxed);
+    for (size_t i = 0; i < kEntries; i++)
+        if (c.entries[i].pass && (all || c.clock - c.used[i] > kIdleLookups))
+            gone[i] = take(c, i);
+    if (all)
+        c.dropAsked.store(false, std::memory_order_relaxed);
 }
 
 thread_local Cache tCache;
@@ -268,35 +315,33 @@ bool rmPassKey(MTLRenderPassDescriptor *d, std::vector<uint8_t> &key, uint64_t &
 RMPassEntry *rmPassFind(const std::vector<uint8_t> &key, uint64_t hash)
 {
     Cache &c = tCache;
-    if (++c.clock % kEntries == 0)
-        dropIdle(c);
-    os_unfair_lock_lock(&c.lock);
+    enter(c);
+    if (++c.clock % kEntries == 0 || c.dropAsked.load(std::memory_order_relaxed)) {
+        CFTypeRef gone[kEntries] = {};
+        dropIdle(c, gone);
+        release(gone);
+    }
     for (size_t i = 0; i < kEntries; i++)
         if (c.hashes[i] == hash && c.entries[i].pass && c.entries[i].key == key) {
             c.used[i] = c.clock;
             return &c.entries[i];
         }
-    os_unfair_lock_unlock(&c.lock);
+    leave(c);
     return nullptr;
 }
 
 void rmPassDone()
 {
-    os_unfair_lock_unlock(&tCache.lock);
+    leave(tCache);
 }
 
 RMPassTrim rmPassHeld()
 {
     RMPassTrim held = {};
     std::lock_guard<std::mutex> registry(gCachesLock);
-    for (Cache *c : gCaches) {
-        os_unfair_lock_lock(&c->lock);
-        for (const RMPassEntry &e : c->entries)
-            if (e.pass) {
-                ++held.passes;
-                held.textures += texturesOf(e.facts);
-            }
-        os_unfair_lock_unlock(&c->lock);
+    for (const Cache *c : gCaches) {
+        held.passes += c->passes.load(std::memory_order_relaxed);
+        held.textures += c->textures.load(std::memory_order_relaxed);
     }
     return held;
 }
@@ -304,21 +349,28 @@ RMPassTrim rmPassHeld()
 RMPassTrim rmPassTrim()
 {
     RMPassTrim trimmed = {};
-    std::vector<MTLRenderPassDescriptor *> gone;
-    std::lock_guard<std::mutex> held(gCachesLock);
+    const mach_port_t self = pthread_mach_thread_np(pthread_self());
+    std::lock_guard<std::mutex> registry(gCachesLock);
     for (Cache *c : gCaches) {
-        os_unfair_lock_lock(&c->lock);
-        for (size_t i = 0; i < kEntries; i++) {
-            RMPassEntry &e = c->entries[i];
-            if (!e.pass)
-                continue;
-            ++trimmed.passes;
-            trimmed.textures += texturesOf(e.facts);
-            gone.push_back(e.pass);
-            e.pass = nil;
-            c->hashes[i] = 0;
+        CFTypeRef gone[kEntries] = {};
+        const bool other = c->thread != self;
+        // thread_suspend returns once the thread is off its core: its last instruction is precise, so `inside` says
+        // whether it stopped within the window
+        if (other && thread_suspend(c->thread) != KERN_SUCCESS)
+            continue;
+        if (c->inside.load(std::memory_order_relaxed)) {
+            c->dropAsked.store(true, std::memory_order_relaxed);
+        } else {
+            for (size_t i = 0; i < kEntries; i++)
+                if (c->entries[i].pass) {
+                    ++trimmed.passes;
+                    trimmed.textures += texturesOf(c->entries[i].facts);
+                    gone[i] = take(*c, i);
+                }
         }
-        os_unfair_lock_unlock(&c->lock);
+        if (other)
+            thread_resume(c->thread);
+        release(gone);
     }
     return trimmed;
 }
@@ -327,7 +379,7 @@ void rmPassKeep(const std::vector<uint8_t> &key, uint64_t hash, MTLRenderPassDes
                 const RMRenderEncoder *e)
 {
     Cache &c = tCache;
-    os_unfair_lock_lock(&c.lock);
+    enter(c);
     size_t at = 0;
     for (size_t i = 0; i < kEntries; i++) {
         if (!c.entries[i].pass) {
@@ -338,8 +390,8 @@ void rmPassKeep(const std::vector<uint8_t> &key, uint64_t hash, MTLRenderPassDes
             at = i;
     }
     RMPassEntry *slot = &c.entries[at];
-    MTLRenderPassDescriptor *gone = slot->pass;
-    slot->pass = copy;
+    CFTypeRef gone = slot->pass ? take(c, at) : nullptr;
+    slot->pass = (__bridge MTLRenderPassDescriptor *)CFBridgingRetain(copy);
     slot->facts = facts;
     std::copy(std::begin(e->_formats), std::end(e->_formats), slot->formats.begin());
     slot->count = e->_count;
@@ -350,6 +402,8 @@ void rmPassKeep(const std::vector<uint8_t> &key, uint64_t hash, MTLRenderPassDes
     slot->key = key;
     c.hashes[at] = hash;
     c.used[at] = c.clock;
-    os_unfair_lock_unlock(&c.lock);
-    (void)gone;
+    count(c, 1, int64_t(texturesOf(facts)));
+    leave(c);
+    if (gone)
+        CFRelease(gone);
 }

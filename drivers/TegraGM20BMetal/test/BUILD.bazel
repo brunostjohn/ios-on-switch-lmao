@@ -2685,6 +2685,12 @@ host_test(
 )
 
 host_test(
+    name = "raw_pass_cache_source_test",
+    srcs = ["raw_pass_cache_source_test.cpp"],
+    data = ["//drivers/TegraGM20BMetal:raw/runtime/RawMetalPassCache.mm"],
+)
+
+host_test(
     name = "raw_cbuf_test",
     srcs = [
         "raw_cbuf_test.cpp",
