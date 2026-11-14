@@ -13,6 +13,7 @@ enum RawProbe {
     static let engineSelector = NSSelectorFromString("switchRawProbeEngine:")
     static let compressSelector = NSSelectorFromString("switchRawProbeCompressNext")
     static let factsSelector = NSSelectorFromString("switchRawProbeFacts:")
+    static let retargetSelector = NSSelectorFromString("switchRawProbeRetarget:")
 
     static func call(_ object: AnyObject, _ selector: Selector, _ argument: Any? = nil) throws -> String? {
         guard let object = object as? NSObject, object.responds(to: selector) else {
@@ -41,6 +42,13 @@ enum RawProbe {
     /// The next private render target `device` makes binds compressible memory of its own.
     static func compressNext(_ device: MTLDevice) throws {
         _ = try call(device, compressSelector)
+    }
+
+    /// `texture`'s header describes `to`'s image from the next submission's header invalidate on (nil: its own again).
+    static func retarget(_ device: MTLDevice, _ texture: MTLTexture, to: MTLTexture?) throws {
+        if let refusal = try call(device, retargetSelector, [texture] + (to.map { [$0] } ?? []) as NSArray) {
+            throw TestFailure(refusal)
+        }
     }
 
     /// raw, comptags, block_linear, pitch of `texture`; tiled_cache and compression of the device.

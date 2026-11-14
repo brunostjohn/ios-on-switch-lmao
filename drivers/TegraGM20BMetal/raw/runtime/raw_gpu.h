@@ -2577,6 +2577,9 @@ public:
 
     // the barrier forms of the command buffer begin() starts next (raw_probe_forms.h), set by its encoder
     ProbeForms nextForms;
+    // gpu.x1.job_boundary_idle's header cell: texture `a`'s header describes `to`'s image from the next submission's
+    // header invalidate on, or its own again (`to` null); false where either has no header
+    bool probeRetarget(const Texture &a, const Texture *to);
     // the pipelines made while set bind their programs' shader data at its exact size (raw_cbuf.h): HW Test's bench
     // measuring what the chip reads of a constant buffer bound off a 256-byte multiple
     std::atomic<bool> probeExactCbufs{false};

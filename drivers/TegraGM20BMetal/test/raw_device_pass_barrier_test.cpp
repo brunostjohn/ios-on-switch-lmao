@@ -8,7 +8,8 @@ namespace {
 
 constexpr uint32_t kBgra8 = 80;
 constexpr uint32_t kPixelShaderBarrier = 0x0de0, kWaitForIdle = 0x0110, kShaderCaches = 0x021c,
-                   kTextureDataNoWfi = 0x1288;
+                   kTextureDataNoWfi = 0x1288, kHeaderCache = 0x1428, kSamplerCache = 0x1424,
+                   kShaderCachesNoWfi = 0x0da4;
 
 // The 3D subchannel's methods of a job's words (IMMD, INC, NON_INC and ONE_INC), in order
 std::vector<uint32_t> methods(const std::vector<uint32_t> &words)
@@ -103,6 +104,53 @@ TEST_F(DevicePassBarrier, AJobOpensWithThePlannersInvalidatesAndNoDrain)
     EXPECT_EQ(std::count(m.begin(), m.end(), kWaitForIdle), 0);
     EXPECT_EQ(std::count(m.begin(), m.end(), kShaderCaches), 0) << "the waiting shader-cache flush";
     EXPECT_GE(std::count(m.begin(), m.end(), kTextureDataNoWfi), 1);
+}
+
+// gpu.x1.job_boundary_idle's arms on the job they run: one pass after the entry. entry_none's job opens with no invalidate
+// at all (only the INSTRUCTION word commit may set), the planner's (the rule's) with the planner's invalidates; neither
+// drains, and the first pass adds nothing to either
+TEST_F(DevicePassBarrier, EachEntryArmsJobOpensWithExactlyItsEntry)
+{
+    struct Arm {
+        raw::EntryForm form;
+        std::vector<uint32_t> want;
+    };
+
+    const Arm arms[] = {
+        {raw::EntryForm::None, {kShaderCachesNoWfi}},
+        {raw::EntryForm::Rule, {kSamplerCache, kHeaderCache, kShaderCachesNoWfi, kTextureDataNoWfi}},
+        {raw::EntryForm::Planner, {kSamplerCache, kHeaderCache, kShaderCachesNoWfi, kTextureDataNoWfi}},
+    };
+    const std::vector<uint32_t> barriers = {kWaitForIdle, kShaderCaches, kShaderCachesNoWfi,  kTextureDataNoWfi,
+                                            kHeaderCache, kSamplerCache, kPixelShaderBarrier, 0x1338};
+    for (const Arm &arm : arms) {
+        dev.nextForms = {};
+        dev.nextForms.entry = arm.form;
+        raw::CommandBuffer *cb = dev.begin();
+        ASSERT_NE(cb, nullptr);
+        cb->render(cleared(atlas))->end();
+        uint32_t seqno = 0;
+        ASSERT_TRUE(cb->commit(seqno));
+        std::vector<uint32_t> got;
+        for (uint32_t m : methods(kernel_model::model.jobs.back().words))
+            if (std::find(barriers.begin(), barriers.end(), m) != barriers.end())
+                got.push_back(m);
+        EXPECT_EQ(got, arm.want) << int(arm.form);
+    }
+}
+
+// The header cell's rewrite: texture a's header slot holds b's header words, then its own again
+TEST_F(DevicePassBarrier, ARetargetedHeaderDescribesTheOtherImageUntilRestored)
+{
+    std::vector<uint32_t> own(dev.headerWords(small.tic), dev.headerWords(small.tic) + 8);
+    const std::vector<uint32_t> other(dev.headerWords(big.tic), dev.headerWords(big.tic) + 8);
+    ASSERT_NE(own, other);
+    ASSERT_TRUE(dev.probeRetarget(small, &big));
+    EXPECT_EQ(std::vector<uint32_t>(dev.headerWords(small.tic), dev.headerWords(small.tic) + 8), other);
+    ASSERT_TRUE(dev.probeRetarget(small, nullptr));
+    EXPECT_EQ(std::vector<uint32_t>(dev.headerWords(small.tic), dev.headerWords(small.tic) + 8), own);
+    raw::Texture none;
+    EXPECT_FALSE(dev.probeRetarget(none, &big));
 }
 
 // A blit encoder that sends nothing changes no engine: the pass after it is ordered after the pass before it as if it were

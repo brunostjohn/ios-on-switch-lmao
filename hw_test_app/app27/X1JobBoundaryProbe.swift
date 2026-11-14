@@ -14,7 +14,10 @@ import Metal
 /// reads a line job 0 left copies the last seed. Writers: the ROP, the copy engine, the SMs' stores, the CPU, the copy
 /// channel's replaceRegion (a second GPU channel). Readers: the texture unit, the SMs' data cache, the constant cache, and
 /// the copy engine reading what the SMs stored (sto_ce: what the planner's entry drops against today's, the flush of the
-/// SMs' data, shows only where something outside the SMs reads their stores).
+/// SMs' data, shows only where something outside the SMs reads their stores). hdr_tex is the hazard every entry but
+/// entry_none invalidates for: between job 0 and job 2 the CPU rewrites the header job 0 sampled a texture through to
+/// describe another image (the raw device's own contract: a header written between submissions is visible at the next
+/// one's header invalidate), so job 2 samples the new image, or with a header cache that kept job 0's entry the old one.
 /// entry_none, the positive control at a job's entry, opens each job with no invalidate at all (not even the header
 /// and sampler caches bare keeps) and no barrier before its first encoder: where a cache holds job 0's lines across the
 /// job boundary, job 2 reads them there, so a cell judges the relaxed entries only once entry_none differed in it, CPU
@@ -39,7 +42,7 @@ enum X1JobBoundaryProbe {
     static let words = 256
 
     enum Writer: String {
-        case rop, ce, sto, cpu, chan
+        case rop, ce, sto, cpu, chan, hdr
     }
 
     enum Reader: String {
@@ -48,7 +51,7 @@ enum X1JobBoundaryProbe {
 
     static let cells: [(Writer, Reader)] = [
         (.rop, .tex), (.ce, .tex), (.sto, .sto), (.sto, .const), (.sto, .ce), (.cpu, .sto), (.cpu, .const),
-        (.chan, .tex),
+        (.chan, .tex), (.hdr, .tex),
     ]
 
     static func run(_ gpu: GPU) async throws -> ProbeFinding {
@@ -62,7 +65,7 @@ enum X1JobBoundaryProbe {
         for (index, (writer, reader)) in cells.enumerated() {
             let name = "\(writer.rawValue)_\(reader.rawValue)"
             let work = try Work(kit, pipelines, writer, reader)
-            let gpuWritten = writer != .cpu && writer != .chan
+            let gpuWritten = writer != .cpu && writer != .chan && writer != .hdr
             let cellArms = gpuWritten ? arms : arms.filter { $0.0 != "injob_none" }
             journal.starting("\(name) arms=\(cellArms.map(\.0).joined(separator: "/"))")
             let started = Date()
@@ -121,6 +124,7 @@ enum X1JobBoundaryProbe {
         let pipelines: [String: MTLComputePipelineState]
         let writer: Writer, reader: Reader
         let textures: [MTLTexture]
+        let images: [MTLTexture]  // hdr: the images the textures' headers are rewritten to describe
         let buffers: [MTLBuffer]
         let staging: [MTLBuffer]
         let primeAtlas: MTLTexture, atlas: MTLTexture
@@ -141,8 +145,14 @@ enum X1JobBoundaryProbe {
                 ? try (0..<n).map { _ in
                     try gpu.texture(
                         .bgra8Unorm, side, side, usage: [.renderTarget, .shaderRead],
-                        storage: writer == .chan ? .shared : .private)
+                        storage: writer == .chan || writer == .hdr ? .shared : .private)
                 } : []
+            images =
+                writer == .hdr
+                ? try (0..<n).map { _ in
+                    try gpu.texture(.bgra8Unorm, side, side, usage: [.shaderRead], storage: .shared)
+                }
+                : []
             buffers = reader == .tex ? [] : try (0..<n).map { _ in try gpu.buffer(X1JobBoundaryProbe.words * 4) }
             staging = writer == .ce ? try (0..<n).map { _ in try gpu.buffer(side * side * 4) } : []
             primeAtlas = try kit.atlas(n)
@@ -235,7 +245,7 @@ enum X1JobBoundaryProbe {
                         threadsPerThreadgroup: MTLSize(width: 64, height: 1, depth: 1))
                 }
                 if concurrent == nil { encoder.endEncoding() }
-            case .cpu, .chan:
+            case .cpu, .chan, .hdr:
                 break
             }
         }
@@ -255,6 +265,14 @@ enum X1JobBoundaryProbe {
                 case .ce:
                     let bytes = pattern(seeds[k])
                     staging[k].contents().copyMemory(from: bytes, byteCount: bytes.count)
+                case .hdr:
+                    images[k].replace(
+                        region: MTLRegionMake2D(0, 0, side, side), mipmapLevel: 0, withBytes: pattern(seeds[k]),
+                        bytesPerRow: side * 4)
+                    textures[k].replace(
+                        region: MTLRegionMake2D(0, 0, side, side), mipmapLevel: 0,
+                        withBytes: pattern(seeds[k] ^ 0x5a5a),
+                        bytesPerRow: side * 4)
                 default:
                     break
                 }
@@ -269,7 +287,13 @@ enum X1JobBoundaryProbe {
                 return try gpu.runBackToBack(
                     forms: forms, [{ read($0, results: false) }, { write($0, seeds) }, { read($0, results: true) }])
             }
+            if writer == .hdr { writeFromCPU(seeds) }
             _ = try await gpu.run(forms: forms) { read($0, results: false) }
+            if writer == .hdr {
+                for (t, image) in zip(textures, images) { try RawProbe.retarget(gpu.device, t, to: image) }
+                defer { for t in textures { try? RawProbe.retarget(gpu.device, t, to: nil) } }
+                return try await gpu.run(forms: forms) { read($0, results: true) }
+            }
             writeFromCPU(seeds)
             return try await gpu.run(forms: forms) { read($0, results: true) }
         }

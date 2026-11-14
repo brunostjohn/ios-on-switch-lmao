@@ -142,6 +142,17 @@ static raw::ProbeSurface probeSurface(const raw::Texture &t, uint32_t fmt2d)
     return nil;
 }
 
+// gpu.x1.job_boundary_idle's header cell: [a, b] makes texture a's header describe b's image from the next submission's
+// header invalidate on, [a] gives a its own back; nil, else why not
+- (NSString *)switchRawProbeRetarget:(NSArray *)textures
+{
+    RMTexture *a = textures.count ? rawTexture(textures[0]) : nil;
+    RMTexture *to = textures.count > 1 ? rawTexture(textures[1]) : nil;
+    if (!a || (textures.count > 1 && !to))
+        return @"not raw textures";
+    return gRM->raw->probeRetarget(a->_raw, to ? &to->_raw : nullptr) ? nil : @"a texture with no header";
+}
+
 // What a probe's line says of a texture and the device: "raw=1 comptags=1 block_linear=1 pitch=N tiled_cache=1
 // compression=1", raw=0 where the raw path does not hold it
 - (NSString *)switchRawProbeFacts:(id<MTLTexture>)texture

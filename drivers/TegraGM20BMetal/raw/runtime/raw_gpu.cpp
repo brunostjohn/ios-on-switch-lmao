@@ -8343,6 +8343,18 @@ void BlitEncoder::end()
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+bool Device::probeRetarget(const Texture &a, const Texture *to)
+{
+    std::lock_guard<raw::Mutex> l(lock_);
+    if (!a.tic || (to && !to->tic))
+        return false;
+    if (to)
+        memcpy(tic_.cpu + 32 * a.tic, tic_.cpu + 32 * to->tic, 32);
+    else
+        writeTic(a);
+    return true;
+}
+
 bool Device::probeCompressible(const tgm_layout &bl, Texture &t)
 {
     const uint32_t kind = compressedKind(t.bpp, 0);
