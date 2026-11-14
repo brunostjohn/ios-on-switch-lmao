@@ -8,8 +8,9 @@
 // keep their on/off state and every word but the surface addresses is armed, and the staged copy is given back the
 // newest requested set's addresses: no WIN_B/WIN_C_UPDATE has ever been seen to leave a staged copy alone across
 // another window's UPDATE on this unit, and a copy promoted early then shows the frame already on screen, never one a
-// producer is still writing. The completion writes the new addresses and the STATE_CONTROL pair under
-// completionFlipLock; finishPlaneFence requests the entry in the latch, and planeOut writes nothing for it.
+// producer is still writing. The completion writes the new addresses and the STATE_CONTROL pair once it has claimed the
+// set (SwitchCompletionFlip.h's word); finishPlaneFence requests the entry in the latch, and planeOut writes nothing
+// for it.
 //
 // Every other writer of windows B and C (planeStage, the recovery, the stop) first runs a written flip's pass and
 // withdraws an armed one, which leaves the latch as it was before the offer; that set then goes out through planeOut as
@@ -50,7 +51,7 @@ static inline struct sysctl_oid mediaFlipTotalOids[kMediaFlipTotals] = {};
 
 bool mediaFlipIdle() const
 {
-    return __atomic_load_n(&mediaFlip.state, __ATOMIC_RELAXED) == SwitchCompletionFlip::kIdle;
+    return SwitchFlipWord::stateOf(__atomic_load_n(&mediaFlip.bits, __ATOMIC_RELAXED)) == SwitchFlipWord::kIdle;
 }
 
 static bool sameWindowLayout(const switch_display::Overlay &a, const switch_display::Overlay &b)
@@ -95,7 +96,7 @@ bool mediaFlipMay(const PlaneSet &p, PlaneSet &assigned)
 // Under the gate, before the token fence (its callback may run on another CPU before the fence call returns).
 bool armMediaFlip(const PlaneSet &p)
 {
-    if (!completionFlipLock)
+    if (!completionFlipStarted())
         startCompletionFlip();
     PlaneSet assigned = {};
     if (!mediaFlipMay(p, assigned)) {
@@ -115,7 +116,6 @@ bool armMediaFlip(const PlaneSet &p)
         return false;
     }
     planeLatch.deferRequest();
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
     mediaFlip.clear();
     for (unsigned window = 0; window != 2; ++window) {
         const switch_display::Overlay &next = assigned.window[window];
@@ -129,7 +129,6 @@ bool armMediaFlip(const PlaneSet &p)
         }
     }
     mediaFlip.arm(update, request);
-    IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
     if (SWITCH_FRAME_TIMELINE)
         noteMediaFlipTotal(4, 1);
     return true;
@@ -152,12 +151,10 @@ void armMediaFlipWaiters(const switch_gpu_backing_token *producers, unsigned cou
 {
     if (count > kMediaFilterProducers)
         return;
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
-    const bool armed = mediaFlip.state == SwitchCompletionFlip::kArmed;
-    const uint32_t generation = mediaFlip.generation;
-    IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
-    if (!armed)
+    const uint32_t word = mediaFlip.now();
+    if (SwitchFlipWord::stateOf(word) != SwitchFlipWord::kArmed)
         return;
+    const uint32_t generation = SwitchFlipWord::generationOf(word);
     auto &waiter = mediaFilterWaiters[generation & 1];
     waiter.display = this;
     waiter.generation = generation;
@@ -180,8 +177,8 @@ void armMediaFlipWaiters(const switch_gpu_backing_token *producers, unsigned cou
     }
 }
 
-// host1x's syncpoint filter (interrupts off, its simple lock held): IOSimpleLock only. One producer's threshold ran
-// it; every other producer's job is read too, its syncpoint included.
+// host1x's syncpoint filter (interrupts off): no lock. One producer's threshold ran it; every other producer's job is
+// read too, its syncpoint included.
 template <class Self> static void mediaFilterFlip(void *ctx)
 {
     const auto *waiter = static_cast<const MediaFilterWaiter *>(ctx);
@@ -193,15 +190,11 @@ template <class Self> static void mediaFilterFlip(void *ctx)
 
 void writeEarlyMediaFlip(uint32_t generation)
 {
-    IOSimpleLock *lock = __atomic_load_n(&completionFlipLock, __ATOMIC_ACQUIRE);
-    if (!lock)
+    if (gPanicRestore.panicking || !mediaFlip.claimEarly(generation))
         return;
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(lock);
-    const bool write = !gPanicRestore.panicking && mediaFlip.claimEarly(generation);
-    if (write)
-        writeMediaFlipStoresLocked();
-    IOSimpleLockUnlockEnableInterrupt(lock, state);
-    if (write && SWITCH_FRAME_TIMELINE)
+    writeMediaFlipStores();
+    mediaFlip.claimed(SwitchCompletionFlip::kEarly);
+    if (SWITCH_FRAME_TIMELINE)
         noteMediaFlipTotal(5, 1);
 }
 
@@ -209,12 +202,7 @@ void writeEarlyMediaFlip(uint32_t generation)
 // the producers' contract: one error line.
 int mediaFlipVerdict(int status)
 {
-    if (!status || !__atomic_load_n(&completionFlipLock, __ATOMIC_ACQUIRE))
-        return status;
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
-    const bool early = mediaFlip.early();
-    IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
-    if (!early)
+    if (!status || !mediaFlip.early())
         return status;
     IOLog(
         "SwitchDisplay: windows B and C's set was written from host1x's syncpoint filter, whose completion then failed "
@@ -223,17 +211,19 @@ int mediaFlipVerdict(int status)
     return 0;
 }
 
-// writeCompletionFlip's, under completionFlipLock on the completion's thread.
-void writeMediaFlipLocked(int status)
+// writeCompletionFlip's, on the completion's thread with interrupts off.
+void writeMediaFlip(int status)
 {
     if (gPanicRestore.panicking)
         mediaFlip.withdraw();
-    if (mediaFlip.claim(status))
-        writeMediaFlipStoresLocked();
+    if (mediaFlip.claim(status)) {
+        writeMediaFlipStores();
+        mediaFlip.claimed(SwitchCompletionFlip::kWritten);
+    }
 }
 
-// Under completionFlipLock: dsb, the address stores and the STATE_CONTROL pair.
-void writeMediaFlipStoresLocked()
+// The claimer, holding kClaimed: dsb, the address stores and the STATE_CONTROL pair.
+void writeMediaFlipStores()
 {
     __asm__ volatile("dsb sy" ::: "memory");
     for (unsigned i = 0; i < mediaFlip.stores; ++i)
@@ -246,13 +236,7 @@ void writeMediaFlipStoresLocked()
 
 void withdrawMediaFlip()
 {
-    if (mediaFlipIdle())
-        return;
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
-    const bool armed = mediaFlip.state == SwitchCompletionFlip::kArmed;
-    mediaFlip.withdraw();
-    IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
-    if (!armed)
+    if (mediaFlipIdle() || !mediaFlip.withdraw())
         return;
     planeLatch.withdraw();
     if (SWITCH_FRAME_TIMELINE)
@@ -264,12 +248,8 @@ void takeMediaFlip()
 {
     if (mediaFlipIdle())
         return;
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
-    const uint8_t seen = mediaFlip.state;
-    if (seen == SwitchCompletionFlip::kEarly)
-        mediaFlip.state = SwitchCompletionFlip::kAdopted;
+    const uint8_t seen = mediaFlip.adopt();
     const uint64_t requestedAt = mediaFlip.requestedAt, writtenAt = mediaFlip.writtenAt;
-    IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
     if (seen == SwitchCompletionFlip::kWritten)
         runCompletionPass();
     else if (seen == SwitchCompletionFlip::kEarly)
@@ -290,15 +270,13 @@ void mediaFlipPass()
 {
     if (mediaFlipIdle() && planeLatch.armedRequested)
         return;
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(completionFlipLock);
     mediaFlip.withdraw();
-    const bool adopted = mediaFlip.state == SwitchCompletionFlip::kAdopted;
-    if (adopted)
-        mediaFlip.state = SwitchCompletionFlip::kIdle;
+    const bool adopted = mediaFlip.idleUnless([](uint8_t state) {
+        return state != SwitchCompletionFlip::kAdopted;
+    }) == SwitchCompletionFlip::kAdopted;
     const bool filtered = mediaFlip.filtered;
     const bool written = !adopted && mediaFlip.take();
     const uint64_t requestedAt = mediaFlip.requestedAt, writtenAt = mediaFlip.writtenAt;
-    IOSimpleLockUnlockEnableInterrupt(completionFlipLock, state);
     if (adopted)
         return;
     if (!written) {

@@ -72,7 +72,8 @@ extern "C" void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_
     info->page_count = backing == &decoded ? (4u << 20) >> 12 : 1024;
 }
 
-int switch_vic_surface_access(const TegraVICSurface *surface, bool write, SwitchVICSurfaceAccess *access, bool)
+int switch_vic_surface_access(const TegraVICSurface *surface, bool write, SwitchVICSurfaceAccess *access, bool,
+                              switch_gpu_backing *)
 {
     EXPECT_TRUE(write);
     ++accesses;

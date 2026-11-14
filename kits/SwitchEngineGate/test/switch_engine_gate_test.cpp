@@ -272,3 +272,35 @@ TEST(SwitchEngineGate, AUseDuringSleepWaitsForResume)
     ASSERT_EQ(f.gate.use(), 0);
     EXPECT_EQ(f.engine.ons, 3u) << "and the next one again, with no wait";
 }
+
+TEST(SwitchEngineGate, AHeldEngineIsNotPoweredOffWhenIdleUntilItsRelease)
+{
+    Fixture f;
+    f.model().lock();
+    f.gate.holdLocked();
+    f.model().unlock();
+    f.model().fire();
+    EXPECT_EQ(f.engine.offs, 0u);
+    EXPECT_EQ(f.engine.ons, 0u) << "a hold powers nothing on";
+    f.gate.release();
+    EXPECT_EQ(f.model().armedMs, SwitchEngineGate<Model>::kIdleMs);
+    f.model().fire();
+    EXPECT_EQ(f.engine.offs, 1u);
+}
+
+TEST(SwitchEngineGate, SleepWaitsForAHoldsReleaseBeforeItPowersOff)
+{
+    Fixture f;
+    f.model().lock();
+    f.gate.holdLocked();
+    f.model().unlock();
+    uint32_t offsBeforeRelease = 99;
+    f.model().meanwhile = [&f, &offsBeforeRelease] {
+        offsBeforeRelease = f.engine.offs;
+        f.gate.release();
+    };
+    f.gate.suspend();
+    EXPECT_EQ(offsBeforeRelease, 0u);
+    EXPECT_EQ(f.engine.drains, 1u);
+    EXPECT_FALSE(f.gate.powered());
+}

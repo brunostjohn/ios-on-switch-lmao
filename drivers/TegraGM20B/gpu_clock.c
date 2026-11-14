@@ -342,12 +342,14 @@ int tgm_gpu_held(void (*fn)(struct nvkm_device *device, void *arg), void *arg)
 }
 
 #endif
-/* drivers/SwitchPower switch_perf_hint (touch, missed frame, launch): busy now, and back up at once if low. */
+/* drivers/SwitchPower switch_perf_hint (touch, missed frame, launch): busy now, and back up at once if low. last_busy
+ * is a time its readers only compare with their clock (idle_drop, SwitchGpuIdleDeadline.h); it publishes nothing else.
+ * A drop that read the time just before this store is undone by the synchronous raise before the next kick. */
 void tegra_gm20b_perf_hint(unsigned int hint)
 {
 	if (!READ_ONCE(tgm_idle.on) || hint < 1 || hint > 3)
 		return;
-	__atomic_store_n(&tgm_idle.last_busy, nvxnu_nanotime(), __ATOMIC_SEQ_CST);
+	__atomic_store_n(&tgm_idle.last_busy, nvxnu_nanotime(), __ATOMIC_RELAXED);
 	if (READ_ONCE(tgm_idle.low))
 		nvxnu_work_schedule(tgm_idle.raise_w);
 }

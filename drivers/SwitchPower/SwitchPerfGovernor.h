@@ -2,8 +2,9 @@
 // The CPU governor's kernel side (SwitchPerfGovernor.cpp) as SwitchThermal drives it. SwitchThermal owns the DFLL and
 // the thermal state; this side owns the scheduler's perfcontrol callouts, the load accounting, the hints and the
 // decisions (SwitchGovernor.h). A decision that changes the clock (or a periodic log line that is due) calls the
-// owner's `signal` from whatever context made it (the scheduler's callout, an interrupt filter, a thread); the owner
-// then calls take() on its work loop, sets the DFLL to that point and reports it with applied().
+// owner's `signal` from whatever context made it (the scheduler's callout, an interrupt filter, a thread), with
+// interrupts masked and the CPU it runs on; the owner then calls take() on its work loop, sets the DFLL to that point
+// and reports it with applied().
 #ifndef SWITCH_PERF_GOVERNOR_H
 #define SWITCH_PERF_GOVERNOR_H
 
@@ -12,7 +13,10 @@
 
 namespace switchperf {
 
-using Signal = void (*)(void *ctx);
+// One wake source per CPU, signalled only by code running on that CPU with interrupts masked, so each source has one
+// producer at a time (IOInterruptEventSource::interruptOccurred counts with a plain increment).
+constexpr unsigned kSignalCpus = 4;  // the Switch's A57 cores (SWITCH_SMP_CORE_COUNT)
+using Signal = void (*)(void *ctx, unsigned cpu);
 
 // The boot window's end if System Boot Complete never comes, in seconds of uptime (r8a's slow boot had it at 74 s).
 constexpr unsigned kBootFallbackSeconds = 120;

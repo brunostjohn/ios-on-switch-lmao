@@ -266,6 +266,7 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 	struct tgm_chan *chan = tgm_present.chan;
 	struct nvif_push *push = NULL;
 	u32 *push_start = NULL;
+	u32 words = 0;
 	int ret = 0;
 	int cut = 0;
 
@@ -296,11 +297,14 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 	cut = dst_va && tgm_copy_reset_armed();
 #endif
 	push = &chan->chan.push;
-	ret = chan_push_wait(
-		chan, dependency_count * 5 + 57 + nreads * TGM_COPY_RECT_DWORDS +
-			      cut * (TegraGM20BCopyResetCopies * TGM_PRESENT_COPY_DWORDS + 2) +
-			      CHAN_FENCE_DWORDS); /* acquires, a start stamp, the copy, the
-								  read-backs, the fence */
+	/* acquires, a start stamp, the copy, the read-backs, the fence */
+	words = dependency_count * 5 + 57 + nreads * TGM_COPY_RECT_DWORDS +
+		cut * (TegraGM20BCopyResetCopies * TGM_PRESENT_COPY_DWORDS + 2) + CHAN_FENCE_DWORDS;
+#if TGM_STATS
+	if (push->cur + words > push->end && !tgm_chan_room(chan, 1, words))
+		tgm_stats_unlocked(TGM_UNLOCKED_PRESENT_ROOM, 0);
+#endif
+	ret = chan_push_wait(chan, words);
 	if (ret == -ETIMEDOUT) {
 		tgm_chan_stalled(chan, "present: push buffer still full after 1 s", chan->submitted,
 				 NSEC_PER_SEC);

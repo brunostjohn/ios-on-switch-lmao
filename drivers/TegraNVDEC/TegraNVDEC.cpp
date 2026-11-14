@@ -590,6 +590,16 @@ void switch_nvdec_power_done()
     gGate.done();
 }
 
+void switch_nvdec_power_hold_locked()
+{
+    gGate.holdLocked();
+}
+
+void switch_nvdec_power_release()
+{
+    gGate.release();
+}
+
 void switch_nvdec_power_idle()
 {
     gGate.idle();

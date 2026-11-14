@@ -53,7 +53,7 @@ void note(Display &d, const char *what)
     o << what << ": ring f" << d.ring.front << " p" << d.ring.pending << " s" << d.ring.superseded << " h"
       << d.ring.held << " | active " << d.activeEntry() << " armed "
       << d.surfaceIndex(d.model.armed[Display::kWinbufStartAddr]) << " req " << d.model.requested << " | flip "
-      << int(d.completionFlip.state) << " e" << d.completionFlip.entry << " | swaps";
+      << int(d.completionFlip.state()) << " e" << d.completionFlip.entry << " | swaps";
     for (const auto &s : d.swaps)
         o << " " << s.seq;
     o << " | retired " << (d.retired.empty() ? 0 : d.retired.back()) << " | seq";
@@ -156,7 +156,6 @@ protected:
 TEST_P(PageReturn, NoPageGoesBackWhileWindowACanStillScanIt)
 {
     Display d;
-    d.completionFlipsProven = true;
     Pages p;
     bool offered = false, written = false, done = false, rendered = false, copying = false, superseded = false;
     unsigned pendingTicks = 0, visible = 0, copies = 0;

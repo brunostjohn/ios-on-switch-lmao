@@ -91,6 +91,26 @@ public:
             platform_.arm(kIdleMs);
     }
 
+    // The gate's lock held: the engine stays as it is until release(), with no power-on: no idle power-off, and sleep
+    // waits for the release. For a driver's recovery that runs part of its sequence (a falcon's reboot and proof)
+    // without the lock.
+    void holdLocked()
+    {
+        users_++;
+        held_++;
+    }
+
+    void release()
+    {
+        platform_.lock();
+        const bool last = --users_ == 0;
+        if (!--held_)
+            platform_.wake(&held_);
+        platform_.unlock();
+        if (last)
+            platform_.arm(kIdleMs);
+    }
+
     // The engine's queue drained. Takes no lock: the engine may call it under its own.
     void idle()
     {
@@ -123,6 +143,8 @@ public:
     {
         platform_.lock();
         asleep_ = true;
+        while (held_)
+            platform_.sleep(&held_);
         if (powered_)
             (void)ops_.off(ops_.engine, true);
         setPowered(false);
@@ -203,6 +225,6 @@ private:
     Platform platform_;
     SwitchEngineGateOps ops_ = {};
     SwitchEngineGateStats stats_ = {};
-    uint32_t users_ = 0;
+    uint32_t users_ = 0, held_ = 0;
     bool powered_ = false, asleep_ = false;
 };

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <mutex>
@@ -25,6 +26,19 @@ inline void IOLockLock(IOLock *p) __attribute__((no_thread_safety_analysis))
 inline void IOLockUnlock(IOLock *p) __attribute__((no_thread_safety_analysis))
 {
 	p->unlock();
+}
+
+inline std::condition_variable_any switch_copy_lock_changed;
+constexpr int THREAD_UNINT = 0;
+
+inline void IOLockSleep(IOLock *p, void *, int) __attribute__((no_thread_safety_analysis))
+{
+	switch_copy_lock_changed.wait(*p);
+}
+
+inline void IOLockWakeup(IOLock *, void *, bool)
+{
+	switch_copy_lock_changed.notify_all();
 }
 
 #define IONew(t, n) static_cast<t *>(calloc(n, sizeof(t)))

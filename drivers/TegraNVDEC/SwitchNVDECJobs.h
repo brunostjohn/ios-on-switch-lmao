@@ -13,6 +13,9 @@ bool switch_nvdec_jobs_park(bool drain);
 // queue draining starts the idle timer.
 int switch_nvdec_power_use();
 void switch_nvdec_power_done();
+// tegra_nvdec_power_lock held: the engine stays as it is (no idle power-off; sleep waits) until the release.
+void switch_nvdec_power_hold_locked();
+void switch_nvdec_power_release();
 void switch_nvdec_power_idle();
 // The engine a cancellation's reset did not bring back, handed to the gate once the cancelled jobs have all ended (its
 // power-on rebases the queue, which needs it empty): the next decode powers it on. Takes no lock.

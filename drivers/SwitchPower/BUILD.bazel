@@ -38,6 +38,8 @@ kernel_driver(
         "SwitchThermal.cpp",
         "SwitchEMC.cpp",
         "SwitchPerfGovernor.cpp",
+        "SwitchPerfGovernorLimits.cpp",
+        "SwitchPerfGovernorLine.cpp",
         "SwitchPowerStats.cpp",
         "SwitchSensors.cpp",
         "SwitchSocTherm.cpp",

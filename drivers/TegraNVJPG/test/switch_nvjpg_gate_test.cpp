@@ -304,3 +304,35 @@ TEST_F(NVJPGGate, ThePublishedTraitsTakeEveryDCTScale)
         EXPECT_EQ(plan.target.scale, scale);
     }
 }
+
+// A decode's host1x submit and syncpoint wait take no lock: the job's use of the gate keeps the engine on.
+TEST_F(NVJPGGate, AJobWaitsForTheEngineWithNoStateLockHeld)
+{
+    TegraNVJPGJob job = decodeJob();
+    nvjpg_dec_status status = {};
+    ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    gEngine.waitsUnderStateLock = 0;
+    ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    // base 2: the submit's wait for room and the job's syncpoint wait, both under gStateLock
+    EXPECT_EQ(gEngine.waitsUnderStateLock, 0);
+}
+
+// The cancellation takes the power lock with gStateLock not held, so the only order between the two is the gate's
+// (power lock, then gateOn/gateOff's gStateLock).
+TEST_F(NVJPGGate, ACancellationTakesThePowerLockOutsideTheStateLock)
+{
+    TegraNVJPGJob job = decodeJob();
+    nvjpg_dec_status status = {};
+    ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    gEngine.waitsUnderStateLock = gEngine.powerUnderStateLock = 0;
+    switch_test_lock_taken = [](IOLock *lock) {
+        gEngine.powerUnderStateLock += lock == &gNvdecPower && gStateLock->locked;
+    };
+    gEngine.stallDecodes = true;
+    EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), -5);
+    switch_test_lock_taken = nullptr;
+    EXPECT_TRUE(logged("engine reset: running again"));
+    // base 1: the power lock inside gStateLock; base 4: the job's submit and wait and the reboot's proof under gStateLock
+    EXPECT_EQ(gEngine.powerUnderStateLock, 0);
+    EXPECT_EQ(gEngine.waitsUnderStateLock, 0);
+}

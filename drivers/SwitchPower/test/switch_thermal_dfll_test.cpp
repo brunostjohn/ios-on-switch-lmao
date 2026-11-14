@@ -292,7 +292,8 @@ TEST(ThermalDfllSource, SwitchThermalFailsOneStepAndNeverLatches)
     EXPECT_NE(raise.find("if (!perfTop) {\n        perfSettled = true;"), std::string::npos);
     EXPECT_NE(raise.find("if (dfllMode)\n            return false;"), std::string::npos);
     EXPECT_EQ(raise.find("dfllMode = "), std::string::npos);
-    const std::string fired = switch_ios::test::Body(source, "void SwitchThermal::governorFired(");
+    const std::string fired = switch_ios::test::Body(source, "void SwitchThermal::governorFired(") +
+                              switch_ios::test::Body(source, "void SwitchThermal::applyGovernor(");
     EXPECT_NE(fired.find("dfllRefused(hz, err)"), std::string::npos);
     EXPECT_EQ(fired.find("setTimeoutMS"), std::string::npos);
     EXPECT_NE(switch_ios::test::Body(source, "void SwitchThermal::resume(").find("resumeDfll()"), std::string::npos);
@@ -301,5 +302,23 @@ TEST(ThermalDfllSource, SwitchThermalFailsOneStepAndNeverLatches)
     EXPECT_NE(switch_ios::test::Body(source, "bool SwitchThermal::preparePerf(").find("perfSettled = fact;"),
               std::string::npos);
     EXPECT_EQ(source.find("PLL mode for this boot"), std::string::npos);
+}
+
+// Nothing a governor signal, ALERT or SOC_THERM waits behind on the work loop sleeps: ALERT's conversion is a timer
+// shot (alertReleased), and the DFLL landing sleeps on its writer's thread between steps it hands the loop one by one.
+TEST(ThermalDfllSource, NoSleepWhereTheGovernorOrAlertWait)
+{
+    const std::string source = switch_ios::test::SourceText("../SwitchThermal.cpp") +
+                               switch_ios::test::SourceText("../SwitchThermalDfllLanding.h");
+    for (const char *signature :
+         {"void SwitchThermal::governorFired(", "void SwitchThermal::applyGovernor(", "void SwitchThermal::alertFired(",
+          "void SwitchThermal::alertReleased(", "void SwitchThermal::dfllLandingStep("}) {
+        const std::string body = switch_ios::test::Body(source, signature);
+        EXPECT_FALSE(body.empty()) << signature;
+        EXPECT_EQ(body.find("IOSleep"), std::string::npos) << signature;
+    }
+    const std::string sysctl = switch_ios::test::Body(source, "int SwitchThermal::dfllLandingSysctl(");
+    ASSERT_FALSE(sysctl.empty());
+    EXPECT_EQ(sysctl.find("runAction"), std::string::npos) << "the whole landing on the loop sleeps under its gate";
 }
 }  // namespace

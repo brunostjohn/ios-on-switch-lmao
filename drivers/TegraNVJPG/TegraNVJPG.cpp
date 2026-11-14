@@ -62,6 +62,7 @@
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "TegraNVJPG.h"
+#include "TegraNVJPGStats.h"
 #include "nvidia/cle7d0.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchCAR/SwitchEngineClock.h"
@@ -150,6 +151,10 @@ inline uint32_t jobBoundUs(uint64_t pixels)
 SwitchFalconInterrupt gErrors;
 IOLock *gJobLock;    // one job at a time: map, run, unmap
 IOLock *gStateLock;  // power transitions against jobs
+#if TEGRA_NVJPG_STATS
+// Written by jobs and under gStateLock, taken by the decode line's caller holding neither (relaxed).
+uint64_t gWaitsUnlocked, gStateWaitMaxUs;
+#endif
 SwitchEngineGate<SwitchEngineGateKernel> gGate;
 uint32_t gSyncpt, gNext, gPicture;
 uint32_t gPowerOns;     // by the idle gate, since boot
@@ -171,6 +176,20 @@ const char *falconState()
     if (gUp && !gGate.powered())
         return "falcon powered off (idle)";
     return switch_falcon_state(gJpg, text, sizeof(text));
+}
+
+// A cancellation's or an idle gate call's gStateLock; debug kernels keep the longest wait for it.
+void lockState()
+{
+#if TEGRA_NVJPG_STATS
+    const uint64_t asked = switch_now_us();
+    IOLockLock(gStateLock);
+    const uint64_t waited = switch_now_us() - asked;
+    if (waited > __atomic_load_n(&gStateWaitMaxUs, __ATOMIC_RELAXED))
+        __atomic_store_n(&gStateWaitMaxUs, waited, __ATOMIC_RELAXED);
+#else
+    IOLockLock(gStateLock);
+#endif
 }
 
 // One physically contiguous buffer below 4 GiB, zeroed and clean in the caches.
@@ -361,9 +380,10 @@ void park()
 // partition kept on and brought up again as at J1 (powerUp releases the flush once the reset is), the falcon rebooted
 // and proven as at J2, and the job fails; the next one runs. An engine the reset does not bring back is turned off and
 // handed back to the idle gate, which powers it on at a later decode. One line per cancellation, with what the
-// falcon and the memory controller held. gStateLock held, and gJobLock (the caller's): no NVJPG power transition can
-// be waiting for gStateLock while this takes the power lock (gateOn runs only in a job, gateOff only with no user, and
-// suspend first takes gJobLock).
+// falcon and the memory controller held. gJobLock held (the caller's) and the job's use of the gate, so no NVJPG power
+// transition runs meanwhile (gateOn runs only in a job, gateOff only with no user, and suspend first takes gJobLock).
+// The power lock and gStateLock are taken one after the other, never one inside the other: the gate calls gateOn and
+// gateOff with the power lock held, and they take gStateLock.
 int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
 {
     char host[200];
@@ -405,8 +425,11 @@ int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
     if (back)
         gErrors.on();
     IOLockUnlock(power);
-    gNext = tegra_host1x_syncpt_read(gSyncpt);
+    const uint32_t next = tegra_host1x_syncpt_read(gSyncpt);
+    lockState();
+    gNext = next;
     gWedged = !back;
+    IOLockUnlock(gStateLock);
     if (!back) {
         engineOff();
         gGate.lost();
@@ -589,6 +612,14 @@ extern "C" void tegra_nvjpg_unlock(void)
     IOLockUnlock(gJobLock);
 }
 
+#if TEGRA_NVJPG_STATS
+void tegra_nvjpg_lock_counts(uint64_t *waitsUnlocked, uint64_t *stateWaitMaxUs)
+{
+    *waitsUnlocked = __atomic_exchange_n(&gWaitsUnlocked, 0, __ATOMIC_RELAXED);
+    *stateWaitMaxUs = __atomic_exchange_n(&gStateWaitMaxUs, 0, __ATOMIC_RELAXED);
+}
+#endif
+
 // Job lock held. The window's tables are fixed; pages past `count` are left (or made) unmapped, so an access beyond
 // the job's memory faults in the SMMU instead of reaching memory.
 extern "C" uint64_t tegra_nvjpg_window_map(uint32_t window, const uint64_t *pages, uint32_t count, bool writable)
@@ -631,11 +662,13 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
         return -22;
     if (const int error = gGate.use())
         return error;
+    // The job's use of the gate keeps the engine as this finds it until done(): no lock is held across its wait.
     IOLockLock(gStateLock);
     while (gSuspended)
         IOLockSleep(gStateLock, &gSuspended, THREAD_UNINT);
-    if (gWedged) {
-        IOLockUnlock(gStateLock);
+    const bool wedged = gWedged;
+    IOLockUnlock(gStateLock);
+    if (wedged) {
         gGate.done();
         return -19;
     }
@@ -645,7 +678,6 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     switch_dcache_clean_invalidate(gStatus.va, sizeof(nvjpg_dec_status));
     uint32_t *words = nullptr;
     if (const int error = switch_host1x_job_begin(TEGRA_HOST1X_CHANNEL_NVJPG, 1 + 3 * 11 + 1, &words)) {
-        IOLockUnlock(gStateLock);
         gGate.done();
         return error;
     }
@@ -678,6 +710,9 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
             follow->queue(follow->context, gSyncpt, fence);
         ret = tegra_host1x_syncpt_wait_unless(gSyncpt, fence, jobBoundUs(job->pixels), gErrors.takenWord(),
                                               gErrors.onAt());
+#if TEGRA_NVJPG_STATS
+        __atomic_fetch_add(&gWaitsUnlocked, 1, __ATOMIC_RELAXED);
+#endif
         if (ret == TEGRA_HOST1X_ETIMEDOUT || ret == TEGRA_HOST1X_EFALCON)
             ret = cancelled(job, fence, switch_now_us() - start);
     }
@@ -685,7 +720,6 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
         *busyUs = switch_now_us() - start;
     switch_dcache_clean_invalidate(gStatus.va, sizeof(nvjpg_dec_status));
     memcpy(status, gStatus.va, sizeof(*status));
-    IOLockUnlock(gStateLock);
     gGate.done();
     return ret;
 }
@@ -700,7 +734,7 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
 namespace {
 int gateOn(void *)
 {
-    IOLockLock(gStateLock);
+    lockState();
     bool wasOn = false;
     bool answered = false;
     gLine[0] = 0;
@@ -734,7 +768,7 @@ int gateOn(void *)
 
 int gateOff(void *, bool)
 {
-    IOLockLock(gStateLock);
+    lockState();
     gSuspended = true;
     gErrors.off();
     const bool off =

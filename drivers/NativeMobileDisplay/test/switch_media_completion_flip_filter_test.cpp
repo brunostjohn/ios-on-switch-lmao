@@ -56,7 +56,7 @@ protected:
 
     bool armed(int slot)
     {
-        return d.offer(video(slot), ++seq) && d.mediaFlip.state == SwitchCompletionFlip::kArmed;
+        return d.offer(video(slot), ++seq) && d.mediaFlip.state() == SwitchCompletionFlip::kArmed;
     }
 };
 
@@ -69,7 +69,7 @@ TEST_F(MediaFlipFilter, TheFilterWritesTheSetAndItsCompletionWritesNothing)
     d.filter();
     const std::vector<uint32_t> want = {kStartB, kStartUB, Display::kDcStateControl, Display::kDcStateControl};
     EXPECT_EQ(d.model.written, want);
-    EXPECT_EQ(d.mediaFlip.state, SwitchCompletionFlip::kEarly);
+    EXPECT_EQ(d.mediaFlip.state(), SwitchCompletionFlip::kEarly);
     d.model.written.clear();
     d.filter();
     d.complete(0);
@@ -92,7 +92,7 @@ TEST_F(MediaFlipFilter, AFrameEndBeforeTheCompletionAdoptsTheSet)
     d.filter();
     frame();
     EXPECT_EQ(d.shown.back(), seq);
-    EXPECT_EQ(d.mediaFlip.state, SwitchCompletionFlip::kAdopted);
+    EXPECT_EQ(d.mediaFlip.state(), SwitchCompletionFlip::kAdopted);
     d.model.written.clear();
     d.complete(0);
     d.donePass();
@@ -110,7 +110,7 @@ TEST_F(MediaFlipFilter, AGateWriterBeforeTheCompletionAdoptsTheSet)
     ASSERT_TRUE(armed(2));
     d.filter();
     d.mediaFlipFromGate();
-    EXPECT_EQ(d.mediaFlip.state, SwitchCompletionFlip::kAdopted);
+    EXPECT_EQ(d.mediaFlip.state(), SwitchCompletionFlip::kAdopted);
     EXPECT_TRUE(d.planeLatch.armedRequested);
     d.complete(0);
     d.donePass();
@@ -124,7 +124,7 @@ TEST_F(MediaFlipFilter, AGateWriterBeforeTheCompletionAdoptsTheSet)
 TEST_F(MediaFlipFilter, ATwoProducerSetWaitsForBothProducers)
 {
     ASSERT_TRUE(d.offer(video(2), ++seq, 2));
-    ASSERT_EQ(d.mediaFlip.state, SwitchCompletionFlip::kArmed);
+    ASSERT_EQ(d.mediaFlip.state(), SwitchCompletionFlip::kArmed);
     ASSERT_EQ(gWaiters.size(), 2u);
     gUncertain = {seq + Display::kSecond};
     d.model.written.clear();
@@ -133,7 +133,7 @@ TEST_F(MediaFlipFilter, ATwoProducerSetWaitsForBothProducers)
     gUncertain.clear();
     d.filter(seq + Display::kSecond);
     EXPECT_FALSE(d.model.written.empty());
-    EXPECT_EQ(d.mediaFlip.state, SwitchCompletionFlip::kEarly);
+    EXPECT_EQ(d.mediaFlip.state(), SwitchCompletionFlip::kEarly);
 }
 
 // A producer already done at the arm gets no waiter, and its record (perhaps gone) is not read in the filter.
@@ -156,7 +156,7 @@ TEST_F(MediaFlipFilter, AProducerNotCertainlyDoneIsLeftToTheCompletion)
     d.model.written.clear();
     d.filter();
     EXPECT_TRUE(d.model.written.empty());
-    EXPECT_EQ(d.mediaFlip.state, SwitchCompletionFlip::kArmed);
+    EXPECT_EQ(d.mediaFlip.state(), SwitchCompletionFlip::kArmed);
     d.complete(0);
     EXPECT_FALSE(d.model.written.empty());
 }
@@ -174,7 +174,7 @@ TEST_F(MediaFlipFilter, AStaleWaiterClaimsNothingOfTheNextOffer)
     for (const auto &waiter : stale)
         waiter.fn(waiter.ctx);
     EXPECT_TRUE(d.model.written.empty());
-    EXPECT_EQ(d.mediaFlip.state, SwitchCompletionFlip::kArmed);
+    EXPECT_EQ(d.mediaFlip.state(), SwitchCompletionFlip::kArmed);
 }
 
 // The producers' contract broken: a set the filter wrote whose completion then failed is shown as done with one line,
@@ -219,7 +219,7 @@ TEST_F(MediaFlipFilter, SuspendAdoptsAnEarlySet)
     ASSERT_TRUE(armed(2));
     d.filter();
     d.suspend();
-    EXPECT_EQ(d.mediaFlip.state, SwitchCompletionFlip::kAdopted);
+    EXPECT_EQ(d.mediaFlip.state(), SwitchCompletionFlip::kAdopted);
     d.complete(0);
     d.donePass();
     d.resume();

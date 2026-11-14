@@ -2,10 +2,12 @@
 // HW Test cpu.dfll_landing, debug kernels only (SwitchThermal.cpp includes this under DEVELOPMENT || DEBUG): DFLL rows
 // asked from a row above and from rows below, the CPU's clock measured where it runs 2, 10, 50 and 200 ms after each
 // request, the loop's registers beside each reading (Tegra X1 TRM 6.1.5 DFLL_TUNE1, 6.1.6 DFLL_FREQ_REQ, 6.1.9
-// DFLL_OUTPUT_CFG, 6.1.12 DFLL_MONITOR_DATA, 6.1.15 DFLL_I2C_STS). Writing debug.switch_perf_dfll_landing runs it on the
-// work loop, so the governor's requests wait until it has asked the rate it found again; reading gives the line:
-// "dfll=ran" and, per case i, "i=<from MHz>><to MHz>" and "i.<ms>=<probe kHz>,<FREQ_REQ>,<TUNE1>,<OUTPUT_CFG>,
-// <MONITOR_DATA>,<I2C_STS>" (registers in hex).
+// DFLL_OUTPUT_CFG, 6.1.12 DFLL_MONITOR_DATA, 6.1.15 DFLL_I2C_STS). Writing debug.switch_perf_dfll_landing runs it and
+// returns once it has ended: each request and each reading is one step on the work loop and the waits between them
+// sleep on the writer's thread, so ALERT, SOC_THERM and the thermal timer run meanwhile; the governor's requests wait
+// until it has asked the rate it found again. A reading lands up to one work-loop hand-off after its time. Reading
+// gives the line: "dfll=ran" and, per case i, "i=<from MHz>><to MHz>" and "i.<ms>=<probe kHz>,<FREQ_REQ>,<TUNE1>,
+// <OUTPUT_CFG>,<MONITOR_DATA>,<I2C_STS>" (registers in hex).
 
 #include "../../kits/SwitchSysctl/SwitchSysctl.h"
 
@@ -65,6 +67,26 @@ char gDfllLandingLine[2048] = "dfll=not_run";
 struct sysctl_oid gDfllLandingOid;
 bool gDfllLandingBusy;
 
+enum class DfllLandingStepKind {
+    Begin,
+    Ask,
+    Read,
+    End
+};
+
+// The writer's thread sets the step and its rate, the work loop runs it and fills the rest (runAction orders the two).
+struct DfllLandingRun {
+    DfllLandingStepKind step;
+    unsigned long hz, restore;
+    unsigned raise;  // perfRaises at Begin: a raise since is another DFLL
+    bool on;         // still on the DFLL the run began on
+    int err;
+    uint32_t khz;
+    tegra_dfll_cpu_loop regs;
+};
+
+DfllLandingRun gDfllLandingRun;
+
 void dfllLandingAppend(size_t &n, const char *format, ...) __printflike(2, 3);
 
 void dfllLandingAppend(size_t &n, const char *format, ...)
@@ -78,41 +100,93 @@ void dfllLandingAppend(size_t &n, const char *format, ...)
 }
 }  // namespace
 
-// Work loop, on the DFLL.
+// Work loop: one step of the run. No step sleeps.
+void SwitchThermal::dfllLandingStep()
+{
+    DfllLandingRun &run = gDfllLandingRun;
+    if (run.step == DfllLandingStepKind::Begin) {
+        run.raise = perfRaises;
+        run.restore = static_cast<unsigned long>(switch_perf_cpu_khz()) * 1000;
+    }
+    run.on = perfRaised && dfllMode && perfRaises == run.raise;
+    switch (run.step) {
+    case DfllLandingStepKind::Begin:
+        dfllLandingRuns = run.on;
+        break;
+    case DfllLandingStepKind::Ask:
+        run.err = run.on ? tegra_dfll_cpu_set_rate(run.hz) : 0;
+        break;
+    case DfllLandingStepKind::Read:
+        if (run.on) {
+            run.khz = probeCpuKhz();
+            tegra_dfll_cpu_loop_registers(&run.regs);
+        }
+        break;
+    case DfllLandingStepKind::End: {
+        if (!run.on) {
+            run.err = -ENODEV;
+        } else {
+            run.err = run.restore ? tegra_dfll_cpu_set_rate(run.restore) : -EINVAL;
+        }
+        dfllLandingRuns = false;
+        const bool pending = governorPending;
+        governorPending = false;
+        if (pending && switchperf::running())
+            applyGovernor();
+        break;
+    }
+    }
+}
+
+// The writer's thread: the steps on the work loop, the waits here.
 void SwitchThermal::dfllLanding()
 {
+    DfllLandingRun &run = gDfllLandingRun;
+    const auto step = [this, &run](DfllLandingStepKind kind) {
+        run.step = kind;
+        loop->runAction(
+            [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
+                static_cast<SwitchThermal *>(owner)->dfllLandingStep();
+                return kIOReturnSuccess;
+            },
+            this);
+        return run.on;
+    };
     size_t n = 0;
-    if (!perfRaised || !dfllMode) {
+    if (!step(DfllLandingStepKind::Begin)) {
         dfllLandingAppend(n, "dfll=not_run reason=not_on_dfll");
         return;
     }
-    const unsigned long restore = static_cast<unsigned long>(switch_perf_cpu_khz()) * 1000;
     dfllLandingAppend(n, "dfll=ran");
-    for (unsigned c = 0; c < sizeof(kDfllLandingCases) / sizeof(kDfllLandingCases[0]); ++c) {
+    for (unsigned c = 0; c < sizeof(kDfllLandingCases) / sizeof(kDfllLandingCases[0]) && run.on; ++c) {
         const DfllLandingCase &k = kDfllLandingCases[c];
         dfllLandingAppend(n, " %u=%lu>%lu", c, k.from / 1000000, k.to / 1000000);
-        int err = tegra_dfll_cpu_set_rate(k.from);
-        if (!err) {
+        run.hz = k.from;
+        if (step(DfllLandingStepKind::Ask) && !run.err) {
             IOSleep(kDfllLandingFromMs);
-            err = tegra_dfll_cpu_set_rate(k.to);
+            run.hz = k.to;
+            (void)step(DfllLandingStepKind::Ask);
         }
-        if (err) {
-            dfllLandingAppend(n, " %u.err=%d", c, err);
+        if (!run.on)
+            break;
+        if (run.err) {
+            dfllLandingAppend(n, " %u.err=%d", c, run.err);
             continue;
         }
         uint32_t slept = 0;
         for (const uint32_t ms : kDfllLandingAfterMs) {
             IOSleep(ms - slept);
             slept = ms;
-            const uint32_t khz = probeCpuKhz();
-            tegra_dfll_cpu_loop regs;
-            tegra_dfll_cpu_loop_registers(&regs);
-            dfllLandingAppend(n, " %u.%u=%u,%x,%x,%x,%x,%x", c, ms, khz, regs.freq_req, regs.tune1, regs.output_cfg,
-                              regs.monitor, regs.i2c_sts);
+            if (!step(DfllLandingStepKind::Read))
+                break;
+            dfllLandingAppend(n, " %u.%u=%u,%x,%x,%x,%x,%x", c, ms, run.khz, run.regs.freq_req, run.regs.tune1,
+                              run.regs.output_cfg, run.regs.monitor, run.regs.i2c_sts);
         }
     }
-    const int err = restore ? tegra_dfll_cpu_set_rate(restore) : -EINVAL;
-    dfllLandingAppend(n, " restore=%lu,%d", restore / 1000000, err);
+    if (!run.on)
+        dfllLandingAppend(n, " reason=not_on_dfll");
+    (void)step(DfllLandingStepKind::End);
+    dfllLandingAppend(n, " restore=%lu,%d", run.restore / 1000000, run.err);
     IOLog("SwitchPerf: DFLL landing: %s\n", gDfllLandingLine);
 }
 
@@ -127,12 +201,7 @@ int SwitchThermal::dfllLandingSysctl(struct sysctl_oid *, void *, int, struct sy
             return ENODEV;
         if (__atomic_exchange_n(&gDfllLandingBusy, true, __ATOMIC_ACQUIRE))
             return EBUSY;
-        self->loop->runAction(
-            [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
-                static_cast<SwitchThermal *>(owner)->dfllLanding();
-                return kIOReturnSuccess;
-            },
-            self);
+        self->dfllLanding();
         __atomic_store_n(&gDfllLandingBusy, false, __ATOMIC_RELEASE);
     }
     return SYSCTL_OUT(req, gDfllLandingLine, strlen(gDfllLandingLine) + 1);
