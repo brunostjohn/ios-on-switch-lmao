@@ -189,7 +189,8 @@ int nvxnu_firmware_find(const char *name, const void **data, unsigned long *size
 /*
  * GPU interrupts, no polled mode. nvxnu_irq_start() claims the GPU's stall and nonstall GIC SPIs (157/158 = INTID
  * 189/190, Linux tegra210.dtsi:427-428) on a work loop whose action runs nvxnu_poll_irqs() (nvkm_intr reads every
- * MC leaf, so both lines share it) and then nvxnu_wake(); it panics if it cannot. Waiters take nvxnu_wake_seq(),
+ * MC leaf, so both lines share it) and then nvxnu_wake(), which wakes a thread only while one sleeps in nvxnu_idle()
+ * or nvxnu_wake_due(); it panics if it cannot. Waiters take nvxnu_wake_seq(),
  * test their condition and call nvxnu_idle(), which sleeps until the sequence moves (1) or the deadline passes (0),
  * and panics when a GPU interrupt stays pending at PMC without being taken, or when called before nvxnu_irq_start().
  * nvxnu_wake() is safe with spinlocks held. nvxnu_wake_due(): `what` (a fence, say) is done although nothing woke
@@ -199,11 +200,22 @@ void nvxnu_irq_start(void);
 /* System sleep: nvxnu_irq_suspend() before the GPU's power goes (both lines masked, no pass reads the GPU from then on,
  * nvxnu_idle() no longer looks at PMC); nvxnu_irq_resume() once it is back, before nvkm arms its interrupts. */
 void nvxnu_irq_suspend(void);
+/* Returns once no interrupt pass that began before the call is still running. Thread context, no lock the pass takes. */
+void nvxnu_pass_barrier(void);
 void nvxnu_irq_resume(void);
 /* A frame timeline kdebug tracepoint (SwitchFrameTimeline.h): debug kernels only, free while tracing is off. */
 void nvxnu_kdebug(nvxnu_u32 code, nvxnu_u64 a, nvxnu_u64 b, nvxnu_u64 c);
 /* The interrupt passes run so far, by line. */
 void nvxnu_irq_passes(nvxnu_u64 *stall, nvxnu_u64 *nonstall);
+/* Debug kernels: the passes and the nonstall line's filters so far by the CPU that ran them, and the threads the passes
+ * woke on the global word. */
+void nvxnu_irq_cpus(nvxnu_u64 passes[4], nvxnu_u64 filters[4], nvxnu_u64 *global_wakeups);
+/* A wake word with the interrupt pass's own sequence (SwitchGpuWakeWord.h): pass 1 only on the pass's thread. */
+struct switch_gpu_wake_word;
+void nvxnu_wword_wake(struct switch_gpu_wake_word *word, int pass);
+int nvxnu_wword_idle(struct switch_gpu_wake_word *word, nvxnu_u32 seq, nvxnu_u64 deadline_ns);
+void nvxnu_wword_wake_due(struct switch_gpu_wake_word *word, nvxnu_u32 seq, const char *what,
+			  nvxnu_u32 value);
 nvxnu_u32 nvxnu_wake_seq(void);
 void nvxnu_wake(void);
 int nvxnu_idle(nvxnu_u32 seq, nvxnu_u64 deadline_ns);

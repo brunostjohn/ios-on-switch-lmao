@@ -9,7 +9,8 @@
  *   channels      nouveau_chan.c nouveau_channel_ctor()/_init() + nvif/chan906f.c GPFIFO/pushbuf helpers
  *   submission    nouveau_exec.c (one GPFIFO entry per push) + nv84/gf100 fence semaphore release
  * Interrupts, no polled mode: from the end of M1 the GPU's stall/nonstall SPIs drive nvkm_intr from a work loop
- * (nvxnu_irq_start, shim/xnu_glue.cpp) and every wait sleeps in nvxnu_idle(); each job's fence also raises a nonstall
+ * (nvxnu_irq_start, shim/xnu_glue.cpp) and every wait sleeps on a wake word (its channel's, tgm_waiter_idle, or the
+ * global one, nvxnu_idle); each job's fence also raises a nonstall
  * interrupt (NON_STALL_INTERRUPT after the semaphore release, as nouveau's nvc0_fence_emit32) that a per-channel
  * NON_STALL_INTR event turns into a wake (a job's internal fences raise none: SwitchGpuJobFences.h). A fence found
  * complete with no wake panics (nvxnu_wake_due).
@@ -71,6 +72,8 @@
 #include "TegraGM20BGpu.h"
 #include "SwitchGpuJobFences.h"
 #include "SwitchGpuQuiet.h"
+#include "SwitchGpuWakeWord.h"
+#include "SwitchGpuChanTable.h"
 #include "SwitchGpuWriterPromise.h"
 #include "SwitchGpuPromiseGiveUp.h"
 #include "SwitchGpuJobTiming.h"
@@ -129,7 +132,7 @@ noinline void tgm_gpu_lock(void);
  * by id; a waiter of another channel on the same word wakes, finds its fence unchanged and sleeps again. Static: a
  * waiter may still sleep on its channel's word while the channel is destroyed. */
 #define TGM_WAITERS 128
-extern volatile u32 tgm_waiter_words[];
+extern struct switch_gpu_wake_word tgm_waiter_words[];
 extern u64 tgm_waiter_woken_ns[];
 
 struct wstat_state {
@@ -138,7 +141,9 @@ struct wstat_state {
 	/* quiet job ends; waiters' asks, wake entries pushed, idle settles (gpu_quiet.c) */
 	u32 quiet, asked, pushed, settled;
 	u64 lat_sum, lat_max;
-	u64 stall, nonstall; /* the interrupt passes at the window's start */
+	u64 stall, nonstall;     /* the interrupt passes at the window's start */
+	u64 cpus[4], filters[4]; /* the passes and the nonstall filters by CPU at its start */
+	u64 global_wakeups;      /* the global word's wakeups at its start */
 };
 extern struct wstat_state tgm_wstat;
 extern struct tgm_gate tgm_sc7_gate;
@@ -246,7 +251,6 @@ struct tgm_chan {
 	struct nvif_object user;
 	struct nvif_object obj[5];
 	struct nvif_event kill;
-	struct nvif_event nonstall;
 	struct nvif_chan chan;
 	void *ring; /* push | gpfifo | sema, pool memory */
 	u64 ring_pa, ring_va;
@@ -259,7 +263,6 @@ struct tgm_chan {
 	u64 fence_gpu;
 	u32 submitted;
 	u32 event_through; /* its jobs through this seqno release event signals mid-job (SwitchGpuEventWord.h) */
-	u64 irq_state;
 	u32 error;
 	u32 chid;
 	int nobj;
@@ -306,7 +309,6 @@ struct tgm_chan {
 	 * leave the GPU (PTIMER), whether an app held the GPU at its kick, whether acquires came before its start stamp */
 	struct switch_gpu_jobs jobs;
 
-	u32 gov_done;   /* idle clock: last seqno counted retired (idle_retire) */
 	u32 woken_done; /* the completed seqno chan_wake_waiters last looked at */
 	u64 wanted;     /* the lowest seqno a fence waiter sleeps for (switch_gpu_waiter_want) */
 	struct switch_gpu_quiet quiet;
@@ -322,6 +324,10 @@ struct tgm_chan {
 	u64 stat_exec,
 		stat_exec_max; /* stats: this window's stamped exec time (PTIMER units), for its owner */
 	u32 stat_exec_n;
+	/* stats, written by the channel's submission owner alone and summed by the waits line (`seen`: its last sum): high
+	 * kicks that read no PFIFO register, and jobs with pushes that end with their own interrupt by why */
+	u32 stat_unread, stat_unread_seen;
+	u32 stat_loud[SWITCH_GPU_LOUD_REASONS], stat_loud_seen[SWITCH_GPU_LOUD_REASONS];
 
 	/* stats: each job's seqnos by its first, the job being timed, and this window's jobs (SwitchGpuJobTiming.h) */
 	struct {
@@ -380,6 +386,9 @@ struct tgm_chan {
 
 #define CHAN_SCRUB 2 /* the pool scrubber's */
 extern struct list_head tgm_live_chans;
+extern struct switch_gpu_chan_table tgm_chan_table;
+/* The interrupt pass, after nvkm's handlers (shim/xnu_glue.cpp gpuInterrupt): every channel with work in flight. */
+void tgm_chans_completed(void);
 extern struct mutex tgm_live_lock;
 extern u64 tgm_live_ids;
 void tgm_chan_describe(struct tgm_chan *chan, char *buf, unsigned int len);
@@ -559,8 +568,6 @@ struct idle_state {
 	int clock_available;
 	u64 last_busy; /* atomic: the last kick or hint (ns) */
 	u64 service_until;
-	u64 kicked,
-		retired; /* atomic: seqnos kicked / retired since boot (SwitchGpuIdleDeadline.h) */
 	/* the periodic line (under clk) */
 	u64 log_start, low_since, low_ns, raise_sum, raise_max;
 	u32 drops, raises, hinted;
@@ -679,6 +686,7 @@ void tgm_present_promises_done(const struct switch_gpu_present_tokens *tokens, u
 			       int copy);
 #endif
 void tgm_chan_need_id(u64 id, u32 seqno);
+void tgm_chan_wanted(uint32_t uid, uint32_t seqno);
 int tgm_chan_announced_id(u64 id, u32 seqno);
 int tgm_chan_announced_uid(u32 uid, u32 seqno);
 int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
@@ -727,6 +735,9 @@ struct present_state {
 	u32 typed_pending;
 	u32 pending; /* seqno of the present in flight, 0: none (atomic: the interrupt pass completes it) */
 	u64 queued;
+	/* the interrupt pass's own: a present job its scan completed, delivered at the pass's end (tgm_present_pass) */
+	u64 fenced_queued;
+	int fenced_due;
 	void (*done)(void *, int);
 	void *arg;
 	u32 completing; /* completions claimed whose callback has not returned yet */
@@ -835,7 +846,7 @@ void tgm_rail_up_locked(const void *site);
 void tgm_zcull_init(struct nvkm_device *device);
 #pragma GCC visibility pop
 
-#include "SwitchGpuActiveIrq.h"
+#include "SwitchGpuFenceWaiter.h"
 #include "SwitchGpuIdleCount.h"
 #include "gpu_inline.h"
 #include "gpu_fenced.h"

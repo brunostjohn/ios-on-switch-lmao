@@ -4,6 +4,7 @@
  * them after every other entry, and their kicks preempt the app channel the GPU is on. */
 #pragma once
 #include <stdint.h>
+#include "SwitchGpuBusy.h"
 
 struct nvkm_device;
 
@@ -23,6 +24,9 @@ int tgm_sched_ramfc(struct nvkm_device *device, unsigned int chid, void (*write)
 		    void *arg, int wait);
 /* What the GPU runs: the app channel on GR, else on the PBDMA; TGM_VICTIM_SWITCHING or TGM_VICTIM_NONE. */
 int tgm_sched_resident(struct nvkm_device *device);
+/* Which channels may have work in flight, and which live ones are below the high level (SwitchGpuBusy.h): gpu_exec.c's
+ * kick, the interrupt pass and gpu_chan.c's channel creation, level and teardown keep it. */
+extern struct switch_gpu_busy tgm_busy;
 
 enum tgm_sched_kick {
 	TGM_KICK_CLEAR,     /* the GPU was idle or on a high channel */
@@ -37,6 +41,7 @@ enum tgm_sched_kick {
 struct tgm_sched_queued {
 	int behind;
 	uint64_t asked_pt;
+	int unread; /* the kick read no PFIFO register: no app work in flight */
 };
 
 /* A high channel kicked work: preempt the app channel holding GR or the PBDMA, if one does. Never waits. */
@@ -83,8 +88,9 @@ void tgm_hold_released(unsigned int chid, uint64_t end_pt, int job_last);
 /* Half its preemption latency after a preempt: if `chid` has left the GPU, the latency comes down. */
 void tgm_hold_check(struct nvkm_device *device, unsigned int chid);
 uint64_t tgm_hold_latency(unsigned int chid);
-/* Whether any tracked app channel is slow enough to be held (tgm_hold_worth); lockless, for opening a window. */
-int tgm_hold_wanted(void);
+/* Whether any tracked app channel is slow enough to be held (tgm_hold_worth), and with `pending` one that has work in
+ * flight (tgm_busy); lockless, for opening a window. */
+int tgm_hold_wanted(int pending);
 /* The window ends (the present completed, or it expired): every held channel is released. */
 void tgm_hold_release(struct nvkm_device *device, uint64_t now);
 /* The channel's cumulative time held, for the stuck timers (tgm_unheld_ns). */
@@ -97,14 +103,20 @@ void tgm_hold_stats(char *buf, unsigned int len);
 void tgm_deadline_init(struct nvkm_device *device);
 /* gpu_exec.c: a high channel kicked (compositor: one of the compositor's, not the present's); app: it found an app on the GPU. */
 void tgm_deadline_kicked(int compositor, int app);
+/* gpu_exec.c, an app channel's kick, between its publication barrier and its doorbell: a plain load unless the frame
+ * end kept a window for a slow app's work; then it opens the window and takes the holds due by now (dl.lock,
+ * hold.lock). 1 when it did. */
+int tgm_deadline_app_kicked(void);
 /* gpu_fenced.h, interrupt pass: a high channel's fence moved past `ns` of GPU time (tgm_gpu_span); `biased` when that is
  * timed from a kick that found an app on the GPU (the frame's time is then not learned). */
 void tgm_deadline_progress(uint64_t ns, int biased);
 /* gpu_fenced.h, interrupt pass: both clocks now (PTIMER calibration), and a PTIMER span in nanoseconds (0 until calibrated). */
 void tgm_deadline_clock(uint64_t ns, uint64_t pt);
 uint64_t tgm_deadline_pt_ns(uint64_t pt_span);
-/* gpu_fenced.h, interrupt pass: the present queued at `queued` completed. */
-void tgm_deadline_presented(uint64_t queued);
+/* The present queued at `queued` completed: at the interrupt pass's end (gpu_present.c tgm_present_pass; `pass` 1), or in
+ * a work item (0: a kill, a late look), whose frame and the next learn no time: a pass may still be adding that frame's
+ * last job, to it or to the next. */
+void tgm_deadline_presented(uint64_t queued, int pass);
 /* gpu_power.c: system sleep and rail-down (every hold released, no callout touching the GPU until the wake or rail-up), and
  * the wake and rail-up. */
 void tgm_deadline_suspend(void);

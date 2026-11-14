@@ -6,9 +6,9 @@
 	0x2000 /* nvif's GET semaphore at +0; stats stamps at CHAN_STAMPS, push profile at CHAN_PROF */
 #define CHAN_BYTES (CHAN_PUSH_BYTES + CHAN_GPFIFO_BYTES + CHAN_SEMA_BYTES)
 
-/* The interrupt pass's own nvxnu_wake() at its end wakes the kernel's waits (channel teardown, sync_for_cpu, system
- * sleep's drain); a channel's fence waiters sleep on its word and wake only once its fence reaches the lowest seqno one
- * of them waits for. */
+/* A channel's fence and room waiters (WaitFence, sync_for_cpu, its teardown, a submission waiting for room) sleep on its
+ * word and wake only once its fence reaches the lowest seqno one of them waits for; the interrupt pass's own nvxnu_wake()
+ * at its end wakes the rest (system sleep's drain, nvkm's waits), and only while one sleeps. */
 static void chan_wake_waiters(struct tgm_chan *chan)
 {
 	u32 done = tgm_chan_completed(chan);
@@ -16,10 +16,10 @@ static void chan_wake_waiters(struct tgm_chan *chan)
 	if (done == chan->woken_done)
 		return;
 	chan->woken_done = done;
-	if (SWITCH_FRAME_TIMELINE)
+	if (SWITCH_FRAME_TIMELINE && !chan->kernel)
 		nvxnu_kdebug(SWITCH_KDBG_GPU_DONE, chan->chid, done, chan->critical);
 	if (switch_gpu_waiter_reached(&chan->wanted, done))
-		chan_wake_all_waiters(chan);
+		chan_wake_all_waiters(chan, 1);
 }
 
 void tgm_chan_want(struct tgm_chan *chan, uint32_t seqno)
@@ -36,7 +36,14 @@ int tgm_chan_announced(struct tgm_chan *chan, uint32_t seqno)
 	return announced && (s32)(tgm_chan_completed(chan) - end) >= 0;
 }
 
+struct switch_gpu_chan_table tgm_chan_table;
+
 #include "SwitchGpuChannelCompletion.h"
+
+void tgm_chans_completed(void)
+{
+	chans_completed();
+}
 
 void tgm_chan_on_fence(struct tgm_chan *chan, void (*fenced)(void *arg), void *arg)
 {
@@ -52,7 +59,6 @@ static void chan_free(struct tgm_chan *chan)
 		tgm_stats_gr_unbind(chan);
 	if (chan->high || chan->tracked)
 		tgm_sched_forget(tgm_gpu.device, chan->chid);
-	nvif_event_dtor(&chan->nonstall);
 	nvif_event_dtor(&chan->kill);
 	switch_gpu_timeline_close(chan->timeline);
 	chan->timeline = NULL;
@@ -112,12 +118,14 @@ void tgm_chan_set_level(struct tgm_chan *chan, unsigned int level)
 		}
 		WRITE_ONCE(chan->tracked, 0);
 		chan->critical = 1;
-		/* chan_nonstall reads the job records once it sees high */
+		/* chan_completion reads the job records once it sees high */
 		__atomic_store_n(&chan->high, 1, __ATOMIC_RELEASE);
+		switch_gpu_busy_level(&tgm_busy, chan->chid, 0);
 		tgm_sched_level(tgm_gpu.device, chan->chid, TGM_LEVEL_HIGH);
 	} else {
 		WRITE_ONCE(chan->high, 0);
 		chan->critical = 0;
+		switch_gpu_busy_level(&tgm_busy, chan->chid, 1);
 		tgm_sched_level(tgm_gpu.device, chan->chid, level);
 	}
 	if (compositor_timeslice_on())
@@ -233,7 +241,6 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	switch_gpu_quiet_init(&chan->quiet, chan->submitted);
 	chan->stat_done = chan->submitted;
 	chan->woken_done = chan->submitted;
-	chan->gov_done = chan->submitted;
 	chan->progress_done = chan->submitted;
 	chan->seen_done = chan->submitted;
 	chan->ring = dma_alloc_attrs(&tgm_gpu_pdev.dev, CHAN_BYTES, &chan->ring_pa, GFP_KERNEL,
@@ -326,13 +333,6 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 		ret = nvif_event_allow(&chan->kill);
 	if (ret)
 		goto fail;
-	/* nouveau_fence_context_new(): the fence's nonstall interrupt (uchan.c NVIF_CHAN_EVENT_V0_NON_STALL_INTR); its
-	 * allow sets PFIFO_INTR_EN_0 bit 31 (gf100_fifo_nonstall_allow). Without it, fences are still seen by polling. */
-	host->type = NVIF_CHAN_EVENT_V0_NON_STALL_INTR;
-	ret = nvif_event_ctor(&chan->user, "fenceNonStallIntr", args.chan.chid, chan_nonstall, true,
-			      &kargs.ev, sizeof(kargs), &chan->nonstall);
-	if (ret)
-		goto fail;
 	ret = nvif_chan906f_ctor(&chan->chan, chan->user.map.ptr,
 				 (u8 *)chan->ring + CHAN_PUSH_BYTES, CHAN_GPFIFO_BYTES, chan->ring,
 				 chan->ring_va, CHAN_PUSH_BYTES,
@@ -375,6 +375,9 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 		goto fail;
 	}
 	list_add_tail(&chan->live, &tgm_live_chans);
+	switch_gpu_busy_open(&tgm_busy, chan->chid, chan->submitted);
+	switch_gpu_busy_level(&tgm_busy, chan->chid, 1);
+	switch_gpu_chan_table_set(&tgm_chan_table, chan->chid, chan);
 	tgm_fault_publish(chan);
 	mutex_unlock(&tgm_live_lock);
 	*pchan = chan;
@@ -447,12 +450,13 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	    switch_gpu_quiet_need(&chan->quiet, chan->submitted))
 		tgm_chan_quiet_wake(chan);
 	for (;;) {
-		u32 seq = nvxnu_wake_seq();
+		u32 seq = tgm_waiter_seq(waiter);
+		switch_gpu_waiter_want(&chan->wanted, chan->submitted);
 		if (chan->error || (s32)(tgm_chan_completed(chan) - chan->submitted) >= 0 ||
 		    nvxnu_nanotime() >= end)
 			break;
-		if (!nvxnu_idle(seq, end) && tgm_chan_announced(chan, chan->submitted))
-			nvxnu_wake_due(seq, "fence", chan->submitted);
+		if (!tgm_waiter_idle(waiter, seq, end) && tgm_chan_announced(chan, chan->submitted))
+			tgm_waiter_unwoken(waiter, seq, chan->submitted);
 	}
 	/* tearing down a channel that still runs would free pages the GPU is using: its owner is gone, so it is killed
 	 * as a hung client's is, and the teardown waits for that */
@@ -463,12 +467,13 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	 * pass of this channel after the teardown: the teardown hands the watch to its work item, as a kill does. */
 	if (!chan->kernel)
 		present_watch_fenced(chan, 1);
-	/* the idle clock's count: what it finished, and (a dead channel) what it never will */
-	idle_retire(chan, chan->submitted);
+	switch_gpu_busy_close(&tgm_busy, chan->chid);
 	mutex_lock(&tgm_live_lock);
 	list_del(&chan->live);
 	order_forget(chan);
 	mutex_unlock(&tgm_live_lock);
+	switch_gpu_chan_table_set(&tgm_chan_table, chan->chid, NULL);
+	nvxnu_pass_barrier();
 	tgm_gpu_lock();
 	held = stats_on() ? nvxnu_nanotime() : 0;
 	chan_free(chan);
@@ -479,7 +484,7 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	}
 	mutex_unlock(&tgm_gpu.lock);
 	*pchan = NULL;
-	nvxnu_word_wake(&tgm_waiter_words[waiter]);
+	nvxnu_wword_wake(&tgm_waiter_words[waiter], 0);
 }
 struct fences_state tgm_fence_pages;
 u64 tgm_fences_pas

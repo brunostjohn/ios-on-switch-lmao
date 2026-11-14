@@ -789,6 +789,9 @@ void tgm_stats_bind(int map, uint64_t pages, uint64_t ns);
 /* A fence wait that slept on `waiter`, then woke (woken 1) or reached its deadline (0), and found its fence done or
  * not: the "waits" line's wakes, waits woken at their seqno, and wake-to-waiter latency. */
 void tgm_stats_wait(uint32_t waiter, int woken, int done);
+/* Debug kernels, by the channel's submission owner: a job with pushes that ends with its own interrupt, by why
+ * (SwitchGpuQuiet.h enum switch_gpu_loud). */
+void tgm_stats_loud(struct tgm_chan *chan, uint32_t reason);
 
 /* A SubmitAddress by phase (TegraGM20BUserClient.cpp): resolving its uses under the connection lock, owning them
  * (backing locks, dependency scan, room waits), chan_exec, and the commit after it. The "exec by process" line. */

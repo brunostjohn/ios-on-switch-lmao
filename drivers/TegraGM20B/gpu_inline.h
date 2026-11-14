@@ -89,7 +89,8 @@ extern inline __attribute__((gnu_inline)) uint32_t tgm_chan_waiter(struct tgm_ch
 	return (uint32_t)(chan->id % TGM_WAITERS);
 }
 
-static inline void chan_wake_all_waiters(struct tgm_chan *chan)
+/* pass: the interrupt pass, the one writer of the words' pass sequences (SwitchGpuWakeWord.h) */
+static inline void chan_wake_all_waiters(struct tgm_chan *chan, int pass)
 {
 	u32 waiter = tgm_chan_waiter(chan);
 
@@ -97,7 +98,7 @@ static inline void chan_wake_all_waiters(struct tgm_chan *chan)
 		__atomic_store_n(&tgm_waiter_woken_ns[waiter], nvxnu_nanotime(), __ATOMIC_RELAXED);
 		__atomic_fetch_add(&tgm_wstat.wakes, 1, __ATOMIC_RELAXED);
 	}
-	nvxnu_word_wake(&tgm_waiter_words[waiter]);
+	nvxnu_wword_wake(&tgm_waiter_words[waiter], pass);
 }
 
 /* tgm_live_lock held; by id, else (id 0) by hardware channel */
@@ -189,7 +190,7 @@ static inline void idle_stats(void)
 	nvxnu_mutex_unlock(tgm_idle.clk);
 	nvxnu_stats("tegra-gm20b: idle clock %llu ms: %llu.%llu%% at %u kHz, %u drops, %u raises "
 		    "(%u by a hint), "
-		    "raise mean %llu ns max %llu ns; %llu in flight; now %d kHz",
+		    "raise mean %llu ns max %llu ns; work in flight %d; now %d kHz",
 		    span / 1000000, low * 100 / span, low * 1000 / span % 10, tgm_idle.idle_khz,
 		    drops, raises, hinted, raises ? sum / raises : 0, max, idle_in_flight(),
 		    nvkm_clk_read(tgm_gpu.device->clk, nv_clk_src_gpc));

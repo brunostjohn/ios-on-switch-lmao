@@ -110,7 +110,7 @@ int tgm_chan_killed(struct nvif_event *event, void *repv, u32 repc)
 	nvxnu_log("tegra-gm20b: GPU error in %s (channel %u): channel killed, GPU running: %s\n",
 		  chan->owner, chan->chid, report);
 	nvxnu_wake();
-	chan_wake_all_waiters(chan);
+	chan_wake_all_waiters(chan, 0);
 	if (READ_ONCE(chan->fenced))
 		chan->fenced(chan->fenced_arg);
 	return NVIF_EVENT_DROP;

@@ -45,7 +45,8 @@ int tgm_chan_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 
 /* Room for gpfifo_nr entries and push_nr dwords, waited for by interrupt: every submission's GET report comes before its
  * fence's nonstall interrupt (chan_fence), whose pass ends in nvxnu_wake(), so nvif's own wait then finds the room at
- * once and never spins; a quiet newest job gets its wake entry first. The caller owns the channel's submissions and is
+ * once and never spins. Not the channel's word: a pass between the fence's release and the GET report finds no room,
+ * and the job's own pass then sees no progress to wake it for. A quiet newest job gets its wake entry first. The caller owns the channel's submissions and is
  * inside the gate. -ETIMEDOUT after 1 s. */
 int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 {
@@ -65,6 +66,18 @@ int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 		}
 	}
 	return ret;
+}
+
+/* GP_PUT after the kick's one store barrier (chan506f.c's kick, here so a slow app's first kick into a frame whose
+ * deadline window was kept is held between the two). DSB ST lets no later instruction run before the earlier stores are
+ * complete: the kicked seqno before the look at the window, and a hold's register writes before the doorbell. */
+static void chan_doorbell(struct tgm_chan *chan)
+{
+	wmb();
+	if (chan->app && !chan->high && tgm_deadline_app_kicked()) {
+		wmb();
+	}
+	writel_relaxed(chan->chan.gpfifo.cur, (u8 __iomem *)chan->chan.userd.map.ptr + 0x8c);
 }
 
 /* Fence push: semaphore release of the next 32-bit seqno after wait-for-idle, then nvif's GET report, then a nonstall
@@ -128,9 +141,6 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 		/* NOLINTNEXTLINE(bugprone-signed-bitwise): nouveau's PUSH_MTHD computes in int */
 		PUSH_MTHD(push, NV906F, NON_STALL_INTERRUPT, 0);
 	}
-	__asm__ volatile(
-		"dsb sy" ::
-			: "memory"); /* client WC writes and our push reach DRAM before GP_PUT */
 	chan->submit_ns = nvxnu_nanotime();
 	if (stats_on())
 		for (s = first; (s32)(next - s) >= 0; s++)
@@ -147,18 +157,20 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 		if (!announce)
 			__atomic_fetch_add(&tgm_wstat.quiet, 1, __ATOMIC_RELAXED);
 	}
-	if (switch_gpu_irq_arm(&chan->irq_state, next) && nvif_event_allow(&chan->nonstall))
-		nvxnu_panic("SwitchGpu: cannot arm channel completion");
 	WRITE_ONCE(chan->submitted, next);
-	idle_kicked(first, next);
+	switch_gpu_busy_kick(&tgm_busy, chan->chid, next);
 	switch_emc_gpu_submit();
-	chan->chan.defer_kick = false;
+	chan->chan.defer_kick = true;
 	PUSH_KICK(push);
+	chan->chan.defer_kick = false;
+	chan_doorbell(chan);
 	if (chan->high) {
 		struct tgm_sched_queued queued;
 		enum tgm_sched_kick kick = tgm_sched_kicked(tgm_gpu.device, chan->chid, &queued);
 
 		WRITE_ONCE(job->app, kick != TGM_KICK_CLEAR);
+		if (stats_on() && queued.unread)
+			WRITE_ONCE(chan->stat_unread, chan->stat_unread + 1);
 		if (stats_on())
 			for (s = next; (s32)(s - first) >= 0; s--)
 				WRITE_ONCE(chan->stat_kick[s % CHAN_NSTAMPS], kick);
@@ -477,6 +489,9 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 		       (visibility & SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY) || !chan->visible_cpu;
 	int quiet = (visibility & SWITCH_GPU_SUBMIT_QUIET) &&
 		    __atomic_load_n(&chan->wake, __ATOMIC_ACQUIRE);
+
+	if (stats_on() && (visibility & SWITCH_GPU_SUBMIT_QUIET) && !quiet && count)
+		tgm_stats_loud(chan, SWITCH_GPU_LOUD_NO_WAKE);
 
 	if (chan->error)
 		return -EIO;

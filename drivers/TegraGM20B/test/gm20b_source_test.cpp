@@ -283,10 +283,8 @@ TEST(GM20BPoolScrubSource, ScrubberFreesOnlyFromItsFence)
 	EXPECT_TRUE(submit.Has("nvxnu_work_schedule_after(tgm_scrub.deadline, SCRUB_NS)"));
 	EXPECT_FALSE(submit.Has("nvxnu_idle"));  // no CPU wait for the copy engine
 	EXPECT_TRUE(Block(gpu(), "static void scrub_deadline(void *arg)").Has("nvxnu_panic("));
-	EXPECT_TRUE(
-		Block(gpu(),
-		      "static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)")
-			.Has("chan->kernel == CHAN_SCRUB"));
+	EXPECT_TRUE(Block(gpu(), "static void chan_completion(struct tgm_chan *chan)")
+			    .Has("chan->kernel == CHAN_SCRUB"));
 }
 
 // T-v5a: the scrubber stuck on PBDMA0 with every engine idle went to a last resort that reset only busy or switching
@@ -519,8 +517,7 @@ TEST(GM20BSleepSource, GpuTouchingPathsGoThroughTheGate)
 		EXPECT_TRUE(body.Before("if (!gate_try())", "gate_leave();"));
 	}
 	// the drain's and the wake's fence waits are woken by the scrubber's fences too
-	EXPECT_TRUE(Block(gpu(), "static int chan_nonstall(struct nvif_event *event, "
-				 "void *repv, u32 repc)")
+	EXPECT_TRUE(Block(gpu(), "static void chan_completion(struct tgm_chan *chan)")
 			    .Has("if (tgm_gate_is_shut(&tgm_sc7_gate)) nvxnu_wake();"));
 	// a pass for an interrupt taken before the GPU's power went reads nothing
 	EXPECT_TRUE(Block(SourceText("../shim/xnu_glue.cpp"),
@@ -533,25 +530,26 @@ TEST(GM20BSleepSource, GpuTouchingPathsGoThroughTheGate)
 // left to the kernel's waits.
 TEST(GM20BFenceWakeSource, WaitersWakeByChannel)
 {
-	const CodeText nonstall = Block(
-		gpu(), "static int chan_nonstall(struct nvif_event *event, void *repv, u32 repc)");
-	EXPECT_TRUE(
-		nonstall.Has("} else { chan_wake_waiters(chan); present_watch_fenced(chan, 0); }"));
+	const CodeText nonstall =
+		Block(gpu(), "static void chan_completion(struct tgm_chan *chan)");
+	EXPECT_TRUE(nonstall.Before("WRITE_ONCE(chan->progress_ns, now); chan_wake_waiters(chan);",
+				    "if (chan->kernel == CHAN_SCRUB) {"));
+	EXPECT_TRUE(nonstall.Has("} else { present_watch_fenced(chan, 0); }"));
 	EXPECT_EQ(nonstall.Count("nvxnu_wake();"),
 		  1u);  // the scrubber's, while the sleep gate is shut
 	const CodeText wake = Block(gpu(), "static void chan_wake_waiters(struct tgm_chan *chan)");
 	EXPECT_TRUE(wake.Has("if (done == chan->woken_done) return;"));
 	EXPECT_TRUE(wake.Has("if (switch_gpu_waiter_reached(&chan->wanted, done)) "
-			     "chan_wake_all_waiters(chan);"));
+			     "chan_wake_all_waiters(chan, 1);"));
 	EXPECT_TRUE(Block(gpu(), "int tgm_chan_killed(struct nvif_event *event, void "
 				 "*repv, u32 repc)")
-			    .Has("chan_wake_all_waiters(chan);"));
-	EXPECT_TRUE(
-		Block(gpu(), "void tgm_chan_del(struct tgm_chan **pchan)")
-			.Before("*pchan = NULL;", "nvxnu_word_wake(&tgm_waiter_words[waiter]);"));
+			    .Has("chan_wake_all_waiters(chan, 0);"));
+	EXPECT_TRUE(Block(gpu(), "void tgm_chan_del(struct tgm_chan **pchan)")
+			    .Before("*pchan = NULL;",
+				    "nvxnu_wword_wake(&tgm_waiter_words[waiter], 0);"));
 	EXPECT_TRUE(Block(SourceText("../shim/xnu_glue.cpp"),
 			  "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)")
-			    .Has("nvxnu_wake();"));
+			    .Has("wakeAfterPass();"));
 	const CodeText wait = Block(client(), "IOReturn AGXDeviceUserClient::waitFence(");
 	EXPECT_TRUE(
 		wait.Before("seq = tgm_waiter_seq(waiter);", "tgm_chan_want(chan, in->seqno);"));
@@ -585,7 +583,6 @@ TEST(GM20BKillSource, AKilledChannelLeavesItsConnectionWorking)
 		killed.Before("switch_gpu_timeline_failed(", "__atomic_store_n(chan->fence_cpu"));
 	const CodeText freed = Block(gpu(), "static void chan_free(struct tgm_chan *chan)");
 	EXPECT_TRUE(freed.Before("nvif_event_dtor(&chan->kill)", "switch_gpu_timeline_close("));
-	EXPECT_TRUE(freed.Before("nvif_event_dtor(&chan->nonstall)", "switch_gpu_timeline_close("));
 	EXPECT_TRUE(Block(client(), "bool AGXDeviceUserClient::bindingIdle(")
 			    .Has("!tgm_chan_error(chans_[slot])"));
 }
@@ -1161,16 +1158,16 @@ TEST(GM20BShimSource, InterruptPassReportsUsePlainFormats)
 }
 
 // A channel made in a slot continues its predecessor's fence sequence, so every cursor the interrupt pass compares with
-// the completed seqno starts at that fence. From 0, the idle clock would count the predecessor's whole sequence retired,
-// its in-flight count (kicked - retired) would underflow, and the GPU would never drop its clock or rail-gate.
+// the completed seqno starts at that fence, and the idle clock's tgm_busy words for the slot start there too.
 TEST(GM20BChannelSource, SeqnoCursorsStartAtTheSlotsFence)
 {
 	const CodeText create = Block(gpu(), "static int chan_new(");
 	EXPECT_TRUE(create.Has("chan->submitted = READ_ONCE(*fence_cpu);"));
-	for (const char *cursor :
-	     {"stat_done", "woken_done", "gov_done", "progress_done", "seen_done"})
+	for (const char *cursor : {"stat_done", "woken_done", "progress_done", "seen_done"})
 		EXPECT_TRUE(create.Has(std::string("chan->") + cursor + " = chan->submitted;"))
 			<< cursor;
+	EXPECT_TRUE(Block(gpu(), "static int chan_new(")
+			    .Has("switch_gpu_busy_open(&tgm_busy, chan->chid, chan->submitted);"));
 }
 
 // nvkm_chan_error preempts from the interrupt pass with interrupts off under the channel's spinlock: the wrapped preempt
@@ -1375,7 +1372,7 @@ TEST(GM20BPresentSource, AWatchedPresentIsCompletedByItsProducersInterruptPass)
 		Block(SourceText("../shim/xnu_glue.cpp"),
 		      "void gpuInterrupt(OSObject *, IOInterruptEventSource *source, int)");
 	EXPECT_TRUE(pass.Before("nvxnu_poll_irqs();", "tgm_present_pass();"));
-	EXPECT_TRUE(pass.Before("tgm_present_pass();", "nvxnu_wake();"));
+	EXPECT_TRUE(pass.Before("tgm_present_pass();", "wakeAfterPass();"));
 	const CodeText deliver = Block(gpu(), "void tgm_present_pass(void)");
 	EXPECT_TRUE(deliver.Has("switch_gpu_present_watch_take_visible("));
 	// the pass's own thread: nothing may wait for a GPU interrupt
@@ -1451,12 +1448,12 @@ TEST(GM20BPresentSource, ACopyEngineResetRedoesThePresentOnTheGpu)
 	const CodeText fenced = Block(gpu(), "static inline void present_fenced(");
 	EXPECT_TRUE(fenced.Before(
 		"redo = pending; if (__atomic_compare_exchange_n(&tgm_present.redo, &redo, 0,",
-		"nvxnu_work_schedule(tgm_present.completion_work);"));
+		"tgm_present.fenced_due = 1;"));
 	EXPECT_TRUE(
 		fenced.Before("__atomic_load_n(&tgm_present.redoing, __ATOMIC_ACQUIRE)) return;",
 			      "redo = pending; if ("));
 	EXPECT_TRUE(fenced.Before("nvxnu_work_schedule(tgm_present.redo_work); return; }",
-				  "nvxnu_work_schedule(tgm_present.completion_work);"));
+				  "tgm_present.fenced_due = 1;"));
 	const CodeText redo = Block(gpu(), "void tgm_present_redo_work(");
 	EXPECT_TRUE(redo.Before("|| !gate_try()) return;", "tgm_present_push_copy(push);"));
 	EXPECT_TRUE(redo.Before("tgm_present_push_copy(push);", "chan_fence_volatile(chan);"));
@@ -1538,8 +1535,10 @@ TEST(GM20BRecoverSource, ASecondStuckLoadKillsTheClientOrGoesToTheKernelStallRul
 TEST(GM20BPresentSource, TypedProducerValidationAndReleaseNeverRunUnderTheIrqEventLock)
 {
 	const CodeText irq = Block(gpu(), "static inline void present_fenced(");
-	EXPECT_TRUE(irq.Has("nvxnu_work_schedule(tgm_present.completion_work)"));
+	EXPECT_TRUE(irq.Has("tgm_present.fenced_due = 1;"));
 	EXPECT_FALSE(irq.Has("switch_gpu_present_tokens_finish"));
+	EXPECT_TRUE(Block(gpu(), "void tgm_present_pass(void)")
+			    .Has("nvxnu_work_schedule(tgm_present.completion_work);"));
 	const CodeText complete = Block(gpu(), "static void present_typed_complete(");
 	EXPECT_TRUE(complete.Before("mutex_unlock(&tgm_present.lock);",
 				    "switch_gpu_present_tokens_finish_visible("));
@@ -1655,7 +1654,8 @@ TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePubl
 	EXPECT_FALSE(internal.Has("defer_kick"));
 	EXPECT_TRUE(internal.Before("RELEASE_SIZE, 4BYTE));", "PUSH_KICK(push);"));
 	EXPECT_TRUE(exec.Before("chan->chan.defer_kick = true;", "last = switch_gpu_job_emit("));
-	EXPECT_TRUE(fence.Before("chan->chan.defer_kick = false;", "PUSH_KICK(push);"));
+	EXPECT_TRUE(fence.Before("chan->chan.defer_kick = true;", "PUSH_KICK(push);"));
+	EXPECT_TRUE(fence.Before("PUSH_KICK(push);", "chan_doorbell(chan);"));
 	EXPECT_TRUE(fence.Before(
 		"job = switch_gpu_jobs_kick(&chan->jobs, first, next, chan->submit_ns, !announce);",
 		"PUSH_KICK(push);"));

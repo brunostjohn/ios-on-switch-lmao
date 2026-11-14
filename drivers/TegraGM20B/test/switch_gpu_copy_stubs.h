@@ -23,6 +23,11 @@ inline void IOLockLock(IOLock *p) __attribute__((no_thread_safety_analysis))
 	p->lock();
 }
 
+inline bool IOLockTryLock(IOLock *p) __attribute__((no_thread_safety_analysis))
+{
+	return p->try_lock();
+}
+
 inline void IOLockUnlock(IOLock *p) __attribute__((no_thread_safety_analysis))
 {
 	p->unlock();
@@ -113,7 +118,10 @@ inline void thread_call_free(thread_call_t p)
 	delete p;
 }
 
+inline unsigned switchCopyThreadCalls;
+
 inline void thread_call_enter(thread_call_t p)
 {
+	++switchCopyThreadCalls;
 	p->pending = true;
 }

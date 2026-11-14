@@ -32,6 +32,7 @@
 #define SCHED_RUNLS 4
 
 static u8 level[SCHED_CHIDS] = {[0 ... SCHED_CHIDS - 1] = TGM_LEVEL_FOREGROUND};
+struct switch_gpu_busy tgm_busy;
 
 /* nvkm's channel functions, the preempt wrapped (sched_chan_preempt) */
 static struct nvkm_chan_func chan_func;
@@ -381,6 +382,8 @@ int tgm_sched_resident(struct nvkm_device *device)
 	struct nvkm_runl *runl = NULL;
 	struct nvkm_engn *engn = NULL;
 
+	if (!switch_gpu_busy_low(&tgm_busy))
+		return TGM_VICTIM_NONE;
 	nvkm_runl_foreach(runl, device->fifo)
 	{
 		if (runl->func->update != sched_update)
@@ -416,11 +419,16 @@ enum tgm_sched_kick tgm_sched_kicked(struct nvkm_device *device, unsigned int ch
 	int victim = 0;
 
 	queued->behind = -1;
+	queued->unread = 0;
 	nvkm_runl_foreach(runl, device->fifo)
 	{
 		if (runl->func->update != sched_update || !is_high(chid) ||
 		    (int)chid >= runl->chid->nr || !test_bit(chid, runl->chid->used))
 			continue;
+		if (!switch_gpu_busy_low(&tgm_busy)) {
+			queued->unread = 1;
+			return counted(TGM_KICK_CLEAR);
+		}
 		victim = sched_victim(device, runl);
 		if (victim == TGM_VICTIM_SWITCHING) {
 			const u32 eng = sched_gr_status(device, runl);

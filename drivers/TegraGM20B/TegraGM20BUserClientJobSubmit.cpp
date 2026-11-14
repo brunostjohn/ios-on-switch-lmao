@@ -253,7 +253,7 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 	switch_gpu_backing_transaction transaction = {};
 	switch_gpu_backing_token completion = {};
 	uint32_t seqno = 0, dependencies = 0, jobVisibility = 0, leaseCount = 0;
-	bool ownershipBusy = false, ownershipFailed = false;
+	bool ownershipBusy = false, ownershipFailed = false, semanticBound = false;
 refresh:
 	if (admissionContinue) {
 		for (uint32_t i = 0; i < surfaceCount; ++i)
@@ -334,7 +334,8 @@ refresh:
 			error = -28;
 		if (!error) {
 			job.phases.end(TGM_SUBMIT_LOCK);
-			const bool quietEnd = switch_gpu_quiet_end(quiet, events->semanticFence(),
+			semanticBound = events->semanticFence();
+			const bool quietEnd = switch_gpu_quiet_end(quiet, semanticBound,
 								   scanoutWrites, closesGroup);
 			jobVisibility =
 				switch_gpu_job_visibility(submit, events->signals(),
@@ -399,6 +400,13 @@ refresh:
 	switch_gpu_path_taken(SWITCH_GPU_PATH_SHARED_USE, head.shared_count);
 	switch_gpu_path_taken(SWITCH_GPU_PATH_QUIET_JOB,
 			      (jobVisibility & SWITCH_GPU_SUBMIT_QUIET) && count ? 1 : 0);
+#if TGM_STATS
+	if (count)
+		tgm_stats_loud(chan,
+			       switch_gpu_quiet_why((head.flags & TegraGM20BJobQuiet) != 0,
+						    (head.flags & TegraGM20BJobHasEvents) != 0,
+						    semanticBound, scanoutWrites, closesGroup));
+#endif
 	out->seqno = seqno;
 	out->reserved = 0;
 	return kIOReturnSuccess;

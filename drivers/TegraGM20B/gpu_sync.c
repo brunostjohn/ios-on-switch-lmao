@@ -169,15 +169,18 @@ int tgm_order_waits(struct tgm_chan *chan)
 
 static int sync_wait(u64 id, u32 seqno, u64 end)
 {
+	const u32 waiter = (u32)(id % TGM_WAITERS);
+
 	tgm_chan_need_id(id, seqno);
 	for (;;) {
-		u32 seq = nvxnu_wake_seq();
+		u32 seq = tgm_waiter_seq(waiter);
+		tgm_chan_wanted((u32)id, seqno);
 		if (sync_done(id, seqno))
 			return 0;
 		if (nvxnu_nanotime() >= end)
 			return -ETIMEDOUT;
-		if (!nvxnu_idle(seq, end) && tgm_chan_announced_id(id, seqno))
-			nvxnu_wake_due(seq, "fence", seqno);
+		if (!tgm_waiter_idle(waiter, seq, end) && tgm_chan_announced_id(id, seqno))
+			tgm_waiter_unwoken(waiter, seq, seqno);
 	}
 }
 
@@ -313,6 +316,7 @@ static void writer_wait(u32 uid, u32 seqno, const struct tgm_relayout_writer *ac
 			u32 nacquired)
 {
 	const u64 start = nvxnu_nanotime();
+	const u32 waiter = uid % TGM_WAITERS;
 	struct tgm_chan *chan = NULL;
 	enum tgm_hang verdict = TGM_HANG_STUCK;
 	u32 late = 0;
@@ -322,14 +326,16 @@ static void writer_wait(u32 uid, u32 seqno, const struct tgm_relayout_writer *ac
 		const u64 end = nvxnu_nanotime() + TGM_WRITER_HANG_NS;
 
 		for (;;) {
-			const u32 seq = nvxnu_wake_seq();
+			const u32 seq = tgm_waiter_seq(waiter);
 
+			tgm_chan_wanted(uid, seqno);
 			if (tgm_writer_done(uid, seqno))
 				return;
 			if (nvxnu_nanotime() >= end)
 				break;
-			if (!nvxnu_idle(seq, end) && tgm_chan_announced_uid(uid, seqno))
-				nvxnu_wake_due(seq, "fence", seqno);
+			if (!tgm_waiter_idle(waiter, seq, end) &&
+			    tgm_chan_announced_uid(uid, seqno))
+				tgm_waiter_unwoken(waiter, seq, seqno);
 		}
 		if (tgm_gpu.stage < 3)
 			continue;

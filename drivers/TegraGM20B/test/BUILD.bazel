@@ -395,7 +395,7 @@ host_test(
     srcs = [
         "switch_gpu_quiet_model.h",
         "switch_gpu_quiet_test.cpp",
-        "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
+        "//drivers/TegraGM20B:SwitchGpuFenceWaiter.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:SwitchGpuJobFences.h",
         "//drivers/TegraGM20B:SwitchGpuQuiet.h",
@@ -937,7 +937,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuVmMap.h",
         "//drivers/TegraGM20B:SwitchGpuChannelCompletion.h",
         "//drivers/TegraGM20B:SwitchGpuPresentTokens.h",
-        "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
+        "//drivers/TegraGM20B:SwitchGpuFenceWaiter.h",
         "//drivers/TegraGM20B:recover.c",
         "//drivers/TegraGM20B:recover_engine.c",
         "//drivers/TegraGM20B:recover_held.c",
@@ -1417,6 +1417,7 @@ host_shims(
     headers = [
         "IOKit/IOLib.h",
         "IOKit/IOLocks.h",
+        "kern/cpu_number.h",
     ],
     stubs = "switch_gpu_timeline_stubs.h",
 )
@@ -1481,6 +1482,36 @@ host_test(
         ":timeline",
         ":timeline_kernel",
     ],
+)
+
+# The view's publication and reclamation against filter runs on other CPUs, under ThreadSanitizer: the filter and the
+# timeline built into the test, instrumented with it.
+host_test(
+    name = "switch_gpu_present_filter_tsan_test",
+    srcs = [
+        "switch_gpu_dependency_stub.cpp",
+        "switch_gpu_present_filter_test.cpp",
+        "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuBridge.h",
+        "//drivers/TegraGM20B:SwitchGpuDependencyTrace.h",
+        "//drivers/TegraGM20B:SwitchGpuPresentFilter.cpp",
+        "//drivers/TegraGM20B:SwitchGpuPresentWatch.h",
+        "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
+        "//drivers/TegraGM20B:SwitchGpuTimeline.cpp",
+        "//drivers/TegraGM20B:SwitchGpuTimeline.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    data = [
+        "//drivers/TegraGM20B:gpu_present.c",
+        "//drivers/TegraGM20B:gpu_promise.c",
+        "//drivers/TegraGM20B:shim/xnu_glue.cpp",
+    ],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+    deps = [":timeline_kernel"],
 )
 
 host_test(
@@ -1598,7 +1629,7 @@ host_test(
         "switch_gpu_present_model.h",
         "switch_gpu_present_quiet_test.cpp",
         "switch_gpu_quiet_model.h",
-        "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
+        "//drivers/TegraGM20B:SwitchGpuFenceWaiter.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:SwitchGpuJobFences.h",
         "//drivers/TegraGM20B:SwitchGpuPresentWatch.h",
@@ -1615,7 +1646,7 @@ host_test(
         "switch_gpu_present_model.h",
         "switch_gpu_present_promise_test.cpp",
         "switch_gpu_quiet_model.h",
-        "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
+        "//drivers/TegraGM20B:SwitchGpuFenceWaiter.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:SwitchGpuJobFences.h",
         "//drivers/TegraGM20B:SwitchGpuPresentWatch.h",
@@ -1632,7 +1663,7 @@ host_test(
         "switch_gpu_present_deadline_test.cpp",
         "switch_gpu_present_model.h",
         "switch_gpu_quiet_model.h",
-        "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
+        "//drivers/TegraGM20B:SwitchGpuFenceWaiter.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:SwitchGpuJobFences.h",
         "//drivers/TegraGM20B:SwitchGpuPresentWatch.h",
@@ -1729,7 +1760,9 @@ host_test(
     srcs = [
         "switch_gpu_completion_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuChannelCompletion.h",
-        "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
+        "//drivers/TegraGM20B:SwitchGpuFenceWaiter.h",
+        "//drivers/TegraGM20B:SwitchGpuBusy.h",
+        "//drivers/TegraGM20B:SwitchGpuChanTable.h",
     ],
 )
 
@@ -1758,6 +1791,7 @@ host_test(
     name = "switch_gpu_deadline_test",
     srcs = [
         "switch_gpu_deadline_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBusy.h",
         "//drivers/TegraGM20B:SwitchGpuIdleCount.h",
         "//drivers/TegraGM20B:SwitchGpuIdleDeadline.h",
         "//drivers/TegraGM20B:SwitchGpuJobFences.h",
@@ -2053,28 +2087,35 @@ exports_files(
 )
 
 host_library(
-    name = "active_irq",
+    name = "event_wait",
     srcs = [
         "//drivers/TegraGM20B:nouveau/nvkm/core/event.c",
-        "switch_gpu_active_irq_fixture.c",
+        "nvkm_event_wait_fixture.c",
     ],
     hdrs = [
-        "switch_gpu_active_irq_fixture.h",
-        "active_irq_include/core/event.h",
-        "active_irq_include/core/os.h",
-        "active_irq_include/core/subdev.h",
+        "event_wait_include/core/event.h",
+        "event_wait_include/core/os.h",
+        "event_wait_include/core/subdev.h",
+        "nvkm_event_wait_fixture.h",
         "//drivers/TegraGM20B:nouveau/include/nvkm/core/event.h",
-        "//drivers/TegraGM20B:SwitchGpuActiveIrq.h",
     ],
     c_std = "gnu11",
     copts = ["-Wno-unused-parameter"],
-    includes = ["active_irq_include"],
+    includes = ["event_wait_include"],
 )
 
 host_test(
-    name = "switch_gpu_active_irq_test",
-    srcs = ["switch_gpu_active_irq_test.cpp"],
-    deps = [":active_irq"],
+    name = "nvkm_event_wait_test",
+    srcs = ["nvkm_event_wait_test.cpp"],
+    deps = [":event_wait"],
+)
+
+host_test(
+    name = "switch_gpu_fence_waiter_test",
+    srcs = [
+        "switch_gpu_fence_waiter_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuFenceWaiter.h",
+    ],
 )
 
 host_shims(
@@ -2402,4 +2443,174 @@ host_test(
         ":async_rights_kernel",
         ":compiler_broker",
     ],
+)
+
+# sched.c and deadline.c whole, their #include lines left out for gm20b_sched_stubs.h's stand-ins.
+genrule(
+    name = "sched_source",
+    testonly = True,
+    srcs = ["//drivers/TegraGM20B:sched.c"],
+    outs = ["sched_source.h"],
+    cmd = """
+set -e
+grep -v '^#include' $< > $@
+grep -q '^enum tgm_sched_kick tgm_sched_kicked(' $@
+""",
+)
+
+genrule(
+    name = "deadline_source",
+    testonly = True,
+    srcs = ["//drivers/TegraGM20B:deadline.c"],
+    outs = ["deadline_source.h"],
+    cmd = """
+set -e
+grep -v '^#include' $< > $@
+grep -q '^void tegra_gm20b_compositor_vsync(' $@
+""",
+)
+
+SCHED_UNIT_HDRS = [
+    "gm20b_sched_stubs.h",
+    "//drivers/TegraGM20B:SwitchGpuBusy.h",
+    "//drivers/TegraGM20B:TegraGM20BAcquire.h",
+    "//drivers/TegraGM20B:TegraGM20BCostHist.h",
+    "//drivers/TegraGM20B:TegraGM20BGpu.h",
+    "//drivers/TegraGM20B:TegraGM20BHost.h",
+    "//drivers/TegraGM20B:TegraGM20BKernelHang.h",
+    "//drivers/TegraGM20B:TegraGM20BRecover.h",
+    "//drivers/TegraGM20B:TegraGM20BSched.h",
+    "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",
+    "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
+]
+
+host_library(
+    name = "sched_unit",
+    srcs = [
+        "gm20b_sched_unit.c",
+        ":sched_source",
+    ],
+    hdrs = SCHED_UNIT_HDRS,
+    c_std = "gnu11",
+    copts = ["-Wno-unused-function"],
+    defines = ["DEVELOPMENT=1"],
+)
+
+host_library(
+    name = "deadline_unit",
+    srcs = [
+        "gm20b_deadline_unit.c",
+        ":deadline_source",
+    ],
+    hdrs = SCHED_UNIT_HDRS,
+    c_std = "gnu11",
+    copts = ["-Wno-unused-function"],
+    defines = ["DEVELOPMENT=1"],
+)
+
+host_test(
+    name = "gm20b_sched_kick_test",
+    srcs = ["gm20b_sched_kick_test.cpp"],
+    cxx_std = "c++17",
+    defines = ["DEVELOPMENT=1"],
+    deps = [":sched_unit"],
+)
+
+host_test(
+    name = "gm20b_deadline_window_test",
+    srcs = ["gm20b_deadline_window_test.cpp"],
+    cxx_std = "c++17",
+    defines = ["DEVELOPMENT=1"],
+    deps = [":deadline_unit"],
+)
+
+host_library(
+    name = "switch_gpu_gpfifo_kick",
+    srcs = ["//drivers/TegraGM20B:nouveau/nvif/chan506f.c"],
+    hdrs = [
+        "gpfifo_include/nvif/chan.h",
+        "kick_include/nvif/chan.h",
+    ],
+    c_std = "gnu11",
+    copts = ["-Wno-sign-compare"],
+    includes = ["kick_include"],
+)
+
+host_test(
+    name = "switch_gpu_gpfifo_kick_test",
+    srcs = ["switch_gpu_gpfifo_kick_test.cpp"],
+    deps = [
+        ":switch_gpu_gpfifo",
+        ":switch_gpu_gpfifo_kick",
+    ],
+)
+
+host_test(
+    name = "gm20b_frame_cpu_source_test",
+    srcs = ["gm20b_frame_cpu_source_test.cpp"],
+    data = [
+        "//drivers/TegraGM20B:SwitchGpuChannelCompletion.h",
+        "//drivers/TegraGM20B:gpu_sources",
+        "//drivers/TegraGM20B:nouveau/nvkm/engine/fifo/gk104.c",
+        "//drivers/TegraGM20B:shim/linux.c",
+        "//drivers/TegraGM20B:shim/xnu_glue.cpp",
+    ],
+)
+
+host_test(
+    name = "switch_gpu_busy_test",
+    srcs = [
+        "switch_gpu_busy_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBusy.h",
+    ],
+)
+
+host_test(
+    name = "switch_gpu_wake_word_test",
+    srcs = [
+        "switch_gpu_wake_word_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuWakeWord.h",
+    ],
+)
+
+# The busy words and the wake word between threads, under ThreadSanitizer
+host_test(
+    name = "switch_gpu_busy_tsan_test",
+    srcs = [
+        "switch_gpu_busy_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBusy.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+)
+
+host_test(
+    name = "switch_gpu_wake_word_tsan_test",
+    srcs = [
+        "switch_gpu_wake_word_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuWakeWord.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+)
+
+host_test(
+    name = "switch_gpu_chan_table_test",
+    srcs = [
+        "switch_gpu_chan_table_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuChanTable.h",
+    ],
+)
+
+host_test(
+    name = "switch_gpu_chan_table_tsan_test",
+    srcs = [
+        "switch_gpu_chan_table_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuChanTable.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
 )
