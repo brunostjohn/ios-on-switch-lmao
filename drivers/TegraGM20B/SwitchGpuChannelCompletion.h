@@ -56,7 +56,7 @@ static void chans_completed(void)
 			bits &= bits - 1u;
 			if (!switch_gpu_busy_pending(&tgm_busy, chid))
 				continue;
-			chan = switch_gpu_chan_table_get(&tgm_chan_table, chid);
+			chan = (struct tgm_chan *)switch_gpu_chan_table_get(&tgm_chan_table, chid);
 			if (chan)
 				chan_completion(chan);
 		}
