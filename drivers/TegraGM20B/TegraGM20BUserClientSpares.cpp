@@ -449,7 +449,7 @@ extern "C" unsigned long tgm_owner_stats(char *out, unsigned long size)
 				       at ? "; " : "", o.name, o.n, o.bytes >> 10,
 				       o.ns / o.n / 1000, o.max_ns / 1000, o.made);
 		if (n > 0)
-			at = at + n < size ? at + n : size - 1;
+			at = at + size_t(n) < size ? at + size_t(n) : size - 1;
 	}
 	uint32_t missed = p->zeroBusy + p->zeroFailed + p->refillRefused + p->notUnits;
 	for (const uint32_t m : p->misses)
@@ -467,7 +467,7 @@ extern "C" unsigned long tgm_owner_stats(char *out, unsigned long size)
 				  p->zeroFailed, p->refillRefused, p->notUnits)
 		       : 0;
 	if (n > 0)
-		at = at + n < size ? at + n : size - 1;
+		at = at + size_t(n) < size ? at + size_t(n) : size - 1;
 	bzero(p->owners, sizeof(p->owners));
 	bzero(p->misses, sizeof(p->misses));
 	p->zeroBusy = p->zeroFailed = p->refillRefused = p->notUnits = 0;

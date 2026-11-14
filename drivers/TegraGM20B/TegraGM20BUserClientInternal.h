@@ -14,6 +14,7 @@
 #include <mach/vm_region.h>
 #include "SwitchGpuSpares.h"
 #include "SwitchGpuCachedBuffer.h"
+#include "SwitchGpuMethodGate.h"
 #include <stddef.h>
 #include <string.h>
 #include <sys/systm.h>
@@ -407,6 +408,8 @@ class AGXDeviceUserClient : public IOUserClient
 				 SwitchGpuAsyncReference &);
 	IOReturn externalCall(uint32_t selector, IOExternalMethodArguments *arguments,
 			      SwitchGpuAsyncReference &asyncReference);
+	IOReturn memoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory);
+	SwitchGpuMethodGate methods_;
 	JobScratch job_ = {};
 	JobScratch channelJobs_[kMaxChannels] = {};
 	IOLock *submitLocks_[kMaxChannels] = {};

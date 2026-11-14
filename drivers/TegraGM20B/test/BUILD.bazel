@@ -1361,7 +1361,10 @@ host_test(
     name = "gm20b_submit_locks_source_test",
     srcs = ["gm20b_submit_locks_source_test.cpp"],
     data = [
+        "//drivers/TegraGM20B:SwitchGpuMethodGate.h",
         "//drivers/TegraGM20B:TegraGM20BSleepGate.h",
+        "//drivers/TegraGM20B:TegraGM20BUserClient.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientInternal.h",
         "//drivers/TegraGM20B:TegraGM20BUserClientJobSubmit.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientSubmit.cpp",
         "//drivers/TegraGM20B:gpu_sources",

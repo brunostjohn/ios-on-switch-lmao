@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // SubmitJob's global locks that switch_gpu_submit_cost_test cannot run: its exec's producer channels resolved under one
 // tgm_live_lock a pass, every status read before it, the job's ownership transaction taking no reference of its own on
-// its uses (the connection's BOs hold them inside the submit gate), and system sleep's gate counting per CPU.
+// its uses (the connection's BOs hold them inside the submit gate), system sleep's gate counting per CPU, and every
+// method running without IOKit's read lock on the connection.
 #include <gtest/gtest.h>
 
 #include <string>
@@ -101,4 +102,41 @@ TEST(GM20BSubmitLocksSource, TheSleepGateCountsOnTheCallersCpu)
 	EXPECT_EQ(CodeText(inl + unit("gpu_bringup.c")).Count("tgm_gate_try_enter("), 1u);
 	EXPECT_TRUE(Block(unit("gpu_bringup.c"), "void tgm_gate_enter(void)")
 			    .Has("while ((entry = gate_try_enter()) != TGM_GATE_IN)"));
+}
+
+// IOKit's default locking took this connection's read lock around every method, SubmitJob included. The connection turns
+// it off and counts its entries per CPU instead (SwitchGpuMethodGate.h); its close shuts that gate and waits for them
+// before it tears anything down.
+TEST(GM20BSubmitLocksSource, MethodsRunWithoutIOKitsReadLock)
+{
+	const std::string client = unit("TegraGM20BUserClient.cpp");
+	EXPECT_TRUE(Block(client, "bool AGXDeviceUserClient::setUp(task_t task)")
+			    .Has("setProperty(kIOUserClientDefaultLockingKey, kOSBooleanFalse);"));
+	const CodeText method = Block(client, "IOReturn AGXDeviceUserClient::externalMethod(");
+	EXPECT_TRUE(method.Before("if (methods_.enter(lock_))",
+				  "externalCall(selector, arguments, asyncReference)"));
+	EXPECT_TRUE(method.Before("externalCall(selector, arguments, asyncReference)",
+				  "methods_.leave(lock_);"));
+	const CodeText memory = Block(client, "IOReturn AGXDeviceUserClient::clientMemoryForType(");
+	EXPECT_TRUE(memory.Before("if (!methods_.enter(lock_))",
+				  "memoryForType(type, options, memory)"));
+	EXPECT_TRUE(
+		memory.Before("memoryForType(type, options, memory)", "methods_.leave(lock_);"));
+	const CodeText close = Block(client, "IOReturn AGXDeviceUserClient::clientClose()");
+	EXPECT_TRUE(close.Before("methods_.close(lock_);", "switch_gpu_compiler_close(this);"));
+	EXPECT_TRUE(close.Before("methods_.close(lock_);", "drainResources();"));
+	EXPECT_EQ(Block(unit("TegraGM20BUserClientInternal.h"),
+			"class AGXDeviceUserClient : public IOUserClient")
+			  .Count("APPLE_KEXT_OVERRIDE"),
+		  4u)
+		<< "clientClose, free, clientMemoryForType and externalMethod: another IOKit entry "
+		   "goes "
+		   "through methods_ too";
+	const std::string gate = unit("SwitchGpuMethodGate.h");
+	for (const char *step : {"bool enter(IOLock *lock)", "void leave(IOLock *lock)"}) {
+		const CodeText body = Block(gate, step);
+		EXPECT_TRUE(body.Before("_disable_preemption();", "cpu_number()")) << step;
+		EXPECT_TRUE(body.Before("cpu_number()", "_enable_preemption();")) << step;
+		EXPECT_FALSE(body.Has("_fetch")) << step;
+	}
 }

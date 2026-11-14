@@ -6,6 +6,7 @@
 // IOConnectUnmapMemory64 finds the same descriptor. GPU work goes through gpu_*.c (TegraGM20BGpu.h). Fence waits sleep
 // until the GPU's nonstall interrupt wakes them; a fence found complete without that wake panics (no polled mode), and
 // so does one that never completes.
+#include <IOKit/IOKitKeys.h>
 #include "TegraGM20BUserClientInternal.h"
 #include "SwitchGpuShaderCompiler.h"
 #include "TegraGM20BCompilerABI.h"
@@ -35,8 +36,12 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 
 	lock_ = IOLockAlloc();
 	unmapLock_ = IOLockAlloc();
-	if (!lock_ || !unmapLock_ || !events_.initialize() || !resources_.initialize())
+	if (!lock_ || !unmapLock_ || !methods_.initialize() || !events_.initialize() ||
+	    !resources_.initialize())
 		return false;
+	// IOKit's default locking takes this connection's read lock around every method (callExternalMethod) and its write
+	// lock around the map calls; methods_ stands in. is_io_service_open_extended reads the key once this returns.
+	setProperty(kIOUserClientDefaultLockingKey, kOSBooleanFalse);
 	for (auto &submitLock : submitLocks_)
 		if (!(submitLock = IOLockAlloc()))
 			return false;
@@ -73,6 +78,9 @@ OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 
 IOReturn AGXDeviceUserClient::clientClose()
 {
+	IOLockLock(lock_);
+	methods_.close(lock_);
+	IOLockUnlock(lock_);
 	switch_gpu_compiler_close(this);
 	drainResources();
 	terminate();
@@ -120,6 +128,7 @@ void AGXDeviceUserClient::free()
 		if (history)
 			IOFree(history, sizeof(*history));
 #endif
+	methods_.destroy();
 	if (counted_)
 		__atomic_sub_fetch(&gConnections, 1, __ATOMIC_SEQ_CST);
 	IOUserClient::free();
@@ -467,7 +476,12 @@ IOReturn AGXDeviceUserClient::externalMethod(uint32_t selector,
 	(void)target;
 	(void)reference;
 	SwitchGpuAsyncReference asyncReference(arguments);
-	return asyncReference.settle(externalCall(selector, arguments, asyncReference));
+	IOReturn ret = kIOReturnNotOpen;
+	if (methods_.enter(lock_)) {
+		ret = externalCall(selector, arguments, asyncReference);
+		methods_.leave(lock_);
+	}
+	return asyncReference.settle(ret);
 }
 
 IOReturn AGXDeviceUserClient::externalCall(uint32_t selector, IOExternalMethodArguments *arguments,
@@ -531,6 +545,16 @@ IOReturn AGXDeviceUserClient::externalCall(uint32_t selector, IOExternalMethodAr
 
 IOReturn AGXDeviceUserClient::clientMemoryForType(UInt32 type, IOOptionBits *options,
 						  IOMemoryDescriptor **memory)
+{
+	if (!methods_.enter(lock_))
+		return kIOReturnNotOpen;
+	const IOReturn ret = memoryForType(type, options, memory);
+	methods_.leave(lock_);
+	return ret;
+}
+
+IOReturn AGXDeviceUserClient::memoryForType(UInt32 type, IOOptionBits *options,
+					    IOMemoryDescriptor **memory)
 {
 #if TGM_STATS
 	if (IOMemoryDescriptor *readback = tgm_readback_memory(this, type)) {
