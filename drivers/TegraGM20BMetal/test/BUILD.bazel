@@ -207,8 +207,10 @@
 #                     a GPU's coverage it is raw/test/boundsoracle.mm's, this Mac's GPU), and raw_region.h: the fetch
 #                     barrier's region test over such draws, and which covers a render area (a clear it makes redundant)
 #   raw_overlap_test  raw/runtime/raw_overlap.h: a fetching draw outside the pixel interlock in runs of one triangle
-#   raw_kernel_texture_test  raw/runtime/raw_kernel_texture.h: the textures a raw kernel samples in place (a mipmapped
-#                     one among them)
+#   raw_kernel_texture_test  raw/runtime/raw_kernel_texture.h: how a raw kernel reaches each texture it binds (a
+#                     mipmapped one in place, rows 16 bytes off 32 through their shadow image)
+#   raw_kernel_shadow_test  raw/runtime/raw_kernel_shadow.h over a byte model: kernels reading and writing textures
+#                     through their shadow images leave every surface byte as an in-place run does
 #   raw_zcull_test    raw/runtime/raw_zcull.h: zcull regions laid out as Mesa's nil_zcull_new (its reference table),
 #                     their words, and the draws' states that invalidate a pass's region
 #   raw_blend_kill_test  raw/runtime/raw_blend_kill.h: the zero-source pixel kill only for single-target ROP blends that
@@ -2300,6 +2302,15 @@ host_test(
     srcs = [
         "raw_kernel_texture_test.cpp",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_texture.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "raw_kernel_shadow_test",
+    srcs = [
+        "raw_kernel_shadow_test.cpp",
+        "//drivers/TegraGM20BMetal:raw/runtime/raw_kernel_shadow.h",
     ],
     cxx_std = "c++17",
 )

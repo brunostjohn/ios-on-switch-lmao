@@ -342,9 +342,18 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
             at[3] = 0;
         } else if (e.kind == KernelTexture) {
             const Texture *t = writes ? textures_[e.slot] : cb_.readTexture(textures_[e.slot]);
-            if (t && !t->tic) {
-                *why = "a texture the raw path cannot sample";
-                return false;
+            if (t && !t->tic) {  // memoryless, or depth without ShaderRead: a load reads header 0's zeros
+                if (writes) {
+                    *why = "a kernel stores a texture with no memory a shader can address";
+                    return false;
+                }
+                continue;
+            }
+            if (t && !writes && t->standIn) {
+                const FormatInfo *s = formatInfo(t->standIn->format);
+                if (s && slotView(e.window, s->tic0, swizzledWord0(s->tic0, t->standIn->swizzle), s->bpp,
+                                  blockCompressed(s)) == SlotView::Own)
+                    t = t->standIn;
             }
             if (t) {
                 cb_.use(*t, writes);

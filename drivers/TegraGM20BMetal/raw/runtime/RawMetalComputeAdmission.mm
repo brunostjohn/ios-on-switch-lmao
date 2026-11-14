@@ -2,14 +2,112 @@
 #import "RawMetalInternal.h"
 #include "raw_compute.h"
 #include "raw_compute_lookup.h"
+#include "raw_kernel_shadow.h"
 #include "raw_kernel_texture.h"
-#include "raw_surface_view.h"
 #include "raw_view.h"
 
-// A texture a raw kernel samples as it is (raw_kernel_texture.h), and not one held in two planes: its header is a pair
-static bool plainTexture(RMTexture *t)
+namespace {
+
+// Which of a texture's terms refused it: compute.image's b, named in its first line
+enum ImageTerm : uint8_t {
+    TermTwoPlanesWritten = 1,  // the record stores RGB10A8_2P_XR10, which no record splits into its two planes
+    TermTwoPlanesBare,         // RGB10A8_2P_XR10 read with no stand-in drawn from its planes
+    TermShadowAliased,         // written through its image while another resource of the dispatch writes its bytes
+};
+
+const char *imageTermName(uint64_t term)
 {
-    return t->_rawOk && raw::kernelSamplesInPlace(t->_raw) && !t->_raw.xrPlanes;
+    switch (term) {
+    case TermTwoPlanesWritten:
+        return "a kernel stores an RGB10A8_2P_XR10 texture";
+    case TermTwoPlanesBare:
+        return "an RGB10A8_2P_XR10 texture read with no stand-in";
+    case TermShadowAliased:
+        return "a texture written through its image while the dispatch writes its bytes through another resource";
+    }
+    return "?";
+}
+
+NSString *textureFacts(RMTexture *t)
+{
+    MTLTextureDescriptor *d = t->_descriptor;
+    const raw::Texture &x = t->_raw;
+    NSMutableString *s = [NSMutableString
+        stringWithFormat:@"%lux%lu format %lu type %lu levels %lu array %lu usage 0x%lx storage %lu kind %d pitch %u "
+                         @"va&31 %llu form %s",
+                         (unsigned long)d.width, (unsigned long)d.height, (unsigned long)d.pixelFormat,
+                         (unsigned long)d.textureType, (unsigned long)d.mipmapLevelCount,
+                         (unsigned long)d.arrayLength, (unsigned long)d.usage, (unsigned long)d.storageMode,
+                         int(t->_kind), x.pitch, (unsigned long long)(x.va & 31),
+                         raw::kernelTextureFormName(raw::kernelTextureForm(x))];
+    if (IOSurfaceRef surface = t->_surface) {
+        const OSType f = IOSurfaceGetPixelFormat(surface);
+        [s appendFormat:@" surface '%c%c%c%c' plane %lu of %zu rows %zu", char(f >> 24), char(f >> 16), char(f >> 8),
+                        char(f), (unsigned long)t->_plane, IOSurfaceGetPlaneCount(surface),
+                        IOSurfaceGetPlaneCount(surface) ? IOSurfaceGetBytesPerRowOfPlane(surface, t->_plane)
+                                                        : IOSurfaceGetBytesPerRow(surface)];
+    }
+    return s;
+}
+
+// The process's first refusal of `pred` names the texture and the kernel (key) it refused at `slot`
+void noteRefusal(RMCommandBuffer *cb, RMPred pred, uint32_t slot, uint64_t term, RMTexture *t, uint64_t key)
+{
+    if (!predLogged(pred))
+        logPred(pred, slot, term,
+                [NSString stringWithFormat:@"(%s; texture %@; kernel %016llx)",
+                                           pred == PredComputeImage ? imageTermName(term) : "a view of another size",
+                                           t ? textureFacts(t) : @"none", (unsigned long long)key]);
+    hit(cb, pred, slot, term);
+}
+
+raw::KernelUse textureUse(RMTexture *t, bool writes)
+{
+    const raw::KernelTextureForm form = raw::kernelTextureForm(t->_raw);
+    return {(__bridge const void *)t, raw::kernelTextureSpan(t->_raw), form == raw::KernelTextureForm::Shadow, writes};
+}
+
+raw::KernelUse bufferUse(RMBuffer *b, uint64_t offset, bool writes)
+{
+    const uint64_t length = b->_raw.length;
+    return {(__bridge const void *)b, {b->_raw.va + std::min(offset, length), length - std::min(offset, length)}, false,
+            writes};
+}
+
+}  // namespace
+
+void kernelUses(RMCommandBuffer *cb, size_t at, std::vector<raw::KernelUse> &uses)
+{
+    auto &plan = cb->_plan;
+    const auto &dispatch = plan.dispatch(at);
+    const auto *kernels = static_cast<const raw::ComputeKernelSet<raw::ComputeState> *>(dispatch.kernel);
+    const auto &state = plan.kernelStates[dispatch.state];
+    const auto &bindings = plan.buffers[2][state.buffers];
+    const auto &textures = plan.textures[2][state.textures].objects;
+    uses.clear();
+    for (uint8_t region = 0; kernels && region < kernels->count; ++region) {
+        const auto &record = *kernels->jobs[region]->value()->rec;
+        for (uint32_t i = 0; i < record.entries; ++i) {
+            const auto &e = record.entry[i];
+            const bool writes = raw::kernelEntryWrites(record, i);
+            if (e.kind == raw::KernelTexture && e.slot < 31 && textures[e.slot])
+                uses.push_back(textureUse((__bridge RMTexture *)textures[e.slot], writes));
+            else if (e.kind == raw::KernelBuffer && e.slot < 31 &&
+                     bindings[e.slot].source == raw::BufferBinding::Source::Buffer && bindings[e.slot].object)
+                uses.push_back(bufferUse((__bridge RMBuffer *)bindings[e.slot].object, bindings[e.slot].offset, writes));
+        }
+    }
+    for (size_t use = dispatch.encoderBegin; use < at; ++use) {
+        if (plan.operation(use).op != OpKernelUse)
+            continue;
+        const RMPlanControl &control = plan.control(use);
+        id resource = (__bridge id)control.object;
+        const bool writes = control.value & MTLResourceUsageWrite;
+        if ([resource isKindOfClass:[RMTexture class]])
+            uses.push_back(textureUse((RMTexture *)resource, writes));
+        else if (RMBuffer *buffer = cpuBufferOfResource(resource))
+            uses.push_back(bufferUse(buffer, 0, writes));
+    }
 }
 
 bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKernelSet<raw::ComputeState> *kernels,
@@ -35,62 +133,67 @@ bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKern
     };
     if (!kernels || kernels->state() != raw::ComputeKernelSet<raw::ComputeState>::State::Ready)
         return refuse(PredComputeKernel, 0, "a dispatch the raw path has no kernel for");
-    raw::ComputeResourceSlots used;
-    for (uint8_t region = 0; region < kernels->count; ++region)
-        used.add(*kernels->jobs[region]->value()->rec);
-    uint32_t surfaceSlots = 0;
+    uint32_t shadowSlots = 0;
     for (uint8_t region = 0; region < kernels->count; ++region) {
         const auto *k = kernels->jobs[region]->value();
         for (uint32_t e = 0; e < k->rec->entries; e++) {
             const raw::PackKernelEntry &x = k->rec->entry[e];
-            RMTexture *shadow = x.kind == raw::KernelTexture && x.slot < 31 ? textureAt(x.slot) : nil;
-            if (shadow && shadow->_raw.surfaceView) {
-                surfaceSlots |= 1u << x.slot;
-                bool aliases = false;
-                const auto *backing = shadow->_raw.import;
-                const auto shares = [&](const raw::Import *other) {
-                    return other && raw::surfaceBackingAliases(backing->id, backing->base, backing->bytes, other->id,
-                                                               other->base, other->bytes);
-                };
-                aliases = used.aliases(
-                    [&](uint32_t slot) {
-                        RMTexture *texture = textureAt(slot);
-                        return texture && texture != shadow && shares(texture->_raw.import);
-                    },
-                    [&](uint32_t slot) {
-                        RMBuffer *buffer = bufferAt(slot);
-                        return buffer && shares(buffer->_raw.import);
-                    });
-                for (size_t use = dispatch.encoderBegin; use < at; ++use) {
-                    if (plan.operation(use).op != OpKernelUse)
-                        continue;
-                    id resource = (__bridge id)plan.control(use).object;
-                    if ([resource isKindOfClass:[RMTexture class]])
-                        aliases |= shares(((RMTexture *)resource)->_raw.import);
-                    else if (RMBuffer *buffer = cpuBufferOfResource(resource))
-                        aliases |= shares(buffer->_raw.import);
-                }
-                if (aliases) {
-                    return refuse(PredComputeImage, x.slot, "a cropped surface view aliases another dispatch resource");
-                }
+            RMTexture *t = x.kind == raw::KernelTexture && x.slot < 31 ? textureAt(x.slot) : nil;
+            if (t && !t->_rawOk) {  // m2v's texture, refused as it was made: its own predicate's command buffer
+                hit(cb, RMPred(t->_pred ?: PredTexShape), t->_descriptor.pixelFormat, t->_kind);
+                if (why)
+                    *why = "a kernel's texture the raw path does not keep";
+                return false;
             }
-            if (x.kind == raw::KernelTexture && x.slot < 31 && textureAt(x.slot) && !plainTexture(textureAt(x.slot))) {
-                return refuse(PredComputeImage, x.slot,
-                              "a kernel's texture the raw path samples through an image of its own");
+            const bool writes = raw::kernelEntryWrites(*k->rec, e);
+            const raw::KernelTextureForm form = t ? raw::kernelTextureForm(t->_raw) : raw::KernelTextureForm::InPlace;
+            if (form == raw::KernelTextureForm::Shadow)
+                shadowSlots |= 1u << x.slot;
+            if (form == raw::KernelTextureForm::NoHeader && writes) {
+                failCommandBuffer(cb,
+                                  [NSString stringWithFormat:@"A kernel stores a texture with no memory a shader can "
+                                                             @"address (memoryless, or a depth texture without "
+                                                             @"MTLTextureUsageShaderRead): %@",
+                                                             textureFacts(t)],
+                                  MTLCommandBufferErrorInvalidResource);
+                if (why)
+                    *why = "a kernel stores a texture with no memory a shader can address";
+                return false;
             }
-            RMTexture *viewed = x.kind == raw::KernelTexture && x.slot < 31 ? textureAt(x.slot) : nil;
-            const raw::FormatInfo *f = viewed ? raw::formatInfo(viewed->_raw.format) : nullptr;
-            const raw::SlotView view =
-                f ? raw::slotView(x.window, f->tic0, raw::swizzledWord0(f->tic0, viewed->_raw.swizzle), f->bpp,
-                                  raw::blockCompressed(f))
-                  : raw::SlotView::Own;
+            auto viewOf = [&](const raw::Texture &b) {
+                const raw::FormatInfo *f = raw::formatInfo(b.format);
+                return f ? raw::slotView(x.window, f->tic0, raw::swizzledWord0(f->tic0, b.swizzle), f->bpp,
+                                         raw::blockCompressed(f))
+                         : raw::SlotView::Own;
+            };
+            // a load of an extended-range texture binds its stand-in where the record's view is the stand-in's own,
+            // else its codes (raw_compute.cpp)
+            const bool standIn = t && !writes && t->_raw.standIn && viewOf(*t->_raw.standIn) == raw::SlotView::Own;
+            if (form == raw::KernelTextureForm::TwoPlanes && (writes || !standIn)) {
+                const uint64_t term = writes ? TermTwoPlanesWritten : TermTwoPlanesBare;
+                noteRefusal(cb, PredComputeImage, x.slot, term, t, k->rec->keyHash);
+                if (why)
+                    *why = imageTermName(term);
+                return false;
+            }
+            if (standIn) {  // drawn from its codes as the encoder begins (encodeRaw's standIns)
+                cb->_standIns = true;
+                if (t->_raw.xrPlanes)
+                    cb->_xrStandIns.insert(t);
+            }
+            const raw::SlotView view = !t || !t->_raw.tic ? raw::SlotView::Own
+                                       : standIn          ? raw::SlotView::Own
+                                                          : viewOf(t->_raw);
             bool viewRefused = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             viewRefused = view == raw::SlotView::View && rmHalfViewRefused();
 #endif
             if (view == raw::SlotView::None || viewRefused) {
-                return refuse(PredComputeView, x.slot,
-                              "a kernel m2v binds a view of another texel size at a texture slot");
+                noteRefusal(cb, PredComputeView, x.slot, view == raw::SlotView::None ? x.window : 0, t,
+                            k->rec->keyHash);
+                if (why)
+                    *why = "a kernel m2v binds a view of another texel size at a texture slot";
+                return false;
             }
             // m2v's descriptor starts at the bind offset rounded down to 16, the rest in a push word the record names
             if (x.kind == raw::KernelBuffer && raw::kernelResidualWord(x) < 0 && x.slot < 31 && bufferAt(x.slot) &&
@@ -98,6 +201,18 @@ bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKern
                 return refuse(PredComputeOff16, x.slot,
                               "a kernel's buffer bound at an offset that is not a multiple of 16");
             }
+        }
+    }
+    if (shadowSlots) {
+        static thread_local std::vector<raw::KernelUse> uses;
+        kernelUses(cb, at, uses);
+        if (!raw::kernelShadowsExact(uses.data(), uses.size())) {
+            const uint32_t slot = uint32_t(__builtin_ctz(shadowSlots));
+            noteRefusal(cb, PredComputeImage, slot, TermShadowAliased, textureAt(slot),
+                        kernels->jobs[0]->value()->rec->keyHash);
+            if (why)
+                *why = imageTermName(TermShadowAliased);
+            return false;
         }
     }
     plan.setKernelUses(at, kernels, [&](std::vector<raw::ResourceUse> &exact) {
@@ -121,7 +236,7 @@ bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKern
             }
         }
     });
-    plan.resolveDispatch(at, kernels, surfaceSlots);
+    plan.resolveDispatch(at, kernels, shadowSlots);
     return true;
 }
 

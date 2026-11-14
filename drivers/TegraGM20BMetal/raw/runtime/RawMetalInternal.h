@@ -26,6 +26,7 @@
 #include <vector>
 #include "GpuMemoryRelease.h"
 #include "LimitsTable.h"
+#include "raw_kernel_shadow.h"
 #include "raw_submit_gate.h"
 #include "raw_invocation.h"
 #include "SwitchFrameTimeline.h"
@@ -604,6 +605,8 @@ void submitLoop();
 bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKernelSet<raw::ComputeState> *kernels,
                           const char **why);
 int computeReadiness(RMCommandBuffer *cb, const RMSegment &range);
+// RawMetalComputeAdmission.mm: an admitted dispatch's textures and buffers, and the encoder's resources it may reach
+void kernelUses(RMCommandBuffer *cb, size_t at, std::vector<raw::KernelUse> &uses);
 
 // RawMetalFootprint.mm: the idle give-back's line, `relieved` the bytes malloc gave back
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG

@@ -519,6 +519,58 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
         }
         return true;
     };
+    // textures a kernel reaches through their images (raw_kernel_shadow.h): filled as their compute encoder begins,
+    // copied back as it ends, sooner where another resource of a dispatch reaches the same bytes. A load the
+    // command buffer's native view of a decoder's plane answers (readTexture) reads in place.
+    static thread_local std::vector<raw::KernelUse> uses, encoderUses;
+    raw::KernelShadows kernelShadows;
+    bool encoderShadows = false;
+    auto localShadows = [&](std::vector<raw::KernelUse> &list) {
+        for (raw::KernelUse &u : list)
+            if (u.shadowed && !u.writes) {
+                const raw::Texture &x = ((__bridge RMTexture *)u.object)->_raw;
+                u.shadowed = rc->readTexture(&x) == &x;
+            }
+    };
+    auto shadowCopies = [&](const std::vector<const void *> &back, const std::vector<const void *> &fill) {
+        raw::BlitEncoder *copy = rc->blit();
+        for (const void *o : back) {
+            const raw::Texture &x = ((__bridge RMTexture *)o)->_raw;
+            copy->copyTexels(*x.sampled, 0, 0, 0, x, 0, 0, 0, x.width, x.height);
+        }
+        for (const void *o : fill) {
+            const raw::Texture &x = ((__bridge RMTexture *)o)->_raw;
+            copy->copyTexels(x, 0, 0, 0, *x.sampled, 0, 0, 0, x.width, x.height);
+        }
+        copy->end();
+    };
+    auto beginKernelShadows = [&](size_t encoderAt) {
+        encoderUses.clear();
+        for (size_t at = encoderAt; at < cb->_plan.encoderEnd(encoderAt); ++at) {
+            if (cb->_plan.operation(at).op != OpDispatch || !cb->_plan.dispatch(at).surfaceSlots)
+                continue;
+            kernelUses(cb, at, uses);
+            localShadows(uses);
+            encoderUses.insert(encoderUses.end(), uses.begin(), uses.end());
+        }
+        kernelShadows.begin(encoderUses.data(), encoderUses.size());
+        encoderShadows = !encoderUses.empty();
+        std::vector<const void *> fill;
+        for (const raw::KernelUse &u : encoderUses)
+            if (u.shadowed && std::find(fill.begin(), fill.end(), u.object) == fill.end())
+                fill.push_back(u.object);
+        if (!fill.empty())
+            shadowCopies({}, fill);
+    };
+    // the images written back, and every pool image of a texture a draw samples refreshed again before that draw: a
+    // kernel may have written its rows through another resource
+    auto endKernelShadows = [&] {
+        const std::vector<const void *> back = kernelShadows.end();
+        if (!back.empty())
+            shadowCopies(back, {});
+        fresh.clear();
+        encoderShadows = false;
+    };
     RAW_ENCODE_BEGIN(loopSpan, Loop);
     for (size_t at = from; at < to; at++) {
         const Cmd c = cb->_plan.legacy(at);
@@ -534,30 +586,19 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             const auto *kernels = static_cast<const raw::ComputeKernelSet<raw::ComputeState> *>(dispatch.kernel);
             const auto &state = cb->_plan.kernelStates[dispatch.state];
             const auto &textures = cb->_plan.textures[2][state.textures].objects;
-            std::array<__unsafe_unretained RMTexture *, 31> shadows{};
-            size_t count = 0;
-            for (uint32_t slots = dispatch.surfaceSlots; slots; slots &= slots - 1) {
-                __unsafe_unretained RMTexture *texture = (__bridge RMTexture *)textures[__builtin_ctz(slots)];
-                if (texture && rc->readTexture(&texture->_raw) == &texture->_raw &&
-                    std::find(shadows.begin(), shadows.begin() + count, texture) == shadows.begin() + count)
-                    shadows[count++] = texture;
+            uses.clear();
+            if (encoderShadows) {
+                kernelUses(cb, at, uses);
+                localShadows(uses);
             }
-            auto copyShadows = [&](bool store) {
+            if (const auto &steps = kernelShadows.before(uses.data(), uses.size()); !steps.empty()) {
                 ce->end();
                 ce.reset();
-                raw::BlitEncoder *copy = rc->blit();
-                for (size_t i = 0; i < count; ++i) {
-                    const raw::Texture &view = shadows[i]->_raw, &image = *view.sampled;
-                    copy->copyTexels(store ? image : view, 0, 0, 0, store ? view : image, 0, 0, 0, view.width,
-                                     view.height);
-                }
-                copy->end();
+                shadowCopies(steps.copyBack, steps.fill);
                 ce.emplace(*rc, d);
                 ce->setSerial(serialCompute);
                 stateCursor.reset();
-            };
-            if (count)
-                copyShadows(false);
+            }
             encodePlannedState(cb, at, *rc, re, &*ce, stateCursor);
             const auto &regions = dispatch.regions;
             ce->setStageInRegion(dispatch.stageIn);
@@ -569,10 +610,15 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
                                                                  !region, region + 1 == regions.count, &w))
                     return fail(PredCompute, w, c.op);
             }
-            if (count) {
-                copyShadows(true);
-                fresh.clear();
-            }
+            kernelShadows.after(uses.data(), uses.size());
+            if (cb->_standIns && !standInFresh.empty())
+                for (uint8_t region = 0; region < kernels->count; ++region) {
+                    const auto &record = *kernels->jobs[region]->value()->rec;
+                    for (uint32_t i = 0; i < record.entries; ++i)
+                        if (record.entry[i].kind == raw::KernelTexture && record.entry[i].slot < 31 &&
+                            raw::kernelEntryWrites(record, i))
+                            standInFresh.erase((__bridge RMTexture *)textures[record.entry[i].slot]);
+                }
             continue;
         }
         {
@@ -590,6 +636,9 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             if (!computeUnit || serialCompute != (c.a == MTLDispatchTypeSerial))
                 rc->endPredicationUnit();
             computeUnit = true;
+            beginKernelShadows(at);
+            if (cb->_standIns && !standIns(at))
+                return false;
             ce.emplace(*rc, d);
             serialCompute = c.a == MTLDispatchTypeSerial;
             ce->setSerial(serialCompute);
@@ -766,6 +815,7 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
             if (ce) {
                 ce->end();
                 ce.reset();
+                endKernelShadows();
             }
             if (!turned.end(*rc, why))
                 return fail(PredPassRotated, *why);
@@ -876,8 +926,10 @@ encodeRawAttempt(RMCommandBuffer *cb, size_t from, size_t to, const char **why, 
         return false;
     if (be)
         be->end();
-    if (ce)
+    if (ce) {
         ce->end();
+        endKernelShadows();
+    }
     if (!turned.end(*rc, why))
         return fail(PredPassRotated, *why);
     if (!storeStandIns())
