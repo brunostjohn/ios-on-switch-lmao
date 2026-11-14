@@ -3873,16 +3873,6 @@ host_test(
 )
 
 host_test(
-    name = "raw_blur_twod_test",
-    srcs = [
-        "raw_blur_twod_test.cpp",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_blur_twod.h",
-        "//drivers/TegraGM20BMetal:raw/runtime/raw_ca_route.h",
-    ],
-    cxx_std = "c++17",
-)
-
-host_test(
     name = "raw_draw_hooks_test",
     srcs = [
         "raw_draw_hooks_test.cpp",
@@ -5966,4 +5956,13 @@ host_test(
     ] + RAW_HOST_HEADERS,
     copts = RAW_HOST_COPTS,
     cxx_std = "c++17",
+)
+
+# Blur-chain draws keep their fragment program: no state carries a route the draw path would classify on the CPU
+host_test(
+    name = "raw_blur_draw_test",
+    srcs = ["raw_blur_draw_test.cpp"] + RAW_HOST_HEADERS,
+    copts = RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    deps = RAW_HOST_DEPS + ["//kits/SwitchGM20B:classes"],
 )

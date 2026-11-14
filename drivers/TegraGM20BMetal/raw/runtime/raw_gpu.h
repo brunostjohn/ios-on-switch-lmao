@@ -585,8 +585,8 @@ struct Pipeline {
     bool fillState = false;
     const char *spanName =
         nullptr;  // DEVELOPMENT: the raw path's own states' name in the long span line (raw_span_marks.h)
-    // what Core Animation's name for the state says its draws are (raw_ca_route.h CaRoute, raw_blur_twod.h BlurFunction)
-    uint8_t caRoute = 0, blurFunction = 0;
+    // what Core Animation's name for the state says its draws are (raw_ca_route.h CaRoute)
+    uint8_t caRoute = 0;
     uint32_t probeGeneration = 0;
     uint8_t probeLines = 0, probeThinLines = 0;
     // raw_rotation.h: its fragment program has a turned variant (AssumeTurned), or reads a turned plane's axes with none; a
@@ -1247,7 +1247,6 @@ private:
     Shortcut shortcut(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count, bool indexed);
     void shortcutBegin(const Shortcut &s);
     void shortcutEnd(const Shortcut &s);
-    bool blurTwod(const Pipeline &pl, uint32_t primitive, uint32_t first, uint32_t count, bool indexed);
 
 public:
     // [x0, x1) x [y0, y1) of colour target 0 set to `rgba` (fillTexture:...): CLEAR_SURFACE over the region, with the ZBC
@@ -2509,7 +2508,6 @@ public:
         std::atomic<uint64_t> dispatches{0};
         // states made with the zero-source pixel kill on (raw_blend_kill.h), and their binds encoded
         std::atomic<uint64_t> blendKillStates{0}, blendKillBinds{0};
-        std::atomic<uint64_t> blurTwodPasses{0};         // blur-chain passes drawn as 2D blits (raw_draw_shortcuts.cpp)
         std::atomic<uint64_t> fillTwod{0};               // fillTexture: regions by the 2D engine (raw_twod_fill.h)
         std::atomic<uint64_t> resolveTwod{0};            // MSAA resolves by the 2D engine (raw_resolve_twod.cpp)
         std::atomic<uint64_t> resolveExact{0};           // those through the grid's complement (the probe's)

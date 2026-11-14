@@ -5305,10 +5305,6 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
         cb_->draws++;
         return true;
     }
-    if (instances == 1 && !amplifies() && blurTwod(*pl, primitive, first, count, false)) {
-        cb_->draws++;
-        return true;
-    }
     const Shortcut cut = instances == 1 && !amplifies() ? shortcut(*pl, primitive, first, count, false) : Shortcut{};
     if (!prepare(pl, primitive, first, first, count, false, why))
         return false;
@@ -5586,11 +5582,6 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     }
     const Runs &runs = *ordered;
     const bool whole = runs.empty() && instances == 1 && baseVertex >= 0 && !amplifies();
-    if (whole && blurTwod(*pl, primitive, uint32_t(baseVertex), count, true)) {
-        drawIndices_ = nullptr;
-        cb_->draws++;
-        return true;
-    }
     const Shortcut cut = whole ? shortcut(*pl, primitive, uint32_t(baseVertex), count, true) : Shortcut{};
     const uint32_t parts = runs.empty() ? 1 : uint32_t(runs.size());
     for (uint32_t r = 0; r < parts; r++) {
