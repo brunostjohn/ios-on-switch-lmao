@@ -53,6 +53,9 @@
 #                            and the shared region in the 16k kernel, and 4 KiB everywhere in the 4k one
 #   switch_pmap_test         <switch/pmap.h>: arm_clear_fast_fault skips the TLB invalidate only for a PTE whose one
 #                            change is setting the Access flag
+#   switch_fsctl_diag_test   <switch/fsctl_diag.h>: a refused APFS fsctl's file described by its first bytes (an Apple
+#                            texture's format, size and internal LZFSE, a KTX's format and size), and both trees'
+#                            fsctl_internal reporting each filesystem fsctl after its answer, nothing in release
 #   switch_protection_test   <switch/protection_rules.h>: an unlabelled vnode reads as D before the epoch and as a new one
 #                            after it, a new one is labelled only when it would read otherwise, listxattr loses only
 #                            the label; 12377's hooks label after authorization and the MAC check, a failed label fails
@@ -546,6 +549,27 @@ host_test(
     srcs = [
         "switch/pmap.h",
         "switch_pmap_test.cpp",
+    ],
+    includes = ["."],
+)
+
+copy_file(
+    name = "switch_fsctl_diag",
+    src = "//kernel/switch:include/switch/fsctl_diag.h",
+    out = "switch/fsctl_diag.h",
+)
+
+host_test(
+    name = "switch_fsctl_diag_test",
+    srcs = [
+        "switch/fsctl_diag.h",
+        "switch_fsctl_diag_test.cpp",
+    ],
+    data = [
+        "//kernel/switch:include/switch/fsctl_diag.h",
+        "//kernel/switch:vfs/fsctl_diag.c",
+        "//kernel/xnu-10063.141.1/bsd:vfs/vfs_syscalls.c",
+        "//kernel/xnu-12377.121.6/bsd:vfs/vfs_syscalls.c",
     ],
     includes = ["."],
 )

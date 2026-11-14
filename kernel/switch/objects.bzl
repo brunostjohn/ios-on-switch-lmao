@@ -36,6 +36,7 @@ SWITCH_OBJECTS = {
         ("bsd/vfs/vfs_lookup.c", "vfs/pretranslated.c", []),
         ("bsd/vfs/kpi_vfs.c", "vfs/auth_fs.c", []),
         ("bsd/vfs/vfs_syscalls.c", "vfs/identity.c", []),
+        ("bsd/vfs/vfs_syscalls.c", "vfs/fsctl_diag.c", []),
         ("bsd/vfs/vfs_attrlist.c", "vfs/protection.c", [], ["12377.121.6"]),
         # The translator's core is //translate/arm64e's (its host tools and tests build the same files).
         ("bsd/kern/mach_loader.c", "translate/a64x_xnu.c", _A64X_COPTS, ["12377.121.6"]),

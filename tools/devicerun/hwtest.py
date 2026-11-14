@@ -318,6 +318,7 @@ TESTS: dict[str, bool] = {
     'system.overlay_app_records': False,
     'system.widgets_render': False,
     'ui.icon_render': False,
+    'system.snapshot_purgeable': False,
     'ui.launch_hitch': False,
     'system.compiler_alive': False,
     'gpu.raw.fetch_rung3': False,
