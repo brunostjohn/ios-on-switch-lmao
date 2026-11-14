@@ -657,7 +657,7 @@ struct tgm_ramfc_look {
 	uint32_t channels, checked, high, mismatched, chid, ramfc, expected;
 };
 
-int tgm_ramfc_look(struct tgm_ramfc_look *look);
+int tgm_ramfc_probe(struct tgm_ramfc_look *look);
 void tgm_ramfc_probe_register(void);
 
 /* Debug kernels: the GM20B registers L4T's capture reads (TegraGM20BRegDump.h, regdump.c), as text into buf; *len its

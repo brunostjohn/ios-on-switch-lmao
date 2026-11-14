@@ -34,7 +34,7 @@ static void ramfc_look(struct nvkm_device *device, void *arg)
 	mutex_unlock(&tgm_live_lock);
 }
 
-int tgm_ramfc_look(struct tgm_ramfc_look *look)
+int tgm_ramfc_probe(struct tgm_ramfc_look *look)
 {
 	*look = (struct tgm_ramfc_look){0};
 	return tgm_gpu_held(ramfc_look, look);

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // debug.switch_gpu_ramfc (debug kernels, read-only): each live client channel's RAMFC timeslice read back against the
-// value last written to it, once it has completed a job since (tgm_ramfc_look), for HW Test gpu.ramfc_timeslice.
+// value last written to it, once it has completed a job since (tgm_ramfc_probe), for HW Test gpu.ramfc_timeslice.
 #include <IOKit/IOLib.h>
 #include <string.h>
 #include <sys/errno.h>
@@ -20,8 +20,8 @@ int ramfcSysctl SYSCTL_HANDLER_ARGS
 	(void)arg2;
 	if (req->newptr)
 		return EPERM;
-	tgm_ramfc_look look = {};
-	if (tgm_ramfc_look(&look))
+	struct tgm_ramfc_look look = {};
+	if (tgm_ramfc_probe(&look))
 		return EBUSY;
 	char line[160];
 	snprintf(line, sizeof(line),
