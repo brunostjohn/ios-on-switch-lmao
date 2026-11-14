@@ -265,6 +265,8 @@ const SwitchEnginePower kPower = {
     .mcRead = tegra_smmu_read,
     .ungateClocks = kUngateClocks,
     .ungateCount = 1,
+    .host1xModule = TEGRA_HOST1X_MODULE_NVJPG,
+    .moduleTeardown = tegra_host1x_module_teardown,
 };
 constexpr SwitchEngineProd kProd[] = {
     {0xe00, 0},         // THI_CLK_OVERRIDE

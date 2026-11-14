@@ -60,6 +60,28 @@ TEST_F(NVJPGGate, AJobPastItsBoundIsCancelledAndTheNextJobRuns)
     EXPECT_EQ(gEngine.syncpt, before + 1);
 }
 
+// "Whenever a module is reset, the corresponding teardown bit in [HOST1X_SYNC_MOD_TEARDOWN] should be written" (TRM
+// 14.9.14): every power-on, the idle gate's and a cancellation's, tears down NVJPG's module (bit 14) after its last
+// reset and before its falcon starts.
+TEST_F(NVJPGGate, EveryResetIsFollowedByHost1xsModuleTeardownBeforeTheFalconStarts)
+{
+    idle();
+    size_t from = gEngine.events.size();
+    TegraNVJPGJob job = decodeJob();
+    nvjpg_dec_status status = {};
+    ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    using Steps = std::vector<std::string>;
+    EXPECT_EQ(gEngine.steps(from, {"reset", "unreset", "module teardown 14", "falcon start"}),
+              (Steps{"reset", "unreset", "reset", "unreset", "module teardown 14", "falcon start"}));
+
+    gEngine.stallDecodes = true;
+    from = gEngine.events.size();
+    EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), -5);
+    EXPECT_EQ(gEngine.steps(from, {"reset", "unreset", "module teardown 14", "falcon start"}),
+              (Steps{"reset", "reset", "unreset", "reset", "unreset", "module teardown 14", "falcon start"}));
+    gEngine.stallDecodes = false;
+}
+
 // The TRM's NVJPG ungating (12.2.7.10 steps 3-4) starts NVJPG's and NVDEC's clocks and stops NVDEC's before the
 // clamps go, on T210B01 as on T210: NVDEC part A sits in NVJPG's partition. A partition already on (NVDEC's keeps it
 // on) is not ungated, and NVDEC's clock is left as found.

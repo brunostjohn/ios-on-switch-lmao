@@ -150,6 +150,8 @@ const SwitchEnginePower kPower = {
     .slcgCount = 1,
     .hotReset = tegra_mc_hot_reset,
     .mcRead = tegra_smmu_read,
+    .host1xModule = TEGRA_HOST1X_MODULE_NVDEC,
+    .moduleTeardown = tegra_host1x_module_teardown,
 };
 const SwitchEnginePower kNvjpgPower = {
     .name = "TegraNVDEC (NVJPG's partition)",
@@ -165,6 +167,8 @@ const SwitchEnginePower kNvjpgPower = {
     .mcRead = tegra_smmu_read,
     .ungateClocks = kNvjpgUngateClocks,
     .ungateCount = 1,
+    .host1xModule = TEGRA_HOST1X_MODULE_NVJPG,
+    .moduleTeardown = tegra_host1x_module_teardown,
 };
 constexpr SwitchEngineProd kProd[] = {
     {0xe00, 0},                      // THI_CLK_OVERRIDE

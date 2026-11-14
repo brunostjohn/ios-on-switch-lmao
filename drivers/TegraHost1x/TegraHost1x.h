@@ -35,6 +35,14 @@ enum {
     TEGRA_HOST1X_CLASS_NVDEC = 0xf0,
 };
 
+// HOST1X_SYNC_MOD_TEARDOWN bits (Tegra X1 TRM 14.9.14).
+enum {
+    TEGRA_HOST1X_MODULE_VIC = 13,
+    TEGRA_HOST1X_MODULE_NVJPG = 14,
+    TEGRA_HOST1X_MODULE_NVDEC = 18,
+    TEGRA_HOST1X_MODULE_NVENC = 19,
+};
+
 // Syncpoint increment conditions (host1x uclass INCR_SYNCPT bits 15:8).
 enum {
     TEGRA_HOST1X_COND_IMMEDIATE = 0,
@@ -165,6 +173,10 @@ int tegra_host1x_submit(const uint32_t *words, uint32_t count);
 // restart resumes it empty at its PUT. The caller holds off its own submits in between.
 void tegra_host1x_channel_teardown(uint32_t channel);
 void tegra_host1x_channel_restart(uint32_t channel);
+// After a module's reset, with its channel empty: host1x forgets which channel owned the module ("Whenever a module is
+// reset, the corresponding teardown bit ... should be written", TRM 14.9.14). The register's other bits write as
+// NO_ACTION, so a write names one module and needs no read-modify-write.
+void tegra_host1x_module_teardown(uint32_t module);
 
 // Sleep (called through tegra_nvdec_suspend/resume below, after NVDEC has quiesced). Suspend saves the
 // handed-out syncpoint values and stops every channel; resume re-adopts the clock, reconfigures the sync unit, restores

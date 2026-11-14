@@ -9,7 +9,7 @@
 //        pulsed (NVJPG's: NVDEC's, 12.2.7.10 steps 3-4, on every revision); clamps removed (until the partition's REMOVE_CLAMPING_CMD bit clears, the
 //        handshake every procedure of Tegra X1 TRM 12.2.7 polls: CLAMP_STATUS is a legacy register, 12.6.12); reset
 //        released; the client's hot reset released; on T210 before B01 only, the MBIST workaround's LVL2 pulse; the
-//        module reset again
+//        module reset again, then host1x's ownership state for the module torn down (TRM 14.9.14 MOD_TEARDOWN)
 // The caller writes its prod registers (switch_engine_prod) and boots its falcon after on. Waits are bounded reads of
 // hardware handshakes that raise no interrupt.
 #pragma once
@@ -30,6 +30,9 @@ struct SwitchEnginePower {
     uint32_t (*mcRead)(uint32_t offset);                     // tegra_smmu_read
     const unsigned *ungateClocks;  // clocks besides its own the partition's ungating runs before its clamps go
     uint32_t ungateCount;
+    void (*mbist)();  // the engine's own MBIST pulse in place of the LVL2 one (VIC's needs THI SLCG overridden)
+    uint32_t host1xModule;                      // its HOST1X_SYNC_MOD_TEARDOWN bit
+    void (*moduleTeardown)(uint32_t module);  // tegra_host1x_module_teardown
 };
 
 struct SwitchEngineProd {
@@ -106,7 +109,13 @@ inline void ungatePulse(const SwitchEnginePower &p)
 
 inline void mbistWorkaround(const SwitchEnginePower &p)
 {
-    if (b01() || !p.lvl2Mask)
+    if (b01())
+        return;
+    if (p.mbist) {
+        p.mbist();
+        return;
+    }
+    if (!p.lvl2Mask)
         return;
     bool wasOn[4] = {};
     for (uint32_t i = 0; i < p.slcgCount && i < 4; i++) {
@@ -178,6 +187,7 @@ inline bool switch_engine_power_up(const SwitchEnginePower &p, bool *wasOn)
     IODelay(kStepUs);
     mbistWorkaround(p);
     moduleReset(p);
+    p.moduleTeardown(p.host1xModule);
     return unclamped && switch_car_clock_enabled(p.clock) && !switch_car_reset_asserted(p.clock);
 }
 

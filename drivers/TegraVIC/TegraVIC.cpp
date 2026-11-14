@@ -242,10 +242,12 @@ void smmuDetach()
 
 // --- Power, clock, falcon ----------------------------------------------------------------------------------------
 // VIC's partition and memory client in L4T's order (SwitchEnginePower.h). VIC needs no clock-gating prod registers
-// (L4T's first VIC power-on loads none). On T210 before B01 only, tegra210_vic_mbist_war: VIC's override bit set with
-// THI SLCG overridden for the pulse (it needs host1x's clock, which the boot chain left on), then the module reset
-// again, as the kit's own workaround would. A partition the boot chain left on keeps its state; the engine is still
+// (L4T's first VIC power-on loads none). On T210 before B01 only, tegra210_vic_mbist_war in place of the kit's LVL2
+// pulse: VIC's override bit set with THI SLCG overridden for the pulse (it needs host1x's clock, which the boot chain
+// left on); the kit's module reset follows it. A partition the boot chain left on keeps its state; the engine is still
 // reset so the falcon starts from scratch.
+void mbistWorkaround();
+
 const SwitchEnginePower kPower = {
     .name = "TegraVIC",
     .partition = kPartition,
@@ -258,6 +260,9 @@ const SwitchEnginePower kPower = {
     .slcgCount = 0,
     .hotReset = tegra_mc_hot_reset,
     .mcRead = tegra_smmu_read,
+    .mbist = mbistWorkaround,
+    .host1xModule = TEGRA_HOST1X_MODULE_VIC,
+    .moduleTeardown = tegra_host1x_module_teardown,
 };
 
 void mbistWorkaround()
@@ -273,7 +278,6 @@ void mbistWorkaround()
     if (!overridden)
         switch_car_rmw(LVL2_CLK_GATE_OVRE, OVRE_VIC_MBIST, 0);
     IODelay(1);
-    switch_engine_power::moduleReset(kPower);
 }
 
 bool powerUp(bool *wasOn)
@@ -290,8 +294,6 @@ bool powerUp(bool *wasOn)
                  switch_car_read(RST_DEVICES_X));
         return false;
     }
-    if (!switch_engine_power::b01())
-        mbistWorkaround();
     return true;
 }
 

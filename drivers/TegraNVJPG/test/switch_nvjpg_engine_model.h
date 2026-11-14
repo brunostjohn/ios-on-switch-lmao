@@ -176,6 +176,11 @@ void tegra_host1x_channel_restart(uint32_t)
     gEngine.restarts++;
 }
 
+void tegra_host1x_module_teardown(uint32_t module)
+{
+    gEngine.events.push_back("module teardown " + std::to_string(module));
+}
+
 void tegra_mc_hot_reset(uint32_t ctrl, uint32_t bit, bool on)
 {
     EXPECT_EQ(ctrl, 0x970u);
@@ -318,6 +323,7 @@ switch_falcon_result switch_falcon_load(volatile uint8_t *, uint64_t, const swit
 
 void switch_falcon_start(volatile uint8_t *)
 {
+    gEngine.events.push_back("falcon start");
     gEngine.boots++;
     gEngine.falconRunning = gEngine.reachable() && !gEngine.deadAfterReset;
 }

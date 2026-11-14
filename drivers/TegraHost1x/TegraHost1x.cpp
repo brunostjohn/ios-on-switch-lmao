@@ -48,6 +48,7 @@ enum : uint32_t {
 };
 
 enum : uint32_t {  // sync unit, relative to kSyncOffset
+    SYNC_MOD_TEARDOWN = 0xb4,
     SYNC_USEC_CLK = 0x1a4,
     SYNC_CTXSW_TIMEOUT_CFG = 0x1a8,
     SYNC_IP_BUSY_TIMEOUT = 0x1bc,
@@ -209,6 +210,12 @@ extern "C" int tegra_host1x_syncpt_alloc(uint32_t *id)
         return TEGRA_HOST1X_ENOMEM;
     *id = next;
     return TEGRA_HOST1X_OK;
+}
+
+extern "C" void tegra_host1x_module_teardown(uint32_t module)
+{
+    if (gHost && module < 32)
+        syncWrite(SYNC_MOD_TEARDOWN, 1u << module);
 }
 
 extern "C" uint32_t tegra_host1x_syncpt_read(uint32_t id)
