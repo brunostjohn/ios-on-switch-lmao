@@ -43,7 +43,6 @@ uint32_t hardware;
 std::vector<std::string> engineSteps;
 bool engineBoots = true;
 IOLock *powerLock;
-uint64_t gateNowUs;
 
 struct TestGatePlatform {
     bool start(void (*)(void *), void *)
@@ -74,7 +73,7 @@ struct TestGatePlatform {
 
     uint64_t nowUs()
     {
-        return gateNowUs;
+        return 0;
     }
 
     void log(const char *line)
@@ -565,7 +564,6 @@ protected:
         switch_test_log().clear();
         engineBoots = true;
         testGate = nullptr;
-        gateNowUs = 0;
         powerLock = IOLockAlloc();
         ASSERT_TRUE(switch_vic_cancel_start(161));
         for (auto &stage : Stages::stages)
@@ -1148,14 +1146,13 @@ static void heardStatus(void *context, int status)
 }
 
 // An engine the cancellation's reset does not bring back is parked, and handed to the idle gate once the cancelled job
-// has ended (switch_vic_power_lost): the next job tries a power-on at once, jobs within the back-off are refused, and
-// the first after it whose power-on boots the engine runs on the rebased queue.
+// has ended (switch_vic_power_lost): each later job runs the normal power-on, and the first whose power-on boots the
+// engine runs on the rebased queue.
 TEST_F(SwitchVICJobsTest, AnEngineTheResetDoesNotBringBackIsPoweredOnByALaterJob)
 {
     SwitchEngineGate<TestGatePlatform> gate;
     ASSERT_TRUE(gate.start(kGateOps));
     testGate = &gate;
-    gateNowUs = 5000000;
     ASSERT_EQ(submit(), 0);
     engineBoots = false;
     outlived(0);
@@ -1170,8 +1167,8 @@ TEST_F(SwitchVICJobsTest, AnEngineTheResetDoesNotBringBackIsPoweredOnByALaterJob
     EXPECT_EQ(engineSteps.back(), "power on") << "the next job tried the engine";
     engineSteps.clear();
     EXPECT_EQ(submit(), -19);
-    EXPECT_TRUE(engineSteps.empty()) << "within the back-off nothing touches it";
-    gateNowUs += 2000000;
+    ASSERT_FALSE(engineSteps.empty());
+    EXPECT_EQ(engineSteps.back(), "power on") << "the job after it runs the power-on again, with no wait";
     engineBoots = true;
     const uint32_t proven = hardware + 2;
     int frame = 1;
@@ -1194,7 +1191,6 @@ TEST_F(SwitchVICJobsTest, AWedgedEngineIsHandedToTheGateOnlyOnceItsCancelledJobs
     SwitchEngineGate<TestGatePlatform> gate;
     ASSERT_TRUE(gate.start(kGateOps));
     testGate = &gate;
-    gateNowUs = 5000000;
     ASSERT_EQ(submit(), 0);
     ASSERT_EQ(submit(), 0);
     engineBoots = false;

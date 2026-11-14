@@ -31,7 +31,7 @@
 // the format description of this plug-in's own SPS/PPS, and goes out at once unless the session reorders
 // (AVEReorder.h). A P picture predicts from the previous picture's reconstruction (two buffers in turn); a key frame is
 // an IDR. A P picture NVENC refuses (its status says why, one error line) is coded again as an IDR and the next
-// picture is a P picture again; refusals in a row back off (AVEBackoff.h), with a line for each run of IDRs.
+// picture is a P picture as usual.
 //
 // Tile sessions (HEIC grids through VTTileCompressionSession): AVETiles.c, on the same stream setup.
 //
@@ -313,7 +313,7 @@ static OSStatus startStream(Encoder *e, CFTypeRef primaries, CFTypeRef transfer,
 
 bool ave_wants_key(const Encoder *e, CMTime pts, CFDictionaryRef options, uint32_t since)
 {
-    if (!e->haveRef || e->keyPending || !e->allowTemporal || !e->info.p_frames || ave_backoff_holds(&e->pBackoff))
+    if (!e->haveRef || e->keyPending || !e->allowTemporal || !e->info.p_frames)
         return true;
     if (options) {
         CFTypeRef force = CFDictionaryGetValue(options, kVTEncodeFrameOptionKey_ForceKeyFrame);
@@ -425,26 +425,20 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     // NVENC 5.0's H.264 and H.265 apps put 2 in error_status of every status record they write (nvenc.bin 0x7d29 and
     // 0x1382b, before the record's DMA out); their errors are ucode_error_status.
     if (stat->ucode_error_status || !produced || produced > e->layout.bitstream_bytes) {
-        static int logged;
         const bool bPicture = picture.type == H264ENC_B;
-        if (!__atomic_exchange_n(&logged, 1, __ATOMIC_RELAXED))
-            os_log_error(gLog, "AVE: NVENC %{public}s picture failed: error_status %u ucode %#x, %u bits%{public}s",
-                         key        ? "IDR"
-                         : bPicture ? "B"
-                                    : "P",
-                         stat->error_status, stat->ucode_error_status, stat->total_bit_count,
-                         key        ? ""
-                         : bPicture ? "; coded again as an I picture, B pictures again from the next group"
-                                    : "; coded again as an IDR, P pictures again from the next picture");
+        os_log_error(gLog, "AVE: NVENC %{public}s picture failed: error_status %u ucode %#x, %u bits%{public}s",
+                     key        ? "IDR"
+                     : bPicture ? "B"
+                                : "P",
+                     stat->error_status, stat->ucode_error_status, stat->total_bit_count,
+                     key        ? ""
+                     : bPicture ? "; coded again as an I picture"
+                                : "; coded again as an IDR");
         e->errors++;
         if (!bPicture)
             e->keyPending = true;
         if (key)
             return kVTVideoEncoderMalfunctionErr;
-        const uint32_t run = bPicture ? 0 : ave_backoff_refused(&e->pBackoff);
-        if (run)
-            os_log_error(gLog, "AVE: NVENC refused %u P pictures in a row; the next %u pictures are IDRs",
-                         e->pBackoff.refusals, run);
         if (plan) {
             plan->refused = true;
             return kVTVideoEncoderMalfunctionErr;
@@ -473,10 +467,6 @@ static OSStatus encodePicture(Encoder *e, VTVideoEncoderFrame frame, CVPixelBuff
     }
     e->haveRef = true;
     e->keyPending = false;
-    if (key)
-        ave_backoff_spend(&e->pBackoff);
-    else if (picture.type == H264ENC_P)
-        ave_backoff_coded(&e->pBackoff);
     if (key) {
         e->idrPicId = (e->idrPicId + 1) & 0xffff;
         e->sinceKey = 0;

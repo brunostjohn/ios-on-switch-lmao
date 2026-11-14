@@ -208,7 +208,7 @@ Colour: NVJPG converts with JFIF's full-range BT.601 (T.871), programmed in its 
 | firmware | linux-firmware nvidia/tegra210/nvjpg.bin (= L4T nvhost_nvjpg010.fw), falcon v1, no FCE | firmware/SOURCE [V] |
 | interface | nvjpg_dec_drv_pic_setup_s 0xb2c bytes, nvjpg_dec_status 0x20, cle7d0.h methods | nvidia/SOURCE [V]; works per averne's FFmpeg/oss-nvjpg [I]; on this unit [T] |
 | table order | huffTab[0] DC, [1] AC; codeNum = BITS, symbol = HUFFVAL, min codes 0; quant zig-zag | FFmpeg nvtegra_mjpeg.c, oss-nvjpg [I]; [T] |
-| outputs | NV12 (memory mode 0), planar, RGB (memory mode 3), downscale 1/2..1/8, pitch linear, strides 64 B | nvjpg_drv.h comments [I]; [T] |
+| outputs | NV12 (memory mode 0), planar, RGB (memory mode 3), downscale 1/2..1/8, pitch linear or Tegra block linear (tile_mode 2, blklinear_gob log2), strides 64 B | nvjpg_drv.h comments [I]; firmware 0x136c-0x1390 [V]; block linear [I: HW Test gpu.iosurface.cross_process nvjpg<size>] |
 | clock | PLLC2 at the 637 mV point of this SoC process (422.4 MHz for process 1), else PLLP 408 MHz | tegra210b01-core-dvfs.c "nvjpg" row, kits/SwitchCAR/SwitchEngineClock.h [I] |
 
 Stages: J0 host1x + buffers, J1 SMMU (ASID 125 through TegraSMMU; VIC 127, display 126) + power + falcon, J2
@@ -226,10 +226,12 @@ fourth sleep client (after NVDEC, whose clock the MBIST pulse borrows).
   under 8 padded rows at 1080p, so non-MCU-aligned heights into '420f' are refused (CPU). BGRA uses the sink.
 - CMPhoto's native destinations under the interchange formats (CMPhoto fjds_createPixelBufferFromJPEGData: '444f' for
   4:4:4 files, 'yuvf' or '422f' for 4:2:2, '420f' otherwise [V]): 'yuvf' is written packed (memory_mode 2, YUY2's
-  Y0 Cb Y1 Cr order) [T]. '422f' and '444f' are refused (CMPhoto decodes those images on the CPU): every NVJPG job
-  with memory_mode 0 at output_chroma_mode 4:2:2 or 4:4:4 hung until cancelled (25 of 25, boots of 10-13 Nov,
-  SpringBoard's 205x83 4:4:4 file at 1/1 among them), and no reference driver submits that pair. Writing them on
-  hardware needs NVJPG's planar output (oss-nvjpg's 4:2:2/4:4:4 route) and a VIC pass that interleaves CbCr.
+  Y0 Cb Y1 Cr order) [T]. '422f' and '444f' are decoded as planar 4:2:2/4:4:4 (memory_mode 3, oss-nvjpg's route)
+  into the service's buffer and re-packed by VIC behind NVJPG's fence (TegraNVJPGRepack.h, SwitchVICDecodeOutput.h)
+  [I: HW Test image.jpeg_422/444/444_small thumb_route]: every job with memory_mode 0 at output_chroma_mode 4:2:2 or
+  4:4:4 hung until cancelled (25 of 25, boots of 8-13 Nov, SpringBoard's 205x83 4:4:4 file at 1/1 among them).
+- A destination GM20B laid out block linear (a GPU sampler asked first) is written as its blocks; a placement off its
+  blocks is refused (the copy engine takes a block-linear side only whole).
 - Encode refused (§6): one wasted call per CMPhoto JPEG encode.
 - CPU work per decode: headers + the scan copy (compressed bytes) + cache maintenance of the destination (two passes,
   ~80 µs per MiB measured for VIC) + page-table writes. For the smallest pictures CMPhoto sends (16384 pixels) this is
@@ -238,8 +240,8 @@ fourth sleep client (after NVDEC, whose clock the MBIST pulse borrows).
 - Sandbox: which processes Apple's profiles let open AppleJPEGDriverUserClient is unverified; a denied process keeps
   software decoding for its life (CMPhoto's probe).
 - A resume, power-on or cancellation reset that fails (`TegraNVJPG: resume FAIL ...`, `power-on FAIL ...`, `it did not
-  come back`) leaves the engine off; the idle gate powers it on at the next decode, then once per back-off (1 s
-  doubling to 64 s) while it keeps failing. Decodes between fail with kIOReturnNotReady and go to the CPU.
+  come back`) leaves the engine off and fails that decode (kIOReturnNotReady, the CPU decodes it); the next decode runs
+  the normal power-on.
 
 ## 10. Next-boot checks and the user test
 

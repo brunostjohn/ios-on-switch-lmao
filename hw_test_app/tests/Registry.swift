@@ -47,11 +47,14 @@ public enum Registry {
 
     static let display: [any HWTest] =
         [
-            DisplayModeTest(), DisplayPacingTest(), CompletionFlipTest(), MediaCompletionFlipTest(), BrightnessTest(),
+            DisplayModeTest(), DisplayPacingTest(), CompletionFlipTest(), MediaCompletionFlipTest(),
+            MediaCompletionFlipGatedTest(), BrightnessTest(),
             ColourPipelineTest(), PlanesTest(), SmallDrawableTest(), PresentAtTimeTest(), PlaneInUseTest(),
             ScanoutRoutesTest(), PlainSurfacesTest(), DisplaySnapshotTest(), WakeTest(),
             PlanesCroppedTest(),
         ] + DisplayWindowProbeTest.all + [LandscapeVideoTest()]
+        // Holds the swaps for a second each; the forced producer failure last.
+        + [Host1xFlipTest.trial, Host1xFlipTest.teardown]
 
     static let sensorsAndInput: [any HWTest] = [
         AccelerometerTest(), GyroscopeTest(), DeviceMotionTest(), AmbientLightTest(), ControllersTest(), RailTest(),
@@ -82,7 +85,7 @@ public enum Registry {
         + [DisplayBufferTest()]
         // The shader compiler's generation covers every test before it.
         + [CompilerAliveTest()]
-        // May stop NVJPG's host1x channel for 50 ms: last.
+        // May stop the display's host1x channel for 50 ms: last.
         + [DcHost1xClassTest()]
         // Every client channel's RAMFC timeslice once the shared tests have run jobs on them.
         + [RamfcTimesliceTest()]

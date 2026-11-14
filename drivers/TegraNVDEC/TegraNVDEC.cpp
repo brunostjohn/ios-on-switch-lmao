@@ -280,8 +280,8 @@ void engineResume();
 int gateOn(void *);
 int gateOff(void *, bool drain);
 
-// Back to reset with the clock off: after a failed bring-up for the boot, after a failed reset or power-on until the gate
-// powers it on again. The engine is in reset before its swgroups go back to bypass, where an IOVA would reach the
+// Back to reset with the clock off: after a failed bring-up for the boot, after a failed reset or power-on until the
+// next decode powers it on. The engine is in reset before its swgroups go back to bypass, where an IOVA would reach the
 // physical address of the same number.
 void park()
 {
@@ -464,10 +464,10 @@ const char *switch_nvdec_engine_wedge()
 // Idle power gating (SwitchEngineGate.h), as mainline's runtime PM: off 500 ms after the last job, on at the next. On
 // is N1 and N2 again on the kept image and address space: partition, clock, reset and the MBIST workaround, the falcon
 // reloaded and proven with an IMMEDIATE and an OP_DONE increment, the job queue rebased on the syncpoint. It also
-// brings back an engine a cancellation's reset or a resume lost (the gate retries it at a later decode; a resume that
-// could not attach the address space attaches it here). A failure there is one line and parks the engine. Off parks
-// the queue and powers the partition down. NVJPG's gate shares the lock (tegra_nvdec_power_lock), so neither engine's
-// power-up borrows a clock the other is switching.
+// powers on an engine a cancellation's reset or a resume left off (a resume that could not attach the address space
+// attaches it here). A failure there is one line, parks the engine and fails that decode; the next decode runs the
+// power-on again. Off parks the queue and powers the partition down. NVJPG's gate shares the lock
+// (tegra_nvdec_power_lock), so neither engine's power-up borrows a clock the other is switching.
 namespace {
 int gateOn(void *)
 {
@@ -479,7 +479,7 @@ int gateOn(void *)
     __atomic_store_n(&gWedged, !answered, __ATOMIC_RELEASE);
     if (!answered) {
         park();
-        IOLog("TegraNVDEC: power-on FAIL %s; decodes fail until a later decode powers NVDEC on\n",
+        IOLog("TegraNVDEC: power-on FAIL %s; this decode fails, the next one powers NVDEC on again\n",
               gLine[0] ? gLine : "N1");
     }
     switch_nvdec_jobs_resume(answered, tegra_host1x_syncpt_read(gSyncpt));
@@ -515,7 +515,7 @@ void engineResume()
         IOLog("TegraNVDEC: resume FAIL %s; the next decode tries again\n", gLine);
         switch_nvdec_jobs_resume(false, tegra_host1x_syncpt_read(gSyncpt));
     }
-    gGate.resume(attached);
+    gGate.resume();
 }
 }  // namespace
 

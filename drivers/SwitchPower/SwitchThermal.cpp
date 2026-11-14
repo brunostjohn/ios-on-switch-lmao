@@ -155,6 +155,7 @@
 #include "../TegraDFLL/TegraDFLL.h"
 #include "SwitchGovernor.h"
 #include "SwitchPerfGovernor.h"
+#include "SwitchPllxStart.h"
 #include "SwitchPower.h"
 #include "SwitchEMC.h"
 #include "SwitchPowerStats.h"
@@ -162,6 +163,8 @@
 #include "SwitchSocTherm.h"
 #include "SwitchThermalLimits.h"
 #include <os/log.h>
+#include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 extern "C" int tegra_gm20b_bringup_busy(void);  // drivers/TegraGM20B/TegraGM20B.cpp
@@ -177,16 +180,13 @@ constexpr vm_offset_t kFusePA = 0x7000F800, kApbMiscPA = 0x70000800;
 enum : uint32_t {
     RST_DEVICES_L = 0x004,
     CLK_OUT_ENB_L = 0x010,
-    MISC_CLK_ENB = 0x048,
     CLK_SOURCE_PWM = 0x110,
     RST_DEV_L_SET = 0x300,
     RST_DEV_L_CLR = 0x304,
     CLK_ENB_L_SET = 0x320,
     CLK_ENB_L_CLR = 0x324,
-    CLK_ENB_H_SET = 0x328,
     CCLKG_BURST_POLICY = 0x368,
     SUPER_CCLKG_DIVIDER = 0x36c,
-    PLLX_MISC3 = 0x518,
     PLLP_BASE = 0x0a0,
     PLLP_OUTB = 0x0a8,
     CLK_OUT_ENB_Y = 0x298,
@@ -197,8 +197,6 @@ enum : uint32_t {
 };
 
 constexpr uint32_t kPwmClock = 1u << 17;
-constexpr uint32_t kFuseClock = 1u << 7, kFuseVisible = 1u << 28;  // CLK_ENB_H bit 7, MISC_CLK_ENB bit 28
-constexpr uint32_t kPllxIddq = 1u << 3;                            // PLLX_MISC3 (clk-tegra210b01.c:373)
 constexpr uint32_t kPllpOutCpu = 1u << 31;   // bank Y bit 31: the PLLP branch to the CPU (hekate CLK_Y_PLLP_OUT_CPU)
 constexpr uint32_t kOut4Running = 3u << 16;  // PLLP_OUTB OUT4 RSTN (16) and CLKEN (17), divider 31:24
 constexpr unsigned kSourcePllpOut4 = 5;      // CCLK_G source pll_p_out4 (clk-tegra-super-gen4.c cclk_g_parents_gen5)
@@ -576,11 +574,11 @@ void SwitchThermal::fanPowerOn()
     gpioMasked(kPortA, MSK_OUT, kPinPA5, true);
     gpioMasked(kPortA, MSK_OE, kPinPA5, true);
     if (switch_mmio_read32(pmc, NO_IOPOWER) & kPmcGpio) {
-        switch_mmio_write32(pmc, NO_IOPOWER, switch_mmio_read32(pmc, NO_IOPOWER) & ~kPmcGpio);
+        switch_pmc_rmw(NO_IOPOWER, kPmcGpio, 0);
         (void)switch_mmio_read32(pmc, NO_IOPOWER);
     }
     if (switch_mmio_read32(pmc, PWR_DET_VAL) & kPmcGpio) {
-        switch_mmio_write32(pmc, PWR_DET_VAL, switch_mmio_read32(pmc, PWR_DET_VAL) & ~kPmcGpio);
+        switch_pmc_rmw(PWR_DET_VAL, kPmcGpio, 0);
         (void)switch_mmio_read32(pmc, PWR_DET_VAL);
     }
 
@@ -845,9 +843,7 @@ bool SwitchThermal::preparePerf()
     if (!fuse || !apbMisc) {
         refusal = "FUSE/APB_MISC mapping failed";
     } else {
-        switch_mmio_write32(car, CLK_ENB_H_SET, kFuseClock);
-        switch_mmio_write32(car, MISC_CLK_ENB, switch_mmio_read32(car, MISC_CLK_ENB) | kFuseVisible);
-        (void)switch_mmio_read32(car, MISC_CLK_ENB);
+        switch_car_fuse_readable();
         const uint32_t hidrev = switch_mmio_read32(apbMisc, APB_MISC_HIDREV);
         const uint32_t sku = switch_mmio_read32(fuse, FUSE_CACHE + FUSE_SKU_INFO) & 0xff;
         cpuSpeedo = static_cast<int>(switch_mmio_read32(fuse, FUSE_CACHE + FUSE_CPU_SPEEDO_0));
@@ -1589,22 +1585,31 @@ bool SwitchThermal::runCpuFromPllx(uint32_t pllxBase, unsigned step)
             switch_mmio_write32(car, CLK_ENB_Y_CLR, gateClose);
         return false;
     }
-    const uint32_t stopped = pllxBase & ~(kPllEnable | kPllBypass | kPllLock);
-    trace("step %u: PLLX off, dividers %#x", step, stopped);
-    switch_mmio_write32(car, PLLX_BASE, switch_mmio_read32(car, PLLX_BASE) & ~kPllEnable);
-    switch_mmio_write32(car, PLLX_BASE, stopped);
-    switch_mmio_write32(car, PLLX_MISC, switch_mmio_read32(car, PLLX_MISC) | kPllxLockEnable);
-    if (switch_mmio_read32(car, PLLX_MISC3) & kPllxIddq) {
-        // clk-pll.c _clk_pll_enable: out of IDDQ, 5 us, before the enable (hekate already leaves it out).
-        switch_mmio_write32(car, PLLX_MISC3, switch_mmio_read32(car, PLLX_MISC3) & ~kPllxIddq);
-        (void)switch_mmio_read32(car, PLLX_MISC3);
-        IODelay(5);
-    }
-    trace("step %u: PLLX on", step);
-    switch_mmio_write32(car, PLLX_BASE, stopped | kPllEnable);
-    (void)switch_mmio_read32(car, PLLX_BASE);
-    IOSleep(1);
-    const uint32_t locked = switch_mmio_read32(car, PLLX_BASE);
+    trace("step %u: PLLX off, out of IDDQ, dividers %#x, on", step, pllxBase);
+
+    struct CarRegs {
+        volatile uint8_t *car;
+
+        uint32_t read(uint32_t offset) const
+        {
+            return switch_mmio_read32(car, offset);
+        }
+
+        void write(uint32_t offset, uint32_t value) const
+        {
+            switch_mmio_write32(car, offset, value);
+        }
+    } regs{car};
+
+    // The lock time slept out (L4T pll_x_params lock_delay 300 us), then the lock read once.
+    const uint32_t locked = switchpllx::start(
+        regs, pllxBase,
+        [](unsigned us) {
+            IODelay(us);
+        },
+        [] {
+            IOSleep(1);
+        });
     if (!(locked & kPllLock)) {
         panic("SwitchPerf: PLLX did not lock at step %u (PLLX_BASE %#x, PLLX_MISC %#x); the CPU is on PLLP_OUT4 at 408 "
               "MHz",

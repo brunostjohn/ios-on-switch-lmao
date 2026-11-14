@@ -135,6 +135,10 @@ typedef struct {
     uint64_t writeEnd;       // one past the last byte the engine may write
     uint32_t fillChroma;     // grey into '420f': the CPU fills the CbCr plane with 0x80 after the decode
     uint64_t fillStart, fillRowBytes, fillPitch, fillRows;
+    // '422f' and '444f': the planes start in the service's own buffer of `repackBytes`, not the destination, and VIC
+    // re-packs them into the destination at the request's offset
+    uint32_t repack;
+    uint64_t repackBytes;
 } TegraNVJPGPlan;
 
 enum {
@@ -184,6 +188,41 @@ static inline uint32_t tegra_nvjpg_format_of(uint32_t fourcc, bool grey, uint32_
     default:
         return TEGRA_NVJPG_OUT_COUNT;
     }
+}
+
+static inline uint64_t tegra_nvjpg_align(uint64_t value, uint64_t to)
+{
+    return (value + to - 1) / to * to;
+}
+
+// '422f' or '444f' (p->target's format, scale set): Y, Cb and Cr at the file's own sampling into the service's buffer,
+// each plane's rows 256 bytes apart (VIC's source pitch) and each plane on 256 bytes. The destination is VIC's: its
+// rectangle must start on a chroma pair. *kind is the caller's UNSUPPORTED until the plan is OK.
+static inline const char *tegra_nvjpg_plan_repack(const TegraNVJPGDecodeRequest *r, const TegraNVJPGImage *img,
+                                                  const TegraNVJPGAbility *a, TegraNVJPGPlan *p)
+{
+    TegraNVJPGTarget *t = &p->target;
+    if (t->format == TEGRA_NVJPG_OUT_NV16 && (r->x_offset & 1))
+        return "odd offset into 4:2:2";
+    const uint32_t w = a->clipped ? tegra_nvjpg_shr_up(img->width, t->scale) : (img->mcusX * img->mcuW) >> t->scale;
+    const uint32_t chroma = t->format == TEGRA_NVJPG_OUT_NV16 ? (w + 1) / 2 : w;
+    t->pitch[0] = (uint32_t)tegra_nvjpg_align(w, 256);
+    t->pitch[1] = t->pitch[2] = (uint32_t)tegra_nvjpg_align(chroma, 256);
+    nvjpg_dec_drv_pic_setup_s scratch;
+    memset(&scratch, 0, sizeof(scratch));
+    const char *why = tegra_nvjpg_setup_output(img, t, a->clipped == 0, &scratch, &p->extent);
+    if (why)
+        return why;
+    p->planes = p->extent.planes;
+    uint64_t end = 0;
+    for (uint32_t i = 0; i < p->planes; i++) {
+        p->planeStart[i] = end;
+        end = tegra_nvjpg_align(end + (uint64_t)t->pitch[i] * p->extent.rows[i], 256);
+    }
+    p->writeEnd = end;
+    p->repack = 1;
+    p->repackBytes = tegra_nvjpg_align(end, 4096);
+    return NULL;
 }
 
 // The plan for request `r` (its JPEG parsed into `img`) into destination `d`, with what the engine proved. NULL and
@@ -238,6 +277,12 @@ static inline const char *tegra_nvjpg_plan(const TegraNVJPGDecodeRequest *r, con
     t->format = format;
     t->scale = scale;
     t->alpha = 0xff;
+    if (format == TEGRA_NVJPG_OUT_NV16 || format == TEGRA_NVJPG_OUT_NV24) {
+        const char *why = tegra_nvjpg_plan_repack(r, img, a, p);
+        if (!why)
+            *kind = TEGRA_NVJPG_PLAN_OK;
+        return why;
+    }
     for (uint32_t i = 0; i < planes && i < 3; i++) {
         if (d->planeBytesPerRow[i] > 0xffffffffULL)
             return "stride";
@@ -309,6 +354,49 @@ static inline const char *tegra_nvjpg_plan(const TegraNVJPGDecodeRequest *r, con
             return "chroma fill would run past the destination";
     }
     *kind = TEGRA_NVJPG_PLAN_OK;
+    return NULL;
+}
+
+// Plan `p` (rows) moved onto a destination GM20B laid out block-linear (tegra_gm20b_surface_layout): `rowBytes` a row
+// of GOBs, 2^`yLog2` GOBs a block, blocks row by row. The picture's offset must fall on a block: x on a GOB's 64 bytes,
+// y on a block's rows. The engine may touch every block of the block rows its rows reach. NULL with `p` and the setup's
+// output stride and tiling rewritten, or why the decode cannot write those blocks.
+static inline const char *tegra_nvjpg_plan_block_linear(const TegraNVJPGDecodeRequest *r, uint64_t length,
+                                                        uint64_t sink, uint32_t rowBytes, uint32_t yLog2,
+                                                        TegraNVJPGPlan *p, nvjpg_dec_drv_pic_setup_s *s)
+{
+    if (p->planes != 1 || p->fillChroma || yLog2 > 5)
+        return "block-linear destination of more than one plane, or blocks over 32 GOBs";
+    uint32_t bpp = 4;
+    if (p->target.format == TEGRA_NVJPG_OUT_YUY2) {
+        bpp = 2;
+    } else if (p->target.format == TEGRA_NVJPG_OUT_GREY) {
+        bpp = 1;
+    }
+    const uint64_t blockRows = 8ull << yLog2;
+    const uint64_t blockBytes = 512ull << yLog2;
+    const uint64_t blockRowBytes = (uint64_t)rowBytes * blockRows;
+    const uint64_t x = (uint64_t)r->x_offset * bpp;
+    if (!rowBytes || (rowBytes & 63))
+        return "block-linear row not a whole number of GOBs";
+    if ((x & 63) || r->y_offset % blockRows)
+        return "picture offset off the destination's blocks";
+    if (x + p->extent.rowBytes[0] > rowBytes)
+        return "picture wider than the destination's blocks";
+    const uint64_t firstBlockRow = r->y_offset / blockRows;
+    const uint64_t pictureEnd = (firstBlockRow + (r->out_height + blockRows - 1) / blockRows) * blockRowBytes;
+    if (pictureEnd > length)
+        return "picture runs past the destination's blocks";
+    p->target.pitch[0] = rowBytes;
+    p->target.blockLinear = 1;
+    p->target.blockHeightLog2 = yLog2;
+    p->planeStart[0] = firstBlockRow * blockRowBytes + (x / 64) * blockBytes;
+    p->writeEnd = (firstBlockRow + (p->extent.rows[0] + blockRows - 1) / blockRows) * blockRowBytes;
+    if (p->writeEnd > length + sink)
+        return "MCU padding would run past the destination's blocks and its sink";
+    s->output_stride_luma = (int)rowBytes;
+    s->tile_mode = TEGRA_NVJPG_TILE_TEGRA_BLOCK_LINEAR;
+    s->block_linear_height = (int)yLog2;
     return NULL;
 }
 
