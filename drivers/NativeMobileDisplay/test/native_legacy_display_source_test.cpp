@@ -16,12 +16,14 @@ using switch_ios::test::SourceText;
 using testing::HasSubstr;
 
 namespace {
-// NativeLegacyDisplay.cpp with the headers its class body includes for scanout, retirement and resume.
+// NativeLegacyDisplay.cpp with the headers its class body includes for scanout, retirement, resume and the frame end.
 const std::string &display()
 {
-    static const std::string source = SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h") +
-                                      SourceText("../SwitchDirectSlots.h") + SourceText("../SwitchRetireDisplay.h") +
-                                      SourceText("../SwitchDisplayResume.h");
+    static const std::string source =
+        SourceText("../NativeLegacyDisplay.cpp") + SourceText("../SwitchScanoutStart.h") +
+        SourceText("../SwitchDirectSlots.h") + SourceText("../SwitchRetireDisplay.h") +
+        SourceText("../SwitchDisplayResume.h") + SourceText("../SwitchFrameEndDisplay.h") +
+        SourceText("../SwitchGpuDoneDisplay.h") + SourceText("../SwitchFlipDeadlineDisplay.h");
     return source;
 }
 
@@ -307,7 +309,7 @@ TEST(FrameEndSource, MaskedWhileNothingWaits)
     for (const char *helper :
          {"void writeIntMask(uint32_t clear, uint32_t set)", "void unmaskFrameEnd()", "void maskIdleFrameEnd()"})
         EXPECT_TRUE(method(helper).Has("IOSimpleLockLockDisableInterrupt(intMaskLock)")) << helper;
-    EXPECT_TRUE(method("void kickSwapQueue() override").StartsWith("unmaskFrameEnd();"));
+    EXPECT_TRUE(method("void kickSwapQueue() override").StartsWith("kickUnmaskFrameEnd();"));
     EXPECT_TRUE(method("void vblankTick()")
                     .EndsWith("if ((status & kFrameEndInt) && !frameEndNeeded() && tegra_panel_holds_frame_end()) "
                               "maskIdleFrameEnd();"));

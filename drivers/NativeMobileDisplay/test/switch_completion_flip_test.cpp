@@ -72,7 +72,7 @@ TEST_F(CompletionFlip, TheCompletionWritesWindowAThroughItsOwnApertureOnly)
     EXPECT_EQ(d.flipRequested, d.completionFlip.requestedAt);
     EXPECT_EQ(d.marks[kSlot].ready, d.completionFlip.writtenAt);
     EXPECT_EQ(d.entrySeq[kSlot], d.flipRequest);
-    EXPECT_EQ(d.deadlineArms, 1u);
+    EXPECT_EQ(d.flipTimerStore.arms, 1u);
     EXPECT_EQ(d.completionFlip.state, SwitchCompletionFlip::kIdle);
     EXPECT_FALSE(d.transferred);
 
@@ -306,7 +306,7 @@ TEST_F(CompletionFlip, RandomOrdersNeverLoseOrDelayALatch)
 TEST(CompletionFlipSource, TheDisplayCallsItWhereTheOrderingNeedsIt)
 {
     const std::string display = SourceText("../NativeLegacyDisplay.cpp");
-    const CodeText complete = Block(display, "void gpuComplete(int status)");
+    const CodeText complete = Block(SourceText("../SwitchGpuDoneDisplay.h"), "void gpuComplete(int status)");
     EXPECT_TRUE(
         complete.Before("__atomic_store_n(&gpuDonePending, true, __ATOMIC_RELEASE);", "writeCompletionFlip(status);"));
     EXPECT_TRUE(complete.Before("writeCompletionFlip(status);", "gpuDoneSource->interruptOccurred("));

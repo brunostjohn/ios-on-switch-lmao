@@ -1440,25 +1440,6 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             switch_perf_hint(SWITCH_PERF_HINT_FRAME_MISS);
     }
 
-    void writeIntMask(uint32_t clear, uint32_t set)
-    {
-        const IOInterruptState state = IOSimpleLockLockDisableInterrupt(intMaskLock);
-        dc[kDcIntMask] = (dc[kDcIntMask] & ~clear) | set;
-        IOSimpleLockUnlockEnableInterrupt(intMaskLock, state);
-    }
-
-    // Any context. A stopped or powered-down scanout gives no frame end; setScanout unmasks it at the restart. INT_ENABLE keeps
-    // FRAME_END latching while it is masked, so the latched one is stale (a frame end long ago, not now) and goes first.
-    void unmaskFrameEnd()
-    {
-        const IOInterruptState state = IOSimpleLockLockDisableInterrupt(intMaskLock);
-        if (intMaskLive && !scanoutStopped && !hwSuspended && !(dc[kDcIntMask] & kFrameEndInt)) {
-            dc[kDcIntStatus] = kFrameEndInt;
-            dc[kDcIntMask] = dc[kDcIntMask] | kFrameEndInt;
-        }
-        IOSimpleLockUnlockEnableInterrupt(intMaskLock, state);
-    }
-
     // Under the gate, at a frame end: whether a later frame end has work. The first frame ends prove the interrupt alive.
     bool frameEndNeeded()
     {
@@ -1468,14 +1449,6 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) || (planesOn && planeLatch.requested()) ||
                planeProbe.active() || planeHeldSet || planeRecoveryWaits() || landscapeState.wanted ||
                completionFlipOut() || scanoutAttachHoldsFrameEnds();
-    }
-
-    void maskIdleFrameEnd()
-    {
-        const IOInterruptState state = IOSimpleLockLockDisableInterrupt(intMaskLock);
-        if (!__atomic_load_n(&gFrameEndHolds, __ATOMIC_ACQUIRE))
-            dc[kDcIntMask] = dc[kDcIntMask] & ~kFrameEndInt;
-        IOSimpleLockUnlockEnableInterrupt(intMaskLock, state);
     }
 
 public:
@@ -1565,72 +1538,7 @@ private:
         vsyncTimer->wakeAtTime(vsyncNext);
     }
 
-    // Primary interrupt context. The action is scheduled with signalInterrupt() and the filter returns false: returning
-    // true on this level line makes IOFilterInterruptEventSource::disableInterruptOccurred mask it until the work loop has
-    // run the action, and TegraPanel's DSI steps and the console tape need every frame end however long the gate is held.
-    // The filter clears the DC's status and reads it back first, which is what signalInterrupt() requires.
-    static bool vblankFilter(OSObject *owner, IOFilterInterruptEventSource *source)
-    {
-        NativeLegacyDisplay *self = static_cast<NativeLegacyDisplay *>(owner);
-        const uint32_t status = self->dc[kDcIntStatus] & (kVblankInt | kFrameEndInt | kVpulse2Int);
-        if (!status)
-            return false;
-        self->dc[kDcIntStatus] = status;
-        (void)self->dc[kDcIntStatus];  // read back: the line is low before ArmCpu's EOI
-        if (gPanicRestore.panicking)
-            return false;  // window A is the panic's (restorePitchOnPanic): no flip, no DSI command
-        if (status & kVblankInt) {
-            self->vblankTime = mach_absolute_time();
-            self->vblankContinuous = mach_continuous_time();
-        }
-        if (status & kVpulse2Int) {  // r17-touch: the vsync phase's line
-            self->vpulseTime = mach_absolute_time();
-            self->vpulseContinuous = mach_continuous_time();
-        }
-        // The panel's DSI command steps, timed from the frame end as hekate does (the line is already low; the last step takes ~620 us).
-        // A console waiting to scroll (waitTapeFrame) wakes at every frame end while it draws on the tape.
-        if (status & kFrameEndInt) {
-            if (__atomic_load_n(&self->scanoutQuiescing, __ATOMIC_ACQUIRE)) {
-                __atomic_fetch_add(&self->scanoutStopFrames, 1ULL, __ATOMIC_RELEASE);
-                thread_wakeup(reinterpret_cast<event_t>(&self->scanoutStopFrames));
-            }
-            tegra_panel_frame_end_filter();
-            self->color->frameEndFilter();
-            if (self->tapeAttached) {
-                __atomic_fetch_add(&self->tapeFrames, 1ULL, __ATOMIC_RELEASE);
-                thread_wakeup((event_t)&self->tapeFrames);
-            }
-            // r6-lows: the frame end's time (the present stamp); debug kernels also the DC A period and a frame end the
-            // action has not taken yet.
-            const uint64_t now = mach_absolute_time();
-            const uint64_t last = self->feLast;
-            __atomic_store_n(&self->feStamp, now, __ATOMIC_RELEASE);
-            self->feLast = now;
-            if (NativeLegacyDisplay::stats) {
-                // Only consecutive frame ends (a stopped scanout or SC7 in between is no period).
-                if (last && now > last && (!self->vsyncInterval || now - last < 2 * self->vsyncInterval)) {
-                    const uint64_t period = now - last;
-                    __atomic_fetch_add(&self->fePeriodSum, period, __ATOMIC_RELAXED);
-                    __atomic_fetch_add(&self->fePeriodN, 1u, __ATOMIC_RELAXED);
-                    if (period < __atomic_load_n(&self->fePeriodMin, __ATOMIC_RELAXED))
-                        __atomic_store_n(&self->fePeriodMin, period, __ATOMIC_RELAXED);
-                    if (period > __atomic_load_n(&self->fePeriodMax, __ATOMIC_RELAXED))
-                        __atomic_store_n(&self->fePeriodMax, period, __ATOMIC_RELAXED);
-                }
-                if (__atomic_load_n(&self->dcPending, __ATOMIC_ACQUIRE) & kFrameEndInt)
-                    __atomic_fetch_add(&self->stFeFolded, 1u, __ATOMIC_RELAXED);
-            }
-        }
-        // Two V_BLANKs before the action runs (the gate busy, e.g. with a copy) fold into one notification; the stats count both.
-        if ((status & kVblankInt) && NativeLegacyDisplay::stats && self->vsyncArmed) {
-            __atomic_fetch_add(&self->stVblanks, 1u, __ATOMIC_RELAXED);
-            if (__atomic_load_n(&self->dcPending, __ATOMIC_ACQUIRE) & kVblankInt)
-                __atomic_fetch_add(&self->stVsyncFolded, 1u, __ATOMIC_RELAXED);
-        }
-        __atomic_fetch_or(&self->dcPending, status, __ATOMIC_RELEASE);
-        source->signalInterrupt();
-        return false;
-    }
+#include "SwitchFrameEndDisplay.h"
 
     static void vblankFired(OSObject *owner, IOInterruptEventSource *, int)
     {
@@ -1640,7 +1548,7 @@ private:
     void vblankTick()
     {
         takeCompletionFlip();
-        const uint32_t status = __atomic_exchange_n(&dcPending, 0u, __ATOMIC_ACQUIRE);
+        const uint32_t status = takeFrameEndStatus();
         if (hwSuspended)
             return;  // a status taken just before the SC7 power-down: the registers are unclocked now
         const uint64_t tickFrom = landscapeRunClock();
@@ -2187,7 +2095,7 @@ private:
         dc = SwitchMMIOWords(static_cast<uintptr_t>(dcMap->getVirtualAddress()));
         color->attach(dc);
         vblankSource = IOFilterInterruptEventSource::filterInterruptEventSource(
-            this, &NativeLegacyDisplay::vblankFired, &NativeLegacyDisplay::vblankFilter, nub, 0);
+            this, &NativeLegacyDisplay::vblankFired, &NativeLegacyDisplay::vblankFilter<NativeLegacyDisplay *>, nub, 0);
         if (!vblankSource || loop->addEventSource(vblankSource) != kIOReturnSuccess)
             panic("SwitchDisplay: cannot attach the DC A interrupt (INTID %u)", kDisplayAInterrupt);
         dcEnable = dc[kDcIntEnable];
@@ -2664,15 +2572,7 @@ private:
     // it replaces a flip still out only when their window layouts match, else it is held for that flip's latch.
 #include "SwitchScanoutStart.h"
 
-    // Under the gate, a request just written: checkFlipDeadline looks at it kFlipDeadlineMS from now, or settles it at once while the
-    // scanout is stopped.
-    void armFlipDeadline()
-    {
-        if (!flipTimer)
-            return;
-        settleArmed = scanoutStopped;
-        flipTimer->setTimeoutMS(scanoutStopped ? 0 : kFlipDeadlineMS);
-    }
+#include "SwitchFlipDeadlineDisplay.h"
 
     // Under the gate, a block-linear frame complete in drawSurface(): the first one switches window A to the rotated layout (and,
     // double-buffered, to surface 1), later ones flip when double-buffered; single-buffered they are already on screen.
@@ -2993,10 +2893,8 @@ private:
             writeFlip(held);
             // r16-idle: nothing is out any more, so the deadline has nothing to check; left armed it woke the CPU 100 ms after
             // the last flip of every burst. The next writeFlip arms it again.
-        } else if (ring.pending == kNoBuffer && !probeRequest && !planeLatch.requested() && !planeHeldSet &&
-                   !planeRecoveryWaits() && flipTimer) {
-            flipTimer->cancelTimeout();
-            settleArmed = false;
+        } else {
+            flipDeadlineIdle();
         }
         if (kickDeferred) {
             kickDeferred = false;
@@ -3288,41 +3186,7 @@ public:
 
 #include "SwitchDisplayResume.h"
 
-    // Called by the GPU client's completion (any thread): the swap is finished on the framebuffer's work loop. The GPU frame copy's
-    // completion (any context, even the GPU's interrupt filter) records its status, writes a direct frame's armed window A flip
-    // (SwitchCompletionFlipDisplay.h) and signals the work loop.
-    void gpuComplete(int status)
-    {
-        status = completionFlipVerdict(status);
-        if (SWITCH_FRAME_TIMELINE) {
-            __atomic_store_n(&gpuDoneAt, mach_absolute_time(), __ATOMIC_RELAXED);
-            KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_PRESENT_DONE), gpuSequence, status);
-        }
-        if (gpuDoneSource) {
-            __atomic_store_n(&gpuStatus, status, __ATOMIC_RELAXED);
-            __atomic_store_n(&gpuDonePending, true, __ATOMIC_RELEASE);
-            writeCompletionFlip(status);
-            gpuDoneSource->interruptOccurred(nullptr, nullptr, 0);
-            return;
-        }
-
-        struct Args {
-            NativeLegacyDisplay *display;
-            int status;
-        } args = {this, status};
-
-        IOWorkLoop *loop = getWorkLoop();
-        const auto action = [](OSObject *, void *a0, void *, void *, void *) -> IOReturn {
-            const Args *a = static_cast<Args *>(a0);
-            a->display->finishGpuSwap(a->status);
-            return kIOReturnSuccess;
-        };
-        if (loop) {
-            loop->runAction(action, this, &args);
-        } else {
-            finishGpuSwap(status);
-        }
-    }
+#include "SwitchGpuDoneDisplay.h"
 
     void free() override
     {
@@ -3542,7 +3406,7 @@ public:
     // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
     void kickSwapQueue() override
     {
-        unmaskFrameEnd();
+        kickUnmaskFrameEnd();
         armVsync();
         if (kicking) {
             rekick = true;
@@ -4301,7 +4165,8 @@ public:
             return;
         }
         IOWorkLoop *loop = getWorkLoop();
-        gpuDoneSource = IOInterruptEventSource::interruptEventSource(this, &NativeLegacyDisplay::gpuDoneFired);
+        gpuDoneSource = IOInterruptEventSource::interruptEventSource(
+            this, &NativeLegacyDisplay::gpuDoneFired<NativeLegacyDisplay *>);
         gpuDeadline = IOTimerEventSource::timerEventSource(this, &NativeLegacyDisplay::gpuDeadlineFired);
         if (!loop || !gpuDoneSource || !gpuDeadline || loop->addEventSource(gpuDoneSource) != kIOReturnSuccess ||
             loop->addEventSource(gpuDeadline) != kIOReturnSuccess)
@@ -4381,8 +4246,7 @@ public:
         gpuOfferedAt = mach_absolute_time();
         ring.claim(target);  // the GPU writes it until finishGpuCopy
         __atomic_store_n(&gpuScanout, true, __ATOMIC_RELEASE);
-        gpuDeadlines = 0;
-        gpuDeadline->setTimeoutMS(kGpuCopyDeadlineMS);
+        armGpuDeadline();
         native_legacy_swap_stage(1);
         gpuRequest = request;
         gpuLength = static_cast<uint64_t>(width) * height * 4;
@@ -4393,14 +4257,6 @@ public:
             native_legacy_early_retires = native_legacy_early_retires + 1;
         }
         return true;
-    }
-
-    static void gpuDoneFired(OSObject *owner, IOInterruptEventSource *, int)
-    {
-        NativeLegacyDisplay *self = static_cast<NativeLegacyDisplay *>(owner);
-        if (!__atomic_exchange_n(&self->gpuDonePending, false, __ATOMIC_ACQUIRE))
-            return;
-        self->finishGpuSwap(__atomic_load_n(&self->gpuStatus, __ATOMIC_RELAXED));
     }
 
     // A completion signalled but not handled yet (the gate was busy) only moves the deadline, as does an offer the GPU driver
@@ -4444,7 +4300,7 @@ public:
     void finishGpuCopy(int status)
     {
         const OriginalLegacySwapRequest *request = gpuRequest;
-        gpuDeadline->cancelTimeout();
+        cancelGpuDeadline();
         __atomic_store_n(&gpuScanout, false, __ATOMIC_RELEASE);
         gpuRequest = nullptr;
         OSSafeReleaseNULL(gpuSource);
@@ -4746,8 +4602,7 @@ public:
         gpuSource = memory;
         gpuOfferedAt = mach_absolute_time();
         __atomic_store_n(&gpuScanout, true, __ATOMIC_RELEASE);
-        gpuDeadlines = 0;
-        gpuDeadline->setTimeoutMS(kGpuCopyDeadlineMS);
+        armGpuDeadline();
         gpuRequest = request;
         gpuLength = static_cast<uint64_t>(width) * height * 4;
         gpuDirect = entry;

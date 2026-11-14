@@ -239,8 +239,9 @@ TEST(CompletionFlipFilterSource, TheDisplayAsksWhereTheFiltersNeedIt)
     using switch_ios::test::Between;
     using switch_ios::test::SourceText;
     const std::string display = SourceText("../NativeLegacyDisplay.cpp");
-    EXPECT_EQ(Between(display, "    void gpuComplete(int status)\n    {\n", ";").find("status = completionFlipVerdict"),
-              8u);
+    EXPECT_EQ(Between(SourceText("../SwitchGpuDoneDisplay.h"), "void gpuComplete(int status)\n{\n", ";")
+                  .find("status = completionFlipVerdict"),
+              4u);
     EXPECT_EQ(Between(display, "    void flip()\n    {\n", ")").find("if (flippedByCompletion("), 8u);
     EXPECT_NE(display.find("#include \"../TegraHost1x/SwitchHost1xFence.h\""), std::string::npos);
     const std::string vic = Between(SourceText("../SwitchVICScanoutDisplay.h"), "bool vicCopyWork()", "\n}\n");

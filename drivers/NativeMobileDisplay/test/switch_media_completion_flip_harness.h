@@ -20,6 +20,7 @@
 #include "../../TegraGM20B/SwitchGpuBacking.h"
 #include "../../TegraHost1x/SwitchHost1xFence.h"
 #include "../SwitchCompletionFlip.h"
+#include "display_filter_context.h"
 #include "../SwitchDisplayComposition.h"
 #include "../SwitchDisplayRetirement.h"
 #include "../SwitchDisplayMemoryEnvelope.h"
@@ -58,6 +59,7 @@ inline int gPreemptionOff = 0;
 
 __attribute__((format(printf, 1, 2))) inline void IOLog(const char *format, ...)
 {
+    filterMayNot("IOLog");
     if (gPreemptionOff)
         throw std::runtime_error(std::string("IOLog with preemption disabled: ") + format);
     char text[512];
@@ -86,6 +88,7 @@ using IOInterruptState = int;
 
 inline IOInterruptState IOSimpleLockLockDisableInterrupt(IOSimpleLock *lock)
 {
+    filterMayNot("IOSimpleLock");
     if (lock->held)
         throw std::runtime_error("completionFlipLock taken while held");
     lock->held = true;
@@ -391,6 +394,7 @@ struct Display {
     // completion's do.
     void filter(uint64_t threshold = 0)
     {
+        const FilterContext context;
         model.completing = true;
         ++gPreemptionOff;
         for (const auto &waiter : gWaiters)

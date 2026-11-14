@@ -1,0 +1,237 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// One display period of a scroll or a scale frame as the display runs it (they are the same to the display: one swap, one
+// frame end), counted: the DC A frame-end filter (with the colour unit's), the frame-end action (the hand-off, the
+// colour unit's enable and palette, the latch), the kick, and either a direct flip from the kick or a fence-only offer
+// whose completion writes window A. Every lock taken, atomic read-modify-write, hand-off (a work-loop signal, a timer's
+// arm or cancel) and work-loop pass, by the real code: SwitchFrameEndDisplay.h, SwitchCompletionFlipDisplay.h,
+// SwitchGpuDoneDisplay.h, SwitchFlipDeadlineDisplay.h and TegraDisplayColor.cpp, on the completion harness's DC A.
+// Boot 21's split: about half the frames flip from the kick, half through the completion.
+#include <gtest/gtest.h>
+
+#include <IOKit/IOLib.h>
+
+#include <cstdint>
+#include <cstring>
+
+#include "../TegraDisplayColor.h"
+#include "switch_completion_flip_harness.h"
+
+namespace {
+uint32_t gColourDc[0x1000];
+unsigned gHolds;
+}  // namespace
+
+extern "C" void native_legacy_frame_end_hold(void)
+{
+    ++gHolds;
+}
+
+extern "C" void native_legacy_frame_end_release(void)
+{
+    --gHolds;
+}
+
+extern "C" uint32_t switch_mmio_model_read32(uintptr_t address)
+{
+    uint32_t value = 0;
+    memcpy(&value, reinterpret_cast<const void *>(address), sizeof(value));
+    return value;
+}
+
+extern "C" void switch_mmio_model_write32(uintptr_t address, uint32_t value)
+{
+    memcpy(reinterpret_cast<void *>(address), &value, sizeof(value));
+}
+
+extern "C" uint16_t switch_mmio_model_read16(uintptr_t)
+{
+    return 0;
+}
+
+extern "C" void switch_mmio_model_write16(uintptr_t, uint16_t)
+{}
+
+extern "C" uint8_t switch_mmio_model_read8(uintptr_t)
+{
+    return 0;
+}
+
+extern "C" void switch_mmio_model_write8(uintptr_t, uint8_t)
+{}
+
+namespace completion_flip_test {
+namespace {
+
+constexpr int kSlot = Display::kSlot0;
+
+struct Counts {
+    unsigned colourLocks, intMaskLocks, flipLocks, rmws, signals, wakeOccurred, timerArms, timerCancels, passes;
+};
+
+class DisplayPeriod : public testing::Test {
+protected:
+    Display d;
+    TegraDisplayColor colour;
+    unsigned passes = 0;
+
+    void SetUp() override
+    {
+        gOffer = nullptr;
+        gLog.clear();
+        memset(gColourDc, 0, sizeof(gColourDc));
+        memset(&colour, 0, sizeof(colour));
+        ASSERT_TRUE(colour.init());
+        colour.attach(SwitchMMIOWords(reinterpret_cast<volatile uint8_t *>(gColourDc)));
+        d.color = &colour;
+        d.completionFlipsProven = true;
+        d.startCompletionFlip();
+        for (int i = 0; i < 4; ++i)
+            directPeriod();
+        for (int i = 0; i < 4; ++i)
+            completionPeriod();
+    }
+
+    void TearDown() override
+    {
+        colour.detach();
+        colour.free();
+        gOffer = nullptr;
+    }
+
+    Counts now() const
+    {
+        return {gSimpleLockTakes.load(),
+                d.intMaskLock->takes,
+                d.completionFlipLock->takes,
+                gRmws,
+                d.vblankSource.signals,
+                d.gpuDoneStore.signals,
+                d.flipTimerStore.arms + d.gpuDeadlineStore.arms,
+                d.flipTimerStore.cancels + d.gpuDeadlineStore.cancels,
+                passes};
+    }
+
+    static Counts since(const Counts &a, const Counts &b)
+    {
+        return {b.colourLocks - a.colourLocks,
+                b.intMaskLocks - a.intMaskLocks,
+                b.flipLocks - a.flipLocks,
+                b.rmws - a.rmws,
+                b.signals - a.signals,
+                b.wakeOccurred - a.wakeOccurred,
+                b.timerArms - a.timerArms,
+                b.timerCancels - a.timerCancels,
+                b.passes - a.passes};
+    }
+
+    // vblankFired: the work-loop pass the filter signalled, in NativeLegacyDisplay's order for these steps.
+    void frameEndAction()
+    {
+        ++passes;
+        d.tick();
+        colour.frameEndAction(d.ring.pending == Display::kNoBuffer);
+        (void)colour.windowOptions();
+    }
+
+    void frameEnd()
+    {
+        d.model.boundary();
+        d.feStamp = mach_absolute_time();
+        d.frameEndInterrupt(false);
+        frameEndAction();
+    }
+
+    void kick()
+    {
+        d.kickUnmaskFrameEnd();
+    }
+
+    // A swap whose producer's writes are in DRAM: the kick flips window A to its slot.
+    void directPeriod()
+    {
+        kick();
+        d.flipRequest = ++d.nextSwap;
+        d.swaps.push_back({d.flipRequest});
+        d.presentEntry(kSlot + static_cast<int>(d.nextSwap % 2));
+        frameEnd();
+    }
+
+    // A swap whose producer still runs: a fence-only offer whose completion writes window A.
+    void completionPeriod()
+    {
+        kick();
+        ASSERT_EQ(d.offer(kSlot + static_cast<int>(d.nextSwap % 2)), 0);
+        d.complete(0);
+        if (d.gpuDoneStore.signals != d.donePasses)
+            ++passes;
+        d.donePass();
+        frameEnd();
+    }
+};
+
+// What a period costs, by lock: none is taken (the colour unit's in the DC A filter least of all), no read-modify-write
+// on the direct path and one claim on the completion's, one signal from the filter to the frame-end action and nothing
+// else handed off, one work-loop pass.
+TEST_F(DisplayPeriod, ADirectFlipPeriod)
+{
+    const Counts before = now();
+    directPeriod();
+    const Counts c = since(before, now());
+    EXPECT_EQ(c.colourLocks, 0u) << "colour unit: filter, action, windowOptions";
+    EXPECT_EQ(c.intMaskLocks, 0u) << "the kick's INT_MASK";
+    EXPECT_EQ(c.flipLocks, 0u);
+    EXPECT_EQ(c.rmws, 0u) << "the filter's hand-off";
+    EXPECT_EQ(c.signals, 1u);
+    EXPECT_EQ(c.wakeOccurred, 0u);
+    EXPECT_EQ(c.timerArms, 0u) << "a deadline per flip";
+    EXPECT_EQ(c.timerCancels, 0u) << "a deadline cancelled per latch";
+    EXPECT_EQ(c.passes, 1u);
+}
+
+TEST_F(DisplayPeriod, AFenceOnlyCompletionPeriod)
+{
+    const Counts before = now();
+    completionPeriod();
+    const Counts c = since(before, now());
+    EXPECT_EQ(c.colourLocks, 0u) << "colour unit: filter, action, windowOptions";
+    EXPECT_EQ(c.intMaskLocks, 0u) << "the kick's INT_MASK";
+    EXPECT_EQ(c.flipLocks, 0u) << "completionFlipLock: arm, write, pass";
+    EXPECT_EQ(c.rmws, 1u) << "the hand-off, the completion's pass; one claim stays";
+    EXPECT_EQ(c.signals, 1u);
+    EXPECT_EQ(c.wakeOccurred, 0u) << "the completion's own work-loop pass";
+    EXPECT_EQ(c.timerArms, 0u) << "the GPU deadline per offer, the flip deadline per flip";
+    EXPECT_EQ(c.timerCancels, 0u);
+    EXPECT_EQ(c.passes, 1u) << "the completion's pass folds into the frame end";
+}
+
+// Both periods keep the screen moving: each latch retires its swap at the frame end that shows it.
+TEST_F(DisplayPeriod, EachSwapRetiresAtTheFrameEndThatShowsIt)
+{
+    for (int i = 0; i < 6; ++i) {
+        const size_t retired = d.retired.size();
+        if (i % 2)
+            completionPeriod();
+        else
+            directPeriod();
+        EXPECT_EQ(d.retired.size(), retired + 1) << "period " << i;
+        EXPECT_EQ(d.ring.pending, Display::kNoBuffer) << "period " << i;
+    }
+}
+
+// The DC A filter runs the colour unit's and TegraPanel's steps with interrupts off: no simple lock, mutex, sleep, log or
+// allocation, with a change of the colour unit's tables pending or not.
+TEST_F(DisplayPeriod, TheFrameEndFilterTakesNoLock)
+{
+    EXPECT_NO_THROW(d.frameEndInterrupt());
+    frameEndAction();
+    uint32_t contrast = 0x3fc00000;
+    ASSERT_EQ(colour.setContrast(&contrast), kIOReturnSuccess);
+    for (int i = 0; i < 4; ++i) {
+        d.model.boundary();
+        EXPECT_NO_THROW(d.frameEndInterrupt()) << "frame end " << i;
+        frameEndAction();
+    }
+}
+
+}  // namespace
+}  // namespace completion_flip_test

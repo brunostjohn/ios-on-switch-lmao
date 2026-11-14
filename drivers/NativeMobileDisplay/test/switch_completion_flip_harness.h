@@ -20,6 +20,9 @@
 #include "../../TegraGM20B/SwitchGpuBacking.h"
 #include "../../TegraHost1x/SwitchHost1xFence.h"
 #include "../SwitchCompletionFlip.h"
+#include "display_filter_context.h"
+
+class TegraDisplayColor;
 
 namespace completion_flip_test {
 
@@ -53,6 +56,7 @@ inline int gPreemptionOff = 0;
 
 inline void mayBlock(const char *what)
 {
+    filterMayNot(what);
     if (gPreemptionOff)
         throw std::runtime_error(std::string(what) + " with preemption disabled");
 }
@@ -117,21 +121,23 @@ __attribute__((format(printf, 1, 2))) inline void IOLog(const char *format, ...)
 
 struct IOSimpleLock {
     bool held = false;
+    unsigned takes = 0;
 };
 
 using IOInterruptState = int;
 
 inline IOSimpleLock *IOSimpleLockAlloc()
 {
-    static IOSimpleLock lock;
-    return &lock;
+    return new IOSimpleLock;
 }
 
 inline IOInterruptState IOSimpleLockLockDisableInterrupt(IOSimpleLock *lock)
 {
+    filterMayNot("IOSimpleLock");
     if (lock->held)
-        throw std::runtime_error("the completion flip's lock taken while held");
+        throw std::runtime_error("a simple lock taken while held");
     lock->held = true;
+    ++lock->takes;
     ++gPreemptionOff;
     return 0;
 }
@@ -142,11 +148,121 @@ inline void IOSimpleLockUnlockEnableInterrupt(IOSimpleLock *lock, IOInterruptSta
     --gPreemptionOff;
 }
 
+inline void IOSleep(unsigned)
+{
+    mayBlock("IOSleep");
+}
+
+// Atomic read-modify-writes in the display's headers, counted (the macros below route them here).
+inline unsigned gRmws = 0;
+
+template <class T, class V> T countedFetchAdd(T *p, V v, int o)
+{
+    ++gRmws;
+    return __atomic_fetch_add(p, v, o);
+}
+
+template <class T, class V> T countedFetchSub(T *p, V v, int o)
+{
+    ++gRmws;
+    return __atomic_fetch_sub(p, v, o);
+}
+
+template <class T, class V> T countedFetchOr(T *p, V v, int o)
+{
+    ++gRmws;
+    return __atomic_fetch_or(p, v, o);
+}
+
+template <class T, class V> T countedFetchAnd(T *p, V v, int o)
+{
+    ++gRmws;
+    return __atomic_fetch_and(p, v, o);
+}
+
+template <class T, class V> T countedExchange(T *p, V v, int o)
+{
+    ++gRmws;
+    return __atomic_exchange_n(p, static_cast<T>(v), o);
+}
+
+template <class T, class V> bool countedCompareExchange(T *p, T *expected, V desired, bool weak, int s, int f)
+{
+    ++gRmws;
+    return __atomic_compare_exchange_n(p, expected, static_cast<T>(desired), weak, s, f);
+}
+
+// The kernel's hand-offs a display period may pay: a work-loop event source's signal, a timer's arm and cancel.
+struct OSObject {};
+
+using IOReturn = int;
+constexpr IOReturn kIOReturnSuccess = 0;
+using event_t = void *;
+
+struct IOInterruptEventSource {
+    unsigned signals = 0;
+
+    void interruptOccurred(void *, void *, int)
+    {
+        mayBlock("IOInterruptEventSource::interruptOccurred outside its spinlock");
+        ++signals;
+    }
+};
+
+struct IOFilterInterruptEventSource {
+    unsigned signals = 0;
+
+    void signalInterrupt()
+    {
+        ++signals;
+    }
+};
+
+struct IOTimerEventSource {
+    unsigned arms = 0, cancels = 0;
+
+    void setTimeoutMS(unsigned)
+    {
+        ++arms;
+    }
+
+    void cancelTimeout()
+    {
+        ++cancels;
+    }
+};
+
+struct IOWorkLoop {
+    template <class Action, class Owner> IOReturn runAction(Action action, Owner *owner, void *a0)
+    {
+        mayBlock("IOWorkLoop::runAction");
+        return action(owner, a0, nullptr, nullptr, nullptr);
+    }
+};
+
+inline unsigned gThreadWakeups = 0, gPanelFrameEnds = 0;
+inline uint32_t gFrameEndHolds = 0;
+
+inline void thread_wakeup(event_t)
+{
+    ++gThreadWakeups;
+}
+
+inline void tegra_panel_frame_end_filter()
+{
+    ++gPanelFrameEnds;
+}
+
 inline uint64_t gClock = 1000;
 
 inline uint64_t mach_absolute_time()
 {
     return ++gClock;
+}
+
+inline uint64_t mach_continuous_time()
+{
+    return gClock;
 }
 
 struct PanicRestore {
@@ -167,7 +283,8 @@ struct DcModel {
         kParksWinbuf
     };
 
-    static constexpr uint32_t kStateAccess = 0x040, kStateControl = 0x041, kHeader = 0x042, kWindowASelect = 1u << 4;
+    static constexpr uint32_t kIntStatus = 0x037, kStateAccess = 0x040, kStateControl = 0x041, kHeader = 0x042,
+                              kWindowASelect = 1u << 4;
     static constexpr uint32_t kStart = 0x800, kActReqs = 3u, kWinAUpdate = 1u << 9, kWinAActReq = 1u << 1;
     std::map<uint32_t, uint32_t> general, assembly, armed, active, parked;
     uint32_t requested = 0;
@@ -198,6 +315,10 @@ struct DcModel {
         if (!clocked)
             throw std::runtime_error("a write to DC A while it is unclocked");
         written.push_back(word);
+        if (word == kIntStatus) {
+            general[word] &= ~value;
+            return;
+        }
         if (const int a = aperture(word); a >= 0) {
             if (a < static_cast<int>(kStart) || winbuf == kLands)
                 assembly[static_cast<uint32_t>(a)] = value;
@@ -268,7 +389,7 @@ struct Words {
     }
 };
 
-struct Display {
+struct Display : OSObject {
     static constexpr int kNoBuffer = TegraScanoutRing::kNone, kSlot0 = TegraScanoutRing::kMaxBuffers;
     static constexpr const char *kBlockScanName = "row scan";
     static constexpr uint32_t kDcIntStatus = 0x037, kDcIntEnable = 0x039, kDcStateAccess = 0x040,
@@ -316,7 +437,7 @@ struct Display {
     uint32_t pitchActControl = 0, pitchOptions = 0x40000000;
     uint64_t frameEnds = 10, feStamp = 0, rotationRequested = 0, flipRequested = 0, flipRequest = 0, nextSwap = 40;
     uint64_t stReplaced = 0, stUnderflows = 0;
-    unsigned underflowRun = 0, deadlineArms = 0, signals = 0;
+    unsigned underflowRun = 0;
     std::vector<std::pair<int, uint64_t>> shown;  // (entry, stamp) for every latch the ring saw
     std::function<void()> midTick;
     // The family's swap queue as retirement sees it: a latch retires through its frame, but not the swap whose
@@ -324,6 +445,58 @@ struct Display {
     bool latchRetire = true;
     std::vector<OriginalLegacySwapRequest> swaps;
     std::vector<uint64_t> retired;
+    // DC A's frame end (SwitchFrameEndDisplay.h) as NativeLegacyDisplay keeps it: INT_MASK, the filter's hand-off, its
+    // dev counters, the colour unit the filter runs.
+    static constexpr uint32_t kDcIntMask = 0x038, kVblankInt = 1u << 2, kFrameEndInt = 1u << 1, kVpulse2Int = 1u << 5;
+    IOSimpleLock *intMaskLock = IOSimpleLockAlloc();
+    bool intMaskLive = true, scanoutStopped = false, scanoutQuiescing = false, tapeAttached = false, vsyncArmed = false;
+    uint32_t dcPending = 0, stFeFolded = 0, stVblanks = 0, stVsyncFolded = 0, fePeriodN = 0;
+    uint64_t vblankTime = 0, vblankContinuous = 0, vpulseTime = 0, vpulseContinuous = 0, scanoutStopFrames = 0;
+    uint64_t tapeFrames = 0, feLast = 0, vsyncInterval = 0, fePeriodSum = 0, fePeriodMin = UINT64_MAX, fePeriodMax = 0;
+    TegraDisplayColor *color = nullptr;
+    IOFilterInterruptEventSource vblankSource;
+    // The GPU's completion (SwitchGpuDoneDisplay.h) and the deadlines (SwitchFlipDeadlineDisplay.h).
+    static constexpr unsigned kFlipDeadlineMS = 100, kGpuCopyDeadlineMS = 1000;
+    IOInterruptEventSource gpuDoneStore;
+    IOInterruptEventSource *gpuDoneSource = &gpuDoneStore;
+    IOTimerEventSource flipTimerStore, gpuDeadlineStore;
+    IOTimerEventSource *flipTimer = &flipTimerStore, *gpuDeadline = &gpuDeadlineStore;
+    IOWorkLoop loop;
+    bool settleArmed = false, planeHeldSet = false;
+    unsigned gpuDeadlines = 0, donePasses = 0;
+    uint64_t gpuDoneAt = 0, gpuSequence = 0;
+
+    IOWorkLoop *getWorkLoop()
+    {
+        return &loop;
+    }
+
+    static bool planeRecoveryWaits()
+    {
+        return false;
+    }
+
+    // DC A's FRAME_END: the filter on the interrupt's CPU, interrupts off (a test with the colour unit linked).
+    template <class Colour = TegraDisplayColor> bool frameEndInterrupt(bool strict = true)
+    {
+        model.general[DcModel::kIntStatus] |= kFrameEndInt;
+        const int filtering = gInFilter;
+        gInFilter = strict ? filtering + 1 : filtering;
+        ++gPreemptionOff;
+        static_assert(sizeof(Colour) > 0);
+        bool handled = false;
+        try {
+            handled = vblankFilter<Display *>(this, &vblankSource);
+        } catch (...) {
+            gInFilter = filtering;
+            --gPreemptionOff;
+            throw;
+        }
+        gInFilter = filtering;
+        --gPreemptionOff;
+        return handled;
+    }
+
     // As NativeLegacyDisplay's startHardware and allocations leave them: surface 0 is the boot framebuffer.
     IOMemoryMap bootMap{kBootFramebuffer};
     IOMemoryMap *bootMapping = &bootMap;
@@ -418,11 +591,6 @@ struct Display {
 
     void scanoutMemoryBarrier()
     {}
-
-    void armFlipDeadline()
-    {
-        ++deadlineArms;
-    }
 
     void planeStage(const Plane &, uint32_t &, uint32_t &)
     {
@@ -540,6 +708,8 @@ struct Display {
     {
         if (const int held = ring.flipHeld(); held != kNoBuffer)
             writeFlip(held);
+        else
+            flipDeadlineIdle();
     }
 
     // NativeLegacyDisplay's checkFlip, with every reading the ring cannot explain a failure.
@@ -576,6 +746,7 @@ struct Display {
         if (offered)
             return offered;
         gpuScanout = transferred = true;
+        armGpuDeadline();
         gpuDirect = entry;
         flipRequest = ++nextSwap;
         swaps.push_back({flipRequest});
@@ -595,6 +766,7 @@ struct Display {
             return offered;
         ring.claim(target);
         gpuScanout = transferred = copying = true;
+        armGpuDeadline();
         flipRequest = ++nextSwap;
         swaps.push_back({flipRequest});
         return 0;
@@ -609,6 +781,7 @@ struct Display {
     // The GPU's nonstall filter with the watched producer complete and visible: interrupts off, its simple lock held.
     void gpuFilter()
     {
+        const FilterContext filter;
         ++gPreemptionOff;
         if (gGpuCallout)
             gGpuCallout(this, 0);
@@ -618,6 +791,7 @@ struct Display {
     // host1x's syncpoint filter with the waiter's threshold reached, likewise; a pass retires the waiter.
     void vicFilter()
     {
+        const FilterContext filter;
         ++gPreemptionOff;
         if (auto *fn = gWaiterFn) {
             gWaiterFn = nullptr;
@@ -629,25 +803,22 @@ struct Display {
     // gpuComplete, on the completion's thread.
     void complete(int status)
     {
-        status = completionFlipVerdict(status);
-        gpuStatus = status;
-        gpuDonePending = true;
-        writeCompletionFlip(status);
-        ++signals;
+        gpuComplete(status);
     }
 
-    // gpuDoneFired, under the gate.
+    // The work-loop pass the completion signalled, if it signalled one.
     void donePass()
     {
-        if (gpuDonePending) {
-            gpuDonePending = false;
-            finishGpuSwap(gpuStatus);
-        }
+        if (gpuDoneStore.signals == donePasses)
+            return;
+        donePasses = gpuDoneStore.signals;
+        gpuDoneFired<Display *>(this, &gpuDoneStore, 0);
     }
 
     // finishGpuCopy and presentGpuCopy: a direct slot is presented as it is, a copy through flip()'s ring.target().
     void finishGpuSwap(int status)
     {
+        cancelGpuDeadline();
         gpuScanout = false;
         if (copying) {
             copying = false;
@@ -681,6 +852,7 @@ struct Display {
     void tick()
     {
         takeCompletionFlip();
+        (void)takeFrameEndStatus();
         if (midTick)
             midTick();
         frameEnds = frameEnds + 1;
@@ -698,6 +870,11 @@ struct Display {
     struct {
         int armed = -2, superseded = -2;
         bool armedRequested = true;
+
+        static bool requested()
+        {
+            return false;
+        }
     } planeLatch;
 
     bool planesOn = false;
@@ -743,10 +920,25 @@ struct Display {
 
 #define SWITCH_FRAME_TIMELINE 0
 #define KDBG(...)
+#define __atomic_fetch_add(p, v, o)                   countedFetchAdd(p, v, o)
+#define __atomic_fetch_sub(p, v, o)                   countedFetchSub(p, v, o)
+#define __atomic_fetch_or(p, v, o)                    countedFetchOr(p, v, o)
+#define __atomic_fetch_and(p, v, o)                   countedFetchAnd(p, v, o)
+#define __atomic_exchange_n(p, v, o)                  countedExchange(p, v, o)
+#define __atomic_compare_exchange_n(p, e, v, w, s, f) countedCompareExchange(p, e, v, w, s, f)
 #include "../SwitchScanoutStart.h"
 #include "../SwitchCompletionFlipDisplay.h"
 #include "../SwitchCompletionFlipFilter.h"
 #include "../SwitchSuspendRetire.h"
+#include "../SwitchFrameEndDisplay.h"
+#include "../SwitchGpuDoneDisplay.h"
+#include "../SwitchFlipDeadlineDisplay.h"
+#undef __atomic_compare_exchange_n
+#undef __atomic_exchange_n
+#undef __atomic_fetch_and
+#undef __atomic_fetch_or
+#undef __atomic_fetch_sub
+#undef __atomic_fetch_add
 #undef KDBG
 #undef SWITCH_FRAME_TIMELINE
 };
