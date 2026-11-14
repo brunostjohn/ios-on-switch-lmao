@@ -341,9 +341,10 @@ void park()
 // partition kept on and brought up again as at J1 (powerUp releases the flush once the reset is), the falcon rebooted
 // and proven as at J2, and the job fails; the next one runs. An engine the reset does not bring back is turned off and
 // handed back to the idle gate, which powers it on at a later decode. One line per cancellation, with what the
-// falcon and the memory controller held. gStateLock held, and gJobLock (the caller's): no NVJPG power transition can
-// be waiting for gStateLock while this takes the power lock (gateOn runs only in a job, gateOff only with no user, and
-// suspend first takes gJobLock).
+// falcon and the memory controller held. gJobLock held (the caller's) and the job's use of the gate, so no NVJPG power
+// transition runs meanwhile (gateOn runs only in a job, gateOff only with no user, and suspend first takes gJobLock).
+// The power lock and gStateLock are taken one after the other, never one inside the other: the gate calls gateOn and
+// gateOff with the power lock held, and they take gStateLock.
 int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
 {
     char host[200];
@@ -376,8 +377,11 @@ int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
     const char *stage = nullptr;
     const bool back = reset && bootFalcon() && !answer(gSyncpt, from, &stage);
     IOLockUnlock(power);
-    gNext = tegra_host1x_syncpt_read(gSyncpt);
+    const uint32_t next = tegra_host1x_syncpt_read(gSyncpt);
+    IOLockLock(gStateLock);
+    gNext = next;
     gWedged = !back;
+    IOLockUnlock(gStateLock);
     if (!back) {
         engineOff();
         gGate.lost();
@@ -587,11 +591,13 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
         return -22;
     if (const int error = gGate.use())
         return error;
+    // The job's use of the gate keeps the engine as this finds it until done(): no lock is held across its wait.
     IOLockLock(gStateLock);
     while (gSuspended)
         IOLockSleep(gStateLock, &gSuspended, THREAD_UNINT);
-    if (gWedged) {
-        IOLockUnlock(gStateLock);
+    const bool wedged = gWedged;
+    IOLockUnlock(gStateLock);
+    if (wedged) {
         gGate.done();
         return -19;
     }
@@ -601,7 +607,6 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     switch_dcache_clean_invalidate(gStatus.va, sizeof(nvjpg_dec_status));
     uint32_t *words = nullptr;
     if (const int error = switch_host1x_job_begin(TEGRA_HOST1X_CHANNEL_NVJPG, 1 + 3 * 11 + 1, &words)) {
-        IOLockUnlock(gStateLock);
         gGate.done();
         return error;
     }
@@ -640,7 +645,6 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
         *busyUs = switch_now_us() - start;
     switch_dcache_clean_invalidate(gStatus.va, sizeof(nvjpg_dec_status));
     memcpy(status, gStatus.va, sizeof(*status));
-    IOLockUnlock(gStateLock);
     gGate.done();
     return ret;
 }
