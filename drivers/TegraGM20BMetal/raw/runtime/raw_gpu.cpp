@@ -1411,7 +1411,8 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     if (const char *ds = strstr(keyString, "ds=")) {
         uint32_t depth = 0, stencil = 0;
         sscanf(ds, "ds=%u/%u", &depth, &stencil);
-        pl.depthFormat = depth ? depth : stencil;
+        // a Depth32Float and a Stencil8 apart are rendered as one Depth32Float_Stencil8 (PassDesc::separate)
+        pl.depthFormat = depth == 252 && stencil == 253 ? kZetaFormat : depth ? depth : stencil;
     }
     if (const char *n = strstr(keyString, "samples="))
         pl.samples = uint8_t(std::max(1, atoi(n + 8)));
@@ -4477,6 +4478,27 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         e.hiddenZeta_ = true;
         backings_.push_back(b);
     }
+    if (const Texture *depth = pass.separate.depth) {
+        constexpr uint32_t kRG8Unorm = 30;
+        Texture shape;
+        shape.width = depth->width;
+        shape.height = depth->height;
+        shape.samples = depth->samples;
+        shape.layers = layers;
+        shape.format = kZetaFormat;
+        shape.zeta = shape.memoryless = true;
+        Texture *b = backing(shape, Device::kSeparateZetaTag, false, true, true);
+        shape.format = kRG8Unorm;
+        shape.zeta = false;
+        Texture *temporary = b ? backing(shape, Device::kSeparateTempTag, true, false, true) : nullptr;
+        if (!temporary)
+            return nullptr;
+        e.pass_.depthStencil.texture = b;
+        e.separate_ = pass.separate;
+        e.separateTemp_ = temporary;
+        backings_.push_back(b);
+        backings_.push_back(temporary);
+    }
     if (backingLock.owns_lock())
         backingLock.unlock();
     // the depth's stored region (raw_zcull_planes.h), taken before this pass's own write leaves it stale
@@ -4504,7 +4526,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass)
         e.areaH_ = std::min(e.areaH_, pass.height);
     ZcullAsk zask;
     zask.on = dev_->zcullOn_;
-    zask.depth = zeta && zetaHasDepth(zeta->format);
+    zask.depth = zeta && !pass.separate.depth && zetaHasDepth(zeta->format);
     zask.cleared = pass.depthStencil.clearDepth;
     zask.layers = layers;
     zask.zetaLayers = zeta ? std::max(zeta->layers, 1u) : 1;
@@ -7405,6 +7427,55 @@ void RenderEncoder::copyShaderTests(uint8_t flags, bool toAttachment)
     p_.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
 }
 
+// The separate depth and stencil textures' aspects into the pass's Depth32Float_Stencil8 backing, or out of it, by
+// raw_shader_tests.h's copies (as a shader test's stand-ins are filled and drained): after the work before is done with them,
+// and done before the work after reads them
+void RenderEncoder::copySeparateZeta(Push &p, uint8_t aspects, bool toAttachment)
+{
+    const Texture &zeta = *pass_.depthStencil.texture;
+    ShaderTestShape shape;
+    if (!aspects || !shaderTestShape(zeta.format, samples_, planeArea().x1, planeArea().y1, aspects, shape))
+        return;
+    auto side = [](const Texture &texture) {
+        auto result = sideOf(texture, 0, 0, 0);
+        result.height = sampleRows(texture);
+        return result;
+    };
+    const auto image = [&](ShaderTestImage which) {
+        switch (which) {
+        case ShaderTestImage::depth:
+            return side(*separate_.depth);
+        case ShaderTestImage::stencil:
+            return side(*separate_.stencil);
+        case ShaderTestImage::temporary:
+            return side(*separateTemp_);
+        case ShaderTestImage::attachment:
+            break;
+        }
+        return side(zeta);
+    };
+    if (aspects & kShaderTestDepth)
+        cb_->use(*separate_.depth, !toAttachment);
+    if (aspects & kShaderTestStencil)
+        cb_->use(*separate_.stencil, !toAttachment);
+    cb_->use(zeta, toAttachment);
+    tiledCacheDrain(p, dev_->k_.info());
+    p.m(WAIT_FOR_IDLE, 0);
+    if (toAttachment)
+        p.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateData);
+    const auto copies = shaderTestTransfers(aspects, shape.packedStencil, toAttachment);
+    for (uint8_t at = 0; at < copies.count; ++at) {
+        const auto &copy = copies.transfers[at];
+        copyRemapped(p, image(copy.source), image(copy.destination), shape.width, shape.height, copy.remap, copy.bytes,
+                     dev_->stats, copy.ordered);
+    }
+    RAW_DIAGNOSTIC(dev_->stats.compZetaCopies += zeta.comptags);
+    p.inc(CE_LINE_LENGTH_IN, {0, 0}, SUBC_COPY);
+    p.m(CE_LAUNCH_DMA, (kLaunchPitch & ~3u) | 2u | (1u << 10), SUBC_COPY);
+    p.m(INVALIDATE_SHADER_CACHES, kInvalidateData);
+    p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
+}
+
 void RenderEncoder::endShaderTests()
 {
     if (!shaderTestsActive_)
@@ -7894,7 +7965,8 @@ void RenderEncoder::end()
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
     const uint32_t room = 160 + 8 * 32 + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZcullRegionWords +
                           kZetaClearWords + 16 + kSampleWords + kTurnWordsMethods + uint32_t(restore.size()) +
-                          kSpanMarkWords + startStampCount_ * counters::kTimestampWords + kDrawStampWords;
+                          kSpanMarkWords + startStampCount_ * counters::kTimestampWords + kDrawStampWords +
+                          (separate_.depth ? 192 : 0);
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
     Push p{start, start + room};
@@ -7936,6 +8008,9 @@ void RenderEncoder::end()
         p.m(WAIT_FOR_IDLE, 0);
         p.m(INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI, 0);
     }
+    if (separate_.depth)
+        copySeparateZeta(p, (separate_.loadDepth ? kShaderTestDepth : 0) | (separate_.loadStencil ? kShaderTestStencil : 0),
+                         true);
     // the clears m2v makes by passes of their own first (Clear loads reaching past the render area): each its attachment alone
     // as target 0, over its reach, then the barrier between passes
     bool own = false;
@@ -8052,6 +8127,17 @@ void RenderEncoder::end()
         checkRoom(q, "a pass's shadow stores");
         cb_->segment(at, q.at);
         cb_->lastEngine_ = BarrierEngine::Copy;
+        d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(q.at) - d.push_.bo.cpu);
+        RAW_DIAGNOSTIC(d.stats.pushBytes += uint64_t(q.at - at) * 4);
+    }
+    if (const uint8_t aspects = (separate_.storeDepth ? kShaderTestDepth : 0) | (separate_.storeStencil ? kShaderTestStencil : 0);
+        separate_.depth && aspects) {
+        constexpr uint32_t room3 = 192;
+        uint32_t *at = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room3 * 4, 256, va));
+        Push q{at, at + room3};
+        copySeparateZeta(q, aspects, false);
+        checkRoom(q, "a pass's separate depth and stencil stores");
+        cb_->segment(at, q.at);
         d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(q.at) - d.push_.bo.cpu);
         RAW_DIAGNOSTIC(d.stats.pushBytes += uint64_t(q.at - at) * 4);
     }

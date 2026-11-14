@@ -88,7 +88,7 @@ uint32_t RMCommandPlan::captureKernel()
     return currentKernel_;
 }
 
-bool RMCommandPlan::record(const Cmd &c, const uint64_t *extra)
+bool RMCommandPlan::record(const Cmd &c, const uint64_t *extra, size_t extraWords)
 {
     // A visibility mode set on a pass with a result buffer is also an operation: the raw encode emits each one in order
     // (raw_visibility.h), sets that no draw follows included
@@ -202,6 +202,12 @@ bool RMCommandPlan::record(const Cmd &c, const uint64_t *extra)
         std::copy_n(extra + c.x, 3, dispatch.grid.begin());
         std::copy_n(extra + c.x + 3, 3, dispatch.groups.begin());
         std::copy_n(extra + c.x + 6, 6, dispatch.stageIn.begin());
+        if (extraWords >= c.x + 16) {  // the indirect forms' words (RMComputeEncoder records them with every dispatch)
+            dispatch.arguments = reinterpret_cast<void *>(uintptr_t(extra[c.x + 12]));
+            dispatch.argumentsOffset = extra[c.x + 13];
+            dispatch.stageInBuffer = reinterpret_cast<void *>(uintptr_t(extra[c.x + 14]));
+            dispatch.stageInOffset = extra[c.x + 15];
+        }
         dispatch.regions = raw::computeDispatch(dispatch.grid, dispatch.threads, dispatch.perThread);
         operation.uses = kernelStates.own(dispatch.state).uses;
         operation.payload = append(dispatches_, dispatch);
@@ -282,6 +288,12 @@ bool RMCommandPlan::record(const Cmd &c, const uint64_t *extra)
     }
     }
     operations_.push_back(operation);
+    if (c.op == OpDispatch) {
+        const auto &last = dispatch(size() - 1);
+        if (last.arguments || last.stageInBuffer)
+            addUses(size() - 1,
+                    {{last.arguments, raw::ResourceUse::Read}, {last.stageInBuffer, raw::ResourceUse::Read}});
+    }
     if (isPlanDraw(c.op)) {
         const RMPlanDraw &last = draws_.own(operation.payload);
         operations_.back().uses = drawUses(operations_.back().uses, last.indices, last.arguments);

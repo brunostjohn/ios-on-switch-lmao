@@ -327,7 +327,7 @@ void rmPoolCommandBuffers()
         _predicates.computeEncoder(cmd.a);
     else if (cmd.op == OpRender || cmd.op == OpBlit || cmd.op == OpSignalEvent || cmd.op == OpWaitEvent)
         _predicates.otherWork();
-    if (_plan.record(cmd, _extra.ownData())) {
+    if (_plan.record(cmd, _extra.ownData(), _extra.size())) {
         std::vector<raw::ResourceUse> &uses = _plan.recordUses();
         if (isPlanDraw(cmd.op)) {
             const uint32_t index = _plan.ownDraw(_plan.size() - 1).state;
@@ -404,6 +404,10 @@ void rmPoolCommandBuffers()
                                         (pass.depthLoad == MTLLoadActionLoad || pass.stencilLoad == MTLLoadActionLoad
                                              ? raw::ResourceUse::Read
                                              : 0))});
+            if (id stencil = pass.zeta[1].texture; stencil && stencil != pass.depth)
+                uses.push_back({(__bridge void *)stencil,
+                                uint8_t(raw::ResourceUse::Write |
+                                        (pass.stencilLoad == MTLLoadActionLoad ? raw::ResourceUse::Read : 0))});
             for (const RMPass::Color &a : pass.color)
                 if (a.resolve)
                     uses.push_back({(__bridge void *)a.resolve, raw::ResourceUse::Write});
@@ -857,32 +861,14 @@ void rmPoolCommandBuffers()
     return c && [c instancesRespondToSelector:selector];
 }
 
+// Every MTLCommandBuffer selector is a method of the command buffer: one that reaches here is no Metal selector, answered zero
+// with an error line
 - (void)forwardInvocation:(NSInvocation *)inv
 {
-    if (!twinAnswers(NSClassFromString(@"NBCommandBuffer"), inv.selector)) {
-        answerZero(self, inv);
-        return;
-    }
-    [inv retainArguments];
-    if (!raw::keepPointedArguments(inv))
-        SWITCH_REFUSE_DETAIL("raw", "call.pointer", uintptr_t(inv.selector),
-                             "-[MTLCommandBuffer %s] recorded with a pointer argument of no known extent",
-                             sel_getName(inv.selector));
-    [self retain:inv];
-    Cmd c = cmd(OpInvocation);
-    c.obj = (__bridge void *)inv;
-    c.stage = 0xff;  // the command buffer's own, not an encoder's
-    [self record:c];
-    [self takeWholeReason:WhyCall why:@"a command buffer call recorded as an invocation"];
-    hit(self, PredCallCBInvocation, uintptr_t(inv.selector));
-    SWITCH_REFUSE_DETAIL("raw", "call.cbinvocation", uintptr_t(inv.selector), "-[MTLCommandBuffer %s] answered zero",
+    SWITCH_REFUSE_DETAIL("raw", "call.cbinvocation", uintptr_t(inv.selector),
+                         "-[MTLCommandBuffer %s]: no method of this device's command buffer: answered zero",
                          sel_getName(inv.selector));
-    const NSUInteger n = inv.methodSignature.methodReturnLength;
-    if (n) {
-        void *zero = calloc(1, n);
-        [inv setReturnValue:zero];
-        free(zero);
-    }
+    answerZero(self, inv);
 }
 
 @end
@@ -915,7 +901,7 @@ void rmPoolCommandBuffers()
         if (_twin)
             return _twin;
     }
-    return twinPublish(self, _twin, [RM_M2V("a command queue for a command buffer replayed on it") newCommandQueue]);
+    return twinPublish(self, _twin, [RM_M2V(NeedReplayQueue) newCommandQueue]);
 }
 
 - (id<MTLCommandBuffer>)commandBuffer

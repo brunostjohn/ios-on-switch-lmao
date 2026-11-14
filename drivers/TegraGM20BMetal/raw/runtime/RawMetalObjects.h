@@ -634,6 +634,9 @@ uint64_t nextTraceId();
     // 0x21c90e51c); every other End answers YES, since MPSGraph aborts on a NO (CSCBSuccess, 0x1810c10a4)
     bool _predicateWithoutBuffer;
     MTLRegion _stageIn;  // setStageInRegion:, which each dispatch records (a stage-in kernel's [[stage_in]] grid)
+    // setStageInRegionWithIndirectBuffer:'s buffer and offset (nil: _stageIn), which each dispatch records
+    RMBuffer *_stageInBuffer;
+    NSUInteger _stageInOffset;
 }
 @end
 

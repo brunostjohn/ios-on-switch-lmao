@@ -701,10 +701,20 @@ struct DepthStencilAttachment {
     bool loadedLater = false;           // a later pass of the command buffer loads this depth
 };
 
+// A pass whose depth and stencil attachments are two textures, a Depth32Float and a Stencil8 of one extent and sample count:
+// it renders a Depth32Float_Stencil8 backing of theirs (depthStencil names the depth texture), each aspect copied in from
+// its texture where loaded and back where stored; an aspect left DontCare keeps its texture's texels, as Metal leaves them
+// (metal2vulkan-runtime depth_stencil_scratch.rs, measured on an M4)
+struct SeparateZeta {
+    const Texture *depth = nullptr, *stencil = nullptr;
+    bool loadDepth = false, loadStencil = false, storeDepth = false, storeStencil = false;
+};
+
 struct PassDesc {
     ColorAttachment color[8];
     uint32_t count = 0;
     DepthStencilAttachment depthStencil;
+    SeparateZeta separate;
     // renderTargetWidth / renderTargetHeight: the render area's bounds where nonzero (m2v render_pass.rs `area`: the
     // attachments' smallest extent, each axis limited by its target size)
     uint32_t width = 0, height = 0;
@@ -1190,6 +1200,11 @@ private:
     uint64_t rootTable(const PackPipeline &r, uint32_t k);
     void copyShaderTests(uint8_t flags, bool toAttachment);
     void endShaderTests();
+    // PassDesc::separate's textures and the copy engine's two-byte stand-in for their stencil; the aspects (raw_shader_tests.h
+    // flags) copied into the pass's backing (`toAttachment`) or out of it
+    SeparateZeta separate_;
+    Texture *separateTemp_ = nullptr;
+    void copySeparateZeta(Push &p, uint8_t aspects, bool toAttachment);
 
     // the encoder's culling, winding and fill, and what the registers hold: the context's (Metal's defaults: no culling,
     // clockwise, fill) at a pass's start, put back at its end
@@ -3128,7 +3143,8 @@ private:
     static constexpr uint32_t kShaderDepthTag = kMemorylessTag + 8;
     static constexpr uint32_t kShaderStencilTag = kShaderDepthTag + 1;
     static constexpr uint32_t kShaderStencilTempTag = kShaderDepthTag + 2;
-    std::array<Backing *, kShaderStencilTempTag + 1> lastBackings_{};
+    static constexpr uint32_t kSeparateZetaTag = kShaderDepthTag + 3, kSeparateTempTag = kShaderDepthTag + 4;
+    std::array<Backing *, kSeparateTempTag + 1> lastBackings_{};
 
     static constexpr uint32_t kPlainPool = 0, kPlainBl = 1, kPlainZeta = 2;
     std::vector<std::unique_ptr<PlainMem>> plainMems_;

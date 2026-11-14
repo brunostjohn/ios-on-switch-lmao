@@ -40,8 +40,6 @@ enum RMPred : uint8_t {
     PredCallSamplerForeign,  // a sampler the raw path does not express (its reason logged when it was made)
     PredCallVertexSampler,
     PredCallDepthBias,     // a = bias, b = slope (float bits)
-    PredCallInvocation,    // an encoder selector recorded as an invocation (each selector logged once)
-    PredCallCBInvocation,  // a command buffer selector recorded as an invocation
     PredCallBlitOptions,
     PredCallBufCopyRange,
     PredBlitTexCopy,
@@ -104,8 +102,6 @@ static constexpr const char *kPredNames[] = {"-",
                                              "call.sampler",
                                              "call.vsampler",
                                              "call.dbias",
-                                             "call.inv",
-                                             "call.cbinv",
                                              "call.blitopt",
                                              "call.bufcopy",
                                              "blit.tex",

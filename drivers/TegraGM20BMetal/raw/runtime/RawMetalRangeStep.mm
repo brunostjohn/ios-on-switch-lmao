@@ -114,9 +114,18 @@ bool RMRangeEncode::command(size_t at)
         encodePlannedState(cb, at, *rc, re_, &*ce_, stateCursor_);
         const auto &regions = dispatch.regions;
         ce_->setStageInRegion(dispatch.stageIn);
+        ce_->setStageInRegionIndirect(dispatch.stageInBuffer ? &((__bridge RMBuffer *)dispatch.stageInBuffer)->_raw
+                                                             : nullptr,
+                                      dispatch.stageInOffset);
         if (!kernels || kernels->count != regions.count)
             return fail(PredCompute, "a dispatch with an incomplete region plan", c.op);
-        for (uint8_t region = 0; region < regions.count; ++region) {
+        if (dispatch.arguments) {
+            ce_->setState(kernels->jobs[0]->value());
+            if (const char *w = nullptr;
+                !ce_->dispatchIndirect(&((__bridge RMBuffer *)dispatch.arguments)->_raw, dispatch.argumentsOffset, &w))
+                return fail(PredCompute, w, c.op);
+        }
+        for (uint8_t region = 0; region < regions.count && !dispatch.arguments; ++region) {
             ce_->setState(kernels->jobs[region]->value());
             if (const char *w = nullptr; !ce_->dispatchRegion(regions.regions[region], regions.grid, regions.nominal,
                                                               !region, region + 1 == regions.count, &w))

@@ -227,7 +227,7 @@ void installDeviceAnswers(Class cls)
     if (raw::blockCompressed(f))
         return 0;
     if (!f || !align)
-        return [(id<RMDeviceSPI>)RM_M2V("a linear row of a format raw does not lay out")
+        return [(id<RMDeviceSPI>)RM_M2V(NeedLinearRow)
             requiredLinearTextureBytesPerRowForDescriptor:d];
     return NSUInteger((uint64_t(d.width) * f->bpp + align - 1) / align * align);
 }

@@ -614,7 +614,7 @@ bool ComputeEncoder::launch(const std::array<uint32_t, 3> &grid, const DispatchP
                             const std::array<uint32_t, 8> &region, const char **why)
 {
     const PackKernel &r = *state_->rec;
-    if (!rootVa_ || grid_ != grid || base_ != piece.base || region_ != region) {
+    if (!rootVa_ || stageInRegion_ || grid_ != grid || base_ != piece.base || region_ != region) {
         uint32_t root[kRootBytes / 4] = {};
         rootWords(r, piece.base.data(), grid.data(), setVa_, residualMask_, residuals_, region.data(), root);
         argumentRoot(r, root);
@@ -625,6 +625,7 @@ bool ComputeEncoder::launch(const std::array<uint32_t, 3> &grid, const DispatchP
         base_ = piece.base;
         region_ = region;
         RAW_DIAGNOSTIC(dev_.stats.uploadBytes += kRootBytes);
+        stageInFromMemory(r, rootVa_);
     }
     uint64_t qmdVa = 0;
     uint32_t qmd[kQmdWords];

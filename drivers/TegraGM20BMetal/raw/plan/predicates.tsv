@@ -32,8 +32,6 @@ call.buf	record	m2v	-	an m2v buffer
 call.sampler	record	gap	sampler_address_mode	pixel coordinates mirrored once on s or t, and a cubic filter with a mip filter, anisotropy or a mirror-clamp axis: an address-lowering program variant (L4); opaque borders are headers per sampled texture (Sampler::bordered)
 call.vsampler	record	layer	L4	a cubic vertex sampler, which m2v filters in the shader: a vertex-stage cubic variant (raw records bind every other vertex sampler)
 call.dbias	record	layer	L4	an infinite or NaN depth bias: the state program's viewport Z offset, as m2v's render_state.rs does
-call.inv	record	layer	L6	an encoder selector raw does not implement: implemented, or failed at creation per Metal
-call.cbinv	record	layer	L6	a command buffer selector raw does not implement: as call.inv
 call.blitopt	record	rule	copy.ce	depth or stencil of a combined format: copy-engine remap of the aspect
 call.bufcopy	record	client	buffer_range	a copy or fill past the buffer
 blit.tex	record	rule	copy.ce	levels, slices and 3D planes: one copy rectangle per layer; texel sizes that differ are client error copy_texel_size

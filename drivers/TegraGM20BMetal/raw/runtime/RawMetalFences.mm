@@ -27,7 +27,7 @@
         if (_twin)
             return _twin;
     }
-    return twinPublish(self, _twin, [RM_M2V("a fence's twin") newFence]);
+    return twinPublish(self, _twin, [RM_M2V(NeedFenceTwin) newFence]);
 }
 
 @end

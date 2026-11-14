@@ -190,6 +190,17 @@ using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
 
 - (void)dispatch:(MTLSize)grid threads:(MTLSize)threads perThread:(bool)perThread
 {
+    [self dispatch:grid threads:threads perThread:perThread arguments:nil offset:0];
+}
+
+// `arguments`: dispatchThreadgroupsWithIndirectBuffer:'s, whose words the GPU reads as the grid; `grid` is then one
+// threadgroup, the shape the kernel is looked up at
+- (void)dispatch:(MTLSize)grid
+         threads:(MTLSize)threads
+       perThread:(bool)perThread
+       arguments:(RMBuffer *)arguments
+          offset:(NSUInteger)offset
+{
     const std::array<uint32_t, 3> t = {uint32_t(threads.width), uint32_t(threads.height), uint32_t(threads.depth)};
     const auto dispatch =
         raw::computeDispatch({grid.width, grid.height, grid.depth}, t, perThread, _state ? _state->_threadLimit : 1024);
@@ -268,7 +279,9 @@ using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
     m.x = _cb->_extra.size();
     for (uint64_t v : {uint64_t(grid.width), uint64_t(grid.height), uint64_t(grid.depth), groups[0], groups[1],
                        groups[2], uint64_t(_stageIn.origin.x), uint64_t(_stageIn.origin.y), uint64_t(_stageIn.origin.z),
-                       uint64_t(_stageIn.size.width), uint64_t(_stageIn.size.height), uint64_t(_stageIn.size.depth)})
+                       uint64_t(_stageIn.size.width), uint64_t(_stageIn.size.height), uint64_t(_stageIn.size.depth),
+                       uint64_t(uintptr_t((__bridge void *)arguments)), uint64_t(offset),
+                       uint64_t(uintptr_t((__bridge void *)_stageInBuffer)), uint64_t(_stageInOffset)})
         _cb->_extra.push_back(v);
     if (kernels) {
         _cb->_computeJobs.try_emplace(kernels.get(), kernels);
@@ -369,6 +382,19 @@ using RMKernelJob = raw::ComputeKernelJob<raw::ComputeState>;
 - (void)dispatchThreads:(MTLSize)grid threadsPerThreadgroup:(MTLSize)threads
 {
     [self dispatch:grid threads:threads perThread:true];
+}
+
+- (void)dispatchThreadgroupsWithIndirectBuffer:(id<MTLBuffer>)buffer
+                          indirectBufferOffset:(NSUInteger)offset
+                         threadsPerThreadgroup:(MTLSize)threads
+{
+    RMBuffer *arguments = [(id)buffer isKindOfClass:[RMBuffer class]] ? (RMBuffer *)buffer : nil;
+    if (!arguments || (offset & 3) || offset > arguments->_raw.length || arguments->_raw.length - offset < 12) {
+        [self refuse:PredCompute value:offset why:@"indirect dispatch arguments not this device's, or outside them"];
+        return;
+    }
+    [_cb retain:buffer];
+    [self dispatch:MTLSizeMake(1, 1, 1) threads:threads perThread:false arguments:arguments offset:offset];
 }
 
 @end

@@ -194,7 +194,7 @@
 // The m2v device this one wraps (the one TEGRA_RAW_METAL=0 gives the process): hw_test_app draws each scene on both
 - (id<MTLDevice>)switchM2VDevice
 {
-    return RM_M2V("HW Test's m2v device");
+    return RM_M2V(NeedHwTestDevice);
 }
 #endif
 
@@ -259,7 +259,7 @@
             logPred(PredCallBufForeign, 0, n, @"(made: the pool had no room)");
         RMTwinObject *t = [RMTwinObject new];
         t->_device = self;
-        t->_twin = [RM_M2V("a buffer the pool had no room for") newBufferWithLength:n options:o];
+        t->_twin = [RM_M2V(NeedBufferPoolFull) newBufferWithLength:n options:o];
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
     b->_raw.hostVisible = (o & MTLResourceStorageModeMask) != MTLResourceStorageModePrivate;
@@ -274,7 +274,7 @@
         return b;
     if (![(id)b isKindOfClass:[RMBuffer class]]) {  // the pool had no room: m2v's buffer, made with the bytes
         RMTwinObject *t = (RMTwinObject *)b;
-        t->_twin = [RM_M2V("a buffer the pool had no room for") newBufferWithBytes:p length:n options:o];
+        t->_twin = [RM_M2V(NeedBufferPoolFull) newBufferWithBytes:p length:n options:o];
         return t->_twin ? b : nil;
     }
     RMBuffer *buffer = (RMBuffer *)b;
@@ -301,7 +301,7 @@
             logPred(PredCallBufForeign, uintptr_t(p) & 0xfff, n, @"(made: a no-copy buffer the raw path refused)");
         RMTwinObject *t = [RMTwinObject new];
         t->_device = self;
-        id<MTLDevice> m2v = RM_M2V("a no-copy buffer the raw path refused");
+        id<MTLDevice> m2v = RM_M2V(NeedNoCopyBuffer);
         t->_twin = [m2v newBufferWithBytesNoCopy:p length:n options:o deallocator:deallocator];
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
@@ -330,7 +330,7 @@
             return nil;
         RMTwinObject *t = [RMTwinObject new];
         t->_device = self;
-        id<RMDeviceSPI> m2v = (id<RMDeviceSPI>)RM_M2V("a buffer over an IOSurface the kernel would not import");
+        id<RMDeviceSPI> m2v = (id<RMDeviceSPI>)RM_M2V(NeedSurfaceBuffer);
         t->_twin = [m2v newBufferWithIOSurface:s];
         return t->_twin ? (id<MTLBuffer>)t : nil;
     }
@@ -423,7 +423,7 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
             uint8_t(array ? raw::fx::kTexTwoDArray : raw::fx::kTexTwoD), t->_raw);
         if (t->_rawOk)
             return (id<MTLTexture>)t;
-        id<MTLDevice> m2v = RM_M2V("a texture the raw path made no memory for");
+        id<MTLDevice> m2v = RM_M2V(NeedTextureNoMemory);
         RMTexture *w = (RMTexture *)[self wrapTwin:[m2v newTextureWithDescriptor:d] descriptor:d];
         if (w)
             refuseTexture(w, PredTexPoolAlloc, d.width, d.height, @"twin-only (pool)", nil);
@@ -434,7 +434,7 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
     const RMStoredSamples stored = storedMultisampleKind(d);
     if (!rawShape(d) && !zetaDescriptor(d) && !line && !volume && !array && !multisampled && !transientLayers &&
         stored == RMStoredSamples::None) {
-        id<MTLDevice> m2v = RM_M2V("a texture of a shape the raw path does not take");
+        id<MTLDevice> m2v = RM_M2V(NeedTextureShape);
         RMTexture *w = (RMTexture *)[self wrapTwin:[m2v newTextureWithDescriptor:d] descriptor:d];
         if (w)
             refuseTexture(w, PredTexShape, rawShapeTerm(d), d.pixelFormat, @"twin-only", nil);
@@ -488,7 +488,7 @@ static void reportNonFiniteStart(RMTexture *t, MTLTextureDescriptor *d)
 #endif
     }
     if (!t->_rawOk) {
-        id twin = t->_twin ?: [RM_M2V("a texture the raw path made no memory for") newTextureWithDescriptor:d];
+        id twin = t->_twin ?: [RM_M2V(NeedTextureNoMemory) newTextureWithDescriptor:d];
         RMTexture *w = (RMTexture *)[self wrapTwin:twin descriptor:d];
         if (w)
             refuseTexture(w, PredTexPoolAlloc, d.width, d.height, @"twin-only (pool)", nil);

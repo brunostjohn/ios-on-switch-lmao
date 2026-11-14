@@ -26,7 +26,8 @@ public enum Registry {
         MPSControlFlowTest(),
         EventReleaseTest(), CoherenceRewriteTest(),
         FetchRungTest(id: "gpu.raw.fetch_rung2", rung: 2), BlendTwinTest(), ZetaColourTest(), PlanarConstexprTest(),
-        StripOverCompressedTest(), OpaqueBorderTest(),
+        StripOverCompressedTest(), OpaqueBorderTest(), IndirectDispatchTest(), TileRefusedTest(),
+        SeparateDepthStencilTest(),
     ]
 
     static let video: [any HWTest] =

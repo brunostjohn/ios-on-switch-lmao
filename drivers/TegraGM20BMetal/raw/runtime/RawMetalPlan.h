@@ -64,6 +64,10 @@ struct RMPlanDispatch {
     std::array<uint64_t, 3> grid{}, groups{};
     std::array<uint32_t, 3> threads{};
     std::array<uint32_t, 6> stageIn{};  // setStageInRegion:'s origin and size
+    // dispatchThreadgroupsWithIndirectBuffer:'s buffer (null: a grid of the CPU's) and setStageInRegionWithIndirectBuffer:'s
+    // (null: stageIn), each an RMBuffer, and their offsets
+    void *arguments = nullptr, *stageInBuffer = nullptr;
+    uint64_t argumentsOffset = 0, stageInOffset = 0;
     bool perThread = false;
     raw::ComputeDispatch regions;
 };
@@ -223,7 +227,8 @@ public:
     raw::GrowList<raw::KernelStateRef> kernelStates;
     raw::GrowList<uint64_t> viewArrays;  // raw::RasterState's viewport and scissor arrays
 
-    bool record(const Cmd &c, const uint64_t *extra);
+    // `extraWords`: how many words `extra` holds (a dispatch's indirect words are read only where its record has them)
+    bool record(const Cmd &c, const uint64_t *extra, size_t extraWords = 0);
 
     // `build` fills the list it is handed with the dispatch's uses, where the kernel and resource revision are new
     template <typename Build> void setKernelUses(size_t at, const void *nativeKernel, Build build)

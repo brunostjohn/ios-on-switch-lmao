@@ -25,7 +25,7 @@
         if (!_compatibility) {
             NSError *error = nil;
             _compatibility =
-                [RM_M2V("a compute state's twin") newComputePipelineStateWithDescriptor:twinComputeDescriptor(_direct)
+                [RM_M2V(NeedComputeStateTwin) newComputePipelineStateWithDescriptor:twinComputeDescriptor(_direct)
                                                                                 options:MTLPipelineOptionNone
                                                                              reflection:nil
                                                                                   error:&error];
@@ -130,7 +130,7 @@ static bool m2vAnswers(RMComputeState *s, MTLPipelineOption options,
                        MTLAutoreleasedComputePipelineReflection *reflection, NSError **error)
 {
     id<MTLDevice> m2v =
-        reflection ? RM_M2V("a compute state's reflection") : RM_M2V("a compute state the pack has no facts of");
+        reflection ? RM_M2V(NeedComputeStateReflection) : RM_M2V(NeedComputeStateUnpacked);
     MTLComputePipelineDescriptor *twin = m2v ? twinComputeDescriptor(s->_direct) : nil;
     if (!twin) {
         if (error)

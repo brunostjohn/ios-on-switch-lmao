@@ -77,6 +77,8 @@ const char *rangeMissing(RMCommandBuffer *cb, size_t from, size_t to)
             layers = cb->_passes[cb->_plan.legacy(at).x].layers;
         if (isPlanDraw(op))
             missing = drawMissing(cb, at, op, layers);
+        else if (op == OpDispatch && (cb->_plan.dispatch(at).arguments || cb->_plan.dispatch(at).stageInBuffer))
+            missing = "a dispatch whose grid or stage-in region the GPU reads from a buffer";
         else if (op == OpDispatch)
             missing = kernelStateMissing(cb, cb->_plan.dispatch(at).state);
         else if (op == OpExecuteKernels)

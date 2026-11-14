@@ -131,7 +131,7 @@ void traceSurfaceImage(RMTexture *t, const char *what, uint32_t seed)
         if (_twin)
             return _twin;
     }
-    id<MTLDevice> m2v = RM_M2V("a texture's twin");
+    id<MTLDevice> m2v = RM_M2V(NeedTextureTwin);
     id made = nil;  // outside this object's lock (twinPublish)
     const char *why = "m2v made none";
     {
