@@ -163,3 +163,4 @@ inline bool thread_call_enter_delayed(thread_call_t call, uint64_t)
 #define OS_LOG_DEFAULT                 nullptr
 #define os_log(log, format, ...)       ((void)(log), IOLog(format "\n", ##__VA_ARGS__))
 #define os_log_error(log, format, ...) ((void)(log), IOLog(format "\n", ##__VA_ARGS__))
+#include "kits/SwitchFalcon/test/switch_falcon_interrupt_stubs.h"

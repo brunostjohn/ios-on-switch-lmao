@@ -407,6 +407,15 @@ void switch_nvdec_engine_describe(char *text, size_t size)
     snprintf(text, size, "falcon CPUCTL 0 IDLESTATE 0x31");
 }
 
+std::string falconError;  // what the engine's error line took since its boot
+
+bool switch_nvdec_engine_falcon_failed(char *text, size_t size)
+{
+    EXPECT_TRUE(powerLock->locked);
+    snprintf(text, size, "%s", falconError.c_str());
+    return !falconError.empty();
+}
+
 bool switch_nvdec_engine_reset(bool *drained)
 {
     EXPECT_TRUE(powerLock->locked);
@@ -941,6 +950,30 @@ TEST_F(SwitchNVDECSubmitTest, AStalledDecodeIsCancelledAndTheNextDecodeRuns)
     reachedInterrupts();
     EXPECT_EQ(waitSequence(next), 0);
     EXPECT_EQ(gQueue.count, 0u);
+}
+
+// NVDEC's falcon raises an error and parks (TRM 15.4.1.7): its line starts the cancellation at once, and the decode in
+// flight fails with the firmware's reason in the cancellation's one line.
+TEST_F(SwitchNVDECSubmitTest, AFalconErrorCancelsTheDecodeInFlightAtOnceWithItsReason)
+{
+    ASSERT_EQ(submit(), 0);
+    const uint64_t failed = gQueue.submitted;
+    semantic(failed);
+    falconError = "falcon error interrupt: MAILBOX0 0x8 (MSDECOS_ERROR_APPLICATION) MAILBOX1 0x9";
+    EXPECT_TRUE(switch_nvdec_jobs_falcon_failed());
+    EXPECT_FALSE(switch_nvdec_jobs_falcon_failed()) << "one cancellation at a time";
+    runCancellation();
+    falconError.clear();
+    EXPECT_EQ(engineSteps, (std::vector<std::string>{"teardown", "reset", "release " + std::to_string(uint32_t(failed)),
+                                                     "restart", "boot"}));
+    reachedInterrupts();
+    EXPECT_EQ(waitSequence(failed), -5);
+    EXPECT_EQ(gQueue.count, 0u);
+    ASSERT_EQ(switch_test_log().size(), 1u);
+    EXPECT_NE(switch_test_log()[0].find("TegraNVDEC: job fence " + std::to_string(uint32_t(failed)) +
+                                        " falcon error interrupt: MAILBOX0 0x8 (MSDECOS_ERROR_APPLICATION)"),
+              std::string::npos)
+        << switch_test_log()[0];
 }
 
 TEST_F(SwitchNVDECSubmitTest, EveryFenceOfOneStallJoinsOneCancellation)

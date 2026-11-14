@@ -10,6 +10,7 @@
 #define SWITCH_DCACHE_OP(op, address) ((void)(address))
 #define SWITCH_DCACHE_BARRIER()       ((void)0)
 #include "../TegraNVJPG.cpp"
+#include "../../../kits/SwitchFalcon/SwitchFalconInterrupt.cpp"
 
 // A falcon v1 image: magic, version 1, 0x200 bytes, the OS header at 0x100 naming 0x80 bytes of code and of data.
 __asm__(".section __DATA,__const\n"
@@ -31,6 +32,8 @@ struct Engine {
     bool requestDropped = false;  // another writer clears NVJPG's request bit after it is set
     bool clampStatusStale = false;  // CLAMP_STATUS keeps reading set (a legacy register, TRM 12.6.12)
     bool clampStuck = false;        // REMOVE_CLAMPING_CMD never clears
+    bool falconErrorInDecode = false;  // the falcon raises MSDECOS_ERROR_APPLICATION and parks during a decode
+    std::string decodeWaitEnded;       // "falcon": the decode's wait ended on the error, not at its bound
     std::vector<std::string> events;
     bool stallDecodes = false, deadAfterReset = false;
     int boots = 0, partitionPowerOns = 0, teardowns = 0, restarts = 0;
@@ -111,6 +114,37 @@ int tegra_host1x_syncpt_wait(uint32_t, uint32_t threshold, uint32_t boundUs)
 {
     gEngine.lastBoundUs = boundUs;
     return static_cast<int32_t>(gEngine.syncpt - threshold) >= 0 ? 0 : TEGRA_HOST1X_ETIMEDOUT;
+}
+
+void tegra_host1x_syncpt_kick(uint32_t)
+{
+    gEngine.events.push_back("kick");
+}
+
+// A decode the falcon parks on: THI raises FALCON_INT on NVJPG's line while the job's wait sleeps.
+int tegra_host1x_syncpt_wait_unless(uint32_t id, uint32_t threshold, uint32_t boundUs, const uint32_t *errors,
+                                    uint32_t seen)
+{
+    if (gEngine.falconErrorInDecode && !gEngine.reachable())
+        ADD_FAILURE() << "an error raised by an engine that is off";
+    if (gEngine.falconErrorInDecode) {
+        auto reg = [](uint32_t offset) -> uint32_t & {
+            return *reinterpret_cast<uint32_t *>(gNvjpgRegisters.data() + offset);
+        };
+        reg(SWITCH_FALCON_THI_INT_STATUS) = 1;
+        reg(SWITCH_FALCON_ERR_IRQSTAT) = 1u << 6;
+        reg(SWITCH_FALCON_ERR_IRQDEST) = 0xfff0;
+        reg(SWITCH_FALCON_ERR_MAILBOX0) = 8;
+        reg(SWITCH_FALCON_ERR_MAILBOX1) = 0x77;
+        gEngine.events.push_back("falcon error");
+        EXPECT_TRUE(IOWorkLoop::last()->fire()) << "NVJPG's line must be on during a decode";
+    }
+    if (errors && __atomic_load_n(errors, __ATOMIC_ACQUIRE) != seen) {
+        gEngine.decodeWaitEnded = "falcon";
+        return TEGRA_HOST1X_EFALCON;
+    }
+    gEngine.decodeWaitEnded = "bound";
+    return tegra_host1x_syncpt_wait(id, threshold, boundUs);
 }
 
 int tegra_host1x_syncpt_release_failed(uint32_t, uint32_t, uint32_t)
@@ -245,6 +279,8 @@ void switch_car_reset_assert(unsigned id)
 {
     gEngine.resets[id] = true;
     if (id == kJpgClock) {
+        for (uint32_t offset : {uint32_t(SWITCH_FALCON_THI_INT_STATUS), uint32_t(SWITCH_FALCON_ERR_IRQSTAT)})
+            *reinterpret_cast<uint32_t *>(gNvjpgRegisters.data() + offset) = 0;
         gEngine.inReset = true;
         gEngine.falconRunning = false;
         gEngine.events.push_back("reset");
@@ -329,6 +365,7 @@ switch_falcon_result switch_falcon_load(volatile uint8_t *, uint64_t, const swit
 
 void switch_falcon_start(volatile uint8_t *)
 {
+    EXPECT_FALSE(switch_falcon_error_pending(gNvjpgRegisters.data())) << "a falcon booted with its error pending";
     gEngine.events.push_back("falcon start");
     gEngine.boots++;
     gEngine.falconRunning = gEngine.reachable() && !gEngine.deadAfterReset;

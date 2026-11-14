@@ -60,6 +60,35 @@ TEST_F(NVJPGGate, AJobPastItsBoundIsCancelledAndTheNextJobRuns)
     EXPECT_EQ(gEngine.syncpt, before + 1);
 }
 
+// The falcon OS raises an application error to the host and parks until it is cleared (TRM 15.4.1.7). NVJPG's own
+// line (global 8, ch.3 p.33) wakes the decode at once; it fails with the firmware's reason, the error is cleared as
+// nvhost clears it, the engine reset and rebooted with its line off meanwhile, and the next decode runs.
+TEST_F(NVJPGGate, AFalconErrorFailsTheDecodeAtOnceWithTheFirmwaresReason)
+{
+    TegraNVJPGJob job = decodeJob();
+    nvjpg_dec_status status = {};
+    ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    gEngine.falconErrorInDecode = true;
+    gEngine.stallDecodes = true;
+    gEngine.decodeWaitEnded.clear();
+    const size_t from = gEngine.events.size();
+    EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), -5);
+    EXPECT_EQ(gEngine.decodeWaitEnded, "falcon") << "the decode ends on the error, not at its bound";
+    gEngine.falconErrorInDecode = false;
+    gEngine.stallDecodes = false;
+    EXPECT_TRUE(logged("falcon error interrupt: MAILBOX0 0x8 (MSDECOS_ERROR_APPLICATION) MAILBOX1 0x77"));
+    EXPECT_FALSE(logged("not reached in"));
+    EXPECT_TRUE(logged("engine reset: running again"));
+    using Steps = std::vector<std::string>;
+    EXPECT_EQ(gEngine.steps(from, {"falcon error", "kick", "flush", "reset", "falcon start"}),
+              (Steps{"falcon error", "kick", "flush", "reset", "reset", "reset", "falcon start"}));
+    EXPECT_EQ(switch_mmio_read32(gNvjpgRegisters.data(), SWITCH_FALCON_THI_INT_STATUS), 0u);
+    EXPECT_TRUE(IOWorkLoop::last()->enabled) << "the line is on again once the falcon is proven";
+    const uint32_t before = gEngine.syncpt;
+    EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    EXPECT_EQ(gEngine.syncpt, before + 1);
+}
+
 // "Whenever a module is reset, the corresponding teardown bit in [HOST1X_SYNC_MOD_TEARDOWN] should be written" (TRM
 // 14.9.14): every power-on, the idle gate's and a cancellation's, tears down NVJPG's module (bit 14) after its last
 // reset and before its falcon starts.

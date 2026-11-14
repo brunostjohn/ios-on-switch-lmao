@@ -69,6 +69,7 @@
 #include "../../kits/SwitchEngineGate/SwitchEngineGateKernel.h"
 #include "../../kits/SwitchEngineGate/SwitchEnginePower.h"
 #include "../../kits/SwitchFalcon/SwitchFalcon.h"
+#include "../../kits/SwitchFalcon/SwitchFalconInterrupt.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
 
@@ -305,11 +306,26 @@ void engineResume();
 int gateOn(void *);
 int gateOff(void *, bool drain);
 
+SwitchFalconInterrupt gErrors;  // NVDEC Interrupt: global 9 (TRM ch.3, p.33)
+constexpr uint32_t kErrorIntid = 32 + 9;
+
+// The falcon's error interrupt: the cancellation runs at once (TegraNVDECCancel.cpp) and its line carries the reason;
+// one already under way clears and resets the engine anyway, so this error is only named.
+void falconFailed(const switch_falcon_error &error)
+{
+    if (switch_nvdec_jobs_falcon_failed())
+        return;
+    char why[256];
+    IOLog("TegraNVDEC: %s, during a cancellation already under way\n",
+          switch_falcon_error_describe(&error, why, sizeof(why)));
+}
+
 // Back to reset with the clock off: after a failed bring-up for the boot, after a failed reset or power-on until the
 // next decode powers it on. The engine is in reset before its swgroups go back to bypass, where an IOVA would reach the
 // physical address of the same number.
 void park()
 {
+    gErrors.off();
     switch_car_reset_assert(kClock);
     IODelay(2);
     switch_car_clock_disable(kClock);
@@ -394,6 +410,12 @@ void bringUpStages()
     IOLog("TegraNVDEC: N2 ok host interface and falcon incremented syncpoint %u %u->%u by interrupt in %llu us; %s\n",
           id, from, tegra_host1x_syncpt_read(id), us, falconState());
     gSyncpt = id;
+    if (!gErrors.start("TegraNVDEC", kErrorIntid, gNvdec, falconFailed)) {
+        IOLog("TegraNVDEC: N2 FAIL no falcon error interrupt (INTID %u)\n", kErrorIntid);
+        giveUp(true);
+        return;
+    }
+    gErrors.on();
     if (!switch_nvdec_jobs_start(gSetup, id, tegra_host1x_syncpt_read(id)) || !switch_nvdec_cancel_start(id) ||
         !gGate.start({"TegraNVDEC", nullptr, gateOn, gateOff}, tegra_nvdec_power_lock())) {
         IOLog("SwitchNVDEC: completion worker or idle timer could not start\n");
@@ -465,9 +487,18 @@ void switch_nvdec_engine_describe(char *text, size_t size)
 
 // The memory controller stops taking NVDEC's requests and drains those in flight (tegra_mc_flush), so the reset cannot
 // cut a transfer in half; powerUp releases the flush once the engine is out of reset again.
+bool switch_nvdec_engine_falcon_failed(char *text, size_t size)
+{
+    return gErrors.failed(text, size);
+}
+
 bool switch_nvdec_engine_reset(bool *drained)
 {
+    gErrors.lostCheckStart();
     *drained = switch_engine_power::flush(kPower);
+    gErrors.lostCheckEnd();
+    gErrors.off();
+    switch_falcon_error_clear(gNvdec);
     switch_car_reset_assert(kClock);
     IODelay(10);
     bool wasOn = false;
@@ -477,7 +508,10 @@ bool switch_nvdec_engine_reset(bool *drained)
 
 bool switch_nvdec_engine_boot()
 {
-    return bootFalcon() && proven();
+    const bool booted = bootFalcon() && proven();
+    if (booted)
+        gErrors.on();
+    return booted;
 }
 
 const char *switch_nvdec_engine_wedge()
@@ -516,6 +550,7 @@ int gateOff(void *, bool drain)
 {
     if (!switch_nvdec_jobs_park(drain))
         return SWITCH_ENGINE_GATE_BUSY;
+    gErrors.off();
     return switch_engine_power_down(kPower) ? SWITCH_ENGINE_GATE_OFF : -5;
 }
 

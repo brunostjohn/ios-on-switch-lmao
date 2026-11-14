@@ -65,6 +65,7 @@
 #include "../../kits/SwitchEngineGate/SwitchEngineGateKernel.h"
 #include "../../kits/SwitchEngineGate/SwitchEnginePower.h"
 #include "../../kits/SwitchFalcon/SwitchFalcon.h"
+#include "../../kits/SwitchFalcon/SwitchFalconInterrupt.h"
 #include "../../kits/SwitchMath/SwitchMath.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
@@ -142,6 +143,8 @@ uint64_t gTailPages[kTailPages];
 
 SwitchEngineGate<SwitchEngineGateKernel> gGate;
 IOLock *gPowerLock;  // the gate's, which the cancellation of a stalled job holds too
+SwitchFalconInterrupt gErrors;  // VIC General Interrupt: global 72 (TRM ch.3, p.35)
+constexpr uint32_t kErrorIntid = 32 + 72;
 uint32_t gSyncpt;
 bool gUp, gAttached = true;
 TegraVICBuffer gConfig, gFilter;
@@ -361,6 +364,7 @@ bool proven()
 // Back to bypass, reset and clock off after a failed bring-up: nothing will use the engine this boot.
 void park()
 {
+    gErrors.off();
     smmuDetach();
     switch_car_reset_assert(kClock);
     IODelay(2);
@@ -371,6 +375,16 @@ void engineSuspend();
 void engineResume();
 int gateOn(void *);
 int gateOff(void *, bool drain);
+
+// The falcon's error interrupt: the cancellation runs at once (TegraVICCancel.cpp) and its line carries the reason;
+// one already under way clears and resets the engine anyway, so this error is only named.
+void falconFailed(const switch_falcon_error &error)
+{
+    if (switch_vic_jobs_falcon_failed())
+        return;
+    char why[256];
+    IOLog("TegraVIC: %s, during a cancellation already under way\n", switch_falcon_error_describe(&error, why, sizeof(why)));
+}
 
 bool allocate()
 {
@@ -467,6 +481,13 @@ void bringUp(void *, wait_result_t)
         "us; %s\n",
         gFceSize, id, from, tegra_host1x_syncpt_read(id), switch_now_us() - start, falconState());
     gSyncpt = id;
+    if (!gErrors.start("TegraVIC", kErrorIntid, gVic, falconFailed)) {
+        IOLog("TegraVIC: V2 FAIL no falcon error interrupt (INTID %u)\n", kErrorIntid);
+        park();
+        giveBack();
+        return;
+    }
+    gErrors.on();
     gPowerLock = IOLockAlloc();
     if (!gPowerLock || !switch_vic_jobs_start(gConfig, id, tegra_host1x_syncpt_read(id)) ||
         !switch_vic_cancel_start(id) || !gGate.start({"TegraVIC", nullptr, gateOn, gateOff}, gPowerLock)) {
@@ -588,6 +609,7 @@ int gateOn(void *)
     if (!answered) {
         IOLog("TegraVIC: power-on FAIL %s; this job fails, the next one powers VIC on again\n",
               gLine[0] ? gLine : "V1");
+        gErrors.off();
         switch_car_reset_assert(kClock);
         IODelay(2);
         switch_car_clock_disable(kClock);
@@ -600,6 +622,7 @@ int gateOff(void *, bool drain)
 {
     if (!switch_vic_jobs_park(drain))
         return SWITCH_ENGINE_GATE_BUSY;
+    gErrors.off();
     return switch_engine_power_down(kPower) ? SWITCH_ENGINE_GATE_OFF : -5;
 }
 
@@ -649,9 +672,18 @@ void switch_vic_engine_describe(char *text, size_t size)
 
 // The memory controller stops taking VIC's requests and drains those in flight (tegra_mc_flush), so the reset cannot
 // cut a transfer in half; powerUp releases the flush once the engine is out of reset again.
+bool switch_vic_engine_falcon_failed(char *text, size_t size)
+{
+    return gErrors.failed(text, size);
+}
+
 bool switch_vic_engine_reset(bool *drained)
 {
+    gErrors.lostCheckStart();
     *drained = switch_engine_power::flush(kPower);
+    gErrors.lostCheckEnd();
+    gErrors.off();
+    switch_falcon_error_clear(gVic);
     switch_car_reset_assert(kClock);
     IODelay(10);
     bool wasOn = false;
@@ -661,11 +693,15 @@ bool switch_vic_engine_reset(bool *drained)
 
 bool switch_vic_engine_boot()
 {
-    return bootFalcon() && proven();
+    const bool booted = bootFalcon() && proven();
+    if (booted)
+        gErrors.on();
+    return booted;
 }
 
 const char *switch_vic_engine_wedge()
 {
+    gErrors.off();
     switch_car_reset_assert(kClock);
     IODelay(2);
     switch_car_clock_disable(kClock);

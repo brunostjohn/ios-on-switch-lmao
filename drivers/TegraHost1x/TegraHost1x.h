@@ -22,6 +22,7 @@ enum {
     TEGRA_HOST1X_ETIMEDOUT = -60,  // the engine did not reach the threshold in time (its interrupt was not lost)
     TEGRA_HOST1X_ELOST = -5,       // the threshold was reached but its interrupt never came (before strict mode only)
     TEGRA_HOST1X_EAGAIN = -35,     // no command arena room until earlier jobs' fences pass
+    TEGRA_HOST1X_EFALCON = -14,    // the engine's falcon raised an error (tegra_host1x_syncpt_wait_unless)
 };
 
 // Host1x class IDs (Linux include/linux/host1x.h: HOST1X_CLASS_HOST1X, ..._NVENC, ..._VIC, ..._NVJPG, ..._NVDEC; L4T
@@ -127,6 +128,12 @@ static inline int tegra_host1x_syncpt_release_through(uint32_t id, uint32_t thre
 // proven its engine (tegra_host1x_set_strict); before that it returns TEGRA_HOST1X_ELOST, so a probe that meets a
 // missing interrupt logs its own failure line and leaves its engine unpublished instead of stopping the boot.
 int tegra_host1x_syncpt_wait(uint32_t id, uint32_t threshold, uint32_t timeoutUs);
+// The same, ending at once with TEGRA_HOST1X_EFALCON once *errors is no longer `seen`: an engine whose falcon parked on
+// an error never reaches the threshold. Whoever moves *errors (a release store) then kicks the syncpoint.
+int tegra_host1x_syncpt_wait_unless(uint32_t id, uint32_t threshold, uint32_t timeoutUs, const uint32_t *errors,
+                                    uint32_t seen);
+// Wakes the waiters of syncpoint `id` to look at their `errors` word again; a waiter with nothing new sleeps on.
+void tegra_host1x_syncpt_kick(uint32_t id);
 void tegra_host1x_set_strict(void);
 
 // Command DMA channels, one per engine as mainline gives every client its own (vic.c, nvdec.c, nvjpg.c

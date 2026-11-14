@@ -58,6 +58,7 @@
 #include "TegraNVENC.h"
 #include "TegraNVENCCheck.h"
 #include "TegraNVENCInputs.h"
+#include "../../kits/SwitchFalcon/SwitchFalconInterrupt.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchCAR/SwitchEngineClock.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
@@ -125,6 +126,8 @@ constexpr uint32_t kInFlight = 4, kSetupSlots = 8, kSetupSlotBytes = TEGRA_NVENC
 constexpr uint32_t kSinkBytes = TEGRA_NVENC_MAX_MBS * sizeof(nvenc_h264_coloc_mb_s);
 constexpr uint32_t kJobBoundUs = 500000, kWaitBoundUs = kInFlight * kJobBoundUs;
 IOLock *gEngineLock;
+SwitchFalconInterrupt gErrors;  // NVENC General Interrupt: global 68 (TRM ch.3, p.35)
+constexpr uint32_t kErrorIntid = 32 + 68;
 uint32_t gSyncpt, gBase, gIssued;  // job n's fence is gBase + n
 uint32_t gFailedThrough;           // with gFailed: every fence up to this one failed (wrapping compare)
 uint8_t gJobCodec[kSetupSlots];    // by setup slot: the codec of the job using it
@@ -291,7 +294,7 @@ bool drained()
 int boundedWait(uint32_t fence)
 {
     return gInputs.wait(tegra_host1x_syncpt_read(gSyncpt), fence, TEGRA_HOST1X_ETIMEDOUT, [fence] {
-        return tegra_host1x_syncpt_wait(gSyncpt, fence, kWaitBoundUs);
+        return tegra_host1x_syncpt_wait_unless(gSyncpt, fence, kWaitBoundUs, gErrors.takenWord(), gErrors.onAt());
     });
 }
 
@@ -312,6 +315,13 @@ void releaseFailed()
 
 void park();
 
+// The falcon's error interrupt: a job's wait wakes at once and the jobs in flight are cancelled with the firmware's
+// reason (stalled()), the engine cleared and reset.
+void falconFailed(const switch_falcon_error &)
+{
+    tegra_host1x_syncpt_kick(gSyncpt);
+}
+
 // A fence past its bound: the engine stopped making progress on a job (a lost interrupt panics in TegraHost1x
 // instead). As L4T's nvhost does on a channel timeout, the job is cancelled, not the engine: channel 2 is torn down so
 // nothing of the stream reaches the engine again, the memory client is flushed, the engine reset and its falcon
@@ -322,6 +332,10 @@ int stalled(uint32_t fence)
 {
     if (failedFence(fence))
         return -5;
+    char why[288];
+    if (!gErrors.failed(why, sizeof(why)))
+        snprintf(why, sizeof(why), "not reached in %u ms (GP timer bound passed)", kWaitBoundUs / 1000);
+    gErrors.lostCheckStart();
     char host[200];
     tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_NVENC, host, sizeof(host));
     const uint32_t reached = tegra_host1x_syncpt_read(gSyncpt);
@@ -329,6 +343,9 @@ int stalled(uint32_t fence)
     const char *falcon = tegra_nvenc_falcon_dump(gNvenc);
     tegra_host1x_channel_teardown(TEGRA_HOST1X_CHANNEL_NVENC);
     (void)switch_engine_power::flush(kPower);
+    gErrors.lostCheckEnd();
+    gErrors.off();
+    switch_falcon_error_clear(gNvenc);
     switch_car_reset_assert(kClock);
     IODelay(10);
     bool wasOn = false;
@@ -347,10 +364,12 @@ int stalled(uint32_t fence)
     if (!back) {
         park();
         gGate.lost();
+    } else {
+        gErrors.on();
     }
-    IOLog("TegraNVENC: job fence %u not reached in %u ms (syncpoint %u at %u, GP timer bound passed); %s; %s; %s; "
-          "cancelled through fence %u, engine reset: %s%s\n",
-          fence, kWaitBoundUs / 1000, gSyncpt, reached, app, falcon, host, gFailedThrough,
+    IOLog("TegraNVENC: job fence %u %s (syncpoint %u at %u); %s; %s; %s; cancelled through fence %u, engine reset: "
+          "%s%s\n",
+          fence, why, gSyncpt, reached, app, falcon, host, gFailedThrough,
           back ? "running again" : "it did not come back, the next encode powers it on again: ",
           back ? ""
                : (gLine[0] ? gLine
@@ -362,6 +381,7 @@ int stalled(uint32_t fence)
 // Back to reset with the clock off after a failed bring-up: nothing will use the engine this boot.
 void park()
 {
+    gErrors.off();
     switch_car_reset_assert(kClock);
     IODelay(2);
     switch_car_clock_disable(kClock);
@@ -423,6 +443,12 @@ void bringUpStages()
           id, from, tegra_host1x_syncpt_read(id), us, falconState());
     gSyncpt = id;
     gBase = tegra_host1x_syncpt_read(id);
+    if (!gErrors.start("TegraNVENC", kErrorIntid, gNvenc, falconFailed)) {
+        IOLog("TegraNVENC: E2 FAIL no falcon error interrupt (INTID %u)\n", kErrorIntid);
+        giveUp(true);
+        return;
+    }
+    gErrors.on();
     if (!gGate.start({"TegraNVENC", nullptr, gateOn, gateOff})) {
         IOLog("TegraNVENC: E2 FAIL no idle timer\n");
         giveUp(true);
@@ -536,7 +562,7 @@ int run(const TegraNVENCSubmit *s, TegraNVENCResolve resolve, void *context, con
     const uint32_t job = gIssued + 1;
     if (job > kInFlight) {
         int ret = boundedWait(gBase + job - kInFlight);
-        if (ret == TEGRA_HOST1X_ETIMEDOUT)
+        if (ret == TEGRA_HOST1X_ETIMEDOUT || ret == TEGRA_HOST1X_EFALCON)
             ret = stalled(gBase + job - kInFlight);
         if (ret || gWedged) {
             IOLockUnlock(gEngineLock);
@@ -652,7 +678,7 @@ extern "C" int tegra_nvenc_wait(uint32_t fence)
     if ((int32_t)(fence - (gBase + __atomic_load_n(&gIssued, __ATOMIC_ACQUIRE))) > 0)
         return -22;
     int ret = boundedWait(fence);
-    if (ret == TEGRA_HOST1X_ETIMEDOUT) {
+    if (ret == TEGRA_HOST1X_ETIMEDOUT || ret == TEGRA_HOST1X_EFALCON) {
         IOLockLock(gEngineLock);
         ret = stalled(fence);
         IOLockUnlock(gEngineLock);
@@ -694,7 +720,9 @@ int gateOn(void *)
                      tegra_host1x_syncpt_read(gSyncpt), falconState());
     }
     gWedged = !answered;
-    if (!answered) {
+    if (answered) {
+        gErrors.on();
+    } else {
         park();
         IOLog("TegraNVENC: power-on FAIL %s; this encode fails, the next one powers NVENC on again\n",
               gLine[0] ? gLine : "E1");
@@ -714,9 +742,13 @@ int gateOff(void *, bool drain)
         IOLockUnlock(gEngineLock);
         return SWITCH_ENGINE_GATE_BUSY;
     }
-    if (drain && !gWedged && boundedWait(gBase + gIssued) == TEGRA_HOST1X_ETIMEDOUT)
-        stalled(gBase + gIssued);
+    if (drain && !gWedged) {
+        const int ret = boundedWait(gBase + gIssued);
+        if (ret == TEGRA_HOST1X_ETIMEDOUT || ret == TEGRA_HOST1X_EFALCON)
+            stalled(gBase + gIssued);
+    }
     gSuspended = true;
+    gErrors.off();
     const bool off = switch_engine_power_down(kPower);
     IOLockUnlock(gEngineLock);
     return off ? SWITCH_ENGINE_GATE_OFF : -5;
