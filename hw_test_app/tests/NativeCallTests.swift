@@ -10,6 +10,7 @@ enum NativeCallTests {
         NativeAmplificationMappingsTest(), NativeDynamicStrideTest(), NativeStageInTest(), NativeVertexStreamsTest(),
         NativeWideStrideTest(), NativeM2vMissingTest(), NativeTargetPartsTest(), NativeLayeredClearTest(),
         NativeLayeredMemorylessTest(), NativeLayeredVertexTest(), NativeLayeredFetchTest(), NativeViewportsTest(),
-        NativeViewportIndexTest(), NativeBlockTexturesTest(), NativeDepthSlicesTest(),
+        NativeViewportIndexTest(), NativeBlockTexturesTest(), NativeDepthSlicesTest(), NativeWideTargetsTest(),
+        NativeInterpolantsTest(), NativeThreadgroupMemoryTest(),
     ]
 }
