@@ -125,8 +125,7 @@ struct SurfaceCrossProcessTest: HWTest {
             metrics.set("cpu\(size)_write_us", cpuWrite(surface))
             return (surface, sampler)
         }
-        let keep = order == "handoff"
-        let answer = await ask(connection) { $0.renderSurface(surface, keep: keep, reply: $1) }
+        let answer = await ask(connection) { $0.renderSurface(surface, keep: false, reply: $1) }
         return answer?.hasPrefix("ok ") == true ? (surface, sampler) : nil
     }
 

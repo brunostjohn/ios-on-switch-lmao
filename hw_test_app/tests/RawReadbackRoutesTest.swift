@@ -8,14 +8,15 @@ import Metal
 import SwiftUI
 import SwitchTexturePattern
 
-/// The home screen's Maps widget on boot 21 showed a 260x260 BGRA snapshot with the GOB signature: block-linear
-/// texels read as rows. Its render ran on WidgetRenderer's own raw device (states with a 260x260 target) and no IOSurface
-/// of that size was ever block-linear, so the rows came back through one of the raw path's own readbacks. This draws an
-/// opaque pattern whose every byte of a GOB differs into a 260x260 BGRA target with the 3D engine, then reads it back by
-/// each route raw offers (heap textures among them, as RenderBox places its own), and by SwiftUI's ImageRenderer
-/// (RenderBox, as WidgetRenderer draws): `<route>_wrong` (bytes off by more than the route's tolerance) and
-/// `<route>_gob` (its first row is the pattern laid out in GOBs, whatever pitch the misread took). `surface_bare` reads
-/// a block-linear surface with no lock, which only a lock can show as rows (TegraGM20BViews.cpp): reported with the
+/// The home screen's Maps widget on boot 21 showed its 260x260 snapshot with the GOB signature: block-linear texels
+/// read as rows. No IOSurface of about that size was block-linear on that boot, so the rows may have come back through
+/// one of the raw path's own readbacks. This draws an opaque pattern whose every byte of a GOB differs into a 260x260
+/// BGRA target with the 3D engine, alone and in a pass shaped as RenderBox's (three colour attachments and a
+/// depth-stencil one, `mixed_*`), then reads it back by each route raw offers (heap textures among them, as RenderBox
+/// places its own), and by SwiftUI's ImageRenderer (RenderBox): `<route>_wrong` (bytes off by more than the route's
+/// tolerance) and `<route>_gob` (its first row is the pattern laid out in GOBs, whatever pitch the misread took). Core
+/// Image's and SwiftUI's routes are judged on `_gob` only (their colour handling is theirs). `surface_bare` reads a
+/// block-linear surface with no lock, which only a lock can show as rows (TegraGM20BViews.cpp): reported with the
 /// surface's layout, not judged.
 struct RawReadbackRoutesTest: HWTest {
     let id = "gpu.raw.readback_routes"
@@ -30,7 +31,7 @@ struct RawReadbackRoutesTest: HWTest {
         guard RawFacade.kind(of: gpu.device) == "raw" else { return .skip("the default device is not the raw facade") }
         var metrics = Metrics()
         var checks: [(String, Bool)] = []
-        func judge(_ route: String, _ got: [UInt8]?, judged: Bool = true, tolerance: Int = 0) {
+        func judge(_ route: String, _ got: [UInt8]?, judged: Bool = true, gobOnly: Bool = false, tolerance: Int = 0) {
             guard let got else {
                 checks.append(("\(route): read back", false))
                 return
@@ -40,7 +41,7 @@ struct RawReadbackRoutesTest: HWTest {
             metrics.set("\(route)_wrong", wrong)
             metrics.set("\(route)_gob", gob ? 1 : 0)
             if judged {
-                checks.append(("\(route): rows (\(wrong) bytes differ, gob \(gob))", wrong == 0 && !gob))
+                checks.append(("\(route): rows (\(wrong) bytes differ, gob \(gob))", (gobOnly || wrong == 0) && !gob))
             }
         }
         let source = try await Self.source(gpu)
@@ -55,7 +56,9 @@ struct RawReadbackRoutesTest: HWTest {
         try await draw(sharedTarget)
         judge("shared_getbytes", Self.getBytes(sharedTarget))
         judge("shared_blit", try await gpu.read(sharedTarget, bytesPerPixel: 4))
-        judge("ci_texture", Self.ciRows(CIImage(mtlTexture: sharedTarget)?.oriented(.downMirrored), gpu.device))
+        judge(
+            "ci_texture", Self.ciRows(CIImage(mtlTexture: sharedTarget)?.oriented(.downMirrored), gpu.device),
+            gobOnly: true)
 
         for storage in [MTLStorageMode.private, .shared] {
             let label = storage == .private ? "heap_private" : "heap_shared"
@@ -82,9 +85,28 @@ struct RawReadbackRoutesTest: HWTest {
         judge("surface_bare", Self.rows(surface.surface.baseAddress, pitch: surface.surface.bytesPerRow), judged: false)
         judge(
             "ci_surface",
-            Self.ciRows(CIImage(ioSurface: unsafeBitCast(surface.surface, to: IOSurfaceRef.self)), gpu.device))
+            Self.ciRows(CIImage(ioSurface: unsafeBitCast(surface.surface, to: IOSurfaceRef.self)), gpu.device),
+            gobOnly: true)
 
-        judge("swiftui", await Self.swiftUIRows(), tolerance: 2)
+        judge("swiftui", await Self.swiftUIRows(), gobOnly: true, tolerance: 2)
+
+        let mixed = try Self.mixedPass(gpu)
+        let drawMixed = { (target: MTLTexture) in
+            try await Self.draw(gpu, mixed.pipeline, source, into: target, with: mixed.attachments)
+        }
+        let mixedHeap = try Self.heapTexture(gpu, .shared)
+        try await drawMixed(mixedHeap)
+        judge("mixed_heap_shared_getbytes", Self.getBytes(mixedHeap))
+        judge("mixed_heap_shared_blit", try await gpu.read(mixedHeap, bytesPerPixel: 4))
+        let mixedShared = try gpu.texture(.bgra8Unorm, Self.side, Self.side, storage: .shared)
+        try await drawMixed(mixedShared)
+        judge("mixed_shared_getbytes", Self.getBytes(mixedShared))
+        let mixedPrivate = try gpu.texture(.bgra8Unorm, Self.side, Self.side, storage: .private)
+        try await drawMixed(mixedPrivate)
+        judge("mixed_private_blit", try await gpu.read(mixedPrivate, bytesPerPixel: 4))
+        let (mixedBuffer, mixedBacking, mixedPitch) = try Self.bufferTexture(gpu)
+        try await drawMixed(mixedBuffer)
+        judge("mixed_buffer_texture", Self.rows(mixedBacking.contents(), pitch: mixedPitch))
         return .judged(checks, metrics, proof: gpu.proof)
     }
 
@@ -113,8 +135,28 @@ struct RawReadbackRoutesTest: HWTest {
         return texture
     }
 
+    /// The attachments a RenderBox pass of boot 21 had besides its target (an RG32Float and a BGRA one, and a
+    /// Depth32Float_Stencil8 one), which the draw does not write, and its pipeline
+    static func mixedPass(_ gpu: GPU) throws -> (pipeline: MTLRenderPipelineState, attachments: [MTLTexture]) {
+        let pipeline = try gpu.render(
+            fragment: "readback_copy_fragment", format: .bgra8Unorm, depth: .depth32Float_stencil8,
+            stencil: .depth32Float_stencil8
+        ) { d in
+            d.colorAttachments[1].pixelFormat = .rg32Float
+            d.colorAttachments[1].writeMask = []
+            d.colorAttachments[2].pixelFormat = .bgra8Unorm
+            d.colorAttachments[2].writeMask = []
+        }
+        let attachments = [
+            try gpu.texture(.rg32Float, side, side), try gpu.texture(.bgra8Unorm, side, side),
+            try gpu.texture(.depth32Float_stencil8, side, side, usage: [.renderTarget]),
+        ]
+        return (pipeline, attachments)
+    }
+
     static func draw(
-        _ gpu: GPU, _ pipeline: MTLRenderPipelineState, _ source: MTLTexture, into target: MTLTexture
+        _ gpu: GPU, _ pipeline: MTLRenderPipelineState, _ source: MTLTexture, into target: MTLTexture,
+        with others: [MTLTexture] = []
     )
         async throws
     {
@@ -122,6 +164,19 @@ struct RawReadbackRoutesTest: HWTest {
         pass.colorAttachments[0].texture = target
         pass.colorAttachments[0].loadAction = .dontCare
         pass.colorAttachments[0].storeAction = .store
+        if others.count == 3 {
+            for (index, texture) in others[0..<2].enumerated() {
+                pass.colorAttachments[index + 1].texture = texture
+                pass.colorAttachments[index + 1].loadAction = .clear
+                pass.colorAttachments[index + 1].storeAction = .dontCare
+            }
+            pass.depthAttachment.texture = others[2]
+            pass.depthAttachment.loadAction = .clear
+            pass.depthAttachment.storeAction = .dontCare
+            pass.stencilAttachment.texture = others[2]
+            pass.stencilAttachment.loadAction = .clear
+            pass.stencilAttachment.storeAction = .dontCare
+        }
         try await gpu.run { commands in
             let encoder = commands.makeRenderCommandEncoder(descriptor: pass)!
             encoder.setRenderPipelineState(pipeline)
