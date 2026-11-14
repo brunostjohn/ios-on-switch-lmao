@@ -179,8 +179,8 @@ TEST_F(FacadeKernelShadow, MediaanalysisdsConversionRunsRawThroughTheImages)
     const size_t launch = ran.order.find('L');
     ASSERT_NE(launch, std::string::npos) << ran.order;
     EXPECT_EQ(ran.order.find('L', launch + 1), std::string::npos) << ran.order;
-    EXPECT_GE(launch, 1u) << "the RGBA8 image filled before the launch: " << ran.order;
-    EXPECT_GE(ran.order.size() - launch - 1, 1u) << "the written images copied back after it: " << ran.order;
+    EXPECT_GE(launch, 3u) << "the three images filled before the launch: " << ran.order;
+    EXPECT_GE(ran.order.size() - launch - 1, 2u) << "the two written images copied back after it: " << ran.order;
 }
 
 TEST_F(FacadeKernelShadow, AMemorylessTextureIsReadThroughHeaderZero)
@@ -196,7 +196,10 @@ TEST_F(FacadeKernelShadow, AMemorylessTextureIsReadThroughHeaderZero)
     const Ran ran = dispatch(luma, rgba, chroma);
     EXPECT_EQ(ran.status, MTLCommandBufferStatusCompleted);
     EXPECT_EQ(ran.opens, 0);
-    EXPECT_NE(ran.order.find('L'), std::string::npos) << "launched raw, slot 1 bound to header 0: " << ran.order;
+    const size_t launch = ran.order.find('L');
+    ASSERT_NE(launch, std::string::npos) << "launched raw, slot 1 bound to header 0: " << ran.order;
+    EXPECT_GE(launch, 2u) << "the planes' images filled: " << ran.order;
+    EXPECT_GE(ran.order.size() - launch - 1, 2u) << "and copied back: " << ran.order;
 }
 
 TEST_F(FacadeKernelShadow, AStoreToAMemorylessTextureFailsTheCommandBuffer)
