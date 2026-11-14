@@ -9,7 +9,6 @@
 static DEFINE_SPINLOCK(pmc_lock);
 static struct nvkm_mc_func pmc_func;
 static struct nvkm_mc_device_func pmc_device;
-static void (*pmc_init_nvkm)(struct nvkm_mc *mc);
 
 static u32 pmc_read(void *ctx)
 {
@@ -54,14 +53,10 @@ static void pmc_enable(struct nvkm_mc *mc, u32 mask)
 	pmc_change(mc->subdev.device, mask, mask);
 }
 
-/* nv50_mc_init's "everything on" is a plain write of the same word */
+/* nv50_mc_init, gk20a's mc init: every engine out of reset, the word written whole */
 static void pmc_init(struct nvkm_mc *mc)
 {
-	unsigned long flags = 0;
-
-	spin_lock_irqsave(&pmc_lock, flags);
-	pmc_init_nvkm(mc);
-	spin_unlock_irqrestore(&pmc_lock, flags);
+	pmc_change(mc->subdev.device, 0xffffffff, 0xffffffff);
 }
 
 void tgm_pmc_own(struct nvkm_device *device)
@@ -75,7 +70,7 @@ void tgm_pmc_own(struct nvkm_device *device)
 	pmc_device.enable = pmc_enable;
 	pmc_device.disable = pmc_disable;
 	pmc_func.device = &pmc_device;
-	pmc_init_nvkm = mc->func->init;
-	pmc_func.init = pmc_init_nvkm ? pmc_init : NULL;
+	if (mc->func->init == nv50_mc_init)
+		pmc_func.init = pmc_init;
 	mc->func = &pmc_func;
 }

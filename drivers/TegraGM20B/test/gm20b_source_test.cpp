@@ -975,7 +975,7 @@ TEST(GM20BPmcSource, EveryPmcEnableChangeTakesItsLockFromM1)
 		Block(SourceText("../gpu_pmc.c"), "void tgm_pmc_own(struct nvkm_device *device)");
 	EXPECT_TRUE(own.Has("pmc_device.enable = pmc_enable;"));
 	EXPECT_TRUE(own.Has("pmc_device.disable = pmc_disable;"));
-	EXPECT_TRUE(own.Has("pmc_func.init = pmc_init_nvkm ? pmc_init : NULL;"));
+	EXPECT_TRUE(own.Has("if (mc->func->init == nv50_mc_init)"));
 	EXPECT_FALSE(gpuCode().Has(", 0x000200,"));
 }
 

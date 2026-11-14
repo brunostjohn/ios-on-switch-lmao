@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include "drivers/TegraGM20B/TegraGM20BPmcEnable.h"
+#include "switch_gpu_interrupts_off_stubs.h"
 
 namespace
 {
@@ -81,5 +82,47 @@ TEST(Gm20bPmcEnable, AFirstUseKeepsTheResetARecoveryMadeInsideIt)
 	change(kCe, kCe);
 	EXPECT_EQ(gPmcEnable, kPmu | kCe)
 		<< "GR came out of reset under a recovery that holds it there";
+}
+
+// gpu_pmc.c's lock is spin_lock_irqsave: what runs under it is the header's read and write of the register and nothing
+// that may take a lock, sleep or allocate (the stubs throw for those with interrupts off).
+uint32_t gWord;
+unsigned gAccesses;
+
+uint32_t readOff(void *)
+{
+	EXPECT_EQ(interrupts_off::depth, 1);
+	++gAccesses;
+	return gWord;
+}
+
+void writeOff(void *, uint32_t value)
+{
+	EXPECT_EQ(interrupts_off::depth, 1);
+	++gAccesses;
+	gWord = value;
+}
+
+unsigned long saveOff(void *)
+{
+	return switch_linux_irq_save();
+}
+
+void restoreOff(void *, unsigned long flags)
+{
+	switch_linux_irq_restore(flags);
+}
+
+TEST(Gm20bPmcEnable, AChangeRunsWithInterruptsOffAndTouchesOnlyTheRegister)
+{
+	const tgm_pmc_enable_io io = {nullptr, readOff, writeOff, saveOff, restoreOff};
+	gWord = kGr | kPmu;
+	gAccesses = 0;
+	interrupts_off::saves = 0;
+	EXPECT_NO_THROW(tgm_pmc_enable_change(&io, kGr, 0));
+	EXPECT_EQ(gWord, kPmu);
+	EXPECT_EQ(gAccesses, 3u) << "a read, the write, its read back";
+	EXPECT_EQ(interrupts_off::saves, 1u);
+	EXPECT_EQ(interrupts_off::depth, 0);
 }
 }  // namespace

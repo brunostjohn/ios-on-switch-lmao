@@ -607,6 +607,7 @@ host_test(
     name = "gm20b_pmc_enable_test",
     srcs = [
         "gm20b_pmc_enable_test.cpp",
+        "switch_gpu_interrupts_off_stubs.h",
         "//drivers/TegraGM20B:TegraGM20BPmcEnable.h",
     ],
 )
