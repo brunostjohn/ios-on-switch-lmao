@@ -15,8 +15,8 @@ import QuartzCore
 /// of these passes) and the two held for the look-ahead encoded ahead; its median from commit to GPU start must stay
 /// under what the remainder, the kernel's SubmitJob and a thread hop take (the encode was 2.2-4.6 ms of a scale frame
 /// before, boot 21); the event's shape is encoded at its commit, as before. Each pass draws into BGRA8 beside a
-/// memoryless colour 1, as the state's line has it. A pack without the state (24B119's) sends its first command buffers
-/// to m2v while the runtime makes its record: those warm it before any shape runs.
+/// memoryless colour 1 in the format the state's line gives it (RGBA16Float on iOS 27). A pack without the state sends
+/// its first command buffers to m2v while the runtime makes its record: those warm it before any shape runs.
 struct CommitLatencyPathTest: HWTest {
     let id = "gpu.path.commit_latency"
     let name = "A Core Animation shaped command buffer's commit returns at once and its GPU work starts soon after"
@@ -47,7 +47,7 @@ struct CommitLatencyPathTest: HWTest {
         let pipeline = try CAState.pipeline(line, library: library, device: gpu.device)
         let targets = try (0..<Self.targets).map { _ in try gpu.texture(.bgra8Unorm, Self.width, Self.height) }
         let scratch = try gpu.texture(
-            .bgra8Unorm, Self.width, Self.height, usage: [.renderTarget], storage: .memoryless)
+            CACorpus.colorFormat(line, 1), Self.width, Self.height, usage: [.renderTarget], storage: .memoryless)
         guard let event = gpu.device.makeSharedEvent() else { return .fail("makeSharedEvent returned nil") }
         let layer = CAMetalLayer()
         layer.device = gpu.device
