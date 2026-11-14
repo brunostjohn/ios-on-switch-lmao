@@ -66,6 +66,7 @@
 		<string>kern.switch_media_flips_declined</string>
 		<string>debug.switch_display_dc_host1x_class</string>
 		<string>debug.switch_display_host1x_flip</string>
+		<string>debug.switch_gpu_rail_cycle</string>
 		<string>debug.switch_joycon_probe</string>
 		<string>kern.switch_scanout_cpu</string>
 		<string>kern.switch_scanout_unshown</string>
@@ -78,6 +79,7 @@
 	<array>
 		<string>debug.switch_display_dc_host1x_class</string>
 		<string>debug.switch_display_host1x_flip</string>
+		<string>debug.switch_gpu_rail_cycle</string>
 		<string>debug.switch_joycon_probe</string>
 	</array>
 	<key>com.apple.security.exception.shared-preference.read-only</key>
