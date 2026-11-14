@@ -44,6 +44,7 @@ M2V_IDENTS = {
 # The kernel's submission entries only NVK calls (TegraGM20BABI.h)
 KERNEL_LEGACY = ('Exec', 'ExecSurfaces', 'Submit', 'SubmitAddress')
 
+TWIN = re.compile(r'\b\w*[Tt]win\w*\b')
 BRIDGE = re.compile(r'\b(native_bridge_metal_\w+|nmb_\w+|switch_nmb_\w+)\b')
 NB_CLASS = re.compile(r'\b(NB[A-Z]\w*)\b')
 INCLUDE = re.compile(r'#\s*(?:include|import)\s*"([^"]+)"')
@@ -148,12 +149,14 @@ class Census:
         for header in INCLUDE.findall(text):
             if header.startswith('bridge/') or Path(header).name == 'NativeBridgeMetalFrontend.h':
                 self.add('include', header, file)
-        self._names(file, text)
+        self._names(file, text, code)
         for ident, pattern in M2V_IDENTS.items():
             if re.search(pattern, code):
                 self.add('ident', ident, file)
 
-    def _names(self, file: str, text: str) -> None:
+    def _names(self, file: str, text: str, code: str) -> None:
+        for word in set(TWIN.findall(code)):
+            self.add('twin', word, file)
         for literal in LITERAL.findall(text):
             if NVK_NAME.match(literal):
                 self.add('nvk', literal, file)
