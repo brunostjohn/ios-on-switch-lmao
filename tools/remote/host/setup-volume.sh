@@ -18,7 +18,8 @@ if [ ! -e "$volume/.fseventsd/no_log" ]; then
     sudo diskutil mount "$device" >&2
 fi
 sudo mdutil -i off "$volume" >&2
-sudo chown "$(id -un)" "$volume"
+user=$(id -un)
+sudo chown "$user" "$volume"
 touch "$volume/.metadata_never_index"
 mkdir -p "$volume/buildbarn-worker/build" "$volume/buildbarn-worker/cache"
 echo "$volume/buildbarn-worker"

@@ -83,6 +83,7 @@ What sets the host's speed, measured on 14 Nov (10-core M4, 16 executors):
 
 Full Disk Access and Developer Tools are granted to the binaries' code hashes: a rebuilt bb_worker or bb_runner needs
 both again.
+
 - Automatic macOS updates are off, so the host never installs one and reboots in the middle of a build.
 
 Bluetooth has no working controller on an EC2 Mac and bluetoothd restarts every ten seconds, which keeps audiomxd and
@@ -95,13 +96,13 @@ keep the same tar.
 ### Another host
 
 An extra host runs only the worker and the runner against the first host's storage and scheduler over the private
-network: reinstall the first host with `SWITCH_BB_PRIVATE_IP=<its private IP>` in the environment, so its storage
-(8980) and the scheduler's worker port (8983) also listen there, and run `install-host.sh <bins> <name> <actions>
-<first host's private IP>` on the new one. The security group then needs TCP 8980-8983 from itself. Those ports take
-no credentials. macOS keeps a non-Apple binary in a user's LaunchDaemon off the local network ("no route to host"), so
-the extra host's worker talks to 127.0.0.1, where launchd hands each connection to `/usr/bin/nc` (exempt) relaying to the
-first host. Running the worker as root instead would make the output directories root's, and actions that chmod their
-own output directory (the native seed) fail.
+network: reinstall the first host with `SWITCH_BB_PRIVATE_IP=<its private IP>` in the environment, so its storage (8980)
+and the scheduler's worker port (8983) also listen there, and run
+`install-host.sh <bins> <name> <actions> <first host's private IP>` on the new one. The security group then needs TCP
+8980-8983 from itself. Those ports take no credentials. macOS keeps a non-Apple binary in a user's LaunchDaemon off the
+local network ("no route to host"), so the extra host's worker talks to 127.0.0.1, where launchd hands each connection
+to `/usr/bin/nc` (exempt) relaying to the first host. Running the worker as root instead would make the output
+directories root's, and actions that chmod their own output directory (the native seed) fail.
 
 ## The cluster cache (until 14 Nov)
 
