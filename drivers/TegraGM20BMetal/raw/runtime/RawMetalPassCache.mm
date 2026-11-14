@@ -355,9 +355,11 @@ RMPassTrim rmPassTrim()
         CFTypeRef gone[kEntries] = {};
         const bool other = c->thread != self;
         // thread_suspend returns once the thread is off its core: its last instruction is precise, so `inside` says
-        // whether it stopped within the window
-        if (other && thread_suspend(c->thread) != KERN_SUCCESS)
+        // whether it stopped within the window. A thread this process may not suspend drops its copies itself.
+        if (other && thread_suspend(c->thread) != KERN_SUCCESS) {
+            c->dropAsked.store(true, std::memory_order_relaxed);
             continue;
+        }
         if (c->inside.load(std::memory_order_relaxed)) {
             c->dropAsked.store(true, std::memory_order_relaxed);
         } else {
