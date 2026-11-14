@@ -178,17 +178,22 @@ SwitchEMC *SwitchEMC::create(char *why, size_t size)
     return emc;
 }
 
+static void dropSource(IOWorkLoop *loop, IOEventSource *source)
+{
+    if (!source)
+        return;
+    source->disable();
+    if (loop)
+        loop->removeEventSource(source);
+    source->release();
+}
+
 void SwitchEMC::free()
 {
-    IOEventSource *sources[] = {actmon, signal[0], signal[1], signal[2], signal[3], hold};
-    for (IOEventSource *source : sources) {
-        if (!source)
-            continue;
-        source->disable();
-        if (loop)
-            loop->removeEventSource(source);
-        source->release();
-    }
+    dropSource(loop, actmon);
+    for (IOInterruptEventSource *source : signal)
+        dropSource(loop, source);
+    dropSource(loop, hold);
     OSSafeReleaseNULL(loop);
     OSObject::free();
 }
