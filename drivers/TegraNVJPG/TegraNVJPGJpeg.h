@@ -501,10 +501,10 @@ enum {
 // nvjpg_drv.h tile_mode (0 pitch, 1 "gpu block linear", 2 "tegra block linear"). 2 is taken for the arrangement every
 // Tegra X1 client shares, NV_MMU_PTE_KIND_GENERIC_16Bx2 with Tegra sector ordering (TRM chapter 20, Tables 83 and 86:
 // clients sharing surfaces must support it), which NVDEC writes as tileFormat 0 "TBL" and VIC reads as GENERIC_16Bx2.
-// blklinear_gob is the GOBs a block as log2, the encoding "all Tegra X1 clients use" (TRM 20.2, Table 85; NVDEC's falcon
-// setup codes 2 GOBs as 0 for itself, but NVJPG's firmware passes the field to the hardware unchanged). The TRM has no
-// NVJPG chapter: HW Test gpu.iosurface.cross_process nvjpg<size> judges both readings and names the layout a wrong read
-// matches.
+// blklinear_gob is the GOBs a block as log2, the encoding "all Tegra X1 clients use" (TRM 20.2, Table 85; NVDEC's
+// falcon setup codes 2 GOBs as 0 for itself, but NVJPG's firmware passes the field to the hardware unchanged). The TRM
+// has no NVJPG chapter: HW Test gpu.iosurface.cross_process nvjpg<size> judges both readings and names the layout a
+// wrong read matches.
 enum {
     TEGRA_NVJPG_TILE_PITCH = 0,
     TEGRA_NVJPG_TILE_TEGRA_BLOCK_LINEAR = 2

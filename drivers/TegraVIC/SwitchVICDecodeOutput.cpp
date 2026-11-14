@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // See SwitchVICDecodeOutput.h. The destination is a recorded write under its surface's access, as switch_vic_transform
-// writes one; the decoder's buffer is a read of its backing, ordered behind the decoder by the job's syncpoint wait (the
-// decoder records nothing in the backing itself).
+// writes one; the decoder's buffer is a read of its backing, ordered behind the decoder by the job's syncpoint wait
+// (the decoder records nothing in the backing itself).
 #include <IOKit/IOLib.h>
 #include "SwitchVICDecodeOutput.h"
 #include "SwitchVICJobs.h"
