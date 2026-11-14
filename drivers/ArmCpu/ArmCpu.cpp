@@ -71,6 +71,9 @@ volatile uint64_t armcpu_ipi_selftest_sent = 0;
 volatile uint32_t armcpu_gic_boot[8];
 volatile uint32_t armcpu_core_timer[8],
     armcpu_core_sgi[8];  // per logical core: architectural timer interrupts and SGI 0 taken
+#if DEVELOPMENT || DEBUG
+volatile uint32_t armcpu_core_spi[8];  // per logical core: SPIs taken (SwitchPowerStats' 10 s line)
+#endif
 // Secondary startup timer probe: bits 1/2 virtual deadline passed / PPI 27 pending, 4/8 the same for the physical
 // timer (PPI 30); diag = virtual ticks, physical ticks, (CNTV_CTL << 8 | CNTP_CTL), spins, (IGROUPR0 << 32 | ISENABLER0).
 volatile uint32_t armcpu_timer_probe[8];
@@ -1146,6 +1149,9 @@ void ArmCpu::interrupt()
 
             void other(uint32_t intid) const
             {
+#if DEVELOPMENT || DEBUG
+                countOwn(armcpu_core_spi[cpu->logicalId]);
+#endif
                 ArmCpu::otherInterrupt(distributor, intid);
             }
         } cpuInterface{this, gV2CpuIf, gDist};
