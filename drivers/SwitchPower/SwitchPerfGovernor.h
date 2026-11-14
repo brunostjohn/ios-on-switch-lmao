@@ -17,14 +17,13 @@ using Signal = void (*)(void *ctx);
 // The boot window's end if System Boot Complete never comes, in seconds of uptime (r8a's slow boot had it at 74 s).
 constexpr unsigned kBootFallbackSeconds = 120;
 
-// Starts governing over `count` points (kHz ascending, with their CVB mV), the clock now at `startIndex`, the rows in
-// `held` held down from the start (bits: the rows above the top the DFLL measured right at enable, tried again from
-// below at the first periodic window), with the boot window in force until SWITCH_PERF_HINT_BOOT_DONE (System Boot
-// Complete) or kBootFallbackSeconds of uptime: the CPU at its ceiling, the GPU's idle clock held off. A boot window that has
-// ended does not open again on a restart. Registers the perfcontrol callouts and arms the first window. False (with
-// `why`) if the table is empty or the governor already runs. Work loop only.
-bool start(const uint32_t *khz, const uint32_t *mv, unsigned count, unsigned startIndex, uint32_t held, Signal signal,
-           void *ctx, char *why, size_t len);
+// Starts governing over `count` points (kHz ascending, with their CVB mV), the clock now at `startIndex`, with the boot
+// window in force until SWITCH_PERF_HINT_BOOT_DONE (System Boot Complete) or kBootFallbackSeconds of uptime: the CPU at
+// its ceiling, the GPU's idle clock held off. A boot window that has ended does not open again on a restart. Registers
+// the perfcontrol callouts and arms the first window. False (with `why`) if the table is empty or the governor already
+// runs. Work loop only.
+bool start(const uint32_t *khz, const uint32_t *mv, unsigned count, unsigned startIndex, Signal signal, void *ctx,
+           char *why, size_t len);
 
 // Stops: callouts unregistered, no signal after it returns, hints ignored. Idempotent. Work loop only.
 void stop();
@@ -43,20 +42,6 @@ void applied(unsigned index);
 void limits(unsigned floorMv, unsigned capMv);
 
 uint32_t khzAt(unsigned index);
-
-// Rows held down (SwitchGovernor.h switch_gov_rows), the ceiling below the DFLL's thermal cap and thermalmonitord's
-// ceiling skipping them. hold(): the ceiling row `index` measured high with the clock on it even when re-asked: that row
-// only is held, the ceiling the next row down at once; returns the periodic lines until it is tried again, `again`
-// whether it was on trial. landed(): the ceiling row `index` measured right with the clock on it; true if it was on
-// trial (now restored). retryHeld(): once per periodic line, after its measurement of the ceiling: held rows whose wait
-// is over go back on trial (returned as bits), the ceiling up at once; the governor gets there from below and every
-// move to the ceiling is measured. ceiling(): the highest index in force now. indexAt: the highest index at or below
-// `khz`. Work loop only.
-unsigned hold(unsigned index, bool *again);
-bool landed(unsigned index);
-uint32_t retryHeld();
-unsigned ceiling();
-unsigned indexAt(uint32_t khz);
 
 // The context-switch callout's last parameter: xnu-12377 passes a timeout the callout may set, xnu-10063 nothing.
 #if XNU_12377_121_6

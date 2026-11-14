@@ -32,7 +32,7 @@ void SwitchThermal::dfllRefused(unsigned long hz, int err)
 }
 
 // DFLL mode raise: its registers back after SC7 if that failed, prepare once, the thermal indices for this
-// temperature, then enable at the 1683 MHz row, the top settled, and the governor started.
+// temperature, then enable at 1785 MHz and the governor started.
 bool SwitchThermal::raiseDfll(int soc)
 {
     char why[256] = "";
@@ -55,7 +55,7 @@ bool SwitchThermal::raiseDfll(int soc)
         dfllPrepared = true;
         dfllFloor = dfllCap = ~0u;
         updateDfllThermal(soc);
-        err = tegra_dfll_cpu_enable(kDfllSafeHz, why, sizeof(why));
+        err = tegra_dfll_cpu_enable(kDfllRateHz, why, sizeof(why));
     }
     if (err) {
         IOLog("SwitchPerf: DFLL not raised (%d: %s); the CPU stays at the inherited clock until the next raise\n", err,
@@ -64,7 +64,6 @@ bool SwitchThermal::raiseDfll(int soc)
     }
     perfRaised = true;
     ++perfRaises;
-    dfllTopHz = settleDfllTop();  // 1785 MHz only as measured at or under it (fixed and governed modes alike)
     if (governed && !startGovernor(why, sizeof(why))) {
         restoreCpu("no governor", CpuDown::Again);
         IOLog("SwitchPerf: CPU governor not started (%s); the CPU stays at the inherited clock until the next raise\n",
@@ -73,11 +72,11 @@ bool SwitchThermal::raiseDfll(int soc)
     }
     dfllRefusedHz = 0;
     char state[224];
-    tegra_dfll_cpu_describe(dfllTopHz, state, sizeof(state));
+    tegra_dfll_cpu_describe(kDfllRateHz, state, sizeof(state));
     const unsigned mhz = switchclk::readCpu(car).kHz / 1000;
     publish("CPUClockMHz", mhz);
     publish("CPURaises", perfRaises);
-    IOLog("SwitchPerf: CPU on the DFLL at %lu MHz%s (raise %u; SoC %d.%d C): %s\n", dfllTopHz / 1000000,
+    IOLog("SwitchPerf: CPU on the DFLL at %lu MHz%s (raise %u; SoC %d.%d C): %s\n", kDfllRateHz / 1000000,
           governed ? ", on demand from here" : "", perfRaises, soc / 1000, soc % 1000 / 100, state);
     if (governed)
         IOLog("SwitchPerf: %s\n", why);  // the governor's table and tunables

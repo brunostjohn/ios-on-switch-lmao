@@ -69,8 +69,9 @@ public enum Registry {
 
     static let cpuAndSystem: [any HWTest] = [
         CPUSingleTest(), CPUMultiTest(), A64XSelfTest(), CryptoKitTest(), CommonCryptoTest(), KeychainTest(),
-        LocalAuthenticationTest(), IdentityTest(), PowerStateTest(), ThermalTest(), MemoryTest(), UnionDirectoryTest(),
-        OverlayAppsTest(), OverlayAppRecordsTest(), CPUClockTest(), CPUSustainedTest(), CPUSchedTest(),
+        LocalAuthenticationTest(), IdentityTest(), PowerStateTest(), ThermalTest(), SocThermThrottleTest(),
+        MemoryTest(), UnionDirectoryTest(), OverlayAppsTest(), OverlayAppRecordsTest(), CPUClockTest(),
+        CPUDfllLandingTest(), CPUSustainedTest(), CPUSchedTest(),
         DispatchSyncTest(), DispatchSyncWorkloopTest(), WorkloopSyncTest(), WidgetsRenderTest(), IconRenderTest(),
     ]
 

@@ -102,10 +102,8 @@
 //     the generic timer is not on CCLK, and TegraI2C serializes I2C5 with the GPU's VDD_GPU traffic (it
 //     writes M1_VOUT and EN_CTRL, never M4).
 //   * DFLL on demand (the default): L4T's normal mode, the DFLL in closed loop (drivers/TegraDFLL,
-//     vendored clk-dfll.c), entered at the 1683 MHz CVB row and taken to 1785 MHz (Horizon's boost clock, the most this
-//     port ever runs: TEGRA_DFLL_CPU_MAX_HZ) only as measured at or under it (settleDfllTop: the first request after
-//     the loop closes can run a DFLL step high), then moved by SwitchPerfGovernor.cpp between the DFLL's own OPP rows
-//     from the CVB Vmin
+//     vendored clk-dfll.c), entered at 1785 MHz (Horizon's boost clock, the most this port ever runs:
+//     TEGRA_DFLL_CPU_MAX_HZ), then moved by SwitchPerfGovernor.cpp between the DFLL's own OPP rows from the CVB Vmin
 //     row (918 MHz at 620 mV on speedo 1659) up to 1785 MHz as the scheduler's load, touches, missed frames and
 //     launches ask; the boot holds the top until System Boot Complete. Each pair is L4T's: the DFLL's CVB voltage for
 //     that row, set by the DFLL itself over its I2C master. A rate the DFLL refuses fails that request alone (one
@@ -309,12 +307,6 @@ constexpr uint8_t kPeakCurrentMask = 0x70, kPeakCurrent7200mA = 7u << 4, kVersio
 // TEGRA210B01_DFLL_THERMAL_FLOOR_0 / _CAP_0 / _CAP_1; 1 C hysteresis as the DT trips).
 constexpr unsigned long kDfllRateHz = 1785000000UL;
 static_assert(kDfllRateHz <= TEGRA_DFLL_CPU_MAX_HZ, "never above Horizon's boost clock");
-// The top, by measurement (settleDfllTop): enable asks for the CVB row below it, re-asks it from the row below
-// that, and asks for 1785 MHz only once a request has measured right. One DFLL step is the 51 MHz reference / 2.
-constexpr unsigned long kDfllSafeHz = 1683000000UL, kDfllBounceHz = 1581000000UL, kDfllStepHz = 25500000UL;
-static_assert(kDfllSafeHz + kDfllStepHz < kDfllRateHz, "one step over the safe row stays under the top");
-constexpr uint32_t kDfllSettleMS = 10;  // a request's closed-loop settle, tune transition included (enable waits this)
-constexpr uint32_t kDfllCeilingCheckMS = 10;  // after a governor move to its ceiling, before it is measured
 constexpr int kDfllFloorWarmMilliC = 20000, kDfllCap1MilliC = 64000, kDfllCap2MilliC = 84000;
 constexpr int kDfllBoundaries[] = {kDfllFloorWarmMilliC, kDfllCap1MilliC, kDfllCap2MilliC};
 
@@ -440,7 +432,6 @@ class SwitchThermal : public IOService {
     bool dfllResume = false;                         // SC7 lost the DFLL's registers and restoring them failed
     unsigned long dfllRefusedHz = 0;                 // the last rate the DFLL refused, logged once until a rate lands
     int dfllRefusedErr = 0;
-    unsigned long dfllTopHz = kDfllRateHz;       // the top this boot measured at or under 1785 MHz
     IOInterruptEventSource *governor = nullptr;  // switchperf's signal: a software interrupt of this work loop
     unsigned dfllFloor = TEGRA_DFLL_FLOOR_COLD, dfllCap = TEGRA_DFLL_CAP_1010MV;  // the driver's boot defaults
     unsigned perfRaises = 0, perfSteps = ~0u;
@@ -476,8 +467,6 @@ class SwitchThermal : public IOService {
     void resumeDfll();
     void dfllRefused(unsigned long hz, int err);
     bool startGovernor(char *why, size_t len);
-    static unsigned long settleDfllTop();
-    static bool dfllOverCeiling(uint32_t *measuredKHz);
     static void governorLimits();
     static void governorSignal(void *ctx);
     static void governorFired(OSObject *owner, IOInterruptEventSource *sender, int count);
@@ -489,6 +478,13 @@ public:
     void quiesceCpu();
     void suspend();
     void resume();
+#if DEVELOPMENT || DEBUG
+    static void dfllLandingRegister();
+
+private:
+    void dfllLanding();
+    static int dfllLandingSysctl(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
+#endif
 
 private:
     // Why the CPU comes down: a thermal trip or sleep (up again after the hold-off), a failed step or the sensor lost
@@ -1127,157 +1123,9 @@ void SwitchThermal::governorLimits()
 
 #include "SwitchThermalDfll.h"
 
-// The cluster's clock, measured where it runs: a chain of dependent adds (one per cycle on the A57) timed by the
-// generic timer with interrupts masked, as XNU's kprof_clock_probe (switch_kprof.c) does, 4x longer (131072
-// adds: about 73 us at 1785 MHz, 0.07 % timer resolution). kprof's probe read 995-997 MHz at 998.4, 1664-1668 at
-// 1670.4 and 1782-1787 at 1785 on this console: within 0.3 % low, against DFLL steps 1.4 % apart. In kHz.
-static uint32_t probeCpuKhz()
-{
-    constexpr uint64_t kLoops = 16384;
-    constexpr uint64_t kAdds = kLoops * 8;
-    uint64_t n = 0;
-    // NOLINTNEXTLINE(misc-const-correctness): the probe's adds write it ("+r")
-    uint64_t x = 0;
-    uint64_t t0 = 0;
-    uint64_t t1 = 0;
-    const boolean_t enabled = ml_set_interrupts_enabled(FALSE);
-    for (int pass = 0; pass < 2; pass++) {  // the first pass warms the branch predictor and the I-cache
-        n = pass ? kLoops : 64;
-        t0 = mach_absolute_time();
-        __asm__ volatile("1:\n"
-                         "add %1, %1, #1\n"
-                         "add %1, %1, #1\n"
-                         "add %1, %1, #1\n"
-                         "add %1, %1, #1\n"
-                         "add %1, %1, #1\n"
-                         "add %1, %1, #1\n"
-                         "add %1, %1, #1\n"
-                         "add %1, %1, #1\n"
-                         "subs %0, %0, #1\n"
-                         "b.ne 1b\n"
-                         : "+r"(n), "+r"(x)
-                         :
-                         : "cc");
-        t1 = mach_absolute_time();
-    }
-    ml_set_interrupts_enabled(enabled);
-    uint64_t ns = 0;
-    absolutetime_to_nanoseconds(t1 - t0, &ns);
-    return ns ? static_cast<uint32_t>(kAdds * 1000000 / ns) : 0;
-}
-
-// The clock now against the governor's ceiling (the highest row under the DFLL's thermal cap and thermalmonitord's CLTM
-// ceiling that is not held down): over it by half a DFLL step or more (one step over 1785 MHz is 1810.5), the ceiling is
-// asked again from the row below; still over, and that row alone is held down (switchperf::hold): the ceiling is the
-// next row down at once, and the row is tried again from below at a later 10 s line (the next one, then 2, 4 and 8
-// lines apart while it keeps measuring high). Measured right with the clock on it, a row on trial is restored. One
-// line each (a trial that measures high again: os_log only). Below the ceiling a step high cannot reach it: rows are
-// four DFLL steps or more apart.
-// `measuredKHz` gets the probe. Returns whether it moved the clock. Work loop, governed.
-bool SwitchThermal::dfllOverCeiling(uint32_t *measuredKHz)
-{
-    const uint32_t khz = probeCpuKhz();
-    const uint32_t step = static_cast<uint32_t>(kDfllStepHz / 1000);
-    if (measuredKHz)
-        *measuredKHz = khz;
-    const unsigned hi = switchperf::ceiling();
-    const uint32_t ceiling = switchperf::khzAt(hi);
-    // NOLINTNEXTLINE(readability-suspicious-call-argument): khz is the measured clock, step the DFLL's
-    if (!switch_gov_over_step(khz, ceiling, step)) {
-        if (switch_perf_cpu_khz() == ceiling && switchperf::landed(hi)) {
-            IOLog("SwitchPerf: DFLL measured %u MHz at its %u MHz ceiling, tried again from below: restored\n",
-                  khz / 1000, ceiling / 1000);
-        }
-        return false;
-    }
-    const uint32_t below = hi ? switchperf::khzAt(hi - 1) : ceiling;
-    int err = tegra_dfll_cpu_set_rate(static_cast<unsigned long>(below) * 1000);
-    if (!err) {
-        IOSleep(2);
-        err = tegra_dfll_cpu_set_rate(static_cast<unsigned long>(ceiling) * 1000);
-    }
-    if (!err)
-        IOSleep(kDfllSettleMS);
-    const uint32_t again = probeCpuKhz();
-    if (!err && !switch_gov_over_step(again, ceiling, step)) {
-        switchperf::applied(hi);
-        const bool restored = switchperf::landed(hi);
-        IOLog("SwitchPerf: DFLL measured %u MHz at its %u MHz ceiling; re-asked from %u MHz: %u MHz%s\n", khz / 1000,
-              ceiling / 1000, below / 1000, again / 1000, restored ? " (tried again from below: restored)" : "");
-        return true;
-    }
-    bool retried = false;
-    const unsigned wait = switchperf::hold(hi, &retried);
-    const unsigned lower = switchperf::ceiling();
-    const int moved = tegra_dfll_cpu_set_rate(static_cast<unsigned long>(switchperf::khzAt(lower)) * 1000);
-    if (!moved) {
-        IOSleep(kDfllSettleMS);
-        switchperf::applied(lower);
-    }
-    if (retried) {  // a row on trial that measured high again: log only, at most one line per its (doubling) wait
-        os_log(OS_LOG_DEFAULT,
-               "SwitchPerf: DFLL measured %u MHz at its %u MHz ceiling on trial, %u MHz re-asked (%d): held down "
-               "again, tried in ~%u0 s; %u MHz now (%d; measured %u MHz)",
-               khz / 1000, ceiling / 1000, again / 1000, err, wait, switchperf::khzAt(lower) / 1000, moved,
-               probeCpuKhz() / 1000);
-    } else {
-        IOLog("SwitchPerf: DFLL measured %u MHz at its %u MHz ceiling, %u MHz re-asked (%d): %u MHz held down, tried "
-              "again from below in ~%u0 s; %u MHz now (%d; measured %u MHz)\n",
-              khz / 1000, ceiling / 1000, again / 1000, err, ceiling / 1000, wait, switchperf::khzAt(lower) / 1000,
-              moved, probeCpuKhz() / 1000);
-    }
-    return true;
-}
-
-// The top this boot can run without exceeding 1785 MHz, by measurement (11-05 r7z, kprof's probe: the rate asked right
-// after the DFLL closed its loop ran one DFLL step high, 1807-1813 MHz for 1785 MHz asked, for the 80 s nothing asked
-// again; every later request, from below, landed at 1782-1787. The DT's loop gains, cf 6 ci 0, have no integral term,
-// so where the loop settles depends on how it got there). Enable has asked for kDfllSafeHz (1683 MHz: one step high
-// is 1708.5, still under 1785) and waited kDfllSettleMS; this asks it again from kDfllBounceHz, measures it, and only
-// if that request landed right asks for 1785 MHz, measures that, and steps back to 1683 if it is high. Fixed and
-// governed DFLL modes both run their top from here. One log line. Work loop, on the DFLL.
-unsigned long SwitchThermal::settleDfllTop()
-{
-    uint32_t safe = 0;
-    uint32_t top = 0;
-    int err = tegra_dfll_cpu_set_rate(kDfllBounceHz);
-    if (!err)
-        IOSleep(2);
-    if (!err)
-        err = tegra_dfll_cpu_set_rate(kDfllSafeHz);
-    if (!err)
-        IOSleep(kDfllSettleMS);
-    safe = probeCpuKhz();
-    unsigned long chosen = kDfllSafeHz;
-    const char *why = "";
-    if (err) {
-        why = ", re-request refused";
-    } else if (switch_gov_over_step(safe, kDfllSafeHz / 1000, kDfllStepHz / 1000)) {
-        why = ", which measured high, so 1785 MHz was not asked";
-    } else {
-        err = tegra_dfll_cpu_set_rate(kDfllRateHz);
-        if (err) {
-            why = ", 1785 MHz refused";
-        } else {
-            IOSleep(kDfllSettleMS);
-            top = probeCpuKhz();
-            if (!switch_gov_over_step(top, kDfllRateHz / 1000, kDfllStepHz / 1000)) {
-                chosen = kDfllRateHz;
-            } else {
-                why = ", 1785 MHz measured high";
-                err = tegra_dfll_cpu_set_rate(kDfllSafeHz);
-                if (!err)
-                    IOSleep(kDfllSettleMS);
-            }
-        }
-    }
-    char at[40] = "";
-    if (top)
-        snprintf(at, sizeof(at), ", %u MHz at %lu MHz", top / 1000, kDfllRateHz / 1000000);
-    IOLog("SwitchPerf: DFLL measured %u MHz at %lu MHz (re-asked from %lu MHz)%s%s; top %lu MHz (probe; %d)\n",
-          safe / 1000, kDfllSafeHz / 1000000, kDfllBounceHz / 1000000, at, why, chosen / 1000000, err);
-    return chosen;
-}
+#if DEVELOPMENT || DEBUG
+#include "SwitchThermalDfllLanding.h"
+#endif
 
 // Governed DFLL mode: the governor's points from the DFLL's own OPP table (switch_gov_cpu_table: the CVB Vmin row up to
 // 1785 MHz), the clock already at the top (enable's rate). Work loop only. `why` gets the reason on failure, the
@@ -1309,25 +1157,17 @@ bool SwitchThermal::startGovernor(char *why, size_t len)
         }
         governor->enable();
     }
-    unsigned top = count - 1;
-    while (top && khz[top] > dfllTopHz / 1000)
-        --top;          // the measured top (1785 MHz, or 1683 if 1785 measured high)
-    uint32_t held = 0;  // rows above it: held down, so the boot floor never asks them before they are tried from below
-    for (unsigned i = top + 1; i < count; ++i)
-        held |= 1u << i;
-    if (!switchperf::start(khz, mv, count, top, held, &SwitchThermal::governorSignal, this, why, len))
+    const unsigned top = count - 1;
+    if (!switchperf::start(khz, mv, count, top, &SwitchThermal::governorSignal, this, why, len))
         return false;
     governorLimits();
     size_t n = static_cast<size_t>(snprintf(why, len, "CPU governor: %u points (L4T CVB, MHz@mV):", count));
     for (unsigned i = 0; i < count && n < len; ++i)
         n += static_cast<size_t>(snprintf(why + n, len - n, " %u@%u", khz[i] / 1000, mv[i]));
     if (n < len) {
-        n += static_cast<size_t>(snprintf(why + n, len - n,
-                                          "; %u MHz until System Boot Complete (at the latest %u s of uptime)",
-                                          khz[top] / 1000, switchperf::kBootFallbackSeconds));
+        snprintf(why + n, len - n, "; %u MHz until System Boot Complete (at the latest %u s of uptime)",
+                 khz[top] / 1000, switchperf::kBootFallbackSeconds);
     }
-    if (held && n < len)
-        snprintf(why + n, len - n, ", %u MHz tried from below at the first 10 s line", khz[count - 1] / 1000);
     return true;
 }
 
@@ -1350,36 +1190,15 @@ void SwitchThermal::governorFired(OSObject *owner, IOInterruptEventSource *, int
     char line[760];
     const unsigned index = switchperf::take(line, sizeof(line));
     const bool onDfll = self->perfRaised && self->dfllMode && self->governed;
-    uint32_t measured = 0;
-    if (line[0]) {
-        // The 10 s line also carries the clock as measured, and checks it against the ceiling.
-        const bool moved = onDfll && dfllOverCeiling(&measured);
 #if DEVELOPMENT || DEBUG
+    if (line[0]) {
         const size_t n = strlen(line);
         if (onDfll && n + 32 < sizeof(line))
-            snprintf(line + n, sizeof(line) - n, "; probe %u MHz", measured / 1000);
+            snprintf(line + n, sizeof(line) - n, "; probe %u MHz", probeCpuKhz() / 1000);
         os_log(OS_LOG_DEFAULT, "%s", line);  // log only, never the boot console
         switch_power_stats_tick();
-#endif
-        // Then rows held down whose wait is over go back on trial as the ceiling (not a row this check just held: its
-        // wait is a line at least): the governor gets there from below at its next window, and that move to the
-        // ceiling is measured below (restored, or held down again).
-        if (onDfll) {
-            const uint32_t back = switchperf::retryHeld();
-#if DEVELOPMENT || DEBUG
-            for (unsigned i = 0; back >> i; ++i) {
-                if (back >> i & 1u) {
-                    os_log(OS_LOG_DEFAULT, "SwitchPerf: %u MHz back on trial as the ceiling",
-                           switchperf::khzAt(i) / 1000);
-                }
-            }
-#else
-            (void)back;
-#endif
-        }
-        if (moved)
-            return;  // the check set the DFLL itself
     }
+#endif
     if (!onDfll)
         return;
     const unsigned long hz = static_cast<unsigned long>(switchperf::khzAt(index)) * 1000;
@@ -1389,10 +1208,6 @@ void SwitchThermal::governorFired(OSObject *owner, IOInterruptEventSource *, int
     if (!err) {
         self->dfllRefusedHz = 0;
         switchperf::applied(index);
-        if (index == switchperf::ceiling()) {
-            IOSleep(kDfllCeilingCheckMS);  // a new request at the ceiling: measured once it has settled
-            (void)dfllOverCeiling(&measured);
-        }
         return;
     }
     if (err != -EPERM) {
@@ -1827,6 +1642,9 @@ extern "C" int switch_thermal_start(void)
         return -1;
     }
     gThermal = candidate;
+#if DEVELOPMENT || DEBUG
+    SwitchThermal::dfllLandingRegister();
+#endif
     return 0;
 }
 
