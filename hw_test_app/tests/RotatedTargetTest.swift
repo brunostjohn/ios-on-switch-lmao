@@ -57,8 +57,7 @@ struct RotatedTargetTest: HWTest {
                     if cell == .load && turn == 4 { r4Load.add(result.path) }
                     switch cell.kind {
                     case .native:
-                        let required = raw && (cell != .fetch || result.referencePath == "raw")
-                        if required {
+                        if raw {
                             native += 1
                             if result.path == "raw" {
                                 nativeRaw += 1

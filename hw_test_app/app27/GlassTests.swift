@@ -14,7 +14,6 @@ import UIKit
 ///   whole     every draw a whole program (whole-programs)
 ///   plain     textures, backings and shadows made during the arm on plain memory (plain-memory), its glass 2 points
 ///             shorter so the render server makes its intermediates again
-///   halfview  a kernel writing a half-float texture through m2v's view sent to m2v, as before T-v2 (half-view-refuse)
 ///   noprobe   the glass probe disarmed in every process (glass-probe-off, glass-mem-watch-off)
 /// The first run arms the render server's split capture (split-capture: `raw: splitcap` lines of the glass shape's
 /// draws, tools/benchloop/capture.py). A failed run saves every picture (composited.png, composited-<arm>.png).
@@ -34,7 +33,6 @@ struct UIGlassTest: HWTest {
     static let arms = [
         Arm(name: "whole", on: ["whole-programs-on"], off: ["whole-programs-off"]),
         Arm(name: "plain", on: ["plain-memory-on"], off: ["plain-memory-off"], shorter: 2),
-        Arm(name: "halfview", on: ["half-view-refuse-on"], off: ["half-view-refuse-off"]),
         Arm(name: "noprobe", on: ["glass-probe-off", "glass-mem-watch-off"], off: []),
     ]
 

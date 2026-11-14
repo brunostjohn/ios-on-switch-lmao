@@ -72,7 +72,7 @@ struct CompileSharedTest: HWTest {
         let here = (after["compiled_here"] ?? 0) - (before["compiled_here"] ?? 0)
         metrics.set("compiled_here", here)
         checks.append(("nothing compiled in this process", here == 0))
-        return .judged(checks, metrics, proof: "salt \(salt)")
+        return .judged(checks, metrics, proof: "salt \(salt)").onRawPath(gpu)
     }
 
     func pipeline(_ gpu: GPU, salt: UInt32) throws -> MTLRenderPipelineState {
