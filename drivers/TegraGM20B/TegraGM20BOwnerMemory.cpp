@@ -13,7 +13,7 @@ constexpr uint32_t kEntries = 64;  // TegraGM20BUserClient.cpp kMaxConnectionsAl
 constexpr uint32_t kShown = 8;     // a line of them fits the stats tick's 1 KiB
 }  // namespace
 
-void tgm_owner_memory_provider(IOService *provider)
+void tgm_uc::tgm_owner_memory_provider(IOService *provider)
 {
 	__atomic_store_n(&gProvider, provider, __ATOMIC_RELEASE);
 }
@@ -42,7 +42,7 @@ extern "C" unsigned long tgm_owner_memory(char *out, unsigned long size, uint64_
 	return written;
 }
 #else
-void tgm_owner_memory_provider(IOService *)
+void tgm_uc::tgm_owner_memory_provider(IOService *)
 {
 }
 #endif
