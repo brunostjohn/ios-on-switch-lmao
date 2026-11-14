@@ -28,7 +28,7 @@ The worker needs Xcode at `/Applications/Xcode.app`, selected with `xcode-select
 path, and the worker advertises that Xcode's build as the `xcode` exec property.
 
 1. Build `bb_worker` and `bb_runner` from `buildbarn/bb-remote-execution` at the commit in the cluster's scheduler
-   image tag, with `go build -trimpath ./cmd/bb_worker ./cmd/bb_runner`. On macOS this needs two patches:
+   image tag, with `go build -trimpath ./cmd/bb_worker ./cmd/bb_runner`. On macOS this needs three patches:
    - bb-storage's `patches/org_golang_x_sys/o-search.diff` for `golang.org/x/sys`. Buildbarn's own Bazel build
      applies it.
    - `bb_worker-clonefile.diff` from this directory. Upstream hard-links each input from the cache into the action's
@@ -39,7 +39,10 @@ path, and the worker advertises that Xcode's build as the `xcode` exec property.
      a new directory and deletes them afterwards. On the EC2 host that churn kept about 4 of its 10 cores busy in the
      worker, fseventsd and XProtect, which scans every new copy of a tool. With the patch, each executor keeps its input
      root between actions and fetches only what changed. A file that an action wrote, chmodded or replaced is fetched
-     again. `//gpu:raw_stack` (1,309 remote actions) then took 109-121 s there instead of 169-172 s.
+     again. `//gpu:raw_stack` (1,309 remote actions) then took 109-121 s there instead of 169-172 s (Gatekeeper off,
+     data on the instance-store NVMe). The input roots are clones kept outside the cache's size limit, and neither the
+     floor nor an idle worker empties them: with a small cache, such as the Studio's 2 GiB, they can hold more of the
+     disk than the cache does.
 2. Put two tokens, minted with the cache's key (homelab `make-cache-token.sh`), in
    `~/Library/Application Support/switch-ios/bazel-worker/`: `cache.token` (audience `bazel-cache`) and
    `worker.token` (audience `bazel-worker`).
