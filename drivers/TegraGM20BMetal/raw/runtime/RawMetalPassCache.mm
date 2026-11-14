@@ -141,8 +141,19 @@ uint64_t hashBytes(const uint8_t *p, size_t n)
 }
 
 struct Cache;
-std::mutex gCachesLock;
-std::vector<Cache *> gCaches;  // every thread's, for rmPassTrim
+
+// Never destroyed: a thread's cache leaves the registry at that thread's exit, which can come after static destruction
+std::mutex &cachesLock()
+{
+    static auto *lock = new std::mutex;
+    return *lock;
+}
+
+std::vector<Cache *> &caches()  // every thread's, for rmPassTrim
+{
+    static auto *list = new std::vector<Cache *>;
+    return *list;
+}
 
 // The entries' hashes and last lookups apart from the entries, so a lookup reads two small arrays and one entry. Only its
 // thread touches a cache, with no lock: rmPassTrim, on another thread, takes a cache's copies only while that thread is
@@ -161,15 +172,15 @@ struct Cache {
 
     Cache()
     {
-        std::lock_guard<std::mutex> held(gCachesLock);
-        gCaches.push_back(this);
+        std::lock_guard<std::mutex> held(cachesLock());
+        caches().push_back(this);
     }
 
     ~Cache()
     {
         {
-            std::lock_guard<std::mutex> held(gCachesLock);
-            gCaches.erase(std::find(gCaches.begin(), gCaches.end(), this));
+            std::lock_guard<std::mutex> held(cachesLock());
+            caches().erase(std::find(caches().begin(), caches().end(), this));
         }
         for (RMPassEntry &e : entries)
             if (e.pass)
@@ -338,8 +349,8 @@ void rmPassDone()
 RMPassTrim rmPassHeld()
 {
     RMPassTrim held = {};
-    std::lock_guard<std::mutex> registry(gCachesLock);
-    for (const Cache *c : gCaches) {
+    std::lock_guard<std::mutex> registry(cachesLock());
+    for (const Cache *c : caches()) {
         held.passes += c->passes.load(std::memory_order_relaxed);
         held.textures += c->textures.load(std::memory_order_relaxed);
     }
@@ -350,8 +361,8 @@ RMPassTrim rmPassTrim()
 {
     RMPassTrim trimmed = {};
     const mach_port_t self = pthread_mach_thread_np(pthread_self());
-    std::lock_guard<std::mutex> registry(gCachesLock);
-    for (Cache *c : gCaches) {
+    std::lock_guard<std::mutex> registry(cachesLock());
+    for (Cache *c : caches()) {
         CFTypeRef gone[kEntries] = {};
         const bool other = c->thread != self;
         // thread_suspend returns once the thread is off its core: its last instruction is precise, so `inside` says
