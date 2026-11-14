@@ -692,7 +692,7 @@ TEST(GM20BRoomSource, NativePublicationNeverSleepsWithBackingLocksHeld)
 {
 	const CodeText exec = Block(client(), "IOReturn AGXDeviceUserClient::exec(");
 	EXPECT_TRUE(exec.Before("switch_gpu_chan_submit_enter(chan);",
-				"switch_gpu_backing_begin_checked("));
+				"switch_gpu_backing_begin_ordered("));
 	EXPECT_TRUE(exec.Before("switch_gpu_backing_abort(&transaction);",
 				"switch_gpu_chan_wait_submission_room("));
 	EXPECT_FALSE(exec.Has("switch_gpu_backing_commit("));

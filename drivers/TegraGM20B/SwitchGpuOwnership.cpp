@@ -87,6 +87,7 @@ void switch_gpu_backing_note_failure_locked(const switch_gpu_backing *backing,
 
 void switch_gpu_backing_prune_locked(switch_gpu_backing *backing)
 {
+	switch_gpu_backing_assert_held(backing);
 	if (backing->host_acquire.engine) {
 		const int acquired = switch_gpu_backing_held_status(backing->host_acquire,
 								    backing->host_acquire_handle);
@@ -165,7 +166,7 @@ int retain_completion(switch_gpu_backing_transaction *transaction, uint32_t refs
 
 int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_lease *const *leases,
 	  uint32_t lease_count, const switch_gpu_backing_guard *guards, uint32_t guard_count,
-	  const switch_gpu_backing_token *completion, bool held,
+	  const switch_gpu_backing_token *completion, bool held, bool ordered,
 	  switch_gpu_backing_transaction *transaction)
 {
 	if (!transaction)
@@ -223,10 +224,10 @@ int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_lease *co
 	int result = 0;
 	uint32_t matched_leases = 0, refs = 0;
 	const void *replaced = nullptr;
-	for (uint32_t i = 0; i < unique; ++i) {
-		IOLockLock(uses[i].backing->lock);
-		++transaction->locked;
-	}
+	if (unique && ordered)
+		hold_ordered(transaction);
+	else if (unique)
+		hold_claimed(transaction);
 	for (uint32_t i = 0; !result && i < guard_count; ++i)
 		if (__atomic_load_n(guards[i].generation, __ATOMIC_ACQUIRE) != guards[i].expected)
 			result = SWITCH_GPU_BACKING_STALE;
@@ -282,10 +283,11 @@ int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_lease *co
 			break;
 		if (backing->dirty & SWITCH_GPU_BACKING_CPU_DIRTY) {
 			transaction->host_written = 1;
-			switch_gpu_backing_cache(
-				backing->pages->addresses, backing->pages->count,
-				backing->clean_start,
-				(uint64_t(backing->pages->count) << 12) - backing->clean_start, 0);
+			const uint64_t size = uint64_t(backing->pages->count) << 12;
+			if (!(uses[i].reserved & kUseCleaned) && backing->clean_start < size)
+				switch_gpu_backing_cache(
+					backing->pages->addresses, backing->pages->count,
+					backing->clean_start, size - backing->clean_start, 0);
 			backing->clean_start = 0;
 			// A CPU writer still holding the backing (a submission proceeds beside it) may write more before the
 			// next job reads it: that job cleans again.
@@ -312,7 +314,7 @@ extern "C" int switch_gpu_backing_begin(switch_gpu_backing_use *uses, uint32_t c
 					const switch_gpu_backing_token *completion,
 					switch_gpu_backing_transaction *transaction)
 {
-	return begin(uses, count, nullptr, 0, nullptr, 0, completion, false, transaction);
+	return begin(uses, count, nullptr, 0, nullptr, 0, completion, false, false, transaction);
 }
 
 extern "C" int switch_gpu_backing_begin_conversion(switch_gpu_backing_use *uses, uint32_t count,
@@ -323,7 +325,8 @@ extern "C" int switch_gpu_backing_begin_conversion(switch_gpu_backing_use *uses,
 {
 	if (!lease_count)
 		return -22;
-	return begin(uses, count, leases, lease_count, nullptr, 0, completion, false, transaction);
+	return begin(uses, count, leases, lease_count, nullptr, 0, completion, false, false,
+		     transaction);
 }
 
 extern "C" int switch_gpu_backing_begin_checked(switch_gpu_backing_use *uses, uint32_t count,
@@ -332,7 +335,8 @@ extern "C" int switch_gpu_backing_begin_checked(switch_gpu_backing_use *uses, ui
 						const switch_gpu_backing_token *completion,
 						switch_gpu_backing_transaction *transaction)
 {
-	return begin(uses, count, nullptr, 0, guards, guard_count, completion, false, transaction);
+	return begin(uses, count, nullptr, 0, guards, guard_count, completion, false, false,
+		     transaction);
 }
 
 extern "C" int switch_gpu_backing_begin_conversion_checked(
@@ -341,7 +345,7 @@ extern "C" int switch_gpu_backing_begin_conversion_checked(
 	const switch_gpu_backing_token *completion, switch_gpu_backing_transaction *transaction)
 {
 	return begin(uses, count, leases, lease_count, guards, guard_count, completion, false,
-		     transaction);
+		     false, transaction);
 }
 
 extern "C" int switch_gpu_backing_begin_held(
@@ -349,6 +353,15 @@ extern "C" int switch_gpu_backing_begin_held(
 	uint32_t lease_count, const switch_gpu_backing_guard *guards, uint32_t guard_count,
 	const switch_gpu_backing_token *completion, switch_gpu_backing_transaction *transaction)
 {
-	return begin(uses, count, leases, lease_count, guards, guard_count, completion, true,
+	return begin(uses, count, leases, lease_count, guards, guard_count, completion, true, true,
+		     transaction);
+}
+
+extern "C" int switch_gpu_backing_begin_ordered(
+	switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_lease *const *leases,
+	uint32_t lease_count, const switch_gpu_backing_guard *guards, uint32_t guard_count,
+	const switch_gpu_backing_token *completion, switch_gpu_backing_transaction *transaction)
+{
+	return begin(uses, count, leases, lease_count, guards, guard_count, completion, false, true,
 		     transaction);
 }

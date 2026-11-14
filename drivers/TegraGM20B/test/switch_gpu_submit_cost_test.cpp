@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: MIT
 // A compositor's SubmitJob over N shared uses as the ownership layer runs it (begin, write ranges, dependencies, promise
 // dependencies, commit), on the real backing registry and GM20B timeline engine among a device's worth of channels: the
-// IOLocks it takes besides its uses' own locks, and its time, per job.
+// IOLocks it takes besides its uses' own locks (the ownership order among them), and its time, per job.
 #include <gtest/gtest.h>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <vector>
 #include "switch_gpu_submit_stubs.h"
+#include "drivers/TegraGM20B/SwitchGpuScanoutSnapshot.h"
 #include "drivers/TegraGM20B/TegraGM20BABI.h"
 
 namespace
@@ -137,6 +138,36 @@ protected:
 		return {taken - ownTaken, ownTaken, needed};
 	}
 
+	struct Frame {
+		uint64_t job, jobOther, display, displayOther;
+	};
+
+	uint64_t ownership_takes() const
+	{
+		return own_takes() + switch_gpu_backing_order()->takes;
+	}
+
+	// One compositor job, then one display period on its target: the swap's snapshot, and the interrupt pass's release
+	// of its lease at the frame's end.
+	Frame frame_takes()
+	{
+		Frame frame = {};
+		uint64_t all = ioLockTakes().load(), owned = ownership_takes();
+		composite();
+		frame.job = ownership_takes() - owned;
+		frame.jobOther = ioLockTakes().load() - all - frame.job;
+		SwitchGpuScanoutSnapshot shown = {};
+		shown.done = [](void *, int) {};
+		all = ioLockTakes().load();
+		owned = ownership_takes();
+		EXPECT_EQ(shown.begin(nullptr, 0), 0);
+		EXPECT_EQ(shown.add(target), 0);
+		SwitchGpuScanoutSnapshot::complete(&shown, 0);
+		frame.display = ownership_takes() - owned;
+		frame.displayOther = ioLockTakes().load() - all - frame.display;
+		return frame;
+	}
+
 	uint64_t own_takes() const
 	{
 		uint64_t takes = target->lock->takes;
@@ -170,8 +201,8 @@ protected:
 	}
 };
 
-// A scroll's 6 shared uses and a scale animation's 60 (boot 21: 55-61) cost the same global locks, none once the
-// compositor has recorded on each backing; each use costs its own backing's lock once.
+// A scroll's 6 shared uses and a scale animation's 60 (boot 21: 55-61) cost the same locks: the ownership order once,
+// none of the uses' own while nothing else claims them, and no timeline's once the compositor has recorded on each.
 TEST_F(SubmitCost, GlobalLocksAJobDoNotGrowWithItsSharedUses)
 {
 	scene(6);
@@ -188,9 +219,9 @@ TEST_F(SubmitCost, GlobalLocksAJobDoNotGrowWithItsSharedUses)
 		static_cast<unsigned long long>(scale.global),
 		static_cast<unsigned long long>(scale.own), mean_us(200), own_locks_us(200));
 	EXPECT_EQ(scale.global, scroll.global);
-	EXPECT_EQ(scale.global, 0u);
-	EXPECT_EQ(scroll.own, 7u);
-	EXPECT_EQ(scale.own, 61u);
+	EXPECT_EQ(scale.global, 1u) << "the ownership order, once";
+	EXPECT_EQ(scroll.own, 0u);
+	EXPECT_EQ(scale.own, 0u);
 	EXPECT_EQ(scale.dependencies, 0u);
 }
 
@@ -212,11 +243,11 @@ TEST_F(SubmitCost, ANewTextureCostsOnlyItsFirstJobTheTimelineLocks)
 {
 	scene(60);
 	draw();
-	EXPECT_EQ(composite().global, 2u);
-	EXPECT_EQ(composite().global, 0u);
+	EXPECT_EQ(composite().global, 3u);
+	EXPECT_EQ(composite().global, 1u);
 }
 
-// An app still drawing one texture: the job waits for that app's channel, found under the texture's own lock.
+// An app still drawing one texture: the job waits for that app's channel, found in the ownership order.
 TEST_F(SubmitCost, PendingProducerIsADependencyWithoutAGlobalLockPerUse)
 {
 	scene(60);
@@ -227,9 +258,76 @@ TEST_F(SubmitCost, PendingProducerIsADependencyWithoutAGlobalLockPerUse)
 	switch_gpu_backing_commit(&transaction);
 	Cost cost = composite();
 	EXPECT_EQ(cost.dependencies, 1u);
-	EXPECT_EQ(cost.global, 0u);
+	EXPECT_EQ(cost.global, 1u);
 	app(7).fence = 2;
 	cost = composite();
 	EXPECT_EQ(cost.dependencies, 0u);
+}
+
+// Every IOLock a compositor frame takes for its ownership, the order and the backings' own: its job, and a display
+// period on its target (the swap's snapshot, and the interrupt pass's release of its lease). A scroll and a scale
+// animation cost the same. The registry's and the timelines' locks (the snapshot's reference and its producer's) are
+// counted apart.
+TEST_F(SubmitCost, AFrameTakesTheSameOwnershipLocksForAnyNumberOfSharedUses)
+{
+	scene(6);
+	const Frame scroll = frame_takes();
+	scene(60);
+	const Frame scale = frame_takes();
+	std::printf(
+		"IOLock takes a frame (ownership + other): scroll job %llu + %llu, display %llu + "
+		"%llu; scale job %llu + %llu, display %llu + %llu\n",
+		static_cast<unsigned long long>(scroll.job),
+		static_cast<unsigned long long>(scroll.jobOther),
+		static_cast<unsigned long long>(scroll.display),
+		static_cast<unsigned long long>(scroll.displayOther),
+		static_cast<unsigned long long>(scale.job),
+		static_cast<unsigned long long>(scale.jobOther),
+		static_cast<unsigned long long>(scale.display),
+		static_cast<unsigned long long>(scale.displayOther));
+	EXPECT_EQ(scroll.job, 1u);
+	EXPECT_EQ(scale.job, 1u);
+	EXPECT_EQ(scroll.display, 2u);
+	EXPECT_EQ(scale.display, 2u);
+}
+
+// An app holding a CPU write lock on one texture leaves it CPU-dirty: the job takes that texture's lock alone besides the
+// order, which it lets go while it cleans the texture (taken three times), and none of the other 59.
+TEST_F(SubmitCost, ACpuWriteLockedTextureCostsTheJobItsLockAlone)
+{
+	scene(60);
+	constexpr uint64_t kBytes = 16 * 4096;
+	compositor.fence = frame;
+	ASSERT_EQ(switch_gpu_backing_cpu_acquire(textures[3], 0, kBytes, SWITCH_GPU_BACKING_WRITE),
+		  0);
+	const uint64_t owned = ownership_takes(), own = own_takes();
+	composite();
+	EXPECT_EQ(own_takes() - own, 1u);
+	EXPECT_EQ(ownership_takes() - owned, 4u);
+	compositor.fence = frame;
+	EXPECT_EQ(switch_gpu_backing_cpu_release(textures[3], 0, kBytes, SWITCH_GPU_BACKING_WRITE),
+		  0);
+	const uint64_t after = ownership_takes();
+	composite();
+	EXPECT_EQ(ownership_takes() - after, 1u);
+}
+
+// A job over its resource set alone, no shared use: no ownership lock.
+TEST_F(SubmitCost, AJobWithNoSharedUseTakesNoOwnershipLock)
+{
+	scene(6);
+	const switch_gpu_backing_token completion = compositor.token(++frame);
+	const uint64_t owned = ownership_takes();
+	switch_gpu_backing_transaction transaction = {};
+	ASSERT_EQ(switch_gpu_backing_begin_held(nullptr, 0, nullptr, 0, nullptr, 0, &completion,
+						&transaction),
+		  0);
+	uint32_t needed = 0;
+	EXPECT_EQ(switch_gpu_backing_dependencies(&transaction, dependencies.data(),
+						  TegraGM20BMaxJobUses, &needed),
+		  0);
+	switch_gpu_backing_commit(&transaction);
+	EXPECT_EQ(ownership_takes() - owned, 0u);
+	compositor.fence = frame;
 }
 }  // namespace

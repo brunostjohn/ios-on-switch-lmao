@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "switch_gpu_submit_stubs.h"
+#include "drivers/TegraGM20B/SwitchGpuAdmission.h"
 #include "drivers/TegraGM20B/SwitchGpuScanoutSnapshot.h"
 
 namespace
@@ -39,13 +40,15 @@ struct Channel {
 	}
 };
 
-Channel compositor, app;
+Channel compositor, app, other;
 uint64_t nextPage = 0xc00000000ull;
 
 // The device's CPU waits for a job sleep until its fence; here, until the test's GPU completes it.
 void waitForJob(uint32_t queue, uint32_t value)
 {
-	const Channel *channel = queue == compositor.token(0).queue ? &compositor : &app;
+	const Channel *channel = queue == compositor.token(0).queue ? &compositor
+				 : queue == app.token(0).queue      ? &app
+								    : &other;
 	const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
 	while (int32_t(__atomic_load_n(&channel->fence, __ATOMIC_ACQUIRE) - value) < 0 &&
 	       std::chrono::steady_clock::now() < end)
@@ -61,6 +64,7 @@ void open()
 	ASSERT_EQ(switch_gpu_timeline_init(), 0);
 	compositor.timeline = switch_gpu_timeline_create(1, &compositor.fence);
 	app.timeline = switch_gpu_timeline_create(2, &app.fence);
+	other.timeline = switch_gpu_timeline_create(3, &other.fence);
 	opened = true;
 }
 
@@ -250,6 +254,90 @@ TEST(KickRace, JobsKickWhileThePassTheDisplayAndCpuLocksMeetTheirBackings)
 	display.join();
 	pass.join();
 	locking.join();
+	switch_gpu_backing_release(target);
+	switch_gpu_backing_release(texture);
+	for (int i = 0; i < 4; ++i)
+		switch_gpu_backing_retire();
+}
+
+// Every other party beside the compositor's ordered jobs: a second channel's ordered job reading the texture, an app's
+// claimed job writing it, an admission group over both backings, the registry finding the texture again and retiring,
+// CPU locks of either kind, and the display with its pass.
+TEST(KickRace, EveryPartyMeetsJobsPublishingInTheOrder)
+{
+	constexpr uint32_t kFrames = 200;
+	open();
+	auto *target = surface(), *texture = surface();
+	switch_gpu_backing_info info = {};
+	switch_gpu_backing_describe(texture, &info);
+	const uint64_t page = info.pages[0];
+	std::atomic<bool> done{false};
+	std::vector<std::thread> parties;
+	parties.emplace_back([&] {
+		for (uint32_t frame = 0; frame < kFrames; ++frame)
+			composite(target, texture, Order::PublishThenKick, [] {});
+		done = true;
+	});
+	parties.emplace_back([&] {
+		while (!done) {
+			switch_gpu_backing_use use = {texture, kRead, 0};
+			const uint32_t value = ++other.next;
+			const auto reading = other.token(value);
+			switch_gpu_backing_transaction transaction = {};
+			ASSERT_EQ(switch_gpu_backing_begin_held(&use, 1, nullptr, 0, nullptr, 0,
+								&reading, &transaction),
+				  0);
+			switch_gpu_backing_commit(&transaction);
+			other.complete(value);
+		}
+	});
+	parties.emplace_back([&] {
+		while (!done) {
+			switch_gpu_backing_use use = {texture, kWrite, 0};
+			const uint32_t value = ++app.next;
+			const auto drawn = app.token(value);
+			switch_gpu_backing_transaction transaction = {};
+			ASSERT_EQ(switch_gpu_backing_begin(&use, 1, &drawn, &transaction), 0);
+			switch_gpu_backing_commit(&transaction);
+			app.complete(value);
+		}
+	});
+	parties.emplace_back([&] {
+		while (!done) {
+			SwitchGpuAdmission admission;
+			const switch_gpu_backing_use uses[2] = {{texture, kRead, 0},
+								{target, kRead, 0}};
+			if (!admission.begin(uses, 2, nullptr, 0, nullptr, 0))
+				admission.end();
+		}
+	});
+	parties.emplace_back([&] {
+		while (!done) {
+			if (auto *found = switch_gpu_backing_find_pa(page))
+				switch_gpu_backing_release(found);
+			switch_gpu_backing_retire();
+		}
+	});
+	parties.emplace_back([&] {
+		for (uint32_t lock = 0; !done; ++lock) {
+			const uint32_t access = (lock & 1) ? kRead : kWrite;
+			if (!switch_gpu_backing_cpu_acquire(texture, 0, kBytes, access))
+				EXPECT_EQ(
+					switch_gpu_backing_cpu_release(texture, 0, kBytes, access),
+					0);
+		}
+	});
+	parties.emplace_back([&] {
+		SwitchGpuScanoutSnapshot shown = {};
+		shown.done = noDone;
+		while (!done) {
+			EXPECT_EQ(shown.begin(nullptr, 0), 0);
+			EXPECT_EQ(shown.add(target), 0);
+			SwitchGpuScanoutSnapshot::complete(&shown, 0);
+		}
+	});
+	for (auto &party : parties)
+		party.join();
 	switch_gpu_backing_release(target);
 	switch_gpu_backing_release(texture);
 	for (int i = 0; i < 4; ++i)
