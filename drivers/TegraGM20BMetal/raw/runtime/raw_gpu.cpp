@@ -4965,8 +4965,23 @@ void RenderEncoder::markSpan(Push &p, uint32_t index, SpanKind kind)
     const Texture *t = pass_.color[0].texture;
     const uint32_t kpx = t ? uint32_t(uint64_t(t->width) * t->height * t->samples / 1000) : 0;
     SpanLabel label;
-    if (kind == SpanKind::Draws && emitted_)
+    if (kind == SpanKind::Draws && emitted_) {
         label = drawSpanLabel(*emitted_, emitted_->rec ? emitted_->rec->keyHash : 0, kpx, samples_);
+        const Pipeline &pl = *emitted_;
+        label.form = pl.splitOf                         ? SpanForm::Twin
+                     : pl.freeForm.rung != FetchNone    ? SpanForm::FetchFree
+                     : pl.storageBits                   ? SpanForm::Interlock
+                     : pipeline_ && &pl != pipeline_    ? SpanForm::Variant
+                                                        : SpanForm::Whole;
+        label.pixels = uint32_t(std::min<uint64_t>(drawPixels_, UINT32_MAX));
+        if (t) {
+            label.format = t->format;
+            label.width = uint16_t(std::min<uint32_t>(t->width, 0xffff));
+            label.height = uint16_t(std::min<uint32_t>(t->height, 0xffff));
+            label.blockLinear = t->blockLinear;
+            label.compressed = t->comptags;
+        }
+    }
     label.kind = kind;
     label.kpx = uint16_t(std::min<uint32_t>(kpx, 0xffff));
     label.samples = samples_;
