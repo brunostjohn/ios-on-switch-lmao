@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // debug.switch_gpu_rail_cycle (debug kernels): writing N (1-16) rail-gates the GPU and brings it up N times on the
 // sysctl's thread (tgm_rail_cycle_once), each rail-up followed by the GPU's first job and a look at its GPCPLL
-// (tgm_rail_look); reading gives the last run's line, which HW Test gpu.rail_cycle judges.
+// (tgm_rail_probe); reading gives the last run's line, which HW Test gpu.rail_cycle judges.
 #include <IOKit/IOLib.h>
 #include <string.h>
 #include <sys/errno.h>
@@ -17,7 +17,7 @@ char gLine[224] = "cycles=0 why=not_run";
 bool gCycling;
 struct sysctl_oid gOid;
 
-bool gpcpllAsSet(const tgm_rail_look &look)
+bool gpcpllAsSet(const struct tgm_rail_look &look)
 {
 	return (look.cfg & 0x20001) == 0x20001 && look.vco_ok && look.pl == look.expect_pl;
 }
@@ -26,7 +26,7 @@ void cycle(int cycles)
 {
 	int downs = 0, fences = 0, plls = 0;
 	uint32_t fenceMax = 0;
-	tgm_rail_look look = {};
+	struct tgm_rail_look look = {};
 	const char *why = "-";
 	for (int i = 0; i < cycles; ++i) {
 		if (tgm_rail_cycle_once()) {
@@ -34,7 +34,7 @@ void cycle(int cycles)
 			break;
 		}
 		++downs;
-		if (tgm_rail_look(&look) == -EBUSY) {
+		if (tgm_rail_probe(&look) == -EBUSY) {
 			why = "before_m3";
 			break;
 		}

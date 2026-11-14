@@ -54,7 +54,7 @@ static void gpcpll_look(struct nvkm_device *device, void *arg)
 /* The GPU's first job since the ungate, one kernel fence through the host, PBDMA, semaphore release and nonstall
  * interrupt (wake_fence's, with a late fence reported instead of judged hung), then the GPCPLL against the idle clock's
  * rate: enabled and locked, on its VCO, at the PL the idle clock last set. */
-int tgm_rail_look(struct tgm_rail_look *look)
+int tgm_rail_probe(struct tgm_rail_look *look)
 {
 	u64 us = 0;
 	int ret = 0;

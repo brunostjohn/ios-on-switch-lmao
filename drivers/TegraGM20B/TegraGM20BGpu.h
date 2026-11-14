@@ -636,7 +636,7 @@ int tgm_clkgate_switch(int on);
 struct nvkm_device;
 int tgm_gpu_held(void (*fn)(struct nvkm_device *device, void *arg), void *arg);
 
-/* Debug kernels: after a rail-up, the GPU's first job and its GPCPLL (gpu_rail_probe.c, for TegraGM20B.cpp's
+/* Debug kernels: after a rail-up, the GPU's first job and its GPCPLL (gpu_rail_probe.c, for TegraGM20BRailCycle.cpp's
  * debug.switch_gpu_rail_cycle). 0 when the fence completed and the GPCPLL is enabled, locked and on the idle clock's VCO
  * at the PL it last set; -EIO otherwise, -EBUSY before M3. */
 struct tgm_rail_look {
@@ -645,7 +645,7 @@ struct tgm_rail_look {
 	int khz, vco_ok;
 };
 
-int tgm_rail_look(struct tgm_rail_look *look);
+int tgm_rail_probe(struct tgm_rail_look *look);
 /* Debug kernels: one rail-gate and rail-up (TegraGM20B.cpp), and debug.switch_gpu_rail_cycle (TegraGM20BRailCycle.cpp). */
 int tgm_rail_cycle_once(void);
 void tgm_rail_cycle_register(void);
