@@ -81,11 +81,10 @@ inline std::vector<const IOLock *> &ioLocksHeld()
 
 inline void ioLockOrderTake(const IOLock *lock)
 {
-	auto &order = ioLockOrder();
-	if (order.recording.load(std::memory_order_relaxed)) {
-		std::lock_guard<std::mutex> hold(order.m);
+	if (ioLockOrder().recording.load(std::memory_order_relaxed)) {
+		std::lock_guard<std::mutex> hold(ioLockOrder().m);
 		for (const IOLock *held : ioLocksHeld())
-			order.edges.insert({held, lock});
+			ioLockOrder().edges.insert({held, lock});
 	}
 	ioLocksHeld().push_back(lock);
 }
@@ -101,10 +100,9 @@ inline void ioLockOrderDrop(const IOLock *lock)
 // The locks along one cycle of the recorded edges; empty when there is none.
 inline std::vector<const IOLock *> ioLockOrderCycle()
 {
-	auto &order = ioLockOrder();
-	std::lock_guard<std::mutex> hold(order.m);
+	std::lock_guard<std::mutex> hold(ioLockOrder().m);
 	std::map<const IOLock *, std::vector<const IOLock *>> next;
-	for (const auto &edge : order.edges)
+	for (const auto &edge : ioLockOrder().edges)
 		next[edge.first].push_back(edge.second);
 	std::map<const IOLock *, int> state;
 	std::vector<const IOLock *> path;
@@ -159,11 +157,11 @@ extern "C" inline void _enable_preemption(void)
 
 inline void IOLockFree(IOLock *lock)
 {
-	auto &order = ioLockOrder();
-	if (order.recording.load(std::memory_order_relaxed)) {
-		std::lock_guard<std::mutex> hold(order.m);
-		for (auto at = order.edges.begin(); at != order.edges.end();)
-			at = at->first == lock || at->second == lock ? order.edges.erase(at) : ++at;
+	if (ioLockOrder().recording.load(std::memory_order_relaxed)) {
+		std::lock_guard<std::mutex> hold(ioLockOrder().m);
+		auto &edges = ioLockOrder().edges;
+		for (auto at = edges.begin(); at != edges.end();)
+			at = at->first == lock || at->second == lock ? edges.erase(at) : ++at;
 	}
 	delete lock;
 }
