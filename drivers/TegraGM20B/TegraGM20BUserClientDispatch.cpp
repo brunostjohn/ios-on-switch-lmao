@@ -382,6 +382,14 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	}
 #endif
 	Bo *imported = nullptr;
+	Spare *backing = nullptr;
+	if (method == TegraGM20BMethodBoAlloc) {
+		const auto *alloc = static_cast<const TegraGM20BAbiBoAlloc *>(in);
+		if (alloc->bytes && !(alloc->bytes & 0xfff) && alloc->bytes <= kMaxBoBytes &&
+		    !(alloc->flags &
+		      (TegraGM20BBoCoherent | TegraGM20BBoCompressible | TegraGM20BBoContiguous)))
+			backing = spareTakeOrMake(alloc->bytes);
+	}
 	if (method == TegraGM20BMethodBoImport) {
 		const IOReturn prepared =
 			boImportPrepare(static_cast<const TegraGM20BAbiBoImport *>(in), &imported);
@@ -398,6 +406,8 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		IOLockUnlock(lock_);
 		if (imported)
 			releaseBo(imported);
+		if (backing)
+			spareReturn(backing);
 		return kIOReturnNotOpen;
 	}
 	// A channel killed for a GPU fault or hang (client fault isolation) refuses only what names it (Exec, Order and
@@ -410,7 +420,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		break;
 	case TegraGM20BMethodBoAlloc:
 		ret = boAlloc(static_cast<const TegraGM20BAbiBoAlloc *>(in),
-			      static_cast<TegraGM20BAbiBoAllocReply *>(out));
+			      static_cast<TegraGM20BAbiBoAllocReply *>(out), backing);
 		break;
 	case TegraGM20BMethodBoImport:
 		ret = boImportInsert(imported, static_cast<TegraGM20BAbiBoAllocReply *>(out));
@@ -502,5 +512,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	IOLockUnlock(lock_);
 	if (imported)
 		releaseBo(imported);
+	if (backing)
+		spareReturn(backing);
 	return ret;
 }

@@ -114,9 +114,9 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsCachedBosDo)
 TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 {
 	const CodeText alloc = Block(client(), "IOReturn AGXDeviceUserClient::boAlloc(");
-	EXPECT_TRUE(
-		alloc.Has("if (!ret && !bo->pool_va && !compressible && !system && "
-			  "!(in->flags & TegraGM20BBoContiguous)) spare = spareTake(in->bytes);"));
+	EXPECT_TRUE(alloc.Has("if (!ret && !bo->pool_va && !compressible && !system && "
+			      "!(in->flags & TegraGM20BBoContiguous)) { spare = taken ? taken : "
+			      "spareTake(in->bytes); taken = nullptr; }"));
 	EXPECT_TRUE(alloc.Has("(in->flags & TegraGM20BBoContiguous) || system ? kClasses : "
 			      "classUp(in->bytes);"));
 	EXPECT_TRUE(alloc.Has("cleanZeros(va, backing);"));

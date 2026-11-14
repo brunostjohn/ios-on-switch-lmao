@@ -480,6 +480,25 @@ bool poolZeroLater(void *va, uint64_t pa, uint64_t bytes)
 	thread_call_enter(p->call);
 	return true;
 }
+
+// A cached BoAlloc's backing before the connection lock and the submit gate: a ready spare, or one made here (the
+// zero-fill and clean that BoAlloc's own path would do under them).
+Spare *spareTakeOrMake(uint64_t bytes)
+{
+	if (Spare *s = spareTake(bytes))
+		return s;
+	const uint32_t c = classUp(bytes);
+	return spareMake(c < kClasses ? classBytes(c) : bytes);
+}
+
+// One that BoAlloc did not use, back to the spares or freed.
+void spareReturn(Spare *s)
+{
+	if (spareKeep(s->bmd, s->pas, s->bytes, s->mapping))
+		IODelete(s, Spare, 1);
+	else
+		spareFree(s);
+}
 }  // namespace tgm_uc
 
 extern "C" void switch_gpu_cached_retire(IOMemoryDescriptor *memory, uint64_t *pages,

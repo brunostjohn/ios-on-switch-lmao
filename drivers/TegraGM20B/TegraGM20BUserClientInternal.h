@@ -193,6 +193,8 @@ struct SparePool {
 void cleanZeros(void *va, uint64_t bytes);
 SparePool *spares();
 Spare *spareTake(uint64_t bytes);
+Spare *spareTakeOrMake(uint64_t bytes);
+void spareReturn(Spare *s);
 void spareIneligible();
 bool spareKeep(IOBufferMemoryDescriptor *bmd, uint64_t *pas, uint64_t bytes,
 	       switch_gpu_cached_mapping *mapping = nullptr);
@@ -524,7 +526,9 @@ class AGXDeviceUserClient : public IOUserClient
 		     const uint32_t *outSize);
 
 	static IOReturn getInfo(TegraGM20BAbiInfo *out);
-	IOReturn boAlloc(const TegraGM20BAbiBoAlloc *in, TegraGM20BAbiBoAllocReply *out);
+	// `taken`: a cached BO's backing made before lock_ (nullptr once used)
+	IOReturn boAlloc(const TegraGM20BAbiBoAlloc *in, TegraGM20BAbiBoAllocReply *out,
+			 Spare *&taken);
 	IOReturn boImportPrepare(const TegraGM20BAbiBoImport *in, Bo **out);
 	IOReturn boImportInsert(Bo *bo, TegraGM20BAbiBoAllocReply *out);
 	static void adoptWiring(Bo *bo, SharedWiring *w);

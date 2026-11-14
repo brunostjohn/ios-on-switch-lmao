@@ -44,3 +44,21 @@ TEST(GM20BImportLockSource, AnImportIsPreparedBeforeTheConnectionLockAndReleased
 	EXPECT_LT(prepare, locked);
 	EXPECT_GT(run.rfind("releaseBo(imported);"), run.rfind("IOLockUnlock(lock_);"));
 }
+
+// A cached BoAlloc's backing (a ready spare, or one made with its zero-fill and clean) is taken before the connection
+// lock; under it the BO only takes what was made.
+TEST(GM20BImportLockSource, ACachedBoAllocMakesItsBackingBeforeTheConnectionLock)
+{
+	const std::string run = Body(SourceText("../TegraGM20BUserClientDispatch.cpp"),
+				     "IOReturn AGXDeviceUserClient::run(");
+	const size_t made = run.find("spareTakeOrMake("),
+		     locked = run.rfind("IOLockLock(lock_);",
+					run.find("submitGate_.beginMutation(lock_)"));
+	// base: no backing is made before lock_; the spare or the new buffer comes inside boAlloc, under it
+	ASSERT_NE(made, std::string::npos);
+	EXPECT_LT(made, locked);
+	EXPECT_GT(run.rfind("spareReturn(backing);"), run.rfind("IOLockUnlock(lock_);"));
+	const std::string alloc = Body(SourceText("../TegraGM20BUserClientBo.cpp"),
+				       "IOReturn AGXDeviceUserClient::boAlloc(");
+	EXPECT_NE(alloc.find("spare = taken ? taken : spareTake(in->bytes);"), std::string::npos);
+}

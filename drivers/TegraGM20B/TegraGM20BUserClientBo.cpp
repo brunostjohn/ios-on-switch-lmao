@@ -160,7 +160,7 @@ static IOReturn collectKernelPages(const void *va, uint64_t bytes, uint64_t *pas
 }
 
 IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
-				      TegraGM20BAbiBoAllocReply *out)
+				      TegraGM20BAbiBoAllocReply *out, Spare *&taken)
 {
 	const bool compressible = (in->flags & TegraGM20BBoCompressible) != 0u;
 	if (!in->bytes || (in->bytes & 0xfff) || in->bytes > kMaxBoBytes || in->align_log2 < 12 ||
@@ -239,9 +239,10 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		systemLogged_ = systemLogged_ || system;
 	}
 	if (!ret && !bo->pool_va && !compressible && !system &&
-	    !(in->flags & TegraGM20BBoContiguous))
-		spare = spareTake(in->bytes);
-	else if (TGM_STATS && !ret && !bo->pool_va && !compressible)
+	    !(in->flags & TegraGM20BBoContiguous)) {
+		spare = taken ? taken : spareTake(in->bytes);
+		taken = nullptr;
+	} else if (TGM_STATS && !ret && !bo->pool_va && !compressible)
 		spareIneligible();
 	if (!ret && bo->pool_va) {
 		for (uint32_t i = 0; i < bo->npages; i++)
