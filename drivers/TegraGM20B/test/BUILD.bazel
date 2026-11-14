@@ -971,6 +971,8 @@ host_test(
         ":backing",
         ":coherency_kernel",
     ],
+    # m2v: the uses of methods 8, 17 and 20, which only NVK calls
+    tags = ["m2v"],
 )
 
 host_test(
@@ -1074,6 +1076,8 @@ host_test(
         ":coherency_kernel",
         ":exec_surfaces",
     ],
+    # m2v: method 17 (ExecSurfaces), which only NVK calls
+    tags = ["m2v"],
 )
 
 host_test(

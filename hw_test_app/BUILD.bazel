@@ -533,7 +533,6 @@ cc_library(
         "bench/bench_pack.cpp",
         "bench/bench_twod.cpp",
         "bench/switch_bench.cpp",
-        "//drivers/NativeMetal:bridge/NativeMetalBlend.h",
         "//drivers/TegraGM20BMetal:raw/runtime/raw_blend_color.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BClockABI.h",
