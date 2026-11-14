@@ -154,7 +154,8 @@ TEST_F(NVJPGGate, APowerOnWaitsForTheRemoveClampingCommandNotTheLegacyClampStatu
     gEngine.clampStuck = true;
     EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), -19);
     EXPECT_TRUE(logged("did not come up (PWRGATE_STATUS 0 REMOVE_CLAMPING_CMD 0x4000000 CLAMP_STATUS 0x4000000"));
-    EXPECT_TRUE(logged("TegraNVJPG: partition 26 kept its clamps: REMOVE_CLAMPING_CMD 0x4000000 CLAMP_STATUS 0x4000000"));
+    EXPECT_TRUE(
+        logged("TegraNVJPG: partition 26 kept its clamps: REMOVE_CLAMPING_CMD 0x4000000 CLAMP_STATUS 0x4000000"));
     EXPECT_FALSE(gEngine.partitionOn) << "powered back off, so the next power-up ungates it again";
     gEngine.clampStuck = false;
     EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0) << "the next decode powers it on again";
