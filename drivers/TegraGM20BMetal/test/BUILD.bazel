@@ -5143,6 +5143,52 @@ host_test(
     ] + RAW_HOST_DEPS,
 )
 
+# mediaanalysisd's kernel shape through the raw facade's admission and encode: shadow images around the launch, a
+# memoryless texture read through header 0, a store to one failing the command buffer, m2v never opened
+host_test(
+    name = "raw_facade_kernel_shadow_test",
+    srcs = [
+        "made_metallib.h",
+        "raw_facade_compute.h",
+        "raw_facade_harness.h",
+        "raw_job_methods.h",
+        "raw_facade_kernel_shadow_test.cpp",
+        "raw_frontend_absent.cpp",
+        "raw_kernel_model.h",
+        "empty_pack.h",
+        "raw_facade_standins.h",
+    ] + RAW_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + RAW_HOST_COPTS,
+    cxx_std = "c++17",
+    data = [":fake_nvk/libvulkan_nouveau.dylib"],
+    env = {"SWITCH_FAKE_NVK": "$(rootpath :fake_nvk/libvulkan_nouveau.dylib)"},
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+    ],
+    sanitize = False,
+    deps = [
+        ":raw_facade_plugin_host",
+        ":raw_runtime_plugin_host",
+        "//kits/SwitchGM20B:classes",
+        "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
+    ] + RAW_HOST_DEPS,
+)
+
 # MTLComputeCommandEncoder's predicated loops through the raw facade's submission, each job run by the model GPU
 host_test(
     name = "raw_facade_loops_test",
