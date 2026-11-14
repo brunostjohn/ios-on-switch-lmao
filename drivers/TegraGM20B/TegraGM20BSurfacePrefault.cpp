@@ -21,6 +21,9 @@
 #include "TegraGM20BViews.h"
 
 extern "C" {
+// XNU's VM modified bit of a physical page (osfmk/vm/pmap.h): clearing it write-protects the page's every mapping
+void pmap_clear_modify(ppnum_t pn);
+boolean_t pmap_is_modified(ppnum_t pn);
 IOMemoryDescriptor *tegra_gm20b_ios_memory(OSObject *surface);
 uint64_t tegra_gm20b_ios_alloc_size(OSObject *surface);
 // XNU's vm_pressure_level_t: 0 normal
@@ -99,6 +102,22 @@ void giveBack(IOMemoryDescriptor *memory)
 	memory->release();
 }
 
+// `visit(page)` for each VM page of the prepared `memory`; false when a segment is not whole pages
+template <typename Visit> bool eachPage(IOMemoryDescriptor *memory, Visit &&visit)
+{
+	const uint64_t bytes = memory->getLength();
+	for (uint64_t off = 0; off < bytes;) {
+		IOByteCount len = 0;
+		const addr64_t pa = memory->getPhysicalSegment(off, &len, kIOMemoryMapperNone);
+		if (!pa || (pa & PAGE_MASK) || len < PAGE_SIZE)
+			return false;
+		for (uint64_t at = 0; at + PAGE_SIZE <= len && off + at < bytes; at += PAGE_SIZE)
+			visit(ppnum_t(atop_64(pa + at)));
+		off += len & ~uint64_t(PAGE_MASK);
+	}
+	return true;
+}
+
 // Cleans and invalidates every page of the prepared `memory` (64 at a time from its segments).
 bool clean(IOMemoryDescriptor *memory)
 {
@@ -171,7 +190,11 @@ void faultIn(Prefault *p, const Created &c)
 		IOMemoryDescriptor *memory = tegra_gm20b_ios_memory(surface);
 		tgm_record *record = tgm_record_of(surface);
 		if (memory && memory->prepare(kIODirectionInOut) == kIOReturnSuccess) {
-			if (record && !pressure() && clean(memory))
+			// the modified bits go first: a store between them and the clean is cleaned, one after sets its bit
+			const bool watched = eachPage(memory, [](ppnum_t page) {
+				pmap_clear_modify(page);
+			});
+			if (record && watched && !pressure() && clean(memory))
 				hold(p, memory, record);
 			else
 				memory->complete(kIODirectionInOut);
@@ -238,8 +261,9 @@ extern "C" void tegra_gm20b_iosurface_method_done(uint32_t selector, const void 
 		thread_call_enter(p->call);
 }
 
-// The prefault's wiring of `surface`'s memory, cleaned after its zero-fill and wired since, if it holds one: the caller
-// completes and releases it once its own wiring holds the pages.
+// The prefault's wiring of `surface`'s memory, cleaned after its zero-fill and wired since, if it holds one and no CPU
+// wrote a page of it since: the caller completes and releases it once its own wiring holds the pages. Taken before the
+// caller wires the pages itself, which writes their modified bits.
 extern "C" IOMemoryDescriptor *tegra_gm20b_prefault_take(OSObject *surface)
 {
 	Prefault *p = __atomic_load_n(&gPrefault, __ATOMIC_ACQUIRE);
@@ -250,5 +274,14 @@ extern "C" IOMemoryDescriptor *tegra_gm20b_prefault_take(OSObject *surface)
 	IOMemoryDescriptor *held = p->held.take(memory);
 	arm(p);
 	IOLockUnlock(p->lock);
-	return held;
+	if (!held)
+		return nullptr;
+	bool written = false;
+	eachPage(held, [&](ppnum_t page) {
+		written = written || pmap_is_modified(page);
+	});
+	if (!written)
+		return held;
+	giveBack(held);
+	return nullptr;
 }
