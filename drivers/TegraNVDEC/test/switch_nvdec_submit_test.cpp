@@ -461,6 +461,12 @@ void switch_nvdec_power_lost()
         testGate->lost();
 }
 
+void switch_nvdec_power_hold_locked()
+{}
+
+void switch_nvdec_power_release()
+{}
+
 bool switch_nvdec_semantics_start(uint32_t, void (*)(switch_gpu_event_waits *))
 {
     return true;
