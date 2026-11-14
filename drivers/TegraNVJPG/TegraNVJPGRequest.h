@@ -312,6 +312,49 @@ static inline const char *tegra_nvjpg_plan(const TegraNVJPGDecodeRequest *r, con
     return NULL;
 }
 
+// Plan `p` (rows) moved onto a destination GM20B laid out block-linear (tegra_gm20b_surface_layout): `rowBytes` a row
+// of GOBs, 2^`yLog2` GOBs a block, blocks row by row. The picture's offset must fall on a block: x on a GOB's 64 bytes,
+// y on a block's rows. The engine may touch every block of the block rows its rows reach. NULL with `p` and the setup's
+// output stride and tiling rewritten, or why the decode cannot write those blocks.
+static inline const char *tegra_nvjpg_plan_block_linear(const TegraNVJPGDecodeRequest *r, uint64_t length,
+                                                        uint64_t sink, uint32_t rowBytes, uint32_t yLog2,
+                                                        TegraNVJPGPlan *p, nvjpg_dec_drv_pic_setup_s *s)
+{
+    if (p->planes != 1 || p->fillChroma || yLog2 > 5)
+        return "block-linear destination of more than one plane, or blocks over 32 GOBs";
+    uint32_t bpp = 4;
+    if (p->target.format == TEGRA_NVJPG_OUT_YUY2) {
+        bpp = 2;
+    } else if (p->target.format == TEGRA_NVJPG_OUT_GREY) {
+        bpp = 1;
+    }
+    const uint64_t blockRows = 8ull << yLog2;
+    const uint64_t blockBytes = 512ull << yLog2;
+    const uint64_t blockRowBytes = (uint64_t)rowBytes * blockRows;
+    const uint64_t x = (uint64_t)r->x_offset * bpp;
+    if (!rowBytes || (rowBytes & 63))
+        return "block-linear row not a whole number of GOBs";
+    if ((x & 63) || r->y_offset % blockRows)
+        return "picture offset off the destination's blocks";
+    if (x + p->extent.rowBytes[0] > rowBytes)
+        return "picture wider than the destination's blocks";
+    const uint64_t firstBlockRow = r->y_offset / blockRows;
+    const uint64_t pictureEnd = (firstBlockRow + (r->out_height + blockRows - 1) / blockRows) * blockRowBytes;
+    if (pictureEnd > length)
+        return "picture runs past the destination's blocks";
+    p->target.pitch[0] = rowBytes;
+    p->target.blockLinear = 1;
+    p->target.blockHeightLog2 = yLog2;
+    p->planeStart[0] = firstBlockRow * blockRowBytes + (x / 64) * blockBytes;
+    p->writeEnd = (firstBlockRow + (p->extent.rows[0] + blockRows - 1) / blockRows) * blockRowBytes;
+    if (p->writeEnd > length + sink)
+        return "MCU padding would run past the destination's blocks and its sink";
+    s->output_stride_luma = (int)rowBytes;
+    s->tile_mode = TEGRA_NVJPG_TILE_TEGRA_BLOCK_LINEAR;
+    s->block_linear_height = (int)yLog2;
+    return NULL;
+}
+
 #ifdef __cplusplus
 }
 #endif

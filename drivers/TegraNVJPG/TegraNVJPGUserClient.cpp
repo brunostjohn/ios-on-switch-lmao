@@ -53,10 +53,14 @@
 #include "../../kits/SwitchTime/SwitchTime.h"
 #include "TegraNVJPGRequest.h"
 #include "TegraNVJPGStats.h"
+#include "../TegraGM20B/TegraGM20BLayout.h"
 
 // TegraGM20B: a surface the GPU left block-linear after its last import (TegraGM20BRecord.h) has its texels moved back
 // to rows first, as that import's release did before the move was deferred: NVJPG reads and writes the pages as rows
 extern "C" void tegra_gm20b_surface_engine_rows(OSObject *surface) __attribute__((weak));
+extern "C" void *tegra_gm20b_surface_hold(uint64_t pa, int *tiled) __attribute__((weak));
+extern "C" void tegra_gm20b_surface_unhold(void *hold) __attribute__((weak));
+extern "C" int tegra_gm20b_surface_layout(uint64_t pa, struct tgm_layout *out) __attribute__((weak));
 
 extern "C" {
 vm_offset_t phystokv(uint64_t pa);
@@ -181,6 +185,24 @@ void fillChroma(const TegraNVJPGPlan &p, uint32_t pages)
     switch_dcache_sync();
 }
 
+// The destination as GM20B laid it out (TegraGM20BTiled.cpp decides once per surface), held until the decode has ended
+// so that no import moves its texels meanwhile: a block-linear one is written as its blocks. The caller has moved the
+// surface's seed first: a GPU sampler whose first ask comes after this read then finds a written surface and keeps it
+// pitch, instead of tiling in place the rows this decode is writing. NULL, or why its blocks cannot be written.
+const char *takeLayout(Job *job, uint64_t firstPage, void **hold)
+{
+    *hold = nullptr;
+    if (!tegra_gm20b_surface_hold || !tegra_gm20b_surface_unhold || !tegra_gm20b_surface_layout)
+        return nullptr;
+    int tiled = 0;
+    *hold = tegra_gm20b_surface_hold(firstPage, &tiled);
+    tgm_layout layout = {};
+    if (!tiled || tegra_gm20b_surface_layout(firstPage, &layout) != 1)
+        return nullptr;
+    return tegra_nvjpg_plan_block_linear(&job->request.base, job->dst.desc.length, kSinkBytes, layout.row_bytes,
+                                         layout.y_log2, &job->plan, &job->engine.setup);
+}
+
 // Engine thread: one decode.
 IOReturn runJob(Job *job)
 {
@@ -190,12 +212,23 @@ IOReturn runJob(Job *job)
     IOReturn ret = tegra_vic_surface_prepare(&job->dst, job->dst.desc.length, gOutList, kOutPages, &pages);
     if (ret)
         return ret == kIOReturnNotAligned ? kIOReturnIOError : ret;
+    tegra_vic_surface_written(&job->dst);
+    void *hold = nullptr;
+    if (const char *why = pages ? takeLayout(job, gOutList[0], &hold) : nullptr) {
+        if (hold)
+            tegra_gm20b_surface_unhold(hold);
+        tegra_vic_surface_complete(&job->dst);
+        refused(why, job->plan.target.format);
+        return kIOReturnUnsupported;
+    }
     // Sink entries for the MCU padding the plan allowed past the surface's pages.
     uint32_t mapped = pages;
     while ((static_cast<uint64_t>(mapped) << SWITCH_HW_PAGE_SHIFT) < p.writeEnd && mapped < kOutPages)
         gOutList[mapped++] = gSink.pa;
     if ((static_cast<uint64_t>(mapped) << SWITCH_HW_PAGE_SHIFT) < p.writeEnd ||
         surfaceBytes > (static_cast<uint64_t>(pages) << SWITCH_HW_PAGE_SHIFT)) {
+        if (hold)
+            tegra_gm20b_surface_unhold(hold);
         tegra_vic_surface_complete(&job->dst);
         return kIOReturnBadArgument;
     }
@@ -232,6 +265,8 @@ IOReturn runJob(Job *job)
     tegra_nvjpg_window_clear(TEGRA_NVJPG_WINDOW_OUT);
     tegra_nvjpg_window_clear(TEGRA_NVJPG_WINDOW_IN);
     tegra_nvjpg_unlock();
+    if (hold)
+        tegra_gm20b_surface_unhold(hold);
     if (!ret && p.fillChroma)
         fillChroma(p, pages);
     tegra_vic_surface_complete(&job->dst);

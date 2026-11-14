@@ -14,7 +14,9 @@ import SwitchTexturePattern
 /// the app samples a surface of its own first, while nothing has written it (block-linear), before the peer renders it;
 /// and the same sampled surface written by the app's CPU under a write lock instead, whose lock and unlock move its
 /// texels on the copy engine (`cpu<size>_write_us`; `<case>_read_us` times each read lock); and a surface the app's CPU
-/// wrote with no lock (its seed still 0) before it sampled it first, whose rows must survive its tiling. The app-made
+/// wrote with no lock (its seed still 0) before it sampled it first, whose rows must survive its tiling; and a surface
+/// the app sampled first that NVJPG then decodes a JPEG into (`nvjpg<size>`, read against the picture within
+/// JPEGSurfaceDecode.tolerance): NVJPG writes the blocks GM20B decided. The app-made
 /// surfaces must read block-linear (`<case>_layout=1`). Two shapes: 256x256 and
 /// the 260x260 of the home screen's large widget. A read that matches the pattern laid out in GOBs reports
 /// `<case>_gob=1`: block-linear texels seen as rows (the Maps widget's garbage on boot 21).
@@ -49,7 +51,7 @@ struct SurfaceCrossProcessTest: HWTest {
         var metrics = Metrics()
         var checks: [(String, Bool)] = []
         for size in Self.sizes {
-            for order in ["held", "dropped", "sampled", "cpu", "unlocked"] {
+            for order in ["held", "dropped", "sampled", "cpu", "unlocked", "nvjpg"] {
                 let label = "\(order)\(size)"
                 guard let (surface, sampler) = try await Self.rendered(gpu, connection, order, size, &metrics)
                 else {
@@ -68,10 +70,14 @@ struct SurfaceCrossProcessTest: HWTest {
                 let (gpuRows, _) = try await Self.gpuRows(gpu, surface)
                 withExtendedLifetime(sampler) {}
                 for (reader, got) in [("cpu", cpu), ("gpu", gpuRows)] {
-                    let (wrong, first) = Self.wrong(got, surface)
+                    let jpeg = order == "nvjpg"
+                    let (wrong, first) = jpeg ? JPEGSurfaceDecode.wrong(got, surface) : Self.wrong(got, surface)
                     metrics.set("\(label)_\(reader)_wrong", wrong)
                     metrics.set("\(label)_\(reader)_first", first)
-                    metrics.set("\(label)_\(reader)_gob", Self.readAsGobs(got, surface) ? 1 : 0)
+                    metrics.set("\(label)_\(reader)_gob", !jpeg && Self.readAsGobs(got, surface) ? 1 : 0)
+                    if jpeg && wrong > 0 {
+                        metrics.set("\(label)_\(reader)_explained", JPEGSurfaceDecode.explained(got, surface))
+                    }
                     checks.append(
                         ("\(label): the \(reader) read is the peer's rows (\(wrong) bytes differ)", wrong == 0))
                 }
@@ -106,6 +112,12 @@ struct SurfaceCrossProcessTest: HWTest {
         if order == "unlocked" { write(surface) }
         let (_, sampler) = try await gpuRows(gpu, surface)
         if order == "unlocked" { return (surface, sampler) }
+        if order == "nvjpg" {
+            guard let file = JPEGSurfaceDecode.file(size) else { throw TestFailure("no JPEG of \(size)") }
+            let failure = JPEGSurfaceDecode.decode(file, into: surface)
+            metrics.set("nvjpg\(size)_decode", failure?.description ?? "ok")
+            return failure == nil ? (surface, sampler) : nil
+        }
         if order == "cpu" {
             metrics.set("cpu\(size)_write_us", cpuWrite(surface))
             return (surface, sampler)
