@@ -28,8 +28,7 @@
  *               CCLK_BURST_POLICY alias at 0x20, so the two are compared before anything is switched.
  *               PLLX_BASE 0xe0 / OSC_CTRL 0x50 / SPARE_REG0 0x55c decode as drivers/SwitchPower/SwitchClocks.h does.
  *   FUSE 0x7000f800 (hekate t210.h:65): L4T offsets are relative to +0x100 (fuse-tegra30.c:32,45-48); spare bits at
- *               0x280 (fuse-tegra30.c:195-200); fuse clock CLK_ENB_H_SET bit 7 + MISC_CLK_ENB 0x48 bit 28, as Linux
- *               tegra_enable_fuse_clk (fuse-tegra.c) and hekate hw_init leave them.
+ *               0x280 (fuse-tegra30.c:195-200); readable once switch_car_fuse_readable (kits/SwitchCAR) ran.
  *   HIDREV 0x70000804 (APB_MISC 0x70000800 + 4: tegra-apbmisc.c:58-80,287); T210B01 = chip 0x21 major 2 minor 1
  *               (tegra-apbmisc.c:180-190).
  *   MAX77812 on I2C5: 0x31 if !(FUSE_RESERVED_ODM28_B01 (hekate 0x240) & 1) else 0x33 (hekate max7762x.c:98-109);
@@ -48,6 +47,7 @@
 #include <soc/tegra/fuse.h>
 #include "linux/drivers/soc/tegra/fuse/fuse.h"
 #include "../TegraI2C/TegraI2C.h"
+#include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchMMIO/SwitchMMIO.h"
 
 #define CAR_PA 0x60006000ULL
@@ -60,12 +60,10 @@
 #define CLK_OUT_ENB_H 0x014
 #define CCLK_BURST_POLICY 0x020
 #define SUPER_CCLK_DIVIDER 0x024
-#define MISC_CLK_ENB 0x048
 #define OSC_CTRL 0x050
 #define PLLX_BASE 0x0e0
 #define CLK_SOURCE_I2C5 0x128
 #define RST_DFLL_DVCO 0x2f4
-#define CLK_ENB_H_SET 0x328
 #define RST_DEVICES_W 0x35c
 #define CLK_OUT_ENB_W 0x364
 #define CCLKG_BURST_POLICY 0x368
@@ -74,10 +72,8 @@
 #define SPARE_REG0 0x55c
 #define CLK_SOURCE_DFLL_REF 0x62c
 #define CLK_SOURCE_DFLL_SOC 0x630
-#define H_FUSE BIT(7)
 #define H_I2C5 BIT(15)
 #define W_DVFS BIT(27)
-#define MISC_FUSE_VISIBLE BIT(28)
 #define DVCO_RESET BIT(0)
 #define PLL_ENABLE BIT(30)
 #define PLL_BYPASS BIT(31)
@@ -653,9 +649,7 @@ static int platform_init(char *why, size_t len)
 		return err;
 
 	/* fuses: identity, speedo (vendored speedo-tegra210.c, as fuse-tegra30.c tegra30_fuse_init runs it) */
-	switch_mmio_write32_flush(car, CLK_ENB_H_SET, H_FUSE);
-	switch_mmio_write32_flush(car, MISC_CLK_ENB,
-				  switch_mmio_read32(car, MISC_CLK_ENB) | MISC_FUSE_VISIBLE);
+	switch_car_fuse_readable();
 	init_revision();
 	if (tegra_sku_info.id_and_rev != TEGRA210B01_REVISION_A01)
 		return fail(why, len, -ENODEV, "not a T210B01 A01 (HIDREV %#x)", hidrev);

@@ -7,6 +7,7 @@
 #include "../../../kits/SwitchLinux/SwitchLinux.h"
 #include "../../../kits/SwitchLinux/SwitchLinuxLock.h"
 #include "../../TegraI2C/TegraI2C.h"
+#include "../../../kits/SwitchCAR/SwitchCAR.h"
 #include "tegra_dfll_fake.h"
 
 #define BIT(n) (1u << (n))
@@ -42,6 +43,12 @@ void tegra_dfll_fake_console(void)
 	tegra_dfll_fake.speedo_id = 0;
 	tegra_dfll_fake.speedo_value = 1659;
 	tegra_dfll_fake.process_id = 0;
+}
+
+void switch_car_fuse_readable(void)
+{
+	*tegra_dfll_fake_reg(TEGRA_DFLL_FAKE_CAR, 0x014) |= BIT(7);
+	*tegra_dfll_fake_reg(TEGRA_DFLL_FAKE_CAR, 0x048) |= BIT(28);
 }
 
 volatile void *switch_linux_ioremap(uint64_t pa, uint64_t size, int write_combined)

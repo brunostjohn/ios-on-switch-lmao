@@ -27,6 +27,12 @@ enum : uint32_t {
     IO_DPD2_STATUS = 0x1c4,
 };
 
+enum : uint32_t {
+    MISC_CLK_ENB = 0x048,
+    CFG_ALL_VISIBLE = 1u << 28,
+};
+
+constexpr unsigned kFuseClock = 39;  // TEGRA210_CLK_FUSE: bank H bit 7
 constexpr uint32_t kToggleStart = 1u << 8;
 constexpr uint32_t kDpdCodeOff = 1u << 30, kDpdCodeOn = 2u << 30;
 constexpr uint32_t kToggleUs = 5000, kDpdUs = 250, kSequenceStepUs = 10;
@@ -163,6 +169,13 @@ void switch_car_rmw(uint32_t offset, uint32_t clear, uint32_t set)
 bool switch_car_wait(uint32_t offset, uint32_t mask, uint32_t value, uint32_t timeout_us)
 {
     return switch_mmio_wait32(car(), offset, mask, value, timeout_us);
+}
+
+void switch_car_fuse_readable(void)
+{
+    switch_car_clock_enable(kFuseClock);
+    switch_car_rmw(MISC_CLK_ENB, 0, CFG_ALL_VISIBLE);
+    (void)switch_car_read(MISC_CLK_ENB);
 }
 
 bool switch_pmc_partition_is_on(unsigned partition)
