@@ -22,6 +22,12 @@
     return MTLPatchTypeQuad;
 }
 
+// what the descriptor checks when it takes a vertex function
+- (MTLFunctionType)functionType
+{
+    return MTLFunctionTypeVertex;
+}
+
 @end
 
 namespace {
@@ -214,11 +220,11 @@ TEST(CompileRequest, EveryStateShapesRequestRebuildsItsOwnKey)
         raw::CompileRequest r = renderRequest();
         shapes(shape, d, r);
         r.fields = raw::fieldsOf(d);
+        r.key = runtimeKey(r).key;
         raw::CompileRequest back;
         ASSERT_TRUE(raw::decodeRequest(raw::encodeRequest(r), back)) << shape;
         bool own = false;
         EXPECT_EQ(raw::requestPackKey(back, own), facadeKey(d, r)) << shape;
-        r.key = runtimeKey(r).key;
         switch_compiler::SystemLibraries system;
         switch_compiler::Prepared p;
         std::string why;
@@ -357,8 +363,12 @@ TEST(CompileRequest, AStageInKernelCarriesItsStageInputToTheCompiler)
     raw::CompileRequest plain = r;
     plain.kernel.stageIn = {};
     const std::string logged = raw::encodeRequest(plain);
+    // what a request carries after its kernel's stage input (writeLater): tessellator state, amplification, two-plane,
+    // sampled slots and a count of written textures
+    constexpr size_t kLaterBytes = sizeof(raw::TessellationFields) + sizeof(uint64_t) + 1 + 2 + 4;
     constexpr size_t kStageInBytes = sizeof(raw::StageInFields::attributes) + 2 * sizeof(uint64_t);
-    ASSERT_TRUE(raw::decodeRequest(logged.substr(0, logged.size() - kStageInBytes), back));
+    ASSERT_TRUE(raw::decodeRequest(logged.substr(0, logged.size() - kLaterBytes), back));
+    ASSERT_TRUE(raw::decodeRequest(logged.substr(0, logged.size() - kLaterBytes - kStageInBytes), back));
     EXPECT_EQ(raw::stageInText(back.kernel.stageIn), "");
     const raw::Digest named = raw::storeName(raw::kernelCacheKey(kStack, "k"), r, {});
     EXPECT_EQ(named, raw::storeName(raw::kernelCacheKey(kStack, "k"), plain, {}));
