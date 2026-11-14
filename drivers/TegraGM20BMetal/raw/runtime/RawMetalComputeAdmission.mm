@@ -13,6 +13,7 @@ enum ImageTerm : uint8_t {
     TermTwoPlanesWritten = 1,  // the record stores RGB10A8_2P_XR10, which no record splits into its two planes
     TermTwoPlanesBare,         // RGB10A8_2P_XR10 read with no stand-in drawn from its planes
     TermShadowAliased,         // written through its image while another resource of the dispatch writes its bytes
+    TermConvertedSampler,      // a converted texture beside a sampler its address map would change (draws take its variant)
 };
 
 const char *imageTermName(uint64_t term)
@@ -24,6 +25,8 @@ const char *imageTermName(uint64_t term)
         return "an RGB10A8_2P_XR10 texture read with no stand-in";
     case TermShadowAliased:
         return "a texture written through its image while the dispatch writes its bytes through another resource";
+    case TermConvertedSampler:
+        return "a converted texture beside a sampler that does not clamp to its edge";
     }
     return "?";
 }
@@ -149,6 +152,27 @@ bool admitComputeDispatch(RMCommandBuffer *cb, size_t at, const raw::ComputeKern
             const raw::KernelTextureForm form = t ? raw::kernelTextureForm(t->_raw) : raw::KernelTextureForm::InPlace;
             if (form == raw::KernelTextureForm::Shadow)
                 shadowSlots |= 1u << x.slot;
+            // a kernel's sampler handles bind the plain header: only one that clamps to the edge on every axis reads
+            // as the converted texture's address map makes a draw's sampler read
+            if (form == raw::KernelTextureForm::Converted && t->_raw.addressMap) {
+                const auto &samplers = plan.samplers[2][state.samplers].objects;
+                bool clamped = true;
+                for (uint32_t j = 0; j < k->rec->entries && clamped; ++j) {
+                    const raw::PackKernelEntry &s = k->rec->entry[j];
+                    if (s.kind != raw::KernelSampler)
+                        continue;
+                    RMSampler *sampler = s.slot < 16 ? (__bridge RMSampler *)samplers[s.slot] : nil;
+                    clamped = sampler && sampler->_raw.desc.sAddress == MTLSamplerAddressModeClampToEdge &&
+                              sampler->_raw.desc.tAddress == MTLSamplerAddressModeClampToEdge &&
+                              sampler->_raw.desc.rAddress == MTLSamplerAddressModeClampToEdge;
+                }
+                if (!clamped) {
+                    noteRefusal(cb, PredComputeImage, x.slot, TermConvertedSampler, t, k->rec->keyHash);
+                    if (why)
+                        *why = imageTermName(TermConvertedSampler);
+                    return false;
+                }
+            }
             if (form == raw::KernelTextureForm::NoHeader && writes) {
                 failCommandBuffer(cb,
                                   [NSString stringWithFormat:@"A kernel stores a texture with no memory a shader can "
