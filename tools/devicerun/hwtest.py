@@ -294,6 +294,7 @@ TESTS: dict[str, bool] = {
     'cpu.clock': False,
     'cpu.sustained': False,
     'cpu.sched': False,
+    'cpu.ipi_pingpong': False,
     'system.dispatch_sync': False,
     'system.dispatch_sync_workloops': False,
     'system.workloop_sync': False,

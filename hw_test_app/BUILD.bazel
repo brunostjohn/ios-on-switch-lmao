@@ -404,7 +404,24 @@ cc_library(
     target_compatible_with = ["@platforms//os:ios"],
 )
 
+swift_interop_hint(
+    name = "ipi_probe_module",
+    module_name = "SwitchIPIProbe",
+)
+
+# cpu.ipi_pingpong's two threads waking each other across cores (cpu/test runs it on the Mac).
+cc_library(
+    name = "ipi_probe",
+    srcs = ["cpu/switch_ipi_probe.c"],
+    hdrs = ["cpu/switch_ipi_probe.h"],
+    aspect_hints = [":ipi_probe_module"],
+    copts = ["-O2"],
+    target_compatible_with = ["@platforms//os:ios"],
+)
+
 exports_files([
+    "cpu/switch_ipi_probe.c",
+    "cpu/switch_ipi_probe.h",
     "cpu/switch_workloop_probe.c",
     "cpu/switch_workloop_probe.h",
 ])
@@ -652,6 +669,7 @@ swift_library(
         ":core",
         ":cpu_clock",
         ":gpu",
+        ":ipi_probe",
         ":sched_probe",
         ":texpeer_pattern",
         ":video",
