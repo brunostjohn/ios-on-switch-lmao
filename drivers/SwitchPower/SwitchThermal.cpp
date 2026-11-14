@@ -163,6 +163,7 @@
 #include "SwitchThermalLimits.h"
 #include <os/log.h>
 #include "../../kits/SwitchCAR/SwitchCAR.h"
+#include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
 extern "C" int tegra_gm20b_bringup_busy(void);  // drivers/TegraGM20B/TegraGM20B.cpp
@@ -574,11 +575,11 @@ void SwitchThermal::fanPowerOn()
     gpioMasked(kPortA, MSK_OUT, kPinPA5, true);
     gpioMasked(kPortA, MSK_OE, kPinPA5, true);
     if (switch_mmio_read32(pmc, NO_IOPOWER) & kPmcGpio) {
-        switch_mmio_write32(pmc, NO_IOPOWER, switch_mmio_read32(pmc, NO_IOPOWER) & ~kPmcGpio);
+        switch_pmc_rmw(NO_IOPOWER, kPmcGpio, 0);
         (void)switch_mmio_read32(pmc, NO_IOPOWER);
     }
     if (switch_mmio_read32(pmc, PWR_DET_VAL) & kPmcGpio) {
-        switch_mmio_write32(pmc, PWR_DET_VAL, switch_mmio_read32(pmc, PWR_DET_VAL) & ~kPmcGpio);
+        switch_pmc_rmw(PWR_DET_VAL, kPmcGpio, 0);
         (void)switch_mmio_read32(pmc, PWR_DET_VAL);
     }
 
