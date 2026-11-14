@@ -270,11 +270,12 @@ TEST(RawRecordCost, CompositorScaleFrame)
     const Sample encoders = measure([&](id<MTLCommandBuffer> cb, Passes &into, uint32_t) {
         emptyEncoders(cb, b, into);
     });
+    // both past the encode-ahead hand-off (RawMetalPipeline.mm kHandOff, 24 commands), which is once a command buffer
     const Sample one = measure([&](id<MTLCommandBuffer> cb, Passes &into, uint32_t) {
-        repeatedDraws(cb, b, into, 0);
+        repeatedDraws(cb, b, into, 32);
     });
     const Sample repeated = measure([&](id<MTLCommandBuffer> cb, Passes &into, uint32_t) {
-        repeatedDraws(cb, b, into, 300);
+        repeatedDraws(cb, b, into, 332);
     });
     print("frame 30 enc 90 draws", frame, 1, "frame");
     print("changed-state draw", difference(doubled, frame), kDraws, "draw");
