@@ -52,8 +52,8 @@ const char *kernelStateMissing(RMCommandBuffer *cb, uint32_t index)
     return kernelMissing((__bridge id)plan.kernel[state.state].pipeline);
 }
 
-// m2v's frontend makes no indirect command buffer (its device answers newIndirectCommandBufferWithDescriptor: nil), so
-// replayKernelCommands runs none of the commands
+// m2v's frontend makes no indirect command buffer (its device answers newIndirectCommandBufferWithDescriptor: nil): an
+// execute of dispatch commands never replays
 const char *executeMissing(RMCommandBuffer *cb, size_t at)
 {
     (void)cb, (void)at;

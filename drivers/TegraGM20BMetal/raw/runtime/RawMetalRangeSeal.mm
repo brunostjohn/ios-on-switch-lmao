@@ -391,6 +391,7 @@ bool RMRangeEncode::endEncoders()
     if (ce_) {
         ce_->end();
         ce_.reset();
+        endKernelShadows();
     }
     if (!turned_.end(*rc_, why_))
         return fail(PredPassRotated, *why_);
@@ -413,8 +414,10 @@ bool RMRangeEncode::seal(size_t to, bool &stale)
         return false;
     if (be_)
         be_->end();
-    if (ce_)
+    if (ce_) {
         ce_->end();
+        endKernelShadows();
+    }
     if (!turned_.end(*rc, why_))
         return fail(PredPassRotated, *why_);
     if (!storeStandIns())

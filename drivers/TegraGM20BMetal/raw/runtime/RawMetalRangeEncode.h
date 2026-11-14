@@ -104,6 +104,10 @@ private:
     bool resolvePasses();
     void refresh(size_t pass);
     bool standIns(size_t pass);
+    void localShadows(std::vector<raw::KernelUse> &list);
+    void shadowCopies(const std::vector<const void *> &back, const std::vector<const void *> &fill);
+    void beginKernelShadows(size_t encoderAt);
+    void endKernelShadows();
     bool command(size_t at);
     bool beginPass(size_t at);
     bool endEncoder(size_t at);
@@ -128,6 +132,9 @@ private:
     raw::BlitEncoder *be_ = nullptr;
     std::optional<raw::ComputeEncoder> ce_;
     bool serialCompute_ = false, computeUnit_ = false;
+    raw::KernelShadows kernelShadows_;  // the open compute encoder's (raw_kernel_shadow.h)
+    std::vector<raw::KernelUse> dispatchUses_, encoderUses_;
+    bool encoderShadows_ = false;
     raw::StateCursor stateCursor_;
     raw::FusionPass fused_;
     size_t fusedAt_ = SIZE_MAX;
