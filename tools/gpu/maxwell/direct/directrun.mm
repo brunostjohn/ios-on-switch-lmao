@@ -53,6 +53,22 @@ NSDictionary *program(const raw::CapturedProgram &p)
     };
 }
 
+// What a draw through argument buffers binds of the record: the root table's and ExecutionStatus's push words + 1 of each
+// stage (vertex, fragment), the stages' root-table slots and set 1's heap arrays
+NSDictionary *arguments(const raw::PackPipeline &p)
+{
+    NSMutableArray *heap = [NSMutableArray array];
+    for (uint32_t k = 0; k < p.heapArrays; k++)
+        [heap addObject:@[ @(p.heap[k].heapClass), @(p.heap[k].offset) ]];
+    return @{
+        @"root_table_word" : numbers(p.rootTableWord, 2),
+        @"status_word" : numbers(p.statusWord, 2),
+        @"root_slots" : words(p.rootSlots, 2),
+        @"heap" : heap,
+        @"heap_bytes" : @(p.heapBytes),
+    };
+}
+
 NSDictionary *stateJson(const raw::RuntimeRecord &r)
 {
     const raw::PackPipeline &p = r.pipeline;
@@ -88,6 +104,7 @@ NSDictionary *stateJson(const raw::RuntimeRecord &r)
         @"control" : @[ @(p.controlWord), @(p.controlPoints), @(p.controlPointIndexBytes) ],
         @"blob" : words(r.blob.data(), r.blob.size()),
         @"extras" : extras,
+        @"arguments" : arguments(p),
     } mutableCopy];
     if (r.strideTwin)
         out[@"stride_twin"] = stateJson(*r.strideTwin);
@@ -253,6 +270,9 @@ void make(Runner &run)
     run.state(@"layered_fetch", @"layered_fetch_vertex", @"layered_fetch_fragment", ^(MTLRenderPipelineDescriptor *d) {
         d.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
     });
+    run.state(@"argument_textures", @"argument_vertex", @"argument_textures_fragment",
+              ^(MTLRenderPipelineDescriptor *){
+              });
     run.state(@"wide_static", @"wide_vertex", @"wide_fragment", ^(MTLRenderPipelineDescriptor *d) {
         MTLVertexDescriptor *v = [MTLVertexDescriptor vertexDescriptor];
         layout(v, 0, MTLVertexFormatFloat2, 1, 2052);

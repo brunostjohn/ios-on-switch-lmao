@@ -426,6 +426,140 @@ class Interpolants(Records):
             self.assertEqual([dr.value(w) for w in colour], want)
 
 
+class ArgumentBuffers(Records):
+    """A fragment function's textures and sampler by ID in a tier-2 argument buffer, read through the device's handle
+    tables (raw/runtime/raw_heap_tables.h, as raw/test/argcheck.py models them for the pack's records).
+
+    The draw's root table holds the handle tables' root and ExecutionStatus words, set 0 the argument buffer and the
+    texture and sampler tables, set 1 header i at element i of each array; an ID is 1 << 32 | TIC or 1 << 32 | TSC << 20.
+    A fetch answers its handle, so each check is the texture and sampler headers the fetches name: the sample through
+    the ID's sampler, and every fetch of the ID's texture.
+    """
+
+    TICS, TSCS, TAG = 8192, 1024, 1 << 32
+    ROOTS, STATUS, TABLES, HEAP, SET0, ARG = 0x2000000, 0x2000100, 0x3000000, 0x4000000, 0x5000000, 0x6000000
+    ENTRY_UBO, ENTRY_TEXTURE_TABLE, ENTRY_SAMPLER_TABLE = 1, 8, 9
+    CBUF_UBO, CBUF_HEAP_SET = 5, 3 | 1 << 3
+
+    def memory(self, record: dict, textures: dict[int, int], samplers: dict[int, int]) -> dict[int, int]:
+        """The device's memory once the IDs of `textures` and `samplers` (header: entry flags) were asked for."""
+        words: dict[int, int] = {}
+
+        def put(va: int, data: bytes) -> None:
+            for i in range(0, len(data), 4):
+                words[va + i] = struct.unpack_from('<I', data, i)[0]
+
+        sink, identity = self.ROOTS + 96, struct.pack('<4Q', 0x1000, 0x1000, (1 << 39) - 0x1000, 0)
+        put(self.ROOTS, bytes(32) + struct.pack('<4Q', sink, 2, 1, 0) + identity)
+        for i in range(1, self.TICS):
+            put(self.TABLES + 16 * i, struct.pack('<4I', i, 1, i if i in textures else 0, textures.get(i, 0)))
+        for i in range(1, self.TSCS):
+            entry = struct.pack('<4I', i << 20, 1, i if i in samplers else 0, samplers.get(i, 0))
+            put(self.TABLES + 16 * self.TICS + 16 * i, entry)
+        for heap_class, offset in record['arguments']['heap']:
+            for header in samplers if heap_class & 3 == 2 else textures:
+                put(self.HEAP + offset + 4 * header, struct.pack('<I', header << 20 if heap_class & 3 == 2 else header))
+        return words
+
+    def fetches(self, record: dict, words: dict[int, int], pixel: tuple[int, int]) -> list[tuple[int, int]]:
+        """Run the fragment program at `pixel`; give the (texture, sampler) header of each fetch."""
+        arguments = record['arguments']
+        push = dr.record_push(record)
+        for stage in range(2):
+            for word, va in (
+                (arguments['root_table_word'][stage], self.ROOTS),
+                (arguments['status_word'][stage], self.STATUS),
+            ):
+                if word:
+                    push[word - 1], push[word] = va & 0xFFFFFFFF, va >> 32
+        set0 = {}
+        for offset, kind, _stage, slot, *_ in record['entries']:
+            if kind == self.ENTRY_UBO and slot == 0:
+                set0[offset] = [self.ARG, 0, 256, 0]
+            elif kind == self.ENTRY_TEXTURE_TABLE:
+                set0[offset] = [self.TABLES, 0, 16 * self.TICS, 0]
+            elif kind == self.ENTRY_SAMPLER_TABLE:
+                set0[offset] = [self.TABLES + 16 * self.TICS, 0, 16 * self.TSCS, 0]
+        program = record['programs'][1]
+        fetched = []
+
+        def cbuf(bank: int, offset: int) -> int:
+            kind = program['cbufs'][bank] if bank < len(program['cbufs']) else 0
+            if kind == dr.CBUF_ROOT:
+                if dr.ROOT_PUSH <= offset < dr.ROOT_PUSH + 128:
+                    return push.get((offset - dr.ROOT_PUSH) // 4, 0)
+                sets = {dr.ROOT_SETS: [self.SET0, 0, 256, 0], 0x48: [self.HEAP, 0, arguments['heap_bytes'], 0]}
+                return sets.get(offset & ~15, [0] * 4)[(offset & 15) // 4]
+            if kind == dr.CBUF_SET:
+                return set0.get(offset & ~15, [0] * 4)[(offset & 15) // 4]
+            if kind == self.CBUF_HEAP_SET:
+                return words.get(self.HEAP + offset, 0)
+            if kind & 7 == self.CBUF_UBO:
+                base = set0.get(kind >> 3 << 4, [self.ARG, 0])
+                return words.get((base[0] | base[1] << 32) + offset, 0)
+            raise UnsupportedError(f'a constant buffer of type {kind} at bank {bank}')
+
+        def texture(key: tuple) -> list[int]:
+            if key[0] == 'ldg':
+                (lo, hi), off = key[1], key[2]
+                va = (lo | hi << 32) + (off - (1 << 24) if off & 1 << 23 else off)
+                return [words.get(va + 4 * k, 0) for k in range(4)]
+            if key[0] in ('tex', 'tld'):
+                fetched.append((key[1] & 0xFFFFF, key[1] >> 20))
+                return [dr.f32(0.5)] * 4
+            if key[0] == 'txq':
+                return [4, 4, 1, 1]
+            raise UnsupportedError(f'a fetch {key[0]}')
+
+        position = {ATTR_POSITION: pixel[0] + 0.5, ATTR_POSITION + 4: pixel[1] + 0.5}
+        position.update({ATTR_POSITION + 8: 0.5, ATTR_POSITION + 12: 1.0})
+
+        def attribute(address: int) -> int:
+            if address not in position:
+                raise UnsupportedError(f'IPA {address:#x}, an input the test gave no word for')
+            return dr.f32(position[address])
+
+        lanes = [Inputs(attribute, cbuf, texture, -1) for _ in range(4)]
+        run_quad(dr.code(program), lanes, 4)
+        return fetched
+
+    def test_the_record_reads_the_handle_tables_and_set_1(self):
+        record = self.state('argument_textures')
+        kinds = {kind for _, kind, *_ in record['entries']}
+        self.assertIn(self.ENTRY_TEXTURE_TABLE, kinds)
+        self.assertIn(self.ENTRY_SAMPLER_TABLE, kinds)
+        self.assertTrue(record['arguments']['heap'], 'set 1 holds the heap arrays')
+        self.assertIn(self.CBUF_HEAP_SET, record['programs'][1]['cbufs'])
+
+    def test_each_ids_texture_and_sampler_are_its_headers(self):
+        record = self.state('argument_textures')
+        for first, second, sampler in ((27, 8191, 1023), (4096, 5, 7)):
+            words = self.memory(record, {first: 0, second: 1 << 16}, {sampler: 0})
+            for va, word in zip(
+                range(self.ARG, self.ARG + 24, 4),
+                struct.unpack('<6I', struct.pack('<3Q', self.TAG | first, self.TAG | second, self.TAG | sampler << 20)),
+                strict=True,
+            ):
+                words[va] = word
+            for x, tic in ((1, first), (6, second)):
+                fetched = self.fetches(record, words, (x, 4))
+                self.assertIn((tic, sampler), fetched, f'x {x}')
+                self.assertEqual({t for t, _ in fetched}, {tic}, f'x {x}')
+
+    def test_a_texture_no_id_names_reads_header_0(self):
+        record = self.state('argument_textures')
+        words = self.memory(record, {}, {1023: 0})
+        for va, word in zip(
+            range(self.ARG, self.ARG + 24, 4),
+            struct.unpack('<6I', struct.pack('<3Q', self.TAG | 27, self.TAG | 8191, self.TAG | 1023 << 20)),
+            strict=True,
+        ):
+            words[va] = word
+        fetched = self.fetches(record, words, (1, 4))
+        self.assertTrue(fetched)
+        self.assertTrue(all(t == 0 for t, _ in fetched), fetched)
+
+
 # QMDV01_07's SHARED_MEMORY_SIZE MW(561:544) and L1_CONFIGURATION MW(671:669), whose 3 is 48 KiB directly addressable
 # (clb1c0qmd.h)
 QMD_SHARED_MEMORY_SIZE, QMD_L1_CONFIGURATION, QMD_L1_48KB = (544, 18), (669, 3), 3

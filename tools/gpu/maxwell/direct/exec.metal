@@ -239,3 +239,23 @@ fragment float4 interpolants_fragment(Interpolated in [[stage_in]])
            in.v30 * 31.0f +
            in.v31 * 32.0f;
 }
+
+// Two textures and a sampler by ID in a tier-2 argument buffer: the left half samples the first, the right the second
+struct TextureArguments {
+    texture2d<float> first [[id(0)]];
+    texture2d<float> second [[id(1)]];
+    sampler nearest [[id(2)]];
+};
+
+vertex float4 argument_vertex(uint vid [[vertex_id]])
+{
+    return float4(float(vid & 1) * 4 - 1, float(vid >> 1) * 4 - 1, 0, 1);
+}
+
+fragment float4 argument_textures_fragment(float4 position [[position]],
+                                           constant TextureArguments &arguments [[buffer(0)]])
+{
+    const float2 centre = float2(0.5);
+    return position.x < 4.0 ? arguments.first.sample(arguments.nearest, centre)
+                             : arguments.second.sample(arguments.nearest, centre);
+}
