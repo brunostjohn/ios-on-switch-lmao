@@ -202,6 +202,23 @@ inline void IOLockSleep(IOLock *lock, void *, int) __attribute__((no_thread_safe
 	ioLockOrderTake(lock);
 }
 
+enum IOLockAssertState {
+	kIOLockAssertOwned = 1,
+	kIOLockAssertNotOwned = 2
+};
+
+inline void IOLockAssert(IOLock *lock, IOLockAssertState state)
+{
+	const bool owned =
+		lock->owner.load(std::memory_order_relaxed) == std::this_thread::get_id();
+	if (owned != (state == kIOLockAssertOwned)) {
+		std::fputs(owned ? "IOLockAssert: the thread holds the lock\n"
+				 : "IOLockAssert: the thread does not hold the lock\n",
+			   stderr);
+		std::abort();
+	}
+}
+
 inline void IOLockWakeup(IOLock *lock, void *, bool)
 {
 	lock->condition.notify_all();

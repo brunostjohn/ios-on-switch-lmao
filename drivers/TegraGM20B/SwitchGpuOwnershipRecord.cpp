@@ -34,8 +34,19 @@ uint64_t read_content(const switch_gpu_backing_transaction &transaction,
 
 void unlock_transaction(switch_gpu_backing_transaction *transaction)
 {
-	while (transaction->locked)
-		IOLockUnlock(transaction->uses[--transaction->locked].backing->lock);
+	if (transaction->ordered)
+		switch_gpu_backing_order_unlock();
+	if (transaction->claimed) {
+		switch_gpu_backing_unclaim_uses(transaction->uses, transaction->count);
+		transaction->locked = 0;
+	}
+	for (uint32_t i = transaction->count; transaction->locked && i; --i) {
+		if (!(transaction->uses[i - 1].reserved & kUseLocked))
+			continue;
+		transaction->uses[i - 1].reserved = 0;
+		IOLockUnlock(transaction->uses[i - 1].backing->lock);
+		--transaction->locked;
+	}
 	for (uint32_t i = 0; !transaction->held && i < transaction->count; ++i)
 		switch_gpu_backing_release(transaction->uses[i].backing);
 	*transaction = {};
@@ -58,8 +69,7 @@ extern "C" int switch_gpu_backing_dependencies(const switch_gpu_backing_transact
 					       switch_gpu_backing_token *out, uint32_t capacity,
 					       uint32_t *needed)
 {
-	if (!transaction || !needed || (capacity && !out) ||
-	    transaction->locked != transaction->count)
+	if (!transaction || !needed || (capacity && !out) || !holds(transaction))
 		return -22;
 	*needed = 0;
 	// The kernel's other engines follow what a GM20B job did not list; GM20B jobs follow only listed work, as
@@ -109,8 +119,7 @@ extern "C" int switch_gpu_backing_promise_dependencies(switch_gpu_backing_transa
 						       uint32_t capacity, uint32_t *needed,
 						       uint32_t own_first, uint32_t own_end)
 {
-	if (!transaction || !needed || *needed > capacity ||
-	    transaction->locked != transaction->count)
+	if (!transaction || !needed || *needed > capacity || !holds(transaction))
 		return -22;
 	transaction->promised = 1;
 	transaction->promise_first = own_first;
@@ -138,8 +147,8 @@ extern "C" int switch_gpu_backing_promise_dependencies(switch_gpu_backing_transa
 
 extern "C" void switch_gpu_backing_commit(switch_gpu_backing_transaction *transaction)
 {
-	if (!transaction || transaction->locked != transaction->count ||
-	    transaction->prepared != transaction->count || !uses_intact(transaction, "commit"))
+	if (!transaction || !holds(transaction) || transaction->prepared != transaction->count ||
+	    !uses_intact(transaction, "commit"))
 		return;
 	const auto *timeline = transaction->timeline;
 	uint32_t used = 0;
@@ -203,6 +212,7 @@ int switch_gpu_backing_adopt_locked(switch_gpu_backing *backing,
 				    const switch_gpu_backing_token *jobs, uint32_t count,
 				    uint32_t access)
 {
+	switch_gpu_backing_assert_held(backing);
 	const uint32_t kind = access_kind(access);
 	for (uint32_t i = 0; i < count; ++i) {
 		const auto &job = jobs[i];
