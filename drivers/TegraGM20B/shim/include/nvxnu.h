@@ -232,8 +232,8 @@ void tegra_gm20b_reset(int assert);
 int tegra_gm20b_unclamp(void);
 int tegra_gm20b_mc_flush(int flush);
 nvxnu_u32 tegra_gm20b_fuse_read(nvxnu_u32 offset); /* Linux tegra_fuse_readl() offsets */
-/* MC_INTSTATUS (cleared after the read), MC_ERR_STATUS, MC_ERR_ADR (Linux drivers/memory/tegra/mc.h): what the memory
- * controller refused since the previous call */
+/* The memory controller's latest refused access as its error interrupt took it (MC_INTSTATUS bits, MC_ERR_STATUS,
+ * MC_ERR_ADR; TegraSMMU's tegra_mc_error_latest), zeros when none came since the previous call */
 void tegra_gm20b_mc_errors(nvxnu_u32 *intstatus, nvxnu_u32 *status, nvxnu_u32 *addr);
 /* The MC's carveout 2, the GPU's WPR1: CFG0, BOM, SIZE_128KB, CLIENT_ACCESS2, CLIENT_ACCESS4 */
 void tegra_gm20b_mc_gpu_wpr(nvxnu_u32 v[5]);

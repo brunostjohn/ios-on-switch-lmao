@@ -185,5 +185,6 @@ extern "C" int tegra_smmu_resume(void)
     }
     if (full)
         IOLog("TegraSMMU: resume: over %u swgroups were attached; one was not restored\n", TEGRA_SMMU_ATTACHMENTS);
+    switch_mc_errors_resume();
     return bad;
 }

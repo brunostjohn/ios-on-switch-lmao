@@ -100,9 +100,6 @@ enum : uint32_t {
 };
 
 enum : uint32_t {  // the SMMU's own registers are TegraSMMU.h's
-    MC_INTSTATUS = 0x0,
-    MC_ERR_STATUS = 0x8,
-    MC_ERR_ADR = 0xc,
     MC_HOTRESET_CTRL = 0x200,
     MC_HOTRESET_STATUS = 0x204,
     MC_HOTRESET_VIC = 1u << 18,
@@ -644,9 +641,10 @@ bool switch_vic_engine_powered()
 void switch_vic_engine_describe(char *text, size_t size)
 {
     char falcon[400];
-    snprintf(text, size, "%s; MC INTSTATUS %#x ERR_STATUS %#x ERR_ADR %#x",
-             switch_falcon_stall(gVic, falcon, sizeof(falcon)), switch_mmio_read32(gMc, MC_INTSTATUS),
-             switch_mmio_read32(gMc, MC_ERR_STATUS), switch_mmio_read32(gMc, MC_ERR_ADR));
+    uint32_t status = 0, error = 0, address = 0;
+    const uint32_t errors = tegra_mc_error_latest(&status, &error, &address);
+    snprintf(text, size, "%s; MC errors %u, latest INTSTATUS %#x ERR_STATUS %#x ERR_ADR %#x",
+             switch_falcon_stall(gVic, falcon, sizeof(falcon)), errors, status, error, address);
 }
 
 // The memory controller stops taking VIC's requests and drains those in flight (tegra_mc_flush), so the reset cannot

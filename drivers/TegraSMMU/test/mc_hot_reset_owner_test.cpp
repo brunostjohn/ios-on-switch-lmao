@@ -200,6 +200,15 @@ void switch_mmio_model_write8(uintptr_t address, uint8_t value)
 void IOLog(const char *, ...)
 {}
 
+void switch_mc_errors_resume(void)
+{}
+
+uint32_t tegra_mc_error_latest(uint32_t *intstatus, uint32_t *status, uint32_t *address)
+{
+    *intstatus = *status = *address = 0;
+    return 0;
+}
+
 uint64_t mach_absolute_time(void)
 {
     return 0;

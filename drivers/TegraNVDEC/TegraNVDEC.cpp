@@ -100,9 +100,6 @@ enum : uint32_t {
 };
 
 enum : uint32_t {
-    MC_INTSTATUS = 0x0,
-    MC_ERR_STATUS = 0x8,
-    MC_ERR_ADR = 0xc,
     MC_HOTRESET_CTRL_1 = 0x970,
     MC_HOTRESET_STATUS_1 = 0x974,
     MC_HOTRESET_NVDEC = 1u << 5,
@@ -460,9 +457,10 @@ bool switch_nvdec_engine_powered()
 void switch_nvdec_engine_describe(char *text, size_t size)
 {
     char falcon[400];
-    snprintf(text, size, "%s; MC INTSTATUS %#x ERR_STATUS %#x ERR_ADR %#x",
-             switch_falcon_stall(gNvdec, falcon, sizeof(falcon)), switch_mmio_read32(gMc, MC_INTSTATUS),
-             switch_mmio_read32(gMc, MC_ERR_STATUS), switch_mmio_read32(gMc, MC_ERR_ADR));
+    uint32_t status = 0, error = 0, address = 0;
+    const uint32_t errors = tegra_mc_error_latest(&status, &error, &address);
+    snprintf(text, size, "%s; MC errors %u, latest INTSTATUS %#x ERR_STATUS %#x ERR_ADR %#x",
+             switch_falcon_stall(gNvdec, falcon, sizeof(falcon)), errors, status, error, address);
 }
 
 // The memory controller stops taking NVDEC's requests and drains those in flight (tegra_mc_flush), so the reset cannot

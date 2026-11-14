@@ -109,9 +109,6 @@ enum : uint32_t {
 
 enum : uint32_t {                                 // the SMMU's own registers are TegraSMMU.h's
     TRANSLATION_NVJPG = (1u << 30) | (1u << 31),  // nvjpgsrd, nvjpgswr (MC_SMMU_TRANSLATION_ENABLE_3)
-    MC_INTSTATUS = 0x0,
-    MC_ERR_STATUS = 0x8,
-    MC_ERR_ADR = 0xc,
     MC_HOTRESET_CTRL_1 = 0x970,
     MC_HOTRESET_STATUS_1 = 0x974,
     MC_HOTRESET_NVJPG = 1u << 8,
@@ -378,8 +375,8 @@ int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
     tegra_host1x_describe_channel(TEGRA_HOST1X_CHANNEL_NVJPG, host, sizeof(host));
     const uint32_t reached = tegra_host1x_syncpt_read(gSyncpt);
     switch_falcon_stall(gJpg, falcon, sizeof(falcon));
-    const uint32_t mcStatus = switch_mmio_read32(gMc, MC_INTSTATUS), mcError = switch_mmio_read32(gMc, MC_ERR_STATUS),
-                   mcAddress = switch_mmio_read32(gMc, MC_ERR_ADR);
+    uint32_t mcStatus = 0, mcError = 0, mcAddress = 0;
+    const uint32_t mcErrors = tegra_mc_error_latest(&mcStatus, &mcError, &mcAddress);
     tegra_host1x_channel_teardown(TEGRA_HOST1X_CHANNEL_NVJPG);
     IOLock *power = tegra_nvdec_power_lock();
     IOLockLock(power);
@@ -401,11 +398,12 @@ int cancelled(const TegraNVJPGJob *job, uint32_t fence, uint64_t us)
         gGate.lost();
     }
     IOLog("TegraNVJPG: job fence %u not reached in %llu ms (syncpoint %u at %u; powered on by the idle gate %u times, "
-          "the last %llu ms ago); job %s; %s; MC INTSTATUS %#x ERR_STATUS %#x ERR_ADR %#x; %s; job cancelled, memory "
+          "the last %llu ms ago); job %s; %s; MC errors %u, latest INTSTATUS %#x ERR_STATUS %#x ERR_ADR %#x; %s; job "
+          "cancelled, memory "
           "client %s, engine reset: %s%s\n",
           fence, us / 1000, gSyncpt, reached, gPowerOns,
           gPowerOns ? static_cast<unsigned long long>((switch_now_us() - gPoweredAtUs) / 1000) : 0ULL, what, falcon,
-          mcStatus, mcError, mcAddress, host, drained ? "drained" : "did not drain in 10 ms",
+          mcErrors, mcStatus, mcError, mcAddress, host, drained ? "drained" : "did not drain in 10 ms",
           back ? "running again" : "it did not come back, the next decode powers it on again: ",
           back ? ""
                : (gLine[0] ? gLine

@@ -190,6 +190,12 @@ void tegra_mc_hot_reset(uint32_t ctrl, uint32_t bit, bool on)
 }
 
 // The client drains at once, and STATUS reads done whenever no flush is requested (TRM 18.11.1.114).
+uint32_t tegra_mc_error_latest(uint32_t *intstatus, uint32_t *status, uint32_t *address)
+{
+    *intstatus = *status = *address = 0;
+    return 0;
+}
+
 uint32_t tegra_smmu_read(uint32_t offset)
 {
     if (offset == 0x970)
