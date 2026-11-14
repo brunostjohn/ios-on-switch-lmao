@@ -225,6 +225,7 @@ extern "C" {
 volatile uint32_t native_legacy_surfaces[14];
 }
 
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 static void noteSurface(OSObject *surface, IOMemoryDescriptor *memory)
 {
     static OSObject *seen[4];
@@ -258,6 +259,7 @@ static void noteSurface(OSObject *surface, IOMemoryDescriptor *memory)
           static_cast<unsigned long long>(memory->getLength()), segments,
           static_cast<unsigned long long>(largest >> 10));
 }
+#endif
 
 extern "C" void native_legacy_gpu_fallback_observed(int status);
 // Swaps retired when the GPU client took the frame (before its copy finished), and copies that then failed after such a retirement.
@@ -869,7 +871,6 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     IOSimpleLock *intMaskLock = nullptr;
     bool intMaskLive = false;     // dc mapped and clocked: a hold may write INT_MASK
     bool scanoutStopped = false;  // display power off (setScanout): no frame ends or vblanks are expected
-    uint32_t dcPending = 0;       // INT_STATUS bits from the filter, for the action
     uint64_t vblankTime = 0, vblankContinuous = 0, vblankLast = 0, frameEnds = 0;
     // r17-touch: the compositor's vsync phase (VsyncPhase.h, the pacing line's "phase"). While its lead is in effect the vsync
     // goes out at V_PULSE2, programmed `lead` before the frame end; otherwise at V_BLANK as before, and at most one goes out a
@@ -1111,7 +1112,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     bool stReadDue = true;
     uint64_t stRead = 0;
     uint32_t stIrqBase = 0;  // switch_interrupt_count(105) at the last stats line
-    uint32_t stVblanks = 0;  // V_BLANKs the filter took while vsync was armed (atomic: primary interrupt context)
+    uint32_t stVblanks = 0;  // V_BLANKs the filter took while vsync was armed
     // Frame pacing (r6-lows). A present is a flip DC A latched, timed at the frame end (or V_BLANK) whose interrupt showed it, as the
     // filter stamped it: the moment the new frame starts to scan. Under the gate unless said otherwise:
     //   presentGap    present-to-present intervals under kGapUs (longer ones are idle screens or stalls: stGaps, not in the quantiles)
@@ -1119,9 +1120,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     //   latency       the compositor's swap submission (validateSwap) to that present
     //   taken         the times of the swap a kick took (noteTaken), until flip() files them under its surface (marks)
     //   stLatch       flips latched at the first frame end after the request, and later
-    // From the filter (primary interrupt context, one CPU): feStamp, the last FRAME_END; the DC A frame period (fePeriod*, relaxed
-    // atomics, reset by the stats line); stFeFolded, frame ends that came before the action took the previous one (the gate was
-    // busy for a whole frame). stFeLate is filter to action, the work loop's delay at each frame end.
+    // From the filter (primary interrupt context, one CPU): feStamp, the last FRAME_END; the DC A frame period (fePeriodSum and
+    // fePeriodN only grow, the stats line takes the difference; fePeriodMin/Max reset by it). stFeFolded, frame ends that came
+    // before the action took the previous one (the gate was busy for a whole frame). stFeLate is filter to action, the work
+    // loop's delay at each frame end.
     static constexpr uint64_t kGapUs = 250000;
     // The histograms (and their quantiles in the stats line) are debug kernels' only, as the frame timeline is: a release
     // kernel never makes them.
@@ -1132,6 +1134,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     Span stFeLate = {};
     uint64_t feStamp = 0, feLast = 0, fePeriodSum = 0, fePeriodMin = UINT64_MAX, fePeriodMax = 0;
     uint32_t fePeriodN = 0, stFeFolded = 0;
+    uint64_t fePeriodSumSeen = 0;  // fePeriodSum and fePeriodN at the last stats line: the filter's counts only grow
+    uint32_t fePeriodNSeen = 0;
     // r6-lows (r6h): swaps validateSwap refused this window and the last refusal's reason (2: not one IOSurface in layer 0 alone,
     // a multi-layer or detached-layer swap; 3: geometry; 4: surface; see validateSwap), relaxed atomics: the client's swap path.
     // A frozen screen with CA still rendering shows here as ~300 a window and 0 swaps.
@@ -1183,7 +1187,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // answer an older report if the app's pipeline is deeper); the slow-motion test measures the whole of it.
     Span stTouchSwap = {};
     uint32_t stReplaced = 0, stCollapsed = 0, stLong[kLongCauses] = {}, stLongFrames[kLongCauses] = {};
-    uint32_t stVsyncFolded = 0, stVsyncLateN = 0, stVsyncIdle = 0;  // stVsyncFolded: atomic (the filter)
+    uint32_t stVsyncFolded = 0, stVsyncLateN = 0, stVsyncIdle = 0;
     uint32_t stFallbacks = 0;  // recoverFlip: DC A did not take a replaced flip as modelled
     bool idleSincePresent = false;
     bool statsQuiet = false;  // the last window logged had nothing on the screen change (noteStatsWindow)
@@ -1483,7 +1487,7 @@ private:
         vsyncArmed = true;
         if (vblankSource) {
             // A V_BLANK latched while it was masked is stale: drop it, then let the next one through.
-            __atomic_fetch_and(&dcPending, ~kVblankInt, __ATOMIC_RELAXED);
+            dropFrameEndStatus(kVblankInt);
             // Powered down for SC7: the resume's scanout restart unmasks V_BLANK for an armed tick. V_PULSE2 (r17-touch's
             // vsync phase) likewise, once programmed: a latched one from before is stale.
             if (!hwSuspended) {
@@ -1633,7 +1637,8 @@ private:
             return;
         }
         const uint64_t us = Span::ticksToUs(now - statsStart);
-        const uint32_t vblanks = __atomic_exchange_n(&stVblanks, 0u, __ATOMIC_RELAXED);
+        const uint32_t vblanks = stVblanks;
+        stVblanks = 0;
         const uint32_t irqs = switch_interrupt_count(kDisplayAInterrupt) - stIrqBase;
         stIrqBase += irqs;
         // r16-idle: a window in which nothing reached the screen and nothing went wrong is logged once, marked quiet; the
@@ -1711,8 +1716,12 @@ private:
         if (frameHists)
             quantiles("swap-to-scan", hists->latency);
         {
-            const uint64_t sum = __atomic_exchange_n(&fePeriodSum, 0ULL, __ATOMIC_RELAXED);
-            const uint32_t n = __atomic_exchange_n(&fePeriodN, 0u, __ATOMIC_RELAXED);
+            const uint64_t sumNow = __atomic_load_n(&fePeriodSum, __ATOMIC_ACQUIRE);
+            const uint32_t nNow = __atomic_load_n(&fePeriodN, __ATOMIC_ACQUIRE);
+            const uint64_t sum = sumNow - fePeriodSumSeen;
+            const uint32_t n = nNow - fePeriodNSeen;
+            fePeriodSumSeen = sumNow;
+            fePeriodNSeen = nNow;
             const uint64_t low = __atomic_exchange_n(&fePeriodMin, UINT64_MAX, __ATOMIC_RELAXED);
             const uint64_t high = __atomic_exchange_n(&fePeriodMax, 0ULL, __ATOMIC_RELAXED);
             uint64_t meanNs = 0;
@@ -1725,7 +1734,8 @@ private:
         }
         add(", fe-late %llu/%llu us, folded %u, flip-waited %u, latch 1st %u later %u",
             static_cast<unsigned long long>(stFeLate.meanUs()), static_cast<unsigned long long>(stFeLate.maxUs()),
-            __atomic_exchange_n(&stFeFolded, 0u, __ATOMIC_RELAXED), stFlipWait.count, stLatch[0], stLatch[1]);
+            stFeFolded, stFlipWait.count, stLatch[0], stLatch[1]);
+        stFeFolded = 0;
         add(", rejected %u (reason %u)", __atomic_exchange_n(&stRejected, 0u, __ATOMIC_RELAXED),
             __atomic_load_n(&stRejectReason, __ATOMIC_RELAXED));
         if (logged)
@@ -1774,8 +1784,7 @@ private:
             stLong[kLongIdle], stLongFrames[kLongIdle], stLong[kLongCa], stLongFrames[kLongCa], stLong[kLongGpu],
             stLongFrames[kLongGpu], stLong[kLongQueue], stLongFrames[kLongQueue], stLong[kLongLatch],
             stLongFrames[kLongLatch], stLong[kLongRate], stLongFrames[kLongRate]);
-        add("; vsync folded %u late>1ms %u idle %u", __atomic_exchange_n(&stVsyncFolded, 0u, __ATOMIC_RELAXED),
-            stVsyncLateN, stVsyncIdle);
+        add("; vsync folded %u late>1ms %u idle %u", stVsyncFolded, stVsyncLateN, stVsyncIdle);
         if (stTouchSwap.count) {
             add("; touch->swap %llu/%llu us mean/max,", static_cast<unsigned long long>(stTouchSwap.meanUs()),
                 static_cast<unsigned long long>(stTouchSwap.maxUs()));
@@ -1809,7 +1818,7 @@ private:
         if (frameHists)
             hists->touchScan = FrameHist{};
         stPQueue = stPWait = stPCopy = stPLatch = Span{};
-        stReplaced = stCollapsed = stVsyncLateN = stVsyncIdle = stFallbacks = 0;
+        stReplaced = stCollapsed = stVsyncFolded = stVsyncLateN = stVsyncIdle = stFallbacks = 0;
         for (auto &n : stLong)
             n = 0;
         for (auto &n : stLongFrames)
@@ -2124,16 +2133,14 @@ private:
             loop->removeEventSource(vblankSource);
         OSSafeReleaseNULL(vblankSource);
         writeIntMask(~0u, dcMask);
-        const IOInterruptState state = IOSimpleLockLockDisableInterrupt(intMaskLock);
-        intMaskLive = false;
-        IOSimpleLockUnlockEnableInterrupt(intMaskLock, state);
+        intMaskDead();
         dc[kDcIntEnable] = dcEnable;
         dc[kDcIntStatus] = kVblankInt | kFrameEndInt | kVpulse2Int;
         vpulseProgrammed = vpulseSeen = false;
         color->detach();
         dc = SwitchMMIOWords();
         OSSafeReleaseNULL(dcMap);
-        dcPending = 0;
+        dropFrameEndStatus(kVblankInt | kFrameEndInt | kVpulse2Int);
     }
 
     void startVsync()
@@ -2370,7 +2377,7 @@ private:
         // No frame end can arrive while the display's interrupt action is pending or running: IOKit keeps the level-triggered
         // DC A line disabled from the filter until vblankFired returns, so a console printing from that action (its stats line)
         // or behind it would wait on itself (the 100 ms panic below, seen on hardware). Scroll without waiting then.
-        if (__atomic_load_n(&dcPending, __ATOMIC_ACQUIRE))
+        if (frameEndPending(kVblankInt | kFrameEndInt | kVpulse2Int))
             return 0;
         if (const IOWorkLoop *loop = getWorkLoop(); loop && loop->onThread())
             return 0;
@@ -2466,7 +2473,7 @@ private:
              !planeRecoveryWaits()) ||
             hwSuspended || scanoutStopped || gPanicRestore.panicking)
             return;
-        if (__atomic_load_n(&dcPending, __ATOMIC_ACQUIRE) & kFrameEndInt) {
+        if (frameEndPending(kFrameEndInt)) {
             flipTimer->setTimeoutMS(kFlipDeadlineMS);
             return;
         }
@@ -3124,7 +3131,7 @@ public:
         dc[kDcStateControl] = kGeneralActReq;
         dc[kDcStateControl] = kGeneralUpdate;
         dc[kDcStateControl] = kGeneralActReq;
-        __atomic_fetch_and(&dcPending, ~(kVblankInt | kFrameEndInt), __ATOMIC_RELAXED);
+        dropFrameEndStatus(kVblankInt | kFrameEndInt);
         // A window underflow latched around the stop is not the rotated scanout failing (checkRotation counts runs of them).
         dc[kDcIntStatus] = kVblankInt | kFrameEndInt | uiUnderflow();
         clearUnderflowCounts();
@@ -3616,7 +3623,9 @@ public:
             if (tapeSettling())
                 return;
         }
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
         noteSurface(surface, memory);
+#endif
         const int blockLog2 = surfaceBlockLog2(memory);
         const bool tiled = blockLog2 >= 0;
         // A block-linear frame in other blocks than window A's reaches the screen only through the GPU copy, which reads

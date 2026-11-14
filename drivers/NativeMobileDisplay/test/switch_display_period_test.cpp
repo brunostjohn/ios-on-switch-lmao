@@ -218,6 +218,66 @@ TEST_F(DisplayPeriod, EachSwapRetiresAtTheFrameEndThatShowsIt)
     }
 }
 
+// FRAME_END stays routed while a hold is out: the kick skips intMaskLock only while the bit it last saw set is the gate's
+// to clear, the idle mask leaves it for a hold, and a mask the gate wrote sends the next kick through the lock again.
+TEST_F(DisplayPeriod, TheKicksMaskShadowFollowsEveryWriter)
+{
+    const auto frameEndUnmasked = [&] {
+        return (d.model.general[Display::kDcIntMask] & Display::kFrameEndInt) != 0u;
+    };
+    ASSERT_TRUE(frameEndUnmasked());
+    const unsigned takes = d.intMaskLock->takes;
+    kick();
+    EXPECT_EQ(d.intMaskLock->takes, takes);
+    gFrameEndHolds = 1;
+    d.unmaskFrameEnd();
+    d.maskIdleFrameEnd();
+    EXPECT_TRUE(frameEndUnmasked()) << "a hold is out";
+    gFrameEndHolds = 0;
+    d.maskIdleFrameEnd();
+    EXPECT_FALSE(frameEndUnmasked());
+    const unsigned masked = d.intMaskLock->takes;
+    kick();
+    EXPECT_TRUE(frameEndUnmasked());
+    EXPECT_EQ(d.intMaskLock->takes, masked + 1) << "the masked->unmasked edge under the lock";
+    d.writeIntMask(Display::kFrameEndInt, 0);
+    kick();
+    EXPECT_TRUE(frameEndUnmasked());
+    d.scanoutStopped = true;
+    d.writeIntMask(Display::kFrameEndInt, 0);
+    kick();
+    EXPECT_FALSE(frameEndUnmasked()) << "a stopped scanout gives no frame end";
+    d.scanoutStopped = false;
+    d.writeIntMask(0, Display::kFrameEndInt);
+    const unsigned live = d.intMaskLock->takes;
+    kick();
+    EXPECT_EQ(d.intMaskLock->takes, live);
+    d.intMaskDead();
+    kick();
+    EXPECT_EQ(d.intMaskLock->takes, live + 2) << "after the stop every kick asks again";
+}
+
+// Each cause the filter takes reaches the action once; two frame ends before it are one status and one fold, a stale
+// V_BLANK the gate drops is not taken, and nothing the filter counts is lost to the action's read.
+TEST_F(DisplayPeriod, TheFiltersCountsReachTheActionOnce)
+{
+    d.stats = true;
+    d.model.general[DcModel::kIntStatus] |= Display::kVblankInt;
+    d.frameEndInterrupt(false);
+    d.frameEndInterrupt(false);
+    EXPECT_TRUE(d.frameEndPending(Display::kFrameEndInt));
+    d.dropFrameEndStatus(Display::kVblankInt);
+    const uint32_t folded = d.stFeFolded;
+    EXPECT_EQ(d.takeFrameEndStatus(), Display::kFrameEndInt);
+    EXPECT_EQ(d.stFeFolded, folded + 1);
+    EXPECT_FALSE(d.frameEndPending(Display::kFrameEndInt | Display::kVblankInt | Display::kVpulse2Int));
+    EXPECT_EQ(d.takeFrameEndStatus(), 0u);
+    d.model.general[DcModel::kIntStatus] |= Display::kVpulse2Int;
+    d.frameEndInterrupt(false);
+    EXPECT_EQ(d.takeFrameEndStatus(), Display::kFrameEndInt | Display::kVpulse2Int);
+    EXPECT_EQ(d.vblankSource.signals, d.feTaken + d.vpulseTaken - 1u) << "one signal per filter run";
+}
+
 // The DC A filter runs the colour unit's and TegraPanel's steps with interrupts off: no simple lock, mutex, sleep, log or
 // allocation, with a change of the colour unit's tables pending or not.
 TEST_F(DisplayPeriod, TheFrameEndFilterTakesNoLock)

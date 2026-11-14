@@ -302,7 +302,8 @@ TEST(DisplayStatsSource, QuietDisplayWindowsAreLogged)
 
 // An idle display wakes no core: FRAME_END reaches the CPU only while something waits for a frame end. Holders outside the
 // gate (TegraPanel, the colour unit) write INT_MASK too, so every INT_MASK write is one of the three under its lock; a kick
-// unmasks it before any work that waits for a frame end; the last frame end with nothing waiting masks it.
+// unmasks it before any work that waits for a frame end, through the lock only when the gate's shadow says masked; the
+// last frame end with nothing waiting masks it.
 TEST(FrameEndSource, MaskedWhileNothingWaits)
 {
     EXPECT_EQ(code().Count("dc[kDcIntMask] ="), 3u);
@@ -314,6 +315,11 @@ TEST(FrameEndSource, MaskedWhileNothingWaits)
                     .EndsWith("if ((status & kFrameEndInt) && !frameEndNeeded() && tegra_panel_holds_frame_end()) "
                               "maskIdleFrameEnd();"));
     EXPECT_TRUE(method("void maskIdleFrameEnd()").Has("if (!__atomic_load_n(&gFrameEndHolds"));
+    // The kick's shadow: set with the lock held, cleared only by the gate.
+    EXPECT_TRUE(method("void kickUnmaskFrameEnd()")
+                    .Has("if (!__atomic_load_n(&frameEndUnmasked, __ATOMIC_RELAXED)) unmaskFrameEnd();"));
+    EXPECT_EQ(code().Count("__atomic_store_n(&frameEndUnmasked, false"), 2u);
+    EXPECT_EQ(code().Count("noteFrameEndMask("), 3u);
 }
 
 // A blank swap blacks the head through the colour unit only while no flip is out, and the first flip latched after it
@@ -405,4 +411,27 @@ TEST(ScanoutRetirementSource, OnlyTheDisplaysTeardownWaitsUnderTheGate)
     const CodeText wait(SourceText("../SwitchScanoutRetirement.h"));
     EXPECT_TRUE(wait.Before("assert_wait_deadline(", "if (scanoutStorageRetired() ||"));
     EXPECT_TRUE(code().Has("thread_wakeup(reinterpret_cast<event_t>(&self->scanoutStopFrames));"));
+}
+
+// A release kernel's swap path counts no client surfaces: noteSurface and its two volatile increments are debug-only.
+TEST(ReleaseSource, NoSurfaceCensusOnAReleaseSwap)
+{
+    const char *const debug = "#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)";
+    EXPECT_TRUE(code().Has(std::string(debug) + " noteSurface(surface, memory); #endif"));
+    EXPECT_TRUE(
+        code().Has(std::string(debug) + " static void noteSurface(OSObject *surface, IOMemoryDescriptor *memory)"));
+    EXPECT_EQ(code().Count("noteSurface("), 2u);
+}
+
+// The DC A filter hands the action per-cause counts only it writes: no read-modify-write on the filter's side or the
+// action's, and every reader of what is pending goes through frameEndPending.
+TEST(FrameEndSource, TheFilterHandsOffWithoutReadModifyWrites)
+{
+    const CodeText filter = method("template <class Self> static bool vblankFilter(");
+    for (const char *rmw : {"__atomic_fetch_", "__atomic_exchange", "__atomic_compare_exchange"})
+        EXPECT_FALSE(filter.Has(rmw)) << rmw;
+    EXPECT_FALSE(method("uint32_t takeFrameEndStatus()").Has("__atomic_exchange"));
+    EXPECT_FALSE(code().Has("dcPending"));
+    EXPECT_TRUE(method("int waitTapeFrame()").Has("frameEndPending(kVblankInt | kFrameEndInt | kVpulse2Int)"));
+    EXPECT_TRUE(method("void checkFlipDeadline()").Has("frameEndPending(kFrameEndInt)"));
 }

@@ -450,7 +450,7 @@ struct Display : OSObject {
     static constexpr uint32_t kDcIntMask = 0x038, kVblankInt = 1u << 2, kFrameEndInt = 1u << 1, kVpulse2Int = 1u << 5;
     IOSimpleLock *intMaskLock = IOSimpleLockAlloc();
     bool intMaskLive = true, scanoutStopped = false, scanoutQuiescing = false, tapeAttached = false, vsyncArmed = false;
-    uint32_t dcPending = 0, stFeFolded = 0, stVblanks = 0, stVsyncFolded = 0, fePeriodN = 0;
+    uint32_t stFeFolded = 0, stVblanks = 0, stVsyncFolded = 0, fePeriodN = 0;
     uint64_t vblankTime = 0, vblankContinuous = 0, vpulseTime = 0, vpulseContinuous = 0, scanoutStopFrames = 0;
     uint64_t tapeFrames = 0, feLast = 0, vsyncInterval = 0, fePeriodSum = 0, fePeriodMin = UINT64_MAX, fePeriodMax = 0;
     TegraDisplayColor *color = nullptr;
