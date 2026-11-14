@@ -334,4 +334,31 @@ TEST(RawYcbcrStore, ALoadHoldsTheChromaBetweenBlocksRoundedOnce)
     EXPECT_EQ(tile[4 * 17 + 0], float(_Float16(85.0f / 255)));
 }
 
+// The same 420v planes loaded and drawn over through write mask green: the chroma the store averages is the loaded mix, so
+// a block reloaded and stored moves (block 0's Cr 53 becomes the mean of 53, 72, 66 and 85 rounded up, 69), and the luma
+// is the drawn green's code
+TEST(RawYcbcrStore, ALumaOnlyDrawOverALoadStoresTheLoadedChromasMean)
+{
+    constexpr uint32_t W = 16, H = 8;
+    std::vector<uint16_t> luma(W * H), chroma(W * H / 2), lumaOut(W * H), chromaOut(W * H / 2);
+    for (uint32_t y = 0; y < H; y++)
+        for (uint32_t x = 0; x < W; x++)
+            luma[y * W + x] = uint16_t(16 + (x * 13 + y * 29) % 220);
+    for (uint32_t y = 0; y < H / 2; y++)
+        for (uint32_t x = 0; x < W; x++)
+            chroma[y * W + x] = uint16_t(16 + (x * 37 + y * 53) % 224);
+    std::vector<float> green(W * H);
+    for (uint32_t x = 0; x < W; x++)
+        for (uint32_t y = 0; y < H; y++)
+            green[y * W + x] = (float(x) + 0.5f) * 0.0123f;
+    ASSERT_TRUE(raw::ycbcrStoreOverLoad({255, true}, luma.data(), chroma.data(), green.data(), W, H, lumaOut.data(),
+                                        chromaOut.data()));
+    EXPECT_EQ(chroma[1], 53u);
+    EXPECT_EQ(chromaOut[1], 69u);
+    EXPECT_EQ(lumaOut[0], uint16_t(std::floor(double(_Float16(0.5f * 0.0123f)) * 255 + 0.5)));
+    EXPECT_EQ(lumaOut[W * H - 1], uint16_t(std::floor(double(_Float16(15.5f * 0.0123f)) * 255 + 0.5)));
+    EXPECT_FALSE(raw::ycbcrStoreOverLoad({255, true}, luma.data(), chroma.data(), green.data(), W - 1, H,
+                                         lumaOut.data(), chromaOut.data()));
+}
+
 }  // namespace
