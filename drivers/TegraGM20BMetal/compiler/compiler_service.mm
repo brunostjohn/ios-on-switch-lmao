@@ -152,10 +152,12 @@ private:
     int32_t run(Work &work);
     bool publish(const raw::Digest *name, const raw::CacheKey &key, const std::string &entry, bool slots,
                  std::string &why);
-    bool connect(std::string &why);
+    bool connect(std::string &why, StartFailure &failure);
     void decline();
-    bool registerStore(uint64_t stack, std::string &why);
-    bool open(uint64_t stack);
+    bool kernelGaveUp();
+    bool registerStore(uint64_t stack, std::string &why, StartFailure *failure = nullptr);
+    void open(uint64_t stack);
+    [[noreturn]] void notServing(const std::string &why, StartFailure failure);
     void warm(uint64_t stack);
     void take(uint64_t stack);
     bool submit(Prepared prepared, std::string request, const Waiter &waiter, int32_t pid,
@@ -304,28 +306,40 @@ void Service::take(uint64_t stack)
     submit(std::move(prepared), std::move(request), waiter, reply.pid);
 }
 
-bool Service::connect(std::string &why)
+bool Service::connect(std::string &why, StartFailure &failure)
 {
     io_service_t service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AGXAccelerator"));
     const kern_return_t opened =
         service ? IOServiceOpen(service, mach_task_self(), TegraGM20BOpenType, &connection_) : KERN_FAILURE;
     if (service)
         IOObjectRelease(service);
-    if (opened)
-        return why = "no connection to the GPU", false;
+    if (opened) {
+        char text[64];
+        snprintf(text, sizeof text, "no connection to the GPU (0x%x)", opened);
+        failure = connectFailure(opened);
+        return why = text, false;
+    }
     const TegraGM20BAbiCompilerAnnounce in = {restarts(), 0};
     call(TegraGM20BMethodCompilerAnnounce, &in, sizeof in, nullptr, 0);
     return true;
 }
 
-// Every client waiting on a compiler, and every later one, compiles its states itself from now on
+// No compiler comes this boot: the kernel answers every waiting and later request Unavailable, and a client fails the
+// creation of a state the pack, the seed and the store lack, by name (RawComplete.h kNoCompilerComes)
 void Service::decline()
 {
     if (connection_)
         call(TegraGM20BMethodCompilerDecline, nullptr, 0, nullptr, 0);
 }
 
-bool Service::registerStore(uint64_t stack, std::string &why)
+bool Service::kernelGaveUp()
+{
+    TegraGM20BAbiCompilerInfoReply info = {};
+    return connection_ && !call(TegraGM20BMethodCompilerInfo, nullptr, 0, &info, sizeof info) &&
+           (info.flags & TegraGM20BCompilerDeclined);
+}
+
+bool Service::registerStore(uint64_t stack, std::string &why, StartFailure *failure)
 {
     TegraGM20BAbiCompilerRegister in = {uint64_t(uintptr_t(store_.base())), store_.mappedBytes(), stack, restarts(), 0};
     TegraGM20BAbiCompilerRegisterReply reply = {};
@@ -333,6 +347,8 @@ bool Service::registerStore(uint64_t stack, std::string &why)
     if (registered) {
         char text[64];
         snprintf(text, sizeof text, "the kernel refused its registration (0x%x)", registered);
+        if (failure)
+            *failure = registrationFailure(registered);
         return why = text, false;
     }
     os_log(logger(),
@@ -343,7 +359,19 @@ bool Service::registerStore(uint64_t stack, std::string &why)
     return true;
 }
 
-bool Service::open(uint64_t stack)
+[[noreturn]] void Service::notServing(const std::string &why, StartFailure failure)
+{
+    const Ending end = ending(failure, restarts() != 0, kernelGaveUp());
+    os_log_error(logger(), "SwitchShaderCompiler: not serving: %{public}s: %{public}s", why.c_str(),
+                 end == Ending::Restart ? "exits for its launcher to start it again"
+                 : end == Ending::Leave ? "another compiler serves"
+                                        : "declines for the boot");
+    if (end == Ending::Decline)
+        decline();
+    exit(end == Ending::Restart ? 1 : 0);
+}
+
+void Service::open(uint64_t stack)
 {
     root_ = geteuid() ? kMobileRoot : kSystemRoot;
     std::string why;
@@ -363,7 +391,6 @@ bool Service::open(uint64_t stack)
 #if SWITCH_DEBUG
     logFootprint("serving");
 #endif
-    return true;
 }
 
 // The requests an earlier store was made from, made again as background work nobody waits for, one at a time: the pool
@@ -407,8 +434,7 @@ void Service::serve()
 #if SWITCH_DEBUG
     armDeath();  // before the sandbox, which looks up no notification center
 #endif
-    if (!open(stack))
-        exit(0);
+    open(stack);
     Pool::Hooks hooks;
     hooks.run = [this](Work &work, const std::function<void(int32_t)> &primary) {
         const int32_t result = run(work);
