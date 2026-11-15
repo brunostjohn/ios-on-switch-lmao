@@ -15,7 +15,7 @@
 //     is not ours yet, see SwitchUSB.h) the port always reports a cable: the pull-up goes on once the functions are
 //     ready, and a host plugged in later simply resets the bus.
 // SwitchXUDC*.cpp implement the 18 pure-virtual hardware methods the in-cache reference backend (AppleUSBXDCI, a DWC3
-// driver) implements, on top of XudcHardware. USB2 high/full speed; bulk, interrupt and isochronous endpoints. Data
+// driver) implements, on top of XudcHardware. Full, high and SuperSpeed; bulk, interrupt and isochronous endpoints. Data
 // moves between the controller and the functions' own buffers, scatter-gather, many requests in flight
 // (SwitchXUDCData.cpp).
 //
@@ -71,8 +71,6 @@ template <typename T> void put(_IOUSBDeviceIORequestTag *r, size_t off, T value)
 {
     memcpy(reinterpret_cast<uint8_t *>(r) + off, &value, sizeof(value));
 }
-
-constexpr int kSpeedFull = 1, kSpeedHigh = 2, kSpeedNone = -1;
 
 constexpr uint32_t kEp0Depth = 16;
 constexpr uint32_t kEp0Bytes = 0x1000;  // descriptors and control data

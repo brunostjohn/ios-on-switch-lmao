@@ -31,12 +31,19 @@ public:
     }
 
     void setAltLanes(unsigned lanes, bool flipped);
+    IOReturn selectMode(int index, bool enable);
+    void systemSleep(bool entering);
+    bool gpuComplete(void *display, int status);
+    bool audioFormat(uint32_t rate, uint32_t channels, uint32_t bits);
+    void audioEnable(bool enable);
+    void audioPresence(const uint8_t *eld, uint32_t bytes, bool present);
 
 private:
     enum class Stage : uint8_t {
         Off,
         Waiting,
         Probing,
+        Ready,
         Training,
         Running
     };
@@ -58,12 +65,13 @@ private:
     TegraDpaux1 aux;
     TegraSor1 sor;
     TegraDisplayB dcb;
-    SwitchExternalScreen screen;
+    SwitchExternalScreen *screen = nullptr;
 
     Stage stage = Stage::Off;
     unsigned altLanes = 0;
     bool flipped = false;
-    bool dcbUp = false, sorUp = false;
+    bool dcbUp = false, sorUp = false, sleeping = false;
+    int wantedMode = -1;
 
     struct switch_dp_aux_request request = {};
     Next next = Next::Caps;

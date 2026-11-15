@@ -19,7 +19,10 @@ extern const uint8_t switch_xusb_firmware_end[] __asm__("_switch_xusb_firmware_e
 
 namespace xhost {
 extern Controller gHost;  // SwitchXHCI.cpp
-constexpr uint32_t kRequiredInterrupters = 3;
+#if !XNU_12377_121_6
+// 21H461 constructs three interrupters regardless of MaxIntrs; only the missing register sets need shadowing.
+constexpr uint32_t kAppleInterrupters = 3;
+#endif
 
 inline size_t firmwareBytes()
 {
@@ -44,10 +47,11 @@ class SwitchXHCI : public AppleUSBXHCI {
     unsigned long powerStateFrom;  // PM's work loop: the state powerStateWillChangeTo saw, for the change's log line
 #endif
     volatile bool stateLost;  // SC7 took a saved state; the system's wake reports it, a controller reset forgets it
-    // Interrupter fold (SwitchXHCI.cpp).
     uint32_t hardwareInterrupters, runtimeOffset, operationalOffset;
     uint64_t capBase;  // AppleUSBXHCI's mapping of the capability registers
-    uint32_t shadow[xhost::kRequiredInterrupters][8];
+#if !XNU_12377_121_6
+    uint32_t shadow[xhost::kAppleInterrupters][8];
+#endif
 
     static bool mailboxFilter(OSObject *owner, IOFilterInterruptEventSource *);
     static void mailboxAction(OSObject *owner, IOInterruptEventSource *, int);
@@ -94,6 +98,9 @@ public:
     void regWrite32(uint64_t base, uint32_t offset, uint32_t value) override;
     void regWrite64(uint64_t base, uint32_t offset, uint64_t value) override;
     IOService *createPort(void *protocol, uint32_t port, uint32_t protocolPort) override;
+#if !XNU_12377_121_6
+    IOBufferMemoryDescriptor *createIOBuffer(IOOptionBits options, uint64_t capacity) override;
+#endif
     IOReturn powerStateWillChangeTo(IOPMPowerFlags capabilities, unsigned long stateNumber,
                                     IOService *whatDevice) override;
     IOReturn powerStateDidChangeTo(IOPMPowerFlags capabilities, unsigned long stateNumber,

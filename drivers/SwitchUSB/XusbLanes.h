@@ -39,12 +39,12 @@ enum switch_usb3_lanes {
 // been switched on (HUB_CONTROL acknowledged).
 void switch_usb_set_alt_lanes(enum switch_usb3_lanes lanes, bool dock_hub_enabled);
 
-// The lane goes up for a host whose pair is free once the UPHY PLL runs. PLLE and PLL0 belong to the PCIe controller
+// The lane goes up for either data role whose pair is free once the UPHY PLL runs. PLLE and PLL0 belong to the PCIe controller
 // (drivers/SwitchWLAN TegraPCIe calibrates them at boot and after SC7, kits/SwitchCAR/SwitchUPHY.h); this never
 // programs or powers them down.
-static inline bool xusb_ss_lane_wanted(bool host, enum switch_usb3_lanes lanes, bool uphy_ready)
+static inline bool xusb_ss_lane_wanted(bool connected, enum switch_usb3_lanes lanes, bool uphy_ready)
 {
-    return host && lanes == SWITCH_USB3_LANES_FREE && uphy_ready;
+    return connected && lanes == SWITCH_USB3_LANES_FREE && uphy_ready;
 }
 
 static inline const char *xusb_lanes_name(enum switch_usb3_lanes lanes)

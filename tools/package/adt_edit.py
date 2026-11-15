@@ -312,6 +312,9 @@ def _usb(tree: list) -> None:
             ('transports-supported', u32(2) + u32(3)),
         ):
             put(port, key, value)
+        external = child(child(tree, 'arm-io'), 'display-external')
+        put(external, 'device_type', b'ext-display-subsystem\0')
+
 
 
 def _media_accel(tree: list) -> None:

@@ -6,7 +6,8 @@
   "bind": "imports",
   "structors": "default",
   "includes": [
-    "IOKit/IOService.h"
+    "IOKit/IOService.h",
+    "IOKit/IOBufferMemoryDescriptor.h"
   ],
   "methods": {
     "free": {
@@ -170,6 +171,11 @@
     "regWrite64": {
       "decl": "virtual void regWrite64(uint64_t base, uint32_t offset, uint64_t value)",
       "mangled": "__ZN12AppleUSBXHCI10regWrite64Eyjy"
+    },
+    "createIOBuffer": {
+      "decl": "virtual IOBufferMemoryDescriptor *createIOBuffer(IOOptionBits options, uint64_t capacity)",
+      "mangled": "__ZN12AppleUSBXHCI14createIOBufferEjy",
+      "doc": "Allocates a client buffer with the original capacity rounding, tag and requested cache mode. On 21H461 this returns a plain IOBufferMemoryDescriptor, prepared and completed per transfer."
     }
   },
   "fields": {

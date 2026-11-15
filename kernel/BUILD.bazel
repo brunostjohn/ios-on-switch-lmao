@@ -388,15 +388,13 @@ kernel_archive(
         "//drivers/TegraNVJPG:TegraNVJPG",
         "//drivers/SwitchUSB:SwitchUSB",
         "//drivers/SwitchDisplayPort:SwitchPDAltMode",
+        "//drivers/SwitchDisplayPort:SwitchDisplayPort",
         "//kits/SwitchCAR:SwitchCAR",
         "//kits/SwitchDMA:SwitchDMA",
         "//kits/SwitchFalcon:SwitchFalcon",
         "//kits/SwitchLinux:SwitchLinux",
         "//kits/SwitchScratch:SwitchScratch",
-    ] + select({
-        "//drivers/SwitchDisplayPort:on": ["//drivers/SwitchDisplayPort:SwitchDisplayPort"],
-        "//conditions:default": [],
-    }),
+    ],
 )
 
 # XNU's mockfs (the same source in xnu-10063 and xnu-12377; it compiles against the selected XNU's SDK).

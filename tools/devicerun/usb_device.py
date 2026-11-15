@@ -25,6 +25,15 @@ STATS = re.compile(
 
 USB_DEVICE = [
     Check(
+        'usb.dev.superspeed',
+        OWNER,
+        'SwitchUSB: host connected (super speed)',
+        REPORT,
+        process=KERNEL,
+        source=f'{USB}/SwitchXUDCEvents.cpp',
+        note='actual SuperSpeed device connection to the external host',
+    ),
+    Check(
         'usb.dev.ready',
         OWNER,
         'SwitchUSB: device mode ready (',

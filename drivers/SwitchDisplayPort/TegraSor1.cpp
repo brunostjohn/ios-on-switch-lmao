@@ -370,3 +370,32 @@ void TegraSor1::powerDown()
     (void)tegra_i2c_write(kPmicBus, kPmic, kLdo8Config, &off, 1);
     lanes = 0;
 }
+
+bool TegraSor1::audioFormat(uint32_t rate, uint32_t channels, uint32_t bits)
+{
+    if (!base || !lanes || rate != 48000 || channels != 2 || (bits != 16 && bits != 24 && bits != 32))
+        return false;
+    // TRM 27.8.216: MAUD is 102 MHz, N/(N + D_N) = 512 * fs / MAUD.
+    write(0x137, (512u << 16) | (2125u - 512u));
+    write(0x103, 0x8000);
+    rmw(0xfc, (3u << 20) | 1u, (2u << 20) | (1u << 12));
+    return true;
+}
+
+void TegraSor1::audioEnable(bool enable)
+{
+    if (base && lanes)
+        write(0x62, (1u << 31) | (0x1fu << 16) | (enable ? 1u : 0u));
+}
+
+void TegraSor1::audioPresence(const uint8_t *eld, uint32_t bytes, bool present)
+{
+    if (!base || !lanes)
+        return;
+    write(0x10d, 0);
+    if (present && eld && bytes && bytes <= 96) {
+        for (uint32_t i = 0; i < 96; ++i)
+            write(0x10c, (i << 8) | (i < bytes ? eld[i] : 0));
+        write(0x10d, 3);
+    }
+}

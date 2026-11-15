@@ -107,6 +107,11 @@ enum : uint32_t {  // XUDC: xHCI-like block at +0, FPCI config at +0x8000, IPFS 
     PORTHALT = 0x6c,
     EP_THREAD_ACTIVE = 0x74,
     EP_STOPPED = 0x78,
+    SSPX_CORE_CNT0 = 0x610,
+    SSPX_CORE_CNT30 = 0x688,
+    SSPX_CORE_CNT32 = 0x690,
+    SSPX_CORE_PADCTL4 = 0x750,
+    CFG_DEV_SSPI_XFER = 0x858,
     CFG_DEV_FE = 0x85c,
     FPCI_CFG_1 = 0x8004,
     FPCI_CFG_4 = 0x8010,
@@ -135,8 +140,6 @@ enum : uint32_t {
     PORTSC_PLS_U0 = 0u << 5,
     PORTSC_PLS_U3 = 3u << 5,
     PORTSC_PLS_RXDETECT = 5u << 5,
-    PORTSC_PS_FS = 1u << 10,
-    PORTSC_PS_MASK = 0xfu << 10,
     PORTSC_LWS = 1u << 16,
     PORTSC_CSC = 1u << 17,
     PORTSC_WRC = 1u << 19,
@@ -153,6 +156,7 @@ enum : uint32_t {
     FE_PORTREGSEL_MASK = 3u,
     FE_PORTREGSEL_SS = 1u,
     FE_PORTREGSEL_HSFS = 2u,
+    FE_INFINITE_SS_RETRY = 1u << 29,
     VBUS_ID_VBUS_OVR_MASK = 3u << 12,
     VBUS_ID_VBUS_OVR_EN = 1u << 12,
     VBUS_ID_VBUS_ON = 1u << 14,
@@ -327,6 +331,13 @@ bool Hardware::powerOn(char *why, size_t whySize)
     xw(PORTHALT, xr(PORTHALT) | PORTHALT_STCHG_INTR_EN);
     xw(ECPLO, control.pa + kContextOffset);
     xw(ECPHI, 0);
+    // L4T tegra_xudc_device_params_init: LFPS and link-configuration timing, and the SSPI transaction timeout.
+    xw(SSPX_CORE_CNT0, (xr(SSPX_CORE_CNT0) & ~0xffu) | 0xau);
+    xw(SSPX_CORE_CNT30, (xr(SSPX_CORE_CNT30) & ~0xfffffu) | 0x978u);
+    xw(SSPX_CORE_CNT32, (xr(SSPX_CORE_CNT32) & ~0xffu) | 0xb0u);
+    xw(SSPX_CORE_PADCTL4, (xr(SSPX_CORE_PADCTL4) & ~0xfffffu) | 0x5dc0u);
+    xw(CFG_DEV_SSPI_XFER, 0xf000u);
+    xw(CFG_DEV_FE, xr(CFG_DEV_FE) | FE_INFINITE_SS_RETRY);
     return true;
 }
 
@@ -351,8 +362,10 @@ void Hardware::connect()
     }
     xw(CFG_DEV_FE, xr(CFG_DEV_FE) & ~FE_PORTREGSEL_MASK);
     xw(CTRL, xr(CTRL) | CTRL_ENABLE);
-    xw(CFG_DEV_FE, (xr(CFG_DEV_FE) & ~FE_PORTREGSEL_MASK) | FE_PORTREGSEL_HSFS);
-    xw(PORTSC, (xr(PORTSC) & ~(PORTSC_PLS_MASK | PORTSC_CHANGES)) | PORTSC_LWS | PORTSC_PLS_RXDETECT);
+    for (const uint32_t instance : kInstances) {
+        xw(CFG_DEV_FE, (xr(CFG_DEV_FE) & ~FE_PORTREGSEL_MASK) | instance);
+        xw(PORTSC, (xr(PORTSC) & ~(PORTSC_PLS_MASK | PORTSC_CHANGES)) | PORTSC_LWS | PORTSC_PLS_RXDETECT);
+    }
     xw(CFG_DEV_FE, xr(CFG_DEV_FE) & ~FE_PORTREGSEL_MASK);
     switch_padctl_modify(padctl, USB2_VBUS_ID, VBUS_ID_OVR_MASK, VBUS_ID_OVR_FLOAT);
 }
@@ -434,9 +447,9 @@ void Hardware::resetEp0()
     volatile uint32_t *c = context(0);
     c[2] = ((ring.pa + ring.enqueue * 16) & ~0xfu) | ring.cycle;
     c[3] = 0;
-    c[5] &= 0x00ffffffu;                      // rsvd, partial_td, splitxstate, seq_num
-    c[11] &= ~0x7fu;                          // device address
-    c[1] = (c[1] & 0x0000ffffu) | 64u << 16;  // max packet 64 below SuperSpeed
+    c[5] &= 0x00ffffffu;  // rsvd, partial_td, splitxstate, seq_num
+    c[11] &= ~0x7fu;      // device address
+    c[1] = (c[1] & 0x0000ffffu) | ep0Packet(portSpeed(xr(PORTSC))) << 16;
     switch_dma_publish();
     xw(CTRL, xr(CTRL) & ~(0x7fu << 24));
     if (const uint32_t halted = xr(EP_HALT))  // Linux ep_unhalt_all
@@ -482,6 +495,7 @@ PortChange Hardware::portChange()
         if (sc & PORTSC_CSC) {
             clearPortChange(PORTSC_CSC);
             if (sc & PORTSC_CCS) {
+                resetEp0();
                 change.connected = connectNow = true;
             } else {
                 resetEp0();
@@ -489,8 +503,11 @@ PortChange Hardware::portChange()
             }
         }
         if (connectNow) {
-            change.fullSpeed = (xr(PORTSC) & PORTSC_PS_MASK) == PORTSC_PS_FS;
-            xw(PORTPM, (xr(PORTPM) & ~PORTPM_L1S_MASK) | PORTPM_L1S_NYET);
+            change.speed = portSpeed(xr(PORTSC));
+            if (change.speed == kSpeedSuper)
+                xw(PORTPM, xr(PORTPM) & ~(0xffu << 16));  // T210/T210B01 disable U1, as L4T.
+            else
+                xw(PORTPM, (xr(PORTPM) & ~PORTPM_L1S_MASK) | PORTPM_L1S_NYET);
             if (xr(ST) & ST_RC)
                 xw(ST, ST_RC);
         }
@@ -556,6 +573,8 @@ bool Hardware::initEndpoint(uint32_t dci, uint32_t type, uint32_t maxPacket, uin
     for (uint32_t i = 0; i < 16; ++i)
         c[i] = 0;
     c[0] = 1 | interval << 16;
+    if ((type == EP_BULK_IN || type == EP_BULK_OUT) && portSpeed(xr(PORTSC)) == kSpeedSuper)
+        c[0] |= 1u << 15;
     c[1] = 3u << 1 | type << 3 | (maxBurst & 0xff) << 8 | maxPacket << 16;
     c[2] = (rings[dci].pa & ~0xfu) | 1;
     c[4] = average | esit << 16;

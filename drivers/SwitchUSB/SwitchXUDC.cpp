@@ -3,6 +3,7 @@
 #include "SwitchXUDC.h"
 #include <libkern/c++/OSKext.h>
 #include <libkern/c++/OSSymbol.h>
+#include <libkern/c++/OSData.h>
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../TegraSMMU/TegraSMMU.h"
 #include "SwitchUSB.h"
@@ -15,7 +16,7 @@ void switchxudc_static_init(void) __asm__("__GLOBAL__sub_I_SwitchXUDC.cpp");
 OSDefineMetaClassAndStructors(SwitchXUDC, IOUSBDeviceController) SwitchXUDC *SwitchXUDC::running;
 
 namespace {
-bool gHostVbus;  // switchxudc_set_vbus
+bool gHostVbus, gLaneReady;  // switchxudc_set_vbus
 }  // namespace
 
 // Everything that can fail without side effects on the family happens here, before start().
@@ -55,6 +56,13 @@ bool SwitchXUDC::start(IOService *provider)
     // The family builds its command gate, pool and timers on getWorkLoop().
     if (!IOUSBDeviceController::start(provider))
         return false;
+    OSData *capability = OSData::withBytes(kSuperSpeedCapability, sizeof(kSuperSpeedCapability));
+    const bool described = capability && deviceCapabilities() && deviceCapabilities()->setObject(capability);
+    OSSafeReleaseNULL(capability);
+    if (!described) {
+        IOLog("SwitchUSB: no memory for the SuperSpeed device capability descriptor\n");
+        return false;
+    }
     attachInterrupt();  // sleeps until the GIC is up; panics if the interrupt cannot be had
     busReturn = IOTimerEventSource::timerEventSource(this, &SwitchXUDC::busReturned);
     if (!busReturn || loop->addEventSource(busReturn) != kIOReturnSuccess) {
@@ -119,8 +127,8 @@ void SwitchXUDC::attachInterrupt()
 void SwitchXUDC::goOnBus(bool on)
 {
     (void)endReturn();
+    wantBus = on;
     if (hostOwnsPort) {  // the host has the pad: remember the wish
-        wantBus = on;
         return;
     }
     setBus(on);
@@ -133,7 +141,7 @@ IOReturn SwitchXUDC::portOwner(bool host)
     if (host == hostOwnsPort)
         return kIOReturnSuccess;
     if (host) {
-        wantBus = endReturn() || onBus;
+        wantBus = endReturn() || wantBus || onBus;
         setBus(false);
         hostOwnsPort = true;
     } else {
@@ -146,9 +154,10 @@ IOReturn SwitchXUDC::portOwner(bool host)
 
 // The VBUS a host gives the port (SwitchUSB.cpp from SwitchPD's attach and detach), kept for a controller that is
 // not running or not on the bus yet.
-extern "C" void switchxudc_set_vbus(bool present)
+extern "C" void switchxudc_set_vbus(bool present, bool laneReady)
 {
     __atomic_store_n(&gHostVbus, present, __ATOMIC_RELEASE);
+    __atomic_store_n(&gLaneReady, laneReady, __ATOMIC_RELEASE);
     SwitchXUDC *controller = __atomic_load_n(&SwitchXUDC::running, __ATOMIC_ACQUIRE);
     if (controller) {
         controller->getWorkLoop()->runAction(
@@ -162,6 +171,9 @@ extern "C" void switchxudc_set_vbus(bool present)
 
 void SwitchXUDC::vbusChanged()
 {
+    if (!hostOwnsPort && !asleep && !returning)
+        setBus(wantBus && __atomic_load_n(&gHostVbus, __ATOMIC_ACQUIRE) &&
+               __atomic_load_n(&gLaneReady, __ATOMIC_ACQUIRE));
     if (onBus)
         hw.setVbus(__atomic_load_n(&gHostVbus, __ATOMIC_ACQUIRE));
 }
@@ -188,8 +200,9 @@ IOReturn SwitchXUDC::systemSleep(bool entering)
         if (asleep)
             return kIOReturnSuccess;
         asleep = true;
+        __atomic_store_n(&gLaneReady, false, __ATOMIC_RELEASE);
         const bool returned = endReturn();
-        busAfterSleep = hostOwnsPort ? wantBus : onBus || returned;
+        busAfterSleep = wantBus || onBus || returned;
         if (!hostOwnsPort)
             setBus(false);
         interrupt->disable();
@@ -209,6 +222,7 @@ IOReturn SwitchXUDC::systemSleep(bool entering)
             endpoints[dci].tds->liftFence();
     }
     interrupt->enable();
+    wantBus = busAfterSleep;
     if (hostOwnsPort) {
         wantBus = busAfterSleep;
     } else if (busAfterSleep) {
@@ -233,7 +247,8 @@ void SwitchXUDC::setBus(bool on)
 {
     if (on == onBus)
         return;
-    if (on && lostToSleep)
+    if (on && (lostToSleep || asleep || !__atomic_load_n(&gHostVbus, __ATOMIC_ACQUIRE) ||
+               !__atomic_load_n(&gLaneReady, __ATOMIC_ACQUIRE)))
         return;
     if (on) {
         ep0Cancel(kIOReturnAborted);

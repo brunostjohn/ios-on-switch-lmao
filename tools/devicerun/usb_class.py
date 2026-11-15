@@ -236,6 +236,18 @@ SUPERSPEED_CHECKS = [
         source=ROLE,
     ),
     Check(
+        'usb.ss.enumerated',
+        OWNER,
+        ENUMERATED,
+        REPORT,
+        process=KERNEL,
+        regex=r'enumerated (?P<ids>\S+) \((?P<product>.*) / \d+\) at '
+        r'(?P<speed>5000\s*Mbps|5\s*Gb(?:ps|/s)|SuperSpeed)$',
+        show=('ids', 'product', 'speed'),
+        source=APPLE_USB,
+        note='actual SuperSpeed enumeration; lane power and RESET_SSPI alone do not establish a USB 3 link',
+    ),
+    Check(
         'usb.ss.u0',
         OWNER,
         'U0 SuperSpeed 5 Gb/s',

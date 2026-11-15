@@ -21,8 +21,9 @@ public:
     void enableSor(bool on);
     // Window A scans `width` x `height` BGRA at `iova` (rows of `stride` bytes) from the next frame on; its frame end
     // interrupt says it was taken.
-    void scanout(uint32_t iova, uint32_t width, uint32_t height, uint32_t stride);
+    void scanout(uint32_t iova, uint32_t width, uint32_t height, uint32_t stride, uint32_t kind = 0);
     void windowOff();
+    void frameInterrupt(bool enable);
     // The interrupt's cause, cleared; the frame-end interrupt off again until the next scanout().
     uint32_t takeInterrupt();
     void powerDown();

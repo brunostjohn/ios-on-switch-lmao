@@ -6,6 +6,7 @@ an unnamed one is a trampoline that panics when called.
 """
 
 import json
+import struct
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -13,7 +14,7 @@ from pathlib import Path
 from native_prelink import read_xml
 from python.runfiles import runfiles
 
-from tools.common.macho import macho
+from tools.common.macho import backed_offset, macho
 
 REPORTS = ('_main/kernel/kernel.json', '_main/kernel/build/xnu-12377/kernel.json')
 PRELINKED = ('_main/kernel/kernel.macho', '_main/kernel/build/xnu-12377/kernel.macho')
@@ -162,6 +163,24 @@ class UsbPrelinkTest(unittest.TestCase):
                 self.assertLessEqual(deferred, set(apple), 'a deferred personality Apple does not have')
                 wanted = {name: p for name, p in apple.items() if name not in deferred}
                 self.assertEqual(self.prelinked[kext].get('IOKitPersonalities', {}), wanted)
+
+    def test_the_declared_sites_are_written(self) -> None:
+        """Each reported site holds its replacement in the prelinked kernel.
+
+        AppleUSBXHCI runs on the falcon's one interrupter only with the kind's declared sites in its code
+        (kits/SwitchABI/kinds/<kind>/sites).
+        """
+        reported = self.report['declared_sites']
+        self.assertIn('com.apple.driver.usb.AppleUSBXHCI', {site['bundle'] for site in reported})
+        if self.ios27:
+            self.assertIn('com.apple.iokit.IOUSBHostFamily', {site['bundle'] for site in reported})
+        image = runfile(PRELINKED).read_bytes()
+        segments = macho(image, subtypes=None)['segments']
+        for site in reported:
+            with self.subTest(site=site['at']):
+                self.assertIn(site['bundle'], self.kexts)
+                at = backed_offset(segments, int(site['va'], 16), 4, len(image))
+                self.assertEqual(f'{struct.unpack_from("<I", image, at)[0]:08x}', site['to'])
 
     def test_ios27_imports_are_named(self) -> None:
         """No prelinked kext has a kernel import that nothing names."""

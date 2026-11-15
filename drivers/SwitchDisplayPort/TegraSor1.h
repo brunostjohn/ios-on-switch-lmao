@@ -33,6 +33,9 @@ public:
     // Teardown, around display controller B dropping SOR1: detachHead, then B lets go, then powerDown.
     void detachHead();
     void powerDown();
+    bool audioFormat(uint32_t rate, uint32_t channels, uint32_t bits);
+    void audioEnable(bool enable);
+    void audioPresence(const uint8_t *eld, uint32_t bytes, bool present);
 
 private:
     volatile uint8_t *base = nullptr;

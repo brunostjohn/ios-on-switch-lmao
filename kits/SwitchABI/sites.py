@@ -50,3 +50,17 @@ def apply(sites: list[Site], read: Callable[[int], int], write: Callable[[int, i
             )
     for site in sites:
         write(site.at, site.replacement)
+
+
+def record(sites: list[Site], slide: int) -> list[dict[str, str]]:
+    """Describe the sites written, for the prelink report: Apple's address and the prelinked kernel's."""
+    return [
+        {
+            'bundle': site.bundle,
+            'at': f'{site.at:#x}',
+            'va': f'{(site.at + slide) & ((1 << 64) - 1):#x}',
+            'from': f'{site.original:08x}',
+            'to': f'{site.replacement:08x}',
+        }
+        for site in sites
+    ]

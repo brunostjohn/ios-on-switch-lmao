@@ -5482,8 +5482,12 @@ IOService *native_legacy_display_allocate(void)
     return new NativeLegacyDisplay;
 }
 
+extern "C" bool switch_displayport_gpu_complete(void *display, int status);
+
 extern "C" void native_legacy_gpu_complete(void *display, int status)
 {
+    if (switch_displayport_gpu_complete(display, status))
+        return;
     if (display)
         static_cast<NativeLegacyDisplay *>(display)->gpuComplete(status);
 }

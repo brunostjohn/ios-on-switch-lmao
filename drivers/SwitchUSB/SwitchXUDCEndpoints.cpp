@@ -132,8 +132,9 @@ IOReturn SwitchXUDC::activateEndpoint(int address, int type, int maxPacketSize, 
     const bool isoch = type == kTypeIsochronous;
     uint32_t kind = 0;
     uint32_t period = 0;
-    uint32_t packet = static_cast<uint32_t>(maxPacketSize);
-    uint32_t burst = 0;
+    const uint32_t packet = static_cast<uint32_t>(maxPacketSize) & 0x7ffu;
+    const uint32_t burst =
+        endpointBurst(speed, type, static_cast<uint32_t>(maxPacketSize), static_cast<uint32_t>(superSpeedBulkMaxBurst));
     if (type == kTypeBulk) {
         kind = in ? EP_BULK_IN : EP_BULK_OUT;
     } else if (type == kTypeInterrupt) {
@@ -157,11 +158,6 @@ IOReturn SwitchXUDC::activateEndpoint(int address, int type, int maxPacketSize, 
         } else if (interval > 16) {
             period = 16;
         }
-        packet = static_cast<uint32_t>(maxPacketSize) & 0x7ff;
-        const uint32_t extra =
-            (static_cast<uint32_t>(maxPacketSize) >> 11) & 3;  // high-bandwidth: transactions per microframe - 1
-        if (speed != kSpeedFull)
-            burst = extra > 2 ? 2 : extra;
     } else {
         switch_refusal_k(
             switch_refusal_key_with(switch_refusal_key("usb-device", "endpoint-type"), static_cast<uint64_t>(type)),

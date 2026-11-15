@@ -151,21 +151,30 @@ void armReport()
 {}
 #endif
 
-// Role thread: SS port 0's lane up for a host whose SuperSpeed pair DisplayPort leaves free, once PCIe has calibrated
+// Role thread: SS port 0's lane up for either data role whose pair DisplayPort leaves free, once PCIe has calibrated
 // the UPHY PLL; down otherwise (XusbLanes.h). The lane's pads only: the port's USB 3 transport follows it.
-void followLane()
+void followLane(bool attached)
 {
     IOLockLock(gLock);
     const enum switch_usb3_lanes lanes = gLanes;
+    const bool device = attached && gDeviceVbus && gDevicePort;
     IOLockUnlock(gLock);
     const bool host = gHostRole && gHostUp;
-    const bool up = gSsInit && switch_usb_ss_lane(xusb_ss_lane_wanted(host, lanes, switch_uphy_ready()));
+    const bool up = gSsInit && switch_usb_ss_lane(xusb_ss_lane_wanted(host || device, lanes, switch_uphy_ready()));
     if (up == gSsUp)
         return;
     gSsUp = up;
     IOLog("SwitchUSB: SuperSpeed lane %s (pairs %s, %s role, UPHY PLL %s)\n", up ? "up" : "down",
           xusb_lanes_name(lanes), gHostRole ? "host" : "device", switch_uphy_ready() ? "calibrated" : "not calibrated");
     armReport();
+}
+
+bool deviceLaneReady()
+{
+    IOLockLock(gLock);
+    const bool ready = gLanes == SWITCH_USB3_LANES_TAKEN || (gLanes == SWITCH_USB3_LANES_FREE && gSsUp);
+    IOLockUnlock(gLock);
+    return ready;
 }
 
 enum xusb_port_role portRole(bool attached)
@@ -180,7 +189,7 @@ enum xusb_port_role portRole(bool attached)
 // (the run wakes this thread), and only then does the USB 3 transport go back.
 void applyLanes(bool attached)
 {
-    followLane();
+    followLane(attached);
     const enum xusb_port_role role = portRole(attached);
     bool superSpeedReset = true;
     if (role == XUSB_PORT_HOST) {
@@ -219,12 +228,15 @@ void applyRole(thread_call_param_t, thread_call_param_t)
     if (wantHost && !gHostRole && !gHostBroken) {
         char why[160] = "";
         switch_usb_dma_session_start();
+        switch_usb_ss_clamp();
+        gSsUp = false;
         switchxudc_set_host_owns_port(true);
         switchxhci_set_host_role(true);
         if (!gHostUp && !switchxhci_start(why, sizeof(why))) {
             IOLog("SwitchUSB: host mode off: %s\n", why);
             gHostBroken = true;
             switchxhci_set_host_role(false);
+            switchxudc_set_vbus(false, false);
             switchxudc_set_host_owns_port(false);
             (void)switch_pd_allow_source(false);  // SwitchPD takes VBUS off and keeps the port sink-only
             return;
@@ -238,14 +250,18 @@ void applyRole(thread_call_param_t, thread_call_param_t)
     } else if (!wantHost && gHostRole) {
         __atomic_store_n(&gHostRole, false, __ATOMIC_RELEASE);
         switch_usb_port_follow(attached ? XUSB_PORT_DEVICE : XUSB_PORT_EMPTY, false, true);
-        followLane();
+        switch_usb_ss_clamp();
+        gSsUp = false;
         switchxhci_set_host_role(false);
+        followLane(attached);
+        switchxudc_set_vbus(deviceVbus, deviceLaneReady());
         switchxudc_set_host_owns_port(false);
         IOLog("SwitchUSB: device role\n");
         switch_usb_dma_session_end();
         armReport();
     }
-    switchxudc_set_vbus(deviceVbus && !gHostRole);
+    followLane(attached);
+    switchxudc_set_vbus(deviceVbus && !gHostRole, deviceLaneReady());
     applyLanes(attached);
 }
 
@@ -322,7 +338,7 @@ extern "C" int switch_usb_start(void)
 #endif
     if (gRoleCall && gHostPackaged && !switch_usb_port_watch(gRoleCall))
         IOLog("SwitchUSB: host mode off: the USB-C port's IOPort cannot be watched\n");
-    gSsInit = (gRoleCall != nullptr) && gHostPackaged && switch_usb_ss_init();
+    gSsInit = (gRoleCall != nullptr) && switch_usb_ss_init();
     if (gSsInit) {
         switch_uphy_listen(&uphyChanged, nullptr);
     } else if (gRoleCall && gHostPackaged) {

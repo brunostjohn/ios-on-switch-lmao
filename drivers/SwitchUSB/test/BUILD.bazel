@@ -10,6 +10,14 @@ load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
 
 lint_files()
 
+host_test(
+    name = "xudc_link_test",
+    srcs = [
+        "xudc_link_test.cpp",
+        "//drivers/SwitchUSB:XudcLink.h",
+    ],
+)
+
 # --- Device mode: the XUDC transfer planner ---
 # XudcTransfer.h's planner over 3000 random scatter-gather layouts and its OUT residue protocol against model
 # controllers of both residue kinds, plus the cost model; only the header, so a SwitchXUDC*.cpp edit does not rerun it.
@@ -126,6 +134,7 @@ host_library(
         "//drivers/SwitchUSB:XusbLanes.h",
         "//drivers/SwitchUSB:XusbPadctl.cpp",
         "//drivers/SwitchUSB:XusbPadctl.h",
+        "//drivers/SwitchUSB:XusbSuperSpeed.h",
         "//drivers/SwitchUSB:XusbUtmiPad.cpp",
         "//drivers/SwitchUSB:XusbUtmiPad.h",
         "//kits/SwitchCAR:SwitchCAR.cpp",

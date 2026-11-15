@@ -287,7 +287,10 @@ switch_abi_bindings(
         "regWrite64",
         "start",
         "stop",
-    ],
+    ] + select({
+        "//ipsw:21H461": ["createIOBuffer"],
+        "//conditions:default": [],
+    }),
     subclass = "SwitchXHCI",
 )
 

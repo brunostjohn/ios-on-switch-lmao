@@ -71,7 +71,7 @@ extern const unsigned long long switch_prelink_cut_null;
 void switchxudc_set_host_owns_port(bool host);
 // Whether a host's VBUS is on the port (SwitchPDPolicy.h switch_pd_usb_device_vbus); the XUDC's VBUS override follows
 // it while it is on the bus.
-void switchxudc_set_vbus(bool present);
+void switchxudc_set_vbus(bool present, bool lane_ready);
 
 #ifdef __cplusplus
 }

@@ -56,6 +56,23 @@ def driverkitd(second: float) -> dict:
 
 
 class Device(unittest.TestCase):
+    def test_superspeed_requires_actual_enumeration(self):
+        for speed in ('12 Mbps', '480 Mbps', '5000 Mbps'):
+            with self.subTest(speed=speed):
+                log = [
+                    record(0, 'SwitchUSB: SuperSpeed lane up (pairs free, host role, UPHY PLL calibrated)'),
+                    record(1, ENUMERATED.replace('12 Mbps', speed)),
+                ]
+                results, _ = judge(log)
+                expected = INFO if speed == '5000 Mbps' else NO_DATA
+                self.assertEqual(results['usb.ss.enumerated'].verdict, expected)
+
+    def test_superspeed_device_requires_the_negotiated_speed(self):
+        for speed in ('full', 'high', 'super'):
+            with self.subTest(speed=speed):
+                results, _ = judge([record(0, f'SwitchUSB: host connected ({speed} speed)')])
+                self.assertEqual(results['usb.dev.superspeed'].verdict, INFO if speed == 'super' else NO_DATA)
+
     def test_boot_1109_fails_the_port_identity_then_the_save_state(self):
         results, rows = fixture('device_1109_2145')
         self.assertEqual(layers(rows)['ioport'], FAIL)

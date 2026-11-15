@@ -15,10 +15,9 @@
 // cacheable needs no maintenance and never shares a cached line. No IOKit: test/usb_dma_cache_test.cpp drives the
 // same rules against a model of a cache line with a neighbour in it.
 //
-// All of that holds only while the buffer's command is completed after each transfer. Apple keeps the command of a
-// buffer it allocated prepared for the buffer's life (AppleUSBXHCIRequest remembers it): one map, transfers that never
-// reach the mapper, an unmap only when the buffer goes. Such buffers are allocated write-combined (SwitchXHCI's client
-// buffer options), so what the mapper still sees cacheable is caller-supplied memory, completed per transfer.
+// The command must complete after each transfer. 24B119's declared IOUSBHostFamily site prevents a mapped family
+// buffer from keeping its command prepared, so the stock request-pool path maps and unmaps every transfer. 21H461's
+// plain client descriptors already do; its persistent internal bounces keep the controller's write-combined mode.
 // UsbDmaKept counts the mappings that need that and are still mapped, so a held one says so instead of going stale.
 #pragma once
 #include <stdint.h>

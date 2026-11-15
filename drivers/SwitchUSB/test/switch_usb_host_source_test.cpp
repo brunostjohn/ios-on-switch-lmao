@@ -156,6 +156,10 @@ TEST(SwitchUsbHostSource, TheTransportsFollowTheRole)
     EXPECT_LT(at(reset, "gHost.setPortPower(port, false)"),
               at(reset, "xusb::settle(\"SuperSpeed root port power-off\", 1, 700"));
     EXPECT_LT(at(reset, "xusb::settle(\"SuperSpeed root port power-off\", 1, 700"), at(reset, "MBOX_RESET_SSPI"));
+    const std::string powerFailure = Body(reset, "if (!off && !interrupted())");
+    EXPECT_THAT(powerFailure, HasSubstr("superSpeedResetDue();"));
+    EXPECT_THAT(powerFailure, HasSubstr("return false;"));
+    EXPECT_THAT(Body(reset, "if (!attempt.taken)"), HasSubstr("superSpeedResetDue();"));
     // AppleUSBXHCI halts, saves, resets and runs the controller again right after its first run: a halt or reset in
     // the power-off window ends the wait at its next look and defers the reset to the next run, without RESET_SSPI.
     const std::string header = SourceText("../SwitchXHCI.h");
@@ -260,7 +264,7 @@ TEST(SwitchUsbHostSource, SuperSpeedFollowsThePll)
     const std::string suspend = Body(usb, "void switch_usb_suspend(");
     EXPECT_LT(at(suspend, "switch_uphy_lost()"), at(suspend, "switch_usb_ss_lost()"));
     const std::string lanes = Body(usb, "void applyLanes(");
-    EXPECT_LT(at(lanes, "followLane()"), at(lanes, "switch_usb_port_follow(role, gSsUp"));
+    EXPECT_LT(at(lanes, "followLane(attached)"), at(lanes, "switch_usb_port_follow(role, gSsUp"));
     const std::string lane = Body(SourceText("../XusbSuperSpeed.cpp"), "bool switch_usb_ss_lane(");
     EXPECT_LT(at(lane, "switch_padctl_lock()"), at(lane, "switch_uphy_ready()"));
 }
@@ -339,6 +343,20 @@ TEST(SwitchUsbHostSource, DeviceBootLogLines)
     }
 }
 
+TEST(SwitchUsbHostSource, OneInterrupterAsTheFalconReportsIt)
+{
+    const std::string xhci = SourceText("../SwitchXHCI.cpp");
+    EXPECT_THAT(Body(xhci, "uint32_t SwitchXHCI::regRead32("), Not(HasSubstr("0x7ff")));
+    const std::string header = SourceText("../SwitchXHCI.h");
+    EXPECT_THAT(Configured(header, "XNU_12377_121_6", true), Not(HasSubstr("uint32_t shadow[")));
+    EXPECT_THAT(Configured(header, "XNU_12377_121_6", false),
+                HasSubstr("uint32_t shadow[xhost::kAppleInterrupters][8];"));
+    EXPECT_THAT(Configured(header, "XNU_12377_121_6", false), HasSubstr("kAppleInterrupters = 3"));
+    const std::string shadow27 = Body(Configured(xhci, "XNU_12377_121_6", true), "uint32_t *SwitchXHCI::shadowFor(");
+    EXPECT_THAT(shadow27, HasSubstr("return nullptr;"));
+    EXPECT_THAT(shadow27, Not(HasSubstr("shadow[")));
+}
+
 // The USB-C port never presents as the donor iPad's Lightning port: the controller's provider carries no "port-type"
 // or "port-number", and the only pair SwitchXHCI writes is the USB-C port's (2, 1), the IOPort adt_edit.py publishes.
 TEST(SwitchUsbHostSource, OnlyTheUsbCPortIdentity)
@@ -415,11 +433,29 @@ TEST(SwitchUsbHostSource, FamilyBuffersWriteCombined)
     const std::string ios27 = SourceText("../../../kits/SwitchABI/kinds/24B119/AppleUSBXHCI.json");
     EXPECT_THAT(ios27, HasSubstr("\"ringBufferOptions\": \"0x5ac\""));
     EXPECT_THAT(ios27, HasSubstr("\"clientBufferOptions\": \"0x5b0\""));
-    const std::string start = Body(SourceText("../SwitchXHCI.cpp"), "bool SwitchXHCI::start(");
+    const std::string xhci = SourceText("../SwitchXHCI.cpp");
+    EXPECT_THAT(Body(Configured(xhci, "XNU_12377_121_6", true), "bool SwitchXHCI::start("),
+                Not(HasSubstr("setClientBufferOptions(")));
+    const std::string start = Body(Configured(xhci, "XNU_12377_121_6", false), "bool SwitchXHCI::start(");
     const std::string fromSet = start.substr(
         at(start, "setClientBufferOptions((clientBufferOptions() & ~static_cast<uint32_t>(kIOMapCacheMask))"));
     EXPECT_THAT(fromSet.substr(0, 200), HasSubstr("kIOMapWriteCombineCache"));
     EXPECT_THAT(fromSet, HasSubstr("AppleUSBXHCI::start(provider)"));
+}
+
+TEST(SwitchUsbHostSource, PlainClientBuffersCachedOnIos17Only)
+{
+    const std::string xhci = SourceText("../SwitchXHCI.cpp");
+    EXPECT_THAT(Configured(xhci, "XNU_12377_121_6", true), Not(HasSubstr("SwitchXHCI::createIOBuffer(")));
+    const std::string allocation =
+        Body(Configured(xhci, "XNU_12377_121_6", false), "IOBufferMemoryDescriptor *SwitchXHCI::createIOBuffer(");
+    EXPECT_THAT(allocation, HasSubstr("if ((options & kIOMapCacheMask) == 0u)"));
+    EXPECT_THAT(allocation, HasSubstr("options |= kIOMapCopybackCache;"));
+    EXPECT_THAT(allocation, HasSubstr("return AppleUSBXHCI::createIOBuffer(options, capacity);"));
+    EXPECT_THAT(SourceText("../../../kits/SwitchABI/kinds/21H461/AppleUSBXHCI.json"),
+                HasSubstr("\"229\": \"createIOBuffer\""));
+    EXPECT_THAT(SourceText("../../../kits/SwitchABI/kinds/24B119/AppleUSBXHCI.json"),
+                HasSubstr("\"231\": \"createIOBuffer\""));
 }
 
 // iOS 17 only: the mapper answers getProtectionGranularity with 1, written as the 32 bits the controller reads back.

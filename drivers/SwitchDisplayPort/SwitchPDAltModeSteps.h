@@ -274,7 +274,7 @@ static inline struct switch_pd_alt_out switch_pd_alt_reply(struct switch_pd_alt 
 
 struct switch_pd_alt_in {
     uint16_t alert, status1, dp_status;
-    bool sink_session;    // SwitchPD's sink phase with the partner as source (a dock, a charger)
+    bool port_session;    // a stable power role: sink, or source with the host data role
     bool at_rest;         // SwitchPD's own USB-PD request is not using COMMAND (published, settling or given up)
     bool dock_power;      // the source's PDOs carry the dock's signature
     bool dual_role_data;  // the source's 5 V PDO has Dual-Role Data
@@ -378,7 +378,7 @@ static inline bool switch_pd_alt_vdm_step(enum switch_pd_alt_step step)
 static inline struct switch_pd_alt_out switch_pd_alt_event(struct switch_pd_alt *alt, const struct switch_pd_alt_in *in)
 {
     const bool plugged = (in->status1 & SWITCH_PD_ALT_STATUS1_INSERT) != 0;
-    if (!plugged || !in->sink_session ||
+    if (!plugged || !in->port_session ||
         (alt->step != SWITCH_PD_ALT_IDLE && (in->alert & SWITCH_PD_ALT_ALERT_PLUGPULL) != 0)) {
         return switch_pd_alt_reset(alt);
     }

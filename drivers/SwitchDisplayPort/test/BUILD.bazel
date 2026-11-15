@@ -1,6 +1,6 @@
 # drivers/SwitchDisplayPort's pure-C policies on the host:
 #   alt_mode_test   the BM92T36 alternate-mode steps against a model dock, adapters and chargers; pin assignment D first
-#   dp_modes_test   EDID parsing and the 1080p60 cap on the mode driven
+#   dp_modes_test   EDID parsing, source limits and native IOAV timing payloads
 #   dp_link_test    the link for a mode, SOR1's transfer units (Linux's numbers), PLL_D2, training against a model sink
 #   dp_aux_test     DPAUX1 control words (Linux's), replies, retries, the EDID read plan
 #   policy_c11      every header again as C11 under -Wconversion -Wsign-conversion
@@ -13,6 +13,7 @@ lint_files()
 
 POLICY = [
     "//drivers/SwitchDisplayPort:SwitchDPAux.h",
+    "//drivers/SwitchDisplayPort:SwitchDPAppleTiming.h",
     "//drivers/SwitchDisplayPort:SwitchDPLink.h",
     "//drivers/SwitchDisplayPort:SwitchDPModes.h",
     "//drivers/SwitchDisplayPort:SwitchDPTraining.h",

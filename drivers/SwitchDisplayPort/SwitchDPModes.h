@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // The sink's modes from its EDID (base block detailed timings, the 640x480 established timing every DisplayPort sink
-// must take, CTA-861 extension detailed timings and short video descriptors) and the one to drive. Plain C for the
+// must take, CTA-861 extension detailed timings and short video descriptors). Plain C for the
 // host tests.
-//
-// Output is capped at 1920x1080 and 60 Hz whatever the sink offers: the Tegra X1 composites the UI for the panel and
-// the TV together, and more pixels than 1080p60 cost frame rate everywhere. 1080p60 first, then modes of 50 Hz and up
-// by size, then the rest; a mode must also fit the trained link.
 #ifndef SWITCH_DP_MODES_H
 #define SWITCH_DP_MODES_H
 
@@ -14,10 +10,8 @@
 #include <stdint.h>
 
 // NOLINTBEGIN(modernize-avoid-c-style-cast,modernize-loop-convert): plain C, compiled by C host tests as well
-#define SWITCH_DP_MAX_WIDTH      1920u
-#define SWITCH_DP_MAX_HEIGHT     1080u
-#define SWITCH_DP_MAX_REFRESH    60500u  // mHz: 60 Hz and 59.94 Hz
-#define SWITCH_DP_SMOOTH         49900u  // mHz: 50 Hz and up count as smooth
+#define SWITCH_DP_MAX_WIDTH      8191u
+#define SWITCH_DP_MAX_HEIGHT     8191u
 #define SWITCH_DP_BITS_PER_PIXEL 24u
 #define SWITCH_DP_MAX_MODES      32u
 
@@ -102,7 +96,7 @@ static inline bool switch_dp_edid_dtd(const uint8_t *d, struct switch_dp_mode *m
     return true;
 }
 
-// CTA-861 VICs a 1080p60 cap leaves (progressive, 1920x1080 or smaller), from the standard's timing tables.
+// Progressive CTA-861 timings. Interlaced and pixel-repeated modes need separate scanout support.
 static inline bool switch_dp_cta_vic(unsigned vic, struct switch_dp_mode *mode)
 {
     static const struct {
@@ -121,6 +115,20 @@ static inline bool switch_dp_cta_vic(unsigned vic, struct switch_dp_mode *mode)
         {32, {74250, 1920, 638, 44, 148, 1080, 4, 5, 36, true, true, false}},
         {33, {74250, 1920, 528, 44, 148, 1080, 4, 5, 36, true, true, false}},
         {34, {74250, 1920, 88, 44, 148, 1080, 4, 5, 36, true, true, false}},
+        {41, {148500, 1280, 440, 40, 220, 720, 5, 5, 20, true, true, false}},
+        {47, {148500, 1280, 110, 40, 220, 720, 5, 5, 20, true, true, false}},
+        {63, {297000, 1920, 88, 44, 148, 1080, 4, 5, 36, true, true, false}},
+        {64, {297000, 1920, 528, 44, 148, 1080, 4, 5, 36, true, true, false}},
+        {93, {297000, 3840, 1276, 88, 296, 2160, 8, 10, 72, true, true, false}},
+        {94, {297000, 3840, 1056, 88, 296, 2160, 8, 10, 72, true, true, false}},
+        {95, {297000, 3840, 176, 88, 296, 2160, 8, 10, 72, true, true, false}},
+        {96, {594000, 3840, 1056, 88, 296, 2160, 8, 10, 72, true, true, false}},
+        {97, {594000, 3840, 176, 88, 296, 2160, 8, 10, 72, true, true, false}},
+        {98, {297000, 4096, 1020, 88, 296, 2160, 8, 10, 72, true, true, false}},
+        {99, {297000, 4096, 968, 88, 128, 2160, 8, 10, 72, true, true, false}},
+        {100, {297000, 4096, 88, 88, 128, 2160, 8, 10, 72, true, true, false}},
+        {101, {594000, 4096, 968, 88, 128, 2160, 8, 10, 72, true, true, false}},
+        {102, {594000, 4096, 88, 88, 128, 2160, 8, 10, 72, true, true, false}},
     };
 
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i) {
@@ -161,6 +169,7 @@ static inline void switch_dp_edid_cta(const uint8_t *block, struct switch_dp_mod
             const unsigned vic = (svd >= 129 && svd <= 192) ? svd & 0x7Fu : svd;
             struct switch_dp_mode mode;
             if (switch_dp_cta_vic(vic, &mode)) {
+                mode.preferred = svd >= 129 && svd <= 192;
                 switch_dp_modes_add(list, &mode);
             }
         }
@@ -206,51 +215,11 @@ static inline void switch_dp_edid_modes(const uint8_t *edid, unsigned blocks, st
 
 static inline bool switch_dp_mode_allowed(const struct switch_dp_mode *m, uint64_t link_payload_kbps)
 {
-    const uint32_t refresh = switch_dp_mode_refresh_mhz(m);
-    return m->hactive <= SWITCH_DP_MAX_WIDTH && m->vactive <= SWITCH_DP_MAX_HEIGHT && refresh != 0 &&
-           refresh <= SWITCH_DP_MAX_REFRESH && (uint64_t)m->pixel_khz * SWITCH_DP_BITS_PER_PIXEL < link_payload_kbps;
-}
-
-static inline bool switch_dp_mode_is_1080p60(const struct switch_dp_mode *m)
-{
-    return m->hactive == 1920 && m->vactive == 1080 && switch_dp_mode_refresh_mhz(m) >= 59900;
-}
-
-// True when `a` is the better choice: 1080p60, then smooth (50 Hz and up) before slow, then more pixels, then a higher
-// refresh, then the sink's own preference.
-static inline bool switch_dp_mode_better(const struct switch_dp_mode *a, const struct switch_dp_mode *b)
-{
-    if (switch_dp_mode_is_1080p60(a) != switch_dp_mode_is_1080p60(b)) {
-        return switch_dp_mode_is_1080p60(a);
-    }
-    const uint32_t ra = switch_dp_mode_refresh_mhz(a);
-    const uint32_t rb = switch_dp_mode_refresh_mhz(b);
-    if ((ra >= SWITCH_DP_SMOOTH) != (rb >= SWITCH_DP_SMOOTH)) {
-        return ra >= SWITCH_DP_SMOOTH;
-    }
-    const uint32_t area_a = (uint32_t)a->hactive * a->vactive;
-    const uint32_t area_b = (uint32_t)b->hactive * b->vactive;
-    if (area_a != area_b) {
-        return area_a > area_b;
-    }
-    if (ra / 100 != rb / 100) {
-        return ra > rb;
-    }
-    return a->preferred && !b->preferred;
-}
-
-// The index of the mode to drive over a link carrying `link_payload_kbps`, or -1 when none fits.
-static inline int switch_dp_pick_mode(const struct switch_dp_mode_list *list, uint64_t link_payload_kbps)
-{
-    int best = -1;
-    for (unsigned i = 0; i < list->count; ++i) {
-        const struct switch_dp_mode *m = &list->modes[i];
-        if (switch_dp_mode_allowed(m, link_payload_kbps) &&
-            (best < 0 || switch_dp_mode_better(m, &list->modes[best]))) {
-            best = (int)i;
-        }
-    }
-    return best;
+    return m->hactive >= 16 && m->hactive <= SWITCH_DP_MAX_WIDTH &&
+           m->vactive >= 16 && m->vactive <= SWITCH_DP_MAX_HEIGHT && m->hsync != 0 && m->vsync != 0 &&
+           m->hfront >= 2 && m->vfront >= 2 && m->hsync + m->hback >= 20 &&
+           switch_dp_mode_htotal(m) <= 0x7fffu && switch_dp_mode_vtotal(m) <= 0x7fffu &&
+           m->pixel_khz >= 11719 && m->pixel_khz <= 750000 && (uint64_t)m->pixel_khz * SWITCH_DP_BITS_PER_PIXEL < link_payload_kbps;
 }
 
 // NOLINTEND(modernize-avoid-c-style-cast,modernize-loop-convert)

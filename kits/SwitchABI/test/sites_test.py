@@ -63,5 +63,55 @@ class SitesTest(unittest.TestCase):
                 self.assertTrue(all(s.original != s.replacement for s in found), path)
 
 
+class FamilyCommandTest(unittest.TestCase):
+    def run_requests(self, word: int, overlapping: bool) -> tuple[int, int, int]:
+        remembered = None
+        active = {}
+        maps = unmaps = 0
+
+        def prepare() -> tuple[int, bool]:
+            nonlocal remembered, maps
+            command = remembered
+            if command is None:
+                command = len(active)
+                active[command] = 1
+                maps += 1
+                if word == 0xEB09011F:  # cmp x8, x9: the mapper equals the buffer's owner mapper
+                    remembered = command
+                else:
+                    self.assertEqual(word, 0xF100011F)  # cmp x8, #0: our mapper is non-null
+            active[command] += 1
+            return command, remembered != command
+
+        def complete(request: tuple[int, bool]) -> None:
+            nonlocal remembered, unmaps
+            command, pool_owned = request
+            self.assertGreater(active[command], 0)
+            active[command] -= 1
+            if pool_owned:
+                unmaps += int(active[command] != 0)
+                active[command] = 0
+                if remembered == command:
+                    remembered = None
+
+        for _ in range(64):
+            first = prepare()
+            second = prepare() if overlapping else None
+            complete(first)
+            if second is not None:
+                self.assertGreater(active[second[0]], 0, 'one completion must not unmap another request')
+                complete(second)
+        return maps, unmaps, sum(active.values())
+
+    def test_cached_family_buffer_returns_its_mapping_after_every_transfer(self) -> None:
+        patch = sites.load(TABLES / '24B119/sites/com.apple.iokit.IOUSBHostFamily.json', '24B119')[0]
+        self.assertEqual(self.run_requests(patch.original, False), (1, 0, 1))
+        self.assertEqual(self.run_requests(patch.replacement, False), (64, 64, 0))
+
+    def test_overlapping_requests_keep_independent_commands(self) -> None:
+        patch = sites.load(TABLES / '24B119/sites/com.apple.iokit.IOUSBHostFamily.json', '24B119')[0]
+        self.assertEqual(self.run_requests(patch.replacement, True), (128, 128, 0))
+
+
 if __name__ == '__main__':
     unittest.main()

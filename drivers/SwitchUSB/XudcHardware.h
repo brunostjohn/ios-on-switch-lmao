@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Tegra X1 (T210B01) XUSB device controller (XUDC): clocks, power, the USB2 PHY on OTG pad 0 (the USB-C port's D+/D-),
-// event ring, endpoint contexts and transfer rings (TRB layout and ring sizes: XudcTransfer.h). USB2 high speed only.
+// event ring, endpoint contexts and transfer rings (TRB layout and ring sizes: XudcTransfer.h).
 // Used by SwitchXUDC (SwitchXUDC.h), the backend of Apple's IOUSBDeviceController.
 //
 // Sequence: hekate bdk/usb/xusbd.c (xusb_device_init, _xusb_init_phy, _xusbd_init_device_clocks,
@@ -23,6 +23,7 @@
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "XudcTransfer.h"
 #include "XudcIsoch.h"
+#include "XudcLink.h"
 
 namespace xudc {
 
@@ -83,7 +84,7 @@ struct PortChange {
     bool disconnected = false;  // CSC without CCS
     bool suspended = false;     // link to U3 (host suspend, or the cable is gone)
     bool resumed = false;       // link back to U0
-    bool fullSpeed = false;     // PORTSC.PS: the host runs us at full speed
+    int speed = kSpeedNone;
 };
 
 class Hardware {

@@ -168,7 +168,7 @@ void TegraDisplayB::enableSor(bool on)
     commit(kGeneralActReq);
 }
 
-void TegraDisplayB::scanout(uint32_t iova, uint32_t width, uint32_t height, uint32_t stride)
+void TegraDisplayB::scanout(uint32_t iova, uint32_t width, uint32_t height, uint32_t stride, uint32_t kind)
 {
     write(DC_CMD_DISPLAY_WINDOW_HEADER, kWindowA);
     write(DC_WIN_COLOR_DEPTH, kB8G8R8A8);
@@ -181,7 +181,7 @@ void TegraDisplayB::scanout(uint32_t iova, uint32_t width, uint32_t height, uint
     write(DC_WIN_DDA_INC, (kDdaOne << 16) | kDdaOne);
     write(DC_WIN_LINE_STRIDE, stride);
     write(DC_WIN_BUFFER_ADDR_MODE, 0);
-    write(DC_WINBUF_SURFACE_KIND, 0);
+    write(DC_WINBUF_SURFACE_KIND, kind);
     write(DC_WINBUF_START_ADDR, iova);
     write(DC_WINBUF_ADDR_H_OFFSET, 0);
     write(DC_WINBUF_ADDR_V_OFFSET, 0);
@@ -195,6 +195,11 @@ void TegraDisplayB::windowOff()
     write(DC_CMD_DISPLAY_WINDOW_HEADER, kWindowA);
     write(DC_WIN_WIN_OPTIONS, 0);
     commit(kWinAActReq);
+}
+
+void TegraDisplayB::frameInterrupt(bool enable)
+{
+    write(DC_CMD_INT_ENABLE, enable ? kFrameEnd : 0);
 }
 
 uint32_t TegraDisplayB::takeInterrupt()

@@ -59,12 +59,13 @@ Regs boardState()
     };
 }
 
-TEST(SwitchUsbLanes, LaneOnlyForAHostWhosePairIsFree)
+TEST(SwitchUsbLanes, LaneForEitherConnectedDataRoleWhosePairIsFree)
 {
-    for (const bool host : {false, true}) {
+    for (const bool connected : {false, true}) {
         for (const auto lanes : {SWITCH_USB3_LANES_PENDING, SWITCH_USB3_LANES_FREE, SWITCH_USB3_LANES_TAKEN}) {
             for (const bool uphy : {false, true})
-                EXPECT_EQ(xusb_ss_lane_wanted(host, lanes, uphy), host && uphy && lanes == SWITCH_USB3_LANES_FREE);
+                EXPECT_EQ(xusb_ss_lane_wanted(connected, lanes, uphy),
+                          connected && uphy && lanes == SWITCH_USB3_LANES_FREE);
         }
     }
 }

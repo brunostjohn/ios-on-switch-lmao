@@ -28,6 +28,7 @@
     "155": "setPowerState",
     "156": "maxCapabilityForDomainState",
     "160": "powerStateDidChangeTo",
+    "229": "createIOBuffer",
     "249": "hardwareException",
     "253": "copyMapper",
     "273": "createPort",
@@ -120,7 +121,6 @@
     "opaque226": "0xfffffff005ec58f0",
     "opaque227": "0xfffffff005ec5a0c",
     "opaque228": "0xfffffff005ec5b24",
-    "opaque229": "0xfffffff005ec0cd4",
     "opaque230": "0xfffffff005ec0c30",
     "opaque231": "0xfffffff005ec0c40",
     "opaque232": "0xfffffff005e1b8d4",
@@ -195,7 +195,8 @@
     "switch_original_xhci_port_properties": "unported",
     "switch_original_xhci_usb2_port": "unported",
     "switch_original_xhci_usb3_port": "unported",
-    "hardwareException": "0xfffffff005ecd38c"
+    "hardwareException": "0xfffffff005ecd38c",
+    "createIOBuffer": "0xfffffff005ec0cd4"
   },
   "hints": {
     "functions": {
@@ -215,7 +216,11 @@
     },
     "evidence": {
       "createPort": "createPorts (slot 246, 0xfffffff005ec81e4) calls slot 273 with x1 the protocol copy, x2 the port number (0xfffffff005ec8794); the function logs \"%s@%s: %s::%s: port %d USB 2.%x with %d speed IDs\" under the name createPort",
-      "hardwareException": "slot 249: its log lines name it hardwareException (\"XHCI.USBCommand = 0x%08x\"), 21H461's exception code table as 24B119's (0x100 lost power)"
+      "hardwareException": "slot 249: its log lines name it hardwareException (\"XHCI.USBCommand = 0x%08x\"), 21H461's exception code table as 24B119's (0x100 lost power)",
+      "createIOBuffer": "slot 229: x0 controller, w1 options, x2 capacity; the factory rounds capacity to the controller alignment, allocates IOBufferMemoryDescriptor, sets its tag and restores requested length"
+    },
+    "layout": {
+      "229": "createIOBuffer"
     }
   }
 }

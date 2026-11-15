@@ -158,7 +158,7 @@ LAYERS = [
     ),
     Layer(
         'superspeed',
-        'SuperSpeed lane and RESET_SSPI',
+        'SuperSpeed PHY preparation',
         ('usb.ss.lane-up',),
         (
             'usb.ss.lane-up',

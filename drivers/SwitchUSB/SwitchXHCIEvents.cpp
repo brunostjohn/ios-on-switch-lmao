@@ -265,6 +265,8 @@ bool SwitchXHCI::resetSuperSpeed()
     if (!off && !interrupted()) {
         IOLog("SwitchUSB: SuperSpeed root port %u still powered 700 ms after PP off (PORTSC %#x)\n", port,
               gHost.portsc(port));
+        superSpeedResetDue();
+        return false;
     }
 
     // Looked at once more on the mailbox's loop just before RESET_SSPI goes out, and once after: a halt or reset
@@ -295,8 +297,10 @@ bool SwitchXHCI::resetSuperSpeed()
 #endif
         return false;
     }
-    if (!attempt.taken)
+    if (!attempt.taken) {
         IOLog("SwitchUSB: XUSB falcon did not take RESET_SSPI\n");
+        superSpeedResetDue();
+    }
 #if DEVELOPMENT || DEBUG
     os_log(OS_LOG_DEFAULT, "SwitchUSB: SuperSpeed reset taken on port %u (PORTSC %#x -> %#x, RESET_SSPI %s)", port,
            before, gHost.portsc(port), attempt.taken ? "taken" : "refused");

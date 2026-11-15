@@ -152,14 +152,17 @@ void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
     }
     negotiate(alertBits);
     const auto atRest = [](const void *pd) -> bool {
-        const Nego n = static_cast<const SwitchPD *>(pd)->nego;
-        return n == Nego::Settling || n == Nego::Done || n == Nego::Failed;
+        const auto *self = static_cast<const SwitchPD *>(pd);
+        const Nego n = self->nego;
+        return self->phase == SWITCH_PD_SOURCE || n == Nego::Settling || n == Nego::Done || n == Nego::Failed;
     };
     const bool contractOurs = nego == Nego::Settling || nego == Nego::Done;
     const bool dualRoleData = contractOurs && sourcePdoCount != 0 && charge::pdoType(sourcePdos[0]) == 0 &&
                               (sourcePdos[0] & PDO_FIXED_DUAL_ROLE_DATA) != 0;
-    switch_pd_alt_alert(this, loop, atRest, alertBits, status1,
-                        phase == SWITCH_PD_SINK && state.plugged && ((status1 & SWITCH_PD_STATUS1_SRC_MODE) == 0u),
+    const bool altSession = state.plugged &&
+                            ((phase == SWITCH_PD_SINK && (status1 & SWITCH_PD_STATUS1_SRC_MODE) == 0u) ||
+                             (phase == SWITCH_PD_SOURCE && state.dataHost));
+    switch_pd_alt_alert(this, loop, atRest, alertBits, status1, altSession,
                         contractOurs && choice.dock, dualRoleData);
     notify();
 }

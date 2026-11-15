@@ -9,10 +9,10 @@
 // mailbox (its own interrupt). Everything above (enumeration, IOUSBHostDevice/Interface publication, hubs, HID and
 // mass storage class drivers) is Apple's unchanged code.
 //
-// AppleUSBXHCI::start refuses a controller with fewer than three interrupters (HCSPARAMS1.MaxIntrs). With one provider
-// interrupt it runs them all on the shared line (legacy interrupters), so when the Tegra firmware reports fewer, we
-// report three and keep the missing register sets in a shadow (the regRead32/regRead64/regWrite32/regWrite64
-// overrides: AppleUSBXHCIInterrupter::enable reads ERSTBA and ERDP back through regRead64); which case ran is logged.
+// The falcon has one interrupter (HCSPARAMS1.MaxIntrs 1). AppleUSBXHCI::start's demand for three and every TRB's
+// Interrupter Target of 1 or 2 are patched to one and 0 at the prelink (kits/SwitchABI/kinds/<kind>/sites). iOS 17's
+// controller still builds three interrupters; their missing register sets are a shadow here (regRead32/regRead64/
+// regWrite32/regWrite64: AppleUSBXHCIInterrupter::enable reads ERSTBA and ERDP back through regRead64).
 #include "SwitchXHCI.h"
 #include "SwitchUSB.h"
 #include "SwitchUSBPort.h"
@@ -35,7 +35,6 @@ void switchxhci_static_init(void) __asm__("__GLOBAL__sub_I_SwitchXHCI.cpp");
 xhost::Controller xhost::gHost;
 
 using xhost::gHost;
-using xhost::kRequiredInterrupters;
 
 OSDefineMetaClassAndStructors(SwitchXHCI, AppleUSBXHCI);
 SwitchXHCI *SwitchXHCI::running;
@@ -49,12 +48,11 @@ bool SwitchXHCI::start(IOService *provider)
     // AppleUSBHostController::init picked (AppleNubT8011USBXHCI clears it: its fabric is coherent; ours is not).
     setRingBufferOptions((ringBufferOptions() & ~static_cast<uint32_t>(kIOMapCacheMask)) |
                          static_cast<uint32_t>(kIOMapWriteCombineCache));
-    // Every transfer buffer the family allocates the same. Apple keeps a buffer's DMA command prepared for the buffer's
-    // life (AppleUSBXHCIRequest remembers it), so the mapper sees one map and no unmap and its cache maintenance runs
-    // once; write-combined memory needs none, however long it stays mapped. Before AppleUSBXHCI::start, which makes
-    // the first of them.
+#if !XNU_12377_121_6
+    // 21H461's internal bounce commands stay prepared; plain client buffers override their cache mode at allocation.
     setClientBufferOptions((clientBufferOptions() & ~static_cast<uint32_t>(kIOMapCacheMask)) |
                            static_cast<uint32_t>(kIOMapWriteCombineCache));
+#endif
     // Without the mapper AppleUSBXHCI would run on (copyMapper NULL is no error to it) there is no cache maintenance.
     if (!switch_usb_dma_mapper(dmaReach()))
         return false;
@@ -85,6 +83,16 @@ bool SwitchXHCI::start(IOService *provider)
         IOLog("SwitchUSB: XUSB falcon did not take MSG_ENABLED\n");
     return true;
 }
+
+#if !XNU_12377_121_6
+// 21H461's plain client descriptors map per transfer; its persistent DMA buffers still use the controller's WC mode.
+IOBufferMemoryDescriptor *SwitchXHCI::createIOBuffer(IOOptionBits options, uint64_t capacity)
+{
+    if ((options & kIOMapCacheMask) == 0u)
+        options |= kIOMapCopybackCache;
+    return AppleUSBXHCI::createIOBuffer(options, capacity);
+}
+#endif
 
 void SwitchXHCI::stop(IOService *provider)
 {
@@ -167,15 +175,20 @@ IOService *SwitchXHCI::createPort(void *protocol, uint32_t port, uint32_t)
 // Interrupter register sets (runtime base + 0x20 + 32 * n) that the hardware does not have.
 uint32_t *SwitchXHCI::shadowFor(uint64_t address)
 {
-    if (!capBase || hardwareInterrupters >= kRequiredInterrupters)
+#if XNU_12377_121_6
+    (void)address;
+    return nullptr;
+#else
+    if (!capBase || hardwareInterrupters >= xhost::kAppleInterrupters)
         return nullptr;
     const uint64_t first = capBase + runtimeOffset + 0x20;
     const uint64_t from = first + 32ULL * hardwareInterrupters;
-    const uint64_t to = first + 32ULL * kRequiredInterrupters;
+    const uint64_t to = first + 32ULL * xhost::kAppleInterrupters;
     if (address < from || address >= to)
         return nullptr;
     const uint64_t at = address - first;
     return &shadow[at / 32][(at % 32) / 4];
+#endif
 }
 
 namespace {
@@ -194,9 +207,6 @@ uint32_t SwitchXHCI::regRead32(uint64_t base, uint32_t offset)
     if (const uint32_t *s = shadowFor(base + offset))
         return *s;
     uint32_t value = AppleUSBXHCI::regRead32(base, offset);
-    if (capBase && base + offset == capBase + 4 && hardwareInterrupters < kRequiredInterrupters) {
-        value = (value & ~(0x7ffu << 8)) | kRequiredInterrupters << 8;
-    }
     if (capBase && base + offset == capBase + operationalOffset + 4)
         value = xusb_hold_usbsts(&hold, value);
     return value;
@@ -347,7 +357,7 @@ bool switchxhci_start(char *why, size_t whySize)
         return false;
     }
     __atomic_store_n(&SwitchXHCI::running, controller, __ATOMIC_RELEASE);
-    IOLog("SwitchUSB: host controller up (AppleUSBXHCI, %u interrupter%s%s)\n", interrupters,
-          interrupters == 1 ? "" : "s", interrupters < kRequiredInterrupters ? ", 3 shown to AppleUSBXHCI" : "");
+    IOLog("SwitchUSB: host controller up (AppleUSBXHCI, %u interrupter%s)\n", interrupters,
+          interrupters == 1 ? "" : "s");
     return true;
 }

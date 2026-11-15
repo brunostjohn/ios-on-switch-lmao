@@ -7,6 +7,7 @@
 
 #include "SwitchDisplayPortService.h"
 
+
 namespace {
 constexpr uint8_t kDpcdD0 = 1;
 constexpr unsigned kMaxEdidBlocks = 4;
@@ -102,7 +103,8 @@ void SwitchDisplayPort::edidDone()
     IOLog("SwitchDisplayPort: sink DPCD %u.%u, %u lanes at up to %u.%02u Gb/s, EDID %u block%s, %u modes\n",
           caps[0] >> 4, caps[0] & 0xfu, sinkLanes, switch_dp_rate_khz(maxRate) / 100000,
           (switch_dp_rate_khz(maxRate) / 1000) % 100, edidBlocks, edidBlocks == 1 ? "" : "s", modes.count);
-    chooseAndTrain();
+    stage = Stage::Ready;
+    screen->publish(modes, switch_dp_payload_kbps(maxRate, maxLanes));
 }
 
 void SwitchDisplayPort::chooseAndTrain()
@@ -111,9 +113,11 @@ void SwitchDisplayPort::chooseAndTrain()
         fail("the link", "no rate or lane left to train");
         return;
     }
-    const int chosen = switch_dp_pick_mode(&modes, switch_dp_payload_kbps(maxRate, maxLanes));
-    if (chosen < 0 || !switch_dp_link_for(modes.modes[chosen].pixel_khz, maxRate, maxLanes, &link)) {
-        fail("the mode", "nothing the sink offers fits 1920x1080 at 60 Hz on this link");
+    const int chosen = wantedMode;
+    if (chosen < 0 || static_cast<unsigned>(chosen) >= modes.count ||
+        !switch_dp_mode_allowed(&modes.modes[chosen], switch_dp_payload_kbps(maxRate, maxLanes)) ||
+        !switch_dp_link_for(modes.modes[chosen].pixel_khz, maxRate, maxLanes, &link)) {
+        fail("the mode", "the requested timing does not fit the available link");
         return;
     }
     modeIndex = (unsigned)chosen;
@@ -193,5 +197,5 @@ void SwitchDisplayPort::trained()
     stage = Stage::Running;
     IOLog("SwitchDisplayPort: link up at %u Mb/s x%u (TU %u, watermark %u)\n", switch_dp_rate_khz(link.rate) / 100,
           link.lanes, tu.tu_size, tu.watermark);
-    screen.attach(modes, modeIndex, &dcb);
+    screen->linkUp(mode, &dcb);
 }

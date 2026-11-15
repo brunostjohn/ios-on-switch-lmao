@@ -45,6 +45,8 @@ def main():
     parser.add_argument('--root', required=True, action='append')
     parser.add_argument('--cut', action='append', default=[], type=lambda v: v.split('='))
     parser.add_argument('--defer', action='append', default=[], type=lambda v: v.split('='))
+    parser.add_argument('--kind', required=True)
+    parser.add_argument('--sites', action='append', default=[], type=Path)
     args = parser.parse_args()
     work = Path(tempfile.mkdtemp(prefix='prelink-'))
     env = dict(
@@ -56,6 +58,8 @@ def main():
         PRELINK_KERNELCACHE_17=str(args.kernelcache_17.resolve()),
         PRELINK_ARM64E=str(args.arm64e.resolve()),
         PRELINK_SLIDE=hex(args.slide),
+        PRELINK_KIND=args.kind,
+        PRELINK_SITES=os.pathsep.join(str(p.resolve()) for p in args.sites),
         PYTHONPATH=os.pathsep.join([str(HERE)] + sys.path),
     )
     try:

@@ -8,10 +8,13 @@
 #include <IOKit/IOLib.h>
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 #include "XusbLanes.h"
+#include "XusbSuperSpeed.h"
 
 void switch_usb_padctl_fake_port_up(volatile uint8_t *padctl)
 {
     const SwitchPadctlLocked locked;
+    if (switch_usb_ss_up())
+        return;
     switch_mmio_write32(padctl, XUSB_PADCTL_SS_PORT_MAP,
                         xusb_ss_port_map(switch_mmio_read32(padctl, XUSB_PADCTL_SS_PORT_MAP)));
     for (const xusb_elpg_step &step : xusb_ss_up_steps) {
@@ -25,6 +28,8 @@ void switch_usb_padctl_fake_port_up(volatile uint8_t *padctl)
 void switch_usb_padctl_fake_port_down(volatile uint8_t *padctl)
 {
     const SwitchPadctlLocked locked;
+    if (switch_usb_ss_up())
+        return;
     for (const xusb_elpg_step &step : xusb_ss_down_steps) {
         switch_mmio_write32(padctl, XUSB_PADCTL_ELPG_PROGRAM_1,
                             xusb_elpg_apply(switch_mmio_read32(padctl, XUSB_PADCTL_ELPG_PROGRAM_1), step));

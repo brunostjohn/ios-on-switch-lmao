@@ -30,6 +30,7 @@
     "157": "initialPowerStateForDomainState",
     "159": "powerStateWillChangeTo",
     "160": "powerStateDidChangeTo",
+    "231": "createIOBuffer",
     "240": "copyMapper",
     "259": "hardwareException",
     "295": "createPort",
@@ -157,7 +158,6 @@
     "opaque277": "0xfffffff009d35f68",
     "opaque278": "0xfffffff009d35fb0",
     "opaque279": "0xfffffff009d35fbc",
-    "opaque231": "0xfffffff009d36150",
     "opaque193": "0xfffffff009d362b8",
     "opaque194": "0xfffffff009d37f28",
     "opaque283": "0xfffffff009d38654",
@@ -231,7 +231,8 @@
     "switch_original_xhci_usb3_port": "0xfffffff009d6c508",
     "gMetaClass": "0xfffffff00aece6d0",
     "switch_original_xhci_typec_usb2_port": "unported",
-    "switch_original_xhci_typec_usb3_port": "unported"
+    "switch_original_xhci_typec_usb3_port": "unported",
+    "createIOBuffer": "0xfffffff009d36150"
   },
   "found": {
     "C2": "stores the vtable",
@@ -276,7 +277,8 @@
     "switch_original_xhci_usb3_port": "allocates 0x428 bytes of AppleUSB30XHCIPort and calls its slot 240, as the USB 2.0 one; base createPort's USB 3 call (0xfffffff009d41b10)",
     "systemWillShutdown": "slot 79 by PAC of _ZN9IOService18systemWillShutdownEj",
     "terminate": "slot 94 by PAC of _ZN9IOService9terminateEj",
-    "vtable": "metaclass initialiser"
+    "vtable": "metaclass initialiser",
+    "createIOBuffer": "slot 231 by hint"
   },
   "hints": {
     "fields": {
@@ -297,11 +299,13 @@
       "copyMapper": "AppleUSBHostController::start keeps copyMapper() (vtable +0x780, slot 240) at +0x310 when that is still NULL (0xfffffff009c0a954); the rings pass +0x310 as their mapper",
       "regRead32": "AppleUSBXHCI reads and writes its registers through slots 313-317 (120 calls through +0x9d0); ml_io_read32 is called directly only from regRead16 and regRead32",
       "createPort": "createPorts (slot 256, 0xfffffff009d3ff2c) calls slot 295 (vtable +0x938, PAC 0x847a) with x1 its copy of the Supported Protocol capability, x2 the port number, x3 the port's place in the protocol, and stores x0 at +0x548[port - 1]; no mangled name gives 0x847a, the function's log lines name it createPort",
-      "hardwareException": "slot 259 (vtable +0x818, PAC 0xa179): its log lines name it hardwareException; x1 the exception code, 0x80 returned early (cmp w19, #0x80 at 0xfffffff009d469c8)"
+      "hardwareException": "slot 259 (vtable +0x818, PAC 0xa179): its log lines name it hardwareException; x1 the exception code, 0x80 returned early (cmp w19, #0x80 at 0xfffffff009d469c8)",
+      "createIOBuffer": "slot 231: x0 controller, w1 options, x2 capacity; the factory rounds capacity to the controller alignment, allocates IOBufferMemoryDescriptor, sets its tag and restores requested length"
     },
     "layout": {
       "259": "hardwareException",
-      "295": "createPort"
+      "295": "createPort",
+      "231": "createIOBuffer"
     },
     "functions": {
       "switch_original_xhci_port_properties": {

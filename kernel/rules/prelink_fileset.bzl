@@ -7,9 +7,12 @@ The prelink refuses an import that nothing names unless shims.py answers it.
 
 Which kexts it takes is base_roots and the drivers' prelink, prelink_cuts and prelink_deferred lists, as the iOS 17
 prelink takes them; a kext only one kind's kernelcache ships is named in a select on that kind (//ipsw:<kind>).
+The selected kind's declared sites (kits/SwitchABI/sites.py) are written into the translated code, each original word
+checked first.
 """
 
 load("@xcode//:defs.bzl", "DEVELOPER_DIR")
+load("//ipsw:ipsw.bzl", "IpswInfo")
 load(":common.bzl", "XCODE_EXECUTION")
 load(":kernel.bzl", "KernelObjectsInfo")
 
@@ -35,13 +38,16 @@ def _kernel_prelink_fileset_impl(ctx):
         fail("signatures must hold exactly one xnu.json")
     args.add("--signatures", xnu_signatures[0])
     args.add("--slide=" + ctx.attr.slide)
+    args.add("--kind=" + ctx.attr._ipsw_kind[IpswInfo].kind)
+    args.add_all(ctx.files.sites, before_each = "--sites")
     args.add("--out", out)
     args.add("--report", report)
     args.add("--names", names)
     ctx.actions.run(
         executable = ctx.executable._prelink,
         arguments = [args],
-        inputs = [kernel, ctx.file.kernelcache, ctx.file.kernelcache_17, ctx.file.symbolsets] + ctx.files._signature_tree,
+        inputs = [kernel, ctx.file.kernelcache, ctx.file.kernelcache_17, ctx.file.symbolsets] + ctx.files._signature_tree +
+                 ctx.files.sites,
         tools = [ctx.executable._arm64e, ctx.executable._ipsw],
         outputs = [out, report, names],
         env = {"DEVELOPER_DIR": DEVELOPER_DIR},
@@ -63,8 +69,10 @@ kernel_prelink_fileset = rule(
         "signatures": attr.label(mandatory = True, allow_files = True, doc = "ipsw's signatures of the kernelcache's Darwin version (<version>/xnu.json and kexts/)"),
         "out": attr.string(mandatory = True, doc = "the prelinked kernel's path in the package, ending in .macho"),
         "slide": attr.string(mandatory = True, doc = "the kexts' slide the bindings assume (kits/SwitchABI's tables)"),
+        "sites": attr.label(default = "//kits/SwitchABI:sites", allow_files = [".json"], doc = "the selected kind's declared sites in Apple's kexts (kits/SwitchABI/sites.py)"),
         "_arm64e": attr.label(default = "//translate/arm64e", executable = True, cfg = "exec"),
         "_ipsw": attr.label(default = "@ipsw_cli//:ipsw", executable = True, allow_single_file = True, cfg = "exec"),
+        "_ipsw_kind": attr.label(default = "//ipsw:current", providers = [IpswInfo]),
         "_prelink": attr.label(default = "//translate/arm64e:prelink", executable = True, cfg = "exec"),
         # ipsw reads every Darwin version's signatures below the directory that holds `signatures`. With 27.2's alone
         # it names half the functions and the prelink refuses its GOT bindings. Only a remote worker, whose inputs are

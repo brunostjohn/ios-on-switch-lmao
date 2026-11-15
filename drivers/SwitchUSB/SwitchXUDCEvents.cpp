@@ -114,16 +114,18 @@ void SwitchXUDC::portEvent()
         setHostPresent(false);
         IOLog("SwitchUSB: host disconnected\n");
     }
-    if (change.reset && onBus) {
+    if ((change.reset || change.connected) && onBus && change.speed != kSpeedNone) {
         ep0Cancel(kIOReturnAborted);
         stage = Stage::Idle;
         suspended = false;
         handleUSBReset();
-        speed = change.fullSpeed ? kSpeedFull : kSpeedHigh;
+        speed = change.speed;
         handleUSBConnectionDone();
         if (!hostPresent) {
             setHostPresent(true);
-            IOLog("SwitchUSB: host connected (%s speed)\n", speed == kSpeedHigh ? "high" : "full");
+            IOLog("SwitchUSB: host connected (%s speed)\n", speed == kSpeedSuper  ? "super"
+                                                            : speed == kSpeedHigh ? "high"
+                                                                                  : "full");
         }
     }
     if (change.suspended && !suspended && speed != kSpeedNone) {

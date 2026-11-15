@@ -416,7 +416,8 @@ TEST(SwitchXudcSource, SleepPowersOnWholeBeforeTheBus)
     EXPECT_LT(power, lift);
     EXPECT_LT(lift, unmasked);
     EXPECT_LT(unmasked, on);
-    EXPECT_THAT(source, HasSubstr("if (on && lostToSleep)\n        return;"));
+    EXPECT_THAT(source, HasSubstr("if (on && (lostToSleep || asleep ||"));
+    EXPECT_THAT(switch_ios::test::Body(source, "void SwitchXUDC::setBus("), HasSubstr("&gLaneReady"));
 }
 
 // An attached host holds idle sleep off as an iPad's powerd does in USB device mode: every change of hostPresent goes
@@ -530,5 +531,5 @@ TEST(SwitchXudcSource, VbusFollowsThePdController)
     EXPECT_THAT(switch_ios::test::Body(usb, "void pdChanged("),
                 HasSubstr("switch_pd_usb_device_vbus(sourcing, state->status1)"));
     EXPECT_THAT(switch_ios::test::Body(usb, "void applyRole("),
-                HasSubstr("switchxudc_set_vbus(deviceVbus && !gHostRole);"));
+                HasSubstr("switchxudc_set_vbus(deviceVbus && !gHostRole, deviceLaneReady());"));
 }

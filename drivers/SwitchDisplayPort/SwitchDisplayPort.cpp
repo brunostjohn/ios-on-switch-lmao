@@ -13,6 +13,7 @@
 
 OSDefineMetaClassAndStructors(SwitchDisplayPort, IOService);
 
+
 namespace {
 constexpr uint32_t kAuxLostMs = 50;  // DPAUX1 times out a silent sink itself within a millisecond
 SwitchDisplayPort *gService;
@@ -21,16 +22,8 @@ uint32_t gLanes, gFlipped;
 
 void applyAltMode(thread_call_param_t, thread_call_param_t)
 {
-    if (gService == nullptr) {
-        auto *service = OSTypeAlloc(SwitchDisplayPort);
-        if (service == nullptr || !service->init() || !service->attach(IOService::getResourceService()) ||
-            !service->begin()) {
-            IOLog("SwitchDisplayPort: could not start\n");
-            OSSafeReleaseNULL(service);
-            return;
-        }
-        gService = service;
-    }
+    if (gService == nullptr && switch_displayport_start())
+        return;
     const unsigned lanes = __atomic_load_n(&gLanes, __ATOMIC_ACQUIRE);
     const bool flipped = __atomic_load_n(&gFlipped, __ATOMIC_ACQUIRE) != 0;
     gService->getWorkLoop()->runAction(
@@ -41,6 +34,19 @@ void applyAltMode(thread_call_param_t, thread_call_param_t)
         gService, reinterpret_cast<void *>((uintptr_t)lanes), flipped ? gService : nullptr);
 }
 }  // namespace
+
+extern "C" int switch_displayport_start(void)
+{
+    if (gService)
+        return 0;
+    auto *service = OSTypeAlloc(SwitchDisplayPort);
+    if (!service || !service->init() || !service->attach(IOService::getResourceService()) || !service->begin()) {
+        OSSafeReleaseNULL(service);
+        return -1;
+    }
+    gService = service;
+    return 0;
+}
 
 extern "C" void switch_displayport_alt_mode(unsigned lanes, bool flipped)
 {
@@ -70,6 +76,9 @@ bool SwitchDisplayPort::begin()
         panic("SwitchDisplayPort: cannot attach the DPAUX1 (INTID %u) or display controller B (INTID %u) interrupt",
               TEGRA_DPAUX1_INTID, TEGRA_DISPLAY_B_INTID);
     }
+    screen = OSTypeAlloc(SwitchExternalScreen);
+    if (!screen || !screen->init() || !screen->begin(this, loop))
+        return false;
     setName("SwitchDisplayPort");
     registerService();
     return true;
@@ -77,17 +86,24 @@ bool SwitchDisplayPort::begin()
 
 void SwitchDisplayPort::setAltLanes(unsigned lanes, bool plugFlipped)
 {
-    if (lanes == altLanes) {
+    if (lanes == altLanes && plugFlipped == flipped) {
         return;
     }
     if (lanes == 0) {
         IOLog("SwitchDisplayPort: DisplayPort alternate mode ended\n");
         powerOff();
+        screen->detach();
+        wantedMode = -1;
         altLanes = 0;
         return;
     }
+    if (stage != Stage::Off)
+        teardownLink();
     altLanes = lanes;
     flipped = plugFlipped;
+    if (sleeping)
+        return;
+    stage = stage == Stage::Off ? Stage::Off : Stage::Waiting;
     char why[128] = "";
     if (stage == Stage::Off) {
         if (!aux.powerUp(why, sizeof(why))) {
@@ -130,7 +146,7 @@ void SwitchDisplayPort::dcInterrupt(OSObject *owner, IOInterruptEventSource *, i
     auto *self = static_cast<SwitchDisplayPort *>(owner);
     const uint32_t cause = self->dcb.takeInterrupt();
     if ((cause & (1u << 1)) != 0) {
-        self->screen.frameEnd();
+        self->screen->frameEnd();
     }
 }
 
@@ -219,7 +235,10 @@ void SwitchDisplayPort::teardownLink()
     auxTimer->cancelTimeout();
     stepTimer->cancelTimeout();
     auxPending = auxRetrying = false;
-    screen.detach();
+    if (sorUp) {
+        sor.audioEnable(false);
+        sor.audioPresence(nullptr, 0, false);
+    }
     if (dcbUp) {
         dcb.windowOff();
     }
@@ -235,6 +254,7 @@ void SwitchDisplayPort::teardownLink()
         dcb.powerDown();
         dcbUp = false;
     }
+    screen->linkDown();
 }
 
 void SwitchDisplayPort::powerOff()
@@ -264,6 +284,8 @@ void SwitchDisplayPort::unplugged()
     }
     IOLog("SwitchDisplayPort: the sink went away (HPD low)\n");
     teardownLink();
+    screen->detach();
+    wantedMode = -1;
     stage = Stage::Waiting;
 }
 
@@ -272,4 +294,120 @@ void SwitchDisplayPort::irqHpd()
     if (stage == Stage::Running && !auxPending && !auxRetrying) {
         auxNative(SWITCH_DP_AUX_NATIVE_READ, SWITCH_DPCD_SINK_COUNT, nullptr, 6, Next::LinkStatus);
     }
+}
+
+IOReturn SwitchDisplayPort::selectMode(int index, bool enable)
+{
+    if (!enable) {
+        const bool configured = stage == Stage::Running || stage == Stage::Training || stage == Stage::Ready;
+        teardownLink();
+        if (configured)
+            stage = Stage::Ready;
+        return kIOReturnSuccess;
+    }
+    if (sleeping || index < 0 || static_cast<unsigned>(index) >= modes.count ||
+        (stage != Stage::Ready && stage != Stage::Running && stage != Stage::Training))
+        return kIOReturnNotReady;
+    if (wantedMode == index && (stage == Stage::Running || stage == Stage::Training))
+        return kIOReturnSuccess;
+    teardownLink();
+    wantedMode = index;
+    chooseAndTrain();
+    return stage == Stage::Training ? kIOReturnSuccess : kIOReturnUnsupported;
+}
+
+bool SwitchDisplayPort::gpuComplete(void *display, int status)
+{
+    if (display != screen)
+        return false;
+    screen->gpuComplete(status);
+    return true;
+}
+
+extern "C" bool switch_displayport_gpu_complete(void *display, int status)
+{
+    return gService && gService->gpuComplete(display, status);
+}
+
+void SwitchDisplayPort::systemSleep(bool entering)
+{
+    if (entering) {
+        sleeping = true;
+        powerOff();
+        return;
+    }
+    sleeping = false;
+    const unsigned lanes = altLanes;
+    const bool orientation = flipped;
+    altLanes = 0;
+    if (lanes)
+        setAltLanes(lanes, orientation);
+}
+
+namespace {
+void setSleeping(bool entering)
+{
+    if (!gService)
+        return;
+    gService->getWorkLoop()->runAction(
+        [](OSObject *owner, void *entering, void *, void *, void *) -> IOReturn {
+            static_cast<SwitchDisplayPort *>(owner)->systemSleep(entering != nullptr);
+            return kIOReturnSuccess;
+        }, gService, entering ? gService : nullptr);
+}
+}
+
+extern "C" void switch_displayport_suspend(void) { setSleeping(true); }
+extern "C" void switch_displayport_resume(void) { setSleeping(false); }
+
+bool SwitchDisplayPort::audioFormat(uint32_t rate, uint32_t channels, uint32_t bits)
+{
+    return stage == Stage::Running && sor.audioFormat(rate, channels, bits);
+}
+
+void SwitchDisplayPort::audioEnable(bool enable)
+{
+    if (stage == Stage::Running)
+        sor.audioEnable(enable);
+}
+
+void SwitchDisplayPort::audioPresence(const uint8_t *eld, uint32_t bytes, bool present)
+{
+    if (stage == Stage::Running)
+        sor.audioPresence(eld, bytes, present);
+}
+
+extern "C" bool switch_displayport_audio_format(uint32_t rate, uint32_t channels, uint32_t bits)
+{
+    if (!gService)
+        return false;
+    const uint32_t format[] = {rate, channels, bits};
+    return gService->getWorkLoop()->runAction(
+        [](OSObject *owner, void *value, void *, void *, void *) -> IOReturn {
+            const auto *format = static_cast<const uint32_t *>(value);
+            return static_cast<SwitchDisplayPort *>(owner)->audioFormat(format[0], format[1], format[2])
+                       ? kIOReturnSuccess : kIOReturnUnsupported;
+        }, gService, const_cast<uint32_t *>(format)) == kIOReturnSuccess;
+}
+
+extern "C" void switch_displayport_audio_enable(bool enable)
+{
+    if (gService)
+        gService->getWorkLoop()->runAction(
+            [](OSObject *owner, void *enabled, void *, void *, void *) -> IOReturn {
+                static_cast<SwitchDisplayPort *>(owner)->audioEnable(enabled != nullptr);
+                return kIOReturnSuccess;
+            }, gService, enable ? gService : nullptr);
+}
+
+extern "C" void switch_displayport_audio_presence(const uint8_t *eld, uint32_t bytes, bool present)
+{
+    if (gService)
+        gService->getWorkLoop()->runAction(
+            [](OSObject *owner, void *eld, void *bytes, void *present, void *) -> IOReturn {
+                static_cast<SwitchDisplayPort *>(owner)->audioPresence(static_cast<const uint8_t *>(eld),
+                    static_cast<uint32_t>(reinterpret_cast<uintptr_t>(bytes)), present != nullptr);
+                return kIOReturnSuccess;
+            }, gService, const_cast<uint8_t *>(eld), reinterpret_cast<void *>(static_cast<uintptr_t>(bytes)),
+            present ? gService : nullptr);
 }
