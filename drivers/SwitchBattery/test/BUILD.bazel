@@ -52,6 +52,7 @@ host_library(
         "//drivers/SwitchDisplayPort:SwitchPDAltMode.h",
         "//drivers/SwitchDisplayPort:SwitchPDAltModeHook.h",
         "//drivers/SwitchDisplayPort:SwitchPDAltModeSteps.h",
+        "//drivers/SwitchDisplayPort:SwitchDisplayPort.h",
         "//drivers/TegraGPIO:TegraGPIO.h",
         "//drivers/TegraI2C:TegraI2C.h",
     ],

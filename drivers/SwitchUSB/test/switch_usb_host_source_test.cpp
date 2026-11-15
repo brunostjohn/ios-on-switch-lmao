@@ -15,6 +15,7 @@
 #include "bazel/testing/source_text.h"
 
 using switch_ios::test::Between;
+using switch_ios::test::Block;
 using switch_ios::test::Body;
 using switch_ios::test::Configured;
 using switch_ios::test::Count;
@@ -102,9 +103,43 @@ TEST(SwitchUsbHostSource, SwitchPdUsesThePolicy)
     EXPECT_THAT(SourceText("../SwitchPDService.h"), HasSubstr("#include \"SwitchPDPolicy.h\""));
     EXPECT_THAT(source, HasSubstr("switch_pd_decide("));
     EXPECT_THAT(source, HasSubstr("switch_pd_window_end("));
-    const std::string enter = Body(source, "void SwitchPD::enter(");
-    EXPECT_LT(at(enter, "if (!switches)\n        setSwitches(false)"), at(enter, "setRails(rails)"));
-    EXPECT_LT(at(enter, "setRails(rails)"), at(enter, "if (switches)\n        setSwitches(true)"));
+    const auto enter = Block(source, "void SwitchPD::enter(");
+    EXPECT_TRUE(enter.Has("if (!switches || (powered && !rails)) setSwitches(false);"));
+    EXPECT_TRUE(enter.Before("setSwitches(false);", "setRails(rails)"));
+    EXPECT_TRUE(enter.Before("setRails(rails)", "setSwitches(true);"));
+}
+
+TEST(SwitchUsbHostSource, SourcePowerIsReadyBeforeTheReattachWait)
+{
+    const std::string source = SourceText("../SwitchPD.cpp");
+    const auto enter = Block(source, "void SwitchPD::enter(");
+    EXPECT_TRUE(enter.Has("if (rails && !powered) {"));
+    EXPECT_TRUE(
+        enter.Before("switch_battery_set_otg_boost(true, switch_pd_vbus_ours(state.status1))", "setRails(rails)"));
+    EXPECT_TRUE(enter.Before("setSwitches(true);", "window->setTimeoutMS(kReattachMS)"));
+    const auto promote = Block(source, "void SwitchPD::startSourcing(");
+    EXPECT_FALSE(promote.Has("switch_battery_set_otg_boost"));
+    const auto rails = Block(source, "bool SwitchPD::setRails(");
+    EXPECT_TRUE(rails.Before("tegra_gpio_output(kSourceRailGpio, 1)", "IOSleep(kRailRampMS)"));
+    EXPECT_TRUE(rails.Before("IOSleep(kRailRampMS)", "tegra_gpio_output(kVconnGpio, 1)"));
+}
+
+TEST(SwitchUsbHostSource, ProvisionalSourcePowerHasLifecycleCleanup)
+{
+    const std::string source = SourceText("../SwitchPD.cpp");
+    const auto enter = Block(source, "void SwitchPD::enter(");
+    EXPECT_TRUE(enter.Has("const bool powered = switch_pd_rails_on(phase);"));
+    EXPECT_TRUE(enter.Has("if (powered && !rails) (void)switch_battery_set_otg_boost(false, false);"));
+    EXPECT_TRUE(enter.Before("setSwitches(false);", "switch_battery_set_otg_boost(false, false)"));
+    EXPECT_TRUE(enter.Before("switch_battery_set_otg_boost(false, false)", "setRails(rails)"));
+    const auto leave = Block(SourceText("../SwitchPDSettings.cpp"), "void SwitchPD::leave(");
+    EXPECT_TRUE(leave.Has("if (switch_pd_rails_on(phase))"));
+    EXPECT_TRUE(leave.Before("setSwitches(false);", "switch_battery_set_otg_boost(false, false)"));
+    EXPECT_TRUE(leave.Before("switch_battery_set_otg_boost(false, false)", "setRails(false)"));
+    const auto sleep = Block(source, "void SwitchPD::systemSleep(");
+    EXPECT_TRUE(sleep.Has("phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH"));
+    EXPECT_TRUE(sleep.Before("window->cancelTimeout();", "enter(SWITCH_PD_EMPTY,"));
+    EXPECT_TRUE(sleep.Before("enter(SWITCH_PD_EMPTY,", "asleepSinkOnly ="));
 }
 
 TEST(SwitchUsbHostSource, HostRoleUsesThePortHelpers)

@@ -159,11 +159,10 @@ void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
     const bool contractOurs = nego == Nego::Settling || nego == Nego::Done;
     const bool dualRoleData = contractOurs && sourcePdoCount != 0 && charge::pdoType(sourcePdos[0]) == 0 &&
                               (sourcePdos[0] & PDO_FIXED_DUAL_ROLE_DATA) != 0;
-    const bool altSession = state.plugged &&
-                            ((phase == SWITCH_PD_SINK && (status1 & SWITCH_PD_STATUS1_SRC_MODE) == 0u) ||
-                             (phase == SWITCH_PD_SOURCE && state.dataHost));
-    switch_pd_alt_alert(this, loop, atRest, alertBits, status1, altSession,
-                        contractOurs && choice.dock, dualRoleData);
+    const bool altSession =
+        state.plugged && ((phase == SWITCH_PD_SINK && (status1 & SWITCH_PD_STATUS1_SRC_MODE) == 0u) ||
+                          (phase == SWITCH_PD_SOURCE && state.dataHost));
+    switch_pd_alt_alert(this, loop, atRest, alertBits, status1, altSession, contractOurs && choice.dock, dualRoleData);
     notify();
 }
 
@@ -221,13 +220,11 @@ void SwitchPD::apply(const switch_pd_step &step)
         sawDetach = true;
         break;
     case SWITCH_PD_ENTER:
+    case SWITCH_PD_END:
         enter(step.next, step.why);
         break;
     case SWITCH_PD_START:
         startSourcing();
-        break;
-    case SWITCH_PD_END:
-        endSourcing(step.next, step.why);
         break;
     }
 }
@@ -237,12 +234,24 @@ void SwitchPD::apply(const switch_pd_step &step)
 // NOLINTNEXTLINE(misc-no-recursion): HELD has no source rails, so the nested enter() goes no deeper
 void SwitchPD::enter(switch_pd_phase next, const char *why)
 {
+    const bool powered = switch_pd_rails_on(phase);
     phase = next;
     sawDetach = false;
     const bool switches = switch_pd_switches_on(next, allowSource);
     const bool rails = switch_pd_rails_on(next);
-    if (!switches)
+    if (!switches || (powered && !rails))
         setSwitches(false);
+    if (powered && !rails)
+        (void)switch_battery_set_otg_boost(false, false);
+    if (rails && !powered) {
+        const int boost = switch_battery_set_otg_boost(true, switch_pd_vbus_ours(state.status1));
+        if (boost) {
+            enter(boost == SWITCH_BATTERY_BOOST_VBUS_PRESENT ? SWITCH_PD_SINK : SWITCH_PD_HELD,
+                  boost == SWITCH_BATTERY_BOOST_VBUS_PRESENT ? "not sourcing: the charger sees external VBUS"
+                                                             : "not sourcing: the BQ24193 boost failed");
+            return;
+        }
+    }
     const bool railsDone = setRails(rails);
     IOLog("SwitchPD: %s (alert %#x status1 %#x status2 %#x)\n", why, state.alert, state.status1, state.status2);
     if (rails && !railsDone) {
@@ -278,7 +287,7 @@ void SwitchPD::setSwitches(bool on)
 }
 
 // The source rails, bm92t_probe + bm92t_extcon_cable_set_init_state order: over-current protection on, v_vdd5v3,
-// VCONN, the ramp. Never half on: a failure turns both GPIOs off again. True when the rails are as asked.
+// the ramp, VCONN. Never half on: a failure turns both GPIOs off again. True when the rails are as asked.
 bool SwitchPD::setRails(bool on)
 {
     if (on == railsOn)
@@ -289,10 +298,10 @@ bool SwitchPD::setRails(bool on)
         if (!err)
             err = tegra_gpio_output(kSourceRailGpio, 1);
         if (!err)
-            err = tegra_gpio_output(kVconnGpio, 1);
-        if (!err) {
             IOSleep(kRailRampMS);
-        } else {
+        if (!err)
+            err = tegra_gpio_output(kVconnGpio, 1);
+        if (err) {
             (void)tegra_gpio_output(kVconnGpio, 0);
             (void)tegra_gpio_output(kSourceRailGpio, 0);
         }
@@ -308,30 +317,14 @@ bool SwitchPD::setRails(bool on)
     return err == 0;
 }
 
-// Reattach: the partner proved sink-only and is back as our sink; the rails were up before it came, so our switch
-// may already be closed (VSAFE ours). bm92t_event_handler's OTG branch: the boost (vbus-supply) on.
+// VBUS is prepared before the reattach wait, as bm92t_event_handler enables it on the initial OTG event.
 void SwitchPD::startSourcing()
 {
     phase = SWITCH_PD_SOURCE;
     const bool ours = switch_pd_vbus_ours(state.status1);
-    const int boost = switch_battery_set_otg_boost(true, ours);
-    if (boost == SWITCH_BATTERY_BOOST_VBUS_PRESENT) {
-        endSourcing(SWITCH_PD_SINK, "not sourcing: the charger sees VBUS that is not ours (sink until unplugged)");
-    } else if (boost) {
-        endSourcing(SWITCH_PD_HELD, "not sourcing: the BQ24193 boost failed");
-    } else {
-        IOLog("SwitchPD: sink-only partner: sourcing VBUS (v_vdd5v3, VCONN, OCP up before it came back; %s; boost "
-              "on) (alert %#x status1 %#x status2 %#x)\n",
-              ours ? "our switch closed" : "our switch closing", state.alert, state.status1, state.status2);
-    }
-}
-
-// The one way out of Source, for a detach and for every error: the boost off, then the phase's outputs (rails off,
-// switches as `next` has them: the empty-port state, or off for a sink session).
-void SwitchPD::endSourcing(switch_pd_phase next, const char *why)
-{
-    (void)switch_battery_set_otg_boost(false, false);
-    enter(next, why);
+    IOLog("SwitchPD: sink-only partner: sourcing VBUS (v_vdd5v3, VCONN, OCP up before it came back; %s; boost "
+          "on) (alert %#x status1 %#x status2 %#x)\n",
+          ours ? "our switch closed" : "our switch closing", state.alert, state.status1, state.status2);
 }
 
 void SwitchPD::windowFired(OSObject *owner, IOTimerEventSource *)
@@ -350,7 +343,10 @@ void SwitchPD::windowFired(OSObject *owner, IOTimerEventSource *)
     self->state.status1 = status1;
     self->state.status2 = status2;
     self->apply(step);
-    self->handle(0, status1, status2);  // the state as it is now, through the new phase
+    if (self->phase == step.next)
+        self->handle(0, status1, status2);
+    else
+        self->notify();
 }
 
 void SwitchPD::alertFired(OSObject *owner, IOInterruptEventSource *, int)
@@ -396,7 +392,7 @@ void SwitchPD::stopEvents()
     IOLog("SwitchPD: BM92T36 ALERT (PK4) fired %u times in 1 s, turned off (port sink-only until reboot): %s\n",
           alertCount, pin);
     if (phase == SWITCH_PD_SOURCE) {
-        endSourcing(SWITCH_PD_SINK, "not sourcing: no PD events");
+        enter(SWITCH_PD_SINK, "not sourcing: no PD events");
     } else {
         enter(SWITCH_PD_SINK, "sink: no PD events");
     }
@@ -418,7 +414,7 @@ void SwitchPD::setAllowSource(bool allow)
         return;
     allowSource = allow;
     if (!allow && phase == SWITCH_PD_SOURCE) {
-        endSourcing(SWITCH_PD_HELD, "not sourcing: host mode is off");
+        enter(SWITCH_PD_HELD, "not sourcing: host mode is off");
         notify();
     } else if (!allow && (phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH)) {
         window->cancelTimeout();
@@ -436,6 +432,11 @@ void SwitchPD::setAllowSource(bool allow)
 // powered so that its key press can wake the console. After the wake the switches follow the phase again.
 void SwitchPD::systemSleep(bool entering)
 {
+    if (entering && (phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH)) {
+        window->cancelTimeout();
+        enter(SWITCH_PD_EMPTY, "source startup canceled for sleep");
+        notify();
+    }
     if (entering) {
         asleepSinkOnly = phase == SWITCH_PD_EMPTY && switchesOn;
         if (asleepSinkOnly)

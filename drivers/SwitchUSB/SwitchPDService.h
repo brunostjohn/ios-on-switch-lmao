@@ -152,7 +152,6 @@ class SwitchPD : public IOService {
     void setSwitches(bool on);
     bool setRails(bool on);
     void startSourcing();
-    void endSourcing(switch_pd_phase next, const char *why);
     void notify();
     void stopEvents();
     void systemReset(uint32_t settleMS, const char *why) const;

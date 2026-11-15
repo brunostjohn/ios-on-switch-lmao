@@ -307,6 +307,7 @@ host_test(
         "//drivers/ArmGIC:ArmGIC.cpp",
         "//drivers/SwitchUSB:SwitchPD.cpp",
         "//drivers/SwitchUSB:SwitchPDService.h",
+        "//drivers/SwitchUSB:SwitchPDSettings.cpp",
         "//drivers/SwitchUSB:SwitchUSB.cpp",
         "//drivers/SwitchUSB:SwitchUSBPort.cpp",
         "//drivers/SwitchUSB:SwitchUSBPort.h",

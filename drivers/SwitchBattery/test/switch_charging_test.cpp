@@ -27,6 +27,7 @@
 #include "../SwitchBattery.h"
 #include "../SwitchBatteryPack.h"
 #include "../SwitchChargePolicy.h"
+#include "../../SwitchDisplayPort/SwitchDisplayPort.h"
 #include "../../SwitchSuspend/SwitchWakeSources.h"
 #include "../../SwitchUSB/SwitchPD.h"
 #include "../../SwitchUSB/XusbLanes.h"
@@ -57,12 +58,20 @@ extern "C" void switch_wake_event(unsigned source)
     gWakeEvents.push_back(source);
 }  // SwitchWake.h
 
-static unsigned gAltLanesCalls = 0;
+static switch_usb3_lanes gAltLanes = SWITCH_USB3_LANES_FREE;
+static bool gAltLanesTaken = false;
+static bool gDisplayPortConfigured = false;
 
-void switch_usb_set_alt_lanes(enum switch_usb3_lanes, bool)
+void switch_usb_set_alt_lanes(enum switch_usb3_lanes lanes, bool)
 {
-    ++gAltLanesCalls;
+    gAltLanes = lanes;
+    gAltLanesTaken |= lanes == SWITCH_USB3_LANES_TAKEN;
 }  // SwitchUSB.cpp (XusbLanes.h)
+
+extern "C" void switch_displayport_alt_mode(unsigned lanes, bool)
+{
+    gDisplayPortConfigured |= lanes != 0;
+}
 
 // Every check is a GoogleTest failure at its call site; the count lets a failed scenario dump the logs it ran on.
 static unsigned gFailures = 0;
@@ -561,6 +570,8 @@ extern "C" int tegra_gpio_config(unsigned gpio)  // SwitchPD's report: an output
 
 extern "C" int tegra_gpio_output(unsigned gpio, int value)
 {
+    if (value && (gpio == TEGRA_GPIO(X, 3) || gpio == TEGRA_GPIO(K, 5)))
+        check(((gCharger.reg[1] >> 4) & 3u) == 2u, "source rail enabled before BQ24193 boost");
     gOutputs[gpio] = value;
     return 0;
 }
@@ -1179,10 +1190,64 @@ static void dockAltMode()
     check(logHas("SwitchPD: contract 15 V 1.2 A (dock: 5 V 0.5 A, *15 V 2.6 A)") && iinlim() == 1200,
           "dock contract published");
     check(logHas("the partner did not answer within 1.5 s"), "the engine gave up on the silent dock");
-    check(gAltLanesCalls == 0, "no DisplayPort: the SuperSpeed pair stayed free");
+    check(gAltLanes == SWITCH_USB3_LANES_FREE && !gAltLanesTaken && !gDisplayPortConfigured,
+          "silent dock: SuperSpeed pair released without a DisplayPort takeover");
     advance(3600 * 1000);
     check(iinlim() == 1200 && ((gCharger.reg[1] >> 4) & 3) == 1, "still charging at 1200 mA an hour later");
     check(gPd.vdmsSent == 1, "no retries after the engine gave up");
+}
+
+static void oledDockSourceStartup()
+{
+    check(switch_battery_start() == 0, "switch_battery_start");
+    advance(10);
+    check(switch_pd_allow_source(true) == 0, "host mode available");
+    SwitchPDState state{};
+    check(switch_pd_add_listener(
+              [](void *context, const SwitchPDState *current) { *static_cast<SwitchPDState *>(context) = *current; },
+              &state) == 0,
+          "power-role listener");
+    const auto classifyDock = [&state] {
+        gPd.status1 = 0x1280;
+        gPd.status2 = 0x2000;
+        gPd.alert |= 0x8;
+        advance(10);
+        check(!state.settled && chgConfig() != 2 && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] &&
+                  (gPd.config1 >> 14) == 3,
+              "OLED attach: classify with boost, rails and source switches off");
+        gPd.unplug();
+        advance(100);
+    };
+    classifyDock();
+    advance(1000);
+    check(!state.settled && state.role != SWITCH_PD_ROLE_SOURCE && chgConfig() == 2 &&
+              gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
+          "BQ24193 boost and rails power the OLED reattach wait before a source role is published");
+    advance(1100);
+    check(state.settled && state.role == SWITCH_PD_ROLE_NONE && chgConfig() == 1 &&
+              !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)],
+          "reattach timeout releases boost and both rails");
+
+    classifyDock();
+    advance(1000);
+    check(chgConfig() == 2, "second reattach powers VBUS");
+    gCharger.plug(500, 2);
+    gPd.sink({PdChip::fixed(5000, 1500)}, 0, 0x8 | 0x1000 | 0x4000);
+    advance(10);
+    check(state.settled && state.role == SWITCH_PD_ROLE_SINK && chgConfig() == 1 &&
+              !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
+          "external source during reattach releases boost, rails and source switches");
+
+    gCharger.unplug();
+    gPd.unplug();
+    advance(500);
+    classifyDock();
+    gCharger.plug(500, 2);
+    advance(1000);
+    check(logHas("not sourcing: the charger sees external VBUS") && state.settled &&
+              state.role == SWITCH_PD_ROLE_SINK && chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] &&
+              !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
+          "external VBUS at the classify deadline keeps the sink refusal latched");
 }
 
 static void macPort()
@@ -1622,6 +1687,11 @@ TEST(SwitchCharging, MacPort)
 TEST(SwitchCharging, DockAltMode)
 {
     run(dockAltMode);
+}
+
+TEST(SwitchCharging, OledDockSourceStartup)
+{
+    run(oledDockSourceStartup);
 }
 
 TEST(SwitchCharging, ResetAtStart)

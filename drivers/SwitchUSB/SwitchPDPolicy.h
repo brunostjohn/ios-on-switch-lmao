@@ -145,6 +145,8 @@ static inline struct switch_pd_step switch_pd_decide(enum switch_pd_phase phase,
         }
         return none;
     case SWITCH_PD_REATTACH:
+        if ((alert & SWITCH_PD_ALERT_SRC_FAULT) || (status1 & SWITCH_PD_STATUS1_FAULT_MASK))
+            return switch_pd_step_make(SWITCH_PD_END, SWITCH_PD_HELD, true, "not sourcing: source fault");
         if (!plugged || (partner_is_sink && !otg_sink))
             return none;
         if (otg_sink && (!vbus || switch_pd_vbus_ours(status1)))
@@ -157,10 +159,6 @@ static inline struct switch_pd_step switch_pd_decide(enum switch_pd_phase phase,
         if (!partner_is_sink) {
             return switch_pd_step_make(SWITCH_PD_END, SWITCH_PD_SINK, false,
                                        "not sourcing: the partner took the source role (sink until unplugged)");
-        }
-        if (alert & SWITCH_PD_ALERT_CONTRACT) {
-            return switch_pd_step_make(SWITCH_PD_END, SWITCH_PD_HELD, false,
-                                       "not sourcing: the partner made a USB-PD contract (no plain OTG device)");
         }
         if ((alert & SWITCH_PD_ALERT_SRC_FAULT) || (status1 & SWITCH_PD_STATUS1_FAULT_MASK))
             return switch_pd_step_make(SWITCH_PD_END, SWITCH_PD_HELD, false, "not sourcing: source fault");
