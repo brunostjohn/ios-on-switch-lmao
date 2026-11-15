@@ -271,31 +271,6 @@ TEST(UsbDmaCache, AnUncachedShortBufferIsNeverBounced)
     EXPECT_TRUE(usbDmaPlan(true, true, usbDmaWholeLines(0x8455'c000, 13, kLine)).bounce);
 }
 
-// The kept count: a held cacheable buffer the controller writes, or a held bounce, stays counted; the same buffer
-// mapped per transfer, write-combined memory and a cacheable buffer the controller only reads do not.
-TEST(UsbDmaCache, TheKeptCountFindsHeldMappingsOnly)
-{
-    const UsbDmaPlan cachedIn = usbDmaPlan(true, true, true);
-    UsbDmaKept perTransfer;
-    for (int transfer = 0; transfer < 3; ++transfer) {
-        perTransfer.mapped(usbDmaNeedsCompletion(cachedIn, false));
-        perTransfer.unmapped(usbDmaNeedsCompletion(cachedIn, false));
-    }
-    EXPECT_EQ(perTransfer.kept(), 0u);
-
-    UsbDmaKept held;
-    held.mapped(usbDmaNeedsCompletion(cachedIn, false));
-    EXPECT_EQ(held.kept(), 1u);
-    held.mapped(usbDmaNeedsCompletion(usbDmaPlan(true, true, false), true));
-    EXPECT_EQ(held.kept(), 2u);
-
-    UsbDmaKept correct;
-    correct.mapped(usbDmaNeedsCompletion(usbDmaPlan(false, true, true), false));
-    correct.mapped(usbDmaNeedsCompletion(usbDmaPlan(false, true, false), false));
-    correct.mapped(usbDmaNeedsCompletion(usbDmaPlan(true, false, false), false));
-    EXPECT_EQ(correct.kept(), 0u);
-}
-
 // With the client buffer options set, AppleUSBXHCIRequest::prepare wraps a caller's descriptor that is not a family
 // buffer in an IOSubMemoryDescriptor whose flags carry the options' 0x400 (direction | 0x400 | kIOMemoryThreadSafe).
 // Over cacheable pages that wrapper is still maintained at map and at unmap; a write-combined family buffer is not.
@@ -308,7 +283,6 @@ TEST(UsbDmaCache, ASubRangeOverCacheableMemoryIsMaintained)
     const UsbDmaPlan plan = usbDmaPlan(usbDmaCacheable(kIn | kOptionWriteCombine | kThreadSafe), true, true);
     EXPECT_EQ(plan.atMap, UsbDmaCacheOp::CleanAndInvalidate);
     EXPECT_EQ(plan.atUnmap, UsbDmaCacheOp::CleanAndInvalidate);
-    EXPECT_TRUE(usbDmaNeedsCompletion(plan, false));
 
     constexpr uint32_t kWriteCombinedBuffer = 4u << kUsbDmaBufferCacheShift;
     EXPECT_FALSE(usbDmaCacheable(kIn | kWriteCombinedBuffer));

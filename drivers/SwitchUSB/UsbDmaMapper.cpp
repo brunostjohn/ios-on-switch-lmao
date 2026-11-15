@@ -148,23 +148,6 @@ namespace {
 // UsbSmmuMapper.h: buffers at IOVAs; what it cannot take is bounced (the pool is at its own IOVA). Below the IONew and
 // IODelete sites above, whose kalloc_type views XNU names by __LINE__.
 bool gSmmu;
-
-// Mappings that are right only when completed per transfer and are still mapped, and the last of them for the line
-// that names one.
-UsbDmaKept gKept;
-const char *gKeptClass;
-uint64_t gKeptLength;
-const char *gKeptPath;
-
-void kept(const IOMemoryDescriptor *memory, uint64_t length, const char *path, bool needsCompletion)
-{
-    if (!needsCompletion)
-        return;
-    gKept.mapped(true);
-    __atomic_store_n(&gKeptClass, memory->getMetaClass()->getClassName(), __ATOMIC_RELAXED);
-    __atomic_store_n(&gKeptLength, length, __ATOMIC_RELAXED);
-    __atomic_store_n(&gKeptPath, path, __ATOMIC_RELAXED);
-}
 }  // namespace
 
 #if XNU_10063_141_1
@@ -253,13 +236,11 @@ IOReturn SwitchDMAMapper::iovmMapMemory(IOMemoryDescriptor *memory, uint64_t off
                !switch_usb_smmu_map(memory, offset, length, writable, alignment, &translated)) {
         const IOReturn bounced = bounce(memory, offset, length, writable, alignment, mapAddress, mapLength);
         if (bounced == kIOReturnSuccess) {
-            kept(memory, length, "bounced", true);
             usb_dma_probe_map(memory, offset, length, mapOptions, physical, *mapAddress, "bounced");
         }
         return bounced;
     }
     const char *path = translated == direct ? "own address" : "window";
-    kept(memory, length, path, usbDmaNeedsCompletion(plan, false));
     usb_dma_probe_map(memory, offset, length, mapOptions, physical, translated, path);
     maintain(memory, offset, length, plan.atMap);
     *mapAddress = translated;
@@ -310,14 +291,12 @@ IOReturn SwitchDMAMapper::iovmUnmapMemory(IOMemoryDescriptor *memory, IODMAComma
         IOByteCount segment = 0;
         const uint64_t physical = memory->getPhysicalSegment(translatedOffset, &segment, kIOMemoryMapperNone);
         const UsbDmaPlan plan = planFor(memory, physical, translatedLength);
-        gKept.unmapped(usbDmaNeedsCompletion(plan, false));
         maintain(memory, translatedOffset, translatedLength, plan.atUnmap);
         usb_dma_probe_unmap(memory, translatedOffset, translatedLength, mapAddress, physical, "window", nullptr, entry);
         return kIOReturnSuccess;
     }
     if (mapLength && mapAddress - poolPA >= kPoolBytes && directAddress(mapAddress, mapLength) == mapAddress) {
         const UsbDmaPlan plan = planFor(memory, mapAddress, mapLength);
-        gKept.unmapped(usbDmaNeedsCompletion(plan, false));
         if (plan.atUnmap == UsbDmaCacheOp::CleanAndInvalidate && switch_dma_pa_managed(mapAddress) &&
             switch_dma_pa_managed(mapAddress + mapLength - 1)) {
             switch_dcache_phys_lines(SWITCH_DCACHE_CLEAN_INVALIDATE, mapAddress, mapLength);
@@ -338,7 +317,6 @@ IOReturn SwitchDMAMapper::iovmUnmapMemory(IOMemoryDescriptor *memory, IODMAComma
     const Mapping done = *m;
     m->used = false;
     IOLockUnlock(lock);
-    gKept.unmapped(true);
 
     __asm__ volatile("dsb sy" ::: "memory");
     usb_dma_probe_unmap(memory, done.offset, done.length, done.address, 0, "bounced",
@@ -403,39 +381,17 @@ LIBKERN_RETURNS_NOT_RETAINED IOMapper *switch_usb_dma_mapper(uint64_t reach)
     return mapper;
 }
 
-namespace {
-// A session ended and its kept count is still to be checked.
-bool gCheckDue;
-
-void checkKept(const char *when)
-{
-    if (!__atomic_exchange_n(&gCheckDue, false, __ATOMIC_ACQ_REL))
-        return;
-    const uint32_t still = gKept.kept();
-    if (!still)
-        return;
-    const char *name = __atomic_load_n(&gKeptClass, __ATOMIC_RELAXED);
-    const char *path = __atomic_load_n(&gKeptPath, __ATOMIC_RELAXED);
-    IOLog("SwitchUSB: a cacheable buffer the controller writes was kept mapped after its host session ended (%u such "
-          "at %s; the last: %s, %llu bytes, %s): its data cannot be kept coherent\n",
-          still, when, name ? name : "?", __atomic_load_n(&gKeptLength, __ATOMIC_RELAXED), path ? path : "?");
-}
-}  // namespace
-
 void switch_usb_dma_session_start()
 {
     usb_dma_probe_summary("host session start");
-    checkKept("the next host session's start");
 }
 
 void switch_usb_dma_session_end()
 {
     usb_dma_probe_summary("device role");
-    __atomic_store_n(&gCheckDue, true, __ATOMIC_RELEASE);
 }
 
 void switch_usb_dma_controller_off()
 {
     usb_dma_probe_summary("controller off");
-    checkKept("controller power off");
 }

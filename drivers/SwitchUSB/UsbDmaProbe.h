@@ -5,7 +5,7 @@
 // Every map and unmap is counted by path (own address, window, bounced) and by descriptor class, with the cache modes
 // each class arrived in, and every mapping is remembered until its unmap. A summary prints those counts, the mappings
 // still held, the live instances of the USB host classes, and how many held mappings must be completed per transfer
-// (UsbDmaCache.h usbDmaNeedsCompletion) whenever the port leaves or takes the host role, when the controller powers
+// whenever the port leaves or takes the host role, when the controller powers
 // off, once the first lines are used up and every so often after.
 //
 // The first device-writable mappings also get a line at prepare (path, class, physical address, line offset, length

@@ -54,7 +54,7 @@ uint32_t cacheMode(IOMemoryDescriptor *memory)
     return (memory->getFlags() & kIOMemoryBufferCacheMask) >> kIOMemoryBufferCacheShift;
 }
 
-// Right only if completed per transfer (UsbDmaCache.h usbDmaNeedsCompletion), so wrong to be found held.
+// A mapping that requires per-transfer completion.
 bool wrongToHold(const Slot &slot)
 {
     return slot.path == kBounced || (slot.writable && slot.cacheable);

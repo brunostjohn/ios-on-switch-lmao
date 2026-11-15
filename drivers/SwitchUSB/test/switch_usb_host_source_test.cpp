@@ -4,7 +4,7 @@
 //     distributor, IPFS programmed as Linux's tegra_xusb_config, no timer and no soft path;
 //   * the kernel files use the tested headers, in the order the model assumes (SwitchPD's enter, the pad's role before
 //     the controller's first start);
-//   * the family's transfer buffers write-combined at each kind's offset, iOS 17's mapper answer, the kept count.
+//   * each kind's transfer-buffer cache policy and iOS 17's mapper answer.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -468,23 +468,6 @@ TEST(SwitchUsbHostSource, ProtectionGranularityOnIos17Only)
     EXPECT_LT(at(answer, "isEqualTo(\"getProtectionGranularity\")"),
               at(answer, "*static_cast<uint32_t *>(param1) = 1;"));
     EXPECT_THAT(answer, HasSubstr("return IOMapper::callPlatformFunction(functionName, waitForFunction, param1"));
-}
-
-// The kept count sees every map and unmap path, and a session start reads it before the new session maps anything.
-TEST(SwitchUsbHostSource, KeptMappingsAreCountedAndReported)
-{
-    const std::string mapper = SourceText("../UsbDmaMapper.cpp");
-    const std::string map = Body(mapper, "IOReturn SwitchDMAMapper::iovmMapMemory(");
-    EXPECT_THAT(map, HasSubstr("kept(memory, length, \"bounced\", true);"));
-    EXPECT_THAT(map, HasSubstr("kept(memory, length, path, usbDmaNeedsCompletion(plan, false));"));
-    const std::string unmap = Body(mapper, "IOReturn SwitchDMAMapper::iovmUnmapMemory(");
-    EXPECT_EQ(Count(unmap, "gKept.unmapped("), 3u);
-    const std::string apply = Body(SourceText("../SwitchUSB.cpp"), "void applyRole(");
-    EXPECT_LT(at(apply, "switch_usb_dma_session_start();"), at(apply, "switchxudc_set_host_owns_port(true);"));
-    EXPECT_LT(at(apply, "IOLog(\"SwitchUSB: device role\\n\");"), at(apply, "switch_usb_dma_session_end();"));
-    const std::string did = Body(SourceText("../SwitchXHCIEvents.cpp"), "IOReturn SwitchXHCI::powerStateDidChangeTo(");
-    EXPECT_THAT(did,
-                HasSubstr("if (whatDevice == this && stateNumber == 0)\n        switch_usb_dma_controller_off();"));
 }
 
 // Nothing reads a mapping's data before its unmap's maintenance: the probe's complete lines come after it, and the

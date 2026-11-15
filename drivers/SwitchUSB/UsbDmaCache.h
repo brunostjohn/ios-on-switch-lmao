@@ -18,7 +18,6 @@
 // The command must complete after each transfer. 24B119's declared IOUSBHostFamily site prevents a mapped family
 // buffer from keeping its command prepared, so the stock request-pool path maps and unmaps every transfer. 21H461's
 // plain client descriptors already do; its persistent internal bounces keep the controller's write-combined mode.
-// UsbDmaKept counts the mappings that need that and are still mapped, so a held one says so instead of going stale.
 #pragma once
 #include <stdint.h>
 
@@ -90,35 +89,3 @@ constexpr UsbDmaPlan usbDmaPlan(bool cacheable, bool deviceMayWrite, bool wholeL
         return {true, UsbDmaCacheOp::None, UsbDmaCacheOp::None};
     return {false, UsbDmaCacheOp::CleanAndInvalidate, UsbDmaCacheOp::CleanAndInvalidate};
 }
-
-// The mapping is right only if its command is completed after each transfer: a bounce is copied in at map and out at
-// unmap, and a cacheable buffer the controller writes is maintained at map and unmap only. (A cacheable buffer the
-// controller only reads is too, but a CPU write through IOMemoryDescriptor::writeBytes flushes its own lines.)
-constexpr bool usbDmaNeedsCompletion(const UsbDmaPlan &plan, bool bounced)
-{
-    return bounced || plan.atUnmap != UsbDmaCacheOp::None;
-}
-
-// The mappings usbDmaNeedsCompletion says must be completed per transfer and are still mapped. Any thread.
-class UsbDmaKept {
-public:
-    void mapped(bool needsCompletion)
-    {
-        if (needsCompletion)
-            __atomic_add_fetch(&count_, 1, __ATOMIC_RELAXED);
-    }
-
-    void unmapped(bool needsCompletion)
-    {
-        if (needsCompletion)
-            __atomic_sub_fetch(&count_, 1, __ATOMIC_RELAXED);
-    }
-
-    uint32_t kept() const
-    {
-        return __atomic_load_n(&count_, __ATOMIC_RELAXED);
-    }
-
-private:
-    uint32_t count_ = 0;
-};
