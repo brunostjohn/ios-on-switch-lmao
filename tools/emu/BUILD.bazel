@@ -32,9 +32,11 @@ py_library(
     name = "emu_lib",
     srcs = [
         "cache.py",
+        "cachecheck.py",
         "gpucheck.py",
         "gpulog.py",
         "hekate.py",
+        "hidcheck.py",
         "machine.py",
         "monitor.py",
         "msgbuf.py",
@@ -125,6 +127,18 @@ py_test(
 )
 
 py_test(
+    name = "cachecheck_test",
+    srcs = ["cachecheck_test.py"],
+    deps = [":emu_lib"],
+)
+
+py_test(
+    name = "hidcheck_test",
+    srcs = ["hidcheck_test.py"],
+    deps = [":emu_lib"],
+)
+
+py_test(
     name = "usbcheck_test",
     srcs = ["usbcheck_test.py"],
     deps = [":emu_lib"],
@@ -142,6 +156,12 @@ py_test(
 py_test(
     name = "msgbuf_test",
     srcs = ["msgbuf_test.py"],
+    deps = [":emu_lib"],
+)
+
+py_test(
+    name = "report_test",
+    srcs = ["report_test.py"],
     deps = [":emu_lib"],
 )
 

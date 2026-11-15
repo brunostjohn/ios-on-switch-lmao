@@ -19,6 +19,7 @@ class Inputs:
     kernel: Path | None = None
     icount: bool = True
     usb: tuple[str, ...] = ()  # usbdev.DEVICES on the USB-C port
+    cache_log: bool = False  # cachecheck.py's log of cache maintenance and xHCI DMA
 
 
 def _load(path: str, address: int) -> list[str]:
@@ -74,4 +75,6 @@ def command(run: Path, inputs: Inputs) -> list[str]:
         args += ['-icount', 'shift=0']
     if inputs.sd:
         args += ['-drive', f'if=sd,index=0,format=vmdk,file={inputs.sd},snapshot=on']
+    if inputs.cache_log:
+        args += ['-global', f'driver=tegra.xusb,property=cache-log,value={run / "cache.bin"}']
     return args + usbdev.qemu_args(run, list(inputs.usb))

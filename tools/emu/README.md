@@ -86,6 +86,20 @@ not start or a transport the USB-C port refused, a device Apple could not create
 lands in `usbN-<name>.pcap`; `check` prints the control requests it saw, the data that moved and every non-zero
 interrupter target Apple wrote (traced into `qemu-guest.log`).
 
+`--until typing` boots the kind's install image to SpringBoard, then plugs a keyboard into the port over QMP
+(`device_add usb-kbd`, the BM92T36's `partner` to sink), waits for the kind's HID path, types `h` and `i` with
+`send-key`, and exits 6 unless the keyboard's interrupt IN reports carry both keys in order. iOS 17 types through the
+kernel driver (IOUSBHostHIDDevice opened by IOHIDEventDriver), iOS 27 through the HID dext (driverkitd launches
+AppleUserHIDDrivers). The reports are the device's side of the exchange. iOS 17 reaches SpringBoard in about 6
+minutes of wall time. QMP's `input-send-event` with `device=` aborts this QEMU (its console lookup reads a property a
+text console lacks); `send-key` reaches the hot-plugged keyboard, the machine's only keyboard handler.
+
+`--cache-log` (patch 0056) writes `cache.bin`: every data-cache maintenance instruction with the line it resolved to
+through the guest's translation, every range the xHCI read or wrote, and the CPU's next mapping of each such page, in
+TCG's order. `check` then judges it with `cachecheck.py`: a line the controller wrote must be invalidated before the CPU
+next touches it through a cacheable mapping, and one it reads must be cleaned after the CPU's last cacheable touch. A
+kernel-only boot logs about 250 MB.
+
 A run without an image waits about 60 guest seconds for root before it panics. That is enough for enumeration and the
 kernel's class drivers: a stick reaches IOMedia, and on iOS 17 a keyboard reaches IOHIDEventDriver. iOS 27 defers
 HID's driver until driverkitd checks in (IOMatchDefer), so without userspace its keyboard stops at "matching deferred

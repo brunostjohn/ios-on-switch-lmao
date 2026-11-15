@@ -140,6 +140,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--qemu', type=Path, help='this qemu-system-aarch64 instead of the cached build')
     parser.add_argument('--mttcg', action='store_true', help='one host thread per core, guest time from the clock')
     parser.add_argument(
+        '--cache-log', action='store_true', help='log cache maintenance and xHCI DMA for cachecheck.py (cache.bin)'
+    )
+    parser.add_argument(
         '--usb',
         action='append',
         default=[],
@@ -168,6 +171,7 @@ def prepare(args: argparse.Namespace) -> tuple[Path, machine.Inputs]:
         kernel=kernel,
         icount=not args.mttcg,
         usb=tuple(args.usb),
+        cache_log=args.cache_log,
     )
     return run, inputs
 
