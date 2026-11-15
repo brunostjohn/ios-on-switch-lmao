@@ -22,6 +22,25 @@
 #pragma once
 #include <stdint.h>
 
+// Memory a device shares with the CPU without its caches (write-combined, Normal non-cacheable) needs no maintenance,
+// only order: a producer's stores before the store that hands an entry over (publish), a consumer's loads after the
+// load that shows an entry written (consume). A register write that has the device read such memory is ordered by
+// switch_mmio_write32_publish (kits/SwitchMMIO) or a publish before it.
+#ifndef SWITCH_DMA_ORDER
+#define SWITCH_DMA_ORDER(kind) __asm__ volatile("dmb " kind::: "memory")
+#endif
+
+static inline void switch_dma_publish(void)  // NOLINT(modernize-redundant-void-arg): a C header
+{
+    SWITCH_DMA_ORDER("oshst");
+}
+
+static inline void switch_dma_consume(void)  // NOLINT(modernize-redundant-void-arg): a C header
+{
+    SWITCH_DMA_ORDER("oshld");
+}
+
+
 enum class UsbDmaCacheOp {
     None,
     Clean,               // write dirty lines back to memory, keep them

@@ -7,16 +7,21 @@
 
 #include <IOKit/IOLib.h>
 #include <kern/thread_call.h>
+#include <libkern/OSKextLib.h>
 
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "SwitchDisplayPortService.h"
 
 OSDefineMetaClassAndStructors(SwitchDisplayPort, IOService);
 
+extern "C" OSReturn switch_kernel_classes(void (*initialize)());
+extern "C" void switch_external_screen_static_init(void) __asm__("__GLOBAL__sub_I_SwitchExternalScreen.cpp");
+
 
 namespace {
 constexpr uint32_t kAuxLostMs = 50;  // DPAUX1 times out a silent sink itself within a millisecond
 SwitchDisplayPort *gService;
+bool gScreenClassRegistered;
 thread_call_t gApply;
 uint32_t gLanes, gFlipped;
 
@@ -63,6 +68,13 @@ extern "C" void switch_displayport_alt_mode(unsigned lanes, bool flipped)
 
 bool SwitchDisplayPort::begin()
 {
+    if (!gScreenClassRegistered) {
+        if (OSKextLoadKextWithIdentifier("com.apple.iokit.IOMobileGraphicsFamily") != KERN_SUCCESS)
+            return false;
+        if (switch_kernel_classes(switch_external_screen_static_init) != kOSReturnSuccess)
+            return false;
+        gScreenClassRegistered = true;
+    }
     loop = IOWorkLoop::workLoop();
     IOService *auxNub = switch_interrupt_nub(TEGRA_DPAUX1_INTID, false);
     IOService *dcNub = switch_interrupt_nub(TEGRA_DISPLAY_B_INTID, false);

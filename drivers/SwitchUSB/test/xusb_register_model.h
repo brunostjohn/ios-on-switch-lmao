@@ -23,6 +23,7 @@ struct XusbEvent {
 struct XusbModel {
     std::map<uintptr_t, uint32_t> registers;
     std::map<uintptr_t, unsigned> reads;  // per address: a status bit read in a loop shows here
+    bool realLaneUp = false;
     bool pllsLock = true;                 // false: PLLU, UTMIPLL and PLLRE never report lock
     std::vector<XusbEvent> log;
     // Runs after the model's own reaction to a write (a test's extra hardware behaviour).

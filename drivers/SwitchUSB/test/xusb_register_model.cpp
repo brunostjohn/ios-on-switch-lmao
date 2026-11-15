@@ -43,6 +43,7 @@ void xusbModelReset()
 {
     gModel.registers.clear();
     gModel.reads.clear();
+    gModel.realLaneUp = false;
     gModel.pllsLock = true;
     gModel.log.clear();
     gModel.afterWrite = nullptr;
@@ -66,6 +67,11 @@ long xusbFirstWrite(uintptr_t address, uint32_t bits)
             return static_cast<long>(i);
     }
     return -1;
+}
+
+extern "C" bool switch_usb_ss_up(void)
+{
+    return gModel.realLaneUp;
 }
 
 extern "C" uint32_t switch_mmio_model_read32(uintptr_t address)

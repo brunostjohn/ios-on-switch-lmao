@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // Tegra X1 XUSB device controller hardware layer; see XudcHardware.h.
 #include "XudcHardware.h"
+#include "UsbDmaCache.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
 #include "../TegraSMMU/TegraSMMU.h"

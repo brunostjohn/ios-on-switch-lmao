@@ -11,15 +11,6 @@
 #include <thread>
 
 namespace {
-bool realLaneUp;
-}
-
-extern "C" bool switch_usb_ss_up(void)
-{
-    return realLaneUp;
-}
-
-namespace {
 constexpr uintptr_t kPadctl = 0x7009F000;
 constexpr uintptr_t kSsPortMap = kPadctl + 0x014, kElpg0 = kPadctl + 0x020, kElpg1 = kPadctl + 0x024;
 // Every SS port clamped and its VCORE down, the AUX mux clamped (bits 29-31), SS port 0 unmapped (7), SS port 3 mapped.
@@ -84,11 +75,10 @@ TEST(XusbPadctl, ModifyIsOneReadModifyWrite)
 TEST(XusbPadctl, FakePortLeavesTheLiveSuperSpeedLaneUntouched)
 {
     xusbModelReset();
-    realLaneUp = true;
+    xusbModel().realLaneUp = true;
     switch_usb_padctl_fake_port_up(padctl());
     switch_usb_padctl_fake_port_down(padctl());
     EXPECT_TRUE(xusbModel().log.empty());
-    realLaneUp = false;
 }
 
 TEST(XusbPadctl, TheLockSerialisesItsHolders)
