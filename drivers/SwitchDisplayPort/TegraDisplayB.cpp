@@ -128,7 +128,7 @@ bool TegraDisplayB::powerUp(char *why, size_t size)
     if (base == nullptr) {
         base = switch_mmio_map(kDisplayBPA, 0x40000);
     }
-    if (!switch_pmc_power_up(kPartitionDisb, kClockDisp2, kClockDisp2)) {
+    if (!switch_pmc_power_up(kPartitionDisb, kClockDisp2, kClockDisp2, nullptr)) {
         snprintf(why, size, "the DISB power partition did not come up");
         return false;
     }

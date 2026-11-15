@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from tools.emu import machine, qemu, report, sdcard
+from tools.emu import machine, qemu, report, sdcard, usbdev
 from tools.emu.monitor import Monitor, socket_path
 from tools.install import stages
 
@@ -139,6 +139,13 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--bazel-flag', action='append', default=[], help='a flag for the //:boot build')
     parser.add_argument('--qemu', type=Path, help='this qemu-system-aarch64 instead of the cached build')
     parser.add_argument('--mttcg', action='store_true', help='one host thread per core, guest time from the clock')
+    parser.add_argument(
+        '--usb',
+        action='append',
+        default=[],
+        choices=sorted(usbdev.DEVICES),
+        help='a device on the USB-C port; a second one needs --usb hub first',
+    )
 
 
 def prepare(args: argparse.Namespace) -> tuple[Path, machine.Inputs]:
@@ -160,6 +167,7 @@ def prepare(args: argparse.Namespace) -> tuple[Path, machine.Inputs]:
         qmp=socket_path(),
         kernel=kernel,
         icount=not args.mttcg,
+        usb=tuple(args.usb),
     )
     return run, inputs
 

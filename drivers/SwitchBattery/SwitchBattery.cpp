@@ -6,7 +6,7 @@
 // slow re-read that bounds the staleness of what has no interrupt (voltage, current) and carries the stats line. The
 // battery temperature has one: the gauge's temperature window, a degree either way of the last reading for
 // thermalmonitord's battery sensors (switch_battery_temperature), narrowed to the charge zone's edges.
-// There is no polled mode: alerts that cannot be attached, keep firing, or never reach the CPU panic.
+// There is no polled mode: alerts that cannot be attached or keep firing panic.
 //
 // powerd (iOS 17) matches IOServiceMatching("IOPMPowerSource") with a first-match
 // notification, then re-reads all properties whenever the source sends
@@ -1058,7 +1058,7 @@ void SwitchBattery::applyInput(Reading &r, const PdSnapshot &pd)
         reg00 = next;
         if (step >= want)
             break;
-        IODelay(1000);  // BQ2419x_CHARGING_CURRENT_STEP_DELAY_US
+        IOSleep(1);  // BQ2419x_CHARGING_CURRENT_STEP_DELAY_US (1000 us); the battery's work loop may sleep
         ++step;
     }
     r.charger[bq::InputSource] = reg00;
@@ -1264,10 +1264,6 @@ void SwitchBattery::timerFired(OSObject *owner, IOTimerEventSource *sender)
     if (!self)
         return;
     if (self->published) {
-        // An alert pending at the GPIO controller that never reached us panics here (TegraGPIO.h).
-        for (const Alert &alert : kAlerts)
-            tegra_gpio_check_delivery(alert.gpio, "SwitchBattery");
-        switch_pd_check_delivery("SwitchBattery");
         ++self->refreshes;
         self->refresh();
     } else if (self->identify() && self->refresh()) {  // the first reading also arms the gauge window

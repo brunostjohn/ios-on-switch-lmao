@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // The BM92T36's alternate-mode sequence, in plain C for the host tests: DR swap to DFP, Discover Identity, the Nintendo
 // dock's own mode, DisplayPort discovery and Configure, and the dock's LED and USB hub. SwitchPDAltMode.cpp performs
-// what each step returns on SwitchPD's work loop.
+// what each step returns on SwitchPD's work loop. As UFP to a dual-role source other than the dock, the source's
+// identity decides whether the data roles are swapped at all.
 //
 // Order, messages and reply checks: CTCaer switch-l4t-kernel-4.9 drivers/misc/bm92txx.c (Copyright (c) 2015-2017,
 // NVIDIA CORPORATION; 2020-2022 CTCaer), bm92t_event_handler from PS_RDY_SENT on and bm92t_handle_dp_config_and_hpd.
@@ -23,6 +24,8 @@ extern "C" {
 #define SWITCH_PD_ALT_ALERT_VDM_RECEIVED (1u << 11)
 #define SWITCH_PD_ALT_ALERT_CONTRACT     (1u << 12)
 #define SWITCH_PD_ALT_STATUS1_LASTCMD    (7u << 4)
+#define SWITCH_PD_ALT_LASTCMD_INVALID    4u
+#define SWITCH_PD_ALT_LASTCMD_REJECTED   6u
 #define SWITCH_PD_ALT_STATUS1_INSERT     (1u << 7)
 #define SWITCH_PD_ALT_STATUS1_DR_SHIFT   8u
 #define SWITCH_PD_ALT_STATUS1_CSIDE      (1u << 11)
@@ -50,7 +53,8 @@ extern "C" {
 
 enum switch_pd_alt_step {
     SWITCH_PD_ALT_IDLE,
-    SWITCH_PD_ALT_STALE_EXIT,  // an earlier boot left DisplayPort configured
+    SWITCH_PD_ALT_STALE_EXIT,       // an earlier boot left DisplayPort configured
+    SWITCH_PD_ALT_SOURCE_IDENTITY,  // Discover Identity as UFP: may this source be swapped to UFP?
     SWITCH_PD_ALT_DR_SWAP,
     SWITCH_PD_ALT_DISCOVER_ID,
     SWITCH_PD_ALT_DISCOVER_SVID,
@@ -91,9 +95,11 @@ struct switch_pd_alt_out {
 struct switch_pd_alt {
     enum switch_pd_alt_step step;
     bool want_dp;
-    bool dock_power;  // the source's PDOs are the dock's signature (SwitchChargePolicy.h): the only partner swapped to
-    bool accepted;    // the step's VDM was answered and ACCEPT went out: its CMD_DONE means the reply is readable
-    bool paused;      // a contract alert while a command was out: the step goes again once SwitchPD is at rest
+    bool dock_power;      // the source's PDOs are the dock's signature (SwitchChargePolicy.h): swapped without asking
+    bool dual_role_data;  // the source's 5 V PDO has Dual-Role Data: it may be asked who it is, then swapped
+    bool as_ufp;          // the session began as UFP and has not become DFP: a swap by the partner restarts it
+    bool accepted;        // the step's VDM was answered and ACCEPT went out: its CMD_DONE means the reply is readable
+    bool paused;          // a contract alert while a command was out: the step goes again once SwitchPD is at rest
     bool dock, old_dock_firmware, hub_enabled;
     uint8_t pin, dp_lanes, hub_tries;
     uint8_t configure[4];
@@ -103,7 +109,7 @@ struct switch_pd_alt {
 static inline void switch_pd_alt_init(struct switch_pd_alt *alt, bool want_dp)
 {
     const struct switch_pd_alt fresh = {
-        SWITCH_PD_ALT_IDLE,      want_dp, false, false, false, false, false, false, 0, 0, 0, {0, 0, 0, 0},
+        SWITCH_PD_ALT_IDLE,      want_dp, false, false, false, false, false, false, false, false, 0, 0, 0, {0, 0, 0, 0},
         SWITCH_PD_ALT_LANES_FREE};
     *alt = fresh;
 }
@@ -206,6 +212,50 @@ static inline bool switch_pd_alt_has_svid(const uint8_t *vdm, size_t len, uint16
 static inline bool switch_pd_alt_acked(const uint8_t *vdm, uint8_t command)
 {
     return vdm[1] == (uint8_t)(0x40u | command);
+}
+
+// A response (ACK, NAK or BUSY) to our Discover Identity, as opposed to the partner's own request: a DFP discovers us
+// too, and its REQ lands in the same INCOMING_VDM.
+static inline bool switch_pd_alt_identity_response(const uint8_t *vdm, size_t len)
+{
+    return len >= 5 && vdm[0] >= 4 && (vdm[1] & 0x1Fu) == 0x01u && (vdm[1] >> 6) != 0 && (vdm[2] & 0x80u) != 0 &&
+           vdm[3] == 0x00 && vdm[4] == 0xFF;
+}
+
+enum switch_pd_alt_identity {
+    SWITCH_PD_ALT_ID_NOT_ACKED,
+    SWITCH_PD_ALT_ID_HOST,
+    SWITCH_PD_ALT_ID_HUB,
+    SWITCH_PD_ALT_ID_DEVICE,
+    SWITCH_PD_ALT_ID_ADAPTER,
+    SWITCH_PD_ALT_ID_NO_USB,
+};
+
+// The ID Header VDO (INCOMING_VDM bytes 5-8; USB PD R3.3 V1.0 6.4.12.3.1 Table 6.34): bit 31 USB Communications
+// Capable as USB Host, 30 as USB Device, 29:27 Product Type (UFP) (Table 6.35: 001b PDUSB Hub, 101b the deprecated
+// AMA), 26 Alternate Modes Supported, 25:23 Product Type (DFP) (Table 6.37: 010b PDUSB Host). A host is never asked
+// to give up the host role, whatever else the header says.
+static inline enum switch_pd_alt_identity switch_pd_alt_identify(const uint8_t *vdm, size_t len)
+{
+    if (len < 9 || vdm[0] < 8 || !switch_pd_alt_acked(vdm, 0x01)) {
+        return SWITCH_PD_ALT_ID_NOT_ACKED;
+    }
+    const unsigned top = vdm[8];
+    const unsigned ufp_type = (top >> 3) & 7u;
+    const unsigned dfp_type = ((top & 3u) << 1) | ((unsigned)vdm[7] >> 7);
+    if ((top & 0x80u) != 0 || dfp_type == 2) {
+        return SWITCH_PD_ALT_ID_HOST;
+    }
+    if (ufp_type == 1) {
+        return SWITCH_PD_ALT_ID_HUB;
+    }
+    if ((top & 0x40u) != 0) {
+        return SWITCH_PD_ALT_ID_DEVICE;
+    }
+    if (ufp_type == 5 || (top & 0x04u) != 0) {
+        return SWITCH_PD_ALT_ID_ADAPTER;
+    }
+    return SWITCH_PD_ALT_ID_NO_USB;
 }
 
 #ifdef __cplusplus

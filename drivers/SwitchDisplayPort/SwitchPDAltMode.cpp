@@ -20,6 +20,7 @@ constexpr unsigned kBus = 1;
 constexpr uint8_t kPD = 0x18;
 
 enum : uint8_t {
+    STATUS1 = 0x03,
     COMMAND = 0x05,
     DP_STATUS = 0x18,
     INCOMING_VDM = 0x50,
@@ -72,6 +73,15 @@ void perform(struct switch_pd_alt_out out)
             out = switch_pd_alt_reply(&gAlt, incoming, sizeof(incoming));
         }
     }
+    if (out.act == SWITCH_PD_ALT_COMMAND && out.command == SWITCH_PD_ALT_CMD_DR_SWAP) {
+        uint8_t raw[2] = {};
+        if (tegra_i2c_read(kBus, kPD, STATUS1, raw, sizeof(raw)) != 0) {
+            out = switch_pd_alt_finish(&gAlt, SWITCH_PD_ALT_FAILED, "STATUS1 could not be read before the swap");
+        } else {
+            out = switch_pd_alt_before_swap(&gAlt, out,
+                                            static_cast<uint16_t>(raw[0] | static_cast<unsigned>(raw[1]) << 8U));
+        }
+    }
     if (out.act == SWITCH_PD_ALT_COMMAND) {
         const uint8_t command[2] = {static_cast<uint8_t>(out.command), static_cast<uint8_t>(out.command >> 8)};
         const bool written =
@@ -99,7 +109,7 @@ void timerFired(OSObject *, IOTimerEventSource *)
 }  // namespace
 
 void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest_of)(const void *), uint16_t alert,
-                         uint16_t status1, bool sink_session, bool dock_power)
+                         uint16_t status1, bool sink_session, bool dock_power, bool dual_role_data)
 {
     if (gTimer == nullptr) {
         switch_pd_alt_init(&gAlt, kWantDisplayPort);
@@ -118,7 +128,7 @@ void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest_of)(con
         (void)tegra_i2c_read(kBus, kPD, DP_STATUS, raw, sizeof(raw));
         dp_status = static_cast<uint16_t>(raw[0] | static_cast<unsigned>(raw[1]) << 8U);
     }
-    const struct switch_pd_alt_in in = {alert, status1, dp_status, sink_session, at_rest, dock_power};
+    const struct switch_pd_alt_in in = {alert, status1, dp_status, sink_session, at_rest, dock_power, dual_role_data};
     const enum switch_pd_alt_step before = gAlt.step;
     const struct switch_pd_alt_out out = switch_pd_alt_event(&gAlt, &in);
     if (out.act == SWITCH_PD_ALT_NONE && out.line == nullptr && gAlt.step == before) {
@@ -126,4 +136,11 @@ void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest_of)(con
         return;
     }
     perform(out);
+}
+
+void switch_pd_alt_leave()
+{
+    if (gTimer != nullptr)
+        gTimer->cancelTimeout();
+    switch_pd_alt_init(&gAlt, kWantDisplayPort);
 }

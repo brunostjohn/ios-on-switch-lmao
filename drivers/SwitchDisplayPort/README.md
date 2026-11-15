@@ -30,10 +30,13 @@ setting off it skips the DisplayPort steps.
   from bits 23:16, so bm92txx puts it there; every other partner gets the standard bits 15:8.
 - The dock's LED and USB hub (`HUB_CONTROL`, retried while the hub is busy) are set up whenever the engine runs, as
   bm92txx does, so USB devices keep working with the TV on.
-- To reach the dock's hub the Switch swaps to DFP, so usbmux and `idevicesyslog` over USB stop working in the dock.
-  Nintendo's firmware behaves the same way. Only a source with the dock's power signature (two PDOs, the first 5 V
-  500 mA; `SwitchChargePolicy.h`) is asked to swap. bm92txx asks any dual-role source, and a Mac that accepted would
-  stop being the Switch's USB host. A USB-C to HDMI adapter with pass-through charging is therefore not driven yet.
+- To reach the dock's hub the Switch swaps to DFP, so usbmux and `idevicesyslog` over USB stop working in the dock, as
+  they do under Nintendo's firmware. A source with the dock's power signature (two PDOs, the first 5 V 500 mA;
+  `SwitchChargePolicy.h`) is asked to swap at once. Any other source whose 5 V PDO has Dual-Role Data gets Discover
+  Identity first and is asked to swap only if its ID Header shows a hub, a USB device or an alternate-mode adapter and
+  no USB host. A Mac reports itself as a host and stays the Switch's USB host (bm92txx swaps with every dual-role
+  source). As UFP the controller accepts a partner's own DR_Swap (CONFIG2), and the engine then starts discovery as
+  DFP.
 - Output stays at or below 1080p60 whatever the EDID offers: 1080p60 first, then modes of 50 Hz and up by size, then
   the rest. The link trains only as fast as the mode needs, HBR ×2 for 1080p60 on pin D and RBR ×4 on pin C. When
   training fails at a rate, the next rate down is tried and the mode is picked again.

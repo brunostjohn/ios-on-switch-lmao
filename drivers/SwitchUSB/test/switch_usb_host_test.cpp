@@ -9,11 +9,8 @@
 // (SPDSRC1/2 closed, as with the rails up first) sources, a VSAFE nobody of ours drives does not; and over a fuzzed walk
 // nothing but a classified re-attach ever sources, and nothing sources without host mode.
 //
-// The host interrupts (INTID 71 xHCI, 72 falcon mailbox) were never booted: until a line has reached its handler once,
-// a missing delivery (an event waiting, or nothing at all after the controller's first start) turns host mode off with
-// one line, never a panic; once it has fired, a lost interrupt panics only when the controller asked for it (IMAN.IE
-// and USBCMD.INTE) and nothing consumed the event. The routing the kernel relies on (DT GIC_SPI 39/40 level-high
-// through the LIC, IPFS as tegra_xusb_config) is checked against the OLED DT and the driver sources in
+// The routing the host interrupts rely on (INTID 71 xHCI, 72 falcon mailbox: DT GIC_SPI 39/40 level-high through the
+// LIC, IPFS as tegra_xusb_config) is checked against the OLED DT and the driver sources in
 // switch_usb_host_source_test.cpp.
 //
 // The host role: the USB 2.0 ports come from the xHCI Supported Protocol capabilities (pad 0 = the first one; a broken
@@ -54,10 +51,10 @@ enum Act {
 
 // BM92T36 bits (bm92txx.c).
 constexpr uint16_t SRC_FAULT = 1 << 1, PLUGPULL = 1 << 3, CONTRACT = 1 << 12;
-constexpr uint16_t SPDSRC2 = 1 << 3, INSERT = 1 << 7, VSAFE = 1 << 10, CSIDE = 1 << 11, SRC_MODE = 1 << 12,
-                   SPDSNK = 1 << 14, SPDSRC1 = 1 << 15;
-constexpr uint16_t DFP = 2 << 8, UFP = 1 << 8;
-constexpr uint16_t OTG_INSERT = 1 << 13;
+constexpr unsigned SPDSRC2 = 1u << 3, INSERT = 1u << 7, VSAFE = 1u << 10, CSIDE = 1u << 11, SRC_MODE = 1u << 12,
+                   SPDSNK = 1u << 14, SPDSRC1 = 1u << 15;
+constexpr unsigned DFP = 2u << 8, UFP = 1u << 8;
+constexpr unsigned OTG_INSERT = 1u << 13;
 
 using Status = std::pair<uint16_t, uint16_t>;  // STATUS1, STATUS2
 // r7w (live-1105-1249, kernel log): STATUS1/STATUS2 as SwitchPD logged them.
@@ -83,7 +80,8 @@ struct Decision {
 
 Decision decide(int phase, uint16_t alert, uint16_t status1, uint16_t status2, bool allow = true)
 {
-    int next = 0, cancel = 0;
+    int next = 0;
+    int cancel = 0;
     char why[256];
     const int act = pd_decide(phase, alert, status1, status2, allow ? 1 : 0, &next, &cancel, why, sizeof(why));
     return {act, next, cancel != 0, why};
@@ -107,6 +105,7 @@ void invariant(bool ok, const std::string &what)
 {
     if (!ok) {
         ADD_FAILURE() << "model invariant: " << what;
+        // NOLINTNEXTLINE(bugprone-std-exception-baseclass): not a std::exception on purpose (require.h)
         throw switch_ios::test::RequireFailed();
     }
 }
@@ -183,14 +182,15 @@ struct Port {
     {
         if (d.cancel)
             window = false;
-        if (d.act == SAW_DETACH)
+        if (d.act == SAW_DETACH) {
             saw = true;
-        else if (d.act == ENTER)
+        } else if (d.act == ENTER) {
             enter(d.next, d.why);
-        else if (d.act == START)
+        } else if (d.act == START) {
             start();
-        else if (d.act == END)
+        } else if (d.act == END) {
             end(d.next, d.why);
+        }
     }
 
     void alert(Status status, uint16_t alertBits = PLUGPULL)
@@ -217,11 +217,13 @@ struct Port {
     void check() const
     {
         const std::string at = "phase " + std::to_string(phase);
-        invariant(rails == (phase == REATTACH || phase == SOURCE), at + ": rails " + std::to_string(rails));
-        invariant(boost == (phase == SOURCE), at + ": boost " + std::to_string(boost));
-        if (!allow)
+        invariant(rails == (phase == REATTACH || phase == SOURCE),
+                  at + ": rails " + std::to_string(static_cast<int>(rails)));
+        invariant(boost == (phase == SOURCE), at + ": boost " + std::to_string(static_cast<int>(boost)));
+        if (!allow) {
             invariant(phase != CLASSIFY && phase != REATTACH && phase != SOURCE && !rails && !switches,
                       at + " without host mode");
+        }
     }
 };
 
@@ -240,7 +242,7 @@ TEST(SwitchUsbHostPowerRole, OutputsPerPhase)
 // r7w's plug-in, with the re-attach as the rails-first order makes it: sourced, rails before switches.
 TEST(SwitchUsbHostPowerRole, KeyboardThroughAnAdapter)
 {
-    for (Status attach : {R7W_SINK_ATTACH, R7W_SINK_ATTACH_CC2}) {
+    for (const Status attach : {R7W_SINK_ATTACH, R7W_SINK_ATTACH_CC2}) {
         SCOPED_TRACE(attach.first);
         Port port;
         port.enter(EMPTY, "start");
@@ -332,6 +334,23 @@ TEST(SwitchUsbHostDataRole, HostForOurSinkOrASourceThatMadeUsDfp)
     EXPECT_FALSE(pd_usb_host(0, kDockAfterSwap & ~INSERT)) << "unplugged";
 }
 
+// The device controller's VBUS through a host session, its detach and the device role with nothing attached: off
+// throughout, so the XUDC sees no VBUS and reports no connect; on for the Mac as our host and for a charger; off for
+// the dock that made us DFP.
+TEST(SwitchUsbHostDataRole, DeviceVbusOnlyFromAHostPort)
+{
+    constexpr uint16_t kNothing = 0;
+    const std::vector<std::pair<int, uint16_t>> hostSessionThenNoPartner = {
+        {0, R7W_SINK_ATTACH.first}, {1, REATTACH_RAILS_UP.first}, {1, kNothing}, {0, kNothing}};
+    for (const auto &[sourcing, status1] : hostSessionThenNoPartner)
+        EXPECT_FALSE(pd_usb_device_vbus(sourcing, status1)) << std::hex << status1;
+    EXPECT_TRUE(pd_usb_device_vbus(0, R7W_MAC_SOURCES.first)) << "the Mac is our host";
+    EXPECT_TRUE(pd_usb_device_vbus(0, R7W_CHARGER_AT_BOOT.first)) << "a charger's VBUS is real";
+    constexpr uint16_t kDockAfterSwap = SPDSNK | VSAFE | DFP | INSERT;
+    EXPECT_FALSE(pd_usb_device_vbus(0, kDockAfterSwap)) << "we are its host";
+    EXPECT_FALSE(pd_usb_device_vbus(0, R7W_MAC_SOURCES.first & ~INSERT)) << "unplugged";
+}
+
 TEST(SwitchUsbHostPowerRole, ChargerAtBootAndNoHostMode)
 {
     Port port;
@@ -359,7 +378,7 @@ TEST(SwitchUsbHostPowerRole, ClassifyWindows)
     d = windowEnd(REATTACH, false, 0);
     EXPECT_EQ(actNext(d), std::make_pair((int)ENTER, (int)EMPTY));
     EXPECT_THAT(d.why, testing::HasSubstr("rails off"));
-    for (int phase : {EMPTY, SINK, SOURCE, HELD})
+    for (const int phase : {EMPTY, SINK, SOURCE, HELD})
         EXPECT_EQ(windowEnd(phase, true, 0).act, NONE) << phase;
 }
 
@@ -378,9 +397,9 @@ TEST(SwitchUsbHostPowerRole, LeavingSource)
 
 TEST(SwitchUsbHostPowerRole, FuzzedWalk)
 {
-    std::mt19937_64 random(1105);
+    std::mt19937_64 random(1105);  // NOLINT(bugprone-random-generator-seed): a fixed seed, so a failure reproduces
     const auto below = [&](size_t n) {
-        return (size_t)std::uniform_int_distribution<uint64_t>(0, n - 1)(random);
+        return static_cast<size_t>(std::uniform_int_distribution<uint64_t>(0, n - 1)(random));
     };
     const std::vector<Status> statuses = {{0, 0},
                                           R7W_SINK_ATTACH,
@@ -393,8 +412,8 @@ TEST(SwitchUsbHostPowerRole, FuzzedWalk)
                                           {SRC_MODE | DFP | INSERT, 0},
                                           {INSERT | UFP, 0}};
     const std::vector<uint16_t> alerts = {0, PLUGPULL, PLUGPULL, CONTRACT, SRC_FAULT, PLUGPULL | CONTRACT};
-    for (bool allow : {true, false}) {
-        for (int boost : {0, -1, -2}) {
+    for (const bool allow : {true, false}) {
+        for (const int boost : {0, -1, -2}) {
             SCOPED_TRACE(std::string(allow ? "host mode" : "no host mode") + ", boost " + std::to_string(boost));
             Port port(allow, boost);
             port.enter(EMPTY, "start");
@@ -466,6 +485,17 @@ TEST_F(SwitchUsbHostRole, TegraLayout)
     EXPECT_EQ(portsc_offset(0x20, 5), 0x20u + 0x400 + 0x40);
 }
 
+// HLC is bit 19 of the USB 2.0 capability's third dword, whichever capability comes first.
+TEST_F(SwitchUsbHostRole, Usb2HardwareLpmCapability)
+{
+    caps({{1, 4, 0, 0, 0}, {2, 5, 3, 1, 4}, {2, 0, 2, 5, 5}});
+    EXPECT_EQ(usb2_hlc(0x2000), 0);
+    const uint32_t usb2 = 0x500 + 4 * 4 + 5 * 4;  // xECP, then after the legacy and USB 3 capabilities
+    fake_write(usb2 + 8, 1u << 19 | 5u << 8 | 5u);
+    EXPECT_EQ(usb2_hlc(0x2000), 1);
+    EXPECT_EQ(find(2).first, Range(5, 5));
+}
+
 TEST_F(SwitchUsbHostRole, BrokenLists)
 {
     caps({{1, 0, 0, 0, 0}, {2, 0, 2, 5, 5}});  // the list ends before the USB 2 capability
@@ -475,10 +505,10 @@ TEST_F(SwitchUsbHostRole, BrokenLists)
     fake_reset();
     EXPECT_EQ(find(2).first, Range(0, 0));  // no xECP at all
     fake_reset();
-    fake_write(0x10, (0x100 >> 2) << 16);
+    fake_write(0x10, (0x100u >> 2) << 16);
     for (uint32_t k = 0; k < 200; ++k)
-        fake_write(0x100 + 4 * k, 1 << 8 | 0xc0);  // a long chain of other capabilities:
-    const auto [result, reads] = find(2);          // the walk stops after 64
+        fake_write(0x100 + 4 * k, 1u << 8 | 0xc0u);  // a long chain of other capabilities:
+    const auto [result, reads] = find(2);            // the walk stops after 64
     EXPECT_EQ(result, Range(0, 0));
     EXPECT_LE(reads, 1u + 64);
 }
@@ -486,7 +516,8 @@ TEST_F(SwitchUsbHostRole, BrokenLists)
 // The role line's words for a port (PORTSC CCS 0, PLS 8:5, PP 9, speed 13:10).
 TEST(SwitchUsbHostPortWords, LinkAndSpeed)
 {
-    constexpr uint32_t kPp = 1u << 9, kCcs = 1u;
+    constexpr uint32_t kPp = 1u << 9;
+    constexpr uint32_t kCcs = 1u;
     EXPECT_STREQ(portsc_link_name(kPp | kCcs | 4u << 10), "U0");
     EXPECT_STREQ(portsc_speed_name(kPp | kCcs | 4u << 10), "SuperSpeed 5 Gb/s");
     EXPECT_STREQ(portsc_speed_name(kPp | kCcs | 3u << 10), "high speed");
@@ -497,21 +528,22 @@ TEST(SwitchUsbHostPortWords, LinkAndSpeed)
     EXPECT_STREQ(portsc_link_name(15u << 5), "Resume");
 }
 
-TEST_F(SwitchUsbHostRole, PortscWrites)
+TEST_F(SwitchUsbHostRole, PortscPowerWrites)
 {
-    const uint32_t write1 = (1u << 1) | (1u << 4) | (1u << 16) | (0x7fu << 17) | (1u << 31);  // PED, PR, LWS, changes,
-    std::mt19937 random(9);                                                                   // WPR
+    // PED, PR, LWS, the change bits, WPR
+    const uint32_t write1 = (1u << 1) | (1u << 4) | (1u << 16) | (0x7fu << 17) | (1u << 31);
+    std::mt19937 random(9);  // NOLINT(bugprone-random-generator-seed): a fixed seed, so a failure reproduces
     for (int i = 0; i < 2000; ++i) {
         const uint32_t v = random();
-        for (int on : {0, 1}) {
+        for (const int on : {0, 1}) {
             const uint32_t out = portsc_power(v, on);
             ASSERT_EQ(out & write1, 0u) << std::hex << v;
             ASSERT_EQ((out & (1u << 9)) != 0, on != 0) << std::hex << v;
             ASSERT_EQ(out & ~(1u << 9), v & portsc_keep() & ~(1u << 9)) << std::hex << v;
         }
     }
-    // A powered, connected high-speed port with a connect change pending: the change bit is not cleared by us.
-    EXPECT_EQ(portsc_power(0x00020e03, 0), 0x00000c01u);
+    // A powered SuperSpeed port in RxDetect with a connect change pending, as after reset: the change bit is not cleared.
+    EXPECT_EQ(portsc_power(0x000202a0, 0), 0x000000a0u);
 }
 
 TEST_F(SwitchUsbHostRole, VbusId)
@@ -534,110 +566,44 @@ TEST_F(SwitchUsbHostRole, ChargerDetectAndOc)
     // utmi_pad_charger_detect_on leaves: pull overrides enabled with value 0, PD_CHG clear, sources off.
     const uint32_t detectOnCtl1 = (1u << 16) | (1u << 18) | (1u << 20) | (1u << 22) | 0x80;
     EXPECT_EQ(chrg_ctl1_host(detectOnCtl1), 0x80u);
-    EXPECT_EQ(chrg_ctl0_host(0xffffffff), 0xffffffffu & ~(0xfu << 9));
-    EXPECT_EQ(chrg_ctl0_host(1), 1u);  // PD_CHG as found
+    EXPECT_EQ(chrg_ctl0_host(0xffffffff), 0xffffffffu & ~(0x1fu << 9));  // OP_I_SRC_EN too (Tegra X1 TRM 22.8.11)
+    EXPECT_EQ(chrg_ctl1_host(1u << 4), 0u);                              // DIV_DET_EN
+    EXPECT_EQ(chrg_ctl0_host(1), 1u);                                    // PD_CHG as found
     EXPECT_EQ(oc_map_host(0xfff0), 0xffffu);
     EXPECT_EQ(oc_map_host(0xffff), 0xffffu);
 }
 
-// --- Interrupt check -------------------------------------------------------------------------------------------------
-
-enum Verdict {
-    FINE,
-    CONFIRM,
-    OFF,
-    PANIC
-};
-
-struct Sample {
-    uint32_t count, erdp;
-    bool pending, deliverable;
-};
-
-int judge(const Sample &armed, const Sample &now, bool first = false, unsigned stage = 1)
-{
-    return irq_judge(armed.count, armed.erdp, armed.pending, armed.deliverable, now.count, now.erdp, now.pending,
-                     now.deliverable, first ? 1 : 0, stage);
-}
-
-// SwitchXHCI::checkFired: stage 1 at 2 s, stage 2 50 ms later against the stage-1 sample.
-int runCheck(const Sample &armed, const Sample &stage1, const Sample &stage2, bool first = false)
-{
-    const int verdict = judge(armed, stage1, first, 1);
-    if (verdict != CONFIRM)
-        return verdict;
-    return judge(stage1, stage2, first, 2);
-}
-
-// r7w: host up, device on the port, no port event and INTID 71 never fired: one line, host off, no panic.
-TEST(SwitchUsbHostInterruptCheck, NeverFiredFirstStart)
-{
-    const Sample quiet = {0, 0x1000, false, true};
-    EXPECT_EQ(runCheck(quiet, quiet, quiet, true), OFF);
-    const Sample waiting = {0, 0x1000, true, true};
-    EXPECT_EQ(runCheck(quiet, waiting, waiting, true), OFF);
-    EXPECT_EQ(runCheck(quiet, waiting, waiting, false), OFF);  // a later role, event stuck
-    const Sample masked = {0, 0x1000, true, false};  // IP set but IE/INTE off: still never delivered, still not a panic
-    EXPECT_EQ(runCheck(quiet, masked, masked, true), OFF);
-}
-
-TEST(SwitchUsbHostInterruptCheck, Delivered)
-{
-    const Sample before = {0, 0x1000, false, true};
-    const Sample fired = {1, 0x1040, false, true};
-    EXPECT_EQ(runCheck(before, fired, fired, true), FINE);
-    // fired before the check was armed (the first PSC came at once): proven, nothing waiting
-    EXPECT_EQ(runCheck(fired, fired, fired, true), FINE);
-    // delivered between stage 1 and stage 2
-    EXPECT_EQ(runCheck(before, {0, 0x1000, true, true}, fired, true), FINE);
-}
-
-TEST(SwitchUsbHostInterruptCheck, ProvenLineLost)
-{
-    const Sample armed = {3, 0x1100, false, true};
-    const Sample stuck = {3, 0x1100, true, true};
-    EXPECT_EQ(runCheck(armed, stuck, stuck), PANIC);
-    // the controller masked its interrupter (IE or INTE off): not a lost interrupt
-    EXPECT_EQ(runCheck(armed, {3, 0x1100, true, false}, {3, 0x1100, true, false}), FINE);
-    // the event was consumed (ERDP moved) or delivered
-    EXPECT_EQ(runCheck(armed, {3, 0x1140, true, true}, {3, 0x1140, true, true}), FINE);
-    EXPECT_EQ(runCheck(armed, {4, 0x1100, true, true}, {4, 0x1100, true, true}), FINE);
-    // nothing due on a later role of a proven line
-    EXPECT_EQ(runCheck(armed, armed, armed), FINE);
-}
-
-TEST(SwitchUsbHostInterruptCheck, NoEvidence)
-{
-    const Sample quiet = {0, 0x1000, false, true};
-    EXPECT_EQ(runCheck(quiet, quiet, quiet, false), FINE);
-}
-
-// INTID 72: an SMI waiting with no handler run, never fired: host off; fired before: panic.
-TEST(SwitchUsbHostInterruptCheck, Mailbox)
-{
-    EXPECT_EQ(runCheck({0, 0, false, true}, {0, 0, true, true}, {0, 0, true, true}), OFF);
-    EXPECT_EQ(runCheck({2, 0, false, true}, {2, 0, true, true}, {2, 0, true, true}), PANIC);
-    EXPECT_EQ(runCheck({0, 0, false, true}, {0, 0, false, true}, {0, 0, false, true}), FINE);
-}
-
-TEST(SwitchUsbHostInterruptCheck, StageOneNeverActs)
-{
-    for (uint32_t count : {0u, 5u})
-        for (bool pending : {false, true})
-            for (bool first : {false, true})
-                EXPECT_THAT(judge({count, 0, false, true}, {count, 0, pending, true}, first, 1),
-                            testing::AnyOf((int)FINE, (int)CONFIRM))
-                    << count << " " << pending << " " << first;
-}
-
-TEST(SwitchUsbHostInterruptCheck, RegisterBits)
-{
-    EXPECT_TRUE(xhci_pending(1, 0));        // IMAN.IP
-    EXPECT_TRUE(xhci_pending(0, 1u << 3));  // USBSTS.EINT
-    EXPECT_FALSE(xhci_pending(2, 1));       // IE, HCH
-    EXPECT_TRUE(xhci_deliverable(2, 1u << 2));
-    EXPECT_FALSE(xhci_deliverable(2, 0));
-    EXPECT_FALSE(xhci_deliverable(1, 1u << 2));
-}
-
 }  // namespace
+
+// bm92t_system_reset_auto(false): only a plugged controller, and only one left as DFP, in DisplayPort mode or after a
+// command that did not complete.
+TEST(SwitchPdPolicy, ResetAtStartAsBm92txx)
+{
+    constexpr unsigned kInsert = 1u << 7;
+    constexpr unsigned kDfp = 2u << 8;
+    constexpr unsigned kUfp = 1u << 8;
+    EXPECT_FALSE(pd_reset_at_start(kDfp, 1u << 15));
+    EXPECT_FALSE(pd_reset_at_start(kInsert | kUfp, 0));
+    EXPECT_TRUE(pd_reset_at_start(kInsert | kDfp, 0));
+    EXPECT_TRUE(pd_reset_at_start(kInsert | kUfp, 1u << 15));
+    EXPECT_TRUE(pd_reset_at_start(kInsert | kUfp | 2u << 4, 0));  // last command aborted
+}
+
+// bm92t_event_handler: an internal fault resets when plugged, on a sink fault or with no alert; a source fault without
+// an internal one gets a hard reset instead.
+TEST(SwitchPdPolicy, FaultResetsAsBm92txx)
+{
+    constexpr uint16_t kInsert = 1u << 7;
+    constexpr uint16_t kFault = 1u;
+    constexpr uint16_t kSnkFault = 1u;
+    constexpr uint16_t kSrcFault = 2u;
+    constexpr uint16_t kPlugPull = 8u;
+    EXPECT_TRUE(pd_reset_on_fault(kPlugPull, kInsert | kFault));
+    EXPECT_TRUE(pd_reset_on_fault(kSnkFault, kFault));
+    EXPECT_TRUE(pd_reset_on_fault(0, kFault));
+    EXPECT_FALSE(pd_reset_on_fault(kPlugPull, kFault));
+    EXPECT_FALSE(pd_reset_on_fault(kPlugPull, kInsert));
+    EXPECT_TRUE(pd_hard_reset(kSrcFault, kInsert));
+    EXPECT_FALSE(pd_hard_reset(kSrcFault, kInsert | kFault));
+    EXPECT_FALSE(pd_hard_reset(kPlugPull, kInsert));
+}

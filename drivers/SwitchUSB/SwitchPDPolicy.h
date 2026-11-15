@@ -35,6 +35,9 @@
 #define SWITCH_PD_STATUS1_SPDSRC1    (1u << 15)  // VBUS switch 1 on
 #define SWITCH_PD_STATUS2_OTG_INSERT (1u << 13)
 #define SWITCH_PD_DATA_ROLE_DFP      2u
+#define SWITCH_PD_ALERT_SNK_FAULT    (1u << 0)
+#define SWITCH_PD_STATUS1_LASTCMD    (7u << 4)  // the last command's result: 0 complete
+#define SWITCH_PD_DP_STATUS_DP_EN    (1u << 15)
 
 enum switch_pd_phase {
     SWITCH_PD_EMPTY,     // nothing on the port; source switches on only with host mode, rails off
@@ -175,14 +178,29 @@ static inline struct switch_pd_step switch_pd_decide(enum switch_pd_phase phase,
 // and left us the data role DFP (the dock after its data role swap, a hub with power in), as its device otherwise. A
 // partner that came up as our sink while we still classify it is neither: it presents Rd (SRC_MODE), we are DFP by
 // default, and it may yet turn out to be a dual-role host such as a Mac.
-static inline bool switch_pd_usb_host(bool sourcing, uint16_t status1)
+static inline bool switch_pd_partner_sources(uint16_t status1)
 {
     const bool plugged = (status1 & SWITCH_PD_STATUS1_INSERT) != 0;
     const bool vbus = (status1 & SWITCH_PD_STATUS1_VSAFE) != 0;
-    const bool partner_sources = plugged && vbus && ((status1 & SWITCH_PD_STATUS1_SRC_MODE) == 0u);
-    const bool dfp =
-        ((status1 & (3u << SWITCH_PD_STATUS1_DR_SHIFT)) >> SWITCH_PD_STATUS1_DR_SHIFT) == SWITCH_PD_DATA_ROLE_DFP;
-    return sourcing || (partner_sources && dfp);
+    return plugged && vbus && ((status1 & SWITCH_PD_STATUS1_SRC_MODE) == 0u);
+}
+
+static inline bool switch_pd_dfp(uint16_t status1)
+{
+    return ((status1 & (3u << SWITCH_PD_STATUS1_DR_SHIFT)) >> SWITCH_PD_STATUS1_DR_SHIFT) == SWITCH_PD_DATA_ROLE_DFP;
+}
+
+static inline bool switch_pd_usb_host(bool sourcing, uint16_t status1)
+{
+    return sourcing || (switch_pd_partner_sources(status1) && switch_pd_dfp(status1));
+}
+
+// VBUS as the device controller is to see it (Tegra X1 TRM 22.9.11, pp. 1406-1407: the VBUS override on only while
+// connected to a host port, off with no cable): a partner that sources VBUS and leaves us UFP, while we source
+// nothing. A charger counts: its VBUS is real, and with no host on D+/D- nothing connects.
+static inline bool switch_pd_usb_device_vbus(bool sourcing, uint16_t status1)
+{
+    return !sourcing && switch_pd_partner_sources(status1) && !switch_pd_dfp(status1);
 }
 
 // A Classify or Reattach window ran out (status1 read at its end). Other phases: nothing (a stale timer).
@@ -207,6 +225,35 @@ static inline struct switch_pd_step switch_pd_window_end(enum switch_pd_phase ph
                                    "empty: the sink-only partner did not come back; source rails off");
     }
     return switch_pd_step_make(SWITCH_PD_NONE, phase, false, 0);
+}
+
+// bm92txx.c bm92t_system_reset_auto(info, false), from bm92t_extcon_cable_set_init_state: a controller found plugged and
+// left as DFP, in DisplayPort mode or with a last command that did not complete gets a SYS_RESET before anything else.
+static inline bool switch_pd_reset_at_start(uint16_t status1, uint16_t dp_status)
+{
+    const bool dfp =
+        ((status1 & (3u << SWITCH_PD_STATUS1_DR_SHIFT)) >> SWITCH_PD_STATUS1_DR_SHIFT) == SWITCH_PD_DATA_ROLE_DFP;
+    return (status1 & SWITCH_PD_STATUS1_INSERT) &&
+           (dfp || (dp_status & SWITCH_PD_DP_STATUS_DP_EN) || (status1 & SWITCH_PD_STATUS1_LASTCMD));
+}
+
+// bm92t_event_handler: an internal fault (STATUS1 1:0) ends the event; it resets the controller (SYS_RESET, with VBUS
+// already off) when a partner is plugged, the ALERT was a sink fault, or nothing raised it.
+static inline bool switch_pd_internal_fault(uint16_t status1)
+{
+    return (status1 & SWITCH_PD_STATUS1_FAULT_MASK) != 0;
+}
+
+static inline bool switch_pd_reset_on_fault(uint16_t alert, uint16_t status1)
+{
+    return switch_pd_internal_fault(status1) &&
+           ((status1 & SWITCH_PD_STATUS1_INSERT) || (alert & SWITCH_PD_ALERT_SNK_FAULT) || alert == 0);
+}
+
+// ... and a source fault without one gets a PD hard reset (PD_HARD_RST_CMD).
+static inline bool switch_pd_hard_reset(uint16_t alert, uint16_t status1)
+{
+    return (alert & SWITCH_PD_ALERT_SRC_FAULT) && !switch_pd_internal_fault(status1);
 }
 
 // NOLINTEND(modernize-use-nullptr)

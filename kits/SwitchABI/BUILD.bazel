@@ -116,6 +116,15 @@ py_test(
 )
 
 py_test(
+    name = "sites_test",
+    srcs = [
+        "sites.py",
+        "test/sites_test.py",
+    ],
+    data = glob(["kinds/*/sites/*.json"]),
+)
+
+py_test(
     name = "gen_test",
     srcs = ["test/gen_test.py"],
     data = glob([
@@ -143,6 +152,8 @@ switch_abi_class(name = "ApplePMGRNub")
 switch_abi_class(name = "AppleUSBXHCI")
 
 switch_abi_class(name = "IOAESAccelerator")
+
+switch_abi_class(name = "IOPort")
 
 switch_abi_class(
     name = "IOAcceleratorES",

@@ -44,9 +44,8 @@
 // One kernel log line per decision, with the controller's bits. The decisions are SwitchPDPolicy.h (host-tested).
 //
 // Interrupt only: a pin that cannot be attached panics; a pin that keeps firing (stuck low: more than 50 ALERTs in a
-// second) is masked for the boot with one line and the port stays sink-only (no storm, no panic);
-// switch_pd_check_delivery() panics when the pin shows a pending interrupt that never reached the CPU. The classify
-// windows are one-shot timers on the PD work loop, armed only by a new attach: nothing re-arms on its own.
+// second) is masked for the boot with one line and the port stays sink-only (no storm, no panic). The classify windows
+// are one-shot timers on the PD work loop, armed only by a new attach: nothing re-arms on its own.
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -70,6 +69,7 @@ struct SwitchPDState {
     bool vbusPresent;        // STATUS1.VSAFE: VBUS at vSafe5V or a contract (ours when role is SOURCE)
     bool dataHost;           // STATUS1 data role DFP
     enum SwitchPDRole role;  // the power role decided (above)
+    bool settled;            // not while a partner is being classified (Classify, Reattach): its role is still open
     // USB-PD request (above), sink sessions only; all 0/false outside one.
     bool pdSource;                 // the partner sent USB-PD source capabilities
     uint16_t contractMillivolts;   // the published (requested and verified) contract, 0 = none
@@ -80,10 +80,6 @@ struct SwitchPDState {
 // GPIO, GIC). The listener runs on the PD work loop after every ALERT and role change, and once right away with the
 // current state; keep it short. Returns 0, or -1 when the controller is not there (the listener is then never called).
 int switch_pd_add_listener(void (*listener)(void *context, const struct SwitchPDState *state), void *context);
-
-// Lost-interrupt check for PK4, for a caller's existing slow timer (SwitchBattery's re-read): panics "<who>: GPIO 84
-// interrupt lost: ..." when the pin's interrupt is pending at the GPIO controller and stays so for 50 ms. May sleep.
-void switch_pd_check_delivery(const char *who);
 
 // Host mode packaged and working (true) or gone for this boot (false: its bring-up failed). Without it the port is
 // sink-only. Thread context; 0, or -1 without the controller.

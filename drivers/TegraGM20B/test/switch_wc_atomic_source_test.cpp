@@ -130,6 +130,9 @@ const Mapping kMappings[] = {
 	 "XHCI rings, Apple's AppleUSBXHCI"},
 	{"drivers/SwitchUSB/UsbDmaMapper.cpp", "kIOMapWriteCombineCache", 1, nullptr,
 	 "the bounce pool, readBytes/writeBytes"},
+	{"drivers/SwitchUSB/XudcHardware.cpp", "kIOMapWriteCombineCache", 1,
+	 R"(\bring\.trb\b|\brings\s*\[[^\]]*\]\s*\.trb\b|\bcontext\s*\(|\bevents\.va\b|\bcontrol\.va\b)",
+	 "the XUDC's transfer rings, event ring and endpoint contexts (DmaBuffer::allocate)"},
 };
 
 // Functions that read, modify and write through a pointer argument: their calls are checked argument by argument

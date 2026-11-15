@@ -82,6 +82,7 @@ static inline const char *xusb_lanes_name(enum switch_usb3_lanes lanes)
 
 #define XUSB_SS_PORT_MAP_MASK(p)  (7u << (5u * (p)))
 #define XUSB_SS_PORT_MAP(p, usb2) ((usb2) << (5u * (p)))
+#define XUSB_SS_PORT_MAP_DISABLED 7u
 
 #define XUSB_AUX_RX_MODE_OVRD    (1u << 13)
 #define XUSB_AUX_RX_TERM_EN      (1u << 18)
@@ -159,6 +160,24 @@ static inline uint32_t xusb_elpg_apply(uint32_t v, struct xusb_elpg_step step)
     return step.set ? v | step.bit : v & ~step.bit;
 }
 
+// SS port 3, which no connector uses: a T210B01 maps it to USB2 port 3 and takes it out of ELPG, as
+// tegra210_xusb_padctl_init_usb3_port(3) does from tegra210_uphy_init and the pad controller's resume.
+#define XUSB_SS_UNUSED_PORT 3u
+
+static inline uint32_t xusb_ss_unused_port_map(uint32_t v)
+{
+    return (v & ~XUSB_SS_PORT_MAP_MASK(XUSB_SS_UNUSED_PORT)) |
+           XUSB_SS_PORT_MAP(XUSB_SS_UNUSED_PORT, XUSB_SS_UNUSED_PORT);
+}
+
+// 100 us between the writes, as the Tegra X1 TRM's ELPG and LP0 exits release an SS port (22.8.7.5, p.1372); L4T's
+// init_usb3_port has none.
+static const struct xusb_elpg_step xusb_ss_unused_port_steps[] = {
+    {XUSB_ELPG_VCORE_DOWN(XUSB_SS_UNUSED_PORT), false, 100},
+    {XUSB_ELPG_CLAMP_EN_EARLY(XUSB_SS_UNUSED_PORT), false, 100},
+    {XUSB_ELPG_CLAMP_EN(XUSB_SS_UNUSED_PORT), false, 0},
+};
+
 static inline bool xusb_ss_clamped(uint32_t elpg1)
 {
     const uint32_t all =
@@ -173,30 +192,70 @@ static inline uint32_t xusb_lfps_detect(uint32_t ctl1, bool enable)
     return enable ? v : v | XUSB_AUX_RX_IDLE_MODE(1u) | XUSB_AUX_RX_TERM_EN | XUSB_AUX_RX_MODE_OVRD;
 }
 
-// --- SS port 0's root port --------------------------------------------------------------------------------------------
+// --- SS port 0's root port and the USB-C port's transports -----------------------------------------------------------
 // The xHCI port of SS port 0: the first USB 3 port of the Supported Protocol capabilities (Tegra XUSB: 1), 0 when none.
 static inline unsigned xusb_ss_xhci_port(unsigned usb3_first, unsigned usb3_count)
 {
     return usb3_count > XUSB_SS_PORT ? usb3_first + XUSB_SS_PORT : 0u;
 }
 
-// What the root port does as the lane and the cable come and go (SwitchXHCIEvents.cpp). It is held On only with the
-// cable in and the lane up. Going On it is reset first as tegra_xhci_set_host_mode does on T210: PP off, the falcon's
-// RESET_SSPI, PP on. A USB 3 device that came up on its USB 2.0 pair while the lane was down (after SC7, or a lane that
-// waited for PCIe's PLL) has given up on SuperSpeed (its upstream port sits in eSS.Disabled) and tries again only after
-// a USB 2.0 bus reset, so its USB2 port's power is cycled and AppleUSBXHCI resets it when it comes back.
-struct xusb_ss_port_step {
-    bool power_on;    // PP off, RESET_SSPI, PP on, then held On (UsbForcePower)
-    bool power_off;   // released Off (UsbForcePower)
-    bool usb2_cycle;  // after power_on: the USB2 port's PP off and on
+// The USB-C port's IOPort transports (SwitchUSBPort.cpp, XusbPortTransports.h) as the role and SS port 0's lane stand:
+// a USB 2.0 transport with the role's data role from attach to detach, and a USB 3 one with it while the lane is up. In
+// the host role the USB 3 transport also waits for the falcon's SuperSpeed interface reset (SwitchXHCIEvents.cpp) and
+// goes while one is owed, so the reset's PORTSC writes and AppleUSB30XHCIPort's never meet. IOAccessoryManager's IOPort
+// holds one transport of a type, whatever its index ("Multiple transports of this type are not allowed on this port!",
+// 24B119 on the console), so each type follows on its own and nothing the USB 3 side does touches the USB 2.0 one.
+enum xusb_port_role {
+    XUSB_PORT_EMPTY,   // nothing attached: no transports
+    XUSB_PORT_DEVICE,  // something attached and we are not its host: data role device
+    XUSB_PORT_HOST,    // the host controller runs the port: data role host
 };
 
-static inline struct xusb_ss_port_step xusb_ss_port_follow(bool cable, bool lane_up, bool held_on, bool usb2_connected)
+// SWAP: the type's data role changed while attached; its transport comes out and goes back with the new role, and Apple's
+// root port loses the cable in between and tears down what was on it, as a role change does anyway.
+enum xusb_transport_step {
+    XUSB_TRANSPORT_KEEP,
+    XUSB_TRANSPORT_ADD,
+    XUSB_TRANSPORT_REMOVE,
+    XUSB_TRANSPORT_SWAP,
+};
+
+static inline bool xusb_usb3_transport_wanted(enum xusb_port_role to, bool lane_up, bool ss_reset)
 {
-    const bool want = cable && lane_up;
-    struct xusb_ss_port_step step = {want && !held_on, !want && held_on, false};
-    step.usb2_cycle = step.power_on && usb2_connected;
-    return step;
+    return lane_up && to != XUSB_PORT_EMPTY && (to != XUSB_PORT_HOST || ss_reset);
+}
+
+// live: the data role of the port's transport of that type (XUSB_PORT_EMPTY: it has none).
+static inline enum xusb_transport_step xusb_transport_decide(enum xusb_port_role live, bool wanted,
+                                                             enum xusb_port_role to)
+{
+    if (live == XUSB_PORT_EMPTY)
+        return wanted ? XUSB_TRANSPORT_ADD : XUSB_TRANSPORT_KEEP;
+    if (!wanted)
+        return XUSB_TRANSPORT_REMOVE;
+    return live == to ? XUSB_TRANSPORT_KEEP : XUSB_TRANSPORT_SWAP;
+}
+
+// Why a transport is added or removed, for development builds' log line (lane_was_up: the lane at the last call).
+static inline const char *xusb_port_change_reason(enum xusb_port_role from, enum xusb_port_role to, bool lane_up,
+                                                  bool lane_was_up, bool ss_reset)
+{
+    if (from == XUSB_PORT_EMPTY)
+        return "attach";
+    if (to == XUSB_PORT_EMPTY)
+        return "detach";
+    if (from != to)
+        return "role change";
+    if (lane_up != lane_was_up)
+        return lane_up ? "lane up" : "lane down";
+    return ss_reset ? "SuperSpeed reset taken" : "SuperSpeed reset owed";
+}
+
+static inline const char *xusb_port_role_name(enum xusb_port_role role)
+{
+    if (role == XUSB_PORT_HOST)
+        return "host";
+    return role == XUSB_PORT_DEVICE ? "device" : "none";
 }
 
 // --- XUSB_HOST through the SMMU ---------------------------------------------------------------------------------------
@@ -245,15 +304,6 @@ static inline struct xusb_mbox_ss xusb_mbox_ss_decide(uint32_t cmd, uint32_t dat
 }
 
 // --- xHCI writes SwitchXHCI adjusts -------------------------------------------------------------------------------------
-// U1/U2 off on SuperSpeed ports, as NVIDIA's own driver leaves them on T210B01 (lpm_support false): a zero U1 and U2
-// timeout in PORTPMSC makes the port reject both. U3 (suspend) is untouched.
-#define XHCI_PORTPMSC_U1_U2_TIMEOUTS 0xffffu
-
-static inline uint32_t xhci_portpmsc_ss(uint32_t value)
-{
-    return value & ~XHCI_PORTPMSC_U1_U2_TIMEOUTS;
-}
-
 // Interrupt moderation: at least this interval (250 ns units, 40 us) between an interrupter's interrupts. A burst of
 // SuperSpeed completions is then one interrupt; a lone event is not delayed.
 #define XHCI_IMOD_MIN_INTERVAL 160u
@@ -263,25 +313,11 @@ static inline uint32_t xhci_imod_floor(uint32_t imod)
     return (imod & 0xffffu) >= XHCI_IMOD_MIN_INTERVAL ? imod : (imod & ~0xffffu) | XHCI_IMOD_MIN_INTERVAL;
 }
 
-// Which register an AppleUSBXHCI write at `offset` from the capability base is: an SS port's PORTPMSC, an interrupter's
-// IMOD, or neither.
-enum xhci_write_kind {
-    XHCI_WRITE_OTHER,
-    XHCI_WRITE_SS_PORTPMSC,
-    XHCI_WRITE_IMOD
-};
-
-static inline enum xhci_write_kind xhci_write_kind(uint32_t offset, uint32_t cap_length, uint32_t runtime,
-                                                   unsigned ss_first, unsigned ss_count, unsigned interrupters)
+// Whether an AppleUSBXHCI write at `offset` from the capability base is an interrupter's IMOD.
+static inline bool xhci_is_imod(uint32_t offset, uint32_t runtime, unsigned interrupters)
 {
-    const uint32_t ports = cap_length + 0x400u;
-    if (ss_count && offset >= ports + 0x10u * (ss_first - 1u) && offset < ports + 0x10u * (ss_first - 1u + ss_count) &&
-        (offset - ports) % 0x10u == 4u)
-        return XHCI_WRITE_SS_PORTPMSC;
-    if (offset >= runtime + 0x20u && offset < runtime + 0x20u + 32u * interrupters &&
-        (offset - runtime - 0x20u) % 32u == 4u)
-        return XHCI_WRITE_IMOD;
-    return XHCI_WRITE_OTHER;
+    return offset >= runtime + 0x20u && offset < runtime + 0x20u + 32u * interrupters &&
+           (offset - runtime - 0x20u) % 32u == 4u;
 }
 
 #ifdef __cplusplus

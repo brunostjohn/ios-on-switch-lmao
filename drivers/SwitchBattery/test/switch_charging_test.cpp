@@ -285,6 +285,10 @@ struct Charger {
 
 struct PdChip {
     uint16_t alert = 0, status1 = 0, status2 = 0, config1 = 0xc0e0, vendor = 0;
+    uint16_t config2 = 0;                         // DR_SWAP field 3:2 reject in both roles
+    uint8_t alertEnable[4] = {0xff, 0xfb, 0, 0};  // every ALERT but bit 10 (DR_SWAP)
+    uint32_t idHeader = 0;                        // the ID Header VDO it ACKs Discover Identity with; 0: never answers
+    std::vector<uint8_t> vdmReply, incomingVdm;
     std::vector<uint32_t> pdos;
     uint32_t curPdo = 0, curRdo = 0, pendingRdo = 0;
 
@@ -358,6 +362,16 @@ struct PdChip {
         case 0x1a:
             put16(vendor);
             break;
+        case 0x17:
+            put16(config2);
+            break;
+        case 0x2e:
+            check(len == 4, "ALERT_ENABLE length " + std::to_string(len));
+            std::memcpy(buf, alertEnable, 4);
+            break;
+        case 0x50:
+            std::memcpy(buf, incomingVdm.data(), std::min(len, incomingVdm.size()));
+            break;
         case 0x4b:
             put16(0x603);
             break;
@@ -397,6 +411,13 @@ struct PdChip {
         case 0x1a:
             vendor = v16;
             break;
+        case 0x17:
+            config2 = v16;
+            break;
+        case 0x2e:
+            check(len == 4, "ALERT_ENABLE write length " + std::to_string(len));
+            std::memcpy(alertEnable, data, 4);
+            break;
         case 0x60:  // OUTGOING_VDM: count, then the message
             check(len >= 5 && data[0] == len - 1, "OUTGOING_VDM layout");
             break;
@@ -435,8 +456,24 @@ struct PdChip {
             } else if (v16 == 0x1818) {  // DR_SWAP, accepted: we are DFP
                 status1 = (uint16_t)((status1 & ~(0x70 | 3u << 8)) | 2u << 8);
                 alert |= 0x4;
-            } else if (v16 == 0x1111) {  // SEND_VDM: a partner that never answers
+            } else if (v16 == 0x1111) {  // SEND_VDM: Discover Identity, ACKed with idHeader or never answered
                 ++vdmsSent;
+                if (idHeader) {
+                    vdmReply = {20, 0x41, 0x80, 0x00, 0xFF};
+                    for (const uint32_t object : {idHeader, 0u, 0x12340001u, 0x01000000u})
+                        for (int b = 0; b < 4; ++b)
+                            vdmReply.push_back((uint8_t)(object >> (8 * b)));
+                    alert |= 0x4 | 0x800;
+                }
+            } else if (v16 == 0x1616) {  // ACCEPT_VDM: the reply readable in INCOMING_VDM
+                incomingVdm = vdmReply;
+                alert |= 0x4;
+            } else if (v16 == 0x0D0D) {  // SYS_RESET: faults and the last command cleared, OCP and CONFIG2 to defaults
+                status1 = (uint16_t)(status1 & ~(0x3 | 0x70));
+                vendor |= 0x4;
+                config2 = 0;
+            } else if (v16 == 0x0808) {  // PD_HARD_RST
+                alert |= 0x4;
             } else {
                 check(false, "unexpected BM92T36 command " + hex(v16));
             }
@@ -515,17 +552,6 @@ extern "C" IOService *tegra_gpio_interrupt_nub(unsigned gpio, unsigned)
 extern "C" void tegra_gpio_describe(unsigned gpio, char *buffer, size_t size)
 {
     std::snprintf(buffer, size, "GPIO %u", gpio);
-}
-
-static bool pending(unsigned gpio)
-{
-    return gpio == TEGRA_GPIO_PK4 ? gPd.alert != 0 : gpio == TEGRA_GPIO_PZ0 ? gCharger.intPending : gGauge.edge;
-}
-
-extern "C" void tegra_gpio_check_delivery(unsigned gpio, const char *who)
-{
-    if (pending(gpio))
-        panic("%s: GPIO %u interrupt lost", who, gpio);
 }
 
 extern "C" int tegra_gpio_config(unsigned gpio)  // SwitchPD's report: an output at its last value
@@ -645,10 +671,11 @@ static void nintendoBoot()
     check(!logHas("SwitchPD: contract"), "not published before 2 s");
     check(iinlim() == 500, "input limit as detected until the contract is published");
     const size_t mark = gLog.size();
+    const uint64_t slept = gSleptMS, delayed = gDelayedUS;
     advance(2300);
     check(logHas("IOLog: SwitchPD: contract 15 V 1.2 A (5 V 1.5 A, *15 V 2.6 A)", mark), "contract line");
     check(iinlim() == 1200, "input limit 1200 mA: " + std::to_string(iinlim()));
-    check(gDelayedUS >= 1000, "raised in steps 1 ms apart");
+    check(gSleptMS - slept >= 1 && gDelayedUS == delayed, "raised in steps 1 ms apart, asleep between them");
     check(
         logHas("IOLog: SwitchBattery: input limit 1200 mA (was 500 mA): USB-PD contract 15000 mV; read back REG00 0x34 "
                "(IINLIM 1200 mA, VINDPM 4360 mV) REG02 0x60 (ICHG 2048 mA)",
@@ -1170,6 +1197,117 @@ static void macPort()
     check(logHas("SwitchPD: contract 5 V 1.5 A (*5 V 1.5 A)") && iinlim() == 1500, "5 V 1.5 A: 1500 mA (r8a: 0.9 A)");
 }
 
+// bm92t_system_reset_auto(false): a controller an earlier boot left plugged as DFP is reset first, then over-current
+// protection goes on.
+static void resetAtStart()
+{
+    gPd.status1 = 0x0280;  // INSERT, DFP
+    gPd.vendor = 0x4;      // OCP off
+    if (switch_battery_start())
+        check(false, "switch_battery_start");
+    advance(10);
+    check(!gPd.commands.empty() && gPd.commands.front() == "0d0d", "SYS_RESET first");
+    check(logHas("SwitchPD: BM92T36 SYS_RESET: found plugged as DFP"), "one line");
+    check((gPd.vendor & 0x4) == 0, "OCP on after the reset");
+}
+
+// bm92t_event_handler: an internal fault with a partner plugged resets the controller; the next event waits, turns
+// over-current protection back on and puts the switches back as the phase has them (a sink: off).
+static void faultReset()
+{
+    bootWithNintendoCharger();
+    gPd.commands.clear();
+    gPd.status1 |= 0x1;
+    gPd.alert |= 0x8;
+    advance(10);
+    check(gPd.commands.size() == 1 && gPd.commands.front() == "0d0d", "SYS_RESET on the internal fault");
+    check((gPd.vendor & 0x4) == 0x4, "the reset's ALERT read, nothing more yet");
+    gPd.alert |= 0x8;  // the controller attaches the partner again
+    advance(10);
+    check((gPd.vendor & 0x4) == 0, "OCP back on at the next event");
+    check(((gPd.config1 >> 14) & 3u) == 3u, "a sink session's switches off again");
+    check((gPd.config2 & 0x4) != 0, "incoming data role swaps accepted as UFP again after the reset");
+}
+
+// A dual-role source other than the dock (its 5 V PDO has Dual-Role Data and USB Communications) leaves the Switch
+// UFP. Discover Identity decides: a Mac stays the USB host, a powered hub is swapped and the Switch becomes its host.
+// One the controller let swap us itself (CONFIG2 accept as UFP, ALERT bit 10) reaches SwitchUSB the same way.
+static bool gDataHost;
+
+static void watchDataRole()
+{
+    switch_pd_add_listener(
+        [](void *, const SwitchPDState *state) {
+            gDataHost = state->dataHost;
+        },
+        nullptr);
+}
+
+constexpr uint32_t kDualRoleData = 1u << 25 | 1u << 26;
+
+static void dualRoleSource(uint32_t idHeader)
+{
+    if (switch_battery_start())
+        check(false, "switch_battery_start");
+    advance(10);
+    check((gPd.config2 & 0xc) == 0x4 && (gPd.alertEnable[1] & 0x4) != 0,
+          "CONFIG2 accepts DR_Swap as UFP, ALERT_ENABLE has DR_SWAP");
+    check(logHas("SwitchPD: incoming data role swaps accepted as UFP (CONFIG2 0 +accept as UFP, ALERT_ENABLE 0xfbff "
+                 "+DR_SWAP)"),
+          "one line with what was found");
+    watchDataRole();
+    gPd.idHeader = idHeader;
+    gCharger.plug(500, 2);
+    gPd.sink({PdChip::fixed(5000, 3000) | kDualRoleData, PdChip::fixed(9000, 3000), PdChip::fixed(15000, 3000)}, 0,
+             0x8 | 0x1000 | 0x4000);
+    advance(3000);
+}
+
+static void macSourceStaysHost()
+{
+    dualRoleSource(0xD14005ACu);
+    check(gPd.vdmsSent == 1 && std::count(gPd.commands.begin(), gPd.commands.end(), std::string("1818")) == 0,
+          "Discover Identity, no data role swap");
+    check(((gPd.status1 >> 8) & 3) == 1 && !gDataHost, "UFP: the Mac stays the USB host");
+    check(logHas("alternate mode (done): no data role swap: the source is a USB host"), "the decision's line");
+}
+
+static void hubSourceIsSwapped()
+{
+    dualRoleSource(0x48602109u);
+    const auto swap = std::find(gPd.commands.begin(), gPd.commands.end(), std::string("1818"));
+    check(swap != gPd.commands.end() && std::find(gPd.commands.begin(), swap, std::string("1111")) != swap,
+          "Discover Identity, then the data role swap");
+    check(((gPd.status1 >> 8) & 3) == 2 && gDataHost, "DFP: the Switch is the hub's USB host");
+    check(logHas("the source is a USB hub: data role swap"), "the decision's line");
+    check(iinlim() == 1200 && logHas("SwitchPD: contract 15 V 1.2 A"),
+          "the contract kept: " + std::to_string(iinlim()));
+}
+
+static void sourceSwapsUs()
+{
+    dualRoleSource(0);
+    check(logHas("no data role swap: the source did not answer Discover Identity within 1.5 s") && !gDataHost,
+          "a silent source leaves us UFP");
+    gPd.status1 = (uint16_t)((gPd.status1 & ~(3u << 8)) | 2u << 8);
+    gPd.alert |= 0x400;
+    advance(10);
+    check(gDataHost && logHas("the partner swapped the data roles: Discover Identity as DFP"),
+          "its own swap makes us host");
+    check(std::count(gPd.commands.begin(), gPd.commands.end(), std::string("1818")) == 0, "no swap of ours");
+}
+
+// A source fault gets a PD hard reset (PD_HARD_RST_CMD).
+static void sourceFault()
+{
+    bootWithNintendoCharger();
+    gPd.commands.clear();
+    gPd.alert |= 0x2;
+    advance(10);
+    check(!gPd.commands.empty() && gPd.commands.front() == "0808", "PD hard reset on the source fault");
+    check(logHas("SwitchPD: source fault: PD hard reset"), "one line");
+}
+
 static void otgLeftOn()
 {
     gCharger.reg[1] = 0x21;  // an earlier boot rebooted with its boost on
@@ -1482,4 +1620,82 @@ TEST(SwitchCharging, MacPort)
 TEST(SwitchCharging, DockAltMode)
 {
     run(dockAltMode);
+}
+
+TEST(SwitchCharging, ResetAtStart)
+{
+    run(resetAtStart);
+}
+
+TEST(SwitchCharging, FaultReset)
+{
+    run(faultReset);
+}
+
+TEST(SwitchCharging, SourceFault)
+{
+    run(sourceFault);
+}
+
+// Shut Down and Restart put the BM92T36 back as this boot found it: it stays powered across both, so the next OS
+// (Horizon, L4T, this one) would otherwise inherit what this boot set. Sleep leaves it alone.
+static void exitAsFound()
+{
+    gPd.config1 = 0x00e0;  // source switches on, as an earlier boot left them
+    gPd.vendor = 0x4;      // over-current protection off, as after a SYS_RESET
+    bootWithNintendoCharger();
+    advance(3000);
+    check(((gPd.config1 >> 14) & 3u) == 3u && (gPd.config2 & 0x4) && (gPd.alertEnable[1] & 0x4) && !(gPd.vendor & 0x4),
+          "this boot's settings: switches off, swaps accepted as UFP, the DR_SWAP alert, OCP on");
+    stubSystemPowerMessage(kIOMessageSystemWillSleep);
+    check(gPd.config2 & 0x4, "sleep puts nothing back");
+    stubSystemPowerMessage(kIOMessageSystemWillRestart);
+    check(gPd.config1 == 0x00e0 && gPd.config2 == 0 && gPd.alertEnable[1] == 0xfb && gPd.vendor == 0x4,
+          "every setting as found: CONFIG1 " + hex(gPd.config1) + " CONFIG2 " + hex(gPd.config2) + " VENDOR_CONFIG " +
+              hex(gPd.vendor));
+    check(logHas("SwitchPD: BM92T36 settings back as found"), "one line");
+    const size_t commands = gPd.commands.size();
+    gPd.alert |= 0x1000 | 0x4000;  // a late contract: nothing answers it any more
+    advance(3000);
+    check(gPd.commands.size() == commands && gPd.config2 == 0 && gPd.vendor == 0x4, "nothing written after");
+}
+
+// A fault's SYS_RESET reloads the controller's defaults and this boot sets its own again; Shut Down still returns the
+// values found at start.
+static void exitAfterFaultReset()
+{
+    bootWithNintendoCharger();
+    gPd.status1 |= 0x1;
+    gPd.alert |= 0x8;
+    advance(10);
+    gPd.alert |= 0x8;
+    advance(10);
+    check((gPd.config2 & 0x4) != 0, "accept as UFP set again after the reset");
+    stubSystemPowerMessage(kIOMessageSystemWillPowerOff);
+    check(gPd.config2 == 0 && (gPd.vendor & 0x4) == 0 && ((gPd.config1 >> 14) & 3u) == 3u, "as found at start");
+}
+
+TEST(SwitchCharging, ExitAsFound)
+{
+    run(exitAsFound);
+}
+
+TEST(SwitchCharging, ExitAfterFaultReset)
+{
+    run(exitAfterFaultReset);
+}
+
+TEST(SwitchCharging, MacSourceStaysHost)
+{
+    run(macSourceStaysHost);
+}
+
+TEST(SwitchCharging, HubSourceIsSwapped)
+{
+    run(hubSourceIsSwapped);
+}
+
+TEST(SwitchCharging, SourceSwapsUs)
+{
+    run(sourceSwapsUs);
 }

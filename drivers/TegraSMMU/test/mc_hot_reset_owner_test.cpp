@@ -283,7 +283,7 @@ uintptr_t ml_io_map(uintptr_t phys_addr, uintptr_t)
     return phys_addr;
 }
 
-bool switch_pmc_power_up(unsigned, unsigned, unsigned)
+bool switch_pmc_power_up(unsigned, unsigned, unsigned, const switch_pmc_mc_client *)
 {
     return true;
 }

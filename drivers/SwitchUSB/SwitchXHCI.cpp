@@ -15,10 +15,16 @@
 // overrides: AppleUSBXHCIInterrupter::enable reads ERSTBA and ERDP back through regRead64); which case ran is logged.
 #include "SwitchXHCI.h"
 #include "SwitchUSB.h"
+#include "SwitchUSBPort.h"
 #include "SwitchXHCIServices.h"
 #include "XusbLanes.h"
+#include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOLib.h>
+#include <IOKit/pwr_mgt/RootDomain.h>
 #include <libkern/c++/OSKext.h>
+#if DEVELOPMENT || DEBUG
+#include <os/log.h>
+#endif
 #include "../ArmGIC/SwitchInterrupts.h"
 
 extern "C" {
@@ -43,15 +49,18 @@ bool SwitchXHCI::start(IOService *provider)
     // AppleUSBHostController::init picked (AppleNubT8011USBXHCI clears it: its fabric is coherent; ours is not).
     setRingBufferOptions((ringBufferOptions() & ~static_cast<uint32_t>(kIOMapCacheMask)) |
                          static_cast<uint32_t>(kIOMapWriteCombineCache));
+    // Every transfer buffer the family allocates the same. Apple keeps a buffer's DMA command prepared for the buffer's
+    // life (AppleUSBXHCIRequest remembers it), so the mapper sees one map and no unmap and its cache maintenance runs
+    // once; write-combined memory needs none, however long it stays mapped. Before AppleUSBXHCI::start, which makes
+    // the first of them.
+    setClientBufferOptions((clientBufferOptions() & ~static_cast<uint32_t>(kIOMapCacheMask)) |
+                           static_cast<uint32_t>(kIOMapWriteCombineCache));
     // Without the mapper AppleUSBXHCI would run on (copyMapper NULL is no error to it) there is no cache maintenance.
     if (!switch_usb_dma_mapper(dmaReach()))
         return false;
 
     tegraLoop = IOWorkLoop::workLoop();
-    check = tegraLoop ? IOTimerEventSource::timerEventSource(
-                            this, OSMemberFunctionCast(IOTimerEventSource::Action, this, &SwitchXHCI::checkFired))
-                      : nullptr;
-    if (!check || tegraLoop->addEventSource(check) != kIOReturnSuccess)
+    if (!tegraLoop)
         return false;
     IOService *nub = switch_interrupt_nub(xhost::kMailboxIntid, false);
     mailbox = IOFilterInterruptEventSource::filterInterruptEventSource(this, &SwitchXHCI::mailboxAction,
@@ -59,40 +68,100 @@ bool SwitchXHCI::start(IOService *provider)
     if (!mailbox || tegraLoop->addEventSource(mailbox) != kIOReturnSuccess) {
         panic("SwitchUSB: cannot attach the XUSB mailbox interrupt (INTID %u)", xhost::kMailboxIntid);
     }
+    commandGate = IOCommandGate::commandGate(this);
+    if (!commandGate || tegraLoop->addEventSource(commandGate) != kIOReturnSuccess)
+        return false;
     mailbox->enable();
+#if !XNU_12377_121_6
+    nameUSBCPort(this);
+#endif
     if (!AppleUSBXHCI::start(provider))
         return false;
-    devices = xhost::logDeviceArrivals(this);
+    // For powerStateWillChangeTo's system wake. 24B119's AppleUSBHostController registers too (it reads the root
+    // domain's changes in its own powerStateWillChangeTo); IOServicePM keeps one entry per driver.
+    getPMRootDomain()->registerInterestedDriver(this);
     // xhci-tegra.c tegra_xusb_probe_finish: firmware messages on (USBCMD.EU3S is regWrite32's).
-    if (!gHost.sendMailbox(xhost::MBOX_MSG_ENABLED, 0))
+    if (!enableMessages())
         IOLog("SwitchUSB: XUSB falcon did not take MSG_ENABLED\n");
     return true;
 }
 
 void SwitchXHCI::stop(IOService *provider)
 {
-    if (devices)
-        devices->remove();
-    devices = nullptr;
-    if (check)
-        check->cancelTimeout();
     if (mailbox)
         mailbox->disable();
+    getPMRootDomain()->deRegisterInterestedDriver(this);
     AppleUSBXHCI::stop(provider);
 }
 
 void SwitchXHCI::free()
 {
-    if (tegraLoop) {
-        if (check)
-            tegraLoop->removeEventSource(check);
-        if (mailbox)
-            tegraLoop->removeEventSource(mailbox);
-    }
-    OSSafeReleaseNULL(check);
+    if (tegraLoop && mailbox)
+        tegraLoop->removeEventSource(mailbox);
+    if (tegraLoop && commandGate)
+        tegraLoop->removeEventSource(commandGate);
     OSSafeReleaseNULL(mailbox);
+    OSSafeReleaseNULL(commandGate);
     OSSafeReleaseNULL(tegraLoop);
     AppleUSBXHCI::free();
+}
+
+// What IOPort::copyParentPortForService looks for on a service or its provider: the USB-C port's IOPort
+// (SwitchUSBPort.h).
+void SwitchXHCI::nameUSBCPort(IORegistryEntry *entry)
+{
+    uint32_t type = kSwitchUSBCPortType;
+    uint32_t number = kSwitchUSBCPortNumber;
+    entry->setProperty("port-type", &type, sizeof(type));
+    entry->setProperty("port-number", &number, sizeof(number));
+}
+
+// Only the USB-C connector's root ports exist: pad 0's USB 2.0 port and SS port 0's. The other seven have no connector;
+// createPorts powers them off. Each is made as base createPort makes a port, from its 16 bytes of operational
+// registers and its protocol copy, but as a USB-C port. iOS 27: the plain port with the host port type USB-C in its
+// property dictionary, labelled with the IOPort it follows. iOS 17, whose plain ports have no IOPort path: the Type-C
+// port Apple's T8011 controller makes for a Type-C connector, which finds the IOPort through the controller (start).
+IOService *SwitchXHCI::createPort(void *protocol, uint32_t port, uint32_t)
+{
+    const bool superSpeed = port == gHost.ssPort();
+    if (!superSpeed && port != gHost.otgPort())
+        return nullptr;
+    IODeviceMemory *window = getProvider()->getDeviceMemoryWithIndex(0);
+    IODeviceMemory *registers =
+        window ? IODeviceMemory::withSubRange(window, xhci_portsc_offset(gHost.capLength(), port), 0x10) : nullptr;
+    if (!registers)
+        return nullptr;
+#if XNU_12377_121_6
+    constexpr uint32_t kHostPortTypeUSBC = 5;  // tIOUSBHostPortType; usb-port-type 4 in the dictionary
+    [[maybe_unused]] constexpr const char *kGiven = "host port type 5, USB-C";
+    OSDictionary *properties = switch_original_xhci_port_properties(port, kHostPortTypeUSBC, 0);
+    IOService *created = nullptr;
+    if (properties) {
+        created = superSpeed ? switch_original_xhci_usb3_port(registers, protocol, properties)
+                             : switch_original_xhci_usb2_port(registers, protocol, properties);
+        properties->release();
+    }
+    if (created)
+        nameUSBCPort(created);
+#else
+    [[maybe_unused]] constexpr const char *kGiven = "Type-C port class";
+    IOService *created = superSpeed ? switch_original_xhci_typec_usb3_port(registers, protocol, port, 0)
+                                    : switch_original_xhci_typec_usb2_port(registers, protocol, port, 0);
+#endif
+    registers->release();
+    if (created && created->attach(this)) {
+        if (created->start(this)) {
+#if DEVELOPMENT || DEBUG
+            os_log(OS_LOG_DEFAULT, "SwitchUSB: root port %u created as %s (%s, %s)", port,
+                   created->getMetaClass()->getClassName(), superSpeed ? "SuperSpeed" : "USB 2.0", kGiven);
+#endif
+            return created;
+        }
+        created->detach(this);
+    }
+    OSSafeReleaseNULL(created);
+    IOLog("SwitchUSB: USB-C root port %u did not start\n", port);
+    return nullptr;
 }
 
 // Interrupter register sets (runtime base + 0x20 + 32 * n) that the hardware does not have.
@@ -110,32 +179,11 @@ uint32_t *SwitchXHCI::shadowFor(uint64_t address)
 }
 
 namespace {
-// XusbLanes.h's adjustments to AppleUSBXHCI's register writes: U1/U2 off on the SuperSpeed ports, an interrupt
-// moderation floor. AppleUSBXHCI writes from its work loop and its interrupt filter: arithmetic only.
-unsigned gSsFirst, gSsCount;
-bool gSsFound;
-
+// XusbLanes.h's interrupt moderation floor on AppleUSBXHCI's IMOD writes. AppleUSBXHCI writes from its work loop and
+// its interrupt filter: arithmetic only.
 uint32_t adjustWrite(uint32_t offset, uint32_t value, uint32_t runtime, uint32_t interrupters)
 {
-    if (!gSsFound) {
-        const xhci_port_range ss = xhci_find_ports(
-            [](void *, uint32_t at) {
-                return gHost.xhci(at);
-            },
-            nullptr, static_cast<uint32_t>(xhost::kXhciBytes), 3);
-        gSsFirst = ss.first;
-        gSsCount = ss.count;
-        gSsFound = true;
-    }
-    switch (xhci_write_kind(offset, gHost.capLength(), runtime, gSsFirst, gSsCount, interrupters)) {
-    case XHCI_WRITE_SS_PORTPMSC:
-        return xhci_portpmsc_ss(value);
-    case XHCI_WRITE_IMOD:
-        return xhci_imod_floor(value);
-    case XHCI_WRITE_OTHER:
-        break;
-    }
-    return value;
+    return xhci_is_imod(offset, runtime, interrupters) ? xhci_imod_floor(value) : value;
 }
 }  // namespace
 
@@ -175,6 +223,14 @@ uint32_t SwitchXHCI::heldWrite32(uint64_t address, uint32_t value)
     // xhci-tegra.c tegra_xusb_probe_finish: USBCMD.EU3S (MFINDEX stops in U3), on every write so that a reset or a
     // controller AppleUSBXHCI reinitializes after SC7 keeps it.
     value = xusb_hold_usbcmd(&hold, value) | XHCI_USBCMD_EU3S;
+    // The controller's reset leaves the SuperSpeed port powered, so the falcon's SuperSpeed interface reset is owed
+    // again (SwitchXHCIEvents.cpp); the role thread does it once the controller runs.
+    if (value & XHCI_USBCMD_HCRST) {
+        __atomic_store_n(&sspiDue, true, __ATOMIC_RELEASE);
+        __atomic_store_n(&stateLost, false, __ATOMIC_RELEASE);
+    }
+    if ((value & XHCI_USBCMD_RS) && __atomic_load_n(&sspiDue, __ATOMIC_ACQUIRE))
+        switch_usb_reconsider();
     if (hold.sre && !failed)
         IOLog("SwitchUSB: XUSB host restore after SC7: the controller's state went with the falcon, USBSTS.SRE\n");
     return value;
@@ -234,8 +290,8 @@ bool switchxhci_start(char *why, size_t whySize)
         return false;
     if (!gHost.loadFirmware(switch_xusb_firmware, xhost::firmwareBytes(), why, whySize))
         return false;
-    // The host stack's IOResources personalities, kept out of the boot-time catalogue (emit_prelink.py
-    // DEFERRED_PERSONALITIES): AppleUSBHostResources (AppleUSBHostController::start waits for it) and
+    // The host stack's IOResources personalities, kept out of the boot-time catalogue (BUILD.bazel
+    // prelink_deferred): AppleUSBHostResources (AppleUSBHostController::start waits for it) and
     // IOUSBMassStorageResource, as their kexts' Info.plist has them. iOS 27's packet capture matches IOResources too
     // (iOS 17's matches AppleUSBHostResources, so it follows that one).
     const bool resources = xhost::addResourcePersonality("AppleUSBHostResources", "AppleUSBHostResources",
@@ -280,8 +336,6 @@ bool switchxhci_start(char *why, size_t whySize)
     }
     const uint32_t interrupters = (gHost.xhci(4) >> 8) & 0x7ff;
     IOService *nub = xhost::makeNub(xhost::kXhciPA, xhost::kXhciBytes, xhost::kHostIntid);
-    if (nub)
-        xhost::copyPortIdentity(nub, "/arm-io/usb-xhci");
     auto *controller = OSTypeAlloc(SwitchXHCI);
     if (!nub || !controller || !controller->init(nullptr) || !controller->attach(nub)) {
         OSSafeReleaseNULL(controller);

@@ -175,7 +175,8 @@ bool TegraSor1::powerUp(char *why, size_t size)
         snprintf(why, size, "the DP pads did not leave deep power down");
         return false;
     }
-    if (!switch_pmc_partition_is_on(kPartitionSor) && !switch_pmc_power_up(kPartitionSor, kClockSor1, kClockSor1)) {
+    if (!switch_pmc_partition_is_on(kPartitionSor) &&
+        !switch_pmc_power_up(kPartitionSor, kClockSor1, kClockSor1, nullptr)) {
         snprintf(why, size, "the SOR power partition did not come up");
         return false;
     }

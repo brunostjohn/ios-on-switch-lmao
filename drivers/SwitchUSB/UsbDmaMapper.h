@@ -3,13 +3,16 @@
 //
 // AppleUSBHostController asks its subclass for a mapper (copyMapper, vtable slot 253) and keeps it as the mapper of its
 // buffers and DMA commands, so every DMA address AppleUSBXHCI hands the controller comes from here:
-//   * a buffer whose physical pieces meet on page boundaries (contiguous memory, or the scattered pages of large I/O)
-//     gets one IOVA range over its own pages through the MC SMMU (UsbSmmuMapper.cpp); a cacheable one is cleaned before
-//     the controller reads it and cleaned and invalidated after it may have written (IOMemoryDescriptor
-//     performOperation, kIOMemoryIncoherentIOStore/Flush). Controller structures (rings, contexts, scratchpads) are
-//     allocated non-cacheable: SwitchXHCI gives AppleUSBXHCI's ring buffer options the write-combine cache mode;
+//   * a physically contiguous buffer below 4 GiB is at its own address through the MC SMMU, which maps that RAM once
+//     (UsbSmmuMapper.cpp), and costs no record; one whose physical pieces meet on page boundaries (the scattered pages
+//     of large I/O, or one piece above 4 GiB) gets one IOVA range over its own pages in the window. A cacheable one is
+//     cleaned before the controller reads it and cleaned and invalidated after it may have written (IOMemoryDescriptor
+//     performOperation, kIOMemoryIncoherentIOStore/Flush, or by physical address for a buffer at its own address).
+//     Controller structures (rings, contexts, scratchpads) and every transfer buffer the family allocates are
+//     non-cacheable: SwitchXHCI gives AppleUSBXHCI's ring and client buffer options the write-combine cache mode, so
+//     what is cacheable here is caller-supplied memory, whose command is completed per transfer (UsbDmaCache.h);
 //   * anything else (pieces that break inside a page, as mbuf chains do, or a full window) goes through a non-cacheable
-//     bounce pool below 4 GiB, identity-mapped, copied in at map time and back at unmap time when the controller may
+//     bounce pool below 4 GiB, at its own IOVA, copied in at map time and back at unmap time when the controller may
 //     have written;
 //   * if the SMMU could not be attached (one line says why), contiguous buffers in reach go by physical address and
 //     the rest is bounced.
@@ -25,3 +28,13 @@ int switch_usb_dma_reserve();
 // Creates (once) and starts the mapper attached to IOResources, on the reserved pool; nullptr on failure (logged).
 // `reach` is the first physical address the controller cannot address (HCCPARAMS1.AC64: 64-bit or 32-bit DMA).
 LIBKERN_RETURNS_NOT_RETAINED IOMapper *switch_usb_dma_mapper(uint64_t reach);
+
+// A mapping that must be completed per transfer and is still mapped after its host session ended was kept by its
+// command for a buffer's life and went stale: one error line, all builds, once per session, at whichever comes first of
+// the controller's power off (AppleUSBHostController idles it to 0 once the detach's requests are done) and the next
+// session's start. Not as the session ends: Apple is still completing the requests the detach aborted.
+void switch_usb_dma_session_start();
+// The session ends (the port leaves the host role).
+void switch_usb_dma_session_end();
+// The controller reached power state 0 (SwitchXHCI::powerStateDidChangeTo).
+void switch_usb_dma_controller_off();

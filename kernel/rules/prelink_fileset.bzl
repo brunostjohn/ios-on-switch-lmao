@@ -4,6 +4,9 @@ The kernelcache's kexts are arm64e and stripped. They are translated in kernel m
 a plain pointer, and each Apple kernel address they use is named from the kernelcache's vtables (PAC-checked), GOT
 order (iOS 17's import names), its vnode operation vectors and ipsw's signatures, then pinned_names.py's hand pins.
 The prelink refuses an import that nothing names unless shims.py answers it.
+
+Which kexts it takes is base_roots and the drivers' prelink, prelink_cuts and prelink_deferred lists, as the iOS 17
+prelink takes them; a kext only one kind's kernelcache ships is named in a select on that kind (//ipsw:<kind>).
 """
 
 load("@xcode//:defs.bzl", "DEVELOPER_DIR")
@@ -15,9 +18,13 @@ def _kernel_prelink_fileset_impl(ctx):
     out = ctx.actions.declare_file(ctx.attr.out)
     report = ctx.actions.declare_file(stem + ".json")
     names = ctx.actions.declare_file(stem + ".names.json")
-    kernel = ctx.attr.kernel[KernelObjectsInfo].objects[0]
+    lists = ctx.attr.kernel[KernelObjectsInfo]
+    kernel = lists.objects[0]
     args = ctx.actions.args()
     args.add("--kernel", kernel)
+    args.add_all({r: True for r in ctx.attr.base_roots + lists.prelink}.keys(), before_each = "--root")
+    args.add_all(lists.cuts, before_each = "--cut")
+    args.add_all(lists.deferred, before_each = "--defer")
     args.add("--kernelcache", ctx.file.kernelcache)
     args.add("--kernelcache-17", ctx.file.kernelcache_17)
     args.add("--arm64e", ctx.executable._arm64e)
@@ -49,6 +56,7 @@ kernel_prelink_fileset = rule(
     doc = "Our kernel with a fileset kernelcache's kexts prelinked (out); its report (.json) and kernel names (.names.json) in the report output group.",
     attrs = {
         "kernel": attr.label(mandatory = True, providers = [KernelObjectsInfo], doc = "the unprelinked kernel"),
+        "base_roots": attr.string_list(mandatory = True, doc = "the kexts prelinked before any driver's list"),
         "kernelcache": attr.label(default = "//ipsw:kernelcache", allow_single_file = True),
         "kernelcache_17": attr.label(default = "//ipsw:kernelcache_21H461", allow_single_file = True),
         "symbolsets": attr.label(mandatory = True, allow_single_file = [".plist"], doc = "the kernel's symbolsets.plist"),
