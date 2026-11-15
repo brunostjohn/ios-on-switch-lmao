@@ -85,5 +85,6 @@ private:
     static void readyDone(void *, int);
     static void readyFired(OSObject *, IOInterruptEventSource *, int);
     void publishModes();
+    void publishScanoutLimits();
 #include "../NativeMobileDisplay/NativeLegacySwapQueue.h"
 };

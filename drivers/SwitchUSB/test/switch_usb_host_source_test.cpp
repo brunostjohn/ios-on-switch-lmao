@@ -500,6 +500,10 @@ TEST(SwitchUsbHostSource, NoProbeReadBeforeTheUnmapMaintenance)
         unmap,
         HasSubstr("\"bounced\",\n                        poolVA + static_cast<uint64_t>(done.firstPage) * kPage"));
     EXPECT_THAT(SourceText("../UsbDmaProbe.h"), Not(HasSubstr("usb_dma_probe_before")));
+    const std::string held = SourceText("../UsbDmaProbeHeld.cpp");
+    EXPECT_THAT(held, Not(HasSubstr("readCached")));
+    EXPECT_THAT(held, Not(HasSubstr("readUncached")));
+    EXPECT_THAT(held, Not(HasSubstr("switch_dcache")));
 }
 
 // usb_static_map_test's high-address window cases drive the composition the kernel uses: the pieces checked against

@@ -6,12 +6,7 @@
 // each class arrived in, and every mapping is remembered until its unmap. A summary prints those counts, the mappings
 // still held, the live instances of the USB host classes, and how many held mappings must be completed per transfer
 // (UsbDmaCache.h usbDmaNeedsCompletion) whenever the port leaves or takes the host role, when the controller powers
-// off, once the first lines are used up and every so often after. With the family's buffers write-combined that last
-// count is 0; for each such mapping still held (cacheable, device-writable, not bounced) it samples the first line:
-// through the cache, through a Device alias of the page that no cache line can answer, and through the cache again
-// after a clean and invalidate of that line, with the aperture address the maintenance was issued on and the MMU's
-// translation of it. A mapping that is right to hold is never sampled: the clean and invalidate
-// could write a dirty line over what the controller is writing.
+// off, once the first lines are used up and every so often after.
 //
 // The first device-writable mappings also get a line at prepare (path, class, physical address, line offset, length
 // and capacity, options, direction, cache mode, CPU, maintenance address) and one at complete, after the unmap's
@@ -22,9 +17,6 @@
 // never makes one. The summary's MC errors are TegraMCErrors.cpp's (tegra_mc_error_latest), never read from the MC
 // here.
 //
-// Reading a held sample: uncached right and cached stale until maintenance: the line was stale and our invalidate fixes
-// it. Cached stale after maintenance: our invalidate had no effect. All stale: the device's write never reached that
-// page. All right while Apple saw stale data: Apple read another copy.
 #pragma once
 #include <IOKit/IOMemoryDescriptor.h>
 #include <stdint.h>

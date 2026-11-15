@@ -2,8 +2,7 @@
 // The development probe's counts and its table of mappings still held; see UsbDmaProbe.h.
 //
 // Maps and unmaps arrive from any work loop on any CPU, and the mapper's own-address path takes no lock, so neither
-// does this: a slot is claimed and freed by compare-and-swap on its state. A sample reads a slot's physical address
-// only, never its descriptor (which its unmap may have released meanwhile); one racing a reuse prints a mixed entry.
+// does this: a slot is claimed and freed by compare-and-swap on its state.
 #include "UsbDmaProbe.h"
 
 #if DEVELOPMENT || DEBUG
@@ -14,11 +13,6 @@
 #include "UsbDmaProbeInternal.h"
 
 namespace {
-using usb_dma_probe::Aperture;
-using usb_dma_probe::Hex;
-using usb_dma_probe::readCached;
-using usb_dma_probe::readUncached;
-
 constexpr uint32_t kSlots = 128;
 constexpr uint32_t kClasses = 8;
 
@@ -34,8 +28,6 @@ enum Path : uint32_t {
     kBounced,
     kPaths
 };
-
-const char *const kPathNames[kPaths] = {"own address", "window", "bounced"};
 
 struct Slot {
     uint32_t state;
@@ -124,27 +116,6 @@ void live(const char *when)
     IOLog("SwitchUSB: DMA probe summary (%s): live:%s\n", when, line);
 }
 
-void sample(const Slot &slot, const char *when)
-{
-    uint8_t cachedBefore[8] = {};
-    uint8_t uncached[8] = {};
-    uint8_t cachedAfter[8] = {};
-    readCached(slot.pa, 8, cachedBefore);
-    readUncached(slot.pa, 8, uncached);
-    if (switch_dma_pa_managed(slot.pa)) {
-        switch_dcache_phys_lines(SWITCH_DCACHE_CLEAN_INVALIDATE, switch_dcache_line_of(slot.pa), SWITCH_DCACHE_LINE);
-        switch_dcache_sync();
-    }
-    readCached(slot.pa, 8, cachedAfter);
-    const Hex before(cachedBefore);
-    const Hex device(uncached);
-    const Hex after(cachedAfter);
-    const Aperture aperture(slot.pa);
-    IOLog("SwitchUSB: DMA probe held (%s): %s %p %s at %#llx pa %#llx: cached %s, uncached %s, cached after clean and "
-          "invalidate %s; maintenance va %#llx -> pa %#llx\n",
-          when, slot.className, static_cast<const void *>(slot.memory), kPathNames[slot.path], slot.address, slot.pa,
-          before.text, device.text, after.text, aperture.va, aperture.back);
-}
 }  // namespace
 
 namespace usb_dma_probe {
@@ -194,15 +165,6 @@ void heldUnmap(const IOMemoryDescriptor *memory, uint64_t address)
         __atomic_add_fetch(&entry->unmaps, 1, __ATOMIC_RELAXED);
 }
 
-// Its clean and invalidate can write a dirty line over what the controller is writing, so only a mapping already wrong
-// to hold is sampled; a bounce's own pages are not the controller's.
-void sampleHeld(const char *when)
-{
-    for (Slot &slot : gSlots) {
-        if (__atomic_load_n(&slot.state, __ATOMIC_ACQUIRE) == kHeld && wrongToHold(slot) && slot.path != kBounced)
-            sample(slot, when);
-    }
-}
 }  // namespace usb_dma_probe
 
 void usb_dma_probe_summary(const char *when)
@@ -242,6 +204,5 @@ void usb_dma_probe_summary(const char *when)
               __atomic_load_n(&entry.modes, __ATOMIC_RELAXED));
     }
     live(when);
-    usb_dma_probe::sampleHeld(when);
 }
 #endif

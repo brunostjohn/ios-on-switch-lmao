@@ -1,7 +1,5 @@
-load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
-load("//kits/SwitchABI:defs.bzl", "switch_abi_bindings")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -40,7 +38,6 @@ kernel_driver(
         "SwitchDPSession.cpp",
         "SwitchExternalScreen.cpp",
         "SwitchExternalScanout.cpp",
-        "original-bindings.S",
         "TegraDisplayB.cpp",
         "TegraDpaux1.cpp",
         "TegraSor1.cpp",
@@ -59,11 +56,4 @@ kernel_driver(
         "kits/SwitchMMIO",
     ],
     late = ["SwitchExternalScreen.cpp"],
-)
-
-switch_abi_bindings(
-    name = "original_bindings",
-    out = "original-bindings.S",
-    classes = ["//kits/SwitchABI:IOMobileFramebufferLegacy"],
-    objects = [":SwitchDisplayPort_cc"],
 )

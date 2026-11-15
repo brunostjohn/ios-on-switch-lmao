@@ -316,6 +316,7 @@ host_test(
         "//drivers/SwitchUSB:SwitchXHCIServices.cpp",
         "//drivers/SwitchUSB:UsbDmaMapper.cpp",
         "//drivers/SwitchUSB:UsbDmaProbe.h",
+        "//drivers/SwitchUSB:UsbDmaProbeHeld.cpp",
         "//drivers/SwitchUSB:UsbSmmuMapper.cpp",
         "//drivers/SwitchUSB:UsbSmmuSpace.h",
         "//drivers/SwitchUSB:XudcHardware.cpp",

@@ -70,11 +70,44 @@ bool SwitchExternalScreen::begin(SwitchDisplayPort *port, IOWorkLoop *workLoop)
     }
     setName("SwitchExternalDisplay");
     setProperty("external", kOSBooleanTrue);
-    setProperty("IOSurfaceRowBytesAlignment", 64, 32);
+    publishScanoutLimits();
     if (!attach(nub) || !IOMobileFramebufferLegacy::start(nub))
         return false;
     registerService();
     return true;
+}
+
+void SwitchExternalScreen::publishScanoutLimits()
+{
+    struct Limit { const char *key; uint64_t value; };
+    const auto publish = [this](const char *name, const Limit *limits, unsigned count, unsigned bits) {
+        auto *dictionary = OSDictionary::withCapacity(count);
+        bool ok = dictionary != nullptr;
+        for (unsigned i = 0; ok && i < count; ++i) {
+            auto *number = OSNumber::withNumber(limits[i].value, bits);
+            ok = number && dictionary->setObject(limits[i].key, number);
+            OSSafeReleaseNULL(number);
+        }
+        if (ok)
+            setProperty(name, dictionary);
+        OSSafeReleaseNULL(dictionary);
+    };
+    const Limit stride[] = {{"StrideLinearHorizontal", 64}};
+    publish("DisplayPipeStrideRequirements", stride, 1, 32);
+    const Limit base[] = {{"PlaneBaseAlignmentLinear", 4096}};
+    publish("DisplayPipePlaneBaseAlignment", base, 1, 64);
+    const Limit layers[] = {{"MaxNumLayers", 1}};
+    publish("IOMFBNumLayers", layers, 1, 32);
+    const Limit scaling[] = {{"RGBLayer_MinScaleFraction", 1}, {"RGBLayer_MaxScale", 1},
+                             {"YUVLayer_MinScaleFraction", 1}, {"YUVLayer_MaxScale", 1}};
+    publish("IOMFBScalingLimits", scaling, 4, 32);
+    const Limit source[] = {{"MaxSrcRectWidth", SWITCH_DP_MAX_WIDTH},
+                            {"MaxSrcRectTotal", uint64_t{SWITCH_DP_MAX_WIDTH} * SWITCH_DP_MAX_HEIGHT},
+                            {"MaxSrcBufferWidth", SWITCH_DP_MAX_WIDTH}, {"MaxSrcBufferHeight", SWITCH_DP_MAX_HEIGHT},
+                            {"MaxVideoSrcDownscalingWidth", SWITCH_DP_MAX_WIDTH}, {"VideoClock", 750000000},
+                            {"PixelClock", 750000000}, {"IOMFBCompressionSupport", 0}};
+    publish("IOMFBMaxSrcPixels", source, 8, 64);
+    setProperty("IOMFBYUVPackedUnSupported", true);
 }
 
 void SwitchExternalScreen::publishModes()
