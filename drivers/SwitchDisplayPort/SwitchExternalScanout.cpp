@@ -96,10 +96,17 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
         auto &slot = slots[i];
         if (slot.memory == memory && slot.surface == surface && slot.pages == pages && slot.offset == offset &&
             slot.allocationId == allocation.allocation_id && slot.generation == allocation.allocation_generation) {
-            releaseRead(i);
-            slot.read = snapshot;
+            if (slot.read.lease) {
+                if (slot.read.allocation.content_generation != snapshot.allocation.content_generation) {
+                    switch_native_scanout_release(&snapshot);
+                    return -1;
+                }
+                switch_native_scanout_release(&snapshot);
+            } else {
+                slot.read = snapshot;
+            }
             slot.used = ++slotUses;
-            if (switch_display::surfaceUseCounted(surface)) {
+            if (!slot.counted && switch_display::surfaceUseCounted(surface)) {
                 switch_surface_use_increment(surface, 0);
                 slot.counted = true;
             }
@@ -239,8 +246,12 @@ void SwitchExternalScreen::completionFired(OSObject *owner, IOInterruptEventSour
     self->gpuPending = false;
     if (!self->dcb || self->gpuGeneration != self->linkGeneration ||
         __atomic_load_n(&self->gpuStatus, __ATOMIC_ACQUIRE) != 0) {
-        if (self->drawing >= 0)
-            self->releaseRead(static_cast<unsigned>(self->drawing));
+        if (self->drawing >= 0) {
+            if (self->connected)
+                self->releaseRead(static_cast<unsigned>(self->drawing));
+            else
+                self->releaseSlot(static_cast<unsigned>(self->drawing));
+        }
         self->drawing = -1;
         self->retire(self->pending, false);
         self->pending = nullptr;
@@ -281,7 +292,6 @@ void SwitchExternalScreen::frameEnd()
         if (front >= 0) {
             slots[front].presented = true;
             switch_native_scanout_deliver(&slots[front].read);
-            switch_native_scanout_release(&slots[front].read);
         }
     }
     const uint64_t now = mach_absolute_time();

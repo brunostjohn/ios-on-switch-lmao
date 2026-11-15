@@ -53,3 +53,12 @@ host_test(
     srcs = ["dp_aux_test.cpp"] + POLICY,
     deps = [":policy_c11"],
 )
+
+host_test(
+    name = "dp_scanout_source_test",
+    srcs = ["dp_scanout_source_test.cpp"],
+    data = [
+        "//drivers/SwitchDisplayPort:SwitchExternalScanout.cpp",
+        "//drivers/SwitchDisplayPort:SwitchExternalScreen.cpp",
+    ],
+)
