@@ -935,6 +935,7 @@ static void notTaken()
     check(switch_battery_set_otg_boost(false, false) == 0 && (gCharger.reg[5] & 0x30) == 0x10,
           "boost off: the watchdog as it was found (40 s): " + hex(gCharger.reg[5]));
     check(switch_battery_set_otg_boost(true, false) == 0 && (gCharger.reg[5] & 0x30) == 0, "boost on again");
+#if DEVELOPMENT || DEBUG
     // REG09 read by the USB role report: the latched fault still reaches the next reading.
     gCharger.latched |= 0x40;
     char line[512];
@@ -942,6 +943,7 @@ static void notTaken()
     gCharger.intPending = true;
     advance(300);
     check(logHas("REG09 0x40"), "the fault the report read is in the next stats line");
+#endif
 }
 
 static void linuxLeft()

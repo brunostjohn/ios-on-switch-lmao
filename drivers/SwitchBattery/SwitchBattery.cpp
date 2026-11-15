@@ -139,10 +139,12 @@ const char *inputSource(bool boosting, bool good, const PdSnapshot &pd, unsigned
     return vbus == 2 ? "adapter" : "unknown";
 }
 
+#if DEVELOPMENT || DEBUG
 unsigned flag(unsigned value, unsigned mask)
 {
     return (value & mask) ? 1 : 0;
 }
+#endif
 
 uint64_t packPd(const SwitchPDState *s)
 {
@@ -1402,6 +1404,7 @@ extern "C" int switch_battery_set_otg_boost(bool on, bool ourVbus)
     return refused ? SWITCH_BATTERY_BOOST_VBUS_PRESENT : 0;
 }
 
+#if DEVELOPMENT || DEBUG
 // The USB role report's charger line (SwitchBattery.h). Writes nothing; REG09's faults go through readFaults, so the
 // next reading still sees what this read cleared.
 extern "C" int switch_battery_describe_otg(char *buffer, size_t size)
@@ -1442,3 +1445,4 @@ extern "C" int switch_battery_describe_otg(char *buffer, size_t size)
              gauge ? 0 : (int16_t)current * 15625 / 100000);
     return 0;
 }
+#endif

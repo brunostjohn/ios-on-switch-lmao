@@ -92,6 +92,7 @@ void pdChanged(void *, const SwitchPDState *state)
 #if DEVELOPMENT || DEBUG
 thread_call_t gReportCall;
 uint32_t gRoleChanges;                // role changes applied (the report names the one it follows)
+uint64_t gChangeAt;                   // mach_absolute_time of the last of them
 constexpr uint32_t kReportMS = 1000;  // the role line: this long after a change, when the port has settled
 
 // The role line, kReportMS after a role change (its own thread call, re-armed by every change: the last one wins):
@@ -99,8 +100,18 @@ constexpr uint32_t kReportMS = 1000;  // the role line: this long after a change
 // every PORTSC) and the pad controller (port 0's capability, ID and VBUS overrides, pad power,
 // charger detection, over-current maps); the PD controller (phase, STATUS1/2, switches, rails' GPIOs); the charger
 // (REG01/05/08/09, battery current). Log only, never the boot console.
+//
+// The role is taken before the registers are read. A report whose change a later one has replaced is dropped (that
+// one's report is due); one that a change overtakes while it reads says so, and every line says how long after its
+// change it was read.
 void reportRole(thread_call_param_t, thread_call_param_t change)
 {
+    const auto number = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(change));
+    if (__atomic_load_n(&gRoleChanges, __ATOMIC_ACQUIRE) != number)
+        return;
+    const char *role = __atomic_load_n(&gHostRole, __ATOMIC_ACQUIRE) ? "host" : "device";
+    uint64_t sinceNs = 0;
+    absolutetime_to_nanoseconds(mach_absolute_time() - __atomic_load_n(&gChangeAt, __ATOMIC_ACQUIRE), &sinceNs);
     char xhci[720];
     char lane[200];
     char pd[300];
@@ -109,16 +120,17 @@ void reportRole(thread_call_param_t, thread_call_param_t change)
     switch_usb_ss_describe(lane, sizeof(lane));
     (void)switch_pd_describe(pd, sizeof(pd));
     (void)switch_battery_describe_otg(charger, sizeof(charger));
-    const char *role = gHostRole ? "host" : "device";
-    const unsigned number = static_cast<unsigned>(reinterpret_cast<uintptr_t>(change));
+    char age[80];
+    snprintf(age, sizeof(age), "read %llu ms after the change%s", sinceNs / 1000000ULL,
+             __atomic_load_n(&gRoleChanges, __ATOMIC_ACQUIRE) != number ? ", a later change came while it read" : "");
     // Under the 1 KiB os_log record (kprof keeps its lines under 900): one line, or two when it would not fit.
-    if (strlen(xhci) + strlen(lane) + strlen(pd) + strlen(charger) < 820) {
-        os_log(OS_LOG_DEFAULT, "SwitchUSB: %s role +1 s (change %u): %s | %s | %s | %s", role, number, xhci, lane, pd,
-               charger);
+    if (strlen(xhci) + strlen(lane) + strlen(pd) + strlen(charger) + strlen(age) < 820) {
+        os_log(OS_LOG_DEFAULT, "SwitchUSB: %s role +1 s (change %u): %s | %s | %s | %s | %s", role, number, xhci, lane,
+               pd, charger, age);
     } else {
         os_log(OS_LOG_DEFAULT, "SwitchUSB: %s role +1 s (change %u, 1/2): %s", role, number, xhci);
-        os_log(OS_LOG_DEFAULT, "SwitchUSB: %s role +1 s (change %u, 2/2): %s | %s | %s", role, number, lane, pd,
-               charger);
+        os_log(OS_LOG_DEFAULT, "SwitchUSB: %s role +1 s (change %u, 2/2): %s | %s | %s | %s", role, number, lane, pd,
+               charger, age);
     }
 }
 
@@ -129,8 +141,10 @@ void armReport()
     uint64_t deadline = 0;
     clock_interval_to_deadline(kReportMS, kMillisecondScale, &deadline);
     thread_call_cancel(gReportCall);
-    thread_call_enter1_delayed(gReportCall,
-                               reinterpret_cast<thread_call_param_t>(static_cast<uintptr_t>(++gRoleChanges)), deadline);
+    __atomic_store_n(&gChangeAt, mach_absolute_time(), __ATOMIC_RELEASE);
+    const uint32_t number = __atomic_add_fetch(&gRoleChanges, 1, __ATOMIC_ACQ_REL);
+    thread_call_enter1_delayed(gReportCall, reinterpret_cast<thread_call_param_t>(static_cast<uintptr_t>(number)),
+                               deadline);
 }
 #else
 void armReport()
@@ -216,13 +230,13 @@ void applyRole(thread_call_param_t, thread_call_param_t)
             return;
         }
         __atomic_store_n(&gHostUp, true, __ATOMIC_RELEASE);
-        gHostRole = true;
+        __atomic_store_n(&gHostRole, true, __ATOMIC_RELEASE);  // the role report reads it
         switchxhci_superspeed_reset_due();
         IOLog("SwitchUSB: host role (%s)\n",
               gDockHost ? "a source that made us DFP, the dock or a powered hub" : "a device on the port, VBUS on");
         armReport();
     } else if (!wantHost && gHostRole) {
-        gHostRole = false;
+        __atomic_store_n(&gHostRole, false, __ATOMIC_RELEASE);
         switch_usb_port_follow(attached ? XUSB_PORT_DEVICE : XUSB_PORT_EMPTY, false, true);
         followLane();
         switchxhci_set_host_role(false);
@@ -301,8 +315,10 @@ extern "C" int switch_usb_start(void)
                                                           THREAD_CALL_OPTIONS_ONCE)
                       : nullptr;
 #if DEVELOPMENT || DEBUG
+    // Not THREAD_CALL_PRIORITY_LOW: its threads run at MAXPRI_THROTTLE, and a busy system (a device's dexts launching)
+    // held a report back for seconds while the port moved on.
     gReportCall =
-        thread_call_allocate_with_options(&reportRole, nullptr, THREAD_CALL_PRIORITY_LOW, THREAD_CALL_OPTIONS_ONCE);
+        thread_call_allocate_with_options(&reportRole, nullptr, THREAD_CALL_PRIORITY_USER, THREAD_CALL_OPTIONS_ONCE);
 #endif
     if (gRoleCall && gHostPackaged && !switch_usb_port_watch(gRoleCall))
         IOLog("SwitchUSB: host mode off: the USB-C port's IOPort cannot be watched\n");
