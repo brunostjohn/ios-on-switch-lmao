@@ -4,6 +4,10 @@
 // interrupts, SwitchAudioCodec.cpp the RT5639 and the jack.
 #pragma once
 #include "SwitchAudioRegisters.h"
+#include "SwitchHDA.h"
+#include <kern/thread_call.h>
+
+extern uint32_t switch_audio_display_formats;
 
 // NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage
 class SwitchAudio : public IOService {
@@ -11,8 +15,23 @@ class SwitchAudio : public IOService {
     OSDeclareDefaultStructors(SwitchAudio) IOWorkLoop *loop = nullptr;
     IOCommandGate *gate = nullptr;
     IOTimerEventSource *timer = nullptr;  // null: the play clock; Tegra: the period interrupt's deadline
-    IOBufferMemoryDescriptor *memory[3] = {};
+    IOBufferMemoryDescriptor *memory[5] = {};
     SwitchAudioControl *control = nullptr;
+    SwitchHDA displayAudio;
+    IOInterruptEventSource *displayInterrupt = nullptr;
+    IOInterruptEventSource *displayEvent = nullptr;
+    thread_call_t displayCall = nullptr;
+    bool displayAsleep = false;
+    bool displayPresencePending = false;  // DP uses codec clocks while the Audio gate is open.
+    bool displayInit();
+    void displayFree();
+    static void displayFired(OSObject *, IOInterruptEventSource *, int);
+    static void displayChanged(OSObject *, IOInterruptEventSource *, int);
+    static void displayProbe(thread_call_param_t, thread_call_param_t);
+    static IOReturn displayPrepareGated(OSObject *, void *, void *, void *, void *);
+    static IOReturn displayConnectGated(OSObject *, void *, void *, void *, void *);
+    static IOReturn displayRequestGated(OSObject *, void *, void *, void *, void *);
+    static IOReturn displaySleepGated(OSObject *, void *, void *, void *, void *);
 
     uint64_t hz = 0;
     const switch_audio_clock *clock = &switch_audio_hw::kClocks[0];  // what the I2S runs (or runs next)
@@ -217,6 +236,9 @@ class SwitchAudio : public IOService {
 
 public:
     void systemSleep(bool entering);
+    void displaySink();
+    void displayStartProbe();
+    IOReturn displayRequest(bool start);
 
     bool start(IOService *provider) override;
 

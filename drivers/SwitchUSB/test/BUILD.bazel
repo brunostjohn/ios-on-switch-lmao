@@ -416,6 +416,7 @@ host_test(
     srcs = [
         "usb_dma_cache_test.cpp",
         "//drivers/SwitchUSB:UsbDmaCache.h",
+        "//kits/SwitchDMA:SwitchDMAOrder.h",
     ],
     copts = ["-O1"],
 )

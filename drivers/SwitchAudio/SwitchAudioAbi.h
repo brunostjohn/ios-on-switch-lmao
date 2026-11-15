@@ -7,6 +7,9 @@
  * (S32_LE, full scale +-2^31): the playback ring ring_frames (SWITCH_AUDIO_RING_FRAMES) frames, the capture ring
  * SWITCH_AUDIO_IN_RING_FRAMES; sample time t lives at frame t modulo the ring's size. The Tegra
  * backend hands them to the APE as they are (SwitchAudioFormat.h): the codec plays the top 24 bits of each.
+ * Memory types 3 and 4 are the display's separate control page and playback ring, on its own 48 kHz timeline.
+ * Its jack is nonzero only after the sink's EDID and HDA codec agree on stereo PCM. sample_bits selects packed
+ * S16_LE or 24 significant bits in left-justified S32_LE containers; both rings use the same cache ownership.
  *
  * Sample time 0 is host time anchor_host, and one frame lasts ticks_per_frame_q32 / 2^32 host ticks. The null backend
  * sets both once; the Tegra I2S backend sets anchor_host again each time the hardware starts (the host time its DMA
@@ -31,7 +34,7 @@
 
 #define SWITCH_AUDIO_CLASS          "SwitchAudio"
 #define SWITCH_AUDIO_MAGIC          0x53574155u /* 'SWAU' */
-#define SWITCH_AUDIO_VERSION        7u
+#define SWITCH_AUDIO_VERSION        8u
 #define SWITCH_AUDIO_RATE           48000u /* the rate a service starts at */
 #define SWITCH_AUDIO_MAX_RATES      2u
 #define SWITCH_AUDIO_OUT_CHANNELS   2u
@@ -44,7 +47,9 @@ typedef int32_t switch_audio_sample_t;     /* a ring sample: S32_LE */
 enum {
     SwitchAudioMemoryControl = 0,
     SwitchAudioMemoryOutput = 1,
-    SwitchAudioMemoryInput = 2
+    SwitchAudioMemoryInput = 2,
+    SwitchAudioMemoryDisplayControl = 3,
+    SwitchAudioMemoryDisplayOutput = 4
 };
 
 enum {
@@ -58,7 +63,9 @@ enum {
     SwitchAudioSetRate = 5,
     /* One scalar: the headphone output's attenuation below its full level in millidecibels, the codec's DAC volume
      * (0.375 dB steps, down to SWITCH_AUDIO_HEADPHONE_RANGE_MDB); more than that mutes it. */
-    SwitchAudioSetHeadphoneLevel = 6
+    SwitchAudioSetHeadphoneLevel = 6,
+    SwitchAudioStartDisplayOutput = 7,
+    SwitchAudioStopDisplayOutput = 8
 };
 
 #define SWITCH_AUDIO_HEADPHONE_RANGE_MDB 63750u
@@ -78,7 +85,8 @@ enum {
 
 enum {
     SwitchAudioBackendNull = 0,
-    SwitchAudioBackendTegraI2S = 1
+    SwitchAudioBackendTegraI2S = 1,
+    SwitchAudioBackendTegraHDA = 2
 };
 
 typedef struct {
@@ -98,6 +106,7 @@ typedef struct {
     volatile uint64_t out_written;         /* the plug-in: the sample time after the last frame it wrote */
     volatile uint64_t io_cycles;           /* the plug-in: playback IO cycles (WriteMix calls) since it mapped this */
     volatile uint64_t io_frames;           /* the plug-in: frames those cycles wrote */
+    uint32_t sample_bits;
 } SwitchAudioControl;
 
 #endif

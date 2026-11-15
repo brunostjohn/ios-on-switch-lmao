@@ -1,8 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// SwitchDisplayPort: TV output over the USB-C port; see SwitchDisplayPortService.h. Started by the first DisplayPort
-// Configure the BM92T36 engine reports, on a thread call so SwitchPD's work loop never waits on it. Every event is an
-// interrupt (DPAUX1: AUX done, HPD plug, unplug, IRQ_HPD; display controller B: frame end) or a one-shot timer; an AUX
-// transaction whose AUX_DONE never reaches the CPU panics, with the GIC's view of the line.
+// AUX transactions, hotplug and scanout run from hardware interrupts; protocol deadlines use one-shot timers.
 #include "SwitchDisplayPort.h"
 
 #include <IOKit/IOLib.h>
@@ -14,6 +11,8 @@
 
 OSDefineMetaClassAndStructors(SwitchDisplayPort, IOService);
 
+extern "C" void switch_displayport_audio_sink(const uint8_t *, unsigned, bool);
+extern "C" bool switch_displayport_audio_eld(const uint8_t *, unsigned);
 extern "C" OSReturn switch_kernel_classes(void (*initialize)());
 extern "C" void switch_external_screen_static_init(void) __asm__("__GLOBAL__sub_I_SwitchExternalScreen.cpp");
 
@@ -76,15 +75,19 @@ bool SwitchDisplayPort::begin()
         gScreenClassRegistered = true;
     }
     loop = IOWorkLoop::workLoop();
+    gate = loop ? IOCommandGate::commandGate(this) : nullptr;
     IOService *auxNub = switch_interrupt_nub(TEGRA_DPAUX1_INTID, false);
     IOService *dcNub = switch_interrupt_nub(TEGRA_DISPLAY_B_INTID, false);
     auxSource = loop && auxNub ? IOInterruptEventSource::interruptEventSource(this, &auxInterrupt, auxNub, 0) : nullptr;
     dcSource = loop && dcNub ? IOInterruptEventSource::interruptEventSource(this, &dcInterrupt, dcNub, 0) : nullptr;
     auxTimer = loop ? IOTimerEventSource::timerEventSource(this, &auxTimerFired) : nullptr;
     stepTimer = loop ? IOTimerEventSource::timerEventSource(this, &stepTimerFired) : nullptr;
-    if (auxSource == nullptr || dcSource == nullptr || auxTimer == nullptr || stepTimer == nullptr ||
+    cecTimer = loop ? IOTimerEventSource::timerEventSource(this, &cecTimerFired) : nullptr;
+    if (gate == nullptr || auxSource == nullptr || dcSource == nullptr || auxTimer == nullptr || stepTimer == nullptr ||
+        cecTimer == nullptr || loop->addEventSource(gate) != kIOReturnSuccess ||
         loop->addEventSource(auxSource) != kIOReturnSuccess || loop->addEventSource(dcSource) != kIOReturnSuccess ||
-        loop->addEventSource(auxTimer) != kIOReturnSuccess || loop->addEventSource(stepTimer) != kIOReturnSuccess) {
+        loop->addEventSource(auxTimer) != kIOReturnSuccess || loop->addEventSource(stepTimer) != kIOReturnSuccess ||
+        loop->addEventSource(cecTimer) != kIOReturnSuccess) {
         panic("SwitchDisplayPort: cannot attach the DPAUX1 (INTID %u) or display controller B (INTID %u) interrupt",
               TEGRA_DPAUX1_INTID, TEGRA_DISPLAY_B_INTID);
     }
@@ -103,14 +106,17 @@ void SwitchDisplayPort::setAltLanes(unsigned lanes, bool plugFlipped)
     }
     if (lanes == 0) {
         IOLog("SwitchDisplayPort: DisplayPort alternate mode ended\n");
+        // Alternate-mode exit can remove AUX before this notification, so a remote CEC disable is no longer reliable.
         powerOff();
         screen->detach();
         wantedMode = -1;
         altLanes = 0;
         return;
     }
-    if (stage != Stage::Off)
-        teardownLink();
+    if (stage != Stage::Off) {
+        cecRelease();
+        powerOff();
+    }
     altLanes = lanes;
     flipped = plugFlipped;
     if (sleeping)
@@ -128,9 +134,11 @@ void SwitchDisplayPort::setAltLanes(unsigned lanes, bool plugFlipped)
     }
     IOLog("SwitchDisplayPort: DisplayPort on %u lanes (pin assignment %c, plug %s), HPD %s\n", lanes,
           lanes == 2 ? 'D' : 'C', flipped ? "flipped" : "straight", aux.hpdHigh() ? "high" : "low");
-    if (aux.hpdHigh()) {
+    cecReset();
+    switch_dp_cec_start(&cec);
+    if (aux.hpdHigh())
         plugged();
-    }
+    scheduleAux();
 }
 
 void SwitchDisplayPort::auxInterrupt(OSObject *owner, IOInterruptEventSource *, int)
@@ -191,14 +199,25 @@ void SwitchDisplayPort::auxIssue()
 void SwitchDisplayPort::auxDone()
 {
     const enum switch_dp_aux_result result = aux.finish(request);
+    if (auxDiscard || (sleeping && next != Next::Cec)) {
+        auxDiscard = false;
+        scheduleAux();
+        return;
+    }
     if (result == SWITCH_DP_AUX_ACK) {
         dispatch();
+        scheduleAux();
         return;
     }
     const uint32_t retryUs = switch_dp_aux_retry_us(result, attempt++);
     if (retryUs != 0) {
         auxRetrying = true;
         auxTimer->setTimeoutUS(retryUs);
+        return;
+    }
+    if (next == Next::Cec) {
+        cecComplete(false);
+        scheduleAux();
         return;
     }
     static const char *const names[] = {"ack", "NACK", "defer", "I2C NACK", "I2C defer", "timeout", "error", "short"};
@@ -244,12 +263,20 @@ void SwitchDisplayPort::fail(const char *what, const char *why)
 
 void SwitchDisplayPort::teardownLink()
 {
-    auxTimer->cancelTimeout();
+    if (next != Next::Cec) {
+        if (auxPending) {
+            auxDiscard = true;
+        } else {
+            auxTimer->cancelTimeout();
+            auxRetrying = false;
+        }
+    }
     stepTimer->cancelTimeout();
-    auxPending = auxRetrying = false;
+    modePending = false;
     if (sorUp) {
         sor.audioEnable(false);
         sor.audioPresence(nullptr, 0, false);
+        switch_displayport_audio_sink(nullptr, 0, false);
     }
     if (dcbUp) {
         dcb.windowOff();
@@ -271,6 +298,10 @@ void SwitchDisplayPort::teardownLink()
 
 void SwitchDisplayPort::powerOff()
 {
+    cecReset();
+    auxTimer->cancelTimeout();
+    auxPending = auxRetrying = auxDiscard = false;
+    probePending = modePending = irqPending = false;
     teardownLink();
     if (stage != Stage::Off) {
         auxSource->disable();
@@ -285,26 +316,33 @@ void SwitchDisplayPort::plugged()
     if (stage != Stage::Waiting) {
         return;
     }
-    stage = Stage::Probing;
-    auxNative(SWITCH_DP_AUX_NATIVE_READ, SWITCH_DPCD_REV, nullptr, sizeof(caps), Next::Caps);
+    cecReleasePending = cecRestartPending = true;
+    probePending = true;
+    scheduleAux();
 }
 
 void SwitchDisplayPort::unplugged()
 {
-    if (stage == Stage::Off || stage == Stage::Waiting) {
+    if (stage == Stage::Off) {
         return;
     }
     IOLog("SwitchDisplayPort: the sink went away (HPD low)\n");
     teardownLink();
     screen->detach();
     wantedMode = -1;
+    probePending = modePending = irqPending = false;
+    cec.physical = SWITCH_DP_CEC_INVALID_PHYSICAL;
+    cecReleasePending = true;
+    cecRestartPending = false;
     stage = Stage::Waiting;
+    scheduleAux();
 }
 
 void SwitchDisplayPort::irqHpd()
 {
-    if (stage == Stage::Running && !auxPending && !auxRetrying) {
-        auxNative(SWITCH_DP_AUX_NATIVE_READ, SWITCH_DPCD_SINK_COUNT, nullptr, 6, Next::LinkStatus);
+    if (stage == Stage::Running || cec.enabled) {
+        irqPending = true;
+        scheduleAux();
     }
 }
 
@@ -312,9 +350,12 @@ IOReturn SwitchDisplayPort::selectMode(int index, bool enable)
 {
     if (!enable) {
         const bool configured = stage == Stage::Running || stage == Stage::Training || stage == Stage::Ready;
-        teardownLink();
-        if (configured)
+        if (configured) {
+            teardownLink();
             stage = Stage::Ready;
+        }
+        modePending = false;
+        scheduleAux();
         return kIOReturnSuccess;
     }
     if (sleeping || index < 0 || static_cast<unsigned>(index) >= modes.count ||
@@ -324,8 +365,9 @@ IOReturn SwitchDisplayPort::selectMode(int index, bool enable)
         return kIOReturnSuccess;
     teardownLink();
     wantedMode = index;
-    chooseAndTrain();
-    return stage == Stage::Training ? kIOReturnSuccess : kIOReturnUnsupported;
+    modePending = true;
+    scheduleAux();
+    return modePending || stage == Stage::Training ? kIOReturnSuccess : kIOReturnUnsupported;
 }
 
 bool SwitchDisplayPort::gpuComplete(void *display, int status)
@@ -345,6 +387,7 @@ void SwitchDisplayPort::systemSleep(bool entering)
 {
     if (entering) {
         sleeping = true;
+        cecRelease();
         powerOff();
         return;
     }
@@ -422,4 +465,18 @@ extern "C" void switch_displayport_audio_presence(const uint8_t *eld, uint32_t b
                 return kIOReturnSuccess;
             }, gService, const_cast<uint8_t *>(eld), reinterpret_cast<void *>(static_cast<uintptr_t>(bytes)),
             present ? gService : nullptr);
+}
+
+bool SwitchDisplayPort::audioPreparePresence()
+{
+    return stage == Stage::Running && !sleeping && switch_displayport_audio_eld(edid, edidBlocks);
+}
+
+extern "C" bool switch_displayport_audio_prepare_presence(void)
+{
+    return gService && gService->getWorkLoop()->runAction(
+        [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
+            return static_cast<SwitchDisplayPort *>(owner)->audioPreparePresence()
+                       ? kIOReturnSuccess : kIOReturnNotReady;
+        }, gService) == kIOReturnSuccess;
 }

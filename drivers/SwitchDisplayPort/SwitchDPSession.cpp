@@ -8,6 +8,8 @@
 #include "SwitchDisplayPortService.h"
 
 
+extern "C" void switch_displayport_audio_sink(const uint8_t *, unsigned, bool);
+
 namespace {
 constexpr uint8_t kDpcdD0 = 1;
 constexpr unsigned kMaxEdidBlocks = 4;
@@ -63,8 +65,13 @@ void SwitchDisplayPort::dispatch()
     case Next::Trained:
         trained();
         break;
+    case Next::Cec:
+        cecComplete(true);
+        break;
     case Next::LinkStatus:
-        if (!switch_dp_link_holds(request.data + 2, link.lanes)) {
+        if ((request.data[1] & 0x40u) && cec.enabled)
+            cec.irq = true;
+        if (stage == Stage::Running && !switch_dp_link_holds(request.data + 2, link.lanes)) {
             IOLog("SwitchDisplayPort: IRQ_HPD: the link lost lock (lanes %#x %#x align %#x); training again\n",
                   request.data[2], request.data[3], request.data[4]);
             teardownLink();
@@ -104,6 +111,7 @@ void SwitchDisplayPort::edidDone()
           caps[0] >> 4, caps[0] & 0xfu, sinkLanes, switch_dp_rate_khz(maxRate) / 100000,
           (switch_dp_rate_khz(maxRate) / 1000) % 100, edidBlocks, edidBlocks == 1 ? "" : "s", modes.count);
     stage = Stage::Ready;
+    cecEdid();
     screen->publish(modes, switch_dp_payload_kbps(maxRate, maxLanes));
 }
 
@@ -198,4 +206,6 @@ void SwitchDisplayPort::trained()
     IOLog("SwitchDisplayPort: link up at %u Mb/s x%u (TU %u, watermark %u)\n", switch_dp_rate_khz(link.rate) / 100,
           link.lanes, tu.tu_size, tu.watermark);
     screen->linkUp(mode, &dcb);
+    switch_displayport_audio_sink(edid, edidBlocks, true);
+    scheduleAux();
 }

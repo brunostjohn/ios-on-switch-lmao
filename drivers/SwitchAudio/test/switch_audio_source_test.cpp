@@ -37,9 +37,9 @@ std::string Driver()
     return text;
 }
 
-// The ABI: version 6 is S32_LE samples at one of rates[]; periods stay whole ADMA buffers and the rings DMA-able
+// The I2S rings remain S32_LE at one of rates[]; periods stay whole ADMA buffers and the rings DMA-able
 // (playback 65536 frames of stereo S32: 512 KiB; capture 16384 mono: 64 KiB).
-static_assert(SWITCH_AUDIO_VERSION == 7u);
+static_assert(SWITCH_AUDIO_VERSION == 8u);
 static_assert(std::is_same_v<switch_audio_sample_t, int32_t>);
 static_assert(SWITCH_AUDIO_RING_FRAMES * switch_audio_linux::kChannels * sizeof(switch_audio_sample_t) == 512 * 1024);
 static_assert(SWITCH_AUDIO_IN_RING_FRAMES * sizeof(switch_audio_sample_t) == 64 * 1024);
@@ -267,6 +267,51 @@ TEST(SwitchAudioSource, CapturePathFollowsInput)
     EXPECT_THAT(plugin, HasSubstr("const Boolean want = gCodecUsers > 0 && gCodecInActive && gControl;"));
     EXPECT_THAT(Between(plugin, "static OSStatus StartIO(", "\n}\n"), Not(HasSubstr("SwitchAudioStartInput")));
     EXPECT_THAT(plugin, HasSubstr("switch_audio_capture_frame(t, anchor, captured, SWITCH_AUDIO_IN_RING_FRAMES)"));
+}
+
+TEST(SwitchAudioSource, HdaReturnsDmaOwnershipBeforeReusingMemoryOrResetting)
+{
+    const std::string source = SourceText("../SwitchHDA.cpp");
+    const auto ordered = [](const std::string &body, const char *first, const char *second) {
+        const size_t before = body.find(first), after = body.find(second);
+        ASSERT_NE(before, std::string::npos) << first;
+        ASSERT_NE(after, std::string::npos) << second;
+        EXPECT_LT(before, after) << first << " before " << second;
+    };
+    const auto body = [&](const char *signature) { return Between(source, signature, "\n}\n"); };
+    const std::string stop = body("void SwitchHDA::stop()");
+    EXPECT_THAT(stop, HasSubstr("kBar + stream, kRun, 0, 40"));
+    ordered(stop, "coreWrite(stream,", "switch_mmio_wait32");
+    ordered(stop, "switch_mmio_wait32", "control->state = 0;");
+    const std::string commands = body("void SwitchHDA::stopCommands()");
+    EXPECT_THAT(commands, HasSubstr("kBar + CORBCTL, kRun, 0, 1000"));
+    EXPECT_THAT(commands, HasSubstr("kBar + RIRBCTL, kRun, 0, 1000"));
+    ordered(commands, "field(RIRBCTL,", "switch_mmio_wait32");
+    ordered(body("bool SwitchHDA::reset()"), "stopCommands();", "coreWrite(GCTL, 0);");
+    const std::string start = body("IOReturn SwitchHDA::start()");
+    ordered(start, "stop();", "bzero(");
+    ordered(start, "stop();", "coreWrite(stream, 1);");
+    ordered(body("void SwitchHDA::disconnect()"), "stop();", "stopCommands();");
+    ordered(body("void SwitchHDA::sleep(bool entering)"), "disconnect();", "power(false);");
+    const std::string release = body("void SwitchHDA::release()");
+    ordered(release, "disconnect();", "power(false);");
+    ordered(release, "power(false);", "tegra_smmu_detach");
+}
+
+TEST(SwitchAudioSource, SleepWaitsForTheExternalPresenceTransactionBeforeReturning)
+{
+    const std::string source = SourceText("../SwitchDisplayAudio.cpp");
+    const std::string sleep = Between(source, "IOReturn SwitchAudio::displaySleepGated(", "\n}\n");
+    EXPECT_THAT(sleep, HasSubstr("while (self->displayPresencePending)"));
+    EXPECT_THAT(sleep, HasSubstr("commandSleep(&self->displayPresencePending, THREAD_UNINT)"));
+    EXPECT_THAT(sleep, HasSubstr("displayAudio.sleep(true)"));
+    EXPECT_LT(sleep.find("commandSleep("), sleep.find("displayAudio.sleep(true)"));
+    const std::string complete = Between(source, "IOReturn SwitchAudio::displayConnectGated(", "\n}\n");
+    EXPECT_THAT(complete, HasSubstr("displayPresencePending = false"));
+    EXPECT_THAT(complete, HasSubstr("displayAudio.sleep(true)"));
+    EXPECT_THAT(complete, HasSubstr("commandWakeup(&self->displayPresencePending, false)"));
+    EXPECT_LT(complete.find("displayPresencePending = false"), complete.find("commandWakeup("));
+    EXPECT_LT(complete.find("displayAudio.sleep(true)"), complete.find("commandWakeup("));
 }
 
 }  // namespace

@@ -6,11 +6,13 @@
 #define SWITCH_DISPLAY_PORT_SERVICE_H
 
 #include <IOKit/IOInterruptEventSource.h>
+#include <IOKit/IOCommandGate.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 
 #include "SwitchDPAux.h"
+#include "SwitchDPCEC.h"
 #include "SwitchDPLink.h"
 #include "SwitchDPModes.h"
 #include "SwitchDPTraining.h"
@@ -34,6 +36,7 @@ public:
     IOReturn selectMode(int index, bool enable);
     void systemSleep(bool entering);
     bool gpuComplete(void *display, int status);
+    bool audioPreparePresence();
     bool audioFormat(uint32_t rate, uint32_t channels, uint32_t bits);
     void audioEnable(bool enable);
     void audioPresence(const uint8_t *eld, uint32_t bytes, bool present);
@@ -56,12 +59,14 @@ private:
         TrainingSet,
         TrainingStatus,
         Trained,
-        LinkStatus
+        LinkStatus,
+        Cec
     };
 
     IOWorkLoop *loop = nullptr;
+    IOCommandGate *gate = nullptr;
     IOInterruptEventSource *auxSource = nullptr, *dcSource = nullptr;
-    IOTimerEventSource *auxTimer = nullptr, *stepTimer = nullptr;
+    IOTimerEventSource *auxTimer = nullptr, *stepTimer = nullptr, *cecTimer = nullptr;
     TegraDpaux1 aux;
     TegraSor1 sor;
     TegraDisplayB dcb;
@@ -76,7 +81,7 @@ private:
     struct switch_dp_aux_request request = {};
     Next next = Next::Caps;
     unsigned attempt = 0;
-    bool auxPending = false, auxRetrying = false;
+    bool auxPending = false, auxRetrying = false, auxDiscard = false;
 
     uint8_t caps[16] = {};
     uint8_t edid[512] = {};
@@ -89,11 +94,21 @@ private:
     uint8_t maxRate = 0, maxLanes = 0;
     struct switch_dp_train train = {};
     struct switch_dp_train_out trainOut = {};
+    struct switch_dp_cec cec = {};
+    bool probePending = false, modePending = false, irqPending = false;
+    bool cecReleasePending = false, cecRestartPending = false;
 
     static void auxInterrupt(OSObject *owner, IOInterruptEventSource *, int);
     static void dcInterrupt(OSObject *owner, IOInterruptEventSource *, int);
     static void auxTimerFired(OSObject *owner, IOTimerEventSource *);
     static void stepTimerFired(OSObject *owner, IOTimerEventSource *);
+
+    static void cecTimerFired(OSObject *, IOTimerEventSource *);
+    void scheduleAux();
+    void cecReset();
+    void cecRelease();
+    void cecComplete(bool ok);
+    void cecEdid();
 
     void auxStart(const struct switch_dp_aux_request &transaction, Next then);
     void auxIssue();

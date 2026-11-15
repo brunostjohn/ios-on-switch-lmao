@@ -2,6 +2,7 @@
 // The policy headers as C11 with -Wconversion -Wsign-conversion: they are included by C++ in the kernel, and kept C so
 // that both languages see one definition.
 #include "../SwitchDPAux.h"
+#include "../SwitchDPCEC.h"
 #include "../SwitchDPAppleTiming.h"
 #include "../SwitchDPLink.h"
 #include "../SwitchDPModes.h"

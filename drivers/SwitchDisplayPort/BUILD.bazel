@@ -36,6 +36,7 @@ kernel_driver(
     srcs = [
         "SwitchDisplayPort.cpp",
         "SwitchDPSession.cpp",
+        "SwitchDPCEC.cpp",
         "SwitchExternalScreen.cpp",
         "SwitchExternalScanout.cpp",
         "TegraDisplayB.cpp",

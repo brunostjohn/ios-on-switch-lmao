@@ -17,6 +17,7 @@ int switch_displayport_start(void);
 void switch_displayport_alt_mode(unsigned lanes, bool flipped);
 void switch_displayport_suspend(void);
 void switch_displayport_resume(void);
+bool switch_displayport_audio_prepare_presence(void);
 bool switch_displayport_audio_format(uint32_t rate, uint32_t channels, uint32_t sample_bits);
 void switch_displayport_audio_enable(bool enable);
 void switch_displayport_audio_presence(const uint8_t *eld, uint32_t bytes, bool present);

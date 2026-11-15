@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "../hal/SwitchAudioObjects.h"
+#include "../hal/SwitchDisplayAudio.h"
 
 #ifndef SWITCH_AUDIO_J181
 #define SWITCH_AUDIO_J181 0
@@ -126,6 +127,32 @@ TEST_F(PlugIn, DevicesAreTheIPadsOwn)
     EXPECT_EQ(DeviceWithUID(CFSTR("Digital Mic")), kJ181 ? (AudioObjectID)kMic : kAudioObjectUnknown);
     EXPECT_EQ(DeviceWithUID(CFSTR("Hawking")), kJ181 ? kAudioObjectUnknown : (AudioObjectID)kMic);
     EXPECT_EQ(String(kMic, kAudioDevicePropertyDeviceUID), kJ181 ? "Digital Mic" : "Hawking");
+}
+
+TEST_F(PlugIn, DisplayDeviceFollowsSinkAvailabilityThroughThePluginInterface)
+{
+    SwitchAudioControl control{};
+    switch_audio_display_attach(&gHostInterface, &control, nullptr);
+    EXPECT_THAT(List(kPlugIn, kAudioPlugInPropertyDeviceList), ElementsAre(kSpeaker, kCodec, kMic));
+    control.jack = SwitchAudioJackHeadphones;
+    switch_audio_display_changed();
+    EXPECT_THAT(List(kPlugIn, kAudioPlugInPropertyDeviceList), ElementsAre(kSpeaker, kCodec, kMic, kDisplay));
+    EXPECT_EQ(DeviceWithUID(CFSTR(SWITCH_AUDIO_DISPLAY_UID)), static_cast<AudioObjectID>(kDisplay));
+    EXPECT_EQ(Value<UInt32>(kDisplay, kAudioDevicePropertyTransportType),
+              static_cast<UInt32>(kAudioDeviceTransportTypeDisplayPort));
+    EXPECT_THAT(List(kDisplay, kAudioDevicePropertyStreams, kAudioObjectPropertyScopeOutput), ElementsAre(kDisplayOut));
+    EXPECT_THAT(List(kDisplay, kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput), IsEmpty());
+    Boolean will = true, inPlace = false;
+    EXPECT_EQ(
+        (*driver_)->WillDoIOOperation(driver_, kDisplay, 0, kAudioServerPlugInIOOperationReadInput, &will, &inPlace),
+        0);
+    EXPECT_FALSE(will);
+    EXPECT_TRUE(inPlace);
+    control.jack = 0;
+    switch_audio_display_changed();
+    EXPECT_THAT(List(kPlugIn, kAudioPlugInPropertyDeviceList), ElementsAre(kSpeaker, kCodec, kMic));
+    EXPECT_EQ(DeviceWithUID(CFSTR(SWITCH_AUDIO_DISPLAY_UID)), kAudioObjectUnknown);
+    switch_audio_display_attach(nullptr, nullptr, nullptr);
 }
 
 // The built-in input: a silent microphone stream, one channel on J120, J181's two microphones on J181 (AID2003's mic

@@ -19,6 +19,15 @@ C_FLAGS = [
     "-Wsign-conversion",
 ]
 
+host_test(
+    name = "hda_test",
+    srcs = [
+        "hda_test.cpp",
+        "//drivers/SwitchAudio:SwitchHDAFormat.h",
+        "//drivers/SwitchAudio:hal/SwitchAudioConvert.h",
+    ],
+)
+
 # The harness twice: NEON (as on the device), and the scalar fallback the plug-in has without it.
 host_library(
     name = "neon_harness",
@@ -63,6 +72,8 @@ host_test(
         "//drivers/SwitchAudio:SwitchAudioDriver.h",
         "//drivers/SwitchAudio:SwitchAudioRegisters.h",
         "//drivers/SwitchAudio:SwitchAudioStream.cpp",
+        "//drivers/SwitchAudio:SwitchDisplayAudio.cpp",
+        "//drivers/SwitchAudio:SwitchHDA.cpp",
         "//drivers/SwitchAudio:SwitchRT5639.cpp",
         "//drivers/SwitchAudio:hal/SwitchAudioPlugIn.c",
         "//drivers/TegraGPIO:TegraGPIO.cpp",
@@ -92,6 +103,8 @@ PLUGIN_SRCS = [
     "//drivers/SwitchAudio:hal/SwitchAudioConvert.h",
     "//drivers/SwitchAudio:hal/SwitchAudioObjects.h",
     "//drivers/SwitchAudio:hal/SwitchAudioPlugIn.c",
+    "//drivers/SwitchAudio:hal/SwitchDisplayAudio.c",
+    "//drivers/SwitchAudio:hal/SwitchDisplayAudio.h",
     "//kits/SwitchDMA:SwitchDcache.h",
     "//kits/SwitchRefusal:SwitchRefusal.c",
     "//kits/SwitchRefusal:SwitchRefusal.h",
@@ -135,4 +148,16 @@ host_test(
     defines = ["SWITCH_AUDIO_J181=1"],
     linkopts = PLUGIN_LINKOPTS,
     deps = [":plugin_j181"],
+)
+
+host_test(
+    name = "display_audio_test",
+    srcs = [
+        "display_audio_test.cpp",
+        "//drivers/SwitchAudio:SwitchAudioAbi.h",
+        "//drivers/SwitchAudio:hal/SwitchAudioObjects.h",
+        "//drivers/SwitchAudio:hal/SwitchDisplayAudio.h",
+    ],
+    linkopts = PLUGIN_LINKOPTS,
+    deps = [":plugin_j120"],
 )

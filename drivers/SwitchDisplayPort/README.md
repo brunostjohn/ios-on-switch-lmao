@@ -16,16 +16,27 @@ producer fences allow a direct flip. AUX completion, frame retirement and blocke
 GPU admission use interrupts or completion notifications. Suspend tears down the
 link and resume probes the sink again.
 
+Audio uses the sink's EDID capabilities. HDA prepares its clocks and reset before
+the DP workloop publishes ELD/presence, then discovers the codec. Disconnect stops
+the audio path; iPadOS controls routing through CoreAudio.
+
+Dock TV wake uses the STDP2550/RTD2172N
+[AUX CEC mailbox](https://github.com/CTCaer/switch-l4t-kernel-nvidia/blob/76e6d48970b451c242c20f298b8d63027836bb0b/drivers/video/tegra/dc/dp_branch.c#L87-L162),
+including the [OLED bridge](https://github.com/CTCaer/switch-l4t-kernel-nvidia/commit/679403ef6dba2f77200479cb4ad8c337c76731b4).
+ImageViewOn can run before HPD/EDID; ActiveSource requires the real HDMI physical
+address and active OS-selected output. The reference supplies no TX-complete
+interrupt contract, so each send gets one bounded timer/status read. RX uses HPD
+IRQ. Suspend disables the bridge's CEC address before AUX powerdown; HDMI topology
+changes allocate a fresh address. Physical detach can remove AUX before cleanup.
+
 ```sh
 bazel test //drivers/SwitchDisplayPort/test:all
 bazel build //:boot
 ```
 
-The host tests cover PD negotiation, EDID parsing, link training policies and the
-native IOAV timing layout from both pinned kernelcaches. Hardware acceptance still
-requires the OLED dock and a direct USB-C display: test both plug orientations,
-HDMI and dock reconnects, charging under USB load, and sleep/wake with output active.
-Confirm USB SuperSpeed only when the negotiated pin assignment leaves its pair free.
-
-SOR audio format, packet enable and ELD hooks are present. The HDA controller and
-CoreAudio output integration are being completed separately.
+Host tests cover PD, EDID, link training, CEC policy/lifecycle and the native IOAV
+timing layout from both pinned kernelcaches. OLED dock/TV and direct USB-C display
+acceptance remains pending: check both orientations, reconnect, charging under USB
+load, audio routing, and sleep/wake. TV standby must also prove AUX access with HPD
+low and actual CEC wake. Confirm SuperSpeed when the negotiated pin assignment
+leaves its pair free.

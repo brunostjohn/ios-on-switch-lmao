@@ -36,12 +36,17 @@ kernel_driver(
         "SwitchAudioClocks.cpp",
         "SwitchAudioCodec.cpp",
         "SwitchAudioStream.cpp",
+        "SwitchDisplayAudio.cpp",
+        "SwitchHDA.cpp",
+        "SwitchHDACodec.cpp",
         "SwitchRT5639.cpp",
     ],
     hdr_deps = [
         "drivers/ArmGIC",
+        "drivers/SwitchDisplayPort",
         "drivers/TegraGPIO",
         "drivers/TegraI2C",
+        "drivers/TegraSMMU",
         "kits/SwitchCAR",
         "kits/SwitchDMA",
         "kits/SwitchMMIO",
@@ -55,6 +60,7 @@ ios_binary(
     name = "SwitchAudioHAL",
     srcs = [
         "hal/SwitchAudioPlugIn.c",
+        "hal/SwitchDisplayAudio.c",
         "//kits/SwitchRefusal:SwitchRefusal.c",
     ] + select({
         "//ipsw:24B119": ["hal/SwitchAudioControls.c"],
@@ -67,6 +73,7 @@ ios_binary(
         "hal/SwitchAudioControls.h",
         "hal/SwitchAudioConvert.h",
         "hal/SwitchAudioObjects.h",
+        "hal/SwitchDisplayAudio.h",
         "//kits/SwitchDMA:SwitchDcache.h",
         "//kits/SwitchRefusal:SwitchRefusal.h",
     ],

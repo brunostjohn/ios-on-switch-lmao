@@ -20,6 +20,8 @@ enum {
     kCodecJackIn = 13,
     kCodecSources = 14,
     kMicSources = 15,
+    kDisplay = 16,
+    kDisplayOut = 17,
 };
 
 #endif

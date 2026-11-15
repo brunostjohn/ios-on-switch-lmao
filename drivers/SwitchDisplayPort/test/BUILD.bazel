@@ -13,6 +13,7 @@ lint_files()
 
 POLICY = [
     "//drivers/SwitchDisplayPort:SwitchDPAux.h",
+    "//drivers/SwitchDisplayPort:SwitchDPCEC.h",
     "//drivers/SwitchDisplayPort:SwitchDPAppleTiming.h",
     "//drivers/SwitchDisplayPort:SwitchDPLink.h",
     "//drivers/SwitchDisplayPort:SwitchDPModes.h",
@@ -61,4 +62,10 @@ host_test(
         "//drivers/SwitchDisplayPort:SwitchExternalScanout.cpp",
         "//drivers/SwitchDisplayPort:SwitchExternalScreen.cpp",
     ],
+)
+
+host_test(
+    name = "dp_cec_test",
+    srcs = ["dp_cec_test.cpp"] + POLICY,
+    deps = [":policy_c11"],
 )
