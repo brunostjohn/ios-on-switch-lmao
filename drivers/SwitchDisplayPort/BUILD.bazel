@@ -37,6 +37,7 @@ kernel_driver(
         "SwitchDisplayPort.cpp",
         "SwitchDPSession.cpp",
         "SwitchDPCEC.cpp",
+        "SwitchDPProperties.cpp",
         "SwitchExternalScreen.cpp",
         "SwitchExternalScanout.cpp",
         "TegraDisplayB.cpp",

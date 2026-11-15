@@ -69,3 +69,16 @@ host_test(
     srcs = ["dp_cec_test.cpp"] + POLICY,
     deps = [":policy_c11"],
 )
+
+host_test(
+    name = "dp_properties_test",
+    srcs = [
+        "dp_properties_test.cpp",
+        "switch_dp_properties_stubs.h",
+        "//drivers/SwitchDisplayPort:SwitchDPAppleTiming.h",
+        "//drivers/SwitchDisplayPort:SwitchDPModes.h",
+        "//drivers/SwitchDisplayPort:SwitchDPProperties.cpp",
+        "//drivers/SwitchDisplayPort:SwitchDPProperties.h",
+    ],
+    defines = ["SWITCH_DP_PROPERTIES_TEST"],
+)

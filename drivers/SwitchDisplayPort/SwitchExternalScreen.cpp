@@ -3,10 +3,9 @@
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <libkern/c++/OSArray.h>
-#include <libkern/c++/OSData.h>
 #include <libkern/c++/OSNumber.h>
 #include <mach/mach_time.h>
-#include "SwitchDPAppleTiming.h"
+#include "SwitchDPProperties.h"
 #include "SwitchDisplayPortService.h"
 #include "../NativeMobileDisplay/NativeLegacyRequest.h"
 #include "../NativeMobileDisplay/SwitchSurfaceUse.h"
@@ -26,27 +25,6 @@ OSDefineMetaClassAndStructors(SwitchExternalScreen, IOMobileFramebufferLegacy);
 namespace {
 constexpr uint32_t kBgra = 0x42475241;
 
-OSDictionary *element(uint32_t type, uint64_t id, const void *bytes, unsigned size)
-{
-    auto *dictionary = OSDictionary::withCapacity(5);
-    auto *data = OSData::withBytes(bytes, size);
-    if (!dictionary || !data) {
-        OSSafeReleaseNULL(dictionary);
-        OSSafeReleaseNULL(data);
-        return nullptr;
-    }
-    auto *number = OSNumber::withNumber(id, 64);
-    bool ok = number && dictionary->setObject("ID", number);
-    OSSafeReleaseNULL(number);
-    number = OSNumber::withNumber(type, 32);
-    ok = ok && number && dictionary->setObject("ElementType", number) && dictionary->setObject("ElementData", data) &&
-         dictionary->setObject("IsVirtual", kOSBooleanFalse);
-    OSSafeReleaseNULL(number);
-    data->release();
-    if (!ok)
-        OSSafeReleaseNULL(dictionary);
-    return dictionary;
-}
 }
 
 bool SwitchExternalScreen::begin(SwitchDisplayPort *port, IOWorkLoop *workLoop)
@@ -115,17 +93,13 @@ void SwitchExternalScreen::publishModes()
     auto *timings = OSArray::withCapacity(modes.count);
     auto *preferred = OSArray::withCapacity(1);
     auto *colors = OSArray::withCapacity(1);
-    const auto colorData = switch_dp_apple_rgb8();
-    auto *color = element(1, 1, &colorData, sizeof(colorData));
+    auto *color = switch_dp_color_element();
     bool ok = timings && preferred && colors && color && colors->setObject(color);
     for (unsigned i = 0; ok && i < modes.count; ++i) {
         if (!switch_dp_mode_allowed(&modes.modes[i], available))
             continue;
-        const auto timingData = switch_dp_apple_timing(&modes.modes[i]);
-        auto *timing = element(0, i + 1, &timingData, sizeof(timingData));
-        ok = timing && timing->setObject("ColorModes", colors) &&
-             timing->setObject("IsPreferred", modes.modes[i].preferred ? kOSBooleanTrue : kOSBooleanFalse) &&
-             timings->setObject(timing);
+        auto *timing = switch_dp_timing_element(&modes.modes[i], i + 1, colors);
+        ok = timing && timings->setObject(timing);
         if (ok && modes.modes[i].preferred)
             ok = preferred->setObject(timing);
         OSSafeReleaseNULL(timing);
