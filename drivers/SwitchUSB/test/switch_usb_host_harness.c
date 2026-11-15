@@ -50,6 +50,11 @@ int pd_rails_on(int phase)
     return switch_pd_rails_on((enum switch_pd_phase)phase) ? 1 : 0;
 }
 
+int pd_boost_on(int phase)
+{
+    return switch_pd_boost_on((enum switch_pd_phase)phase) ? 1 : 0;
+}
+
 int pd_vbus_ours(uint16_t status1)
 {
     return switch_pd_vbus_ours(status1) ? 1 : 0;

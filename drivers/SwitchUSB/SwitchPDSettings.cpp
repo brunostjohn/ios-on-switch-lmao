@@ -90,7 +90,7 @@ void SwitchPD::leave()
     negoTimer->cancelTimeout();
     switch_pd_alt_leave();
     setSwitches(false);
-    if (switch_pd_rails_on(phase))
+    if (switch_pd_boost_on(phase))
         (void)switch_battery_set_otg_boost(false, false);
     (void)setRails(false);
     if (!found.valid) {

@@ -16,6 +16,7 @@ int pd_decide(int phase, uint16_t alert, uint16_t status1, uint16_t status2, int
 int pd_window_end(int phase, int saw_detach, uint16_t status1, int *next, char *why, size_t why_size);
 int pd_switches_on(int phase, int allow);
 int pd_rails_on(int phase);
+int pd_boost_on(int phase);
 int pd_vbus_ours(uint16_t status1);
 const char *pd_phase_name(int phase);
 int pd_usb_host(int sourcing, uint16_t status1);

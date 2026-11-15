@@ -27,20 +27,19 @@
 // source switches (CONFIG1 SPDSRC) on all the time, and a dual-role partner that comes up as the sink gets our VBUS.
 // Here:
 //   - At start, always (host mode packaged or not): the source switches off, whatever an earlier boot left.
-//   - Empty port: the source switches on only when host mode is packaged (switch_pd_allow_source), so a sink can
-//     attach; VBUS itself is never driven while the port is empty (no boost, no v_vdd5v3, no VCONN).
-//   - Anything attaches: the switches go off until it is classified. A partner with VBUS up (a charger, a Mac, a
+//   - Empty port: with host mode packaged (switch_pd_allow_source), the fixed 5.3 V supply and VCONN are prepared
+//     before the source switches are armed, as bm92txx does at probe. BQ24193 boost stays off.
+//   - Anything attaches: the switches go off until it is classified. A partner supplying VBUS (a charger, a Mac, a
 //     dock) is a sink session: switches off until INSERT drops, so no later event (suspend, sleep, a swap request)
 //     can make us the source. A partner that came up as our sink is offered the source role: switches off for
 //     kClassifyMS. A dual-role partner then sources (sink session); a sink-only one just goes away (an observed
-//     detach), and only then the source rails come up (OCP on, v_vdd5v3 on PX3, VCONN on PK5, 10 ms ramp) and the
-//     switches go back on, so the controller closes its switch onto a live 5.3 V rail when the partner attaches
-//     again as the sink (bm92txx.c order: rails at probe, SPDSRC12_ON after). We then source: the BQ24193 boost on
-//     as Linux does (refused only if the charger sees VBUS that is not ours: STATUS1 shows neither SPDSRC switch on).
+//     detach). The fixed supplies stay available through classification; once sink-only is proven, the BQ24193
+//     boost starts before the source switches are rearmed. It is refused if the charger sees VBUS that is not ours.
 //     v_vdd5v3 is the OLED's VBUS power (SwitchPDPolicy.h). No observed detach (the switches did not move the port's
 //     role) is no proof: we do not source.
-//   - Sourcing ends (detach, a USB-PD contract, a source fault, host mode gone) through one path: boost off, v_vdd5v3
-//     and VCONN off, switches to the empty-port state. The rails are on in Reattach and Source only.
+//   - Sourcing ends (detach, power-role change, a source fault, host mode gone) through one path: connector switches
+//     off, boost off, then the next phase's fixed supplies and switches. Sink and Held keep fixed supplies off;
+//     Empty retains them until sleep, shutdown or host mode is disabled.
 // One kernel log line per decision, with the controller's bits. The decisions are SwitchPDPolicy.h (host-tested).
 //
 // Interrupt only: a pin that cannot be attached panics; a pin that keeps firing (stuck low: more than 50 ALERTs in a

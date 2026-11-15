@@ -125,7 +125,7 @@ class SwitchPD : public IOService {
     switch_pd_phase phase = SWITCH_PD_EMPTY;
     bool allowSource = false, switchesOn = false, railsOn = false, sawDetach = false, stuck = false;
     bool reportedReadFailure = false, reportedSwitchFailure = false;
-    bool asleepSinkOnly = false;  // systemSleep took the empty port's source switches off for this SC7
+    bool asleepSinkOnly = false;  // SC7 holds an empty or canceled startup sink-only until resume
     bool resetPending = false;    // a fault's SYS_RESET: the next event finishes it (bm92t_event_handler sys_reset)
     unsigned alertCount = 0;
     uint64_t alertWindow = 0;

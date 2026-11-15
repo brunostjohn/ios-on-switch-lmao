@@ -134,7 +134,7 @@ void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
         IOSleep(kAfterResetMS);
         (void)enableOcp();
         acceptDataRoleSwapsAsUfp(false);
-        const bool want = switch_pd_switches_on(phase, allowSource);
+        const bool want = switch_pd_switches_on(phase, allowSource && !asleepSinkOnly);
         switchesOn = !want;
         setSwitches(want);
     }
@@ -145,7 +145,7 @@ void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
     state.vbusPresent = ((status1 & SWITCH_PD_STATUS1_VSAFE) != 0u);
     state.dataHost = state.plugged &&
                      ((static_cast<unsigned>(status1) >> SWITCH_PD_STATUS1_DR_SHIFT) & 3u) == SWITCH_PD_DATA_ROLE_DFP;
-    apply(switch_pd_decide(phase, alertBits, status1, status2, allowSource));
+    apply(switch_pd_decide(phase, alertBits, status1, status2, allowSource && railsOn && switchesOn));
     if (handleFault(alertBits, status1)) {
         notify();
         return;
@@ -234,21 +234,24 @@ void SwitchPD::apply(const switch_pd_step &step)
 // NOLINTNEXTLINE(misc-no-recursion): HELD has no source rails, so the nested enter() goes no deeper
 void SwitchPD::enter(switch_pd_phase next, const char *why)
 {
-    const bool powered = switch_pd_rails_on(phase);
+    const bool boosting = switch_pd_boost_on(phase);
     phase = next;
     sawDetach = false;
-    const bool switches = switch_pd_switches_on(next, allowSource);
-    const bool rails = switch_pd_rails_on(next);
-    if (!switches || (powered && !rails))
+    const bool armed = allowSource && !asleepSinkOnly;
+    const bool switches = switch_pd_switches_on(next, armed);
+    const bool rails = armed && switch_pd_rails_on(next);
+    const bool boost = switch_pd_boost_on(next);
+    if (!switches || (boosting && !boost))
         setSwitches(false);
-    if (powered && !rails)
+    if (boosting && !boost)
         (void)switch_battery_set_otg_boost(false, false);
-    if (rails && !powered) {
-        const int boost = switch_battery_set_otg_boost(true, switch_pd_vbus_ours(state.status1));
-        if (boost) {
-            enter(boost == SWITCH_BATTERY_BOOST_VBUS_PRESENT ? SWITCH_PD_SINK : SWITCH_PD_HELD,
-                  boost == SWITCH_BATTERY_BOOST_VBUS_PRESENT ? "not sourcing: the charger sees external VBUS"
-                                                             : "not sourcing: the BQ24193 boost failed");
+    if (boost && !boosting) {
+        const int result =
+            switch_battery_set_otg_boost(true, railsOn && switchesOn && switch_pd_vbus_ours(state.status1));
+        if (result) {
+            enter(result == SWITCH_BATTERY_BOOST_VBUS_PRESENT ? SWITCH_PD_SINK : SWITCH_PD_HELD,
+                  result == SWITCH_BATTERY_BOOST_VBUS_PRESENT ? "not sourcing: the charger sees external VBUS"
+                                                              : "not sourcing: the BQ24193 boost failed");
             return;
         }
     }
@@ -292,6 +295,9 @@ bool SwitchPD::setRails(bool on)
 {
     if (on == railsOn)
         return true;
+    setSwitches(false);
+    if (on && switchesOn)
+        return false;
     int err = 0;
     if (on) {
         err = enableOcp();
@@ -421,7 +427,15 @@ void SwitchPD::setAllowSource(bool allow)
         enter(SWITCH_PD_SINK, "sink: host mode is off");
         notify();
     } else if (phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_HELD) {
-        setSwitches(allow);
+        const bool arm = allow && !asleepSinkOnly;
+        if (arm && phase == SWITCH_PD_EMPTY && !setRails(true)) {
+            enter(SWITCH_PD_HELD, "not sourcing: the source supplies failed");
+            notify();
+            return;
+        }
+        setSwitches(arm);
+        if (!arm)
+            (void)setRails(false);
     }
 }
 
@@ -432,17 +446,24 @@ void SwitchPD::setAllowSource(bool allow)
 // powered so that its key press can wake the console. After the wake the switches follow the phase again.
 void SwitchPD::systemSleep(bool entering)
 {
-    if (entering && (phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH)) {
-        window->cancelTimeout();
-        enter(SWITCH_PD_EMPTY, "source startup canceled for sleep");
-        notify();
-    }
     if (entering) {
-        asleepSinkOnly = phase == SWITCH_PD_EMPTY && switchesOn;
-        if (asleepSinkOnly)
+        asleepSinkOnly = phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH;
+        if (phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH) {
+            window->cancelTimeout();
+            enter(SWITCH_PD_EMPTY, "source startup canceled for sleep");
+            notify();
+        }
+        if (asleepSinkOnly) {
             setSwitches(false);
+            (void)setRails(false);
+        }
     } else if (asleepSinkOnly) {
         asleepSinkOnly = false;
+        if (allowSource && switch_pd_rails_on(phase) && !setRails(true)) {
+            enter(SWITCH_PD_HELD, "not sourcing: the source supplies failed after sleep");
+            notify();
+            return;
+        }
         setSwitches(switch_pd_switches_on(phase, allowSource));
     }
 }
