@@ -50,6 +50,7 @@ void SwitchDisplayPort::dispatch()
         break;
     }
     case Next::Coding:
+        sor.enableLink(tu);
         trainOut = switch_dp_train_start(&train, link.lanes,
                                          link.rate == SWITCH_DP_RATE_HBR2 && (caps[2] & SWITCH_DPCD_TPS3) != 0,
                                          caps[SWITCH_DPCD_TRAINING_AUX_RD_INTERVAL]);
@@ -133,6 +134,12 @@ void SwitchDisplayPort::chooseAndTrain()
     mode = modes.modes[chosen];
     stage = Stage::Training;
     char why[128] = "";
+    const bool enhanced = (caps[2] & SWITCH_DPCD_ENHANCED_FRAME) != 0;
+    if (!switch_dp_tu_config(mode.pixel_khz, mode.hactive, switch_dp_mode_htotal(&mode), link.rate, link.lanes,
+                             enhanced, &tu)) {
+        fail("SOR1", "no transfer-unit configuration for the mode");
+        return;
+    }
     if (!sorUp) {
         if (!sor.powerUp(why, sizeof(why))) {
             fail("SOR1", why);
@@ -152,7 +159,6 @@ void SwitchDisplayPort::chooseAndTrain()
         dcbUp = true;
     }
     dcb.setMode(mode);
-    const bool enhanced = (caps[2] & SWITCH_DPCD_ENHANCED_FRAME) != 0;
     if (!sor.startLink(link, enhanced, why, sizeof(why))) {
         fail("SOR1", why);
         return;
@@ -175,6 +181,7 @@ void SwitchDisplayPort::applyTraining()
         break;
     case SWITCH_DP_TRAIN_FAIL: {
 #if DEVELOPMENT || DEBUG
+        sor.logTrainingState();
         IOLog("SwitchDisplayPort: training DPCD interval %#x, status %02x %02x %02x %02x, adjust %02x %02x\n",
               caps[SWITCH_DPCD_TRAINING_AUX_RD_INTERVAL], request.data[0], request.data[1], request.data[2],
               request.data[3], request.data[4], request.data[5]);
@@ -191,14 +198,7 @@ void SwitchDisplayPort::applyTraining()
 
 void SwitchDisplayPort::trained()
 {
-    const bool enhanced = (caps[2] & SWITCH_DPCD_ENHANCED_FRAME) != 0;
-    struct switch_dp_tu tu = {};
     char why[128] = "";
-    if (!switch_dp_tu_config(mode.pixel_khz, mode.hactive, switch_dp_mode_htotal(&mode), link.rate, link.lanes,
-                             enhanced, &tu)) {
-        fail("SOR1", "no transfer-unit configuration for the mode");
-        return;
-    }
     if (!sor.attach(mode, tu, why, sizeof(why))) {
         fail("SOR1", why);
         return;

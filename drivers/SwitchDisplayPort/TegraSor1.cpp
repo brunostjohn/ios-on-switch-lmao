@@ -85,6 +85,7 @@ constexpr uint32_t kClkSelMask = 3u, kClkSelDiffDp = 3u, kLinkSpeedMask = 0x1fu 
 constexpr uint32_t kSpareSeqEnable = 1u << 0, kSparePanelInternal = 1u << 1;
 constexpr uint32_t kPadCalPd = 1u << 23, kTxPuEnable = 1u << 22, kTxPuMask = 0xffu << 8;
 constexpr uint32_t kLaneSeqTrigger = 1u << 31, kLaneSeqDown = 1u << 20, kLaneStateDown = 1u << 16;
+constexpr uint32_t kLaneSeqBusy = 1u << 28;
 constexpr uint32_t kLinkEnable = 1u << 0, kEnhancedFrame = 1u << 14, kLaneCountMask = 0x1fu << 16;
 constexpr uint32_t kTuSizeMask = 0x7fu << 2;
 constexpr uint32_t kProtocolMask = 0xfu << 8, kProtocolDpA = 0x8u << 8, kOwnerMask = 0xfu, kSubownerMask = 3u << 4;
@@ -192,6 +193,8 @@ bool TegraSor1::powerUp(char *why, size_t size)
 
 bool TegraSor1::lanesPower(uint8_t count, bool up)
 {
+    if (!waitClear(LANE_SEQ_CTL, kLaneSeqBusy, kHandshakeUs))
+        return false;
     uint32_t value = read(DP_PADCTL0) & ~0xfu;
     if (up) {
         for (unsigned lane = 0; lane < count; ++lane) {
@@ -277,31 +280,50 @@ bool TegraSor1::startLink(const struct switch_dp_link &link, bool enhanced, char
     rmw(PLL2, kPll2PortPd, 0);
     rmw(PLL1, 0, kPll1Term);
     IODelay(10);
-    uint32_t crossbar = 0;
-    for (uint32_t i = 0; i < 5; ++i) {
-        crossbar |= (((uint32_t)kCrossbar[i] & 7u) << (i * 3)) << 2;
-        crossbar |= ((i & 7u) << (i * 3)) << 17;
-    }
-    write(XBAR_POL, 0);
-    write(XBAR_CTRL, crossbar);
     rmw(STATE1, kProtocolMask, kProtocolDpA);
-    rmw(DP_LINKCTL0, 0, kLinkEnable);
-    rmw(DP_LINKCTL0, kLaneCountMask | kEnhancedFrame,
+    rmw(DP_LINKCTL0, kLinkEnable | kLaneCountMask | kEnhancedFrame,
         (((1u << link.lanes) - 1u) << 16) | (enhanced ? kEnhancedFrame : 0));
     rmw(DP_SPARE0, kSparePanelInternal, 0);
-    if (!lanesPower(0, false) || !lanesPower(link.lanes, true)) {
+    if (!lanesPower(link.lanes, true)) {
         snprintf(why, size, "SOR1's lane sequencer did not finish (LANE_SEQ_CTL %#x)", read(LANE_SEQ_CTL));
         return false;
     }
+    return true;
+}
+
+void TegraSor1::enableLink(const struct switch_dp_tu &tu)
+{
+    rmw(DP_LINKCTL0, kTuSizeMask, (tu.tu_size & 0x7fu) << 2);
+    rmw(DP_CONFIG0, (1u << 24) | (0xfu << 16) | (0x7fu << 8) | 0x3fu,
+        (1u << 31) | (1u << 28) | (1u << 26) | (tu.active_polarity != 0 ? 1u << 24 : 0) |
+            ((tu.active_frac & 0xfu) << 16) | ((tu.active_count & 0x7fu) << 8) | (tu.watermark & 0x3fu));
+    rmw(DP_LINKCTL0, 0, kLinkEnable);
+    uint32_t crossbar = 0, mask = 3u;
+    for (uint32_t i = 0; i < 5; ++i) {
+        crossbar |= (uint32_t)kCrossbar[i] << (i * 3 + 2);
+        mask |= 7u << (i * 3 + 2);
+    }
+    rmw(XBAR_CTRL, mask, crossbar);
+    write(XBAR_POL, 0);
     switch_car_clock_disable(kClockSor1);
     switch_car_rmw(CLK_SOURCE_SOR1, kOutMask, kOutPad);
     switch_car_clock_enable(kClockSor1);
-    const uint32_t lanesMask = (1u << link.lanes) - 1u;
+    const uint32_t lanesMask = (1u << lanes) - 1u;
     rmw(DP_PADCTL0, 0xfu << 4, lanesMask << 4);
     IODelay(20);
     rmw(DP_PADCTL0, 0xfu << 4, 0);
-    return true;
 }
+
+#if DEVELOPMENT || DEBUG
+void TegraSor1::logTrainingState()
+{
+    IOLog("SwitchDisplayPort: SOR lane state %#x, pad %#x, link %#x, config %#x, clock %#x, power %#x\n",
+          read(LANE_SEQ_CTL), read(DP_PADCTL0), read(DP_LINKCTL0), read(DP_CONFIG0), read(CLK_CNTRL), read(PWR));
+    IOLog("SwitchDisplayPort: SOR drive %#x, emphasis %#x, pattern %#x, crossbar %#x/%#x, OSC %#x\n",
+          read(LANE_DRIVE_CURRENT0), read(LANE_PREEMPHASIS0), read(DP_TPG), read(XBAR_CTRL), read(XBAR_POL),
+          switch_car_read(OSC_CTRL));
+}
+#endif
 
 void TegraSor1::drive(const struct switch_dp_train &train, const struct switch_dp_train_out &out)
 {
@@ -323,10 +345,6 @@ void TegraSor1::drive(const struct switch_dp_train &train, const struct switch_d
 
 bool TegraSor1::attach(const struct switch_dp_mode &mode, const struct switch_dp_tu &tu, char *why, size_t size)
 {
-    rmw(DP_LINKCTL0, kTuSizeMask, (tu.tu_size & 0x7fu) << 2);
-    rmw(DP_CONFIG0, (1u << 24) | (0xfu << 16) | (0x7fu << 8) | 0x3fu,
-        (1u << 31) | (1u << 26) | (tu.active_polarity != 0 ? 1u << 24 : 0) | ((tu.active_frac & 0xfu) << 16) |
-            ((tu.active_count & 0x7fu) << 8) | (tu.watermark & 0x3fu));
     rmw(DP_AUDIO_HBLANK_SYMBOLS, 0x1ffffu, tu.hblank_symbols & 0xffffu);
     rmw(DP_AUDIO_VBLANK_SYMBOLS, 0xffffu, tu.vblank_symbols & 0xffffu);
 
@@ -389,11 +407,13 @@ void TegraSor1::powerDown()
     if (base == nullptr || !switch_car_clock_enabled(kClockSor1)) {
         return;
     }
-    rmw(STATE1, kProtocolMask | kSubownerMask | kOwnerMask, 0);
-    update();
     switch_car_clock_disable(kClockSor1);
     switch_car_rmw(CLK_SOURCE_SOR1, kOutMask, 0);
     switch_car_clock_enable(kClockSor1);
+    (void)lanesPower(0, false);
+    rmw(DP_LINKCTL0, kLinkEnable, 0);
+    rmw(STATE1, kProtocolMask | kSubownerMask | kOwnerMask, 0);
+    update();
     rmw(PWR, kNormalPowerUp, kTrigger);
     (void)waitClear(PWR, kTrigger, kHandshakeUs);
     rmw(PLL2, 0, kPll2PortPd);

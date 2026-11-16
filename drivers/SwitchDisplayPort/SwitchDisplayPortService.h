@@ -91,6 +91,7 @@ private:
     struct switch_dp_mode mode = {};
     unsigned modeIndex = 0;
     struct switch_dp_link link = {};
+    struct switch_dp_tu tu = {};
     uint8_t maxRate = 0, maxLanes = 0;
     struct switch_dp_train train = {};
     struct switch_dp_train_out trainOut = {};
