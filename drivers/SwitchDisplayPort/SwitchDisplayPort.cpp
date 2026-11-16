@@ -364,6 +364,7 @@ IOReturn SwitchDisplayPort::selectMode(int index, bool enable)
     if (wantedMode == index && (stage == Stage::Running || stage == Stage::Training))
         return kIOReturnSuccess;
     teardownLink();
+    stage = Stage::Ready;
     wantedMode = index;
     modePending = true;
     scheduleAux();
