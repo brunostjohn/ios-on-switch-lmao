@@ -50,7 +50,7 @@ struct switch_dp_train {
     enum switch_dp_train_phase phase;
     uint8_t lanes;
     bool tps3;
-    uint32_t eq_wait_us;
+    uint32_t interval_us;
     uint8_t swing[4], emphasis[4];
     unsigned tries, same_swing;
     const char *why;
@@ -64,19 +64,13 @@ struct switch_dp_train_out {
     uint32_t wait_us;
 };
 
-// DPCD 0x00E: the wait before reading channel equalisation status (0: 400 us; n: n * 4 ms).
-static inline uint32_t switch_dp_eq_wait_us(uint8_t rd_interval)
-{
-    const uint8_t interval = rd_interval & 0x7Fu;
-    return interval == 0 ? 400u : interval * 4000u;
-}
-
 static inline struct switch_dp_train_out switch_dp_train_drive(const struct switch_dp_train *t)
 {
-    struct switch_dp_train_out out = {SWITCH_DP_TRAIN_DRIVE, 1, {0}, 0, SWITCH_DP_CR_US};
+    struct switch_dp_train_out out = {
+        SWITCH_DP_TRAIN_DRIVE, 1, {0}, 0, t->interval_us != 0 ? t->interval_us : SWITCH_DP_CR_US};
     if (t->phase == SWITCH_DP_TRAIN_EQUALISATION) {
         out.pattern = t->tps3 ? 3 : 2;
-        out.wait_us = t->eq_wait_us;
+        out.wait_us = t->interval_us != 0 ? t->interval_us : 400u;
     }
     out.dpcd[0] = (uint8_t)(out.pattern | SWITCH_DPCD_SCRAMBLING_DISABLE);
     for (unsigned lane = 0; lane < t->lanes; ++lane) {
@@ -98,7 +92,7 @@ static inline struct switch_dp_train_out switch_dp_train_start(struct switch_dp_
                                                                uint8_t rd_interval)
 {
     const struct switch_dp_train fresh = {
-        SWITCH_DP_TRAIN_CLOCK_RECOVERY, lanes, tps3, switch_dp_eq_wait_us(rd_interval), {0}, {0}, 0, 0, 0};
+        SWITCH_DP_TRAIN_CLOCK_RECOVERY, lanes, tps3, (rd_interval & 0x7Fu) * 4000u, {0}, {0}, 0, 0, 0};
     *t = fresh;
     return switch_dp_train_drive(t);
 }
@@ -153,12 +147,14 @@ static inline struct switch_dp_train_out switch_dp_train_clock_recovery(struct s
         t->tries = 0;
         return switch_dp_train_drive(t);
     }
+    bool all_max_swing = true;
     for (unsigned lane = 0; lane < t->lanes; ++lane) {
-        if (t->swing[lane] == 3) {
-            return switch_dp_train_fail(t, "clock recovery failed at the highest swing");
-        }
+        all_max_swing = all_max_swing && t->swing[lane] == 3;
     }
     const bool changed = switch_dp_train_adjust(t, status);
+    if (all_max_swing && !changed) {
+        return switch_dp_train_fail(t, "clock recovery failed at the highest swing");
+    }
     t->same_swing = changed ? 0 : t->same_swing + 1;
     if (t->same_swing >= SWITCH_DP_CR_SAME_SWING_MAX || ++t->tries >= SWITCH_DP_CR_TRIES_MAX) {
         return switch_dp_train_fail(t, "clock recovery did not converge");

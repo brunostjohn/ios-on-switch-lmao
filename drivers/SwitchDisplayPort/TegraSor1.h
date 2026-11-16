@@ -17,10 +17,9 @@
 
 class TegraSor1 {
 public:
-    // vdd-hdmi-dp (MAX77620 LDO8, 1.0 V), the pads out of deep power down, the SOR power partition, SOR1's clock on
-    // the safe source and out of reset.
+    // vdd-hdmi-dp (MAX77620 LDO8, 1.0 V), the SOR power partition, SOR1's clock on the safe source and out of reset.
     bool powerUp(char *why, size_t size);
-    // PLL_D2 at twice `pixel_khz`; pll_d2_out0 then clocks DISP2 and SOR1's pixel side.
+    // PLL_D2 at `pixel_khz`; pll_d2_out0 clocks DISP2 and SOR1's pixel side.
     bool pixelClock(uint32_t pixel_khz, char *why, size_t size);
     // SOR1's PLL, DP clocks, crossbar and protocol, termination calibration, link rate and lanes, lanes powered and
     // precharged: ready for the first training pattern.
@@ -47,7 +46,7 @@ private:
     void superUpdate();
     void update();
     bool lanesPower(uint8_t count, bool up);
-    void terminationCalibrate();
+    bool terminationCalibrate(char *why, size_t size);
 };
 
 #endif

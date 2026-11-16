@@ -25,10 +25,12 @@ enum : uint32_t {
     PLLDP_SS_CFG = 0x598,
     PLLDP_SS_CTRL1 = 0x59c,
     PLLDP_SS_CTRL2 = 0x5a0,
+    PLLDP_MISC4 = 0x770,
 };
 
-constexpr uint32_t kPllEnable = 1u << 30, kPllLock = 1u << 27;
+constexpr uint32_t kPllEnable = 1u << 30, kPllLock = 1u << 27, kPllIddq = 1u << 18;
 constexpr uint32_t kPllDp270 = (3u << 19) | (28u << 8) | 1u;  // P = 4 (qlin code 3), N = 28, M = 1
+constexpr uint32_t kPllDp270B01 = (5u << 19) | (42u << 8) | 1u;
 constexpr uint32_t kPadAux = (2u << 12) | (4u << 8) | (0x30u << 2) | (1u << 1);
 constexpr uint32_t kAllInterrupts = SWITCH_DPAUX_INTR_AUX_DONE | SWITCH_DPAUX_INTR_IRQ_EVENT |
                                     SWITCH_DPAUX_INTR_UNPLUG_EVENT | SWITCH_DPAUX_INTR_PLUG_EVENT;
@@ -46,20 +48,28 @@ void TegraDpaux1::write(uint32_t word, uint32_t value)
 
 bool TegraDpaux1::startPllDp(char *why, size_t size)
 {
-    if ((switch_car_read(PLLDP_BASE) & (kPllEnable | kPllLock)) == (kPllEnable | kPllLock)) {
-        return true;
-    }
-    switch_car_write(PLLDP_MISC, 0x40000020);
-    switch_car_write(PLLDP_SS_CFG, 0xc0000000);
-    switch_car_write(PLLDP_SS_CTRL1, 0xf400f0da);
-    switch_car_write(PLLDP_SS_CTRL2, 0x2004f400);
-    switch_car_write(PLLDP_BASE, kPllDp270);  // IDDQ (bit 18) clear
+    const bool b01 = switch_car_soc_t210b01();
+    const uint32_t dividers = b01 ? kPllDp270B01 : kPllDp270;
+    switch_car_rmw(PLLDP_SS_CFG, 1u << 30, 0);
+    IODelay(1);
+    switch_car_rmw(PLLDP_BASE, kPllEnable, 0);
+    IODelay(1);
+    switch_car_write(PLLDP_BASE, dividers | kPllIddq);
+    IODelay(2);
+    switch_car_write(PLLDP_MISC, b01 ? 0x40000000 : 0x40000020);
+    switch_car_write(PLLDP_SS_CFG, 0x80000000);
+    switch_car_write(PLLDP_SS_CTRL1, b01 ? 0xf600f200 : 0xf400f0da);
+    switch_car_write(PLLDP_SS_CTRL2, b01 ? 0x2005f600 : 0x2004f400);
+    if (b01)
+        switch_car_write(PLLDP_MISC4, 0);
+    switch_car_write(PLLDP_BASE, dividers);
     IODelay(5);
-    switch_car_write(PLLDP_BASE, kPllDp270 | kPllEnable);
+    switch_car_write(PLLDP_BASE, dividers | kPllEnable);
     if (!switch_car_wait(PLLDP_BASE, kPllLock, kPllLock, 300)) {
         snprintf(why, size, "PLL_DP did not lock (base %#x)", switch_car_read(PLLDP_BASE));
         return false;
     }
+    switch_car_write(PLLDP_SS_CFG, 0xc0000000);
     return true;
 }
 

@@ -119,6 +119,7 @@ host_shims(
         "os/log.h",
     ],
     stubs = "xusb_kernel_stubs.h",
+    visibility = ["//drivers/SwitchDisplayPort/test:__pkg__"],
 )
 
 host_library(
@@ -126,6 +127,7 @@ host_library(
     srcs = ["xusb_register_model.cpp"],
     hdrs = ["xusb_register_model.h"],
     deps = [":xusb_kernel"],
+    visibility = ["//drivers/SwitchDisplayPort/test:__pkg__"],
 )
 
 host_library(

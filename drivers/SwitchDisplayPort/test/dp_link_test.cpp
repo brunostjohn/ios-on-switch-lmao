@@ -71,30 +71,74 @@ TEST(TransferUnit, OverfullLinkIsRefused)
 
 TEST(PllD2, PixelClocksAreExact)
 {
+    const bool socs[] = {false, true};
+    for (bool b01 : socs) {
+        SCOPED_TRACE(b01 ? "B01" : "Erista");
+        switch_dp_plld2 pll{};
+        ASSERT_TRUE(switch_dp_plld2_for(594000, 38400, b01, &pll));
+        EXPECT_EQ(pll.out_hz, 594000000u);
+        EXPECT_EQ(pll.n, 30u);
+        EXPECT_EQ(pll.m, 1u);
+        EXPECT_EQ(pll.pdiv, 2u);
+        EXPECT_EQ(pll.pdiv_hw, 1u);
+        EXPECT_EQ(pll.sdm_din, 0xE00);
+        ASSERT_TRUE(switch_dp_plld2_for(148500, 38400, b01, &pll));
+        EXPECT_EQ(pll.out_hz, 148500000u);
+        EXPECT_EQ(pll.pdiv, 6u);
+        EXPECT_EQ(pll.pdiv_hw, 5u);
+        EXPECT_EQ(pll.n, 23u);
+        EXPECT_EQ(pll.sdm_din, 0xF680);
+        ASSERT_TRUE(switch_dp_plld2_for(74250, 38400, b01, &pll));
+        EXPECT_EQ(pll.out_hz, 74250000u);
+        EXPECT_EQ(pll.pdiv, 12u);
+        EXPECT_EQ(pll.pdiv_hw, 9u);
+        EXPECT_EQ(pll.n, 23u);
+        EXPECT_EQ(pll.sdm_din, 0xF680);
+        ASSERT_TRUE(switch_dp_plld2_for(196800, 38400, b01, &pll));
+        EXPECT_EQ(pll.out_hz, 196800000u);
+        EXPECT_EQ(pll.n, 20u);
+        EXPECT_EQ(pll.pdiv, 4u);
+        EXPECT_EQ(pll.pdiv_hw, 3u);
+        EXPECT_EQ(pll.sdm_din, 0);
+        ASSERT_TRUE(switch_dp_plld2_for(27000, 38400, b01, &pll));
+        EXPECT_EQ(pll.out_hz, 27000000u);
+    }
+}
+
+TEST(PllD2, SocLimitsAndVgaDividers)
+{
     switch_dp_plld2 pll{};
-    ASSERT_TRUE(switch_dp_plld2_for(148500, 38400, &pll));
-    EXPECT_EQ(pll.out_hz, 297000000u);
-    EXPECT_EQ(pll.pdiv, 3u);
-    EXPECT_EQ(pll.pdiv_hw, 2u);
-    EXPECT_EQ(pll.n, 22u);
-    EXPECT_EQ(pll.sdm_din, 5760);
-    ASSERT_TRUE(switch_dp_plld2_for(74250, 38400, &pll));
-    EXPECT_EQ(pll.out_hz, 148500000u);
-    ASSERT_TRUE(switch_dp_plld2_for(27000, 38400, &pll));
-    EXPECT_EQ(pll.out_hz, 54000000u);
-    ASSERT_TRUE(switch_dp_plld2_for(25175, 38400, &pll));
-    EXPECT_NEAR(static_cast<double>(pll.out_hz), 50350000.0, 50350000.0 * 1e-4);
+    ASSERT_TRUE(switch_dp_plld2_for(25175, 38400, false, &pll));
+    EXPECT_EQ(pll.pdiv, 30u);
+    EXPECT_EQ(pll.pdiv_hw, 15u);
+    EXPECT_NEAR(static_cast<double>(pll.out_hz), 25175000.0, 25175000.0 * 1e-4);
+    ASSERT_TRUE(switch_dp_plld2_for(25175, 38400, true, &pll));
+    EXPECT_EQ(pll.pdiv, 31u);
+    EXPECT_EQ(pll.pdiv_hw, 16u);
+    EXPECT_NEAR(static_cast<double>(pll.out_hz), 25175000.0, 25175000.0 * 1e-4);
+    EXPECT_TRUE(switch_dp_plld2_for(25000, 38400, false, &pll));
+    EXPECT_FALSE(switch_dp_plld2_for(25000, 38400, true, &pll));
+    EXPECT_TRUE(switch_dp_plld2_for(1500000, 38400, false, &pll));
+    EXPECT_FALSE(switch_dp_plld2_for(1500001, 38400, false, &pll));
+    EXPECT_TRUE(switch_dp_plld2_for(1620000, 38400, true, &pll));
+    EXPECT_FALSE(switch_dp_plld2_for(1620001, 38400, true, &pll));
 }
 
 TEST(PllD2, VcoStaysInRange)
 {
-    for (uint32_t khz = 25000; khz <= 165000; khz += 250) {
-        switch_dp_plld2 pll{};
-        ASSERT_TRUE(switch_dp_plld2_for(khz, 38400, &pll)) << khz;
-        const uint64_t vco = pll.out_hz * pll.pdiv;
-        EXPECT_GE(vco, 749000000u) << khz;
-        EXPECT_LE(vco, 1500000000u) << khz;
-        EXPECT_NEAR(static_cast<double>(pll.out_hz), khz * 2000.0, khz * 2000.0 * 1e-4) << khz;
+    const bool socs[] = {false, true};
+    for (bool b01 : socs) {
+        SCOPED_TRACE(b01 ? "B01" : "Erista");
+        for (uint32_t khz = 26000; khz <= 165000; khz += 250) {
+            switch_dp_plld2 pll{};
+            ASSERT_TRUE(switch_dp_plld2_for(khz, 38400, b01, &pll)) << khz;
+            const uint64_t vco = pll.out_hz * pll.pdiv;
+            EXPECT_GE(vco, (b01 ? 780000000u : 750000000u) - 5000u) << khz;
+            EXPECT_LE(vco, (b01 ? 1620000000u : 1500000000u) + 5000u) << khz;
+            EXPECT_GE(static_cast<int16_t>(pll.sdm_din), -4096) << khz;
+            EXPECT_LE(static_cast<int16_t>(pll.sdm_din), 4095) << khz;
+            EXPECT_NEAR(static_cast<double>(pll.out_hz), khz * 1000.0, khz * 1000.0 * 1e-4) << khz;
+        }
     }
 }
 
@@ -176,7 +220,7 @@ TEST(Training, PatternsAndLaneSettings)
     EXPECT_EQ(out.pattern, 1);
     EXPECT_EQ(out.dpcd[0], 0x21);
     EXPECT_EQ(out.dpcd_len, 3);
-    EXPECT_EQ(out.wait_us, 100u);
+    EXPECT_EQ(out.wait_us, 4000u);
     const uint8_t cr_done[6] = {0x11, 0, 0, 0, 0x0E, 0};  // lane 0 asks swing 2 emphasis 3: clamped to 1
     out = switch_dp_train_status(&t, cr_done);
     EXPECT_EQ(out.pattern, 3);
@@ -187,10 +231,42 @@ TEST(Training, PatternsAndLaneSettings)
     EXPECT_EQ(out.dpcd[1], 2 | (1 << 3) | SWITCH_DPCD_MAX_PRE_EMPHASIS_REACHED);
     switch_dp_train t2{};
     out = switch_dp_train_start(&t2, 1, false, 0);
+    EXPECT_EQ(out.wait_us, 100u);
     const uint8_t done[6] = {0x01, 0, 0, 0, 0, 0};
     out = switch_dp_train_status(&t2, done);
     EXPECT_EQ(out.dpcd[0], 0x22);
     EXPECT_EQ(out.wait_us, 400u);
+}
+
+TEST(Training, SinkIntervalAppliesToClockRecoveryRetries)
+{
+    switch_dp_train t{};
+    switch_dp_train_out out = switch_dp_train_start(&t, 2, false, 0x82);
+    EXPECT_EQ(out.wait_us, 8000u);
+    const uint8_t retry[6] = {0, 0, 0, 0, 0x11, 0};
+    out = switch_dp_train_status(&t, retry);
+    ASSERT_EQ(out.act, SWITCH_DP_TRAIN_DRIVE);
+    EXPECT_EQ(out.pattern, 1);
+    EXPECT_EQ(out.wait_us, 8000u);
+    const uint8_t recovered[6] = {0x11, 0, 0, 0, 0, 0};
+    out = switch_dp_train_status(&t, recovered);
+    EXPECT_EQ(out.pattern, 2);
+    EXPECT_EQ(out.wait_us, 8000u);
+}
+
+TEST(Training, RecoveredLaneAtMaxSwingAllowsOtherLanesToAdjust)
+{
+    switch_dp_train t{};
+    (void)switch_dp_train_start(&t, 2, false, 0);
+    const uint8_t first[6] = {0, 0, 0, 0, 0x13, 0};
+    ASSERT_EQ(switch_dp_train_status(&t, first).act, SWITCH_DP_TRAIN_DRIVE);
+    const uint8_t retry[6] = {0x01, 0, 0, 0, 0x23, 0};
+    const switch_dp_train_out out = switch_dp_train_status(&t, retry);
+    EXPECT_EQ(out.act, SWITCH_DP_TRAIN_DRIVE);
+    EXPECT_EQ(out.pattern, 1);
+    EXPECT_EQ(out.dpcd[2] & 3u, 2u);
+    const uint8_t recovered[6] = {0x11, 0, 0, 0, 0, 0};
+    EXPECT_EQ(switch_dp_train_status(&t, recovered).pattern, 2);
 }
 
 TEST(Training, ClockThatNeverLocksFails)

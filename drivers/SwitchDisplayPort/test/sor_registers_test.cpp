@@ -1,0 +1,340 @@
+// SPDX-License-Identifier: GPL-2.0-only
+#include "drivers/SwitchDisplayPort/TegraSor1.h"
+#include "drivers/SwitchDisplayPort/TegraDpaux1.h"
+#include "drivers/SwitchUSB/test/xusb_register_model.h"
+
+#include <gtest/gtest.h>
+
+#include <ios>
+
+namespace {
+constexpr uintptr_t kSor = 0x54580000, kCar = 0x60006000, kPmc = 0x7000e400;
+constexpr uintptr_t kPll0 = kSor + 0x05c, kPll1 = kSor + 0x060, kPll2 = kSor + 0x064, kPll4 = kSor + 0x1c8;
+constexpr uintptr_t kPadctl0 = kSor + 0x170, kPadRequest = kPmc + 0x1c0;
+constexpr uintptr_t kPadctl2 = kSor + 0x1cc, kLaneSeq = kSor + 0x084, kTpg = kSor + 0x1b4;
+constexpr uintptr_t kSorClock = kCar + 0x410, kPllD2 = kCar + 0x4b8;
+constexpr uintptr_t kPllDp = kCar + 0x590, kPllDpCfg = kCar + 0x598;
+constexpr uintptr_t kClockOut = kCar + 0x280, kClockSet = kCar + 0x284, kClockClear = kCar + 0x288;
+constexpr uint32_t kSorBit = 1u << 23, kOutMask = 3u << 14, kOutPad = 1u << 14;
+constexpr uint32_t kPll0Boot = 0x7aaa755f, kPll1Boot = 0x48e0a055, kPll4Boot = 0xa5ffffff;
+constexpr uint32_t kPadctl2Boot = 0xa5123456;
+
+long firstMaskedWrite(uintptr_t address, uint32_t mask, uint32_t value, long after = -1)
+{
+    const auto &log = xusbModel().log;
+    for (size_t i = static_cast<size_t>(after + 1); i < log.size(); ++i)
+        if (log[i].kind == XusbEvent::Write && log[i].address == address && (log[i].value & mask) == value)
+            return static_cast<long>(i);
+    return -1;
+}
+
+bool hasDelay(uint32_t us, long after, long before)
+{
+    const auto &log = xusbModel().log;
+    for (long i = after + 1; i < before; ++i)
+        if (log[static_cast<size_t>(i)] == xusbDelay(us))
+            return true;
+    return false;
+}
+
+long maskedUpdate(uintptr_t address, uint32_t boot, uint32_t mask, uint32_t value)
+{
+    const auto &log = xusbModel().log;
+    uint32_t previous = boot;
+    for (size_t i = 0; i < log.size(); ++i) {
+        const auto &event = log[i];
+        if (event.kind != XusbEvent::Write || event.address != address)
+            continue;
+        if ((event.value & mask) == value) {
+            EXPECT_EQ(event.value & ~mask, previous & ~mask);
+            return static_cast<long>(i);
+        }
+        previous = event.value;
+    }
+    ADD_FAILURE() << "Missing masked update at " << std::hex << address;
+    return -1;
+}
+
+class SorRegisters : public ::testing::Test {
+protected:
+    TegraSor1 sor;
+    char why[160] = {};
+    bool sscBeforeLock = false, dpEnabled = false;
+    unsigned dpEnableReads = 0;
+
+    void SetUp() override
+    {
+        xusbModelReset();
+        auto &model = xusbModel();
+        auto &r = model.registers;
+        r[0x70000804] = 0x21u << 8 | 2u << 4;
+        r[kPmc + 0x038] = 1u << 17;
+        r[kSorClock] = 2u << 14;
+        r[kPll0] = kPll0Boot;
+        r[kPll1] = kPll1Boot;
+        r[kPll2] = 0x01c60000;
+        r[kPll4] = kPll4Boot;
+        r[kPadctl0] = 1u << 23;
+        r[kPadctl2] = kPadctl2Boot;
+        model.afterWrite = [this](uintptr_t address, uint32_t value) {
+            auto &registers = xusbModel().registers;
+            if (address == kPllD2 && (value & (1u << 30)))
+                registers[address] |= 1u << 27;
+            if (address == kPllDp) {
+                dpEnabled = (value & (1u << 30)) != 0;
+                if (dpEnabled) {
+                    registers[address] |= 1u << 27;
+                    dpEnableReads = xusbModel().reads[address];
+                } else
+                    registers[address] &= ~(1u << 27);
+            }
+            if (address == kPllDpCfg && (value & (1u << 30)))
+                sscBeforeLock |= !dpEnabled || !(registers[kPllDp] & (1u << 27)) ||
+                                 xusbModel().reads[kPllDp] <= dpEnableReads;
+            if (address == kLaneSeq)
+                registers[address] &= ~(1u << 31);
+            if (address == kClockSet)
+                registers[kClockOut] |= value;
+            if (address == kClockClear)
+                registers[kClockOut] &= ~value;
+            if (address == kCar + 0x29c)
+                registers[kCar + 0x298] |= value;
+            if (address == kCar + 0x2a0)
+                registers[kCar + 0x298] &= ~value;
+            if (address == kPmc + 0x1c0) {
+                if ((value >> 30) == 1)
+                    registers[kPmc + 0x1c4] &= ~(value & 0x3fffffffu);
+                else if ((value >> 30) == 2)
+                    registers[kPmc + 0x1c4] |= value & 0x3fffffffu;
+            }
+        };
+    }
+
+    bool start(uint8_t lanes = 2, uint8_t rate = SWITCH_DP_RATE_HBR)
+    {
+        const switch_dp_link link{rate, lanes};
+        return sor.powerUp(why, sizeof(why)) && sor.pixelClock(74250, why, sizeof(why)) &&
+               sor.startLink(link, true, why, sizeof(why));
+    }
+
+    void checkAuxClock(bool b01)
+    {
+        auto &r = xusbModel().registers;
+        r[0x70000804] = 0x21u << 8 | (b01 ? 2u : 1u) << 4;
+        for (const bool wasRunning : {false, true}) {
+            SCOPED_TRACE(wasRunning);
+            xusbModel().log.clear();
+            const uint32_t initialBase = wasRunning ? 0x48181c01 : 1u << 18;
+            const uint32_t initialCfg = wasRunning ? 0xc0000000u : 0;
+            r[kPllDp] = initialBase;
+            r[kPllDpCfg] = initialCfg;
+            r[kCar + 0x770] = 0xa5a5a5a5;
+            sscBeforeLock = dpEnabled = false;
+            TegraDpaux1 aux;
+            ASSERT_TRUE(aux.powerUp(why, sizeof(why))) << why;
+            const uint32_t profile = b01 ? 0x00282a01 : 0x00181c01;
+            EXPECT_EQ(xusbWritesTo(kPllDp),
+                      (std::vector<uint32_t>{initialBase & ~(1u << 30), profile | 1u << 18, profile,
+                                             profile | 1u << 30}));
+            EXPECT_EQ(r[kPllDp] & ~(1u << 27), profile | 1u << 30);
+            EXPECT_EQ(r[kCar + 0x594], b01 ? 0x40000000u : 0x40000020u);
+            EXPECT_EQ(r[kCar + 0x59c], b01 ? 0xf600f200u : 0xf400f0dau);
+            EXPECT_EQ(r[kCar + 0x5a0], b01 ? 0x2005f600u : 0x2004f400u);
+            if (b01)
+                EXPECT_EQ(r[kCar + 0x770], 0u);
+            EXPECT_EQ(xusbWritesTo(kPllDpCfg),
+                      (std::vector<uint32_t>{initialCfg & ~(1u << 30), 0x80000000, 0xc0000000}));
+            const long stopped = firstMaskedWrite(kPllDpCfg, 0xffffffff, initialCfg & ~(1u << 30));
+            const long disabled = firstMaskedWrite(kPllDp, 0xffffffff, initialBase & ~(1u << 30), stopped);
+            const long iddq = firstMaskedWrite(kPllDp, 0xffffffff, profile | 1u << 18, disabled);
+            const long defaults = firstMaskedWrite(kCar + 0x594, 0xffffffff,
+                                                  b01 ? 0x40000000u : 0x40000020u, iddq);
+            ASSERT_GE(stopped, 0);
+            ASSERT_GE(disabled, 0);
+            ASSERT_GE(iddq, 0);
+            ASSERT_GE(defaults, 0);
+            EXPECT_TRUE(hasDelay(1, stopped, disabled));
+            EXPECT_TRUE(hasDelay(1, disabled, iddq));
+            EXPECT_TRUE(hasDelay(2, iddq, defaults));
+            const long spreadOff = firstMaskedWrite(kPllDpCfg, 0xffffffff, 0x80000000);
+            const long configured = firstMaskedWrite(kPllDp, 0xffffffff, profile);
+            const long enabled = firstMaskedWrite(kPllDp, 0xffffffff, profile | 1u << 30, configured);
+            const long spread = firstMaskedWrite(kPllDpCfg, 0xffffffff, 0xc0000000, enabled);
+            ASSERT_GE(configured, 0);
+            ASSERT_GE(spreadOff, 0);
+            ASSERT_GE(enabled, 0);
+            ASSERT_GE(spread, 0);
+            EXPECT_LT(spreadOff, configured);
+            EXPECT_TRUE(hasDelay(5, configured, enabled));
+            EXPECT_FALSE(sscBeforeLock);
+            const uint32_t n = (r[kPllDp] >> 8) & 0xffu, m = r[kPllDp] & 0xffu;
+            ASSERT_EQ(m, 1u);
+            EXPECT_EQ((r[kPllDp] >> 19) & 0x1fu, b01 ? 5u : 3u);
+            const int64_t effective = n * 8192 + 4096 + static_cast<int16_t>(r[kCar + 0x5a0]);
+            EXPECT_EQ(38400000 * effective / (8192 * m * (b01 ? 6 : 4)), 270000000);
+        }
+    }
+};
+
+TEST_F(SorRegisters, StartsB01AuxClockFromOwnedDefaults)
+{
+    checkAuxClock(true);
+}
+
+TEST_F(SorRegisters, RetainsEristaAuxClockProfile)
+{
+    checkAuxClock(false);
+}
+
+TEST_F(SorRegisters, ProgramsTheB01PixelClockWithoutAFixedPostDivider)
+{
+    ASSERT_TRUE(sor.powerUp(why, sizeof(why))) << why;
+    ASSERT_TRUE(sor.pixelClock(74250, why, sizeof(why))) << why;
+    const auto &r = xusbModel().registers;
+    EXPECT_EQ(r.at(kPllD2) & ~(1u << 27), 0x40481701u);
+    EXPECT_EQ(r.at(kCar + 0x4bc), 0x40000000u);
+    EXPECT_EQ(r.at(kCar + 0x570), 0x90000000u);
+    EXPECT_EQ(r.at(kCar + 0x574), 0xf6e0f620u);
+    EXPECT_EQ(r.at(kCar + 0x578), 0x0001f680u);
+    EXPECT_EQ(r.at(kCar + 0x76c), 0u);
+    const int64_t effective = ((r.at(kPllD2) >> 8) & 0xff) * 8192 + 4096 +
+                              static_cast<int16_t>(r.at(kCar + 0x578));
+    EXPECT_EQ(38400000 * effective / (8192 * 12), 74250000);
+}
+
+TEST_F(SorRegisters, AppliesMaskedB01ProdOnTheSafeClock)
+{
+    ASSERT_TRUE(start()) << why;
+    const long safe = firstMaskedWrite(kSorClock, kOutMask, 0);
+    const long pad = firstMaskedWrite(kSorClock, kOutMask, kOutPad);
+    ASSERT_GE(safe, 0);
+    ASSERT_GE(pad, 0);
+    for (const long prod : {
+             maskedUpdate(kPll0, kPll0Boot, 0x000f0000, 0x00050000),
+             maskedUpdate(kPll1, kPll1Boot, 0x00f00100, 0x00400100),
+             maskedUpdate(kPll4, kPll4Boot, 0x00400000, 0),
+             maskedUpdate(kPadctl2, kPadctl2Boot, 0xff000000, 0x34000000),
+         }) {
+        EXPECT_LT(safe, prod);
+        EXPECT_LT(prod, pad);
+    }
+    const auto &r = xusbModel().registers;
+    EXPECT_EQ(r.at(kPll0) & 0x000f0000u, 0x00050000u);
+    EXPECT_EQ(r.at(kPll1) & 0x00f00100u, 0x00400100u);
+    EXPECT_EQ(r.at(kPll4) & 0x00400000u, 0u);
+    EXPECT_EQ(r.at(kPadctl2), 0x34123456u);
+}
+
+TEST_F(SorRegisters, PowersLanesBeforeSelectingThePadClockAndTps1)
+{
+    ASSERT_TRUE(start()) << why;
+    EXPECT_EQ(xusbWritesTo(kLaneSeq), (std::vector<uint32_t>{0x8011f000, 0x8010f000}));
+    const long up = firstMaskedWrite(kLaneSeq, 0xffffffff, 0x8010f000);
+    const long pad = firstMaskedWrite(kSorClock, kOutMask, kOutPad);
+    ASSERT_GE(up, 0);
+    ASSERT_GE(pad, 0);
+    EXPECT_LT(up, pad);
+
+    switch_dp_train train{};
+    switch_dp_train_out out{};
+    out.pattern = 1;
+    sor.drive(train, out);
+    const long tps1 = firstMaskedWrite(kTpg, 0xffff, 0x4141);
+    ASSERT_GE(tps1, 0);
+    EXPECT_LT(pad, tps1);
+    EXPECT_EQ(xusbModel().registers[kClockOut] & kSorBit, kSorBit);
+}
+
+TEST_F(SorRegisters, CalibratesBeforeCyclingThePadsAndStartingThePll)
+{
+    ASSERT_TRUE(start()) << why;
+    const long calibrationBandgap = firstMaskedWrite(kPll2, 1u << 22, 0);
+    const long calibrationTerm = firstMaskedWrite(kPll1, 1u << 8, 1u << 8, calibrationBandgap);
+    const long calibrationOn = firstMaskedWrite(kPadctl0, 1u << 23, 0, calibrationTerm);
+    const long calibrationOff = firstMaskedWrite(kPadctl0, 1u << 23, 1u << 23, calibrationOn);
+    const long bandgapOff = firstMaskedWrite(kPll2, 1u << 22, 1u << 22, calibrationOff);
+    const long termOff = firstMaskedWrite(kPll1, 1u << 8, 0, calibrationOff);
+    const long padOff = firstMaskedWrite(kPadRequest, 0xffffffff, 0x82000000, bandgapOff);
+    const long padOn = firstMaskedWrite(kPadRequest, 0xffffffff, 0x42000000, padOff);
+    const long initialPll2 = firstMaskedWrite(kPll2, 0x01c60000, 0x01c20000, calibrationOff);
+    const long initialPll0 = firstMaskedWrite(kPll0, 5, 5, initialPll2);
+    const long bandgapOn = firstMaskedWrite(kPll2, 0x01c60000, 0x01820000, initialPll0);
+    const long pllOn = firstMaskedWrite(kPll0, 5, 0, bandgapOn);
+    const long overrideOff = firstMaskedWrite(kPll2, 0x01c60000, 0x00820000, bandgapOn);
+    const long portOn = firstMaskedWrite(kPll2, 0x01c60000, 0x00020000, overrideOff);
+    const long termOn = firstMaskedWrite(kPll1, 1u << 8, 1u << 8, portOn);
+    const long lanes = firstMaskedWrite(kLaneSeq, 0xffffffff, 0x8011f000, termOn);
+    const long padClock = firstMaskedWrite(kSorClock, kOutMask, kOutPad, lanes);
+    const long prechargeOn = firstMaskedWrite(kPadctl0, 0xf0, 0x30, padClock);
+    const long prechargeOff = firstMaskedWrite(kPadctl0, 0xf0, 0, prechargeOn);
+    for (const long event : {calibrationBandgap, calibrationTerm, calibrationOn, calibrationOff, bandgapOff, termOff,
+                             padOff, padOn, initialPll2, initialPll0, bandgapOn, pllOn, overrideOff, portOn, termOn,
+                             lanes, padClock, prechargeOn, prechargeOff})
+        ASSERT_GE(event, 0);
+    EXPECT_LT(termOff, padOff);
+    EXPECT_LT(padOn, bandgapOn);
+    EXPECT_LT(pllOn, portOn);
+    EXPECT_TRUE(hasDelay(5, initialPll0, bandgapOn));
+    EXPECT_TRUE(hasDelay(100, bandgapOn, pllOn));
+    EXPECT_TRUE(hasDelay(200, pllOn, portOn));
+    EXPECT_TRUE(hasDelay(200, overrideOff, portOn));
+    EXPECT_TRUE(hasDelay(10, termOn, lanes));
+    EXPECT_TRUE(hasDelay(20, prechargeOn, prechargeOff));
+
+    std::vector<uint32_t> adjustments;
+    const auto &log = xusbModel().log;
+    for (long i = calibrationOn + 1; i < calibrationOff; ++i) {
+        const auto &event = log[static_cast<size_t>(i)];
+        if (event.kind == XusbEvent::Write && event.address == kPll1)
+            adjustments.push_back(event.value & 0x1e00u);
+    }
+    EXPECT_EQ(adjustments, (std::vector<uint32_t>{0x1000, 0x800, 0x400, 0x200, 0}));
+}
+
+TEST_F(SorRegisters, UsesTheSameSequencerCommandForEachLaneCount)
+{
+    for (const uint8_t lanes : {1, 2, 4}) {
+        SCOPED_TRACE(lanes);
+        xusbModel().log.clear();
+        ASSERT_TRUE(start(lanes)) << why;
+        EXPECT_EQ(xusbWritesTo(kLaneSeq), (std::vector<uint32_t>{0x8011f000, 0x8010f000}));
+        EXPECT_EQ(xusbModel().registers[kSor + 0x170] & 0xfu, (1u << lanes) - 1u);
+    }
+}
+
+TEST_F(SorRegisters, RetainsBoardSetupOnRepeatedStart)
+{
+    ASSERT_TRUE(start()) << why;
+    const switch_dp_link link{SWITCH_DP_RATE_HBR2, 4};
+    ASSERT_TRUE(sor.startLink(link, true, why, sizeof(why))) << why;
+    const auto &r = xusbModel().registers;
+    EXPECT_EQ(r.at(kPll0) & 0x000f0000u, 0x00050000u);
+    EXPECT_EQ(r.at(kPll1) & 0x00f00100u, 0x00400100u);
+    EXPECT_EQ(r.at(kPll4) & 0x00400000u, 0u);
+    EXPECT_EQ(r.at(kPadctl2), 0x34123456u);
+}
+
+TEST_F(SorRegisters, PacksTheConfiguredCrossbarDriveBytes)
+{
+    ASSERT_TRUE(start(4)) << why;
+    switch_dp_train train{};
+    for (uint8_t lane = 0; lane < 4; ++lane)
+        train.swing[lane] = lane;
+    switch_dp_train_out out{};
+    out.pattern = 1;
+    sor.drive(train, out);
+    const auto &r = xusbModel().registers;
+    EXPECT_EQ(r.at(kSor + 0x138), 0x39281e13u);
+    EXPECT_EQ(r.at(kSor + 0x148), 0x00010100u);
+    EXPECT_EQ(r.at(kSor + 0x170) & 0x0040ff00u, 0x00406000u);
+    EXPECT_EQ(r.at(kTpg), 0x41414141u);
+    out.pattern = 0;
+    sor.drive(train, out);
+    EXPECT_EQ(r.at(kTpg), 0x50505050u);
+}
+}
+
+extern "C" int tegra_i2c_write(unsigned, uint8_t, uint8_t, const void *, size_t)
+{
+    return 0;
+}

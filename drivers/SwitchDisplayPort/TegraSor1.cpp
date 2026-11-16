@@ -32,6 +32,7 @@ enum : uint32_t {
     PLLD2_MISC1 = 0x570,
     PLLD2_MISC2 = 0x574,
     PLLD2_MISC3 = 0x578,
+    PLLD2_MISC4 = 0x76c,
 };
 
 constexpr uint32_t kPllEnable = 1u << 30, kPllLock = 1u << 27, kSdmEnable = 1u << 31;
@@ -67,6 +68,8 @@ enum : uint32_t {
     DP_AUDIO_HBLANK_SYMBOLS = 0x63,
     DP_AUDIO_VBLANK_SYMBOLS = 0x64,
     DP_TPG = 0x6d,
+    PLL4 = 0x72,
+    PADCTL2 = 0x73,
 };
 
 constexpr uint32_t kAttached = 1u << 3, kModeNormal = 1u << 2, kHeadAwake = 2u;
@@ -137,17 +140,20 @@ void TegraSor1::update()
 
 bool TegraSor1::pixelClock(uint32_t pixel_khz, char *why, size_t size)
 {
+    const bool b01 = switch_car_soc_t210b01();
     const uint32_t ref_khz = 38400u >> ((switch_car_read(OSC_CTRL) >> 26) & 3u);
     struct switch_dp_plld2 pll = {};
-    if (!switch_dp_plld2_for(pixel_khz, ref_khz, &pll)) {
+    if (!switch_dp_plld2_for(pixel_khz, ref_khz, b01, &pll)) {
         snprintf(why, size, "PLL_D2 cannot make %u kHz", pixel_khz);
         return false;
     }
     const uint32_t dividers = (pll.pdiv_hw << 19) | (pll.n << 8) | pll.m;
     switch_car_write(PLLD2_BASE, dividers);  // disabled, IDDQ (bit 18) clear
-    switch_car_write(PLLD2_MISC0, 0x40000020);
-    switch_car_write(PLLD2_MISC2, 0);
-    switch_car_write(PLLD2_MISC3, pll.sdm_din);
+    switch_car_write(PLLD2_MISC0, b01 ? 0x40000000 : 0x40000020);
+    switch_car_write(PLLD2_MISC2, b01 ? 0xf6e0f620 : 0);
+    switch_car_write(PLLD2_MISC3, (b01 ? 0x00010000u : 0) | pll.sdm_din);
+    if (b01)
+        switch_car_write(PLLD2_MISC4, 0);
     switch_car_write(PLLD2_MISC1, 0x10000000 | kSdmEnable);
     IODelay(5);
     switch_car_write(PLLD2_BASE, dividers | kPllEnable);
@@ -171,15 +177,12 @@ bool TegraSor1::powerUp(char *why, size_t size)
         return false;
     }
     IODelay(100);
-    if (!switch_pmc_io_pad_on(kPadLvds)) {
-        snprintf(why, size, "the DP pads did not leave deep power down");
-        return false;
-    }
     if (!switch_pmc_partition_is_on(kPartitionSor) &&
         !switch_pmc_power_up(kPartitionSor, kClockSor1, kClockSor1, nullptr)) {
         snprintf(why, size, "the SOR power partition did not come up");
         return false;
     }
+    switch_car_reset_assert(kClockSor1);
     switch_car_rmw(CLK_SOURCE_SOR1, kOutMask, 0);
     switch_car_clock_enable(kClockSor1);
     IOSleep(1);
@@ -196,14 +199,22 @@ bool TegraSor1::lanesPower(uint8_t count, bool up)
         }
     }
     write(DP_PADCTL0, value);
-    write(LANE_SEQ_CTL, kLaneSeqTrigger | (up ? kLaneSeqDown : 0) | (up ? 0 : kLaneStateDown));
+    write(LANE_SEQ_CTL, kLaneSeqTrigger | kLaneSeqDown | (15u << 12) | (up ? 0 : kLaneStateDown));
     return waitClear(LANE_SEQ_CTL, kLaneSeqTrigger, kHandshakeUs);
 }
 
-void TegraSor1::terminationCalibrate()
+bool TegraSor1::terminationCalibrate(char *why, size_t size)
 {
-    rmw(DP_PADCTL0, kPadCalPd, 0);
+    if (!switch_pmc_io_pad_on(kPadLvds)) {
+        snprintf(why, size, "the DP pads did not leave deep power down for calibration");
+        return false;
+    }
+    IODelay(5);
+    rmw(PLL2, kPll2BandgapPd, 0);
     rmw(PLL1, 0, kPll1Term);
+    IODelay(20);
+    rmw(DP_PADCTL0, kPadCalPd, 0);
+    IODelay(10);
     uint32_t adjust = 0;
     for (uint32_t mask = 0x8; mask != 0; mask >>= 1) {
         adjust |= mask;
@@ -215,23 +226,57 @@ void TegraSor1::terminationCalibrate()
     }
     rmw(PLL1, kPll1TermAdjMask, adjust << 9);
     rmw(DP_PADCTL0, 0, kPadCalPd);
+    IODelay(10);
+    rmw(PLL2, 0, kPll2BandgapPd);
+    rmw(PLL1, kPll1Term, 0);
+    IODelay(20);
+    if (!switch_pmc_io_pad_off(kPadLvds)) {
+        snprintf(why, size, "the DP pads did not enter deep power down after calibration");
+        return false;
+    }
+    IODelay(5);
+    return true;
 }
 
 bool TegraSor1::startLink(const struct switch_dp_link &link, bool enhanced, char *why, size_t size)
 {
     lanes = link.lanes;
-    rmw(PLL2, kPll2BandgapPd, 0);
-    IODelay(20);
-    rmw(PLL3, 0, kPll3Vdd3V3);
-    rmw(PLL0, kPll0VcoPd | kPll0Pwr, 0);
-    rmw(PLL2, kPll2Enforce, kPll2CapPd);
-    IODelay(200);
-    rmw(PLL2, kPll2Override | kPll2PortPd, 0);
-    rmw(CLK_CNTRL, kClkSelMask, kClkSelDiffDp);
-    IODelay(200);
+    switch_car_clock_disable(kClockSor1);
+    switch_car_rmw(CLK_SOURCE_SOR1, kOutMask, 0);
+    switch_car_clock_enable(kClockSor1);
+    rmw(CLK_CNTRL, kClkSelMask | kLinkSpeedMask, kClkSelDiffDp | (uint32_t)(link.rate & 0x1fu) << 2);
+    IODelay(300);
+    if (switch_car_soc_t210b01()) {
+        rmw(PLL0, 0x000f0000, 0x00050000);
+        rmw(PLL1, 0x00f00100, 0x00400100);
+        rmw(PLL4, 0x00400000, 0);
+        rmw(PADCTL2, 0xff000000, 0x34000000);
+        rmw(DP_PADCTL0, 0, link.rate == SWITCH_DP_RATE_HBR2 ? 0x2000 : 0x3000);
+    } else {
+        rmw(PLL0, (0xfu << 24) | (0xfu << 8) | kPll0ResistorExt, (1u << 24) | (3u << 8) | kPll0ResistorExt);
+        const uint32_t loadAdjust = link.rate == SWITCH_DP_RATE_RBR ? 3u : link.rate == SWITCH_DP_RATE_HBR ? 4u : 6u;
+        rmw(PLL1, kPll1LoadAdjMask, loadAdjust << 20);
+        rmw(PLL3, 0, kPll3Vdd3V3);
+    }
     rmw(DP_SPARE0, kSparePanelInternal, kSpareSeqEnable);
     write(LVDS, 0);
-    rmw(PLL0, (0xfu << 24) | (0xfu << 8), (1u << 24) | (3u << 8) | kPll0ResistorExt);
+    if (!terminationCalibrate(why, size))
+        return false;
+    rmw(PLL2, kPll2Override, kPll2CapPd | kPll2Enforce | kPll2PortPd | kPll2BandgapPd);
+    rmw(PLL0, 0, kPll0VcoPd | kPll0Pwr);
+    if (!switch_pmc_io_pad_on(kPadLvds)) {
+        snprintf(why, size, "the DP pads did not leave deep power down");
+        return false;
+    }
+    IODelay(5);
+    rmw(PLL2, kPll2BandgapPd, 0);
+    IODelay(100);
+    rmw(PLL0, kPll0VcoPd | kPll0Pwr, 0);
+    rmw(PLL2, kPll2Enforce, 0);
+    IODelay(200);
+    rmw(PLL2, kPll2PortPd, 0);
+    rmw(PLL1, 0, kPll1Term);
+    IODelay(10);
     uint32_t crossbar = 0;
     for (uint32_t i = 0; i < 5; ++i) {
         crossbar |= (((uint32_t)kCrossbar[i] & 7u) << (i * 3)) << 2;
@@ -239,27 +284,21 @@ bool TegraSor1::startLink(const struct switch_dp_link &link, bool enhanced, char
     }
     write(XBAR_POL, 0);
     write(XBAR_CTRL, crossbar);
-    switch_car_clock_disable(kClockSor1);
-    switch_car_rmw(CLK_SOURCE_SOR1, kOutMask, kOutPad);
-    switch_car_clock_enable(kClockSor1);
     rmw(STATE1, kProtocolMask, kProtocolDpA);
     rmw(DP_LINKCTL0, 0, kLinkEnable);
-    terminationCalibrate();
-
-    rmw(CLK_CNTRL, kLinkSpeedMask, (uint32_t)(link.rate & 0x1fu) << 2);
     rmw(DP_LINKCTL0, kLaneCountMask | kEnhancedFrame,
         (((1u << link.lanes) - 1u) << 16) | (enhanced ? kEnhancedFrame : 0));
-    IODelay(400);
-    const uint32_t loadAdjust = link.rate == SWITCH_DP_RATE_RBR ? 3u : link.rate == SWITCH_DP_RATE_HBR ? 4u : 6u;
-    rmw(PLL1, kPll1LoadAdjMask, loadAdjust << 20);
     rmw(DP_SPARE0, kSparePanelInternal, 0);
     if (!lanesPower(0, false) || !lanesPower(link.lanes, true)) {
         snprintf(why, size, "SOR1's lane sequencer did not finish (LANE_SEQ_CTL %#x)", read(LANE_SEQ_CTL));
         return false;
     }
+    switch_car_clock_disable(kClockSor1);
+    switch_car_rmw(CLK_SOURCE_SOR1, kOutMask, kOutPad);
+    switch_car_clock_enable(kClockSor1);
     const uint32_t lanesMask = (1u << link.lanes) - 1u;
     rmw(DP_PADCTL0, 0xfu << 4, lanesMask << 4);
-    IODelay(15);
+    IODelay(20);
     rmw(DP_PADCTL0, 0xfu << 4, 0);
     return true;
 }

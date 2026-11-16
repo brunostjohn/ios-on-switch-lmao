@@ -176,40 +176,39 @@ static inline bool switch_dp_tu_config(uint32_t pixel_khz, uint32_t hactive, uin
 struct switch_dp_plld2 {
     uint32_t n, m, pdiv, pdiv_hw;
     uint16_t sdm_din;
-    uint64_t out_hz;  // PLL_D2 as programmed; pll_d2_out0 (the pixel clock) is half of it
+    uint64_t out_hz;
 };
 
-// PLL_D2 for a pixel clock: pll_d2_out0 = PLL_D2 / 2 feeds both DC B (DISP2) and SOR1's pixel clock, so PLL_D2 runs at
-// twice it, from the 38.4 MHz oscillator with M = 1 and the SDM's fraction for clocks the integer N cannot hit.
-static inline bool switch_dp_plld2_for(uint32_t pixel_khz, uint32_t ref_khz, struct switch_dp_plld2 *pll)
+// Switchroot clocks pll_d2_out0 at PLL_D2's rate; DISP2 and both DC dividers are 1:1.
+static inline bool switch_dp_plld2_for(uint32_t pixel_khz, uint32_t ref_khz, bool b01, struct switch_dp_plld2 *pll)
 {
     static const uint8_t pdivs[17][2] = {{1, 0},   {2, 1},   {3, 2},   {4, 3},   {5, 4},   {6, 5},
                                          {8, 6},   {9, 7},   {10, 8},  {12, 9},  {15, 10}, {16, 11},
                                          {18, 12}, {20, 13}, {24, 14}, {30, 15}, {32, 16}};
-    const uint64_t target_hz = (uint64_t)pixel_khz * 2000u, ref_hz = (uint64_t)ref_khz * 1000u;
+    const uint64_t target_hz = (uint64_t)pixel_khz * 1000u, ref_hz = (uint64_t)ref_khz * 1000u;
     if (target_hz == 0 || ref_hz == 0) {
         return false;
     }
     for (unsigned i = 0; i < 17; ++i) {
-        const uint64_t vco = target_hz * pdivs[i][0];
-        if (vco < 750000000u) {
+        // PDIV code 16 is /31 on B01 and /32 on Erista.
+        const uint32_t pdiv = b01 && pdivs[i][0] == 32 ? 31u : pdivs[i][0];
+        const uint64_t vco = target_hz * pdiv;
+        if (vco < (b01 ? 780000000u : 750000000u)) {
             continue;
         }
-        if (vco > 1500000000u) {
+        if (vco > (b01 ? 1620000000u : 1500000000u)) {
             return false;
         }
         const uint64_t scaled = (vco * 8192u + ref_hz / 2) / ref_hz;  // (N + 1/2 + SDM / 8192) * 8192
-        const uint64_t n = (scaled - 4096u) / 8192u;
-        const uint64_t din = scaled - 4096u - n * 8192u;
-        // din 0 means "SDM off" to the hardware; -1/8192 is the nearest value it takes instead.
-        const uint16_t sdm = din == 0 ? (uint16_t)0xFFFFu : (uint16_t)din;
-        const int64_t effective = (int64_t)(n * 8192u + 4096u) + (int16_t)sdm;
+        const uint64_t n = scaled / 8192u;
+        const int64_t din = (int64_t)(scaled - n * 8192u) - 4096;
+        const int64_t effective = (int64_t)(n * 8192u + 4096u) + din;
         pll->n = (uint32_t)n;
         pll->m = 1;
-        pll->pdiv = pdivs[i][0];
+        pll->pdiv = pdiv;
         pll->pdiv_hw = pdivs[i][1];
-        pll->sdm_din = sdm;
-        pll->out_hz = (uint64_t)effective * ref_hz / 8192u / pdivs[i][0];
+        pll->sdm_din = (uint16_t)din;
+        pll->out_hz = (uint64_t)effective * ref_hz / 8192u / pdiv;
         return n > 0 && n < 256;
     }
     return false;

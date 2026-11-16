@@ -133,6 +133,13 @@ void SwitchDisplayPort::chooseAndTrain()
     mode = modes.modes[chosen];
     stage = Stage::Training;
     char why[128] = "";
+    if (!sorUp) {
+        if (!sor.powerUp(why, sizeof(why))) {
+            fail("SOR1", why);
+            return;
+        }
+        sorUp = true;
+    }
     if (!sor.pixelClock(mode.pixel_khz, why, sizeof(why))) {
         fail("the pixel clock", why);
         return;
@@ -145,13 +152,6 @@ void SwitchDisplayPort::chooseAndTrain()
         dcbUp = true;
     }
     dcb.setMode(mode);
-    if (!sorUp) {
-        if (!sor.powerUp(why, sizeof(why))) {
-            fail("SOR1", why);
-            return;
-        }
-        sorUp = true;
-    }
     const bool enhanced = (caps[2] & SWITCH_DPCD_ENHANCED_FRAME) != 0;
     if (!sor.startLink(link, enhanced, why, sizeof(why))) {
         fail("SOR1", why);
@@ -174,6 +174,11 @@ void SwitchDisplayPort::applyTraining()
         auxNative(SWITCH_DP_AUX_NATIVE_WRITE, SWITCH_DPCD_TRAINING_PATTERN_SET, trainOut.dpcd, 1, Next::Trained);
         break;
     case SWITCH_DP_TRAIN_FAIL: {
+#if DEVELOPMENT || DEBUG
+        IOLog("SwitchDisplayPort: training DPCD interval %#x, status %02x %02x %02x %02x, adjust %02x %02x\n",
+              caps[SWITCH_DPCD_TRAINING_AUX_RD_INTERVAL], request.data[0], request.data[1], request.data[2],
+              request.data[3], request.data[4], request.data[5]);
+#endif
         IOLog("SwitchDisplayPort: training at %u Mb/s x%u: %s\n", switch_dp_rate_khz(link.rate) / 100, link.lanes,
               train.why != nullptr ? train.why : "failed");
         maxRate = switch_dp_rate_below(link.rate);

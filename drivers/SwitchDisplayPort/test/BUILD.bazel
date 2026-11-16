@@ -55,6 +55,42 @@ host_test(
     deps = [":policy_c11"],
 )
 
+host_library(
+    name = "sor_registers",
+    srcs = [
+        "//drivers/SwitchDisplayPort:TegraDpaux1.cpp",
+        "//drivers/SwitchDisplayPort:TegraSor1.cpp",
+        "//kits/SwitchCAR:SwitchCAR.cpp",
+    ],
+    hdrs = [
+        "//drivers/SwitchDisplayPort:SwitchDPAux.h",
+        "//drivers/SwitchDisplayPort:SwitchDPLink.h",
+        "//drivers/SwitchDisplayPort:SwitchDPModes.h",
+        "//drivers/SwitchDisplayPort:SwitchDPTraining.h",
+        "//drivers/SwitchDisplayPort:TegraDpaux1.h",
+        "//drivers/SwitchDisplayPort:TegraSor1.h",
+        "//drivers/TegraI2C:TegraI2C.h",
+        "//kits/SwitchCAR:SwitchCAR.h",
+        "//kits/SwitchCAR:SwitchPMC.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+        "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+    ],
+    defines = ["SWITCH_MMIO_HOST_MODEL=1"],
+    deps = ["//drivers/SwitchUSB/test:xusb_kernel"],
+)
+
+host_test(
+    name = "sor_registers_test",
+    srcs = [
+        "sor_registers_test.cpp",
+        "//drivers/SwitchDisplayPort:TegraSor1.h",
+    ],
+    deps = [
+        ":sor_registers",
+        "//drivers/SwitchUSB/test:xusb_register_model",
+    ],
+)
+
 host_test(
     name = "dp_scanout_source_test",
     srcs = ["dp_scanout_source_test.cpp"],
