@@ -46,7 +46,7 @@ void SwitchDisplayPort::dispatch()
         break;
     }
     case Next::LinkSet: {
-        const uint8_t coding[2] = {0x00, 0x01};  // no downspread, 8b/10b
+        const uint8_t coding[2] = {0x10, 0x01};  // PLL_DP runs with spread spectrum enabled.
         auxNative(SWITCH_DP_AUX_NATIVE_WRITE, SWITCH_DPCD_DOWNSPREAD_CTRL, coding, 2, Next::Coding);
         break;
     }
