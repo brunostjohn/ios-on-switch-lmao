@@ -151,19 +151,25 @@ void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
         return;
     }
     negotiate(alertBits);
+    notifyAlt(alertBits);
+    notify();
+}
+
+void SwitchPD::notifyAlt(uint16_t alertBits)
+{
     const auto atRest = [](const void *pd) -> bool {
         const auto *self = static_cast<const SwitchPD *>(pd);
         const Nego n = self->nego;
         return self->phase == SWITCH_PD_SOURCE || n == Nego::Settling || n == Nego::Done || n == Nego::Failed;
     };
     const bool contractOurs = nego == Nego::Settling || nego == Nego::Done;
-    const bool dualRoleData = contractOurs && sourcePdoCount != 0 && charge::pdoType(sourcePdos[0]) == 0 &&
+    const bool dualRoleData = sourcePdoCount != 0 && charge::pdoType(sourcePdos[0]) == 0 &&
                               (sourcePdos[0] & PDO_FIXED_DUAL_ROLE_DATA) != 0;
+    const uint16_t status1 = state.status1;
     const bool altSession =
         state.plugged && ((phase == SWITCH_PD_SINK && (status1 & SWITCH_PD_STATUS1_SRC_MODE) == 0u) ||
                           (phase == SWITCH_PD_SOURCE && state.dataHost));
     switch_pd_alt_alert(this, loop, atRest, alertBits, status1, altSession, contractOurs && choice.dock, dualRoleData);
-    notify();
 }
 
 // bm92t_event_handler's faults, after the policy has taken VBUS off: an internal fault ends the event (true), with a

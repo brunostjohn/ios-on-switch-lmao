@@ -152,6 +152,7 @@ class SwitchPD : public IOService {
     void setSwitches(bool on);
     bool setRails(bool on);
     void startSourcing();
+    void notifyAlt(uint16_t alertBits);
     void notify();
     void stopEvents();
     void systemReset(uint32_t settleMS, const char *why) const;

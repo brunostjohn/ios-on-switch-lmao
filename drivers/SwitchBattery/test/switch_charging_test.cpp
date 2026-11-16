@@ -1423,6 +1423,29 @@ static void macSourceStaysHost()
     check(logHas("alternate mode (done): no data role swap: the source is a USB host"), "the decision's line");
 }
 
+static void dataDiscoveryWithoutCharging()
+{
+    check(switch_battery_start() == 0, "switch_battery_start");
+    advance(10);
+    gPd.commands.clear();
+    gPd.sink({PdChip::fixed(5000, 0) | kDualRoleData}, 0, 0x1000 | 0x8);
+    gPd.status1 = 0x0d80;
+    gPd.status2 = 0;
+    const uint32_t contract = gPd.curRdo;
+    const uint8_t input = gCharger.reg[0];
+    advance(499);
+    check(gPd.commands.empty() && gPd.vdmsSent == 0, "discovery waits for the PDO timer");
+    advance(2);
+    check(gPd.commands == (std::vector<std::string>{"1111"}) && gPd.vdmsSent == 1,
+          "PDO timer starts one identity discovery without SEND_RDO or PS_RDY");
+    check(logHas("no fixed 5/9/12/15 V PDO up to 3 A that gives 500 mA or more"), "charging policy still refuses zero");
+    check(gPd.curRdo == contract && !gCharger.input && gCharger.reg[0] == input,
+          "controller contract and absent charger input remain unchanged");
+    advance(2000);
+    check(gPd.commands == (std::vector<std::string>{"1111"}) && gPd.vdmsSent == 1,
+          "silent identity discovery is not repeated");
+}
+
 static void hubSourceIsSwapped()
 {
     dualRoleSource(0x48602109u);
@@ -1849,6 +1872,11 @@ TEST(SwitchCharging, ExitAfterFaultReset)
 TEST(SwitchCharging, MacSourceStaysHost)
 {
     run(macSourceStaysHost);
+}
+
+TEST(SwitchCharging, DataDiscoveryWithoutCharging)
+{
+    run(dataDiscoveryWithoutCharging);
 }
 
 TEST(SwitchCharging, HubSourceIsSwapped)

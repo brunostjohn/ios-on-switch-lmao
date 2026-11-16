@@ -258,7 +258,8 @@ void SwitchPD::negoFired(OSObject *owner, IOTimerEventSource *)
     switch (self->nego) {
     case Nego::WaitPdos:
         self->choose();
-        break;  // bm92txx goes on after its msleep(500) whatever came
+        self->notifyAlt(0);
+        break;
     case Nego::RdoSent:
         self->fail("no contract within 1.5 s of the request");
         break;
