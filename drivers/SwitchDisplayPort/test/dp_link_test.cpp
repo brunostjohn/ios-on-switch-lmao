@@ -9,6 +9,25 @@
 
 namespace {
 
+TEST(Capabilities, ReadsAdvertisedExtendedRevisionAndBandwidthOnce)
+{
+    uint8_t caps[16] = {};
+    uint8_t base[16] = {0x12, 0x14, 0xC4, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 2, 15};
+    EXPECT_FALSE(switch_dp_caps_update(caps, base, false));
+    for (unsigned i = 0; i < 16; ++i) {
+        EXPECT_EQ(caps[i], base[i]);
+    }
+    base[SWITCH_DPCD_TRAINING_AUX_RD_INTERVAL] |= SWITCH_DPCD_EXT_CAP_PRESENT;
+    EXPECT_TRUE(switch_dp_caps_update(caps, base, false));
+    const uint8_t extended[2] = {0x14, 0x0A};
+    EXPECT_FALSE(switch_dp_caps_update(caps, extended, true));
+    EXPECT_EQ(caps[SWITCH_DPCD_REV], 0x14);
+    EXPECT_EQ(switch_dp_rate_cap(caps[SWITCH_DPCD_MAX_LINK_RATE]), SWITCH_DP_RATE_HBR);
+    for (unsigned i = 2; i < 16; ++i) {
+        EXPECT_EQ(caps[i], base[i]);
+    }
+}
+
 TEST(Link, Only1080p60sNeedIsTrained)
 {
     switch_dp_link link{};

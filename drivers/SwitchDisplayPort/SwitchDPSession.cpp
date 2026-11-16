@@ -19,8 +19,9 @@ void SwitchDisplayPort::dispatch()
 {
     switch (next) {
     case Next::Caps:
-        for (unsigned i = 0; i < sizeof(caps); ++i) {
-            caps[i] = request.data[i];
+        if (switch_dp_caps_update(caps, request.data, request.address == SWITCH_DPCD_EXT_CAP_BASE)) {
+            auxNative(SWITCH_DP_AUX_NATIVE_READ, SWITCH_DPCD_EXT_CAP_BASE, nullptr, 2, Next::Caps);
+            break;
         }
         auxNative(SWITCH_DP_AUX_NATIVE_WRITE, SWITCH_DPCD_SET_POWER, &kDpcdD0, 1, Next::Powered);
         break;

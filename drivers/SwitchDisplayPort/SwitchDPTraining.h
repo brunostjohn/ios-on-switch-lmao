@@ -18,6 +18,8 @@
 #define SWITCH_DPCD_SINK_COUNT               0x200u
 #define SWITCH_DPCD_LANE0_1_STATUS           0x202u
 #define SWITCH_DPCD_SET_POWER                0x600u
+#define SWITCH_DPCD_EXT_CAP_BASE             0x2200u
+#define SWITCH_DPCD_EXT_CAP_PRESENT          (1u << 7)
 #define SWITCH_DPCD_ENHANCED_FRAME           (1u << 7)
 #define SWITCH_DPCD_TPS3                     (1u << 6)
 #define SWITCH_DPCD_SCRAMBLING_DISABLE       (1u << 5)
@@ -32,6 +34,14 @@
 #define SWITCH_DP_CR_SAME_SWING_MAX 5u
 #define SWITCH_DP_CR_TRIES_MAX      10u
 #define SWITCH_DP_EQ_TRIES_MAX      5u
+
+static inline bool switch_dp_caps_update(uint8_t caps[16], const uint8_t *reply, bool extended)
+{
+    for (unsigned i = 0; i < (extended ? 2u : 16u); ++i) {
+        caps[i] = reply[i];
+    }
+    return !extended && (caps[SWITCH_DPCD_TRAINING_AUX_RD_INTERVAL] & SWITCH_DPCD_EXT_CAP_PRESENT) != 0;
+}
 
 enum switch_dp_train_phase {
     SWITCH_DP_TRAIN_CLOCK_RECOVERY,
