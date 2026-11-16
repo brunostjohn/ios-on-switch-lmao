@@ -75,6 +75,8 @@ extern "C" void switch_displayport_alt_mode(unsigned lanes, bool)
 
 // Every check is a GoogleTest failure at its call site; the count lets a failed scenario dump the logs it ran on.
 static unsigned gFailures = 0;
+static bool gCheckPdInputOrder = false;
+static std::function<void()> gBeforeZeroRdo;
 
 static void checkAt(bool ok, const std::string &what, const char *file, int line)
 {
@@ -466,8 +468,10 @@ struct PdChip {
                     alert |= 0x4;
                 }
             } else if (v16 == 0x0505) {
-                if (psRdyReply)
+                if (psRdyReply) {
+                    status1 |= 0x4000;
                     alert |= 0x4;
+                }
             } else if (v16 == 0x1818) {  // DR_SWAP, accepted: we are DFP
                 status1 = (uint16_t)((status1 & ~(0x70 | 3u << 8)) | 2u << 8);
                 alert |= 0x4;
@@ -540,10 +544,29 @@ extern "C" int tegra_i2c_write(unsigned bus, uint8_t addr, uint8_t reg, const vo
     auto *b = static_cast<const uint8_t *>(buf);
     if (addr == 0x6b) {
         check(len == 1, "charger write length");
+        if (gCheckPdInputOrder && reg == 0 && (gCharger.reg[0] & charge::bq::kHiZ) &&
+            !(b[0] & charge::bq::kHiZ) && (gPd.status1 & 0x80) && !gPd.pdos.empty()) {
+            const unsigned budget = charge::rdoOperatingMilliamps(gPd.curRdo);
+            check(charge::pdoMilliamps(gPd.curPdo) != 0 && budget != 0 &&
+                      charge::bq::decodeInputLimit(b[0]) == budget,
+                  "Hi-Z released only with the accepted positive input budget");
+        }
         return gCharger.write(reg, b[0]);
     }
-    if (addr == 0x18)
+    if (addr == 0x18) {
+        if (gCheckPdInputOrder && reg == 0x05 && len == 2 && b[0] == 0x07 && b[1] == 0x07) {
+            const unsigned position = charge::rdoPosition(gPd.pendingRdo);
+            if (position != 0 && position <= gPd.pdos.size() &&
+                charge::pdoMilliamps(gPd.pdos[position - 1]) == 0) {
+                const auto observe = gBeforeZeroRdo;
+                gBeforeZeroRdo = {};
+                if (observe)
+                    observe();
+                check((gCharger.reg[0] & charge::bq::kHiZ) != 0, "input isolated before zero-current SEND_RDO");
+            }
+        }
         return gPd.write(reg, b, len);
+    }
     if (addr == 0x36) {
         check(len == 2, "gauge write length");
         uint16_t v = (uint16_t)(b[0] | b[1] << 8);
@@ -1454,23 +1477,308 @@ static void dataDiscoveryWithoutCharging()
 {
     check(switch_battery_start() == 0, "switch_battery_start");
     advance(10);
+    gCheckPdInputOrder = true;
     gPd.commands.clear();
+    gCharger.plug(500, 2);
     gPd.sink({PdChip::fixed(5000, 0) | kDualRoleData}, 0, 0x1000 | 0x8);
     gPd.status1 = 0x0d80;
     gPd.status2 = 0;
-    const uint32_t contract = gPd.curRdo;
-    const uint8_t input = gCharger.reg[0];
+    SwitchPDState state{};
+    check(switch_pd_add_listener(
+              [](void *context, const SwitchPDState *current) { *static_cast<SwitchPDState *>(context) = *current; },
+              &state) == 0,
+          "power-role listener");
     advance(499);
     check(gPd.commands.empty() && gPd.vdmsSent == 0, "discovery waits for the PDO timer");
     advance(2);
-    check(gPd.commands == (std::vector<std::string>{"1111"}) && gPd.vdmsSent == 1,
-          "PDO timer starts one identity discovery without SEND_RDO or PS_RDY");
-    check(logHas("no fixed 5/9/12/15 V PDO up to 3 A that gives 500 mA or more"), "charging policy still refuses zero");
-    check(gPd.curRdo == contract && !gCharger.input && gCharger.reg[0] == input,
-          "controller contract and absent charger input remain unchanged");
-    advance(2000);
-    check(gPd.commands == (std::vector<std::string>{"1111"}) && gPd.vdmsSent == 1,
+    check(gPd.commands == (std::vector<std::string>{"0707", "0505", "1111"}) && gPd.vdmsSent == 1,
+          "zero-current RDO and PS_RDY complete before identity discovery");
+    check(gPd.curRdo == (1u << 28 | charge::kRdoUsbCommunications | charge::kRdoNoUsbSuspend) &&
+              (gPd.status1 & 0x4000) && (gCharger.reg[0] & charge::bq::kHiZ),
+          "established zero-current contract leaves charger input isolated");
+    advance(2300);
+    check(state.contractMillivolts == 5000 && state.inputLimitMilliamps == 0 &&
+              (gCharger.reg[0] & charge::bq::kHiZ),
+          "published zero budget never becomes a 100 or 500 mA input allowance");
+    const auto checkPublishedZeroBudget = [] {
+        const IOPMPowerSource *ps = battery();
+        check(ps && !ps->charging && !ps->external, "isolated input is neither charging nor usable external power");
+        if (!ps)
+            return;
+        const auto raw = ps->ps.find("AppleRawExternalConnected");
+        check(raw != ps->ps.end() && raw->second == 1, "raw external attachment remains published");
+        const auto data = ps->dicts.find("ChargerData");
+        check(data != ps->dicts.end() && data->second.numbers.count("InputCurrentLimit") &&
+                  data->second.numbers.at("InputCurrentLimit") == 0 &&
+                  data->second.numbers.count("ChargingCurrent") && data->second.numbers.at("ChargingCurrent") == 0,
+              "ChargerData reports zero effective input and charging current");
+        const auto &adapter = ps->adapter.numbers;
+        check(adapter.count(kIOPMPSAdapterDetailsFamilyKey) &&
+                  adapter.at(kIOPMPSAdapterDetailsFamilyKey) == kIOPSFamilyCodeUSBCPD &&
+                  adapter.count(kIOPMPSAdapterDetailsVoltage) && adapter.at(kIOPMPSAdapterDetailsVoltage) == 5000,
+              "accepted zero-current contract retains its USB-PD family and voltage");
+        for (const char *key : {kIOPMPSAdapterDetailsAmperageKey, "PMUConfiguration", kIOPMPSAdapterDetailsWattsKey})
+            check(adapter.count(key) && adapter.at(key) == 0, std::string("isolated AdapterDetails ") + key);
+    };
+    checkPublishedZeroBudget();
+    gCharger.input = false;
+    gCharger.status();
+    gCharger.intPending = true;
+    advance(300);
+    check((gCharger.reg[8] & charge::bq::kPowerGood) == 0 && state.plugged,
+          "charger power-good is low while the PD partner remains attached");
+    checkPublishedZeroBudget();
+    check(!logHas("no USB-PD request"), "zero-current contract is accepted");
+    check(gPd.commands == (std::vector<std::string>{"0707", "0505", "1111"}) && gPd.vdmsSent == 1,
           "silent identity discovery is not repeated");
+}
+
+static void zeroBudgetAtBoot()
+{
+    gCheckPdInputOrder = true;
+    gCharger.plug(500, 2);
+    gCharger.intPending = false;
+    gPd.sink({PdChip::fixed(5000, 0)}, 0, 0x1000 | 0x4000);
+    gPd.status1 &= ~0x4000;
+    gPd.curRdo = 1u << 28 | charge::kRdoUsbCommunications | charge::kRdoNoUsbSuspend;
+    check(switch_battery_start() == 0, "switch_battery_start");
+    advance(10);
+    check(gPd.commands.size() >= 2 && gPd.commands[0] == "0707" && gPd.commands[1] == "0505",
+          "latched boot contract without SPDSNK completes the handshake even when its RDO already matches");
+    advance(2500);
+    check((gPd.status1 & 0x4000) && (gCharger.reg[0] & charge::bq::kHiZ),
+          "boot-attached zero-current sink stays isolated after PS_RDY");
+}
+
+static void zeroBudgetRefreshBeforePublication()
+{
+    check(switch_battery_start() == 0, "switch_battery_start");
+    advance(10);
+    gCheckPdInputOrder = true;
+    IOTimerEventSource *refresh = nullptr;
+    for (auto *timer : IOTimerEventSource::all)
+        if (dynamic_cast<IOPMPowerSource *>(timer->owner))
+            refresh = timer;
+    check(refresh != nullptr, "Battery refresh timer");
+    if (!refresh)
+        return;
+    unsigned observations = 0;
+    for (unsigned pass = 0; pass < 2; ++pass) {
+        if (pass != 0) {
+            gPd.sink({PdChip::fixed(5000, 1500)}, 0, 0x1000 | 0x4000);
+            gPd.curRdo = 1u << 28 | 50u << 10 | 150u;
+            advance(2500);
+            check((gCharger.reg[0] & charge::bq::kHiZ) == 0 && iinlim() == 1500, "preceding positive budget");
+        }
+        gCharger.plug(500, 2);
+        gPd.sink({PdChip::fixed(5000, 0)}, 0, 0x8 | 0x1000 | 0x4000);
+        gPd.status1 &= ~0x4000;
+        refresh->setTimeoutMS(0);
+        gBeforeZeroRdo = [refresh, &observations] {
+            check(refresh->armed && refresh->deadline <= gNow, "Battery refresh due before SEND_RDO");
+            const unsigned updates = battery()->updates;
+            refresh->fire();
+            check(battery()->updates == updates + 1, "real Battery refresh ran before PD notification");
+            check((gCharger.reg[0] & charge::bq::kHiZ) != 0,
+                  "pending zero-current attach survives refresh of a preceding unplugged or positive state");
+            ++observations;
+        };
+        advance(10);
+        check(!gBeforeZeroRdo, "SEND_RDO observation was exercised");
+        advance(2500);
+        check((gCharger.reg[0] & charge::bq::kHiZ) != 0, "zero-current contract remains isolated");
+    }
+    check(observations == 2, "refresh interleaved with both unplugged and positive snapshots");
+}
+
+static void zeroBudgetRapidReplug()
+{
+    check(switch_battery_start() == 0, "switch_battery_start");
+    advance(10);
+    gCheckPdInputOrder = true;
+    for (const bool powerdHold : {false, true}) {
+        gCharger.plug(500, 2);
+        gPd.sink({PdChip::fixed(5000, 0)}, 0, 0x8 | 0x1000 | 0x4000);
+        gPd.status1 &= ~0x4000;
+        advance(2500);
+        check((gCharger.reg[0] & charge::bq::kHiZ) != 0, "zero budget held before detach");
+        if (powerdHold) {
+            setProperty("ExternalConnected", false);
+            advance(300);
+        }
+        const uint64_t detachedAt = gNow;
+        gCharger.unplug();
+        gPd.unplug();
+        deliver();
+        gCharger.plug(500, 1);
+        gPd.sink({}, 0, 0x8);
+        deliver();
+        check(gNow - detachedAt < 200000000ull, "plain cable attached before the Battery settle deadline");
+        advance(300);
+        check(((gCharger.reg[0] & charge::bq::kHiZ) != 0) == powerdHold,
+              "rapid non-PD replug clears only the previous PD hold");
+        if (powerdHold) {
+            setProperty("ExternalConnected", true);
+            advance(300);
+            check((gCharger.reg[0] & charge::bq::kHiZ) == 0, "powerd releases its own hold on the new cable");
+        }
+        check(iinlim() == 500, "plain cable uses its conservative input budget");
+        gCharger.unplug();
+        gPd.unplug();
+        advance(300);
+    }
+}
+
+static void zeroBudgetSettingsLost()
+{
+    check(switch_battery_start() == 0, "switch_battery_start");
+    advance(10);
+    gCheckPdInputOrder = true;
+    gCharger.plug(500, 2);
+    gPd.sink({PdChip::fixed(5000, 0)}, 0, 0x8 | 0x1000 | 0x4000);
+    gPd.status1 &= ~0x4000;
+    advance(2500);
+    check((gCharger.reg[0] & charge::bq::kHiZ) != 0, "zero budget held");
+    advance(120001);
+    check((gCharger.reg[0] & charge::bq::kHiZ) != 0, "periodic refresh preserves the hold");
+    gCharger.reg[5] |= 0x10;
+    gCharger.lastKick = gNow;
+    advance(40001);
+    advance(300);
+    check(std::count(gCharger.ops.begin(), gCharger.ops.end(), std::string("watchdog expired")) == 1 &&
+              (gCharger.reg[0] & charge::bq::kHiZ) && (gCharger.reg[5] & 0x30) == 0,
+          "watchdog reset restores isolation and disables the watchdog again");
+    for (int i = 0; i < 4; ++i) {
+        gCharger.reset();
+        gCharger.intPending = true;
+        advance(300);
+        check((gCharger.reg[0] & charge::bq::kHiZ) != 0, "charger reset preserves the zero-budget hold");
+    }
+    check(logHas("charger keeps losing its settings"), "charger management stopped after repeated resets");
+    advance(120001);
+    check((gCharger.reg[0] & charge::bq::kHiZ) != 0, "input remains isolated after charger management stops");
+    gCharger.unplug();
+    gPd.unplug();
+    advance(300);
+    check((gCharger.reg[0] & charge::bq::kHiZ) == 0, "detach releases the PD input hold");
+    gCharger.plug(500, 1);
+    gPd.sink({}, 0, 0x8);
+    advance(300);
+    check((gCharger.reg[0] & charge::bq::kHiZ) == 0, "the next cable does not inherit the zero-budget hold");
+}
+
+static void zeroBudgetFailures()
+{
+    check(switch_battery_start() == 0, "switch_battery_start");
+    advance(10);
+    gCheckPdInputOrder = true;
+    for (const auto reply : {PdChip::Refuse, PdChip::Silent, PdChip::Accept}) {
+        gPd.commands.clear();
+        gPd.rdoReply = reply;
+        gPd.psRdyReply = false;
+        gCharger.plug(500, 2);
+        gPd.sink({PdChip::fixed(5000, 0)}, 0, 0x8 | 0x1000 | 0x4000);
+        gPd.status1 &= ~0x4000;
+        const size_t mark = gLog.size();
+        advance(2000);
+        check(std::count(gPd.commands.begin(), gPd.commands.end(), std::string("0707")) == 1 &&
+                  (gCharger.reg[0] & charge::bq::kHiZ),
+              "a refused or unanswered zero-current handshake retains input isolation");
+        check(logHas(reply == PdChip::Refuse   ? "the request was refused"
+                     : reply == PdChip::Silent ? "no contract within 1.5 s"
+                                              : "PS_RDY was not completed within 1.5 s",
+                     mark),
+              "the intended handshake failure was exercised");
+        advance(120001);
+        check((gCharger.reg[0] & charge::bq::kHiZ) != 0, "failed handshake never falls back to charging current");
+        gCharger.unplug();
+        gPd.unplug();
+        advance(300);
+        check((gCharger.reg[0] & charge::bq::kHiZ) == 0, "failed session releases its hold on detach");
+    }
+}
+
+static void zeroBudgetPositiveUpgrade()
+{
+    check(switch_battery_start() == 0, "switch_battery_start");
+    advance(10);
+    gCheckPdInputOrder = true;
+    gCharger.plug(500, 2);
+    gPd.sink({PdChip::fixed(5000, 0)}, 0, 0x8 | 0x1000 | 0x4000);
+    gPd.status1 &= ~0x4000;
+    advance(2500);
+    check((gCharger.reg[0] & charge::bq::kHiZ) != 0, "zero budget held");
+    gPd.psRdyReply = false;
+    gPd.sink({PdChip::fixed(5000, 1500)}, 0, 0x1000 | 0x4000);
+    gPd.curRdo = 1u << 28 | 50u << 10 | 150u;
+    advance(10);
+    check((gCharger.reg[0] & charge::bq::kHiZ) != 0, "new PDO and accepted RDO do not release input before PS_RDY");
+    gPd.psRdyReply = true;
+    gPd.alert |= 0x4;
+    advance(1900);
+    check((gCharger.reg[0] & charge::bq::kHiZ) != 0, "settling contract keeps input isolated");
+    advance(600);
+    check((gCharger.reg[0] & charge::bq::kHiZ) == 0 && iinlim() == 1500,
+          "accepted positive contract releases input with its programmed 1500 mA budget");
+    check(battery()->external && battery()->charging &&
+              battery()->adapter.numbers[kIOPMPSAdapterDetailsAmperageKey] == 1500 &&
+              battery()->dicts["ChargerData"].numbers["InputCurrentLimit"] == 1500,
+          "positive budget becomes usable external power with its published current");
+    gPd.rdoReply = PdChip::Silent;
+    gPd.sink({PdChip::fixed(5000, 0)}, 0, 0x1000 | 0x4000);
+    gPd.status1 &= ~0x4000;
+    advance(300);
+    check((gCharger.reg[0] & charge::bq::kHiZ) != 0,
+          "positive-to-zero rebalance withdraws the old input allowance before its new request");
+    advance(2000);
+    check((gCharger.reg[0] & charge::bq::kHiZ) != 0, "failed zero-current rebalance cannot restore the old budget");
+}
+
+static void zeroBudgetPowerdHold()
+{
+    check(switch_battery_start() == 0, "switch_battery_start");
+    advance(10);
+    gCheckPdInputOrder = true;
+    gCharger.plug(500, 2);
+    gPd.sink({PdChip::fixed(5000, 0)}, 0, 0x8 | 0x1000 | 0x4000);
+    gPd.status1 &= ~0x4000;
+    advance(2500);
+    check(setProperty("ExternalConnected", false) == kIOReturnSuccess, "powerd DisableInflow held");
+    advance(300);
+    setProperty("ExternalConnected", true);
+    advance(300);
+    check((gCharger.reg[0] & charge::bq::kHiZ) != 0, "powerd release cannot clear the independent zero-budget hold");
+    setProperty("ExternalConnected", false);
+    advance(300);
+    gPd.sink({PdChip::fixed(5000, 1500)}, 0, 0x1000 | 0x4000);
+    gPd.curRdo = 1u << 28 | 50u << 10 | 150u;
+    advance(2500);
+    check((gCharger.reg[0] & charge::bq::kHiZ) != 0 && !battery()->external,
+          "positive PD budget preserves powerd's input hold");
+    check(!battery()->charging && battery()->ps["AppleRawExternalConnected"] == 1 &&
+              battery()->dicts.count("ChargerData") &&
+              battery()->dicts["ChargerData"].numbers.count("InputCurrentLimit") &&
+              battery()->dicts["ChargerData"].numbers["InputCurrentLimit"] == 0 &&
+              battery()->adapter.numbers.count(kIOPMPSAdapterDetailsAmperageKey) &&
+              battery()->adapter.numbers[kIOPMPSAdapterDetailsAmperageKey] == 0 &&
+              battery()->adapter.numbers.count("PMUConfiguration") &&
+              battery()->adapter.numbers["PMUConfiguration"] == 0 &&
+              battery()->adapter.numbers.count(kIOPMPSAdapterDetailsWattsKey) &&
+              battery()->adapter.numbers[kIOPMPSAdapterDetailsWattsKey] == 0,
+          "powerd-held input also publishes zero usable power while retaining raw attachment");
+    check(setProperty("ExternalConnected", true) == kIOReturnSuccess, "powerd DisableInflow released");
+    advance(300);
+    check((gCharger.reg[0] & charge::bq::kHiZ) == 0 && iinlim() == 1500,
+          "powerd release applies the accepted positive budget");
+    setProperty("ExternalConnected", false);
+    advance(300);
+    gCharger.unplug();
+    gPd.unplug();
+    advance(300);
+    check((gCharger.reg[0] & charge::bq::kHiZ) != 0, "detach does not release powerd's independent hold");
+    setProperty("ExternalConnected", true);
+    advance(300);
+    check((gCharger.reg[0] & charge::bq::kHiZ) == 0, "only powerd releases its input hold");
 }
 
 static void hubSourceIsSwapped()
@@ -1904,6 +2212,41 @@ TEST(SwitchCharging, MacSourceStaysHost)
 TEST(SwitchCharging, DataDiscoveryWithoutCharging)
 {
     run(dataDiscoveryWithoutCharging);
+}
+
+TEST(SwitchCharging, ZeroBudgetAtBoot)
+{
+    run(zeroBudgetAtBoot);
+}
+
+TEST(SwitchCharging, ZeroBudgetRefreshBeforePublication)
+{
+    run(zeroBudgetRefreshBeforePublication);
+}
+
+TEST(SwitchCharging, ZeroBudgetRapidReplug)
+{
+    run(zeroBudgetRapidReplug);
+}
+
+TEST(SwitchCharging, ZeroBudgetSettingsLost)
+{
+    run(zeroBudgetSettingsLost);
+}
+
+TEST(SwitchCharging, ZeroBudgetFailures)
+{
+    run(zeroBudgetFailures);
+}
+
+TEST(SwitchCharging, ZeroBudgetPositiveUpgrade)
+{
+    run(zeroBudgetPositiveUpgrade);
+}
+
+TEST(SwitchCharging, ZeroBudgetPowerdHold)
+{
+    run(zeroBudgetPowerdHold);
 }
 
 TEST(SwitchCharging, HubSourceIsSwapped)

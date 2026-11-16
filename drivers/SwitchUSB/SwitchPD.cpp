@@ -104,7 +104,7 @@ bool SwitchPD::begin(uint16_t &type, uint16_t &revision, uint16_t &config, bool 
             uint16_t status2 = 0;
             (void)read16(ALERT_STATUS, alertBits);  // releases a latched ALERT; its event is the state read next
             if (self->readStatus(status1, status2))
-                self->handle(0, status1, status2);
+                self->handle(alertBits, status1, status2);
             return kIOReturnSuccess;
         },
         this);

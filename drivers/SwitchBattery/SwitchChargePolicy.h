@@ -512,7 +512,7 @@ struct PdChoice {
 // 2.6-3 A second PDO; otherwise a fixed PDO at 5/9/12/15 V and <= 3 A, the higher voltage on a tie. bm92txx ranks by the
 // PDO's own power; here by the power the charger will take from it (voltage x pdInputLimit), which is what charges:
 // for 9 V 2 A and 12 V 1.5 A (both 18 W) bm92txx takes 12 V at 900 mA (10.8 W), this 9 V at 1500 mA (13.5 W). A PDO
-// whose input limit is below the 500 mA the charger gets without a contract (kUnknownSourceMA) is never chosen.
+// below 500 mA is not used for charging; an explicit 5 V/0 A offer still permits PD signaling with input disconnected.
 constexpr PdChoice choosePdo(const uint32_t *pdos, unsigned count)
 {
     PdChoice choice{0, 0, 0, 0, 0, false, "no source PDOs (not USB-PD)"};
@@ -538,6 +538,11 @@ constexpr PdChoice choosePdo(const uint32_t *pdos, unsigned count)
             continue;
         if (mv != 5000 && mv != 9000 && mv != 12000 && mv != kPdMaxMillivolts)
             continue;
+        if (mv == 5000 && ma == 0) {
+            if (!choice.position)
+                choice = PdChoice{i + 1, p, mv, ma, 0, false, nullptr};
+            continue;
+        }
         const unsigned limit = pdInputLimit(mv, ma);
         if (limit < kUnknownSourceMA)
             continue;

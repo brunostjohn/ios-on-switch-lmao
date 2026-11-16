@@ -161,9 +161,17 @@ void SwitchPD::choose()
         fail(choice.refusal);
         return;
     }
+    if (!choice.inputLimit) {
+        withdraw();
+        if (switch_battery_prepare_pd_input(&state)) {
+            fail("the charger input could not be disconnected for the zero-current contract");
+            return;
+        }
+    }
     uint32_t pdo = 0;
     uint32_t rdo = 0;
-    if (readContract(pdo, rdo) && charge::contractMatches(choice, pdo, rdo)) {
+    if ((state.status1 & SWITCH_PD_STATUS1_SPDSNK) && readContract(pdo, rdo) &&
+        charge::contractMatches(choice, pdo, rdo)) {
         publish();  // ours already (made by an earlier boot): nothing to request
         return;
     }

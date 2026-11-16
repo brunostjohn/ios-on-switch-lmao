@@ -23,6 +23,11 @@ extern "C" {
 #define SWITCH_BATTERY_BOOST_VBUS_PRESENT (-2)
 int switch_battery_set_otg_boost(bool on, bool ourVbus);
 
+// Admit a zero-current PD request only after Hi-Z and watchdog-off are set. The input stays blocked until detach or
+// an accepted nonzero limit is applied; powerd's DisableInflow remains independent. Thread context; 0 or I2C error.
+struct SwitchPDState;
+int switch_battery_prepare_pd_input(const struct SwitchPDState *current);
+
 // One line for the USB role report (drivers/SwitchUSB/SwitchUSB.cpp), nothing written: REG01 (CHG_CONFIG, BOOST_LIM),
 // REG05 (I2C watchdog: a write to the charger starts it; when it expires the registers reset, OTG included), REG08
 // (VBUS_STAT, CHRG_STAT, PG), REG09 twice (latched faults, then now: BOOST_FAULT, WATCHDOG_FAULT; what it clears is
