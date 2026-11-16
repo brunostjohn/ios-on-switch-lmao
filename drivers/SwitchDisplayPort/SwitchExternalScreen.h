@@ -16,7 +16,7 @@ class SwitchExternalScreen : public IOMobileFramebufferLegacy {
     OSDeclareDefaultStructors(SwitchExternalScreen);
 public:
     bool begin(SwitchDisplayPort *transport, IOWorkLoop *workLoop);
-    void publish(const struct switch_dp_mode_list &modes, uint64_t payload);
+    bool publish(const struct switch_dp_mode_list &modes, uint64_t payload, const uint8_t *edid);
     void linkUp(const struct switch_dp_mode &mode, TegraDisplayB *controller);
     void linkDown();
     void detach();

@@ -123,14 +123,20 @@ void SwitchExternalScreen::publishModes()
     OSSafeReleaseNULL(timings);
 }
 
-void SwitchExternalScreen::publish(const struct switch_dp_mode_list &list, uint64_t payload)
+bool SwitchExternalScreen::publish(const struct switch_dp_mode_list &list, uint64_t payload, const uint8_t *edid)
 {
+    auto *uuid = switch_dp_edid_uuid(edid);
+    const bool identified = uuid && setProperty("IOMFBUUID", uuid);
+    OSSafeReleaseNULL(uuid);
+    if (!identified)
+        return false;
     modes = list;
     available = payload;
     selectedMode = -1;
     connected = true;
     publishModes();
     IOMobileFramebufferLegacy::hotPlugNotify(1);
+    return true;
 }
 
 void SwitchExternalScreen::linkUp(const struct switch_dp_mode &timing, TegraDisplayB *controller)
@@ -182,6 +188,7 @@ void SwitchExternalScreen::detach()
     removeProperty("PreferredTimingElements");
     removeProperty("ColorElements");
     removeProperty("Transport");
+    removeProperty("IOMFBUUID");
     IOMobileFramebufferLegacy::hotPlugNotify(0);
 }
 

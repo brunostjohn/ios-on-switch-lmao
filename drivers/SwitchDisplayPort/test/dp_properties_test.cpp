@@ -9,6 +9,39 @@
 
 namespace {
 
+TEST(DisplayProperties, EdidIdentityMatchesNativeIoavAndSurvivesSerialAndTimingChanges)
+{
+    uint8_t edid[128] = {};
+    for (unsigned i = 0; i < sizeof(edid); ++i)
+        edid[i] = static_cast<uint8_t>(i);
+    auto *uuid = switch_dp_edid_uuid(edid);
+    ASSERT_NE(uuid, nullptr);
+    EXPECT_STREQ(uuid->getCStringNoCopy(), "08090A0B-0000-0000-1011-121314151617");
+    uuid->release();
+
+    std::memset(edid + 12, 0xff, 4);
+    std::memset(edid + 54, 0xff, 74);
+    uuid = switch_dp_edid_uuid(edid);
+    ASSERT_NE(uuid, nullptr);
+    EXPECT_STREQ(uuid->getCStringNoCopy(), "08090A0B-0000-0000-1011-121314151617");
+    uuid->release();
+
+    edid[10] = 0xff;
+    uuid = switch_dp_edid_uuid(edid);
+    ASSERT_NE(uuid, nullptr);
+    EXPECT_STREQ(uuid->getCStringNoCopy(), "0809FF0B-0000-0000-1011-121314151617");
+    uuid->release();
+}
+
+TEST(DisplayProperties, ZeroEdidUsesNativeResetIdentity)
+{
+    const uint8_t edid[128] = {};
+    auto *uuid = switch_dp_edid_uuid(edid);
+    ASSERT_NE(uuid, nullptr);
+    EXPECT_STREQ(uuid->getCStringNoCopy(), "00000000-0000-0000-0000-000000000000");
+    uuid->release();
+}
+
 uint64_t number(OSDictionary *dictionary, const char *key, unsigned bits = 32)
 {
     auto *value = OSDynamicCast(OSNumber, dictionary->getObject(key));

@@ -112,7 +112,8 @@ void SwitchDisplayPort::edidDone()
           (switch_dp_rate_khz(maxRate) / 1000) % 100, edidBlocks, edidBlocks == 1 ? "" : "s", modes.count);
     stage = Stage::Ready;
     cecEdid();
-    screen->publish(modes, switch_dp_payload_kbps(maxRate, maxLanes));
+    if (!screen->publish(modes, switch_dp_payload_kbps(maxRate, maxLanes), edid))
+        fail("the display identity", "could not publish IOMFBUUID");
 }
 
 void SwitchDisplayPort::chooseAndTrain()

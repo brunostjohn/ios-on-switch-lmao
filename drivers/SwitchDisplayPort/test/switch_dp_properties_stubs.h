@@ -25,6 +25,25 @@ private:
     mutable unsigned refs = 1;
 };
 
+class OSString : public OSObject {
+public:
+    static OSString *withCString(const char *value)
+    {
+        return new OSString(value);
+    }
+
+    const char *getCStringNoCopy() const
+    {
+        return value.c_str();
+    }
+
+private:
+    explicit OSString(const char *value) : value(value)
+    {}
+
+    std::string value;
+};
+
 class OSNumber : public OSObject {
 public:
     static OSNumber *withNumber(uint64_t value, unsigned bits)

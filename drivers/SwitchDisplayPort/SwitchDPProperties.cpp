@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #if defined(SWITCH_DP_PROPERTIES_TEST)
 #include "test/switch_dp_properties_stubs.h"
+#include <cstdio>
 #else
+#include <IOKit/IOLib.h>
 #include <libkern/c++/OSArray.h>
 #include <libkern/c++/OSBoolean.h>
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSNumber.h>
+#include <libkern/c++/OSString.h>
 #endif
 #include "SwitchDPProperties.h"
 #include "SwitchDPAppleTiming.h"
@@ -47,6 +50,15 @@ OSDictionary *axis(const struct switch_dp_apple_axis &value)
         OSSafeReleaseNULL(dictionary);
     return dictionary;
 }
+}
+
+OSString *switch_dp_edid_uuid(const uint8_t *edid)
+{
+    // IOAV's EDID UUID excludes the serial bytes 12–15 on both supported builds.
+    char uuid[37];
+    snprintf(uuid, sizeof(uuid), "%02X%02X%02X%02X-0000-0000-%02X%02X-%02X%02X%02X%02X%02X%02X", edid[8], edid[9],
+             edid[10], edid[11], edid[16], edid[17], edid[18], edid[19], edid[20], edid[21], edid[22], edid[23]);
+    return OSString::withCString(uuid);
 }
 
 OSDictionary *switch_dp_timing_element(const struct switch_dp_mode *mode, uint32_t id, OSArray *colors)
