@@ -52,6 +52,10 @@ OSDictionary *axis(const struct switch_dp_apple_axis &value)
 OSDictionary *switch_dp_timing_element(const struct switch_dp_mode *mode, uint32_t id, OSArray *colors)
 {
     const auto timing = switch_dp_apple_timing(mode);
+    const uint64_t refresh = static_cast<uint32_t>(timing.vertical.precise_sync_rate);
+    const uint64_t activeRate = (uint64_t{mode->hactive} * mode->vactive * refresh) >> 16;
+    // IOAV's progressive timing score uses active Mpixels/s, rounded Hz, and preferred flags 0x12.
+    const uint64_t score = (activeRate + 500000) / 1000000 + (refresh + 32768) / 65536 + (mode->preferred ? 10100 : 0);
     auto *dictionary = element(0, id, &timing, sizeof(timing));
     auto *horizontal = axis(timing.horizontal);
     auto *vertical = axis(timing.vertical);
@@ -65,7 +69,7 @@ OSDictionary *switch_dp_timing_element(const struct switch_dp_mode *mode, uint32
         dictionary->setObject("IsOverscanned", kOSBooleanFalse) &&
         dictionary->setObject("IsPreferred", mode->preferred ? kOSBooleanTrue : kOSBooleanFalse) &&
         dictionary->setObject("IsPromoted", kOSBooleanFalse) &&
-        number(dictionary, "ScanInformation", timing.scan_information) &&
+        number(dictionary, "ScanInformation", timing.scan_information) && number(dictionary, "Score", score) &&
         number(dictionary, "ValidPixelEncodings", 1) && number(dictionary, "StandardType", 1) &&
         number(dictionary, "TimingType", 3) && number(dictionary, "AspectRatio", timing.aspect_ratio) &&
         number(dictionary, "PreciseAspectRatio", uint64_t{mode->hactive} * 65536 / mode->vactive);

@@ -97,6 +97,40 @@ TEST(DisplayProperties, FractionalRefreshKeepsFixedPointPrecision)
     colors->release();
 }
 
+TEST(DisplayProperties, NativeScoresAdmitExternalTimingsAndPreserveEdidPreference)
+{
+    auto *colors = OSArray::withCapacity(0);
+
+    const struct {
+        uint32_t clock, ordinary, preferred;
+    } samples[] = {
+        {148500, 184, 10284},
+        {148352, 184, 10284},
+        {146273, 182, 10282},
+    };
+
+    for (const auto &sample : samples) {
+        switch_dp_mode mode{};
+        ASSERT_TRUE(switch_dp_cta_vic(16, &mode));
+        mode.pixel_khz = sample.clock;
+        uint64_t scores[2] = {};
+        for (unsigned preferred = 0; preferred < 2; ++preferred) {
+            mode.preferred = preferred != 0;
+            auto *timing = switch_dp_timing_element(&mode, 1, colors);
+            ASSERT_NE(timing, nullptr);
+            scores[preferred] = number(timing, "Score");
+            const bool isVirtual = timing->getObject("IsVirtual") == kOSBooleanTrue;
+            EXPECT_FALSE(isVirtual);
+            EXPECT_TRUE(scores[preferred] != 0 || isVirtual);
+            timing->release();
+        }
+        EXPECT_EQ(scores[0], sample.ordinary);
+        EXPECT_EQ(scores[1], sample.preferred);
+        EXPECT_GT(scores[1], scores[0]);
+    }
+    colors->release();
+}
+
 TEST(DisplayProperties, ColorExportsNativeRgb8FieldsAndOriginalPayload)
 {
     auto *color = switch_dp_color_element();
