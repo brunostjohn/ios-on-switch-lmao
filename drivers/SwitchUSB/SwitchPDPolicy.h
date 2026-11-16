@@ -6,13 +6,14 @@
 //   - source switches (CONFIG1 SPDSRC): on in Empty, Held, Reattach and Source when host mode is packaged, off in
 //     Sink and Classify;
 //   - fixed source supplies (v_vdd5v3 on PX3, VCONN on PK5): ready before Empty arms the switches, kept through
-//     Classify, Reattach and Source; off in Sink and Held;
+//     Classify, Sink, Reattach and Source; off in Held;
 //   - BQ24193 boost: on in Reattach and Source only.
 // On the OLED, v_vdd5v3 is the port's VBUS power (L4T nx-platform tegra210-nx-power-fixed.dtsi "VBUS power", and
 // tegra210b01-fric-power-tree.dtsi usb2-0 vbus-supply "Actual v_vdd5v3"); the BM92T36's SPDSRC switch connects it to
 // the connector once the partner's Rd is seen. bm92txx.c turns the rails on at probe, before SPDSRC12_ON, so the
 // supply is in regulation when the switch closes onto the partner. The supplies remain up while Classify opens
-// only the connector's source switches.
+// only the connector's source switches. VCONN stays available when power and data roles differ; the source FETs
+// isolate VBUS while the Switch sinks power.
 // With the rails up first, the controller drives VBUS itself when the partner comes back, so STATUS1 can already show
 // VSAFE: it is ours when SPDSRC1 or SPDSRC2 is on (our switch closed); VSAFE with both off is someone else's.
 #ifndef SWITCH_PD_POLICY_H
@@ -89,8 +90,8 @@ static inline bool switch_pd_switches_on(enum switch_pd_phase phase, bool allow_
 
 static inline bool switch_pd_rails_on(enum switch_pd_phase phase)
 {
-    return phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH ||
-           phase == SWITCH_PD_SOURCE;
+    return phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_SINK ||
+           phase == SWITCH_PD_REATTACH || phase == SWITCH_PD_SOURCE;
 }
 
 static inline bool switch_pd_boost_on(enum switch_pd_phase phase)

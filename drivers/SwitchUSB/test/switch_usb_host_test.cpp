@@ -253,7 +253,7 @@ struct Port {
 TEST(SwitchUsbHostPowerRole, OutputsPerPhase)
 {
     for (int phase = 0; phase < 6; ++phase) {
-        EXPECT_EQ(pd_rails_on(phase) != 0, phase != SINK && phase != HELD) << phase;
+        EXPECT_EQ(pd_rails_on(phase) != 0, phase != HELD) << phase;
         EXPECT_EQ(pd_boost_on(phase) != 0, phase == REATTACH || phase == SOURCE) << phase;
         EXPECT_FALSE(pd_switches_on(phase, 0)) << phase;
         EXPECT_EQ(pd_switches_on(phase, 1) != 0, phase != SINK && phase != CLASSIFY) << phase;
@@ -326,13 +326,15 @@ TEST(SwitchUsbHostPowerRole, ChargerSeesVbusThatIsNotOurs)
     Port port(true, -2);
     port.enter(REATTACH, "proven");
     EXPECT_EQ(port.phase, SINK);
-    EXPECT_FALSE(port.rails || port.switches || port.boost);
-    EXPECT_EQ(port.events, (std::vector<Event>{{"boost", true}, {"boost", false}}));
+    EXPECT_TRUE(port.rails);
+    EXPECT_FALSE(port.switches || port.boost);
+    EXPECT_EQ(port.events, (std::vector<Event>{{"boost", true}, {"boost", false}, {"rails", true}}));
     Port unpowered(true, -2);
     unpowered.status1 = REATTACH_RAILS_UP.first;
     unpowered.enter(REATTACH, "proven");
     EXPECT_EQ(unpowered.phase, SINK);
-    EXPECT_FALSE(unpowered.boost || unpowered.rails);
+    EXPECT_TRUE(unpowered.rails);
+    EXPECT_FALSE(unpowered.boost || unpowered.switches);
     Port closed(true, -2);
     closed.enter(EMPTY, "start");
     closed.status1 = REATTACH_RAILS_UP.first;
@@ -360,10 +362,13 @@ TEST(SwitchUsbHostPowerRole, ClassifyWindowKeepsBoostRefusalLatched)
         port.events.clear();
         port.windowEnds({0, 0});
         EXPECT_EQ(port.phase, result == -2 ? SINK : HELD);
-        EXPECT_FALSE(port.boost || port.rails || port.window);
-        std::vector<Event> expected = {{"boost", true}, {"boost", false}, {"rails", false}};
-        if (result == -1)
+        EXPECT_EQ(port.rails, result == -2);
+        EXPECT_FALSE(port.boost || port.window);
+        std::vector<Event> expected = {{"boost", true}, {"boost", false}};
+        if (result == -1) {
+            expected.emplace_back("rails", false);
             expected.emplace_back("switches", true);
+        }
         EXPECT_EQ(port.events, expected);
     }
 }
@@ -406,8 +411,9 @@ TEST(SwitchUsbHostPowerRole, ReattachPowerIsReleasedOnRoleChangeAndStop)
     port.events.clear();
     port.alert(R7W_MAC_SOURCES);
     EXPECT_EQ(port.phase, SINK);
-    EXPECT_FALSE(port.boost || port.rails || port.switches || port.window);
-    EXPECT_EQ(port.events, (std::vector<Event>{{"switches", false}, {"boost", false}, {"rails", false}}));
+    EXPECT_TRUE(port.rails);
+    EXPECT_FALSE(port.boost || port.switches || port.window);
+    EXPECT_EQ(port.events, (std::vector<Event>{{"switches", false}, {"boost", false}}));
     for (int next : {EMPTY, SINK, HELD}) {
         Port stopped;
         stopped.enter(REATTACH, "proven");
@@ -443,7 +449,8 @@ TEST(SwitchUsbHostPowerRole, MacIsDualRole)
     port.alert(R7W_SINK_ATTACH_CC2);
     port.alert(R7W_MAC_SOURCES);
     EXPECT_EQ(port.phase, SINK);
-    EXPECT_FALSE(port.window);
+    EXPECT_TRUE(port.rails);
+    EXPECT_FALSE(port.window || port.boost || port.switches);
     for (const Event &e : port.events) {
         EXPECT_NE(e, Event("rails", true));
         EXPECT_NE(e, Event("boost", true));

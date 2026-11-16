@@ -432,14 +432,14 @@ void SwitchPD::setAllowSource(bool allow)
         window->cancelTimeout();
         enter(SWITCH_PD_SINK, "sink: host mode is off");
         notify();
-    } else if (phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_HELD) {
+    } else if (phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_HELD || phase == SWITCH_PD_SINK) {
         const bool arm = allow && !asleepSinkOnly;
-        if (arm && phase == SWITCH_PD_EMPTY && !setRails(true)) {
+        if (arm && switch_pd_rails_on(phase) && !setRails(true)) {
             enter(SWITCH_PD_HELD, "not sourcing: the source supplies failed");
             notify();
             return;
         }
-        setSwitches(arm);
+        setSwitches(switch_pd_switches_on(phase, arm));
         if (!arm)
             (void)setRails(false);
     }

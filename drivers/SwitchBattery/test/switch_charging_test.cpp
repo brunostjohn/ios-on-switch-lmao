@@ -1243,8 +1243,8 @@ static void oledDockSourceStartup()
     gPd.sink({PdChip::fixed(5000, 1500)}, 0, 0x8 | 0x1000 | 0x4000);
     advance(10);
     check(state.settled && state.role == SWITCH_PD_ROLE_SINK && chgConfig() == 1 &&
-              !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
-          "external source during reattach releases boost, rails and source switches");
+              gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
+          "external source during reattach keeps fixed supplies with boost and source switches off");
 
     gCharger.unplug();
     gPd.unplug();
@@ -1253,8 +1253,8 @@ static void oledDockSourceStartup()
     gCharger.plug(500, 2);
     advance(1000);
     check(logHas("not sourcing: the charger sees external VBUS") && state.settled &&
-              state.role == SWITCH_PD_ROLE_SINK && chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] &&
-              !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
+              state.role == SWITCH_PD_ROLE_SINK && chgConfig() == 1 && gOutputs[TEGRA_GPIO(X, 3)] &&
+              gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
           "external VBUS at the classify deadline keeps the sink refusal latched");
     gCharger.unplug();
     gPd.unplug();
@@ -1276,6 +1276,18 @@ static void sourceSupplyLifecycle()
 {
     check(switch_battery_start() == 0, "switch_battery_start");
     advance(10);
+    gPd.status1 = 0x0580;
+    gPd.status2 = 0;
+    gPd.alert |= 0x8;
+    advance(10);
+    check(switch_pd_allow_source(true) == 0 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] &&
+              chgConfig() != 2 && (gPd.config1 >> 14) == 3,
+          "host capability arriving after a cold sink attach prepares fixed supplies without sourcing VBUS");
+    check(switch_pd_allow_source(false) == 0 && !gOutputs[TEGRA_GPIO(X, 3)] &&
+              !gOutputs[TEGRA_GPIO(K, 5)] && chgConfig() != 2 && (gPd.config1 >> 14) == 3,
+          "host capability removal in Sink releases fixed supplies with source switches and boost off");
+    gPd.unplug();
+    advance(10);
     check(switch_pd_allow_source(true) == 0, "host mode available");
     gPd.status1 = 0x9e80;
     gPd.status2 = 0x2000;
@@ -1290,9 +1302,9 @@ static void sourceSupplyLifecycle()
     gPd.status2 = 0;
     gPd.alert |= 0x8;
     advance(10);
-    check(logHas("dual-role partner:") && chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] &&
-              !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
-          "Mac takes the source role without BQ boost");
+    check(logHas("dual-role partner:") && chgConfig() == 1 && gOutputs[TEGRA_GPIO(X, 3)] &&
+              gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
+          "Mac takes the source role with fixed supplies on and BQ boost and source switches off");
     gCharger.unplug();
     gPd.unplug();
     advance(10);
@@ -1339,13 +1351,28 @@ static void macPort()
     if (switch_battery_start())
         check(false, "switch_battery_start");
     advance(10);
+    check(switch_pd_allow_source(true) == 0, "host mode available");
+    SwitchPDState state{};
+    check(switch_pd_add_listener(
+              [](void *context, const SwitchPDState *current) { *static_cast<SwitchPDState *>(context) = *current; },
+              &state) == 0,
+          "power-role listener");
     gPd.rdoReply = PdChip::AbortOnce;
     gCharger.plug(500, 1);
     gPd.sink({PdChip::fixed(5000, 1500)}, 0, 0x8 | 0x1000 | 0x4000);
     gPd.curRdo = 1u << 28 | 50u << 10 | 150u;  // the controller's own contract: 0.5 A of 1.5 A
-    advance(3200);
+    advance(10);
+    check(state.role == SWITCH_PD_ROLE_SINK && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] &&
+              chgConfig() != 2 && (gPd.config1 >> 14) == 3,
+          "cold source attach keeps fixed supplies while source switches and boost stay off");
+    advance(3190);
     check(logHas("request aborted at attach") && !logHas("no USB-PD request"), "aborted once, asked again");
     check(logHas("SwitchPD: contract 5 V 1.5 A (*5 V 1.5 A)") && iinlim() == 1500, "5 V 1.5 A: 1500 mA (r8a: 0.9 A)");
+    check(std::count(gPd.commands.begin(), gPd.commands.end(), std::string("0707")) == 2 &&
+              std::count(gPd.commands.begin(), gPd.commands.end(), std::string("0505")) == 1 &&
+              state.role == SWITCH_PD_ROLE_SINK && !state.dataHost && ((gPd.status1 >> 8) & 3) == 1 &&
+              gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] && chgConfig() != 2 && (gPd.config1 >> 14) == 3,
+          "RDO and PS_RDY complete with fixed supplies retained and the Mac still the USB host");
 }
 
 // bm92t_system_reset_auto(false): a controller an earlier boot left plugged as DFP is reset first, then over-current
