@@ -491,6 +491,9 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
                                            _segError.set() && _promised.load(std::memory_order_acquire));
     };
     if (_committed && !returns()) {
+#if SWITCH_FRAME_TIMELINE
+        const switch_frame::WaitScope frameWait(_frame);
+#endif
 #if SWITCH_METAL_DIAGNOSTICS
         const BlockedWait blocked(gRM->stats.scheduledWaits, gRM->stats.scheduledWaitUs);
 #endif

@@ -123,6 +123,9 @@ void retireRawRange(SwitchMetalCommandBuffer *cb, size_t from, size_t to)
 static void dispatchScheduled(SwitchMetalCommandBuffer *cb, NSArray *handlers)
 {
     if (!handlers.count) {
+#if SWITCH_FRAME_TIMELINE
+        cb->_frame.mark(switch_frame::Scheduled);
+#endif
         cb->_scheduledDone = true;
         gm20bChanged(cb);
         return;
@@ -131,6 +134,9 @@ static void dispatchScheduled(SwitchMetalCommandBuffer *cb, NSArray *handlers)
     dispatch_async(cb->_queue->_handlers, ^{
         for (MTLCommandBufferHandler h in handlers)
             h((id<MTLCommandBuffer>)cb);
+#if SWITCH_FRAME_TIMELINE
+        cb->_frame.mark(switch_frame::Scheduled);
+#endif
         cb->_scheduledDone = true;
         gm20bChanged(cb);
     });
