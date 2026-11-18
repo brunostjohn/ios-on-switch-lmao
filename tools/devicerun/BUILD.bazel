@@ -11,6 +11,7 @@ py_library(
         "apps.py",
         "audio.py",
         "checks.py",
+        "cpu.py",
         "cut.py",
         "devicerun.py",
         "dispatch.py",
@@ -120,6 +121,14 @@ py_test(
     name = "textures_test",
     size = "small",
     srcs = ["textures_test.py"],
+    deps = [":lib"],
+)
+
+# cpu.py's summaries over the kernel probes' lines (who used the CPU, the interrupt sources, translation traps).
+py_test(
+    name = "cpu_test",
+    size = "small",
+    srcs = ["cpu_test.py"],
     deps = [":lib"],
 )
 

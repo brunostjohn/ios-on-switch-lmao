@@ -14,6 +14,7 @@ from collections.abc import Iterable, Iterator
 
 from tools.devicerun import renamed
 from tools.devicerun.checks import FRAME_PREFIX, GROUPS
+from tools.devicerun.cpu import cpu_rows
 from tools.devicerun.morning import CHECKLIST
 from tools.devicerun.reports import crash_rows, frame_rows, headline, rolled_up
 from tools.devicerun.rules import FAIL, Check, Event, Result, evaluate, match
@@ -140,6 +141,7 @@ def evaluate_all(
     results, frame_lines = run_checks(records, all_checks(label))
     by_check = {r.check.name: r for r in results}
     groups = [(name, rolled_up([by_check[c.name] for c in group])) for name, group in groups_in.items()]
+    groups.append(('cpu-summary', cpu_rows(by_check)))
     groups.append(('frames', frame_rows(frame_lines)))
     groups.append(('crashes', crash_rows(crashes)))
     return groups

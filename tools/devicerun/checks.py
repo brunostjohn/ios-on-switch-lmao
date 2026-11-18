@@ -6,6 +6,7 @@
 
 from tools.devicerun.apps import APPS
 from tools.devicerun.audio import AUDIO
+from tools.devicerun.cpu import CPU
 from tools.devicerun.cut import CUT
 from tools.devicerun.dispatch import DISPATCH
 from tools.devicerun.hwtest import (
@@ -1256,6 +1257,7 @@ GROUPS: dict[str, list[Check]] = {
     'lockscreen': LOCKSCREEN,
     'protection': PROTECTION,
     'stutter': STUTTER,
+    'cpu': CPU,
 }
 
 # The tools/frames lines, pulled with the checks' own query.
