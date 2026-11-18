@@ -330,5 +330,23 @@ def arm_names(text: str) -> list[tuple[str, int]]:
     return names
 
 
+class Harness(unittest.TestCase):
+    LINE = (
+        'HWTEST suite.harness {} boundaries=665 boundary_ms_p50={} boundary_ms_max=455.0 flush_ms_p50=31.0 '
+        'flush_ms_max=420.0 main_wait_ms_p50=0.3 main_wait_ms_max=80.0 main_late=2 ms=30000.0'
+    )
+
+    def test_the_suite_between_tests_is_judged_by_its_line(self):
+        quick = run(self.LINE.format('PASS', '42.0'))
+        self.assertEqual(quick['hwtest.harness-ceiling'].verdict, PASS)
+        self.assertIn('42.0/31.0/0.3/30000.0', quick[hwtest.HARNESS].observed)
+        slow = run(self.LINE.format('FAIL', '565.0') + ' why=median_boundary_over_100_ms')
+        self.assertEqual(slow['hwtest.harness-ceiling'].verdict, FAIL)
+        self.assertIn('median_boundary_over_100_ms', slow['hwtest.harness-ceiling'].observed)
+        self.assertEqual(
+            run('HWTEST suite PASS pass=1 fail=0 skip=0 ms=1.0')['hwtest.harness-ceiling'].verdict, NO_DATA
+        )
+
+
 if __name__ == '__main__':
     unittest.main()

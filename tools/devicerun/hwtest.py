@@ -16,6 +16,7 @@ SUBSYSTEM = 'com.brunostjohn.switch.hwtest'
 SOURCE = 'apps/hwtest/core/LogLine.swift'
 SUITE = 'hwtest.suite'
 LITERAL = 'HWTEST '
+HARNESS = 'hwtest.harness'
 # A test's FAIL line naming the failed command buffers that reddened it, and any line naming calls skipped
 # (core/FailedAttribution.swift, core/FailedCounts.swift): reports.py rolls them up per predicate
 REDS = 'hwtest.reds'
@@ -870,6 +871,31 @@ HWTEST = [
         show=('view', 'form'),
         source=SOURCE,
         note='each run of gpu.decode.views and the gm20b:tex.view and gm20b:tex.decoded_form lines it must log',
+    ),
+    Check(
+        HARNESS,
+        OWNER,
+        LITERAL,
+        REPORT,
+        subsystem=SUBSYSTEM,
+        regex=(
+            r'^HWTEST suite\.harness (?:PASS|FAIL) .*\bboundary_ms_p50=(?P<boundary>[\d.]+)'
+            r' .*\bflush_ms_p50=(?P<flush>[\d.]+) .*\bmain_wait_ms_p50=(?P<main>[\d.]+) .*\bms=(?P<ms>[\d.]+)'
+        ),
+        show=('boundary', 'flush', 'main', 'ms'),
+        source='apps/hwtest/core/HarnessTally.swift',
+        note='the suite between its tests, per batch: median boundary, journal flush and main-thread answer, total ms',
+    ),
+    Check(
+        'hwtest.harness-ceiling',
+        OWNER,
+        LITERAL,
+        subsystem=SUBSYSTEM,
+        regex=r'^HWTEST suite\.harness FAIL(?:$| )(?:.*\bwhy=(?P<why>\S+))?',
+        show=('why',),
+        needs=HARNESS,
+        source='apps/hwtest/core/HarnessTally.swift',
+        note='median boundary <= 100 ms and median main-thread answer <= 16.7 ms: the suite stays out of tests',
     ),
     Check(
         'hwtest.suite-reds',
