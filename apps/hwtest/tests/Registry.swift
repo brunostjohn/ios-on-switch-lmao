@@ -157,7 +157,7 @@ public enum Registry {
         LocalAuthenticationTest(), IdentityTest(), PowerStateTest(), ThermalTest(), SocThermThrottleTest(),
         MemoryTest(), UnionDirectoryTest(), OverlayAppsTest(), OverlayAppRecordsTest(), IconCacheTest(),
         IconCacheResetTest(), CPUClockTest(), CPUDfllLandingTest(), CPUSustainedTest(), CPUSchedTest(),
-        CPUIPIPingPongTest(),
+        CPUIPIPingPongTest(), HogPacingTest(),
         DispatchSyncTest(), DispatchSyncWorkloopTest(), WorkloopSyncTest(), WidgetsRenderTest(), IconRenderTest(),
         SnapshotPurgeableTest(),
     ]
