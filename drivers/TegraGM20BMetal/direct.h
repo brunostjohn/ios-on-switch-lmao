@@ -13,10 +13,13 @@ struct NmbDirectState;
 
 namespace gm20b {
 
+class StageMemo;
+
 // The stage compile the direct compile calls (third_party/mesa/src/nouveau/switch_compile), linked in; it makes no device
 struct StageCompile {
     bool ranked = false;           // switch_compile_ranked_stage in place of switch_compile_stage
     const void *target = nullptr;  // the frozen table the compile takes (nak_target.h)
+    StageMemo *memo = nullptr;     // the shader compiler's compiled stages (compiler/compiler_stages.h); none elsewhere
 
     static StageCompile linked(bool ranked = false);
     // direct_nvk.h's copies of the compile's structs are its sizes (switch_compile_abi)

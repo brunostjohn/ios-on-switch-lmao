@@ -78,6 +78,12 @@ public:
                         std::map<uint32_t, uint32_t> *registers = nullptr, bool split = false,
                         PackForm requested = PackForm::Default);
 
+    // The shader compiler's: a stage compiled from the same inputs as an earlier one is that one (StageCompile::memo)
+    void keepStages(StageMemo *memo)
+    {
+        compile_.memo = memo;
+    }
+
     // The pack generator's: records also hold the program variants directRecord makes (`variants`)
     void makeVariants(bool on)
     {

@@ -145,7 +145,7 @@ public:
             for (uint32_t i = 0; i < 32; i++)
                 if (zeroPush >> i & 1)
                     info.constPushWords[i] = 0;
-            const int32_t result = compileStage(compile_, info, layout_.layout, made_[k]);
+            const int32_t result = compileStage(compile_, info, layout_.layout, made_[k], &held_[k]);
             if (result != 0) {
                 why = "the stage compile refused stage " + std::to_string(k) + " (VkResult " + std::to_string(result) +
                       ")";
@@ -163,7 +163,7 @@ public:
 
     bool tessellates() const
     {
-        return made_[3].owner != nullptr;
+        return made_[3].owner != nullptr || held_[3];
     }
 
     bool pixel() const
@@ -190,6 +190,7 @@ private:
     XrPlaneBindings xrPlaneBindings_;
     bool pixel_ = true;
     NvkStage made_[4] = {};
+    std::shared_ptr<const void> held_[4];  // a memo's stages (StageCompile::memo), which own their code
     CapturedProgram programs_[4];
 };
 
