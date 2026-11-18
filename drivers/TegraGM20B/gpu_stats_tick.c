@@ -2,6 +2,7 @@
 // The periodic statistics lines (TGM_STATS): job stamps, fences, clocks, submissions and owners.
 #include "gpu_internal.h"
 #include "deadline_stats.h"
+#include "TegraGM20BLoad.h"
 
 #if TGM_STATS
 /* TegraVIC (drivers/TegraVIC/SwitchVICMapping.cpp, debug kernels) */
@@ -249,8 +250,10 @@ void tgm_stats_tick(void)
 	char scrubbed[200];
 	char sched[120];
 	char recov[128];
+	char load[160];
 
 	__atomic_fetch_add(&tgm_stats.submits, 1, __ATOMIC_RELAXED);
+	tgm_load_sample(now);
 	if (!since) {
 		if (__atomic_compare_exchange_n(&tgm_stats.since, &since, now, false,
 						__ATOMIC_RELAXED, __ATOMIC_RELAXED))
@@ -310,6 +313,7 @@ void tgm_stats_tick(void)
 	}
 	/* the GPU's share of the window spent on stamped user submissions and copies */
 	busy = PT_NS(es + cs) * 100 / (now - since);
+	tgm_load_stats(load, sizeof(load), now - since);
 	tgm_clk_measure(clk, sizeof(clk));
 	tgm_scrub_stats(scrubbed, sizeof(scrubbed), ms);
 	/* formatted here and logged as one string: os_log drops a message whose scalar arguments outgrow its 256-byte buffer
@@ -318,7 +322,7 @@ void tgm_stats_tick(void)
 		  "%llu ms: %u submits (%llu/s), fence latency mean %llu us max %llu us (%u), GPU "
 		  "queue "
 		  "mean %llu us max %llu us, exec mean %llu us max %llu us (%u stamped), busy "
-		  "%llu%% (PTIMER x%llu.%03llu), "
+		  "%llu%% (PTIMER x%llu.%03llu), %s, "
 		  "L2 %s, %u presents (%u writer-only, %u L2 flushes), "
 		  "offer to done mean %llu us max "
 		  "%llu us, %s; compositor GPU queue mean %llu us max %llu us (%u), with an app on "
@@ -326,8 +330,8 @@ void tgm_stats_tick(void)
 		  ms, submits, submits * 1000ULL / (ms ? ms : 1), fences ? sum / fences / 1000 : 0,
 		  max / 1000, fences, timed ? PT_NS(qs) / timed / 1000 : 0, PT_NS(qm) / 1000,
 		  timed ? PT_NS(es) / timed / 1000 : 0, PT_NS(em) / 1000, timed, busy, rate >> 16,
-		  ((rate & 0xffff) * 1000) >> 16, l2_on() ? "cached" : "volatile", presents, writer,
-		  present_flushes, presents ? ps / presents / 1000 : 0, pm / 1000, clk,
+		  ((rate & 0xffff) * 1000) >> 16, load, l2_on() ? "cached" : "volatile", presents,
+		  writer, present_flushes, presents ? ps / presents / 1000 : 0, pm / 1000, clk,
 		  comp ? PT_NS(cos) / comp / 1000 : 0, PT_NS(com) / 1000, comp,
 		  behind ? PT_NS(bs) / behind / 1000 : 0, PT_NS(bm) / 1000, behind, sched, recov);
 	nvxnu_stats("tegra-gm20b: stats %s", line);
