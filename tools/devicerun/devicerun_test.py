@@ -227,6 +227,45 @@ class Rules(unittest.TestCase):
         got = {r.check.name: r for r in devicerun.run_checks(log[:2], [runs, lines])[0]}
         self.assertEqual(got[lines.name].verdict, PASS)
 
+    def test_a_title_scroll_repetition_past_the_first_takes_no_fresh_import(self):
+        reps, imports = (
+            next(c for c in checks.GROUPS['refusals'] if c.name == name)
+            for name in (checks.TITLE_SCROLL_REPS, 'compositor.title-scroll-imports')
+        )
+
+        def record(second: float, proc: str, subsystem: str, message: str) -> dict:
+            return {
+                'timestamp': f'2026-11-23 09:00:{second:06.3f}-0800',
+                'bootUUID': 'B00T',
+                'processImagePath': f'/usr/libexec/{proc}',
+                'subsystem': subsystem,
+                'category': 'marks',
+                'messageType': 'Default',
+                'eventMessage': message,
+            }
+
+        user = 'SwitchFrameUser: backboardd cb 9 commit 1 enc 1 1 replay 0 0 ret 0 owait 0 0 fence 2 done 2 back 0 '
+        log = [
+            record(
+                1.2, 'backboardd', checks.GPU_METAL_SUBSYSTEM, user + 'slot 0 0 prev 0 dropped 0 surf 1 imp 2 hit 0'
+            ),
+            record(
+                1.4, 'SwitchHWTest27', 'com.brunostjohn.switch.hwtest', 'SwitchMark: ui.title_scroll.paused.0 500 ms'
+            ),
+            record(
+                3.2, 'backboardd', checks.GPU_METAL_SUBSYSTEM, user + 'slot 0 0 prev 0 dropped 0 surf 0 imp 0 hit 3'
+            ),
+            record(
+                3.4, 'SwitchHWTest27', 'com.brunostjohn.switch.hwtest', 'SwitchMark: ui.title_scroll.paused.1 500 ms'
+            ),
+        ]
+        got = {r.check.name: r for r in devicerun.run_checks(log, [reps, imports])[0]}
+        self.assertEqual(got[imports.name].verdict, PASS)
+        self.assertIn('1 runs, 0 off', got[imports.name].observed)
+        log[0] = {**log[0], 'timestamp': '2026-11-23 09:00:03.100-0800'}
+        got = {r.check.name: r for r in devicerun.run_checks(log, [reps, imports])[0]}
+        self.assertEqual(got[imports.name].verdict, FAIL)
+
     def test_a_promise_given_up_after_its_makers_kill_fails(self):
         judged = [c for c in checks.GROUPS['gpu'] if c.name.startswith(('gpu.channel-killed', 'gpu.promise-given-up'))]
 

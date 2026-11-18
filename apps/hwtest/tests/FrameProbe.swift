@@ -19,7 +19,7 @@ final class FrameProbe: NSObject, @unchecked Sendable {
     private var link: CADisplayLink?
     private var thread: Thread?
     private var level = 0
-    private let stopped = Waiter<Bool>()
+    private var stopped = Waiter<Bool>()
 
     @MainActor
     init(frame: CGRect) {
@@ -32,9 +32,13 @@ final class FrameProbe: NSObject, @unchecked Sendable {
         layer.contentsScale = UIScreen.main.scale
     }
 
-    /// Starts the probe's thread, which presents from its next display-link frame on.
+    /// Starts the probe's thread, which presents from its next display-link frame on; again after `stop`, the frames
+    /// kept. QuartzCore finishes the first drawable a layer presents after a second with no presented report at once,
+    /// with no presented time (24B119 layer_private_present_impl), so a restart's first frame has none.
     func start() {
-        let thread = Thread { [self] in run() }
+        let stopped = Waiter<Bool>()
+        self.stopped = stopped
+        let thread = Thread { [self] in run(stopped) }
         thread.qualityOfService = .userInteractive
         thread.name = "FrameProbe"
         self.thread = thread
@@ -44,6 +48,7 @@ final class FrameProbe: NSObject, @unchecked Sendable {
     /// Ends the probe's display link and waits for its thread to leave its run loop.
     func stop() async {
         guard let thread else { return }
+        self.thread = nil
         perform(#selector(end), on: thread, with: nil, waitUntilDone: false)
         _ = await stopped.wait(timeout: 2)
     }
@@ -65,7 +70,7 @@ final class FrameProbe: NSObject, @unchecked Sendable {
         all.first { $0.committed >= time }?.presented ?? 0
     }
 
-    private func run() {
+    private func run(_ stopped: Waiter<Bool>) {
         let link = CADisplayLink(target: self, selector: #selector(tick))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 60, preferred: 60)
         link.add(to: .current, forMode: .default)

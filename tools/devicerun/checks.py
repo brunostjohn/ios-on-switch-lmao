@@ -44,6 +44,9 @@ KILLED_FAILURE = (
     r'|(?P<code>[12])\): The operation couldn.t be completed\. \(MTLCommandBufferErrorDomain error (?P=code)\.\))'
 )
 GPU_METAL_SUBSYSTEM = 'com.brunostjohn.switch.TegraGM20BMetal'
+# ui.title_scroll's repetitions past the first, each a window from its SwitchMark line's time less its ms: backboardd's
+# work in them is judged against "every repetition after the first draws from what the first made"
+TITLE_SCROLL_REPS = 'hwtest.title-scroll-reps'
 # The kernel's one line for a writer promise given up: its maker (the channel owner holding its fence word) and reader
 PROMISE_GIVEN_UP = (
     r"tegra-gm20b: (?P<owner>.+?)'s writer promise at fence offset \d+ \(value \d+\) was not kept: "
@@ -977,6 +980,45 @@ GROUPS: dict[str, list[Check]] = {
             source='drivers/TegraGM20BMetal/TegraGM20BMetalDecodedFamily.mm',
             note="on 21H461 a gpu.decode.views run's 221 and 227 views are nil, as the A10X identity makes no ASTC HDR "
             'texture: one line a process (one key for both), on its first run; none on 24B119',
+        ),
+        Check(
+            TITLE_SCROLL_REPS,
+            'probes-frame',
+            'SwitchMark: ui.title_scroll.',
+            REPORT,
+            subsystem='com.brunostjohn.switch.hwtest',
+            regex=r'^SwitchMark: ui\.title_scroll\.(?P<rep>back\.\d+|paused\.[1-9]\d*) (?P<ms>\d+) ms',
+            show=('rep',),
+            source='apps/hwtest/tests/TitleScrollTest.swift',
+            note='the repetitions past the first of ui.title_scroll, both arms (paused 1.5 s before each, back to '
+            "back); the app's own numbers are on each line",
+        ),
+        Check(
+            'compositor.title-scroll-creations',
+            'probes-frame',
+            'a state the pack lacks',
+            process='backboardd',
+            subsystem=GPU_METAL_SUBSYSTEM,
+            regex=r'^SwitchMetal: a (?:compute )?state the pack lacks',
+            per=TITLE_SCROLL_REPS,
+            per_count='0',
+            source='drivers/TegraGM20BMetal/TegraGM20BMetalCompleteRemote.mm (debug builds)',
+            note='no state made for the title scroll once the first repetition has made them',
+        ),
+        Check(
+            'compositor.title-scroll-imports',
+            'probes-frame',
+            'SwitchFrameUser: backboardd ',
+            process='backboardd',
+            subsystem=GPU_METAL_SUBSYSTEM,
+            regex=r'^SwitchFrameUser: backboardd cb \d+ .* imp [1-9]\d* ',
+            per=TITLE_SCROLL_REPS,
+            per_count='0',
+            source='drivers/TegraGM20BMetal/plugin/SwitchFrameTimeline.h (debug builds)',
+            note="no command buffer of the render server's with a fresh kernel import (imp) in a repetition past the "
+            'first: its memory is what the first made. Catch-all draws under 5 ms, zeroed bytes and object-call time '
+            'reach no line; the catch-all spans of 5 ms or more are in the HWTEST line (p<n>_generic, b<n>_generic). '
+            'SwitchFrameUser is capped at 60 lines a second a process, so a window can miss an import',
         ),
         Check(
             'gm20b.failed-hwtest',
