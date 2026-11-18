@@ -46,6 +46,7 @@ gm20b::CreationWork since(const gm20b::CreationWork &now, const gm20b::CreationW
     w.builds = now.builds - then.builds;
     w.buildTicks = now.buildTicks - then.buildTicks;
     w.variants = now.variants - then.variants;
+    w.textKeys = now.textKeys - then.textKeys;
     return w;
 }
 
@@ -58,7 +59,7 @@ void logCreation(const gm20b::CreationCost &c, SwitchMetalPipeline *p, MTLRender
     os_log(gm20bLog(),
            "SwitchMetal: %{public}s: render state %016llx %{public}s in %llu us: key %llu us, place %llu us (%llu "
            "lookups %llu us, %llu pieces %llu us, %llu copies %llu bytes, %llu builds %llu us, %llu variants), packed "
-           "variants %llu us, record %llu us, other %llu us; %llu locks, %llu waited %llu us; %llu "
+           "variants %llu us, record %llu us, other %llu us; %llu text keys; %llu locks, %llu waited %llu us; %llu "
            "kernel calls %.0f us; on CPU %llu us; task faults %llu, pageins %llu: %{public}s",
            getprogname(), (unsigned long long)(p ? p->_packKey : 0),
            p && p->_packed ? "from the pack" : "the pack lacks", (unsigned long long)wall, (unsigned long long)key,
@@ -66,7 +67,7 @@ void logCreation(const gm20b::CreationCost &c, SwitchMetalPipeline *p, MTLRender
            (unsigned long long)w.pieces, (unsigned long long)ticksUs(w.pieceTicks), (unsigned long long)w.copies,
            (unsigned long long)w.copiedBytes, (unsigned long long)w.builds, (unsigned long long)ticksUs(w.buildTicks),
            (unsigned long long)w.variants, (unsigned long long)variants, (unsigned long long)record,
-           (unsigned long long)(wall > phases ? wall - phases : 0),
+           (unsigned long long)(wall > phases ? wall - phases : 0), (unsigned long long)w.textKeys,
            (unsigned long long)c.locks, (unsigned long long)c.lockWaits, (unsigned long long)ticksUs(c.lockWaitTicks),
            (unsigned long long)c.kernelCalls, c.kernelUs, (unsigned long long)(c.cpuNs / 1000),
            (unsigned long long)c.faults, (unsigned long long)c.pageins, d.label.UTF8String ?: "-");
@@ -154,6 +155,7 @@ void SwitchMetalCreationMeter::finish(SwitchMetalPipeline *p, MTLRenderPipelineD
         @"builds" : @(w.builds),
         @"build_us" : @(ticksUs(w.buildTicks)),
         @"variants" : @(w.variants),
+        @"text_keys" : @(w.textKeys),
         @"locks" : @(c.locks),
         @"lock_waits" : @(c.lockWaits),
         @"lock_wait_us" : @(ticksUs(c.lockWaitTicks)),

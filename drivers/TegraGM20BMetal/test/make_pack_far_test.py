@@ -127,5 +127,26 @@ class FarTest(unittest.TestCase):
         self.assertEqual(directlink.program_id(near), directlink.program_id(dict(near, far_ubos=[])))
 
 
+class FastKeysTest(unittest.TestCase):
+    """The PackFastKeys section (runtime/pack.h PackFastKey): each fast key the run of its state's records.
+
+    The runtime searches the pipelines unchecked, so a link of records out of key hash order fails.
+    """
+
+    KEYS = sorted(('samples=1 | v a | f b', 'samples=4 | v a | f b'), key=lambda k: packfile.fnv(k.encode()))
+
+    def test_a_fast_key_names_its_states_records(self):
+        first, second = (packfile.fnv(k.encode()) for k in self.KEYS)
+        pipes = [dict(record(0), key=key) for key in (self.KEYS[0], self.KEYS[0], self.KEYS[1])]
+        section = packfile.fast_key_bytes({5: second, 3: first, 9: 1234}, pipes)
+        runs = [struct.unpack_from('<QII', section, 16 * i) for i in range(len(section) // 16)]
+        self.assertEqual(runs, [(3, 0, 2), (5, 2, 1)])
+
+    def test_records_out_of_key_hash_order_fail_the_link(self):
+        pipes = [dict(record(0), key=self.KEYS[1]), dict(record(0), key=self.KEYS[0])]
+        with self.assertRaisesRegex(ValueError, 'not in key hash order'):
+            packfile.pack_bytes(packfile.Pack(pipes, [], [], {}, [], bytearray(), []))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -22,6 +22,7 @@ struct CreationWork {
     uint64_t pieces = 0, pieceTicks = 0;    // pieces of a file's pages imported and bound to run in place
     uint64_t builds = 0, buildTicks = 0;    // pipelines built from their records (Device::build)
     uint64_t variants = 0;                  // variant pipelines placed (Device::placeVariant)
+    uint64_t textKeys = 0;                  // states' keys made as text (TegraGM20BMetalStatesKey.mm)
 };
 
 inline thread_local CreationWork tCreationWork;

@@ -33,10 +33,11 @@ enum PackSectionId {
     PackIterated,
     PackComputeStates,
     PackReflections,
+    PackFastKeys,
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 31;
+constexpr uint32_t kPackVersion = 32;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bit 26 of its pass, bits 17-25 of the chip
@@ -192,6 +193,13 @@ struct PackIteratedBlend {
     uint64_t reservedName;
     uint16_t constant[kIteratedConstants][3];  // SET_ITERATED_BLEND_CONSTANT_RED/GREEN/BLUE(j): half floats
     uint32_t program[kIteratedProgramWords];   // LOAD_ITERATED_BLEND_INSTRUCTION words, the first count of them
+};
+
+// A state's fast key (TegraGM20BMetalPipelineKey.h fastKey) and its records: `records` of them from `first` in the
+// pipelines section, all of its keyHash. The PackFastKeys section, ascending by fast key.
+struct PackFastKey {
+    uint64_t fast;
+    uint32_t first, records;
 };
 
 // The bytes of a uniform buffer entry a pipeline's programs read: from its bind offset, in 16-byte units
@@ -710,6 +718,7 @@ static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackArchive) == 16, "pack layout");
 static_assert(sizeof(PackComputeFacts) == 24, "pack layout: packfile.py compute_facts_bytes");
 static_assert(sizeof(PackReflection) == 16, "pack layout: packfile.py reflection_bytes");
+static_assert(sizeof(PackFastKey) == 16, "pack layout: packfile.py fast_key_bytes");
 static_assert(sizeof(PackHeader) == 24 + 16 * PackSectionCount + 16, "pack layout: packfile.py pack_bytes header_size");
 static_assert(sizeof(PackKernel) == 18 + 256 + 14 + 128 + 8 * kKernelEntries + 84 + 12, "pack layout");
 static_assert(offsetof(PackKernel, stageInRegionWord) == 1012, "pack layout: packfile.py KERNEL_V21");
@@ -738,6 +747,8 @@ public:
     }
 
     const PackPipeline *find(uint64_t keyHash, PackForm form = PackForm::Default) const;  // nullptr: not in the pack
+    // The keyHash of the state of fast key `fast`; 0: the pack holds no such state
+    uint64_t fastState(uint64_t fast) const;
     // the state's PipelineVariantRecords, and the one named `name` (variantNameAt) of `form`; nullptr: not in the pack
     std::vector<const PackPipeline *> variantRecords(uint64_t keyHash) const;
     const PackPipeline *variantRecord(uint64_t keyHash, const std::string &name,

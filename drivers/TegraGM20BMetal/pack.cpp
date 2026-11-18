@@ -182,6 +182,16 @@ const PackPipeline *Pack::variantRecord(uint64_t keyHash, const std::string &nam
     return nullptr;
 }
 
+uint64_t Pack::fastState(uint64_t fast) const
+{
+    const PackFastKey *k = section<PackFastKey>(PackFastKeys);
+    const PackFastKey *end = k + bytes(PackFastKeys) / sizeof(PackFastKey);
+    const PackFastKey *at = std::lower_bound(k, end, fast, [](const PackFastKey &a, uint64_t f) {
+        return a.fast < f;
+    });
+    return at != end && at->fast == fast ? section<PackPipeline>(PackPipelines)[at->first].keyHash : 0;
+}
+
 // mkpack.py writes the kernels in keyHash order
 const PackKernel *Pack::findKernel(uint64_t keyHash) const
 {

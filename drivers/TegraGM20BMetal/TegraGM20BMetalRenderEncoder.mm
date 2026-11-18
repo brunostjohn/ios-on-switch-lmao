@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "TegraGM20BMetalInternal.h"
+#import "TegraGM20BMetalStatesKey.h"
 
 #include "ca_catch_all.h"
 #include "sample_shading.h"
@@ -256,7 +257,7 @@ static void forwardCall(SwitchMetalEncoder *e, SEL selector, const void *argumen
         }
     }
     if (_turn && pl.turnRefused) {
-        gm20bTurnRefused(_cb, pl.rec->keyHash, _turn, _pipe->_key.c_str());
+        gm20bTurnRefused(_cb, pl.rec->keyHash, _turn, gm20bStateKey(_pipe).c_str());
         return NO;
     }
     uint32_t sampleMasks[4];

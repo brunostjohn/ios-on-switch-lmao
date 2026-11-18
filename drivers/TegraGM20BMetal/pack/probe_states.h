@@ -109,6 +109,7 @@ inline bool linkedFunction(MTLRenderPipelineDescriptor *d, id<MTLLibrary> own, c
 
 struct State {
     std::string key, label;
+    uint64_t fast = 0;  // its fast key (TegraGM20BMetalPipelineKey.h fastKey), of its key less any variant name
     MTLRenderPipelineDescriptor *d;
     id<MTLLibrary> library = nil;  // the library its functions are made from
     std::string framework;         // that library's framework (parseState), "" for QuartzCore's and a bundle's
@@ -258,8 +259,10 @@ inline bool parseState(id<MTLLibrary> qc, const std::string &line, State &s, con
             return refuse("its segment \"" + segment.substr(0, 80) + "\" makes nothing");
         at = next;
     }
-    s.key = gm20b::pipelineKey(d, &vertex, d.fragmentFunction ? &fragment : nullptr, linked, framework) +
+    const gm20b::PipelineFields fields = gm20b::fieldsOf(d);
+    s.key = gm20b::pipelineKey(fields, &vertex, d.fragmentFunction ? &fragment : nullptr, linked, framework) +
             (s.cubic.empty() ? std::string() : s.cubic.key());
+    s.fast = gm20b::fastKey(fields, &vertex, d.fragmentFunction ? &fragment : nullptr, linked, framework);
     s.d = d;
     return true;
 }

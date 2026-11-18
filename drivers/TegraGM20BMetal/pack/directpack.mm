@@ -28,6 +28,8 @@
 // (runtime/pack.h PackComputeFacts: three u32).
 // And per state the corpus names, once: "DRFL", u32 0 for a render state (under its key less any variant name) or 1 for a
 // compute state (under a kernel key of it), the key, and its reflection (runtime/reflection_blob.h: u32 length, bytes).
+// And per corpus line that makes a render state: "DFKY", u32 16, its fast key (TegraGM20BMetalPipelineKey.h fastKey) and
+// the keyHash its records are under (record.h packKeyHash of its key less any variant name), each a u64.
 // A corpus line that makes no state is a refused DREC, and a D line that makes no kernel a refused DKRN, keyed by the line.
 // PROBE_DATA_LIBS names the directory of the corpus's data: libraries.
 #import <Foundation/Foundation.h>
@@ -352,6 +354,9 @@ int main(int argc, char **argv)
                 textures.cubic = s.cubic;
                 makeState(direct, w, qc, line, textures, s, counts);
                 const std::string state = s.key.substr(0, gm20b::variantNameAt(s.key));
+                const uint64_t keys[2] = {s.fast, gm20b::packKeyHash(state)};
+                fwrite("DFKY", 1, 4, w.f);
+                w.bytes(keys, sizeof keys);
                 if (reflected.insert(state).second) {
                     std::string blob, why;
                     const bool made = offline::renderReflection(s.d, blob, why);

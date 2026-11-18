@@ -97,11 +97,21 @@ def load_records(path: str) -> tuple[list[dict], list[dict], dict[tuple[bool, in
     A reflection is a state's: a render state's under its key's hash, a compute state's under its computeStateKey's
     (a kernel key's part before its dispatch shape, as kernels.state_facts names it).
     """
+    return read_records(path)[:3]
+
+
+def read_records(
+    path: str,
+) -> tuple[list[dict], list[dict], dict[tuple[bool, int], bytes], list[tuple[int, int]]]:
+    """Give load_records' and each corpus line's fast key with its state's key hash (DFKY)."""
     with open(path, 'rb') as f:
         r = Reader(f.read())
-    states, kernel_recs, reflections = [], [], {}
+    states, kernel_recs, reflections, fast = [], [], {}, []
     while not r.done():
         tag = r.take(4)
+        if tag == b'DFKY':
+            fast.append(struct.unpack('<QQ', r.blob()))
+            continue
         if tag == b'DRFL':
             compute, key, blob = bool(r.u32()), r.blob().decode(), r.blob()
             state = key.split(' | tg=', 1)[0] if compute else key
@@ -138,7 +148,23 @@ def load_records(path: str) -> tuple[list[dict], list[dict], dict[tuple[bool, in
             rec['extras'], rec['restore'] = (list(zip(*[iter(words_of(r.blob()))] * 2, strict=True)) for _ in range(2))
             rec['far'] = words_of(r.blob())
         states.append(rec)
-    return states, kernel_recs, reflections
+    return states, kernel_recs, reflections, fast
+
+
+def fast_keys(lines: list[tuple[int, int]]) -> dict[int, int]:
+    """Give each fast key the corpus lines made (directpack.mm DFKY: fast key, key hash) its state's key hash.
+
+    A fast key of two states, or a state of two fast keys, is refused: the fast key has to name what the key's text
+    names (TegraGM20BMetalPipelineKey.h fastKey), no more and no less.
+    """
+    by_fast: dict[int, int] = {}
+    by_state: dict[int, int] = {}
+    for fast, state in lines:
+        if by_fast.setdefault(fast, state) != state:
+            raise ValueError(f'fast key {fast:016x} names states {by_fast[fast]:016x} and {state:016x}')
+        if by_state.setdefault(state, fast) != fast:
+            raise ValueError(f'state {state:016x} has fast keys {by_state[state]:016x} and {fast:016x}')
+    return by_fast
 
 
 def stage_programs(rec: dict) -> list[dict]:
@@ -545,10 +571,12 @@ def main() -> None:
     declared, kinds = archives.declared(inventory)
     held = archives.held_kernels([k['key'] for k in computes])
     report.append(archives.report(declared, kinds, held))
-    reflections = {}
+    reflections, lines = {}, []
     for d in buckets:
-        for state, blob in load_records(os.path.join(d, 'records.bin'))[2].items():
+        _, _, found, fast = read_records(os.path.join(d, 'records.bin'))
+        for state, blob in found.items():
             reflections.setdefault(state, blob)
+        lines += fast
     report.append(
         f'{sum(not c for c, _ in reflections)} render and {sum(c for c, _ in reflections)} compute reflections, '
         f'{len(set(reflections.values()))} distinct'
@@ -566,6 +594,7 @@ def main() -> None:
         iterated,
         compute_facts,
         reflections,
+        fast_keys(lines),
     )
     data, blob = packfile.pack_bytes(pack)
     os.makedirs(out_dir, exist_ok=True)

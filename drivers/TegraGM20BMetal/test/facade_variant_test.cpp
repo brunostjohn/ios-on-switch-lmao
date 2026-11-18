@@ -3,6 +3,7 @@
 // packed state's test class the pack lacks asked as any other form, the test classes of a state this process made made
 // with it, and a pass switching among its states finding each variant again without the state's map
 #include "facade_variant_compiler.h"
+#include "../TegraGM20BMetalStatesKey.h"
 #include "../fragment_tests.h"
 #include "bazel/testing/fresh_process.h"
 
@@ -123,7 +124,7 @@ void failedVariant()
             EXPECT_EQ(variant, first) << "the failed variant stays the state's";
         }
     }
-    const std::string key = pipeline->_key + compiler.captured()[0].variant.name();
+    const std::string key = gm20bStateKey(pipeline) + compiler.captured()[0].variant.name();
     const uint64_t line =
         switch_refusal_key_with(SWITCH_REFUSAL_KEY("gm20b", "state.variant"), gm20b::Pack::fnv(key.data(), key.size()));
     EXPECT_FALSE(switch_refusal_first(line)) << "no refusal line for " << key;
@@ -176,7 +177,7 @@ void unservedVariant()
             EXPECT_EQ(variant, first) << "the state keeps the one variant plans name";
         }
     }
-    const std::string key = pipeline->_key + pipeline->_variants.begin()->first;
+    const std::string key = gm20bStateKey(pipeline) + pipeline->_variants.begin()->first;
     const uint64_t line =
         switch_refusal_key_with(SWITCH_REFUSAL_KEY("gm20b", "state.variant"), gm20b::Pack::fnv(key.data(), key.size()));
     EXPECT_TRUE(switch_refusal_first(line)) << "a refusal line for " << key;

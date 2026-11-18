@@ -4,6 +4,7 @@
 #import "TegraGM20BMetalBinaryArchive.h"
 #import "TegraGM20BMetalReflection.h"
 #import "TegraGM20BMetalStatesCost.h"
+#import "TegraGM20BMetalStatesKey.h"
 #include "ca_catch_all.h"
 
 @implementation SwitchMetalSampler
@@ -141,7 +142,7 @@ gm20b::Completion::Ask gm20bRecordAsk(SwitchMetalPipeline *p, MTLRenderPipelineD
     a.descriptor = d;
     a.resolveDescriptor = true;
     a.facade = d;
-    a.key = p->_key;
+    a.key = gm20bStateKey(p);
     a.caTransform = p->_caTransform;
     a.own = !p->_packable;
     return a;
@@ -209,18 +210,21 @@ SwitchMetalPipeline *gm20bPipelineShell(SwitchMetalDevice *device, MTLRenderPipe
     p->_completable = ownFunctions(d);
     p->_packable = p->_completable && !vf->_framework.empty() && (!ff || vf->_framework == ff->_framework) &&
                    metal_linked_packable(d);
-    if (p->_completable) {
-        p->_key = metal_pipeline_key(d).UTF8String;
-        p->_madeFrom = [d copy];
+    // A state the pack holds is found by its fast key; the text of its key is made only for a state the pack lacks
+    const uint64_t fast = p->_completable ? gm20bKeepKey(p, d, vf, ff) : 0;
+    const uint64_t fastHeld = p->_packable ? gRM->raw->pack().fastState(fast) : 0;
+    uint64_t keyHash = fastHeld;
+    if (!keyHash) {
+        const std::string &key = gm20bStateKey(p);
+        keyHash = gm20b::Pack::fnv(key.data(), key.size());
     }
-    const uint64_t keyHash = gm20b::Pack::fnv(p->_key.data(), p->_key.size());
     uint64_t packKey = keyHash;
     gm20b::CacheKey own;
     bool lookedUp = p->_packable;
     if (p->_packable) {
         p->_caTransform =
             vf->_framework == "QuartzCore" && [vf.name hasPrefix:@"fixed_vert_"] && [vf.name hasSuffix:@"_spc"];
-    } else if (p->_completable && gm20b::renderCacheKey(d, p->_key, true, 0, own, gm20bFunctionSource)) {
+    } else if (p->_completable && gm20b::renderCacheKey(d, gm20bStateKey(p), true, 0, own, gm20bFunctionSource)) {
         packKey = gm20b::Pack::fnv(own.key.data(), own.key.size());  // another library's: under its functions' AIR too
         lookedUp = true;
     }
@@ -235,6 +239,11 @@ SwitchMetalPipeline *gm20bPipelineShell(SwitchMetalDevice *device, MTLRenderPipe
         markProbes(p->_raw, d.label);
 #endif
         p->_packed = p->_raw && gRM->raw->packHolds(*p->_raw);
+        if (p->_packed && !fastHeld)
+            os_log_error(gm20bLog(),
+                         "SwitchMetal: pack state %016llx found by its key's text and not by its fast key %016llx: "
+                         "the pack's fast keys are not the runtime's",
+                         (unsigned long long)keyHash, (unsigned long long)fast);
         if (p->_packed) {
             SWITCH_METAL_CREATION_SPAN(variantTicks);
             packedVariants(p, packKey);

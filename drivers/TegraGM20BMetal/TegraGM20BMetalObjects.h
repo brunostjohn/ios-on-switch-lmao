@@ -32,6 +32,7 @@
 #include "metallib_functions.h"
 #include "render_variant.h"
 #include "obtained.h"
+#include "pipeline_fields.h"
 
 namespace gm20b {
 template <typename T> class ComputeKernelJob;
@@ -96,6 +97,8 @@ inline uint64_t gm20bNewIdentity()
     uint32_t _type;                      // MTLFunctionType from the metallib; 0: none listed (a Core Image extern)
     MTLFunctionOptions _options;
     std::optional<gm20b::AirHash> _air;  // its library function's HASH tag; none where its library lists none
+    uint64_t _stageHash;                 // its part of a state's fast key (TegraGM20BMetalPipelineKey.h stageHash)
+    uint8_t _patchType;                  // its MTLPatchType, its TESS tag's
 }
 @property (nonatomic, copy) NSString *name;
 @end
@@ -245,9 +248,17 @@ enum class SwitchMetalShareable : uint8_t {
     // its alpha to coverage and alpha to one (alpha_control.h), which its key does not hold
     uint32_t _alphaControl;
     std::string _failure;  // why its creation failed (Completion::makeNow), as Metal's would
-    std::string _key;      // its pack key (completable states')
-    uint64_t _packKey;     // the hash the pack finds its records and reflection by (its key's, or its key and AIR's)
-    MTLRenderPipelineDescriptor *_madeFrom;  // completable states': what its cubic variants are made of
+    // Completable states': what its key names (keyFieldsOf), its functions and their linked functions' segments, from which
+    // its pack key's text and a descriptor its variants are made of come at their first ask (gm20bStateKey,
+    // gm20bMadeFrom: TegraGM20BMetalStateKey.h)
+    gm20b::PipelineFields _fields;
+    SwitchMetalFunction *_vertexFunction, *_fragmentFunction;
+    NSArray *_linkedLists[4];  // vertex functions, vertex private functions, fragment's, fragment private
+    std::string _linked;
+    std::once_flag _keyed, _described;
+    std::string _key;
+    MTLRenderPipelineDescriptor *_madeFrom;
+    uint64_t _packKey;  // the hash the pack finds its records and reflection by (its key's, or its key and AIR's)
     gm20b::Mutex _variantLock;
     // every variant asked of it, by name, for its life: plans and encoders name each by address
     std::map<std::string, std::shared_ptr<gm20b::Variant<gm20b::Pipeline>>> _variants;

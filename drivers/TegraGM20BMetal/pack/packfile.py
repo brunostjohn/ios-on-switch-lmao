@@ -24,9 +24,9 @@ MAGIC = b'GM20BPK1'
 # entries past 32 (the count's high byte, the rest of the entries and their bound and memory bits in a far block in the
 # blob section, an argument table's entry past 254), programs' uniform buffers past set-0 byte 496 (a far table in the
 # blob section); 28: the selector section (PackSelectors), a state's shader-side stencil push word (shadow_stencil_word)
-# 31: the selector section gone
-VERSION = 31
-SECTIONS = 15  # runtime/pack.h PackSectionCount
+# 31: the selector section gone; 32: the fast keys section (PackFastKeys)
+VERSION = 32
+SECTIONS = 16  # runtime/pack.h PackSectionCount
 ENTRY_COMPARES = 1  # runtime/pack.h kEntryCompares: a handle's sampler slot the state samples by comparison
 # PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, uniformWords, reserved, alphaSource,
 # alphaDest, name, reservedName, constant[8][3], program[128]
@@ -487,6 +487,8 @@ class Pack:
     compute_facts: list[dict] = field(default_factory=list)  # the PackComputeStates section (kernels.py state_facts)
     # the PackReflections section's blobs (reflection_bytes): by (compute, the state's key hash)
     reflections: dict[tuple[bool, int], bytes] = field(default_factory=dict)
+    # the PackFastKeys section's (fast_key_bytes): each state's fast key, the key hash of its records
+    fast_keys: dict[int, int] = field(default_factory=dict)
 
 
 def pipeline_sections(pipes: list[dict]) -> tuple[bytearray, list[int], bytearray, bytearray]:
@@ -558,6 +560,24 @@ def reflection_bytes(reflections: dict[tuple[bool, int], bytes]) -> bytes:
     return head + bytes(entries) + bytes(blobs)
 
 
+def fast_key_bytes(fast_keys: dict[int, int], pipes: list[dict]) -> bytes:
+    """Give the PackFastKeys section (runtime/pack.h PackFastKey), ascending by fast key.
+
+    Each state's records are one run of the pipelines, which are in key hash order; a fast key whose state has no
+    record is left out.
+    """
+    runs: dict[int, tuple[int, int]] = {}
+    last = -1
+    for at, rec in enumerate(pipes):
+        h = key_hash(rec)
+        if h < last:
+            raise ValueError(f'pipeline {at} ({h:016x}) after {last:016x}: the pipelines are not in key hash order')
+        first, count = runs.get(h, (at, 0))
+        runs[h] = (first, count + 1)
+        last = h
+    return b''.join(struct.pack('<QII', fast, *runs[h]) for fast, h in sorted(fast_keys.items()) if h in runs)
+
+
 def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
     pipe_bin, blob, strings, variant_bin = pipeline_sections(pack.pipes)
     kernel_bin = bytearray()
@@ -607,6 +627,7 @@ def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
         iterated_bytes(pack.iterated),
         compute_facts_bytes(pack.compute_facts),
         reflection_bytes(pack.reflections),
+        fast_key_bytes(pack.fast_keys, pack.pipes),
     ]
     assert len(sections) == SECTIONS
     header_size = 8 + 4 * 4 + 8 * 2 * len(sections) + 16  # the section table, then the stack key and chip facts

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "TegraGM20BMetalInternal.h"
+#import "TegraGM20BMetalStatesKey.h"
 #include "fragment_tests.h"
 #include "render_variant.h"
 #include "shader_test_push.h"
@@ -86,15 +87,15 @@ static gm20b::Variant<gm20b::Pipeline> *renderVariant(SwitchMetalPipeline *p, co
             return at->second.get();
         variant = at->second;
     }
-    const std::string key = p->_key + name;
+    const std::string key = gm20bStateKey(p) + name;
     gm20b::Completion *completion = gRM->completion.get();
     if (!completion) {
         variant->failUnserved();
         return variant.get();
     }
     gm20b::Completion::Ask request;
-    request.descriptor = p->_madeFrom;
-    request.facade = p->_madeFrom;
+    request.descriptor = gm20bMadeFrom(p);
+    request.facade = request.descriptor;
     request.key = key;
     request.caTransform = p->_caTransform;
     request.own = !p->_packable;
