@@ -204,6 +204,11 @@ extern "C" __attribute__((weak)) void tegra_gm20b_frame_take(struct SwitchFrameG
     *out = {};
 }
 
+extern "C" __attribute__((weak)) int tegra_gm20b_gpu_load(uint64_t *, uint64_t *)
+{
+    return -1;
+}
+
 extern "C" __attribute__((weak)) void switch_sched_render_vsync(uint64_t, uint64_t)
 {}
 
@@ -1246,6 +1251,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         uint64_t intervalUs = 0;
         uint32_t periods = 0;
         unsigned cause = kLongCauses;
+        const uint32_t gpuBusy = gpuBusySincePresent();
         frameStall.present(stamp, lastPresent && stamp > lastPresent ? stamp - lastPresent : 0, refreshTicks());
         uint64_t began = 0;
         uint64_t lastDown = 0;
@@ -1279,10 +1285,28 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                     cause = noteLong(periods, mark);
             }
             if (SWITCH_FRAME_TIMELINE && judged.slow)
-                noteSlowFrame(stamp, us, periods, cause, mark);
+                noteSlowFrame(stamp, us, periods, cause, mark, gpuBusy);
         }
         if (frameHists)
             noteInteraction(stamp, intervalUs, periods, cause, began, lastDown);
+    }
+
+    // Debug kernels: the GPU's busy share since the previous present from its PMU counters, in tenths of a percent
+    // (UINT32_MAX: not read). Static: the instance is at the 16 KiB a kalloc_type class may have.
+    static inline uint64_t gpuBusyLast = 0, gpuTotalLast = 0;
+
+    static uint32_t gpuBusySincePresent()
+    {
+        uint64_t busy = 0;
+        uint64_t total = 0;
+        if (tegra_gm20b_gpu_load(&busy, &total) != 0)
+            return UINT32_MAX;
+        const bool first = gpuTotalLast == 0;
+        const uint64_t busySince = busy - gpuBusyLast, totalSince = total - gpuTotalLast;
+        const bool counted = !first && total > gpuTotalLast && busy >= gpuBusyLast && busySince <= totalSince;
+        gpuBusyLast = busy;
+        gpuTotalLast = total;
+        return counted ? static_cast<uint32_t>(busySince * 1000 / totalSince) : UINT32_MAX;
     }
 
     SwitchFrameStall frameStall;
@@ -1375,8 +1399,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     }
 
     // Debug kernels: one "SwitchFrame" line per slow present (SwitchSlowPresent.h interval; tools/frames reads them), its
-    // points in microseconds from the vsync its swap came after (from its submission when none is known).
-    static void noteSlowFrame(uint64_t stamp, uint64_t us, uint32_t frames, unsigned cause, const FrameMark &mark)
+    // points in microseconds from the vsync its swap came after (from its submission when none is known), and the GPU's
+    // busy share since the previous present (gpuBusy, tenths of a percent; UINT32_MAX: not read).
+    static void noteSlowFrame(uint64_t stamp, uint64_t us, uint32_t frames, unsigned cause, const FrameMark &mark,
+                              uint32_t gpuBusy)
     {
         const FrameTimeline &tl = mark.tl;
         const bool fromVsync = (mark.submit != 0u) && tl.vsyncUs != kNotSeen;
@@ -1404,16 +1430,23 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             anchor = "swap";
         }
         char line[640];
-        snprintf(line, sizeof(line),
-                 "latch %llu after %u frames (%llu us), cause %s; origin %s %llu; first submit %lld, last "
-                 "submit %lld (%u, exec %u us), swap %lld, offer %lld, gpu done %lld, flip %lld, latch "
-                 "%lld us; other submits %u; swap thread base %d sched %d mode %d qos %d; cpu %u MHz at vsync %u at "
-                 "swap; imp %u %u us, bind %u %u us, alloc %u %u us, free %u, clean %u KiB %u us",
-                 stamp, frames, us, cause < kLongCauses ? switch_slow_present::kNames[cause] : "?", anchor, origin,
-                 rel(tl.firstUs), rel(tl.lastUs), tl.submits, tl.execUs, at(mark.submit), at(mark.kick), rel(tl.doneUs),
-                 at(mark.ready), at(stamp), tl.others, tl.basePri, tl.schedPri, tl.mode, tl.qos, tl.mhzVsync,
-                 tl.mhzSwap, tl.imports, tl.importUs, tl.binds, tl.bindUs, tl.allocs, tl.allocUs, tl.frees, tl.cleanKiB,
-                 tl.cleanUs);
+        const int written = snprintf(
+            line, sizeof(line),
+            "latch %llu after %u frames (%llu us), cause %s; origin %s %llu; first submit %lld, last "
+            "submit %lld (%u, exec %u us), swap %lld, offer %lld, gpu done %lld, flip %lld, latch "
+            "%lld us; other submits %u; swap thread base %d sched %d mode %d qos %d; cpu %u MHz at vsync %u at "
+            "swap; imp %u %u us, bind %u %u us, alloc %u %u us, free %u, clean %u KiB %u us",
+            stamp, frames, us, cause < kLongCauses ? switch_slow_present::kNames[cause] : "?", anchor, origin,
+            rel(tl.firstUs), rel(tl.lastUs), tl.submits, tl.execUs, at(mark.submit), at(mark.kick), rel(tl.doneUs),
+            at(mark.ready), at(stamp), tl.others, tl.basePri, tl.schedPri, tl.mode, tl.qos, tl.mhzVsync, tl.mhzSwap,
+            tl.imports, tl.importUs, tl.binds, tl.bindUs, tl.allocs, tl.allocUs, tl.frees, tl.cleanKiB, tl.cleanUs);
+        size_t used = written > 0 ? static_cast<size_t>(written) : 0;
+        if (used >= sizeof(line))
+            used = sizeof(line) - 1;
+        if (gpuBusy == UINT32_MAX)
+            snprintf(line + used, sizeof(line) - used, "; gpu busy -");
+        else
+            snprintf(line + used, sizeof(line) - used, "; gpu busy %u.%u%%", gpuBusy / 10, gpuBusy % 10);
         os_log(OS_LOG_DEFAULT, "SwitchFrame: %s", line);  // one string: os_log drops a record whose scalars outgrow it
     }
 
