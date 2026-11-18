@@ -185,6 +185,9 @@ bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_
     }
     bo.cpu = reinterpret_cast<uint8_t *>(uintptr_t(addr));
     bo.mapped = size;
+    bo.control = control;
+    if (control)
+        controlMapped_.fetch_add(size, std::memory_order_relaxed);
     bo.va = bo.vaBase = at ? at : allocVa(bytes, align);
     bo.vaReserved = at != 0;
     if (!bo.va) {
@@ -418,6 +421,8 @@ void Kernel::free(Bo &bo)
     }
     if (bo.allocated)
         allocated_.fetch_sub(bo.bytes, std::memory_order_relaxed);
+    if (bo.control)
+        controlMapped_.fetch_sub(bo.mapped, std::memory_order_relaxed);
     if (bo.vaBase && !bo.vaReserved)
         freeVa(bo.vaBase, bo.bytes);
     bo = {};

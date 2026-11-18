@@ -755,16 +755,16 @@ uint64_t Device::heapInPlaceBytes()
     return bytes;
 }
 
+// The kernel's count of the control memory mapped, which the threads that make it keep (the submit worker grows the rings
+// under the channel's lock, not lock_), less the write-combined chunks, which are control memory named apart
 uint64_t Device::controlMappedBytes()
 {
+    const uint64_t control = k_.controlMappedBytes();
     std::lock_guard<gm20b::Mutex> l(lock_);
-    uint64_t bytes = 0;
-    for (const Bo *bo : {&tic_, &tsc_, &root_, &zero_, &tickets_, &colorTable_, &srgbEncode_, &stamps_, &handleTables_,
-                         &argumentRoots_, &push_.bo, &upload_.bo})
-        bytes += bo->mapped;
-    for (const Bo &bo : heapSets_)
-        bytes += bo.mapped;
-    return bytes;
+    uint64_t wc = 0;
+    for (const Chunk &ch : wcChunks_)
+        wc += ch.bo.mapped;
+    return control > wc ? control - wc : 0;
 }
 
 uint64_t Device::wcChunkBytesHeld()

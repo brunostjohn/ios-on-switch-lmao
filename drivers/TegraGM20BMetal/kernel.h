@@ -36,6 +36,7 @@ struct Bo {
     bool vaReserved =
         false;  // bound inside a reservation (bindImportAt): the VA is the reservation's, not freed with it
     bool allocated = false;  // a BoAlloc's (Kernel::allocatedBytes counts it), not an import
+    bool control = false;    // from the control reserve (Kernel::controlMappedBytes counts its mapping)
 };
 
 // The offset into `bo` of the CPU bytes [cpu, cpu + bytes): bo.cpu is the CPU address of bo.va, which lies bo.va - bo.vaBase
@@ -327,6 +328,12 @@ public:
         return allocated_.load(std::memory_order_relaxed);
     }
 
+    // The CPU mappings of the connection's control memory (allocControl) it holds
+    uint64_t controlMappedBytes() const
+    {
+        return controlMapped_.load(std::memory_order_relaxed);
+    }
+
 private:
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     std::atomic<uint64_t> jobs_{0}, released_{0};
@@ -363,6 +370,9 @@ private:
     std::shared_ptr<SharedEvents> events_;
     std::atomic<uint64_t> vaUsed_{0};
     std::atomic<uint64_t> allocated_{0};
+    // Kept by the threads that make and free control memory (the open, the submit worker's rings), read by the debug
+    // give-back line on another: a count of their own, as allocated_ is, not their BOs' fields
+    std::atomic<uint64_t> controlMapped_{0};
     std::string err_;
     mutable gm20b::Mutex errorLock_;
 };

@@ -46,6 +46,24 @@ protected:
     }
 };
 
+// The give-back line's control bytes, read on the release's thread before the first commit opens the channel: the submitting
+// thread makes the rings under the channel's lock, and nothing orders the read before it (a relaxed flag)
+TEST_F(DeviceSubmitted, TheGiveBackLinesControlBytesNeedNotTheRingsOwner)
+{
+    std::atomic<bool> read{false};
+    uint32_t seqno = 0;
+    std::thread submitter([&] {
+        while (!read.load(std::memory_order_relaxed)) {
+        }
+        seqno = copy();
+    });
+    const uint64_t before = dev.controlMappedBytes();
+    read.store(true, std::memory_order_relaxed);
+    submitter.join();
+    EXPECT_NE(seqno, 0u);
+    EXPECT_GT(dev.controlMappedBytes(), before) << "the rings, made with the channel, are counted";
+}
+
 TEST_F(DeviceSubmitted, TheMemoryReleasesPurgeReadsWhatTheSubmitterLastSubmitted)
 {
     ASSERT_NE(copy(), 0u);
