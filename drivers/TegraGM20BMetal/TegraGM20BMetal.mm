@@ -332,17 +332,24 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
         os_log(gm20bLog(), "SwitchMetal: shader heap %llu KB, each program placed at its state's first use",
                (unsigned long long)(dev->heapBytes() >> 10));
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    {  // the stall line's timer (gm20bStallTick): its own, so nothing the render server's other threads hold delays it; another
-        // process's rides the wakeups it takes anyway
+    {  // the stall line's timer (gm20bStallTick): one a process, on a serial queue of its own, which alone runs the tick
+        // and so owns its state. Nothing the render server's other threads hold delays it; another process's rides the
+        // wakeups it takes anyway. On a global queue a source's ticks are kept apart only inside libdispatch, where
+        // ThreadSanitizer cannot see it.
         static dispatch_source_t stall;
-        stall =
-            dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
-        dispatch_source_set_timer(stall, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC,
-                                  renderServer ? NSEC_PER_SEC / 4 : 5 * NSEC_PER_SEC);
-        dispatch_source_set_event_handler(stall, ^{
-            gm20bStallTick();
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            dispatch_queue_t ticks = dispatch_queue_create(
+                "com.brunostjohn.switch.gm20b.stall",
+                dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
+            stall = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, ticks);
+            dispatch_source_set_timer(stall, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC), 5 * NSEC_PER_SEC,
+                                      renderServer ? NSEC_PER_SEC / 4 : 5 * NSEC_PER_SEC);
+            dispatch_source_set_event_handler(stall, ^{
+                gm20bStallTick();
+            });
+            dispatch_resume(stall);
         });
-        dispatch_resume(stall);
     }
     watchFetchBarrierWay(dev);
     watchKeylineProbe();

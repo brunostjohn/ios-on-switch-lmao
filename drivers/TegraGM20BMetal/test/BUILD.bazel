@@ -5003,8 +5003,7 @@ facade_test(
         "scale_frames.h",
     ],
     copts = ["-fsanitize=thread"],
-    data = ["model_gpu.supp"],
-    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0:suppressions=$(rootpath model_gpu.supp)"},
+    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
     linkopts = ["-fsanitize=thread"],
     plugin = "_tsan",
 )
@@ -5097,8 +5096,7 @@ facade_test(
         "scale_frames.h",
     ],
     copts = ["-fsanitize=thread"],
-    data = ["model_gpu.supp"],
-    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0:suppressions=$(rootpath model_gpu.supp)"},
+    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
     linkopts = ["-fsanitize=thread"],
     plugin = "_tsan",
 )
@@ -5121,8 +5119,7 @@ facade_test(
         "scale_frames.h",
     ],
     copts = ["-fsanitize=thread"],
-    data = ["model_gpu.supp"],
-    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0:suppressions=$(rootpath model_gpu.supp)"},
+    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
     linkopts = ["-fsanitize=thread"],
     plugin = "_tsan",
 )
@@ -5166,8 +5163,7 @@ facade_test(
         "stall_watchdog.h",
     ],
     copts = tsan,
-    data = ["model_gpu.supp"],
-    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0:suppressions=$(rootpath model_gpu.supp)"},
+    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
     linkopts = tsan,
     plugin = plugin,
 ) for suffix, plugin, tsan in [
@@ -6454,8 +6450,7 @@ host_test(
         "-fsanitize=thread",
     ] + METAL_HOST_COPTS,
     cxx_std = "c++17",
-    data = ["model_gpu.supp"],
-    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0:suppressions=$(rootpath model_gpu.supp)"},
+    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
     linkopts = [
         "-framework",
         "Foundation",
