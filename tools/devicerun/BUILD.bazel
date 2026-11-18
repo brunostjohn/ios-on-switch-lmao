@@ -10,6 +10,7 @@ py_library(
     srcs = [
         "apps.py",
         "audio.py",
+        "battery.py",
         "checks.py",
         "cpu.py",
         "cut.py",
@@ -82,6 +83,14 @@ py_test(
     name = "audio_test",
     size = "small",
     srcs = ["audio_test.py"],
+    deps = [":lib"],
+)
+
+# battery.py's checks over boot 2's dasd and powerd lines.
+py_test(
+    name = "battery_test",
+    size = "small",
+    srcs = ["battery_test.py"],
     deps = [":lib"],
 )
 

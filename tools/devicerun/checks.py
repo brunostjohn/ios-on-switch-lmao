@@ -6,6 +6,7 @@
 
 from tools.devicerun.apps import APPS
 from tools.devicerun.audio import AUDIO
+from tools.devicerun.battery import BATTERY
 from tools.devicerun.cpu import CPU
 from tools.devicerun.cut import CUT
 from tools.devicerun.dispatch import DISPATCH
@@ -1326,6 +1327,7 @@ GROUPS: dict[str, list[Check]] = {
         ),
     ],
     'audio': AUDIO,
+    'battery': BATTERY,
     'm2v-cut': CUT,
     'textures': TEXTURES,
     'dispatch': DISPATCH,
