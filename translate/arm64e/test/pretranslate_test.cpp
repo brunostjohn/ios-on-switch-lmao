@@ -309,6 +309,33 @@ TEST(Pretranslate, TheVerifierCatchesABlOverAnX30Operand)
     EXPECT_LT(a64x_pt_verify(&m, x.out.data(), &v, x.err, sizeof(x.err)), 0) << "the BL overwrites the w30 it adds";
 }
 
+// typical()'s LDADDAL (a shared stub) and CASAL (its own) are acquire+release: each stub holds one DMB ISH, and
+// removing either one is refused even though the slice is signed again.
+TEST(Pretranslate, TheVerifierRefusesAnAcquireReleaseStubWithoutItsBarrier)
+{
+    Result x;
+    run(typical(), x);
+    ASSERT_EQ(x.r.status, A64X_PT_TRANSLATED) << x.r.why;
+    ASSERT_EQ(x.verified, 2) << x.err;
+    std::vector<uint64_t> barriers;
+    for (uint64_t at = kTextOff; at < kSeg; at += 4) {
+        if (get32(x.out.data() + at) == 0xD5033BBFu)
+            barriers.push_back(at);
+    }
+    ASSERT_EQ(barriers.size(), 2u);
+    uint64_t so, ss;
+    ASSERT_EQ(a64x_cs_find(x.out.data(), x.out.size(), &so, &ss), 0);
+    for (uint64_t at : barriers) {
+        put32(x.out, at, 0xD503201Fu);
+        uint8_t h[A64X_CDHASH_SIZE];
+        ASSERT_EQ(a64x_cs_rehash(x.out.data(), x.out.size(), so, ss, h, x.err, sizeof(x.err)), 0) << x.err;
+        a64x_pt_check v;
+        EXPECT_LT(a64x_pt_verify(&x.m, x.out.data(), &v, x.err, sizeof(x.err)), 0) << std::hex << at;
+        EXPECT_NE(strstr(x.err, "DMB ISH"), nullptr) << x.err;
+        put32(x.out, at, 0xD5033BBFu);
+    }
+}
+
 TEST(Pretranslate, TheSignatureNoLongerChecksAfterAByteChanges)
 {
     Result x;
@@ -337,7 +364,7 @@ TEST(Pretranslate, NoRoomLeavesTheSliceForTheLoader)
 }
 
 // No tail, only 3-word holes: a CASAL with x30 live needs its own stub, longer than any hole, so it is split.
-TEST(Pretranslate, AStubLongerThanEveryHoleIsSplitOverSeveral)
+Spec split_casal()
 {
     Spec s;
     s.code.assign((kSeg - kTextOff) / 4, kAdd);
@@ -348,8 +375,13 @@ TEST(Pretranslate, AStubLongerThanEveryHoleIsSplitOverSeveral)
     for (uint32_t f = 2; f + 5 <= s.code.size(); f += 5)
         memcpy(&s.code[f], lr_check, sizeof(lr_check));
     s.code.back() = kRet;
+    return s;
+}
+
+TEST(Pretranslate, AStubLongerThanEveryHoleIsSplitOverSeveral)
+{
     Result x;
-    run(s, x);
+    run(split_casal(), x);
     ASSERT_EQ(x.r.status, A64X_PT_TRANSLATED) << x.r.why;
     EXPECT_EQ(x.verified, 1) << x.err;
     EXPECT_EQ(x.r.tail_words, 0u);
@@ -366,6 +398,31 @@ TEST(Pretranslate, AStubLongerThanEveryHoleIsSplitOverSeveral)
         holes++;
     }
     EXPECT_GT(holes, 1u) << "the stub spans several holes";
+}
+
+TEST(Pretranslate, TheVerifierRefusesASplitAcquireReleaseStubWithoutItsBarrier)
+{
+    Result x;
+    run(split_casal(), x);
+    ASSERT_EQ(x.r.status, A64X_PT_TRANSLATED) << x.r.why;
+    ASSERT_EQ(x.verified, 1) << x.err;
+    uint64_t barrier = 0;
+    int barriers = 0;
+    for (uint64_t at = kTextOff; at < kSeg; at += 4) {
+        if (get32(x.out.data() + at) == 0xD5033BBFu) {
+            barrier = at;
+            barriers++;
+        }
+    }
+    ASSERT_EQ(barriers, 1);
+    put32(x.out, barrier, 0xD503201Fu);
+    uint8_t h[A64X_CDHASH_SIZE];
+    uint64_t so, ss;
+    ASSERT_EQ(a64x_cs_find(x.out.data(), x.out.size(), &so, &ss), 0);
+    ASSERT_EQ(a64x_cs_rehash(x.out.data(), x.out.size(), so, ss, h, x.err, sizeof(x.err)), 0) << x.err;
+    a64x_pt_check v;
+    EXPECT_LT(a64x_pt_verify(&x.m, x.out.data(), &v, x.err, sizeof(x.err)), 0);
+    EXPECT_NE(strstr(x.err, "DMB ISH"), nullptr) << x.err;
 }
 
 // A tail-call LR check shared with an unsigned early return (libsystem_trace's _logDestructor in iOS 27): the CBZ enters

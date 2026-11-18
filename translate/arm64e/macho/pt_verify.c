@@ -1,4 +1,5 @@
 #include "pretranslate.h"
+#include "stub_split.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -143,6 +144,15 @@ static bool follow(const struct vctx *c, uint64_t site, uint32_t w)
     return true;
 }
 
+static bool stub_word(const void *ctx, uint64_t off, uint32_t *w)
+{
+    const struct vctx *c = ctx;
+    if (!freed_at(c, off))
+        return false;
+    *w = rd32(c->out + off);
+    return true;
+}
+
 static bool stub_site(enum a64x_class c, uint32_t w)
 {
     uint32_t one;
@@ -180,6 +190,9 @@ static int check_words(struct vctx *c, bool no_pac, struct a64x_pt_check *v, cha
             return fail(err, errlen, "site at 0x%llx: its BL overwrites the x30 that %08x uses",
                         (unsigned long long)off, was);
         } else if (stub_site(cw, was) && follow(c, off, now)) {
+            if (!a64x_stub_ordered(was, off, now, stub_word, c))
+                return fail(err, errlen, "site at 0x%llx: the stub of %08x has no DMB ISH after its store-exclusive",
+                            (unsigned long long)off, was);
             v->sites++;
         } else {
             return fail(err, errlen, "word at 0x%llx: %08x became %08x", (unsigned long long)off, was, now);
