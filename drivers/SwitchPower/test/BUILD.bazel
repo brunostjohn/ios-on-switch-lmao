@@ -8,6 +8,8 @@
 #                                    measurements, unit conversions, SOC_THERM fuse calibration against L4T's, CLTM
 #   switch_thermal_tcal_test         the PMU tcal answer against thermalmonitord's correction and J181's skin model
 #   switch_sensors_hid_source_test   the HID descriptor and IOHIDFamily vtable slots the sensors are published through
+#   switch_irq_sources_test          SwitchIrqSources.h: the power stats' interrupt sources, each INTID's SPIs in the
+#                                    window, the busiest first, and their line
 #   switch_emc_governor_test         SwitchEMCGovernor.h: the EMC rates used, ACTMON's watermarks and the governor's moves
 #   switch_soctherm_window_test      SwitchSocThermWindow.h: SOC_THERM's one-degree LVL0 window and the groups' registers
 #   switch_soctherm_throttle_test    SwitchSocThermThrottle.h: L4T's T210B01 hardware throttle on a model of SOC_THERM,
@@ -157,6 +159,14 @@ host_test(
     srcs = [
         "switch_monotonic_base_test.cpp",
         "//drivers/SwitchPower:SwitchMonotonicBase.h",
+    ],
+)
+
+host_test(
+    name = "switch_irq_sources_test",
+    srcs = [
+        "switch_irq_sources_test.cpp",
+        "//drivers/SwitchPower:SwitchIrqSources.h",
     ],
 )
 
