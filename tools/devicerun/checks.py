@@ -797,18 +797,21 @@ GROUPS: dict[str, list[Check]] = {
         Check(
             'boot.pack-covers-os',
             'cold-boot',
-            ('a state the pack lacks made in', 'a compute state the pack lacks answered by the shader compiler'),
+            ('SwitchMetal: harvest ', 'a compute state the pack lacks answered by the shader compiler'),
             process='!SwitchHWTest',
             subsystem=GPU_METAL_SUBSYSTEM,
             regex=(
-                r'^SwitchMetal: a (?P<kind>compute state|state) the pack lacks (?:made|answered) '
-                r'.*?by the shader compiler'
+                r'^SwitchMetal: (?:harvest [0-9a-f]{16} 1/\d+ label='
+                r'(?:com\.apple\.coreanimation\.(?P<ca>\S+)|(?P<label>\S+))'
+                r'|a (?P<kind>compute state) the pack lacks answered by the shader compiler)'
             ),
-            show=('process', 'kind'),
+            show=('process', 'ca', 'label', 'kind'),
             source='drivers/TegraGM20BMetal/TegraGM20BMetalCompleteRemote.mm (debug builds)',
-            note='an OS process waited for a compile of a state the pack lacks; `logharvest --check` on the pull names '
-            'them and `logharvest` adds them to the corpus; boot 1 (22 Nov), before its boot logo: 3 states (shadowed '
-            'variants, 30 to 61 s each; the last held the logo) and 45 compute states',
+            note='an OS process made a state the pack lacks: each render state by its harvest line (compiled, from '
+            "the shader compiler's store or refused), named by its Core Animation spec (ca) or other label, and each "
+            'compute state the shader compiler answered; `logharvest --check` on the pull names them and `logharvest` '
+            'adds them to the corpus; boot 1 (22 Nov), before its boot logo: 3 states (shadowed variants, 30 to 61 s '
+            'each; the last held the logo) and 45 compute states',
         ),
         Check(
             'compiler.ui-waiter-served-below-ui',

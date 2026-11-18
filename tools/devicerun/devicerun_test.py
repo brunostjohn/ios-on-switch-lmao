@@ -368,6 +368,43 @@ class Rules(unittest.TestCase):
         self.assertEqual(got['gm20b.failed'].verdict, FAIL)
         self.assertIn('SpringBoard/none/1', got['gm20b.failed'].observed)
 
+    def test_an_os_state_the_pack_lacks_fails_the_boot_by_its_label(self):
+        covers = [c for c in checks.GROUPS['boot'] if c.name == 'boot.pack-covers-os']
+
+        def record(process: str, message: str) -> dict:
+            return {
+                'timestamp': '2026-11-23 10:00:01.000000+0000',
+                'bootUUID': 'B00T',
+                'processImagePath': '/usr/libexec/' + process,
+                'subsystem': checks.GPU_METAL_SUBSYSTEM,
+                'category': '',
+                'messageType': 'Default',
+                'eventMessage': message,
+            }
+
+        key = 'c0=80 | v fixed_vert_lph_spc | f fixed_frag_lph_cph | l QuartzCore'
+        stored = [
+            record(
+                'backboardd',
+                "SwitchMetal: a state the pack lacks made in 3 ms (UI, from the shader compiler's store; queue -1 us) "
+                f'after 0 ms for a compile slot: 3ef3a99e4f382ce1 {key}',
+            ),
+            record(
+                'backboardd',
+                'SwitchMetal: harvest 3ef3a99e4f382ce1 1/1 '
+                f'label=com.apple.coreanimation.PBGRAXmw_TimgA3Xhf_IxrgN3Oc3mtc4nlnlnl {key}',
+            ),
+        ]
+        hwtest = record(
+            'SwitchHWTest', f'SwitchMetal: harvest 0123456789abcdef 1/1 label=com.apple.coreanimation.x {key}'
+        )
+        results, _ = devicerun.run_checks([hwtest], covers)
+        self.assertEqual(results[0].verdict, PASS)
+        results, _ = devicerun.run_checks([*stored, hwtest], covers)
+        self.assertEqual(results[0].verdict, FAIL)
+        self.assertEqual(len(results[0].matches), 1)
+        self.assertIn('backboardd/PBGRAXmw_TimgA3Xhf_IxrgN3Oc3mtc4nlnlnl', results[0].observed)
+
     def test_kills_in_a_kill_tests_window_are_that_tests(self):
         judged = [c for c in checks.GROUPS['refusals'] if c.name in {'gm20b.failed', 'gm20b.killed'}]
         windows = [c for c in checks.GROUPS['hwtest'] if c.name == 'hwtest.kill-windows']
