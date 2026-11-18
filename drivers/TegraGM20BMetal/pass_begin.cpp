@@ -283,15 +283,19 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
     ZcullAsk zask;
     zask.on = dev_->zcullOn_ && e.rasterSamples_ <= e.samples_;
 #if SWITCH_METAL_DIAGNOSTICS
-    zask.on |= dev_->zcullOn_ && e.samples_ == 1 && e.rasterSamples_ == 4 &&
-               dev_->probeZcullMixed.load(std::memory_order_relaxed);
+    e.tirProbe_ = e.samples_ == 1 && e.rasterSamples_ == 4 ? dev_->probeTir.load(std::memory_order_relaxed) : 0;
+    zask.on |= dev_->zcullOn_ && (e.tirProbe_ & kTirProbeZcull);
 #endif
     zask.depth = zeta && !pass.separate.stencil && zetaHasDepth(zeta->format);
     zask.cleared = pass.depthStencil.clearDepth && !std::isnan(pass.depthStencil.depth);
     zask.layers = layers;
     zask.zetaLayers = zeta ? std::max(zeta->layers, 1u) : 1;
     zask.atStorageBase = zeta && (!zeta->storage.va || zeta->va == zeta->storage.va);
-    const Rect zcullArea = e.planeArea();
+    Rect zcullArea = e.planeArea();
+#if SWITCH_METAL_DIAGNOSTICS
+    if (e.tirProbe_ & kTirProbeSampleGrid)
+        zcullArea = {zcullArea.x0 * 2, zcullArea.y0 * 2, zcullArea.x1 * 2, zcullArea.y1 * 2};
+#endif
     const bool zcullKeep =
         zeta && e.pass_.depthStencil.texture == zeta && pass.depthStencil.stored && pass.depthStencil.loadedLater;
     zcullBegin(e.zcull_, zask, dev_->zcullInfo_, zcullArea.x0, zcullArea.y0, zcullArea.x1 - zcullArea.x0,

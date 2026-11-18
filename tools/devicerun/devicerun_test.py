@@ -360,6 +360,46 @@ class Rules(unittest.TestCase):
         self.assertEqual(refused['gpu.vic-read-refused'], FAIL)
         self.assertEqual(verdicts('SwitchDisplay: V_PULSE2 never reached the CPU')['display.vblank-phase-gone'], FAIL)
 
+    def test_a_probe_row_runs_kills_are_its_killed_rows_class_errors(self):
+        runs = {c.name: c for c in hwtest.HWTEST}
+        lines = {c.name: c for c in checks.GROUPS['gpu']}
+
+        def record(second: int, path: str, subsystem: str, message: str) -> dict:
+            return {
+                'timestamp': f'2026-11-23 09:00:{second:02d}.000000-0800',
+                'bootUUID': 'B00T',
+                'processImagePath': path,
+                'subsystem': subsystem,
+                'category': 'results',
+                'messageType': 'Default',
+                'eventMessage': message,
+            }
+
+        def kill(second: int, code: str, method: str, data: str) -> dict:
+            return record(
+                second,
+                '/System/Library/Kernels/kernel.development',
+                '',
+                f'tegra-gm20b: GPU error in SwitchHWTest (channel 18): channel killed, GPU running: gr: DATA_ERROR '
+                f'{code} [] ch 18 [00f11f4000 SwitchHWTest] subc 0 class b197 mthd {method} data {data} | fifo:0',
+            )
+
+        def run(second: int, killed: int) -> dict:
+            return record(
+                second,
+                '/Applications/SwitchHWTest.app/SwitchHWTest',
+                hwtest.SUBSYSTEM,
+                f'HWTEST gpu.gm20b.mixed_end_rows PASS row_end_mode=killed killed={killed} ms=4000.0',
+            )
+
+        log = [kill(1, '00000004', '0fb8', '00000000'), kill(2, '00000127', '0d78', '00000004'), run(3, 2)]
+        check = [runs[hwtest.TIR_ROWS_RUNS], lines['gpu.tir-rows-errors']]
+        got = {r.check.name: r for r in devicerun.run_checks(log, check)[0]}
+        self.assertEqual(got['gpu.tir-rows-errors'].verdict, PASS)
+        self.assertEqual([m['code'] for m in got['gpu.tir-rows-errors'].matches], ['00000004', '00000127'])
+        got = {r.check.name: r for r in devicerun.run_checks(log[1:], check)[0]}
+        self.assertEqual(got['gpu.tir-rows-errors'].verdict, FAIL)
+
     def test_decode_lines_are_counted_per_run_against_each_runs_want(self):
         runs = {c.name: c for c in hwtest.HWTEST}
         lines = {c.name: c for c in checks.GROUPS['refusals']}

@@ -160,8 +160,14 @@ void RenderEncoder::end()
         p_.m(GLOBAL_BASE_VERTEX_INDEX, 0);
         p_.m(VERTEX_ID_BASE, 0);
     }
-    if (rasterSamples_ > samples_)
-        tirOff(p_);
+    if (rasterSamples_ > samples_) {
+#if SWITCH_METAL_DIAGNOSTICS
+        if (tirProbe_)
+            tirOffProbed(p_, tirProbe_);
+        else
+#endif
+            tirOff(p_);
+    }
     if (std::max(samples_, rasterSamples_) > 1)
         sampleWords(p_, 1, d.root_.va);
     // the 3D engine's work outside the pass (the blit encoder's draws) meets no iterated blend and the pass's
@@ -301,7 +307,11 @@ void RenderEncoder::end()
     zetaTargetWords(p, zs.texture, layers);
     // ahead of the depth clear, which sets the region, or the load of a stored one; over the plane the pass renders (a
     // turned drawable's own axes, zcullBegin)
-    if (zcull_.candidate) {
+    bool zcullAfterTir = false;
+#if SWITCH_METAL_DIAGNOSTICS
+    zcullAfterTir = zcull_.candidate && (tirProbe_ & kTirProbeZcullAfter);
+#endif
+    const auto zcullWords = [&] {
         uint32_t criterion = 0;
 #if SWITCH_METAL_DIAGNOSTICS
         if (const uint32_t c = d.probeZcullCriterion.load(std::memory_order_relaxed))
@@ -312,9 +322,11 @@ void RenderEncoder::end()
         if (zcull_.load)
             p.m(kLoadZcull, 0);
         SWITCH_METAL_DIAGNOSTIC(d.stats.zcullPasses++; d.stats.zcullLoads += zcull_.load);
-    } else if (d.zcullOn_) {
+    };
+    if (zcull_.candidate && !zcullAfterTir)
+        zcullWords();
+    else if (!zcull_.candidate && d.zcullOn_)
         zcullOffWords(p);
-    }
     // the backing's layers past a shorter zeta's own, which no copy fills, hold what an M4 Max tests there
     // (m2v-pass-forms/probe/layerprobe.mm): a loaded depth above 1.0 (a float zeta's 2.0) or Depth16Unorm's 1.0, a loaded
     // stencil 0xff; a DontCare aspect its clear value, as Apple's DontCare depth and stencil test against
@@ -363,6 +375,12 @@ void RenderEncoder::end()
             clearZeta(p, planeArea(), zsBits, 0, layers);
         zsBits = 0;
         tirOn(p, rasterSamples_);
+#if SWITCH_METAL_DIAGNOSTICS
+        if (tirProbe_ & kTirProbeModeOff)
+            p.m(NVB197_SET_TIR, NVB197_SET_TIR_MODE_DISABLED);
+#endif
+        if (zcullAfterTir)
+            zcullWords();
     }
     if (zsBits)
         clearZeta(p, planeArea(), zsBits, 0, layers);

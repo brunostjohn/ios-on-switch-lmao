@@ -132,9 +132,10 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
     return nil;
 }
 
-- (NSString *)switchMetalProbeZcullMixed:(NSNumber *)on
+// `row`: a mixed pass's probe row (mixed_samples.h kTirProbeZcull .. TirEnd), 0 off
+- (NSString *)switchMetalProbeTir:(NSNumber *)row
 {
-    gRM->raw->probeZcullMixed.store(on.boolValue, std::memory_order_release);
+    gRM->raw->probeTir.store(row.unsignedIntValue, std::memory_order_release);
     return nil;
 }
 

@@ -39,6 +39,8 @@ DECODE_READBACK_RUNS = 'hwtest.decode-readback-runs'
 DECODE_VIEWS_RUNS = 'hwtest.decode-views-runs'
 # Each full run, its suite line's time less its ms= (the run's span across relaunches) to the line
 RUN_WINDOWS = 'hwtest.run-windows'
+# The runs of the mixed-pass probe rows (apps/hwtest/tests/TirRowsTests.swift), each with how many rows the class killed
+TIR_ROWS_RUNS = 'hwtest.tir-rows-runs'
 
 CODECS = ('h264', 'hevc', 'hevc_main10', 'vp9')
 SIZES = ('720p', '1080p', '4k')
@@ -353,6 +355,7 @@ TESTS: dict[str, bool] = {
             'gpu.gm20b.zeta_resolve_parts',
             'gpu.gm20b.ycbcr_norender_usage',
             'gpu.gm20b.mixed_samples',
+            'gpu.gm20b.mixed_end_rows',
             'gpu.gm20b.same_bits',
             'gpu.gm20b.depth16_layered_tests',
             'gpu.gm20b.layers_past',
@@ -884,6 +887,20 @@ HWTEST = [
         show=('view', 'form'),
         source=SOURCE,
         note='each run of gpu.decode.views and the gm20b:tex.view and gm20b:tex.decoded_form lines it must log',
+    ),
+    Check(
+        TIR_ROWS_RUNS,
+        OWNER,
+        LITERAL,
+        REPORT,
+        subsystem=SUBSYSTEM,
+        regex=(
+            r'^HWTEST gpu\.gm20b\.(?P<test>zc_mixed|mixed_end_rows) (?:PASS|FAIL) .*\bkilled=(?P<killed>\d+)\b'
+            r'.* ms=(?P<ms>[\d.]+)(?: why=|$)'
+        ),
+        show=('test', 'killed'),
+        source='apps/hwtest/tests/TirRowsTests.swift',
+        note="each run of a mixed pass's probe rows and how many of its rows the class killed (row_<name>=killed)",
     ),
     Check(
         HARNESS,

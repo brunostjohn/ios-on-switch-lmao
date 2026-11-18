@@ -17,6 +17,7 @@ from tools.devicerun.hwtest import (
     KILL_WINDOWS,
     READBACK_RUNS,
     RUN_WINDOWS,
+    TIR_ROWS_RUNS,
     TRANSFER_FAILED_RUNS,
 )
 from tools.devicerun.joycon import JOYCON
@@ -330,6 +331,22 @@ GROUPS: dict[str, list[Check]] = {
             show=('owner',),
             source='drivers/TegraGM20B/gpu_hang.c tgm_chan_killed',
             note='client channels the kernel killed: a fault, the hang rule, or destroyed with its work still running',
+        ),
+        Check(
+            'gpu.tir-rows-errors',
+            'boot2-correctness',
+            'channel killed, GPU running: gr: DATA_ERROR ',
+            process=KERNEL,
+            regex=(
+                r'tegra-gm20b: GPU error in SwitchHWTest\w* \(channel \d+\): channel killed, GPU running: gr: '
+                r'DATA_ERROR (?P<code>[0-9a-f]{8}) .*? mthd (?P<method>[0-9a-f]+) data (?P<data>[0-9a-f]+)'
+            ),
+            show=('code', 'method', 'data'),
+            per=TIR_ROWS_RUNS,
+            per_count='killed',
+            source='drivers/TegraGM20B/gpu_hang.c tgm_chan_killed',
+            note="the class error of each mixed-pass probe row the class killed, in the rows' order (a run's "
+            'row_<name>=killed fields; tools/benchloop/gr_class_errors.txt names the code): one kill a killed row',
         ),
         Check(
             'gpu.promise-given-up',
