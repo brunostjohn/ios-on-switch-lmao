@@ -193,6 +193,9 @@ uint32_t tgm_relayout_checkpoint(uint32_t *w, uint64_t address)
 	P_NVB06F_MEM_OP_D(&p, {.operation = OPERATION_L2_FLUSH_DIRTY});
 	P_MTHD(&p, NVB06F, FB_FLUSH);
 	P_NVB06F_FB_FLUSH(&p, 0);
+	P_MTHD(&p, NVB06F, MEM_OP_C);
+	P_NVB06F_MEM_OP_C(&p, {0});
+	P_NVB06F_MEM_OP_D(&p, {.operation = OPERATION_L2_SYSMEM_INVALIDATE});
 	P_MTHD(&p, NVB06F, SEMAPHOREA);
 	P_NVB06F_SEMAPHOREA(&p, (uint32_t)(address >> 32));
 	P_NVB06F_SEMAPHOREB(&p, (uint32_t)address >> 2);
