@@ -50,10 +50,12 @@ PATHS = {
                     re.compile(r'AppleUserUSBHostHIDDevice-0x[0-9a-f]+::start\(IOUSBHostInterface-0x[0-9a-f]+\) ok'),
                 ),
                 (
+                    'event driver opened',
+                    re.compile(r'AppleUserUSBHostHIDDevice:0x[0-9a-f]+ open by AppleUserHIDEventDriver:0x[0-9a-f]+'),
+                ),
+                (
                     'event driver started',
-                    re.compile(
-                        r'AppleUserHIDEventDriver-0x[0-9a-f]+::start\(AppleUserUSBHostHIDDevice-0x[0-9a-f]+\) ok'
-                    ),
+                    re.compile(r'AppleUserHIDEventDriver-0x[0-9a-f]+::start\(IOHIDInterface-0x[0-9a-f]+\) ok'),
                 ),
             ),
         ),

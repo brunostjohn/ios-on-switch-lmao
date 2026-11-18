@@ -93,14 +93,20 @@ class Judge(unittest.TestCase):
         self.assertIsNone(hidcheck.first(lines[1:], path.steps[0][1]))
         self.assertIsNone(hidcheck.first(self.LOG, path.steps[-1][1]))
 
-    def test_17_native_owner_requires_both_successful_driver_starts(self):
+    def test_17_native_owner_opens_the_keyboard_and_starts_on_its_hid_interface(self):
         with tempfile.TemporaryDirectory() as d:
             run, monitor = Path(d), Mock()
             watch = hidcheck.Typing('ios17', base=1, phase='hid')
-            logs = [*self.LOG[:2], 'DK: AppleUserUSBHostHIDDevice-0x579::start(IOUSBHostInterface-0x578) ok']
+            logs = [
+                *self.LOG[:2],
+                'DK: AppleUserUSBHostHIDDevice-0x10000030a::start(IOUSBHostInterface-0x1000002fb) ok',
+            ]
             self.assertFalse(watch.step(logs, monitor, run))
             monitor.command.assert_not_called()
-            logs.append('DK: AppleUserHIDEventDriver-0x581::start(AppleUserUSBHostHIDDevice-0x579) ok')
+            logs.append('AppleUserUSBHostHIDDevice:0x10000030a open by AppleUserHIDEventDriver:0x10000036d (0x0)')
+            self.assertFalse(watch.step(logs, monitor, run))
+            monitor.command.assert_not_called()
+            logs.append('DK: AppleUserHIDEventDriver-0x10000036d::start(IOHIDInterface-0x10000036c) ok')
             self.assertFalse(watch.step(logs, monitor, run))
             self.assertIs(watch.owner, hidcheck.PATHS['ios17'][1])
             self.assertEqual(monitor.command.call_count, 1)
