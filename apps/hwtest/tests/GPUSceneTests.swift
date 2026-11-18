@@ -88,6 +88,11 @@ public struct GPUSceneTest: HWTest {
         guard let goldens = Self.goldens else { return ["scene_goldens.txt is not in the app's bundle"] }
         var reasons: [String] = []
         for picture in pictures {
+            if let line = goldens.malformed(scene: scene.id, picture: picture.golden) {
+                metrics.set("golden_" + picture.label, GoldenVerdict.malformed.rawValue)
+                reasons.append("\(picture.label): its golden line names no signature: \(line.prefix(80))")
+                continue
+            }
             let golden = goldens.golden(scene: scene.id, picture: picture.golden)
             if let golden, let blank = picture.blank,
                GoldenVerdict.of(blank, against: golden, metalFormat: picture.metalFormat).holds

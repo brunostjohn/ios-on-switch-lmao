@@ -8,7 +8,8 @@ import Metal
 /// apps/hwtest/goldens). exact= drew the Mac's bytes; close= every 8x8 block's mean within a few steps of the Mac's
 /// (another GPU's filtering and rounding); wrong= anything else. A state whose command buffer left the driver failed
 /// (failed=, its path in states.txt); one the reference lacks is counted apart (no_golden=: run
-/// //apps/hwtest:ca_goldens after a harvest). The wrong states' PNGs and every verdict land in
+/// //apps/hwtest:ca_goldens after a harvest), and one whose reference line names no signature fails
+/// (malformed_golden=). The wrong states' PNGs and every verdict land in
 /// Documents/gpu/gpu.ca.sweep/. HWTEST_SWEEP_ALL=1 in the app's environment draws every corpus state.
 public struct CAStateSweepTest: HWTest {
     public let id = "gpu.ca.sweep"
@@ -49,7 +50,7 @@ public struct CAStateSweepTest: HWTest {
         try? Data(listing.utf8).place(at: directory.appendingPathComponent("states.txt"))
         var metrics = Metrics()
         metrics.set("states", states.count)
-        for key in ["exact", "close", "wrong", "no_golden", "skipped", "failed"] {
+        for key in ["exact", "close", "wrong", "no_golden", "malformed_golden", "skipped", "failed"] {
             metrics.set(key, counts[key] ?? 0)
         }
         metrics.set("golden_states", goldens.states.count)
@@ -57,10 +58,12 @@ public struct CAStateSweepTest: HWTest {
         let checked = (counts["exact"] ?? 0) + (counts["close"] ?? 0) + (counts["wrong"] ?? 0)
         let proof = raw.proof + " reference: " + goldens.header
         if checked == 0 { return .fail("no state was drawn by the driver against a reference", metrics) }
-        if !wrongStates.isEmpty || counts["failed", default: 0] > 0 {
+        let malformed = counts["malformed_golden", default: 0]
+        if !wrongStates.isEmpty || counts["failed", default: 0] > 0 || malformed > 0 {
             let failed = counts["failed", default: 0]
             return .fail(
-                "\(wrongStates.count) states drew other pixels than the Mac's, \(failed) failed", metrics, proof: proof
+                "\(wrongStates.count) states drew other pixels than the Mac's, \(failed) failed, \(malformed) golden "
+                    + "lines name no signature", metrics, proof: proof
             )
         }
         return .pass(metrics, proof: proof)
@@ -82,6 +85,7 @@ public struct CAStateSweepTest: HWTest {
             {
                 return "wrong: the blit wrote past plane 0 of c\(color.index)"
             }
+            if goldens.malformed[CAStateSweep.key(line)] != nil { return "malformed_golden" }
             guard let golden = goldens.states[CAStateSweep.key(line)] else { return "no_golden" }
             var verdict = Verdict.exact
             for (color, bytes) in zip(line.colors.sorted(by: { $0.index < $1.index }), drawn.attachments) {
@@ -92,6 +96,7 @@ public struct CAStateSweepTest: HWTest {
                 case .exact: continue
                 case .close: verdict = .close
                 case .missing: return "no_golden"
+                case .malformed: return "malformed_golden"
                 case .wrong:
                     save(line, color: color, bytes: bytes, directory: directory)
                     return Verdict.wrong.rawValue

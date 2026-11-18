@@ -2,8 +2,8 @@ import Foundation
 import HWTestCore
 import XCTest
 
-/// The Mac golden files as the device reads them (CAGoldens): a line it cannot read is skipped there, and its scene or
-/// state then reports no golden at all, so every line must name at least one attachment's signature.
+/// The Mac golden files as the device reads them (CAGoldens): none has a line that names no signature, which the
+/// device would report as its picture's or state's golden malformed.
 final class GoldenFilesTests: XCTestCase {
     func testEveryGoldenLineGivesItsKeyASignature() throws {
         let environment = ProcessInfo.processInfo.environment
@@ -12,11 +12,7 @@ final class GoldenFilesTests: XCTestCase {
         XCTAssertEqual(paths.count, 4)
         for path in paths {
             let text = try String(contentsOf: URL(fileURLWithPath: root + path), encoding: .utf8)
-            for line in text.split(separator: "\n") where !line.hasPrefix("#") {
-                let key = String(line.prefix { $0 != " " })
-                let read = CAGoldens(String(line)).states[key] ?? [:]
-                XCTAssertFalse(read.isEmpty, "\(path): \(line.prefix(80))")
-            }
+            XCTAssertEqual(CAGoldens(text).malformed, [:], String(path))
         }
     }
 }

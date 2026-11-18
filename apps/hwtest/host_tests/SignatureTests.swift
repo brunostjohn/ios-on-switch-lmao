@@ -77,5 +77,19 @@ final class SignatureTests: XCTestCase {
         XCTAssertEqual(goldens.header, "QuartzCore 24B119 on Apple M4 Max")
         XCTAssertEqual(goldens.states.count, 1)
         XCTAssertEqual(try XCTUnwrap(goldens.states["c00c"]?[1]).hash, signature.hash)
+        XCTAssertEqual(goldens.malformed, ["bad": "bad line"])
+    }
+
+    /// A golden line whose label and signature lost the space between them (boot 2's gpu.gm20b.cubic_sampler) is its
+    /// own outcome naming the line, not a picture without a golden
+    func testALineNamingNoSignatureIsMalformedNotMissing() throws {
+        let signature = Signature(bytes: bgra(), metalFormat: 80, width: 16, height: 8)
+        let line = SceneGoldens.line(scene: "gpu.x", picture: "p", metalFormat: 80, signature)
+        let joined = line.replacingOccurrences(of: "f80 c0=", with: "f80c0=")
+        let goldens = SceneGoldens(joined + "\n")
+        XCTAssertNil(goldens.golden(scene: "gpu.x", picture: "p"))
+        XCTAssertEqual(goldens.malformed(scene: "gpu.x", picture: "p"), joined)
+        XCTAssertNotNil(SceneGoldens(line + "\n").golden(scene: "gpu.x", picture: "p"))
+        XCTAssertNil(SceneGoldens(line + "\n").malformed(scene: "gpu.x", picture: "p"))
     }
 }
