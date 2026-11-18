@@ -578,6 +578,76 @@ class Rules(unittest.TestCase):
         self.assertEqual(got['wifi.dhcp-bound'].verdict, NO_DATA)
 
 
+class Widgets(unittest.TestCase):
+    """The display-query, window-server and widget-watchdog checks over boot 2's (22 Nov) lines."""
+
+    @staticmethod
+    def judge(name: str, log: list[dict]) -> rules.Result:
+        results, _ = devicerun.run_checks(log, [c for c in checks.GROUPS['boot'] if c.name == name])
+        return results[0]
+
+    @staticmethod
+    def record(path: str, subsystem: str, message: str) -> dict:
+        return {
+            'timestamp': '2026-11-22 23:51:55.850000+0000',
+            'bootUUID': '3349B3E8',
+            'processImagePath': path,
+            'subsystem': subsystem,
+            'category': '',
+            'messageType': 'Error',
+            'eventMessage': message,
+        }
+
+    def test_a_refused_display_query_fails_the_boot_in_any_process(self):
+        refused = 'CoreAnimation: Unable to query displays from server (-81182718)'
+        chronod = self.record('/System/Library/PrivateFrameworks/ChronoCore.framework/Support/chronod', '', refused)
+        contextstored = self.record('/usr/libexec/contextstored', 'com.apple.coreanimation', refused)
+        self.assertEqual(self.judge('boot.display-query-refused', []).verdict, PASS)
+        result = self.judge('boot.display-query-refused', [chronod, contextstored])
+        self.assertEqual(result.verdict, FAIL)
+        self.assertIn('chronod x1', result.observed)
+        self.assertIn('contextstored x1', result.observed)
+
+    def test_the_window_server_is_ready_inside_a_display_querys_five_seconds(self):
+        def ready(seconds: str) -> dict:
+            return self.record(
+                '/usr/libexec/backboardd',
+                'com.apple.BackBoard',
+                f'      window server ready in {seconds}s. overall 35.0843s',
+            )
+
+        self.assertEqual(self.judge('boot.window-server-ready', []).verdict, NO_DATA)
+        self.assertEqual(self.judge('boot.window-server-ready', [ready('0.4127')]).verdict, PASS)
+        result = self.judge('boot.window-server-ready', [ready('0.4127'), ready('21.7462')])
+        self.assertEqual(result.verdict, FAIL)
+        self.assertIn('max(s) 21.75', result.observed)
+
+    def test_a_widget_session_the_watchdog_ends_fails_once_per_kill(self):
+        chronod = '/System/Library/PrivateFrameworks/ChronoCore.framework/Support/chronod'
+        error = (
+            'Error Domain=CHSErrorDomain Code=1001 "Watchdog provision violated for getTimelines(1)" '
+            'UserInfo={NSDebugDescription=Watchdog provision violated for getTimelines(1)}'
+        )
+        killed = [
+            self.record(
+                chronod,
+                'com.apple.chrono',
+                f'[Music.MusicWidgets-23375BEB9354] Session operation: `getTimelines(1)` error result: {error}',
+            ),
+            self.record(
+                chronod,
+                'com.apple.chrono',
+                '[com.apple.Music::com.apple.Music.MusicWidgets:Music.RecentlyPlayedWidget:systemMedium::305.50/'
+                f'141.00/23.97:(null)~(null)] on local reload: failed with error {error}',
+            ),
+        ]
+        self.assertEqual(self.judge('widgets.timeline-watchdog', []).verdict, PASS)
+        result = self.judge('widgets.timeline-watchdog', killed)
+        self.assertEqual(result.verdict, FAIL)
+        self.assertEqual(len(result.matches), 1)
+        self.assertIn('Music.MusicWidgets x1', result.observed)
+
+
 class UsbHost(unittest.TestCase):
     """The host-mode checks over boot-1109-2145's lines (a keyboard plugged twice) and a boot that enumerates."""
 

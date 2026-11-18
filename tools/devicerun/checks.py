@@ -830,6 +830,38 @@ GROUPS: dict[str, list[Check]] = {
             'user-initiated at most, and only a synchronous waiter pushing the worker (a turnstile, as a sync XPC '
             "message pushes Apple's MTLCompilerService) lifts it; boot 1: 36",
         ),
+        Check(
+            'boot.display-query-refused',
+            'widgets',
+            'CoreAnimation: Unable to query displays from server',
+            show=('process',),
+            source='QuartzCore 24B119 query_displays (0x1843d6e84): its line before abort(), kept in every build',
+            note="backboardd answers another process's display query 0xfb294002 until its window server is set up, "
+            'and QuartzCore aborts a client still refused after 5 s; boot 2 (22 Nov): chronod; saved reports 8-18 '
+            'Nov: chronod, contextstored, replicatord, callservicesd. A crash-report count misses an abort with none',
+        ),
+        Check(
+            'boot.window-server-ready',
+            'widgets',
+            'window server ready in ',
+            'max(s) < 5',
+            process='backboardd',
+            regex=r'window server ready in (?P<s>[\d.]+)s',
+            source="backboardd's own startup line (com.apple.BackBoard:Common)",
+            note="QuartzCore's client budget for a display query (query_displays: 5 s); necessary, not sufficient, "
+            'since a client can ask before the window server starts; boot 2: 21.7462 s',
+        ),
+        Check(
+            'widgets.timeline-watchdog',
+            'widgets',
+            'Watchdog provision violated for getTimelines',
+            process='chronod',
+            regex=r'\[(?P<session>[\w.]+)-[0-9A-F]{12}\] Session operation: `getTimelines\(\d+\)` error result',
+            show=('session',),
+            source="chronod's session log (com.apple.chrono:session), boot 2",
+            note='a widget extension that did not return its timeline within its session budget (measured: 30 s an '
+            'entry at Default QoS, 45 s at Utility) is killed; boot 2: 6 (Music, Stocks, News, Maps, Weather x2)',
+        ),
     ],
     'refusals': [
         Check(
