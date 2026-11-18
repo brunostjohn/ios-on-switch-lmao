@@ -88,10 +88,10 @@ interrupter target Apple wrote (traced into `qemu-guest.log`).
 
 `--until typing` boots the kind's install image to SpringBoard, then plugs a keyboard into the port over QMP
 (`device_add usb-kbd`, the BM92T36's `partner` to sink), waits for the kind's HID path, types `h` and `i` with
-`send-key`, and exits 6 unless the keyboard's interrupt IN reports carry both keys in order. iOS 17 types through the
-kernel driver (IOUSBHostHIDDevice opened by IOHIDEventDriver), iOS 27 through the HID dext (driverkitd launches
-AppleUserHIDDrivers). The reports are the device's side of the exchange. iOS 17 reaches SpringBoard in about 6
-minutes of wall time. QMP's `input-send-event` with `device=` aborts this QEMU (its console lookup reads a property a
+`send-key`, and checks each key's interrupt IN report before sending the next. On iOS 17 the log identifies either
+IOUSBHostHIDDevice opened by IOHIDEventDriver or the USB HID and event services started by DriverKit. On iOS 27
+the gate requires the AppleUserHIDDrivers launch and open. Set `--timeout` for the host's load. QMP's
+`input-send-event` with `device=` aborts this QEMU (its console lookup reads a property a
 text console lacks); `send-key` reaches the hot-plugged keyboard, the machine's only keyboard handler.
 
 `--cache-log` (patch 0056) writes `cache.bin`: every data-cache maintenance instruction with the line it resolved to

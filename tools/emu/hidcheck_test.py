@@ -50,7 +50,7 @@ class Judge(unittest.TestCase):
     def judge(self, reports: list[bytes]) -> tuple[list[str], list[str]]:
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / hidcheck.PCAP).write_bytes(pcap(reports))
-            return hidcheck.Typing('ios17', base=1, sent=2).judge(self.LOG, Path(d))
+            return hidcheck.Typing('ios17', base=1, sent=2, owner=hidcheck.PATHS['ios17'][0]).judge(self.LOG, Path(d))
 
     def test_the_keys_sent_reported_in_order_pass(self):
         problems, notes = self.judge([report(0x0B), report(), report(0x0C), report()])
@@ -79,10 +79,12 @@ class Judge(unittest.TestCase):
             self.assertEqual(monitor.command.call_count, 2)
 
     def test_the_dext_path_needs_each_of_its_steps(self):
-        path = hidcheck.PATHS['ios27']
+        (path,) = hidcheck.PATHS['ios27']
         lines = [
-            'DK: AppleUserUSBHostHIDDevice-0x10000047d waiting for server '
-            'com.apple.driverkit.AppleUserHIDDrivers-100000474',
+            (
+                'DK: AppleUserUSBHostHIDDevice-0x10000047d waiting for server '
+                'com.apple.driverkit.AppleUserHIDDrivers-100000474'
+            ),
             'DK: AppleUserUSBHostHIDDevice-0x10000047d server launched, validating',
             'DK: AppleUserUSBHostHIDDevice-0x10000047d::start(IOUSBHostInterface-0x10000047c) ok',
             'AppleUserUSBHostHIDDevice:0x10000047d open by AppleUserHIDEventDriver:0x10000048a (0x0)',
@@ -90,6 +92,18 @@ class Judge(unittest.TestCase):
         self.assertTrue(all(hidcheck.first(lines, pattern) for _, pattern in path.steps))
         self.assertIsNone(hidcheck.first(lines[1:], path.steps[0][1]))
         self.assertIsNone(hidcheck.first(self.LOG, path.steps[-1][1]))
+
+    def test_17_native_owner_requires_both_successful_driver_starts(self):
+        with tempfile.TemporaryDirectory() as d:
+            run, monitor = Path(d), Mock()
+            watch = hidcheck.Typing('ios17', base=1, phase='hid')
+            logs = [*self.LOG[:2], 'DK: AppleUserUSBHostHIDDevice-0x579::start(IOUSBHostInterface-0x578) ok']
+            self.assertFalse(watch.step(logs, monitor, run))
+            monitor.command.assert_not_called()
+            logs.append('DK: AppleUserHIDEventDriver-0x581::start(AppleUserUSBHostHIDDevice-0x579) ok')
+            self.assertFalse(watch.step(logs, monitor, run))
+            self.assertIs(watch.owner, hidcheck.PATHS['ios17'][1])
+            self.assertEqual(monitor.command.call_count, 1)
 
 
 if __name__ == '__main__':

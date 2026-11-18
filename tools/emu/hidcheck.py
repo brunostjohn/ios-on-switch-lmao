@@ -5,7 +5,7 @@ over QMP and the BM92T36's partner turns sink, as a cable plugged in; once the k
 `send-key` (the keyboard is the machine's only keyboard handler). It passes when Apple's stack enumerated the keyboard,
 the HID path's steps all came, and the interrupt IN reports in the keyboard's pcap carry every key sent, in order.
 
-iOS 17 takes the kernel driver: IOUSBHostHIDDevice starts and IOHIDEventDriver opens it. iOS 27 takes the HID dext:
+iOS 17 can bind the kernel HID pair or the native USB HID and event dext services. iOS 27 takes the HID dext:
 the kernel asks driverkitd for AppleUserHIDDrivers ("DK: ... waiting for server"), the server launches, the dext's
 service starts and the event driver opens it. The pcap is the device's side: it shows the reports going out to a host
 that polled for them.
@@ -34,24 +34,45 @@ class HidPath:
 
 
 PATHS = {
-    'ios17': HidPath(
-        'kernel driver (IOUSBHostHIDDevice, IOHIDEventDriver)',
-        (
-            ('started', re.compile(r'IOUSBHostHIDDevice:0x[0-9a-f]+ start\b')),
-            ('opened', re.compile(r'IOUSBHostHIDDevice:0x[0-9a-f]+ open by IOHIDEventDriver')),
+    'ios17': (
+        HidPath(
+            'kernel driver (IOUSBHostHIDDevice, IOHIDEventDriver)',
+            (
+                ('started', re.compile(r'IOUSBHostHIDDevice:0x[0-9a-f]+ start\b')),
+                ('opened', re.compile(r'IOUSBHostHIDDevice:0x[0-9a-f]+ open by IOHIDEventDriver')),
+            ),
+        ),
+        HidPath(
+            'HID dext (AppleUserUSBHostHIDDevice, AppleUserHIDEventDriver)',
+            (
+                (
+                    'USB HID started',
+                    re.compile(r'AppleUserUSBHostHIDDevice-0x[0-9a-f]+::start\(IOUSBHostInterface-0x[0-9a-f]+\) ok'),
+                ),
+                (
+                    'event driver started',
+                    re.compile(
+                        r'AppleUserHIDEventDriver-0x[0-9a-f]+::start\(AppleUserUSBHostHIDDevice-0x[0-9a-f]+\) ok'
+                    ),
+                ),
+            ),
         ),
     ),
-    'ios27': HidPath(
-        'HID dext (AppleUserHIDDrivers)',
-        (
+    'ios27': (
+        HidPath(
+            'HID dext (AppleUserHIDDrivers)',
             (
-                'requested',
-                re.compile(r'AppleUserUSBHostHIDDevice-0x[0-9a-f]+ waiting for server '
-                           r'com\.apple\.driverkit\.AppleUserHIDDrivers-'),
+                (
+                    'requested',
+                    re.compile(
+                        r'AppleUserUSBHostHIDDevice-0x[0-9a-f]+ waiting for server '
+                        r'com\.apple\.driverkit\.AppleUserHIDDrivers-'
+                    ),
+                ),
+                ('launched', re.compile(r'AppleUserUSBHostHIDDevice-0x[0-9a-f]+ server launched, validating')),
+                ('started', re.compile(r'AppleUserUSBHostHIDDevice-0x[0-9a-f]+::start\(.*\) ok')),
+                ('opened', re.compile(r'AppleUserUSBHostHIDDevice:0x[0-9a-f]+ open by AppleUserHIDEventDriver:')),
             ),
-            ('launched', re.compile(r'AppleUserUSBHostHIDDevice-0x[0-9a-f]+ server launched, validating')),
-            ('started', re.compile(r'AppleUserUSBHostHIDDevice-0x[0-9a-f]+::start\(.*\) ok')),
-            ('opened', re.compile(r'AppleUserUSBHostHIDDevice:0x[0-9a-f]+ open by AppleUserHIDEventDriver:')),
         ),
     ),
 }
@@ -81,6 +102,7 @@ class Typing:
     phase: str = 'boot'
     base: int = 0
     sent: int = 0
+    owner: HidPath | None = None
     marks: list[str] = field(default_factory=list)
 
     def step(self, log: Sequence[str], monitor: Monitor, run: Path) -> bool:
@@ -90,14 +112,15 @@ class Typing:
             self.base, self.phase = len(log), 'hid'
             self.marks.append(f'SpringBoard: {first(log, SPRINGBOARD)[:120]}')
         elif self.phase == 'hid':
-            path = PATHS[self.kind]
-            if all(first(log, pattern, self.base) for _, pattern in path.steps):
-                self.phase = 'typing'
+            for path in PATHS[self.kind]:
+                if all(first(log, pattern, self.base) for _, pattern in path.steps):
+                    self.owner, self.phase = path, 'typing'
+                    break
         if self.phase != 'typing':
             return False
         reported = keys_in(run / PCAP)
-        expected = [USAGES[key] for key in KEYS[:self.sent]]
-        if reported != expected[:len(reported)]:
+        expected = [USAGES[key] for key in KEYS[: self.sent]]
+        if reported != expected[: len(reported)]:
             return True
         if len(reported) < self.sent:
             return False
@@ -114,16 +137,16 @@ class Typing:
 
     def judge(self, log: Sequence[str], run: Path) -> tuple[list[str], list[str]]:
         """Return (problems, notes) for the finished run."""
-        path = PATHS[self.kind]
-        notes = [*self.marks, f'path: {path.name}']
+        notes = [*self.marks, f'path: {self.owner.name if self.owner else "no USB class owner observed"}']
         problems = []
         enumerated = first(log, ENUMERATED, self.base)
         if not enumerated:
             problems.append('the hot-plugged keyboard never enumerated')
-        for name, pattern in path.steps:
-            line = first(log, pattern, self.base)
-            notes.append(f'{name}: {line[:140] if line else "none"}')
-        sent = [USAGES[key] for key in KEYS[:self.sent]]
+        for path in (self.owner,) if self.owner else PATHS[self.kind]:
+            for name, pattern in path.steps:
+                line = first(log, pattern, self.base)
+                notes.append(f'{name}: {line[:140] if line else "none"}')
+        sent = [USAGES[key] for key in KEYS[: self.sent]]
         got = keys_in(run / PCAP)
         notes.append(f'keys sent {[hex(u) for u in sent]}, reported {[hex(u) for u in got]}')
         if len(sent) != len(KEYS) or got != sent:
