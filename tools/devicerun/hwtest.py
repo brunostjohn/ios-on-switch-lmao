@@ -610,6 +610,7 @@ TESTS: dict[str, bool] = {
     'cpu.single': False,
     'cpu.multi': False,
     'a64x.self': False,
+    'cpu.atomics': False,
     'crypto.cryptokit': False,
     'crypto.commoncrypto': False,
     'crypto.keychain': False,

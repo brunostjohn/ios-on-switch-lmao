@@ -593,6 +593,43 @@ cc_library(
     target_compatible_with = ["@platforms//os:ios"],
 )
 
+swift_interop_hint(
+    name = "atomics_module",
+    module_name = "SwitchAtomics",
+)
+
+# cpu.atomics' forms and harness, compiled like a64x_probe for each app's deployment target: LSE instructions in the
+# iOS 27 app, the ARMv8.0 sequences of their stubs in the iOS 17 one (atomics/test runs both on the Mac).
+cc_library(
+    name = "atomics",
+    srcs = [
+        "atomics/switch_atomics.c",
+        "atomics/switch_atomics_forms.S",
+        "atomics/switch_atomics_hammer.c",
+        "atomics/switch_atomics_harness.S",
+        "atomics/switch_atomics_internal.h",
+        "atomics/switch_atomics_library.c",
+        "atomics/switch_atomics_list.h",
+        "atomics/switch_atomics_litmus.c",
+    ],
+    hdrs = ["atomics/switch_atomics.h"],
+    aspect_hints = [":atomics_module"],
+    copts = ["-O2"],
+    target_compatible_with = ["@platforms//os:ios"],
+)
+
+exports_files([
+    "atomics/switch_atomics.c",
+    "atomics/switch_atomics_forms.S",
+    "atomics/switch_atomics_hammer.c",
+    "atomics/switch_atomics_harness.S",
+    "atomics/switch_atomics_internal.h",
+    "atomics/switch_atomics_library.c",
+    "atomics/switch_atomics_list.h",
+    "atomics/switch_atomics_litmus.c",
+    "atomics/switch_atomics.h",
+])
+
 # The texture peer's jetsam limits, which //overlay:jetsam_properties merges into iOS 27's overlay in debug
 exports_files(["peer/com.brunostjohn.switch.texpeer.jetsam.plist"])
 
@@ -782,6 +819,7 @@ swift_library(
     target_compatible_with = ["@platforms//os:ios"],
     deps = [
         ":a64x_probe",
+        ":atomics",
         ":bench_api",
         ":compiler_probe_api",
         ":core",
