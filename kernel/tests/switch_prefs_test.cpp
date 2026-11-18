@@ -282,6 +282,101 @@ TEST(SwitchPrefs, NotAPlist)
     EXPECT_EQ(Drop(bytes), SWITCH_PREFS_UNREADABLE);
 }
 
+// The setup's com.apple.purplebuddy as kern_exec.c writes it, and the domain as cfprefsd saves it once the OS has set
+// keys of its own there: ours hold, so the boot leaves the file alone.
+const char kPurpleBuddy[] = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                            "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+                            "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>"
+                            "<key>SetupDone</key><true/><key>SetupFinishedAllSteps</key><true/>"
+                            "<key>SetupVersion</key><integer>11</integer><key>daemonizeNeedsToRun</key><false/>"
+                            "</dict></plist>\n";
+
+bool Holds(const Bytes &plist)
+{
+    return switch_prefs_holds(plist.data(), plist.size(), kPurpleBuddy, sizeof(kPurpleBuddy) - 1);
+}
+
+CFMutableDictionaryRef PurpleBuddy(int version, bool daemonize)
+{
+    CFMutableDictionaryRef dict = NewDict();
+    Set(dict, "SetupDone", kCFBooleanTrue);
+    Set(dict, "SetupFinishedAllSteps", kCFBooleanTrue);
+    Owned<CFNumberRef> number(CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &version));
+    Set(dict, "SetupVersion", number.ref);
+    Set(dict, "daemonizeNeedsToRun", daemonize ? kCFBooleanTrue : kCFBooleanFalse);
+    return dict;
+}
+
+Bytes AsXml(CFPropertyListRef plist)
+{
+    Owned<CFDataRef> data(
+        CFPropertyListCreateData(kCFAllocatorDefault, plist, kCFPropertyListXMLFormat_v1_0, 0, nullptr));
+    const uint8_t *bytes = CFDataGetBytePtr(data.ref);
+    return Bytes(bytes, bytes + CFDataGetLength(data.ref));
+}
+
+TEST(SwitchPrefsHolds, OurOwnFileHolds)
+{
+    EXPECT_TRUE(Holds(Bytes(kPurpleBuddy, kPurpleBuddy + sizeof(kPurpleBuddy) - 1)));
+}
+
+TEST(SwitchPrefsHolds, BinaryWithTheOsKeysBesideOursHolds)
+{
+    Owned<CFMutableDictionaryRef> dict(PurpleBuddy(11, false));
+    Owned<CFStringRef> country(Str("GB"));
+    Set(dict.ref, "GuessedCountry", country.ref);
+    Owned<CFDateRef> date(CFDateCreate(kCFAllocatorDefault, 800000000.0));
+    Set(dict.ref, "SetupLastExit", date.ref);
+    const int big = 70000;
+    Owned<CFNumberRef> number(CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &big));
+    Set(dict.ref, "PBAppActivity", number.ref);
+    EXPECT_TRUE(Holds(Binary(dict.ref)));
+    EXPECT_TRUE(Holds(AsXml(dict.ref)));
+}
+
+TEST(SwitchPrefsHolds, AChangedOrMissingKeyDoesNot)
+{
+    Owned<CFMutableDictionaryRef> older(PurpleBuddy(10, false));
+    EXPECT_FALSE(Holds(Binary(older.ref)));
+    EXPECT_FALSE(Holds(AsXml(older.ref)));
+    Owned<CFMutableDictionaryRef> flipped(PurpleBuddy(11, true));
+    EXPECT_FALSE(Holds(Binary(flipped.ref)));
+    Owned<CFMutableDictionaryRef> missing(PurpleBuddy(11, false));
+    Owned<CFStringRef> key(Str("SetupDone"));
+    CFDictionaryRemoveValue(missing.ref, key.ref);
+    EXPECT_FALSE(Holds(Binary(missing.ref)));
+    EXPECT_FALSE(Holds(AsXml(missing.ref)));
+}
+
+TEST(SwitchPrefsHolds, AValueOfAnotherKindDoesNot)
+{
+    Owned<CFMutableDictionaryRef> dict(PurpleBuddy(11, false));
+    Set(dict.ref, "SetupDone", kCFBooleanFalse);
+    Owned<CFStringRef> text(Str("11"));
+    Set(dict.ref, "SetupVersion", text.ref);
+    EXPECT_FALSE(Holds(Binary(dict.ref)));
+    Owned<CFMutableDictionaryRef> real(PurpleBuddy(11, false));
+    const double eleven = 11;
+    Owned<CFNumberRef> number(CFNumberCreate(kCFAllocatorDefault, kCFNumberDoubleType, &eleven));
+    Set(real.ref, "SetupVersion", number.ref);
+    EXPECT_FALSE(Holds(Binary(real.ref)));
+}
+
+TEST(SwitchPrefsHolds, NothingToHoldOrNotAPlist)
+{
+    const Bytes ours(kPurpleBuddy, kPurpleBuddy + sizeof(kPurpleBuddy) - 1);
+    const std::string nothing = std::string(kXmlHead) + kXmlTail;
+    EXPECT_FALSE(switch_prefs_holds(ours.data(), ours.size(), nothing.data(), nothing.size()));
+    const std::string string_value = std::string(kXmlHead) + "<key>SetupDone</key><string>yes</string>" + kXmlTail;
+    EXPECT_FALSE(switch_prefs_holds(ours.data(), ours.size(), string_value.data(), string_value.size()));
+    const Bytes hello = {'h', 'e', 'l', 'l', 'o'};
+    EXPECT_FALSE(Holds(hello));
+    Owned<CFMutableDictionaryRef> dict(PurpleBuddy(11, false));
+    Bytes truncated = Binary(dict.ref);
+    truncated.resize(truncated.size() / 2);
+    EXPECT_FALSE(Holds(truncated));
+}
+
 // The guard: SpringBoard's Auto-Lock is the user's (11-07). No boot-time setup writes SBDisableAutoDim or
 // SBDontDimOrLockOnAC, in either kernel or in the 12377 port record; the names appear only in the one function that
 // takes them out of a user plist earlier builds wrote, the same in both kernels and called from the setup.

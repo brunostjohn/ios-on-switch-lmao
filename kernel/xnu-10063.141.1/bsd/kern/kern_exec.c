@@ -7718,10 +7718,11 @@ native_switch_watchdog_attributes(vnode_t vp, mount_t data_mount, int directory,
 static unsigned int native_switch_policy_written, native_switch_policy_unchanged;
 static struct switch_boot_sync native_switch_sync;
 
-/* Why path is not already a regular file on data_mount with these bytes, owner, group and mode; NULL when it is. */
+/* Why path is not already a regular file on data_mount with these bytes (with our_keys: a plist holding every key
+ * the XML `bytes` sets, with its value, among any others), owner, group and mode; NULL when it is. */
 static const char *
 native_switch_file_differs(const char *path, const char *bytes, int length, mount_t data_mount, uid_t owner,
-    gid_t group, mode_t mode)
+    gid_t group, mode_t mode, bool our_keys)
 {
 	vfs_context_t context = vfs_context_current();
 	vnode_t vp = NULLVP;
@@ -7741,17 +7742,20 @@ native_switch_file_differs(const char *path, const char *bytes, int length, moun
 		why = "not a regular Data file";
 	} else if (attributes.va_uid != owner || attributes.va_gid != group || (attributes.va_mode & 07777) != mode) {
 		why = "owner or mode";
-	} else if (attributes.va_data_size != (uint64_t)length) {
+	} else if (our_keys ? attributes.va_data_size > 64 * 1024 : attributes.va_data_size != (uint64_t)length) {
 		why = "size";
 	} else {
-		char *existing = kalloc_data((vm_size_t)length, Z_WAITOK);
-		int residual = length;
+		const int size = (int)attributes.va_data_size;
+		char *existing = size ? kalloc_data((vm_size_t)size, Z_WAITOK) : NULL;
+		int residual = size;
 		why = "bytes";
-		if (existing && !vn_rdwr(UIO_READ, vp, existing, length, 0, UIO_SYSSPACE, 0, vfs_context_ucred(context),
-		    &residual, vfs_context_proc(context)) && residual == 0 && !memcmp(existing, bytes, (size_t)length)) {
+		if (existing && !vn_rdwr(UIO_READ, vp, existing, size, 0, UIO_SYSSPACE, 0, vfs_context_ucred(context),
+		    &residual, vfs_context_proc(context)) && residual == 0 &&
+		    (our_keys ? switch_prefs_holds((const uint8_t *)existing, (size_t)size, bytes, (size_t)length) :
+		    !memcmp(existing, bytes, (size_t)length))) {
 			why = NULL;
 		}
-		if (existing) kfree_data(existing, (vm_size_t)length);
+		if (existing) kfree_data(existing, (vm_size_t)size);
 	}
 	(void)vnode_close(vp, FREAD, context);
 	return why;
@@ -7761,7 +7765,7 @@ static bool
 native_switch_file_unchanged(const char *path, const char *bytes, int length, mount_t data_mount, uid_t owner,
     gid_t group, mode_t mode)
 {
-	return native_switch_file_differs(path, bytes, length, data_mount, owner, group, mode) == NULL;
+	return native_switch_file_differs(path, bytes, length, data_mount, owner, group, mode, false) == NULL;
 }
 
 static int
@@ -7799,35 +7803,19 @@ native_switch_watchdog_directory(proc_t p, user_addr_t scratch, const char *path
 	return error ? error : close_error;
 }
 
+/* path replaced by a file with these bytes, owner, group and mode: written beside it, then renamed over it. */
 static int
-native_switch_data_file(proc_t p, user_addr_t scratch, const char *path, const char *bytes, int length, mount_t data_mount,
-    uid_t owner, gid_t group, mode_t mode, enum switch_boot_change change)
+native_switch_replace_file(proc_t p, user_addr_t scratch, const char *path, const char *bytes, int length,
+    mount_t data_mount, uid_t owner, gid_t group, mode_t mode, enum switch_boot_change change)
 {
-	/* An empty marker is created once; the policy is replaced atomically every boot
-	 * so edits to its job list reach existing Data volumes. Root-owned, as launchd requires. */
 	vfs_context_t context = vfs_context_current();
 	vnode_t vp = NULLVP;
 	char temporary[192];
-	int error;
-	if (!length) {
-		error = vnode_open(path, FREAD | O_NOFOLLOW_ANY, 0, 0, &vp, context);
-		if (!error) return vnode_close(vp, FREAD, context);
-		if (error != ENOENT) return error;
-	} else {
-		const char *why = native_switch_file_differs(path, bytes, length, data_mount, owner, group, mode);
-		if (!why) {
-			native_switch_policy_unchanged++;
-			return 0;
-		}
-#if DEVELOPMENT || DEBUG
-		printf("SwitchRawBoot: %s written: %s\n", path, why);
-#endif
-	}
 	const int io = switch_boot_sync_change(&native_switch_sync, change, path) ? IO_SYNC : 0;
 	native_switch_policy_written++;
 	int size = snprintf(temporary, sizeof(temporary), "%s.Switch-%s", path, bootsessionuuid_string);
 	if (size < 0 || (size_t)size >= sizeof(temporary)) return ENAMETOOLONG;
-	error = vnode_open(temporary, FREAD | FWRITE | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, mode, 0, &vp, context);
+	int error = vnode_open(temporary, FREAD | FWRITE | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, mode, 0, &vp, context);
 	if (error) return error;
 	if (vnode_mount(vp) != data_mount || !vnode_isreg(vp)) error = EINVAL;
 	if (!error && length) {
@@ -7857,6 +7845,31 @@ native_switch_data_file(proc_t p, user_addr_t scratch, const char *path, const c
 		(void)unlink(p, &cleanup, &result);
 	}
 	return error;
+}
+
+static int
+native_switch_data_file(proc_t p, user_addr_t scratch, const char *path, const char *bytes, int length, mount_t data_mount,
+    uid_t owner, gid_t group, mode_t mode, enum switch_boot_change change)
+{
+	/* An empty marker is created once; the policy is replaced atomically every boot
+	 * so edits to its job list reach existing Data volumes. Root-owned, as launchd requires. */
+	vfs_context_t context = vfs_context_current();
+	vnode_t vp = NULLVP;
+	if (!length) {
+		int error = vnode_open(path, FREAD | O_NOFOLLOW_ANY, 0, 0, &vp, context);
+		if (!error) return vnode_close(vp, FREAD, context);
+		if (error != ENOENT) return error;
+	} else {
+		const char *why = native_switch_file_differs(path, bytes, length, data_mount, owner, group, mode, false);
+		if (!why) {
+			native_switch_policy_unchanged++;
+			return 0;
+		}
+#if DEVELOPMENT || DEBUG
+		printf("SwitchRawBoot: %s written: %s\n", path, why);
+#endif
+	}
+	return native_switch_replace_file(p, scratch, path, bytes, length, data_mount, owner, group, mode, change);
 }
 
 static int
@@ -8555,15 +8568,20 @@ native_switch_portrait_display(proc_t p, user_addr_t scratch, mount_t data_mount
 /* The state a restored iPad has after Setup and data migration, plus no
  * SpringBoard watchdogs. Keys follow UniXNU's skip-setup seed and ios-sweet's root tweaks.
  *
- * Each domain is written one of three ways: replacing the user's plist every boot (kSetupUser: domains whose every key is
- * ours), seeding it only when it is missing (kSetupOnce), or as a managed preference (kSetupManaged: /private/var/Managed
+ * Each domain is written one of three ways: replacing the user's plist when it no longer holds our keys with our
+ * values (kSetupUser: cfprefsd saves these domains with keys of its own beside ours, which stay), seeding it only when
+ * it is missing (kSetupOnce), or as a managed preference (kSetupManaged: /private/var/Managed
  * Preferences/mobile/<domain>.plist, root 0644, rewritten every boot), which CFPreferences reads over the user's plist key
  * by key and so leaves the user's other keys alone. com.apple.springboard is managed: its user plist also keeps what
  * backboardd and SpringBoard save there, above all the display brightness (SBBacklightLevel2, BKSSpringBoardDefaults
  * brightness), which backboardd restores at start (BKDisplayBrightnessUpdateTransactionManager
  * synchronizeALSPreferencesAndSystemDisplayBrightness). Rewriting that plist every boot reset the brightness to the
  * default 0.5 at each boot (every boot logged since 10-30). Should the managed file not be written, the user's plist is
- * replaced as before (one line). */
+ * replaced as before (one line).
+ * A kSetupUser body holds booleans and integers only, the values switch_prefs_holds reads: a value of another kind
+ * never holds, and its domain would be rewritten, and synced, every boot. A key taken out of a kSetupUser body stays
+ * in the files the OS has saved since: it comes out of them once, as SpringBoard's never-dim keys did
+ * (native_switch_springboard_keys_release). */
 enum native_switch_setup_kind { kSetupUser, kSetupOnce, kSetupManaged };
 enum native_switch_setup_scale { kSetupAnyScale, kSetupUnitScale, kSetupFractionalScale };
 
@@ -8676,7 +8694,18 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 			vnode_put(existing);
 			continue;
 		}
-		error = native_switch_watchdog_file(p, scratch, path, body, (int)strlen(body), data_mount, 501, 501, 0600);
+		const bool our_keys = prefs[i].kind == kSetupUser;
+		const int length = (int)strlen(body);
+		const char *why = native_switch_file_differs(path, body, length, data_mount, 501, 501, 0600, our_keys);
+		if (!why) {
+			native_switch_policy_unchanged++;
+			continue;
+		}
+#if DEVELOPMENT || DEBUG
+		printf("SwitchRawBoot: %s written: %s%s\n", path, our_keys ? "our keys do not hold: " : "", why);
+#endif
+		error = native_switch_replace_file(p, scratch, path, body, length, data_mount, 501, 501, 0600,
+		    SWITCH_BOOT_DURABLE);
 	}
 	if (error) printf("SwitchRawBoot: first-boot state failed at %s: %d\n", path, error);
 	else {
