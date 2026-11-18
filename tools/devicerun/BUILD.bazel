@@ -12,6 +12,7 @@ py_library(
         "audio.py",
         "battery.py",
         "checks.py",
+        "commit.py",
         "cpu.py",
         "cut.py",
         "devicerun.py",
@@ -140,6 +141,14 @@ py_test(
     name = "textures_test",
     size = "small",
     srcs = ["textures_test.py"],
+    deps = [":lib"],
+)
+
+# commit.py's summaries over the commit and touch-delivery lines (why commits wait, the commit path).
+py_test(
+    name = "commit_test",
+    size = "small",
+    srcs = ["commit_test.py"],
     deps = [":lib"],
 )
 
