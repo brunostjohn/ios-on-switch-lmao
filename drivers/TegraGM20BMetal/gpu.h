@@ -1032,6 +1032,9 @@ public:
         std::atomic<uint64_t> learnedDraws{0};           // band_rates.h
         std::atomic<uint64_t> bandedDispatches{0};       // dispatch_bands.h
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        // draws large enough to measure, priced by the static estimate or a learned rate, and those drawn whole
+        // without a band decision (fetchDraw, wholeDraw)
+        std::atomic<uint64_t> pricedStatic{0}, pricedLearned{0}, unpricedLarge{0};
         std::atomic<uint64_t> splitLaunches{0};
         // split twins that found no room in the heap or local memory at a draw that took them
         std::atomic<uint64_t> splitRoomRefusals{0};
