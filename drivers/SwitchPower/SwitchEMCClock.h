@@ -37,8 +37,18 @@ bool SwitchEMC::moveTo(unsigned asked, switch_emc_reason reason)
     else if (index < floor)
         index = floor;
     index = memoryFloor(index);
-    if (index >= count || !programMemory(khz[cur], khz[index]))
+    if (index >= count || !programMemory(khz[cur], khz[index])) {
+#if DEVELOPMENT || DEBUG
+        refusals++;
+#endif
+        if (!planRefusalLogged) {
+            os_log_error(OS_LOG_DEFAULT,
+                         "SwitchEMC: the display memory plan carries no move to %u kHz; staying at %u kHz",
+                         index < count ? khz[index] : 0, khz[cur]);
+        }
+        planRefusalLogged = true;
         return false;
+    }
     if (index == cur)
         return true;
     unsigned now = 0;
@@ -49,6 +59,9 @@ bool SwitchEMC::moveTo(unsigned asked, switch_emc_reason reason)
 #endif
     const int err = tegra_bpmp_emc_set(khz[index], &now);
     if (err) {
+#if DEVELOPMENT || DEBUG
+        refusals++;
+#endif
         if (!refusalLogged) {
             os_log_error(OS_LOG_DEFAULT, "SwitchEMC: the BPMP refused %u kHz (%d); staying at %u kHz", khz[index], err,
                          khz[cur]);
@@ -63,9 +76,7 @@ bool SwitchEMC::moveTo(unsigned asked, switch_emc_reason reason)
 #endif
     const unsigned actual = reconcileRate(now);
 #if DEVELOPMENT || DEBUG
-    const uint64_t t = mach_absolute_time();
-    residency[cur] += t - since;
-    since = t;
+    account(mach_absolute_time());
     moves++;
     logMove(cur, actual, asked, reason);
 #endif
@@ -78,8 +89,8 @@ bool SwitchEMC::moveTo(unsigned asked, switch_emc_reason reason)
 #if DEVELOPMENT || DEBUG
 void SwitchEMC::logMove(unsigned from, unsigned to, unsigned asked, switch_emc_reason reason) const
 {
-    static const char *const kReasons[] = {"ACTMON", "a hint or submit", "display bandwidth", "display memory",
-                                           "governor start"};
+    static const char *const kReasons[] = {"ACTMON",         "a hint or submit", "display bandwidth",
+                                           "display memory", "governor start",   "the CPU tick's stop"};
     const unsigned floor = memoryFloor(0);
     os_log(OS_LOG_DEFAULT, "SwitchEMC: %u -> %u kHz, %s asked %u kHz; display floor %u kHz for %llu MB/s", khz[from],
            khz[to], kReasons[reason], asked < count ? khz[asked] : 0, floor < count ? khz[floor] : 0,
@@ -118,6 +129,7 @@ IOReturn SwitchEMC::governAction(OSObject *owner, void *resume, void *, void *, 
     self->cur = self->reconcileRate(now, resume != nullptr);
 #if DEVELOPMENT || DEBUG
     self->since = mach_absolute_time();
+    self->busyMark = __atomic_load_n(&self->busyTotal, __ATOMIC_RELAXED);
 #endif
     self->memoryDirty = true;
     if (!self->moveTo(self->cur, SWITCH_EMC_REASON_GOVERN))

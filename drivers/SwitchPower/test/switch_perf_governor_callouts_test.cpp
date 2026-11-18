@@ -30,6 +30,7 @@ std::atomic<uint64_t> gNow{1'000'000'000};
 std::atomic<sched_perfcontrol_callbacks *> gCallbacks;
 std::atomic<uint64_t> gDeadline;
 std::atomic<unsigned> gSignals;
+std::atomic<uint64_t> gEmcCpuTime;  // what the last tick handed the EMC
 unsigned gTouchSent;
 
 constexpr uint64_t kMs = 1'000'000;  // the stand-in timebase counts nanoseconds
@@ -253,8 +254,10 @@ void tegra_gm20b_idle_tick(void)
 void switch_emc_hint(unsigned int)
 {}
 
-void switch_emc_tick(uint64_t)
-{}
+void switch_emc_tick(uint64_t, uint64_t busy)
+{
+    gEmcCpuTime.store(busy, std::memory_order_relaxed);
+}
 
 void switch_emc_retick(void)
 {}
@@ -339,6 +342,15 @@ TEST_F(SwitchPerfCallouts, AMovingFingerWakesTheOwnerOnce)
         own();
     }
     EXPECT_EQ(gSignals.load() - signals, 1u);
+}
+
+// The tick hands the EMC its window's CPU time, summed over the CPUs: the EMC holds its top rate while the CPUs work.
+TEST_F(SwitchPerfCallouts, TheEmcTickTakesTheWindowsCpuTime)
+{
+    load(50, 2);
+    EXPECT_EQ(gEmcCpuTime.load(), 4 * 4 * kMs) << "four CPUs, each busy 4 ms of an 8 ms window";
+    load(0, 1);
+    EXPECT_EQ(gEmcCpuTime.load(), 0u);
 }
 
 // The DFLL's thermal cap and thermalmonitord's ceiling apply at once, from their own threads, both ways.

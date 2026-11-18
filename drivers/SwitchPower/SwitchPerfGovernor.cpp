@@ -108,16 +108,18 @@ void csw(perfcontrol_event event, uint32_t cpu, uint64_t timestamp, uint32_t, st
         switch_cpu_load_switch(&switchperf::gLoad[cpu], timestamp, event != IDLE);
 }
 
-// One window's busy share, in permille.
-uint32_t windowBusy(const switchperf::Config &config, uint64_t now)
+// One window's busy share, in permille; `cpuTime` the CPUs' busy time in it, summed over them.
+uint32_t windowBusy(const switchperf::Config &config, uint64_t now, uint64_t *cpuTime)
 {
     const uint64_t span = now - gTick.prevNow;
     uint64_t sum = 0;
     uint64_t peak = 0;
+    *cpuTime = 0;
     for (unsigned c = 0; c < config.cpus; ++c) {
         const uint64_t total = switch_cpu_load_busy(&switchperf::gLoad[c], now);
         const uint64_t done = total > gTick.prevTotal[c] ? total - gTick.prevTotal[c] : 0;
         gTick.prevTotal[c] = total;
+        *cpuTime += done;
         uint64_t permille = span ? done * 1000 / span : 0;
         if (permille > 1000)
             permille = 1000;
@@ -132,10 +134,11 @@ uint32_t windowBusy(const switchperf::Config &config, uint64_t now)
 }
 
 // One window: the limits and boosts the other sides posted, folded in; the step; the decision published. Returns
-// whether the owner must be woken (the clock moves, or the periodic line is due); `boot` whether the boot window runs.
-bool step(const switchperf::Config &config, uint64_t now, bool *boot)
+// whether the owner must be woken (the clock moves, or the periodic line is due); `boot` whether the boot window runs,
+// `cpuTime` the window's busy time.
+bool step(const switchperf::Config &config, uint64_t now, bool *boot, uint64_t *cpuTime)
 {
-    uint32_t busy = windowBusy(config, now);
+    uint32_t busy = windowBusy(config, now, cpuTime);
     const uint32_t limits = __atomic_load_n(&switchperf::gLimits, __ATOMIC_RELAXED);
     if (limits != gTick.limits) {
         gTick.limits = limits;
@@ -171,7 +174,8 @@ void deadlinePassed(uint64_t)
     if (gTick.generation != generation)
         restartTick(config, generation, now);
     bool boot = false;
-    if (step(config, now, &boot)) {
+    uint64_t cpuTime = 0;
+    if (step(config, now, &boot, &cpuTime)) {
         switchperf::gSignal(switchperf::gCtx, static_cast<unsigned>(cpu_number()));
         switchperf::lineWake(&gTick.stats);
     }
@@ -179,7 +183,7 @@ void deadlinePassed(uint64_t)
     // until then the GPU never leaves its full clock.
     if (!boot)
         tegra_gm20b_idle_tick();
-    switch_emc_tick(now);
+    switch_emc_tick(now, cpuTime);
     __atomic_thread_fence(__ATOMIC_RELEASE);
     sched_perfcontrol_update_callback_deadline(now + config.window);
 }

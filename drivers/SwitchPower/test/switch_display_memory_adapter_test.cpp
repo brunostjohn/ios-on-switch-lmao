@@ -87,10 +87,17 @@ public:
     unsigned carRate = 0;
     uint32_t khz[3] = {204000, 1331200, 1600000};
     unsigned count = 3, cur = 0, starts = 0, watermarks = 0;
-    uint64_t residency[3] = {}, since = 0;
-    unsigned moves = 0;
-    bool governing = false, refusalLogged = false, bpmpChangeLogged = false;
+    uint64_t residency[3] = {}, since = 0, busyTotal = 0, busyMark = 0;
+    unsigned moves = 0, refusals = 0;
+    bool governing = false, refusalLogged = false, planRefusalLogged = false, bpmpChangeLogged = false;
     uint64_t floorBytes() const;
+
+    void account(uint64_t now)
+    {
+        residency[cur] += now - since;
+        since = now;
+    }
+
     unsigned memoryFloor(unsigned) const;
     void uncoveredDisplayMemory(uint32_t, const char *);
 

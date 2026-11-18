@@ -23,8 +23,8 @@
 #                                    lock detection, enable, lock)
 #   switch_tegra_rtc_test            SwitchTegraRTC.h: the RTC's latched seconds and milliseconds, its one reader and
 #                                    that reader's two callers
-#   switch_emc_hold_test             SwitchEMCHold.h played out over a frame burst: the EMC loop's hold-timer arms and
-#                                    wake-ups per burst, the hold's end within a tick of the frames' or the hint's
+#   switch_emc_hold_test             SwitchEMCHold.h played out over frame bursts and CPU work: the EMC loop's wake-ups,
+#                                    the hold's end within a tick of the frames', the hint's or the CPUs' work
 #   switch_perf_hint_source_test     the touch filter's GPU and EMC hints as their sources stand: no lock, no
 #                                    read-modify-write, no sequentially consistent access
 #   switch_cpu_load_test             SwitchCpuLoad.h: a CPU's busy time from its context-switch callout, exact read
