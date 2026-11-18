@@ -799,6 +799,34 @@ GROUPS: dict[str, list[Check]] = {
             note='silence means the page-ins failed',
         ),
         Check(
+            'boot.prefs-before-launchd',
+            'paging',
+            'launchd preferences ready',
+            'max(ms) < 150',
+            process=KERNEL,
+            regex=r'preferences ready \((?P<written>\d+) written, (?P<unchanged>\d+) unchanged, (?P<durable>\d+) '
+            r'durable, (?P<ms>\d+) ms\)',
+            where='durable == 0',
+            show=('written', 'unchanged', 'ms'),
+            source='kernel/xnu-*/bsd/kern/kern_exec.c (debug kernels)',
+            note="the kernel's Data setup before launchd on boots with no durable change, which sync nothing (boot 2, "
+            '22 Nov, synced every boot: 1487 ms); the bound is inferred; NO-DATA when every boot synced: '
+            'boot.prefs-synced says why',
+        ),
+        Check(
+            'boot.prefs-synced',
+            'paging',
+            'launchd preferences ready',
+            REPORT,
+            process=KERNEL,
+            regex=r'(?P<durable>\d+) durable, (?P<ms>\d+) ms\): synced from (?P<first>.+)$',
+            show=('first', 'durable', 'ms'),
+            source='kernel/xnu-*/bsd/kern/kern_exec.c (debug kernels)',
+            note='boots that synced, by their first durable change: a changed override or managed preference, a fresh '
+            'Data volume, a panic record, a mode change; the same change on every boot is a write that should be '
+            'REDONE, or the OS changing one of our keys',
+        ),
+        Check(
             'boot.pack-covers-os',
             'cold-boot',
             ('SwitchMetal: harvest ', 'a compute state the pack lacks answered by the shader compiler'),

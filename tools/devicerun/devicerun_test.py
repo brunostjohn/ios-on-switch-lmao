@@ -444,6 +444,35 @@ class Rules(unittest.TestCase):
         self.assertEqual(len(results[0].matches), 1)
         self.assertIn('backboardd/PBGRAXmw_TimgA3Xhf_IxrgN3Oc3mtc4nlnlnl', results[0].observed)
 
+    def test_the_setup_before_launchd_is_timed_on_boots_that_sync_nothing(self):
+        rows = [c for c in checks.GROUPS['boot'] if c.name in {'boot.prefs-before-launchd', 'boot.prefs-synced'}]
+
+        def record(boot: str, tail: str) -> dict:
+            return {
+                'timestamp': '2026-11-23 10:00:05.000000+0000',
+                'bootUUID': boot,
+                'processImagePath': '/kernel',
+                'messageType': 'Default',
+                'eventMessage': f'Switch: persistent Data launchd preferences ready {tail}',
+            }
+
+        ordinary = record('B00T', '(1 written, 9 unchanged, 0 durable, 84 ms)')
+        panicked = record(
+            'B00T2', '(4 written, 8 unchanged, 3 durable, 1412 ms): synced from /private/var/Switch/panic-x.log'
+        )
+        results, _ = devicerun.run_checks([ordinary, panicked], rows)
+        got = {r.check.name: r for r in results}
+        self.assertEqual(got['boot.prefs-before-launchd'].verdict, PASS, got['boot.prefs-before-launchd'].observed)
+        self.assertEqual(got['boot.prefs-synced'].verdict, INFO)
+        self.assertIn('/private/var/Switch/panic-x.log/3/1412', got['boot.prefs-synced'].observed)
+        results, _ = devicerun.run_checks([panicked], rows)
+        got = {r.check.name: r for r in results}
+        self.assertEqual(got['boot.prefs-before-launchd'].verdict, NO_DATA)
+        results, _ = devicerun.run_checks([record('B00T', '(1 written, 9 unchanged, 0 durable, 1487 ms)')], rows)
+        got = {r.check.name: r for r in results}
+        self.assertEqual(got['boot.prefs-before-launchd'].verdict, FAIL)
+        self.assertEqual(got['boot.prefs-synced'].verdict, NO_DATA)
+
     def test_kills_in_a_kill_tests_window_are_that_tests(self):
         judged = [c for c in checks.GROUPS['refusals'] if c.name in {'gm20b.failed', 'gm20b.killed'}]
         windows = [c for c in checks.GROUPS['hwtest'] if c.name == 'hwtest.kill-windows']
