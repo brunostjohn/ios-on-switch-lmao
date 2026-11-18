@@ -450,6 +450,8 @@ TESTS: dict[str, bool] = {
             'gpu.path.fresh_surface_import',
             'gpu.path.native_surface_republished',
             'gpu.path.holder_timeout',
+            'gpu.path.idle_redraw',
+            'gpu.path.launch_target',
             'metal.native.depth_stencil',
             'metal.native.shared_event',
             'metal.native.fence',

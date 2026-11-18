@@ -616,6 +616,7 @@ enum GPUPathTests {
         SetSurvivesTrimPathTest(), SurfaceLocksSideBySideTest.blockLinear, SurfaceLocksSideBySideTest.pitchLinear,
         ImportBesideSubmitsTest(), TransferBesideReadbackTest(), CommitLatencyPathTest(), AheadMovesTest(),
         FreshSurfaceImportPathTest(), NativeSurfaceRepublishedPathTest(), HolderTimeoutPathTest(),
+        IdleRedrawPathTest(), LaunchTargetPathTest(),
     ]
 }
 
