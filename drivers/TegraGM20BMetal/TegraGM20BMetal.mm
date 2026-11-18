@@ -341,9 +341,12 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
 #endif
         },
         nullptr);
-    // A process that opens the device and draws nothing gives back the room its first queue kept.
-    r->idle.drained(clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
     const bool renderServer = dev->role() == gm20b::Device::Role::RenderServer;
+    // A client that opens the device and draws nothing gives back the room its first queue kept.
+    if (renderServer)
+        r->idle.pressureOnly();
+    else
+        r->idle.drained(clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
     if (renderServer)
         os_log(gm20bLog(), "SwitchMetal: shader heap %llu KB, each program placed at its state's first use",
                (unsigned long long)(dev->heapBytes() >> 10));

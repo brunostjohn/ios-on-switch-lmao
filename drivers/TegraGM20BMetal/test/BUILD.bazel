@@ -4762,7 +4762,8 @@ objc_library(
 # named at the first ask and forgotten when they go. facade_heap_use_test: useHeap on its render and compute encoders
 # is one use of the heap in the plan and of its arena in each job at 4 and 404 textures, host-written for a shared heap;
 # a heap texture either encoder uses alone names its own range. facade_probe_test: a 2D-engine probe op's textures are
-# uses of its blit encoder. Each test's unit holds the kernel model's IOKit calls.
+# uses of its blit encoder. facade_render_server_test: the render server's idle memory stays through an idle second and
+# goes on memory pressure. Each test's unit holds the kernel model's IOKit calls.
 [objc_library(
     name = name + "_unit",
     testonly = True,
@@ -4788,6 +4789,7 @@ objc_library(
     "facade_arguments_test",
     "facade_heap_use_test",
     "facade_probe_test",
+    "facade_render_server_test",
 ]]
 
 [host_test(
@@ -4801,6 +4803,7 @@ objc_library(
     "facade_arguments_test",
     "facade_heap_use_test",
     "facade_probe_test",
+    "facade_render_server_test",
 ]]
 
 # The facade is linked for SwitchMetalRenderEncoder only; no device is opened, and the textures are the host Metal device's.
