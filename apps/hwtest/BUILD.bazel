@@ -555,8 +555,16 @@ cc_library(
         "//drivers/TegraGM20BMetal:compiler/SwitchShaderCompilerJetsam.h",
     ],
     hdrs = ["system/switch_compiler_probe.h"],
-    aspect_hints = [":compiler_probe_module"],
     copts = ["-O2"],
+    target_compatible_with = ["@platforms//os:ios"],
+)
+
+# The probe's header alone, as :bench_api is the bench's
+cc_library(
+    name = "compiler_probe_api",
+    hdrs = ["system/switch_compiler_probe.h"],
+    aspect_hints = [":compiler_probe_module"],
+    implementation_deps = [":compiler_probe"],
     target_compatible_with = ["@platforms//os:ios"],
 )
 
@@ -686,7 +694,6 @@ cc_library(
     ],
     hdrs = ["bench/switch_bench.h"],
     additional_compiler_inputs = ["//drivers/TegraGM20BMetal:completed.cpp"],
-    aspect_hints = [":bench_module"],
     copts = [
         "-O2",
         "-std=c++17",
@@ -710,6 +717,16 @@ cc_library(
         "//kits/SwitchGM20BEmit:emit_ndebug",
         "//kits/SwitchGM20BEmit:macros_h",
     ],
+)
+
+# The bench's header alone, which Swift imports. A Swift compile takes every header in its C modules' compilation
+# contexts as inputs; behind implementation_deps the driver's headers stay out of kit's, and the apps still link :bench.
+cc_library(
+    name = "bench_api",
+    hdrs = ["bench/switch_bench.h"],
+    aspect_hints = [":bench_module"],
+    implementation_deps = [":bench"],
+    target_compatible_with = ["@platforms//os:ios"],
 )
 
 # The bench's records on the host, over a pack with the template state the Switch's pack gave it
@@ -757,8 +774,8 @@ swift_library(
     target_compatible_with = ["@platforms//os:ios"],
     deps = [
         ":a64x_probe",
-        ":bench",
-        ":compiler_probe",
+        ":bench_api",
+        ":compiler_probe_api",
         ":core",
         ":cpu_clock",
         ":gpu",
