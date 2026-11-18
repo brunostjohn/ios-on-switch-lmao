@@ -70,6 +70,7 @@ SWITCH_OBJECTS = {
         ("osfmk/arm64/cpu.c", "idle/idle.c", []),
         ("osfmk/kern/timer_call.c", "sched/stats.c", []),
         ("osfmk/kern/timer_call.c", "sched/render.c", []),
+        ("osfmk/kern/timer_call.c", "sched/cpu.c", []),
         ("osfmk/kern/sched_prim.c", "diag/stall.c", []),
         ("osfmk/kern/sched_prim.c", "diag/stall_snapshot.c", []),
         ("osfmk/kern/sched_prim.c", "diag/stall_frame.c", []),

@@ -33,6 +33,11 @@ void switch_sched_render_vsync(uint64_t stamp, uint64_t period);
 void switch_sched_render_submitted(void);
 void switch_sched_render_swapped(void);
 
+/* cpu.c: each core's and each process's CPU in the report's window (`line`: its LINE-byte buffer), and a process's
+ * exit (diag/exit.c), whose CPU since the last report would leave no row otherwise. */
+void switch_sched_cpu_report(char *line, uint64_t window_ns);
+void switch_sched_cpu_exited(task_t task);
+
 /* busy.c: SpringBoard's and backboardd's main threads between two waits in their run loops (sched/busy.h). */
 extern uint32_t switch_sched_busy_watching;
 

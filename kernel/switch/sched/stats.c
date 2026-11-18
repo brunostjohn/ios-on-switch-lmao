@@ -468,12 +468,14 @@ static void switch_sched_report(__unused thread_call_param_t p0, __unused thread
     static uint64_t last_ns;
     static char line[LINE];
     uint64_t now_ns = 0;
+    uint64_t window_ns = 0;
     uint64_t window_ms = 0;
     uint64_t boot_ns = os_atomic_load(&boot_complete_ns, relaxed);
     size_t at = 0;
 
     absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
-    window_ms = (now_ns - last_ns) / NSEC_PER_MSEC;
+    window_ns = now_ns - last_ns;
+    window_ms = window_ns / NSEC_PER_MSEC;
     last_ns = now_ns;
     if (boot_ns != 0) {
         at = (size_t)snprintf(line, LINE,
@@ -493,6 +495,7 @@ static void switch_sched_report(__unused thread_call_param_t p0, __unused thread
     at = (size_t)snprintf(line, LINE, "SwitchSched 2/2 (the render server's GPU threads)");
     append_slots(line, MIN(at, LINE - 1), FIRST_GPU, SLOTS);
     os_log(OS_LOG_DEFAULT, "%s", line);
+    switch_sched_cpu_report(line, window_ns);
     report_asked(line);
 }
 
