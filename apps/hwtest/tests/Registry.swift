@@ -168,6 +168,7 @@ public enum Registry {
 
     public static let all: [any HWTest] =
         [CPUAsyncTimersTest(), RegDumpQuietTest()] + gpuScenes + metal + gm20bRoutes + GPUPathTests.all
+            + [FrameRecordCostTest()]
             + NativeObjectTests.all
             + NativeCallTests.all + video + images + audio
             + display + compositor + sensorsAndInput + connectivityAndStorage

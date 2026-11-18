@@ -457,6 +457,7 @@ TESTS: dict[str, bool] = {
             'gpu.path.holder_timeout',
             'gpu.path.idle_redraw',
             'gpu.path.launch_target',
+            'gpu.frame.record_cost',
             'metal.native.depth_stencil',
             'metal.native.shared_event',
             'metal.native.fence',
@@ -773,6 +774,10 @@ OPEN: dict[str, str] = {
     'gpu.gm20b.xr_stand_in_refill': (
         'built, unjudged: a kernel reading an XR texel buffer through its stand-in after a write in the same compute '
         'encoder reached it splits the encoder there, refills the pool and redraws the stand-in'
+    ),
+    'gpu.frame.record_cost': (
+        "the frame CPU plan's targets (about 1.2 ms a home-screen frame across both threads) are met only once the "
+        'encode ahead per pass and the per-draw constant buffer slots are built'
     ),
     'gpu.gm20b.plain_rows_quarter_turns': (
         "an M4 Max stores a quarter-turned pass's frame tiles concurrently: no fixed order fits the rows it keeps "
