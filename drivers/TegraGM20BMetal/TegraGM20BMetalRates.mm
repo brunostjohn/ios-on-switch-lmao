@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "TegraGM20BMetalInternal.h"
 #import "TegraGM20BMetalPassCache.h"
+#import "TegraGM20BMetalStatesCost.h"
 #include "ca_catch_all.h"
 #include "object_pool.h"
 #include "resolve_rule.h"
@@ -78,6 +79,14 @@ size_t metal_rates(char *out, size_t size)
         (unsigned long long)k.resolveRoute[gm20b::ResolveByPass][0].exchange(0),
         (unsigned long long)k.resolveRoute[gm20b::ResolveByPass][1].exchange(0),
         (unsigned long long)k.resolveRoute[gm20b::ResolveByPass][2].exchange(0));
+    {
+        // render state creations the pack held and every other, since the device opened (TegraGM20BMetalStatesCost.mm)
+        uint64_t packHits = 0, packMisses = 0;
+        gm20bPackCreations(packHits, packMisses);
+        const size_t used = strlen(diag);
+        snprintf(diag + used, sizeof diag - used, " pack=%llu/%llu", (unsigned long long)packHits,
+                 (unsigned long long)packMisses);
+    }
     {
         const size_t used = strlen(diag);
         snprintf(diag + used, sizeof diag - used, " cag=%llu",

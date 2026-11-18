@@ -17,6 +17,7 @@
 @protocol HarnessDeviceSPI
 - (id<MTLBuffer>)newBufferWithIOSurface:(IOSurfaceRef)surface;
 - (NSUInteger)requiredLinearTextureBytesPerRowForDescriptor:(MTLTextureDescriptor *)descriptor;
+- (NSDictionary<NSString *, NSNumber *> *)switchMetalLastCreation;
 @end
 
 namespace {
@@ -104,6 +105,34 @@ void packedDraw()
         (long long)(int64_t(atDraw) - int64_t(atOpen)) / 1024, (unsigned long long)(device.currentAllocatedSize >> 10),
         [[held.description stringByReplacingOccurrencesOfString:@"\n" withString:@" "] UTF8String]);
     note("packed_draw", line);
+}
+
+// A packed state's creation answers its own work on its thread (TegraGM20BMetalStatesCost.mm): the first in the process
+// looks its records up, imports the pack's pages its programs run from (kernel calls) and builds the state; the second,
+// of the same key, finds it placed and does neither
+void creationCost()
+{
+    const Opened opened = openWithLibrary(writePack(packKey(kPacked)));
+    id<MTLDevice> device = opened.device;
+    ASSERT_TRUE(device != nil && opened.library != nil);
+    MTLRenderPipelineDescriptor *d = descriptor(opened.library, kPacked);
+    const auto made = [device, d] {
+        NSError *error = nil;
+        EXPECT_TRUE([device newRenderPipelineStateWithDescriptor:d error:&error] != nil) << text(error);
+        return [(id<HarnessDeviceSPI>)device switchMetalLastCreation];
+    };
+    NSDictionary<NSString *, NSNumber *> *first = made(), *again = made();
+    ASSERT_TRUE(first != nil && again != nil);
+    EXPECT_GT(first[@"lookups"].intValue, 0) << text(first);
+    EXPECT_EQ(first[@"builds"].intValue, 1) << text(first);
+    EXPECT_GT(first[@"pieces"].intValue, 0) << text(first);
+    EXPECT_GE(first[@"kernel_calls"].intValue, 2 * first[@"pieces"].intValue) << text(first);
+    EXPECT_GT(first[@"locks"].intValue, 0) << text(first);
+    EXPECT_GE(first[@"wall_us"].intValue, first[@"place_us"].intValue) << text(first);
+    EXPECT_EQ(again[@"builds"].intValue, 0) << text(again);
+    EXPECT_EQ(again[@"pieces"].intValue, 0) << text(again);
+    EXPECT_EQ(again[@"copied_bytes"].intValue, 0) << text(again);
+    EXPECT_EQ(again[@"kernel_calls"].intValue, 0) << text(again);
 }
 
 // A state of this device's functions that no record draws (the pack lacks it and no shader compiler serves the process)
@@ -450,6 +479,11 @@ TEST(GM20BFacadeLazy, PackedDrawOpensNoM2V)
 {
     switch_ios::test::ExpectPassesInFreshProcess(packedDraw);
     show("packed_draw");
+}
+
+TEST(GM20BFacadeLazy, APackedStatesCreationAnswersItsOwnWork)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(creationCost);
 }
 
 TEST(GM20BFacadeLazy, AnUnpackedStateIsMetalsCreationFailure)

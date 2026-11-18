@@ -2,6 +2,7 @@
 // See gpu.h (Device::pipeline, the argument tables, the runtime's own states).
 #include "lock.h"
 #include "blend_kill.h"
+#include "creation_cost.h"
 #include "dynamic_push.h"
 #include "blend_reads.h"
 #include "gpu.h"
@@ -208,6 +209,21 @@ bool Device::rebindArguments(Pipeline &pl)
     return bound;
 }
 
+// Pack::find and Pack::variantRecords, counted for the creation's line (creation_cost.h)
+static const PackPipeline *findRecord(const Pack &pack, uint64_t keyHash, PackForm form)
+{
+    SWITCH_METAL_CREATION_SPAN(lookupTicks);
+    SWITCH_METAL_CREATION_COUNT(lookups, 1);
+    return pack.find(keyHash, form);
+}
+
+static std::vector<const PackPipeline *> variantRecordsOf(const Pack &pack, uint64_t keyHash)
+{
+    SWITCH_METAL_CREATION_SPAN(lookupTicks);
+    SWITCH_METAL_CREATION_COUNT(lookups, 1);
+    return pack.variantRecords(keyHash);
+}
+
 // A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers
 // as push words with its programs placed in the heap. Else one the runtime made (addRecord). A storage form that computes
 // the pipeline's blend has no barrier twin to fall back on: its barrier form leaves the blend to the ROP after a fetch
@@ -235,7 +251,7 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 // Whether the state's fetch-free form, where the pack holds one, is placed (fetch_free.h fetchFreePlaced)
 bool Device::fetchFreeReachable(uint64_t keyHash) const
 {
-    const PackPipeline *rec = pack_.find(keyHash, PackForm::FetchFree);
+    const PackPipeline *rec = findRecord(pack_, keyHash, PackForm::FetchFree);
     if (!rec)
         return false;
     uint8_t probe = 0;
@@ -254,7 +270,7 @@ bool Device::usableRecord(const PackPipeline *rec) const
 std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(uint64_t keyHash, bool caTransform)
 {
     std::vector<std::pair<std::string, Pipeline *>> out;
-    for (const PackPipeline *rec : pack_.variantRecords(keyHash)) {
+    for (const PackPipeline *rec : variantRecordsOf(pack_, keyHash)) {
         const std::string name = pack_.string(rec->variantName);
         // a barrier record is a storage form's twin unless it is the variant's one record (its storage form refused)
         if ((rec->flags & PipelineBarrierForm) && pack_.variantRecord(keyHash, name, PackForm::Default))
@@ -280,11 +296,11 @@ std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(uint64_
 
 Pipeline *Device::placePipeline(uint64_t keyHash, PackForm form, bool caTransform)
 {
-    const PackPipeline *rec = pack_.find(keyHash, form);
+    const PackPipeline *rec = findRecord(pack_, keyHash, form);
     if (rec && !usableRecord(rec)) {
         const bool blends = rec->storageBlendMask;
         const PackPipeline *barrier = form == PackForm::Default && (rec->flags & PipelineStorageMetadata) && !blends
-                                          ? pack_.find(keyHash, PackForm::Barrier)
+                                          ? findRecord(pack_, keyHash, PackForm::Barrier)
                                           : nullptr;
         rec = usableRecord(barrier) ? barrier : nullptr;
         if (blends)
@@ -346,7 +362,7 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
     }
     Pipeline *twin = nullptr;
     if (pp.strideTwin) {
-        const PackPipeline *twinRecord = pack_.find(pp.strideTwin, recordForm(pp));
+        const PackPipeline *twinRecord = findRecord(pack_, pp.strideTwin, recordForm(pp));
         if (twinRecord && twinRecord != &pp && usableRecord(twinRecord) &&
             !(twin = placeRecord(*twinRecord, caTransform)))
             return nullptr;
@@ -381,6 +397,8 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
                    const uint32_t *blob, const char *keyString, bool caTransform, const uint32_t *spills,
                    const uint32_t *far, const PlacedProgram *tess)
 {
+    SWITCH_METAL_CREATION_SPAN(buildTicks);
+    SWITCH_METAL_CREATION_COUNT(builds, 1);
     pl.entries = SetEntries(pp, far);
     auto instructions = [](const PackProgram &program) {
         const uint32_t bytes = program.dataBytes ? program.dataOffset : program.bytes;

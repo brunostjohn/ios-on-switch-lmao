@@ -3,6 +3,7 @@
 #import "TegraGM20BMetalRenderKey.h"
 #import "TegraGM20BMetalBinaryArchive.h"
 #import "TegraGM20BMetalReflection.h"
+#import "TegraGM20BMetalStatesCost.h"
 #include "ca_catch_all.h"
 
 @implementation SwitchMetalSampler
@@ -204,6 +205,7 @@ SwitchMetalPipeline *gm20bPipelineShell(SwitchMetalDevice *device, MTLRenderPipe
                                   ? (SwitchMetalFunction *)d.fragmentFunction
                                   : nil;
     // a state linking functions is packed under them too (its key names each), where they are framework libraries' as well
+    SWITCH_METAL_CREATION_STAMP(keyBegan);
     p->_completable = ownFunctions(d);
     p->_packable = p->_completable && !vf->_framework.empty() && (!ff || vf->_framework == ff->_framework) &&
                    metal_linked_packable(d);
@@ -223,14 +225,20 @@ SwitchMetalPipeline *gm20bPipelineShell(SwitchMetalDevice *device, MTLRenderPipe
         lookedUp = true;
     }
     p->_packKey = packKey;
+    SWITCH_METAL_CREATION_SINCE(keyBegan, keyTicks);
     if (lookedUp) {
-        p->_raw = gRM->raw->pipeline(packKey, gm20b::PackForm::Default, p->_caTransform);
+        {
+            SWITCH_METAL_CREATION_SPAN(placeTicks);
+            p->_raw = gRM->raw->pipeline(packKey, gm20b::PackForm::Default, p->_caTransform);
+        }
 #if SWITCH_METAL_DIAGNOSTICS
         markProbes(p->_raw, d.label);
 #endif
         p->_packed = p->_raw && gRM->raw->packHolds(*p->_raw);
-        if (p->_packed)
+        if (p->_packed) {
+            SWITCH_METAL_CREATION_SPAN(variantTicks);
             packedVariants(p, packKey);
+        }
     }
     // A framework's state the pack holds is the device's archive hit, as Apple's own archives hold its states for Apple's
     // GPUs; any other state is answered by the archives the creation lists alone, as Metal answers it
@@ -248,7 +256,10 @@ SwitchMetalPipeline *gm20bPipelineFor(SwitchMetalDevice *device, MTLRenderPipeli
     SwitchMetalPipeline *p = gm20bPipelineShell(device, d, o, error);
     if (!p)
         return nil;
-    makeRecord(p, d);
+    {
+        SWITCH_METAL_CREATION_SPAN(recordTicks);
+        makeRecord(p, d);
+    }
     if (p->_failure.empty())
         return p;
     if (error)
@@ -296,8 +307,15 @@ static id<MTLRenderPipelineState> makeState(SwitchMetalDevice *device, MTLRender
                                             MTLPipelineOption o, MTLAutoreleasedRenderPipelineReflection *reflection,
                                             NSError **error)
 {
+#if SWITCH_METAL_DIAGNOSTICS
+    SwitchMetalCreationMeter meter;
+#endif
     SwitchMetalPipeline *p = gm20bPipelineFor(device, d, o, error);
-    return p ? gm20bFinishState(p, d, o, reflection, error) : nil;
+    id<MTLRenderPipelineState> state = p ? gm20bFinishState(p, d, o, reflection, error) : nil;
+#if SWITCH_METAL_DIAGNOSTICS
+    meter.finish(p, d);
+#endif
+    return state;
 }
 
 - (id<MTLRenderPipelineState>)newRenderPipelineStateWithDescriptor:(MTLRenderPipelineDescriptor *)d

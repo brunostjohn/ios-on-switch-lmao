@@ -5,6 +5,7 @@
 // first version (render encoder, pack replay) and checked it against NVK's stream; r8-rawca added the lifetimes, the pool, the
 // imports, the copies and the abortable command buffer.
 #include "lock.h"
+#include "creation_cost.h"
 #include "gpu.h"
 #include "mme.h"
 #include "owned.h"
@@ -376,8 +377,10 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
         glassMem = std::make_unique<GlassMem>();
 #endif
     openFailure_ = OpenFailure::Structural;
+    SWITCH_METAL_CREATION_STAMP(loadBegan);
     if (!pack_.load(packPath, stack, err))
         return false;
+    SWITCH_METAL_DIAGNOSTIC(gPackLoadTicks = mach_absolute_time() - loadBegan);
     openFailure_ = OpenFailure::Transient;
     if (!k_.open(err))
         return false;
@@ -694,6 +697,8 @@ bool Device::heapPlace(const uint8_t *bytes, uint32_t size, uint64_t &offset)
     uint8_t *cpu = p->cpu + (at - p->offset);
     memcpy(cpu, bytes, size);
     cleanToMemory(cpu, size);
+    SWITCH_METAL_CREATION_COUNT(copies, 1);
+    SWITCH_METAL_CREATION_COUNT(copiedBytes, size);
     offset = at;
     heapPlaced_ = at + size;
     heapEpoch_.fetch_add(1, std::memory_order_release);
@@ -719,6 +724,8 @@ bool Device::placeInPlace(ProgramPages &pages, const uint8_t *file, uint64_t fil
     if (!pages.missing(fileOffset, uint64_t(size) + kHeapSlack, grains))
         return false;
     for (const ProgramPages::Grain &r : grains) {
+        SWITCH_METAL_CREATION_SPAN(pieceTicks);
+        SWITCH_METAL_CREATION_COUNT(pieces, 1);
         void *cpu = const_cast<uint8_t *>(file + r.offset);
         Bo bo;
         if (!k_.importPages(cpu, r.bytes, bo, 0, true)) {

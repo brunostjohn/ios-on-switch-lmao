@@ -3,6 +3,7 @@
 // worked out when its bindings change; the pipeline it draws with is the one whose programs are the first variants of each
 // stage those facts hold for. Compatible pipelines are placed with their state, sharing their programs in the pack heap.
 #include <algorithm>
+#include "creation_cost.h"
 #include "gpu.h"
 #include "set_reads.h"
 #include "slm.h"
@@ -91,6 +92,7 @@ Pipeline *Device::placeVariant(Pipeline &pl, const std::array<uint32_t, 2> &inde
     if (!placedBoth)
         return &pl;
     Pipeline &made = variantPipelines_.emplace_back();
+    SWITCH_METAL_CREATION_COUNT(variants, 1);
     build(made, pp, placed[0], placed[1], pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString),
           pl.caTransform, pack_.spills(pp), pack_.far(pp));
     for (uint32_t s = 0; s < 2; s++)
