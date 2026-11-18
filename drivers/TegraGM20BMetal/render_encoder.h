@@ -46,8 +46,57 @@ namespace gm20b {
 
 class CommandBuffer;
 
+// A binding table whose storage a pass's encoder made again over the last one keeps (RenderEncoder::remake): only the
+// slots the last pass set are cleared, not the whole table
+template <typename Row, size_t N> struct KeptRows {
+    union {
+        Row rows[N];
+    };
+
+    KeptRows() : rows{}
+    {}
+
+    explicit KeptRows(bool)
+    {}
+
+    Row &operator[](size_t i)
+    {
+        return rows[i];
+    }
+
+    const Row &operator[](size_t i) const
+    {
+        return rows[i];
+    }
+
+    Row *begin()
+    {
+        return rows;
+    }
+
+    Row *end()
+    {
+        return rows + N;
+    }
+
+    const Row *begin() const
+    {
+        return rows;
+    }
+
+    const Row *end() const
+    {
+        return rows + N;
+    }
+};
+
 class RenderEncoder {
 public:
+    RenderEncoder() = default;
+    // Made again where it is for a new pass, as a new encoder (value-initialised) but for its binding tables, whose
+    // slots the last pass set are cleared one by one: most of its bytes are the tables (CommandBuffer::render)
+    void remake();
+
     void setPipeline(Pipeline *p);
 
     // The bound Metal state's alpha to coverage and alpha to one (alpha_control.h alphaControl), after setPipeline
@@ -118,6 +167,7 @@ public:
             samplers_[at][slot] = s;
             ++bindingRevision_;
             moved_.samplers[at] |= uint16_t(1u << slot);
+            touched_[0].samplers[at] |= uint16_t(1u << slot);
         }
     }
 
@@ -450,20 +500,37 @@ private:
     {
         ++bindingRevision_;
         moved_.buffers[stage] |= 1u << slot;
+        touched_[0].buffers[stage] |= 1u << slot;
     }
 
     void textureMoved(uint32_t at, uint32_t slot)
     {
         ++bindingRevision_;
         addSlot(moved_.textures[at], slot);
+        addSlot(touched_[0].textures[at], slot);
         vertexSamples_ |= at == 0 && textures_[at][slot];
     }
 
     uint32_t movedEntries(const SetEntries &entries) const;
     DescriptorBinding descriptorBinding_;
-    Bound bufs_[3][31];
-    const Texture *textures_[2][kStageTextures] = {};  // vertex, fragment (handleStage)
-    const Sampler *samplers_[2][kStageSamplers] = {};
+    // remake() keeps these four, declared together, as they are: nothing may be declared between them
+    KeptRows<Bound[31], 3> bufs_;
+    KeptRows<const Texture *[kStageTextures], 2> textures_;  // vertex, fragment (handleStage)
+    KeptRows<const Sampler *[kStageSamplers], 2> samplers_;
+
+    // the slots set since the encoder was made new, which remake() clears
+    struct Touched {
+        uint32_t buffers[3];
+        StageTextureMask textures[2];
+        uint16_t samplers[2];
+    };
+
+    KeptRows<Touched, 1> touched_;
+
+    struct Again {};
+
+    explicit RenderEncoder(Again) : bufs_(true), textures_(true), samplers_(true), touched_(true)
+    {}
 
     const Texture *boundTexture(const PackEntry &e) const
     {

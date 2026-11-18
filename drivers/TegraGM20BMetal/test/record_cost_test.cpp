@@ -475,6 +475,29 @@ TEST(GM20BRecordCost, ChangedStateDrawByCall)
     EXPECT_LT(fewest[Calls] / draws, 5200);
 }
 
+// The submit worker's render encoder made again for each pass (gm20b::RenderEncoder::remake): its binding tables keep
+// their storage and only the slots the last pass set are cleared (measured 2,276 instructions on 24B119's kind, where
+// destroying and value-initialising its 19,408 bytes measured 3,667)
+TEST(GM20BRecordCost, APassEncoderIsMadeAgainWithoutItsWholeBindingTables)
+{
+    auto *e = new gm20b::RenderEncoder();
+    const auto *sampler = reinterpret_cast<const gm20b::Sampler *>(uintptr_t(0x1000));
+    double fewest = 1e30;
+    for (int round = 0; round < 8; round++) {
+        constexpr int kRemakes = 4000;
+        const Counts before = counts();
+        for (int i = 0; i < kRemakes; i++) {
+            for (uint32_t slot = 0; slot < 4; slot++)
+                e->setSampler(2, slot, sampler + slot);
+            e->remake();
+        }
+        fewest = std::min(fewest, double(counts().instructions - before.instructions) / kRemakes);
+    }
+    delete e;
+    printf("record cost pass encoder remake %.0f instr (%zu bytes)\n", fewest, sizeof(gm20b::RenderEncoder));
+    EXPECT_LT(fewest, 3000.0);
+}
+
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // The frame rates line over frames of kept pass shapes: every pass a hit, each command buffer counted once, and each
 // blocked waitUntilScheduled's time split whole into its parts

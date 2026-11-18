@@ -17,6 +17,31 @@
 
 namespace gm20b {
 
+void RenderEncoder::remake()
+{
+    auto *const bytes = reinterpret_cast<unsigned char *>(this);
+    const size_t keptFrom = size_t(reinterpret_cast<unsigned char *>(&bufs_) - bytes),
+                 keptTo = size_t(reinterpret_cast<unsigned char *>(&touched_ + 1) - bytes);
+    const Touched touched = touched_[0];
+    this->~RenderEncoder();
+    // what value-initialisation does before the members' own initialisers: zero, here around the kept tables
+    memset(bytes, 0, keptFrom);
+    memset(bytes + keptTo, 0, sizeof(RenderEncoder) - keptTo);
+    new (this) RenderEncoder(Again{});
+    for (uint32_t stage = 0; stage < 3; stage++)
+        for (uint32_t slots = touched.buffers[stage]; slots; slots &= slots - 1)
+            bufs_[stage][__builtin_ctz(slots)] = Bound{};
+    using Words = SlotMaskWords<StageTextureMask>;
+    for (uint32_t at = 0; at < 2; at++) {
+        for (size_t w = 0; w < Words::kWords; w++)
+            for (uint32_t slots = Words::word(touched.textures[at], w); slots; slots &= slots - 1)
+                textures_[at][32 * w + __builtin_ctz(slots)] = nullptr;
+        for (uint32_t slots = touched.samplers[at]; slots; slots &= slots - 1)
+            samplers_[at][__builtin_ctz(slots)] = nullptr;
+    }
+    touched_[0] = Touched{};
+}
+
 RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
 {
     const auto refused = [why](const char *rule) -> RenderEncoder * {
@@ -39,9 +64,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
     rects.clear();
     splitPlan.clear();
     clears.clear();
-    // made again where it is, not built aside and moved in (the encoder is 7 KB)
-    e.~RenderEncoder();
-    new (&e) RenderEncoder();
+    e.remake();
     e.bodies_ = std::move(bodies);
     e.rects_ = std::move(rects);
     e.splitPlan_ = std::move(splitPlan);
