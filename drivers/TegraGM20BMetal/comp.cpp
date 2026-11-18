@@ -239,7 +239,7 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
             k_.free(bo);
         SWITCH_METAL_DIAGNOSTIC(stats.compFailed++);
         const bool shortage = compShortage(kr);
-        if (comp_.refuse(w, shortage))
+        if (comp_.refuse(w, shortage)) {
             os_log_error(compLog(),
                          "SwitchMetal: compressed memory %llu KiB kind 0x%x not made (%{public}s, 0x%x): %{public}s",
                          (unsigned long long)(w.bytes >> 10), w.kind,
@@ -250,6 +250,18 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
                          unsigned(kr),
                          shortage ? "those backings stay uncompressed until this process gives compressed memory back"
                                   : "that backing stays uncompressed");
+#if SWITCH_METAL_DIAGNOSTICS
+            uint64_t ready = 0;
+            for (const CompBo &r : comp_.ready)
+                ready += r.bo.bytes;
+            os_log(
+                compLog(),
+                "SwitchMetal: at that refusal this process holds %llu KiB of compressed memory, %llu KiB of it in %zu "
+                "made buffers no backing took",
+                (unsigned long long)(stats.compHeldBytes.load() >> 10), (unsigned long long)(ready >> 10),
+                comp_.ready.size());
+#endif
+        }
     }
 }
 
