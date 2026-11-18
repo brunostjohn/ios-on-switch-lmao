@@ -1,6 +1,8 @@
 # drivers/TegraGM20B on the host:
 #   gm20b_comp_test          TegraGM20BComp.h against nvgpu's gm20b: the compbit backing store's size, lines and base for
 #                            every plausible CBC_PARAM, which page lists and binds may compress, a compressed bind's PTEs
+#   gm20b_load_test          TegraGM20BLoad.h: the PMU idle counters' program (nvgpu's raw load pair) and their reads
+#                            extended to 64 bits, an interval counted only when it cannot hide a wrap
 #   gm20b_zcull_test         TegraGM20BZcull.h against nvgpu's zcull report for the X1's GR; its record is
 #                            drm_nouveau_get_zcull_info's
 #   gm20b_zcull_context_test TegraGM20BZcullContext.h: each GR context's own zcull image and the context words
@@ -296,6 +298,14 @@ host_test(
     srcs = [
         "gm20b_comp_test.cpp",
         "//drivers/TegraGM20B:TegraGM20BComp.h",
+    ],
+)
+
+host_test(
+    name = "gm20b_load_test",
+    srcs = [
+        "gm20b_load_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BLoad.h",
     ],
 )
 
