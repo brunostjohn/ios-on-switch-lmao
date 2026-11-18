@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "TegraGM20BMetalInternal.h"
 #import "TegraGM20BMetalPassCache.h"
+#include "ca_catch_all.h"
 #include "object_pool.h"
 #include "resolve_rule.h"
 
@@ -77,6 +78,11 @@ size_t metal_rates(char *out, size_t size)
         (unsigned long long)k.resolveRoute[gm20b::ResolveByPass][0].exchange(0),
         (unsigned long long)k.resolveRoute[gm20b::ResolveByPass][1].exchange(0),
         (unsigned long long)k.resolveRoute[gm20b::ResolveByPass][2].exchange(0));
+    {
+        const size_t used = strlen(diag);
+        snprintf(diag + used, sizeof diag - used, " cag=%llu",
+                 (unsigned long long)gm20b::gCaCatchAllDraws.load(std::memory_order_relaxed));
+    }
 #if SWITCH_FRAME_TIMELINE
     {
         const size_t used = strlen(diag);

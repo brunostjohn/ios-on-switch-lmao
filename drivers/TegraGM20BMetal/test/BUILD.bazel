@@ -4963,6 +4963,15 @@ facade_test(
     ],
 )
 
+# Core Animation's catch-all state named by its label and its draws counted in the rates line (ca_catch_all.h)
+facade_test(
+    name = "facade_ca_catch_all_test",
+    srcs = [
+        "facade_ca_catch_all_test.cpp",
+        "scale_frames.h",
+    ],
+)
+
 # A private target made plain for want of compressed memory moved onto it by the submit worker while another thread
 # records passes into it, samples it and copies out of it (facade_compressed_move_test.cpp), plain and
 # thread-sanitized: the recording reads none of the fields the move writes

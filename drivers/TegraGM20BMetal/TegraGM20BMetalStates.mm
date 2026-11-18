@@ -4,6 +4,7 @@
 #import "TegraGM20BMetalRenderKey.h"
 #import "TegraGM20BMetalBinaryArchive.h"
 #import "TegraGM20BMetalReflection.h"
+#include "ca_catch_all.h"
 
 @implementation SwitchMetalSampler
 
@@ -212,6 +213,7 @@ SwitchMetalPipeline *gm20bPipelineShell(SwitchMetalDevice *device, MTLRenderPipe
     SwitchMetalPipeline *p = [SwitchMetalPipeline new];
     p->_device = device;
     p.label = d.label;
+    SWITCH_METAL_DIAGNOSTIC(p->_caCatchAll = gm20b::caCatchAll(d.label.UTF8String));
     p->_alphaControl = gm20b::alphaControl(d.alphaToCoverageEnabled, d.alphaToOneEnabled);
     SwitchMetalFunction *vf = [(id)d.vertexFunction isKindOfClass:[SwitchMetalFunction class]]
                                   ? (SwitchMetalFunction *)d.vertexFunction

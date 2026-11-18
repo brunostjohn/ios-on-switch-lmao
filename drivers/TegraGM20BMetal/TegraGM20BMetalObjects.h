@@ -251,6 +251,9 @@ enum class SwitchMetalShareable : uint8_t {
     // every variant asked of it, by name, for its life: plans and encoders name each by address
     std::map<std::string, std::shared_ptr<gm20b::Variant<gm20b::Pipeline>>> _variants;
     gm20b::Obtained _obtained;  // debug builds: how its creation got its record
+#if SWITCH_METAL_DIAGNOSTICS
+    bool _caCatchAll;  // Core Animation's catch-all state (ca_catch_all.h), whose draws the rates line counts
+#endif
 }
 @end
 
