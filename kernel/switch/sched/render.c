@@ -59,6 +59,7 @@ void switch_sched_render_on_core(thread_t thread, uint64_t now)
         nanoseconds_to_absolutetime(MIN_BLOCK_US * NSEC_PER_USEC, &min_block);
     }
     os_atomic_store(&render_thread, thread->thread_id, relaxed);
+    switch_sched_watch_display_woke(now);
     if (switch_render_dispatched(&window, count, os_atomic_load(&vsync_stamp, relaxed), now,
                                  recount_thread_time_mach(thread), made == THREAD_NOT_RUNNABLE ? 0 : made, min_block,
                                  os_atomic_load(&half_period, relaxed))) {

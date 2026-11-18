@@ -37,10 +37,9 @@
 
 #if DEVELOPMENT || DEBUG
 
-#define SWITCH_BUSY_MIN_MS 250
-#define BUSY_RING          4
-#define BUSY_LINE          900 /* under the 1 KiB os_log record */
-#define BUSY_KINDS         4
+#define BUSY_RING  4
+#define BUSY_LINE  900 /* under the 1 KiB os_log record */
+#define BUSY_KINDS 4
 
 struct busy_slot {
     const char *name;
@@ -110,32 +109,36 @@ void switch_sched_busy_exec(thread_t thread)
     }
 }
 
-static void busy_wait_of(thread_t thread, struct switch_busy_wait *w)
+/* A thread's user PC (or LR) as switch_stall_user_where places it; RAW 0 when it has no user state. */
+uint8_t switch_sched_user_site(thread_t thread, bool lr, uint64_t *value)
 {
     const task_t task = get_threadtask(thread);
-    const struct vm_shared_region *sr = task->shared_region;
     const arm_saved_state_t *user = get_user_regs(thread);
-    uint64_t value = 0;
+    const struct vm_shared_region *sr = NULL;
 
+    *value = 0;
+    /* A terminating task's shared region can go with it (it holds no reference here): its threads are not placed. */
+    if (user == NULL || !task->active) {
+        return SWITCH_STALL_RAW;
+    }
+    sr = task->shared_region;
+    return (uint8_t)switch_stall_user_where(
+        (uint64_t)ptrauth_strip((void *)(lr ? get_saved_state_lr(user) : get_saved_state_pc(user)),
+                                ptrauth_key_return_address),
+        sr ? sr->sr_base_address : 0, sr ? sr->sr_size : 0, sr ? sr->sr_slide : 0, task->mach_header_vm_address, value);
+}
+
+/* A thread going into a wait: its kind, user sites, kernel continuation and event. */
+void switch_sched_wait_of(thread_t thread, struct switch_busy_wait *w)
+{
     w->hint = (uint8_t)thread->block_hint;
     w->event = VM_KERNEL_UNSLIDE_OR_PERM(thread->wait_event);
     w->kernel =
         thread->continuation != NULL
             ? VM_KERNEL_UNSLIDE((uintptr_t)ptrauth_strip((void *)thread->continuation, ptrauth_key_function_pointer))
             : 0;
-    if (user == NULL) {
-        return;
-    }
-    w->pc_where = (uint8_t)switch_stall_user_where(
-        (uint64_t)ptrauth_strip((void *)get_saved_state_pc(user), ptrauth_key_return_address),
-        sr ? sr->sr_base_address : 0, sr ? sr->sr_size : 0, sr ? sr->sr_slide : 0, task->mach_header_vm_address,
-        &value);
-    w->pc = value;
-    w->lr_where = (uint8_t)switch_stall_user_where(
-        (uint64_t)ptrauth_strip((void *)get_saved_state_lr(user), ptrauth_key_return_address),
-        sr ? sr->sr_base_address : 0, sr ? sr->sr_size : 0, sr ? sr->sr_slide : 0, task->mach_header_vm_address,
-        &value);
-    w->lr = value;
+    w->pc_where = switch_sched_user_site(thread, false, &w->pc);
+    w->lr_where = switch_sched_user_site(thread, true, &w->lr);
 }
 
 /* thread_dispatch, under the departing thread's lock: no lock, allocation or log here. */
@@ -152,7 +155,12 @@ void switch_sched_busy_departed(thread_t thread, uint64_t now)
     waiting = (thread->state & TH_WAIT) != 0;
     idle = waiting && !waitq_is_null(thread->waitq) && waitq_type(thread->waitq) == WQT_PORT_SET;
     if (waiting && !idle) {
-        busy_wait_of(thread, &wait);
+        switch_sched_wait_of(thread, &wait);
+    } else if (!waiting) {
+        uint64_t pc = 0;
+        const uint8_t where = switch_sched_user_site(thread, false, &pc);
+
+        switch_busy_sampled(&s->state, where, pc);
     }
     if (!switch_busy_departed(&s->state, now, recount_thread_time_mach(thread), waiting, idle, &wait, busy_min,
                               &done)) {
@@ -182,6 +190,7 @@ void switch_sched_busy_tick(void)
 {
     thread_call_t call = os_atomic_load(&busy_call, acquire);
 
+    switch_sched_watch_tick();
     if (call == NULL) {
         return;
     }

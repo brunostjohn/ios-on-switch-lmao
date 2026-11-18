@@ -165,14 +165,18 @@ static void watch(enum slot_id id, uint64_t tid, int pid, const char *label, boo
         }
     }
     simple_lock(&slots_lock, LCK_GRP_NULL);
-    if (os_atomic_load(&watched[id], relaxed) != tid &&
-        (replace_same_pid || slots[id].pid != pid || os_atomic_load(&watched[id], relaxed) == 0)) {
+    const bool stored = os_atomic_load(&watched[id], relaxed) != tid &&
+                        (replace_same_pid || slots[id].pid != pid || os_atomic_load(&watched[id], relaxed) == 0);
+    if (stored) {
         slots[id].pid = pid;
         strlcpy(slots[id].label, label, sizeof(slots[id].label));
         os_atomic_store(&watched[id], tid, relaxed);
     }
     simple_unlock(&slots_lock);
     os_atomic_store(&switch_sched_watching, 1, relaxed);
+    if (stored && id == CA_RENDER) {
+        switch_sched_watch_render_server(tid);
+    }
 }
 
 static uint64_t main_thread_id(task_t task)
@@ -209,6 +213,7 @@ void switch_sched_role(task_t task, int role)
     }
     snprintf(label, sizeof(label), "%s.main", name);
     watch(APP_MAIN, tid, task_pid(task), label, true);
+    switch_sched_watch_focal(task, tid);
 }
 
 /* bsd_setthreadname (proc_info.c): backboardd's threads as they name themselves, and its main thread with them. */
@@ -496,6 +501,7 @@ static void switch_sched_report(__unused thread_call_param_t p0, __unused thread
     append_slots(line, MIN(at, LINE - 1), FIRST_GPU, SLOTS);
     os_log(OS_LOG_DEFAULT, "%s", line);
     switch_sched_cpu_report(line, window_ns);
+    switch_sched_watch_report(line, LINE, window_ns);
     report_asked(line);
 }
 

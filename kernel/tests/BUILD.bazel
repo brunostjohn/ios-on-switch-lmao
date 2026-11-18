@@ -28,6 +28,11 @@
 #                            to its swap into running, blocked and waiting for a core
 #   xnu_sched_cpu_test       kernel/switch/sched/cpu.h: each process's CPU in a window, counted once across its exit and
 #                            an exec, a full table's misses counted; the cores and tasks lines
+#   xnu_sched_watch_test     kernel/switch/sched/watch.h and commit.h: a committing or touch-sending thread's stretch to
+#                            each event, one per burst, its cause and line; a commit through the render server to the
+#                            display thread's wake; nothing under the thread lock that locks or logs
+#   xnu_sched_slots_test     kernel/switch/sched/slots.h: watched threads' slots taken without a lock, freed only from
+#                            the report's snapshot, filter bits cleared only when no taken id needs them
 #   xnu_sched_busy_test      kernel/switch/sched/busy.h: a UI main thread's stretch between two run-loop waits split into
 #                            running, blocked by kind and waiting for a core, its longest waits and its line; both trees'
 #                            thread_dispatch feed it under the thread's lock, with nothing there that locks or logs
@@ -348,6 +353,58 @@ host_test(
         "//kernel/switch:sched/busy.h",
         "//kernel/xnu-10063.141.1/osfmk:kern/sched_prim.c",
         "//kernel/xnu-12377.121.6/osfmk:kern/sched_prim.c",
+    ],
+    includes = ["."],
+)
+
+# --- kernel/switch/sched/watch.h, commit.h ----------------------------------------------------------------------------
+copy_file(
+    name = "switch_sched_watch",
+    src = "//kernel/switch:sched/watch.h",
+    out = "sched/watch.h",
+)
+
+copy_file(
+    name = "switch_sched_commit",
+    src = "//kernel/switch:sched/commit.h",
+    out = "sched/commit.h",
+)
+
+host_test(
+    name = "xnu_sched_watch_test",
+    srcs = [
+        "diag/stall.h",
+        "sched/busy.h",
+        "sched/commit.h",
+        "sched/stats.h",
+        "sched/watch.h",
+        "xnu_sched_watch_test.cpp",
+    ],
+    data = [
+        "//kernel/switch:include/switch/sched.h",
+        "//kernel/switch:sched/commit.c",
+        "//kernel/switch:sched/slots.h",
+        "//kernel/switch:sched/watch.c",
+    ],
+    defines = select({
+        "//kernel:xnu_12377_121_6": ["XNU_12377_121_6=1"],
+        "//conditions:default": [],
+    }),
+    includes = ["."],
+)
+
+# --- kernel/switch/sched/slots.h ------------------------------------------------------------------------------------------
+copy_file(
+    name = "switch_sched_slots",
+    src = "//kernel/switch:sched/slots.h",
+    out = "sched/slots.h",
+)
+
+host_test(
+    name = "xnu_sched_slots_test",
+    srcs = [
+        "sched/slots.h",
+        "xnu_sched_slots_test.cpp",
     ],
     includes = ["."],
 )

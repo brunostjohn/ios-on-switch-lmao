@@ -101,6 +101,57 @@ TEST(XnuSchedBusy, NothingIsCountedBeforeTheFirstRunLoopWait)
     EXPECT_FALSE(t.b.open);
 }
 
+TEST(XnuSchedBusy, ANullEpisodeStillReportsEndedAndClosesTheStretch)
+{
+    switch_busy b = {};
+    switch_busy_wait w = {};
+    EXPECT_FALSE(switch_busy_departed(&b, 100, 0, true, true, &w, kMin, nullptr));
+    switch_busy_dispatched(&b, 200, 200);
+    EXPECT_TRUE(switch_busy_departed(&b, 350, 150, true, true, &w, kMin, nullptr));
+    EXPECT_FALSE(b.open);
+    switch_busy_dispatched(&b, 400, 400);
+    EXPECT_FALSE(switch_busy_departed(&b, 450, 200, true, true, &w, kMin, nullptr)) << "under kMin";
+    EXPECT_FALSE(b.open);
+}
+
+TEST(XnuSchedBusy, PreemptionsSampleWhereTheStretchRan)
+{
+    Thread t;
+    t.leave(1000, 0, true, true);
+    t.run(2000, 2000);
+    for (uint64_t i = 0; i < 5; i++)
+        switch_busy_sampled(&t.b, SWITCH_STALL_DSC, 0x1a2b00 + i);  // one 64-byte bucket
+    switch_busy_sampled(&t.b, SWITCH_STALL_MAIN, 0x400);
+    switch_busy_sampled(&t.b, SWITCH_STALL_DSC, 0x9000);
+    switch_busy_sampled(&t.b, SWITCH_STALL_DSC, 0x9000);
+    t.leave(3000, 900, true, true);
+    ASSERT_EQ(t.ended, 1);
+    EXPECT_EQ(t.done.samples, 8u);
+    EXPECT_THAT(Line(t.done),
+                HasSubstr(" user pc at its 8 preemptions (the trap site when in the kernel): dsc 0x1a2b00 x5; dsc "
+                          "0x9000 x2; main+0x400 x1;"));
+}
+
+TEST(XnuSchedBusy, AFullSampleTableGivesItsLeastCountedBucketToANewOne)
+{
+    switch_busy b = {};
+    b.open = true;
+    for (uint64_t i = 0; i < SWITCH_BUSY_PCS; i++)
+        for (uint64_t k = 0; k <= i; k++)
+            switch_busy_sampled(&b, SWITCH_STALL_DSC, 0x1000 * (i + 1));
+    switch_busy_sampled(&b, SWITCH_STALL_DSC, 0x9000);
+    bool newest = false, least = false;
+    for (const switch_busy_pc &p : b.e.pcs) {
+        newest = newest || (p.pc == 0x9000 && p.n == 1);
+        least = least || p.pc == 0x1000;
+    }
+    EXPECT_TRUE(newest);
+    EXPECT_FALSE(least) << "the bucket counted once went";
+    switch_busy closed = {};
+    switch_busy_sampled(&closed, SWITCH_STALL_DSC, 0x1000);
+    EXPECT_EQ(closed.e.samples, 0u) << "no stretch open: nothing to count";
+}
+
 TEST(XnuSchedBusy, TheThreeLongestWaitsAreKeptInOrder)
 {
     Thread t;
@@ -207,7 +258,8 @@ TEST(XnuSchedBusySource, NothingUnderTheThreadLockLocksSleepsAllocatesOrLogs)
     const std::string header = switch_ios::test::SourceText("../switch/sched/busy.h");
     const std::string hot =
         switch_ios::test::Body(source, "\nstatic struct busy_slot *busy_slot_of(") +
-        switch_ios::test::Body(source, "\nstatic void busy_wait_of(") +
+        switch_ios::test::Body(source, "\nuint8_t switch_sched_user_site(") +
+        switch_ios::test::Body(source, "\nvoid switch_sched_wait_of(") +
         switch_ios::test::Body(source, "\nvoid switch_sched_busy_departed(") +
         switch_ios::test::Body(source, "\nvoid switch_sched_busy_dispatched(") +
         switch_ios::test::Between(header, "struct switch_busy {", "static inline uint64_t switch_busy_us(");
