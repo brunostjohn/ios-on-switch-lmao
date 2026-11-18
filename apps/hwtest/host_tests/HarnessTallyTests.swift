@@ -20,4 +20,11 @@ final class HarnessTallyTests: XCTestCase {
         XCTAssertEqual(tally(boundary: 565, mainWait: 0.2).outcome.verdict, .fail, "boot 2's harness")
         XCTAssertEqual(tally(boundary: 45, mainWait: 350).outcome.verdict, .fail, "a list redraw at every start")
     }
+
+    func testTheLineCarriesWhatTheThreadSamplesCost() {
+        var tally = HarnessTally()
+        for ms in [0.2, 0.3, 0.4, 2.5] { tally.add(cpuSampleMs: ms) }
+        XCTAssertEqual(tally.outcome.metrics["cpu_sample_ms_p50"], .number(0.3, digits: 2))
+        XCTAssertEqual(tally.outcome.metrics["cpu_sample_ms_max"], .number(2.5, digits: 2))
+    }
 }

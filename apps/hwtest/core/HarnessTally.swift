@@ -12,6 +12,7 @@ public struct HarnessTally {
     private var boundaries: [Double] = []
     private var flushes: [Double] = []
     private var mainWaits: [Double] = []
+    private var cpuSamples: [Double] = []
 
     public init() {}
 
@@ -19,6 +20,11 @@ public struct HarnessTally {
         boundaries.append(boundaryMs)
         flushes.append(flushMs)
         mainWaits.append(mainWaitMs)
+    }
+
+    /// The thread sample each test's CPU split comes from, taken at the test's end inside its boundary.
+    public mutating func add(cpuSampleMs: Double) {
+        cpuSamples.append(cpuSampleMs)
     }
 
     public var outcome: Outcome {
@@ -32,6 +38,8 @@ public struct HarnessTally {
         metrics.set("main_wait_ms_p50", mainWait, digits: 1)
         metrics.set("main_wait_ms_max", mainWaits.max() ?? 0, digits: 1)
         metrics.set("main_late", mainWaits.filter { $0 > Self.mainWaitCeilingMs }.count)
+        metrics.set("cpu_sample_ms_p50", Stats.percentile(cpuSamples, 0.5), digits: 2)
+        metrics.set("cpu_sample_ms_max", cpuSamples.max() ?? 0, digits: 2)
         var over: [String] = []
         if boundary > Self.boundaryCeilingMs { over.append("median boundary over \(Int(Self.boundaryCeilingMs)) ms") }
         if mainWait > Self.mainWaitCeilingMs { over.append("median main-thread answer over one display period") }

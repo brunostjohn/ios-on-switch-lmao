@@ -150,11 +150,13 @@ public final class Suite: ObservableObject {
             prompter: prompter, stage: stage
         )
         let recorder = recorder
+        let main = ThreadTimes.current()
         Task.detached(priority: .userInitiated) { [weak self] in
             let start = CFAbsoluteTimeGetCurrent()
             var harness = HarnessTally()
             var finished: TestRecord?
             var ended: Double?
+            var cpu = ThreadTimes.sample(main: main)
             for test in batch {
                 guard let self else { return }
                 let wedged = await self.advance(finished, next: test.id)
@@ -162,9 +164,11 @@ public final class Suite: ObservableObject {
                 let mainWait = await Suite.mainThreadAnswer()
                 let begun = CFAbsoluteTimeGetCurrent()
                 if let ended { harness.add(boundaryMs: (begun - ended) * 1000, flushMs: flush, mainWaitMs: mainWait) }
-                let record = await Suite.outcome(of: test, context, wedgedBy: wedged)
-                ended = begun + record.milliseconds / 1000
-                finished = record
+                let ran = await Suite.outcome(of: test, context, wedgedBy: wedged, cpuSince: cpu)
+                harness.add(cpuSampleMs: ran.sampleMs)
+                cpu = ran.cpu
+                ended = begun + ran.record.milliseconds / 1000
+                finished = ran.record
             }
             guard let self else { return }
             _ = await self.advance(finished, next: nil)

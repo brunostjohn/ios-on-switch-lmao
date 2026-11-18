@@ -14,10 +14,11 @@ extension Suite {
     nonisolated static let gpuAnswersKey = "gpu_answers"
 
     /// The line goes out as the measured span ends, so the line's time less its ms= is when the test started; only a
-    /// GPU test that timed out waits for GPUProbe first.
-    nonisolated static func outcome(of test: any HWTest, _ context: TestContext, wedgedBy wedged: String?) async
-        -> TestRecord
-    {
+    /// GPU test that timed out waits for GPUProbe first, and the thread sample its CPU split is taken from (since
+    /// `earlier`, the last test's) comes before it, outside the span.
+    nonisolated static func outcome(
+        of test: any HWTest, _ context: TestContext, wedgedBy wedged: String?, cpuSince earlier: ThreadTimes
+    ) async -> (record: TestRecord, cpu: ThreadTimes, sampleMs: Double) {
         var record: TestRecord
         if let wedged, test.drawsWithGPU, !test.runsWhenGPUWedged {
             record = Suite.record(test, .skip("the app's GPU stopped answering after \(wedged) timed out"), 0)
@@ -30,9 +31,15 @@ extension Suite {
                 record = await checked(test, record)
             }
         }
+        let sampled = CFAbsoluteTimeGetCurrent()
+        let cpu = ThreadTimes.sample(main: earlier.main)
+        let sampleMs = (CFAbsoluteTimeGetCurrent() - sampled) * 1000
+        var outcome = record.outcome
+        outcome.metrics.set(CPUSplit.key, cpu.split(since: earlier).field)
+        record = Suite.record(test, outcome, record.milliseconds)
         log(LogLine.format(record))
         if GlassMemWatch.armsTheProbe(test.id) { GlassMemWatch.endGlassTest() }
-        return record
+        return (record, cpu, sampleMs)
     }
 
     /// The test's own span only: the stage it leaves is cleared between tests.
