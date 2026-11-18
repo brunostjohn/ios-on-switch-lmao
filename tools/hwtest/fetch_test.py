@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from tools.hwtest import fetch, hwtest
-from tools.hwtest.reports import Report, history, sidecar_of
+from tools.hwtest.reports import Report, from_journal, history, sidecar_of
 
 BOOT = '6A25F6C4-A931-4851-9437-EDE961F57EC1'
 OTHER_BOOT = '11111111-2222-3333-4444-555555555555'
@@ -164,6 +164,62 @@ class Fetch(unittest.TestCase):
         self.assertIn('a mb_s: 80 -> 40 (-50%)', summary)
         self.assertIn('slower (1)', summary)
         self.assertEqual(lines[-1], 'hwtest: no new HW Test run on the card')
+
+
+# The same text as apps/hwtest/host_tests/RunJournalTests.swift's sharedJournal: both readers fold it to the same run.
+JOURNAL = (
+    '{"identity":{"build":"24B119"},"results":[],"run":{"boot_uuid":"B1","id":"B1-19700101-000000","ios":27,'
+    '"order":["a","b","c"],"started":"1970-01-01T00:00:00.000Z","status":"running"},"schema":2,'
+    '"summary":{"crashed":0,"fail":0,"pass":0,"planned":3,"skip":0}}\n'
+    '{"begin":"a"}\n'
+    '{"result":{"boot_uuid":"B1","detail":"","finished":"1970-01-01T00:00:01.000Z","id":"a","interactive":false,'
+    '"log":"HWTEST a PASS ms=3.0","metrics":{"fps":59.94},"milliseconds":3,"name":"a","proof":"","subsystem":"Storage",'
+    '"verdict":"PASS"}}\n'
+    '{"begin":"b"}\n'
+    '{"interruption":"backgrounded"}\n'
+    '{"result":{"boot_uuid":"B1","detail":"bad","finished":"1970-01-01T00:00:02.000Z","id":"b","interactive":false,'
+    '"log":"HWTEST b FAIL ms=3.0 why=bad","metrics":{},"milliseconds":3,"name":"b","proof":"","subsystem":"Stor'
+)
+
+
+class Journal(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.card = Card(self.root)
+        self.history = self.root / 'history'
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_a_running_runs_journal_is_fetched_as_its_report(self):
+        (self.card.reports / 'B1-19700101-000000.journal').write_text(JOURNAL)
+        changed = fetch.fetch(self.card.data, self.card.switch, self.history, self.root / 'out')
+        self.assertEqual([p.name for p in changed], ['B1-19700101-000000.json'])
+        report = Report.load(self.history / 'B1-19700101-000000.json')
+        self.assertEqual(report.current, 'b')
+        self.assertEqual(report.run['interruption'], 'backgrounded')
+        self.assertFalse(report.finished)
+        self.assertEqual(list(report.results), ['a'])
+        self.assertEqual(report.results['a']['metrics'], {'fps': 59.94})
+        self.assertEqual(report.data['summary'], {'pass': 1, 'fail': 0, 'skip': 0, 'crashed': 0, 'planned': 3})
+        self.assertTrue((self.root / 'out/B1-19700101-000000.json').is_file())
+        self.assertEqual(fetch.fetch(self.card.data, self.card.switch, self.history), [], 'unchanged on the card')
+
+    def test_a_reruns_journal_wins_over_the_runs_finished_json(self):
+        self.card.run('B1-19700101-000000.json', report(10))
+        (self.card.reports / 'B1-19700101-000000.journal').write_text(JOURNAL.rpartition('\n')[0] + '\n')
+        fetch.fetch(self.card.data, self.card.switch, self.history)
+        self.assertEqual(Report.load(self.history / 'B1-19700101-000000.json').current, 'b')
+
+    def test_a_run_that_finished_ends_its_journal(self):
+        lines = JOURNAL.rpartition('\n')[0] + '\n{"result":{"id":"b","verdict":"FAIL","metrics":{"crashed":true}}}\n'
+        report = from_journal((lines + '{"finished":"1970-01-01T00:01:40.000Z"}\n').encode())
+        self.assertEqual(report['run']['status'], 'done')
+        self.assertNotIn('current', report['run'])
+        self.assertNotIn('interruption', report['run'])
+        self.assertEqual(report['summary']['crashed'], 1)
+        self.assertIsNone(from_journal(b'{"begin":"a"}\n'))
 
 
 if __name__ == '__main__':

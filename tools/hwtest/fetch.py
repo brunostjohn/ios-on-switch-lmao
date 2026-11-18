@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from tools.hwtest import bootlog, health, posters
-from tools.hwtest.reports import Report, is_report, sidecar_of
+from tools.hwtest.reports import JOURNAL, Report, from_journal, is_report, sidecar_of
 
 BUNDLES = ('com.brunostjohn.switch.hwtest', 'com.brunostjohn.switch.hwtest27e')
 CONTAINERS = 'mobile/Containers/Data/Application'
@@ -43,6 +43,19 @@ def copy_gpu_files(container: Path, out: Path, identifier: str) -> None:
         files = container / 'Documents' / folder
         if files.is_dir():
             shutil.copytree(files, out / kind / identifier, copy_function=shutil.copyfile, dirs_exist_ok=True)
+
+
+def card_reports(folder: Path) -> dict[str, bytes]:
+    """Return each run in an app's Documents/hwtest as its json's name and bytes.
+
+    A run with a journal (one that runs, or a finished one a rerun reopened) is the journal's report.
+    """
+    reports = {path.name: path.read_bytes() for path in sorted(folder.glob('*.json')) if is_report(path)}
+    for path in sorted(folder.glob('*' + JOURNAL)):
+        report = from_journal(path.read_bytes())
+        if report is not None:
+            reports[path.stem + '.json'] = (json.dumps(report, indent=1, sort_keys=True) + '\n').encode()
+    return reports
 
 
 def sidecar(report: Report, data: Path, switch_folder: Path, archive: Path | None = None) -> dict:
@@ -81,16 +94,14 @@ def fetch(
     for identifier, container in containers(data).items():
         if out:
             copy_gpu_files(container, out, identifier)
-        for source in sorted((container / 'Documents/hwtest').glob('*.json')):
-            if not is_report(source):
-                continue
-            target = history / source.name
+        for name, content in card_reports(container / 'Documents/hwtest').items():
+            target = history / name
             if out:
                 out.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source, out / source.name)
-            if target.is_file() and target.read_bytes() == source.read_bytes():
+                (out / name).write_bytes(content)
+            if target.is_file() and target.read_bytes() == content:
                 continue
-            shutil.copyfile(source, target)
+            target.write_bytes(content)
             try:
                 report = Report.load(target)
             except ValueError:
