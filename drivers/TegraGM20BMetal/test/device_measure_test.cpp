@@ -176,6 +176,26 @@ TEST_F(DeviceMeasure, TheNextCommandBufferTeachesWhatTheGpuStamped)
     cb->abandon();
 }
 
+// A large draw counts where its price came from: the static estimate until a measured draw of its state completed,
+// then the learned rate, by which the next command buffer bands it (ten milliseconds in one-millisecond bands)
+TEST_F(DeviceMeasure, TheNextCommandBufferPricesALargeDrawByItsLearnedRate)
+{
+    const Words w = pass(1);
+    ASSERT_EQ(w.stamps.size(), 2u);
+    EXPECT_EQ(dev.stats.pricedStatic.load(), 1u);
+    EXPECT_EQ(dev.stats.pricedLearned.load(), 0u);
+    const uint64_t ticks[2] = {1000, 1000 + 10 * 614'400};
+    for (size_t i = 0; i < 2; i++) {
+        const gm20b::StampRelease r{w.stamps[i].second, 0, ticks[i]};
+        memcpy(kernel_model::model.host(w.stamps[i].first), &r, sizeof r);
+    }
+    const uint64_t bands = dev.stats.bands.load();
+    pass(1);
+    EXPECT_EQ(dev.stats.pricedStatic.load(), 1u);
+    EXPECT_EQ(dev.stats.pricedLearned.load(), 1u);
+    EXPECT_EQ(dev.stats.bands.load() - bands, 10u);
+}
+
 TEST_F(DeviceMeasure, AMeasuredDrawTheGpuHasNotRunWaits)
 {
     const Words w = pass(1);

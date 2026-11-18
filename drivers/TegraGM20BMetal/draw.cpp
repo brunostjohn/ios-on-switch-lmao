@@ -81,6 +81,7 @@ bool RenderEncoder::drawnWhole(const Pipeline &pl) const
 void RenderEncoder::wholeDraw(const Pipeline &pl, bool indexed, uint32_t first, uint32_t count, uint32_t instances,
                               uint32_t baseVertex, uint32_t baseInstance)
 {
+    SWITCH_METAL_DIAGNOSTIC(if (drawUnits(instances) >= kMeasureUnits) dev_->stats.unpricedLarge++);
     if (amplifies()) {
         amplifyCall(pl, indexed, first, count, instances, baseVertex, baseInstance);
         return;
@@ -187,6 +188,8 @@ void RenderEncoder::fetchDraw(uint32_t primitive, bool indexed, uint32_t first, 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     dev_->stats.fetch.sequential++;
     dev_->stats.fetch.sequentialTriangles += uint64_t(primitives(primitive, count)) * instances;
+    if (drawUnits(instances) >= kMeasureUnits)
+        dev_->stats.unpricedLarge++;
 #endif
 }
 

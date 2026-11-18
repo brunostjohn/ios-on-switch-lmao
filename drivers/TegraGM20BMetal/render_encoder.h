@@ -451,7 +451,10 @@ private:
                   uint32_t baseInstance);
     uint64_t drawUnits(uint32_t instances) const;
     uint32_t drawBands(uint32_t vertices, uint32_t instances, uint64_t units) const;
-    void noteCandidate(uint64_t units);
+    void noteCandidate(uint64_t units, uint32_t bands);
+#if SWITCH_METAL_DIAGNOSTICS
+    void notePrice(uint64_t units, uint32_t bands) const;
+#endif
     bool measurePass(bool drained);
     uint32_t passDraws_ = 0;
     DrawTiming candidate_;  // the pass's first draw, measured at the pass's end when it stays the only one

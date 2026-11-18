@@ -64,6 +64,9 @@
     d[@"banded_draws"] = @(gRM->raw->stats.bandedDraws.load());
     d[@"bands"] = @(gRM->raw->stats.bands.load());
     d[@"learned_draws"] = @(gRM->raw->stats.learnedDraws.load());
+    d[@"priced_static"] = @(gRM->raw->stats.pricedStatic.load());
+    d[@"priced_learned"] = @(gRM->raw->stats.pricedLearned.load());
+    d[@"unpriced_large"] = @(gRM->raw->stats.unpricedLarge.load());
     d[@"banded_dispatches"] = @(gRM->raw->stats.bandedDispatches.load());
     d[@"storage_barriers"] = @(gRM->raw->stats.storageBarriers.load());
     d[@"texture_uploads"] = @(gRM->raw->stats.textureUploads.load());

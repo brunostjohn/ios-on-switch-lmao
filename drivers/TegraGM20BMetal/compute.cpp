@@ -735,7 +735,7 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     if (pieces > 1 && cb_.batchWork_.operations)
         cutBatch();
     if (first)
-        noteDispatch(units, looping);
+        noteDispatch(units, looping, pieces);
     slotTableVa_ = 0;
     for (uint32_t i = 0; i < pieces; i++) {
         const DispatchPiece piece = dispatchPiece(grid, axis, i, pieces);
@@ -820,11 +820,11 @@ void ComputeEncoder::cutBatch()
 // the encoder's opening wait for idle, which only the first dispatch follows, the end stamp ahead of the closing one. The
 // start stamp goes out before the encoder knows the dispatch stays alone, so it is taken in a slot of its own; a second
 // dispatch leaves it unread. The pick is counted at the end whether or not a start stamp went out.
-void ComputeEncoder::noteDispatch(uint64_t units, bool looping)
+void ComputeEncoder::noteDispatch(uint64_t units, bool looping, uint32_t pieces)
 {
     if (++dispatches_ != 1 || looping || dev_.compositorClass() || cb_.timings.size() >= kMeasuredPerCommandBuffer)
         return;
-    candidate_ = {&state_->rate, units, 0, 0, state_->rec->keyHash, state_->instructions};
+    candidate_ = {&state_->rate, units, 0, 0, state_->rec->keyHash, state_->instructions, pieces};
     if (!wouldMeasure(state_->rate, units))
         return;
     const uint32_t n = dev_.drawStamps_++;
