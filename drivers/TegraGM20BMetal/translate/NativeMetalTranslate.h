@@ -100,6 +100,10 @@ typedef struct NmbOfflineFunction NmbOfflineFunction;
 // As nmb_library_new's metallib, nmb_function_new's and nmb_function_new_specialized's functions
 NmbOfflineLibrary *nmb_offline_library_new(const void *bytes, size_t length);
 void nmb_offline_library_release(NmbOfflineLibrary *);
+// The system shader compiler keeps up to `bytes` of each kind of compiled stage (0: none), so a stage another state
+// compiles under the same inputs is translated once; and what it keeps: entries and bytes
+void nmb_keep_translations(uint64_t bytes);
+void nmb_kept_translations(uint64_t out[2]);
 NmbOfflineFunction *nmb_offline_function_new(const NmbOfflineLibrary *, const char *name);
 NmbOfflineFunction *nmb_offline_function_new_specialized(const NmbOfflineLibrary *, const char *name,
                                                          const char *specialized_name,

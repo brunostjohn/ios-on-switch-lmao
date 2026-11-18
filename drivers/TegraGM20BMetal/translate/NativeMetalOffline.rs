@@ -142,6 +142,27 @@ pub extern "C" fn nmb_offline_library_release(library: *mut NmbOfflineLibrary) {
     release(library)
 }
 
+/// The system shader compiler's: keep up to `bytes` of each kind of compiled stage, so a stage another state compiles
+/// under the same inputs is translated once (metal2vulkan::pipeline::keep_compiled_stages)
+#[unsafe(no_mangle)]
+pub extern "C" fn nmb_keep_translations(bytes: u64) {
+    metal2vulkan::pipeline::keep_compiled_stages(usize::try_from(bytes).unwrap_or(usize::MAX));
+}
+
+/// The kept stages into `out`'s two words: entries and bytes
+///
+/// # Safety
+/// `out` holds two words.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nmb_kept_translations(out: *mut u64) {
+    if out.is_null() {
+        return;
+    }
+    let k = metal2vulkan::pipeline::kept_compiled_stages();
+    // SAFETY: the caller's two words.
+    unsafe { std::slice::from_raw_parts_mut(out, 2) }.copy_from_slice(&[k.entries, k.bytes]);
+}
+
 fn offline_function(
     library: *const NmbOfflineLibrary,
     name: &str,
