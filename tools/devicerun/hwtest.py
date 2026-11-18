@@ -196,6 +196,7 @@ TESTS: dict[str, bool] = {
             'gpu.compile.first_draw',
             'gpu.compile.stage_library',
             'gpu.compile.answer_latency',
+            'gpu.compile.shared_stages',
             'gpu.sched.long_draw_bands',
             'gpu.sched.long_dispatch_pieces',
             'gpu.poster_targets',
