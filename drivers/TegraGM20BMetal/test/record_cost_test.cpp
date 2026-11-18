@@ -518,6 +518,41 @@ TEST(GM20BRecordCost, TheFrameLineCountsKeptPassesAndWhereWaitsWent)
     EXPECT_EQ(parts[0] + parts[1] + parts[2] + parts[3] + parts[4], waited) << line;
 }
 
+// The recording thread prepares an encoder's range only where the submit worker may encode it ahead of the commit, which
+// reads it as the tape is written: a command buffer too short to be handed to the worker leaves every range to the
+// worker's turn, and one handed has each encoder prepared once
+TEST(GM20BRecordCost, OnlyAnEncodeAheadHasTheRecordingThreadPrepareRanges)
+{
+    Bench &b = bench();
+    ASSERT_TRUE(b.device != nil && b.state != nil);
+    std::atomic<uint64_t> &prepared = gm20b::frameCpuCounts().recordPrepares;
+    const auto run = [&](const std::function<void(id<MTLCommandBuffer>)> &record) {
+        @autoreleasepool {
+            id<MTLCommandBuffer> cb = [b.queue commandBuffer];
+            const uint64_t before = prepared.load();
+            record(cb);
+            const uint64_t made = prepared.load() - before;
+            [cb commit];
+            [cb waitUntilCompleted];
+            EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+            EXPECT_EQ(prepared.load() - before, made) << "the commit prepared ranges on the recording thread";
+            return made;
+        }
+    };
+    const std::vector<MTLRenderPassDescriptor *> into = passes(b, kEncoders);
+    const uint64_t shortOne = run([&](id<MTLCommandBuffer> cb) {
+        id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:into[0]];
+        [e setRenderPipelineState:b.state];
+        compositorDraw(e, b, 0, 0);
+        [e endEncoding];
+    });
+    EXPECT_EQ(shortOne, 0u);
+    const uint64_t frame = run([&](id<MTLCommandBuffer> cb) {
+        compositorFrame(cb, b, into, kDraws, 0);
+    });
+    EXPECT_LE(frame, uint64_t(kEncoders));
+}
+
 // A wait's time goes to its parts in order, none past the wait: before the worker took it, parked, encoding, the
 // handler queue's hop from its scheduling, then the rest
 TEST(GM20BRecordCost, AScheduledWaitSplitsIntoItsParts)

@@ -153,8 +153,8 @@ void planSegments(SwitchMetalCommandBuffer *cb)
             return;
         }
     }
+    // the ranges are prepared by the submit worker at their turn (submitLoop), which owns the plan from the commit on
     for (const auto &range : plan.ranges()) {
-        cb->_plan.prepareRange(range.from, range.to);
         const bool native = range.kind == gm20b::ExecutionKind::native;
         cb->_segs.push_back({uint32_t(range.from), uint32_t(range.to), !native, false, range.gpuWait});
         if (native && cb->_predicates.loops()) {

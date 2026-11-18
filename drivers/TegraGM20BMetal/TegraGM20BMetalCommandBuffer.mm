@@ -211,7 +211,8 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
         if (!uses.empty())
             _plan.addUses(_plan.size() - 1, uses);
         if (cmd.op == OpEnd && _encOpen) {
-            _plan.prepareRange(_encAt, _plan.size());
+            if (gm20bAheadReads(self))
+                gm20bPrepareEncoder(self, _encAt, _plan.size());
             [self closeEncoder];
             gm20bPublishEncoder(self);
         }

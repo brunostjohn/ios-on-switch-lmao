@@ -7,9 +7,16 @@
 #pragma once
 #import "TegraGM20BMetalInternal.h"
 
-// The caller's, as an encoder of `cb` ended (its OpEnd recorded, its range prepared): what is final of the tape published,
-// and the worker handed the command buffer once enough was recorded since it last was
+// The caller's, as an encoder of `cb` ended (its OpEnd recorded, its range prepared where the worker reads it ahead): what
+// is final of the tape published, and the worker handed the command buffer once enough was recorded since it last was,
+// every encoder recorded before that first hand-off prepared then
 void gm20bPublishEncoder(SwitchMetalCommandBuffer *cb);
+// The caller's: whether the worker may encode the encoder that just ended ahead of the commit, so the caller prepares
+// its range (the worker reads it with the tape still being written). Otherwise its range is the worker's to prepare at
+// the commit's turn, with the rest of the range it is in.
+bool gm20bAheadReads(SwitchMetalCommandBuffer *cb);
+// The caller's: the encoder [from, to)'s range prepared on the recording thread
+void gm20bPrepareEncoder(SwitchMetalCommandBuffer *cb, size_t from, size_t to);
 
 // The worker's: `cb` was handed over (SwitchMetalScheduleChange::Encoded)
 void gm20bPipelineHanded(SwitchMetalCommandBuffer *cb);

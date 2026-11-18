@@ -68,6 +68,34 @@ void giveBack(uint32_t veto)
 
 }  // namespace
 
+bool gm20bAheadReads(SwitchMetalCommandBuffer *cb)
+{
+    return cb->_handedOnce && !cb->_pipelineVeto.load(std::memory_order_relaxed) &&
+           !cb->_pipelineDeclined.load(std::memory_order_relaxed);
+}
+
+void gm20bPrepareEncoder(SwitchMetalCommandBuffer *cb, size_t from, size_t to)
+{
+    cb->_plan.prepareRange(from, to);
+    SWITCH_METAL_DIAGNOSTIC(gm20b::frameCpuCounts().recordPrepares.fetch_add(1, std::memory_order_relaxed));
+}
+
+// Before the first hand-off: the encoders recorded so far, which the worker encodes from the tape's start
+static void prepareEnded(SwitchMetalCommandBuffer *cb, size_t length)
+{
+    for (size_t at = 0; at < length;) {
+        if (!SwitchMetalCommandPlan::isEncoderBegin(cb->_plan.operation(at).op)) {
+            ++at;
+            continue;
+        }
+        const size_t end = cb->_plan.encoderEnd(at);
+        if (end <= at || end > length)
+            break;
+        gm20bPrepareEncoder(cb, at, end);
+        at = end;
+    }
+}
+
 void gm20bPublishEncoder(SwitchMetalCommandBuffer *cb)
 {
     const size_t length = cb->_plan.size();
@@ -79,6 +107,7 @@ void gm20bPublishEncoder(SwitchMetalCommandBuffer *cb)
     cb->_handedCommands = 0;
     SWITCH_METAL_DIAGNOSTIC(gRM->stats.handoffs++);
     if (!cb->_handedOnce) {
+        prepareEnded(cb, length);
         cb->_handedOnce = true;
         SWITCH_METAL_DIAGNOSTIC(gRM->stats.handoffWakes += gRM->submitAsleep.load(std::memory_order_relaxed));
         gRM->schedule.push({SwitchMetalScheduleChange::Encoded, cb});

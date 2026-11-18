@@ -84,6 +84,7 @@ struct FrameCpuCounts {
     std::atomic<uint64_t> longestWait{0};
     // the longest wait's parts (ScheduledWait's order), written by the waiter whose wait became the longest
     std::atomic<uint64_t> longestParts[5] = {};
+    std::atomic<uint64_t> recordPrepares{0};  // encoder ranges the recording thread prepared (gm20bPrepareEncoder)
 };
 
 inline FrameCpuCounts &frameCpuCounts()

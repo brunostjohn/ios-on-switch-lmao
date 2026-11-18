@@ -27,6 +27,8 @@ void enqueueBuffer(SwitchMetalCommandBuffer *cb)
 // the submit thread.
 static std::vector<uint64_t> writtenSurfaces(SwitchMetalCommandBuffer *cb)
 {
+    for (const SwitchMetalSegment &range : cb->_segs)
+        cb->_plan.prepareRange(range.from, range.to);
     std::vector<uint64_t> handles;
     cb->_plan.forEachWritten(0, cb->_plan.size(), [&](void *object) {
         id resource = (__bridge id)object;
