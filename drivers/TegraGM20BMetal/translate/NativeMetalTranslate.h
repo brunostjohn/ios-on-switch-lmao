@@ -100,6 +100,11 @@ typedef struct NmbOfflineFunction NmbOfflineFunction;
 // As nmb_library_new's metallib, nmb_function_new's and nmb_function_new_specialized's functions
 NmbOfflineLibrary *nmb_offline_library_new(const void *bytes, size_t length);
 void nmb_offline_library_release(NmbOfflineLibrary *);
+// nmb_offline_library_new's library over `bytes`, which the caller holds unchanged until `release(owner)` (called once,
+// on any thread, also when no library is made), with no copy. `sealed`: read from a sealed system volume, its
+// functions' HASH tags taken as stated, so only its function list is read until a function of it is compiled.
+NmbOfflineLibrary *nmb_offline_library_new_held(const void *bytes, size_t length, bool sealed, const void *owner,
+                                                void (*release)(const void *owner));
 // The system shader compiler keeps up to `bytes` of each kind of compiled stage (0: none), so a stage another state
 // compiles under the same inputs is translated once; and what it keeps: entries and bytes
 void nmb_keep_translations(uint64_t bytes);

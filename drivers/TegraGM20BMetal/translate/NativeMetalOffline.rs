@@ -13,11 +13,11 @@ use crate::direct_abi::SWITCH_METAL_HEAP_ELEMENTS;
 use metal2vulkan::device::{
     Device, DeviceDescription, DevicePolicy, FramebufferFetchPolicy, NativeShaderTarget, VkExtension, VkFeature,
 };
-use metal2vulkan::library::{FunctionConstantValues, Library, LibraryType};
+use metal2vulkan::library::{FunctionConstantValues, HeldBytes, Library, LibraryType};
 use metal2vulkan::pipeline::{FunctionDescriptor, LinkedFunction};
 use metal2vulkan::reflection::{Attribute, FunctionProperties};
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 const PROFILE: &str = include_str!(env!("NMB_COMPILE_PROFILE"));
 
@@ -133,6 +133,72 @@ pub unsafe extern "C" fn nmb_offline_library_new(bytes: *const c_void, length: u
         let bytes = unsafe { std::slice::from_raw_parts(bytes.cast::<u8>(), length) };
         let library = Library::from_metallib(crate::air_slice(bytes).ok_or("metallib without an AIR64 slice")?)
             .map_err(e("metallib"))?;
+        Ok(Box::into_raw(Box::new(NmbOfflineLibrary(library))))
+    })
+}
+
+/// Bytes a library's caller holds for it: given back through `release` once the library's last clone is gone
+struct Held {
+    bytes: *const u8,
+    length: usize,
+    owner: *const c_void,
+    release: unsafe extern "C" fn(*const c_void),
+}
+
+// SAFETY: the caller's bytes do not change while they are held, and its `release` runs on any thread
+// (nmb_offline_library_new_held).
+unsafe impl Send for Held {}
+unsafe impl Sync for Held {}
+
+impl std::fmt::Debug for Held {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} held bytes", self.length)
+    }
+}
+
+impl HeldBytes for Held {
+    fn bytes(&self) -> &[u8] {
+        if self.bytes.is_null() {
+            return &[];
+        }
+        // SAFETY: the caller's contract.
+        unsafe { std::slice::from_raw_parts(self.bytes, self.length) }
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        // SAFETY: the caller's contract.
+        unsafe { (self.release)(self.owner) }
+    }
+}
+
+/// nmb_offline_library_new's library over bytes the caller holds, with no copy. `sealed`: a library read from a sealed
+/// system volume, whose functions' HASH tags are taken as stated, so only its function list is read until a function
+/// of it is compiled.
+///
+/// # Safety
+/// `bytes` holds `length` bytes, unchanged until `release(owner)`, which is called once, on any thread, also when no
+/// library is made.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn nmb_offline_library_new_held(
+    bytes: *const c_void,
+    length: usize,
+    sealed: bool,
+    owner: *const c_void,
+    release: unsafe extern "C" fn(*const c_void),
+) -> *mut NmbOfflineLibrary {
+    let held: Arc<dyn HeldBytes> = Arc::new(Held {
+        bytes: bytes.cast(),
+        length,
+        owner,
+        release,
+    });
+    guard(std::ptr::null_mut(), move || {
+        if held.bytes().is_empty() {
+            return Err("no library bytes".into());
+        }
+        let library = Library::from_held_metallib(held, sealed).map_err(e("metallib"))?;
         Ok(Box::into_raw(Box::new(NmbOfflineLibrary(library))))
     })
 }
