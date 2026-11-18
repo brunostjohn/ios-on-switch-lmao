@@ -102,46 +102,46 @@ TEST(SwitchUsbHostSource, SwitchPdUsesThePolicy)
     const std::string source = SourceText("../SwitchPD.cpp");
     EXPECT_THAT(SourceText("../SwitchPDService.h"), HasSubstr("#include \"SwitchPDPolicy.h\""));
     EXPECT_THAT(source, HasSubstr("switch_pd_decide("));
-    EXPECT_TRUE(Block(source, "void SwitchPD::handle(").Has("allowSource && railsOn && switchesOn"));
+    EXPECT_TRUE(Block(source, "void SwitchPD::handle(").has("allowSource && railsOn && switchesOn"));
     EXPECT_THAT(source, HasSubstr("switch_pd_window_end("));
     const auto enter = Block(source, "void SwitchPD::enter(");
-    EXPECT_TRUE(enter.Before("setSwitches(false);", "setRails(rails)"));
-    EXPECT_TRUE(enter.Before("setRails(rails)", "setSwitches(true);"));
+    EXPECT_TRUE(enter.before("setSwitches(false);", "setRails(rails)"));
+    EXPECT_TRUE(enter.before("setRails(rails)", "setSwitches(true);"));
 }
 
 TEST(SwitchUsbHostSource, SourcePowerIsReadyBeforeTheReattachWait)
 {
     const std::string source = SourceText("../SwitchPD.cpp");
     const auto enter = Block(source, "void SwitchPD::enter(");
-    EXPECT_TRUE(enter.Has("if (boost && !boosting) {"));
-    EXPECT_TRUE(enter.Before("switch_battery_set_otg_boost(true,", "setSwitches(true);"));
-    EXPECT_TRUE(enter.Before("setSwitches(true);", "window->setTimeoutMS(kReattachMS)"));
+    EXPECT_TRUE(enter.has("if (boost && !boosting) {"));
+    EXPECT_TRUE(enter.before("switch_battery_set_otg_boost(true,", "setSwitches(true);"));
+    EXPECT_TRUE(enter.before("setSwitches(true);", "window->setTimeoutMS(kReattachMS)"));
     const auto promote = Block(source, "void SwitchPD::startSourcing(");
-    EXPECT_FALSE(promote.Has("switch_battery_set_otg_boost"));
+    EXPECT_FALSE(promote.has("switch_battery_set_otg_boost"));
     const auto rails = Block(source, "bool SwitchPD::setRails(");
-    EXPECT_TRUE(rails.Before("setSwitches(false);", "tegra_gpio_output(kSourceRailGpio, 1)"));
-    EXPECT_TRUE(rails.Before("if (on && switchesOn)", "tegra_gpio_output(kSourceRailGpio, 1)"));
-    EXPECT_TRUE(rails.Before("tegra_gpio_output(kSourceRailGpio, 1)", "IOSleep(kRailRampMS)"));
-    EXPECT_TRUE(rails.Before("IOSleep(kRailRampMS)", "tegra_gpio_output(kVconnGpio, 1)"));
+    EXPECT_TRUE(rails.before("setSwitches(false);", "tegra_gpio_output(kSourceRailGpio, 1)"));
+    EXPECT_TRUE(rails.before("if (on && switchesOn)", "tegra_gpio_output(kSourceRailGpio, 1)"));
+    EXPECT_TRUE(rails.before("tegra_gpio_output(kSourceRailGpio, 1)", "IOSleep(kRailRampMS)"));
+    EXPECT_TRUE(rails.before("IOSleep(kRailRampMS)", "tegra_gpio_output(kVconnGpio, 1)"));
 }
 
 TEST(SwitchUsbHostSource, ProvisionalSourcePowerHasLifecycleCleanup)
 {
     const std::string source = SourceText("../SwitchPD.cpp");
     const auto enter = Block(source, "void SwitchPD::enter(");
-    EXPECT_TRUE(enter.Has("const bool boosting = switch_pd_boost_on(phase);"));
-    EXPECT_TRUE(enter.Has("if (boosting && !boost) (void)switch_battery_set_otg_boost(false, false);"));
-    EXPECT_TRUE(enter.Before("setSwitches(false);", "switch_battery_set_otg_boost(false, false)"));
-    EXPECT_TRUE(enter.Before("switch_battery_set_otg_boost(false, false)", "setRails(rails)"));
+    EXPECT_TRUE(enter.has("const bool boosting = switch_pd_boost_on(phase);"));
+    EXPECT_TRUE(enter.has("if (boosting && !boost) (void)switch_battery_set_otg_boost(false, false);"));
+    EXPECT_TRUE(enter.before("setSwitches(false);", "switch_battery_set_otg_boost(false, false)"));
+    EXPECT_TRUE(enter.before("switch_battery_set_otg_boost(false, false)", "setRails(rails)"));
     const auto leave = Block(SourceText("../SwitchPDSettings.cpp"), "void SwitchPD::leave(");
-    EXPECT_TRUE(leave.Has("if (switch_pd_boost_on(phase))"));
-    EXPECT_TRUE(leave.Before("setSwitches(false);", "switch_battery_set_otg_boost(false, false)"));
-    EXPECT_TRUE(leave.Before("switch_battery_set_otg_boost(false, false)", "setRails(false)"));
+    EXPECT_TRUE(leave.has("if (switch_pd_boost_on(phase))"));
+    EXPECT_TRUE(leave.before("setSwitches(false);", "switch_battery_set_otg_boost(false, false)"));
+    EXPECT_TRUE(leave.before("switch_battery_set_otg_boost(false, false)", "setRails(false)"));
     const auto sleep = Block(source, "void SwitchPD::systemSleep(");
-    EXPECT_TRUE(sleep.Has("phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH"));
-    EXPECT_TRUE(sleep.Before("window->cancelTimeout();", "enter(SWITCH_PD_EMPTY,"));
-    EXPECT_TRUE(sleep.Before("asleepSinkOnly =", "enter(SWITCH_PD_EMPTY,"));
-    EXPECT_TRUE(sleep.Before("setSwitches(false);", "setRails(false)"));
+    EXPECT_TRUE(sleep.has("phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH"));
+    EXPECT_TRUE(sleep.before("window->cancelTimeout();", "enter(SWITCH_PD_EMPTY,"));
+    EXPECT_TRUE(sleep.before("asleepSinkOnly =", "enter(SWITCH_PD_EMPTY,"));
+    EXPECT_TRUE(sleep.before("setSwitches(false);", "setRails(false)"));
 }
 
 TEST(SwitchUsbHostSource, HostRoleUsesThePortHelpers)
