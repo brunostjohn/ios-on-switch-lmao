@@ -6377,12 +6377,63 @@ objcxx_units(
         "compiler_stages_test",
         "medium",
         [],
+        ["compiler_stage_cases.h"],
         [],
+        [":compiler_stages_metallib"],
+        {"SWITCH_STAGES_METALLIB": "$(rootpath :compiler_stages_metallib)"},
+    ),
+    (
+        "compiler_concurrency_test",
+        "medium",
+        [],
+        ["compiler_stage_cases.h"],
         [],
         [":compiler_stages_metallib"],
         {"SWITCH_STAGES_METALLIB": "$(rootpath :compiler_stages_metallib)"},
     ),
 ]]
+
+# compiler_concurrency_test thread-sanitized: the engine's workers, the kept stages and libraries, the direct compiles
+host_test(
+    name = "compiler_concurrency_tsan_test",
+    size = "large",
+    srcs = [
+        "compiler_concurrency_test.cpp",
+        "compiler_requests.h",
+        "compiler_stage_cases.h",
+        "//drivers/TegraGM20BMetal:pack/kernel_shapes.h",
+        "//drivers/TegraGM20BMetal:pack/probe_states.h",
+        "//gpu:translate_host",
+    ] + METAL_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+        "-fsanitize=thread",
+    ] + METAL_HOST_COPTS,
+    cxx_std = "c++17",
+    data = [
+        ":compiler_stages_metallib",
+        "@ipsw//:crawl_qc",
+        "@ipsw//:crawl_tree",
+    ],
+    env = {
+        "SWITCH_QUARTZCORE": "$(rootpath @ipsw//:crawl_qc)",
+        "SWITCH_STAGES_METALLIB": "$(rootpath :compiler_stages_metallib)",
+        "TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0",
+    },
+    # the sanitizer's C runtime brings a fourth personality routine beside C++'s and the translator's and stage
+    # compile's two Rust ones, past the three compact unwind encodes: its unwind tables are DWARF alone
+    linkopts = FACADE_LINKOPTS + [
+        "-fsanitize=thread",
+        "-Wl,-no_compact_unwind",
+    ],
+    sanitize = False,
+    deps = [
+        ":facade_plugin_tsan",
+        ":runtime_plugin_tsan",
+    ] + METAL_HOST_DEPS,
+)
 
 # compiler_stages_test's library, compiled from source as an app's default library is
 genrule(
