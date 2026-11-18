@@ -96,20 +96,10 @@ template <class Self> static bool vblankFilter(OSObject *owner, IOFilterInterrup
         self->vblankTime = mach_absolute_time();
         self->vblankContinuous = mach_continuous_time();
     }
-    // The panel's DSI command steps, timed from the frame end as hekate does (the line is already low; the last step takes ~620 us).
-    // A console waiting to scroll (waitTapeFrame) wakes at every frame end while it draws on the tape.
     if (status & kFrameEndInt) {
-        if (__atomic_load_n(&self->scanoutQuiescing, __ATOMIC_ACQUIRE)) {
-            bump(self->scanoutStopFrames, 1ULL);
-            thread_wakeup(reinterpret_cast<event_t>(&self->scanoutStopFrames));
-        }
-        tegra_panel_frame_end_filter();
-        self->color->frameEndFilter();
-        if (self->tapeAttached) {
-            bump(self->tapeFrames, 1ULL);
-            thread_wakeup((event_t)&self->tapeFrames);
-        }
-        // r6-lows: the frame end's time (the present stamp); debug kernels also the DC A period.
+        // The frame end's time (the present stamp, which phases Core Animation's frame clock through frame info) is read
+        // before the panel's DSI step and the colour unit's table writes: their length varies from frame to frame. Debug
+        // kernels also time the DC A period.
         const uint64_t now = mach_absolute_time();
         const uint64_t last = self->feLast;
         __atomic_store_n(&self->feStamp, now, __ATOMIC_RELEASE);
@@ -125,6 +115,18 @@ template <class Self> static bool vblankFilter(OSObject *owner, IOFilterInterrup
                 if (period > __atomic_load_n(&self->fePeriodMax, __ATOMIC_RELAXED))
                     __atomic_store_n(&self->fePeriodMax, period, __ATOMIC_RELAXED);
             }
+        }
+        if (__atomic_load_n(&self->scanoutQuiescing, __ATOMIC_ACQUIRE)) {
+            bump(self->scanoutStopFrames, 1ULL);
+            thread_wakeup(reinterpret_cast<event_t>(&self->scanoutStopFrames));
+        }
+        // The panel's DSI command steps, timed from the frame end as hekate does (the line is already low; the last step
+        // takes ~620 us). A console waiting to scroll (waitTapeFrame) wakes at every frame end while it draws on the tape.
+        tegra_panel_frame_end_filter();
+        self->color->frameEndFilter();
+        if (self->tapeAttached) {
+            bump(self->tapeFrames, 1ULL);
+            thread_wakeup((event_t)&self->tapeFrames);
         }
     }
     // Last, with release: the action that reads a count sees the stamps and times stored before it.

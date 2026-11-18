@@ -269,12 +269,14 @@ inline void thread_wakeup(event_t)
     ++gThreadWakeups;
 }
 
+inline uint64_t gClock = 1000;
+inline uint64_t gPanelStepTicks = 0;  // how far the clock moves while TegraPanel's frame-end step runs
+
 inline void tegra_panel_frame_end_filter()
 {
     ++gPanelFrameEnds;
+    gClock += gPanelStepTicks;
 }
-
-inline uint64_t gClock = 1000;
 
 inline uint64_t mach_absolute_time()
 {

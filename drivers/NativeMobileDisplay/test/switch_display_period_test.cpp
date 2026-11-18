@@ -370,6 +370,19 @@ TEST_F(DisplayPeriod, OneDeadlineThatStillCatchesALostFrameEnd)
     EXPECT_THROW(d.checkFlipDeadline(), std::runtime_error) << "a flip out and no frame end since the last look";
 }
 
+// The frame end's stamp, which Core Animation's frame clock is phased from, is the interrupt's time: TegraPanel's DSI
+// step and the colour unit's writes come after it.
+TEST_F(DisplayPeriod, TheFrameEndIsStampedBeforeThePanelStep)
+{
+    d.model.boundary();
+    const uint64_t before = gClock;
+    gPanelStepTicks = 9600;
+    d.frameEndInterrupt(false);
+    gPanelStepTicks = 0;
+    EXPECT_LT(d.feStamp - before, 9600u);
+    EXPECT_GE(gClock - before, 9600u);
+}
+
 // The DC A filter runs the colour unit's and TegraPanel's steps with interrupts off: no simple lock, mutex, sleep, log or
 // allocation, with a change of the colour unit's tables pending or not.
 TEST_F(DisplayPeriod, TheFrameEndFilterTakesNoLock)
