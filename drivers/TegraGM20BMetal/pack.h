@@ -725,6 +725,12 @@ static_assert(offsetof(PackKernel, stageInRegionWord) == 1012, "pack layout: pac
 static_assert(sizeof(PackSplit) == 34 + 256 + 32, "pack layout");
 static_assert(sizeof(PackIteratedBlend) == 32 + 48 + 4 * kIteratedProgramWords, "pack layout");
 
+// One state's records in the pipelines section (Pack::run, Pack::fastRun): `records` of them from `first`
+struct PackRun {
+    const PackPipeline *first = nullptr;
+    uint32_t records = 0;
+};
+
 class Pack {
 public:
     ~Pack();
@@ -746,11 +752,18 @@ public:
         return hdr_->section[s].bytes;
     }
 
-    const PackPipeline *find(uint64_t keyHash, PackForm form = PackForm::Default) const;  // nullptr: not in the pack
-    // The keyHash of the state of fast key `fast`; 0: the pack holds no such state
-    uint64_t fastState(uint64_t fast) const;
+    // A state's records: of keyHash `keyHash`, a search of the pipelines section; of fast key `fast`, one probe of
+    // PackFastKeys and none of the pipelines (a process's open reads no record: a search's probes would read the
+    // section's pages at a state's creation). No records: the pack holds no such state.
+    PackRun run(uint64_t keyHash) const;
+    PackRun fastRun(uint64_t fast) const;
+    const PackPipeline *find(const PackRun &run, PackForm form = PackForm::Default) const;  // nullptr: none of `form`
+    const PackPipeline *find(uint64_t keyHash, PackForm form = PackForm::Default) const;    // nullptr: not in the pack
     // the state's PipelineVariantRecords, and the one named `name` (variantNameAt) of `form`; nullptr: not in the pack
+    std::vector<const PackPipeline *> variantRecords(const PackRun &run) const;
     std::vector<const PackPipeline *> variantRecords(uint64_t keyHash) const;
+    const PackPipeline *variantRecord(const PackRun &run, const std::string &name,
+                                      PackForm form = PackForm::Default) const;
     const PackPipeline *variantRecord(uint64_t keyHash, const std::string &name,
                                       PackForm form = PackForm::Default) const;
     const PackKernel *findKernel(uint64_t keyHash) const;  // nullptr: not in the pack
@@ -780,13 +793,9 @@ public:
     static uint64_t fnv(const void *p, size_t n);
 
 private:
-    bool farBlocksFit(std::string &err) const;
-
     const uint8_t *base_ = nullptr;
     size_t size_ = 0;
     const PackHeader *hdr_ = nullptr;
-    // the pipelines in keyHash order, for a pack whose section is not in that order itself (mkpack.py's are); empty: it is
-    std::vector<uint32_t> index_;
 };
 
 }  // namespace gm20b

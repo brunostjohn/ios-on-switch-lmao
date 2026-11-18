@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: MIT
 // A pack record past kPackEntries set-0 entries reads the rest from its far block in the blob section, and a pack program
 // its uniform buffers past set-0 byte 496 from its far table there (pack version 27). A record or program pointing past the
-// blob section, or a record past every argument a render pipeline binds, fails the pack's load, not a draw.
+// blob section, or a record past every argument a render pipeline binds, is named by the generator's scan (pack_scan.h):
+// the pack's load reads its header alone.
 #include <gtest/gtest.h>
 
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <vector>
 #include "../pack.h"
+#include "../pack_scan.h"
 #include "../set_entries.h"
 
 namespace {
@@ -86,25 +89,31 @@ TEST(PackFar, ARecordPastThirtyTwoEntriesReadsTheRestFromItsFarBlock)
     EXPECT_TRUE(entries.memory(39));
 }
 
-TEST(PackFar, AFarBlockPastTheBlobSectionFailsTheLoad)
+bool scanned(const gm20b::Pack &pack, const std::string &line)
+{
+    const std::vector<std::string> found = gm20b::packScan(pack);
+    return std::find(found.begin(), found.end(), line) != found.end();
+}
+
+TEST(PackFar, AFarBlockPastTheBlobSectionIsTheScansNotTheLoads)
 {
     gm20b::Pack pack;
     std::string err;
     WidePack w;
     w.farAt = 64 - gm20b::farWords(40) + 1;
-    EXPECT_FALSE(pack.load(write(w, "far_past.pack").c_str(), 0, err));
-    EXPECT_EQ(err, "pipeline 0000000000000007 of 40 set-0 entries: its far entries past the blob section");
+    ASSERT_TRUE(pack.load(write(w, "far_past.pack").c_str(), 0, err)) << err;
+    EXPECT_TRUE(scanned(pack, "pipeline 0000000000000007: its far entries past the blob section"));
 }
 
-TEST(PackFar, ARecordPastEveryArgumentOfARenderPipelineFailsTheLoad)
+TEST(PackFar, ARecordPastEveryArgumentOfARenderPipelineIsTheScansNotTheLoads)
 {
     gm20b::Pack pack;
     std::string err;
     WidePack w;
     w.entries = gm20b::kSetEntriesMax + 1;
     w.blobWords = 1024;
-    EXPECT_FALSE(pack.load(write(w, "far_bound.pack").c_str(), 0, err));
-    EXPECT_EQ(err, "pipeline 0000000000000007 of 371 set-0 entries: past the 370 a record holds");
+    ASSERT_TRUE(pack.load(write(w, "far_bound.pack").c_str(), 0, err)) << err;
+    EXPECT_TRUE(scanned(pack, "pipeline 0000000000000007: of more set-0 entries than a record holds"));
 }
 
 TEST(PackFar, AProgramsFarTableNamesItsUniformBuffersPastByte496)
@@ -119,14 +128,14 @@ TEST(PackFar, AProgramsFarTableNamesItsUniformBuffersPastByte496)
     EXPECT_EQ(gm20b::cbufUboOffset(program.cbufType, pack.farUbos(program), 1), 640u);
 }
 
-TEST(PackFar, AProgramsFarTablePastTheBlobSectionFailsTheLoad)
+TEST(PackFar, AProgramsFarTablePastTheBlobSectionIsTheScansNotTheLoads)
 {
     gm20b::Pack pack;
     std::string err;
     WidePack w;
     w.programFar = 60;
-    EXPECT_FALSE(pack.load(write(w, "far_ubos_past.pack").c_str(), 0, err));
-    EXPECT_EQ(err, "program 0's far uniform buffers past the blob section");
+    ASSERT_TRUE(pack.load(write(w, "far_ubos_past.pack").c_str(), 0, err)) << err;
+    EXPECT_TRUE(scanned(pack, "program 0000000000000000: its far uniform buffers past the blob section"));
 }
 
 TEST(PackFar, ARecordOfThirtyTwoEntriesOrFewerHasNoFarBlock)
@@ -140,6 +149,44 @@ TEST(PackFar, ARecordOfThirtyTwoEntriesOrFewerHasNoFarBlock)
     const gm20b::PackPipeline &pp = *pack.section<gm20b::PackPipeline>(gm20b::PackPipelines);
     EXPECT_EQ(pack.far(pp), nullptr);
     EXPECT_FALSE(gm20b::SetEntries(pp, nullptr).wide());
+}
+
+// A pack of records of `keys` in that order, and `fast` as its PackFastKeys section
+std::string writeKeys(const std::vector<uint64_t> &keys, const std::vector<gm20b::PackFastKey> &fast, const char *name)
+{
+    std::vector<uint8_t> file(kBlob, 0);
+    gm20b::PackHeader h = {};
+    memcpy(h.magic, "GM20BPK1", 8);
+    h.version = gm20b::kPackVersion;
+    h.pipelines = uint32_t(keys.size());
+    h.section[gm20b::PackPipelines] = {kPipelines, keys.size() * sizeof(gm20b::PackPipeline)};
+    h.section[gm20b::PackFastKeys] = {kBlob - 0x100, fast.size() * sizeof(gm20b::PackFastKey)};
+    memcpy(file.data(), &h, sizeof h);
+    for (size_t i = 0; i < keys.size(); i++) {
+        gm20b::PackPipeline pp = {};
+        pp.keyHash = keys[i];
+        pp.fs = gm20b::kNoProgram;
+        memcpy(file.data() + kPipelines + i * sizeof pp, &pp, sizeof pp);
+    }
+    memcpy(file.data() + kBlob - 0x100, fast.data(), fast.size() * sizeof(gm20b::PackFastKey));
+    const std::string path = std::string(getenv("TEST_TMPDIR") ?: "/tmp") + "/" + name;
+    FILE *f = fopen(path.c_str(), "wb");
+    fwrite(file.data(), 1, file.size(), f);
+    fclose(f);
+    return path;
+}
+
+TEST(PackFastKeys, TheScanNamesRecordsOutOfOrderAndFastKeysOffTheirRecords)
+{
+    gm20b::Pack pack;
+    std::string err;
+    ASSERT_TRUE(
+        pack.load(writeKeys({9, 7, 7}, {{12, 1, 1}, {11, 0, 1}, {13, 2, 5}}, "fast_unordered.pack").c_str(), 0, err))
+        << err;
+    EXPECT_TRUE(scanned(pack, "pipeline 0000000000000007: out of keyHash order"));
+    EXPECT_TRUE(scanned(pack, "fast key 000000000000000c: not its state's records alone and all of them"));
+    EXPECT_TRUE(scanned(pack, "fast key 000000000000000b: out of order"));
+    EXPECT_TRUE(scanned(pack, "fast key 000000000000000d: its records past the pipelines"));
 }
 
 }  // namespace

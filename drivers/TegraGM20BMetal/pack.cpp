@@ -64,19 +64,11 @@ bool Pack::load(const char *path, uint64_t stack, std::string &err)
             err = "truncated pack";
             return false;
         }
-    if (!farBlocksFit(err))
+    if (uint64_t(hdr_->pipelines) * sizeof(PackPipeline) > bytes(PackPipelines) ||
+        uint64_t(hdr_->programs) * sizeof(PackProgram) > bytes(PackPrograms)) {
+        err = "a pipeline or program count past its section";
         return false;
-    const PackPipeline *p = section<PackPipeline>(PackPipelines);
-    const auto byKey = [p](uint32_t a, uint32_t b) {
-        return p[a].keyHash < p[b].keyHash;
-    };
-    for (uint32_t i = 1; i < hdr_->pipelines && index_.empty(); i++)
-        if (p[i].keyHash < p[i - 1].keyHash) {
-            index_.resize(hdr_->pipelines);
-            for (uint32_t k = 0; k < hdr_->pipelines; k++)
-                index_[k] = k;
-            std::stable_sort(index_.begin(), index_.end(), byKey);
-        }
+    }
     return true;
 }
 
@@ -116,24 +108,35 @@ uint32_t relocated(const PackInitMethod &m, const InitAddresses &a)
     }
 }
 
-const PackPipeline *Pack::find(uint64_t keyHash, PackForm form) const
+// pack/packfile.py writes the pipelines in keyHash order
+PackRun Pack::run(uint64_t keyHash) const
 {
-    const PackPipeline *p = section<PackPipeline>(PackPipelines);
-    const uint32_t n = hdr_->pipelines;
-    const auto keyAt = [&](uint32_t i) {
-        return p[index_.empty() ? i : index_[i]].keyHash;
-    };
-    uint32_t lo = 0, hi = n;
-    while (lo < hi) {
-        const uint32_t mid = lo + (hi - lo) / 2;
-        if (keyAt(mid) < keyHash)
-            lo = mid + 1;
-        else
-            hi = mid;
-    }
+    const PackPipeline *p = section<PackPipeline>(PackPipelines), *end = p + hdr_->pipelines;
+    const PackPipeline *first = std::lower_bound(p, end, keyHash, [](const PackPipeline &a, uint64_t h) {
+        return a.keyHash < h;
+    });
+    const PackPipeline *last = first;
+    while (last != end && last->keyHash == keyHash)
+        last++;
+    return {first, uint32_t(last - first)};
+}
+
+PackRun Pack::fastRun(uint64_t fast) const
+{
+    const PackFastKey *k = section<PackFastKey>(PackFastKeys);
+    const PackFastKey *end = k + bytes(PackFastKeys) / sizeof(PackFastKey);
+    const PackFastKey *at = std::lower_bound(k, end, fast, [](const PackFastKey &a, uint64_t f) {
+        return a.fast < f;
+    });
+    if (at == end || at->fast != fast)
+        return {};
+    return {section<PackPipeline>(PackPipelines) + at->first, at->records};
+}
+
+const PackPipeline *Pack::find(const PackRun &run, PackForm form) const
+{
     const PackPipeline *fallback = nullptr;
-    for (; lo < n && keyAt(lo) == keyHash; lo++) {
-        const PackPipeline *at = p + (index_.empty() ? lo : index_[lo]);
+    for (const PackPipeline *at = run.first; at != run.first + run.records; at++) {
         if (at->flags & PipelineVariantRecord)
             continue;
         if (form == PackForm::FetchFree || (at->flags & PipelineFetchFreeForm)) {
@@ -152,44 +155,36 @@ const PackPipeline *Pack::find(uint64_t keyHash, PackForm form) const
     return fallback;
 }
 
-std::vector<const PackPipeline *> Pack::variantRecords(uint64_t keyHash) const
+const PackPipeline *Pack::find(uint64_t keyHash, PackForm form) const
 {
-    const PackPipeline *p = section<PackPipeline>(PackPipelines);
-    const uint32_t n = hdr_->pipelines;
-    const auto at = [&](uint32_t i) {
-        return p + (index_.empty() ? i : index_[i]);
-    };
-    uint32_t lo = 0, hi = n;
-    while (lo < hi) {
-        const uint32_t mid = lo + (hi - lo) / 2;
-        if (at(mid)->keyHash < keyHash)
-            lo = mid + 1;
-        else
-            hi = mid;
-    }
+    return find(run(keyHash), form);
+}
+
+std::vector<const PackPipeline *> Pack::variantRecords(const PackRun &run) const
+{
     std::vector<const PackPipeline *> out;
-    for (; lo < n && at(lo)->keyHash == keyHash; lo++)
-        if (at(lo)->flags & PipelineVariantRecord)
-            out.push_back(at(lo));
+    for (const PackPipeline *at = run.first; at != run.first + run.records; at++)
+        if (at->flags & PipelineVariantRecord)
+            out.push_back(at);
     return out;
 }
 
-const PackPipeline *Pack::variantRecord(uint64_t keyHash, const std::string &name, PackForm form) const
+std::vector<const PackPipeline *> Pack::variantRecords(uint64_t keyHash) const
 {
-    for (const PackPipeline *rec : variantRecords(keyHash))
+    return variantRecords(run(keyHash));
+}
+
+const PackPipeline *Pack::variantRecord(const PackRun &run, const std::string &name, PackForm form) const
+{
+    for (const PackPipeline *rec : variantRecords(run))
         if (name == string(rec->variantName) && bool(rec->flags & PipelineBarrierForm) == (form == PackForm::Barrier))
             return rec;
     return nullptr;
 }
 
-uint64_t Pack::fastState(uint64_t fast) const
+const PackPipeline *Pack::variantRecord(uint64_t keyHash, const std::string &name, PackForm form) const
 {
-    const PackFastKey *k = section<PackFastKey>(PackFastKeys);
-    const PackFastKey *end = k + bytes(PackFastKeys) / sizeof(PackFastKey);
-    const PackFastKey *at = std::lower_bound(k, end, fast, [](const PackFastKey &a, uint64_t f) {
-        return a.fast < f;
-    });
-    return at != end && at->fast == fast ? section<PackPipeline>(PackPipelines)[at->first].keyHash : 0;
+    return variantRecord(run(keyHash), name, form);
 }
 
 // mkpack.py writes the kernels in keyHash order
@@ -225,45 +220,6 @@ const PackIteratedBlend *Pack::iterated(const PackPipeline &pp) const
     if (!pp.iterated || uint64_t(pp.iterated) * sizeof(PackIteratedBlend) > bytes(PackIterated))
         return nullptr;
     return section<PackIteratedBlend>(PackIterated) + pp.iterated - 1;
-}
-
-namespace {
-std::string hex(uint64_t v)
-{
-    char s[17];
-    snprintf(s, sizeof s, "%016llx", static_cast<unsigned long long>(v));
-    return s;
-}
-}  // namespace
-
-// Every record's far block (set_entries.h) and every program's far table of uniform buffers lies in the blob section:
-// a pack that points past it is refused at load, not at a draw
-bool Pack::farBlocksFit(std::string &err) const
-{
-    const uint64_t blobWords = bytes(PackBlob) / sizeof(uint32_t);
-    if (uint64_t(hdr_->pipelines) * sizeof(PackPipeline) > bytes(PackPipelines) ||
-        uint64_t(hdr_->programs) * sizeof(PackProgram) > bytes(PackPrograms)) {
-        err = "a pipeline or program count past its section";
-        return false;
-    }
-    const PackPipeline *p = section<PackPipeline>(PackPipelines);
-    for (uint32_t i = 0; i < hdr_->pipelines; i++) {
-        const uint32_t count = entryCount(p[i]);
-        if (count > kSetEntriesMax ||
-            (count > kPackEntries && uint64_t(farEntriesAt(p[i])) + farWords(count) > blobWords)) {
-            err = "pipeline " + hex(p[i].keyHash) + " of " + std::to_string(count) + " set-0 entries: " +
-                  (count > kSetEntriesMax ? "past the " + std::to_string(kSetEntriesMax) + " a record holds"
-                                          : "its far entries past the blob section");
-            return false;
-        }
-    }
-    const PackProgram *programs = section<PackProgram>(PackPrograms);
-    for (uint32_t i = 0; i < hdr_->programs; i++)
-        if (programFarAt(programs[i]) && programFarAt(programs[i]) - 1 + kProgramCbufs / 2 > blobWords) {
-            err = "program " + std::to_string(i) + "'s far uniform buffers past the blob section";
-            return false;
-        }
-    return true;
 }
 
 const uint32_t *Pack::far(const PackPipeline &pp) const

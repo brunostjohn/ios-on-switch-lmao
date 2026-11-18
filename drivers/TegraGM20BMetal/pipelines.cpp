@@ -209,39 +209,38 @@ bool Device::rebindArguments(Pipeline &pl)
     return bound;
 }
 
-// Pack::find and Pack::variantRecords, counted for the creation's line (creation_cost.h)
-static const PackPipeline *findRecord(const Pack &pack, uint64_t keyHash, PackForm form)
+// A search of the pack for keyHash's records (Pack::run), counted for the creation's line (creation_cost.h)
+static PackRun searched(const Pack &pack, uint64_t keyHash)
 {
     SWITCH_METAL_CREATION_SPAN(lookupTicks);
     SWITCH_METAL_CREATION_COUNT(lookups, 1);
-    return pack.find(keyHash, form);
+    return pack.run(keyHash);
 }
 
-static std::vector<const PackPipeline *> variantRecordsOf(const Pack &pack, uint64_t keyHash)
+Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 {
-    SWITCH_METAL_CREATION_SPAN(lookupTicks);
-    SWITCH_METAL_CREATION_COUNT(lookups, 1);
-    return pack.variantRecords(keyHash);
+    return pipeline(searched(pack_, keyHash), keyHash, form, caTransform);
 }
 
 // A state of the pack, made the first time it is looked up (most of the pack's states never are in a process): its registers
-// as push words with its programs placed in the heap. Else one the runtime made (addRecord). A storage form that computes
+// as push words with its programs placed in the heap, the record drawn as the pack holds it (the generator's tests scan
+// every record of the pack: pack_scan.h). Else one the runtime made (addRecord). A storage form that computes
 // the pipeline's blend has no barrier twin to fall back on: its barrier form leaves the blend to the ROP after a fetch
 // outside the interlock, which keeps Metal's result only drawn a triangle at a time. A pass it cannot view as its storage
 // images refuses its draws (RenderEncoder::prepare), as Metal fails a state drawn into attachments it was not made for.
 // That form is its blendTwin, which a draw takes a triangle at a time where rule fetch.twin holds (twin_rule.h).
-Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
+Pipeline *Device::pipeline(const PackRun &run, uint64_t keyHash, PackForm form, bool caTransform)
 {
-    Pipeline *pl = placePipeline(keyHash, form, caTransform);
-    if (form == PackForm::Default && pl && pl->fetchBits && fetchFreeReachable(keyHash)) {
-        Pipeline *free = placePipeline(keyHash, PackForm::FetchFree, caTransform);
+    Pipeline *pl = placePipeline(run, keyHash, form, caTransform);
+    if (form == PackForm::Default && pl && pl->fetchBits && fetchFreeReachable(run)) {
+        Pipeline *free = placePipeline(run, keyHash, PackForm::FetchFree, caTransform);
         std::lock_guard<gm20b::Mutex> l(lock_);
         if (free && free != pl && free->freeForm.rung != FetchNone)
             pl->fetchFree = free;
     }
     if (form != PackForm::Default || !pl || !pl->storageBits)
         return pl;
-    Pipeline *twin = placePipeline(keyHash, PackForm::Barrier, caTransform);
+    Pipeline *twin = placePipeline(run, keyHash, PackForm::Barrier, caTransform);
     std::lock_guard<gm20b::Mutex> l(lock_);
     if (twin && twin != pl && !twin->storageBits)
         (pl->storageBlendBits ? pl->blendTwin : pl->barrierTwin) = twin;
@@ -249,9 +248,9 @@ Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 }
 
 // Whether the state's fetch-free form, where the pack holds one, is placed (fetch_free.h fetchFreePlaced)
-bool Device::fetchFreeReachable(uint64_t keyHash) const
+bool Device::fetchFreeReachable(const PackRun &run) const
 {
-    const PackPipeline *rec = findRecord(pack_, keyHash, PackForm::FetchFree);
+    const PackPipeline *rec = pack_.find(run, PackForm::FetchFree);
     if (!rec)
         return false;
     uint8_t probe = 0;
@@ -261,29 +260,28 @@ bool Device::fetchFreeReachable(uint64_t keyHash) const
     return fetchFreePlaced(fetchFreeForm(*rec, pack_.iterated(*rec), pack_.far(*rec)), probe);
 }
 
-bool Device::usableRecord(const PackPipeline *rec) const
-{
-    return rec && usableDynamicPush(*rec, pack_.string(rec->keyString)) &&
-           usableStorageMetadata(*rec, pack_.section<uint32_t>(PackBlob) + rec->blob, rec->blobDwords, pack_.far(*rec));
-}
-
 std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(uint64_t keyHash, bool caTransform)
 {
+    return variantPipelines(searched(pack_, keyHash), caTransform);
+}
+
+std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(const PackRun &run, bool caTransform)
+{
     std::vector<std::pair<std::string, Pipeline *>> out;
-    for (const PackPipeline *rec : variantRecordsOf(pack_, keyHash)) {
+    for (const PackPipeline *rec : pack_.variantRecords(run)) {
         const std::string name = pack_.string(rec->variantName);
         // a barrier record is a storage form's twin unless it is the variant's one record (its storage form refused)
-        if ((rec->flags & PipelineBarrierForm) && pack_.variantRecord(keyHash, name, PackForm::Default))
+        if ((rec->flags & PipelineBarrierForm) && pack_.variantRecord(run, name, PackForm::Default))
             continue;
         Pipeline *pl = nullptr;
-        if (usableRecord(rec)) {
+        {
             std::lock_guard<gm20b::Mutex> l(lock_);
             pl = placeRecord(*rec, caTransform);
         }
         // a storage form's barrier twin, as Device::pipeline gives a state's own
         const PackPipeline *barrier =
-            pl && pl->storageBits ? pack_.variantRecord(keyHash, name, PackForm::Barrier) : nullptr;
-        if (usableRecord(barrier)) {
+            pl && pl->storageBits ? pack_.variantRecord(run, name, PackForm::Barrier) : nullptr;
+        if (barrier) {
             std::lock_guard<gm20b::Mutex> l(lock_);
             Pipeline *twin = placeRecord(*barrier, caTransform);
             if (twin && twin != pl && !twin->storageBits)
@@ -294,27 +292,9 @@ std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(uint64_
     return out;
 }
 
-Pipeline *Device::placePipeline(uint64_t keyHash, PackForm form, bool caTransform)
+Pipeline *Device::placePipeline(const PackRun &run, uint64_t keyHash, PackForm form, bool caTransform)
 {
-    const PackPipeline *rec = findRecord(pack_, keyHash, form);
-    if (rec && !usableRecord(rec)) {
-        const bool blends = rec->storageBlendMask;
-        const PackPipeline *barrier = form == PackForm::Default && (rec->flags & PipelineStorageMetadata) && !blends
-                                          ? findRecord(pack_, keyHash, PackForm::Barrier)
-                                          : nullptr;
-        rec = usableRecord(barrier) ? barrier : nullptr;
-        if (blends)
-            os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
-                         "SwitchMetal: pack state %016llx computes its blend in a storage form this runtime cannot "
-                         "read: refused",
-                         (unsigned long long)keyHash);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        if (rec) {
-            stats.fetch.storageFallback[size_t(StorageFallback::Metadata)]++;
-            stats.fetch.fallbackKeys.note(keyHash);
-        }
-#endif
-    }
+    const PackPipeline *rec = pack_.find(run, form);
     std::lock_guard<gm20b::Mutex> l(lock_);
     if (!rec) {
         const auto made = completed_.find(keyHash);
@@ -337,14 +317,8 @@ std::vector<uint32_t> restoreWords(const uint32_t *pairs, uint32_t dwords)
 Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
 {
     Pipeline &pl = pipelines_[&pp - pack_.section<PackPipeline>(PackPipelines)];
-    if (pl.rec || pl.malformed)
-        return pl.rec ? &pl : nullptr;
-    if (const char *why = entriesRefusal(pp, pack_.far(pp), pack_.header()->samplers)) {
-        pl.malformed = true;
-        os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
-                     "SwitchMetal: pack state %016llx refused: %{public}s", (unsigned long long)pp.keyHash, why);
-        return nullptr;
-    }
+    if (pl.rec)
+        return &pl;
     const bool tess = tessellates(pp);
     PlacedProgram vs, fs = noPixelProgram(), tessPlaced[2];
     if (!placePackProgram(pp.vs, vs) || (pixelStage(pp) && !placePackProgram(pp.fs, fs)) ||
@@ -362,9 +336,8 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
     }
     Pipeline *twin = nullptr;
     if (pp.strideTwin) {
-        const PackPipeline *twinRecord = findRecord(pack_, pp.strideTwin, recordForm(pp));
-        if (twinRecord && twinRecord != &pp && usableRecord(twinRecord) &&
-            !(twin = placeRecord(*twinRecord, caTransform)))
+        const PackPipeline *twinRecord = pack_.find(searched(pack_, pp.strideTwin), recordForm(pp));
+        if (twinRecord && twinRecord != &pp && !(twin = placeRecord(*twinRecord, caTransform)))
             return nullptr;
     }
     build(pl, pp, vs, fs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString), caTransform,

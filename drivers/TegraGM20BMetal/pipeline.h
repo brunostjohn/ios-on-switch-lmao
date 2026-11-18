@@ -138,7 +138,6 @@ struct Pipeline {
     // rotation.h: its fragment program has a turned variant (AssumeTurned), or reads a turned plane's axes with none; a
     // runtime record's turned variant's pipeline (a pack record's is one of `chosen`)
     bool turnedVariant = false, turnRefused = false;
-    bool malformed = false;  // a pack record whose entries its draws cannot write (entriesRefusal): never placed
     // the fragment slots its programs read two-plane RGB10A8_2P_XR10 textures at through their header pairs (PackPipeline)
     uint16_t xrSlots = 0;
     uint16_t writtenSlots = 0;  // the fragment slots its programs write textures at (written_textures.h)

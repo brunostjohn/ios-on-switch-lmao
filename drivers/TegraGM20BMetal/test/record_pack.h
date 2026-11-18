@@ -2,8 +2,8 @@
 // A pack of runtime records (record.h, compute_record.h) laid out as directlink.py lays out the generator's: each
 // render program a heap slot of its own (programSlot), a record's extras after its blob's pairs, its restore pairs after
 // its argument tables, its stride twin a record of its own under the twin's keyHash, and a kernel's code at its slot's
-// start (kernels.py lay_out). A host test opens gm20b::Device over it to draw a pack record of a state as the device draws
-// its runtime record of the same state.
+// start (kernels.py lay_out), the records in keyHash order as packfile.py writes them. A host test opens gm20b::Device
+// over it to draw a pack record of a state as the device draws its runtime record of the same state.
 #pragma once
 #include <algorithm>
 #include <cstdio>
@@ -93,6 +93,10 @@ inline std::string recordPack(const std::vector<gm20b::RuntimeRecord> &records, 
         laid.record(r);
     for (const auto &[keyHash, k] : kernels)
         laid.kernel(keyHash, *k);
+    std::stable_sort(laid.pipelines.begin(), laid.pipelines.end(),
+                     [](const gm20b::PackPipeline &a, const gm20b::PackPipeline &b) {
+                         return a.keyHash < b.keyHash;
+                     });
     std::sort(laid.kernels.begin(), laid.kernels.end(), [](const gm20b::PackKernel &a, const gm20b::PackKernel &b) {
         return a.keyHash < b.keyHash;
     });

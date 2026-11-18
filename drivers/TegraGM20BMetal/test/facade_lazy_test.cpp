@@ -112,8 +112,8 @@ void packedDraw()
 }
 
 // A packed state's creation answers its own work on its thread (TegraGM20BMetalStatesCost.mm): the first in the process
-// looks its records up, imports the pack's pages its programs run from (kernel calls) and builds the state; the second,
-// of the same key, finds it placed and does neither
+// imports the pack's pages its programs run from (kernel calls) and builds the state, finding its records by its fast
+// key with no search of the pack; the second, of the same key, finds it placed and does neither
 void creationCost()
 {
     const Opened opened = openWithLibrary(writePack(packKey(kPacked)));
@@ -127,7 +127,7 @@ void creationCost()
     };
     NSDictionary<NSString *, NSNumber *> *first = made(), *again = made();
     ASSERT_TRUE(first != nil && again != nil);
-    EXPECT_GT(first[@"lookups"].intValue, 0) << text(first);
+    EXPECT_EQ(first[@"lookups"].intValue, 0) << text(first);
     EXPECT_EQ(first[@"builds"].intValue, 1) << text(first);
     EXPECT_GT(first[@"pieces"].intValue, 0) << text(first);
     EXPECT_GE(first[@"kernel_calls"].intValue, 2 * first[@"pieces"].intValue) << text(first);

@@ -7,6 +7,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 #include "../pack.h"
 #include "../variants.h"
@@ -225,6 +226,50 @@ TEST(GM20BPack, ARecordAProcessMadeIsNotThePacks)
     EXPECT_FALSE(gm20b::packHolds(pack, &made));
     EXPECT_FALSE(gm20b::packHolds(pack, nullptr));
     EXPECT_FALSE(gm20b::packHolds(pack, pack.find(7) + 3));
+}
+
+// A pack of records of `keys` in that order, and `fast` as its PackFastKeys section
+std::string writeKeys(const std::vector<uint64_t> &keys, const std::vector<gm20b::PackFastKey> &fast, const char *name)
+{
+    std::vector<uint8_t> file(0x1000, 0);
+    gm20b::PackHeader h = {};
+    memcpy(h.magic, "GM20BPK1", 8);
+    h.version = gm20b::kPackVersion;
+    h.pipelines = uint32_t(keys.size());
+    h.section[gm20b::PackPipelines] = {0x200, keys.size() * sizeof(gm20b::PackPipeline)};
+    h.section[gm20b::PackFastKeys] = {0xF00, fast.size() * sizeof(gm20b::PackFastKey)};
+    memcpy(file.data(), &h, sizeof h);
+    for (size_t i = 0; i < keys.size(); i++) {
+        gm20b::PackPipeline pp = {};
+        pp.keyHash = keys[i];
+        pp.fs = gm20b::kNoProgram;
+        memcpy(file.data() + 0x200 + i * sizeof pp, &pp, sizeof pp);
+    }
+    memcpy(file.data() + 0xF00, fast.data(), fast.size() * sizeof(gm20b::PackFastKey));
+    const std::string path = std::string(getenv("TEST_TMPDIR") ?: "/tmp") + "/" + name;
+    FILE *f = fopen(path.c_str(), "wb");
+    fwrite(file.data(), 1, file.size(), f);
+    fclose(f);
+    return path;
+}
+
+TEST(PackFastKeys, AFastKeyFindsItsStatesRecordsWithNoSearch)
+{
+    gm20b::Pack pack;
+    std::string err;
+    ASSERT_TRUE(pack.load(writeKeys({3, 7, 7, 9}, {{11, 0, 1}, {12, 1, 2}, {13, 3, 1}}, "fast.pack").c_str(), 0, err))
+        << err;
+    const auto state = [&pack](uint64_t fast) {
+        const gm20b::PackRun run = pack.fastRun(fast);
+        return std::make_pair(run.records ? run.first->keyHash : 0, run.records);
+    };
+    EXPECT_EQ(state(11), std::make_pair(uint64_t(3), 1u));
+    EXPECT_EQ(state(12), std::make_pair(uint64_t(7), 2u));
+    EXPECT_EQ(state(13), std::make_pair(uint64_t(9), 1u));
+    EXPECT_EQ(state(10), std::make_pair(uint64_t(0), 0u));
+    EXPECT_EQ(state(14), std::make_pair(uint64_t(0), 0u));
+    EXPECT_EQ(pack.run(7).first, pack.fastRun(12).first);
+    EXPECT_EQ(pack.run(8).records, 0u);
 }
 
 TEST(GM20BPack, RefusesAPackOfAnotherVersion)

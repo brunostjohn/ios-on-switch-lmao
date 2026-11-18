@@ -216,11 +216,14 @@ public:
         return gm20b::packHolds(pack_, pl.rec);
     }
 
-    bool fetchFreeReachable(uint64_t keyHash) const;
-    Pipeline *placePipeline(uint64_t keyHash, PackForm form, bool caTransform);
+    // pipeline()'s of the state whose records are `run` (Pack::fastRun: no search of the pack)
+    Pipeline *pipeline(const PackRun &run, uint64_t keyHash, PackForm form, bool caTransform);
+    bool fetchFreeReachable(const PackRun &run) const;
+    Pipeline *placePipeline(const PackRun &run, uint64_t keyHash, PackForm form, bool caTransform);
     // The state's pack records for the variants its draws pick (PipelineVariantRecord), each placed, by name: null where it
-    // cannot be (its programs find no room in the heap, or its storage or push metadata is not this runtime's)
+    // cannot be (its programs find no room in the heap)
     std::vector<std::pair<std::string, Pipeline *>> variantPipelines(uint64_t keyHash, bool caTransform);
+    std::vector<std::pair<std::string, Pipeline *>> variantPipelines(const PackRun &run, bool caTransform);
     // A state the runtime made a record of (record.h), drawn from then on as the pack's are; null: its programs find no room
     // in the heap or its samplers none in the header pool (`why`)
     Pipeline *addRecord(const RuntimeRecord &r, bool caTransform, std::string &why, bool *retry = nullptr);
@@ -1444,8 +1447,6 @@ private:
     void build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
                const uint32_t *blob, const char *keyString, bool caTransform, const uint32_t *spills,
                const uint32_t *far, const PlacedProgram *tess = nullptr);
-    // whether this runtime can draw pack record `rec`: its push and storage metadata are ones it reads
-    bool usableRecord(const PackPipeline *rec) const;
     // lock_ held: pack record `pp` placed (its programs in the heap) and built, once; null where the heap has no room
     Pipeline *placeRecord(const PackPipeline &pp, bool caTransform);
     // lock_ held: `pl`'s split offered, its twin made when a draw first takes it (makeSplit)

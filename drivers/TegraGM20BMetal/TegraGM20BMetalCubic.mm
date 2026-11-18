@@ -45,10 +45,10 @@ static void cubicBinds(__unsafe_unretained SwitchMetalRenderEncoder *encoder, co
     });
 }
 
-void packedVariants(SwitchMetalPipeline *p, uint64_t keyHash)
+void packedVariants(SwitchMetalPipeline *p, const gm20b::PackRun &run)
 {
     std::lock_guard<gm20b::Mutex> lock(p->_variantLock);
-    for (const auto &[name, pl] : gRM->raw->variantPipelines(keyHash, p->_caTransform)) {
+    for (const auto &[name, pl] : gRM->raw->variantPipelines(run, p->_caTransform)) {
         auto variant = std::make_shared<gm20b::Variant<gm20b::Pipeline>>();
         variant->publish(pl);
         p->_variants.emplace(name, std::move(variant));

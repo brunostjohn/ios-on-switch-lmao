@@ -2,6 +2,7 @@
 // directcheck compares native translator/compiler records with a pack's corpus, including two-plane forms.
 // usage: directcheck <default.metallib> <corpus.log> <pack.bin>
 // DIRECTCHECK_MET appends record hashes; DIRECTCHECK_DUMP writes the JSON consumed by nakstat.py and rungcheck.py.
+// DIRECTCHECK_SCAN: the whole pack scanned as the runtime trusts it (pack_scan.h), one "SCAN " line a finding.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <chrono>
@@ -12,6 +13,7 @@
 #include "../pack/fetch_free_make.h"
 #include "../TegraGM20BMetalDirect.h"
 #include "../TegraGM20BMetalOffline.h"
+#include "../pack_scan.h"
 #include "TwoPlaneStandIn.h"
 #include "record_compare.h"
 
@@ -133,6 +135,12 @@ int main(int argc, char **argv)
             fprintf(stderr, "directcheck: %s\n", err.c_str());
             return 1;
         }
+        uint32_t scanned = 0;
+        if (getenv("DIRECTCHECK_SCAN"))
+            for (const std::string &line : gm20b::packScan(pack)) {
+                printf("SCAN %s\n", line.c_str());
+                scanned++;
+            }
         NSError *error = nil;
         id<MTLLibrary> qc = [dev newLibraryWithURL:[NSURL fileURLWithPath:@(argv[1])] error:&error];
         NSString *text = [NSString stringWithContentsOfFile:@(argv[2]) encoding:NSUTF8StringEncoding error:nil];
@@ -247,6 +255,6 @@ int main(int argc, char **argv)
         printf("directcheck: %u states made directly: %u records the same as the pack's, %u the same as its barrier "
                "forms, %u set aside and refused, %u differ; %u with the pack's split; %.1f ms a state\n",
                states, same, barriers, refused, bad, splits, states ? ms / states : 0.0);
-        return bad || !states ? 1 : 0;
+        return bad || scanned || !states ? 1 : 0;
     }
 }

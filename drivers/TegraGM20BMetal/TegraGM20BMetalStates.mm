@@ -212,8 +212,8 @@ SwitchMetalPipeline *gm20bPipelineShell(SwitchMetalDevice *device, MTLRenderPipe
                    metal_linked_packable(d);
     // A state the pack holds is found by its fast key; the text of its key is made only for a state the pack lacks
     const uint64_t fast = p->_completable ? gm20bKeepKey(p, d, vf, ff) : 0;
-    const uint64_t fastHeld = p->_packable ? gRM->raw->pack().fastState(fast) : 0;
-    uint64_t keyHash = fastHeld;
+    const gm20b::PackRun held = p->_packable ? gRM->raw->pack().fastRun(fast) : gm20b::PackRun();
+    uint64_t keyHash = held.records ? held.first->keyHash : 0;
     if (!keyHash) {
         const std::string &key = gm20bStateKey(p);
         keyHash = gm20b::Pack::fnv(key.data(), key.size());
@@ -233,20 +233,21 @@ SwitchMetalPipeline *gm20bPipelineShell(SwitchMetalDevice *device, MTLRenderPipe
     if (lookedUp) {
         {
             SWITCH_METAL_CREATION_SPAN(placeTicks);
-            p->_raw = gRM->raw->pipeline(packKey, gm20b::PackForm::Default, p->_caTransform);
+            p->_raw = held.records ? gRM->raw->pipeline(held, keyHash, gm20b::PackForm::Default, p->_caTransform)
+                                   : gRM->raw->pipeline(packKey, gm20b::PackForm::Default, p->_caTransform);
         }
 #if SWITCH_METAL_DIAGNOSTICS
         markProbes(p->_raw, d.label);
 #endif
         p->_packed = p->_raw && gRM->raw->packHolds(*p->_raw);
-        if (p->_packed && !fastHeld)
+        if (p->_packed && !held.records)
             os_log_error(gm20bLog(),
                          "SwitchMetal: pack state %016llx found by its key's text and not by its fast key %016llx: "
                          "the pack's fast keys are not the runtime's",
                          (unsigned long long)keyHash, (unsigned long long)fast);
         if (p->_packed) {
             SWITCH_METAL_CREATION_SPAN(variantTicks);
-            packedVariants(p, packKey);
+            packedVariants(p, held.records ? held : gRM->raw->pack().run(packKey));
         }
     }
     // A framework's state the pack holds is the device's archive hit, as Apple's own archives hold its states for Apple's

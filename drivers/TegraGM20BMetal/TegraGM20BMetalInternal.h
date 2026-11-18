@@ -278,7 +278,7 @@ std::string libraryName(SwitchMetalFunction *f);
 @end
 
 // A packed state's variants placed with its own record at creation (TegraGM20BMetalCubic.mm)
-void packedVariants(SwitchMetalPipeline *p, uint64_t keyHash);
+void packedVariants(SwitchMetalPipeline *p, const gm20b::PackRun &run);
 // A state this process made: the variants its creation already names (its test classes), made and waited for before
 // the creation returns, as the pack builder makes a packed state's
 void gm20bMadeVariants(SwitchMetalPipeline *p, MTLRenderPipelineDescriptor *d);
