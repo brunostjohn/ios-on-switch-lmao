@@ -22,6 +22,7 @@ from tools.devicerun.hwtest import (
     TRANSFER_FAILED_RUNS,
 )
 from tools.devicerun.joycon import JOYCON
+from tools.devicerun.launch import LAUNCHES
 from tools.devicerun.lockscreen import LOCKSCREEN
 from tools.devicerun.morning import MORNING
 from tools.devicerun.motion import MOTION
@@ -1426,6 +1427,7 @@ GROUPS: dict[str, list[Check]] = {
     'stutter': STUTTER,
     'cpu': CPU,
     'commit': COMMIT,
+    'launch': LAUNCHES,
 }
 
 # The tools/frames lines, pulled with the checks' own query.

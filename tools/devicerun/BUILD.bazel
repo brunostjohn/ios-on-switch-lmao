@@ -19,6 +19,7 @@ py_library(
         "dispatch.py",
         "hwtest.py",
         "joycon.py",
+        "launch.py",
         "lockscreen.py",
         "morning.py",
         "motion.py",
@@ -149,6 +150,14 @@ py_test(
     name = "commit_test",
     size = "small",
     srcs = ["commit_test.py"],
+    deps = [":lib"],
+)
+
+# launch.py's summaries: the memory clock around each launch, page-ins, the cryptex cache.
+py_test(
+    name = "launch_test",
+    size = "small",
+    srcs = ["launch_test.py"],
     deps = [":lib"],
 )
 
