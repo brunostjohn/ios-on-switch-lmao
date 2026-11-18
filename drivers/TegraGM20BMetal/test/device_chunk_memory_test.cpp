@@ -57,18 +57,46 @@ TEST_F(ChunkMemory, AChunkGivenBackIsFreedNotLeftMapped)
     EXPECT_LT(model.bos.size(), live);
 }
 
-// A client's chunks stay imports of its own pages: m2v twins a client's raw memory by importing its CPU range
-TEST(ClientChunkMemory, AClientsChunkIsAnImportOfItsOwnPages)
+// A launching app's chunks are the kernel's spares too (22 Nov: Photos, Maps and MercuryPosterExtension zero-filled 4-16
+// MiB chunks of their own pages on the creating thread, 4.3-9.1 ms each): no import of the app's anonymous pages
+TEST(ClientChunkMemory, AClientsChunksAreCachedBoAllocsNotImportsOfItsPages)
 {
     kernel_model::model = {};
     gm20b::Device dev;
     std::string err;
     ASSERT_TRUE(dev.open(harness::emptyPack().c_str(), 0, err, gm20b::Device::Role::Client)) << err;
     const size_t before = model.imports.size();
-    gm20b::Texture t;
-    ASSERT_TRUE(dev.createTexture(1280, 720, kBgra8, t, false, true));
-    EXPECT_GT(model.imports.size(), before);
-    dev.destroyTexture(t);
+    gm20b::Texture tiled, pitch, launch;
+    ASSERT_TRUE(dev.createTexture(1280, 720, kBgra8, tiled, false, true));
+    ASSERT_TRUE(dev.createTexture(256, 256, kBgra8, pitch, false, false));
+    ASSERT_TRUE(dev.createTexture(1792, 1472, kRgba16Float, launch, false, true));
+    gm20b::Buffer pooled;
+    ASSERT_TRUE(dev.createBuffer(64 << 10, pooled));
+    EXPECT_EQ(model.imports.size(), before);
+    dev.destroyBuffer(pooled);
+    dev.destroyTexture(launch);
+    dev.destroyTexture(pitch);
+    dev.destroyTexture(tiled);
+}
+
+// A no-copy buffer over a buffer's own contents would import a cached BO's pages from past its first page, which the
+// kernel hands to another process's BoAlloc once the chunk goes: refused with its line, nothing imported
+TEST(ClientChunkMemory, ANoCopyBufferOverTheDevicesOwnMemoryIsRefused)
+{
+    kernel_model::model = {};
+    gm20b::Device dev;
+    std::string err;
+    ASSERT_TRUE(dev.open(harness::emptyPack().c_str(), 0, err, gm20b::Device::Role::Client)) << err;
+    gm20b::Buffer pooled;
+    ASSERT_TRUE(dev.createBuffer(64 << 10, pooled, false));
+    ASSERT_NE(pooled.cpu, nullptr);
+    const size_t before = model.imports.size();
+    gm20b::Buffer over;
+    bool tiled = false;
+    EXPECT_FALSE(dev.createBufferNoCopy(pooled.cpu + 16384, 16384, over, tiled));
+    EXPECT_FALSE(tiled);
+    EXPECT_EQ(model.imports.size(), before);
+    dev.destroyBuffer(pooled);
 }
 
 }  // namespace

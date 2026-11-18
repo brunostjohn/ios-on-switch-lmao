@@ -598,6 +598,9 @@ public:
     // The caller's pages as a buffer (newBufferWithBytesNoCopy). False where the kernel refuses the import, or where the
     // pages lie in a surface this task imported block-linear (`tiled`): they hold its texels in GOBs, no buffer's rows
     bool createBufferNoCopy(void *bytes, uint64_t length, Buffer &b, bool &tiled);
+    // lock_ held: [bytes, bytes + length) reaches into this device's chunks, which no import may take (one line, naming
+    // `what`)
+    bool ownChunkMemory(const void *bytes, uint64_t length, const char *what) const;
     // An IOSurface's pages as a buffer of `length` bytes (newBufferWithIOSurface:), sharing its textures' import. False
     // where the kernel refuses the import, or keeps the surface block-linear (`tiled`): its bytes are no pitch buffer then
     bool createSurfaceBuffer(uint64_t id, void *base, uint64_t length, const void *owner, Buffer &b, bool &tiled);
@@ -948,6 +951,9 @@ public:
         std::atomic<uint64_t> backings{0}, backingBytes{0}, retiredBackings{0}, tiledFreeBytes{0};
         // surface imports made (a kernel import each) and found live, since open
         std::atomic<uint64_t> importsMade{0}, importHits{0};
+        // heaps' arenas made and purged ones bound again, and the bytes of untouched host pages imported (a shared heap's),
+        // each zero-filled by the kernel's wiring on the importing thread, since open
+        std::atomic<uint64_t> arenasMade{0}, arenaRestores{0}, hostZeroedBytes{0};
         // the memory live textures took of their own and their kept blocks' (Texture::heldBytes, Buffer::keptBytes)
         std::atomic<uint64_t> textureBytes{0};
         // diagnostics: color targets the driver rendered whose address or pitch is not a multiple of 128 (NVK renders

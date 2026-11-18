@@ -7,11 +7,12 @@
 #include "TegraGM20BLayout.h"
 
 #include <CoreFoundation/CoreFoundation.h>
-#include <mach/mach.h>
 #include <os/log.h>
 #include <pthread.h>
+#include <stdlib.h>
 #include <algorithm>
 #include <chrono>
+#include <iterator>
 
 #include "gm20b_gpu_internal.h"
 
@@ -44,33 +45,21 @@ uint64_t Device::chunkSize(const std::vector<Chunk> &chunks, uint64_t cap, uint6
     return (size + align - 1) & ~(align - 1);
 }
 
-// The render server's chunks are cached BoAllocs, which the kernel serves from its spares: pages wired, zeroed by the
-// copy engine and cleaned ahead of time, so a chunk costs a BO and a bind, not a wiring of fresh anonymous pages that the
-// CPU zero-fills (r7l, boot 21: ~9 ms for 16 MiB, on the render thread when a burst outran the grower). A chunk given back
-// returns to those spares. A client's stay imports of its own anonymous pages: m2v twins a client's raw memory by importing
-// its CPU range, and a kernel BO's view must not be freed under another import of its mapping (TegraGM20BUserClientPool.cpp).
+// Every process's chunks are cached BoAllocs, which the kernel serves from its spares: pages wired, zeroed by the copy
+// engine and cleaned ahead of time, so a chunk costs a BO and a bind, not a wiring of fresh anonymous pages that the CPU
+// zero-fills on the creating thread (r7l, boot 21: ~9 ms for 16 MiB on the render thread; 22 Nov: 4.3-9.1 ms per 4-16 MiB
+// chunk on launching apps' threads). A chunk given back returns to those spares.
 bool Device::chunkMemory(uint64_t size, uint32_t kind, std::unique_lock<gm20b::Mutex> *unlocked, Chunk &ch)
 {
-    vm_address_t host = 0;
-    const bool kernelMemory = role_ == Role::RenderServer;
-    if (!kernelMemory && vm_allocate(mach_task_self(), &host, size, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
-        return false;
     if (unlocked)
         unlocked->unlock();
-    const bool made = kernelMemory ? k_.alloc(size, false, ch.bo, kind, kChunkVaAlign)
-                                   : k_.importPages(reinterpret_cast<void *>(host), size, ch.bo);
+    const bool made = k_.alloc(size, false, ch.bo, kind, kChunkVaAlign);
     if (unlocked)
         unlocked->lock();
-    if (!made || (!kernelMemory && !k_.bindImport(reinterpret_cast<void *>(host), ch.bo, kind))) {
-        if (ch.bo.handle)
-            k_.free(ch.bo);
-        if (host)
-            vm_deallocate(mach_task_self(), host, size);
+    if (!made)
         return false;
-    }
-    ch.memory = kernelMemory ? ch.bo.cpu : reinterpret_cast<void *>(host);
+    ch.memory = ch.bo.cpu;
     ch.bytes = size;
-    ch.hostPages = !kernelMemory;
     return true;
 }
 
@@ -251,18 +240,15 @@ void Device::poolFree(Span &s)
     }
 }
 
-// lock_ held: an imported chunk's BO and pages go back (the kernel keeps the pages until the work submitted before has completed)
+// lock_ held: a chunk's BO goes back (the kernel keeps the pages until the work submitted before has completed)
 void Device::freeChunk(Chunk &ch)
 {
     SWITCH_METAL_DIAGNOSTIC(stats.poolBytes -= ch.bytes);
     SWITCH_METAL_DIAGNOSTIC(stats.poolChunks--);
     SWITCH_METAL_DIAGNOSTIC(glassMemEvent("chunk freed", ch.bytes));
-    const bool host = ch.hostPages;
     k_.free(ch.bo);
     if (ch.pitchVa)
         k_.releaseVa(ch.pitchVa, ch.bytes);
-    if (host)
-        vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
     ch = Chunk();
 }
 
@@ -457,8 +443,6 @@ bool Device::newTiledChunk(std::vector<Chunk> &chunks, uint32_t kind, uint64_t s
         return false;
     if (ch.bo.va & (kBlAlign - 1)) {
         k_.free(ch.bo);
-        if (ch.hostPages)
-            vm_deallocate(mach_task_self(), vm_address_t(ch.memory), ch.bytes);
         return false;
     }
     uint32_t c = 0;
@@ -798,6 +782,26 @@ uint64_t Device::blChunkFreeBytes()
     return tiledFreeBytes(blChunks_);
 }
 
+// lock_ held. A chunk is a cached BO, whose pages the kernel hands to any process's next BoAlloc once it is freed, though
+// an import of them that begins past its first page still holds them: a backing is found by its first page
+// (SwitchGpuBacking.cpp). So no import may take a range that reaches into one; `what` names the call refused.
+bool Device::ownChunkMemory(const void *bytes, uint64_t length, const char *what) const
+{
+    const auto overlaps = [&](const std::vector<Chunk> &chunks) {
+        return std::any_of(chunks.begin(), chunks.end(), [&](const Chunk &ch) {
+            return ch.memory && uintptr_t(bytes) < uintptr_t(ch.memory) + ch.bytes &&
+                   uintptr_t(ch.memory) < uintptr_t(bytes) + length;
+        });
+    };
+    if (!overlaps(chunks_) && !overlaps(blChunks_) && std::none_of(std::begin(zChunks_), std::end(zChunks_), overlaps))
+        return false;
+    os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+                 "SwitchMetal: %{public}s: %{public}s over %llu bytes at %p: they lie in this process's own GPU memory "
+                 "(a Metal buffer's contents), which no import may take",
+                 getprogname(), what, (unsigned long long)length, bytes);
+    return true;
+}
+
 // The caller's pages around [bytes, bytes + length): the frontend answers minBufferNoCopyAlignmentBytes with the kernel's 4 KiB
 // page, not getpagesize()'s 16 KiB, and Apple's own callers (iconservicesagent on 27) pass pointers inside a page; the import
 // binds whole kernel pages and the buffer's address is its first byte's inside them
@@ -823,6 +827,8 @@ bool Device::createBufferNoCopy(void *bytes, uint64_t length, Buffer &b, bool &t
             tiled = true;
             return false;
         }
+    if (ownChunkMemory(bytes, length, "newBufferWithBytesNoCopy"))
+        return false;
     if (!(b.import = importSurface(l, 0, bytes, length, nullptr)))
         return false;
     b.va = b.import->bo.va;
