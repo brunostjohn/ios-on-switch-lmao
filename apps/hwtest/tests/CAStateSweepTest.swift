@@ -46,7 +46,7 @@ public struct CAStateSweepTest: HWTest {
             if verdict.hasPrefix(Verdict.wrong.rawValue) { wrongStates.append(line.shortLabel) }
             listing += "\(verdict) \(line.shortLabel) \(line.vertex.name) \(line.fragment.name)\n"
         }
-        try? listing.write(to: directory.appendingPathComponent("states.txt"), atomically: true, encoding: .utf8)
+        try? Data(listing.utf8).place(at: directory.appendingPathComponent("states.txt"))
         var metrics = Metrics()
         metrics.set("states", states.count)
         for key in ["exact", "close", "wrong", "no_golden", "skipped", "failed"] {
@@ -115,9 +115,9 @@ public struct CAStateSweepTest: HWTest {
                height: height
            ).png()
         {
-            try? png.write(to: url.appendingPathExtension("png"))
+            try? png.place(at: url.appendingPathExtension("png"))
         } else {
-            try? Data(bytes).write(to: url.appendingPathExtension("bin"))
+            try? Data(bytes).place(at: url.appendingPathExtension("bin"))
         }
     }
 }
