@@ -383,6 +383,22 @@ TEST_F(DisplayPeriod, TheFrameEndIsStampedBeforeThePanelStep)
     EXPECT_GE(gClock - before, 9600u);
 }
 
+// Core Animation's render thread wakes on its own timer at the frame end, before the action may run: the frame
+// timeline's stand-in vsync is the filter's stamp, published by the filter, while no vsync client is armed.
+TEST_F(DisplayPeriod, TheFilterPublishesTheTimelineVsync)
+{
+    d.stats = true;
+    d.timelineVsyncs.clear();
+    d.frameEndInterrupt(false);
+    ASSERT_EQ(d.timelineVsyncs.size(), 1u) << "published before the frame-end action";
+    EXPECT_EQ(d.timelineVsyncs[0].first, d.feStamp);
+    EXPECT_EQ(d.timelineVsyncs[0].second, d.refreshTicks());
+    d.vsyncArmed = true;
+    d.frameEndInterrupt(false);
+    EXPECT_EQ(d.timelineVsyncs.size(), 1u) << "an armed vsync's V_BLANK is the timeline's";
+    d.vsyncArmed = false;
+}
+
 // The DC A filter runs the colour unit's and TegraPanel's steps with interrupts off: no simple lock, mutex, sleep, log or
 // allocation, with a change of the colour unit's tables pending or not.
 TEST_F(DisplayPeriod, TheFrameEndFilterTakesNoLock)

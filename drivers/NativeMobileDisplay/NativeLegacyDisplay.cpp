@@ -1585,11 +1585,11 @@ private:
         if (status & kVblankInt)
             vblankNotify();
         // Core Animation never registers for vsync on either kind (its frame clock is a CADisplayTimer): the frame end
-        // stands in for the compositor's vsync so the GPU deadline's window still opens.
+        // stands in for the compositor's vsync so the GPU deadline's window still opens (the frame timeline's, from
+        // the filter).
         if ((status & kFrameEndInt) && !vsyncArmed) {
             const uint64_t frameEnd = __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE);
             tegra_gm20b_compositor_vsync(frameEnd, 0, refreshTicks());
-            noteTimelineVsync(frameEnd, refreshTicks());
         }
         watchVsync(status);
         if (status & kFrameEndInt)
@@ -1900,7 +1900,8 @@ private:
 
     // Debug kernels: the frame timeline's vsync, sent to the compositor or not. Core Animation's frame clock is its own
     // (it never arms the vsync on iOS 17 or 27), so the frame end stands in: without it no SwitchFrame line has a vsync
-    // origin and SwitchFrameRender (render.c) never sees a frame begin.
+    // origin and SwitchFrameRender (render.c) never sees a frame begin. The stand-in comes from DC A's primary filter:
+    // nothing here may lock or block.
     void noteTimelineVsync(uint64_t stamp, uint64_t interval)
     {
         if (!SWITCH_FRAME_TIMELINE)

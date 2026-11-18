@@ -115,6 +115,10 @@ template <class Self> static bool vblankFilter(OSObject *owner, IOFilterInterrup
                 if (period > __atomic_load_n(&self->fePeriodMax, __ATOMIC_RELAXED))
                     __atomic_store_n(&self->fePeriodMax, period, __ATOMIC_RELAXED);
             }
+            // Core Animation's render thread wakes on a timer of its own phased to this stamp, often before the action
+            // runs: the frame timeline's stand-in vsync starts here, or that wake is charged to the frame before.
+            if (!__atomic_load_n(&self->vsyncArmed, __ATOMIC_RELAXED))
+                self->noteTimelineVsync(now, self->refreshTicks());
         }
         if (__atomic_load_n(&self->scanoutQuiescing, __ATOMIC_ACQUIRE)) {
             bump(self->scanoutStopFrames, 1ULL);
