@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "TegraGM20BMetalInternal.h"
+#import "TegraGM20BMetalPipeline.h"
 #include <time.h>
 #include "completion_source.h"
 #include "stamps.h"
@@ -216,6 +217,7 @@ void scheduled(SwitchMetalCommandBuffer *cb)
     const double now = hostSeconds();
     cb->_kernelEnd = now;
     cb->_gpuStart = now;
+    SWITCH_METAL_DIAGNOSTIC(cb->_scheduleNotes.scheduledUs.store(nowUs(), std::memory_order_relaxed));
     // Core Animation's render thread waits for this every frame (waitUntilScheduled): with nothing to run, no hop through
     // the handler queue
     dispatchScheduled(cb, gm20bTakeHandlers(cb, cb->_scheduledHandlers, cb->_hasScheduledHandlers));
@@ -380,6 +382,7 @@ static void finished(SwitchMetalCommandBuffer *cb)
         failedBy = SwitchMetalPred(cb->_failedBy);
     }
     SWITCH_METAL_DIAGNOSTIC(gRM->stats.finished.fetch_add(1, std::memory_order_relaxed));
+    SWITCH_METAL_DIAGNOSTIC(gm20bNoteFinished(cb));
     cancelPromises(cb);
     releaseEventWaits(cb);
     unhold(cb);
@@ -394,6 +397,7 @@ static void finished(SwitchMetalCommandBuffer *cb)
     if (sendScheduled) {
         scheduledHandlers = gm20bTakeHandlers(cb, cb->_scheduledHandlers, cb->_hasScheduledHandlers);
         cb->_kernelEnd = hostSeconds();
+        SWITCH_METAL_DIAGNOSTIC(cb->_scheduleNotes.scheduledUs.store(nowUs(), std::memory_order_relaxed));
 #if SWITCH_FRAME_TIMELINE
         SWITCH_METAL_DIAGNOSTIC(gRM->stats.scheduledByFinish++);
 #endif

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include "frame_cpu_counts.h"
 #include "lock.h"
 #include "word_wait.h"
 #import <Foundation/Foundation.h>
@@ -520,6 +521,7 @@ struct SwitchMetalSharedEventWait {
 #endif
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     std::atomic<uint64_t> _heldReturnUs;  // when waitUntilScheduled returned for it held, until it was submitted
+    gm20b::ScheduleNotes _scheduleNotes;  // the submit worker's turns of it, for the frame rates line
 #endif
     // scheduled() and finish() ran (their handlers taken): a handler added after goes at once, and scheduled() runs once (a
     // command buffer held for a shared event is scheduled at its commit, eventHeld). A handler is added under _lock after its

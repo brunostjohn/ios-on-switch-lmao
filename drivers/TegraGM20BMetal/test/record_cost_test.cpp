@@ -476,6 +476,74 @@ TEST(GM20BRecordCost, ChangedStateDrawByCall)
 }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// The frame rates line over frames of kept pass shapes: every pass a hit, each command buffer counted once, and each
+// blocked waitUntilScheduled's time split whole into its parts
+TEST(GM20BRecordCost, TheFrameLineCountsKeptPassesAndWhereWaitsWent)
+{
+    Bench &b = bench();
+    ASSERT_TRUE(b.device != nil && b.state != nil);
+    const auto frame = [&](uint32_t f) {
+        @autoreleasepool {
+            id<MTLCommandBuffer> cb = [b.queue commandBuffer];
+            compositorFrame(cb, b, passes(b, kEncoders), kDraws, f);
+            [cb commit];
+            [cb waitUntilScheduled];
+            [cb waitUntilCompleted];
+        }
+    };
+    for (uint32_t f = 0; f < uint32_t(kWarm); f++)
+        frame(f);
+    char line[1024];
+    (void)metal_frame_rates(line, sizeof line);
+    constexpr int kFrames = 4;
+    for (uint32_t f = 0; f < kFrames; f++)
+        frame(f);
+    ASSERT_GT(metal_frame_rates(line, sizeof line), 0u);
+    unsigned long long opened = 0, hits = 0, kept = 0, unkept = 0, unkeyed = 0, counters = 0, owned = 0;
+    ASSERT_EQ(sscanf(line, "frame pass=%llu hit=%llu kept=%llu unkept=%llu unkeyed=%llu counters=%llu owned=%llu",
+                     &opened, &hits, &kept, &unkept, &unkeyed, &counters, &owned),
+              7)
+        << line;
+    EXPECT_EQ(opened, unsigned(kFrames * kEncoders)) << line;
+    EXPECT_EQ(hits, opened) << line;
+    const char *ahead = strstr(line, " ahead=");
+    unsigned long long encodedAhead = 0, buffers = 0;
+    ASSERT_TRUE(ahead && sscanf(ahead, " ahead=%llu/%llu", &encodedAhead, &buffers) == 2) << line;
+    EXPECT_EQ(buffers, unsigned(kFrames)) << line;
+    const char *ws = strstr(line, " ws=");
+    unsigned long long waits = 0, waited = 0, parts[5] = {};
+    ASSERT_TRUE(ws && sscanf(ws, " ws=%llu/%lluus(queued %llu parked %llu encoding %llu handlers %llu other %llu)",
+                             &waits, &waited, &parts[0], &parts[1], &parts[2], &parts[3], &parts[4]) == 7)
+        << line;
+    EXPECT_EQ(parts[0] + parts[1] + parts[2] + parts[3] + parts[4], waited) << line;
+}
+
+// A wait's time goes to its parts in order, none past the wait: before the worker took it, parked, encoding, the
+// handler queue's hop from its scheduling, then the rest
+TEST(GM20BRecordCost, AScheduledWaitSplitsIntoItsParts)
+{
+    gm20b::ScheduleNotes n;
+    n.takenUs = 1300;
+    n.parkedUs = 200;
+    n.encodeUs = 400;
+    n.scheduledUs = 2000;
+    const gm20b::ScheduledWait w = gm20b::splitScheduledWait(n, 1000, 2500);
+    EXPECT_EQ(w.queued, 300u);
+    EXPECT_EQ(w.parked, 200u);
+    EXPECT_EQ(w.encoding, 400u);
+    EXPECT_EQ(w.handlers, 500u);
+    EXPECT_EQ(w.other, 100u);
+    gm20b::ScheduleNotes never;
+    EXPECT_EQ(gm20b::splitScheduledWait(never, 1000, 1700).queued, 700u);
+    gm20b::ScheduleNotes late;
+    late.takenUs = 900;
+    late.encodeUs = 5000;
+    const gm20b::ScheduledWait clipped = gm20b::splitScheduledWait(late, 1000, 1600);
+    EXPECT_EQ(clipped.queued, 0u);
+    EXPECT_EQ(clipped.encoding, 600u);
+    EXPECT_EQ(clipped.total(), 600u);
+}
+
 // The jobs of compositor frames, each with an encoder of indexed draws after them (the first of a new state, the rest of
 // the same one), as job_words.h's text: what a change of the recording path must leave as it is
 TEST(GM20BRecordCost, CompositorFrameWords)

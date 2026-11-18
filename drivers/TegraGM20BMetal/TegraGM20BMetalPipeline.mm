@@ -97,6 +97,8 @@ void gm20bPipelineHanded(SwitchMetalCommandBuffer *cb)
     if (cb->_pipelineDeclined.load(std::memory_order_relaxed) || cb->_committed.load(std::memory_order_acquire))
         return;
     if (a.cb) {
+        SWITCH_METAL_DIAGNOSTIC(
+            cb->_scheduleNotes.aheadLost.store(uint8_t(gm20b::AheadLost::Busy), std::memory_order_relaxed));
         cb->_pipelineDeclined.store(true, std::memory_order_release);
         aheadChanged(cb);
         return;
@@ -180,6 +182,8 @@ bool gm20bPipelineTake(SwitchMetalCommandBuffer *cb, size_t from)
     if (a.cb != cb || from)
         return false;
     if (!a.open) {
+        SWITCH_METAL_DIAGNOSTIC(
+            cb->_scheduleNotes.aheadLost.store(uint8_t(gm20b::AheadLost::Late), std::memory_order_relaxed));
         giveBack(0);
         return false;
     }

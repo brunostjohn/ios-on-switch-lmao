@@ -496,8 +496,12 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
 #endif
 #if SWITCH_METAL_DIAGNOSTICS
         const BlockedWait blocked(gRM->stats.scheduledWaits, gRM->stats.scheduledWaitUs);
+        const uint64_t from = nowUs();
 #endif
         waitFor(self, returns);
+#if SWITCH_METAL_DIAGNOSTICS
+        gm20bNoteScheduledWait(self, from, nowUs());
+#endif
     }
 #if SWITCH_METAL_DIAGNOSTICS
     uint64_t none = 0;

@@ -377,6 +377,7 @@ void submitLoop()
             }
             const uint64_t judged = r.progress.visit();
             SwitchMetalCommandBuffer *cb = ticket.value;
+            SWITCH_METAL_DIAGNOSTIC(gm20bNoteTaken(cb));
             auto deadline = gm20b::EventDeadline::Time::max();
             uint32_t dependencies = 0;
             bool blocked = false;
@@ -426,6 +427,7 @@ void submitLoop()
                     continue;
                 }
                 r.waiting.park(ticket, dependencies, deadline);
+                SWITCH_METAL_DIAGNOSTIC(gm20bNoteParked(cb, unsigned(wait)));
                 if (!gm20b::holds(wait)) {
                     markHeld(marked, true);
                     continue;

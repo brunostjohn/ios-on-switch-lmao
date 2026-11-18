@@ -69,6 +69,7 @@ void gm20bOwnPass(SwitchMetalRenderEncoder *e)
 {
     if (!e->_passShared)
         return;
+    SWITCH_METAL_DIAGNOSTIC(gm20b::frameCpuCounts().passOwned.fetch_add(1, std::memory_order_relaxed));
     gm20bPassBind(e->_cb, e->_pass);
     MTLRenderPassDescriptor *own = [e->_pass copy];
     [e->_cb retain:own];
@@ -100,10 +101,13 @@ void gm20bOwnPass(SwitchMetalRenderEncoder *e)
     [self begin:e];
     thread_local std::vector<uint8_t> key;
     uint64_t hash = 0;
-    const bool keyed = !gm20bCounterBuffersMade() && gm20bPassKey(d, key, hash);
+    const bool counters = gm20bCounterBuffersMade();
+    const bool keyed = !counters && gm20bPassKey(d, key, hash);
     if (keyed)
-        if (const SwitchMetalPassEntry *kept = gm20bPassFind(self, key, hash))
+        if (const SwitchMetalPassEntry *kept = gm20bPassFind(self, key, hash)) {
+            SWITCH_METAL_DIAGNOSTIC(gm20b::countPass(gm20b::PassOpen::Hit));
             return openKeptPass(self, e, *kept);
+        }
     MTLRenderPassDescriptor *pass = [d copy];
     bool skipped = gm20bPassAsApple(self, pass);
     [self retain:pass];
@@ -314,7 +318,12 @@ void gm20bOwnPass(SwitchMetalRenderEncoder *e)
             return c.resolve != nil;
         });
     // a pass whose making counted a skip is made again at each call, which counts it again
-    if (keyed && !_encFailed && !resolves && !skipped) {
+    const bool keeps = keyed && !_encFailed && !resolves && !skipped;
+    SWITCH_METAL_DIAGNOSTIC(gm20b::countPass(keeps      ? gm20b::PassOpen::Kept
+                                             : keyed    ? gm20b::PassOpen::Unkept
+                                             : counters ? gm20b::PassOpen::Counters
+                                                        : gm20b::PassOpen::Unkeyed));
+    if (keeps) {
         // what the raw encode reads of it made now, so the copy is read, never changed, after this
         for (unsigned c = 0; c < 8; c++)
             (void)pass.colorAttachments[c];

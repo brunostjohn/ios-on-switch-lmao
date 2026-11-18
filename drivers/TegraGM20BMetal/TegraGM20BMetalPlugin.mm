@@ -527,6 +527,8 @@ void startRates()
             os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", processWord(), line);
         if (metal_encode_rates(line, sizeof line))
             os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", processWord(), line);
+        if (metal_frame_rates(line, sizeof line))
+            os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", processWord(), line);
         if (metal_fetch_keys(line, sizeof line))
             os_log(logger(), "TegraGM20BMetal: %{public}s %{public}s", processWord(), line);
     });

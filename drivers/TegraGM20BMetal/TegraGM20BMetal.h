@@ -39,6 +39,11 @@ size_t metal_fetch_rates(char *out, size_t size);
 // a part includes those nested in it, a self time leaves them out), "/x" the calls per encode, pmax= the longest
 // prepare(), then the encode's events per command buffer (mallocs, locks, sends, slots per draw).
 size_t metal_encode_rates(char *out, size_t size);
+// Debug builds: "frame pass= hit= ... ahead= why= encoders= park= ws=" since the previous call (0 when nothing was
+// recorded or waited for): the recording thread's passes by how the pass cache gave them, command buffers encoded ahead
+// and why not, the pooled objects' blocks, queue heads parked by why, and waitUntilScheduled by where its time went
+// (TegraGM20BMetalEncoderRates.mm)
+size_t metal_frame_rates(char *out, size_t size);
 // "fetch keys rec=<key>:n,... enc=... sto=...": the pipeline keys behind the window's record-time and encode-time
 // refusals and storage-to-barrier fallbacks, eight of each at most, most first; 0 when none
 size_t metal_fetch_keys(char *out, size_t size);

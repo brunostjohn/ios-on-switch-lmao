@@ -301,6 +301,7 @@ bool submitRange(SwitchMetalCommandBuffer *cb, bool followed)
         const uint64_t wallTicks = gm20b::encodeTicks() - profileTicks;
         cb->_frame.mark(switch_frame::EncodeEnd);
         SWITCH_METAL_DIAGNOSTIC(r.stats.encodeUs += nowUs() - began);
+        SWITCH_METAL_DIAGNOSTIC(cb->_scheduleNotes.encodeUs.fetch_add(nowUs() - began, std::memory_order_relaxed));
         const auto folded = [&, wallTicks] {
             gm20b::tEncodeProfile = nullptr;
             mallocs.reset();
