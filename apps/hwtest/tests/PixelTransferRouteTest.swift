@@ -8,7 +8,9 @@ import HWTestVideo
 /// MostRecentConversionType, which both this Mac's VideoToolbox and the device's answer kVTPropertyNotSupportedErr
 /// ("unsupported"), so no route is measured on either; and chain_<pair>, the session's MostRecentChainDescription,
 /// where a pair VideoToolbox registers the scaler (VIC) for in 21H461 and 24B119 (420f 601 -> BGRA, 420v 709 -> BGRA,
-/// BGRA sRGB/709 -> BGRA at 1:1 and half, L008 -> BGRA) reports a route other than hardware.
+/// BGRA sRGB/709 -> BGRA at 1:1 and half, L008 -> BGRA) reports a route other than hardware; and vic_maps_<pair>, the
+/// SMMU mappings VIC made over the pair's transfers (kern.switch_vic_maps, debug kernels; every process's), which says
+/// whether VideoToolbox sent the pair to the scaler at all.
 struct PixelTransferRouteTest: HWTest {
     let id = "image.pixel_transfer_route"
     let name = "VTPixelTransferSession converts every pair, L008 to BGRA within a code of Apple's"
@@ -20,7 +22,11 @@ struct PixelTransferRouteTest: HWTest {
         var checks: [(String, Bool)] = []
         for pair in PixelTransferRoutes.pairs {
             do {
+                let mapsBefore = Self.vicMaps()
                 let r = try PixelTransferRoutes.run(pair)
+                if let before = mapsBefore, let after = Self.vicMaps() {
+                    metrics.set("vic_maps_" + pair.key, after - before)
+                }
                 metrics.set("route_" + pair.key, r.route)
                 metrics.set("status_" + pair.key, Int(r.status))
                 checks.append(("status_\(pair.key)=\(r.status)", r.status == 0))
@@ -34,5 +40,10 @@ struct PixelTransferRouteTest: HWTest {
             }
         }
         return .judged(checks, metrics)
+    }
+
+    static func vicMaps() -> Int? {
+        guard case .value(let maps) = KernelSysctl.integer("kern.switch_vic_maps", as: Int32.self) else { return nil }
+        return Int(maps)
     }
 }
