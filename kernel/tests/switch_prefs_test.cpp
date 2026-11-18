@@ -354,9 +354,10 @@ TEST(SwitchPrefsGuard, TimedCacheKeptOnlyFromThisClock)
         EXPECT_EQ(Count(body, "\"/private/var/db/timed/com.apple.timed.plist\""), 1u) << path;
         EXPECT_EQ(Count(body, "keep = native_switch_bytes_hold(cached, cached_length, last, last_length);"), 1u)
             << path;
-        EXPECT_LT(body.find("if (!keep) {"), body.find("native_switch_unlink(p, &request, &result)")) << path;
-        EXPECT_LT(body.find("native_switch_unlink(p, &request, &result)"),
-                  body.find("native_switch_watchdog_file(p, scratch, marker, bootsessionuuid_string"))
+        EXPECT_LT(body.find("if (!keep) {"), body.find("native_switch_unlink(p, scratch, cache, SWITCH_BOOT_REDONE)"))
+            << path;
+        EXPECT_LT(body.find("native_switch_unlink(p, scratch, cache, SWITCH_BOOT_REDONE)"),
+                  body.find("native_switch_data_file(p, scratch, marker, bootsessionuuid_string"))
             << path << ": the marker is this boot's, written after the drop";
         EXPECT_EQ(Count(Body(source, "native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)"),
                         "native_switch_timed_cache(p, scratch, data_mount);"),
