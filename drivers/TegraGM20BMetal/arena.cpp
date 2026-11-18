@@ -12,6 +12,8 @@
 
 #include <mach/mach.h>
 #include <mach/memory_object_types.h>
+#include <os/log.h>
+#include <stdlib.h>
 
 namespace gm20b {
 namespace {
@@ -466,15 +468,22 @@ void Device::trimLocked(Arena &a, const std::atomic<uint32_t> &committed)
         vm_address_t at = vm_address_t(a.cpu + h.offset);
         hostPages(h.bytes, at, true);
     }
-    bool bound = true;
+    ArenaRange refused = {0, 0};
     for (const ArenaRange &b : arenaBacked(holes, a.bytes))
-        bound = bound && bindArenaPart(a, b.offset, b.bytes);
-    if (bound) {
+        if (!refused.bytes && !bindArenaPart(a, b.offset, b.bytes))
+            refused = b;
+    if (!refused.bytes) {
         a.holes = std::move(holes);
         SWITCH_METAL_DIAGNOSTIC(glassMemEvent("heap trimmed", rangeBytes(a.holes)));
     } else {
         unbindArena(a);
-        if (!bindArena(a)) {
+        const bool whole = bindArena(a);
+        os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+                     "SwitchMetal: %{public}s: the kernel refused a trimmed heap's part of %llu bytes at %llu: the "
+                     "heap of %llu bytes is %{public}s",
+                     getprogname(), (unsigned long long)refused.bytes, (unsigned long long)refused.offset,
+                     (unsigned long long)a.bytes, whole ? "bound whole again" : "purged, its pages refused too");
+        if (!whole) {
             a.purged = true;
             purgedArenas_++;
         }
