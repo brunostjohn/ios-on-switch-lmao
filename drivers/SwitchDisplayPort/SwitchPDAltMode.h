@@ -67,6 +67,8 @@ enum switch_pd_alt_step {
     SWITCH_PD_ALT_HUB_POWER,  // the dock's hub powers up after its LED reply
     SWITCH_PD_ALT_HUB_ENABLE,
     SWITCH_PD_ALT_HUB_RETRY,
+    SWITCH_PD_ALT_DOCK_DP_SLEEP,
+    SWITCH_PD_ALT_DOCK_DP_WAKE,
     SWITCH_PD_ALT_DONE,
     SWITCH_PD_ALT_FAILED,
 };
@@ -96,7 +98,7 @@ struct switch_pd_alt {
     enum switch_pd_alt_step step;
     bool want_dp;
     bool dock_power;      // the source's PDOs are the dock's signature (SwitchChargePolicy.h): swapped without asking
-    bool dual_role_data;  // the source's 5 V PDO has Dual-Role Data: it may be asked who it is, then swapped
+    bool ufp_discovery_allowed;  // SOP explicitly negotiated PD3 and the source advertised dual-role data
     bool as_ufp;          // the session began as UFP and has not become DFP: a swap by the partner restarts it
     bool accepted;        // the step's VDM was answered and ACCEPT went out: its CMD_DONE means the reply is readable
     bool paused;          // a contract alert while a command was out: the step goes again once SwitchPD is at rest
@@ -117,6 +119,13 @@ static inline void switch_pd_alt_init(struct switch_pd_alt *alt, bool want_dp)
 static inline bool switch_pd_alt_active(const struct switch_pd_alt *alt)
 {
     return alt->step != SWITCH_PD_ALT_IDLE && alt->step != SWITCH_PD_ALT_DONE && alt->step != SWITCH_PD_ALT_FAILED;
+}
+
+static inline unsigned switch_pd_alt_display_lanes(const struct switch_pd_alt *alt, bool resume_pending)
+{
+    if (resume_pending || alt->step == SWITCH_PD_ALT_DOCK_DP_SLEEP || alt->step == SWITCH_PD_ALT_DOCK_DP_WAKE)
+        return 0;
+    return alt->dp_lanes;
 }
 
 static inline struct switch_pd_alt_out switch_pd_alt_none()
@@ -173,8 +182,7 @@ struct switch_pd_alt_config {
 };
 
 // DisplayPort Configure from the partner's capabilities VDO (`caps` = INCOMING_VDM after DP discovery: count, then the
-// VDO's bytes). Pin assignment D (two lanes, the other SuperSpeed pair stays USB 3) whenever it is offered, C (four
-// lanes) otherwise. The UFP_D assignments are bits 23:16 for a receptacle and 15:8 for a plug. The dock reports a plug
+// VDO's bytes). The Nintendo dock prefers C (four DP lanes); a multifunction adapter prefers D to retain USB3. The UFP_D assignments are bits 23:16 for a receptacle and 15:8 for a plug. The dock reports a plug
 // but answers as a receptacle and ignores where the Configure's assignment is: bm92txx puts the dock's in bits 23:16
 // and everyone else's in the standard 15:8, which is what the dock is known to work with.
 static inline struct switch_pd_alt_config switch_pd_alt_choose_pins(const uint8_t *caps, size_t len, bool dock)
@@ -185,7 +193,7 @@ static inline struct switch_pd_alt_config switch_pd_alt_choose_pins(const uint8_
     }
     const bool receptacle = dock || (caps[1] & 0x40u) != 0;
     const uint8_t offered = receptacle ? caps[3] : caps[2];
-    if ((offered & SWITCH_PD_ALT_PIN_D) != 0) {
+    if ((offered & SWITCH_PD_ALT_PIN_D) != 0 && (!dock || (offered & SWITCH_PD_ALT_PIN_C) == 0)) {
         config.pin = SWITCH_PD_ALT_PIN_D;
         config.lanes = 2;
     } else if ((offered & SWITCH_PD_ALT_PIN_C) != 0) {
@@ -200,13 +208,18 @@ static inline struct switch_pd_alt_config switch_pd_alt_choose_pins(const uint8_
 
 static inline bool switch_pd_alt_has_svid(const uint8_t *vdm, size_t len, uint16_t svid)
 {
-    const size_t count = vdm[0] < len ? vdm[0] : len - 1;
-    for (size_t i = 5; i + 1 <= count; i += 2) {
+    for (size_t i = 5; i + 1 < len; i += 2) {
         if ((uint16_t)((unsigned)vdm[i] | (unsigned)vdm[i + 1] << 8U) == svid) {
             return true;
         }
     }
     return false;
+}
+
+static inline bool switch_pd_alt_dock_answer(const uint8_t *vdm, size_t len, uint8_t reply)
+{
+    return len >= 9 && vdm[1] == 0x40 && vdm[2] == 0 && vdm[3] == 0x7E && vdm[4] == 0x05 &&
+           vdm[6] == 2 && vdm[7] == reply;
 }
 
 static inline bool switch_pd_alt_acked(const uint8_t *vdm, uint8_t command)

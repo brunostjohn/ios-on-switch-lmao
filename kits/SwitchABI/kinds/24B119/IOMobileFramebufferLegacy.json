@@ -42,6 +42,7 @@
     "307": "kickSwapQueue",
     "312": "completeCurrentSwap",
     "313": "validateSwap",
+    "319": "getRefreshAttributes",
     "324": "platformFrameInfoNotify",
     "325": "sendFrameInfo",
     "344": "setEdrFactor",
@@ -197,7 +198,6 @@
     "opaque333": "0xfffffff0099804b0",
     "opaque360": "0xfffffff009980954",
     "opaque334": "0xfffffff009980e3c",
-    "opaque319": "0xfffffff009980e44",
     "native_legacy_set_display_refresh_properties": "0xfffffff009980f94",
     "opaque225": "0xfffffff009981124",
     "opaque226": "0xfffffff009981130",
@@ -301,7 +301,8 @@
     "setDigitalOutMode": "0xfffffff00997d818",
     "getDigitalOutState": "0xfffffff00997dff4",
     "hotPlugNotify": "0xfffffff00997d094",
-    "switch_external_complete_current": "0xfffffff0099758d4"
+    "switch_external_complete_current": "0xfffffff0099758d4",
+    "getRefreshAttributes": "0xfffffff009980e44"
   },
   "found": {
     "C2": "stores the vtable",
@@ -380,7 +381,8 @@
     "setDisplayDevice": "PAC root on IOMobileFramebuffer",
     "setDigitalOutMode": "PAC root on IOMobileFramebuffer",
     "getDigitalOutState": "PAC root on IOMobileFramebuffer",
-    "hotPlugNotify": "slot 278 by PAC; stores state at +0x1dc0 and sends two type-0 scalars"
+    "hotPlugNotify": "slot 278 by PAC; stores state at +0x1dc0 and sends two type-0 scalars",
+    "getRefreshAttributes": "slot 319 by hint"
   },
   "hints": {
     "layout": {
@@ -415,7 +417,8 @@
       "185": "setDisplayDevice",
       "187": "setDigitalOutMode",
       "188": "getDigitalOutState",
-      "278": "hotPlugNotify"
+      "278": "hotPlugNotify",
+      "319": "getRefreshAttributes"
     },
     "functions": {
       "native_legacy_vsync_notify": {

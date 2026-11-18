@@ -233,6 +233,27 @@ TEST(CecWake, ANewHdmiTopologyAllocatesAgainInsteadOfKeepingTheOldAddress)
     EXPECT_EQ(b.state.physical, SWITCH_DP_CEC_INVALID_PHYSICAL);
 }
 
+TEST(CecWake, HdmiBounceClaimsANewAddressWithoutRepeatingImageViewOn)
+{
+    Branch b;
+    b.enable();
+    b.claim();
+    EXPECT_EQ(b.packet(0), (std::vector<uint8_t>{0x40, 4}));
+    switch_dp_cec_reconnect(&b.state);
+    b.take();
+    b.complete({0, 0xe0, 0x4c});
+    for (int i = 0; i < 4; ++i) {
+        b.take();
+        b.complete();
+    }
+    b.claim();
+    EXPECT_EQ(b.state.wake, SWITCH_DP_CEC_PHYSICAL);
+    switch_dp_aux_request request{};
+    EXPECT_FALSE(switch_dp_cec_next(&b.state, &request, &b.wait));
+    switch_dp_cec_start(&b.state);
+    EXPECT_FALSE(b.state.wake_sent);
+}
+
 TEST(CecWake, PhysicalAddressComesOnlyFromAValidHdmiVendorBlock)
 {
     std::array<uint8_t, 256> edid{};
@@ -251,13 +272,20 @@ TEST(CecWake, PhysicalAddressComesOnlyFromAValidHdmiVendorBlock)
     };
     sum(0);
     sum(128);
-    EXPECT_EQ(switch_dp_cec_physical(edid.data(), 2), 0x2100);
+    const auto physical = [&] {
+        switch_dp_mode_list modes{};
+        const auto original = edid;
+        const uint32_t valid = switch_dp_edid_modes(edid.data(), 2, &modes);
+        EXPECT_EQ(edid, original);
+        return switch_dp_cec_physical(edid.data(), valid);
+    };
+    EXPECT_EQ(physical(), 0x2100);
     edid[136] = 0x20;
     edid[137] = 0x10;
     sum(128);
-    EXPECT_EQ(switch_dp_cec_physical(edid.data(), 2), SWITCH_DP_CEC_INVALID_PHYSICAL);
+    EXPECT_EQ(physical(), SWITCH_DP_CEC_INVALID_PHYSICAL);
     edid[136] = 0x21;
     edid[137] = 0;
-    EXPECT_EQ(switch_dp_cec_physical(edid.data(), 2), SWITCH_DP_CEC_INVALID_PHYSICAL);
+    EXPECT_EQ(physical(), SWITCH_DP_CEC_INVALID_PHYSICAL);
 }
 }

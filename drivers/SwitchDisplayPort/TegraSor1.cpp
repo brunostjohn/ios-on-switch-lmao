@@ -3,7 +3,7 @@
 // Corporation): tegra_sor_dp_enable/_disable, _power_up_lanes/_power_down_lanes, _dp_precharge, _dp_term_calibrate,
 // _dp_link_apply_training, _dp_link_configure, _apply_config, _mode_set, _attach/_detach/_wakeup/_power_up/_power_down;
 // tegra210_sor1 (crossbar 2 1 0 3 4, identity lane map). Drive tables: the OLED's own (switchroot tegra210b01-fric.dts
-// and tegra210-nx-common-disp.dtsi sor1 dp-display lt-data, post-cursor 0). Clocks: clk-tegra210.c (CLK_SOURCE_SOR1:
+// and tegra210-nx-common-disp.dtsi sor1 dp-display lt-data). Clocks: clk-tegra210.c (CLK_SOURCE_SOR1:
 // 31:29 sor1 source, 5 = pll_d2_out0; 15:14 sor1_out, 0 sor_safe, 1 the pad clock), PLL_D2 as pll_d2_params. Supplies:
 // tegra210b01-fric-power-tree.dtsi (vdd-dp-pad = MAX77620 LDO8, 1.0 V, no FPS slot: software owns it), the pad as
 // upstream's DP SOR (TEGRA_IO_PAD_LVDS, IO_DPD2 bit 25).
@@ -62,6 +62,7 @@ enum : uint32_t {
     DP_LINKCTL0 = 0x4c,
     LANE_DRIVE_CURRENT0 = 0x4e,
     LANE_PREEMPHASIS0 = 0x52,
+    LANE_POSTCURSOR0 = 0x56,
     DP_CONFIG0 = 0x58,
     DP_PADCTL0 = 0x5c,
     DP_SPARE0 = 0x60,
@@ -93,10 +94,30 @@ constexpr uint32_t kPixelDepthMask = 0xfu << 17, kBpp24 = 0x5u << 17, kCrcComple
 constexpr uint32_t kHsyncLow = 1u << 12, kVsyncLow = 1u << 13;
 constexpr uint8_t kCrossbar[5] = {2, 1, 0, 3, 4};
 
-// Indexed by swing * 4 - swing * (swing - 1) / 2 + emphasis (swing + emphasis <= 3), post-cursor level 0.
-constexpr uint8_t kSwing[10] = {0x13, 0x19, 0x1e, 0x28, 0x1e, 0x25, 0x2d, 0x28, 0x32, 0x39};
-constexpr uint8_t kEmphasis[10] = {0x00, 0x08, 0x12, 0x24, 0x01, 0x0e, 0x1d, 0x01, 0x13, 0x00};
-constexpr uint8_t kTxPu[10] = {0x20, 0x30, 0x40, 0x60, 0x30, 0x40, 0x60, 0x40, 0x60, 0x60};
+constexpr uint8_t kSwing[4][10] = {
+    {0x13, 0x19, 0x1e, 0x28, 0x1e, 0x25, 0x2d, 0x28, 0x32, 0x39},
+    {0x12, 0x17, 0x1b, 0x25, 0x1c, 0x23, 0x2a, 0x25, 0x2f, 0x37},
+    {0x12, 0x16, 0x1a, 0x22, 0x1b, 0x20, 0x27, 0x24, 0x2d, 0x35},
+    {0x11, 0x14, 0x17, 0x1f, 0x19, 0x1e, 0x24, 0x22, 0x2a, 0x32},
+};
+constexpr uint8_t kEmphasis[4][10] = {
+    {0x00, 0x08, 0x12, 0x24, 0x01, 0x0e, 0x1d, 0x01, 0x13, 0x00},
+    {0x00, 0x08, 0x12, 0x24, 0x00, 0x0e, 0x1d, 0x00, 0x13, 0x00},
+    {0x00, 0x08, 0x12, 0x24, 0x00, 0x0e, 0x1d, 0x00, 0x13, 0x00},
+    {0x00, 0x08, 0x12, 0x24, 0x00, 0x0e, 0x1d, 0x00, 0x13, 0x00},
+};
+constexpr uint8_t kPostcursor[4][10] = {
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+    {0x02, 0x02, 0x04, 0x05, 0x02, 0x04, 0x05, 0x04, 0x05, 0x05},
+    {0x04, 0x05, 0x08, 0x0b, 0x05, 0x09, 0x0b, 0x08, 0x0a, 0x0b},
+    {0x05, 0x09, 0x0b, 0x12, 0x09, 0x0d, 0x12, 0x0b, 0x0f, 0x12},
+};
+constexpr uint8_t kTxPu[4][10] = {
+    {0x20, 0x30, 0x40, 0x60, 0x30, 0x40, 0x60, 0x40, 0x60, 0x60},
+    {0x20, 0x20, 0x30, 0x50, 0x30, 0x40, 0x50, 0x40, 0x50, 0x60},
+    {0x20, 0x20, 0x30, 0x40, 0x30, 0x30, 0x40, 0x40, 0x50, 0x60},
+    {0x20, 0x20, 0x20, 0x40, 0x30, 0x30, 0x40, 0x40, 0x40, 0x60},
+};
 
 unsigned driveIndex(unsigned swing, unsigned emphasis)
 {
@@ -139,10 +160,15 @@ void TegraSor1::update()
     write(STATE0, 0);
 }
 
+uint32_t TegraSor1::referenceClockKhz()
+{
+    return 38400u >> ((switch_car_read(OSC_CTRL) >> 26) & 3u);
+}
+
 bool TegraSor1::pixelClock(uint32_t pixel_khz, char *why, size_t size)
 {
     const bool b01 = switch_car_soc_t210b01();
-    const uint32_t ref_khz = 38400u >> ((switch_car_read(OSC_CTRL) >> 26) & 3u);
+    const uint32_t ref_khz = referenceClockKhz();
     struct switch_dp_plld2 pll = {};
     if (!switch_dp_plld2_for(pixel_khz, ref_khz, b01, &pll)) {
         snprintf(why, size, "PLL_D2 cannot make %u kHz", pixel_khz);
@@ -327,15 +353,19 @@ void TegraSor1::logTrainingState()
 
 void TegraSor1::drive(const struct switch_dp_train &train, const struct switch_dp_train_out &out)
 {
-    uint32_t swing = 0, emphasis = 0, txPu = 0, pattern = 0;
+    uint32_t swing = 0, emphasis = 0, postcursor = 0, txPu = 0, pattern = 0;
     for (unsigned lane = 0; lane < lanes; ++lane) {
         const unsigned index = driveIndex(train.swing[lane], train.emphasis[lane]);
-        swing |= (uint32_t)kSwing[index] << (lane * 8);
-        emphasis |= (uint32_t)kEmphasis[index] << (lane * 8);
-        txPu = kTxPu[index] > txPu ? kTxPu[index] : txPu;
+        const unsigned pc = (train.postcursor >> (lane * 2)) & 3u;
+        postcursor |= (uint32_t)kPostcursor[pc][index] << (lane * 8);
+        swing |= (uint32_t)kSwing[pc][index] << (lane * 8);
+        emphasis |= (uint32_t)kEmphasis[pc][index] << (lane * 8);
+        txPu = kTxPu[pc][index] > txPu ? kTxPu[pc][index] : txPu;
         const uint32_t lanePattern = out.pattern == 0 ? (1u << 4) : out.pattern;  // none: Galois scrambler on
         pattern = (pattern << 8) | lanePattern | (1u << 6);                       // 8b/10b channel coding
     }
+    if (train.tps3)
+        write(LANE_POSTCURSOR0, postcursor);
     write(LANE_DRIVE_CURRENT0, swing);
     write(LANE_PREEMPHASIS0, emphasis);
     write(DP_TPG, pattern);

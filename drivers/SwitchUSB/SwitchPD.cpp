@@ -129,22 +129,25 @@ void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
 {
     if (leaving)
         return;
-    if (resetPending) {  // bm92t_event_handler after its SYS_RESET: 100 ms, over-current protection, the switches
-        resetPending = false;
-        IOSleep(kAfterResetMS);
-        (void)enableOcp();
-        acceptDataRoleSwapsAsUfp(false);
-        const bool want = switch_pd_switches_on(phase, allowSource && !asleepSinkOnly);
-        switchesOn = !want;
-        setSwitches(want);
+    if (resetPending)
+        return;
+    const bool inserted = (status1 & SWITCH_PD_STATUS1_INSERT) != 0;
+    if (state.plugged && (!inserted || (alertBits & SWITCH_PD_ALERT_PLUGPULL))) {
+        endNegotiation();
+        switch_pd_alt_leave();
     }
     state.alert = alertBits;
     state.status1 = status1;
     state.status2 = status2;
-    state.plugged = ((status1 & SWITCH_PD_STATUS1_INSERT) != 0u);
+    state.plugged = inserted;
     state.vbusPresent = ((status1 & SWITCH_PD_STATUS1_VSAFE) != 0u);
     state.dataHost = state.plugged &&
                      ((static_cast<unsigned>(status1) >> SWITCH_PD_STATUS1_DR_SHIFT) & 3u) == SWITCH_PD_DATA_ROLE_DFP;
+    // The dock can be gone and a new Rd present before one PLUGPULL is serviced. The sink phase had its switches off.
+    if (phase == SWITCH_PD_SINK && allowSource && (alertBits & SWITCH_PD_ALERT_PLUGPULL) && state.plugged &&
+        !state.vbusPresent && (status1 & SWITCH_PD_STATUS1_SRC_MODE) && (status2 & SWITCH_PD_STATUS2_OTG_INSERT) &&
+        !(status1 & SWITCH_PD_STATUS1_FAULT_MASK) && !(alertBits & SWITCH_PD_ALERT_SRC_FAULT))
+        enter(SWITCH_PD_WAIT_ROLE, "replacement partner presents Rd without VBUS");
     apply(switch_pd_decide(phase, alertBits, status1, status2, allowSource && railsOn && switchesOn));
     if (handleFault(alertBits, status1)) {
         notify();
@@ -163,31 +166,37 @@ void SwitchPD::notifyAlt(uint16_t alertBits)
         return self->phase == SWITCH_PD_SOURCE || n == Nego::Settling || n == Nego::Done || n == Nego::Failed;
     };
     const bool contractOurs = nego == Nego::Settling || nego == Nego::Done;
-    const bool dualRoleData = sourcePdoCount != 0 && charge::pdoType(sourcePdos[0]) == 0 &&
-                              (sourcePdos[0] & PDO_FIXED_DUAL_ROLE_DATA) != 0;
     const uint16_t status1 = state.status1;
-    const bool altSession =
-        state.plugged && ((phase == SWITCH_PD_SINK && (status1 & SWITCH_PD_STATUS1_SRC_MODE) == 0u) ||
-                          (phase == SWITCH_PD_SOURCE && state.dataHost));
-    switch_pd_alt_alert(this, loop, atRest, alertBits, status1, altSession, contractOurs && choice.dock, dualRoleData);
+    const bool altSession = explicitContract && state.plugged &&
+                            ((phase == SWITCH_PD_SINK && (status1 & SWITCH_PD_STATUS1_SRC_MODE) == 0u) ||
+                             (phase == SWITCH_PD_SOURCE && state.dataHost));
+    // BM92 firmware revision does not establish PD 3.x on SOP. PD 2.0 UFP waits for a partner data-role swap.
+    switch_pd_alt_alert(this, loop, atRest, alertBits, status1, altSession, contractOurs && choice.dock, false);
 }
 
 // bm92t_event_handler's faults, after the policy has taken VBUS off: an internal fault ends the event (true), with a
 // SYS_RESET when switch_pd_reset_on_fault says so; a source fault gets a PD hard reset.
 bool SwitchPD::handleFault(uint16_t alertBits, uint16_t status1)
 {
-    if (switch_pd_reset_on_fault(alertBits, status1)) {
-        systemReset(kFaultResetMS, "internal fault");
-        resetPending = true;
-    }
-    if (switch_pd_internal_fault(status1))
-        return true;
-    if (switch_pd_hard_reset(alertBits, status1)) {
+    if (!switch_pd_internal_fault(status1) && !switch_pd_hard_reset(alertBits, status1))
+        return false;
+    endNegotiation();
+    switch_pd_alt_leave();
+    window->cancelTimeout();
+    if (switch_pd_internal_fault(status1)) {
+        if (phase != SWITCH_PD_HELD)
+            enter(SWITCH_PD_HELD, "internal fault: isolating the source supplies");
+        if (switch_pd_reset_on_fault(alertBits, status1) && write16(COMMAND, SYS_RESET_CMD) == 0) {
+            resetPending = true;
+            alert->disable();
+            window->setTimeoutMS(kFaultResetMS + kAfterResetMS);
+        }
+    } else {
         const int err = write16(COMMAND, PD_HARD_RST_CMD);
         IOLog("SwitchPD: source fault: PD hard reset%s (alert %#x status1 %#x)\n", err ? " failed" : "", alertBits,
               status1);
     }
-    return false;
+    return true;
 }
 
 // SYS_RESET, then `settleMS`, then ALERT_STATUS read to release the ALERT the reset raised (bm92t_system_reset_auto).
@@ -210,7 +219,8 @@ void SwitchPD::notify()
     } else if (phase == SWITCH_PD_SOURCE) {
         state.role = SWITCH_PD_ROLE_SOURCE;
     }
-    state.settled = phase != SWITCH_PD_CLASSIFY && phase != SWITCH_PD_REATTACH;
+    state.settled = phase != SWITCH_PD_HELD && phase != SWITCH_PD_WAIT_ROLE && phase != SWITCH_PD_CLASSIFY &&
+                    phase != SWITCH_PD_REATTACH;
     for (unsigned i = 0; i < listenerCount; ++i)
         listeners[i].function(listeners[i].context, &state);
 }
@@ -241,6 +251,8 @@ void SwitchPD::apply(const switch_pd_step &step)
 void SwitchPD::enter(switch_pd_phase next, const char *why)
 {
     const bool boosting = switch_pd_boost_on(phase);
+    if (next != phase)
+        explicitContract = false;
     phase = next;
     sawDetach = false;
     const bool armed = allowSource && !asleepSinkOnly;
@@ -269,7 +281,7 @@ void SwitchPD::enter(switch_pd_phase next, const char *why)
     }
     if (switches)
         setSwitches(true);
-    if (next == SWITCH_PD_CLASSIFY)
+    if (next == SWITCH_PD_WAIT_ROLE || next == SWITCH_PD_CLASSIFY)
         window->setTimeoutMS(kClassifyMS);
     if (next == SWITCH_PD_REATTACH)
         window->setTimeoutMS(kReattachMS);
@@ -346,6 +358,26 @@ void SwitchPD::windowFired(OSObject *owner, IOTimerEventSource *)
         return;
     uint16_t status1 = 0;
     uint16_t status2 = 0;
+    if (self->resetPending) {
+        self->resetPending = false;
+        uint16_t bits = 0;
+        uint16_t config = 0;
+        if (!read16(ALERT_STATUS, bits) && self->readStatus(status1, status2) && !read16(CONFIG1, config)) {
+            self->switchesOn = (config & CONFIG1_SPDSRC_MASK) != CONFIG1_SPDSRC_MASK;
+            self->setSwitches(false);
+            if (!self->switchesOn && !self->enableOcp() && !switch_pd_internal_fault(status1)) {
+                self->acceptDataRoleSwapsAsUfp(false);
+                const bool sink = (status1 & SWITCH_PD_STATUS1_INSERT) &&
+                                  (!(status1 & SWITCH_PD_STATUS1_SRC_MODE) ||
+                                   ((status1 & SWITCH_PD_STATUS1_VSAFE) && !switch_pd_vbus_ours(status1)));
+                self->enter(sink ? SWITCH_PD_SINK : SWITCH_PD_EMPTY, "power role after controller reset");
+                self->handle(bits, status1, status2);
+            }
+        }
+        if (!self->resetPending)
+            self->alert->enable();
+        return;
+    }
     if (!self->readStatus(status1, status2))
         return;
     const switch_pd_step step = switch_pd_window_end(self->phase, self->sawDetach, status1);
@@ -401,6 +433,7 @@ void SwitchPD::stopEvents()
     allowSource = false;
     window->cancelTimeout();
     endNegotiation();  // no events: no contract can be followed, so none stays published
+    switch_pd_alt_leave();
     IOLog("SwitchPD: BM92T36 ALERT (PK4) fired %u times in 1 s, turned off (port sink-only until reboot): %s\n",
           alertCount, pin);
     if (phase == SWITCH_PD_SOURCE) {
@@ -425,10 +458,12 @@ void SwitchPD::setAllowSource(bool allow)
     if (allow == allowSource || stuck)
         return;
     allowSource = allow;
+    if (resetPending)
+        return;
     if (!allow && phase == SWITCH_PD_SOURCE) {
         enter(SWITCH_PD_HELD, "not sourcing: host mode is off");
         notify();
-    } else if (!allow && (phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH)) {
+    } else if (!allow && (phase == SWITCH_PD_WAIT_ROLE || phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH)) {
         window->cancelTimeout();
         enter(SWITCH_PD_SINK, "sink: host mode is off");
         notify();
@@ -453,8 +488,9 @@ void SwitchPD::setAllowSource(bool allow)
 void SwitchPD::systemSleep(bool entering)
 {
     if (entering) {
-        asleepSinkOnly = phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH;
-        if (phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH) {
+        asleepSinkOnly = phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_WAIT_ROLE || phase == SWITCH_PD_CLASSIFY ||
+                         phase == SWITCH_PD_REATTACH;
+        if (phase == SWITCH_PD_WAIT_ROLE || phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH) {
             window->cancelTimeout();
             enter(SWITCH_PD_EMPTY, "source startup canceled for sleep");
             notify();
@@ -471,6 +507,17 @@ void SwitchPD::systemSleep(bool entering)
             return;
         }
         setSwitches(switch_pd_switches_on(phase, allowSource));
+    }
+    if (!entering && explicitContract) {
+        uint16_t bits = 0;
+        uint16_t status1 = 0;
+        uint16_t status2 = 0;
+        if (read16(ALERT_STATUS, bits) || !readStatus(status1, status2))
+            return;
+        if (bits || status1 != state.status1 || status2 != state.status2)
+            handle(bits, status1, status2);
+        if (explicitContract)
+            switch_pd_alt_resume();
     }
 }
 

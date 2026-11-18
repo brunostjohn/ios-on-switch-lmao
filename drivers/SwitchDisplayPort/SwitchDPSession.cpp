@@ -5,6 +5,7 @@
 // (the CRTC is enabled before the encoder in DRM's commit).
 #include <IOKit/IOLib.h>
 
+#include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "SwitchDisplayPortService.h"
 
 
@@ -20,9 +21,10 @@ void SwitchDisplayPort::dispatch()
     switch (next) {
     case Next::Caps:
         if (switch_dp_caps_update(caps, request.data, request.address == SWITCH_DPCD_EXT_CAP_BASE)) {
-            auxNative(SWITCH_DP_AUX_NATIVE_READ, SWITCH_DPCD_EXT_CAP_BASE, nullptr, 2, Next::Caps);
+            auxNative(SWITCH_DP_AUX_NATIVE_READ, SWITCH_DPCD_EXT_CAP_BASE, nullptr, sizeof(caps), Next::Caps);
             break;
         }
+        aux.setDownspread((caps[SWITCH_DPCD_MAX_DOWNSPREAD] & 1u) != 0);
         auxNative(SWITCH_DP_AUX_NATIVE_WRITE, SWITCH_DPCD_SET_POWER, &kDpcdD0, 1, Next::Powered);
         break;
     case Next::Powered:
@@ -46,7 +48,7 @@ void SwitchDisplayPort::dispatch()
         break;
     }
     case Next::LinkSet: {
-        const uint8_t coding[2] = {0x10, 0x01};  // PLL_DP runs with spread spectrum enabled.
+        const uint8_t coding[2] = {static_cast<uint8_t>((caps[SWITCH_DPCD_MAX_DOWNSPREAD] & 1u) << 4), 0x01};
         auxNative(SWITCH_DP_AUX_NATIVE_WRITE, SWITCH_DPCD_DOWNSPREAD_CTRL, coding, 2, Next::Coding);
         break;
     }
@@ -54,15 +56,28 @@ void SwitchDisplayPort::dispatch()
         sor.enableLink(tu);
         trainOut = switch_dp_train_start(&train, link.lanes,
                                          link.rate == SWITCH_DP_RATE_HBR2 && (caps[2] & SWITCH_DPCD_TPS3) != 0,
-                                         caps[SWITCH_DPCD_TRAINING_AUX_RD_INTERVAL]);
+                                         caps[SWITCH_DPCD_REV], caps[SWITCH_DPCD_TRAINING_AUX_RD_INTERVAL]);
         applyTraining();
         break;
     case Next::TrainingSet:
+        if (train.tps3) {
+            uint8_t levels[2];
+            switch_dp_train_set2(&train, levels);
+            auxNative(SWITCH_DP_AUX_NATIVE_WRITE, SWITCH_DPCD_TRAINING_LANE0_1_SET2, levels, (train.lanes + 1) / 2,
+                      Next::PostcursorSet);
+            break;
+        }
+        [[fallthrough]];
+    case Next::PostcursorSet:
         stepTimer->setTimeoutUS(trainOut.wait_us);
         break;
     case Next::TrainingStatus:
         trainOut = switch_dp_train_status(&train, request.data);
         applyTraining();
+        break;
+    case Next::TrainingStopped:
+        teardownLink();
+        chooseAndTrain(true);
         break;
     case Next::Trained:
         trained();
@@ -105,42 +120,56 @@ void SwitchDisplayPort::edidNext()
 
 void SwitchDisplayPort::edidDone()
 {
-    switch_dp_edid_modes(edid, edidBlocks, &modes);
+    validEdidBlocks = switch_dp_edid_modes(edid, edidBlocks, &modes);
     maxRate = switch_dp_rate_cap(caps[1]);
     const uint8_t sinkLanes = caps[2] & 0x1fu;
     maxLanes = sinkLanes < altLanes ? sinkLanes : (uint8_t)altLanes;
+    const bool enhanced = (caps[2] & SWITCH_DPCD_ENHANCED_FRAME) != 0;
+    const bool spread = (caps[SWITCH_DPCD_MAX_DOWNSPREAD] & 1u) != 0;
+    const auto refKhz = TegraSor1::referenceClockKhz();
+    const bool b01 = switch_car_soc_t210b01();
+    unsigned admitted = 0;
+    for (unsigned i = 0; i < modes.count; ++i) {
+        const auto &candidate = modes.modes[i];
+        switch_dp_plld2 pll;
+        switch_dp_tu transport;
+        switch_dp_link choice;
+        unsigned cursor = 0;
+        if (switch_dp_mode_allowed(&candidate, switch_dp_payload_kbps(maxRate, maxLanes)) &&
+            switch_dp_plld2_for(candidate.pixel_khz, refKhz, b01, &pll) &&
+            switch_dp_next_link(candidate.pixel_khz, candidate.hactive, switch_dp_mode_htotal(&candidate),
+                                maxRate, maxLanes, enhanced, spread, &cursor, &choice, &transport))
+            modes.modes[admitted++] = candidate;
+    }
+    modes.count = admitted;
     IOLog("SwitchDisplayPort: sink DPCD %u.%u, %u lanes at up to %u.%02u Gb/s, EDID %u block%s, %u modes\n",
           caps[0] >> 4, caps[0] & 0xfu, sinkLanes, switch_dp_rate_khz(maxRate) / 100000,
           (switch_dp_rate_khz(maxRate) / 1000) % 100, edidBlocks, edidBlocks == 1 ? "" : "s", modes.count);
     stage = Stage::Ready;
     cecEdid();
-    if (!screen->publish(modes, switch_dp_payload_kbps(maxRate, maxLanes), edid))
-        fail("the display identity", "could not publish IOMFBUUID");
+    if (!screen->publish(modes, edid, edidBlocks * 128u))
+        fail("the external display", "could not publish identity and timings");
 }
 
-void SwitchDisplayPort::chooseAndTrain()
+void SwitchDisplayPort::chooseAndTrain(bool nextChoice)
 {
-    if (maxRate == 0 || maxLanes == 0) {
-        fail("the link", "no rate or lane left to train");
+    if (!nextChoice)
+        linkCursor = 0;
+    if (wantedMode < 0 || static_cast<unsigned>(wantedMode) >= modes.count) {
+        fail("the mode", "the requested timing is unavailable");
         return;
     }
-    const int chosen = wantedMode;
-    if (chosen < 0 || static_cast<unsigned>(chosen) >= modes.count ||
-        !switch_dp_mode_allowed(&modes.modes[chosen], switch_dp_payload_kbps(maxRate, maxLanes)) ||
-        !switch_dp_link_for(modes.modes[chosen].pixel_khz, maxRate, maxLanes, &link)) {
-        fail("the mode", "the requested timing does not fit the available link");
+    modeIndex = static_cast<unsigned>(wantedMode);
+    mode = modes.modes[modeIndex];
+    const bool enhanced = (caps[2] & SWITCH_DPCD_ENHANCED_FRAME) != 0;
+    const bool spread = (caps[SWITCH_DPCD_MAX_DOWNSPREAD] & 1u) != 0;
+    if (!switch_dp_next_link(mode.pixel_khz, mode.hactive, switch_dp_mode_htotal(&mode), maxRate, maxLanes,
+                             enhanced, spread, &linkCursor, &link, &tu)) {
+        fail("the link", "the available rate and lane combinations were exhausted");
         return;
     }
-    modeIndex = (unsigned)chosen;
-    mode = modes.modes[chosen];
     stage = Stage::Training;
     char why[128] = "";
-    const bool enhanced = (caps[2] & SWITCH_DPCD_ENHANCED_FRAME) != 0;
-    if (!switch_dp_tu_config(mode.pixel_khz, mode.hactive, switch_dp_mode_htotal(&mode), link.rate, link.lanes,
-                             enhanced, &tu)) {
-        fail("SOR1", "no transfer-unit configuration for the mode");
-        return;
-    }
     if (!sorUp) {
         if (!sor.powerUp(why, sizeof(why))) {
             fail("SOR1", why);
@@ -158,6 +187,7 @@ void SwitchDisplayPort::chooseAndTrain()
             return;
         }
         dcbUp = true;
+        dcSource->enable();
     }
     dcb.setMode(mode);
     if (!sor.startLink(link, enhanced, why, sizeof(why))) {
@@ -186,12 +216,12 @@ void SwitchDisplayPort::applyTraining()
         IOLog("SwitchDisplayPort: training DPCD interval %#x, status %02x %02x %02x %02x, adjust %02x %02x\n",
               caps[SWITCH_DPCD_TRAINING_AUX_RD_INTERVAL], request.data[0], request.data[1], request.data[2],
               request.data[3], request.data[4], request.data[5]);
-#endif
         IOLog("SwitchDisplayPort: training at %u Mb/s x%u: %s\n", switch_dp_rate_khz(link.rate) / 100, link.lanes,
               train.why != nullptr ? train.why : "failed");
-        maxRate = switch_dp_rate_below(link.rate);
-        teardownLink();
-        chooseAndTrain();
+#endif
+        sor.drive(train, trainOut);
+        auxNative(SWITCH_DP_AUX_NATIVE_WRITE, SWITCH_DPCD_TRAINING_PATTERN_SET, trainOut.dpcd, 1,
+                  Next::TrainingStopped);
         break;
     }
     }
@@ -213,6 +243,6 @@ void SwitchDisplayPort::trained()
     IOLog("SwitchDisplayPort: link up at %u Mb/s x%u (TU %u, watermark %u)\n", switch_dp_rate_khz(link.rate) / 100,
           link.lanes, tu.tu_size, tu.watermark);
     screen->linkUp(mode, &dcb);
-    switch_displayport_audio_sink(edid, edidBlocks, true);
+    switch_displayport_audio_sink(edid, validEdidBlocks, true);
     scheduleAux();
 }

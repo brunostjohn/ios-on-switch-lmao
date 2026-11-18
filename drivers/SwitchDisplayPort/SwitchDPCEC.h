@@ -52,17 +52,16 @@ struct switch_dp_cec {
     uint16_t physical;
     uint8_t logical, candidate, control, message[16], length, reply[16], reply_length, rx_info;
     uint8_t rx_stage;
-    bool enabled, irq, service, active, wait_pending, deadline, retry_on_hpd;
+    bool enabled, irq, service, active, wait_pending, deadline, retry_on_hpd, wake_sent;
 };
 
-static inline uint16_t switch_dp_cec_physical(const uint8_t *edid, unsigned blocks)
+static inline uint16_t switch_dp_cec_physical(const uint8_t *edid, uint32_t valid_blocks)
 {
-    if (!blocks || !switch_dp_edid_header_valid(edid))
-        return SWITCH_DP_CEC_INVALID_PHYSICAL;
-    const unsigned count = edid[126] < blocks - 1 ? edid[126] : blocks - 1;
-    for (unsigned b = 1; b <= count; ++b) {
+    for (unsigned b = 1; (valid_blocks >>= 1) != 0; ++b) {
+        if (!(valid_blocks & 1u))
+            continue;
         const uint8_t *cta = edid + (size_t)b * 128;
-        if (cta[0] != 2 || cta[2] < 4 || cta[2] > 127 || !switch_dp_edid_block_valid(cta))
+        if (cta[0] != 2 || cta[2] < 4 || cta[2] > 127)
             continue;
         for (unsigned at = 4; at < cta[2];) {
             const unsigned length = cta[at] & 31u;
@@ -104,6 +103,13 @@ static inline void switch_dp_cec_start(struct switch_dp_cec *s)
     s->physical = SWITCH_DP_CEC_INVALID_PHYSICAL;
     s->wake = SWITCH_DP_CEC_POLL;
     s->retry_on_hpd = true;
+}
+
+static inline void switch_dp_cec_reconnect(struct switch_dp_cec *s)
+{
+    const bool wake_sent = s->wake_sent;
+    switch_dp_cec_start(s);
+    s->wake_sent = wake_sent;
 }
 
 static inline void switch_dp_cec_release(struct switch_dp_cec *s)
@@ -247,6 +253,8 @@ static inline bool switch_dp_cec_next(struct switch_dp_cec *s, struct switch_dp_
         __builtin_memcpy(request->data, s->message, s->length);
         break;
     case SWITCH_DP_CEC_SEND:
+        if (s->packet == SWITCH_DP_CEC_IMAGE)
+            s->wake_sent = true;
         *request = switch_dp_aux_make(SWITCH_DP_AUX_NATIVE_WRITE, SWITCH_DP_CEC_TX_CONTROL, 1);
         request->data[0] = (uint8_t)((s->length - 1u) | 0x10u);
         break;
@@ -342,7 +350,7 @@ static inline void switch_dp_cec_complete(struct switch_dp_cec *s, const uint8_t
         } else if (s->packet == SWITCH_DP_CEC_POLL) {
             if (data[0] & 0x20u) {
                 s->logical = switch_dp_cec_candidate(s->candidate);
-                s->wake = SWITCH_DP_CEC_IMAGE;
+                s->wake = s->wake_sent ? SWITCH_DP_CEC_PHYSICAL : SWITCH_DP_CEC_IMAGE;
                 s->phase = SWITCH_DP_CEC_LOGICAL;
             } else {
                 s->phase = ++s->candidate < 3 ? SWITCH_DP_CEC_IDLE : SWITCH_DP_CEC_STOP;

@@ -11,6 +11,8 @@
 #define SWITCH_DPCD_REV                      0x000u
 #define SWITCH_DPCD_MAX_LINK_RATE            0x001u
 #define SWITCH_DPCD_MAX_LANE_COUNT           0x002u
+#define SWITCH_DPCD_MAX_DOWNSPREAD           0x003u
+#define SWITCH_DPCD_TRAINING_LANE0_1_SET2     0x10Fu
 #define SWITCH_DPCD_TRAINING_AUX_RD_INTERVAL 0x00Eu
 #define SWITCH_DPCD_LINK_BW_SET              0x100u
 #define SWITCH_DPCD_TRAINING_PATTERN_SET     0x102u
@@ -37,7 +39,9 @@
 
 static inline bool switch_dp_caps_update(uint8_t caps[16], const uint8_t *reply, bool extended)
 {
-    for (unsigned i = 0; i < (extended ? 2u : 16u); ++i) {
+    if (extended && reply[SWITCH_DPCD_REV] < caps[SWITCH_DPCD_REV])
+        return false;
+    for (unsigned i = 0; i < 16; ++i) {
         caps[i] = reply[i];
     }
     return !extended && (caps[SWITCH_DPCD_TRAINING_AUX_RD_INTERVAL] & SWITCH_DPCD_EXT_CAP_PRESENT) != 0;
@@ -60,8 +64,8 @@ struct switch_dp_train {
     enum switch_dp_train_phase phase;
     uint8_t lanes;
     bool tps3;
-    uint32_t interval_us;
-    uint8_t swing[4], emphasis[4];
+    uint32_t cr_wait_us, eq_wait_us;
+    uint8_t swing[4], emphasis[4], postcursor;
     unsigned tries, same_swing;
     const char *why;
 };
@@ -76,11 +80,10 @@ struct switch_dp_train_out {
 
 static inline struct switch_dp_train_out switch_dp_train_drive(const struct switch_dp_train *t)
 {
-    struct switch_dp_train_out out = {
-        SWITCH_DP_TRAIN_DRIVE, 1, {0}, 0, t->interval_us != 0 ? t->interval_us : SWITCH_DP_CR_US};
+    struct switch_dp_train_out out = {SWITCH_DP_TRAIN_DRIVE, 1, {0}, 0, t->cr_wait_us};
     if (t->phase == SWITCH_DP_TRAIN_EQUALISATION) {
         out.pattern = t->tps3 ? 3 : 2;
-        out.wait_us = t->interval_us != 0 ? t->interval_us : 400u;
+        out.wait_us = t->eq_wait_us;
     }
     out.dpcd[0] = (uint8_t)(out.pattern | SWITCH_DPCD_SCRAMBLING_DISABLE);
     for (unsigned lane = 0; lane < t->lanes; ++lane) {
@@ -88,7 +91,7 @@ static inline struct switch_dp_train_out switch_dp_train_drive(const struct swit
         if (t->swing[lane] == 3) {
             set |= SWITCH_DPCD_MAX_SWING_REACHED;
         }
-        if (t->swing[lane] + t->emphasis[lane] == 3) {
+        if (t->emphasis[lane] == 3) {
             set |= SWITCH_DPCD_MAX_PRE_EMPHASIS_REACHED;
         }
         out.dpcd[1 + lane] = set;
@@ -97,12 +100,13 @@ static inline struct switch_dp_train_out switch_dp_train_drive(const struct swit
     return out;
 }
 
-// Starts training `lanes` lanes; `tps3` when the rate is HBR2 and the sink has TPS3, `rd_interval` is DPCD 0x00E.
 static inline struct switch_dp_train_out switch_dp_train_start(struct switch_dp_train *t, uint8_t lanes, bool tps3,
-                                                               uint8_t rd_interval)
+                                                               uint8_t revision, uint8_t rd_interval)
 {
+    const uint32_t interval = (rd_interval & 0x7Fu) * 4000u;
     const struct switch_dp_train fresh = {
-        SWITCH_DP_TRAIN_CLOCK_RECOVERY, lanes, tps3, (rd_interval & 0x7Fu) * 4000u, {0}, {0}, 0, 0, 0};
+        SWITCH_DP_TRAIN_CLOCK_RECOVERY, lanes, tps3, revision >= 0x14 || !interval ? SWITCH_DP_CR_US : interval,
+        interval ? interval : 400u, {0}, {0}, 0, 0, 0, 0};
     *t = fresh;
     return switch_dp_train_drive(t);
 }
@@ -122,11 +126,22 @@ static inline bool switch_dp_all_lanes(const uint8_t *status, uint8_t lanes, uin
     return true;
 }
 
+static inline void switch_dp_train_set2(const struct switch_dp_train *t, uint8_t levels[2])
+{
+    levels[0] = levels[1] = 0;
+    for (unsigned lane = 0; lane < t->lanes; ++lane) {
+        const unsigned pc = (t->postcursor >> (lane * 2)) & 3u;
+        levels[lane / 2] |= (uint8_t)((pc | (pc == 3 ? 4u : 0u)) << ((lane % 2) * 4));
+    }
+}
+
 // The sink's adjust requests (DPCD 0x206/0x207), clamped to what SOR1's tables hold (swing + emphasis <= 3). True
 // when the swing of any lane changed.
 static inline bool switch_dp_train_adjust(struct switch_dp_train *t, const uint8_t *status)
 {
     bool changed = false;
+    if (t->tps3)
+        t->postcursor = status[10];
     for (unsigned lane = 0; lane < t->lanes; ++lane) {
         const uint8_t request = (uint8_t)(status[4 + lane / 2] >> (4u * (lane % 2)));
         const uint8_t swing = request & 3u;
@@ -153,6 +168,7 @@ static inline struct switch_dp_train_out switch_dp_train_clock_recovery(struct s
                                                                         const uint8_t *status)
 {
     if (switch_dp_all_lanes(status, t->lanes, SWITCH_DPCD_CR_DONE)) {
+        (void)switch_dp_train_adjust(t, status);
         t->phase = SWITCH_DP_TRAIN_EQUALISATION;
         t->tries = 0;
         return switch_dp_train_drive(t);
@@ -190,7 +206,7 @@ static inline struct switch_dp_train_out switch_dp_train_equalisation(struct swi
     return switch_dp_train_drive(t);
 }
 
-// DPCD 0x202..0x207 read after a DRIVE's wait.
+// TPS3 includes ADJUST_REQUEST_POST_CURSOR2 (0x20c) in the same AUX status read.
 static inline struct switch_dp_train_out switch_dp_train_status(struct switch_dp_train *t, const uint8_t *status)
 {
     if (t->phase == SWITCH_DP_TRAIN_CLOCK_RECOVERY) {

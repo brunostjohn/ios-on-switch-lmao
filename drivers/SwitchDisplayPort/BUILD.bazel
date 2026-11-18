@@ -48,6 +48,7 @@ kernel_driver(
     hdr_deps = [
         "drivers/ArmGIC",
         "drivers/NativeMobileDisplay",
+        "drivers/SwitchPower",
         "drivers/TegraGM20B",
         "drivers/TegraVIC",
         "kits/SwitchDMA",

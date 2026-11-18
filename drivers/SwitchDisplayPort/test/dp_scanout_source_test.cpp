@@ -7,7 +7,7 @@ using switch_ios::test::SourceText;
 TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuseReuse)
 {
     const auto source = SourceText("../SwitchExternalScanout.cpp");
-    const auto latch = Block(source, "void SwitchExternalScreen::frameEnd()");
+    const auto latch = Block(source, "bool SwitchExternalScreen::frameEnd()");
     EXPECT_TRUE(latch.has("front != drawing"));
     EXPECT_TRUE(latch.has("releaseRead(static_cast<unsigned>(front));"));
     EXPECT_TRUE(latch.has("switch_native_scanout_deliver(&slots[front].read);"));
@@ -23,4 +23,6 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     const auto off = Block(lifecycle, "void SwitchExternalScreen::linkDown()");
     EXPECT_TRUE(off.has("releaseRead(static_cast<unsigned>(front));"));
     EXPECT_TRUE(Block(lifecycle, "void SwitchExternalScreen::detach()").has("releaseSlot(i);"));
+    EXPECT_TRUE(Block(lifecycle, "void SwitchExternalScreen::linkUp(").has("mode.hactive != timing.hactive"));
+    EXPECT_TRUE(Block(source, "int SwitchExternalScreen::prepareSlot(").has("native_legacy_surface_bounds("));
 }

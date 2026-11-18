@@ -508,8 +508,8 @@ struct PdChoice {
     const char *refusal;             // why none, when position is 0
 };
 
-// [L4T-PD] bm92t_check_pdo: the Nintendo dock signature (exactly 2 PDOs, the first 5 V 500 mA) takes only a fixed 15 V
-// 2.6-3 A second PDO; otherwise a fixed PDO at 5/9/12/15 V and <= 3 A, the higher voltage on a tie. bm92txx ranks by the
+// [L4T-PD] bm92t_check_pdo: the Nintendo dock offers two fixed PDOs, 5 V 500 mA and 15 V 2.6-3 A.
+// Other sources use a fixed PDO at 5/9/12/15 V and <= 3 A, the higher voltage on a tie. bm92txx ranks by the
 // PDO's own power; here by the power the charger will take from it (voltage x pdInputLimit), which is what charges:
 // for 9 V 2 A and 12 V 1.5 A (both 18 W) bm92txx takes 12 V at 900 mA (10.8 W), this 9 V at 1500 mA (13.5 W). A PDO
 // below 500 mA is not used for charging; an explicit 5 V/0 A offer still permits PD signaling with input disconnected.
@@ -520,13 +520,11 @@ constexpr PdChoice choosePdo(const uint32_t *pdos, unsigned count)
         count = 7;
     if (!count)
         return choice;
-    if (count == 2 && pdoMillivolts(pdos[0]) == 5000 && pdoMilliamps(pdos[0]) == 500) {
+    if (count == 2 && pdoType(pdos[0]) == 0 && pdoMillivolts(pdos[0]) == 5000 && pdoMilliamps(pdos[0]) == 500) {
         const uint32_t p = pdos[1];
         if (pdoType(p) == 0 && pdoMillivolts(p) == 15000 && pdoMilliamps(p) >= 2600 && pdoMilliamps(p) <= 3000) {
             return PdChoice{2, p, 15000, pdoMilliamps(p), pdInputLimit(15000, pdoMilliamps(p), true), true, nullptr};
         }
-        choice.refusal = "dock signature without 15 V 2.6-3 A";
-        return choice;
     }
     unsigned bestWatts = 0;
     choice.refusal = "no fixed 5/9/12/15 V PDO up to 3 A that gives 500 mA or more";

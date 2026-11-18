@@ -59,6 +59,8 @@ void SwitchPD::negotiate(uint16_t alertBits)
     if (!sinkSession) {
         if (nego != Nego::Idle || state.pdSource || state.contractMillivolts)
             endNegotiation();
+        if (phase == SWITCH_PD_SOURCE && state.plugged && (alertBits & SWITCH_PD_ALERT_CONTRACT))
+            explicitContract = true;
         return;
     }
     if (alertBits & (SWITCH_PD_ALERT_CONTRACT | ALERT_PDO))
@@ -82,9 +84,7 @@ void SwitchPD::negotiate(uint16_t alertBits)
             choose();
         break;
     case Nego::RdoSent:
-        if (alertBits & SWITCH_PD_ALERT_CONTRACT) {
-            verify();
-        } else if ((alertBits & ALERT_CMD_DONE) && (state.status1 & STATUS1_LASTCMD_MASK)) {
+        if ((alertBits & ALERT_CMD_DONE) && (state.status1 & STATUS1_LASTCMD_MASK)) {
             const unsigned last = (state.status1 & STATUS1_LASTCMD_MASK) >> STATUS1_LASTCMD_SHIFT;
             if (last == LASTCMD_ABORTED && ++failedRequests < kMaxFailedRequests) {
                 // r8a: a MacBook's port aborts the first request at attach (the controller still busy with the
@@ -98,13 +98,26 @@ void SwitchPD::negotiate(uint16_t alertBits)
             char why[64];
             snprintf(why, sizeof(why), "the request was refused (last command status %u)", last);
             fail(why);
+        } else if (alertBits & SWITCH_PD_ALERT_CONTRACT) {
+            verify();
         }
         break;
     case Nego::PsRdySent:
+        if (alertBits & ALERT_CMD_DONE) {
+#if DEVELOPMENT || DEBUG
+            IOLog("SwitchPD: PS_RDY result %u (alert %#x status1 %#x)\n",
+                  (state.status1 & STATUS1_LASTCMD_MASK) >> STATUS1_LASTCMD_SHIFT, alertBits, state.status1);
+#endif
+            if (state.status1 & STATUS1_LASTCMD_MASK) {
+                fail("PS_RDY did not complete successfully");
+                break;
+            }
+        }
         if (alertBits & SWITCH_PD_ALERT_CONTRACT) {
             withdraw();
             choose();
         } else if (alertBits & ALERT_CMD_DONE) {
+            explicitContract = true;
             nego = Nego::Settling;
             negoTimer->setTimeoutMS(kPowerDelayMS);
         }
@@ -130,6 +143,8 @@ bool SwitchPD::readContract(uint32_t &pdo, uint32_t &rdo)
     if (tegra_i2c_read(kBus, kPD, CURRENT_PDO, p, sizeof(p)) || tegra_i2c_read(kBus, kPD, CURRENT_RDO, r, sizeof(r))) {
         return false;
     }
+    if (p[0] != 4 || r[0] != 4)
+        return false;
     pdo = le32(p + 1);
     rdo = le32(r + 1);
     return true;
@@ -144,7 +159,11 @@ void SwitchPD::choose()
         fail("the source's PDOs could not be read");
         return;
     }
-    sourcePdoCount = raw[0] / 4 > 7 ? 7 : raw[0] / 4;
+    if (raw[0] > sizeof(raw) - 1 || (raw[0] & 3u)) {
+        fail("invalid source PDO list length");
+        return;
+    }
+    sourcePdoCount = raw[0] / 4;
     for (unsigned i = 0; i < sourcePdoCount; ++i)
         sourcePdos[i] = le32(raw + 1 + 4 * static_cast<size_t>(i));
     if (!sourcePdoCount) {
@@ -152,6 +171,7 @@ void SwitchPD::choose()
             IOLog("SwitchPD: no USB-PD source capabilities: the charger keeps its own input detection (status1 %#x)\n",
                   state.status1);
         }
+        explicitContract = false;
         nego = Nego::NotPd;
         return;
     }
@@ -178,6 +198,10 @@ void SwitchPD::choose()
     const uint32_t request = charge::encodeRdo(choice);
     const uint8_t message[5] = {4, static_cast<uint8_t>(request), static_cast<uint8_t>(request >> 8),
                                 static_cast<uint8_t>(request >> 16), static_cast<uint8_t>(request >> 24)};
+#if DEVELOPMENT || DEBUG
+    IOLog("SwitchPD: request PDO %u %#x RDO %#x (alert %#x status1 %#x)\n", choice.position, choice.pdo, request,
+          state.alert, state.status1);
+#endif
     if (tegra_i2c_write(kBus, kPD, SET_RDO, message, sizeof(message)) || write16(COMMAND, SEND_RDO_CMD)) {
         fail("the request could not be written");
         return;
@@ -215,6 +239,7 @@ void SwitchPD::verify()
 void SwitchPD::publish()
 {
     negoTimer->cancelTimeout();
+    explicitContract = true;
     nego = Nego::Done;
     failedRequests = 0;
     state.contractMillivolts = static_cast<uint16_t>(choice.millivolts);
@@ -239,6 +264,7 @@ void SwitchPD::fail(const char *why)
 {
     negoTimer->cancelTimeout();
     withdraw();
+    explicitContract = false;
     nego = Nego::Failed;
     ++failedRequests;
     char pdos[192];
@@ -251,6 +277,7 @@ void SwitchPD::fail(const char *why)
 void SwitchPD::endNegotiation()
 {
     negoTimer->cancelTimeout();
+    explicitContract = false;
     nego = Nego::Idle;
     failedRequests = 0;
     sourcePdoCount = 0;
@@ -266,7 +293,6 @@ void SwitchPD::negoFired(OSObject *owner, IOTimerEventSource *)
     switch (self->nego) {
     case Nego::WaitPdos:
         self->choose();
-        self->notifyAlt(0);
         break;
     case Nego::RdoSent:
         self->fail("no contract within 1.5 s of the request");
@@ -280,5 +306,6 @@ void SwitchPD::negoFired(OSObject *owner, IOTimerEventSource *)
     default:
         return;
     }
+    self->notifyAlt(0);
     self->notify();
 }

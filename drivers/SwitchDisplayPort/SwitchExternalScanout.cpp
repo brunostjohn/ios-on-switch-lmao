@@ -2,13 +2,16 @@
 #include "SwitchExternalScreen.h"
 #include <mach/mach_time.h>
 #include "TegraDisplayB.h"
+#include "../NativeMobileDisplay/NativeLegacyRequest.h"
 #include "../NativeMobileDisplay/SwitchSurfaceUse.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
 #include "../TegraSMMU/TegraSMMU.h"
+#include "../TegraSMMU/TegraSMMUPublish.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 
 extern "C" IOMemoryDescriptor *native_legacy_surface_descriptor(OSObject *);
+extern "C" uint64_t native_legacy_surface_width(OSObject *), native_legacy_surface_height(OSObject *);
 extern "C" uint64_t native_legacy_surface_stride(OSObject *), native_legacy_surface_allocation(OSObject *);
 extern "C" int tegra_gm20b_surface_layout(uint64_t, struct tgm_layout *);
 
@@ -33,10 +36,7 @@ bool SwitchExternalScreen::mapDomain()
 
 void SwitchExternalScreen::cleanDomain()
 {
-    uintptr_t low, high;
-    if (domain.takeDirty(&low, &high))
-        switch_dcache_clean(reinterpret_cast<void *>(low), high - low);
-    tegra_smmu_flush(TEGRA_SMMU_ASID_DISPLAY_B);
+    switch_smmu_publish(domain, TEGRA_SMMU_ASID_DISPLAY_B, SWITCH_DCACHE_CLEAN);
 }
 
 void SwitchExternalScreen::releaseRead(unsigned index)
@@ -79,9 +79,11 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
     for (const auto &slot : slots)
         if (slot.surface == surface && slot.memory == memory)
             held = slot.backing;
-    if ((!held || switch_native_scanout_pitch_held(surface, held, &snapshot)) &&
-        switch_native_scanout_pitch(surface, &snapshot))
-        return -1;
+    if (!held || switch_native_scanout_pitch_held(surface, held, &snapshot)) {
+        const int error = switch_native_scanout_pitch(surface, &snapshot);
+        if (error)
+            return error;
+    }
     const auto &allocation = snapshot.allocation;
     const uint64_t offset = snapshot.pitchOffset;
     const uint64_t bytes = native_legacy_surface_allocation(surface);
@@ -116,7 +118,11 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
             (victim < 0 || slot.used < slots[victim].used))
             victim = static_cast<int>(i);
     }
-    if (victim < 0) {
+    // A swap validated before a modeset can reach scanout after it. Cached slots belong to one geometry.
+    const uint64_t pitch = native_legacy_surface_stride(surface);
+    if (victim < 0 || native_legacy_surface_width(surface) != mode.hactive ||
+        native_legacy_surface_height(surface) != mode.vactive || pitch > 0xffff || (pitch & 63u) ||
+        !native_legacy_surface_bounds(mode.hactive, mode.vactive, pitch, bytes, memory->getLength())) {
         switch_native_scanout_release(&snapshot);
         return -1;
     }
@@ -150,12 +156,13 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
     slot.counted = switch_display::surfaceUseCounted(surface);
     if (slot.counted)
         switch_surface_use_increment(surface, 0);
-    slot.stride = static_cast<uint32_t>(native_legacy_surface_stride(surface));
+    slot.stride = static_cast<uint32_t>(pitch);
     int tiled = 0;
     slot.layout = tegra_gm20b_surface_hold(allocation.pages[0], &tiled);
     if (tiled) {
         tgm_layout layout = {};
-        if (tegra_gm20b_surface_layout(allocation.pages[0], &layout) != 1 || layout.bytes > bytes) {
+        if (tegra_gm20b_surface_layout(allocation.pages[0], &layout) != 1 || layout.bytes > bytes ||
+            layout.row_bytes < mode.hactive * 4u || layout.row_bytes > 0xffff) {
             releaseSlot(index);
             return -1;
         }
@@ -193,7 +200,10 @@ void SwitchExternalScreen::requestFrame()
     }
     const int prepared = prepareSlot(surface);
     if (prepared < 0) {
-        retryWhenReady();
+        if (prepared == -16 || prepared == SWITCH_GPU_BACKING_STALE)
+            retryWhenReady();
+        else
+            dropFrame(request);
         return;
     }
     const unsigned index = static_cast<unsigned>(prepared);
@@ -227,8 +237,12 @@ void SwitchExternalScreen::requestFrame()
         gpuPending = false;
         pending = nullptr;
         drawing = -1;
-        releaseRead(index);
-        retryWhenReady();
+        if (front != prepared)
+            releaseRead(index);
+        if (result == kIOReturnCannotLock || result == kIOReturnBusy)
+            retryWhenReady();
+        else
+            dropFrame(request);
         return;
     }
     ++sequence;
@@ -246,16 +260,19 @@ void SwitchExternalScreen::completionFired(OSObject *owner, IOInterruptEventSour
     self->gpuPending = false;
     if (!self->dcb || self->gpuGeneration != self->linkGeneration ||
         __atomic_load_n(&self->gpuStatus, __ATOMIC_ACQUIRE) != 0) {
-        if (self->drawing >= 0) {
-            if (self->connected)
-                self->releaseRead(static_cast<unsigned>(self->drawing));
-            else
+        if (self->drawing >= 0 && self->drawing != self->front) {
+            if (!self->connected || self->gpuGeneration != self->linkGeneration)
                 self->releaseSlot(static_cast<unsigned>(self->drawing));
+            else
+                self->releaseRead(static_cast<unsigned>(self->drawing));
         }
         self->drawing = -1;
         self->retire(self->pending, false);
         self->pending = nullptr;
-        self->kickSwapQueue();
+        if (self->connected && self->selectedMode < 0)
+            self->modeFailed();
+        else
+            self->kickSwapQueue();
         return;
     }
     self->latchFrame();
@@ -265,38 +282,59 @@ void SwitchExternalScreen::latchFrame()
 {
     const unsigned index = static_cast<unsigned>(drawing);
     const auto &slot = slots[index];
-    dcb->scanout(static_cast<uint32_t>(kSlotBase + index * kSlotSpan), mode.hactive,
-                 mode.vactive, slot.stride, slot.kind);
-    latched = true;
-}
-
-void SwitchExternalScreen::retire(const OriginalLegacySwapRequest *request, bool shown)
-{
-    if (!request || !activateOnlyPendingSwap(request))
+    if (dcb->scanout(static_cast<uint32_t>(kSlotBase + index * kSlotSpan), slot.stride, slot.kind)) {
+        latched = true;
         return;
-    switch_external_complete_current(this, shown);
+    }
+    if (drawing != front)
+        releaseRead(index);
+    drawing = -1;
+    const auto *request = pending;
+    pending = nullptr;
+    dropFrame(request);
 }
 
-void SwitchExternalScreen::frameEnd()
+void SwitchExternalScreen::dropFrame(const OriginalLegacySwapRequest *request)
+{
+    if (retire(request, false) && pendingSwapRequest())
+        readySource->interruptOccurred(nullptr, nullptr, 0);
+}
+
+bool SwitchExternalScreen::retire(const OriginalLegacySwapRequest *request, bool shown)
+{
+    if (!activateOnlyPendingSwap(request))
+        return false;
+    switch_external_complete_current(this, shown);
+    return true;
+}
+
+bool SwitchExternalScreen::frameEnd()
 {
     if (!dcb)
-        return;
+        return true;
     if (latched) {
-        latched = false;
-        if (front >= 0 && front != drawing)
-            releaseRead(static_cast<unsigned>(front));
-        front = drawing;
-        drawing = -1;
-        retire(pending, true);
-        pending = nullptr;
-        if (front >= 0) {
-            slots[front].presented = true;
-            switch_native_scanout_deliver(&slots[front].read);
+        const auto receipt = dcb->windowLatch(drawing < 0 ? 0 : static_cast<uint32_t>(kSlotBase + drawing * kSlotSpan));
+        if (receipt == TegraDisplayB::Latch::Missed)
+            return false;
+        if (receipt == TegraDisplayB::Latch::Active) {
+            latched = false;
+            if (front >= 0 && front != drawing)
+                releaseRead(static_cast<unsigned>(front));
+            front = drawing;
+            drawing = -1;
+            retire(pending, true);
+            pending = nullptr;
+            if (front >= 0) {
+                slots[front].presented = true;
+                switch_native_scanout_deliver(&slots[front].read);
+            }
         }
     }
-    const uint64_t now = mach_absolute_time();
-    native_legacy_vsync_notify(this, now, mach_continuous_time(), interval);
-    kickSwapQueue();
     const auto *clients = switch_abi_load<const void *>(this, vsyncClientList);
-    dcb->frameInterrupt(clients || latched);
+    if (clients)
+        native_legacy_vsync_notify(this, mach_absolute_time(), mach_continuous_time(), interval);
+    kickSwapQueue();
+    if (dcb)
+        dcb->frameInterrupt(latched || switch_abi_load<const void *>(this, vsyncClientList));
+    return true;
 }

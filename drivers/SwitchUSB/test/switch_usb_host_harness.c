@@ -215,7 +215,7 @@ void hold_lost(void)
 
 int hold_keeps(uint64_t value, uint64_t current)
 {
-    return xusb_hold_keeps(&hold, value, current) ? 1 : 0;
+    return xusb_hold_retained(&hold) && value == current;
 }
 
 uint32_t hold_erstba0(void)

@@ -310,19 +310,13 @@ bool SwitchHDA::prepare(IOBufferMemoryDescriptor *ring)
     return attached;
 }
 
-bool SwitchHDA::connect(uint32_t formats, IOBufferMemoryDescriptor *ring)
+bool SwitchHDA::connect(uint32_t formats)
 {
-    output = ring;
     if (!attached)
         return false;
     ready = discover(formats);
-    if (!ready) {
-        __atomic_store_n(&control->jack, 0, __ATOMIC_RELEASE);
-        if (attached)
-            IOLog("SwitchAudio: HDA display codec not ready\n");
-    } else {
-        __atomic_store_n(&control->jack, SwitchAudioJackHeadphones, __ATOMIC_RELEASE);
-    }
+    if (!ready && attached)
+        IOLog("SwitchAudio: HDA display codec not ready\n");
     return ready;
 }
 

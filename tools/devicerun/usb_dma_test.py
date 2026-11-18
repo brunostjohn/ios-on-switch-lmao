@@ -70,6 +70,10 @@ class Dma(unittest.TestCase):
         results, rows = judge(plugged(*[(1.02 + 0.2 * i, line) for i, line in enumerate(DEXT)], (2, self.UNMAP)))
         self.assertIn('IOBufferMemoryDescriptor x1', results['usb.dma.unmap-unmatched'].observed)
         self.assertEqual(rows['usb.host.first-failure'].observed.split(';')[0], 'transfer-data')
+        truncated = 'SwitchUSB: incomplete DMA bounce copy back at 0x80042000 (4096 bytes)'
+        results, rows = judge(plugged(*[(1.02 + 0.2 * i, line) for i, line in enumerate(DEXT)], (2, truncated)))
+        self.assertEqual(results['usb.dma.copyback-incomplete'].verdict, FAIL)
+        self.assertEqual(rows['usb.host.first-failure'].observed.split(';')[0], 'transfer-data')
 
 
 class McRuns(unittest.TestCase):
@@ -127,8 +131,8 @@ class McRuns(unittest.TestCase):
 SUMMARY = 'SwitchUSB: DMA probe summary ({}): '
 HEADER = (
     '{} held mappings that must be completed per transfer; maps/unmaps/held: own address 11/7/4, window 14/7/7, '
-    'bounced 0/0/0; 0 maps untracked (table full), 0 unmaps of no tracked mapping; 0 MC errors, the latest INTSTATUS 0 '
-    'ERR_STATUS 0 ERR_ADR 0'
+    'bounced 0/0/0; {} maps untracked (table full), {} unmaps of no tracked mapping; 0 MC errors, the latest '
+    'INTSTATUS 0 ERR_STATUS 0 ERR_ADR 0'
 )
 CLASS = '{}: {} maps, {} unmaps, {} held; cache modes {} (bit n: mode n)'
 LIVE = 'live: IOUSBHostDevice {} IOUSBHostInterface {} IOUSBHostPipe 1 AppleUSBHostDMABufferMemoryDescriptor 11'
@@ -144,8 +148,10 @@ def summary(second: float, when: str, **changes: int | str | tuple[int, int]) ->
     )
     prefix = SUMMARY.format(when)
     lines = [
-        HEADER.format(wrong),
-        CLASS.format('AppleUSBHostDMABufferMemoryDescriptor', 20, 20 - held, held, '0x10'),
+        HEADER.format(wrong, changes.get('untracked', 0), changes.get('unknown', 0)),
+        CLASS.format(
+            'AppleUSBHostDMABufferMemoryDescriptor', 20, 20 - held, held, changes.get('controller_modes', '0x10')
+        ),
         CLASS.format('AppleUSBHostClientBufferMemoryDescriptor', 5, 5, 0, modes),
         LIVE.format(*live),
     ]
@@ -172,14 +178,31 @@ class Probe(unittest.TestCase):
             'IOUSBHostInterface 3; no later session start',
         )
 
+    def test_cached_client_payloads_retire_at_teardown(self):
+        _, rows = judge(
+            [*summary(3, 'lines used up', wrong=2, modes='0x8'), *summary(9, 'controller off', modes='0x8')]
+        )
+        self.assertEqual(rows['usb.dma.probe-summary'].verdict, PASS)
+        self.assertIn('ClientBufferMemoryDescriptor cache modes 0x8', rows['usb.dma.probe-summary'].observed)
+
+    def test_incomplete_observations_cannot_pass(self):
+        for records in (
+            summary(1, 'host session start'),
+            summary(2, 'lines used up', wrong=1),
+            summary(3, 'controller off', untracked=1),
+            summary(4, 'device role', unknown=1),
+        ):
+            _, rows = judge(records)
+            self.assertEqual(rows['usb.dma.probe-summary'].verdict, NO_DATA)
+
     def test_mappings_to_complete_a_buffer_not_write_combined_or_a_leak_fail(self):
         cases = {
             '2 held mappings to complete per transfer at device role 10:00:09.000': [
                 *summary(9, 'device role', wrong=2),
                 *summary(9.1, 'controller off'),
             ],
-            'AppleUSBHostClientBufferMemoryDescriptor in cache modes 0x1, not mode 4 only': [
-                *summary(9.1, 'controller off', modes='0x1'),
+            'AppleUSBHostDMABufferMemoryDescriptor in cache modes 0x1, expected mode 4': [
+                *summary(9.1, 'controller off', controller_modes='0x1'),
             ],
             'AppleUSBHostDMABufferMemoryDescriptor held at each controller off: 11 > 12': [
                 *summary(9.1, 'controller off'),

@@ -82,6 +82,7 @@ struct Run {
     int neighbour;
     bool early;
     bool fillDuringTransfer;
+    uint32_t actual = UINT32_MAX;
 };
 
 bool failsWith(const Run &r)
@@ -96,15 +97,20 @@ bool failsWith(const Run &r)
         line.cpuWrite(static_cast<uint32_t>(r.neighbour), ++neighbourValue);
     };
     for (uint32_t i = 0; i < r.length; ++i)
-        line.cpuWrite(r.offset + i, 0);  // the stack zeroes or reuses its buffer
+        line.cpuWrite(r.offset + i, static_cast<uint8_t>(0x80 + i));
     touchNeighbour();
     const UsbDmaPlan plan = usbDmaPlan(true, true, usbDmaWholeLines(r.offset, r.length, kLine));
     std::array<uint8_t, kLine> bounce{};
+    if (plan.bounce) {
+        for (uint32_t i = 0; i < r.length; ++i)
+            bounce[r.offset + i] = line.cpuRead(r.offset + i);
+    }
+    const uint32_t supplied = r.actual < r.length ? r.actual : r.length;
     line.apply(plan.atMap);
     touchNeighbour();
     if (r.fillDuringTransfer)
         line.fill();
-    for (uint32_t i = 0; i < r.length; ++i) {
+    for (uint32_t i = 0; i < supplied; ++i) {
         if (plan.bounce) {
             bounce[r.offset + i] = static_cast<uint8_t>(0x40 + i);  // the controller writes the bounce page
         } else {
@@ -114,7 +120,7 @@ bool failsWith(const Run &r)
     touchNeighbour();
     bool failed = false;
     if (r.early && !plan.bounce && !r.fillDuringTransfer) {
-        for (uint32_t i = 0; i < r.length; ++i)
+        for (uint32_t i = 0; i < supplied; ++i)
             failed = failed || line.cpuRead(r.offset + i) != 0x40 + i;
     }
     line.apply(plan.atUnmap);
@@ -124,7 +130,7 @@ bool failsWith(const Run &r)
     }
     touchNeighbour();
     for (uint32_t i = 0; i < r.length; ++i)
-        failed = failed || line.cpuRead(r.offset + i) != 0x40 + i;
+        failed = failed || line.cpuRead(r.offset + i) != (i < supplied ? 0x40 + i : 0x80 + i);
     if (r.neighbour >= 0)
         failed = failed || line.cpuRead(static_cast<uint32_t>(r.neighbour)) != neighbourValue;
     line.apply(UsbDmaCacheOp::CleanAndInvalidate);
@@ -137,6 +143,14 @@ bool failsWith(const Run &r)
 
 // The failing reads on the 14 Nov boot: 2, 8 and 18 bytes of a heap buffer sharing its line with data the CPU uses.
 // Every placement in the line, with the neighbour on either side, read after complete and (not bounced) before it.
+TEST(UsbDmaCache, ShortAndCanceledInPreserveTheUnwrittenRange)
+{
+    for (const uint32_t supplied : {0u, 1u, 12u, 13u}) {
+        EXPECT_FALSE(failsWith({3, 13, 2, false, true, supplied}));
+        EXPECT_FALSE(failsWith({3, 13, 16, false, true, supplied}));
+    }
+}
+
 TEST(UsbDmaCache, SmallInBuffersBesideCpuDataSeeTheDevicesBytes)
 {
     for (const uint32_t length : {2u, 8u, 18u}) {

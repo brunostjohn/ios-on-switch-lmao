@@ -11,10 +11,9 @@
 extern "C" {
 #endif
 
-// Any thread, never blocks (SwitchPD's work loop calls it): the last call wins, applied on SwitchDisplayPort's own work
-// loop. `lanes` is 2 (pin assignment D) or 4 (C); `flipped` is the plug's orientation (CC2), for the log.
+// The PD work loop publishes a new attachment without blocking the controller. `lanes` is 2 (pin assignment D) or 4 (C); `flipped` is the plug's orientation (CC2), for the log.
 int switch_displayport_start(void);
-void switch_displayport_alt_mode(unsigned lanes, bool flipped);
+void switch_displayport_alt_mode(unsigned lanes, bool flipped, bool dock);
 void switch_displayport_suspend(void);
 void switch_displayport_resume(void);
 bool switch_displayport_audio_prepare_presence(void);

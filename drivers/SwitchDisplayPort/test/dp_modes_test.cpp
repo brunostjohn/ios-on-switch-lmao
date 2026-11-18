@@ -110,6 +110,7 @@ TEST(Edid, StandardDetailedTimingParses)
     EXPECT_TRUE(mode.hsync_high);
     EXPECT_TRUE(mode.vsync_high);
     EXPECT_EQ(switch_dp_mode_refresh_mhz(&mode), 60000u);
+    EXPECT_EQ(switch_dp_refresh_period(&mode), 0x04444444u);
 }
 
 TEST(Edid, InterlacedAndDescriptorsAreSkipped)
@@ -121,25 +122,39 @@ TEST(Edid, InterlacedAndDescriptorsAreSkipped)
     EXPECT_FALSE(switch_dp_edid_dtd(name.data(), &mode));
 }
 
-TEST(SourceLimits, FourKAndFastModesRemainAvailableToTheOS)
+TEST(SourceLimits, UltrawideAndFastModesLeaveRoomForSupportedEdidTimings)
 {
-    const auto list = parse({base({k2160p60, k1440p144, k1080p60}, 0)});
-    ASSERT_GE(list.count, 3u);
-    EXPECT_TRUE(list.modes[0].preferred);
-    for (unsigned i = 0; i < 3; ++i)
-        EXPECT_TRUE(switch_dp_mode_allowed(&list.modes[i], kHbr2Four));
-    EXPECT_FALSE(switch_dp_mode_allowed(&list.modes[0], switch_dp_payload_kbps(SWITCH_DP_RATE_HBR2, 2)));
-    EXPECT_TRUE(switch_dp_mode_allowed(&list.modes[2], switch_dp_payload_kbps(SWITCH_DP_RATE_HBR, 2)));
+    const auto ultrawide = dtd(319750, 3440, 48, 32, 80, 1440, 3, 10, 28);
+    const auto list = parse({base({ultrawide, k2160p60, k1440p144, k1080p60}, 0)});
+    ASSERT_EQ(list.count, 2u);
+    EXPECT_EQ(list.modes[0].hactive, 1920);
+    EXPECT_TRUE(switch_dp_prefer(&list.modes[0], &list.modes[1]));
+    auto timing = list.modes[0];
+    EXPECT_TRUE(switch_dp_mode_allowed(&timing, switch_dp_payload_kbps(SWITCH_DP_RATE_HBR, 2)));
+    ++timing.pixel_khz;
+    EXPECT_FALSE(switch_dp_mode_allowed(&timing, kHbr2Four));
+    timing.pixel_khz = 148352;
+    EXPECT_TRUE(switch_dp_mode_allowed(&timing, kHbr2Four));
+    EXPECT_EQ(switch_dp_refresh_period(&timing), (uint64_t{2200} * 1125 << 32) / 148352000u);
 }
 
-TEST(Edid, CtaFourKModesAndNativePreference)
+TEST(Edid, PublishesBoth1080RatesWhenFourKIsExcluded)
 {
     const auto list = parse({base({}, 1, false), cta({97, 95, 0x80 | 16})});
-    ASSERT_EQ(list.count, 4u);
-    EXPECT_EQ(list.modes[1].hactive, 3840);
-    EXPECT_EQ(switch_dp_mode_refresh_mhz(&list.modes[1]), 60000u);
-    EXPECT_EQ(switch_dp_mode_refresh_mhz(&list.modes[2]), 30000u);
-    EXPECT_TRUE(list.modes[3].preferred);
+    ASSERT_EQ(list.count, 2u);
+    EXPECT_EQ(list.modes[0].hactive, 1920);
+    EXPECT_EQ(switch_dp_mode_refresh_mhz(&list.modes[0]), 60000u);
+    EXPECT_EQ(switch_dp_mode_refresh_mhz(&list.modes[1]), 59940u);
+    EXPECT_TRUE(list.modes[0].preferred);
+    EXPECT_EQ(parse({base({}, 1, false), cta({97, 95})}).count, 0u);
+}
+
+TEST(Edid, RepeatedDetailedAndCtaTimingsShareOneModeId)
+{
+    const auto list = parse({base({k1080p60}, 1, false), cta({16, 0x80 | 16}, {k1080p60})});
+    ASSERT_EQ(list.count, 2u);
+    EXPECT_TRUE(list.modes[0].preferred);
+    EXPECT_EQ(switch_dp_mode_refresh_mhz(&list.modes[1]), 59940u);
 }
 
 TEST(Edid, BrokenBaseAndExtensionAreIgnored)
@@ -147,8 +162,7 @@ TEST(Edid, BrokenBaseAndExtensionAreIgnored)
     Block broken = base({k1080p60}, 0);
     broken[60] ^= 0xff;
     const auto fallback = parse({broken});
-    ASSERT_EQ(fallback.count, 1u);
-    EXPECT_EQ(fallback.modes[0].hactive, 640);
+    EXPECT_EQ(fallback.count, 0u);
     auto extension = cta({97});
     extension[127] ^= 1;
     const auto list = parse({base({k1080p60}, 1, false), extension});

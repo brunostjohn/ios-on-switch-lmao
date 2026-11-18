@@ -92,6 +92,29 @@ host_test(
 )
 
 host_test(
+    name = "dcb_scanout_test",
+    srcs = [
+        "dcb_scanout_test.cpp",
+        "//drivers/SwitchDisplayPort:SwitchDPModes.h",
+        "//drivers/SwitchDisplayPort:TegraDisplayB.cpp",
+        "//drivers/SwitchDisplayPort:TegraDisplayB.h",
+        "//drivers/SwitchPower:SwitchDisplayMemory.h",
+        "//drivers/TegraDisplayFlip:SwitchDisplayPriority.h",
+        "//drivers/TegraSMMU:TegraSMMU.h",
+        "//kits/SwitchCAR:SwitchCAR.cpp",
+        "//kits/SwitchCAR:SwitchCAR.h",
+        "//kits/SwitchCAR:SwitchPMC.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+        "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+    ],
+    defines = ["SWITCH_MMIO_HOST_MODEL=1"],
+    deps = [
+        "//drivers/SwitchUSB/test:xusb_kernel",
+        "//drivers/SwitchUSB/test:xusb_register_model",
+    ],
+)
+
+host_test(
     name = "dp_scanout_source_test",
     srcs = ["dp_scanout_source_test.cpp"],
     data = [

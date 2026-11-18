@@ -7,7 +7,10 @@
 #include "SwitchHDA.h"
 #include <kern/thread_call.h>
 
-extern uint32_t switch_audio_display_formats;
+struct alignas(8) SwitchAudioSink {
+    uint32_t formats, generation;
+};
+SwitchAudioSink switch_audio_display_sink();
 
 // NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage
 class SwitchAudio : public IOService {

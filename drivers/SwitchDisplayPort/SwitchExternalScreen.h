@@ -16,17 +16,18 @@ class SwitchExternalScreen : public IOMobileFramebufferLegacy {
     OSDeclareDefaultStructors(SwitchExternalScreen);
 public:
     bool begin(SwitchDisplayPort *transport, IOWorkLoop *workLoop);
-    bool publish(const struct switch_dp_mode_list &modes, uint64_t payload, const uint8_t *edid);
+    bool publish(const struct switch_dp_mode_list &modes, const uint8_t *edid, unsigned bytes);
     void linkUp(const struct switch_dp_mode &mode, TegraDisplayB *controller);
     void linkDown();
+    void modeFailed();
     void detach();
-    void frameEnd();
+    bool frameEnd();
     void gpuComplete(int status);
     bool requested() const { return device == 2; }
-    int selected() const { return selectedMode; }
     IOWorkLoop *getWorkLoop() const override { return loop; }
     bool isMainDisplay() override { return false; }
     bool startHardware() override { return true; }
+    bool getRefreshAttributes(uint64_t *periods, uint32_t internal) override;
     IOReturn getDotPitch(uint32_t *pitch) override;
     IOReturn setDisplayDevice(uint32_t requested) override;
     IOReturn setDigitalOutMode(uint32_t color, uint32_t timing) override;
@@ -65,7 +66,7 @@ private:
     TegraSMMUDomain domain;
     struct switch_dp_mode_list modes = {};
     struct switch_dp_mode mode = {};
-    uint64_t available = 0, sequence = 0, slotUses = 0, interval = 0, linkGeneration = 0, gpuGeneration = 0;
+    uint64_t sequence = 0, slotUses = 0, refreshPeriod = 0, interval = 0, linkGeneration = 0, gpuGeneration = 0;
     int selectedMode = -1, front = -1, drawing = -1;
     uint32_t device = 0;
     bool connected = false, mapped = false, gpuPending = false, latched = false, kicking = false;
@@ -78,13 +79,16 @@ private:
     void releaseRead(unsigned slot);
     int prepareSlot(OSObject *surface);
     void latchFrame();
-    void retire(const OriginalLegacySwapRequest *request, bool shown);
+    bool retire(const OriginalLegacySwapRequest *request, bool shown);
+    void dropFrame(const OriginalLegacySwapRequest *request);
     void requestFrame();
     void retryWhenReady();
     static int readyQuery(void *);
-    static void readyDone(void *, int);
     static void readyFired(OSObject *, IOInterruptEventSource *, int);
-    void publishModes();
+    bool publishModes(OSString *uuid);
     void publishScanoutLimits();
+    bool publishSourceLimits(uint32_t clockHz);
+    void clearSinkProperties();
+    IOReturn selectOutput(bool timing, uint32_t value);
 #include "../NativeMobileDisplay/NativeLegacySwapQueue.h"
 };

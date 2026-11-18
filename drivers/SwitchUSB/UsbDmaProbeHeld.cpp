@@ -32,7 +32,7 @@ enum Path : uint32_t {
 struct Slot {
     uint32_t state;
     Path path;
-    bool writable, cacheable;
+    bool cacheable;
     const IOMemoryDescriptor *memory;  // identity only
     uint64_t address, pa;
     const char *className;
@@ -57,7 +57,7 @@ uint32_t cacheMode(IOMemoryDescriptor *memory)
 // A mapping that requires per-transfer completion.
 bool wrongToHold(const Slot &slot)
 {
-    return slot.path == kBounced || (slot.writable && slot.cacheable);
+    return slot.path == kBounced || slot.cacheable;
 }
 
 Path pathOf(const char *path)
@@ -119,7 +119,7 @@ void live(const char *when)
 }  // namespace
 
 namespace usb_dma_probe {
-void heldMap(IOMemoryDescriptor *memory, uint64_t address, uint64_t pa, const char *path, bool writable)
+void heldMap(IOMemoryDescriptor *memory, uint64_t address, uint64_t pa, const char *path)
 {
     const Path p = pathOf(path);
     __atomic_add_fetch(&gMaps[p], 1, __ATOMIC_RELAXED);
@@ -133,7 +133,6 @@ void heldMap(IOMemoryDescriptor *memory, uint64_t address, uint64_t pa, const ch
         if (!__atomic_compare_exchange_n(&slot.state, &expected, kWriting, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
             continue;
         slot.path = p;
-        slot.writable = writable;
         slot.cacheable = cacheable(memory);
         slot.memory = memory;
         slot.address = address;

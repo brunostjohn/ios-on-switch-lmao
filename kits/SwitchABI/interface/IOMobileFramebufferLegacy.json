@@ -247,6 +247,11 @@
       "decl": "virtual void hotPlugNotify(uint64_t state)",
       "pac": "_ZN25IOMobileFramebufferLegacy14hotPlug_notifyEy",
       "mangled": "__ZN25IOMobileFramebufferLegacy13hotPlugNotifyEy"
+    },
+    "getRefreshAttributes": {
+      "decl": "virtual bool getRefreshAttributes(uint64_t *periods, uint32_t internal)",
+      "mangled": "__ZN25IOMobileFramebufferLegacy20getRefreshAttributesEPyj",
+      "doc": "The refresh publisher dispatches this slot with six uint64 words and the internal-display flag. Shortest, longest and step each pair a 32.32-second period with its nanoseconds_to_absolutetime conversion. On 24B119 the calling slot's discriminator is 0xdcfc."
     }
   },
   "fields": {

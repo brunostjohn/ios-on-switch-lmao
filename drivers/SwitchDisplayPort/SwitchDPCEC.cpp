@@ -25,9 +25,11 @@ void SwitchDisplayPort::cecRelease()
 
 void SwitchDisplayPort::cecEdid()
 {
-    const uint16_t physical = switch_dp_cec_physical(edid, edidBlocks);
+    if (!nintendoDock)
+        return;
+    const uint16_t physical = switch_dp_cec_physical(edid, validEdidBlocks);
     if (cec.phase == SWITCH_DP_CEC_OFF && cec.retry_on_hpd && physical != SWITCH_DP_CEC_INVALID_PHYSICAL)
-        switch_dp_cec_start(&cec);
+        switch_dp_cec_reconnect(&cec);
     cec.physical = physical;
 }
 
@@ -77,7 +79,7 @@ void SwitchDisplayPort::scheduleAux()
         return;
     if (cecRestartPending) {
         cecRestartPending = false;
-        switch_dp_cec_start(&cec);
+        switch_dp_cec_reconnect(&cec);
     }
     if (probePending && stage == Stage::Waiting) {
         probePending = false;

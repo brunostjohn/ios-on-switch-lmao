@@ -399,23 +399,34 @@ OSDefineMetaClassAndStructors(SwitchAudioUserClient, IOUserClient)
     // Publishes the service under IOResources. Call once from the board thread (the Tegra backend sleeps on the GIC, the
     // GPIO controller and I2C1), any point before launchd starts audiomxd; returns 0 on success.
     static SwitchAudio *gAudio;  // set once published (switch_audio_suspend/resume)
-uint32_t switch_audio_display_formats;
+static SwitchAudioSink gDisplaySink;
 
-extern "C" void switch_displayport_audio_sink(const uint8_t *edid, unsigned blocks, bool connected)
+SwitchAudioSink switch_audio_display_sink()
 {
-    const uint32_t formats = connected ? switch_hda_sink_formats(edid, blocks) : 0;
-    __atomic_store_n(&switch_audio_display_formats, formats, __ATOMIC_RELEASE);
+    SwitchAudioSink sink;
+    __atomic_load(&gDisplaySink, &sink, __ATOMIC_ACQUIRE);
+    return sink;
+}
+
+extern "C" void switch_displayport_audio_sink(const uint8_t *edid, unsigned valid_blocks, bool connected)
+{
+    const uint32_t formats = connected ? switch_hda_sink_formats(edid, valid_blocks) : 0;
+    SwitchAudioSink sink = switch_audio_display_sink();
+    if (!formats && !sink.formats)
+        return;
+    sink.formats = formats;
+    ++sink.generation;
+    __atomic_store(&gDisplaySink, &sink, __ATOMIC_RELEASE);
     if (SwitchAudio *audio = __atomic_load_n(&gAudio, __ATOMIC_ACQUIRE))
         audio->displaySink();
 }
 
-extern "C" bool switch_displayport_audio_eld(const uint8_t *edid, unsigned blocks)
+extern "C" bool switch_displayport_audio_eld(const uint8_t *edid, unsigned valid_blocks)
 {
-    const uint32_t formats = switch_hda_sink_formats(edid, blocks);
-    uint8_t eld[128] = {};
-    const uint32_t bytes = formats ? switch_hda_eld(edid, blocks, eld) : 0;
-    switch_displayport_audio_presence(eld, bytes, formats != 0);
-    return formats != 0;
+    uint8_t eld[128];
+    const uint32_t bytes = switch_hda_eld(edid, valid_blocks, eld);
+    switch_displayport_audio_presence(eld, bytes, bytes != 0);
+    return bytes != 0;
 }
 
 extern "C" int switch_audio_publish(void)
@@ -437,7 +448,7 @@ extern "C" int switch_audio_publish(void)
         return -1;
     }
     __atomic_store_n(&gAudio, audio, __ATOMIC_RELEASE);
-    if (__atomic_load_n(&switch_audio_display_formats, __ATOMIC_ACQUIRE))
+    if (switch_audio_display_sink().formats)
         audio->displayStartProbe();
     audio->release();  // the attachment keeps it
     published = true;

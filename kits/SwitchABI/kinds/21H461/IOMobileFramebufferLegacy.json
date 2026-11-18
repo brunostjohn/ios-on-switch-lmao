@@ -42,6 +42,7 @@
     "290": "kickSwapQueue",
     "295": "completeCurrentSwap",
     "296": "validateSwap",
+    "301": "getRefreshAttributes",
     "306": "platformFrameInfoNotify",
     "307": "sendFrameInfo",
     "326": "setEdrFactor",
@@ -192,7 +193,6 @@
     "opaque315": "0xfffffff00679d85c",
     "opaque339": "0xfffffff00679e150",
     "opaque316": "0xfffffff00679ea44",
-    "opaque301": "0xfffffff00679ea5c",
     "opaque220": "0xfffffff00679ed9c",
     "opaque221": "0xfffffff00679edb4",
     "opaque222": "0xfffffff00679edd0",
@@ -281,6 +281,7 @@
     "setDigitalOutMode": "0xfffffff00679748c",
     "getDigitalOutState": "0xfffffff0067980e0",
     "hotPlugNotify": "0xfffffff006796a40",
-    "switch_external_complete_current": "0xfffffff00678a96c"
+    "switch_external_complete_current": "0xfffffff00678a96c",
+    "getRefreshAttributes": "0xfffffff00679ea5c"
   }
 }

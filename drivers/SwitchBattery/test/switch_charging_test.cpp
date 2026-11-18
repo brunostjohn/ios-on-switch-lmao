@@ -68,7 +68,7 @@ void switch_usb_set_alt_lanes(enum switch_usb3_lanes lanes, bool)
     gAltLanesTaken |= lanes == SWITCH_USB3_LANES_TAKEN;
 }  // SwitchUSB.cpp (XusbLanes.h)
 
-extern "C" void switch_displayport_alt_mode(unsigned lanes, bool)
+extern "C" void switch_displayport_alt_mode(unsigned lanes, bool, bool)
 {
     gDisplayPortConfigured |= lanes != 0;
 }
@@ -1223,6 +1223,28 @@ static void dockAltMode()
     advance(3600 * 1000);
     check(iinlim() == 1200 && ((gCharger.reg[1] >> 4) & 3) == 1, "still charging at 1200 mA an hour later");
     check(gPd.vdmsSent == 1, "no retries after the engine gave up");
+    SwitchPDState observed{};
+    check(switch_pd_add_listener(
+              [](void *context, const SwitchPDState *state) {
+                  *static_cast<SwitchPDState *>(context) = *state;
+              },
+              &observed) == 0 &&
+              observed.plugged,
+          "dock attached before sleep");
+    check(switch_pd_allow_source(true) == 0, "host mode enabled for replacement keyboard");
+    switch_pd_sleep(true);
+    gCharger.unplug();
+    gPd.unplug();
+    gPd.status1 = 0x1280;
+    gPd.status2 = 0x2000;
+    switch_pd_sleep(false);
+    check(observed.plugged && !observed.settled && observed.contractMillivolts == 0 && gPd.vdmsSent == 1 &&
+              chgConfig() != 2 && (gPd.config1 >> 14) == 0,
+          "resume consumes dock removal and re-arms for the new Rd before any vendor command");
+    gPd.alert |= 1u << 13;
+    advance(10);
+    check(observed.settled && observed.role == SWITCH_PD_ROLE_SOURCE && chgConfig() == 2,
+          "the replacement keyboard receives power on the controller's source attach");
 }
 
 static void oledDockSourceStartup()
@@ -1243,6 +1265,9 @@ static void oledDockSourceStartup()
         gPd.status2 = 0x2000;
         gPd.alert |= 0x8;
         advance(10);
+        check(!state.settled && chgConfig() != 2 && (gPd.config1 >> 14) == 0,
+              "initial attach keeps the controller's source switches armed");
+        advance(1000);
         check(!state.settled && chgConfig() != 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] &&
                   (gPd.config1 >> 14) == 3,
               "OLED attach: fixed supplies remain ready while boost and connector switches stay off");
@@ -1316,16 +1341,16 @@ static void sourceSupplyLifecycle()
     gPd.status2 = 0x2000;
     gPd.alert |= 0x8;
     advance(10);
-    check(logHas("classifying:") && chgConfig() == 1 && gOutputs[TEGRA_GPIO(X, 3)] &&
-              gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
-          "our VSAFE still classifies with fixed supplies on and connector switches off");
+    check(logHas("waiting for the controller") && chgConfig() == 1 && gOutputs[TEGRA_GPIO(X, 3)] &&
+              gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
+          "keep the CC attachment while the controller resolves power");
     advance(422);
     gCharger.plug(500, 1);
     gPd.status1 = 0x0d80;
     gPd.status2 = 0;
     gPd.alert |= 0x8;
     advance(10);
-    check(logHas("dual-role partner:") && chgConfig() == 1 && gOutputs[TEGRA_GPIO(X, 3)] &&
+    check(logHas("sink: the partner is a source") && chgConfig() == 1 && gOutputs[TEGRA_GPIO(X, 3)] &&
               gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
           "Mac takes the source role with fixed supplies on and BQ boost and source switches off");
     gCharger.unplug();
@@ -1424,8 +1449,8 @@ static void faultReset()
     check(gPd.commands.size() == 1 && gPd.commands.front() == "0d0d", "SYS_RESET on the internal fault");
     check((gPd.vendor & 0x4) == 0x4, "the reset's ALERT read, nothing more yet");
     gPd.alert |= 0x8;  // the controller attaches the partner again
-    advance(10);
-    check((gPd.vendor & 0x4) == 0, "OCP back on at the next event");
+    advance(150);
+    check((gPd.vendor & 0x4) == 0, "OCP restored after the reset deadline");
     check(((gPd.config1 >> 14) & 3u) == 3u, "a sink session's switches off again");
     check((gPd.config2 & 0x4) != 0, "incoming data role swaps accepted as UFP again after the reset");
 }
@@ -1467,10 +1492,9 @@ static void dualRoleSource(uint32_t idHeader)
 static void macSourceStaysHost()
 {
     dualRoleSource(0xD14005ACu);
-    check(gPd.vdmsSent == 1 && std::count(gPd.commands.begin(), gPd.commands.end(), std::string("1818")) == 0,
-          "Discover Identity, no data role swap");
+    check(gPd.vdmsSent == 0 && std::count(gPd.commands.begin(), gPd.commands.end(), std::string("1818")) == 0,
+          "no UFP discovery or data role swap on PD 2.0");
     check(((gPd.status1 >> 8) & 3) == 1 && !gDataHost, "UFP: the Mac stays the USB host");
-    check(logHas("alternate mode (done): no data role swap: the source is a USB host"), "the decision's line");
 }
 
 static void dataDiscoveryWithoutCharging()
@@ -1491,6 +1515,10 @@ static void dataDiscoveryWithoutCharging()
     advance(499);
     check(gPd.commands.empty() && gPd.vdmsSent == 0, "discovery waits for the PDO timer");
     advance(2);
+    check(gPd.commands == (std::vector<std::string>{"0707", "0505"}), "UFP retains the zero-power contract");
+    gPd.status1 = (uint16_t)((gPd.status1 & ~(3u << 8)) | 2u << 8);
+    gPd.alert |= 1u << 10;
+    advance(1);
     check(gPd.commands == (std::vector<std::string>{"0707", "0505", "1111"}) && gPd.vdmsSent == 1,
           "zero-current RDO and PS_RDY complete before identity discovery");
     check(gPd.curRdo == (1u << 28 | charge::kRdoUsbCommunications | charge::kRdoNoUsbSuspend) &&
@@ -1531,6 +1559,37 @@ static void dataDiscoveryWithoutCharging()
     check(!logHas("no USB-PD request"), "zero-current contract is accepted");
     check(gPd.commands == (std::vector<std::string>{"0707", "0505", "1111"}) && gPd.vdmsSent == 1,
           "silent identity discovery is not repeated");
+}
+
+static void rejectedPsRdyKeepsInputBlocked()
+{
+    check(switch_battery_start() == 0, "switch_battery_start");
+    advance(10);
+    gCharger.plug(500, 2);
+    gPd.psRdyReply = false;
+    gPd.sink({PdChip::fixed(5000, 0)}, 0, 0x1000 | 0x4000);
+    gPd.status1 &= ~0x4000;
+    advance(5);
+    check(gPd.commands == (std::vector<std::string>{"0707", "0505"}), "zero-current PS_RDY pending");
+    gPd.status1 |= 6u << 4;
+    gPd.alert |= 0x4 | 0x1000;
+    advance(2500);
+    check(logHas("PS_RDY did not complete successfully") && !logHas("SwitchPD: contract 5 V") && gPd.vdmsSent == 0 &&
+              (gCharger.reg[0] & charge::bq::kHiZ),
+          "rejected PS_RDY never publishes a current or starts discovery");
+}
+
+static void resetCancelsPendingPublication()
+{
+    bootWithNintendoCharger();
+    gPd.status1 |= 1;
+    gPd.alert |= 1;
+    advance(2);
+    gCharger.unplug();
+    gPd.unplug();
+    advance(2500);
+    check(!logHas("SwitchPD: contract 15 V") && !battery()->external && gPd.vdmsSent == 0,
+          "a detached port cannot publish its pre-reset contract");
 }
 
 static void zeroBudgetAtBoot()
@@ -1781,14 +1840,10 @@ static void zeroBudgetPowerdHold()
     check((gCharger.reg[0] & charge::bq::kHiZ) == 0, "only powerd releases its input hold");
 }
 
-static void hubSourceIsSwapped()
+static void hubSourceWaitsForSwap()
 {
     dualRoleSource(0x48602109u);
-    const auto swap = std::find(gPd.commands.begin(), gPd.commands.end(), std::string("1818"));
-    check(swap != gPd.commands.end() && std::find(gPd.commands.begin(), swap, std::string("1111")) != swap,
-          "Discover Identity, then the data role swap");
-    check(((gPd.status1 >> 8) & 3) == 2 && gDataHost, "DFP: the Switch is the hub's USB host");
-    check(logHas("the source is a USB hub: data role swap"), "the decision's line");
+    check(gPd.vdmsSent == 0 && !gDataHost, "a PD 2.0 UFP waits for the hub to request a swap");
     check(iinlim() == 1200 && logHas("SwitchPD: contract 15 V 1.2 A"),
           "the contract kept: " + std::to_string(iinlim()));
 }
@@ -1796,8 +1851,7 @@ static void hubSourceIsSwapped()
 static void sourceSwapsUs()
 {
     dualRoleSource(0);
-    check(logHas("no data role swap: the source did not answer Discover Identity within 1.5 s") && !gDataHost,
-          "a silent source leaves us UFP");
+    check(gPd.vdmsSent == 0 && !gDataHost, "a silent source leaves us UFP");
     gPd.status1 = (uint16_t)((gPd.status1 & ~(3u << 8)) | 2u << 8);
     gPd.alert |= 0x400;
     advance(10);
@@ -1862,7 +1916,8 @@ static void policy()
     const Case cases[] = {
         {"Nintendo AC adapter", {F(5000, 1500), F(15000, 2600)}, 2, 15000, 1200},
         {"Nintendo dock signature", {F(5000, 500), F(15000, 2600)}, 2, 15000, 1200},
-        {"dock signature, too little", {F(5000, 500), F(15000, 1500)}, 0, 0, 0},
+        {"generic 15 V source", {F(5000, 500), F(15000, 1500)}, 2, 15000, 1200},
+        {"generic 9 V source", {F(5000, 500), F(9000, 2000)}, 2, 9000, 2000},
         {"20 V laptop brick", {F(5000, 3000), F(9000, 3000), F(15000, 3000), F(20000, 3250)}, 3, 15000, 1200},
         {"9 V 3 A ties 15 V 1.8 A", {F(5000, 3000), F(9000, 3000), F(15000, 1800)}, 3, 15000, 1200},
         {"18 W phone charger", {F(5000, 3000), F(9000, 2000), F(12000, 1500)}, 3, 12000, 1500},
@@ -2188,7 +2243,7 @@ static void exitAfterFaultReset()
     gPd.alert |= 0x8;
     advance(10);
     gPd.alert |= 0x8;
-    advance(10);
+    advance(150);
     check((gPd.config2 & 0x4) != 0, "accept as UFP set again after the reset");
     stubSystemPowerMessage(kIOMessageSystemWillPowerOff);
     check(gPd.config2 == 0 && (gPd.vendor & 0x4) == 0 && ((gPd.config1 >> 14) & 3u) == 3u, "as found at start");
@@ -2207,6 +2262,16 @@ TEST(SwitchCharging, ExitAfterFaultReset)
 TEST(SwitchCharging, MacSourceStaysHost)
 {
     run(macSourceStaysHost);
+}
+
+TEST(SwitchCharging, RejectedPsRdyKeepsInputBlocked)
+{
+    run(rejectedPsRdyKeepsInputBlocked);
+}
+
+TEST(SwitchCharging, ResetCancelsPendingPublication)
+{
+    run(resetCancelsPendingPublication);
 }
 
 TEST(SwitchCharging, DataDiscoveryWithoutCharging)
@@ -2249,9 +2314,9 @@ TEST(SwitchCharging, ZeroBudgetPowerdHold)
     run(zeroBudgetPowerdHold);
 }
 
-TEST(SwitchCharging, HubSourceIsSwapped)
+TEST(SwitchCharging, HubSourceWaitsForSwap)
 {
-    run(hubSourceIsSwapped);
+    run(hubSourceWaitsForSwap);
 }
 
 TEST(SwitchCharging, SourceSwapsUs)

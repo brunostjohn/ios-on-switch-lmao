@@ -13,13 +13,14 @@ class IOWorkLoop;
 
 // After SwitchPD has handled an ALERT (or looked at the port), on its work loop: `at_rest(pd)` says whether its USB-PD
 // request leaves COMMAND free (settling, published or given up), now or whenever the engine's timer asks;
-// `port_session` is a settled sink phase or a source phase with the host data role; `dock_power` that the contract is with a source
-// carrying the Nintendo dock's PDO signature; `dual_role_data` that the source's 5 V PDO has Dual-Role Data. The first
+// `port_session` is an explicit SOP contract in the current attachment; `dock_power` that the contract is with a source
+// carrying the Nintendo dock's PDO signature; `ufp_discovery_allowed` requires a confirmed PD3 SOP contract and a dual-role data partner. The first
 // call adds the engine's timer to `loop`.
 void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest)(const void *pd), uint16_t alert,
-                         uint16_t status1, bool port_session, bool dock_power, bool dual_role_data);
+                         uint16_t status1, bool port_session, bool dock_power, bool ufp_discovery_allowed);
 // Shut Down or Restart, on the same loop: the step timer off, so nothing reaches COMMAND after SwitchPD has put the
 // controller back.
 void switch_pd_alt_leave();
+void switch_pd_alt_resume();
 
 #endif

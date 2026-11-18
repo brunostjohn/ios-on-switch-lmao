@@ -22,20 +22,27 @@ constexpr uint32_t kAuxLostMs = 50;  // DPAUX1 times out a silent sink itself wi
 SwitchDisplayPort *gService;
 bool gScreenClassRegistered;
 thread_call_t gApply;
-uint32_t gLanes, gFlipped;
+struct alignas(8) Attachment {
+    uint32_t serial;
+    uint16_t lanes;
+    bool flipped, dock;
+};
+static_assert(sizeof(Attachment) == sizeof(uint64_t));
+uint32_t gSerial;
+Attachment gPublished;
 
 void applyAltMode(thread_call_param_t, thread_call_param_t)
 {
     if (gService == nullptr && switch_displayport_start())
         return;
-    const unsigned lanes = __atomic_load_n(&gLanes, __ATOMIC_ACQUIRE);
-    const bool flipped = __atomic_load_n(&gFlipped, __ATOMIC_ACQUIRE) != 0;
     gService->getWorkLoop()->runAction(
-        [](OSObject *owner, void *lanes, void *flipped, void *, void *) -> IOReturn {
-            static_cast<SwitchDisplayPort *>(owner)->setAltLanes((unsigned)(uintptr_t)lanes, flipped != nullptr);
+        [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
+            Attachment state;
+            __atomic_load(&gPublished, &state, __ATOMIC_ACQUIRE);
+            static_cast<SwitchDisplayPort *>(owner)->setAltLanes(state.lanes, state.flipped, state.dock, state.serial);
             return kIOReturnSuccess;
         },
-        gService, reinterpret_cast<void *>((uintptr_t)lanes), flipped ? gService : nullptr);
+        gService);
 }
 }  // namespace
 
@@ -52,16 +59,13 @@ extern "C" int switch_displayport_start(void)
     return 0;
 }
 
-extern "C" void switch_displayport_alt_mode(unsigned lanes, bool flipped)
+extern "C" void switch_displayport_alt_mode(unsigned lanes, bool flipped, bool dock)
 {
-    __atomic_store_n(&gLanes, lanes, __ATOMIC_RELEASE);
-    __atomic_store_n(&gFlipped, flipped ? 1u : 0u, __ATOMIC_RELEASE);
-    if (gApply == nullptr) {
-        thread_call_t fresh = thread_call_allocate(applyAltMode, nullptr), none = nullptr;
-        if (!__atomic_compare_exchange_n(&gApply, &none, fresh, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-            thread_call_free(fresh);
-        }
-    }
+    // A detach and reattach can coalesce before the display loop runs, including two identical assignments.
+    Attachment state{++gSerial, static_cast<uint16_t>(lanes), flipped, dock};
+    __atomic_store(&gPublished, &state, __ATOMIC_RELEASE);
+    if (!gApply)
+        gApply = thread_call_allocate(applyAltMode, nullptr);
     thread_call_enter(gApply);
 }
 
@@ -99,19 +103,22 @@ bool SwitchDisplayPort::begin()
     return true;
 }
 
-void SwitchDisplayPort::setAltLanes(unsigned lanes, bool plugFlipped)
+void SwitchDisplayPort::setAltLanes(unsigned lanes, bool plugFlipped, bool dock, uint32_t attachment)
 {
-    if (lanes == altLanes && plugFlipped == flipped) {
+    if (lanes == altLanes && plugFlipped == flipped && attachment == activeAttachment) {
         return;
     }
-    if (lanes == 0) {
+    const bool replaced = altLanes && attachment != activeAttachment;
+    activeAttachment = attachment;
+    if (lanes == 0 || replaced) {
         IOLog("SwitchDisplayPort: DisplayPort alternate mode ended\n");
         // Alternate-mode exit can remove AUX before this notification, so a remote CEC disable is no longer reliable.
         powerOff();
         screen->detach();
         wantedMode = -1;
         altLanes = 0;
-        return;
+        if (lanes == 0)
+            return;
     }
     if (stage != Stage::Off) {
         cecRelease();
@@ -119,6 +126,7 @@ void SwitchDisplayPort::setAltLanes(unsigned lanes, bool plugFlipped)
     }
     altLanes = lanes;
     flipped = plugFlipped;
+    nintendoDock = dock;
     if (sleeping)
         return;
     stage = stage == Stage::Off ? Stage::Off : Stage::Waiting;
@@ -129,13 +137,13 @@ void SwitchDisplayPort::setAltLanes(unsigned lanes, bool plugFlipped)
             return;
         }
         auxSource->enable();
-        dcSource->enable();
         stage = Stage::Waiting;
     }
     IOLog("SwitchDisplayPort: DisplayPort on %u lanes (pin assignment %c, plug %s), HPD %s\n", lanes,
           lanes == 2 ? 'D' : 'C', flipped ? "flipped" : "straight", aux.hpdHigh() ? "high" : "low");
     cecReset();
-    switch_dp_cec_start(&cec);
+    if (nintendoDock)
+        switch_dp_cec_start(&cec);
     if (aux.hpdHigh())
         plugged();
     scheduleAux();
@@ -145,15 +153,18 @@ void SwitchDisplayPort::auxInterrupt(OSObject *owner, IOInterruptEventSource *, 
 {
     auto *self = static_cast<SwitchDisplayPort *>(owner);
     const uint32_t cause = self->aux.takeInterrupt();
-    if ((cause & SWITCH_DPAUX_INTR_AUX_DONE) != 0 && self->auxPending) {
+    const bool completed = (cause & SWITCH_DPAUX_INTR_AUX_DONE) != 0 && self->auxPending;
+    const bool unplug = (cause & SWITCH_DPAUX_INTR_UNPLUG_EVENT) != 0;
+    if (unplug) {
+        self->auxDiscard = self->auxPending;
+        self->unplugged();
+    }
+    if (completed) {
         self->auxTimer->cancelTimeout();
         self->auxPending = false;
         self->auxDone();
     }
-    if ((cause & SWITCH_DPAUX_INTR_UNPLUG_EVENT) != 0) {
-        self->unplugged();
-    }
-    if ((cause & SWITCH_DPAUX_INTR_PLUG_EVENT) != 0) {
+    if ((cause & SWITCH_DPAUX_INTR_PLUG_EVENT) != 0 && (!unplug || self->aux.hpdHigh())) {
         self->plugged();
     }
     if ((cause & SWITCH_DPAUX_INTR_IRQ_EVENT) != 0) {
@@ -164,10 +175,11 @@ void SwitchDisplayPort::auxInterrupt(OSObject *owner, IOInterruptEventSource *, 
 void SwitchDisplayPort::dcInterrupt(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = static_cast<SwitchDisplayPort *>(owner);
+    if (!self->dcbUp)
+        return;
     const uint32_t cause = self->dcb.takeInterrupt();
-    if ((cause & (1u << 1)) != 0) {
-        self->screen->frameEnd();
-    }
+    if ((cause & (1u << 1)) && !self->screen->frameEnd())
+        self->fail("DCB", "window A activation completed with a different scanout");
 }
 
 void SwitchDisplayPort::auxStart(const struct switch_dp_aux_request &transaction, Next then)
@@ -248,17 +260,21 @@ void SwitchDisplayPort::stepTimerFired(OSObject *owner, IOTimerEventSource *)
 {
     auto *self = static_cast<SwitchDisplayPort *>(owner);
     if (self->stage == Stage::Training) {
-        self->auxNative(SWITCH_DP_AUX_NATIVE_READ, SWITCH_DPCD_LANE0_1_STATUS, nullptr, 6, Next::TrainingStatus);
+        self->auxNative(SWITCH_DP_AUX_NATIVE_READ, SWITCH_DPCD_LANE0_1_STATUS, nullptr, self->train.tps3 ? 11 : 6,
+                        Next::TrainingStatus);
     }
 }
 
 void SwitchDisplayPort::fail(const char *what, const char *why)
 {
-    IOLog("SwitchDisplayPort: %s: %s; DisplayPort off until the next plug\n", what, why);
+    IOLog("SwitchDisplayPort: %s: %s\n", what, why);
+    const bool probed = stage == Stage::Training || stage == Stage::Running;
     teardownLink();
     if (stage != Stage::Off) {
-        stage = Stage::Waiting;
+        stage = probed ? Stage::Ready : Stage::Waiting;
     }
+    if (probed)
+        screen->modeFailed();
 }
 
 void SwitchDisplayPort::teardownLink()
@@ -279,9 +295,11 @@ void SwitchDisplayPort::teardownLink()
         switch_displayport_audio_sink(nullptr, 0, false);
     }
     if (dcbUp) {
+        dcSource->disable();
         dcb.windowOff();
     }
-    sor.detachHead();
+    if (sorUp)
+        sor.detachHead();
     if (dcbUp) {
         dcb.enableSor(false);
     }
@@ -305,7 +323,6 @@ void SwitchDisplayPort::powerOff()
     teardownLink();
     if (stage != Stage::Off) {
         auxSource->disable();
-        dcSource->disable();
         aux.powerDown();
     }
     stage = Stage::Off;
@@ -316,7 +333,7 @@ void SwitchDisplayPort::plugged()
     if (stage != Stage::Waiting) {
         return;
     }
-    cecReleasePending = cecRestartPending = true;
+    cecReleasePending = cecRestartPending = nintendoDock;
     probePending = true;
     scheduleAux();
 }
@@ -349,8 +366,7 @@ void SwitchDisplayPort::irqHpd()
 IOReturn SwitchDisplayPort::selectMode(int index, bool enable)
 {
     if (!enable) {
-        const bool configured = stage == Stage::Running || stage == Stage::Training || stage == Stage::Ready;
-        if (configured) {
+        if (stage == Stage::Running || stage == Stage::Training) {
             teardownLink();
             stage = Stage::Ready;
         }
@@ -363,7 +379,8 @@ IOReturn SwitchDisplayPort::selectMode(int index, bool enable)
         return kIOReturnNotReady;
     if (wantedMode == index && (stage == Stage::Running || stage == Stage::Training))
         return kIOReturnSuccess;
-    teardownLink();
+    if (stage != Stage::Ready)
+        teardownLink();
     stage = Stage::Ready;
     wantedMode = index;
     modePending = true;
@@ -386,18 +403,21 @@ extern "C" bool switch_displayport_gpu_complete(void *display, int status)
 
 void SwitchDisplayPort::systemSleep(bool entering)
 {
+    if (entering == sleeping)
+        return;
+    sleeping = entering;
     if (entering) {
-        sleeping = true;
         cecRelease();
         powerOff();
+        screen->detach();
+        wantedMode = -1;
         return;
     }
-    sleeping = false;
-    const unsigned lanes = altLanes;
-    const bool orientation = flipped;
+    Attachment state;
+    __atomic_load(&gPublished, &state, __ATOMIC_ACQUIRE);
     altLanes = 0;
-    if (lanes)
-        setAltLanes(lanes, orientation);
+    if (state.lanes)
+        setAltLanes(state.lanes, state.flipped, state.dock, state.serial);
 }
 
 namespace {
@@ -470,7 +490,7 @@ extern "C" void switch_displayport_audio_presence(const uint8_t *eld, uint32_t b
 
 bool SwitchDisplayPort::audioPreparePresence()
 {
-    return stage == Stage::Running && !sleeping && switch_displayport_audio_eld(edid, edidBlocks);
+    return stage == Stage::Running && !sleeping && switch_displayport_audio_eld(edid, validEdidBlocks);
 }
 
 extern "C" bool switch_displayport_audio_prepare_presence(void)

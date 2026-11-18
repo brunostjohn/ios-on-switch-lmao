@@ -50,7 +50,7 @@ void usb_dma_probe_map(IOMemoryDescriptor *memory, uint64_t offset, uint64_t len
                        uint64_t physical, uint64_t address, const char *path)
 {
     const bool writable = watched(memory);
-    usb_dma_probe::heldMap(memory, address, path[0] == 'b' ? 0 : physical, path, writable);
+    usb_dma_probe::heldMap(memory, address, path[0] == 'b' ? 0 : physical, path);
     if (!writable)
         return;
     const uint32_t total = __atomic_add_fetch(&gWritable, 1, __ATOMIC_RELAXED);

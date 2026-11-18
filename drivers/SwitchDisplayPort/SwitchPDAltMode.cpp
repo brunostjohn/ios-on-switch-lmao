@@ -33,7 +33,7 @@ bool (*gAtRest)(const void *);
 struct switch_pd_alt gAlt;
 uint16_t gStatus1;
 enum switch_pd_alt_lanes gToldLanes = SWITCH_PD_ALT_LANES_FREE;
-bool gToldHub;
+bool gToldHub, gToldFlipped, gResumePending;
 unsigned gToldDisplayPort;
 
 void hand_off()
@@ -49,10 +49,13 @@ void hand_off()
     }
     gToldLanes = gAlt.lanes;
     gToldHub = gAlt.hub_enabled;
-    if (gAlt.dp_lanes != gToldDisplayPort) {
-        switch_displayport_alt_mode(gAlt.dp_lanes, (gStatus1 & SWITCH_PD_ALT_STATUS1_CSIDE) != 0);
+    const bool flipped = (gStatus1 & SWITCH_PD_ALT_STATUS1_CSIDE) != 0;
+    const unsigned displayLanes = switch_pd_alt_display_lanes(&gAlt, gResumePending);
+    if (displayLanes != gToldDisplayPort || (displayLanes && flipped != gToldFlipped)) {
+        switch_displayport_alt_mode(displayLanes, flipped, gAlt.dock);
+        gToldFlipped = flipped;
     }
-    gToldDisplayPort = gAlt.dp_lanes;
+    gToldDisplayPort = displayLanes;
 }
 
 void perform(struct switch_pd_alt_out out)
@@ -101,7 +104,7 @@ void timerFired(OSObject *, IOTimerEventSource *)
 }  // namespace
 
 void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest_of)(const void *), uint16_t alert,
-                         uint16_t status1, bool port_session, bool dock_power, bool dual_role_data)
+                         uint16_t status1, bool port_session, bool dock_power, bool ufp_discovery_allowed)
 {
     if (gTimer == nullptr) {
         switch_pd_alt_init(&gAlt, kWantDisplayPort);
@@ -120,9 +123,16 @@ void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest_of)(con
         (void)tegra_i2c_read(kBus, kPD, DP_STATUS, raw, sizeof(raw));
         dp_status = static_cast<uint16_t>(raw[0] | static_cast<unsigned>(raw[1]) << 8U);
     }
-    const struct switch_pd_alt_in in = {alert, status1, dp_status, port_session, at_rest, dock_power, dual_role_data};
+    const struct switch_pd_alt_in in = {alert, status1, dp_status, port_session, at_rest, dock_power, ufp_discovery_allowed};
     const enum switch_pd_alt_step before = gAlt.step;
     const struct switch_pd_alt_out out = switch_pd_alt_event(&gAlt, &in);
+    if (!port_session || (alert & SWITCH_PD_ALT_ALERT_PLUGPULL) != 0)
+        gResumePending = false;
+    if (gResumePending && at_rest && (status1 & SWITCH_PD_ALT_STATUS1_CMD_BUSY) == 0 &&
+        gAlt.step == SWITCH_PD_ALT_DONE) {
+        switch_pd_alt_resume();
+        return;
+    }
     if (out.act == SWITCH_PD_ALT_NONE && out.line == nullptr && gAlt.step == before) {
         hand_off();
         return;
@@ -130,9 +140,24 @@ void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest_of)(con
     perform(out);
 }
 
+void switch_pd_alt_resume()
+{
+    gResumePending = false;
+    if (!gAlt.dock || !gAlt.dp_lanes || gAlt.step != SWITCH_PD_ALT_DONE)
+        return;
+    if (!gAtRest(gPD) || (gStatus1 & SWITCH_PD_ALT_STATUS1_CMD_BUSY) != 0) {
+        gResumePending = true;
+        hand_off();
+        return;
+    }
+    perform(switch_pd_alt_go(&gAlt, SWITCH_PD_ALT_DOCK_DP_SLEEP));
+}
+
 void switch_pd_alt_leave()
 {
     if (gTimer != nullptr)
         gTimer->cancelTimeout();
+    gResumePending = false;
     switch_pd_alt_init(&gAlt, kWantDisplayPort);
+    hand_off();
 }

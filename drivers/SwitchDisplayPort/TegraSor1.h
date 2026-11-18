@@ -21,6 +21,7 @@ public:
     // vdd-hdmi-dp (MAX77620 LDO8, 1.0 V), the SOR power partition, SOR1's clock on the safe source and out of reset.
     bool powerUp(char *why, size_t size);
     // PLL_D2 at `pixel_khz`; pll_d2_out0 clocks DISP2 and SOR1's pixel side.
+    static uint32_t referenceClockKhz();
     bool pixelClock(uint32_t pixel_khz, char *why, size_t size);
     // SOR1's PLL, termination calibration, protocol and lane power, still on the safe clock.
     bool startLink(const struct switch_dp_link &link, bool enhanced, char *why, size_t size);

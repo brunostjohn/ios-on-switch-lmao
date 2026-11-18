@@ -61,15 +61,18 @@ void SwitchAudio::displayFired(OSObject *owner, IOInterruptEventSource *, int)
 void SwitchAudio::displayProbe(thread_call_param_t owner, thread_call_param_t)
 {
     auto *self = static_cast<SwitchAudio *>(owner);
-    const bool prepared = self->gate->runAction(displayPrepareGated) == kIOReturnSuccess;
+    SwitchAudioSink sink;
+    const bool prepared = self->gate->runAction(displayPrepareGated, &sink) == kIOReturnSuccess;
     const bool present = prepared && switch_displayport_audio_prepare_presence();
-    self->gate->runAction(displayConnectGated, present ? self : nullptr);
+    self->gate->runAction(displayConnectGated, present ? &sink : nullptr);
 }
 
-IOReturn SwitchAudio::displayPrepareGated(OSObject *owner, void *, void *, void *, void *)
+IOReturn SwitchAudio::displayPrepareGated(OSObject *owner, void *capture, void *, void *, void *)
 {
     auto *self = static_cast<SwitchAudio *>(owner);
-    if (!__atomic_load_n(&switch_audio_display_formats, __ATOMIC_ACQUIRE) || self->displayAsleep)
+    auto &sink = *static_cast<SwitchAudioSink *>(capture);
+    sink = switch_audio_display_sink();
+    if (!sink.formats || self->displayAsleep)
         return kIOReturnNotReady;
     auto *&output = self->memory[SwitchAudioMemoryDisplayOutput];
     if (!output) {
@@ -91,13 +94,16 @@ IOReturn SwitchAudio::displayConnectGated(OSObject *owner, void *present, void *
 {
     auto *self = static_cast<SwitchAudio *>(owner);
     self->displayPresencePending = false;
-    const uint32_t formats = __atomic_load_n(&switch_audio_display_formats, __ATOMIC_ACQUIRE);
-    if (present && formats && !self->displayAsleep)
-        (void)self->displayAudio.connect(formats, self->memory[SwitchAudioMemoryDisplayOutput]);
-    else if (self->displayAsleep)
+    const auto *sink = static_cast<const SwitchAudioSink *>(present);
+    if (!sink || self->displayAsleep || sink->generation != switch_audio_display_sink().generation ||
+        !self->displayAudio.connect(sink->formats) ||
+        sink->generation != switch_audio_display_sink().generation) {
         self->displayAudio.sleep(true);
-    else
-        self->displayAudio.disconnect();
+        self->displayInterrupt->disable();
+    } else {
+        auto *page = static_cast<SwitchAudioControl *>(self->memory[SwitchAudioMemoryDisplayControl]->getBytesNoCopy());
+        __atomic_store_n(&page->jack, SwitchAudioJackHeadphones, __ATOMIC_RELEASE);
+    }
     self->gate->commandWakeup(&self->displayPresencePending, false);
     self->messageClients(kIOMessageServicePropertyChange);
     return kIOReturnSuccess;
@@ -106,11 +112,14 @@ IOReturn SwitchAudio::displayConnectGated(OSObject *owner, void *present, void *
 void SwitchAudio::displayChanged(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = static_cast<SwitchAudio *>(owner);
-    self->displayAudio.disconnect();
-    if (self->displayInterrupt)
-        self->displayInterrupt->disable();
+    const bool probe = switch_audio_display_sink().formats && self->displayCall && !self->displayAsleep;
+    if (!probe && !self->displayPresencePending)
+        self->displayAudio.sleep(true);
+    else
+        self->displayAudio.disconnect();
+    self->displayInterrupt->disable();
     self->messageClients(kIOMessageServicePropertyChange);
-    if (__atomic_load_n(&switch_audio_display_formats, __ATOMIC_ACQUIRE) && self->displayCall && !self->displayAsleep)
+    if (probe)
         self->displayStartProbe();
 }
 
@@ -159,7 +168,7 @@ IOReturn SwitchAudio::displaySleepGated(OSObject *owner, void *entering, void *,
     }
     if (self->displayInterrupt)
         self->displayInterrupt->disable();
-    if (!self->displayAsleep && __atomic_load_n(&switch_audio_display_formats, __ATOMIC_ACQUIRE) && self->displayCall)
+    if (!self->displayAsleep && switch_audio_display_sink().formats && self->displayCall)
         self->displayStartProbe();
     self->messageClients(kIOMessageServicePropertyChange);
     return kIOReturnSuccess;

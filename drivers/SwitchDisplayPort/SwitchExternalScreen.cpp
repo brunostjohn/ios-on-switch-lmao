@@ -25,6 +25,14 @@ OSDefineMetaClassAndStructors(SwitchExternalScreen, IOMobileFramebufferLegacy);
 namespace {
 constexpr uint32_t kBgra = 0x42475241;
 
+uint64_t periodTicks(uint64_t period)
+{
+    const uint64_t ns = (period >> 32) * 1000000000u + ((uint64_t(uint32_t(period)) * 1000000000u) >> 32);
+    uint64_t ticks;
+    nanoseconds_to_absolutetime(ns, &ticks);
+    return ticks;
+}
+
 }
 
 bool SwitchExternalScreen::begin(SwitchDisplayPort *port, IOWorkLoop *workLoop)
@@ -55,99 +63,118 @@ bool SwitchExternalScreen::begin(SwitchDisplayPort *port, IOWorkLoop *workLoop)
     return true;
 }
 
+namespace {
+struct Limit { const char *key; uint64_t value; };
+bool publishLimits(IOService *screen, const char *name, const Limit *limits, unsigned count, unsigned bits)
+{
+    auto *dictionary = OSDictionary::withCapacity(count);
+    bool ok = dictionary != nullptr;
+    for (unsigned i = 0; ok && i < count; ++i) {
+        auto *number = OSNumber::withNumber(limits[i].value, bits);
+        ok = number && dictionary->setObject(limits[i].key, number);
+        OSSafeReleaseNULL(number);
+    }
+    if (ok)
+        ok = screen->setProperty(name, dictionary);
+    OSSafeReleaseNULL(dictionary);
+    return ok;
+}
+}
+
 void SwitchExternalScreen::publishScanoutLimits()
 {
-    struct Limit { const char *key; uint64_t value; };
-    const auto publish = [this](const char *name, const Limit *limits, unsigned count, unsigned bits) {
-        auto *dictionary = OSDictionary::withCapacity(count);
-        bool ok = dictionary != nullptr;
-        for (unsigned i = 0; ok && i < count; ++i) {
-            auto *number = OSNumber::withNumber(limits[i].value, bits);
-            ok = number && dictionary->setObject(limits[i].key, number);
-            OSSafeReleaseNULL(number);
-        }
-        if (ok)
-            setProperty(name, dictionary);
-        OSSafeReleaseNULL(dictionary);
-    };
     const Limit stride[] = {{"StrideLinearHorizontal", 64}};
-    publish("DisplayPipeStrideRequirements", stride, 1, 32);
+    publishLimits(this, "DisplayPipeStrideRequirements", stride, 1, 32);
     const Limit base[] = {{"PlaneBaseAlignmentLinear", 4096}};
-    publish("DisplayPipePlaneBaseAlignment", base, 1, 64);
+    publishLimits(this, "DisplayPipePlaneBaseAlignment", base, 1, 64);
     const Limit layers[] = {{"MaxNumLayers", 1}};
-    publish("IOMFBNumLayers", layers, 1, 32);
+    publishLimits(this, "IOMFBNumLayers", layers, 1, 32);
     const Limit scaling[] = {{"RGBLayer_MinScaleFraction", 1}, {"RGBLayer_MaxScale", 1},
                              {"YUVLayer_MinScaleFraction", 1}, {"YUVLayer_MaxScale", 1}};
-    publish("IOMFBScalingLimits", scaling, 4, 32);
-    const Limit source[] = {{"MaxSrcRectWidth", SWITCH_DP_MAX_WIDTH},
-                            {"MaxSrcRectTotal", uint64_t{SWITCH_DP_MAX_WIDTH} * SWITCH_DP_MAX_HEIGHT},
-                            {"MaxSrcBufferWidth", SWITCH_DP_MAX_WIDTH}, {"MaxSrcBufferHeight", SWITCH_DP_MAX_HEIGHT},
-                            {"MaxVideoSrcDownscalingWidth", SWITCH_DP_MAX_WIDTH}, {"VideoClock", 750000000},
-                            {"PixelClock", 750000000}, {"IOMFBCompressionSupport", 0}};
-    publish("IOMFBMaxSrcPixels", source, 8, 64);
+    publishLimits(this, "IOMFBScalingLimits", scaling, 4, 32);
     setProperty("IOMFBYUVPackedUnSupported", true);
 }
 
-void SwitchExternalScreen::publishModes()
+bool SwitchExternalScreen::publishSourceLimits(uint32_t clockHz)
+{
+    const Limit source[] = {{"MaxSrcRectWidth", SWITCH_DP_MAX_WIDTH},
+                            {"MaxSrcRectTotal", uint64_t{SWITCH_DP_MAX_WIDTH} * SWITCH_DP_MAX_HEIGHT},
+                            {"MaxSrcBufferWidth", SWITCH_DP_MAX_WIDTH}, {"MaxSrcBufferHeight", SWITCH_DP_MAX_HEIGHT},
+                            {"MaxVideoSrcDownscalingWidth", SWITCH_DP_MAX_WIDTH}, {"VideoClock", clockHz},
+                            {"PixelClock", clockHz}, {"IOMFBCompressionSupport", 0}};
+    return publishLimits(this, "IOMFBMaxSrcPixels", source, 8, 64);
+}
+
+bool SwitchExternalScreen::publishModes(OSString *uuid)
 {
     auto *timings = OSArray::withCapacity(modes.count);
     auto *preferred = OSArray::withCapacity(1);
     auto *colors = OSArray::withCapacity(1);
     auto *color = switch_dp_color_element();
     bool ok = timings && preferred && colors && color && colors->setObject(color);
+    unsigned best = 0;
+    for (unsigned i = 1; i < modes.count; ++i)
+        if (switch_dp_prefer(&modes.modes[i], &modes.modes[best]))
+            best = i;
+    uint32_t clockKHz = 0;
     for (unsigned i = 0; ok && i < modes.count; ++i) {
-        if (!switch_dp_mode_allowed(&modes.modes[i], available))
-            continue;
+        modes.modes[i].preferred = i == best;
         auto *timing = switch_dp_timing_element(&modes.modes[i], i + 1, colors);
         ok = timing && timings->setObject(timing);
-        if (ok && modes.modes[i].preferred)
+        if (ok && i == best)
             ok = preferred->setObject(timing);
+        if (clockKHz < modes.modes[i].pixel_khz)
+            clockKHz = modes.modes[i].pixel_khz;
         OSSafeReleaseNULL(timing);
     }
     auto *wire = OSDictionary::withCapacity(1);
     auto *name = OSString::withCString("DP");
     ok = ok && timings->getCount() && wire && name && wire->setObject("Downstream", name);
-    if (ok) {
-        setProperty("TimingElements", timings);
-        setProperty("PreferredTimingElements", preferred);
-        setProperty("ColorElements", colors);
-        setProperty("Transport", wire);
-    } else {
+    ok = ok && publishSourceLimits(clockKHz * 1000u) && setProperty("TimingElements", timings) &&
+         setProperty("PreferredTimingElements", preferred) && setProperty("ColorElements", colors) &&
+         setProperty("Transport", wire) && setProperty("IOMFBUUID", uuid);
+    if (!ok)
         IOLog("SwitchDisplayPort: no publishable external display timings\n");
-    }
     OSSafeReleaseNULL(name);
     OSSafeReleaseNULL(wire);
     OSSafeReleaseNULL(color);
     OSSafeReleaseNULL(colors);
     OSSafeReleaseNULL(preferred);
     OSSafeReleaseNULL(timings);
+    return ok;
 }
 
-bool SwitchExternalScreen::publish(const struct switch_dp_mode_list &list, uint64_t payload, const uint8_t *edid)
+bool SwitchExternalScreen::publish(const struct switch_dp_mode_list &list, const uint8_t *edid, unsigned bytes)
 {
     auto *uuid = switch_dp_edid_uuid(edid);
-    const bool identified = uuid && setProperty("IOMFBUUID", uuid);
-    OSSafeReleaseNULL(uuid);
-    if (!identified)
-        return false;
     modes = list;
-    available = payload;
+    const bool published = uuid && publishModes(uuid) && setProperty("EDID", const_cast<uint8_t *>(edid), bytes);
+    OSSafeReleaseNULL(uuid);
+    if (!published) {
+        clearSinkProperties();
+        return false;
+    }
     selectedMode = -1;
     connected = true;
-    publishModes();
     IOMobileFramebufferLegacy::hotPlugNotify(1);
     return true;
 }
 
 void SwitchExternalScreen::linkUp(const struct switch_dp_mode &timing, TegraDisplayB *controller)
 {
+    if (mode.hactive != timing.hactive || mode.vactive != timing.vactive) {
+        for (unsigned i = 0; i < kSlots; ++i)
+            if (slots[i].surface && static_cast<int>(i) != drawing)
+                releaseSlot(i);
+    }
     mode = timing;
     dcb = controller;
     setDisplayWidth(mode.hactive);
     setDisplayHeight(mode.vactive);
-    const uint64_t ns = uint64_t(switch_dp_mode_htotal(&mode)) * switch_dp_mode_vtotal(&mode) * 1000000u /
-                        mode.pixel_khz;
-    nanoseconds_to_absolutetime(ns, &interval);
+    refreshPeriod = switch_dp_refresh_period(&mode);
+    interval = periodTicks(refreshPeriod);
+    if (!native_legacy_set_display_refresh_properties(this))
+        IOLog("SwitchDisplayPort: could not publish the selected refresh interval\n");
     struct { uint32_t skipRequested, requested, skipPowered, powered; uint8_t changed; uint8_t pad[11]; }
         power = {1, 0, 0, 1, 1, {}};
     setDisplayPowerState(&power, false);
@@ -156,6 +183,8 @@ void SwitchExternalScreen::linkUp(const struct switch_dp_mode &timing, TegraDisp
 
 void SwitchExternalScreen::linkDown()
 {
+    if (!dcb)
+        return;
     dcb = nullptr;
     ++linkGeneration;
     switch_gpu_ready_cancel(&ready);
@@ -181,15 +210,47 @@ void SwitchExternalScreen::detach()
     for (unsigned i = 0; i < kSlots; ++i)
         if (!gpuPending || static_cast<int>(i) != drawing)
             releaseSlot(i);
+    const bool wasConnected = connected;
     connected = false;
     selectedMode = -1;
     device = 0;
+    clearSinkProperties();
+    if (wasConnected)
+        IOMobileFramebufferLegacy::hotPlugNotify(0);
+}
+
+void SwitchExternalScreen::modeFailed()
+{
+    selectedMode = -1;
+    if (!gpuPending) {
+        while (selectedMode < 0 && retire(pendingSwapRequest(), false)) {
+        }
+    }
+}
+
+void SwitchExternalScreen::clearSinkProperties()
+{
+    removeProperty("IOMFBDisplayRefresh");
     removeProperty("TimingElements");
     removeProperty("PreferredTimingElements");
     removeProperty("ColorElements");
     removeProperty("Transport");
     removeProperty("IOMFBUUID");
-    IOMobileFramebufferLegacy::hotPlugNotify(0);
+    removeProperty("EDID");
+    removeProperty("IOMFBMaxSrcPixels");
+}
+
+bool SwitchExternalScreen::getRefreshAttributes(uint64_t *periods, uint32_t internal)
+{
+    if (!dcb)
+        return IOMobileFramebufferLegacy::getRefreshAttributes(periods, internal);
+    constexpr uint64_t externalLongest = (1ull << 32) / 24;
+    periods[0] = refreshPeriod;
+    periods[1] = interval;
+    periods[2] = internal || refreshPeriod >= externalLongest ? refreshPeriod : externalLongest;
+    periods[3] = periods[2] == refreshPeriod ? interval : periodTicks(externalLongest);
+    periods[4] = periods[5] = 0;
+    return true;
 }
 
 IOReturn SwitchExternalScreen::getDotPitch(uint32_t *pitch)
@@ -212,17 +273,35 @@ IOReturn SwitchExternalScreen::setDisplayDevice(uint32_t requested)
 {
     if (requested > 2)
         return kIOReturnBadArgument;
-    device = requested;
-    return transport->selectMode(selectedMode, requested == 2);
+    return selectOutput(false, requested);
 }
 
 IOReturn SwitchExternalScreen::setDigitalOutMode(uint32_t color, uint32_t timing)
 {
-    if (color != 1 || timing == 0 || timing > modes.count ||
-        !switch_dp_mode_allowed(&modes.modes[timing - 1], available))
+    if (color != 1 || !timing)
         return kIOReturnUnsupported;
-    selectedMode = static_cast<int>(timing - 1);
-    return transport->selectMode(selectedMode, device == 2);
+    return selectOutput(true, timing - 1);
+}
+
+IOReturn SwitchExternalScreen::selectOutput(bool timing, uint32_t value)
+{
+    struct Selection { bool timing; uint32_t value; } selection = {timing, value};
+    return loop->runAction([](OSObject *owner, void *argument, void *, void *, void *) -> IOReturn {
+        auto *self = static_cast<SwitchExternalScreen *>(owner);
+        const auto &s = *static_cast<Selection *>(argument);
+        if (s.timing && (!self->connected || s.value >= self->modes.count))
+            return kIOReturnUnsupported;
+        const int index = s.timing ? static_cast<int>(s.value) : self->selectedMode;
+        const uint32_t device = s.timing ? self->device : s.value;
+        if (device == 2 && !self->connected)
+            return kIOReturnNotReady;
+        const auto result = index < 0 && device == 2 ? kIOReturnSuccess : self->transport->selectMode(index, device == 2);
+        if (result == kIOReturnSuccess) {
+            self->selectedMode = index;
+            self->device = device;
+        }
+        return result;
+    }, this, &selection);
 }
 
 bool SwitchExternalScreen::validateSwap(const OriginalLegacySwapRequest *request)
@@ -275,8 +354,8 @@ IOReturn SwitchExternalScreen::supportedFrameInfo(uint32_t, uint32_t *count, cha
 
 void SwitchExternalScreen::retryWhenReady()
 {
-    if (!ready && switch_gpu_ready_observe(readyQuery, readyDone, this, &ready))
-        IOLog("SwitchDisplayPort: cannot observe a blocked external swap\n");
+    if (!ready && switch_gpu_ready_observe(readyQuery, [](void *, int) {}, this, &ready))
+        dropFrame(pendingSwapRequest());
 }
 
 int SwitchExternalScreen::readyQuery(void *owner)
@@ -285,21 +364,20 @@ int SwitchExternalScreen::readyQuery(void *owner)
     return self->loop->runAction(
         [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
             auto *screen = static_cast<SwitchExternalScreen *>(owner);
-            if (!screen->dcb || !screen->pendingSwapRequest())
-                return 1;
-            screen->kickSwapQueue();
-            return screen->pending ? 1 : 0;
+            const auto *request = screen->pendingSwapRequest();
+            if (screen->dcb && request) {
+                screen->kickSwapQueue();
+                if (!screen->pending && screen->pendingSwapRequest() == request)
+                    return 0;
+            }
+            // Disarm on the display loop. A delayed GPU callback could otherwise cancel a new attachment's watch.
+            switch_gpu_ready_cancel(&screen->ready);
+            return 1;
         }, self);
-}
-
-void SwitchExternalScreen::readyDone(void *owner, int)
-{
-    static_cast<SwitchExternalScreen *>(owner)->readySource->interruptOccurred(nullptr, nullptr, 0);
 }
 
 void SwitchExternalScreen::readyFired(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = static_cast<SwitchExternalScreen *>(owner);
-    switch_gpu_ready_cancel(&self->ready);
     self->kickSwapQueue();
 }

@@ -8,13 +8,14 @@ enum {
     SWITCH_HDA_PERIOD_FRAMES = 16384
 };
 
-static inline uint32_t switch_hda_sink_formats(const uint8_t *edid, uint32_t blocks)
+static inline uint32_t switch_hda_sink_formats(const uint8_t *edid, uint32_t valid_blocks)
 {
     uint32_t formats = 0;
-    if (!edid || blocks < 2)
+    if (!edid || !(valid_blocks & 1u))
         return 0;
-    const uint32_t extensions = edid[126] < blocks - 1 ? edid[126] : blocks - 1;
-    for (uint32_t block = 1; block <= extensions; ++block) {
+    for (uint32_t block = 1; (valid_blocks >>= 1) != 0; ++block) {
+        if (!(valid_blocks & 1u))
+            continue;
         const uint8_t *cta = edid + block * 128;
         if (cta[0] != 2)
             continue;
@@ -40,6 +41,15 @@ static inline uint32_t switch_hda_sink_formats(const uint8_t *edid, uint32_t blo
     return formats;
 }
 
+static inline uint32_t switch_hda_sample_bits(uint32_t sink_formats, uint32_t pcm)
+{
+    if ((sink_formats & SWITCH_HDA_S24) && (pcm & (1u << 19)))
+        return 24;
+    if ((sink_formats & SWITCH_HDA_S16) && (pcm & (1u << 17)))
+        return 16;
+    return 0;
+}
+
 static inline uint16_t switch_hda_stream_format(uint32_t bits)
 {
     return (uint16_t)((bits == 24 ? 3u : 1u) << 4 | 1u);
@@ -50,11 +60,11 @@ static inline uint32_t switch_hda_verb(uint32_t codec, uint32_t node, uint32_t v
     return codec << 28 | node << 20 | verb << 8 | value;
 }
 
-static inline uint32_t switch_hda_eld(const uint8_t *edid, uint32_t blocks, uint8_t eld[128])
+static inline uint32_t switch_hda_eld(const uint8_t *edid, uint32_t valid_blocks, uint8_t eld[128])
 {
     for (uint32_t byte = 0; byte < 128; ++byte)
         eld[byte] = 0;
-    if (!switch_hda_sink_formats(edid, blocks))
+    if (!switch_hda_sink_formats(edid, valid_blocks))
         return 0;
     uint32_t name = 0, count = 0;
     for (uint32_t at = 54; at + 18 <= 126; at += 18) {
@@ -66,9 +76,10 @@ static inline uint32_t switch_hda_eld(const uint8_t *edid, uint32_t blocks, uint
         }
         break;
     }
-    const uint32_t extensions = edid[126] < blocks - 1 ? edid[126] : blocks - 1;
     uint32_t revision = 0;
-    for (uint32_t block = 1; block <= extensions; ++block) {
+    for (uint32_t block = 1; (valid_blocks >>= 1) != 0; ++block) {
+        if (!(valid_blocks & 1u))
+            continue;
         const uint8_t *cta = edid + block * 128;
         if (cta[0] != 2)
             continue;

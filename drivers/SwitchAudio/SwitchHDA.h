@@ -40,7 +40,7 @@ public:
     void release();
     void interrupt();
     void disconnect();
-    bool connect(uint32_t formats, IOBufferMemoryDescriptor *ring);
+    bool connect(uint32_t formats);
     IOReturn start();
     void stop();
     void sleep(bool entering);

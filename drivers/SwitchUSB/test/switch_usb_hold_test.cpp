@@ -282,6 +282,9 @@ TEST_F(SwitchUsbHold, RestoreWithNothingHeldFails)
     io.write32(kUsbcmd, io.read32(kUsbcmd) & ~kRs);
     io.write32(kUsbcmd, io.read32(kUsbcmd) | kCrs);
     EXPECT_NE(io.read32(kUsbsts) & kSre, 0u);
+    io.write32(kUsbcmd, kCss);
+    io.write32(kUsbcmd, kCrs);
+    EXPECT_NE(io.read32(kUsbsts) & kSre, 0u) << "SRE is write-one-to-clear across a subsequent successful restore";
     io.write32(kUsbsts, kSre);
     EXPECT_EQ(io.read32(kUsbsts) & kSre, 0u);
 }

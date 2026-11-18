@@ -18,6 +18,7 @@ public:
     // pending. False with one line in `why` when a clock or PLL does not come up.
     bool powerUp(char *why, size_t size);
     void powerDown();
+    void setDownspread(bool enabled);
 
     bool hpdHigh() const;
 

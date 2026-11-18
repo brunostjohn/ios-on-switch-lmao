@@ -56,17 +56,13 @@ bool SwitchHDA::discover(uint32_t formats)
     if (!verb(formatNode, 0xf00, 0x0b, &value) || !(value & 1) || !verb(formatNode, 0xf00, 0x0a, &value) ||
         !(value & (1u << 6)))
         return false;
-    if ((formats & SWITCH_HDA_S24) && (value & (1u << 19)))
-        control->sample_bits = 24;
-    else if ((formats & SWITCH_HDA_S16) && (value & (1u << 16)))
-        control->sample_bits = 16;
-    else
+    control->sample_bits = switch_hda_sample_bits(formats, value);
+    if (!control->sample_bits)
         return false;
     const uint32_t stripe = (core(0) >> 1) & 3;
     if (!verb(converter, 0x200, switch_hda_stream_format(control->sample_bits)) || !verb(converter, 0x706, 0x10) ||
         !verb(converter, 0x70d, 1) || !verb(converter, 0x70e, 0) || !verb(converter, 0x72d, 1) ||
-        !verb(converter, 0x724, stripe ? 1 : 0) || !verb(pin, 0x734, 0x22) || !verb(pin, 0x734, 0x33) ||
-        !verb(pin, 0x707, 0x40))
+        !verb(converter, 0x724, stripe ? 1 : 0) || !verb(pin, 0x707, 0x40))
         return false;
     return attached;
 }

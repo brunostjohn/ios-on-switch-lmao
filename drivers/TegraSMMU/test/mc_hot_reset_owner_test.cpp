@@ -207,6 +207,11 @@ void IOSimpleLockUnlock(IOSimpleLock *lock)
 }
 
 extern "C" {
+int switch_emc_display_memory_reserve(const switch_display_memory_head *)
+{
+    return 0;
+}
+
 uint32_t switch_mmio_model_read32(uintptr_t address)
 {
     if (address == kMc + kStatus1)

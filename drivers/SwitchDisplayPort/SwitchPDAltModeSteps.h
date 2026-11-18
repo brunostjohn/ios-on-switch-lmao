@@ -48,6 +48,9 @@ static inline struct switch_pd_alt_out switch_pd_alt_send(struct switch_pd_alt *
         out.command = SWITCH_PD_ALT_CMD_DP_CONFIGURE;
         return out;
     }
+    case SWITCH_PD_ALT_DOCK_DP_SLEEP:
+    case SWITCH_PD_ALT_DOCK_DP_WAKE:
+        return switch_pd_alt_dock_request(alt->step == SWITCH_PD_ALT_DOCK_DP_SLEEP, 0x1C);
     case SWITCH_PD_ALT_DOCK_QUERY:
         return switch_pd_alt_dock_request(0, 0x16);
     case SWITCH_PD_ALT_DOCK_LED:
@@ -131,8 +134,7 @@ static inline struct switch_pd_alt_out switch_pd_alt_swap(struct switch_pd_alt *
 
 // The data role decides the first step: DFP discovers, UFP swaps first (a source starts as DFP). bm92txx swaps with any
 // dual-role source, and a Mac that accepted would stop being the Switch's USB host (usbmux, Xcode, idevicesyslog). So
-// only the dock's power signature is swapped at once; any other dual-role source is first asked who it is (Discover
-// Identity, which a UFP may send: USB PD R3.3 V1.0 8.5) and swapped only when it is not a host.
+// only the dock's power signature is swapped at once. A UFP may initiate Discover Identity on a PD3 contract.
 static inline struct switch_pd_alt_out switch_pd_alt_begin(struct switch_pd_alt *alt, uint16_t status1)
 {
     const unsigned role = switch_pd_alt_data_role(status1);
@@ -143,7 +145,7 @@ static inline struct switch_pd_alt_out switch_pd_alt_begin(struct switch_pd_alt 
     if (role == SWITCH_PD_ALT_DATA_ROLE_UFP && alt->dock_power) {
         return switch_pd_alt_go(alt, SWITCH_PD_ALT_DR_SWAP);
     }
-    if (role == SWITCH_PD_ALT_DATA_ROLE_UFP && alt->dual_role_data) {
+    if (role == SWITCH_PD_ALT_DATA_ROLE_UFP && alt->ufp_discovery_allowed) {
         alt->lanes = SWITCH_PD_ALT_LANES_FREE;
         return switch_pd_alt_go(alt, SWITCH_PD_ALT_SOURCE_IDENTITY);
     }
@@ -199,7 +201,7 @@ static inline struct switch_pd_alt_out switch_pd_alt_before_swap(struct switch_p
 static inline struct switch_pd_alt_out switch_pd_alt_partner_identified(struct switch_pd_alt *alt, const uint8_t *vdm,
                                                                         size_t len)
 {
-    if (!switch_pd_alt_acked(vdm, 0x01) || len < 17) {
+    if (!switch_pd_alt_identity_response(vdm, len) || !switch_pd_alt_acked(vdm, 0x01) || len < 17) {
         return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, "no alternate modes: Discover Identity not acked");
     }
     const unsigned vid = (unsigned)vdm[5] | (unsigned)vdm[6] << 8U;
@@ -218,27 +220,34 @@ static inline struct switch_pd_alt_out switch_pd_alt_partner_identified(struct s
 // INCOMING_VDM after a step's reply was accepted (or the DisplayPort capabilities after DP discovery).
 static inline struct switch_pd_alt_out switch_pd_alt_reply(struct switch_pd_alt *alt, const uint8_t *vdm, size_t len)
 {
-    if (len < 5) {
-        return switch_pd_alt_finish(alt, SWITCH_PD_ALT_FAILED, "short INCOMING_VDM read");
+    if (len < 5 || vdm[0] < 4 || vdm[0] > SWITCH_PD_ALT_INCOMING_MAX - 1u || (vdm[0] & 3u) ||
+        vdm[0] >= len) {
+        if (alt->step == SWITCH_PD_ALT_DOCK_DP_SLEEP)
+            return switch_pd_alt_go(alt, SWITCH_PD_ALT_DOCK_DP_WAKE);
+        return switch_pd_alt_finish(alt, SWITCH_PD_ALT_FAILED, "invalid INCOMING_VDM count");
     }
+    len = 1u + vdm[0];
     switch (alt->step) {
     case SWITCH_PD_ALT_SOURCE_IDENTITY:
         return switch_pd_alt_source_identified(alt, vdm, len);
     case SWITCH_PD_ALT_DISCOVER_ID:
         return switch_pd_alt_partner_identified(alt, vdm, len);
     case SWITCH_PD_ALT_DISCOVER_SVID:
-        if (!switch_pd_alt_acked(vdm, 0x02) || !switch_pd_alt_has_svid(vdm, len, 0xFF01)) {
+        if (!switch_pd_alt_acked(vdm, 0x02) || (vdm[2] & 0x87u) != 0x80 || vdm[3] != 0 || vdm[4] != 0xFF ||
+            !switch_pd_alt_has_svid(vdm, len, 0xFF01)) {
             return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, "no DisplayPort: SVID FF01 not offered");
         }
         return switch_pd_alt_go(alt, SWITCH_PD_ALT_DISCOVER_MODE);
     case SWITCH_PD_ALT_DISCOVER_MODE:
-        if (vdm[0] <= 4 || !switch_pd_alt_acked(vdm, 0x03) || vdm[2] != 0x80 || vdm[3] != 0x01 || vdm[4] != 0xFF ||
+        if (vdm[0] <= 4 || !switch_pd_alt_acked(vdm, 0x03) || (vdm[2] & 0x87u) != 0x80 || vdm[3] != 0x01 || vdm[4] != 0xFF ||
             len < 6 || (vdm[5] & 0x01u) == 0 || (vdm[5] & 0x04u) == 0) {
             return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, "no DisplayPort: no UFP_D mode");
         }
         return switch_pd_alt_go(alt, SWITCH_PD_ALT_DP_DISCOVER);
     case SWITCH_PD_ALT_ENTER_DOCK:
-        // A dock still in its mode from an earlier session NAKs a second Enter Mode; it goes on all the same.
+        // A dock already in Nintendo mode may NAK a second Enter Mode.
+        if ((vdm[1] != 0x44 && vdm[1] != 0x84) || (vdm[2] & 0x87u) != 0x81 || vdm[3] != 0x7E || vdm[4] != 0x05)
+            return switch_pd_alt_finish(alt, SWITCH_PD_ALT_FAILED, "unexpected Enter Mode response");
         return switch_pd_alt_dp_or_dock(alt);
     case SWITCH_PD_ALT_DP_DISCOVER: {
         const struct switch_pd_alt_config config = switch_pd_alt_choose_pins(vdm, len, alt->dock);
@@ -252,17 +261,28 @@ static inline struct switch_pd_alt_out switch_pd_alt_reply(struct switch_pd_alt 
         return switch_pd_alt_go(alt, SWITCH_PD_ALT_DP_CONFIGURE);
     }
     case SWITCH_PD_ALT_DOCK_QUERY:
-        alt->old_dock_firmware = vdm[6] == 2 && vdm[7] == 0x17 && len > 11 && (vdm[11] & 0x02u) != 0;
+        if (!switch_pd_alt_dock_answer(vdm, len, 0x17) || len < 13)
+            return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, "unrecognized dock state reply");
+        alt->old_dock_firmware = (vdm[11] & 0x02u) != 0;
         return switch_pd_alt_go(alt, SWITCH_PD_ALT_DOCK_LED);
+    case SWITCH_PD_ALT_DOCK_DP_SLEEP:
+        // Restore the signal even when the dock failed to acknowledge disabling it.
+        return switch_pd_alt_go(alt, SWITCH_PD_ALT_DOCK_DP_WAKE);
+    case SWITCH_PD_ALT_DOCK_DP_WAKE:
+        return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE,
+                                    switch_pd_alt_dock_answer(vdm, len, 0x1D) && vdm[5] == 0 ? NULL :
+                                    "the dock did not acknowledge restoring the DP signal");
     case SWITCH_PD_ALT_DOCK_LED:
+        if (!switch_pd_alt_dock_answer(vdm, len, 0x02))
+            return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, "unrecognized dock LED reply");
         return switch_pd_alt_go(alt, SWITCH_PD_ALT_HUB_POWER);
     case SWITCH_PD_ALT_HUB_ENABLE: {
-        const bool answer = vdm[6] == 2 && vdm[7] == 0x21;
-        if (answer && (vdm[5] & 0x01u) != 0 && alt->hub_tries < SWITCH_PD_ALT_HUB_RETRIES) {
+        const bool answer = switch_pd_alt_dock_answer(vdm, len, 0x21);
+        if (answer && vdm[5] == 1 && alt->hub_tries < SWITCH_PD_ALT_HUB_RETRIES) {
             ++alt->hub_tries;
             return switch_pd_alt_go(alt, SWITCH_PD_ALT_HUB_RETRY);
         }
-        alt->hub_enabled = answer && (vdm[5] & 0x01u) == 0;
+        alt->hub_enabled = answer && vdm[5] == 0;
         return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE,
                                     alt->hub_enabled ? NULL : "the dock did not enable its USB hub");
     }
@@ -274,10 +294,10 @@ static inline struct switch_pd_alt_out switch_pd_alt_reply(struct switch_pd_alt 
 
 struct switch_pd_alt_in {
     uint16_t alert, status1, dp_status;
-    bool port_session;    // a stable power role: sink, or source with the host data role
+    bool port_session;    // explicit SOP contract in the current attachment
     bool at_rest;         // SwitchPD's own USB-PD request is not using COMMAND (published, settling or given up)
     bool dock_power;      // the source's PDOs carry the dock's signature
-    bool dual_role_data;  // the source's 5 V PDO has Dual-Role Data
+    bool ufp_discovery_allowed;  // confirmed PD3 SOP and dual-role data
 };
 
 static inline bool switch_pd_alt_waiting_on_chip(const struct switch_pd_alt *alt)
@@ -297,7 +317,7 @@ static inline struct switch_pd_alt_out switch_pd_alt_reset(struct switch_pd_alt 
 static inline struct switch_pd_alt_out switch_pd_alt_start(struct switch_pd_alt *alt, const struct switch_pd_alt_in *in)
 {
     alt->dock_power = in->dock_power;
-    alt->dual_role_data = in->dual_role_data;
+    alt->ufp_discovery_allowed = in->ufp_discovery_allowed;
     alt->lanes = alt->want_dp ? SWITCH_PD_ALT_LANES_PENDING : SWITCH_PD_ALT_LANES_FREE;
     if ((in->dp_status & SWITCH_PD_ALT_DP_STATUS_DP_EN) != 0) {
         return switch_pd_alt_go(alt, SWITCH_PD_ALT_STALE_EXIT);
@@ -368,6 +388,8 @@ static inline bool switch_pd_alt_vdm_step(enum switch_pd_alt_step step)
     case SWITCH_PD_ALT_DOCK_QUERY:
     case SWITCH_PD_ALT_DOCK_LED:
     case SWITCH_PD_ALT_HUB_ENABLE:
+    case SWITCH_PD_ALT_DOCK_DP_SLEEP:
+    case SWITCH_PD_ALT_DOCK_DP_WAKE:
         return true;
     default:
         return false;
@@ -430,20 +452,19 @@ static inline struct switch_pd_alt_out switch_pd_alt_event(struct switch_pd_alt 
 static inline struct switch_pd_alt_out switch_pd_alt_timer(struct switch_pd_alt *alt, bool at_rest)
 {
     if (alt->step == SWITCH_PD_ALT_HUB_POWER || alt->step == SWITCH_PD_ALT_HUB_RETRY) {
+        alt->step = SWITCH_PD_ALT_HUB_ENABLE;
         if (!at_rest) {
-            return switch_pd_alt_send(alt);
+            alt->paused = true;
+            return switch_pd_alt_none();
         }
-        return switch_pd_alt_go(alt, SWITCH_PD_ALT_HUB_ENABLE);
+        return switch_pd_alt_send(alt);
     }
     if (!switch_pd_alt_active(alt)) {
         return switch_pd_alt_none();
     }
     if (alt->paused) {
-        if (!at_rest) {
-            struct switch_pd_alt_out out = switch_pd_alt_none();
-            out.timer_ms = SWITCH_PD_ALT_REPLY_MS;
-            return out;
-        }
+        if (!at_rest)
+            return switch_pd_alt_none();
         alt->paused = false;
         return switch_pd_alt_send(alt);
     }
@@ -454,6 +475,10 @@ static inline struct switch_pd_alt_out switch_pd_alt_timer(struct switch_pd_alt 
     if (alt->step == SWITCH_PD_ALT_DP_DISCOVER || alt->step == SWITCH_PD_ALT_DP_CONFIGURE) {
         return switch_pd_alt_after_dp(alt, "no DisplayPort: no answer within 1.5 s");
     }
+    if (alt->step == SWITCH_PD_ALT_DOCK_DP_SLEEP)
+        return switch_pd_alt_go(alt, SWITCH_PD_ALT_DOCK_DP_WAKE);
+    if (alt->step == SWITCH_PD_ALT_DOCK_DP_WAKE)
+        return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, "no reply to restoring the dock DP signal");
     if (alt->step == SWITCH_PD_ALT_DOCK_QUERY || alt->step == SWITCH_PD_ALT_DOCK_LED ||
         alt->step == SWITCH_PD_ALT_HUB_ENABLE) {
         return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE,
@@ -479,6 +504,8 @@ static inline const char *switch_pd_alt_step_name(enum switch_pd_alt_step step)
                                         "dock hub power-up",
                                         "dock hub enable",
                                         "dock hub retry",
+                                        "dock DP signal disable",
+                                        "dock DP signal restore",
                                         "done",
                                         "failed"};
     return (unsigned)step < sizeof(names) / sizeof(names[0]) ? names[step] : "?";

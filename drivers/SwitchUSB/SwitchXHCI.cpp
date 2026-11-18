@@ -250,14 +250,13 @@ uint32_t SwitchXHCI::heldWrite32(uint64_t address, uint32_t value)
 bool SwitchXHCI::keepsEventRing(uint64_t address, uint64_t value, unsigned bytes)
 {
     const uint32_t erstba = runtimeOffset + XHCI_ERSTBA0;
-    if (address == capBase + erstba) {
-        const uint64_t current =
-            bytes == 8 ? AppleUSBXHCI::regRead64(capBase, erstba) : AppleUSBXHCI::regRead32(capBase, erstba);
-        return xusb_hold_keeps(&hold, value, current);
-    }
-    if (bytes == 4 && address == capBase + erstba + 4)
-        return xusb_hold_keeps(&hold, value, AppleUSBXHCI::regRead32(capBase, erstba + 4));
-    return false;
+    const uint64_t offset = address - capBase;
+    if (offset != erstba && !(bytes == 4 && offset == erstba + 4))
+        return false;
+    if (!xusb_hold_retained(&hold))
+        return false;
+    return value == (bytes == 8 ? AppleUSBXHCI::regRead64(capBase, erstba)
+                                : AppleUSBXHCI::regRead32(capBase, static_cast<uint32_t>(offset)));
 }
 
 void SwitchXHCI::regWrite32(uint64_t base, uint32_t offset, uint32_t value)

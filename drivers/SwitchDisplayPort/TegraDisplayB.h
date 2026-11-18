@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include "SwitchDPModes.h"
+#include "../SwitchPower/SwitchDisplayMemory.h"
 
 #define TEGRA_DISPLAY_B_INTID (32u + 74u)
 
@@ -15,21 +16,22 @@ class TegraDisplayB {
 public:
     // The DISB partition with DISP2 (already sourced from pll_d2_out0) and the controller's base configuration.
     bool powerUp(char *why, size_t size);
-    // The mode's timing; the controller runs continuously from here, every window off. The frame-end interrupt is on
-    // only while a flip waits to be taken: a still screen costs the CPU nothing.
     void setMode(const struct switch_dp_mode &mode);
     void enableSor(bool on);
-    // Window A scans `width` x `height` BGRA at `iova` (rows of `stride` bytes) from the next frame on; its frame end
-    // interrupt says it was taken.
-    void scanout(uint32_t iova, uint32_t width, uint32_t height, uint32_t stride, uint32_t kind = 0);
+    bool scanout(uint32_t iova, uint32_t stride, uint32_t kind);
+    enum class Latch { Pending, Active, Missed };
+    Latch windowLatch(uint32_t address);
     void windowOff();
     void frameInterrupt(bool enable);
-    // The interrupt's cause, cleared; the frame-end interrupt off again until the next scanout().
     uint32_t takeInterrupt();
     void powerDown();
 
 private:
     volatile uint8_t *base = nullptr;
+    switch_display_memory_head memory = {};
+    uint32_t stride = 0, kind = 0;
+    bool windowEnabled = false, frameInterruptEnabled = false;
+    void releaseBandwidth();
     uint32_t read(uint32_t word) const;
     void write(uint32_t word, uint32_t value);
     void commit(uint32_t update);

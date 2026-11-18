@@ -9,7 +9,7 @@
 
 namespace {
 
-TEST(Capabilities, ReadsAdvertisedExtendedRevisionAndBandwidthOnce)
+TEST(Capabilities, UsesOneCoherentReceiverCapabilityBlock)
 {
     uint8_t caps[16] = {};
     uint8_t base[16] = {0x12, 0x14, 0xC4, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 2, 15};
@@ -19,38 +19,50 @@ TEST(Capabilities, ReadsAdvertisedExtendedRevisionAndBandwidthOnce)
     }
     base[SWITCH_DPCD_TRAINING_AUX_RD_INTERVAL] |= SWITCH_DPCD_EXT_CAP_PRESENT;
     EXPECT_TRUE(switch_dp_caps_update(caps, base, false));
-    const uint8_t extended[2] = {0x14, 0x0A};
+    uint8_t extended[16] = {0x14, 0x0a, 0x82, 0};
+    extended[SWITCH_DPCD_TRAINING_AUX_RD_INTERVAL] = 3;
     EXPECT_FALSE(switch_dp_caps_update(caps, extended, true));
-    EXPECT_EQ(caps[SWITCH_DPCD_REV], 0x14);
-    EXPECT_EQ(switch_dp_rate_cap(caps[SWITCH_DPCD_MAX_LINK_RATE]), SWITCH_DP_RATE_HBR);
-    for (unsigned i = 2; i < 16; ++i) {
-        EXPECT_EQ(caps[i], base[i]);
-    }
+    for (unsigned i = 0; i < 16; ++i)
+        EXPECT_EQ(caps[i], extended[i]);
+    EXPECT_FALSE(switch_dp_caps_update(caps, base, true));
+    EXPECT_EQ(caps[2], extended[2]);
+    EXPECT_EQ(caps[SWITCH_DPCD_TRAINING_AUX_RD_INTERVAL], 3u);
 }
 
-TEST(Link, Only1080p60sNeedIsTrained)
+TEST(Link, VisitsOnlyFeasibleTuplesOnce)
 {
     switch_dp_link link{};
-    ASSERT_TRUE(switch_dp_link_for(148500, SWITCH_DP_RATE_HBR2, 2, &link));
-    EXPECT_EQ(link.rate, SWITCH_DP_RATE_HBR);
-    EXPECT_EQ(link.lanes, 2);
-    ASSERT_TRUE(switch_dp_link_for(148500, SWITCH_DP_RATE_HBR2, 4, &link));
-    EXPECT_EQ(link.rate, SWITCH_DP_RATE_RBR);
-    EXPECT_EQ(link.lanes, 4);
-    ASSERT_TRUE(switch_dp_link_for(74250, SWITCH_DP_RATE_HBR2, 2, &link));
-    EXPECT_EQ(link.rate, SWITCH_DP_RATE_RBR);
-    EXPECT_EQ(link.lanes, 2);
-    EXPECT_FALSE(switch_dp_link_for(148500, SWITCH_DP_RATE_RBR, 2, &link));
+    switch_dp_tu tu{};
+    unsigned cursor = 0, tries = 0;
+    bool seen[3][5] = {};
+    while (switch_dp_next_link(148500, 1920, 2200, SWITCH_DP_RATE_HBR2, 4, true, true, &cursor, &link, &tu)) {
+        if (!tries) {
+            EXPECT_EQ(link.rate, SWITCH_DP_RATE_HBR);
+            EXPECT_EQ(link.lanes, 2);
+        }
+        const unsigned rate = link.rate == SWITCH_DP_RATE_RBR ? 0 : link.rate == SWITCH_DP_RATE_HBR ? 1 : 2;
+        EXPECT_FALSE(seen[rate][link.lanes]);
+        seen[rate][link.lanes] = true;
+        EXPECT_GT(switch_dp_payload_kbps(link.rate, link.lanes) * 995 / 1000, 148500u * 24);
+        ++tries;
+    }
+    EXPECT_EQ(tries, 6u);
+    cursor = 0;
+    while (switch_dp_next_link(148500, 1920, 2200, SWITCH_DP_RATE_HBR2, 2, true, true, &cursor, &link, &tu))
+        EXPECT_LE(link.lanes, 2);
+    cursor = 0;
+    EXPECT_FALSE(switch_dp_next_link(148500, 1920, 2200, SWITCH_DP_RATE_RBR, 2, true, false, &cursor, &link, &tu));
+    cursor = 0;
+    EXPECT_FALSE(switch_dp_next_link(53800, 1280, 1650, SWITCH_DP_RATE_RBR, 1, false, true, &cursor, &link, &tu));
+    cursor = 0;
+    EXPECT_TRUE(switch_dp_next_link(53800, 1280, 1650, SWITCH_DP_RATE_RBR, 1, false, false, &cursor, &link, &tu));
 }
 
-TEST(Link, RateCapAndFallback)
+TEST(Link, CapsAtTheFastestBoardRate)
 {
     EXPECT_EQ(switch_dp_rate_cap(0x1E), SWITCH_DP_RATE_HBR2);
+    EXPECT_EQ(switch_dp_rate_cap(0), 0);
     EXPECT_EQ(switch_dp_rate_cap(0x0A), SWITCH_DP_RATE_HBR);
-    EXPECT_EQ(switch_dp_rate_cap(0x00), SWITCH_DP_RATE_RBR);
-    EXPECT_EQ(switch_dp_rate_below(SWITCH_DP_RATE_HBR2), SWITCH_DP_RATE_HBR);
-    EXPECT_EQ(switch_dp_rate_below(SWITCH_DP_RATE_HBR), SWITCH_DP_RATE_RBR);
-    EXPECT_EQ(switch_dp_rate_below(SWITCH_DP_RATE_RBR), 0);
 }
 
 struct TuGolden {
@@ -60,13 +72,14 @@ struct TuGolden {
     switch_dp_tu tu;
 };
 
-// Values from a separate port of Linux tegra_sor_compute_config.
-TEST(TransferUnit, MatchesLinux)
+// Golden fractions from integer enumeration of the 27.8.41 encodings (both polarities, F=1..15).
+TEST(TransferUnit, MatchesHardwareSymbolFractions)
 {
     const TuGolden cases[] = {
-        {148500, 1920, 2200, SWITCH_DP_RATE_HBR, 2, true, {56, 46, 5, 0, 13, 487, 3423}},
+        {148500, 1920, 2200, SWITCH_DP_RATE_HBR, 2, true, {64, 52, 5, 1, 14, 487, 3423}},
         {148500, 1920, 2200, SWITCH_DP_RATE_RBR, 4, true, {64, 43, 1, 0, 18, 291, 2054}},
         {74250, 1280, 1650, SWITCH_DP_RATE_RBR, 2, true, {64, 43, 1, 0, 18, 783, 2716}},
+        {74250, 1280, 1650, SWITCH_DP_RATE_HBR, 2, true, {60, 24, 4, 1, 19, 1311, 4541}},
         {25175, 640, 800, SWITCH_DP_RATE_RBR, 1, false, {37, 17, 4, 0, 14, 972, 3917}},
     };
     for (const TuGolden &c : cases) {
@@ -207,12 +220,12 @@ struct Sink {
 
 switch_dp_train_out train(Sink &sink, switch_dp_train &t, bool tps3, unsigned *drives)
 {
-    switch_dp_train_out out = switch_dp_train_start(&t, sink.lanes, tps3, 0);
+    switch_dp_train_out out = switch_dp_train_start(&t, sink.lanes, tps3, 0x12, 0);
     *drives = 0;
     while (out.act == SWITCH_DP_TRAIN_DRIVE && *drives < 50) {
         ++*drives;
         sink.write(out);
-        uint8_t status[6];
+        uint8_t status[11] = {};
         sink.status(status);
         out = switch_dp_train_status(&t, status);
     }
@@ -235,21 +248,22 @@ TEST(Training, ConvergesOnTheSinksRequests)
 TEST(Training, PatternsAndLaneSettings)
 {
     switch_dp_train t{};
-    switch_dp_train_out out = switch_dp_train_start(&t, 2, true, 1);
+    switch_dp_train_out out = switch_dp_train_start(&t, 2, true, 0x12, 1);
     EXPECT_EQ(out.pattern, 1);
     EXPECT_EQ(out.dpcd[0], 0x21);
     EXPECT_EQ(out.dpcd_len, 3);
     EXPECT_EQ(out.wait_us, 4000u);
-    const uint8_t cr_done[6] = {0x11, 0, 0, 0, 0x0E, 0};  // lane 0 asks swing 2 emphasis 3: clamped to 1
+    const uint8_t cr_done[11] = {0x11, 0, 0, 0, 0x0E, 0};  // lane 0 asks swing 2 emphasis 3: clamped to 1
     out = switch_dp_train_status(&t, cr_done);
     EXPECT_EQ(out.pattern, 3);
     EXPECT_EQ(out.dpcd[0], 0x23);
     EXPECT_EQ(out.wait_us, 4000u);
-    const uint8_t eq_retry[6] = {0x11, 0, 0, 0, 0x0E, 0};
+    const uint8_t eq_retry[11] = {0x11, 0, 0, 0, 0xCE, 0};
     out = switch_dp_train_status(&t, eq_retry);
-    EXPECT_EQ(out.dpcd[1], 2 | (1 << 3) | SWITCH_DPCD_MAX_PRE_EMPHASIS_REACHED);
+    EXPECT_EQ(out.dpcd[1], 2 | (1 << 3));
+    EXPECT_EQ(out.dpcd[2], (3 << 3) | SWITCH_DPCD_MAX_PRE_EMPHASIS_REACHED);
     switch_dp_train t2{};
-    out = switch_dp_train_start(&t2, 1, false, 0);
+    out = switch_dp_train_start(&t2, 1, false, 0x12, 0);
     EXPECT_EQ(out.wait_us, 100u);
     const uint8_t done[6] = {0x01, 0, 0, 0, 0, 0};
     out = switch_dp_train_status(&t2, done);
@@ -257,26 +271,52 @@ TEST(Training, PatternsAndLaneSettings)
     EXPECT_EQ(out.wait_us, 400u);
 }
 
-TEST(Training, SinkIntervalAppliesToClockRecoveryRetries)
+TEST(Training, PerLanePostcursorAndPartialLock)
 {
     switch_dp_train t{};
-    switch_dp_train_out out = switch_dp_train_start(&t, 2, false, 0x82);
-    EXPECT_EQ(out.wait_us, 8000u);
+    (void)switch_dp_train_start(&t, 4, true, 0x12, 0);
+    const uint8_t mixed[11] = {0x11, 0x01, 0x80, 0, 0x33, 0x33, 0, 0, 0, 0, 0xe4};
+    EXPECT_EQ(switch_dp_train_status(&t, mixed).pattern, 1);
+    uint8_t levels[2] = {};
+    switch_dp_train_set2(&t, levels);
+    EXPECT_EQ(levels[0], 0x10);
+    EXPECT_EQ(levels[1], 0x72);
+    const uint8_t allCr[11] = {0x11, 0x11};
+    EXPECT_EQ(switch_dp_train_status(&t, allCr).pattern, 3);
+    const uint8_t eqMiss[11] = {0x77, 0x17, 0x80, 0x02, 0x66, 0x66};
+    switch_dp_train_out result{};
+    for (unsigned i = 0; i < SWITCH_DP_EQ_TRIES_MAX; ++i)
+        result = switch_dp_train_status(&t, eqMiss);
+    EXPECT_EQ(result.act, SWITCH_DP_TRAIN_FAIL);
+    (void)switch_dp_train_start(&t, 2, false, 0x12, 0);
+    EXPECT_EQ(switch_dp_train_status(&t, allCr).pattern, 2);
+    const uint8_t twoLocked[6] = {0x77, 0, SWITCH_DPCD_INTERLANE_ALIGN_DONE};
+    EXPECT_EQ(switch_dp_train_status(&t, twoLocked).act, SWITCH_DP_TRAIN_DONE);
+}
+
+TEST(Training, SinkIntervalDependsOnDpcdRevisionAndTrainingPhase)
+{
     const uint8_t retry[6] = {0, 0, 0, 0, 0x11, 0};
-    out = switch_dp_train_status(&t, retry);
-    ASSERT_EQ(out.act, SWITCH_DP_TRAIN_DRIVE);
-    EXPECT_EQ(out.pattern, 1);
-    EXPECT_EQ(out.wait_us, 8000u);
     const uint8_t recovered[6] = {0x11, 0, 0, 0, 0, 0};
-    out = switch_dp_train_status(&t, recovered);
-    EXPECT_EQ(out.pattern, 2);
-    EXPECT_EQ(out.wait_us, 8000u);
+    for (uint8_t revision : {0x12, 0x14}) {
+        switch_dp_train t{};
+        const unsigned crWait = revision == 0x12 ? 8000u : 100u;
+        auto out = switch_dp_train_start(&t, 2, false, revision, 0x82);
+        EXPECT_EQ(out.wait_us, crWait);
+        out = switch_dp_train_status(&t, retry);
+        ASSERT_EQ(out.act, SWITCH_DP_TRAIN_DRIVE);
+        EXPECT_EQ(out.pattern, 1);
+        EXPECT_EQ(out.wait_us, crWait);
+        out = switch_dp_train_status(&t, recovered);
+        EXPECT_EQ(out.pattern, 2);
+        EXPECT_EQ(out.wait_us, 8000u);
+    }
 }
 
 TEST(Training, RecoveredLaneAtMaxSwingAllowsOtherLanesToAdjust)
 {
     switch_dp_train t{};
-    (void)switch_dp_train_start(&t, 2, false, 0);
+    (void)switch_dp_train_start(&t, 2, false, 0x12, 0);
     const uint8_t first[6] = {0, 0, 0, 0, 0x13, 0};
     ASSERT_EQ(switch_dp_train_status(&t, first).act, SWITCH_DP_TRAIN_DRIVE);
     const uint8_t retry[6] = {0x01, 0, 0, 0, 0x23, 0};

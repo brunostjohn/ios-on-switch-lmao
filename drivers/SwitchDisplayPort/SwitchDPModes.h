@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-// The sink's modes from its EDID (base block detailed timings, the 640x480 established timing every DisplayPort sink
-// must take, CTA-861 extension detailed timings and short video descriptors). Plain C for the
-// host tests.
+// EDID base and CTA detailed timings, established VGA, and CTA short video descriptors.
 #ifndef SWITCH_DP_MODES_H
 #define SWITCH_DP_MODES_H
 
@@ -10,8 +8,8 @@
 #include <stdint.h>
 
 // NOLINTBEGIN(modernize-avoid-c-style-cast,modernize-loop-convert): plain C, compiled by C host tests as well
-#define SWITCH_DP_MAX_WIDTH      8191u
-#define SWITCH_DP_MAX_HEIGHT     8191u
+#define SWITCH_DP_MAX_WIDTH      1920u
+#define SWITCH_DP_MAX_HEIGHT     1080u
 #define SWITCH_DP_BITS_PER_PIXEL 24u
 #define SWITCH_DP_MAX_MODES      32u
 
@@ -33,10 +31,23 @@ static inline uint32_t switch_dp_mode_vtotal(const struct switch_dp_mode *m)
     return (uint32_t)m->vactive + m->vfront + m->vsync + m->vback;
 }
 
+static inline uint64_t switch_dp_refresh_period(const struct switch_dp_mode *m)
+{
+    const uint64_t pixels = (uint64_t)switch_dp_mode_htotal(m) * switch_dp_mode_vtotal(m);
+    return m->pixel_khz ? (pixels << 32) / ((uint64_t)m->pixel_khz * 1000u) : 0;
+}
+
 static inline uint32_t switch_dp_mode_refresh_mhz(const struct switch_dp_mode *m)
 {
     const uint64_t total = (uint64_t)switch_dp_mode_htotal(m) * switch_dp_mode_vtotal(m);
     return total == 0 ? 0 : (uint32_t)(((uint64_t)m->pixel_khz * 1000000u + total / 2) / total);
+}
+
+static inline bool switch_dp_source_timing(const struct switch_dp_mode *m)
+{
+    const uint64_t total = (uint64_t)switch_dp_mode_htotal(m) * switch_dp_mode_vtotal(m);
+    return m->hactive <= SWITCH_DP_MAX_WIDTH && m->vactive <= SWITCH_DP_MAX_HEIGHT &&
+           m->pixel_khz <= 750000u && (uint64_t)m->pixel_khz * 1000u <= total * 60u;
 }
 
 static inline bool switch_dp_edid_block_valid(const uint8_t *block)
@@ -145,11 +156,28 @@ struct switch_dp_mode_list {
     unsigned count;
 };
 
+static inline bool switch_dp_prefer(const struct switch_dp_mode *m, const struct switch_dp_mode *best)
+{
+    if (m->preferred != best->preferred)
+        return m->preferred;
+    const unsigned pixels = (unsigned)m->hactive * m->vactive;
+    const unsigned previous = (unsigned)best->hactive * best->vactive;
+    return pixels != previous ? pixels > previous : switch_dp_mode_refresh_mhz(m) > switch_dp_mode_refresh_mhz(best);
+}
+
 static inline void switch_dp_modes_add(struct switch_dp_mode_list *list, const struct switch_dp_mode *mode)
 {
-    if (list->count < SWITCH_DP_MAX_MODES) {
-        list->modes[list->count++] = *mode;
+    if (!switch_dp_source_timing(mode))
+        return;
+    for (unsigned i = 0; i < list->count; ++i) {
+        struct switch_dp_mode *existing = &list->modes[i];
+        if (__builtin_memcmp(existing, mode, offsetof(struct switch_dp_mode, preferred)) == 0) {
+            existing->preferred |= mode->preferred;
+            return;
+        }
     }
+    if (list->count < SWITCH_DP_MAX_MODES)
+        list->modes[list->count++] = *mode;
 }
 
 static inline void switch_dp_edid_cta(const uint8_t *block, struct switch_dp_mode_list *list)
@@ -171,6 +199,11 @@ static inline void switch_dp_edid_cta(const uint8_t *block, struct switch_dp_mod
             if (switch_dp_cta_vic(vic, &mode)) {
                 mode.preferred = svd >= 129 && svd <= 192;
                 switch_dp_modes_add(list, &mode);
+                if (vic == 4 || vic == 16) {
+                    mode.pixel_khz = (mode.pixel_khz * 1000u + 500u) / 1001u;
+                    mode.preferred = false;
+                    switch_dp_modes_add(list, &mode);
+                }
             }
         }
         at += 1 + length;
@@ -183,17 +216,12 @@ static inline void switch_dp_edid_cta(const uint8_t *block, struct switch_dp_mod
     }
 }
 
-// Every mode of `edid` (`blocks` 128-byte blocks read). A bad base block yields only 640x480, which DisplayPort
-// requires every sink to take; a bad extension is skipped.
-static inline void switch_dp_edid_modes(const uint8_t *edid, unsigned blocks, struct switch_dp_mode_list *list)
+static inline uint32_t switch_dp_edid_modes(const uint8_t *edid, unsigned blocks, struct switch_dp_mode_list *list)
 {
     list->count = 0;
-    struct switch_dp_mode vga;
-    (void)switch_dp_cta_vic(1, &vga);
-    if (blocks == 0 || !switch_dp_edid_header_valid(edid)) {
-        switch_dp_modes_add(list, &vga);
-        return;
-    }
+    if (blocks == 0 || !switch_dp_edid_header_valid(edid))
+        return 0;
+    uint32_t valid = 1;
     for (unsigned at = 54; at + 18 <= 126; at += 18) {
         struct switch_dp_mode mode;
         if (switch_dp_edid_dtd(edid + at, &mode)) {
@@ -201,25 +229,29 @@ static inline void switch_dp_edid_modes(const uint8_t *edid, unsigned blocks, st
             switch_dp_modes_add(list, &mode);
         }
     }
-    if ((edid[35] & 0x20u) != 0 || list->count == 0) {
+    if ((edid[35] & 0x20u) != 0) {
+        struct switch_dp_mode vga;
+        (void)switch_dp_cta_vic(1, &vga);
         switch_dp_modes_add(list, &vga);
     }
     const unsigned extensions = edid[126] < blocks - 1 ? edid[126] : blocks - 1;
-    for (unsigned b = 1; b <= extensions; ++b) {
+    for (unsigned b = 1; b <= extensions && b < 32; ++b) {
         const uint8_t *block = edid + (size_t)128 * b;
         if (switch_dp_edid_block_valid(block)) {
+            valid |= 1u << b;
             switch_dp_edid_cta(block, list);
         }
     }
+    return valid;
 }
 
 static inline bool switch_dp_mode_allowed(const struct switch_dp_mode *m, uint64_t link_payload_kbps)
 {
-    return m->hactive >= 16 && m->hactive <= SWITCH_DP_MAX_WIDTH &&
-           m->vactive >= 16 && m->vactive <= SWITCH_DP_MAX_HEIGHT && m->hsync != 0 && m->vsync != 0 &&
+    return switch_dp_source_timing(m) && m->hactive >= 16 &&
+           m->vactive >= 16 && m->hsync != 0 && m->vsync != 0 &&
            m->hfront >= 2 && m->vfront >= 2 && m->hsync + m->hback >= 20 &&
            switch_dp_mode_htotal(m) <= 0x7fffu && switch_dp_mode_vtotal(m) <= 0x7fffu &&
-           m->pixel_khz >= 11719 && m->pixel_khz <= 750000 && (uint64_t)m->pixel_khz * SWITCH_DP_BITS_PER_PIXEL < link_payload_kbps;
+           m->pixel_khz >= 11719 && (uint64_t)m->pixel_khz * SWITCH_DP_BITS_PER_PIXEL < link_payload_kbps;
 }
 
 // NOLINTEND(modernize-avoid-c-style-cast,modernize-loop-convert)

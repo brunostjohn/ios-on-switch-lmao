@@ -65,7 +65,7 @@ inline void readCached(uint64_t pa, uint64_t length, uint8_t out[8])
 }
 
 // UsbDmaProbeHeld.cpp. path: "own address", "window" or "bounced"; pa: the mapping's first byte (0 for a bounce).
-void heldMap(IOMemoryDescriptor *memory, uint64_t address, uint64_t pa, const char *path, bool writable);
+void heldMap(IOMemoryDescriptor *memory, uint64_t address, uint64_t pa, const char *path);
 void heldUnmap(const IOMemoryDescriptor *memory, uint64_t address);
 }  // namespace usb_dma_probe
 #endif

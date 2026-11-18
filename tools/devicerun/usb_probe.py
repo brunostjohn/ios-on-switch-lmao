@@ -3,7 +3,7 @@
 A summary is a burst of lines with one occasion ("host session start", "device role", "controller off", "lines used
 up"): the counts by path, then one line per descriptor class with the cache modes it arrived in, then the live
 instances of the USB host classes. Held mappings that must be completed per transfer are the stale-data hazard: with
-the family's buffers write-combined (mode 4) there are none. The controller's own buffers stay mapped while it is
+per-transfer mapping they must retire at teardown. The controller's own buffers stay mapped while it is
 powered off, so their count at each power-off is level when nothing leaks.
 """
 
@@ -43,7 +43,14 @@ def summaries(lines: list[dict]) -> list[dict]:
         if header:
             paths = {p: tuple(int(n) for n in header[p].split('/')) for p in ('own', 'window', 'bounced')}
             found.append(
-                {'time': m['time'], 'when': header['when'], 'wrong': int(header['wrong']), 'paths': paths}
+                {
+                    'time': m['time'],
+                    'when': header['when'],
+                    'wrong': int(header['wrong']),
+                    'paths': paths,
+                    'untracked': int(header['untracked']),
+                    'unknown': int(header['unknown']),
+                }
                 | {'classes': {}, 'live': {}, 'line': m}
             )
             continue
@@ -79,16 +86,15 @@ def controller_held(found: list[dict]) -> list[int]:
 
 
 def problems(found: list[dict]) -> list[str]:
-    """Return what the summaries show wrong: mappings to complete, a family buffer not write-combined, a leak."""
+    """Report outstanding transfers, cached controller buffers, and controller buffer leaks."""
     out = [
         f'{s["wrong"]} held mappings to complete per transfer at {s["when"]} {clock(s["time"])}'
         for s in found
-        if s['wrong']
+        if s['wrong'] and s['when'] in ('device role', 'controller off', 'host session start')
     ]
-    modes = family_modes(found)
-    out += [
-        f'{name} in cache modes {bits:#x}, not mode 4 only' for name, bits in modes.items() if bits != WRITE_COMBINED
-    ]
+    controller_modes = family_modes(found).get(CONTROLLER_BUFFERS)
+    if controller_modes is not None and controller_modes != WRITE_COMBINED:
+        out.append(f'{CONTROLLER_BUFFERS} in cache modes {controller_modes:#x}, expected mode 4')
     held = controller_held(found)
     if len(set(held)) > 1:
         out.append(f'{CONTROLLER_BUFFERS} held at each controller off: {" > ".join(map(str, held))}')
@@ -100,8 +106,8 @@ def probe_lines(by_check: dict[str, Result]) -> list[dict]:
 
 
 def probe_row(by_check: dict[str, Result]) -> Result:
-    """Return the probe's verdict: no mapping to complete per transfer, the family's buffers write-combined, no leak."""
-    rule = '0 held mappings to complete per transfer; family buffers in mode 4 only; controller buffers level'
+    """Judge completed sessions against payload ownership and controller buffer lifetimes."""
+    rule = '0 held mappings to complete per transfer; controller DMA buffers in mode 4 only; controller buffers level'
     check = Check('usb.dma.probe-summary', OWNER, 'SwitchUSB: DMA probe summary', rule, source=PROBE)
     lines = probe_lines(by_check)
     found = summaries(lines)
@@ -113,10 +119,23 @@ def probe_row(by_check: dict[str, Result]) -> Result:
     wrong = problems(found)
     if wrong:
         return Result(check, FAIL, '; '.join(wrong), [s['line'] for s in found])
-    families = sorted(family_modes(found))
+    gaps = [s for s in found if s['untracked'] or s['unknown']]
+    if gaps:
+        last = gaps[-1]
+        return Result(
+            check,
+            NO_DATA,
+            f'incomplete DMA trace: {last["untracked"]} untracked maps, {last["unknown"]} unaccounted unmaps',
+            [last['line']],
+        )
+    if not any(s['when'] in ('controller off', 'device role') for s in found):
+        return Result(check, NO_DATA, 'waiting for a completed host session')
+    families = family_modes(found)
     held = controller_held(found)
     observed = f'{len(found)} summaries: 0 held mappings to complete per transfer; '
-    observed += f'{", ".join(families) or "no family buffer"} in mode 4 only'
+    observed += (
+        ', '.join(f'{name} cache modes {bits:#x}' for name, bits in sorted(families.items())) or 'no family buffer'
+    )
     observed += f'; controller buffers {held[0]} held at each of {len(held)} controller offs' if held else ''
     return Result(check, PASS, observed, [s['line'] for s in found])
 

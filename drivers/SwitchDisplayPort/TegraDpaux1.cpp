@@ -69,8 +69,12 @@ bool TegraDpaux1::startPllDp(char *why, size_t size)
         snprintf(why, size, "PLL_DP did not lock (base %#x)", switch_car_read(PLLDP_BASE));
         return false;
     }
-    switch_car_write(PLLDP_SS_CFG, 0xc0000000);
     return true;
+}
+
+void TegraDpaux1::setDownspread(bool enabled)
+{
+    switch_car_write(PLLDP_SS_CFG, (1u << 31) | (enabled ? 1u << 30 : 0));
 }
 
 bool TegraDpaux1::powerUp(char *why, size_t size)

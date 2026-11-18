@@ -279,17 +279,20 @@ void switch_audio_display_mix(UInt32 frames, const AudioServerPlugInIOCycleInfo 
     const uint32_t run = total < SWITCH_AUDIO_RING_FRAMES - at ? total : SWITCH_AUDIO_RING_FRAMES - at;
     const uint32_t width = gControl->sample_bits == 16 ? 2 : 4;
     if (width == 4) {
-        switch_audio_ring_mix(gOutput, SWITCH_AUDIO_RING_FRAMES, 2, first, samples, frames, 1.0f);
+        int32_t *ring = gOutput;
+        switch_audio_write_s32(ring + at * 2, samples, run * 2);
+        if (run < total)
+            switch_audio_write_s32(ring, samples + run * 2, (total - run) * 2);
     } else {
         int16_t *ring = gOutput;
-        switch_audio_mix_s16(ring + at * 2, samples, run * 2);
+        switch_audio_write_s16(ring + at * 2, samples, run * 2);
         if (run < total)
-            switch_audio_mix_s16(ring, samples + run * 2, (total - run) * 2);
+            switch_audio_write_s16(ring, samples + run * 2, (total - run) * 2);
     }
     switch_dcache_clean_lines((uint8_t *)gOutput + at * 2 * width, run * 2 * width);
     if (run < total)
         switch_dcache_clean_lines(gOutput, (total - run) * 2 * width);
     switch_dcache_sync();
-    if (first + frames > gControl->out_written)
-        gControl->out_written = first + frames;
+    if (first + total > gControl->out_written)
+        gControl->out_written = first + total;
 }

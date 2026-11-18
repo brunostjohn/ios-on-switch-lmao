@@ -106,12 +106,12 @@ BRINGUP_CHECKS = [
     Check(
         'usb.host.silent',
         OWNER,
-        'SwitchPD: sink-only partner: sourcing VBUS',
+        ('SwitchPD: sink-only partner: sourcing VBUS', 'SwitchPD: OTG partner: '),
         process=KERNEL,
         followed='usb.host.answer',
         within=10.0,
         failure='VBUS went on for a sink-only partner and neither a host role nor host mode off followed within 10 s',
-        source=f'{USB}/SwitchPD.cpp, {ROLE}',
+        source=f'{USB}/SwitchPD.cpp, {USB}/SwitchPDPolicy.h, {ROLE}',
     ),
     Check(
         'usb.host.roles',

@@ -33,15 +33,9 @@ static inline uint8_t switch_dp_rate_cap(uint8_t sink_max_rate)
     if (sink_max_rate >= SWITCH_DP_RATE_HBR2) {
         return SWITCH_DP_RATE_HBR2;
     }
-    return sink_max_rate >= SWITCH_DP_RATE_HBR ? SWITCH_DP_RATE_HBR : SWITCH_DP_RATE_RBR;
-}
-
-static inline uint8_t switch_dp_rate_below(uint8_t rate)
-{
-    if (rate > SWITCH_DP_RATE_HBR) {
+    if (sink_max_rate >= SWITCH_DP_RATE_HBR)
         return SWITCH_DP_RATE_HBR;
-    }
-    return rate > SWITCH_DP_RATE_RBR ? SWITCH_DP_RATE_RBR : 0;
+    return sink_max_rate >= SWITCH_DP_RATE_RBR ? SWITCH_DP_RATE_RBR : 0;
 }
 
 struct switch_dp_link {
@@ -49,128 +43,87 @@ struct switch_dp_link {
     uint8_t lanes;
 };
 
-// The slowest link that carries `pixel_khz` at 24 bpp: the lowest rate up to `max_rate`, then the fewest of 1, 2 or 4
-// lanes up to `max_lanes`. False when none does.
-static inline bool switch_dp_link_for(uint32_t pixel_khz, uint8_t max_rate, uint8_t max_lanes,
-                                      struct switch_dp_link *link)
-{
-    static const uint8_t rates[] = {SWITCH_DP_RATE_RBR, SWITCH_DP_RATE_HBR, SWITCH_DP_RATE_HBR2};
-    static const uint8_t lane_counts[] = {1, 2, 4};
-    const uint64_t need = (uint64_t)pixel_khz * 24u;
-    for (unsigned r = 0; r < 3; ++r) {
-        for (unsigned l = 0; l < 3 && rates[r] <= max_rate; ++l) {
-            if (lane_counts[l] <= max_lanes && need < switch_dp_payload_kbps(rates[r], lane_counts[l])) {
-                link->rate = rates[r];
-                link->lanes = lane_counts[l];
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 struct switch_dp_tu {
     uint32_t tu_size, active_count, active_frac, active_polarity, watermark;
     uint32_t hblank_symbols, vblank_symbols;
 };
 
-struct switch_dp_tu_params {
-    uint32_t num_clocks;
-    uint64_t ratio, precision;
-    uint32_t active_polarity, active_count, active_frac, tu_size;
-    uint64_t error;
-};
-
-static inline bool switch_dp_tu_try(struct switch_dp_tu_params *params, uint32_t tu_size)
-{
-    const uint64_t f = params->precision;
-    const uint64_t active_sym = params->ratio * tu_size;
-    const uint64_t active_count = active_sym / f * f;
-    uint64_t frac = active_sym - active_count;
-    uint32_t active_polarity = 0, active_frac = 0;
-    if (frac >= f / 2) {
-        active_polarity = 1;
-        frac = f - frac;
-    }
-    if (frac != 0) {
-        frac = f * f / frac;
-        if (frac <= 15 * f) {
-            active_frac = (uint32_t)(frac / f);
-            if (active_polarity != 0) {
-                ++active_frac;
-            }
-        } else {
-            active_frac = active_polarity != 0 ? 1 : 15;
-        }
-    }
-    if (active_frac == 1) {
-        active_polarity = 0;
-    }
-    uint64_t approx = active_count;
-    if (active_polarity == 1) {
-        approx = active_frac != 0 ? (active_count + (active_frac * (f - 1)) * f) / (active_frac * f) : active_count + f;
-    } else if (active_frac != 0) {
-        approx = active_count + f / active_frac;
-    }
-    const int64_t error = ((int64_t)active_sym - (int64_t)approx) / (int64_t)tu_size * (int64_t)params->num_clocks;
-    const uint64_t magnitude = (uint64_t)(error < 0 ? -error : error);
-    if (error <= 0 && magnitude < params->error) {
-        params->active_count = (uint32_t)(active_count / f);
-        params->active_polarity = active_polarity;
-        params->active_frac = active_frac;
-        params->error = magnitude;
-        params->tu_size = tu_size;
-        return error == 0;
-    }
-    return false;
-}
-
-// SOR1's DP_LINKCTL/DP_CONFIG/blanking symbols for a mode over a link. False when the link cannot carry the mode.
 static inline bool switch_dp_tu_config(uint32_t pixel_khz, uint32_t hactive, uint32_t htotal, uint8_t rate,
                                        uint8_t lanes, bool enhanced_framing, struct switch_dp_tu *tu)
 {
-    const uint64_t f = 100000, link_rate = (uint64_t)switch_dp_rate_khz(rate) * 1000u;
-    const uint64_t pclk = (uint64_t)pixel_khz * 1000u, bpp = 24;
-    if (link_rate == 0 || lanes == 0 || pclk == 0 || htotal <= hactive) {
+    const uint64_t symbol_khz = switch_dp_rate_khz(rate);
+    const uint64_t input = (uint64_t)pixel_khz * 3, output = symbol_khz * lanes;
+    if (!input || input >= output || !hactive || htotal <= hactive ||
+        (lanes != 1 && lanes != 2 && lanes != 4))
         return false;
-    }
-    const uint64_t input = pclk * bpp, output = link_rate * 8u * lanes;
-    if (input >= output) {
-        return false;
-    }
-    struct switch_dp_tu_params params = {
-        (uint32_t)(link_rate * hactive / pclk), input * f / output, f, 0, 0, 0, 64, 64 * f};
+
+    // TRM 27.8.41: the fractional symbol is sent once per F units (polarity 0), or on all but one (1).
+    uint64_t best_excess = 0, best_period = 0;
     for (uint32_t size = 64; size >= 32; --size) {
-        if (switch_dp_tu_try(&params, size)) {
+        const uint64_t target = input * size, rem = target % output;
+        uint32_t count = (uint32_t)(target / output), frac = 1, polarity = 0;
+        if (!rem) {
+            --count;
+        } else if (rem * 2 <= output) {
+            const uint64_t denominator = output / rem;
+            frac = (uint32_t)(denominator > 15 ? 15 : denominator);
+        } else {
+            const uint64_t complement = output - rem;
+            const uint64_t denominator = (output + complement - 1) / complement;
+            if (denominator <= 15) {
+                frac = (uint32_t)denominator;
+                polarity = 1;
+            }
+        }
+        const uint64_t emitted = (uint64_t)count * frac + (polarity ? frac - 1 : 1);
+        const uint64_t excess = emitted * output - target * frac, period = (uint64_t)size * frac;
+        if (best_period && excess * best_period >= best_excess * period)
+            continue;
+        best_excess = excess;
+        best_period = period;
+        tu->tu_size = size;
+        tu->active_count = count;
+        tu->active_frac = frac;
+        tu->active_polarity = polarity;
+        if (!excess)
             break;
+    }
+    const uint64_t precision = 100000, ratio = input * precision / output;
+    const uint64_t clocks = symbol_khz * hactive / pixel_khz;
+    const uint64_t error = (best_excess * precision / (output * best_period)) * clocks;
+    tu->watermark = (uint32_t)((ratio * tu->tu_size * (precision - ratio) / precision + error) / precision) + 5;
+    if (tu->watermark > 30 || tu->watermark > (uint64_t)hactive * 3 / lanes)
+        return false;
+    const int64_t hblank = ((int64_t)htotal - hactive - 7) * (int64_t)symbol_khz / pixel_khz -
+                           (enhanced_framing ? 3 : 0) - 12 / lanes;
+    const int64_t vblank = ((int64_t)hactive - 25) * (int64_t)symbol_khz / pixel_khz - (36 / lanes + 4);
+    tu->hblank_symbols = hblank > 0 ? (uint32_t)hblank : 0;
+    tu->vblank_symbols = vblank > 0 ? (uint32_t)vblank : 0;
+    return true;
+}
+
+static inline bool switch_dp_next_link(uint32_t pixel_khz, uint32_t hactive, uint32_t htotal, uint8_t max_rate,
+                                       uint8_t max_lanes, bool enhanced, bool downspread, unsigned *cursor,
+                                       struct switch_dp_link *link, struct switch_dp_tu *tu)
+{
+    static const struct switch_dp_link choices[] = {
+        {SWITCH_DP_RATE_RBR, 1}, {SWITCH_DP_RATE_RBR, 2}, {SWITCH_DP_RATE_HBR, 1},
+        {SWITCH_DP_RATE_HBR, 2}, {SWITCH_DP_RATE_RBR, 4}, {SWITCH_DP_RATE_HBR, 4},
+        {SWITCH_DP_RATE_HBR2, 1}, {SWITCH_DP_RATE_HBR2, 2}, {SWITCH_DP_RATE_HBR2, 4}
+    };
+    while (*cursor < sizeof(choices) / sizeof(choices[0])) {
+        const struct switch_dp_link candidate = choices[(*cursor)++];
+        if (candidate.rate > max_rate || candidate.lanes > max_lanes)
+            continue;
+        const uint64_t capacity = switch_dp_payload_kbps(candidate.rate, candidate.lanes);
+        if ((uint64_t)pixel_khz * 24 >= (downspread ? capacity * 995 / 1000 : capacity))
+            continue;
+        if (switch_dp_tu_config(pixel_khz, hactive, htotal, candidate.rate, candidate.lanes, enhanced, tu)) {
+            *link = candidate;
+            return true;
         }
     }
-    if (params.active_frac == 0) {
-        tu->active_polarity = 0;
-        tu->active_count = params.active_polarity == 0 ? params.active_count - 1 : params.active_count;
-        tu->active_frac = 1;
-    } else {
-        tu->active_polarity = params.active_polarity;
-        tu->active_count = params.active_count;
-        tu->active_frac = params.active_frac;
-    }
-    tu->tu_size = params.tu_size;
-    uint64_t watermark = params.ratio * tu->tu_size * (f - params.ratio) / f;
-    watermark = (watermark + params.error) / f;
-    tu->watermark = (uint32_t)watermark + (uint32_t)(bpp / 8) + 2;
-    const uint64_t syms_per_line = hactive * bpp * (lanes * 8u);
-    if (tu->watermark > 30) {
-        tu->watermark = 30;
-    } else if (tu->watermark > syms_per_line) {
-        tu->watermark = (uint32_t)syms_per_line;
-    }
-    uint64_t hblank = (htotal - hactive - 7) * link_rate / pclk;
-    hblank -= enhanced_framing ? 3 : 0;
-    hblank -= 12u / lanes;
-    tu->hblank_symbols = (uint32_t)hblank;
-    const uint64_t vblank = (hactive - 25) * link_rate / pclk;
-    tu->vblank_symbols = (uint32_t)(vblank - (36u / lanes + 4));
-    return true;
+    return false;
 }
 
 struct switch_dp_plld2 {

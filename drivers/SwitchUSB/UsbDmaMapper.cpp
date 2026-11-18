@@ -48,12 +48,6 @@ void maintain(IOMemoryDescriptor *memory, uint64_t offset, uint64_t length, UsbD
     }
 }
 
-// The data cache's line size: CTR_EL0.DminLine, log2 of the words in the smallest line.
-uint64_t lineBytes()
-{
-    return 4ULL << ((__builtin_arm_rsr64("CTR_EL0") >> 16) & 0xfu);
-}
-
 bool deviceMayWrite(IOMemoryDescriptor *memory)
 {
     return (memory->getFlags() & kIOMemoryPreparedReadOnly) == 0u;
@@ -61,7 +55,8 @@ bool deviceMayWrite(IOMemoryDescriptor *memory)
 
 UsbDmaPlan planFor(IOMemoryDescriptor *memory, uint64_t physical, uint64_t length)
 {
-    return usbDmaPlan(cacheable(memory), deviceMayWrite(memory), usbDmaWholeLines(physical, length, lineBytes()));
+    return usbDmaPlan(cacheable(memory), deviceMayWrite(memory),
+                      usbDmaWholeLines(physical, length, SWITCH_DCACHE_LINE));
 }
 }  // namespace
 
@@ -78,6 +73,7 @@ class SwitchDMAMapper : public IOMapper {
     bool reportedFull = false;
 
     int allocatePages(uint32_t count, uint64_t alignment);
+    void releasePages(uint32_t first, uint32_t pages);
     uint64_t directAddress(uint64_t physical, uint64_t length) const;
     IOReturn bounce(IOMemoryDescriptor *memory, uint64_t offset, uint64_t length, bool writable, uint64_t alignment,
                     uint64_t *mapAddress, uint64_t *mapLength);
@@ -170,8 +166,9 @@ IOReturn SwitchDMAMapper::callPlatformFunction(const OSSymbol *functionName, boo
 
 int SwitchDMAMapper::allocatePages(uint32_t count, uint64_t alignment)
 {
-    const uint32_t step = alignment > kPage ? static_cast<uint32_t>(alignment / kPage) : 1;
-    for (uint32_t first = 0; first + count <= kPoolPages; first += step) {
+    const uint64_t firstAligned = (-poolPA & (alignment - 1)) / kPage;
+    const uint64_t step = alignment > kPage ? alignment / kPage : 1;
+    for (uint64_t first = firstAligned; first + count <= kPoolPages; first += step) {
         uint32_t n = 0;
         while (n < count && !usedPages[first + n])
             ++n;
@@ -182,6 +179,12 @@ int SwitchDMAMapper::allocatePages(uint32_t count, uint64_t alignment)
         }
     }
     return -1;
+}
+
+void SwitchDMAMapper::releasePages(uint32_t first, uint32_t pages)
+{
+    bzero(usedPages + first, pages);
+    reportedFull = false;
 }
 
 Mapping *SwitchDMAMapper::slot()
@@ -211,7 +214,7 @@ uint64_t SwitchDMAMapper::directAddress(uint64_t physical, uint64_t length) cons
         return UINT64_MAX;
     if (gSmmu)
         return switch_usb_smmu_fixed(physical, length);
-    return physical + length <= reach ? physical : UINT64_MAX;
+    return physical < reach && length <= reach - physical ? physical : UINT64_MAX;
 }
 
 // A buffer at its own address takes no slot and no lock; one the window can take gets IOVAs; the rest is bounced.
@@ -251,6 +254,8 @@ IOReturn SwitchDMAMapper::iovmMapMemory(IOMemoryDescriptor *memory, uint64_t off
 IOReturn SwitchDMAMapper::bounce(IOMemoryDescriptor *memory, uint64_t offset, uint64_t length, bool writable,
                                  uint64_t alignment, uint64_t *mapAddress, uint64_t *mapLength)
 {
+    if (length > kPoolBytes)
+        return kIOReturnNoResources;
     const auto pages = static_cast<uint32_t>((length + kPage - 1) / kPage);
     IOLockLock(lock);
     Mapping *m = slot();
@@ -268,8 +273,14 @@ IOReturn SwitchDMAMapper::bounce(IOMemoryDescriptor *memory, uint64_t offset, ui
     IOLockUnlock(lock);
 
     uint8_t *bounce = poolVA + static_cast<uint64_t>(first) * kPage;
-    if (memory->readBytes(offset, bounce, length) != length)
-        bzero(bounce, length);
+    // IOMapper receives no actual byte count on unmap: the untouched suffix of a short or canceled IN must survive.
+    if (memory->readBytes(offset, bounce, length) != length) {
+        IOLockLock(lock);
+        m->used = false;
+        releasePages(static_cast<uint32_t>(first), pages);
+        IOLockUnlock(lock);
+        return kIOReturnUnderrun;
+    }
     __asm__ volatile("dsb sy" ::: "memory");  // non-cacheable stores reach memory before the doorbell
     *mapAddress = address;
     *mapLength = length;
@@ -321,13 +332,16 @@ IOReturn SwitchDMAMapper::iovmUnmapMemory(IOMemoryDescriptor *memory, IODMAComma
     __asm__ volatile("dsb sy" ::: "memory");
     usb_dma_probe_unmap(memory, done.offset, done.length, done.address, 0, "bounced",
                         poolVA + static_cast<uint64_t>(done.firstPage) * kPage, 0);
-    if (done.writable)
-        memory->writeBytes(done.offset, poolVA + static_cast<uint64_t>(done.firstPage) * kPage, done.length);
+    const bool copied =
+        !done.writable || memory->writeBytes(done.offset, poolVA + static_cast<uint64_t>(done.firstPage) * kPage,
+                                             done.length) == done.length;
     IOLockLock(lock);
-    for (uint32_t i = 0; i < done.pages; ++i)
-        usedPages[done.firstPage + i] = 0;
-    reportedFull = false;
+    releasePages(done.firstPage, done.pages);
     IOLockUnlock(lock);
+    if (!copied) {
+        IOLog("SwitchUSB: incomplete DMA bounce copy back at %#llx (%llu bytes)\n", done.address, done.length);
+        return kIOReturnUnderrun;
+    }
     return kIOReturnSuccess;
 }
 

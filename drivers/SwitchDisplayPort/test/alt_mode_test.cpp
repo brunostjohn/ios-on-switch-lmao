@@ -179,7 +179,7 @@ struct Session {
     uint32_t timer_ms = 0;
     bool at_rest = true;
     bool dock_power = true;
-    bool dual_role_data = true;
+    bool ufp_discovery_allowed = true;
 
     explicit Session(bool want_dp = true)
     {
@@ -203,7 +203,7 @@ struct Session {
 
     void event(uint16_t alert)
     {
-        const switch_pd_alt_in in{alert, model.status1, model.dp_status, true, at_rest, dock_power, dual_role_data};
+        const switch_pd_alt_in in{alert, model.status1, model.dp_status, true, at_rest, dock_power, ufp_discovery_allowed};
         const switch_pd_alt_step before = alt.step;
         const switch_pd_alt_out out = switch_pd_alt_event(&alt, &in);
         if (out.act == SWITCH_PD_ALT_NONE && out.line == nullptr && alt.step == before) {
@@ -231,18 +231,18 @@ struct Session {
     }
 };
 
-TEST(AltMode, DockGetsPinDTwoLanesAndItsHub)
+TEST(AltMode, DockGetsPinCFourLanesAndItsHub)
 {
     Session run;
     run.model.partner.hub_busy = 2;
     run.settle();
     EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
     EXPECT_TRUE(run.alt.dock);
-    EXPECT_EQ(run.alt.pin, SWITCH_PD_ALT_PIN_D);
-    EXPECT_EQ(run.alt.dp_lanes, 2);
-    EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_FREE);
+    EXPECT_EQ(run.alt.pin, SWITCH_PD_ALT_PIN_C);
+    EXPECT_EQ(run.alt.dp_lanes, 4);
+    EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_TAKEN);
     EXPECT_TRUE(run.alt.hub_enabled);
-    EXPECT_EQ(run.model.configured, (std::vector<uint8_t>{0x06, 0x00, 0x08, 0x00}));
+    EXPECT_EQ(run.model.configured, (std::vector<uint8_t>{0x06, 0x00, 0x04, 0x00}));
     EXPECT_EQ(run.model.commands.front(), SWITCH_PD_ALT_CMD_DR_SWAP);
     EXPECT_TRUE(run.lines.empty());
 }
@@ -254,7 +254,7 @@ TEST(AltMode, DockSequenceIsBm92txxs)
     const std::vector<std::vector<uint8_t>> expected = {
         {4, 0x01, 0x80, 0x00, 0xFF},
         {4, 0x04, 0x81, 0x7E, 0x05},
-        {4, 0x06, 0x00, 0x08, 0x00},
+        {4, 0x06, 0x00, 0x04, 0x00},
         {8, 0x00, 0x00, 0x7E, 0x05, 0, 1, 0x16, 0x00},
         {12, 0x00, 0x00, 0x7E, 0x05, 1, 1, 0x01, 0x00, 64, 0, 0, 128},
         {8, 0x00, 0x00, 0x7E, 0x05, 1, 1, 0x20, 0x00},
@@ -309,11 +309,11 @@ TEST(AltMode, ChargerWithoutIdentityFreesTheLanes)
     EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_FREE);
 }
 
-TEST(AltMode, SourceWithoutDualRoleDataIsLeftAlone)
+TEST(AltMode, UfpWithoutConfirmedPd3DiscoveryWaitsForPartner)
 {
     Session run;
     run.dock_power = false;
-    run.dual_role_data = false;
+    run.ufp_discovery_allowed = false;
     run.settle();
     EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
     EXPECT_TRUE(run.model.commands.empty());
@@ -372,7 +372,7 @@ TEST(AltMode, ContractAlertPausesAndResendsTheStep)
     EXPECT_EQ(run.model.commands.size(), 2u);
     EXPECT_EQ(run.model.commands.back(), SWITCH_PD_ALT_CMD_DR_SWAP);
     run.settle();
-    EXPECT_EQ(run.alt.dp_lanes, 2);
+    EXPECT_EQ(run.alt.dp_lanes, 4);
 }
 
 TEST(AltMode, DetachEndsTheSessionAndFreesTheLanes)
@@ -425,7 +425,7 @@ TEST(AltMode, StaleDisplayPortIsExitedWithoutAReset)
     run.model.status1 = kInsert | kDfp;
     run.settle();
     EXPECT_EQ(run.model.commands.front(), SWITCH_PD_ALT_CMD_DP_EXIT);
-    EXPECT_EQ(run.alt.dp_lanes, 2);
+    EXPECT_EQ(run.alt.dp_lanes, 4);
 }
 
 TEST(AltMode, RefusedSwapFails)
@@ -444,7 +444,7 @@ TEST(AltMode, BusyHubGivesUpAfterTenRetries)
     run.settle();
     EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
     EXPECT_FALSE(run.alt.hub_enabled);
-    EXPECT_EQ(run.alt.dp_lanes, 2);
+    EXPECT_EQ(run.alt.dp_lanes, 4);
 }
 
 // A dual-role source other than the dock's power signature (the session begins UFP, so the swap decision is ours).
@@ -649,7 +649,7 @@ TEST(SourceIdentity, OurSwapIsNotSentOnceThePartnersMadeUsDfp)
 TEST(SourceIdentity, DockPowerSignatureSwapsBeforeAnyMessage)
 {
     Session run;
-    run.dual_role_data = false;
+    run.ufp_discovery_allowed = false;
     run.settle();
     EXPECT_EQ(run.model.commands.front(), SWITCH_PD_ALT_CMD_DR_SWAP);
     EXPECT_TRUE(run.alt.hub_enabled);
@@ -675,7 +675,7 @@ TEST(SourceIdentity, IdentityDecoding)
     EXPECT_EQ(switch_pd_alt_identify(nak, sizeof(nak)), SWITCH_PD_ALT_ID_NOT_ACKED);
 }
 
-TEST(PinChoice, DIsPreferredWheneverOffered)
+TEST(PinChoice, MultifunctionPartnerCanRetainSuperSpeed)
 {
     const uint8_t both_receptacle[] = {4, 0x45, 0x00, 0x1C, 0x00};
     EXPECT_EQ(switch_pd_alt_choose_pins(both_receptacle, 5, false).pin, SWITCH_PD_ALT_PIN_D);
@@ -693,9 +693,44 @@ TEST(PinChoice, DockIsReadAsAReceptacle)
 {
     const uint8_t dock[] = {4, 0x05, 0x00, 0x0C, 0x00};
     const switch_pd_alt_config config = switch_pd_alt_choose_pins(dock, 5, true);
-    EXPECT_EQ(config.pin, SWITCH_PD_ALT_PIN_D);
+    EXPECT_EQ(config.pin, SWITCH_PD_ALT_PIN_C);
     EXPECT_EQ(config.vdo[1], 0);
-    EXPECT_EQ(config.vdo[2], SWITCH_PD_ALT_PIN_D);
+    EXPECT_EQ(config.vdo[2], SWITCH_PD_ALT_PIN_C);
+}
+
+TEST(AltMode, DockRepliesUseOnlyDeclaredObjectsAndMatchTheirOrigin)
+{
+    const uint8_t shortHub[] = {4, 0x40, 0, 0x7E, 5, 0, 2, 0x21, 0};
+    const uint8_t wrongVendor[] = {8, 0x40, 0, 0x01, 0xFF, 0, 2, 0x21, 0};
+    const uint8_t request[] = {8, 0, 0, 0x7E, 5, 0, 2, 0x21, 0};
+    const uint8_t wrongCommand[] = {8, 0x40, 0, 0x7E, 5, 0, 2, 0x1D, 0};
+    for (auto *bytes : {shortHub, wrongVendor, request, wrongCommand}) {
+        Session run;
+        run.alt.step = SWITCH_PD_ALT_HUB_ENABLE;
+        switch_pd_alt_reply(&run.alt, bytes, sizeof(shortHub));
+        EXPECT_FALSE(run.alt.hub_enabled);
+        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+    }
+}
+
+TEST(AltMode, DockResumeRestoresTheSignalAfterItsDisableAcknowledgement)
+{
+    Session run;
+    run.settle();
+    ASSERT_TRUE(run.alt.dock);
+    EXPECT_EQ(switch_pd_alt_display_lanes(&run.alt, true), 0u);
+    run.perform(switch_pd_alt_go(&run.alt, SWITCH_PD_ALT_DOCK_DP_SLEEP));
+    EXPECT_EQ(switch_pd_alt_display_lanes(&run.alt, false), 0u);
+    EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_TAKEN);
+    EXPECT_TRUE(run.alt.hub_enabled);
+    run.settle();
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+    EXPECT_EQ(switch_pd_alt_display_lanes(&run.alt, false), 4u);
+    EXPECT_TRUE(run.alt.hub_enabled);
+    ASSERT_GE(run.model.messages.size(), 2u);
+    const auto count = run.model.messages.size();
+    EXPECT_EQ(run.model.messages[count - 2], (std::vector<uint8_t>{8, 0, 0, 0x7E, 5, 1, 1, 0x1C, 0}));
+    EXPECT_EQ(run.model.messages[count - 1], (std::vector<uint8_t>{8, 0, 0, 0x7E, 5, 0, 1, 0x1C, 0}));
 }
 
 TEST(PinChoice, AWrongCountIsRefused)

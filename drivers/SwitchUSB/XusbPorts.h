@@ -248,7 +248,7 @@ static inline uint32_t xusb_hold_usbcmd(struct xusb_hold *hold, uint32_t value)
         hold->lost = false;
     }
     if (value & XHCI_USBCMD_CRS) {
-        hold->sre = !hold->held || hold->lost;
+        hold->sre |= !hold->held || hold->lost;
         hold->held = false;
     }
     return value & ~(XHCI_USBCMD_CSS | XHCI_USBCMD_CRS);
@@ -270,10 +270,9 @@ static inline void xusb_hold_lost(struct xusb_hold *hold)
     hold->lost = true;
 }
 
-// Whether a write of interrupter 0's ERSTBA (either half) is the restore putting back what the controller still holds.
-static inline bool xusb_hold_keeps(const struct xusb_hold *hold, uint64_t value, uint64_t current)
+static inline bool xusb_hold_retained(const struct xusb_hold *hold)
 {
-    return hold->held && !hold->lost && value == current;
+    return hold->held && !hold->lost;
 }
 
 #endif

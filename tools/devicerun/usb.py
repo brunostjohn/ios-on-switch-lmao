@@ -133,7 +133,7 @@ LAYERS = [
         'transfer-data',
         'control transfer data (the descriptors read back)',
         ('usb.enum.stale-data',),
-        ('usb.enum.stale-data', 'usb.dma.unmap-unmatched'),
+        ('usb.enum.stale-data', 'usb.dma.unmap-unmatched', 'usb.dma.copyback-incomplete'),
     ),
     Layer(
         'enumeration',

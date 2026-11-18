@@ -26,31 +26,30 @@ Edid sink()
 TEST(HdaSink, RequiresStereo48kLpcmOrBasicAudio)
 {
     auto edid = sink();
-    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 2), 5u);
+    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 5u);
     edid[134] = 2;
-    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 2), 0u);
+    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 0u);
     edid[131] = 0x40;
-    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 2), 1u);
+    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 1u);
     edid[131] = 0;
     edid[134] = 4;
     edid[133] = 0x08;
-    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 2), 0u);
+    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 0u);
     edid[133] = 0x11;
-    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 2), 0u);
+    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 0u);
 }
 
 TEST(HdaSink, RespectsProvidedExtensionAndDataBlockBounds)
 {
     auto edid = sink();
     EXPECT_EQ(switch_hda_sink_formats(edid.data(), 1), 0u);
-    EXPECT_EQ(switch_hda_sink_formats(nullptr, 2), 0u);
+    EXPECT_EQ(switch_hda_sink_formats(nullptr, 3), 0u);
     edid[130] = 7;
-    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 2), 0u);
+    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 0u);
     edid[130] = 255;
-    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 2), 0u);
+    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 0u);
     edid[130] = 8;
-    edid[126] = 0;
-    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 2), 0u);
+    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 5), 0u);
 }
 
 TEST(HdaEld, CarriesMonitorIdentityAndActualSadsOnDisplayPort)
@@ -65,7 +64,7 @@ TEST(HdaEld, CarriesMonitorIdentityAndActualSadsOnDisplayPort)
     std::array<uint8_t, 130> buffer;
     buffer.fill(0xa5);
     uint8_t *eld = buffer.data() + 1;
-    EXPECT_EQ(switch_hda_eld(edid.data(), 2, eld), 32u);
+    EXPECT_EQ(switch_hda_eld(edid.data(), 3, eld), 32u);
     EXPECT_EQ(buffer.front(), 0xa5);
     EXPECT_EQ(buffer.back(), 0xa5);
     EXPECT_EQ(eld[0], 16);
@@ -85,7 +84,7 @@ TEST(HdaEld, BasicAudioHasItsMandatory16BitLpcmDescriptor)
     edid[130] = 0;
     edid[131] = 0x40;
     uint8_t eld[128];
-    EXPECT_EQ(switch_hda_eld(edid.data(), 2, eld), 24u);
+    EXPECT_EQ(switch_hda_eld(edid.data(), 3, eld), 24u);
     EXPECT_EQ(eld[5], 0x14);
     EXPECT_EQ(eld[20], 9);
     EXPECT_EQ(eld[21], 7);
@@ -110,7 +109,7 @@ TEST(HdaEld, LimitsDescriptorsAcrossExtensions)
         }
     }
     uint8_t eld[128];
-    EXPECT_EQ(switch_hda_eld(edid.data(), 3, eld), 68u);
+    EXPECT_EQ(switch_hda_eld(edid.data(), 7, eld), 68u);
     EXPECT_EQ(eld[5], 0xf4);
     EXPECT_EQ(eld[64], 5);
     EXPECT_EQ(eld[65], 0);
@@ -124,12 +123,24 @@ TEST(HdaProtocol, Encodes48kStereoAnd16BitVerbPayloads)
     EXPECT_EQ(switch_hda_verb(0, 7, 0xf00, 9), 0x007f0009u);
 }
 
-TEST(HdaMix, Saturates16BitFloatSamplesIncludingTailAndNonFiniteValues)
+TEST(HdaProtocol, RequiresMatchingSinkAndCodecPcmWidth)
+{
+    EXPECT_EQ(switch_hda_sample_bits(SWITCH_HDA_S16, 1u << 16), 0u);
+    EXPECT_EQ(switch_hda_sample_bits(SWITCH_HDA_S16, 1u << 17), 16u);
+    EXPECT_EQ(switch_hda_sample_bits(SWITCH_HDA_S16 | SWITCH_HDA_S24, 1u << 19), 24u);
+    EXPECT_EQ(switch_hda_sample_bits(SWITCH_HDA_S24, 1u << 17), 0u);
+}
+
+TEST(HdaMix, FinalStereoMixOverwritesExistingSamplesInBothFormats)
 {
     int16_t ring[] = {100, -100, 0, 0, 0, 10, -10, 32760, -32760};
     const float samples[] = {0.5f, -0.5f, INFINITY, -INFINITY, NAN, 0, 0, 0.5f, -0.5f};
-    switch_audio_mix_s16(ring, samples, 9);
-    const int16_t expected[] = {16484, -16484, 32767, -32768, 0, 10, -10, 32767, -32768};
+    switch_audio_write_s16(ring, samples, 9);
+    const int16_t expected[] = {16384, -16384, 32767, -32768, 0, 0, 0, 16384, -16384};
     EXPECT_EQ(std::memcmp(ring, expected, sizeof(ring)), 0);
+    int32_t wide[9] = {10, 20, 30, 40, 50, 60, 70, 80, 90};
+    switch_audio_write_s32(wide, samples, 9);
+    const int32_t converted[] = {1 << 30, -(1 << 30), INT32_MAX, INT32_MIN, 0, 0, 0, 1 << 30, -(1 << 30)};
+    EXPECT_EQ(std::memcmp(wide, converted, sizeof(wide)), 0);
 }
 }  // namespace

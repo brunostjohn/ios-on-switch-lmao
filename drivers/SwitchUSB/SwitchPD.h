@@ -21,25 +21,11 @@
 // re-balancing, a source reset) withdraws the published one and starts over; three failed requests in one session end
 // the attempts until the cable is pulled. Every step is a reply to an ALERT or a one-shot timer.
 //
-// Power role: sink first (Try.SNK). The Switch takes power from anything that can give it and sources VBUS only to a
-// partner proven to be sink-only (an OTG adapter, a USB-C flash drive or keyboard, an unpowered hub). Linux cannot
-// tell a dual-role partner (a Mac's USB-C port) from such a sink: SRC_MODE + OTG_INSERT is its whole test, with the
-// source switches (CONFIG1 SPDSRC) on all the time, and a dual-role partner that comes up as the sink gets our VBUS.
-// Here:
-//   - At start, always (host mode packaged or not): the source switches off, whatever an earlier boot left.
-//   - Empty port: with host mode packaged (switch_pd_allow_source), the fixed 5.3 V supply and VCONN are prepared
-//     before the source switches are armed, as bm92txx does at probe. BQ24193 boost stays off.
-//   - Anything attaches: the switches go off until it is classified. A partner supplying VBUS (a charger, a Mac, a
-//     dock) is a sink session: switches off until INSERT drops, so no later event (suspend, sleep, a swap request)
-//     can make us the source. A partner that came up as our sink is offered the source role: switches off for
-//     kClassifyMS. A dual-role partner then sources (sink session); a sink-only one just goes away (an observed
-//     detach). The fixed supplies stay available through classification; once sink-only is proven, the BQ24193
-//     boost starts before the source switches are rearmed. It is refused if the charger sees VBUS that is not ours.
-//     v_vdd5v3 is the OLED's VBUS power (SwitchPDPolicy.h). No observed detach (the switches did not move the port's
-//     role) is no proof: we do not source.
-//   - Sourcing ends (detach, power-role change, a source fault, host mode gone) through one path: connector switches
-//     off, boost off, then the next phase's fixed supplies and switches. Sink and Held keep fixed supplies off;
-//     Empty retains them until sleep, shutdown or host mode is disabled.
+// On OLED the fixed 5.3 V rail and VCONN can remain on with the connector source switches open while sinking.
+// An initial SRC_MODE/OTG_INSERT looks identical for a sink-only adapter and a dual-role Mac. Keep CC attached
+// while the controller resolves it: a source-plug alert permits protected OTG boost, a partner sourcing VBUS
+// opens our switches. Only an unresolved role goes through the switch-open and reattach windows. External VBUS
+// blocks boost unless our own enabled source switch accounts for it. Faults and host shutdown isolate the source.
 // One kernel log line per decision, with the controller's bits. The decisions are SwitchPDPolicy.h (host-tested).
 //
 // Interrupt only: a pin that cannot be attached panics; a pin that keeps firing (stuck low: more than 50 ALERTs in a

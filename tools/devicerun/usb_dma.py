@@ -51,6 +51,14 @@ USB_DMA = [
         source=MAPPER,
     ),
     Check(
+        'usb.dma.copyback-incomplete',
+        OWNER,
+        'SwitchUSB: incomplete DMA bounce copy back',
+        process=KERNEL,
+        failure='the host DMA bounce copy did not return the entire buffer',
+        source=MAPPER,
+    ),
+    Check(
         'usb.dma.host-window',
         OWNER,
         'SwitchUSB: host DMA through the SMMU',

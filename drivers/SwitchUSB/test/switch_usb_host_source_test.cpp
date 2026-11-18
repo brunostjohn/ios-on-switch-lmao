@@ -325,7 +325,8 @@ TEST(SwitchUsbHostSource, RegistersGoThroughTheHold)
     EXPECT_THAT(held, HasSubstr("xusb_hold_usbcmd(&hold, value) | XHCI_USBCMD_EU3S"));
     const std::string keeps = Body(xhci, "bool SwitchXHCI::keepsEventRing(");
     EXPECT_THAT(keeps, HasSubstr("runtimeOffset + XHCI_ERSTBA0"));
-    EXPECT_EQ(Count(keeps, "xusb_hold_keeps(&hold, value"), 2u);
+    EXPECT_LT(at(keeps, "!xusb_hold_retained(&hold)"), at(keeps, "AppleUSBXHCI::regRead64("));
+    EXPECT_LT(at(keeps, "!xusb_hold_retained(&hold)"), at(keeps, "AppleUSBXHCI::regRead32("));
     const std::string write32 = Body(xhci, "void SwitchXHCI::regWrite32(");
     EXPECT_LT(at(write32, "heldWrite32(address, value)"), at(write32, "AppleUSBXHCI::regWrite32("));
     EXPECT_LT(at(write32, "keepsEventRing(address, value, 4)"), at(write32, "AppleUSBXHCI::regWrite32("));
@@ -535,6 +536,20 @@ TEST(SwitchUsbHostSource, WindowMapIsTheTestedComposition)
     EXPECT_THAT(map, HasSubstr("usb_iova_map_pages(segments(memory, offset), length, pages, mapPage, &mapped)"));
     EXPECT_THAT(SourceText("../UsbSmmuSpace.h"),
                 HasSubstr("domain_.map(base + static_cast<uint64_t>(i) * UsbIovaWindow::kPage, &pa, 1, true)"));
+}
+
+TEST(SwitchUsbHostSource, BouncedMappingOwnsACompleteSnapshotBeforePublication)
+{
+    const std::string mapper = SourceText("../UsbDmaMapper.cpp");
+    const std::string bounce = Body(mapper, "IOReturn SwitchDMAMapper::bounce(");
+    EXPECT_LT(at(bounce, "length > kPoolBytes"), at(bounce, "allocatePages(pages, alignment)"));
+    EXPECT_LT(at(bounce, "if (memory->readBytes(offset, bounce, length) != length)"),
+              at(bounce, "releasePages(static_cast<uint32_t>(first), pages);"));
+    EXPECT_LT(at(bounce, "return kIOReturnUnderrun;"), at(bounce, "*mapAddress = address;"));
+    EXPECT_THAT(bounce, Not(HasSubstr("bzero(bounce")));
+    const std::string unmap = Body(mapper, "IOReturn SwitchDMAMapper::iovmUnmapMemory(");
+    EXPECT_LT(at(unmap, "memory->writeBytes(done.offset"), at(unmap, "releasePages(done.firstPage, done.pages)"));
+    EXPECT_LT(at(unmap, "releasePages(done.firstPage, done.pages)"), at(unmap, "return kIOReturnUnderrun;"));
 }
 
 // The mapper takes no reference on what it maps: IODMACommand holds the descriptor from prepare to complete, and Apple's

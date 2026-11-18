@@ -32,7 +32,7 @@ public:
         return loop;
     }
 
-    void setAltLanes(unsigned lanes, bool flipped);
+    void setAltLanes(unsigned lanes, bool flipped, bool dock, uint32_t attachment);
     IOReturn selectMode(int index, bool enable);
     void systemSleep(bool entering);
     bool gpuComplete(void *display, int status);
@@ -57,6 +57,8 @@ private:
         LinkSet,
         Coding,
         TrainingSet,
+        PostcursorSet,
+        TrainingStopped,
         TrainingStatus,
         Trained,
         LinkStatus,
@@ -74,7 +76,8 @@ private:
 
     Stage stage = Stage::Off;
     unsigned altLanes = 0;
-    bool flipped = false;
+    uint32_t activeAttachment = 0;
+    bool flipped = false, nintendoDock = false;
     bool dcbUp = false, sorUp = false, sleeping = false;
     int wantedMode = -1;
 
@@ -85,6 +88,7 @@ private:
 
     uint8_t caps[16] = {};
     uint8_t edid[512] = {};
+    uint32_t validEdidBlocks = 0;
     unsigned edidBlock = 0, edidBlocks = 0, edidStep = 0, edidSteps = 0, edidRead = 0;
     struct switch_dp_aux_request edidPlan[SWITCH_DP_EDID_REQUESTS] = {};
     struct switch_dp_mode_list modes = {};
@@ -93,6 +97,7 @@ private:
     struct switch_dp_link link = {};
     struct switch_dp_tu tu = {};
     uint8_t maxRate = 0, maxLanes = 0;
+    unsigned linkCursor = 0;
     struct switch_dp_train train = {};
     struct switch_dp_train_out trainOut = {};
     struct switch_dp_cec cec = {};
@@ -125,7 +130,7 @@ private:
     void dispatch();
     void edidNext();
     void edidDone();
-    void chooseAndTrain();
+    void chooseAndTrain(bool nextChoice = false);
     void applyTraining();
     void trained();
 };

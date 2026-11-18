@@ -3,8 +3,8 @@
 // (test/switch_usb_host_test.cpp) run this same header against the BM92T36 traces r7w recorded. SwitchPD.cpp owns the
 // controller, the GPIOs, the charger call and the one-shot windows; this file maps (phase, ALERT_STATUS, STATUS1,
 // STATUS2) to the next step and says, for every phase, which outputs are on:
-//   - source switches (CONFIG1 SPDSRC): on in Empty, Held, Reattach and Source when host mode is packaged, off in
-//     Sink and Classify;
+//   - source switches (CONFIG1 SPDSRC): on in Empty, WaitRole, Reattach and Source when host mode is packaged, off in
+//     Sink, Held and Classify;
 //   - fixed source supplies (v_vdd5v3 on PX3, VCONN on PK5): ready before Empty arms the switches, kept through
 //     Classify, Sink, Reattach and Source; off in Held;
 //   - BQ24193 boost: on in Reattach and Source only.
@@ -26,6 +26,7 @@
 #define SWITCH_PD_ALERT_SRC_FAULT    (1u << 1)
 #define SWITCH_PD_ALERT_PLUGPULL     (1u << 3)
 #define SWITCH_PD_ALERT_CONTRACT     (1u << 12)
+#define SWITCH_PD_ALERT_SRC_PLUGIN   (1u << 13)
 #define SWITCH_PD_STATUS1_FAULT_MASK (3u << 0)
 #define SWITCH_PD_STATUS1_SPDSRC2    (1u << 3)  // VBUS switch 2 on
 #define SWITCH_PD_STATUS1_INSERT     (1u << 7)
@@ -47,6 +48,7 @@ enum switch_pd_phase {
     SWITCH_PD_REATTACH,  // sink-only proven: boost on, switches armed, waiting for it to come back
     SWITCH_PD_SOURCE,    // our VBUS on a sink-only partner
     SWITCH_PD_HELD,      // source error: fixed supplies off, not again until unplugged
+    SWITCH_PD_WAIT_ROLE,  // transient Rd: keep CC attached for the controller to resolve OTG or partner VBUS
 };
 
 enum switch_pd_act {
@@ -73,6 +75,8 @@ static inline const char *switch_pd_phase_name(enum switch_pd_phase phase)
         return "sink";
     case SWITCH_PD_CLASSIFY:
         return "classify";
+    case SWITCH_PD_WAIT_ROLE:
+        return "waiting for power role";
     case SWITCH_PD_REATTACH:
         return "reattach";
     case SWITCH_PD_SOURCE:
@@ -85,13 +89,13 @@ static inline const char *switch_pd_phase_name(enum switch_pd_phase phase)
 
 static inline bool switch_pd_switches_on(enum switch_pd_phase phase, bool allow_source)
 {
-    return allow_source && phase != SWITCH_PD_SINK && phase != SWITCH_PD_CLASSIFY;
+    return allow_source && phase != SWITCH_PD_SINK && phase != SWITCH_PD_CLASSIFY && phase != SWITCH_PD_HELD;
 }
 
 static inline bool switch_pd_rails_on(enum switch_pd_phase phase)
 {
-    return phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_SINK ||
-           phase == SWITCH_PD_REATTACH || phase == SWITCH_PD_SOURCE;
+    return phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_WAIT_ROLE || phase == SWITCH_PD_CLASSIFY ||
+           phase == SWITCH_PD_SINK || phase == SWITCH_PD_REATTACH || phase == SWITCH_PD_SOURCE;
 }
 
 static inline bool switch_pd_boost_on(enum switch_pd_phase phase)
@@ -123,29 +127,38 @@ static inline struct switch_pd_step switch_pd_decide(enum switch_pd_phase phase,
     const bool partner_is_sink = plugged && ((status1 & SWITCH_PD_STATUS1_SRC_MODE) != 0u);
     const bool otg_sink = partner_is_sink && ((status2 & SWITCH_PD_STATUS2_OTG_INSERT) != 0u);
     const struct switch_pd_step none = switch_pd_step_make(SWITCH_PD_NONE, phase, false, 0);
-    if ((phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_CLASSIFY) &&
+    if ((phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_WAIT_ROLE || phase == SWITCH_PD_CLASSIFY) &&
         ((alert & SWITCH_PD_ALERT_SRC_FAULT) || (status1 & SWITCH_PD_STATUS1_FAULT_MASK)))
-        return switch_pd_step_make(SWITCH_PD_END, SWITCH_PD_HELD, phase == SWITCH_PD_CLASSIFY,
+        return switch_pd_step_make(SWITCH_PD_END, SWITCH_PD_HELD, phase != SWITCH_PD_EMPTY,
                                    "not sourcing: source fault");
     switch (phase) {
+    case SWITCH_PD_WAIT_ROLE:
+        if (!plugged)
+            return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_EMPTY, true, "detached before power role settled");
+        // fall through
     case SWITCH_PD_EMPTY:
         // Our sink without OTG_INSERT (yet, or an accessory): nothing to decide until the controller says more.
         if (!plugged || (partner_is_sink && !otg_sink))
             return none;
         if (!partner_is_sink) {
-            return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_SINK, false,
+            return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_SINK, phase == SWITCH_PD_WAIT_ROLE,
                                        "sink: the partner is a source (charger, host or dock)");
         }
         if (vbus && (!source_ready || !switch_pd_vbus_ours(status1))) {
-            return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_SINK, false,
+            return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_SINK, phase == SWITCH_PD_WAIT_ROLE,
                                        "sink: the partner came up as our sink with VBUS already up");
         }
         if (!source_ready) {
-            return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_SINK, false,
+            return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_SINK, phase == SWITCH_PD_WAIT_ROLE,
                                        "sink: the partner came up as our sink; host mode off");
         }
-        return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_CLASSIFY, false,
-                                   "classifying: the partner came up as our sink; source switches off 1 s");
+        if (alert & SWITCH_PD_ALERT_SRC_PLUGIN)
+            return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_SOURCE, phase == SWITCH_PD_WAIT_ROLE,
+                                       "OTG partner: the controller resolved the source role");
+        if (phase == SWITCH_PD_WAIT_ROLE)
+            return none;
+        return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_WAIT_ROLE, false,
+                                   "waiting for the controller to resolve the initial power role");
     case SWITCH_PD_CLASSIFY:
         // The switches moved the port: a sink-only partner stays away, a dual-role one sources.
         if (!plugged)
@@ -217,6 +230,15 @@ static inline bool switch_pd_usb_device_vbus(bool sourcing, uint16_t status1)
 static inline struct switch_pd_step switch_pd_window_end(enum switch_pd_phase phase, bool saw_detach, uint16_t status1)
 {
     const bool plugged = (status1 & SWITCH_PD_STATUS1_INSERT) != 0;
+    if (phase == SWITCH_PD_WAIT_ROLE) {
+        if (!plugged)
+            return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_EMPTY, false, "detached before power role settled");
+        if (!(status1 & SWITCH_PD_STATUS1_SRC_MODE) ||
+            ((status1 & SWITCH_PD_STATUS1_VSAFE) && !switch_pd_vbus_ours(status1)))
+            return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_SINK, false, "the partner supplies VBUS");
+        return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_CLASSIFY, false,
+                                   "classifying: the port stayed OTG without a source-plug event");
+    }
     if (phase == SWITCH_PD_CLASSIFY) {
         if (!saw_detach) {
             return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_SINK, false,

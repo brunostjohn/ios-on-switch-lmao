@@ -138,6 +138,8 @@ protected:
             sscBeforeLock = dpEnabled = false;
             TegraDpaux1 aux;
             ASSERT_TRUE(aux.powerUp(why, sizeof(why))) << why;
+            EXPECT_EQ(r[kPllDpCfg], 0x80000000u);
+            aux.setDownspread(true);
             const uint32_t profile = b01 ? 0x00282a01 : 0x00181c01;
             EXPECT_EQ(xusbWritesTo(kPllDp),
                       (std::vector<uint32_t>{initialBase & ~(1u << 30), profile | 1u << 18, profile,
@@ -173,6 +175,8 @@ protected:
             EXPECT_LT(spreadOff, configured);
             EXPECT_TRUE(hasDelay(5, configured, enabled));
             EXPECT_FALSE(sscBeforeLock);
+            aux.setDownspread(false);
+            EXPECT_EQ(r[kPllDpCfg], 0x80000000u);
             const uint32_t n = (r[kPllDp] >> 8) & 0xffu, m = r[kPllDp] & 0xffu;
             ASSERT_EQ(m, 1u);
             EXPECT_EQ((r[kPllDp] >> 19) & 0x1fu, b01 ? 5u : 3u);
@@ -249,6 +253,21 @@ TEST_F(SorRegisters, PowersLanesBeforeSelectingThePadClockAndTps1)
     ASSERT_GE(tps1, 0);
     EXPECT_LT(pad, tps1);
     EXPECT_EQ(xusbModel().registers[kClockOut] & kSorBit, kSorBit);
+}
+
+TEST_F(SorRegisters, DrivesTheFourRequestedPostcursorLevels)
+{
+    ASSERT_TRUE(start(4, SWITCH_DP_RATE_HBR2)) << why;
+    switch_dp_train train{};
+    (void)switch_dp_train_start(&train, 4, true, 0x12, 0);
+    const uint8_t status[11] = {0x11, 0x11, 0, 0, 0, 0, 0, 0, 0, 0, 0xe4};
+    const auto next = switch_dp_train_status(&train, status);
+    ASSERT_EQ(next.pattern, 3u);
+    sor.drive(train, next);
+    const auto &regs = xusbModel().registers;
+    EXPECT_EQ(regs.at(kSor + 0x4e * 4), 0x11121213u);
+    EXPECT_EQ(regs.at(kSor + 0x56 * 4), 0x05040200u);
+    EXPECT_EQ(regs.at(kTpg), 0x43434343u);
 }
 
 TEST_F(SorRegisters, ConfiguresTransferUnitsBeforeEnablingThePort)
