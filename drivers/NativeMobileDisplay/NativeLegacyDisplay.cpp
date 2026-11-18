@@ -1836,14 +1836,28 @@ private:
     }
 
     // Debug kernels: how far from Core Animation's requested presentation the frames this window were shown
-    // (SwitchFrameTickets.h lagged), in periods: 0 is on time, 1 a period late.
+    // (SwitchFrameTickets.h lagged), in periods: 0 is on time, 1 a period late; and what the timed-present gate did with
+    // them (SwitchTimedPresentDisplay.h): held for an early frame end or for a phase, shown or replaced while held, let
+    // go as ordinary frames (with the frame ends masked: unphased), shown early.
+    static constexpr unsigned kTimedCounts = 7;
+    static inline uint32_t timedSeen[kTimedCounts] = {};
+
     void noteRequestedWindow(uint64_t us, bool logged)
     {
 #if SWITCH_FRAME_TIMELINE
         const SwitchFrameTickets::Lag lag = frameInfo->tickets.takeLag();
+        const auto &pending = frameInfo->pending;
+        const uint32_t timed[kTimedCounts] = {pending.heldEarly,   pending.heldPhase,     pending.timedShown,
+                                              pending.timedUnsent, pending.timedOrdinary, pending.timedUnphased,
+                                              pending.shownEarly};
+        uint32_t window[kTimedCounts];
+        for (unsigned i = 0; i < kTimedCounts; ++i) {
+            window[i] = timed[i] - timedSeen[i];
+            timedSeen[i] = timed[i];
+        }
         if (!logged)
             return;
-        char line[192];
+        char line[320];
         size_t at = 0;
         for (unsigned i = 0; i < SwitchFrameTickets::kLagBins && at < sizeof(line); ++i) {
             const int periods = static_cast<int>(i) + SwitchFrameTickets::kLagEarliest;
@@ -1856,9 +1870,12 @@ private:
             at += static_cast<size_t>(
                 snprintf(line + at, sizeof(line) - at, "%s%s%d:%u", i ? " " : "", edge, periods, lag.bins[i]));
         }
-        os_log(OS_LOG_DEFAULT,
-               "SwitchDisplay requested: %llu ms: shown minus requested presentation, periods %s, unknown %u",
-               static_cast<unsigned long long>(us / 1000), line, lag.unknown);
+        snprintf(line + at, at < sizeof(line) ? sizeof(line) - at : 0,
+                 ", unknown %u; timed gate held early %u phase %u, shown %u, replaced while held %u, ordinary %u "
+                 "unphased %u, shown early %u",
+                 lag.unknown, window[0], window[1], window[2], window[3], window[4], window[5], window[6]);
+        os_log(OS_LOG_DEFAULT, "SwitchDisplay requested: %llu ms: shown minus requested presentation, periods %s",
+               static_cast<unsigned long long>(us / 1000), line);
 #else
         (void)us;
         (void)logged;

@@ -15,13 +15,14 @@ import UIKit
 /// this layer's route lose presentedTime. offsets_ms= is each timed drawable's presentedTime minus its target ("x":
 /// none); lead_min_ms its commit to target; hlag_* when its handler ran against its target. d_fi_* (debug kernels)
 /// count the display's swaps: held for their time and shown or replaced unsent, let go early by the ordinary-frame
-/// clause, and shown more than half a period before their requested presentation.
+/// clause, shown more than half a period before their requested presentation, and let go by that clause with the frame
+/// ends masked.
 struct PresentAtTimeTest: HWTest {
     let id = "display.present_at_time"
     let name = "presentDrawable:atTime: shows each drawable at its refresh, with its presentedTime"
     let subsystem = Subsystem.compositor
 
-    static let counters = ["shown", "unsent", "ordinary", "early"]
+    static let counters = ["shown", "unsent", "ordinary", "early", "unphased"]
 
     func run(_ context: TestContext) async throws -> Outcome {
         let kernelBefore = Self.frameInfoTotals()

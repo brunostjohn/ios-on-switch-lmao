@@ -54,6 +54,7 @@
 		<string>kern.switch_frame_info_unsent</string>
 		<string>kern.switch_frame_info_ordinary</string>
 		<string>kern.switch_frame_info_early</string>
+		<string>kern.switch_frame_info_unphased</string>
 		<string>kern.switch_joycon</string>
 		<string>kern.switch_soctherm</string>
 		<string>kern.switch_gpu_paths</string>
