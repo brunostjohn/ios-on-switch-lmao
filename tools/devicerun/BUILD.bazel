@@ -25,6 +25,7 @@ py_library(
         "stutter.py",
         "textures.py",
     ],
+    visibility = ["//tools/perf:__pkg__"],
     deps = [
         ":renamed",
         "//tools/frames:lib",

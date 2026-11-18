@@ -1,0 +1,40 @@
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_library.bzl", "py_library")
+load("@rules_python//python:py_test.bzl", "py_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+lint_files()
+
+py_library(
+    name = "lib",
+    srcs = [
+        "cpu.py",
+        "gpu.py",
+        "ips.py",
+        "pacing.py",
+        "perf.py",
+        "report.py",
+        "session.py",
+        "source.py",
+        "windows.py",
+        "work.py",
+    ],
+    deps = [
+        "//tools/devicerun:lib",
+        "//tools/frames:lib",
+    ],
+)
+
+# bazel run //tools/perf -- pull <absolute folder> | report <absolute .logarchive> --crashes <dir>: one session's report.
+py_binary(
+    name = "perf",
+    srcs = ["perf.py"],
+    deps = [":lib"],
+)
+
+py_test(
+    name = "perf_test",
+    size = "small",
+    srcs = ["perf_test.py"],
+    deps = [":lib"],
+)
