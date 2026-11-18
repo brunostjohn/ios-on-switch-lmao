@@ -13,7 +13,9 @@ import UIKit
 /// driving a fresh layer for two seconds (warm_off_ms, mlink_off_ms: median presentedTime minus target). A failure so
 /// says whether timed presents, future times, a layer Core Animation has not shown yet, the kind of display link or
 /// this layer's route lose presentedTime. offsets_ms= is each timed drawable's presentedTime minus its target ("x":
-/// none); lead_min_ms its commit to target; hlag_* when its handler ran against its target. d_fi_* (debug kernels)
+/// none); lead_min_ms its commit to target; hlag_* when its handler ran against its target, hc_p50_ms (and each
+/// control's <key>_hc_ms) against its commit: a presented handler within a few ms of its commit, with no
+/// presentedTime, is a drawable QuartzCore released at presentAtTime: without queueing it. d_fi_* (debug kernels)
 /// count the display's swaps: held for their time and shown or replaced unsent, let go early by the ordinary-frame
 /// clause, shown more than half a period before their requested presentation, and let go by that clause with the frame
 /// ends masked.
@@ -39,6 +41,9 @@ struct PresentAtTimeTest: HWTest {
         let summary = PresentTimeVerdict.Summary(frames)
         let offsets = frames.compactMap(\.offsetMs)
         let handlerLag = frames.filter { $0.handled > 0 }.map { ($0.handled - $0.target) * 1000 }
+        let handlerAfterCommit = { (frames: [PresentTimeVerdict.Frame]) in
+            Stats.percentile(frames.filter { $0.handled > 0 }.map { ($0.handled - $0.committed) * 1000 }, 0.5)
+        }
         var metrics = Metrics()
         metrics.set("submitted", summary.submitted)
         metrics.set("timed", summary.timed)
@@ -49,6 +54,7 @@ struct PresentAtTimeTest: HWTest {
         metrics.set("offset_p50_ms", Stats.percentile(offsets, 0.5), digits: 1)
         metrics.set("hlag_min_ms", handlerLag.min() ?? 0, digits: 1)
         metrics.set("hlag_p50_ms", Stats.percentile(handlerLag, 0.5), digits: 1)
+        metrics.set("hc_p50_ms", handlerAfterCommit(frames), digits: 1)
         metrics.set("drawable", timed.drawable)
         metrics.set("d_flips", timed.flips)
         for name in Self.counters {
@@ -63,6 +69,7 @@ struct PresentAtTimeTest: HWTest {
             metrics.set(key + "_flips", control.flips)
             let latency = control.frames.compactMap(\.latencyMs)
             metrics.set(key + "_lat_ms", Stats.percentile(latency, 0.5), digits: 1)
+            metrics.set(key + "_hc_ms", handlerAfterCommit(control.frames), digits: 1)
         }
         for (key, control) in [("warm", warm), ("mlink", metalLink)] {
             metrics.set(key + "_off_ms", Stats.percentile(control.frames.compactMap(\.offsetMs), 0.5), digits: 1)
@@ -122,11 +129,14 @@ struct PresentAtTimeTest: HWTest {
         return values
     }
 
-    /// mach_continuous_time() ahead of mach_absolute_time(): the time asleep since boot, in milliseconds.
+    /// mach_continuous_time() ahead of mach_absolute_time(): the time asleep since boot, in milliseconds. The absolute
+    /// clock is read first: read second, it is ahead of a continuous clock that never slept.
     static func asleepMs() -> Double {
         var base = mach_timebase_info_data_t()
         mach_timebase_info(&base)
-        let ticks = Double(mach_continuous_time() &- mach_absolute_time())
+        let absolute = mach_absolute_time()
+        let continuous = mach_continuous_time()
+        let ticks = Double(continuous > absolute ? continuous - absolute : 0)
         return ticks * Double(base.numer) / Double(base.denom) / 1_000_000
     }
 }
