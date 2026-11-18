@@ -433,6 +433,23 @@ TEST(SwitchPrefsGuard, NoSetupTurnsBackBoardsWatchdogsOff)
     }
 }
 
+// SetupVersion is the selected IPSW's (<switch/setup_state.h>, one header per build), in both kernels: a number written
+// into the setup's purplebuddy body would apply to every build.
+TEST(SwitchPrefsGuard, SetupVersionComesFromTheIpswTable)
+{
+    using switch_ios::test::Body;
+    using switch_ios::test::SourceText;
+    const std::string key = "<key>SetupVersion</key><integer>", table = "\" SWITCH_SETUP_VERSION \"";
+    for (const char *path : kKernels) {
+        const std::string setup =
+            Body(SourceText(path), "native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)");
+        const size_t at = setup.find(key);
+        ASSERT_NE(at, std::string::npos) << path;
+        EXPECT_EQ(setup.compare(at + key.size(), table.size(), table), 0) << path << ": " << setup.substr(at, 60);
+        EXPECT_EQ(setup.find(key, at + 1), std::string::npos) << path;
+    }
+}
+
 // timed's cache is kept only when it holds the boot session UUID of this clock's last boot, the same in both kernels
 // (drivers/SwitchPower/SwitchMonotonicBase.h): one an older kernel's boot saved would put the time decades ahead.
 TEST(SwitchPrefsGuard, TimedCacheKeptOnlyFromThisClock)

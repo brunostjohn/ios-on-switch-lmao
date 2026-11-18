@@ -8241,6 +8241,7 @@ native_owner_cache_checkpoint(int status, int authorized)
 #include <switch/prefs.h>
 #include <switch/icon_cache.h>
 #include <switch/boot_sync.h>
+#include <switch/setup_state.h>
 #endif
 
 static int
@@ -9634,7 +9635,8 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		enum native_switch_setup_scale scale;
 	} prefs[] = {
 		{"com.apple.purplebuddy", SWITCH_PLIST("<key>SetupDone</key><true/><key>SetupFinishedAllSteps</key><true/>"
-		    "<key>SetupVersion</key><integer>11</integer><key>daemonizeNeedsToRun</key><false/>"), kSetupUser},
+		    "<key>SetupVersion</key><integer>" SWITCH_SETUP_VERSION "</integer><key>daemonizeNeedsToRun</key><false/>"),
+		    kSetupUser},
 		{"com.apple.purplebuddy.notbackedup", SWITCH_PLIST("<key>ShouldRunDiagnosticsMiniBuddy</key><false/>"
 		    "<key>ShouldRunHSA2MiniBuddy</key><false/><key>ShouldRunKeychainSyncMiniBuddy</key><false/>"
 		    "<key>ShouldRunMesaMiniBuddy</key><false/><key>ShouldRunPaymentMiniBuddy</key><false/>"
