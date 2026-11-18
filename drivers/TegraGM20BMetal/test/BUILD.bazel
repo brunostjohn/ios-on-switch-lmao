@@ -5745,6 +5745,7 @@ host_test(
         "made_metallib.h",
         "facade_harness.h",
         "facade_variant_compiler.h",
+        "facade_pass_scene.h",
         "job_methods.h",
         "facade_fused_storage_test.cpp",
         "translate_absent.cpp",

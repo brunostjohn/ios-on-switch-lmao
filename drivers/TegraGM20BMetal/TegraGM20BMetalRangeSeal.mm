@@ -91,10 +91,12 @@ static bool storageLaidOut(SwitchMetalCommandBuffer *cb, gm20b::RenderEncoder &o
 }
 
 // A Depth16Unorm a draw of the pass after `open` tests in its shader is the converted zeta only where `open` began it so
-// (TegraGM20BMetalRangeForms.mm depth16Tested)
+// (TegraGM20BMetalRangeForms.mm depth16Tested); a zeta of any other format is the same however its pass began
 static bool testedLaidOut(SwitchMetalCommandBuffer *cb, size_t open, size_t next)
 {
-    return !cb->_passes[cb->_plan.legacy(next).x].shaderTestsDepth ||
+    const SwitchMetalPass &pass = cb->_passes[cb->_plan.legacy(next).x];
+    __unsafe_unretained SwitchMetalTexture *depth = (SwitchMetalTexture *)pass.zeta[0].texture;
+    return !pass.shaderTestsDepth || !depth || depth->_raw.format != MTLPixelFormatDepth16Unorm ||
            cb->_passes[cb->_plan.legacy(open).x].shaderTestsDepth;
 }
 
