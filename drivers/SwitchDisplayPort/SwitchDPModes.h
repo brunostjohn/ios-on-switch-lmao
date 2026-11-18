@@ -216,12 +216,17 @@ static inline void switch_dp_edid_cta(const uint8_t *block, struct switch_dp_mod
     }
 }
 
-static inline uint32_t switch_dp_edid_modes(const uint8_t *edid, unsigned blocks, struct switch_dp_mode_list *list)
+static inline bool switch_dp_edid_block_modes(const uint8_t *edid, bool base, struct switch_dp_mode_list *list)
 {
+    if (!base) {
+        if (!switch_dp_edid_block_valid(edid))
+            return false;
+        switch_dp_edid_cta(edid, list);
+        return true;
+    }
     list->count = 0;
-    if (blocks == 0 || !switch_dp_edid_header_valid(edid))
-        return 0;
-    uint32_t valid = 1;
+    if (!switch_dp_edid_header_valid(edid))
+        return false;
     for (unsigned at = 54; at + 18 <= 126; at += 18) {
         struct switch_dp_mode mode;
         if (switch_dp_edid_dtd(edid + at, &mode)) {
@@ -234,15 +239,7 @@ static inline uint32_t switch_dp_edid_modes(const uint8_t *edid, unsigned blocks
         (void)switch_dp_cta_vic(1, &vga);
         switch_dp_modes_add(list, &vga);
     }
-    const unsigned extensions = edid[126] < blocks - 1 ? edid[126] : blocks - 1;
-    for (unsigned b = 1; b <= extensions && b < 32; ++b) {
-        const uint8_t *block = edid + (size_t)128 * b;
-        if (switch_dp_edid_block_valid(block)) {
-            valid |= 1u << b;
-            switch_dp_edid_cta(block, list);
-        }
-    }
-    return valid;
+    return true;
 }
 
 static inline bool switch_dp_mode_allowed(const struct switch_dp_mode *m, uint64_t link_payload_kbps)

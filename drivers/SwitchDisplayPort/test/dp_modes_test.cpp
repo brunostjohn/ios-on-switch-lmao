@@ -80,12 +80,11 @@ Block cta(const std::vector<uint8_t> &vics, const std::vector<std::array<uint8_t
 
 switch_dp_mode_list parse(const std::vector<Block> &blocks)
 {
-    std::vector<uint8_t> edid;
-    for (const Block &b : blocks) {
-        edid.insert(edid.end(), b.begin(), b.end());
-    }
     switch_dp_mode_list list{};
-    switch_dp_edid_modes(edid.data(), static_cast<unsigned>(blocks.size()), &list);
+    if (!blocks.empty() && switch_dp_edid_block_modes(blocks[0].data(), true, &list)) {
+        for (size_t i = 1; i < blocks.size() && i <= blocks[0][126]; ++i)
+            switch_dp_edid_block_modes(blocks[i].data(), false, &list);
+    }
     return list;
 }
 

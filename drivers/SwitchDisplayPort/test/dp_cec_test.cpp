@@ -275,7 +275,8 @@ TEST(CecWake, PhysicalAddressComesOnlyFromAValidHdmiVendorBlock)
     const auto physical = [&] {
         switch_dp_mode_list modes{};
         const auto original = edid;
-        const uint32_t valid = switch_dp_edid_modes(edid.data(), 2, &modes);
+        EXPECT_TRUE(switch_dp_edid_block_modes(edid.data(), true, &modes));
+        const uint32_t valid = switch_dp_edid_block_modes(edid.data() + 128, false, &modes) ? 3u : 1u;
         EXPECT_EQ(edid, original);
         return switch_dp_cec_physical(edid.data(), valid);
     };

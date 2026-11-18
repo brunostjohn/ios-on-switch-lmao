@@ -30,6 +30,7 @@ void SwitchDisplayPort::dispatch()
     case Next::Powered:
         edidBlock = 0;
         edidBlocks = 1;
+        validEdidBlocks = 0;
         edidStep = 0;
         edidSteps = switch_dp_edid_requests(0, edidPlan);
         edidRead = 0;
@@ -104,8 +105,10 @@ void SwitchDisplayPort::edidNext()
         auxStart(edidPlan[edidStep], Next::Edid);
         return;
     }
-    if (edidBlock == 0) {
-        edidBlocks = switch_dp_edid_header_valid(edid) ? 1u + edid[126] : 1u;
+    if (switch_dp_edid_block_modes(edid + edidBlock * 128u, edidBlock == 0, &modes))
+        validEdidBlocks |= 1u << edidBlock;
+    if (edidBlock == 0 && validEdidBlocks) {
+        edidBlocks = 1u + edid[126];
         edidBlocks = edidBlocks > kMaxEdidBlocks ? kMaxEdidBlocks : edidBlocks;
     }
     if (++edidBlock < edidBlocks) {
@@ -120,7 +123,6 @@ void SwitchDisplayPort::edidNext()
 
 void SwitchDisplayPort::edidDone()
 {
-    validEdidBlocks = switch_dp_edid_modes(edid, edidBlocks, &modes);
     maxRate = switch_dp_rate_cap(caps[1]);
     const uint8_t sinkLanes = caps[2] & 0x1fu;
     maxLanes = sinkLanes < altLanes ? sinkLanes : (uint8_t)altLanes;
