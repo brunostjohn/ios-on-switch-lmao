@@ -177,7 +177,7 @@ void markCandidates(const std::string &line, gm20b::PackPipeline &p)
 // The depth and stencil test classes a state's draws ask its variant for (TegraGM20BMetalCubic.mm drawnRecord): a state that fetches
 // beside a depth or stencil attachment without the storage form, each class fragment_tests.h FragmentTests names above Any
 // (Pass, ReadOnly, DepthWrite, StencilWrite: 1-4) that its attachments' formats can reach (fragmentTests answers DepthWrite
-// only of a zeta with depth, StencilWrite only of one with stencil)
+// only of a zeta with depth, StencilWrite only of one with stencil, a Depth16Unorm's being testedZeta's)
 std::vector<uint8_t> testClasses(const gm20b::PackPipeline &p, const std::string &key)
 {
     unsigned depth = 0, stencil = 0;
@@ -188,7 +188,7 @@ std::vector<uint8_t> testClasses(const gm20b::PackPipeline &p, const std::string
     std::vector<uint8_t> classes = {1, 2};
     if (gm20b::zetaHasDepth(depth) || gm20b::zetaHasDepth(stencil))
         classes.push_back(3);
-    if (gm20b::zetaHasStencil(depth) || gm20b::zetaHasStencil(stencil))
+    if (gm20b::zetaHasStencil(gm20b::testedZeta(depth)) || gm20b::zetaHasStencil(stencil))
         classes.push_back(4);
     return classes;
 }

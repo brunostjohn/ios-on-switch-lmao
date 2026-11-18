@@ -135,7 +135,7 @@ static std::vector<uint8_t> testClasses(const gm20b::Pipeline &pl, uint32_t dept
 {
     using gm20b::FragmentTests;
     const bool hasDepth = gm20b::zetaHasDepth(depth) || gm20b::zetaHasDepth(stencil);
-    const bool hasStencil = gm20b::zetaHasStencil(depth) || gm20b::zetaHasStencil(stencil);
+    const bool hasStencil = gm20b::zetaHasStencil(gm20b::testedZeta(depth)) || gm20b::zetaHasStencil(stencil);
     if (pl.fetchBits && pl.depthFormat && !pl.storageBits) {
         std::vector<uint8_t> classes = {uint8_t(FragmentTests::Pass), uint8_t(FragmentTests::ReadOnly)};
         if (hasDepth)
@@ -254,7 +254,7 @@ static gm20b::Variant<gm20b::Pipeline> *preparedVariant(__unsafe_unretained Swit
     // where a state set in it tests depth or stencil (depth_stencil_state.h testsHiddenZeta)
     const uint32_t zeta = _zeta ? _zeta : _cb->_passes[_passAt].testsHiddenZeta ? gm20b::kZetaFormat : 0;
     _forms.fragmentTests = gm20b::drawnTests(base->fetchBits && base->depthFormat && !base->storageBits,
-                                             base->rec->shaderTests, _ds, zeta);
+                                             base->rec->shaderTests, _ds, gm20b::testedZeta(zeta));
     // a Depth16Unorm a draw tests in its shader renders converted (TegraGM20BMetalRangeForms.mm depth16Tested)
     if ((_forms.fragmentTests && gm20b::zetaHasDepth(zeta)) || (base->rec->shaderTests.flags & gm20b::kShaderTestDepth))
         _cb->_passes[_passAt].shaderTestsDepth = true;

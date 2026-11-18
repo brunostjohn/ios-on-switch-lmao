@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // A render state's variants (TegraGM20BMetalCubic.mm): each key asked once in the process and named once where none is made, a
 // packed state's test class the pack lacks asked as any other form, the test classes of a state this process made made
-// with it, and a pass switching among its states finding each variant again without the state's map
+// with it (a Depth16Unorm's those of its converted Depth32Float_Stencil8), and a pass switching among its states finding
+// each variant again without the state's map
 #include "facade_variant_compiler.h"
 #include "../TegraGM20BMetalStatesKey.h"
 #include "../fragment_tests.h"
@@ -403,6 +404,70 @@ void hiddenDepthTestClass()
     EXPECT_EQ(drawnPrograms(firstJob, 2), (std::vector<uint32_t>{expected}));
 }
 
+id<MTLDepthStencilState> stencilTest(id<MTLDevice> device, MTLCompareFunction compare)
+{
+    MTLDepthStencilDescriptor *ds = [MTLDepthStencilDescriptor new];
+    MTLStencilDescriptor *stencil = [MTLStencilDescriptor new];
+    stencil.stencilCompareFunction = compare;
+    ds.frontFaceStencil = ds.backFaceStencil = stencil;
+    return [device newDepthStencilStateWithDescriptor:ds];
+}
+
+// A fetching state made for a Depth16Unorm attachment, drawn under a depth test that writes and then under stencil tests
+// (HW Test gpu.gm20b.depth16_shader_tests): the pass renders through a Depth32Float_Stencil8 (depth16Tested), whose
+// stencil the draws test as Apple's tile does a stencil the pass has no attachment for, so each draw takes the class of
+// that format (ReadOnly under Equal 0 and NotEqual 0, not Pass: the class draw_prepare.cpp holds a variant's storage
+// form to), and every class a draw can take is made with the state, StencilWrite included
+void depth16StencilTestClasses()
+{
+    RenderCompiler compiler;
+    const std::string pack = writePack(packKey(MTLPixelFormatBGRA8Unorm));
+    id<MTLDevice> device = nil;
+    id<MTLLibrary> library = served(compiler, "variant-depth16-stencil", pack, device);
+    ASSERT_TRUE(library != nil);
+    MTLRenderPipelineDescriptor *d = descriptor(library, MTLPixelFormatBGRA8Unorm);
+    d.depthAttachmentPixelFormat = MTLPixelFormatDepth16Unorm;
+    id<MTLRenderPipelineState> state = [device newRenderPipelineStateWithDescriptor:d error:nil];
+    ASSERT_TRUE(state != nil);
+    __unsafe_unretained SwitchMetalPipeline *pipeline = (SwitchMetalPipeline *)state;
+    ASSERT_TRUE(pipeline->_raw);
+    std::set<uint8_t> classes;
+    for (const auto &request : compiler.captured())
+        if (request.variant.fragmentTests)
+            classes.insert(request.variant.fragmentTests);
+    using gm20b::FragmentTests;
+    EXPECT_EQ(classes, (std::set<uint8_t>{uint8_t(FragmentTests::Pass), uint8_t(FragmentTests::ReadOnly),
+                                          uint8_t(FragmentTests::DepthWrite), uint8_t(FragmentTests::StencilWrite)}));
+    const auto programOf = [&](FragmentTests tests) {
+        gm20b::RenderVariant forms;
+        forms.fragmentTests = uint8_t(tests);
+        gm20b::Variant<gm20b::Pipeline> *variant = variantOf(pipeline, forms);
+        return variant && ready(*variant) ? program(variant->value()->methods, 2) : UINT32_MAX;
+    };
+    MTLRenderPassDescriptor *pass = colourPass(device, false);
+    pass.depthAttachment.texture = image(device, MTLTextureUsageRenderTarget, MTLPixelFormatDepth16Unorm);
+    pass.depthAttachment.loadAction = MTLLoadActionClear;
+    pass.depthAttachment.storeAction = MTLStoreActionDontCare;
+    pass.depthAttachment.clearDepth = 1;
+    const size_t firstJob = kernel_model::model.jobs.size();
+    id<MTLCommandBuffer> commands = [[device newCommandQueue] commandBuffer];
+    id<MTLRenderCommandEncoder> encoder = [commands renderCommandEncoderWithDescriptor:pass];
+    [encoder setRenderPipelineState:state];
+    [encoder setDepthStencilState:depthWrite(device)];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder setDepthStencilState:stencilTest(device, MTLCompareFunctionEqual)];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder setDepthStencilState:stencilTest(device, MTLCompareFunctionNotEqual)];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder endEncoding];
+    [commands commit];
+    [commands waitUntilCompleted];
+    EXPECT_EQ(commands.status, MTLCommandBufferStatusCompleted) << commands.error.description.UTF8String;
+    const uint32_t readOnly = programOf(FragmentTests::ReadOnly);
+    EXPECT_EQ(drawnPrograms(firstJob, 2),
+              (std::vector<uint32_t>{programOf(FragmentTests::DepthWrite), readOnly, readOnly}));
+}
+
 }  // namespace
 
 TEST(GM20BFacadeVariant, AVariantNoCompilerMadeIsAskedOnceAndNamedOnce)
@@ -438,4 +503,9 @@ TEST(GM20BFacadeVariant, AnInstancedDrawOfAStorageTestClassStaysRaw)
 TEST(GM20BFacadeVariant, ADrawInAPassOfNoDepthTakesItsHiddenAttachmentsTestClass)
 {
     switch_ios::test::ExpectPassesInFreshProcess(hiddenDepthTestClass);
+}
+
+TEST(GM20BFacadeVariant, ADepth16UnormPassesDrawsTakeTheTestClassOfItsConvertedStencil)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(depth16StencilTestClasses);
 }

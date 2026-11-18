@@ -324,7 +324,7 @@ static void forwardCall(SwitchMetalEncoder *e, SEL selector, const void *argumen
     const uint32_t zeta = _zeta ? _zeta : _cb->_passes[_passAt].testsHiddenZeta ? gm20b::kZetaFormat : 0;
     if (const gm20b::Pipeline *pl = _pipe ? _pipe->_raw : nullptr;
         pl && _forms.fragmentTests != gm20b::drawnTests(pl->fetchBits && pl->depthFormat && !pl->storageBits,
-                                                        pl->rec->shaderTests, _ds, zeta))
+                                                        pl->rec->shaderTests, _ds, gm20b::testedZeta(zeta)))
         [self prepareDrawnRecord];
 }
 
