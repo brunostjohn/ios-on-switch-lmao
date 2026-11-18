@@ -68,6 +68,13 @@ extern "C" void tgm_stats_unlocked(enum tgm_unlocked, uint64_t)
 {
 }
 
+// Each read 1.5 ms after the one before
+extern "C" uint64_t tgm_timestamp_ns(void)
+{
+	static uint64_t now;
+	return now += 1500000;
+}
+
 extern "C" void tgm_vm_del(tgm_vm **out)
 {
 	*out = nullptr;
@@ -479,6 +486,38 @@ TEST_F(RelayoutControl, ASecondMoveIsKickedWhileTheFirstWaitsForTheGpu)
 	EXPECT_EQ(gRelayout.slots, 0u);
 	EXPECT_EQ(gRelayout.users, 0u);
 	copyWait = nullptr;
+	channelsOpen = pipelined = false;
+}
+}  // namespace
+
+namespace
+{
+// The stats count the copy engine's in-place moves, each one L2 invalidate, with their time; moves into or out of a
+// scratch have no checkpoint and are not counted
+TEST_F(RelayoutControl, InPlaceMovesAreCountedAndTimedWithTheStats)
+{
+	channelsOpen = pipelined = true;
+	uint64_t before[3];
+	tgm_relayout_in_place_stats(before);
+	tgm_layout l = {};
+	ASSERT_TRUE(tgm_layout_tiled(64, 64, 4, &l));
+	std::vector<uint64_t> surfacePas, rowsPas;
+	for (uint64_t at = 0; at < surfaceBytes.size(); at += 4096) {
+		surfacePas.push_back(kSurfacePa + at);
+		rowsPas.push_back(kRowsPa + at);
+	}
+	const tgm_relayout_pages surface = {surfacePas.data(), uint32_t(surfacePas.size())};
+	const tgm_relayout_pages rows = {rowsPas.data(), uint32_t(rowsPas.size())};
+	for (const int op : {TGM_RELAYOUT_TILE_IN_PLACE, TGM_RELAYOUT_TO_ROWS,
+			     TGM_RELAYOUT_UNTILE_IN_PLACE, TGM_RELAYOUT_TO_TILED})
+		EXPECT_EQ(tgm_relayout(&surface, &rows, &l, 256, op, nullptr, 0), 0) << op;
+	uint64_t taken[3];
+	tgm_relayout_in_place_stats(taken);
+	EXPECT_EQ(taken[0], TGM_STATS ? 2u : 0u);
+	EXPECT_EQ(taken[1], TGM_STATS ? 2u * 1500000u : 0u);
+	EXPECT_EQ(taken[2], TGM_STATS ? 1500000u : 0u);
+	tgm_relayout_in_place_stats(taken);
+	EXPECT_EQ(taken[0], 0u);
 	channelsOpen = pipelined = false;
 }
 }  // namespace

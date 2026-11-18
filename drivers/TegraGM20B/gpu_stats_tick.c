@@ -447,6 +447,14 @@ void tgm_stats_tick(void)
 				  "never: the memory went), %llu moves made\n",
 				  r[0], r[1], r[2], r[3], r[4]);
 		}
+		uint64_t in_place[3];
+		tgm_relayout_in_place_stats(in_place);
+		if (in_place[0]) {
+			nvxnu_log("tegra-gm20b: in-place moves %llu (an L2 invalidate each), "
+				  "submission to completion mean %llu us, max %llu us\n",
+				  in_place[0], in_place[1] / in_place[0] / 1000,
+				  in_place[2] / 1000);
+		}
 	}
 #undef PT_NS
 }

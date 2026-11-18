@@ -92,6 +92,20 @@ tgm_chan *channel()
 void tgm_relayout_finish_cpu(const tgm_relayout_pages *, const tgm_relayout_pages *,
 			     const tgm_layout *, uint32_t, tgm_relayout_op);
 
+// Written under gRelayout.lock (one move at a time), taken by the stats tick: moves, ns, longest ns
+uint64_t gInPlace[3];
+
+void countInPlace(tgm_relayout_op op, uint64_t started)
+{
+	if (!TGM_STATS || (op != TGM_RELAYOUT_TILE_IN_PLACE && op != TGM_RELAYOUT_UNTILE_IN_PLACE))
+		return;
+	const uint64_t ns = tgm_timestamp_ns() - started;
+	__atomic_fetch_add(&gInPlace[0], 1, __ATOMIC_RELAXED);
+	__atomic_fetch_add(&gInPlace[1], ns, __ATOMIC_RELAXED);
+	if (ns > __atomic_load_n(&gInPlace[2], __ATOMIC_RELAXED))
+		__atomic_store_n(&gInPlace[2], ns, __ATOMIC_RELAXED);
+}
+
 // A copy that faulted leaves its own partial writes, and its writers' (complete, an Internal job's possibly still there),
 // in the GPU's L2, behind which the CPU would read and write: this move's finish, or the caller's tgm_relayout_by_cpu. The faulted channel is gone: a new one's empty
 // External job flushes the whole L2. Without a channel only the LTC's MMIO flush could, which polls.
@@ -173,6 +187,7 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 		if (r.users)
 			tgm_stats_unlocked(TGM_UNLOCKED_RELAYOUT_BESIDE, 0);
 #endif
+		const uint64_t started = TGM_STATS ? tgm_timestamp_ns() : 0;
 		ret = tgm_chan_exec(chan, &push, 1, &seqno, nullptr);
 		if (!ret) {
 			tgm_relayout_writer acquired[TGM_RELAYOUT_MAX_WAITS];
@@ -183,6 +198,8 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 			});
 			ret = tgm_chan_error(chan) ? -5 : 0;
 			finish = ret && __atomic_load_n(words + kCheckpointWord, __ATOMIC_ACQUIRE);
+			if (!ret)
+				countInPlace(op, started);
 		}
 	}
 	releaseSlot(slot);
@@ -285,6 +302,12 @@ extern "C" void tgm_relayout_cpu_stats(uint64_t *moves, uint64_t *bytes)
 {
 	*moves = __atomic_exchange_n(&cpuMoves, 0, __ATOMIC_RELAXED);
 	*bytes = __atomic_exchange_n(&cpuMoveBytes, 0, __ATOMIC_RELAXED);
+}
+
+extern "C" void tgm_relayout_in_place_stats(uint64_t out[3])
+{
+	for (uint32_t i = 0; i < 3; i++)
+		out[i] = __atomic_exchange_n(&gInPlace[i], 0, __ATOMIC_RELAXED);
 }
 
 extern "C" int tgm_relayout_init(void)
