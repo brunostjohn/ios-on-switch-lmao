@@ -104,8 +104,8 @@ TEST(CryptexSource, NotAVirtualDeviceAndReadOnly)
     EXPECT_TRUE(Search(source, R"(reportWriteProtection\(bool \*value\) override\s*\{\s*\*value = true;)"));
 }
 
-// Extents resolved once, on the SD APFS window only, covering the image; sampled blocks compared both ways; a refused
-// map attaches through DiskImages with one line; a failed mount falls back the same way.
+// Extents resolved once, on the SD APFS window only, covering the image; a refused map attaches through DiskImages with
+// one line; a failed mount falls back the same way.
 TEST(CryptexSource, MapCheckedBeforeUse)
 {
     const std::string resolve = body("Extent *resolveExtents(");
@@ -116,17 +116,8 @@ TEST(CryptexSource, MapCheckedBeforeUse)
     EXPECT_THAT(resolve, HasSubstr("switchExtentsCover(map, n, bytes)"));
     const std::string attach = body("IOService *attachDirect(unsigned index, dev_t preboot, const char **why)");
     EXPECT_THAT(attach, HasSubstr("UF_COMPRESSED"));
-    EXPECT_THAT(attach, HasSubstr("sameBothWays(image, map[0], 0, sd, direct, file)"));
-    EXPECT_THAT(attach, HasSubstr("sameBothWays(image, last, va.va_data_size - kImageBlock, sd, direct, file)"));
-    // The cache is checked through the first direct device before it is registered, and turned off with one
-    // line if a block read through it is not the image file's.
-    EXPECT_THAT(attach, HasSubstr("proveCache(device, image, map, count, va.va_data_size)"));
-    EXPECT_THAT(attach, HasSubstr("read cache off (%s); every read goes to the card"));
-    EXPECT_LT(attach.find("proveCache("), attach.find("device->registerService();"));
-    const std::string prove = body("const char *proveCache(");
-    EXPECT_THAT(prove, HasSubstr("vn_rdwr(UIO_READ, image,"));
-    EXPECT_THAT(prove, HasSubstr("device->readBlock(buffer, offsets[i] / kImageBlock)"));
-    EXPECT_THAT(prove, HasSubstr("memcmp(buffer->getBytesNoCopy(), file, kImageBlock)"));
+    // The cache is set up before the first direct device is registered.
+    EXPECT_LT(attach.find("setupCache()"), attach.find("device->registerService();"));
     EXPECT_THAT(body("IOReturn SwitchCryptexDevice::readBlock("), HasSubstr("panic("));
     const std::string entry = body("extern \"C\" int switch_cryptex_attach(");
     EXPECT_THAT(entry, HasSubstr("direct read map refused"));

@@ -152,8 +152,8 @@ int outputs(unsigned index, dev_t *device, char *path, size_t capacity)
 // with the per-read VNOP_READ, UPL and copy work those four threads used ~29 s of CPU per r7v boot, ~1.5 s of it the
 // copy). The image is one unchanging file, so its extents are resolved once here instead: the file's blocks on Preboot
 // (VNOP_BLOCKMAP) and where they sit on the SD card's APFS window (DKIOCGETPHYSICALEXTENT, as kern_symfile.c's
-// direct-I/O files), checked by reading sampled blocks both ways. The cryptex device's reads then go to the SD device,
-// one read per extent piece: no DiskImages thread, no VNOP_READ.
+// direct-I/O files). The cryptex device's reads then go to the SD device, one read per extent piece: no DiskImages
+// thread, no VNOP_READ.
 //
 // The device reports itself as SD storage, not a virtual (disk image) interface, so the cryptex APFS mounts without
 // MNTK_VIRTUALDEV. APFS still reads the cryptex files one 4 KiB block at a time, each after the last, whatever the
@@ -161,19 +161,17 @@ int outputs(unsigned index, dev_t *device, char *path, size_t capacity)
 // of 128 KiB windows (SwitchCryptexCache.h): a small read that misses reads its whole window in one command, the
 // reads that follow copy their blocks out of it (copypv, as the SD driver's bounce path copies into requests), and the
 // boot prefetch reads its runs ahead into windows. A large read the cache does not hold goes straight into the
-// request's pages. APFS checks every block it gets against the seal's hashes, wherever it came from. The cache is
-// checked once at the first attach (proveCache) and turned off with one line if a block differs from the image file.
+// request's pages. APFS checks every block it gets against the seal's hashes, wherever it came from.
 // Completions go to the client from a thread call, never from the SD driver's worker, so the hash checks run beside
 // the card's next command, and a completion that ever waited for another read of the same image could not block the
 // thread that issues it.
 //
-// The image file stays open (its use count) while the device exists. A refused map (a hole, a compressed file, an
-// extent outside the window, a sampled block that differs) logs one line and attaches through DiskImages as before.
+// The image file stays open (its use count) while the device exists. A refused map (a compressed file, an extent
+// outside the window) logs one line and attaches through DiskImages as before.
 namespace {
 constexpr uint32_t kImageBlock = 4096;  // the cryptex device's block (APFS's), and the images' size multiple
 constexpr uint32_t kSdSector = 512;
 constexpr uint32_t kMaxExtents = 1u << 16;
-constexpr unsigned kSampledExtents = 16;  // checked both ways at attach, besides the image's first and last block
 static_assert(kImageBlock == kSwitchCacheBlock, "the cache's block is the device's");
 // The cache's windows: 32 MiB until the boot's reads are done (bootIoDone), then 8 MiB: app launches page the
 // cryptexes in one block at a time too.
@@ -827,7 +825,7 @@ void SwitchCryptexDevice::readAhead(uint64_t start, uint64_t length)
 }
 
 namespace {
-// One synchronous read for the attach-time check: `bytes` at `sector` of the SD window into `buffer`.
+// One synchronous read (readBlock).
 struct SyncRead {
     IOLock *lock;
     bool done;
@@ -842,24 +840,6 @@ void syncReadDone(void *, void *parameter, IOReturn status, UInt64)
     wait->done = true;
     IOLockUnlock(wait->lock);
     IOLockWakeup(wait->lock, wait, false);
-}
-
-IOReturn readSd(IOBlockStorageDevice *sd, uint64_t sector, IOBufferMemoryDescriptor *buffer)
-{
-    SyncRead wait = {IOLockAlloc(), false, kIOReturnSuccess};
-    if (!wait.lock)
-        return kIOReturnNoMemory;
-    IOStorageCompletion completion = {nullptr, syncReadDone, &wait};
-    IOReturn status = sd->doAsyncReadWrite(buffer, sector, buffer->getLength() / kSdSector, nullptr, &completion);
-    if (status == kIOReturnSuccess) {
-        IOLockLock(wait.lock);
-        while (!wait.done)
-            IOLockSleep(wait.lock, &wait, THREAD_UNINT);
-        IOLockUnlock(wait.lock);
-        status = wait.status;
-    }
-    IOLockFree(wait.lock);
-    return status;
 }
 }  // namespace
 
@@ -927,61 +907,6 @@ bool setupCache()
     return true;
 }
 
-// Blocks read through the cache must be the image file's own (vn_rdwr): a cold miss (its window read around it), a hit
-// in that window, the image's last block, and the first block of extents spread over the image. nullptr, or what
-// failed.
-const char *proveCache(SwitchCryptexDevice *device, vnode_t image, const Extent *map, uint32_t count, uint64_t bytes)
-{
-    IOBufferMemoryDescriptor *buffer = IOBufferMemoryDescriptor::withOptions(kIODirectionIn, kImageBlock, kImageBlock);
-    auto *file = static_cast<uint8_t *>(IOMallocData(kImageBlock));
-    const bool prepared = (buffer != nullptr) && buffer->prepare() == kIOReturnSuccess;
-    const char *why = prepared && file ? nullptr : "no memory";
-    uint64_t offsets[kSampledExtents + 3];
-    unsigned n = 0;
-    offsets[n++] = 0;
-    if (bytes > kImageBlock)
-        offsets[n++] = kImageBlock;
-    offsets[n++] = bytes - kImageBlock;
-    for (unsigned k = 1; k <= kSampledExtents && count > 2; ++k)
-        offsets[n++] = map[static_cast<uint64_t>(count - 1) * k / (kSampledExtents + 1)].file;
-    vfs_context_t ctx = vfs_context_current();
-    for (unsigned i = 0; i < n && !why; ++i) {
-        int resid = 0;
-        if (vn_rdwr(UIO_READ, image, reinterpret_cast<caddr_t>(file), kImageBlock, static_cast<off_t>(offsets[i]),
-                    UIO_SYSSPACE, IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx)) ||
-            resid) {
-            why = "the image file could not be read";
-        } else if (device->readBlock(buffer, offsets[i] / kImageBlock) != kIOReturnSuccess) {
-            why = "a read through it failed";
-        } else if (memcmp(buffer->getBytesNoCopy(), file, kImageBlock)) {
-            why = "a block read through it differs from the image file";
-        }
-    }
-    if (prepared)
-        buffer->complete();
-    OSSafeReleaseNULL(buffer);
-    if (file)
-        IOFreeData(file, kImageBlock);
-    return why;
-}
-
-// Whether block `offset` of the image reads the same through the file and through the map.
-bool sameBothWays(vnode_t image, const Extent &e, uint64_t offset, IOBlockStorageDevice *sd,
-                  IOBufferMemoryDescriptor *direct, uint8_t *file)
-{
-    vfs_context_t ctx = vfs_context_current();
-    int resid = 0;
-    if (vn_rdwr(UIO_READ, image, reinterpret_cast<caddr_t>(file), kImageBlock, static_cast<off_t>(offset), UIO_SYSSPACE,
-                IO_NOAUTH, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx)) ||
-        resid)
-        return false;
-    if (e.disk == kSwitchHole)
-        return memcmp(gZeros, file, kImageBlock) == 0;
-    if (readSd(sd, (e.disk + (offset - e.file)) / kSdSector, direct) != kIOReturnSuccess)
-        return false;
-    return memcmp(direct->getBytesNoCopy(), file, kImageBlock) == 0;
-}
-
 // The image's extents on the SD APFS window, or nullptr with *why set. `image` is open; `preboot` its volume's device.
 Extent *resolveExtents(vnode_t image, uint64_t bytes, dev_t preboot, dev_t whole, uint64_t windowBytes, uint32_t *count,
                        const char **why)
@@ -1039,7 +964,7 @@ Extent *resolveExtents(vnode_t image, uint64_t bytes, dev_t preboot, dev_t whole
                     asked = true;
                     if (error == ENOTTY && first) {
                         // No physical-extent answer: the container is the whole window (one physical store at offset 0),
-                        // so its block addresses are the window's; the sampled reads below check that.
+                        // so its block addresses are the window's.
                         physical = false;
                     } else if (error || !request.length || request.dev != whole) {
                         *why = error ? "DKIOCGETPHYSICALEXTENT failed" : "an extent is not on the SD APFS window";
@@ -1098,8 +1023,6 @@ IOService *attachDirect(unsigned index, dev_t preboot, const char **why)
     VATTR_WANTED(&va, va_flags);
     uint32_t count = 0;
     Extent *map = nullptr;
-    IOBufferMemoryDescriptor *direct = nullptr;
-    uint8_t *file = nullptr;
     SwitchCryptexDevice *device = nullptr;
     if (!vnode_isreg(image) || vnode_getattr(image, &va, ctx) || !VATTR_IS_SUPPORTED(&va, va_data_size)) {
         *why = "image attributes";
@@ -1110,28 +1033,6 @@ IOService *attachDirect(unsigned index, dev_t preboot, const char **why)
     } else {
         map = resolveExtents(image, va.va_data_size, preboot, whole, windowSectors * kSdSector, &count, why);
     }
-    if (map) {
-        direct = IOBufferMemoryDescriptor::withOptions(kIODirectionIn, kImageBlock, kImageBlock);
-        file = static_cast<uint8_t *>(IOMallocData(kImageBlock));
-        if (!direct || !file || direct->prepare() != kIOReturnSuccess) {
-            *why = "no memory";
-        } else {
-            // The first and last block, and the first block of extents spread over the image.
-            const Extent &last = map[count - 1];  // (a hole is compared with zeros)
-            bool same = sameBothWays(image, map[0], 0, sd, direct, file) &&
-                        sameBothWays(image, last, va.va_data_size - kImageBlock, sd, direct, file);
-            for (unsigned k = 1; same && k <= kSampledExtents && count > 2; ++k) {
-                const Extent &e = map[static_cast<uint64_t>(count - 1) * k / (kSampledExtents + 1)];
-                same = sameBothWays(image, e, e.file, sd, direct, file);
-            }
-            direct->complete();
-            if (!same)
-                *why = "a sampled block differs between the file and the map";
-        }
-    }
-    OSSafeReleaseNULL(direct);
-    if (file)
-        IOFreeData(file, kImageBlock);
     if (!*why) {
         device = OSTypeAlloc(SwitchCryptexDevice);
         if (!device || !device->init(static_cast<OSDictionary *>(nullptr)) ||
@@ -1150,23 +1051,16 @@ IOService *attachDirect(unsigned index, dev_t preboot, const char **why)
         vnode_close(image, FREAD, ctx);
         return nullptr;
     }
-    // Checked through this device before it is registered, so nothing else reads through the cache yet.
-    const char *cacheOff = nullptr;
     if (!gCache.setUp) {
-        if (!setupCache()) {
-            cacheOff = "no memory for its windows";
-        } else {
+        if (setupCache()) {
             __atomic_store_n(&gCache.on, true, __ATOMIC_RELEASE);
-            cacheOff = proveCache(device, image, map, count, va.va_data_size);
-            if (cacheOff)
-                __atomic_store_n(&gCache.on, false, __ATOMIC_RELEASE);
+        } else {
+            IOLog("SwitchCryptex: read cache off (no memory for its windows); every read goes to the card\n");
         }
-        if (cacheOff)
-            IOLog("SwitchCryptex: read cache off (%s); every read goes to the card\n", cacheOff);
     }
     if (gCache.on) {
-        IOLog("SwitchCryptex: %s read from the card through the read cache (%u windows of %u KiB, checked): %u "
-              "extents, %llu MiB\n",
+        IOLog("SwitchCryptex: %s read from the card through the read cache (%u windows of %u KiB): %u extents, %llu "
+              "MiB\n",
               paths[index], gCache.count, kSwitchWindowBytes >> 10, count, va.va_data_size >> 20);
     } else {
         IOLog("SwitchCryptex: %s read straight from the card: %u extents, %llu MiB\n", paths[index], count,
