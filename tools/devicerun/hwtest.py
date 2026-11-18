@@ -88,6 +88,7 @@ TESTS: dict[str, bool] = {
             'gpu.blur.mps',
             'gpu.blur.coreimage',
             'gpu.compute.half_alu',
+            'gpu.pack.hit_cost',
             'gpu.ca.sweep',
             'gpu.ca.asked_forms',
             'gpu.sm53_probe',
