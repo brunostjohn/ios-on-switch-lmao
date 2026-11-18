@@ -30,7 +30,6 @@ final class RunJournalTests: XCTestCase {
         return report
     }
 
-    /// The run a process that nothing stopped leaves: each test begun, then recorded, then the run finished.
     func uninterrupted() -> Report {
         var report = planned()
         for (index, id) in ids.enumerated() {

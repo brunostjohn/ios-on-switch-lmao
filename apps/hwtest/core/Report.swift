@@ -159,7 +159,6 @@ public struct Report: Codable, Equatable {
         self.record(entry(record))
     }
 
-    /// `record`'s entry, belonging to the boot the run is on now.
     public func entry(_ record: TestRecord) -> Entry {
         Entry(record, bootUUID: latestBootUUID)
     }

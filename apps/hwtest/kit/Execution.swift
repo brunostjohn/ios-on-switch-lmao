@@ -13,8 +13,8 @@ extension Suite {
     /// On a GPU test that timed out: whether GPUProbe's fill on a fresh queue then completed.
     nonisolated static let gpuAnswersKey = "gpu_answers"
 
-    /// `test`'s record, logged. Its line goes out as its measured span ends, so the line's time less its ms= is when
-    /// the test started; only a GPU test that timed out waits for GPUProbe first.
+    /// The line goes out as the measured span ends, so the line's time less its ms= is when the test started; only a
+    /// GPU test that timed out waits for GPUProbe first.
     nonisolated static func outcome(of test: any HWTest, _ context: TestContext, wedgedBy wedged: String?) async
         -> TestRecord
     {

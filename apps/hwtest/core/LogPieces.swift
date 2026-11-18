@@ -30,8 +30,6 @@ extension LogLine {
         }
     }
 
-    /// Where a piece from `start` with `room` bytes ends: before the last space that fits, else at the last character
-    /// boundary that fits.
     private static func cut(_ bytes: [UInt8], from start: Int, room: Int) -> Int {
         let limit = start + room
         guard limit < bytes.count else { return bytes.count }

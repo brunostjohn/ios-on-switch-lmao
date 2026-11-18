@@ -1,9 +1,7 @@
 import Foundation
 
-/// The suite's own time between the tests of one batch, logged after it as `HWTEST suite.harness`: each boundary (one
-/// test's measured end to the next one's start: its log line, the list's update, the journal's flush), the journal's
-/// flush inside it, and how long the main thread took to answer just before the next test started. FAIL when the
-/// median boundary or the median answer passes its ceiling: the suite's work is then back between or inside the tests.
+/// A boundary runs from one test's measured end to the next one's start (its log line, the list's update, the
+/// journal's flush); a main wait is how long the main thread took to answer just before the next test started.
 public struct HarnessTally {
     public static let id = "suite.harness"
     /// Two main-thread hops and one journal line flushed to the card (APFS's transaction flush: 36 ms median, boot 2).
@@ -40,7 +38,6 @@ public struct HarnessTally {
         return over.isEmpty ? .pass(metrics) : .fail(over.joined(separator: "; "), metrics)
     }
 
-    /// The batch's line: ms= is the time the batch spent between its tests.
     public var line: String {
         LogLine.format(id: Self.id, outcome: outcome, milliseconds: boundaries.reduce(0, +))
     }

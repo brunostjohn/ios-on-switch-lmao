@@ -16,7 +16,7 @@ final class RunRecorder: @unchecked Sendable {
         self.store = store
     }
 
-    /// A batch's start: `report`'s journal, unless the journal holds it already (a run just continued).
+    /// A run just continued has its journal already.
     func start(_ report: Report) {
         queue.async { [self] in
             guard journal?.report != report else { return }
@@ -24,7 +24,7 @@ final class RunRecorder: @unchecked Sendable {
         }
     }
 
-    /// `finished`'s result and `next`'s begin on the card; the milliseconds that took.
+    /// Returns once the lines are on the card, with the milliseconds that took.
     func advance(_ finished: TestRecord?, begin next: String?) async -> Double {
         await withCheckedContinuation { continuation in
             queue.async { [self] in
@@ -42,8 +42,7 @@ final class RunRecorder: @unchecked Sendable {
         }
     }
 
-    /// A batch's end: a run with nothing left is finished and closed (written whole, its journal removed). The run as
-    /// it stands; nil when its journal never started.
+    /// Nil when the journal never started.
     func finish(at date: Date) async -> Report? {
         await withCheckedContinuation { continuation in
             queue.async { [self] in
@@ -61,12 +60,11 @@ final class RunRecorder: @unchecked Sendable {
         }
     }
 
-    /// A person's choice of an unfinished run, on the card before the run goes on: its journal from `continued`.
+    /// On the card before the run goes on.
     func checkpoint(_ continued: Report) throws {
         try queue.sync { journal = try store.open(continued) }
     }
 
-    /// A person's choice to end a run (cancelled, or continued with nothing left): written whole.
     func close(_ ended: Report) throws {
         try queue.sync {
             journal = nil

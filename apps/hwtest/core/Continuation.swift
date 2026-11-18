@@ -1,29 +1,20 @@
 import Foundation
 
-/// What Continue makes of an unfinished run: the run as it goes on and the tests left, in the order they run.
 public struct Continuation {
     public enum Cause: Equatable {
-        /// The run stopped between tests.
         case none
-        /// The device restarted while the test ran: it runs last.
         case restarted(String)
-        /// The app was closed or sent to the background (`reason`) while the test ran: it runs again.
         case interrupted(String, reason: String)
-        /// The app's process ended while the test ran: it is recorded as a crash.
         case crashed(String)
     }
 
     public let report: Report
-    /// The tests left, in run order; empty when the run is finished.
     public let order: [String]
     public let cause: Cause
-    /// The crash's record, when the cause is a crash.
     public let crash: TestRecord?
 }
 
 extension Report {
-    /// The run continued on boot `boot`. `available`: the tests this build has (a test it lacks is recorded as a
-    /// SKIP); `record` makes a test's record with an outcome the continuation gives it.
     public func continued(
         boot: String, at date: Date, identity: [String: String], available: Set<String>,
         record: (String, Outcome) -> TestRecord

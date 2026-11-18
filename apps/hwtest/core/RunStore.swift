@@ -12,13 +12,11 @@ public struct RunStore {
         directory = documents.appendingPathComponent("hwtest")
     }
 
-    /// Starts `report`'s journal.
     public func open(_ report: Report) throws -> RunJournal {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return try RunJournal(report, at: url(report.run.id, Kind.journal))
     }
 
-    /// Writes an ended run whole as its json and removes its journal.
     public func close(_ report: Report) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try DurableFile.write(report.encoded(), to: url(report.run.id, Kind.json))
@@ -37,12 +35,11 @@ public struct RunStore {
         return found.reversed()
     }
 
-    /// Every run that reads, most recently written first, each read only when reached.
     public func newestFirst() -> some Sequence<Report> {
         runs().lazy.compactMap(read)
     }
 
-    /// Removes the oldest runs beyond `kept`; the Mac keeps every one it has fetched.
+    /// The Mac keeps every run it has fetched.
     public func prune() {
         for run in runs().dropFirst(Self.kept) {
             for kind in run.kinds { try? FileManager.default.removeItem(at: url(run.id, kind)) }

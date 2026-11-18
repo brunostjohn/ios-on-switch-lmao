@@ -18,7 +18,6 @@ public final class RunJournal {
     public let url: URL
     public private(set) var report: Report
 
-    /// Writes `report` as the journal's first line, replacing any journal at `url`.
     public init(_ report: Report, at url: URL) throws {
         self.url = url
         self.report = report
@@ -33,9 +32,8 @@ public final class RunJournal {
         try append(changes, flush: true)
     }
 
-    /// The app going away (`reason`) or coming back (nil), for the next launch to tell a person's or the system's
-    /// ending of the process from a crash. Written, not flushed: the line outlives the process, and after a restart the
-    /// running test is requeued whatever the line says.
+    /// Written, not flushed: the line outlives the process, and after a restart the running test is requeued whatever
+    /// the line says.
     public func interrupt(_ reason: String?) throws {
         guard report.run.interruption != reason else { return }
         try append([.interruption(reason)], flush: false)
@@ -53,9 +51,7 @@ public final class RunJournal {
         for change in changes { report.apply(change) }
     }
 
-    /// The report a journal's bytes hold: its first line with each whole line after it applied in order; nil when the
-    /// first line is not a report. Reading stops at a line without its newline (the process died writing it) or one
-    /// that does not decode.
+    /// Reading stops at a line without its newline (the process died writing it) or one that does not decode.
     public static func report(from data: Data) -> Report? {
         var lines = data.split(separator: newline[0], omittingEmptySubsequences: false)
         _ = lines.popLast()
@@ -76,7 +72,7 @@ public final class RunJournal {
         return encoder
     }()
 
-    /// One change as a line: the one key that names it. A cleared interruption is "".
+    /// A cleared interruption is "".
     private struct Line: Codable {
         var begin: String?
         var result: Report.Entry?

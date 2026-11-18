@@ -1,8 +1,7 @@
 import Foundation
 import HWTestCore
 
-/// One test's row. Each row is observed on its own, so a test's result redraws its row, not the list. Changed on the
-/// main thread only.
+/// Each row is observed on its own, so a test's result redraws its row, not the list. Changed on the main thread only.
 final class RowState: ObservableObject, Identifiable {
     let test: any HWTest
     @Published var record: TestRecord?
@@ -16,8 +15,7 @@ final class RowState: ObservableObject, Identifiable {
     }
 }
 
-/// The list's rows, and while a run goes the running test, the finished ones newest first, the ones still to come and
-/// the counts above them: changed once a test, by `advance`.
+/// Changed once a test, by `advance`.
 @MainActor
 final class RunList: ObservableObject {
     struct Progress: Equatable {
@@ -55,7 +53,6 @@ final class RunList: ObservableObject {
         .filter { !$0.rows.isEmpty }
     }
 
-    /// A batch's start on `report`, its batch planned.
     func seed(_ report: Report) {
         verdicts = Dictionary(report.results.map { ($0.id, $0.verdict) }, uniquingKeysWith: { $1 })
         let summary = report.summary
@@ -70,7 +67,6 @@ final class RunList: ObservableObject {
         current = nil
     }
 
-    /// One test's record, and the next test starting (nil after the last).
     func advance(_ finished: TestRecord?, next: String?) {
         if let finished, let row = byID[finished.id] {
             row.record = finished

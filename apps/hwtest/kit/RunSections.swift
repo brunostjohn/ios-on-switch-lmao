@@ -22,8 +22,7 @@ struct RunSections: View {
     }
 }
 
-/// The running test and when it started. No elapsed-time counter: a timer redrawing the list would take the main
-/// thread from the test that runs.
+/// No elapsed-time counter: a timer redrawing the list would take the main thread from the test that runs.
 struct RunningRow: View {
     @ObservedObject var row: RowState
 

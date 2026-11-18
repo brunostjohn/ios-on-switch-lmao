@@ -176,8 +176,7 @@ public final class Suite: ObservableObject {
         }
     }
 
-    /// Between two tests on the main thread: the stage cleared and the list moved on. Returns the test that wedged
-    /// the GPU, if one did.
+    /// Returns the test that wedged the GPU, if one did.
     private func advance(_ finished: TestRecord?, next: String?) -> String? {
         stage.dismiss()
         if let finished, finished.outcome.metrics[Suite.gpuAnswersKey] == .flag(false) { wedgedBy = finished.id }
@@ -185,7 +184,6 @@ public final class Suite: ObservableObject {
         return wedgedBy
     }
 
-    /// Milliseconds the main thread takes to run an empty block: what a test that starts now would wait for it.
     nonisolated static func mainThreadAnswer() async -> Double {
         let asked = CFAbsoluteTimeGetCurrent()
         await MainActor.run {}
@@ -207,7 +205,6 @@ public final class Suite: ObservableObject {
         Self.log(LogLine.summary(records, ios: ios, milliseconds: span))
     }
 
-    /// Each piece of `line` (LogLine.pieces), so a line of any length reaches the log whole.
     nonisolated static func log(_ line: String) {
         for piece in LogLine.pieces(line) { results.notice("\(piece, privacy: .public)") }
     }
