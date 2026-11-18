@@ -158,34 +158,20 @@ struct BarrierKit {
         UnsafeRawBufferPointer(start: buffer.contents() + index * tileBytes, count: tileBytes)
     }
 
-    /// The bytes pass A's seed puts at (x, y) in memory (BGRA8: blue, green, red, alpha; RGBA16F: four halves; RGBA32F:
-    /// four floats)
-    func texel(_ x: Int, _ y: Int, seed: Int) -> [UInt8] {
-        let v = probeHash(UInt32(x), UInt32(y), UInt32(seed))
-        if format == .rgba32Float {
-            return [v, v >> 3, v >> 6, v >> 9].flatMap { (word: UInt32) -> [UInt8] in
-                let bits = 0x3f80_0000 | (word & 0x7f_ffff)
-                return [UInt8(bits & 255), UInt8((bits >> 8) & 255), UInt8((bits >> 16) & 255), UInt8(bits >> 24)]
-            }
-        }
-        if format == .rgba16Float {
-            let halves = [v & 0x3ff, (v >> 10) & 0x3ff, (v >> 20) & 0x3ff, (v >> 22) & 0x3ff].map {
-                UInt16(0x3c00 | $0)
-            }
-            return halves.flatMap { [UInt8($0 & 0xff), UInt8($0 >> 8)] }
-        }
-        return [UInt8((v >> 16) & 255), UInt8((v >> 8) & 255), UInt8(v & 255), UInt8(v >> 24)]
-    }
+    var pattern: BarrierPattern { format == .rgba32Float ? .rgba32f : format == .rgba16Float ? .rgba16f : .bgra8 }
+
+    func texel(_ x: Int, _ y: Int, seed: Int) -> [UInt8] { pattern.texel(x, y, seed: seed) }
 
     /// What a tap of `seed`'s pattern over a width x height source gives, the CPU's reading
     func expectedTap(seed: Int, base: SIMD2<Int32>, step: SIMD2<Int32>, width: Int, height: Int) -> [UInt8] {
-        var out: [UInt8] = []
-        out.reserveCapacity(tileBytes)
-        for y in 0 ..< Self.tile {
-            for x in 0 ..< Self.tile {
-                let sx = min(max(Int(base.x) + x * Int(step.x), 0), width - 1)
-                let sy = min(max(Int(base.y) + y * Int(step.y), 0), height - 1)
-                out += texel(sx, sy, seed: seed)
+        var out = [UInt8](repeating: 0, count: tileBytes)
+        out.withUnsafeMutableBytes { bytes in
+            for y in 0 ..< Self.tile {
+                for x in 0 ..< Self.tile {
+                    let sx = min(max(Int(base.x) + x * Int(step.x), 0), width - 1)
+                    let sy = min(max(Int(base.y) + y * Int(step.y), 0), height - 1)
+                    pattern.put(sx, sy, seed: seed, into: bytes, at: (y * Self.tile + x) * bytesPerTexel)
+                }
             }
         }
         return out
