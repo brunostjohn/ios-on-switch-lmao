@@ -58,8 +58,7 @@ TEST(SdQueueSource, ReadsOnly)
     EXPECT_TRUE(Search(source, R"(static_cast<uint8_t>\(priority >> 6\),\s*0,\s*false\};)"));
 }
 
-// r14-sdcq: a read chain's gaps go to the sink and nowhere else; a write chain never has one; the first chains with
-// gaps are compared with SDMA before they complete, and a difference turns gap reads off.
+// r14-sdcq: a read chain's gaps go to the sink and nowhere else; a write chain never has one.
 TEST(SdQueueSource, GapChains)
 {
     const std::string &source = driver();
@@ -70,17 +69,11 @@ TEST(SdQueueSource, GapChains)
     EXPECT_EQ(Count(table, "staging.addSink(sinkPA, gap(r))"), 1u);
     EXPECT_EQ(Count(table, "table.addSealed(sinkPA, gap(r))"), 1u);
     EXPECT_EQ(Count(table, "gap(r) > static_cast<uint64_t>(kGapSectors) * kSector || !sinkPA"), 2u);
-    EXPECT_THAT(body("void NativeSwitchBlock::endBatch("), HasSubstr("} else if (b.gapSectors && gapProofs) {"));
-    const std::string prove = body("bool NativeSwitchBlock::proveGaps(");
-    EXPECT_THAT(prove, HasSubstr("gapsOn = false;"));
-    EXPECT_THAT(prove, HasSubstr("compareChain(first, sectors, &at)"));
-    // compareChain: the requests get the SDMA read's bytes when theirs differ.
+    // compareChain (the command queue's proofs): the requests get the SDMA read's bytes when theirs differ.
     EXPECT_THAT(body("NativeSwitchBlock::ChainProof NativeSwitchBlock::compareChain("),
                 HasSubstr("stageChain(first, 0, sectors * kSector, checkBuffer, true)"));
-    EXPECT_THAT(body("void NativeSwitchBlock::releaseChecks()"), HasSubstr("(gapsOn && gapProofs)"));
     // Toward the requests gaps are skipped; from them (writes, read-back copies) every byte must be covered.
     EXPECT_THAT(body("bool NativeSwitchBlock::stageChain("), HasSubstr("toClient);"));
-    // The cache maintenance and the high-memory proof leave the sink alone.
+    // The cache maintenance leaves the sink alone.
     EXPECT_THAT(source, HasSubstr("if (pa - skip < skipBytes)\n            continue;"));
-    EXPECT_THAT(body("bool NativeSwitchBlock::proveHigh("), HasSubstr("|| inSink(pa)) {"));
 }

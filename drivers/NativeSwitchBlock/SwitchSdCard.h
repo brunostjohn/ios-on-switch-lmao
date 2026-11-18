@@ -155,6 +155,20 @@ inline SwitchSdScr switchSdParseScr(const uint8_t scr[8])
     return s;
 }
 
+// What the data path takes from the registers alone (setup()): ADMA2 with 128-bit descriptors when the controller
+// lists ADMA2 (CAPABILITIES bit 19) and keeps v4 mode with 64-bit addressing (HOST_CONTROL2 bits 12 and 13, which
+// setup() sets), and Auto CMD23 framing for ADMA2's multi-block commands when the card's SCR lists CMD23 (`scr`
+// nullptr: the card's SCR was not read).
+struct SwitchSdPath {
+    bool adma, autoCmd23;
+};
+
+inline SwitchSdPath switchSdPath(uint32_t capabilities, uint16_t hostControl2, const SwitchSdScr *scr)
+{
+    const bool adma = (capabilities & (1u << 19)) != 0u && (hostControl2 & 0x3000u) == 0x3000u;
+    return {adma, adma && scr && (scr->cmdSupport & kSdCmd23) != 0u};
+}
+
 // SD Status (ACMD13, 512 bits, Table 4-44).
 struct SwitchSdStatus {
     uint8_t busWidth;    // 0 1-bit, 2 4-bit

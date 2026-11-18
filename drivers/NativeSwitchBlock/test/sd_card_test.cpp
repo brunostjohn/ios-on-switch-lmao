@@ -346,3 +346,28 @@ TEST(SdCard, BlockFraming)
 {
     framing();
 }
+
+// The data path from the registers boot 2 of image d13 logged: caps 0x376cd08c, HOST_CONTROL2 after the switch to SDR104
+// (v4 64-bit addressing, tuned, 1.8 V, SDR104), SCR 0245848700000000 (CMD20, CMD23, CMD48). The emulator lists the same
+// capabilities and has no SCR.
+TEST(SdCard, DataPathFromRegisters)
+{
+    const uint8_t scrBytes[8] = {0x02, 0x45, 0x84, 0x87, 0, 0, 0, 0};
+    const SwitchSdScr scr = switchSdParseScr(scrBytes);
+    const SwitchSdPath device = switchSdPath(0x376cd08cu, 0x308b, &scr);
+    EXPECT_TRUE(device.adma);
+    EXPECT_TRUE(device.autoCmd23);
+    const SwitchSdPath emulator = switchSdPath(0x376cd08cu, 0x3000, nullptr);
+    EXPECT_TRUE(emulator.adma);
+    EXPECT_FALSE(emulator.autoCmd23);
+    // No ADMA2 listed, or v4 64-bit addressing not kept: SDMA through the bounce buffer, and no CMD23 framing either.
+    EXPECT_FALSE(switchSdPath(0x376cd08cu & ~(1u << 19), 0x308b, &scr).adma);
+    const SwitchSdPath noV4 = switchSdPath(0x376cd08cu, 0x008b, &scr);
+    EXPECT_FALSE(noV4.adma);
+    EXPECT_FALSE(noV4.autoCmd23);
+    EXPECT_FALSE(switchSdPath(0x376cd08cu, 0x108b, &scr).adma);
+    // A card whose SCR lists no CMD23.
+    const uint8_t plain[8] = {0x02, 0x45, 0x84, 0x80, 0, 0, 0, 0};
+    const SwitchSdScr old = switchSdParseScr(plain);
+    EXPECT_FALSE(switchSdPath(0x376cd08cu, 0x308b, &old).autoCmd23);
+}
