@@ -18,7 +18,10 @@ import UIKit
 /// video (other processes' jobs are reported, not judged), no frame of either change showing anything but one route's
 /// CRC or the other's (the landscape route's CRC is the held landscape frame's), the copy's very CRC back afterwards,
 /// no underflow, no frame dropped while playing. The two routes filter differently (VIC scales the turn, window A's
-/// DDAs scale the scan), so their CRCs are reported (crc_same), not compared. Last, the forced-failure arm.
+/// DDAs scale the scan), so their CRCs are reported (crc_same), not compared. Last, the forced-failure arm. Reported
+/// for the change in: the video and UI latches of its last sample (enter_video_latches, enter_ui_latches: a paused
+/// video whose held frame reaches no overlay latch gives the route no swap to change on) and the playing sample's
+/// frames still portrait (playing_portrait_frames).
 struct LandscapeVideoTest: HWTest {
     let id = "display.x1.landscape_video"
     let name = "A landscape video column-scanned on window A under the UI on window B, against the VIC copy (CRC)"
@@ -115,6 +118,9 @@ struct LandscapeVideoTest: HWTest {
 
         var (checks, metrics) = LandscapeJudge.judge(samples, dropped: dropped)
         metrics.set("enter_samples", enterSamples)
+        metrics.set("enter_video_latches", samples.enter.overlayLatches)
+        metrics.set("enter_ui_latches", samples.enter.uiLatches)
+        metrics.set("playing_portrait_frames", samples.playing.frames - samples.playing.landscapeFrames)
         metrics.set("leave_samples", leaveSamples)
         metrics.merge(forcedMetrics)
         checks += forcedChecks
