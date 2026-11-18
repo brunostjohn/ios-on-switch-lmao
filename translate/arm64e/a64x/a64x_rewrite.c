@@ -374,6 +374,41 @@ bool a64x_regs(uint32_t w, uint32_t *rd_mask, uint32_t *wr_mask)
     return false;
 }
 
+uint32_t a64x_stub_gprs(uint32_t w)
+{
+    uint32_t rs = BITS(w, 20, 16), rn = BITS(w, 9, 5), rt = BITS(w, 4, 0);
+    switch (a64x_classify(w)) {
+    case A64X_LSE_CASP:
+        return XMASK(rs) | XMASK(rn) | XMASK(rt) | (rs < 30 ? XMASK(rs + 1) : 0) | (rt < 30 ? XMASK(rt + 1) : 0);
+    case A64X_LSE_CAS:
+    case A64X_LSE_LDOP:
+    case A64X_LSE_SWP:
+        return XMASK(rs) | XMASK(rn) | XMASK(rt);
+    case A64X_PAC_LDRA:
+        return XMASK(rn) | XMASK(rt);
+    case A64X_JSCVT:
+        return XMASK(rt);
+    case A64X_FP16: {
+        /* conversions between half precision and a general register (integer or fixed point) */
+        bool to_fp = BITS(w, 18, 16) == 2 || BITS(w, 18, 16) == 3;
+        if ((w & 0x7F20FC00u) == 0x1E200000u) {
+            return to_fp || BITS(w, 18, 16) == 7 ? XMASK(rn) : XMASK(rt);
+        }
+        if ((w & 0x7F200000u) == 0x1E000000u) {
+            return to_fp ? XMASK(rn) : XMASK(rt);
+        }
+        return 0;
+    }
+    default:
+        return 0;
+    }
+}
+
+bool a64x_bl_site_ok(uint32_t orig, uint32_t site_word)
+{
+    return (site_word & 0xFC000000u) != 0x94000000u || !(a64x_stub_gprs(orig) & XMASK(30));
+}
+
 uint32_t a64x_dead_regs(const uint32_t *next, int n)
 {
     uint32_t dead = 0, read = 0;

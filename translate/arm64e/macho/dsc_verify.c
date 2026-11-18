@@ -266,7 +266,7 @@ static int check_code(const struct cache *c, const struct xmap *m, struct a64x_d
             v->stub_words++;
             v->entered_stub_words += (m->entered[k >> 3] >> (k & 7)) & 1;
         } else if (is_stub_class(cw, was)) {
-            if (follow(c, va, now)) {
+            if (a64x_bl_site_ok(was, now) && follow(c, va, now)) {
                 v->sites_ok++;
                 v->sites[cw]++;
             } else {

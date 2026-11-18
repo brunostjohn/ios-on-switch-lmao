@@ -59,8 +59,9 @@ stub region), so switching is a packaging decision, not a code change.
   PACGA to `MOV Xd, XZR`; LDRAA/LDRAB to LDR, LDUR or pre-index LDR, else a 3-word stub. The hint-space forms
   (PACIBSP, AUTIBSP, XPACLRI) are NOPs on ARMv8.0 already and stay.
 - LDAPR to LDAR (RCpc acquire to RCsc acquire: stronger), LDLAR/STLLR to LDAR/STLR, DC CVAP to DC CVAC.
-- LSE (CAS, CASP, LD<op>, ST<op>, SWP): the site becomes `B stub` (or `BL shared_stub` where x30 is dead); the stub is
-  what a compiler emits for ARMv8.0, an exclusive loop with the same acquire/release bits, ending in a branch back.
+- LSE (CAS, CASP, LD<op>, ST<op>, SWP): the site becomes `B stub` (or `BL shared_stub` where x30 is dead and the
+  instruction does not use it); the stub is what a compiler emits for ARMv8.0, an exclusive loop with the same
+  acquire/release bits, ending in a branch back.
   Scratch registers come from a path-sensitive liveness pass (over the whole function when LC_FUNCTION_STARTS gives its
   bounds); otherwise they are spilled below Darwin's 128-byte red zone.
 - FJCVTZS, FCMLA/FCADD, FP16 arithmetic, SQRDMLAH/SQRDMLSH: stubs. FP16 widens to single, operates and narrows once

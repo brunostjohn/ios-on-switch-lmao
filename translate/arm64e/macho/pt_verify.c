@@ -176,6 +176,9 @@ static int check_words(struct vctx *c, bool no_pac, struct a64x_pt_check *v, cha
         } else if (freed) {
             v->stub_words++;
             v->entered_stub_words += a64x_pt_entered(c->m, c->entries, off);
+        } else if (stub_site(cw, was) && !a64x_bl_site_ok(was, now)) {
+            return fail(err, errlen, "site at 0x%llx: its BL overwrites the x30 that %08x uses",
+                        (unsigned long long)off, was);
         } else if (stub_site(cw, was) && follow(c, off, now)) {
             v->sites++;
         } else {

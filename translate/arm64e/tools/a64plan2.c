@@ -1981,7 +1981,7 @@ int a64x_cmd_plan2(int argc, char **argv)
                                                 lr & ~(1u << 30),
                                                 vd,
                                                 (uint8_t)c,
-                                                (uint8_t)((lr >> 30) & 1),
+                                                (uint8_t)(((lr >> 30) & 1) && !(a64x_stub_gprs(w) & (1u << 30))),
                                                 (uint8_t)((hotbits[f][(fo / 4) >> 3] >> ((fo / 4) & 7)) & 1)};
             }
         }
@@ -2250,7 +2250,7 @@ int a64x_cmd_plan2(int argc, char **argv)
                      c == A64X_JSCVT || c == A64X_FCMA || c == A64X_FP16 || c == A64X_RDM) &&
                     out[x] != in[x]) {
                     vcls[c]++;
-                    if (follow(va + 4 * x, out[x]))
+                    if (a64x_bl_site_ok(in[x], out[x]) && follow(va + 4 * x, out[x]))
                         ok++;
                     else {
                         bad++;

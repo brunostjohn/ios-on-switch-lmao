@@ -25,6 +25,8 @@ constexpr uint32_t kLdpFp = 0xA8C17BFD;    // ldp x29, x30, [sp], #16
 constexpr uint32_t kLdaddal = 0xF8E20003;  // ldaddal x2, x3, [x0]
 constexpr uint32_t kCasal = 0xC8E1FC02;    // casal x1, x2, [x0]
 constexpr uint32_t kAdd = 0x8B020020;      // add x0, x1, x2
+constexpr uint32_t kLdadd30 = 0xB83E0003;  // ldadd w30, w3, [x0]
+constexpr uint32_t kUcvtf30 = 0x1EE303C0;  // ucvtf h0, w30
 constexpr uint32_t kSeg = 0x4000;
 constexpr uint32_t kTextOff = 0x1000;
 constexpr uint64_t kBase = 0x100000000;
@@ -277,6 +279,34 @@ TEST(Pretranslate, TheVerifierCatchesAStubThatDoesNotReturn)
     put32(x.out, end, 0x14000000u | 1);  // b . + 4: runs into the next stub words instead of returning
     a64x_pt_check v;
     EXPECT_LT(a64x_pt_verify(&x.m, x.out.data(), &v, x.err, sizeof(x.err)), 0);
+}
+
+// f0's site has x30 dead after it (the ldp reloads it), but these sites read w30: a BL would overwrite it first.
+TEST(Pretranslate, ASiteThatReadsX30GetsItsOwnStub)
+{
+    for (uint32_t site : {kLdadd30, kUcvtf30}) {
+        Spec s = typical();
+        s.code[2] = site;
+        Result x;
+        run(s, x);
+        ASSERT_EQ(x.r.status, A64X_PT_TRANSLATED) << x.r.why;
+        EXPECT_EQ(x.verified, 2) << x.err;
+        EXPECT_EQ(text(x, 2) & 0xFC000000u, 0x14000000u) << std::hex << site;
+    }
+}
+
+TEST(Pretranslate, TheVerifierCatchesABlOverAnX30Operand)
+{
+    Result x;
+    run(typical(), x);
+    ASSERT_EQ(text(x, 2) & 0xFC000000u, 0x94000000u);
+    Spec s = typical();
+    s.code[2] = kLdadd30;
+    std::vector<uint8_t> in = build(s);
+    a64x_macho m;
+    ASSERT_EQ(a64x_macho_parse(in.data(), in.size(), &m, x.err, sizeof(x.err)), 0) << x.err;
+    a64x_pt_check v;
+    EXPECT_LT(a64x_pt_verify(&m, x.out.data(), &v, x.err, sizeof(x.err)), 0) << "the BL overwrites the w30 it adds";
 }
 
 TEST(Pretranslate, TheSignatureNoLongerChecksAfterAByteChanges)

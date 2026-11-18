@@ -367,7 +367,7 @@ static bool place_site(struct pt *p, uint64_t site, uint32_t w, enum a64x_class 
     uint32_t dead, vdead, branch = 0;
     bool vt = a64x_class_uses_vtemps(c);
     liveness(p, site, vt, &dead, &vdead);
-    if ((dead >> 30) & 1 && c != A64X_PAC_LDRA) {
+    if ((dead >> 30) & 1 && c != A64X_PAC_LDRA && !(a64x_stub_gprs(w) & (1u << 30))) {
         uint32_t need = vt ? vtemps_of(w) : 0;
         bool two = (dead & ((1u << 16) | (1u << 17))) == ((1u << 16) | (1u << 17)),
              vfree = need && (vdead & need) == need;
