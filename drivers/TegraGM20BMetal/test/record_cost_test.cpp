@@ -316,11 +316,12 @@ TEST(GM20BRecordCost, CompositorScaleFrame)
     print("unchanged-state draw", difference(repeated, one), 300, "draw");
     printRetainSites("changed-state draw retains", doubled, frame);
     printRetainSites("unchanged-state draw retains", repeated, one);
-    // the API calls' own messages alone: 6 a compositor draw, 1 a draw with nothing set before it, 3 an encoder's
-    // begin, state and end (plus the pass copy's own at a new shape), and no allocation once the recording is warm
+    // the API calls' own messages alone: 6 a compositor draw, 1 a draw with nothing set before it, 3 an encoder of a
+    // kept shape's begin, state and end and 1 its release (its block comes from the pool with no message), and no
+    // allocation once the recording is warm
     EXPECT_EQ(difference(doubled, frame).counts.sends, uint64_t(6 * kDraws));
     EXPECT_EQ(difference(repeated, one).counts.sends, 300u);
-    EXPECT_LE(encoders.counts.sends, uint64_t(7 * kEncoders));
+    EXPECT_LE(encoders.counts.sends, uint64_t(4 * kEncoders));
     EXPECT_EQ(frame.counts.mallocs, 0u);
     // an encoder of a kept pass shape takes no lock: the pass cache is its thread's alone (gm20bPassTrim stops the thread)
     EXPECT_EQ(encoders.counts.locks, 0u);

@@ -7,16 +7,19 @@
 #import "TegraGM20BMetalRotated.h"
 #import "TegraGM20BMetalTargetViews.h"
 #include "format_standin.h"
+#include "object_pool.h"
 #include "planar_target.h"
 #include "xr.h"
 #include "zeta_colour.h"
 
 // A pass of the contents of one opened before (TegraGM20BMetalPassCache.h): its copy and facts, and what each pass of a command
-// buffer does again: the objects it names retained, its targets' GPU writes declared, their compression as it is now
+// buffer does again: the objects it names retained, its targets' GPU writes declared, their compression as it is now. A kept
+// shape's key names only this device's textures and buffers (gm20bPassKey), so its objects' classes are known; the cache
+// and the command buffer hold every object it names.
 static id<MTLRenderCommandEncoder> openKeptPass(SwitchMetalCommandBuffer *cb, SwitchMetalRenderEncoder *e,
                                                 const SwitchMetalPassEntry &kept)
 {
-    MTLRenderPassDescriptor *pass = kept.pass;
+    __unsafe_unretained MTLRenderPassDescriptor *pass = kept.pass;
     [cb retain:pass];
     e->_pass = pass;
     e->_passShared = true;
@@ -24,34 +27,30 @@ static id<MTLRenderCommandEncoder> openKeptPass(SwitchMetalCommandBuffer *cb, Sw
     SwitchMetalPass &facts = cb->_passes.emplace_back(kept.facts);
     facts.compressed = 0;
     for (unsigned c = 0; c < 8; c++) {
-        id t = facts.color[c].texture;
-        if (!t)
+        __unsafe_unretained SwitchMetalTexture *x = (SwitchMetalTexture *)facts.color[c].texture;
+        if (!x)
             continue;
-        [cb retain:t];
-        [cb retain:facts.color[c].resolve];
-        if (SwitchMetalTexture *x = (SwitchMetalTexture *)t; [(id)x isKindOfClass:[SwitchMetalTexture class]]) {
-            declareGpuWrites(x);
-            if (x->_gm20bOk && gm20b::xrForm(x->_raw.format) != gm20b::XrForm::None && x->_raw.comptags)
-                facts.compressed |= uint8_t(1u << c);
+        [cb retain:x];
+        declareGpuWrites(x);
+        if (x->_gm20bOk && gm20b::xrForm(x->_raw.format) != gm20b::XrForm::None && x->_raw.comptags)
+            facts.compressed |= uint8_t(1u << c);
+        if (__unsafe_unretained SwitchMetalTexture *r = (SwitchMetalTexture *)facts.color[c].resolve) {
+            [cb retain:r];
+            declareGpuWrites(r);
         }
-        if (SwitchMetalTexture *r = (SwitchMetalTexture *)facts.color[c].resolve;
-            [(id)r isKindOfClass:[SwitchMetalTexture class]])
-            declareGpuWrites(r);
     }
-    [cb retain:facts.zeta[0].texture];
-    [cb retain:facts.zeta[1].texture];
-    if (SwitchMetalTexture *r = (SwitchMetalTexture *)facts.depthResolve) {
-        [cb retain:r];
-        if ([(id)r isKindOfClass:[SwitchMetalTexture class]])
+    for (const SwitchMetalPass::Zeta &z : facts.zeta)
+        if (z.texture)
+            [cb retain:z.texture];
+    for (unsigned i = 0; i < 2; i++)
+        if (__unsafe_unretained SwitchMetalTexture *r =
+                (SwitchMetalTexture *)(i ? facts.stencilResolve : facts.depthResolve)) {
+            [cb retain:r];
             declareGpuWrites(r);
-    }
-    if (SwitchMetalTexture *r = (SwitchMetalTexture *)facts.stencilResolve) {
-        [cb retain:r];
-        if ([(id)r isKindOfClass:[SwitchMetalTexture class]])
-            declareGpuWrites(r);
-    }
+        }
     e->_visibility = kept.visibility;
-    [cb retain:kept.visibility];
+    if (kept.visibility)
+        [cb retain:kept.visibility];
     std::copy(kept.formats.begin(), kept.formats.end(), e->_formats);
     e->_count = kept.count;
     e->_zeta = kept.zeta;
@@ -96,7 +95,8 @@ void gm20bOwnPass(SwitchMetalRenderEncoder *e)
 - (id<MTLRenderCommandEncoder>)renderCommandEncoderWithDescriptor:(MTLRenderPassDescriptor *)d
 {
     SWITCH_API(ApiEncoder);
-    SwitchMetalRenderEncoder *e = [SwitchMetalRenderEncoder new];
+    SwitchMetalRenderEncoder *e =
+        (__bridge_transfer SwitchMetalRenderEncoder *)gm20bPoolNew([SwitchMetalRenderEncoder class]);
     [self begin:e];
     thread_local std::vector<uint8_t> key;
     uint64_t hash = 0;
