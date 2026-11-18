@@ -21,6 +21,7 @@ from tools.devicerun.hwtest import (
 from tools.devicerun.joycon import JOYCON
 from tools.devicerun.lockscreen import LOCKSCREEN
 from tools.devicerun.morning import MORNING
+from tools.devicerun.motion import MOTION
 from tools.devicerun.protection import PROTECTION
 from tools.devicerun.rules import REPORT, TIMELINE, Check
 from tools.devicerun.stutter import STUTTER
@@ -1356,6 +1357,7 @@ GROUPS: dict[str, list[Check]] = {
     ],
     'audio': AUDIO,
     'battery': BATTERY,
+    'motion': MOTION,
     'm2v-cut': CUT,
     'textures': TEXTURES,
     'dispatch': DISPATCH,

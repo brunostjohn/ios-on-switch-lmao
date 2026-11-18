@@ -20,6 +20,7 @@ py_library(
         "joycon.py",
         "lockscreen.py",
         "morning.py",
+        "motion.py",
         "protection.py",
         "reports.py",
         "rules.py",
@@ -91,6 +92,14 @@ py_test(
     name = "battery_test",
     size = "small",
     srcs = ["battery_test.py"],
+    deps = [":lib"],
+)
+
+# motion.py's checks over boot 2's CoreMotion lines.
+py_test(
+    name = "motion_test",
+    size = "small",
+    srcs = ["motion_test.py"],
     deps = [":lib"],
 )
 

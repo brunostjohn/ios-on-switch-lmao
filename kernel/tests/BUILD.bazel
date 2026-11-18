@@ -51,6 +51,9 @@
 #                            scale keeping the shipped calls and exit; both copies of WidgetKit's placeholder deadline;
 #                            WidgetKit's archived image limit at 2x; the scroll edge keyline's two ladders sending every
 #                            scale but 3 to the 2x row; only the grid and WidgetKit's two applied at scale 1
+#   xnu_motion_caps_24B119_test  the CoreMotion site of switch_ui_scale_sites_24B119.h: the hardware type 225 case run
+#                            from its shipped bytes loads J181's capability word and from its patched bytes that word
+#                            without the motion coprocessor's bits; 21H461's table has no such site
 #   xnu_ui_scale_page_test   both trees' switch_ui_scale_page over 24B119's table focus site: the shipped bytes take
 #                            both edits and nothing else; a difference anywhere in either checked window leaves the
 #                            chunk as read and logs one line; a chunk without the edits is copied as read
@@ -477,6 +480,12 @@ host_test(
     name = "xnu_ui_scale_sites_24B119_test",
     srcs = _UI_SCALE_SITES_HDRS + ["xnu_ui_scale_sites_24B119_test.cpp"],
     data = _UI_SCALE_SITES_DATA,
+    includes = ["."],
+)
+
+host_test(
+    name = "xnu_motion_caps_24B119_test",
+    srcs = _UI_SCALE_SITES_HDRS + ["xnu_motion_caps_24B119_test.cpp"],
     includes = ["."],
 )
 
