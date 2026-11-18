@@ -76,6 +76,7 @@ SWITCH_OBJECTS = {
         ("osfmk/kern/sched_prim.c", "diag/stall_frame.c", []),
         ("osfmk/kern/sched_prim.c", "diag/heartbeat.c", []),
         ("osfmk/kern/sched_prim.c", "sched/busy.c", []),
+        ("osfmk/kern/sched_prim.c", "diag/unnest.c", []),
         ("osfmk/kern/exception.c", "diag/crash.c", []),
         ("osfmk/kern/host.c", "vm/stats.c", [], ["12377.121.6"]),
     ],

@@ -32,6 +32,8 @@ void switch_diag_user_crash(struct task *task, const char *name, int pid, int si
 void switch_diag_cpu_hog(struct task *task, const char *name, int pid);
 /* filt_wltouch, after a successful update: a sync wait that returns at once on another wait's knote (diag/workloop.c). */
 void switch_diag_wl_touched(uint32_t command, uint32_t sfflags, uint64_t workloop, uint64_t ident, const void *waiter);
+/* log_unnest_badness, after its rate limit: the current thread unnests [start, end) of its shared region (diag/unnest.c). */
+void switch_diag_unnest(uint64_t start, uint64_t end);
 #else
 static inline void switch_diag_proc_exit(__unused struct proc *p, __unused int rv)
 {}
@@ -42,6 +44,9 @@ static inline void switch_diag_cpu_hog(__unused struct task *task, __unused cons
 static inline void switch_diag_wl_touched(__unused uint32_t command, __unused uint32_t sfflags,
                                           __unused uint64_t workloop, __unused uint64_t ident,
                                           __unused const void *waiter)
+{}
+
+static inline void switch_diag_unnest(__unused uint64_t start, __unused uint64_t end)
 {}
 #endif
 
