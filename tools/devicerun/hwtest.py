@@ -596,6 +596,7 @@ TESTS: dict[str, bool] = {
     'net.usb_storage': True,
     'storage.sequential': False,
     'storage.random': False,
+    'storage.io': False,
     'cpu.single': False,
     'cpu.multi': False,
     'a64x.self': False,

@@ -149,7 +149,7 @@ public enum Registry {
 
     static let connectivityAndStorage: [any HWTest] = [
         NetworkPathTest(), ReachabilityTest(), BluetoothTest(), USBStorageTest(), SequentialStorageTest(),
-        RandomStorageTest(), WiFiLinkTest(),
+        RandomStorageTest(), StorageIOTest(), WiFiLinkTest(),
     ]
 
     static let cpuAndSystem: [any HWTest] = [

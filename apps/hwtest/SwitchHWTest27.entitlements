@@ -63,6 +63,7 @@
 		<string>kern.switch_display_refresh_step_mach</string>
 		<string>kern.switch_joycon</string>
 		<string>kern.switch_soctherm</string>
+		<string>kern.switch_sd</string>
 		<string>kern.switch_gpu_paths</string>
 		<string>kern.switch_gpu_promises</string>
 		<string>kern.a64x.images</string>
