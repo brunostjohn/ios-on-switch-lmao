@@ -84,11 +84,6 @@ public:
         variants_ = on;
     }
 
-    void selectorConfigs(const std::map<uint64_t, SelectorConfigs> *configs)
-    {
-        selectors_ = configs;
-    }
-
     // Why the last make's storage form was refused where it made the barrier form instead; empty where it made none
     const std::string &storageRefusal() const
     {
@@ -129,7 +124,6 @@ private:
     DirectTranslator translator_;
     StageCompile compile_;
     bool variants_ = false;
-    const std::map<uint64_t, SelectorConfigs> *selectors_ = nullptr;
     std::string storageRefusal_;
     bool splittable_ = false;
     bool keepBound_ = false;

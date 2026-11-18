@@ -47,7 +47,6 @@ class Directcheck(unittest.TestCase):
             any(EXTENDED_COLOUR.search(line) for line in lines), 'the corpora name no extended-range colour'
         )
         env = dict(os.environ, PROBE_LIB_ROOT=str(Path(INPUTS['lib_root']).resolve()))
-        env['DIRECTCHECK_SELECTORS'] = str(Path(INPUTS['selectors']).resolve())
         runs = []
         for shard in range(SHARDS):
             corpus = work / f'corpus{shard}.log'

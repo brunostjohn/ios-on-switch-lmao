@@ -5,8 +5,6 @@ import re
 import struct
 from dataclasses import dataclass, field
 
-import selector_section
-
 MAGIC = b'GM20BPK1'
 # 2: the header's stack key (make_pack.py --stack) after the section table; 3: barrier-form records; 4: programs' shader
 # data and constant buffer types; 6: compute kernels (runtime/pack.h PackKernel); 8: a texture3d entry's Metal
@@ -26,8 +24,9 @@ MAGIC = b'GM20BPK1'
 # entries past 32 (the count's high byte, the rest of the entries and their bound and memory bits in a far block in the
 # blob section, an argument table's entry past 254), programs' uniform buffers past set-0 byte 496 (a far table in the
 # blob section); 28: the selector section (PackSelectors), a state's shader-side stencil push word (shadow_stencil_word)
-VERSION = 30
-SECTIONS = 16  # runtime/pack.h PackSectionCount
+# 31: the selector section gone
+VERSION = 31
+SECTIONS = 15  # runtime/pack.h PackSectionCount
 ENTRY_COMPARES = 1  # runtime/pack.h kEntryCompares: a handle's sampler slot the state samples by comparison
 # PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, uniformWords, reserved, alphaSource,
 # alphaDest, name, reservedName, constant[8][3], program[128]
@@ -608,7 +607,6 @@ def pack_bytes(pack: Pack) -> tuple[bytes, list[int]]:
         iterated_bytes(pack.iterated),
         compute_facts_bytes(pack.compute_facts),
         reflection_bytes(pack.reflections),
-        selector_section.section_bytes(pack.pipes),
     ]
     assert len(sections) == SECTIONS
     header_size = 8 + 4 * 4 + 8 * 2 * len(sections) + 16  # the section table, then the stack key and chip facts

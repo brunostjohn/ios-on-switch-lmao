@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// directcheck compares native translator/compiler records with a pack's corpus, including two-plane and selector forms.
+// directcheck compares native translator/compiler records with a pack's corpus, including two-plane forms.
 // usage: directcheck <default.metallib> <corpus.log> <pack.bin>
 // DIRECTCHECK_MET appends record hashes; DIRECTCHECK_DUMP writes the JSON consumed by nakstat.py and rungcheck.py.
 #import <Foundation/Foundation.h>
@@ -10,9 +10,7 @@
 #include <sys/stat.h>
 #include "../pack/direct_states.h"
 #include "../pack/fetch_free_make.h"
-#include "../pack/selector_configs.h"
 #include "../TegraGM20BMetalDirect.h"
-#include "../selector_variants.h"
 #include "../TegraGM20BMetalOffline.h"
 #include "TwoPlaneStandIn.h"
 #include "record_compare.h"
@@ -43,7 +41,7 @@ std::string jsonString(const std::string &text)
 }
 
 void dumpRecord(const char *dir, const std::string &key, const gm20b::RuntimeRecord &rec,
-                const probe::FetchFree *free = nullptr, const gm20b::SelectorConfigs *selectors = nullptr)
+                const probe::FetchFree *free = nullptr)
 {
     char name[32];
     snprintf(name, sizeof name, "/%016llx.json", (unsigned long long)gm20b::packKeyHash(key));
@@ -103,52 +101,8 @@ void dumpRecord(const char *dir, const std::string &key, const gm20b::RuntimeRec
             rec.pipeline.halfBlendColorWord, free ? free->rung : 0, free ? free->colour : 0,
             jsonString(free ? free->program : "").c_str(), uniform.c_str(), entries.c_str(), setBanks.c_str(),
             rec.pipeline.storageWriteMask, cbufs.c_str(), hexOf(rec.programs[1].data).c_str());
-    if (selectors && !rec.selectors.empty()) {
-        const int32_t entry = gm20b::selectorEntry(rec, selectors->slot);
-        const int32_t bank = gm20b::selectorBank(rec.programs[1], set[entry].offset);
-        fprintf(f, ", \"selectors\": {\"bank\": %d, \"length\": %u, \"compared\": %llu, \"residual_words\": [", bank,
-                selectors->length, (unsigned long long)gm20b::selectorCompared(*selectors));
-        bool first = true;
-        for (uint32_t i = 0; i < gm20b::kUniformRanges; i++)
-            if (rec.selectorAssume & (gm20b::AssumeUniformAligned << i)) {
-                fprintf(f, "%s%u", first ? "" : ",",
-                        0x700 + 4 * gm20b::bufferResidualWord(set[rec.pipeline.uniform[i].entry]));
-                first = false;
-            }
-        fprintf(f, "], \"configs\": [");
-        for (size_t i = 0; i < rec.selectors.size(); i++) {
-            const auto &s = rec.selectors[i];
-            fprintf(f, "%s{\"id\": %u, \"value\": \"%s\", \"code\": \"%s\", \"gprs\": %u, \"bound_textures\": %u}",
-                    i ? "," : "", s.id, hexOf(std::vector<uint8_t>(s.value, s.value + selectors->length)).c_str(),
-                    hexOf(s.program.image).c_str(), s.program.gprs, s.program.boundTextures);
-        }
-        fprintf(f, "]}");
-    }
     fprintf(f, "}\n");
     fclose(f);
-}
-
-std::string selectorDifferences(const gm20b::Pack &pack, const gm20b::PackPipeline &pp, const gm20b::RuntimeRecord &rec)
-{
-    const auto *table = pack.selectors(pp);
-    if (!table)
-        return rec.selectors.empty() ? "" : " selectors-missing";
-    if (table->configs != rec.selectors.size() || table->assume != rec.selectorAssume)
-        return " selectors-layout";
-    const auto *configs = gm20b::selectorConfigs(*table);
-    for (uint32_t i = 0; i < table->configs; i++) {
-        const auto &made = rec.selectors[i];
-        const auto &packed = pack.section<gm20b::PackProgram>(gm20b::PackPrograms)[configs[i].program];
-        gm20b::PackProgram program;
-        const auto slot = gm20b::programSlot(made.program, program);
-        const uint8_t *heap = pack.section<uint8_t>(gm20b::PackHeap) + packed.heapOffset;
-        if (configs[i].id != made.id || packed.bytes != program.bytes || memcmp(heap, slot.data(), slot.size()) ||
-            packed.program - packed.heapOffset != program.program || packed.cbufs != program.cbufs ||
-            memcmp(packed.cbufType, program.cbufType, sizeof program.cbufType) ||
-            !recordcompare::sameFarUbos(pack.farUbos(packed), made.program))
-            return " selector-program";
-    }
-    return "";
 }
 
 // The state's fetch-free form, made as directpack.mm makes it (fetch_free_make.h)
@@ -199,19 +153,6 @@ int main(int argc, char **argv)
         }
         gm20b::Direct direct(gm20b::PackRules::of(pack), false, offline::translator());
         direct.makeVariants(true);
-        std::map<uint64_t, gm20b::SelectorConfigs> selectors;
-        const char *selectorPath = getenv("DIRECTCHECK_SELECTORS");
-        if (selectorPath && *selectorPath) {
-            NSString *table = [NSString stringWithContentsOfFile:@(selectorPath)
-                                                        encoding:NSUTF8StringEncoding
-                                                           error:nil];
-            std::string why;
-            if (!table || !::pack::readSelectorConfigs(table.UTF8String, selectors, why)) {
-                fprintf(stderr, "directcheck: selectors: %s\n", table ? why.c_str() : "unread table");
-                return 1;
-            }
-            direct.selectorConfigs(&selectors);
-        }
         FILE *met = getenv("DIRECTCHECK_MET") ? fopen(getenv("DIRECTCHECK_MET"), "a") : nullptr;
         uint32_t states = 0, same = 0, barriers = 0, refused = 0, bad = 0, splits = 0;
         double ms = 0;
@@ -243,8 +184,7 @@ int main(int argc, char **argv)
             if (outcome == gm20b::CompileOutcome::Made && !direct.storageRefusal().empty())
                 printf("BARRIER FORM (%s): %s\n", direct.storageRefusal().c_str(), key.substr(0, 160).c_str());
             if (const char *dir = getenv("DIRECTCHECK_DUMP"); dir && *dir && outcome == gm20b::CompileOutcome::Made) {
-                const auto found = selectors.find(keyHash);
-                dumpRecord(dir, key, rec, nullptr, found == selectors.end() ? nullptr : &found->second);
+                dumpRecord(dir, key, rec);
                 dumpFetchFree(direct, s, line, key, textures, dir);
             }
             std::string verdict;
@@ -253,8 +193,7 @@ int main(int argc, char **argv)
             } else if (pp) {
                 verdict = outcome == gm20b::CompileOutcome::Made
                               ? recordcompare::differences(pack, *pp, rec) +
-                                    recordcompare::splitDifferences(pack, *pp, rec, direct.splittable()) +
-                                    (selectorPath && *selectorPath ? selectorDifferences(pack, *pp, rec) : "")
+                                    recordcompare::splitDifferences(pack, *pp, rec, direct.splittable())
                               : " refused (" + why + ")";
                 splits += verdict.empty() && rec.split;
                 (barrier ? barriers : same) += verdict.empty();

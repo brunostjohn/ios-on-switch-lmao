@@ -2,7 +2,6 @@
 // See pack.h.
 #include "pack.h"
 #include "set_entries.h"
-#include "pack_selectors.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -29,7 +28,7 @@ Pack::~Pack()
         munmap(const_cast<uint8_t *>(base_), size_);
 }
 
-bool Pack::load(const char *path, uint64_t stack, std::string &err, uint32_t maxSelectorId)
+bool Pack::load(const char *path, uint64_t stack, std::string &err)
 {
     const int fd = ::open(path, O_RDONLY);
     if (fd < 0) {
@@ -65,7 +64,7 @@ bool Pack::load(const char *path, uint64_t stack, std::string &err, uint32_t max
             err = "truncated pack";
             return false;
         }
-    if (!farBlocksFit(err) || !selectorsFit(maxSelectorId, err))
+    if (!farBlocksFit(err))
         return false;
     const PackPipeline *p = section<PackPipeline>(PackPipelines);
     const auto byKey = [p](uint32_t a, uint32_t b) {
@@ -255,56 +254,6 @@ bool Pack::farBlocksFit(std::string &err) const
             return false;
         }
     return true;
-}
-
-bool Pack::selectorsFit(uint32_t maxId, std::string &err) const
-{
-    const uint64_t size = bytes(PackSelectors);
-    if (!size)
-        return true;
-    const auto refuse = [&err](const char *why) {
-        err = std::string("invalid selector section: ") + why;
-        return false;
-    };
-    if (size < 8 || hdr_->section[PackSelectors].offset % 8)
-        return refuse("truncated or unaligned header");
-    const uint8_t *at = section<uint8_t>(PackSelectors);
-    const uint32_t count = *reinterpret_cast<const uint32_t *>(at);
-    const uint64_t tablesAt = 8 + uint64_t(count) * sizeof(PackSelectorIndex);
-    if (tablesAt > size)
-        return refuse("index past its section");
-    const auto *index = reinterpret_cast<const PackSelectorIndex *>(at + 8);
-    for (uint32_t i = 0; i < count; i++) {
-        if (index[i].record >= hdr_->pipelines || (i && index[i].record <= index[i - 1].record))
-            return refuse("record index out of range or order");
-        const uint64_t offset = index[i].at;
-        if (offset < tablesAt || offset % 8 || offset > size || size - offset < sizeof(PackSelectorTable))
-            return refuse("table outside its section");
-        const auto *table = reinterpret_cast<const PackSelectorTable *>(at + offset);
-        if (!table->configs || uint64_t(table->configs) * sizeof(PackSelectorConfig) > size - offset - sizeof *table)
-            return refuse("configs past their table");
-        const PackSelectorConfig *configs = selectorConfigs(*table);
-        for (uint32_t c = 0; c < table->configs; c++)
-            if (!configs[c].id || configs[c].id > maxId || (c && configs[c].id <= configs[c - 1].id) ||
-                configs[c].program >= hdr_->programs)
-                return refuse("config ID or program out of range or order");
-    }
-    return true;
-}
-
-const PackSelectorTable *Pack::selectors(const PackPipeline &pp) const
-{
-    if (!bytes(PackSelectors))
-        return nullptr;
-    const uint8_t *at = section<uint8_t>(PackSelectors);
-    const uint32_t count = *reinterpret_cast<const uint32_t *>(at);
-    const uint32_t record = uint32_t(&pp - section<PackPipeline>(PackPipelines));
-    const auto *index = reinterpret_cast<const PackSelectorIndex *>(at + 8), *end = index + count;
-    const auto *found = std::lower_bound(index, end, record, [](const PackSelectorIndex &x, uint32_t r) {
-        return x.record < r;
-    });
-    return found == end || found->record != record ? nullptr
-                                                   : reinterpret_cast<const PackSelectorTable *>(at + found->at);
 }
 
 const uint32_t *Pack::far(const PackPipeline &pp) const

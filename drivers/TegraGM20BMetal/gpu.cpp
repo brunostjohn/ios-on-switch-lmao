@@ -5,7 +5,6 @@
 // first version (render encoder, pack replay) and checked it against NVK's stream; r8-rawca added the lifetimes, the pool, the
 // imports, the copies and the abortable command buffer.
 #include "lock.h"
-#include "drivers/TegraGM20BMetal/precompile/ca-selectors/ca_selector_layout.h"
 #include "gpu.h"
 #include "mme.h"
 #include "owned.h"
@@ -377,7 +376,7 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
         glassMem = std::make_unique<GlassMem>();
 #endif
     openFailure_ = OpenFailure::Structural;
-    if (!pack_.load(packPath, stack, err, kCaSelectorConfigs))
+    if (!pack_.load(packPath, stack, err))
         return false;
     openFailure_ = OpenFailure::Transient;
     if (!k_.open(err))

@@ -125,9 +125,6 @@ struct Pipeline {
     const PackVariant *variants[2] = {};
     uint8_t variantCount[2] = {};
     std::vector<Pipeline *> chosen;
-    uint16_t selectorCount = 0;
-    uint32_t selectorAssume = 0;
-    bool selectorVariant = false;
 
     // DEVELOPMENT: a Core Animation state's name, whose draws log their form and quads (RenderEncoder::probeDraw): a solid
     // fill into its three-colour pass (..Xmw_A3Xhfc, the scroll edge keyline's state: fillState) its first draws and thin

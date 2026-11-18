@@ -13,7 +13,6 @@
 #include <vector>
 #include "pack/probe_bind.h"
 #include "pack.h"
-#include "pack_selectors.h"
 #include "set_entries.h"
 
 namespace nvdec {
@@ -94,16 +93,6 @@ struct RuntimeRecord {
     };
 
     std::vector<Variant> variants;
-
-    struct Selector {
-        uint32_t id = 0;
-        uint8_t value[kSelectorBytes] = {};
-        CapturedProgram program;
-    };
-
-    uint32_t selectorAssume = 0;
-    std::vector<Selector> selectors;
-    std::vector<uint32_t> selectorGeneric;
     // its argument tables' words (PackPipeline::spillWords), the vertex table's first: in a pack, its blob section's
     std::vector<uint32_t> spill;
     // its far block (set_entries.h farWords of its entries): in a pack, its blob section's at farEntriesAt

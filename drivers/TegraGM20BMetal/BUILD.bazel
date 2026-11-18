@@ -43,7 +43,6 @@ filegroup(
         "pack/xr_srgb_decode.h",  # BGR10_XR_sRGB's tables, which xr_srgb.h's model reads
         "pack/xr_srgb_encode.h",
         "//drivers/TegraGM20BMetal/abi:MetalABI.h",
-        "//drivers/TegraGM20BMetal/precompile/ca-selectors:ca_selector_layout.h",
     ],
 )
 
@@ -90,7 +89,6 @@ filegroup(
         "metallib.cpp",
         "metallib.h",
         "pack.h",
-        "pack_selectors.h",
         "set_entries.h",
         "TegraGM20BMetalPipelineKey.h",  # the runtime's key of a state, which probe_states.h files records under
         "pipeline_fields.h",  # the descriptor fields that key reads
@@ -150,14 +148,12 @@ filegroup(
         "sample_shading.h",
         "pack.cpp",
         "pack.h",
-        "pack_selectors.h",
         "push.h",
         "record.h",
         "record_parts.cpp",
         "record_parts.h",
         "residual.h",
         "rotation.h",
-        "selector_variants.h",
         "set_entries.h",
         "set_layout.h",
         "slot_mask.h",

@@ -486,11 +486,9 @@ private:
                  const char **why);
     // `pl`'s split twin where the draw is large enough for it to save time and its prologue can read what the draw binds
     Pipeline *splitTwin(Pipeline *pl, WrittenRegion::Analysis &analysis) const;
-    // the facts of a draw of `pl` its bindings decide, and with them selectorId_: the Core Animation config bound at
-    // fragment slot kCaSelectorSlot as `pl`'s selector variants name it (0: none), read where the bindings moved since
-    // the last draw, never as one is bound
+    // the facts of a draw of `pl` its bindings decide, worked out where the bindings moved since the last draw, never as
+    // one is bound
     uint32_t bindingFacts(const Pipeline &pl);
-    uint16_t selectorId_ = 0;
     const Pipeline *factsPipeline_ = nullptr;
     uint64_t factsRevision_ = 0;
     uint32_t facts_ = 0;

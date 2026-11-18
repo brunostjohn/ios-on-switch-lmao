@@ -174,7 +174,7 @@ public:
     }
 
     // the pipeline a draw of `pl` with binding facts `facts` (pack.h PackAssumption) draws with (variants.cpp)
-    Pipeline *variant(Pipeline &pl, uint32_t facts, uint16_t selector = 0);
+    Pipeline *variant(Pipeline &pl, uint32_t facts);
 
     const Pack &pack() const
     {

@@ -33,11 +33,10 @@ enum PackSectionId {
     PackIterated,
     PackComputeStates,
     PackReflections,
-    PackSelectors,
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 30;
+constexpr uint32_t kPackVersion = 31;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bit 26 of its pass, bits 17-25 of the chip
@@ -332,7 +331,6 @@ enum class PackForm : uint8_t {
 };
 
 struct PackPipeline;
-struct PackSelectorTable;
 
 // The form a record answers to (Pack::find): a variant record's is its state's own
 PackForm recordForm(const PackPipeline &pp);
@@ -722,7 +720,7 @@ class Pack {
 public:
     ~Pack();
     // `stack`: the plugin's own key; a pack of another build (another m2v, NVK or frontend) is refused. 0 takes any (host tests).
-    bool load(const char *path, uint64_t stack, std::string &err, uint32_t maxSelectorId = UINT16_MAX);
+    bool load(const char *path, uint64_t stack, std::string &err);
 
     const PackHeader *header() const
     {
@@ -748,7 +746,6 @@ public:
     const PackSplit *split(uint32_t wholeProgram) const;   // nullptr: not split
     // `pp`'s variants of stage `stage` (0 vertex, 1 fragment), `count` of them; nullptr: none
     const PackVariant *variants(const PackPipeline &pp, uint32_t stage, uint32_t &count) const;
-    const PackSelectorTable *selectors(const PackPipeline &pp) const;
     const PackArchive *archive(uint64_t pathHash) const;              // nullptr: the pack lists no such archive
     const PackIteratedBlend *iterated(const PackPipeline &pp) const;  // nullptr: it names none
     // `pp`'s or `k`'s ArgumentTable words (PackPipeline::spillAt); nullptr: none, or past the section
@@ -773,7 +770,6 @@ public:
 
 private:
     bool farBlocksFit(std::string &err) const;
-    bool selectorsFit(uint32_t maxId, std::string &err) const;
 
     const uint8_t *base_ = nullptr;
     size_t size_ = 0;

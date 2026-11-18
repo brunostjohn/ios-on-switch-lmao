@@ -19,7 +19,6 @@ RAW = [
     "probelog.py",
     "layouts.py",
     "packfile.py",
-    "selector_section.py",
     "kernels.py",
     "splits.py",
     "eqcheck.py",

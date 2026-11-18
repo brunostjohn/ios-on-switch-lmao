@@ -488,17 +488,14 @@ def stamp(pack_bin: Path, stack: int) -> None:
     pack_bin.write_bytes(pack)
 
 
-def link(
-    out: Path, buckets: list[Path], stack: int, inventory: Path | None = None, selectors: str | None = None
-) -> None:
+def link(out: Path, buckets: list[Path], stack: int, inventory: Path | None = None) -> None:
     """directlink.py over the buckets' records: out/pack.bin, stamped with the stack key.
 
     `inventory`: the IPSW's archive inventory, whose archives' declared states the pack lists (archives.py).
     """
     out.mkdir(parents=True, exist_ok=True)
     archives = ['--archives', inventory] if inventory else []
-    table = ['--ca-selectors', selectors] if selectors else []
-    report = run([sys.executable, HERE / 'directlink.py', out, *archives, *table, *buckets])
+    report = run([sys.executable, HERE / 'directlink.py', out, *archives, *buckets])
     if stack:
         stamp(out / 'pack.bin', stack)
     print(report.rstrip())
@@ -514,7 +511,7 @@ def stamp_or_link(stack: int) -> bool:
         buckets = [Path(a).resolve() for a in sys.argv[sys.argv.index('--link') + 1 :] if Path(a).is_dir()]
         buckets = [b for b in buckets if b != out]
         inventory = option('--archives', False)
-        link(out, buckets, stack, Path(inventory).resolve() if inventory else None, option('--ca-selectors', False))
+        link(out, buckets, stack, Path(inventory).resolve() if inventory else None)
         return True
     return False
 
@@ -571,9 +568,9 @@ def main() -> None:
     env = probe_env()
     buckets = split_buckets(corpus, work, BUCKETS)
     with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
-        for line in pool.map(lambda b: bucket(work, b, qc, env, option('--ca-selectors', False)), buckets):
+        for line in pool.map(lambda b: bucket(work, b, qc, env), buckets):
             print(line)
-    link(out, buckets, stack, selectors=option('--ca-selectors', False))
+    link(out, buckets, stack)
     if '--clean' in sys.argv[1:]:
         shutil.rmtree(work)
 

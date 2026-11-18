@@ -390,9 +390,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         y[0] = std::min(y[0], yj[0]), y[1] = std::max(y[1], yj[1]);
     }
     const uint32_t facts = bindingFacts(*pl);
-    Pipeline *prepared = dev_->variant(*pl, facts | (rot_.turned() ? AssumeTurned : 0u), selectorId_);
-    if (prepared->selectorVariant)
-        pl = prepared;
+    Pipeline *prepared = dev_->variant(*pl, facts | (rot_.turned() ? AssumeTurned : 0u));
     SWITCH_METAL_ENCODE_BEGIN(geometrySpan, Geometry);
     // only a pass's first draw is bounded by its vertices, for the cover test below (its vertex bytes the recording's
     // cached copy, SwitchMetalCommandBuffer::_shadow); every other decision takes the draw's pixel limit

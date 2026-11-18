@@ -743,7 +743,6 @@ host_test(
         "//drivers/TegraGM20BMetal:own_states.h",
         "//drivers/TegraGM20BMetal:pack.cpp",
         "//drivers/TegraGM20BMetal:pack.h",
-        "//drivers/TegraGM20BMetal:pack_selectors.h",
         "//drivers/TegraGM20BMetal:record.h",
         "//drivers/TegraGM20BMetal:record_parts.cpp",
         "//drivers/TegraGM20BMetal:descriptors.h",

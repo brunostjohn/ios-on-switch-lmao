@@ -285,8 +285,7 @@ def split(args: argparse.Namespace, generator: list[str], env: dict[str, str], w
 def link(args: argparse.Namespace, generator: list[str], env: dict[str, str], work: Path) -> None:
     linked = fresh(work / 'linked')
     inventory = ['--archives', Path(args.archives).resolve()] if args.archives else []
-    selectors = ['--ca-selectors', Path(args.ca_selectors).resolve()] if args.ca_selectors else []
-    arguments = ['--link', '--out', linked, *inventory, *selectors, *[Path(b).resolve() for b in args.buckets]]
+    arguments = ['--link', '--out', linked, *inventory, *[Path(b).resolve() for b in args.buckets]]
     report = generate(generator, arguments, env, 'link')
     if args.corpus_report:
         corpus = Path(args.corpus_report).read_text()
@@ -349,7 +348,6 @@ def main() -> None:
     steps.choices['link'].add_argument('buckets', nargs='+')
     steps.choices['link'].add_argument('--corpus-report')
     steps.choices['link'].add_argument('--archives')
-    steps.choices['link'].add_argument('--ca-selectors')
     args = parser.parse_args()
     if args.step == 'corpus':
         lines, report = own_build(probe_lines(Path(args.corpus).read_text()), args.build)

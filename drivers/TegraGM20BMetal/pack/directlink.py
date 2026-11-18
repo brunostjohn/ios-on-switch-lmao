@@ -23,7 +23,6 @@ import fetchfree_link
 import kernels
 import mkpack
 import packfile
-import selector_section
 import splits
 
 PIPELINE = struct.Struct('<QIIIIIBBBBHHI')
@@ -138,8 +137,6 @@ def load_records(path: str) -> tuple[list[dict], list[dict], dict[tuple[bool, in
             rec['tess_programs'] = [program(r) for _ in range(r.u32())]
             rec['extras'], rec['restore'] = (list(zip(*[iter(words_of(r.blob()))] * 2, strict=True)) for _ in range(2))
             rec['far'] = words_of(r.blob())
-            rec['selectors'] = selector_section.read(r, program)
-            rec['selector_generic'] = words_of(r.blob())
         states.append(rec)
     return states, kernel_recs, reflections
 
@@ -350,7 +347,6 @@ def pipeline_of(rec: dict, varying: list[int], prog_index: dict[str, int], const
             }
             for i, v in enumerate(rec.get('variants', []))
         ],
-        'selectors': selector_section.of_record(rec, lambda p: prog_index[program_id(p)]),
     }
 
 
@@ -474,11 +470,7 @@ def lay_out_variants(states: list[dict], programs: dict[str, dict], laid: tuple,
     """Append the states' variant and tessellation programs to the heap image `laid` holds, after every generic one."""
     count = tessellating = 0
     for rec in states:
-        for p in (
-            [v['program'] for v in rec.get('variants', [])]
-            + rec.get('tess_programs', [])
-            + selector_section.programs(rec)
-        ):
+        for p in [v['program'] for v in rec.get('variants', [])] + rec.get('tess_programs', []):
             pid = program_id(p)
             programs.setdefault(pid, p)
             packfile.place_graphics(pid, programs, *laid)
@@ -528,7 +520,6 @@ def read_option(buckets: list[str], name: str) -> str | None:
 
 def main() -> None:
     out_dir, *buckets = sys.argv[1:]
-    selector_table = read_option(buckets, '--ca-selectors')
     inventory = read_option(buckets, '--archives') or ''
     warm = next(d for d in buckets if os.path.exists(os.path.join(d, 'context.log')))
     _, post = mkpack.load_init(os.path.join(warm, 'context.log'))
@@ -537,8 +528,6 @@ def main() -> None:
     found = split_programs(states, programs)
     simple = [rec['probe'] for rec in states]
     report = [f'{len(states) + len(refused)} states made directly, {len(states)} records, {len(refused)} refused']
-    if selector_table is not None:
-        report += selector_section.coverage(states + refused, selector_table, packfile.key_hash)
     report += variant_report(states)
     varying, baseline = mkpack.split_registers(simple, post)
     report.append(f'{len(varying)} per-pipeline registers: ' + ' '.join(f'{m:x}' for m in varying))
