@@ -748,8 +748,9 @@ OPEN: dict[str, str] = {
         'built, unjudged: where a word byte and an alpha byte of one store meet, they are ORed'
     ),
     'gpu.gm20b.ycbcr_texel_buffer_wide': (
-        'built, unjudged: a YCbCr or packed texture buffer wider than 16384 texels is read as rows of 16384 '
-        "(texel i at the plane's row i / 16384, texel i % 16384)"
+        'compute.nokernel on boot 2: no pack kernel at the dispatch shape of a read of a YCbCr or packed texture '
+        'buffer wider than 16384 texels, so all five formats failed their command buffers before the read as rows '
+        'of 16384 ran'
     ),
     'gpu.gm20b.packed_levels_open': (
         'built, unjudged: level views of R10/RG10Unorm_PACKED of several levels; a kernel sampler shared with a '
