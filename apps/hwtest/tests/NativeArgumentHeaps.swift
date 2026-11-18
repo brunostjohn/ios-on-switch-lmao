@@ -74,7 +74,7 @@ extension NativeArgumentEncoderTest {
                 metrics.set("draw_error", "\(error)".replacingOccurrences(of: " ", with: "_"))
             }
             metrics.set("heap_draw_path_\(count)", path)
-            if path != "raw/exact" { failures.append("heap_draw_path_\(count) \(path), not raw/exact") }
+            if path != "gm20b/exact" { failures.append("heap_draw_path_\(count) \(path), not gm20b/exact") }
         }
         guard counts.count == 2, !counts[0].values.allSatisfy({ $0 == 0 }) else {
             metrics.set("heap_use_cost", "unmeasured")
