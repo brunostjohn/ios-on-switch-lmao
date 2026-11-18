@@ -112,6 +112,14 @@ MEDIA = [
     "heic_grid.heic",
 ]
 
+# Every Mac golden file the device's scene and Core Animation checks read (core/CAGoldens.swift)
+GOLDEN_FILES = [
+    "goldens/ca_21H461.txt",
+    "goldens/ca_24B119.txt",
+    "goldens/scenes_21H461.txt",
+    "goldens/scenes_24B119.txt",
+]
+
 swift_test(
     name = "core_test",
     size = "small",
@@ -122,11 +130,12 @@ swift_test(
         "//tools/benchloop:generated_batches.json",
         "//tools/benchloop:testdata/golden_batch.json",
         "//tools/benchloop:testdata/split_capture_batch.json",
-    ],
+    ] + GOLDEN_FILES,
     env = {
         "BENCH_GENERATED": "$(rlocationpath //tools/benchloop:generated_batches.json)",
         "BENCH_GOLDEN": "$(rlocationpath //tools/benchloop:testdata/golden_batch.json)",
         "BENCH_CAPTURE": "$(rlocationpath //tools/benchloop:testdata/split_capture_batch.json)",
+        "HWTEST_GOLDEN_FILES": " ".join(["$(rlocationpath %s)" % f for f in GOLDEN_FILES]),
         "HWTEST_MEDIA": " ".join(MEDIA),
         "TEXPEER_ENTITLEMENTS": "$(rlocationpath peer/texpeer.entitlements)",
     },
