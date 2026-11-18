@@ -160,6 +160,7 @@ public enum Registry {
         IconCacheResetTest(), CPUClockTest(), CPUDfllLandingTest(), CPUSustainedTest(), CPUSchedTest(),
         CPUIPIPingPongTest(), HogPacingTest(),
         DispatchSyncTest(), DispatchSyncWorkloopTest(), WorkloopSyncTest(), WidgetsRenderTest(), IconRenderTest(),
+        DispatchSyncHandoffTest(),
         SnapshotPurgeableTest(),
     ]
 

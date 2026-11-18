@@ -792,6 +792,7 @@ swift_library(
         ":texpeer_pattern",
         ":video",
         ":workloop_probe",
+        "//apps/hwtest/dispatch:sync_handoff",
     ],
 )
 

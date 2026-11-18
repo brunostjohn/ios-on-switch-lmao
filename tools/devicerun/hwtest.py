@@ -628,6 +628,7 @@ TESTS: dict[str, bool] = {
     'system.dispatch_sync': False,
     'system.dispatch_sync_workloops': False,
     'system.workloop_sync': False,
+    'dispatch.sync_handoff': False,
     'net.wifi_link': False,
     'gpu.latency': False,
     'gpu.present.copy_reset': False,
