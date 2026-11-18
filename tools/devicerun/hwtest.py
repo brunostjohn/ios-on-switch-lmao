@@ -730,52 +730,13 @@ BY_IOS: dict[str, dict[str, bool]] = {
 # gap, not a regression. A row stays until a device run shows its test green: it names what the driver lacks, or,
 # once the driver builds it, what the driver now does that no device has judged yet ('built, unjudged: ...').
 OPEN: dict[str, str] = {
-    'gpu.gm20b.planes_copies_open': (
-        'built, unjudged: a source with no plane 1 leaves the destination plane 1 alone; a descriptor-made 550 and one '
-        'over a surface copy either way through the alpha at the word rows'
-    ),
-    'gpu.gm20b.xr_texel_buffer_tiled': (
-        'built, unjudged: a texel buffer over a surface the kernel laid out block-linear reads its bytes in order '
-        'through a pool the copy engine fills'
-    ),
-    'gpu.gm20b.packed_mips': (
-        'built, unjudged: R10Unorm_PACKED and RG10Unorm_PACKED over planes made with several levels'
-    ),
-    'gpu.gm20b.xr_turned_rows_under_16': (
-        'built, unjudged: a turned RGB10A8_2P_XR10 over planes of rows under 16 bytes stores through the turned pools'
-    ),
-    'gpu.gm20b.xr_into_alpha_tie': (
-        'built, unjudged: where a word byte and an alpha byte of one store meet, they are ORed'
-    ),
     'gpu.gm20b.ycbcr_texel_buffer_wide': (
         'compute.nokernel on boot 2: no pack kernel at the dispatch shape of a read of a YCbCr or packed texture '
         'buffer wider than 16384 texels, so all five formats failed their command buffers before the read as rows '
         'of 16384 ran'
     ),
-    'gpu.gm20b.packed_levels_open': (
-        'built, unjudged: level views of R10/RG10Unorm_PACKED of several levels; a kernel sampler shared with a '
-        'one-level texture reads its level 0'
-    ),
-    'gpu.gm20b.ycbcr_planes_meet': (
-        "built, unjudged: where a YCbCr target's two planes' stored rows meet, the later 2x2 quad's byte is kept and "
-        "one quad's two planes are ORed"
-    ),
-    'gpu.gm20b.ycbcr_turned_overlap_order': (
-        'built, unjudged: a turned target over planes is made at any extent (rotations 1-3 were nil, rotation 0 the '
-        "control), stored by its frame's tiles"
-    ),
-    'gpu.gm20b.turned_overlap_tile_order': (
-        "built, unjudged: a turned target over planes is made at any extent and stored by its frame's tiles"
-    ),
-    'gpu.gm20b.xr_turned_clear_order': (
-        "built, unjudged: a turned target over planes is made at any extent and stored by its frame's tiles"
-    ),
     'gpu.gm20b.xr_descriptor_padding': (
         'a descriptor 550 has no row padding on raw: bytes a copy leaves in its padding or past its rows come back 0'
-    ),
-    'gpu.gm20b.xr_stand_in_refill': (
-        'built, unjudged: a kernel reading an XR texel buffer through its stand-in after a write in the same compute '
-        'encoder reached it splits the encoder there, refills the pool and redraws the stand-in'
     ),
     'gpu.frame.record_cost': (
         "the frame CPU plan's targets (about 1.2 ms a home-screen frame across both threads) are met only once the "
