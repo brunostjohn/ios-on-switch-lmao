@@ -5044,10 +5044,15 @@ public:
     {
         setInternalDisplay(true);
         IOWorkLoop *loop = getWorkLoop();
-        if (!loop || loop->runAction(&publishRefreshGated, this) != kIOReturnSuccess)
+        if (!loop || loop->runAction(&publishRefreshGated, this) != kIOReturnSuccess) {
             IOLog("SwitchDisplay: IOMobileFramebufferLegacy::setDisplayRefreshProperties failed: no "
                   "IOMFBDisplayRefresh\n");
+            return;
+        }
+        refreshValuesRegister();
     }
+
+#include "SwitchRefreshSysctlDisplay.h"
 
     // The compositor's framebuffer rows (QuartzCore CA::WindowServer::AppleDisplay::update_display_limits reads this IOMFB
     // property; iosurface_alignment() then rounds every framebuffer's bytesPerRow up to it, 64 by default), and VideoToolbox's

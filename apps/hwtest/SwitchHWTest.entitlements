@@ -53,6 +53,12 @@
 		<string>kern.switch_frame_info_ordinary</string>
 		<string>kern.switch_frame_info_early</string>
 		<string>kern.switch_frame_info_unphased</string>
+		<string>kern.switch_display_refresh_min</string>
+		<string>kern.switch_display_refresh_min_mach</string>
+		<string>kern.switch_display_refresh_max</string>
+		<string>kern.switch_display_refresh_max_mach</string>
+		<string>kern.switch_display_refresh_step</string>
+		<string>kern.switch_display_refresh_step_mach</string>
 		<string>kern.switch_joycon</string>
 		<string>kern.switch_soctherm</string>
 		<string>kern.switch_gpu_paths</string>
