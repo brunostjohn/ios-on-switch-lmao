@@ -207,8 +207,9 @@ public final class Suite: ObservableObject {
         Self.log(LogLine.summary(records, ios: ios, milliseconds: span))
     }
 
+    /// Each piece of `line` (LogLine.pieces), so a line of any length reaches the log whole.
     nonisolated static func log(_ line: String) {
-        results.notice("\(line, privacy: .public)")
+        for piece in LogLine.pieces(line) { results.notice("\(piece, privacy: .public)") }
     }
 
     private func show(_ shown: Report) {

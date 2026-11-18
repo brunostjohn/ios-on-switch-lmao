@@ -8,6 +8,7 @@ sources.
 """
 
 import re
+from collections.abc import Iterable, Iterator
 
 from tools.devicerun.rules import REPORT, Check
 
@@ -16,6 +17,9 @@ SUBSYSTEM = 'com.brunostjohn.switch.hwtest'
 SOURCE = 'apps/hwtest/core/LogLine.swift'
 SUITE = 'hwtest.suite'
 LITERAL = 'HWTEST '
+# A line longer than one os_log message goes out in pieces (apps/hwtest/core/LogPieces.swift): its start, then
+# `HWTEST <id> +<n> <text>` lines whose texts follow it with nothing between them
+CONTINUED = re.compile(r'^HWTEST (?P<id>\S+) \+\d+ ')
 HARNESS = 'hwtest.harness'
 # A test's FAIL line naming the failed command buffers that reddened it, and any line naming calls skipped
 # (core/FailedAttribution.swift, core/FailedCounts.swift): reports.py rolls them up per predicate
@@ -772,6 +776,30 @@ OPEN: dict[str, str] = {
         'elements ten runs agree on change between runs), so raw keeps the order the larger shapes fit'
     ),
 }
+
+
+def joined(records: Iterable[dict]) -> Iterator[dict]:
+    """Return `records` with each HW Test line's continuations appended to its first piece.
+
+    A first piece waits for the next HW Test line of its process: the app logs a line's pieces before its next line.
+    """
+    held: dict[tuple, dict] = {}
+    for record in records:
+        message = record.get('eventMessage') or ''
+        if not message.startswith(LITERAL) or SUBSYSTEM not in (record.get('subsystem') or ''):
+            yield record
+            continue
+        key = (record.get('bootUUID'), record.get('processID'))
+        continued = CONTINUED.match(message)
+        if continued:
+            first = held.get(key)
+            if first and first['eventMessage'].split(' ', 2)[1] == continued['id']:
+                first['eventMessage'] += message[continued.end() :]
+            continue
+        if key in held:
+            yield held.pop(key)
+        held[key] = dict(record)
+    yield from held.values()
 
 
 def test_check(test_id: str, interactive: bool, ios: str) -> Check:

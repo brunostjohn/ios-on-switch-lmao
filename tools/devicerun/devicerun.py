@@ -14,6 +14,7 @@ from collections.abc import Iterable, Iterator
 
 from tools.devicerun import renamed
 from tools.devicerun.checks import FRAME_PREFIX, GROUPS
+from tools.devicerun.hwtest import joined
 from tools.devicerun.cpu import cpu_rows
 from tools.devicerun.morning import CHECKLIST
 from tools.devicerun.reports import crash_rows, frame_rows, headline, rolled_up
@@ -78,9 +79,9 @@ def run_checks(records: Iterable[dict], checks: list[Check]) -> tuple[list[Resul
     regexes = {c.name: re.compile(c.regex) if c.regex else None for c in checks}
     by_name: dict[str, list[dict]] = {c.name: [] for c in checks}
     frame_lines, first, last = [], None, None
-    for record in records:
+    for record in joined(records):
         event = Event.from_ndjson(record)
-        first, last = first or event.time, event.time
+        first, last = min(first or event.time, event.time), max(last or event.time, event.time)
         if event.message.startswith(FRAME_PREFIX):
             frame_lines.append(f'{record["timestamp"]} {event.message}')
         for check in checks:
