@@ -91,6 +91,9 @@
 #   switch_prefs_add_test    kernel/switch/boot/prefs.c adds a missing integer key to plists CoreFoundation wrote and
 #                            reads back (binary, offsets widening, XML, <dict/>), never replaces one; only 27's setup
 #                            adds True Tone's default
+#   switch_boot_sync_test    <switch/boot_sync.h>: the setup before launchd syncs from a boot's first durable change on
+#                            (a changed override, a fresh Data volume, a panic record) and never on an ordinary or
+#                            deploy boot's REDONE changes
 #
 #   bazel test //kernel/tests:all
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
@@ -859,7 +862,11 @@ copy_file(
 
 host_library(
     name = "prefs",
-    srcs = ["//kernel/switch:boot/prefs.c"],
+    # The headers: prefs.c's private ones beside it.
+    srcs = [
+        "//kernel/switch:boot/prefs.c",
+        "//kernel/switch:headers",
+    ],
     hdrs = ["switch/prefs.h"],
     includes = ["."],
 )
@@ -891,6 +898,22 @@ host_test(
         "CoreFoundation",
     ],
     deps = [":prefs"],
+)
+
+# --- kernel/switch/include/switch/boot_sync.h -------------------------------------------------------------------------
+copy_file(
+    name = "switch_boot_sync",
+    src = "//kernel/switch:include/switch/boot_sync.h",
+    out = "switch/boot_sync.h",
+)
+
+host_test(
+    name = "switch_boot_sync_test",
+    srcs = [
+        "switch/boot_sync.h",
+        "switch_boot_sync_test.cpp",
+    ],
+    includes = ["."],
 )
 
 copy_file(
