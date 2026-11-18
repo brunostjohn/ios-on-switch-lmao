@@ -6373,7 +6373,35 @@ objcxx_units(
         ["//drivers/TegraGM20BMetal:precompile/corpus.log"],
         {"SWITCH_CORPUS": "$(rootpath //drivers/TegraGM20BMetal:precompile/corpus.log)"},
     ),
+    (
+        "compiler_stages_test",
+        "medium",
+        [],
+        [],
+        [],
+        [":compiler_stages_metallib"],
+        {"SWITCH_STAGES_METALLIB": "$(rootpath :compiler_stages_metallib)"},
+    ),
 ]]
+
+# compiler_stages_test's library, compiled from source as an app's default library is
+genrule(
+    name = "compiler_stages_metallib",
+    testonly = True,
+    srcs = [
+        "testdata/compiler_stages/stages.metal",
+        "@xcode//:xcode.env",
+    ],
+    outs = ["compiler_stages.metallib"],
+    cmd = """
+export DEVELOPER_DIR="$$(/usr/bin/sed -n 's/^DEVELOPER_DIR=//p' $(execpath @xcode//:xcode.env))"
+work="$$(/usr/bin/mktemp -d)"
+export HOME="$$work" TMPDIR="$$work"
+/usr/bin/xcrun -sdk iphoneos metal -c $(execpath testdata/compiler_stages/stages.metal) -o "$$work/stages.air"
+/usr/bin/xcrun -sdk iphoneos metallib "$$work/stages.air" -o $@
+""",
+    tags = ["requires-darwin"],
+)
 
 # The translator's own heap and sampler rules (metal_rules.rs), which metal_rules_test holds raw's to
 rust_static_library(
