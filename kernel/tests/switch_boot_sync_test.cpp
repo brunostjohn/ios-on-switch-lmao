@@ -1,10 +1,14 @@
 // <switch/boot_sync.h>: which of the changes the policy step makes on Data before launchd (bsd/kern/kern_exec.c) go to
-// the card synchronously, over the changes each kind of boot makes there, in the step's order.
+// the card synchronously, over the changes each kind of boot makes there, in the step's order; and the step's end: the
+// volume sync, then a saved panic's release.
 #include <gtest/gtest.h>
 
+#include <cerrno>
 #include <string>
 #include <vector>
 
+// The debug kernels' shape: the first durable path is kept for the step's line.
+#define DEVELOPMENT 1
 #include <switch/boot_sync.h>
 
 namespace {
@@ -102,6 +106,74 @@ TEST(SwitchBootSync, TheFirstDurablePathIsKeptCutToFit)
     (void)switch_boot_sync_change(&sync, kDurable, deep.c_str());
     (void)switch_boot_sync_change(&sync, kDurable, kPolicy);
     EXPECT_EQ(std::string(sync.first), deep.substr(0, sizeof(sync.first) - 1));
+}
+
+// What the step's end did, in order: "sync" for the volume sync, "release <error>" for the saved panic's release.
+struct End {
+    std::vector<std::string> calls;
+    int syncError = 0;
+
+    static int Sync(void *context)
+    {
+        End *end = static_cast<End *>(context);
+        end->calls.push_back("sync");
+        return end->syncError;
+    }
+
+    static void Release(void *context, int error)
+    {
+        static_cast<End *>(context)->calls.push_back("release " + std::to_string(error));
+    }
+
+    switch_boot_finish Finish(bool panicWritten = false, int panicError = 0)
+    {
+        return {this, Sync, Release, panicWritten, panicError};
+    }
+};
+
+TEST(SwitchBootSyncFinish, AStepThatFailedAfterADurableChangeStillSyncsTheVolume)
+{
+    switch_boot_sync sync = {};
+    (void)switch_boot_sync_change(&sync, kDurable, kPolicy);
+    End end;
+    const switch_boot_finish finish = end.Finish();
+    EXPECT_EQ(switch_boot_sync_finish(&sync, ENOSPC, &finish), ENOSPC) << "the step's error is kept";
+    EXPECT_EQ(end.calls, std::vector<std::string>({"sync"}));
+}
+
+TEST(SwitchBootSyncFinish, AnOrdinaryBootSyncsNothingAtTheEnd)
+{
+    switch_boot_sync sync = {};
+    (void)switch_boot_sync_change(&sync, kRedone, kTimedMarker);
+    End end;
+    const switch_boot_finish finish = end.Finish();
+    EXPECT_EQ(switch_boot_sync_finish(&sync, 0, &finish), 0);
+    EXPECT_TRUE(end.calls.empty());
+}
+
+TEST(SwitchBootSyncFinish, ASavedPanicIsReleasedOnlyAfterTheVolumeSync)
+{
+    switch_boot_sync sync = {};
+    (void)switch_boot_sync_change(&sync, kDurable, kPanic);
+    End end;
+    const switch_boot_finish finish = end.Finish(true);
+    EXPECT_EQ(switch_boot_sync_finish(&sync, 0, &finish), 0);
+    EXPECT_EQ(end.calls, std::vector<std::string>({"sync", "release 0"}));
+}
+
+TEST(SwitchBootSyncFinish, AFailedSyncOrWriteKeepsTheSavedPanic)
+{
+    switch_boot_sync sync = {};
+    (void)switch_boot_sync_change(&sync, kDurable, kPanic);
+    End failedSync;
+    failedSync.syncError = EIO;
+    const switch_boot_finish afterSync = failedSync.Finish(true);
+    EXPECT_EQ(switch_boot_sync_finish(&sync, 0, &afterSync), EIO);
+    EXPECT_EQ(failedSync.calls, std::vector<std::string>({"sync", "release " + std::to_string(EIO)}));
+    End failedWrite;
+    const switch_boot_finish afterWrite = failedWrite.Finish(true, ENOSPC);
+    EXPECT_EQ(switch_boot_sync_finish(&sync, 0, &afterWrite), 0);
+    EXPECT_EQ(failedWrite.calls, std::vector<std::string>({"sync", "release " + std::to_string(ENOSPC)}));
 }
 
 }  // namespace

@@ -7716,7 +7716,12 @@ native_switch_watchdog_attributes(vnode_t vp, mount_t data_mount, int directory,
  * An ordinary boot's changes are all REDONE (timed's marker; on a deploy boot, IconServices' cache) and go out
  * unsynced.
  */
+#if DEVELOPMENT || DEBUG
 static unsigned int native_switch_policy_written, native_switch_policy_unchanged;
+#define NATIVE_SWITCH_COUNT(counter) ((counter)++)
+#else
+#define NATIVE_SWITCH_COUNT(counter) ((void)0)
+#endif
 static struct switch_boot_sync native_switch_sync;
 
 /* Why path is not already a regular file on data_mount with these bytes (with our_keys: a plist holding every key
@@ -7797,7 +7802,7 @@ native_switch_watchdog_directory(proc_t p, user_addr_t scratch, const char *path
 		error = vnode_setattr(vp, &attributes, vfs_context_current());
 	}
 	if (!error) error = native_switch_watchdog_attributes(vp, data_mount, 1, 0);
-	if (created) native_switch_policy_written++;
+	if (created) NATIVE_SWITCH_COUNT(native_switch_policy_written);
 	/* Persists a new directory, or names a durable change made in it; nothing to persist before one. */
 	if (!error && switch_boot_sync_due(&native_switch_sync)) error = VNOP_FSYNC(vp, MNT_WAIT, vfs_context_current());
 	int close_error = vnode_close(vp, FREAD, vfs_context_current());
@@ -7813,7 +7818,7 @@ native_switch_replace_file(proc_t p, user_addr_t scratch, const char *path, cons
 	vnode_t vp = NULLVP;
 	char temporary[192];
 	const int io = switch_boot_sync_change(&native_switch_sync, change, path) ? IO_SYNC : 0;
-	native_switch_policy_written++;
+	NATIVE_SWITCH_COUNT(native_switch_policy_written);
 	int size = snprintf(temporary, sizeof(temporary), "%s.Switch-%s", path, bootsessionuuid_string);
 	if (size < 0 || (size_t)size >= sizeof(temporary)) return ENAMETOOLONG;
 	int error = vnode_open(temporary, FREAD | FWRITE | O_CREAT | O_TRUNC | O_NOFOLLOW_ANY, mode, 0, &vp, context);
@@ -7852,8 +7857,8 @@ static int
 native_switch_data_file(proc_t p, user_addr_t scratch, const char *path, const char *bytes, int length, mount_t data_mount,
     uid_t owner, gid_t group, mode_t mode, enum switch_boot_change change)
 {
-	/* An empty marker is created once; the policy is replaced atomically every boot
-	 * so edits to its job list reach existing Data volumes. Root-owned, as launchd requires. */
+	/* An empty marker is created once; a file is replaced atomically whenever it differs, so edits to the policy's job
+	 * list reach existing Data volumes. Root-owned, as launchd requires. */
 	vfs_context_t context = vfs_context_current();
 	vnode_t vp = NULLVP;
 	if (!length) {
@@ -7863,7 +7868,7 @@ native_switch_data_file(proc_t p, user_addr_t scratch, const char *path, const c
 	} else {
 		const char *why = native_switch_file_differs(path, bytes, length, data_mount, owner, group, mode, false);
 		if (!why) {
-			native_switch_policy_unchanged++;
+			NATIVE_SWITCH_COUNT(native_switch_policy_unchanged);
 			return 0;
 		}
 #if DEVELOPMENT || DEBUG
@@ -7873,6 +7878,7 @@ native_switch_data_file(proc_t p, user_addr_t scratch, const char *path, const c
 	return native_switch_replace_file(p, scratch, path, bytes, length, data_mount, owner, group, mode, change);
 }
 
+/* A change of the step is DURABLE unless its caller states that the next boot redoes it. */
 static int
 native_switch_watchdog_file(proc_t p, user_addr_t scratch, const char *path, const char *bytes, int length, mount_t data_mount,
     uid_t owner, gid_t group, mode_t mode)
@@ -7889,7 +7895,7 @@ native_switch_unlink(proc_t p, user_addr_t scratch, const char *path, enum switc
 	int error = copyout(path, request.path, strlen(path) + 1);
 	if (!error) error = unlink(p, &request, &result);
 	if (!error) {
-		native_switch_policy_written++;
+		NATIVE_SWITCH_COUNT(native_switch_policy_written);
 		(void)switch_boot_sync_change(&native_switch_sync, change, path);
 	}
 	return error;
@@ -7908,7 +7914,7 @@ native_switch_mkdir(proc_t p, user_addr_t scratch, const char *path, uid_t owner
 	struct mkdir_args request = {.path = scratch + 0x900, .mode = 0755};
 	int32_t result = 0;
 	if ((error = copyout(path, request.path, strlen(path) + 1)) || (error = mkdir(p, &request, &result))) return error;
-	native_switch_policy_written++;
+	NATIVE_SWITCH_COUNT(native_switch_policy_written);
 	(void)switch_boot_sync_change(&native_switch_sync, SWITCH_BOOT_DURABLE, path);
 	if ((error = vnode_lookup(path, 0, &vp, vfs_context_current()))) return error;
 	struct vnode_attr attributes;
@@ -8700,7 +8706,7 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		const int length = (int)strlen(body);
 		const char *why = native_switch_file_differs(path, body, length, data_mount, 501, 501, 0600, our_keys);
 		if (!why) {
-			native_switch_policy_unchanged++;
+			NATIVE_SWITCH_COUNT(native_switch_policy_unchanged);
 			continue;
 		}
 #if DEVELOPMENT || DEBUG
@@ -8730,17 +8736,18 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 /* The last boot's panic, kept in RAM across the warm reset (SwitchPanicSave.c):
  * /private/var/Switch/panic-<UTC time>.log, root 0644, written as the policy files are, and its panic stackshot (zlib
  * kcdata: every task's threads, kernel and user frames, wait info) as panic-<UTC time>.kcdata next to it; the record is
- * cleared once the text is on Data. A failure is logged and the record kept for the next boot. A copy of both goes to
- * mobile's CrashReporter directory as Switch-panic-<UTC time>.*, where `idevicecrashreport` fetches them over USB;
- * a failure there is only logged. */
-static void
-native_switch_panic_save(proc_t p, user_addr_t scratch, mount_t data_mount)
+ * cleared by the step's end, after the volume sync (switch_boot_sync_finish). A failure is logged and the record kept
+ * for the next boot. A copy of both goes to mobile's CrashReporter directory as Switch-panic-<UTC time>.*, where
+ * `idevicecrashreport` fetches them over USB; a failure there is only logged. Returns whether a record was pending,
+ * with its path and its write's error. */
+static bool
+native_switch_panic_save(proc_t p, user_addr_t scratch, mount_t data_mount, char path[96], int *saved)
 {
 	static const char crash_reporter[] = "/private/var/mobile/Library/Logs/CrashReporter";
-	char path[96], other[160];
+	char other[160];
 	uint32_t length = 0, shot_length = 0;
-	const char *text = switch_panic_save_pending(&length, path, sizeof(path));
-	if (!text) return;
+	const char *text = switch_panic_save_pending(&length, path, 96);
+	if (!text) return false;
 	const char *shot = (const char *)switch_panic_save_pending_stackshot(&shot_length);
 	const char *name = strrchr(path, '/') + 1;          /* panic-<UTC>[-damaged].log */
 	const size_t stem = strlen(name) - strlen(".log");
@@ -8763,7 +8770,25 @@ native_switch_panic_save(proc_t p, user_addr_t scratch, mount_t data_mount)
 		}
 		if (copy_error) printf("SwitchPanicSave: copy to %s failed: %d\n", crash_reporter, copy_error);
 	}
-	switch_panic_save_done(error, path);
+	*saved = error;
+	return true;
+}
+
+struct native_switch_finish_data {
+	vnode_t data_root;
+	char panic_path[96];
+};
+
+static int
+native_switch_sync_volume(void *context)
+{
+	return VNOP_FSYNC(((const struct native_switch_finish_data *)context)->data_root, MNT_WAIT, vfs_context_current());
+}
+
+static void
+native_switch_release_panic(void *context, int error)
+{
+	switch_panic_save_done(error, ((const struct native_switch_finish_data *)context)->panic_path);
 }
 
 static int
@@ -8868,10 +8893,14 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	    "/private/var/db/com.apple.xpc.launchd", data_mount);
 	if (!error) error = native_switch_watchdog_directory(p, scratch, "/private/var/db", data_mount);
 	if (!error) error = native_switch_setup_state(p, scratch, data_mount);
-	if (!error) native_switch_panic_save(p, scratch, data_mount);
-	if (!error && switch_boot_sync_due(&native_switch_sync)) {
-		error = VNOP_FSYNC(data_root, MNT_WAIT, vfs_context_current());
+	struct native_switch_finish_data finish_data = {.data_root = data_root};
+	struct switch_boot_finish finish = {.context = &finish_data, .sync_volume = native_switch_sync_volume,
+	    .release_panic = native_switch_release_panic};
+	if (!error) {
+		finish.panic_written = native_switch_panic_save(p, scratch, data_mount, finish_data.panic_path,
+		    &finish.panic_error);
 	}
+	error = switch_boot_sync_finish(&native_switch_sync, error, &finish);
 	int close_error = vnode_close(data_root, FREAD, vfs_context_current());
 	if (!error) error = close_error;
 #if DEVELOPMENT || DEBUG

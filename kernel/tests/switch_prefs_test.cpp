@@ -450,6 +450,64 @@ TEST(SwitchPrefsGuard, SetupVersionComesFromTheIpswTable)
     }
 }
 
+// The setup's sync decisions (<switch/boot_sync.h>, kernel/tests/switch_boot_sync_test.cpp) as both kernels apply them:
+// REDONE at exactly the four changes the next boot remakes (IconServices' drop and its marker, timed's drop and its
+// marker), every other write DURABLE, the class deciding the write's IO_SYNC, and the step's end syncing through
+// switch_boot_sync_finish. A change classed wrongly would ship unsynced with every host test green.
+TEST(SwitchPrefsGuard, OnlyTheRemadeChangesGoOutUnsynced)
+{
+    using switch_ios::test::Body;
+    using switch_ios::test::Count;
+    using switch_ios::test::SourceText;
+    const char *const functions[] = {
+        "\nnative_switch_watchdog_directory(",
+        "\nnative_switch_replace_file(",
+        "\nnative_switch_data_file(",
+        "\nnative_switch_watchdog_file(",
+        "\nnative_switch_unlink(",
+        "\nnative_switch_mkdir(",
+        "\nnative_switch_icon_cache_write(",
+        "\nnative_switch_icon_cache_unlink(",
+        "\nnative_switch_timed_cache(",
+        "\nnative_switch_sync_volume(",
+    };
+    std::vector<std::string> first;
+    for (const char *path : kKernels) {
+        const std::string source = SourceText(path);
+        EXPECT_EQ(Count(source, "SWITCH_BOOT_REDONE"), 4u) << path;
+        EXPECT_EQ(Count(Body(source, "\nnative_switch_icon_cache_write("), "SWITCH_BOOT_REDONE"), 1u) << path;
+        EXPECT_EQ(Count(Body(source, "\nnative_switch_icon_cache_unlink("), "SWITCH_BOOT_REDONE"), 1u) << path;
+        EXPECT_EQ(Count(Body(source, "\nnative_switch_timed_cache("), "SWITCH_BOOT_REDONE"), 2u) << path;
+        EXPECT_EQ(Count(Body(source, "\nnative_switch_watchdog_file("), "mode, SWITCH_BOOT_DURABLE);"), 1u) << path;
+        const std::string replace = Body(source, "\nnative_switch_replace_file(");
+        EXPECT_EQ(
+            Count(replace, "const int io = switch_boot_sync_change(&native_switch_sync, change, path) ? IO_SYNC : 0;"),
+            1u)
+            << path;
+        EXPECT_EQ(Count(replace, "UIO_SYSSPACE, io, vfs_context_ucred(context)"), 1u) << path;
+        EXPECT_EQ(Count(Body(source, "\nnative_switch_unlink("),
+                        "switch_boot_sync_change(&native_switch_sync, change, path)"),
+                  1u)
+            << path;
+        EXPECT_EQ(Count(Body(source, "\nnative_switch_mkdir("), "SWITCH_BOOT_DURABLE, path);"), 1u) << path;
+        const std::string directory = Body(source, "\nnative_switch_watchdog_directory(");
+        EXPECT_EQ(Count(directory, "SWITCH_BOOT_DURABLE, path);"), 1u) << path;
+        EXPECT_EQ(Count(directory, "if (!error && switch_boot_sync_due(&native_switch_sync)) error = VNOP_FSYNC("), 1u)
+            << path;
+        EXPECT_EQ(Count(Body(source, "\nnative_switch_sync_volume("), "return VNOP_FSYNC("), 1u) << path;
+        const std::string policy = Body(source, "\nnative_switch_watchdog_policy(");
+        EXPECT_EQ(Count(policy, ".sync_volume = native_switch_sync_volume"), 1u) << path;
+        EXPECT_EQ(Count(policy, "error = switch_boot_sync_finish(&native_switch_sync, error, &finish);"), 1u) << path;
+        EXPECT_EQ(Count(policy, "VNOP_FSYNC("), 0u) << path << ": the volume sync is switch_boot_sync_finish's";
+        std::vector<std::string> bodies;
+        for (const char *function : functions)
+            bodies.push_back(Body(source, function));
+        if (first.empty())
+            first = bodies;
+        EXPECT_EQ(bodies, first) << path << ": the two kernels' sync decisions differ";
+    }
+}
+
 // timed's cache is kept only when it holds the boot session UUID of this clock's last boot, the same in both kernels
 // (drivers/SwitchPower/SwitchMonotonicBase.h): one an older kernel's boot saved would put the time decades ahead.
 TEST(SwitchPrefsGuard, TimedCacheKeptOnlyFromThisClock)
