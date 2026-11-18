@@ -90,6 +90,10 @@ TEST(GM20BFetchRungs, IteratedBlendTakesTheProgramsWhosePassesBeatTheInterlockOn
         a.program = gm20b::iteratedProgramName(slower);
         EXPECT_FALSE(gm20b::iteratedBlendUsable(a)) << slower << " costs more passes than the interlock";
     }
+    a.program = gm20b::iteratedProgramName("llt");
+    a.programWords = 9;
+    EXPECT_FALSE(gm20b::iteratedBlendUsable(a))
+        << "llt's 9 passes ran slower than its storage form (gpu.gm20b.fetch_rung3)";
     EXPECT_NE(gm20b::iteratedProgramName("dso"), gm20b::iteratedProgramName("pld"));
 }
 
