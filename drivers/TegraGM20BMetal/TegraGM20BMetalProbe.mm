@@ -220,6 +220,19 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
                                    (flags & TegraGM20BInfoTiledCache) != 0, (flags & TegraGM20BInfoCompression) != 0];
 }
 
+// A texture's header as the texture unit reads it, its eight words dot-separated; nil where the driver holds no header
+// for it
+- (NSString *)switchMetalProbeHeader:(id<MTLTexture>)texture
+{
+    SwitchMetalTexture *t = gm20bTexture(texture);
+    const gm20b::Texture now = t ? gRM->raw->lockedCopy(t->_raw) : gm20b::Texture();
+    if (!now.tic)
+        return nil;
+    const uint32_t *w = gRM->raw->headerWords(now.tic);
+    return [NSString
+        stringWithFormat:@"%08x.%08x.%08x.%08x.%08x.%08x.%08x.%08x", w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]];
+}
+
 @end
 
 @implementation SwitchMetalCommandBuffer (Probe)
