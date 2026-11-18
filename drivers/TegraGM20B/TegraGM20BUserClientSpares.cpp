@@ -4,15 +4,8 @@
 
 namespace
 {
-constexpr uint64_t kSpareCapBytes = 96ULL << 20, kLearnMaxBytes = 32ULL << 20;
-
-struct WarmClass {
-	uint64_t bytes;
-	uint16_t ready;
-};
-
-constexpr WarmClass kWarm[] = {
-	{64ULL << 10, 8}, {4ULL << 20, 2}, {8ULL << 20, 1}, {16ULL << 20, 2}};
+constexpr uint64_t kSpareCapBytes = SWITCH_GPU_SPARE_CAP_BYTES, kLearnMaxBytes = 32ULL << 20;
+static_assert(kClasses == SWITCH_GPU_SPARE_CLASSES, "the pool's classes are the policy's");
 }  // namespace
 
 namespace tgm_uc
@@ -20,16 +13,12 @@ namespace tgm_uc
 
 uint64_t classBytes(uint32_t c)
 {
-	return c < 5 ? 4096ULL << c : ((64ULL << 10) << ((c - 5) / 4)) * (5 + (c - 5) % 4) / 4;
+	return switch_gpu_spare_class_bytes(c);
 }
 
-// The smallest class of at least `bytes`; kClasses past the largest.
 uint32_t classUp(uint64_t bytes)
 {
-	uint32_t c = 0;
-	while (c < kClasses && classBytes(c) < bytes)
-		c++;
-	return c;
+	return switch_gpu_spare_class_up(bytes);
 }
 }  // namespace tgm_uc
 
@@ -312,7 +301,7 @@ SparePool *spares()
 	if (!n)
 		return nullptr;
 	bzero(n, sizeof(*n));
-	for (const WarmClass &w : kWarm)
+	for (const switch_gpu_spare_warm &w : SWITCH_GPU_SPARE_WARM)
 		n->target[classUp(w.bytes)] = w.ready;
 	n->lock = IOLockAlloc();
 	n->call =
@@ -344,10 +333,9 @@ Spare *spareTake(uint64_t bytes)
 	const uint32_t c = classUp(bytes);
 	if (!p || c >= kClasses)
 		return nullptr;
-	const uint32_t last = c + (c < 5 ? 1 : 4);
 	IOLockLock(p->lock);
 	Spare *s = nullptr;
-	for (uint32_t d = c; d < kClasses && d <= last && !s; d++) {
+	for (uint32_t d = c; d < kClasses && switch_gpu_spare_serves(c, d) && !s; d++) {
 		s = p->ready[d];
 		if (s) {
 			p->ready[d] = s->next;
