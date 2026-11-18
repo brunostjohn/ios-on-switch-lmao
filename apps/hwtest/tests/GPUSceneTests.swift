@@ -118,7 +118,7 @@ public struct GPUSceneTest: HWTest {
         }
         if written > 0 {
             let listing = result.failed.map(\.line).joined(separator: "\n") + "\n"
-            try? listing.write(to: directory.appendingPathComponent("\(prefix).txt"), atomically: true, encoding: .utf8)
+            try? Data(listing.utf8).place(at: directory.appendingPathComponent("\(prefix).txt"))
         }
         return written
     }
@@ -132,6 +132,6 @@ public struct GPUSceneTest: HWTest {
               let png = format.raster(bytes, width: picture.width, height: picture.height).png()
         else { return false }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return (try? png.write(to: directory.appendingPathComponent("\(prefix)-\(picture.label).png"))) != nil
+        return (try? png.place(at: directory.appendingPathComponent("\(prefix)-\(picture.label).png"))) != nil
     }
 }

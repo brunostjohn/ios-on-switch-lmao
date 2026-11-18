@@ -38,7 +38,7 @@ public final class Suite: ObservableObject {
         self.ios = ios
         list = RunList(tests: tests)
         documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        store = RunStore(documents: documents)
+        store = RunStore(directory: AppFiles.working)
         recorder = RunRecorder(store: store)
     }
 

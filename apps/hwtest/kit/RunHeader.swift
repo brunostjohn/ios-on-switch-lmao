@@ -19,7 +19,8 @@ struct RunHeader: View {
                     counts(report)
                     failures(report.results.filter { $0.verdict == .fail }.map(\.id))
                 }
-                Text("Report: Documents/hwtest/\(report.fileName)").font(.caption2).foregroundStyle(.secondary)
+                Text("Report: Library/Application Support/hwtest/\(report.fileName)")
+                    .font(.caption2).foregroundStyle(.secondary)
             } else {
                 Text("Tap Run All. The run needs nothing else from you.").font(.headline)
             }

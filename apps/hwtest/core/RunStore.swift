@@ -1,6 +1,6 @@
 import Foundation
 
-/// The runs in Documents/hwtest, where tools/hwtest/fetch.py finds them on the card's Data volume: a running run's
+/// The runs in AppFiles.working, where tools/hwtest/fetch.py finds them on the card's Data volume: a running run's
 /// <run id>.journal (RunJournal), an ended run's <run id>.json. A run with both was reopened by a rerun, and its journal
 /// is the newer.
 public struct RunStore {
@@ -8,8 +8,8 @@ public struct RunStore {
 
     public let directory: URL
 
-    public init(documents: URL) {
-        directory = documents.appendingPathComponent("hwtest")
+    public init(directory: URL) {
+        self.directory = directory
     }
 
     public func open(_ report: Report) throws -> RunJournal {

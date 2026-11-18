@@ -6,8 +6,12 @@ import Foundation
 /// flush: APFS commits the rename in the same transaction the flush commits, so a reader finds the old file or the new
 /// one, never a torn one.
 public enum DurableFile {
-    public static func write(_ data: Data, to url: URL) throws {
-        let staged = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).new")
+    /// `staging`: where the file is written before its rename, when it must not appear beside its target half-written
+    /// (a folder Spotlight indexes); on the target's volume.
+    public static func write(_ data: Data, to url: URL, stagingIn staging: URL? = nil) throws {
+        if let staging { try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true) }
+        let directory = staging ?? url.deletingLastPathComponent()
+        let staged = directory.appendingPathComponent(".\(url.lastPathComponent).new")
         let fd = open(staged.path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0o644)
         guard fd >= 0 else { throw failure("open", staged) }
         defer { close(fd) }

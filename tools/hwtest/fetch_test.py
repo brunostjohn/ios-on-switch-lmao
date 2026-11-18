@@ -42,7 +42,8 @@ class Card:
     def __init__(self, root: Path) -> None:
         self.data = root / 'data'
         self.switch = self.data / 'Switch'
-        self.reports = self.container('AAAA', 'com.brunostjohn.switch.hwtest') / 'Documents/hwtest'
+        self.documents = self.container('AAAA', 'com.brunostjohn.switch.hwtest') / 'Documents'
+        self.reports = self.documents.parent / 'Library/Application Support/hwtest'
         self.container('BBBB', 'com.apple.Preferences')
         (self.container('CCCC', 'com.apple.Other') / 'Documents/hwtest').mkdir(parents=True)
         self.reports.mkdir(parents=True)
@@ -105,7 +106,7 @@ class Fetch(unittest.TestCase):
         self.assertEqual({k: p.name for k, p in found.items()}, {'com.brunostjohn.switch.hwtest': 'AAAA'})
 
     def test_the_gpu_scenes_files_come_along(self):
-        scene = self.card.reports.parent / 'gpu/gpu.xr_blend'
+        scene = self.card.documents / 'gpu/gpu.xr_blend'
         scene.mkdir(parents=True)
         (scene / 'gm20b-0-got.png').write_bytes(b'png')
         fetch.fetch(self.card.data, self.card.switch, self.history, self.root / 'out')
@@ -113,7 +114,7 @@ class Fetch(unittest.TestCase):
         self.assertEqual(copied.read_bytes(), b'png')
 
     def test_the_ui_tests_pictures_come_along(self):
-        test = self.card.reports.parent / 'ui/display.pocket_strip'
+        test = self.card.documents / 'ui/display.pocket_strip'
         test.mkdir(parents=True)
         (test / 'shown.png').write_bytes(b'png')
         fetch.fetch(self.card.data, self.card.switch, self.history, self.root / 'out')
@@ -139,6 +140,15 @@ class Fetch(unittest.TestCase):
         self.assertEqual(mac['health']['apps'], {'installed': 1, 'placeholders': 1, 'system_apps_wanted': 1})
         self.assertTrue((self.root / 'out/r1.json').is_file())
         self.assertEqual(Report.load(self.history / 'r1.json').commit, '0123456789ab')
+
+    def test_an_earlier_builds_runs_in_documents_are_fetched_and_the_later_folder_wins(self):
+        (self.card.documents / 'hwtest').mkdir(parents=True)
+        (self.card.documents / 'hwtest/old.json').write_text(json.dumps(report(10)))
+        (self.card.documents / 'hwtest/r1.json').write_text(json.dumps(report(10, status='running')))
+        self.card.run('r1.json', report(10))
+        changed = fetch.fetch(self.card.data, self.card.switch, self.history)
+        self.assertEqual(sorted(p.name for p in changed), ['old.json', 'r1.json'])
+        self.assertEqual(json.loads((self.history / 'r1.json').read_text())['run']['status'], 'done')
 
     def test_a_deploy_after_the_boot_leaves_the_commit_unknown(self):
         self.card.deployed('fedcba', '2026-11-09T08:00:00+00:00')

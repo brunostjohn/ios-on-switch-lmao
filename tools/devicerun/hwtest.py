@@ -37,6 +37,8 @@ READBACK_RUNS = 'hwtest.readback-routes-runs'
 TRANSFER_FAILED_RUNS = 'hwtest.texture-transfer-failed-runs'
 DECODE_READBACK_RUNS = 'hwtest.decode-readback-runs'
 DECODE_VIEWS_RUNS = 'hwtest.decode-views-runs'
+# Each full run, its suite line's time less its ms= (the run's span across relaunches) to the line
+RUN_WINDOWS = 'hwtest.run-windows'
 
 CODECS = ('h264', 'hevc', 'hevc_main10', 'vp9')
 SIZES = ('720p', '1080p', '4k')
@@ -807,6 +809,16 @@ HWTEST = [
         show=('pass', 'fail', 'skip', 'ios'),
         source=SOURCE,
         note='the last full run (Run All, or the launch run)',
+    ),
+    Check(
+        RUN_WINDOWS,
+        OWNER,
+        LITERAL,
+        REPORT,
+        subsystem=SUBSYSTEM,
+        regex=r'^HWTEST suite (?:PASS|FAIL) .* ms=(?P<ms>[\d.]+)$',
+        source=SOURCE,
+        note='each full run, as a window from its start to its summary line',
     ),
     Check(
         KILL_WINDOWS,

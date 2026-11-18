@@ -16,6 +16,7 @@ from tools.devicerun.hwtest import (
     HWTEST,
     KILL_WINDOWS,
     READBACK_RUNS,
+    RUN_WINDOWS,
     TRANSFER_FAILED_RUNS,
 )
 from tools.devicerun.joycon import JOYCON
@@ -1224,6 +1225,19 @@ GROUPS: dict[str, list[Check]] = {
             regex=r'(?P<n>\d+) completions, client (?P<client_us>\d+) us \(max (?P<max_us>\d+) us\); '
             r'copied (?P<kib>\d+) KiB in (?P<copy_us>\d+) us',
             source='drivers/NativeSwitchBlock/SwitchCryptexStats.h',
+        ),
+        Check(
+            'storage.hwtest-indexed-mid-write',
+            'hwtest-harness',
+            'failed to get metadata',
+            process='fileindexerd',
+            level='error',
+            regex=r'failed to get metadata for',
+            per=RUN_WINDOWS,
+            per_count='0',
+            source='fileindexerd (24B119), com.apple.FileIndexer:daemon',
+            note="Spotlight's file indexer finding a file gone before it read it, in a HW Test run: the app writes "
+            'what changes while a run goes outside Documents (apps/hwtest/core/AppFiles.swift); boot 2 read 1,861',
         ),
     ],
     'memory': [

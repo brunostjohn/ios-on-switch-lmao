@@ -51,7 +51,7 @@ struct UIGlassTest: HWTest {
         if !reasons.isEmpty {
             let directory = context.documents.appendingPathComponent("ui").appendingPathComponent(id)
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try? inside.png()?.write(to: directory.appendingPathComponent("composited.png"))
+            try? inside.png()?.place(at: directory.appendingPathComponent("composited.png"))
         }
         return reasons.isEmpty ? .pass(metrics) : .fail(LogLine.fitted(reasons), metrics)
     }
@@ -164,7 +164,7 @@ struct UIGlassMotionTest: HWTest {
     }
 
     static func save(_ picture: Raster, _ name: String, _ directory: URL) -> String {
-        try? picture.png()?.write(to: directory.appendingPathComponent(name))
+        try? picture.png()?.place(at: directory.appendingPathComponent(name))
         return name
     }
 }

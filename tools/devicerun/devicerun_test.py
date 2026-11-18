@@ -227,6 +227,40 @@ class Rules(unittest.TestCase):
         got = {r.check.name: r for r in devicerun.run_checks(log[:2], [runs, lines])[0]}
         self.assertEqual(got[lines.name].verdict, PASS)
 
+    def test_the_file_indexer_failing_inside_a_hwtest_run_fails_and_outside_it_does_not(self):
+        runs = next(c for c in hwtest.HWTEST if c.name == hwtest.RUN_WINDOWS)
+        lines = next(c for c in checks.GROUPS['storage'] if c.name == 'storage.hwtest-indexed-mid-write')
+
+        def record(second: int, image: str, subsystem: str, message: str) -> dict:
+            return {
+                'timestamp': f'2026-11-22 23:{second // 60:02d}:{second % 60:02d}.000000-0800',
+                'bootUUID': 'B00T',
+                'processImagePath': image,
+                'subsystem': subsystem,
+                'category': 'daemon',
+                'messageType': 'Error',
+                'eventMessage': message,
+            }
+
+        indexer = (
+            '/System/Library/PrivateFrameworks/FileIndexer.framework/fileindexerd',
+            'com.apple.FileIndexer',
+            'failed to get metadata for (12, in: 3): NSError: POSIX 2 '
+            '"The operation couldn’t be completed. No such file or directory"',
+        )
+        suite = 'HWTEST suite FAIL pass=600 fail=40 skip=28 ios=27 ms=2045000.0'
+        app = '/Applications/SwitchHWTest.app/SwitchHWTest'
+        log = [
+            record(300, *indexer),
+            {**record(2200, app, hwtest.SUBSYSTEM, suite), 'category': 'results', 'messageType': 'Default'},
+            record(2300, *indexer),
+        ]
+        got = {r.check.name: r for r in devicerun.run_checks(log, [runs, lines])[0]}
+        self.assertEqual(got[lines.name].verdict, FAIL)
+        self.assertIn('1 runs, 1 off', got[lines.name].observed)
+        got = {r.check.name: r for r in devicerun.run_checks(log[1:], [runs, lines])[0]}
+        self.assertEqual(got[lines.name].verdict, PASS)
+
     def test_a_title_scroll_repetition_past_the_first_takes_no_fresh_import(self):
         reps, imports = (
             next(c for c in checks.GROUPS['refusals'] if c.name == name)

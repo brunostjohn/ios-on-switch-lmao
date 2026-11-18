@@ -8,7 +8,7 @@ final class RunJournalTests: XCTestCase {
     var store: RunStore!
 
     override func setUpWithError() throws {
-        store = RunStore(documents: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        store = RunStore(directory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
     }
 
     override func tearDownWithError() throws {

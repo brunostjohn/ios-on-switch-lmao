@@ -1,7 +1,8 @@
 """Copy HW Test's run reports off the card's Data volume into the Mac's history, each with its sidecar.
 
-The app keeps its reports in its data container (Documents/hwtest), which needs no change to the OS: the container is
-found by its metadata plist. The sidecar holds what the device cannot see: the commit deploy.py recorded on the card,
+The app keeps its reports in its data container (Library/Application Support/hwtest; builds before 23 Nov used
+Documents/hwtest, which Spotlight indexes), which needs no change to the OS: the container is found by its metadata
+plist. The sidecar holds what the device cannot see: the commit deploy.py recorded on the card,
 the boot's crash reports and saved panics, and how many hosts the device is paired with.
 """
 
@@ -17,6 +18,8 @@ from tools.hwtest.reports import JOURNAL, Report, from_journal, is_report, sidec
 BUNDLES = ('com.brunostjohn.switch.hwtest', 'com.brunostjohn.switch.hwtest27e')
 CONTAINERS = 'mobile/Containers/Data/Application'
 METADATA = '.com.apple.mobile_container_manager.metadata.plist'
+# Oldest first: a run in both is the later folder's
+REPORT_FOLDERS = ('Documents/hwtest', 'Library/Application Support/hwtest')
 CRASH_REPORTS = 'mobile/Library/Logs/CrashReporter'
 DEPLOYED = 'deployed.json'
 
@@ -46,7 +49,7 @@ def copy_gpu_files(container: Path, out: Path, identifier: str) -> None:
 
 
 def card_reports(folder: Path) -> dict[str, bytes]:
-    """Return each run in an app's Documents/hwtest as its json's name and bytes.
+    """Return each run in one of an app's REPORT_FOLDERS as its json's name and bytes.
 
     A run with a journal (one that runs, or a finished one a rerun reopened) is the journal's report.
     """
@@ -94,7 +97,8 @@ def fetch(
     for identifier, container in containers(data).items():
         if out:
             copy_gpu_files(container, out, identifier)
-        for name, content in card_reports(container / 'Documents/hwtest').items():
+        reports = {name: data for folder in REPORT_FOLDERS for name, data in card_reports(container / folder).items()}
+        for name, content in reports.items():
             target = history / name
             if out:
                 out.mkdir(parents=True, exist_ok=True)
