@@ -4,6 +4,7 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 from tools.emu import hidcheck, usbcheck
 
@@ -49,7 +50,7 @@ class Judge(unittest.TestCase):
     def judge(self, reports: list[bytes]) -> tuple[list[str], list[str]]:
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / hidcheck.PCAP).write_bytes(pcap(reports))
-            return hidcheck.Typing('ios17', base=1).judge(self.LOG, Path(d))
+            return hidcheck.Typing('ios17', base=1, sent=2).judge(self.LOG, Path(d))
 
     def test_the_keys_sent_reported_in_order_pass(self):
         problems, notes = self.judge([report(0x0B), report(), report(0x0C), report()])
@@ -59,6 +60,23 @@ class Judge(unittest.TestCase):
     def test_a_missing_or_wrong_key_fails(self):
         problems, _ = self.judge([report(0x0B), report()])
         self.assertTrue(problems and 'reported' in problems[0])
+        problems, _ = self.judge([report(0x0C), report(), report(0x0B)])
+        self.assertTrue(problems and 'reported' in problems[0])
+
+    def test_waits_for_class_attach_and_both_key_reports(self):
+        with tempfile.TemporaryDirectory() as d:
+            run, monitor = Path(d), Mock()
+            watch = hidcheck.Typing('ios17', base=1, phase='hid')
+            self.assertFalse(watch.step(self.LOG[:2], monitor, run))
+            monitor.command.assert_not_called()
+            self.assertFalse(watch.step(self.LOG, monitor, run))
+            self.assertEqual(monitor.command.call_count, 1)
+            (run / hidcheck.PCAP).write_bytes(pcap([report(0x0B), report()]))
+            self.assertFalse(watch.step(self.LOG, monitor, run))
+            self.assertEqual(monitor.command.call_count, 2)
+            (run / hidcheck.PCAP).write_bytes(pcap([report(0x0B), report(), report(0x0C)]))
+            self.assertTrue(watch.step(self.LOG, monitor, run))
+            self.assertEqual(monitor.command.call_count, 2)
 
     def test_the_dext_path_needs_each_of_its_steps(self):
         path = hidcheck.PATHS['ios27']

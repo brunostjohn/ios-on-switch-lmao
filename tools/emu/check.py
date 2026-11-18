@@ -88,10 +88,9 @@ class TypingWatch(Watch):
     def __call__(self, monitor: Monitor) -> bool:
         if super().__call__(monitor):
             return True
-        done = self.typing.step(self.log, monitor)
+        done = self.typing.step(self.log, monitor, self.run)
         if done:
-            self.failed = self.typing.failed
-            self.reached = None if self.failed else 'keys typed'
+            self.reached = 'keys reported'
         return done
 
 
@@ -114,7 +113,7 @@ def after_run(args: argparse.Namespace, run: Path, watch: Watch) -> list[str]:
         return problems
     if args.until == 'gpu' and watch.reached:
         return gpucheck.after_run(run)
-    if args.until == 'typing' and watch.reached:
+    if args.until == 'typing':
         problems, notes = watch.typing.judge(watch.log, run)
         print(*notes, sep='\n')
         return problems

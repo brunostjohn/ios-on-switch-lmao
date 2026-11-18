@@ -12,7 +12,6 @@ that polled for them.
 """
 
 import re
-import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,8 +25,6 @@ PCAP = 'hot0-keyboard.pcap'
 DEVICE_ID = 'hot0'
 KEYS = ('h', 'i')
 USAGES = {'h': 0x0B, 'i': 0x0C}  # USB HID Usage Tables 1.4, Keyboard/Keypad page
-HID_SECONDS = 300.0
-SETTLE_SECONDS = 20.0
 
 
 @dataclass(frozen=True)
@@ -78,32 +75,37 @@ def keys_in(pcap: Path) -> list[int]:
 
 @dataclass
 class Typing:
-    """The milestone's watch: boot to SpringBoard, plug, wait for the HID path, type, settle."""
+    """The milestone's watch: boot to SpringBoard, plug, wait for the HID path, then the key reports."""
 
     kind: str
     phase: str = 'boot'
     base: int = 0
-    since: float = 0.0
-    failed: str | None = None
+    sent: int = 0
     marks: list[str] = field(default_factory=list)
 
-    def step(self, log: Sequence[str], monitor: Monitor) -> bool:
+    def step(self, log: Sequence[str], monitor: Monitor, run: Path) -> bool:
         """Advance on this poll's log; return True when the run can stop."""
         if self.phase == 'boot' and first(log, SPRINGBOARD):
             self.plug(monitor)
-            self.base, self.since, self.phase = len(log), time.monotonic(), 'hid'
+            self.base, self.phase = len(log), 'hid'
             self.marks.append(f'SpringBoard: {first(log, SPRINGBOARD)[:120]}')
         elif self.phase == 'hid':
             path = PATHS[self.kind]
             if all(first(log, pattern, self.base) for _, pattern in path.steps):
-                for key in KEYS:
-                    monitor.command('send-key', keys=[{'type': 'qcode', 'data': key}], **{'hold-time': 100})
-                self.since, self.phase = time.monotonic(), 'typed'
-            elif time.monotonic() - self.since > HID_SECONDS:
-                missing = [name for name, pattern in path.steps if not first(log, pattern, self.base)]
-                self.failed = f'no {", ".join(missing)} step on the {path.name} path {HID_SECONDS:.0f} s after the plug'
-                return True
-        return self.phase == 'typed' and time.monotonic() - self.since > SETTLE_SECONDS
+                self.phase = 'typing'
+        if self.phase != 'typing':
+            return False
+        reported = keys_in(run / PCAP)
+        expected = [USAGES[key] for key in KEYS[:self.sent]]
+        if reported != expected[:len(reported)]:
+            return True
+        if len(reported) < self.sent:
+            return False
+        if self.sent == len(KEYS):
+            return True
+        monitor.command('send-key', keys=[{'type': 'qcode', 'data': KEYS[self.sent]}], **{'hold-time': 100})
+        self.sent += 1
+        return False
 
     @staticmethod
     def plug(monitor: Monitor) -> None:
@@ -112,8 +114,6 @@ class Typing:
 
     def judge(self, log: Sequence[str], run: Path) -> tuple[list[str], list[str]]:
         """Return (problems, notes) for the finished run."""
-        if self.failed:
-            return [self.failed], self.marks
         path = PATHS[self.kind]
         notes = [*self.marks, f'path: {path.name}']
         problems = []
@@ -123,10 +123,10 @@ class Typing:
         for name, pattern in path.steps:
             line = first(log, pattern, self.base)
             notes.append(f'{name}: {line[:140] if line else "none"}')
-        sent = [USAGES[key] for key in KEYS]
+        sent = [USAGES[key] for key in KEYS[:self.sent]]
         got = keys_in(run / PCAP)
         notes.append(f'keys sent {[hex(u) for u in sent]}, reported {[hex(u) for u in got]}')
-        if got != sent:
+        if len(sent) != len(KEYS) or got != sent:
             problems.append(f'the keyboard reported {[hex(u) for u in got]} for {[hex(u) for u in sent]} sent')
         return problems, notes
 
