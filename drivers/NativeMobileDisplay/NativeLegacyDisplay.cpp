@@ -55,6 +55,7 @@
 #include "SwitchFrameInfo.h"
 #include "SwitchFrameStall.h"
 #include "SwitchInteraction.h"
+#include "SwitchSlowPresent.h"
 #include "SwitchSBIM.h"
 #include "SwitchTimedPresent.h"
 #include "../SwitchSuspend/SwitchSleepSteps.h"
@@ -1171,17 +1172,10 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // of the time between them the part spent waiting for a free surface, and its flip. At its present, swap-to-scan splits into
     // queue (submission to kick: behind the previous copy, or waiting for a surface), copy (kick to flip: the GPU work the copy is
     // ordered after, i.e. the compositor's own rendering of the frame, then the copy) and latch (flip to the boundary that took it).
-    // Every present more than 1.5 frames after the previous one (and under kGapUs) is charged to one cause, with the frames it cost:
-    //   idle   the compositor turned vsync off since the previous present: it had nothing to draw (no stall)
-    //   ca     its swap came at or after the boundary a one-frame interval would have used: the compositor was late (its CPU
-    //          render: m2v replay, encode, CPU contention)
-    //   gpu    the swap came in time, but kick to flip alone outlasted the time it had left: the compositor's GPU work (or GPU
-    //          contention) ended after that boundary
-    //   queue  in time, but waiting behind the previous copy or for a surface made it miss
-    //   latch  the flip was asked for in time but taken a boundary later
-    // Also: frames replaced before they were shown (latest frame wins), swaps retired unshown because a newer one was queued
-    // behind them (collapsed), V_BLANKs folded into one notification, notifications more than 1 ms after their V_BLANK, and how
-    // often the compositor turned vsync off.
+    // Every present more than 1.5 frames after the previous one (and under kGapUs) is charged to one cause, with the frames it cost
+    // (SwitchSlowPresent.h). Also: frames replaced before they were shown (latest frame wins), swaps retired unshown because a
+    // newer one was queued behind them (collapsed), V_BLANKs folded into one notification, notifications more than 1 ms after
+    // their V_BLANK, and how often the compositor turned vsync off.
     struct FrameMark {
         uint64_t submit, kick, waited, ready;
         FrameTimeline tl;
@@ -1189,19 +1183,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
 
     FrameMark taken = {}, marks[TegraScanoutRing::kMaxEntries] = {};
 
-    //   rate   its swap came promptly after the vsync it answered (under half a frame): the frames before it had nothing new
-    //          to show (a client drawing at 20 Hz: r8a's clock widget), not a late compositor (r17-touch)
-    enum {
-        kLongIdle,
-        kLongCa,
-        kLongGpu,
-        kLongQueue,
-        kLongLatch,
-        kLongRate,
-        kLongCauses
-    };
-
-    static_assert(SwitchInteraction::kCauses == kLongCauses, "the interaction line names the causes in this order");
+    static constexpr unsigned kLongCauses = switch_slow_present::kCauses;
 
     Span stPQueue = {}, stPWait = {}, stPCopy = {}, stPLatch = {};
     // r17-touch: for a present whose swap was submitted after a touch report the screen had not yet followed with one,
@@ -1209,7 +1191,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // touch input is when a frame that can answer it reaches the panel. A lower bound on touch-to-photon (the frame may
     // answer an older report if the app's pipeline is deeper); the slow-motion test measures the whole of it.
     Span stTouchSwap = {};
-    uint32_t stReplaced = 0, stCollapsed = 0, stLong[kLongCauses] = {}, stLongFrames[kLongCauses] = {};
+    uint32_t stReplaced = 0, stCollapsed = 0;
+    // Static: the instance is at the 16 KiB a kalloc_type class may have.
+    static inline uint32_t stLong[kLongCauses] = {}, stLongFrames[kLongCauses] = {};
     uint32_t stVsyncFolded = 0, stVsyncLateN = 0, stVsyncIdle = 0;
     uint32_t stFallbacks = 0;  // recoverFlip: DC A did not take a replaced flip as modelled
     bool idleSincePresent = false;
@@ -1366,27 +1350,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         return back < mark.submit ? mark.submit - back : 0;
     }
 
-    // A present frames DC A periods after the previous one (lastPresent, not yet moved on): its cause, see above.
+    // A present frames DC A periods after the previous one (lastPresent, not yet moved on): its cause (SwitchSlowPresent.h).
     unsigned noteLong(uint32_t frames, const FrameMark &mark)
     {
-        uint64_t period = vsyncInterval;
-        if (!period)
-            nanoseconds_to_absolutetime(16666667ULL, &period);
-        const uint64_t due = lastPresent + period;  // the boundary a one-frame interval would have used
-        unsigned cause = 0;
-        if (!mark.submit || mark.submit >= due) {
-            if (idleSincePresent) {
-                cause = kLongIdle;
-            } else if (const uint64_t vsync = vsyncOf(mark); vsync && mark.submit - vsync < period / 2) {
-                cause = kLongRate;
-            } else {
-                cause = kLongCa;
-            }
-        } else if (mark.ready > due) {
-            cause = mark.ready - mark.kick > due - mark.submit ? kLongGpu : kLongQueue;
-        } else {
-            cause = kLongLatch;
-        }
+        const unsigned cause = switch_slow_present::cause({mark.submit, mark.kick, mark.ready, vsyncOf(mark)},
+                                                          lastPresent, refreshTicks(), idleSincePresent);
         ++stLong[cause];
         stLongFrames[cause] += frames - 1;
         return cause;
@@ -1396,7 +1364,6 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // its points in microseconds from the vsync its swap came after (from its submission when none is known).
     static void noteSlowFrame(uint64_t stamp, uint64_t us, uint32_t frames, unsigned cause, const FrameMark &mark)
     {
-        static const char *const kCause[kLongCauses] = {"idle", "ca", "gpu", "queue", "latch", "rate"};
         const FrameTimeline &tl = mark.tl;
         const bool fromVsync = (mark.submit != 0u) && tl.vsyncUs != kNotSeen;
         const uint64_t submitNs = mark.submit ? ticksNs(mark.submit) : 0;
@@ -1428,10 +1395,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
                  "submit %lld (%u, exec %u us), swap %lld, offer %lld, gpu done %lld, flip %lld, latch "
                  "%lld us; other submits %u; swap thread base %d sched %d mode %d qos %d; cpu %u MHz at vsync %u at "
                  "swap; imp %u %u us, bind %u %u us, alloc %u %u us, free %u, clean %u KiB %u us",
-                 stamp, frames, us, cause < kLongCauses ? kCause[cause] : "?", anchor, origin, rel(tl.firstUs),
-                 rel(tl.lastUs), tl.submits, tl.execUs, at(mark.submit), at(mark.kick), rel(tl.doneUs), at(mark.ready),
-                 at(stamp), tl.others, tl.basePri, tl.schedPri, tl.mode, tl.qos, tl.mhzVsync, tl.mhzSwap, tl.imports,
-                 tl.importUs, tl.binds, tl.bindUs, tl.allocs, tl.allocUs, tl.frees, tl.cleanKiB, tl.cleanUs);
+                 stamp, frames, us, cause < kLongCauses ? switch_slow_present::kNames[cause] : "?", anchor, origin,
+                 rel(tl.firstUs), rel(tl.lastUs), tl.submits, tl.execUs, at(mark.submit), at(mark.kick), rel(tl.doneUs),
+                 at(mark.ready), at(stamp), tl.others, tl.basePri, tl.schedPri, tl.mode, tl.qos, tl.mhzVsync,
+                 tl.mhzSwap, tl.imports, tl.importUs, tl.binds, tl.bindUs, tl.allocs, tl.allocUs, tl.frees, tl.cleanKiB,
+                 tl.cleanUs);
         os_log(OS_LOG_DEFAULT, "SwitchFrame: %s", line);  // one string: os_log drops a record whose scalars outgrow it
     }
 
@@ -1800,12 +1768,12 @@ private:
         stPlaneNative = 0;
         stPlaneFlips = stPlaneOnly = stPlaneLatched = stPlaneMaps = stPlaneRemaps = stPlaneDropped = stPlaneComposited =
             stPlaneUnderflows = stPlaneUnready = 0;
-        add("; long %u: idle %u/%u ca %u/%u gpu %u/%u queue %u/%u latch %u/%u rate %u/%u",
-            stLong[kLongIdle] + stLong[kLongCa] + stLong[kLongGpu] + stLong[kLongQueue] + stLong[kLongLatch] +
-                stLong[kLongRate],
-            stLong[kLongIdle], stLongFrames[kLongIdle], stLong[kLongCa], stLongFrames[kLongCa], stLong[kLongGpu],
-            stLongFrames[kLongGpu], stLong[kLongQueue], stLongFrames[kLongQueue], stLong[kLongLatch],
-            stLongFrames[kLongLatch], stLong[kLongRate], stLongFrames[kLongRate]);
+        uint32_t longs = 0;
+        for (const uint32_t n : stLong)
+            longs += n;
+        add("; long %u:", longs);
+        for (unsigned c = 0; c < kLongCauses; ++c)
+            add(" %s %u/%u", switch_slow_present::kNames[c], stLong[c], stLongFrames[c]);
         add("; vsync folded %u late>1ms %u idle %u", stVsyncFolded, stVsyncLateN, stVsyncIdle);
         if (stTouchSwap.count) {
             add("; touch->swap %llu/%llu us mean/max,", static_cast<unsigned long long>(stTouchSwap.meanUs()),

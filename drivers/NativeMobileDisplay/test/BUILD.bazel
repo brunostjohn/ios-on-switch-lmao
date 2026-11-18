@@ -1,5 +1,6 @@
 # drivers/NativeMobileDisplay on the host:
 #   switch_interaction_test             SwitchInteraction.h: the presents of a touch interaction window, its line
+#   switch_slow_present_test            SwitchSlowPresent.h: the cause a present two or more periods late is charged to
 #   switch_frame_stall_test             SwitchFrameStall.h: the frame ends at which the screen stopped mid-animation
 #   switch_sbim_test                    SwitchSBIM.h: libEDR's enableSBIM dictionaries (iOS 27), as
 #                                       AppleMobileDispH12P answers them for a display without SBIM statistics
@@ -93,6 +94,15 @@ host_test(
     srcs = [
         "switch_interaction_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchInteraction.h",
+        "//drivers/NativeMobileDisplay:SwitchSlowPresent.h",
+    ],
+)
+
+host_test(
+    name = "switch_slow_present_test",
+    srcs = [
+        "switch_slow_present_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchSlowPresent.h",
     ],
 )
 
