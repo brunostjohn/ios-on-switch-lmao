@@ -63,13 +63,15 @@ class Judge(unittest.TestCase):
     def test_the_dext_path_needs_each_of_its_steps(self):
         path = hidcheck.PATHS['ios27']
         lines = [
-            'DK: IOUSBHostInterface (Keyboard)-0x1000002a5 waiting for server com.apple.AppleUserHIDDrivers-1000002b0',
-            'DK: IOUSBHostInterface (Keyboard)-0x1000002a5 server launched, validating',
-            'DK: AppleUserUSBHostHIDDevice-0x1000002c0::start(IOUSBHostInterface-0x1000002a5) ok',
-            'AppleUserUSBHostHIDDevice:0x1000002c0 open by IOHIDEventDriver:0x1000002c4 (0x0)',
+            'DK: AppleUserUSBHostHIDDevice-0x10000047d waiting for server '
+            'com.apple.driverkit.AppleUserHIDDrivers-100000474',
+            'DK: AppleUserUSBHostHIDDevice-0x10000047d server launched, validating',
+            'DK: AppleUserUSBHostHIDDevice-0x10000047d::start(IOUSBHostInterface-0x10000047c) ok',
+            'AppleUserUSBHostHIDDevice:0x10000047d open by AppleUserHIDEventDriver:0x10000048a (0x0)',
         ]
         self.assertTrue(all(hidcheck.first(lines, pattern) for _, pattern in path.steps))
         self.assertIsNone(hidcheck.first(lines[1:], path.steps[0][1]))
+        self.assertIsNone(hidcheck.first(self.LOG, path.steps[-1][1]))
 
 
 if __name__ == '__main__':

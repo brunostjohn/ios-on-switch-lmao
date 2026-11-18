@@ -44,15 +44,17 @@ PATHS = {
             ('opened', re.compile(r'IOUSBHostHIDDevice:0x[0-9a-f]+ open by IOHIDEventDriver')),
         ),
     ),
-    # The kernel's and driverkitd's lines for a dext request (24B119 kernelcache, devicerun's usb_driver.py); no
-    # emulator run has shown them yet.
     'ios27': HidPath(
         'HID dext (AppleUserHIDDrivers)',
         (
-            ('requested', re.compile(r'DK: .* waiting for server com\.apple\.AppleUserHIDDrivers')),
-            ('launched', re.compile(r'DK: .* server launched')),
-            ('started', re.compile(r'DK: .*::start\(.*\) ok')),
-            ('opened', re.compile(r'open by IOHIDEventDriver')),
+            (
+                'requested',
+                re.compile(r'AppleUserUSBHostHIDDevice-0x[0-9a-f]+ waiting for server '
+                           r'com\.apple\.driverkit\.AppleUserHIDDrivers-'),
+            ),
+            ('launched', re.compile(r'AppleUserUSBHostHIDDevice-0x[0-9a-f]+ server launched, validating')),
+            ('started', re.compile(r'AppleUserUSBHostHIDDevice-0x[0-9a-f]+::start\(.*\) ok')),
+            ('opened', re.compile(r'AppleUserUSBHostHIDDevice:0x[0-9a-f]+ open by AppleUserHIDEventDriver:')),
         ),
     ),
 }
