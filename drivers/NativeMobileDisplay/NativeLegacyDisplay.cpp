@@ -1610,7 +1610,7 @@ private:
             colourBlankFrameEnd();
         }
         if ((status & kFrameEndInt) && stats) {
-            if (frameStall.frameEnd(mach_absolute_time(), refreshTicks(), vsyncWanted()))
+            if (frameStall.frameEnd(mach_absolute_time(), refreshTicks(), lastSubmit))
                 switch_stall_frame(frameStall.lastPresent());
             checkInteraction();
             noteStatsWindow();
