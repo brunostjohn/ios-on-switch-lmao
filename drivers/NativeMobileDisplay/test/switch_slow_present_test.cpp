@@ -7,6 +7,7 @@
 namespace {
 
 using switch_slow_present::cause;
+using switch_slow_present::interval;
 using switch_slow_present::kCa;
 using switch_slow_present::kGpu;
 using switch_slow_present::kIdle;
@@ -37,4 +38,18 @@ TEST(SwitchSlowPresent, ASwapInTimeIsChargedToWhatCameAfterIt)
     EXPECT_EQ(cause({kLast + 9000, kLast + 9100, kDue + 5000, kLast}, kLast, kPeriod, false), kGpu);
     EXPECT_EQ(cause({kLast + 9000, kLast + 16000, kDue + 5000, kLast}, kLast, kPeriod, false), kQueue);
     EXPECT_EQ(cause({kLast + 9000, kLast + 9100, kLast + 16000, kLast}, kLast, kPeriod, false), kLatch);
+}
+
+// A gap of 250 ms or more is a still screen outside a touch window; inside one it is timed like any slow present, in
+// whole periods, since it may be the stall the touch waits on.
+TEST(SwitchSlowPresent, AGapInsideATouchWindowIsASlowPresentInWholePeriods)
+{
+    const auto touched = interval(2683000, kPeriod, true);
+    EXPECT_EQ(touched.periods, 161u);
+    EXPECT_TRUE(touched.slow);
+    const auto still = interval(2683000, kPeriod, false);
+    EXPECT_EQ(still.periods, 161u);
+    EXPECT_FALSE(still.slow);
+    EXPECT_TRUE(interval(2 * kPeriod, kPeriod, false).slow);
+    EXPECT_FALSE(interval(kPeriod, kPeriod, true).slow);
 }

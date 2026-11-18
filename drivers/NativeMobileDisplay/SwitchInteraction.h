@@ -14,7 +14,7 @@
 class SwitchInteraction {
 public:
     static constexpr uint64_t kTailUs = 1000000;
-    static constexpr uint64_t kStillUs = 250000;  // the display's kGapUs: a longer interval is a screen that went still
+    static constexpr uint64_t kStillUs = switch_slow_present::kGapUs;  // a longer interval: a screen that went still
     static constexpr unsigned kCauses = switch_slow_present::kCauses;
 
     // Whether a window is open at nowUs for a run of touches that began at beganUs with its last contact at lastDownUs

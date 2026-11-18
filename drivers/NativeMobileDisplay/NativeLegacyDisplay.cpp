@@ -1149,7 +1149,7 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // fePeriodN only grow, the stats line takes the difference; fePeriodMin/Max reset by it). stFeFolded, frame ends that came
     // before the action took the previous one (the gate was busy for a whole frame). stFeLate is filter to action, the work
     // loop's delay at each frame end.
-    static constexpr uint64_t kGapUs = 250000;
+    static constexpr uint64_t kGapUs = switch_slow_present::kGapUs;
     // The histograms (and their quantiles in the stats line) are debug kernels' only, as the frame timeline is: a release
     // kernel never makes them.
     static constexpr bool frameHists = SWITCH_FRAME_TIMELINE;
@@ -1172,8 +1172,8 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // of the time between them the part spent waiting for a free surface, and its flip. At its present, swap-to-scan splits into
     // queue (submission to kick: behind the previous copy, or waiting for a surface), copy (kick to flip: the GPU work the copy is
     // ordered after, i.e. the compositor's own rendering of the frame, then the copy) and latch (flip to the boundary that took it).
-    // Every present more than 1.5 frames after the previous one (and under kGapUs) is charged to one cause, with the frames it cost
-    // (SwitchSlowPresent.h). Also: frames replaced before they were shown (latest frame wins), swaps retired unshown because a
+    // Every present more than 1.5 frames after the previous one (and under kGapUs, or inside a touch window) is charged to one
+    // cause, with the frames it cost (SwitchSlowPresent.h). Also: frames replaced before they were shown (latest frame wins), swaps retired unshown because a
     // newer one was queued behind them (collapsed), V_BLANKs folded into one notification, notifications more than 1 ms after
     // their V_BLANK, and how often the compositor turned vsync off.
     struct FrameMark {
@@ -1247,33 +1247,42 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         uint32_t periods = 0;
         unsigned cause = kLongCauses;
         frameStall.present(stamp, lastPresent && stamp > lastPresent ? stamp - lastPresent : 0, refreshTicks());
+        uint64_t began = 0;
+        uint64_t lastDown = 0;
+        if (frameHists)
+            switch_frames_touch_activity(&began, &lastDown);
+        // The run's first present answers the touch-down: its interval is the still screen before it.
+        const bool touching =
+            frameHists && began && lastPresent >= began &&
+            SwitchInteraction::active(Span::ticksToUs(stamp), Span::ticksToUs(began), Span::ticksToUs(lastDown));
         if (lastPresent && stamp > lastPresent) {
             const uint64_t us = Span::ticksToUs(stamp - lastPresent);
+            const uint64_t period = vsyncInterval ? Span::ticksToUs(vsyncInterval) : 16667;
+            const switch_slow_present::Interval judged = switch_slow_present::interval(us, period, touching);
             intervalUs = us;
+            periods = judged.periods;
             if (us >= kGapUs) {
                 ++stGaps[us < 1000000 ? 0 : 1];
+                if (judged.slow)
+                    cause = longCause(mark);
             } else {
                 if (frameHists)
                     hists->presentGap.add(us);
-                const uint64_t period = vsyncInterval ? Span::ticksToUs(vsyncInterval) : 16667;
-                const uint64_t frames = (us + period / 2) / period;
-                periods = static_cast<uint32_t>(frames);
-                uint64_t bin = 3;
-                if (frames <= 1) {
+                uint32_t bin = 3;
+                if (periods <= 1) {
                     bin = 0;
-                } else if (frames < 4) {
-                    bin = frames - 1;
+                } else if (periods < 4) {
+                    bin = periods - 1;
                 }
                 ++stVb[bin];
-                if (frames >= 2) {
-                    cause = noteLong(static_cast<uint32_t>(frames), mark);
-                    if (SWITCH_FRAME_TIMELINE)
-                        noteSlowFrame(stamp, us, static_cast<uint32_t>(frames), cause, mark);
-                }
+                if (judged.slow)
+                    cause = noteLong(periods, mark);
             }
+            if (SWITCH_FRAME_TIMELINE && judged.slow)
+                noteSlowFrame(stamp, us, periods, cause, mark);
         }
         if (frameHists)
-            noteInteraction(stamp, intervalUs, periods, cause);
+            noteInteraction(stamp, intervalUs, periods, cause, began, lastDown);
     }
 
     SwitchFrameStall frameStall;
@@ -1286,12 +1295,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         return period;
     }
 
-    // Debug kernels: a present inside a touch interaction window (SwitchInteraction.h), after closing an ended one.
-    void noteInteraction(uint64_t stamp, uint64_t intervalUs, uint32_t periods, unsigned cause)
+    // Debug kernels: a present inside a touch interaction window (SwitchInteraction.h), after closing an ended one; began and
+    // lastDown, the touch run's (switch_frames_touch_activity).
+    void noteInteraction(uint64_t stamp, uint64_t intervalUs, uint32_t periods, unsigned cause, uint64_t began,
+                         uint64_t lastDown)
     {
-        uint64_t began = 0;
-        uint64_t lastDown = 0;
-        switch_frames_touch_activity(&began, &lastDown);
         const uint64_t now = Span::ticksToUs(stamp);
         const uint64_t beganUs = Span::ticksToUs(began);
         const uint64_t lastDownUs = Span::ticksToUs(lastDown);
@@ -1350,18 +1358,24 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         return back < mark.submit ? mark.submit - back : 0;
     }
 
-    // A present frames DC A periods after the previous one (lastPresent, not yet moved on): its cause (SwitchSlowPresent.h).
+    // A slow present's cause (SwitchSlowPresent.h); lastPresent is the one before, not yet moved on.
+    unsigned longCause(const FrameMark &mark) const
+    {
+        return switch_slow_present::cause({mark.submit, mark.kick, mark.ready, vsyncOf(mark)}, lastPresent,
+                                          refreshTicks(), idleSincePresent);
+    }
+
+    // A present frames DC A periods after the previous one, under kGapUs: its cause, counted for the pacing line.
     unsigned noteLong(uint32_t frames, const FrameMark &mark)
     {
-        const unsigned cause = switch_slow_present::cause({mark.submit, mark.kick, mark.ready, vsyncOf(mark)},
-                                                          lastPresent, refreshTicks(), idleSincePresent);
+        const unsigned cause = longCause(mark);
         ++stLong[cause];
         stLongFrames[cause] += frames - 1;
         return cause;
     }
 
-    // Debug kernels: one "SwitchFrame" line per present 1.5 periods or more after the one before (tools/frames reads them),
-    // its points in microseconds from the vsync its swap came after (from its submission when none is known).
+    // Debug kernels: one "SwitchFrame" line per slow present (SwitchSlowPresent.h interval; tools/frames reads them), its
+    // points in microseconds from the vsync its swap came after (from its submission when none is known).
     static void noteSlowFrame(uint64_t stamp, uint64_t us, uint32_t frames, unsigned cause, const FrameMark &mark)
     {
         const FrameTimeline &tl = mark.tl;

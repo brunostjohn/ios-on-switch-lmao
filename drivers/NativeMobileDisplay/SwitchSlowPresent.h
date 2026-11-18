@@ -1,11 +1,27 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Debug kernels: the cause NativeLegacyDisplay charges a present two or more refresh periods after the one before it
-// to, in its pacing line ("long"), its SwitchFrame lines and the touch interaction line. Times are ticks of one
-// monotonic clock.
+// Debug kernels: the presents NativeLegacyDisplay calls slow (two or more refresh periods after the one before) and the
+// cause it charges each to, in its pacing line ("long"), its SwitchFrame lines and the touch interaction line. Times
+// are ticks of one monotonic clock, intervals microseconds.
 #pragma once
 #include <stdint.h>
 
 namespace switch_slow_present {
+
+constexpr uint64_t kGapUs = 250000;  // a longer interval is a screen that went still, or a stall
+
+struct Interval {
+    uint32_t periods;  // whole refresh periods, rounded
+    bool slow;         // charged to a cause, with a SwitchFrame line
+};
+
+// A present intervalUs after the one before. A gap of kGapUs or more is slow only inside a touch window, where it may
+// be the stall the touch is waiting on (or a finger at rest: the interaction line counts those as "still").
+inline Interval interval(uint64_t intervalUs, uint64_t periodUs, bool touching)
+{
+    const uint64_t periods = (intervalUs + periodUs / 2) / periodUs;
+    const uint32_t whole = periods > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(periods);
+    return {whole, whole >= 2 && (intervalUs < kGapUs || touching)};
+}
 
 enum Cause : unsigned {
     kIdle,   // the compositor turned vsync off since the previous present: it had nothing to draw (no stall)
