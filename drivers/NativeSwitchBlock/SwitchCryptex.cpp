@@ -55,7 +55,8 @@ void switch_cluster_register_cryptex_mount(unsigned int index, mount_t);        
 void switch_cluster_record_start(struct switch_record_entry *log, uint32_t capacity);  // bsd/vfs/vfs_cluster.c
 uint32_t switch_cluster_record_stop(void);                                             // bsd/vfs/vfs_cluster.c
 #if DEVELOPMENT || DEBUG
-void switch_cluster_image_direct(uint64_t bytes, uint32_t cardReads);  // bsd/vfs/vfs_cluster.c
+void switch_cluster_image_direct(uint64_t bytes, uint32_t cardReads);      // bsd/vfs/vfs_cluster.c
+void switch_diag_cryptex_cache(size_t (*counts)(char *out, size_t size));  // kernel/switch/diag/pagein.c
 #endif
 // NOLINTNEXTLINE(readability-redundant-declaration): not every kernel configuration's headers declare it
 int vnode_pagein(vnode_t, upl_t, upl_offset_t, vm_object_offset_t, upl_size_t, int, int *);  // bsd/vm/vnode_pager.c
@@ -285,6 +286,29 @@ void reportDirect(uint64_t bytes, uint32_t cardReads)
 }
 
 void finishRequest(thread_call_param_t, thread_call_param_t);
+
+#if DEVELOPMENT || DEBUG
+// The 10 s scheduling report's "SwitchSched cryptex cache" line: the cache's counts since its call before (one caller).
+size_t cacheCounts(char *out, size_t size)
+{
+    static SwitchCacheStats seen;
+    IOLockLock(gCache.lock);
+    const SwitchCacheStats s = gCache.cache.stats();
+    IOLockUnlock(gCache.lock);
+    const uint64_t kib = kSwitchCacheBlock >> 10;
+    const int n =
+        snprintf(out, size,
+                 "%llu requests (%llu all held, %llu left to the card); %llu card reads of %llu KiB, %llu KiB "
+                 "of it read ahead; %llu KiB served the first time (%llu KiB of the read-ahead); %llu windows "
+                 "reused holding blocks never served; %llu reads failed",
+                 s.requests - seen.requests, s.ready - seen.ready, s.refused - seen.refused, s.reads - seen.reads,
+                 (s.blocksRead - seen.blocksRead) * kib, (s.aheadBlocks - seen.aheadBlocks) * kib,
+                 (s.served - seen.served) * kib, (s.aheadServed - seen.aheadServed) * kib, s.evicted - seen.evicted,
+                 s.failed - seen.failed);
+    seen = s;
+    return n < 0 ? 0 : static_cast<size_t>(n) < size ? static_cast<size_t>(n) : size - 1;
+}
+#endif
 
 Pending *takePending()
 {
@@ -923,6 +947,9 @@ bool setupCache()
         return false;
     }
     gCache.cache.init(gCache.windows, n, gCache.buckets, kBuckets);
+#if DEVELOPMENT || DEBUG
+    switch_diag_cryptex_cache(cacheCounts);
+#endif
     return true;
 }
 
