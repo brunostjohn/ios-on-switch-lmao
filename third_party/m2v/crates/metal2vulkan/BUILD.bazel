@@ -126,6 +126,15 @@ rust_test(
     deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
 )
 
+# The stages a process keeps (pipeline::compile::kept): one compile per key, every use charged as its compile was
+rust_test(
+    name = "kept_stages_test",
+    args = ["pipeline::compile::kept::"],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
+
 # Every residual a render stage pushes stays within the 31 argument-table words a raw record names
 rust_test(
     name = "push_placement_test",
