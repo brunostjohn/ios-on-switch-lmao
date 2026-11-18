@@ -1800,6 +1800,7 @@ private:
             add("%s", "; quiet (the next quiet windows are not logged)");
         if (logged)
             os_log(OS_LOG_DEFAULT, "SwitchDisplay pacing: %s", line);  // log only, never the boot console
+        noteRequestedWindow(us, logged);
         // who drew in this window: Core Animation's clients send each commit to the render server as a mach message
         if (switch_render_senders_line(line, sizeof(line), us / 1000, 6) && logged) {
             os_log(OS_LOG_DEFAULT, "SwitchDisplay clients: %llu ms to the render server: %s",
@@ -1832,6 +1833,36 @@ private:
         stReadDue = true;
         stRead = 0;
         noteLocksWindow();
+    }
+
+    // Debug kernels: how far from Core Animation's requested presentation the frames this window were shown
+    // (SwitchFrameTickets.h lagged), in periods: 0 is on time, 1 a period late.
+    void noteRequestedWindow(uint64_t us, bool logged)
+    {
+#if SWITCH_FRAME_TIMELINE
+        const SwitchFrameTickets::Lag lag = frameInfo->tickets.takeLag();
+        if (!logged)
+            return;
+        char line[192];
+        size_t at = 0;
+        for (unsigned i = 0; i < SwitchFrameTickets::kLagBins && at < sizeof(line); ++i) {
+            const int periods = static_cast<int>(i) + SwitchFrameTickets::kLagEarliest;
+            const char *edge = "";
+            if (i == 0) {
+                edge = "<=";
+            } else if (i + 1 == SwitchFrameTickets::kLagBins) {
+                edge = ">=";
+            }
+            at += static_cast<size_t>(
+                snprintf(line + at, sizeof(line) - at, "%s%s%d:%u", i ? " " : "", edge, periods, lag.bins[i]));
+        }
+        os_log(OS_LOG_DEFAULT,
+               "SwitchDisplay requested: %llu ms: shown minus requested presentation, periods %s, unknown %u",
+               static_cast<unsigned long long>(us / 1000), line, lag.unknown);
+#else
+        (void)us;
+        (void)logged;
+#endif
     }
 
     // Debug kernels: the frame path's locks per 100 frame ends this window, by lock (the colour unit's setters' lock,
@@ -4380,8 +4411,10 @@ public:
 #if SWITCH_FRAME_TIMELINE
         bool first = false;
         const auto ticket = frameInfo->tickets.shown(seq, continuous, vsyncInterval / 2, &first);
-        if (first)
+        if (first) {
             KDBG(SWITCH_KDBG_CODE(SWITCH_KDBG_FRAME_TICKET), ticket.id, ticket.swapId, ticket.take, ticket.gpu);
+            frameInfo->tickets.lagged(ticket.requested, continuous, vsyncInterval);
+        }
 #endif
         switch_frame_info::Frame frame;
         if (frameInfo->pending.shown(seq, continuous, frame, vsyncInterval / 2) && frameInfo->clients.any())
