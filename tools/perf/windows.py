@@ -88,10 +88,10 @@ def touches(recs: list[Rec]) -> list[Window]:
 
 
 def marks(recs: list[Rec]) -> list[Window]:
-    """Each mark the owner set (capture button or a HW Test scenario button), with the span it names, if any."""
+    """Each mark the owner set (capture button, HW Test scenario button) or a HW Test test logged, with its span."""
     out = []
     for r in recs:
-        if r.proc == 'kernel' and (m := MARK.match(r.msg)):
+        if (r.proc == 'kernel' or r.subsystem == 'com.brunostjohn.switch.hwtest') and (m := MARK.match(r.msg)):
             span = timedelta(milliseconds=int(m['ms'] or 0))
             out.append(Window('mark', m['label'], r.time - span, r.time))
     return out

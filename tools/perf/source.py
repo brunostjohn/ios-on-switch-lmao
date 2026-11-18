@@ -45,7 +45,9 @@ LOG_PREDICATE = ' OR '.join(
         + _any('eventMessage', 'CONTAINS', METAL_PARTS)
         + ')',
         '(process == "SwitchShaderCompiler" AND eventMessage BEGINSWITH "SwitchShaderCompiler: made in")',
-        '(subsystem == "com.brunostjohn.switch.hwtest" AND eventMessage BEGINSWITH "HWTEST ")',
+        '(subsystem == "com.brunostjohn.switch.hwtest" AND '
+        + _any('eventMessage', 'BEGINSWITH', ('HWTEST ', 'SwitchMark: '))
+        + ')',
         (
             '(subsystem == "com.apple.hangtracer" AND eventMessage BEGINSWITH "Hang detected" AND eventMessage '
             'CONTAINS "always-on")'

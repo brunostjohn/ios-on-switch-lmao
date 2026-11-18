@@ -156,6 +156,22 @@ class WindowsTest(unittest.TestCase):
         (w,) = windows.launches(recs)
         self.assertEqual((w.name, w.pid, round(w.ms)), ('com.apple.Preferences', 659, 8930))
 
+    def test_a_mark_is_the_kernels_or_hw_tests_and_spans_its_ms(self):
+        recs = [
+            rec('SwitchMark: capture', 2.0),
+            rec(
+                'SwitchMark: ui.title_scroll.back.1 500 ms frames=31',
+                9.0,
+                'SwitchHWTest27',
+                subsystem='com.brunostjohn.switch.hwtest',
+            ),
+            rec('SwitchMark: forged 100 ms', 9.0, 'SpringBoard'),
+        ]
+        capture, scroll = windows.marks(recs)
+        self.assertEqual((capture.name, capture.start, capture.end), ('capture', recs[0].time, recs[0].time))
+        self.assertEqual(scroll.name, 'ui.title_scroll.back.1')
+        self.assertEqual(scroll.end - scroll.start, timedelta(milliseconds=500))
+
     def test_a_hang_spans_its_signpost_begin_and_end(self):
         begin, end = MACH0 + int(2 * TICK_HZ), MACH0 + int(5.49 * TICK_HZ)
         sp = rec(HANG.format(begin=begin, end=end), 5.5, 'SpringBoard', pid=400, name='HangInterval', kind='event')
