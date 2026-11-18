@@ -1,0 +1,37 @@
+# NativeSwitchBlock
+
+Tegra X1 SDMMC1 block driver and direct cryptex read driver for the Switch's SD card APFS partition.
+
+## What it does
+
+`NativeSwitchBlock` brings the card from the inherited 48 MHz 3.3 V bus to UHS-I SDR104 (1.8 V, 199.68 MHz, hardware
+tuned) unless `switch-no-sd-uhs` is set, then exposes the APFS GPT partition as an `IOBlockStorageDevice`. Data moves by
+SDHCI v4 64-bit ADMA2 straight into request pages with Auto CMD23 framing when the SCR lists CMD23, or by SDMA through a
+1 MiB bounce buffer when a segment cannot go direct. Queued reads merge across the queue, including bounded read-through
+gaps into a sink page, and completions run on the worker thread while the next command runs on the card. `SwitchCryptex`
+maps cryptex image extents onto the block device below DiskImages and the image files' page cache.
+
+Writes run write-through. The driver never turns the card's volatile write cache on, and `setup()` flushes and disables
+any cache left enabled by an earlier boot stage (panicking if the card fails to clear both bits).
+
+## Tests
+
+```sh
+bazel test //drivers/NativeSwitchBlock/test:all
+```
+
+## Why SD command queueing is absent
+
+Tegra X1's SDMMC1 controller is an SDHOST 4.0 host without a hardware command-queue engine (CQHCI). Every queue protocol
+command must be issued in software and waited for by interrupt.
+
+- Sequential mode (SD 6.00 4.19.1.2) assigns every task with CMD44 and CMD45 before any CMD46 data transfer starts.
+  Across six device boots on a SanDisk A2 card (SR01T, queue depth 32), 16 queued random 4 KiB reads were 46 to 121 us
+  per task slower than 16 single-command reads (36 to 111 us net of host cache work) because the card's overlap in
+  sequential mode did not cover the two extra interrupt-driven commands per task.
+- Voluntary mode (SD 6.00 4.19.6), where A2 random read performance is defined, polls the Task Status Register with
+  CMD13 until a task reports ready (up to 250 ms). That violates the no-polling rule and adds at least one more software
+  command per task.
+
+Running one data command at a time with queue merging and pipelined completions uses one interrupt per command and
+avoids both costs.

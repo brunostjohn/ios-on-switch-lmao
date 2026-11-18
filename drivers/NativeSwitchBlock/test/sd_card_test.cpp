@@ -1,6 +1,5 @@
-// Host test of drivers/NativeSwitchBlock/SwitchSdCard.h: the SD card register decoders and command encodings the SD
-// driver uses for its identification lines, CMD23 framing and the command queue, bit for bit. What the driver does with
-// them is guarded by sd_card_source_test.cpp.
+// Host test of drivers/NativeSwitchBlock/SwitchSdCard.h: the SD card register decoders, CMD23 framing, and cache-off
+// sequence used by NativeSwitchBlock.cpp. What the driver does with them is guarded by sd_card_source_test.cpp.
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -215,29 +214,28 @@ static void extension()
     SwitchSdGeneralInfo g = switchSdParseGeneralInfo(info.data(), 512);
     REQUIRE(!g.why && g.extensions == 2 && g.power.found && g.power.fno == 1 && g.power.address == 0 && g.perf.found &&
             g.perf.fno == 2 && g.perf.address == 3 * 512);
-    REQUIRE(switchSdCqControlAddress(g.perf) == 3 * 512 + 262);
-    // A performance set not at the top of its page: byte 262 would be on the next page, so no CQ address.
+    REQUIRE(switchSdPerfFits(g.perf));
+    // A performance set not at the top of its page: byte 262 would be on the next page, so it does not fit.
     SwitchSdExtFunction shifted = g.perf;
     shifted.address = 3 * 512 + 250;
-    REQUIRE(!switchSdCqControlAddress(shifted));
+    REQUIRE(!switchSdPerfFits(shifted));
+    REQUIRE(!switchSdPerfWriteAddress(shifted, kSdPerfCacheControl, 0));
     shifted.address = 3 * 512 + 249;
-    REQUIRE(switchSdCqControlAddress(shifted) == 3 * 512 + 511);
-    REQUIRE(!switchSdCqControlAddress(SwitchSdExtFunction{}));
-    // r16-sdcq: the host bytes the driver may write, and only these values: Cache Enable 00h/01h, Flush Cache 01h, the
-    // CQ control byte 00h/03h; the CMD48/CMD49 argument of each (MIO 0, FNO 2, page 3, LEN 0: one byte).
+    REQUIRE(switchSdPerfFits(shifted));
+    REQUIRE(switchSdPerfWriteAddress(shifted, kSdPerfCacheControl, 0) == 3 * 512 + 509);
+    REQUIRE(!switchSdPerfFits(SwitchSdExtFunction{}));
+    // Only flushing a cache found enabled (byte 261 = 01h) and disabling it (byte 260 = 00h) are permitted.
     REQUIRE(switchSdPerfWriteAddress(g.perf, kSdPerfCacheControl, 0) == 3 * 512 + 260);
-    REQUIRE(switchSdPerfWriteAddress(g.perf, kSdPerfCacheControl, kSdCacheEnable) == 3 * 512 + 260);
     REQUIRE(switchSdPerfWriteAddress(g.perf, kSdPerfFlushControl, kSdFlushCache) == 3 * 512 + 261);
-    REQUIRE(switchSdPerfWriteAddress(g.perf, kSdPerfCqControl, 0) == 3 * 512 + 262);
-    REQUIRE(switchSdPerfWriteAddress(g.perf, kSdPerfCqControl, kSdCqEnable | kSdCqSequential) == 3 * 512 + 262);
-    REQUIRE(!switchSdPerfWriteAddress(g.perf, kSdPerfFlushControl, 0));         // the card clears it, never the host
-    REQUIRE(!switchSdPerfWriteAddress(g.perf, kSdPerfCqControl, kSdCqEnable));  // voluntary mode: never
+    REQUIRE(!switchSdPerfWriteAddress(g.perf, kSdPerfCacheControl, kSdCacheEnable));  // never enables cache
+    REQUIRE(!switchSdPerfWriteAddress(g.perf, kSdPerfFlushControl, 0));               // the card clears it, never host
+    REQUIRE(!switchSdPerfWriteAddress(g.perf, kSdPerfCqControl, 0));                  // command queue is absent
+    REQUIRE(!switchSdPerfWriteAddress(g.perf, kSdPerfCqControl, 3));
     REQUIRE(!switchSdPerfWriteAddress(g.perf, kSdPerfCacheControl, 2));
     REQUIRE(!switchSdPerfWriteAddress(g.perf, 257, 1) && !switchSdPerfWriteAddress(g.perf, 258, 0));
-    REQUIRE(!switchSdPerfWriteAddress(shifted, kSdPerfCacheControl, 0) || switchSdCqControlAddress(shifted));
-    REQUIRE(!switchSdPerfWriteAddress(SwitchSdExtFunction{}, kSdPerfCqControl, 0));
+    REQUIRE(!switchSdPerfWriteAddress(SwitchSdExtFunction{}, kSdPerfCacheControl, 0));
     REQUIRE(switchSdExtArgument(2, 3 * 512 + 261, 1) == (2u << 27 | (3u * 512 + 261) << 9));
-    REQUIRE(!(switchSdExtArgument(2, 3 * 512 + 262, 1) & (1u << 31 | 1u << 26)));  // MIO 0 (memory), MW 0
+    REQUIRE(!(switchSdExtArgument(2, 3 * 512 + 260, 2) & (1u << 31 | 1u << 26)));  // MIO 0 (memory), MW 0
     // Layouts it does not trust.
     REQUIRE(switchSdParseGeneralInfo(generalInfo(1).data(), 512).why);
     info = generalInfo();
@@ -272,7 +270,7 @@ static void extension()
     perf[4] = 1;
     perf[6] = 0x1f;
     perf[260] = 1;
-    perf[262] = kSdCqEnable | kSdCqSequential;
+    perf[262] = 0x03;
     SwitchSdPerf f = switchSdParsePerf(perf.data());
     REQUIRE(f.fxEvent && f.cardMaintenance && f.hostMaintenance && f.cache && f.cqDepth == 32 && f.cacheEnable == 1 &&
             f.cqControl == 3 && !f.taskErrors);
@@ -317,14 +315,6 @@ static void framing()
     REQUIRE(f.transfer == 0x2b && f.command == 0x193a && f.argument2 == 2048);
     f = switchSdBlockFrame(1, true, true);
     REQUIRE(f.transfer == 0x01 && f.command == 0x183a && f.argument2 == 0);
-    // r14-sdcq: a command-queue task's CMD46: a read, DMA, the block count, no auto command, never a write.
-    for (uint32_t sectors = 1; sectors <= 512; ++sectors) {
-        const SwitchSdFrame t = switchSdTaskFrame(sectors);
-        REQUIRE(t.command == 0x2e3a && t.argument2 == 0 && !t.autoStop);
-        REQUIRE(!(t.transfer & (kSdTransferAutoCmd12 | kSdTransferAutoCmd23)) && (t.transfer & kSdTransferRead) &&
-                (t.transfer & kSdTransferDma));
-        REQUIRE(t.transfer == (sectors > 1 ? 0x33 : 0x11));
-    }
 }
 
 TEST(SdCard, RegisterFields)
@@ -370,4 +360,192 @@ TEST(SdCard, DataPathFromRegisters)
     const uint8_t plain[8] = {0x02, 0x45, 0x84, 0x80, 0, 0, 0, 0};
     const SwitchSdScr old = switchSdParseScr(plain);
     EXPECT_FALSE(switchSdPath(0x376cd08cu, 0x308b, &old).autoCmd23);
+}
+
+TEST(SdCard, DisableFoundCache)
+{
+    struct Op {
+        bool write;
+        uint8_t fno;
+        uint32_t address;
+        uint32_t length;
+        uint8_t value;
+    };
+
+    struct FakeBus {
+        uint32_t base = 3 * 512;
+        uint8_t cacheByte = kSdCacheEnable;
+        uint8_t flushByte = 0;
+        bool flushedWhileEnabled = false;
+        bool stickyCache = false;
+        bool stickyFlush = false;
+        int failAt = 0;
+        int failError = 0;
+        uint32_t failR1 = 0;
+        std::vector<Op> ops;
+
+        int writeByte(uint8_t fno, uint32_t address, uint8_t value, uint32_t *r1)
+        {
+            ops.push_back({true, fno, address, 1, value});
+            *r1 = 0;
+            if (static_cast<int>(ops.size()) == failAt) {
+                *r1 = failR1;
+                return failError;
+            }
+            if (address == base + kSdPerfFlushControl) {
+                if ((value & kSdFlushCache) && (cacheByte & kSdCacheEnable))
+                    flushedWhileEnabled = true;
+                flushByte = stickyFlush ? kSdFlushCache : 0;
+            } else if (address == base + kSdPerfCacheControl) {
+                cacheByte = stickyCache ? kSdCacheEnable : value;
+            }
+            return 0;
+        }
+
+        int readBytes(uint8_t fno, uint32_t address, uint32_t length, uint8_t *out, uint32_t *r1)
+        {
+            ops.push_back({false, fno, address, length, 0});
+            *r1 = 0;
+            if (static_cast<int>(ops.size()) == failAt) {
+                *r1 = failR1;
+                return failError;
+            }
+            if (address == base + kSdPerfCacheControl && length == 2) {
+                out[0] = cacheByte;
+                out[1] = flushByte;
+            }
+            return 0;
+        }
+    };
+
+    const SwitchSdExtFunction perfFunc{true, 2, 3 * 512};
+    SwitchSdPerf perf = {};
+
+    // Zero commands when the performance set was not read or Cache Enable already reads 0.
+    {
+        FakeBus bus;
+        perf.cacheEnable = kSdCacheEnable;
+        const SwitchSdCacheOff r = switchSdDisableFoundCache(false, perfFunc, perf, bus);
+        EXPECT_EQ(r.step, SwitchSdCacheOffStep::kSkipped);
+        EXPECT_TRUE(bus.ops.empty());
+    }
+    {
+        FakeBus bus;
+        perf.cacheEnable = 0;
+        const SwitchSdCacheOff r = switchSdDisableFoundCache(true, perfFunc, perf, bus);
+        EXPECT_EQ(r.step, SwitchSdCacheOffStep::kSkipped);
+        EXPECT_TRUE(bus.ops.empty());
+    }
+    {
+        FakeBus bus;
+        perf.cacheEnable = 0x02;  // bit 0 is clear
+        const SwitchSdCacheOff r = switchSdDisableFoundCache(true, perfFunc, perf, bus);
+        EXPECT_EQ(r.step, SwitchSdCacheOffStep::kSkipped);
+        EXPECT_TRUE(bus.ops.empty());
+    }
+
+    // Cache found on: flush (261 = 01h) while cache is still enabled, disable (260 = 00h), single read-back of 260-261.
+    perf.cacheEnable = kSdCacheEnable;
+    {
+        FakeBus bus;
+        const SwitchSdCacheOff r = switchSdDisableFoundCache(true, perfFunc, perf, bus);
+        EXPECT_EQ(r.step, SwitchSdCacheOffStep::kDone);
+        EXPECT_TRUE(bus.flushedWhileEnabled);
+        ASSERT_EQ(bus.ops.size(), 3u);
+        EXPECT_TRUE(bus.ops[0].write);
+        EXPECT_EQ(bus.ops[0].fno, 2u);
+        EXPECT_EQ(bus.ops[0].address, 3u * 512 + kSdPerfFlushControl);
+        EXPECT_EQ(bus.ops[0].value, kSdFlushCache);
+        EXPECT_TRUE(bus.ops[1].write);
+        EXPECT_EQ(bus.ops[1].fno, 2u);
+        EXPECT_EQ(bus.ops[1].address, 3u * 512 + kSdPerfCacheControl);
+        EXPECT_EQ(bus.ops[1].value, 0u);
+        EXPECT_FALSE(bus.ops[2].write);
+        EXPECT_EQ(bus.ops[2].fno, 2u);
+        EXPECT_EQ(bus.ops[2].address, 3u * 512 + kSdPerfCacheControl);
+        EXPECT_EQ(bus.ops[2].length, 2u);
+    }
+
+    // Invalid or page-crossing performance register set: zero commands, fails.
+    {
+        FakeBus bus;
+        SwitchSdExtFunction crosses = perfFunc;
+        crosses.address = 3 * 512 + 250;
+        EXPECT_EQ(switchSdDisableFoundCache(true, crosses, perf, bus).step, SwitchSdCacheOffStep::kBadAddress);
+        EXPECT_TRUE(bus.ops.empty());
+        EXPECT_EQ(switchSdDisableFoundCache(true, SwitchSdExtFunction{}, perf, bus).step,
+                  SwitchSdCacheOffStep::kBadAddress);
+        EXPECT_TRUE(bus.ops.empty());
+    }
+
+    // Flush failure stops immediately (bus error or R1 error bit); no disable and no retry.
+    {
+        FakeBus bus;
+        bus.failAt = 1;
+        bus.failError = 6;
+        const SwitchSdCacheOff r = switchSdDisableFoundCache(true, perfFunc, perf, bus);
+        EXPECT_EQ(r.step, SwitchSdCacheOffStep::kFlushFailed);
+        EXPECT_EQ(r.error, 6);
+        EXPECT_EQ(bus.ops.size(), 1u);
+    }
+    {
+        FakeBus bus;
+        bus.failAt = 1;
+        bus.failR1 = 1u << 22;  // ILLEGAL_COMMAND
+        const SwitchSdCacheOff r = switchSdDisableFoundCache(true, perfFunc, perf, bus);
+        EXPECT_EQ(r.step, SwitchSdCacheOffStep::kFlushFailed);
+        EXPECT_EQ(r.r1, 1u << 22);
+        EXPECT_EQ(bus.ops.size(), 1u);
+    }
+
+    // Disable failure stops after two commands; no read-back and no retry.
+    {
+        FakeBus bus;
+        bus.failAt = 2;
+        bus.failError = 3;
+        const SwitchSdCacheOff r = switchSdDisableFoundCache(true, perfFunc, perf, bus);
+        EXPECT_EQ(r.step, SwitchSdCacheOffStep::kDisableFailed);
+        EXPECT_EQ(r.error, 3);
+        EXPECT_EQ(bus.ops.size(), 2u);
+    }
+    {
+        FakeBus bus;
+        bus.failAt = 2;
+        bus.failR1 = 1u << 19;  // ERROR
+        const SwitchSdCacheOff r = switchSdDisableFoundCache(true, perfFunc, perf, bus);
+        EXPECT_EQ(r.step, SwitchSdCacheOffStep::kDisableFailed);
+        EXPECT_EQ(r.r1, 1u << 19);
+        EXPECT_EQ(bus.ops.size(), 2u);
+    }
+
+    // Read-back failure stops after one CMD48.
+    {
+        FakeBus bus;
+        bus.failAt = 3;
+        bus.failError = 2;
+        const SwitchSdCacheOff r = switchSdDisableFoundCache(true, perfFunc, perf, bus);
+        EXPECT_EQ(r.step, SwitchSdCacheOffStep::kReadBackFailed);
+        EXPECT_EQ(r.error, 2);
+        EXPECT_EQ(bus.ops.size(), 3u);
+    }
+
+    // Read-back still shows Cache Enable bit 0 or Flush Cache bit 0 set: fails after one read-back, no retry loop.
+    {
+        FakeBus bus;
+        bus.stickyCache = true;
+        const SwitchSdCacheOff r = switchSdDisableFoundCache(true, perfFunc, perf, bus);
+        EXPECT_EQ(r.step, SwitchSdCacheOffStep::kStillOn);
+        EXPECT_EQ(r.cacheEnable, kSdCacheEnable);
+        EXPECT_EQ(r.flushCache, 0u);
+        EXPECT_EQ(bus.ops.size(), 3u);
+    }
+    {
+        FakeBus bus;
+        bus.stickyFlush = true;
+        const SwitchSdCacheOff r = switchSdDisableFoundCache(true, perfFunc, perf, bus);
+        EXPECT_EQ(r.step, SwitchSdCacheOffStep::kStillOn);
+        EXPECT_EQ(r.cacheEnable, 0u);
+        EXPECT_EQ(r.flushCache, kSdFlushCache);
+        EXPECT_EQ(bus.ops.size(), 3u);
+    }
 }

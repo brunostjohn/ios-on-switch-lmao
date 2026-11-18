@@ -104,8 +104,7 @@ inline unsigned switchSdSize(uint64_t bytes)
 
 struct SwitchSdIo {
     SwitchSdHistogram wait[kSwitchSdClasses], total[kSwitchSdClasses];
-    SwitchSdHistogram command[2][kSwitchSdSizes];  // [write][size], legacy commands
-    SwitchSdHistogram task[kSwitchSdSizes];        // command-queue tasks (reads), by size
+    SwitchSdHistogram command[2][kSwitchSdSizes];  // [write][size]
     uint64_t asked[kSwitchSdClasses];              // requests by the class their client gave
     uint64_t chosen;                               // of them, queued in another class by the driver (the boot prefetch)
     uint64_t depthNs;                              // the queue's length integrated over time (requests x ns)
@@ -124,7 +123,6 @@ struct SwitchSdIo {
         for (unsigned z = 0; z < kSwitchSdSizes; ++z) {
             copy.command[0][z] = command[0][z].since({});
             copy.command[1][z] = command[1][z].since({});
-            copy.task[z] = task[z].since({});
         }
         copy.chosen = switchSdLoad(&chosen);
         copy.depthNs = switchSdLoad(&depthNs);
@@ -162,9 +160,8 @@ inline size_t switchSdFormatHistogram(const SwitchSdHistogram &h, char *out, siz
 }
 
 // The 10 s line: what happened between `before` and `now` over `spanNs`. Per class (hi def lo bg) the queue wait and
-// the whole request (count p50/p90/p99 ms), per direction and size (<=4K <=32K <=256K >256K) a legacy command's time
-// and (when there were any) a command-queue task's, the mean and longest queue, requests the driver queued in another
-// class, and bounce bytes.
+// the whole request (count p50/p90/p99 ms), per direction and size (<=4K <=32K <=256K >256K) a command's time, the mean
+// and longest queue, requests the driver queued in another class, and bounce bytes.
 inline size_t switchSdFormatIo(const SwitchSdIo &now, const SwitchSdIo &before, uint64_t spanNs, char *out, size_t size)
 {
     static const char *const kClassNames[kSwitchSdClasses] = {"hi", "def", "lo", "bg"};
@@ -182,19 +179,11 @@ inline size_t switchSdFormatIo(const SwitchSdIo &now, const SwitchSdIo &before, 
         at += static_cast<size_t>(snprintf(out + at, room(), " all"));
         at += switchSdFormatHistogram(total, out + at, room());
     }
-    for (unsigned w = 0; w < 3; ++w) {
-        static const char *const kRows[3] = {"cmd rd", "cmd wr", "cq task"};
-        uint64_t any = 0;
-        SwitchSdHistogram row[kSwitchSdSizes];
-        for (unsigned s = 0; s < kSwitchSdSizes; ++s) {
-            row[s] = w < 2 ? now.command[w][s].since(before.command[w][s]) : now.task[s].since(before.task[s]);
-            any += row[s].count;
-        }
-        if (w == 2 && !any)
-            continue;
+    for (unsigned w = 0; w < 2; ++w) {
+        static const char *const kRows[2] = {"cmd rd", "cmd wr"};
         at += static_cast<size_t>(snprintf(out + at, room(), " | %s", kRows[w]));
-        for (const SwitchSdHistogram &h : row)
-            at += switchSdFormatHistogram(h, out + at, room());
+        for (unsigned s = 0; s < kSwitchSdSizes; ++s)
+            at += switchSdFormatHistogram(now.command[w][s].since(before.command[w][s]), out + at, room());
     }
     const uint64_t depth = spanNs ? (switchSdLoad(&now.depthNs) - before.depthNs) * 10 / spanNs : 0;
     const uint64_t chosen = switchSdLoad(&now.chosen) - before.chosen;
@@ -230,7 +219,6 @@ inline size_t switchSdFormatTotals(const SwitchSdIo &io, char *out, size_t size)
     for (unsigned s = 0; s < kSwitchSdSizes; ++s) {
         histogram("rd", s, io.command[0][s]);
         histogram("wr", s, io.command[1][s]);
-        histogram("cq", s, io.task[s]);
     }
     for (unsigned c = 0; c < kSwitchSdClasses; ++c) {
         at += static_cast<size_t>(snprintf(out + at, room(), " asked%u=%llu", c,

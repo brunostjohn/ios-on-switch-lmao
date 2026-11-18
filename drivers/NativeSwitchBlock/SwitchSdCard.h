@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// r14-sdcq: the SD card's own registers and the command encodings the driver builds from them (NativeSwitchBlock.cpp),
-// kept here as plain functions so the host can test every bit (tests/native_sd_card_harness.cpp).
+// SD card register decoders, data-command framing and extension-register helpers (NativeSwitchBlock.cpp), kept here as
+// plain functions so the host can test every bit (test/sd_card_test.cpp).
 //
-// Sources: SD Physical Layer Simplified Specification 6.00 (sdcard.org; the copy at
-// academy.cba.mit.edu/classes/networking_communications/SD/SD.pdf): 4.7.4 Table 4.7.4-1 (CQ commands), 4.10.2 Table 4-44
-// (SD Status), 4.19 (Command Queue), 5.2/5.3 (CID/CSD), 5.6 Table 5-17/5-23 (SCR, CMD_SUPPORT), 5.7 (extension registers,
-// CMD48/CMD49, General Information), 5.8.2 Table 5-30 (Performance Enhancement register set). Linux drivers/mmc/core/sd.c
-// (mmc_sd_read_ext_regs, sd_parse_ext_reg*, sd_enable_cache) and the Raspberry Pi kernel's mmc_sd_cmdq_switch
-// (drivers/mmc/core/sd_ops.c: byte 262 of the performance register enables CQ) read the same layouts.
+// Sources: SD Physical Layer Simplified Specification 6.00 (4.10.2 Table 4-44 SD Status, 4.17 Cache, 5.2/5.3 CID/CSD,
+// 5.6 Table 5-17/5-23 SCR CMD_SUPPORT, 5.7 extension registers CMD48/CMD49 and General Information, 5.8.2 Table 5-30
+// Performance Enhancement register set). Linux drivers/mmc/core/sd.c (mmc_sd_read_ext_regs, sd_parse_ext_reg*) reads
+// the same layouts.
 #pragma once
 
 #include <stdint.h>
@@ -323,13 +321,11 @@ inline SwitchSdPower switchSdParsePower(const uint8_t *reg)
 // Performance Enhancement register set (Table 5-30), from its first byte. Byte 6 "CQ Support and Depth": 00h none,
 // 01h-1Fh depth 2-32, 20h-FFh reserved (read as none). The second 256 bytes are the host's: 257 FX_EVENT enable, 258
 // maintenance enables, 260 Cache Enable (bit 0), 261 Flush Cache (bit 0: the host sets it, the card clears it when the
-// flush is done, busy on DAT0 meanwhile, at most 1 s: 4.17), 262 Enable CQ (bit 0) and CQ Mode (bit 1: 0 voluntary,
-// 1 sequential), bits 7:2 reserved. r16-sdcq: the Enable CQ and CQ Mode bits are separate (a card may take bit 0 and keep
-// voluntary mode), and 4.19.1 asks for the cache before the queue ("Cache Feature should be enabled before enabling
-// Command Queue"): Linux (sd.c mmc_sd_init_card) and the Raspberry Pi kernel (sd_ops.c mmc_sd_cmdq_switch) always enable
-// the cache first, and the latter takes CQ support only from cards that also offer the cache and Power Off Notification.
+// flush is done, busy on DAT0 meanwhile, at most 1 s: 4.17), 262 CQ control (read for identification only).
 constexpr uint32_t kSdPerfCqSupport = 6, kSdPerfCacheControl = 260, kSdPerfFlushControl = 261, kSdPerfCqControl = 262;
-constexpr uint8_t kSdCqEnable = 1, kSdCqSequential = 2, kSdCacheEnable = 1, kSdFlushCache = 1;
+constexpr uint32_t kSdPerfLength = kSdPerfCqControl + 1;
+constexpr uint8_t kSdCacheEnable = 1, kSdFlushCache = 1;
+constexpr uint32_t kSdR1Errors = 0xfdf90008u;
 
 struct SwitchSdPerf {
     uint8_t revision;
@@ -357,81 +353,71 @@ inline SwitchSdPerf switchSdParsePerf(const uint8_t *reg)
     return p;
 }
 
-// Where the CQ control byte is, when the whole performance register set (its first 263 bytes) sits in one page so a CMD48
-// of it and the CMD49 of byte 262 stay inside that page. 0 when it does not (the driver then leaves CQ alone).
-inline uint32_t switchSdCqControlAddress(const SwitchSdExtFunction &perf)
+// Whether the performance register set (its first 263 bytes) sits inside one 512-byte extension page.
+inline bool switchSdPerfFits(const SwitchSdExtFunction &perf)
 {
-    if (!perf.found || !switchSdExtRange(perf.address, kSdPerfCqControl + 1))
-        return 0;
-    return perf.address + kSdPerfCqControl;
+    return perf.found && switchSdExtRange(perf.address, kSdPerfLength);
 }
 
-// r16-sdcq: the host bytes the driver writes (SwitchCq.h): Cache Enable, Flush Cache and the CQ control byte, and
-// only these values. 0 for any other byte or value (the driver panics on 0 before a command is built), else the byte's
-// address under the same one-page rule as the CQ control byte (they are its neighbours).
+// The only extension-register writes this driver may issue: flushing a cache found enabled at boot (byte 261 = 01h)
+// and disabling it (byte 260 = 00h). Returns 0 for every other byte or value, or when the register set crosses a page.
 inline uint32_t switchSdPerfWriteAddress(const SwitchSdExtFunction &perf, uint32_t byte, uint8_t value)
 {
-    const uint32_t cq = switchSdCqControlAddress(perf);
-    if (!cq)
+    if (!switchSdPerfFits(perf))
         return 0;
-    switch (byte) {
-    case kSdPerfCacheControl:
-        return value == 0 || value == kSdCacheEnable ? cq - 2 : 0;
-    case kSdPerfFlushControl:
-        return value == kSdFlushCache ? cq - 1 : 0;
-    case kSdPerfCqControl:
-        return value == 0 || value == (kSdCqEnable | kSdCqSequential) ? cq : 0;
-    default:
-        return 0;
-    }
+    if (byte == kSdPerfFlushControl && value == kSdFlushCache)
+        return perf.address + kSdPerfFlushControl;
+    if (byte == kSdPerfCacheControl && value == 0)
+        return perf.address + kSdPerfCacheControl;
+    return 0;
 }
 
-// What a read-back of the CQ control byte says, for the one line a failed enable leaves: whether the enable bit or the
-// mode bit (or reserved bits) did not take.
-inline const char *switchSdCqControlMeaning(uint8_t value)
-{
-    if (value & 0xfc)
-        return "reserved bits set";
-    switch (value & 3) {
-    case 0:
-        return "the queue stays disabled";
-    case 1:
-        return "enabled in voluntary mode: the card did not take sequential mode";
-    case 2:
-        return "sequential mode set but the queue disabled";
-    default:
-        return "enabled, sequential";
-    }
-}
+enum class SwitchSdCacheOffStep : uint8_t {
+    kSkipped,
+    kDone,
+    kBadAddress,
+    kFlushFailed,
+    kDisableFailed,
+    kReadBackFailed,
+    kStillOn,
+};
 
-// r18-sdcq: the error and event bits set in an R1 card status (Table 4-42), by name, for the queue's error lines: "-" when
-// none. COM_CRC and ILLEGAL (clear condition B) describe the command before the one whose response carries them.
-inline void switchSdR1ErrorNames(uint32_t r1, char *out, unsigned long size)
-{
-    static const struct {
-        uint32_t bit;
-        const char *name;
-    } kBits[] = {
-        {1u << 31, "OUT_OF_RANGE"}, {1u << 30, "ADDRESS"},     {1u << 29, "BLOCK_LEN"}, {1u << 28, "ERASE_SEQ"},
-        {1u << 27, "ERASE_PARAM"},  {1u << 26, "WP"},          {1u << 24, "LOCK"},      {1u << 23, "COM_CRC"},
-        {1u << 22, "ILLEGAL"},      {1u << 21, "ECC"},         {1u << 20, "CC"},        {1u << 19, "ERROR"},
-        {1u << 16, "CSD_OW"},       {1u << 13, "ERASE_RESET"}, {1u << 6, "FX_EVENT"},   {1u << 3, "AKE_SEQ"}};
+struct SwitchSdCacheOff {
+    SwitchSdCacheOffStep step;
+    int error;
+    uint32_t r1;
+    uint8_t cacheEnable;
+    uint8_t flushCache;
+};
 
-    if (!size)
-        return;
-    unsigned long at = 0;
-    out[0] = 0;
-    for (const auto &b : kBits) {
-        if (!(r1 & b.bit))
-            continue;
-        for (const char *c = at ? "|" : ""; *c && at + 1 < size; ++c)
-            out[at++] = *c;
-        for (const char *c = b.name; *c && at + 1 < size; ++c)
-            out[at++] = *c;
+// If an earlier stage left the card's cache on, flush it, disable it, and confirm both bits read 0 in one read-back
+// (5.7.2.2: CMD49 busy ends when complete). Flush runs first because 6.00 does not say clearing Cache Enable flushes.
+// Sends no commands when the performance set was not read or Cache Enable already reads 0.
+template <typename Bus>
+inline SwitchSdCacheOff switchSdDisableFoundCache(bool havePerf, const SwitchSdExtFunction &perfFunc,
+                                                  const SwitchSdPerf &perf, Bus &bus)
+{
+    if (!havePerf || !(perf.cacheEnable & kSdCacheEnable))
+        return {SwitchSdCacheOffStep::kSkipped, 0, 0, perf.cacheEnable, 0};
+    const uint32_t flushAddress = switchSdPerfWriteAddress(perfFunc, kSdPerfFlushControl, kSdFlushCache);
+    const uint32_t cacheAddress = switchSdPerfWriteAddress(perfFunc, kSdPerfCacheControl, 0);
+    if (!flushAddress || !cacheAddress || !switchSdExtRange(cacheAddress, 2))
+        return {SwitchSdCacheOffStep::kBadAddress, 0, 0, perf.cacheEnable, 0};
+    uint32_t r1 = 0;
+    if (const int err = bus.writeByte(perfFunc.fno, flushAddress, kSdFlushCache, &r1); err || (r1 & kSdR1Errors))
+        return {SwitchSdCacheOffStep::kFlushFailed, err, r1, perf.cacheEnable, 0};
+    r1 = 0;
+    if (const int err = bus.writeByte(perfFunc.fno, cacheAddress, 0, &r1); err || (r1 & kSdR1Errors))
+        return {SwitchSdCacheOffStep::kDisableFailed, err, r1, perf.cacheEnable, 0};
+    uint8_t readBack[2] = {};
+    r1 = 0;
+    if (const int err = bus.readBytes(perfFunc.fno, cacheAddress, sizeof(readBack), readBack, &r1);
+        err || (r1 & kSdR1Errors)) {
+        return {SwitchSdCacheOffStep::kReadBackFailed, err, r1, perf.cacheEnable, 0};
     }
-    if (!at && size > 1)
-        out[at++] = '-';
-    out[at] = 0;
+    if ((readBack[0] & kSdCacheEnable) || (readBack[1] & kSdFlushCache))
+        return {SwitchSdCacheOffStep::kStillOn, 0, 0, readBack[0], readBack[1]};
+    return {SwitchSdCacheOffStep::kDone, 0, 0, readBack[0], readBack[1]};
 }
 
 // ---- Data command framing ------------------------------------------------------------------------------------------
@@ -447,10 +433,10 @@ struct SwitchSdFrame {
     bool autoStop;       // an Auto CMD12 follows the data (its response and error bits mean something)
 };
 
-// CMD17/18 (read) or CMD24/25 (write). A multi-block command stops by Auto CMD12 after the data (`cmd23` false: what
-// every command did before r14-sdcq) or is preceded by Auto CMD23 SET_BLOCK_COUNT with the block count in Argument 2, so
-// the card knows the length up front and no stop command follows (SDHCI 3.00+, the mode L4T's sdhci.c uses on this
-// controller with SD cards whose SCR lists CMD23).
+// CMD17/18 (read) or CMD24/25 (write). A multi-block command stops by Auto CMD12 after the data (`cmd23` false) or is
+// preceded by Auto CMD23 SET_BLOCK_COUNT with the block count in Argument 2, so the card knows the length up front and
+// no stop command follows (SDHCI 3.00+, the mode L4T's sdhci.c uses on this controller with SD cards whose SCR lists
+// CMD23).
 inline SwitchSdFrame switchSdBlockFrame(uint32_t sectors, bool write, bool cmd23)
 {
     const bool multi = sectors > 1;
@@ -463,35 +449,4 @@ inline SwitchSdFrame switchSdBlockFrame(uint32_t sectors, bool write, bool cmd23
     const uint32_t readIndex = multi ? 18 : 17;
     const uint32_t index = write ? writeIndex : readIndex;
     return {transfer, static_cast<uint16_t>(index << 8 | kSdDataR1), multi && cmd23 ? sectors : 0, multi && !cmd23};
-}
-
-// ---- Command Queue (4.19) ------------------------------------------------------------------------------------------
-// CMD44 Q_TASK_INFO_A: [30] direction (1 read, 0 write), [23] priority, [20:16] task id, [15:0] blocks (1..65535); [29:24]
-// (extended address, SDUC only) and the rest 0. CMD45 Q_TASK_INFO_B: the start block. CMD46 Q_RD_TASK / CMD47 Q_WR_TASK:
-// [20:16] task id. CMD43 Q_MANAGEMENT (R1b): [20:16] task id, [3:0] 1 abort the entire queue, 2 abort that task.
-inline uint32_t switchSdCmd44(bool read, uint8_t task, uint32_t blocks)
-{
-    return (read ? 1u << 30 : 0u) | static_cast<uint32_t>(task & 0x1f) << 16 | (blocks & 0xffff);
-}
-
-inline uint32_t switchSdTaskArgument(uint8_t task)
-{
-    return static_cast<uint32_t>(task & 0x1f) << 16;
-}
-
-constexpr uint32_t kSdAbortQueue = 1, kSdAbortTask = 2;
-
-inline uint32_t switchSdCmd43(uint32_t operation, uint8_t task)
-{
-    return static_cast<uint32_t>(task & 0x1f) << 16 | (operation & 0xf);
-}
-
-// CMD46 of a read task: no Auto CMD12 or CMD23, the block count was given in CMD44; the card sends that many blocks
-// (4.19.7) and the host stops after BLOCK_COUNT of them.
-inline SwitchSdFrame switchSdTaskFrame(uint32_t sectors)
-{
-    const bool multi = sectors > 1;
-    const uint16_t transfer = static_cast<uint16_t>(kSdTransferDma | kSdTransferRead |
-                                                    (multi ? kSdTransferBlockCount | kSdTransferMulti : 0));
-    return {transfer, static_cast<uint16_t>(46u << 8 | kSdDataR1), 0, false};
 }

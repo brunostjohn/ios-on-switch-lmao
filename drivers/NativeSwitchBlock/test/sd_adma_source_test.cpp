@@ -47,15 +47,9 @@ TEST(SdAdmaSource, DriverGuards)
     const std::string begin = body("void NativeSwitchBlock::beginBatch(");
     EXPECT_THAT(begin, HasSubstr("outside the APFS partition"));
     EXPECT_LT(Index(begin, "outside the APFS partition"), Index(begin, "issue("));
-    // issue() is only called from command() and beginBatch(), and (r14-sdcq) for command-queue reads from beginTask()
-    // and checkCq(): those issue reads (write false) with a task argument, never a write.
+    // issue() is only called from command() and beginBatch().
     const auto calls = LinesMatching(source, R"(^.*[^:\w]issue\(static_cast|^.*[^:\w]issue\(lba)");
-    EXPECT_EQ(calls.size(), 4u) << testing::PrintToString(calls);
-    // r18-sdcq: beginTask takes the engine's CMD46 argument from the group runner (SwitchCq.h run).
-    for (const char *name : {"void NativeSwitchBlock::beginTask(", "const char *NativeSwitchBlock::checkCq("})
-        EXPECT_TRUE(Search(
-            body(name), R"(issue\(static_cast<uint32_t>\([^)]*\), \w+(?:\.sectors)?, false, [^;]*argument(?:\(\))?\))"))
-            << name;
+    EXPECT_EQ(calls.size(), 2u) << testing::PrintToString(calls);
     // In ADMA2 mode the SDMA boundary interrupt is neither awaited nor acted on (resuming would rewrite the descriptor
     // table's address), and an ADMA error is the host's failure.
     EXPECT_THAT(complete, HasSubstr("INT_TRANSFER | (descriptors ? 0 : INT_DMA) | ERROR_SIGNALS"));
@@ -82,11 +76,9 @@ TEST(SdAdmaSource, PipelinedWorker)
     const std::string worker = body("void NativeSwitchBlock::worker(");
     EXPECT_LT(Index(worker, "beginBatch(*next)"), Index(worker, "completeBatch(*pending)"));
     EXPECT_LT(Index(worker, "completeBatch(*pending)"), Index(worker, "endBatch(*next)"));
-    // suspend() waits for `working`: it is set before the command is begun and cleared only after endBatch (r14-sdcq: and
-    // around leaving CQ mode when the queue runs dry, before the pick).
+    // suspend() waits for `working`: it is set before the command is begun and cleared only after endBatch.
     EXPECT_LT(Index(worker, "working = true", Index(worker, "pickLocked(")), Index(worker, "beginBatch(*next)"));
     EXPECT_LT(Index(worker, "endBatch(*next)"), RIndex(worker, "working = false"));
-    EXPECT_LT(Index(worker, "runGroup("), RIndex(worker, "working = false"));
     // beginBatch never waits for the card: it only issues (no complete(), command(), run() or transfer() there).
     EXPECT_FALSE(Search(body("void NativeSwitchBlock::beginBatch("),
                         R"(\b(complete|command|run|transfer|bounceChain|waitSignal)\()"));
@@ -109,20 +101,16 @@ TEST(SdAdmaSource, PipelinedWorker)
 }
 
 // The data path does the least maintenance that is correct: writes clean, reads invalidate before and after (every line
-// is whole and the card overwrites it, so a dirty line is dropped, never written back). Only a read whose pages hold a
-// fill to keep (the command queue's setup check) cleans as well. A non-cacheable page has no line to
-// maintain (XNU's dcache_incoherent_io_store64 skips it) and goes straight to the card.
+// is whole and the card overwrites it, so a dirty line is dropped, never written back). A non-cacheable page has no
+// line to maintain (XNU's dcache_incoherent_io_store64 skips it) and goes straight to the card.
 TEST(SdAdmaSource, MinimalMaintenance)
 {
     const std::string &source = driver();
     const std::string prepare = body("void NativeSwitchBlock::prepareDirect(");
     EXPECT_THAT(prepare, HasSubstr("syncLines(SWITCH_DCACHE_CLEAN, table, tableUncached);"));
-    EXPECT_THAT(prepare,
-                HasSubstr("fill == ReadFill::kNone ? SWITCH_DCACHE_INVALIDATE : SWITCH_DCACHE_CLEAN_INVALIDATE"));
+    EXPECT_THAT(prepare, HasSubstr("syncLines(SWITCH_DCACHE_INVALIDATE, table, tableUncached, sinkPA,"));
     EXPECT_THAT(body("void NativeSwitchBlock::finishDirect("), HasSubstr("syncLines(SWITCH_DCACHE_INVALIDATE, table,"));
-    EXPECT_THAT(body("void NativeSwitchBlock::beginTask("), HasSubstr("prepareDirect(false, ReadFill::kNone);"));
-    EXPECT_EQ(Count(source, "prepareDirect(false, ReadFill::kCpuFill);"), 2u);
-    EXPECT_EQ(Count(source, "prepareDirect("), 6u);  // declaration, definition, beginBatch, beginTask, checkCq twice
+    EXPECT_EQ(Count(source, "prepareDirect("), 3u);  // declaration, definition, beginBatch
     const std::string page = body("static DmaPage dmaPage(");
     EXPECT_THAT(page, HasSubstr("if (attributes == kWimgDefault)\n        return DmaPage::kCacheable;"));
     EXPECT_THAT(page, HasSubstr("(attributes & kWimgNotCacheable) != 0 ? DmaPage::kUncached : DmaPage::kRefused"));

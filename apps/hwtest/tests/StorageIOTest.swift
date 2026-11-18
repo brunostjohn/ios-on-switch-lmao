@@ -6,8 +6,8 @@ import HWTestCore
 /// test's reads: random 4 KiB pages of a 16 MiB file with F_NOCACHE into page-aligned memory, one reader at a time and
 /// then 32 reader threads at once. Its setup ran no self-tests (setup_ms), the 32 readers really queued at the driver
 /// (deep_queue), the card moved every byte straight into the readers' pages (no bounce copy), and every page came back
-/// as written. The rest is reported: command and request times per pass, command-queue tasks, interrupts per command,
-/// and what the cryptex devices copied and raised to the high class since boot.
+/// as written. The rest is reported: command and request times per pass, interrupts per command, and what the cryptex
+/// devices copied and raised to the high class since boot.
 struct StorageIOTest: HWTest {
     let id = "storage.io"
     let name = "SD requests: setup, copies, latency at depth"
@@ -18,8 +18,8 @@ struct StorageIOTest: HWTest {
     static let page = 4096
     static let reads = 1024
     static let threads = 32
-    // bus up and tuned (47-48 ms on eight boots on disk), identification, GPT, the command queue's own setup
-    static let setupCeilingMs = 110.0
+    // bus up and tuned (47-48 ms on six boots on disk), identification, GPT entries, no setup self-tests
+    static let setupCeilingMs = 75.0
     // requests waiting at the driver on average while 32 readers each keep one read outstanding
     static let deepQueueFloor = 8.0
 
@@ -54,18 +54,15 @@ struct StorageIOTest: HWTest {
         metrics.set("serial_iops", Double(Self.reads) / serial.seconds, digits: 0)
         metrics.set("deep_iops", Double(Self.reads) / deep.seconds, digits: 0)
         for (name, from, to) in [("serial", before, middle), ("deep", middle, after)] {
-            let legacy = to.histogram("rd0").minus(from.histogram("rd0"))
-            let tasks = to.histogram("cq0").minus(from.histogram("cq0"))
+            let cmd = to.histogram("rd0").minus(from.histogram("rd0"))
             let all = to.histogram("all0").minus(from.histogram("all0"))
             let wait = to.histogram("wait0").minus(from.histogram("wait0"))
-            metrics.set("\(name)_cmd_p50_us", legacy.percentileUs(500))
-            metrics.set("\(name)_task_p50_us", tasks.percentileUs(500))
-            metrics.set("\(name)_tasks", tasks.count)
+            metrics.set("\(name)_cmd_p50_us", cmd.percentileUs(500))
             metrics.set("\(name)_all_p50_us", all.percentileUs(500))
             metrics.set("\(name)_all_p99_us", all.percentileUs(990))
             metrics.set("\(name)_wait_p50_us", wait.percentileUs(500))
             var commands = 0
-            for row in ["rd", "wr", "cq"] {
+            for row in ["rd", "wr"] {
                 for size in 0 ..< 4 {
                     commands += to.histogram("\(row)\(size)").count - from.histogram("\(row)\(size)").count
                 }

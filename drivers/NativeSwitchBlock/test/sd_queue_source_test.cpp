@@ -69,10 +69,7 @@ TEST(SdQueueSource, GapChains)
     EXPECT_EQ(Count(table, "staging.addSink(sinkPA, gap(r))"), 1u);
     EXPECT_EQ(Count(table, "table.addSealed(sinkPA, gap(r))"), 1u);
     EXPECT_EQ(Count(table, "gap(r) > static_cast<uint64_t>(kGapSectors) * kSector || !sinkPA"), 2u);
-    // compareChain (the command queue's proofs): the requests get the SDMA read's bytes when theirs differ.
-    EXPECT_THAT(body("NativeSwitchBlock::ChainProof NativeSwitchBlock::compareChain("),
-                HasSubstr("stageChain(first, 0, sectors * kSector, checkBuffer, true)"));
-    // Toward the requests gaps are skipped; from them (writes, read-back copies) every byte must be covered.
+    // Toward the requests gaps are skipped; from them (writes) every byte must be covered.
     EXPECT_THAT(body("bool NativeSwitchBlock::stageChain("), HasSubstr("toClient);"));
     // The cache maintenance leaves the sink alone.
     EXPECT_THAT(source, HasSubstr("if (pa - skip < skipBytes)\n            continue;"));

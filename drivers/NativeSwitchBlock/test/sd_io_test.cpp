@@ -83,11 +83,7 @@ TEST(SwitchSdIo, LineShowsOnlyWhatHappenedSinceTheLastOne)
     EXPECT_EQ(line.find("def"), std::string::npos) << line;  // a class with nothing is left out
     EXPECT_NE(line.find("cmd rd 1 0.5/0.5/0.5 - - -"), std::string::npos) << line;
     EXPECT_NE(line.find("cmd wr - - - 1 "), std::string::npos) << line;
-    EXPECT_EQ(line.find("cq task"), std::string::npos) << line;  // no task: no row
-    io->task[0].add(300 * kUs);
-    char again[768];
-    const std::string tasks(again, switchSdFormatIo(*io, *before, 10000 * kMs, again, sizeof(again)));
-    EXPECT_NE(tasks.find("cq task 1 0.3/0.3/0.3 - - -"), std::string::npos) << tasks;
+    EXPECT_EQ(line.find("cq task"), std::string::npos) << line;
 }
 
 TEST(SwitchSdIo, DepthIsTheQueueLengthOverTime)
@@ -142,8 +138,8 @@ TEST(SwitchSdIo, TotalsParse)
     EXPECT_EQ(tokens["asked1"], std::vector<uint64_t>{5});
     EXPECT_EQ(tokens["chosen"], std::vector<uint64_t>{2});
     EXPECT_EQ(tokens["bounce"], std::vector<uint64_t>{4096});
-    EXPECT_EQ(tokens["cq0"][0], 0u);
-    EXPECT_EQ(tokens.size(), 2 * kSwitchSdClasses + 3 * kSwitchSdSizes + kSwitchSdClasses + 3);
+    EXPECT_EQ(tokens.find("cq0"), tokens.end());
+    EXPECT_EQ(tokens.size(), 2 * kSwitchSdClasses + 2 * kSwitchSdSizes + kSwitchSdClasses + 3);
 }
 
 // The driver's buffers: a 10 s line with more of everything than a card can do (320,000 commands of each kind) fits its
@@ -166,8 +162,6 @@ TEST(SwitchSdIo, FitsTheDriversBuffers)
             for (auto &h : dir)
                 each(h);
         }
-        for (auto &h : io.task)
-            each(h);
         io.chosen = io.depthMax = perBucket * kSwitchSdBuckets;
         io.depthNs = perBucket * kMs;
         io.bounceBytes = perBucket << 20;
