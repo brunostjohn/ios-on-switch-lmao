@@ -584,6 +584,7 @@ TESTS: dict[str, bool] = {
     'pacing.list': False,
     'ui.scale_pacing': False,
     'ui.title_scroll': False,
+    'anim.timing': False,
     'sensor.accelerometer': False,
     'sensor.gyroscope': False,
     'sensor.device_motion': False,

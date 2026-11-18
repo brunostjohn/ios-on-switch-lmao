@@ -164,7 +164,7 @@ public enum Registry {
 
     static let compositor: [any HWTest] =
         UISceneTests.all + [VideoAlphaTest()] + PacingTests.all
-            + [ScalePacingTest(), TitleScrollTest()]
+            + [ScalePacingTest(), TitleScrollTest(), AnimTimingTest()]
 
     public static let all: [any HWTest] =
         [CPUAsyncTimersTest(), RegDumpQuietTest()] + gpuScenes + metal + gm20bRoutes + GPUPathTests.all
