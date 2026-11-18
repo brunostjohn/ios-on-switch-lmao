@@ -126,7 +126,8 @@ bool Kernel::open(std::string &)
     return true;
 }
 
-bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t, uint64_t, bool gpuVolatile, bool control, bool)
+bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t, uint64_t, bool gpuVolatile, bool control, bool,
+                   uint64_t)
 {
     std::lock_guard<std::mutex> l(fake->lock);
     EXPECT_TRUE(coherent);

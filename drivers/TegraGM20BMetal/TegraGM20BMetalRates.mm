@@ -83,6 +83,11 @@ size_t metal_rates(char *out, size_t size)
         snprintf(diag + used, sizeof diag - used, " cag=%llu",
                  (unsigned long long)gm20b::gCaCatchAllDraws.load(std::memory_order_relaxed));
     }
+    {  // since open: heaps' arenas made and restored, untouched host pages imported (zero-filled on the importer)
+        const size_t used = strlen(diag);
+        snprintf(diag + used, sizeof diag - used, " heaps=%llu/%llu hz=%lluKB", (unsigned long long)k.arenasMade.load(),
+                 (unsigned long long)k.arenaRestores.load(), (unsigned long long)(k.hostZeroedBytes.load() >> 10));
+    }
 #if SWITCH_FRAME_TIMELINE
     {
         const size_t used = strlen(diag);

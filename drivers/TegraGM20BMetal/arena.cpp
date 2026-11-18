@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
-// See gpu.h (createArena). An arena's GPU VA is a reservation and its host range is never given back while it lives: a
-// purge frees the BO (the kernel releases the pages) and replaces the host range with untouched pages, so neither address
-// moves and a restore is one import and one bind at the same VA, no texture header or CPU pointer rewritten. A trim
-// (arena_trim.h) gives back only the ranges no resource is placed in, the same way, and binds the rest in parts.
+// See gpu.h (createArena). An arena's GPU VA is a reservation and its host range is never given back while it lives, so a
+// purge and a restore rewrite no texture header or CPU pointer. A private heap's arena is one BO the kernel serves from its
+// zeroed spares, bound at the reservation and never mapped for the CPU: a purge frees it, a restore allocates and binds
+// another. A shared heap's is its own write-combined pages, imported: a purge frees the BO and replaces the host range with
+// untouched pages, a restore imports them again, and a trim (arena_trim.h) gives back only the ranges no resource is
+// placed in, the same way, and binds the rest in parts.
 #include "lock.h"
 #include "gpu.h"
 #include "TegraGM20BLayout.h"
@@ -16,14 +18,12 @@ namespace {
 constexpr uint64_t kArenaGranule = 0x10000;  // the GMMU big page every VA range starts and ends on (kernel.cpp)
 constexpr uint64_t kArenaPitchAlign = 256;   // a pitch render target's address and rows (linearTarget), a cbuf's base
 
-// An arena's host pages at `at` (`fixed`: in place of the ones there). A shared heap's are write-combined, as the device's
-// shared buffers are (Buffer::wc): a heap used whole (useHeap) leaves no resource of it for an encoder to clean, so what the
-// CPU writes there must need no clean. A private heap's are cacheable: the CPU never writes them.
-bool hostPages(uint64_t bytes, bool writeCombined, vm_address_t &at, bool fixed)
+// A shared heap's host pages at `at` (`fixed`: in place of the ones there), write-combined as the device's shared buffers
+// are (Buffer::wc): a heap used whole (useHeap) leaves no resource of it for an encoder to clean, so what the CPU writes
+// there must need no clean.
+bool hostPages(uint64_t bytes, vm_address_t &at, bool fixed)
 {
     const int place = fixed ? VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE : VM_FLAGS_ANYWHERE;
-    if (!writeCombined)
-        return vm_allocate(mach_task_self(), &at, bytes, place) == KERN_SUCCESS;
     memory_object_size_t size = bytes;
     mach_port_t entry = MACH_PORT_NULL;
     vm_prot_t permission = MAP_MEM_NAMED_CREATE | VM_PROT_READ | VM_PROT_WRITE;
@@ -34,6 +34,18 @@ bool hostPages(uint64_t bytes, bool writeCombined, vm_address_t &at, bool fixed)
                                     VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
     mach_port_deallocate(mach_task_self(), entry);
     return kr == KERN_SUCCESS;
+}
+
+// A private heap's host range: addresses only, which no access can ever reach. The CPU never reads or writes a private
+// heap, and a path that did would fault here instead of writing pages the GPU never reads.
+bool reservedPages(uint64_t bytes, vm_address_t &at)
+{
+    if (vm_allocate(mach_task_self(), &at, bytes, VM_FLAGS_ANYWHERE) != KERN_SUCCESS)
+        return false;
+    if (vm_protect(mach_task_self(), at, bytes, TRUE, VM_PROT_NONE) == KERN_SUCCESS)
+        return true;
+    vm_deallocate(mach_task_self(), at, bytes);
+    return false;
 }
 
 // `bo` bound again at `va` as a member of the set there too: the set finds a use by its VA
@@ -56,11 +68,13 @@ bool Device::arenaFootprint(uint32_t width, uint32_t height, uint32_t format, bo
     return footprint(ask, bytes, align);
 }
 
-// The host range's pages wired and bound at the arena's VA, under its kind (lock_ held)
+// The arena's memory bound at its VA under its kind and at its other views (lock_ held): a private heap's a cached BO from
+// the kernel's spares, a shared heap's its host range's pages wired
 bool Device::bindArena(Arena &a)
 {
-    bool bound = k_.importPages(a.cpu, a.bytes, a.bo) && k_.bindImportAt(a.cpu, a.bo, a.va, a.kind) &&
-                 (a.bufferVa == a.va || k_.bindAlias(a.bo, a.bufferVa, kPteKindPitch));
+    bool bound = a.wc ? k_.importPages(a.cpu, a.bytes, a.bo) && k_.bindImportAt(a.cpu, a.bo, a.va, a.kind)
+                      : k_.alloc(a.bytes, false, a.bo, a.kind, kArenaGranule, false, false, false, a.va);
+    bound = bound && (a.bufferVa == a.va || k_.bindAlias(a.bo, a.bufferVa, kPteKindPitch));
     for (const Arena::View &v : a.views)
         bound = bound && k_.bindAlias(a.bo, v.va, v.kind);
     if (!bound) {
@@ -79,6 +93,8 @@ bool Device::bindArena(Arena &a)
     }
     SWITCH_METAL_DIAGNOSTIC(stats.poolBytes += a.bytes);
     SWITCH_METAL_DIAGNOSTIC(if (a.purged) glassMemEvent("heap restored", a.bytes));
+    SWITCH_METAL_DIAGNOSTIC(stats.arenaRestores += a.purged ? 1 : 0);
+    SWITCH_METAL_DIAGNOSTIC(stats.hostZeroedBytes += a.wc ? a.bytes : 0);
     return true;
 }
 
@@ -94,6 +110,7 @@ bool Device::bindArenaPart(Arena &a, uint64_t offset, uint64_t bytes)
         k_.free(part);
         return false;
     }
+    SWITCH_METAL_DIAGNOSTIC(stats.hostZeroedBytes += bytes);
     if (!a.wc) {
         Bo alias = part;
         alias.va = alias.vaBase = a.bufferVa + offset;
@@ -130,7 +147,7 @@ bool Device::createArena(uint64_t bytes, bool blockLinear, uint32_t &arena, bool
         return false;
     bytes = (bytes + kArenaGranule - 1) & ~(kArenaGranule - 1);
     vm_address_t cpu = 0;
-    if (!bytes || !hostPages(bytes, !blockLinear, cpu, false))
+    if (!bytes || !(blockLinear ? reservedPages(bytes, cpu) : hostPages(bytes, cpu, false)))
         return false;
     Arena a;
     a.wc = !blockLinear;
@@ -158,6 +175,7 @@ bool Device::createArena(uint64_t bytes, bool blockLinear, uint32_t &arena, bool
         arenas_.emplace_back();
     arenas_[i] = std::move(a);
     arena = i;
+    SWITCH_METAL_DIAGNOSTIC(stats.arenasMade++);
     return true;
 }
 
@@ -406,8 +424,10 @@ void Device::purgeLocked(Arena &a, const std::atomic<uint32_t> &committed)
         return;
     }
     unbindArena(a);
-    vm_address_t at = vm_address_t(a.cpu);
-    hostPages(a.bytes, a.wc, at, true);
+    if (a.wc) {
+        vm_address_t at = vm_address_t(a.cpu);
+        hostPages(a.bytes, at, true);
+    }
     SWITCH_METAL_DIAGNOSTIC(glassMemEvent("heap purged", a.bytes));
     a.purged = true;
 }
@@ -444,7 +464,7 @@ void Device::trimLocked(Arena &a, const std::atomic<uint32_t> &committed)
     unbindArena(a);
     for (const ArenaRange &h : holes) {
         vm_address_t at = vm_address_t(a.cpu + h.offset);
-        hostPages(h.bytes, a.wc, at, true);
+        hostPages(h.bytes, at, true);
     }
     bool bound = true;
     for (const ArenaRange &b : arenaBacked(holes, a.bytes))
@@ -468,7 +488,7 @@ void Device::trimArenas(const std::atomic<uint32_t> &committed)
     if (!done(submitted()))
         return;
     for (Arena &a : arenas_)
-        if (a.used && !a.purged && !a.dying && !a.leases && !a.isVolatile)
+        if (a.used && a.wc && !a.purged && !a.dying && !a.leases && !a.isVolatile)
             trimLocked(a, committed);
 }
 

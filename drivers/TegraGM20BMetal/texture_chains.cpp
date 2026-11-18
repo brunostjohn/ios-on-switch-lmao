@@ -97,6 +97,11 @@ bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width
     if (!blockCompressed(f) || !bytes || length < layout.bytes || layout.bpp != f->bpp ||
         !shape(width, height, format, t))
         return false;
+    {
+        std::lock_guard<gm20b::Mutex> l(lock_);
+        if (ownChunkMemory(bytes, length, "newTextureWithBytesNoCopy"))
+            return false;
+    }
     const bool inPlace = blockImageInPlace(uintptr_t(bytes), layout);
     const uint32_t kind = inPlace ? TGM_LAYOUT_KIND : kPteKindPitch;
     cleanToMemory(bytes, layout.bytes);

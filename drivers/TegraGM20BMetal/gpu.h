@@ -1208,8 +1208,7 @@ private:
         std::map<uint64_t, uint64_t> free;  // offset -> bytes, coalesced
         uint64_t used = 0;
         bool dedicated = false;
-        bool hostPages = false;  // memory is this task's anonymous pages, imported (chunkMemory)
-        uint64_t pitchVa = 0;    // a block-linear chunk's kind-0 view (blPitchVa), made at its first ask
+        uint64_t pitchVa = 0;  // a block-linear chunk's kind-0 view (blPitchVa), made at its first ask
     };
 
     // A role's memory steps: the shared pool chunk (a span over half of one gets its own), a chunk of block-linear images, a

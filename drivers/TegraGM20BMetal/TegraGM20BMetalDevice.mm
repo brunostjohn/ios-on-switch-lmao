@@ -152,7 +152,9 @@
 // footprint); backings: memoryless attachments' uncompressed backings (trimBackings' last count); grows: allocations that
 // wired a chunk themselves; headers_left: the texture headers not held (8191 at most, gpu.h kTextureHeaders); textures:
 // the memory live textures took of their own and their kept blocks', which returns to where it was once they go (pool
-// and wc keep a chunk's worth free).
+// and wc keep a chunk's worth free); imports_made: surface and no-copy imports since open; arenas_made and arena_restores:
+// heaps' arenas made and purged ones bound again since open; host_zeroed: the bytes of untouched host pages imported
+// since open, each zero-filled on the importing thread.
 // hw_test_app's gpu.path.set_survives_trim: the latest resource set registration the kernel refused, its member and why
 - (NSString *)switchMetalSetRefusal
 {
@@ -170,7 +172,11 @@
         @"backings" : @(d.stats.backingBytes.load()),
         @"grows" : @(d.stats.poolStalls.load()),
         @"headers_left" : @(d.headersLeft()),
-        @"textures" : @(d.stats.textureBytes.load())
+        @"textures" : @(d.stats.textureBytes.load()),
+        @"imports_made" : @(d.stats.importsMade.load()),
+        @"arenas_made" : @(d.stats.arenasMade.load()),
+        @"arena_restores" : @(d.stats.arenaRestores.load()),
+        @"host_zeroed" : @(d.stats.hostZeroedBytes.load())
     };
 }
 

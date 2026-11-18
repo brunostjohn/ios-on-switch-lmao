@@ -160,7 +160,7 @@ bool Kernel::bind(uint64_t va, uint64_t handle, uint64_t range, uint32_t kind, b
 }
 
 bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_t align, bool gpuVolatile, bool control,
-                   bool cpu)
+                   bool cpu, uint64_t at)
 {
     bytes = (bytes + info_.page_size - 1) & ~uint64_t(info_.page_size - 1);
     TegraGM20BAbiBoAlloc a = {bytes, 12, coherent ? uint32_t(TegraGM20BBoCoherent) : 0u};
@@ -185,7 +185,8 @@ bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_
     }
     bo.cpu = reinterpret_cast<uint8_t *>(uintptr_t(addr));
     bo.mapped = size;
-    bo.va = bo.vaBase = allocVa(bytes, align);
+    bo.va = bo.vaBase = at ? at : allocVa(bytes, align);
+    bo.vaReserved = at != 0;
     if (!bo.va) {
         setError("out of GPU VA");
         free(bo);

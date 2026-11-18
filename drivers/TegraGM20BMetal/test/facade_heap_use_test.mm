@@ -199,8 +199,8 @@ TEST_F(FacadeHeapUse, ABlitReadsAHeapBufferAcrossRestoredMappings)
 {
     kernel_model::model.unknownUsesRefused = true;
     constexpr uint64_t quarter = 0x40000;
-    for (MTLStorageMode mode : {MTLStorageModeShared, MTLStorageModePrivate}) {
-        SCOPED_TRACE(int(mode));
+    {  // a shared heap's arena: a private one is a single BO, never trimmed (arena.cpp)
+        const MTLStorageMode mode = MTLStorageModeShared;
         @autoreleasepool {
             id<MTLHeap> h = facade::heap(mode, 4 * quarter);
             ASSERT_NE(h, nil);
@@ -261,8 +261,8 @@ TEST_F(FacadeHeapUse, ARecordedHeapUseOutlivesMakeAliasableAndIdleTrim)
 {
     kernel_model::model.unknownUsesRefused = true;
     constexpr uint64_t quarter = 0x40000;
-    for (MTLStorageMode mode : {MTLStorageModeShared, MTLStorageModePrivate}) {
-        SCOPED_TRACE(int(mode));
+    {  // a shared heap's arena: a private one is a single BO, never trimmed (arena.cpp)
+        const MTLStorageMode mode = MTLStorageModeShared;
         @autoreleasepool {
             id<MTLHeap> h = facade::heap(mode, 4 * quarter);
             ASSERT_NE(h, nil);
@@ -344,6 +344,34 @@ TEST_F(FacadeHeapUse, ARecordedHeapViewKeepsItsAliasableOwnersMappings)
             EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted) << cb.error.description.UTF8String;
             EXPECT_EQ(a.width + c.width, 512u);
         }
+    }
+}
+
+// A private heap's memory has no CPU mapping (arena.cpp). A CPU copy of a texture over one of its buffers, which Metal's
+// validation stops, asks the host access that refuses it and raises, and loads nothing through the arena's reserved range
+TEST_F(FacadeHeapUse, ACpuCopyOfAPrivateHeapsMemoryIsRefusedNeverLoaded)
+{
+    @autoreleasepool {
+        id<MTLHeap> h = facade::heap(MTLStorageModePrivate, 0x40000);
+        ASSERT_NE(h, nil);
+        id<MTLBuffer> b = [h newBufferWithLength:0x10000 options:MTLResourceStorageModePrivate];
+        ASSERT_NE(b, nil);
+        MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                     width:16
+                                                                                    height:16
+                                                                                 mipmapped:NO];
+        d.storageMode = MTLStorageModePrivate;
+        d.usage = MTLTextureUsageShaderRead;
+        id<MTLTexture> t = [b newTextureWithDescriptor:d offset:0 bytesPerRow:256];
+        ASSERT_NE(t, nil);
+        std::vector<uint8_t> bytes(16 * 16 * 4);
+        bool raised = false;
+        @try {
+            [t getBytes:bytes.data() bytesPerRow:64 fromRegion:MTLRegionMake2D(0, 0, 16, 16) mipmapLevel:0];
+        } @catch (NSException *) {
+            raised = true;
+        }
+        EXPECT_TRUE(raised);
     }
 }
 

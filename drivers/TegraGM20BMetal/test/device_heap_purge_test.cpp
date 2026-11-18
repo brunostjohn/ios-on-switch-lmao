@@ -165,6 +165,59 @@ TEST_F(DeviceHeapPurge, NoPurgeWhileAJobAViewOrACommittedCommandBufferMayReachIt
     EXPECT_EQ(dev.purgedArenas(), 1u);
 }
 
+// A private heap's arena is a BO from the kernel's spares, no import of pages the creating thread zero-fills, bound at the
+// arena's VAs with no CPU mapping; a purge frees it and a restore binds another at the same VAs (22 Nov: backboardd's 8 MiB
+// heaps, restored after each idle give-back, zero-filled their pages on the render thread, 4.4 ms each)
+TEST_F(DeviceHeapPurge, APrivateArenaIsASpareBoAtItsVasAndComesBackAsAnother)
+{
+    const size_t imports = kernel_model::model.imports.size();
+    uint32_t priv = 0;
+    ASSERT_TRUE(dev.createArena(kArenaBytes, true, priv));
+    gm20b::Texture t;
+    ASSERT_TRUE(dev.arenaTexture(priv, 64, 64, kRGBA8, t));
+    gm20b::Buffer b;
+    ASSERT_TRUE(dev.arenaBuffer(priv, 4096, b));
+    const uint64_t first = gm20b::DeviceHarness::arena(dev, priv).handle;
+    ASSERT_NE(first, 0u);
+    EXPECT_FALSE(kernel_model::model.bos.at(first).import);
+    EXPECT_EQ(gm20b::DeviceHarness::arena(dev, priv).cpu, nullptr);
+    EXPECT_EQ(boAt(t.va), first);
+    EXPECT_EQ(boAt(b.va), first);
+    EXPECT_EQ(kernel_model::model.imports.size(), imports);
+
+    dev.setArenaVolatile(priv, true);
+    dev.purgeArena(priv, committed);
+    ASSERT_TRUE(dev.arenaPurged(priv));
+    EXPECT_EQ(kernel_model::model.bos.count(first), 0u);
+    EXPECT_EQ(boAt(t.va), 0u);
+
+    ASSERT_TRUE(dev.restoreArena(priv));
+    const uint64_t again = gm20b::DeviceHarness::arena(dev, priv).handle;
+    ASSERT_NE(again, first);
+    EXPECT_FALSE(kernel_model::model.bos.at(again).import);
+    EXPECT_EQ(boAt(t.va), again);
+    EXPECT_EQ(boAt(b.va), again);
+    EXPECT_EQ(kernel_model::model.imports.size(), imports);
+    dev.arenaRelease(b);
+    dev.arenaRelease(t);
+    dev.destroyArena(priv);
+}
+
+// A private heap's arena is one BO: the idle trim gives none of it back (a shared heap's own pages are what it trims)
+TEST_F(DeviceHeapPurge, TheTrimLeavesAPrivateArenaWhole)
+{
+    uint32_t priv = 0;
+    ASSERT_TRUE(dev.createArena(kArenaBytes, true, priv));
+    gm20b::Buffer b;
+    ASSERT_TRUE(dev.arenaBuffer(priv, 4096, b));
+    const uint64_t whole = gm20b::DeviceHarness::arena(dev, priv).handle;
+    dev.trimArenas(committed);
+    EXPECT_EQ(gm20b::DeviceHarness::arena(dev, priv).handle, whole);
+    EXPECT_EQ(kernel_model::model.bos.count(whole), 1u);
+    dev.arenaRelease(b);
+    dev.destroyArena(priv);
+}
+
 TEST_F(DeviceHeapPurge, OnlyVolatileArenasGoAtTheDevicesPurge)
 {
     uint32_t kept = 0;
