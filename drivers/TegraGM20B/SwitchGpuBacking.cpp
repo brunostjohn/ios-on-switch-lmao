@@ -133,6 +133,28 @@ switch_gpu_backing *retire_pop()
 	return backing;
 }
 
+// registry held, `found` entered
+switch_gpu_backing_collision collision(const switch_gpu_backing *found, const uint64_t *pages,
+				       uint32_t count, uint32_t surface_id, const void *owner)
+{
+	const uint32_t common = count < found->pages->count ? count : found->pages->count;
+	const bool grows = count > found->pages->count;
+	if (memcmp(pages, found->pages->addresses, uint64_t(common) * sizeof(*pages)))
+		return SWITCH_GPU_BACKING_OTHER_PAGES;
+	if (grows && (found->gpu_memory_flags & SWITCH_GPU_BACKING_MEMORY_FIXED))
+		return SWITCH_GPU_BACKING_GROWS_FIXED;
+	if (grows && found->mapping_engines)
+		return SWITCH_GPU_BACKING_GROWS_MAPPED;
+	if (grows && found->owner && !owner)
+		return SWITCH_GPU_BACKING_GROWS_UNOWNED;
+	if (grows && (found->cpu_readers || found->cpu_writers || found->gpu_admission_readers ||
+		      found->gpu_admission_writers))
+		return SWITCH_GPU_BACKING_GROWS_HELD;
+	if (surface_id && found->surface_id && surface_id != found->surface_id)
+		return SWITCH_GPU_BACKING_OTHER_SURFACE;
+	return SWITCH_GPU_BACKING_SHARES;
+}
+
 // registry held: what is found again by pages or surface is no longer private to one connection
 bool reached_locked(switch_gpu_backing *backing)
 {
@@ -203,16 +225,8 @@ extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *pages
 		found = found->next;
 	if (found) {
 		const bool claimed = switch_gpu_backing_enter(found);
-		const uint32_t common = count < found->pages->count ? count : found->pages->count;
-		if (memcmp(pages, found->pages->addresses, uint64_t(common) * sizeof(*pages)) ||
-		    (count > found->pages->count &&
-		     ((found->gpu_memory_flags & SWITCH_GPU_BACKING_MEMORY_FIXED) ||
-		      found->mapping_engines)) ||
-		    (count > found->pages->count && found->owner && !owner) ||
-		    (count > found->pages->count &&
-		     (found->cpu_readers || found->cpu_writers || found->gpu_admission_readers ||
-		      found->gpu_admission_writers)) ||
-		    (surface_id && found->surface_id && surface_id != found->surface_id)) {
+		if (collision(found, pages, count, surface_id, owner) !=
+		    SWITCH_GPU_BACKING_SHARES) {
 			switch_gpu_backing_leave(found, claimed);
 			IOLockUnlock(lock);
 			free_pages(copy);
@@ -279,6 +293,39 @@ extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *pages
 	buckets[bucket(pages[0])] = made;
 	IOLockUnlock(lock);
 	return made;
+}
+
+extern "C" switch_gpu_backing_collision
+switch_gpu_backing_collision_at(const uint64_t *pages, uint32_t count, uint32_t surface_id,
+				const void *owner, switch_gpu_backing_found *out)
+{
+	*out = {};
+	IOLock *lock = registry_lock();
+	if (!count || !lock)
+		return SWITCH_GPU_BACKING_SHARES;
+	IOLockLock(lock);
+	switch_gpu_backing *found = buckets[bucket(pages[0])];
+	while (found && found->pages->addresses[0] != pages[0])
+		found = found->next;
+	switch_gpu_backing_collision why = SWITCH_GPU_BACKING_SHARES;
+	if (found) {
+		const bool claimed = switch_gpu_backing_enter(found);
+		why = collision(found, pages, count, surface_id, owner);
+		if (why != SWITCH_GPU_BACKING_SHARES)
+			*out = {found->id,
+				found->surface_id,
+				found->pages->count,
+				found->gpu_memory_flags,
+				found->mapping_engines,
+				found->cpu_readers,
+				found->cpu_writers,
+				found->gpu_admission_readers,
+				found->gpu_admission_writers,
+				found->owner != nullptr};
+		switch_gpu_backing_leave(found, claimed);
+	}
+	IOLockUnlock(lock);
+	return why;
 }
 
 extern "C" switch_gpu_backing *switch_gpu_backing_find_pa(uint64_t first_page)

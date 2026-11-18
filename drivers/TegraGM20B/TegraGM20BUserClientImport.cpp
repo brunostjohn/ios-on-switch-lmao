@@ -35,6 +35,30 @@ void describeRegion(task_t task, uint64_t address, char *out, size_t size)
 }
 
 #endif
+
+// The import's pages found a registered backing at their first page that would not take them: one line per collision,
+// naming the backing met (its IOSurface, pages, GPU memory flags, engine mappings, CPU and GPU holders, owner)
+void refuseBacking(const uint64_t *pas, uint32_t npages, const void *owner,
+		   const TegraGM20BAbiBoImport *in)
+{
+	static const char *const kWhy[] = {"backing",
+					   "backing.other-pages",
+					   "backing.grows-fixed",
+					   "backing.grows-mapped",
+					   "backing.grows-unowned",
+					   "backing.grows-held",
+					   "backing.other-surface"};
+	switch_gpu_backing_found found = {};
+	const switch_gpu_backing_collision why =
+		switch_gpu_backing_collision_at(pas, npages, in->surface_id, owner, &found);
+	switch_refusal("bo-import", kWhy[why],
+		       "IOSurface %u, %u pages at %#llx: met backing %llu (IOSurface %u, %u pages, "
+		       "memory %#x, engines %#x, cpu %u/%u, admissions %u/%u, owned %d)",
+		       in->surface_id, npages, in->address, found.id, found.surface_id, found.pages,
+		       found.gpu_memory_flags, found.mapping_engines, found.cpu_readers,
+		       found.cpu_writers, found.gpu_admission_readers, found.gpu_admission_writers,
+		       found.owned);
+}
 }  // namespace
 
 // The page list of a prepared descriptor: one getPhysicalSegment per physically contiguous run (each call is a walk of the
@@ -213,13 +237,15 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 				    ? switch_gpu_surface_imported(bo->surface, bo->backing)
 				    : 0;
 	const int tracked = !pinned && !adopted ? switch_gpu_backing_cpu_track(bo->backing) : 0;
+	if (!bo->backing) {
+		refuseBacking(bo->pas, bo->npages, bo, in);
+		releaseBo(bo);
+		return kIOReturnNoMemory;
+	}
 	if (pinned || adopted || tracked) {
-		// backing: its pages registered for no backing; pin: the coherency entry holds another backing; adopt: the
-		// surface's CPU leases hold another; track: no room to track its CPU writes
-		const char *step = !bo->backing ? "backing"
-				   : pinned     ? "pin"
-				   : adopted    ? "adopt"
-						: "track";
+		// pin: the coherency entry holds another backing; adopt: the surface's CPU leases hold another; track: no
+		// room to track its CPU writes
+		const char *step = pinned ? "pin" : adopted ? "adopt" : "track";
 		const int refused = pinned ? pinned : adopted ? adopted : tracked;
 		switch_refusal("bo-import", step, "IOSurface %u: %llu bytes at %#llx refused (%d)",
 			       in->surface_id, in->bytes, in->address, refused);
