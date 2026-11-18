@@ -11,12 +11,19 @@
 #include "compiler_facts.h"
 #include "compiler_libraries.h"
 #include "compiler_record.h"
+#include "compiler_stages.h"
+#include "compiler_times.h"
 #include "../TegraGM20BMetalDirect.h"
 #include "../TegraGM20BMetalOffline.h"
 #include "../pack.h"
 
 namespace switch_compiler {
 namespace {
+
+// What a compiler keeps of its compiles beside its store, for the states that share stages: m2v's translations of each
+// kind (portable and native) and the stages NIR and NAK compiled. Both are bounds of a few MB under the daemon's active
+// limit (SwitchShaderCompilerJetsam.h), past which the least recently used go.
+constexpr size_t kKeptTranslationBytes = 8u << 20, kKeptStageBytes = 8u << 20;
 
 os_log_t logger()
 {
@@ -67,6 +74,7 @@ struct Engine::State {
     gm20b::Digest rules{};
     std::shared_ptr<LibraryCache> libraries;
     std::unique_ptr<CodeGen> codeGen;
+    std::unique_ptr<CompiledStages> stages;
 };
 
 Engine::Engine() : state_(std::make_unique<State>())
@@ -91,6 +99,8 @@ bool Engine::open(uint64_t stack, const EngineInputs &inputs, std::string &why)
     s.rules = rulesDigest(gm20b::PackRules::of(s.pack));
     s.libraries = std::make_shared<LibraryCache>(inputs.systemRoot);
     s.codeGen = std::make_unique<CodeGen>(inputs.codeGen);
+    s.stages = std::make_unique<CompiledStages>(kKeptStageBytes);
+    nmb_keep_translations(kKeptTranslationBytes);
     return true;
 }
 
@@ -109,6 +119,7 @@ std::unique_ptr<gm20b::Direct> Engine::takeCompiler()
     const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
 #endif
     auto compiler = std::make_unique<gm20b::Direct>(gm20b::PackRules::of(s.pack), false, offline::translator());
+    compiler->keepStages(s.stages.get());
 #if SWITCH_DEBUG
     os_log(logger(), "SwitchShaderCompiler: a compiler made for a compile no idle one could take in %llu ms",
            (unsigned long long)((clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - began) / 1000000));
@@ -149,12 +160,29 @@ int32_t Engine::compile(const Prepared &p, std::string &entry, std::string &why)
     std::unique_ptr<gm20b::Direct> compiler = takeCompiler();
     LibraryCache &cache = *s.libraries;
     const Libraries libraries = [&cache](const gm20b::RequestLibrary &l, std::string &failed) {
+#if SWITCH_DEBUG
+        const uint64_t began = uptimeNs();
+        id<MTLLibrary> library = cache.library(l, failed);
+        tJobSplit.libraryNs += uptimeNs() - began;
+        return library;
+#else
         return cache.library(l, failed);
+#endif
     };
+#if SWITCH_DEBUG
+    uint64_t before[2] = {}, after[2] = {};
+    nmb_kept_translations(before);
+    const uint64_t began = uptimeNs();
+#endif
     cache.began();
     const int32_t result = makeEntry(p, libraries, *compiler, s.stack, entry, why);
     cache.ended();
     giveBack(std::move(compiler));
+#if SWITCH_DEBUG
+    tJobSplit.makeNs = uptimeNs() - began;
+    nmb_kept_translations(after);
+    tJobSplit.translationsKept = int64_t(after[0]) - int64_t(before[0]);
+#endif
     return result;
 }
 
