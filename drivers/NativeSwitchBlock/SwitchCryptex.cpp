@@ -199,6 +199,7 @@ struct Pending {
     bool prefetch;
     bool inflight;  // its length is counted in gFlow.inflight (a prefetch read that went straight to the card)
     bool cached;    // finishRequest copies it out of `cache`'s windows into `buffer`
+    bool waited;    // (debug kernels' counts) a window read was issued or under way for it
     IOMemoryDescriptor *buffer;  // retained while cached
     uint64_t start;              // the request's first image byte
     SwitchCacheRequest cache;
@@ -361,6 +362,7 @@ void finishRequest(thread_call_param_t parameter, thread_call_param_t)
     auto *p = static_cast<Pending *>(parameter);
 #if DEVELOPMENT || DEBUG
     const uint64_t copiedBytes = p->cached ? p->length : 0;
+    const bool waited = p->waited;
     uint64_t copyAbs = 0;
 #endif
     if (p->cached) {
@@ -395,7 +397,7 @@ void finishRequest(thread_call_param_t parameter, thread_call_param_t)
     if (client.action)
         client.action(client.target, client.parameter, status, bytes);
 #if DEVELOPMENT || DEBUG
-    switch_cryptex_stats::note(copiedBytes, copyAbs, mach_absolute_time() - completing);
+    switch_cryptex_stats::note(copiedBytes, waited, copyAbs, mach_absolute_time() - completing);
 #endif
 }
 
@@ -584,8 +586,10 @@ private:
     IOBlockStorageDevice *sd = nullptr;
     uint64_t maxPiece = 0;  // bytes per SD read
     bool holes = false;     // some of the image reads as zeros (a sparse file)
-    bool cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint64_t block, uint64_t count);
-    uint32_t issueRead(const SwitchCacheRead &read, bool ahead);
+    // `raised`: the card read goes in the SD driver's high class although no client asked for it there (debug kernels'
+    // counts).
+    bool cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint64_t block, uint64_t count, bool raised);
+    uint32_t issueRead(const SwitchCacheRead &read, bool ahead, bool raised);
 };
 
 OSDefineMetaClassAndStructors(SwitchCryptexDevice, IOBlockStorageDevice)
@@ -642,7 +646,7 @@ IOReturn SwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt6
     p->bytes = 0;
     p->status = kIOReturnSuccess;
     p->remaining = 1;
-    p->inflight = p->cached = false;
+    p->inflight = p->cached = p->waited = false;
     p->prefetch = isPrefetchThread(current_thread());
     if (!p->prefetch && (prefetchRunning() || gFlow.window)) {
         __atomic_fetch_add(&gFlow.foregroundReads, 1, __ATOMIC_RELAXED);
@@ -653,7 +657,8 @@ IOReturn SwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt6
     IOStorageAttributes high = {};
     high.priority = kIOStoragePriorityHigh;
     IOStorageAttributes *issue = p->prefetch ? &high : attributes;
-    if (cacheRead(p, buffer, block, count))
+    const bool lower = !attributes || (attributes->priority >> 6) != 0;  // the client asked below high (none: default)
+    if (cacheRead(p, buffer, block, count, lower))
         return kIOReturnSuccess;
     if (p->prefetch) {
         p->inflight = true;
@@ -702,13 +707,18 @@ IOReturn SwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt6
     }
     if (done < length)
         failPending(p, kIOReturnNoMemory);  // the rest was never issued
+#if DEVELOPMENT || DEBUG
+    switch_cryptex_stats::add(&switch_cryptex_stats::Bytes::direct, done);
+    if (p->prefetch && lower)
+        switch_cryptex_stats::add(&switch_cryptex_stats::Bytes::raised, done);
+#endif
     reportDirect(length, pieces);
     pieceDone(this, p, kIOReturnSuccess, 0);  // the issuing reference
     return kIOReturnSuccess;
 }
 
 // True when the cache took the request (finishRequest completes it once its windows hold every block).
-bool SwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint64_t block, uint64_t count)
+bool SwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint64_t block, uint64_t count, bool raised)
 {
     if (!__atomic_load_n(&gCache.on, __ATOMIC_ACQUIRE))
         return false;
@@ -722,8 +732,10 @@ bool SwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint
     IOLockLock(gCache.lock);
     const bool taken = gCache.cache.plan(&p->cache, static_cast<uint8_t>(index), block, static_cast<uint32_t>(count),
                                          blocks, mode, p->reads, kRequestReads, &n);
-    if (taken)
+    if (taken) {
         p->remaining = p->cache.waiting ? 2 : 1;  // the issuing reference, and the wait for the windows
+        p->waited = p->cache.waiting != 0;
+    }
     IOLockUnlock(gCache.lock);
     if (!taken) {
         p->cached = false;
@@ -733,7 +745,7 @@ bool SwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint
     buffer->retain();
     uint32_t cardReads = 0;
     for (uint32_t i = 0; i < n; ++i)
-        cardReads += issueRead(p->reads[i], false);
+        cardReads += issueRead(p->reads[i], false, raised);
     reportDirect(p->length, cardReads);
     pieceDone(this, p, kIOReturnSuccess, 0);  // the issuing reference
     return true;
@@ -742,7 +754,7 @@ bool SwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint
 // Returns the card reads it issued. The window's blocks are marked being read: nothing else touches them until
 // jobFinish. Every cache read goes in the SD driver's high class, whichever request started it: a foreground read may
 // be waiting on it, and in a lower class it would wait out the SD driver's 100 ms aging behind a busy foreground.
-uint32_t SwitchCryptexDevice::issueRead(const SwitchCacheRead &read, bool ahead)
+uint32_t SwitchCryptexDevice::issueRead(const SwitchCacheRead &read, bool ahead, bool raised)
 {
     IOStorageAttributes high = {};
     high.priority = kIOStoragePriorityHigh;
@@ -794,7 +806,14 @@ uint32_t SwitchCryptexDevice::issueRead(const SwitchCacheRead &read, bool ahead)
         done += piece.length;
     }
     if (done < length)
-        jobFail(j, kIOReturnNoMemory);           // the rest was never issued
+        jobFail(j, kIOReturnNoMemory);  // the rest was never issued
+#if DEVELOPMENT || DEBUG
+    switch_cryptex_stats::add(&switch_cryptex_stats::Bytes::card, done);
+    if (raised)
+        switch_cryptex_stats::add(&switch_cryptex_stats::Bytes::raised, done);
+#else
+    (void)raised;
+#endif
     jobPieceDone(this, j, kIOReturnSuccess, 0);  // the issuing reference
     return pieces;
 }
@@ -814,7 +833,7 @@ void SwitchCryptexDevice::readAhead(uint64_t start, uint64_t length)
         if (!covered)
             break;  // every window in use: the page-in reads the rest itself
         for (uint32_t i = 0; i < n; ++i)
-            cardReads += issueRead(reads[i], true);
+            cardReads += issueRead(reads[i], true, true);
         at += covered;
     }
 #if DEVELOPMENT || DEBUG
@@ -1108,6 +1127,13 @@ int waitVolume(unsigned index, dev_t *device, char *path, size_t capacity)
     return error;
 }
 }  // namespace
+
+#if DEVELOPMENT || DEBUG
+extern "C" size_t switch_cryptex_io_totals(char *out, size_t size)
+{
+    return switch_cryptex_stats::totals(out, size);
+}
+#endif
 
 extern "C" int switch_cryptex_attach(unsigned index, dev_t preboot, dev_t *device, char *path, size_t capacity)
 {

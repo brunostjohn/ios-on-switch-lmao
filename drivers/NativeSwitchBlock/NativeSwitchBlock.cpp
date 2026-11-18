@@ -65,6 +65,11 @@
 #include "SwitchSdCard.h"
 #include "SwitchSdTrim.h"
 #include "SwitchCq.h"
+#if DEVELOPMENT || DEBUG
+#include <sys/sysctl.h>
+#include "../../kits/SwitchSysctl/SwitchSysctl.h"
+#include "SwitchSdIo.h"
+#endif
 
 extern "C" {
 // The ADMA2 path's page checks and cache maintenance (osfmk/arm/pmap/pmap.c, arm64/arm_vm_init.c): a page's cache
@@ -438,6 +443,12 @@ struct Stats {
 }
 
 #if DEVELOPMENT || DEBUG
+namespace {
+// The request accounting (SwitchSdIo.h) of the one SD controller: since boot, the 10 s line's copy of it, and what the
+// last line was formatted against. Outside the service, whose size IOKit caps at 16 KiB.
+SwitchSdIo gIo, gIoNow, gIoLine;
+}  // namespace
+
 #define SWITCH_SD_DEBUG_COUNT(field) (++stats.field)
 #else
 #define SWITCH_SD_DEBUG_COUNT(field) ((void)0)
@@ -779,7 +790,7 @@ class NativeSwitchBlock : public IOService {
     void takenLocked(Request *first, uint32_t count, uint64_t pickNs);
     void beginBatch(Batch &);
     void endBatch(Batch &);
-    void account(Batch &);
+    void account(Batch &, bool task = false);
     void completeBatch(Batch &);
     // r14-sdcq: the command queue: a group's chains (under queueLock), the group run, its tasks, the protocol's own
     // commands, leaving CQ mode, stopping it for the boot, and the power cycle for a card that will not leave it.
@@ -857,6 +868,13 @@ public:
     void suspend();
     void resume();
     Stats stats = {};
+#if DEVELOPMENT || DEBUG
+    // When the last 10 s line of the request accounting (gIo) was made, and when the driver began and finished its
+    // setup (kern.switch_sd's setup_us).
+    uint64_t ioLineNs = 0, setupBeganNs = 0, setupEndedNs = 0;
+    void logIo(uint64_t now);
+    size_t formatTotals(char *out, size_t size) const;
+#endif
     uint64_t firstSector = 0, sectorCount = 0;
     // Per request and per merged command, as advertised: reads kBounceSectors with ADMA2 or once setup() has checked
     // SDMA boundary resumes, else kSafeSectors; writes kDirectWriteSectors with ADMA2, else kSafeSectors.
@@ -972,11 +990,16 @@ IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, U
         return kIOReturnNoMemory;
     buffer->retain();
     // No attributes: the default class, as IOStorage's own default priority. The boot prefetch: high.
-    IOStoragePriority priority = kIOStoragePriorityDefault;
+    IOStoragePriority priority = attributes ? attributes->priority : kIOStoragePriorityDefault;
+#if DEVELOPMENT || DEBUG
+    switchSdAdd(&gIo.asked[priority >> 6], 1);
+#endif
     if (current_thread() == __atomic_load_n(&gPrefetchThread, __ATOMIC_ACQUIRE)) {
+#if DEVELOPMENT || DEBUG
+        if (priority >> 6)
+            switchSdAdd(&gIo.chosen, 1);
+#endif
         priority = kIOStoragePriorityHigh;
-    } else if (attributes) {
-        priority = attributes->priority;
     }
     *request = {nullptr,
                 buffer,
@@ -1398,6 +1421,9 @@ void NativeSwitchBlock::submit(Request *request)
         head = request;
     }
     tail = request;
+#if DEVELOPMENT || DEBUG
+    gIo.depthChanging(request->queuedNs, queued);
+#endif
     if (++queued > stats.maxQueued)
         stats.maxQueued = queued;
     if (!request->write)
@@ -1743,6 +1769,9 @@ bool NativeSwitchBlock::copyStaged()
     for (uint32_t i = 0; ok && i < staging.count; ++i) {
         const Staging::Stage &stageAt = staging.stages[i];
         ok = stage(stageAt.memory, static_cast<uint32_t>(stageAt.offset), bounce + stageAt.at, stageAt.length, true);
+#if DEVELOPMENT || DEBUG
+        switchSdAdd(&gIo.bounceBytes, stageAt.length);
+#endif
     }
     stats.copyNs += switch_now_ns() - began;
     return ok;
@@ -1772,6 +1801,9 @@ bool NativeSwitchBlock::stageChain(Request *first, uint32_t from, uint32_t lengt
         },
         toClient);
     stats.copyNs += switch_now_ns() - began;
+#if DEVELOPMENT || DEBUG
+    switchSdAdd(&gIo.bounceBytes, length);
+#endif
     return ok;
 }
 
@@ -1940,7 +1972,7 @@ void NativeSwitchBlock::endBatch(Batch &b)
 // The stats for a chain whose command (or r14-sdcq: task) has ended. Card and copies first, completions after: busy time
 // covers the card, the copies and the cache maintenance, completeNs the callbacks (IOStorageFamily/APFS work that runs on
 // this thread; r12-sdio: while the next command runs, their time inside this chain's span is not this chain's busy time).
-void NativeSwitchBlock::account(Batch &b)
+void NativeSwitchBlock::account(Batch &b, bool task)
 {
     const bool write = b.write;
     const IOReturn result = b.result;
@@ -1970,6 +2002,12 @@ void NativeSwitchBlock::account(Batch &b)
     }
     stats.busyNs += latency;
     (write ? stats.writeNs : stats.readNs) += latency;
+#if DEVELOPMENT || DEBUG
+    const unsigned size = switchSdSize(static_cast<uint64_t>(b.sectors) * kSector);
+    (task ? gIo.task[size] : gIo.command[write ? 1 : 0][size]).add(latency);
+#else
+    (void)task;
+#endif
     stats.merged += b.count - 1;
     if (latency > stats.maxLatencyNs)
         stats.maxLatencyNs = latency;
@@ -1984,6 +2022,10 @@ void NativeSwitchBlock::completeBatch(Batch &b)
         const uint32_t length = r->sectors * kSector;
         const IOMemoryDescriptor *buffer = r->buffer;
         const IOStorageCompletion completion = r->completion;
+#if DEVELOPMENT || DEBUG
+        const uint64_t now = switch_now_ns();
+        gIo.total[r->klass].add(now > r->queuedNs ? now - r->queuedNs : 0);
+#endif
         IOFree(r, sizeof(*r));
         buffer->release();
         // IOStorage::complete, without binding another original IOStorageFamily symbol.
@@ -2426,7 +2468,7 @@ int NativeSwitchBlock::endTask(Batch &b, uint32_t *r1)
     }
     b.result = result;
     ++stats.cqTasks;
-    account(b);
+    account(b, true);
     return 0;
 }
 
@@ -2670,12 +2712,18 @@ Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCo
 // The queue counts and the per-class wait stats for a chain just unlinked (queueLock held).
 void NativeSwitchBlock::takenLocked(Request *first, uint32_t count, uint64_t pickNs)
 {
+#if DEVELOPMENT || DEBUG
+    gIo.depthChanging(pickNs, queued);
+#endif
     queued -= count;
     for (const Request *r = first; r; r = r->next) {
         if (!r->write)
             --queuedReads[r->klass];
         ClassWait &wait = waits[r->klass];
         const uint64_t waited = pickNs > r->queuedNs ? pickNs - r->queuedNs : 0;
+#if DEVELOPMENT || DEBUG
+        gIo.wait[r->klass].add(waited);
+#endif
         ++wait.n;
         wait.sumNs += waited;
         if (waited > wait.maxNs)
@@ -2806,6 +2854,7 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
             if (now - self->statsLastNs >= NativeSwitchBlock::statsEveryNs) {
                 self->statsLastNs = now;
                 self->logThroughput();
+                self->logIo(now);
             }
         }
 #endif
@@ -2951,6 +3000,34 @@ void NativeSwitchBlock::logThroughput()
         stats.admaErrors, stats.retunes, busMode, busKHz / 1000, busKHz % 1000 / 10, classes);
     os_log(OS_LOG_DEFAULT, "%s", out);
 }
+
+#if DEVELOPMENT || DEBUG
+size_t NativeSwitchBlock::formatTotals(char *out, size_t size) const
+{
+    const size_t at = static_cast<size_t>(
+        snprintf(out, size, "setup_us=%llu submitted=%llu serviced=%llu irq=%llu ",
+                 (setupEndedNs - setupBeganNs) / 1000, __atomic_load_n(&submitted, __ATOMIC_RELAXED),
+                 __atomic_load_n(&serviced, __ATOMIC_RELAXED), __atomic_load_n(&stats.interrupts, __ATOMIC_RELAXED)));
+    return at < size ? at + switchSdFormatTotals(gIo, out + at, size - at) : size - 1;
+}
+
+// The request accounting's 10 s line (SwitchSdIo.h), against the counters the last one was formatted with. The queue's
+// length is integrated up to now and its longest restarts, under queueLock as every change of it.
+void NativeSwitchBlock::logIo(uint64_t now)
+{
+    IOLockLock(queueLock);
+    gIo.depthChanging(now, queued);
+    gIo.copyTo(gIoNow);
+    __atomic_store_n(&gIo.depthMax, queued, __ATOMIC_RELAXED);
+    IOLockUnlock(queueLock);
+    char out[896];
+    const uint64_t since = ioLineNs ? ioLineNs : stats.firstNs;
+    switchSdFormatIo(gIoNow, gIoLine, since && now > since ? now - since : 0, out, sizeof(out));
+    os_log(OS_LOG_DEFAULT, "%s", out);
+    gIoNow.copyTo(gIoLine);
+    ioLineNs = now;
+}
+#endif
 
 void NativeSwitchBlock::reportState(const char *why)
 {
@@ -3985,6 +4062,9 @@ const char *NativeSwitchBlock::checkCq(uint64_t *queuedNs, uint64_t *serialNs, u
 
 bool NativeSwitchBlock::setup()
 {
+#if DEVELOPMENT || DEBUG
+    setupBeganNs = switch_now_ns();
+#endif
     regs = switch_mmio_map(kControllerPA, 0x1000);
     mc = switch_mmio_map(kMemoryControllerPA, 0x1000);
     // CAR and APB_MISC/pinmux serve the SDR104 bring-up only; without them it is skipped.
@@ -4168,6 +4248,42 @@ extern "C" void switch_block_resume(void)
         gOwner->resume();
 }
 
+#if DEVELOPMENT || DEBUG
+extern "C" size_t switch_cryptex_io_totals(char *out, size_t size);  // SwitchCryptex.cpp
+
+namespace {
+// kern.switch_sd (debug kernels): the request accounting since boot (SwitchSdIo.h switchSdFormatTotals), the cryptex
+// devices' (switch_cryptex_io_totals), how long setup() took to the device's publication, and the requests submitted
+// and completed and the interrupts taken.
+int sdSysctl(struct sysctl_oid *, void *, int, struct sysctl_req *req)
+{
+    const NativeSwitchBlock *owner = gOwner;
+    if (!owner)
+        return SYSCTL_OUT(req, "down", 5);
+    constexpr size_t kBytes = 16384;
+    auto *line = static_cast<char *>(IOMallocData(kBytes));
+    if (!line)
+        return ENOMEM;
+    size_t at = owner->formatTotals(line, kBytes);
+    at += switch_cryptex_io_totals(line + at, kBytes - at);
+    const int error = SYSCTL_OUT(req, line, at + 1);
+    IOFreeData(line, kBytes);
+    return error;
+}
+
+struct sysctl_oid gSdOid;
+
+void registerSdSysctl()
+{
+    switch_sysctl_oid(&gSdOid, &sysctl__kern_children, "switch_sd",
+                      static_cast<int>(CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED), sdSysctl, "A",
+                      "SD requests since boot: queue wait and completion per class, command time per direction and "
+                      "size, queue depth, bytes the CPU copied, setup time");
+    sysctl_register_oid(&gSdOid);
+}
+}  // namespace
+#endif
+
 extern "C" int switch_block_publish(void)
 {
     if (gPublishStatus >= 0)
@@ -4190,6 +4306,10 @@ extern "C" int switch_block_publish(void)
     }
     owner->device = device;
     gOwner = owner;
+#if DEVELOPMENT || DEBUG
+    owner->setupEndedNs = switch_now_ns();
+    registerSdSysctl();
+#endif
     device->registerService();
     device->release();
     gPublishStatus = SWITCH_BLOCK_OK;

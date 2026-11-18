@@ -38,6 +38,15 @@ host_test(
     ],
 )
 
+# The request accounting's histograms, line and totals (debug kernels' SwitchSD io line and kern.switch_sd).
+host_test(
+    name = "sd_io_test",
+    srcs = [
+        "sd_io_test.cpp",
+        "//drivers/NativeSwitchBlock:SwitchSdIo.h",
+    ],
+)
+
 host_test(
     name = "sd_trim_test",
     srcs = [
