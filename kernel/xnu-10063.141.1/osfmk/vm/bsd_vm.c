@@ -57,6 +57,7 @@
 #include <vm/vm_purgeable_internal.h>
 
 #include <sys/kdebug_triage.h>
+#include <switch/diag.h>
 
 /* BSD VM COMPONENT INTERFACES */
 int
@@ -642,6 +643,7 @@ vnode_pager_data_request(
 	const kern_return_t kr = vnode_pager_cluster_read(vnode_object, base_offset, offset, io_streaming, size);
 	switch_kprof_wait(vnode_pager_virtualdev(vnode_object->vnode_handle) ? 3 : 0, mach_absolute_time() - began,
 	    (uint64_t)size);
+	switch_diag_pagein(vnode_object->vnode_handle, (uint64_t)size, mach_absolute_time() - began);
 	return kr;
 #else
 	return vnode_pager_cluster_read(vnode_object, base_offset, offset, io_streaming, size);

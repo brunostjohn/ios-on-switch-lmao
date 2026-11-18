@@ -13,6 +13,7 @@
  */
 
 #include <kern/misc_protos.h>
+#include <switch/diag.h>
 #include <switch/sched.h>
 #include <switch/stall.h>
 #include <switch/xnu.h>
@@ -502,6 +503,7 @@ static void switch_sched_report(__unused thread_call_param_t p0, __unused thread
     os_log(OS_LOG_DEFAULT, "%s", line);
     switch_sched_cpu_report(line, window_ns);
     switch_sched_watch_report(line, LINE, window_ns);
+    switch_diag_pagein_report(line, LINE, window_ns);
     report_asked(line);
 }
 

@@ -100,6 +100,7 @@
 #include <vm/vm_ubc.h>
 #include <vm/vm_compressor_xnu.h>
 #include <os/hash.h>
+#include <switch/diag.h>
 
 #if CONFIG_PHANTOM_CACHE
 #include <vm/vm_phantom_cache_internal.h>
@@ -8651,11 +8652,13 @@ vm_page_sleep(vm_object_t object, vm_page_t m, wait_interrupt_t interruptible, l
 #endif /* CONFIG_IOSCHED */
 	m->vmp_wanted = TRUE;
 	thread_set_pending_block_hint(current_thread(), kThreadWaitPageBusy);
+	const struct switch_page_wait switch_wait = switch_diag_page_wait(object->internal ? NULL : object->pager, m->vmp_absent);
 #if PAGE_SLEEP_WITH_INHERITOR
 	ret = vm_page_sleep_with_inheritor(object, action, (event_t)m, interruptible);
 #else
 	ret = lck_rw_sleep(&object->Lock, LCK_SLEEP_PROMOTED_PRI | action, (event_t)m, interruptible);
 #endif
+	switch_diag_page_waited(&switch_wait);
 	KDBG_FILTERED((VMDBG_CODE(DBG_VM_PAGE_SLEEP)) | DBG_FUNC_END, VM_KERNEL_ADDRHIDE(object), m->vmp_offset, VM_KERNEL_ADDRHIDE(m));
 	return ret;
 }

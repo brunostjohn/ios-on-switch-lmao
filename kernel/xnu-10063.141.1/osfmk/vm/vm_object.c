@@ -97,6 +97,7 @@
 #include <vm/vm_purgeable_internal.h>
 
 #include <vm/vm_compressor.h>
+#include <switch/diag.h>
 
 #if CONFIG_PHANTOM_CACHE
 #include <vm/vm_phantom_cache.h>
@@ -8048,7 +8049,9 @@ vm_page_sleep(vm_object_t o, vm_page_t m, int interruptible)
 		vm_page_handle_prio_inversion(o, m);
 	}
 	m->vmp_wanted = TRUE;
+	const struct switch_page_wait switch_wait = switch_diag_page_wait(o->internal ? NULL : o->pager, m->vmp_absent);
 	ret = thread_sleep_vm_object(o, m, interruptible);
+	switch_diag_page_waited(&switch_wait);
 	KERNEL_DEBUG((MACHDBG_CODE(DBG_MACH_VM, VM_PAGE_SLEEP)) | DBG_FUNC_END, o, m, 0, 0, 0);
 	return ret;
 }

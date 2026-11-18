@@ -31,6 +31,9 @@
 #   xnu_sched_watch_test     kernel/switch/sched/watch.h and commit.h: a committing or touch-sending thread's stretch to
 #                            each event, one per burst, its cause and line; a commit through the render server to the
 #                            display thread's wake; nothing under the thread lock that locks or logs
+#   xnu_diag_pagein_test     kernel/switch/diag/pagein.h: a window's file pager reads and busy-page waits by process
+#                            and file, a file named by a read, full tables counted, the line; both trees' file pager
+#                            and page sleep reporting to it
 #   xnu_sched_slots_test     kernel/switch/sched/slots.h: watched threads' slots taken without a lock, freed only from
 #                            the report's snapshot, filter bits cleared only when no taken id needs them
 #   xnu_sched_busy_test      kernel/switch/sched/busy.h: a UI main thread's stretch between two run-loop waits split into
@@ -405,6 +408,30 @@ host_test(
     srcs = [
         "sched/slots.h",
         "xnu_sched_slots_test.cpp",
+    ],
+    includes = ["."],
+)
+
+# --- kernel/switch/diag/pagein.h -------------------------------------------------------------------------------------
+copy_file(
+    name = "switch_diag_pagein",
+    src = "//kernel/switch:diag/pagein.h",
+    out = "diag/pagein.h",
+)
+
+host_test(
+    name = "xnu_diag_pagein_test",
+    srcs = [
+        "diag/pagein.h",
+        "xnu_diag_pagein_test.cpp",
+    ],
+    data = [
+        "//kernel/switch:include/switch/diag.h",
+        "//kernel/xnu-10063.141.1/osfmk:vm/bsd_vm.c",
+        "//kernel/xnu-10063.141.1/osfmk:vm/vm_fault.c",
+        "//kernel/xnu-10063.141.1/osfmk:vm/vm_object.c",
+        "//kernel/xnu-12377.121.6/osfmk:vm/bsd_vm.c",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_object.c",
     ],
     includes = ["."],
 )

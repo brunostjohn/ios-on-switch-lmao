@@ -13,11 +13,23 @@
 __BEGIN_DECLS
 
 struct task;
+struct vnode;
 
 void switch_print_blocked_threads(unsigned max_threads);
 void switch_print_thread(const void *thread, const char *who);
 void switch_print_processors(const char *who);
 void switch_sched_describe(char *buffer, size_t size, const void *thread);
+
+/* vm_page_sleep: a thread waits for a busy page. The file read it waits for, if it is one (an absent page of a file's
+ * object), is taken under the object's lock before the sleep; the wait is counted after it (diag/pagein.c). */
+struct switch_page_wait {
+    const struct vnode *file;
+    uint64_t began;
+};
+
+/* NativeSwitchBlock's cryptex read cache (SwitchCryptex.cpp): its counts since the call before, as text after the
+ * 10 s report's "SwitchSched cryptex cache (<ms> ms): " (debug kernels: switch_diag_cryptex_cache, below). */
+typedef size_t (*switch_cryptex_cache_counts_t)(char *out, size_t size);
 
 /*
  * proc_prepareexit: a process exits with status rv; one that crashed is logged (diag/exit.c, diag/crash.c).
@@ -34,6 +46,14 @@ void switch_diag_cpu_hog(struct task *task, const char *name, int pid);
 void switch_diag_wl_touched(uint32_t command, uint32_t sfflags, uint64_t workloop, uint64_t ident, const void *waiter);
 /* log_unnest_badness, after its rate limit: the current thread unnests [start, end) of its shared region (diag/unnest.c). */
 void switch_diag_unnest(uint64_t start, uint64_t end);
+/* vnode_pager_data_request, on the faulting thread after the pager's read: `bytes` asked of `vp`, `read` (mach) spent
+ * in it: the whole read when the file system reads synchronously (a compressed file), its issue otherwise, the wait
+ * then being a busy-page wait (diag/pagein.c); the 10 s scheduling report's lines of them. */
+void switch_diag_pagein(struct vnode *vp, uint64_t bytes, uint64_t read);
+struct switch_page_wait switch_diag_page_wait(void *pager, unsigned int absent);
+void switch_diag_page_waited(const struct switch_page_wait *wait);
+void switch_diag_pagein_report(char *line, size_t size, uint64_t window_ns);
+void switch_diag_cryptex_cache(switch_cryptex_cache_counts_t counts);
 #else
 static inline void switch_diag_proc_exit(__unused struct proc *p, __unused int rv)
 {}
@@ -47,6 +67,17 @@ static inline void switch_diag_wl_touched(__unused uint32_t command, __unused ui
 {}
 
 static inline void switch_diag_unnest(__unused uint64_t start, __unused uint64_t end)
+{}
+
+static inline void switch_diag_pagein(__unused struct vnode *vp, __unused uint64_t bytes, __unused uint64_t read)
+{}
+
+static inline struct switch_page_wait switch_diag_page_wait(__unused void *pager, __unused unsigned int absent)
+{
+    return (struct switch_page_wait){NULL, 0};
+}
+
+static inline void switch_diag_page_waited(__unused const struct switch_page_wait *wait)
 {}
 #endif
 

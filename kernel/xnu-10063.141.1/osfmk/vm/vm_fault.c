@@ -1,4 +1,5 @@
 #include <switch/bootstrap.h>
+#include <switch/diag.h>
 /*
  * Copyright (c) 2000-2021 Apple Inc. All rights reserved.
  *
@@ -1431,10 +1432,12 @@ vm_fault_page(
 				m = vm_page_lookup(object, vm_object_trunc_page(offset));
 
 				if (m != VM_PAGE_NULL && m->vmp_cleaning) {
+					const struct switch_page_wait switch_wait = switch_diag_page_wait(object->internal ? NULL : object->pager, m->vmp_absent);
 					PAGE_ASSERT_WAIT(m, interruptible);
 
 					vm_object_unlock(object);
 					wait_result = thread_block(THREAD_CONTINUE_NULL);
+					switch_diag_page_waited(&switch_wait);
 					vm_object_deallocate(object);
 
 					goto backoff;
@@ -2322,10 +2325,12 @@ dont_look_for_page:
 				copy_m = vm_page_lookup(copy_object, copy_offset);
 
 				if (copy_m != VM_PAGE_NULL && copy_m->vmp_busy) {
+					const struct switch_page_wait switch_wait = switch_diag_page_wait(copy_object->internal ? NULL : copy_object->pager, copy_m->vmp_absent);
 					PAGE_ASSERT_WAIT(copy_m, interruptible);
 
 					vm_object_unlock(copy_object);
 					wait_result = thread_block(THREAD_CONTINUE_NULL);
+					switch_diag_page_waited(&switch_wait);
 					vm_object_deallocate(copy_object);
 
 					goto backoff;
@@ -4683,6 +4688,7 @@ RetryFault:
 					vm_map_unlock(real_map);
 				}
 
+				const struct switch_page_wait switch_wait = switch_diag_page_wait(cur_object->internal ? NULL : cur_object->pager, m->vmp_absent);
 				result = PAGE_ASSERT_WAIT(m, interruptible);
 
 				vm_object_unlock(cur_object);
@@ -4690,6 +4696,7 @@ RetryFault:
 				if (result == THREAD_WAITING) {
 					result = thread_block(THREAD_CONTINUE_NULL);
 				}
+				switch_diag_page_waited(&switch_wait);
 				if (result == THREAD_AWAKENED || result == THREAD_RESTART) {
 					goto RetryFault;
 				}
