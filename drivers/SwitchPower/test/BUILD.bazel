@@ -26,7 +26,8 @@
 #   switch_emc_hold_test             SwitchEMCHold.h played out over frame bursts and CPU work: the EMC loop's wake-ups,
 #                                    the hold's end within a tick of the frames', the hint's or the CPUs' work
 #   switch_perf_hint_source_test     the touch filter's GPU and EMC hints as their sources stand: no lock, no
-#                                    read-modify-write, no sequentially consistent access
+#                                    read-modify-write, no sequentially consistent access; both kernels' task policy
+#                                    hands every role change to switch_perf_role
 #   switch_cpu_load_test             SwitchCpuLoad.h: a CPU's busy time from its context-switch callout, exact read
 #                                    alone, off by one interval per racing switch at most (also under TSAN)
 #   switch_perf_governor_callouts_test SwitchPerfGovernor.cpp itself over stand-ins for XNU: the locks, read-modify-
@@ -350,5 +351,7 @@ host_test(
         "//drivers/SwitchPower:SwitchEMC.cpp",
         "//drivers/SwitchPower:SwitchEMCHints.h",
         "//drivers/TegraGM20B:gpu_clock.c",
+        "//kernel/xnu-10063.141.1/osfmk:kern/task_policy.c",
+        "//kernel/xnu-12377.121.6/osfmk:kern/task_policy.c",
     ],
 )
