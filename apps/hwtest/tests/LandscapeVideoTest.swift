@@ -109,9 +109,6 @@ struct LandscapeVideoTest: HWTest {
         guard case .success(let (leave, leaveSamples)) = await change(session, video, held, fresh: false) else {
             return .fail("no sample of the change back")
         }
-        _ = try session.call(
-            LandscapeSample.request(op: LandscapeSample.portrait, value: 0), replyBytes: LandscapeSample.size
-        ).get()
         samples.leave = leave
         let (forcedChecks, forcedMetrics) = try await forcedFailure(session, video, held)
         await MainActor.run { video.pause() }
@@ -124,9 +121,11 @@ struct LandscapeVideoTest: HWTest {
         return .judged(checks, metrics)
     }
 
-    /// The forced-failure arm, last: FAIL makes the next change into landscape fail as a reservation would (one line,
-    /// that change dropped); nothing is held, so a following frame's change has to go landscape. forced_failures is the
-    /// kernel's count over the arm.
+    /// The forced-failure arm, last, entered on the copy route with PORTRAIT still holding changes into landscape back:
+    /// FAIL is armed under the hold and the hold then let go, so the first change into landscape is the one FAIL makes
+    /// fail as a reservation would (one line, that change dropped), and a following frame's change has to go landscape.
+    /// Armed after the hold's release, FAIL would find the held frame already landscape and no change left to fail.
+    /// forced_failures is the kernel's count over the arm.
     func forcedFailure(
         _ session: VICKernelTest.Session, _ video: AVPlayer, _ held: Held
     ) async throws
@@ -141,6 +140,9 @@ struct LandscapeVideoTest: HWTest {
         ).get()
         _ = try session.call(
             LandscapeSample.request(op: LandscapeSample.fail, value: 1), replyBytes: LandscapeSample.size
+        ).get()
+        _ = try session.call(
+            LandscapeSample.request(op: LandscapeSample.portrait, value: 0), replyBytes: LandscapeSample.size
         ).get()
         await MainActor.run { video.play() }
         var entered = false
