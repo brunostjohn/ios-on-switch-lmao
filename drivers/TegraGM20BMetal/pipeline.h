@@ -133,8 +133,6 @@ struct Pipeline {
     const char *caName = nullptr;
     bool fillState = false;
     const char *spanName = nullptr;  // DEVELOPMENT: the driver's own states' name in the long span line (span_marks.h)
-    // what Core Animation's name for the state says its draws are (ca_route.h CaRoute)
-    uint8_t caRoute = 0;
     uint32_t probeGeneration = 0;
     uint8_t probeLines = 0, probeThinLines = 0;
     // rotation.h: its fragment program has a turned variant (AssumeTurned), or reads a turned plane's axes with none; a

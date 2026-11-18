@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
 #import "TegraGM20BMetalInternal.h"
-#include "ca_route.h"
 #import "TegraGM20BMetalRenderKey.h"
 #import "TegraGM20BMetalBinaryArchive.h"
 #import "TegraGM20BMetalReflection.h"
@@ -90,22 +89,6 @@
     return (id<MTLSamplerState>)r;
 }
 
-// What Core Animation's name for a state says its draws are (ca_route.h), for the draw shortcuts' rules: the state and
-// its barrier form alike
-static void markRoute(gm20b::Pipeline *pl, NSString *label)
-{
-    static NSString *const prefix = @"com.apple.coreanimation.";
-    if (!pl || pl->caRoute || ![label hasPrefix:prefix])
-        return;
-    const char *name = [label substringFromIndex:prefix.length].UTF8String;
-    const uint8_t route = uint8_t(gm20b::caRouteOf(name));
-    for (gm20b::Pipeline *p : {pl, pl->barrierTwin}) {
-        if (!p)
-            continue;
-        p->caRoute = route;
-    }
-}
-
 #if SWITCH_METAL_DIAGNOSTICS
 // Core Animation's glass background (Tgs*, Tgb*) and generic merge (..Xghfc) states: the draw path checks their uniforms for
 // NaN and infinity (gpu.cpp probeUniforms), its barrier form's too
@@ -173,7 +156,6 @@ static void makeRecord(SwitchMetalPipeline *p, MTLRenderPipelineDescriptor *d)
     const gm20b::Completion::Ask a = gm20bRecordAsk(p, d);
     p->_raw = gRM->completion->makeNow(a, p->_failure);
     SWITCH_METAL_DIAGNOSTIC(p->_obtained = gm20b::Completion::lastObtained());
-    markRoute(p->_raw, d.label);
 #if SWITCH_METAL_DIAGNOSTICS
     markProbes(p->_raw, d.label);
 #endif
@@ -243,7 +225,6 @@ SwitchMetalPipeline *gm20bPipelineShell(SwitchMetalDevice *device, MTLRenderPipe
     p->_packKey = packKey;
     if (lookedUp) {
         p->_raw = gRM->raw->pipeline(packKey, gm20b::PackForm::Default, p->_caTransform);
-        markRoute(p->_raw, d.label);
 #if SWITCH_METAL_DIAGNOSTICS
         markProbes(p->_raw, d.label);
 #endif
