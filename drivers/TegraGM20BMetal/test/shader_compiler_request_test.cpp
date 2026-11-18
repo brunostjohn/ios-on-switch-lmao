@@ -848,6 +848,16 @@ TEST(CompileRequest, ARefusalsLineNamesItsFunctionsAndReason)
               "pid 1's library of front end request type 13 refused: error");
 }
 
+// Boot 2: a kernel whose translation fails at every try (its dispatches' command buffers fail) logged only the
+// compiler's own "not made" line, and no refusal line
+TEST(CompileRequest, ATranslationThatFailsAtEveryTryIsRefusedForGood)
+{
+    EXPECT_TRUE(switch_compiler::failsForGood(
+        "m2v refused its translation: fails: kernel sampler slot 0 samples texture slots 0 and 1"));
+    EXPECT_FALSE(switch_compiler::failsForGood("m2v refused its translation: retry: compile: Budget(Time)"));
+    EXPECT_FALSE(switch_compiler::failsForGood("the store took no entry"));
+}
+
 TEST(CompileRequest, ConstantsReadBackAsTheirText)
 {
     MTLFunctionConstantValues *values = [MTLFunctionConstantValues new];

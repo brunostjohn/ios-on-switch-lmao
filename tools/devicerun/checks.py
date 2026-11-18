@@ -910,6 +910,18 @@ GROUPS: dict[str, list[Check]] = {
     ],
     'refusals': [
         Check(
+            'refusal.compiler-reason',
+            'compiler-speed',
+            ' refused:',
+            process='SwitchShaderCompiler',
+            subsystem=REFUSAL_SUBSYSTEM,
+            regex=r' refused:\s*$',
+            show=('process',),
+            source='drivers/TegraGM20BMetal/compiler/compiler_request.mm (refusalLine)',
+            note='a shader compiler refusal line that names no reason; boot 2: two libraries of front end request type '
+            "13 (the front end's log was the library entry's, never the line's)",
+        ),
+        Check(
             'refusal.bytesnocopy',
             'r119-rawgaps',
             'texture.bytesnocopy',
