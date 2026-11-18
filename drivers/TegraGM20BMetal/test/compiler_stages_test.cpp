@@ -14,8 +14,10 @@
 #include "../pack.h"
 
 #include <gtest/gtest.h>
+#include <chrono>
 #include <fstream>
 #include <iterator>
+#include <thread>
 
 namespace {
 
@@ -141,15 +143,13 @@ public:
         const uint64_t stages = kept_.kept().entries;
         uint64_t before[2] = {}, after[2] = {};
         nmb_kept_translations(before);
-        if (p.request.kind == gm20b::RequestKind::Facts) {
-            out.result = switch_compiler::makeFacts(p, root(), out.entry, out.why);
-        } else {
-            switch_compiler::LibraryCache &cache = *libraries_;
-            const switch_compiler::Libraries libraries = [&cache](const gm20b::RequestLibrary &l, std::string &why) {
-                return cache.library(l, why);
-            };
-            out.result = switch_compiler::makeEntry(p, libraries, *direct_, 0, out.entry, out.why);
-        }
+        switch_compiler::LibraryCache &cache = *libraries_;
+        const switch_compiler::Libraries libraries = [&cache](const gm20b::RequestLibrary &l, std::string &why) {
+            return cache.library(l, why);
+        };
+        out.result = p.request.kind == gm20b::RequestKind::Facts
+                         ? switch_compiler::makeFacts(p, libraries, out.entry, out.why)
+                         : switch_compiler::makeEntry(p, libraries, *direct_, 0, out.entry, out.why);
         nmb_kept_translations(after);
         out.stages = recording_.asked;
         out.stagesMade = kept_.kept().entries - stages;
@@ -321,4 +321,26 @@ TEST_F(CompilerStages, AKernelIsTranslatedOnceForItsFactsAndEveryDispatch)
     nmb_kept_translations(kept);
     printf("kept translations: %llu, %llu bytes\n", (unsigned long long)kept[0], (unsigned long long)kept[1]);
     EXPECT_GT(kept[1], kept[0] * 4096);
+}
+
+TEST_F(CompilerStages, ASystemLibraryIsReadOncePerProcess)
+{
+    auto cache = std::make_shared<switch_compiler::LibraryCache>(root());
+    gm20b::RequestLibrary system;
+    system.path = compiler_test::kQuartzCore;
+    system.system = true;
+    gm20b::RequestLibrary data;
+    data.path = kLibrary;
+    data.bytes = fileBytes(library());
+    std::string why;
+    cache->began();
+    id<MTLLibrary> first = cache->library(system, why), firstData = cache->library(data, why);
+    ASSERT_TRUE(first && firstData) << why;
+    EXPECT_NE(offline::libraryHandle(first), nullptr);
+    EXPECT_EQ(cache->library(system, why), first);
+    cache->ended();
+    // past the time a library of a client's data is kept once no compile runs
+    std::this_thread::sleep_for(std::chrono::seconds(6));
+    EXPECT_EQ(cache->library(system, why), first) << "a system library let go";
+    EXPECT_NE(cache->library(data, why), firstData) << "a client's data library kept at rest";
 }

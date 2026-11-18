@@ -141,23 +141,9 @@ gm20b::Digest Engine::rules() const
 
 int32_t Engine::compile(const Prepared &p, std::string &entry, std::string &why)
 {
-    if (p.request.kind == gm20b::RequestKind::Facts)
-        return makeFacts(p, state_->inputs.systemRoot, entry, why);
-    if (gm20b::functionAttributes(p.request))
-        return makeAttributes(p, state_->inputs.systemRoot, entry, why);
-    if (gm20b::bufferEncoders(p.request))
-        return makeBufferEncoders(p, state_->inputs.systemRoot, entry, why);
-    if (p.request.kind == gm20b::RequestKind::Library)
-        return state_->codeGen->make(p, entry, why);
     State &s = *state_;
-    if (p.request.kind == gm20b::RequestKind::Reflection) {
-        const std::string &root = s.inputs.systemRoot;
-        const Libraries offline = [&root](const gm20b::RequestLibrary &l, std::string &failed) {
-            return offlineLibrary(l, root, failed);
-        };
-        return makeReflectionEntry(p, offline, s.stack, entry, why);
-    }
-    std::unique_ptr<gm20b::Direct> compiler = takeCompiler();
+    if (p.request.kind == gm20b::RequestKind::Library)
+        return s.codeGen->make(p, entry, why);
     LibraryCache &cache = *s.libraries;
     const Libraries libraries = [&cache](const gm20b::RequestLibrary &l, std::string &failed) {
 #if SWITCH_DEBUG
@@ -174,10 +160,20 @@ int32_t Engine::compile(const Prepared &p, std::string &entry, std::string &why)
     nmb_kept_translations(before);
     const uint64_t began = uptimeNs();
 #endif
+    const auto record = [&] {
+        std::unique_ptr<gm20b::Direct> compiler = takeCompiler();
+        const int32_t made = makeEntry(p, libraries, *compiler, s.stack, entry, why);
+        giveBack(std::move(compiler));
+        return made;
+    };
     cache.began();
-    const int32_t result = makeEntry(p, libraries, *compiler, s.stack, entry, why);
+    const int32_t result = p.request.kind == gm20b::RequestKind::Facts ? makeFacts(p, libraries, entry, why)
+                           : gm20b::functionAttributes(p.request)      ? makeAttributes(p, libraries, entry, why)
+                           : gm20b::bufferEncoders(p.request)          ? makeBufferEncoders(p, libraries, entry, why)
+                           : p.request.kind == gm20b::RequestKind::Reflection
+                               ? makeReflectionEntry(p, libraries, s.stack, entry, why)
+                               : record();
     cache.ended();
-    giveBack(std::move(compiler));
 #if SWITCH_DEBUG
     tJobSplit.makeNs = uptimeNs() - began;
     nmb_kept_translations(after);

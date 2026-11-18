@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
-// The libraries the engine's compiles are made from (compiler_engine.h), made by the translator alone (TegraGM20BMetalOffline.h): kept
-// while compiles come, so a burst of one library's states reads it once, and let go once none ran for a while. m2v's
-// translator holds a copy of each library's AIR on the heap (metal2vulkan::library::Library), several MB for Core
-// Animation's and RenderBox's, which a compiler at rest has no use for.
+// The libraries every request kind of the engine's (compiler_engine.h) is made from, made by the translator alone
+// (TegraGM20BMetalOffline.h). A system library is read once per process: its file is mapped and read in place, its
+// functions' HASH tags taken as the sealed volume states them, so a request reads its function list and the bitcode
+// it compiles, and nothing of it is copied or hashed (an MPS library is 84 MB). A library of a client's data is kept
+// while compiles come, so a burst of one library's states reads it once, and let go once none ran for a while: its
+// bytes are a heap copy of the request's, which a compiler at rest has no use for.
 #pragma once
 #import <Metal/Metal.h>
 #include <deque>

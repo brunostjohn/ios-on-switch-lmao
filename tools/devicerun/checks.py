@@ -848,6 +848,20 @@ GROUPS: dict[str, list[Check]] = {
             'each; the last held the logo) and 45 compute states',
         ),
         Check(
+            'compiler.library-time',
+            'compiler-speed',
+            'SwitchShaderCompiler: made in',
+            'max(ms) < 100',
+            process='SwitchShaderCompiler',
+            subsystem=GPU_METAL_SUBSYSTEM,
+            regex=r' libraries (?P<ms>\d+) ms',
+            show=('ms',),
+            source='drivers/TegraGM20BMetal/compiler/compiler_debug.mm (debug builds)',
+            note='a job read its libraries for over 100 ms (an inferred bound): a system library is mapped and parsed '
+            'by its function list once per compiler process; boot 1 spent 2.2 s per MPS facts request copying and '
+            'hashing an 84 MB metallib',
+        ),
+        Check(
             'compiler.ui-waiter-served-below-ui',
             'cold-boot',
             '(UI, by the shader compiler;',

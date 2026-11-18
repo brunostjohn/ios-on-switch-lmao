@@ -30,13 +30,11 @@ void LibraryCache::ended()
 
 void LibraryCache::release(uint64_t generation)
 {
-    std::map<std::string, id<MTLLibrary>> system;
     std::map<gm20b::Digest, id<MTLLibrary>> data;
     {
         std::lock_guard<std::mutex> l(lock_);
         if (running_ || generation != generation_)
             return;
-        system.swap(system_);
         data.swap(data_);
         dataOrder_.clear();
     }
@@ -61,7 +59,7 @@ id<MTLLibrary> LibraryCache::library(const gm20b::RequestLibrary &l, std::string
     id<MTLLibrary> made = nil;
     GM20BOfflineDevice *device = [GM20BOfflineDevice new];
     if (l.system) {
-        made = [device newLibraryWithURL:[NSURL fileURLWithPath:@(real.c_str())] error:&error];
+        made = [device newSealedLibraryWithURL:[NSURL fileURLWithPath:@(real.c_str())] error:&error];
     } else {
         dispatch_data_t bytes =
             dispatch_data_create(l.bytes.data(), l.bytes.size(), nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
