@@ -32,6 +32,7 @@ constexpr uint32_t kPllEnable = 1u << 30, kPllLock = 1u << 27, kPllIddq = 1u << 
 constexpr uint32_t kPllDp270 = (3u << 19) | (28u << 8) | 1u;  // P = 4 (qlin code 3), N = 28, M = 1
 constexpr uint32_t kPllDp270B01 = (5u << 19) | (42u << 8) | 1u;
 constexpr uint32_t kPadAux = (2u << 12) | (4u << 8) | (0x30u << 2) | (1u << 1);
+constexpr uint32_t kPadAuxB01 = (2u << 12) | (3u << 8) | (0x28u << 2) | (1u << 1);
 constexpr uint32_t kAllInterrupts = SWITCH_DPAUX_INTR_AUX_DONE | SWITCH_DPAUX_INTR_IRQ_EVENT |
                                     SWITCH_DPAUX_INTR_UNPLUG_EVENT | SWITCH_DPAUX_INTR_PLUG_EVENT;
 }  // namespace
@@ -74,7 +75,18 @@ bool TegraDpaux1::startPllDp(char *why, size_t size)
 
 void TegraDpaux1::setDownspread(bool enabled)
 {
-    switch_car_write(PLLDP_SS_CFG, (1u << 31) | (enabled ? 1u << 30 : 0));
+    const uint32_t target = (1u << 31) | (enabled ? (1u << 30) : 0u);
+    if (switch_car_read(PLLDP_SS_CFG) == target)
+        return;
+    switch_car_rmw(PLLDP_BASE, kPllEnable, 0);
+    IODelay(1);
+    switch_car_write(PLLDP_SS_CFG, target);
+    IODelay(1);
+    switch_car_rmw(PLLDP_BASE, 0, kPllEnable);
+    if (!switch_car_wait(PLLDP_BASE, kPllLock, kPllLock, 300)) {
+        IOLog("SwitchDisplayPort: PLL_DP did not relock after downspread %s (base %#x)\n",
+              enabled ? "enable" : "disable", switch_car_read(PLLDP_BASE));
+    }
 }
 
 bool TegraDpaux1::powerUp(char *why, size_t size)
@@ -96,7 +108,7 @@ bool TegraDpaux1::powerUp(char *why, size_t size)
     switch_car_reset_deassert(kClockDpaux1);
     IOSleep(1);
     switch_mmio_rmw32(pinmux, kPinmuxHpd, kPinmuxClear, kPinmuxSet);
-    write(SWITCH_DPAUX_HYBRID_PADCTL, kPadAux);
+    write(SWITCH_DPAUX_HYBRID_PADCTL, switch_car_soc_t210b01() ? kPadAuxB01 : kPadAux);
     write(SWITCH_DPAUX_HYBRID_SPARE, read(SWITCH_DPAUX_HYBRID_SPARE) & ~1u);
     write(SWITCH_DPAUX_INTR_AUX, kAllInterrupts);
     write(SWITCH_DPAUX_INTR_EN_AUX, kAllInterrupts);

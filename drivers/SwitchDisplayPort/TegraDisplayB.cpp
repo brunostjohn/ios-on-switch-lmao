@@ -23,8 +23,9 @@
 namespace {
 constexpr uint64_t kDisplayBPA = 0x54240000;
 constexpr unsigned kClockDisp2 = 26, kPartitionDisb = 19;
-constexpr uint32_t kMcHotResetControl = 0x200, kMcHotResetDcb = 1u << 3;
+constexpr uint32_t kMcHotResetControl = 0x200, kMcHotResetStatus = 0x204, kMcHotResetDcb = 1u << 3;
 constexpr uint32_t kLvl2ClockGateOverrideA = 0xf8, kOverrideDisb = 1u << 2;
+constexpr uint32_t kStateAccessReadActive = 1u << 0, kStateAccessWriteActive = 1u << 2;
 
 enum : uint32_t {
     DC_CMD_DISPLAY_COMMAND_OPTION0 = 0x031,
@@ -184,8 +185,14 @@ void TegraDisplayB::setMode(const struct switch_dp_mode &mode)
 
 void TegraDisplayB::enableSor(bool on)
 {
-    write(DC_DISP_DISP_WIN_OPTIONS, on ? kSor1Enable : 0);
-    commit(kGeneralActReq);
+    if (on) {
+        write(DC_DISP_DISP_WIN_OPTIONS, kSor1Enable);
+        commit(kGeneralActReq);
+        return;
+    }
+    write(DC_CMD_STATE_ACCESS, kStateAccessReadActive | kStateAccessWriteActive);
+    write(DC_DISP_DISP_WIN_OPTIONS, 0);
+    write(DC_CMD_STATE_ACCESS, kStateAccessReadActive);
 }
 
 bool TegraDisplayB::scanout(uint32_t iova, uint32_t rowBytes, uint32_t surfaceKind)
@@ -269,13 +276,31 @@ void TegraDisplayB::powerDown()
         return;
     }
     write(DC_CMD_INT_ENABLE, 0);
+    frameInterruptEnabled = false;
+    windowEnabled = false;
     write(DC_CMD_INT_MASK, 0);
+    write(DC_CMD_STATE_ACCESS, kStateAccessReadActive | kStateAccessWriteActive);
+    write(DC_DISP_DISP_WIN_OPTIONS, 0);
     write(DC_CMD_DISPLAY_COMMAND, 0);
     write(DC_CMD_DISPLAY_POWER_CONTROL, 0);
-    commit(kGeneralActReq);
+    write(DC_CMD_STATE_ACCESS, kStateAccessReadActive);
 #if DEVELOPMENT || DEBUG
     IOLog("SwitchDisplayPort: DCB window A UFLOW_STATUS %#x at stop\n", read(DC_WINBUF_AD_UFLOW_STATUS));
 #endif
+    tegra_mc_hot_reset(kMcHotResetControl, kMcHotResetDcb, true);
+    uint32_t settled = 0;
+    for (uint32_t i = 0; i < 1000 && settled < 5; ++i) {
+        if (!(tegra_smmu_read(kMcHotResetControl) & kMcHotResetDcb)) {
+            IOLog("SwitchDisplayPort: DCB MC hot reset request cleared during flush\n");
+            break;
+        }
+        settled = (tegra_smmu_read(kMcHotResetStatus) & kMcHotResetDcb) ? settled + 1 : 0;
+        if (settled < 5)
+            IODelay(10);
+    }
+    if (settled < 5)
+        IOLog("SwitchDisplayPort: DCB MC hot reset flush timed out (STATUS %#x)\n",
+              tegra_smmu_read(kMcHotResetStatus));
     switch_car_reset_assert(kClockDisp2);
     releaseBandwidth();
     switch_car_clock_disable(kClockDisp2);

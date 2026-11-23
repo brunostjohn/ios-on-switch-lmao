@@ -36,6 +36,7 @@ host_test(
     name = "smmu_attachments_test",
     srcs = [
         "smmu_attachments_test.cpp",
+        "//drivers/TegraSMMU:TegraSMMU.h",
         "//drivers/TegraSMMU:TegraSMMUAttachments.h",
     ],
 )

@@ -205,7 +205,7 @@ void SwitchDisplayPort::applyTraining()
     switch (trainOut.act) {
     case SWITCH_DP_TRAIN_DRIVE:
         sor.drive(train, trainOut);
-        auxNative(SWITCH_DP_AUX_NATIVE_WRITE, SWITCH_DPCD_TRAINING_PATTERN_SET, trainOut.dpcd, trainOut.dpcd_len,
+        auxNative(SWITCH_DP_AUX_NATIVE_WRITE, trainOut.dpcd_addr, trainOut.dpcd, trainOut.dpcd_len,
                   Next::TrainingSet);
         break;
     case SWITCH_DP_TRAIN_DONE:

@@ -185,10 +185,14 @@ struct Sink {
 
     void write(const switch_dp_train_out &out)
     {
-        pattern = out.dpcd[0] & 3;
-        for (unsigned l = 0; l + 1 < out.dpcd_len; ++l) {
-            vs[l] = out.dpcd[1 + l] & 3;
-            pe[l] = (out.dpcd[1 + l] >> 3) & 3;
+        unsigned offset = 0;
+        if (out.dpcd_addr == SWITCH_DPCD_TRAINING_PATTERN_SET) {
+            pattern = out.dpcd[0] & 3;
+            offset = 1;
+        }
+        for (unsigned l = 0; offset + l < out.dpcd_len; ++l) {
+            vs[l] = out.dpcd[offset + l] & 3;
+            pe[l] = (out.dpcd[offset + l] >> 3) & 3;
         }
     }
 
@@ -250,23 +254,38 @@ TEST(Training, PatternsAndLaneSettings)
     switch_dp_train t{};
     switch_dp_train_out out = switch_dp_train_start(&t, 2, true, 0x12, 1);
     EXPECT_EQ(out.pattern, 1);
+    EXPECT_EQ(out.dpcd_addr, SWITCH_DPCD_TRAINING_PATTERN_SET);
     EXPECT_EQ(out.dpcd[0], 0x21);
     EXPECT_EQ(out.dpcd_len, 3);
     EXPECT_EQ(out.wait_us, 4000u);
+    const uint8_t cr_retry[11] = {0x00, 0, 0, 0, 0x55, 0};  // both lanes ask swing 1 emphasis 1
+    out = switch_dp_train_status(&t, cr_retry);
+    EXPECT_EQ(out.pattern, 1);
+    EXPECT_EQ(out.dpcd_addr, SWITCH_DPCD_TRAINING_LANE0_SET);
+    EXPECT_EQ(out.dpcd_len, 2);
+    EXPECT_EQ(out.dpcd[0], 1 | (1 << 3));
+    EXPECT_EQ(out.dpcd[1], 1 | (1 << 3));
     const uint8_t cr_done[11] = {0x11, 0, 0, 0, 0x0E, 0};  // lane 0 asks swing 2 emphasis 3: clamped to 1
     out = switch_dp_train_status(&t, cr_done);
     EXPECT_EQ(out.pattern, 3);
+    EXPECT_EQ(out.dpcd_addr, SWITCH_DPCD_TRAINING_PATTERN_SET);
     EXPECT_EQ(out.dpcd[0], 0x23);
+    EXPECT_EQ(out.dpcd[1], 2 | (1 << 3) | SWITCH_DPCD_MAX_PRE_EMPHASIS_REACHED);
+    EXPECT_EQ(out.dpcd_len, 3);
     EXPECT_EQ(out.wait_us, 4000u);
     const uint8_t eq_retry[11] = {0x11, 0, 0, 0, 0xCE, 0};
     out = switch_dp_train_status(&t, eq_retry);
-    EXPECT_EQ(out.dpcd[1], 2 | (1 << 3));
-    EXPECT_EQ(out.dpcd[2], (3 << 3) | SWITCH_DPCD_MAX_PRE_EMPHASIS_REACHED);
+    EXPECT_EQ(out.dpcd_addr, SWITCH_DPCD_TRAINING_LANE0_SET);
+    EXPECT_EQ(out.dpcd_len, 2);
+    EXPECT_EQ(out.dpcd[0], 2 | (1 << 3) | SWITCH_DPCD_MAX_PRE_EMPHASIS_REACHED);
+    EXPECT_EQ(out.dpcd[1], (3 << 3) | SWITCH_DPCD_MAX_PRE_EMPHASIS_REACHED);
     switch_dp_train t2{};
     out = switch_dp_train_start(&t2, 1, false, 0x12, 0);
+    EXPECT_EQ(out.dpcd_addr, SWITCH_DPCD_TRAINING_PATTERN_SET);
     EXPECT_EQ(out.wait_us, 100u);
     const uint8_t done[6] = {0x01, 0, 0, 0, 0, 0};
     out = switch_dp_train_status(&t2, done);
+    EXPECT_EQ(out.dpcd_addr, SWITCH_DPCD_TRAINING_PATTERN_SET);
     EXPECT_EQ(out.dpcd[0], 0x22);
     EXPECT_EQ(out.wait_us, 400u);
 }
@@ -323,7 +342,10 @@ TEST(Training, RecoveredLaneAtMaxSwingAllowsOtherLanesToAdjust)
     const switch_dp_train_out out = switch_dp_train_status(&t, retry);
     EXPECT_EQ(out.act, SWITCH_DP_TRAIN_DRIVE);
     EXPECT_EQ(out.pattern, 1);
-    EXPECT_EQ(out.dpcd[2] & 3u, 2u);
+    EXPECT_EQ(out.dpcd_addr, SWITCH_DPCD_TRAINING_LANE0_SET);
+    EXPECT_EQ(out.dpcd_len, 2);
+    EXPECT_EQ(out.dpcd[0], 3 | SWITCH_DPCD_MAX_SWING_REACHED | SWITCH_DPCD_MAX_PRE_EMPHASIS_REACHED);
+    EXPECT_EQ(out.dpcd[1] & 3u, 2u);
     const uint8_t recovered[6] = {0x11, 0, 0, 0, 0, 0};
     EXPECT_EQ(switch_dp_train_status(&t, recovered).pattern, 2);
 }
