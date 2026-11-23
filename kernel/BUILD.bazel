@@ -81,11 +81,6 @@ config_setting(
 )
 
 config_setting(
-    name = "kprof_on",
-    flag_values = {":kprof": "true"},
-)
-
-config_setting(
     name = "vm_page_16k",
     flag_values = {":vm_page_size": "16k"},
 )

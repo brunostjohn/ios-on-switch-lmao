@@ -41,6 +41,8 @@
 #                            only when taken; a hang taking a queued tail; the gap, the slots, the status line's cost
 #   xnu_recorder_hooks_source_test  every source in kernel/switch and both trees' bsd and osfmk that names
 #                            SWITCH_RECORDER is in objects.bzl's _RECORDER_OBJECTS, and every listed one names it
+#   xnu_kprof_role_test      kernel/switch/include/switch/kprof_role.h: main-thread vs worker user-sample bucketing,
+#                            per-CPU merge, per-role top-K selection and user/images line formatting
 #   xnu_sched_busy_test      kernel/switch/sched/busy.h: a UI main thread's stretch between two run-loop waits split into
 #                            running, blocked by kind and waiting for a core, its longest waits and its line; both trees'
 #                            thread_dispatch feed it under the thread's lock, with nothing there that locks or logs
@@ -395,6 +397,22 @@ host_test(
     srcs = [
         "recorder/recorder.h",
         "xnu_recorder_test.cpp",
+    ],
+    includes = ["."],
+)
+
+# --- kernel/switch/include/switch/kprof_role.h ----------------------------------------------------------------------------
+copy_file(
+    name = "switch_kprof_role",
+    src = "//kernel/switch:include/switch/kprof_role.h",
+    out = "switch/kprof_role.h",
+)
+
+host_test(
+    name = "xnu_kprof_role_test",
+    srcs = [
+        "switch/kprof_role.h",
+        "xnu_kprof_role_test.cpp",
     ],
     includes = ["."],
 )
