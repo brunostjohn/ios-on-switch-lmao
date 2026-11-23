@@ -16,6 +16,8 @@ from tools.perf.windows import Window
 
 POWER = re.compile(r'^SwitchPower: (?P<ms>\d+) ms: ')
 CORE_BUSY = re.compile(r'cpu\d c7 [\d.]+% \([^)]*\) wfi [\d.]+% busy (?P<busy>[\d.]+)%')
+EMC = re.compile(r'EMC \d+ moves (?P<rates>(?:\d+:[\d.]+% ?)+)')
+EMC_RATE = re.compile(r'(?P<mhz>\d+):(?P<share>[\d.]+)%')
 THREAD = re.compile(
     r'(?P<name>[\w.\-]+)\[(?P<pid>\d+)\] [^:;]*: (?P<runs>\d+) runs (?P<p50>\d+)/(?P<p99>\d+)/(?P<max>\d+) us'
 )
@@ -27,6 +29,7 @@ class Busy:
     end: datetime
     ms: int
     cores: float
+    emc: dict[int, float]  # the memory clock's residency in the window: MHz: share
 
 
 @dataclass
@@ -43,7 +46,9 @@ def busy_windows(recs: list[Rec]) -> list[Busy]:
     for r in recs:
         if r.proc == 'kernel' and (m := POWER.match(r.msg)):
             cores = sum(float(c['busy']) for c in CORE_BUSY.finditer(r.msg)) / 100
-            out.append(Busy(r.time, int(m['ms']), cores))
+            rates = EMC.search(r.msg)
+            emc = {int(e['mhz']): float(e['share']) / 100 for e in EMC_RATE.finditer(rates['rates'])} if rates else {}
+            out.append(Busy(r.time, int(m['ms']), cores, emc))
     return out
 
 
@@ -52,6 +57,18 @@ def mean_busy(window: Window, busy: list[Busy]) -> float | None:
     weights = [(b, window.overlap(b.end - timedelta(milliseconds=b.ms), b.end)) for b in busy]
     total = sum(w for _, w in weights)
     return sum(b.cores * w for b, w in weights) / total if total else None
+
+
+def mean_emc(window: Window, busy: list[Busy]) -> dict[int, float]:
+    """Return the memory clock's residency over the window (MHz: share), weighted like mean_busy."""
+    shares: dict[int, float] = {}
+    total = 0.0
+    for b in busy:
+        w = window.overlap(b.end - timedelta(milliseconds=b.ms), b.end)
+        total += w if b.emc else 0
+        for mhz, share in b.emc.items():
+            shares[mhz] = shares.get(mhz, 0.0) + share * w
+    return {mhz: s / total for mhz, s in shares.items()} if total else {}
 
 
 def tasks(recs: list[Rec]) -> list:

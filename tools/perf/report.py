@@ -1,9 +1,10 @@
 """The session report: one text, one section per question, every window's dossier, and what the lines cannot say."""
 
 from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime
 
-from tools.perf import cpu, gpu, ips, pacing, work
+from tools.perf import cpu, dumps, gpu, ips, ktrace, pacing, work
 from tools.perf.session import Session, dossier, families, lost, pacing_row, slows_in
 from tools.perf.windows import BOOTSTRAPPED, Window
 
@@ -21,6 +22,7 @@ TIMELINES = 12
 WAITED_TIMELINES = 3
 HANG_DOSSIERS = 12
 HANG_TESTS = 6
+DUMP_SLACK_S = 3600  # a dump's file is written at its trigger; a pull can come an hour later
 SLOW_WAIT_US = 10000
 FOCUS = ('pacing.', 'ui.', 'display.snapshot')
 LIMITS = (
@@ -53,6 +55,17 @@ LIMITS = (
         'off: a hang has a duration and no stack.'
     ),
 )
+
+
+@dataclass
+class Pulled:
+    """What the pull holds besides the log: crash reports, image paths the log named, recorder dumps."""
+
+    reports: list[ips.Report] = field(default_factory=list)
+    images: dict[str, str] = field(default_factory=dict)
+    spins: list[str] = field(default_factory=list)
+    dumps: list[tuple[str, str]] = field(default_factory=list)  # (ring, stackshot), oldest first
+    kcdata: str | None = None  # XNU's tools/lldbmacros/kcdata.py
 
 
 def at(t: datetime) -> str:
@@ -161,7 +174,7 @@ def work_section(s: Session) -> list[str]:
     return out
 
 
-def hang_section(s: Session, reports: list[ips.Report], images: dict[str, str], spins: list[str]) -> list[str]:
+def hang_section(s: Session, pulled: Pulled) -> list[str]:
     hangs = s.windows['hang']
     total: Counter[str] = Counter()
     for h in hangs:
@@ -188,10 +201,16 @@ def hang_section(s: Session, reports: list[ips.Report], images: dict[str, str], 
         out.append(f'{at(h.start)} {h.proc}[{h.pid}] {h.name} {h.note}; tests {", ".join(tests[:3]) or "-"}')
         out += ['    ' + line for line in dossier(s, h)]
         out.append('    its stack: none (no hang report on this device; the recorder, DESIGN.md S2, takes one)')
-    out += ['', '### Reports pulled with the archive', *ips.summary(reports, {s.boot.upper()}, images, WATCH)]
-    out += ['', '### Watchdog stackshots in the folder (every boot)', *ips.watchdogs(reports)]
+    out += [
+        '',
+        '### Reports pulled with the archive',
+        *ips.summary(pulled.reports, {s.boot.upper()}, pulled.images, WATCH),
+    ]
+    out += ['', '### Watchdog stackshots in the folder (every boot)', *ips.watchdogs(pulled.reports)]
     status = [r for r in s.recs if 'TailspinStatus' in r.msg or 'microstackshot' in r.msg or 'tailspin' in r.category]
-    out.append(f'tailspin or spindump files in the folder: {len(spins)}; what Apple logged about its own capture:')
+    out.append(
+        f'tailspin or spindump files in the folder: {len(pulled.spins)}; what Apple logged about its own capture:'
+    )
     out += [f'  {r.time:%H:%M:%S} {r.proc}: {r.msg[:160]}' for r in dedupe(status)[:8]]
     return out
 
@@ -234,14 +253,30 @@ def launch_section(s: Session) -> list[str]:
     return out
 
 
-def render(s: Session, reports: list[ips.Report], images: dict[str, str], spins: list[str]) -> str:
+def dump_section(s: Session, pulled: Pulled) -> list[str]:
+    first, last = s.recs[0].time.timestamp(), s.recs[-1].time.timestamp()
+    mine = [(r, k) for r, k in pulled.dumps if first - DUMP_SLACK_S <= ktrace.tod(r) <= last + DUMP_SLACK_S]
+    lines = [r for r in s.recs if r.msg.startswith('SwitchRecorder')]
+    out = [
+        '',
+        '## Flight recorder dumps',
+        f'{len(lines)} recorder lines in the log, {len(mine)} dumps of this boot pulled',
+    ]
+    out += [f'  {r.time:%H:%M:%S} {r.msg[:200]}' for r in lines[-8:]]
+    for ring, shot in mine:
+        out += dumps.summary(ring, shot, pulled.kcdata, pulled.images)
+    return out
+
+
+def render(s: Session, pulled: Pulled) -> str:
     out = head(s)
     out += pacing_section(s)
     out += slow_section(s)
     out += cpu_section(s)
     out += ['', '## GPU', *gpu.lines(gpu.read(s.recs))]
     out += work_section(s)
-    out += hang_section(s, reports, images, spins)
+    out += hang_section(s, pulled)
+    out += dump_section(s, pulled)
     out += launch_section(s)
     out += ['', '## What these lines cannot answer', *(f'- {x}' for x in LIMITS)]
     return '\n'.join(out) + '\n'

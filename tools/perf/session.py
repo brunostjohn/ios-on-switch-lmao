@@ -111,6 +111,9 @@ def dossier(s: Session, w: Window) -> list[str]:
     out = [pacing_row(s, w)]
     busy = cpu.mean_busy(w, s.busy)
     out.append(f'busy cores {busy:.2f} (the 10 s windows over it)' if busy is not None else 'busy cores: no line')
+    if emc := cpu.mean_emc(w, s.busy):
+        rates = sorted(emc.items(), key=lambda kv: -kv[1])
+        out.append('memory clock: ' + ', '.join(f'{mhz} MHz {100 * share:.0f}%' for mhz, share in rates if share))
     top = cpu.top_tasks(w, s.tasks)
     out.append(
         'processes: ' + ', '.join(f'{n} {v:.0f} ms/s' for n, v in top)

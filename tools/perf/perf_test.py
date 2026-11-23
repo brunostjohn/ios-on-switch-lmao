@@ -273,7 +273,7 @@ class SessionTest(unittest.TestCase):
 
     def test_the_report_has_every_section_on_lines_of_any_kind(self):
         recs = [rec(POWER, 10.0), rec(STATS, 5.016), frame(LATE_RECORD, 1.0, MACH0 + 1000)]
-        text = report.render(session.build('B', recs), [], {}, [])
+        text = report.render(session.build('B', recs), report.Pulled())
         for heading in ('## Frame pacing', '## Slow presents', '## CPU', '## GPU', '## Hangs', '## Launches'):
             self.assertIn(heading, text)
 

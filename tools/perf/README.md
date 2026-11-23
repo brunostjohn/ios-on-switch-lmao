@@ -29,9 +29,26 @@ for a server rather than recording.
 
 A cycle line means the late presents of a window keep to a timer's period, so something periodic is behind them.
 
+## Flight recorder
+
+A debug kernel built with `--//kernel:recorder` keeps the last two to three seconds of the scheduler, system calls,
+faults, disk reads, the GPU's jobs and the frame timeline in a ring, with every busy core's kernel and user stack
+sampled every 4 ms. It costs the render thread an estimated 0.04 to 0.2 ms a frame, so measure frame times on a build
+without it. Three things freeze the ring into a dump: a present six periods or more late, a busy stretch of 250 ms on
+the main thread of SpringBoard, backboardd or the front app, and Capture on the left Joy-Con or a Bluetooth controller.
+A dump stops every CPU for its stackshot and writes 16 MiB or more, so one comes at most every 10 s.
+
+A dump is `Switch-recorder-<n>.ktrace` and `.kcdata` in the crash folder, which `pull` copies, and eight are kept. The
+report names the thread that triggered it, what ran in the second before, its stacks, who woke it and the GPU jobs.
+`sysctl debug.switch_recorder` gives the ring's span and event rate, the samples taken, the triggers and the dumps.
+
 ## A session
 
-1. Boot a debug build. Let it settle for ten minutes so the post-boot work is over.
+1. Boot a debug build (with `--//kernel:recorder` to get dumps). Let it settle for ten minutes so the post-boot work
+   is over.
 2. Unplug and do the scenario. Note when you started and give that time to `report --start`. Launch each app twice,
    since the first launch after a boot is the cold one.
-3. Plug in while the Switch is still up and run `pull`. The archive holds about the last hour.
+3. Press Capture within two seconds of a hitch, since the ring holds only the seconds before the press. The press still
+   takes its screenshot.
+4. Plug in while the Switch is still up and run `pull`. The archive holds about the last hour, and the dumps the last
+   eight.

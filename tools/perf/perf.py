@@ -12,7 +12,9 @@ import tarfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from tools.perf import ips, report, session, source
+from tools.perf import dumps, ips, report, session, source
+
+KCDATA = Path(__file__).resolve().parents[2] / 'kernel/xnu-12377.121.6/tools/lldbmacros/kcdata.py'
 
 
 def pull_commands(out: Path, udid: str | None, age_s: int) -> list[list[str]]:
@@ -56,18 +58,19 @@ def archive_root(folder: Path) -> Path:
 
 def write_reports(paths: list[str], crashes: str | None, args: argparse.Namespace) -> list[str]:
     recs, images = source.read(paths, args.start, args.end)
-    reports = ips.scan(crashes)
-    spins = ips.spin_files(crashes)
+    kcdata = args.kcdata or (str(KCDATA) if KCDATA.is_file() else None)
+    pulled = report.Pulled(ips.scan(crashes), images, ips.spin_files(crashes), dumps.find(crashes), kcdata)
     texts = []
     for boot, boot_recs in source.by_boot(recs).items():
         if not boot or (args.boot and not boot.upper().startswith(args.boot.upper())):
             continue
-        texts.append(report.render(session.build(boot, boot_recs), reports, images, spins))
+        texts.append(report.render(session.build(boot, boot_recs), pulled))
     return texts
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument('--kcdata', help="XNU's tools/lldbmacros/kcdata.py, which reads a dump's stackshot")
     sub = parser.add_subparsers(dest='command', required=True)
     rep = sub.add_parser('report', help='report on archives already pulled')
     rep.add_argument('logs', nargs='+', help='.logarchive folders (absolute under bazel run) or ndjson files')
