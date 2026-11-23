@@ -517,6 +517,46 @@ class Rules(unittest.TestCase):
         self.assertEqual(results[0].verdict, FAIL)
         self.assertEqual(len(results[0].matches), 1)
         self.assertIn('backboardd/PBGRAXmw_TimgA3Xhf_IxrgN3Oc3mtc4nlnlnl', results[0].observed)
+        in_process = record(
+            'backboardd',
+            'SwitchMetal: in-process state the pack lacks 3ef3a99e4f382ce1 (record): '
+            'label=com.apple.coreanimation.PBGRABsovXmw_TlrpA3Xhfs_Iclr_Iclr',
+        )
+        hwtest_in_process = record(
+            'SwitchHWTest',
+            'SwitchMetal: in-process state the pack lacks 0123456789abcdef (record): '
+            'label=com.apple.coreanimation.PBGRAXm_TimgA2Xhf_Isrc',
+        )
+        results, _ = devicerun.run_checks([hwtest_in_process], covers)
+        self.assertEqual(results[0].verdict, PASS)
+        results, _ = devicerun.run_checks([in_process, hwtest_in_process], covers)
+        self.assertEqual(results[0].verdict, FAIL)
+        self.assertIn('backboardd/PBGRABsovXmw_TlrpA3Xhfs_Iclr_Iclr', results[0].observed)
+
+    def test_backboardd_must_draw_no_catch_all_across_the_boot(self):
+        rule = [c for c in checks.GROUPS['boot'] if c.name == 'boot.ca-no-catch-all']
+        self.assertEqual(len(rule), 1)
+
+        def rates(process: str, cag: int, second: int) -> dict:
+            return {
+                'timestamp': f'2026-11-23 10:00:{second:02d}.000000+0000',
+                'bootUUID': 'B00T',
+                'processImagePath': '/usr/libexec/' + process,
+                'subsystem': checks.GPU_METAL_SUBSYSTEM,
+                'category': 'plugin',
+                'messageType': 'Default',
+                'eventMessage': f'TegraGM20BMetal: {process} gm20b 5s c=120(24.0/s) pack=45/0 cag={cag} rtsync=12/345us',
+            }
+
+        hwtest = rates('SwitchHWTest', 7, 1)
+        results, _ = devicerun.run_checks([hwtest], rule)
+        self.assertEqual(results[0].verdict, NO_DATA)
+        clean = [rates('backboardd', 0, 5), rates('backboardd', 0, 10), hwtest]
+        results, _ = devicerun.run_checks(clean, rule)
+        self.assertEqual(results[0].verdict, PASS)
+        results, _ = devicerun.run_checks([*clean, rates('backboardd', 3, 15)], rule)
+        self.assertEqual(results[0].verdict, FAIL)
+        self.assertIn('max(cag) 3', results[0].observed)
 
     def test_the_setup_before_launchd_is_timed_on_boots_that_sync_nothing(self):
         rows = [c for c in checks.GROUPS['boot'] if c.name in {'boot.prefs-before-launchd', 'boot.prefs-synced'}]

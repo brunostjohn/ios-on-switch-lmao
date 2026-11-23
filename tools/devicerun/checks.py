@@ -886,21 +886,40 @@ GROUPS: dict[str, list[Check]] = {
         Check(
             'boot.pack-covers-os',
             'cold-boot',
-            ('SwitchMetal: harvest ', 'a compute state the pack lacks answered by the shader compiler'),
+            (
+                'SwitchMetal: harvest ',
+                'SwitchMetal: in-process state the pack lacks ',
+                'a compute state the pack lacks answered by the shader compiler',
+            ),
             process='!SwitchHWTest',
             subsystem=GPU_METAL_SUBSYSTEM,
             regex=(
-                r'^SwitchMetal: (?:harvest [0-9a-f]{16} 1/\d+ label='
+                r'^SwitchMetal: (?:(?:harvest [0-9a-f]{16} 1/\d+ '
+                r'|in-process state the pack lacks [0-9a-f]{16} \((?:record|refusal)\): )label='
                 r'(?:com\.apple\.coreanimation\.(?P<ca>\S+)|(?P<label>\S+))'
                 r'|a (?P<kind>compute state) the pack lacks answered by the shader compiler)'
             ),
             show=('process', 'ca', 'label', 'kind'),
-            source='drivers/TegraGM20BMetal/TegraGM20BMetalCompleteRemote.mm (debug builds)',
+            source='drivers/TegraGM20BMetal/TegraGM20BMetalComplete{,Remote}.mm (debug builds)',
             note='an OS process made a state the pack lacks: each render state by its harvest line (compiled, from '
-            "the shader compiler's store or refused), named by its Core Animation spec (ca) or other label, and each "
-            'compute state the shader compiler answered; `logharvest --check` on the pull names them and `logharvest` '
-            'adds them to the corpus; boot 1 (22 Nov), before its boot logo: 3 states (shadowed variants, 30 to 61 s '
-            'each; the last held the logo) and 45 compute states',
+            "the shader compiler's store or refused) or in-process CA line (table, disk cache or seed), named by its "
+            'Core Animation spec (ca) or other label, and each compute state the shader compiler answered; '
+            '`logharvest --check` on the pull names them and `logharvest` adds them to the corpus; boot 1 (22 Nov), '
+            'before its boot logo: 3 states (shadowed variants, 30 to 61 s each; the last held the logo) and 45 '
+            'compute states',
+        ),
+        Check(
+            'boot.ca-no-catch-all',
+            'ca-closure',
+            ' cag=',
+            'max(cag) == 0',
+            process='backboardd',
+            subsystem=GPU_METAL_SUBSYSTEM,
+            regex=r'\bgm20b \d+s c=\d+\(.*?\bcag=(?P<cag>\d+)',
+            show=('cag',),
+            source='drivers/TegraGM20BMetal/TegraGM20BMetalRates.mm (debug builds)',
+            note='backboardd draws zero Core Animation catch-all shaders across the boot on iOS 27 '
+            '(CA_DISABLE_GENERIC_SHADERS=1 in xnu-12377 kern_exec.c; 21H461 keeps the generic)',
         ),
         Check(
             'compiler.library-time',
