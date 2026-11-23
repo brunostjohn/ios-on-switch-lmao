@@ -416,4 +416,42 @@ TEST_F(FacadeHeapUse, ACommitBringsBackAPurgedHeapItReachesThroughViewsAndBuffer
     }
 }
 
+// A private heap's arena reserves a VM_PROT_NONE host range (arena.cpp). Blit fill and buffer copies over a private
+// heap buffer must not queue CPU cache cleans on that reserved range, which fault on arm64 dc cvac/civac.
+TEST_F(FacadeHeapUse, ABlitFillAndCopyOfAPrivateHeapsBufferDoesNotCleanReservedPages)
+{
+    @autoreleasepool {
+        id<MTLHeap> h = facade::heap(MTLStorageModePrivate, 0x40000);
+        ASSERT_NE(h, nil);
+        id<MTLBuffer> priv = [h newBufferWithLength:0x4000 options:MTLResourceStorageModePrivate];
+        id<MTLBuffer> shared = [facade::device() newBufferWithLength:0x4000 options:MTLResourceStorageModeShared];
+        ASSERT_NE(priv, nil);
+        ASSERT_NE(shared, nil);
+        MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                     width:16
+                                                                                    height:16
+                                                                                 mipmapped:NO];
+        d.storageMode = MTLStorageModePrivate;
+        d.usage = MTLTextureUsageShaderRead;
+        id<MTLTexture> tex = [h newTextureWithDescriptor:d];
+        ASSERT_NE(tex, nil);
+
+        id<MTLCommandBuffer> cb = [[facade::device() newCommandQueue] commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+        [blit fillBuffer:priv range:NSMakeRange(0, 0x4000) value:0x5a];
+        [blit copyFromBuffer:priv sourceOffset:0 toBuffer:shared destinationOffset:0 size:0x4000];
+        [blit copyFromBuffer:priv
+                   sourceOffset:0
+              sourceBytesPerRow:64
+            sourceBytesPerImage:1024
+                     sourceSize:MTLSizeMake(16, 16, 1)
+                      toTexture:tex
+               destinationSlice:0
+               destinationLevel:0
+              destinationOrigin:MTLOriginMake(0, 0, 0)];
+        [blit endEncoding];
+        commit(cb);
+    }
+}
+
 }  // namespace

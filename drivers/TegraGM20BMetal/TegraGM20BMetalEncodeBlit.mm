@@ -71,7 +71,7 @@ void gm20bCopyPlanes(gm20b::BlitEncoder *be, gm20b::CommandBuffer *rc, const gm2
         BufferRows rows;
         bufferRows(at, row, h, rowBytes, unit, intoTexture, rows);
         const uint64_t first = bufferRow(rows, at, row, 0);
-        if (!b.wc)
+        if (b.hostVisible && !b.wc && b.cpu)
             rc->clean(b.cpu + first, bufferRow(rows, at, row, h - 1) - first + rowBytes, !intoTexture);
         copyRows(be, b.va, rows, at, row, t, x, y, z + k, w, h, intoTexture, aspect);
     }
@@ -277,9 +277,9 @@ bool encodeBlit(SwitchMetalCommandBuffer *cb, const Cmd &c, gm20b::CommandBuffer
         useBuffer(rc, t, true);
         be->access(memoryOf(s), memoryOf(t));
         const uint64_t n = extra(cb, c.x + 1), dof = extra(cb, c.x);
-        if (!s->_raw.wc)
+        if (s->_raw.hostVisible && !s->_raw.wc && s->_raw.cpu)
             rc->clean(s->_raw.cpu + c.c, n);
-        if (!t->_raw.wc)
+        if (t->_raw.hostVisible && !t->_raw.wc && t->_raw.cpu)
             rc->clean(t->_raw.cpu + dof, n, true);
         be->copyBytes(s->_raw.va + c.c, t->_raw.va + dof, n);
         break;
@@ -289,7 +289,7 @@ bool encodeBlit(SwitchMetalCommandBuffer *cb, const Cmd &c, gm20b::CommandBuffer
         const uint64_t n = extra(cb, c.x);
         useBuffer(rc, t, true);
         be->access(nullptr, memoryOf(t));
-        if (!t->_raw.wc)
+        if (t->_raw.hostVisible && !t->_raw.wc && t->_raw.cpu)
             rc->clean(t->_raw.cpu + c.c, n, true);
         be->fillBytes(t->_raw.va + c.c, n, uint8_t(c.a));
         break;
