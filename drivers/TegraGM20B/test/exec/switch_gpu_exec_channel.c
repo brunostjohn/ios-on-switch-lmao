@@ -163,6 +163,11 @@ void switch_exec_chan_critical(struct switch_exec_chan *chan, int critical)
 	chan->tgm.critical = critical;
 }
 
+void switch_exec_chan_share_vm(struct switch_exec_chan *chan, struct switch_exec_chan *with)
+{
+	chan->tgm.vm = with->tgm.vm;
+}
+
 void switch_exec_chan_complete_stamp(struct switch_exec_chan *chan, uint32_t seqno,
 				     uint64_t start_pt, uint64_t end_pt)
 {

@@ -220,6 +220,11 @@ _Static_assert(TGM_PROF_MAX * 16 <= 0x1000,
 #define CHAN_NSTAMPS \
 	64 /* by seqno; one record = two 16-byte semaphore releases (payload, 0, PTIMER ns) */
 #define TGM_STAT_LATER (1u << 0)
+#define TGM_STAT_FOREIGN_FENCE (1u << 1)
+#define TGM_STAT_FOREIGN_PROMISE (1u << 2)
+#define TGM_STAT_FOREIGN_EVENT (1u << 3)
+#define TGM_STAT_FOREIGN_MASK \
+	(TGM_STAT_FOREIGN_FENCE | TGM_STAT_FOREIGN_PROMISE | TGM_STAT_FOREIGN_EVENT)
 
 /* What a 16-byte semaphore release writes (NV906F SEMAPHORED RELEASE_SIZE_16BYTE) */
 struct tgm_stamp {
@@ -493,6 +498,9 @@ struct stats_state {
 #if TGM_STATS
 	u32 later_kicks, later_frames, later_in_frame, later_frame_max;
 	u64 later_queue_max;
+	u32 foreign_jobs, foreign_fences, foreign_promises, foreign_events, foreign_host1x,
+		foreign_timed;
+	u64 foreign_queue_sum, foreign_queue_max;
 #endif
 	/* tgm_gpu.lock held by a channel's setup (chan_new) and teardown (chan_free): every VmBind, BoAlloc, BoImport and BoFree
 	 * of every process, the compositor's too, waits for it; nanoseconds, the sum counts them */

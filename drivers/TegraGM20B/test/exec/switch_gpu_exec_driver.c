@@ -51,6 +51,18 @@ void switch_exec_take_later_stats(struct switch_exec_later_stats *out)
 	__atomic_store_n(&tgm_stats.later_in_frame, 0, __ATOMIC_RELAXED);
 }
 
+void switch_exec_take_foreign_stats(struct switch_exec_foreign_stats *out)
+{
+	out->jobs = __atomic_exchange_n(&tgm_stats.foreign_jobs, 0, __ATOMIC_RELAXED);
+	out->fences = __atomic_exchange_n(&tgm_stats.foreign_fences, 0, __ATOMIC_RELAXED);
+	out->promises = __atomic_exchange_n(&tgm_stats.foreign_promises, 0, __ATOMIC_RELAXED);
+	out->events = __atomic_exchange_n(&tgm_stats.foreign_events, 0, __ATOMIC_RELAXED);
+	out->host1x = __atomic_exchange_n(&tgm_stats.foreign_host1x, 0, __ATOMIC_RELAXED);
+	out->timed = __atomic_exchange_n(&tgm_stats.foreign_timed, 0, __ATOMIC_RELAXED);
+	out->queue_sum = __atomic_exchange_n(&tgm_stats.foreign_queue_sum, 0, __ATOMIC_RELAXED);
+	out->queue_max = __atomic_exchange_n(&tgm_stats.foreign_queue_max, 0, __ATOMIC_RELAXED);
+}
+
 __attribute__((constructor)) static void switch_exec_device(void)
 {
 	tgm_gpu.device = &device;

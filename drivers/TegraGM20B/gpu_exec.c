@@ -81,6 +81,76 @@ static void chan_doorbell(struct tgm_chan *chan)
 }
 
 #if TGM_STATS
+static u8 chan_note_foreign(struct tgm_chan *chan,
+			    const struct switch_gpu_backing_token *dependencies,
+			    u32 dependency_count, const u32 *unsettled,
+			    const struct switch_gpu_word_wait *word_waits, u32 word_wait_count)
+{
+	const uintptr_t base = (uintptr_t)tgm_fence_pages.va;
+	const uintptr_t own = (uintptr_t)chan->fence_cpu;
+	const uintptr_t own_slot = base && own >= base && own - base < TGM_FENCE_BYTES
+					   ? (own - base) / TGM_FENCE_SLOT
+					   : ~(uintptr_t)0;
+	u8 flags = 0;
+	u32 fences = 0;
+	u32 promises = 0;
+	u32 events = 0;
+	u32 host1x = 0;
+	u32 i = 0;
+
+	if (!chan->critical || !chan->high || chan->kernel)
+		return 0;
+	for (i = 0; i < dependency_count; ++i) {
+		if (!(unsettled[i / 32] & (1u << (i % 32))))
+			continue;
+		if (dependencies[i].engine == SWITCH_GPU_ENGINE_GM20B) {
+			struct tgm_chan *source = live_by_uid(dependencies[i].queue);
+			if (source && source->vm != chan->vm) {
+				flags |= TGM_STAT_FOREIGN_FENCE;
+				fences++;
+			}
+		} else if (dependencies[i].engine == SWITCH_GPU_ENGINE_PROMISE) {
+			if (dependencies[i].queue / TGM_FENCE_SLOT != own_slot) {
+				flags |= TGM_STAT_FOREIGN_PROMISE;
+				promises++;
+			}
+		} else if (dependencies[i].engine == SWITCH_GPU_ENGINE_VIC ||
+			   dependencies[i].engine == SWITCH_GPU_ENGINE_NVDEC ||
+			   dependencies[i].engine == SWITCH_GPU_ENGINE_DISPLAY ||
+			   dependencies[i].engine == SWITCH_GPU_ENGINE_NVENC) {
+			host1x++;
+		}
+	}
+	for (i = 0; i < word_wait_count; ++i) {
+		struct tgm_chan *source =
+			word_waits[i].queue ? live_by_uid(word_waits[i].queue) : NULL;
+		if (source ? source->vm != chan->vm
+			   : (word_waits[i].pool / TGM_FENCE_SLOT) != own_slot) {
+			flags |= TGM_STAT_FOREIGN_EVENT;
+			events++;
+		}
+	}
+	if (flags)
+		__atomic_fetch_add(&tgm_stats.foreign_jobs, 1, __ATOMIC_RELAXED);
+	if (fences)
+		__atomic_fetch_add(&tgm_stats.foreign_fences, fences, __ATOMIC_RELAXED);
+	if (promises)
+		__atomic_fetch_add(&tgm_stats.foreign_promises, promises, __ATOMIC_RELAXED);
+	if (events)
+		__atomic_fetch_add(&tgm_stats.foreign_events, events, __ATOMIC_RELAXED);
+	if (host1x)
+		__atomic_fetch_add(&tgm_stats.foreign_host1x, host1x, __ATOMIC_RELAXED);
+	return flags;
+}
+
+static void chan_set_foreign(struct tgm_chan *chan, u32 first, u32 next, u8 foreign)
+{
+	u32 s = 0;
+
+	for (s = first; (s32)(next - s) >= 0; s++)
+		WRITE_ONCE(chan->stat_foreign[s % CHAN_NSTAMPS], foreign);
+}
+
 static void chan_note_later_kick(struct tgm_chan *chan, u32 first, u32 next, int later, int app)
 {
 	u32 s = 0;
@@ -226,12 +296,18 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 
 u32 tgm_chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 next)
 {
+#if TGM_STATS
+	chan_set_foreign(chan, first, next, 0);
+#endif
 	return chan_fence_job(chan, external, first, next, 0, NULL, 0, NULL);
 }
 
 u32 switch_gpu_chan_fence_sealed(struct tgm_chan *chan, int external,
 				 struct switch_gpu_backing_transaction *owned)
 {
+#if TGM_STATS
+	chan_set_foreign(chan, chan->submitted + 1, chan->submitted + 1, 0);
+#endif
 	return chan_fence_job(chan, external, chan->submitted + 1, chan->submitted + 1, 0, NULL, 0,
 			      owned);
 }
@@ -557,6 +633,9 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 	u32 bind_target = 0;
 	u64 bind_va = 0;
 	int bind = 0;
+#if TGM_STATS
+	u8 foreign = 0;
+#endif
 	int host_written = !(visibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT) ||
 			   (visibility & SWITCH_GPU_SUBMIT_HOST_WRITTEN);
 	int external = !(visibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT) ||
@@ -648,6 +727,10 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 				  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
 	PUSH_KICK(&chan->chan.push);
 	switch_gpu_chan_park_promises_locked(chan, dependencies, dependency_count, unsettled);
+#if TGM_STATS
+	foreign = chan_note_foreign(chan, dependencies, dependency_count, unsettled, word_waits,
+				    word_wait_count);
+#endif
 	if (channels)
 		mutex_unlock(&tgm_live_lock);
 	if (owned)
@@ -721,6 +804,9 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 	last = switch_gpu_job_emit(pushes, count, chan->submitted, &emitter);
 	tgm_hang_log_submit(&chan->hang, last, job.first, chan->chan.gpfifo.cur);
 
+#if TGM_STATS
+	chan_set_foreign(chan, chan->submitted + 1, last, foreign);
+#endif
 	*seqno = chan_fence_job(chan, external, chan->submitted + 1, last, quiet, releases,
 				release_count, owned);
 	if (SWITCH_FRAME_TIMELINE && !chan->kernel)

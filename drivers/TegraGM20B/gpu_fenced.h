@@ -191,8 +191,18 @@ static inline void stats_fences(struct tgm_chan *chan)
 				stats_add(&tgm_stats.behind_sum, &tgm_stats.behind_max, queue);
 			}
 #if TGM_STATS
-			if (READ_ONCE(chan->stat_foreign[i]) & TGM_STAT_LATER)
-				stats_max(&tgm_stats.later_queue_max, queue);
+			{
+				const u8 foreign = READ_ONCE(chan->stat_foreign[i]);
+
+				if (foreign & TGM_STAT_LATER)
+					stats_max(&tgm_stats.later_queue_max, queue);
+				if (foreign & TGM_STAT_FOREIGN_MASK) {
+					__atomic_fetch_add(&tgm_stats.foreign_timed, 1,
+							   __ATOMIC_RELAXED);
+					stats_add(&tgm_stats.foreign_queue_sum,
+						  &tgm_stats.foreign_queue_max, queue);
+				}
+			}
 #endif
 		}
 	}

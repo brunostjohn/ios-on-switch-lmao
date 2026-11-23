@@ -230,6 +230,12 @@ void tgm_stats_tick(void)
 	u32 later_kicks = 0;
 	u32 later_frames = 0;
 	u32 later_frame_max = 0;
+	u32 foreign_jobs = 0;
+	u32 foreign_fences = 0;
+	u32 foreign_promises = 0;
+	u32 foreign_events = 0;
+	u32 foreign_host1x = 0;
+	u32 foreign_timed = 0;
 	u32 lnew = 0;
 	u32 lfree = 0;
 	u64 abytes = 0;
@@ -245,6 +251,8 @@ void tgm_stats_tick(void)
 	u64 bs = 0;
 	u64 bm = 0;
 	u64 later_queue_max = 0;
+	u64 foreign_qs = 0;
+	u64 foreign_qm = 0;
 	u64 lns = 0;
 	u64 lnm = 0;
 	u64 lfs = 0;
@@ -306,6 +314,14 @@ void tgm_stats_tick(void)
 	later_frame_max = __atomic_exchange_n(&tgm_stats.later_frame_max, 0, __ATOMIC_RELAXED);
 	later_queue_max = __atomic_exchange_n(&tgm_stats.later_queue_max, 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&tgm_stats.later_in_frame, 0, __ATOMIC_RELAXED);
+	foreign_jobs = __atomic_exchange_n(&tgm_stats.foreign_jobs, 0, __ATOMIC_RELAXED);
+	foreign_fences = __atomic_exchange_n(&tgm_stats.foreign_fences, 0, __ATOMIC_RELAXED);
+	foreign_promises = __atomic_exchange_n(&tgm_stats.foreign_promises, 0, __ATOMIC_RELAXED);
+	foreign_events = __atomic_exchange_n(&tgm_stats.foreign_events, 0, __ATOMIC_RELAXED);
+	foreign_host1x = __atomic_exchange_n(&tgm_stats.foreign_host1x, 0, __ATOMIC_RELAXED);
+	foreign_timed = __atomic_exchange_n(&tgm_stats.foreign_timed, 0, __ATOMIC_RELAXED);
+	foreign_qs = __atomic_exchange_n(&tgm_stats.foreign_queue_sum, 0, __ATOMIC_RELAXED);
+	foreign_qm = __atomic_exchange_n(&tgm_stats.foreign_queue_max, 0, __ATOMIC_RELAXED);
 	tgm_sched_stats(sched, sizeof(sched));
 	tgm_recover_stats(recov, sizeof(recov));
 	lnew = __atomic_exchange_n(&tgm_stats.lock_new, 0, __ATOMIC_RELAXED);
@@ -349,6 +365,14 @@ void tgm_stats_tick(void)
 			    "%u, queue max %llu us",
 			    later_kicks, later_frames, later_frame_max,
 			    PT_NS(later_queue_max) / 1000);
+	if (comp || foreign_jobs || foreign_host1x || foreign_timed)
+		nvxnu_stats("tegra-gm20b: %u compositor jobs waited on foreign work (%u fences, "
+			    "%u promises, %u events; %u host1x waits), queue mean %llu us max "
+			    "%llu us (%u)",
+			    foreign_jobs, foreign_fences, foreign_promises, foreign_events,
+			    foreign_host1x,
+			    foreign_timed ? PT_NS(foreign_qs) / foreign_timed / 1000 : 0,
+			    PT_NS(foreign_qm) / 1000, foreign_timed);
 	stats_deadline(line, sizeof(line));
 	tgm_acquire_probe_window(line, sizeof(line), now);
 	if (line[0])
