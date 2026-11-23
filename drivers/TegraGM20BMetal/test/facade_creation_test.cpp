@@ -5,6 +5,7 @@
 // of the same metallib (facade_compute.h), so the facade keys the state as on the device.
 #include "facade_compute.h"
 #include "../archive.h"
+#include "../ca_catch_all.h"
 #include "../TegraGM20BMetalCompileRequest.h"
 #include "../compile_request.h"
 #include "../render_key.h"
@@ -487,6 +488,47 @@ TEST(GM20BFacadeCreation, StandInTargetStateHonorsDeviceArchiveAndArchiveMiss)
                                                          error:&error],
                   nil);
         EXPECT_GT(kernel_model::model.compiles, 0u);
+    });
+}
+
+TEST(GM20BFacadeCreation, AnInProcessCoreAnimationMissLogsOncePerLabel)
+{
+    switch_ios::test::ExpectPassesInFreshProcess([] {
+        RefusingCompiler compiler;
+        ASSERT_TRUE(compiler.serve());
+        const auto [device, library] = opened(kernel_model::model.compilerFlags);
+        ASSERT_TRUE(library != nil);
+
+        MTLRenderPipelineDescriptor *first = unpacked(library);
+        first.label = @"com.apple.coreanimation.PBGRAXm_TimgA2Xhf_Isrc";
+        EXPECT_NE(created(device, first).find("refused"), std::string::npos);
+        EXPECT_EQ(gm20b::gInProcessCaLogged.load(std::memory_order_relaxed), 0u);
+
+        EXPECT_NE(created(device, first).find("refused"), std::string::npos);
+        EXPECT_EQ(gm20b::gInProcessCaLogged.load(std::memory_order_relaxed), 1u);
+
+        EXPECT_NE(created(device, first).find("refused"), std::string::npos);
+        EXPECT_EQ(gm20b::gInProcessCaLogged.load(std::memory_order_relaxed), 1u);
+
+        MTLRenderPipelineDescriptor *plain = unpacked(library);
+        plain.label = @"not.coreanimation";
+        EXPECT_NE(created(device, plain).find("refused"), std::string::npos);
+        EXPECT_EQ(gm20b::gInProcessCaLogged.load(std::memory_order_relaxed), 1u);
+
+        MTLRenderPipelineDescriptor *second = unpacked(library);
+        second.label = @"com.apple.coreanimation.PBGRAXmw_TimgA3Xhf_Isrc";
+        EXPECT_NE(created(device, second).find("refused"), std::string::npos);
+        EXPECT_EQ(gm20b::gInProcessCaLogged.load(std::memory_order_relaxed), 2u);
+
+        MTLRenderPipelineDescriptor *asyncDesc = unpacked(library);
+        asyncDesc.label = @"com.apple.coreanimation.PBGRAXmw_TimgA3Xhfp_Isrc";
+        dispatch_semaphore_t answered = dispatch_semaphore_create(0);
+        [device newRenderPipelineStateWithDescriptor:asyncDesc
+                                   completionHandler:^(id<MTLRenderPipelineState>, NSError *) {
+                                       dispatch_semaphore_signal(answered);
+                                   }];
+        ASSERT_EQ(dispatch_semaphore_wait(answered, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))), 0);
+        EXPECT_EQ(gm20b::gInProcessCaLogged.load(std::memory_order_relaxed), 3u);
     });
 }
 

@@ -177,6 +177,11 @@ private:
                                    const NmbDirectDispatch &dispatch, const CacheKey &k, ComputeRecord &record,
                                    std::string &why, bool &taken);
     void logRemote(const Ask &a, const CacheKey &k, RecordCache::Found found, const char *how, const Obtained &o);
+#if SWITCH_METAL_DIAGNOSTICS
+    void logInProcessCa(const Ask &a, const CacheKey &k, RecordCache::Found found);
+    gm20b::Mutex inProcessCaLock_;  // debug-only miss path: serializes once-per-label deduplication across threads
+    std::set<std::string> inProcessCaSeen_;
+#endif
 };
 
 #if SWITCH_METAL_DIAGNOSTICS

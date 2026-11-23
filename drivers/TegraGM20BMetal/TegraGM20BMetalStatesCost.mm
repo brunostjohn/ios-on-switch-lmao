@@ -5,6 +5,7 @@
 #if SWITCH_METAL_DIAGNOSTICS
 #include <mach/mach.h>
 #include <time.h>
+#include "ca_catch_all.h"
 
 namespace {
 
@@ -120,7 +121,9 @@ void SwitchMetalCreationMeter::finish(SwitchMetalPipeline *p, MTLRenderPipelineD
     c.probeTicks = probe_ + (mach_absolute_time() - ended);
     (p && p->_packed ? gPackHits : gPackMisses).fetch_add(1, std::memory_order_relaxed);
     tLastCreation = c;
-    if (ticksUs(c.wallTicks) >= 1000)
+    const uint64_t wallUs = ticksUs(c.wallTicks);
+    gm20b::noteRenderSyncCreation(wallUs);
+    if (wallUs >= 1000)
         logCreation(c, p, d);
 }
 
