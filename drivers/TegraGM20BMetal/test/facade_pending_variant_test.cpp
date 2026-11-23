@@ -59,7 +59,9 @@ NSDictionary *pipelined(id<MTLCommandBuffer> cb)
     return ((NSDictionary * (*)(id, SEL)) objc_msgSend)((id)cb, sel_registerName("switchMetalPipelined"));
 }
 
-void aPendingVariantIsNotEncodedAhead()
+// A pass binding a variant still being made: it and the passes after it are encoded at the commit, those before it
+// ahead of it
+void aPendingVariantIsNotEncodedAhead(unsigned cubicPass)
 {
     RenderCompiler compiler;
     const std::string directory = dir() + "/pending-variant-" + std::to_string(getpid());
@@ -100,7 +102,7 @@ void aPendingVariantIsNotEncodedAhead()
             renderCommandEncoderWithDescriptor:colourPass(target, pass ? MTLLoadActionLoad : MTLLoadActionClear)];
         [encoder setRenderPipelineState:state];
         texture(encoder, 2, sampled);
-        if (!pass)
+        if (pass == cubicPass)
             sampler(encoder, 2, cubic);
         for (unsigned d = 0; d < kDraws; d++)
             [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
@@ -118,8 +120,11 @@ void aPendingVariantIsNotEncodedAhead()
     EXPECT_EQ(commands.status, MTLCommandBufferStatusCompleted) << commands.error.description.UTF8String;
     NSDictionary *p = pipelined(commands);
     ASSERT_TRUE(p != nil);
-    EXPECT_NE([p[@"veto"] unsignedIntValue] & VetoVariant, 0u) << [[p description] UTF8String];
-    EXPECT_EQ([p[@"pipelined"] intValue], 0) << [[p description] UTF8String];
+    const unsigned reasons = [p[cubicPass ? @"stopped" : @"veto"] unsignedIntValue];
+    EXPECT_NE(reasons & VetoVariant, 0u) << [[p description] UTF8String];
+    // the passes before it, as far as the worker came before the commit: a compile it waits on may hold it
+    EXPECT_GE([p[@"pipelined"] unsignedIntValue], std::min(cubicPass, 1u)) << [[p description] UTF8String];
+    EXPECT_LE([p[@"pipelined"] unsignedIntValue], cubicPass) << [[p description] UTF8String];
     ASSERT_TRUE(ready(variant));
     const uint32_t made = program(variant.value()->methods, 2);
     ASSERT_NE(made, base);
@@ -135,5 +140,14 @@ void aPendingVariantIsNotEncodedAhead()
 
 TEST(GM20BFacadePendingVariant, ABindingOfAVariantStillBeingMadeIsNotEncodedAhead)
 {
-    switch_ios::test::ExpectPassesInFreshProcess(aPendingVariantIsNotEncodedAhead);
+    switch_ios::test::ExpectPassesInFreshProcess([] {
+        aPendingVariantIsNotEncodedAhead(0);
+    });
+}
+
+TEST(GM20BFacadePendingVariant, PassesBeforeABindingOfAVariantStillBeingMadeAreEncodedAhead)
+{
+    switch_ios::test::ExpectPassesInFreshProcess([] {
+        aPendingVariantIsNotEncodedAhead(2);
+    });
 }

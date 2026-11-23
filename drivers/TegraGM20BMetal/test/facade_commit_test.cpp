@@ -409,7 +409,9 @@ TEST(GM20BFacadeCommit, AnotherQueuesSubmissionTakesTheDeviceBack)
     EXPECT_EQ([p[@"pipelined"] intValue], 0);
 }
 
-TEST(GM20BFacadeCommit, ACommandBufferWithAComputeEncoderIsEncodedAtTheCommit)
+// A compute encoder after pass 12 of 15, which an encode ahead does not take: the encoders before it are encoded ahead
+// (they go to the GPU at the commit's turn as a range of their own), the compute encoder and the rest at the commit
+TEST(GM20BFacadeCommit, EncodersBeforeAComputeEncoderAreEncodedAhead)
 {
     ASSERT_TRUE(opened().device != nil);
     id<MTLCommandQueue> queue = [opened().device newCommandQueue];
@@ -422,12 +424,18 @@ TEST(GM20BFacadeCommit, ACommandBufferWithAComputeEncoderIsEncodedAtTheCommit)
             [[cb computeCommandEncoder] endEncoding];
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    EXPECT_EQ(scale_frames::waitAhead(cb), 0u);
     [cb commit];
     [cb waitUntilCompleted];
     ASSERT_EQ(cb.status, MTLCommandBufferStatusCompleted);
     NSDictionary *p = pipelined(cb);
     ASSERT_NE(p, nil);
-    EXPECT_EQ([p[@"pipelined"] intValue], 0) << [[p description] UTF8String];
+    EXPECT_EQ([p[@"encoders"] intValue], 16);
+    EXPECT_GE([p[@"pipelined"] intValue], 9) << [[p description] UTF8String];
+    EXPECT_LE([p[@"pipelined"] intValue], 12) << [[p description] UTF8String];
+    EXPECT_NE([p[@"stopped"] unsignedIntValue] & VetoOps, 0u) << [[p description] UTF8String];
+    EXPECT_EQ([p[@"veto"] intValue], 0);
+    EXPECT_EQ([p[@"abandons"] intValue], 0);
 }
 
 struct Latency {

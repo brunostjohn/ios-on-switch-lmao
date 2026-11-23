@@ -179,11 +179,11 @@ bool gm20bBindTexture(__unsafe_unretained SwitchMetalRenderEncoder *e, int stage
         e->_tex[stage - 1][index] = x;
     }
     if (x && (x->_raw.sampled || gm20b::xrPlanesPooled(x->_raw) || x->_raw.texelRows)) {
-        gm20bPipelineVeto(e->_cb, VetoShadows);
+        gm20bPipelineStop(e->_cb, VetoShadows);
         e->_cb->_sampledShadows = true;
     }
     if (x && x->_raw.standIn) {
-        gm20bPipelineVeto(e->_cb, VetoShadows);
+        gm20bPipelineStop(e->_cb, VetoShadows);
         e->_cb->_standIns = true;
     }
     if (x && x->_raw.xrPlanes)

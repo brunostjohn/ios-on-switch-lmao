@@ -35,6 +35,13 @@ void gm20bPipelineFailed(SwitchMetalCommandBuffer *cb);
 // The worker's, in encodeRaw: the encode ahead of `cb`'s range from `from` taken over by the commit's encode (resumed);
 // false: none, or it is no longer good (abandoned)
 bool gm20bPipelineTake(SwitchMetalCommandBuffer *cb, size_t from);
+// The worker's, in encodeRaw: a taken encode ahead that did not seal (clears its pipelined count; non-zero `veto` counts
+// the abandon before whole-range fallback)
+void gm20bPipelineAbandoned(SwitchMetalCommandBuffer *cb, uint32_t veto);
+// The worker's, at the commit's turn before it prepares `cb`'s next range: a range the encode ahead of `cb` covers
+// only in part split where the encode ahead stopped or reached between two encoders, so what was encoded ahead goes to
+// the GPU at once and the rest is encoded whole after it
+void gm20bPipelineSplit(SwitchMetalCommandBuffer *cb);
 // The worker's, once a raw range of `cb` ending at `to` was submitted: its counts of encoders encoded ahead
 void gm20bPipelineSealed(SwitchMetalCommandBuffer *cb, size_t to);
 // The worker's, when the device goes idle: an encode ahead whose command buffer no one else holds (it can never be

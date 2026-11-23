@@ -112,7 +112,7 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
         _commandLog->push_back(s);
     }
     if (cmd.op == OpPipeline && bindsPendingVariant(cmd))
-        gm20bPipelineVeto(self, VetoVariant);
+        gm20bPipelineStop(self, VetoVariant);
     if (cmd.op == OpCompute)
         _predicates.computeEncoder(cmd.a);
     else if (cmd.op == OpRender || cmd.op == OpBlit || cmd.op == OpSignalEvent || cmd.op == OpWaitEvent)
@@ -574,14 +574,18 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // Host tests' wait for the submit worker, before its commit: returns once the worker encoded ahead everything it
-// published so far, or gave it back (answering the reasons given back, 0 where none), once it was handed the command
-// buffer. A publish too small to hand it over again (TegraGM20BMetalPipeline.mm kHandOff) and a recorded veto wake no
-// worker asleep, so the wait wakes it: the semaphore keeps the wake for a worker about to sleep.
+// published so far up to where it stopped, or gave it back (answering the reasons given back, 0 where none), once it
+// was handed the command buffer. A publish too small to hand it over again (TegraGM20BMetalPipeline.mm kHandOff) and a
+// recorded veto wake no worker asleep, so the wait wakes it: the semaphore keeps the wake for a worker about to sleep.
 - (NSNumber *)switchMetalWaitAhead
 {
     const auto done = [&] {
-        return _pipelineDeclined.load(std::memory_order_acquire) ||
-               _aheadAt.load(std::memory_order_acquire) >= size_t(_published.load(std::memory_order_acquire) >> 32);
+        size_t until = size_t(_published.load(std::memory_order_acquire) >> 32);
+        if (const size_t stop = _aheadStop.load(std::memory_order_acquire))
+            until = std::min(until, stop);
+        if (const size_t halt = _aheadHalt.load(std::memory_order_acquire))
+            until = std::min(until, halt);
+        return _pipelineDeclined.load(std::memory_order_acquire) || _aheadAt.load(std::memory_order_acquire) >= until;
     };
     gRM->schedule.wake();
     waitFor(self, done);
@@ -603,6 +607,7 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
         @"pipelined" : @(_pipelinedEncoders),
         @"abandons" : @(_pipelineAbandons),
         @"veto" : @(_pipelineVeto.load(std::memory_order_relaxed)),
+        @"stopped" : @(_aheadStopped.load(std::memory_order_relaxed)),
         @"given_back" : @(_pipelineGivenBack),
     } mutableCopy];
 #if SWITCH_METAL_DIAGNOSTICS

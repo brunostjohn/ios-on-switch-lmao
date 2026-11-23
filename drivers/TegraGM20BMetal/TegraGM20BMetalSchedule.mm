@@ -398,6 +398,7 @@ void submitLoop()
                 error = failed();
             }
             if (!error && !blocked && cb->_segNext < cb->_segs.size()) {
+                gm20bPipelineSplit(cb);
                 SwitchMetalSegment &range = cb->_segs[cb->_segNext];
                 cb->_plan.prepareRange(range.from, range.to);
                 // the completion's _loopContinue is written before its range's completed() releases the count

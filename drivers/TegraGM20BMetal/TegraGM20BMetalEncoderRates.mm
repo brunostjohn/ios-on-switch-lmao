@@ -75,13 +75,25 @@ void gm20bNoteFinished(SwitchMetalCommandBuffer *cb)
     // the last two encoders are encoded at the commit by design (gm20bPublishEncoder)
     if (encoders - std::min(encoders, cb->_pipelinedEncoders) <= 2)
         c.ahead.fetch_add(1, std::memory_order_relaxed);
-    for (uint32_t bits = cb->_pipelineVeto.load(std::memory_order_relaxed) | cb->_pipelineGivenBack; bits;
-         bits &= bits - 1)
+    for (uint32_t bits = cb->_pipelineVeto.load(std::memory_order_relaxed) | cb->_pipelineGivenBack |
+                         cb->_aheadStopped.load(std::memory_order_relaxed);
+         bits; bits &= bits - 1)
         c.vetoes[__builtin_ctz(bits)].fetch_add(1, std::memory_order_relaxed);
     const auto lost = cb->_handedOnce ? gm20b::AheadLost(cb->_scheduleNotes.aheadLost.load(std::memory_order_relaxed))
                                       : gm20b::AheadLost::Short;
     if (lost != gm20b::AheadLost::None)
         c.lost[size_t(lost)].fetch_add(1, std::memory_order_relaxed);
+    if (cb->_kickedTicks > cb->_committedTicks && cb->_committedTicks) {
+        static mach_timebase_info_data_t tb;
+        if (!tb.denom)
+            mach_timebase_info(&tb);
+        const uint64_t us = (cb->_kickedTicks - cb->_committedTicks) * tb.numer / tb.denom / 1000;
+        c.kicks.fetch_add(1, std::memory_order_relaxed);
+        c.kickUs.fetch_add(us, std::memory_order_relaxed);
+        uint64_t longest = c.kickMaxUs.load(std::memory_order_relaxed);
+        while (us > longest && !c.kickMaxUs.compare_exchange_weak(longest, us, std::memory_order_relaxed)) {
+        }
+    }
 }
 
 void gm20bNoteScheduledWait(SwitchMetalCommandBuffer *cb, uint64_t fromUs, uint64_t toUs)
@@ -138,6 +150,9 @@ size_t metal_frame_rates(char *out, size_t size)
     static uint64_t lastPipelined, lastSealed;
     const uint64_t pipelined = gRM->stats.pipelinedEncoders.load(std::memory_order_relaxed),
                    sealed = gRM->stats.sealedEncoders.load(std::memory_order_relaxed);
+    const uint64_t kicks = take(c.kicks), kickUs = take(c.kickUs);
+    put(line, " split=%llu kick=%llu/%lluus", (unsigned long long)take(c.splits),
+        (unsigned long long)(kicks ? kickUs / kicks : 0), (unsigned long long)take(c.kickMaxUs));
     put(line, " ahead=%llu/%llu enc=%llu/%llu why=", (unsigned long long)take(c.ahead), (unsigned long long)buffers,
         (unsigned long long)(pipelined - lastPipelined), (unsigned long long)(sealed - lastSealed));
     lastPipelined = pipelined;

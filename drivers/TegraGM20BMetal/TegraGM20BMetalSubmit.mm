@@ -153,6 +153,8 @@ void planSegments(SwitchMetalCommandBuffer *cb)
             return;
         }
     }
+    // with room for the split at the encode ahead's end (gm20bPipelineSplit), which the worker makes without allocating
+    cb->_segs.reserve(plan.ranges().size() + 2);
     // the ranges are prepared by the submit worker at their turn (submitLoop), which owns the plan from the commit on
     for (const auto &range : plan.ranges()) {
         const bool native = range.kind == gm20b::ExecutionKind::native;
@@ -327,6 +329,10 @@ bool submitRange(SwitchMetalCommandBuffer *cb, bool followed)
             return failSubmission(cb, stoppedWithoutError(why));
         }
         SWITCH_METAL_DIAGNOSTIC(r.stats.raw++);
+#if SWITCH_METAL_DIAGNOSTICS
+        if (!cb->_kickedTicks)
+            cb->_kickedTicks = mach_absolute_time();
+#endif
         {
             SWITCH_METAL_ENCODE_SPAN(Retire);
             // Core Animation's waitUntilScheduled returns before the retirement's bookkeeping: a waitUntilCompleted that
