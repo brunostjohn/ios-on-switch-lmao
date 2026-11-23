@@ -288,7 +288,7 @@ static gm20b::Variant<gm20b::Pipeline> *preparedVariant(__unsafe_unretained Swit
         }
     }
     if (gm20b::anySlot(standIns[0]) || gm20b::anySlot(standIns[1]))
-        gm20bPipelineVeto(_cb, VetoShadows);
+        gm20bPipelineStop(_cb, VetoShadows);
     for (uint32_t stage = 0; stage < 2; stage++)
         gm20b::forEachSlot(standIns[stage], [&](uint32_t slot) {
             _cb->_xrStandIns.insert(_tex[stage][slot]);
