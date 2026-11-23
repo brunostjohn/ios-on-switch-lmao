@@ -393,11 +393,14 @@ def place_graphics(
         return
     pr = programs[pid]
     storage_id = pr.get('storage_id', pid)
-    shared = next((p for p in prog_recs if p.get('storage_id') == storage_id), None)
-    if shared:
+    # The first record of each storage id, under a key no program id takes (prog_index is only looked up by key):
+    # one probe where a scan of every record placed made the link quadratic in programs
+    shared = prog_index.get(('storage', storage_id))
+    if shared is not None:
         prog_index[pid] = len(prog_recs)
-        prog_recs.append(dict(shared, id=pid))
+        prog_recs.append(dict(prog_recs[shared], id=pid))
         return
+    prog_index['storage', storage_id] = len(prog_recs)
     off = len(heap)
     slot = bytearray(0x80 - 0x50) + pr['image'][:80]
     slot += pr['image'][80:]

@@ -397,12 +397,12 @@ def lay_out_programs(
     simple: list[dict], programs: dict[str, dict], report: list[str]
 ) -> tuple[bytearray, dict[str, int], list[dict]]:
     # programs used, heap layout
-    used = []
+    used: dict[str, None] = {}  # in first-use order; a list's membership test made this quadratic in states
     for p in simple:
         for st in (1, 5):
             pid = p['records'][0]['prog'][st][0] if st in p['records'][0]['prog'] else None
-            if pid is not None and pid not in used:
-                used.append(pid)
+            if pid is not None:
+                used.setdefault(pid)
     heap, prog_index, prog_recs = bytearray(), {}, []
     for pid in used:
         packfile.place_graphics(pid, programs, heap, prog_index, prog_recs)

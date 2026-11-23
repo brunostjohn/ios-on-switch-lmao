@@ -12,9 +12,12 @@ it: context_state.cpp; the inventory gives the binary archives' declared states,
 writes <out dir>/pack.bin, pack.json, layouts.txt, programs.bin (every render program, for nvdec) and report.txt
 """
 
+import functools
+import hashlib
 import os
 import struct
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'iterated'))
@@ -26,6 +29,7 @@ import packfile
 import splits
 
 PIPELINE = struct.Struct('<QIIIIIBBBBHHI')
+PROGRAM_IDS: dict[bytes, str] = {}  # program_id's: a 16-byte BLAKE2b of the named bytes -> their FNV-1a in hex
 # SET_PIPELINE_PROGRAM(vertex B, pixel): where each program sits in the shader heap, which the probe saw differ by state
 PROGRAM_OFFSETS = (0x2044, 0x2144)
 PIPELINE_BYTES = (
@@ -100,6 +104,7 @@ def load_records(path: str) -> tuple[list[dict], list[dict], dict[tuple[bool, in
     return read_records(path)[:3]
 
 
+@functools.cache  # each bucket's records.bin is parsed once: gather, the kernels and main's reflections share it
 def read_records(
     path: str,
 ) -> tuple[list[dict], list[dict], dict[tuple[bool, int], bytes], list[tuple[int, int]]]:
@@ -180,7 +185,13 @@ def program_id(program: dict) -> str:
     """
     far = struct.pack(f'<{len(program.get("far_ubos", []))}H', *program.get('far_ubos', []))
     named = program['image'] + program['data'] + bytes(program['cbufs']) + program.get('identity', b'') + far
-    return f'{packfile.fnv(named):x}'
+    # A program comes here once per state, variant and split that uses it (over a million times a pack): its FNV-1a, a
+    # Python loop over every byte, is made once and found again by a C digest of the same bytes
+    digest = hashlib.blake2b(named, digest_size=16).digest()
+    known = PROGRAM_IDS.get(digest)
+    if known is None:
+        known = PROGRAM_IDS[digest] = f'{packfile.fnv(named):x}'
+    return known
 
 
 def entries_of(
@@ -546,27 +557,45 @@ def read_option(buckets: list[str], name: str) -> str | None:
 
 def main() -> None:
     out_dir, *buckets = sys.argv[1:]
+    # Each step's seconds, printed (not in report.txt, which must not differ between two links of the same buckets)
+    phases: dict[str, float] = {}
+    since = [time.monotonic()]
+
+    def phase(name: str) -> None:
+        now = time.monotonic()
+        phases[name] = now - since[0]
+        since[0] = now
+
     inventory = read_option(buckets, '--archives') or ''
     warm = next(d for d in buckets if os.path.exists(os.path.join(d, 'context.log')))
     _, post = mkpack.load_init(os.path.join(warm, 'context.log'))
     states, refused = gather(buckets, draw_context(post[0]))
+    phase('gather')
     programs = {program_id(p): p for rec in states for p in stage_programs(rec)}
     found = split_programs(states, programs)
     simple = [rec['probe'] for rec in states]
     report = [f'{len(states) + len(refused)} states made directly, {len(states)} records, {len(refused)} refused']
     report += variant_report(states)
+    phase('programs')
     varying, baseline = mkpack.split_registers(simple, post)
     report.append(f'{len(varying)} per-pipeline registers: ' + ' '.join(f'{m:x}' for m in varying))
     report.append(f'{len(baseline)} baseline registers over post-init')
+    phase('registers')
     laid = mkpack.lay_out_programs(simple, programs, report)
     heap, prog_index, prog_recs = laid
+    phase('heap')
     lay_out_variants(states, programs, laid, report)
+    phase('variants')
     constexpr_tsc: list[list[int]] = []
     pipes = sorted((pipeline_of(rec, varying, prog_index, constexpr_tsc) for rec in states), key=packfile.key_hash)
+    phase('pipelines')
     pipes, iterated = fetchfree_link.attach(pipes, report)
+    phase('fetchfree')
     computes, compute_facts = compute_kernels(buckets, constexpr_tsc, laid, report)
+    phase('kernels')
     used = list(dict.fromkeys(prog_recs[rec['fs']]['id'] for rec in pipes if rec['fs'] != packfile.NO_PROGRAM))
     split = splits.lay_out(used, found, programs, laid, report)
+    phase('splits')
     init_recs = init_records(os.path.join(warm, 'context.log'))
     declared, kinds = archives.declared(inventory, archives.refused_keys(states, refused))
     held = archives.held_kernels([k['key'] for k in computes])
@@ -577,6 +606,7 @@ def main() -> None:
         for state, blob in found.items():
             reflections.setdefault(state, blob)
         lines += fast
+    phase('reflections')
     report.append(
         f'{sum(not c for c, _ in reflections)} render and {sum(c for c, _ in reflections)} compute reflections, '
         f'{len(set(reflections.values()))} distinct'
@@ -600,9 +630,12 @@ def main() -> None:
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, 'pack.bin'), 'wb') as f:
         f.write(data)
+    phase('bytes')
     packfile.write_json(os.path.join(out_dir, 'pack.json'), pack, varying)
+    phase('json')
     packfile.write_layouts(os.path.join(out_dir, 'layouts.txt'), pack)
     write_programs(os.path.join(out_dir, 'programs.bin'), programs)
+    phase('files')
     unshared = sum(len(p['blob']) * 2 for p in pipes)
     report.append(
         f'pack.bin {len(data) // 1024} KiB: {len(pipes)} pipelines, {len(computes)} kernels, '
@@ -612,7 +645,8 @@ def main() -> None:
     report += [f'  refused ({rec["why"]}): {rec["key"][:150]}' for rec in refused]
     with open(os.path.join(out_dir, 'report.txt'), 'w') as f:
         f.write('\n'.join(report) + '\n')
-    print('\n'.join(line for line in report if not line.startswith('  refused')))
+    print('\n'.join(report))  # the refused states too: a state the pack drops is named in the build's log
+    print('link seconds: ' + ', '.join(f'{name} {s:.1f}' for name, s in phases.items()))
 
 
 if __name__ == '__main__':
