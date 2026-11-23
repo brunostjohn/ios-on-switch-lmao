@@ -38,6 +38,7 @@ SWITCH_OBJECTS = {
         ("bsd/kern/ubc_subr.c", "security/bootstrap_signature.c", []),
         ("bsd/kern/kern_exec.c", "security/entitlements_factory.c", []),
         ("bsd/kern/kern_exec.c", "boot/icon_cache.c", []),
+        ("bsd/kern/kern_exec.c", "boot/icon_cache_sweep.c", [], ["12377.121.6"]),
         ("bsd/kern/kern_exit.c", "diag/exit.c", []),
         ("bsd/kern/kdebug.c", "recorder/recorder.c", []),
         ("bsd/kern/kern_event.c", "diag/workloop.c", []),
