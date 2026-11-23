@@ -130,8 +130,11 @@ bool AppleAVE2UserClient::resolveDirect(void *context, uint32_t handle, TegraNVE
 // producers are not ones NVENC's stream can wait for, else the job's error.
 int AppleAVE2UserClient::submitDirect(const TegraNVENCSubmit *submit, uint32_t *fence, const char **why)
 {
-    if (!tegra_nvenc_engine_ready())
+    if (!tegra_nvenc_engine_ready()) {
+        if (why)
+            *why = "NVENC is not ready for a direct native read";
         return -95;
+    }
     TegraNVENCDirect direct;
     int err = tegra_nvenc_direct_prepare(submit, current_task(), &direct, &direct_, why);
     if (!err) {
