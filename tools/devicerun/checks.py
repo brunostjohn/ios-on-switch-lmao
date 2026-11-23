@@ -818,8 +818,39 @@ GROUPS: dict[str, list[Check]] = {
             'SwitchBootPrefetch: ',
             REPORT,
             process=KERNEL,
-            source='drivers/NativeSwitchBlock/SwitchCryptex.cpp',
-            note='silence means the page-ins failed',
+            regex=r'^SwitchBootPrefetch: (?!\d+ MiB paged in ahead)',
+            source='kernel/switch/vm/prefetch.c',
+            note='debug kernels log list save and errors; release kernels log errors and no-list boots only '
+            '(silent on a healthy replay boot)',
+        ),
+        Check(
+            'boot.prefetch-lead',
+            'paging',
+            'SwitchBootPrefetch: ',
+            REPORT,
+            process=KERNEL,
+            regex=r'SwitchBootPrefetch: (?P<replayed>\d+) MiB paged in ahead \((?P<used>\d+) used, '
+            r'(?P<reclaimed>\d+) reclaimed unused, lead (?P<lead>\d+) of bound (?P<bound>\d+)\), '
+            r'(?P<demand>\d+) MiB of demand reads by volume \((?P<cx>\d+)/(?P<root>\d+)/(?P<data>\d+)\), '
+            r'card ms (?P<replay_ms>\d+)/(?P<demand_ms>\d+), requests > 64 KiB replay '
+            r'(?P<replay_gt64k>\d+)/(?P<replay_reqs>\d+), demand (?P<demand_gt64k>\d+)/(?P<demand_reqs>\d+)',
+            show=(
+                'replayed',
+                'used',
+                'reclaimed',
+                'lead',
+                'bound',
+                'demand',
+                'replay_ms',
+                'demand_ms',
+                'replay_gt64k',
+                'replay_reqs',
+                'demand_gt64k',
+                'demand_reqs',
+            ),
+            source='kernel/switch/vm/prefetch.c (debug kernels)',
+            note='10 s boot prefetch pacing and request-size split: used/replayed should stay near 1 and '
+            'reclaimed unused small',
         ),
         Check(
             'boot.prefs-before-launchd',
