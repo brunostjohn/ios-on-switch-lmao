@@ -46,8 +46,8 @@ struct switch_linked_group_name {
  * vertex descriptor. The linked arrays are vertexLinkedFunctions' and fragmentLinkedFunctions' functions and
  * privateFunctions, as NmbComputePipelineDescriptor's linked functions are. tessellation through
  * factor_scale_enabled are the descriptor's tessellator state, as MTLRenderPipelineDescriptor's (0: Metal's defaults),
- * max_amplification its maxVertexAmplificationCount and texture_write_rounding its textureWriteRoundingMode (Apple SPI,
- * 0 where Metal has none). */
+ * max_amplification its maxVertexAmplificationCount, texture_write_rounding its textureWriteRoundingMode (Apple SPI,
+ * 0 where Metal has none) and alpha_to_coverage its alphaToCoverageEnabled (1 on, 0 off). */
 #define NMB_RENDER_PIPELINE_DESCRIPTOR_FIELDS(Function)                                                           \
     Function *vertex, *fragment;                                                                                  \
     struct NmbColorAttachment colors[8];                                                                          \
@@ -66,7 +66,8 @@ struct switch_linked_group_name {
     uint64_t tessellation, max_tessellation_factor, partition_mode, factor_format, factor_step_function, winding, \
         control_point_index_type, factor_scale_enabled;                                                           \
     uint64_t max_amplification;                                                                                   \
-    uint64_t texture_write_rounding;
+    uint64_t texture_write_rounding;                                                                              \
+    uint64_t alpha_to_coverage;
 
 /* As NMB_RENDER_PIPELINE_DESCRIPTOR_FIELDS, a compute pipeline descriptor's. The linked arrays are MTLLinkedFunctions'
  * functions and privateFunctions, the external functions the kernel calls by name (counted arrays of live handles for

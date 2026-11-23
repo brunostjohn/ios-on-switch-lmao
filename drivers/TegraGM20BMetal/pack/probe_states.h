@@ -222,6 +222,8 @@ inline bool parseState(id<MTLLibrary> qc, const std::string &line, State &s, con
             s.tier = 1;
         } else if (h == "twr=2") {
             [d setValue:@2 forKey:@"textureWriteRoundingMode"];
+        } else if (h == "alphacov=1") {
+            d.alphaToCoverageEnabled = YES;
         } else if (h[0] == 'a' && isdigit(h[1])) {
             unsigned i, x[6] = {};
             unsigned long long stride = 0;

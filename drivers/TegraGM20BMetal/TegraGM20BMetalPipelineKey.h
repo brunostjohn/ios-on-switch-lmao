@@ -141,6 +141,7 @@ inline PipelineFields fieldsOf(MTLRenderPipelineDescriptor *d)
     f.amplification = d.maxVertexAmplificationCount;
     f.textureWriteRounding = textureWriteRoundingOf(d);
     f.patchType = d.vertexFunction.patchType;
+    f.alphaToCoverage = d.alphaToCoverageEnabled ? 1 : 0;
     f.tessellation = {d.tessellationPartitionMode,
                       d.tessellationFactorFormat,
                       d.tessellationFactorStepFunction,
@@ -180,6 +181,8 @@ inline std::string pipelineKey(const PipelineFields &f, const StageKey *vertex, 
     snprintf(head, sizeof head, "samples=%llu topo=%llu ds=%llu/%llu ", (unsigned long long)f.samples,
              (unsigned long long)f.topology, (unsigned long long)f.depthFormat, (unsigned long long)f.stencilFormat);
     std::string key = head;
+    if (f.alphaToCoverage)
+        key += "alphacov=1 ";
     for (unsigned i = 0; i < 8; i++) {
         const ColorFields &c = f.color[i];
         if (!c.format)
@@ -237,9 +240,11 @@ inline std::string pipelineKey(MTLRenderPipelineDescriptor *d, const StageKey *v
 
 // The fast key, which the pack finds a state's records by (pack.h PackFastKey): what pipelineKey's text names, hashed as
 // words with no text made. The descriptor's fields go in as pipelineKey prints them (a colour or attribute of no format,
-// the tessellator without a patch, an amplification of 1 or less, a rounding other than 2 and rasterization on all left
-// out, the dynamic stride as UINT32_MAX), each tagged so no two field lists hash alike; then each stage's stageHash, the
-// linked functions' text's and the framework's. The pack's link refuses two states of one fast key and a state of two.
+// the tessellator without a patch, an amplification of 1 or less, a rounding other than 2, alpha-to-coverage off and
+// rasterization on all left out, the dynamic stride as UINT32_MAX), each tagged so no two field lists hash alike; then
+// each stage's stageHash, the linked functions' text's and the framework's. A hit is taken on the fast key alone without
+// comparing the full key text: packed states cannot collide because the link refuses duplicates, and a state outside the
+// pack collides with odds at most (fast-key rows) / 2^64 per creation.
 inline uint64_t keyTextHash(const char *bytes, size_t length)
 {
     uint64_t h = 0xcbf29ce484222325ull;
@@ -325,6 +330,8 @@ inline uint64_t fastKey(const PipelineFields &f, uint64_t vertex, uint64_t fragm
         k.add(0x500);
     if (!f.rasterization)
         k.add(0x600);
+    if (f.alphaToCoverage)
+        k.add(0x680);
     for (const uint64_t w : {uint64_t(0x700), vertex, fragment, linked, framework})
         k.add(w);
     return k.done();
@@ -350,6 +357,7 @@ inline PipelineFields keyFieldsOf(MTLRenderPipelineDescriptor *d, uint64_t patch
     f.amplification = d.maxVertexAmplificationCount;
     f.textureWriteRounding = textureWriteRoundingOf(d);
     f.patchType = patchType;
+    f.alphaToCoverage = d.alphaToCoverageEnabled ? 1 : 0;
     if (patchType)
         f.tessellation = {d.tessellationPartitionMode,
                           d.tessellationFactorFormat,

@@ -375,6 +375,7 @@ bool renderDescriptor(MTLRenderPipelineDescriptor *d, NmbOfflineRenderPipelineDe
     }
     p.max_amplification = d.maxVertexAmplificationCount;
     p.texture_write_rounding = gm20b::textureWriteRoundingOf(d);
+    p.alpha_to_coverage = d.alphaToCoverageEnabled ? 1 : 0;
     if (MTLVertexDescriptor *v = d.vertexDescriptor)
         for (unsigned i = 0; i < 31; i++) {
             MTLVertexAttributeDescriptor *a = v.attributes[i];

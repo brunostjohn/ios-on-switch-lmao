@@ -99,6 +99,8 @@ inline uint64_t fastKeyOfText(const std::string &key)
             f.amplification = x[0];
         else if (!strcmp(field, "twr=2"))
             f.textureWriteRounding = 2;
+        else if (!strcmp(field, "alphacov=1"))
+            f.alphaToCoverage = 1;
         else if (!strcmp(field, "rast=0"))
             f.rasterization = 0;
     }

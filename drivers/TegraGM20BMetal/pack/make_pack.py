@@ -470,7 +470,7 @@ def state_key(line: str) -> str:
     fields = [
         h
         for h in line[:bar1].split()
-        if h.startswith(('samples=', 'topo=', 'ds=')) or (len(h) > 1 and h[0] in 'ca' and h[1].isdigit())
+        if h.startswith(('samples=', 'topo=', 'ds=', 'alphacov=')) or (len(h) > 1 and h[0] in 'ca' and h[1].isdigit())
     ] + [h for h in line[:bar1].split() if h == 'rast=0']
     key = ' '.join(fields) + ' ' + STAGE_NAMES.sub(r'\1', line[bar1 : bar3 if bar3 >= 0 else len(line)])
     cubic = sampled = written = ''

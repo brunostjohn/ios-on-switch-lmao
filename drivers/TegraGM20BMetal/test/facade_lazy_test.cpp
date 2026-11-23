@@ -557,6 +557,9 @@ TEST(GM20BFacadeLazy, AFastKeyNamesWhatItsTextNames)
         f.textureWriteRounding = 2;
     });
     with([](F &f) {
+        f.alphaToCoverage = 1;
+    });
+    with([](F &f) {
         f.patchType = 1;
     });
     with([](F &f) {

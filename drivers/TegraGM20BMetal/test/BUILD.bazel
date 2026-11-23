@@ -6425,6 +6425,37 @@ objcxx_units(
     ),
 ]]
 
+host_test(
+    name = "facade_alpha_key_test",
+    size = "medium",
+    srcs = [
+        "empty_pack.h",
+        "facade_alpha_key_test.cpp",
+        "facade_harness.h",
+        "job_methods.h",
+        "kernel_model.h",
+        "made_metallib.h",
+        "//drivers/TegraGM20BMetal:pack/probe_states.h",
+        "//gpu:translate_host",
+    ] + METAL_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + METAL_HOST_COPTS,
+    cxx_std = "c++17",
+    data = [":compiler_stages_metallib"],
+    env = {"SWITCH_STAGES_METALLIB": "$(rootpath :compiler_stages_metallib)"},
+    linkopts = FACADE_LINKOPTS,
+    sanitize = False,
+    deps = [
+        ":facade_plugin_host",
+        ":runtime_plugin_host",
+        "//kits/SwitchGM20BEmit/test:method_checks",
+        "//kits/SwitchRefusal:switch_refusal",
+    ] + METAL_HOST_DEPS,
+)
+
 # compiler_concurrency_test thread-sanitized: the engine's workers, the kept stages and libraries, the direct compiles
 host_test(
     name = "compiler_concurrency_tsan_test",
