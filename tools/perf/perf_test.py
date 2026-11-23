@@ -2,11 +2,13 @@
 
 import json
 import os
+import struct
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
-from tools.perf import ips, pacing, perf, report, session, source, windows, work
+from tools.perf import ips, pacing, perf, report, session, source, symbols, vm, windows, work
 from tools.perf.source import TICK_HZ, Rec
 
 T0 = datetime(2026, 11, 23, 0, 13, 20, tzinfo=UTC)
@@ -316,6 +318,217 @@ class SourceTest(unittest.TestCase):
         (r,) = source.parse_lines([line, '{"eventType": "statedumpEvent"}'], images)
         self.assertEqual((r.proc, r.msg, r.time), ('kernel', 'SwitchFrame: x', T0 + timedelta(milliseconds=703)))
         self.assertEqual(images['ABCD'], '/System/Library/Extensions/X.kext/X')
+
+
+class Stage3DecodeAndSymbolTest(unittest.TestCase):
+    def _make_symbols(self, root: str) -> symbols.Symbols:
+        with open(os.path.join(root, 'dsc.tsv'), 'w') as f:
+            f.write('I\t180000000\t180200000\t/System/Library/Frameworks/CoreFoundation\n')
+            f.write('I\t192000000\t192300000\t/System/Library/Frameworks/QuartzCore\n')
+            f.write('S\t180000000\tCoreFoundation\tCFRunLoopRun\n')
+            f.write('S\t192000040\tQuartzCore\tCA::Render::Server::render\n')
+        with open(os.path.join(root, 'kernel.tsv'), 'w') as f:
+            f.write('fffffe0007001000 T _vm_map_clip_unnest\n')
+        with open(os.path.join(root, 'SpringBoard.tsv'), 'w') as f:
+            f.write('S\t1000\tSBMainLoop\n')
+        return symbols.load(symbols_dir=root)
+
+    def test_symbols_resolve_dsc_kernel_and_bundle_with_fallback(self):
+        with tempfile.TemporaryDirectory() as d:
+            syms = self._make_symbols(d)
+            macho = Path(d, 'fake_app')
+            header = struct.pack('<IIIIIIII', symbols.MH_MAGIC_64, 0, 0, 2, 1, 72, 0, 0)
+            seg = struct.pack(
+                '<II16sQQQQIIII', symbols.LC_SEGMENT_64, 72, b'__TEXT', 0x100000000, 0x4000, 0, 0, 0, 0, 0, 0
+            )
+            macho.write_bytes(header + seg)
+            self.assertEqual(symbols.macho_text_base(macho), 0x100000000)
+        self.assertEqual(syms.dsc_addr(0x180000040), 'CoreFoundation CFRunLoopRun+0x40')
+        self.assertEqual(syms.dsc_addr(0x192000010), 'QuartzCore+0x10')
+        self.assertEqual(syms.dsc_addr(0x250000010), 'dsc 0x250000010')
+        self.assertEqual(syms.dsc_region(0x1920), 'QuartzCore (dsc 1920)')
+        self.assertEqual(syms.kernel_addr(0xFFFFFE0007001018), '_vm_map_clip_unnest+0x18')
+        self.assertEqual(syms.kernel_addr(0xFFFFFE0009000000), 'k 0xfffffe0009000000')
+        self.assertEqual(syms.image_addr('SpringBoard', 0x1020), 'SpringBoard SBMainLoop+0x20')
+        self.assertEqual(syms.image_addr('OtherApp', 0x20), 'OtherApp+0x20')
+        self.assertEqual(symbols.Symbols().dsc_addr(0x180000040), 'dsc 0x180000040')
+
+    def test_kprof_attributes_cpu_floor_and_window_with_thread_roles(self):
+        quiet_power = (
+            'SwitchPower: 10000 ms: cpu0 c7 0.0% (0, 0 skipped, 0 frame wakes) wfi 70.0% busy 30.0% '
+            'cpu1 c7 0.0% (0, 0 skipped, 0 frame wakes) wfi 80.0% busy 20.0%'
+        )
+        busy_power = (
+            'SwitchPower: 10000 ms: cpu0 c7 0.0% (0, 0 skipped, 0 frame wakes) wfi 10.0% busy 90.0% '
+            'cpu1 c7 0.0% (0, 0 skipped, 0 frame wakes) wfi 10.0% busy 90.0%'
+        )
+        kprof_recs = [
+            rec(quiet_power, 10.0),
+            rec(CORES, 10.0),
+            rec(TASKS, 10.001),
+            rec('SwitchKprof: 10000 ms, 4 cpus busy/irq %: 30/1.0 20/0.5', 10.002),
+            rec(
+                'SwitchKprof tasks (user+kernel samples=exact CPU): SpringBoard[30] 120+40=650ms, '
+                'backboardd[62] 80+20=410ms',
+                10.003,
+            ),
+            rec(
+                'SwitchKprof user 1/2: SpringBoard[30] 120 (main 70, worker 50): '
+                'main: dsc 180000040 45, main+ 1020 15, other 10; '
+                'worker: dsc 192000040 35, other 15;',
+                10.004,
+            ),
+            rec(
+                'SwitchKprof user 2/2: backboardd[62] 80: dsc 192000040 50, other 30;',
+                10.005,
+            ),
+            rec(
+                'SwitchKprof images: SpringBoard[30] main 70/120: dsc 1800 55, main+ 0 15, rest 0; lost 0',
+                10.006,
+            ),
+            rec(busy_power, 20.0),
+            rec(busy_power, 30.0),
+            rec(busy_power, 40.0),
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            syms = self._make_symbols(d)
+        s = session.build('B', kprof_recs)
+        self.assertEqual(len(s.kprof), 1)
+        rendered = report.render(s, report.Pulled(syms=syms))
+        self.assertIn('CPU floor (quietest quarter, 1 windows): mean 0.50 busy cores', rendered)
+        self.assertIn('floor processes (SwitchSched tasks): SpringBoard 150 ms/s, backboardd 70 ms/s', rendered)
+        self.assertIn('floor processes (SwitchKprof): SpringBoard 65 ms/s, backboardd 41 ms/s', rendered)
+        self.assertIn(
+            'kprof user SpringBoard (main) (70 samples): CoreFoundation CFRunLoopRun+0x40 45, '
+            'SpringBoard SBMainLoop+0x20 15',
+            rendered,
+        )
+        self.assertIn(
+            'kprof user SpringBoard (worker) (50 samples): QuartzCore CA::Render::Server::render 35', rendered
+        )
+        self.assertIn('kprof user backboardd (80 samples): QuartzCore CA::Render::Server::render 50', rendered)
+        self.assertIn('kprof images SpringBoard (main) (70 samples): CoreFoundation (dsc 1800) 55', rendered)
+        w = windows.Window(
+            'launch', 'SpringBoard', T0 + timedelta(seconds=2), T0 + timedelta(seconds=11), 30, 'SpringBoard'
+        )
+        doss = '\n'.join(session.dossier(s, w, syms))
+        self.assertIn('kprof tasks: SpringBoard 65 ms/s (160s), backboardd 41 ms/s (100s)', doss)
+        self.assertIn('kprof user SpringBoard (main) (70 samples): CoreFoundation CFRunLoopRun+0x40 45', doss)
+
+    def test_launch_window_shows_pageins_and_shared_cache_unnests(self):
+        ask = Rec(
+            T0 + timedelta(seconds=1),
+            0,
+            'B',
+            'SpringBoard',
+            30,
+            1,
+            'com.apple.FrontBoard',
+            '',
+            '',
+            '',
+            0,
+            'Asked to bootstrap a new process with identity: app<com.apple.Preferences(x)>',
+        )
+        boot = Rec(
+            T0 + timedelta(seconds=1.1),
+            0,
+            'B',
+            'SpringBoard',
+            30,
+            1,
+            'com.apple.FrontBoard',
+            '',
+            '',
+            '',
+            0,
+            'Bootstrap success! <FBProcess: 0x1; app<com.apple.Preferences(x)>:659(v1)>',
+        )
+        ready = Rec(
+            T0 + timedelta(seconds=8),
+            0,
+            'B',
+            'SpringBoard',
+            30,
+            1,
+            'com.apple.FrontBoard',
+            '',
+            '',
+            '',
+            0,
+            'sceneID:com.apple.Preferences-1 content state changed: ready',
+        )
+        pagein_line = (
+            'SwitchSched page-ins (10000 ms): 1200 reads, 96000 KiB asked, 40 ms reading; '
+            '1500 waits for pages being read, 1800 ms (longest 116 ms: Preferences[659] on dyld_shared_cache_arm64e); '
+            '12 other busy-page waits, 3 ms; untracked 0; XNU page-ins 3400, 120 evicted and paged in again '
+            '(ghosts found, 900 added, the last 25600 evictions held); by process '
+            '(reads/KiB asked/ms reading/waits/ms waiting): Preferences[659] 800/64000/30/1100/1400, '
+            'SpringBoard[30] 190/15200/10/210/400'
+        )
+        pagein_files = (
+            'SwitchSched page-ins by file (10000 ms; reads/KiB asked/ms reading/waits/ms waiting): '
+            'dyld_shared_cache_arm64e 900/72000/30/1100/1800, Preferences 80/6400/10/40/100'
+        )
+        unnest_line = (
+            'SwitchUnnest: Preferences[659] unnest 0x180000000->0x180200000: call 74 from user pc dsc 0x180000040 '
+            'lr dsc 0x192000040; kernel 0xfffffe0007001018'
+        )
+        recs = [ask, boot, rec(unnest_line, 4.0), ready, rec(pagein_line, 7.5), rec(pagein_files, 7.501)]
+        with tempfile.TemporaryDirectory() as d:
+            syms = self._make_symbols(d)
+        s = session.build('B', recs)
+        self.assertEqual(len(s.pageins), 1)
+        self.assertEqual(len(s.unnests), 1)
+        self.assertEqual(vm.call_label(74), 'mprotect (74)')
+        rendered = report.render(s, report.Pulled(syms=syms))
+        self.assertIn('## Page-ins and shared-cache unnests', rendered)
+        self.assertIn(
+            'page-ins (1 window): 1200 reads (96000 KiB, 40 ms reading), '
+            '1500 busy-page waits (1800 ms waiting, 120 refaults)',
+            rendered,
+        )
+        self.assertIn('by file: dyld_shared_cache_arm64e 72000 KiB/1830 ms, Preferences 6400 KiB/110 ms', rendered)
+        self.assertIn('shared-cache unnests: 1 (2.0 MiB); by process: Preferences 1; calls: mprotect (74) 1', rendered)
+        self.assertIn(
+            'Preferences mprotect (74) pc CoreFoundation CFRunLoopRun+0x40 lr QuartzCore CA::Render::Server::render x1',
+            rendered,
+        )
+
+    def test_ips_symbolizes_watchdog_frames_when_tables_given(self):
+        body = {
+            'uptime': 130,
+            'pid': 30,
+            'stackshot': {
+                'binaryImages': [
+                    ['00000000-0000-0000-0000-000000000000', 0x180000000, 'S'],
+                    ['11111111-1111-1111-1111-111111111111', 0xFFFFFE0007000000, 'U'],
+                ],
+                'processByPid': {
+                    '30': {
+                        'pid': 30,
+                        'procname': 'SpringBoard',
+                        'userTimeTask': 12.8,
+                        'systemTimeTask': 6.4,
+                        'waitInfo': [],
+                        'threadById': {
+                            '520': {
+                                'state': ['TH_WAIT'],
+                                'snapshotFlags': ['kThreadMain'],
+                                'kernelFrames': [[1, 0x1018]],
+                                'userFrames': [[0, 0x40]],
+                            },
+                        },
+                    }
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as d:
+            syms = self._make_symbols(d)
+            r = ips.Report(os.path.join(d, 'sb.ips'), '409', 'SpringBoard', '2026-11-23 00:00:00', 'B', body, '24B119')
+            text = '\n'.join(ips.summary([r], {'B'}, {}, ('SpringBoard',), syms))
+        self.assertIn('_vm_map_clip_unnest+0x18', text)
+        self.assertIn('CoreFoundation CFRunLoopRun+0x40', text)
 
 
 if __name__ == '__main__':

@@ -2,15 +2,19 @@
 
 A report belongs to a boot by its bootSessionUUID; the crash folder keeps every report since the card was made, so a
 report of another boot is counted, never read as this one's. Frames print as the device's own symbol when the report
-has one, `dsc 0x<unslid>` for the dyld shared cache (`ipsw dyld a2s <the IPSW's cache> <address>`), `<image>+0x<offset>`
-for an image a log line named, and `k 0x<unslid>` for the kernel (`atos -o <the build's kernel.macho>`).
+has one, symbolized via `--dsc` / symbol tables when present, or fall back to `dsc 0x<unslid>`, `<image>+0x<offset>`,
+and `k 0x<unslid>`.
 """
+
+from __future__ import annotations
 
 import json
 import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+
+from tools.perf import symbols
 
 KINDS = {
     '308': 'user fault',
@@ -94,7 +98,13 @@ def spin_files(root: str | None) -> list[str]:
     return sorted(f for f in names if f.endswith(('.tailspin', '.spin')) or 'tailspin' in f.lower())
 
 
-def frame_text(image: list | dict | None, offset: int, images: dict[str, str], symbol: str = '') -> str:
+def frame_text(
+    image: list | dict | None,
+    offset: int,
+    images: dict[str, str],
+    symbol: str = '',
+    syms: symbols.Symbols | None = None,
+) -> str:
     if isinstance(image, dict):
         uuid, base, source, name = (
             image.get('uuid', ''),
@@ -109,16 +119,16 @@ def frame_text(image: list | dict | None, offset: int, images: dict[str, str], s
     if symbol:
         return f'{name or "?"} {symbol}'
     if source == 'S':
-        return f'dsc 0x{base + offset:x}'
+        return syms.dsc_addr(base + offset) if syms else f'dsc 0x{base + offset:x}'
     if source in {'U', 'K'}:
-        return f'k 0x{base + offset:x}'
+        return syms.kernel_addr(base + offset) if syms else f'k 0x{base + offset:x}'
     if source == 'A':
         return f'0x{offset:x}'
     label = name or images.get(uuid.upper(), '').rsplit('/', 1)[-1] or uuid[:8]
-    return f'{label}+0x{offset:x}'
+    return syms.image_addr(label, offset, uuid) if syms else f'{label}+0x{offset:x}'
 
 
-def crash_lines(r: Report, images: dict[str, str]) -> list[str]:
+def crash_lines(r: Report, images: dict[str, str], syms: symbols.Symbols | None = None) -> list[str]:
     b = r.body
     exc, term = b.get('exception', {}), b.get('termination', {})
     out = [f'{exc.get("type", "")} {exc.get("signal", "")} {term.get("indicator", "")}'.strip()]
@@ -131,7 +141,11 @@ def crash_lines(r: Report, images: dict[str, str]) -> list[str]:
             out.append(
                 '  '
                 + frame_text(
-                    used[i] if 0 <= i < len(used) else None, f.get('imageOffset', 0), images, f.get('symbol', '')
+                    used[i] if 0 <= i < len(used) else None,
+                    f.get('imageOffset', 0),
+                    images,
+                    f.get('symbol', ''),
+                    syms,
                 )
             )
     return out
@@ -154,7 +168,13 @@ def wait(proc: dict, tid: str, build: str) -> str:
     return 'no wait record'
 
 
-def thread_lines(proc: dict, images_list: list, images: dict[str, str], build: str) -> list[str]:
+def thread_lines(
+    proc: dict,
+    images_list: list,
+    images: dict[str, str],
+    build: str,
+    syms: symbols.Symbols | None = None,
+) -> list[str]:
     found = main_thread(proc)
     if not found:
         return []
@@ -168,11 +188,18 @@ def thread_lines(proc: dict, images_list: list, images: dict[str, str], build: s
     ]
     for frames in (t.get('kernelFrames') or [])[:4], (t.get('userFrames') or [])[:STACK_FRAMES]:
         for i, offset in frames:
-            out.append('  ' + frame_text(images_list[i] if 0 <= i < len(images_list) else None, offset, images))
+            out.append(
+                '  ' + frame_text(images_list[i] if 0 <= i < len(images_list) else None, offset, images, '', syms)
+            )
     return out
 
 
-def stackshot_lines(r: Report, images: dict[str, str], watch: tuple[str, ...]) -> list[str]:
+def stackshot_lines(
+    r: Report,
+    images: dict[str, str],
+    watch: tuple[str, ...],
+    syms: symbols.Symbols | None = None,
+) -> list[str]:
     ss = r.body.get('stackshot') or r.body
     procs, images_list = ss.get('processByPid') or {}, ss.get('binaryImages') or []
     term = r.body.get('termination', {})
@@ -188,11 +215,17 @@ def stackshot_lines(r: Report, images: dict[str, str], watch: tuple[str, ...]) -
     wanted = {str(r.body.get('pid'))} | {pid for pid, p in procs.items() if p.get('procname') in watch}
     for pid in sorted(wanted, key=lambda x: int(x) if x.isdigit() else 0):
         if pid in procs:
-            out += thread_lines(procs[pid], images_list, images, r.build)
+            out += thread_lines(procs[pid], images_list, images, r.build, syms)
     return out
 
 
-def summary(reports: list[Report], boots: set[str], images: dict[str, str], watch: tuple[str, ...]) -> list[str]:
+def summary(
+    reports: list[Report],
+    boots: set[str],
+    images: dict[str, str],
+    watch: tuple[str, ...],
+    syms: symbols.Symbols | None = None,
+) -> list[str]:
     mine = [r for r in reports if r.boot in boots]
     others = Counter(r.kind for r in reports if r.boot not in boots)
     out = [
@@ -202,7 +235,9 @@ def summary(reports: list[Report], boots: set[str], images: dict[str, str], watc
     ]
     for r in mine:
         out.append(f'{r.time[:19]} {r.kind}: {r.name} ({os.path.basename(r.path)})')
-        lines = stackshot_lines(r, images, watch) if r.bug in {'409', '509', '288'} else crash_lines(r, images)
+        lines = (
+            stackshot_lines(r, images, watch, syms) if r.bug in {'409', '509', '288'} else crash_lines(r, images, syms)
+        )
         out += ['    ' + line for line in lines]
     return out
 
@@ -215,6 +250,5 @@ def watchdogs(reports: list[Report]) -> list[str]:
         proc = procs.get(str(r.body.get('pid')), {})
         found = main_thread(proc)
         state = f'{",".join(found[1].get("state", []))}, {wait(proc, found[0], r.build)}' if found else '-'
-
         out.append(f'{r.time[:19]} {r.name} at {r.body.get("uptime")} s uptime: main thread {state}')
     return out

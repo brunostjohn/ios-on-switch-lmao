@@ -1,11 +1,13 @@
 """One boot's parsed records, and the dossier of everything logged inside one window of it."""
 
+from __future__ import annotations
+
 import bisect
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from tools.perf import cpu, pacing, windows, work
+from tools.perf import cpu, pacing, symbols, vm, windows, work
 from tools.perf.source import Rec
 from tools.perf.windows import Window
 
@@ -17,9 +19,11 @@ FAMILIES = (
     'SwitchSched 1/2',
     'SwitchSched cores',
     'SwitchSched tasks',
+    'SwitchSched page-ins',
     'SwitchPower: ',
     'SwitchKprof',
     'SwitchStall',
+    'SwitchUnnest',
     'SwitchMark',
     'tegra-gm20b: stats',
     'HWTEST ',
@@ -35,6 +39,9 @@ class Session:
     slows: list[pacing.Slow] = field(default_factory=list)  # in time order
     busy: list[cpu.Busy] = field(default_factory=list)
     tasks: list = field(default_factory=list)
+    kprof: list[cpu.KprofWindow] = field(default_factory=list)
+    pageins: list[vm.PageinWindow] = field(default_factory=list)
+    unnests: list[vm.UnnestEvent] = field(default_factory=list)
     costs: list[work.Cost] = field(default_factory=list)  # in the order they ended
     slow_times: list[datetime] = field(default_factory=list)
     cost_ends: list[datetime] = field(default_factory=list)
@@ -56,6 +63,9 @@ def build(boot: str, recs: list[Rec]) -> Session:
     s.slow_times = [x.time for x in s.slows]
     s.busy = cpu.busy_windows(recs)
     s.tasks = cpu.tasks(recs)
+    s.kprof = cpu.kprof_windows(recs)
+    s.pageins = vm.pagein_windows(recs)
+    s.unnests = vm.unnest_lines(recs)
     s.costs = sorted(work.compiles(recs) + work.stalls(recs), key=lambda c: c.time)
     s.cost_ends = [c.time for c in s.costs]
     s.longest_cost = timedelta(milliseconds=max((c.ms for c in s.costs), default=0.0))
@@ -106,7 +116,7 @@ def pacing_row(s: Session, w: Window) -> str:
     )
 
 
-def dossier(s: Session, w: Window) -> list[str]:
+def dossier(s: Session, w: Window, syms: symbols.Symbols | None = None) -> list[str]:
     """Return what the lines say happened inside one window, and what they cannot say."""
     out = [pacing_row(s, w)]
     busy = cpu.mean_busy(w, s.busy)
@@ -120,6 +130,9 @@ def dossier(s: Session, w: Window) -> list[str]:
         if top
         else 'processes: not attributable (needs probes-kernel SwitchSched tasks, a 10 s window ending inside)'
     )
+    out += cpu.kprof_in_window(w, s.kprof, syms, w.proc)
+    out += vm.pagein_summary(w, s.pageins, w.proc)
+    out += vm.unnest_summary([u for u in s.unnests if w.holds(u.time)], syms)
     out += [row.text() for row in work.by_kind(costs_in(s, w))[:7]]
     hangs = [h for h in s.windows['hang'] if h is not w and w.overlap(h.start, h.end)]
     out += [f'hang {h.proc}[{h.pid}] {h.name} {h.note} from {h.start:%H:%M:%S.%f}'[:-3] for h in hangs[:4]]

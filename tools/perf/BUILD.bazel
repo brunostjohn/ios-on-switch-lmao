@@ -18,6 +18,8 @@ py_library(
         "report.py",
         "session.py",
         "source.py",
+        "symbols.py",
+        "vm.py",
         "windows.py",
         "work.py",
     ],

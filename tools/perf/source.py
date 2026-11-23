@@ -19,6 +19,7 @@ KERNEL_PREFIXES = (
     'SwitchPower',
     'SwitchKprof',
     'SwitchStall',
+    'SwitchUnnest',
     'SwitchMark',
     'SwitchRecorder',
     'tegra-gm20b: stats ',
