@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "SwitchGM20BEmitBarrier.h"
 
+#include "nv_push_clb06f.h"
 #include "nv_push_clb197.h"
 
 static bool has(uint32_t caches, uint32_t cache)
@@ -70,4 +71,20 @@ void switch_gm20b_pass_barrier(struct nv_push *p, bool tiled_cache)
     switch_gm20b_invalidate_shader_caches(p, SWITCH_GM20B_SHADER_FLUSH_DATA | SWITCH_GM20B_SHADER_DATA |
                                                  SWITCH_GM20B_SHADER_CONSTANTS);
     switch_gm20b_invalidate_texture_data(p);
+}
+
+void switch_gm20b_kind_switch(struct nv_push *p)
+{
+    P_MTHD(p, NVB06F, WFI);
+    P_NVB06F_WFI(p, NVB06F_WFI_SCOPE_CURRENT_SCG_TYPE);
+    P_MTHD(p, NVB06F, FB_FLUSH);
+    P_NVB06F_FB_FLUSH(p, 0);
+    P_MTHD(p, NVB06F, MEM_OP_C);
+    P_NVB06F_MEM_OP_C(p, {0});
+    P_NVB06F_MEM_OP_D(p, {.operation = OPERATION_L2_FLUSH_DIRTY});
+    P_MTHD(p, NVB06F, FB_FLUSH);
+    P_NVB06F_FB_FLUSH(p, 0);
+    P_MTHD(p, NVB06F, MEM_OP_C);
+    P_NVB06F_MEM_OP_C(p, {0});
+    P_NVB06F_MEM_OP_D(p, {.operation = OPERATION_L2_SYSMEM_INVALIDATE});
 }

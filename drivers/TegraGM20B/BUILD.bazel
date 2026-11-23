@@ -58,6 +58,7 @@ kernel_driver(
     name = "TegraGM20B_emit",
     srcs = [
         "TegraGM20BCopyEmit.c",
+        "//kits/SwitchGM20BEmit:SwitchGM20BEmitBarrier.c",
         "//kits/SwitchGM20BEmit:mesa/nouveau_copy_rect.c",
     ],
     c_copts = SWITCH_GM20B_EMIT_INCLUDES,

@@ -1609,7 +1609,7 @@ host_library(
     hdrs = ["//drivers/TegraGM20B:TegraGM20BCopyEmit.h"],
     copts = ["-Ikits/SwitchGM20BEmit"],
     visibility = ["//kits/SwitchGM20BEmit/test:__pkg__"],
-    deps = ["//kits/SwitchGM20BEmit:copy_rect"],
+    deps = ["//kits/SwitchGM20BEmit:emit"],
 )
 
 host_library(
@@ -2663,7 +2663,7 @@ host_library(
         "-fsanitize=thread",
     ],
     sanitize = False,
-    deps = ["//kits/SwitchGM20BEmit:copy_rect"],
+    deps = ["//kits/SwitchGM20BEmit:emit"],
 )
 
 host_test(

@@ -18,6 +18,7 @@ enum switch_gm20b_shader_caches {
 };
 
 #define SWITCH_GM20B_PASS_BARRIER_WORDS 4u
+#define SWITCH_GM20B_KIND_SWITCH_WORDS  12u
 
 void switch_gm20b_wait_for_idle(struct nv_push *p);
 
@@ -42,6 +43,12 @@ void switch_gm20b_pixel_shader_barrier(struct nv_push *p);
 // Between two passes: the earlier pass's ROP and shader writes reach memory, and the next one's shader and texture
 // caches drop what they held, constants included (the copy and 2D engines write constant buffers too)
 void switch_gm20b_pass_barrier(struct nv_push *p, bool tiled_cache);
+
+// Between two accesses of the same pages through PTE kinds that place a GOB's bytes otherwise (kind 0 and 0xfe, or
+// either and a zeta kind), after the first has completed: the L2's lines of them written back, then dropped. A line
+// keeps the placement of the access that brought it in, so the second kind's reads and writes would otherwise take
+// the first kind's GOB order (on the device: TegraColor texels read back in FermiColor order).
+void switch_gm20b_kind_switch(struct nv_push *p);
 
 #ifdef __cplusplus
 }
