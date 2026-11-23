@@ -21,6 +21,7 @@ py_library(
         "joycon.py",
         "launch.py",
         "lockscreen.py",
+        "memory.py",
         "morning.py",
         "motion.py",
         "protection.py",
@@ -175,6 +176,14 @@ py_test(
     name = "springboard_test",
     size = "small",
     srcs = ["springboard_test.py"],
+    deps = [":lib"],
+)
+
+# memory.py's kill and small-daemon rows over lines in the Metal driver's and XNU's formats.
+py_test(
+    name = "memory_test",
+    size = "small",
+    srcs = ["memory_test.py"],
     deps = [":lib"],
 )
 

@@ -24,6 +24,7 @@ from tools.devicerun.hwtest import (
 from tools.devicerun.joycon import JOYCON
 from tools.devicerun.launch import LAUNCHES
 from tools.devicerun.lockscreen import LOCKSCREEN
+from tools.devicerun.memory import MEMORY
 from tools.devicerun.morning import MORNING
 from tools.devicerun.motion import MOTION
 from tools.devicerun.protection import PROTECTION
@@ -1287,6 +1288,7 @@ GROUPS: dict[str, list[Check]] = {
         ),
     ],
     'memory': [
+        *MEMORY,
         Check(
             'memory.gpu-live',
             'r116-sched',
