@@ -198,7 +198,7 @@ void Device::warm()
         });
 }
 
-void Device::poolFree(Span &s)
+void Device::poolFree(Span &s, DeferredFrees &deferred)
 {
     if (!s.valid() || s.chunk >= chunks_.size())
         return;
@@ -210,7 +210,7 @@ void Device::poolFree(Span &s)
             s = {};
             return;
         }
-        freeChunk(ch);
+        freeChunk(ch, deferred);
         s = {};
         return;
     }
@@ -236,46 +236,50 @@ void Device::poolFree(Span &s)
     // shrinks after a burst instead of holding its peak for good (r8a: 320 MB in 20 chunks from 15:18 on, the screen idle)
     if (!ch.used && poolFree_ >= ch.bytes + sizes_.chunk) {
         poolFree_ -= ch.bytes;
-        freeChunk(ch);
+        freeChunk(ch, deferred);
     }
 }
 
-// lock_ held: a chunk's BO goes back (the kernel keeps the pages until the work submitted before has completed)
-void Device::freeChunk(Chunk &ch)
+// lock_ held: a chunk's BO is detached for off-lock free (the kernel keeps the pages until the work submitted before has
+// completed)
+void Device::freeChunk(Chunk &ch, DeferredFrees &deferred)
 {
     SWITCH_METAL_DIAGNOSTIC(stats.poolBytes -= ch.bytes);
     SWITCH_METAL_DIAGNOSTIC(stats.poolChunks--);
     SWITCH_METAL_DIAGNOSTIC(glassMemEvent("chunk freed", ch.bytes));
-    k_.free(ch.bo);
-    if (ch.pitchVa)
-        k_.releaseVa(ch.pitchVa, ch.bytes);
+    deferred.add({ch.bo, ch.pitchVa, ch.pitchVa ? ch.bytes : 0, nullptr, 0, nullptr, ch.bytes, 0, RetireKind::Chunk});
     ch = Chunk();
 }
 
 Device::Trimmed Device::trim()
 {
+    DeferredFrees deferred(*this);
     std::lock_guard<gm20b::Mutex> l(lock_);
-    const Trimmed trimmed = dropKeptImports();
-    reapNativeSurfaces();
+    const Trimmed trimmed = dropKeptImports(deferred);
+    std::vector<Bo> nativeBos;
+    reapNativeSurfaces(nativeBos);
+    for (const Bo &bo : nativeBos)
+        deferred.add({bo});
     for (const Spare &sp : spares_)
-        freeChunk(chunks_[sp.chunk]);
+        freeChunk(chunks_[sp.chunk], deferred);
     spares_.clear();
     for (Chunk &ch : chunks_)
         if (ch.memory && !ch.dedicated && !ch.used) {
             poolFree_ -= ch.bytes;
-            freeChunk(ch);
+            freeChunk(ch, deferred);
         }
     auto freeUnused = [&](std::vector<Chunk> &tiled) {
         for (Chunk &ch : tiled)
             if (ch.memory && !ch.used)
-                freeChunk(ch);
+                freeChunk(ch, deferred);
     };
     freeUnused(blChunks_);
     for (std::vector<Chunk> &z : zChunks_)
         freeUnused(z);
     for (Chunk &ch : wcChunks_)
         if (ch.bo.handle && !ch.used) {
-            k_.free(ch.bo);
+            deferred.add({ch.bo, 0, 0, nullptr, 0, nullptr, ch.bytes, ch.bo.mapped,
+                          ch.dedicated ? RetireKind::WcDedicated : RetireKind::WcShared});
             ch = Chunk();
         }
     return trimmed;
@@ -360,17 +364,17 @@ Import *Device::makeImport(uint64_t id, void *base, uint64_t bytes, const void *
     return i;
 }
 
-void Device::release(Import *i)
+void Device::release(Import *i, DeferredFrees &deferred)
 {
     if (!i || --i->refs)
         return;
     if (i->id && i->owner)
-        keepImport(i);
+        keepImport(i, deferred);
     else
-        dropImport(i);
+        dropImport(i, deferred);
 }
 
-void Device::keepImport(Import *i)
+void Device::keepImport(Import *i, DeferredFrees &deferred)
 {
     keptImports_.push_back(i);
     keptImportBytes_ += i->bo.bytes;
@@ -378,7 +382,7 @@ void Device::keepImport(Import *i)
         Import *oldest = keptImports_.front();
         keptImports_.erase(keptImports_.begin());
         keptImportBytes_ -= oldest->bo.bytes;
-        dropImport(oldest);
+        dropImport(oldest, deferred, true);
     }
 }
 
@@ -388,17 +392,17 @@ Device::Trimmed Device::keptImports()
     return {keptImports_.size(), keptImportBytes_};
 }
 
-Device::Trimmed Device::dropKeptImports()
+Device::Trimmed Device::dropKeptImports(DeferredFrees &deferred)
 {
     const Trimmed trimmed = {keptImports_.size(), keptImportBytes_};
     for (Import *i : keptImports_)
-        dropImport(i);
+        dropImport(i, deferred, true);
     keptImports_.clear();
     keptImportBytes_ = 0;
     return trimmed;
 }
 
-void Device::dropImport(Import *i)
+void Device::dropImport(Import *i, DeferredFrees &deferred, bool wasKept)
 {
     if (i->id)
         if (auto it = surfaces_.find(std::make_tuple(i->id, i->base, i->bytes));
@@ -410,9 +414,8 @@ void Device::dropImport(Import *i)
         i->native->cached = false;
         nativeStale_.store(true, std::memory_order_release);
     }
-    k_.free(i->bo);
-    if (i->owner)
-        CFRelease(i->owner);
+    deferred.add({i->bo, 0, 0, nullptr, 0, i->owner, wasKept ? i->bo.bytes : 0, 0,
+                  wasKept ? RetireKind::KeptImport : RetireKind::None});
     delete i;
 }
 
@@ -527,14 +530,14 @@ bool Device::tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t byte
     return false;
 }
 
-void Device::tiledFree(std::vector<Chunk> &chunks, Span &s)
+void Device::tiledFree(std::vector<Chunk> &chunks, Span &s, DeferredFrees &deferred)
 {
     if (!s.valid() || s.chunk >= chunks.size())
         return;
     Chunk &ch = chunks[s.chunk];
     ch.used -= s.bytes;
     if (ch.dedicated) {
-        freeChunk(ch);
+        freeChunk(ch, deferred);
         s = {};
         return;
     }
@@ -558,7 +561,7 @@ void Device::tiledFree(std::vector<Chunk> &chunks, Span &s)
     // an empty chunk goes back while the others keep a chunk's worth free, as the pool's do: a burst's peak is not held for
     // good (boot 15: backboardd's chunks stayed at 912 MB after its keyboard's burst)
     if (!ch.used && tiledFreeBytes(chunks) >= ch.bytes + sizes_.blChunk)
-        freeChunk(ch);
+        freeChunk(ch, deferred);
 }
 
 uint64_t Device::blPitchVa(const Span &s)
@@ -704,7 +707,7 @@ bool Device::wcAlloc(uint64_t bytes, Span &s)
 }
 
 // lock_ held
-void Device::wcFree(Span &s)
+void Device::wcFree(Span &s, DeferredFrees &deferred)
 {
     if (!s.valid() || s.chunk >= wcChunks_.size())
         return;
@@ -712,7 +715,7 @@ void Device::wcFree(Span &s)
     ch.used -= s.bytes;
     SWITCH_METAL_DIAGNOSTIC(stats.wcBytes -= s.bytes);
     if (ch.dedicated) {
-        k_.free(ch.bo);
+        deferred.add({ch.bo, 0, 0, nullptr, 0, nullptr, ch.bytes, ch.bo.mapped, RetireKind::WcDedicated});
         ch = Chunk();
         s = {};
         return;
@@ -740,7 +743,7 @@ void Device::wcFree(Span &s)
     if (!ch.used) {
         for (const Chunk &other : wcChunks_)
             if (&other != &ch && other.bo.handle && !other.dedicated && !other.used) {
-                k_.free(ch.bo);  // (the kernel keeps the pages until the work submitted before has completed)
+                deferred.add({ch.bo, 0, 0, nullptr, 0, nullptr, ch.bytes, ch.bo.mapped, RetireKind::WcShared});
                 ch = Chunk();
                 break;
             }
@@ -769,11 +772,11 @@ uint64_t Device::heapInPlaceBytes()
 // under the channel's lock, not lock_), less the write-combined chunks, which are control memory named apart
 uint64_t Device::controlMappedBytes()
 {
-    const uint64_t control = k_.controlMappedBytes();
     std::lock_guard<gm20b::Mutex> l(lock_);
-    uint64_t wc = 0;
+    uint64_t wc = retiring_.wcMapped.load(std::memory_order_acquire);
     for (const Chunk &ch : wcChunks_)
         wc += ch.bo.mapped;
+    const uint64_t control = k_.controlMappedBytes();
     return control > wc ? control - wc : 0;
 }
 
@@ -802,9 +805,12 @@ bool Device::held(Held &h, bool wait)
     for (const std::vector<Chunk> &z : zChunks_)
         for (const Chunk &ch : z)
             count(ch);
+    h.chunks += retiring_.chunkBytes.load(std::memory_order_relaxed);
+    h.chunkCount += retiring_.chunkCount.load(std::memory_order_relaxed);
     for (const Spare &sp : spares_)
         h.reuse += chunks_[sp.chunk].bytes;
-    uint64_t wcMapped = 0;
+    uint64_t wcMapped = retiring_.wcMapped.load(std::memory_order_relaxed);
+    h.writeCombined = retiring_.wcBytes.load(std::memory_order_relaxed);
     for (const Chunk &ch : wcChunks_) {
         h.writeCombined += ch.bo.handle ? ch.bytes : 0;
         wcMapped += ch.bo.mapped;
@@ -814,7 +820,9 @@ bool Device::held(Held &h, bool wait)
             (a.wc ? h.heaps : h.gpuHeaps) += a.bytes;
             h.volatileHeaps += a.isVolatile ? a.bytes : 0;
         }
-    h.kept = keptImportBytes_;
+    h.heaps += retiring_.heapBytes.load(std::memory_order_relaxed);
+    h.gpuHeaps += retiring_.gpuHeapBytes.load(std::memory_order_relaxed);
+    h.kept = keptImportBytes_ + retiring_.keptBytes.load(std::memory_order_relaxed);
     const uint64_t control = k_.controlMappedBytes();
     h.tables = control > wcMapped ? control - wcMapped : 0;
     return true;
@@ -823,7 +831,7 @@ bool Device::held(Held &h, bool wait)
 uint64_t Device::wcChunkBytesHeld()
 {
     std::lock_guard<gm20b::Mutex> l(lock_);
-    uint64_t n = 0;
+    uint64_t n = retiring_.wcSharedBytes.load(std::memory_order_relaxed);
     for (const Chunk &ch : wcChunks_)
         n += ch.bo.handle && !ch.dedicated ? ch.bytes : 0;
     return n;
@@ -894,13 +902,14 @@ bool Device::createSurfaceBuffer(uint64_t id, void *base, uint64_t length, const
 {
     b = {};
     tiled = false;
+    DeferredFrees deferred(*this);
     std::unique_lock<gm20b::Mutex> l(lock_);
     Import *i = importSurface(l, id, base, length, owner);
     if (!i)
         return false;
     if (i->kind == TGM_LAYOUT_KIND) {
         tiled = true;
-        release(i);
+        release(i, deferred);
         return false;
     }
     b.import = i;
@@ -912,10 +921,11 @@ bool Device::createSurfaceBuffer(uint64_t id, void *base, uint64_t length, const
 
 void Device::destroyBuffer(Buffer &b)
 {
-    std::lock_guard<gm20b::Mutex> l(lock_);
+    DeferredFrees deferred(*this);
+    std::unique_lock<gm20b::Mutex> l(lock_);
     if (b.import)
-        release(b.import);
-    freeSpan(b.span, b.arena ? Memory::Arena : b.wc ? Memory::Wc : Memory::Pool, b.lease);
+        release(b.import, deferred);
+    freeSpan(l, b.span, b.arena ? Memory::Arena : b.wc ? Memory::Wc : Memory::Pool, b.lease, deferred);
     SWITCH_METAL_DIAGNOSTIC(stats.textureBytes -= b.keptBytes);
     b = {};
 }

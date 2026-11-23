@@ -505,8 +505,8 @@ struct Model {
 
     void endGeneration(uint32_t index)
     {
-        reinterpret_cast<volatile uint32_t *>(fences.bytes)[TegraGM20BSetGenerationWord + index] =
-            ++sets[index].generation;
+        __atomic_store_n(&reinterpret_cast<volatile uint32_t *>(fences.bytes)[TegraGM20BSetGenerationWord + index],
+                         ++sets[index].generation, __ATOMIC_RELEASE);
     }
 
     int setCreate(const TegraGM20BAbiResourceSetCreate &in, TegraGM20BAbiResourceSetCreateReply &out)

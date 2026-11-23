@@ -7,10 +7,14 @@
 #include "empty_pack.h"
 #include "../gpu.h"
 
+#include <CoreFoundation/CoreFoundation.h>
 #include <gtest/gtest.h>
 #include <atomic>
+#include <cstdlib>
 #include <string>
 #include <thread>
+#include <unistd.h>
+#include <vector>
 
 namespace {
 
@@ -131,6 +135,145 @@ TEST_F(DeviceSubmitted, TheMemoryReleasesPurgeReadsWhatTheSubmitterLastSubmitted
     release.join();
     EXPECT_GT(purges.load(), 0);
     EXPECT_EQ(dev.submitted(), last);
+}
+
+// Concurrent teardown, no-copy release/grow, kept-import eviction, arena destroy/purge/trim, memory watch reads and
+// submissions run race-free under TSan with every BoFree/vm_deallocate/CFRelease off Device::lock_
+TEST_F(DeviceSubmitted, ConcurrentTeardownTrimPurgeAndHeldRunRaceFreeOffTheLock)
+{
+    constexpr uint32_t kRGBA8 = 70;
+    constexpr uint64_t kSurfaceBytes = 256 << 10, kArenaBytes = 4 * (64 << 10);
+
+    struct Surface {
+        void *pages = nullptr;
+        CFTypeRef owner = nullptr;
+        uint32_t id = 0;
+    };
+
+    std::vector<Surface> surfaces(10);
+    for (uint32_t i = 0; i < 10; ++i) {
+        ASSERT_EQ(posix_memalign(&surfaces[i].pages, size_t(getpagesize()), kSurfaceBytes), 0);
+        surfaces[i].owner = CFDataCreate(nullptr, nullptr, 0);
+        surfaces[i].id = 200 + i;
+    }
+    void *noCopyPages = nullptr;
+    ASSERT_EQ(posix_memalign(&noCopyPages, size_t(getpagesize()), 128 << 10), 0);
+
+    std::atomic<bool> stop{false};
+    std::atomic<uint32_t> committed{0};
+    std::atomic<int> heldReads{0}, trims{0}, submits{0};
+
+    std::thread releaser([&] {
+        while (!stop.load(std::memory_order_acquire)) {
+            dev.trim();
+            dev.purgeArenas(committed);
+            dev.trimArenas(committed);
+            trims.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+    std::thread watcher([&] {
+        while (!stop.load(std::memory_order_acquire)) {
+            gm20b::Device::Held h = {};
+            if (dev.held(h, false))
+                heldReads.fetch_add(1, std::memory_order_relaxed);
+            (void)dev.controlMappedBytes();
+            (void)dev.wcChunkBytesHeld();
+        }
+    });
+    std::thread submitter([&] {
+        while (!stop.load(std::memory_order_acquire)) {
+            committed.fetch_add(1, std::memory_order_acq_rel);
+            const uint32_t seqno = copy();
+            committed.fetch_sub(1, std::memory_order_acq_rel);
+            if (seqno)
+                submits.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+
+    for (int round = 0; round < 20; ++round) {
+        // No-copy release followed immediately by a larger wrap over the same pages
+        gm20b::Buffer small, big;
+        bool tiled = false;
+        ASSERT_TRUE(dev.createBufferNoCopy(noCopyPages, 4 << 10, small, tiled));
+        dev.destroyBuffer(small);
+        ASSERT_TRUE(dev.createBufferNoCopy(noCopyPages, 128 << 10, big, tiled));
+        dev.destroyBuffer(big);
+
+        // Kept-import eviction across 10 surfaces
+        for (const Surface &s : surfaces) {
+            gm20b::Texture t;
+            ASSERT_TRUE(
+                dev.createSurfaceTexture(s.id, s.pages, kSurfaceBytes, s.owner, 0, 128, 64, 512, kRGBA8, t, true));
+            dev.destroyTexture(t);
+        }
+
+        // Dedicated WC buffer, shared arena (with aliasable placement + volatile) and private arena
+        gm20b::Buffer wc;
+        ASSERT_TRUE(dev.createBuffer(2 << 20, wc, true));
+        dev.destroyBuffer(wc);
+
+        uint32_t shared = 0, priv = 0;
+        ASSERT_TRUE(dev.createArena(kArenaBytes, false, shared));
+        gm20b::Buffer placed;
+        ASSERT_TRUE(dev.arenaBuffer(shared, 64 << 10, placed));
+        dev.makeArenaAliasable(placed.span, placed.lease);
+        dev.destroyBuffer(placed);
+        dev.setArenaVolatile(shared, true);
+        dev.destroyArena(shared);
+
+        ASSERT_TRUE(dev.createArena(kArenaBytes, true, priv));
+        dev.setArenaVolatile(priv, true);
+        dev.destroyArena(priv);
+    }
+
+    stop.store(true, std::memory_order_release);
+    submitter.join();
+    watcher.join();
+    releaser.join();
+    dev.trim();
+    EXPECT_GT(heldReads.load(), 0);
+    EXPECT_GT(trims.load(), 0);
+    EXPECT_GT(submits.load(), 0);
+
+    free(noCopyPages);
+    for (Surface &s : surfaces) {
+        CFRelease(s.owner);
+        free(s.pages);
+    }
+}
+
+// Two threads tearing down their own no-copy buffers while a third trims: each call frees its own BOs synchronously
+// with no cross-thread stealing or races under TSan
+TEST_F(DeviceSubmitted, ConcurrentDestroyAndTrimEachFreeTheirOwnBosBeforeReturning)
+{
+    constexpr size_t kBytes = 64 << 10;
+    void *pagesA = nullptr, *pagesB = nullptr;
+    ASSERT_EQ(posix_memalign(&pagesA, size_t(getpagesize()), kBytes), 0);
+    ASSERT_EQ(posix_memalign(&pagesB, size_t(getpagesize()), kBytes), 0);
+    std::atomic<bool> stop{false};
+
+    auto worker = [&](void *pages) {
+        for (int i = 0; i < 40; ++i) {
+            gm20b::Buffer b;
+            bool tiled = false;
+            ASSERT_TRUE(dev.createBufferNoCopy(pages, kBytes, b, tiled));
+            const uint64_t handle = b.import->bo.handle;
+            dev.destroyBuffer(b);
+            EXPECT_NE(handle, 0u);
+        }
+    };
+    std::thread trimmer([&] {
+        while (!stop.load(std::memory_order_acquire))
+            dev.trim();
+    });
+    std::thread a(worker, pagesA);
+    std::thread b(worker, pagesB);
+    a.join();
+    b.join();
+    stop.store(true, std::memory_order_release);
+    trimmer.join();
+    free(pagesA);
+    free(pagesB);
 }
 
 }  // namespace

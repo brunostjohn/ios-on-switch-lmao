@@ -282,9 +282,9 @@ private:
     BatchWork batchWork_;
     uint64_t batchLimit() const;
     DirtyRanges dirty_;
-    std::vector<Texture *> backings_;         // memoryless backings it uses
-    std::vector<const HeapMembers *> heaps_;  // useHeap's, each kept alive by the facade's command buffer
-    void nameHeaps();                         // lock_ held
+    std::vector<Texture *> backings_;                   // memoryless backings it uses
+    std::vector<const HeapMembers *> heaps_;            // useHeap's, each kept alive by the facade's command buffer
+    void nameHeaps(std::unique_lock<gm20b::Mutex> &l);  // lock_ held
     SurfaceList surfaces_;
     ZcullPlanes zcullPlanes_;  // the depths' regions this command buffer's passes stored (zcull_planes.h)
     std::vector<SetUse> memberUses_;

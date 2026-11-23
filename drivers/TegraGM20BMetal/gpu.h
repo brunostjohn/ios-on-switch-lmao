@@ -238,10 +238,6 @@ public:
     // says (the CPU reaches it through replaceRegion and getBytes alone)
     bool createTexture(uint32_t width, uint32_t height, uint32_t format, Texture &t, bool wc = false,
                        bool tiled = false, const ArenaAt *at = nullptr);
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    // createTexture's block-linear target over compressible memory of its own (probeCompressNext), under lock_
-    bool probeCompressible(const tgm_layout &bl, Texture &t);
-#endif
 
     // Before the GPU first renders or stores into the IOSurface (Kernel::surfaceGpuWrites).
     bool surfaceGpuWrites(uint64_t id)
@@ -1582,7 +1578,84 @@ private:
     std::vector<std::unique_ptr<NativeSurface>> nativeSurfaces_;
     uint64_t nativeGeneration_ = 0;
     const Texture *nativeRead(const Texture &source, NativeSurface *&owner, int &error);
-    void reapNativeSurfaces(bool all = false);
+    // What teardown, trim, purge or creation rollback detaches under lock_ and frees synchronously once lock_ is let go
+    // (alias.cpp): BOs, VA reservations, arena host ranges and CF owner references, freed in FIFO order.
+    enum class RetireKind : uint8_t {
+        None = 0,
+        Chunk,
+        WcShared,
+        WcDedicated,
+        SharedHeap,
+        GpuHeap,
+        KeptImport,
+    };
+
+    struct Retired {
+        Bo bo;
+        uint64_t va = 0, vaBytes = 0;
+        void *host = nullptr;
+        uint64_t hostBytes = 0;
+        const void *owner = nullptr;
+        uint64_t accountBytes = 0;
+        uint64_t accountMapped = 0;
+        RetireKind kind = RetireKind::None;
+    };
+
+    class DeferredFrees {
+    public:
+        explicit DeferredFrees(Device &dev) : dev_(dev)
+        {}
+
+        DeferredFrees(const DeferredFrees &) = delete;
+        DeferredFrees &operator=(const DeferredFrees &) = delete;
+
+        ~DeferredFrees()
+        {
+            flush();
+        }
+
+        bool empty() const
+        {
+            return items_.empty() && !compFreed_;
+        }
+
+        void add(const Retired &r);
+
+        void noteCompFreed()
+        {
+            compFreed_ = true;
+        }
+
+        void flush();
+
+    private:
+        Device &dev_;
+        std::vector<Retired> items_;
+        bool compFreed_ = false;
+    };
+
+    // Bytes and chunks detached from Device tables under lock_ whose off-lock BoFree/vm_deallocate/CFRelease has not
+    // completed yet: incremented under lock_ before clearing the slot and decremented off lock_ after freeing so
+    // Device::held(), wcChunkBytesHeld() and controlMappedBytes() neither under-report still-mapped memory nor
+    // double-count it.
+    struct Retiring {
+        std::atomic<uint64_t> chunkBytes{0};
+        std::atomic<uint32_t> chunkCount{0};
+        std::atomic<uint64_t> wcBytes{0};
+        std::atomic<uint64_t> wcSharedBytes{0};
+        std::atomic<uint64_t> wcMapped{0};
+        std::atomic<uint64_t> heapBytes{0};
+        std::atomic<uint64_t> gpuHeapBytes{0};
+        std::atomic<uint64_t> keptBytes{0};
+    };
+
+    Retiring retiring_;
+    void freeNow(Retired &r);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    // createTexture's block-linear target over compressible memory of its own (probeCompressNext), under lock_
+    bool probeCompressible(const tgm_layout &bl, Texture &t, DeferredFrees &deferred);
+#endif
+    void reapNativeSurfaces(std::vector<Bo> &detached, bool all = false);
     std::vector<Chunk> chunks_;
 
     // Dedicated chunks freed but kept wired for the next allocation of the same size: a video's frames are surface textures
@@ -1602,16 +1675,16 @@ private:
     // write-combined buffers' memory: GPU-pool BOs (BoAlloc coherent: the CPU maps them write-combined), sub-allocated by page
     std::vector<Chunk> wcChunks_;
     bool wcAlloc(uint64_t bytes, Span &s);
-    void wcFree(Span &s);
+    void wcFree(Span &s, DeferredFrees &deferred);
 
     bool blAlloc(uint64_t bytes, uint64_t align, Span &s)
     {
         return tiledAlloc(blChunks_, fx::kBlockLinearKind, bytes, align, s);
     }
 
-    void blFree(Span &s)
+    void blFree(Span &s, DeferredFrees &deferred)
     {
-        tiledFree(blChunks_, s);
+        tiledFree(blChunks_, s, deferred);
     }
 
     // lock_ held: where block-linear span `s`'s bytes lie under a kind-0 view of its chunk; 0: no view could be bound
@@ -1627,7 +1700,8 @@ private:
         std::shared_ptr<std::atomic<uint64_t>> multiKindGen;
         uint32_t leases = 0;  // CPU access and m2v views keep its mappings and host range
         bool used = false, isVolatile = false, purged = false, dying = false;
-        bool wc = false;  // its host pages are write-combined (arena.cpp hostPages)
+        bool wc = false;    // its host pages are write-combined (arena.cpp hostPages)
+        bool busy = false;  // an off-lock purge, trim or restore is in flight on this slot (lock_)
 
         // its BO bound again under another PTE kind (createArena's comment)
         struct View {
@@ -1655,17 +1729,20 @@ private:
         return it == arenaCrossSeen_.end() ? 0 : it->second;
     }
 
+    gm20b::CondVar arenaReady_;
     std::atomic<uint32_t> purgedArenas_{0};
-    bool bindArena(Arena &a);  // lock_ held
+    void waitArena(std::unique_lock<gm20b::Mutex> &l, uint32_t index);
+    bool restoreArenaLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index);
+    bool bindArena(Arena &a, DeferredFrees &deferred);  // lock_ held (createArena)
     // lock_ held: [offset, offset + bytes) of `a`'s host range imported and bound at its VAs as one more part
     bool bindArenaPart(Arena &a, uint64_t offset, uint64_t bytes);
-    void unbindArena(Arena &a);  // lock_ held: its import, whole or in parts, freed
-    void trimLocked(Arena &a, const std::atomic<uint32_t> &committed);
+    void unbindArena(Arena &a, DeferredFrees &deferred);  // lock_ held: its import, whole or in parts, detached
+    void trimLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const std::atomic<uint32_t> &committed);
     // lock_ held: the holes a placement of [offset, offset + bytes) reaches bound again; false: no memory for them
     bool backPlacement(Arena &a, uint64_t offset, uint64_t bytes);
-    void purgeLocked(Arena &a, const std::atomic<uint32_t> &committed);
-    void freeArena(Arena &a);  // lock_ held
-    void arenaFree(Span &s);   // lock_ held
+    void purgeLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const std::atomic<uint32_t> &committed);
+    void freeArena(Arena &a, DeferredFrees &deferred);                                    // lock_ held
+    void arenaFree(std::unique_lock<gm20b::Mutex> &l, Span &s, DeferredFrees &deferred);  // lock_ held
     const ArenaStorage *arenaStorage(const Arena &arena, uint32_t index, uint64_t offset, uint64_t bytes, uint64_t va,
                                      uint32_t kind) const;
     // lock_ held: the arena's mapping of `kind` (its own, its pitch view, or a view made now); 0: none
@@ -1679,11 +1756,12 @@ private:
     // `ask` laid out in `at`'s arena, else (any kind but Plain) in the device's chunks of its kind, with its header
     bool createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at);
     // lock_ held: `bytes` of the arena under `kind` as t's memory (Texture::arena)
-    bool arenaSpan(const ArenaAt &at, uint64_t bytes, uint64_t align, uint32_t kind, Texture &t);
+    bool arenaSpan(std::unique_lock<gm20b::Mutex> &l, const ArenaAt &at, uint64_t bytes, uint64_t align, uint32_t kind,
+                   Texture &t);
 
     // a span of chunks bound with PTE kind `kind` (block-linear images), lock_ held
     bool tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t bytes, uint64_t align, Span &s);
-    void tiledFree(std::vector<Chunk> &chunks, Span &s);
+    void tiledFree(std::vector<Chunk> &chunks, Span &s, DeferredFrees &deferred);
     // lock_ held (`unlocked`: the caller's lock, let go for the kernel's wiring); the chunk's index in `chunks`
     bool newTiledChunk(std::vector<Chunk> &chunks, uint32_t kind, uint64_t size, bool dedicated,
                        std::unique_lock<gm20b::Mutex> *unlocked, uint32_t &index);
@@ -1753,25 +1831,25 @@ private:
     PlainMem *largestPlain(uint32_t tag, uint32_t memory, bool layered) const;
     // A memoryless backing of `m`'s shape on the largest plain memory of its tag and memory, made where none holds it;
     // nullptr when no memory or header is had
-    Backing *plainBacking(const Texture &m, uint32_t tag, bool blockLinear);
-    void plainFree(Backing &b);
-    void freePlainSpan(PlainMem &mem);
-    void dropPlain(PlainMem *mem);  // its span back, and it out of plainMems_
+    Backing *plainBacking(const Texture &m, uint32_t tag, bool blockLinear, DeferredFrees &deferred);
+    void plainFree(Backing &b, DeferredFrees &deferred);
+    void freePlainSpan(PlainMem &mem, DeferredFrees &deferred);
+    void dropPlain(PlainMem *mem, DeferredFrees &deferred);  // its span back, and it out of plainMems_
 
     // createOwnedZeta's memory by its address: its format's index and span, outside Texture::span, which alias() and
     // freeSpan() take for block-linear colour memory
     std::map<uint64_t, std::pair<uint32_t, Span>> ownedZeta_;
     // createCompressedZeta's memory, or a moved zeta's (compressedFromPlain), by its address
     std::map<uint64_t, PrivateComp> compZeta_;
-    void freeCompressedZeta(uint64_t va);  // lock_ held
+    void freeCompressedZeta(uint64_t va, DeferredFrees &deferred);  // lock_ held
 
-    void freeOwnedZeta(uint64_t va)  // lock_ held
+    void freeOwnedZeta(uint64_t va, DeferredFrees &deferred)  // lock_ held
     {
-        freeCompressedZeta(va);
+        freeCompressedZeta(va, deferred);
         const auto at = ownedZeta_.find(va);
         if (at == ownedZeta_.end())
             return;
-        tiledFree(zChunks_[at->second.first], at->second.second);
+        tiledFree(zChunks_[at->second.first], at->second.second, deferred);
         ownedZeta_.erase(at);
     }
 
@@ -1856,7 +1934,7 @@ private:
     bool init(std::string &err);
     bool openChannel(std::string &err, bool &gaveBack);
     void growRing(Ring &r, uint64_t most);
-    void freeChunk(Chunk &ch);
+    void freeChunk(Chunk &ch, DeferredFrees &deferred);
     uint32_t contextWords() const;
     void emitContext(Push &p);
     bool reopen();
@@ -1905,28 +1983,28 @@ private:
     void freeTicPair(uint32_t first);
     void writeTic(const Texture &t);
     bool poolAlloc(uint64_t bytes, Span &s);
-    void poolFree(Span &s);
+    void poolFree(Span &s, DeferredFrees &deferred);
     bool tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch, Texture &t,
-                             Texture *sampled);
+                             Texture *sampled, DeferredFrees &deferred);
     // texel_rows.cpp. lock_ held: `t` a texel buffer of `elements` texels of `format` held in a pool of import `i`'s
     // bytes from `offset`, its rows `bytesPerRow` apart, taking `i`'s hold
-    bool createTexelRows(Import *i, uint64_t offset, uint32_t bytesPerRow, uint32_t elements, uint32_t format,
-                         Texture &t);
+    bool createTexelRows(std::unique_lock<gm20b::Mutex> &l, Import *i, uint64_t offset, uint32_t bytesPerRow,
+                         uint32_t elements, uint32_t format, Texture &t, DeferredFrees &deferred);
     TextureTransferResult transferTexelRows(const Texture &t, const uint32_t origin[3], const uint32_t size[3],
                                             void *bytes, bool write, std::shared_ptr<void> owner);
     Import *importSurface(std::unique_lock<gm20b::Mutex> &l, uint64_t id, void *base, uint64_t bytes, const void *owner,
                           const LayoutAsk *ask = nullptr);
     Import *makeImport(uint64_t id, void *base, uint64_t bytes, const void *owner, const LayoutAsk *ask);
     // lock_ held: a texture's hold on its import goes. A surface's import no texture holds is kept (keepImport)
-    void release(Import *i);
-    void keepImport(Import *i);
-    void dropImport(Import *i);
-    Trimmed dropKeptImports();
+    void release(Import *i, DeferredFrees &deferred);
+    void keepImport(Import *i, DeferredFrees &deferred);
+    void dropImport(Import *i, DeferredFrees &deferred, bool wasKept = false);
+    Trimmed dropKeptImports(DeferredFrees &deferred);
     // lock_ held (alias.cpp): a hold on a span's lease, made at its first alias; the last drop frees what the lease holds
     Lease *leaseSpan(Lease *&lease, const Span &span, Memory from);
-    void dropLocked(Lease *lease);
+    void dropLocked(std::unique_lock<gm20b::Mutex> &l, Lease *lease, DeferredFrees &deferred);
     // lock_ held: the span goes back to where it came from now, or at its lease's last drop
-    void freeSpan(Span &span, Memory from, Lease *&lease);
+    void freeSpan(std::unique_lock<gm20b::Mutex> &l, Span &span, Memory from, Lease *&lease, DeferredFrees &deferred);
 
     static Memory memoryOf(const Texture &t)
     {
@@ -1936,13 +2014,13 @@ private:
     // Scratch colors occupy distinct tags within a pass and reuse them after its GPU boundary. Depth and shader-test
     // scratch remain separate. Plain and compressed views keep their own backing and retire after their final fence.
     // `copied`: the copy engine fills or drains it (a shadow), so it compresses only where comp.h proves that safe.
-    Texture *backing(const Texture &memoryless, uint32_t tag = 0, bool blockLinear = false, bool compression = true,
-                     bool copied = false);
+    Texture *backing(DeferredFrees &deferred, const Texture &memoryless, uint32_t tag = 0, bool blockLinear = false,
+                     bool compression = true, bool copied = false);
     // The backing backing() last answered the same ask with, taken with no lock while nothing that decides backings has
     // changed since (backingEpoch_); nullptr: ask backing() under lock_. The encoding thread's alone.
     Texture *lastBacking(const Texture &memoryless, uint32_t tag = 0, bool blockLinear = false, bool compression = true,
                          bool copied = false);
-    void trimBackings();
+    void trimBackings(DeferredFrees &deferred);
 
     // Compressed backings (comp.cpp), lock_ held: the compressible kind a backing of this shape takes (0: none or
     // compression off); a backing on compressed memory made off this thread, or nullptr after asking compThread_ for some
@@ -1983,13 +2061,13 @@ private:
     bool compUnsettled();                             // lock_
     void compSettledRun(std::unique_lock<gm20b::Mutex> &l);
 #endif
-    void compFree(Backing &b);
+    void compFree(Backing &b, DeferredFrees &deferred);
     // This process gave compressed memory back, lock_ held: the asks refused for a shortage may be made again, and each
     // a plain private texture still wants is (the one event that can change the kernel's answer that this process sees;
     // another process's give-back raises none)
     void compGaveBack();
     // Made buffers no backing took while stale, at `now`
-    void compTrim(uint64_t now);
+    void compTrim(uint64_t now, DeferredFrees &deferred);
     // When compressed or shared plain memory, a made buffer or a retired backing next turns stale (compClock()), 0 with
     // none held
     uint64_t compDeadline() const;
@@ -2008,10 +2086,10 @@ private:
     void noteCompressed(const TextureAsk &ask, const Bo &bo, uint64_t bytes, Texture &t);
     // written under lock_, read without it by the counters
     std::atomic<uint64_t> privateMade_{0};
-    void releasePrivateCompressed(const Texture &t);  // lock_ held
+    void releasePrivateCompressed(const Texture &t, DeferredFrees &deferred);  // lock_ held
     // A closed private texture's compressed memory, lock_ held: kept made for the next of its kind where that holds
     // back no ask refused for a shortage, else given back
-    void compRelease(PrivateComp comp);
+    void compRelease(PrivateComp comp, DeferredFrees &deferred);
 
     // plain private textures wanting compressed memory (wantCompressed), lock_
     struct PrivateWant {

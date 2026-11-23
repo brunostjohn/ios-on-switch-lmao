@@ -290,7 +290,7 @@ ResourceSet::Renewal ResourceSet::renew(Kernel &k, uint32_t generation)
     std::lock_guard<gm20b::Mutex> l(lock_);
     if (generation != generation_)
         return Renewal::renewed;
-    if (!mirror_ || *mirror_ == generation_)
+    if (!mirror_ || __atomic_load_n(mirror_, __ATOMIC_ACQUIRE) == generation_)
         return Renewal::current;
     return registerLocked(k, "for an ended generation") ? Renewal::renewed : Renewal::refused;
 }

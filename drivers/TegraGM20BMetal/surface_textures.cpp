@@ -20,7 +20,7 @@ static_assert(kTexelBufferType == fx::kTexOneDBuffer);
 // kernel decided (a view of another format of the same texel size reads it as its own), under the import's
 // TGM_LAYOUT_KIND binding, which the 3D and 2D engines, the copy engine and the texture unit all address so
 bool Device::tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch, Texture &t,
-                                 Texture *sampled)
+                                 Texture *sampled, DeferredFrees &deferred)
 {
     const tgm_layout &l = t.import->layout;
     SurfaceView view;
@@ -28,7 +28,7 @@ bool Device::tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t heigh
     if (!viewed || (!view.direct && !sampled)) {
         surfaceRefusal = !viewed ? "a crop the kernel's block-linear layout of the surface does not hold"
                                  : "no memory for the pool image a crop of a block-linear surface is sampled through";
-        release(t.import);
+        release(t.import, deferred);
         t.import = nullptr;
         return false;
     }
@@ -50,7 +50,7 @@ bool Device::tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t heigh
     }
     if (!(t.tic = allocTic())) {
         surfaceRefusal = "no texture header left";
-        release(t.import);
+        release(t.import, deferred);
         t.import = nullptr;
         return false;
     }
@@ -92,6 +92,7 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
             return false;
         }
     }
+    DeferredFrees deferred(*this);
     std::unique_lock<gm20b::Mutex> l(lock_);
     t.pitch = pitch;
     const LayoutAsk ask = {t.width, t.height, t.bpp, pitch, writes && !offset && !sampled && !blocks};
@@ -102,7 +103,7 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
                          "iosurface-layout or vm-bind line), or no GPU VA left";
     if (t.import && offPage && t.import->kernelTiled()) {
         surfaceRefusal = "a surface over memory off a page that the kernel lays out block-linear";
-        release(t.import);
+        release(t.import, deferred);
         t.import = nullptr;
     }
     if (t.import && t.import->kernelTiled()) {
@@ -117,10 +118,11 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
             }
             l.lock();
         }
-        tiledSurfaceTexture(offset, width, height, pitch, t, sampled);
+        tiledSurfaceTexture(offset, width, height, pitch, t, sampled, deferred);
     }
     if (!t.import) {
         l.unlock();
+        deferred.flush();
         if (sampled && sampled != t.sampled) {
             destroyTexture(*sampled);
             delete sampled;
@@ -149,7 +151,7 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
     }
     if (!(t.tic = allocTic())) {
         surfaceRefusal = "no texture header left";
-        release(t.import);
+        release(t.import, deferred);
         t.import = nullptr;
         return false;
     }
@@ -174,8 +176,9 @@ bool Device::createPlanarTexture(uint64_t surfaceId, void *base, uint64_t allocB
     if (!planes)
         return false;
     if (!createTexture(width, height, kRGBA8Unorm, t)) {  // the image: pool memory, its texture header
+        DeferredFrees deferred(*this);
         std::lock_guard<gm20b::Mutex> l(lock_);
-        release(planes);
+        release(planes, deferred);
         return false;
     }
     t.import = planes;
@@ -342,6 +345,7 @@ bool Device::createSurfaceTexelBuffer(uint64_t surfaceId, void *base, uint64_t a
         return false;
     }
     {
+        DeferredFrees deferred(*this);
         std::unique_lock<gm20b::Mutex> l(lock_);
         Import *i =
             importSurface(l, surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface);
@@ -351,8 +355,8 @@ bool Device::createSurfaceTexelBuffer(uint64_t surfaceId, void *base, uint64_t a
             return false;
         }
         if (i->kernelTiled()) {
-            if (!createTexelRows(i, offset, bytesPerRow, elements, format, t)) {
-                release(i);
+            if (!createTexelRows(l, i, offset, bytesPerRow, elements, format, t, deferred)) {
+                release(i, deferred);
                 return false;
             }
         } else {
@@ -369,7 +373,7 @@ bool Device::createSurfaceTexelBuffer(uint64_t surfaceId, void *base, uint64_t a
             t.cpu = static_cast<uint8_t *>(base) + offset;
             if (!(t.tic = allocTic())) {
                 surfaceRefusal = "no texture header left";
-                release(i);
+                release(i, deferred);
                 t.import = nullptr;
                 return false;
             }

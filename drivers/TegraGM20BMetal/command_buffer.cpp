@@ -41,17 +41,24 @@ void Device::reapAtBegin()
 {
     if (!trimmedPending_.load(std::memory_order_acquire) && !nativeStale_.load(std::memory_order_acquire))
         return;
-    SWITCH_METAL_ENCODE_LOCK(l, lock_);
-    reapNativeSurfaces();
-    nativeStale_.store(std::any_of(nativeSurfaces_.begin(), nativeSurfaces_.end(),
-                                   [](const std::unique_ptr<NativeSurface> &s) {
-                                       return !s->cached;
-                                   }),
-                       std::memory_order_relaxed);
-    for (Backing *b : trimmedBackings_)
+    DeferredFrees deferred(*this);
+    std::vector<Backing *> trimmed;
+    {
+        SWITCH_METAL_ENCODE_LOCK(l, lock_);
+        std::vector<Bo> nativeBos;
+        reapNativeSurfaces(nativeBos);
+        for (const Bo &bo : nativeBos)
+            deferred.add({bo});
+        nativeStale_.store(std::any_of(nativeSurfaces_.begin(), nativeSurfaces_.end(),
+                                       [](const std::unique_ptr<NativeSurface> &s) {
+                                           return !s->cached;
+                                       }),
+                           std::memory_order_relaxed);
+        trimmed.swap(trimmedBackings_);
+        trimmedPending_.store(false, std::memory_order_relaxed);
+    }
+    for (Backing *b : trimmed)
         delete b;
-    trimmedBackings_.clear();
-    trimmedPending_.store(false, std::memory_order_relaxed);
 }
 
 CommandBuffer *Device::begin()
@@ -150,10 +157,11 @@ CommandBuffer *Device::begin()
     reapAtBegin();
     // a trim's lock once in 64 command buffers, never waited for: the compressed-memory thread holding it trims too
     if (commits() % 64 == 0) {
+        DeferredFrees deferred(*this);
         std::unique_lock<gm20b::Mutex> l(lock_, std::try_to_lock);
         if (l.owns_lock()) {
             SWITCH_METAL_ENCODE_COUNT(Locks);
-            trimBackings();
+            trimBackings(deferred);
         }
     }
     cb.stamp = stampOf(commits());
@@ -421,8 +429,9 @@ bool CommandBuffer::commit(uint32_t &seqno)
             d.tablesInvalidated_ = written;
         }
         if (!heaps_.empty()) {
-            SWITCH_METAL_ENCODE_LOCK(lock, d.lock_);
-            nameHeaps();
+            std::unique_lock<gm20b::Mutex> lock(d.lock_);
+            SWITCH_METAL_ENCODE_COUNT(Locks);
+            nameHeaps(lock);
         }
     }
     if (!batchWork_.operations)

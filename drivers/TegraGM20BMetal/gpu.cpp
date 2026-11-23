@@ -316,15 +316,22 @@ Device::~Device()
     {
         std::lock_guard<gm20b::Mutex> l(lock_);
         stopping_ = true;
-        dropKeptImports();
     }
     grow_.notify_all();
     if (grower_.joinable())
         grower_.join();
     compStop();
+    {
+        DeferredFrees deferred(*this);
+        std::lock_guard<gm20b::Mutex> l(lock_);
+        dropKeptImports(deferred);
+        std::vector<Bo> nativeBos;
+        reapNativeSurfaces(nativeBos, true);
+        for (const Bo &bo : nativeBos)
+            deferred.add({bo});
+    }
     if (const uint32_t ch = channel_.load(std::memory_order_relaxed))
         k_.closeChannel(ch);
-    reapNativeSurfaces(true);
     for (Backing *b : trimmedBackings_)
         delete b;
 }
@@ -524,11 +531,12 @@ bool Device::init(std::string &err)
     // at the render server's start, not under its first frames: the heap's first part, the mip chains' first chunk and the
     // first pool chunk
     {
+        DeferredFrees deferred(*this);
         std::lock_guard<gm20b::Mutex> l(lock_);
         heapGrow(heapCopiesAt_ + std::min<uint64_t>(pack_.bytes(PackHeap) + kHeapSlack, kHeapAtOpen));
         Span first;
         if (blAlloc(1, 0, first))
-            blFree(first);
+            blFree(first, deferred);
     }
     uint32_t chunk;
     newChunk(sizes_.chunk, false, nullptr, chunk);

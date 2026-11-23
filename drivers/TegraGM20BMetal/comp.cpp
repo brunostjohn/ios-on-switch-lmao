@@ -131,7 +131,15 @@ void Device::compStart()
                 compMake(l);
                 zbcMake(l);
                 SWITCH_METAL_DIAGNOSTIC(compSettledRun(l));
-                trimBackings();
+                if (stopping_)
+                    return;
+                DeferredFrees deferred(*this);
+                trimBackings(deferred);
+                if (!deferred.empty()) {
+                    l.unlock();
+                    deferred.flush();
+                    l.lock();
+                }
             }
         });
     compWake_.notify_one();
@@ -235,8 +243,11 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
                                                  (unsigned long long)(w.bytes >> 10), w.kind, (long long)us));
             continue;
         }
-        if (made)
+        if (made) {
+            l.unlock();
             k_.free(bo);
+            l.lock();
+        }
         SWITCH_METAL_DIAGNOSTIC(stats.compFailed++);
         const bool shortage = compShortage(kr);
         if (comp_.refuse(w, shortage)) {
@@ -309,7 +320,7 @@ void Device::compSettledRun(std::unique_lock<gm20b::Mutex> &l)
 }
 #endif
 
-void Device::compFree(Backing &b)
+void Device::compFree(Backing &b, DeferredFrees &deferred)
 {
     if (b.texture.tic)
         freeTic(b.texture.tic);
@@ -321,11 +332,11 @@ void Device::compFree(Backing &b)
     SWITCH_METAL_DIAGNOSTIC(stats.compHeld--);
     SWITCH_METAL_DIAGNOSTIC(stats.compHeldBytes -= mem->bo.bytes);
     SWITCH_METAL_DIAGNOSTIC(glassMemEvent("compressed memory freed", mem->bo.bytes));
-    k_.free(mem->bo);
+    deferred.add({mem->bo});
+    deferred.noteCompFreed();
     comp_.mems.erase(std::find_if(comp_.mems.begin(), comp_.mems.end(), [&](const std::unique_ptr<CompMem> &m) {
         return m.get() == mem;
     }));
-    compGaveBack();
 }
 
 uint64_t Device::compDeadline() const
@@ -344,16 +355,16 @@ uint64_t Device::compDeadline() const
     return at ? std::max(at, compClock() + kCompRecheckNs) : 0;
 }
 
-void Device::compTrim(uint64_t now)
+void Device::compTrim(uint64_t now, DeferredFrees &deferred)
 {
     for (auto it = comp_.ready.begin(); it != comp_.ready.end();) {
         if (readyStale(commits(), it->madeAt, now, it->readyNs)) {
             SWITCH_METAL_DIAGNOSTIC(stats.compHeld--);
             SWITCH_METAL_DIAGNOSTIC(stats.compHeldBytes -= it->bo.bytes);
             SWITCH_METAL_DIAGNOSTIC(glassMemEvent("compressed memory freed unused", it->bo.bytes));
-            k_.free(it->bo);
+            deferred.add({it->bo});
+            deferred.noteCompFreed();
             it = comp_.ready.erase(it);
-            compGaveBack();
             continue;
         }
         ++it;

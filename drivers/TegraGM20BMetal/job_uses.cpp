@@ -52,7 +52,7 @@ void CommandBuffer::useStorage(uint64_t va, uint64_t bytes, bool write, bool hos
 // read-only), host-written for a heap the CPU writes: its write-combined pages leave no CPU line behind, the GPU's L2 may
 // hold stale ones. A private heap's arena goes with the set instead. Each resource the heap made outside its arena is a use
 // of its own.
-void CommandBuffer::nameHeaps()
+void CommandBuffer::nameHeaps(std::unique_lock<gm20b::Mutex> &l)
 {
     Device &d = *dev_;
     for (const HeapMembers *heap : heaps_) {
@@ -64,6 +64,7 @@ void CommandBuffer::nameHeaps()
             }
         };
         if (heap->arena() < d.arenas_.size()) {
+            d.waitArena(l, heap->arena());
             const Device::Arena &a = d.arenas_[heap->arena()];
             if (a.used && !a.purged) {
                 if (a.multiKindGen && a.multiKindGen->load(std::memory_order_acquire) != 0)

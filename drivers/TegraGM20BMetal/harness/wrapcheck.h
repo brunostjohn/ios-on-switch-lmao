@@ -59,6 +59,7 @@ struct DeviceHarness {
         expect(hasZero(device.push_) && hasZero(device.upload_), "abandon preserves the earlier zero submission");
         Device::Backing *held = nullptr;
         {
+            Device::DeferredFrees deferred(device);
             std::lock_guard<std::mutex> lock(device.lock_);
             for (auto *backing : device.backings_)
                 if (backing->texture.width == 17 && backing->texture.height == 13 && backing->submitted &&
@@ -67,15 +68,16 @@ struct DeviceHarness {
             expect(held != nullptr, "transient backing records a valid zero last use");
             if (held)
                 held->retired = true;
-            device.trimBackings();
+            device.trimBackings(deferred);
             expect(std::find(device.backings_.begin(), device.backings_.end(), held) != device.backings_.end(),
                    "idle trimming retains the backing before zero physically retires");
         }
         mock_iokit_pause(device.channel_.load(std::memory_order_acquire), false);
         expect(device.wait(sequence) && device.done(sequence), "zero completes through the ordinary fence wait");
         {
+            Device::DeferredFrees deferred(device);
             std::lock_guard<std::mutex> lock(device.lock_);
-            device.trimBackings();
+            device.trimBackings(deferred);
             expect(std::find(device.backings_.begin(), device.backings_.end(), held) == device.backings_.end(),
                    "retired transient backing releases after zero completion");
         }

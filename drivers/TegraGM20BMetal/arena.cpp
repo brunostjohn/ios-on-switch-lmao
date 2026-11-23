@@ -70,9 +70,59 @@ bool Device::arenaFootprint(uint32_t width, uint32_t height, uint32_t format, bo
     return footprint(ask, bytes, align);
 }
 
+void Device::waitArena(std::unique_lock<gm20b::Mutex> &l, uint32_t index)
+{
+    arenaReady_.wait(l, [&] {
+        return index >= arenas_.size() || !arenas_[index].busy;
+    });
+}
+
+bool Device::restoreArenaLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index)
+{
+    if (index >= arenas_.size() || !arenas_[index].purged)
+        return true;
+    Arena &initial = arenas_[index];
+    initial.busy = true;
+    const bool wc = initial.wc;
+    uint8_t *const cpu = initial.cpu;
+    const uint64_t va = initial.va, bufferVa = initial.bufferVa, bytes = initial.bytes;
+    const uint32_t kind = initial.kind;
+    const std::vector<Arena::View> views = initial.views;
+    l.unlock();
+    Bo bo;
+    bool bound = wc ? k_.importPages(cpu, bytes, bo) && k_.bindImportAt(cpu, bo, va, kind)
+                    : k_.alloc(bytes, false, bo, kind, kArenaGranule, false, false, false, va);
+    bound = bound && (bufferVa == va || k_.bindAlias(bo, bufferVa, kPteKindPitch));
+    for (const Arena::View &v : views)
+        bound = bound && k_.bindAlias(bo, v.va, v.kind);
+    if (!bound) {
+        k_.free(bo);
+    } else if (!wc) {
+        Bo alias = bo;
+        alias.va = alias.vaBase = bufferVa;
+        set_.add(k_, {{&bo, TegraGM20BSurfaceRead}, {&alias, TegraGM20BSurfaceRead}});
+        for (const Arena::View &v : views)
+            addAlias(set_, k_, bo, v.va);
+    }
+    l.lock();
+    Arena &a = arenas_[index];
+    if (bound) {
+        a.bo = bo;
+        a.purged = false;
+        purgedArenas_--;
+        SWITCH_METAL_DIAGNOSTIC(stats.poolBytes += bytes);
+        SWITCH_METAL_DIAGNOSTIC(glassMemEvent("heap restored", bytes));
+        SWITCH_METAL_DIAGNOSTIC(stats.arenaRestores++);
+        SWITCH_METAL_DIAGNOSTIC(stats.hostZeroedBytes += wc ? bytes : 0);
+    }
+    a.busy = false;
+    arenaReady_.notify_all();
+    return bound;
+}
+
 // The arena's memory bound at its VA under its kind and at its other views (lock_ held): a private heap's a cached BO from
 // the kernel's spares, a shared heap's its host range's pages wired
-bool Device::bindArena(Arena &a)
+bool Device::bindArena(Arena &a, DeferredFrees &deferred)
 {
     bool bound = a.wc ? k_.importPages(a.cpu, a.bytes, a.bo) && k_.bindImportAt(a.cpu, a.bo, a.va, a.kind)
                       : k_.alloc(a.bytes, false, a.bo, a.kind, kArenaGranule, false, false, false, a.va);
@@ -80,7 +130,10 @@ bool Device::bindArena(Arena &a)
     for (const Arena::View &v : a.views)
         bound = bound && k_.bindAlias(a.bo, v.va, v.kind);
     if (!bound) {
-        k_.free(a.bo);
+        if (a.bo.handle) {
+            deferred.add({a.bo});
+            a.bo = {};
+        }
         return false;
     }
     // Only a private heap's arena joins the set. A job that uses a shared heap names its arena host-written, since the CPU
@@ -94,8 +147,6 @@ bool Device::bindArena(Arena &a)
             addAlias(set_, k_, a.bo, v.va);
     }
     SWITCH_METAL_DIAGNOSTIC(stats.poolBytes += a.bytes);
-    SWITCH_METAL_DIAGNOSTIC(if (a.purged) glassMemEvent("heap restored", a.bytes));
-    SWITCH_METAL_DIAGNOSTIC(stats.arenaRestores += a.purged ? 1 : 0);
     SWITCH_METAL_DIAGNOSTIC(stats.hostZeroedBytes += a.wc ? a.bytes : 0);
     return true;
 }
@@ -125,19 +176,20 @@ bool Device::bindArenaPart(Arena &a, uint64_t offset, uint64_t bytes)
     return true;
 }
 
-void Device::unbindArena(Arena &a)
+void Device::unbindArena(Arena &a, DeferredFrees &deferred)
 {
     a.holes.clear();
     if (a.parts.empty()) {  // whole, or trimmed to no part at all: then its BO is already gone and counted out
         if (a.bo.handle) {
             SWITCH_METAL_DIAGNOSTIC(stats.poolBytes -= a.bytes);
+            deferred.add({a.bo});
+            a.bo = {};
         }
-        k_.free(a.bo);
         return;
     }
     for (auto &[offset, part] : a.parts) {
         SWITCH_METAL_DIAGNOSTIC(stats.poolBytes -= part.bytes);
-        k_.free(part);
+        deferred.add({part});
     }
     a.parts.clear();
 }
@@ -159,17 +211,18 @@ bool Device::createArena(uint64_t bytes, bool blockLinear, uint32_t &arena, bool
     a.place = HeapPlacement(logicalBytes, explicitPlacement);
     a.multiKindGen = std::make_shared<std::atomic<uint64_t>>(0);
     a.used = true;
+    DeferredFrees deferred(*this);
     std::lock_guard<gm20b::Mutex> l(lock_);
     a.id = ++nextArenaId_;
     a.va = k_.reserveVa(bytes);
     // Kind 0xfe changes the sector interpretation inside a GOB. Buffers take a pitch view of the same BO.
     a.bufferVa = blockLinear ? k_.reserveVa(bytes) : a.va;
-    if (!a.va || !a.bufferVa || !bindArena(a)) {
+    if (!a.va || !a.bufferVa || !bindArena(a, deferred)) {
         if (a.va)
-            k_.releaseVa(a.va, bytes);
+            deferred.add({{}, a.va, bytes});
         if (a.bufferVa && a.bufferVa != a.va)
-            k_.releaseVa(a.bufferVa, bytes);
-        vm_deallocate(mach_task_self(), cpu, bytes);
+            deferred.add({{}, a.bufferVa, bytes});
+        deferred.add({{}, 0, 0, reinterpret_cast<void *>(cpu), bytes});
         return false;
     }
     uint32_t i = 0;
@@ -183,40 +236,56 @@ bool Device::createArena(uint64_t bytes, bool blockLinear, uint32_t &arena, bool
     return true;
 }
 
-void Device::freeArena(Arena &a)
+void Device::freeArena(Arena &a, DeferredFrees &deferred)
 {
+    const bool hadGpuHeap = !a.purged && !a.wc;
+    const bool hadSharedHeap = !a.purged && a.wc;
     if (a.purged)
         purgedArenas_--;
     else
-        unbindArena(a);
-    k_.releaseVa(a.va, a.bytes);
+        unbindArena(a, deferred);
+    if (hadGpuHeap)
+        deferred.add({{}, 0, 0, nullptr, 0, nullptr, a.bytes, 0, RetireKind::GpuHeap});
+    // after its BOs: no other arena binds at these VAs, nor maps this host range, before they are unbound
+    deferred.add({{}, a.va, a.bytes});
     if (a.bufferVa != a.va)
-        k_.releaseVa(a.bufferVa, a.bytes);
+        deferred.add({{}, a.bufferVa, a.bytes});
     for (const Arena::View &v : a.views)
-        k_.releaseVa(v.va, a.bytes);
-    vm_deallocate(mach_task_self(), vm_address_t(a.cpu), a.bytes);
+        deferred.add({{}, v.va, a.bytes});
+    deferred.add({{},
+                  0,
+                  0,
+                  a.cpu,
+                  a.bytes,
+                  nullptr,
+                  hadSharedHeap ? a.bytes : 0,
+                  0,
+                  hadSharedHeap ? RetireKind::SharedHeap : RetireKind::None});
     a = Arena();
 }
 
 void Device::destroyArena(uint32_t arena)
 {
-    std::lock_guard<gm20b::Mutex> l(lock_);
+    DeferredFrees deferred(*this);
+    std::unique_lock<gm20b::Mutex> l(lock_);
+    waitArena(l, arena);
     if (arena >= arenas_.size() || !arenas_[arena].used)
         return;
     Arena &a = arenas_[arena];
     a.dying = true;
     if (!a.leases)
-        freeArena(a);
+        freeArena(a, deferred);
 }
 
-void Device::arenaFree(Span &s)
+void Device::arenaFree(std::unique_lock<gm20b::Mutex> &l, Span &s, DeferredFrees &deferred)
 {
+    waitArena(l, s.chunk);
     Arena &a = arenas_[s.chunk];
     delete s.storage;
     a.place.release(s.offset, s.bytes);
     s = {};
     if (a.dying && !a.leases)
-        freeArena(a);
+        freeArena(a, deferred);
 }
 
 uint64_t Device::arenaView(Arena &a, uint32_t kind)
@@ -252,16 +321,15 @@ uint64_t Device::arenaView(Arena &a, uint32_t kind)
     return va;
 }
 
-bool Device::arenaSpan(const ArenaAt &at, uint64_t bytes, uint64_t align, uint32_t kind, Texture &t)
+bool Device::arenaSpan(std::unique_lock<gm20b::Mutex> &l, const ArenaAt &at, uint64_t bytes, uint64_t align,
+                       uint32_t kind, Texture &t)
 {
+    waitArena(l, at.arena);
     if (at.arena >= arenas_.size() || !arenas_[at.arena].used || arenas_[at.arena].dying)
         return false;
-    Arena &a = arenas_[at.arena];
-    const auto bind = [this](Arena &x) {
-        return bindArena(x);
-    };
-    if (!arenaRestore(a, purgedArenas_, bind))
+    if (!restoreArenaLocked(l, at.arena))
         return false;
+    Arena &a = arenas_[at.arena];
     uint64_t offset = at.offset.value_or(0);
     const uint64_t view = arenaView(a, kind);
     bool crossed = false;
@@ -325,17 +393,15 @@ bool Device::arenaTexture(const ArenaAt &at, const TextureAsk &ask, Texture &t)
 
 bool Device::arenaBuffer(uint32_t arena, uint64_t length, Buffer &b, std::optional<uint64_t> requestedOffset)
 {
-    std::lock_guard<gm20b::Mutex> l(lock_);
+    std::unique_lock<gm20b::Mutex> l(lock_);
+    waitArena(l, arena);
     if (arena >= arenas_.size() || !arenas_[arena].used || arenas_[arena].dying ||
         (arenas_[arena].kind != kPteKindPitch && arenas_[arena].bufferVa == arenas_[arena].va) ||
         length > UINT64_MAX - (kArenaPitchAlign - 1))
         return false;
-    Arena &a = arenas_[arena];
-    const auto bind = [this](Arena &x) {
-        return bindArena(x);
-    };
-    if (!arenaRestore(a, purgedArenas_, bind))
+    if (!restoreArenaLocked(l, arena))
         return false;
+    Arena &a = arenas_[arena];
     const uint64_t bytes = (std::max<uint64_t>(length, 16) + kArenaPitchAlign - 1) & ~(kArenaPitchAlign - 1);
     uint64_t offset = requestedOffset.value_or(0);
     bool crossed = false;
@@ -365,16 +431,18 @@ void Device::arenaRelease(Texture &t)
     if (t.arena && glassMemOn.load(std::memory_order_relaxed))
         glassMem->forget(t.storageRange().va);
 #endif
-    std::lock_guard<gm20b::Mutex> l(lock_);
+    DeferredFrees deferred(*this);
+    std::unique_lock<gm20b::Mutex> l(lock_);
     if (t.arena)
-        freeSpan(t.span, Memory::Arena, t.lease);
+        freeSpan(l, t.span, Memory::Arena, t.lease, deferred);
 }
 
 void Device::arenaRelease(Buffer &b)
 {
-    std::lock_guard<gm20b::Mutex> l(lock_);
+    DeferredFrees deferred(*this);
+    std::unique_lock<gm20b::Mutex> l(lock_);
     if (b.arena)
-        freeSpan(b.span, Memory::Arena, b.lease);
+        freeSpan(l, b.span, Memory::Arena, b.lease, deferred);
 }
 
 uint64_t Device::arenaUsed(uint32_t arena)
@@ -391,7 +459,8 @@ uint64_t Device::arenaLargestFree(uint32_t arena, uint64_t align)
 
 bool Device::setArenaVolatile(uint32_t arena, bool isVolatile)
 {
-    std::lock_guard<gm20b::Mutex> l(lock_);
+    std::unique_lock<gm20b::Mutex> l(lock_);
+    waitArena(l, arena);
     return arena < arenas_.size() && arenaSetVolatile(arenas_[arena], !isVolatile);
 }
 
@@ -421,93 +490,164 @@ void Device::arenaUse(uint64_t &placed, uint64_t &volatileBytes, uint64_t *given
 
 bool Device::arenaPurged(uint32_t arena)
 {
-    std::lock_guard<gm20b::Mutex> l(lock_);
+    std::unique_lock<gm20b::Mutex> l(lock_);
+    waitArena(l, arena);
     return arena < arenas_.size() && arenas_[arena].purged;
 }
 
-// lock_ held. The commit path counts itself in `committed` before it counts purged arenas, so one of the two sees the
-// other: a command buffer committed meanwhile keeps the pages.
-void Device::purgeLocked(Arena &a, const std::atomic<uint32_t> &committed)
+// lock_ held through `l`. The commit path counts itself in `committed` before it counts purged arenas, so one of the
+// two sees the other: a command buffer committed meanwhile keeps the pages. The slot stays busy while BoFree and
+// hostPages run with lock_ let go so no restore, destroy or access can touch the same VAs or host range until they end.
+void Device::purgeLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const std::atomic<uint32_t> &committed)
 {
     purgedArenas_++;
     if (committed.load()) {
         purgedArenas_--;
         return;
     }
-    unbindArena(a);
-    if (a.wc) {
-        vm_address_t at = vm_address_t(a.cpu);
-        hostPages(a.bytes, at, true);
+    Arena &initial = arenas_[index];
+    const bool wc = initial.wc;
+    uint8_t *const cpu = initial.cpu;
+    const uint64_t bytes = initial.bytes;
+    initial.busy = true;
+    initial.purged = true;
+    DeferredFrees deferred(*this);
+    unbindArena(initial, deferred);
+    if (wc)
+        retiring_.heapBytes.fetch_add(bytes, std::memory_order_relaxed);
+    else
+        deferred.add({{}, 0, 0, nullptr, 0, nullptr, bytes, 0, RetireKind::GpuHeap});
+    SWITCH_METAL_DIAGNOSTIC(glassMemEvent("heap purged", bytes));
+    l.unlock();
+    deferred.flush();
+    if (wc) {
+        vm_address_t at = vm_address_t(cpu);
+        hostPages(bytes, at, true);
+        retiring_.heapBytes.fetch_sub(bytes, std::memory_order_relaxed);
     }
-    SWITCH_METAL_DIAGNOSTIC(glassMemEvent("heap purged", a.bytes));
-    a.purged = true;
+    l.lock();
+    arenas_[index].busy = false;
+    arenaReady_.notify_all();
 }
 
 void Device::purgeArena(uint32_t arena, const std::atomic<uint32_t> &committed)
 {
-    std::lock_guard<gm20b::Mutex> l(lock_);
+    std::unique_lock<gm20b::Mutex> l(lock_);
+    waitArena(l, arena);
     if (arena < arenas_.size() && arenaPurgeable(arenas_[arena], done(submitted()), committed.load() != 0, true))
-        purgeLocked(arenas_[arena], committed);
+        purgeLocked(l, arena, committed);
 }
 
 void Device::purgeArenas(const std::atomic<uint32_t> &committed)
 {
-    std::lock_guard<gm20b::Mutex> l(lock_);
-    purgeIdleArenas(arenas_, done(submitted()), committed.load() != 0, [&](Arena &a) {
-        purgeLocked(a, committed);
-    });
+    std::unique_lock<gm20b::Mutex> l(lock_);
+    for (uint32_t i = 0; i < arenas_.size(); ++i)
+        if (!arenas_[i].busy && arenaPurgeable(arenas_[i], done(submitted()), committed.load() != 0, false))
+            purgeLocked(l, i, committed);
 }
 
-// lock_ held, the device idle: the import goes (no GPU work can read it), each hole's host range is replaced by untouched
-// pages, and the placed parts are imported again at their VAs. It counts as a purge while it runs (purgeLocked's order
-// with the commit path), so a command buffer committed meanwhile waits in restoreArena for the parts to be bound again,
-// and one committed before it keeps the arena as it is. A part the kernel refuses binds the whole arena again.
-void Device::trimLocked(Arena &a, const std::atomic<uint32_t> &committed)
+// lock_ held through `l`, the device idle: the import goes (no GPU work can read it), each hole's host range is
+// replaced by untouched pages, and the placed parts are imported again at their VAs, all with lock_ let go while the
+// slot is marked busy. It counts as a purge while it runs (purgeLocked's order with the commit path), so a command
+// buffer committed meanwhile waits in restoreArena for the parts to be bound again, and one committed before it keeps
+// the arena as it is. A part the kernel refuses binds the whole arena again.
+void Device::trimLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const std::atomic<uint32_t> &committed)
 {
-    std::vector<ArenaRange> holes = arenaHoles(a.place, a.bytes, kArenaGranule);
-    if (holes.empty() || holes == a.holes)
+    Arena &initial = arenas_[index];
+    std::vector<ArenaRange> holes = arenaHoles(initial.place, initial.bytes, kArenaGranule);
+    if (holes.empty() || holes == initial.holes)
         return;
     purgedArenas_++;
     if (committed.load()) {
         purgedArenas_--;
         return;
     }
-    unbindArena(a);
+    initial.busy = true;
+    uint8_t *const cpu = initial.cpu;
+    const uint64_t va = initial.va, bufferVa = initial.bufferVa, bytes = initial.bytes;
+    const uint32_t kind = initial.kind;
+    const std::vector<Arena::View> views = initial.views;
+    DeferredFrees deferred(*this);
+    unbindArena(initial, deferred);
+    l.unlock();
+    deferred.flush();
     for (const ArenaRange &h : holes) {
-        vm_address_t at = vm_address_t(a.cpu + h.offset);
+        vm_address_t at = vm_address_t(cpu + h.offset);
         hostPages(h.bytes, at, true);
     }
+    std::vector<std::pair<uint64_t, Bo>> parts;
+#if SWITCH_METAL_DIAGNOSTICS
+    uint64_t partsBytes = 0, zeroedBytes = 0;
+#endif
     ArenaRange refused = {0, 0};
-    for (const ArenaRange &b : arenaBacked(holes, a.bytes))
-        if (!refused.bytes && !bindArenaPart(a, b.offset, b.bytes))
+    auto bindOne = [&](uint64_t offset, uint64_t len, Bo &bo) {
+        uint8_t *at = cpu + offset;
+        bool bound = k_.importPages(at, len, bo) && k_.bindImportAt(at, bo, va + offset, kind) &&
+                     (bufferVa == va || k_.bindAlias(bo, bufferVa + offset, kPteKindPitch));
+        for (const Arena::View &v : views)
+            bound = bound && k_.bindAlias(bo, v.va + offset, v.kind);
+        if (!bound) {
+            k_.free(bo);
+            return false;
+        }
+        return true;
+    };
+    for (const ArenaRange &b : arenaBacked(holes, bytes)) {
+        if (refused.bytes)
+            break;
+        Bo part;
+        if (bindOne(b.offset, b.bytes, part)) {
+            parts.emplace_back(b.offset, part);
+            SWITCH_METAL_DIAGNOSTIC(partsBytes += b.bytes);
+            SWITCH_METAL_DIAGNOSTIC(zeroedBytes += b.bytes);
+        } else {
             refused = b;
-    if (!refused.bytes) {
-        a.holes = std::move(holes);
-        SWITCH_METAL_DIAGNOSTIC(glassMemEvent("heap trimmed", rangeBytes(a.holes)));
-    } else {
-        unbindArena(a);
-        const bool whole = bindArena(a);
+        }
+    }
+    Bo wholeBo;
+    bool whole = false;
+    if (refused.bytes) {
+        for (auto &[offset, part] : parts)
+            k_.free(part);
+        parts.clear();
+        whole = bindOne(0, bytes, wholeBo);
+        SWITCH_METAL_DIAGNOSTIC(if (whole) zeroedBytes += bytes);
         os_log_error(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
                      "SwitchMetal: %{public}s: the kernel refused a trimmed heap's part of %llu bytes at %llu: the "
                      "heap of %llu bytes is %{public}s",
                      getprogname(), (unsigned long long)refused.bytes, (unsigned long long)refused.offset,
-                     (unsigned long long)a.bytes, whole ? "bound whole again" : "purged, its pages refused too");
-        if (!whole) {
-            a.purged = true;
-            purgedArenas_++;
-        }
+                     (unsigned long long)bytes, whole ? "bound whole again" : "purged, its pages refused too");
     }
+    l.lock();
+    Arena &a = arenas_[index];
+    SWITCH_METAL_DIAGNOSTIC(stats.hostZeroedBytes += zeroedBytes);
+    if (!refused.bytes) {
+        a.parts = std::move(parts);
+        a.holes = std::move(holes);
+        SWITCH_METAL_DIAGNOSTIC(stats.poolBytes += partsBytes);
+        SWITCH_METAL_DIAGNOSTIC(glassMemEvent("heap trimmed", rangeBytes(a.holes)));
+    } else if (whole) {
+        a.bo = wholeBo;
+        SWITCH_METAL_DIAGNOSTIC(stats.poolBytes += bytes);
+    } else {
+        a.purged = true;
+        purgedArenas_++;
+    }
+    a.busy = false;
     purgedArenas_--;
+    arenaReady_.notify_all();
 }
 
 void Device::trimArenas(const std::atomic<uint32_t> &committed)
 {
-    std::lock_guard<gm20b::Mutex> l(lock_);
-    if (!done(submitted()))
-        return;
-    for (Arena &a : arenas_)
-        if (a.used && a.wc && !a.purged && !a.dying && !a.leases && !a.isVolatile)
-            trimLocked(a, committed);
+    std::unique_lock<gm20b::Mutex> l(lock_);
+    for (uint32_t i = 0; i < arenas_.size(); ++i) {
+        if (!done(submitted()))
+            return;
+        const Arena &a = arenas_[i];
+        if (a.used && a.wc && !a.purged && !a.dying && !a.leases && !a.isVolatile && !a.busy)
+            trimLocked(l, i, committed);
+    }
 }
 
 bool Device::backPlacement(Arena &a, uint64_t offset, uint64_t bytes)
@@ -563,11 +703,9 @@ const ArenaStorage *Device::arenaStorage(const Arena &arena, uint32_t index, uin
 
 bool Device::restoreArena(uint32_t arena)
 {
-    const auto bind = [this](Arena &a) {
-        return bindArena(a);
-    };
-    std::lock_guard<gm20b::Mutex> l(lock_);
-    return arena >= arenas_.size() || arenaRestore(arenas_[arena], purgedArenas_, bind);
+    std::unique_lock<gm20b::Mutex> l(lock_);
+    waitArena(l, arena);
+    return arena >= arenas_.size() || restoreArenaLocked(l, arena);
 }
 
 }  // namespace gm20b

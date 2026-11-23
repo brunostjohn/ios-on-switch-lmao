@@ -137,6 +137,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
     blockLinear |= !pitchTarget;
     // the device's backings: those the last passes asked the same of with no lock, else under the device's lock once a
     // pass however many attachments need one (the compression thread trims them under it)
+    Device::DeferredFrees deferred(*dev_);
     std::unique_lock<gm20b::Mutex> backingLock(dev_->lock_, std::defer_lock);
     const auto backing = [&](const Texture &shape, uint32_t tag, bool linear, bool compression, bool copied = false) {
         if (Texture *b = backingLock.owns_lock() ? nullptr : dev_->lastBacking(shape, tag, linear, compression, copied))
@@ -145,7 +146,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
             backingLock.lock();
             SWITCH_METAL_ENCODE_COUNT(Locks);
         }
-        return dev_->backing(shape, tag, linear, compression, copied);
+        return dev_->backing(deferred, shape, tag, linear, compression, copied);
     };
     // a colour texture as the depth attachment: a Depth32Float backing (zeta_colour.h)
     const Texture zetaShape = zeta && !zeta->zeta ? colourAsDepthShape(*zeta) : zeta ? *zeta : Texture();
@@ -253,6 +254,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
     }
     if (backingLock.owns_lock())
         backingLock.unlock();
+    deferred.flush();
     encodersOpened_++;
     // the depth's stored region (zcull_planes.h), taken before this pass's own write leaves it stale
     const ZcullStored zcullHeld = zeta ? zcullPlanes_.held(zeta->va) : ZcullStored();

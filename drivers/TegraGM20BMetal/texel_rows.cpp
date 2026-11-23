@@ -32,8 +32,8 @@ Texture rowsSide(const Import &i, uint32_t unit)
 }  // namespace
 
 // lock_ held
-bool Device::createTexelRows(Import *i, uint64_t offset, uint32_t bytesPerRow, uint32_t elements, uint32_t format,
-                             Texture &t)
+bool Device::createTexelRows(std::unique_lock<gm20b::Mutex> &l, Import *i, uint64_t offset, uint32_t bytesPerRow,
+                             uint32_t elements, uint32_t format, Texture &t, DeferredFrees &deferred)
 {
     const FormatInfo *f = formatInfo(format);
     const uint64_t bytes = uint64_t(elements) * f->bpp;
@@ -52,7 +52,7 @@ bool Device::createTexelRows(Import *i, uint64_t offset, uint32_t bytesPerRow, u
     t.va = t.span.va;
     if (!(t.tic = allocTic())) {
         Lease *none = nullptr;
-        freeSpan(t.span, memoryOf(t), none);
+        freeSpan(l, t.span, memoryOf(t), none, deferred);
         surfaceRefusal = "no texture header left";
         return false;
     }
