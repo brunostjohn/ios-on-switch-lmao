@@ -451,32 +451,32 @@ TEST(SwitchPrefsGuard, SetupVersionComesFromTheIpswTable)
 }
 
 // The setup's sync decisions (<switch/boot_sync.h>, kernel/tests/switch_boot_sync_test.cpp) as both kernels apply them:
-// REDONE at exactly the four changes the next boot remakes (IconServices' drop and its marker, timed's drop and its
-// marker), every other write DURABLE, the class deciding the write's IO_SYNC, and the step's end syncing through
-// switch_boot_sync_finish. A change classed wrongly would ship unsynced with every host test green.
+// REDONE at the changes the next boot remakes (IconServices' drop — top-level unlink on 10063, trash mkdir and
+// rename-aside on 12377 — and its marker, timed's drop and its marker), every other write DURABLE, the class deciding
+// the write's IO_SYNC, and the step's end syncing through switch_boot_sync_finish. A change classed wrongly would ship
+// unsynced with every host test green.
 TEST(SwitchPrefsGuard, OnlyTheRemadeChangesGoOutUnsynced)
 {
     using switch_ios::test::Body;
     using switch_ios::test::Count;
     using switch_ios::test::SourceText;
     const char *const functions[] = {
-        "\nnative_switch_watchdog_directory(",
-        "\nnative_switch_replace_file(",
-        "\nnative_switch_data_file(",
-        "\nnative_switch_watchdog_file(",
-        "\nnative_switch_unlink(",
-        "\nnative_switch_mkdir(",
-        "\nnative_switch_icon_cache_write(",
-        "\nnative_switch_icon_cache_unlink(",
-        "\nnative_switch_timed_cache(",
-        "\nnative_switch_sync_volume(",
+        "\nnative_switch_watchdog_directory(", "\nnative_switch_replace_file(", "\nnative_switch_data_file(",
+        "\nnative_switch_watchdog_file(",      "\nnative_switch_unlink(",       "\nnative_switch_mkdir(",
+        "\nnative_switch_icon_cache_write(",   "\nnative_switch_timed_cache(",  "\nnative_switch_sync_volume(",
     };
     std::vector<std::string> first;
     for (const char *path : kKernels) {
         const std::string source = SourceText(path);
-        EXPECT_EQ(Count(source, "SWITCH_BOOT_REDONE"), 4u) << path;
+        const bool salted = std::string(path).find("12377") != std::string::npos;
+        EXPECT_EQ(Count(source, "SWITCH_BOOT_REDONE"), salted ? 5u : 4u) << path;
         EXPECT_EQ(Count(Body(source, "\nnative_switch_icon_cache_write("), "SWITCH_BOOT_REDONE"), 1u) << path;
-        EXPECT_EQ(Count(Body(source, "\nnative_switch_icon_cache_unlink("), "SWITCH_BOOT_REDONE"), 1u) << path;
+        if (salted) {
+            EXPECT_EQ(Count(Body(source, "\nnative_switch_icon_cache_mkdir("), "SWITCH_BOOT_REDONE"), 1u) << path;
+            EXPECT_EQ(Count(Body(source, "\nnative_switch_icon_cache_rename("), "SWITCH_BOOT_REDONE"), 1u) << path;
+        } else {
+            EXPECT_EQ(Count(Body(source, "\nnative_switch_icon_cache_unlink("), "SWITCH_BOOT_REDONE"), 1u) << path;
+        }
         EXPECT_EQ(Count(Body(source, "\nnative_switch_timed_cache("), "SWITCH_BOOT_REDONE"), 2u) << path;
         EXPECT_EQ(Count(Body(source, "\nnative_switch_watchdog_file("), "mode, SWITCH_BOOT_DURABLE);"), 1u) << path;
         const std::string replace = Body(source, "\nnative_switch_replace_file(");
