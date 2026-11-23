@@ -9369,31 +9369,119 @@ native_switch_icon_cache_write(void *context, const char *relative, const char *
 }
 
 static int
-native_switch_icon_cache_unlink(void *context, const char *relative)
+native_switch_icon_cache_mkdir(void *context, const char *relative, unsigned int mode)
 {
 	const struct native_switch_icon_cache_data *data = context;
 	char path[256];
 	int error = native_switch_icon_cache_path(path, relative);
-	if (!error) error = native_switch_unlink(data->p, data->scratch, path, SWITCH_BOOT_REDONE);
+	if (error) return error;
+	vnode_t vp = NULLVP;
+	error = vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW | VNODE_LOOKUP_NOFOLLOW_ANY, &vp, vfs_context_current());
+	if (!error) {
+		if (vnode_mount(vp) != data->data_mount || vnode_mountedhere(vp) != NULL) error = EXDEV;
+		else if (vnode_vtype(vp) == VLNK) error = ELOOP;
+		else if (!vnode_isdir(vp)) error = ENOTDIR;
+		else {
+			struct vnode_attr attributes;
+			VATTR_INIT(&attributes);
+			VATTR_SET(&attributes, va_uid, 0);
+			VATTR_SET(&attributes, va_gid, 0);
+			VATTR_SET(&attributes, va_mode, (mode_t)mode);
+			error = vnode_setattr(vp, &attributes, vfs_context_current());
+		}
+		vnode_put(vp);
+		return error;
+	}
+	if (error != ENOENT) return error;
+	struct mkdir_args request = {.path = data->scratch + 0x900, .mode = (int)mode};
+	int32_t result = 0;
+	if ((error = copyout(path, request.path, strlen(path) + 1)) || (error = mkdir(data->p, &request, &result))) {
+		return error;
+	}
+	NATIVE_SWITCH_COUNT(native_switch_policy_written);
+	(void)switch_boot_sync_change(&native_switch_sync, SWITCH_BOOT_REDONE, path);
+	if ((error = vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW | VNODE_LOOKUP_NOFOLLOW_ANY, &vp, vfs_context_current()))) {
+		return error;
+	}
+	if (vnode_mount(vp) != data->data_mount || vnode_mountedhere(vp) != NULL || !vnode_isdir(vp)) error = EXDEV;
+	else {
+		struct vnode_attr attributes;
+		VATTR_INIT(&attributes);
+		VATTR_SET(&attributes, va_uid, 0);
+		VATTR_SET(&attributes, va_gid, 0);
+		VATTR_SET(&attributes, va_mode, (mode_t)mode);
+		error = vnode_setattr(vp, &attributes, vfs_context_current());
+	}
+	vnode_put(vp);
 	return error;
+}
+
+static int
+native_switch_icon_cache_rename(void *context, const char *from_rel, const char *to_rel)
+{
+	const struct native_switch_icon_cache_data *data = context;
+	char from[256], to[256];
+	int error = native_switch_icon_cache_path(from, from_rel);
+	if (!error) error = native_switch_icon_cache_path(to, to_rel);
+	if (error) return error;
+	vnode_t vp = NULLVP;
+	error = vnode_lookup(from, VNODE_LOOKUP_NOFOLLOW | VNODE_LOOKUP_NOFOLLOW_ANY, &vp, vfs_context_current());
+	if (error) return error;
+	if (vnode_mount(vp) != data->data_mount || vnode_mountedhere(vp) != NULL) error = EXDEV;
+	else if (vnode_vtype(vp) == VLNK) error = ELOOP;
+	else if (!vnode_isdir(vp)) error = ENOTDIR;
+	vnode_put(vp);
+	if (error) return error;
+	struct renameatx_np_args request = {.fromfd = AT_FDCWD, .from = data->scratch + 0xa00,
+	    .tofd = AT_FDCWD, .to = data->scratch + 0xb00, .flags = RENAME_NOFOLLOW_ANY | RENAME_EXCL};
+	int32_t result = 0;
+	if ((error = copyout(from, request.from, strlen(from) + 1)) ||
+	    (error = copyout(to, request.to, strlen(to) + 1))) return error;
+	error = renameatx_np(data->p, &request, &result);
+	if (!error) {
+		NATIVE_SWITCH_COUNT(native_switch_policy_written);
+		(void)switch_boot_sync_change(&native_switch_sync, SWITCH_BOOT_REDONE, to);
+	}
+	return error;
+}
+
+static bool
+native_switch_icon_cache_exists(void *context, const char *relative)
+{
+	const struct native_switch_icon_cache_data *data = context;
+	char path[256];
+	vnode_t vp = NULLVP;
+	if (native_switch_icon_cache_path(path, relative)) return false;
+	if (vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW | VNODE_LOOKUP_NOFOLLOW_ANY, &vp, vfs_context_current())) {
+		return false;
+	}
+	const bool present = vnode_mount(vp) == data->data_mount && vnode_isdir(vp) && vnode_mountedhere(vp) == NULL;
+	vnode_put(vp);
+	return present;
 }
 
 static int
 native_switch_icon_cache_folders(void *context, const char *relative, int (*visit)(void *walk, const char *name),
     void *walk)
 {
-	enum { kEntries = 2048 };
+	enum { kEntries = 2048, kNames = 4096 };
+	const struct native_switch_icon_cache_data *data = context;
 	vfs_context_t vfs = vfs_context_current();
 	vnode_t folder = NULLVP;
 	char path[256];
-	(void)context;
 	int error = native_switch_icon_cache_path(path, relative);
 	if (!error) error = vnode_open(path, FREAD | O_DIRECTORY | O_NOFOLLOW_ANY, 0, 0, &folder, vfs);
 	if (error) return error;
+	if (vnode_mount(folder) != data->data_mount || vnode_mountedhere(folder) != NULL) {
+		(void)vnode_close(folder, FREAD, vfs);
+		return EXDEV;
+	}
 	char *entries = kalloc_data(kEntries, Z_WAITOK);
+	char *names = kalloc_data(kNames, Z_WAITOK);
+	size_t used = 0;
 	UIO_STACKBUF(uio_buf, 1);
 	uio_t uio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ, uio_buf, sizeof(uio_buf));
-	if (!entries) error = ENOMEM;
+	if (!entries || !names) error = ENOMEM;
 	for (int eof = 0, count = 0; !error && !eof;) {
 		uio_reset(uio, uio_offset(uio), UIO_SYSSPACE, UIO_READ);
 		uio_addiov(uio, CAST_USER_ADDR_T(entries), kEntries);
@@ -9401,15 +9489,43 @@ native_switch_icon_cache_folders(void *context, const char *relative, int (*visi
 		const size_t filled = kEntries - (size_t)uio_resid(uio);
 		if (!filled) eof = 1;
 		for (size_t at = 0; !error && at < filled;) {
-			const struct dirent *entry = (const struct dirent *)(entries + at);
-			if (!entry->d_reclen) break;
-			at += entry->d_reclen;
-			if (entry->d_ino && entry->d_type == DT_DIR && entry->d_name[0] != '.') error = visit(walk, entry->d_name);
+			if (filled - at < offsetof(struct dirent, d_name)) {
+				error = EIO;
+				break;
+			}
+			struct dirent entry;
+			memcpy(&entry, entries + at, offsetof(struct dirent, d_name));
+			if (entry.d_reclen < offsetof(struct dirent, d_name) || entry.d_reclen > filled - at) {
+				error = EIO;
+				break;
+			}
+			const char *name = entries + at + offsetof(struct dirent, d_name);
+			const size_t max_name = entry.d_reclen - offsetof(struct dirent, d_name);
+			const size_t cap = entry.d_namlen < max_name ? entry.d_namlen : max_name;
+			at += entry.d_reclen;
+			if (!entry.d_ino || entry.d_type != DT_DIR || !cap || name[0] == '.') continue;
+			const size_t nlen = strnlen(name, cap);
+			if (!nlen) continue;
+			if (used + nlen + 1 > kNames) {
+				error = E2BIG;
+				break;
+			}
+			memcpy(names + used, name, nlen);
+			names[used + nlen] = '\0';
+			used += nlen + 1;
 		}
 	}
 	if (entries) kfree_data(entries, kEntries);
 	const int close_error = vnode_close(folder, FREAD, vfs);
-	return error ? error : close_error;
+	if (!error) error = close_error;
+	/* Visit after closing folder so renameatx_np never mutates an open readdir stream. */
+	for (size_t at = 0; !error && at < used;) {
+		const char *name = names + at;
+		at += strlen(name) + 1;
+		error = visit(walk, name);
+	}
+	if (names) kfree_data(names, kNames);
+	return error;
 }
 
 static void
@@ -9418,17 +9534,19 @@ native_switch_icon_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	struct native_switch_icon_cache_data data = {.p = p, .scratch = scratch, .data_mount = data_mount};
 	const struct switch_icon_cache_ops ops = {
 		.context = &data, .read = native_switch_icon_cache_read, .holds = native_switch_icon_cache_holds,
-		.write = native_switch_icon_cache_write, .unlink = native_switch_icon_cache_unlink,
-		.folders = native_switch_icon_cache_folders,
+		.write = native_switch_icon_cache_write, .folders = native_switch_icon_cache_folders,
+		.mkdir = native_switch_icon_cache_mkdir, .rename = native_switch_icon_cache_rename,
+		.exists = native_switch_icon_cache_exists, .session = bootsessionuuid_string,
 	};
 	struct switch_icon_cache_result result;
 	switch_icon_cache_drop(&ops, &result);
+	switch_icon_cache_sweep_arm(data_mount, result.trash_pending);
 	if (result.error) {
 		printf("SwitchRawBoot: icon cache for GPU build %s NOT dropped: %d\n", result.build, result.error);
 	}
 #if DEVELOPMENT || DEBUG
 	else if (result.requested) {
-		printf("SwitchRawBoot: icon cache for GPU build %s: %d __cache_info__ dropped\n", result.build, result.dropped);
+		printf("SwitchRawBoot: icon cache for GPU build %s: %d folder(s) moved to trash\n", result.build, result.dropped);
 	}
 #endif
 }
