@@ -46,6 +46,7 @@ class SwitchXHCI : public AppleUSBXHCI {
 #if DEVELOPMENT || DEBUG
     unsigned long powerStateFrom;  // PM's work loop: the state powerStateWillChangeTo saw, for the change's log line
 #endif
+    uint32_t powerState;
     volatile bool stateLost;  // SC7 took a saved state; the system's wake reports it, a controller reset forgets it
     uint32_t hardwareInterrupters, runtimeOffset, operationalOffset;
     uint64_t capBase;  // AppleUSBXHCI's mapping of the capability registers
@@ -80,6 +81,11 @@ public:
     bool superSpeedResetOwed() const
     {
         return __atomic_load_n(&sspiDue, __ATOMIC_ACQUIRE);
+    }
+
+    bool isOff() const
+    {
+        return __atomic_load_n(&powerState, __ATOMIC_ACQUIRE) == 0;
     }
 
     static bool controllerRuns()

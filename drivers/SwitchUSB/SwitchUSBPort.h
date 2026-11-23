@@ -22,3 +22,4 @@ bool switch_usb_port_watch(struct thread_call *roleCall);
 // Role thread: the transports for the role, with a USB 3 one while SS port 0's lane is up and, in the host role, once
 // the falcon's SuperSpeed interface has been reset (superSpeedReset: nothing owed).
 void switch_usb_port_follow(enum xusb_port_role role, bool laneUp, bool superSpeedReset);
+bool switch_usb_port_holding_retired();

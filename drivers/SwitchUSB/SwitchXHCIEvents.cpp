@@ -56,10 +56,13 @@ IOReturn SwitchXHCI::systemSleep(bool entering)
 IOReturn SwitchXHCI::powerStateWillChangeTo(IOPMPowerFlags capabilities, unsigned long stateNumber,
                                             IOService *whatDevice)
 {
+    if (whatDevice == this) {
 #if DEVELOPMENT || DEBUG
-    if (whatDevice == this)
         powerStateFrom = getPowerState();
 #endif
+        if (stateNumber != 0)
+            __atomic_store_n(&powerState, static_cast<uint32_t>(stateNumber), __ATOMIC_RELEASE);
+    }
     const IOReturn result = AppleUSBXHCI::powerStateWillChangeTo(capabilities, stateNumber, whatDevice);
     if (whatDevice == getPMRootDomain() && !(capabilities & kIOPMSleepCapability) &&
         __atomic_exchange_n(&stateLost, false, __ATOMIC_ACQ_REL)) {
@@ -77,13 +80,18 @@ IOReturn SwitchXHCI::powerStateWillChangeTo(IOPMPowerFlags capabilities, unsigne
 IOReturn SwitchXHCI::powerStateDidChangeTo(IOPMPowerFlags capabilities, unsigned long stateNumber,
                                            IOService *whatDevice)
 {
+    const IOReturn result = AppleUSBXHCI::powerStateDidChangeTo(capabilities, stateNumber, whatDevice);
+    if (whatDevice == this) {
 #if DEVELOPMENT || DEBUG
-    if (whatDevice == this)
         os_log(OS_LOG_DEFAULT, "SwitchUSB: controller power state %lu -> %lu", powerStateFrom, stateNumber);
 #endif
-    if (whatDevice == this && stateNumber == 0)
-        switch_usb_dma_controller_off();
-    return AppleUSBXHCI::powerStateDidChangeTo(capabilities, stateNumber, whatDevice);
+        __atomic_store_n(&powerState, static_cast<uint32_t>(stateNumber), __ATOMIC_RELEASE);
+        if (stateNumber == 0) {
+            switch_usb_dma_controller_off();
+            switch_usb_reconsider();
+        }
+    }
+    return result;
 }
 
 // Primary interrupt context. INTID 72 with no SMI to acknowledge is ignored a few times (a spurious level); a line
@@ -329,22 +337,30 @@ bool switchxhci_reset_superspeed()
 
 IOService *switchxhci_copy_root_device()
 {
-    const SwitchXHCI *controller = __atomic_load_n(&SwitchXHCI::running, __ATOMIC_ACQUIRE);
-    OSIterator *ports = controller ? controller->getChildIterator(gIOServicePlane) : nullptr;
+    SwitchXHCI *controller = __atomic_load_n(&SwitchXHCI::running, __ATOMIC_ACQUIRE);
+    IORegistryIterator *it =
+        controller ? IORegistryIterator::iterateOver(controller, gIOServicePlane, kIORegistryIterateRecursively)
+                   : nullptr;
     IOService *device = nullptr;
-    for (OSObject *port = ports ? ports->getNextObject() : nullptr; port && !device; port = ports->getNextObject()) {
-        OSIterator *children = static_cast<IORegistryEntry *>(port)->getChildIterator(gIOServicePlane);
-        for (OSObject *child = children ? children->getNextObject() : nullptr; child && !device;
-             child = children->getNextObject()) {
-            if (child->metaCast("IOUSBHostDevice"))
-                device = static_cast<IOService *>(child);
+    if (it) {
+        while (IORegistryEntry *entry = it->getNextObject()) {
+            auto *candidate = OSDynamicCast(IOService, entry);
+            if (!candidate || candidate->isInactive())
+                continue;
+            if (candidate->metaCast("IOUSBHostDevice") || candidate->metaCast("IOUSBHostInterface"))
+                device = candidate;
         }
-        OSSafeReleaseNULL(children);
+        if (device)
+            device->retain();
+        it->release();
     }
-    if (device)
-        device->retain();
-    OSSafeReleaseNULL(ports);
     return device;
+}
+
+bool switchxhci_is_off()
+{
+    const SwitchXHCI *controller = __atomic_load_n(&SwitchXHCI::running, __ATOMIC_ACQUIRE);
+    return controller == nullptr || controller->isOff();
 }
 
 bool switchxhci_remote_wake_armed()

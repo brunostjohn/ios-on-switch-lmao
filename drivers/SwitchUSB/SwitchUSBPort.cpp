@@ -136,15 +136,26 @@ bool watchUntilGone(IOService *device)
     return true;
 }
 
-// Leaving the host role for nothing attached with a device still on the root port.
+bool watchActiveDevice()
+{
+    for (unsigned attempt = 0; attempt < 16; ++attempt) {
+        IOService *device = switchxhci_copy_root_device();
+        if (!device)
+            return false;
+        const bool watched = watchUntilGone(device);
+        OSSafeReleaseNULL(device);
+        if (watched)
+            return true;
+    }
+    return false;
+}
+
+// Leaving the host role for nothing attached with a device still on the root port or behind a hub.
 bool retiresForDevice(enum xusb_port_role role)
 {
     if (role != XUSB_PORT_EMPTY || gTransports.role() != XUSB_PORT_HOST)
         return false;
-    IOService *device = switchxhci_copy_root_device();
-    const bool watched = device != nullptr && watchUntilGone(device);
-    OSSafeReleaseNULL(device);
-    return watched;
+    return watchActiveDevice();
 }
 }  // namespace
 
@@ -171,8 +182,13 @@ void switch_usb_port_follow(enum xusb_port_role role, bool laneUp, bool superSpe
 {
     if (!__atomic_load_n(&gPort, __ATOMIC_ACQUIRE))
         return;
-    if (gTransports.holdsRetired() && __atomic_load_n(&gRetiredDeviceGone, __ATOMIC_ACQUIRE))
-        dropRetired();
+    if (gTransports.holdsRetired()) {
+        if (role != XUSB_PORT_EMPTY) {
+            dropRetired();
+        } else if (__atomic_load_n(&gRetiredDeviceGone, __ATOMIC_ACQUIRE) && !watchActiveDevice()) {
+            dropRetired();
+        }
+    }
     const char *why = nullptr;
 #if DEVELOPMENT || DEBUG
     why = xusb_port_change_reason(gTransports.role(), role, laneUp, gLaneWasUp, superSpeedReset);
@@ -183,4 +199,9 @@ void switch_usb_port_follow(enum xusb_port_role role, bool laneUp, bool superSpe
         return;
     }
     gTransports.follow(role, laneUp, superSpeedReset, why);
+}
+
+bool switch_usb_port_holding_retired()
+{
+    return gTransports.holdsRetired();
 }

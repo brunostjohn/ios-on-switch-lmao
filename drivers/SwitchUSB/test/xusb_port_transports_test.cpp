@@ -172,6 +172,21 @@ TEST_F(XusbPortTransports, RetiredTransportsGoBeforeTheirTypeComesBack)
     EXPECT_EQ(port.held.size(), 1u);
 }
 
+TEST_F(XusbPortTransports, DropRetiredClearsBothTypesBeforeDeviceAttach)
+{
+    transports.follow(XUSB_PORT_HOST, true, true, "attach");
+    transports.retire("detach");
+    ASSERT_TRUE(transports.holdsRetired());
+    const size_t mark = port.log.size();
+    transports.dropRetired();
+    transports.follow(XUSB_PORT_DEVICE, false, true, "attach");
+    EXPECT_EQ(since(mark), (std::vector<std::string>{"-USB3 host", "-USB2 host", "+USB2 device"}));
+    EXPECT_FALSE(transports.holdsRetired());
+    EXPECT_EQ(held(xport::kUSB3), nullptr);
+    ASSERT_NE(held(xport::kUSB2), nullptr);
+    EXPECT_EQ(held(xport::kUSB2)->role, XUSB_PORT_DEVICE);
+}
+
 // A refused addition leaves no transport behind and is tried again on the next pass.
 TEST_F(XusbPortTransports, RefusedAdditionIsReleasedAndRetried)
 {

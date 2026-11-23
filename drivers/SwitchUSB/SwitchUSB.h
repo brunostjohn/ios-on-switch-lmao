@@ -92,8 +92,9 @@ void switchxhci_set_host_role(bool host);
 void switchxhci_superspeed_reset_due();
 bool switchxhci_superspeed_reset_owed();
 bool switchxhci_reset_superspeed();
-// The device on one of the controller's root ports, retained, or NULL.
+// The deepest active USB host device or interface under the controller, retained, or NULL.
 IOService *switchxhci_copy_root_device();
+bool switchxhci_is_off();
 // SwitchUSB.cpp: the role thread looks at the port again (from any context).
 void switch_usb_reconsider();
 // switch_usb_suspend/resume's host half: the Tegra side down for SC7, and powered with its firmware again after it.

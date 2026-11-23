@@ -168,7 +168,11 @@ TEST(SwitchUsbHostSource, TheTransportsFollowTheRole)
     EXPECT_THAT(Body(usb, "enum xusb_port_role portRole("),
                 HasSubstr("if (gHostRole)\n        return XUSB_PORT_HOST;"));
     const size_t device = at(apply, "} else if (!wantHost && gHostRole) {");
-    EXPECT_LT(apply.find("switch_usb_port_follow(", device), apply.find("switchxhci_set_host_role(false)", device));
+    EXPECT_LT(apply.find("switch_usb_port_follow(", device), apply.find("finishHostTeardown()", device));
+    const std::string teardown = Body(usb, "void finishHostTeardown(");
+    EXPECT_LT(at(teardown, "switch_usb_port_holding_retired() || !switchxhci_is_off()"),
+              at(teardown, "switchxhci_set_host_role(false)"));
+    EXPECT_LT(at(teardown, "switchxhci_set_host_role(false)"), at(teardown, "switchxudc_set_host_owns_port(false)"));
     for (const char *file : {"../SwitchXHCIServices.cpp", "../SwitchXHCIEvents.cpp", "../SwitchUSB.cpp",
                              "../SwitchUSBPort.cpp", "../SwitchXHCI.cpp", "../XusbHost.cpp"}) {
         EXPECT_THAT(SourceText(file), Not(HasSubstr("UsbForcePower"))) << file;
@@ -233,14 +237,24 @@ TEST(SwitchUsbHostSource, TransportsOutliveTheRootPortDevice)
     const std::string follow = Body(port, "void switch_usb_port_follow(");
     EXPECT_LT(at(follow, "gRetiredDeviceGone"), at(follow, "gTransports.follow("));
     EXPECT_LT(at(follow, "retiresForDevice(role)"), at(follow, "gTransports.follow("));
+    EXPECT_THAT(follow, HasSubstr("!watchActiveDevice()"));
     const std::string retires = Body(port, "bool retiresForDevice(");
     EXPECT_THAT(retires, HasSubstr("role != XUSB_PORT_EMPTY || gTransports.role() != XUSB_PORT_HOST"));
-    EXPECT_LT(at(retires, "switchxhci_copy_root_device()"), at(retires, "watchUntilGone("));
+    EXPECT_THAT(retires, HasSubstr("watchActiveDevice()"));
+    const std::string active = Body(port, "bool watchActiveDevice(");
+    EXPECT_LT(at(active, "switchxhci_copy_root_device()"), at(active, "watchUntilGone("));
     const std::string watch = Body(port, "bool watchUntilGone(");
     EXPECT_THAT(watch, HasSubstr("gIOTerminatedNotification"));
     EXPECT_THAT(watch, HasSubstr("device->isInactive()"));
     EXPECT_THAT(Body(port, "bool deviceTerminated("), HasSubstr("thread_call_enter(gRoleCall)"));
     EXPECT_THAT(port, Not(HasSubstr("_delayed")));
+    const std::string events = SourceText("../SwitchXHCIEvents.cpp");
+    const std::string copy = Body(events, "IOService *switchxhci_copy_root_device(");
+    EXPECT_THAT(copy, HasSubstr("kIORegistryIterateRecursively"));
+    EXPECT_THAT(copy, HasSubstr("IOUSBHostDevice"));
+    EXPECT_THAT(copy, HasSubstr("IOUSBHostInterface"));
+    const std::string didChange = Body(events, "IOReturn SwitchXHCI::powerStateDidChangeTo(");
+    EXPECT_LT(at(didChange, "AppleUSBXHCI::powerStateDidChangeTo("), at(didChange, "switch_usb_reconsider()"));
 }
 
 // No sleep hold: the Tegra side goes down with SC7 and comes back before IOKit raises AppleUSBXHCI.
