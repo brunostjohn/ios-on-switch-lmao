@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Switch UI stall reports (debug kernels): one os_log line when SpringBoard's or backboardd's main thread has been off
- * core for SWITCH_STALL_NS, blocked on anything but its idle run loop or runnable and not run, and one when it runs
- * again.
+ * Switch UI stall reports (debug kernels): one os_log line when the main thread of SpringBoard, backboardd, chronod or
+ * a WidgetKit extension has been off core for SWITCH_STALL_NS, blocked on anything but its idle run loop or runnable
+ * and not run, and one when it runs again. Each watched thread costs one sample under its lock per tick, a stall one
+ * snapshot and two lines; a widget extension's exec costs one lookup of its executable's path.
  *
  * Detection rides the scheduler's maintenance tick (sched_timeshare_maintenance_continue, woken from context switches
  * and quantum expiry at most every sched_tick_interval): no timer of its own, no wakeup of an idle system. The tick
@@ -23,6 +24,7 @@
  * every thread's time on a core, the end the gains since (the newest stall's: one snapshot).
  */
 
+#include <switch/recorder.h>
 #include <switch/sched.h>
 #include <switch/xnu.h>
 
@@ -52,11 +54,13 @@ void switch_stall_report(thread_call_param_t p0, thread_call_param_t p1);
 #define STALL_CHECK_NS 250000000ull /* the most often the tick samples */
 #define STALL_USED     4096         /* more threads than the system runs */
 #define STALL_TOP      4
+#define STALL_WIDGETS  4 /* the extensions exec'd last; a new one takes the slot of its own name, else the oldest */
 
 extern void qsort(void *a, size_t n, size_t es, int (*cmp)(const void *, const void *));
 
 struct stall_slot {
-    const char *name;
+    const char *name; /* a widget slot's names its last exec, rewritten under stall_lock */
+    bool widget;
     thread_t thread; /* +1: the main thread of the last exec of `name` */
     struct switch_stall_episode episode;
     struct stall_snapshot snap; /* taken when the episode began; its references held while report is set */
@@ -65,10 +69,23 @@ struct stall_slot {
     uint64_t ended_ns;          /* that episode's length, to the sample that saw it end */
 };
 
+static char stall_widget_names[STALL_WIDGETS][32];
+
 static struct stall_slot stall_slots[] = {
     {.name = "SpringBoard"},
     {.name = "backboardd"},
+    {.name = "chronod"},
+    {.name = stall_widget_names[0], .widget = true},
+    {.name = stall_widget_names[1], .widget = true},
+    {.name = stall_widget_names[2], .widget = true},
+    {.name = stall_widget_names[3], .widget = true},
 };
+static unsigned int stall_widget_next;
+
+/* bsd/kern/kern_proc.c and bsd/vfs: the process's executable vnode (an iocount) and its path. */
+extern void *proc_getexecutablevnode(void *p);
+extern int vn_getpath(void *vp, char *pathbuf, int *len);
+extern int vnode_put(void *vp);
 
 static SIMPLE_LOCK_DECLARE(stall_lock, 0);
 static thread_call_t stall_call;
@@ -80,33 +97,84 @@ static unsigned int stall_used_n;
 static bool stall_used_complete;
 static int stall_used_slot = -1;
 
+/* A WidgetKit extension, as switch_boot_band.c's band_widget_extension tells them: an .appex named like a widget. */
+static bool stall_widget(task_t task, const char *name)
+{
+    char path[512];
+    int len = sizeof(path);
+    void *vp = NULL;
+    bool widget = false;
+
+    if (strnstr(name, "Widget", strlen(name)) == NULL && strcmp(name, "NewsToday2") != 0 &&
+        strcmp(name, "NewsTag") != 0) {
+        return false;
+    }
+    void *p = get_bsdtask_info(task);
+    if (p == NULL) {
+        return false;
+    }
+    vp = proc_getexecutablevnode(p);
+    if (vp == NULL) {
+        return false;
+    }
+    widget = vn_getpath(vp, path, &len) == 0 && strnstr(path, ".appex/", strlen(path)) != NULL;
+    vnode_put(vp);
+    return widget;
+}
+
+/* Under stall_lock: the slot a new process takes, or NULL. A widget extension takes the one of its name, else the
+ * oldest, renamed. */
+static struct stall_slot *stall_slot_for(const char *name, bool widget)
+{
+    const unsigned int n = sizeof(stall_slots) / sizeof(stall_slots[0]);
+    unsigned int k = 0;
+
+    for (unsigned int i = 0; i < n; i++) {
+        if (stall_slots[i].widget == widget && strcmp(name, stall_slots[i].name) == 0) {
+            return &stall_slots[i];
+        }
+    }
+    if (!widget) {
+        return NULL;
+    }
+    k = stall_widget_next++ % STALL_WIDGETS;
+    strlcpy(stall_widget_names[k], name, sizeof(stall_widget_names[k]));
+    return &stall_slots[n - STALL_WIDGETS + k];
+}
+
 /* kern_exec.c, after a successful posix_spawn or execve: the new main thread, if its process is a UI one. */
 void switch_stall_exec(thread_t thread)
 {
     char name[32];
+    struct stall_slot *slot = NULL;
     thread_t old = THREAD_NULL;
     struct stall_snapshot stale = {0};
+    bool widget = false;
 
     switch_sched_busy_exec(thread);
+#if SWITCH_RECORDER
+    switch_recorder_exec(thread);
+#endif
     switch_task_name(get_threadtask(thread), name, sizeof(name));
-    for (unsigned int i = 0; i < sizeof(stall_slots) / sizeof(stall_slots[0]); i++) {
-        struct stall_slot *slot = &stall_slots[i];
+    widget = stall_widget(get_threadtask(thread), name);
+    if (!widget && strcmp(name, "SpringBoard") != 0 && strcmp(name, "backboardd") != 0 &&
+        strcmp(name, "chronod") != 0) {
+        return;
+    }
+    if (os_atomic_load(&stall_call, acquire) == NULL) {
+        thread_call_t call = thread_call_allocate_with_options(switch_stall_report, NULL, THREAD_CALL_PRIORITY_KERNEL,
+                                                               THREAD_CALL_OPTIONS_ONCE);
 
-        if (strcmp(name, slot->name) != 0) {
-            continue;
+        nanoseconds_to_absolutetime(SWITCH_STALL_NS, &stall_threshold);
+        nanoseconds_to_absolutetime(STALL_CHECK_NS, &stall_check);
+        if (call != NULL && !os_atomic_cmpxchg(&stall_call, NULL, call, release)) {
+            thread_call_free(call);
         }
-        if (os_atomic_load(&stall_call, acquire) == NULL) {
-            thread_call_t call = thread_call_allocate_with_options(
-                switch_stall_report, NULL, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
-
-            nanoseconds_to_absolutetime(SWITCH_STALL_NS, &stall_threshold);
-            nanoseconds_to_absolutetime(STALL_CHECK_NS, &stall_check);
-            if (call != NULL && !os_atomic_cmpxchg(&stall_call, NULL, call, release)) {
-                thread_call_free(call);
-            }
-        }
-        thread_reference(thread);
-        simple_lock(&stall_lock, LCK_GRP_NULL);
+    }
+    thread_reference(thread);
+    simple_lock(&stall_lock, LCK_GRP_NULL);
+    slot = stall_slot_for(name, widget);
+    if (slot != NULL) {
         old = slot->thread;
         if (slot->report) {
             stale = slot->snap;
@@ -114,8 +182,11 @@ void switch_stall_exec(thread_t thread)
         slot->thread = thread;
         slot->episode = (struct switch_stall_episode){0};
         slot->report = slot->ended = false;
-        simple_unlock(&stall_lock);
-        break;
+    }
+    simple_unlock(&stall_lock);
+    if (slot == NULL) {
+        thread_deallocate(thread);
+        return;
     }
     switch_stall_release(&stale);
     if (old != THREAD_NULL) {
@@ -145,6 +216,9 @@ void switch_stall_tick(uint64_t now)
     bool due = false;
 
     switch_sched_busy_tick();
+#if SWITCH_RECORDER
+    switch_recorder_tick(now);
+#endif
     if (os_atomic_load(&stall_call, acquire) == NULL || now - stall_last < stall_check) {
         return;
     }
@@ -298,11 +372,13 @@ void switch_stall_report(__unused thread_call_param_t p0, __unused thread_call_p
         struct stall_slot *slot = &stall_slots[i];
         struct switch_stall_episode episode;
         struct stall_snapshot snap;
+        char name[32];
         thread_t t;
         bool report, ended;
         uint64_t ended_ns;
 
         simple_lock(&stall_lock, LCK_GRP_NULL);
+        strlcpy(name, slot->name, sizeof(name));
         t = slot->thread;
         report = slot->report;
         ended = slot->ended;
@@ -318,13 +394,13 @@ void switch_stall_report(__unused thread_call_param_t p0, __unused thread_call_p
             continue;
         }
         if (report) {
-            stall_report_one(slot->name, &snap, episode);
+            stall_report_one(name, &snap, episode);
             stall_used_take((int)i);
         }
         if (ended) {
             struct stall_line l = {.at = 0};
 
-            switch_stall_put(&l, "%s[%d] main thread 0x%llx ran again %llu.%llu s after it %s", slot->name,
+            switch_stall_put(&l, "%s[%d] main thread 0x%llx ran again %llu.%llu s after it %s", name,
                              task_pid(get_threadtask(t)), thread_tid(t), ended_ns / 1000000000ull,
                              ended_ns / 100000000ull % 10,
                              episode.kind == SWITCH_STALL_RUNNABLE ? "was made runnable" : "blocked");
