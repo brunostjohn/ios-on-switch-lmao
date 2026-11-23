@@ -1,6 +1,6 @@
-// Guards on NativeSwitchBlock.cpp's use of the read chains (sd_queue_test.cpp tests SwitchQueue.h's merging; the
-// driver is not built for the host): reads only, the chain checked before it is unlinked, and a read chain's gaps go to
-// the sink and nowhere else (r12-sdio, r14-sdcq).
+// Guards on NativeSwitchBlock.cpp's use of read and write chains (sd_queue_test.cpp tests SwitchQueue.h's merging; the
+// driver is not built for the host): every chain is checked before it is unlinked, write chains never carry gaps and
+// check active in-flight ranges, and a read chain's gaps go to the sink and nowhere else (r12-sdio, r14-sdcq).
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -30,30 +30,39 @@ std::string body(const char *signature)
 }
 }  // namespace
 
-// Writes keep their FIFO rule; the read chain is checked to tile its command before it goes anywhere.
-TEST(SdQueueSource, ReadsOnly)
+// Reads and contiguous writes merge across the queue; both are checked before unlinking, and writes never take gaps.
+TEST(SdQueueSource, MergeChains)
 {
     const std::string &source = driver();
     const std::string pick = body("Request *NativeSwitchBlock::pickLocked(");
-    EXPECT_THAT(pick, HasSubstr("if (merge && mergeAnywhere && !first->write) {"));
-    EXPECT_THAT(pick, HasSubstr("switchGatherReads(head, first, maxSectors, kMaxChain, kMergeScan, &start, &sectors, "
-                                "maxGap, gapBudget)"));
-    // r14-sdcq: gaps only while gap reads are on, within the cost model's bounds.
+    EXPECT_THAT(pick, HasSubstr("if (merge && mergeAnywhere) {"));
+    EXPECT_THAT(pick, HasSubstr("if (first->write) {"));
+    EXPECT_TRUE(Search(pick, R"(switchGatherWrites\(head, first, limit, kMaxChain, kMergeScan, &start, &sectors,\s*)"
+                             R"(inFlight,\s*inFlightCount\))"));
+    EXPECT_TRUE(Search(pick, R"(switchGatherReads\(head, first, maxSectors, kMaxChain, kMergeScan, &start, )"
+                             R"(&sectors,\s*maxGap,\s*gapBudget\))"));
+    // r14-sdcq: gaps only on reads while gap reads are on, within the cost model's bounds.
     EXPECT_THAT(pick, HasSubstr("const uint32_t maxGap = gapsOn ? kGapSectors : 0;"));
     EXPECT_THAT(pick, HasSubstr("const uint32_t gapBudget = gapsOn ? kGapBudget : 0;"));
     EXPECT_TRUE(
         Search(source, R"(constexpr uint32_t kGapSectors = 32 \* 1024 / kSector, kGapBudget = 64 \* 1024 / kSector)"));
-    // The scan reaches as far as a chain can hold: never fewer than the old rule's queue-adjacent reads.
+    // The scan reaches as far as a chain can hold: never fewer than the old rule's queue-adjacent requests.
     EXPECT_THAT(source, HasSubstr("constexpr unsigned kMergeScan = kMaxChain;"));
-    // The chain is checked before it is unlinked; one that fails stays queued, the boot falls back to the old rule
-    // with one line, and nothing panics.
+    // Both chains are checked before unlinking; one that fails stays queued, the boot falls back to adjacent-only
+    // merging with one line, and nothing panics.
+    EXPECT_LT(Index(pick, "switchWriteChainTiles(head, start, sectors, count)"), Index(pick, "switchUnlinkChain("));
     EXPECT_LT(Index(pick, "switchChainFits(head, start, sectors, count, maxGap, gapBudget)"),
               Index(pick, "switchUnlinkChain("));
     EXPECT_THAT(pick, HasSubstr("switchClearChain(head);"));
     EXPECT_THAT(pick, HasSubstr("mergeAnywhere = false;"));
     EXPECT_THAT(pick, Not(HasSubstr("panic(")));
-    // The write path: only the requests right behind, in queue order.
+    // Fallback path keeps adjacent-only merging and checks active in-flight overlap for writes.
     EXPECT_THAT(pick, HasSubstr("last->next->lba == last->lba + last->sectors"));
+    EXPECT_THAT(pick, HasSubstr("!overlapsInFlight(last->next)"));
+    // Worker passes any pending batch's LBA range to pickLocked so writes check overlap against active work.
+    const std::string worker = body("void NativeSwitchBlock::worker(");
+    EXPECT_THAT(worker, HasSubstr("SwitchLbaRange{pending->first->lba, pending->sectors}"));
+    EXPECT_THAT(worker, HasSubstr("self->pickLocked(&next->sectors, &next->count, &active,"));
     // Every request starts unchained.
     EXPECT_TRUE(Search(source, R"(static_cast<uint8_t>\(priority >> 6\),\s*0,\s*false\};)"));
 }

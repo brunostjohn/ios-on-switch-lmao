@@ -583,7 +583,7 @@ class NativeSwitchBlock : public IOService {
     static constexpr uint64_t statsEveryNs = 10 * 1000000000ULL;
     uint64_t statsLastNs = 0;
     static constexpr bool merge = true;
-    // r12-sdio: reads merge with continuing reads anywhere in the queue (SwitchQueue.h) until a chain fails its check.
+    // r12-sdio: reads and contiguous writes merge anywhere in the queue (SwitchQueue.h) until a chain fails its check.
     bool mergeAnywhere = true;
     // Requests' bytes through IOMemoryDescriptor::readBytes/writeBytes, with the clean+invalidate of every destination
     // line they add on this kernel (SwitchClientCopy.h), for A/B builds; it keeps ADMA2 off too, so every request takes
@@ -708,7 +708,8 @@ class NativeSwitchBlock : public IOService {
     int run(uint64_t lba, uint32_t sectors, bool write, unsigned descriptors);
     int retry(int step, uint32_t status, uint64_t lba, uint32_t sectors, bool write, unsigned descriptors);
     static void worker(void *, wait_result_t);
-    Request *pickLocked(uint32_t *sectors, uint32_t *count);
+    Request *pickLocked(uint32_t *sectors, uint32_t *count, const SwitchLbaRange *inFlight = nullptr,
+                        unsigned inFlightCount = 0);
     void takenLocked(Request *first, uint32_t count, uint64_t pickNs);
     void beginBatch(Batch &);
     void endBatch(Batch &);
@@ -1799,7 +1800,7 @@ void NativeSwitchBlock::beginBatch(Batch &b)
               firstSector, sectorCount);
     }
     // r14-sdcq: the sectors no request of the chain covers (a read chain's gaps). A write chain has none: every byte it
-    // puts on the card comes from its requests (pickLocked takes only the requests right behind a write).
+    // puts on the card comes from its requests (switchGatherWrites tiles with zero gaps).
     uint64_t payload = 0;
     for (const Request *r = first; r; r = r->next)
         payload += r->sectors;
@@ -2041,11 +2042,9 @@ int NativeSwitchBlock::controlCommand(uint32_t index, uint32_t argument, uint32_
 
 // The next chain off the queue (queueLock held, queue not empty), unlinked: the head, or a passing read (r6-lows), and the
 // queued requests that continue it on the card.
-Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCount)
+Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCount, const SwitchLbaRange *inFlight,
+                                       unsigned inFlightCount)
 {
-    // Take the head and every queued request that continues it on the card in the same
-    // direction, up to one command's limit: one command, one card access latency, one
-    // interrupt instead of several. No write passes another.
     Request *prev = nullptr;
     Request *first = head;
     const uint64_t pickNs = switch_now_ns();
@@ -2078,33 +2077,37 @@ Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCo
     }
     uint32_t sectors = first->sectors;
     uint32_t count = 1;
+    const uint32_t limit = first->write ? maxWriteSectors : maxSectors;
     bool gathered = false;
-    if (merge && mergeAnywhere && !first->write) {
-        // r12-sdio: a read takes every queued read that continues it on the card, before or after it, wherever it is
-        // queued, unless that read overlaps an older request still queued (SwitchQueue.h). Back in card order. The
-        // chain must fit its command exactly (tile it, but for gaps within the bounds); one that does not (never seen;
-        // host-tested) stays queued as it was, and this boot goes back to the old rule, with one line.
-        // r14-sdcq: and, while gap reads are on, queued reads up to kGapSectors away (kGapBudget per command).
+    if (merge && mergeAnywhere) {
         uint64_t start = 0;
-        const uint32_t maxGap = gapsOn ? kGapSectors : 0;
-        const uint32_t gapBudget = gapsOn ? kGapBudget : 0;
-        count = switchGatherReads(head, first, maxSectors, kMaxChain, kMergeScan, &start, &sectors, maxGap, gapBudget);
-        if (switchChainFits(head, start, sectors, count, maxGap, gapBudget)) {
+        bool fits = false;
+        if (first->write) {
+            count = switchGatherWrites(head, first, limit, kMaxChain, kMergeScan, &start, &sectors, inFlight,
+                                       inFlightCount);
+            fits = switchWriteChainTiles(head, start, sectors, count);
+        } else {
+            const uint32_t maxGap = gapsOn ? kGapSectors : 0;
+            const uint32_t gapBudget = gapsOn ? kGapBudget : 0;
+            count =
+                switchGatherReads(head, first, maxSectors, kMaxChain, kMergeScan, &start, &sectors, maxGap, gapBudget);
+            fits = switchChainFits(head, start, sectors, count, maxGap, gapBudget);
+        }
+        if (fits) {
             first = switchUnlinkChain(head, tail, count);
             gathered = true;
         } else {
             switchClearChain(head);
             mergeAnywhere = false;
-            IOLog("SwitchSD: read chain lba=%llu n=%u (%u requests) does not fit; reads merge only with the requests "
+            IOLog("SwitchSD: %s chain lba=%llu n=%u (%u requests) does not fit; requests merge only with the requests "
                   "right behind them until reboot\n",
-                  start, sectors, count);
+                  first->write ? "write" : "read", start, sectors, count);
             sectors = first->sectors;
             count = 1;
         }
     }
     if (!gathered) {
         Request *last = first;
-        const uint32_t limit = first->write ? maxWriteSectors : maxSectors;
         // A passing read's chain passes the older requests too: each request it takes must not overlap any of them either.
         const auto overlapsOlder = [&](const Request *later) {
             if (!prev)
@@ -2115,9 +2118,18 @@ Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCo
             }
             return false;
         };
+        const auto overlapsInFlight = [&](const Request *later) {
+            if (!first->write)
+                return false;
+            for (unsigned i = 0; i < inFlightCount; ++i) {
+                if (switchOverlapsRange(later, inFlight[i]))
+                    return true;
+            }
+            return false;
+        };
         while (merge && count < kMaxChain && last->next && last->next->write == first->write &&
                last->next->lba == last->lba + last->sectors && sectors + last->next->sectors <= limit &&
-               !overlapsOlder(last->next)) {
+               !overlapsOlder(last->next) && !overlapsInFlight(last->next)) {
             last = last->next;
             sectors += last->sectors;
             ++count;
@@ -2233,7 +2245,10 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
                 ++self->chainsSinceUnmap;
             next = &batches[turn];
             turn ^= 1;
-            next->first = self->pickLocked(&next->sectors, &next->count);
+            const SwitchLbaRange active = pending && pending->first
+                                              ? SwitchLbaRange{pending->first->lba, pending->sectors}
+                                              : SwitchLbaRange{0, 0};
+            next->first = self->pickLocked(&next->sectors, &next->count, &active, pending && pending->first ? 1u : 0u);
 #if DEVELOPMENT || DEBUG
             next->wokeFromIdle = wokeFromIdle;
             uint64_t oldest = next->first->queuedNs;
