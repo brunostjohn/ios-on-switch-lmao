@@ -12,7 +12,8 @@
 #                            __cache_info__ alone goes, once per GPU build the deploy names
 #   xnu_icon_cache_source_test  both trees' boot setup runs it once before launchd, with one error line
 #   xnu_stall_test           kernel/switch/diag/stall.h's decisions: which samples of a UI main thread are a stall,
-#                            one report and one end per episode, wait names by block_hint.h value, user addresses
+#                            one report and one end per episode, wait names by block_hint.h value (both trees), the
+#                            kernel rwlock behind a wait's event, kernel_task owner hops, user addresses
 #   xnu_render_senders_test  osfmk/ipc/switch_render_senders.h's table and line: the render server's senders by
 #                            process, largest first, with their rates and top ids, the rest as others
 #   xnu_render_senders_source_test  ipc_kmsg_send counts a message under its destination port's lock, only for the
@@ -293,7 +294,10 @@ host_library(
 host_test(
     name = "xnu_stall_test",
     srcs = ["xnu_stall_test.cpp"],
-    data = ["//kernel/xnu-10063.141.1/osfmk:kern/block_hint.h"],
+    data = [
+        "//kernel/xnu-10063.141.1/osfmk:kern/block_hint.h",
+        "//kernel/xnu-12377.121.6/osfmk:kern/block_hint.h",
+    ],
     deps = [":stall"],
 )
 
