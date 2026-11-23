@@ -161,8 +161,17 @@ void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
         notify();
         return;
     }
-    if (phase == SWITCH_PD_SINK)
-        (void)setRails(false, switch_pd_vconn_on(phase, status1, status2));
+    if (phase == SWITCH_PD_SINK) {
+        const bool wantVconn = switch_pd_vconn_on(phase, status1, status2);
+#if DEVELOPMENT || DEBUG
+        const bool hadVconn = vconnOn;
+#endif
+        (void)setRails(false, wantVconn);
+#if DEVELOPMENT || DEBUG
+        if (hadVconn && !vconnOn)
+            IOLog("SwitchPD: sink cleared VCONN (alert %#x status1 %#x status2 %#x)\n", alertBits, status1, status2);
+#endif
+    }
     if (wasSource && phase == SWITCH_PD_SOURCE) {
         if (prSwap == PrSwap::WaitingReady && (status1 & STATUS1_CMD_BUSY) == 0) {
             window->cancelTimeout();
@@ -356,7 +365,7 @@ void SwitchPD::setSwitches(bool on)
 // open, CONFIG1 stays SPDSRC12_ON so Rp is never dropped; if our VBUS switch is already closed, open switches first.
 bool SwitchPD::setRails(bool vbus, bool vconn)
 {
-    if (vbus == vbusRailOn && vconn == vconnOn)
+    if (vbus == vbusRailOn && vconn == vconnOn && vconnSwap == vconnOn)
         return true;
     if (vbus && switch_pd_vbus_ours(state.status1)) {
         setSwitches(false);
@@ -373,6 +382,7 @@ bool SwitchPD::setRails(bool vbus, bool vconn)
         if (!err && vconn && !vconnOn)
             err = tegra_gpio_output(kVconnGpio, 1);
         if (err) {
+            setVconnSwap(false);
             (void)tegra_gpio_output(kVconnGpio, 0);
             (void)tegra_gpio_output(kSourceRailGpio, 0);
             vbusRailOn = false;
@@ -385,6 +395,7 @@ bool SwitchPD::setRails(bool vbus, bool vconn)
             vconnOn = true;
     }
     if (!vconn && vconnOn) {
+        setVconnSwap(false);
         const int vconnErr = tegra_gpio_output(kVconnGpio, 0);
         if (vconnErr)
             err = vconnErr;
@@ -402,6 +413,7 @@ bool SwitchPD::setRails(bool vbus, bool vconn)
             err = vconnErr;
         vconnOn = vconnErr == 0;
     }
+    setVconnSwap(vconnOn);
     if (err)
         IOLog("SwitchPD: source rails %s failed (%d)\n", (vbus || vconn) ? "on" : "off", err);
     return err == 0;

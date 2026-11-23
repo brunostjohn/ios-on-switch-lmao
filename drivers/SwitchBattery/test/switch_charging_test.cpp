@@ -307,6 +307,7 @@ struct PdChip {
     uint8_t alertEnable[4] = {0xff, 0xfb, 0, 0};  // every ALERT but bit 10 (DR_SWAP)
     uint32_t idHeader = 0;                        // the ID Header VDO it ACKs Discover Identity with; 0: never answers
     bool dpSupport = false;                       // answers Discover SVID/Mode + DP Discover/Configure
+    bool rxVdmFull = false;                       // BM92T36 RX VDM mailbox latch: blocks 0x800 until 0x1616 drains it
     std::vector<uint8_t> vdmReply, incomingVdm, lastOutgoingVdm;
     std::vector<uint32_t> pdos;
     uint32_t curPdo = 0, curRdo = 0, pendingRdo = 0;
@@ -350,11 +351,23 @@ struct PdChip {
         alert |= bits;
     }
 
+    void receiveVdm(std::vector<uint8_t> bytes)
+    {
+        if (rxVdmFull)
+            return;
+        vdmReply = std::move(bytes);
+        rxVdmFull = true;
+        alert |= 0x800;
+    }
+
     void unplug()
     {
         status1 = status2 = 0;
         pdos.clear();
         curPdo = curRdo = 0;
+        rxVdmFull = false;
+        vdmReply.clear();
+        incomingVdm.clear();
         alert |= 0x8;
     }
 
@@ -518,23 +531,26 @@ struct PdChip {
                 ++vdmsSent;
                 const uint8_t vdmCmd = lastOutgoingVdm.size() >= 2 ? lastOutgoingVdm[1] : 0;
                 if (vdmCmd == 0x01 && idHeader) {
-                    vdmReply = {20, 0x41, 0x80, 0x00, 0xFF};
+                    std::vector<uint8_t> reply = {20, 0x41, 0x80, 0x00, 0xFF};
                     for (const uint32_t object : {idHeader, 0u, 0x12340001u, 0x01000000u})
                         for (int b = 0; b < 4; ++b)
-                            vdmReply.push_back((uint8_t)(object >> (8 * b)));
+                            reply.push_back((uint8_t)(object >> (8 * b)));
                     status1 = (uint16_t)(status1 & ~0x70);
-                    alert |= 0x4 | 0x800;
+                    alert |= 0x4;
+                    receiveVdm(std::move(reply));
                 } else if (dpSupport && vdmCmd == 0x02) {
-                    vdmReply = {8, 0x42, 0x80, 0x00, 0xFF, 0x00, 0x00, 0x01, 0xFF};
                     status1 = (uint16_t)(status1 & ~0x70);
-                    alert |= 0x4 | 0x800;
+                    alert |= 0x4;
+                    receiveVdm({8, 0x42, 0x80, 0x00, 0xFF, 0x00, 0x00, 0x01, 0xFF});
                 } else if (dpSupport && vdmCmd == 0x03) {
-                    vdmReply = {8, 0x43, 0x80, 0x01, 0xFF, 0x05, 0x00, 0x0C, 0x00};
                     status1 = (uint16_t)(status1 & ~0x70);
-                    alert |= 0x4 | 0x800;
+                    alert |= 0x4;
+                    receiveVdm({8, 0x43, 0x80, 0x01, 0xFF, 0x05, 0x00, 0x0C, 0x00});
                 }
             } else if (v16 == 0x1616) {  // ACCEPT_VDM: the reply readable in INCOMING_VDM
                 incomingVdm = vdmReply;
+                vdmReply.clear();
+                rxVdmFull = false;
                 status1 = (uint16_t)(status1 & ~0x70);
                 alert |= 0x4;
             } else if (v16 == 0x3131) {  // DP_DISCOVER
@@ -548,6 +564,9 @@ struct PdChip {
                 status1 = (uint16_t)(status1 & ~(0x3 | 0x70));
                 vendor |= 0x4;
                 config2 = 0;
+                rxVdmFull = false;
+                vdmReply.clear();
+                incomingVdm.clear();
             } else if (v16 == 0x0808) {  // PD_HARD_RST
                 alert |= 0x4;
             } else {
@@ -1278,7 +1297,7 @@ static void dockAltMode()
     check(gPd.commands.size() >= 3 && gPd.commands[0] == "0707" && gPd.commands[1] == "0505" &&
               gPd.commands[2] == "1818",
           "SEND_RDO, PS_RDY, then the data role swap");
-    check(((gPd.status1 >> 8) & 3) == 2 && gPd.vdmsSent == 1, "DFP after the swap, Discover Identity sent");
+    check(((gPd.status1 >> 8) & 3) == 2 && gPd.vdmsSent == 2, "DFP after the swap, Discover Identity sent and retried");
     check(logHas("SwitchPD: contract 15 V 1.2 A (dock: 5 V 0.5 A, *15 V 2.6 A)") && iinlim() == 1200,
           "dock contract published");
     check(logHas("the partner did not answer within 1.5 s"), "the engine gave up on the silent dock");
@@ -1286,7 +1305,7 @@ static void dockAltMode()
           "silent dock: SuperSpeed pair released without a DisplayPort takeover");
     advance(3600 * 1000);
     check(iinlim() == 1200 && ((gCharger.reg[1] >> 4) & 3) == 1, "still charging at 1200 mA an hour later");
-    check(gPd.vdmsSent == 1, "no retries after the engine gave up");
+    check(gPd.vdmsSent == 2, "no retries after the engine gave up");
     SwitchPDState observed{};
     check(switch_pd_add_listener(
               [](void *context, const SwitchPDState *state) {
@@ -1302,7 +1321,7 @@ static void dockAltMode()
     gPd.status1 = 0x1280;
     gPd.status2 = 0x2000;
     switch_pd_sleep(false);
-    check(observed.plugged && !observed.settled && observed.contractMillivolts == 0 && gPd.vdmsSent == 1 &&
+    check(observed.plugged && !observed.settled && observed.contractMillivolts == 0 && gPd.vdmsSent == 2 &&
               chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] &&
               (gPd.config1 >> 14) == 0,
           "resume consumes dock removal and enters WaitSource with boost, rails and switches armed");
@@ -1607,8 +1626,8 @@ static void dataDiscoveryWithoutCharging()
           "charger power-good is low while the PD partner remains attached");
     checkPublishedZeroBudget();
     check(!logHas("no USB-PD request"), "zero-current contract is accepted");
-    check(gPd.commands == (std::vector<std::string>{"0707", "0505", "1111"}) && gPd.vdmsSent == 1,
-          "silent identity discovery is not repeated");
+    check(gPd.commands == (std::vector<std::string>{"0707", "0505", "1111", "1111"}) && gPd.vdmsSent == 2,
+          "silent identity discovery stops after one retry");
 }
 
 static void rejectedPsRdyKeepsInputBlocked()
@@ -2266,17 +2285,19 @@ TEST(SwitchCharging, SourceFault)
 static void exitAsFound()
 {
     gPd.config1 = 0x00e0;        // source switches on, as an earlier boot left them
+    gPd.config2 = 0x0010;        // VSRC_SWAP set as found, cleared while VCONN is off and restored on exit
     gPd.dpAlertEnable = 0x0003;  // non-zero DP_ALERT_EN, cleared at start and restored on exit
     gPd.vendor = 0x4;            // over-current protection off, as after a SYS_RESET
     bootWithNintendoCharger();
     advance(3000);
-    check(((gPd.config1 >> 14) & 3u) == 3u && (gPd.config2 & 0xf) == 0xe && gPd.dpAlertEnable == 0 &&
+    check(((gPd.config1 >> 14) & 3u) == 3u && (gPd.config2 & 0x1f) == 0xe && gPd.dpAlertEnable == 0 &&
               (gPd.alertEnable[1] & 0x4) && !(gPd.vendor & 0x4),
-          "this boot's settings: switches off, DR/PR swaps configured, DP_ALERT_EN cleared, DR_SWAP alert, OCP on");
+          "this boot's settings: switches off, DR/PR swaps configured, VSRC_SWAP off, DP_ALERT_EN cleared, DR_SWAP "
+          "alert, OCP on");
     stubSystemPowerMessage(kIOMessageSystemWillSleep);
-    check((gPd.config2 & 0xf) == 0xe && gPd.dpAlertEnable == 0, "sleep puts nothing back");
+    check((gPd.config2 & 0x1f) == 0xe && gPd.dpAlertEnable == 0, "sleep puts nothing back");
     stubSystemPowerMessage(kIOMessageSystemWillRestart);
-    check(gPd.config1 == 0x00e0 && gPd.config2 == 0 && gPd.dpAlertEnable == 0x0003 && gPd.alertEnable[1] == 0xfb &&
+    check(gPd.config1 == 0x00e0 && gPd.config2 == 0x0010 && gPd.dpAlertEnable == 0x0003 && gPd.alertEnable[1] == 0xfb &&
               gPd.vendor == 0x4,
           "every setting as found: CONFIG1 " + hex(gPd.config1) + " CONFIG2 " + hex(gPd.config2) + " DP_ALERT_EN " +
               hex(gPd.dpAlertEnable) + " VENDOR_CONFIG " + hex(gPd.vendor));
@@ -2284,7 +2305,7 @@ static void exitAsFound()
     const size_t commands = gPd.commands.size();
     gPd.alert |= 0x1000 | 0x4000;  // a late contract: nothing answers it any more
     advance(3000);
-    check(gPd.commands.size() == commands && gPd.config2 == 0 && gPd.dpAlertEnable == 0x0003 && gPd.vendor == 0x4,
+    check(gPd.commands.size() == commands && gPd.config2 == 0x0010 && gPd.dpAlertEnable == 0x0003 && gPd.vendor == 0x4,
           "nothing written after");
 }
 
@@ -2313,46 +2334,64 @@ static void lgTrySnkMonitor()
               [](void *context, const SwitchPDState *current) { *static_cast<SwitchPDState *>(context) = *current; },
               &state) == 0,
           "listener");
-    // LG Try.SNK monitor: initially presents Rd (no VBUS), then closes SPDSRC1 -> SRC_PLUGIN -> accepts PR_Swap while
-    // keeping VCONN_ON (e-marked cable) and stays DFP for DP Alt Mode + charging.
+    // LG Try.SNK monitor with an e-marked cable: initially presents Rd (no VBUS), raises unsolicited 0x800 VDM while in
+    // WaitSource (STATUS2 = 0x3202), then SRC_PLUGIN -> PR_Swap while keeping VCONN_ON, drains the latched RX VDM with
+    // ACCEPT_VDM (0x1616) before Discover Identity (0x1111), configures DP Alt Mode + 15 V charging, and clears PK5 and
+    // CONFIG2_VSRC_SWAP when VCONN_ON drops.
     gPd.prSwapReply = PdChip::PrAccept;
-    gPd.prSwapStatus2 = 1u << 9;  // STATUS2_VCONN_ON
-    gPd.idHeader = 0x28001234u;   // UFP AMA (not USB host)
+    gPd.prSwapStatus2 = 0x0202;  // STATUS2_VCONN_ON | 0x2
+    gPd.idHeader = 0x28001234u;  // UFP AMA (not USB host)
     gPd.dpSupport = true;
+    check((gPd.config2 & 0x10) == 0, "CONFIG2_VSRC_SWAP starts off while VCONN is off");
     gPd.status1 = 0x1280;
     gPd.status2 = 0x2000;
     gPd.alert |= 0x8;
     advance(10);
-    check((gPd.config1 >> 14) == 0 && chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)],
-          "WaitSource keeps SPDSRC12_ON armed with boost, PX3 and PK5 on");
+    check((gPd.config1 >> 14) == 0 && chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] &&
+              (gPd.config2 & 0x10) != 0,
+          "WaitSource keeps SPDSRC12_ON armed with boost, PX3, PK5 and CONFIG2_VSRC_SWAP on");
+    // Unsolicited e-marked cable VDM arrives before SRC_PLUGIN: must stay in WaitSource and not fire premature PR_Swap.
     gPd.status1 = 0x9680;
-    gPd.status2 = 0x2000;
+    gPd.status2 = 0x3202;
+    gPd.receiveVdm({4, 0x01, 0x80, 0x00, 0xFF});
+    advance(10);
+    check(gPd.commands.empty() && gPd.rxVdmFull && chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] &&
+              gOutputs[TEGRA_GPIO(K, 5)],
+          "unsolicited 0x800 VDM in WaitSource does not promote to Source or send premature PR_Swap");
     gPd.alert |= 1u << 13;  // ALERT_SRC_PLUGIN
     advance(10);
-    // PR_SWAP_CMD (0x0303) sent and accepted: now SINK + DFP, PX3=0, PK5=1 (VCONN_ON).
+    // PR_SWAP_CMD (0x0303) sent and accepted: now SINK + DFP, PX3=0, PK5=1 (VCONN_ON), CONFIG2_VSRC_SWAP=1.
     check(std::count(gPd.commands.begin(), gPd.commands.end(), std::string("0303")) == 1, "PR_Swap probe sent");
     check(state.role == SWITCH_PD_ROLE_SINK && state.dataHost && chgConfig() != 2 &&
-              !gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)],
-          "PR_Swap leaves SINK + DFP with PX3 off and PK5 preserved for VCONN_ON");
-    // Monitor advertises 15 V PDOs after PR_Swap: SwitchPD negotiates charging and configures DisplayPort Alt Mode.
+              !gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config2 & 0x10) != 0,
+          "PR_Swap leaves SINK + DFP with PX3 off and PK5 + CONFIG2_VSRC_SWAP preserved for VCONN_ON");
+    // Monitor advertises 15 V PDOs after PR_Swap: SwitchPD negotiates charging, drains stale VDM before Discover
+    // Identity, and configures DisplayPort Alt Mode.
     gCharger.plug(500, 2);
     gPd.pdos = {PdChip::fixed(5000, 3000), PdChip::fixed(15000, 3000)};
     gPd.curPdo = gPd.pdos[0];
     gPd.curRdo = 1u << 28 | 50u << 10 | 300u;
     gPd.alert |= 0x1000 | 0x4000;
     advance(2500);
-    check(iinlim() == 1200 && gDisplayPortConfigured && gOutputs[TEGRA_GPIO(K, 5)] && !gOutputs[TEGRA_GPIO(X, 3)],
+    const auto acceptIt = std::find(gPd.commands.begin(), gPd.commands.end(), std::string("1616"));
+    const auto sendVdmIt = std::find(gPd.commands.begin(), gPd.commands.end(), std::string("1111"));
+    check(acceptIt != gPd.commands.end() && sendVdmIt != gPd.commands.end() && acceptIt < sendVdmIt,
+          "ACCEPT_VDM (0x1616) drains stale VDM before Discover Identity (0x1111)");
+    check(iinlim() == 1200 && gDisplayPortConfigured && gOutputs[TEGRA_GPIO(K, 5)] && !gOutputs[TEGRA_GPIO(X, 3)] &&
+              (gPd.config2 & 0x10) != 0,
           "LG monitor charges at 15 V 1.2 A and configures DP Alt Mode with VCONN preserved");
-    // VCONN_Swap clears STATUS2.VCONN_ON: PK5 turns off promptly while remaining in Sink.
+    // VCONN_Swap clears STATUS2.VCONN_ON: PK5 and CONFIG2_VSRC_SWAP turn off promptly while remaining in Sink.
     gPd.status2 = 0;
     gPd.alert |= 0x4;
     advance(10);
-    check(!gOutputs[TEGRA_GPIO(K, 5)] && state.role == SWITCH_PD_ROLE_SINK, "PK5 turns off when VCONN_ON clears");
+    check(!gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config2 & 0x10) == 0 && state.role == SWITCH_PD_ROLE_SINK,
+          "PK5 and CONFIG2_VSRC_SWAP turn off when VCONN_ON clears");
     gCharger.unplug();
     gPd.unplug();
     advance(10);
-    check(state.role == SWITCH_PD_ROLE_NONE && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)],
-          "detach returns cleanly to Empty with rails off");
+    check(state.role == SWITCH_PD_ROLE_NONE && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] &&
+              (gPd.config2 & 0x10) == 0,
+          "detach returns cleanly to Empty with rails and CONFIG2_VSRC_SWAP off");
 }
 
 static void macCaughtInRd()

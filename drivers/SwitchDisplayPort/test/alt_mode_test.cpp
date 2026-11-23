@@ -168,6 +168,7 @@ struct Session {
     switch_pd_alt alt{};
     std::vector<std::string> lines;
     uint32_t timer_ms = 0;
+    bool port_session = true;
     bool at_rest = true;
     bool dock_power = true;
     bool is_source = false;
@@ -194,7 +195,7 @@ struct Session {
 
     void event(uint16_t alert)
     {
-        const switch_pd_alt_in in{alert, model.status1, model.dp_status, true, at_rest, dock_power, is_source};
+        const switch_pd_alt_in in{alert, model.status1, model.dp_status, port_session, at_rest, dock_power, is_source};
         const switch_pd_alt_step before = alt.step;
         const switch_pd_alt_out out = switch_pd_alt_event(&alt, &in);
         if (out.act == SWITCH_PD_ALT_NONE && out.line == nullptr && out.timer_ms == 0 && alt.step == before) {
@@ -382,10 +383,24 @@ TEST(AltMode, UnansweredDiscoveryFailsWithLanesFree)
     Session run;
     run.event(0);
     run.event(SWITCH_PD_ALT_ALERT_CMD_DONE);  // swap done: Discover Identity out, no answer
+    ASSERT_EQ(run.alt.step, SWITCH_PD_ALT_DISCOVER_ID);
+    EXPECT_EQ(run.timer_ms, SWITCH_PD_ALT_DISCOVER_RETRY_MS);
+    run.model.alerts.clear();
+    run.perform(switch_pd_alt_timer(&run.alt, true));
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DISCOVER_ID);
+    EXPECT_TRUE(run.alt.vdm_retried);
+    EXPECT_EQ(run.timer_ms, SWITCH_PD_ALT_DISCOVER_FINAL_MS);
     run.model.alerts.clear();
     run.perform(switch_pd_alt_timer(&run.alt, true));
     EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_FAILED);
     EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_FREE);
+    unsigned sendCount = 0;
+    for (const uint16_t cmd : run.model.commands) {
+        if (cmd == SWITCH_PD_ALT_CMD_SEND_VDM) {
+            ++sendCount;
+        }
+    }
+    EXPECT_EQ(sendCount, 2u);
     ASSERT_EQ(run.lines.size(), 1u);
 }
 
@@ -756,6 +771,180 @@ TEST(AltMode, VdmAbortedRetriesOnceAndOtherErrorsFailImmediately)
         run.event(SWITCH_PD_ALT_ALERT_CMD_DONE);
         EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_FAILED);
     }
+}
+
+TEST(AltMode, UnsolicitedVdmBeforePortSessionIsDrainedBeforeDiscovery)
+{
+    Session run;
+    run.dock_power = false;
+    run.model.partner.dock = false;
+    run.model.status1 = kInsert | kDfp;
+    run.model.pending_reply = {4, 0x01, 0x80, 0x00, 0xFF};
+    run.port_session = false;
+    run.at_rest = false;
+    run.event(SWITCH_PD_ALT_ALERT_VDM_RECEIVED);
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_IDLE);
+    EXPECT_TRUE(run.alt.vdm_pending);
+    EXPECT_TRUE(run.model.commands.empty());
+    run.event(SWITCH_PD_ALT_ALERT_PR_SWAP);
+    EXPECT_TRUE(run.alt.vdm_pending);
+
+    run.port_session = true;
+    run.at_rest = true;
+    run.settle();
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+    EXPECT_EQ(run.alt.dp_lanes, 2u);
+    ASSERT_GE(run.model.commands.size(), 2u);
+    EXPECT_EQ(run.model.commands[0], SWITCH_PD_ALT_CMD_ACCEPT_VDM);
+    EXPECT_EQ(run.model.commands[1], SWITCH_PD_ALT_CMD_SEND_VDM);
+}
+
+TEST(AltMode, DrainVdmErrorAbortAndTimeoutStillConfigureDisplayPort)
+{
+    {
+        Session run;
+        run.dock_power = false;
+        run.model.partner.dock = false;
+        run.model.status1 = kInsert | kDfp;
+        run.port_session = false;
+        run.event(SWITCH_PD_ALT_ALERT_VDM_RECEIVED);
+        run.port_session = true;
+        run.event(0);
+        ASSERT_EQ(run.alt.step, SWITCH_PD_ALT_DRAIN_VDM);
+        run.model.alerts.clear();
+        run.model.status1 = static_cast<uint16_t>(kInsert | kDfp | (6u << 4));
+        run.event(SWITCH_PD_ALT_ALERT_CMD_DONE);
+        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DISCOVER_ID);
+        run.model.status1 = kInsert | kDfp;
+        run.settle();
+        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+        EXPECT_EQ(run.alt.dp_lanes, 2u);
+    }
+    {
+        Session run;
+        run.dock_power = false;
+        run.model.partner.dock = false;
+        run.model.status1 = kInsert | kDfp;
+        run.model.pending_reply = {4, 0x01, 0x80, 0x00, 0xFF};
+        run.port_session = false;
+        run.event(SWITCH_PD_ALT_ALERT_VDM_RECEIVED);
+        run.port_session = true;
+        run.event(0);
+        ASSERT_EQ(run.alt.step, SWITCH_PD_ALT_DRAIN_VDM);
+        run.model.alerts.clear();
+        run.model.status1 = static_cast<uint16_t>(kInsert | kDfp | (2u << 4));
+        run.event(SWITCH_PD_ALT_ALERT_CMD_DONE);
+        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DRAIN_VDM);
+        EXPECT_TRUE(run.alt.paused);
+        EXPECT_EQ(run.timer_ms, 100u);
+        run.model.status1 = kInsert | kDfp;
+        run.perform(switch_pd_alt_timer(&run.alt, true));
+        EXPECT_FALSE(run.alt.paused);
+        EXPECT_EQ(run.model.commands.back(), SWITCH_PD_ALT_CMD_ACCEPT_VDM);
+        run.settle();
+        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+        EXPECT_EQ(run.alt.dp_lanes, 2u);
+    }
+    {
+        Session run;
+        run.dock_power = false;
+        run.model.partner.dock = false;
+        run.model.status1 = kInsert | kDfp;
+        run.port_session = false;
+        run.event(SWITCH_PD_ALT_ALERT_VDM_RECEIVED);
+        run.port_session = true;
+        run.event(0);
+        ASSERT_EQ(run.alt.step, SWITCH_PD_ALT_DRAIN_VDM);
+        EXPECT_EQ(run.timer_ms, SWITCH_PD_ALT_DRAIN_MS);
+        run.model.alerts.clear();
+        run.perform(switch_pd_alt_timer(&run.alt, true));
+        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DISCOVER_ID);
+        run.settle();
+        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+        EXPECT_EQ(run.alt.dp_lanes, 2u);
+    }
+}
+
+TEST(AltMode, DrainVdmInDonePreservesUfpAndAllowsPartnerDrSwap)
+{
+    {
+        Session run = ufpSource(kBrickHeader);
+        run.settle();
+        ASSERT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+        ASSERT_TRUE(run.alt.as_ufp);
+        run.model.pending_reply = {4, 0x01, 0x80, 0x00, 0xFF};
+        run.event(SWITCH_PD_ALT_ALERT_VDM_RECEIVED);
+        ASSERT_EQ(run.alt.step, SWITCH_PD_ALT_DRAIN_VDM);
+        run.settle();
+        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+        EXPECT_TRUE(run.alt.as_ufp);
+        EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_FREE);
+
+        run.model.status1 = kInsert | kDfp;
+        run.event(1u << 10);
+        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DISCOVER_ID);
+        run.settle();
+        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+        EXPECT_EQ(run.alt.dp_lanes, 2u);
+    }
+    {
+        Session run = ufpSource(kBrickHeader);
+        run.settle();
+        ASSERT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+        run.model.pending_reply = {4, 0x01, 0x80, 0x00, 0xFF};
+        run.model.status1 = kInsert | kDfp;
+        run.event(static_cast<uint16_t>((1u << 10) | SWITCH_PD_ALT_ALERT_VDM_RECEIVED));
+        ASSERT_EQ(run.alt.step, SWITCH_PD_ALT_DRAIN_VDM);
+        EXPECT_EQ(run.model.commands[0], SWITCH_PD_ALT_CMD_ACCEPT_VDM);
+        run.settle();
+        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+        EXPECT_EQ(run.alt.dp_lanes, 2u);
+        ASSERT_FALSE(run.lines.empty());
+        EXPECT_EQ(run.lines.front(), "the partner swapped the data roles: Discover Identity as DFP");
+    }
+}
+
+TEST(AltMode, DiscoverIdentityRetriesOnceAfterHalfSecondAndSucceeds)
+{
+    Session run;
+    run.dock_power = false;
+    run.model.partner.dock = false;
+    run.model.partner.silent = true;
+    run.model.status1 = kInsert | kDfp;
+    run.event(0);
+    ASSERT_EQ(run.alt.step, SWITCH_PD_ALT_DISCOVER_ID);
+    EXPECT_EQ(run.timer_ms, SWITCH_PD_ALT_DISCOVER_RETRY_MS);
+    run.settle();
+    ASSERT_EQ(run.alt.step, SWITCH_PD_ALT_DISCOVER_ID);
+    run.model.partner.silent = false;
+    run.perform(switch_pd_alt_timer(&run.alt, true));
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DISCOVER_ID);
+    EXPECT_TRUE(run.alt.vdm_retried);
+    EXPECT_EQ(run.timer_ms, SWITCH_PD_ALT_DISCOVER_FINAL_MS);
+    run.settle();
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+    EXPECT_EQ(run.alt.dp_lanes, 2u);
+}
+
+TEST(AltMode, UnsolicitedNonResponseVdmDuringDiscoverIdRetriesAndSucceeds)
+{
+    Session run;
+    run.dock_power = false;
+    run.model.partner.dock = false;
+    run.model.status1 = kInsert | kDfp;
+    run.event(0);
+    ASSERT_EQ(run.alt.step, SWITCH_PD_ALT_DISCOVER_ID);
+    run.model.pending_reply = {4, 0x01, 0x80, 0x00, 0xFF};
+    run.settle();
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+    EXPECT_EQ(run.alt.dp_lanes, 2u);
+    unsigned discoverCount = 0;
+    for (const auto &msg : run.model.messages) {
+        if (msg == (std::vector<uint8_t>{4, 0x01, 0x80, 0x00, 0xFF})) {
+            ++discoverCount;
+        }
+    }
+    EXPECT_EQ(discoverCount, 2u);
 }
 
 }  // namespace

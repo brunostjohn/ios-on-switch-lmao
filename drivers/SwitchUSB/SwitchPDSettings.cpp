@@ -68,8 +68,9 @@ void SwitchPD::configureRoleSwaps(bool announce)
         return;
     }
     const uint32_t enabled = le32(enable);
-    const uint16_t swapMask = CONFIG2_PR_SWAP_MASK | CONFIG2_DR_SWAP_MASK;
-    const uint16_t swapWant = CONFIG2_PR_SWAP_ACCEPT_SRC_REJECT_SNK | CONFIG2_DR_SWAP_ALWAYS_ACCEPT;
+    const uint16_t swapMask = CONFIG2_PR_SWAP_MASK | CONFIG2_DR_SWAP_MASK | CONFIG2_VSRC_SWAP;
+    const uint16_t swapWant = CONFIG2_PR_SWAP_ACCEPT_SRC_REJECT_SNK | CONFIG2_DR_SWAP_ALWAYS_ACCEPT |
+                              (vconnOn ? CONFIG2_VSRC_SWAP : 0u);
     const bool setDrSwap = (config2 & CONFIG2_DR_SWAP_MASK) != CONFIG2_DR_SWAP_ALWAYS_ACCEPT;
     const bool setPrSwap = (config2 & CONFIG2_PR_SWAP_MASK) != CONFIG2_PR_SWAP_ACCEPT_SRC_REJECT_SNK;
     const bool setConfig2 = (config2 & swapMask) != swapWant;
@@ -79,6 +80,8 @@ void SwitchPD::configureRoleSwaps(bool announce)
         const uint16_t next = static_cast<uint16_t>((config2 & ~swapMask) | swapWant);
         err = write16(CONFIG2, next);
     }
+    if (!err)
+        vconnSwap = vconnOn;
     if (!err && setDpAlert)
         err = write16(DP_ALERT_EN, 0);
     if (!err && setAlert) {
@@ -91,6 +94,24 @@ void SwitchPD::configureRoleSwaps(bool announce)
               setPrSwap ? " +PR_Swap as source" : "", dpAlertEnable, setDpAlert ? " -> 0" : "", enabled,
               setAlert ? " +DR_SWAP" : "");
     }
+}
+
+void SwitchPD::setVconnSwap(bool accept)
+{
+    if (accept == vconnSwap)
+        return;
+    uint16_t config2 = 0;
+    int err = read16(CONFIG2, config2);
+    if (!err) {
+        const uint16_t next = accept ? static_cast<uint16_t>(config2 | CONFIG2_VSRC_SWAP)
+                                     : static_cast<uint16_t>(config2 & ~CONFIG2_VSRC_SWAP);
+        if (next != config2)
+            err = write16(CONFIG2, next);
+    }
+    if (!err)
+        vconnSwap = accept;
+    else
+        IOLog("SwitchPD: CONFIG2 VCONN_Swap %s failed (I2C %d)\n", accept ? "on" : "off", err);
 }
 
 // Shut Down and Restart, on the work loop, before the PMIC goes down: no more events, the source rails and boost off
@@ -112,7 +133,7 @@ void SwitchPD::leave()
     }
     int err = restoreField(CONFIG1, CONFIG1_SPDSRC_MASK, found.config1);
     if (!err)
-        err = restoreField(CONFIG2, CONFIG2_PR_SWAP_MASK | CONFIG2_DR_SWAP_MASK, found.config2);
+        err = restoreField(CONFIG2, CONFIG2_PR_SWAP_MASK | CONFIG2_DR_SWAP_MASK | CONFIG2_VSRC_SWAP, found.config2);
     if (!err)
         err = restoreField(DP_ALERT_EN, 0xffffu, found.dpAlertEnable);
     if (!err)

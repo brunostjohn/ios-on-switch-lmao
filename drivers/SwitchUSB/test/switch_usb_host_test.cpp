@@ -50,7 +50,8 @@ enum Act {
 };
 
 // BM92T36 bits (bm92txx.c).
-constexpr uint16_t SRC_FAULT = 1 << 1, PLUGPULL = 1 << 3, PR_SWAP = 1 << 4, CONTRACT = 1 << 12, SRC_PLUGIN = 1 << 13;
+constexpr uint16_t SRC_FAULT = 1 << 1, PLUGPULL = 1 << 3, PR_SWAP = 1 << 4, VDM_RECEIVED = 1 << 11,
+                   CONTRACT = 1 << 12, SRC_PLUGIN = 1 << 13;
 constexpr unsigned SPDSRC2 = 1u << 3, INSERT = 1u << 7, VSAFE = 1u << 10, CSIDE = 1u << 11, SRC_MODE = 1u << 12,
                    SPDSNK = 1u << 14, SPDSRC1 = 1u << 15;
 constexpr unsigned DFP = 2u << 8, UFP = 1u << 8;
@@ -346,6 +347,30 @@ TEST(SwitchUsbHostPowerRole, WaitSourceWindowPromotesQemuSwitchClosure)
     EXPECT_EQ(port.phase, SOURCE);
     EXPECT_TRUE(port.boost && port.vbusRail && port.vconn && port.switches && !port.window);
     EXPECT_TRUE(port.events.empty());
+}
+
+TEST(SwitchUsbHostPowerRole, WaitSourceIgnoresVdmAlertUntilSrcPlugin)
+{
+    constexpr Status kEmarkedVdm = {0x9680, 0x3202};
+    Port port;
+    port.enter(EMPTY, "start");
+    port.alert(R7W_SINK_ATTACH, PLUGPULL);
+    ASSERT_EQ(port.phase, WAIT_SOURCE);
+    port.alert(kEmarkedVdm, VDM_RECEIVED);
+    EXPECT_EQ(port.phase, WAIT_SOURCE);
+    EXPECT_TRUE(port.window);
+    port.alert(kEmarkedVdm, CONTRACT);
+    EXPECT_EQ(port.phase, WAIT_SOURCE);
+    port.alert(kEmarkedVdm, SRC_PLUGIN);
+    EXPECT_EQ(port.phase, SOURCE);
+    EXPECT_FALSE(port.window);
+
+    Port polled;
+    polled.enter(EMPTY, "start");
+    polled.alert(R7W_SINK_ATTACH, PLUGPULL);
+    ASSERT_EQ(polled.phase, WAIT_SOURCE);
+    polled.alert(SOURCE_RAILS_UP, 0);
+    EXPECT_EQ(polled.phase, SOURCE);
 }
 
 TEST(SwitchUsbHostPowerRole, VsafeThatIsNotOurs)
@@ -662,9 +687,9 @@ TEST(SwitchUsbHostPowerRole, FuzzedWalk)
                                           {SRC_MODE | VSAFE | DFP | INSERT, OTG_INSERT},
                                           {SRC_MODE | DFP | INSERT, 0},
                                           {INSERT | UFP, 0}};
-    const std::vector<uint16_t> alerts = {0,         PLUGPULL,   PLUGPULL,          PR_SWAP,
-                                          CONTRACT,  SRC_FAULT,  SRC_PLUGIN,        PLUGPULL | CONTRACT,
-                                          PLUGPULL | SRC_PLUGIN};
+    const std::vector<uint16_t> alerts = {0,           PLUGPULL,   PLUGPULL,          PR_SWAP,
+                                          VDM_RECEIVED, CONTRACT,  SRC_FAULT,         SRC_PLUGIN,
+                                          PLUGPULL | CONTRACT,     PLUGPULL | SRC_PLUGIN};
     for (const bool allow : {true, false}) {
         for (const int boost : {0, -1, -2}) {
             SCOPED_TRACE(std::string(allow ? "host mode" : "no host mode") + ", boost " + std::to_string(boost));

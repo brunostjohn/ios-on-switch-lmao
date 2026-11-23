@@ -39,18 +39,23 @@ extern "C" {
 #define SWITCH_PD_ALT_CMD_DP_CONFIGURE 0x3636u
 #define SWITCH_PD_ALT_CMD_DP_EXIT      0x3B3Bu
 
-#define SWITCH_PD_ALT_VDM_MAX      13u  // count byte + 12 bytes: the longest message sent (the dock's LED)
-#define SWITCH_PD_ALT_INCOMING_MAX 29u  // count byte + header + six VDOs
-#define SWITCH_PD_ALT_REPLY_MS     1500u
-#define SWITCH_PD_ALT_HUB_POWER_MS 500u
-#define SWITCH_PD_ALT_HUB_RETRY_MS 250u
-#define SWITCH_PD_ALT_HUB_RETRIES  10u
+#define SWITCH_PD_ALT_VDM_MAX           13u  // count byte + 12 bytes: the longest message sent (the dock's LED)
+#define SWITCH_PD_ALT_INCOMING_MAX      29u  // count byte + header + six VDOs
+#define SWITCH_PD_ALT_REPLY_MS          1500u
+#define SWITCH_PD_ALT_DRAIN_MS          500u
+#define SWITCH_PD_ALT_DRAIN_MAX         4u
+#define SWITCH_PD_ALT_DISCOVER_RETRY_MS 500u
+#define SWITCH_PD_ALT_DISCOVER_FINAL_MS 1000u
+#define SWITCH_PD_ALT_HUB_POWER_MS      500u
+#define SWITCH_PD_ALT_HUB_RETRY_MS      250u
+#define SWITCH_PD_ALT_HUB_RETRIES       10u
 
 #define SWITCH_PD_ALT_PIN_C (1u << 2)
 #define SWITCH_PD_ALT_PIN_D (1u << 3)
 
 enum switch_pd_alt_step {
     SWITCH_PD_ALT_IDLE,
+    SWITCH_PD_ALT_DRAIN_VDM,
     SWITCH_PD_ALT_STALE_EXIT,  // an earlier boot left DisplayPort configured
     SWITCH_PD_ALT_DR_SWAP,
     SWITCH_PD_ALT_DR_SWAP_TO_UFP,
@@ -101,7 +106,10 @@ struct switch_pd_alt {
     bool paused;      // a contract/PR_Swap alert or aborted VDM: the step goes again once SwitchPD is at rest
     bool dock, old_dock_firmware, hub_enabled;
     bool is_source, partner_is_usb_host, vdm_retried;
-    uint8_t offered_pins, pin, dp_lanes, hub_tries;
+    bool vdm_pending, drain_dock_power, drain_retried;
+    uint8_t offered_pins, pin, dp_lanes, hub_tries, drain_count;
+    uint16_t drain_status1, drain_dp_status;
+    enum switch_pd_alt_step drain_resume;
     uint8_t configure[4];
     enum switch_pd_alt_lanes lanes;
 };
@@ -109,8 +117,9 @@ struct switch_pd_alt {
 static inline void switch_pd_alt_init(struct switch_pd_alt *alt, bool want_dp)
 {
     const struct switch_pd_alt fresh = {
-        SWITCH_PD_ALT_IDLE, want_dp, false, false, false, false, false, false, false, false, false, false,
-        0,                  0,       0,     0,     {0, 0, 0, 0}, SWITCH_PD_ALT_LANES_FREE};
+        SWITCH_PD_ALT_IDLE, want_dp, false, false, false, false, false, false, false, false, false, false, false,
+        false,              false,   0,     0,     0,     0,     0,     0,     0,     SWITCH_PD_ALT_IDLE,
+        {0, 0, 0, 0},       SWITCH_PD_ALT_LANES_FREE};
     *alt = fresh;
 }
 

@@ -107,8 +107,9 @@ void SwitchPD::negotiate(uint16_t alertBits)
     case Nego::PsRdySent:
         if (alertBits & ALERT_CMD_DONE) {
 #if DEVELOPMENT || DEBUG
-            IOLog("SwitchPD: PS_RDY result %u (alert %#x status1 %#x)\n",
-                  (state.status1 & STATUS1_LASTCMD_MASK) >> STATUS1_LASTCMD_SHIFT, alertBits, state.status1);
+            IOLog("SwitchPD: PS_RDY result %u (alert %#x status1 %#x status2 %#x)\n",
+                  (state.status1 & STATUS1_LASTCMD_MASK) >> STATUS1_LASTCMD_SHIFT, alertBits, state.status1,
+                  state.status2);
 #endif
             if (state.status1 & STATUS1_LASTCMD_MASK) {
                 fail("PS_RDY did not complete successfully");

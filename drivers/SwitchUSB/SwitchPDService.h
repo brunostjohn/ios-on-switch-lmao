@@ -68,6 +68,7 @@ enum : unsigned {
     CONFIG2_PR_SWAP_ACCEPT_SRC_REJECT_SNK = 2u,
     CONFIG2_DR_SWAP_MASK = 3u << 2,
     CONFIG2_DR_SWAP_ALWAYS_ACCEPT = 3u << 2,  // DR_SWAP field 3:2: bit 2 accept as UFP, bit 3 accept as DFP
+    CONFIG2_VSRC_SWAP = 1u << 4,
     ALERT_CMD_DONE = 1u << 2,
     ALERT_DR_SWAP = 1u << 10,
     PDO_FIXED_DUAL_ROLE_DATA = 1u << 25,  // the source's 5 V Fixed PDO: USB PD R3.3 V1.0 6.4.1.3.3 Table 6.8
@@ -127,7 +128,8 @@ class SwitchPD : public IOService {
     unsigned listenerCount = 0;
     SwitchPDState state = {};
     switch_pd_phase phase = SWITCH_PD_EMPTY;
-    bool allowSource = false, switchesOn = false, vbusRailOn = false, vconnOn = false, sawDetach = false, stuck = false;
+    bool allowSource = false, switchesOn = false, vbusRailOn = false, vconnOn = false, vconnSwap = false,
+         sawDetach = false, stuck = false;
     bool reportedReadFailure = false, reportedSwitchFailure = false;
     bool asleepSinkOnly = false;  // SC7 holds an empty or canceled startup sink-only until resume
     bool resetPending = false, explicitContract = false;
@@ -165,7 +167,8 @@ class SwitchPD : public IOService {
     void stopEvents();
     void systemReset(uint32_t settleMS, const char *why) const;
     static int enableOcp();
-    static void configureRoleSwaps(bool announce);
+    void configureRoleSwaps(bool announce);
+    void setVconnSwap(bool accept);
     void recordAsFound();
     void leave();
     static IOReturn powerMessage(void *target, void *, UInt32 type, IOService *, void *, vm_size_t);

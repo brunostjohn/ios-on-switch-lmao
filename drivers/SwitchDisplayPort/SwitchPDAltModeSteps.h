@@ -28,13 +28,18 @@ static inline struct switch_pd_alt_out switch_pd_alt_send(struct switch_pd_alt *
 {
     alt->accepted = false;
     switch (alt->step) {
+    case SWITCH_PD_ALT_DRAIN_VDM:
+        return switch_pd_alt_command(SWITCH_PD_ALT_CMD_ACCEPT_VDM, SWITCH_PD_ALT_DRAIN_MS);
     case SWITCH_PD_ALT_STALE_EXIT:
         return switch_pd_alt_command(SWITCH_PD_ALT_CMD_DP_EXIT, SWITCH_PD_ALT_REPLY_MS);
     case SWITCH_PD_ALT_DR_SWAP:
     case SWITCH_PD_ALT_DR_SWAP_TO_UFP:
         return switch_pd_alt_command(SWITCH_PD_ALT_CMD_DR_SWAP, SWITCH_PD_ALT_REPLY_MS);
-    case SWITCH_PD_ALT_DISCOVER_ID:
-        return switch_pd_alt_structured(0x01, 0, 0xFF00);
+    case SWITCH_PD_ALT_DISCOVER_ID: {
+        struct switch_pd_alt_out out = switch_pd_alt_structured(0x01, 0, 0xFF00);
+        out.timer_ms = alt->vdm_retried ? SWITCH_PD_ALT_DISCOVER_FINAL_MS : SWITCH_PD_ALT_DISCOVER_RETRY_MS;
+        return out;
+    }
     case SWITCH_PD_ALT_DISCOVER_SVID:
         return switch_pd_alt_structured(0x02, 0, 0xFF00);
     case SWITCH_PD_ALT_DISCOVER_MODE:
@@ -168,7 +173,14 @@ static inline struct switch_pd_alt_out switch_pd_alt_before_swap(struct switch_p
 static inline struct switch_pd_alt_out switch_pd_alt_partner_identified(struct switch_pd_alt *alt, const uint8_t *vdm,
                                                                         size_t len)
 {
-    if (!switch_pd_alt_identity_response(vdm, len) || !switch_pd_alt_acked(vdm, 0x01) || len < 17) {
+    if (!switch_pd_alt_identity_response(vdm, len)) {
+        if (!alt->vdm_retried) {
+            alt->vdm_retried = true;
+            return switch_pd_alt_send(alt);
+        }
+        return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, "no alternate modes: Discover Identity not acked");
+    }
+    if (!switch_pd_alt_acked(vdm, 0x01) || len < 17) {
         return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, "no alternate modes: Discover Identity not acked");
     }
     const uint32_t id_header = (uint32_t)vdm[5] | ((uint32_t)vdm[6] << 8U) | ((uint32_t)vdm[7] << 16U) |
@@ -195,9 +207,84 @@ static inline struct switch_pd_alt_out switch_pd_alt_partner_identified(struct s
     return switch_pd_alt_go(alt, SWITCH_PD_ALT_DISCOVER_SVID);
 }
 
+struct switch_pd_alt_in {
+    uint16_t alert, status1, dp_status;
+    bool port_session;  // explicit SOP contract in the current attachment
+    bool at_rest;       // SwitchPD's own USB-PD request is not using COMMAND (published, settling or given up)
+    bool dock_power;    // the source's PDOs carry the dock's signature
+    bool is_source;     // we are currently the power source
+};
+
+static inline struct switch_pd_alt_out switch_pd_alt_start(struct switch_pd_alt *alt, const struct switch_pd_alt_in *in)
+{
+    alt->dock_power = in->dock_power;
+    alt->lanes = alt->want_dp ? SWITCH_PD_ALT_LANES_PENDING : SWITCH_PD_ALT_LANES_FREE;
+    if ((in->dp_status & SWITCH_PD_ALT_DP_STATUS_DP_EN) != 0) {
+        return switch_pd_alt_go(alt, SWITCH_PD_ALT_STALE_EXIT);
+    }
+    return switch_pd_alt_begin(alt, in->status1);
+}
+
+static inline struct switch_pd_alt_out switch_pd_alt_begin_drain(struct switch_pd_alt *alt,
+                                                                 enum switch_pd_alt_step resume, uint16_t status1,
+                                                                 uint16_t dp_status, bool dock_power)
+{
+    alt->drain_resume = resume;
+    alt->drain_status1 = status1;
+    alt->drain_dp_status = dp_status;
+    alt->drain_dock_power = dock_power;
+    if (resume == SWITCH_PD_ALT_IDLE) {
+        alt->dock_power = dock_power;
+    }
+    alt->vdm_pending = false;
+    ++alt->drain_count;
+    alt->step = SWITCH_PD_ALT_DRAIN_VDM;
+    alt->drain_retried = false;
+    alt->paused = false;
+    alt->accepted = false;
+    return switch_pd_alt_command(SWITCH_PD_ALT_CMD_ACCEPT_VDM, SWITCH_PD_ALT_DRAIN_MS);
+}
+
+static inline struct switch_pd_alt_out switch_pd_alt_finish_drain(struct switch_pd_alt *alt)
+{
+    if (alt->vdm_pending && alt->drain_count < SWITCH_PD_ALT_DRAIN_MAX) {
+        alt->vdm_pending = false;
+        ++alt->drain_count;
+        alt->drain_retried = false;
+        alt->paused = false;
+        alt->accepted = false;
+        return switch_pd_alt_command(SWITCH_PD_ALT_CMD_ACCEPT_VDM, SWITCH_PD_ALT_DRAIN_MS);
+    }
+    const enum switch_pd_alt_step resume = alt->drain_resume;
+    alt->drain_resume = SWITCH_PD_ALT_IDLE;
+    alt->paused = false;
+    alt->accepted = false;
+    if (resume == SWITCH_PD_ALT_IDLE) {
+        alt->step = SWITCH_PD_ALT_IDLE;
+        const struct switch_pd_alt_in saved = {
+            0, alt->drain_status1, alt->drain_dp_status, true, true, alt->drain_dock_power, alt->is_source};
+        return switch_pd_alt_start(alt, &saved);
+    }
+    if (resume == SWITCH_PD_ALT_DONE) {
+        alt->step = SWITCH_PD_ALT_DONE;
+        if (alt->as_ufp && !alt->partner_is_usb_host &&
+            switch_pd_alt_data_role(alt->drain_status1) == SWITCH_PD_ALT_DATA_ROLE_DFP) {
+            struct switch_pd_alt_out out = switch_pd_alt_discover(alt);
+            out.line = "the partner swapped the data roles: Discover Identity as DFP";
+            return out;
+        }
+        return switch_pd_alt_none();
+    }
+    alt->step = resume;
+    return switch_pd_alt_send(alt);
+}
+
 // INCOMING_VDM after a step's reply was accepted (or the DisplayPort capabilities after DP discovery).
 static inline struct switch_pd_alt_out switch_pd_alt_reply(struct switch_pd_alt *alt, const uint8_t *vdm, size_t len)
 {
+    if (alt->step == SWITCH_PD_ALT_DRAIN_VDM) {
+        return switch_pd_alt_finish_drain(alt);
+    }
     if (len < 5 || vdm[0] < 4 || vdm[0] > SWITCH_PD_ALT_INCOMING_MAX - 1u || (vdm[0] & 3u) ||
         vdm[0] >= len) {
         if (alt->step == SWITCH_PD_ALT_DOCK_DP_SLEEP)
@@ -269,14 +356,6 @@ static inline struct switch_pd_alt_out switch_pd_alt_reply(struct switch_pd_alt 
     return switch_pd_alt_none();
 }
 
-struct switch_pd_alt_in {
-    uint16_t alert, status1, dp_status;
-    bool port_session;  // explicit SOP contract in the current attachment
-    bool at_rest;       // SwitchPD's own USB-PD request is not using COMMAND (published, settling or given up)
-    bool dock_power;    // the source's PDOs carry the dock's signature
-    bool is_source;     // we are currently the power source
-};
-
 static inline bool switch_pd_alt_waiting_on_chip(const struct switch_pd_alt *alt)
 {
     return switch_pd_alt_active(alt) && alt->step != SWITCH_PD_ALT_HUB_POWER && alt->step != SWITCH_PD_ALT_HUB_RETRY;
@@ -289,16 +368,6 @@ static inline struct switch_pd_alt_out switch_pd_alt_reset(struct switch_pd_alt 
     struct switch_pd_alt_out out = switch_pd_alt_none();
     out.line = was ? "ended: the partner left" : NULL;
     return out;
-}
-
-static inline struct switch_pd_alt_out switch_pd_alt_start(struct switch_pd_alt *alt, const struct switch_pd_alt_in *in)
-{
-    alt->dock_power = in->dock_power;
-    alt->lanes = alt->want_dp ? SWITCH_PD_ALT_LANES_PENDING : SWITCH_PD_ALT_LANES_FREE;
-    if ((in->dp_status & SWITCH_PD_ALT_DP_STATUS_DP_EN) != 0) {
-        return switch_pd_alt_go(alt, SWITCH_PD_ALT_STALE_EXIT);
-    }
-    return switch_pd_alt_begin(alt, in->status1);
 }
 
 // A command's completion in the step that sent it (not a VDM reply).
@@ -380,17 +449,34 @@ static inline struct switch_pd_alt_out switch_pd_alt_vdm_failed(struct switch_pd
 static inline struct switch_pd_alt_out switch_pd_alt_event(struct switch_pd_alt *alt, const struct switch_pd_alt_in *in)
 {
     const bool plugged = (in->status1 & SWITCH_PD_ALT_STATUS1_INSERT) != 0;
-    if (!plugged || !in->port_session ||
-        (alt->step != SWITCH_PD_ALT_IDLE && (in->alert & SWITCH_PD_ALT_ALERT_PLUGPULL) != 0)) {
+    if (!plugged || (alt->step != SWITCH_PD_ALT_IDLE && (in->alert & SWITCH_PD_ALT_ALERT_PLUGPULL) != 0)) {
         return switch_pd_alt_reset(alt);
     }
+    if (!in->port_session) {
+        const bool pending = alt->vdm_pending || (in->alert & SWITCH_PD_ALT_ALERT_VDM_RECEIVED) != 0;
+        struct switch_pd_alt_out out =
+            alt->step != SWITCH_PD_ALT_IDLE ? switch_pd_alt_reset(alt) : switch_pd_alt_none();
+        alt->vdm_pending = pending;
+        return out;
+    }
     alt->is_source = in->is_source;
+    if ((in->alert & SWITCH_PD_ALT_ALERT_VDM_RECEIVED) != 0 &&
+        !(switch_pd_alt_vdm_step(alt->step) && !alt->accepted)) {
+        alt->vdm_pending = true;
+    }
     if ((in->alert & (SWITCH_PD_ALT_ALERT_CONTRACT | SWITCH_PD_ALT_ALERT_PR_SWAP)) != 0 &&
         switch_pd_alt_waiting_on_chip(alt)) {
         alt->paused = true;
     }
     if (!in->at_rest) {
         return switch_pd_alt_none();
+    }
+    if (alt->vdm_pending && alt->drain_count < SWITCH_PD_ALT_DRAIN_MAX && alt->step != SWITCH_PD_ALT_DRAIN_VDM &&
+        (alt->step == SWITCH_PD_ALT_IDLE || alt->step == SWITCH_PD_ALT_DONE || alt->paused)) {
+        if ((in->status1 & SWITCH_PD_ALT_STATUS1_CMD_BUSY) != 0) {
+            return switch_pd_alt_none();
+        }
+        return switch_pd_alt_begin_drain(alt, alt->step, in->status1, in->dp_status, in->dock_power);
     }
     if (alt->step == SWITCH_PD_ALT_IDLE) {
         if ((in->status1 & SWITCH_PD_ALT_STATUS1_CMD_BUSY) != 0) {
@@ -399,6 +485,7 @@ static inline struct switch_pd_alt_out switch_pd_alt_event(struct switch_pd_alt 
         return switch_pd_alt_start(alt, in);
     }
     if (alt->as_ufp && !alt->partner_is_usb_host && alt->step != SWITCH_PD_ALT_DR_SWAP &&
+        alt->step != SWITCH_PD_ALT_DRAIN_VDM &&
         switch_pd_alt_data_role(in->status1) == SWITCH_PD_ALT_DATA_ROLE_DFP &&
         (in->status1 & SWITCH_PD_ALT_STATUS1_CMD_BUSY) == 0) {
         alt->paused = false;
@@ -412,6 +499,26 @@ static inline struct switch_pd_alt_out switch_pd_alt_event(struct switch_pd_alt 
         }
         alt->paused = false;
         return switch_pd_alt_send(alt);
+    }
+    if (alt->step == SWITCH_PD_ALT_DRAIN_VDM) {
+        alt->drain_status1 = in->status1;
+        if ((in->alert & SWITCH_PD_ALT_ALERT_CMD_DONE) != 0) {
+            const unsigned last = switch_pd_alt_last_command(in->status1);
+            if (last == 0u) {
+                struct switch_pd_alt_out out = switch_pd_alt_none();
+                out.act = SWITCH_PD_ALT_READ;
+                return out;
+            }
+            if (last == 2u && !alt->drain_retried) {
+                alt->drain_retried = true;
+                alt->paused = true;
+                struct switch_pd_alt_out out = switch_pd_alt_none();
+                out.timer_ms = 100u;
+                return out;
+            }
+            return switch_pd_alt_finish_drain(alt);
+        }
+        return switch_pd_alt_none();
     }
     if (switch_pd_alt_vdm_step(alt->step)) {
         if (!alt->accepted && (in->alert & SWITCH_PD_ALT_ALERT_VDM_RECEIVED) != 0) {
@@ -467,6 +574,28 @@ static inline struct switch_pd_alt_out switch_pd_alt_timer(struct switch_pd_alt 
         alt->paused = false;
         return switch_pd_alt_send(alt);
     }
+    if (alt->step == SWITCH_PD_ALT_DRAIN_VDM) {
+        if (!at_rest) {
+            const enum switch_pd_alt_step resume = alt->drain_resume;
+            alt->drain_resume = SWITCH_PD_ALT_IDLE;
+            alt->step = resume;
+            alt->paused = resume != SWITCH_PD_ALT_IDLE && resume != SWITCH_PD_ALT_DONE;
+            return switch_pd_alt_none();
+        }
+        return switch_pd_alt_finish_drain(alt);
+    }
+    if (alt->step == SWITCH_PD_ALT_DISCOVER_ID && !alt->accepted && !alt->vdm_retried) {
+        alt->vdm_retried = true;
+        if (!at_rest) {
+            alt->paused = true;
+            return switch_pd_alt_none();
+        }
+        if (alt->vdm_pending && alt->drain_count < SWITCH_PD_ALT_DRAIN_MAX) {
+            return switch_pd_alt_begin_drain(alt, SWITCH_PD_ALT_DISCOVER_ID, alt->drain_status1,
+                                             alt->drain_dp_status, alt->drain_dock_power);
+        }
+        return switch_pd_alt_send(alt);
+    }
     if (alt->step == SWITCH_PD_ALT_DP_DISCOVER || alt->step == SWITCH_PD_ALT_DP_CONFIGURE) {
         return switch_pd_alt_after_dp(alt, "no DisplayPort: no answer within 1.5 s");
     }
@@ -485,6 +614,7 @@ static inline struct switch_pd_alt_out switch_pd_alt_timer(struct switch_pd_alt 
 static inline const char *switch_pd_alt_step_name(enum switch_pd_alt_step step)
 {
     static const char *const names[] = {"idle",
+                                        "drain incoming VDM",
                                         "stale DisplayPort exit",
                                         "data role swap",
                                         "data role swap to UFP",

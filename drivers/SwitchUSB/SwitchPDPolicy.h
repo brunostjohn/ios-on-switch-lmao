@@ -172,7 +172,7 @@ static inline struct switch_pd_step switch_pd_decide(enum switch_pd_phase phase,
             return switch_pd_step_make(SWITCH_PD_END, SWITCH_PD_SINK, true,
                                        "sink: the partner came back as a source, or with VBUS up that is not ours");
         }
-        if (otg_sink && ((alert & SWITCH_PD_ALERT_SRC_PLUGIN) || switch_pd_vbus_ours(status1)))
+        if (otg_sink && ((alert & SWITCH_PD_ALERT_SRC_PLUGIN) || (alert == 0 && switch_pd_vbus_ours(status1))))
             return switch_pd_step_make(SWITCH_PD_START, SWITCH_PD_SOURCE, true, 0);
         return none;
     case SWITCH_PD_SOURCE:

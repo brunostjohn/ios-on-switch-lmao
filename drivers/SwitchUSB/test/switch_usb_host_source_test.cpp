@@ -137,6 +137,8 @@ TEST(SwitchUsbHostSource, ProvisionalSourcePowerHasLifecycleCleanup)
     EXPECT_TRUE(leave.has("if (switch_pd_boost_on(phase))"));
     EXPECT_TRUE(leave.before("setSwitches(false);", "switch_battery_set_otg_boost(false, false)"));
     EXPECT_TRUE(leave.before("switch_battery_set_otg_boost(false, false)", "setRails(false, false)"));
+    EXPECT_TRUE(
+        leave.has("restoreField(CONFIG2, CONFIG2_PR_SWAP_MASK | CONFIG2_DR_SWAP_MASK | CONFIG2_VSRC_SWAP, found.config2)"));
     const auto sleep = Block(source, "void SwitchPD::systemSleep(");
     EXPECT_TRUE(sleep.has("phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_WAIT_SOURCE"));
     EXPECT_TRUE(sleep.before("window->cancelTimeout();", "enter(SWITCH_PD_EMPTY,"));

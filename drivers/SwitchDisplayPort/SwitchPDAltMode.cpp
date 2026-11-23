@@ -85,7 +85,11 @@ void perform(struct switch_pd_alt_out out, enum switch_pd_alt_step from)
         from = gAlt.step;
         uint8_t incoming[SWITCH_PD_ALT_INCOMING_MAX] = {};
         if (tegra_i2c_read(kBus, kPD, INCOMING_VDM, incoming, sizeof(incoming)) != 0) {
-            out = switch_pd_alt_finish(&gAlt, SWITCH_PD_ALT_FAILED, "INCOMING_VDM could not be read");
+            if (gAlt.step == SWITCH_PD_ALT_DRAIN_VDM) {
+                out = switch_pd_alt_reply(&gAlt, incoming, sizeof(incoming));
+            } else {
+                out = switch_pd_alt_finish(&gAlt, SWITCH_PD_ALT_FAILED, "INCOMING_VDM could not be read");
+            }
         } else {
 #if DEVELOPMENT || DEBUG
             logIncomingVdm(incoming, sizeof(incoming));
