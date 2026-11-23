@@ -117,6 +117,16 @@ static MTLPixelFormat kernelFormat(SwitchMetalTexture *t, SwitchMetalComputeStat
     return MTLPixelFormat(gm20b::kernelTextureFormat(t->_raw, uint32_t(t->_descriptor.pixelFormat), codes));
 }
 
+// The swizzle a kernel reads `t` through (gm20b::kernelTextureSwizzle)
+static MTLTextureSwizzleChannels kernelSwizzle(SwitchMetalTexture *t)
+{
+    const MTLTextureSwizzleChannels w = t->_descriptor.swizzle;
+    uint8_t c[4] = {w.red, w.green, w.blue, w.alpha};
+    gm20b::kernelTextureSwizzle(t->_raw, uint32_t(t->_descriptor.pixelFormat), c);
+    return MTLTextureSwizzleChannelsMake(MTLTextureSwizzle(c[0]), MTLTextureSwizzle(c[1]), MTLTextureSwizzle(c[2]),
+                                         MTLTextureSwizzle(c[3]));
+}
+
 static MTLTextureDescriptor *kernelDescriptor(SwitchMetalTexture *t, SwitchMetalComputeState *state, uint32_t slot,
                                               bool fetched)
 {
@@ -126,6 +136,7 @@ static MTLTextureDescriptor *kernelDescriptor(SwitchMetalTexture *t, SwitchMetal
         return d;
     d = [d copy];
     d.pixelFormat = format;
+    d.swizzle = kernelSwizzle(t);
     return d;
 }
 
@@ -136,7 +147,7 @@ static MTLTextureDescriptor *kernelDescriptor(SwitchMetalTexture *t, SwitchMetal
     gm20b::BoundTexture bound = {};
     if (t) {
         MTLTextureDescriptor *d = t->_descriptor;
-        const MTLTextureSwizzleChannels w = d.swizzle;
+        const MTLTextureSwizzleChannels w = kernelSwizzle(t);
         bound = {index,           kernelFormat(t, _state, index, !_unfetchedSamplers),
                  d.textureType,   d.mipmapLevelCount,
                  d.arrayLength,   {w.red, w.green, w.blue, w.alpha},

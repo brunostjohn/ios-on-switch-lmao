@@ -38,12 +38,23 @@ template <typename Texture> constexpr KernelTextureForm kernelTextureForm(const 
     return KernelTextureForm::InPlace;
 }
 
-// The MTLPixelFormat a kernel is compiled to read texture `x` of `format` in: a two-plane RGB10A8_2P_XR10 texture's
-// stand-in (kXrStandInFormat), whose header admission binds where the record views the slot so. An extended-range
-// texture the kernel does not read by its codes (`codes` false: kernelReadsCodes) is read through its stand-in too. Else
-// its own.
+// RGB10A8_2P_XR10 or its sRGB twin held as BGR10_XR's (BGR10_XR_sRGB's) words alone under that format's header, over
+// a plane no alpha plane follows (TegraGM20BMetalXrPlanes.h xrWordsTexture, xrWordsFormat); a texel buffer's are its own
+template <typename Texture> bool xrWordsAlone(const Texture &x, uint32_t format)
+{
+    constexpr uint32_t kBgr10Xr = 554, kBgr10XrSrgb = 555;
+    return x.type != kTexelBufferType &&
+           ((format == 550 && x.format == kBgr10Xr) || (format == kRgb10A8XrSrgb && x.format == kBgr10XrSrgb));
+}
+
+// The MTLPixelFormat a kernel is compiled to read texture `x` of `format` in: words alone in their own format (alpha 0
+// by kernelTextureSwizzle); a two-plane RGB10A8_2P_XR10 texture's stand-in (kXrStandInFormat), whose header admission
+// binds where the record views the slot so. An extended-range texture the kernel does not read by its codes (`codes`
+// false: kernelReadsCodes) is read through its stand-in too. Else its own.
 template <typename Texture> uint32_t kernelTextureFormat(const Texture &x, uint32_t format, bool codes)
 {
+    if (xrWordsAlone(x, format))
+        return x.format;
     if (!x.standIn)
         return format;
     const XrForm form = xrForm(format);
@@ -53,6 +64,17 @@ template <typename Texture> uint32_t kernelTextureFormat(const Texture &x, uint3
     const bool planesBuffer = x.type == kTexelBufferType && twoPlaneXr(format) && (twoPlaneXr(x.format) || !codes);
     return x.xrPlanes || planesBuffer || (!codes && form != XrForm::None && form != XrForm::Planes) ? kXrStandInFormat
                                                                                                     : format;
+}
+
+// The swizzle a kernel reads texture `x` of `format` through, from the texture's own `channels` (MTLTextureSwizzle each):
+// words alone read alpha 0, as an M4 Max reads them (m2v-textures3 probes/xrsurf.mm), where their format reads 1, so a
+// channel of alpha's takes zero
+template <typename Texture> void kernelTextureSwizzle(const Texture &x, uint32_t format, uint8_t channels[4])
+{
+    constexpr uint8_t kZero = 0, kAlpha = 5;  // MTLTextureSwizzleZero, MTLTextureSwizzleAlpha
+    if (xrWordsAlone(x, format))
+        for (int c = 0; c < 4; c++)
+            channels[c] = channels[c] == kAlpha ? kZero : channels[c];
 }
 
 // Whether the translator samples an extended-range texture's codes through a runtime sampler of these

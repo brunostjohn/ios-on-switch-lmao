@@ -5,6 +5,7 @@
 // kernel bound an RGBA8 texture whose rows are 16 bytes off 32 (boot 21: 326 command buffers on m2v): it is reached
 // through its shadow image, not refused.
 #include <gtest/gtest.h>
+#include <vector>
 
 #include "../kernel_texture.h"
 
@@ -76,6 +77,36 @@ TEST(KernelTexture, ATwoPlaneTexelBufferOverASurfaceIsCompiledForItsWordsWhereSt
         buffer.format = format;
         EXPECT_EQ(gm20b::kernelTextureFormat(buffer, format, true), gm20b::kXrStandInFormat) << format;
     }
+}
+
+// RGB10A8_2P_XR10 read alone over a surface's last plane is held as BGR10_XR's words under BGR10_XR's header
+// (TegraGM20BMetalXrPlanes.h xrWordsTexture), which an M4 Max reads with alpha 0. Boot 2's kernels were compiled for
+// 550, whose view is a word and an alpha byte side by side, which no header of the texture is: admission failed them
+// (gpu.gm20b.xr_next_plane, xr_planes_off16). They read the words in BGR10_XR, a channel of alpha's zero
+TEST(KernelTexture, WordsAloneAreReadInTheirOwnFormatWithAlphaZero)
+{
+    const Texture standIn;
+    Texture words;
+    words.standIn = &standIn;
+    for (const uint32_t format : {550u, 551u}) {
+        words.format = format + 4;
+        for (const bool codes : {false, true})
+            EXPECT_EQ(gm20b::kernelTextureFormat(words, format, codes), format + 4) << format;
+        uint8_t own[4] = {2, 3, 4, 5}, swizzled[4] = {5, 1, 4, 0};
+        gm20b::kernelTextureSwizzle(words, format, own);
+        gm20b::kernelTextureSwizzle(words, format, swizzled);
+        EXPECT_EQ(std::vector<uint8_t>(own, own + 4), (std::vector<uint8_t>{2, 3, 4, 0})) << format;
+        EXPECT_EQ(std::vector<uint8_t>(swizzled, swizzled + 4), (std::vector<uint8_t>{0, 1, 4, 0})) << format;
+    }
+    Texture planes = words;
+    planes.format = 550;
+    uint8_t own[4] = {2, 3, 4, 5};
+    gm20b::kernelTextureSwizzle(planes, 550, own);
+    EXPECT_EQ(own[3], 5) << "a 550 held as 550 keeps its alpha";
+    Texture buffer = words;
+    buffer.format = 554;
+    buffer.type = gm20b::kTexelBufferType;
+    EXPECT_EQ(gm20b::kernelTextureFormat(buffer, 550, false), gm20b::kXrStandInFormat) << "a texel buffer's own rule";
 }
 
 // A state's reflection names the texture slots its kernel may store: a read-write or write-only texture binding's

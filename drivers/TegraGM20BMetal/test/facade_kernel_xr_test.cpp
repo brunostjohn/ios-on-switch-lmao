@@ -24,7 +24,8 @@ constexpr uint32_t kCompute = 1, kSendPcasA = 0x02b4;  // NVB1C0_SEND_PCAS_A
 const uint32_t kThreads[3] = {8, 8, 1};
 // the library's kernels the records are made for
 constexpr uint32_t kStore = 0, kLoad = 1, kFloatRead = 2, kHalfRead = 3;
-constexpr uint32_t kR32Uint = 98, kRgba16Float = 97;  // VkFormat
+constexpr uint32_t kR32Uint = 98, kRgba16Float = 97, kRg32Uint = 101;   // VkFormat
+constexpr uint8_t kRgba[4] = {2, 3, 4, 5}, kRgbZero[4] = {2, 3, 4, 0};  // MTLTextureSwizzle
 
 id<MTLDevice> gDevice;
 id<MTLComputePipelineState> gStates[4];
@@ -77,14 +78,15 @@ std::string readsSlotZero(MTLDataType components)
     return reflection_blob::of({root, binding}, {1}, 1);
 }
 
-// Kernel `i`'s record of a load of slot 0 keyed at `format` under `samplers` (computeSamplers' text), through a view
-// of `vkFormat`
+// Kernel `i`'s record of a load of slot 0 keyed at `format` and `swizzle` under `samplers` (computeSamplers' text),
+// through a view of `vkFormat`
 gm20b::PackKernel readRecord(uint32_t i, uint32_t maxThreads, uint64_t format, uint32_t vkFormat,
-                             const std::string &samplers = "")
+                             const std::string &samplers = "", const uint8_t *swizzle = kRgba)
 {
     gm20b::AirHash air;
     air.fill(uint8_t(kKernelSeed + i));
-    const gm20b::BoundTexture bound = {0, format, MTLTextureType2D, 1, 1, {2, 3, 4, 5}};
+    const gm20b::BoundTexture bound = {0, format, MTLTextureType2D,
+                                       1, 1,      {swizzle[0], swizzle[1], swizzle[2], swizzle[3]}};
     const std::string key =
         gm20b::computeKey(air, "", maxThreads, false, kThreads, "", gm20b::computeTextures(&bound, 1), samplers);
     gm20b::PackKernel k = {};
@@ -224,7 +226,9 @@ protected:
             {planesRecord(kStore, maxThreads, false), planesRecord(kLoad, maxThreads, true),
              readRecord(kFloatRead, maxThreads, MTLPixelFormatBGR10_XR, kR32Uint),
              readRecord(kFloatRead, maxThreads, gm20b::kXrStandInFormat, kRgba16Float, samplerAtZero(mipSampler())),
-             readRecord(kHalfRead, maxThreads, gm20b::kXrStandInFormat, kRgba16Float)},
+             readRecord(kHalfRead, maxThreads, gm20b::kXrStandInFormat, kRgba16Float),
+             readRecord(kFloatRead, maxThreads, MTLPixelFormatBGR10_XR, kR32Uint, "", kRgbZero),
+             readRecord(kFloatRead, maxThreads, 550, kRg32Uint)},
             {kernelFacts(kStore, maxThreads), kernelFacts(kLoad, maxThreads), kernelFacts(kFloatRead, maxThreads),
              kernelFacts(kHalfRead, maxThreads)},
             true, reflections,
@@ -335,6 +339,34 @@ TEST_F(FacadeKernelXr, AHalfReadAndAFloatReadBesideAMipFilterReadTheStandIn)
         EXPECT_EQ(ran.status, MTLCommandBufferStatusCompleted) << ran.error << " sampler first " << samplerFirst;
         EXPECT_EQ(ran.launches, 1u) << "sampler first " << samplerFirst;
     }
+}
+
+// RGB10A8_2P_XR10 read alone over a surface's one plane is held as BGR10_XR's words (TegraGM20BMetalXrPlanes.h
+// xrWordsTexture), which an M4 Max reads with alpha 0. Boot 2's kernel was keyed at 550, its record viewing the slot as
+// a word and an alpha byte side by side, which no header of the texture is, and admission failed the command buffer
+// (gpu.gm20b.xr_next_plane, xr_planes_off16; the pack here holds that record too). A kernel reading it is keyed at
+// BGR10_XR with alpha zero and reads the words
+TEST_F(FacadeKernelXr, WordsAloneAreReadAsBgr10XrWithAlphaZero)
+{
+    IOSurfaceRef one = IOSurfaceCreate((__bridge CFDictionaryRef) @{
+        (id)kIOSurfaceWidth : @(kSide),
+        (id)kIOSurfaceHeight : @(kSide),
+        (id)kIOSurfaceBytesPerElement : @4,
+        (id)kIOSurfacePixelFormat : @(uint32_t('w30r'))
+    });
+    ASSERT_TRUE(one);
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormat(550)
+                                                                                 width:kSide
+                                                                                height:kSide
+                                                                             mipmapped:NO];
+    d.usage = MTLTextureUsageShaderRead;
+    SwitchMetalTexture *t = (SwitchMetalTexture *)[gDevice newTextureWithDescriptor:d iosurface:one plane:0];
+    ASSERT_TRUE(t != nil && t->_gm20bOk && t->_raw.format == MTLPixelFormatBGR10_XR && !t->_raw.xrPlanes);
+    dispatch(kFloatRead, (id<MTLTexture>)t);
+    const Ran ran = dispatch(kFloatRead, (id<MTLTexture>)t);
+    EXPECT_EQ(ran.status, MTLCommandBufferStatusCompleted) << ran.error;
+    EXPECT_EQ(ran.launches, 1u);
+    CFRelease(one);
 }
 
 }  // namespace
