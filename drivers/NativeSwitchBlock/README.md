@@ -13,7 +13,10 @@ completions run on the worker thread while the next command runs on the card. `S
 onto the block device below DiskImages and the image files' page cache.
 
 Writes run write-through. The driver never turns the card's volatile write cache on, and `setup()` flushes and disables
-any cache left enabled by an earlier boot stage (panicking if the card fails to clear both bits).
+any cache left enabled by an earlier boot stage (panicking if the card fails to clear both bits). At shutdown and
+restart, when the card exposes the SD 6.00 Power Management extension with Power Off Notification support, the driver
+quiesces the worker, rejects new I/O, writes `POFN=1`, waits for CMD49 busy by interrupt, and reads `POFR` (re-reading
+every 10 ms up to 1.5 s if the card is not ready yet) before power goes off.
 
 ## Tests
 

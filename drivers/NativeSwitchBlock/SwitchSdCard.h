@@ -307,7 +307,14 @@ inline SwitchSdGeneralInfo switchSdParseGeneralInfo(const uint8_t *info, uint32_
     return g;
 }
 
-// Power Management register set (5.8.1): byte 0 revision [3:0], byte 1 support bits.
+// Power Management register set (5.8.1, Table 5-28): byte 0 revision [3:0], byte 1 status (support [6:4], ready
+// [2:0]; bit 4 POFS, bit 0 POFR), byte 2 setting (bit 0 POFN).
+constexpr uint32_t kSdPowerRevision = 0, kSdPowerStatus = 1, kSdPowerSetting = 2;
+constexpr uint32_t kSdPowerLength = kSdPowerSetting + 1;
+constexpr uint8_t kSdPowerOffReady = 1u << 0, kSdPowerOffSupport = 1u << 4, kSdPowerOffNotify = 1u << 0;
+constexpr uint64_t kSdPowerOffReadyLimitNs = 1500000000ULL;
+constexpr uint32_t kSdPowerOffSleepMs = 10;
+
 struct SwitchSdPower {
     uint8_t revision;
     bool offNotification, sustenance, powerDown;
@@ -315,7 +322,23 @@ struct SwitchSdPower {
 
 inline SwitchSdPower switchSdParsePower(const uint8_t *reg)
 {
-    return {static_cast<uint8_t>(reg[0] & 0xf), (reg[1] & 0x10) != 0, (reg[1] & 0x20) != 0, (reg[1] & 0x40) != 0};
+    return {static_cast<uint8_t>(reg[kSdPowerRevision] & 0xf), (reg[kSdPowerStatus] & kSdPowerOffSupport) != 0,
+            (reg[kSdPowerStatus] & 0x20) != 0, (reg[kSdPowerStatus] & 0x40) != 0};
+}
+
+inline bool switchSdPowerFits(const SwitchSdExtFunction &power)
+{
+    return power.found && switchSdExtRange(power.address, kSdPowerLength);
+}
+
+// The only Power Management write this driver may issue: Power Off Notification (byte 2 = 01h).
+inline uint32_t switchSdPowerWriteAddress(const SwitchSdExtFunction &power, uint32_t byte, uint8_t value)
+{
+    if (!switchSdPowerFits(power))
+        return 0;
+    if (byte == kSdPowerSetting && value == kSdPowerOffNotify)
+        return power.address + kSdPowerSetting;
+    return 0;
 }
 
 // Performance Enhancement register set (Table 5-30), from its first byte. Byte 6 "CQ Support and Depth": 00h none,
@@ -419,6 +442,53 @@ inline SwitchSdCacheOff switchSdDisableFoundCache(bool havePerf, const SwitchSdE
     if ((readBack[0] & kSdCacheEnable) || (readBack[1] & kSdFlushCache))
         return {SwitchSdCacheOffStep::kStillOn, 0, 0, readBack[0], readBack[1]};
     return {SwitchSdCacheOffStep::kDone, 0, 0, readBack[0], readBack[1]};
+}
+
+enum class SwitchSdPowerOffStep : uint8_t {
+    kSkipped,
+    kDone,
+    kBadAddress,
+    kNotifyFailed,
+    kReadBackFailed,
+    kNotReady,
+};
+
+struct SwitchSdPowerOff {
+    SwitchSdPowerOffStep step;
+    int error;
+    uint32_t r1;
+    uint8_t status;
+};
+
+// SD 6.00 5.8.1.3 / Fig. 5-19: set POFN=1 (byte 2), wait for CMD49 busy end, then read byte 1 immediately.
+// If POFR=1, return at once with zero sleeps; if POFR=0, sleep and re-read until POFR=1 or 1.5 s elapses
+// (500 ms margin over the spec's 1 s post-busy window).
+template <typename Bus>
+inline SwitchSdPowerOff switchSdPowerOffNotify(bool havePower, const SwitchSdExtFunction &powerFunc,
+                                               const SwitchSdPower &power, Bus &bus)
+{
+    if (!havePower || !power.offNotification)
+        return {SwitchSdPowerOffStep::kSkipped, 0, 0, 0};
+    const uint32_t notifyAddress = switchSdPowerWriteAddress(powerFunc, kSdPowerSetting, kSdPowerOffNotify);
+    const uint32_t statusAddress = powerFunc.address + kSdPowerStatus;
+    if (!notifyAddress || !switchSdExtRange(statusAddress, 1))
+        return {SwitchSdPowerOffStep::kBadAddress, 0, 0, 0};
+    uint32_t r1 = 0;
+    if (const int err = bus.writeByte(powerFunc.fno, notifyAddress, kSdPowerOffNotify, &r1); err || (r1 & kSdR1Errors))
+        return {SwitchSdPowerOffStep::kNotifyFailed, err, r1, 0};
+    const uint64_t busyEndedNs = bus.nowNs();
+    for (;;) {
+        uint8_t status = 0;
+        r1 = 0;
+        if (const int err = bus.readBytes(powerFunc.fno, statusAddress, 1, &status, &r1); err || (r1 & kSdR1Errors))
+            return {SwitchSdPowerOffStep::kReadBackFailed, err, r1, 0};
+        if (status & kSdPowerOffReady)
+            return {SwitchSdPowerOffStep::kDone, 0, 0, status};
+        const uint64_t now = bus.nowNs();
+        if (now >= busyEndedNs && now - busyEndedNs >= kSdPowerOffReadyLimitNs)
+            return {SwitchSdPowerOffStep::kNotReady, 0, 0, status};
+        bus.sleepMs(kSdPowerOffSleepMs);
+    }
 }
 
 // ---- Data command framing ------------------------------------------------------------------------------------------

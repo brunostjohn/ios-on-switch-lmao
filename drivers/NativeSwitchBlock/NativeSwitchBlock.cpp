@@ -76,6 +76,7 @@ extern "C" {
 // physical aperture.
 unsigned int pmap_cache_attributes(ppnum_t pn);
 extern uint64_t gPhysBase, gPhysSize;  // the RAM the kernel's physical aperture covers
+unsigned panic_active(void);
 }
 
 namespace {
@@ -633,9 +634,10 @@ class NativeSwitchBlock : public IOService {
     uint32_t rca = 0, initStatus = 0;
     bool tuned = false;
     unsigned speed = 0;
-    // System sleep: the worker stops between commands while suspended; the card was in 1.8 V signalling at boot (so it
-    // is taken back there after SC7); LBA 1 as read at boot, compared after re-initialization.
-    bool suspended = false, working = false, lowVoltageBus = false;
+    // System sleep and shutdown: the worker stops between commands while suspended; the card was in 1.8 V signalling
+    // at boot (so it is taken back there after SC7); LBA 1 as read at boot, compared after re-initialization.
+    bool suspended = false, working = false, lowVoltageBus = false, shutdownDone = false;
+    bool inShutdown = false, shutdownIrqLost = false;
     uint8_t gptHeader[kSector] = {};
     // r14-sdcq: the card's registers as identify() read them once at boot (CID and CSD during reinitialize(), the rest in
     // transfer state), for the identification lines, CMD23 and the card's cache (disableFoundCache).
@@ -713,7 +715,7 @@ class NativeSwitchBlock : public IOService {
     void account(Batch &);
     void completeBatch(Batch &);
     int controlCommand(uint32_t index, uint32_t argument, uint32_t flags, uint32_t *response, int data,
-                       uint64_t limitNs = 1500000000ULL);
+                       uint64_t limitNs = 1500000000ULL, bool allowRelease = true);
     bool stepUnmap(Unmap &job);
     int erase(uint64_t first, uint64_t last, uint32_t argument, uint64_t limitNs);
     bool trimRunnable() const;
@@ -755,9 +757,30 @@ class NativeSwitchBlock : public IOService {
     void powerOffCard();
     void powerOnController();
 
+    struct ExtRegBus {
+        NativeSwitchBlock *self;
+        bool allowRelease;
+
+        int writeByte(uint8_t fno, uint32_t address, uint8_t value, uint32_t *r1) const;
+        int readBytes(uint8_t fno, uint32_t address, uint32_t length, uint8_t *out, uint32_t *r1) const;
+
+        static uint64_t nowNs()
+        {
+            return switch_now_ns();
+        }
+
+        static void sleepMs(uint32_t ms)
+        {
+            IOSleep(ms);
+        }
+    };
+
 public:
+    using IOService::callPlatformFunction;
+    IOReturn callPlatformFunction(const OSSymbol *function, bool wait, void *p1, void *p2, void *p3, void *p4) override;
     void suspend();
     void resume();
+    void shutdown();
     Stats stats = {};
 #if DEVELOPMENT || DEBUG
     // When the last 10 s line of the request accounting (gIo) was made, and when the driver began and finished its
@@ -775,7 +798,7 @@ public:
 
     bool setup();
     int transfer(uint64_t lba, uint32_t sectors, bool write, uint8_t *bytes);
-    void submit(Request *);
+    bool submit(Request *);
     IOReturn unmap(const IOBlockStorageDeviceExtent *extents, uint32_t count, uint64_t blocks);
 
     void prepareTrim();
@@ -902,7 +925,11 @@ IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, U
                 static_cast<uint8_t>(priority >> 6),
                 0,
                 false};
-    owner->submit(request);
+    if (!owner->submit(request)) {
+        buffer->release();
+        IOFree(request, sizeof(*request));
+        return kIOReturnNotReady;
+    }
     return kIOReturnSuccess;
 }
 
@@ -1065,8 +1092,20 @@ uint32_t NativeSwitchBlock::awaitStatus(uint32_t awaited, uint64_t limitNs)
         if (elapsed >= limitNs)
             return s;
         const uint64_t left = limitNs - elapsed;
-        if (!waitSignal(signals, left < kInterruptCheckNs ? left : kInterruptCheckNs) && (r32(STATUS) & signals))
+        if (!waitSignal(signals, left < kInterruptCheckNs ? left : kInterruptCheckNs) && (r32(STATUS) & signals)) {
+            if (inShutdown) {
+                const uint32_t lost = r32(STATUS);
+                if (!shutdownIrqLost) {
+                    shutdownIrqLost = true;
+                    char gic[192];
+                    switch_interrupt_describe(kInterrupt, gic, sizeof(gic));
+                    IOLog("SwitchSD: SDMMC1 interrupt lost during shutdown: STATUS %#x awaited %#x, %s\n", lost,
+                          signals, gic);
+                }
+                return lost;
+            }
             interruptLost(signals);
+        }
     }
 }
 
@@ -1316,10 +1355,14 @@ int NativeSwitchBlock::retry(int step, uint32_t status, uint64_t lba, uint32_t s
     return step;
 }
 
-void NativeSwitchBlock::submit(Request *request)
+bool NativeSwitchBlock::submit(Request *request)
 {
     request->queuedNs = switch_now_ns();
     IOLockLock(queueLock);
+    if (shutdownDone) {
+        IOLockUnlock(queueLock);
+        return false;
+    }
     lastIoNs = request->queuedNs;
     if (request->write)
         switchSdTrimClear(&trim, request->lba, request->sectors);
@@ -1341,6 +1384,7 @@ void NativeSwitchBlock::submit(Request *request)
     __atomic_fetch_add(&submitted, 1, __ATOMIC_RELAXED);
     IOLockWakeup(queueLock, &head, true);
     IOLockUnlock(queueLock);
+    return true;
 }
 
 IOReturn NativeSwitchBlockDevice::doUnmap(IOBlockStorageDeviceExtent *extents, UInt32 count, IOStorageUnmapOptions)
@@ -1364,6 +1408,10 @@ IOReturn NativeSwitchBlock::unmap(const IOBlockStorageDeviceExtent *extents, uin
     if (!sdStatus.discard) {
         // Marked now, erased in idle time: a write queued before then cancels its AUs (submit).
         IOLockLock(queueLock);
+        if (shutdownDone) {
+            IOLockUnlock(queueLock);
+            return kIOReturnNotReady;
+        }
         for (uint32_t i = 0; i < count; ++i)
             switchSdTrimMark(&trim, firstSector + extents[i].blockStart, extents[i].blockCount);
         IOLockWakeup(queueLock, &head, true);
@@ -1372,6 +1420,10 @@ IOReturn NativeSwitchBlock::unmap(const IOBlockStorageDeviceExtent *extents, uin
     }
     Unmap job = {nullptr, extents, count, 0, 0, 0, kIOReturnSuccess, false};
     IOLockLock(queueLock);
+    if (shutdownDone) {
+        IOLockUnlock(queueLock);
+        return kIOReturnNotReady;
+    }
     Unmap **last = &unmaps;
     while (*last)
         last = &(*last)->next;
@@ -1922,7 +1974,7 @@ void NativeSwitchBlock::completeBatch(Batch &b)
 // *response gets the R1, also on a failure when the command's response came (command complete seen: steps 3, 6 and 10);
 // the interrupt status the command ended with is kept for the refusal lines (cardLastIrq).
 int NativeSwitchBlock::controlCommand(uint32_t index, uint32_t argument, uint32_t flags, uint32_t *response, int data,
-                                      uint64_t limitNs)
+                                      uint64_t limitNs, bool allowRelease)
 {
     *response = 0;
     SwitchSdUse use = SwitchSdUse::kCommand;
@@ -1967,7 +2019,7 @@ int NativeSwitchBlock::controlCommand(uint32_t index, uint32_t argument, uint32_
         step = 4;
     // Transfer complete follows a CMD49's or an R1b's busy; DAT0 confirms it. RESPONSE is read first: CMD13 would
     // replace it.
-    if (!step && !bus.idle() && awaitRelease())
+    if (!step && !bus.idle() && (!allowRelease || awaitRelease()))
         step = 10;
     cardLastIrq = s;
     if (step) {
@@ -2207,6 +2259,11 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
             pending = nullptr;
         }
         if (!next) {
+            IOLockLock(self->queueLock);
+            self->working = false;
+            if (self->suspended)
+                IOLockWakeup(self->queueLock, &self->working, false);
+            IOLockUnlock(self->queueLock);
 #if DEVELOPMENT || DEBUG
             self->prevIrqNs = 0;
 #endif
@@ -2215,10 +2272,20 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
         self->endBatch(*next);
         pending = next;
         IOLockLock(self->queueLock);
-        self->working = false;
-        if (self->suspended)
-            IOLockWakeup(self->queueLock, &self->working, false);
+        const bool drain = self->suspended;
         IOLockUnlock(self->queueLock);
+        if (drain) {
+            self->completeBatch(*pending);
+            pending = nullptr;
+            IOLockLock(self->queueLock);
+            self->working = false;
+            IOLockWakeup(self->queueLock, &self->working, false);
+            IOLockUnlock(self->queueLock);
+#if DEVELOPMENT || DEBUG
+            self->prevIrqNs = 0;
+#endif
+            continue;
+        }
 #if DEVELOPMENT || DEBUG
         // Throughput line every statsEveryNs while I/O is happening (one log line).
         {
@@ -2627,31 +2694,30 @@ void NativeSwitchBlock::identify()
 #endif
 }
 
+int NativeSwitchBlock::ExtRegBus::writeByte(uint8_t fno, uint32_t address, uint8_t value, uint32_t *r1) const
+{
+    memset(self->bounce, 0, kSector);
+    self->bounce[0] = value;
+    return self->controlCommand(49, switchSdExtArgument(fno, address, 1), RSP_R1, r1, kRegWrite, 1500000000ULL,
+                                allowRelease);
+}
+
+int NativeSwitchBlock::ExtRegBus::readBytes(uint8_t fno, uint32_t address, uint32_t length, uint8_t *out,
+                                            uint32_t *r1) const
+{
+    *r1 = 0;
+    if (!switchSdExtRange(address, length))
+        return -1;
+    const int step = self->cardCommand(48, switchSdExtArgument(fno, address, length), RSP_R1, r1, kSector);
+    if (step)
+        return step;
+    memcpy(out, self->bounce, length);
+    return 0;
+}
+
 void NativeSwitchBlock::disableFoundCache()
 {
-    struct CacheBus {
-        NativeSwitchBlock *self;
-
-        int writeByte(uint8_t fno, uint32_t address, uint8_t value, uint32_t *r1) const
-        {
-            memset(self->bounce, 0, kSector);
-            self->bounce[0] = value;
-            return self->controlCommand(49, switchSdExtArgument(fno, address, 1), RSP_R1, r1, kRegWrite);
-        }
-
-        int readBytes(uint8_t fno, uint32_t address, uint32_t length, uint8_t *out, uint32_t *r1) const
-        {
-            *r1 = 0;
-            if (!switchSdExtRange(address, length))
-                return -1;
-            const int step = self->cardCommand(48, switchSdExtArgument(fno, address, length), RSP_R1, r1, kSector);
-            if (step)
-                return step;
-            memcpy(out, self->bounce, length);
-            return 0;
-        }
-    } cacheBus{this};
-
+    const ExtRegBus cacheBus{this, true};
     const SwitchSdCacheOff off = switchSdDisableFoundCache(havePerf, extInfo.perf, perf, cacheBus);
     if (off.step == SwitchSdCacheOffStep::kSkipped)
         return;
@@ -3210,6 +3276,89 @@ void NativeSwitchBlock::dmaResume()
           control2, translated ? "on" : "off");
 }
 
+void NativeSwitchBlock::shutdown()
+{
+    if (panic_active())
+        return;
+    if (!preemption_enabled()) {
+        IOLog("SwitchSD: power off notification skipped (preemption off)\n");
+        return;
+    }
+    IOLockLock(queueLock);
+    if (shutdownDone) {
+        IOLockUnlock(queueLock);
+        return;
+    }
+    const bool alreadySuspended = suspended;
+    suspended = true;
+    shutdownDone = true;
+    while (working)
+        IOLockSleep(queueLock, &working, THREAD_UNINT);
+    Request *abandoned = head;
+    head = tail = nullptr;
+    if (abandoned) {
+#if DEVELOPMENT || DEBUG
+        gIo.depthChanging(switch_now_ns(), queued);
+#endif
+        queued = 0;
+        for (unsigned c = 0; c < kClasses; ++c)
+            queuedReads[c] = 0;
+    }
+    if (Unmap *u = unmaps) {
+        unmaps = nullptr;
+        while (u) {
+            Unmap *next = u->next;
+            u->next = nullptr;
+            u->result = kIOReturnNotReady;
+            u->finished = true;
+            u = next;
+        }
+        IOLockWakeup(queueLock, &unmaps, false);
+    }
+    IOLockUnlock(queueLock);
+    if (abandoned) {
+        Batch b = {};
+        b.first = abandoned;
+        b.result = kIOReturnNotReady;
+        completeBatch(b);
+    }
+    if (alreadySuspended)
+        return;
+    inShutdown = true;
+    if (trimCall)
+        thread_call_cancel(trimCall);
+    // SD 6.00 Figure 5-18 allows only CMD48 after POFN=1, so suppress CMD13 release fallback on CMD49.
+    const ExtRegBus extBus{this, false};
+    const SwitchSdPowerOff pon = switchSdPowerOffNotify(havePower, extInfo.power, power, extBus);
+    if (pon.step == SwitchSdPowerOffStep::kDone) {
+        IOLog("SwitchSD: power off notification ready (status 0x%02x)\n", static_cast<unsigned>(pon.status));
+    } else if (pon.step != SwitchSdPowerOffStep::kSkipped) {
+        uint32_t irq = 0;
+        if (pon.step == SwitchSdPowerOffStep::kNotifyFailed) {
+            irq = cardLastIrq;
+        } else if (pon.step == SwitchSdPowerOffStep::kReadBackFailed) {
+            irq = initStatus;
+        }
+        IOLog("SwitchSD: power off notification failed (step %u, err %d, R1 0x%08x, irq 0x%08x, status 0x%02x)\n",
+              static_cast<unsigned>(pon.step), pon.error, pon.r1, irq, static_cast<unsigned>(pon.status));
+    }
+    dmaSuspend();
+    if (irqSource)
+        irqSource->disable();
+}
+
+IOReturn NativeSwitchBlock::callPlatformFunction(const OSSymbol *function, bool wait, void *p1, void *p2, void *p3,
+                                                 void *p4)
+{
+    if (function && function->isEqualTo("IOPlatformHaltRestartAction")) {
+        const uint32_t message = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(p2));
+        if (message == kPEHaltCPU || message == kPEUPSDelayHaltCPU || message == kPERestartCPU)
+            shutdown();
+        return kIOReturnSuccess;
+    }
+    return IOService::callPlatformFunction(function, wait, p1, p2, p3, p4);
+}
+
 void NativeSwitchBlock::resume()
 {
     powerOnController();
@@ -3461,6 +3610,9 @@ extern "C" int switch_block_publish(void)
     }
     owner->device = device;
     gOwner = owner;
+    // High priority runs after other platform halt/restart actions, right before SwitchPMIC cuts power.
+    owner->setProperty("IOPlatformHaltRestartAction", 1000000u, 32);
+    owner->registerService();
 #if DEVELOPMENT || DEBUG
     owner->setupEndedNs = switch_now_ns();
     registerSdSysctl();
