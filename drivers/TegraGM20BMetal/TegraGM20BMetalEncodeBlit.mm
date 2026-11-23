@@ -78,17 +78,20 @@ void gm20bCopyPlanes(gm20b::BlitEncoder *be, gm20b::CommandBuffer *rc, const gm2
 }
 
 // A no-copy texture copied into a pool image (gm20b::Texture::callerPages): what a copy wrote into the image goes on to the
-// caller's memory, which stays the texture's contents, after it on the copy engine
+// caller's memory, which stays the texture's contents, after it on the copy engine. The copy reads the image through its
+// kind-0 view after the blit wrote its texels through 0xfe, and later commands use the texels again: a kind switch on
+// each side (gpu.astc.layouts blitin_back read the caller's blocks in FermiColor order without them)
 static void copyToCallerPages(gm20b::BlitEncoder *be, gm20b::CommandBuffer *rc, SwitchMetalTexture *t)
 {
     t = t->_levelsOwner ?: t;
     const gm20b::Texture &x = t->_raw;
     if (!x.callerPages)
         return;
-    be->access(memoryOf(t), x.callerPages);
     rc->use(x.callerPages, true);
     rc->clean(x.callerPages->bo.cpu, x.storage.bytes, true);
+    be->crossKinds();
     be->copyBytes(x.imagePitchVa, x.callerPages->bo.va, x.storage.bytes);
+    be->crossKinds();
 }
 
 // The image a buffer copy moves of `t`'s level: a texture held through a surface's planes moves plane 0's bytes, at the
