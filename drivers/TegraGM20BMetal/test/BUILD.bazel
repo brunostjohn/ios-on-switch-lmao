@@ -5920,12 +5920,15 @@ facade_test(
 )
 
 # A kernel storing and loading an RGB10A8_2P_XR10 texture over a two-plane surface on the facade: kept raw, keyed
-# ":xr2p", run through the planes' own headers; a load of one made without ShaderRead failing the command buffer
+# ":xr2p", run through the planes' own headers; a load of one made without ShaderRead failing the command buffer; a
+# BGR10_XR texture's float reads keyed at its codes, its half reads at its stand-in
 facade_test(
     name = "facade_kernel_xr_test",
     srcs = [
+        "NativeMetalComputeArtifact.h",
         "facade_compute.h",
         "facade_kernel_xr_test.cpp",
+        "reflection_blob_writer.h",
     ],
     deps = ["//kits/SwitchGM20B:classes"],
 )
