@@ -45,8 +45,10 @@ public:
     void platformRefreshRates() override {}
 private:
     static constexpr unsigned kSlots = 3;
-    static constexpr uint64_t kSlotBase = 0x10000000, kSlotSpan = 0x10000000;
+    static constexpr uint64_t kSlotBase = 0x10000000, kSlotSpan = 16ULL << 20;
     static constexpr uint32_t kTablePages = 1 + kSlots * (kSlotSpan >> 22);
+    static_assert(kTablePages == 13);
+    static_assert(kTablePages == 1 + TegraSMMUDomain::tablesFor(kSlotBase, kSlots * kSlotSpan));
     struct Slot {
         SwitchNativeScanout read;
         OSObject *surface;
@@ -67,12 +69,16 @@ private:
     struct switch_dp_mode_list modes = {};
     struct switch_dp_mode mode = {};
     uint64_t sequence = 0, slotUses = 0, refreshPeriod = 0, interval = 0, linkGeneration = 0, gpuGeneration = 0;
+    uint64_t activeGeometry = 0;
     int selectedMode = -1, front = -1, drawing = -1;
     uint32_t device = 0;
     bool connected = false, mapped = false, gpuPending = false, latched = false, kicking = false;
     const OriginalLegacySwapRequest *pending = nullptr;
     int gpuStatus = 0;
     static void completionFired(OSObject *owner, IOInterruptEventSource *, int);
+    void publishActiveGeometry();
+    void drainSwapQueue();
+    bool applyTiledLayout(Slot &slot, uint64_t firstPage, uint64_t bytes);
     bool mapDomain();
     void cleanDomain();
     void releaseSlot(unsigned slot);

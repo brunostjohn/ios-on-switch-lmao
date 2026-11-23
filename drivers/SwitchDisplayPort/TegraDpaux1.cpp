@@ -174,3 +174,14 @@ enum switch_dp_aux_result TegraDpaux1::finish(struct switch_dp_aux_request &requ
     }
     return result;
 }
+
+void TegraDpaux1::resetAux()
+{
+    if (base == nullptr)
+        return;
+    write(SWITCH_DPAUX_AUXCTL, SWITCH_DPAUX_AUXCTL_RST);
+    IODelay(1);
+    write(SWITCH_DPAUX_AUXCTL, 0);
+    write(SWITCH_DPAUX_AUXSTAT, SWITCH_DPAUX_AUXSTAT_ERRORS);
+    write(SWITCH_DPAUX_INTR_AUX, SWITCH_DPAUX_INTR_AUX_DONE);
+}

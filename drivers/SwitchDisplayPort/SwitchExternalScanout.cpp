@@ -71,6 +71,27 @@ void SwitchExternalScreen::releaseSlot(unsigned index)
     slot = {};
 }
 
+bool SwitchExternalScreen::applyTiledLayout(Slot &slot, uint64_t firstPage, uint64_t bytes)
+{
+    int tiled = 0;
+    void *held = tegra_gm20b_surface_hold(firstPage, &tiled);
+    if (!tiled) {
+        slot.layout = held;
+        return true;
+    }
+    tgm_layout layout = {};
+    if (tegra_gm20b_surface_layout(firstPage, &layout) != 1 || layout.bytes > bytes ||
+        layout.row_bytes < mode.hactive * 4u || layout.row_bytes > 0xffff) {
+        if (held)
+            tegra_gm20b_surface_unhold(held);
+        return false;
+    }
+    slot.layout = held;
+    slot.kind = 2u | (static_cast<uint32_t>(layout.y_log2) << 4);
+    slot.stride = layout.row_bytes;
+    return true;
+}
+
 int SwitchExternalScreen::prepareSlot(OSObject *surface)
 {
     auto *memory = native_legacy_surface_descriptor(surface);
@@ -98,6 +119,10 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
         auto &slot = slots[i];
         if (slot.memory == memory && slot.surface == surface && slot.pages == pages && slot.offset == offset &&
             slot.allocationId == allocation.allocation_id && slot.generation == allocation.allocation_generation) {
+            if (!slot.layout && !applyTiledLayout(slot, allocation.pages[0], bytes)) {
+                switch_native_scanout_release(&snapshot);
+                return -1;
+            }
             if (slot.read.lease) {
                 if (slot.read.allocation.content_generation != snapshot.allocation.content_generation) {
                     switch_native_scanout_release(&snapshot);
@@ -157,17 +182,9 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
     if (slot.counted)
         switch_surface_use_increment(surface, 0);
     slot.stride = static_cast<uint32_t>(pitch);
-    int tiled = 0;
-    slot.layout = tegra_gm20b_surface_hold(allocation.pages[0], &tiled);
-    if (tiled) {
-        tgm_layout layout = {};
-        if (tegra_gm20b_surface_layout(allocation.pages[0], &layout) != 1 || layout.bytes > bytes ||
-            layout.row_bytes < mode.hactive * 4u || layout.row_bytes > 0xffff) {
-            releaseSlot(index);
-            return -1;
-        }
-        slot.kind = 2u | (static_cast<uint32_t>(layout.y_log2) << 4);
-        slot.stride = layout.row_bytes;
+    if (!applyTiledLayout(slot, allocation.pages[0], bytes)) {
+        releaseSlot(index);
+        return -1;
     }
     cleanDomain();
     return victim;
@@ -226,8 +243,11 @@ void SwitchExternalScreen::requestFrame()
     offer.source = native_legacy_surface_descriptor(surface);
     offer.sourceStride = slots[index].stride;
     offer.sourceBytes = native_legacy_surface_allocation(surface);
+    const bool tiled = slots[index].kind != 0;
     offer.flags = TEGRA_SCANOUT_COPY_FENCE_ONLY |
-                  (slots[index].presented ? TEGRA_SCANOUT_COPY_PRODUCER_WATCH : 0u);
+                  (slots[index].presented ? TEGRA_SCANOUT_COPY_PRODUCER_WATCH : 0u) |
+                  (tiled ? TEGRA_SCANOUT_COPY_SOURCE_BLOCK : 0u);
+    offer.sourceBlockHeightLog2 = tiled ? ((slots[index].kind >> 4) & 7u) : 0u;
     offer.dependencies = tokens;
     offer.dependencyCount = switch_native_scanout_dependencies(slots[index].read, tokens,
                                                                SWITCH_SCANOUT_MAX_DEPENDENCIES);
@@ -269,8 +289,8 @@ void SwitchExternalScreen::completionFired(OSObject *owner, IOInterruptEventSour
         self->drawing = -1;
         self->retire(self->pending, false);
         self->pending = nullptr;
-        if (self->connected && self->selectedMode < 0)
-            self->modeFailed();
+        if (!self->connected || self->selectedMode < 0 || self->device != 2)
+            self->drainSwapQueue();
         else
             self->kickSwapQueue();
         return;

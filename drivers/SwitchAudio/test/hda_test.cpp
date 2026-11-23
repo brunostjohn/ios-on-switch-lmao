@@ -121,6 +121,8 @@ TEST(HdaProtocol, Encodes48kStereoAnd16BitVerbPayloads)
     EXPECT_EQ(switch_hda_stream_format(24), 0x31);
     EXPECT_EQ(switch_hda_verb(2, 3, 0x200, 0x31), 0x20320031u);
     EXPECT_EQ(switch_hda_verb(0, 7, 0xf00, 9), 0x007f0009u);
+    EXPECT_EQ(switch_hda_verb(1, 4, 0x707, 0x40), 0x10470740u);
+    EXPECT_EQ(switch_hda_verb(1, 4, 0xf09, 0), 0x104f0900u);
 }
 
 TEST(HdaProtocol, RequiresMatchingSinkAndCodecPcmWidth)

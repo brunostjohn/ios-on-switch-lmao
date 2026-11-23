@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "SwitchDisplayPortService.h"
+#include <kern/clock.h>
 
 void SwitchDisplayPort::cecReset()
 {
@@ -18,9 +19,16 @@ void SwitchDisplayPort::cecRelease()
     cecReleasePending = true;
     stepTimer->cancelTimeout();
     scheduleAux();
+    uint64_t deadline = 0;
+    clock_interval_to_deadline(200, kMillisecondScale, &deadline);
     // Only the suspend or alt-mode caller sleeps; the event thread must finish AUX_DONE with the gate open.
-    while (cecReleasePending)
-        gate->commandSleep(&cecReleasePending, THREAD_UNINT);
+    while (cecReleasePending) {
+        if (gate->commandSleep(&cecReleasePending, deadline, THREAD_UNINT) == THREAD_TIMED_OUT) {
+            IOLog("SwitchDisplayPort: timed out waiting for dock CEC release\n");
+            cecReleasePending = false;
+            break;
+        }
+    }
 }
 
 void SwitchDisplayPort::cecEdid()

@@ -47,7 +47,7 @@ static inline bool switch_dp_source_timing(const struct switch_dp_mode *m)
 {
     const uint64_t total = (uint64_t)switch_dp_mode_htotal(m) * switch_dp_mode_vtotal(m);
     return m->hactive <= SWITCH_DP_MAX_WIDTH && m->vactive <= SWITCH_DP_MAX_HEIGHT &&
-           m->pixel_khz <= 750000u && (uint64_t)m->pixel_khz * 1000u <= total * 60u;
+           m->pixel_khz <= 750000u && (uint64_t)m->pixel_khz * 10000u <= total * 605u;
 }
 
 static inline bool switch_dp_edid_block_valid(const uint8_t *block)
@@ -216,6 +216,45 @@ static inline void switch_dp_edid_cta(const uint8_t *block, struct switch_dp_mod
     }
 }
 
+static inline bool switch_dp_standard_timing(uint8_t b0, uint8_t b1, bool edid13, struct switch_dp_mode *mode)
+{
+    if ((b0 == 0x01u && b1 == 0x01u) || (b0 == 0x00u && b1 == 0x00u) || (b0 == 0x20u && b1 == 0x20u))
+        return false;
+    if ((b1 & 0x3Fu) != 0)
+        return false;
+    const uint16_t hactive = (uint16_t)(((unsigned)b0 + 31u) * 8u);
+    uint16_t vactive = 0;
+    switch (b1 >> 6) {
+    case 0:
+        vactive = edid13 ? (uint16_t)(hactive * 10u / 16u) : hactive;
+        break;
+    case 1:
+        vactive = (uint16_t)(hactive * 3u / 4u);
+        break;
+    case 2:
+        vactive = (uint16_t)(hactive * 4u / 5u);
+        break;
+    case 3:
+        vactive = (uint16_t)(hactive * 9u / 16u);
+        break;
+    }
+    static const struct switch_dp_mode table[] = {
+        {148500, 1920, 88, 44, 148, 1080, 4, 5, 36, true, true, false},
+        {97750, 1600, 48, 32, 80, 900, 3, 5, 18, true, false, false},
+        {74250, 1280, 110, 40, 220, 720, 5, 5, 20, true, true, false},
+        {91000, 1280, 48, 32, 80, 1024, 3, 7, 20, true, false, false},
+        {65000, 1024, 24, 136, 160, 768, 3, 6, 29, false, false, false},
+        {35500, 800, 48, 32, 80, 600, 3, 4, 11, true, false, false},
+    };
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i) {
+        if (table[i].hactive == hactive && table[i].vactive == vactive) {
+            *mode = table[i];
+            return true;
+        }
+    }
+    return false;
+}
+
 static inline bool switch_dp_edid_block_modes(const uint8_t *edid, bool base, struct switch_dp_mode_list *list)
 {
     if (!base) {
@@ -233,6 +272,12 @@ static inline bool switch_dp_edid_block_modes(const uint8_t *edid, bool base, st
             mode.preferred = at == 54 && list->count == 0;
             switch_dp_modes_add(list, &mode);
         }
+    }
+    const bool edid13 = edid[18] > 1 || (edid[18] == 1 && edid[19] >= 3);
+    for (unsigned at = 38; at + 2 <= 54; at += 2) {
+        struct switch_dp_mode mode;
+        if (switch_dp_standard_timing(edid[at], edid[at + 1], edid13, &mode))
+            switch_dp_modes_add(list, &mode);
     }
     if ((edid[35] & 0x20u) != 0) {
         struct switch_dp_mode vga;

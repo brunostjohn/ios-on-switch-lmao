@@ -28,7 +28,7 @@ class SwitchHDA {
     void coreWrite(uint32_t offset, uint32_t value);
     void field(uint32_t offset, uint32_t mask, uint32_t value);
     bool prepareHardware();
-    void stopCommands();
+    bool stopCommands();
     void power(bool on);
     bool reset();
     bool verb(uint32_t node, uint32_t operation, uint32_t payload, uint32_t *value = nullptr);
@@ -42,7 +42,7 @@ public:
     void disconnect();
     bool connect(uint32_t formats);
     IOReturn start();
-    void stop();
+    bool stop();
     void sleep(bool entering);
     static constexpr uint32_t kIntid = 32 + 81;
 };

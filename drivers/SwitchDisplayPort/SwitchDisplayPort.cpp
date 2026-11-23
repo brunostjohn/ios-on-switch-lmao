@@ -251,9 +251,21 @@ void SwitchDisplayPort::auxTimerFired(OSObject *owner, IOTimerEventSource *)
     }
     char gic[192];
     switch_interrupt_describe(TEGRA_DPAUX1_INTID, gic, sizeof(gic));
-    panic(
-        "SwitchDisplayPort: DPAUX1 interrupt lost: no AUX_DONE %u ms after a transaction (AUXCTL %#x, AUXSTAT %#x); %s",
-        kAuxLostMs, switch_dp_auxctl(&self->request), self->aux.auxstat(), gic);
+    const uint32_t auxstat = self->aux.auxstat();
+    IOLog("SwitchDisplayPort: DPAUX1 interrupt lost: no AUX_DONE %u ms after a transaction "
+          "(AUXCTL %#x, AUXSTAT %#x); %s\n",
+          kAuxLostMs, switch_dp_auxctl(&self->request), auxstat, gic);
+    self->auxPending = false;
+    self->auxDiscard = false;
+    self->aux.resetAux();
+    if (self->next == Next::Cec) {
+        self->cecComplete(false);
+        self->scheduleAux();
+        return;
+    }
+    char why[96];
+    snprintf(why, sizeof(why), "AUX_DONE timeout after %u ms (AUXSTAT %#x)", kAuxLostMs, auxstat);
+    self->fail("DPAUX1", why);
 }
 
 void SwitchDisplayPort::stepTimerFired(OSObject *owner, IOTimerEventSource *)

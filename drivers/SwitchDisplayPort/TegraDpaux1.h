@@ -26,6 +26,7 @@ public:
     void start(const struct switch_dp_aux_request &request);
     // After AUX_DONE: the reply, and a read's bytes into request.data.
     enum switch_dp_aux_result finish(struct switch_dp_aux_request &request);
+    void resetAux();
 
     // The interrupt's cause, cleared (the line is level: reading and clearing INTR_AUX drops it).
     uint32_t takeInterrupt();

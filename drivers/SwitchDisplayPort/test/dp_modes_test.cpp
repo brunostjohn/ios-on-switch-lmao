@@ -130,11 +130,63 @@ TEST(SourceLimits, UltrawideAndFastModesLeaveRoomForSupportedEdidTimings)
     EXPECT_TRUE(switch_dp_prefer(&list.modes[0], &list.modes[1]));
     auto timing = list.modes[0];
     EXPECT_TRUE(switch_dp_mode_allowed(&timing, switch_dp_payload_kbps(SWITCH_DP_RATE_HBR, 2)));
-    ++timing.pixel_khz;
+    timing.pixel_khz = 149500;
+    EXPECT_TRUE(switch_dp_mode_allowed(&timing, kHbr2Four));
+    timing.pixel_khz = 150000;
     EXPECT_FALSE(switch_dp_mode_allowed(&timing, kHbr2Four));
     timing.pixel_khz = 148352;
     EXPECT_TRUE(switch_dp_mode_allowed(&timing, kHbr2Four));
     EXPECT_EQ(switch_dp_refresh_period(&timing), (uint64_t{2200} * 1125 << 32) / 148352000u);
+}
+
+TEST(SourceLimits, AcceptsVesa60HzToleranceAndRejectsHigherRates)
+{
+    const switch_dp_mode xga60{65000, 1024, 24, 136, 160, 768, 3, 6, 29, false, false, false};      // 60.004 Hz
+    const switch_dp_mode sxga60{108000, 1280, 48, 112, 248, 1024, 1, 3, 38, true, true, false};     // 60.020 Hz
+    const switch_dp_mode svga60{40000, 800, 40, 128, 88, 600, 1, 4, 23, true, true, false};         // 60.317 Hz
+    EXPECT_TRUE(switch_dp_source_timing(&xga60));
+    EXPECT_TRUE(switch_dp_source_timing(&sxga60));
+    EXPECT_TRUE(switch_dp_source_timing(&svga60));
+
+    const switch_dp_mode xga70{75000, 1024, 24, 136, 144, 768, 3, 6, 29, false, false, false};      // 70.069 Hz
+    const switch_dp_mode sxga75{135000, 1280, 16, 144, 248, 1024, 1, 3, 38, true, true, false};     // 75.025 Hz
+    const switch_dp_mode fhd120{297000, 1920, 88, 44, 148, 1080, 4, 5, 36, true, true, false};      // 120.000 Hz
+    const switch_dp_mode fhd144{356400, 1920, 88, 44, 148, 1080, 4, 5, 36, true, true, false};      // 144.000 Hz
+    EXPECT_FALSE(switch_dp_source_timing(&xga70));
+    EXPECT_FALSE(switch_dp_source_timing(&sxga75));
+    EXPECT_FALSE(switch_dp_source_timing(&fhd120));
+    EXPECT_FALSE(switch_dp_source_timing(&fhd144));
+}
+
+TEST(Edid, ParsesStandardTimingsAt60Hz)
+{
+    Block b = base({k2160p60}, 0, false);
+    const uint8_t stdTimings[16] = {
+        0xD1, 0xC0,  // 1920x1080 @ 60 Hz
+        0xA9, 0xC0,  // 1600x900 @ 60 Hz
+        0x81, 0xC0,  // 1280x720 @ 60 Hz
+        0x81, 0x80,  // 1280x1024 @ 60 Hz
+        0x61, 0x40,  // 1024x768 @ 60 Hz
+        0x45, 0x40,  // 800x600 @ 60 Hz
+        0x81, 0x8F,  // 1280x1024 @ 75 Hz (skipped)
+        0x01, 0x01,  // unused padding
+    };
+    std::copy(std::begin(stdTimings), std::end(stdTimings), b.begin() + 38);
+    checksum(b);
+    const auto list = parse({b});
+    ASSERT_EQ(list.count, 6u);
+    const std::pair<uint16_t, uint16_t> expected[6] = {
+        {1920, 1080}, {1600, 900}, {1280, 720}, {1280, 1024}, {1024, 768}, {800, 600},
+    };
+    for (unsigned i = 0; i < 6; ++i) {
+        EXPECT_EQ(list.modes[i].hactive, expected[i].first);
+        EXPECT_EQ(list.modes[i].vactive, expected[i].second);
+        EXPECT_TRUE(switch_dp_mode_allowed(&list.modes[i], kHbr2Four));
+        for (bool b01 : {false, true}) {
+            switch_dp_plld2 pll{};
+            EXPECT_TRUE(switch_dp_plld2_for(list.modes[i].pixel_khz, 38400, b01, &pll));
+        }
+    }
 }
 
 TEST(Edid, PublishesBoth1080RatesWhenFourKIsExcluded)

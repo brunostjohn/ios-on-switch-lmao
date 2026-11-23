@@ -22,7 +22,40 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     const auto lifecycle = SourceText("../SwitchExternalScreen.cpp");
     const auto off = Block(lifecycle, "void SwitchExternalScreen::linkDown()");
     EXPECT_TRUE(off.has("releaseRead(static_cast<unsigned>(front));"));
-    EXPECT_TRUE(Block(lifecycle, "void SwitchExternalScreen::detach()").has("releaseSlot(i);"));
+    const auto detach = Block(lifecycle, "void SwitchExternalScreen::detach()");
+    EXPECT_TRUE(detach.has("releaseSlot(i);"));
+    EXPECT_TRUE(detach.has("drainSwapQueue();"));
+    EXPECT_TRUE(detach.has("publishActiveGeometry();"));
+    EXPECT_TRUE(Block(lifecycle, "void SwitchExternalScreen::modeFailed()").has("drainSwapQueue();"));
+    const auto select = Block(lifecycle, "IOReturn SwitchExternalScreen::selectOutput(");
+    EXPECT_TRUE(select.has("self->publishActiveGeometry();"));
+    EXPECT_TRUE(select.has("if (device != 2) self->drainSwapQueue();"));
     EXPECT_TRUE(Block(lifecycle, "void SwitchExternalScreen::linkUp(").has("mode.hactive != timing.hactive"));
-    EXPECT_TRUE(Block(source, "int SwitchExternalScreen::prepareSlot(").has("native_legacy_surface_bounds("));
+
+    const auto validate = Block(lifecycle, "bool SwitchExternalScreen::validateSwap(");
+    EXPECT_TRUE(validate.has("__atomic_load_n(&activeGeometry, __ATOMIC_ACQUIRE)"));
+    EXPECT_FALSE(validate.has("modes.modes[selectedMode]"));
+
+    const auto prepare = Block(source, "int SwitchExternalScreen::prepareSlot(");
+    EXPECT_TRUE(prepare.has("native_legacy_surface_bounds("));
+    EXPECT_TRUE(prepare.has("if (!slot.layout && !applyTiledLayout("));
+
+    const auto request = Block(source, "void SwitchExternalScreen::requestFrame()");
+    EXPECT_TRUE(request.has("TEGRA_SCANOUT_COPY_SOURCE_BLOCK"));
+    EXPECT_TRUE(request.has("offer.sourceBlockHeightLog2 = tiled ? ((slots[index].kind >> 4) & 7u) : 0u;"));
+
+    const auto complete = Block(source, "void SwitchExternalScreen::completionFired(");
+    EXPECT_TRUE(complete.has("if (!self->connected || self->selectedMode < 0 || self->device != 2)"));
+    EXPECT_TRUE(complete.has("self->drainSwapQueue();"));
+
+    const auto header = SourceText("../SwitchExternalScreen.h");
+    EXPECT_NE(header.find("kSlotSpan = 16ULL << 20"), std::string::npos);
+    EXPECT_NE(header.find("static_assert(kTablePages == 13);"), std::string::npos);
+
+    const auto service = SourceText("../SwitchDisplayPort.cpp");
+    const auto auxTimer = Block(service, "void SwitchDisplayPort::auxTimerFired(");
+    EXPECT_FALSE(auxTimer.has("panic("));
+    EXPECT_TRUE(auxTimer.has("self->aux.resetAux();"));
+    EXPECT_TRUE(auxTimer.has("self->cecComplete(false);"));
+    EXPECT_TRUE(auxTimer.has("self->fail(\"DPAUX1\", why);"));
 }

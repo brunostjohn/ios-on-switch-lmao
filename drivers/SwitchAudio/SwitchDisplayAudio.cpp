@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include "SwitchAudioDriver.h"
 #include "../SwitchDisplayPort/SwitchDisplayPort.h"
+#include <kern/clock.h>
 #include <kern/thread.h>
 
 using namespace switch_audio_hw;
@@ -159,9 +160,15 @@ IOReturn SwitchAudio::displaySleepGated(OSObject *owner, void *entering, void *,
     self->displayAsleep = entering != nullptr;
     if (self->displayAsleep) {
         self->displayAudio.disconnect();
+        uint64_t deadline = 0;
+        clock_interval_to_deadline(200, kMillisecondScale, &deadline);
         // SwitchSuspend and PM callers wait here; the worker finishes DP with the Audio gate open.
-        while (self->displayPresencePending)
-            self->gate->commandSleep(&self->displayPresencePending, THREAD_UNINT);
+        while (self->displayPresencePending) {
+            if (self->gate->commandSleep(&self->displayPresencePending, deadline, THREAD_UNINT) == THREAD_TIMED_OUT) {
+                IOLog("SwitchAudio: timed out waiting for display presence before sleep\n");
+                break;
+            }
+        }
         self->displayAudio.sleep(true);
     } else {
         self->displayAudio.sleep(false);

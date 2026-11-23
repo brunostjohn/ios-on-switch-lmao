@@ -144,18 +144,40 @@ bool SwitchExternalScreen::publishModes(OSString *uuid)
     return ok;
 }
 
+void SwitchExternalScreen::publishActiveGeometry()
+{
+    uint64_t geometry = 0;
+    if (connected && selectedMode >= 0 && static_cast<unsigned>(selectedMode) < modes.count) {
+        const auto &selected = modes.modes[selectedMode];
+        geometry = (static_cast<uint64_t>(selected.hactive) << 32) | selected.vactive;
+    }
+    __atomic_store_n(&activeGeometry, geometry, __ATOMIC_RELEASE);
+}
+
+void SwitchExternalScreen::drainSwapQueue()
+{
+    if (!gpuPending) {
+        while (retire(pendingSwapRequest(), false)) {
+        }
+    }
+}
+
 bool SwitchExternalScreen::publish(const struct switch_dp_mode_list &list, const uint8_t *edid, unsigned bytes)
 {
+    selectedMode = -1;
+    publishActiveGeometry();
     auto *uuid = switch_dp_edid_uuid(edid);
     modes = list;
     const bool published = uuid && publishModes(uuid) && setProperty("EDID", const_cast<uint8_t *>(edid), bytes);
     OSSafeReleaseNULL(uuid);
     if (!published) {
+        connected = false;
+        publishActiveGeometry();
         clearSinkProperties();
         return false;
     }
-    selectedMode = -1;
     connected = true;
+    publishActiveGeometry();
     IOMobileFramebufferLegacy::hotPlugNotify(1);
     return true;
 }
@@ -214,7 +236,9 @@ void SwitchExternalScreen::detach()
     connected = false;
     selectedMode = -1;
     device = 0;
+    publishActiveGeometry();
     clearSinkProperties();
+    drainSwapQueue();
     if (wasConnected)
         IOMobileFramebufferLegacy::hotPlugNotify(0);
 }
@@ -222,10 +246,8 @@ void SwitchExternalScreen::detach()
 void SwitchExternalScreen::modeFailed()
 {
     selectedMode = -1;
-    if (!gpuPending) {
-        while (selectedMode < 0 && retire(pendingSwapRequest(), false)) {
-        }
-    }
+    publishActiveGeometry();
+    drainSwapQueue();
 }
 
 void SwitchExternalScreen::clearSinkProperties()
@@ -299,6 +321,9 @@ IOReturn SwitchExternalScreen::selectOutput(bool timing, uint32_t value)
         if (result == kIOReturnSuccess) {
             self->selectedMode = index;
             self->device = device;
+            self->publishActiveGeometry();
+            if (device != 2)
+                self->drainSwapQueue();
         }
         return result;
     }, this, &selection);
@@ -306,8 +331,11 @@ IOReturn SwitchExternalScreen::selectOutput(bool timing, uint32_t value)
 
 bool SwitchExternalScreen::validateSwap(const OriginalLegacySwapRequest *request)
 {
-    if (!request || selectedMode < 0 || !connected)
+    const uint64_t geometry = __atomic_load_n(&activeGeometry, __ATOMIC_ACQUIRE);
+    if (!request || !geometry)
         return false;
+    const uint32_t width = static_cast<uint32_t>(geometry >> 32);
+    const uint32_t height = static_cast<uint32_t>(geometry);
     const auto *bytes = reinterpret_cast<const uint8_t *>(request);
     uint32_t updated, disabled, background;
     memcpy(&updated, bytes + swapUpdated, sizeof(updated));
@@ -324,17 +352,16 @@ bool SwitchExternalScreen::validateSwap(const OriginalLegacySwapRequest *request
     int32_t source[4], destination[4];
     memcpy(source, bytes + swapSourceRects, sizeof(source));
     memcpy(destination, bytes + swapDestinationRects, sizeof(destination));
-    const auto &selected = modes.modes[selectedMode];
     if (!surface || !surface->metaCast("IOSurface") || transform || native_legacy_surface_planes(surface) ||
-        native_legacy_surface_format(surface) != kBgra || native_legacy_surface_width(surface) != selected.hactive ||
-        native_legacy_surface_height(surface) != selected.vactive || source[0] || source[1] || destination[0] ||
-        destination[1] || source[2] != selected.hactive || source[3] != selected.vactive ||
-        destination[2] != selected.hactive || destination[3] != selected.vactive)
+        native_legacy_surface_format(surface) != kBgra || native_legacy_surface_width(surface) != width ||
+        native_legacy_surface_height(surface) != height || source[0] || source[1] || destination[0] ||
+        destination[1] || source[2] != static_cast<int32_t>(width) || source[3] != static_cast<int32_t>(height) ||
+        destination[2] != static_cast<int32_t>(width) || destination[3] != static_cast<int32_t>(height))
         return false;
     const uint64_t stride = native_legacy_surface_stride(surface);
     auto *memory = native_legacy_surface_descriptor(surface);
     return memory && stride <= 0xffff && (stride & 63) == 0 &&
-           native_legacy_surface_bounds(selected.hactive, selected.vactive, stride,
+           native_legacy_surface_bounds(width, height, stride,
                                          native_legacy_surface_allocation(surface), memory->getLength());
 }
 

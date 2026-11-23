@@ -5,6 +5,7 @@
 #include <initializer_list>
 #include <vector>
 #include "../SwitchDPCEC.h"
+#include "bazel/testing/source_text.h"
 
 namespace {
 struct Branch {
@@ -288,5 +289,14 @@ TEST(CecWake, PhysicalAddressComesOnlyFromAValidHdmiVendorBlock)
     edid[136] = 0x21;
     edid[137] = 0;
     EXPECT_EQ(physical(), SWITCH_DP_CEC_INVALID_PHYSICAL);
+}
+
+TEST(CecWake, ReleaseWaitUsesBoundedDeadline)
+{
+    const auto source = switch_ios::test::SourceText("../SwitchDPCEC.cpp");
+    const auto release = switch_ios::test::Block(source, "void SwitchDisplayPort::cecRelease()");
+    EXPECT_TRUE(release.has("clock_interval_to_deadline("));
+    EXPECT_TRUE(release.has("gate->commandSleep(&cecReleasePending, deadline, THREAD_UNINT)"));
+    EXPECT_TRUE(release.has("THREAD_TIMED_OUT"));
 }
 }

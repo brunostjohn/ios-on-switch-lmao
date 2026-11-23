@@ -118,14 +118,17 @@ host_test(
     name = "dp_scanout_source_test",
     srcs = ["dp_scanout_source_test.cpp"],
     data = [
+        "//drivers/SwitchDisplayPort:SwitchDisplayPort.cpp",
         "//drivers/SwitchDisplayPort:SwitchExternalScanout.cpp",
         "//drivers/SwitchDisplayPort:SwitchExternalScreen.cpp",
+        "//drivers/SwitchDisplayPort:SwitchExternalScreen.h",
     ],
 )
 
 host_test(
     name = "dp_cec_test",
     srcs = ["dp_cec_test.cpp"] + POLICY,
+    data = ["//drivers/SwitchDisplayPort:SwitchDPCEC.cpp"],
     deps = [":policy_c11"],
 )
 
