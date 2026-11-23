@@ -517,6 +517,10 @@ struct SwitchMetalSharedEventWait {
     // `_endedAt`: the last ended encoder's first command; `_handedCommands`: commands since the worker was last handed it.
     std::atomic<uint64_t> _published;
     std::atomic<uint32_t> _pipelineVeto;
+    // `_aheadStop`: the first command of the first encoder a reason of its own keeps from the encode ahead (0: none),
+    // stored as the reason is recorded; the encoders before it are encoded ahead and its commit splits the range there
+    // (gm20bPipelineSplit). `_aheadStopped`: the reasons that stopped it, the recording's and the worker's.
+    std::atomic<uint32_t> _aheadStop, _aheadStopped;
     size_t _endedAt;
     uint32_t _handedCommands;
     bool _handedOnce;  // the worker was handed it (its one SwitchMetalScheduleChange::Encoded)
@@ -525,10 +529,12 @@ struct SwitchMetalSharedEventWait {
     std::atomic<bool> _pipelineDeclined;
     uint32_t _pipelinedEncoders, _pipelineEncoders, _pipelineAbandons, _pipelineGivenBack;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    std::atomic<size_t> _aheadAt;  // where the worker's encode ahead of it reached (switchMetalWaitAhead)
+    std::atomic<size_t> _aheadAt;    // where the worker's encode ahead of it reached (switchMetalWaitAhead)
+    std::atomic<size_t> _aheadHalt;  // where the worker found an encoder it cannot take ahead (0: none)
 #endif
 #if SWITCH_METAL_DIAGNOSTICS
     uint64_t _committedTicks;  // mach_absolute_time as its commit began
+    uint64_t _kickedTicks;     // and as its first raw range's job went to the kernel (0: none yet)
 #endif
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     std::atomic<uint64_t> _heldReturnUs;  // when waitUntilScheduled returned for it held, until it was submitted
@@ -645,6 +651,20 @@ static inline void gm20bPipelineVeto(SwitchMetalCommandBuffer *cb, uint32_t reas
 {
     if (!(cb->_pipelineVeto.load(std::memory_order_relaxed) & reason))
         cb->_pipelineVeto.fetch_or(reason, std::memory_order_release);
+}
+
+// The recording thread's: the encoder being recorded is not encoded ahead for `reason`, the encoders before it still are.
+// Stored before the publish of that encoder's end, which is the earliest the worker may encode the end before it.
+static inline void gm20bPipelineStop(SwitchMetalCommandBuffer *cb, uint32_t reason)
+{
+    if (!cb->_encAt) {
+        gm20bPipelineVeto(cb, reason);
+        return;
+    }
+    if (!cb->_aheadStop.load(std::memory_order_relaxed))
+        cb->_aheadStop.store(uint32_t(cb->_encAt), std::memory_order_release);
+    if (!(cb->_aheadStopped.load(std::memory_order_relaxed) & reason))
+        cb->_aheadStopped.fetch_or(reason, std::memory_order_relaxed);
 }
 
 // ---- encoders: they record ----
