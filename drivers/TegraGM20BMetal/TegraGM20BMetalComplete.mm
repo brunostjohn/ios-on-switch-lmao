@@ -144,6 +144,7 @@ void Completion::askVariant(Ask asked, Ready ready)
 void Completion::create(Ask asked, Ready ready)
 {
     asked.qos = uint32_t(qos_class_self());
+    asked.waited = false;
     request(std::move(asked), std::make_shared<Pending>(pending_, std::move(ready), true));
 }
 

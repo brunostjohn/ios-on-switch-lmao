@@ -190,7 +190,13 @@ struct Model {
     uint32_t storeGeneration = 1;
     std::function<int32_t(const std::string &request)> compiler;
     std::vector<std::string> compileRequests;  // each compile's request bytes, as the client sent them
-    unsigned refuse = 0;                       // submissions refused from now, with `refusal`
+
+    struct CompileCall {
+        uint32_t qos = 0, flags = 0;
+    };
+
+    std::vector<CompileCall> compileCalls;
+    unsigned refuse = 0;  // submissions refused from now, with `refusal`
     // a SubmitJob use of no BO the connection holds or binds refused kIOReturnBadArgument, as the kernel refuses it (off:
     // the tests whose uses name memory the model never bound)
     bool unknownUsesRefused = false;
@@ -857,6 +863,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
     }
     case TegraGM20BMethodCompile: {
         const auto &in = *static_cast<const TegraGM20BAbiCompile *>(input);
+        model.compileCalls.push_back({in.qos, in.flags});
         model.compileRequests.emplace_back(reinterpret_cast<const char *>(uintptr_t(in.address)), size_t(in.bytes));
         const size_t at = std::min<size_t>(model.compiles++, model.compileResults.size() - 1);
         auto &reply = *static_cast<TegraGM20BAbiCompileReply *>(output);

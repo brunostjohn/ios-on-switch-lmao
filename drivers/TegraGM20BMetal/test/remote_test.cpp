@@ -47,6 +47,7 @@ public:
         uint64_t cookie;
         uint64_t reference[kOSAsyncRef64Count];
         uint32_t port = 0;
+        uint32_t qos = 0, flags = 0;
     };
 
     std::vector<Waiting> waiting;
@@ -110,7 +111,8 @@ public:
                 if (asyncCalled != kIOReturnSuccess)
                     return asyncCalled;
                 compiles++;
-                Waiting w = {static_cast<const TegraGM20BAbiCompile *>(in)->cookie, {}, port};
+                const auto &req = *static_cast<const TegraGM20BAbiCompile *>(in);
+                Waiting w = {req.cookie, {}, port, req.qos, req.flags};
                 memcpy(w.reference, reference, sizeof w.reference);
                 waiting.push_back(w);
                 return kIOReturnSuccess;
@@ -547,6 +549,30 @@ TEST_F(RemoteCompile, AnAsynchronousAnswerIsTakenAtItsAskersClass)
             << "answer " << i << " never taken";
         EXPECT_EQ(taken[i].at, gm20b::answerClass(asked[i])) << "answer " << i;
     }
+}
+
+TEST_F(RemoteCompile, AnUnwaitedAsynchronousRequestRunsAtTheBackgroundClass)
+{
+    publish();
+    gm20b::Remote remote(kernel.call(), kStack);
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    qos_class_t unwaitedAt = QOS_CLASS_UNSPECIFIED;
+    ASSERT_TRUE(remote.compileAsync("unwaited", false, QOS_CLASS_USER_INTERACTIVE,
+                                    [&](gm20b::Remote::Answer, const gm20b::Remote::Answered &) {
+                                        unwaitedAt = qos_class_self();
+                                        dispatch_semaphore_signal(done);
+                                    }));
+    ASSERT_TRUE(remote.compileAsync("waited", true, QOS_CLASS_USER_INTERACTIVE,
+                                    [](gm20b::Remote::Answer, const gm20b::Remote::Answered &) {}));
+    ASSERT_EQ(kernel.waiting.size(), 2u);
+    EXPECT_EQ(kernel.waiting[0].flags & TegraGM20BCompileWaited, 0u);
+    EXPECT_EQ(kernel.waiting[0].qos, uint32_t(QOS_CLASS_BACKGROUND));
+    EXPECT_NE(kernel.waiting[1].flags & TegraGM20BCompileWaited, 0u);
+    EXPECT_EQ(kernel.waiting[1].qos, uint32_t(QOS_CLASS_USER_INTERACTIVE));
+    EXPECT_NE(kernel.waiting[0].port, kernel.waiting[1].port);
+    kernel.send(TegraGM20BCompileMade);
+    ASSERT_EQ(dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))), 0);
+    EXPECT_EQ(unwaitedAt, QOS_CLASS_BACKGROUND);
 }
 
 // Completion's queue (TegraGM20BMetalComplete.mm) runs each block at its asker's class, below its own default as well as above it,

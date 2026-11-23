@@ -299,7 +299,7 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k, std::function<void
     const uint64_t began = nowUs();
     const Ask asked = a;
     const bool sent = remote_->compileAsync(
-        request, true, a.qos,
+        request, a.waited, a.qos,
         [this, asked, k, name, began, settle, done, again](Remote::Answer answer, const Remote::Answered &answered) {
             RuntimeRecord made;
             std::string refusal;

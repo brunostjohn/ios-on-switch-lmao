@@ -54,6 +54,7 @@ public:
         // the descriptor over this facade's own functions, which a compile request names (nil: none can)
         MTLRenderPipelineDescriptor *facade = nil;
         uint32_t qos = 0;  // ask(): the asking thread's class, which the compiler runs it at
+        bool waited = true;
     };
 
     // The state's pipeline handed to `ready` once made, or null for a permanent refusal. Temporary allocation
