@@ -100,8 +100,9 @@ bool kernelPages(const void *va, uint64_t bytes, uint64_t *pas)
 	return true;
 }
 
-// A wired, zeroed, clean cached BO of `bytes`, of 128 KiB units where its layout has them (each one GMMU big page), or
-// nullptr. The refill thread alone makes these: BoAlloc's own path on the allocating thread never searches for units.
+// A wired cached BO of `bytes`, of 128 KiB units where its layout has them (each one GMMU big page), or nullptr. Its pages
+// hold what their last owner left: it is a dirty spare until the copy engine has zeroed it (spareWork). The refill
+// thread alone makes these: BoAlloc's own path on the allocating thread never searches for units.
 Spare *spareMake(SparePool *p, uint64_t bytes)
 {
 	Spare *s = IONew(Spare, 1);
@@ -118,13 +119,9 @@ Spare *spareMake(SparePool *p, uint64_t bytes)
 #endif
 	}
 	made = made || switch_gpu_cached_buffer_pages(bytes, &buffer);
-	if (s && pas && made) {
-		// KMA_ZERO zero-filled it through the cacheable aperture: clean the zeros out
-		cleanZeros(buffer.cpu, bytes);
-		if (kernelPages(buffer.cpu, bytes, pas)) {
-			*s = {nullptr, buffer, pas, bytes, nullptr};
-			return s;
-		}
+	if (s && pas && made && kernelPages(buffer.cpu, bytes, pas)) {
+		*s = {nullptr, buffer, pas, bytes, nullptr};
+		return s;
 	}
 	switch_gpu_cached_buffer_free(&buffer);
 	if (pas)
@@ -150,7 +147,13 @@ void spareZeroed(void *context, int result)
 	} else {
 		p->clean -= s->bytes;
 	}
+	const bool firstFailure = result && !p->fillFailed;
+	p->fillFailed = p->fillFailed || result;
 	IOLockUnlock(p->lock);
+	if (firstFailure)
+		IOLog("tegra-gm20b: the copy engine's zero-fill of a %llu KiB spare "
+		      "failed (%d): no spare is made until the next BoAlloc\n",
+		      s->bytes >> 10, result);
 	if (!keep)
 		spareFree(s);
 	thread_call_enter(p->call);
@@ -234,7 +237,9 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 			return;
 		}
 		Spare *evicted = nullptr;
-		uint32_t c = 0;
+		// a spare made goes through the dirty list, which keeps none without room or with the copy engine's fills
+		// failing: the refill would make and free one without end
+		uint32_t c = p->fillFailed || !spareRoom() ? kClasses : 0;
 		for (; c < kClasses; c++) {
 			if (p->count[c] + p->zeroing[c] >= p->target[c])
 				continue;
@@ -273,17 +278,18 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 			return;
 		Spare *s = spareMake(p, classBytes(c));
 		IOLockLock(p->lock);
+		p->clean -= classBytes(c);
 		if (!s) {  // the VM could not give it: try again at the next event, not now
-			p->clean -= classBytes(c);
 #if TGM_STATS
 			++p->refillRefused;
 #endif
 			IOLockUnlock(p->lock);
 			return;
 		}
-		s->next = p->ready[c];
-		p->ready[c] = s;
-		p->count[c]++;
+		// to the copy engine as a freed spare goes; this loop takes the dirty list before it makes another
+		s->next = p->dirty;
+		p->dirty = s;
+		p->dirtyBytes += s->bytes;
 		IOLockUnlock(p->lock);
 	}
 }
@@ -356,6 +362,8 @@ Spare *spareTake(uint64_t bytes)
 	}
 	const bool kick =
 		memoryPressure() ? p->clean != 0 : spareRoom() && p->count[c] < p->target[c];
+	if (kick)
+		p->fillFailed = false;
 	IOLockUnlock(p->lock);
 	if (kick)
 		thread_call_enter(p->call);

@@ -117,7 +117,8 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsCachedBosDo)
 
 // A system BO neither takes a spare nor gives its pages to the spares, which are cacheable: it is made at its own size.
 // A cached BO's pages are in one state from every source: zero in DRAM, no line in the cacheable kernel alias
-// (cleanZeros publishes KMA_ZERO; recycled spares become ready only after CE completion).
+// (cleanZeros publishes a missed BoAlloc's KMA_ZERO; every spare, made or recycled, becomes ready only after CE
+// completion, so no CPU thread zeroes a spare).
 TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 {
 	const CodeText alloc = Block(client(), "IOReturn AGXDeviceUserClient::boAlloc(");
@@ -127,12 +128,15 @@ TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 	EXPECT_TRUE(alloc.has("(in->flags & TegraGM20BBoContiguous) || system ? kClasses : "
 			      "classUp(in->bytes);"));
 	EXPECT_TRUE(alloc.has("cleanZeros(va, backing);"));
-	EXPECT_TRUE(Block(client(), "Spare *spareMake(SparePool *p, uint64_t bytes)")
-			    .has("cleanZeros(buffer.cpu, bytes);"));
+	EXPECT_FALSE(Block(client(), "Spare *spareMake(SparePool *p, uint64_t bytes)")
+			     .has("cleanZeros"));
 	const CodeText work =
 		Block(client(), "void spareWork(thread_call_param_t param, thread_call_param_t)");
 	EXPECT_TRUE(work.has("switch_gpu_cached_zero(s->pas"));
 	EXPECT_FALSE(work.has("cleanZeros(s->buffer"));
+	EXPECT_FALSE(work.has("p->ready[c] = s;"));
+	EXPECT_EQ(work.count("p->dirty = s;"), 2u)
+		<< "a busy scrub's spare put back, and the refill's new one";
 	const CodeText completed = Block(client(), "void spareZeroed(void *context, int result)");
 	EXPECT_TRUE(
 		completed.before("const bool keep = !result && spareRoom();", "p->ready[c] = s;"));

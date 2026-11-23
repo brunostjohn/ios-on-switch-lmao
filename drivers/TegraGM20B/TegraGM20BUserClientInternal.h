@@ -191,6 +191,8 @@ struct SparePool {
 	uint16_t count[kClasses], target[kClasses], zeroing[kClasses];
 	uint64_t clean, dirtyBytes, cleaningBytes,
 		poolZeroing;  // bytes ready, freed and waiting, pool bytes waiting
+	// a copy-engine fill failed: no spare is made until the next BoAlloc asks
+	bool fillFailed;
 #if TGM_STATS
 	OwnerStat owners[kOwners];
 	uint32_t misses[SWITCH_GPU_SPARE_MISSES], zeroBusy, zeroFailed, refillRefused, notUnits;
