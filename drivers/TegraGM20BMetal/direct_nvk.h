@@ -37,11 +37,6 @@ struct NvkStageInfo {
     bool texsF16 = false;
     bool turned = false;
     XrPlaneBindings xrPlaneBindings = {};  // nvk_switch_xr_planes.h: set-0 bindings read through a header pair
-    // nvk_switch_ubo_fold.h: the set-0 uniform buffer at descriptor byte uboFoldDesc, its bytes in uboFoldMask held as
-    // uboFoldBytes
-    uint32_t uboFoldDesc = 0;
-    uint64_t uboFoldMask = 0;
-    uint8_t uboFoldBytes[64] = {};
 };
 
 struct NvkStage {

@@ -28,7 +28,6 @@ struct StageInputs {
         Pipeline,
         Push,
         Targets,
-        Fold,
         Layout,
         Compiler,
         kParts
@@ -37,7 +36,7 @@ struct StageInputs {
     static const char *name(int part)
     {
         static const char *const names[kParts] = {"code",    "specialization", "pipeline", "push",
-                                                  "targets", "fold",           "layout",   "compiler"};
+                                                  "targets", "layout",         "compiler"};
         return names[part];
     }
 
@@ -104,7 +103,7 @@ private:
 }  // namespace stage_inputs
 
 // Every field of NvkStageInfo is read below, or makes the stage unkeyable
-static_assert(sizeof(gm20b::NvkStageInfo) == 384, "a field added to NvkStageInfo is read by stageInputs");
+static_assert(sizeof(gm20b::NvkStageInfo) == 304, "a field added to NvkStageInfo is read by stageInputs");
 
 inline StageInputs stageInputs(const gm20b::StageCompile &c, const gm20b::NvkStageInfo &info,
                                const gm20b::NakLayout &layout)
@@ -161,14 +160,6 @@ inline StageInputs stageInputs(const gm20b::StageCompile &c, const gm20b::NvkSta
         d.word(info.stage == kFragmentStage ? info.halfTargets : 0u);
         d.bytes(info.xrPlaneBindings.data(), sizeof info.xrPlaneBindings);
         in.parts[StageInputs::Targets] = d.done();
-    }
-    {
-        Digest d;
-        d.word(info.uboFoldDesc);
-        d.word(info.uboFoldMask);
-        for (uint32_t i = 0; i < sizeof info.uboFoldBytes; i++)
-            d.word(uint8_t(info.uboFoldMask >> i & 1 ? info.uboFoldBytes[i] : 0));
-        in.parts[StageInputs::Fold] = d.done();
     }
     {
         Digest d;
