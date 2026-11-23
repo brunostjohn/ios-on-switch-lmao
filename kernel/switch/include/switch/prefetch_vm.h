@@ -59,6 +59,7 @@ extern void switch_vm_prefetch_inflight_add(uint32_t bytes) SWITCH_PREFETCH_WEAK
 extern void switch_vm_prefetch_committed(uint32_t pages) SWITCH_PREFETCH_WEAK;
 extern void switch_vm_prefetch_inflight_done(uint32_t bytes, uint64_t elapsed_abs) SWITCH_PREFETCH_WEAK;
 extern void switch_vm_pressure_changed(unsigned int old_level, unsigned int new_level) SWITCH_PREFETCH_WEAK;
+extern void switch_prefetch_volumes_mounted(struct mount *root_mount, struct mount *data_mount) SWITCH_PREFETCH_WEAK;
 extern void switch_prefetch_shutdown(void) SWITCH_PREFETCH_WEAK;
 
 #define SWITCH_VM_PREFETCH_FLUSH_WAKE(flag)        \
@@ -74,6 +75,7 @@ extern void switch_prefetch_shutdown(void) SWITCH_PREFETCH_WEAK;
 /* XNU-side helpers exposed to kernel/switch/vm/. */
 extern uint64_t switch_vm_pressure_headroom_pages(void);
 extern int switch_vfs_rename(const char *from, const char *to);
+extern void switch_cluster_register_mount(unsigned int index, struct mount *mp);
 extern void switch_cluster_register_cryptex_mount(unsigned int index, struct mount *mp);
 extern void switch_cluster_record_start(struct switch_record_entry *log, uint32_t capacity);
 extern uint32_t switch_cluster_record_stop(void);

@@ -13,10 +13,16 @@ extern "C" {
 
 #define SWITCH_PREFETCH_CRYPTEX_COUNT 2u
 #define SWITCH_PREFETCH_VOLUME_COUNT  4u
+#define SWITCH_PREFETCH_READY_ALL     ((1u << SWITCH_PREFETCH_VOLUME_COUNT) - 1u)
 #define SWITCH_PREFETCH_LIST_V2_MAGIC "SWCHPF02"
 #define SWITCH_PREFETCH_LIST_V3_MAGIC "SWCHPF03"
 #define SWITCH_PREFETCH_LIST_VERSION  3u
 #define SWITCH_PREFETCH_MAX_RUN_LIMIT 128u
+
+struct switch_prefetch_ready {
+    void *mounts[SWITCH_PREFETCH_VOLUME_COUNT];
+    uint32_t mask;
+};
 
 struct switch_image_key {
     uint64_t bytes;
@@ -151,6 +157,86 @@ static inline bool switch_prefetch_parse_uuid(const char *str, uint8_t out[16])
     return str[36] == '\0' && byte_index == 16;
 }
 
+static inline bool switch_prefetch_uuid_is_zero(const uint8_t uuid[16])
+{
+    uint8_t acc = 0;
+    for (unsigned i = 0; i < 16u; ++i) {
+        acc |= uuid[i];
+    }
+    return acc == 0u;
+}
+
+static inline void switch_prefetch_ready_init(struct switch_prefetch_ready *r)
+{
+    for (unsigned i = 0; i < SWITCH_PREFETCH_VOLUME_COUNT; ++i) {
+        __atomic_store_n(&r->mounts[i], NULL, __ATOMIC_RELAXED);
+    }
+    __atomic_store_n(&r->mask, 0u, __ATOMIC_RELAXED);
+}
+
+static inline bool switch_prefetch_ready_has_mount(const struct switch_prefetch_ready *r, void *mount)
+{
+    if (mount == NULL) {
+        return false;
+    }
+    for (unsigned i = 0; i < SWITCH_PREFETCH_VOLUME_COUNT; ++i) {
+        if (__atomic_load_n(&r->mounts[i], __ATOMIC_ACQUIRE) == mount) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static inline bool switch_prefetch_ready_add(struct switch_prefetch_ready *r, unsigned index, void *mount)
+{
+    if (index >= SWITCH_PREFETCH_VOLUME_COUNT || mount == NULL) {
+        return false;
+    }
+    const uint32_t bit = 1u << index;
+    if ((__atomic_load_n(&r->mask, __ATOMIC_ACQUIRE) & bit) != 0u) {
+        return false;
+    }
+    if (switch_prefetch_ready_has_mount(r, mount)) {
+        return false;
+    }
+    void *expected = NULL;
+    if (!__atomic_compare_exchange_n(&r->mounts[index], &expected, mount, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
+        return false;
+    }
+    const uint32_t prev = __atomic_fetch_or(&r->mask, bit, __ATOMIC_ACQ_REL);
+    return (prev & bit) == 0u && (prev | bit) == SWITCH_PREFETCH_READY_ALL;
+}
+
+static inline void switch_prefetch_bit_set(uint8_t *bits, uint32_t index)
+{
+    bits[index >> 3] |= (uint8_t)(1u << (index & 7u));
+}
+
+static inline bool switch_prefetch_bit_test(const uint8_t *bits, uint32_t index)
+{
+    return (bits[index >> 3] & (uint8_t)(1u << (index & 7u))) != 0u;
+}
+
+static inline bool switch_prefetch_vnode_eligible(bool is_reg, bool is_namedstream, bool is_system, bool is_swap,
+                                                  bool is_recycled, bool mount_matches, uint64_t file_id,
+                                                  uint64_t expected_file_id, uint64_t file_size, bool nlink_supported,
+                                                  uint64_t nlink)
+{
+    if (!is_reg || is_namedstream || is_system || is_swap || is_recycled || !mount_matches) {
+        return false;
+    }
+    if (file_id == 0u || file_size == 0u) {
+        return false;
+    }
+    if (expected_file_id != 0u && file_id != expected_file_id) {
+        return false;
+    }
+    if (nlink_supported && nlink == 0u) {
+        return false;
+    }
+    return true;
+}
+
 static inline bool switch_prefetch_run_matches_file(const struct switch_prefetch_run *run, uint64_t file_size,
                                                     int64_t mtime_sec, int64_t mtime_nsec)
 {
@@ -282,10 +368,12 @@ static inline const char *switch_prefetch_header_refusal(const struct switch_pre
             return "saved for other cryptex images";
         }
     }
-    if (memcmp(saved->root_uuid, expected->root_uuid, sizeof(saved->root_uuid)) != 0) {
+    if (switch_prefetch_uuid_is_zero(saved->root_uuid) || switch_prefetch_uuid_is_zero(expected->root_uuid) ||
+        memcmp(saved->root_uuid, expected->root_uuid, sizeof(saved->root_uuid)) != 0) {
         return "saved for another root volume";
     }
-    if (memcmp(saved->data_uuid, expected->data_uuid, sizeof(saved->data_uuid)) != 0) {
+    if (switch_prefetch_uuid_is_zero(saved->data_uuid) || switch_prefetch_uuid_is_zero(expected->data_uuid) ||
+        memcmp(saved->data_uuid, expected->data_uuid, sizeof(saved->data_uuid)) != 0) {
         return "saved for another Data volume";
     }
     if (saved->runs == 0u || saved->runs > max_runs) {
@@ -305,8 +393,8 @@ static inline const char *switch_prefetch_validate_runs(const struct switch_pref
         return "torn (its runs do not match its checksum)";
     }
     for (uint32_t i = 0; i < header->runs; ++i) {
-        if (runs[i].volume >= SWITCH_PREFETCH_VOLUME_COUNT || runs[i].pages == 0u ||
-            runs[i].pages > SWITCH_PREFETCH_MAX_RUN_LIMIT) {
+        if (runs[i].volume >= SWITCH_PREFETCH_VOLUME_COUNT || runs[i].file_id == 0u || runs[i].file_size == 0u ||
+            runs[i].pages == 0u || runs[i].pages > SWITCH_PREFETCH_MAX_RUN_LIMIT) {
             return "invalid run";
         }
     }
@@ -340,7 +428,7 @@ static inline const char *switch_prefetch_validate_file(const uint8_t *bytes, si
     for (uint32_t i = 0; i < header.runs; ++i) {
         struct switch_prefetch_run run;
         memcpy(&run, bytes + sizeof(header) + (size_t)i * sizeof(run), sizeof(run));
-        if (run.volume >= SWITCH_PREFETCH_VOLUME_COUNT || run.pages == 0u ||
+        if (run.volume >= SWITCH_PREFETCH_VOLUME_COUNT || run.file_id == 0u || run.file_size == 0u || run.pages == 0u ||
             run.pages > SWITCH_PREFETCH_MAX_RUN_LIMIT) {
             return "invalid run";
         }

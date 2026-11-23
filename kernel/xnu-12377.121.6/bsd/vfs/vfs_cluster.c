@@ -208,6 +208,7 @@ static int cluster_handle_split_pagein(vnode_t vp, upl_t upl, upl_offset_t upl_o
 static void cluster_read_upl_release(upl_t upl, int start_pg, int last_pg, int take_reference);
 static inline bool switch_cluster_is_image(vnode_t vp);
 static inline int switch_cluster_cryptex_index(mount_t mp);
+static inline int switch_cluster_volume_index(mount_t mp);
 static void switch_cluster_record(vnode_t vp, int index, off_t offset, uint64_t size);
 static struct switch_quiesce switch_record_gate;
 static int switch_record_drain_event;
@@ -1609,8 +1610,12 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 	uint64_t switch_demand_start = 0;
 #endif
 
-	if ((flags & CL_READ) && !(flags & CL_PAGEOUT)) {
-		const int switch_vol = switch_cluster_cryptex_index(mp);
+	bool switch_track_read = (flags & CL_READ) && !(flags & CL_PAGEOUT);
+#if !(DEVELOPMENT || DEBUG)
+	switch_track_read = switch_track_read && __improbable(switch_quiesce_is_armed(&switch_record_gate));
+#endif
+	if (switch_track_read) {
+		const int switch_vol = switch_cluster_volume_index(mp);
 		if (switch_vol >= 0) {
 			const bool switch_is_replay =
 			    os_atomic_load(&switch_record_skip_thread, relaxed) == current_thread();
@@ -4758,17 +4763,23 @@ switch_cluster_is_image(vnode_t vp)
 }
 
 /*
- * Switch (r17-launch): the two cryptex volumes' mounts (System 0, App 1; SwitchCryptex.cpp registers them right
- * after SwitchRawMount.h mounts them), for the boot prefetch recording below and the kprof waits line's "cx".
+ * Switch: the four boot-prefetch mounts (System 0, App 1, root 2, Data 3), for recording and the kprof waits line.
  */
-static mount_t switch_cryptex_mounts[2];
+static mount_t switch_prefetch_mounts[SWITCH_PREFETCH_VOLUMES];
 
-void switch_cluster_register_cryptex_mount(unsigned int index, mount_t mp);
+void
+switch_cluster_register_mount(unsigned int index, mount_t mp)
+{
+	if (index < SWITCH_PREFETCH_VOLUMES) {
+		os_atomic_store(&switch_prefetch_mounts[index], mp, release);
+	}
+}
+
 void
 switch_cluster_register_cryptex_mount(unsigned int index, mount_t mp)
 {
 	if (index < 2) {
-		os_atomic_store(&switch_cryptex_mounts[index], mp, release);
+		switch_cluster_register_mount(index, mp);
 	}
 }
 
@@ -4778,11 +4789,25 @@ switch_cluster_cryptex_index(mount_t mp)
 	if (mp == NULL) {
 		return -1;
 	}
-	if (os_atomic_load(&switch_cryptex_mounts[0], acquire) == mp) {
-		return 0;
+	if (os_atomic_load(&switch_prefetch_mounts[SWITCH_PREFETCH_VOL_SYSTEM], relaxed) == mp) {
+		return SWITCH_PREFETCH_VOL_SYSTEM;
 	}
-	if (os_atomic_load(&switch_cryptex_mounts[1], acquire) == mp) {
-		return 1;
+	if (os_atomic_load(&switch_prefetch_mounts[SWITCH_PREFETCH_VOL_APP], relaxed) == mp) {
+		return SWITCH_PREFETCH_VOL_APP;
+	}
+	return -1;
+}
+
+static inline int
+switch_cluster_volume_index(mount_t mp)
+{
+	if (mp == NULL) {
+		return -1;
+	}
+	for (unsigned int i = 0; i < SWITCH_PREFETCH_VOLUMES; ++i) {
+		if (os_atomic_load(&switch_prefetch_mounts[i], relaxed) == mp) {
+			return (int)i;
+		}
 	}
 	return -1;
 }
@@ -4842,7 +4867,8 @@ switch_cluster_record_stop(void)
 static void
 switch_cluster_record(vnode_t vp, int index, off_t offset, uint64_t size)
 {
-	if (offset < 0 || size == 0 || size > UINT32_MAX || vp->v_type != VREG) {
+	if (offset < 0 || size == 0 || size > UINT32_MAX || vp->v_type != VREG ||
+	    (vp->v_flag & (VISNAMEDSTREAM | VSYSTEM | VSWAP)) != 0) {
 		return;
 	}
 	struct switch_record_entry *log =

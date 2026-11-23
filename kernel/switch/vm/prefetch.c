@@ -17,8 +17,11 @@
 #include <sys/mount.h>
 #include <sys/param.h>
 #include <sys/vnode.h>
+#include <vm/vnode_pager.h>
+#if XNU_12377_121_6
+#include <vm/vm_ubc.h>
+#endif
 
-extern int vnode_pagein(vnode_t, upl_t, upl_offset_t, vm_object_offset_t, upl_size_t, int, int *);
 extern kern_return_t thread_terminate(thread_t);
 
 static const char *const k_cryptex_images[SWITCH_PREFETCH_CRYPTEX_COUNT] = {
@@ -27,7 +30,8 @@ static const char *const k_cryptex_images[SWITCH_PREFETCH_CRYPTEX_COUNT] = {
 };
 
 static struct {
-    mount_t mounts[SWITCH_PREFETCH_VOLUME_COUNT];
+    struct switch_prefetch_ready ready;
+    fsid_t fsids[SWITCH_PREFETCH_VOLUME_COUNT];
     uint32_t started;
     uint32_t thread_active;
     uint32_t thread_done;
@@ -48,6 +52,14 @@ static struct {
 void switch_prefetch_list_path(char *out, size_t size)
 {
     (void)snprintf(out, size, "%s.boot-prefetch", SWITCH_SYSTEM_CRYPTEX_IMAGE);
+}
+
+static inline mount_t switch_prefetch_mount_at(unsigned index)
+{
+    if (index >= SWITCH_PREFETCH_VOLUME_COUNT) {
+        return NULL;
+    }
+    return (mount_t)__atomic_load_n(&g_prefetch.ready.mounts[index], __ATOMIC_ACQUIRE);
 }
 
 #if DEVELOPMENT || DEBUG
@@ -125,6 +137,26 @@ static void switch_prefetch_diag_tick(thread_call_param_t p0 __unused, thread_ca
 }
 #endif
 
+static bool switch_prefetch_mount_uuid(mount_t mp, fsid_t fsid, const char *pinned_uuid_str, uint8_t out[16],
+                                       vfs_context_t ctx)
+{
+    mount_t busy_mp = switch_prefetch_busy_mount(mp, fsid);
+    if (busy_mp != NULL) {
+        struct vfs_attr vfa;
+        VFSATTR_INIT(&vfa);
+        VFSATTR_WANTED(&vfa, f_uuid);
+        const bool ok = vfs_getattr(busy_mp, &vfa, ctx) == 0 && VFSATTR_IS_SUPPORTED(&vfa, f_uuid) &&
+                        !switch_prefetch_uuid_is_zero(vfa.f_uuid);
+        vfs_unbusy(busy_mp);
+        if (ok) {
+            memcpy(out, vfa.f_uuid, 16u);
+            return true;
+        }
+    }
+    return pinned_uuid_str != NULL && switch_prefetch_parse_uuid(pinned_uuid_str, out) &&
+           !switch_prefetch_uuid_is_zero(out);
+}
+
 static bool switch_prefetch_expected_key(struct switch_prefetch_header *key)
 {
     memset(key, 0, sizeof(*key));
@@ -152,6 +184,15 @@ static bool switch_prefetch_expected_key(struct switch_prefetch_header *key)
         key->images[i].file_id = va.va_fileid;
         key->images[i].mtime_sec = va.va_modify_time.tv_sec;
         key->images[i].mtime_nsec = va.va_modify_time.tv_nsec;
+    }
+    if (!switch_prefetch_mount_uuid(switch_prefetch_mount_at(SWITCH_PREFETCH_VOL_ROOT),
+                                    g_prefetch.fsids[SWITCH_PREFETCH_VOL_ROOT], SWITCH_OS_VOLUME_UUID, key->root_uuid,
+                                    ctx)) {
+        return false;
+    }
+    if (!switch_prefetch_mount_uuid(switch_prefetch_mount_at(SWITCH_PREFETCH_VOL_DATA),
+                                    g_prefetch.fsids[SWITCH_PREFETCH_VOL_DATA], NULL, key->data_uuid, ctx)) {
+        return false;
     }
     return true;
 }
@@ -191,70 +232,47 @@ static struct switch_prefetch_run *switch_prefetch_load_list(const struct switch
     if (vnode_open(path, FREAD | O_NOFOLLOW_ANY, 0, 0, &vp, ctx) != 0) {
         return NULL;
     }
+    struct switch_prefetch_run *runs = NULL;
+    size_t body_bytes = 0;
+    const char *why = NULL;
     struct vnode_attr va;
     VATTR_INIT(&va);
     VATTR_WANTED(&va, va_data_size);
-    if (!vnode_isreg(vp) || vnode_getattr(vp, &va, ctx) != 0 || !VATTR_IS_SUPPORTED(&va, va_data_size)) {
-        vnode_close(vp, FREAD, ctx);
-        *why_out = "not a regular file";
-        return NULL;
-    }
-    if (va.va_data_size < 8u) {
-        vnode_close(vp, FREAD, ctx);
-        *why_out = "too short";
-        return NULL;
-    }
-    char magic[8];
-    if (switch_prefetch_read_all(vp, magic, sizeof(magic), 0, ctx) != 0) {
-        vnode_close(vp, FREAD, ctx);
-        *why_out = "read failed";
-        return NULL;
-    }
-    if (memcmp(magic, SWITCH_PREFETCH_LIST_V2_MAGIC, 8) == 0) {
-        vnode_close(vp, FREAD, ctx);
-        *why_out = "another format";
-        return NULL;
-    }
     struct switch_prefetch_header header;
-    if (va.va_data_size < sizeof(header)) {
-        vnode_close(vp, FREAD, ctx);
-        *why_out = "too short";
-        return NULL;
-    }
-    if (switch_prefetch_read_all(vp, &header, sizeof(header), 0, ctx) != 0) {
-        vnode_close(vp, FREAD, ctx);
-        *why_out = "read failed";
-        return NULL;
-    }
-    const char *refusal = switch_prefetch_header_refusal(&header, expected, SWITCH_PREFETCH_MAX_RUNS);
-    if (refusal != NULL) {
-        vnode_close(vp, FREAD, ctx);
-        *why_out = refusal;
-        return NULL;
-    }
-    const size_t body_bytes = (size_t)header.runs * sizeof(struct switch_prefetch_run);
-    if (va.va_data_size != sizeof(header) + body_bytes) {
-        vnode_close(vp, FREAD, ctx);
-        *why_out = "torn (short list)";
-        return NULL;
-    }
-    struct switch_prefetch_run *runs = (struct switch_prefetch_run *)kalloc_data(body_bytes, Z_WAITOK);
-    if (runs == NULL) {
-        vnode_close(vp, FREAD, ctx);
-        *why_out = "no memory";
-        return NULL;
-    }
-    if (switch_prefetch_read_all(vp, runs, body_bytes, (off_t)sizeof(header), ctx) != 0) {
-        kfree_data(runs, body_bytes);
-        vnode_close(vp, FREAD, ctx);
-        *why_out = "read failed";
-        return NULL;
+    char magic[8];
+    if (!vnode_isreg(vp) || vnode_getattr(vp, &va, ctx) != 0 || !VATTR_IS_SUPPORTED(&va, va_data_size)) {
+        why = "not a regular file";
+    } else if (va.va_data_size < 8u) {
+        why = "too short";
+    } else if (switch_prefetch_read_all(vp, magic, sizeof(magic), 0, ctx) != 0) {
+        why = "read failed";
+    } else if (memcmp(magic, SWITCH_PREFETCH_LIST_V2_MAGIC, 8) == 0) {
+        why = "another format";
+    } else if (va.va_data_size < sizeof(header)) {
+        why = "too short";
+    } else if (switch_prefetch_read_all(vp, &header, sizeof(header), 0, ctx) != 0) {
+        why = "read failed";
+    } else if ((why = switch_prefetch_header_refusal(&header, expected, SWITCH_PREFETCH_MAX_RUNS)) != NULL) {
+    } else if (va.va_data_size != sizeof(header) + (size_t)header.runs * sizeof(struct switch_prefetch_run)) {
+        why = "torn (short list)";
+    } else {
+        body_bytes = (size_t)header.runs * sizeof(struct switch_prefetch_run);
+        runs = (struct switch_prefetch_run *)kalloc_data(body_bytes, Z_WAITOK);
+        if (runs == NULL) {
+            why = "no memory";
+        } else if (switch_prefetch_read_all(vp, runs, body_bytes, (off_t)sizeof(header), ctx) != 0) {
+            why = "read failed";
+        }
     }
     vnode_close(vp, FREAD, ctx);
-    refusal = switch_prefetch_validate_runs(&header, runs, body_bytes);
-    if (refusal != NULL) {
-        kfree_data(runs, body_bytes);
-        *why_out = refusal;
+    if (why == NULL) {
+        why = switch_prefetch_validate_runs(&header, runs, body_bytes);
+    }
+    if (why != NULL) {
+        if (runs != NULL) {
+            kfree_data(runs, body_bytes);
+        }
+        *why_out = why;
         return NULL;
     }
     *count_out = header.runs;
@@ -263,7 +281,8 @@ static struct switch_prefetch_run *switch_prefetch_load_list(const struct switch
     return runs;
 }
 
-static uint32_t switch_prefetch_replay_runs(const struct switch_prefetch_run *runs, uint32_t run_count)
+static uint32_t switch_prefetch_replay_runs(const struct switch_prefetch_run *runs, uint32_t run_count,
+                                            uint8_t *replayed_bits)
 {
     uint64_t list_bytes = 0;
     for (uint32_t i = 0; i < run_count; ++i) {
@@ -281,9 +300,7 @@ static uint32_t switch_prefetch_replay_runs(const struct switch_prefetch_run *ru
     vnode_t vp = NULLVP;
     uint64_t vp_file_id = 0;
     uint8_t vp_volume = 0xffu;
-    uint64_t vp_size = 0;
-    int64_t vp_mtime_sec = 0;
-    int64_t vp_mtime_nsec = 0;
+    struct switch_prefetch_file_meta vp_meta = {0};
     bool vp_valid = false;
     uint32_t replayed = 0;
 
@@ -293,53 +310,51 @@ static uint32_t switch_prefetch_replay_runs(const struct switch_prefetch_run *ru
             if (vp != NULLVP) {
                 vnode_put(vp);
                 vp = NULLVP;
-                vp_volume = 0xffu;
             }
+            vp_volume = 0xffu;
+            vp_valid = false;
             if (!switch_vm_prefetch_wait_can_issue()) {
                 break;
             }
         }
         const struct switch_prefetch_run *run = &runs[i];
-        if (run->volume >= SWITCH_PREFETCH_CRYPTEX_COUNT || g_prefetch.mounts[run->volume] == NULL) {
+        mount_t mp = switch_prefetch_mount_at(run->volume);
+        if (mp == NULL) {
             continue;
         }
-        if (vp == NULLVP || run->file_id != vp_file_id || run->volume != vp_volume) {
+        if (run->file_id != vp_file_id || run->volume != vp_volume) {
             if (vp != NULLVP) {
                 vnode_put(vp);
                 vp = NULLVP;
             }
             vp_file_id = run->file_id;
             vp_volume = run->volume;
-            vp_valid = false;
-            if (VFS_VGET(g_prefetch.mounts[run->volume], (ino64_t)run->file_id, &vp, ctx) != 0) {
-                vp = NULLVP;
-                continue;
-            }
-            struct vnode_attr va;
-            VATTR_INIT(&va);
-            VATTR_WANTED(&va, va_data_size);
-            VATTR_WANTED(&va, va_modify_time);
-            if (!vnode_isreg(vp) || vnode_getattr(vp, &va, ctx) != 0 || !VATTR_IS_SUPPORTED(&va, va_data_size) ||
-                !VATTR_IS_SUPPORTED(&va, va_modify_time)) {
+            vp_valid =
+                switch_prefetch_vget_regular(mp, g_prefetch.fsids[run->volume], run->file_id, ctx, &vp, &vp_meta);
+        } else if (vp_valid && (run->volume == SWITCH_PREFETCH_VOL_DATA || vnode_isrecycled(vp))) {
+            /* Re-validate writable Data vnodes across consecutive runs so truncation or unlink skips cleanly. */
+            if (!switch_prefetch_vnode_meta(vp, mp, run->file_id, ctx, NULL, &vp_meta)) {
                 vnode_put(vp);
                 vp = NULLVP;
-                continue;
+                vp_valid = false;
             }
-            vp_size = va.va_data_size;
-            vp_mtime_sec = va.va_modify_time.tv_sec;
-            vp_mtime_nsec = va.va_modify_time.tv_nsec;
-            vp_valid = true;
         }
-        if (!vp_valid || !switch_prefetch_run_matches_file(run, vp_size, vp_mtime_sec, vp_mtime_nsec)) {
+        if (!vp_valid ||
+            !switch_prefetch_run_matches_file(run, vp_meta.file_size, vp_meta.mtime_sec, vp_meta.mtime_nsec)) {
             continue;
         }
         struct switch_prefetch_pagein in;
-        if (!switch_prefetch_run_pagein(run, SWITCH_PREFETCH_LIST_PAGE, PAGE_SIZE, vp_size, &in)) {
+        if (!switch_prefetch_run_pagein(run, SWITCH_PREFETCH_LIST_PAGE, PAGE_SIZE, vp_meta.file_size, &in)) {
             continue;
         }
         int err = 0;
-        (void)vnode_pagein(vp, NULL, 0, in.offset, (upl_size_t)in.length, 0, &err);
-        replayed = i + 1u;
+        const int rc = vnode_pagein(vp, NULL, 0, in.offset, (upl_size_t)in.length, 0, &err);
+        if (rc == PAGER_SUCCESS) {
+            if (replayed_bits != NULL) {
+                switch_prefetch_bit_set(replayed_bits, i);
+            }
+            replayed = i + 1u;
+        }
     }
     if (vp != NULLVP) {
         vnode_put(vp);
@@ -356,6 +371,8 @@ static void switch_prefetch_thread(void *parameter, wait_result_t w __unused)
     const size_t log_bytes = (size_t)SWITCH_PREFETCH_LOG_ENTRIES * sizeof(*log);
     struct switch_prefetch_header key;
     struct switch_prefetch_run *runs = NULL;
+    uint8_t *replayed_bits = NULL;
+    size_t replayed_bits_bytes = 0;
     uint32_t run_count = 0;
     size_t runs_bytes = 0;
     uint32_t replayed = 0;
@@ -364,12 +381,15 @@ static void switch_prefetch_thread(void *parameter, wait_result_t w __unused)
     if (switch_vm_prefetch_boot_stop_reason() == SWITCH_PREFETCH_STOP_NONE) {
         have_key = switch_prefetch_expected_key(&key);
         if (!have_key) {
-            os_log(OS_LOG_DEFAULT, "SwitchBootPrefetch: off this boot (the images' attributes)");
+            os_log(OS_LOG_DEFAULT, "SwitchBootPrefetch: off this boot (volume identity unavailable)");
         } else if (switch_vm_prefetch_boot_stop_reason() == SWITCH_PREFETCH_STOP_NONE) {
             const char *why = NULL;
             runs = switch_prefetch_load_list(&key, &run_count, &runs_bytes, &why);
             if (runs == NULL) {
                 os_log(OS_LOG_DEFAULT, "SwitchBootPrefetch: no list to replay (%s); this boot records one", why);
+            } else if (run_count != 0u) {
+                replayed_bits_bytes = ((size_t)run_count + 7u) / 8u;
+                replayed_bits = (uint8_t *)kalloc_data(replayed_bits_bytes, Z_WAITOK | Z_ZERO);
             }
         }
     }
@@ -387,7 +407,7 @@ static void switch_prefetch_thread(void *parameter, wait_result_t w __unused)
 #endif
 
     if (runs != NULL && switch_vm_prefetch_replay_stop_reason() == SWITCH_PREFETCH_STOP_NONE) {
-        replayed = switch_prefetch_replay_runs(runs, run_count);
+        replayed = switch_prefetch_replay_runs(runs, run_count, replayed_bits);
     }
 
     const uint32_t stop_reason = switch_vm_prefetch_wait_stop();
@@ -407,12 +427,19 @@ static void switch_prefetch_thread(void *parameter, wait_result_t w __unused)
 
     const uint32_t appended = switch_cluster_record_stop();
     if (stop_reason == SWITCH_PREFETCH_STOP_BOOT_COMPLETE && have_key && log != NULL) {
-        switch_prefetch_save_next(log, appended, runs, replayed, &key, g_prefetch.mounts,
-                                  SWITCH_PREFETCH_CRYPTEX_COUNT);
+        mount_t mounts[SWITCH_PREFETCH_VOLUME_COUNT];
+        for (unsigned v = 0; v < SWITCH_PREFETCH_VOLUME_COUNT; ++v) {
+            mounts[v] = switch_prefetch_mount_at(v);
+        }
+        switch_prefetch_save_next(log, appended, runs, replayed, replayed_bits, &key, mounts, g_prefetch.fsids,
+                                  SWITCH_PREFETCH_VOLUME_COUNT);
     }
 
     if (log != NULL) {
         kfree_data(log, log_bytes);
+    }
+    if (replayed_bits != NULL) {
+        kfree_data(replayed_bits, replayed_bits_bytes);
     }
     if (runs != NULL) {
         kfree_data(runs, runs_bytes);
@@ -423,16 +450,8 @@ static void switch_prefetch_thread(void *parameter, wait_result_t w __unused)
     thread_terminate(current_thread());
 }
 
-void switch_cryptex_mounted(unsigned index, mount_t mount)
+static void switch_prefetch_start(void)
 {
-    if (index >= SWITCH_PREFETCH_CRYPTEX_COUNT || mount == NULL) {
-        return;
-    }
-    switch_cluster_register_cryptex_mount(index, mount);
-    g_prefetch.mounts[index] = mount;
-    if (g_prefetch.mounts[0] == NULL || g_prefetch.mounts[SWITCH_PREFETCH_CRYPTEX_COUNT - 1u] == NULL) {
-        return;
-    }
     if (__atomic_exchange_n(&g_prefetch.started, 1u, __ATOMIC_ACQ_REL) != 0u) {
         return;
     }
@@ -463,6 +482,48 @@ void switch_cryptex_mounted(unsigned index, mount_t mount)
         kfree_data(log, log_bytes);
         __atomic_store_n(&g_prefetch.thread_done, 1u, __ATOMIC_SEQ_CST);
         thread_wakeup((event_t)&g_prefetch.done_event);
+    }
+}
+
+void switch_cryptex_mounted(unsigned index, mount_t mount)
+{
+    if (index >= SWITCH_PREFETCH_CRYPTEX_COUNT || mount == NULL || switch_prefetch_mount_at(index) != NULL ||
+        switch_prefetch_ready_has_mount(&g_prefetch.ready, mount)) {
+        return;
+    }
+    g_prefetch.fsids[index] = vfs_statfs(mount)->f_fsid;
+    switch_cluster_register_cryptex_mount(index, mount);
+    if (switch_prefetch_ready_add(&g_prefetch.ready, index, mount)) {
+        switch_prefetch_start();
+    }
+}
+
+void switch_prefetch_volumes_mounted(mount_t root_mount, mount_t data_mount)
+{
+    if (root_mount == NULL || data_mount == NULL || root_mount == data_mount) {
+        return;
+    }
+    if ((vfs_flags(root_mount) & MNT_RDONLY) == 0 || (vfs_flags(data_mount) & MNT_RDONLY) != 0) {
+        return;
+    }
+    if (strcmp(vfs_statfs(root_mount)->f_fstypename, "apfs") != 0 ||
+        strcmp(vfs_statfs(data_mount)->f_fstypename, "apfs") != 0) {
+        return;
+    }
+    if (switch_prefetch_mount_at(SWITCH_PREFETCH_VOL_ROOT) != NULL ||
+        switch_prefetch_mount_at(SWITCH_PREFETCH_VOL_DATA) != NULL ||
+        switch_prefetch_ready_has_mount(&g_prefetch.ready, root_mount) ||
+        switch_prefetch_ready_has_mount(&g_prefetch.ready, data_mount)) {
+        return;
+    }
+    g_prefetch.fsids[SWITCH_PREFETCH_VOL_ROOT] = vfs_statfs(root_mount)->f_fsid;
+    g_prefetch.fsids[SWITCH_PREFETCH_VOL_DATA] = vfs_statfs(data_mount)->f_fsid;
+    switch_cluster_register_mount(SWITCH_PREFETCH_VOL_ROOT, root_mount);
+    switch_cluster_register_mount(SWITCH_PREFETCH_VOL_DATA, data_mount);
+    const bool root_ready = switch_prefetch_ready_add(&g_prefetch.ready, SWITCH_PREFETCH_VOL_ROOT, root_mount);
+    const bool data_ready = switch_prefetch_ready_add(&g_prefetch.ready, SWITCH_PREFETCH_VOL_DATA, data_mount);
+    if (root_ready || data_ready) {
+        switch_prefetch_start();
     }
 }
 

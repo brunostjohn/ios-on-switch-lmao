@@ -707,12 +707,14 @@ TEST(SwitchPrefetchSource, ReplayReleasesVnodeDrainsInflightAndUsesLowPriority)
     EXPECT_THAT(replay, HasSubstr("switch_vm_prefetch_wait_inflight_drain();"));
 
     // PG2: Dekker startup-vs-shutdown protocol sets thread_active (seq_cst) before checking boot stop.
-    const std::string mounted = bodyOf(prefetch, "switch_cryptex_mounted(");
-    const size_t activePos = mounted.find("g_prefetch.thread_active, 1u, __ATOMIC_SEQ_CST");
-    const size_t stopCheckPos = mounted.find("switch_vm_prefetch_boot_stop_reason()");
+    const std::string startBody = bodyOf(prefetch, "switch_prefetch_start(");
+    const size_t activePos = startBody.find("g_prefetch.thread_active, 1u, __ATOMIC_SEQ_CST");
+    const size_t stopCheckPos = startBody.find("switch_vm_prefetch_boot_stop_reason()");
     ASSERT_NE(activePos, std::string::npos);
     ASSERT_NE(stopCheckPos, std::string::npos);
     EXPECT_LT(activePos, stopCheckPos);
+    EXPECT_THAT(bodyOf(prefetch, "switch_cryptex_mounted("), HasSubstr("switch_prefetch_start();"));
+    EXPECT_THAT(bodyOf(prefetch, "switch_prefetch_volumes_mounted("), HasSubstr("switch_prefetch_start();"));
     EXPECT_THAT(bodyOf(prefetch, "switch_prefetch_shutdown("), HasSubstr("g_prefetch.thread_active, __ATOMIC_SEQ_CST"));
 
     // PG3: debug diag_call uses THREAD_CALL_OPTIONS_ONCE, sets diag_stop before cancel_wait/free, then clears pointer.
@@ -751,4 +753,213 @@ TEST(SwitchPrefetchSource, ReplayReleasesVnodeDrainsInflightAndUsesLowPriority)
         ++count;
     }
     EXPECT_GE(count, 2u);
+}
+
+TEST(SwitchPrefetchList, RefusesZeroVolumeUuidsAndInvalidRunIdentity)
+{
+    const auto expected = makeExpectedKey();
+    const std::vector<struct switch_prefetch_run> allFour = {
+        {0x101ULL, 65536ULL, 1730800100, 1, 0u, 16u, 1u, 0u},
+        {0x102ULL, 65536ULL, 1730800101, 2, 0u, 16u, 2u, 1u},
+        {0x103ULL, 131072ULL, 1730800102, 3, 4u, 28u, 3u, 2u},
+        {0x104ULL, 262144ULL, 1730800103, 4, 8u, 56u, 4u, 3u},
+    };
+    const auto valid = serializeList(expected, allFour);
+    struct switch_prefetch_header parsed = {};
+    EXPECT_EQ(switch_prefetch_validate_file(valid.data(), valid.size(), &expected, 1u << 18, &parsed), nullptr);
+    EXPECT_EQ(parsed.runs, 4u);
+
+    // Legacy zero-UUID headers never match even when both saved and expected carry zeroes.
+    auto zeroRoot = expected;
+    memset(zeroRoot.root_uuid, 0, sizeof(zeroRoot.root_uuid));
+    const auto zeroRootBytes = serializeList(zeroRoot, allFour);
+    EXPECT_STREQ(
+        switch_prefetch_validate_file(zeroRootBytes.data(), zeroRootBytes.size(), &zeroRoot, 1u << 18, nullptr),
+        "saved for another root volume");
+
+    auto zeroData = expected;
+    memset(zeroData.data_uuid, 0, sizeof(zeroData.data_uuid));
+    const auto zeroDataBytes = serializeList(zeroData, allFour);
+    EXPECT_STREQ(
+        switch_prefetch_validate_file(zeroDataBytes.data(), zeroDataBytes.size(), &zeroData, 1u << 18, nullptr),
+        "saved for another Data volume");
+
+    // Zero file_id or zero file_size runs are rejected by both validate_file and validate_runs.
+    auto zeroIdRuns = allFour;
+    zeroIdRuns[2].file_id = 0u;
+    const auto zeroIdBytes = serializeList(expected, zeroIdRuns);
+    EXPECT_STREQ(switch_prefetch_validate_file(zeroIdBytes.data(), zeroIdBytes.size(), &expected, 1u << 18, nullptr),
+                 "invalid run");
+
+    auto zeroSizeRuns = allFour;
+    zeroSizeRuns[3].file_size = 0u;
+    const auto zeroSizeBytes = serializeList(expected, zeroSizeRuns);
+    EXPECT_STREQ(
+        switch_prefetch_validate_file(zeroSizeBytes.data(), zeroSizeBytes.size(), &expected, 1u << 18, nullptr),
+        "invalid run");
+}
+
+TEST(SwitchPrefetchList, ReadyMaskStartsStrictlyOnceAcrossAllFourUniqueVolumes)
+{
+    int m0 = 0, m1 = 1, m2 = 2, m3 = 3, m4 = 4;
+
+    // Normal boot order: System cryptex, App cryptex, root, Data.
+    struct switch_prefetch_ready r = {};
+    switch_prefetch_ready_init(&r);
+    EXPECT_FALSE(switch_prefetch_ready_add(&r, 0u, nullptr));
+    EXPECT_FALSE(switch_prefetch_ready_add(&r, SWITCH_PREFETCH_VOLUME_COUNT, &m0));
+    EXPECT_FALSE(switch_prefetch_ready_add(&r, 0u, &m0));
+    EXPECT_EQ(r.mask, 1u);
+    EXPECT_FALSE(switch_prefetch_ready_add(&r, 0u, &m4));  // duplicate slot rejected
+    EXPECT_EQ(r.mounts[0], &m0);
+    EXPECT_FALSE(switch_prefetch_ready_add(&r, 1u, &m0));  // duplicate mount pointer rejected
+    EXPECT_EQ(r.mask, 1u);
+    EXPECT_EQ(r.mounts[1], nullptr);
+    EXPECT_FALSE(switch_prefetch_ready_add(&r, 1u, &m1));
+    EXPECT_FALSE(switch_prefetch_ready_add(&r, 2u, &m2));
+    EXPECT_FALSE(switch_prefetch_ready_add(&r, 3u, &m2));  // duplicate on final slot must not trigger start
+    EXPECT_EQ(r.mask, 0x7u);
+    EXPECT_TRUE(switch_prefetch_ready_add(&r, 3u, &m3));
+    EXPECT_EQ(r.mask, SWITCH_PREFETCH_READY_ALL);
+    EXPECT_FALSE(switch_prefetch_ready_add(&r, 3u, &m4));  // fires strictly once
+
+    // Reversed order (root + Data before cryptexes) also starts strictly once on the 4th mount.
+    struct switch_prefetch_ready rev = {};
+    switch_prefetch_ready_init(&rev);
+    EXPECT_FALSE(switch_prefetch_ready_add(&rev, 2u, &m2));
+    EXPECT_FALSE(switch_prefetch_ready_add(&rev, 3u, &m3));
+    EXPECT_FALSE(switch_prefetch_ready_add(&rev, 0u, &m0));
+    EXPECT_TRUE(switch_prefetch_ready_add(&rev, 1u, &m1));
+    EXPECT_EQ(rev.mask, SWITCH_PREFETCH_READY_ALL);
+}
+
+TEST(SwitchPrefetchList, VnodeEligibilityRefusesDeletedAndSpecialVnodes)
+{
+    EXPECT_TRUE(switch_prefetch_vnode_eligible(true, false, false, false, false, true, 42u, 42u, 4096u, true, 1u));
+    EXPECT_TRUE(switch_prefetch_vnode_eligible(true, false, false, false, false, true, 42u, 0u, 4096u, false, 0u));
+
+    EXPECT_FALSE(switch_prefetch_vnode_eligible(false, false, false, false, false, true, 42u, 42u, 4096u, true, 1u));
+    EXPECT_FALSE(switch_prefetch_vnode_eligible(true, true, false, false, false, true, 42u, 42u, 4096u, true, 1u));
+    EXPECT_FALSE(switch_prefetch_vnode_eligible(true, false, true, false, false, true, 42u, 42u, 4096u, true, 1u));
+    EXPECT_FALSE(switch_prefetch_vnode_eligible(true, false, false, true, false, true, 42u, 42u, 4096u, true, 1u));
+    EXPECT_FALSE(switch_prefetch_vnode_eligible(true, false, false, false, true, true, 42u, 42u, 4096u, true, 1u));
+    EXPECT_FALSE(switch_prefetch_vnode_eligible(true, false, false, false, false, false, 42u, 42u, 4096u, true, 1u));
+    EXPECT_FALSE(switch_prefetch_vnode_eligible(true, false, false, false, false, true, 0u, 0u, 4096u, true, 1u));
+    EXPECT_FALSE(switch_prefetch_vnode_eligible(true, false, false, false, false, true, 43u, 42u, 4096u, true, 1u));
+    EXPECT_FALSE(switch_prefetch_vnode_eligible(true, false, false, false, false, true, 42u, 42u, 0u, true, 1u));
+    // Open-but-unlinked Data file (va_nlink == 0) is rejected.
+    EXPECT_FALSE(switch_prefetch_vnode_eligible(true, false, false, false, false, true, 42u, 42u, 4096u, true, 0u));
+}
+
+TEST(SwitchPrefetchList, ReplayedBitmaskTracksPerRunSuccess)
+{
+    uint8_t bits[64] = {};
+    const uint32_t setIndices[] = {0u, 7u, 8u, 15u, 16u, 127u, 255u, 511u};
+    for (uint32_t idx : setIndices) {
+        switch_prefetch_bit_set(bits, idx);
+    }
+    for (uint32_t i = 0; i < 512u; ++i) {
+        const bool expected = std::find(std::begin(setIndices), std::end(setIndices), i) != std::end(setIndices);
+        EXPECT_EQ(switch_prefetch_bit_test(bits, i), expected) << i;
+    }
+}
+
+TEST(SwitchPrefetchSource, RootAndDataVolumesWiredAcrossBothXnuTrees)
+{
+    for (const char *tree : {"xnu-10063.141.1", "xnu-12377.121.6"}) {
+        const std::string cluster = SourceText(std::string("../") + tree + "/bsd/vfs/vfs_cluster.c");
+        const std::string clusterIo = bodyOf(cluster, "cluster_io(");
+        EXPECT_THAT(clusterIo, HasSubstr("switch_cluster_volume_index(mp)")) << tree;
+        // SB-2: RELEASE short-circuits on switch_quiesce_is_armed before scanning the 4 volume slots.
+        const size_t armedGatePos = clusterIo.find("__improbable(switch_quiesce_is_armed(&switch_record_gate))");
+        const size_t volIdxPos = clusterIo.find("switch_cluster_volume_index(mp)");
+        ASSERT_NE(armedGatePos, std::string::npos) << tree;
+        ASSERT_NE(volIdxPos, std::string::npos) << tree;
+        EXPECT_LT(armedGatePos, volIdxPos) << tree;
+        EXPECT_THAT(bodyOf(cluster, "switch_cluster_is_cryptex_mount("), HasSubstr("switch_cluster_cryptex_index(mp)"))
+            << tree;
+        const std::string cryptexIdx = bodyOf(cluster, "switch_cluster_cryptex_index(");
+        EXPECT_THAT(cryptexIdx, HasSubstr("SWITCH_PREFETCH_VOL_SYSTEM")) << tree;
+        EXPECT_THAT(cryptexIdx, HasSubstr("SWITCH_PREFETCH_VOL_APP")) << tree;
+        EXPECT_THAT(cryptexIdx, Not(HasSubstr("SWITCH_PREFETCH_VOL_ROOT"))) << tree;
+        EXPECT_THAT(cryptexIdx, Not(HasSubstr("SWITCH_PREFETCH_VOL_DATA"))) << tree;
+        EXPECT_THAT(bodyOf(cluster, "switch_cluster_record("), HasSubstr("VISNAMEDSTREAM | VSYSTEM | VSWAP")) << tree;
+
+        const std::string exec = SourceText(std::string("../") + tree + "/bsd/kern/kern_exec.c");
+        const std::string dataPrep = bodyOf(exec, "native_owner_data_prepare(");
+        EXPECT_THAT(dataPrep, HasSubstr("native_owner_data_mount = data_mount;")) << tree;
+        const std::string init = bodyOf(exec, "load_init_program(");
+        const size_t policyPos = init.find("native_switch_watchdog_policy(");
+        const size_t mountHookPos =
+            init.find("switch_prefetch_volumes_mounted(vnode_mount(rootvnode), native_owner_data_mount);");
+        const size_t launchdPos = init.find("load_init_program_at_path(");
+        EXPECT_NE(policyPos, std::string::npos) << tree;
+        EXPECT_NE(mountHookPos, std::string::npos) << tree;
+        EXPECT_NE(launchdPos, std::string::npos) << tree;
+        if (policyPos != std::string::npos && mountHookPos != std::string::npos && launchdPos != std::string::npos) {
+            EXPECT_LT(policyPos, mountHookPos) << tree;
+            EXPECT_LT(mountHookPos, launchdPos) << tree;
+        }
+    }
+
+    const std::string prefetch = SourceText("../switch/vm/prefetch.c");
+    const std::string prefetchSave = SourceText("../switch/vm/prefetch_save.c");
+
+    const std::string volsMounted = bodyOf(prefetch, "switch_prefetch_volumes_mounted(");
+    EXPECT_THAT(volsMounted, HasSubstr("SWITCH_PREFETCH_VOL_ROOT"));
+    EXPECT_THAT(volsMounted, HasSubstr("SWITCH_PREFETCH_VOL_DATA"));
+    EXPECT_THAT(volsMounted, HasSubstr("\"apfs\""));
+    EXPECT_THAT(volsMounted, HasSubstr("MNT_RDONLY"));
+    EXPECT_THAT(volsMounted, HasSubstr("switch_prefetch_mount_at(SWITCH_PREFETCH_VOL_ROOT) != NULL"));
+
+    const std::string expKey = bodyOf(prefetch, "switch_prefetch_expected_key(");
+    EXPECT_THAT(expKey, HasSubstr("SWITCH_OS_VOLUME_UUID"));
+    EXPECT_THAT(expKey, HasSubstr("key->root_uuid"));
+    EXPECT_THAT(expKey, HasSubstr("key->data_uuid"));
+    EXPECT_THAT(bodyOf(prefetch, "switch_prefetch_mount_uuid("), HasSubstr("VFSATTR_WANTED(&vfa, f_uuid)"));
+    EXPECT_THAT(bodyOf(prefetch, "switch_prefetch_mount_uuid("), HasSubstr("switch_prefetch_busy_mount(mp, fsid)"));
+
+    const std::string replay = bodyOf(prefetch, "switch_prefetch_replay_runs(");
+    EXPECT_THAT(replay, Not(HasSubstr("SWITCH_PREFETCH_CRYPTEX_COUNT")));
+    EXPECT_THAT(replay, HasSubstr("switch_prefetch_vget_regular("));
+    EXPECT_THAT(replay, HasSubstr("switch_prefetch_vnode_meta("));
+    EXPECT_THAT(replay, HasSubstr("rc == PAGER_SUCCESS"));
+    EXPECT_THAT(replay, Not(HasSubstr("vfs_flags(mp)")));
+
+    const std::string threadBody = bodyOf(prefetch, "switch_prefetch_thread(");
+    EXPECT_THAT(threadBody, HasSubstr("SWITCH_PREFETCH_VOLUME_COUNT"));
+    EXPECT_THAT(threadBody, Not(HasSubstr("SWITCH_PREFETCH_CRYPTEX_COUNT")));
+
+    // SB-1: all mount busy calls validate mount liveness through mount_list_lookupby_fsid + mount_iterdrop.
+    const std::string busyMount = bodyOf(prefetchSave, "switch_prefetch_busy_mount(");
+    const size_t lookupPos = busyMount.find("mount_list_lookupby_fsid(&fsid, 0, 1)");
+    const size_t busyCallPos = busyMount.find("vfs_busy(mp, LK_NOWAIT)");
+    const size_t dropPos = busyMount.find("mount_iterdrop(mp);");
+    ASSERT_NE(lookupPos, std::string::npos);
+    ASSERT_NE(busyCallPos, std::string::npos);
+    ASSERT_NE(dropPos, std::string::npos);
+    EXPECT_LT(lookupPos, busyCallPos);
+    EXPECT_LT(busyCallPos, dropPos);
+
+    const std::string vgetReg = bodyOf(prefetchSave, "switch_prefetch_vget_regular(");
+    const size_t busyPos = vgetReg.find("switch_prefetch_busy_mount(mp, fsid)");
+    const size_t vgetPos = vgetReg.find("VFS_VGET(");
+    const size_t unbusyPos = vgetReg.find("vfs_unbusy(busy_mp);");
+    const size_t metaPos = vgetReg.find("switch_prefetch_vnode_meta(");
+    EXPECT_NE(busyPos, std::string::npos);
+    EXPECT_NE(vgetPos, std::string::npos);
+    EXPECT_NE(unbusyPos, std::string::npos);
+    EXPECT_NE(metaPos, std::string::npos);
+    if (busyPos != std::string::npos && vgetPos != std::string::npos && unbusyPos != std::string::npos &&
+        metaPos != std::string::npos) {
+        EXPECT_LT(busyPos, vgetPos);
+        EXPECT_LT(vgetPos, unbusyPos);
+        EXPECT_LT(unbusyPos, metaPos);
+    }
+
+    const std::string saveNext = bodyOf(prefetchSave, "switch_prefetch_save_next(");
+    EXPECT_THAT(saveNext, HasSubstr("switch_prefetch_busy_mount(mounts[v], fsids[v])"));
+    EXPECT_THAT(saveNext, HasSubstr("vfs_unbusy(busy_mp);"));
+    EXPECT_THAT(bodyOf(prefetchSave, "collect_kept_replayed("), HasSubstr("switch_prefetch_bit_test("));
+    EXPECT_THAT(bodyOf(prefetchSave, "collect_kept_replayed("), HasSubstr("switch_prefetch_vget_regular("));
 }

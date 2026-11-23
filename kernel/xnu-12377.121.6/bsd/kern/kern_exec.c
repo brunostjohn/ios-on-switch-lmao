@@ -8242,6 +8242,7 @@ native_owner_cache_checkpoint(int status, int authorized)
 #include <switch/prefs.h>
 #include <switch/icon_cache.h>
 #include <switch/boot_sync.h>
+#include <switch/prefetch_vm.h>
 #include <switch/setup_state.h>
 #endif
 
@@ -8399,6 +8400,10 @@ volatile int native_owner_data_status = -1;
 volatile int native_owner_data_stage = 0;
 volatile int native_owner_data_readonly = -1;
 volatile dev_t native_owner_data_device = NODEV;
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && \
+    defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
+static mount_t native_owner_data_mount = NULL;
+#endif
 uint64_t native_owner_data_seed_base, native_owner_data_seed_size;
 uint8_t native_owner_data_seed_sha256[32];
 char native_owner_data_device_path[64];
@@ -8604,7 +8609,13 @@ native_owner_data_prepare(proc_t p, user_addr_t scratch)
 			    observed_root, observed_mobile);
 	}
 #endif
-	if (!error) native_owner_data_stage = 4;
+	if (!error) {
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && \
+    defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
+		native_owner_data_mount = data_mount;
+#endif
+		native_owner_data_stage = 4;
+	}
 	if (!error) native_gpu_addon_prepare(p, scratch);
 done:
 	if (data_root) vnode_put(data_root);
@@ -10233,6 +10244,9 @@ load_init_program(proc_t p)
 	int watchdog_error = native_switch_watchdog_policy(p, (user_addr_t)scratch_addr);
 	if (watchdog_error) printf("SwitchRawBoot: watchdogd launchd policy not written: %d (continuing)\n", watchdog_error);
 	switch_boot_steps_mark(&steps, "watchdog policy");
+	if (native_owner_data_mount != NULL && rootvnode != NULLVP && switch_prefetch_volumes_mounted != NULL) {
+		switch_prefetch_volumes_mounted(vnode_mount(rootvnode), native_owner_data_mount);
+	}
 	/* The NVRAM saved on Data (drivers/SwitchNVRAM, /private/var/Switch/nvram.bin): restored now, so that userland
 	 * sees it from its first read, and saved there from now on. */
 	extern uint32_t switch_nvram_data_mounted(void);
