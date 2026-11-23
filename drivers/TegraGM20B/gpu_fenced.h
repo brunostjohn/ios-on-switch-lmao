@@ -3,6 +3,7 @@
 // statistics on every fence.
 #pragma once
 #include "gpu_inline.h"
+#include "SwitchGpuJobRing.h"
 
 /* push profile (stats):
  * What each push of a submission costs the GPU, sampled: one submission in 64 of each connection (the user client's
@@ -130,6 +131,10 @@ static inline void stats_fences(struct tgm_chan *chan)
 	u64 now = nvxnu_nanotime();
 	u64 start = 0;
 	u64 end = 0;
+#if SWITCH_RECORDER
+	bool started = false;
+	bool ended = false;
+#endif
 	volatile struct tgm_stamps *st = NULL;
 
 	if ((s32)(done - s) > CHAN_NSTAMPS) {
@@ -153,10 +158,21 @@ static inline void stats_fences(struct tgm_chan *chan)
 				prof_collect(chan, first, fs->start.ns, st->end.ns);
 			WRITE_ONCE(chan->prof_seqno, 0);
 		}
+#if SWITCH_RECORDER
+		started = st->start.payload == s + 1;
+		ended = st->end.payload == s + 1;
+		start = started ? st->start.ns : 0;
+		end = ended ? st->end.ns : 0;
+		if (!chan->kernel)
+			switch_gpu_job_ring(chan, s + 1, start, end);
+		if (!started || !ended)
+			continue; /* overwritten by a later submission, or not stamped */
+#else
 		if (st->start.payload != s + 1 || st->end.payload != s + 1)
 			continue; /* overwritten by a later submission, or not stamped */
 		start = st->start.ns;
 		end = st->end.ns;
+#endif
 		if (chan->kernel) {
 			__atomic_fetch_add(&tgm_stats.copies, 1, __ATOMIC_RELAXED);
 			stats_add(&tgm_stats.copy_sum, &tgm_stats.copy_max, end - start);
