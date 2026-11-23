@@ -13,11 +13,15 @@ OWNER = 'boot-springboard'
 SOURCE = 'backboardd, SpringBoard and launchd of 24B119 (boot 2, 22 Nov)'
 MACH_HZ = 19_200_000  # mach time counts the Tegra X1's system counter
 WATCHDOG_S = 70.0
+ICON_RESET_MAX_S = 0.5
 CHECKIN = 'boot.springboard-checkin'
 FINISHED = 'boot.springboard-finished'
 LOGO = 'boot.springboard-logo-pid'
 EXITED = 'boot.springboard-exited'
 ANCHOR = 'boot.springboard-window-server'
+ICON_RESET_START = 'boot.icon-reset-start'
+ICON_RESET_DONE = 'boot.icon-reset-done'
+ICON_STALL = 'boot.icon-stall'
 
 SPRINGBOARD = [
     Check(
@@ -58,6 +62,36 @@ SPRINGBOARD = [
         process='launchd',
         subsystem='/com.apple.SpringBoard [',
         source=SOURCE,
+    ),
+    Check(
+        ICON_RESET_START,
+        OWNER,
+        'Resetting icon cache',
+        REPORT,
+        process='iconservicesagent',
+        source='iconservicesagent of 24B119 (boot 2, 22 Nov)',
+    ),
+    Check(
+        ICON_RESET_DONE,
+        OWNER,
+        'Cache reset complete:',
+        REPORT,
+        process='iconservicesagent',
+        regex=r'removed (?P<items>\d+) items, (?P<failures>\d+) failures',
+        show=('items', 'failures'),
+        source='iconservicesagent of 24B119 (boot 2, 22 Nov)',
+    ),
+    Check(
+        ICON_STALL,
+        OWNER,
+        'SwitchStall: SpringBoard[',
+        REPORT,
+        process='kernel',
+        regex=(
+            r'SwitchStall: SpringBoard\[\d+\] main thread 0x[0-9a-f]+ '
+            r'.*?(?:waits for |owner \d+: |held for writing by )iconservicesagent\[\d+\]'
+        ),
+        source='kernel/switch/diag/stall*.c (debug kernels)',
     ),
 ]
 
@@ -136,6 +170,17 @@ FIRST_LIFE = Check(
     'finished 21.3 s after its own',
 )
 
+ICON_RESET = Check(
+    'boot.icon-reset-off-path',
+    OWNER,
+    'Cache reset complete:',
+    f'icon cache reset finishes in < {ICON_RESET_MAX_S:g} s or removed 0 items with 0 pre-logo SpringBoard '
+    'SwitchStall waits on iconservicesagent',
+    source='iconservicesagent and SwitchStall of 24B119 (boot 2, 22 Nov)',
+    note='boot 2 (22 Nov): iconservicesagent spent 9.72 s removing 1 salt folder on its main thread before opening '
+    'its XPC listener, stalling SpringBoard[30] 11.0 s',
+)
+
 
 def seconds(ticks: float) -> float:
     return ticks / MACH_HZ
@@ -212,15 +257,91 @@ def judge_boot(boot: str, lines: dict[str, list[dict]]) -> tuple[str, str]:
     return PASS, ', '.join(parts)
 
 
+def describe_icon_resets(starts: list[dict], dones: list[dict]) -> tuple[list[str], bool, bool]:
+    """Pair icon cache reset starts with completions; return (parts, all_ok, missing_start)."""
+    parts: list[str] = []
+    reset_ok = True
+    missing_start = False
+    matched_dones: set[int] = set()
+    for i, start in enumerate(starts):
+        nxt = starts[i + 1]['mach'] if i + 1 < len(starts) else float('inf')
+        match = next(
+            ((j, d) for j, d in enumerate(dones) if j not in matched_dones and start['mach'] <= d['mach'] < nxt),
+            None,
+        )
+        if match is None:
+            reset_ok = False
+            parts.append('reset started without completion')
+            continue
+        j, done = match
+        matched_dones.add(j)
+        dur_s = seconds(done['mach'] - start['mach'])
+        items, failures = int(done['items']), int(done['failures'])
+        parts.append(f'reset {dur_s:.2f} s (removed {items} items, {failures} failures)')
+        if failures != 0 or (dur_s >= ICON_RESET_MAX_S and items != 0):
+            reset_ok = False
+    for j, done in enumerate(dones):
+        if j in matched_dones:
+            continue
+        items, failures = int(done['items']), int(done['failures'])
+        parts.append(f'reset completed (removed {items} items, {failures} failures, no start line)')
+        if failures != 0:
+            reset_ok = False
+        elif items != 0:
+            missing_start = True
+    return parts, reset_ok, missing_start
+
+
+def judge_icon_reset(boot: str, lines: dict[str, list[dict]]) -> tuple[str, str]:
+    """Return (verdict, summary) for whether this boot's icon cache reset stayed off SpringBoard's critical path."""
+    starts = in_boot(lines[ICON_RESET_START], boot)
+    dones = in_boot(lines[ICON_RESET_DONE], boot)
+    stalls_all = in_boot(lines[ICON_STALL], boot)
+    logos = in_boot(lines[LOGO], boot)
+    if any(f['mach'] <= 0 for f in (*starts, *dones, *stalls_all, *logos)):
+        return NO_DATA, f'boot {boot}: missing machTimestamp'
+    logo = logos[0] if logos else None
+    pre_stalls = [f for f in stalls_all if logo is None or f['mach'] < logo['mach']]
+    if not starts and not dones:
+        if pre_stalls:
+            return FAIL, f'boot {boot}: {len(pre_stalls)} pre-logo SpringBoard SwitchStall wait(s) on iconservicesagent'
+        return NO_DATA, f'boot {boot}: no icon cache reset'
+    parts, reset_ok, missing_start = describe_icon_resets(starts, dones)
+    parts.append(f'{len(pre_stalls)} pre-logo SwitchStall wait(s) on iconservicesagent')
+    summary = f'boot {boot}: ' + ', '.join(parts)
+    if pre_stalls or not reset_ok:
+        return FAIL, summary
+    if missing_start:
+        return NO_DATA, summary
+    return PASS, summary
+
+
+def icon_reset_row(by_check: dict[str, Result]) -> Result:
+    """Return the icon-cache-reset-off-path verdict across every boot with icon reset or stall lines."""
+    lines = {
+        name: by_check[name].matches if name in by_check else []
+        for name in (ICON_RESET_START, ICON_RESET_DONE, ICON_STALL, LOGO)
+    }
+    boots = sorted({f['boot'] for name in (ICON_RESET_START, ICON_RESET_DONE, ICON_STALL) for f in lines[name]})
+    if not boots:
+        return Result(ICON_RESET, NO_DATA, 'no icon cache reset or SpringBoard iconservicesagent stall')
+    judged = [judge_icon_reset(boot, lines) for boot in boots]
+    verdicts = [v for v, _ in judged]
+    verdict = FAIL if FAIL in verdicts else PASS if all(v == PASS for v in verdicts) else NO_DATA
+    return Result(ICON_RESET, verdict, ' | '.join(text for _, text in judged))
+
+
 def springboard_rows(by_check: dict[str, Result]) -> list[Result]:
-    """Return the first-life verdict of every boot with SpringBoard lifecycle lines."""
+    """Return the first-life and icon-reset-off-path verdicts of every boot with SpringBoard lifecycle lines."""
     lines = {
         name: by_check[name].matches if name in by_check else [] for name in (CHECKIN, FINISHED, LOGO, EXITED, ANCHOR)
     }
     boots = sorted({f['boot'] for name in (CHECKIN, FINISHED, LOGO, EXITED) for f in lines[name]})
     if not boots:
-        return [Result(FIRST_LIFE, NO_DATA, "no backboardd check-in line (24B119's format)")]
-    judged = [judge_boot(boot, lines) for boot in boots]
-    verdicts = [v for v, _ in judged]
-    verdict = FAIL if FAIL in verdicts else PASS if all(v == PASS for v in verdicts) else NO_DATA
-    return [Result(FIRST_LIFE, verdict, ' | '.join(text for _, text in judged))]
+        first_life = Result(FIRST_LIFE, NO_DATA, "no backboardd check-in line (24B119's format)")
+    else:
+        judged = [judge_boot(boot, lines) for boot in boots]
+        verdicts = [v for v, _ in judged]
+        verdict = FAIL if FAIL in verdicts else PASS if all(v == PASS for v in verdicts) else NO_DATA
+        first_life = Result(FIRST_LIFE, verdict, ' | '.join(text for _, text in judged))
+    return [first_life, icon_reset_row(by_check)]

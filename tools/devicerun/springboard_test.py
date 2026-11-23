@@ -59,8 +59,27 @@ def on_boot(boot: str, *records: dict) -> list[dict]:
 
 def verdict(*records: dict):
     results, _ = devicerun.run_checks(list(records), springboard.SPRINGBOARD)
-    (row,) = springboard.springboard_rows({r.check.name: r for r in results})
-    return row
+    rows = {r.check.name: r for r in springboard.springboard_rows({r.check.name: r for r in results})}
+    return rows['boot.springboard-first-life']
+
+
+def icon_verdict(*records: dict):
+    results, _ = devicerun.run_checks(list(records), springboard.SPRINGBOARD)
+    rows = {r.check.name: r for r in springboard.springboard_rows({r.check.name: r for r in results})}
+    return rows['boot.icon-reset-off-path']
+
+
+def icon_start(uptime: float | None) -> dict:
+    return record('iconservicesagent', 'com.apple.iconservices', 'Resetting icon cache...', uptime)
+
+
+def icon_done(uptime: float | None, items: int = 0, failures: int = 0) -> dict:
+    return record(
+        'iconservicesagent',
+        'com.apple.iconservices',
+        f'... Done. Cache reset complete: removed {items} items, {failures} failures',
+        uptime,
+    )
 
 
 class FirstLife(unittest.TestCase):
@@ -197,6 +216,105 @@ class Observations(unittest.TestCase):
         unsupported = kernel('AppleKeyStore: selector 42 unsupported (first from keybagd)', 14.0)
         results, _ = devicerun.run_checks([unsupported], springboard.OBSERVATIONS)
         self.assertEqual({r.check.name: r.verdict for r in results}['boot.keystore-slow'], NO_DATA)
+
+
+class IconResetOffPath(unittest.TestCase):
+    def test_boot_2s_slow_reset_and_pre_logo_stall_fail(self):
+        stall = kernel(
+            'SwitchStall: SpringBoard[30] main thread 0x208 blocked 2.9 s (since 121.3 s of uptime, pri 47): '
+            'mach_msg receive on port 0x1, event 0x2; waits for iconservicesagent[353] thread 0x1265 '
+            '(special reply port);',
+            124.2,
+        )
+        row = icon_verdict(icon_start(111.291), icon_done(121.015, items=1), stall, logo(400, 154.059))
+        self.assertEqual(row.verdict, FAIL)
+        self.assertIn('reset 9.72 s (removed 1 items, 0 failures)', row.observed)
+        self.assertIn('1 pre-logo SwitchStall wait(s) on iconservicesagent', row.observed)
+
+    def test_off_path_zero_item_reset_passes(self):
+        row = icon_verdict(icon_start(40.100), icon_done(40.108, items=0), logo(30, 60.0))
+        self.assertEqual(row.verdict, PASS, row.observed)
+        self.assertIn('reset 0.01 s (removed 0 items, 0 failures)', row.observed)
+        self.assertIn('0 pre-logo SwitchStall wait(s)', row.observed)
+
+    def test_fast_reset_under_half_second_passes(self):
+        row = icon_verdict(icon_start(40.100), icon_done(40.350, items=1), logo(30, 60.0))
+        self.assertEqual(row.verdict, PASS, row.observed)
+
+    def test_zero_item_reset_passes_even_past_half_second(self):
+        row = icon_verdict(icon_start(40.000), icon_done(40.700, items=0), logo(30, 60.0))
+        self.assertEqual(row.verdict, PASS, row.observed)
+
+    def test_slow_nonzero_reset_fails_even_without_stall(self):
+        row = icon_verdict(icon_start(40.000), icon_done(40.600, items=1), logo(30, 60.0))
+        self.assertEqual(row.verdict, FAIL)
+
+    def test_chained_pre_logo_stall_on_iconservicesagent_fails(self):
+        chain = kernel(
+            'SwitchStall: SpringBoard[30] main thread 0x208 chain: owner 2: iconservicesagent[353] thread 0x110a '
+            '(special reply port); it is on core (pri 47);',
+            50.0,
+        )
+        row = icon_verdict(icon_start(40.0), icon_done(40.01, items=0), chain, logo(30, 60.0))
+        self.assertEqual(row.verdict, FAIL)
+        self.assertIn('1 pre-logo SwitchStall wait(s) on iconservicesagent', row.observed)
+
+    def test_iconservicesagent_in_cpu_census_only_is_not_a_wait(self):
+        other = kernel(
+            'SwitchStall: SpringBoard[30] main thread 0x208 blocked 2.5 s (since 50.0 s of uptime, pri 47): '
+            'ulock on wait queue 0x1, event 0x2; waits for wifid[99] thread 0x699 (ulock); '
+            'cores: 0 iconservicesagent[353] (pri 31)',
+            52.5,
+        )
+        row = icon_verdict(icon_start(40.0), icon_done(40.01, items=0), other, logo(30, 60.0))
+        self.assertEqual(row.verdict, PASS, row.observed)
+
+    def test_post_logo_stall_does_not_fail(self):
+        late = kernel(
+            'SwitchStall: SpringBoard[30] main thread 0x208 blocked 2.1 s: waits for iconservicesagent[353] '
+            'thread 0x1265 (special reply port);',
+            75.0,
+        )
+        row = icon_verdict(icon_start(40.0), icon_done(40.01, items=0), logo(30, 60.0), late)
+        self.assertEqual(row.verdict, PASS, row.observed)
+
+    def test_ordinary_boot_without_reset_is_no_data(self):
+        row = icon_verdict(window_ready(18.0), checkin(30, 22.0), logo(30, 40.0), finished(41.0))
+        self.assertEqual(row.verdict, NO_DATA)
+
+    def test_missing_mach_timestamp_is_no_data(self):
+        row = icon_verdict(icon_start(None), icon_done(40.01, items=0))
+        self.assertEqual(row.verdict, NO_DATA)
+        self.assertIn('missing machTimestamp', row.observed)
+
+    def test_incomplete_reset_or_failures_fail(self):
+        self.assertEqual(icon_verdict(icon_start(40.0), logo(30, 60.0)).verdict, FAIL)
+        self.assertEqual(icon_verdict(icon_start(40.0), icon_done(40.01, items=0, failures=1)).verdict, FAIL)
+
+    def test_orphan_done_before_or_after_paired_reset_is_not_dropped(self):
+        self.assertEqual(
+            icon_verdict(icon_done(30.0, items=1, failures=1), icon_start(40.0), icon_done(40.01, items=0)).verdict,
+            FAIL,
+        )
+        self.assertEqual(
+            icon_verdict(icon_done(30.0, items=1, failures=0), icon_start(40.0), icon_done(40.01, items=0)).verdict,
+            NO_DATA,
+        )
+        self.assertEqual(
+            icon_verdict(
+                icon_start(40.0), icon_done(40.01, items=0), icon_done(45.0, items=1, failures=1)
+            ).verdict,
+            FAIL,
+        )
+
+    def test_rwlock_writer_chain_stall_on_iconservicesagent_fails(self):
+        chain = kernel(
+            'SwitchStall: SpringBoard[30] main thread 0x208 chain: kernel rwlock is held for writing by '
+            'iconservicesagent[353] thread 0x110a;',
+            50.0,
+        )
+        row = icon_verdict(icon_start(40.0), icon_done(40.01, items=0), chain, logo(30, 60.0))
+        self.assertEqual(row.verdict, FAIL)
 
 
 if __name__ == '__main__':
