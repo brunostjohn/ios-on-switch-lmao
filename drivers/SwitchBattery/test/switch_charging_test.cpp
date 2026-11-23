@@ -1452,7 +1452,8 @@ static void faultReset()
     advance(150);
     check((gPd.vendor & 0x4) == 0, "OCP restored after the reset deadline");
     check(((gPd.config1 >> 14) & 3u) == 3u, "a sink session's switches off again");
-    check((gPd.config2 & 0x4) != 0, "incoming data role swaps accepted as UFP again after the reset");
+    check((gPd.config2 & 0x4) != 0 && (gPd.config2 & 0x3) == 0x2,
+          "incoming DR_Swap as UFP and PR_Swap as source restored after the reset");
 }
 
 // A dual-role source other than the dock (its 5 V PDO has Dual-Role Data and USB Communications) leaves the Switch
@@ -1476,10 +1477,10 @@ static void dualRoleSource(uint32_t idHeader)
     if (switch_battery_start())
         check(false, "switch_battery_start");
     advance(10);
-    check((gPd.config2 & 0xc) == 0x4 && (gPd.alertEnable[1] & 0x4) != 0,
-          "CONFIG2 accepts DR_Swap as UFP, ALERT_ENABLE has DR_SWAP");
-    check(logHas("SwitchPD: incoming data role swaps accepted as UFP (CONFIG2 0 +accept as UFP, ALERT_ENABLE 0xfbff "
-                 "+DR_SWAP)"),
+    check((gPd.config2 & 0xf) == 0x6 && (gPd.alertEnable[1] & 0x4) != 0,
+          "CONFIG2 accepts DR_Swap as UFP and PR_Swap as source, ALERT_ENABLE has DR_SWAP");
+    check(logHas("SwitchPD: incoming data role swaps accepted as UFP (CONFIG2 0 +accept as UFP +PR_Swap as source, "
+                 "ALERT_ENABLE 0xfbff +DR_SWAP)"),
           "one line with what was found");
     watchDataRole();
     gPd.idHeader = idHeader;

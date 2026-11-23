@@ -58,13 +58,15 @@ void unusedPortUp()
 // tegra210_xusb_lane_defaults only when t210b01_compatible).
 void laneUp()
 {
-    if (switch_car_soc_t210b01()) {
+    const bool b01 = switch_car_soc_t210b01();
+    const unsigned lane = xusb_ss_lane(b01);
+    if (b01) {
         for (const auto &write : xusb_b01_usb3_lane_data)
-            w(XUSB_PADCTL_UPHY_MISC_CTL8(XUSB_SS_LANE), xusb_uphy_cfg(write[0], write[1]));
+            w(XUSB_PADCTL_UPHY_MISC_CTL8(lane), xusb_uphy_cfg(write[0], write[1]));
     }
-    w(XUSB_PADCTL_USB3_PAD_MUX, xusb_pad_mux_ss(r(XUSB_PADCTL_USB3_PAD_MUX)));
+    w(XUSB_PADCTL_USB3_PAD_MUX, xusb_pad_mux_ss(r(XUSB_PADCTL_USB3_PAD_MUX), b01));
     w(XUSB_PADCTL_SS_PORT_MAP, xusb_ss_port_map(r(XUSB_PADCTL_SS_PORT_MAP)));
-    w(XUSB_PADCTL_USB3_ECTL(XUSB_SS_PORT, 1), xusb_ectl1(r(XUSB_PADCTL_USB3_ECTL(XUSB_SS_PORT, 1))));
+    w(XUSB_PADCTL_USB3_ECTL(XUSB_SS_PORT, 1), xusb_ectl1(r(XUSB_PADCTL_USB3_ECTL(XUSB_SS_PORT, 1)), b01));
     w(XUSB_PADCTL_USB3_ECTL(XUSB_SS_PORT, 2), xusb_ectl2(r(XUSB_PADCTL_USB3_ECTL(XUSB_SS_PORT, 2))));
     w(XUSB_PADCTL_USB3_ECTL(XUSB_SS_PORT, 3), XUSB_ECTL3);
     w(XUSB_PADCTL_USB3_ECTL(XUSB_SS_PORT, 4), xusb_ectl4(r(XUSB_PADCTL_USB3_ECTL(XUSB_SS_PORT, 4))));
@@ -93,6 +95,7 @@ bool switch_usb_ss_lane(bool up)
         __atomic_store_n(&gUp, true, __ATOMIC_RELEASE);
     } else if (!up && gUp) {
         runSteps(xusb_ss_down_steps);
+        w(XUSB_PADCTL_SS_PORT_MAP, xusb_ss_port_unmap(r(XUSB_PADCTL_SS_PORT_MAP)));
         __atomic_store_n(&gUp, false, __ATOMIC_RELEASE);
     }
     const bool now = gUp;
@@ -123,7 +126,8 @@ void switch_usb_ss_lfps(bool enable)
 {
     if (!gPadctl)
         return;
-    w(XUSB_PADCTL_UPHY_MISC_CTL1(XUSB_SS_LANE), xusb_lfps_detect(r(XUSB_PADCTL_UPHY_MISC_CTL1(XUSB_SS_LANE)), enable));
+    const unsigned lane = xusb_ss_lane(switch_car_soc_t210b01());
+    w(XUSB_PADCTL_UPHY_MISC_CTL1(lane), xusb_lfps_detect(r(XUSB_PADCTL_UPHY_MISC_CTL1(lane)), enable));
 }
 
 #if DEVELOPMENT || DEBUG

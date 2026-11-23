@@ -264,7 +264,7 @@ void SwitchPD::fail(const char *why)
 {
     negoTimer->cancelTimeout();
     withdraw();
-    explicitContract = false;
+    explicitContract = (state.status1 & SWITCH_PD_STATUS1_SPDSNK) != 0 && sourcePdoCount > 0;
     nego = Nego::Failed;
     ++failedRequests;
     char pdos[192];

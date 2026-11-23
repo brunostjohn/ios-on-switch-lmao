@@ -77,7 +77,7 @@ bool SwitchPD::begin(uint16_t &type, uint16_t &revision, uint16_t &config, bool 
     }
     if (const int ocp = enableOcp())
         IOLog("SwitchPD: over-current protection on failed (I2C %d)\n", ocp);
-    acceptDataRoleSwapsAsUfp(true);
+    configureRoleSwaps(true);
     if (!read16(CONFIG1, config)) {
         switchesOn = ((config & CONFIG1_SPDSRC_MASK) >> CONFIG1_SPDSRC_SHIFT) != SPDSRC12_OFF;
         const bool wereOn = switchesOn;
@@ -170,8 +170,7 @@ void SwitchPD::notifyAlt(uint16_t alertBits)
     const bool altSession = explicitContract && state.plugged &&
                             ((phase == SWITCH_PD_SINK && (status1 & SWITCH_PD_STATUS1_SRC_MODE) == 0u) ||
                              (phase == SWITCH_PD_SOURCE && state.dataHost));
-    // BM92 firmware revision does not establish PD 3.x on SOP. PD 2.0 UFP waits for a partner data-role swap.
-    switch_pd_alt_alert(this, loop, atRest, alertBits, status1, altSession, contractOurs && choice.dock, false);
+    switch_pd_alt_alert(this, loop, atRest, alertBits, status1, altSession, contractOurs && choice.dock);
 }
 
 // bm92t_event_handler's faults, after the policy has taken VBUS off: an internal fault ends the event (true), with a
@@ -366,7 +365,7 @@ void SwitchPD::windowFired(OSObject *owner, IOTimerEventSource *)
             self->switchesOn = (config & CONFIG1_SPDSRC_MASK) != CONFIG1_SPDSRC_MASK;
             self->setSwitches(false);
             if (!self->switchesOn && !self->enableOcp() && !switch_pd_internal_fault(status1)) {
-                self->acceptDataRoleSwapsAsUfp(false);
+                self->configureRoleSwaps(false);
                 const bool sink = (status1 & SWITCH_PD_STATUS1_INSERT) &&
                                   (!(status1 & SWITCH_PD_STATUS1_SRC_MODE) ||
                                    ((status1 & SWITCH_PD_STATUS1_VSAFE) && !switch_pd_vbus_ours(status1)));

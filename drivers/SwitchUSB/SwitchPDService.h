@@ -65,6 +65,8 @@ enum : unsigned {
     SPDSRC12_ON = 0,
     SPDSRC12_OFF = 3,
     VENDOR_CONFIG_OCP_DISABLE = 1u << 2,
+    CONFIG2_PR_SWAP_MASK = 3u << 0,
+    CONFIG2_PR_SWAP_ACCEPT_SRC_REJECT_SNK = 2u,
     CONFIG2_DR_SWAP_ACCEPT_AS_UFP = 1u << 2,  // DR_SWAP field 3:2: bit 2 accept as UFP, bit 3 accept as DFP
     ALERT_CMD_DONE = 1u << 2,
     ALERT_DR_SWAP = 1u << 10,
@@ -157,7 +159,7 @@ class SwitchPD : public IOService {
     void stopEvents();
     void systemReset(uint32_t settleMS, const char *why) const;
     static int enableOcp();
-    static void acceptDataRoleSwapsAsUfp(bool announce);
+    static void configureRoleSwaps(bool announce);
     void recordAsFound();
     void leave();
     static IOReturn powerMessage(void *target, void *, UInt32 type, IOService *, void *, vm_size_t);

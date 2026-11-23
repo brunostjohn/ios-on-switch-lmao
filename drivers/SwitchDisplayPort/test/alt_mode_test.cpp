@@ -15,18 +15,9 @@ constexpr uint16_t kInsert = SWITCH_PD_ALT_STATUS1_INSERT;
 constexpr uint16_t kUfp = SWITCH_PD_ALT_DATA_ROLE_UFP << SWITCH_PD_ALT_STATUS1_DR_SHIFT;
 constexpr uint16_t kDfp = SWITCH_PD_ALT_DATA_ROLE_DFP << SWITCH_PD_ALT_STATUS1_DR_SHIFT;
 
-unsigned dataRole(uint16_t status1)
-{
-    return (static_cast<unsigned>(status1) >> SWITCH_PD_ALT_STATUS1_DR_SHIFT) & 3u;
-}
-
 // ID Header VDOs (USB PD R3.3 V1.0 Table 6.34), little-endian in INCOMING_VDM bytes 5-8.
-constexpr uint32_t kMacHeader = 0xD14005ACu;      // host and device, UFP PDUSB Peripheral, DFP PDUSB Host, receptacle
-constexpr uint32_t kHubHeader = 0x48602109u;      // device, UFP PDUSB Hub, DFP none, captive plug
-constexpr uint32_t kBrickHeader = 0x01C01234u;    // no USB, DFP Power Brick, receptacle
-constexpr uint32_t kDeviceHeader = 0x50401234u;   // device, UFP PDUSB Peripheral
-constexpr uint32_t kHostOnlyBit = 0x90401234u;    // host bit, UFP PDUSB Peripheral, DFP type left 000b
-constexpr uint32_t kHostClaimsHub = 0xC8401234u;  // host and device bits with UFP PDUSB Hub
+constexpr uint32_t kMacHeader = 0xD14005ACu;    // host and device, UFP PDUSB Peripheral, DFP PDUSB Host, receptacle
+constexpr uint32_t kBrickHeader = 0x01C01234u;  // no USB, DFP Power Brick, receptacle
 
 struct Partner {
     bool dock = true;
@@ -34,12 +25,12 @@ struct Partner {
     bool silent = false;         // never answers Discover Identity
     uint32_t header = 0;         // an ID Header VDO other than the dock's or the adapter's, answered with a UFP VDO
     bool drd_reply = false;      // the seven-object DRD reply: UFP VDO, pad, DFP VDO
-    bool request_first = false;  // its own Discover Identity REQ arrives before its reply to ours
-    unsigned send_lastcmd = 0;   // STATUS1 LASTCMD when the controller completes SEND_VDM as UFP
     bool dp_svid = true;
     uint8_t caps[4] = {0x45, 0x00, 0x0C, 0x00};  // receptacle, UFP_D pins C and D
     int hub_busy = 0;                            // HUB_CONTROL answers busy this many times
     bool refuse_swap = false;
+    bool refuse_pin_d = false;
+    bool refuse_pin_c = false;
 };
 
 std::vector<uint8_t> identityAck(uint32_t header, bool drd)
@@ -87,18 +78,10 @@ struct Model {
         }
         switch (command) {
         case 0x01:
-            if (dataRole(status1) == SWITCH_PD_ALT_DATA_ROLE_UFP && partner.send_lastcmd != 0) {
-                status1 =
-                    static_cast<uint16_t>((static_cast<unsigned>(status1) & ~(7u << 4)) | partner.send_lastcmd << 4);
-                alerts.push_back(SWITCH_PD_ALT_ALERT_CMD_DONE);
-            } else if (partner.silent) {
+            if (partner.silent) {
                 alerts.push_back(SWITCH_PD_ALT_ALERT_CMD_DONE);
             } else if (!partner.identity) {
                 reply({4, 0x81, 0x80, 0x00, 0xFF});
-            } else if (partner.header != 0 && partner.request_first) {
-                reply({4, 0x01, 0x80, 0x00, 0xFF});
-                later_reply = identityAck(partner.header, partner.drd_reply);
-                partner.request_first = false;
             } else if (partner.header != 0) {
                 reply(identityAck(partner.header, partner.drd_reply));
             } else if (partner.dock) {
@@ -157,11 +140,18 @@ struct Model {
             incoming = {4, partner.caps[0], partner.caps[1], partner.caps[2], partner.caps[3]};
             alerts.push_back(SWITCH_PD_ALT_ALERT_CMD_DONE);
             break;
-        case SWITCH_PD_ALT_CMD_DP_CONFIGURE:
+        case SWITCH_PD_ALT_CMD_DP_CONFIGURE: {
             configured.assign(out.message + 1, out.message + 5);
-            dp_status = SWITCH_PD_ALT_DP_STATUS_DP_EN;
+            const uint8_t pin = static_cast<uint8_t>(out.message[2] | out.message[3]);
+            const bool refused = (pin == SWITCH_PD_ALT_PIN_D && partner.refuse_pin_d) ||
+                                 (pin == SWITCH_PD_ALT_PIN_C && partner.refuse_pin_c);
+            status1 = static_cast<uint16_t>((status1 & ~(7u << 4)) | (refused ? (6u << 4) : 0u));
+            if (!refused) {
+                dp_status = SWITCH_PD_ALT_DP_STATUS_DP_EN;
+            }
             alerts.push_back(SWITCH_PD_ALT_ALERT_CMD_DONE);
             break;
+        }
         case SWITCH_PD_ALT_CMD_DP_EXIT:
             dp_status = 0;
             alerts.push_back(SWITCH_PD_ALT_ALERT_CMD_DONE);
@@ -179,7 +169,6 @@ struct Session {
     uint32_t timer_ms = 0;
     bool at_rest = true;
     bool dock_power = true;
-    bool ufp_discovery_allowed = true;
 
     explicit Session(bool want_dp = true)
     {
@@ -203,7 +192,7 @@ struct Session {
 
     void event(uint16_t alert)
     {
-        const switch_pd_alt_in in{alert, model.status1, model.dp_status, true, at_rest, dock_power, ufp_discovery_allowed};
+        const switch_pd_alt_in in{alert, model.status1, model.dp_status, true, at_rest, dock_power};
         const switch_pd_alt_step before = alt.step;
         const switch_pd_alt_out out = switch_pd_alt_event(&alt, &in);
         if (out.act == SWITCH_PD_ALT_NONE && out.line == nullptr && alt.step == before) {
@@ -309,11 +298,10 @@ TEST(AltMode, ChargerWithoutIdentityFreesTheLanes)
     EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_FREE);
 }
 
-TEST(AltMode, UfpWithoutConfirmedPd3DiscoveryWaitsForPartner)
+TEST(AltMode, UfpNonDockSourceWaitsForPartner)
 {
     Session run;
     run.dock_power = false;
-    run.ufp_discovery_allowed = false;
     run.settle();
     EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
     EXPECT_TRUE(run.model.commands.empty());
@@ -467,165 +455,12 @@ bool hasCommand(const Session &run, uint16_t command)
     return false;
 }
 
-TEST(SourceIdentity, MacStaysTheHost)
-{
-    Session run = ufpSource(kMacHeader);
-    run.model.partner.drd_reply = true;
-    run.settle();
-    EXPECT_EQ(run.model.commands, (std::vector<uint16_t>{SWITCH_PD_ALT_CMD_SEND_VDM, SWITCH_PD_ALT_CMD_ACCEPT_VDM}));
-    EXPECT_EQ(run.model.messages.front(), (std::vector<uint8_t>{4, 0x01, 0x80, 0x00, 0xFF}));
-    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
-    EXPECT_EQ(dataRole(run.model.status1), SWITCH_PD_ALT_DATA_ROLE_UFP);
-    EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_FREE);
-    EXPECT_EQ(run.lines, (std::vector<std::string>{"no data role swap: the source is a USB host"}));
-}
-
-TEST(SourceIdentity, TheHostBitWinsWhateverTheProductTypes)
-{
-    for (const uint32_t header : {kHostOnlyBit, kHostClaimsHub}) {
-        Session run = ufpSource(header);
-        run.settle();
-        EXPECT_FALSE(hasCommand(run, SWITCH_PD_ALT_CMD_DR_SWAP)) << std::hex << header;
-        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
-    }
-}
-
-TEST(SourceIdentity, PartnersOwnRequestIsNotTheReply)
-{
-    Session run = ufpSource(kMacHeader);
-    run.model.partner.request_first = true;
-    run.settle();
-    EXPECT_FALSE(hasCommand(run, SWITCH_PD_ALT_CMD_DR_SWAP));
-    EXPECT_EQ(run.lines, (std::vector<std::string>{"no data role swap: the source is a USB host"}));
-}
-
-TEST(SourceIdentity, PoweredHubIsSwappedThenDiscovered)
-{
-    Session run = ufpSource(kHubHeader);
-    run.model.partner.dp_svid = false;
-    run.settle();
-    const std::vector<uint16_t> expected = {SWITCH_PD_ALT_CMD_SEND_VDM,   SWITCH_PD_ALT_CMD_ACCEPT_VDM,
-                                            SWITCH_PD_ALT_CMD_DR_SWAP,    SWITCH_PD_ALT_CMD_SEND_VDM,
-                                            SWITCH_PD_ALT_CMD_ACCEPT_VDM, SWITCH_PD_ALT_CMD_SEND_VDM,
-                                            SWITCH_PD_ALT_CMD_ACCEPT_VDM};
-    EXPECT_EQ(run.model.commands, expected);
-    EXPECT_EQ(dataRole(run.model.status1), SWITCH_PD_ALT_DATA_ROLE_DFP);
-    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
-    EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_FREE);
-    ASSERT_FALSE(run.lines.empty());
-    EXPECT_EQ(run.lines.front(), "the source is a USB hub: data role swap");
-}
-
-// The default build (DisplayPort off): a powered hub is still identified and swapped, and the decision is a line.
-TEST(SourceIdentity, HubSwapNeedsNoDisplayPort)
-{
-    Session run(false);
-    run.dock_power = false;
-    run.model.partner.dock = false;
-    run.model.partner.header = kHubHeader;
-    run.settle();
-    EXPECT_EQ(dataRole(run.model.status1), SWITCH_PD_ALT_DATA_ROLE_DFP);
-    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
-    EXPECT_EQ(run.lines, (std::vector<std::string>{"the source is a USB hub: data role swap"}));
-    for (const uint16_t command : run.model.commands) {
-        EXPECT_NE(command, SWITCH_PD_ALT_CMD_DP_DISCOVER);
-    }
-}
-
-TEST(SourceIdentity, DeviceWithoutHostIsSwapped)
-{
-    Session run = ufpSource(kDeviceHeader);
-    run.model.partner.drd_reply = true;
-    run.settle();
-    EXPECT_TRUE(hasCommand(run, SWITCH_PD_ALT_CMD_DR_SWAP));
-    EXPECT_EQ(dataRole(run.model.status1), SWITCH_PD_ALT_DATA_ROLE_DFP);
-}
-
-TEST(SourceIdentity, PassThroughAdapterGetsDisplayPort)
-{
-    Session run;
-    run.dock_power = false;
-    run.model.partner.dock = false;
-    run.settle();
-    EXPECT_EQ(run.model.commands.front(), SWITCH_PD_ALT_CMD_SEND_VDM);
-    EXPECT_TRUE(hasCommand(run, SWITCH_PD_ALT_CMD_DR_SWAP));
-    EXPECT_EQ(run.alt.dp_lanes, 2);
-    EXPECT_FALSE(run.alt.dock);
-}
-
-TEST(SourceIdentity, PowerBrickIsNotSwapped)
-{
-    Session run = ufpSource(kBrickHeader);
-    run.settle();
-    EXPECT_FALSE(hasCommand(run, SWITCH_PD_ALT_CMD_DR_SWAP));
-    EXPECT_EQ(run.lines,
-              (std::vector<std::string>{"no data role swap: the source is no USB host, hub, device or adapter"}));
-}
-
-TEST(SourceIdentity, NakIsNoSwap)
-{
-    Session run = ufpSource(kHubHeader);
-    run.model.partner.identity = false;
-    run.settle();
-    EXPECT_FALSE(hasCommand(run, SWITCH_PD_ALT_CMD_DR_SWAP));
-    EXPECT_EQ(run.lines, (std::vector<std::string>{"no data role swap: the source did not ACK Discover Identity"}));
-}
-
-TEST(SourceIdentity, SilenceIsNoSwap)
-{
-    Session run = ufpSource(kHubHeader);
-    run.model.partner.silent = true;
-    run.settle();
-    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_SOURCE_IDENTITY);
-    EXPECT_EQ(run.timer_ms, SWITCH_PD_ALT_REPLY_MS);
-    run.perform(switch_pd_alt_timer(&run.alt, true));
-    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
-    EXPECT_FALSE(hasCommand(run, SWITCH_PD_ALT_CMD_DR_SWAP));
-    EXPECT_EQ(run.lines, (std::vector<std::string>{
-                             "no data role swap: the source did not answer Discover Identity within 1.5 s"}));
-}
-
-TEST(SourceIdentity, ControllerRefusingSendVdmAsUfpSaysSo)
-{
-    Session run = ufpSource(kHubHeader);
-    run.model.partner.send_lastcmd = SWITCH_PD_ALT_LASTCMD_REJECTED;
-    run.settle();
-    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
-    EXPECT_EQ(run.lines, (std::vector<std::string>{"no data role swap: the controller rejected SEND_VDM as UFP"}));
-}
-
-TEST(SourceIdentity, HubRefusingTheSwapLeavesUsUfp)
-{
-    Session run = ufpSource(kHubHeader);
-    run.model.partner.refuse_swap = true;
-    run.settle();
-    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_FAILED);
-    EXPECT_EQ(dataRole(run.model.status1), SWITCH_PD_ALT_DATA_ROLE_UFP);
-    EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_FREE);
-    EXPECT_EQ(run.lines.back(), "the partner refused the data role swap");
-}
-
-TEST(SourceIdentity, PartnerSwappingUsMidIdentityRestartsAsDfp)
-{
-    Session run = ufpSource(kHubHeader);
-    run.model.partner.silent = true;
-    run.model.partner.dp_svid = false;
-    run.settle();
-    ASSERT_EQ(run.alt.step, SWITCH_PD_ALT_SOURCE_IDENTITY);
-    run.model.partner.silent = false;
-    run.model.status1 = static_cast<uint16_t>((run.model.status1 & ~(3u << 8)) | kDfp);
-    run.event(1u << 10);  // ALERT_DR_SWAP: the controller accepted the hub's DR_Swap
-    run.settle();
-    EXPECT_FALSE(hasCommand(run, SWITCH_PD_ALT_CMD_DR_SWAP));
-    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
-    EXPECT_EQ(run.lines.front(), "the partner swapped the data roles: Discover Identity as DFP");
-}
-
 TEST(SourceIdentity, PartnerSwappingUsAfterwardsRestartsAsDfp)
 {
     Session run = ufpSource(kBrickHeader);
     run.settle();
     ASSERT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+    EXPECT_TRUE(run.model.commands.empty());
     run.model.status1 = static_cast<uint16_t>((run.model.status1 & ~(3u << 8)) | kDfp);
     run.event(1u << 10);
     EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DISCOVER_ID);
@@ -649,30 +484,66 @@ TEST(SourceIdentity, OurSwapIsNotSentOnceThePartnersMadeUsDfp)
 TEST(SourceIdentity, DockPowerSignatureSwapsBeforeAnyMessage)
 {
     Session run;
-    run.ufp_discovery_allowed = false;
     run.settle();
     EXPECT_EQ(run.model.commands.front(), SWITCH_PD_ALT_CMD_DR_SWAP);
     EXPECT_TRUE(run.alt.hub_enabled);
     EXPECT_TRUE(run.lines.empty());
 }
 
-TEST(SourceIdentity, IdentityDecoding)
+TEST(SourceIdentity, IdentityResponseDecoding)
 {
     const std::vector<uint8_t> mac = identityAck(kMacHeader, true);
     EXPECT_EQ(mac[0], 28);
     EXPECT_TRUE(switch_pd_alt_identity_response(mac.data(), mac.size()));
-    EXPECT_EQ(switch_pd_alt_identify(mac.data(), mac.size()), SWITCH_PD_ALT_ID_HOST);
-    const std::vector<uint8_t> hub = identityAck(kHubHeader, false);
-    EXPECT_EQ(switch_pd_alt_identify(hub.data(), hub.size()), SWITCH_PD_ALT_ID_HUB);
-    const std::vector<uint8_t> brick = identityAck(kBrickHeader, false);
-    EXPECT_EQ(switch_pd_alt_identify(brick.data(), brick.size()), SWITCH_PD_ALT_ID_NO_USB);
     const uint8_t request[] = {4, 0x01, 0x80, 0x00, 0xFF};
     EXPECT_FALSE(switch_pd_alt_identity_response(request, sizeof(request)));
     const uint8_t other_svid[] = {4, 0x41, 0x80, 0x01, 0xFF};
     EXPECT_FALSE(switch_pd_alt_identity_response(other_svid, sizeof(other_svid)));
     const uint8_t nak[] = {4, 0x81, 0x80, 0x00, 0xFF};
     EXPECT_TRUE(switch_pd_alt_identity_response(nak, sizeof(nak)));
-    EXPECT_EQ(switch_pd_alt_identify(nak, sizeof(nak)), SWITCH_PD_ALT_ID_NOT_ACKED);
+}
+
+TEST(AltMode, PinDRefusalFallsBackToPinC)
+{
+    Session run;
+    run.dock_power = false;
+    run.model.status1 = kInsert | kDfp;
+    run.model.partner.dock = false;
+    run.model.partner.refuse_pin_d = true;
+    run.settle();
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+    EXPECT_EQ(run.alt.pin, SWITCH_PD_ALT_PIN_C);
+    EXPECT_EQ(run.alt.dp_lanes, 4);
+    EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_TAKEN);
+    EXPECT_EQ(run.model.configured, (std::vector<uint8_t>{0x06, 0x04, 0x00, 0x00}));
+    unsigned configureCount = 0;
+    for (const uint16_t cmd : run.model.commands) {
+        if (cmd == SWITCH_PD_ALT_CMD_DP_CONFIGURE)
+            ++configureCount;
+    }
+    EXPECT_EQ(configureCount, 2u);
+    EXPECT_TRUE(run.lines.empty());
+}
+
+TEST(AltMode, PinDAndPinCRefusalGivesUpAfterOneRetry)
+{
+    Session run;
+    run.dock_power = false;
+    run.model.status1 = kInsert | kDfp;
+    run.model.partner.dock = false;
+    run.model.partner.refuse_pin_d = true;
+    run.model.partner.refuse_pin_c = true;
+    run.settle();
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+    EXPECT_EQ(run.alt.dp_lanes, 0);
+    EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_FREE);
+    unsigned configureCount = 0;
+    for (const uint16_t cmd : run.model.commands) {
+        if (cmd == SWITCH_PD_ALT_CMD_DP_CONFIGURE)
+            ++configureCount;
+    }
+    EXPECT_EQ(configureCount, 2u);
+    EXPECT_EQ(run.lines, (std::vector<std::string>{"no DisplayPort: Configure refused"}));
 }
 
 TEST(PinChoice, MultifunctionPartnerCanRetainSuperSpeed)

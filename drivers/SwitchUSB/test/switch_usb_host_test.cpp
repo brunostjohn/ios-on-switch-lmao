@@ -459,6 +459,29 @@ TEST(SwitchUsbHostPowerRole, ControllerResolvesOtgBeforeTheClassifyDeadline)
     EXPECT_FALSE(port.boost || port.switches);
 }
 
+TEST(SwitchUsbHostPowerRole, PrSwapWhileSourcingTransitionsToSink)
+{
+    constexpr Status kMonitorAfterPrSwap = {SPDSNK | VSAFE | DFP | INSERT, 0};
+    Port port;
+    port.enter(EMPTY, "start");
+    port.alert(R7W_SINK_ATTACH);
+    EXPECT_EQ(port.phase, WAIT_ROLE);
+    port.alert(REATTACH_RAILS_UP, 1u << 13);
+    EXPECT_EQ(port.phase, SOURCE);
+    EXPECT_TRUE(port.boost && port.rails && port.switches);
+    port.events.clear();
+    port.alert(kMonitorAfterPrSwap, CONTRACT);
+    EXPECT_EQ(port.phase, SINK);
+    EXPECT_TRUE(port.rails);
+    EXPECT_FALSE(port.boost || port.switches || port.window);
+    EXPECT_EQ(port.events, (std::vector<Event>{{"switches", false}, {"boost", false}}));
+    EXPECT_TRUE(pd_usb_host(0, kMonitorAfterPrSwap.first));
+    EXPECT_FALSE(pd_usb_device_vbus(0, kMonitorAfterPrSwap.first));
+    port.alert({0, 0}, PLUGPULL);
+    EXPECT_EQ(port.phase, EMPTY);
+    EXPECT_TRUE(port.rails && port.switches);
+}
+
 TEST(SwitchUsbHostPowerRole, MacIsDualRole)
 {
     Port port;

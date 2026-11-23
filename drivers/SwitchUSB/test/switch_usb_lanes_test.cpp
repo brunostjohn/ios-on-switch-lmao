@@ -17,13 +17,16 @@ namespace {
 using Regs = std::map<uint32_t, uint32_t>;
 
 // What XusbSuperSpeed.cpp writes to bring the lane up and down, applied to a register model.
-void laneUp(Regs &r, std::vector<uint32_t> *elpgTrace = nullptr)
+void laneUp(Regs &r, bool b01 = true, std::vector<uint32_t> *elpgTrace = nullptr)
 {
-    for (const auto &write : xusb_b01_usb3_lane_data)
-        r[XUSB_PADCTL_UPHY_MISC_CTL8(XUSB_SS_LANE)] = xusb_uphy_cfg(write[0], write[1]);
-    r[XUSB_PADCTL_USB3_PAD_MUX] = xusb_pad_mux_ss(r[XUSB_PADCTL_USB3_PAD_MUX]);
+    const unsigned lane = xusb_ss_lane(b01);
+    if (b01) {
+        for (const auto &write : xusb_b01_usb3_lane_data)
+            r[XUSB_PADCTL_UPHY_MISC_CTL8(lane)] = xusb_uphy_cfg(write[0], write[1]);
+    }
+    r[XUSB_PADCTL_USB3_PAD_MUX] = xusb_pad_mux_ss(r[XUSB_PADCTL_USB3_PAD_MUX], b01);
     r[XUSB_PADCTL_SS_PORT_MAP] = xusb_ss_port_map(r[XUSB_PADCTL_SS_PORT_MAP]);
-    r[XUSB_PADCTL_USB3_ECTL(0, 1)] = xusb_ectl1(r[XUSB_PADCTL_USB3_ECTL(0, 1)]);
+    r[XUSB_PADCTL_USB3_ECTL(0, 1)] = xusb_ectl1(r[XUSB_PADCTL_USB3_ECTL(0, 1)], b01);
     r[XUSB_PADCTL_USB3_ECTL(0, 2)] = xusb_ectl2(r[XUSB_PADCTL_USB3_ECTL(0, 2)]);
     r[XUSB_PADCTL_USB3_ECTL(0, 3)] = XUSB_ECTL3;
     r[XUSB_PADCTL_USB3_ECTL(0, 4)] = xusb_ectl4(r[XUSB_PADCTL_USB3_ECTL(0, 4)]);
@@ -42,13 +45,15 @@ void laneDown(Regs &r, std::vector<uint32_t> *elpgTrace = nullptr)
         if (elpgTrace)
             elpgTrace->push_back(r[XUSB_PADCTL_ELPG_PROGRAM_1]);
     }
+    r[XUSB_PADCTL_SS_PORT_MAP] = xusb_ss_port_unmap(r[XUSB_PADCTL_SS_PORT_MAP]);
 }
 
-// Reset-like values with every bit outside SS port 0 and lane 5 set, so a stray write shows.
-Regs boardState()
+// Reset-like values with every bit outside SS port 0 and the SoC's SS lane set, so a stray write shows.
+Regs boardState(bool b01 = true)
 {
+    const unsigned lane = xusb_ss_lane(b01);
     return {
-        {XUSB_PADCTL_USB3_PAD_MUX, 0xffffffffu & ~(3u << 22) & ~(1u << 6)},
+        {XUSB_PADCTL_USB3_PAD_MUX, 0xffffffffu & ~(3u << XUSB_PAD_MUX_SHIFT(lane)) & ~XUSB_PAD_MUX_IDDQ_DISABLE(lane)},
         {XUSB_PADCTL_SS_PORT_MAP, 0x7777777u},
         {XUSB_PADCTL_ELPG_PROGRAM_1, 0xffffffffu},
         {XUSB_USB2_VBUS_ID, 0x12345678u},
@@ -379,21 +384,28 @@ TEST(SwitchUsbLanes, DockSessions)
 
 TEST(SwitchUsbLanes, UpAndDownTouchOnlyThePortsOwnBits)
 {
-    const Regs before = boardState();
-    Regs regs = before;
-    laneUp(regs);
-    EXPECT_EQ(regs[XUSB_PADCTL_USB3_PAD_MUX] & ~((3u << 22) | (1u << 6)), before.at(XUSB_PADCTL_USB3_PAD_MUX));
-    EXPECT_EQ((regs[XUSB_PADCTL_USB3_PAD_MUX] >> 22) & 3u, 1u) << "lane 5 carries xusb";
-    EXPECT_TRUE(regs[XUSB_PADCTL_USB3_PAD_MUX] & (1u << 6)) << "lane 5 out of IDDQ";
-    EXPECT_EQ(regs[XUSB_PADCTL_SS_PORT_MAP] & ~7u, before.at(XUSB_PADCTL_SS_PORT_MAP) & ~7u);
-    EXPECT_EQ(regs[XUSB_PADCTL_SS_PORT_MAP] & 7u, 0u) << "SS port 0 paired with USB2 port 0";
-    EXPECT_EQ(regs[XUSB_PADCTL_ELPG_PROGRAM_1], 0xffffffffu & ~7u);
-    for (const uint32_t untouched : {XUSB_USB2_VBUS_ID, XUSB_USB2_PORT_CAP, XUSB_CHRG_OTGPAD0_CTL0,
-                                     XUSB_PADCTL_UPHY_MISC_CTL8(0), XUSB_PADCTL_UPHY_MISC_CTL1(0)})
-        EXPECT_EQ(regs[untouched], before.at(untouched)) << std::hex << untouched;
-    laneDown(regs);
-    EXPECT_EQ(regs[XUSB_PADCTL_ELPG_PROGRAM_1], 0xffffffffu);
-    EXPECT_EQ(regs[XUSB_USB2_VBUS_ID], before.at(XUSB_USB2_VBUS_ID));
+    for (const bool b01 : {true, false}) {
+        SCOPED_TRACE(b01 ? "T210B01 pcie-5" : "T210 Erista pcie-6");
+        const unsigned lane = xusb_ss_lane(b01);
+        const uint32_t muxMask = (3u << XUSB_PAD_MUX_SHIFT(lane)) | XUSB_PAD_MUX_IDDQ_DISABLE(lane);
+        const Regs before = boardState(b01);
+        Regs regs = before;
+        laneUp(regs, b01);
+        EXPECT_EQ(regs[XUSB_PADCTL_USB3_PAD_MUX] & ~muxMask, before.at(XUSB_PADCTL_USB3_PAD_MUX));
+        EXPECT_EQ((regs[XUSB_PADCTL_USB3_PAD_MUX] >> XUSB_PAD_MUX_SHIFT(lane)) & 3u, 1u) << "lane carries xusb";
+        EXPECT_TRUE(regs[XUSB_PADCTL_USB3_PAD_MUX] & XUSB_PAD_MUX_IDDQ_DISABLE(lane)) << "lane out of IDDQ";
+        EXPECT_EQ(regs[XUSB_PADCTL_SS_PORT_MAP] & ~7u, before.at(XUSB_PADCTL_SS_PORT_MAP) & ~7u);
+        EXPECT_EQ(regs[XUSB_PADCTL_SS_PORT_MAP] & 7u, 0u) << "SS port 0 paired with USB2 port 0";
+        EXPECT_EQ(regs[XUSB_PADCTL_ELPG_PROGRAM_1], 0xffffffffu & ~7u);
+        for (const uint32_t untouched : {XUSB_USB2_VBUS_ID, XUSB_USB2_PORT_CAP, XUSB_CHRG_OTGPAD0_CTL0,
+                                         XUSB_PADCTL_UPHY_MISC_CTL8(0), XUSB_PADCTL_UPHY_MISC_CTL1(0)})
+            EXPECT_EQ(regs[untouched], before.at(untouched)) << std::hex << untouched;
+        laneDown(regs);
+        EXPECT_EQ(regs[XUSB_PADCTL_ELPG_PROGRAM_1], 0xffffffffu);
+        EXPECT_EQ(regs[XUSB_PADCTL_SS_PORT_MAP], before.at(XUSB_PADCTL_SS_PORT_MAP))
+            << "SS port 0 unmapped to disabled (7) on lane-down";
+        EXPECT_EQ(regs[XUSB_USB2_VBUS_ID], before.at(XUSB_USB2_VBUS_ID));
+    }
 }
 
 // tegra210_pcie_phy_power_on/off: VCORE_DOWN, CLAMP_EN_EARLY, CLAMP_EN cleared in that order; set back in reverse.
@@ -402,7 +414,7 @@ TEST(SwitchUsbLanes, ClampOrderAsLinux)
     Regs regs = {{XUSB_PADCTL_ELPG_PROGRAM_1, 7u}};
     std::vector<uint32_t> up;
     std::vector<uint32_t> down;
-    laneUp(regs, &up);
+    laneUp(regs, true, &up);
     EXPECT_EQ(up, (std::vector<uint32_t>{3u, 1u, 0u}));
     laneDown(regs, &down);
     EXPECT_EQ(down, (std::vector<uint32_t>{2u, 3u, 7u}));
@@ -414,12 +426,18 @@ TEST(SwitchUsbLanes, ClampOrderAsLinux)
 
 TEST(SwitchUsbLanes, PadSettingsAsLinuxAndProds)
 {
+    EXPECT_EQ(xusb_ss_lane(true), 5u);
+    EXPECT_EQ(xusb_ss_lane(false), 6u);
     EXPECT_EQ(XUSB_PADCTL_UPHY_MISC_CTL8(5), 0x5bcu);
     EXPECT_EQ(XUSB_PADCTL_UPHY_MISC_CTL1(5), 0x5a0u);
+    EXPECT_EQ(XUSB_PADCTL_UPHY_MISC_CTL8(6), 0x5fcu);
+    EXPECT_EQ(XUSB_PADCTL_UPHY_MISC_CTL1(6), 0x5e0u);
     EXPECT_EQ(XUSB_PADCTL_USB3_ECTL(0, 1), 0xa60u);
     EXPECT_EQ(XUSB_PADCTL_USB3_ECTL(0, 6), 0xa74u);
-    EXPECT_EQ(xusb_ectl1(0), 0x20027u);
-    EXPECT_EQ(xusb_ectl1(0xffffffffu), 0xfffeffe7u);
+    EXPECT_EQ(xusb_ectl1(0, true), 0x20027u);
+    EXPECT_EQ(xusb_ectl1(0xffffffffu, true), 0xfffeffe7u);
+    EXPECT_EQ(xusb_ectl1(0, false), 0x20000u);
+    EXPECT_EQ(xusb_ectl1(0xffffffffu, false), 0xfffeffffu);
     EXPECT_EQ(xusb_ectl2(0xabcd1234u), 0xabcd00fcu);
     EXPECT_EQ(xusb_ectl4(0x1234abcdu), 0x01c7abcdu);
     ASSERT_EQ(XUSB_B01_USB3_LANE_WRITES, 11u);

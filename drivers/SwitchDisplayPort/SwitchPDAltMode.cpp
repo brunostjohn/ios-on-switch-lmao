@@ -104,7 +104,7 @@ void timerFired(OSObject *, IOTimerEventSource *)
 }  // namespace
 
 void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest_of)(const void *), uint16_t alert,
-                         uint16_t status1, bool port_session, bool dock_power, bool ufp_discovery_allowed)
+                         uint16_t status1, bool port_session, bool dock_power)
 {
     if (gTimer == nullptr) {
         switch_pd_alt_init(&gAlt, kWantDisplayPort);
@@ -123,7 +123,7 @@ void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest_of)(con
         (void)tegra_i2c_read(kBus, kPD, DP_STATUS, raw, sizeof(raw));
         dp_status = static_cast<uint16_t>(raw[0] | static_cast<unsigned>(raw[1]) << 8U);
     }
-    const struct switch_pd_alt_in in = {alert, status1, dp_status, port_session, at_rest, dock_power, ufp_discovery_allowed};
+    const struct switch_pd_alt_in in = {alert, status1, dp_status, port_session, at_rest, dock_power};
     const enum switch_pd_alt_step before = gAlt.step;
     const struct switch_pd_alt_out out = switch_pd_alt_event(&gAlt, &in);
     if (!port_session || (alert & SWITCH_PD_ALT_ALERT_PLUGPULL) != 0)

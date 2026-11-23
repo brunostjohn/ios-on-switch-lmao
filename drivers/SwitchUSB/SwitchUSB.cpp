@@ -253,16 +253,13 @@ void applyRole(thread_call_param_t, thread_call_param_t)
         switch_usb_ss_clamp();
         gSsUp = false;
         switchxhci_set_host_role(false);
-        followLane(attached);
-        switchxudc_set_vbus(deviceVbus, deviceLaneReady());
         switchxudc_set_host_owns_port(false);
         IOLog("SwitchUSB: device role\n");
         switch_usb_dma_session_end();
         armReport();
     }
-    followLane(attached);
-    switchxudc_set_vbus(deviceVbus && !gHostRole, deviceLaneReady());
     applyLanes(attached);
+    switchxudc_set_vbus(deviceVbus && !gHostRole, deviceLaneReady());
 }
 
 void usbThread(void *, wait_result_t)

@@ -62,7 +62,6 @@ static inline const char *xusb_lanes_name(enum switch_usb3_lanes lanes)
 
 // --- XUSB pad controller ---------------------------------------------------------------------------------------------
 #define XUSB_SS_PORT                  0u  // the USB-C port's SuperSpeed port (usb3-0)
-#define XUSB_SS_LANE                  5u  // its UPHY lane, pcie-5
 #define XUSB_PADCTL_SS_PORT_MAP       0x014u
 #define XUSB_PADCTL_ELPG_PROGRAM_1    0x024u
 #define XUSB_PADCTL_USB3_PAD_MUX      0x028u
@@ -102,23 +101,37 @@ static const uint16_t xusb_b01_usb3_lane_data[][2] = {
 };
 #define XUSB_B01_USB3_LANE_WRITES (sizeof(xusb_b01_usb3_lane_data) / sizeof(xusb_b01_usb3_lane_data[0]))
 
-// Lane 5 to the XUSB, out of IDDQ.
-static inline uint32_t xusb_pad_mux_ss(uint32_t v)
+// T210B01 routes usb3-0 through pcie-5 (tegra210b01-nx-common.dtsi); T210 Erista through pcie-6 (tegra210-odin-common.dtsi).
+static inline unsigned xusb_ss_lane(bool b01)
 {
-    return (v & ~(3u << XUSB_PAD_MUX_SHIFT(XUSB_SS_LANE))) |
-           (XUSB_PAD_MUX_FUNCTION_XUSB << XUSB_PAD_MUX_SHIFT(XUSB_SS_LANE)) | XUSB_PAD_MUX_IDDQ_DISABLE(XUSB_SS_LANE);
+    return b01 ? 5u : 6u;
 }
 
-// SS port 0 paired with USB2 port 0.
+// SS port 0's UPHY lane to XUSB, out of IDDQ.
+static inline uint32_t xusb_pad_mux_ss(uint32_t v, bool b01)
+{
+    const unsigned lane = xusb_ss_lane(b01);
+    return (v & ~(3u << XUSB_PAD_MUX_SHIFT(lane))) |
+           (XUSB_PAD_MUX_FUNCTION_XUSB << XUSB_PAD_MUX_SHIFT(lane)) | XUSB_PAD_MUX_IDDQ_DISABLE(lane);
+}
+
+// SS port 0 paired with USB2 port 0, or unmapped when the lane goes down.
 static inline uint32_t xusb_ss_port_map(uint32_t v)
 {
     return (v & ~XUSB_SS_PORT_MAP_MASK(XUSB_SS_PORT)) | XUSB_SS_PORT_MAP(XUSB_SS_PORT, 0u);
 }
 
-// The SS pad's equalisation (tegra210_pcie_phy_power_on, then prod_c_ss0 over ECTL_1).
-static inline uint32_t xusb_ectl1(uint32_t v)
+static inline uint32_t xusb_ss_port_unmap(uint32_t v)
 {
-    return (v & ~((3u << 16) | 0x3fu)) | (2u << 16) | 0x27u;
+    return (v & ~XUSB_SS_PORT_MAP_MASK(XUSB_SS_PORT)) | XUSB_SS_PORT_MAP(XUSB_SS_PORT, XUSB_SS_PORT_MAP_DISABLED);
+}
+
+// The SS pad's equalisation (tegra210_pcie_phy_power_on, then prod_c_ss0 over ECTL_1; char 0x27 is B01-only).
+static inline uint32_t xusb_ectl1(uint32_t v, bool b01)
+{
+    const uint32_t mask = (3u << 16) | (b01 ? 0x3fu : 0u);
+    const uint32_t value = (2u << 16) | (b01 ? 0x27u : 0u);
+    return (v & ~mask) | value;
 }
 
 static inline uint32_t xusb_ectl2(uint32_t v)
