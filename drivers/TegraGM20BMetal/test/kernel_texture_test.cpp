@@ -42,9 +42,9 @@ TEST(KernelTexture, ATwoPlaneTextureIsCompiledForAsItsStandIn)
 }
 
 // A kernel sampling a BGR10_XR texture through a mip filter, anisotropy or mixed min and mag filters has no form over
-// the codes (the translator's NotImplemented(Format)): one no kernel can store is read through its RGBA16Float
-// stand-in, which the GM20B filters; one a kernel may store keeps its codes, which its stores write
-TEST(KernelTexture, AnExtendedRangeTextureNoKernelStoresIsCompiledForAsItsStandIn)
+// the codes (the translator's NotImplemented(Format)): one a kernel does not read by its codes is read through its
+// RGBA16Float stand-in, which the GM20B filters; one it does keeps its codes
+TEST(KernelTexture, AnExtendedRangeTextureNoKernelReadsByItsCodesIsCompiledForAsItsStandIn)
 {
     const Texture standIn;
     Texture codes;
@@ -103,6 +103,73 @@ TEST(KernelTexture, TheSlotsAKernelStoresAreItsWritableTextureBindings)
     const uint32_t edges[] = {0, 1, 2, 3};
     const Range kernel = {0, 4};
     EXPECT_EQ(gm20b::kernelTexturesWritten(View{&kernel, nodes, edges}), 1u << 3 | 1u << 5 | 1u << 6);
+}
+
+// The slots a kernel reads as floats are its texture bindings of float components, not half ones nor a buffer's
+TEST(KernelTexture, TheSlotsAKernelReadsAsFloatsAreItsFloatTextureBindings)
+{
+    struct Node {
+        uint64_t values[8];
+    };
+
+    struct Range {
+        uint32_t first, count;
+    };
+
+    struct View {
+        const Range *stages;
+        const Node *nodes;
+        const uint32_t *edges;
+    };
+
+    const Node nodes[] = {{{2, 0, 0, 0, 0, 0, 3, 1}},    // texture 0, float
+                          {{2, 0, 1, 0, 0, 0, 16, 1}},   // texture 1, half
+                          {{2, 1, 4, 0, 0, 0, 3, 2}},    // textures 4 and 5, float
+                          {{0, 0, 2, 3, 0, 0, 16, 0}}};  // buffer 2 of floats
+    const uint32_t edges[] = {0, 1, 2, 3};
+    const Range kernel = {0, 4};
+    EXPECT_EQ(gm20b::kernelTexturesFloat(View{&kernel, nodes, edges}), 1u << 0 | 1u << 4 | 1u << 5);
+    EXPECT_EQ(gm20b::kernelTexturesWritten(View{&kernel, nodes, edges}), 1u << 4 | 1u << 5);
+}
+
+// gpu.compute.exact_round (boot 2): 6,628 of BGR10_XR's and BGRA10_XR's float channels read through the RGBA16Float
+// stand-in were a half's rounding off, every half read right. A slot read as floats takes the codes beside samplers
+// the translator's fetches all take; a slot a kernel may store of a texture made with ShaderWrite takes them as before
+TEST(KernelTexture, AFloatReadTakesTheCodesBesideSamplersTheFetchesTake)
+{
+    const uint32_t floats = 1u << 2, written = 1u << 5;
+    EXPECT_TRUE(gm20b::kernelReadsCodes(2, false, written, floats, true));
+    EXPECT_FALSE(gm20b::kernelReadsCodes(2, false, written, floats, false)) << "beside a mip filter";
+    EXPECT_FALSE(gm20b::kernelReadsCodes(3, false, written, floats, true)) << "a half read";
+    EXPECT_TRUE(gm20b::kernelReadsCodes(5, true, written, floats, false));
+    EXPECT_FALSE(gm20b::kernelReadsCodes(5, false, written, floats, true)) << "made without ShaderWrite";
+}
+
+// m2v's extended_sampler takes a cubic filter, or one filter for minification and magnification with no mip filter and
+// no anisotropy (MTLSamplerMinMagFilter: nearest 0, linear 1, cubic 2)
+TEST(KernelTexture, TheCodesFetchesTakeOneFilterAndNoMipFilterOrAnisotropy)
+{
+    EXPECT_TRUE(gm20b::xrCodesSampler(0, 0, 0, 1));
+    EXPECT_TRUE(gm20b::xrCodesSampler(1, 1, 0, 1));
+    EXPECT_TRUE(gm20b::xrCodesSampler(2, 1, 0, 1));
+    EXPECT_FALSE(gm20b::xrCodesSampler(1, 0, 0, 1));
+    EXPECT_FALSE(gm20b::xrCodesSampler(0, 0, 1, 1));
+    EXPECT_FALSE(gm20b::xrCodesSampler(1, 1, 2, 1));
+    EXPECT_FALSE(gm20b::xrCodesSampler(1, 1, 0, 4));
+}
+
+// A kernel reading an extended-range texture's codes over rows off 32 bytes reaches them through its pool image, which
+// the encoder fills; one reading its stand-in reads the stand-in
+TEST(KernelTexture, ACodesReadOfAPooledTextureGoesThroughItsShadow)
+{
+    const Texture standIn, image;
+    Texture t;
+    t.standIn = &standIn;
+    t.sampled = &image;
+    EXPECT_EQ(gm20b::kernelTextureForm(t), KernelTextureForm::StandIn);
+    EXPECT_EQ(gm20b::kernelTextureForm(t, false), KernelTextureForm::Shadow);
+    t.sampled = nullptr;
+    EXPECT_EQ(gm20b::kernelTextureForm(t, false), KernelTextureForm::InPlace);
 }
 
 TEST(KernelTexture, AMipmappedTextureIsSampledInPlace)
