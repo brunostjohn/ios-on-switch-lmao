@@ -21,7 +21,7 @@ constexpr uint64_t kSor1PA = 0x54580000;
 constexpr unsigned kClockSor1 = 183, kPartitionSor = 17, kPadLvds = 32 + 25, kPmicBus = 5;
 constexpr uint8_t kPmic = 0x3c, kLdo8Config = 0x33, kLdo8On1V0 = (3u << 6) | 4u, kLdo8Off = 4u;
 constexpr unsigned kHead = 1;  // display controller B
-constexpr uint32_t kHandshakeUs = 10000;
+constexpr uint32_t kHandshakeUs = 100000;
 
 enum : uint32_t {
     CLK_SOURCE_DISP2 = 0x13c,

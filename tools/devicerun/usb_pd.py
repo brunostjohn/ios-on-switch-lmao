@@ -21,11 +21,12 @@ USB_PD = [
     Check(
         'usb.pd.classified',
         OWNER,
-        'SwitchPD: classifying: the partner came up as our sink',
+        'the partner came up as our sink',
         process=KERNEL,
+        regex=r'SwitchPD: (?:classifying|waiting for source): the partner came up as our sink',
         followed='usb.pd.decision',
         within=3.0,
-        failure='a classify window ended with no decision',
+        failure='a classify or source-wait window ended with no decision',
         source=POLICY,
     ),
     Check(
@@ -56,9 +57,10 @@ USB_PD = [
     Check(
         'usb.pd.came',
         OWNER,
-        ('SwitchPD: sink: the partner ', 'SwitchPD: classifying: the partner came up as our sink'),
+        ('SwitchPD: sink: the partner ', 'the partner came up as our sink'),
         TIMELINE,
         process=KERNEL,
+        regex=r'SwitchPD: (?:sink: the partner |(?:classifying|waiting for source): the partner came up as our sink)',
         source=f'{POLICY}, {PD}',
         note='a partner on the empty port',
     ),
@@ -96,9 +98,9 @@ USB_PD = [
     Check(
         'usb.pd.ufp-write',
         OWNER,
-        'SwitchPD: incoming data role swaps accepted as UFP',
+        'SwitchPD: incoming ',
         process=KERNEL,
-        regex='UFP: write failed',
+        regex=r'incoming .*write failed',
         source=SETTINGS,
     ),
     Check(

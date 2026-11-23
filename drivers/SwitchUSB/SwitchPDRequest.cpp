@@ -59,7 +59,8 @@ void SwitchPD::negotiate(uint16_t alertBits)
     if (!sinkSession) {
         if (nego != Nego::Idle || state.pdSource || state.contractMillivolts)
             endNegotiation();
-        if (phase == SWITCH_PD_SOURCE && state.plugged && (alertBits & SWITCH_PD_ALERT_CONTRACT))
+        if (phase == SWITCH_PD_SOURCE && state.plugged &&
+            (alertBits & (SWITCH_PD_ALERT_CONTRACT | SWITCH_PD_ALERT_SRC_PLUGIN)))
             explicitContract = true;
         return;
     }
@@ -75,7 +76,8 @@ void SwitchPD::negotiate(uint16_t alertBits)
                 nego = Nego::WaitPdos;
                 negoTimer->setTimeoutMS(kPdoWaitMS);
             }
-        } else if (nego == Nego::Idle && (state.status1 & SWITCH_PD_STATUS1_SPDSNK)) {
+        } else if (nego == Nego::Idle && !(alertBits & SWITCH_PD_ALERT_PR_SWAP) &&
+                   (state.status1 & SWITCH_PD_STATUS1_SPDSNK)) {
             choose();  // already sinking on a contract made before this boot (bm92txx first_init)
         }
         break;

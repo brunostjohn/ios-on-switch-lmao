@@ -17,7 +17,7 @@ constexpr uint64_t kDpaux1PA = 0x54040000, kPinmuxPA = 0x70003000;
 // PINMUX_AUX_HDMI_INT_DP_HPD (PCC1) as the OLED DTB's pinmux has it: function 0 (DP, into DPAUX1), no pull, output
 // tri-stated, input on, not high-voltage. Nothing in the boot chain applies that table.
 constexpr uint32_t kPinmuxHpd = 0x19c, kPinmuxClear = 0xfu | (1u << 10), kPinmuxSet = (1u << 4) | (1u << 6);
-constexpr unsigned kClockDpaux1 = 207, kClockSorSafe = 222;
+constexpr unsigned kClockDpaux1 = 207, kClockSorSafe = 222, kPartitionSor = 17;
 
 enum : uint32_t {
     PLLDP_BASE = 0x590,
@@ -95,16 +95,22 @@ bool TegraDpaux1::powerUp(char *why, size_t size)
         base = switch_mmio_map(kDpaux1PA, 0x1000);
         pinmux = switch_mmio_map(kPinmuxPA, 0x1000);
     }
+    if (!switch_pmc_partition_is_on(kPartitionSor) &&
+        !switch_pmc_power_up(kPartitionSor, kClockDpaux1, kClockDpaux1, nullptr)) {
+        snprintf(why, size, "the SOR power partition did not come up");
+        return false;
+    }
     if (!startPllDp(why, size)) {
         return false;
     }
+    switch_car_reset_assert(kClockDpaux1);
     switch_car_clock_enable(kClockSorSafe);
     switch_car_clock_enable(kClockDpaux1);
     if (!switch_car_clock_enabled(kClockSorSafe) || !switch_car_clock_enabled(kClockDpaux1)) {
         snprintf(why, size, "DPAUX1 or SOR_SAFE clock did not enable");
         return false;
     }
-    IOSleep(1);
+    IOSleep(2);
     switch_car_reset_deassert(kClockDpaux1);
     IOSleep(1);
     switch_mmio_rmw32(pinmux, kPinmuxHpd, kPinmuxClear, kPinmuxSet);

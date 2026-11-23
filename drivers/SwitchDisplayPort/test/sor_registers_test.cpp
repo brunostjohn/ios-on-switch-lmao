@@ -113,6 +113,10 @@ protected:
                 registers[kCar + 0x298] |= value;
             if (address == kCar + 0x2a0)
                 registers[kCar + 0x298] &= ~value;
+            if (address == kCar + 0x2a8)
+                registers[kCar + 0x2a4] |= value;
+            if (address == kCar + 0x2ac)
+                registers[kCar + 0x2a4] &= ~value;
             if (address == kPmc + 0x1c0) {
                 if ((value >> 30) == 1)
                     registers[kPmc + 0x1c4] &= ~(value & 0x3fffffffu);
@@ -479,6 +483,31 @@ TEST_F(SorRegisters, AttachAndWakeFollowTrmHandshakeOrder)
     ASSERT_TRUE(sor.wake(why, sizeof(why))) << why;
     EXPECT_EQ(xusbWritesTo(kSuperState1), (std::vector<uint32_t>{0xeu}));
     EXPECT_EQ(xusbModel().registers.at(kTest), (1u << 10) | (2u << 8));
+}
+
+TEST_F(SorRegisters, DpauxPowerUpBringsUpSorPartitionAndPulsesReset)
+{
+    auto &r = xusbModel().registers;
+    r[kPmc + 0x038] = 0;  // SOR partition 17 initially off
+    xusbModel().log.clear();
+    TegraDpaux1 aux;
+    ASSERT_TRUE(aux.powerUp(why, sizeof(why))) << why;
+    EXPECT_NE(r[kPmc + 0x038] & (1u << 17), 0u);
+    const long toggle = firstMaskedWrite(kPmc + 0x030, 0xffffffff, (1u << 8) | 17u);
+    const long unclamp = firstMaskedWrite(kPmc + 0x034, 1u << 17, 1u << 17, toggle);
+    const long pllEnable = firstMaskedWrite(kPllDp, 1u << 30, 1u << 30, unclamp);
+    const long resetAssert = firstMaskedWrite(kCar + 0x2a8, 1u << 15, 1u << 15, pllEnable);
+    const long clkEnable = firstMaskedWrite(kCar + 0x29c, 1u << 15, 1u << 15, resetAssert);
+    const long resetDeassert = firstMaskedWrite(kCar + 0x2ac, 1u << 15, 1u << 15, clkEnable);
+    const long padConfig = xusbFirstWrite(kDpauxPadctl);
+    for (const long ev : {toggle, unclamp, pllEnable, resetAssert, clkEnable, resetDeassert, padConfig})
+        ASSERT_GE(ev, 0);
+    EXPECT_LT(toggle, unclamp);
+    EXPECT_LT(unclamp, pllEnable);
+    EXPECT_LT(pllEnable, resetAssert);
+    EXPECT_LT(resetAssert, clkEnable);
+    EXPECT_LT(clkEnable, resetDeassert);
+    EXPECT_LT(resetDeassert, padConfig);
 }
 
 TEST_F(SorRegisters, PacksTheConfiguredCrossbarDriveBytes)

@@ -21,12 +21,12 @@
 // re-balancing, a source reset) withdraws the published one and starts over; three failed requests in one session end
 // the attempts until the cable is pulled. Every step is a reply to an ALERT or a one-shot timer.
 //
-// Fixed source rails (v_vdd5v3 on PX3, VCONN on PK5) and BQ24193 boost stay off in Empty, Classify, Sink and Held,
-// and turn on only in Reattach and Source (before arming SPDSRC12_ON in Reattach). An initial SRC_MODE/OTG_INSERT
-// looks identical for a sink-only adapter and a dual-role partner (a Mac or monitor). Open the source switches for
-// kClassifyMS to classify it: a dual-role partner then sources VBUS (Sink), while a sink-only partner detaches and is
-// powered across the reattach window. External VBUS blocks boost unless our own enabled source switch accounts for it.
-// Faults and host shutdown isolate the source.
+// Fixed VBUS rail (v_vdd5v3 on PX3) and BQ24193 boost stay off in Empty, Classify, Sink and Held, and turn on only in
+// WaitSource and Source. VCONN (PK5) stays on in WaitSource and Source, and in Sink only while STATUS2.VCONN_ON holds
+// (e-marked cable across PR_Swap). Keeping SPDSRC12_ON armed across Empty -> WaitSource lets Try.SNK monitors settle
+// without dropping Rp; once Source begins, a PR_Swap probe asks dual-role partners to take back VBUS, and verified USB
+// hosts that refuse drop to Classify (source switches off 1 s). External VBUS blocks boost unless our own enabled source
+// switch accounts for it. Faults and host shutdown isolate the source.
 // One kernel log line per decision, with the controller's bits. The decisions are SwitchPDPolicy.h (host-tested).
 //
 // Interrupt only: a pin that cannot be attached panics; a pin that keeps firing (stuck low: more than 50 ALERTs in a
@@ -55,7 +55,7 @@ struct SwitchPDState {
     bool vbusPresent;        // STATUS1.VSAFE: VBUS at vSafe5V or a contract (ours when role is SOURCE)
     bool dataHost;           // STATUS1 data role DFP
     enum SwitchPDRole role;  // the power role decided (above)
-    bool settled;            // not while a partner is being classified (Classify, Reattach): its role is still open
+    bool settled;            // false while WaitSource, Classify, Held, or Source PR_Swap probe is in flight
     // USB-PD request (above), sink sessions only; all 0/false outside one.
     bool pdSource;                 // the partner sent USB-PD source capabilities
     uint16_t contractMillivolts;   // the published (requested and verified) contract, 0 = none

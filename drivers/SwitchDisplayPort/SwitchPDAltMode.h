@@ -20,6 +20,7 @@ extern "C" {
 
 #define SWITCH_PD_ALT_ALERT_CMD_DONE     (1u << 2)
 #define SWITCH_PD_ALT_ALERT_PLUGPULL     (1u << 3)
+#define SWITCH_PD_ALT_ALERT_PR_SWAP      (1u << 4)
 #define SWITCH_PD_ALT_ALERT_VDM_RECEIVED (1u << 11)
 #define SWITCH_PD_ALT_ALERT_CONTRACT     (1u << 12)
 #define SWITCH_PD_ALT_STATUS1_LASTCMD    (7u << 4)
@@ -52,6 +53,7 @@ enum switch_pd_alt_step {
     SWITCH_PD_ALT_IDLE,
     SWITCH_PD_ALT_STALE_EXIT,  // an earlier boot left DisplayPort configured
     SWITCH_PD_ALT_DR_SWAP,
+    SWITCH_PD_ALT_DR_SWAP_TO_UFP,
     SWITCH_PD_ALT_DISCOVER_ID,
     SWITCH_PD_ALT_DISCOVER_SVID,
     SWITCH_PD_ALT_DISCOVER_MODE,
@@ -96,8 +98,9 @@ struct switch_pd_alt {
     bool dock_power;  // the source's PDOs are the dock's signature (SwitchChargePolicy.h): swapped without asking
     bool as_ufp;      // the session began as UFP and has not become DFP: a swap by the partner restarts it
     bool accepted;    // the step's VDM was answered and ACCEPT went out: its CMD_DONE means the reply is readable
-    bool paused;      // a contract alert while a command was out: the step goes again once SwitchPD is at rest
+    bool paused;      // a contract/PR_Swap alert or aborted VDM: the step goes again once SwitchPD is at rest
     bool dock, old_dock_firmware, hub_enabled;
+    bool is_source, partner_is_usb_host, vdm_retried;
     uint8_t offered_pins, pin, dp_lanes, hub_tries;
     uint8_t configure[4];
     enum switch_pd_alt_lanes lanes;
@@ -106,8 +109,8 @@ struct switch_pd_alt {
 static inline void switch_pd_alt_init(struct switch_pd_alt *alt, bool want_dp)
 {
     const struct switch_pd_alt fresh = {
-        SWITCH_PD_ALT_IDLE, want_dp, false, false, false, false, false, false, false, 0, 0, 0, 0, {0, 0, 0, 0},
-        SWITCH_PD_ALT_LANES_FREE};
+        SWITCH_PD_ALT_IDLE, want_dp, false, false, false, false, false, false, false, false, false, false,
+        0,                  0,       0,     0,     {0, 0, 0, 0}, SWITCH_PD_ALT_LANES_FREE};
     *alt = fresh;
 }
 

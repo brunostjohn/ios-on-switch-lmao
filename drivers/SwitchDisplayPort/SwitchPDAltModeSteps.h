@@ -31,6 +31,7 @@ static inline struct switch_pd_alt_out switch_pd_alt_send(struct switch_pd_alt *
     case SWITCH_PD_ALT_STALE_EXIT:
         return switch_pd_alt_command(SWITCH_PD_ALT_CMD_DP_EXIT, SWITCH_PD_ALT_REPLY_MS);
     case SWITCH_PD_ALT_DR_SWAP:
+    case SWITCH_PD_ALT_DR_SWAP_TO_UFP:
         return switch_pd_alt_command(SWITCH_PD_ALT_CMD_DR_SWAP, SWITCH_PD_ALT_REPLY_MS);
     case SWITCH_PD_ALT_DISCOVER_ID:
         return switch_pd_alt_structured(0x01, 0, 0xFF00);
@@ -77,6 +78,7 @@ static inline struct switch_pd_alt_out switch_pd_alt_send(struct switch_pd_alt *
 static inline struct switch_pd_alt_out switch_pd_alt_go(struct switch_pd_alt *alt, enum switch_pd_alt_step step)
 {
     alt->step = step;
+    alt->vdm_retried = false;
     return switch_pd_alt_send(alt);
 }
 
@@ -142,33 +144,50 @@ static inline struct switch_pd_alt_out switch_pd_alt_begin(struct switch_pd_alt 
     return switch_pd_alt_finish(alt, SWITCH_PD_ALT_FAILED, "no data role to swap from");
 }
 
-// Just before DR_SWAP goes to COMMAND, with STATUS1 read again: a partner that swapped the roles itself since has made
-// us DFP already, and our DR_SWAP would swap them back.
+// Just before DR_SWAP goes to COMMAND, with STATUS1 read again: avoid swapping back if the partner already swapped us.
 static inline struct switch_pd_alt_out switch_pd_alt_before_swap(struct switch_pd_alt *alt,
                                                                  struct switch_pd_alt_out out, uint16_t status1)
 {
-    if (out.act != SWITCH_PD_ALT_COMMAND || out.command != SWITCH_PD_ALT_CMD_DR_SWAP ||
-        switch_pd_alt_data_role(status1) != SWITCH_PD_ALT_DATA_ROLE_DFP) {
+    if (out.act != SWITCH_PD_ALT_COMMAND || out.command != SWITCH_PD_ALT_CMD_DR_SWAP) {
         return out;
     }
-    struct switch_pd_alt_out discover = switch_pd_alt_discover(alt);
-    discover.line = "the partner swapped the data roles first: Discover Identity as DFP";
-    return discover;
+    const unsigned role = switch_pd_alt_data_role(status1);
+    if (alt->step == SWITCH_PD_ALT_DR_SWAP && role == SWITCH_PD_ALT_DATA_ROLE_DFP) {
+        struct switch_pd_alt_out discover = switch_pd_alt_discover(alt);
+        discover.line = "the partner swapped the data roles first: Discover Identity as DFP";
+        return discover;
+    }
+    if (alt->step == SWITCH_PD_ALT_DR_SWAP_TO_UFP && role == SWITCH_PD_ALT_DATA_ROLE_UFP) {
+        return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, "yielded data role to USB host");
+    }
+    return out;
 }
 
-// The partner's answer to Discover Identity as DFP: the dock goes into its own mode, anyone else on to DisplayPort.
+// The partner's answer to Discover Identity as DFP: the dock goes into its own mode, a USB host gets our data role
+// (or triggers SwitchPD's yield if we are still sourcing), anyone else goes on to DisplayPort.
 static inline struct switch_pd_alt_out switch_pd_alt_partner_identified(struct switch_pd_alt *alt, const uint8_t *vdm,
                                                                         size_t len)
 {
     if (!switch_pd_alt_identity_response(vdm, len) || !switch_pd_alt_acked(vdm, 0x01) || len < 17) {
         return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, "no alternate modes: Discover Identity not acked");
     }
-    const unsigned vid = (unsigned)vdm[5] | (unsigned)vdm[6] << 8U;
-    const unsigned type = ((unsigned)vdm[8] >> 3U) & 7U;
+    const uint32_t id_header = (uint32_t)vdm[5] | ((uint32_t)vdm[6] << 8U) | ((uint32_t)vdm[7] << 16U) |
+                               ((uint32_t)vdm[8] << 24U);
+    const bool host_capable = (id_header & (1u << 31)) != 0;
+    const unsigned ufp_type = (id_header >> 27U) & 7U;
+    const unsigned dfp_type = (id_header >> 23U) & 7U;
+    const unsigned vid = (unsigned)(id_header & 0xFFFFu);
     const unsigned pid = (unsigned)vdm[15] | (unsigned)vdm[16] << 8U;
-    alt->dock = type == 5 && vid == 0x057E && pid == 0x2003;
+    alt->dock = ufp_type == 5 && vid == 0x057E && pid == 0x2003;
     if (alt->dock) {
         return switch_pd_alt_go(alt, SWITCH_PD_ALT_ENTER_DOCK);
+    }
+    if (host_capable && ufp_type != 5 && (dfp_type == 2 || vid == 0x05AC)) {
+        alt->partner_is_usb_host = true;
+        if (!alt->is_source) {
+            return switch_pd_alt_go(alt, SWITCH_PD_ALT_DR_SWAP_TO_UFP);
+        }
+        return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, "USB host partner while sourcing");
     }
     if (!alt->want_dp) {
         return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, NULL);
@@ -255,6 +274,7 @@ struct switch_pd_alt_in {
     bool port_session;  // explicit SOP contract in the current attachment
     bool at_rest;       // SwitchPD's own USB-PD request is not using COMMAND (published, settling or given up)
     bool dock_power;    // the source's PDOs carry the dock's signature
+    bool is_source;     // we are currently the power source
 };
 
 static inline bool switch_pd_alt_waiting_on_chip(const struct switch_pd_alt *alt)
@@ -293,6 +313,12 @@ static inline struct switch_pd_alt_out switch_pd_alt_done(struct switch_pd_alt *
             return switch_pd_alt_finish(alt, SWITCH_PD_ALT_FAILED, "the partner refused the data role swap");
         }
         return switch_pd_alt_discover(alt);
+    case SWITCH_PD_ALT_DR_SWAP_TO_UFP:
+        return switch_pd_alt_finish(
+            alt, SWITCH_PD_ALT_DONE,
+            last == 0 && switch_pd_alt_data_role(status1) == SWITCH_PD_ALT_DATA_ROLE_UFP
+                ? "yielded data role to USB host"
+                : "USB host partner did not accept data role swap to UFP");
     case SWITCH_PD_ALT_DP_DISCOVER: {
         if (last != 0) {
             return switch_pd_alt_after_dp(alt, "no DisplayPort: discovery failed");
@@ -337,6 +363,19 @@ static inline bool switch_pd_alt_vdm_step(enum switch_pd_alt_step step)
     }
 }
 
+static inline struct switch_pd_alt_out switch_pd_alt_vdm_failed(struct switch_pd_alt *alt, const char *why)
+{
+    if (alt->step == SWITCH_PD_ALT_DOCK_DP_SLEEP)
+        return switch_pd_alt_go(alt, SWITCH_PD_ALT_DOCK_DP_WAKE);
+    if (alt->step == SWITCH_PD_ALT_DOCK_DP_WAKE)
+        return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, "VDM command failed restoring the dock DP signal");
+    if (alt->step == SWITCH_PD_ALT_DOCK_QUERY || alt->step == SWITCH_PD_ALT_DOCK_LED ||
+        alt->step == SWITCH_PD_ALT_HUB_ENABLE) {
+        return switch_pd_alt_finish(alt, SWITCH_PD_ALT_DONE, "dock VDM command failed (its hub stays off)");
+    }
+    return switch_pd_alt_finish(alt, SWITCH_PD_ALT_FAILED, why);
+}
+
 // Every ALERT (and SwitchPD's first look at the port), on SwitchPD's work loop after its own handling.
 static inline struct switch_pd_alt_out switch_pd_alt_event(struct switch_pd_alt *alt, const struct switch_pd_alt_in *in)
 {
@@ -345,7 +384,9 @@ static inline struct switch_pd_alt_out switch_pd_alt_event(struct switch_pd_alt 
         (alt->step != SWITCH_PD_ALT_IDLE && (in->alert & SWITCH_PD_ALT_ALERT_PLUGPULL) != 0)) {
         return switch_pd_alt_reset(alt);
     }
-    if ((in->alert & SWITCH_PD_ALT_ALERT_CONTRACT) != 0 && switch_pd_alt_waiting_on_chip(alt)) {
+    alt->is_source = in->is_source;
+    if ((in->alert & (SWITCH_PD_ALT_ALERT_CONTRACT | SWITCH_PD_ALT_ALERT_PR_SWAP)) != 0 &&
+        switch_pd_alt_waiting_on_chip(alt)) {
         alt->paused = true;
     }
     if (!in->at_rest) {
@@ -357,7 +398,7 @@ static inline struct switch_pd_alt_out switch_pd_alt_event(struct switch_pd_alt 
         }
         return switch_pd_alt_start(alt, in);
     }
-    if (alt->as_ufp && alt->step != SWITCH_PD_ALT_DR_SWAP &&
+    if (alt->as_ufp && !alt->partner_is_usb_host && alt->step != SWITCH_PD_ALT_DR_SWAP &&
         switch_pd_alt_data_role(in->status1) == SWITCH_PD_ALT_DATA_ROLE_DFP &&
         (in->status1 & SWITCH_PD_ALT_STATUS1_CMD_BUSY) == 0) {
         alt->paused = false;
@@ -366,6 +407,9 @@ static inline struct switch_pd_alt_out switch_pd_alt_event(struct switch_pd_alt 
         return out;
     }
     if (alt->paused) {
+        if ((in->status1 & SWITCH_PD_ALT_STATUS1_CMD_BUSY) != 0) {
+            return switch_pd_alt_none();
+        }
         alt->paused = false;
         return switch_pd_alt_send(alt);
     }
@@ -374,7 +418,23 @@ static inline struct switch_pd_alt_out switch_pd_alt_event(struct switch_pd_alt 
             alt->accepted = true;
             return switch_pd_alt_command(SWITCH_PD_ALT_CMD_ACCEPT_VDM, SWITCH_PD_ALT_REPLY_MS);
         }
+        if (!alt->accepted && (in->alert & SWITCH_PD_ALT_ALERT_CMD_DONE) != 0) {
+            const unsigned last = switch_pd_alt_last_command(in->status1);
+            if (last == 2u && !alt->vdm_retried) {
+                alt->vdm_retried = true;
+                alt->paused = true;
+                struct switch_pd_alt_out out = switch_pd_alt_none();
+                out.timer_ms = 100u;
+                return out;
+            }
+            if (last != 0u) {
+                return switch_pd_alt_vdm_failed(alt, "VDM command failed");
+            }
+        }
         if (alt->accepted && (in->alert & SWITCH_PD_ALT_ALERT_CMD_DONE) != 0) {
+            if (switch_pd_alt_last_command(in->status1) != 0u) {
+                return switch_pd_alt_vdm_failed(alt, "the partner did not accept the VDM");
+            }
             struct switch_pd_alt_out out = switch_pd_alt_none();
             out.act = SWITCH_PD_ALT_READ;
             return out;
@@ -427,6 +487,7 @@ static inline const char *switch_pd_alt_step_name(enum switch_pd_alt_step step)
     static const char *const names[] = {"idle",
                                         "stale DisplayPort exit",
                                         "data role swap",
+                                        "data role swap to UFP",
                                         "Discover Identity",
                                         "Discover SVIDs",
                                         "Discover Modes",

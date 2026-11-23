@@ -334,10 +334,10 @@ VALUE_CHECKS = [
     Check(
         'usb.info.pd-as-found',
         OWNER,
-        'SwitchPD: incoming data role swaps accepted as UFP',
+        'SwitchPD: incoming ',
         REPORT,
         process=KERNEL,
-        regex=r'UFP(?:: write failed)? \(CONFIG2 (?P<config2>[^ ,]+)[^,]*, ALERT_ENABLE (?P<alert>[^ )]+)',
+        regex=r'\(CONFIG2 (?P<config2>[^ ,]+)[^,]*,(?: DP_ALERT_EN [^,]*,)? ALERT_ENABLE (?P<alert>[^ )]+)',
         show=('config2', 'alert'),
         source=SETTINGS,
         note='the values as the boot found them',

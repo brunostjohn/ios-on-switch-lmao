@@ -32,9 +32,10 @@ int pd_decide(int phase, uint16_t alert, uint16_t status1, uint16_t status2, int
     return (int)step.act;
 }
 
-int pd_window_end(int phase, int saw_detach, uint16_t status1, int *next, char *why, size_t why_size)
+int pd_window_end(int phase, int saw_detach, uint16_t status1, uint16_t status2, int *next, char *why, size_t why_size)
 {
-    const struct switch_pd_step step = switch_pd_window_end((enum switch_pd_phase)phase, saw_detach != 0, status1);
+    const struct switch_pd_step step =
+        switch_pd_window_end((enum switch_pd_phase)phase, saw_detach != 0, status1, status2);
     *next = (int)step.next;
     copy_why(step.why, why, why_size);
     return (int)step.act;
@@ -45,9 +46,14 @@ int pd_switches_on(int phase, int allow)
     return switch_pd_switches_on((enum switch_pd_phase)phase, allow != 0) ? 1 : 0;
 }
 
-int pd_rails_on(int phase)
+int pd_vbus_rail_on(int phase)
 {
-    return switch_pd_rails_on((enum switch_pd_phase)phase) ? 1 : 0;
+    return switch_pd_vbus_rail_on((enum switch_pd_phase)phase) ? 1 : 0;
+}
+
+int pd_vconn_on(int phase, uint16_t status1, uint16_t status2)
+{
+    return switch_pd_vconn_on((enum switch_pd_phase)phase, status1, status2) ? 1 : 0;
 }
 
 int pd_boost_on(int phase)

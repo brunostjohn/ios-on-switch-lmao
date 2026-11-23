@@ -303,9 +303,11 @@ static unsigned gRailRaises = 0;
 struct PdChip {
     uint16_t alert = 0, status1 = 0, status2 = 0, config1 = 0xc0e0, vendor = 0;
     uint16_t config2 = 0;                         // DR_SWAP field 3:2 reject in both roles
+    uint16_t dpAlertEnable = 0;
     uint8_t alertEnable[4] = {0xff, 0xfb, 0, 0};  // every ALERT but bit 10 (DR_SWAP)
     uint32_t idHeader = 0;                        // the ID Header VDO it ACKs Discover Identity with; 0: never answers
-    std::vector<uint8_t> vdmReply, incomingVdm;
+    bool dpSupport = false;                       // answers Discover SVID/Mode + DP Discover/Configure
+    std::vector<uint8_t> vdmReply, incomingVdm, lastOutgoingVdm;
     std::vector<uint32_t> pdos;
     uint32_t curPdo = 0, curRdo = 0, pendingRdo = 0;
 
@@ -316,6 +318,14 @@ struct PdChip {
         AbortOnce
     } rdoReply = Accept;
 
+    enum PrSwapReply {
+        PrTerminate,
+        PrAccept,
+        PrAbortOnce,
+        PrSilent
+    } prSwapReply = PrTerminate;
+
+    uint16_t prSwapStatus2 = 0;  // STATUS2 bits kept after PR_Swap (e.g. VCONN_ON)
     bool psRdyReply = true;
     std::vector<std::string> commands;
     unsigned vdmsSent = 0;
@@ -405,6 +415,9 @@ struct PdChip {
         case 0x18:  // DP_STATUS: no DisplayPort configured
             put16(0);
             break;
+        case 0x19:
+            put16(dpAlertEnable);
+            break;
         case 0x08:
             check(len == 29, "READ_PDOS_SRC length " + std::to_string(len));
             buf[0] = (uint8_t)(pdos.size() * 4);
@@ -435,12 +448,16 @@ struct PdChip {
         case 0x17:
             config2 = v16;
             break;
+        case 0x19:
+            dpAlertEnable = v16;
+            break;
         case 0x2e:
             check(len == 4, "ALERT_ENABLE write length " + std::to_string(len));
             std::memcpy(alertEnable, data, 4);
             break;
         case 0x60:  // OUTGOING_VDM: count, then the message
             check(len >= 5 && data[0] == len - 1, "OUTGOING_VDM layout");
+            lastOutgoingVdm.assign(data, data + len);
             break;
         case 0x30:
             check(len == 5 && data[0] == 4, "SET_RDO layout");
@@ -448,7 +465,24 @@ struct PdChip {
             break;
         case 0x05:
             commands.push_back(hex(v16 >> 8) + hex(v16 & 0xff));
-            if (v16 == 0x0707) {
+            if (v16 == 0x0303) {
+                if (prSwapReply == PrSilent)
+                    break;
+                if (prSwapReply == PrAbortOnce) {
+                    prSwapReply = PrAccept;
+                    status1 = (uint16_t)((status1 & ~0x70) | 2u << 4);
+                    alert |= 0x4;
+                    break;
+                }
+                if (prSwapReply == PrAccept) {
+                    status1 = (uint16_t)((status1 & ~(0x70 | 0x1000 | 0x8000 | 0x8)) | 0x4000 | 0x0400 | 0x0080);
+                    status2 = prSwapStatus2;
+                    alert |= 0x10 | 0x4;
+                } else {
+                    status1 = (uint16_t)((status1 & ~0x70) | 7u << 4);  // terminated (passive sink)
+                    alert |= 0x4;
+                }
+            } else if (v16 == 0x0707) {
                 const unsigned pos = charge::rdoPosition(pendingRdo);
                 const bool valid = pos >= 1 && pos <= pdos.size() && charge::pdoType(pdos[pos - 1]) == 0 &&
                                    charge::rdoOperatingMilliamps(pendingRdo) <= charge::pdoMilliamps(pdos[pos - 1]) &&
@@ -473,23 +507,42 @@ struct PdChip {
                 }
             } else if (v16 == 0x0505) {
                 if (psRdyReply) {
-                    status1 |= 0x4000;
+                    status1 = (uint16_t)((status1 & ~0x70) | 0x4000);
                     alert |= 0x4;
                 }
-            } else if (v16 == 0x1818) {  // DR_SWAP, accepted: we are DFP
-                status1 = (uint16_t)((status1 & ~(0x70 | 3u << 8)) | 2u << 8);
+            } else if (v16 == 0x1818) {  // DR_SWAP, accepted: toggles UFP <-> DFP
+                const bool currentlyDfp = ((status1 >> 8) & 3u) == 2u;
+                status1 = (uint16_t)((status1 & ~(0x70 | 3u << 8)) | (currentlyDfp ? 1u : 2u) << 8);
                 alert |= 0x4;
-            } else if (v16 == 0x1111) {  // SEND_VDM: Discover Identity, ACKed with idHeader or never answered
+            } else if (v16 == 0x1111) {  // SEND_VDM
                 ++vdmsSent;
-                if (idHeader) {
+                const uint8_t vdmCmd = lastOutgoingVdm.size() >= 2 ? lastOutgoingVdm[1] : 0;
+                if (vdmCmd == 0x01 && idHeader) {
                     vdmReply = {20, 0x41, 0x80, 0x00, 0xFF};
                     for (const uint32_t object : {idHeader, 0u, 0x12340001u, 0x01000000u})
                         for (int b = 0; b < 4; ++b)
                             vdmReply.push_back((uint8_t)(object >> (8 * b)));
+                    status1 = (uint16_t)(status1 & ~0x70);
+                    alert |= 0x4 | 0x800;
+                } else if (dpSupport && vdmCmd == 0x02) {
+                    vdmReply = {8, 0x42, 0x80, 0x00, 0xFF, 0x00, 0x00, 0x01, 0xFF};
+                    status1 = (uint16_t)(status1 & ~0x70);
+                    alert |= 0x4 | 0x800;
+                } else if (dpSupport && vdmCmd == 0x03) {
+                    vdmReply = {8, 0x43, 0x80, 0x01, 0xFF, 0x05, 0x00, 0x0C, 0x00};
+                    status1 = (uint16_t)(status1 & ~0x70);
                     alert |= 0x4 | 0x800;
                 }
             } else if (v16 == 0x1616) {  // ACCEPT_VDM: the reply readable in INCOMING_VDM
                 incomingVdm = vdmReply;
+                status1 = (uint16_t)(status1 & ~0x70);
+                alert |= 0x4;
+            } else if (v16 == 0x3131) {  // DP_DISCOVER
+                incomingVdm = {4, 0x45, 0x00, 0x0C, 0x00};
+                status1 = (uint16_t)(status1 & ~0x70);
+                alert |= 0x4;
+            } else if (v16 == 0x3636) {  // DP_CONFIGURE
+                status1 = (uint16_t)(status1 & ~0x70);
                 alert |= 0x4;
             } else if (v16 == 0x0D0D) {  // SYS_RESET: faults and the last command cleared, OCP and CONFIG2 to defaults
                 status1 = (uint16_t)(status1 & ~(0x3 | 0x70));
@@ -601,10 +654,15 @@ extern "C" int tegra_gpio_config(unsigned gpio)  // SwitchPD's report: an output
 
 extern "C" int tegra_gpio_output(unsigned gpio, int value)
 {
-    if (value && (gpio == TEGRA_GPIO(X, 3) || gpio == TEGRA_GPIO(K, 5))) {
+    if (value && gpio == TEGRA_GPIO(X, 3)) {
         ++gRailRaises;
-        check((gPd.config1 >> 14) == 3u, "source supply raised before the connector switches opened");
+        check((gPd.status1 & ((1u << 15) | (1u << 3))) == 0 || (gPd.config1 >> 14) == 3u,
+              "source VBUS rail raised while SPDSRC1/2 switch was already closed");
         check(((gCharger.reg[1] >> 4) & 3u) == 2u, "source supply raised before BQ24193 boost");
+    } else if (value && gpio == TEGRA_GPIO(K, 5)) {
+        ++gRailRaises;
+        if (gOutputs[TEGRA_GPIO(X, 3)])
+            check(((gCharger.reg[1] >> 4) & 3u) == 2u, "VCONN raised before BQ24193 boost");
     }
     gOutputs[gpio] = value;
     return 0;
@@ -1245,26 +1303,16 @@ static void dockAltMode()
     gPd.status2 = 0x2000;
     switch_pd_sleep(false);
     check(observed.plugged && !observed.settled && observed.contractMillivolts == 0 && gPd.vdmsSent == 1 &&
-              chgConfig() != 2 && (gPd.config1 >> 14) == 3,
-          "resume consumes dock removal and classifies the new Rd with source switches off before any vendor command");
-    gPd.alert |= 1u << 13;
-    advance(10);
-    check(!observed.settled && observed.role != SWITCH_PD_ROLE_SOURCE && chgConfig() != 2 &&
-              (gPd.config1 >> 14) == 3,
-          "source-plug alert does not bypass classification for the replacement partner");
-    gPd.unplug();
-    advance(100);
-    advance(1000);
-    check(!observed.settled && chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] &&
+              chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] &&
               (gPd.config1 >> 14) == 0,
-          "classified replacement keyboard enters reattach with boost, rails and switches armed");
+          "resume consumes dock removal and enters WaitSource with boost, rails and switches armed");
     gPd.status1 = 0x9680;
     gPd.status2 = 0x2000;
-    gPd.alert |= 0x8;
+    gPd.alert |= 1u << 13;
     advance(10);
     check(observed.settled && observed.role == SWITCH_PD_ROLE_SOURCE && chgConfig() == 2 &&
               gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)],
-          "the replacement keyboard receives power after classifying and reattaching");
+          "the replacement keyboard receives power on SRC_PLUGIN after PR_Swap terminates");
 }
 
 static void oledDockSourceStartup()
@@ -1280,58 +1328,52 @@ static void oledDockSourceStartup()
               [](void *context, const SwitchPDState *current) { *static_cast<SwitchPDState *>(context) = *current; },
               &state) == 0,
           "power-role listener");
-    const auto classifyDock = [&state] {
+    const auto attachSink = [&state] {
         gPd.status1 = 0x1280;
         gPd.status2 = 0x2000;
         gPd.alert |= 0x8;
         advance(10);
-        check(!state.settled && chgConfig() != 2 && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] &&
-                  (gPd.config1 >> 14) == 3,
-              "OLED attach: classify with boost, rails and connector switches off");
-        gPd.unplug();
-        advance(100);
+        check(!state.settled && state.role != SWITCH_PD_ROLE_SOURCE && chgConfig() == 2 &&
+                  gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
+              "Rd attach enters WaitSource with boost, rails and armed switches (Rp undisturbed)");
     };
-    classifyDock();
-    advance(1000);
-    check(gPd.unpoweredSourceArms == 0 && !state.settled && state.role != SWITCH_PD_ROLE_SOURCE && chgConfig() == 2 &&
-              gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
-          "BQ24193 boost and rails power the OLED reattach wait before switches arm and before source role is published");
-    advance(1100);
+    attachSink();
+    gPd.status1 = 0;
+    gPd.status2 = 0;
+    advance(900);
     check(state.settled && state.role == SWITCH_PD_ROLE_NONE && chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] &&
               !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
-          "reattach timeout releases boost and both source rails for the empty port");
+          "WaitSource timeout releases boost and both source rails for the empty port");
 
-    classifyDock();
-    advance(1000);
-    check(chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)],
-          "second reattach powers VBUS and VCONN");
+    attachSink();
     gCharger.plug(500, 2);
     gPd.sink({PdChip::fixed(5000, 1500)}, 0, 0x8 | 0x1000 | 0x4000);
     advance(10);
     check(state.settled && state.role == SWITCH_PD_ROLE_SINK && chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] &&
               !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
-          "external source during reattach releases boost, source rails and source switches");
+          "external source during WaitSource releases boost, source rails and source switches");
 
     gCharger.unplug();
     gPd.unplug();
     advance(500);
-    classifyDock();
     gCharger.plug(500, 2);
-    advance(1000);
+    gPd.status1 = 0x1280;
+    gPd.status2 = 0x2000;
+    gPd.alert |= 0x8;
+    advance(10);
     check(logHas("not sourcing: the charger sees external VBUS") && state.settled &&
               state.role == SWITCH_PD_ROLE_SINK && chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] &&
               !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
-          "external VBUS at the classify deadline keeps the sink refusal latched with rails off");
+          "external VBUS on WaitSource entry keeps the sink refusal latched with rails off");
     gCharger.unplug();
     gPd.unplug();
     advance(10);
-    classifyDock();
-    advance(1000);
+    attachSink();
     switch_pd_sleep(true);
-    advance(1100);
+    advance(900);
     check(state.settled && state.role == SWITCH_PD_ROLE_NONE && chgConfig() == 1 &&
               !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
-          "sleep cancels the powered reattach wait without rearming it");
+          "sleep cancels the powered WaitSource window without rearming it");
     switch_pd_sleep(false);
     check(chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] &&
               (gPd.config1 >> 14) == 0,
@@ -1367,29 +1409,6 @@ static void sourceSupplyLifecycle()
           "VSAFE seen on an empty port is external and enters Sink without powering rails or boost");
     gPd.unplug();
     advance(10);
-    gPd.status1 = 0x1a80;
-    gPd.status2 = 0x2000;
-    gPd.alert |= 0x8;
-    advance(10);
-    check(logHas("classifying:") && chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] &&
-              !gOutputs[TEGRA_GPIO(K, 5)] && gRailRaises == 0 && gCharger.boostEnables == 0 &&
-              (gPd.config1 >> 14) == 3,
-          "Mac attach classifies with v_vdd5v3, VCONN, boost and connector switches off");
-    advance(422);
-    gCharger.plug(500, 1);
-    gPd.status1 = 0x0d80;
-    gPd.status2 = 0;
-    gPd.alert |= 0x8;
-    advance(10);
-    check(logHas("dual-role partner:") && chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] &&
-              !gOutputs[TEGRA_GPIO(K, 5)] && gRailRaises == 0 && gCharger.boostEnables == 0 &&
-              (gPd.config1 >> 14) == 3,
-          "Mac flipping to source never turns on PX3, PK5 or BQ24193 boost");
-    gCharger.unplug();
-    gPd.unplug();
-    advance(10);
-    check(!gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
-          "empty port keeps source rails off while switches rearm");
     switch_pd_sleep(true);
     check(!gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
           "empty-port sleep opens connector switches with source rails off");
@@ -1406,28 +1425,11 @@ static void sourceSupplyLifecycle()
     gPd.status2 = 0x2000;
     gPd.alert |= 0x8;
     advance(10);
-    switch_pd_sleep(true);
-    check(chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] &&
-              (gPd.config1 >> 14) == 3,
-          "sleep cancels classification with all source power off");
-    gPd.unplug();
-    advance(10);
-    switch_pd_sleep(false);
-    check(!gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
-          "canceled classification resumes to an empty port with source rails off");
-    gPd.status1 = 0x1280;
-    gPd.status2 = 0x2000;
-    gPd.alert |= 0x8;
-    advance(10);
-    gPd.unplug();
-    advance(100);
-    advance(1000);
-    check(gPd.unpoweredSourceArms == 0 && chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] &&
-              gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
-          "sink-only reattach powers boost and source rails before arming switches");
+    check(chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
+          "WaitSource powers boost and rails while keeping switches armed");
     gPd.status1 = 0x9680;
     gPd.status2 = 0x2000;
-    gPd.alert |= 0x8;
+    gPd.alert |= 1u << 13;
     advance(10);
     check(chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
           "sourcing keeps boost, source rails and switches on");
@@ -1499,8 +1501,8 @@ static void faultReset()
     advance(150);
     check((gPd.vendor & 0x4) == 0, "OCP restored after the reset deadline");
     check(((gPd.config1 >> 14) & 3u) == 3u, "a sink session's switches off again");
-    check((gPd.config2 & 0x4) != 0 && (gPd.config2 & 0x3) == 0x2,
-          "incoming DR_Swap as UFP and PR_Swap as source restored after the reset");
+    check((gPd.config2 & 0xf) == 0xe,
+          "incoming DR_Swap always accept and PR_Swap as source restored after the reset");
 }
 
 // A dual-role source other than the dock (its 5 V PDO has Dual-Role Data and USB Communications) leaves the Switch
@@ -1524,10 +1526,10 @@ static void dualRoleSource(uint32_t idHeader)
     if (switch_battery_start())
         check(false, "switch_battery_start");
     advance(10);
-    check((gPd.config2 & 0xf) == 0x6 && (gPd.alertEnable[1] & 0x4) != 0,
-          "CONFIG2 accepts DR_Swap as UFP and PR_Swap as source, ALERT_ENABLE has DR_SWAP");
-    check(logHas("SwitchPD: incoming data role swaps accepted as UFP (CONFIG2 0 +accept as UFP +PR_Swap as source, "
-                 "ALERT_ENABLE 0xfbff +DR_SWAP)"),
+    check((gPd.config2 & 0xf) == 0xe && gPd.dpAlertEnable == 0 && (gPd.alertEnable[1] & 0x4) != 0,
+          "CONFIG2 always accepts DR_Swap and PR_Swap as source, DP_ALERT_EN cleared, ALERT_ENABLE has DR_SWAP");
+    check(logHas("SwitchPD: incoming role swaps configured (CONFIG2 0 +DR_Swap always accept +PR_Swap as source, "
+                 "DP_ALERT_EN 0, ALERT_ENABLE 0xfbff +DR_SWAP)"),
           "one line with what was found");
     watchDataRole();
     gPd.idHeader = idHeader;
@@ -2263,23 +2265,27 @@ TEST(SwitchCharging, SourceFault)
 // (Horizon, L4T, this one) would otherwise inherit what this boot set. Sleep leaves it alone.
 static void exitAsFound()
 {
-    gPd.config1 = 0x00e0;  // source switches on, as an earlier boot left them
-    gPd.vendor = 0x4;      // over-current protection off, as after a SYS_RESET
+    gPd.config1 = 0x00e0;        // source switches on, as an earlier boot left them
+    gPd.dpAlertEnable = 0x0003;  // non-zero DP_ALERT_EN, cleared at start and restored on exit
+    gPd.vendor = 0x4;            // over-current protection off, as after a SYS_RESET
     bootWithNintendoCharger();
     advance(3000);
-    check(((gPd.config1 >> 14) & 3u) == 3u && (gPd.config2 & 0x4) && (gPd.alertEnable[1] & 0x4) && !(gPd.vendor & 0x4),
-          "this boot's settings: switches off, swaps accepted as UFP, the DR_SWAP alert, OCP on");
+    check(((gPd.config1 >> 14) & 3u) == 3u && (gPd.config2 & 0xf) == 0xe && gPd.dpAlertEnable == 0 &&
+              (gPd.alertEnable[1] & 0x4) && !(gPd.vendor & 0x4),
+          "this boot's settings: switches off, DR/PR swaps configured, DP_ALERT_EN cleared, DR_SWAP alert, OCP on");
     stubSystemPowerMessage(kIOMessageSystemWillSleep);
-    check(gPd.config2 & 0x4, "sleep puts nothing back");
+    check((gPd.config2 & 0xf) == 0xe && gPd.dpAlertEnable == 0, "sleep puts nothing back");
     stubSystemPowerMessage(kIOMessageSystemWillRestart);
-    check(gPd.config1 == 0x00e0 && gPd.config2 == 0 && gPd.alertEnable[1] == 0xfb && gPd.vendor == 0x4,
-          "every setting as found: CONFIG1 " + hex(gPd.config1) + " CONFIG2 " + hex(gPd.config2) + " VENDOR_CONFIG " +
-              hex(gPd.vendor));
+    check(gPd.config1 == 0x00e0 && gPd.config2 == 0 && gPd.dpAlertEnable == 0x0003 && gPd.alertEnable[1] == 0xfb &&
+              gPd.vendor == 0x4,
+          "every setting as found: CONFIG1 " + hex(gPd.config1) + " CONFIG2 " + hex(gPd.config2) + " DP_ALERT_EN " +
+              hex(gPd.dpAlertEnable) + " VENDOR_CONFIG " + hex(gPd.vendor));
     check(logHas("SwitchPD: BM92T36 settings back as found"), "one line");
     const size_t commands = gPd.commands.size();
     gPd.alert |= 0x1000 | 0x4000;  // a late contract: nothing answers it any more
     advance(3000);
-    check(gPd.commands.size() == commands && gPd.config2 == 0 && gPd.vendor == 0x4, "nothing written after");
+    check(gPd.commands.size() == commands && gPd.config2 == 0 && gPd.dpAlertEnable == 0x0003 && gPd.vendor == 0x4,
+          "nothing written after");
 }
 
 // A fault's SYS_RESET reloads the controller's defaults and this boot sets its own again; Shut Down still returns the
@@ -2292,9 +2298,147 @@ static void exitAfterFaultReset()
     advance(10);
     gPd.alert |= 0x8;
     advance(150);
-    check((gPd.config2 & 0x4) != 0, "accept as UFP set again after the reset");
+    check((gPd.config2 & 0xf) == 0xe, "role swaps set again after the reset");
     stubSystemPowerMessage(kIOMessageSystemWillPowerOff);
     check(gPd.config2 == 0 && (gPd.vendor & 0x4) == 0 && ((gPd.config1 >> 14) & 3u) == 3u, "as found at start");
+}
+
+static void lgTrySnkMonitor()
+{
+    check(switch_battery_start() == 0, "switch_battery_start");
+    advance(10);
+    check(switch_pd_allow_source(true) == 0, "host mode available");
+    SwitchPDState state{};
+    check(switch_pd_add_listener(
+              [](void *context, const SwitchPDState *current) { *static_cast<SwitchPDState *>(context) = *current; },
+              &state) == 0,
+          "listener");
+    // LG Try.SNK monitor: initially presents Rd (no VBUS), then closes SPDSRC1 -> SRC_PLUGIN -> accepts PR_Swap while
+    // keeping VCONN_ON (e-marked cable) and stays DFP for DP Alt Mode + charging.
+    gPd.prSwapReply = PdChip::PrAccept;
+    gPd.prSwapStatus2 = 1u << 9;  // STATUS2_VCONN_ON
+    gPd.idHeader = 0x28001234u;   // UFP AMA (not USB host)
+    gPd.dpSupport = true;
+    gPd.status1 = 0x1280;
+    gPd.status2 = 0x2000;
+    gPd.alert |= 0x8;
+    advance(10);
+    check((gPd.config1 >> 14) == 0 && chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)],
+          "WaitSource keeps SPDSRC12_ON armed with boost, PX3 and PK5 on");
+    gPd.status1 = 0x9680;
+    gPd.status2 = 0x2000;
+    gPd.alert |= 1u << 13;  // ALERT_SRC_PLUGIN
+    advance(10);
+    // PR_SWAP_CMD (0x0303) sent and accepted: now SINK + DFP, PX3=0, PK5=1 (VCONN_ON).
+    check(std::count(gPd.commands.begin(), gPd.commands.end(), std::string("0303")) == 1, "PR_Swap probe sent");
+    check(state.role == SWITCH_PD_ROLE_SINK && state.dataHost && chgConfig() != 2 &&
+              !gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)],
+          "PR_Swap leaves SINK + DFP with PX3 off and PK5 preserved for VCONN_ON");
+    // Monitor advertises 15 V PDOs after PR_Swap: SwitchPD negotiates charging and configures DisplayPort Alt Mode.
+    gCharger.plug(500, 2);
+    gPd.pdos = {PdChip::fixed(5000, 3000), PdChip::fixed(15000, 3000)};
+    gPd.curPdo = gPd.pdos[0];
+    gPd.curRdo = 1u << 28 | 50u << 10 | 300u;
+    gPd.alert |= 0x1000 | 0x4000;
+    advance(2500);
+    check(iinlim() == 1200 && gDisplayPortConfigured && gOutputs[TEGRA_GPIO(K, 5)] && !gOutputs[TEGRA_GPIO(X, 3)],
+          "LG monitor charges at 15 V 1.2 A and configures DP Alt Mode with VCONN preserved");
+    // VCONN_Swap clears STATUS2.VCONN_ON: PK5 turns off promptly while remaining in Sink.
+    gPd.status2 = 0;
+    gPd.alert |= 0x4;
+    advance(10);
+    check(!gOutputs[TEGRA_GPIO(K, 5)] && state.role == SWITCH_PD_ROLE_SINK, "PK5 turns off when VCONN_ON clears");
+    gCharger.unplug();
+    gPd.unplug();
+    advance(10);
+    check(state.role == SWITCH_PD_ROLE_NONE && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)],
+          "detach returns cleanly to Empty with rails off");
+}
+
+static void macCaughtInRd()
+{
+    check(switch_battery_start() == 0, "switch_battery_start");
+    advance(10);
+    check(switch_pd_allow_source(true) == 0, "host mode available");
+    SwitchPDState state{};
+    check(switch_pd_add_listener(
+              [](void *context, const SwitchPDState *current) { *static_cast<SwitchPDState *>(context) = *current; },
+              &state) == 0,
+          "listener");
+    // MacBook caught in its Rd DRP phase: accepts PR_SWAP_CMD (0x0303), then Discover Identity sees Apple host header
+    // (0xD14005AC) and sends DR_Swap to UFP.
+    gPd.prSwapReply = PdChip::PrAccept;
+    gPd.idHeader = 0xD14005ACu;
+    gPd.status1 = 0x1a80;
+    gPd.status2 = 0x2000;
+    gPd.alert |= 0x8;
+    advance(10);
+    gPd.status1 = 0x9e80;
+    gPd.status2 = 0x2000;
+    gPd.alert |= 1u << 13;
+    advance(10);
+    check(state.role == SWITCH_PD_ROLE_SINK && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)],
+          "MacBook took source role via PR_Swap");
+    gCharger.plug(500, 1);
+    gPd.pdos = {PdChip::fixed(5000, 3000)};
+    gPd.curPdo = gPd.pdos[0];
+    gPd.curRdo = 1u << 28 | 50u << 10 | 300u;
+    gPd.alert |= 0x1000 | 0x4000;
+    advance(2500);
+    check(state.role == SWITCH_PD_ROLE_SINK && !state.dataHost && ((gPd.status1 >> 8) & 3) == 1 &&
+              std::count(gPd.commands.begin(), gPd.commands.end(), std::string("1818")) == 1 &&
+              logHas("yielded data role to USB host"),
+          "Switch yielded data role to MacBook (UFP) after PR_Swap");
+}
+
+static void stubbornMacDropsToClassify()
+{
+    check(switch_battery_start() == 0, "switch_battery_start");
+    advance(10);
+    check(switch_pd_allow_source(true) == 0, "host mode available");
+    SwitchPDState state{};
+    check(switch_pd_add_listener(
+              [](void *context, const SwitchPDState *current) { *static_cast<SwitchPDState *>(context) = *current; },
+              &state) == 0,
+          "listener");
+    // MacBook refuses PR_Swap while in Source: Discover Identity sees kMacHeader, SwitchPD drops to Classify (1 s).
+    gPd.prSwapReply = PdChip::PrTerminate;
+    gPd.idHeader = 0xD14005ACu;
+    gPd.status1 = 0x1a80;
+    gPd.status2 = 0x2000;
+    gPd.alert |= 0x8;
+    advance(10);
+    gPd.status1 = 0x9e80;
+    gPd.status2 = 0x2000;
+    gPd.alert |= 1u << 13;
+    advance(50);
+    check(logHas("USB host partner did not take power role: source switches off 1 s") && !state.settled &&
+              chgConfig() != 2 && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] &&
+              (gPd.config1 >> 14) == 3,
+          "stubborn USB host drops SwitchPD to Classify with switches, boost and rails off");
+    gCharger.plug(500, 1);
+    gPd.status1 = 0x0d80;
+    gPd.status2 = 0;
+    gPd.alert |= 0x8;
+    advance(10);
+    check(state.settled && state.role == SWITCH_PD_ROLE_SINK && !state.dataHost &&
+              logHas("dual-role partner: it sources with our source switches off"),
+          "MacBook flips to source during Classify and Switch settles in Sink + UFP");
+}
+
+TEST(SwitchCharging, LgTrySnkMonitor)
+{
+    run(lgTrySnkMonitor);
+}
+
+TEST(SwitchCharging, MacCaughtInRd)
+{
+    run(macCaughtInRd);
+}
+
+TEST(SwitchCharging, StubbornMacDropsToClassify)
+{
+    run(stubbornMacDropsToClassify);
 }
 
 TEST(SwitchCharging, ExitAsFound)

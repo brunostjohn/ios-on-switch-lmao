@@ -29,10 +29,8 @@ constexpr unsigned kVconnGpio = TEGRA_GPIO(K, 5), kSourceRailGpio = TEGRA_GPIO(X
 constexpr unsigned kMaxListeners = 4;
 constexpr unsigned kAlertBurst = 50;  // ALERTs in one second that mean the line is stuck low
 constexpr uint32_t kRailRampMS = 10;  // v_vdd5v3 regulator-enable-ramp-delay (10000 us)
-// Classify window: a dual-role partner that loses our Rp sees the port open (tPDDebounce 20 ms), toggles to source
-// (tDRP 100 ms), debounces our Rd (tCCDebounce 200 ms) and raises VBUS (tVBUSON 275 ms): under 600 ms by the Type-C
-// spec. Re-attach window: our own toggle and debounce of a sink-only partner, about 300 ms (r7w: 53 ms).
-constexpr uint32_t kClassifyMS = 1000, kReattachMS = 1000;
+constexpr uint32_t kClassifyMS = 1000, kWaitSourceMS = 800;
+constexpr uint32_t kPrSwapTimeoutMS = 500, kPrSwapRetryMS = 150;
 // bm92txx.c's msleep()s around SYS_RESET: 100 ms at start, 33 ms after a fault, 100 ms before the next event's work.
 constexpr uint32_t kStartResetMS = 100, kFaultResetMS = 33, kAfterResetMS = 100;
 // USB-PD request: source PDOs after a contract alert without ALERT_PDO (bm92t_event_handler's msleep(500)), a reply to
@@ -50,6 +48,7 @@ enum : uint8_t {
     READ_PDOS_SRC = 0x08,  // count byte (4 per PDO), up to 7 PDOs
     CONFIG2 = 0x17,
     DP_STATUS = 0x18,
+    DP_ALERT_EN = 0x19,
     VENDOR_CONFIG = 0x1a,
     CURRENT_PDO = 0x28,   // count byte, PDO
     CURRENT_RDO = 0x2b,   // count byte, RDO
@@ -67,14 +66,17 @@ enum : unsigned {
     VENDOR_CONFIG_OCP_DISABLE = 1u << 2,
     CONFIG2_PR_SWAP_MASK = 3u << 0,
     CONFIG2_PR_SWAP_ACCEPT_SRC_REJECT_SNK = 2u,
-    CONFIG2_DR_SWAP_ACCEPT_AS_UFP = 1u << 2,  // DR_SWAP field 3:2: bit 2 accept as UFP, bit 3 accept as DFP
+    CONFIG2_DR_SWAP_MASK = 3u << 2,
+    CONFIG2_DR_SWAP_ALWAYS_ACCEPT = 3u << 2,  // DR_SWAP field 3:2: bit 2 accept as UFP, bit 3 accept as DFP
     ALERT_CMD_DONE = 1u << 2,
     ALERT_DR_SWAP = 1u << 10,
     PDO_FIXED_DUAL_ROLE_DATA = 1u << 25,  // the source's 5 V Fixed PDO: USB PD R3.3 V1.0 6.4.1.3.3 Table 6.8
     ALERT_PDO = 1u << 14,
     STATUS1_LASTCMD_SHIFT = 4,  // 0 complete, 2 aborted, 4 invalid, 6 rejected, 7 terminated
     STATUS1_LASTCMD_MASK = 7u << 4,
+    STATUS1_CMD_BUSY = 1u << 13,
     LASTCMD_ABORTED = 2,
+    PR_SWAP_CMD = 0x0303,
     SEND_RDO_CMD = 0x0707,
     PS_RDY_CMD = 0x0505,
     PD_HARD_RST_CMD = 0x0808,
@@ -125,17 +127,20 @@ class SwitchPD : public IOService {
     unsigned listenerCount = 0;
     SwitchPDState state = {};
     switch_pd_phase phase = SWITCH_PD_EMPTY;
-    bool allowSource = false, switchesOn = false, railsOn = false, sawDetach = false, stuck = false;
+    bool allowSource = false, switchesOn = false, vbusRailOn = false, vconnOn = false, sawDetach = false, stuck = false;
     bool reportedReadFailure = false, reportedSwitchFailure = false;
     bool asleepSinkOnly = false;  // SC7 holds an empty or canceled startup sink-only until resume
     bool resetPending = false, explicitContract = false;
+    enum class PrSwap : uint8_t { None, WaitingReady, Sent, RetryWait, Done };
+    PrSwap prSwap = PrSwap::None;
+    bool prSwapRetried = false;
     unsigned alertCount = 0;
     uint64_t alertWindow = 0;
 
     // The settings this boot changes, as begin() found them (SwitchPDSettings.cpp).
     struct {
         bool valid;
-        uint16_t config1, config2, vendor;
+        uint16_t config1, config2, dpAlertEnable, vendor;
         uint8_t alertEnable[4];
     } found = {};
 
@@ -152,8 +157,9 @@ class SwitchPD : public IOService {
     void apply(const switch_pd_step &step);
     void enter(switch_pd_phase next, const char *why);
     void setSwitches(bool on);
-    bool setRails(bool on);
+    bool setRails(bool vbus, bool vconn);
     void startSourcing();
+    void sendPrSwap();
     void notifyAlt(uint16_t alertBits);
     void notify();
     void stopEvents();

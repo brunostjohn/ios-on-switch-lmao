@@ -53,6 +53,7 @@ TEST(DisplayB, OnlyAnActivatedWindowCanRetireOrReleaseItsBandwidth)
     switch_dp_mode mode = {};
     ASSERT_TRUE(switch_dp_cta_vic(16, &mode));
     display.setMode(mode);
+    EXPECT_EQ(xusbModel().registers.at(dc + 4 * 0x405), 1u);
     EXPECT_EQ(xusbModel().registers.at(dc + 4 * 0x40), 1u);
     EXPECT_EQ(xusbModel().registers.at(dc + 4 * 0x43) & 4u, 0u);
     xusbModel().log.clear();
@@ -124,7 +125,11 @@ TEST(DisplayB, TeardownUsesActiveWriteMuxAndFlushesMcHotResetBeforeReset)
     ASSERT_TRUE(switch_dp_cta_vic(16, &mode));
     display.setMode(mode);
 
+    model.log.clear();
     display.enableSor(true);
+    EXPECT_EQ(xusbWritesTo(kStateAccess), (std::vector<uint32_t>{5u, 1u}));
+    EXPECT_EQ(xusbWritesTo(kDispWinOptions), (std::vector<uint32_t>{1u << 26}));
+    EXPECT_LT(xusbFirstWrite(kStateAccess), xusbFirstWrite(kDispWinOptions));
     EXPECT_EQ(model.registers[kDispWinOptions], 1u << 26);
 
     model.log.clear();

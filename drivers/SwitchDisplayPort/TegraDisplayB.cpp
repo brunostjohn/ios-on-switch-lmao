@@ -44,6 +44,7 @@ enum : uint32_t {
     DC_DISP_DISP_WIN_OPTIONS = 0x402,
     DC_DISP_DISP_MEM_HIGH_PRIORITY = 0x403,
     DC_DISP_DISP_MEM_HIGH_PRIORITY_TIMER = 0x404,
+    DC_DISP_DISP_TIMING_OPTIONS = 0x405,
     DC_DISP_REF_TO_SYNC = 0x406,
     DC_DISP_SYNC_WIDTH = 0x407,
     DC_DISP_BACK_PORCH = 0x408,
@@ -166,6 +167,7 @@ void TegraDisplayB::setMode(const struct switch_dp_mode &mode)
     write(DC_WINBUF_ADDR_H_OFFSET, 0);
     write(DC_WINBUF_ADDR_V_OFFSET, 0);
     write(DC_DISP_DISP_CLOCK_CONTROL, 0);
+    write(DC_DISP_DISP_TIMING_OPTIONS, 1u);
     write(DC_DISP_REF_TO_SYNC, (1u << 16) | 1u);
     write(DC_DISP_SYNC_WIDTH, (static_cast<uint32_t>(mode.vsync) << 16) | mode.hsync);
     write(DC_DISP_BACK_PORCH, (static_cast<uint32_t>(mode.vback) << 16) | mode.hback);
@@ -185,13 +187,8 @@ void TegraDisplayB::setMode(const struct switch_dp_mode &mode)
 
 void TegraDisplayB::enableSor(bool on)
 {
-    if (on) {
-        write(DC_DISP_DISP_WIN_OPTIONS, kSor1Enable);
-        commit(kGeneralActReq);
-        return;
-    }
     write(DC_CMD_STATE_ACCESS, kStateAccessReadActive | kStateAccessWriteActive);
-    write(DC_DISP_DISP_WIN_OPTIONS, 0);
+    write(DC_DISP_DISP_WIN_OPTIONS, on ? kSor1Enable : 0u);
     write(DC_CMD_STATE_ACCESS, kStateAccessReadActive);
 }
 

@@ -13,9 +13,11 @@ extern "C" {
 // --- SwitchPDPolicy.h ---
 int pd_decide(int phase, uint16_t alert, uint16_t status1, uint16_t status2, int allow, int *next, int *cancel,
               char *why, size_t why_size);
-int pd_window_end(int phase, int saw_detach, uint16_t status1, int *next, char *why, size_t why_size);
+int pd_window_end(int phase, int saw_detach, uint16_t status1, uint16_t status2, int *next, char *why,
+                  size_t why_size);
 int pd_switches_on(int phase, int allow);
-int pd_rails_on(int phase);
+int pd_vbus_rail_on(int phase);
+int pd_vconn_on(int phase, uint16_t status1, uint16_t status2);
 int pd_boost_on(int phase);
 int pd_vbus_ours(uint16_t status1);
 const char *pd_phase_name(int phase);

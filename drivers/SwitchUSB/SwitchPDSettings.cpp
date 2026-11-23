@@ -35,7 +35,7 @@ int restoreField(uint8_t reg, uint16_t mask, uint16_t found)
 void SwitchPD::recordAsFound()
 {
     found.valid = read16(CONFIG1, found.config1) == 0 && read16(CONFIG2, found.config2) == 0 &&
-                  read16(VENDOR_CONFIG, found.vendor) == 0 &&
+                  read16(DP_ALERT_EN, found.dpAlertEnable) == 0 && read16(VENDOR_CONFIG, found.vendor) == 0 &&
                   tegra_i2c_read(kBus, kPD, ALERT_ENABLE, found.alertEnable, sizeof(found.alertEnable)) == 0;
 }
 
@@ -49,15 +49,18 @@ int SwitchPD::enableOcp()
     return err;
 }
 
-// An incoming DR_Swap or PR_Swap is answered by the controller itself, as CONFIG2 says; bm92txx never writes it, so
-// the controller's default decides on L4T. Accepting DR_Swap as UFP lets a hub or monitor that asks first become our
-// device (a Mac that sources stays DFP); accepting PR_Swap as source (rejecting as sink) lets a wall-powered DRP
-// partner that initially presented Rd take back VBUS. ALERT bit 10 delivers partner-initiated DR_Swaps to handle().
+// An incoming DR_Swap or PR_Swap is answered by the controller itself, as CONFIG2 says. Always accepting DR_Swap
+// lets hubs/monitors swap us UFP->DFP and lets a USB host (MacBook after PR_Swap) swap us DFP->UFP; accepting
+// PR_Swap as source (rejecting as sink) lets a wall-powered DRP partner that initially presented Rd take back VBUS.
+// DP_ALERT_EN is cleared to match bm92txx.c on boards without rohm,dp-alerts-enable.
 void SwitchPD::configureRoleSwaps(bool announce)
 {
     uint16_t config2 = 0;
+    uint16_t dpAlertEnable = 0;
     uint8_t enable[4] = {};
     int err = read16(CONFIG2, config2);
+    if (!err)
+        err = read16(DP_ALERT_EN, dpAlertEnable);
     if (!err)
         err = tegra_i2c_read(kBus, kPD, ALERT_ENABLE, enable, sizeof(enable));
     if (err) {
@@ -65,24 +68,28 @@ void SwitchPD::configureRoleSwaps(bool announce)
         return;
     }
     const uint32_t enabled = le32(enable);
-    const bool setDrSwap = (config2 & CONFIG2_DR_SWAP_ACCEPT_AS_UFP) == 0;
+    const uint16_t swapMask = CONFIG2_PR_SWAP_MASK | CONFIG2_DR_SWAP_MASK;
+    const uint16_t swapWant = CONFIG2_PR_SWAP_ACCEPT_SRC_REJECT_SNK | CONFIG2_DR_SWAP_ALWAYS_ACCEPT;
+    const bool setDrSwap = (config2 & CONFIG2_DR_SWAP_MASK) != CONFIG2_DR_SWAP_ALWAYS_ACCEPT;
     const bool setPrSwap = (config2 & CONFIG2_PR_SWAP_MASK) != CONFIG2_PR_SWAP_ACCEPT_SRC_REJECT_SNK;
-    const bool setConfig2 = setDrSwap || setPrSwap;
+    const bool setConfig2 = (config2 & swapMask) != swapWant;
+    const bool setDpAlert = dpAlertEnable != 0;
     const bool setAlert = (enabled & ALERT_DR_SWAP) == 0;
     if (setConfig2) {
-        const uint16_t next = static_cast<uint16_t>((config2 & ~CONFIG2_PR_SWAP_MASK) |
-                                                    CONFIG2_PR_SWAP_ACCEPT_SRC_REJECT_SNK |
-                                                    CONFIG2_DR_SWAP_ACCEPT_AS_UFP);
+        const uint16_t next = static_cast<uint16_t>((config2 & ~swapMask) | swapWant);
         err = write16(CONFIG2, next);
     }
+    if (!err && setDpAlert)
+        err = write16(DP_ALERT_EN, 0);
     if (!err && setAlert) {
         enable[1] = static_cast<uint8_t>(enable[1] | (ALERT_DR_SWAP >> 8));
         err = tegra_i2c_write(kBus, kPD, ALERT_ENABLE, enable, sizeof(enable));
     }
-    if (announce || setConfig2 || setAlert || err) {
-        IOLog("SwitchPD: incoming data role swaps accepted as UFP%s (CONFIG2 %#x%s%s, ALERT_ENABLE %#x%s)\n",
-              err ? ": write failed" : "", config2, setDrSwap ? " +accept as UFP" : "",
-              setPrSwap ? " +PR_Swap as source" : "", enabled, setAlert ? " +DR_SWAP" : "");
+    if (announce || setConfig2 || setDpAlert || setAlert || err) {
+        IOLog("SwitchPD: incoming role swaps configured%s (CONFIG2 %#x%s%s, DP_ALERT_EN %#x%s, ALERT_ENABLE %#x%s)\n",
+              err ? ": write failed" : "", config2, setDrSwap ? " +DR_Swap always accept" : "",
+              setPrSwap ? " +PR_Swap as source" : "", dpAlertEnable, setDpAlert ? " -> 0" : "", enabled,
+              setAlert ? " +DR_SWAP" : "");
     }
 }
 
@@ -98,14 +105,16 @@ void SwitchPD::leave()
     setSwitches(false);
     if (switch_pd_boost_on(phase))
         (void)switch_battery_set_otg_boost(false, false);
-    (void)setRails(false);
+    (void)setRails(false, false);
     if (!found.valid) {
         IOLog("SwitchPD: leaving the BM92T36 as this boot set it: its settings as found were not readable\n");
         return;
     }
     int err = restoreField(CONFIG1, CONFIG1_SPDSRC_MASK, found.config1);
     if (!err)
-        err = restoreField(CONFIG2, CONFIG2_PR_SWAP_MASK | CONFIG2_DR_SWAP_ACCEPT_AS_UFP, found.config2);
+        err = restoreField(CONFIG2, CONFIG2_PR_SWAP_MASK | CONFIG2_DR_SWAP_MASK, found.config2);
+    if (!err)
+        err = restoreField(DP_ALERT_EN, 0xffffu, found.dpAlertEnable);
     if (!err)
         err = restoreField(VENDOR_CONFIG, VENDOR_CONFIG_OCP_DISABLE, found.vendor);
     uint8_t enable[4] = {};
@@ -117,8 +126,10 @@ void SwitchPD::leave()
         enable[1] = static_cast<uint8_t>((enable[1] & ~dr) | drFound);
         err = tegra_i2c_write(kBus, kPD, ALERT_ENABLE, enable, sizeof(enable));
     }
-    IOLog("SwitchPD: BM92T36 settings %s as found (CONFIG1 %#x CONFIG2 %#x VENDOR_CONFIG %#x ALERT_ENABLE %#x)\n",
-          err ? "not all back" : "back", found.config1, found.config2, found.vendor, le32(found.alertEnable));
+    IOLog("SwitchPD: BM92T36 settings %s as found (CONFIG1 %#x CONFIG2 %#x DP_ALERT_EN %#x VENDOR_CONFIG %#x "
+          "ALERT_ENABLE %#x)\n",
+          err ? "not all back" : "back", found.config1, found.config2, found.dpAlertEnable, found.vendor,
+          le32(found.alertEnable));
 }
 
 IOReturn SwitchPD::powerMessage(void *target, void *, UInt32 type, IOService *, void *, vm_size_t)

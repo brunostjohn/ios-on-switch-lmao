@@ -58,6 +58,27 @@ void hand_off()
     gToldDisplayPort = displayLanes;
 }
 
+#if DEVELOPMENT || DEBUG
+void logIncomingVdm(const uint8_t *incoming, size_t maxLen)
+{
+    const size_t count = incoming[0];
+    const size_t avail = count + 1 <= maxLen ? count : maxLen - 1;
+    char words[96] = {};
+    size_t used = 0;
+    for (size_t i = 0; i + 4 <= avail && used + 1 < sizeof(words); i += 4) {
+        const uint32_t word = static_cast<uint32_t>(incoming[1 + i]) |
+                              (static_cast<uint32_t>(incoming[2 + i]) << 8U) |
+                              (static_cast<uint32_t>(incoming[3 + i]) << 16U) |
+                              (static_cast<uint32_t>(incoming[4 + i]) << 24U);
+        const int n = snprintf(words + used, sizeof(words) - used, "%s%#010x", i ? " " : "", word);
+        if (n < 0)
+            break;
+        used += static_cast<size_t>(n) < sizeof(words) - used ? static_cast<size_t>(n) : sizeof(words) - used - 1;
+    }
+    IOLog("SwitchPD: alt incoming VDM (%zu B): %s\n", count, words);
+}
+#endif
+
 void perform(struct switch_pd_alt_out out, enum switch_pd_alt_step from)
 {
     if (out.act == SWITCH_PD_ALT_READ) {
@@ -66,6 +87,9 @@ void perform(struct switch_pd_alt_out out, enum switch_pd_alt_step from)
         if (tegra_i2c_read(kBus, kPD, INCOMING_VDM, incoming, sizeof(incoming)) != 0) {
             out = switch_pd_alt_finish(&gAlt, SWITCH_PD_ALT_FAILED, "INCOMING_VDM could not be read");
         } else {
+#if DEVELOPMENT || DEBUG
+            logIncomingVdm(incoming, sizeof(incoming));
+#endif
             out = switch_pd_alt_reply(&gAlt, incoming, sizeof(incoming));
         }
     }
@@ -96,6 +120,11 @@ void perform(struct switch_pd_alt_out out, enum switch_pd_alt_step from)
             IOLog("SwitchPD: alternate mode (%s): %s\n", switch_pd_alt_step_name(gAlt.step), out.line);
         }
     }
+#if DEVELOPMENT || DEBUG
+    if (gAlt.step != from)
+        IOLog("SwitchPD: alt step %s -> %s (cmd %#x timer %u ms)\n", switch_pd_alt_step_name(from),
+              switch_pd_alt_step_name(gAlt.step), out.command, out.timer_ms);
+#endif
     if (out.timer_ms != 0) {
         gTimer->setTimeoutMS(out.timer_ms);
     } else {
@@ -112,7 +141,7 @@ void timerFired(OSObject *, IOTimerEventSource *)
 }  // namespace
 
 void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest_of)(const void *), uint16_t alert,
-                         uint16_t status1, bool port_session, bool dock_power)
+                         uint16_t status1, bool port_session, bool dock_power, bool is_source)
 {
     if (gTimer == nullptr) {
         switch_pd_alt_init(&gAlt, kWantDisplayPort);
@@ -131,9 +160,17 @@ void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest_of)(con
         (void)tegra_i2c_read(kBus, kPD, DP_STATUS, raw, sizeof(raw));
         dp_status = static_cast<uint16_t>(raw[0] | static_cast<unsigned>(raw[1]) << 8U);
     }
-    const struct switch_pd_alt_in in = {alert, status1, dp_status, port_session, at_rest, dock_power};
+    const struct switch_pd_alt_in in = {alert, status1, dp_status, port_session, at_rest, dock_power, is_source};
     const enum switch_pd_alt_step before = gAlt.step;
     const struct switch_pd_alt_out out = switch_pd_alt_event(&gAlt, &in);
+#if DEVELOPMENT || DEBUG
+    if (gAlt.step != before ||
+        (alert & (SWITCH_PD_ALT_ALERT_CMD_DONE | SWITCH_PD_ALT_ALERT_VDM_RECEIVED)) != 0) {
+        IOLog("SwitchPD: alt event %s -> %s (alert %#x status1 %#x dp %#x last %u)\n",
+              switch_pd_alt_step_name(before), switch_pd_alt_step_name(gAlt.step), alert, status1, dp_status,
+              switch_pd_alt_last_command(status1));
+    }
+#endif
     if (!port_session || (alert & SWITCH_PD_ALT_ALERT_PLUGPULL) != 0)
         gResumePending = false;
     if (gResumePending && at_rest && (status1 & SWITCH_PD_ALT_STATUS1_CMD_BUSY) == 0 &&
@@ -141,11 +178,16 @@ void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest_of)(con
         switch_pd_alt_resume();
         return;
     }
-    if (out.act == SWITCH_PD_ALT_NONE && out.line == nullptr && gAlt.step == before) {
+    if (out.act == SWITCH_PD_ALT_NONE && out.line == nullptr && out.timer_ms == 0 && gAlt.step == before) {
         hand_off();
         return;
     }
     perform(out, before);
+}
+
+bool switch_pd_alt_partner_is_usb_host()
+{
+    return gAlt.partner_is_usb_host;
 }
 
 void switch_pd_alt_resume()

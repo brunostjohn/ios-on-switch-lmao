@@ -36,7 +36,7 @@ enum Phase {
     EMPTY,
     SINK,
     CLASSIFY,
-    REATTACH,
+    WAIT_SOURCE,
     SOURCE,
     HELD
 };
@@ -50,11 +50,11 @@ enum Act {
 };
 
 // BM92T36 bits (bm92txx.c).
-constexpr uint16_t SRC_FAULT = 1 << 1, PLUGPULL = 1 << 3, CONTRACT = 1 << 12, SRC_PLUGIN = 1 << 13;
+constexpr uint16_t SRC_FAULT = 1 << 1, PLUGPULL = 1 << 3, PR_SWAP = 1 << 4, CONTRACT = 1 << 12, SRC_PLUGIN = 1 << 13;
 constexpr unsigned SPDSRC2 = 1u << 3, INSERT = 1u << 7, VSAFE = 1u << 10, CSIDE = 1u << 11, SRC_MODE = 1u << 12,
                    SPDSNK = 1u << 14, SPDSRC1 = 1u << 15;
 constexpr unsigned DFP = 2u << 8, UFP = 1u << 8;
-constexpr unsigned OTG_INSERT = 1u << 13;
+constexpr unsigned VCONN_ON = 1u << 9, OTG_INSERT = 1u << 13;
 
 using Status = std::pair<uint16_t, uint16_t>;  // STATUS1, STATUS2
 // r7w (live-1105-1249, kernel log): STATUS1/STATUS2 as SwitchPD logged them.
@@ -63,8 +63,8 @@ constexpr Status R7W_SINK_ATTACH_CC2 = {0x1A80, 0x2000};  // the same on CC2
 constexpr Status R7W_DETACH_SOURCING = {0x8400, 0};       // SPDSRC1 | VSAFE, no INSERT: unplugged while we sourced
 constexpr Status R7W_MAC_SOURCES = {0x0D80, 0};           // the Mac took the source role with our switches off
 constexpr Status R7W_CHARGER_AT_BOOT = {0x4580, 0x0001};  // SPDSNK | VSAFE | UFP | INSERT
-// what the re-attach shows once our switch closes onto v_vdd5v3
-constexpr Status REATTACH_RAILS_UP = {0x1280 | SPDSRC1 | VSAFE, 0x2000};
+// what SRC_PLUGIN shows once our switch closes onto v_vdd5v3
+constexpr Status SOURCE_RAILS_UP = {0x1280 | SPDSRC1 | VSAFE, 0x2000};
 // The traces, bit by bit as their comments read them.
 static_assert(R7W_SINK_ATTACH.first == (SRC_MODE | DFP | INSERT) && R7W_SINK_ATTACH.second == OTG_INSERT);
 static_assert(R7W_SINK_ATTACH_CC2.first == (SRC_MODE | CSIDE | DFP | INSERT));
@@ -92,11 +92,11 @@ Decision decide(int phase, uint16_t alert, Status status, bool allow = true)
     return decide(phase, alert, status.first, status.second, allow);
 }
 
-Decision windowEnd(int phase, bool saw, uint16_t status1)
+Decision windowEnd(int phase, bool saw, uint16_t status1, uint16_t status2 = 0)
 {
     int next = 0;
     char why[256];
-    const int act = pd_window_end(phase, saw ? 1 : 0, status1, &next, why, sizeof(why));
+    const int act = pd_window_end(phase, saw ? 1 : 0, status1, status2, &next, why, sizeof(why));
     return {act, next, false, why};
 }
 
@@ -112,19 +112,19 @@ void invariant(bool ok, const std::string &what)
 
 using Event = std::pair<std::string, bool>;
 
-// SwitchPD.cpp's apply/enter/startSourcing/endSourcing/windowFired, with the hardware as recorded outputs.
+// SwitchPD.cpp's apply/enter/startSourcing/windowFired, with the hardware as recorded outputs.
 struct Port {
     explicit Port(bool allow = true, int boostResult = 0) : allow(allow), boostResult(boostResult)
     {}
 
     int phase = EMPTY;
     bool allow, saw = false, window = false;
-    bool switches = false, rails = false, boost = false;
+    bool switches = false, vbusRail = false, vconn = false, boost = false;
     bool railFailure = false;
     int boostResult;  // 0 ok, -2 the charger sees VBUS that is not ours, -1 I2C
     std::vector<Event> events;
     std::vector<std::string> lines;
-    uint16_t status1 = 0;
+    uint16_t status1 = 0, status2 = 0;
 
     void setSwitches(bool on)
     {
@@ -134,14 +134,33 @@ struct Port {
         }
     }
 
-    bool setRails(bool on)
+    bool setRails(bool wantVbus, bool wantVconn)
     {
-        if (on != rails) {
+        if (wantVbus == vbusRail && wantVconn == vconn)
+            return true;
+        if (wantVbus && pd_vbus_ours(status1))
             setSwitches(false);
-            events.emplace_back("rails", on);
-            if (on && railFailure)
+        if (wantVbus && !vbusRail) {
+            events.emplace_back("vbus", true);
+            if (railFailure)
                 return false;
-            rails = on;
+            vbusRail = true;
+            if (wantVconn && !vconn) {
+                events.emplace_back("vconn", true);
+                vconn = true;
+            }
+        }
+        if (!wantVconn && vconn) {
+            events.emplace_back("vconn", false);
+            vconn = false;
+        }
+        if (!wantVbus && vbusRail) {
+            events.emplace_back("vbus", false);
+            vbusRail = false;
+        }
+        if (wantVconn && !vconn) {
+            events.emplace_back("vconn", true);
+            vconn = true;
         }
         return true;
     }
@@ -149,7 +168,7 @@ struct Port {
     int setBoost(bool on)
     {
         events.emplace_back("boost", on);
-        const int result = !on || (boostResult == -2 && rails && switches && pd_vbus_ours(status1)) ? 0 : boostResult;
+        const int result = !on || (boostResult == -2 && vbusRail && switches && pd_vbus_ours(status1)) ? 0 : boostResult;
         if (!result)
             boost = on;
         return result;
@@ -162,7 +181,8 @@ struct Port {
         saw = false;
         window = false;
         const bool on = pd_switches_on(next, allow ? 1 : 0) != 0;
-        const bool railsOn = allow && pd_rails_on(next) != 0;
+        const bool wantVbus = allow && pd_vbus_rail_on(next) != 0;
+        const bool wantVconn = (pd_vconn_on(next, status1, status2) != 0) && (next == SINK || allow);
         const bool boostOn = allow && pd_boost_on(next) != 0;
         if (!on || (boosting && !boostOn))
             setSwitches(false);
@@ -175,14 +195,14 @@ struct Port {
                 return;
             }
         }
-        if (!setRails(railsOn)) {
+        if (!setRails(wantVbus, wantVconn) && wantVbus) {
             enter(HELD, "not sourcing: source rails failed");
             return;
         }
         lines.push_back(why);
         if (on)
             setSwitches(true);
-        if (next == CLASSIFY || next == REATTACH)
+        if (next == CLASSIFY || next == WAIT_SOURCE)
             window = true;
     }
 
@@ -215,7 +235,10 @@ struct Port {
     void alert(Status status, uint16_t alertBits = PLUGPULL)
     {
         status1 = status.first;
+        status2 = status.second;
         apply(decide(phase, alertBits, status.first, status.second, allow && switches));
+        if (phase == SINK)
+            (void)setRails(false, pd_vconn_on(phase, status1, status2) != 0);
         check();
     }
 
@@ -224,25 +247,31 @@ struct Port {
         if (!window)
             return;
         window = false;
-        const Decision d = windowEnd(phase, saw, status.first);
+        const Decision d = windowEnd(phase, saw, status.first, status.second);
         if (d.act == NONE)
             return;
         status1 = status.first;
+        status2 = status.second;
         apply({d.act, d.next, false, d.why});
-        if (phase == d.next)
+        if (phase == d.next) {
             apply(decide(phase, 0, status.first, status.second, allow && switches));
+            if (phase == SINK)
+                (void)setRails(false, pd_vconn_on(phase, status1, status2) != 0);
+        }
         check();
     }
 
     void check() const
     {
         const std::string at = "phase " + std::to_string(phase);
-        invariant(rails == (allow && pd_rails_on(phase)),
-                  at + ": rails " + std::to_string(static_cast<int>(rails)));
+        invariant(vbusRail == (allow && pd_vbus_rail_on(phase)),
+                  at + ": vbusRail " + std::to_string(static_cast<int>(vbusRail)));
+        const bool expectedVconn = (pd_vconn_on(phase, status1, status2) != 0) && (phase == SINK || allow);
+        invariant(vconn == expectedVconn, at + ": vconn " + std::to_string(static_cast<int>(vconn)));
         invariant(boost == (allow && pd_boost_on(phase) != 0),
                   at + ": boost " + std::to_string(static_cast<int>(boost)));
         if (!allow) {
-            invariant(phase != CLASSIFY && phase != REATTACH && phase != SOURCE && !rails && !switches && !boost,
+            invariant(phase != CLASSIFY && phase != WAIT_SOURCE && phase != SOURCE && !vbusRail && !switches && !boost,
                       at + " without host mode");
         }
     }
@@ -253,15 +282,22 @@ struct Port {
 TEST(SwitchUsbHostPowerRole, OutputsPerPhase)
 {
     for (int phase = 0; phase <= HELD; ++phase) {
-        EXPECT_EQ(pd_rails_on(phase) != 0, phase == REATTACH || phase == SOURCE) << phase;
-        EXPECT_EQ(pd_boost_on(phase) != 0, phase == REATTACH || phase == SOURCE) << phase;
+        EXPECT_EQ(pd_vbus_rail_on(phase) != 0, phase == WAIT_SOURCE || phase == SOURCE) << phase;
+        EXPECT_EQ(pd_boost_on(phase) != 0, phase == WAIT_SOURCE || phase == SOURCE) << phase;
+        EXPECT_EQ(pd_vconn_on(phase, 0, 0) != 0, phase == WAIT_SOURCE || phase == SOURCE) << phase;
+        EXPECT_EQ(pd_vconn_on(phase, INSERT, VCONN_ON) != 0,
+                  phase == WAIT_SOURCE || phase == SOURCE || phase == SINK)
+            << phase;
+        EXPECT_FALSE(pd_vconn_on(SINK, 0, VCONN_ON));
+        EXPECT_FALSE(pd_vconn_on(SINK, INSERT, 0));
         EXPECT_FALSE(pd_switches_on(phase, 0)) << phase;
         EXPECT_EQ(pd_switches_on(phase, 1) != 0, phase != SINK && phase != CLASSIFY && phase != HELD) << phase;
     }
-    EXPECT_STREQ(pd_phase_name(REATTACH), "reattach");
+    EXPECT_STREQ(pd_phase_name(WAIT_SOURCE), "wait-source");
 }
 
-// r7w's plug-in, with the re-attach as the rails-first order makes it: sourced, boost and rails before switches.
+// Initial Rd attach enters WaitSource without dropping SPDSRC12_ON (preserves Rp for Try.SNK), raises boost/vbus/vconn,
+// then promotes to Source on SRC_PLUGIN.
 TEST(SwitchUsbHostPowerRole, KeyboardThroughAnAdapter)
 {
     for (const Status attach : {R7W_SINK_ATTACH, R7W_SINK_ATTACH_CC2}) {
@@ -269,55 +305,59 @@ TEST(SwitchUsbHostPowerRole, KeyboardThroughAnAdapter)
         Port port;
         port.enter(EMPTY, "start");
         EXPECT_TRUE(port.switches);
-        EXPECT_FALSE(port.rails);
-        EXPECT_FALSE(port.boost);
+        EXPECT_FALSE(port.vbusRail || port.vconn || port.boost);
         EXPECT_EQ(port.events, (std::vector<Event>{{"switches", true}}));
         port.events.clear();
         port.alert(attach);
-        EXPECT_EQ(port.phase, CLASSIFY);
-        EXPECT_FALSE(port.rails || port.boost || port.switches);
-        EXPECT_EQ(port.events, (std::vector<Event>{{"switches", false}}));
-        port.alert({0, 0});  // it left with our switches off
-        EXPECT_TRUE(port.saw);
+        EXPECT_EQ(port.phase, WAIT_SOURCE);
+        EXPECT_TRUE(port.boost && port.vbusRail && port.vconn && port.switches && port.window);
+        EXPECT_EQ(port.events, (std::vector<Event>{{"boost", true}, {"vbus", true}, {"vconn", true}}));
         port.events.clear();
-        port.windowEnds({0, 0});
-        EXPECT_EQ(port.phase, REATTACH);
-        EXPECT_EQ(port.events, (std::vector<Event>{{"boost", true}, {"rails", true}, {"switches", true}}));
-        EXPECT_TRUE(port.boost && port.rails && port.switches);
-        port.events.clear();
-        port.alert(REATTACH_RAILS_UP);
+        port.alert(SOURCE_RAILS_UP, SRC_PLUGIN);
         EXPECT_EQ(port.phase, SOURCE);
-        EXPECT_TRUE(port.boost && port.rails && port.switches);
+        EXPECT_TRUE(port.boost && port.vbusRail && port.vconn && port.switches && !port.window);
         EXPECT_TRUE(port.events.empty());
         port.events.clear();
         port.alert(R7W_DETACH_SOURCING);
         EXPECT_EQ(port.phase, EMPTY);
-        EXPECT_EQ(port.events,
-                  (std::vector<Event>{{"switches", false}, {"boost", false}, {"rails", false}, {"switches", true}}));
+        EXPECT_EQ(port.events, (std::vector<Event>{{"switches", false},
+                                                   {"boost", false},
+                                                   {"vconn", false},
+                                                   {"vbus", false},
+                                                   {"switches", true}}));
         EXPECT_TRUE(port.switches);
-        EXPECT_FALSE(port.rails || port.boost);
+        EXPECT_FALSE(port.vbusRail || port.vconn || port.boost);
         ASSERT_FALSE(port.lines.empty());
         EXPECT_THAT(port.lines.back(), testing::HasSubstr("detached"));
     }
 }
 
-// r7w's own re-attach status (no VSAFE yet) sources too.
-TEST(SwitchUsbHostPowerRole, ReattachBeforeOurSwitchCloses)
+// QEMU bm92t36.c closes SPDSRC1 | VSAFE after 10 ms without raising ALERT_SRC_PLUGIN; the WaitSource watchdog promotes
+// it cleanly to Source.
+TEST(SwitchUsbHostPowerRole, WaitSourceWindowPromotesQemuSwitchClosure)
 {
-    const Decision d = decide(REATTACH, PLUGPULL, R7W_SINK_ATTACH);
-    EXPECT_EQ(std::make_tuple(d.act, d.next, d.cancel), std::make_tuple((int)START, (int)SOURCE, true));
+    Port port;
+    port.enter(EMPTY, "start");
+    port.alert(R7W_SINK_ATTACH, PLUGPULL);
+    EXPECT_EQ(port.phase, WAIT_SOURCE);
+    EXPECT_TRUE(port.window && port.switches && port.boost && port.vbusRail && port.vconn);
+    port.events.clear();
+    port.windowEnds(SOURCE_RAILS_UP);
+    EXPECT_EQ(port.phase, SOURCE);
+    EXPECT_TRUE(port.boost && port.vbusRail && port.vconn && port.switches && !port.window);
+    EXPECT_TRUE(port.events.empty());
 }
 
 TEST(SwitchUsbHostPowerRole, VsafeThatIsNotOurs)
 {
-    Decision d = decide(REATTACH, PLUGPULL, SRC_MODE | VSAFE | DFP | INSERT, OTG_INSERT);
-    EXPECT_EQ(std::make_tuple(d.act, d.next, d.cancel), std::make_tuple((int)ENTER, (int)SINK, true));
+    Decision d = decide(WAIT_SOURCE, PLUGPULL, SRC_MODE | VSAFE | DFP | INSERT, OTG_INSERT);
+    EXPECT_EQ(std::make_tuple(d.act, d.next, d.cancel), std::make_tuple((int)END, (int)SINK, true));
     EXPECT_THAT(d.why, testing::HasSubstr("not ours"));
     EXPECT_TRUE(pd_vbus_ours(SPDSRC2 | VSAFE));
     EXPECT_FALSE(pd_vbus_ours(VSAFE | INSERT | SRC_MODE));
-    d = decide(EMPTY, PLUGPULL, REATTACH_RAILS_UP);
+    d = decide(EMPTY, PLUGPULL, SOURCE_RAILS_UP);
     EXPECT_EQ(std::make_pair(d.act, d.next), std::make_pair((int)ENTER, (int)SINK));
-    d = decide(EMPTY, PLUGPULL, REATTACH_RAILS_UP, false);
+    d = decide(EMPTY, PLUGPULL, SOURCE_RAILS_UP, false);
     EXPECT_EQ(std::make_pair(d.act, d.next), std::make_pair((int)ENTER, (int)SINK));
     d = decide(EMPTY, PLUGPULL, SRC_MODE | VSAFE | DFP | INSERT, OTG_INSERT);
     EXPECT_EQ(std::make_pair(d.act, d.next), std::make_pair((int)ENTER, (int)SINK));
@@ -326,189 +366,180 @@ TEST(SwitchUsbHostPowerRole, VsafeThatIsNotOurs)
 TEST(SwitchUsbHostPowerRole, ChargerSeesVbusThatIsNotOurs)
 {
     Port port(true, -2);
-    port.enter(REATTACH, "proven");
+    port.enter(WAIT_SOURCE, "attach");
     EXPECT_EQ(port.phase, SINK);
-    EXPECT_FALSE(port.rails || port.switches || port.boost);
+    EXPECT_FALSE(port.vbusRail || port.vconn || port.switches || port.boost);
     EXPECT_EQ(port.events, (std::vector<Event>{{"boost", true}, {"boost", false}}));
     Port unpowered(true, -2);
-    unpowered.status1 = REATTACH_RAILS_UP.first;
-    unpowered.enter(REATTACH, "proven");
+    unpowered.status1 = SOURCE_RAILS_UP.first;
+    unpowered.enter(WAIT_SOURCE, "attach");
     EXPECT_EQ(unpowered.phase, SINK);
-    EXPECT_FALSE(unpowered.rails || unpowered.boost || unpowered.switches);
+    EXPECT_FALSE(unpowered.vbusRail || unpowered.vconn || unpowered.boost || unpowered.switches);
     Port emptyPort(true, -2);
     emptyPort.enter(EMPTY, "start");
-    emptyPort.status1 = REATTACH_RAILS_UP.first;
-    emptyPort.enter(REATTACH, "proven");
+    emptyPort.status1 = SOURCE_RAILS_UP.first;
+    emptyPort.enter(WAIT_SOURCE, "attach");
     EXPECT_EQ(emptyPort.phase, SINK);
-    EXPECT_FALSE(emptyPort.rails || emptyPort.boost || emptyPort.switches);
+    EXPECT_FALSE(emptyPort.vbusRail || emptyPort.vconn || emptyPort.boost || emptyPort.switches);
 }
 
 TEST(SwitchUsbHostPowerRole, BoostFailureLeavesRailsUnpowered)
 {
     Port port(true, -1);
-    port.enter(REATTACH, "proven");
+    port.enter(WAIT_SOURCE, "attach");
     EXPECT_EQ(port.phase, HELD);
-    EXPECT_FALSE(port.rails || port.boost || port.window);
+    EXPECT_FALSE(port.vbusRail || port.vconn || port.boost || port.window);
     EXPECT_EQ(port.events, (std::vector<Event>{{"boost", true}, {"boost", false}}));
-}
-
-TEST(SwitchUsbHostPowerRole, ClassifyWindowKeepsBoostRefusalLatched)
-{
-    for (const int result : {-2, -1}) {
-        Port port(true, result);
-        port.enter(EMPTY, "start");
-        port.alert(R7W_SINK_ATTACH);
-        port.alert({0, 0});
-        port.events.clear();
-        port.windowEnds({0, 0});
-        EXPECT_EQ(port.phase, result == -2 ? SINK : HELD);
-        EXPECT_FALSE(port.rails || port.boost || port.switches || port.window);
-        EXPECT_EQ(port.events, (std::vector<Event>{{"boost", true}, {"boost", false}}));
-    }
 }
 
 TEST(SwitchUsbHostPowerRole, RailFailureReleasesPreparedBoost)
 {
     Port port;
     port.railFailure = true;
-    port.enter(REATTACH, "proven");
+    port.enter(WAIT_SOURCE, "attach");
     EXPECT_EQ(port.phase, HELD);
-    EXPECT_FALSE(port.rails || port.boost || port.window);
-    EXPECT_EQ(port.events, (std::vector<Event>{{"boost", true}, {"rails", true}, {"boost", false}}));
+    EXPECT_FALSE(port.vbusRail || port.vconn || port.boost || port.window);
+    EXPECT_EQ(port.events, (std::vector<Event>{{"boost", true}, {"vbus", true}, {"boost", false}}));
 }
 
-TEST(SwitchUsbHostPowerRole, OledDockBoostIsReadyWhileWaitingForReattach)
+TEST(SwitchUsbHostPowerRole, WaitSourceTimeoutReleasesBoostAndRails)
 {
     Port port;
     port.enter(EMPTY, "start");
-    port.alert(R7W_SINK_ATTACH);
-    port.alert({0, 0});
     port.events.clear();
-    port.windowEnds({0, 0});
-    EXPECT_EQ(port.phase, REATTACH);
-    EXPECT_TRUE(port.window && port.boost && port.rails && port.switches);
-    EXPECT_EQ(port.events, (std::vector<Event>{{"boost", true}, {"rails", true}, {"switches", true}}));
+    port.alert(R7W_SINK_ATTACH);
+    EXPECT_EQ(port.phase, WAIT_SOURCE);
+    EXPECT_TRUE(port.window && port.boost && port.vbusRail && port.vconn && port.switches);
+    EXPECT_EQ(port.events, (std::vector<Event>{{"boost", true}, {"vbus", true}, {"vconn", true}}));
     port.events.clear();
     port.windowEnds({0, 0});
     EXPECT_EQ(port.phase, EMPTY);
-    EXPECT_FALSE(port.boost || port.rails || port.window);
+    EXPECT_FALSE(port.boost || port.vbusRail || port.vconn || port.window);
     EXPECT_TRUE(port.switches);
-    EXPECT_EQ(port.events,
-              (std::vector<Event>{{"switches", false}, {"boost", false}, {"rails", false}, {"switches", true}}));
+    EXPECT_EQ(port.events, (std::vector<Event>{{"switches", false},
+                                               {"boost", false},
+                                               {"vconn", false},
+                                               {"vbus", false},
+                                               {"switches", true}}));
 }
 
-TEST(SwitchUsbHostPowerRole, ReattachPowerIsReleasedOnRoleChangeAndStop)
+TEST(SwitchUsbHostPowerRole, WaitSourcePowerIsReleasedOnRoleChangeDetachAndStop)
 {
     Port port;
-    port.enter(REATTACH, "proven");
+    port.enter(WAIT_SOURCE, "attach");
     port.events.clear();
     port.alert(R7W_MAC_SOURCES);
     EXPECT_EQ(port.phase, SINK);
-    EXPECT_FALSE(port.rails || port.boost || port.switches || port.window);
-    EXPECT_EQ(port.events, (std::vector<Event>{{"switches", false}, {"boost", false}, {"rails", false}}));
+    EXPECT_FALSE(port.vbusRail || port.vconn || port.boost || port.switches || port.window);
+    EXPECT_EQ(port.events,
+              (std::vector<Event>{{"switches", false}, {"boost", false}, {"vconn", false}, {"vbus", false}}));
+
+    Port detached;
+    detached.enter(WAIT_SOURCE, "attach");
+    detached.events.clear();
+    detached.alert({0, 0}, PLUGPULL);
+    EXPECT_EQ(detached.phase, EMPTY);
+    EXPECT_TRUE(detached.switches);
+    EXPECT_FALSE(detached.vbusRail || detached.vconn || detached.boost || detached.window);
+
     for (int next : {EMPTY, SINK, HELD}) {
         Port stopped;
-        stopped.enter(REATTACH, "proven");
+        stopped.enter(WAIT_SOURCE, "attach");
         stopped.allow = false;
         stopped.enter(next, "stop");
-        EXPECT_FALSE(stopped.boost || stopped.rails || stopped.switches || stopped.window);
+        EXPECT_FALSE(stopped.boost || stopped.vbusRail || stopped.vconn || stopped.switches || stopped.window);
         stopped.check();
     }
 }
 
-TEST(SwitchUsbHostPowerRole, ReattachFaultReleasesPreparedPower)
+TEST(SwitchUsbHostPowerRole, WaitSourceFaultReleasesPreparedPower)
 {
     for (const uint16_t fault : {uint16_t{SRC_FAULT}, uint16_t{0}}) {
         Port port;
-        port.enter(REATTACH, "proven");
+        port.enter(WAIT_SOURCE, "attach");
         port.events.clear();
         const Status status = {static_cast<uint16_t>(R7W_SINK_ATTACH.first | (fault ? 0 : 1)), OTG_INSERT};
-        const Decision d = decide(REATTACH, fault, status);
+        const Decision d = decide(WAIT_SOURCE, fault, status);
         EXPECT_EQ(std::make_tuple(d.act, d.next, d.cancel), std::make_tuple((int)END, (int)HELD, true));
         port.alert(status, fault);
         EXPECT_EQ(port.phase, HELD);
-        EXPECT_FALSE(port.boost || port.rails || port.window);
-        EXPECT_EQ(port.events, (std::vector<Event>{{"switches", false}, {"boost", false}, {"rails", false}}));
+        EXPECT_FALSE(port.boost || port.vbusRail || port.vconn || port.window);
+        EXPECT_EQ(port.events,
+                  (std::vector<Event>{{"switches", false}, {"boost", false}, {"vconn", false}, {"vbus", false}}));
     }
 }
 
-TEST(SwitchUsbHostPowerRole, SrcPluginAlertNeverBypassesClassify)
+TEST(SwitchUsbHostPowerRole, LgTrySnkMonitorPreservesVconnAcrossPrSwap)
 {
-    {
-        Port port;
-        port.enter(EMPTY, "start");
-        port.events.clear();
-        port.alert(R7W_SINK_ATTACH_CC2, PLUGPULL | SRC_PLUGIN);
-        EXPECT_EQ(port.phase, CLASSIFY);
-        EXPECT_TRUE(port.window);
-        EXPECT_FALSE(port.rails || port.switches || port.boost);
-        port.alert(R7W_SINK_ATTACH_CC2, SRC_PLUGIN);
-        EXPECT_EQ(port.phase, CLASSIFY);
-        EXPECT_FALSE(port.rails || port.switches || port.boost);
-        port.alert(R7W_MAC_SOURCES, PLUGPULL);
-        EXPECT_EQ(port.phase, SINK);
-        EXPECT_FALSE(port.rails || port.window || port.switches || port.boost);
-        EXPECT_TRUE(pd_usb_device_vbus(0, R7W_MAC_SOURCES.first));
-    }
-    {
-        constexpr Status kMonitorSources = {SPDSNK | VSAFE | DFP | INSERT, 0};
-        Port port;
-        port.enter(EMPTY, "start");
-        port.events.clear();
-        port.alert(R7W_SINK_ATTACH, PLUGPULL);
-        EXPECT_EQ(port.phase, CLASSIFY);
-        EXPECT_FALSE(port.rails || port.switches || port.boost);
-        port.alert(REATTACH_RAILS_UP, SRC_PLUGIN);
-        EXPECT_EQ(port.phase, CLASSIFY);
-        EXPECT_FALSE(port.rails || port.switches || port.boost);
-        port.alert(kMonitorSources, PLUGPULL);
-        EXPECT_EQ(port.phase, SINK);
-        EXPECT_FALSE(port.rails || port.window || port.switches || port.boost);
-        EXPECT_TRUE(pd_usb_host(0, kMonitorSources.first));
-    }
-}
-
-TEST(SwitchUsbHostPowerRole, PrSwapWhileSourcingTransitionsToSink)
-{
-    constexpr Status kMonitorAfterPrSwap = {SPDSNK | VSAFE | DFP | INSERT, 0};
+    constexpr Status kMonitorAfterPrSwapVconn = {SPDSNK | VSAFE | DFP | INSERT, VCONN_ON};
+    constexpr Status kMonitorVconnOff = {SPDSNK | VSAFE | DFP | INSERT, 0};
     Port port;
     port.enter(EMPTY, "start");
-    port.alert(R7W_SINK_ATTACH);
-    EXPECT_EQ(port.phase, CLASSIFY);
-    port.alert({0, 0});
-    port.windowEnds({0, 0});
-    EXPECT_EQ(port.phase, REATTACH);
-    port.alert(REATTACH_RAILS_UP);
-    EXPECT_EQ(port.phase, SOURCE);
-    EXPECT_TRUE(port.boost && port.rails && port.switches);
     port.events.clear();
-    port.alert(kMonitorAfterPrSwap, CONTRACT);
+    port.alert(R7W_SINK_ATTACH, PLUGPULL);
+    EXPECT_EQ(port.phase, WAIT_SOURCE);
+    // SPDSRC12_ON never dropped across EMPTY -> WAIT_SOURCE.
+    EXPECT_EQ(port.events, (std::vector<Event>{{"boost", true}, {"vbus", true}, {"vconn", true}}));
+    port.alert(SOURCE_RAILS_UP, SRC_PLUGIN);
+    EXPECT_EQ(port.phase, SOURCE);
+    EXPECT_TRUE(port.boost && port.vbusRail && port.vconn && port.switches);
+    port.events.clear();
+    port.alert(kMonitorAfterPrSwapVconn, PR_SWAP | CONTRACT);
     EXPECT_EQ(port.phase, SINK);
-    EXPECT_FALSE(port.rails || port.boost || port.switches || port.window);
-    EXPECT_EQ(port.events, (std::vector<Event>{{"switches", false}, {"boost", false}, {"rails", false}}));
-    EXPECT_TRUE(pd_usb_host(0, kMonitorAfterPrSwap.first));
-    EXPECT_FALSE(pd_usb_device_vbus(0, kMonitorAfterPrSwap.first));
+    EXPECT_FALSE(port.vbusRail || port.boost || port.switches || port.window);
+    EXPECT_TRUE(port.vconn);
+    EXPECT_EQ(port.events, (std::vector<Event>{{"switches", false}, {"boost", false}, {"vbus", false}}));
+    EXPECT_TRUE(pd_usb_host(0, kMonitorAfterPrSwapVconn.first));
+    EXPECT_FALSE(pd_usb_device_vbus(0, kMonitorAfterPrSwapVconn.first));
+    // Clearing STATUS2.VCONN_ON turns PK5 off while staying in Sink.
+    port.events.clear();
+    port.alert(kMonitorVconnOff, 0);
+    EXPECT_EQ(port.phase, SINK);
+    EXPECT_FALSE(port.vconn);
+    EXPECT_EQ(port.events, (std::vector<Event>{{"vconn", false}}));
+    // Re-entering Sink with VCONN_ON then detaching also turns PK5 off.
+    port.alert(kMonitorAfterPrSwapVconn, 0);
+    EXPECT_TRUE(port.vconn);
     port.alert({0, 0}, PLUGPULL);
     EXPECT_EQ(port.phase, EMPTY);
     EXPECT_TRUE(port.switches);
-    EXPECT_FALSE(port.rails || port.boost);
+    EXPECT_FALSE(port.vbusRail || port.vconn || port.boost);
 }
 
-TEST(SwitchUsbHostPowerRole, MacIsDualRole)
+TEST(SwitchUsbHostPowerRole, ClassifyYieldsStubbornHostAndNeverReSources)
 {
     Port port;
     port.enter(EMPTY, "start");
-    EXPECT_FALSE(port.rails || port.boost);
-    port.alert(R7W_SINK_ATTACH_CC2);
+    port.alert(R7W_SINK_ATTACH_CC2, PLUGPULL);
+    port.alert(SOURCE_RAILS_UP, SRC_PLUGIN);
+    EXPECT_EQ(port.phase, SOURCE);
+    port.events.clear();
+    port.enter(CLASSIFY, "USB host partner did not take power role: source switches off 1 s");
+    EXPECT_EQ(port.phase, CLASSIFY);
+    EXPECT_FALSE(port.vbusRail || port.vconn || port.boost || port.switches);
+    EXPECT_TRUE(port.window);
     port.alert(R7W_MAC_SOURCES);
     EXPECT_EQ(port.phase, SINK);
-    EXPECT_FALSE(port.rails || port.window || port.boost || port.switches);
-    for (const Event &e : port.events) {
-        EXPECT_NE(e, Event("rails", true));
-        EXPECT_NE(e, Event("boost", true));
-    }
+    EXPECT_FALSE(port.vbusRail || port.vconn || port.window || port.boost || port.switches);
     ASSERT_FALSE(port.lines.empty());
     EXPECT_THAT(port.lines.back(), testing::HasSubstr("dual-role"));
+
+    // If the stubborn host stays attached without sourcing until the window expires, stay in Sink (never re-source).
+    Port stubborn;
+    stubborn.enter(CLASSIFY, "yield");
+    stubborn.windowEnds(R7W_SINK_ATTACH_CC2);
+    EXPECT_EQ(stubborn.phase, SINK);
+    EXPECT_FALSE(stubborn.vbusRail || stubborn.vconn || stubborn.boost || stubborn.switches);
+
+    // If it detached during Classify, return to Empty.
+    Port left;
+    left.enter(CLASSIFY, "yield");
+    left.alert({0, 0}, PLUGPULL);
+    EXPECT_TRUE(left.saw);
+    left.windowEnds({0, 0});
+    EXPECT_EQ(left.phase, EMPTY);
+    EXPECT_TRUE(left.switches);
+    EXPECT_FALSE(left.vbusRail || left.vconn || left.boost);
 }
 
 TEST(SwitchUsbHostPowerRole, PreparedSuppliesReleaseOnFault)
@@ -517,26 +548,26 @@ TEST(SwitchUsbHostPowerRole, PreparedSuppliesReleaseOnFault)
         Port port;
         port.enter(EMPTY, "start");
         if (phase == CLASSIFY)
-            port.alert(R7W_SINK_ATTACH);
+            port.enter(CLASSIFY, "yield");
         port.events.clear();
         port.alert(R7W_SINK_ATTACH, SRC_FAULT);
         EXPECT_EQ(port.phase, HELD);
-        EXPECT_FALSE(port.rails || port.boost || port.switches || port.window);
+        EXPECT_FALSE(port.vbusRail || port.vconn || port.boost || port.switches || port.window);
         if (phase == EMPTY)
             EXPECT_THAT(port.events, testing::Contains(Event("switches", false)));
-        EXPECT_THAT(port.events, testing::Not(testing::Contains(Event("rails", true))));
+        EXPECT_THAT(port.events, testing::Not(testing::Contains(Event("vbus", true))));
         EXPECT_THAT(port.events, testing::Not(testing::Contains(Event("boost", true))));
     }
 }
 
 // SwitchUSB's data role: host for the partner we source and for a source that left us DFP (the dock after its data role
-// swap, a hub with power in); never for a partner still being classified, which presents Rd while we are DFP by
-// default (r7w's attach, before the Mac turned out to be dual-role), nor for the Mac or a charger, which leave us UFP.
+// swap, a hub with power in); never for a partner still waiting to source, which presents Rd while we are DFP by
+// default, nor for the Mac or a charger, which leave us UFP.
 TEST(SwitchUsbHostDataRole, HostForOurSinkOrASourceThatMadeUsDfp)
 {
-    EXPECT_FALSE(pd_usb_host(0, R7W_SINK_ATTACH.first)) << "classifying the keyboard's adapter";
-    EXPECT_FALSE(pd_usb_host(0, R7W_SINK_ATTACH_CC2.first)) << "classifying the Mac";
-    EXPECT_TRUE(pd_usb_host(1, REATTACH_RAILS_UP.first)) << "sourcing";
+    EXPECT_FALSE(pd_usb_host(0, R7W_SINK_ATTACH.first)) << "waiting for the keyboard's adapter";
+    EXPECT_FALSE(pd_usb_host(0, R7W_SINK_ATTACH_CC2.first)) << "waiting for the Mac";
+    EXPECT_TRUE(pd_usb_host(1, SOURCE_RAILS_UP.first)) << "sourcing";
     EXPECT_FALSE(pd_usb_host(0, R7W_MAC_SOURCES.first)) << "the Mac is our host";
     EXPECT_FALSE(pd_usb_host(0, R7W_CHARGER_AT_BOOT.first)) << "a charger leaves us UFP";
     constexpr uint16_t kDockAfterSwap = SPDSNK | VSAFE | DFP | INSERT;
@@ -553,7 +584,7 @@ TEST(SwitchUsbHostDataRole, DeviceVbusOnlyFromAHostPort)
 {
     constexpr uint16_t kNothing = 0;
     const std::vector<std::pair<int, uint16_t>> hostSessionThenNoPartner = {
-        {0, R7W_SINK_ATTACH.first}, {1, REATTACH_RAILS_UP.first}, {1, kNothing}, {0, kNothing}};
+        {0, R7W_SINK_ATTACH.first}, {1, SOURCE_RAILS_UP.first}, {1, kNothing}, {0, kNothing}};
     for (const auto &[sourcing, status1] : hostSessionThenNoPartner)
         EXPECT_FALSE(pd_usb_device_vbus(sourcing, status1)) << std::hex << status1;
     EXPECT_TRUE(pd_usb_device_vbus(0, R7W_MAC_SOURCES.first)) << "the Mac is our host";
@@ -575,23 +606,22 @@ TEST(SwitchUsbHostPowerRole, ChargerAtBootAndNoHostMode)
     EXPECT_THAT(off.lines.back(), testing::HasSubstr("host mode off"));
 }
 
-TEST(SwitchUsbHostPowerRole, ClassifyWindows)
+TEST(SwitchUsbHostPowerRole, Windows)
 {
     const auto actNext = [](const Decision &d) {
         return std::make_pair(d.act, d.next);
     };
-    // no detach: no proof
     EXPECT_EQ(actNext(windowEnd(CLASSIFY, false, R7W_SINK_ATTACH.first)), std::make_pair((int)ENTER, (int)SINK));
-    // back already
     EXPECT_EQ(actNext(windowEnd(CLASSIFY, true, R7W_SINK_ATTACH.first)), std::make_pair((int)ENTER, (int)SINK));
-    Decision d = windowEnd(CLASSIFY, true, 0);
-    EXPECT_EQ(actNext(d), std::make_pair((int)ENTER, (int)REATTACH));
-    EXPECT_THAT(d.why, testing::HasSubstr("boost, source rails"));
-    d = windowEnd(REATTACH, false, 0);
-    EXPECT_EQ(actNext(d), std::make_pair((int)ENTER, (int)EMPTY));
+    EXPECT_EQ(actNext(windowEnd(CLASSIFY, true, 0)), std::make_pair((int)ENTER, (int)EMPTY));
+    EXPECT_EQ(actNext(windowEnd(WAIT_SOURCE, false, SOURCE_RAILS_UP.first, SOURCE_RAILS_UP.second)),
+              std::make_pair((int)START, (int)SOURCE));
+    EXPECT_EQ(actNext(windowEnd(WAIT_SOURCE, false, R7W_MAC_SOURCES.first, 0)), std::make_pair((int)ENTER, (int)SINK));
+    const Decision d = windowEnd(WAIT_SOURCE, false, 0, 0);
+    EXPECT_EQ(actNext(d), std::make_pair((int)END, (int)EMPTY));
     EXPECT_THAT(d.why, testing::HasSubstr("boost and source rails off"));
     for (const int phase : {EMPTY, SINK, SOURCE, HELD})
-        EXPECT_EQ(windowEnd(phase, true, 0).act, NONE) << phase;
+        EXPECT_EQ(windowEnd(phase, true, 0, 0).act, NONE) << phase;
 }
 
 TEST(SwitchUsbHostPowerRole, LeavingSource)
@@ -603,15 +633,15 @@ TEST(SwitchUsbHostPowerRole, LeavingSource)
     EXPECT_EQ(actNext(decide(SOURCE, SRC_FAULT, R7W_SINK_ATTACH)), std::make_pair((int)END, (int)HELD));
     EXPECT_EQ(actNext(decide(SOURCE, 0, R7W_SINK_ATTACH.first | 1, 0x2000)), std::make_pair((int)END, (int)HELD));
     EXPECT_EQ(actNext(decide(SOURCE, PLUGPULL, R7W_MAC_SOURCES)), std::make_pair((int)END, (int)SINK));
-    EXPECT_EQ(decide(SOURCE, 0, REATTACH_RAILS_UP).act, NONE);
+    EXPECT_EQ(decide(SOURCE, 0, SOURCE_RAILS_UP).act, NONE);
     EXPECT_EQ(actNext(decide(HELD, PLUGPULL, 0, 0)), std::make_pair((int)ENTER, (int)EMPTY));
     Port port;
-    port.enter(REATTACH, "proven");
-    port.alert(REATTACH_RAILS_UP);
+    port.enter(WAIT_SOURCE, "attach");
+    port.alert(SOURCE_RAILS_UP, SRC_PLUGIN);
     port.events.clear();
-    port.alert(REATTACH_RAILS_UP, CONTRACT);
+    port.alert(SOURCE_RAILS_UP, CONTRACT);
     EXPECT_EQ(port.phase, SOURCE);
-    EXPECT_TRUE(port.boost && port.rails && port.switches);
+    EXPECT_TRUE(port.boost && port.vbusRail && port.vconn && port.switches);
     EXPECT_TRUE(port.events.empty());
 }
 
@@ -627,12 +657,14 @@ TEST(SwitchUsbHostPowerRole, FuzzedWalk)
                                           R7W_DETACH_SOURCING,
                                           R7W_MAC_SOURCES,
                                           R7W_CHARGER_AT_BOOT,
-                                          REATTACH_RAILS_UP,
+                                          SOURCE_RAILS_UP,
+                                          {SPDSNK | VSAFE | DFP | INSERT, VCONN_ON},
                                           {SRC_MODE | VSAFE | DFP | INSERT, OTG_INSERT},
                                           {SRC_MODE | DFP | INSERT, 0},
                                           {INSERT | UFP, 0}};
-    const std::vector<uint16_t> alerts = {0,         PLUGPULL,   PLUGPULL,          CONTRACT,
-                                          SRC_FAULT, SRC_PLUGIN, PLUGPULL | CONTRACT, PLUGPULL | SRC_PLUGIN};
+    const std::vector<uint16_t> alerts = {0,         PLUGPULL,   PLUGPULL,          PR_SWAP,
+                                          CONTRACT,  SRC_FAULT,  SRC_PLUGIN,        PLUGPULL | CONTRACT,
+                                          PLUGPULL | SRC_PLUGIN};
     for (const bool allow : {true, false}) {
         for (const int boost : {0, -1, -2}) {
             SCOPED_TRACE(std::string(allow ? "host mode" : "no host mode") + ", boost " + std::to_string(boost));
@@ -647,17 +679,17 @@ TEST(SwitchUsbHostPowerRole, FuzzedWalk)
                     port.alert(status, alerts[below(alerts.size())]);
                     if (port.phase == SOURCE && before != SOURCE) {
                         const auto [s1, s2] = status;
-                        ASSERT_EQ(before, REATTACH) << "step " << step;
+                        ASSERT_EQ(before, WAIT_SOURCE) << "step " << step;
                         ASSERT_TRUE((s1 & INSERT) && (s1 & SRC_MODE) && (s2 & OTG_INSERT)) << "step " << step;
                         ASSERT_TRUE(!(s1 & VSAFE) || (s1 & (SPDSRC1 | SPDSRC2))) << "step " << step;
                     }
                     if (before == SOURCE && !(status.first & INSERT))
                         ASSERT_NE(port.phase, SOURCE) << "step " << step;
                 }
-                if (port.phase != REATTACH && port.phase != SOURCE)
-                    ASSERT_FALSE(port.rails || port.boost) << "step " << step;
+                if (port.phase != WAIT_SOURCE && port.phase != SOURCE)
+                    ASSERT_FALSE(port.vbusRail || port.boost) << "step " << step;
                 if (port.phase == SOURCE)
-                    ASSERT_TRUE(port.rails && port.switches) << "step " << step;
+                    ASSERT_TRUE(port.vbusRail && port.vconn && port.switches) << "step " << step;
             }
         }
     }

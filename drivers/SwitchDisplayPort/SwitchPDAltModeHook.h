@@ -16,7 +16,8 @@ class IOWorkLoop;
 // `port_session` is an explicit SOP contract in the current attachment; `dock_power` that the contract is with a source
 // carrying the Nintendo dock's PDO signature. The first call adds the engine's timer to `loop`.
 void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest)(const void *pd), uint16_t alert,
-                         uint16_t status1, bool port_session, bool dock_power);
+                         uint16_t status1, bool port_session, bool dock_power, bool is_source);
+bool switch_pd_alt_partner_is_usb_host();
 // Shut Down or Restart, on the same loop: the step timer off, so nothing reaches COMMAND after SwitchPD has put the
 // controller back.
 void switch_pd_alt_leave();

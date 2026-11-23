@@ -130,9 +130,10 @@ struct Model {
             break;
         case SWITCH_PD_ALT_CMD_DR_SWAP:
             if (partner.refuse_swap) {
-                status1 = static_cast<uint16_t>(status1 | (6u << 4));
+                status1 = static_cast<uint16_t>((status1 & ~(7u << 4)) | (6u << 4));
             } else {
-                status1 = static_cast<uint16_t>((status1 & ~(3u << 8)) | kDfp);
+                const bool currentlyDfp = ((status1 >> 8) & 3u) == SWITCH_PD_ALT_DATA_ROLE_DFP;
+                status1 = static_cast<uint16_t>((status1 & ~((7u << 4) | (3u << 8))) | (currentlyDfp ? kUfp : kDfp));
             }
             alerts.push_back(SWITCH_PD_ALT_ALERT_CMD_DONE);
             break;
@@ -169,6 +170,7 @@ struct Session {
     uint32_t timer_ms = 0;
     bool at_rest = true;
     bool dock_power = true;
+    bool is_source = false;
 
     explicit Session(bool want_dp = true)
     {
@@ -192,10 +194,10 @@ struct Session {
 
     void event(uint16_t alert)
     {
-        const switch_pd_alt_in in{alert, model.status1, model.dp_status, true, at_rest, dock_power};
+        const switch_pd_alt_in in{alert, model.status1, model.dp_status, true, at_rest, dock_power, is_source};
         const switch_pd_alt_step before = alt.step;
         const switch_pd_alt_out out = switch_pd_alt_event(&alt, &in);
-        if (out.act == SWITCH_PD_ALT_NONE && out.line == nullptr && alt.step == before) {
+        if (out.act == SWITCH_PD_ALT_NONE && out.line == nullptr && out.timer_ms == 0 && alt.step == before) {
             return;  // as switch_pd_alt_alert: nothing to perform, the step timer runs on
         }
         perform(out);
@@ -628,6 +630,132 @@ TEST(PinChoice, AWrongCountIsRefused)
 {
     const uint8_t caps[] = {8, 0x45, 0x00, 0x0C, 0x00};
     EXPECT_EQ(switch_pd_alt_choose_pins(caps, 5, false).pin, 0);
+}
+
+TEST(HostIdentity, MacIdentifiedAsDfpInSinkYieldsDataRoleToUfp)
+{
+    Session run;
+    run.dock_power = false;
+    run.is_source = false;
+    run.model.status1 = kInsert | kDfp;
+    run.model.partner.dock = false;
+    run.model.partner.header = kMacHeader;
+    run.model.partner.drd_reply = true;
+    run.settle();
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+    EXPECT_TRUE(run.alt.partner_is_usb_host);
+    EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_FREE);
+    EXPECT_EQ(run.alt.dp_lanes, 0u);
+    EXPECT_EQ(switch_pd_alt_data_role(run.model.status1), SWITCH_PD_ALT_DATA_ROLE_UFP);
+    EXPECT_TRUE(hasCommand(run, SWITCH_PD_ALT_CMD_DR_SWAP));
+    ASSERT_FALSE(run.lines.empty());
+    EXPECT_EQ(run.lines.back(), "yielded data role to USB host");
+}
+
+TEST(HostIdentity, MacIdentifiedWhileSourcingFinishesWithoutDrSwap)
+{
+    Session run;
+    run.dock_power = false;
+    run.is_source = true;
+    run.model.status1 = kInsert | kDfp;
+    run.model.partner.dock = false;
+    run.model.partner.header = kMacHeader;
+    run.settle();
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+    EXPECT_TRUE(run.alt.partner_is_usb_host);
+    EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_FREE);
+    EXPECT_FALSE(hasCommand(run, SWITCH_PD_ALT_CMD_DR_SWAP));
+}
+
+TEST(HostIdentity, BeforeSwapKeepsDrSwapToUfpIntactAndSkipsIfAlreadyUfp)
+{
+    switch_pd_alt alt{};
+    switch_pd_alt_init(&alt, true);
+    alt.step = SWITCH_PD_ALT_DR_SWAP_TO_UFP;
+    const switch_pd_alt_out swap = switch_pd_alt_command(SWITCH_PD_ALT_CMD_DR_SWAP, SWITCH_PD_ALT_REPLY_MS);
+    const switch_pd_alt_out dfp = switch_pd_alt_before_swap(&alt, swap, kInsert | kDfp);
+    EXPECT_EQ(dfp.act, SWITCH_PD_ALT_COMMAND);
+    EXPECT_EQ(dfp.command, SWITCH_PD_ALT_CMD_DR_SWAP);
+    EXPECT_EQ(alt.step, SWITCH_PD_ALT_DR_SWAP_TO_UFP);
+    const switch_pd_alt_out ufp = switch_pd_alt_before_swap(&alt, swap, kInsert | kUfp);
+    EXPECT_EQ(ufp.act, SWITCH_PD_ALT_NONE);
+    EXPECT_EQ(alt.step, SWITCH_PD_ALT_DONE);
+}
+
+TEST(AltMode, PrSwapAlertPausesActiveVdmAndResendsAtRest)
+{
+    Session run;
+    run.dock_power = false;
+    run.model.status1 = kInsert | kDfp;
+    run.model.partner.dock = false;
+    run.event(0);  // sends Discover Identity
+    ASSERT_EQ(run.alt.step, SWITCH_PD_ALT_DISCOVER_ID);
+    run.model.alerts.clear();
+    run.at_rest = false;
+    run.event(SWITCH_PD_ALT_ALERT_PR_SWAP);
+    EXPECT_TRUE(run.alt.paused);
+    const size_t sentBefore = run.model.commands.size();
+    run.at_rest = true;
+    run.event(SWITCH_PD_ALT_ALERT_CMD_DONE);
+    EXPECT_FALSE(run.alt.paused);
+    EXPECT_EQ(run.model.commands.size(), sentBefore + 1);
+    EXPECT_EQ(run.model.commands.back(), SWITCH_PD_ALT_CMD_SEND_VDM);
+    run.settle();
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+    EXPECT_EQ(run.alt.dp_lanes, 2u);
+}
+
+TEST(AltMode, VdmAbortedRetriesOnceAndOtherErrorsFailImmediately)
+{
+    {
+        Session run;
+        run.dock_power = false;
+        run.model.status1 = kInsert | kDfp;
+        run.model.partner.dock = false;
+        run.event(0);  // Discover Identity
+        run.model.alerts.clear();
+        const size_t cmds = run.model.commands.size();
+        run.model.status1 = static_cast<uint16_t>(kInsert | kDfp | (2u << 4));  // LASTCMD_ABORTED
+        run.event(SWITCH_PD_ALT_ALERT_CMD_DONE);
+        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DISCOVER_ID);
+        EXPECT_TRUE(run.alt.paused);
+        EXPECT_TRUE(run.alt.vdm_retried);
+        EXPECT_EQ(run.timer_ms, 100u);
+        EXPECT_EQ(run.model.commands.size(), cmds);
+        run.model.status1 = kInsert | kDfp;
+        run.perform(switch_pd_alt_timer(&run.alt, true));
+        EXPECT_FALSE(run.alt.paused);
+        EXPECT_EQ(run.model.commands.size(), cmds + 1);
+        run.settle();
+        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+        EXPECT_EQ(run.alt.dp_lanes, 2u);
+    }
+    {
+        Session run;
+        run.dock_power = false;
+        run.model.status1 = kInsert | kDfp;
+        run.model.partner.dock = false;
+        run.event(0);
+        run.model.alerts.clear();
+        run.model.status1 = static_cast<uint16_t>(kInsert | kDfp | (6u << 4));  // rejected
+        run.event(SWITCH_PD_ALT_ALERT_CMD_DONE);
+        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_FAILED);
+        EXPECT_EQ(run.alt.lanes, SWITCH_PD_ALT_LANES_FREE);
+    }
+    {
+        Session run;
+        run.dock_power = false;
+        run.model.status1 = kInsert | kDfp;
+        run.model.partner.dock = false;
+        run.event(0);
+        run.model.alerts.clear();
+        run.event(SWITCH_PD_ALT_ALERT_VDM_RECEIVED);  // sends ACCEPT_VDM
+        ASSERT_TRUE(run.alt.accepted);
+        run.model.alerts.clear();
+        run.model.status1 = static_cast<uint16_t>(kInsert | kDfp | (6u << 4));
+        run.event(SWITCH_PD_ALT_ALERT_CMD_DONE);
+        EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_FAILED);
+    }
 }
 
 }  // namespace
