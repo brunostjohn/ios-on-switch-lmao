@@ -377,14 +377,15 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
         const uint32_t bytes = program.dataBytes ? program.dataOffset : program.bytes;
         return std::max(1u, (bytes > 128 ? bytes - 128 : 0) / 8);
     };
-    pl.vertexInstructions = instructions(*vs.record);
+    pl.vertexInstructions =
+        instructions(*vs.record) + (tess ? instructions(*tess[0].record) + instructions(*tess[1].record) : 0);
     pl.fragmentInstructions = instructions(*fs.record);
     // the code as the heap holds it (a runtime record's CPU copy is its header alone)
     const auto writesMemory = [&](const PlacedProgram &p) {
         const uint8_t *header = heapCpu(p.program);
         return !header || placedWritesMemory(header, *p.record);
     };
-    pl.writesMemory[0] = writesMemory(vs);
+    pl.writesMemory[0] = writesMemory(vs) || (tess && (writesMemory(tess[0]) || writesMemory(tess[1])));
     pl.writesMemory[1] = writesMemory(fs);
     pl.memoryEntries = pp.memoryEntries;
     std::vector<uint32_t> words(64 + 16 + kStageSwitchWords + (tess ? 64 : 0) + pp.blobDwords * 2);
@@ -443,6 +444,11 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.setSlot[1] = bindProgramCbufs(w, *fs.record, kSetGroups[1], fs.data, root_.va, exactCbufs);
     const PackProgram *programs[4] = {vs.record, fs.record};
     const uint16_t *farUbos[4] = {vs.farUbos, fs.farUbos};
+    if (tess) {
+        // SET_PATCH is in kOwnedMethods so the blob loop drops it; m2v's tessellation states always draw 1-point
+        // patches.
+        w.m(NVB197_SET_PATCH, 1);
+    }
     for (uint32_t k = 0; tess && k < 2; k++) {
         w.m(PIPELINE_PROGRAM_TESS + kPipelineStageStride * k, tess[k].program);
         w.m(PIPELINE_REGISTER_COUNT_TESS + kPipelineStageStride * k, tess[k].record->gprs);
@@ -517,11 +523,15 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     uint32_t sph[20];
     memcpy(sph, fs.header, sizeof sph);
     pl.primitiveId = (sph[5] >> 24) & 1;  // NVA097_SPHV3T2_IMAP_PRIMITIVE_ID, bit 184
-    uint32_t vsph0;
-    memcpy(&vsph0, vs.header, sizeof vsph0);
-    pl.vertexStores = (vsph0 >> 16) & 1;    // NVA097_SPHV3T1_DOES_GLOBAL_STORE
+    const auto doesGlobalStore = [](const uint8_t *header) {
+        uint32_t sph0;
+        memcpy(&sph0, header, sizeof sph0);
+        return ((sph0 >> 16) & 1) != 0;  // NVA097_SPHV3T1_DOES_GLOBAL_STORE
+    };
+    pl.vertexStores =
+        doesGlobalStore(vs.header) || (tess && (doesGlobalStore(tess[0].header) || doesGlobalStore(tess[1].header)));
     pl.fragmentDepth = (sph[19] >> 1) & 1;  // OMAP_DEPTH, bit 609
-    pl.viewportIndex = headerWritesViewportIndex(vs.header);
+    pl.viewportIndex = headerWritesViewportIndex((tess ? tess[1] : vs).header);
     pl.writesLayer = headerWritesLayer((tess ? tess[1] : vs).header);
     bool tests = false;
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
