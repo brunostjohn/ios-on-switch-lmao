@@ -5271,6 +5271,12 @@ facade_test(
     ],
 )
 
+# A private buffer takes no CPU lease as it is made: its pool chunk stays in the resource set
+facade_test(
+    name = "facade_private_buffer_test",
+    srcs = ["facade_private_buffer_test.cpp"],
+)
+
 # Render passes the facade fails instead of drawing, nothing of them on m2v: attachments Metal's validation layer stops, a
 # stand-in target whose states the pack lacks, a YCbCr texture with no stand-in; a YCbCr state with no target is raw's
 facade_test(

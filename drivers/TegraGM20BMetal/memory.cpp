@@ -583,11 +583,12 @@ uint64_t Device::blPitchVa(const Span &s)
     return ch.pitchVa + s.offset;
 }
 
-bool Device::createBuffer(uint64_t length, Buffer &b, bool wc)
+bool Device::createBuffer(uint64_t length, Buffer &b, bool wc, bool hostVisible)
 {
     b = {};
     if (!length)
         length = 16;
+    bool cleaned = hostVisible;
     {
         std::lock_guard<gm20b::Mutex> l(lock_);
         if (wc && wcAlloc(length, b.span)) {
@@ -598,12 +599,21 @@ bool Device::createBuffer(uint64_t length, Buffer &b, bool wc)
                 SWITCH_METAL_DIAGNOSTIC(stats.wcFallbacks++);
             if (!poolAlloc(length, b.span))
                 return false;
+            Chunk &chunk = chunks_[b.span.chunk];
+            cleaned = hostVisible || chunk.hostTouched;
+            chunk.hostTouched |= hostVisible;
         }
     }
     b.va = b.span.va;
     b.cpu = b.span.cpu;
     b.length = length;
-    // A reused span may still have dirty GPU lines from its previous owner. Acquire before exposing CPU bytes.
+    b.hostVisible = hostVisible;
+    // A reused span may still have dirty GPU lines from its previous owner. Acquire before exposing CPU bytes. A buffer no
+    // CPU reads or writes exposes none: it takes the lease (whose release cleans the CPU's lines) only where a host-visible
+    // buffer was in its chunk before it. A lease takes the whole chunk out of the resource set for good
+    // (SwitchGpuResourceSet.cpp cpu_reached), every resource in it a job use of its own from then on
+    if (!cleaned)
+        return true;
     HostAccess access;
     if (!hostAccess(b, true, access) || !access.finish()) {
         destroyBuffer(b);

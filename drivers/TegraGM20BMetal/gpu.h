@@ -577,8 +577,9 @@ public:
     TextureTransferResult transferTexture(const Texture &texture, uint32_t level, uint32_t slice,
                                           const uint32_t origin[3], const uint32_t size[3], void *bytes, uint64_t row,
                                           uint64_t image, bool write, std::shared_ptr<void> owner);
-    // `wc`: from the write-combined GPU pool (Buffer::wc), else (or full) pool memory as before
-    bool createBuffer(uint64_t length, Buffer &b, bool wc = false);
+    // `wc`: from the write-combined GPU pool (Buffer::wc), else (or full) pool memory as before; `hostVisible`: the CPU
+    // reads or writes it (Buffer::hostVisible), else it takes no CPU lease
+    bool createBuffer(uint64_t length, Buffer &b, bool wc = false, bool hostVisible = true);
 
     // The write-combined chunks held (non-dedicated) and their bytes (test/poolcheck.cpp: they follow what is in them)
     uint32_t wcChunksHeld();
@@ -1235,6 +1236,9 @@ private:
         uint64_t used = 0;
         bool dedicated = false;
         uint64_t pitchVa = 0;  // a block-linear chunk's kind-0 view (blPitchVa), made at its first ask
+        // a pool chunk a host-visible buffer was placed in: the CPU writes such a buffer outside any lease, so lines
+        // it left may be dirty under a later owner of its span (Device::createBuffer)
+        bool hostTouched = false;
     };
 
     // A role's memory steps: the shared pool chunk (a span over half of one gets its own), a chunk of block-linear images, a
