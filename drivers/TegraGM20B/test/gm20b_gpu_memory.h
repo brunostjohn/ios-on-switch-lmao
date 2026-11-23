@@ -55,14 +55,15 @@ struct Memory {
 	const Pte *lastPte[2] = {};
 	const Pte *last = nullptr;
 
-	void map(uint64_t va, uint8_t *bytes, uint64_t size, bool readOnly, bool cached = false)
+	void map(uint64_t va, uint8_t *bytes, uint64_t size, bool readOnly, bool cached = false,
+		 int kind = kNoKind)
 	{
 		EXPECT_EQ(va % kPage, 0u) << "a GPU mapping starts on a page";
 		last = lastPte[0] = lastPte[1] = nullptr;
 		for (uint64_t at = 0; at < size; at += kPage)
 			ptes[(va + at) / kPage] = {
 				nullptr,  bytes + at, 0,     std::min(kPage, size - at),
-				readOnly, cached,     false, kNoKind};
+				readOnly, cached,     false, kind};
 	}
 
 	void map(uint64_t va, std::vector<uint8_t> &buffer, bool readOnly = false,

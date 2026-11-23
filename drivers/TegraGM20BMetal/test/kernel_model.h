@@ -116,6 +116,7 @@ struct Model {
     std::map<uint64_t, BoState> bos;
     std::map<uint64_t, std::pair<uint64_t, uint64_t>> imports;  // handle: the host pages imported and their bytes
     std::map<uint64_t, std::pair<uint64_t, uint64_t>> binds;    // va: the BO bound there and its bytes
+    std::map<uint64_t, uint32_t> bindKinds;                     // va: the PTE kind it was bound with
 
     // Where the host holds the BO bound at `va` (its allocation, or the pages an import named), null: none bound there
     uint8_t *host(uint64_t va)
@@ -765,6 +766,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         for (uint32_t i = 0; i < b.count; i++) {
             const TegraGM20BAbiBindOp &op = b.ops[i];
             model.binds[op.va] = {op.handle, op.range};
+            model.bindKinds[op.va] = op.kind;
             if (model.bound)
                 model.bound(op);
         }

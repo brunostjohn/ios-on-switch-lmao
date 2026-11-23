@@ -6,6 +6,9 @@
 #include "../TegraGM20BMetalInternal.h"
 
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
 
 namespace {
 
@@ -247,6 +250,63 @@ TEST_F(FacadeTextureCopies, AWholeTextureCopyTakesTheLevelsOfOneSize)
     EXPECT_EQ(none.status, MTLCommandBufferStatusError);
     EXPECT_EQ(none.error.code, MTLCommandBufferErrorInvalidResource);
     EXPECT_EQ(gm20bPath(none), "error:call.blit");
+}
+
+// A no-copy block texture off its layout's alignment is a pool image (Texture::callerPages), and a blit into it goes on
+// to the caller's memory through the image's kind-0 view: that memory then holds the image's bytes as they are. Read
+// through lines the blit's 0xfe writes held, the copy took them in the other GOB order: gpu.astc.layouts blitin_back,
+// 21504 blocks wrong with the map g5=w5^w6^1, g6=w5^w7.
+TEST_F(FacadeTextureCopies, ABlitIntoAPoolImageReachesTheCallersMemoryAsTheImageHoldsIt)
+{
+    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatASTC_4x4_LDR
+                                                                                 width:64
+                                                                                height:64
+                                                                             mipmapped:NO];
+    d.storageMode = MTLStorageModeShared;
+    d.usage = MTLTextureUsageShaderRead;
+    id layout = ((id (*)(id, SEL, id, BOOL))objc_msgSend)(
+        gDevice, sel_registerName("newTextureLayoutWithDescriptor:isHeapOrBufferBacked:"), d, NO);
+    ASSERT_TRUE(layout != nil);
+    const NSUInteger length =
+        std::max<NSUInteger>(((NSUInteger (*)(id, SEL))objc_msgSend)(layout, sel_registerName("size")), 16384);
+    constexpr NSUInteger kOffAlignment = 512;
+    void *pages = nullptr;
+    ASSERT_EQ(posix_memalign(&pages, 16384, (kOffAlignment + length + 16383) / 16384 * 16384), 0);
+    auto *at = static_cast<uint8_t *>(pages) + kOffAlignment;
+    memset(at, 0, length);
+    id<MTLTexture> texture = ((id (*)(id, SEL, void *, NSUInteger, id, id))objc_msgSend)(
+        gDevice, sel_registerName("newTextureWithBytesNoCopy:length:descriptor:deallocator:"), at, length, d, nil);
+    ASSERT_TRUE(texture != nil);
+    const gm20b::Texture &image = ((SwitchMetalTexture *)texture)->_raw;
+    ASSERT_TRUE(image.callerPages != nullptr) << "a base off its alignment: a pool image";
+    constexpr NSUInteger kRowBytes = 16 * 16;
+    id<MTLBuffer> staging = [gDevice newBufferWithLength:kRowBytes * 16 options:MTLResourceStorageModeShared];
+    auto *blocks = static_cast<uint8_t *>(staging.contents);
+    for (NSUInteger i = 0; i < kRowBytes * 16; ++i)
+        blocks[i] = uint8_t(i * 7 + (i >> 8) * 61 + 1);
+    id<MTLCommandBuffer> cb = [[gDevice newCommandQueue] commandBuffer];
+    id<MTLBlitCommandEncoder> e = [cb blitCommandEncoder];
+    [e copyFromBuffer:staging
+               sourceOffset:0
+          sourceBytesPerRow:kRowBytes
+        sourceBytesPerImage:0
+                 sourceSize:MTLSizeMake(64, 64, 1)
+                  toTexture:texture
+           destinationSlice:0
+           destinationLevel:0
+          destinationOrigin:MTLOriginMake(0, 0, 0)];
+    [e endEncoding];
+    harness::EngineRun run;
+    ASSERT_NO_FATAL_FAILURE(harness::commitOnRaw(cb, run, true));
+    const uint8_t *texels = kernel_model::model.host(image.imagePitchVa, image.storage.bytes);
+    ASSERT_NE(texels, nullptr);
+    size_t wrong = 0, written = 0;
+    for (uint64_t i = 0; i < image.storage.bytes; ++i) {
+        wrong += at[i] != texels[i];
+        written += texels[i] != 0;
+    }
+    EXPECT_GT(written, 0u) << "the blit wrote the image";
+    EXPECT_EQ(wrong, 0u) << "bytes of the caller's memory that are not the image's";
 }
 
 }  // namespace

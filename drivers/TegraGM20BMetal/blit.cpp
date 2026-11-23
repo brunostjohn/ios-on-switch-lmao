@@ -286,6 +286,13 @@ void BlitEncoder::barrier()
     p_.m(CE_LAUNCH_DMA, kNonPipelined | kFlush | kPitchToPitch | kRemap, SUBC_COPY);
 }
 
+void BlitEncoder::crossKinds()
+{
+    room(SWITCH_GM20B_KIND_SWITCH_WORDS);
+    kit(p_, switch_gm20b_kind_switch);
+    reads_ = writes_ = 0;
+}
+
 void BlitEncoder::timestamp(uint64_t va, bool afterCopies)
 {
     room(counters::kTimestampWords);
