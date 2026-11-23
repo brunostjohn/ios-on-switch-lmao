@@ -92,4 +92,19 @@ final class SignatureTests: XCTestCase {
         XCTAssertNotNil(SceneGoldens(line + "\n").golden(scene: "gpu.x", picture: "p"))
         XCTAssertNil(SceneGoldens(line + "\n").malformed(scene: "gpu.x", picture: "p"))
     }
+
+    func testOneCodeVerdictDistinguishesCloseFromCoarse() {
+        let base = Signature(hash: 1, means: [0.5, 0.25])
+        let fine8 = Signature(hash: 2, means: [0.5 + 0.5 / 255, 0.25])
+        let coarse8 = Signature(hash: 3, means: [0.5 + 2.0 / 255, 0.25])
+        XCTAssertEqual(GoldenVerdict.of(fine8, against: base, metalFormat: 80), .close)
+        XCTAssertEqual(GoldenVerdict.of(coarse8, against: base, metalFormat: 80), .close)
+        XCTAssertTrue(CAGoldens.withinOneCode(fine8, against: base, metalFormat: 80))
+        XCTAssertFalse(CAGoldens.withinOneCode(coarse8, against: base, metalFormat: 80))
+        let fineXR = Signature(hash: 4, means: [0.5 + 0.5 / 510, 0.25])
+        let coarseXR = Signature(hash: 5, means: [0.5 + 2.0 / 510, 0.25])
+        XCTAssertTrue(CAGoldens.withinOneCode(fineXR, against: base, metalFormat: 554))
+        XCTAssertFalse(CAGoldens.withinOneCode(coarseXR, against: base, metalFormat: 554))
+        XCTAssertTrue(CAGoldens.withinOneCode(base, against: base, metalFormat: 80))
+    }
 }

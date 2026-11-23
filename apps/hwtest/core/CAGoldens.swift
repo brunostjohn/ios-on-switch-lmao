@@ -45,4 +45,10 @@ public struct CAGoldens: Sendable {
     public static func line(key: String, label: String, _ attachments: [(index: Int, signature: Signature)]) -> String {
         ([key, label] + attachments.map { "c\($0.index)=\($0.signature.text)" }).joined(separator: " ")
     }
+
+    /// Within one code of `metalFormat` from `golden` (GoldenVerdict allows three, for its other scenes).
+    public static func withinOneCode(_ ours: Signature, against golden: Signature, metalFormat: UInt) -> Bool {
+        let code = Signature.format(metal: metalFormat)?.step() ?? 0
+        return ours.matches(golden, absolute: code, relative: 0)
+    }
 }
