@@ -102,7 +102,7 @@ TEST(SwitchUsbHostSource, SwitchPdUsesThePolicy)
     const std::string source = SourceText("../SwitchPD.cpp");
     EXPECT_THAT(SourceText("../SwitchPDService.h"), HasSubstr("#include \"SwitchPDPolicy.h\""));
     EXPECT_THAT(source, HasSubstr("switch_pd_decide("));
-    EXPECT_TRUE(Block(source, "void SwitchPD::handle(").has("allowSource && railsOn && switchesOn"));
+    EXPECT_TRUE(Block(source, "void SwitchPD::handle(").has("allowSource && !asleepSinkOnly && switchesOn"));
     EXPECT_THAT(source, HasSubstr("switch_pd_window_end("));
     const auto enter = Block(source, "void SwitchPD::enter(");
     EXPECT_TRUE(enter.before("setSwitches(false);", "setRails(rails)"));

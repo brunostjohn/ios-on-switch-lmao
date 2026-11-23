@@ -5,17 +5,15 @@
 // STATUS2) to the next step and says, for every phase, which outputs are on:
 //   - source switches (CONFIG1 SPDSRC): on in Empty, Reattach and Source when host mode is packaged, off in
 //     Sink, Held and Classify;
-//   - fixed source supplies (v_vdd5v3 on PX3, VCONN on PK5): ready before Empty arms the switches, kept through
-//     Classify, Sink, Reattach and Source; off in Held;
-//   - BQ24193 boost: on in Reattach and Source only.
+//   - fixed source supplies (v_vdd5v3 on PX3, VCONN on PK5) and BQ24193 boost: on in Reattach and Source only; off in
+//     Empty, Classify, Sink and Held.
 // On the OLED, v_vdd5v3 is the port's VBUS power (L4T nx-platform tegra210-nx-power-fixed.dtsi "VBUS power", and
 // tegra210b01-fric-power-tree.dtsi usb2-0 vbus-supply "Actual v_vdd5v3"); the BM92T36's SPDSRC switch connects it to
-// the connector once the partner's Rd is seen. bm92txx.c turns the rails on at probe, before SPDSRC12_ON, so the
-// supply is in regulation when the switch closes onto the partner. The supplies remain up while Classify opens
-// only the connector's source switches. VCONN stays available when power and data roles differ; the source FETs
-// isolate VBUS while the Switch sinks power.
-// With the rails up first, the controller drives VBUS itself when the partner comes back, so STATUS1 can already show
-// VSAFE: it is ours when SPDSRC1 or SPDSRC2 is on (our switch closed); VSAFE with both off is someone else's.
+// the connector once the partner's Rd is seen. Keeping PX3 and PK5 off outside Reattach and Source prevents
+// autonomously back-feeding 5.3 V into a dual-role partner through armed SPDSRC12_ON in Empty and follows USB-C
+// §4.5.2.2 (Power Source is VCONN Source). During Reattach, boost, OCP, v_vdd5v3 (10 ms ramp) and VCONN come up before
+// SPDSRC12_ON closes, so STATUS1 can already show VSAFE when the partner comes back: it is ours when SPDSRC1 or SPDSRC2
+// is on; any VSAFE in Empty, or in Reattach with both switches off, is someone else's.
 #ifndef SWITCH_PD_POLICY_H
 #define SWITCH_PD_POLICY_H
 
@@ -44,9 +42,9 @@ enum switch_pd_phase {
     SWITCH_PD_EMPTY,     // nothing on the port; source switches on only with host mode, rails off
     SWITCH_PD_SINK,      // a partner we do not source: switches off until it is unplugged
     SWITCH_PD_CLASSIFY,  // a partner that came up as our sink, switches off: does it source (dual-role) or go?
-    SWITCH_PD_REATTACH,  // sink-only proven: boost on, switches armed, waiting for it to come back
+    SWITCH_PD_REATTACH,  // sink-only proven: boost and source rails on, switches armed, waiting for it to come back
     SWITCH_PD_SOURCE,    // our VBUS on a sink-only partner
-    SWITCH_PD_HELD,      // source error: fixed supplies off, not again until unplugged
+    SWITCH_PD_HELD,      // source error: switches, boost and source rails off, not again until unplugged
 };
 
 enum switch_pd_act {
@@ -90,8 +88,7 @@ static inline bool switch_pd_switches_on(enum switch_pd_phase phase, bool allow_
 
 static inline bool switch_pd_rails_on(enum switch_pd_phase phase)
 {
-    return phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_SINK ||
-           phase == SWITCH_PD_REATTACH || phase == SWITCH_PD_SOURCE;
+    return phase == SWITCH_PD_REATTACH || phase == SWITCH_PD_SOURCE;
 }
 
 static inline bool switch_pd_boost_on(enum switch_pd_phase phase)
@@ -112,8 +109,8 @@ static inline struct switch_pd_step switch_pd_step_make(enum switch_pd_act act, 
     return step;
 }
 
-// After an ALERT (alert = its ALERT_STATUS) or with the state as it is (alert 0). source_ready includes host mode,
-// enabled fixed supplies and armed connector switches.
+// After an ALERT (alert = its ALERT_STATUS) or with the state as it is (alert 0). source_ready includes host mode and
+// armed connector switches.
 // NOLINTBEGIN(modernize-use-nullptr): C (the host harness) reads this header too; 0 is the step without a reason
 static inline struct switch_pd_step switch_pd_decide(enum switch_pd_phase phase, uint16_t alert, uint16_t status1,
                                                      uint16_t status2, bool source_ready)
@@ -136,7 +133,7 @@ static inline struct switch_pd_step switch_pd_decide(enum switch_pd_phase phase,
             return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_SINK, false,
                                        "sink: the partner is a source (charger, host or dock)");
         }
-        if (vbus && (!source_ready || !switch_pd_vbus_ours(status1))) {
+        if (vbus) {
             return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_SINK, false,
                                        "sink: the partner came up as our sink with VBUS already up");
         }
@@ -167,7 +164,7 @@ static inline struct switch_pd_step switch_pd_decide(enum switch_pd_phase phase,
                                    "sink: the partner came back as a source, or with VBUS up that is not ours");
     case SWITCH_PD_SOURCE:
         if (!plugged)
-            return switch_pd_step_make(SWITCH_PD_END, SWITCH_PD_EMPTY, false, "detached: boost off");
+            return switch_pd_step_make(SWITCH_PD_END, SWITCH_PD_EMPTY, false, "detached: VBUS, v_vdd5v3, VCONN off");
         if (!partner_is_sink) {
             return switch_pd_step_make(SWITCH_PD_END, SWITCH_PD_SINK, false,
                                        "not sourcing: the partner took the source role (sink until unplugged)");
@@ -228,11 +225,11 @@ static inline struct switch_pd_step switch_pd_window_end(enum switch_pd_phase ph
         }
         return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_REATTACH, false,
                                    "sink-only partner: it left with our source switches off and sourced nothing; "
-                                   "boost, then source switches, on");
+                                   "boost, source rails (OCP, v_vdd5v3, VCONN), then switches, on");
     }
     if (phase == SWITCH_PD_REATTACH) {
         return switch_pd_step_make(SWITCH_PD_ENTER, SWITCH_PD_EMPTY, false,
-                                   "empty: the sink-only partner did not come back; boost off");
+                                   "empty: the sink-only partner did not come back; boost and source rails off");
     }
     return switch_pd_step_make(SWITCH_PD_NONE, phase, false, 0);
 }

@@ -148,7 +148,7 @@ void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
         !state.vbusPresent && (status1 & SWITCH_PD_STATUS1_SRC_MODE) && (status2 & SWITCH_PD_STATUS2_OTG_INSERT) &&
         !(status1 & SWITCH_PD_STATUS1_FAULT_MASK) && !(alertBits & SWITCH_PD_ALERT_SRC_FAULT))
         enter(SWITCH_PD_CLASSIFY, "replacement partner presents Rd without VBUS");
-    apply(switch_pd_decide(phase, alertBits, status1, status2, allowSource && railsOn && switchesOn));
+    apply(switch_pd_decide(phase, alertBits, status1, status2, allowSource && !asleepSinkOnly && switchesOn));
     if (handleFault(alertBits, status1)) {
         notify();
         return;
@@ -256,7 +256,7 @@ void SwitchPD::enter(switch_pd_phase next, const char *why)
     const bool armed = allowSource && !asleepSinkOnly;
     const bool switches = switch_pd_switches_on(next, armed);
     const bool rails = armed && switch_pd_rails_on(next);
-    const bool boost = switch_pd_boost_on(next);
+    const bool boost = armed && switch_pd_boost_on(next);
     if (!switches || (boosting && !boost))
         setSwitches(false);
     if (boosting && !boost)
@@ -366,8 +366,7 @@ void SwitchPD::windowFired(OSObject *owner, IOTimerEventSource *)
             if (!self->switchesOn && !self->enableOcp() && !switch_pd_internal_fault(status1)) {
                 self->configureRoleSwaps(false);
                 const bool sink = (status1 & SWITCH_PD_STATUS1_INSERT) &&
-                                  (!(status1 & SWITCH_PD_STATUS1_SRC_MODE) ||
-                                   ((status1 & SWITCH_PD_STATUS1_VSAFE) && !switch_pd_vbus_ours(status1)));
+                                  (!(status1 & SWITCH_PD_STATUS1_SRC_MODE) || (status1 & SWITCH_PD_STATUS1_VSAFE));
                 self->enter(sink ? SWITCH_PD_SINK : SWITCH_PD_EMPTY, "power role after controller reset");
                 self->handle(bits, status1, status2);
             }

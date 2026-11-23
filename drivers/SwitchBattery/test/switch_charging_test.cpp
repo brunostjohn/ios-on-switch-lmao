@@ -169,7 +169,7 @@ struct Charger {
     bool defaultMode = true, input = false, intPending = false;
     uint8_t latched = 0;
     uint64_t lastKick = 0;
-    unsigned detectMA = 500, vbusStat = 2, writes = 0, iinlimRaises = 0;
+    unsigned detectMA = 500, vbusStat = 2, writes = 0, iinlimRaises = 0, boostEnables = 0;
     bool refuseReg05 = false;
     const Gauge *gauge = nullptr;
     std::vector<std::string> ops;
@@ -281,6 +281,8 @@ struct Charger {
                   "IINLIM raised to " + std::to_string(charge::bq::decodeInputLimit(v)));
         }
         reg[r] = r == 1 ? (uint8_t)(v & 0x3f) : v;
+        if (r == 1 && ((v >> 4) & 3) == 2)
+            ++boostEnables;
         if (r == 2)
             check(charge::bq::decodeChargeCurrent(v) <= 2048, "ICHG " + hex(v));
         if (r == 4)
@@ -294,7 +296,9 @@ struct Charger {
     }
 };
 
+static Charger gCharger;
 static std::map<unsigned, int> gOutputs;
+static unsigned gRailRaises = 0;
 
 struct PdChip {
     uint16_t alert = 0, status1 = 0, status2 = 0, config1 = 0xc0e0, vendor = 0;
@@ -420,7 +424,7 @@ struct PdChip {
         const uint16_t v16 = len >= 2 ? (uint16_t)(data[0] | data[1] << 8) : 0;
         switch (r) {
         case 0x06:
-            if ((config1 >> 14) != 0 && (v16 >> 14) == 0 &&
+            if ((config1 >> 14) != 0 && (v16 >> 14) == 0 && ((gCharger.reg[1] >> 4) & 3u) == 2u &&
                 (!gOutputs[TEGRA_GPIO(X, 3)] || !gOutputs[TEGRA_GPIO(K, 5)]))
                 ++unpoweredSourceArms;
             config1 = v16;
@@ -506,7 +510,6 @@ struct PdChip {
 };
 
 static Gauge gGauge;
-static Charger gCharger;
 static PdChip gPd;
 static std::map<unsigned, IOService *> gNubs;
 
@@ -598,8 +601,11 @@ extern "C" int tegra_gpio_config(unsigned gpio)  // SwitchPD's report: an output
 
 extern "C" int tegra_gpio_output(unsigned gpio, int value)
 {
-    if (value && (gpio == TEGRA_GPIO(X, 3) || gpio == TEGRA_GPIO(K, 5)))
+    if (value && (gpio == TEGRA_GPIO(X, 3) || gpio == TEGRA_GPIO(K, 5))) {
+        ++gRailRaises;
         check((gPd.config1 >> 14) == 3u, "source supply raised before the connector switches opened");
+        check(((gCharger.reg[1] >> 4) & 3u) == 2u, "source supply raised before BQ24193 boost");
+    }
     gOutputs[gpio] = value;
     return 0;
 }
@@ -1249,13 +1255,15 @@ static void dockAltMode()
     gPd.unplug();
     advance(100);
     advance(1000);
-    check(!observed.settled && chgConfig() == 2 && (gPd.config1 >> 14) == 0,
-          "classified replacement keyboard enters reattach with boost and switches armed");
+    check(!observed.settled && chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] &&
+              (gPd.config1 >> 14) == 0,
+          "classified replacement keyboard enters reattach with boost, rails and switches armed");
     gPd.status1 = 0x9680;
     gPd.status2 = 0x2000;
     gPd.alert |= 0x8;
     advance(10);
-    check(observed.settled && observed.role == SWITCH_PD_ROLE_SOURCE && chgConfig() == 2,
+    check(observed.settled && observed.role == SWITCH_PD_ROLE_SOURCE && chgConfig() == 2 &&
+              gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)],
           "the replacement keyboard receives power after classifying and reattaching");
 }
 
@@ -1264,9 +1272,9 @@ static void oledDockSourceStartup()
     check(switch_battery_start() == 0, "switch_battery_start");
     advance(10);
     check(switch_pd_allow_source(true) == 0, "host mode available");
-    check(gPd.unpoweredSourceArms == 0 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] &&
-              chgConfig() == 1 && (gPd.config1 >> 14) == 0,
-          "fixed supplies ready before the first source switch arm, without BQ boost");
+    check(gPd.unpoweredSourceArms == 0 && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] &&
+              gRailRaises == 0 && gCharger.boostEnables == 0 && chgConfig() == 1 && (gPd.config1 >> 14) == 0,
+          "empty port arms connector switches with fixed source rails and BQ boost off");
     SwitchPDState state{};
     check(switch_pd_add_listener(
               [](void *context, const SwitchPDState *current) { *static_cast<SwitchPDState *>(context) = *current; },
@@ -1277,31 +1285,32 @@ static void oledDockSourceStartup()
         gPd.status2 = 0x2000;
         gPd.alert |= 0x8;
         advance(10);
-        check(!state.settled && chgConfig() != 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] &&
+        check(!state.settled && chgConfig() != 2 && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] &&
                   (gPd.config1 >> 14) == 3,
-              "OLED attach: fixed supplies remain ready while boost and connector switches stay off");
+              "OLED attach: classify with boost, rails and connector switches off");
         gPd.unplug();
         advance(100);
     };
     classifyDock();
     advance(1000);
-    check(!state.settled && state.role != SWITCH_PD_ROLE_SOURCE && chgConfig() == 2 &&
+    check(gPd.unpoweredSourceArms == 0 && !state.settled && state.role != SWITCH_PD_ROLE_SOURCE && chgConfig() == 2 &&
               gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
-          "BQ24193 boost and rails power the OLED reattach wait before a source role is published");
+          "BQ24193 boost and rails power the OLED reattach wait before switches arm and before source role is published");
     advance(1100);
-    check(state.settled && state.role == SWITCH_PD_ROLE_NONE && chgConfig() == 1 &&
-              gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)],
-          "reattach timeout releases boost and leaves fixed supplies ready for the empty port");
+    check(state.settled && state.role == SWITCH_PD_ROLE_NONE && chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] &&
+              !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
+          "reattach timeout releases boost and both source rails for the empty port");
 
     classifyDock();
     advance(1000);
-    check(chgConfig() == 2, "second reattach powers VBUS");
+    check(chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)],
+          "second reattach powers VBUS and VCONN");
     gCharger.plug(500, 2);
     gPd.sink({PdChip::fixed(5000, 1500)}, 0, 0x8 | 0x1000 | 0x4000);
     advance(10);
-    check(state.settled && state.role == SWITCH_PD_ROLE_SINK && chgConfig() == 1 &&
-              gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
-          "external source during reattach keeps fixed supplies with boost and source switches off");
+    check(state.settled && state.role == SWITCH_PD_ROLE_SINK && chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] &&
+              !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
+          "external source during reattach releases boost, source rails and source switches");
 
     gCharger.unplug();
     gPd.unplug();
@@ -1310,9 +1319,9 @@ static void oledDockSourceStartup()
     gCharger.plug(500, 2);
     advance(1000);
     check(logHas("not sourcing: the charger sees external VBUS") && state.settled &&
-              state.role == SWITCH_PD_ROLE_SINK && chgConfig() == 1 && gOutputs[TEGRA_GPIO(X, 3)] &&
-              gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
-          "external VBUS at the classify deadline keeps the sink refusal latched");
+              state.role == SWITCH_PD_ROLE_SINK && chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] &&
+              !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
+          "external VBUS at the classify deadline keeps the sink refusal latched with rails off");
     gCharger.unplug();
     gPd.unplug();
     advance(10);
@@ -1324,9 +1333,9 @@ static void oledDockSourceStartup()
               !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
           "sleep cancels the powered reattach wait without rearming it");
     switch_pd_sleep(false);
-    check(chgConfig() == 1 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] &&
+    check(chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] &&
               (gPd.config1 >> 14) == 0,
-          "resume restores fixed supplies without restarting the canceled boost");
+          "resume rearms empty-port switches without restarting boost or source rails");
 }
 
 static void sourceSupplyLifecycle()
@@ -1337,46 +1346,62 @@ static void sourceSupplyLifecycle()
     gPd.status2 = 0;
     gPd.alert |= 0x8;
     advance(10);
-    check(switch_pd_allow_source(true) == 0 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] &&
-              chgConfig() != 2 && (gPd.config1 >> 14) == 3,
-          "host capability arriving after a cold sink attach prepares fixed supplies without sourcing VBUS");
+    check(switch_pd_allow_source(true) == 0 && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] &&
+              gRailRaises == 0 && gCharger.boostEnables == 0 && chgConfig() != 2 && (gPd.config1 >> 14) == 3,
+          "host capability arriving after a cold sink attach keeps source rails, boost and switches off");
     check(switch_pd_allow_source(false) == 0 && !gOutputs[TEGRA_GPIO(X, 3)] &&
               !gOutputs[TEGRA_GPIO(K, 5)] && chgConfig() != 2 && (gPd.config1 >> 14) == 3,
-          "host capability removal in Sink releases fixed supplies with source switches and boost off");
+          "host capability removal in Sink keeps source rails, switches and boost off");
     gPd.unplug();
     advance(10);
-    check(switch_pd_allow_source(true) == 0, "host mode available");
+    check(switch_pd_allow_source(true) == 0 && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] &&
+              gRailRaises == 0 && gCharger.boostEnables == 0 && (gPd.config1 >> 14) == 0,
+          "host mode on an empty port keeps v_vdd5v3, VCONN and boost off");
     gPd.status1 = 0x9e80;
     gPd.status2 = 0x2000;
     gPd.alert |= 0x8;
     advance(10);
-    check(logHas("classifying:") && chgConfig() == 1 && gOutputs[TEGRA_GPIO(X, 3)] &&
-              gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
-          "our VSAFE still classifies with fixed supplies on and connector switches off");
+    check(logHas("with VBUS already up") && chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] &&
+              !gOutputs[TEGRA_GPIO(K, 5)] && gRailRaises == 0 && gCharger.boostEnables == 0 &&
+              (gPd.config1 >> 14) == 3,
+          "VSAFE seen on an empty port is external and enters Sink without powering rails or boost");
+    gPd.unplug();
+    advance(10);
+    gPd.status1 = 0x1a80;
+    gPd.status2 = 0x2000;
+    gPd.alert |= 0x8;
+    advance(10);
+    check(logHas("classifying:") && chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] &&
+              !gOutputs[TEGRA_GPIO(K, 5)] && gRailRaises == 0 && gCharger.boostEnables == 0 &&
+              (gPd.config1 >> 14) == 3,
+          "Mac attach classifies with v_vdd5v3, VCONN, boost and connector switches off");
     advance(422);
     gCharger.plug(500, 1);
     gPd.status1 = 0x0d80;
     gPd.status2 = 0;
     gPd.alert |= 0x8;
     advance(10);
-    check(logHas("dual-role partner:") && chgConfig() == 1 && gOutputs[TEGRA_GPIO(X, 3)] &&
-              gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
-          "Mac takes the source role with fixed supplies on and BQ boost and source switches off");
+    check(logHas("dual-role partner:") && chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] &&
+              !gOutputs[TEGRA_GPIO(K, 5)] && gRailRaises == 0 && gCharger.boostEnables == 0 &&
+              (gPd.config1 >> 14) == 3,
+          "Mac flipping to source never turns on PX3, PK5 or BQ24193 boost");
     gCharger.unplug();
     gPd.unplug();
     advance(10);
-    check(gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)], "empty port supplies restored");
+    check(!gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
+          "empty port keeps source rails off while switches rearm");
     switch_pd_sleep(true);
     check(!gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
-          "empty-port sleep opens connector switches and removes fixed supplies");
+          "empty-port sleep opens connector switches with source rails off");
     switch_pd_sleep(false);
-    check(gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
-          "resume prepares fixed supplies before rearming connector switches");
+    check(!gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
+          "resume rearms empty-port connector switches with source rails off");
     check(switch_pd_allow_source(false) == 0 && !gOutputs[TEGRA_GPIO(X, 3)] &&
               !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
-          "host disable releases empty-port supplies");
-    check(switch_pd_allow_source(true) == 0 && gPd.unpoweredSourceArms == 0,
-          "host enable never arms an unpowered source");
+          "host disable opens empty-port switches with rails off");
+    check(switch_pd_allow_source(true) == 0 && gPd.unpoweredSourceArms == 0 && !gOutputs[TEGRA_GPIO(X, 3)] &&
+              !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
+          "host enable on empty port keeps rails off");
     gPd.status1 = 0x1280;
     gPd.status2 = 0x2000;
     gPd.alert |= 0x8;
@@ -1388,16 +1413,28 @@ static void sourceSupplyLifecycle()
     gPd.unplug();
     advance(10);
     switch_pd_sleep(false);
-    check(gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
-          "canceled classification resumes to a prepared empty port");
+    check(!gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
+          "canceled classification resumes to an empty port with source rails off");
     gPd.status1 = 0x1280;
     gPd.status2 = 0x2000;
     gPd.alert |= 0x8;
     advance(10);
+    gPd.unplug();
+    advance(100);
+    advance(1000);
+    check(gPd.unpoweredSourceArms == 0 && chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] &&
+              gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
+          "sink-only reattach powers boost and source rails before arming switches");
+    gPd.status1 = 0x9680;
+    gPd.status2 = 0x2000;
+    gPd.alert |= 0x8;
+    advance(10);
+    check(chgConfig() == 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
+          "sourcing keeps boost, source rails and switches on");
     gPd.alert |= 0x2;
     advance(10);
-    check(chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)],
-          "a source fault releases fixed supplies while held");
+    check(chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
+          "a source fault releases boost, source rails and switches while held");
     stubSystemPowerMessage(kIOMessageSystemWillRestart);
     check(chgConfig() == 1 && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)],
           "shutdown leaves source supplies off");
@@ -1419,17 +1456,18 @@ static void macPort()
     gPd.sink({PdChip::fixed(5000, 1500)}, 0, 0x8 | 0x1000 | 0x4000);
     gPd.curRdo = 1u << 28 | 50u << 10 | 150u;  // the controller's own contract: 0.5 A of 1.5 A
     advance(10);
-    check(state.role == SWITCH_PD_ROLE_SINK && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] &&
-              chgConfig() != 2 && (gPd.config1 >> 14) == 3,
-          "cold source attach keeps fixed supplies while source switches and boost stay off");
+    check(state.role == SWITCH_PD_ROLE_SINK && !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] &&
+              gRailRaises == 0 && gCharger.boostEnables == 0 && chgConfig() != 2 && (gPd.config1 >> 14) == 3,
+          "cold source attach keeps source rails, source switches and boost off");
     advance(3190);
     check(logHas("request aborted at attach") && !logHas("no USB-PD request"), "aborted once, asked again");
     check(logHas("SwitchPD: contract 5 V 1.5 A (*5 V 1.5 A)") && iinlim() == 1500, "5 V 1.5 A: 1500 mA (r8a: 0.9 A)");
     check(std::count(gPd.commands.begin(), gPd.commands.end(), std::string("0707")) == 2 &&
               std::count(gPd.commands.begin(), gPd.commands.end(), std::string("0505")) == 1 &&
               state.role == SWITCH_PD_ROLE_SINK && !state.dataHost && ((gPd.status1 >> 8) & 3) == 1 &&
-              gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] && chgConfig() != 2 && (gPd.config1 >> 14) == 3,
-          "RDO and PS_RDY complete with fixed supplies retained and the Mac still the USB host");
+              !gOutputs[TEGRA_GPIO(X, 3)] && !gOutputs[TEGRA_GPIO(K, 5)] && gRailRaises == 0 &&
+              gCharger.boostEnables == 0 && chgConfig() != 2 && (gPd.config1 >> 14) == 3,
+          "RDO and PS_RDY complete with source rails and boost off and the Mac still the USB host");
 }
 
 // bm92t_system_reset_auto(false): a controller an earlier boot left plugged as DFP is reset first, then over-current

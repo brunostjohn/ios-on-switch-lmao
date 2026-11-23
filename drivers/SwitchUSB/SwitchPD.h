@@ -21,11 +21,12 @@
 // re-balancing, a source reset) withdraws the published one and starts over; three failed requests in one session end
 // the attempts until the cable is pulled. Every step is a reply to an ALERT or a one-shot timer.
 //
-// On OLED the fixed 5.3 V rail and VCONN can remain on with the connector source switches open while sinking.
-// An initial SRC_MODE/OTG_INSERT looks identical for a sink-only adapter and a dual-role partner (a Mac or monitor).
-// Open the source switches for kClassifyMS to classify it: a dual-role partner then sources VBUS (Sink), while a
-// sink-only partner detaches and is powered across the reattach window. External VBUS blocks boost unless our own
-// enabled source switch accounts for it. Faults and host shutdown isolate the source.
+// Fixed source rails (v_vdd5v3 on PX3, VCONN on PK5) and BQ24193 boost stay off in Empty, Classify, Sink and Held,
+// and turn on only in Reattach and Source (before arming SPDSRC12_ON in Reattach). An initial SRC_MODE/OTG_INSERT
+// looks identical for a sink-only adapter and a dual-role partner (a Mac or monitor). Open the source switches for
+// kClassifyMS to classify it: a dual-role partner then sources VBUS (Sink), while a sink-only partner detaches and is
+// powered across the reattach window. External VBUS blocks boost unless our own enabled source switch accounts for it.
+// Faults and host shutdown isolate the source.
 // One kernel log line per decision, with the controller's bits. The decisions are SwitchPDPolicy.h (host-tested).
 //
 // Interrupt only: a pin that cannot be attached panics; a pin that keeps firing (stuck low: more than 50 ALERTs in a
