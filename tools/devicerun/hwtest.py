@@ -665,6 +665,7 @@ TESTS: dict[str, bool] = {
     'system.widgets_render': False,
     'ui.icon_render': False,
     'system.snapshot_purgeable': False,
+    'recorder.hang_dump': False,
     'ui.launch_hitch': False,
     'system.compiler_alive': False,
     'gpu.x1.texture_extents': False,
