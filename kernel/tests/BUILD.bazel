@@ -1779,3 +1779,28 @@ host_test(
     ],
     includes = ["."],
 )
+
+[genrule(
+    name = "backboardd_environment_" + version,
+    srcs = ["//kernel/xnu-" + xnu + "/bsd:kern/kern_exec.c"],
+    outs = ["backboardd_environment_" + version + ".h"],
+    cmd = """awk '
+        /^static const char \\*const native_switch_bluetoothd_environment\\[/ { on = 1 }
+        /^native_switch_exec_environment\\(/ { fn = 1 }
+        on { print }
+        fn && /^}/ { exit }
+    ' $< > $@""",
+) for version, xnu in [
+    ("17", "10063.141.1"),
+    ("27", "12377.121.6"),
+]]
+
+host_test(
+    name = "switch_backboardd_environment_test",
+    srcs = [
+        "switch_backboardd_environment_test.cpp",
+        ":backboardd_environment_17",
+        ":backboardd_environment_27",
+    ],
+    includes = ["."],
+)

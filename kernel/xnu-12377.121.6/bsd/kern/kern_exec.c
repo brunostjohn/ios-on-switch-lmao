@@ -6903,7 +6903,7 @@ static const char *const native_switch_bluetoothd_environment[] = {
 	"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000", NULL
 };
 static const char *const native_switch_backboardd_environment[] = {
-	"CA_DISABLE_DETACHED=1", NULL
+	"CA_DISABLE_DETACHED=1", "CA_DISABLE_GENERIC_SHADERS=1", NULL
 };
 
 /* The extra environment strings for imgp's executable, NULL-terminated, or NULL for none. */
