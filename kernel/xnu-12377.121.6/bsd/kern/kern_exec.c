@@ -114,6 +114,7 @@
 #include <sys/persona.h>
 #include <sys/reason.h>
 #include <switch/pretranslated.h>
+#include <switch/boot_steps.h>
 #include <switch/protection.h>
 #include <switch/a64x.h>
 #if SYSV_SHM
@@ -10086,6 +10087,8 @@ load_init_program(proc_t p)
 	(void) mach_vm_allocate_kernel(map, &scratch_addr, map_page_size,
 	    VM_MAP_KERNEL_FLAGS_ANYWHERE());
 	user_addr_t init_envp = USER_ADDR_NULL;
+	struct switch_boot_steps steps;
+	switch_boot_steps_begin(&steps);
 #if defined(XNU_OWNER_CACHE_MOUNT) && XNU_OWNER_CACHE_MOUNT
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
 	switch_root_event(9,0,0);
@@ -10095,6 +10098,7 @@ load_init_program(proc_t p)
 	switch_root_event(10,cache_error,0);
 #endif
 	if (cache_error) panic("offline owner SystemOS mount failed: %d", cache_error);
+	switch_boot_steps_mark(&steps, "cryptexes");
 #endif
 #if defined(XNU_OWNER_DATA_MOUNT) && XNU_OWNER_DATA_MOUNT
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT
@@ -10105,23 +10109,31 @@ load_init_program(proc_t p)
 	switch_root_event(12,data_error,0);
 #endif
 	if (data_error) panic("offline scratch Data mount failed: %d", data_error);
+	switch_boot_steps_mark(&steps, "Data and its files");
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && \
     defined(XNU_NATIVE_RAM_BLOCK) && XNU_NATIVE_RAM_BLOCK
 	int watchdog_error = native_switch_watchdog_policy(p, (user_addr_t)scratch_addr);
 	if (watchdog_error) printf("SwitchRawBoot: watchdogd launchd policy not written: %d (continuing)\n", watchdog_error);
+	switch_boot_steps_mark(&steps, "watchdog policy");
 	/* The NVRAM saved on Data (drivers/SwitchNVRAM, /private/var/Switch/nvram.bin): restored now, so that userland
 	 * sees it from its first read, and saved there from now on. */
 	extern uint32_t switch_nvram_data_mounted(void);
 	int nvram_error = native_switch_mkdir(p, (user_addr_t)scratch_addr, "/private/var/Switch", 0, 0755);
 	if (nvram_error) printf("SwitchRawBoot: /private/var/Switch not made: %d (NVRAM not saved)\n", nvram_error);
 	(void)switch_nvram_data_mounted();
+	switch_boot_steps_mark(&steps, "NVRAM and Bluetooth");
 	/* Owner overlay unions over sealed directories (SwitchRawMount.h), now that Data is mounted. */
 	native_switch_raw_overlay(p, (user_addr_t)scratch_addr);
+	switch_boot_steps_mark(&steps, "overlay");
 	switch_bootstrap_capture();
+	switch_boot_steps_mark(&steps, "bootstrap");
 	switch_pretranslated_capture();
+	switch_boot_steps_mark(&steps, "pretranslated");
 	switch_protection_capture();
+	switch_boot_steps_mark(&steps, "protection");
 #endif
 #endif
+	switch_boot_steps_log(&steps, "before launchd");
 #if CONFIG_MEMORYSTATUS
 	(void) memorystatus_init_at_boot_snapshot();
 #endif /* CONFIG_MEMORYSTATUS */
