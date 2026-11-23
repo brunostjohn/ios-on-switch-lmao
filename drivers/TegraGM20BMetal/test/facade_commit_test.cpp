@@ -13,6 +13,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <future>
+#include <memory>
 #include <optional>
 #include <thread>
 
@@ -158,6 +160,42 @@ TEST(GM20BFacadeCommit, EncodersEndedBeforeTheCommitAreEncodedAhead)
     };
     printf("hand-offs over 4 frames: %lld, %lld of them woke the worker\n", delta(@"pipeline_handoffs"),
            delta(@"pipeline_handoff_wakes"));
+}
+
+// Nine passes of eight commands hand the command buffer over at the ninth (kHandOff); with the worker asleep after it
+// encoded them, a tenth publishes too little to hand it over again and wakes no one. Waiting for the encode ahead of it
+// must still return: it hung on iOS 17 now and then in AnotherQueuesSubmissionTakesTheDeviceBack, whose worker slept
+// before the tenth pass's publish.
+TEST(GM20BFacadeCommit, AWaitForTheEncodeAheadWakesASleepingWorker)
+{
+    ASSERT_TRUE(opened().device != nil);
+    // Let any pending 1 s idle release (which calls schedule.wake()) finish before recording so nothing else wakes it.
+    for (int i = 0; i < 400 && gRM->idle.due(0); i++)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    id<MTLCommandQueue> queue = [opened().device newCommandQueue];
+    const scale_frames::Shape shape{15, 90, 4};
+    const auto into = scale_frames::targets(opened().device, shape);
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    for (int p = 0; p < 9; p++)
+        scale_frames::pass(cb, opened().state, into, shape, p, 0);
+    EXPECT_EQ(scale_frames::waitAhead(cb), 0u);
+    for (int i = 0; i < 200 && !gRM->submitAsleep.load(std::memory_order_acquire); i++)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    scale_frames::pass(cb, opened().state, into, shape, 9, 0);
+    const auto waited = std::make_shared<std::promise<uint32_t>>();
+    std::future<uint32_t> answer = waited->get_future();
+    std::thread([cb, waited] {
+        waited->set_value(scale_frames::waitAhead(cb));
+    }).detach();
+    const bool returned = answer.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    EXPECT_TRUE(returned) << "the wait for the encode ahead slept through a publish that woke no worker";
+    if (returned)
+        EXPECT_EQ(answer.get(), 0u);
+    [cb commit];
+    [cb waitUntilCompleted];
+    EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
 }
 
 TEST(GM20BFacadeCommit, PassesBesideAMemorylessColourAreEncodedAhead)

@@ -574,14 +574,16 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 // Host tests' wait for the submit worker, before its commit: returns once the worker encoded ahead everything it
-// published so far, or gave it back (answering the reasons given back, 0 where none). The worker reaches either once it
-// was handed the command buffer and no veto stands; a recorded veto it reads only at its next step.
+// published so far, or gave it back (answering the reasons given back, 0 where none), once it was handed the command
+// buffer. A publish too small to hand it over again (TegraGM20BMetalPipeline.mm kHandOff) and a recorded veto wake no
+// worker asleep, so the wait wakes it: the semaphore keeps the wake for a worker about to sleep.
 - (NSNumber *)switchMetalWaitAhead
 {
     const auto done = [&] {
         return _pipelineDeclined.load(std::memory_order_acquire) ||
                _aheadAt.load(std::memory_order_acquire) >= size_t(_published.load(std::memory_order_acquire) >> 32);
     };
+    gRM->schedule.wake();
     waitFor(self, done);
     return @(_pipelineDeclined.load(std::memory_order_acquire) ? _pipelineGivenBack : 0u);
 }
