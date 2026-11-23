@@ -1081,6 +1081,58 @@ host_test(
     includes = ["."],
 )
 
+# --- kernel/switch/vm/prefetch_*.h ------------------------------------------------------------------------------------
+copy_file(
+    name = "switch_prefetch_list_hdr",
+    src = "//kernel/switch:vm/prefetch_list.h",
+    out = "switch/prefetch_list.h",
+)
+
+copy_file(
+    name = "switch_prefetch_pace_hdr",
+    src = "//kernel/switch:vm/prefetch_pace.h",
+    out = "switch/prefetch_pace.h",
+)
+
+copy_file(
+    name = "switch_prefetch_quiesce_hdr",
+    src = "//kernel/switch:include/switch/prefetch_quiesce.h",
+    out = "switch/prefetch_quiesce.h",
+)
+
+host_test(
+    name = "switch_prefetch_test",
+    srcs = [
+        "switch/prefetch_list.h",
+        "switch/prefetch_pace.h",
+        "switch/prefetch_quiesce.h",
+        "switch_prefetch_test.cpp",
+    ],
+    data = [
+        "//kernel/switch:shutdown/shutdown.c",
+        "//kernel/switch:vm/prefetch.c",
+        "//kernel/switch:vm/prefetch_save.c",
+        "//kernel/switch:vm/prefetch_vm.c",
+        "//kernel/xnu-10063.141.1/bsd:vfs/vfs_cluster.c",
+        "//kernel/xnu-10063.141.1/osfmk:vm/memory_object.c",
+        "//kernel/xnu-10063.141.1/osfmk:vm/vm_fault.c",
+        "//kernel/xnu-10063.141.1/osfmk:vm/vm_object.h",
+        "//kernel/xnu-10063.141.1/osfmk:vm/vm_page.h",
+        "//kernel/xnu-10063.141.1/osfmk:vm/vm_pageout.c",
+        "//kernel/xnu-10063.141.1/osfmk:vm/vm_resident.c",
+        "//kernel/xnu-12377.121.6/bsd:vfs/vfs_cluster.c",
+        "//kernel/xnu-12377.121.6/osfmk:vm/memory_object.c",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_fault.c",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_object_xnu.h",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_page.h",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_page_internal.h",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_pageout.c",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_resident.c",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_upl.c",
+    ],
+    includes = ["."],
+)
+
 copy_file(
     name = "switch_timebase_21H461",
     src = "//kernel/xnu-10063.141.1/bsd:vm/switch_timebase_21H461.h",
