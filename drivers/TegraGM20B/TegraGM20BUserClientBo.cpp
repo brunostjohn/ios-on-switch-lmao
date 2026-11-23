@@ -3,15 +3,12 @@
 #include "TegraGM20BUserClientInternal.h"
 #include "SwitchGpuAllocatedMemory.h"
 #include "TegraGM20BRecord.h"
+#include "../../kits/SwitchRefusal/SwitchRefusal.h"
 
 namespace
 {
 // A compressible BO's granule: one comptag line, one big page (TegraGM20BComp.h TGM_COMP_BYTES)
-constexpr uint64_t kChunkBytes = 128ULL << 10;
-constexpr uint32_t kBoFlags = static_cast<uint32_t>(TegraGM20BBoCoherent) |
-			      static_cast<uint32_t>(TegraGM20BBoContiguous) |
-			      static_cast<uint32_t>(TegraGM20BBoCompressible) |
-			      static_cast<uint32_t>(TegraGM20BBoControl);
+constexpr uint64_t kChunkBytes = SWITCH_GPU_BO_CHUNK_BYTES;
 
 // The GPU pool for clients other than the compositor. Every coherent BO comes from
 // the pool (NVK's coherent event heap, Metal's Shared storage through m2v), and so do nvkm's own page tables and channels,
@@ -223,12 +220,12 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 				      TegraGM20BAbiBoAllocReply *out)
 {
 	const bool compressible = (in->flags & TegraGM20BBoCompressible) != 0u;
-	if (!in->bytes || (in->bytes & 0xfff) || in->bytes > kMaxBoBytes || in->align_log2 < 12 ||
-	    in->align_log2 > 21 || (in->flags & ~kBoFlags) ||
-	    ((in->flags & TegraGM20BBoControl) && !(in->flags & TegraGM20BBoCoherent)) ||
-	    (compressible &&
-	     (in->flags != TegraGM20BBoCompressible || (in->bytes & (kChunkBytes - 1)))))
+	if (!switch_gpu_bo_alloc_args_ok(in->bytes, in->align_log2, in->flags)) {
+		switch_refusal("bo-alloc", "arguments",
+			       "%llu bytes flags %#x align 2^%u invalid or past %llu", in->bytes,
+			       in->flags, in->align_log2, switch_gpu_bo_alloc_limit(in->flags));
 		return kIOReturnBadArgument;
+	}
 	if (__atomic_load_n(&gPoolOrphans, __ATOMIC_RELAXED))
 		scheduleOrphanRelease();  // not here: releasing a view can wait for another connection (releaseOrphans)
 	IOLockLock(lock_);

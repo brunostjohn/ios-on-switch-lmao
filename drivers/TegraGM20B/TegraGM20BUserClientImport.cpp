@@ -127,11 +127,11 @@ private:
 IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 				       TegraGM20BAbiBoAllocReply *out)
 {
-	if (!in->bytes || ((in->address | in->bytes) & 0xfff) || in->bytes > kMaxBoBytes) {
+	if (!switch_gpu_bo_import_args_ok(in->address, in->bytes)) {
 		switch_refusal(
 			"bo-import", "arguments",
-			"IOSurface %u: %llu bytes at %#llx are not whole pages, or past %llu",
-			in->surface_id, in->bytes, in->address, uint64_t(kMaxBoBytes));
+			"IOSurface %u: %llu bytes at %#llx are not whole pages, wrap, or past %llu",
+			in->surface_id, in->bytes, in->address, uint64_t(SWITCH_GPU_MAX_BO_BYTES));
 		return kIOReturnBadArgument;
 	}
 	// before this import's own wiring, which sets the pages' modified bits

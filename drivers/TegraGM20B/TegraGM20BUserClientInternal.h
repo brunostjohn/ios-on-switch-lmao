@@ -38,6 +38,7 @@
 #include "SwitchGpuBindings.h"
 #include "SwitchGpuWriterPromise.h"
 #include "SwitchGpuBoIndex.h"
+#include "SwitchGpuBoLimits.h"
 #include "SwitchGpuBindingTable.h"
 #include "SwitchGpuGatedMethods.h"
 #include "SwitchGpuClaims.h"
@@ -84,7 +85,7 @@ constexpr uint32_t kJobBytes =
 	TegraGM20BMaxJobEvents *
 		(sizeof(TegraGM20BAbiEventUse) + sizeof(TegraGM20BAbiSignalRelease)) +
 	sizeof(TegraGM20BAbiSubmitAdmission) + sizeof(TegraGM20BAbiJobPromises);
-constexpr uint64_t kMaxBoBytes = 256ULL << 20;
+constexpr uint64_t kMaxBoBytes = SWITCH_GPU_MAX_BUFFER_BYTES;
 // IOKit's inline structure limit (4096 bytes) less the tunnel's header
 constexpr uint32_t kMaxRecordBytes = 4096 - 8;
 constexpr uint32_t kFenceToken = 0xfe000001u;

@@ -3304,3 +3304,19 @@ host_test(
     linkopts = ["-fsanitize=thread"],
     sanitize = False,
 )
+
+host_test(
+    name = "switch_gpu_bo_limits_test",
+    srcs = [
+        "switch_gpu_bo_limits_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBoLimits.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+    ],
+    cxx_std = "c++17",
+    data = [
+        "//drivers/TegraGM20B:TegraGM20BUserClient.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientBo.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientImport.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientSpares.cpp",
+    ],
+)

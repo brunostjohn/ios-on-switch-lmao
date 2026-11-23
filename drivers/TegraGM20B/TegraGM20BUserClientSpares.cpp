@@ -387,6 +387,8 @@ void spareIneligible()
 bool spareKeep(const SwitchGpuCachedBuffer &buffer, uint64_t *pas, uint64_t bytes,
 	       switch_gpu_cached_mapping *mapping)
 {
+	if (bytes > kSpareCapBytes || classUp(bytes) >= kClasses)
+		return false;
 	SparePool *p = spares();
 	Spare *s = p && switch_gpu_cached_buffer_alone(buffer) ? IONew(Spare, 1) : nullptr;
 	if (!s)
