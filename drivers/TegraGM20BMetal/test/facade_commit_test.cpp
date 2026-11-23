@@ -750,6 +750,66 @@ TEST(GM20BFacadeCommit, RecordingCost)
     printf("%s", line);
 }
 
+TEST(GM20BFacadeCommit, GiveBackDropsUncommittedEncodeAheadAndPurgesVolatileHeap)
+{
+    ASSERT_TRUE(opened().device != nil && opened().state != nil);
+    id<MTLCommandQueue> queue = [opened().device newCommandQueue];
+    const scale_frames::Shape shape{5, 30, 2};
+    const auto into = scale_frames::targets(opened().device, shape);
+
+    MTLHeapDescriptor *hd = [MTLHeapDescriptor new];
+    hd.size = 256 << 10;
+    hd.storageMode = MTLStorageModeShared;
+    hd.type = MTLHeapTypeAutomatic;
+    id<MTLHeap> heap = [opened().device newHeapWithDescriptor:hd];
+    ASSERT_NE(heap, nil);
+    const uint32_t arena = ((SwitchMetalHeap *)heap)->_arena - 1;
+    ASSERT_EQ([heap setPurgeableState:MTLPurgeableStateVolatile], MTLPurgeableStateNonVolatile);
+
+    @autoreleasepool {
+        id<MTLCommandBuffer> orphan = [queue commandBuffer];
+        for (int p = 0; p < shape.passes; p++)
+            scale_frames::pass(orphan, opened().state, into, shape, p, 0);
+        EXPECT_EQ(scale_frames::waitAhead(orphan), 0u);
+        ASSERT_EQ(gRM->committed.load(), 1u);
+    }
+    gRawRelease.release();
+    EXPECT_EQ(gRM->committed.load(), 0u);
+    EXPECT_TRUE(gRM->raw->arenaPurged(arena));
+
+    EXPECT_EQ([heap setPurgeableState:MTLPurgeableStateNonVolatile], MTLPurgeableStateEmpty);
+    ASSERT_FALSE(gRM->raw->arenaPurged(arena));
+    EXPECT_EQ([heap setPurgeableState:MTLPurgeableStateVolatile], MTLPurgeableStateNonVolatile);
+
+    id<MTLCommandBuffer> live = [queue commandBuffer];
+    for (int p = 0; p < shape.passes; p++)
+        scale_frames::pass(live, opened().state, into, shape, p, 1);
+    EXPECT_EQ(scale_frames::waitAhead(live), 0u);
+    ASSERT_EQ(gRM->committed.load(), 1u);
+    gRawRelease.release();
+    EXPECT_EQ(gRM->committed.load(), 0u);
+    EXPECT_TRUE(gRM->raw->arenaPurged(arena));
+    [live commit];
+    [live waitUntilCompleted];
+    ASSERT_EQ(live.status, MTLCommandBufferStatusCompleted);
+    heap = nil;
+
+    id<MTLCommandBuffer> kept = [queue commandBuffer];
+    for (int p = 0; p < shape.passes; p++)
+        scale_frames::pass(kept, opened().state, into, shape, p, 2);
+    EXPECT_EQ(scale_frames::waitAhead(kept), 0u);
+    ASSERT_EQ(gRM->committed.load(), 1u);
+    gRawRelease.release();
+    EXPECT_EQ(gRM->committed.load(), 1u);
+    [kept commit];
+    [kept waitUntilCompleted];
+    ASSERT_EQ(kept.status, MTLCommandBufferStatusCompleted);
+    NSDictionary *p = pipelined(kept);
+    ASSERT_NE(p, nil);
+    EXPECT_EQ([p[@"abandons"] intValue], 0) << [[p description] UTF8String];
+    EXPECT_GE([p[@"pipelined"] intValue], 1) << [[p description] UTF8String];
+}
+
 TEST(GM20BFacadeCommit, CommitLatency)
 {
     ASSERT_TRUE(opened().device != nil);

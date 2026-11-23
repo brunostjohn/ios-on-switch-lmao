@@ -160,6 +160,7 @@ struct SwitchMetalRawRetirement {
 struct SwitchMetalMove {
     const std::function<void()> *work;
     dispatch_semaphore_t done;
+    bool yieldAll = true;
 };
 
 // A change of the submit worker's schedule another thread hands it (GM20BState::schedule)
@@ -201,8 +202,6 @@ struct GM20BState {
     dispatch_queue_t handlers;           // where scheduled handlers run (in order, never inside commit)
     gm20b::ProgressGate progress;        // whether a completion wakes the submit worker (progress_gate.h)
     std::atomic<uint32_t> committed{0};  // command buffers committed and not finished (the arenas' purge)
-    std::atomic<bool> orphanCheck{
-        false};  // the device idled: an encode ahead no one can commit goes (gm20bPipelineOrphans)
     // the submit worker is about to wait or waits for a change: a command buffer's hand-offs after its first wake it only
     // then (gm20bPublishEncoder; with its _published, a store then a load on each side, both sequentially consistent)
     std::atomic<bool> submitAsleep{false};
@@ -478,6 +477,7 @@ bool gm20bInSubmission();
 // encode ahead open (a Move change from any other thread, which waits for it)
 bool gm20bOnSubmitWorker();
 void gm20bRunOnSubmitWorker(const std::function<void()> &work);
+void gm20bReleaseAhead(bool yieldOpen);
 
 // `move` with no submission running and no encode ahead holding the device's command buffer: at once inside the submit
 // worker's own submission, else on the worker in its order
@@ -609,7 +609,8 @@ void kernelUses(SwitchMetalCommandBuffer *cb, size_t at, std::vector<gm20b::Kern
 // passes' copies and the kept surface imports held until then
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 struct SwitchMetalPassTrim;
-void logGivenBack(size_t relieved, const SwitchMetalPassTrim &passes, const gm20b::Device::Trimmed &kept);
+void logGivenBack(size_t relieved, const SwitchMetalPassTrim &passes, const gm20b::Device::Trimmed &kept,
+                  const gm20b::Device::PurgeStats &purge);
 // The memory line, on the stall line's tick (its queue owns the line's state): what the device holds by kind beside the
 // process's footprint and its limit, whenever either moved since the last
 void gm20bMemoryTick();

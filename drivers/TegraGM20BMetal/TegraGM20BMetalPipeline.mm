@@ -261,11 +261,15 @@ void gm20bPipelineAbandoned(SwitchMetalCommandBuffer *cb, uint32_t veto)
     SWITCH_METAL_DIAGNOSTIC(gRM->stats.pipelineAbandons[__builtin_ctz(veto)]++);
 }
 
-void gm20bPipelineOrphans()
+void gm20bPipelineOrphans(bool yieldOpen)
 {
     Ahead &a = ahead();
-    if (a.cb && !a.cb->_committed.load(std::memory_order_acquire) && CFGetRetainCount((__bridge CFTypeRef)a.cb) == 1)
+    if (!a.cb || a.cb->_committed.load(std::memory_order_acquire))
+        return;
+    if (CFGetRetainCount((__bridge CFTypeRef)a.cb) == 1)
         giveBack(VetoOtherWork);
+    else if (yieldOpen)
+        giveBack(VetoDevice);
 }
 
 static bool sharesRenderTarget(SwitchMetalCommandBuffer *cb, size_t first, size_t second)

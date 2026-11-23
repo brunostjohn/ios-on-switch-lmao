@@ -276,4 +276,47 @@ TEST_F(DeviceSubmitted, ConcurrentDestroyAndTrimEachFreeTheirOwnBosBeforeReturni
     free(pagesB);
 }
 
+TEST_F(DeviceSubmitted, ConcurrentAliasableVolatilePurgeAndHostAccessRunRaceFree)
+{
+    constexpr uint64_t kArenaBytes = 256 << 10;
+    std::atomic<bool> stop{false};
+    std::atomic<uint32_t> committed{0};
+    std::atomic<int> purges{0};
+    std::thread releaser([&] {
+        while (!stop.load(std::memory_order_acquire)) {
+            (void)dev.hasBoundVolatileArena();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+            gm20b::Device::PurgeStats stats;
+            dev.purgeArenas(committed, &stats);
+#else
+            dev.purgeArenas(committed);
+#endif
+            dev.trimArenas(committed);
+            purges.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+    for (int round = 0; round < 30; ++round) {
+        for (bool blockLinear : {false, true}) {
+            uint32_t arena = 0;
+            ASSERT_TRUE(dev.createArena(kArenaBytes, blockLinear, arena));
+            gm20b::Buffer b;
+            ASSERT_TRUE(dev.arenaBuffer(arena, 64 << 10, b));
+            b.hostVisible = !blockLinear;
+            dev.makeArenaAliasable(b.span, b.lease);
+            dev.setArenaVolatile(arena, true);
+            if (!blockLinear) {
+                gm20b::HostAccess access;
+                if (dev.hostAccess(b, false, access))
+                    EXPECT_TRUE(access.finish());
+            }
+            ASSERT_TRUE(dev.restoreArena(arena));
+            dev.destroyBuffer(b);
+            dev.destroyArena(arena);
+        }
+    }
+    stop.store(true, std::memory_order_release);
+    releaser.join();
+    EXPECT_GT(purges.load(), 0);
+}
+
 }  // namespace

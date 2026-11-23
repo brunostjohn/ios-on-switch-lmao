@@ -349,18 +349,22 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
     r->listener = [[MTLSharedEventListener alloc] initWithDispatchQueue:r->handlers];
     gRawRelease.startOnPressure(
         [](void *) {
-            gRM->orphanCheck.store(true, std::memory_order_release);
-            gRM->schedule.wake();
+            gm20bReleaseAhead(gRM->raw->hasBoundVolatileArena());
             const SwitchMetalPassTrim passes = gm20bPassTrim();
             const gm20b::Device::Trimmed kept = gRM->raw->trim();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+            gm20b::Device::PurgeStats purge;
+            gRM->raw->purgeArenas(gRM->committed, &purge);
+#else
             gRM->raw->purgeArenas(gRM->committed);
+#endif
             gRM->raw->trimArenas(gRM->committed);
             releaseRecordings();
             // A daemon over its inactive jetsam limit is killed when it goes inactive, without a pressure notification that
             // would have made malloc give back the dirty pages its zones keep free (a compile's working memory)
             const size_t relieved = malloc_zone_pressure_relief(nullptr, 0);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-            logGivenBack(relieved, passes, kept);
+            logGivenBack(relieved, passes, kept, purge);
 #else
             (void)relieved;
             (void)passes;

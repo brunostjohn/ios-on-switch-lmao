@@ -273,7 +273,7 @@ void Device::destroyArena(uint32_t arena)
         return;
     Arena &a = arenas_[arena];
     a.dying = true;
-    if (!a.leases)
+    if (!a.leases && !a.aliasLeases)
         freeArena(a, deferred);
 }
 
@@ -284,7 +284,7 @@ void Device::arenaFree(std::unique_lock<gm20b::Mutex> &l, Span &s, DeferredFrees
     delete s.storage;
     a.place.release(s.offset, s.bytes);
     s = {};
-    if (a.dying && !a.leases)
+    if (a.dying && !a.leases && !a.aliasLeases)
         freeArena(a, deferred);
 }
 
@@ -495,15 +495,24 @@ bool Device::arenaPurged(uint32_t arena)
     return arena < arenas_.size() && arenas_[arena].purged;
 }
 
+bool Device::hasBoundVolatileArena()
+{
+    std::lock_guard<gm20b::Mutex> l(lock_);
+    for (const Arena &a : arenas_)
+        if (a.used && !a.purged && a.isVolatile)
+            return true;
+    return false;
+}
+
 // lock_ held through `l`. The commit path counts itself in `committed` before it counts purged arenas, so one of the
 // two sees the other: a command buffer committed meanwhile keeps the pages. The slot stays busy while BoFree and
 // hostPages run with lock_ let go so no restore, destroy or access can touch the same VAs or host range until they end.
-void Device::purgeLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const std::atomic<uint32_t> &committed)
+bool Device::purgeLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const std::atomic<uint32_t> &committed)
 {
     purgedArenas_++;
     if (committed.load()) {
         purgedArenas_--;
-        return;
+        return false;
     }
     Arena &initial = arenas_[index];
     const bool wc = initial.wc;
@@ -528,6 +537,7 @@ void Device::purgeLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, cons
     l.lock();
     arenas_[index].busy = false;
     arenaReady_.notify_all();
+    return true;
 }
 
 void Device::purgeArena(uint32_t arena, const std::atomic<uint32_t> &committed)
@@ -538,6 +548,58 @@ void Device::purgeArena(uint32_t arena, const std::atomic<uint32_t> &committed)
         purgeLocked(l, arena, committed);
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+void Device::purgeArenas(const std::atomic<uint32_t> &committed, PurgeStats *stats)
+{
+    if (stats)
+        *stats = {};
+    std::unique_lock<gm20b::Mutex> l(lock_);
+    for (uint32_t i = 0; i < arenas_.size(); ++i) {
+        const Arena &a = arenas_[i];
+        if (!a.used || a.purged || !a.isVolatile)
+            continue;
+        const bool idle = done(submitted());
+        const uint32_t committedNow = committed.load();
+        const uint64_t bytes = a.bytes;
+        const bool nonEmpty = a.place.used() != 0;
+        if (!a.busy && arenaPurgeable(a, idle, committedNow != 0, false)) {
+            if (purgeLocked(l, i, committed)) {
+                if (stats) {
+                    stats->purged++;
+                    stats->purgedBytes += bytes;
+                }
+                continue;
+            }
+            if (stats) {
+                const uint32_t after = committed.load();
+                stats->skipped++;
+                stats->skippedBytes += bytes;
+                stats->committed++;
+                stats->committedCount = std::max(stats->committedCount, after ? after : 1u);
+                if (nonEmpty)
+                    stats->nonEmpty++;
+            }
+            continue;
+        }
+        if (stats) {
+            stats->skipped++;
+            stats->skippedBytes += bytes;
+            if (a.busy)
+                stats->busy++;
+            if (!idle)
+                stats->inFlight++;
+            if (committedNow) {
+                stats->committed++;
+                stats->committedCount = std::max(stats->committedCount, committedNow);
+            }
+            if (a.leases)
+                stats->leases++;
+            if (nonEmpty)
+                stats->nonEmpty++;
+        }
+    }
+}
+#else
 void Device::purgeArenas(const std::atomic<uint32_t> &committed)
 {
     std::unique_lock<gm20b::Mutex> l(lock_);
@@ -545,6 +607,7 @@ void Device::purgeArenas(const std::atomic<uint32_t> &committed)
         if (!arenas_[i].busy && arenaPurgeable(arenas_[i], done(submitted()), committed.load() != 0, false))
             purgeLocked(l, i, committed);
 }
+#endif
 
 // lock_ held through `l`, the device idle: the import goes (no GPU work can read it), each hole's host range is
 // replaced by untouched pages, and the placed parts are imported again at their VAs, all with lock_ let go while the
@@ -645,7 +708,7 @@ void Device::trimArenas(const std::atomic<uint32_t> &committed)
         if (!done(submitted()))
             return;
         const Arena &a = arenas_[i];
-        if (a.used && a.wc && !a.purged && !a.dying && !a.leases && !a.isVolatile && !a.busy)
+        if (a.used && a.wc && !a.purged && !a.dying && !a.leases && !a.aliasLeases && !a.isVolatile && !a.busy)
             trimLocked(l, i, committed);
     }
 }

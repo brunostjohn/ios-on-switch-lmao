@@ -454,4 +454,45 @@ TEST_F(FacadeHeapUse, ABlitFillAndCopyOfAPrivateHeapsBufferDoesNotCleanReservedP
     }
 }
 
+TEST_F(FacadeHeapUse, VolatileHeapWithAliasableResourcesPurgesOnGiveBackAndRestoresOnCommit)
+{
+    kernel_model::model.unknownUsesRefused = true;
+    constexpr uint64_t quarter = 0x40000;
+    for (MTLStorageMode mode : {MTLStorageModeShared, MTLStorageModePrivate}) {
+        SCOPED_TRACE(int(mode));
+        @autoreleasepool {
+            id<MTLHeap> h = facade::heap(mode, 4 * quarter);
+            ASSERT_NE(h, nil);
+            const uint32_t index = ((SwitchMetalHeap *)h)->_arena - 1;
+            MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                                                         width:256
+                                                                                        height:256
+                                                                                     mipmapped:NO];
+            d.storageMode = mode;
+            d.usage = MTLTextureUsageRenderTarget | MTLTextureUsagePixelFormatView;
+            id<MTLTexture> t = [h newTextureWithDescriptor:d];
+            ASSERT_NE(t, nil);
+            id<MTLTexture> view = [t newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm];
+            ASSERT_NE(view, nil);
+            id<MTLCommandBuffer> cb = [[facade::device() newCommandQueue] commandBuffer];
+            MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+            rp.colorAttachments[0].texture = view;
+            rp.colorAttachments[0].loadAction = MTLLoadActionClear;
+            rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+            [[cb renderCommandEncoderWithDescriptor:rp] endEncoding];
+            [t makeAliasable];
+            EXPECT_EQ(h.usedSize, 0u);
+            EXPECT_EQ([h setPurgeableState:MTLPurgeableStateVolatile], MTLPurgeableStateNonVolatile);
+            gRawRelease.release();
+            EXPECT_TRUE(gRM->raw->arenaPurged(index));
+            EXPECT_EQ([h setPurgeableState:MTLPurgeableStateKeepCurrent], MTLPurgeableStateEmpty);
+            [cb commit];
+            [cb waitUntilCompleted];
+            EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted) << cb.error.description.UTF8String;
+            EXPECT_FALSE(gRM->raw->arenaPurged(index));
+            EXPECT_EQ(t.width, 256u);
+        }
+    }
+}
+
 }  // namespace

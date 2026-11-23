@@ -671,8 +671,26 @@ public:
     // purgedArenas() and the purge counts itself there before it reads `committed`, both sequentially consistent, so one of
     // them sees the other: the commit restores what it reaches, or the purge does not happen.
     bool setArenaVolatile(uint32_t arena, bool isVolatile);  // whether its pages had gone (arena_purge.h)
+    bool hasBoundVolatileArena();
     void purgeArena(uint32_t arena, const std::atomic<uint32_t> &committed);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    struct PurgeStats {
+        uint32_t purged = 0;
+        uint64_t purgedBytes = 0;
+        uint32_t skipped = 0;
+        uint64_t skippedBytes = 0;
+        uint32_t committed = 0;
+        uint32_t committedCount = 0;
+        uint32_t leases = 0;
+        uint32_t inFlight = 0;
+        uint32_t busy = 0;
+        uint32_t nonEmpty = 0;
+    };
+
+    void purgeArenas(const std::atomic<uint32_t> &committed, PurgeStats *stats = nullptr);
+#else
     void purgeArenas(const std::atomic<uint32_t> &committed);
+#endif
     bool arenaPurged(uint32_t arena);
     // Fresh pages where it was (their contents zero); false: no memory, it stays purged
     bool restoreArena(uint32_t arena);
@@ -1698,7 +1716,8 @@ private:
         Bo bo;
         HeapPlacement place;
         std::shared_ptr<std::atomic<uint64_t>> multiKindGen;
-        uint32_t leases = 0;  // CPU access and m2v views keep its mappings and host range
+        uint32_t leases = 0;       // active CPU accesses (hostArenaAccess): blocks purge, trim and teardown
+        uint32_t aliasLeases = 0;  // live aliasable placements: blocks trim and teardown, not volatile purge
         bool used = false, isVolatile = false, purged = false, dying = false;
         bool wc = false;    // its host pages are write-combined (arena.cpp hostPages)
         bool busy = false;  // an off-lock purge, trim or restore is in flight on this slot (lock_)
@@ -1740,7 +1759,7 @@ private:
     void trimLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const std::atomic<uint32_t> &committed);
     // lock_ held: the holes a placement of [offset, offset + bytes) reaches bound again; false: no memory for them
     bool backPlacement(Arena &a, uint64_t offset, uint64_t bytes);
-    void purgeLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const std::atomic<uint32_t> &committed);
+    bool purgeLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const std::atomic<uint32_t> &committed);
     void freeArena(Arena &a, DeferredFrees &deferred);                                    // lock_ held
     void arenaFree(std::unique_lock<gm20b::Mutex> &l, Span &s, DeferredFrees &deferred);  // lock_ held
     const ArenaStorage *arenaStorage(const Arena &arena, uint32_t index, uint64_t offset, uint64_t bytes, uint64_t va,

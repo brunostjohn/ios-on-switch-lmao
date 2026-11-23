@@ -231,4 +231,97 @@ TEST_F(DeviceHeapPurge, OnlyVolatileArenasGoAtTheDevicesPurge)
     EXPECT_EQ(dev.purgedArenas(), 0u);
 }
 
+TEST_F(DeviceHeapPurge, VolatileAndEmptyArenasPurgeWithLiveAliasablePlacements)
+{
+    for (bool blockLinear : {false, true}) {
+        SCOPED_TRACE(blockLinear ? "private" : "shared");
+        uint32_t id = 0;
+        ASSERT_TRUE(dev.createArena(kArenaBytes, blockLinear, id));
+        gm20b::Buffer b;
+        ASSERT_TRUE(dev.arenaBuffer(id, 4096, b));
+        dev.makeArenaAliasable(b.span, b.lease);
+        EXPECT_EQ(dev.arenaUsed(id), 0u);
+
+        dev.setArenaVolatile(id, true);
+        dev.purgeArenas(committed);
+        EXPECT_TRUE(dev.arenaPurged(id)) << "aliasable lease must not block volatile purge";
+        ASSERT_TRUE(dev.restoreArena(id));
+        EXPECT_FALSE(dev.arenaPurged(id));
+
+        dev.setArenaVolatile(id, false);
+        dev.purgeArena(id, committed);
+        EXPECT_TRUE(dev.arenaPurged(id)) << "aliasable lease must not block explicit Empty purge";
+        ASSERT_TRUE(dev.restoreArena(id));
+
+        const uint64_t handle = gm20b::DeviceHarness::arena(dev, id).handle;
+        ASSERT_NE(handle, 0u);
+        dev.trimArenas(committed);
+        EXPECT_EQ(gm20b::DeviceHarness::arena(dev, id).handle, handle)
+            << "non-volatile trim still keeps mappings while an aliasable placement lives";
+
+        dev.destroyArena(id);
+        EXPECT_EQ(kernel_model::model.bos.count(handle), 1u)
+            << "destroying the arena waits for the aliasable lease to drop";
+        dev.destroyBuffer(b);
+        EXPECT_EQ(kernel_model::model.bos.count(handle), 0u);
+    }
+}
+
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+TEST_F(DeviceHeapPurge, PurgeStatsReportsPurgedAndEverySkipReason)
+{
+    gm20b::Buffer b;
+    ASSERT_TRUE(dev.arenaBuffer(arena, 4096, b));
+    b.hostVisible = true;
+    dev.setArenaVolatile(arena, true);
+
+    gm20b::Device::PurgeStats stats;
+    committed.store(2);
+    dev.purgeArenas(committed, &stats);
+    EXPECT_EQ(stats.purged, 0u);
+    EXPECT_EQ(stats.skipped, 1u);
+    EXPECT_EQ(stats.skippedBytes, kArenaBytes);
+    EXPECT_EQ(stats.committed, 1u);
+    EXPECT_EQ(stats.committedCount, 2u);
+    EXPECT_EQ(stats.leases, 0u);
+    EXPECT_EQ(stats.inFlight, 0u);
+    EXPECT_EQ(stats.busy, 0u);
+    EXPECT_EQ(stats.nonEmpty, 1u);
+    committed.store(0);
+
+    gm20b::HostAccess access;
+    ASSERT_TRUE(dev.hostAccess(b, false, access));
+    dev.purgeArenas(committed, &stats);
+    EXPECT_EQ(stats.purged, 0u);
+    EXPECT_EQ(stats.skipped, 1u);
+    EXPECT_EQ(stats.leases, 1u);
+    EXPECT_EQ(stats.committed, 0u);
+    EXPECT_EQ(stats.inFlight, 0u);
+    EXPECT_EQ(stats.nonEmpty, 1u);
+    ASSERT_TRUE(access.finish());
+
+    const gm20b::HeapMembers heap(arena, true);
+    kernel_model::model.inFlight = true;
+    submitUsing(heap);
+    dev.purgeArenas(committed, &stats);
+    EXPECT_EQ(stats.purged, 0u);
+    EXPECT_EQ(stats.skipped, 1u);
+    EXPECT_EQ(stats.inFlight, 1u);
+    EXPECT_EQ(stats.leases, 0u);
+    EXPECT_EQ(stats.committed, 0u);
+    completeEverything();
+    kernel_model::model.inFlight = false;
+
+    dev.makeArenaAliasable(b.span, b.lease);
+    dev.purgeArenas(committed, &stats);
+    EXPECT_EQ(stats.purged, 1u);
+    EXPECT_EQ(stats.purgedBytes, kArenaBytes);
+    EXPECT_EQ(stats.skipped, 0u);
+    EXPECT_EQ(stats.skippedBytes, 0u);
+    EXPECT_TRUE(dev.arenaPurged(arena));
+
+    dev.destroyBuffer(b);
+}
+#endif
+
 }  // namespace

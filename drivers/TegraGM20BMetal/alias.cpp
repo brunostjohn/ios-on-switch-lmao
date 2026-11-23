@@ -160,7 +160,7 @@ void Device::releaseHostArena(void *owner, uint32_t index)
     device.waitArena(lock, index);
     Arena &arena = device.arenas_[index];
     --arena.leases;
-    if (arena.dying && !arena.leases)
+    if (arena.dying && !arena.leases && !arena.aliasLeases)
         device.freeArena(arena, deferred);
 }
 
@@ -323,7 +323,7 @@ Lease *Device::leaseSpan(Lease *&lease, const Span &span, Memory from)
     if (!lease) {
         lease = new Lease{this, 1, from, span, nullptr};
         if (from == Memory::Arena)
-            arenas_[span.chunk].leases++;
+            arenas_[span.chunk].aliasLeases++;
     }
     lease->refs++;
     return lease;
@@ -368,12 +368,13 @@ void Device::dropLocked(std::unique_lock<gm20b::Mutex> &l, Lease *lease, Deferre
         break;
     case Memory::Arena:
         waitArena(l, lease->span.chunk);
-        arenas_[lease->span.chunk].leases--;
+        arenas_[lease->span.chunk].aliasLeases--;
         if (lease->placed)
             arenaFree(l, lease->span, deferred);
         else {
             delete lease->span.storage;
-            if (arenas_[lease->span.chunk].dying && !arenas_[lease->span.chunk].leases)
+            if (arenas_[lease->span.chunk].dying && !arenas_[lease->span.chunk].leases &&
+                !arenas_[lease->span.chunk].aliasLeases)
                 freeArena(arenas_[lease->span.chunk], deferred);
         }
         break;

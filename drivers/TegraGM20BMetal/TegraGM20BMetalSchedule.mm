@@ -246,19 +246,39 @@ bool gm20bOnSubmitWorker()
 
 // The worker's, between its submissions: a move begins and commits the device's one command buffer on its own, so an
 // encode ahead holding it goes back first
-static void runMove(const std::function<void()> &work)
+static void runMove(const std::function<void()> &work, bool yieldAll)
 {
-    gm20bPipelineYield(nil, SIZE_MAX, false);
+    if (yieldAll)
+        gm20bPipelineYield(nil, SIZE_MAX, false);
     work();
 }
 
 void gm20bRunOnSubmitWorker(const std::function<void()> &work)
 {
     if (tSubmitWorker) {
-        runMove(work);
+        runMove(work, true);
         return;
     }
-    SwitchMetalMove move{&work, dispatch_semaphore_create(0)};
+    SwitchMetalMove move{&work, dispatch_semaphore_create(0), true};
+    SwitchMetalScheduleChange change;
+    change.kind = SwitchMetalScheduleChange::Move;
+    change.move = &move;
+    gRM->schedule.push(std::move(change));
+    dispatch_semaphore_wait(move.done, DISPATCH_TIME_FOREVER);
+}
+
+void gm20bReleaseAhead(bool yieldOpen)
+{
+    const std::function<void()> work = [yieldOpen] {
+        @autoreleasepool {
+            gm20bPipelineOrphans(yieldOpen);
+        }
+    };
+    if (tSubmitWorker) {
+        work();
+        return;
+    }
+    SwitchMetalMove move{&work, dispatch_semaphore_create(0), false};
     SwitchMetalScheduleChange change;
     change.kind = SwitchMetalScheduleChange::Move;
     change.move = &move;
@@ -275,7 +295,7 @@ static void applyChange(GM20BState &r, const SwitchMetalScheduleChange &change)
         return;
     }
     if (change.kind == SwitchMetalScheduleChange::Move) {
-        runMove(*change.move->work);
+        runMove(*change.move->work, change.move->yieldAll);
         dispatch_semaphore_signal(change.move->done);
         return;
     }
@@ -416,9 +436,6 @@ void submitLoop()
                     break;
                 }
                 closePromise();
-                if (r.orphanCheck.load(std::memory_order_relaxed) &&
-                    r.orphanCheck.exchange(false, std::memory_order_acquire))
-                    gm20bPipelineOrphans();
                 // nothing to submit: what the command buffer being recorded has published, encoded ahead of its commit
                 if (gm20bPipelineStep())
                     continue;
