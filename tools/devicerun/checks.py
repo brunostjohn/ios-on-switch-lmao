@@ -28,6 +28,7 @@ from tools.devicerun.morning import MORNING
 from tools.devicerun.motion import MOTION
 from tools.devicerun.protection import PROTECTION
 from tools.devicerun.rules import REPORT, TIMELINE, Check
+from tools.devicerun.springboard import OBSERVATIONS, SPRINGBOARD
 from tools.devicerun.stutter import STUTTER
 from tools.devicerun.textures import TEXTURES
 
@@ -1428,6 +1429,8 @@ GROUPS: dict[str, list[Check]] = {
     'cpu': CPU,
     'commit': COMMIT,
     'launch': LAUNCHES,
+    'springboard': SPRINGBOARD,
+    'boot-observations': OBSERVATIONS,
 }
 
 # The tools/frames lines, pulled with the checks' own query.

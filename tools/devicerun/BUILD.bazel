@@ -26,6 +26,7 @@ py_library(
         "protection.py",
         "reports.py",
         "rules.py",
+        "springboard.py",
         "stutter.py",
         "textures.py",
     ],
@@ -166,6 +167,14 @@ py_test(
     name = "cpu_test",
     size = "small",
     srcs = ["cpu_test.py"],
+    deps = [":lib"],
+)
+
+# springboard.py: the first SpringBoard of a boot finishes launching inside backboardd's check-in watchdog.
+py_test(
+    name = "springboard_test",
+    size = "small",
+    srcs = ["springboard_test.py"],
     deps = [":lib"],
 )
 

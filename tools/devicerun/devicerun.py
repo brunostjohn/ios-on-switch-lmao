@@ -21,6 +21,7 @@ from tools.devicerun.launch import launch_rows
 from tools.devicerun.morning import CHECKLIST
 from tools.devicerun.reports import crash_rows, frame_rows, headline, rolled_up
 from tools.devicerun.rules import FAIL, Check, Event, Result, evaluate, match
+from tools.devicerun.springboard import springboard_rows
 
 OBSERVED_WIDTH = 110
 
@@ -147,6 +148,7 @@ def evaluate_all(
     groups.append(('cpu-summary', cpu_rows(by_check)))
     groups.append(('commit-summary', commit_rows(by_check)))
     groups.append(('launch-summary', launch_rows(by_check)))
+    groups.append(('springboard-life', springboard_rows(by_check)))
     groups.append(('frames', frame_rows(frame_lines)))
     groups.append(('crashes', crash_rows(crashes)))
     return groups

@@ -96,6 +96,7 @@ class Event:
     category: str
     level: str
     message: str
+    mach: int = 0
 
     @classmethod
     def from_ndjson(cls, record: dict) -> 'Event':
@@ -107,6 +108,7 @@ class Event:
             category=record.get('category') or '',
             level=record.get('messageType') or '',
             message=renamed.current(record.get('eventMessage') or ''),
+            mach=int(record.get('machTimestamp') or 0),
         )
 
 
@@ -149,6 +151,7 @@ def match(check: Check, event: Event, regex: re.Pattern | None) -> dict | None:
         'category': event.category,
         'job': LAUNCHD_PID.sub('', event.subsystem),
         'message': event.message,
+        'mach': event.mach,
         **groups,
     }
 
