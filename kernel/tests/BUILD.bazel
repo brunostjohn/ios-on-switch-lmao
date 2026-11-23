@@ -37,6 +37,10 @@
 #                            and page sleep reporting to it
 #   xnu_sched_slots_test     kernel/switch/sched/slots.h: watched threads' slots taken without a lock, freed only from
 #                            the report's snapshot, filter bits cleared only when no taken id needs them
+#   xnu_recorder_test        kernel/switch/recorder/recorder.h: a UI main thread's busy stretch as one hang, latched
+#                            only when taken; a hang taking a queued tail; the gap, the slots, the status line's cost
+#   xnu_recorder_hooks_source_test  every source in kernel/switch and both trees' bsd and osfmk that names
+#                            SWITCH_RECORDER is in objects.bzl's _RECORDER_OBJECTS, and every listed one names it
 #   xnu_sched_busy_test      kernel/switch/sched/busy.h: a UI main thread's stretch between two run-loop waits split into
 #                            running, blocked by kind and waiting for a core, its longest waits and its line; both trees'
 #                            thread_dispatch feed it under the thread's lock, with nothing there that locks or logs
@@ -191,6 +195,19 @@ host_test(
         "//kernel/switch:srcs",
         "//kernel/xnu-10063.141.1/libkern:c++/OSKext.cpp",
         "//kernel/xnu-12377.121.6/libkern:c++/OSKext.cpp",
+    ],
+)
+
+host_test(
+    name = "xnu_recorder_hooks_source_test",
+    srcs = ["xnu_recorder_hooks_source_test.cpp"],
+    data = [
+        "//kernel/switch:objects.bzl",
+        "//kernel/switch:srcs",
+        "//kernel/xnu-10063.141.1/bsd:all",
+        "//kernel/xnu-10063.141.1/osfmk:all",
+        "//kernel/xnu-12377.121.6/bsd:all",
+        "//kernel/xnu-12377.121.6/osfmk:all",
     ],
 )
 
@@ -362,6 +379,22 @@ host_test(
     srcs = [
         "sched/cpu.h",
         "xnu_sched_cpu_test.cpp",
+    ],
+    includes = ["."],
+)
+
+# --- kernel/switch/recorder/recorder.h ------------------------------------------------------------------------------------
+copy_file(
+    name = "switch_recorder",
+    src = "//kernel/switch:recorder/recorder.h",
+    out = "recorder/recorder.h",
+)
+
+host_test(
+    name = "xnu_recorder_test",
+    srcs = [
+        "recorder/recorder.h",
+        "xnu_recorder_test.cpp",
     ],
     includes = ["."],
 )
