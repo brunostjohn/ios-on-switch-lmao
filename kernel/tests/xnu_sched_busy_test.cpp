@@ -201,13 +201,15 @@ TEST(XnuSchedBusy, TheLineNamesKindsLargestFirstAndTheLongestWaits)
 TEST(XnuSchedBusy, AHintStallHasNoNameForGivesItsNumber)
 {
     switch_busy_episode e = {};
-    e.waits = 1;
+    e.waits = 2;
     e.hint_ticks[0x1c] = 9;
     e.hint_waits[0x1c] = 1;
     e.longest[0] = {.ticks = 9, .hint = 0x1c};
+    e.longest[1] = {.ticks = 4, .hint = 0x23};
     const std::string line = Line(e);
-    EXPECT_THAT(line, HasSubstr("(wait kind 0x1c 9 us/1)"));
-    EXPECT_THAT(line, HasSubstr(" 9 us wait kind 0x1c, user pc"));
+    EXPECT_THAT(line, HasSubstr("(paging in progress 9 us/1)"));
+    EXPECT_THAT(line, HasSubstr(" 9 us paging in progress, user pc"));
+    EXPECT_THAT(line, HasSubstr(" 4 us wait kind 0x23, user pc"));
 }
 
 TEST(XnuSchedBusy, TheLineStaysInsideItsBuffer)

@@ -16,7 +16,8 @@
  * shared cache, main+<offset>), and who it waits for: the process that received the request a special reply port
  * waits on (or the receiver of the port it is still queued at), the receiver of the port a send is blocked on, or the
  * thread or workqueue at the end of its turnstile's inheritor chain (lock holders, sync IPC servers), with that
- * thread's own state.
+ * thread's own state. A "chain:" line follows when that owner waits for another in turn (up to STALL_MORE more) or a
+ * wait on the way is a kernel rwlock, whose writer it names (stall_chain.c).
  *
  * The line that ends it names the threads that ran the most on the cores since its first line: the first line takes
  * every thread's time on a core, the end the gains since (the newest stall's: one snapshot).
@@ -172,6 +173,7 @@ void switch_stall_tick(uint64_t now)
             if (!slot->report) {
                 slot->snap = (struct stall_snapshot){0};
                 switch_stall_take(t, &slot->snap);
+                switch_stall_take_rwlock(t, &slot->snap.wait);
                 slot->report = due = began = true;
             }
             break;
@@ -186,7 +188,7 @@ void switch_stall_tick(uint64_t now)
         thread_unlock(t);
         splx(s);
         if (began) {
-            switch_stall_take_owner(&slot->snap);
+            switch_stall_take_owner_chain(&slot->snap, STALL_MORE);
         }
     }
     simple_unlock(&stall_lock);
@@ -198,15 +200,17 @@ void switch_stall_tick(uint64_t now)
 /* Releases the snapshot's references. */
 static void stall_report_one(const char *name, struct stall_snapshot *ss, struct switch_stall_episode episode)
 {
-    struct stall_line l = {.at = 0};
+    struct stall_line l = {.at = 0}, chain = {.at = 0};
+    const int pid = task_pid(ss->task);
     uint64_t off_ns = 0, since_ns = 0;
+    bool chained;
 
     absolutetime_to_nanoseconds(ss->taken - episode.since, &off_ns);
     absolutetime_to_nanoseconds(episode.since, &since_ns);
-    switch_stall_put(
-        &l, "%s[%d] main thread 0x%llx %s %llu.%llu s (since %llu.%llu s of uptime, pri %d):", name, task_pid(ss->task),
-        ss->tid, episode.kind == SWITCH_STALL_RUNNABLE ? "runnable, not run, for" : "blocked", off_ns / 1000000000ull,
-        off_ns / 100000000ull % 10, since_ns / 1000000000ull, since_ns / 100000000ull % 10, ss->wait.sched_pri);
+    switch_stall_put(&l, "%s[%d] main thread 0x%llx %s %llu.%llu s (since %llu.%llu s of uptime, pri %d):", name, pid,
+                     ss->tid, episode.kind == SWITCH_STALL_RUNNABLE ? "runnable, not run, for" : "blocked",
+                     off_ns / 1000000000ull, off_ns / 100000000ull % 10, since_ns / 1000000000ull,
+                     since_ns / 100000000ull % 10, ss->wait.sched_pri);
     switch_stall_put_wait(&l, ss);
     switch_stall_put_kernel(&l, "kernel", &ss->wait);
     switch_stall_put_user(&l, ss);
@@ -216,8 +220,12 @@ static void stall_report_one(const char *name, struct stall_snapshot *ss, struct
         switch_stall_census(cpus);
         switch_stall_put_census(&l, cpus);
     }
+    chained = switch_stall_put_chain(&chain, ss);
     switch_stall_release(ss);
     os_log(OS_LOG_DEFAULT, "SwitchStall: %s", l.text);
+    if (chained) {
+        os_log(OS_LOG_DEFAULT, "SwitchStall: %s[%d] main thread 0x%llx chain:%s", name, pid, ss->tid, chain.text);
+    }
 }
 
 static void stall_used_take(int slot)

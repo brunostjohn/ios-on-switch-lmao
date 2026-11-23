@@ -189,7 +189,7 @@ static inline void switch_busy_where(char *out, size_t size, uint8_t where, uint
     }
 }
 
-/* block_hint.h's name for a hint, or its number past the ones stall.h names (the page waits among them). */
+/* block_hint.h's name for a hint, or its number past the ones stall.h names. */
 static inline void switch_busy_kind(char *out, size_t size, unsigned int hint)
 {
     if (hint < SWITCH_STALL_WAIT_NAMES) {
