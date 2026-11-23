@@ -251,8 +251,8 @@ bool SwitchXHCI::resetSuperSpeed()
         return false;
     // Taken before the work: a controller reset inside the power-off window owes it again (heldWrite32).
     __atomic_store_n(&sspiDue, false, __ATOMIC_RELEASE);
-    const uint32_t before = gHost.portsc(port);
 #if DEVELOPMENT || DEBUG
+    const uint32_t before = gHost.portsc(port);
     os_log(OS_LOG_DEFAULT, "SwitchUSB: SuperSpeed reset requested on port %u (PORTSC %#x)", port, before);
 #endif
     gHost.setPortPower(port, false);
