@@ -494,6 +494,7 @@ void tgm_stats_tick(void)
 				  in_place[2] / 1000);
 		}
 	}
+	tgm_stats_l2_inval_window();
 #undef PT_NS
 }
 #endif
