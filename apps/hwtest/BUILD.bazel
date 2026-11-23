@@ -794,6 +794,7 @@ host_test(
         "//drivers/TegraGM20BMetal:descriptors.h",
         "//drivers/TegraGM20BMetal:record_parts.h",
         "//drivers/TegraGM20BMetal:set_entries.h",
+        "//drivers/TegraGM20BMetal:program_stores.h",
         "//drivers/TegraGM20BMetal:set_reads.h",
         "//drivers/TegraGM20BMetal:spill_table.h",
     ],

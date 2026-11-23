@@ -123,6 +123,14 @@ OS_BUILD = re.compile(r' os=\S+')
 # The Core Animation states the pack holds (ca/caset.py's tiers): every one. The runtime makes a state and places its
 # programs in the shader heap at its first lookup (gpu.cpp Device::pipeline), so the pack's size is file size only.
 CA_TIERS = ('corpus', 'demand', 'manifest', 'variants', 'blend', 'fetch', 'closure')
+# The tiers the generator derives and no device or manifest named: their states are laid after the launch set
+# (runtime/pack.h PackHeader::tier0), their lines marked by cold_line
+COLD_TIERS = ('variants', 'blend', 'fetch', 'closure')
+
+
+def cold_line(line: str) -> str:
+    """Give a corpus line marked as a state of tier 1 (probe_states.h State::tier); its key is the line's as it was."""
+    return line.replace(' samples=', ' tier=1 samples=', 1)
 
 
 def ca_corpus(qc: Path, corpus: Path, work: Path, names: list[str] = (), preferences: Path = STAGER) -> Path:
@@ -205,7 +213,10 @@ def ca_states(
     for tier, labels in caset.labels(tables, named, CA_TIERS, cif10).items():
         out.append((tier, [line for line in (caspec.state_line(tables, n) for n in labels) if fresh(line)]))
     why: dict[str, int] = {}
-    tagged = [(tier, [caset.with_fetch_rung(tables, line, why) for line in lines]) for tier, lines in out]
+    tagged = [
+        (tier, [(cold_line if tier in COLD_TIERS else str)(caset.with_fetch_rung(tables, line, why)) for line in lines])
+        for tier, lines in out
+    ]
     for reason, count in sorted(why.items()):
         print(f'make_pack: fetching states, {reason}: {count}')
     return tagged

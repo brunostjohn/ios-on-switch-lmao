@@ -121,6 +121,9 @@ struct State {
     // a line naming the state's written variant (" | wtex=<slot>:<format>,...", written_textures.h): the formats bound at
     // the slots it writes, which its key leaves out as it does xrSlots
     std::vector<gm20b::WrittenTexture> written;
+    // its line's " tier=1": a state the generator derived and no device named, laid after the launch set (pack.h
+    // PackHeader::tier0); 0: one of the launch set
+    uint64_t tier = 0;
 };
 
 // A line's " | cubic s<slot>:<s><t><r><border><n|p>... t<slot>:<MTLPixelFormat>..." segment (cubic.h key) as binds,
@@ -215,6 +218,8 @@ inline bool parseState(id<MTLLibrary> qc, const std::string &line, State &s, con
             d.tessellationFactorScaleEnabled = scale != 0;
         } else if (h.rfind("amp=", 0) == 0) {
             d.maxVertexAmplificationCount = strtoul(h.c_str() + 4, nullptr, 10);
+        } else if (h == "tier=1") {
+            s.tier = 1;
         } else if (h == "twr=2") {
             [d setValue:@2 forKey:@"textureWriteRoundingMode"];
         } else if (h[0] == 'a' && isdigit(h[1])) {

@@ -145,6 +145,7 @@ filegroup(
         "nak_target.h",
         "owned.h",
         "program_pages.h",
+        "program_stores.h",
         "sample_shading.h",
         "pack.cpp",
         "pack.h",
@@ -465,6 +466,20 @@ py_test(
         "pack/ca/qc-24B119.json",
     ],
     main = "pack/ca/closure_test.py",
+    deps = [":pack"],
+)
+
+# pack/make_pack.py's tiers: every Core Animation state a device or QuartzCore names is in the pack's launch set (tier 0)
+py_test(
+    name = "tiers_test",
+    size = "medium",
+    srcs = ["pack/ca/tiers_test.py"],
+    data = [
+        "precompile/ca-names/24B119.txt",
+        "precompile/corpus.log",
+        "pack/ca/qc-24B119.json",
+    ],
+    main = "pack/ca/tiers_test.py",
     deps = [":pack"],
 )
 

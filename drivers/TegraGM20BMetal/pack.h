@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // The driver's pipeline pack (pack/mkpack.py writes it, pack/make_pack.py runs the whole generation at bundle build time;
 // this is its layout). Little endian, packed, sections 256-byte aligned. Read-only after load: mmapped shared and pointed into,
-// so every process reads the same page-cache pages. Its pipelines are in keyHash order (Pack::find searches them in place).
+// so every process reads the same page-cache pages. Its pipelines are in keyHash order within each tier (Pack::run searches
+// them in place).
 #pragma once
 #include <cstddef>
 #include <algorithm>
@@ -37,7 +38,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 32;
+constexpr uint32_t kPackVersion = 33;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bit 26 of its pass, bits 17-25 of the chip
@@ -76,6 +77,9 @@ constexpr uint32_t ropBlendAssumptions(uint8_t model)
     return uint32_t(model) << kRopBlendShift & kRopBlendAssumptions;
 }
 
+// Tier 0 is the launch set: every state a device journalled or Apple named (pack/make_pack.py). Each section lays tier 0's
+// part first, tier0[s] bytes from its start; within each tier the records and the fast keys are in key order. The heap's
+// tier 0 ends on a kPackTierAlign boundary with an instruction prefetch's room after its last program.
 struct PackHeader {
     char magic[8];                                    // "GM20BPK1"
     uint32_t version, programs, pipelines, samplers;  // kPackVersion
@@ -84,7 +88,10 @@ struct PackHeader {
     // the chip facts (kChipAssumptions) the pack's builder took as proven on the device: a draw's facts always hold them
     uint32_t chipFacts;
     uint32_t reserved;
+    uint64_t tier0[PackSectionCount];  // v33
 };
+
+constexpr uint64_t kPackTierAlign = 128 << 10;
 
 // A program's constant buffer as the pack and the runtime's capture name it: its nvk_cbuf_type in bits 0-2, and for a uniform
 // buffer's descriptor (CbufUbo) its byte offset in set 0 / 16 in bits 3-7, or 0 where the offset is past 496 bytes and the
@@ -115,6 +122,11 @@ struct PackProgram {
     // v27. Its uniform buffers past set-0 byte 496 (cbufType CbufUbo, bits 3-7 zero): the blob section's dword + 1 of its far
     // table, kProgramCbufs uint16_t of each slot's set-0 byte / 16 (0: none); 0: it has none (programFarUbos)
     uint8_t farUbos[3];
+    uint32_t facts;  // v33. PackProgramFact bits, found in its code when it was made
+};
+
+enum PackProgramFact : uint32_t {
+    kProgramWritesMemory = 1u << 0,  // its code stores to memory (program_stores.h programWritesMemory)
 };
 
 // One of a stage's programs compiled under assumptions about its draws (PackAssumption). A stage's variants are tried in order
@@ -491,8 +503,9 @@ struct PackPipeline {
     // v27. Bits 8-15 of spillEntry[0] (bits 0-7 here) and spillEntry[1] (bits 8-15 here): an argument table past entry 254
     uint16_t spillEntryHigh;
     // v24. A tessellation state's control and evaluation programs (program indices; a runtime record's are its
-    // tessPrograms). strideTwin: the keyHash of the same state with its bind-stride layouts pulled in the shader
-    // (RuntimeRecord::strideTwin), which a draw of a bind stride past a stream's 12 bits takes; 0: none.
+    // tessPrograms). strideTwin: the same state with its bind-stride layouts pulled in the shader (RuntimeRecord::strideTwin),
+    // which a draw of a bind stride past a stream's 12 bits takes: in the pack (v33) its record of this record's form, as
+    // its index + 1; in a runtime record its keyHash. 0: none.
     uint32_t tessPrograms[2];
     uint64_t strideTwin;
     // An amplifying state's push words + 1 of m2v's AmplificationLayerOffset and AmplificationViewportOffset (0: none),
@@ -713,13 +726,14 @@ static_assert(offsetof(PackPipeline, tessPrograms) == 704 && offsetof(PackPipeli
 static_assert(offsetof(PackPipeline, entriesHigh) == 31 && offsetof(PackPipeline, farEntriesAt) == 557 &&
                   offsetof(PackPipeline, spillEntryHigh) == 702,
               "pack layout: packfile.py PIPELINE_V27");
-static_assert(sizeof(PackProgram) == 44 && offsetof(PackProgram, farUbos) == 41, "pack layout");
+static_assert(sizeof(PackProgram) == 48 && offsetof(PackProgram, farUbos) == 41, "pack layout");
 static_assert(sizeof(PackVariant) == 8, "pack layout");
 static_assert(sizeof(PackArchive) == 16, "pack layout");
 static_assert(sizeof(PackComputeFacts) == 24, "pack layout: packfile.py compute_facts_bytes");
 static_assert(sizeof(PackReflection) == 16, "pack layout: packfile.py reflection_bytes");
 static_assert(sizeof(PackFastKey) == 16, "pack layout: packfile.py fast_key_bytes");
-static_assert(sizeof(PackHeader) == 24 + 16 * PackSectionCount + 16, "pack layout: packfile.py pack_bytes header_size");
+static_assert(sizeof(PackHeader) == 24 + 16 * PackSectionCount + 16 + 8 * PackSectionCount,
+              "pack layout: packfile.py pack_bytes header_size");
 static_assert(sizeof(PackKernel) == 18 + 256 + 14 + 128 + 8 * kKernelEntries + 84 + 12, "pack layout");
 static_assert(offsetof(PackKernel, stageInRegionWord) == 1012, "pack layout: packfile.py KERNEL_V21");
 static_assert(sizeof(PackSplit) == 34 + 256 + 32, "pack layout");
@@ -752,9 +766,16 @@ public:
         return hdr_->section[s].bytes;
     }
 
-    // A state's records: of keyHash `keyHash`, a search of the pipelines section; of fast key `fast`, one probe of
-    // PackFastKeys and none of the pipelines (a process's open reads no record: a search's probes would read the
-    // section's pages at a state's creation). No records: the pack holds no such state.
+    // The entries of section `s` in tier 0 (PackHeader::tier0), entries of `size` bytes
+    uint64_t tier0Entries(PackSectionId s, size_t size) const
+    {
+        return hdr_->tier0[s] / size;
+    }
+
+    // A state's records: of keyHash `keyHash`, a search of the pipelines section's tier 0, then of its tier 1; of fast key
+    // `fast`, the same of PackFastKeys and none of the pipelines (a process's open reads no record: a search's probes
+    // would read the section's pages at a state's creation). A state of tier 0 reads no page of tier 1. No records: the
+    // pack holds no such state.
     PackRun run(uint64_t keyHash) const;
     PackRun fastRun(uint64_t fast) const;
     const PackPipeline *find(const PackRun &run, PackForm form = PackForm::Default) const;  // nullptr: none of `form`

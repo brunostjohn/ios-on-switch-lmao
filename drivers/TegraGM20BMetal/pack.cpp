@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
+#include <utility>
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -60,7 +62,8 @@ bool Pack::load(const char *path, uint64_t stack, std::string &err)
         return false;
     }
     for (int s = 0; s < PackSectionCount; s++)
-        if (hdr_->section[s].offset > size_ || hdr_->section[s].bytes > size_ - hdr_->section[s].offset) {
+        if (hdr_->section[s].offset > size_ || hdr_->section[s].bytes > size_ - hdr_->section[s].offset ||
+            hdr_->tier0[s] > hdr_->section[s].bytes) {
             err = "truncated pack";
             return false;
         }
@@ -108,27 +111,45 @@ uint32_t relocated(const PackInitMethod &m, const InitAddresses &a)
     }
 }
 
-// pack/packfile.py writes the pipelines in keyHash order
+namespace {
+
+// The entries of [first, end) whose key is `key`, each tier's part of the span ([first, split), [split, end)) in key order
+template <class T, class Key>
+std::pair<const T *, const T *> tieredRange(const T *first, const T *split, const T *end, uint64_t key, Key keyOf)
+{
+    for (const auto &[from, to] : {std::pair{first, split}, std::pair{split, end}}) {
+        const T *at = std::lower_bound(from, to, key, [&](const T &entry, uint64_t wanted) {
+            return keyOf(entry) < wanted;
+        });
+        const T *last = at;
+        while (last != to && keyOf(*last) == key)
+            last++;
+        if (last != at)
+            return {at, last};
+    }
+    return {end, end};
+}
+
+}  // namespace
+
 PackRun Pack::run(uint64_t keyHash) const
 {
-    const PackPipeline *p = section<PackPipeline>(PackPipelines), *end = p + hdr_->pipelines;
-    const PackPipeline *first = std::lower_bound(p, end, keyHash, [](const PackPipeline &a, uint64_t h) {
-        return a.keyHash < h;
-    });
-    const PackPipeline *last = first;
-    while (last != end && last->keyHash == keyHash)
-        last++;
-    return {first, uint32_t(last - first)};
+    const PackPipeline *p = section<PackPipeline>(PackPipelines);
+    const auto [first, last] = tieredRange(p, p + tier0Entries(PackPipelines, sizeof(PackPipeline)),
+                                           p + hdr_->pipelines, keyHash, [](const PackPipeline &r) {
+                                               return r.keyHash;
+                                           });
+    return first == last ? PackRun{} : PackRun{first, uint32_t(last - first)};
 }
 
 PackRun Pack::fastRun(uint64_t fast) const
 {
     const PackFastKey *k = section<PackFastKey>(PackFastKeys);
-    const PackFastKey *end = k + bytes(PackFastKeys) / sizeof(PackFastKey);
-    const PackFastKey *at = std::lower_bound(k, end, fast, [](const PackFastKey &a, uint64_t f) {
-        return a.fast < f;
-    });
-    if (at == end || at->fast != fast)
+    const auto [at, last] = tieredRange(k, k + tier0Entries(PackFastKeys, sizeof(PackFastKey)),
+                                        k + bytes(PackFastKeys) / sizeof(PackFastKey), fast, [](const PackFastKey &f) {
+                                            return f.fast;
+                                        });
+    if (at == last)
         return {};
     return {section<PackPipeline>(PackPipelines) + at->first, at->records};
 }

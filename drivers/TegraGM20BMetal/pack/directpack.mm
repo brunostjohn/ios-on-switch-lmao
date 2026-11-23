@@ -9,7 +9,8 @@
 // records.bin, little-endian, per state: "DREC", the outcome (0 made, 1 refused, 2 failed), the key and the reason (u32 length,
 // bytes), then for a made state its PackPipeline (pack.h; vs 0, fs 1, no blob), its key string, its registers (u32 count,
 // method and value pairs: emit's), its vertex and fragment programs (header + code, shader data, constant buffer types:
-// each a u32 length and bytes), its constexpr sampler headers (u32 count, eight words each), which its entries number from 0,
+// each a u32 length and bytes, then a u32 of its register count, its bound-texture slot << 8 and its PackProgram::facts <<
+// 16), its constexpr sampler headers (u32 count, eight words each), which its entries number from 0,
 // and its fragment program's split: u32 0, or 1 and its PackSplit (no program indices), its per-pixel program and its prologue
 // (as the programs above; the prologue's header 80 bytes of zeros), its program variants, and the iterated blend program a
 // fetch-free form names (u32 length and bytes: ca/fetchfree.py, iterated/table.py; empty for any other record), then its
@@ -28,8 +29,9 @@
 // (runtime/pack.h PackComputeFacts: three u32).
 // And per state the corpus names, once: "DRFL", u32 0 for a render state (under its key less any variant name) or 1 for a
 // compute state (under a kernel key of it), the key, and its reflection (runtime/reflection_blob.h: u32 length, bytes).
-// And per corpus line that makes a render state: "DFKY", u32 16, its fast key (TegraGM20BMetalPipelineKey.h fastKey) and
-// the keyHash its records are under (record.h packKeyHash of its key less any variant name), each a u64.
+// And per corpus line that makes a render state: "DFKY", u32 24, its fast key (TegraGM20BMetalPipelineKey.h fastKey), the
+// keyHash its records are under (record.h packKeyHash of its key less any variant name) and its line's tier (probe_states.h
+// State::tier), each a u64.
 // A corpus line that makes no state is a refused DREC, and a D line that makes no kernel a refused DKRN, keyed by the line.
 // PROBE_DATA_LIBS names the directory of the corpus's data: libraries.
 #import <Foundation/Foundation.h>
@@ -108,7 +110,7 @@ void record(Writer &w, const std::string &key, gm20b::CompileOutcome outcome, co
         w.list(p.data);
         w.list(p.cbufTypes);
         w.list(p.farUbos);
-        w.u32(p.gprs | uint32_t(p.boundTextures) << 8);
+        w.u32(p.gprs | uint32_t(p.boundTextures) << 8 | gm20b::programFacts(p) << 16);
     };
     for (const gm20b::CapturedProgram &p : rec.programs)
         program(p);
@@ -354,7 +356,7 @@ int main(int argc, char **argv)
                 textures.cubic = s.cubic;
                 makeState(direct, w, qc, line, textures, s, counts);
                 const std::string state = s.key.substr(0, gm20b::variantNameAt(s.key));
-                const uint64_t keys[2] = {s.fast, gm20b::packKeyHash(state)};
+                const uint64_t keys[3] = {s.fast, gm20b::packKeyHash(state), s.tier};
                 fwrite("DFKY", 1, 4, w.f);
                 w.bytes(keys, sizeof keys);
                 if (reflected.insert(state).second) {

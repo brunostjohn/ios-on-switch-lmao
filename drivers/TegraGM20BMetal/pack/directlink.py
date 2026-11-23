@@ -18,6 +18,7 @@ import os
 import struct
 import sys
 import time
+from collections.abc import Callable
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'iterated'))
@@ -58,6 +59,9 @@ TABLE_KINDS = {code: kind for kind, code in packfile.TABLE_KINDS.items()}
 STREAM_FORMAT, STREAM_STRIDE = 0x1C00, 0xFFF
 TEXTURE_KINDS = {2: 'slot', 3: 'fetch', 4: 'tex3d', 6: 'depth_test', 7: 'stencil_test'}
 SAMPLER_SLOT, SAMPLER_CONSTEXPR = 1, 2
+# The heap's tier 0 ends on this boundary (runtime/pack.h kPackTierAlign) with an instruction prefetch's room after its
+# last slot (runtime/program_pages.h kProgramPrefetchBytes)
+TIER_ALIGN, PREFETCH = 128 << 10, 0x1000
 
 
 class Reader:
@@ -83,7 +87,7 @@ def program(r: Reader) -> dict:
     far = r.blob()
     out['far_ubos'] = list(struct.unpack(f'<{len(far) // 2}H', far))
     words = r.u32()
-    out['gprs'], out['bound_textures'] = words & 0xFF, words >> 8 & 0xFF
+    out['gprs'], out['bound_textures'], out['facts'] = words & 0xFF, words >> 8 & 0xFF, words >> 16
     return out
 
 
@@ -107,15 +111,15 @@ def load_records(path: str) -> tuple[list[dict], list[dict], dict[tuple[bool, in
 @functools.cache  # each bucket's records.bin is parsed once: gather, the kernels and main's reflections share it
 def read_records(
     path: str,
-) -> tuple[list[dict], list[dict], dict[tuple[bool, int], bytes], list[tuple[int, int]]]:
-    """Give load_records' and each corpus line's fast key with its state's key hash (DFKY)."""
+) -> tuple[list[dict], list[dict], dict[tuple[bool, int], bytes], list[tuple[int, int, int]]]:
+    """Give load_records' and each corpus line's fast key, its state's key hash and its line's tier (DFKY)."""
     with open(path, 'rb') as f:
         r = Reader(f.read())
     states, kernel_recs, reflections, fast = [], [], {}, []
     while not r.done():
         tag = r.take(4)
         if tag == b'DFKY':
-            fast.append(struct.unpack('<QQ', r.blob()))
+            fast.append(struct.unpack('<QQQ', r.blob()))
             continue
         if tag == b'DRFL':
             compute, key, blob = bool(r.u32()), r.blob().decode(), r.blob()
@@ -156,20 +160,71 @@ def read_records(
     return states, kernel_recs, reflections, fast
 
 
-def fast_keys(lines: list[tuple[int, int]]) -> dict[int, int]:
-    """Give each fast key the corpus lines made (directpack.mm DFKY: fast key, key hash) its state's key hash.
+def fast_keys(lines: list[tuple[int, int, int]]) -> tuple[dict[int, int], dict[int, int]]:
+    """Give each fast key its state's key hash, and each state the lowest tier of its lines.
 
-    A fast key of two states, or a state of two fast keys, is refused: the fast key has to name what the key's text
-    names (TegraGM20BMetalPipelineKey.h fastKey), no more and no less.
+    The lines are directpack.mm's DFKY (fast key, key hash, tier), one per corpus line. A fast key of two states, or a
+    state of two fast keys, is refused: the fast key has to name what the key's text names
+    (TegraGM20BMetalPipelineKey.h fastKey), no more and no less.
     """
     by_fast: dict[int, int] = {}
     by_state: dict[int, int] = {}
-    for fast, state in lines:
+    tiers: dict[int, int] = {}
+    for fast, state, tier in lines:
         if by_fast.setdefault(fast, state) != state:
             raise ValueError(f'fast key {fast:016x} names states {by_fast[fast]:016x} and {state:016x}')
         if by_state.setdefault(state, fast) != fast:
             raise ValueError(f'state {state:016x} has fast keys {by_state[state]:016x} and {fast:016x}')
-    return by_fast
+        tiers[state] = min(tier, tiers.get(state, tier))
+    return by_fast, tiers
+
+
+def set_tiers(states: list[dict], tiers: dict[int, int]) -> None:
+    """Give each made state its tier: its lines' (`tiers`), 0 for a state no line names (the driver's own).
+
+    A stride twin is in the lowest tier of its own and those of the states it is the twin of, so a state's twin is never
+    of a tier after it.
+    """
+    for rec in states:
+        rec['tier'] = tiers.get(packfile.key_hash(rec), 0)
+    twins: dict[int, int] = {}
+    for rec in states:
+        twin = packfile.PIPELINE_V24.unpack_from(rec['pipeline'], V24_AT)[2]
+        if twin:
+            twins[twin] = min(rec['tier'], twins.get(twin, rec['tier']))
+    for rec in states:
+        rec['tier'] = min(rec['tier'], twins.get(packfile.key_hash(rec), rec['tier']))
+
+
+def lay_out_tiers(
+    states: list[dict], programs: dict[str, dict], found: dict[str, dict], report: list[str]
+) -> tuple[tuple, list[dict], int, int]:
+    """Give the heap image `laid`, tier 0's programs first, the splits, and tier 0's programs and bytes.
+
+    Each tier's generic programs, then its program variants, then its splits. Tier 0's part of the heap ends on a
+    TIER_ALIGN boundary with PREFETCH bytes or more after its last slot (empty: no tier 0).
+    """
+    laid: tuple = (bytearray(), {}, [])
+    split: list[dict] = []
+    split_done: set[str] = set()
+    tier0 = (0, 0)
+    for tier in (0, 1):
+        group = [rec for rec in states if rec['tier'] == tier]
+        report.append(f'tier {tier}: {len(group)} states')
+        mkpack.place_programs([rec['probe'] for rec in group], programs, laid)
+        lay_out_variants(group, programs, laid, report)
+        used = [program_id(rec['programs'][1]) for rec in group if rec['programs'][1]['image']]
+        fresh = [pid for pid in dict.fromkeys(used) if pid not in split_done]
+        split_done.update(fresh)
+        split += splits.lay_out(fresh, found, programs, laid, report)
+        heap = laid[0]
+        if tier == 0 and heap:
+            heap += bytes(-(len(heap) + PREFETCH) % TIER_ALIGN + PREFETCH)
+            tier0 = (len(laid[2]), len(heap))
+    heap, _, prog_recs = laid
+    data = sum(1 for pr in prog_recs if pr['data_bytes'])
+    report.append(f'{len(prog_recs)} programs ({data} with shader data), shader heap image {len(heap) // 1024} KiB')
+    return laid, sorted(split, key=lambda s: s['whole']), *tier0
 
 
 def stage_programs(rec: dict) -> list[dict]:
@@ -555,6 +610,38 @@ def read_option(buckets: list[str], name: str) -> str | None:
     return text
 
 
+def read_reflections(buckets: list[str], report: list[str]) -> dict[tuple[bool, int], bytes]:
+    reflections: dict[tuple[bool, int], bytes] = {}
+    for d in buckets:
+        for state, blob in read_records(os.path.join(d, 'records.bin'))[2].items():
+            reflections.setdefault(state, blob)
+    report.append(
+        f'{sum(not c for c, _ in reflections)} render and {sum(c for c, _ in reflections)} compute reflections, '
+        f'{len(set(reflections.values()))} distinct'
+    )
+    return reflections
+
+
+def write_outputs(
+    out_dir: str,
+    pack: packfile.Pack,
+    varying: list[int],
+    programs: dict[str, dict],
+    phase: Callable[[str], None],
+) -> tuple[bytes, list[int]]:
+    data, blob = packfile.pack_bytes(pack)
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, 'pack.bin'), 'wb') as f:
+        f.write(data)
+    phase('bytes')
+    packfile.write_json(os.path.join(out_dir, 'pack.json'), pack, varying)
+    phase('json')
+    packfile.write_layouts(os.path.join(out_dir, 'layouts.txt'), pack)
+    write_programs(os.path.join(out_dir, 'programs.bin'), programs)
+    phase('files')
+    return data, blob
+
+
 def main() -> None:
     out_dir, *buckets = sys.argv[1:]
     # Each step's seconds, printed (not in report.txt, which must not differ between two links of the same buckets)
@@ -570,47 +657,38 @@ def main() -> None:
     warm = next(d for d in buckets if os.path.exists(os.path.join(d, 'context.log')))
     _, post = mkpack.load_init(os.path.join(warm, 'context.log'))
     states, refused = gather(buckets, draw_context(post[0]))
+    fast, tiers = fast_keys([line for d in buckets for line in read_records(os.path.join(d, 'records.bin'))[3]])
+    set_tiers(states, tiers)
     phase('gather')
     programs = {program_id(p): p for rec in states for p in stage_programs(rec)}
     found = split_programs(states, programs)
     simple = [rec['probe'] for rec in states]
-    report = [f'{len(states) + len(refused)} states made directly, {len(states)} records, {len(refused)} refused']
-    report += variant_report(states)
+    report = [
+        f'{len(states) + len(refused)} states made directly, {len(states)} records, {len(refused)} refused',
+        *variant_report(states),
+    ]
     phase('programs')
     varying, baseline = mkpack.split_registers(simple, post)
     report.append(f'{len(varying)} per-pipeline registers: ' + ' '.join(f'{m:x}' for m in varying))
     report.append(f'{len(baseline)} baseline registers over post-init')
     phase('registers')
-    laid = mkpack.lay_out_programs(simple, programs, report)
+    laid, split, tier0_programs, tier0_heap = lay_out_tiers(states, programs, found, report)
     heap, prog_index, prog_recs = laid
-    phase('heap')
-    lay_out_variants(states, programs, laid, report)
-    phase('variants')
+    phase('tiers')
     constexpr_tsc: list[list[int]] = []
-    pipes = sorted((pipeline_of(rec, varying, prog_index, constexpr_tsc) for rec in states), key=packfile.key_hash)
+    pipes = [dict(pipeline_of(rec, varying, prog_index, constexpr_tsc), tier=rec['tier']) for rec in states]
+    pipes.sort(key=lambda rec: (rec['tier'], packfile.key_hash(rec)))
     phase('pipelines')
     pipes, iterated = fetchfree_link.attach(pipes, report)
     phase('fetchfree')
     computes, compute_facts = compute_kernels(buckets, constexpr_tsc, laid, report)
     phase('kernels')
-    used = list(dict.fromkeys(prog_recs[rec['fs']]['id'] for rec in pipes if rec['fs'] != packfile.NO_PROGRAM))
-    split = splits.lay_out(used, found, programs, laid, report)
-    phase('splits')
     init_recs = init_records(os.path.join(warm, 'context.log'))
     declared, kinds = archives.declared(inventory, archives.refused_keys(states, refused))
     held = archives.held_kernels([k['key'] for k in computes])
     report.append(archives.report(declared, kinds, held))
-    reflections, lines = {}, []
-    for d in buckets:
-        _, _, found, fast = read_records(os.path.join(d, 'records.bin'))
-        for state, blob in found.items():
-            reflections.setdefault(state, blob)
-        lines += fast
+    reflections = read_reflections(buckets, report)
     phase('reflections')
-    report.append(
-        f'{sum(not c for c, _ in reflections)} render and {sum(c for c, _ in reflections)} compute reflections, '
-        f'{len(set(reflections.values()))} distinct'
-    )
     pack = packfile.Pack(
         pipes,
         prog_recs,
@@ -624,24 +702,18 @@ def main() -> None:
         iterated,
         compute_facts,
         reflections,
-        fast_keys(lines),
+        fast,
+        tier0_programs,
+        tier0_heap,
     )
-    data, blob = packfile.pack_bytes(pack)
-    os.makedirs(out_dir, exist_ok=True)
-    with open(os.path.join(out_dir, 'pack.bin'), 'wb') as f:
-        f.write(data)
-    phase('bytes')
-    packfile.write_json(os.path.join(out_dir, 'pack.json'), pack, varying)
-    phase('json')
-    packfile.write_layouts(os.path.join(out_dir, 'layouts.txt'), pack)
-    write_programs(os.path.join(out_dir, 'programs.bin'), programs)
-    phase('files')
+    data, blob = write_outputs(out_dir, pack, varying, programs, phase)
     unshared = sum(len(p['blob']) * 2 for p in pipes)
     report.append(
         f'pack.bin {len(data) // 1024} KiB: {len(pipes)} pipelines, {len(computes)} kernels, '
         f'{len(prog_recs)} programs, {len(split)} splits, {len(constexpr_tsc)} constexpr samplers, '
         f'{len(blob)} blob dwords ({unshared} unshared), {len(baseline)} baseline regs'
     )
+    report.append(packfile.sections_line(data))
     report += [f'  refused ({rec["why"]}): {rec["key"][:150]}' for rec in refused]
     with open(os.path.join(out_dir, 'report.txt'), 'w') as f:
         f.write('\n'.join(report) + '\n')

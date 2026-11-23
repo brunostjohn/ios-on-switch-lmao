@@ -16,7 +16,6 @@
 #include "shader_test_push.h"
 #include "slm.h"
 #include "stage_switches.h"
-#include "program_stores.h"
 #include "storage.h"
 #include "xr_pass.h"
 #include "written_textures.h"
@@ -335,11 +334,9 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
         return nullptr;
     }
     Pipeline *twin = nullptr;
-    if (pp.strideTwin) {
-        const PackPipeline *twinRecord = pack_.find(searched(pack_, pp.strideTwin), recordForm(pp));
-        if (twinRecord && twinRecord != &pp && !(twin = placeRecord(*twinRecord, caTransform)))
-            return nullptr;
-    }
+    if (pp.strideTwin &&
+        !(twin = placeRecord(pack_.section<PackPipeline>(PackPipelines)[pp.strideTwin - 1], caTransform)))
+        return nullptr;
     build(pl, pp, vs, fs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString), caTransform,
           pack_.spills(pp), pack_.far(pp), tess ? tessPlaced : nullptr);
     if (pp.restoreDwords && uint64_t(pp.restoreAt) + pp.restoreDwords <= pack_.bytes(PackBlob) / 4) {
@@ -380,10 +377,8 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.vertexInstructions =
         instructions(*vs.record) + (tess ? instructions(*tess[0].record) + instructions(*tess[1].record) : 0);
     pl.fragmentInstructions = instructions(*fs.record);
-    // the code as the heap holds it (a runtime record's CPU copy is its header alone)
-    const auto writesMemory = [&](const PlacedProgram &p) {
-        const uint8_t *header = heapCpu(p.program);
-        return !header || placedWritesMemory(header, *p.record);
+    const auto writesMemory = [](const PlacedProgram &p) {
+        return (p.record->facts & kProgramWritesMemory) != 0;
     };
     pl.writesMemory[0] = writesMemory(vs) || (tess && (writesMemory(tess[0]) || writesMemory(tess[1])));
     pl.writesMemory[1] = writesMemory(fs);

@@ -146,7 +146,7 @@ inline std::string writePack(const std::string &key, std::vector<gm20b::PackKern
                              const std::vector<std::pair<std::string, MTLPixelFormat>> &named = {},
                              const std::vector<gm20b::PackEntry> &entries = {}, const std::string &archives = "")
 {
-    constexpr uint64_t kPrograms = 0x180, kComputeStates = 0xc00, kStrings = 0xe00, kKernels = 0x2000;
+    constexpr uint64_t kPrograms = 0x200, kComputeStates = 0xc00, kStrings = 0xe00, kKernels = 0x2000;
     // one state's record fits below the compute states; more go between the kernels and the heap
     const uint64_t kPipelines = named.empty() ? 0x800 : 0x8000;
     const uint32_t programs = 2 + uint32_t(kernels.size());

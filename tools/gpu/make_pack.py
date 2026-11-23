@@ -353,7 +353,12 @@ def main() -> None:
         lines, report = own_build(probe_lines(Path(args.corpus).read_text()), args.build)
         if args.archives:
             harvested = set(lines)
-            lines += [line for line in archive_lines(Path(args.archives).read_text()) if line not in harvested]
+            # no device named them: states of tier 1 (pack/make_pack.py cold_line), unless a harvested line is theirs
+            lines += [
+                line.replace(' samples=', ' tier=1 samples=', 1)
+                for line in archive_lines(Path(args.archives).read_text())
+                if line not in harvested
+            ]
         lines = stand_in_lines(lines)
         if args.app_states:
             own = app_states(Path(args.app_states).read_text())
