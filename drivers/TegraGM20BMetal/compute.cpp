@@ -192,7 +192,16 @@ ComputeEncoder::ComputeEncoder(CommandBuffer &cb, Device &dev) : cb_(cb), dev_(d
         computeEncoderOpening(p_, switchFormFor(forms.switchForm, cb.lastEngine_, BarrierEngine::Compute),
                               entryFormFor(forms.entry), cb.lastEngine_);
     cb.lastEngine_ = BarrierEngine::Compute;
+    cb.encodersOpened_++;
     SWITCH_METAL_DIAGNOSTIC(cb.taken_.count(opened));
+}
+
+void ComputeEncoder::emitKindSwitch()
+{
+    if (!cb_.takeKindSwitch())
+        return;
+    room(SWITCH_GM20B_KIND_SWITCH_WORDS);
+    kit(p_, switch_gm20b_kind_switch);
 }
 
 void ComputeEncoder::room(uint32_t words)
@@ -729,6 +738,7 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
             ? 1
             : pieceCount(estimatedNs(state_->rate, units, workNs(laneWork(units, state_->instructions))),
                          dev_.bandBudgetNs(), grid[axis], kBandsPerCommandBuffer - cb_.bands);
+    emitKindSwitch();
     if (serial_ && dispatched_ && first)
         barrier();
     dispatched_ = true;

@@ -253,13 +253,19 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
     }
     if (backingLock.owns_lock())
         backingLock.unlock();
+    encodersOpened_++;
     // the depth's stored region (zcull_planes.h), taken before this pass's own write leaves it stale
     const ZcullStored zcullHeld = zeta ? zcullPlanes_.held(zeta->va) : ZcullStored();
-    for (uint32_t j = 0; j < e.pass_.count && j < 8; ++j)
+    for (uint32_t j = 0; j < e.pass_.count && j < 8; ++j) {
         if (const Texture *texture = e.pass_.color[j].texture)
             use(*texture, true);
+        if (const Texture *shadow = e.shadowOf_[j])
+            noteArenaKind(shadow->storageRange().arena);
+    }
     if (const Texture *texture = e.pass_.depthStencil.texture)
         use(*texture, true);
+    if (e.zetaShadowOf_)
+        noteArenaKind(e.zetaShadowOf_->storageRange().arena);
     // the render area: from the origin, the smallest attachment's extent, each axis within the pass's target size where it
     // names one (m2v render_pass.rs `area`); Metal's default viewport and scissor cover it (render_state.rs `metal_defaults`)
     // (a separate pair's stencil is an attachment of its own extent, as an M4 Max counts it)

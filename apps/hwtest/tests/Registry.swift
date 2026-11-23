@@ -55,6 +55,7 @@ public enum Registry {
         VertexOnlyStateTest(), RenderReflectionTest(), ComputeReflectionTest(), ReflectionKindsTest(),
         FunctionPointerAnswersTest(), ScratchOrderTest(), FencePageRegionsTest(), Depth16MultisampleResolveTest(),
         InvalidRequestsTest(), HeapAliasableUsedTest(), CompressionSettledTest(), TextureTransferFailedTest(),
+        HeapAliasedKindsTest(),
         X1ViewportsTest(), X1ThreadsPerThreadgroupTest(), X1Mme2Test(),
         DecodePvrtcTest(), DecodeAstcNarrowTest(), DecodeAstcHdrTest(), DecodeNativeAstcPrecisionTest(),
         DecodeFreshTest(), DecodeReadbackTest(), DecodeViewsTest(), DecodeViewLifetimeTest(), DecodeUploadCostTest(),

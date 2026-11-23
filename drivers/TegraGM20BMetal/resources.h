@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <tuple>
 #include <vector>
@@ -116,9 +118,13 @@ struct StoragePiece {
 
 // While its allocation is live, later trim/restoration cannot split these cuts.
 struct ArenaStorage {
-    uint32_t arena;
-    uint64_t offset;
-    uint8_t *cpu;
+    uint32_t arena = 0;
+    uint64_t offset = 0;
+    uint8_t *cpu = nullptr;
+    uint64_t arenaId = 0;
+    uint32_t kind = 0;
+    // Bumped under Device::lock_ when overlapping placements in this arena cross PTE kinds; read lock-free at use.
+    std::shared_ptr<std::atomic<uint64_t>> multiKindGen;
     StoragePiece first = {};
     std::vector<StoragePiece> rest{};
 

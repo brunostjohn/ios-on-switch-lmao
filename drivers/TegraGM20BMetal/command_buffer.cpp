@@ -93,6 +93,13 @@ CommandBuffer *Device::begin()
     cb.memberUses_.clear();
     cb.memberRemovals_ = setView_.removals;
     cb.memberHostWritten_ = false;
+    cb.arenaKindInvalidate_ = false;
+    cb.pendingKindSwitch_ = false;
+    cb.kindSwitchGen_ = 0;
+    cb.encodersOpened_ = 0;
+    cb.activeBlit_ = nullptr;
+    cb.cbArenaKinds_.clear();
+    cb.cbCrossSeen_.clear();
     cb.named_.clear();
     cb.sharedWaits_.clear();
     cb.sharedSignals_.clear();
@@ -444,8 +451,8 @@ bool CommandBuffer::commit(uint32_t &seqno)
         SWITCH_METAL_ENCODE_BEGIN(execSpan, Exec);
         const bool executed =
             d.job(d.setView_, d.channel_, pushes, count, uses, visibility, seq, &result, events, &memberUses_,
-                  memberRemovals_, invalidates || memberHostWritten_ || tablesInvalidate, admission, admissionFlags,
-                  !last || quietEnd, last && !promises.empty() ? &promises : nullptr);
+                  memberRemovals_, invalidates || memberHostWritten_ || tablesInvalidate || arenaKindInvalidate_,
+                  admission, admissionFlags, !last || quietEnd, last && !promises.empty() ? &promises : nullptr);
         SWITCH_METAL_ENCODE_END(execSpan);
         if (executed && last && quietEnd && gm20b::jobKeptLoud())
             quietEnd = false;
@@ -558,6 +565,27 @@ bool CommandBuffer::commit(uint32_t &seqno)
     }
     d.commitCount_.store(d.commitCount_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
     d.closedCount_.store(d.closedCount_.load(std::memory_order_relaxed) + 1, std::memory_order_release);
+    for (const auto &[id, gen] : cbCrossSeen_) {
+        uint64_t &seen = d.arenaCrossSeen_[id];
+        if (gen > seen)
+            seen = gen;
+    }
+    cbCrossSeen_.clear();
+    if (invalidates || memberHostWritten_ || tablesInvalidate || arenaKindInvalidate_ || kindSwitchGen_) {
+        d.l2InvalidatedBeforeCb_ = serial;
+        for (auto it = d.arenaKindUses_.begin(); it != d.arenaKindUses_.end();) {
+            it->second.pruneBefore(d.l2InvalidatedBeforeCb_);
+            it = it->second.empty() ? d.arenaKindUses_.erase(it) : std::next(it);
+        }
+    }
+    for (const auto &entry : cbArenaKinds_) {
+        const uint64_t id = entry.first;
+        entry.second.each([&](uint64_t offset, uint64_t bytes, uint32_t kind, uint64_t gen) {
+            if (gen == kindSwitchGen_)
+                d.arenaKindUses_[id].record(offset, bytes, kind, serial);
+        });
+    }
+    cbArenaKinds_.clear();
     d.noteCommittedTimings(timings);
     SWITCH_METAL_DIAGNOSTIC(if (drawTimes_) d.committedDrawTimes(*this, seq));
     releaseNativeReads();
@@ -590,6 +618,11 @@ void CommandBuffer::abandon()
     dirty_.clear();
     surfaces_.clear();
     named_.clear();
+    cbArenaKinds_.clear();
+    cbCrossSeen_.clear();
+    activeBlit_ = nullptr;
+    pendingKindSwitch_ = false;
+    arenaKindInvalidate_ = false;
 }
 
 }  // namespace gm20b

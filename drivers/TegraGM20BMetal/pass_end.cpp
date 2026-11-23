@@ -212,9 +212,10 @@ void RenderEncoder::end()
     probeEdges();
 #endif
     const std::vector<uint32_t> &restore = extrasAtBegin_ ? extrasAtBegin_->restore : std::vector<uint32_t>();
-    const uint32_t room = 160 + 8 * 32 * layers + uint32_t(cl.size()) * 48 + kZetaTargetWords + kZcullRegionWords +
-                          kZetaClearWords + 16 + kSampleWords + kTurnWordsMethods + uint32_t(restore.size()) +
-                          kSpanMarkWords + startStampCount_ * counters::kTimestampWords + kDrawStampWords +
+    const uint32_t room = 160 + SWITCH_GM20B_KIND_SWITCH_WORDS + 8 * 32 * layers + uint32_t(cl.size()) * 48 +
+                          kZetaTargetWords + kZcullRegionWords + kZetaClearWords + 16 + kSampleWords +
+                          kTurnWordsMethods + uint32_t(restore.size()) + kSpanMarkWords +
+                          startStampCount_ * counters::kTimestampWords + kDrawStampWords +
                           (separate_.stencil ? 64 + 128 * layers : 0) + (zetaShadowOf_ ? zetaShadowWords(layers) : 0) +
                           (rasterSamples_ > samples_ ? kSampleWords + kTirWords + 16 : 0) + kTimedPassWords;
     uint64_t va;
@@ -228,6 +229,8 @@ void RenderEncoder::end()
     const PassForm pass = forms.pass != PassForm::Rule ? forms.pass : passRule(before, uses);
     const Opened opened = passOpening(p, pass, switchFormFor(forms.switchForm, before, BarrierEngine::ThreeD),
                                       entryFormFor(forms.entry), before);
+    if (cb_->takeKindSwitch())
+        kit(p, switch_gm20b_kind_switch);
     advanceChain(cb_->chain_, uses, opened != Opened::Pass);
     cb_->lastEngine_ = BarrierEngine::ThreeD;
     SWITCH_METAL_DIAGNOSTIC(cb_->taken_.count(opened));

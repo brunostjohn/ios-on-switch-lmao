@@ -1618,11 +1618,13 @@ private:
     uint64_t blPitchVa(const Span &s);
 
     struct Arena {
+        uint64_t id = 0;
         uint64_t va = 0, bufferVa = 0, bytes = 0;
         uint32_t kind = 0;
         uint8_t *cpu = nullptr;  // its host range, reserved for good; its pages wired and bound unless purged
         Bo bo;
         HeapPlacement place;
+        std::shared_ptr<std::atomic<uint64_t>> multiKindGen;
         uint32_t leases = 0;  // CPU access and m2v views keep its mappings and host range
         bool used = false, isVolatile = false, purged = false, dying = false;
         bool wc = false;  // its host pages are write-combined (arena.cpp hostPages)
@@ -1641,6 +1643,18 @@ private:
     };
 
     std::vector<Arena> arenas_;
+    uint64_t nextArenaId_ = 0;
+    // Encode-thread-only tracking of multi-kind arenas (empty unless an arena has overlapping different-kind placements).
+    uint64_t l2InvalidatedBeforeCb_ = 0;
+    std::map<uint64_t, KindRanges> arenaKindUses_;
+    std::map<uint64_t, uint64_t> arenaCrossSeen_;
+
+    uint64_t arenaCrossSeen(uint64_t arenaId) const
+    {
+        const auto it = arenaCrossSeen_.find(arenaId);
+        return it == arenaCrossSeen_.end() ? 0 : it->second;
+    }
+
     std::atomic<uint32_t> purgedArenas_{0};
     bool bindArena(Arena &a);  // lock_ held
     // lock_ held: [offset, offset + bytes) of `a`'s host range imported and bound at its VAs as one more part
@@ -1652,8 +1666,8 @@ private:
     void purgeLocked(Arena &a, const std::atomic<uint32_t> &committed);
     void freeArena(Arena &a);  // lock_ held
     void arenaFree(Span &s);   // lock_ held
-    const ArenaStorage *arenaStorage(const Arena &arena, uint32_t index, uint64_t offset, uint64_t bytes,
-                                     uint64_t va) const;
+    const ArenaStorage *arenaStorage(const Arena &arena, uint32_t index, uint64_t offset, uint64_t bytes, uint64_t va,
+                                     uint32_t kind) const;
     // lock_ held: the arena's mapping of `kind` (its own, its pitch view, or a view made now); 0: none
     uint64_t arenaView(Arena &a, uint32_t kind);
     // The layout every create* but createTexture's own memory gives its kind of texture: t's shape, rows and kind fields

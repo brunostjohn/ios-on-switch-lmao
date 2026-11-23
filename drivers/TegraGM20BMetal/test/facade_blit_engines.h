@@ -115,7 +115,7 @@ inline void runEngines(size_t first, EngineRun &out, bool kinds = false)
     gm20b::fx::emitTwodInit(push);
     ASSERT_TRUE(twod.run(init.data(), size_t(push.at - init.data()))) << twod.error();
     for (size_t j = first; j < kernel_model::model.jobs.size(); ++j) {
-        if (kinds && (kernel_model::model.jobs[j].flags & TegraGM20BJobHostWritten))
+        if (kinds && kernel_model::model.jobs[j].hostWritten)
             memory.invalidateL2();  // the kernel's invalidate ahead of a host-written job (gpu_exec.c chan_exec_body)
         const auto &words = kernel_model::model.jobs[j].words;
         std::vector<switch_gm20b_method> methods(words.size());

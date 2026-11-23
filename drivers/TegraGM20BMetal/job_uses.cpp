@@ -66,6 +66,8 @@ void CommandBuffer::nameHeaps()
         if (heap->arena() < d.arenas_.size()) {
             const Device::Arena &a = d.arenas_[heap->arena()];
             if (a.used && !a.purged) {
+                if (a.multiKindGen && a.multiKindGen->load(std::memory_order_acquire) != 0)
+                    arenaKindInvalidate_ = true;
                 name(a.bo);
                 for (const auto &[offset, part] : a.parts)
                     name(part);
@@ -91,6 +93,58 @@ void CommandBuffer::useAddress(uint64_t va, uint64_t bytes, bool write)
     }
 }
 
+bool CommandBuffer::hasEncodedWork() const
+{
+    if (!segments_.empty() || encodersOpened_ > 1)
+        return true;
+    return activeBlit_ && activeBlit_->emitted();
+}
+
+void CommandBuffer::requestKindSwitch()
+{
+    kindSwitchGen_++;
+    if (activeBlit_) {
+        activeBlit_->crossKinds();
+        pendingKindSwitch_ = false;
+    } else {
+        pendingKindSwitch_ = true;
+    }
+}
+
+void CommandBuffer::noteArenaKind(const ArenaStorage *arena)
+{
+    if (!arena || !arena->multiKindGen)
+        return;
+    const uint64_t gen = arena->multiKindGen->load(std::memory_order_acquire);
+    if (!gen)
+        return;
+    const uint64_t bytes = arena->bytes();
+    KindRanges &cbRanges = cbArenaKinds_[arena->arenaId];
+    const bool sameCbCross = cbRanges.overlapsOther(arena->offset, bytes, arena->kind, kindSwitchGen_);
+    bool priorCbCross = false;
+    if (!sameCbCross) {
+        if (auto it = dev_->arenaKindUses_.find(arena->arenaId); it != dev_->arenaKindUses_.end())
+            priorCbCross = it->second.overlapsOther(arena->offset, bytes, arena->kind, dev_->l2InvalidatedBeforeCb_);
+    }
+    const uint64_t seenDev = dev_->arenaCrossSeen(arena->arenaId);
+    const uint64_t seenCb = cbCrossSeen_[arena->arenaId];
+    const bool unseenCross = gen > std::max(seenDev, seenCb);
+    if (sameCbCross) {
+        requestKindSwitch();
+    } else if (priorCbCross) {
+        if (!arenaKindInvalidate_ && !kindSwitchGen_)
+            arenaKindInvalidate_ = true;
+    } else if (unseenCross) {
+        if (hasEncodedWork())
+            requestKindSwitch();
+        else
+            arenaKindInvalidate_ = true;
+    }
+    if (unseenCross)
+        cbCrossSeen_[arena->arenaId] = gen;
+    cbRanges.record(arena->offset, bytes, arena->kind, kindSwitchGen_);
+}
+
 void CommandBuffer::use(const Buffer &buffer, bool write, bool noted)
 {
     SWITCH_METAL_ENCODE_COUNT(Uses);
@@ -99,6 +153,7 @@ void CommandBuffer::use(const Buffer &buffer, bool write, bool noted)
     // ahead of the memo too: a buffer named written by a draw that writes nothing is written by a later one
     if (write && noted)
         bufferWrites_.note(buffer.va, buffer.length);
+    noteArenaKind(buffer.span.storage);
     if (named_.named(&buffer, buffer.va, buffer.length, buffer.import, write))
         return;
     SWITCH_METAL_ENCODE_SPAN(Use);
@@ -117,6 +172,7 @@ void CommandBuffer::use(const Texture &texture, bool write)
         publication_.wrote(range.hostVisible || (texture.import && !texture.import->id) || texture.callerPages);
         zcullPlanes_.wrote(range.va ? range.va : texture.va, range.bytes ? range.bytes : 1);
     }
+    noteArenaKind(range.arena);
     if (named_.named(&texture, texture.va, range.bytes, texture.import, write))
         return;
     SWITCH_METAL_ENCODE_SPAN(Use);

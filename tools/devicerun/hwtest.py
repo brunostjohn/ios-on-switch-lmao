@@ -294,6 +294,7 @@ TESTS: dict[str, bool] = {
             'gpu.gm20b.depth16_ms_resolve',
             'gpu.gm20b.invalid_requests',
             'gpu.heap.aliasable_used',
+            'gpu.heap.aliased_kinds',
             'gpu.gm20b.compression_settled',
             'gpu.gm20b.texture_transfer_failed',
             'gpu.x1.viewports',

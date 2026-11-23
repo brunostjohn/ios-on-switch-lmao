@@ -40,6 +40,10 @@ BlitEncoder *CommandBuffer::blit()
     e.before_ = lastEngine_;
     e.opened_ = e.p_.at;
     lastEngine_ = BarrierEngine::Copy;
+    encodersOpened_++;
+    activeBlit_ = &e;
+    if (takeKindSwitch())
+        e.crossKinds();
     SWITCH_METAL_DIAGNOSTIC(taken_.count(opened));
     blits++;
     return &e;
@@ -316,6 +320,8 @@ void BlitEncoder::generate(Texture &t, uint32_t fmt2d, uint32_t first, uint32_t 
 
 void BlitEncoder::end()
 {
+    if (cb_->activeBlit_ == this)
+        cb_->activeBlit_ = nullptr;
     if (p_.at == opened_)
         cb_->lastEngine_ = before_;
     checkRoom(p_, "a blit encoder");

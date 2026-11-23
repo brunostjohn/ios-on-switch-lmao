@@ -282,6 +282,7 @@ private:
     bool argumentTables(const char **why);
     bool prepareDescriptors(const char **why);
     void room(uint32_t words);
+    void emitKindSwitch();
     bool launch(const std::array<uint32_t, 3> &grid, const DispatchPiece &piece, const std::array<uint32_t, 8> &region,
                 const char **why);
     void cutBatch();

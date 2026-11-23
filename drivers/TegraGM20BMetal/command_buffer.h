@@ -19,6 +19,7 @@
 #include "draw_times.h"
 #include "event_release.h"
 #include "geometry.h"
+#include "heap.h"
 #include "heap_members.h"
 #include "kernel.h"
 #include "loop_copies.h"
@@ -289,6 +290,24 @@ private:
     std::vector<SetUse> memberUses_;
     uint32_t memberRemovals_ = 0;
     bool memberHostWritten_ = false;
+    bool arenaKindInvalidate_ = false;
+    bool pendingKindSwitch_ = false;
+    uint32_t kindSwitchGen_ = 0;
+    uint32_t encodersOpened_ = 0;
+    BlitEncoder *activeBlit_ = nullptr;
+    std::map<uint64_t, KindRanges> cbArenaKinds_;
+    std::map<uint64_t, uint64_t> cbCrossSeen_;
+    bool hasEncodedWork() const;
+    void requestKindSwitch();
+
+    bool takeKindSwitch()
+    {
+        const bool pending = pendingKindSwitch_;
+        pendingKindSwitch_ = false;
+        return pending;
+    }
+
+    void noteArenaKind(const ArenaStorage *arena);
     UseMemo named_;  // (use_memo.h)
     JobVisibility visibility_ = JobVisibility::Legacy;
     bool externalWrites_ = false;

@@ -157,8 +157,10 @@ bool Device::createArena(uint64_t bytes, bool blockLinear, uint32_t &arena, bool
     a.kind = blockLinear ? TGM_LAYOUT_KIND : kPteKindPitch;
     a.cpu = reinterpret_cast<uint8_t *>(cpu);
     a.place = HeapPlacement(logicalBytes, explicitPlacement);
+    a.multiKindGen = std::make_shared<std::atomic<uint64_t>>(0);
     a.used = true;
     std::lock_guard<gm20b::Mutex> l(lock_);
+    a.id = ++nextArenaId_;
     a.va = k_.reserveVa(bytes);
     // Kind 0xfe changes the sector interpretation inside a GOB. Buffers take a pitch view of the same BO.
     a.bufferVa = blockLinear ? k_.reserveVa(bytes) : a.va;
@@ -262,14 +264,18 @@ bool Device::arenaSpan(const ArenaAt &at, uint64_t bytes, uint64_t align, uint32
         return false;
     uint64_t offset = at.offset.value_or(0);
     const uint64_t view = arenaView(a, kind);
-    if (!view || !(at.offset ? a.place.placeAt(bytes, align, offset) : a.place.place(bytes, align, offset)))
+    bool crossed = false;
+    if (!view || !(at.offset ? a.place.placeAt(bytes, align, offset, kind, &crossed)
+                             : a.place.place(bytes, align, offset, kind, &crossed)))
         return false;
     if (!backPlacement(a, offset, bytes)) {
         a.place.release(offset, bytes);
         return false;
     }
+    if (crossed && a.multiKindGen)
+        a.multiKindGen->fetch_add(1, std::memory_order_release);
     t.span = {at.arena, offset, bytes, view + offset, a.cpu + offset};
-    t.span.storage = arenaStorage(a, at.arena, offset, bytes, t.span.va);
+    t.span.storage = arenaStorage(a, at.arena, offset, bytes, t.span.va, kind);
     t.arena = true;
     t.wc = a.wc;
     return true;
@@ -332,16 +338,19 @@ bool Device::arenaBuffer(uint32_t arena, uint64_t length, Buffer &b, std::option
         return false;
     const uint64_t bytes = (std::max<uint64_t>(length, 16) + kArenaPitchAlign - 1) & ~(kArenaPitchAlign - 1);
     uint64_t offset = requestedOffset.value_or(0);
-    if (!(requestedOffset ? a.place.placeAt(bytes, kArenaPitchAlign, offset)
-                          : a.place.place(bytes, kArenaPitchAlign, offset)))
+    bool crossed = false;
+    if (!(requestedOffset ? a.place.placeAt(bytes, kArenaPitchAlign, offset, kPteKindPitch, &crossed)
+                          : a.place.place(bytes, kArenaPitchAlign, offset, kPteKindPitch, &crossed)))
         return false;
     if (!backPlacement(a, offset, bytes)) {
         a.place.release(offset, bytes);
         return false;
     }
+    if (crossed && a.multiKindGen)
+        a.multiKindGen->fetch_add(1, std::memory_order_release);
     b = {};
     b.span = {arena, offset, bytes, a.bufferVa + offset, a.cpu + offset};
-    b.span.storage = arenaStorage(a, arena, offset, bytes, b.span.va);
+    b.span.storage = arenaStorage(a, arena, offset, bytes, b.span.va, kPteKindPitch);
     b.arena = true;
     b.wc = a.wc;
     b.va = b.span.va;
@@ -518,9 +527,15 @@ bool Device::backPlacement(Arena &a, uint64_t offset, uint64_t bytes)
 }
 
 const ArenaStorage *Device::arenaStorage(const Arena &arena, uint32_t index, uint64_t offset, uint64_t bytes,
-                                         uint64_t va) const
+                                         uint64_t va, uint32_t kind) const
 {
-    auto *storage = new ArenaStorage{index, offset, arena.cpu + offset};
+    auto *storage = new ArenaStorage;
+    storage->arena = index;
+    storage->offset = offset;
+    storage->cpu = arena.cpu + offset;
+    storage->arenaId = arena.id;
+    storage->kind = kind;
+    storage->multiKindGen = arena.multiKindGen;
     if (arena.bo.handle) {
         storage->first = {va, bytes};
     } else {
