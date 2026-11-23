@@ -568,7 +568,7 @@ def main() -> None:
     used = list(dict.fromkeys(prog_recs[rec['fs']]['id'] for rec in pipes if rec['fs'] != packfile.NO_PROGRAM))
     split = splits.lay_out(used, found, programs, laid, report)
     init_recs = init_records(os.path.join(warm, 'context.log'))
-    declared, kinds = archives.declared(inventory)
+    declared, kinds = archives.declared(inventory, archives.refused_keys(states, refused))
     held = archives.held_kernels([k['key'] for k in computes])
     report.append(archives.report(declared, kinds, held))
     reflections, lines = {}, []

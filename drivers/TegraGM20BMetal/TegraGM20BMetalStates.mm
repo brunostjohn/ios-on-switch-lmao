@@ -260,21 +260,24 @@ SwitchMetalPipeline *gm20bPipelineShell(SwitchMetalDevice *device, MTLRenderPipe
     return p;
 }
 
-SwitchMetalPipeline *gm20bPipelineFor(SwitchMetalDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o,
-                                      NSError **error)
+bool gm20bMakeRecord(SwitchMetalPipeline *p, MTLRenderPipelineDescriptor *d, NSError **error)
 {
-    SwitchMetalPipeline *p = gm20bPipelineShell(device, d, o, error);
-    if (!p)
-        return nil;
     {
         SWITCH_METAL_CREATION_SPAN(recordTicks);
         makeRecord(p, d);
     }
     if (p->_failure.empty())
-        return p;
+        return true;
     if (error)
         *error = gm20bCreationError(p->_failure);
-    return nil;
+    return false;
+}
+
+SwitchMetalPipeline *gm20bPipelineFor(SwitchMetalDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o,
+                                      NSError **error)
+{
+    SwitchMetalPipeline *p = gm20bPipelineShell(device, d, o, error);
+    return p && gm20bMakeRecord(p, d, error) ? p : nil;
 }
 
 NSError *gm20bCreationError(const std::string &failure)

@@ -144,7 +144,7 @@ inline std::string writePack(const std::string &key, std::vector<gm20b::PackKern
                              std::vector<gm20b::PackComputeFacts> facts = {}, bool pixelStage = true,
                              const std::string &reflections = "",
                              const std::vector<std::pair<std::string, MTLPixelFormat>> &named = {},
-                             const std::vector<gm20b::PackEntry> &entries = {})
+                             const std::vector<gm20b::PackEntry> &entries = {}, const std::string &archives = "")
 {
     constexpr uint64_t kPrograms = 0x180, kComputeStates = 0xc00, kStrings = 0xe00, kKernels = 0x2000;
     // one state's record fits below the compute states; more go between the kernels and the heap
@@ -225,6 +225,11 @@ inline std::string writePack(const std::string &key, std::vector<gm20b::PackKern
     file.resize((file.size() + 7) & ~size_t(7));
     h.section[gm20b::PackFastKeys] = {file.size(), sizeof fast};
     file.insert(file.end(), reinterpret_cast<const uint8_t *>(&fast), reinterpret_cast<const uint8_t *>(&fast + 1));
+    if (!archives.empty()) {
+        file.resize((file.size() + 7) & ~size_t(7));
+        h.section[gm20b::PackArchives] = {file.size(), archives.size()};
+        file.insert(file.end(), archives.begin(), archives.end());
+    }
     memcpy(file.data(), &h, sizeof h);
     const std::string path = dir() + "/pack.bin";
     std::ofstream(path, std::ios::binary)

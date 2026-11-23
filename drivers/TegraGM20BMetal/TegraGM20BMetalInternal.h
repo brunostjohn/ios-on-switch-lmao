@@ -359,6 +359,7 @@ bool gm20bRenderArchiveMissed(MTLRenderPipelineDescriptor *d, MTLPipelineOption 
 // ask the runtime for, and the state handed to its creator once its record is there, or nil with its error
 SwitchMetalPipeline *gm20bPipelineShell(SwitchMetalDevice *device, MTLRenderPipelineDescriptor *d, MTLPipelineOption o,
                                         NSError **error);
+bool gm20bMakeRecord(SwitchMetalPipeline *p, MTLRenderPipelineDescriptor *d, NSError **error);
 bool gm20bNeedsRecord(SwitchMetalPipeline *p);
 gm20b::Completion::Ask gm20bRecordAsk(SwitchMetalPipeline *p, MTLRenderPipelineDescriptor *d);
 id<MTLRenderPipelineState> gm20bFinishState(SwitchMetalPipeline *p, MTLRenderPipelineDescriptor *d, MTLPipelineOption o,
