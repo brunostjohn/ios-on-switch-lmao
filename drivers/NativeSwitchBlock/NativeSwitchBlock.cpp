@@ -61,6 +61,7 @@
 #include "SwitchClientCopy.h"
 #include "SwitchAdma.h"
 #include "SwitchQueue.h"
+#include "SwitchSdPool.h"
 #include "SwitchSdBus.h"
 #include "SwitchSdCard.h"
 #include "SwitchSdTrim.h"
@@ -103,6 +104,9 @@ constexpr uint32_t kBounceSectors = kBounceBytes / kSector;
 constexpr uint32_t kSafeSectors = 256 * 1024 / kSector;
 // Most requests one merged command carries (APFS issues >= 4 KiB, so 256 still fills the buffer).
 constexpr uint32_t kMaxChain = 256;
+constexpr uint32_t kRequestPool = 1024;
+constexpr size_t kCompleteChunk = 16;
+constexpr uint64_t kPoolRefusal = switch_refusal_key("SwitchSD", "request pool");
 // r12-sdio: how many queued requests a read chain looks through for reads that continue it (SwitchQueue.h): as many as
 // one chain may hold, so it never takes fewer than the old rule did from a queue of reads right behind each other.
 constexpr unsigned kMergeScan = kMaxChain;
@@ -338,14 +342,17 @@ struct Request {
     IOMemoryDescriptor *buffer;
     uint64_t lba;  // absolute card LBA
     uint32_t sectors;
-    bool write;
-    IOStorageCompletion completion;
     // r6-lows: the request's IOStoragePriority class (IOStorageAttributes priority >> 6: 0 high (I/O tier 0, the UI's page-ins),
-    // 1 default, 2 low, 3 background) and when it was queued.
+    // 1 default, 2 low, 3 background).
     uint8_t klass;
-    uint64_t queuedNs;
+    bool write;
     bool chained;  // r12-sdio: taken into the chain being picked (SwitchQueue.h), under queueLock
+    bool pooled;   // owned by requestPool slab (SwitchSdPool.h); false for overflow IOMalloc nodes
+    IOStorageCompletion completion;
+    uint64_t queuedNs;
 };
+
+static_assert(sizeof(Request) <= 64, "Request fits in one cache line");
 
 // One doUnmap call's extents (device blocks), discarded by the worker one command at a time between chains
 // (stepUnmap) while its caller waits.
@@ -564,6 +571,8 @@ class NativeSwitchBlock : public IOService {
     uint8_t *bounce = nullptr;
     uint64_t bouncePA = 0;
     IOLock *queueLock = nullptr;
+    Request *requestSlab = nullptr;
+    SwitchSdPool<Request> requestPool = {};
     Request *head = nullptr, *tail = nullptr;
     Unmap *unmaps = nullptr;  // under queueLock, oldest first
     // Erase-based trim (cards without discard): the map and the quiet-period timer, under queueLock.
@@ -708,6 +717,9 @@ class NativeSwitchBlock : public IOService {
     int run(uint64_t lba, uint32_t sectors, bool write, unsigned descriptors);
     int retry(int step, uint32_t status, uint64_t lba, uint32_t sectors, bool write, unsigned descriptors);
     static void worker(void *, wait_result_t);
+    void enqueueLocked(Request *request);
+    Request *drainQueueLocked();
+    void releaseRequestPool();
     Request *pickLocked(uint32_t *sectors, uint32_t *count, const SwitchLbaRange *inFlight = nullptr,
                         unsigned inFlightCount = 0);
     void takenLocked(Request *first, uint32_t count, uint64_t pickNs);
@@ -779,6 +791,8 @@ class NativeSwitchBlock : public IOService {
 public:
     using IOService::callPlatformFunction;
     IOReturn callPlatformFunction(const OSSymbol *function, bool wait, void *p1, void *p2, void *p3, void *p4) override;
+    void stop(IOService *provider) override;
+    void free() override;
     void suspend();
     void resume();
     void shutdown();
@@ -799,7 +813,7 @@ public:
 
     bool setup();
     int transfer(uint64_t lba, uint32_t sectors, bool write, uint8_t *bytes);
-    bool submit(Request *);
+    IOReturn submit(const Request &);
     IOReturn unmap(const IOBlockStorageDeviceExtent *extents, uint32_t count, uint64_t blocks);
 
     void prepareTrim();
@@ -901,10 +915,6 @@ IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, U
         return kIOReturnBadArgument;
     if (direction == kIODirectionOut && count > owner->maxWriteSectors)
         return kIOReturnBadArgument;
-    auto *request = static_cast<Request *>(IOMalloc(sizeof(Request)));
-    if (!request)
-        return kIOReturnNoMemory;
-    buffer->retain();
     // No attributes: the default class, as IOStorage's own default priority. The boot prefetch: high.
     IOStoragePriority priority = attributes ? attributes->priority : kIOStoragePriorityDefault;
 #if DEVELOPMENT || DEBUG
@@ -917,19 +927,21 @@ IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, U
 #endif
         priority = kIOStoragePriorityHigh;
     }
-    *request = {nullptr,
-                buffer,
-                owner->firstSector + block,
-                static_cast<uint32_t>(count),
-                direction == kIODirectionOut,
-                *completion,
-                static_cast<uint8_t>(priority >> 6),
-                0,
-                false};
-    if (!owner->submit(request)) {
+    const Request spec = {nullptr,
+                          buffer,
+                          owner->firstSector + block,
+                          static_cast<uint32_t>(count),
+                          static_cast<uint8_t>(priority >> 6),
+                          direction == kIODirectionOut,
+                          false,
+                          false,
+                          *completion,
+                          0};
+    buffer->retain();
+    const IOReturn status = owner->submit(spec);
+    if (status != kIOReturnSuccess) {
         buffer->release();
-        IOFree(request, sizeof(*request));
-        return kIOReturnNotReady;
+        return status;
     }
     return kIOReturnSuccess;
 }
@@ -1356,15 +1368,10 @@ int NativeSwitchBlock::retry(int step, uint32_t status, uint64_t lba, uint32_t s
     return step;
 }
 
-bool NativeSwitchBlock::submit(Request *request)
+void NativeSwitchBlock::enqueueLocked(Request *request)
 {
-    request->queuedNs = switch_now_ns();
-    IOLockLock(queueLock);
-    if (shutdownDone) {
-        IOLockUnlock(queueLock);
-        return false;
-    }
-    lastIoNs = request->queuedNs;
+    if (request->queuedNs > lastIoNs)
+        lastIoNs = request->queuedNs;
     if (request->write)
         switchSdTrimClear(&trim, request->lba, request->sectors);
     if (tail) {
@@ -1384,8 +1391,59 @@ bool NativeSwitchBlock::submit(Request *request)
         stats.firstNs = statsLastNs = request->queuedNs;
     __atomic_fetch_add(&submitted, 1, __ATOMIC_RELAXED);
     IOLockWakeup(queueLock, &head, true);
-    IOLockUnlock(queueLock);
-    return true;
+}
+
+IOReturn NativeSwitchBlock::submit(const Request &spec)
+{
+    struct Ops {
+        NativeSwitchBlock *self;
+
+        void lock() const
+        {
+            IOLockLock(self->queueLock);
+        }
+
+        void unlock() const
+        {
+            IOLockUnlock(self->queueLock);
+        }
+
+        bool isShutdown() const
+        {
+            return self->shutdownDone;
+        }
+
+        static uint64_t nowNs()
+        {
+            return switch_now_ns();
+        }
+
+        static void onExhausted(uint32_t capacity)
+        {
+            switch_refusal_k(kPoolRefusal, "SwitchSD", "request pool",
+                             "request pool of %u entries exhausted; allocating from heap", capacity);
+        }
+
+        static Request *allocHeap()
+        {
+            return static_cast<Request *>(IOMalloc(sizeof(Request)));
+        }
+
+        static void freeHeap(Request *request)
+        {
+            IOFree(request, sizeof(*request));
+        }
+
+        void enqueueLocked(Request *request) const
+        {
+            self->enqueueLocked(request);
+        }
+    };
+
+    const SwitchSdPoolSubmitResult status = switchSdPoolSubmit(requestPool, spec, Ops{this});
+    if (status == SwitchSdPoolSubmitResult::kQueued)
+        return kIOReturnSuccess;
+    return status == SwitchSdPoolSubmitResult::kNoMemory ? kIOReturnNoMemory : kIOReturnNotReady;
 }
 
 IOReturn NativeSwitchBlockDevice::doUnmap(IOBlockStorageDeviceExtent *extents, UInt32 count, IOStorageUnmapOptions)
@@ -1943,25 +2001,54 @@ void NativeSwitchBlock::account(Batch &b)
 // completeBatch: every request of the chain completes with endBatch's result.
 void NativeSwitchBlock::completeBatch(Batch &b)
 {
-    const uint64_t began = switch_now_ns();
-    for (Request *r = b.first; r;) {
-        Request *next = r->next;
-        const uint32_t length = r->sectors * kSector;
-        const IOMemoryDescriptor *buffer = r->buffer;
-        const IOStorageCompletion completion = r->completion;
+    struct Done {
+        IOMemoryDescriptor *buffer;
+        IOStorageCompletion completion;
+        uint32_t length;
+    };
+
+    struct Ops {
+        NativeSwitchBlock *self;
+        IOReturn result;
+
+        void lock() const
+        {
+            IOLockLock(self->queueLock);
+        }
+
+        void unlock() const
+        {
+            IOLockUnlock(self->queueLock);
+        }
+
+        static Done capture(const Request &r)
+        {
 #if DEVELOPMENT || DEBUG
-        const uint64_t now = switch_now_ns();
-        gIo.total[r->klass].add(now > r->queuedNs ? now - r->queuedNs : 0);
+            const uint64_t now = switch_now_ns();
+            gIo.total[r.klass].add(now > r.queuedNs ? now - r.queuedNs : 0);
 #endif
-        IOFree(r, sizeof(*r));
-        buffer->release();
-        // IOStorage::complete, without binding another original IOStorageFamily symbol.
-        if (completion.action)
-            completion.action(completion.target, completion.parameter, b.result, b.result ? 0 : length);
-        __atomic_fetch_add(&serviced, 1, __ATOMIC_RELAXED);
-        r = next;
-    }
+            return {r.buffer, r.completion, r.sectors * kSector};
+        }
+
+        static void freeHeap(Request *r)
+        {
+            IOFree(r, sizeof(*r));
+        }
+
+        void finish(const Done &d) const
+        {
+            d.buffer->release();
+            // IOStorage::complete, without binding another original IOStorageFamily symbol.
+            if (d.completion.action)
+                d.completion.action(d.completion.target, d.completion.parameter, result, result ? 0 : d.length);
+            __atomic_fetch_add(&self->serviced, 1, __ATOMIC_RELAXED);
+        }
+    };
+
+    const uint64_t began = switch_now_ns();
+    Request *const first = b.first;
     b.first = nullptr;
+    switchSdPoolComplete<kCompleteChunk, Request, Done>(requestPool, first, Ops{this, b.result});
     stats.completeNs += switch_now_ns() - began;
 }
 
@@ -3291,24 +3378,8 @@ void NativeSwitchBlock::dmaResume()
           control2, translated ? "on" : "off");
 }
 
-void NativeSwitchBlock::shutdown()
+Request *NativeSwitchBlock::drainQueueLocked()
 {
-    if (panic_active())
-        return;
-    if (!preemption_enabled()) {
-        IOLog("SwitchSD: power off notification skipped (preemption off)\n");
-        return;
-    }
-    IOLockLock(queueLock);
-    if (shutdownDone) {
-        IOLockUnlock(queueLock);
-        return;
-    }
-    const bool alreadySuspended = suspended;
-    suspended = true;
-    shutdownDone = true;
-    while (working)
-        IOLockSleep(queueLock, &working, THREAD_UNINT);
     Request *abandoned = head;
     head = tail = nullptr;
     if (abandoned) {
@@ -3330,6 +3401,75 @@ void NativeSwitchBlock::shutdown()
         }
         IOLockWakeup(queueLock, &unmaps, false);
     }
+    return abandoned;
+}
+
+void NativeSwitchBlock::releaseRequestPool()
+{
+    Request *slab = nullptr;
+    if (queueLock) {
+        IOLockLock(queueLock);
+        slab = requestPool.detachIfIdle();
+        if (slab)
+            requestSlab = nullptr;
+        IOLockUnlock(queueLock);
+    } else {
+        slab = requestPool.detachIfIdle();
+        if (slab)
+            requestSlab = nullptr;
+    }
+    if (slab)
+        IOFree(slab, kRequestPool * sizeof(Request));
+}
+
+void NativeSwitchBlock::stop(IOService *provider)
+{
+    if (queueLock) {
+        IOLockLock(queueLock);
+        suspended = true;
+        shutdownDone = true;
+        while (working)
+            IOLockSleep(queueLock, &working, THREAD_UNINT);
+        Request *const abandoned = drainQueueLocked();
+        IOLockUnlock(queueLock);
+        if (abandoned) {
+            Batch b = {};
+            b.first = abandoned;
+            b.result = kIOReturnNotReady;
+            completeBatch(b);
+        }
+    }
+    if (trimCall)
+        thread_call_cancel(trimCall);
+    releaseRequestPool();
+    IOService::stop(provider);
+}
+
+void NativeSwitchBlock::free()
+{
+    releaseRequestPool();
+    IOService::free();
+}
+
+void NativeSwitchBlock::shutdown()
+{
+    if (panic_active())
+        return;
+    if (!preemption_enabled()) {
+        IOLog("SwitchSD: power off notification skipped (preemption off)\n");
+        return;
+    }
+    IOLockLock(queueLock);
+    if (shutdownDone) {
+        IOLockUnlock(queueLock);
+        return;
+    }
+    const bool alreadySuspended = suspended;
+    suspended = true;
+    shutdownDone = true;
+    while (working)
+        IOLockSleep(queueLock, &working, THREAD_UNINT);
+    Request *const abandoned = drainQueueLocked();
     IOLockUnlock(queueLock);
     if (abandoned) {
         Batch b = {};
@@ -3546,8 +3686,16 @@ bool NativeSwitchBlock::setup()
               gapsOn ? "on" : "off (no sink page below 4 GiB)");
     }
 
+    requestSlab = static_cast<Request *>(IOMallocZero(kRequestPool * sizeof(Request)));
+    if (requestSlab) {
+        requestPool.init(requestSlab, kRequestPool);
+    } else {
+        IOLog("SwitchSD: request pool allocation failed; using per-request IOMalloc\n");
+    }
+
     thread_t thread = THREAD_NULL;
     if (kernel_thread_start(&NativeSwitchBlock::worker, this, &thread) != KERN_SUCCESS) {
+        releaseRequestPool();
         IOLog("SwitchSD: worker start failed\n");
         return false;
     }

@@ -64,7 +64,8 @@ TEST(SdQueueSource, MergeChains)
     EXPECT_THAT(worker, HasSubstr("SwitchLbaRange{pending->first->lba, pending->sectors}"));
     EXPECT_THAT(worker, HasSubstr("self->pickLocked(&next->sectors, &next->count, &active,"));
     // Every request starts unchained.
-    EXPECT_TRUE(Search(source, R"(static_cast<uint8_t>\(priority >> 6\),\s*0,\s*false\};)"));
+    EXPECT_TRUE(
+        Search(source, R"(static_cast<uint8_t>\(priority >> 6\),\s*direction == kIODirectionOut,\s*false,\s*false,)"));
 }
 
 // r14-sdcq: a read chain's gaps go to the sink and nowhere else; a write chain never has one.

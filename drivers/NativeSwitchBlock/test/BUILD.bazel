@@ -98,6 +98,16 @@ host_test(
 )
 
 host_test(
+    name = "sd_pool_test",
+    srcs = [
+        "sd_pool_test.cpp",
+        "//drivers/NativeSwitchBlock:SwitchSdPool.h",
+        "//drivers/NativeSwitchBlock:SwitchQueue.h",
+    ],
+    copts = ["-O1"],
+)
+
+host_test(
     name = "cryptex_map_test",
     size = "medium",
     srcs = [
@@ -166,6 +176,17 @@ host_test(
     srcs = ["sd_queue_source_test.cpp"],
     copts = ["-O1"],
     data = ["//drivers/NativeSwitchBlock:NativeSwitchBlock.cpp"],
+    deps = [":source_checks"],
+)
+
+host_test(
+    name = "sd_pool_source_test",
+    srcs = ["sd_pool_source_test.cpp"],
+    copts = ["-O1"],
+    data = [
+        "//drivers/NativeSwitchBlock:SwitchSdPool.h",
+        "//drivers/NativeSwitchBlock:NativeSwitchBlock.cpp",
+    ],
     deps = [":source_checks"],
 )
 
