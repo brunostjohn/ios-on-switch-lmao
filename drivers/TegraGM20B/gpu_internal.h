@@ -501,6 +501,7 @@ struct stats_state {
 	u32 foreign_jobs, foreign_fences, foreign_promises, foreign_events, foreign_host1x,
 		foreign_timed;
 	u64 foreign_queue_sum, foreign_queue_max;
+	u32 l2_inval, l2_inval_host, l2_inval_host_comp, l2_inval_tlb, l2_inval_kernel;
 #endif
 	/* tgm_gpu.lock held by a channel's setup (chan_new) and teardown (chan_free): every VmBind, BoAlloc, BoImport and BoFree
 	 * of every process, the compositor's too, waits for it; nanoseconds, the sum counts them */
@@ -521,6 +522,7 @@ struct frame_gpu_state {
 extern struct frame_gpu_state tgm_frame_gpu;
 void tgm_stats_waits(u64 ms);
 void tgm_stats_mem(u64 ms);
+void tgm_stats_l2_inval_window(void);
 
 /* Submit-to-fence latency (CPU clock), seen from the fence's nonstall interrupt (every channel's handler runs on each
  * one), and from the GPU's stamps (PTIMER): queue = the GPU started the submission - the kernel kicked it, exec = the

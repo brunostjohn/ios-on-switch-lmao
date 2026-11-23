@@ -50,6 +50,8 @@ int switch_exec_mutex_held(void);
 void switch_exec_chan_high(struct switch_exec_chan *chan, int high);
 void switch_exec_chan_critical(struct switch_exec_chan *chan, int critical);
 void switch_exec_chan_share_vm(struct switch_exec_chan *chan, struct switch_exec_chan *with);
+void switch_exec_chan_kernel(struct switch_exec_chan *chan, int kernel);
+void switch_exec_chan_dirty_tlb(struct switch_exec_chan *chan);
 
 enum switch_exec_kick_kind {
 	SWITCH_EXEC_KICK_CLEAR,
@@ -68,6 +70,10 @@ struct switch_exec_foreign_stats {
 	uint64_t queue_sum, queue_max;
 };
 
+struct switch_exec_l2_inval_stats {
+	uint32_t total, host_written, compositor, tlb, kernel_push;
+};
+
 void switch_exec_reset_driver(void);
 void switch_exec_set_kick(enum switch_exec_kick_kind sched_kick, int deadline_later);
 void switch_exec_set_ptimer(uint64_t pt);
@@ -75,6 +81,7 @@ void switch_exec_chan_complete_stamp(struct switch_exec_chan *chan, uint32_t seq
 				     uint64_t start_pt, uint64_t end_pt);
 void switch_exec_take_later_stats(struct switch_exec_later_stats *out);
 void switch_exec_take_foreign_stats(struct switch_exec_foreign_stats *out);
+void switch_exec_take_l2_inval_stats(struct switch_exec_l2_inval_stats *out);
 /* The GPU clock on its idle divider until the next tgm_idle_raise, which calls `raised` first; NULL: the idle clock off */
 void switch_exec_idle_low(void (*raised)(void *context), void *context);
 

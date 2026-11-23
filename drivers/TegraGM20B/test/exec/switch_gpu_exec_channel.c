@@ -168,6 +168,16 @@ void switch_exec_chan_share_vm(struct switch_exec_chan *chan, struct switch_exec
 	chan->tgm.vm = with->tgm.vm;
 }
 
+void switch_exec_chan_kernel(struct switch_exec_chan *chan, int kernel)
+{
+	chan->tgm.kernel = kernel;
+}
+
+void switch_exec_chan_dirty_tlb(struct switch_exec_chan *chan)
+{
+	tgm_tlb_mapped(&chan->vm.tlb);
+}
+
 void switch_exec_chan_complete_stamp(struct switch_exec_chan *chan, uint32_t seqno,
 				     uint64_t start_pt, uint64_t end_pt)
 {

@@ -742,3 +742,50 @@ TEST_F(ExecCommit, CompositorForeignWaitsCountFencesPromisesEventsHost1xAndQueue
 	EXPECT_EQ(got.queue_sum, 0u);
 	EXPECT_EQ(got.queue_max, 0u);
 }
+
+TEST_F(ExecCommit, L2InvalidateStatsSplitHostWrittenTlbAndKernelPush)
+{
+	const auto submit = [&](switch_exec_chan *chan, uint32_t visibility) {
+		uint32_t out = 0;
+		ASSERT_EQ(switch_gpu_chan_exec_events(switch_exec_chan_tgm(chan), &kPush, 1,
+						      nullptr, 0, nullptr, 0, nullptr, 0, &out,
+						      nullptr, visibility, nullptr, 0, nullptr),
+			  0);
+		kicks.clear();
+	};
+
+	switch_exec_chan *compositor = switch_exec_chan_new(0x140, 3);
+	switch_exec_chan_critical(compositor, 1);
+	switch_exec_chan *kernel = switch_exec_chan_new(0x141, 4);
+	switch_exec_chan_kernel(kernel, 1);
+
+	// Plain explicit job: no L2 invalidate.
+	submit(consumer, kJob);
+	// App host-written job.
+	submit(consumer, kJob | SWITCH_GPU_SUBMIT_HOST_WRITTEN);
+	// Compositor host-written job.
+	submit(compositor, kJob | SWITCH_GPU_SUBMIT_HOST_WRITTEN);
+	// TLB-only job (not host-written).
+	switch_exec_chan_dirty_tlb(consumer);
+	submit(consumer, kJob);
+	// Both host-written and TLB-dirty on one user submission.
+	switch_exec_chan_dirty_tlb(consumer);
+	submit(consumer, kJob | SWITCH_GPU_SUBMIT_HOST_WRITTEN);
+	// Kernel channel host-written push.
+	submit(kernel, kJob | SWITCH_GPU_SUBMIT_HOST_WRITTEN);
+
+	switch_exec_l2_inval_stats got = {};
+	switch_exec_take_l2_inval_stats(&got);
+	EXPECT_EQ(got.total, 5u);
+	EXPECT_EQ(got.host_written, 3u);
+	EXPECT_EQ(got.compositor, 1u);
+	EXPECT_EQ(got.tlb, 2u);
+	EXPECT_EQ(got.kernel_push, 1u);
+
+	switch_exec_take_l2_inval_stats(&got);
+	EXPECT_EQ(got.total, 0u);
+	EXPECT_EQ(got.host_written, 0u);
+	EXPECT_EQ(got.compositor, 0u);
+	EXPECT_EQ(got.tlb, 0u);
+	EXPECT_EQ(got.kernel_push, 0u);
+}

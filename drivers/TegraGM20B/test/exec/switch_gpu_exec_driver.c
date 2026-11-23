@@ -63,6 +63,15 @@ void switch_exec_take_foreign_stats(struct switch_exec_foreign_stats *out)
 	out->queue_max = __atomic_exchange_n(&tgm_stats.foreign_queue_max, 0, __ATOMIC_RELAXED);
 }
 
+void switch_exec_take_l2_inval_stats(struct switch_exec_l2_inval_stats *out)
+{
+	out->total = __atomic_exchange_n(&tgm_stats.l2_inval, 0, __ATOMIC_RELAXED);
+	out->host_written = __atomic_exchange_n(&tgm_stats.l2_inval_host, 0, __ATOMIC_RELAXED);
+	out->compositor = __atomic_exchange_n(&tgm_stats.l2_inval_host_comp, 0, __ATOMIC_RELAXED);
+	out->tlb = __atomic_exchange_n(&tgm_stats.l2_inval_tlb, 0, __ATOMIC_RELAXED);
+	out->kernel_push = __atomic_exchange_n(&tgm_stats.l2_inval_kernel, 0, __ATOMIC_RELAXED);
+}
+
 __attribute__((constructor)) static void switch_exec_device(void)
 {
 	tgm_gpu.device = &device;

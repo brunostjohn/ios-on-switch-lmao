@@ -122,6 +122,28 @@ static inline int stats_on(void)
 	return TGM_STATS;
 }
 
+static inline void tgm_stats_l2_inval(const struct tgm_chan *chan, int host_written, int tlb)
+{
+#if TGM_STATS
+	__atomic_fetch_add(&tgm_stats.l2_inval, 1, __ATOMIC_RELAXED);
+	if (chan->kernel) {
+		__atomic_fetch_add(&tgm_stats.l2_inval_kernel, 1, __ATOMIC_RELAXED);
+		return;
+	}
+	if (host_written) {
+		__atomic_fetch_add(&tgm_stats.l2_inval_host, 1, __ATOMIC_RELAXED);
+		if (chan->critical)
+			__atomic_fetch_add(&tgm_stats.l2_inval_host_comp, 1, __ATOMIC_RELAXED);
+	}
+	if (tlb)
+		__atomic_fetch_add(&tgm_stats.l2_inval_tlb, 1, __ATOMIC_RELAXED);
+#else
+	(void)chan;
+	(void)host_written;
+	(void)tlb;
+#endif
+}
+
 /* The atomics below write through sum and max. */
 /* NOLINTNEXTLINE(readability-non-const-parameter) */
 static inline void stats_add(u64 *sum, u64 *max, u64 v)
