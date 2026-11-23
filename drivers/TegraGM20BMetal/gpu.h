@@ -514,6 +514,19 @@ public:
     // The kept surface imports trim would give back now (debug builds' rates line)
     Trimmed keptImports();
 
+    // What the device holds, by kind (debug builds' memory line). `chunks`: the pool's, block-linear and zeta chunks,
+    // each mapped whole into the task; of them `pinned`, shared chunks a quarter or less used, which a few live
+    // resources keep from going back, and `reuse`, emptied dedicated chunks kept for the next of their size. `heaps`:
+    // shared heaps, the task's own pages; `gpuHeaps`: private heaps, kernel BOs no task maps, which its footprint does
+    // not count. False: `wait` unset and another thread held the device's lock.
+    struct Held {
+        uint64_t chunks = 0, pinned = 0, reuse = 0, writeCombined = 0;
+        uint64_t heaps = 0, gpuHeaps = 0, volatileHeaps = 0, kept = 0, tables = 0;
+        uint32_t chunkCount = 0, pinnedCount = 0;
+    };
+
+    bool held(Held &h, bool wait);
+
     // Whether the device's resource lock is free now (try, never waits: the stall line's)
     bool lockFree()
     {

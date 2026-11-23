@@ -609,6 +609,9 @@ void kernelUses(SwitchMetalCommandBuffer *cb, size_t at, std::vector<gm20b::Kern
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 struct SwitchMetalPassTrim;
 void logGivenBack(size_t relieved, const SwitchMetalPassTrim &passes, const gm20b::Device::Trimmed &kept);
+// The memory line, on the stall line's tick (its queue owns the line's state): what the device holds by kind beside the
+// process's footprint and its limit, whenever either moved since the last
+void gm20bMemoryTick();
 #endif
 
 // TegraGM20BMetalRates.mm

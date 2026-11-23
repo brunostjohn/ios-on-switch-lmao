@@ -99,4 +99,42 @@ TEST(ClientChunkMemory, ANoCopyBufferOverTheDevicesOwnMemoryIsRefused)
     dev.destroyBuffer(pooled);
 }
 
+// The memory line's split: a chunk a few small buffers keep is pinned until a quarter of it is used; a shared heap (the
+// task's pages) and a private one (a kernel BO no task maps, outside the footprint) count apart
+TEST(ClientChunkMemory, TheHeldSplitNamesAPinnedChunkAndEachHeapApart)
+{
+    kernel_model::model = {};
+    gm20b::Device dev;
+    std::string err;
+    ASSERT_TRUE(dev.open(harness::emptyPack().c_str(), 0, err, gm20b::Device::Role::Client)) << err;
+    constexpr uint64_t kSmall = 64 << 10;
+    std::vector<gm20b::Buffer> buffers(1);
+    ASSERT_TRUE(dev.createBuffer(kSmall, buffers[0]));
+    gm20b::Device::Held h;
+    ASSERT_TRUE(dev.held(h, false));
+    ASSERT_EQ(h.chunkCount, 1u);
+    EXPECT_EQ(h.pinnedCount, 1u) << "one 64 KiB buffer in a " << (h.chunks >> 10) << " KiB chunk";
+    EXPECT_EQ(h.pinned, h.chunks);
+    const uint64_t chunk = h.chunks;
+    while (buffers.size() * kSmall * 4 <= chunk) {
+        buffers.emplace_back();
+        ASSERT_TRUE(dev.createBuffer(kSmall, buffers.back()));
+    }
+    ASSERT_TRUE(dev.held(h, false));
+    EXPECT_EQ(h.chunks, chunk) << "the buffers share the one chunk";
+    EXPECT_EQ(h.pinnedCount, 0u) << "more than a quarter of it used";
+    EXPECT_EQ(h.heaps, 0u);
+    uint32_t shared = 0, gpuOnly = 0;
+    ASSERT_TRUE(dev.createArena(4 << 20, false, shared));
+    ASSERT_TRUE(dev.createArena(2 << 20, true, gpuOnly));
+    ASSERT_TRUE(dev.held(h, false));
+    EXPECT_EQ(h.heaps, uint64_t(4 << 20));
+    EXPECT_EQ(h.gpuHeaps, uint64_t(2 << 20));
+    EXPECT_EQ(h.chunks, chunk) << "a heap is not a chunk";
+    dev.destroyArena(gpuOnly);
+    dev.destroyArena(shared);
+    for (gm20b::Buffer &b : buffers)
+        dev.destroyBuffer(b);
+}
+
 }  // namespace

@@ -767,6 +767,49 @@ uint64_t Device::controlMappedBytes()
     return control > wc ? control - wc : 0;
 }
 
+bool Device::held(Held &h, bool wait)
+{
+    std::unique_lock<gm20b::Mutex> l(lock_, std::defer_lock);
+    if (wait)
+        l.lock();
+    else if (!l.try_lock())
+        return false;
+    h = {};
+    const auto count = [&](const Chunk &ch) {
+        if (!ch.memory)
+            return;
+        h.chunks += ch.bytes;
+        h.chunkCount++;
+        if (!ch.dedicated && ch.used && ch.used * 4 <= ch.bytes) {
+            h.pinned += ch.bytes;
+            h.pinnedCount++;
+        }
+    };
+    for (const Chunk &ch : chunks_)
+        count(ch);
+    for (const Chunk &ch : blChunks_)
+        count(ch);
+    for (const std::vector<Chunk> &z : zChunks_)
+        for (const Chunk &ch : z)
+            count(ch);
+    for (const Spare &sp : spares_)
+        h.reuse += chunks_[sp.chunk].bytes;
+    uint64_t wcMapped = 0;
+    for (const Chunk &ch : wcChunks_) {
+        h.writeCombined += ch.bo.handle ? ch.bytes : 0;
+        wcMapped += ch.bo.mapped;
+    }
+    for (const Arena &a : arenas_)
+        if (a.used && !a.purged) {
+            (a.wc ? h.heaps : h.gpuHeaps) += a.bytes;
+            h.volatileHeaps += a.isVolatile ? a.bytes : 0;
+        }
+    h.kept = keptImportBytes_;
+    const uint64_t control = k_.controlMappedBytes();
+    h.tables = control > wcMapped ? control - wcMapped : 0;
+    return true;
+}
+
 uint64_t Device::wcChunkBytesHeld()
 {
     std::lock_guard<gm20b::Mutex> l(lock_);

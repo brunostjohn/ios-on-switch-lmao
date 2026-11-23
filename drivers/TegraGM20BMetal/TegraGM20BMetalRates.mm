@@ -406,6 +406,7 @@ static void gm20bEventWaitTick()
 void gm20bStallTick()
 {
     gm20bEventWaitTick();
+    gm20bMemoryTick();
     static uint64_t lastCommits = ~0ull, lastDone = ~0ull;
     static int still = 0;
     static bool said = false;
