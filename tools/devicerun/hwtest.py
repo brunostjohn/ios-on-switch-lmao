@@ -464,6 +464,7 @@ TESTS: dict[str, bool] = {
             'gpu.path.holder_timeout',
             'gpu.path.idle_redraw',
             'gpu.path.launch_target',
+            'gpu.path.fresh_spare',
             'gpu.frame.record_cost',
             'metal.native.depth_stencil',
             'metal.native.shared_event',
