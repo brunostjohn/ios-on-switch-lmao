@@ -773,6 +773,7 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 	/* The L2 first: page-table lines a GPU-ordered map wrote around (TegraGM20BTlb.h) go before the TLB refetches. */
 	tlb = tgm_tlb_take(&chan->tlb, &chan->vm->tlb) || bind;
 	if ((l2_on() && host_written) || tlb) {
+		tgm_stats_l2_inval(chan, l2_on() && host_written, tlb);
 		/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
 		/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
 		PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_WFI, 0);
