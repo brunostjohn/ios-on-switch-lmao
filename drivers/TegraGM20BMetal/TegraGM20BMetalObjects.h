@@ -491,11 +491,12 @@ struct SwitchMetalSharedEventWait {
         *_commandLog;           // a sub-encoder's command buffer's log of what it records (null: none)
     NSArray *_doneHandlers;     // its completed handlers, from finish() until they ran
     bool _doneBehindScheduled;  // they run behind its scheduled handlers on the queue's handler queue
-    gm20b::HandlerTurn _turn;
+    bool _emptyPendingCompletion;
+    gm20b::HandlerTurn _scheduledTurn, _turn;
     std::atomic<MTLCommandBufferStatus> _status;
     NSError *_error;
     SwitchMetalQueue *_queue;
-    std::atomic<bool> _enqueued;
+    std::atomic<uint8_t> _enqueueState;  // 0: none, 1: commit claimed queue slot, 2: explicit enqueue pushed to worker
     gm20b::SubmitQueue<void *, SwitchMetalCommandBuffer *>::Reservation _reservation;
     bool _reserved;  // the submit worker's: its reservation made
     std::vector<size_t> _eventWaits;

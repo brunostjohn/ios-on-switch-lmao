@@ -199,6 +199,8 @@ static void withholdPresents(SwitchMetalCommandBuffer *cb)
     abort_with_reason(kOsReasonLibsystem, 0, reason, kOsReasonCrashReport);
 }
 
+static void finishScheduledTurn(SwitchMetalCommandBuffer *cb);
+
 // A queue's command buffers' scheduled handlers run in its order, on its own serial queue: one that waits for another queue's
 // command buffer holds up none of that queue's handlers.
 void scheduled(SwitchMetalCommandBuffer *cb)
@@ -221,6 +223,7 @@ void scheduled(SwitchMetalCommandBuffer *cb)
     // Core Animation's render thread waits for this every frame (waitUntilScheduled): with nothing to run, no hop through
     // the handler queue
     dispatchScheduled(cb, gm20bTakeHandlers(cb, cb->_scheduledHandlers, cb->_hasScheduledHandlers));
+    finishScheduledTurn(cb);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (heldReturnUs)
         noteHeldReturn(cb, heldReturnUs, "submitted");
@@ -274,31 +277,121 @@ void segmentCompleted(SwitchMetalCommandBuffer *cb, NSError *error, const gm20b:
 // frame's presentDrawable. The queue's turns keep its completed handlers one at a time, in order.
 static void deliverCompletion(SwitchMetalCommandBuffer *cb);
 
+static void prepareEmptyCompletion(SwitchMetalCommandBuffer *cb)
+{
+    SWITCH_METAL_DIAGNOSTIC(gRM->stats.finished.fetch_add(1, std::memory_order_relaxed));
+    cb->_error = nil;
+    cb->_status = MTLCommandBufferStatusCompleted;
+    const gm20b::CommandBufferTimes t = gm20b::orderedTimes(cb->_kernelStart, cb->_kernelEnd, hostSeconds(), false, 0);
+    cb->_kernelStart = t.kernelStart;
+    cb->_kernelEnd = t.kernelEnd;
+    cb->_gpuStart = t.gpuStart;
+    cb->_gpuEnd = t.gpuEnd;
+    cb->_completedSent = true;
+    cb->_doneHandlers = gm20bTakeHandlers(cb, cb->_completedHandlers, cb->_hasCompletedHandlers);
+    cb->_doneBehindScheduled = cb->_handlersQueued;
+    gm20bChanged(cb);
+}
+
 // Its completed handlers run, it is done, and the command buffer behind it that waited for its turn is delivered
 static void completeBuffer(SwitchMetalCommandBuffer *cb)
 {
-    NSArray *handlers = cb->_doneHandlers;
-    cb->_doneHandlers = nil;
-    for (MTLCommandBufferHandler h in handlers)
-        h((id<MTLCommandBuffer>)cb);
-    cb->_owners.clear();  // the resources may die now: no submission uses them any more (its capacity is recycled)
-    gm20bBytesDone(cb);
-    cb->_computeJobs.clear();
-    cb->_sharedEventWaits.clear();
-    cb->_resourceReady.reset();
-    gm20bRecordingDone(cb);
-    cb->_scheduledDone = true;
-    cb->_completedDone = true;
-    gm20bChanged(cb);
-    gRM->committed.fetch_sub(1, std::memory_order_acq_rel);
+    SwitchMetalCommandBuffer *cur = cb;
+    while (cur) {
+        NSArray *handlers = cur->_doneHandlers;
+        cur->_doneHandlers = nil;
+        for (MTLCommandBufferHandler h in handlers)
+            h((id<MTLCommandBuffer>)cur);
+        cur->_owners.clear();  // the resources may die now: no submission uses them any more (its capacity is recycled)
+        gm20bBytesDone(cur);
+        cur->_computeJobs.clear();
+        cur->_sharedEventWaits.clear();
+        cur->_resourceReady.reset();
+        gm20bRecordingDone(cur);
+        cur->_scheduledDone = true;
+        cur->_completedDone = true;
+        gm20bChanged(cur);
+        gRM->committed.fetch_sub(1, std::memory_order_acq_rel);
 #if SWITCH_FRAME_TIMELINE
-    switch_frame::finished(cb->_frame);
+        switch_frame::finished(cur->_frame);
 #endif
-    void *last = (__bridge void *)cb;
-    if (cb->_queue->_last.compare_exchange_strong(last, nullptr))
-        CFRelease(last);
-    if (void *next = cb->_turn.finished())
-        deliverCompletion((__bridge_transfer SwitchMetalCommandBuffer *)next);
+        void *last = (__bridge void *)cur;
+        if (cur->_queue->_last.compare_exchange_strong(last, nullptr))
+            CFRelease(last);
+        void *next = cur->_turn.finished();
+        if (!next)
+            return;
+        SwitchMetalCommandBuffer *later = (__bridge_transfer SwitchMetalCommandBuffer *)next;
+        if (later->_emptyPendingCompletion) {
+            later->_emptyPendingCompletion = false;
+            prepareEmptyCompletion(later);
+        }
+        if (!later->_doneBehindScheduled && !later->_queue->_completionQueue && !later->_doneHandlers.count) {
+            cur = later;
+            continue;
+        }
+        deliverCompletion(later);
+        return;
+    }
+}
+
+static void scheduledEmpty(SwitchMetalCommandBuffer *cb)
+{
+    if (cb->_scheduledSent.exchange(true))
+        return;
+    MTLCommandBufferStatus committed = MTLCommandBufferStatusCommitted;
+    cb->_status.compare_exchange_strong(committed, MTLCommandBufferStatusScheduled);
+    const double now = hostSeconds();
+    cb->_kernelEnd = now;
+    cb->_gpuStart = now;
+    SWITCH_METAL_DIAGNOSTIC(cb->_scheduleNotes.scheduledUs.store(nowUs(), std::memory_order_relaxed));
+    dispatchScheduled(cb, gm20bTakeHandlers(cb, cb->_scheduledHandlers, cb->_hasScheduledHandlers));
+}
+
+static void handEmptyToCompletion(SwitchMetalCommandBuffer *cb)
+{
+    SwitchMetalCommandBuffer *before = cb->_before;
+    cb->_before = nil;
+    if (before && !before->_turn.ran()) {
+        cb->_emptyPendingCompletion = true;
+        void *later = (__bridge_retained void *)cb;
+        if (before->_turn.hand(later))
+            return;
+        (void)(__bridge_transfer SwitchMetalCommandBuffer *)later;
+        cb->_emptyPendingCompletion = false;
+    }
+    prepareEmptyCompletion(cb);
+    deliverCompletion(cb);
+}
+
+static void drainScheduledTurn(void *next)
+{
+    while (next) {
+        SwitchMetalCommandBuffer *cur = (__bridge_transfer SwitchMetalCommandBuffer *)next;
+        scheduledEmpty(cur);
+        next = cur->_scheduledTurn.finished();
+        handEmptyToCompletion(cur);
+    }
+}
+
+static void finishScheduledTurn(SwitchMetalCommandBuffer *cb)
+{
+    drainScheduledTurn(cb->_scheduledTurn.finished());
+}
+
+void gm20bFinishEmpty(SwitchMetalCommandBuffer *cb)
+{
+    SwitchMetalCommandBuffer *before = cb->_before;
+    if (before && !before->_scheduledTurn.ran()) {
+        void *later = (__bridge_retained void *)cb;
+        if (before->_scheduledTurn.hand(later))
+            return;
+        (void)(__bridge_transfer SwitchMetalCommandBuffer *)later;
+    }
+    scheduledEmpty(cb);
+    void *next = cb->_scheduledTurn.finished();
+    handEmptyToCompletion(cb);
+    drainScheduledTurn(next);
 }
 
 // dispatch_async_f's work: the command buffer the context holds
@@ -425,8 +518,10 @@ static void finished(SwitchMetalCommandBuffer *cb)
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     const uint64_t heldReturnUs = cb->_heldReturnUs.exchange(0);
 #endif
-    if (sendScheduled)
+    if (sendScheduled) {
         dispatchScheduled(cb, scheduledHandlers);
+        finishScheduledTurn(cb);
+    }
     const bool behindScheduled = cb->_handlersQueued;
     gm20bChanged(cb);
 #if SWITCH_METAL_DIAGNOSTICS

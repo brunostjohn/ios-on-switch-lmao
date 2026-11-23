@@ -448,9 +448,9 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
 
 - (void)commit
 {
-    [self enqueue];
     if (_committed.exchange(true))
         return;
+    gm20bClaimCommitSlot(self);
     _status = MTLCommandBufferStatusCommitted;
     _kernelStart = hostSeconds();
 #if SWITCH_METAL_DIAGNOSTICS

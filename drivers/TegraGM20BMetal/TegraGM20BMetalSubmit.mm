@@ -297,8 +297,11 @@ bool submitRange(SwitchMetalCommandBuffer *cb, bool followed)
         const gm20b::RangeEnd end = rangeEnd(cb, last, followed, handlers);
         cb->_rangeQuiet = gm20b::quietEnd(end);
         cb->_rangeHeld = gm20b::frameHeld(end);
-        gm20bMoveWanting();
-        const SwitchMetalEncoded encoded = encodeRaw(cb, range.from, range.to, &why);
+        SwitchMetalEncoded encoded = SwitchMetalEncoded::stopped;
+        @autoreleasepool {
+            gm20bMoveWanting();
+            encoded = encodeRaw(cb, range.from, range.to, &why);
+        }
 #if SWITCH_FRAME_TIMELINE
         const uint64_t wallTicks = gm20b::encodeTicks() - profileTicks;
         cb->_frame.mark(switch_frame::EncodeEnd);

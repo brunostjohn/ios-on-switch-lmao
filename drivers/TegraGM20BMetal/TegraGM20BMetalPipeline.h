@@ -47,6 +47,8 @@ void gm20bPipelineSealed(SwitchMetalCommandBuffer *cb, size_t to);
 // The worker's, when the device goes idle: an encode ahead whose command buffer no one else holds (it can never be
 // committed) given back
 void gm20bPipelineOrphans();
+bool gm20bClaimCommitSlot(SwitchMetalCommandBuffer *cb);
+void gm20bFinishEmpty(SwitchMetalCommandBuffer *cb);
 
 #if SWITCH_METAL_DIAGNOSTICS
 // Debug builds' frame rates line (TegraGM20BMetalEncoderRates.mm, frame_cpu_counts.h). The worker's: it took `cb` as its

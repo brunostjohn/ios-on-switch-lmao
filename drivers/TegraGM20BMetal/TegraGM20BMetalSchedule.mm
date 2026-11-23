@@ -14,13 +14,25 @@ void wakeSubmit(void *queue, uint32_t dependencies)
 // those that happened before it).
 void enqueueBuffer(SwitchMetalCommandBuffer *cb)
 {
-    if (cb->_enqueued.exchange(true, std::memory_order_acq_rel))
+    uint8_t none = 0;
+    if (!cb->_enqueueState.compare_exchange_strong(none, 2, std::memory_order_acq_rel))
         return;
     cb->_before =
         (__bridge_transfer SwitchMetalCommandBuffer *)cb->_queue->_last.exchange((__bridge_retained void *)cb);
-    MTLCommandBufferStatus none = MTLCommandBufferStatusNotEnqueued;
-    cb->_status.compare_exchange_strong(none, MTLCommandBufferStatusEnqueued);
+    MTLCommandBufferStatus status = MTLCommandBufferStatusNotEnqueued;
+    cb->_status.compare_exchange_strong(status, MTLCommandBufferStatusEnqueued);
     gRM->schedule.push({SwitchMetalScheduleChange::Enqueue, cb}, false);  // nothing to submit until its commit
+}
+
+bool gm20bClaimCommitSlot(SwitchMetalCommandBuffer *cb)
+{
+    uint8_t none = 0;
+    if (cb->_enqueueState.compare_exchange_strong(none, 1, std::memory_order_acq_rel)) {
+        cb->_before =
+            (__bridge_transfer SwitchMetalCommandBuffer *)cb->_queue->_last.exchange((__bridge_retained void *)cb);
+        return false;
+    }
+    return none == 2;
 }
 
 // The imports of the IOSurfaces it writes. Only while the submit thread cannot take it: under the schedule lock, or on
@@ -155,11 +167,61 @@ static gm20b::EventDeadline::Time holdBound(SwitchMetalCommandBuffer *cb, bool &
     return wait.holderBound();
 }
 
+static bool renderPassReachesGpu(const SwitchMetalPass &pass)
+{
+    for (const SwitchMetalPass::Color &a : pass.color)
+        if (a.texture && (a.load == MTLLoadActionClear || a.store != MTLStoreActionDontCare || a.resolve))
+            return true;
+    for (const SwitchMetalPass::Zeta &z : pass.zeta)
+        if (z.texture && (z.load == MTLLoadActionClear || z.store != MTLStoreActionDontCare || z.resolve))
+            return true;
+    return pass.depthResolve != nil || pass.stencilResolve != nil;
+}
+
+static bool canFastPathEmpty(SwitchMetalCommandBuffer *cb)
+{
+    if (cb->_enqueueState.load(std::memory_order_acquire) == 2 || cb->_segError.set() || cb->_handedOnce ||
+        cb->_predicates.recorded() || !cb->_counterMarks.empty())
+        return false;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (!cb->_probeOps.empty())
+        return false;
+#endif
+    const SwitchMetalCommandPlan &plan = cb->_plan;
+    if (plan.recordingError() != SwitchMetalPlanError::None)
+        return false;
+    for (size_t at = 0; at < plan.size();) {
+        const Op beginOp = plan.operation(at).op;
+        if (!SwitchMetalCommandPlan::isEncoderBegin(beginOp))
+            return false;
+        const size_t end = plan.encoderEnd(at);
+        if (end < at + 2 || end > plan.size() || plan.operation(end - 1).op != OpEnd)
+            return false;
+        if (beginOp == OpRender && renderPassReachesGpu(cb->_passes[plan.legacy(at).x]))
+            return false;
+        for (size_t i = at + 1; i + 1 < end; ++i) {
+            const Op op = plan.operation(i).op;
+            const bool noOp = op == OpUpdateFence || op == OpWaitFence || (beginOp == OpRender && op == OpBarrier) ||
+                              (beginOp == OpCompute && op == OpKernelBarrier);
+            if (!noOp)
+                return false;
+        }
+        at = end;
+    }
+    return true;
+}
+
 void commitBuffer(SwitchMetalCommandBuffer *cb)
 {
     gm20b::followers().committing();
-    planSegments(cb);
     GM20BState &r = *gRM;
+    if (canFastPathEmpty(cb)) {
+        [cb closeEncoder];
+        r.committed.fetch_add(1, std::memory_order_relaxed);
+        gm20bFinishEmpty(cb);
+        return;
+    }
+    planSegments(cb);
     r.committed.fetch_add(1);
     if (r.raw->purgedArenas())
         restoreArenas(cb);

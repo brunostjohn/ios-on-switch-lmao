@@ -68,6 +68,74 @@ TEST(GM20BFacadeHandlers, ScheduledHandlersRunBeforeCompletedOnesInQueueOrder)
     }
 }
 
+TEST(GM20BFacadeHandlers, EmptyAndDrawnCommandBuffersKeepScheduledAndCompletedOrder)
+{
+    ASSERT_TRUE(opened().device != nil && opened().state != nil);
+    id<MTLCommandQueue> queue = [opened().device newCommandQueue];
+    const scale_frames::Shape shape{2, 12, 2};
+    const auto into = scale_frames::targets(opened().device, shape);
+    std::mutex lock;
+    std::vector<int> order;
+    std::mutex *const handlersLock = &lock;
+    std::vector<int> *const handlersOrder = &order;
+    NSMutableArray *kept = [NSMutableArray array];
+    constexpr int kCount = 24;
+    for (int i = 0; i < kCount; i++) {
+        id<MTLCommandBuffer> cb;
+        switch (i % 6) {
+        case 0:
+        case 3:
+            cb = scale_frames::record(queue, opened().state, into, shape, uint32_t(i));
+            break;
+        case 1:
+        case 2:
+            cb = [queue commandBuffer];
+            break;
+        case 4: {
+            cb = [queue commandBuffer];
+            [[cb blitCommandEncoder] endEncoding];
+            break;
+        }
+        default: {
+            cb = [queue commandBuffer];
+            MTLRenderPassDescriptor *d = [MTLRenderPassDescriptor renderPassDescriptor];
+            d.colorAttachments[0].texture = into[0];
+            d.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+            d.colorAttachments[0].storeAction = MTLStoreActionDontCare;
+            [[cb renderCommandEncoderWithDescriptor:d] endEncoding];
+            break;
+        }
+        }
+        [cb addScheduledHandler:^(id<MTLCommandBuffer>) {
+            std::lock_guard<std::mutex> l(*handlersLock);
+            handlersOrder->push_back(i + 1);
+        }];
+        [cb addCompletedHandler:^(id<MTLCommandBuffer>) {
+            std::lock_guard<std::mutex> l(*handlersLock);
+            handlersOrder->push_back(-(i + 1));
+        }];
+        [cb commit];
+        [kept addObject:cb];
+    }
+    [kept.lastObject waitUntilCompleted];
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    std::lock_guard<std::mutex> l(lock);
+    ASSERT_EQ(order.size(), size_t(kCount * 2));
+    int scheduled = 0, completed = 0;
+    std::vector<bool> seen(size_t(kCount + 1), false);
+    for (int at : order) {
+        if (at > 0) {
+            EXPECT_EQ(at, ++scheduled);
+            seen[size_t(at)] = true;
+        } else {
+            EXPECT_EQ(-at, ++completed);
+            EXPECT_TRUE(seen[size_t(-at)]) << "buffer " << -at - 1 << " completed before it was scheduled";
+        }
+    }
+    for (id<MTLCommandBuffer> cb in kept)
+        EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+}
+
 TEST(GM20BFacadeHandlers, AWaitForCompletionAfterScheduledIsWokenByItsRange)
 {
     ASSERT_TRUE(opened().device != nil && opened().state != nil);
