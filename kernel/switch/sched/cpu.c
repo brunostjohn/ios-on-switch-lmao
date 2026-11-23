@@ -14,6 +14,7 @@
 #include "cpu.h"
 
 #include <kern/clock.h>
+#include <kern/counter.h>
 #include <kern/processor.h>
 #include <kern/recount.h>
 #include <kern/simple_lock.h>
@@ -25,7 +26,8 @@
 
 #if DEVELOPMENT || DEBUG
 
-#define LINE 900u /* under the 1 KiB os_log record */
+#define LINE              900u /* under the 1 KiB os_log record */
+#define BOOT_TASK_LOG_MAX 128u
 
 #if XNU_12377_121_6
 extern int kernel_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
@@ -44,8 +46,30 @@ static uint64_t task_key(task_t task)
     return uid == 0 || uid == UINT64_MAX ? (1ull << 63) | (uint32_t)task_pid(task) : uid;
 }
 
+static void boot_task_exited(task_t task, const char *name, const struct recount_times_mach *times)
+{
+    static uint32_t logged;
+    uint64_t now_ns = 0, user_ns = 0, sys_ns = 0;
+
+    if (os_atomic_load(&logged, relaxed) >= BOOT_TASK_LOG_MAX ||
+        os_atomic_inc_orig(&logged, relaxed) >= BOOT_TASK_LOG_MAX) {
+        return;
+    }
+    absolutetime_to_nanoseconds(mach_absolute_time(), &now_ns);
+    absolutetime_to_nanoseconds(times->rtm_user, &user_ns);
+    absolutetime_to_nanoseconds(times->rtm_system, &sys_ns);
+    os_log(OS_LOG_DEFAULT,
+           "SwitchBootTask: %s[%d] exited at %llu.%03llu s of uptime: CPU %llu ms user + %llu ms "
+           "system, %llu page-ins",
+           name, task_pid(task), now_ns / NSEC_PER_SEC, now_ns % NSEC_PER_SEC / NSEC_PER_MSEC, user_ns / NSEC_PER_MSEC,
+           sys_ns / NSEC_PER_MSEC, counter_load(&task->pageins));
+}
+
 void switch_sched_cpu_exited(task_t task)
 {
+    if (task == TASK_NULL) {
+        return;
+    }
     const struct recount_times_mach times = recount_task_times(task);
     char name[SWITCH_CPU_NAME];
 
@@ -53,6 +77,9 @@ void switch_sched_cpu_exited(task_t task)
     simple_lock(&tasks_lock, LCK_GRP_NULL);
     switch_cpu_exited(&cpu_tasks, task_key(task), task_pid(task), name, times.rtm_user, times.rtm_system);
     simple_unlock(&tasks_lock);
+    if ((os_atomic_load(&switch_sched_busy_watching, relaxed) & SWITCH_SCHED_BUSY_SPRINGBOARD) == 0) {
+        boot_task_exited(task, name, &times);
+    }
 }
 
 static uint32_t walk_tasks(struct switch_cpu_task *top, uint64_t *all_user, uint64_t *all_sys)

@@ -102,7 +102,10 @@ void switch_sched_busy_exec(thread_t thread)
         s->pid = task_pid(get_threadtask(thread));
         os_atomic_store(&s->tid, thread->thread_id, release);
         simple_unlock(&busy_lock);
-        os_atomic_store(&switch_sched_busy_watching, 1, relaxed);
+        os_atomic_or(&switch_sched_busy_watching,
+                     SWITCH_SCHED_BUSY_WATCHING |
+                         (strcmp(s->name, "SpringBoard") == 0 ? SWITCH_SCHED_BUSY_SPRINGBOARD : 0u),
+                     relaxed);
         os_log(OS_LOG_DEFAULT, "SwitchBusy: watching %s[%d] main thread 0x%llx for stretches of %d ms or more", s->name,
                s->pid, thread_tid(thread), SWITCH_BUSY_MIN_MS);
         return;

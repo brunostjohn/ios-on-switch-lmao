@@ -39,6 +39,8 @@ void switch_sched_cpu_report(char *line, uint64_t window_ns);
 void switch_sched_cpu_exited(task_t task);
 
 /* busy.c: SpringBoard's and backboardd's main threads between two waits in their run loops (sched/busy.h). */
+#define SWITCH_SCHED_BUSY_WATCHING    (1u << 0)
+#define SWITCH_SCHED_BUSY_SPRINGBOARD (1u << 1)
 extern uint32_t switch_sched_busy_watching;
 
 void switch_sched_busy_exec(thread_t thread);
