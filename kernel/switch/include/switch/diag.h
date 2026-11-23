@@ -8,6 +8,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <switch/workloop_handoff.h>
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
@@ -54,6 +55,21 @@ struct switch_page_wait switch_diag_page_wait(void *pager, unsigned int absent);
 void switch_diag_page_waited(const struct switch_page_wait *wait);
 void switch_diag_pagein_report(char *line, size_t size, uint64_t window_ns);
 void switch_diag_cryptex_cache(switch_cryptex_cache_counts_t counts);
+/* iOS 27's workloop filter, once one of <switch/workloop_handoff.h>'s events happened: its line (diag/workloop.c). */
+void switch_diag_wl_event(enum switch_wl_kind kind, struct switch_wl_event *event);
+/* filt_wlwait_continue, under the workloop's lock: the owner and servicer the line names, by thread id. */
+void switch_diag_wl_hold(struct switch_wl_event *event, const void *owner, const void *servicer);
+
+static inline bool switch_diag_wl_unheld(const void *self, const void *owner, const void *servicer)
+{
+    return __builtin_expect(owner != self && servicer != self, 0);
+}
+
+/* The waiter an EV_DELETE of its knote wakes (a SYNC_WAIT not yet woken), else NULL. */
+static inline const void *switch_diag_wl_waking(bool unwoken_wait, const void *waiter)
+{
+    return __builtin_expect(unwoken_wait && waiter != NULL, 0) ? waiter : NULL;
+}
 #else
 static inline void switch_diag_proc_exit(__unused struct proc *p, __unused int rv)
 {}
@@ -79,6 +95,24 @@ static inline struct switch_page_wait switch_diag_page_wait(__unused void *pager
 
 static inline void switch_diag_page_waited(__unused const struct switch_page_wait *wait)
 {}
+
+static inline void switch_diag_wl_event(__unused enum switch_wl_kind kind, __unused struct switch_wl_event *event)
+{}
+
+static inline void switch_diag_wl_hold(__unused struct switch_wl_event *event, __unused const void *owner,
+                                       __unused const void *servicer)
+{}
+
+static inline bool switch_diag_wl_unheld(__unused const void *self, __unused const void *owner,
+                                         __unused const void *servicer)
+{
+    return false;
+}
+
+static inline const void *switch_diag_wl_waking(__unused bool unwoken_wait, __unused const void *waiter)
+{
+    return NULL;
+}
 #endif
 
 __END_DECLS

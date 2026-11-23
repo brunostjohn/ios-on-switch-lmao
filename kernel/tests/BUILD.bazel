@@ -105,6 +105,9 @@
 #   switch_boot_sync_test    <switch/boot_sync.h>: the setup before launchd syncs from a boot's first durable change on
 #                            (a changed override, a fresh Data volume, a panic record) and never on an ordinary or
 #                            deploy boot's REDONE changes
+#   xnu_workloop_handoff_test  <switch/workloop_handoff.h>'s SwitchWL handoff lines (which a process logs, as devicerun
+#                            reads them); 12377's workloop filter hooks each event where its state is held, 10063's has
+#                            no hook, and a release kernel compiles them to nothing
 #
 #   bazel test //kernel/tests:all
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
@@ -198,6 +201,35 @@ host_test(
         "//kernel/xnu-10063.141.1/bsd:kern/kern_event.c",
         "//kernel/xnu-12377.121.6/bsd:kern/kern_event.c",
     ],
+)
+
+# --- <switch/workloop_handoff.h> and kernel/switch/diag/workloop_line.h ----------------------------------------------
+copy_file(
+    name = "switch_workloop_handoff",
+    src = "//kernel/switch:include/switch/workloop_handoff.h",
+    out = "switch/workloop_handoff.h",
+)
+
+copy_file(
+    name = "switch_workloop_line",
+    src = "//kernel/switch:diag/workloop_line.h",
+    out = "switch_workloop_line.h",
+)
+
+host_test(
+    name = "xnu_workloop_handoff_test",
+    srcs = [
+        "switch/workloop_handoff.h",
+        "switch_workloop_line.h",
+        "xnu_workloop_handoff_test.cpp",
+    ],
+    data = [
+        "//kernel/switch:diag/workloop.c",
+        "//kernel/switch:include/switch/diag.h",
+        "//kernel/xnu-10063.141.1/bsd:kern/kern_event.c",
+        "//kernel/xnu-12377.121.6/bsd:kern/kern_event.c",
+    ],
+    includes = ["."],
 )
 
 host_test(
