@@ -263,9 +263,11 @@ _METAL_BUCKETS = 16
 # inputs are links into the source tree) and failed on a remote worker.
 _METAL_STAMP = ["make_pack.py", "packfile.py"]
 _METAL_SPLIT = _METAL_STAMP + [
+    "ca/caname.py",
     "ca/caset.py",
     "ca/caspec.py",
     "ca/caspec27.py",
+    "ca/closure.py",
     "ca/deepcolour.py",
     "ca/fetchfree.py",
     "iterated/programs.py",

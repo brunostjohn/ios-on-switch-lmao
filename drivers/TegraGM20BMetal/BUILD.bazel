@@ -415,6 +415,8 @@ py_library(
         ],
     ),
     data = [
+        "pack/ca/context-24B119.json",
+        "pack/ca/demand-24B119.json",
         "pack/ca/qc-21H461.json",
         "pack/ca/qc-24B119.json",
         "pack/rb/rb-21H461.json",
@@ -447,6 +449,22 @@ py_test(
         "pack/ca/qc-24B119.json",
     ],
     main = "pack/ca/caspec27_test.py",
+    deps = [":pack"],
+)
+
+# pack/ca/closure.py and caname.py: QuartzCore's names written back as it writes them, and every known content in every
+# context the build's table gives (context-24B119.json, demand-24B119.json) among the pack's corpus lines.
+py_test(
+    name = "closure_test",
+    size = "medium",
+    srcs = ["pack/ca/closure_test.py"],
+    data = [
+        "precompile/ca-names/24B119.txt",
+        "precompile/corpus.log",
+        "pack/ca/qc-21H461.json",
+        "pack/ca/qc-24B119.json",
+    ],
+    main = "pack/ca/closure_test.py",
     deps = [":pack"],
 )
 
