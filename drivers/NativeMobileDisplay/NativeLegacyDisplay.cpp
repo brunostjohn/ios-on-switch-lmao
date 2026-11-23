@@ -215,6 +215,15 @@ extern "C" __attribute__((weak)) void switch_sched_render_vsync(uint64_t, uint64
 extern "C" __attribute__((weak)) void switch_sched_render_swapped(void)
 {}
 
+#if SWITCH_RECORDER
+// XNU kernel/switch/recorder (--//kernel:recorder): a present six periods or more late freezes the ring into a dump.
+extern "C" __attribute__((weak)) void switch_recorder_late_frame(uint64_t)
+{}
+
+// A dump stops every CPU and writes 16 MiB or more: only a gross miss earns one.
+constexpr uint32_t kRecorderLatePeriods = 6;
+#endif
+
 // XNU osfmk/kern/switch_stall.c, debug kernels: base and current priority, mode and effective QoS of a thread.
 extern "C" __attribute__((weak)) void switch_thread_sched(thread_t, int *base, int *sched, int *mode, int *qos)
 {
@@ -1286,6 +1295,11 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             }
             if (SWITCH_FRAME_TIMELINE && judged.slow)
                 noteSlowFrame(stamp, us, periods, cause, mark, gpuBusy);
+#if SWITCH_RECORDER
+            if (judged.slow && periods >= kRecorderLatePeriods && cause >= switch_slow_present::kCa &&
+                cause <= switch_slow_present::kLatch)
+                switch_recorder_late_frame(us);
+#endif
         }
         if (frameHists)
             noteInteraction(stamp, intervalUs, periods, cause, began, lastDown);
