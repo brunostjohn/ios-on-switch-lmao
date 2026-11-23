@@ -14,6 +14,7 @@
 
 #include <kern/misc_protos.h>
 #include <switch/diag.h>
+#include <switch/recorder.h>
 #include <switch/sched.h>
 #include <switch/stall.h>
 #include <switch/xnu.h>
@@ -180,6 +181,20 @@ static void watch(enum slot_id id, uint64_t tid, int pid, const char *label, boo
     }
 }
 
+/* The task's first thread, its main thread, with a reference (THREAD_NULL when it has none). */
+static thread_t main_thread(task_t task)
+{
+    thread_t thread = THREAD_NULL;
+
+    task_lock(task);
+    if (!queue_empty(&task->threads)) {
+        thread = (thread_t)queue_first(&task->threads);
+        thread_reference(thread);
+    }
+    task_unlock(task);
+    return thread;
+}
+
 static uint64_t main_thread_id(task_t task)
 {
     uint64_t tid = 0;
@@ -197,16 +212,22 @@ void switch_sched_role(task_t task, int role)
 {
     char name[32];
     char label[LABEL];
+    thread_t main = THREAD_NULL;
     uint64_t tid = 0;
 
     switch_stall_frame_role(task, role);
-    if (role != TASK_FOREGROUND_APPLICATION) {
+    if (role == TASK_FOREGROUND_APPLICATION) {
+        main = main_thread(task);
+    }
+    switch_sched_busy_focal(task, role, main);
+#if SWITCH_RECORDER
+    switch_recorder_role(task, role, main);
+#endif
+    if (main == THREAD_NULL) {
         return;
     }
-    tid = main_thread_id(task);
-    if (tid == 0) {
-        return;
-    }
+    tid = thread_tid(main);
+    thread_deallocate(main);
     switch_task_name(task, name, sizeof(name));
     if (strcmp(name, "SpringBoard") == 0) {
         watch(SB_MAIN, tid, task_pid(task), "SpringBoard.main", true);
