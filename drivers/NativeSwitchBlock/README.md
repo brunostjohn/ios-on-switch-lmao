@@ -6,10 +6,11 @@ Tegra X1 SDMMC1 block driver and direct cryptex read driver for the Switch's SD 
 
 `NativeSwitchBlock` brings the card from the inherited 48 MHz 3.3 V bus to UHS-I SDR104 (1.8 V, 199.68 MHz, hardware
 tuned) unless `switch-no-sd-uhs` is set, then exposes the APFS GPT partition as an `IOBlockStorageDevice`. Data moves by
-SDHCI v4 64-bit ADMA2 straight into request pages with Auto CMD23 framing when the SCR lists CMD23, or by SDMA through a
-1 MiB bounce buffer when a segment cannot go direct. Queued reads merge across the queue, including bounded read-through
-gaps into a sink page, and completions run on the worker thread while the next command runs on the card. `SwitchCryptex`
-maps cryptex image extents onto the block device below DiskImages and the image files' page cache.
+SDHCI v4 64-bit ADMA2 straight into request pages with Auto CMD23 framing when the SCR lists CMD23; refused read
+segments stage individually through a 1 MiB bounce buffer inside ADMA2, and other bounce cases fall back to whole-chain
+SDMA. Queued reads merge across the queue, including bounded read-through gaps into a 32 KiB sink buffer, and
+completions run on the worker thread while the next command runs on the card. `SwitchCryptex` maps cryptex image extents
+onto the block device below DiskImages and the image files' page cache.
 
 Writes run write-through. The driver never turns the card's volatile write cache on, and `setup()` flushes and disables
 any cache left enabled by an earlier boot stage (panicking if the card fails to clear both bits).

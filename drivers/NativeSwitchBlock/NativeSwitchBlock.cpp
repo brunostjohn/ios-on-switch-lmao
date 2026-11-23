@@ -372,7 +372,11 @@ struct Batch {
     SwitchAdmaRefusal why;
     int issueStep;                // issue()'s result when the command never reached the card
     uint64_t beganNs, overlapNs;  // when beginBatch started; the previous chain's completions that ran inside this one
-    IOReturn result;              // endBatch's, for every request of the chain
+#if DEVELOPMENT || DEBUG
+    uint64_t oldestQueuedNs, issuedNs;
+    bool wokeFromIdle;
+#endif
+    IOReturn result;  // endBatch's, for every request of the chain
 };
 
 // r6-lows: a high-class read may be taken before older requests of lower classes (worker), never before an older request it
@@ -759,6 +763,7 @@ public:
     // When the last 10 s line of the request accounting (gIo) was made, and when the driver began and finished its
     // setup (kern.switch_sd's setup_us).
     uint64_t ioLineNs = 0, setupBeganNs = 0, setupEndedNs = 0;
+    uint64_t lastIssuedNs = 0, lastIrqNs = 0, lastWakeNs = 0, lastCmdIrqNs = 0, lastCmdWakeNs = 0, prevIrqNs = 0;
     void logIo(uint64_t now);
     size_t formatTotals(char *out, size_t size) const;
 #endif
@@ -973,6 +978,9 @@ bool NativeSwitchBlock::interruptFilter(OSObject *owner, IOFilterInterruptEventS
     self->w32(SIGNAL_ENABLE, 0);
     (void)self->r32(SIGNAL_ENABLE);  // the line is low before ArmCpu ends the interrupt
     __atomic_fetch_add(&self->stats.interrupts, 1, __ATOMIC_RELAXED);
+#if DEVELOPMENT || DEBUG
+    __atomic_store_n(&self->lastIrqNs, switch_now_ns(), __ATOMIC_RELEASE);
+#endif
     thread_wakeup(&self->irqEvent);
     return false;
 }
@@ -988,11 +996,19 @@ bool NativeSwitchBlock::waitSignal(uint32_t signals, uint64_t timeoutNs)
 #if DEVELOPMENT || DEBUG
     const uint32_t interruptsBefore = switch_interrupt_count(kInterrupt);
     const uint64_t filtersBefore = __atomic_load_n(&stats.interrupts, __ATOMIC_RELAXED);
+    // Clear before assert_wait_deadline and publish before the Device-nGnRE SIGNAL_ENABLE write:
+    // on ARMv8 a plain Normal store is not ordered before a subsequent Device store without a barrier.
+    __atomic_store_n(&lastIrqNs, 0, __ATOMIC_RELAXED);
 #endif
     assert_wait_deadline(&irqEvent, THREAD_UNINT, deadline);
+#if DEVELOPMENT || DEBUG
+    switch_mmio_write32_publish(regs, SIGNAL_ENABLE, signals);
+#else
     w32(SIGNAL_ENABLE, signals);
+#endif
     const wait_result_t result = thread_block(THREAD_CONTINUE_NULL);
 #if DEVELOPMENT || DEBUG
+    const uint64_t wakeNs = switch_now_ns();
     if (result != THREAD_AWAKENED) {
         waitFailure.status = r32(STATUS);
         waitFailure.signals = r32(SIGNAL_ENABLE);
@@ -1008,6 +1024,10 @@ bool NativeSwitchBlock::waitSignal(uint32_t signals, uint64_t timeoutNs)
     }
 #endif
     w32(SIGNAL_ENABLE, 0);
+#if DEVELOPMENT || DEBUG
+    if (result == THREAD_AWAKENED)
+        lastWakeNs = wakeNs;
+#endif
     return result == THREAD_AWAKENED;
 }
 
@@ -1135,6 +1155,9 @@ int NativeSwitchBlock::issue(uint32_t lba, uint32_t sectors, bool write, unsigne
         w32(ARGUMENT2, frame.argument2);
     w16(TRANSFER, frame.transfer);
     switch_dcache_sync();
+#if DEVELOPMENT || DEBUG
+    lastIssuedNs = switch_now_ns();
+#endif
     w16(COMMAND, frame.command);
     return 0;
 }
@@ -1194,6 +1217,10 @@ int NativeSwitchBlock::complete(uint32_t sectors, bool write, unsigned descripto
     }
     if (early)
         *early = !waited;
+#if DEVELOPMENT || DEBUG
+    lastCmdIrqNs = waited ? __atomic_load_n(&lastIrqNs, __ATOMIC_ACQUIRE) : 0;
+    lastCmdWakeNs = waited ? lastWakeNs : 0;
+#endif
     ended(s);
     w32(STATUS, INT_COMMAND | INT_TRANSFER);
     if (!(s & INT_COMMAND) || (r32(RESPONSE) & R1_ERRORS))
@@ -1206,6 +1233,10 @@ int NativeSwitchBlock::complete(uint32_t sectors, bool write, unsigned descripto
             return 9;
     }
     // A write's transfer complete follows the card's busy release, which DAT0 confirms (ended()).
+#if DEVELOPMENT || DEBUG
+    if (!bus.idle())
+        lastCmdIrqNs = 0;
+#endif
     if (!bus.idle() && awaitRelease())
         return 10;
     return 0;
@@ -1734,11 +1765,26 @@ void NativeSwitchBlock::beginBatch(Batch &b)
     b.direct = adma && (b.why = buildTable(first, sectors, b.write)) == kAdmaOk;
     b.staged = b.direct && (staging.count != 0u);
     b.cmd23 = b.direct && sectors > 1 && autoCmd23;
-    if (!b.direct)
+    if (!b.direct) {
+#if DEVELOPMENT || DEBUG
+        prevIrqNs = 0;
+#endif
         return;
+    }
     prepareDirect(b.write);
     b.issueStep = issue(static_cast<uint32_t>(first->lba), sectors, b.write, table.count, b.cmd23);
     b.issued = true;
+#if DEVELOPMENT || DEBUG
+    if (!b.issueStep) {
+        b.issuedNs = lastIssuedNs;
+        gIo.roundTrip[kSwitchSdRtPrep].add(b.issuedNs > b.beganNs ? b.issuedNs - b.beganNs : 0);
+        if (b.wokeFromIdle)
+            gIo.roundTrip[kSwitchSdRtSubmit].add(b.issuedNs > b.oldestQueuedNs ? b.issuedNs - b.oldestQueuedNs : 0);
+        if (prevIrqNs)
+            gIo.roundTrip[kSwitchSdRtGap].add(b.issuedNs > prevIrqNs ? b.issuedNs - prevIrqNs : 0);
+    }
+    prevIrqNs = 0;
+#endif
 }
 
 // endBatch: the issued command waited for (the interrupt, unless it finished meanwhile), retried and checked; or the whole
@@ -1753,6 +1799,15 @@ void NativeSwitchBlock::endBatch(Batch &b)
         uint32_t status = 0;
         bool early = false;
         int step = b.issueStep ? b.issueStep : complete(sectors, write, table.count, &status, &early, b.cmd23);
+#if DEVELOPMENT || DEBUG
+        if (!b.issueStep && !step && !early && lastCmdIrqNs) {
+            gIo.roundTrip[kSwitchSdRtWire].add(lastCmdIrqNs > b.issuedNs ? lastCmdIrqNs - b.issuedNs : 0);
+            gIo.roundTrip[kSwitchSdRtWake].add(lastCmdWakeNs > lastCmdIrqNs ? lastCmdWakeNs - lastCmdIrqNs : 0);
+            prevIrqNs = lastCmdIrqNs;
+        } else {
+            prevIrqNs = 0;
+        }
+#endif
         if (b.cmd23)
             ++stats.cmd23;
         if (!b.issueStep && b.overlapNs) {
@@ -1876,8 +1931,10 @@ int NativeSwitchBlock::controlCommand(uint32_t index, uint32_t argument, uint32_
     } else if ((flags & 3) == 3) {
         use = SwitchSdUse::kBusy;
     }
-    if (!claimBus(use))
+    if (!claimBus(use)) {
+        cardLastIrq = r32(PRESENT);
         return 1;
+    }
     w32(STATUS, 0xffffffff);
     if (data != kRegNone) {
         switch_dcache_clean_invalidate_lines(bounce, kSector);
@@ -2062,6 +2119,9 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
         IOLockLock(self->queueLock);
         // Idle: an erase-based trim once the queue has been quiet long enough, else a timer for when it will have been.
         bool trimNow = false;
+#if DEVELOPMENT || DEBUG
+        bool wokeFromIdle = false;
+#endif
         while (!pending && ((!self->head && !self->unmaps) || self->suspended)) {
             if (!self->suspended && self->trimRunnable()) {
                 const uint64_t now = switch_now_ns();
@@ -2077,9 +2137,16 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
                 thread_call_enter_delayed_with_leeway(self->trimCall, nullptr, mach_absolute_time() + wait, leeway,
                                                       THREAD_CALL_DELAY_LEEWAY);
             }
+#if DEVELOPMENT || DEBUG
+            wokeFromIdle = true;
+            self->prevIrqNs = 0;
+#endif
             IOLockSleep(self->queueLock, &self->head, THREAD_UNINT);
         }
         if (trimNow) {
+#if DEVELOPMENT || DEBUG
+            self->prevIrqNs = 0;
+#endif
             self->trimStep();
             IOLockUnlock(self->queueLock);
             continue;
@@ -2091,6 +2158,9 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
             Unmap *job = self->unmaps;
             self->working = true;
             self->chainsSinceUnmap = 0;
+#if DEVELOPMENT || DEBUG
+            self->prevIrqNs = 0;
+#endif
             IOLockUnlock(self->queueLock);
             const bool finished = self->stepUnmap(*job);
             IOLockLock(self->queueLock);
@@ -2112,6 +2182,15 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
             next = &batches[turn];
             turn ^= 1;
             next->first = self->pickLocked(&next->sectors, &next->count);
+#if DEVELOPMENT || DEBUG
+            next->wokeFromIdle = wokeFromIdle;
+            uint64_t oldest = next->first->queuedNs;
+            for (const Request *r = next->first->next; r; r = r->next) {
+                if (r->queuedNs < oldest)
+                    oldest = r->queuedNs;
+            }
+            next->oldestQueuedNs = oldest;
+#endif
             self->working = true;
         }
         IOLockUnlock(self->queueLock);
@@ -2127,8 +2206,12 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
                 next->overlapNs = switch_now_ns() - began;
             pending = nullptr;
         }
-        if (!next)
+        if (!next) {
+#if DEVELOPMENT || DEBUG
+            self->prevIrqNs = 0;
+#endif
             continue;
+        }
         self->endBatch(*next);
         pending = next;
         IOLockLock(self->queueLock);
@@ -2142,6 +2225,7 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
             const uint64_t now = switch_now_ns();
             if (now - self->statsLastNs >= NativeSwitchBlock::statsEveryNs) {
                 self->statsLastNs = now;
+                self->prevIrqNs = 0;
                 self->logThroughput();
                 self->logIo(now);
             }
@@ -2316,6 +2400,8 @@ void NativeSwitchBlock::reportState(const char *why)
 // initStatus the last STATUS sample.
 int NativeSwitchBlock::cardCommand(uint32_t index, uint32_t arg, uint32_t flags, uint32_t *response, uint32_t data)
 {
+    if (response)
+        *response = 0;
     SwitchSdUse use = SwitchSdUse::kCommand;
     if (data) {
         use = SwitchSdUse::kRead;
@@ -2343,15 +2429,18 @@ int NativeSwitchBlock::cardCommand(uint32_t index, uint32_t arg, uint32_t flags,
     // Data and R1b commands end in transfer complete (an R1b's when the card's busy ends), which follows command complete.
     const bool transfers = data != 0 || (flags & 3) == 3;
     const uint32_t done = INT_COMMAND | (transfers ? INT_TRANSFER : 0);
-    const uint32_t s = awaitStatus(transfers ? INT_TRANSFER : INT_COMMAND, transfers ? 1000000000ULL : 100000000ULL);
+    const uint32_t s = awaitStatus(transfers ? INT_TRANSFER : INT_COMMAND, transfers ? 1500000000ULL : 100000000ULL);
     ended(s);
+    const uint32_t answer = r32(RESPONSE);
     initStatus = s;
     if ((s & INT_ERRORS) || (s & done) != done) {
+        if (response && (s & INT_COMMAND) && !(s & 0x000f0000u))
+            *response = answer;
         recover(false);
         return (s & INT_ERRORS) ? 2 : 3;
     }
     if (response)
-        *response = r32(RESPONSE);
+        *response = answer;
     w32(STATUS, 0xffffffff);
     if (!bus.idle() && awaitRelease())
         return 4;  // R1b: the card's DAT0 release failed
@@ -2570,7 +2659,12 @@ void NativeSwitchBlock::disableFoundCache()
         IOLog("SwitchSD: card cache was left on at boot; flushed and disabled\n");
         return;
     }
-    const uint32_t irq = off.step == SwitchSdCacheOffStep::kReadBackFailed ? initStatus : cardLastIrq;
+    uint32_t irq = 0;
+    if (off.step == SwitchSdCacheOffStep::kReadBackFailed) {
+        irq = initStatus;
+    } else if (off.step == SwitchSdCacheOffStep::kFlushFailed || off.step == SwitchSdCacheOffStep::kDisableFailed) {
+        irq = cardLastIrq;
+    }
     panic("SwitchSD: card cache left on at boot could not be disabled (step %u, err %d, R1 0x%08x, irq 0x%08x, "
           "cache 0x%02x flush 0x%02x)",
           static_cast<unsigned>(off.step), off.error, off.r1, irq, static_cast<unsigned>(off.cacheEnable),

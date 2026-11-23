@@ -139,7 +139,72 @@ TEST(SwitchSdIo, TotalsParse)
     EXPECT_EQ(tokens["chosen"], std::vector<uint64_t>{2});
     EXPECT_EQ(tokens["bounce"], std::vector<uint64_t>{4096});
     EXPECT_EQ(tokens.find("cq0"), tokens.end());
-    EXPECT_EQ(tokens.size(), 2 * kSwitchSdClasses + 2 * kSwitchSdSizes + kSwitchSdClasses + 3);
+    ASSERT_EQ(tokens["rt0"].size(), 2 + kSwitchSdBuckets);
+    ASSERT_EQ(tokens["rt4"].size(), 2 + kSwitchSdBuckets);
+    EXPECT_EQ(tokens.size(), 2 * kSwitchSdClasses + 2 * kSwitchSdSizes + kSwitchSdRtPhases + kSwitchSdClasses + 3);
+}
+
+TEST(SwitchSdIo, FineBucketsAreHalfOctavesFrom1Us)
+{
+    EXPECT_EQ(switchSdBucket(0, kSwitchSdFineFirstNs), 0u);
+    EXPECT_EQ(switchSdBucket(999, kSwitchSdFineFirstNs), 0u);
+    EXPECT_EQ(switchSdBucket(1 * kUs, kSwitchSdFineFirstNs), 1u);
+    EXPECT_EQ(switchSdBucket(14 * kUs, kSwitchSdFineFirstNs), 8u);
+    EXPECT_EQ(switchSdBucket(28 * kUs, kSwitchSdFineFirstNs), 10u);
+    EXPECT_EQ(switchSdBucket(55 * kUs, kSwitchSdFineFirstNs), 12u);
+    EXPECT_EQ(switchSdBucket(64 * kMs, kSwitchSdFineFirstNs), kSwitchSdBuckets - 1);
+    for (uint64_t ns = 1; ns < 100 * kMs; ns = ns * 9 / 8 + 1) {
+        const unsigned b = switchSdBucket(ns, kSwitchSdFineFirstNs);
+        ASSERT_LT(b, kSwitchSdBuckets);
+        if (b)
+            EXPECT_GE(ns, switchSdBucketLow(b, kSwitchSdFineFirstNs)) << ns;
+        if (b + 1 < kSwitchSdBuckets)
+            EXPECT_LT(ns, switchSdBucketTop(b, kSwitchSdFineFirstNs)) << ns;
+        EXPECT_GE(b, switchSdBucket(ns * 8 / 9, kSwitchSdFineFirstNs)) << ns;
+    }
+}
+
+TEST(SwitchSdIo, RoundTripSplitInLineAndTotals)
+{
+    auto io = std::make_unique<SwitchSdIo>();
+    io->roundTrip[kSwitchSdRtGap].add(500 * kUs);
+    auto before = std::make_unique<SwitchSdIo>();
+    io->copyTo(*before);
+
+    io->roundTrip[kSwitchSdRtSubmit].add(25 * kUs);
+    io->roundTrip[kSwitchSdRtPrep].add(12 * kUs);
+    io->roundTrip[kSwitchSdRtWire].add(420 * kUs);
+    io->roundTrip[kSwitchSdRtWake].add(18 * kUs);
+    io->roundTrip[kSwitchSdRtGap].add(52 * kUs);
+
+    char out[896];
+    const size_t n = switchSdFormatIo(*io, *before, 10000 * kMs, out, sizeof(out));
+    const std::string line(out, n);
+    EXPECT_NE(line.find("| rt us sub 32/32/32 prep 16/16/16 wire 512/512/512 wake 22/22/22 gap 64/64/64"),
+              std::string::npos)
+        << line;
+
+    std::string text(16384, '\0');
+    text.resize(switchSdFormatTotals(*io, text.data(), text.size()));
+    std::map<std::string, std::vector<uint64_t>> tokens;
+    std::istringstream in(text);
+    for (std::string token; in >> token;) {
+        const size_t eq = token.find('=');
+        ASSERT_NE(eq, std::string::npos) << token;
+        std::vector<uint64_t> values;
+        std::istringstream list(token.substr(eq + 1));
+        for (std::string v; std::getline(list, v, ',');)
+            values.push_back(std::strtoull(v.c_str(), nullptr, 10));
+        tokens[token.substr(0, eq)] = values;
+    }
+    EXPECT_EQ(tokens["rt0"][0], 1u);
+    EXPECT_EQ(tokens["rt0"][1], 25u);
+    EXPECT_EQ(tokens["rt0"][2 + switchSdBucket(25 * kUs, kSwitchSdFineFirstNs)], 1u);
+    EXPECT_EQ(tokens["rt1"][1], 12u);
+    EXPECT_EQ(tokens["rt2"][1], 420u);
+    EXPECT_EQ(tokens["rt3"][1], 18u);
+    EXPECT_EQ(tokens["rt4"][0], 2u);
+    EXPECT_EQ(tokens["rt4"][1], 552u);
 }
 
 // The driver's buffers: a 10 s line with more of everything than a card can do (320,000 commands of each kind) fits its
@@ -147,7 +212,7 @@ TEST(SwitchSdIo, TotalsParse)
 TEST(SwitchSdIo, FitsTheDriversBuffers)
 {
     const auto fill = [](SwitchSdIo &io, uint64_t perBucket) {
-        const auto each = [&](SwitchSdHistogram &h) {
+        const auto each = [&](auto &h) {
             for (unsigned b = 0; b < kSwitchSdBuckets; ++b)
                 h.n[b] = perBucket;
             h.count = perBucket * kSwitchSdBuckets;
@@ -162,6 +227,8 @@ TEST(SwitchSdIo, FitsTheDriversBuffers)
             for (auto &h : dir)
                 each(h);
         }
+        for (auto &h : io.roundTrip)
+            each(h);
         io.chosen = io.depthMax = perBucket * kSwitchSdBuckets;
         io.depthNs = perBucket * kMs;
         io.bounceBytes = perBucket << 20;

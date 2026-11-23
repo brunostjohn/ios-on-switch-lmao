@@ -518,7 +518,7 @@ TEST(SdCard, DisableFoundCache)
         EXPECT_EQ(bus.ops.size(), 2u);
     }
 
-    // Read-back failure stops after one CMD48.
+    // Read-back failure stops after one CMD48 (bus error or R1 error bit).
     {
         FakeBus bus;
         bus.failAt = 3;
@@ -526,6 +526,15 @@ TEST(SdCard, DisableFoundCache)
         const SwitchSdCacheOff r = switchSdDisableFoundCache(true, perfFunc, perf, bus);
         EXPECT_EQ(r.step, SwitchSdCacheOffStep::kReadBackFailed);
         EXPECT_EQ(r.error, 2);
+        EXPECT_EQ(bus.ops.size(), 3u);
+    }
+    {
+        FakeBus bus;
+        bus.failAt = 3;
+        bus.failR1 = 1u << 19;  // ERROR
+        const SwitchSdCacheOff r = switchSdDisableFoundCache(true, perfFunc, perf, bus);
+        EXPECT_EQ(r.step, SwitchSdCacheOffStep::kReadBackFailed);
+        EXPECT_EQ(r.r1, 1u << 19);
         EXPECT_EQ(bus.ops.size(), 3u);
     }
 

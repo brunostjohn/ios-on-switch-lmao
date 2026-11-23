@@ -343,12 +343,13 @@ inline SwitchSdPerf switchSdParsePerf(const uint8_t *reg)
     p.cardMaintenance = ((reg[2] & 1) != 0);
     p.hostMaintenance = (reg[2] & 2) != 0;
     p.cache = ((reg[4] & 1) != 0);
-    p.cqDepth = static_cast<uint8_t>(reg[6] && reg[6] <= 0x1f ? reg[6] + 1 : 0);
+    p.cqDepth =
+        static_cast<uint8_t>(reg[kSdPerfCqSupport] && reg[kSdPerfCqSupport] <= 0x1f ? reg[kSdPerfCqSupport] + 1 : 0);
     for (unsigned i = 8; i < 16; ++i)
         p.taskErrors |= reg[i];
     p.fxEnable = reg[257];
     p.maintenanceEnable = reg[258];
-    p.cacheEnable = reg[260];
+    p.cacheEnable = reg[kSdPerfCacheControl];
     p.cqControl = reg[kSdPerfCqControl];
     return p;
 }

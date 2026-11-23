@@ -61,6 +61,14 @@ struct StorageIOTest: HWTest {
             metrics.set("\(name)_all_p50_us", all.percentileUs(500))
             metrics.set("\(name)_all_p99_us", all.percentileUs(990))
             metrics.set("\(name)_wait_p50_us", wait.percentileUs(500))
+            let rtPhases = [("submit", "rt0"), ("prep", "rt1"), ("wire", "rt2"), ("wake", "rt3"), ("gap", "rt4")]
+            for (phase, key) in rtPhases {
+                let hist = to.histogram(key, firstUs: 1).minus(from.histogram(key, firstUs: 1))
+                metrics.set("\(name)_rt_\(phase)_p50_us", hist.percentileUs(500))
+                if phase == "wake" || phase == "gap" {
+                    metrics.set("\(name)_rt_\(phase)_mean_us", hist.meanUs)
+                }
+            }
             var commands = 0
             for row in ["rd", "wr"] {
                 for size in 0 ..< 4 {
@@ -148,22 +156,32 @@ struct SdTotals {
 
     func value(_ key: String) -> Int { Int(fields[key]?.first ?? 0) }
 
-    func histogram(_ key: String) -> SdHistogram {
+    func histogram(_ key: String, firstUs: Int = 64) -> SdHistogram {
         let values = fields[key] ?? []
+        let sumUs = values.count > 1 ? Int(values[1]) : 0
         let buckets = values.count > 2 ? values.dropFirst(2).map { Int($0) } : []
-        return SdHistogram(count: Int(values.first ?? 0), buckets: buckets)
+        return SdHistogram(count: Int(values.first ?? 0), sumUs: sumUs, firstUs: firstUs, buckets: buckets)
     }
 }
 
 struct SdHistogram {
     var count: Int
+    var sumUs: Int
+    var firstUs: Int
     var buckets: [Int]
+
+    var meanUs: Int { count > 0 ? sumUs / count : 0 }
 
     func minus(_ other: SdHistogram) -> SdHistogram {
         let n = max(buckets.count, other.buckets.count)
         let mine = buckets + Array(repeating: 0, count: n - buckets.count)
         let theirs = other.buckets + Array(repeating: 0, count: n - other.buckets.count)
-        return SdHistogram(count: count - other.count, buckets: zip(mine, theirs).map { $0 - $1 })
+        return SdHistogram(
+            count: count - other.count,
+            sumUs: sumUs - other.sumUs,
+            firstUs: firstUs,
+            buckets: zip(mine, theirs).map { $0 - $1 }
+        )
     }
 
     /// The top of the bucket holding the `permille`-th value, in us; 0 when empty.
@@ -173,15 +191,18 @@ struct SdHistogram {
         var seen = 0
         for (bucket, n) in buckets.enumerated() {
             seen += n
-            if seen >= rank { return Self.low(bucket + 1 < buckets.count ? bucket + 1 : bucket) }
+            if seen >= rank {
+                return Self.low(bucket + 1 < buckets.count ? bucket + 1 : bucket, firstUs: firstUs)
+            }
         }
-        return Self.low(max(buckets.count - 1, 0))
+        return Self.low(max(buckets.count - 1, 0), firstUs: firstUs)
     }
 
-    /// A bucket's lower bound in us: 0 below 64 us, then two per doubling.
-    static func low(_ bucket: Int) -> Int {
+    /// A bucket's lower bound in us: 0 below `firstUs`, then two per doubling.
+    static func low(_ bucket: Int, firstUs: Int = 64) -> Int {
         guard bucket > 0 else { return 0 }
-        let octave = 64 << ((bucket - 1) / 2)
-        return (bucket - 1) % 2 == 1 ? octave * 362 / 256 : octave
+        let octave = (firstUs * 1000) << ((bucket - 1) / 2)
+        let ns = (bucket - 1) % 2 == 1 ? octave * 362 / 256 : octave
+        return ns / 1000
     }
 }
