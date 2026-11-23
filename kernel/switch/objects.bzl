@@ -39,6 +39,7 @@ SWITCH_OBJECTS = {
         ("bsd/kern/kern_exec.c", "security/entitlements_factory.c", []),
         ("bsd/kern/kern_exec.c", "boot/icon_cache.c", []),
         ("bsd/kern/kern_exit.c", "diag/exit.c", []),
+        ("bsd/kern/kdebug.c", "recorder/recorder.c", []),
         ("bsd/kern/kern_event.c", "diag/workloop.c", []),
         ("bsd/net/necp.c", "diag/necp.c", [], ["12377.121.6"]),
         ("bsd/net/necp.c", "diag/necp_table.c", [], ["12377.121.6"]),
@@ -83,6 +84,8 @@ SWITCH_OBJECTS = {
         ("osfmk/kern/sched_prim.c", "sched/busy.c", []),
         ("osfmk/kern/sched_prim.c", "diag/unnest.c", []),
         ("osfmk/vm/bsd_vm.c", "diag/pagein.c", []),
+        ("osfmk/kern/sched_prim.c", "recorder/watch.c", []),
+        ("osfmk/kperf/kperf.c", "recorder/sample.c", []),
         ("osfmk/kern/exception.c", "diag/crash.c", []),
         ("osfmk/kern/host.c", "vm/stats.c", [], ["12377.121.6"]),
     ],
@@ -126,6 +129,36 @@ def switch_copts(component, copts):
     for obj, flags in SWITCH_APPLE_COPTS.get(component, {}).items():
         out[obj] = out.get(obj, []) + flags
     return out
+
+# The objects whose hooks <switch/recorder.h> expands under --//kernel:recorder, per component.
+_RECORDER_OBJECTS = {
+    "bsd": [
+        "bsd/kern/kdebug.c",
+        "bsd/kern/kdebug_common.c",
+        "bsd/kern/kern_shutdown.c",
+        "switch:recorder/recorder.c",
+    ],
+    "osfmk": [
+        "osfmk/kperf/kperf.c",
+        "osfmk/kperf/kptimer.c",
+        "switch:diag/stall.c",
+        "switch:recorder/sample.c",
+        "switch:recorder/watch.c",
+        "switch:sched/stats.c",
+    ],
+}
+
+def with_recorder(component, copts):
+    """A component's `copts` with SWITCH_RECORDER on the objects that expand the recorder's hooks (--//kernel:recorder).
+
+    Args:
+        component: osfmk, bsd, ...
+        copts: the component's per-object copts.
+
+    Returns:
+        The copts with the define on those objects.
+    """
+    return copts | {obj: copts.get(obj, []) + ["-DSWITCH_RECORDER=1"] for obj in _RECORDER_OBJECTS.get(component, [])}
 
 def with_kprof(component, copts):
     """A component's `copts` with SWITCH_KPROF for switch_kprof.c (--//kernel:kprof), the one object that reads it.
