@@ -1009,8 +1009,11 @@ host_test(
     srcs = ["xnu_icon_cache_source_test.cpp"],
     data = [
         "//kernel/switch:boot/icon_cache.c",
+        "//kernel/switch:boot/icon_cache_sweep.c",
         "//kernel/xnu-10063.141.1/bsd:kern/kern_exec.c",
+        "//kernel/xnu-10063.141.1/iokit:Kernel/IOPMrootDomain.cpp",
         "//kernel/xnu-12377.121.6/bsd:kern/kern_exec.c",
+        "//kernel/xnu-12377.121.6/iokit:Kernel/IOPMrootDomain.cpp",
         "//tools/deploy:icon_cache.py",
     ],
 )
