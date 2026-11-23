@@ -17,6 +17,11 @@ extern "C" {
 // metal_device_open with the same pack and key takes its result. A device opened without it is another process's
 // (gpu.h Device::Role::Client): each of those made at its first use, in smaller steps.
 void metal_prepare(const char *packPath, uint64_t stack);
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// Debug builds: the render server's prepare thread's Device::open and warm, and how long metal_device_open then waited
+// for that thread, in nanoseconds (all 0 in a process that did not prepare).
+void metal_prepare_split(uint64_t *open_ns, uint64_t *warm_ns, uint64_t *waited_ns);
+#endif
 // Turns on the runtime's completion of the Core Animation states the pack lacks (TegraGM20BMetalComplete.h): their records made off the render
 // thread and kept under `cacheDir`, the process's own shader cache directory (null: in memory only), the installed native records
 // under `nativeSeed` read first (RecordCache::attachSeed; null: none). After metal_device_open.

@@ -128,13 +128,24 @@ static struct {
     gm20b::Device *dev = nullptr;
     gm20b::OpenFailure failure = gm20b::OpenFailure::Structural;
     bool started = false;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    uint64_t openNs = 0, warmNs = 0, waitedNs = 0;
+#endif
 } gPrepared;
 
 static gm20b::OpenFailure gOpenFailure = gm20b::OpenFailure::Structural;  // metal_device_open's last nil
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+static gm20b::Device *openDevice(const char *packPath, uint64_t stack, gm20b::Device::Role role, std::string &err,
+                                 gm20b::OpenFailure &failure, uint64_t *openNs = nullptr, uint64_t *warmNs = nullptr)
+#else
 static gm20b::Device *openDevice(const char *packPath, uint64_t stack, gm20b::Device::Role role, std::string &err,
                                  gm20b::OpenFailure &failure)
+#endif
 {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#endif
     gm20b::Device *dev = new gm20b::Device;
     dev->heapHolds(gm20b::heapHolds);
     if (!dev->open(packPath, stack, err, role)) {
@@ -144,7 +155,16 @@ static gm20b::Device *openDevice(const char *packPath, uint64_t stack, gm20b::De
     }
     if (role == gm20b::Device::Role::Client)
         return dev;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    const uint64_t opened = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#endif
     dev->warm();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (openNs && warmNs) {
+        *openNs = opened - began;
+        *warmNs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - opened;
+    }
+#endif
     return dev;
 }
 
@@ -161,14 +181,34 @@ void metal_prepare(const char *packPath, uint64_t stack)
         pthread_setname_np("com.brunostjohn.switch.gm20b.open");
         std::string err;
         gm20b::OpenFailure failure = gm20b::OpenFailure::Structural;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        uint64_t openNs = 0, warmNs = 0;
+        gm20b::Device *dev = openDevice(gPrepared.path.c_str(), gPrepared.stack, gm20b::Device::Role::RenderServer, err,
+                                        failure, &openNs, &warmNs);
+#else
         gm20b::Device *dev =
             openDevice(gPrepared.path.c_str(), gPrepared.stack, gm20b::Device::Role::RenderServer, err, failure);
+#endif
         std::lock_guard<gm20b::Mutex> m(gPrepared.lock);
         gPrepared.dev = dev;
         gPrepared.err = err;
         gPrepared.failure = failure;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+        gPrepared.openNs = openNs;
+        gPrepared.warmNs = warmNs;
+#endif
     });
 }
+
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+void metal_prepare_split(uint64_t *open_ns, uint64_t *warm_ns, uint64_t *waited_ns)
+{
+    std::lock_guard<gm20b::Mutex> l(gPrepared.lock);
+    *open_ns = gPrepared.openNs;
+    *warm_ns = gPrepared.warmNs;
+    *waited_ns = gPrepared.waitedNs;
+}
+#endif
 
 void metal_complete_states(const char *cacheDir, const char *nativeSeed)
 {
@@ -241,9 +281,15 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
     {
         std::unique_lock<gm20b::Mutex> m(gPrepared.lock);
         if (gPrepared.started && gPrepared.thread.joinable()) {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+            const uint64_t joining = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#endif
             m.unlock();
             gPrepared.thread.join();  // what is left of it: it began with the plugin
             m.lock();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+            gPrepared.waitedNs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - joining;
+#endif
         }
         if (gPrepared.started && gPrepared.path == packPath && gPrepared.stack == stack) {
             prepared = true;
