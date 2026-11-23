@@ -885,7 +885,7 @@ class Reports(unittest.TestCase):
         )
         saved_msg = (
             'SwitchBootPrefetch: list saved: 42 runs, 12 MiB '
-            '(10 kept of the last list, 1 dropped unused, 0 evicted) in 35 ms'
+            '(4/3/5 MiB cx/root/Data; 10 kept of the last list, 1 dropped unused, 0 evicted) in 35 ms'
         )
         records = [
             {
@@ -902,7 +902,7 @@ class Reports(unittest.TestCase):
         results, _ = devicerun.run_checks(records, [summary_check, lead_check])
         by_name = {r.check.name: r for r in results}
         self.assertEqual(by_name['boot.prefetch-lead'].verdict, INFO)
-        self.assertIn('120/110/2/8/64/45/1400/900/200/240/12/80', by_name['boot.prefetch-lead'].observed)
+        self.assertIn('120/110/2/8/64/45/15/20/10/1400/900/200/240/12/80', by_name['boot.prefetch-lead'].observed)
         self.assertEqual(by_name['boot.prefetch'].verdict, INFO)
         self.assertEqual(len(by_name['boot.prefetch'].matches), 1)
         self.assertIn('list saved:', by_name['boot.prefetch'].matches[0]['message'])
