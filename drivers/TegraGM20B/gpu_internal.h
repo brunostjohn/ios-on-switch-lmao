@@ -219,6 +219,7 @@ _Static_assert(TGM_PROF_MAX * 16 <= 0x1000,
 	       "the push profile's stamps fit the channel's semaphore page above CHAN_PROF");
 #define CHAN_NSTAMPS \
 	64 /* by seqno; one record = two 16-byte semaphore releases (payload, 0, PTIMER ns) */
+#define TGM_STAT_LATER (1u << 0)
 
 /* What a 16-byte semaphore release writes (NV906F SEMAPHORED RELEASE_SIZE_16BYTE) */
 struct tgm_stamp {
@@ -310,6 +311,9 @@ struct tgm_chan {
 	u64 stat_sub_ns[CHAN_NSTAMPS];
 	u64 stat_sub_ptimer[CHAN_NSTAMPS];
 	u8 stat_kick[CHAN_NSTAMPS]; /* stats: what each high kick found (tgm_sched_kick) */
+#if TGM_STATS
+	u8 stat_foreign[CHAN_NSTAMPS]; /* TGM_STAT_* per-seqno marks */
+#endif
 	u64 stat_exec,
 		stat_exec_max; /* stats: this window's stamped exec time (PTIMER units), for its owner */
 	u32 stat_exec_n;
@@ -486,6 +490,10 @@ struct stats_state {
 	 * app on the GPU (tgm_sched_kicked: preempted, mid-switch or deferred), PTIMER units */
 	u32 comp, behind;
 	u64 comp_sum, comp_max, behind_sum, behind_max;
+#if TGM_STATS
+	u32 later_kicks, later_frames, later_in_frame, later_frame_max;
+	u64 later_queue_max;
+#endif
 	/* tgm_gpu.lock held by a channel's setup (chan_new) and teardown (chan_free): every VmBind, BoAlloc, BoImport and BoFree
 	 * of every process, the compositor's too, waits for it; nanoseconds, the sum counts them */
 	u64 lock_new_sum, lock_new_max, lock_free_sum, lock_free_max;

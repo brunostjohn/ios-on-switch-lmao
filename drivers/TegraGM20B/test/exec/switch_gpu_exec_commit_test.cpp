@@ -577,3 +577,57 @@ TEST_F(ExecCommit, PlainAndHostOnlyJobsTakeNoLiveLock)
 		kicks.clear();
 	}
 }
+
+TEST_F(ExecCommit, LaterCompositorKicksCountFramesPerFrameMaxAndQueueMax)
+{
+	switch_exec_chan_high(consumer, 1);
+	switch_exec_chan_critical(consumer, 1);
+
+	const auto submit = [&](switch_exec_chan *chan, switch_exec_kick_kind kick, int later,
+				uint64_t sub_pt, uint64_t queue_pt) {
+		switch_exec_set_kick(kick, later);
+		switch_exec_set_ptimer(sub_pt);
+		uint32_t out = 0;
+		EXPECT_EQ(switch_gpu_chan_exec_events(switch_exec_chan_tgm(chan), &kPush, 1,
+						      nullptr, 0, nullptr, 0, nullptr, 0, &out,
+						      nullptr, kJob, nullptr, 0, nullptr),
+			  0);
+		switch_exec_chan_complete_stamp(chan, out, sub_pt + queue_pt,
+						sub_pt + queue_pt + 100);
+		kicks.clear();
+		return out;
+	};
+
+	submit(consumer, SWITCH_EXEC_KICK_PREEMPTED, 0, 1000, 8000);
+	submit(consumer, SWITCH_EXEC_KICK_CLEAR, 1, 10000, 7000);
+	const uint32_t marked_seqno = submit(consumer, SWITCH_EXEC_KICK_PREEMPTED, 1, 20000, 2500);
+	submit(consumer, SWITCH_EXEC_KICK_SWITCHING, 1, 30000, 1200);
+
+	submit(consumer, SWITCH_EXEC_KICK_CLEAR, 0, 35000, 500);
+	submit(consumer, SWITCH_EXEC_KICK_DEFERRED, 1, 40000, 4000);
+
+	switch_exec_chan *other = switch_exec_chan_new(0x130, 3);
+	switch_exec_chan_high(other, 1);
+	submit(other, SWITCH_EXEC_KICK_PREEMPTED, 1, 50000, 49000);
+
+	uint64_t pt = 100000;
+	uint32_t last = 0;
+	for (uint32_t tries = 0; tries < 80 && last != marked_seqno + 64; ++tries) {
+		pt += 1000;
+		last = submit(consumer, SWITCH_EXEC_KICK_PREEMPTED, 0, pt, 50000);
+	}
+	EXPECT_EQ(last, marked_seqno + 64);
+
+	switch_exec_later_stats got = {};
+	switch_exec_take_later_stats(&got);
+	EXPECT_EQ(got.kicks, 3u);
+	EXPECT_EQ(got.frames, 2u);
+	EXPECT_EQ(got.frame_max, 2u);
+	EXPECT_EQ(got.queue_max, 4000u);
+
+	switch_exec_take_later_stats(&got);
+	EXPECT_EQ(got.kicks, 0u);
+	EXPECT_EQ(got.frames, 0u);
+	EXPECT_EQ(got.frame_max, 0u);
+	EXPECT_EQ(got.queue_max, 0u);
+}

@@ -227,6 +227,9 @@ void tgm_stats_tick(void)
 	u32 copies = 0;
 	u32 comp = 0;
 	u32 behind = 0;
+	u32 later_kicks = 0;
+	u32 later_frames = 0;
+	u32 later_frame_max = 0;
 	u32 lnew = 0;
 	u32 lfree = 0;
 	u64 abytes = 0;
@@ -241,6 +244,7 @@ void tgm_stats_tick(void)
 	u64 com = 0;
 	u64 bs = 0;
 	u64 bm = 0;
+	u64 later_queue_max = 0;
 	u64 lns = 0;
 	u64 lnm = 0;
 	u64 lfs = 0;
@@ -297,6 +301,11 @@ void tgm_stats_tick(void)
 	behind = __atomic_exchange_n(&tgm_stats.behind, 0, __ATOMIC_RELAXED);
 	bs = __atomic_exchange_n(&tgm_stats.behind_sum, 0, __ATOMIC_RELAXED);
 	bm = __atomic_exchange_n(&tgm_stats.behind_max, 0, __ATOMIC_RELAXED);
+	later_kicks = __atomic_exchange_n(&tgm_stats.later_kicks, 0, __ATOMIC_RELAXED);
+	later_frames = __atomic_exchange_n(&tgm_stats.later_frames, 0, __ATOMIC_RELAXED);
+	later_frame_max = __atomic_exchange_n(&tgm_stats.later_frame_max, 0, __ATOMIC_RELAXED);
+	later_queue_max = __atomic_exchange_n(&tgm_stats.later_queue_max, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&tgm_stats.later_in_frame, 0, __ATOMIC_RELAXED);
 	tgm_sched_stats(sched, sizeof(sched));
 	tgm_recover_stats(recov, sizeof(recov));
 	lnew = __atomic_exchange_n(&tgm_stats.lock_new, 0, __ATOMIC_RELAXED);
@@ -335,6 +344,11 @@ void tgm_stats_tick(void)
 		  comp ? PT_NS(cos) / comp / 1000 : 0, PT_NS(com) / 1000, comp,
 		  behind ? PT_NS(bs) / behind / 1000 : 0, PT_NS(bm) / 1000, behind, sched, recov);
 	nvxnu_stats("tegra-gm20b: stats %s", line);
+	if (comp || later_kicks || later_queue_max)
+		nvxnu_stats("tegra-gm20b: %u later kicks met an app in %u frames, per frame max "
+			    "%u, queue max %llu us",
+			    later_kicks, later_frames, later_frame_max,
+			    PT_NS(later_queue_max) / 1000);
 	stats_deadline(line, sizeof(line));
 	tgm_acquire_probe_window(line, sizeof(line), now);
 	if (line[0])

@@ -80,6 +80,29 @@ static void chan_doorbell(struct tgm_chan *chan)
 	writel_relaxed(chan->chan.gpfifo.cur, (u8 __iomem *)chan->chan.userd.map.ptr + 0x8c);
 }
 
+#if TGM_STATS
+static void chan_note_later_kick(struct tgm_chan *chan, u32 first, u32 next, int later, int app)
+{
+	u32 s = 0;
+	u32 in_frame = 0;
+
+	if (!later) {
+		__atomic_store_n(&tgm_stats.later_in_frame, 0, __ATOMIC_RELAXED);
+		return;
+	}
+	if (!app)
+		return;
+	__atomic_fetch_add(&tgm_stats.later_kicks, 1, __ATOMIC_RELAXED);
+	in_frame = __atomic_add_fetch(&tgm_stats.later_in_frame, 1, __ATOMIC_RELAXED);
+	if (in_frame == 1)
+		__atomic_fetch_add(&tgm_stats.later_frames, 1, __ATOMIC_RELAXED);
+	stats_max32(&tgm_stats.later_frame_max, in_frame);
+	for (s = next; (s32)(s - first) >= 0; s--)
+		WRITE_ONCE(chan->stat_foreign[s % CHAN_NSTAMPS],
+			   READ_ONCE(chan->stat_foreign[s % CHAN_NSTAMPS]) | TGM_STAT_LATER);
+}
+#endif
+
 /* Fence push: semaphore release of the next 32-bit seqno after wait-for-idle, then nvif's GET report, then a nonstall
  * interrupt (nouveau nvc0_fence_emit32) unless the job is quiet and nobody asked for it (SwitchGpuQuiet.h), then kick. The L2's dirty lines go to DRAM first, and the end of the submission
  * is stamped for the stats. The GET report comes before the interrupt so that a wait for room (chan_room) finds the room
@@ -145,6 +168,11 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 	if (stats_on())
 		for (s = first; (s32)(next - s) >= 0; s++)
 			WRITE_ONCE(chan->stat_sub_ns[s % CHAN_NSTAMPS], chan->submit_ns);
+#if TGM_STATS
+	for (s = first; (s32)(next - s) >= 0; s++)
+		WRITE_ONCE(chan->stat_foreign[s % CHAN_NSTAMPS],
+			   READ_ONCE(chan->stat_foreign[s % CHAN_NSTAMPS]) & (u8)~TGM_STAT_LATER);
+#endif
 	if ((s32)(tgm_chan_completed(chan) - chan->submitted) >= 0) {
 		WRITE_ONCE(chan->progress_held, tgm_hold_held_ns(chan->chid, chan->submit_ns));
 		WRITE_ONCE(chan->busy_ns, chan->submit_ns);
@@ -173,6 +201,7 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 	if (chan->high) {
 		struct tgm_sched_queued queued;
 		enum tgm_sched_kick kick = tgm_sched_kicked(tgm_gpu.device, chan->chid, &queued);
+		int later = 0;
 
 		WRITE_ONCE(job->app, kick != TGM_KICK_CLEAR);
 		if (stats_on() && queued.unread)
@@ -182,7 +211,13 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 				WRITE_ONCE(chan->stat_kick[s % CHAN_NSTAMPS], kick);
 		WRITE_ONCE(job->asked_pt, queued.asked_pt);
 		WRITE_ONCE(job->behind, queued.behind);
-		tgm_deadline_kicked(!chan->kernel, kick != TGM_KICK_CLEAR);
+		later = tgm_deadline_kicked(!chan->kernel, kick != TGM_KICK_CLEAR);
+#if TGM_STATS
+		if (chan->critical && !chan->kernel)
+			chan_note_later_kick(chan, first, next, later, kick != TGM_KICK_CLEAR);
+#else
+		(void)later;
+#endif
 	}
 	if (stats_on())
 		idle_stats();

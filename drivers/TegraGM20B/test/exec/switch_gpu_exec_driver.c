@@ -7,6 +7,7 @@
 struct gpu_state tgm_gpu;
 struct idle_state tgm_idle;
 struct switch_gpu_busy tgm_busy;
+struct stats_state tgm_stats;
 struct wstat_state tgm_wstat;
 struct frame_gpu_state tgm_frame_gpu;
 struct present_state tgm_present;
@@ -18,6 +19,37 @@ DEFINE_MUTEX(tgm_live_lock);
 
 static struct nvkm_device device;
 static u32 parked;
+static enum switch_exec_kick_kind test_sched_kick;
+static int test_deadline_later;
+static u64 test_ptimer;
+
+void switch_exec_reset_driver(void)
+{
+	memset(&tgm_stats, 0, sizeof(tgm_stats));
+	test_sched_kick = SWITCH_EXEC_KICK_CLEAR;
+	test_deadline_later = 0;
+	test_ptimer = 0;
+}
+
+void switch_exec_set_kick(enum switch_exec_kick_kind sched_kick, int deadline_later)
+{
+	test_sched_kick = sched_kick;
+	test_deadline_later = deadline_later;
+}
+
+void switch_exec_set_ptimer(uint64_t pt)
+{
+	test_ptimer = pt;
+}
+
+void switch_exec_take_later_stats(struct switch_exec_later_stats *out)
+{
+	out->kicks = __atomic_exchange_n(&tgm_stats.later_kicks, 0, __ATOMIC_RELAXED);
+	out->frames = __atomic_exchange_n(&tgm_stats.later_frames, 0, __ATOMIC_RELAXED);
+	out->frame_max = __atomic_exchange_n(&tgm_stats.later_frame_max, 0, __ATOMIC_RELAXED);
+	out->queue_max = __atomic_exchange_n(&tgm_stats.later_queue_max, 0, __ATOMIC_RELAXED);
+	__atomic_store_n(&tgm_stats.later_in_frame, 0, __ATOMIC_RELAXED);
+}
 
 __attribute__((constructor)) static void switch_exec_device(void)
 {
@@ -93,8 +125,14 @@ void tgm_chan_wake_push(struct tgm_chan *chan)
 {
 }
 
-void tgm_deadline_kicked(int compositor, int app)
+int tgm_deadline_kicked(int compositor, int app)
 {
+	return compositor ? test_deadline_later : 0;
+}
+
+uint64_t tgm_deadline_pt_ns(uint64_t pt_span)
+{
+	return pt_span;
 }
 
 int tgm_deadline_app_kicked(void)
@@ -111,6 +149,10 @@ void tgm_hold_need(struct nvkm_device *dev, unsigned int chid)
 {
 }
 
+void tgm_hold_released(unsigned int chid, uint64_t end_pt, int job_last)
+{
+}
+
 void tgm_hold_track(struct nvkm_device *dev, unsigned int chid, int on)
 {
 }
@@ -121,7 +163,18 @@ enum tgm_sched_kick tgm_sched_kicked(struct nvkm_device *dev, unsigned int chid,
 				     struct tgm_sched_queued *queued)
 {
 	memset(queued, 0, sizeof(*queued));
-	return TGM_KICK_CLEAR;
+	queued->behind = -1;
+	switch (test_sched_kick) {
+	case SWITCH_EXEC_KICK_PREEMPTED:
+		return TGM_KICK_PREEMPTED;
+	case SWITCH_EXEC_KICK_SWITCHING:
+		return TGM_KICK_SWITCHING;
+	case SWITCH_EXEC_KICK_DEFERRED:
+		return TGM_KICK_DEFERRED;
+	case SWITCH_EXEC_KICK_CLEAR:
+	default:
+		return TGM_KICK_CLEAR;
+	}
 }
 
 void tgm_stats_tick(void)
@@ -132,6 +185,18 @@ void tgm_stats_loud(struct tgm_chan *chan, uint32_t reason)
 {
 }
 
+void tgm_stats_gr_context(void)
+{
+}
+
+void switch_gpu_compositor_job(uint64_t ns)
+{
+}
+
+void switch_gpu_compositor_sync(uint32_t syncs, uint64_t ns, int behind)
+{
+}
+
 int nvif_event_allow(struct nvif_event *event)
 {
 	return 0;
@@ -139,7 +204,7 @@ int nvif_event_allow(struct nvif_event *event)
 
 u64 nvkm_timer_read(struct nvkm_timer *timer)
 {
-	return nvxnu_nanotime();
+	return test_ptimer ? test_ptimer : nvxnu_nanotime();
 }
 
 int nvkm_clk_read(struct nvkm_clk *clk, enum nv_clk_src src)

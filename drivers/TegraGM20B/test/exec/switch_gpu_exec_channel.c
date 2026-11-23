@@ -111,6 +111,7 @@ void switch_exec_reset(const struct switch_exec_hooks *with)
 	if (!tgm_fence_pages.va)
 		tgm_fence_pages.va = switch_exec_host_alloc(TGM_FENCE_BYTES);
 	memset(tgm_fence_pages.va, 0, TGM_FENCE_BYTES);
+	switch_exec_reset_driver();
 	hooks = *with;
 }
 
@@ -155,6 +156,24 @@ struct tgm_chan *switch_exec_chan_tgm(struct switch_exec_chan *chan)
 void switch_exec_chan_high(struct switch_exec_chan *chan, int high)
 {
 	chan->tgm.high = high;
+}
+
+void switch_exec_chan_critical(struct switch_exec_chan *chan, int critical)
+{
+	chan->tgm.critical = critical;
+}
+
+void switch_exec_chan_complete_stamp(struct switch_exec_chan *chan, uint32_t seqno,
+				     uint64_t start_pt, uint64_t end_pt)
+{
+	volatile struct tgm_stamps *st = chan_stamps(&chan->tgm, seqno);
+
+	st->start.payload = seqno;
+	st->start.ns = start_pt;
+	st->end.payload = seqno;
+	st->end.ns = end_pt;
+	WRITE_ONCE(*chan->tgm.fence_cpu, seqno);
+	stats_fences(&chan->tgm);
 }
 
 void switch_exec_chan_live(struct switch_exec_chan *chan, int live)

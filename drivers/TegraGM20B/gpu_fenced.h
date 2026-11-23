@@ -166,14 +166,18 @@ static inline void stats_fences(struct tgm_chan *chan)
 		stats_add(&tgm_stats.queue_sum, &tgm_stats.queue_max,
 			  start - READ_ONCE(chan->stat_sub_ptimer[i]));
 		if (chan->high) {
+			const u64 queue = start - READ_ONCE(chan->stat_sub_ptimer[i]);
+
 			__atomic_fetch_add(&tgm_stats.comp, 1, __ATOMIC_RELAXED);
-			stats_add(&tgm_stats.comp_sum, &tgm_stats.comp_max,
-				  start - READ_ONCE(chan->stat_sub_ptimer[i]));
+			stats_add(&tgm_stats.comp_sum, &tgm_stats.comp_max, queue);
 			if (READ_ONCE(chan->stat_kick[i]) != TGM_KICK_CLEAR) {
 				__atomic_fetch_add(&tgm_stats.behind, 1, __ATOMIC_RELAXED);
-				stats_add(&tgm_stats.behind_sum, &tgm_stats.behind_max,
-					  start - READ_ONCE(chan->stat_sub_ptimer[i]));
+				stats_add(&tgm_stats.behind_sum, &tgm_stats.behind_max, queue);
 			}
+#if TGM_STATS
+			if (READ_ONCE(chan->stat_foreign[i]) & TGM_STAT_LATER)
+				stats_max(&tgm_stats.later_queue_max, queue);
+#endif
 		}
 	}
 	chan->stat_done = done;

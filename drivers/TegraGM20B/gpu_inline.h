@@ -133,6 +133,24 @@ static inline void stats_add(u64 *sum, u64 *max, u64 v)
 		;
 }
 
+/* NOLINTNEXTLINE(readability-non-const-parameter) */
+static inline void stats_max(u64 *max, u64 v)
+{
+	u64 m = __atomic_load_n(max, __ATOMIC_RELAXED);
+	while (v > m &&
+	       !__atomic_compare_exchange_n(max, &m, v, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+		;
+}
+
+/* NOLINTNEXTLINE(readability-non-const-parameter) */
+static inline void stats_max32(u32 *max, u32 v)
+{
+	u32 m = __atomic_load_n(max, __ATOMIC_RELAXED);
+	while (v > m &&
+	       !__atomic_compare_exchange_n(max, &m, v, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+		;
+}
+
 static inline volatile struct tgm_stamps *chan_stamps(struct tgm_chan *chan, u32 seqno)
 {
 	return (volatile struct tgm_stamps *)((u8 *)chan->ring + CHAN_STAMPS) +
