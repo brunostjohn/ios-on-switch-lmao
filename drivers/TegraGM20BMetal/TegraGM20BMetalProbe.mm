@@ -180,6 +180,12 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
     return [NSString stringWithFormat:@"old=%u readback=%u", reply.old_mode, reply.readback];
 }
 
+- (NSString *)switchMetalProbeMacroBands:(NSNumber *)on
+{
+    gRM->raw->probeMacroBands.store(on.boolValue, std::memory_order_release);
+    return nil;
+}
+
 // Storage forms view compressed attachments while set, for gpu.gm20b.storage_compressed
 - (NSString *)switchMetalProbeStorageCompressed:(NSNumber *)on
 {

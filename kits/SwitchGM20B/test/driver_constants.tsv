@@ -96,6 +96,9 @@ mme.h	kAmplify	policy	raw macro slot
 mme.h	kAmplifyIndexed	policy	raw macro slot
 mme.h	kAmplifyCallWords	policy	push words of an amplify call: its header and an indexed draw's five words
 mme.h	kAmplificationScratchWords	policy	push words of the amplify macros' scratch writes: the count, both maps, a state's words
+mme.h	kBandDraw	policy	raw macro slot
+mme.h	kBandDrawCallWords	policy	push words of a band draw macro call
+mme.h	kBandDrawMaxWords	policy	push words of a band draw macro call with scissor restore
 fx_mip.cpp	kSubc2D	policy	gm20b::SUBC_2D, the kernel binding of FERMI_TWOD_A (gpu_chan.c)
 fx_mip.cpp	kSubc3D	policy	gm20b::SUBC_3D, the kernel binding of MAXWELL_B (gpu_chan.c)
 nvdec.cpp	kListedIndices	policy	decoder table size

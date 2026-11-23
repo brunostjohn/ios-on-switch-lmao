@@ -130,6 +130,7 @@ inline void metalMacro(PushCounts &c, PushParse &p, uint32_t slot, uint32_t firs
 	case SWITCH_GM20B_MACRO_AMPLIFY_INDEXED:
 	case SWITCH_GM20B_MACRO_FETCH_DRAW:
 	case SWITCH_GM20B_MACRO_FETCH_DRAW_INDEXED:
+	case SWITCH_GM20B_MACRO_BAND_DRAW:
 		countDraw(c, p);
 		break;
 	case SWITCH_GM20B_MACRO_CLEAR_LAYERS:

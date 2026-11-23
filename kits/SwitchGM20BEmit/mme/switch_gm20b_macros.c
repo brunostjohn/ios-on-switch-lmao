@@ -916,6 +916,80 @@ static void build_icb_bind(struct mme_builder *b, bool unused)
     }
 }
 
+static void build_band_draw(struct mme_builder *b, bool unused)
+{
+    (void)unused;
+    struct mme_value bands = mme_load(b);
+    struct mme_value horiz = mme_load(b);
+    mme_if(b, ine, bands, mme_zero())
+    {
+        mme_mthd(b, NVB197_SET_SCISSOR_ENABLE(0));
+        mme_emit(b, mme_imm(NVB197_SET_SCISSOR_ENABLE_V_TRUE));
+        mme_mthd(b, NVB197_SET_SCISSOR_HORIZONTAL(0));
+        mme_emit(b, horiz);
+    }
+    mme_free_reg(b, horiz);
+
+    struct mme_value first = mme_load(b);
+    struct mme_value count = mme_load(b);
+    struct mme_value y_cur = mme_load(b);
+    struct mme_value step = mme_load(b);
+
+    mme_if(b, ine, bands, mme_zero())
+    {
+        mme_sub_to(b, bands, bands, mme_imm(1));
+        mme_while(b, ine, bands, mme_zero())
+        {
+            struct mme_value next = mme_add(b, y_cur, step);
+            mme_merge_to(b, y_cur, y_cur, next, 16, 16, 0);
+            mme_mthd(b, NVB197_SET_SCISSOR_VERTICAL(0));
+            mme_emit(b, y_cur);
+            mme_mov_to(b, y_cur, next);
+            mme_free_reg(b, next);
+
+            mme_mthd(b, NVB197_BEGIN);
+            mme_emit(b, mme_zero());
+            mme_mthd(b, NVB197_SET_VERTEX_ARRAY_START);
+            mme_emit(b, first);
+            mme_emit(b, count);
+            mme_mthd(b, NVB197_END);
+            mme_emit(b, mme_zero());
+            mme_mthd(b, NVB197_WAIT_FOR_IDLE);
+            mme_emit(b, mme_zero());
+
+            mme_sub_to(b, bands, bands, mme_imm(1));
+        }
+        mme_mov_to(b, bands, mme_imm(1));
+    }
+    mme_free_reg(b, step);
+
+    struct mme_value y_end = mme_load(b);
+    struct mme_value orig_vert = mme_load(b);
+    mme_if(b, ine, bands, mme_zero())
+    {
+        mme_merge_to(b, y_cur, y_cur, y_end, 16, 16, 0);
+        mme_mthd(b, NVB197_SET_SCISSOR_VERTICAL(0));
+        mme_emit(b, y_cur);
+
+        mme_mthd(b, NVB197_BEGIN);
+        mme_emit(b, mme_zero());
+        mme_mthd(b, NVB197_SET_VERTEX_ARRAY_START);
+        mme_emit(b, first);
+        mme_emit(b, count);
+        mme_mthd(b, NVB197_END);
+        mme_emit(b, mme_zero());
+
+        mme_mthd(b, NVB197_SET_SCISSOR_VERTICAL(0));
+        mme_emit(b, orig_vert);
+    }
+    mme_free_reg(b, orig_vert);
+    mme_free_reg(b, y_end);
+    mme_free_reg(b, y_cur);
+    mme_free_reg(b, count);
+    mme_free_reg(b, first);
+    mme_free_reg(b, bands);
+}
+
 static void write_macro(FILE *out, const char *name, void (*build)(struct mme_builder *, bool), bool indexed,
                         const struct nv_device_info *dev)
 {
@@ -972,6 +1046,7 @@ int main(int argc, char **argv)
     write_macro(out, "clear_layers", build_clear_layers, false, &dev);
     write_macro(out, "fetch_draw", build_fetch_draw, false, &dev);
     write_macro(out, "fetch_draw_indexed", build_fetch_draw, true, &dev);
+    write_macro(out, "band_draw", build_band_draw, false, &dev);
     fprintf(out, "\n#endif\n");
     return fclose(out) ? 1 : 0;
 }

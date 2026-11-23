@@ -48,6 +48,7 @@ enum {
     // barrier, of vertices and of indices: its words in Vulkan's indirect order, the call's data or a GPFIFO continuation
     SWITCH_GM20B_MACRO_FETCH_DRAW,
     SWITCH_GM20B_MACRO_FETCH_DRAW_INDEXED,
+    SWITCH_GM20B_MACRO_BAND_DRAW,
     SWITCH_GM20B_MACRO_METAL_END,  // one past the driver's last slot
 };
 

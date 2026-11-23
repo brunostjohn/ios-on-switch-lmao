@@ -28,7 +28,7 @@ public enum Registry {
         IconCornersTest(), TextureBufferTest(), IconSmallSizesTest(), IconPasscodeTest(), IconCalendarTest(),
         CompileSharedTest(), CompileFirstDrawTest(), CompileStageLibraryTest(), CompileAnswerLatencyTest(),
         CompileSharedStagesTest(),
-        DrawBandsTest(), DispatchPiecesTest(), ProbeCtaTest(), PosterTargetsTest(),
+        DrawBandsTest(), DispatchPiecesTest(), ProbeCtaTest(), ProbeMacroWfiTest(), PosterTargetsTest(),
         PushScanTargetsTest(), ResolveCostTest(), JobRefusalLinesTest(),
         MsaaFirstUseTest(), StoredDepthTest(), ZetaMoveTest(), ZetaKeptTest(), ZcViewFormatsTest(),
         ZcZetaLayersTest(), ZcZetaShadowTest(), ZcMixedTest(), ZcStencilCriterionTest(),

@@ -90,9 +90,22 @@ void RenderEncoder::emitDraw(bool indexed, uint32_t first, uint32_t count, uint3
         finishDraw(count, instances);
         return;
     }
+    const PixelBox area = {sc_[0], sc_[1], sc_[0] + sc_[2], sc_[1] + sc_[3]};
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (dev_->probeMacroBands.load(std::memory_order_relaxed) && !indexed && instances == 1 && rot_.turn == 0 &&
+        area.y1 > area.y0) {
+        if (p_.room() < mme::kBandDrawMaxWords)
+            reserve();
+        mme::bandDraw(p_, params_, bands, first, count, root, baseInstance, uint16_t(area.x0), uint16_t(area.x1),
+                      uint16_t(area.y0), uint16_t(area.y1));
+        cb_->bands += bands;
+        SWITCH_METAL_DIAGNOSTIC(if (cb_->drawTimes_) timeDraw(count, instances, false));
+        SWITCH_METAL_DIAGNOSTIC(dev_->stats.bandedDraws++; dev_->stats.bands += bands);
+        return;
+    }
+#endif
     if (cb_->batchWork_.operations)
         cutBatch();
-    const PixelBox area = {sc_[0], sc_[1], sc_[0] + sc_[2], sc_[1] + sc_[3]};
     emitBands(
         p_, rot_, area, drawBox_, bands,
         [&] {
