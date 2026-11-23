@@ -21,7 +21,7 @@ USB_PD = [
     Check(
         'usb.pd.classified',
         OWNER,
-        ('SwitchPD: classifying:', 'SwitchPD: OTG partner: '),
+        'SwitchPD: classifying: the partner came up as our sink',
         process=KERNEL,
         followed='usb.pd.decision',
         within=3.0,
@@ -33,7 +33,6 @@ USB_PD = [
         OWNER,
         (
             'SwitchPD: sink-only partner: sourcing VBUS',
-            'SwitchPD: OTG partner: ',
             'SwitchPD: dual-role partner: ',
             'SwitchPD: not sourcing: ',
             'SwitchPD: empty: the sink-only partner did not come back',
@@ -57,12 +56,7 @@ USB_PD = [
     Check(
         'usb.pd.came',
         OWNER,
-        (
-            'SwitchPD: sink: the partner ',
-            'SwitchPD: waiting for the controller',
-            'SwitchPD: classifying:',
-            'SwitchPD: OTG partner: ',
-        ),
+        ('SwitchPD: sink: the partner ', 'SwitchPD: classifying: the partner came up as our sink'),
         TIMELINE,
         process=KERNEL,
         source=f'{POLICY}, {PD}',
@@ -71,11 +65,11 @@ USB_PD = [
     Check(
         'usb.pd.sourcing',
         OWNER,
-        ('SwitchPD: sink-only partner: sourcing VBUS', 'SwitchPD: OTG partner: '),
+        'SwitchPD: sink-only partner: sourcing VBUS',
         'count > 0',
         process=KERNEL,
         needs='usb.pd.classified',
-        source=f'{POLICY}, {PD}',
+        source=PD,
         note='plug the stick or keyboard (manual steps)',
     ),
     Check(

@@ -22,10 +22,10 @@
 // the attempts until the cable is pulled. Every step is a reply to an ALERT or a one-shot timer.
 //
 // On OLED the fixed 5.3 V rail and VCONN can remain on with the connector source switches open while sinking.
-// An initial SRC_MODE/OTG_INSERT looks identical for a sink-only adapter and a dual-role Mac. Keep CC attached
-// while the controller resolves it: a source-plug alert permits protected OTG boost, a partner sourcing VBUS
-// opens our switches. Only an unresolved role goes through the switch-open and reattach windows. External VBUS
-// blocks boost unless our own enabled source switch accounts for it. Faults and host shutdown isolate the source.
+// An initial SRC_MODE/OTG_INSERT looks identical for a sink-only adapter and a dual-role partner (a Mac or monitor).
+// Open the source switches for kClassifyMS to classify it: a dual-role partner then sources VBUS (Sink), while a
+// sink-only partner detaches and is powered across the reattach window. External VBUS blocks boost unless our own
+// enabled source switch accounts for it. Faults and host shutdown isolate the source.
 // One kernel log line per decision, with the controller's bits. The decisions are SwitchPDPolicy.h (host-tested).
 //
 // Interrupt only: a pin that cannot be attached panics; a pin that keeps firing (stuck low: more than 50 ALERTs in a

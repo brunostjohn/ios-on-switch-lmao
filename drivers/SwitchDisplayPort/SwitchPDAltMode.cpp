@@ -58,9 +58,10 @@ void hand_off()
     gToldDisplayPort = displayLanes;
 }
 
-void perform(struct switch_pd_alt_out out)
+void perform(struct switch_pd_alt_out out, enum switch_pd_alt_step from)
 {
     if (out.act == SWITCH_PD_ALT_READ) {
+        from = gAlt.step;
         uint8_t incoming[SWITCH_PD_ALT_INCOMING_MAX] = {};
         if (tegra_i2c_read(kBus, kPD, INCOMING_VDM, incoming, sizeof(incoming)) != 0) {
             out = switch_pd_alt_finish(&gAlt, SWITCH_PD_ALT_FAILED, "INCOMING_VDM could not be read");
@@ -69,6 +70,7 @@ void perform(struct switch_pd_alt_out out)
         }
     }
     if (out.act == SWITCH_PD_ALT_COMMAND && out.command == SWITCH_PD_ALT_CMD_DR_SWAP) {
+        from = gAlt.step;
         uint8_t raw[2] = {};
         if (tegra_i2c_read(kBus, kPD, STATUS1, raw, sizeof(raw)) != 0) {
             out = switch_pd_alt_finish(&gAlt, SWITCH_PD_ALT_FAILED, "STATUS1 could not be read before the swap");
@@ -78,6 +80,7 @@ void perform(struct switch_pd_alt_out out)
         }
     }
     if (out.act == SWITCH_PD_ALT_COMMAND) {
+        from = gAlt.step;
         const uint8_t command[2] = {static_cast<uint8_t>(out.command), static_cast<uint8_t>(out.command >> 8)};
         const bool written =
             (out.message_len == 0 || tegra_i2c_write(kBus, kPD, OUTGOING_VDM, out.message, out.message_len) == 0) &&
@@ -87,7 +90,11 @@ void perform(struct switch_pd_alt_out out)
         }
     }
     if (out.line != nullptr) {
-        IOLog("SwitchPD: alternate mode (%s): %s\n", switch_pd_alt_step_name(gAlt.step), out.line);
+        if (gAlt.step == SWITCH_PD_ALT_FAILED && from != SWITCH_PD_ALT_FAILED) {
+            IOLog("SwitchPD: alternate mode (failed): %s: %s\n", switch_pd_alt_step_name(from), out.line);
+        } else {
+            IOLog("SwitchPD: alternate mode (%s): %s\n", switch_pd_alt_step_name(gAlt.step), out.line);
+        }
     }
     if (out.timer_ms != 0) {
         gTimer->setTimeoutMS(out.timer_ms);
@@ -99,7 +106,8 @@ void perform(struct switch_pd_alt_out out)
 
 void timerFired(OSObject *, IOTimerEventSource *)
 {
-    perform(switch_pd_alt_timer(&gAlt, gAtRest(gPD)));
+    const enum switch_pd_alt_step before = gAlt.step;
+    perform(switch_pd_alt_timer(&gAlt, gAtRest(gPD)), before);
 }
 }  // namespace
 
@@ -137,7 +145,7 @@ void switch_pd_alt_alert(IOService *pd, IOWorkLoop *loop, bool (*at_rest_of)(con
         hand_off();
         return;
     }
-    perform(out);
+    perform(out, before);
 }
 
 void switch_pd_alt_resume()
@@ -150,7 +158,8 @@ void switch_pd_alt_resume()
         hand_off();
         return;
     }
-    perform(switch_pd_alt_go(&gAlt, SWITCH_PD_ALT_DOCK_DP_SLEEP));
+    const enum switch_pd_alt_step before = gAlt.step;
+    perform(switch_pd_alt_go(&gAlt, SWITCH_PD_ALT_DOCK_DP_SLEEP), before);
 }
 
 void switch_pd_alt_leave()

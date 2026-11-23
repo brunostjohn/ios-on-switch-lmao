@@ -1239,12 +1239,24 @@ static void dockAltMode()
     gPd.status2 = 0x2000;
     switch_pd_sleep(false);
     check(observed.plugged && !observed.settled && observed.contractMillivolts == 0 && gPd.vdmsSent == 1 &&
-              chgConfig() != 2 && (gPd.config1 >> 14) == 0,
-          "resume consumes dock removal and re-arms for the new Rd before any vendor command");
+              chgConfig() != 2 && (gPd.config1 >> 14) == 3,
+          "resume consumes dock removal and classifies the new Rd with source switches off before any vendor command");
     gPd.alert |= 1u << 13;
     advance(10);
+    check(!observed.settled && observed.role != SWITCH_PD_ROLE_SOURCE && chgConfig() != 2 &&
+              (gPd.config1 >> 14) == 3,
+          "source-plug alert does not bypass classification for the replacement partner");
+    gPd.unplug();
+    advance(100);
+    advance(1000);
+    check(!observed.settled && chgConfig() == 2 && (gPd.config1 >> 14) == 0,
+          "classified replacement keyboard enters reattach with boost and switches armed");
+    gPd.status1 = 0x9680;
+    gPd.status2 = 0x2000;
+    gPd.alert |= 0x8;
+    advance(10);
     check(observed.settled && observed.role == SWITCH_PD_ROLE_SOURCE && chgConfig() == 2,
-          "the replacement keyboard receives power on the controller's source attach");
+          "the replacement keyboard receives power after classifying and reattaching");
 }
 
 static void oledDockSourceStartup()
@@ -1265,9 +1277,6 @@ static void oledDockSourceStartup()
         gPd.status2 = 0x2000;
         gPd.alert |= 0x8;
         advance(10);
-        check(!state.settled && chgConfig() != 2 && (gPd.config1 >> 14) == 0,
-              "initial attach keeps the controller's source switches armed");
-        advance(1000);
         check(!state.settled && chgConfig() != 2 && gOutputs[TEGRA_GPIO(X, 3)] && gOutputs[TEGRA_GPIO(K, 5)] &&
                   (gPd.config1 >> 14) == 3,
               "OLED attach: fixed supplies remain ready while boost and connector switches stay off");
@@ -1341,16 +1350,16 @@ static void sourceSupplyLifecycle()
     gPd.status2 = 0x2000;
     gPd.alert |= 0x8;
     advance(10);
-    check(logHas("waiting for the controller") && chgConfig() == 1 && gOutputs[TEGRA_GPIO(X, 3)] &&
-              gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 0,
-          "keep the CC attachment while the controller resolves power");
+    check(logHas("classifying:") && chgConfig() == 1 && gOutputs[TEGRA_GPIO(X, 3)] &&
+              gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
+          "our VSAFE still classifies with fixed supplies on and connector switches off");
     advance(422);
     gCharger.plug(500, 1);
     gPd.status1 = 0x0d80;
     gPd.status2 = 0;
     gPd.alert |= 0x8;
     advance(10);
-    check(logHas("sink: the partner is a source") && chgConfig() == 1 && gOutputs[TEGRA_GPIO(X, 3)] &&
+    check(logHas("dual-role partner:") && chgConfig() == 1 && gOutputs[TEGRA_GPIO(X, 3)] &&
               gOutputs[TEGRA_GPIO(K, 5)] && (gPd.config1 >> 14) == 3,
           "Mac takes the source role with fixed supplies on and BQ boost and source switches off");
     gCharger.unplug();

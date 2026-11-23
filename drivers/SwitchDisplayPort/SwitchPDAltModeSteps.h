@@ -358,7 +358,8 @@ static inline struct switch_pd_alt_out switch_pd_alt_event(struct switch_pd_alt 
         return switch_pd_alt_start(alt, in);
     }
     if (alt->as_ufp && alt->step != SWITCH_PD_ALT_DR_SWAP &&
-        switch_pd_alt_data_role(in->status1) == SWITCH_PD_ALT_DATA_ROLE_DFP) {
+        switch_pd_alt_data_role(in->status1) == SWITCH_PD_ALT_DATA_ROLE_DFP &&
+        (in->status1 & SWITCH_PD_ALT_STATUS1_CMD_BUSY) == 0) {
         alt->paused = false;
         struct switch_pd_alt_out out = switch_pd_alt_discover(alt);
         out.line = "the partner swapped the data roles: Discover Identity as DFP";

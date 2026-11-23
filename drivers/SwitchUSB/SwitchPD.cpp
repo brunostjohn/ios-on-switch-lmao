@@ -147,7 +147,7 @@ void SwitchPD::handle(uint16_t alertBits, uint16_t status1, uint16_t status2)
     if (phase == SWITCH_PD_SINK && allowSource && (alertBits & SWITCH_PD_ALERT_PLUGPULL) && state.plugged &&
         !state.vbusPresent && (status1 & SWITCH_PD_STATUS1_SRC_MODE) && (status2 & SWITCH_PD_STATUS2_OTG_INSERT) &&
         !(status1 & SWITCH_PD_STATUS1_FAULT_MASK) && !(alertBits & SWITCH_PD_ALERT_SRC_FAULT))
-        enter(SWITCH_PD_WAIT_ROLE, "replacement partner presents Rd without VBUS");
+        enter(SWITCH_PD_CLASSIFY, "replacement partner presents Rd without VBUS");
     apply(switch_pd_decide(phase, alertBits, status1, status2, allowSource && railsOn && switchesOn));
     if (handleFault(alertBits, status1)) {
         notify();
@@ -218,8 +218,7 @@ void SwitchPD::notify()
     } else if (phase == SWITCH_PD_SOURCE) {
         state.role = SWITCH_PD_ROLE_SOURCE;
     }
-    state.settled = phase != SWITCH_PD_HELD && phase != SWITCH_PD_WAIT_ROLE && phase != SWITCH_PD_CLASSIFY &&
-                    phase != SWITCH_PD_REATTACH;
+    state.settled = phase != SWITCH_PD_HELD && phase != SWITCH_PD_CLASSIFY && phase != SWITCH_PD_REATTACH;
     for (unsigned i = 0; i < listenerCount; ++i)
         listeners[i].function(listeners[i].context, &state);
 }
@@ -280,7 +279,7 @@ void SwitchPD::enter(switch_pd_phase next, const char *why)
     }
     if (switches)
         setSwitches(true);
-    if (next == SWITCH_PD_WAIT_ROLE || next == SWITCH_PD_CLASSIFY)
+    if (next == SWITCH_PD_CLASSIFY)
         window->setTimeoutMS(kClassifyMS);
     if (next == SWITCH_PD_REATTACH)
         window->setTimeoutMS(kReattachMS);
@@ -462,7 +461,7 @@ void SwitchPD::setAllowSource(bool allow)
     if (!allow && phase == SWITCH_PD_SOURCE) {
         enter(SWITCH_PD_HELD, "not sourcing: host mode is off");
         notify();
-    } else if (!allow && (phase == SWITCH_PD_WAIT_ROLE || phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH)) {
+    } else if (!allow && (phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH)) {
         window->cancelTimeout();
         enter(SWITCH_PD_SINK, "sink: host mode is off");
         notify();
@@ -487,9 +486,8 @@ void SwitchPD::setAllowSource(bool allow)
 void SwitchPD::systemSleep(bool entering)
 {
     if (entering) {
-        asleepSinkOnly = phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_WAIT_ROLE || phase == SWITCH_PD_CLASSIFY ||
-                         phase == SWITCH_PD_REATTACH;
-        if (phase == SWITCH_PD_WAIT_ROLE || phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH) {
+        asleepSinkOnly = phase == SWITCH_PD_EMPTY || phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH;
+        if (phase == SWITCH_PD_CLASSIFY || phase == SWITCH_PD_REATTACH) {
             window->cancelTimeout();
             enter(SWITCH_PD_EMPTY, "source startup canceled for sleep");
             notify();

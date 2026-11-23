@@ -467,6 +467,26 @@ TEST(SourceIdentity, PartnerSwappingUsAfterwardsRestartsAsDfp)
     EXPECT_FALSE(hasCommand(run, SWITCH_PD_ALT_CMD_DR_SWAP));
 }
 
+TEST(SourceIdentity, PartnerSwapWaitsWhileCommandRegisterIsBusy)
+{
+    Session run = ufpSource(kBrickHeader);
+    run.settle();
+    ASSERT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+    EXPECT_TRUE(run.model.commands.empty());
+    run.model.status1 = static_cast<uint16_t>((run.model.status1 & ~(3u << 8)) | kDfp | SWITCH_PD_ALT_STATUS1_CMD_BUSY);
+    run.event(1u << 10);
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+    EXPECT_TRUE(run.model.commands.empty());
+    run.model.status1 = static_cast<uint16_t>(run.model.status1 & ~SWITCH_PD_ALT_STATUS1_CMD_BUSY);
+    run.event(SWITCH_PD_ALT_ALERT_CMD_DONE);
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DISCOVER_ID);
+    EXPECT_FALSE(hasCommand(run, SWITCH_PD_ALT_CMD_DR_SWAP));
+    EXPECT_TRUE(hasCommand(run, SWITCH_PD_ALT_CMD_SEND_VDM));
+    run.settle();
+    EXPECT_EQ(run.alt.step, SWITCH_PD_ALT_DONE);
+    EXPECT_EQ(run.alt.dp_lanes, 2);
+}
+
 TEST(SourceIdentity, OurSwapIsNotSentOnceThePartnersMadeUsDfp)
 {
     switch_pd_alt alt{};
