@@ -684,6 +684,8 @@ struct tgm_ramfc_look {
 
 int tgm_ramfc_probe(struct tgm_ramfc_look *look);
 void tgm_ramfc_probe_register(void);
+int tgm_chan_gr_preempt(struct tgm_chan *chan, uint32_t mode, uint32_t *old_mode,
+			uint32_t *readback);
 
 /* Debug kernels: the GM20B registers L4T's capture reads (TegraGM20BRegDump.h, regdump.c), as text into buf; *len its
  * length. 0, -EBUSY before M3, -ENOMEM, -ENOSPC when cap is short of tgm_regdump_bytes(). */

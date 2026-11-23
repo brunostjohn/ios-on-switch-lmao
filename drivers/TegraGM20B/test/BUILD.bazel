@@ -468,6 +468,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BCopyResetABI.h",
         "//drivers/TegraGM20B:TegraGM20BFencePageABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGrPreemptABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BReadbackABI.h",
         "//drivers/TegraGM20B:TegraGM20BRegDumpABI.h",
@@ -825,6 +826,7 @@ host_test(
     name = "gm20b_ramfc_order_test",
     srcs = [
         "gm20b_ramfc_order_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BGrPreempt.h",
         "//drivers/TegraGM20B:TegraGM20BRamfcOrder.h",
     ],
 )

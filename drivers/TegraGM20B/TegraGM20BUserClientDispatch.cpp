@@ -2,6 +2,7 @@
 // The ABI dispatch: run's method switch.
 #include "TegraGM20BUserClientInternal.h"
 #include "TegraGM20BClockABI.h"
+#include "TegraGM20BGrPreemptABI.h"
 #include "TegraGM20BZcullABI.h"
 
 static IOReturn zbcAdd(const TegraGM20BAbiZbc *in, TegraGM20BAbiZbcReply *out)
@@ -190,6 +191,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	case TegraGM20BMethodCopyReset:
 		wantIn = sizeof(TegraGM20BAbiCopyReset);
 		wantOut = sizeof(TegraGM20BAbiCopyResetReply);
+		break;
+	case TegraGM20BMethodGrPreempt:
+		wantIn = sizeof(TegraGM20BAbiGrPreempt);
+		wantOut = sizeof(TegraGM20BAbiGrPreemptReply);
 		break;
 #endif
 #if SWITCH_GPU_PATH_STATS
@@ -440,6 +445,22 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	case TegraGM20BMethodPriority:
 		ret = setPriority(*static_cast<const TegraGM20BAbiPriority *>(in));
 		break;
+#if TGM_STATS
+	case TegraGM20BMethodGrPreempt: {
+		const auto *input = static_cast<const TegraGM20BAbiGrPreempt *>(in);
+		auto *reply = static_cast<TegraGM20BAbiGrPreemptReply *>(out);
+		*reply = {};
+		if (input->reserved[0] || input->reserved[1] || !input->channel ||
+		    input->channel > kMaxChannels || !chans_[input->channel - 1] ||
+		    input->mode > TegraGM20BGrPreemptCta) {
+			ret = kIOReturnBadArgument;
+			break;
+		}
+		ret = ioreturn(tgm_chan_gr_preempt(chans_[input->channel - 1], input->mode,
+						   &reply->old_mode, &reply->readback));
+		break;
+	}
+#endif
 	default:
 		ret = kIOReturnUnsupported;
 		break;

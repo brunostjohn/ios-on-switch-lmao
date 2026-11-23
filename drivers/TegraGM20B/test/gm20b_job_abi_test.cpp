@@ -4,15 +4,16 @@
 #include <string>
 #include "bazel/testing/source_text.h"
 #include "drivers/TegraGM20B/TegraGM20BCopyResetABI.h"
+#include "drivers/TegraGM20B/TegraGM20BGrPreemptABI.h"
 #include "drivers/TegraGM20B/TegraGM20BJobABI.h"
 #include "drivers/TegraGM20B/TegraGM20BReadbackABI.h"
 #include "drivers/TegraGM20B/TegraGM20BRegDumpABI.h"
 
 TEST(JobAbi, MethodsFollowTheHashedHeadersOnes)
 {
-	const uint32_t hashed[] = {TegraGM20BMethodGetInfo, TegraGM20BMethodCpuComplete,
-				   TegraGM20BMethodReadback, TegraGM20BMethodRegdump,
-				   TegraGM20BMethodCopyReset};
+	const uint32_t hashed[] = {TegraGM20BMethodGetInfo,   TegraGM20BMethodCpuComplete,
+				   TegraGM20BMethodReadback,  TegraGM20BMethodRegdump,
+				   TegraGM20BMethodCopyReset, TegraGM20BMethodGrPreempt};
 	const uint32_t job[] = {TegraGM20BMethodResourceSetCreate,
 				TegraGM20BMethodResourceSetRelease, TegraGM20BMethodSubmitJob,
 				TegraGM20BMethodWriterPromise, TegraGM20BMethodEventWord};
@@ -21,6 +22,9 @@ TEST(JobAbi, MethodsFollowTheHashedHeadersOnes)
 		for (uint32_t other : hashed)
 			EXPECT_NE(method, other);
 	}
+	EXPECT_NE(uint32_t(TegraGM20BMethodGrPreempt), uint32_t(TegraGM20BMethodCopyReset));
+	EXPECT_NE(uint32_t(TegraGM20BMethodGrPreempt), uint32_t(TegraGM20BMethodReadback));
+	EXPECT_NE(uint32_t(TegraGM20BMethodGrPreempt), uint32_t(TegraGM20BMethodRegdump));
 }
 
 TEST(JobAbi, RecordsKeepTheirLayout)
@@ -40,6 +44,7 @@ TEST(JobAbi, TheHashedAbiHeaderNeverIncludesIt)
 	const std::string abi = switch_ios::test::SourceText("../TegraGM20BABI.h");
 	ASSERT_FALSE(abi.empty());
 	EXPECT_EQ(abi.find("TegraGM20BJobABI.h"), std::string::npos);
+	EXPECT_EQ(abi.find("TegraGM20BGrPreemptABI.h"), std::string::npos);
 }
 
 // What attachSet and the raw kernel model refuse a method 31 record for before its BO lookup

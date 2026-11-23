@@ -201,6 +201,7 @@ TESTS: dict[str, bool] = {
             'gpu.compile.shared_stages',
             'gpu.sched.long_draw_bands',
             'gpu.sched.long_dispatch_pieces',
+            'gpu.sched.probe_cta',
             'gpu.poster_targets',
             'gpu.push_scan_targets',
             'gpu.msaa.resolve_cost',

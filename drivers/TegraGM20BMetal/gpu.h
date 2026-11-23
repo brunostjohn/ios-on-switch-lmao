@@ -808,6 +808,11 @@ public:
     {
         return k_.debugCall(method, in, inSize, out, outSize);
     }
+
+    uint32_t probeChannel()
+    {
+        return ensureChannel() ? channel_.load(std::memory_order_acquire) : 0u;
+    }
 #endif
     // Where the command buffer of `stamp` records a loop that would run past its copies, and once it completed which
     // loop did (the stamp page is volatile to the GPU: the record needs no L2 flush)

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #import "TegraGM20BMetalInternal.h"
+#include "TegraGM20BGrPreemptABI.h"
 #include "push.h"
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -160,6 +161,23 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
 {
     return [NSString
         stringWithFormat:@"%llu", (unsigned long long)gRM->raw->bandBudgetNs_.exchange(ns.unsignedLongLongValue)];
+}
+
+- (NSString *)switchMetalProbeComputeCta:(NSNumber *)on
+{
+    int kr = kIOReturnNotReady;
+    TegraGM20BAbiGrPreemptReply reply = {};
+    gm20bRunOnSubmitWorker([&] {
+        const uint32_t channel = gRM->raw->probeChannel();
+        if (!channel)
+            return;
+        const TegraGM20BAbiGrPreempt in = {
+            channel, on.boolValue ? uint32_t(TegraGM20BGrPreemptCta) : uint32_t(TegraGM20BGrPreemptWfi), {0, 0}};
+        kr = gRM->raw->kernelDebugCall(TegraGM20BMethodGrPreempt, &in, sizeof in, &reply, sizeof reply);
+    });
+    if (kr != KERN_SUCCESS)
+        return [NSString stringWithFormat:@"error=0x%x", unsigned(kr)];
+    return [NSString stringWithFormat:@"old=%u readback=%u", reply.old_mode, reply.readback];
 }
 
 // Storage forms view compressed attachments while set, for gpu.gm20b.storage_compressed
