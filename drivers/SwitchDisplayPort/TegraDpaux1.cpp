@@ -123,7 +123,7 @@ bool TegraDpaux1::powerUp(char *why, size_t size)
 
 void TegraDpaux1::powerDown()
 {
-    if (base == nullptr) {
+    if (base == nullptr || !switch_car_clock_enabled(kClockDpaux1)) {
         return;
     }
     write(SWITCH_DPAUX_INTR_EN_AUX, 0);

@@ -152,7 +152,7 @@ void TegraDisplayB::setMode(const struct switch_dp_mode &mode)
 {
     memory = {1, mode.pixel_khz * 1000u, mode.hactive, mode.vactive,
               switch_dp_mode_htotal(&mode), switch_dp_mode_vtotal(&mode), 0, 0, {}};
-    stride = kind = 0;
+    active = {};
     windowEnabled = false;
     write(DC_CMD_DISPLAY_WINDOW_HEADER, kWindowA);
     write(DC_WIN_COLOR_DEPTH, kB8G8R8A8);
@@ -192,7 +192,7 @@ void TegraDisplayB::enableSor(bool on)
     write(DC_CMD_STATE_ACCESS, kStateAccessReadActive);
 }
 
-bool TegraDisplayB::scanout(uint32_t iova, uint32_t rowBytes, uint32_t surfaceKind)
+bool TegraDisplayB::scanout(const Frame &frame)
 {
     if (!windowEnabled) {
         auto next = memory;
@@ -202,18 +202,45 @@ bool TegraDisplayB::scanout(uint32_t iova, uint32_t rowBytes, uint32_t surfaceKi
             switch_emc_display_memory_reserve(&next))
             return false;
         memory = next;
+        write(DC_CMD_DISPLAY_WINDOW_HEADER, kWindowA);
+        write(DC_WINBUF_BLEND_LAYER_CONTROL, (1u << 24) | 255);
         write(DC_WIN_WIN_OPTIONS, kWinEnable);
     }
-    if (!windowEnabled || stride != rowBytes) {
-        stride = rowBytes;
-        write(DC_WIN_LINE_STRIDE, stride);
+    if (!windowEnabled || active.colorDepth != frame.colorDepth) {
+        active.colorDepth = frame.colorDepth;
+        write(DC_WIN_COLOR_DEPTH, active.colorDepth);
     }
-    if (!windowEnabled || kind != surfaceKind) {
-        kind = surfaceKind;
-        write(DC_WINBUF_SURFACE_KIND, kind);
+    if (!windowEnabled || active.position != frame.position) {
+        active.position = frame.position;
+        write(DC_WIN_POSITION, active.position);
+    }
+    if (!windowEnabled || active.size != frame.size) {
+        active.size = frame.size;
+        write(DC_WIN_SIZE, active.size);
+    }
+    if (!windowEnabled || active.prescaled != frame.prescaled) {
+        active.prescaled = frame.prescaled;
+        write(DC_WIN_PRESCALED_SIZE, active.prescaled);
+    }
+    if (!windowEnabled || active.stride != frame.stride) {
+        active.stride = frame.stride;
+        write(DC_WIN_LINE_STRIDE, active.stride);
+    }
+    if (!windowEnabled || active.hOffset != frame.hOffset) {
+        active.hOffset = frame.hOffset;
+        write(DC_WINBUF_ADDR_H_OFFSET, active.hOffset);
+    }
+    if (!windowEnabled || active.vOffset != frame.vOffset) {
+        active.vOffset = frame.vOffset;
+        write(DC_WINBUF_ADDR_V_OFFSET, active.vOffset);
+    }
+    if (!windowEnabled || active.kind != frame.kind) {
+        active.kind = frame.kind;
+        write(DC_WINBUF_SURFACE_KIND, active.kind);
     }
     windowEnabled = true;
-    write(DC_WINBUF_START_ADDR, iova);
+    active.iova = frame.iova;
+    write(DC_WINBUF_START_ADDR, frame.iova);
     commit(kWinAActReq);
     frameInterrupt(true);
     return true;
@@ -275,6 +302,7 @@ void TegraDisplayB::powerDown()
     write(DC_CMD_INT_ENABLE, 0);
     frameInterruptEnabled = false;
     windowEnabled = false;
+    active = {};
     write(DC_CMD_INT_MASK, 0);
     write(DC_CMD_STATE_ACCESS, kStateAccessReadActive | kStateAccessWriteActive);
     write(DC_DISP_DISP_WIN_OPTIONS, 0);

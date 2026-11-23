@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #pragma once
 #include <IOKit/IOInterruptEventSource.h>
+#include <IOKit/IOLocks.h>
 #include <IOKit/IOWorkLoop.h>
 #include "OriginalLegacyFramebufferABI.h"
 #include "SwitchDPModes.h"
+#include "SwitchExternalGeometry.h"
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "../TegraGM20B/SwitchGpuReady.h"
 #include "../TegraVIC/SwitchNativeScanout.h"
@@ -15,6 +17,7 @@ class TegraDisplayB;
 class SwitchExternalScreen : public IOMobileFramebufferLegacy {
     OSDeclareDefaultStructors(SwitchExternalScreen);
 public:
+    void free() override;
     bool begin(SwitchDisplayPort *transport, IOWorkLoop *workLoop);
     bool publish(const struct switch_dp_mode_list &modes, const uint8_t *edid, unsigned bytes);
     void linkUp(const struct switch_dp_mode &mode, TegraDisplayB *controller);
@@ -32,6 +35,10 @@ public:
     IOReturn setDisplayDevice(uint32_t requested) override;
     IOReturn setDigitalOutMode(uint32_t color, uint32_t timing) override;
     IOReturn getDigitalOutState(uint32_t *state) override;
+    IOReturn getMatrix(uint32_t location, void *matrix) override;
+    IOReturn setMatrix(uint32_t location, const void *matrix) override;
+    IOReturn swapSetColorMatrix(const void *matrix, uint32_t location, uint32_t flags) override;
+    IOReturn setAccessibilityScale(uint32_t scale) override;
     void kickSwapQueue() override;
     bool validateSwap(const OriginalLegacySwapRequest *request) override;
     bool areTimingsEnabled() const override { return dcb != nullptr; }
@@ -55,12 +62,17 @@ private:
         IOMemoryDescriptor *memory;
         switch_gpu_backing *backing;
         void *layout;
-        uint64_t allocationId, generation, offset, used;
-        uint32_t pages, stride, kind;
+        uint64_t allocationId, generation, offset, used, allocationBytes, blockBytes;
+        uint32_t pages, stride, kind, width, height, colorDepth;
         bool counted, presented;
     } slots[kSlots] = {};
+    struct LayerRect {
+        switch_external::Rect src, dst;
+        bool valid;
+    } layerRects[switch_external::kLayers] = {};
     SwitchDisplayPort *transport = nullptr;
     IOWorkLoop *loop = nullptr;
+    IOLock *colorLock = nullptr;
     IOInterruptEventSource *completion = nullptr, *readySource = nullptr;
     switch_gpu_ready_watch *ready = nullptr;
     TegraDisplayB *dcb = nullptr;
@@ -68,6 +80,11 @@ private:
     TegraSMMUDomain domain;
     struct switch_dp_mode_list modes = {};
     struct switch_dp_mode mode = {};
+    switch_external::ExternalFrame pendingFrame = {};
+    int64_t harmonyMatrix[9] = {};
+    int64_t accessibilityMatrix[9] = {};
+    uint32_t accessibilityScale = 0x10000u;
+    uint32_t latchedAddr = 0;
     uint64_t sequence = 0, slotUses = 0, refreshPeriod = 0, interval = 0, linkGeneration = 0, gpuGeneration = 0;
     uint64_t activeGeometry = 0;
     int selectedMode = -1, front = -1, drawing = -1;
@@ -75,9 +92,16 @@ private:
     bool connected = false, mapped = false, gpuPending = false, latched = false, kicking = false;
     const OriginalLegacySwapRequest *pending = nullptr;
     int gpuStatus = 0;
+#if DEVELOPMENT || DEBUG
+    uint32_t diagValidateRejects = 0;
+    uint32_t diagScanoutFailures = 0;
+    uint32_t diagFrameLogs = 0;
+    uint32_t diagLastPos = ~0u, diagLastSize = ~0u, diagLastSurfW = 0, diagLastSurfH = 0, diagLastKind = ~0u;
+#endif
     static void completionFired(OSObject *owner, IOInterruptEventSource *, int);
     void publishActiveGeometry();
     void drainSwapQueue();
+    void clearLayerState();
     bool applyTiledLayout(Slot &slot, uint64_t firstPage, uint64_t bytes);
     bool mapDomain();
     void cleanDomain();

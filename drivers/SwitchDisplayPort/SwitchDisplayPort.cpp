@@ -315,13 +315,14 @@ void SwitchDisplayPort::teardownLink()
     if (dcbUp) {
         dcb.enableSor(false);
     }
-    if (sorUp) {
-        sor.powerDown();
-        sorUp = false;
-    }
+    // DCB's DISP2 clock is muxed to PLL_D2; power DCB down before SOR1 disables PLL_D2.
     if (dcbUp) {
         dcb.powerDown();
         dcbUp = false;
+    }
+    if (sorUp) {
+        sor.powerDown();
+        sorUp = false;
     }
     screen->linkDown();
 }

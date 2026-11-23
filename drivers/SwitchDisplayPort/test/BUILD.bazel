@@ -92,16 +92,27 @@ host_test(
 )
 
 host_test(
+    name = "external_geometry_test",
+    srcs = [
+        "external_geometry_test.cpp",
+        "//drivers/NativeMobileDisplay:NativeLegacyRequest.h",
+        "//drivers/SwitchDisplayPort:SwitchDPModes.h",
+        "//drivers/SwitchDisplayPort:SwitchExternalGeometry.h",
+    ],
+)
+
+host_test(
     name = "dcb_scanout_test",
     srcs = [
         "dcb_scanout_test.cpp",
         "//drivers/SwitchDisplayPort:SwitchDPModes.h",
         "//drivers/SwitchDisplayPort:TegraDisplayB.cpp",
         "//drivers/SwitchDisplayPort:TegraDisplayB.h",
+        "//drivers/SwitchDisplayPort:TegraDpaux1.h",
+        "//drivers/SwitchDisplayPort:TegraSor1.h",
         "//drivers/SwitchPower:SwitchDisplayMemory.h",
         "//drivers/TegraDisplayFlip:SwitchDisplayPriority.h",
         "//drivers/TegraSMMU:TegraSMMU.h",
-        "//kits/SwitchCAR:SwitchCAR.cpp",
         "//kits/SwitchCAR:SwitchCAR.h",
         "//kits/SwitchCAR:SwitchPMC.h",
         "//kits/SwitchMMIO:SwitchMMIO.h",
@@ -109,6 +120,7 @@ host_test(
     ],
     defines = ["SWITCH_MMIO_HOST_MODEL=1"],
     deps = [
+        ":sor_registers",
         "//drivers/SwitchUSB/test:xusb_kernel",
         "//drivers/SwitchUSB/test:xusb_register_model",
     ],

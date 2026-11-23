@@ -8,6 +8,7 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
 {
     const auto source = SourceText("../SwitchExternalScanout.cpp");
     const auto latch = Block(source, "bool SwitchExternalScreen::frameEnd()");
+    EXPECT_TRUE(latch.has("dcb->windowLatch(latchedAddr)"));
     EXPECT_TRUE(latch.has("front != drawing"));
     EXPECT_TRUE(latch.has("releaseRead(static_cast<unsigned>(front));"));
     EXPECT_TRUE(latch.has("switch_native_scanout_deliver(&slots[front].read);"));
@@ -41,6 +42,10 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_TRUE(prepare.has("if (!slot.layout && !applyTiledLayout("));
 
     const auto request = Block(source, "void SwitchExternalScreen::requestFrame()");
+    EXPECT_TRUE(request.has("offer.width = slots[index].width;"));
+    EXPECT_TRUE(request.has("offer.height = slots[index].height;"));
+    EXPECT_FALSE(request.has("offer.width = mode.hactive;"));
+    EXPECT_FALSE(request.has("offer.height = mode.vactive;"));
     EXPECT_TRUE(request.has("TEGRA_SCANOUT_COPY_SOURCE_BLOCK"));
     EXPECT_TRUE(request.has("offer.sourceBlockHeightLog2 = tiled ? ((slots[index].kind >> 4) & 7u) : 0u;"));
 
@@ -48,11 +53,22 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_TRUE(complete.has("if (!self->connected || self->selectedMode < 0 || self->device != 2)"));
     EXPECT_TRUE(complete.has("self->drainSwapQueue();"));
 
+    const auto limits = Block(lifecycle, "void SwitchExternalScreen::publishScanoutLimits()");
+    EXPECT_TRUE(limits.has("IOMFBYUV420UnSupported"));
+    EXPECT_TRUE(limits.has("IOMFBDisableFlip"));
+    EXPECT_TRUE(limits.has("publishSourceLimits(148500000u)"));
+    EXPECT_NE(lifecycle.find("SwitchExternalScreen::getMatrix("), std::string::npos);
+    EXPECT_NE(lifecycle.find("SwitchExternalScreen::setMatrix("), std::string::npos);
+    EXPECT_NE(lifecycle.find("SwitchExternalScreen::swapSetColorMatrix("), std::string::npos);
+    EXPECT_NE(lifecycle.find("SwitchExternalScreen::setAccessibilityScale("), std::string::npos);
+
     const auto header = SourceText("../SwitchExternalScreen.h");
     EXPECT_NE(header.find("kSlotSpan = 16ULL << 20"), std::string::npos);
     EXPECT_NE(header.find("static_assert(kTablePages == 13);"), std::string::npos);
 
     const auto service = SourceText("../SwitchDisplayPort.cpp");
+    const auto teardown = Block(service, "void SwitchDisplayPort::teardownLink()");
+    EXPECT_TRUE(teardown.before("dcb.powerDown();", "sor.powerDown();"));
     const auto auxTimer = Block(service, "void SwitchDisplayPort::auxTimerFired(");
     EXPECT_FALSE(auxTimer.has("panic("));
     EXPECT_TRUE(auxTimer.has("self->aux.resetAux();"));

@@ -43,6 +43,7 @@ enum : uint32_t {
     SUPER_STATE1 = 0x02,
     STATE0 = 0x03,
     STATE1 = 0x04,
+    HEAD_STATE0 = 0x05,
     HEAD_STATE1 = 0x07,
     HEAD_STATE2 = 0x09,
     HEAD_STATE3 = 0x0b,
@@ -390,6 +391,7 @@ bool TegraSor1::attach(const struct switch_dp_mode &mode, const struct switch_dp
     const uint32_t vtotal = switch_dp_mode_vtotal(&mode), htotal = switch_dp_mode_htotal(&mode);
     const uint32_t vse = mode.vsync - 1u, hse = mode.hsync - 1u;
     const uint32_t vbe = vse + mode.vback, hbe = hse + mode.hback;
+    write(HEAD_STATE0 + kHead, 0);
     write(HEAD_STATE1 + kHead, ((vtotal & 0x7fffu) << 16) | (htotal & 0x7fffu));
     write(HEAD_STATE2 + kHead, ((vse & 0x7fffu) << 16) | (hse & 0x7fffu));
     write(HEAD_STATE3 + kHead, ((vbe & 0x7fffu) << 16) | (hbe & 0x7fffu));
@@ -434,6 +436,7 @@ void TegraSor1::detachHead()
     (void)switch_mmio_wait32(base, PWR * 4u, kModeSafe, kModeSafe, kHandshakeUs);
     rmw(SUPER_STATE1, 3u, 0);
     superUpdate();
+    (void)waitClear(TEST, kTestHeadMask, kHandshakeUs);
     rmw(SUPER_STATE1, kAttached, 0);
     superUpdate();
     (void)waitClear(TEST, kTestAttached, kHandshakeUs);

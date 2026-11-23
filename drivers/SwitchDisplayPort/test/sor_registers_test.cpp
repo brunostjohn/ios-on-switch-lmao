@@ -472,6 +472,8 @@ TEST_F(SorRegisters, AttachAndWakeFollowTrmHandshakeOrder)
                                     SWITCH_DP_RATE_HBR, 2, true, &tu));
     xusbModel().log.clear();
     ASSERT_TRUE(sor.attach(mode, tu, why, sizeof(why))) << why;
+    EXPECT_EQ(xusbWritesTo(kSor + 0x018), (std::vector<uint32_t>{0u}));
+    EXPECT_LT(xusbFirstWrite(kSor + 0x018), xusbFirstWrite(kSor + 0x020));
     EXPECT_EQ(xusbWritesTo(kSuperState1), (std::vector<uint32_t>{0x8u, 0xcu}));
     const long attachWrite = firstMaskedWrite(kSuperState1, 0xffffffff, 0x8u);
     const long normalWrite = firstMaskedWrite(kSuperState1, 0xffffffff, 0xcu, attachWrite);

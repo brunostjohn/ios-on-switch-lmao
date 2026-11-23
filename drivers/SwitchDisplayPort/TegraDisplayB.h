@@ -14,11 +14,22 @@
 
 class TegraDisplayB {
 public:
+    struct Frame {
+        uint32_t iova = 0;
+        uint32_t stride = 0;
+        uint32_t kind = 0;
+        uint32_t colorDepth = 12;
+        uint32_t position = 0;
+        uint32_t size = 0;
+        uint32_t prescaled = 0;
+        uint32_t hOffset = 0;
+        uint32_t vOffset = 0;
+    };
     // The DISB partition with DISP2 (already sourced from pll_d2_out0) and the controller's base configuration.
     bool powerUp(char *why, size_t size);
     void setMode(const struct switch_dp_mode &mode);
     void enableSor(bool on);
-    bool scanout(uint32_t iova, uint32_t stride, uint32_t kind);
+    bool scanout(const Frame &frame);
     enum class Latch { Pending, Active, Missed };
     Latch windowLatch(uint32_t address);
     void windowOff();
@@ -29,7 +40,7 @@ public:
 private:
     volatile uint8_t *base = nullptr;
     switch_display_memory_head memory = {};
-    uint32_t stride = 0, kind = 0;
+    Frame active = {};
     bool windowEnabled = false, frameInterruptEnabled = false;
     void releaseBandwidth();
     uint32_t read(uint32_t word) const;
