@@ -64,6 +64,50 @@ TEST_F(DeviceSubmitted, TheGiveBackLinesControlBytesNeedNotTheRingsOwner)
     EXPECT_GT(dev.controlMappedBytes(), before) << "the rings, made with the channel, are counted";
 }
 
+// Memory release trimming arenas and the stall tick reading completed() while the first commit opens the channel:
+// openChannel writes fence_ and channel_ under channelLock_ before channelReady_, and nothing orders the reads before it
+TEST_F(DeviceSubmitted, TheMemoryReleasesTrimReadsTheFenceBesideTheFirstChannelOpen)
+{
+    std::atomic<bool> read{false};
+    std::atomic<uint32_t> committed{0};
+    uint32_t seqno = 0;
+    std::thread submitter([&] {
+        while (!read.load(std::memory_order_relaxed)) {
+        }
+        seqno = copy();
+    });
+    dev.trimArenas(committed);
+    (void)dev.completed();
+    read.store(true, std::memory_order_relaxed);
+    submitter.join();
+    EXPECT_NE(seqno, 0u);
+    EXPECT_TRUE(dev.done(seqno));
+    EXPECT_GE(int32_t(dev.completed() - seqno), 0);
+}
+
+// Same reads while a killed channel reopens in another slot: reopen updates channel_ and fence_ on the submit thread
+TEST_F(DeviceSubmitted, TheMemoryReleasesTrimReadsTheFenceBesideAReopen)
+{
+    ASSERT_NE(copy(), 0u);
+    kernel_model::model.kill(1, 1);
+    kernel_model::model.foreignTakesFreedSlot = true;
+    std::atomic<bool> read{false};
+    std::atomic<uint32_t> committed{0};
+    uint32_t seqno = 0;
+    std::thread submitter([&] {
+        while (!read.load(std::memory_order_relaxed)) {
+        }
+        seqno = copy();
+    });
+    dev.trimArenas(committed);
+    (void)dev.completed();
+    read.store(true, std::memory_order_relaxed);
+    submitter.join();
+    EXPECT_NE(seqno, 0u);
+    EXPECT_TRUE(dev.done(seqno));
+    EXPECT_GE(int32_t(dev.completed() - seqno), 0);
+}
+
 TEST_F(DeviceSubmitted, TheMemoryReleasesPurgeReadsWhatTheSubmitterLastSubmitted)
 {
     ASSERT_NE(copy(), 0u);

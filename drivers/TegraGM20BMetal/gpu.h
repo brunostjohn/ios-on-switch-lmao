@@ -721,12 +721,12 @@ public:
     // The channel an encode began on (channelGeneration() then) is the one begin() would hand out now
     bool channelCurrent(uint64_t generation) const
     {
-        return channelGeneration() == generation && !contextless_ && !k_.lost(channel_);
+        return channelGeneration() == generation && !contextless_ && !k_.lost(channel_.load(std::memory_order_acquire));
     }
 
     uint32_t completed() const
     {
-        return __atomic_load_n(fence_, __ATOMIC_ACQUIRE);
+        return __atomic_load_n(fence_.load(std::memory_order_acquire), __ATOMIC_ACQUIRE);
     }
 
     // 0 before the channel is made (it may be made on another thread: a client's first mipmapped texture)
@@ -737,8 +737,9 @@ public:
 
     bool done(uint32_t seqno) const
     {
-        return fence_ == &kNoFence || (int32_t(__atomic_load_n(fence_, __ATOMIC_ACQUIRE) - seqno) >= 0 &&
-                                       semanticFence(seqno).status != SemanticFenceStatus::Pending);
+        const volatile uint32_t *fence = fence_.load(std::memory_order_acquire);
+        return fence == &kNoFence || (int32_t(__atomic_load_n(fence, __ATOMIC_ACQUIRE) - seqno) >= 0 &&
+                                      semanticFenceAt(fence, seqno).status != SemanticFenceStatus::Pending);
     }
 
     // In the kernel, on the fence interrupt. False: the submission failed, the channel died with it in flight (reopen).
@@ -834,7 +835,10 @@ public:
     // the job that names it (CommandBuffer::promises) or cancelled
     bool promise(const std::vector<uint64_t> &handles, uint32_t &id)
     {
-        return ensureChannel() && k_.promise(channel_, handles, id) == KERN_SUCCESS;
+        if (!ensureChannel())
+            return false;
+        const uint32_t ch = channel_.load(std::memory_order_acquire);
+        return ch && k_.promise(ch, handles, id) == KERN_SUCCESS;
     }
 
     // withdrawn: its command buffer failed, so the promised writes never come (TegraGM20BPromiseWithdraw). The
@@ -863,7 +867,8 @@ public:
     {
         if (!ensureChannel())
             return kIOReturnNotReady;
-        return k_.eventWord(handle, channel_, address, base, floor);
+        const uint32_t ch = channel_.load(std::memory_order_acquire);
+        return ch ? k_.eventWord(handle, ch, address, base, floor) : kIOReturnNotReady;
     }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     uint64_t jobsSubmitted() const
@@ -909,7 +914,7 @@ public:
         if (events.empty() || events.waitCount + events.signalCount > TegraGM20BMaxJobEvents || !ensureChannel())
             return false;
         Killed live = {};
-        if ((contextless_ || k_.lost(channel_) || liveKill(live)) && !reopen())
+        if ((contextless_ || k_.lost(channel_.load(std::memory_order_acquire)) || liveKill(live)) && !reopen())
             return false;
         if (generation && generation != channelGeneration()) {
             if (result)
@@ -918,7 +923,8 @@ public:
         }
         SurfaceList none;
         uint32_t seq = 0;
-        if (!job(setView_, channel_, nullptr, 0, none, JobVisibility::External, seq, result, events))
+        if (!job(setView_, channel_.load(std::memory_order_acquire), nullptr, 0, none, JobVisibility::External, seq,
+                 result, events))
             return false;
         submittedThrough(seq);
         seqno = seq;
@@ -1355,7 +1361,9 @@ private:
     std::vector<OutgrownRing> grownOut_;
     bool overflowing_ = false;  // the open command buffer outgrew a ring with no memory for a larger one
     std::deque<std::vector<uint8_t>> overflow_;  // where it is written then (never submitted)
-    uint32_t channel_ = 0;
+    // Written by openChannel (under channelLock_) and reopen (submit thread); read unlocked by waitFence, promise,
+    // eventWord, channelCurrent and captureCpuCompletion on other threads.
+    std::atomic<uint32_t> channel_{0};
     // Stored only by whoever submits (the submit worker, or openChannel before channelReady_), one release store a job;
     // read by any thread, the memory release's purge among them, which holds lock_
     std::atomic<uint32_t> lastSeqno_{0};
@@ -1376,18 +1384,24 @@ private:
     bool hostArenaAccess(const ArenaStorage &storage, const void *cpu, uint64_t bytes, bool write, HostAccess &access);
     static void releaseHostArena(void *owner, uint32_t arena);
     // the channel's fence word; before there is a channel a zero, which every seqno submitted so far (none) has passed.
-    // The GPU's semaphore release writes it while this process reads it unlocked: loaded with acquire, as the kernel
-    // loads it (SwitchGpuTimeline.cpp), so what the job wrote before its release is seen after the seqno
-    const volatile uint32_t *fence_ = &kNoFence;
+    // Written with release by openChannel and reopen once the fence page is mapped and the context submitted; read with
+    // acquire by done, completed, semanticFence, liveKill and captureCpuCompletion from the completion, stall-tick,
+    // memory-release and compressed-memory threads. The GPU's semaphore release writes the word itself, loaded with
+    // acquire (SwitchGpuTimeline.cpp) so what the job wrote before its release is seen after the seqno.
+    std::atomic<const volatile uint32_t *> fence_{&kNoFence};
     static constexpr uint32_t kNoFence = 0;
 
-    SemanticFenceRead semanticFence(uint32_t seqno) const
+    static SemanticFenceRead semanticFenceAt(const volatile uint32_t *fence, uint32_t seqno)
     {
-        const volatile uint32_t *fence = fence_;
         if (fence == &kNoFence)
             return {};
         const auto *record = reinterpret_cast<const volatile TegraGM20BAbiFence *>(fence);
         return readSemanticFence(reinterpret_cast<const volatile TegraGM20BAbiFenceSemantic *>(record + 1), seqno);
+    }
+
+    SemanticFenceRead semanticFence(uint32_t seqno) const
+    {
+        return semanticFenceAt(fence_.load(std::memory_order_acquire), seqno);
     }
 
     gm20b::Mutex channelLock_;

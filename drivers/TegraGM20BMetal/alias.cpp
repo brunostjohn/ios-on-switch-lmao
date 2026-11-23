@@ -92,16 +92,18 @@ CpuCompletion Device::captureCpuCompletion(uint32_t seqno, uint64_t generation,
     if (buffers.empty())
         return result;
     std::lock_guard<gm20b::Mutex> lock(lock_);
-    if (generation != channelGeneration() || !channelReady_.load(std::memory_order_acquire) || fence_ == &kNoFence) {
+    const volatile uint32_t *fence = fence_.load(std::memory_order_acquire);
+    const uint32_t ch = channel_.load(std::memory_order_acquire);
+    if (generation != channelGeneration() || !channelReady_.load(std::memory_order_acquire) || fence == &kNoFence) {
         result.valid = false;
         return result;
     }
     const auto *identity = reinterpret_cast<const volatile TegraGM20BAbiFenceIdentity *>(
-        reinterpret_cast<const volatile uint8_t *>(fence_) + sizeof(TegraGM20BAbiFence) +
+        reinterpret_cast<const volatile uint8_t *>(fence) + sizeof(TegraGM20BAbiFence) +
         sizeof(TegraGM20BAbiFenceSemantic));
     result.channelUid = __atomic_load_n(&identity->channel_uid, __ATOMIC_ACQUIRE);
     result.generation = generation;
-    result.channel = channel_;
+    result.channel = ch;
     result.seqno = seqno;
     for (const Buffer *buffer : buffers) {
         if (!buffer || !buffer->hostVisible || buffer->wc || !buffer->cpu)

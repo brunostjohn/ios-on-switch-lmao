@@ -322,8 +322,8 @@ Device::~Device()
     if (grower_.joinable())
         grower_.join();
     compStop();
-    if (channel_)
-        k_.closeChannel(channel_);
+    if (const uint32_t ch = channel_.load(std::memory_order_relaxed))
+        k_.closeChannel(ch);
     reapNativeSurfaces(true);
     for (Backing *b : trimmedBackings_)
         delete b;
@@ -559,21 +559,21 @@ bool Device::ensureChannel()
 // back, so a later call starts over; `gaveBack`: a channel among it.
 bool Device::openChannel(std::string &err, bool &gaveBack)
 {
+    uint32_t ch = 0;
+    const volatile uint32_t *fence = &kNoFence;
     auto undo = [&](bool created) {
         err = k_.error();
         gaveBack = created;
         if (created)
-            k_.closeChannel(channel_);
+            k_.closeChannel(ch);
         k_.free(push_.bo);
         k_.free(upload_.bo);
         push_ = Ring();
         upload_ = Ring();
-        channel_ = 0;
-        fence_ = &kNoFence;
         return false;
     };
     if (!k_.allocControl(sizes_.push, push_.bo, ControlUse::Ring) ||
-        !k_.allocControl(sizes_.upload, upload_.bo, ControlUse::Ring) || !k_.channel(kEngines, channel_, fence_))
+        !k_.allocControl(sizes_.upload, upload_.bo, ControlUse::Ring) || !k_.channel(kEngines, ch, fence))
         return undo(false);
     set_.add(k_, {{&push_.bo, TegraGM20BSurfaceRead}, {&upload_.bo, TegraGM20BSurfaceWrite}});
     const uint32_t words = contextWords() + uint32_t(fx::twodInitWords());
@@ -586,8 +586,10 @@ bool Device::openChannel(std::string &err, bool &gaveBack)
     uint32_t seq = 0;
     SurfaceList resources;
     SetView view;
-    if (!job(view, channel_, &seg, 1, resources, JobVisibility::External, seq))
+    if (!job(view, ch, &seg, 1, resources, JobVisibility::External, seq))
         return undo(true);
+    channel_.store(ch, std::memory_order_release);
+    fence_.store(fence, std::memory_order_release);
     submittedThrough(seq);
     retire(push_, seq);
     return true;
