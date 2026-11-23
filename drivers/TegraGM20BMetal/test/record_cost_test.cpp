@@ -541,6 +541,132 @@ TEST(GM20BRecordCost, TheFrameLineCountsKeptPassesAndWhereWaitsWent)
     EXPECT_EQ(parts[0] + parts[1] + parts[2] + parts[3] + parts[4], waited) << line;
 }
 
+#if SWITCH_METAL_DIAGNOSTICS
+TEST(GM20BRecordCost, TheFrameLineReportsEnqueueTimingAndLateBoundWrites)
+{
+    Bench &b = bench();
+    ASSERT_TRUE(b.device != nil && b.state != nil);
+    const std::vector<MTLRenderPassDescriptor *> into = passes(b, 1);
+    char line[1024];
+    (void)metal_frame_rates(line, sizeof line);
+
+    const float vertices[16] = {0, 0, 0, 1, 0.25f, 0, 0, 1, 0, 0.25f, 0, 1, 0.25f, 0.25f, 0, 1};
+    const float transform[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    const float colour[4] = {0.25f, 0.5f, 0.75f, 1};
+    id<MTLBuffer> sharedBuf =
+        [b.device newBufferWithBytes:transform length:sizeof transform options:MTLResourceStorageModeShared];
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                  width:16
+                                                                                 height:16
+                                                                              mipmapped:NO];
+    td.storageMode = MTLStorageModeShared;
+    td.usage = MTLTextureUsageShaderRead;
+    id<MTLTexture> sharedTex = [b.device newTextureWithDescriptor:td];
+    IOSurfaceRef surface = IOSurfaceCreate((__bridge CFDictionaryRef) @{
+        (id)kIOSurfaceWidth : @16,
+        (id)kIOSurfaceHeight : @16,
+        (id)kIOSurfaceBytesPerElement : @4,
+        (id)kIOSurfaceBytesPerRow : @64,
+        (id)kIOSurfaceAllocSize : @(16 * 64),
+        (id)kIOSurfacePixelFormat : @(uint32_t('BGRA'))
+    });
+    ASSERT_TRUE(sharedBuf != nil && sharedTex != nil && surface != nullptr);
+    id<MTLTexture> surfaceTex = [b.device newTextureWithDescriptor:td iosurface:surface plane:0];
+    ASSERT_NE(surfaceTex, nil);
+
+    const auto recordPass = [&](id<MTLCommandBuffer> cb) {
+        id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:into[0]];
+        [e setRenderPipelineState:b.state];
+        [e setVertexBytes:vertices length:sizeof vertices atIndex:0];
+        [e setVertexBuffer:sharedBuf offset:0 atIndex:2];
+        [e setFragmentBytes:colour length:sizeof colour atIndex:0];
+        [(id<RecordCostCoreAnimationSPI>)e setFragmentTexture:sharedTex
+                                               atTextureIndex:0
+                                                 samplerState:b.sampler
+                                               atSamplerIndex:0];
+        [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        [(id<RecordCostCoreAnimationSPI>)e setFragmentTexture:surfaceTex
+                                               atTextureIndex:0
+                                                 samplerState:b.sampler
+                                               atSamplerIndex:0];
+        [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+        [e endEncoding];
+    };
+
+    for (int mode = 0; mode < 3; mode++) {
+        id<MTLCommandBuffer> cb = [b.queue commandBuffer];
+        if (mode == 0)
+            [cb enqueue];
+        recordPass(cb);
+        if (mode == 1)
+            [cb enqueue];
+        [cb commit];
+        [cb waitUntilCompleted];
+        ASSERT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+    }
+    ASSERT_GT(metal_frame_rates(line, sizeof line), 0u);
+    const char *enq = strstr(line, " enq=");
+    unsigned long long beforeFirst = 0, beforeCommit = 0, never = 0;
+    ASSERT_TRUE(enq && sscanf(enq, " enq=%llu/%llu/%llu", &beforeFirst, &beforeCommit, &never) == 3) << line;
+    EXPECT_EQ(beforeFirst, 1u) << line;
+    EXPECT_EQ(beforeCommit, 1u) << line;
+    EXPECT_EQ(never, 1u) << line;
+
+    const SEL setPeriod = sel_registerName("switchMetalProbeLateWritePeriod:");
+    ASSERT_TRUE([(id)b.device respondsToSelector:setPeriod]);
+    NSNumber *prevPeriod = ((NSNumber * (*)(id, SEL, NSNumber *)) objc_msgSend)(b.device, setPeriod, @1);
+
+    struct RestorePeriod {
+        id device;
+        SEL sel;
+        NSNumber *prev;
+
+        ~RestorePeriod()
+        {
+            ((void (*)(id, SEL, NSNumber *))objc_msgSend)(device, sel, prev);
+        }
+    } restore{b.device, setPeriod, prevPeriod};
+
+    (void)metal_frame_rates(line, sizeof line);
+    {
+        id<MTLCommandBuffer> clean = [b.queue commandBuffer];
+        recordPass(clean);
+        [clean commit];
+        [clean waitUntilCompleted];
+        ASSERT_EQ(clean.status, MTLCommandBufferStatusCompleted);
+    }
+    ASSERT_GT(metal_frame_rates(line, sizeof line), 0u);
+    const char *latew = strstr(line, " latew=");
+    unsigned long long sampled = 0, bufW = 0, repW = 0, surfW = 0;
+    ASSERT_TRUE(latew && sscanf(latew, " latew=%llu/%llu/%llu/%llu", &sampled, &bufW, &repW, &surfW) == 4) << line;
+    EXPECT_EQ(sampled, 1u) << line;
+    EXPECT_EQ(bufW, 0u) << line;
+    EXPECT_EQ(repW, 0u) << line;
+    EXPECT_EQ(surfW, 0u) << line;
+
+    {
+        id<MTLCommandBuffer> dirty = [b.queue commandBuffer];
+        recordPass(dirty);
+        static_cast<uint8_t *>(sharedBuf.contents)[0] ^= 0xff;
+        const uint32_t pixels[16 * 16] = {};
+        [sharedTex replaceRegion:MTLRegionMake2D(0, 0, 16, 16) mipmapLevel:0 withBytes:pixels bytesPerRow:64];
+        IOSurfaceLock(surface, 0, nullptr);
+        IOSurfaceUnlock(surface, 0, nullptr);
+        [dirty commit];
+        [dirty waitUntilCompleted];
+        ASSERT_EQ(dirty.status, MTLCommandBufferStatusCompleted);
+    }
+    ASSERT_GT(metal_frame_rates(line, sizeof line), 0u);
+    latew = strstr(line, " latew=");
+    ASSERT_TRUE(latew && sscanf(latew, " latew=%llu/%llu/%llu/%llu", &sampled, &bufW, &repW, &surfW) == 4) << line;
+    EXPECT_EQ(sampled, 1u) << line;
+    EXPECT_EQ(bufW, 1u) << line;
+    EXPECT_EQ(repW, 1u) << line;
+    EXPECT_EQ(surfW, 1u) << line;
+    CFRelease(surface);
+}
+#endif
+
 // The recording thread prepares an encoder's range only where the submit worker may encode it ahead of the commit, which
 // reads it as the tape is written: a command buffer too short to be handed to the worker leaves every range to the
 // worker's turn, and one handed has each encoder prepared once

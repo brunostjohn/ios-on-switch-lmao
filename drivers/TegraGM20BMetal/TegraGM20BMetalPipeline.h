@@ -58,4 +58,8 @@ void gm20bNoteTaken(SwitchMetalCommandBuffer *cb);
 void gm20bNoteParked(SwitchMetalCommandBuffer *cb, unsigned why);
 void gm20bNoteFinished(SwitchMetalCommandBuffer *cb);
 void gm20bNoteScheduledWait(SwitchMetalCommandBuffer *cb, uint64_t fromUs, uint64_t toUs);
+void gm20bNoteEnqueue(SwitchMetalCommandBuffer *cb);
+void gm20bSampleLateWrites(SwitchMetalCommandBuffer *cb, size_t from, size_t to);
+void gm20bCheckLateWrites(SwitchMetalCommandBuffer *cb);
+void gm20bDropLateWrites(SwitchMetalCommandBuffer *cb);
 #endif

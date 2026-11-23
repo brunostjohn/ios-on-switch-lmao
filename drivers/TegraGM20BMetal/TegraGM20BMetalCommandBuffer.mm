@@ -48,6 +48,10 @@ static void commandBufferDropped(void *object)
     if (SwitchMetalEncoder *__unsafe_unretained e = (SwitchMetalEncoder *)b->_active)
         e->_cb = nil;
     b->_active = nil;
+#if SWITCH_METAL_DIAGNOSTICS
+    if (b->_lateWriteSampled)
+        gm20bDropLateWrites(b);
+#endif
     if (!completed)
         gm20bRecordingDone(b);
 }
@@ -213,6 +217,10 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
         if (cmd.op == OpEnd && _encOpen) {
             if (gm20bAheadReads(self))
                 gm20bPrepareEncoder(self, _encAt, _plan.size());
+#if SWITCH_METAL_DIAGNOSTICS
+            if (!_lateWriteChecked)
+                gm20bSampleLateWrites(self, _encAt, _plan.size());
+#endif
             [self closeEncoder];
             gm20bPublishEncoder(self);
         }
@@ -443,6 +451,9 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
 
 - (void)enqueue
 {
+#if SWITCH_METAL_DIAGNOSTICS
+    gm20bNoteEnqueue(self);
+#endif
     enqueueBuffer(self);
 }
 
@@ -467,6 +478,10 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
 #endif
     if (_active)
         [(SwitchMetalEncoder *)_active endEncoding];
+#if SWITCH_METAL_DIAGNOSTICS
+    if (_lateWriteSampled)
+        gm20bCheckLateWrites(self);
+#endif
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     glassProbeCommitted(self);
 #endif
@@ -613,7 +628,7 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
 #if SWITCH_METAL_DIAGNOSTICS
     uint64_t units = 0;
     const TegraGM20BAbiClockAnchors anchors = gm20bClockAnchorsNow();
-    if (gRM->raw->gpuStartUnits(_stamp, units))
+    if (gRM->raw->gpuStartUnits(_firstStamp, units))
         if (const gm20b::counters::Anchor a = gm20b::counters::anchorOf(anchors, units); a.valid) {
             mach_timebase_info_data_t tb;
             mach_timebase_info(&tb);

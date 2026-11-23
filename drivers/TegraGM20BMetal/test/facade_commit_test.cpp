@@ -608,6 +608,63 @@ TEST(GM20BFacadeCommit, AnEmptyCommandBufferOnAnotherQueueDoesNotAbandonAnEncode
     EXPECT_GE([p[@"pipelined"] intValue], 10) << [[p description] UTF8String];
 }
 
+TEST(GM20BFacadeCommit, ALongUnsplitCommandBufferKicksInTwoToThreeRanges)
+{
+    ASSERT_TRUE(opened().device != nil);
+    id<MTLCommandQueue> queue = [opened().device newCommandQueue];
+    const scale_frames::Shape medium{15, 90, 4}, large{24, 144, 4}, small{3, 12, 2};
+    const auto into = scale_frames::targets(opened().device, medium);
+    const auto rawCount = [&] {
+        return [counters(opened().device)[@"gm20b"] unsignedLongLongValue];
+    };
+    {
+        id<MTLCommandBuffer> warm = scale_frames::record(queue, opened().state, into, small, 0);
+        [warm commit];
+        [warm waitUntilCompleted];
+        ASSERT_EQ(warm.status, MTLCommandBufferStatusCompleted);
+    }
+    const auto runUnsplit = [&](const scale_frames::Shape &shape, uint32_t frame) {
+        const uint64_t before = rawCount();
+        id<MTLCommandBuffer> cb;
+        {
+            scale_frames::WorkerHold hold;
+            cb = scale_frames::record(queue, opened().state, into, shape, frame);
+            [cb commit];
+        }
+        [cb waitUntilCompleted];
+        EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+        EXPECT_EQ(path(cb), "gm20b");
+        return rawCount() - before;
+    };
+    EXPECT_EQ(runUnsplit(small, 1), 1u);
+    const uint64_t mediumRanges = runUnsplit(medium, 2);
+    EXPECT_GE(mediumRanges, 2u);
+    EXPECT_LE(mediumRanges, 3u);
+    const uint64_t largeRanges = runUnsplit(large, 3);
+    EXPECT_GE(largeRanges, 2u);
+    EXPECT_LE(largeRanges, 3u);
+
+    id<MTLCommandBuffer> earlyStop = [queue commandBuffer];
+    for (int p = 0; p < medium.passes; p++) {
+        scale_frames::pass(earlyStop, opened().state, into, medium, p, 4);
+        if (p == 2)
+            [[earlyStop computeCommandEncoder] endEncoding];
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_EQ(scale_frames::waitAhead(earlyStop), 0u);
+    const uint64_t beforeEarly = rawCount();
+    [earlyStop commit];
+    [earlyStop waitUntilCompleted];
+    ASSERT_EQ(earlyStop.status, MTLCommandBufferStatusCompleted);
+    EXPECT_EQ(path(earlyStop), "gm20b");
+    const uint64_t earlyRanges = rawCount() - beforeEarly;
+    EXPECT_EQ(earlyRanges, 3u);
+    NSDictionary *p = pipelined(earlyStop);
+    ASSERT_NE(p, nil);
+    EXPECT_EQ([p[@"abandons"] intValue], 0);
+    EXPECT_NE([p[@"stopped"] unsignedIntValue] & VetoOps, 0u) << [[p description] UTF8String];
+}
+
 struct Latency {
     std::vector<double> commit, scheduled, firstSubmit;
 };

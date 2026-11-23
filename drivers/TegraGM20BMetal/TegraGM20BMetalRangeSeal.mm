@@ -290,6 +290,10 @@ bool SwitchMetalRangeEncode::seal(size_t to)
     cb->_seqno = seq;
     cb->_channelGeneration = generation_;
     cb->_stamp = cb->_segs.size() == 1 && !cb->_segs.front().event ? rc->stamp : 0;
+#if SWITCH_METAL_DIAGNOSTICS
+    if (!cb->_firstStamp)
+        cb->_firstStamp = rc->stamp;
+#endif
     cb->_rangeLoopStamp = rc->loopsLaid ? rc->stamp : 0;
     SWITCH_METAL_DIAGNOSTIC(d_->stats.levelPasses += levelPasses_);
     SWITCH_METAL_DIAGNOSTIC(gRM->stats.draws += rc->draws);
