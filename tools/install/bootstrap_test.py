@@ -474,6 +474,33 @@ class BootstrapTest(unittest.TestCase):
         self.assertFalse(bootstrap.stage(self.data, self.base / 'legacy', {}, self.log.append))
         self.assertEqual(list(self.data.iterdir()), [])
 
+    def test_development_holds_are_validated_all_or_none_and_held_in_status(self):
+        dev_status = STATUS + ''.join(
+            f'\nPackage: {name}\nStatus: install ok installed\nVersion: 1\n' for name in bootstrap.DEVELOPMENT_HELD
+        )
+        directory = self.package / 'bootstrap'
+        with tarfile.open(directory / bootstrap.ARCHIVE, 'w') as archive:
+            for info, data in (
+                regular('.procursus_strapped', b''),
+                regular('.switch-bootstrap-ready', b''),
+                regular('Library/dpkg/status', dev_status.encode()),
+                regular('usr/bin/tool', b'tool', 0o755),
+            ):
+                archive.addfile(info, io.BytesIO(data))
+        manifest = json.loads((directory / bootstrap.MANIFEST).read_text())
+        manifest['archive_sha256'] = hashlib.sha256((directory / bootstrap.ARCHIVE).read_bytes()).hexdigest()
+        manifest['holds'] = [*bootstrap.HELD, *bootstrap.DEVELOPMENT_HELD[:-1]]
+        (directory / bootstrap.MANIFEST).write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(host.HostError, 'invalid manifest'):
+            self.stage()
+        manifest['holds'] = [*bootstrap.HELD, *bootstrap.DEVELOPMENT_HELD]
+        (directory / bootstrap.MANIFEST).write_text(json.dumps(manifest))
+        self.assertTrue(self.stage())
+        status = bootstrap._control((self.installed() / 'root/Library/dpkg/status').read_text())
+        records = {item['Package']: item for item in status}
+        for name in (*bootstrap.HELD, *bootstrap.DEVELOPMENT_HELD):
+            self.assertEqual(records[name]['Status'], 'hold ok installed')
+
 
 if __name__ == '__main__':
     unittest.main()
