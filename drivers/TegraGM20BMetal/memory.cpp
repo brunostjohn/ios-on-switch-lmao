@@ -337,9 +337,8 @@ Device::Trimmed Device::trim()
             for (std::vector<Chunk> &z : zChunks_)
                 freeUnused(z);
             freeUnusedWc(wcChunks_);
+            freeUnusedWc(volatileWcChunks_);
         }
-        // Volatile WC chunks stay unparked to return carveout RAM immediately and avoid VOL=1/VOL=0 unpark aliasing.
-        freeUnusedWc(volatileWcChunks_);
     }
     finishParkChunks(toPark);
     return trimmed;
@@ -799,12 +798,11 @@ bool Device::wcPoolAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &
                     return true;
                 }
             }
-            if (!gpuVolatile) {
-                uint32_t unparked = ~0u;
-                bool resident = false;
-                if (tryUnparkChunk(l, ChunkVec::Wc, 0, bytes, false, 0, TegraGM20BSurfaceRead, unparked, resident))
-                    continue;
-            }
+            uint32_t unparked = ~0u;
+            bool resident = false;
+            if (tryUnparkChunk(l, gpuVolatile ? ChunkVec::VolatileWc : ChunkVec::Wc, 0, bytes, false, 0,
+                               TegraGM20BSurfaceRead, unparked, resident))
+                continue;
         }
         if (closing_ || pass++)
             break;
