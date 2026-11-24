@@ -1804,3 +1804,27 @@ host_test(
     ],
     includes = ["."],
 )
+
+[genrule(
+    name = "launchd_policy_tail_" + version,
+    srcs = ["//kernel/xnu-" + xnu + "/bsd:kern/kern_exec.c"],
+    outs = ["launchd_policy_tail_" + version + ".h"],
+    cmd = """awk '
+        /^#define NATIVE_SWITCH_POLICY_TAIL / { on = 1 }
+        on { print }
+        on && /<\\/dict><\\/plist>/ { exit }
+    ' $< > $@""",
+) for version, xnu in [
+    ("17", "10063.141.1"),
+    ("27", "12377.121.6"),
+]]
+
+host_test(
+    name = "switch_prngseedd_policy_test",
+    srcs = [
+        "switch_prngseedd_policy_test.cpp",
+        ":launchd_policy_tail_17",
+        ":launchd_policy_tail_27",
+    ],
+    includes = ["."],
+)

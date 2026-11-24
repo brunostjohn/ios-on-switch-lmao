@@ -9983,6 +9983,7 @@ native_switch_watchdog_policy(proc_t p, user_addr_t scratch)
 	    "<key>com.apple.fairplayd.A2</key><true/>" \
 	    "<key>com.apple.adid</key><true/>" \
 	    "<key>com.apple.lskdd</key><true/>" \
+	    "<key>com.apple.prngseedd</key><true/>" \
 	    "</dict></plist>\n"
 	/* This file is the only override database 21H461 launchd reads: no disabled.<uid>.plist exists. launchd reads it
 	 * once, between its finish-demo-restore and sysstatuscheck boot tasks. The user/501 domain shares the system

@@ -1033,6 +1033,22 @@ class Reports(unittest.TestCase):
         self.assertEqual(len(by_name['boot.prefetch'].matches), 1)
         self.assertIn('list saved:', by_name['boot.prefetch'].matches[0]['message'])
 
+    def test_launchd_prngseedd_fails_on_boot_2_respawn_and_passes_when_absent(self):
+        check = next(c for c in checks.GROUPS['launchd'] if c.name == 'launchd.prngseedd')
+        spawned = {
+            'timestamp': '2026-11-22 23:56:53.760000+0000',
+            'bootUUID': 'B2',
+            'processImagePath': '/sbin/launchd',
+            'subsystem': 'user/501/com.apple.prngseedd [492]',
+            'category': '',
+            'messageType': 'Default',
+            'eventMessage': 'exited due to exit(0), ran for 1030ms',
+        }
+        failed, _ = devicerun.run_checks([spawned], [check])
+        self.assertEqual(failed[0].verdict, FAIL)
+        clean, _ = devicerun.run_checks([], [check])
+        self.assertEqual(clean[0].verdict, PASS)
+
 
 if __name__ == '__main__':
     unittest.main()

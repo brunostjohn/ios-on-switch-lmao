@@ -65,6 +65,14 @@ PROMISE_UNKEPT_WINDOWS = 'gpu.promise-unkept-windows'
 GROUPS: dict[str, list[Check]] = {
     'launchd': [
         Check('launchd.lskdd', 'r32-cpuhog', 'Successfully spawned lskdd[', process=LAUNCHD, note='was 158 in 158 s'),
+        Check(
+            'launchd.prngseedd',
+            'perf1-daemons',
+            ('Successfully spawned seputil[', 'exited due to exit('),
+            process=LAUNCHD,
+            subsystem='com.apple.prngseedd',
+            note='was 203 respawns in 34 min on boot 2',
+        ),
         Check('launchd.sepupdatetimer', 'r32-cpuhog', SPAWNED, process=LAUNCHD, subsystem='com.apple.SepUpdateTimer'),
         Check(
             'launchd.sepupdatetimer-throttle',
