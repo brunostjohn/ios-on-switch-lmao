@@ -58,12 +58,12 @@ constexpr int32_t kMbdrcCrossover[kMbdrcBands][kMbdrcWordsPerBand] = {
 
 constexpr uint32_t kMbdrcIirStagesMinus1 = 5u;
 constexpr uint32_t kMbdrcInitGainUnityQ22 = 1u << 22;
-constexpr uint32_t kMbdrcInAttack = 1044928780u;
-constexpr uint32_t kMbdrcInRelease = 138497695u;
-constexpr uint32_t kMbdrcFastAttack = 2147483647u;
-constexpr uint32_t kMbdrcGainAttack = 14268942u;
-constexpr uint32_t kMbdrcGainRelease = 1044928780u;
-constexpr uint32_t kMbdrcFastRelease = 2147480170u;
+constexpr uint32_t kMbdrcInAttackVal = 1044928780u;
+constexpr uint32_t kMbdrcInReleaseVal = 138497695u;
+constexpr uint32_t kMbdrcFastAttackVal = 2147483647u;
+constexpr uint32_t kMbdrcGainAttackVal = 14268942u;
+constexpr uint32_t kMbdrcGainReleaseVal = 1044928780u;
+constexpr uint32_t kMbdrcFastReleaseVal = 2147480170u;
 
 // RMS_OFFSET=0, unbias=1, PEAK mode=0, ALL_PASS_TREE=0, shift=30, frame_size=32 (5), MULTIBAND=3.
 constexpr uint32_t kMbdrcCfgSpeaker = (1u << 15) | (30u << 8) | (5u << 4) | 3u;
@@ -152,12 +152,12 @@ bool configureMbdrcSpeaker(volatile uint8_t *ahub, uint32_t channels)
         switch_mmio_write32(ahub, kMbdrcBase + kMbdrcRatio5th + off, 512u);
         switch_mmio_write32(ahub, kMbdrcBase + kMbdrcMakeupGain + off, 0u);
         switch_mmio_write32(ahub, kMbdrcBase + kMbdrcInitGain + off, kMbdrcInitGainUnityQ22);
-        switch_mmio_write32(ahub, kMbdrcBase + kMbdrcInAttack + off, kMbdrcInAttack);
-        switch_mmio_write32(ahub, kMbdrcBase + kMbdrcInRelease + off, kMbdrcInRelease);
-        switch_mmio_write32(ahub, kMbdrcBase + kMbdrcFastAttack + off, kMbdrcFastAttack);
-        switch_mmio_write32(ahub, kMbdrcBase + kMbdrcGainAttack + off, kMbdrcGainAttack);
-        switch_mmio_write32(ahub, kMbdrcBase + kMbdrcGainRelease + off, kMbdrcGainRelease);
-        switch_mmio_write32(ahub, kMbdrcBase + kMbdrcFastRelease + off, kMbdrcFastRelease);
+        switch_mmio_write32(ahub, kMbdrcBase + kMbdrcInAttack + off, kMbdrcInAttackVal);
+        switch_mmio_write32(ahub, kMbdrcBase + kMbdrcInRelease + off, kMbdrcInReleaseVal);
+        switch_mmio_write32(ahub, kMbdrcBase + kMbdrcFastAttack + off, kMbdrcFastAttackVal);
+        switch_mmio_write32(ahub, kMbdrcBase + kMbdrcGainAttack + off, kMbdrcGainAttackVal);
+        switch_mmio_write32(ahub, kMbdrcBase + kMbdrcGainRelease + off, kMbdrcGainReleaseVal);
+        switch_mmio_write32(ahub, kMbdrcBase + kMbdrcFastRelease + off, kMbdrcFastReleaseVal);
     }
 
     switch_mmio_write32(ahub, kMbdrcBase + kMbdrcCfg, kMbdrcCfgSpeaker);

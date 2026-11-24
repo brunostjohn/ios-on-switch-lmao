@@ -22,6 +22,7 @@ struct RamCapture {
 
 struct AhubModel {
     static constexpr uintptr_t kBase = 0x10000000u;
+    static constexpr uint32_t kSize = 0xd000u;
     std::unordered_map<uint32_t, uint32_t> regs;
     std::vector<std::pair<uint32_t, uint32_t>> writes;
     bool freezeSoftReset = false;
@@ -86,6 +87,8 @@ struct AhubModel {
 
     uint32_t read32(uint32_t off)
     {
+        EXPECT_LT(off, kSize) << "out-of-bounds AHUB MMIO read offset 0x" << std::hex << off;
+        EXPECT_EQ(off & 3u, 0u) << "unaligned AHUB MMIO read offset 0x" << std::hex << off;
         if (off == kSfc1Base + kSfcStatus) {
             return freezeStatus ? 1u : regs[kSfc1Base + kSfcEnable];
         }
@@ -120,6 +123,8 @@ struct AhubModel {
 
     void write32(uint32_t off, uint32_t value)
     {
+        EXPECT_LT(off, kSize) << "out-of-bounds AHUB MMIO write offset 0x" << std::hex << off;
+        EXPECT_EQ(off & 3u, 0u) << "unaligned AHUB MMIO write offset 0x" << std::hex << off;
         writes.emplace_back(off, value);
         regs[off] = value;
 
@@ -410,6 +415,13 @@ TEST_F(AhubTest, OpeSpeakerDspAndHeadphoneBypass)
         EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcCfg], (1u << 15) | (30u << 8) | (5u << 4) | 3u);
         for (uint32_t band = 0; band < kMbdrcBands; ++band) {
             ASSERT_EQ(gModel.mbdrcRam[band].words.size(), kMbdrcWordsPerBand);
+            const uint32_t off = 4u * band;
+            EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcInAttack + off], 1044928780u);
+            EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcInRelease + off], 138497695u);
+            EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcFastAttack + off], 2147483647u);
+            EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcGainAttack + off], 14268942u);
+            EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcGainRelease + off], 1044928780u);
+            EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcFastRelease + off], 2147480170u);
         }
         // Band 2 stages 0..2 are bypass {1<<30, 0, 0, 0, 0}, stage 3 begins at word 15.
         EXPECT_EQ(static_cast<int32_t>(gModel.mbdrcRam[2].words[0]), 1073741824);
