@@ -625,6 +625,7 @@ enum GPUPathTests {
         ImportBesideSubmitsTest(), TransferBesideReadbackTest(), CommitLatencyPathTest(), AheadMovesTest(),
         FreshSurfaceImportPathTest(), NativeSurfaceRepublishedPathTest(), HolderTimeoutPathTest(),
         IdleRedrawPathTest(), LaunchTargetPathTest(), FreshSparePathTest(), TeardownFreePathTest(),
+        ParkedBoPathTest(),
     ]
 }
 

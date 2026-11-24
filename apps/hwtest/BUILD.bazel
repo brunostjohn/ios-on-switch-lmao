@@ -702,6 +702,8 @@ cc_library(
         "//drivers/TegraGM20BMetal:draw_inputs.cpp",
         "//drivers/TegraGM20BMetal:draw_shader_tests.cpp",
         "//drivers/TegraGM20BMetal:memory.cpp",
+        "//drivers/TegraGM20BMetal:parked_arena.cpp",
+        "//drivers/TegraGM20BMetal:parked_chunks.cpp",
         "//drivers/TegraGM20BMetal:pass_backings.cpp",
         "//drivers/TegraGM20BMetal:pass_begin.cpp",
         "//drivers/TegraGM20BMetal:pass_clears.cpp",

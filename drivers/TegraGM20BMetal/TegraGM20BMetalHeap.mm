@@ -294,10 +294,14 @@ void gm20bHeapForget(SwitchMetalHeap *heap, uint64_t va)
         return answer(false);
     // whether the pages had gone and the new volatility in one step: no purge falls between the answer and the promise
     const MTLPurgeableState old = answer(gRM->raw->setArenaVolatile(_arena - 1, !keep));
-    if (keep)
-        resident(self);
-    else if (state == MTLPurgeableStateEmpty)
+    if (keep) {
+        if (!resident(self) && gRM->raw->setArenaVolatileIfPurged(_arena - 1)) {
+            int expected = MTLPurgeableStateNonVolatile;
+            _purgeable.compare_exchange_strong(expected, MTLPurgeableStateVolatile);
+        }
+    } else if (state == MTLPurgeableStateEmpty) {
         gRM->raw->purgeArena(_arena - 1, gRM->committed);
+    }
     return old;
 }
 

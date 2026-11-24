@@ -27,6 +27,8 @@
 #include "TegraGM20BFencePageABI.h"
 #include "TegraGM20BJobABI.h"
 #include <IOKit/IOKitLib.h>
+#include <mach/mach.h>
+#include <mach/memory_object_types.h>
 #include <unistd.h>
 #include <algorithm>
 #include <atomic>
@@ -53,11 +55,37 @@ inline void (*checkJob)(const uint32_t *words, const TegraGM20BAbiPush *pushes, 
 // or answers it (anything but KERN_SUCCESS)
 inline std::atomic<int (*)(uint32_t method, const void *input)> arriving{nullptr};
 
+enum class ParkState : uint8_t {
+    Live = 0,
+    Parked,
+    Reclaimed,
+};
+
+struct BoVmBacking {
+    mach_port_t entry = MACH_PORT_NULL;
+    uint64_t va = 0;
+    uint64_t bytes = 0;
+    bool ownsVa = false;
+
+    ~BoVmBacking()
+    {
+        if (ownsVa && va && bytes)
+            vm_deallocate(mach_task_self(), vm_address_t(va), vm_size_t(bytes));
+        if (entry != MACH_PORT_NULL)
+            mach_port_deallocate(mach_task_self(), entry);
+    }
+};
+
 struct BoState {
     bool import = false, cached = false, cpuReached = false;
     bool hostWritten = false;         // a CPU write lease released on it since a job last named it
     uint32_t set = 0;                 // the set it is a member of, 0: none
-    uint64_t address = 0, bytes = 0;  // an import's host range
+    uint64_t address = 0, bytes = 0;  // an import's host range (or BoAlloc bytes)
+    bool control = false, coherent = false, system = false, poolVa = false;
+    ParkState parkState = ParkState::Live;
+    bool mapped = false, parkedGuard = false, mappedFixed = false;
+    uint64_t mappedVa = 0, parkedVa = 0;
+    std::shared_ptr<BoVmBacking> vm = nullptr;
 };
 
 struct SetState {
@@ -138,6 +166,10 @@ struct Model {
         };
         if (!within(bound->second.second))
             return nullptr;
+        const auto bo = bos.find(handle);
+        if (bo != bos.end() && bo->second.vm && bo->second.mapped && bo->second.parkState == ParkState::Live &&
+            within(bo->second.bytes))
+            return reinterpret_cast<uint8_t *>(uintptr_t(bo->second.mappedVa)) + offset;
         if (const auto held = memory.find(uint32_t(handle)); held != memory.end() && within(held->second.size()))
             return held->second.data() + offset;
         if (const auto pages = imports.find(handle); pages != imports.end() && within(pages->second.second))
@@ -213,6 +245,54 @@ struct Model {
     uint64_t vaStart = 0x1000000;
     uint64_t vaEnd = uint64_t(1) << 40;
     uint32_t infoFlags = 0;  // GetInfo's flags beyond the model's own (TegraGM20BInfoTiledCache)
+    bool coherentFromPool = true;
+    bool forceParkBusy = false, forceUnparkBusy = false;
+    uint64_t overrideUnparkBytes = 0, maxBoBytes = 0;
+    uint64_t parkCapBytes = 0, parkedBytes = 0;
+    unsigned refuseParkCount = 0, refuseUnparkCount = 0;
+    int refuseParkError = kIOReturnBusy;
+    unsigned parkCalls = 0, parkRefusals = 0, unparkResident = 0, unparkReclaimed = 0, reclaims = 0, fixedMaps = 0,
+             badUnmaps = 0;
+    std::vector<uint64_t> parkedOrder;
+
+    bool boParkEnabled() const
+    {
+        return (infoFlags & TegraGM20BInfoBoPark) != 0;
+    }
+
+    bool reclaimParked(uint64_t handle)
+    {
+        const auto it = bos.find(handle);
+        if (it == bos.end() || it->second.parkState != ParkState::Parked)
+            return false;
+        BoState &bo = it->second;
+        parkedOrder.erase(std::remove(parkedOrder.begin(), parkedOrder.end(), handle), parkedOrder.end());
+        parkedBytes -= bo.bytes;
+        for (auto bound = binds.begin(); bound != binds.end();)
+            bound = bound->second.first == handle ? binds.erase(bound) : std::next(bound);
+        if (bo.vm && bo.vm->entry != MACH_PORT_NULL) {
+            mach_port_deallocate(mach_task_self(), bo.vm->entry);
+            bo.vm->entry = MACH_PORT_NULL;
+        }
+        bo.parkState = ParkState::Reclaimed;
+        reclaims++;
+        return true;
+    }
+
+    unsigned reclaimAllParked()
+    {
+        const std::vector<uint64_t> order = parkedOrder;
+        unsigned n = 0;
+        for (uint64_t handle : order)
+            n += reclaimParked(handle);
+        return n;
+    }
+
+    void reclaimToCap()
+    {
+        while (parkCapBytes && parkedBytes > parkCapBytes && !parkedOrder.empty())
+            reclaimParked(parkedOrder.front());
+    }
 
     struct PackImageConfig {
         bool enabled = false;
@@ -483,11 +563,18 @@ struct Model {
             if (const uint64_t bo = resolve(shared[i]))
                 named.push_back(bo);
         for (const uint64_t bo : named) {
+            if (bos.count(bo) && bos.at(bo).parkState != ParkState::Live)
+                return kIOReturnNotReady;
             if (held != admitted.end() &&
                 std::find(held->second.second.begin(), held->second.second.end(), bo) == held->second.second.end())
                 return kIOReturnBadArgument;
             if (held == admitted.end() && lockedByCpu(bo))
                 return kIOReturnCannotLock;
+        }
+        if (set) {
+            for (const auto &m : set->members)
+                if (bos.count(m.handle) && bos.at(m.handle).parkState != ParkState::Live)
+                    return kIOReturnNotReady;
         }
         if (admission & TegraGM20BJobAdmissionBegin)
             admitted[head->channel] = {cookie, named};
@@ -610,6 +697,10 @@ struct Model {
         const auto it = bos.find(handle);
         if (it == bos.end())
             return;
+        if (it->second.parkState == ParkState::Parked) {
+            parkedOrder.erase(std::remove(parkedOrder.begin(), parkedOrder.end(), handle), parkedOrder.end());
+            parkedBytes -= it->second.bytes;
+        }
         if (const uint32_t set = it->second.set) {
             auto &members = sets[set - 1].members;
             members.erase(std::remove_if(members.begin(), members.end(),
@@ -766,6 +857,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         info.va_start = model.vaStart;
         info.va_end = model.vaEnd;
         info.page_size = 4096;
+        info.max_bo_bytes = model.maxBoBytes;
         return KERN_SUCCESS;
     }
     case TegraGM20BMethodBoAlloc: {
@@ -782,8 +874,34 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         if (model.refuseAllocs)
             return kIOReturnNoMemory;
         const uint32_t token = uint32_t(model.nextHandle);
-        model.memory[token].assign(in.bytes, 0);
-        model.bos[model.nextHandle] = {false, !(in.flags & TegraGM20BBoCoherent), 0};
+        const bool control = (in.flags & TegraGM20BBoControl) != 0;
+        const bool coherent = (in.flags & TegraGM20BBoCoherent) != 0;
+        const bool system = (in.flags & TegraGM20BBoSystem) != 0;
+        if (system && (!coherent || control || (in.flags & (TegraGM20BBoCompressible | TegraGM20BBoContiguous))))
+            return kIOReturnBadArgument;
+        if (in.flags && model.maxBoBytes && in.bytes > model.maxBoBytes)
+            return kIOReturnBadArgument;
+        kernel_model::BoState state = {};
+        state.cached = !coherent;
+        state.bytes = in.bytes;
+        state.control = control;
+        state.coherent = coherent;
+        state.system = system;
+        state.poolVa = coherent && !control && !system && model.coherentFromPool;
+        if (model.boParkEnabled() && !control) {
+            auto vm = std::make_shared<kernel_model::BoVmBacking>();
+            memory_object_size_t sz = in.bytes;
+            mach_port_t entry = MACH_PORT_NULL;
+            const vm_prot_t prot = MAP_MEM_NAMED_CREATE | VM_PROT_READ | VM_PROT_WRITE;
+            if (mach_make_memory_entry_64(mach_task_self(), &sz, 0, prot, &entry, MACH_PORT_NULL) != KERN_SUCCESS)
+                return kIOReturnNoMemory;
+            vm->entry = entry;
+            vm->bytes = in.bytes;
+            state.vm = std::move(vm);
+        } else {
+            model.memory[token].assign(in.bytes, 0);
+        }
+        model.bos[model.nextHandle] = std::move(state);
         *static_cast<TegraGM20BAbiBoAllocReply *>(output) = {model.nextHandle++, token, 0};
         return KERN_SUCCESS;
     }
@@ -793,7 +911,12 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
             return kIOReturnNoMemory;
         }
         const auto &in = *static_cast<const TegraGM20BAbiBoImport *>(input);
-        model.bos[model.nextHandle] = {true, true, false, false, 0, in.address, in.bytes};
+        kernel_model::BoState imported = {};
+        imported.import = true;
+        imported.cached = true;
+        imported.address = in.address;
+        imported.bytes = in.bytes;
+        model.bos[model.nextHandle] = std::move(imported);
         model.imports[model.nextHandle] = {in.address, in.bytes};
         *static_cast<TegraGM20BAbiBoAllocReply *>(output) = {model.nextHandle++, 0, 0};
         return KERN_SUCCESS;
@@ -802,6 +925,88 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         model.freed.push_back(static_cast<const TegraGM20BAbiBoFree *>(input)->handle);
         model.freeBo(static_cast<const TegraGM20BAbiBoFree *>(input)->handle);
         return KERN_SUCCESS;
+    case TegraGM20BMethodBoPark: {
+        if (!model.boParkEnabled())
+            return kIOReturnUnsupported;
+        const auto &in = *static_cast<const TegraGM20BAbiBoPark *>(input);
+        const auto it = model.bos.find(in.handle);
+        if (it == model.bos.end() || it->second.parkState != kernel_model::ParkState::Live)
+            return kIOReturnBadArgument;
+        kernel_model::BoState &bo = it->second;
+        if (bo.import || bo.control || bo.poolVa || !bo.vm || bo.vm->entry == MACH_PORT_NULL)
+            return kIOReturnUnsupported;
+        if (!bo.mapped)
+            return kIOReturnNotFound;
+        if (bo.set != 0 || model.inFlight || model.lockedByCpu(in.handle) || model.forceParkBusy) {
+            model.parkRefusals++;
+            return kIOReturnBusy;
+        }
+        if (model.refuseParkCount) {
+            model.refuseParkCount--;
+            model.parkRefusals++;
+            return model.refuseParkError;
+        }
+        const bool guard = (in.flags & TegraGM20BParkGuard) != 0;
+        vm_address_t at = vm_address_t(bo.mappedVa);
+        if (vm_allocate(mach_task_self(), &at, vm_size_t(bo.bytes), VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE) !=
+            KERN_SUCCESS)
+            return kIOReturnBusy;
+        if (guard)
+            vm_protect(mach_task_self(), at, vm_size_t(bo.bytes), TRUE, VM_PROT_NONE);
+        bo.parkState = kernel_model::ParkState::Parked;
+        bo.parkedVa = bo.mappedVa;
+        bo.parkedGuard = guard;
+        bo.mapped = false;
+        bo.mappedVa = 0;
+        model.parkCalls++;
+        model.parkedOrder.push_back(in.handle);
+        model.parkedBytes += bo.bytes;
+        model.reclaimToCap();
+        return KERN_SUCCESS;
+    }
+    case TegraGM20BMethodBoUnpark: {
+        if (!model.boParkEnabled())
+            return kIOReturnUnsupported;
+        const auto &in = *static_cast<const TegraGM20BAbiBoUnpark *>(input);
+        auto &reply = *static_cast<TegraGM20BAbiBoUnparkReply *>(output);
+        reply = {};
+        const auto it = model.bos.find(in.handle);
+        if (it == model.bos.end())
+            return kIOReturnBadArgument;
+        kernel_model::BoState &bo = it->second;
+        if (model.forceUnparkBusy &&
+            (bo.parkState == kernel_model::ParkState::Parked || bo.parkState == kernel_model::ParkState::Reclaimed))
+            return kIOReturnBusy;
+        if (bo.parkState == kernel_model::ParkState::Reclaimed) {
+            model.unparkReclaimed++;
+            reply = {bo.parkedVa, bo.bytes, TegraGM20BUnparkReclaimed, 0};
+            return KERN_SUCCESS;
+        }
+        if (bo.parkState != kernel_model::ParkState::Parked || !bo.vm || bo.vm->entry == MACH_PORT_NULL)
+            return kIOReturnBadArgument;
+        if (model.refuseUnparkCount) {
+            model.refuseUnparkCount--;
+            return kIOReturnNoMemory;
+        }
+        vm_address_t at = vm_address_t(bo.parkedVa);
+        if (vm_map(mach_task_self(), &at, vm_size_t(bo.bytes), 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, bo.vm->entry, 0,
+                   FALSE, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE) != KERN_SUCCESS)
+            return kIOReturnNoMemory;
+        bo.parkState = kernel_model::ParkState::Live;
+        bo.mapped = true;
+        bo.mappedVa = uint64_t(at);
+        bo.vm->va = uint64_t(at);
+        bo.vm->ownsVa = true;
+        bo.parkedVa = 0;
+        bo.parkedGuard = false;
+        model.parkedOrder.erase(std::remove(model.parkedOrder.begin(), model.parkedOrder.end(), in.handle),
+                                model.parkedOrder.end());
+        model.parkedBytes -= bo.bytes;
+        model.unparkResident++;
+        const uint64_t replyBytes = model.overrideUnparkBytes ? model.overrideUnparkBytes : bo.bytes;
+        reply = {bo.mappedVa, replyBytes, TegraGM20BUnparkResident, 0};
+        return KERN_SUCCESS;
+    }
     case TegraGM20BMethodVmBind: {
         const auto &b = *static_cast<const TegraGM20BAbiVmBind *>(input);
         if (model.packMappedBytes) {
@@ -814,6 +1019,22 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         }
         for (uint32_t i = 0; i < b.count; i++) {
             const TegraGM20BAbiBindOp &op = b.ops[i];
+            if ((op.op == TegraGM20BBindMap || op.op == TegraGM20BBindMapVolatile) && model.bos.count(op.handle) &&
+                model.bos.at(op.handle).parkState != kernel_model::ParkState::Live)
+                return kIOReturnNotReady;
+            if (op.range) {
+                for (const auto &[bva, entry] : model.binds) {
+                    const uint64_t bhandle = entry.first, brange = entry.second;
+                    if (!brange || op.va >= bva + brange || bva >= op.va + op.range)
+                        continue;
+                    const auto bit = model.bos.find(bhandle);
+                    if (bit != model.bos.end() && bit->second.parkState != kernel_model::ParkState::Live)
+                        return kIOReturnNotReady;
+                }
+            }
+        }
+        for (uint32_t i = 0; i < b.count; i++) {
+            const TegraGM20BAbiBindOp &op = b.ops[i];
             model.binds[op.va] = {op.handle, op.range};
             model.bindKinds[op.va] = op.kind;
             if (model.bound)
@@ -821,9 +1042,13 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         }
         return KERN_SUCCESS;
     }
-    case TegraGM20BMethodCpuAcquire:
-        model.cpuLease(static_cast<const TegraGM20BAbiCpuAccess *>(input)->handle);
+    case TegraGM20BMethodCpuAcquire: {
+        const uint64_t handle = static_cast<const TegraGM20BAbiCpuAccess *>(input)->handle;
+        if (model.bos.count(handle) && model.bos.at(handle).parkState != kernel_model::ParkState::Live)
+            return kIOReturnNotReady;
+        model.cpuLease(handle);
         return KERN_SUCCESS;
+    }
     case TegraGM20BMethodCpuRelease:
         model.cpuReleased(*static_cast<const TegraGM20BAbiCpuAccess *>(input));
         return KERN_SUCCESS;
@@ -838,12 +1063,64 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
     case TegraGM20BMethodMap: {
         const auto &in = *static_cast<const TegraGM20BAbiMap *>(input);
         auto &reply = *static_cast<TegraGM20BAbiMapReply *>(output);
-        if (in.token == kernel_model::kFenceToken)
+        if (in.token == kernel_model::kFenceToken) {
             reply = {uint64_t(uintptr_t(model.fences.bytes)), sizeof model.fences.bytes};
-        else if (in.token == TegraGM20BCompilerStoreToken)
+            return KERN_SUCCESS;
+        }
+        if (in.token == TegraGM20BCompilerStoreToken) {
             reply = {uint64_t(uintptr_t(model.store)), model.storeBytes};
-        else
-            reply = {uint64_t(uintptr_t(model.memory[in.token].data())), model.memory[in.token].size()};
+            return KERN_SUCCESS;
+        }
+        if (const auto it = model.bos.find(in.token); it != model.bos.end() && it->second.vm) {
+            kernel_model::BoState &bo = it->second;
+            if (bo.parkState != kernel_model::ParkState::Live || bo.vm->entry == MACH_PORT_NULL)
+                return kIOReturnNotReady;
+            const vm_prot_t prot = (in.flags & TegraGM20BMapReadOnly) ? VM_PROT_READ : (VM_PROT_READ | VM_PROT_WRITE);
+            if (in.flags & TegraGM20BMapFixed) {
+                if (!in.address || bo.mapped)
+                    return kIOReturnBadArgument;
+                for (const auto &[otherHandle, other] : model.bos)
+                    if (other.parkState == kernel_model::ParkState::Live && other.mapped &&
+                        in.address < other.mappedVa + other.bytes && other.mappedVa < in.address + bo.bytes)
+                        return kIOReturnBusy;
+                vm_address_t regionAddr = vm_address_t(in.address);
+                vm_size_t regionSize = 0;
+                vm_region_basic_info_data_64_t info = {};
+                mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+                mach_port_t obj = MACH_PORT_NULL;
+                if (vm_region_64(mach_task_self(), &regionAddr, &regionSize, VM_REGION_BASIC_INFO_64,
+                                 reinterpret_cast<vm_region_info_t>(&info), &count, &obj) != KERN_SUCCESS ||
+                    regionAddr > in.address || regionAddr + regionSize < in.address + bo.bytes)
+                    return kIOReturnNotFound;
+                vm_address_t at = vm_address_t(in.address);
+                if (vm_map(mach_task_self(), &at, vm_size_t(bo.bytes), 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
+                           bo.vm->entry, 0, FALSE, prot, prot, VM_INHERIT_NONE) != KERN_SUCCESS)
+                    return kIOReturnNoMemory;
+                for (auto &[otherHandle, other] : model.bos)
+                    if (otherHandle != it->first && other.vm && other.parkState != kernel_model::ParkState::Live &&
+                        other.parkedVa == in.address)
+                        other.vm->ownsVa = false;
+                bo.vm->va = uint64_t(at);
+                bo.vm->ownsVa = true;
+                bo.mapped = true;
+                bo.mappedVa = uint64_t(at);
+                bo.mappedFixed = true;
+                model.fixedMaps++;
+                reply = {bo.mappedVa, bo.bytes};
+                return KERN_SUCCESS;
+            }
+            vm_address_t at = 0;
+            if (vm_map(mach_task_self(), &at, vm_size_t(bo.bytes), 0, VM_FLAGS_ANYWHERE, bo.vm->entry, 0, FALSE, prot,
+                       prot, VM_INHERIT_NONE) != KERN_SUCCESS)
+                return kIOReturnNoMemory;
+            bo.vm->va = uint64_t(at);
+            bo.vm->ownsVa = true;
+            bo.mapped = true;
+            bo.mappedVa = uint64_t(at);
+            reply = {bo.mappedVa, bo.bytes};
+            return KERN_SUCCESS;
+        }
+        reply = {uint64_t(uintptr_t(model.memory[in.token].data())), model.memory[in.token].size()};
         return KERN_SUCCESS;
     }
     case TegraGM20BMethodChannelCreate:
@@ -871,8 +1148,23 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         *static_cast<TegraGM20BAbiCpuCompleteReply *>(output) = {in.range_count, 0, 0, 0, 0, 0};
         return KERN_SUCCESS;
     }
-    case TegraGM20BMethodUnmap:
+    case TegraGM20BMethodUnmap: {
+        const auto &in = *static_cast<const TegraGM20BAbiUnmap *>(input);
+        if (const auto it = model.bos.find(in.token); it != model.bos.end() && it->second.vm) {
+            kernel_model::BoState &bo = it->second;
+            if (bo.parkState != kernel_model::ParkState::Live || !bo.mapped || bo.mappedVa != in.address) {
+                model.badUnmaps++;
+                return kIOReturnBadArgument;
+            }
+            if (bo.vm->ownsVa)
+                vm_deallocate(mach_task_self(), vm_address_t(in.address), vm_size_t(bo.bytes));
+            bo.vm->va = 0;
+            bo.vm->ownsVa = false;
+            bo.mapped = false;
+            bo.mappedVa = 0;
+        }
         return KERN_SUCCESS;
+    }
     case TegraGM20BMethodEventImport: {
         if (!model.kernelEvents)
             return kIOReturnUnsupported;

@@ -26,7 +26,8 @@ Device::PlainMem *Device::largestPlain(uint32_t tag, uint32_t memory, bool layer
     return best;
 }
 
-Device::Backing *Device::plainBacking(const Texture &m, uint32_t tag, bool blockLinear, DeferredFrees &deferred)
+Device::Backing *Device::plainBacking(std::unique_lock<gm20b::Mutex> &l, const Texture &m, uint32_t tag,
+                                      bool blockLinear, DeferredFrees &deferred)
 {
     Texture t;
     fx::MipChain c;
@@ -71,28 +72,34 @@ Device::Backing *Device::plainBacking(const Texture &m, uint32_t tag, bool block
         made->layered = layered;
         made->align = align;
         const uint64_t want = sizeClassBytes(bytes, kBlAlign);
-        const bool ok = memory == kPlainPool ? poolAlloc(want, made->span)
+        const bool ok = memory == kPlainPool ? poolAlloc(l, want, made->span)
                         : memory == kPlainBl
-                            ? blAlloc(want, align, made->span)
-                            : tiledAlloc(zChunks_[memory - kPlainZeta], kZetaFormatInfo[memory - kPlainZeta].kind, want,
-                                         align, made->span);
+                            ? blAlloc(l, want, align, made->span)
+                            : tiledAlloc(l, zChunks_[memory - kPlainZeta], kZetaFormatInfo[memory - kPlainZeta].kind,
+                                         want, align, made->span);
         if (!ok || (made->span.va & (align - 1))) {
             if (ok)
                 freePlainSpan(*made, deferred);
             return nullptr;
         }
-        SWITCH_METAL_DIAGNOSTIC(stats.backingBytes += made->span.bytes);
-        SWITCH_METAL_DIAGNOSTIC(glassMemEvent("memoryless plain memory made", made->span.bytes));
-        plainMems_.push_back(std::move(made));
-        mem = plainMems_.back().get();
-        // the views of its tag's smaller memory: no pass takes them again (an animated layer seldom asks a size twice), so it
-        // goes back once their last uses complete rather than 10 s on
-        for (Backing *b : backings_)
-            if (b->plain && b->plain != mem && b->plain->holds(tag, memory, layered))
-                b->retired = true;
-        backingsChanged();
-        compRearm_ = true;  // an idle process gives it back when it turns stale
-        compStart();
+        PlainMem *existing = largestPlain(tag, memory, layered);
+        if (existing && existing->span.bytes >= bytes && !(existing->span.va & (align - 1))) {
+            freePlainSpan(*made, deferred);
+            mem = existing;
+        } else {
+            SWITCH_METAL_DIAGNOSTIC(stats.backingBytes += made->span.bytes);
+            SWITCH_METAL_DIAGNOSTIC(glassMemEvent("memoryless plain memory made", made->span.bytes));
+            plainMems_.push_back(std::move(made));
+            mem = plainMems_.back().get();
+            // the views of its tag's smaller memory: no pass takes them again (an animated layer seldom asks a size twice), so it
+            // goes back once their last uses complete rather than 10 s on
+            for (Backing *b : backings_)
+                if (b->plain && b->plain != mem && b->plain->holds(tag, memory, layered))
+                    b->retired = true;
+            backingsChanged();
+            compRearm_ = true;  // an idle process gives it back when it turns stale
+            compStart();
+        }
     }
     t.va = mem->span.va;
     t.storage = {t.va, bytes, false};
@@ -176,8 +183,8 @@ Texture *Device::lastBacking(const Texture &m, uint32_t tag, bool blockLinear, b
     return nullptr;
 }
 
-Texture *Device::backing(DeferredFrees &deferred, const Texture &m, uint32_t tag, bool blockLinear, bool compression,
-                         bool copied)
+Texture *Device::backing(std::unique_lock<gm20b::Mutex> &l, DeferredFrees &deferred, const Texture &m, uint32_t tag,
+                         bool blockLinear, bool compression, bool copied)
 {
     BackingAsk ask{m.width,     m.height,    m.format, tag,         std::max(m.layers, 1u), m.samples, m.zeta,
                    blockLinear, compression, copied,   kindProbes()};
@@ -226,7 +233,7 @@ Texture *Device::backing(DeferredFrees &deferred, const Texture &m, uint32_t tag
     }
     if (plain)
         return asked(plain);
-    Backing *view = plainBacking(m, tag, blockLinear, deferred);
+    Backing *view = plainBacking(l, m, tag, blockLinear, deferred);
     if (!view)
         return nullptr;
     backings_.push_back(view);

@@ -96,8 +96,15 @@ size_t metal_rates(char *out, size_t size)
     }
     {  // since open: heaps' arenas made and restored, untouched host pages imported (zero-filled on the importer)
         const size_t used = strlen(diag);
-        snprintf(diag + used, sizeof diag - used, " heaps=%llu/%llu hz=%lluKB", (unsigned long long)k.arenasMade.load(),
-                 (unsigned long long)k.arenaRestores.load(), (unsigned long long)(k.hostZeroedBytes.load() >> 10));
+        snprintf(diag + used, sizeof diag - used,
+                 " heaps=%llu/%llu hz=%lluKB park=c%llu/%lluKB(%llu/%llu/%llu),h%llu/%lluKB(%llu/%llu/%llu)",
+                 (unsigned long long)k.arenasMade.load(), (unsigned long long)k.arenaRestores.load(),
+                 (unsigned long long)(k.hostZeroedBytes.load() >> 10), (unsigned long long)k.parkedChunks.load(),
+                 (unsigned long long)(k.parkedChunkBytes.load() >> 10), (unsigned long long)k.chunkParks.load(),
+                 (unsigned long long)k.chunkUnparksResident.load(), (unsigned long long)k.chunkUnparksReclaimed.load(),
+                 (unsigned long long)k.parkedHeaps.load(), (unsigned long long)(k.parkedHeapBytes.load() >> 10),
+                 (unsigned long long)k.heapParks.load(), (unsigned long long)k.heapUnparksResident.load(),
+                 (unsigned long long)k.heapUnparksReclaimed.load());
     }
 #if SWITCH_FRAME_TIMELINE
     {

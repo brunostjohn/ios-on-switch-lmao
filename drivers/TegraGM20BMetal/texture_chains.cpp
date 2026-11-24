@@ -119,7 +119,7 @@ bool Device::createBlockTextureOver(void *bytes, uint64_t length, uint32_t width
     SWITCH_METAL_DIAGNOSTIC(stats.imports++);
     SWITCH_METAL_DIAGNOSTIC(stats.importsMade++);
     SWITCH_METAL_DIAGNOSTIC(stats.importBytes += i->bo.bytes);
-    if (!inPlace && !blAlloc(layout.bytes, layout.align, t.span)) {
+    if (!inPlace && !blAlloc(l, layout.bytes, layout.align, t.span)) {
         release(i, deferred);
         return false;
     }

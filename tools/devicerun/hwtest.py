@@ -470,6 +470,7 @@ TESTS: dict[str, bool] = {
             'gpu.path.launch_target',
             'gpu.path.fresh_spare',
             'gpu.path.teardown_free',
+            'gpu.path.parked_bo',
             'gpu.frame.record_cost',
             'metal.native.depth_stencil',
             'metal.native.shared_event',

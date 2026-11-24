@@ -102,17 +102,17 @@ bool Device::createTexture(uint32_t width, uint32_t height, uint32_t format, Tex
     if (probeCompressNext.exchange(false) && laid && !wc && !blocks && compressedKind(t.bpp, 0))
         return probeCompressible(bl, t, deferred);
 #endif
-    if (laid && blAlloc(bl.bytes, bl.align, t.span)) {
+    if (laid && blAlloc(l, bl.bytes, bl.align, t.span)) {
         tiledRows(t, bl);
     } else if (blocks) {
         return false;
-    } else if (wc && wcAlloc(bytes, t.span)) {
+    } else if (wc && wcAlloc(l, bytes, t.span)) {
         t.wc = true;
         SWITCH_METAL_DIAGNOSTIC(stats.wcBytes += t.span.bytes);
     } else {
         if (wc)
             SWITCH_METAL_DIAGNOSTIC(stats.wcFallbacks++);
-        if (!poolAlloc(bytes, t.span))
+        if (!poolAlloc(l, bytes, t.span))
             return false;
     }
     t.va = t.span.va;
@@ -302,8 +302,8 @@ bool Device::createLaidOut(const TextureAsk &ask, Texture &t, const ArenaAt *at)
     Bo comp;
     const bool compressed = ask.compressKind && !at && !zeta && takeCompressed(bytes, ask.compressKind, comp);
     const bool placed = compressed || (at     ? arenaSpan(l, *at, bytes, align, kind, t)
-                                       : zeta ? tiledAlloc(zChunks_[z], kind, bytes, align, owned)
-                                              : blAlloc(bytes, align, t.span));
+                                       : zeta ? tiledAlloc(l, zChunks_[z], kind, bytes, align, owned)
+                                              : blAlloc(l, bytes, align, t.span));
     if (!placed) {
         delete chain;
         return false;

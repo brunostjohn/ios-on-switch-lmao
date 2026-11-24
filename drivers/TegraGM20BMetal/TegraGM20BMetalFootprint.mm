@@ -151,10 +151,12 @@ void gm20bMemoryTick()
     os_log(gm20bLog(),
            "SwitchMetal: memory held %llu KB: chunks %llu KB in %u (pinned %llu KB in %u, kept for reuse %llu KB), "
            "write-combined %llu KB, heaps %llu KB, kept imports %llu KB, tables %llu KB; GPU-only heaps %llu KB, "
-           "volatile heaps %llu KB; footprint %llu KB %s, IOKit %llu KB",
+           "volatile heaps %llu KB; parked chunks %llu KB in %u, heaps %llu KB in %u; footprint %llu KB %s, "
+           "IOKit %llu KB",
            kb(held), kb(int64_t(h.chunks)), h.chunkCount, kb(int64_t(h.pinned)), h.pinnedCount, kb(int64_t(h.reuse)),
            kb(int64_t(h.writeCombined)), kb(int64_t(h.heaps)), kb(int64_t(h.kept)), kb(int64_t(h.tables)),
-           kb(int64_t(h.gpuHeaps)), kb(int64_t(h.volatileHeaps)), kb(f.footprint), limit, kb(f.iokit));
+           kb(int64_t(h.gpuHeaps)), kb(int64_t(h.volatileHeaps)), kb(int64_t(h.parkedChunks)), h.parkedChunkCount,
+           kb(int64_t(h.parkedHeaps)), h.parkedHeapCount, kb(f.footprint), limit, kb(f.iokit));
 }
 
 void logGivenBack(size_t relieved, const SwitchMetalPassTrim &passes, const gm20b::Device::Trimmed &kept,
@@ -189,7 +191,7 @@ void logGivenBack(size_t relieved, const SwitchMetalPassTrim &passes, const gm20
         "KB%s; shader heap in place %llu KB (file pages: no footprint); compiler store mapped %llu KB (external pager "
         "%d, resident %llu KB); malloc gave back %llu KB; trim let go %zu kept surface imports (%llu KB) and %zu pass "
         "copies naming %zu textures; volatile purge %u (%llu KB), kept %u (%llu KB: committed %u/%u, leases %u, "
-        "in-flight %u, busy %u, non-empty %u)",
+        "in-flight %u, busy %u, non-empty %u); parked chunks %llu KB in %u, heaps %llu KB in %u",
         kb(f.footprint), kb(f.internal - f.alternate), kb(int64_t(heap.size_in_use)), kb(int64_t(heap.size_allocated)),
         kb(pool), (unsigned long long)d.stats.poolChunks.load(), kb(int64_t(d.arenaBytes())), kb(int64_t(arenaPlaced)),
         kb(int64_t(arenaVolatile)), kb(int64_t(arenaGiven)), kb(copies), kb(rest),
@@ -199,6 +201,7 @@ void logGivenBack(size_t relieved, const SwitchMetalPassTrim &passes, const gm20
         kb(int64_t(d.heapInPlaceBytes())), kb(int64_t(store.mapped)), int(store.external), kb(int64_t(store.resident)),
         kb(int64_t(relieved)), kept.keptImports, kb(int64_t(kept.keptImportBytes)), passes.passes, passes.textures,
         purge.purged, kb(int64_t(purge.purgedBytes)), purge.skipped, kb(int64_t(purge.skippedBytes)), purge.committed,
-        purge.committedCount, purge.leases, purge.inFlight, purge.busy, purge.nonEmpty);
+        purge.committedCount, purge.leases, purge.inFlight, purge.busy, purge.nonEmpty, kb(int64_t(held.parkedChunks)),
+        held.parkedChunkCount, kb(int64_t(held.parkedHeaps)), held.parkedHeapCount);
 }
 #endif

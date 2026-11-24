@@ -89,8 +89,9 @@ bool RenderEncoder::prepareShaderTests(const Pipeline &pipeline, const char **wh
         shape.layers = std::max(pass_.layers, 1u);
         if (!(slot = dev_->lastBacking(shape, tag, true, false))) {
             Device::DeferredFrees deferred(*dev_);
-            SWITCH_METAL_ENCODE_LOCK(lock, dev_->lock_);
-            slot = dev_->backing(deferred, shape, tag, true, false);
+            std::unique_lock<gm20b::Mutex> lock(dev_->lock_);
+            SWITCH_METAL_ENCODE_COUNT(Locks);
+            slot = dev_->backing(lock, deferred, shape, tag, true, false);
         }
         if (!slot)
             return false;

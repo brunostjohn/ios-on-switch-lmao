@@ -179,12 +179,14 @@ bool Kernel::bind(uint64_t va, uint64_t handle, uint64_t range, uint32_t kind, b
 }
 
 bool Kernel::alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind, uint64_t align, bool gpuVolatile, bool control,
-                   bool cpu, uint64_t at)
+                   bool cpu, uint64_t at, bool systemOnly)
 {
     bytes = (bytes + info_.page_size - 1) & ~uint64_t(info_.page_size - 1);
     TegraGM20BAbiBoAlloc a = {bytes, 12, coherent ? uint32_t(TegraGM20BBoCoherent) : 0u};
     if (control && coherent && !kind)
         a.flags |= TegraGM20BBoControl;
+    if (systemOnly && coherent && !control)
+        a.flags |= TegraGM20BBoSystem;
     TegraGM20BAbiBoAllocReply r = {};
     bo = {};
     if (call(TegraGM20BMethodBoAlloc, &a, sizeof a, &r, sizeof r) != KERN_SUCCESS) {
@@ -439,7 +441,7 @@ void Kernel::unbind(uint64_t va, uint64_t range)
 void Kernel::free(Bo &bo)
 {
     const bool listed = bo.handle && freeObserver_ && freeObserver_->leaving(bo.handle);
-    if (bo.token && bo.cpu)
+    if (bo.token && bo.cpu && !bo.parked)
         unmap(bo.token, uint64_t(uintptr_t(bo.cpu)));
     if (bo.handle) {
         TegraGM20BAbiBoFree f = {bo.handle};
@@ -454,6 +456,52 @@ void Kernel::free(Bo &bo)
     bo = {};
     if (listed)
         freeObserver_->left(*this);
+}
+
+int Kernel::park(uint64_t handle, bool guardNone)
+{
+    if (!supportsBoPark())
+        return kIOReturnUnsupported;
+    if (!handle)
+        return kIOReturnBadArgument;
+    const TegraGM20BAbiBoPark in = {handle, guardNone ? uint32_t(TegraGM20BParkGuard) : 0u, 0};
+    return call(TegraGM20BMethodBoPark, &in, sizeof in, nullptr, 0);
+}
+
+int Kernel::unpark(uint64_t handle, uint64_t &address, uint64_t &bytes, uint32_t &status)
+{
+    address = 0;
+    bytes = 0;
+    status = 0;
+    if (!supportsBoPark())
+        return kIOReturnUnsupported;
+    if (!handle)
+        return kIOReturnBadArgument;
+    const TegraGM20BAbiBoUnpark in = {handle, 0, 0};
+    TegraGM20BAbiBoUnparkReply r = {};
+    const int kr = call(TegraGM20BMethodBoUnpark, &in, sizeof in, &r, sizeof r);
+    if (kr == KERN_SUCCESS) {
+        address = r.address;
+        bytes = r.bytes;
+        status = r.status;
+    }
+    return kr;
+}
+
+bool Kernel::mapAt(uint32_t token, uint64_t bytes, uint64_t fixedVa, bool readOnly)
+{
+    if (!(info_.flags & TegraGM20BInfoKernelMap) || !token || !fixedVa)
+        return false;
+    const TegraGM20BAbiMap in = {
+        token, uint32_t(TegraGM20BMapFixed) | (readOnly ? uint32_t(TegraGM20BMapReadOnly) : 0u), fixedVa};
+    TegraGM20BAbiMapReply r = {};
+    if (call(TegraGM20BMethodMap, &in, sizeof in, &r, sizeof r) != KERN_SUCCESS)
+        return false;
+    if (r.address != fixedVa || r.bytes < bytes) {
+        unmap(token, r.address);
+        return false;
+    }
+    return true;
 }
 
 bool Kernel::channel(uint32_t engines, uint32_t &channel, const volatile uint32_t *&fence)

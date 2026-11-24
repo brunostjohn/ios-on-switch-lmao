@@ -231,6 +231,8 @@ host_library(
         "memory",
         "multisample",
         "pack",
+        "parked_arena",
+        "parked_chunks",
         "pass_backings",
         "pass_begin",
         "pass_clears",
@@ -4674,6 +4676,8 @@ METAL_HOST_UNITS = ["//drivers/TegraGM20BMetal:fx/" + f for f in [
     "multisample",
     "object_pool",
     "pack",
+    "parked_arena",
+    "parked_chunks",
     "pass_backings",
     "pass_begin",
     "pass_clears",
@@ -4835,6 +4839,7 @@ objc_library(
 ) for name in [
     "facade_arguments_test",
     "facade_heap_use_test",
+    "facade_parked_heap_test",
     "facade_probe_test",
     "facade_render_server_test",
 ]]
@@ -4849,6 +4854,7 @@ objc_library(
 ) for name in [
     "facade_arguments_test",
     "facade_heap_use_test",
+    "facade_parked_heap_test",
     "facade_probe_test",
     "facade_render_server_test",
 ]]
@@ -6602,6 +6608,44 @@ host_test(
     copts = METAL_HOST_COPTS + ["-DSWITCH_METAL_HARNESS_MARKS"],
     cxx_std = "c++17",
     deps = METAL_HOST_DEPS + ["//kits/SwitchGM20B:classes"],
+)
+
+host_test(
+    name = "device_parked_tsan_test",
+    size = "medium",
+    srcs = [
+        "device_parked_tsan_test.cpp",
+        "empty_pack.h",
+        "translate_absent.cpp",
+        "kernel_model.h",
+    ] + METAL_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+        "-fsanitize=thread",
+    ] + METAL_HOST_COPTS,
+    cxx_std = "c++17",
+    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
+    linkopts = [
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Metal",
+        "-framework",
+        "IOSurface",
+        "-framework",
+        "IOKit",
+        "-framework",
+        "CoreFoundation",
+        "-lobjc",
+        "-fsanitize=thread",
+    ],
+    sanitize = False,
+    deps = [
+        ":runtime_plugin_tsan",
+        "//kits/SwitchRefusal:switch_refusal",
+    ] + METAL_HOST_DEPS,
 )
 
 host_test(

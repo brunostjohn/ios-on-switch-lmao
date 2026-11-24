@@ -323,14 +323,32 @@ Device::~Device()
     {
         std::lock_guard<gm20b::Mutex> l(lock_);
         stopping_ = true;
+        closing_ = true;
     }
     grow_.notify_all();
+    grown_.notify_all();
     if (grower_.joinable())
         grower_.join();
     compStop();
+    releaseParkedChunksOnClose();
     {
         DeferredFrees deferred(*this);
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::unique_lock<gm20b::Mutex> l(lock_);
+        arenaReady_.wait(l, [&] {
+            return std::none_of(arenas_.begin(), arenas_.end(), [](const Arena &a) {
+                return a.busy;
+            });
+        });
+        for (Arena &a : arenas_)
+            if (a.used && a.kernelBo && a.purged && a.bo.handle) {
+                if (a.boParked) {
+                    SWITCH_METAL_DIAGNOSTIC(stats.parkedHeaps--);
+                    SWITCH_METAL_DIAGNOSTIC(stats.parkedHeapBytes -= a.bytes);
+                }
+                deferred.add({a.bo});
+                a.bo = {};
+                a.boParked = false;
+            }
         dropKeptImports(deferred);
         std::vector<Bo> nativeBos;
         reapNativeSurfaces(nativeBos, true);
@@ -540,15 +558,15 @@ bool Device::init(std::string &err)
     // first pool chunk
     {
         DeferredFrees deferred(*this);
-        std::lock_guard<gm20b::Mutex> l(lock_);
+        std::unique_lock<gm20b::Mutex> l(lock_);
         if (!packWindowBytes_)
             heapGrow(heapCopiesAt_ + std::min<uint64_t>(pack_.bytes(PackHeap) + kHeapSlack, kHeapAtOpen));
         Span first;
-        if (blAlloc(1, 0, first))
+        if (blAlloc(l, 1, 0, first))
             blFree(first, deferred);
+        uint32_t chunk;
+        newChunk(sizes_.chunk, false, l, chunk);
     }
-    uint32_t chunk;
-    newChunk(sizes_.chunk, false, nullptr, chunk);
     return true;
 }
 

@@ -146,7 +146,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
             backingLock.lock();
             SWITCH_METAL_ENCODE_COUNT(Locks);
         }
-        return dev_->backing(deferred, shape, tag, linear, compression, copied);
+        return dev_->backing(backingLock, deferred, shape, tag, linear, compression, copied);
     };
     // a colour texture as the depth attachment: a Depth32Float backing (zeta_colour.h)
     const Texture zetaShape = zeta && !zeta->zeta ? colourAsDepthShape(*zeta) : zeta ? *zeta : Texture();

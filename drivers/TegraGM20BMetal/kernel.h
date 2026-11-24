@@ -37,6 +37,7 @@ struct Bo {
         false;  // bound inside a reservation (bindImportAt): the VA is the reservation's, not freed with it
     bool allocated = false;  // a BoAlloc's (Kernel::allocatedBytes counts it), not an import
     bool control = false;    // from the control reserve (Kernel::controlMappedBytes counts its mapping)
+    bool parked = false;
 };
 
 // The offset into `bo` of the CPU bytes [cpu, cpu + bytes): bo.cpu is the CPU address of bo.va, which lies bo.va - bo.vaBase
@@ -117,7 +118,8 @@ public:
     // CPU at bo.cpu; an IOKit mapping counts whole in the task's phys_footprint (iokit_mapped), touched or not. `at`: bound
     // at that VA of a reservation (reserveVa), which freeing the BO leaves to the reservation; 0: a VA of its own.
     bool alloc(uint64_t bytes, bool coherent, Bo &bo, uint32_t kind = 0, uint64_t align = 0x10000,
-               bool gpuVolatile = false, bool control = false, bool cpu = true, uint64_t at = 0);
+               bool gpuVolatile = false, bool control = false, bool cpu = true, uint64_t at = 0,
+               bool systemOnly = false);
 
     // Memory only the GPU reads and writes (shader local memory): no CPU mapping
     bool allocGpu(uint64_t bytes, Bo &bo)
@@ -179,6 +181,16 @@ public:
     {
         return (info_.flags & TegraGM20BInfoPackImage) != 0;
     }
+
+    bool supportsBoPark() const
+    {
+        return (info_.flags & TegraGM20BInfoBoPark) != 0;
+    }
+
+    int park(uint64_t handle, bool guardNone);
+    int unpark(uint64_t handle, uint64_t &address, uint64_t &bytes, uint32_t &status);
+    bool mapAt(uint32_t token, uint64_t bytes, uint64_t fixedVa, bool readOnly = false);
+    void unmap(uint32_t token, uint64_t address);
 
     int packImageMap(const TegraGM20BAbiPackCpuRange *cpuRanges, uint32_t cpuRangeCount,
                      TegraGM20BAbiPackImageMapReply &reply);
@@ -355,7 +367,6 @@ private:
     int call(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize);
     void notResponding(uint32_t channel, uint32_t opened);
     bool map(uint32_t token, bool readOnly, uint64_t &address, uint64_t &bytes);
-    void unmap(uint32_t token, uint64_t address);
     bool bind(uint64_t va, uint64_t handle, uint64_t range, uint32_t kind, bool gpuVolatile = false);
     uint64_t allocVa(uint64_t bytes, uint64_t align);
     void freeVa(uint64_t va, uint64_t bytes);

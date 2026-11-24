@@ -519,6 +519,10 @@ public:
         uint64_t chunks = 0, pinned = 0, reuse = 0, writeCombined = 0;
         uint64_t heaps = 0, gpuHeaps = 0, volatileHeaps = 0, kept = 0, tables = 0;
         uint32_t chunkCount = 0, pinnedCount = 0;
+#if SWITCH_METAL_DIAGNOSTICS
+        uint64_t parkedChunks = 0, parkedHeaps = 0;
+        uint32_t parkedChunkCount = 0, parkedHeapCount = 0;
+#endif
     };
 
     bool held(Held &h, bool wait);
@@ -688,6 +692,7 @@ public:
     // purgedArenas() and the purge counts itself there before it reads `committed`, both sequentially consistent, so one of
     // them sees the other: the commit restores what it reaches, or the purge does not happen.
     bool setArenaVolatile(uint32_t arena, bool isVolatile);  // whether its pages had gone (arena_purge.h)
+    bool setArenaVolatileIfPurged(uint32_t arena);
     bool hasBoundVolatileArena();
     void purgeArena(uint32_t arena, const std::atomic<uint32_t> &committed);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -1013,6 +1018,10 @@ public:
         // heaps' arenas made and purged ones bound again, and the bytes of untouched host pages imported (a shared heap's),
         // each zero-filled by the kernel's wiring on the importing thread, since open
         std::atomic<uint64_t> arenasMade{0}, arenaRestores{0}, hostZeroedBytes{0};
+        std::atomic<uint64_t> parkedChunks{0}, parkedChunkBytes{0}, chunkParks{0}, chunkUnparksResident{0},
+            chunkUnparksReclaimed{0};
+        std::atomic<uint64_t> parkedHeaps{0}, parkedHeapBytes{0}, heapParks{0}, heapUnparksResident{0},
+            heapUnparksReclaimed{0};
         // the memory live textures took of their own and their kept blocks' (Texture::heldBytes, Buffer::keptBytes)
         std::atomic<uint64_t> textureBytes{0};
         // diagnostics: color targets the driver rendered whose address or pitch is not a multiple of 128 (NVK renders
@@ -1265,6 +1274,20 @@ private:
             outgrown;  // what the open command buffer grew out of (Device::alloc): freed once its work completes
     };
 
+    enum class ChunkPark : uint8_t {
+        Live = 0,
+        Parking,
+        Parked,
+        Unparking,
+    };
+
+    enum class ChunkVec : uint8_t {
+        Pool = 0,
+        Bl,
+        Zeta,
+        Wc,
+    };
+
     struct Chunk {
         Bo bo;
         void *memory = nullptr;
@@ -1276,7 +1299,34 @@ private:
         // a pool chunk a host-visible buffer was placed in: the CPU writes such a buffer outside any lease, so lines
         // it left may be dirty under a later owner of its span (Device::createBuffer)
         bool hostTouched = false;
+        ChunkPark park = ChunkPark::Live;
+        uint64_t parkedVa = 0;
     };
+
+    struct ParkCandidate {
+        ChunkVec vec = ChunkVec::Pool;
+        uint32_t zetaIndex = 0;
+        uint32_t index = 0;
+        Bo bo;
+        uint64_t bytes = 0;
+        uint64_t pitchVa = 0;
+        uint64_t mapped = 0;
+        bool dedicated = false;
+        bool parked = false;
+    };
+
+    static bool chunkSlotOccupied(const Chunk &ch)
+    {
+        return ch.memory != nullptr || ch.bo.handle != 0 || ch.park != ChunkPark::Live;
+    }
+
+    std::vector<Chunk> &chunkVec(ChunkVec vec, uint32_t zetaIndex = 0);
+    bool hasTransientChunksLocked() const;
+    void collectParkableChunksLocked(std::vector<ParkCandidate> &out);
+    void finishParkChunks(std::vector<ParkCandidate> &candidates);
+    bool tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uint32_t zetaIndex, uint64_t bytes,
+                        bool dedicated, uint64_t align, uint32_t setAccess, uint32_t &index, bool &resident);
+    void releaseParkedChunksOnClose();
 
     // A role's memory steps: the shared pool chunk (a span over half of one gets its own), a chunk of block-linear images, a
     // chunk of write-combined buffers, and the rings' first sizes (each doubles where an allocation waited, to the render
@@ -1716,12 +1766,12 @@ private:
     std::vector<Chunk> zChunks_[kZetaFormats];
     // write-combined buffers' memory: GPU-pool BOs (BoAlloc coherent: the CPU maps them write-combined), sub-allocated by page
     std::vector<Chunk> wcChunks_;
-    bool wcAlloc(uint64_t bytes, Span &s);
+    bool wcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s);
     void wcFree(Span &s, DeferredFrees &deferred);
 
-    bool blAlloc(uint64_t bytes, uint64_t align, Span &s)
+    bool blAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, uint64_t align, Span &s)
     {
-        return tiledAlloc(blChunks_, fx::kBlockLinearKind, bytes, align, s);
+        return tiledAlloc(l, blChunks_, fx::kBlockLinearKind, bytes, align, s);
     }
 
     void blFree(Span &s, DeferredFrees &deferred)
@@ -1745,6 +1795,8 @@ private:
         bool used = false, isVolatile = false, purged = false, dying = false;
         bool wc = false;    // its host pages are write-combined (arena.cpp hostPages)
         bool busy = false;  // an off-lock purge, trim or restore is in flight on this slot (lock_)
+        bool kernelBo = false;
+        bool boParked = false;
 
         // its BO bound again under another PTE kind (createArena's comment)
         struct View {
@@ -1776,14 +1828,19 @@ private:
     std::atomic<uint32_t> purgedArenas_{0};
     void waitArena(std::unique_lock<gm20b::Mutex> &l, uint32_t index);
     bool restoreArenaLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index);
-    bool bindArena(Arena &a, DeferredFrees &deferred);  // lock_ held (createArena)
+    bool restoreKernelArenaOffLock(bool wasParked, Bo &oldBo, uint8_t *cpu, uint64_t va, uint64_t bufferVa,
+                                   uint64_t bytes, uint32_t kind, const std::vector<Arena::View> &views, Bo &outBo,
+                                   bool &unparkResident, bool &unparkReclaimed, bool &unparkMismatch);
+    bool bindArenaOffLock(Arena &a);
     // lock_ held: [offset, offset + bytes) of `a`'s host range imported and bound at its VAs as one more part
     bool bindArenaPart(Arena &a, uint64_t offset, uint64_t bytes);
     void unbindArena(Arena &a, DeferredFrees &deferred);  // lock_ held: its import, whole or in parts, detached
     void trimLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const std::atomic<uint32_t> &committed);
     // lock_ held: the holes a placement of [offset, offset + bytes) reaches bound again; false: no memory for them
     bool backPlacement(Arena &a, uint64_t offset, uint64_t bytes);
-    bool purgeLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const std::atomic<uint32_t> &committed);
+    bool purgeKernelArenaLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index);
+    bool purgeLocked(std::unique_lock<gm20b::Mutex> &l, uint32_t index, const std::atomic<uint32_t> &committed,
+                     bool *parkBusy = nullptr);
     void freeArena(Arena &a, DeferredFrees &deferred);                                    // lock_ held
     void arenaFree(std::unique_lock<gm20b::Mutex> &l, Span &s, DeferredFrees &deferred);  // lock_ held
     const ArenaStorage *arenaStorage(const Arena &arena, uint32_t index, uint64_t offset, uint64_t bytes, uint64_t va,
@@ -1802,12 +1859,13 @@ private:
     bool arenaSpan(std::unique_lock<gm20b::Mutex> &l, const ArenaAt &at, uint64_t bytes, uint64_t align, uint32_t kind,
                    Texture &t);
 
-    // a span of chunks bound with PTE kind `kind` (block-linear images), lock_ held
-    bool tiledAlloc(std::vector<Chunk> &chunks, uint32_t kind, uint64_t bytes, uint64_t align, Span &s);
+    // a span of chunks bound with PTE kind `kind` (block-linear images), lock_ held through `l`
+    bool tiledAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &chunks, uint32_t kind, uint64_t bytes,
+                    uint64_t align, Span &s);
     void tiledFree(std::vector<Chunk> &chunks, Span &s, DeferredFrees &deferred);
-    // lock_ held (`unlocked`: the caller's lock, let go for the kernel's wiring); the chunk's index in `chunks`
+    // lock_ held through `l` (released across the kernel's call); the chunk's index in `chunks`
     bool newTiledChunk(std::vector<Chunk> &chunks, uint32_t kind, uint64_t size, bool dedicated,
-                       std::unique_lock<gm20b::Mutex> *unlocked, uint32_t &index);
+                       std::unique_lock<gm20b::Mutex> &l, uint32_t &index);
     // the free bytes of a kind's shared chunks, lock_ held
     static uint64_t tiledFreeBytes(const std::vector<Chunk> &chunks);
 
@@ -1874,7 +1932,8 @@ private:
     PlainMem *largestPlain(uint32_t tag, uint32_t memory, bool layered) const;
     // A memoryless backing of `m`'s shape on the largest plain memory of its tag and memory, made where none holds it;
     // nullptr when no memory or header is had
-    Backing *plainBacking(const Texture &m, uint32_t tag, bool blockLinear, DeferredFrees &deferred);
+    Backing *plainBacking(std::unique_lock<gm20b::Mutex> &l, const Texture &m, uint32_t tag, bool blockLinear,
+                          DeferredFrees &deferred);
     void plainFree(Backing &b, DeferredFrees &deferred);
     void freePlainSpan(PlainMem &mem, DeferredFrees &deferred);
     void dropPlain(PlainMem *mem, DeferredFrees &deferred);  // its span back, and it out of plainMems_
@@ -1932,11 +1991,11 @@ private:
     std::atomic<bool> trimmedPending_{false};
     // the pool's growth ahead of need (lock_): free bytes of its shared chunks, a chunk being made by the grower thread
     uint64_t poolFree_ = 0;
-    bool growing_ = false, stopping_ = false;
-    gm20b::CondVar grow_, grown_;
+    bool growing_ = false, stopping_ = false, closing_ = false;
+    uint32_t offLockChunkOps_ = 0;
+    gm20b::CondVar grow_, grown_, chunkReady_;
     std::thread grower_;
-    bool chunkMemory(uint64_t size, uint32_t kind, std::unique_lock<gm20b::Mutex> *unlocked, Chunk &ch);
-    bool newChunk(uint64_t size, bool dedicated, std::unique_lock<gm20b::Mutex> *unlocked, uint32_t &index);
+    bool newChunk(uint64_t size, bool dedicated, std::unique_lock<gm20b::Mutex> &l, uint32_t &index);
     void growLoop();
     // Written by the submitting thread alone (the submit worker, which runs every move too), each a load and a store; a
     // command buffer's backings are marked used before closedCount_ moves
@@ -2025,7 +2084,7 @@ private:
     uint32_t allocTicPair();
     void freeTicPair(uint32_t first);
     void writeTic(const Texture &t);
-    bool poolAlloc(uint64_t bytes, Span &s);
+    bool poolAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s);
     void poolFree(Span &s, DeferredFrees &deferred);
     bool tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch, Texture &t,
                              Texture *sampled, DeferredFrees &deferred);
@@ -2057,8 +2116,8 @@ private:
     // Scratch colors occupy distinct tags within a pass and reuse them after its GPU boundary. Depth and shader-test
     // scratch remain separate. Plain and compressed views keep their own backing and retire after their final fence.
     // `copied`: the copy engine fills or drains it (a shadow), so it compresses only where comp.h proves that safe.
-    Texture *backing(DeferredFrees &deferred, const Texture &memoryless, uint32_t tag = 0, bool blockLinear = false,
-                     bool compression = true, bool copied = false);
+    Texture *backing(std::unique_lock<gm20b::Mutex> &l, DeferredFrees &deferred, const Texture &memoryless,
+                     uint32_t tag = 0, bool blockLinear = false, bool compression = true, bool copied = false);
     // The backing backing() last answered the same ask with, taken with no lock while nothing that decides backings has
     // changed since (backingEpoch_); nullptr: ask backing() under lock_. The encoding thread's alone.
     Texture *lastBacking(const Texture &memoryless, uint32_t tag = 0, bool blockLinear = false, bool compression = true,

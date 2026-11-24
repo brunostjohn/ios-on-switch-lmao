@@ -39,7 +39,7 @@ bool Device::createTexelRows(std::unique_lock<gm20b::Mutex> &l, Import *i, uint6
     const uint64_t bytes = uint64_t(elements) * f->bpp;
     const TexelRowsParts parts = texelRowsParts(i->layout, offset, bytesPerRow, bytes);
     t = {};
-    if (!poolAlloc(bytes, t.span)) {
+    if (!poolAlloc(l, bytes, t.span)) {
         surfaceRefusal = "no memory for the pool a texel buffer over a block-linear surface is held in";
         return false;
     }

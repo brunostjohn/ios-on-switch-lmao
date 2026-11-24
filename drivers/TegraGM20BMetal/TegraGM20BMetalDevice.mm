@@ -179,7 +179,17 @@
         @"imports_made" : @(d.stats.importsMade.load()),
         @"arenas_made" : @(d.stats.arenasMade.load()),
         @"arena_restores" : @(d.stats.arenaRestores.load()),
-        @"host_zeroed" : @(d.stats.hostZeroedBytes.load())
+        @"host_zeroed" : @(d.stats.hostZeroedBytes.load()),
+        @"parked_chunks" : @(d.stats.parkedChunkBytes.load()),
+        @"parked_chunk_count" : @(d.stats.parkedChunks.load()),
+        @"chunk_parks" : @(d.stats.chunkParks.load()),
+        @"chunk_unparks_resident" : @(d.stats.chunkUnparksResident.load()),
+        @"chunk_unparks_reclaimed" : @(d.stats.chunkUnparksReclaimed.load()),
+        @"parked_heaps" : @(d.stats.parkedHeapBytes.load()),
+        @"parked_heap_count" : @(d.stats.parkedHeaps.load()),
+        @"heap_parks" : @(d.stats.heapParks.load()),
+        @"heap_unparks_resident" : @(d.stats.heapUnparksResident.load()),
+        @"heap_unparks_reclaimed" : @(d.stats.heapUnparksReclaimed.load())
     };
 }
 
