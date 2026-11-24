@@ -37,7 +37,8 @@ struct switch_gpt_header {
 struct switch_gpt_extent {
     uint64_t first, last;
     uint8_t guid[16], type_guid[16];
-    uint32_t partition_index, basic_data;
+    uint32_t partition_index;
+    uint8_t basic_data, writable, hos_data;
 };
 
 /* Caller-owned scratch, normally static for kernel callers. No initialization
@@ -46,7 +47,6 @@ struct switch_gpt_workspace {
     uint8_t sectors[2][512];
     struct switch_gpt_header headers[2];
     struct switch_gpt_extent used[SWITCH_GPT_MAX_ENTRIES];
-    uint32_t writable_hos_data_at_zero;
 };
 
 /* Strict GPT validation only, shared by FAT selection and raw APFS discovery.

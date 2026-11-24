@@ -59,35 +59,59 @@ bool exfat(const uint8_t *b, uint64_t sectors)
            root >= 2 && root < clusters + 2;
 }
 
-uint8_t hybridType(const uint8_t *mbr, const switch_gpt_extent &data, uint64_t capacity)
+enum class MbrMatch : uint8_t {
+    Invalid,
+    None,
+    Mirror,
+};
+
+struct MbrResult {
+    MbrMatch match;
+    uint8_t type;
+};
+
+bool validMbr(const uint8_t *mbr, uint64_t capacity)
 {
-    uint8_t mirror = 0;
     for (unsigned i = 0; i < 4; ++i) {
         const uint8_t *p = mbr + 446 + 16 * i;
         const uint8_t type = p[4];
         const uint64_t first = le32(p + 8), count = le32(p + 12);
         if (p[0] != 0 && p[0] != 0x80)
-            return 0;
+            return false;
         if (!type) {
             if (first || count || p[0])
-                return 0;
+                return false;
+            continue;
+        }
+        if (type == 0xee) {
+            // Some partitioners saturate protective 0xee SizeInLBA to UINT32_MAX even on cards under 2 TiB.
+            if (first != 1 || !count || (count != UINT32_MAX && count > capacity - first))
+                return false;
             continue;
         }
         if (!first || !count || first >= capacity || count > capacity - first)
-            return 0;
-        if (type == 0xee) {
-            if (first != 1)
-                return 0;
+            return false;
+    }
+    return true;
+}
+
+MbrResult matchMbr(const uint8_t *mbr, const switch_gpt_extent &data)
+{
+    uint8_t mirror = 0;
+    const uint64_t length = data.last - data.first + 1;
+    for (unsigned i = 0; i < 4; ++i) {
+        const uint8_t *p = mbr + 446 + 16 * i;
+        const uint8_t type = p[4];
+        if (!type || type == 0xee)
             continue;
-        }
+        const uint64_t first = le32(p + 8), count = le32(p + 12);
         if (first > data.last || first + count <= data.first)
             continue;
-        if (mirror || first != data.first || count != data.last - data.first + 1 ||
-            (type != 0x0b && type != 0x0c && type != 0x07))
-            return 0;
+        if (mirror || first != data.first || count != length || (type != 0x0b && type != 0x0c && type != 0x07))
+            return {MbrMatch::Invalid, 0};
         mirror = type;
     }
-    return mirror;
+    return mirror ? MbrResult{MbrMatch::Mirror, mirror} : MbrResult{MbrMatch::None, 0};
 }
 
 void copyCid(const switch_sd_card &card, uint8_t cid[16])
@@ -127,36 +151,83 @@ int switch_sd_files_select(switch_sd_read_sector_fn read, void *context, const v
     int error = switch_gpt_scan(read, context, card.capacity_sectors, work, &used);
     if (error)
         return error;
-    if (used < 2 || !work->writable_hos_data_at_zero)
-        return SWITCH_GPT_NOT_FOUND;
-    const auto &data = work->used[0];
-    bool rootFound = false;
-    for (uint32_t i = 1; i < used; ++i) {
+    uint32_t rootIndex = used;
+    for (uint32_t i = 0; i < used; ++i) {
         const auto &entry = work->used[i];
         if (root_first == entry.first && root_sectors == entry.last - entry.first + 1)
-            rootFound = true;
+            rootIndex = i;
     }
-    if (!rootFound)
+    if (rootIndex == used)
         return SWITCH_GPT_MISMATCH;
-    const uint8_t type = hybridType(reference.sector, data, card.capacity_sectors);
-    if (!type)
+    if (!validMbr(reference.sector, card.capacity_sectors))
         return SWITCH_GPT_MBR;
-    uint8_t *boot = work->sectors[0];
-    if (read(context, data.first, boot))
-        return SWITCH_GPT_IO;
-    if (boot[510] != 0x55 || boot[511] != 0xaa)
-        return SWITCH_GPT_PROBE;
-    const uint64_t count = data.last - data.first + 1;
-    const bool isExfat = !memcmp(boot + 3, "EXFAT   ", 8);
-    if (isExfat) {
-        if (type == 0x0b || !exfat(boot, count))
-            return SWITCH_GPT_PROBE;
-    } else if (type == 0x07 || !fat32(boot, count)) {
-        return SWITCH_GPT_PROBE;
+
+    struct Candidate {
+        uint32_t index;
+        bool exfat;
+    };
+
+    Candidate chosen{}, hos{}, mirrored{};
+    uint32_t count = 0, hosCount = 0, mirroredCount = 0;
+    bool sawMbrReject = false, sawProbeReject = false;
+
+    for (uint32_t i = 0; i < used; ++i) {
+        if (i == rootIndex)
+            continue;
+        const auto &entry = work->used[i];
+        if (!entry.basic_data || !entry.writable)
+            continue;
+        const MbrResult mbr = matchMbr(reference.sector, entry);
+        if (mbr.match == MbrMatch::Invalid) {
+            sawMbrReject = true;
+            continue;
+        }
+        uint8_t *boot = work->sectors[0];
+        if (read(context, entry.first, boot))
+            return SWITCH_GPT_IO;
+        if (boot[510] != 0x55 || boot[511] != 0xaa) {
+            sawProbeReject = true;
+            continue;
+        }
+        const uint64_t sectors = entry.last - entry.first + 1;
+        const bool isExfat = !memcmp(boot + 3, "EXFAT   ", 8);
+        if (isExfat) {
+            if ((mbr.match == MbrMatch::Mirror && mbr.type == 0x0b) || !exfat(boot, sectors)) {
+                sawProbeReject = true;
+                continue;
+            }
+        } else if ((mbr.match == MbrMatch::Mirror && mbr.type == 0x07) || !fat32(boot, sectors)) {
+            sawProbeReject = true;
+            continue;
+        }
+        const Candidate candidate = {i, isExfat};
+        chosen = candidate;
+        ++count;
+        if (entry.hos_data) {
+            hos = candidate;
+            ++hosCount;
+        }
+        if (mbr.match == MbrMatch::Mirror) {
+            mirrored = candidate;
+            ++mirroredCount;
+        }
     }
-    result->exfat = isExfat;
+
+    if (!count)
+        return sawMbrReject ? SWITCH_GPT_MBR : sawProbeReject ? SWITCH_GPT_PROBE : SWITCH_GPT_NOT_FOUND;
+    if (count > 1) {
+        if (hosCount == 1)
+            chosen = hos;
+        else if (!hosCount && mirroredCount == 1)
+            chosen = mirrored;
+        else
+            return SWITCH_GPT_AMBIGUOUS;
+    }
+
+    const auto &data = work->used[chosen.index];
+    result->exfat = chosen.exfat;
     result->first_sector = data.first;
-    result->sector_count = count;
+    result->sector_count = data.last - data.first + 1;
     memcpy(result->unique_guid, data.guid, sizeof(data.guid));
     copyCid(card, result->cid);
     return SWITCH_GPT_OK;
