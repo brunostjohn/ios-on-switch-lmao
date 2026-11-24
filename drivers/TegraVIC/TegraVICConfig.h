@@ -239,8 +239,8 @@ static inline void tegra_vic_matrix_apply(const TegraVICMatrix *m, const uint32_
 {
     for (int r = 0; r < 3; r++) {
         int64_t acc = (int64_t)m->c[r][0] * in10[0] + (int64_t)m->c[r][1] * in10[1] + (int64_t)m->c[r][2] * in10[2];
-        acc = (acc >> m->shift) + m->c[r][3];  // NOLINT(bugprone-signed-bitwise): arithmetic shift, see above
-        acc >>= 8;                             // NOLINT(bugprone-signed-bitwise): arithmetic shift, see above
+        acc = (acc >> m->shift) + m->c[r][3] + 128;  // NOLINT(bugprone-signed-bitwise): arithmetic shift
+        acc >>= 8;                                   // NOLINT(bugprone-signed-bitwise): arithmetic shift
         out10[r] = tegra_vic_clamp(acc, 1023);
     }
 }
@@ -251,6 +251,21 @@ static inline int32_t tegra_vic_fix(int64_t micros, int64_t one)
     const int64_t n = micros * one;
     return (int32_t)(n >= 0 ? (n + 500000) / 1000000 : -((-n + 500000) / 1000000));
 }
+
+static inline int32_t tegra_vic_fix_nano(int64_t nanos, int64_t one)
+{
+    const int64_t n = nanos * one;
+    return (int32_t)(n >= 0 ? (n + 500000000) / 1000000000 : -((-n + 500000000) / 1000000000));
+}
+
+// T210B01 VIC widens 8-bit inputs across 0..1023 ((x << 2) | (x >> 6)), rounds the matrix >> 8 stage, and narrows to
+// 8-bit by >> 2 (4 steps per code, 255 * 4 = 1020). Gains therefore carry 1020/1023, input zero points sit at their
+// 0..1023 positions (in milli-steps), and +384 (+1.5 steps) plus the stage's +0.5 step lands on +2.0 (+0.5 8-bit code).
+enum {
+    TEGRA_VIC_MATRIX_BIAS = 384,
+    TEGRA_VIC_Y0_MILLI = 64188,
+    TEGRA_VIC_C0_MILLI = 513506,
+};
 
 enum {
     TEGRA_VIC_YCC_601 = 0,
@@ -272,7 +287,7 @@ typedef struct {
 } TegraVICChroma;
 
 // RGB (pipeline channels R, G, B) -> Y'CbCr, 8-bit video range (Y 16..235, C 16..240) or full range (Y 0..255, C 128
-// +- 127.5), rounded to nearest at the final >> 2 (offset + 2 10-bit steps).
+// +- 127.5).
 static inline void tegra_vic_matrix_rgb_to_ycc(uint32_t standard, bool full, const TegraVICChroma *ch,
                                                TegraVICMatrix *m)
 {
@@ -280,8 +295,8 @@ static inline void tegra_vic_matrix_rgb_to_ycc(uint32_t standard, bool full, con
     int64_t kb = 0;
     tegra_vic_kr_kb(standard, &kr, &kb);
     const int64_t kg = 1000000 - kr - kb;
-    const int64_t ys = full ? 1000000 : 1000000 * 219 / 255;
-    const int64_t cs = full ? 1000000 : 1000000 * 224 / 255;
+    const int64_t ys = (full ? 1000000 : 1000000 * 219 / 255) * 1020 / 1023;
+    const int64_t cs = (full ? 1000000 : 1000000 * 224 / 255) * 1020 / 1023;
     const int64_t one = (int64_t)(1ULL << (TEGRA_VIC_MATRIX_SHIFT + 8));
     // Rows in micro-units: Y = kr R + kg G + kb B; Cb = (B - Y) / (2 (1 - kb)); Cr = (R - Y) / (2 (1 - kr)).
     const int64_t y[3] = {kr * ys / 1000000, kg * ys / 1000000, kb * ys / 1000000};
@@ -296,10 +311,9 @@ static inline void tegra_vic_matrix_rgb_to_ycc(uint32_t standard, bool full, con
         m->c[ch->cbChannel][i] = tegra_vic_fix(cb[i], one);
         m->c[ch->crChannel][i] = tegra_vic_fix(cr[i], one);
     }
-    // Offsets in 10-bit steps (x256), +2 steps so out8 = out10 >> 2 rounds: Y 64 (video) or 0; C 512.
-    m->c[0][3] = (full ? 0 : 64 * 256) + 512;
-    m->c[ch->cbChannel][3] = 512 * 256 + 512;
-    m->c[ch->crChannel][3] = 512 * 256 + 512;
+    m->c[0][3] = (full ? 0 : 64 * 256) + TEGRA_VIC_MATRIX_BIAS;
+    m->c[ch->cbChannel][3] = 512 * 256 + TEGRA_VIC_MATRIX_BIAS;
+    m->c[ch->crChannel][3] = 512 * 256 + TEGRA_VIC_MATRIX_BIAS;
 }
 
 // Y'CbCr -> RGB, the inverse: R = Y + 2(1-kr) Cr; B = Y + 2(1-kb) Cb; G = Y - (2kb(1-kb) Cb + 2kr(1-kr) Cr) / kg.
@@ -311,8 +325,8 @@ static inline void tegra_vic_matrix_ycc_to_rgb(uint32_t standard, bool full, con
     tegra_vic_kr_kb(standard, &kr, &kb);
     const int64_t kg = 1000000 - kr - kb;
     // Gains of the 8-bit code values: luma 255/219 (video) or 1; chroma 255/224 (video) or 1.
-    const int64_t gy = full ? 1000000 : 1000000 * 255 / 219;
-    const int64_t gc = full ? 1000000 : 1000000 * 255 / 224;
+    const int64_t gy = (full ? 1000000 : 1000000 * 255 / 219) * 1020 / 1023;
+    const int64_t gc = (full ? 1000000 : 1000000 * 255 / 224) * 1020 / 1023;
     const int64_t rCr = 2 * (1000000 - kr) * gc / 1000000;
     const int64_t bCb = 2 * (1000000 - kb) * gc / 1000000;
     const int64_t gCb = 2 * kb * (1000000 - kb) / kg * gc / 1000000;
@@ -328,11 +342,11 @@ static inline void tegra_vic_matrix_ycc_to_rgb(uint32_t standard, bool full, con
     m->c[1][cb] = tegra_vic_fix(-gCb, one);
     m->c[1][cr] = tegra_vic_fix(-gCr, one);
     m->c[2][cb] = tegra_vic_fix(bCb, one);
-    // Offsets: -(gain x black level) in 10-bit steps (x256): luma 64 (video), chroma 512; +2 steps to round.
-    const int64_t y0 = full ? 0 : 64;
-    m->c[0][3] = tegra_vic_fix(-(gy * y0 + rCr * 512), 256) + 512;
-    m->c[1][3] = tegra_vic_fix(-(gy * y0 - gCb * 512 - gCr * 512), 256) + 512;
-    m->c[2][3] = tegra_vic_fix(-(gy * y0 + bCb * 512), 256) + 512;
+    const int64_t y0 = full ? 0 : TEGRA_VIC_Y0_MILLI;
+    m->c[0][3] = tegra_vic_fix_nano(-(gy * y0 + rCr * TEGRA_VIC_C0_MILLI), 256) + TEGRA_VIC_MATRIX_BIAS;
+    m->c[1][3] = tegra_vic_fix_nano(-(gy * y0 - gCb * TEGRA_VIC_C0_MILLI - gCr * TEGRA_VIC_C0_MILLI), 256) +
+                 TEGRA_VIC_MATRIX_BIAS;
+    m->c[2][3] = tegra_vic_fix_nano(-(gy * y0 + bCb * TEGRA_VIC_C0_MILLI), 256) + TEGRA_VIC_MATRIX_BIAS;
 }
 
 // A luminance-only destination ('L008'): the source's full-range luma in every channel. VIC writes L8 from the pipeline
@@ -341,11 +355,16 @@ static inline void tegra_vic_matrix_ycc_to_rgb(uint32_t standard, bool full, con
 // into a Y'CbCr destination by its matrix; a Y'CbCr source's is its Y'.
 static inline void tegra_vic_matrix_luma(uint32_t standard, bool ycc, bool full, TegraVICMatrix *m)
 {
-    int64_t w[3] = {full ? 1000000 : 1000000 * 255 / 219, 0, 0};
-    const int64_t y0 = ycc && !full ? 64 : 0;
+    int64_t w[3] = {(full ? 1000000 : 1000000 * 255 / 219) * 1020 / 1023, 0, 0};
+    const int64_t y0 = ycc && !full ? TEGRA_VIC_Y0_MILLI : 0;
     if (!ycc) {
-        tegra_vic_kr_kb(standard, &w[0], &w[2]);
-        w[1] = 1000000 - w[0] - w[2];
+        int64_t kr = 0;
+        int64_t kb = 0;
+        tegra_vic_kr_kb(standard, &kr, &kb);
+        const int64_t kg = 1000000 - kr - kb;
+        w[0] = kr * 1020 / 1023;
+        w[1] = kg * 1020 / 1023;
+        w[2] = kb * 1020 / 1023;
     }
     const int64_t one = (int64_t)(1ULL << (TEGRA_VIC_MATRIX_SHIFT + 8));
     memset(m, 0, sizeof(*m));
@@ -353,8 +372,18 @@ static inline void tegra_vic_matrix_luma(uint32_t standard, bool ycc, bool full,
     for (int r = 0; r < 3; r++) {
         for (int i = 0; i < 3; i++)
             m->c[r][i] = tegra_vic_fix(w[i], one);
-        m->c[r][3] = tegra_vic_fix(-w[0] * y0, 256) + 512;
+        m->c[r][3] = tegra_vic_fix_nano(-w[0] * y0, 256) + TEGRA_VIC_MATRIX_BIAS;
     }
+}
+
+// VIC 4.0 reads T_L8 into channel 0 and fills channels 1 and 2 with neutral chroma (512); replicate channel 0 into all
+// three channels so BGRA, L8 and Y'CbCr destinations see grayscale (L, L, L).
+static inline void tegra_vic_matrix_luma_expand(TegraVICMatrix *m)
+{
+    const int32_t one = (int32_t)(1u << (TEGRA_VIC_MATRIX_SHIFT + 8));
+    memset(m, 0, sizeof(*m));
+    m->shift = TEGRA_VIC_MATRIX_SHIFT;
+    m->c[0][0] = m->c[1][0] = m->c[2][0] = one;
 }
 
 // The full-range BT.709 RGB of an 8-bit Y'CbCr sample: the float conversion in integer millionths, rounded and clamped
@@ -790,7 +819,10 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
         TegraVICMatrix m;
         const bool sameYcc = srcYcc && dstYcc && sf->kind == df->kind && src->standard == dst->standard &&
                              t->in.cbChannel == t->out.cbChannel;
-        if (lumaOut) {
+        if (sf->vic == TEGRA_VIC_T_L8) {
+            tegra_vic_matrix_luma_expand(&m);
+            tegra_vic_matrix_put(s, slot + TEGRA_VIC_SLOT_MATRIX, &m);
+        } else if (lumaOut) {
             tegra_vic_matrix_luma(dst->standard, srcYcc, sf->kind == TEGRA_VIC_KIND_YCC_FULL, &m);
             tegra_vic_matrix_put(s, slot + TEGRA_VIC_SLOT_MATRIX, &m);
         } else if (srcYcc && !sameYcc) {

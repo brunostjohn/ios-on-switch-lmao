@@ -15,7 +15,7 @@ OSObject inputObject, outputObject;
 IOMemoryDescriptor inputMemory, outputMemory;
 switch_gpu_backing inputPitch, inputNative, outputPitch;
 volatile uint64_t inputGeneration = 1, outputGeneration = 1, payloadGeneration = 1;
-bool nativeInput = true, immediate = false;
+bool nativeInput = true, immediate = false, dstTiled = false, dstCompressed = false;
 int admission = 0, mappings = 0, gates = 0, pitchInputs = 0, notifications = 0;
 void (*pending)(void *, int);
 void *pendingContext;
@@ -42,16 +42,24 @@ extern "C" uint64_t tegra_vic_filter_address()
     return 0x80002000;
 }
 
-extern "C" int tegra_gm20b_surface_layout(uint64_t, tgm_layout *)
+extern "C" int tegra_gm20b_surface_layout(uint64_t pa, tgm_layout *out)
 {
-    return 0;
+    if (!dstTiled || pa != 0x200000)
+        return 0;
+    return tgm_layout_tiled(1280, 720, 4, out);
 }
 
-extern "C" void switch_gpu_backing_describe(switch_gpu_backing *, switch_gpu_backing_info *info)
+extern "C" int tegra_gm20b_surface_compressed(uint64_t pa)
 {
-    static uint64_t pages[1] = {0x100000};
+    return dstCompressed && pa == 0x200000 ? 1 : 0;
+}
+
+extern "C" void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_gpu_backing_info *info)
+{
+    static uint64_t inputPages[1] = {0x100000};
+    static uint64_t outputPages[1] = {0x200000};
     *info = {};
-    info->pages = pages;
+    info->pages = backing == &outputPitch ? outputPages : inputPages;
     info->page_count = 1024;
 }
 
@@ -213,6 +221,8 @@ protected:
     {
         nativeInput = true;
         immediate = false;
+        dstTiled = false;
+        dstCompressed = false;
         admission = mappings = gates = pitchInputs = notifications = 0;
         pending = nullptr;
         pendingContext = nullptr;
@@ -412,6 +422,49 @@ TEST_F(SwitchVICTransformTest, BounceFallbackPreservesPreReservedWriteLeaseForCa
     EXPECT_EQ(writeReleases, 0u);
     EXPECT_EQ(reservation.lease, lease);
     switch_vic_surface_release_write(&reservation);
+}
+
+TEST_F(SwitchVICTransformTest, UncompressedTiledDestinationWritesDirectBlockLinear)
+{
+    dstTiled = true;
+    immediate = true;
+    ASSERT_EQ(submit(), 1);
+    EXPECT_EQ(notifications, 1);
+    tgm_layout expected = {};
+    ASSERT_EQ(tgm_layout_tiled(1280, 720, 4, &expected), 1);
+    EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_BLK_KIND),
+              uint64_t(TEGRA_VIC_BLK_16Bx2));
+    EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_BLK_HEIGHT), expected.y_log2);
+    EXPECT_EQ(TEGRA_VIC_GET(submittedJob.config, TEGRA_VIC_OUTPUT_SURFACE, SURF_LUMA_HEIGHT), expected.rows - 1);
+}
+
+TEST_F(SwitchVICTransformTest, CompressedPartialOrTransposedTiledDestinationFallsBackToBounce)
+{
+    dstTiled = true;
+    dstCompressed = true;
+    EXPECT_EQ(submit(), 0);
+    EXPECT_TRUE(declaredUses.empty());
+
+    dstCompressed = false;
+    plan.op[0].dstW = 640;
+    EXPECT_EQ(submit(), 0);
+    EXPECT_TRUE(declaredUses.empty());
+
+    plan.op[0].dstW = 1280;
+    plan.op[0].transform = TEGRA_VIC_ROT90;
+    EXPECT_EQ(submit(), 0);
+    EXPECT_TRUE(declaredUses.empty());
+}
+
+TEST_F(SwitchVICTransformTest, NativeSourceWithUnalignedLogicalPitchRunsDirect)
+{
+    source.desc.planeBytesPerRow[0] = source.desc.planeBytesPerRow[1] = 1344;
+    source.desc.planeOffset[1] = 1344 * 720;
+    source.desc.length = 1344 * 720 * 3 / 2;
+    immediate = true;
+    ASSERT_EQ(submit(), 1);
+    EXPECT_EQ(notifications, 1);
+    EXPECT_EQ(pitchInputs, 0);
 }
 
 // A landscape video's turn (SwitchVICTurn.h): a native picture a quarter turn onto all of a portrait '420v' is left to

@@ -330,7 +330,7 @@ bool runJob(Job *job, IOReturn *status)
     // A quarter turn of a decoder's picture window A scans itself: recorded on the destination, nothing to submit.
     SwitchDisplayTraits traits = switch_display_traits();
     traits.columnScanYuv = traits.columnScanYuv && switch_display_landscape_ready();
-    if (!job->bounceSrc && !job->bounceDst &&
+    if (!job->bounceDst &&
         switch_vic_turn_defer(&job->src, &job->dst, &job->plan, job->chromaSite, &job->events, traits)) {
 #if TEGRA_VIC_STATS
         switch_vic_turn_count(job->origin, false, true, eventTurn, mach_absolute_time() - entered);
@@ -347,7 +347,11 @@ bool runJob(Job *job, IOReturn *status)
     const uint64_t addressed = tegra_vic_surface_extent(&job->dst.desc) +
                                (job->plan.readsSource ? tegra_vic_surface_extent(&job->src.desc) : 0);
 #endif
-    if (!job->bounceSrc && !job->bounceDst)
+    const TegraVICFormat *srcFormat = job->plan.readsSource ? tegra_vic_format(job->src.desc.fourcc) : nullptr;
+    const TegraVICFormat *dstFormat = tegra_vic_format(job->dst.desc.fourcc);
+    const bool tryDirect = (!job->bounceSrc || (srcFormat && srcFormat->kind != TEGRA_VIC_KIND_RGB)) &&
+                           (!job->bounceDst || (dstFormat && dstFormat->planes == 1));
+    if (tryDirect)
         submitted = switch_vic_transform(&job->src, &job->dst, &job->plan, job->chromaSite, transformed, job,
                                          job->events, nullptr, &dstReserve.reservation);
     const bool bounced = !submitted;
@@ -625,7 +629,7 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
     IOLockUnlock(conn->lock);
     job->eventReady = job->events == nullptr;
     const bool async = job->async;
-    const bool mayDeferTurn = !job->bounceSrc && !job->bounceDst && job->plan.count == 1 &&
+    const bool mayDeferTurn = !job->bounceDst && job->plan.count == 1 &&
                               (job->plan.op[0].transform & TEGRA_VIC_ROT90) != 0 && job->dst.desc.planes == 2;
     if (!job->events && !mayDeferTurn)
         switch_vic_surface_reserve_write(&job->dst, &job->dstReserve);
