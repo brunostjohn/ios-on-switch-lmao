@@ -753,19 +753,44 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     // A loop's body is laid down once and listed per copy (loop_copies.h): no band cuts a batch inside it, and its
     // copies end the batches between them
     const bool looping = cb_.loops_.open();
+    const uint64_t progressVa = dev_.channelProgressVa();
+    const bool unmeasured = units >= kMeasureUnits && state_->rate.psPerUnit.load(std::memory_order_relaxed) == 0;
+    const uint32_t maxPieces = progressVa ? kMaxTileBands : kMaxBands;
+    const uint32_t left =
+        progressVa ? kMaxTileBands : (cb_.bands < kBandsPerCommandBuffer ? kBandsPerCommandBuffer - cb_.bands : 0);
     const uint32_t pieces =
         dev_.compositorClass() || looping
             ? 1
             : pieceCount(estimatedNs(state_->rate, units, workNs(laneWork(units, state_->instructions))),
-                         dev_.bandBudgetNs(), grid[axis], kBandsPerCommandBuffer - cb_.bands);
+                         dev_.bandBudgetNs(), grid[axis], left, maxPieces, unmeasured);
     emitKindSwitch();
     if (serial_ && dispatched_ && first)
         barrier();
     dispatched_ = true;
-    if (pieces > 1 && cb_.batchWork_.operations)
-        cutBatch();
-    if (first)
+    if (pieces > 1 && cb_.batchWork_.operations) {
+        if (progressVa) {
+            room(kProgressReleaseWords);
+            emitProgressRelease(p_, progressVa, dev_.nextProgressSeq());
+            cb_.batchWork_ = {};
+        } else {
+            cutBatch();
+        }
+    }
+    bool selfMeasured = false;
+    DrawTiming selfTiming;
+    if (pieces > 1 && first && last && !looping && !dev_.compositorClass()) {
+        dispatches_++;
+        if (cb_.timings.size() < kMeasuredPerCommandBuffer && measure(state_->rate, units)) {
+            selfMeasured = true;
+            const uint32_t n = dev_.drawStamps_++;
+            selfTiming = {&state_->rate,        units, n % kDrawStampSlots, n + 1 ? n + 1 : 1, state_->rec->keyHash,
+                          state_->instructions, pieces};
+            room(kStampWords);
+            emitStamp(p_, dev_.stamps_.va + drawStampOffset(selfTiming.slot, false), selfTiming.payload);
+        }
+    } else if (first) {
         noteDispatch(units, looping, pieces);
+    }
     slotTableVa_ = 0;
     for (uint32_t i = 0; i < pieces; i++) {
         const DispatchPiece piece = dispatchPiece(grid, axis, i, pieces);
@@ -773,9 +798,22 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
         for (uint64_t s = 0; s < slices; s++)
             if (!launch(grid, qmdSlice(piece, s), region, why))
                 return false;
-        if (pieces > 1)
-            cutBatch();
+        if (pieces > 1) {
+            if (selfMeasured && i + 1 == pieces) {
+                room(kStampWords + (progressVa ? kProgressReleaseWords : 0));
+                emitStamp(p_, dev_.stamps_.va + drawStampOffset(selfTiming.slot, true), selfTiming.payload);
+            }
+            if (progressVa) {
+                room(kProgressReleaseWords);
+                emitProgressRelease(p_, progressVa, dev_.nextProgressSeq());
+                cb_.batchWork_ = {};
+            } else {
+                cutBatch();
+            }
+        }
     }
+    if (selfMeasured)
+        cb_.timings.push_back(selfTiming);
     if (pieces > 1) {
         cb_.bands += pieces;
         SWITCH_METAL_DIAGNOSTIC(dev_.stats.bandedDispatches++; dev_.stats.bands += pieces);

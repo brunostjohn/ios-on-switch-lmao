@@ -30,11 +30,15 @@ inline uint8_t pieceAxis(const std::array<uint32_t, 3> &groups)
 }
 
 // Into how many pieces a dispatch of `ns` goes: 1 launches it whole. `left`: the bands its command buffer may still take.
-inline uint32_t pieceCount(uint64_t ns, uint64_t budgetNs, uint32_t axisGroups, uint32_t left)
+inline uint32_t pieceCount(uint64_t ns, uint64_t budgetNs, uint32_t axisGroups, uint32_t left,
+                           uint32_t maxPieces = kMaxBands, bool unmeasured = false)
 {
-    if (!budgetNs || ns <= budgetNs)
+    if (!budgetNs || (!unmeasured && ns <= budgetNs))
         return 1;
-    const uint64_t n = std::min<uint64_t>({(ns + budgetNs - 1) / budgetNs, kMaxBands, axisGroups, left});
+    uint64_t want = (ns + budgetNs - 1) / budgetNs;
+    if (unmeasured)
+        want = std::max<uint64_t>(want, kMaxBands);
+    const uint64_t n = std::min<uint64_t>({want, maxPieces, axisGroups, left});
     return n > 1 ? uint32_t(n) : 1u;
 }
 

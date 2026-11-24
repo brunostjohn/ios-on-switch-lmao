@@ -332,6 +332,7 @@ struct Model {
     bool foreignTakesFreedSlot = false;
     bool volatileWrites = true;
     bool priorityCritical = false;
+    bool channelProgress = true;
     unsigned creates = 0, destroys = 0, staleReads = 0, cpuAcquireCalls = 0;
     // the channel epoch's count (channelEpochMoves)
     uint32_t epoch = 0;
@@ -854,7 +855,8 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         info.abi_version = TegraGM20BAbiVersion;
         info.flags = TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord |
                      TegraGM20BInfoCpuAccess | TegraGM20BInfoChannelEpoch | TegraGM20BInfoPriority |
-                     TegraGM20BInfoPriorityReply | (model.volatileWrites ? TegraGM20BInfoVolatileWrites : 0u) |
+                     TegraGM20BInfoPriorityReply | (model.channelProgress ? TegraGM20BInfoChannelProgress : 0u) |
+                     (model.volatileWrites ? TegraGM20BInfoVolatileWrites : 0u) |
                      (model.packImage.enabled ? TegraGM20BInfoPackImage : 0u) | model.infoFlags;
         info.fence_token = kernel_model::kFenceToken;
         info.cls_copy = 0xb0b5;
@@ -1149,6 +1151,18 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
     case TegraGM20BMethodGetStatus:
         return model.status(*static_cast<const TegraGM20BAbiChannel *>(input),
                             *static_cast<TegraGM20BAbiStatus *>(output));
+    case TegraGM20BMethodChannelProgress: {
+        if (!model.channelProgress)
+            return kIOReturnUnsupported;
+        const auto &in = *static_cast<const TegraGM20BAbiChannel *>(input);
+        if (!model.live(in.channel))
+            return kIOReturnBadArgument;
+        const uint32_t slot = in.channel - 1;
+        *static_cast<TegraGM20BAbiChannelProgressReply *>(output) = {uint64_t(kernel_model::kFenceToken) +
+                                                                     slot * kernel_model::kRecordBytes +
+                                                                     TegraGM20BFencePageChannelProgressOffset};
+        return KERN_SUCCESS;
+    }
     case TegraGM20BMethodCpuComplete: {
         const auto &in = *static_cast<const TegraGM20BAbiCpuComplete *>(input);
         *static_cast<TegraGM20BAbiCpuCompleteReply *>(output) = {in.range_count, 0, 0, 0, 0, 0};

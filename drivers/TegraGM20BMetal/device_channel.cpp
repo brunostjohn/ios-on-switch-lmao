@@ -234,6 +234,8 @@ bool Device::reopen()
         generations_.closed(retiring);
         channel_.store(0, std::memory_order_release);
         fence_.store(&kNoFence, std::memory_order_release);
+        progressVa_ = 0;
+        progressSeq_ = 0;
     }
     if (!channelRefusal_.mayAsk(k_))
         return false;
@@ -249,6 +251,9 @@ bool Device::reopen()
         return false;
     }
     channelRefusal_.made();
+    progressVa_ = 0;
+    progressSeq_ = 0;
+    k_.channelProgress(channel_.load(std::memory_order_relaxed), progressVa_);
     if (fence_.load(std::memory_order_relaxed) != keptSlot_)
         forgetKept();
     contextless_ = false;

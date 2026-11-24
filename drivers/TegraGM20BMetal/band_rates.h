@@ -83,7 +83,7 @@ inline void learn(BandRate &r, uint64_t ns, uint64_t units)
         return;
     const uint64_t sample = std::clamp<uint64_t>(ns * 1000 / units, 1, UINT32_MAX);
     const uint64_t old = r.psPerUnit.load(std::memory_order_relaxed);
-    const uint64_t rate = old ? (old * (kRateWeight - 1) + sample) / kRateWeight : sample;
+    const uint64_t rate = !old || sample > old ? sample : (old * (kRateWeight - 1) + sample) / kRateWeight;
     r.psPerUnit.store(uint32_t(std::max<uint64_t>(rate, 1)), std::memory_order_relaxed);
     r.samples.fetch_add(1, std::memory_order_relaxed);
 }

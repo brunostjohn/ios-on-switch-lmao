@@ -590,7 +590,10 @@ device_test(
 # no tiled-cache flush, only a draw alone in its pass is measured, an untaught state no more than its cap, any completer teaches
 device_test(
     name = "device_measure_test",
-    srcs = ["device_measure_test.cpp"],
+    srcs = [
+        "device_measure_test.cpp",
+        "timed_gpu.h",
+    ],
 )
 
 # The encode reads no buffer's contents on the CPU (gm20b::Device over the kernel model): a first draw over buffer vertices and

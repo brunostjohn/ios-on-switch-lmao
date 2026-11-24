@@ -601,6 +601,8 @@ bool Device::openChannel(std::string &err, bool &gaveBack)
         gaveBack = created;
         if (created)
             k_.closeChannel(ch);
+        progressVa_ = 0;
+        progressSeq_ = 0;
         k_.free(push_.bo);
         k_.free(upload_.bo);
         push_ = Ring();
@@ -625,6 +627,9 @@ bool Device::openChannel(std::string &err, bool &gaveBack)
         return undo(true);
     channel_.store(ch, std::memory_order_release);
     fence_.store(fence, std::memory_order_release);
+    progressVa_ = 0;
+    progressSeq_ = 0;
+    k_.channelProgress(ch, progressVa_);
     submittedThrough(seq);
     retire(push_, seq);
     return true;

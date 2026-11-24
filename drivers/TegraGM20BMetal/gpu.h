@@ -270,6 +270,16 @@ public:
 #endif
     }
 
+    uint64_t channelProgressVa() const
+    {
+        return progressVa_;
+    }
+
+    uint32_t nextProgressSeq()
+    {
+        return ++progressSeq_ ? progressSeq_ : ++progressSeq_;
+    }
+
     bool hasGpuPriority() const
     {
         return (k_.info().flags & TegraGM20BInfoPriority) != 0;
@@ -1476,6 +1486,8 @@ private:
     // Written by openChannel (under channelLock_) and reopen (submit thread); read unlocked by waitFence, promise,
     // eventWord, channelCurrent and captureCpuCompletion on other threads.
     std::atomic<uint32_t> channel_{0};
+    uint64_t progressVa_ = 0;
+    uint32_t progressSeq_ = 0;
     // Stored only by whoever submits (the submit worker, or openChannel before channelReady_), one release store a job;
     // read by any thread, the memory release's purge among them, which holds lock_
     std::atomic<uint32_t> lastSeqno_{0};

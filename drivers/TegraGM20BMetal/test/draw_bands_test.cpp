@@ -139,6 +139,37 @@ TEST(BandCount, TheCommandBuffersShareAndANoBudgetNeverBands)
     EXPECT_EQ(gm20b::bandCount(d, 0, gm20b::kBandsPerCommandBuffer), 1u);
 }
 
+TEST(BandGrid, LongDrawOn720RowsSplitsInto2DTilesUnderBudgetWithNo64Cap)
+{
+    BandDraw d;
+    d.fragmentNs = milliseconds(248);
+    d.rows = 720;
+    d.cols = 1280;
+    const gm20b::BandGrid g = gm20b::bandGrid(d, TGM_APP_BAND_NS, gm20b::kMaxTileBands, gm20b::kMaxTileBands);
+    EXPECT_GE(g.total(), 248u);
+    EXPECT_GT(g.cols, 1u);
+    EXPECT_LE(g.rows, 720u / gm20b::kMinBandRows);
+    EXPECT_LE(g.cols, 1280u / gm20b::kMinBandCols);
+    EXPECT_LE(d.fragmentNs / g.total(), TGM_APP_BAND_NS);
+}
+
+TEST(BandGrid, UnmeasuredLargeDrawGoesInMaxBandsAndRespectsVertexRule)
+{
+    BandDraw d;
+    d.fragmentNs = 10'000;  // tiny mispriced static estimate
+    d.vertexNs = 200;
+    d.rows = 720;
+    d.cols = 1280;
+    d.unmeasured = true;
+    const gm20b::BandGrid g = gm20b::bandGrid(d, TGM_APP_BAND_NS, gm20b::kMaxTileBands, gm20b::kMaxTileBands);
+    EXPECT_EQ(g.total(), gm20b::kMaxBands);
+    EXPECT_EQ(gm20b::bandGrid(d, 0, gm20b::kMaxTileBands, gm20b::kMaxTileBands).total(), 1u);
+
+    // Massive vertex work still stays bounded by the 1/8 rule.
+    d.vertexNs = milliseconds(1);
+    EXPECT_EQ(gm20b::bandGrid(d, TGM_APP_BAND_NS, gm20b::kMaxTileBands, gm20b::kMaxTileBands).total(), 1u);
+}
+
 TEST(WritesMemory, TheShaderHeadersGlobalStoreBit)
 {
     const uint32_t stores[1] = {1u << 16 | 0x62}, none[1] = {0x62};
@@ -230,6 +261,48 @@ TEST(EmitBands, ABandedDrawDrawsEachPixelOnceUnderItsScissor)
         const Rect whole = rot.rect({area.x0, area.y0, area.x1, area.y1});
         EXPECT_EQ(r.scissorH, whole.x1 << 16 | whole.x0);
         EXPECT_EQ(r.scissorV, whole.y1 << 16 | whole.y0);
+        for (uint32_t y = 0; y < rot.planeHeight(); y++)
+            for (uint32_t x = 0; x < rot.planeWidth(); x++) {
+                const bool inside = x >= whole.x0 && x < whole.x1 && y >= whole.y0 && y < whole.y1;
+                EXPECT_EQ(r.hits[size_t(y) * rot.planeWidth() + x], inside ? 1 : 0)
+                    << "turn " << int(turn) << " at " << x << "," << y;
+            }
+    }
+}
+
+TEST(EmitBands, A2DBandGridCoversEveryPixelOnceAcrossAllTurns)
+{
+    const uint32_t w = 64, h = 40;
+    const PixelBox area = {4, 3, 60, 37}, box = {10, 12, 50, 30};
+    const gm20b::BandGrid grid{3, 4};
+    for (uint8_t turn = 0; turn <= 4; turn++) {
+        const Rotation rot = turned(turn, w, h);
+        std::vector<uint32_t> words(8192);
+        gm20b::Push p{words.data(), words.data() + words.size()};
+        uint32_t rooms = 0;
+        gm20b::emitBandGrid(
+            p, rot, area, box, grid,
+            [&] {
+                rooms++;
+            },
+            [&](gm20b::Push &q) {
+                q.m(NVB197_BEGIN, 0);
+                q.inc(NVB197_SET_VERTEX_ARRAY_START, {0, 6});
+                q.m(NVB197_END, 0);
+            },
+            [&] {
+                p.m(NVB197_NO_OPERATION, 0);
+            });
+        words.resize(size_t(p.at - words.data()));
+        Raster r;
+        r.rot = rot;
+        r.footprint = rot.rect({0, 0, w, h});
+        r.run(words);
+        EXPECT_EQ(r.draws, grid.total());
+        EXPECT_EQ(r.cuts, grid.total());
+        EXPECT_EQ(rooms, grid.total() + 1);
+        EXPECT_TRUE(r.others.empty());
+        const Rect whole = rot.rect({area.x0, area.y0, area.x1, area.y1});
         for (uint32_t y = 0; y < rot.planeHeight(); y++)
             for (uint32_t x = 0; x < rot.planeWidth(); x++) {
                 const bool inside = x >= whole.x0 && x < whole.x1 && y >= whole.y0 && y < whole.y1;

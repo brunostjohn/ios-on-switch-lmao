@@ -553,6 +553,19 @@ bool Kernel::channel(uint32_t engines, uint32_t &channel, const volatile uint32_
     return true;
 }
 
+bool Kernel::channelProgress(uint32_t channel, uint64_t &gpuVa)
+{
+    gpuVa = 0;
+    if (!(info_.flags & TegraGM20BInfoChannelProgress) || !channel)
+        return false;
+    const TegraGM20BAbiChannel in = {channel, 0};
+    TegraGM20BAbiChannelProgressReply r = {};
+    if (call(TegraGM20BMethodChannelProgress, &in, sizeof in, &r, sizeof r) != KERN_SUCCESS || !r.gpu_va)
+        return false;
+    gpuVa = r.gpu_va;
+    return true;
+}
+
 void Kernel::closeChannel(uint32_t channel)
 {
     const TegraGM20BAbiChannel in = {channel, 0};
