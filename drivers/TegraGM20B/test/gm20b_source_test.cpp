@@ -552,6 +552,9 @@ TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
 	EXPECT_TRUE(info.has("? tgm_coherency_layout_fitted(coh, width, height, "
 			     "surface.bpp, pitch, writes)"));
 	EXPECT_TRUE(info.has("canonical || (same && tgm_layout_nil_height(&tiled))"));
+	EXPECT_TRUE(info.has("current && current->backingMemory && current->mem && "
+			     "tgm_mem_can_compress(current->mem)"));
+	EXPECT_TRUE(info.has("switch_refusal(\"iosurface-layout\", \"uncompressible-bo\","));
 }
 
 // System sleep (gpu_power.c "system sleep"): every path that touches the GPU outside tgm_gpu.lock goes through the gate

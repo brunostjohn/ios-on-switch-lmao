@@ -102,7 +102,7 @@ struct Import {
     // createSurfaceImage), whose textures address their memory as their images say
     bool kernelTiled() const
     {
-        return kind == TGM_LAYOUT_KIND && layout.bytes;
+        return kind != 0 && layout.bytes;
     }
 };
 

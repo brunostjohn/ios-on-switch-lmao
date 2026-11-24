@@ -268,8 +268,10 @@ bool Kernel::priority(uint32_t priority, uint32_t background)
 }
 
 uint32_t Kernel::surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytesPerRow,
-                               bool writes, tgm_layout *canonical)
+                               bool writes, tgm_layout *canonical, uint32_t *kind)
 {
+    if (kind)
+        *kind = 0;
     const TegraGM20BAbiSurfaceLayout in = {
         bo.handle, width, height, bpp, bytesPerRow, writes ? uint32_t(TegraGM20BLayoutWrites) : 0, 0};
     if (canonical && (info_.flags & TegraGM20BInfoCanonicalSurfaceLayout)) {
@@ -282,15 +284,18 @@ uint32_t Kernel::surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, ui
                 (unsigned long long)bo.handle, width, height, bpp, bytesPerRow, kr);
             return TegraGM20BLayoutOtherShape;
         }
-        if (out.layout == TegraGM20BLayoutTiled)
+        if (out.layout == TegraGM20BLayoutTiled) {
             *canonical = {out.width, out.height,          out.bpp,   out.pitch,
                           out.rows,  uint8_t(out.y_log2), out.align, out.bytes};
-        else if (out.layout == TegraGM20BLayoutOtherShape)
+            if (kind)
+                *kind = out.kind ? out.kind : TGM_LAYOUT_KIND;
+        } else if (out.layout == TegraGM20BLayoutOtherShape) {
             os_log_error(
                 OS_LOG_DEFAULT,
                 "SwitchMetal: SurfaceLayoutInfo of import %llu (%ux%u x%u, rows %u): laid out for another shape: no "
                 "texture over it",
                 (unsigned long long)bo.handle, width, height, bpp, bytesPerRow);
+        }
         return out.layout;
     }
     if (!(info_.flags & TegraGM20BInfoSurfaceLayout))
@@ -311,6 +316,8 @@ uint32_t Kernel::surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, ui
             (unsigned long long)bo.handle, width, height, bpp);
         return TegraGM20BLayoutOtherShape;
     }
+    if (out.layout == TegraGM20BLayoutTiled && kind)
+        *kind = TGM_LAYOUT_KIND;
     if (out.layout == TegraGM20BLayoutOtherShape)
         os_log_error(
             OS_LOG_DEFAULT,

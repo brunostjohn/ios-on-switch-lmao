@@ -38,6 +38,7 @@ bool Device::tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t heigh
     t.blockLinear = true;
     t.blockHeight = l.y_log2;
     t.layerBytes = l.bytes;
+    t.comptags = t.import->kind != 0 && t.import->kind != TGM_LAYOUT_KIND;
     t.storage = {t.va, l.bytes, !t.import->id};
     t.surfaceX = view.x;
     t.surfaceY = view.y;

@@ -304,7 +304,9 @@ struct TegraGM20BAbiSurfaceLayoutReply {
 
 struct TegraGM20BAbiSurfaceLayoutInfo {
 	uint32_t layout, width, height, bpp;
-	uint32_t pitch, y_log2, rows, reserved;
+	uint32_t pitch, y_log2, rows;
+	/* 0: TGM_LAYOUT_KIND when layout == TegraGM20BLayoutTiled; else compressed PTE kind */
+	uint32_t kind;
 	uint64_t align, bytes;
 };
 

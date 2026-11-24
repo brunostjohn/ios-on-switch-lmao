@@ -146,7 +146,7 @@ public:
     // texture renders into or stores to it. TegraGM20BLayoutTiled, TegraGM20BLayoutOtherShape, or 0 (pitch; also without
     // the method).
     uint32_t surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytesPerRow,
-                           bool writes, tgm_layout *canonical = nullptr);
+                           bool writes, tgm_layout *canonical = nullptr, uint32_t *kind = nullptr);
     int nativeSurfaceView(const Bo &source, Bo &view, TegraGM20BAbiNativeSurfaceViewReply &layout);
     bool bindImport(void *addr, Bo &bo, uint32_t kind);
     // BoAlloc Compressible (comp.h), never CPU-mapped; safe beside the other calls (it may zero pages a free left

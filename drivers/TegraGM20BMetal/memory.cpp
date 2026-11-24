@@ -342,14 +342,16 @@ Import *Device::makeImport(uint64_t id, void *base, uint64_t bytes, const void *
     const LayoutAsk none = {};
     const LayoutAsk &a = ask ? *ask : none;
     if (id) {
-        const uint32_t layout = k_.surfaceLayout(i->bo, a.width, a.height, a.bpp, a.bytesPerRow, a.writes, &i->layout);
+        uint32_t kind = 0;
+        const uint32_t layout =
+            k_.surfaceLayout(i->bo, a.width, a.height, a.bpp, a.bytesPerRow, a.writes, &i->layout, &kind);
         if (layout == TegraGM20BLayoutOtherShape) {
             k_.free(i->bo);
             delete i;
             return nullptr;
         }
         if (layout == TegraGM20BLayoutTiled)
-            i->kind = TGM_LAYOUT_KIND;
+            i->kind = kind ? kind : TGM_LAYOUT_KIND;
     }
     if (!k_.bindImport(base, i->bo, i->kind)) {
         delete i;
@@ -907,7 +909,7 @@ bool Device::createSurfaceBuffer(uint64_t id, void *base, uint64_t length, const
     Import *i = importSurface(l, id, base, length, owner);
     if (!i)
         return false;
-    if (i->kind == TGM_LAYOUT_KIND) {
+    if (i->kernelTiled()) {
         tiled = true;
         release(i, deferred);
         return false;
