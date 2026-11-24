@@ -65,6 +65,7 @@ struct NativeSurfaceRepublishedPathTest: GPUPathTest {
         guard CVMetalTextureCacheCreate(nil, nil, gpu.device, nil, &made) == kCVReturnSuccess, let cache = made else {
             throw TestFailure("CVMetalTextureCacheCreate failed")
         }
+        let sampler = try NativeSurfaceViewPathTest.PlaneSampler(gpu)
         let counters = GM20BFacade.counters(of: gpu.device)
         let failedBefore = gpu.commandBufferErrors.count
         let pictures = Pictures()
@@ -89,8 +90,9 @@ struct NativeSurfaceRepublishedPathTest: GPUPathTest {
                 frames += 1
                 let failedSoFar = gpu.commandBufferErrors.count
                 do {
-                    wrong += try await NativeSurfaceViewPathTest.planesWrong(frame, through: cache, gpu, bitDepth: 8)
-                        .reduce(0, +)
+                    wrong += try await NativeSurfaceViewPathTest.planesWrong(
+                        frame, through: cache, gpu, bitDepth: 8, sampler: sampler
+                    ).reduce(0, +)
                 } catch {
                     if gpu.commandBufferErrors.count == failedSoFar { throw error }
                 }

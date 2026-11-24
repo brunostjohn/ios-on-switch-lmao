@@ -108,10 +108,11 @@ struct FetchBlendOrderScene: GPUScene {
         let kind = GM20BFacade.kind(of: gpu.device)
         for shape in Shape.allCases {
             let plan = Self.plan(shape)
+            let layers = plan.layers
             let before = GM20BFacade.counters(of: gpu.device)
             var tally = Tally()
             for format in Self.formats(shape) {
-                let want = FetchBlendState.replay(plan.layers, size: Self.size, format: format)
+                let want = FetchBlendState.replay(layers, size: Self.size, format: format)
                 result.expect(want.allSatisfy { $0.max() <= 255 }, "\(shape.rawValue): the replay saturates")
                 do {
                     try await check(shape, plan, want, format, gpu, &result, &tally)

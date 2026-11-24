@@ -228,39 +228,76 @@ struct NativeSurfaceViewPathTest: GPUPathTest {
         return failures
     }
 
+    final class PlaneSampler {
+        let pipeline: MTLComputePipelineState
+        private var buffers: [MTLBuffer?] = [nil, nil]
+
+        init(_ gpu: GPU) throws { pipeline = try gpu.compute("read_float_texture") }
+
+        func buffer(_ gpu: GPU, plane: Int, bytes: Int) throws -> MTLBuffer {
+            if let existing = buffers[plane], existing.length >= bytes { return existing }
+            let made = try gpu.buffer(bytes)
+            buffers[plane] = made
+            return made
+        }
+    }
+
     /// Per plane, the bytes a compute kernel samples from `frame` through `cache` that differ from its CPU rows; the GPU
     /// reads both planes before the CPU's lock
     static func planesWrong(
-        _ frame: CVPixelBuffer, through cache: CVMetalTextureCache, _ gpu: GPU, bitDepth: Int
+        _ frame: CVPixelBuffer, through cache: CVMetalTextureCache, _ gpu: GPU, bitDepth: Int,
+        sampler: PlaneSampler? = nil
     ) async throws -> [Int] {
+        let sampler = try sampler ?? PlaneSampler(gpu)
         let sampleBytes = bitDepth > 8 ? 2 : 1
-        let scale = sampleBytes == 2 ? 65535.0 : 255.0
         let planes: [(format: MTLPixelFormat, channels: Int)] =
             sampleBytes == 2 ? [(.r16Unorm, 1), (.rg16Unorm, 2)] : [(.r8Unorm, 1), (.rg8Unorm, 2)]
-        var sampled: [[UInt8]] = []
         var held: [CVMetalTexture] = []
+        var outputs: [(buffer: MTLBuffer, width: Int, height: Int, channels: Int)] = []
+        var committed: [MTLCommandBuffer] = []
         for (plane, shape) in planes.enumerated() {
+            let width = CVPixelBufferGetWidthOfPlane(frame, plane)
+            let height = CVPixelBufferGetHeightOfPlane(frame, plane)
             var texture: CVMetalTexture?
             guard
                 CVMetalTextureCacheCreateTextureFromImage(
-                    nil, cache, frame, nil, shape.format, CVPixelBufferGetWidthOfPlane(frame, plane),
-                    CVPixelBufferGetHeightOfPlane(frame, plane), plane, &texture
+                    nil, cache, frame, nil, shape.format, width, height, plane, &texture
                 ) == kCVReturnSuccess,
                 let texture, let metal = CVMetalTextureGetTexture(texture)
             else { throw TestFailure("no Metal texture of plane \(plane)") }
             held.append(texture)
-            let texels = try await gpu.texels(metal)
-            sampled.append(
-                texels.flatMap { texel in
-                    (0 ..< shape.channels).flatMap { channel -> [UInt8] in
-                        let value = UInt16((Double(texel[channel]) * scale).rounded())
-                        return sampleBytes == 2 ? [UInt8(value & 0xff), UInt8(value >> 8)] : [UInt8(value)]
-                    }
+            let out = try sampler.buffer(gpu, plane: plane, bytes: width * height * 16)
+            outputs.append((out, width, height, shape.channels))
+            committed.append(
+                try gpu.commit { commands in
+                    let encoder = commands.makeComputeCommandEncoder()!
+                    encoder.setComputePipelineState(sampler.pipeline)
+                    encoder.setTexture(metal, index: 0)
+                    encoder.setBuffer(out, offset: 0, index: 0)
+                    encoder.dispatchThreads(
+                        MTLSize(width: width, height: height, depth: 1),
+                        threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1)
+                    )
+                    encoder.endEncoding()
                 }
             )
         }
-        return planes.enumerated().map { plane, shape in
-            wrong(sampled[plane], rows(frame, plane: plane, bytesPerPixel: shape.channels * sampleBytes))
+        try gpu.finish(committed)
+        withExtendedLifetime(held) {}
+        CVPixelBufferLockBaseAddress(frame, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(frame, .readOnly) }
+        return outputs.enumerated().map { plane, output in
+            guard let base = CVPixelBufferGetBaseAddressOfPlane(frame, plane) else {
+                return output.width * output.height * output.channels * sampleBytes
+            }
+            let sampled = output.buffer.contents().bindMemory(
+                to: SIMD4<Float>.self, capacity: output.width * output.height
+            )
+            return NativePlaneCompare.wrongBytes(
+                sampled: sampled, planeBase: base, width: output.width, height: output.height,
+                bytesPerRow: CVPixelBufferGetBytesPerRowOfPlane(frame, plane), channels: output.channels,
+                sampleBytes: sampleBytes
+            )
         }
     }
 

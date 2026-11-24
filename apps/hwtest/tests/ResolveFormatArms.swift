@@ -87,44 +87,124 @@ extension ResolveTwodTest {
     /// Sample s's codes at every pixel: resolve_twod_fragment's colour for s drawn into a one-sample target
     func storedSamples(_ gpu: GPU, _ format: X1Format, samples: Int) async throws -> [[UInt8]] {
         let state = try gpu.render(fragment: "resolve_twod_sample_fragment", format: format.pixelFormat)
-        var out: [[UInt8]] = []
+        let row = Self.width * format.bytesPerTexel, total = row * Self.height
+        var readbacks: [MTLBuffer] = []
+        var committed: [MTLCommandBuffer] = []
         for s in 0 ..< samples {
             let target = try gpu.texture(format.pixelFormat, Self.width, Self.height)
-            _ = try await gpu.run { commands in
-                let pass = MTLRenderPassDescriptor()
-                pass.colorAttachments[0].texture = target
-                pass.colorAttachments[0].loadAction = .dontCare
-                pass.colorAttachments[0].storeAction = .store
-                let e = commands.makeRenderCommandEncoder(descriptor: pass)!
-                e.setRenderPipelineState(state)
-                var corners = GPU.fullScreen, index = UInt32(s)
-                e.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
-                e.setFragmentBytes(&index, length: 4, index: 0)
-                e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-                e.endEncoding()
-            }
-            out.append(try await gpu.read(target, bytesPerPixel: format.bytesPerTexel))
+            let out = try gpu.buffer(total)
+            readbacks.append(out)
+            committed.append(
+                try gpu.commit { commands in
+                    let pass = MTLRenderPassDescriptor()
+                    pass.colorAttachments[0].texture = target
+                    pass.colorAttachments[0].loadAction = .dontCare
+                    pass.colorAttachments[0].storeAction = .store
+                    let e = commands.makeRenderCommandEncoder(descriptor: pass)!
+                    e.setRenderPipelineState(state)
+                    var corners = GPU.fullScreen, index = UInt32(s)
+                    e.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
+                    e.setFragmentBytes(&index, length: 4, index: 0)
+                    e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    e.endEncoding()
+                    let blit = commands.makeBlitCommandEncoder()!
+                    blit.copy(
+                        from: target, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(),
+                        sourceSize: MTLSize(width: Self.width, height: Self.height, depth: 1), to: out,
+                        destinationOffset: 0, destinationBytesPerRow: row, destinationBytesPerImage: 0
+                    )
+                    blit.endEncoding()
+                }
+            )
         }
-        return out
+        try gpu.finish(committed)
+        return readbacks.map { [UInt8](UnsafeRawBufferPointer(start: $0.contents(), count: total)) }
     }
 
     /// Of every third texel each way, those whose codes are not Metal's resolve of the stored samples, and channels
     /// more than one code from it
     static func offMetal(_ format: X1Format, _ got: [UInt8], _ stored: [[UInt8]]) -> (Int, Int) {
-        var off = 0, beyond = 0
-        for y in stride(from: 0, to: height, by: 3) {
-            for x in stride(from: 0, to: width, by: 3) {
-                let t = y * width + x
-                let codes = format.codes(got, t), want = metalResolve(format, stored.map { format.codes($0, t) })
-                var differs = false
-                for c in 0 ..< want.count where codes[c] != want[c] {
-                    differs = true
-                    if abs(Int64(codes[c]) - Int64(want[c])) > 1 { beyond += 1 }
+        let n = stored.count
+        guard n > 0 else { return (0, 0) }
+        let channels = format.channels
+        let channelCount = channels.count
+        let rows = (height + 2) / 3
+        let chunks = min(max(1, ProcessInfo.processInfo.activeProcessorCount), max(1, rows))
+        let srgbLUT: [Double] = channels.contains(.srgb8) ? (0 ..< 256).map { X1Channel.linear(Double($0) / 255) } : []
+        var offCounts = [Int](repeating: 0, count: chunks)
+        var beyondCounts = [Int](repeating: 0, count: chunks)
+        let nU = UInt32(n), halfU = UInt32(n / 2), invN = 1.0 / Double(n)
+        got.withUnsafeBufferPointer { gp in
+            let gBase = gp.baseAddress!
+            let s0 = stored[0], s1 = stored[min(1, n - 1)]
+            let s2 = stored[min(2, n - 1)], s3 = stored[min(3, n - 1)]
+            s0.withUnsafeBufferPointer { p0 in
+                s1.withUnsafeBufferPointer { p1 in
+                    s2.withUnsafeBufferPointer { p2 in
+                        s3.withUnsafeBufferPointer { p3 in
+                            let sp0 = p0.baseAddress!, sp1 = p1.baseAddress!
+                            let sp2 = p2.baseAddress!, sp3 = p3.baseAddress!
+                            offCounts.withUnsafeMutableBufferPointer { offBuf in
+                                beyondCounts.withUnsafeMutableBufferPointer { beyBuf in
+                                    DispatchQueue.concurrentPerform(iterations: chunks) { chunk in
+                                        let r0 = chunk * rows / chunks
+                                        let r1 = (chunk + 1) * rows / chunks
+                                        var off = 0, beyond = 0
+                                        for r in r0 ..< r1 {
+                                            let y = r * 3
+                                            let rowBase = y * width
+                                            for x in stride(from: 0, to: width, by: 3) {
+                                                let t = rowBase + x
+                                                let codes = format.codes4(gBase, t)
+                                                let c0 = format.codes4(sp0, t)
+                                                let c1 = n > 1 ? format.codes4(sp1, t) : .zero
+                                                let c2 = n > 2 ? format.codes4(sp2, t) : .zero
+                                                let c3 = n > 3 ? format.codes4(sp3, t) : .zero
+                                                var differs = false
+                                                for c in 0 ..< channelCount {
+                                                    let channel = channels[c]
+                                                    let want: UInt32
+                                                    switch channel {
+                                                    case .unorm:
+                                                        var sum = c0[c]
+                                                        if n > 1 { sum += c1[c] }
+                                                        if n > 2 { sum += c2[c] }
+                                                        if n > 3 { sum += c3[c] }
+                                                        want = (sum + halfU) / nU
+                                                    case .srgb8:
+                                                        var sum = srgbLUT[Int(c0[c])]
+                                                        if n > 1 { sum += srgbLUT[Int(c1[c])] }
+                                                        if n > 2 { sum += srgbLUT[Int(c2[c])] }
+                                                        if n > 3 { sum += srgbLUT[Int(c3[c])] }
+                                                        want = X1Rounding.nearest.code(
+                                                            X1Channel.encoded(sum * invN), channel
+                                                        )
+                                                    default:
+                                                        var sum = channel.value(c0[c])
+                                                        if n > 1 { sum += channel.value(c1[c]) }
+                                                        if n > 2 { sum += channel.value(c2[c]) }
+                                                        if n > 3 { sum += channel.value(c3[c]) }
+                                                        want = X1Rounding.tiesEven.code(sum * invN, channel)
+                                                    }
+                                                    if codes[c] != want {
+                                                        differs = true
+                                                        if abs(Int64(codes[c]) - Int64(want)) > 1 { beyond += 1 }
+                                                    }
+                                                }
+                                                if differs { off += 1 }
+                                            }
+                                        }
+                                        offBuf[chunk] = off
+                                        beyBuf[chunk] = beyond
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-                if differs { off += 1 }
             }
         }
-        return (off, beyond)
+        return (offCounts.reduce(0, +), beyondCounts.reduce(0, +))
     }
 
     static func metalResolve(_ format: X1Format, _ samples: [[UInt32]]) -> [UInt32] {

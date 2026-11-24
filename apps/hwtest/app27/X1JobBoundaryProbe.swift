@@ -125,7 +125,7 @@ enum X1JobBoundaryProbe {
     }
 
     /// One cell's memory: a texture or a buffer per trial, what job 0 reads into, and what job 2 reads into.
-    struct Work {
+    final class Work {
         let kit: BarrierKit
         let pipelines: [String: MTLComputePipelineState]
         let writer: Writer, reader: Reader
@@ -135,6 +135,8 @@ enum X1JobBoundaryProbe {
         let staging: [MTLBuffer]
         let primeAtlas: MTLTexture, atlas: MTLTexture
         let primeOut: MTLBuffer, out: MTLBuffer
+        private var expectedCache: [Int: [UInt8]] = [:]
+        private var patternCache: [Int: [UInt8]] = [:]
 
         init(
             _ kit: BarrierKit, _ pipelines: [String: MTLComputePipelineState], _ writer: Writer, _ reader: Reader
@@ -180,20 +182,33 @@ enum X1JobBoundaryProbe {
         }
 
         func expected(_ seed: Int) -> [UInt8] {
+            if let cached = expectedCache[seed] { return cached }
+            let made: [UInt8]
             if reader == .tex {
-                return kit.expectedTap(
+                made = kit.expectedTap(
                     seed: seed, base: SIMD2(0, 0), step: SIMD2(1, 1), width: X1JobBoundaryProbe.side,
                     height: X1JobBoundaryProbe.side
                 )
+            } else {
+                var out = [UInt8](repeating: 0, count: X1JobBoundaryProbe.words * 4)
+                out.withUnsafeMutableBytes { buf in
+                    for i in 0 ..< X1JobBoundaryProbe.words {
+                        let word = probeHash(UInt32(i), 0, UInt32(seed)).littleEndian
+                        buf.storeBytes(of: word, toByteOffset: i * 4, as: UInt32.self)
+                    }
+                }
+                made = out
             }
-            return (0 ..< X1JobBoundaryProbe.words).flatMap { i -> [UInt8] in
-                withUnsafeBytes(of: probeHash(UInt32(i), 0, UInt32(seed)).littleEndian, Array.init)
-            }
+            expectedCache[seed] = made
+            return made
         }
 
         func pattern(_ seed: Int) -> [UInt8] {
+            if let cached = patternCache[seed] { return cached }
             let side = X1JobBoundaryProbe.side
-            return (0 ..< side * side).flatMap { kit.texel($0 % side, $0 / side, seed: seed) }
+            let made = kit.pattern.image(width: side, height: side, seed: seed)
+            patternCache[seed] = made
+            return made
         }
 
         /// Reads every trial's memory: into the prime outputs (job 0) or the results (job 2)
@@ -269,8 +284,8 @@ enum X1JobBoundaryProbe {
             for k in 0 ..< seeds.count {
                 switch writer {
                 case .cpu:
-                    let words = buffers[k].contents().bindMemory(to: UInt32.self, capacity: X1JobBoundaryProbe.words)
-                    for i in 0 ..< X1JobBoundaryProbe.words { words[i] = probeHash(UInt32(i), 0, UInt32(seeds[k])) }
+                    let bytes = expected(seeds[k])
+                    buffers[k].contents().copyMemory(from: bytes, byteCount: bytes.count)
                 case .chan:
                     textures[k].replace(
                         region: MTLRegionMake2D(0, 0, side, side), mipmapLevel: 0, withBytes: pattern(seeds[k]),
@@ -301,7 +316,8 @@ enum X1JobBoundaryProbe {
             if writer == .rop || writer == .ce || writer == .sto {
                 writeFromCPU(seeds)
                 return try gpu.runBackToBack(
-                    forms: forms, [{ read($0, results: false) }, { write($0, seeds) }, { read($0, results: true) }]
+                    forms: forms,
+                    [{ self.read($0, results: false) }, { self.write($0, seeds) }, { self.read($0, results: true) }]
                 )
             }
             if writer == .hdr { writeFromCPU(seeds) }

@@ -69,6 +69,7 @@ enum X1SwitchDrainProbe {
             let work = try Work(kit, cell)
             journal.starting("\(name) arms=\(arms.map(\.0).joined(separator: "/"))")
             var expected: [Int: [UInt8]] = [:]
+            var tapExpected: [Int: [UInt8]] = [:]
             let started = Date()
             let plan = IterationPlan(cells: arms.count, target: cell.width == 1280 ? 600 : 1504, batch: batch)
             var trial = [Int](repeating: 0, count: arms.count)
@@ -80,19 +81,32 @@ enum X1SwitchDrainProbe {
                 let seeds = (0 ..< batch).map { probeSeed(trial: first + $0, cell: index, seeds: 16) }
                 let spins = spins(from: first, size: cell.width)
                 let hazard = arm == "hazard"
-                let ran = try await gpu.run(forms: forms) { commands in
-                    try work.encode(commands, seeds: seeds, spins: spins, hazard: hazard)
-                }
-                ops += ran.taken["ops"] ?? 0
+                let ran: ArmBatch
                 if hazard || cell.engine != .compute {
-                    _ = try await gpu.run { commands in
+                    let workCB = try gpu.commit { commands in
+                        if !forms.isEmpty { try GM20BProbe.forms(commands, forms) }
+                        try work.encode(commands, seeds: seeds, spins: spins, hazard: hazard)
+                    }
+                    let readCB = try gpu.commit { commands in
                         kit.readback(commands, work.atlas, into: hazard ? work.hazardOut : work.out)
                     }
+                    try gpu.finish([workCB, readCB])
+                    ran = ArmBatch(
+                        gpuMilliseconds: max(0, workCB.gpuEndTime - workCB.gpuStartTime) * 1000,
+                        path: GM20BFacade.path(of: workCB),
+                        taken: try GM20BProbe.taken(workCB)
+                    )
+                } else {
+                    ran = try await gpu.run(forms: forms) { commands in
+                        try work.encode(commands, seeds: seeds, spins: spins, hazard: false)
+                    }
                 }
+                ops += ran.taken["ops"] ?? 0
                 var tally = ledger.tally(name, arm)
                 for (k, seed) in seeds.enumerated() {
                     if hazard {
-                        work.tapExpected(seed).withUnsafeBytes {
+                        if tapExpected[seed] == nil { tapExpected[seed] = work.tapExpected(seed) }
+                        tapExpected[seed]!.withUnsafeBytes {
                             tally.compare(
                                 kit.tile(work.hazardOut, k), $0, trial: first + k, width: BarrierKit.tile,
                                 bytesPerTexel: kit.bytesPerTexel
@@ -184,16 +198,16 @@ enum X1SwitchDrainProbe {
 
         func expected(_ seed: Int) -> [UInt8] {
             guard cell.engine == .compute else { return tapExpected(seed) }
-            var bytes: [UInt8] = []
-            bytes.reserveCapacity(resultBytes)
-            for y in 0 ..< cell.height {
-                for x in 0 ..< cell.width {
-                    if cell.format == .rgba16Float {
-                        bytes += kit.texel(x, y, seed: seed)
-                    } else {
-                        bytes += withUnsafeBytes(
-                            of: probeHash(UInt32(x), UInt32(y), UInt32(seed)).littleEndian, Array.init
-                        )
+            if cell.format == .rgba16Float {
+                return kit.pattern.image(width: cell.width, height: cell.height, seed: seed)
+            }
+            var bytes = [UInt8](repeating: 0, count: resultBytes)
+            bytes.withUnsafeMutableBytes { out in
+                for y in 0 ..< cell.height {
+                    let row = y * cell.width
+                    for x in 0 ..< cell.width {
+                        let word = probeHash(UInt32(x), UInt32(y), UInt32(seed)).littleEndian
+                        out.storeBytes(of: word, toByteOffset: (row + x) * 4, as: UInt32.self)
                     }
                 }
             }

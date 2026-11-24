@@ -59,7 +59,7 @@ struct PresentCopyResetTest: HWTest {
         if state == Self.armed { return .skip("no frame came through a GPU copy (direct scanout)", metrics) }
 
         var nextWhole = false
-        switch await ScanoutReadback.capture(nudge: nudge) {
+        switch await ScanoutReadback.capture(includeRasters: false, nudge: nudge) {
         case .frame(let frame):
             metrics.set("next_direct", frame.direct)
             metrics.set("next_copy_rows", frame.copyRows)
@@ -77,12 +77,12 @@ struct PresentCopyResetTest: HWTest {
         )
     }
 
-    /// Nudges a frame every 100 ms until the armed present is done or missed, for up to 3 s.
+    /// Nudges a frame every 25 ms until the armed present is done or missed, for up to 3 s.
     static func settle(_ gpu: GPUConnection, _ nudge: @escaping @MainActor () -> Void) async -> [UInt8] {
         var reply: [UInt8] = []
-        for _ in 0 ..< 30 {
+        for _ in 0 ..< 120 {
             await MainActor.run { nudge() }
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            try? await Task.sleep(nanoseconds: 25_000_000)
             let (kr, answer) = call(gpu, query)
             guard kr == KERN_SUCCESS else { return reply }
             reply = answer
