@@ -520,10 +520,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
         dsDirty_ = false;
     }
-    if (zcull_.candidate && (dsChanged || pl != zcullProgram_)) {
+    if (zcull_.candidate && !zcull_.invalidated && (dsChanged || pl != zcullProgram_)) {
         zcullProgram_ = pl;
+        const bool earlyTests = pl->writesMemory[1] && zcullEarlyFragmentTests(pl->methods.data(), pl->methods.size());
         if (zcullInvalidates(zcull_, ds_, zeta && zetaHasDepth(zeta->format), zeta && zetaHasStencil(zeta->format),
-                             pl->fragmentDepth, shaderTestsActive_ != 0, pl->writesMemory[1])) {
+                             pl->fragmentDepth, shaderTestsActive_ != 0, pl->writesMemory[1], earlyTests)) {
             p.m(kInvalidateZcull, 0);
             SWITCH_METAL_DIAGNOSTIC(d.stats.zcullInvalidations++);
         }
