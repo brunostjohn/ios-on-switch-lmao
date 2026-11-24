@@ -502,3 +502,20 @@ TEST(FrameTimelineSource, TheFrameEndStandsInForAnUnarmedVsync)
     EXPECT_TRUE(note.has("switch_sched_render_vsync(stamp, interval);"));
     EXPECT_TRUE(method("FrameTimeline swapTimeline(uint64_t at)").has("tl.vsyncUs = timelineVsyncUs(at);"));
 }
+
+TEST(SwapZeroLayerSource, SwapSubmitFilterMatchesBothIpswTables)
+{
+    const std::string t24 = SourceText("../../../kits/SwitchABI/kinds/24B119/IOMobileFramebufferLegacy.json");
+    const std::string t21 = SourceText("../../../kits/SwitchABI/kinds/21H461/IOMobileFramebufferLegacy.json");
+    EXPECT_THAT(t24, HasSubstr("\"slots\": 379"));
+    EXPECT_THAT(t24, HasSubstr("\"opaque180\": \"0xfffffff009978668\""));
+    EXPECT_THAT(t21, HasSubstr("\"slots\": 358"));
+    EXPECT_THAT(t21, HasSubstr("\"opaque178\": \"0xfffffff00678f224\""));
+    EXPECT_TRUE(code().has("static constexpr unsigned kLegacyVtableSlots = 379, kSwapSubmitSlot = 180;"));
+    EXPECT_TRUE(code().has("static constexpr unsigned kLegacyVtableSlots = 358, kSwapSubmitSlot = 178;"));
+    EXPECT_TRUE(code().has("static inline switch_display::SwapZeroLayerState swapZeroLayer;"));
+    EXPECT_TRUE(method("bool start(IOService *provider) override").has("installSwapSubmitFilter();"));
+    EXPECT_TRUE(method("void stop(IOService *provider) override").has("resetSwapZeroLayer();"));
+    EXPECT_TRUE(method("void free() override").has("removeSwapSubmitFilter();"));
+    EXPECT_TRUE(method("IOReturn newUserClient(").has("resetSwapZeroLayer();"));
+}

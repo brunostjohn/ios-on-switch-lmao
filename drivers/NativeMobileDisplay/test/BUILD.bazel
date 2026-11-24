@@ -116,6 +116,14 @@ host_test(
 )
 
 host_test(
+    name = "switch_swap_zero_layer_test",
+    srcs = [
+        "switch_swap_zero_layer_test.cpp",
+        "//drivers/NativeMobileDisplay:SwitchSwapZeroLayer.h",
+    ],
+)
+
+host_test(
     name = "switch_frame_stall_test",
     srcs = [
         "switch_frame_stall_test.cpp",
@@ -290,6 +298,7 @@ host_test(
         "//drivers/NativeMobileDisplay:SwitchScanoutSetup.h",
         "//drivers/NativeMobileDisplay:SwitchLandscapeSelection.h",
         "//kits/SwitchABI:kinds/21H461/IOMobileFramebufferLegacy.json",
+        "//kits/SwitchABI:kinds/24B119/IOMobileFramebufferLegacy.json",
     ],
 )
 
