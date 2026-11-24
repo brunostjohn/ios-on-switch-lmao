@@ -180,24 +180,27 @@ void SwitchMetalRangeEncode::separateZeta(const SwitchMetalPass &pass, SwitchMet
 // reads that zeta, the pass's depth target, since the conversion back runs after the resolve and a discarded depth has
 // none: the pack's Depth16Unorm resolve state reads any depth and rounds the sample it picks once, as picking among
 // rounded samples would
-bool SwitchMetalRangeEncode::depth16Zeta(const SwitchMetalPass &pass, gm20b::PassDesc &p)
+bool SwitchMetalRangeEncode::depth16Zeta(const SwitchMetalPass &pass, gm20b::PassDesc &p, bool convertDepth32)
 {
     const gm20b::Texture &z = *p.separate.depth;
-    if (z.format != MTLPixelFormatDepth16Unorm)
+    const bool depth16 = z.format == MTLPixelFormatDepth16Unorm;
+    if (!depth16 && !(convertDepth32 && z.format == MTLPixelFormatDepth32Float))
         return true;
     gm20b::Texture *scratch = rc_->turnScratch(gm20b::kZetaFormat, z.width, z.height, gm20b::kDepthConvertTag,
                                                z.samples, std::max<uint32_t>(pass.layers, 1));
     if (!scratch) {
-        constexpr const char *kNoScratch = "no Depth32Float_Stencil8 scratch for a Depth16Unorm";
-        gm20bPassWorkFails(cb_, ahead_, kNoScratch, MTLCommandBufferErrorOutOfMemory);
-        return fail(PredEncPassRender, kNoScratch, z.width);
+        const char *noScratch = depth16 ? "no Depth32Float_Stencil8 scratch for a Depth16Unorm"
+                                        : "no Depth32Float_Stencil8 scratch for a Depth32Float";
+        gm20bPassWorkFails(cb_, ahead_, noScratch, MTLCommandBufferErrorOutOfMemory);
+        return fail(PredEncPassRender, noScratch, z.width);
     }
     if (pass.depthLoad == MTLLoadActionLoad && !rc_->depthConvert(*scratch, z, why_)) {
         gm20bPassWorkFails(cb_, ahead_, *why_, MTLCommandBufferErrorInternal);
         return fail(PredEncPassRender, *why_, z.width);
     }
     p.depthStencil.texture = scratch;
-    p.biasDepthBits = 16;
+    if (depth16)
+        p.biasDepthBits = 16;
     p.separate.depth = nullptr;
     p.separate.loadDepth = p.separate.storeDepth = false;
     separateResolved_[0] = nullptr;
@@ -205,9 +208,10 @@ bool SwitchMetalRangeEncode::depth16Zeta(const SwitchMetalPass &pass, gm20b::Pas
     return true;
 }
 
-// A Depth16Unorm a draw's shader tests (shader_tests.h copies no 16-bit depth) renders as one beside a Stencil8
-// does, through depth16Zeta's Depth32Float_Stencil8: every layer of a layered pass converted (CommandBuffer::depthConvert),
-// a turned pass's scratch moved into the plane by TurnedPass as any Depth32Float_Stencil8 attachment is
+// A Depth16Unorm a draw's shader tests (shader_tests.h copies no 16-bit depth), or a Depth16Unorm / Depth32Float in a
+// pass whose draws test or write stencil, renders through depth16Zeta's Depth32Float_Stencil8: every layer of a layered
+// pass converted (CommandBuffer::depthConvert), a turned pass's scratch moved into the plane by TurnedPass as any
+// Depth32Float_Stencil8 attachment is
 bool SwitchMetalRangeEncode::depth16Tested(const SwitchMetalPass &pass, gm20b::PassDesc &p)
 {
     __unsafe_unretained SwitchMetalTexture *z = (SwitchMetalTexture *)pass.depth;
@@ -217,16 +221,18 @@ bool SwitchMetalRangeEncode::depth16Tested(const SwitchMetalPass &pass, gm20b::P
         if (!(part ? zetaPart_.tic || (zetaPart_.tic = d_->attachmentTic(z->_raw, zetaPart_, uint32_t(level),
                                                                          uint32_t(pass.depthSlice)))
                    : d_->sampleable(z->_raw))) {
-            constexpr const char *kNoHeader = "no texture header for a Depth16Unorm's conversion";
-            gm20bPassWorkFails(cb_, ahead_, kNoHeader, MTLCommandBufferErrorOutOfMemory);
-            return fail(PredPassDepthStencil, kNoHeader, z->_raw.format);
+            const char *noHeader = z->_raw.format == MTLPixelFormatDepth16Unorm
+                                       ? "no texture header for a Depth16Unorm's conversion"
+                                       : "no texture header for a Depth32Float's conversion";
+            gm20bPassWorkFails(cb_, ahead_, noHeader, MTLCommandBufferErrorOutOfMemory);
+            return fail(PredPassDepthStencil, noHeader, z->_raw.format);
         }
     }
     separatePart_[0] = *p.depthStencil.texture;
     p.separate.depth = &separatePart_[0];
     p.depthStencil.clearStencil = true;
     p.depthStencil.stencil = 0;
-    return depth16Zeta(pass, p);
+    return depth16Zeta(pass, p, true);
 }
 
 bool SwitchMetalRangeEncode::depth16Back()

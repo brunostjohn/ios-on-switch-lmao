@@ -90,14 +90,21 @@ static bool storageLaidOut(SwitchMetalCommandBuffer *cb, gm20b::RenderEncoder &o
     return !b.storageMask || open.takeStorage(b.storageMask, b.arrayedStorageMask);
 }
 
-// A Depth16Unorm a draw of the pass after `open` tests in its shader is the converted zeta only where `open` began it so
-// (TegraGM20BMetalRangeForms.mm depth16Tested); a zeta of any other format is the same however its pass began
+// A Depth16Unorm a draw of the pass after `open` tests in its shader is the converted zeta only where `open` began it
+// so (TegraGM20BMetalRangeForms.mm depth16Tested), and a depth-only pass testing or writing stencil cannot fuse across
+// pass boundaries because Metal starts each pass's hidden stencil at 0
 static bool testedLaidOut(SwitchMetalCommandBuffer *cb, size_t open, size_t next)
 {
+    const SwitchMetalPass &first = cb->_passes[cb->_plan.legacy(open).x];
     const SwitchMetalPass &pass = cb->_passes[cb->_plan.legacy(next).x];
     __unsafe_unretained SwitchMetalTexture *depth = (SwitchMetalTexture *)pass.zeta[0].texture;
-    return !pass.shaderTestsDepth || !depth || depth->_raw.format != MTLPixelFormatDepth16Unorm ||
-           cb->_passes[cb->_plan.legacy(open).x].shaderTestsDepth;
+    if (!depth)
+        return true;
+    if (depth->_raw.format == MTLPixelFormatDepth32Float)
+        return !pass.testsStencil && !first.testsStencil;
+    if (depth->_raw.format == MTLPixelFormatDepth16Unorm)
+        return !pass.testsStencil && !first.testsStencil && (!pass.shaderTestsDepth || first.shaderTestsDepth);
+    return true;
 }
 
 bool SwitchMetalRangeEncode::endEncoder(size_t at)

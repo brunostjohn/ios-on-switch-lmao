@@ -91,7 +91,7 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
         return true;
     }
     gm20b::PassDesc p;
-    bool shaderTestsDepth = false;
+    bool shaderTestsDepth = false, testsStencil = false;
     for (size_t sub = at; sub == at || (sub < to_ && gm20bContinuesPass(cb, sub)); sub = cb->_plan.encoderEnd(sub)) {
         if (sampledShadows_)
             refresh(sub);
@@ -102,6 +102,7 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
         passStorageMasks(cb, sub, p);
         p.hiddenZeta |= cb->_passes[cb->_plan.legacy(sub).x].testsHiddenZeta;
         shaderTestsDepth |= cb->_passes[cb->_plan.legacy(sub).x].shaderTestsDepth;
+        testsStencil |= cb->_passes[cb->_plan.legacy(sub).x].testsStencil;
     }
     for (unsigned j = 0; j < 8; j++) {
         const SwitchMetalPass::Color &a = pass.color[j];
@@ -270,7 +271,9 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
             separateZeta(pass, z, s, p);
             if (!depth16Zeta(pass, p))
                 return false;
-        } else if (shaderTestsDepth && z->_raw.format == MTLPixelFormatDepth16Unorm && !depth16Tested(pass, p)) {
+        } else if (((z->_raw.format == MTLPixelFormatDepth16Unorm && (shaderTestsDepth || testsStencil)) ||
+                    (z->_raw.format == MTLPixelFormatDepth32Float && testsStencil)) &&
+                   !depth16Tested(pass, p)) {
             return false;
         }
     }

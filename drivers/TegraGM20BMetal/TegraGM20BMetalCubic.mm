@@ -292,6 +292,9 @@ static gm20b::Variant<gm20b::Pipeline> *preparedVariant(__unsafe_unretained Swit
     // a Depth16Unorm a draw tests in its shader renders converted (TegraGM20BMetalRangeForms.mm depth16Tested)
     if ((_forms.fragmentTests && gm20b::zetaHasDepth(zeta)) || (base->rec->shaderTests.flags & gm20b::kShaderTestDepth))
         _cb->_passes[_passAt].shaderTestsDepth = true;
+    if (_forms.fragmentTests == uint8_t(gm20b::FragmentTests::StencilWrite) ||
+        (base->rec->shaderTests.flags & gm20b::kShaderTestStencil))
+        _cb->_passes[_passAt].testsStencil = true;
     reboundTextures(*base, _tex[1], _forms.written);
     if (!_forms.cubic.empty() || _forms.fragmentTests || !_forms.written.empty())
         _formVariant = preparedVariant(self, _forms);

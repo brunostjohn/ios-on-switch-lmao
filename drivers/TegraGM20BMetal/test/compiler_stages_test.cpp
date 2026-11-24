@@ -12,6 +12,7 @@
 #include "../TegraGM20BMetalOffline.h"
 #include "../gm20b_cache.h"
 #include "../pack.h"
+#include "../shader_tests.h"
 #include "../view.h"
 
 #include <gtest/gtest.h>
@@ -379,5 +380,25 @@ TEST_F(CompilerStages, ExtendedRangeAndYcbcrTexelBuffersCompileDirect)
         EXPECT_EQ(window, c.tic0) << c.fn << " fmt " << c.format;
         EXPECT_EQ(gm20b::slotView(window, c.tic0, c.tic0, c.bpp, false), gm20b::SlotView::Own)
             << c.fn << " fmt " << c.format;
+    }
+}
+
+TEST_F(CompilerStages, FetchDepthOnlyStencilWriteCompilesWithShaderStencilTest)
+{
+    nmb_keep_translations(0);
+    Compiler compiler(false);
+    const std::string fetchDiscard = " | f stages_fetch_discard_fragment lib=" + std::string(kLibrary);
+    for (const char *ds : {"ds=252/0", "ds=250/0"}) {
+        const std::string line =
+            state(std::string("samples=1 topo=0 ") + ds, "c0=80:15:0:1:0:0:1:0:0", kAttributes, fetchDiscard) +
+            " | tests=4";
+        const Made made = compiler.render(line);
+        ASSERT_EQ(made.result, TegraGM20BCompileMade) << ds << ": " << made.why;
+        gm20b::RuntimeRecord record;
+        std::string refusal;
+        ASSERT_EQ(gm20b::decodeEntry(made.entry, made.key, record, refusal), gm20b::RecordCache::Found::Record)
+            << ds << ": " << refusal;
+        EXPECT_EQ(record.pipeline.shaderTests.flags, gm20b::kShaderTestDepth | gm20b::kShaderTestStencil) << ds;
+        EXPECT_EQ(record.pipeline.storageTests, 4u) << ds;
     }
 }

@@ -32,6 +32,13 @@ fragment float4 stages_fetch_fragment(StagesOut in [[stage_in]], float4 fetched 
     return fract(fetched + float4(in.uv, 0.25f, 0.5f));
 }
 
+fragment float4 stages_fetch_discard_fragment(StagesOut in [[stage_in]], float4 fetched [[color(0)]])
+{
+    if (in.uv.x < 0.0f)
+        discard_fragment();
+    return fract(fetched + float4(in.uv, 0.25f, 0.5f));
+}
+
 kernel void stages_kernel(texture2d<float, access::read> t [[texture(0)]], device float4 *out [[buffer(0)]],
                           uint2 id [[thread_position_in_grid]])
 {

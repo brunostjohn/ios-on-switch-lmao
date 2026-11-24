@@ -337,6 +337,7 @@ struct SwitchMetalPass {
     // a draw in it tests depth in its shader (shader_tests.h): a Depth16Unorm attachment renders converted
     // (TegraGM20BMetalRangeForms.mm depth16Tested)
     bool shaderTestsDepth = false;
+    bool testsStencil = false;
     bool xrPlaneBinds = false;  // it binds a two-plane RGB10A8_2P_XR10 texture, which a draw may store through
     bool continues =
         false;  // a parallel encoder's sub-encoder after its first: the pass before it goes on (parallel.h)

@@ -151,7 +151,7 @@ private:
     void planesBack();
     void separateZeta(const SwitchMetalPass &pass, SwitchMetalTexture *depth, SwitchMetalTexture *stencil,
                       gm20b::PassDesc &p);
-    bool depth16Zeta(const SwitchMetalPass &pass, gm20b::PassDesc &p);
+    bool depth16Zeta(const SwitchMetalPass &pass, gm20b::PassDesc &p, bool convertDepth32 = false);
     bool depth16Tested(const SwitchMetalPass &pass, gm20b::PassDesc &p);
     bool depth16Back();
     bool imagePlanes(size_t pass, gm20b::PassDesc &p);
