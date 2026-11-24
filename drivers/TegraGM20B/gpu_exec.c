@@ -3,10 +3,6 @@
 #include "gpu_internal.h"
 #include "SwitchGpuWordWait.h"
 
-#define NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE (0x0eu << 27)
-#define NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE (0x09u << 27)
-#define NVB06F_MEM_OP_C_TLB_INVALIDATE_PDB_ALL 0x1u /* GPC 1:1 0: the GPCs' TLBs too */
-
 /* Whether nvif_chan_gpfifo_wait(gpfifo_nr, push_nr) would find its room now, counted as nvif counts it (the GET reports
  * on the semaphore page, its post size, a wrap of the push buffer that kicks one more entry). */
 static int chan_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)

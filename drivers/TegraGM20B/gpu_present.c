@@ -222,6 +222,7 @@ int tgm_present_open(struct tgm_vm **pvm)
 		      ? tgm_vm_new(&tgm_present.vm)
 		      : -ENOMEM;
 	if (!ret) {
+		tgm_vm_claim(tgm_present.vm, &tgm_present);
 		ret = tgm_pfence_get(
 			tgm_present
 				.vm); /* the channel's own fence: the page every address space may wait on */
@@ -241,10 +242,11 @@ int tgm_present_open(struct tgm_vm **pvm)
 				  &tgm_present.fences_gpu);
 	}
 	if (!ret) {
-		ret = tgm_chan_new_copy(tgm_present.vm, NULL, tgm_present.fence,
+		ret = tgm_chan_new_copy(tgm_present.vm, &tgm_present, tgm_present.fence,
 					tgm_present.fence_gpu, "present", 1, &tgm_present.chan);
 	}
 	if (!ret) {
+		tgm_present.chan->app = 0;
 		tgm_present.chan->kernel = CHAN_PRESENT;
 		tgm_gpu_lock();
 		chan_prioritize(tgm_present.chan);
@@ -328,8 +330,8 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 	cut = dst_va && tgm_copy_reset_armed();
 #endif
 	push = &chan->chan.push;
-	/* acquires, a start stamp, the copy, the read-backs, the fence */
-	words = dependency_count * 5 + 57 + nreads * TGM_COPY_RECT_DWORDS +
+	/* acquires, a start stamp, optional L2+TLB invalidate, the copy, the read-backs, the fence */
+	words = dependency_count * 5 + 57 + 18 + nreads * TGM_COPY_RECT_DWORDS +
 		cut * (TegraGM20BCopyResetCopies * TGM_PRESENT_COPY_DWORDS + 2) + CHAN_FENCE_DWORDS;
 #if TGM_STATS
 	if (push->cur + words > push->end && !tgm_chan_room(chan, 1, words))
@@ -371,6 +373,20 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 	tgm_present.copy.dst_va = dst_va;
 	tgm_present.copy.dst_pitch = dst_pitch;
 	tgm_present.copy.block_height_log2 = block_height_log2;
+	if (tgm_tlb_take(&chan->tlb, &chan->vm->tlb)) {
+		/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
+		/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
+		PUSH_NVSQ(push, NV906F, NVB06F_WFI, 0);
+		PUSH_NVSQ(push, NV906F, NVB06F_FB_FLUSH, 0);
+		PUSH_NVSQ(push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
+			  NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY);
+		PUSH_NVSQ(push, NV906F, NVB06F_FB_FLUSH, 0);
+		PUSH_NVSQ(push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
+			  NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);
+		PUSH_NVSQ(push, NV906F, NVB06F_MEM_OP_C, NVB06F_MEM_OP_C_TLB_INVALIDATE_PDB_ALL,
+			  NVB06F_MEM_OP_D, NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE);
+		/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
+	}
 	if (dst_va)
 		tgm_present_push_copy(push);
 #if TGM_STATS

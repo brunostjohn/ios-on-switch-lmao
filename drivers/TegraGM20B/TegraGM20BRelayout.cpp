@@ -165,12 +165,16 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 	}
 	SwitchGpuRelayoutMapping *surfaceMap = nullptr, *rowsMap = nullptr;
 	bool finish = false;
+	bool restorePitch = false;
+	bool compressed = false;
 	int ret = switch_gpu_relayout_mapping(r.space.vm, &gRelayout.mappings, surface.pas,
 					      surface.npages, true, &surfaceMap);
 	if (!ret)
 		ret = switch_gpu_relayout_mapping(r.space.vm, &gRelayout.mappings, rows.pas,
 						  rows.npages, false, &rowsMap);
 	if (!ret) {
+		compressed =
+			surfaceMap->tiledKind != 0u && surfaceMap->tiledKind != TGM_LAYOUT_KIND;
 		const uint64_t pushVa = kPushVa + slot * kPage;
 		__atomic_store_n(words + kCheckpointWord, 0u, __ATOMIC_RELEASE);
 		const tgm_relayout_move m = {surfaceMap->tiled,
@@ -197,7 +201,13 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 				tgm_copy_wait(tgm_chan_uid(chan), seqno, acquired, nwaits);
 			});
 			ret = tgm_chan_error(chan) ? -5 : 0;
-			finish = ret && __atomic_load_n(words + kCheckpointWord, __ATOMIC_ACQUIRE);
+			const uint32_t reached =
+				__atomic_load_n(words + kCheckpointWord, __ATOMIC_ACQUIRE);
+			const bool checkpoint = ret && reached != 0u;
+			if (checkpoint && op == TGM_RELAYOUT_TILE_IN_PLACE && compressed)
+				restorePitch = true;
+			else if (checkpoint)
+				finish = true;
 			if (!ret)
 				countInPlace(op, started);
 		}
@@ -205,15 +215,21 @@ int move(const tgm_relayout_pages &surface, const tgm_relayout_pages &rows, cons
 	releaseSlot(slot);
 	switch_gpu_relayout_mapping_put(rowsMap);
 	switch_gpu_relayout_mapping_put(surfaceMap);
-	if (ret && tgm_chan_error(chan)) {
+	if (ret && (tgm_chan_error(chan) || compressed)) {
 		switch_gpu_relayout_cache_clear(r.space.vm, &gRelayout.mappings);
-		if (!flushForCpu())
+		if (tgm_chan_error(chan) && !flushForCpu())
 			switch_refusal("iosurface-layout", "fault-unflushed",
 				       "a faulted relayout leaves the GPU's L2 unflushed for the "
 				       "CPU's move: "
 				       "no copy channel");
 	}
-	if (finish) {
+	if (restorePitch) {
+		// Copy 1 already saved intact pitch rows before Copy 2 faulted mid-compression;
+		// restore them so the caller's pitch fallback does not expose half-compressed bytes.
+		tgm_cpu_clean_pages(rows.pas, rows.npages);
+		tgm_relayout_finish_cpu(&surface, &rows, &l, bytesPerRow,
+					TGM_RELAYOUT_UNTILE_IN_PLACE);
+	} else if (finish) {
 		tgm_cpu_clean_pages(rows.pas, rows.npages);
 		tgm_relayout_finish_cpu(&surface, &rows, &l, bytesPerRow, op);
 		ret = 0;

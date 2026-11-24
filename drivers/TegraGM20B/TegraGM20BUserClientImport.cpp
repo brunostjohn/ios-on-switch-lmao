@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 // BoImport: a task's pages wired for the GPU.
 #include "TegraGM20BUserClientInternal.h"
+#include "SwitchGpuSmmu.h"
+#include "TegraGM20BComp.h"
 #include "TegraGM20BRecord.h"
 #include "TegraGM20BSurfacePrefault.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
@@ -198,13 +200,6 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 			bo->representationValue = 1;
 		}
 	}
-	if (!ret && !bo->wiring) {
-		ret = ioreturn(
-			tgm_mem_new_waited(vm_, bo->pas, bo->npages, &bo->mem, &cost.lock_ns));
-		if (!ret && in->surface_id)
-			publishWiring(bo, in);
-	}
-	lap(2);
 	if (ret) {
 		char region[192] = "";
 #if TGM_STATS
@@ -252,6 +247,56 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 		releaseBo(bo);
 		return ioreturn(refused);
 	}
+	const bool wantBackingMem = in->surface_id != 0 && (bo->npages % TGM_COMP_PAGES) == 0 &&
+				    switch_gpu_smmu_ready() && switch_gpu_compression_on();
+	tgm_mem *canonical = nullptr;
+	bool gotCanonical = false;
+	if (wantBackingMem && !bo->mem) {
+		gotCanonical = switch_gpu_backing_tgm_mem(bo->backing, bo->npages, &canonical) == 0;
+		if (!gotCanonical)
+			gotCanonical = switch_gpu_backing_tgm_mem_existing_or_direct(
+					       bo->backing, bo->npages, &canonical) == 0;
+	} else {
+		gotCanonical = switch_gpu_backing_tgm_mem_existing_or_direct(
+				       bo->backing, bo->npages, &canonical) == 0;
+	}
+	if (gotCanonical) {
+		bo->mem = canonical;
+		bo->backingMemory = true;
+		bo->ownsMem = false;
+	} else if (!bo->mem) {
+		ret = ioreturn(
+			tgm_mem_new_waited(vm_, bo->pas, bo->npages, &bo->mem, &cost.lock_ns));
+		if (ret) {
+			releaseBo(bo);
+			return ret;
+		}
+		bo->ownsMem = true;
+	}
+	if (!bo->wiring && in->surface_id) {
+		publishWiring(bo, in);
+		// A racing publish that won with canonical memory leaves w->mem == nullptr and
+		// destroys our fallback sharedMem; recover canonical or fresh fallback memory.
+		if (!bo->mem) {
+			if (switch_gpu_backing_tgm_mem_existing_or_direct(bo->backing, bo->npages,
+									  &canonical) == 0) {
+				bo->mem = canonical;
+				bo->backingMemory = true;
+				bo->ownsMem = false;
+			} else {
+				ret = ioreturn(tgm_mem_new_waited(vm_, bo->pas, bo->npages,
+								  &bo->mem, &cost.lock_ns));
+				if (ret) {
+					releaseBo(bo);
+					return ret;
+				}
+				bo->ownsMem = true;
+			}
+		}
+	}
+	lap(2);
+	if (bo->backingMemory && bo->mem && tgm_mem_can_compress(bo->mem))
+		tgm_coherency_set_compressible(bo->coh, 1);
 	int fresh = 0;
 	if (bo->surface) {
 		tgm_record *record = tgm_record_of(bo->surface);
@@ -321,6 +366,7 @@ void AGXDeviceUserClient::adoptWiring(Bo *bo, SharedWiring *w)
 	bo->pas = w->pas;
 	bo->mem = w->mem;
 	bo->readOnly = w->readOnly;
+	bo->ownsMem = false;
 }
 
 // The import's own wiring becomes the task's for this range; when another import published one meanwhile, the import
@@ -330,7 +376,16 @@ void AGXDeviceUserClient::publishWiring(Bo *bo, const TegraGM20BAbiBoImport *in)
 	SharedWiring *made = IONew(SharedWiring, 1);
 	if (!made)
 		return;
+	tgm_mem *const backingMem = bo->backingMemory ? bo->mem : nullptr;
+	tgm_mem *const sharedMem = bo->ownsMem ? bo->mem : nullptr;
+	if (sharedMem)
+		bo->ownsMem = false;
 	*made = {nullptr,   task_,   in->address, in->bytes, in->surface_id, 0,
-		 bo->wired, bo->pas, bo->npages,  bo->mem,   bo->readOnly};
+		 bo->wired, bo->pas, bo->npages,  sharedMem, bo->readOnly};
 	adoptWiring(bo, sharedWiringPublish(made));
+	if (backingMem) {
+		bo->mem = backingMem;
+		bo->backingMemory = true;
+		bo->ownsMem = false;
+	}
 }

@@ -347,6 +347,7 @@ class AGXDeviceUserClient : public IOUserClient
 		bool compositorPool;  // a pool BO counted as the compositor's (critical_ when it was made)
 		tgm_mem *mem;
 		bool backingMemory;
+		bool ownsMem;
 		tgm_coh *coh;  // imports: the surface's coherency entry, held (TegraGM20BCoherency)
 		bool layoutAsked;  // imports: this BO asked the surface's layout before (TGM_LAYOUT_ASK_FIRST)
 		switch_gpu_backing *backing;

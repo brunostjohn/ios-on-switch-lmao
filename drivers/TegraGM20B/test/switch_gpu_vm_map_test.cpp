@@ -315,6 +315,26 @@ TEST_F(VmMap, VolatileCompressedKindIsRefusedNowAndAtInstall)
 	free(mapping);
 }
 
+TEST_F(VmMap, RawMapRefusesVolatileCompressedKindAndMapsNonVolatileAtBigShift)
+{
+	memory.page = memory.mem.shift = 16;
+	memory.bytes = memory.mem.bytes = 16 * PAGE_SIZE;
+	memory.npages = 16;
+	tgm_gpu.mmu.kind[0x42] = 0xfe;
+	u8 shift = 0;
+	EXPECT_EQ(tgm_vm_map_raw(&a, 0x40000000, memory.bytes, &memory, 0, 0x42, 0, 1, 0, &shift),
+		  -EINVAL);
+	EXPECT_TRUE(calls.empty());
+	EXPECT_EQ(tgm_vm_map_raw(&a, 0x40000000, memory.bytes, &memory, 0, 0x42, 0, 0, 0, &shift),
+		  0);
+	EXPECT_EQ(shift, 16u);
+	ASSERT_EQ(calls.size(), 2u);
+	EXPECT_EQ(calls[1].operation, 'm');
+	EXPECT_EQ(calls[1].vol, 0u);
+	EXPECT_EQ(calls[1].kind, 0x42u);
+	EXPECT_EQ(calls[1].shift, 16u);
+}
+
 // A refilled spare's pages (SwitchGpuSpares.h switch_gpu_spare_layout): 128 KiB units anywhere in memory, each aligned,
 // then a tail of single pages. Each unit maps as two 64 KiB PTEs, the tail in 4 KiB ones.
 TEST_F(VmMap, ASparesUnitsMapAsBigPages)

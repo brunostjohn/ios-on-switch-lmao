@@ -84,6 +84,8 @@ IOReturn AGXDeviceUserClient::nativeSurfaceView(const TegraGM20BAbiNativeSurface
 		} else {
 			result =
 				tgm_mem_new(vm_, allocation.pages, allocation.page_count, &bo->mem);
+			if (!result)
+				bo->ownsMem = true;
 		}
 	}
 	if (result) {

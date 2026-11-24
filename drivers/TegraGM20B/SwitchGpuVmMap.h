@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+/* A volatile map keeps none of its lines in the GPU's L2, and a compressible kind compresses through the L2
+ * (TegraGM20BABI.h "Compression"): any uncompressed kind, pitch or block-linear, maps volatile. */
+int switch_gpu_vm_volatile_kind_ok(u8 kind, int vol)
+{
+	return !vol || tgm_gpu.mmu.kind[kind] == kind;
+}
+
 /* Sysmem is mapped volatile (GPU L2 does not keep its lines): CONTRACT.md §3(b) option one; cacheable with
- * l2_on(). A compressible kind maps with 128 KiB pages and the memory's comptags (TegraGM20BComp.h) or is refused: a map
+ * l2_on(). A compressible kind maps with 64 KiB pages and the memory's comptags (TegraGM20BComp.h) or is refused: a map
  * demoted to its uncompressed kind, as nvgpu demotes one, would look compressed to its caller, who would go on clearing
  * and resolving it as compressed. */
 int tgm_vm_map_raw(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
@@ -17,7 +24,7 @@ int tgm_vm_map_raw(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_me
 	u32 ordered_scope = 0;
 	if (va < TGM_USER_VA_START || range > TGM_KERNEL_VA || va > TGM_KERNEL_VA - range ||
 	    offset > mem->bytes || range > mem->bytes - offset ||
-	    !nvif_mmu_kind_valid(&tgm_gpu.mmu, kind))
+	    !nvif_mmu_kind_valid(&tgm_gpu.mmu, kind) || !switch_gpu_vm_volatile_kind_ok(kind, vol))
 		return -EINVAL;
 	if (tgm_gpu.mmu.kind[kind] != kind) {
 		if (!tgm_comp_bind_ok(va, offset, range, mem->page))
@@ -162,13 +169,6 @@ static struct nvif_mem *mem_mapping_view(struct tgm_mem *mem,
 	}
 	entry->shift = PAGE_SHIFT;
 	return &mem->mem;
-}
-
-/* A volatile map keeps none of its lines in the GPU's L2, and a compressible kind compresses through the L2
- * (TegraGM20BABI.h "Compression"): any uncompressed kind, pitch or block-linear, maps volatile. */
-int switch_gpu_vm_volatile_kind_ok(u8 kind, int vol)
-{
-	return !vol || tgm_gpu.mmu.kind[kind] == kind;
 }
 
 int switch_gpu_vm_map_volatile(struct tgm_vm *vm, u64 va, u64 range, struct tgm_mem *mem,

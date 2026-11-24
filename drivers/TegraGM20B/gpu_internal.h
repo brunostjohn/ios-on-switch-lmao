@@ -654,6 +654,9 @@ int tgm_fences_map(struct tgm_vm *vm);
 #define NVB06F_MEM_OP_C 0x0030
 #define NVB06F_MEM_OP_D 0x0034
 #define NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY (0x10u << 27)
+#define NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE (0x0eu << 27)
+#define NVB06F_MEM_OP_D_OPERATION_MMU_TLB_INVALIDATE (0x09u << 27)
+#define NVB06F_MEM_OP_C_TLB_INVALIDATE_PDB_ALL 0x1u /* GPC 1:1 0: the GPCs' TLBs too */
 #define NVB06F_WFI 0x0078
 
 /* Push dwords chan_fence() may write, at most */

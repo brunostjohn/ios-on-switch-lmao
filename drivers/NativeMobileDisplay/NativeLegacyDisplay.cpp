@@ -199,6 +199,11 @@ extern "C" __attribute__((weak)) int tegra_gm20b_surface_layout(uint64_t, struct
     return 0;
 }
 
+extern "C" __attribute__((weak)) int tegra_gm20b_surface_compressed(uint64_t)
+{
+    return 0;
+}
+
 extern "C" __attribute__((weak)) void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)
 {
     *out = {};
@@ -3594,10 +3599,11 @@ public:
 #endif
         const int blockLog2 = surfaceBlockLog2(memory);
         const bool tiled = blockLog2 >= 0;
+        const bool compressed = tiled && surfaceCompressed(memory);
         // A block-linear frame in other blocks than window A's reaches the screen only through the GPU copy, which reads
         // its layout: window A cannot scan it, nor a CPU copy take its bytes as they are.
         const bool asScanned = !tiled || blockLog2 == static_cast<int>(kScanBlockLog2);
-        if (direct && asScanned &&
+        if (direct && asScanned && !compressed &&
             offerDirect(request, surface, memory, sourceStride, allocation, width, height, tiled, kickAt))
             return;
         if (direct && ring.target() == kNoBuffer) {  // no slot either: the frame end that frees a surface kicks again
@@ -3610,6 +3616,10 @@ public:
         if (offerVicCopy(request, surface, sourceStride, allocation, width, height, blockLog2, kickAt))
             return;
         if (!asScanned) {
+            native_legacy_transfer_observed(kIOReturnUnsupported, request, 0);
+            return;
+        }
+        if (compressed) {
             native_legacy_transfer_observed(kIOReturnUnsupported, request, 0);
             return;
         }

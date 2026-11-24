@@ -524,6 +524,7 @@ struct tgm_coh *tgm_coherency_add(uint64_t pa, uint32_t surface_id, const uint64
 /* SurfaceWrites (method 15): every entry of the surface counts submissions as GPU writes from now on. */
 void tgm_coherency_gpu_writes(uint32_t surface_id);
 void tgm_coherency_cleaned(struct tgm_coh *c);
+void tgm_coherency_set_compressible(struct tgm_coh *c, int compressible);
 struct switch_gpu_backing;
 /* Success consumes the supplied surface reference; it keeps a parked tiled identity from being recycled. */
 int tgm_coherency_pin(struct tgm_coh *c, struct switch_gpu_backing *backing, void *surface,

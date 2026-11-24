@@ -205,7 +205,7 @@ AGXDeviceUserClient::Bo *AGXDeviceUserClient::findToken(uint32_t token)
 
 void AGXDeviceUserClient::releaseBo(Bo *bo)
 {
-	if (bo->wiring || bo->backingMemory)
+	if (!bo->ownsMem)
 		bo->mem = nullptr;
 	tgm_mem_del(&bo->mem);
 	if (bo->pool_va && bo->handle) {

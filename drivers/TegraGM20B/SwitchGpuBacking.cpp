@@ -381,14 +381,14 @@ extern "C" void switch_gpu_backing_scanout(switch_gpu_backing *backing, int add)
 	if (!backing)
 		return;
 	if (add)
-		__atomic_add_fetch(&backing->scanout_holds, 1u, __ATOMIC_ACQ_REL);
+		__atomic_add_fetch(&backing->scanout_holds, 1u, __ATOMIC_SEQ_CST);
 	else
-		__atomic_sub_fetch(&backing->scanout_holds, 1u, __ATOMIC_ACQ_REL);
+		__atomic_sub_fetch(&backing->scanout_holds, 1u, __ATOMIC_SEQ_CST);
 }
 
 extern "C" int switch_gpu_backing_scanned(const switch_gpu_backing *backing)
 {
-	return backing && __atomic_load_n(&backing->scanout_holds, __ATOMIC_ACQUIRE) != 0;
+	return backing && __atomic_load_n(&backing->scanout_holds, __ATOMIC_SEQ_CST) != 0;
 }
 
 extern "C" void switch_gpu_backing_release(switch_gpu_backing *backing)

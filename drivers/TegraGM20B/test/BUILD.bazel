@@ -302,6 +302,14 @@ host_test(
 )
 
 host_test(
+    name = "switch_gpu_surface_comp_test",
+    srcs = [
+        "switch_gpu_surface_comp_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuSurfaceComp.h",
+    ],
+)
+
+host_test(
     name = "gm20b_load_test",
     srcs = [
         "gm20b_load_test.cpp",
@@ -1690,6 +1698,8 @@ host_library(
         "//drivers/TegraGM20B:TegraGM20BViewMerge.h",
         "//drivers/TegraGM20B:TegraGM20BViews.h",
         "//drivers/TegraGM20B:SwitchGpuPathStats.h",
+        "//drivers/TegraGM20B:SwitchGpuSmmu.h",
+        "//drivers/TegraGM20B:SwitchGpuSurfaceComp.h",
         "//kits/SwitchRefusal:SwitchRefusal.h",
     ],
     deps = [

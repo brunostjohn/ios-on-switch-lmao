@@ -134,6 +134,7 @@ public:
 		uint32_t npages, backing_pages;
 		bool readOnly;
 		bool backingMemory;
+		bool ownsMem;
 		tgm_mem *mem;
 	};
 
@@ -243,7 +244,8 @@ protected:
 		while (client.bos_ != &source) {
 			auto *bo = client.bos_;
 			client.bos_ = bo->next;
-			if (!bo->backingMemory)
+			EXPECT_EQ(bo->ownsMem, !bo->backingMemory);
+			if (bo->ownsMem)
 				delete bo->mem;
 			release(bo->nativeView);
 			free(bo->nativeView);

@@ -531,8 +531,20 @@ TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
 	EXPECT_FALSE(Block(SourceText("../TegraGM20BReadback.cpp"), "uint32_t tgm_readback_take(")
 			     .has("TEGRA_SCANOUT_TILED"));
 	const CodeText surface = Block(client(), "uint64_t presentSurface(");
-	EXPECT_TRUE(surface.has("const uint32_t kind = blockLinear ? TGM_LAYOUT_KIND : 0;"));
-	EXPECT_TRUE(surface.has("s.mem, bytes, static_cast<uint8_t>(kind))"));
+	EXPECT_TRUE(surface.has("uint32_t kind = compressed ? compKind : "
+				"(blockLinear ? TGM_LAYOUT_KIND : 0);"));
+	EXPECT_TRUE(surface.has("const uint32_t preparedKind = presentCompressedKind(memory);"));
+	EXPECT_TRUE(surface.has("switch_gpu_vm_map(vm, va, mapBytes, s.mem, 0, "
+				"static_cast<uint8_t>(kind), 0, &s.mapping)"));
+	EXPECT_TRUE(surface.has("switch_gpu_vm_map_volatile(vm, va, mapBytes, s.mem, 0, "
+				"static_cast<uint8_t>(kind), 0, 1, &s.mapping)"));
+	const CodeText drop = Block(client(), "void dropSurface(PresentSurface &s)");
+	EXPECT_TRUE(drop.has("switch_gpu_vm_unmap(s.vm, &s.mapping);"));
+	EXPECT_FALSE(drop.has("tgm_present_unmap("));
+	EXPECT_TRUE(Block(gpu(), "int tgm_present_open(struct tgm_vm **pvm)")
+			    .has("tgm_vm_claim(tgm_present.vm, &tgm_present);"));
+	EXPECT_TRUE(Block(gpu(), "static int present_copy(")
+			    .has("if (tgm_tlb_take(&chan->tlb, &chan->vm->tlb))"));
 	EXPECT_FALSE(Block(client(), "IOReturn AGXDeviceUserClient::vmBind(").has("tiled"));
 	EXPECT_TRUE(Block(client(), "IOReturn AGXDeviceUserClient::surfaceLayoutInfo(")
 			    .has("tgm_coherency_layout(coh,"));
@@ -865,7 +877,7 @@ TEST(GM20BVisibilitySource, AJobWritingAScannedBackingIsExternal)
 	EXPECT_TRUE(
 		Block(SourceText("../SwitchGpuBacking.cpp"),
 		      "extern \"C\" int switch_gpu_backing_scanned(")
-			.has("__atomic_load_n(&backing->scanout_holds, __ATOMIC_ACQUIRE) != 0"));
+			.has("__atomic_load_n(&backing->scanout_holds, __ATOMIC_SEQ_CST) != 0"));
 }
 
 // Only a connection's maps skip the CPU's L2 and TLB maintenance; every removal keeps it (TegraGM20BTlb.h).
