@@ -384,6 +384,18 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 #if TGM_STATS
 		else if (op == TegraGM20BPathsOpTargetPeaks)
 			tgm_target_peaks_line(reply->line, sizeof(reply->line));
+		else if (op == TegraGM20BPathsOpForeignWaits) {
+			struct tgm_foreign_waits totals = {};
+			tgm_foreign_waits_totals(&totals);
+			snprintf(reply->line, sizeof(reply->line),
+				 "foreign_jobs=%llu foreign_fences=%llu foreign_promises=%llu "
+				 "foreign_events=%llu foreign_host1x=%llu",
+				 static_cast<unsigned long long>(totals.jobs),
+				 static_cast<unsigned long long>(totals.fences),
+				 static_cast<unsigned long long>(totals.promises),
+				 static_cast<unsigned long long>(totals.events),
+				 static_cast<unsigned long long>(totals.host1x));
+		}
 #endif
 		else
 			return kIOReturnBadArgument;

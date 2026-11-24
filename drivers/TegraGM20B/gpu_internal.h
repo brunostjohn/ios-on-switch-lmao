@@ -502,6 +502,8 @@ struct stats_state {
 		foreign_timed;
 	u64 foreign_queue_sum, foreign_queue_max;
 	u32 l2_inval, l2_inval_host, l2_inval_host_comp, l2_inval_tlb, l2_inval_kernel;
+	u64 foreign_total_jobs, foreign_total_fences, foreign_total_promises, foreign_total_events,
+		foreign_total_host1x;
 #endif
 	/* tgm_gpu.lock held by a channel's setup (chan_new) and teardown (chan_free): every VmBind, BoAlloc, BoImport and BoFree
 	 * of every process, the compositor's too, waits for it; nanoseconds, the sum counts them */

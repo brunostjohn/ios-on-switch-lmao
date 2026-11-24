@@ -60,6 +60,7 @@ PROMISE_GIVEN_UP = (
     r"tegra-gm20b: (?P<owner>.+?)'s writer promise at fence offset \d+ \(value \d+\) was not kept: "
     r'(?P<waiter>.+?) waited (?P<waited_ms>\d+) ms for it'
 )
+PROMISE_UNKEPT_WINDOWS = 'gpu.promise-unkept-windows'
 
 GROUPS: dict[str, list[Check]] = {
     'launchd': [
@@ -377,6 +378,42 @@ GROUPS: dict[str, list[Check]] = {
             source='drivers/TegraGM20B/gpu_promise_giveup.c giveup_report',
             note="a promise given up whose maker's channel a kill named in the 2 s before it: that kill's retirement "
             'releases it (abandon and raise), never the give-up',
+        ),
+        Check(
+            PROMISE_UNKEPT_WINDOWS,
+            'kernel-sched',
+            ('HWTEST gpu.path.promise_unkept ', 'HWTEST gpu.path.present_promise ', 'was not kept: '),
+            REPORT,
+            regex=(
+                r'(?:^HWTEST (?P<id>gpu\.path\.(?:promise_unkept|present_promise)) (?:PASS|FAIL|SKIP)(?: .*)? ms='
+                r"|tegra-gm20b: (?P<owner>SwitchHWTest\w*)'s writer promise at fence offset \d+ \(value \d+\) was not kept: "
+                r'(?P<waiter>.+?) waited )(?P<ms>[\d.]+)(?: ms for it| why=|$)'
+            ),
+            show=('id', 'owner', 'waiter'),
+            source='apps/hwtest/tests/PromiseUnkeptPathTest.swift, apps/hwtest/tests/PresentPromisePathTest.swift, '
+            'drivers/TegraGM20B/gpu_promise_giveup.c',
+            note='windows containing gpu.path.promise_unkept, gpu.path.present_promise, or SwitchHWTest '
+            'gpu.promise-given-up lines that excuse promise-only waits in gpu.compositor-foreign-waits',
+        ),
+        Check(
+            'gpu.compositor-foreign-waits',
+            'kernel-sched',
+            ' compositor jobs waited on foreign work (',
+            process=KERNEL,
+            regex=(
+                r'tegra-gm20b: (?P<jobs>\d+) compositor jobs waited on foreign work '
+                r'\((?P<fences>\d+) fences, (?P<promises>\d+) promises, (?P<events>\d+) events; '
+                r'(?P<host1x>\d+) host1x waits\), queue mean (?P<mean>\d+) us max (?P<max>\d+) us \((?P<timed>\d+)\)'
+            ),
+            where='jobs > 0',
+            show=('jobs', 'fences', 'promises', 'events', 'max'),
+            during=PROMISE_UNKEPT_WINDOWS,
+            within=5.5,
+            excusable=r'\(0 fences, [1-9]\d* promises, 0 events;',
+            source='drivers/TegraGM20B/gpu_stats_tick.c',
+            note='debug kernels: compositor foreign GM20B fences and shared events always fail; foreign writer '
+            'promises are excused only inside a gpu.path.promise_unkept, gpu.path.present_promise, or SwitchHWTest '
+            'gpu.promise-given-up window',
         ),
         Check(
             'gm20b.zbc-full-lines',

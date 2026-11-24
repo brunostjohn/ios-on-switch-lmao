@@ -130,17 +130,36 @@ static u8 chan_note_foreign(struct tgm_chan *chan,
 			events++;
 		}
 	}
-	if (flags)
+	if (flags) {
 		__atomic_fetch_add(&tgm_stats.foreign_jobs, 1, __ATOMIC_RELAXED);
-	if (fences)
+		__atomic_fetch_add(&tgm_stats.foreign_total_jobs, 1, __ATOMIC_RELAXED);
+	}
+	if (fences) {
 		__atomic_fetch_add(&tgm_stats.foreign_fences, fences, __ATOMIC_RELAXED);
-	if (promises)
+		__atomic_fetch_add(&tgm_stats.foreign_total_fences, fences, __ATOMIC_RELAXED);
+	}
+	if (promises) {
 		__atomic_fetch_add(&tgm_stats.foreign_promises, promises, __ATOMIC_RELAXED);
-	if (events)
+		__atomic_fetch_add(&tgm_stats.foreign_total_promises, promises, __ATOMIC_RELAXED);
+	}
+	if (events) {
 		__atomic_fetch_add(&tgm_stats.foreign_events, events, __ATOMIC_RELAXED);
-	if (host1x)
+		__atomic_fetch_add(&tgm_stats.foreign_total_events, events, __ATOMIC_RELAXED);
+	}
+	if (host1x) {
 		__atomic_fetch_add(&tgm_stats.foreign_host1x, host1x, __ATOMIC_RELAXED);
+		__atomic_fetch_add(&tgm_stats.foreign_total_host1x, host1x, __ATOMIC_RELAXED);
+	}
 	return flags;
+}
+
+void tgm_foreign_waits_totals(struct tgm_foreign_waits *out)
+{
+	out->jobs = __atomic_load_n(&tgm_stats.foreign_total_jobs, __ATOMIC_RELAXED);
+	out->fences = __atomic_load_n(&tgm_stats.foreign_total_fences, __ATOMIC_RELAXED);
+	out->promises = __atomic_load_n(&tgm_stats.foreign_total_promises, __ATOMIC_RELAXED);
+	out->events = __atomic_load_n(&tgm_stats.foreign_total_events, __ATOMIC_RELAXED);
+	out->host1x = __atomic_load_n(&tgm_stats.foreign_total_host1x, __ATOMIC_RELAXED);
 }
 
 static void chan_set_foreign(struct tgm_chan *chan, u32 first, u32 next, u8 foreign)

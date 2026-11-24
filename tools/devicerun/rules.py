@@ -46,9 +46,9 @@ class Check:
     counted from the line's time less its `since` field in milliseconds: the rule then counts the lines without one.
     `boot` limits the check to one of the morning's boot labels (A, B tiled cache, K kprof). `unless` names a check
     whose lines excuse this one's in the same boot. `during` names a check whose lines are tests that kill this check's
-    subjects on purpose, each test's window its line's time less its `ms` field up to its time: this check's lines in a
-    window of the same boot that match `excusable` (searched; every line when empty) are that test's, listed as expected
-    ("killed by <its id>") and left out of the rule. A `process` of '!<name>' matches every process whose name does not
+    subjects on purpose, each test's window its line's time less its `ms` field up to its time plus `within` seconds:
+    this check's lines in a window of the same boot that match `excusable` (searched; every line when empty) are that
+    test's, listed as expected ("killed by <its id>") and left out of the rule. A `process` of '!<name>' matches every process whose name does not
     begin with <name>. `per` names a check whose lines are tests' runs, each a window as `during`'s: the verdict is then
     each window's count of this check's lines in the same boot against `per_count`, that line's field or a number (FAIL
     where any differs, NO_DATA with no run), and `rule` is not read. `preceded` names a check: only this check's lines
@@ -325,8 +325,14 @@ def led(check: Check, matches: list[dict], leaders: list[dict]) -> list[dict]:
 
 def killed_during(check: Check, matches: list[dict], tests: list[dict]) -> tuple[list[dict], list[dict]]:
     """Split `matches` into those `check.during`'s tests do not account for and those they do (each with `killer`)."""
+    slack = timedelta(seconds=check.within)
     windows = [
-        (t['boot'], t['time'] - timedelta(milliseconds=number(t['ms'])), t['time'], t.get('id', check.during))
+        (
+            t['boot'],
+            t['time'] - timedelta(milliseconds=number(t['ms'])),
+            t['time'] + slack,
+            t.get('id', check.during),
+        )
         for t in tests
         if 'ms' in t
     ]

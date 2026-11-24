@@ -332,6 +332,92 @@ class Rules(unittest.TestCase):
         self.assertEqual(verdicts(given_up(9, 'Weather'), killed)['gpu.promise-given-up-after-kill'], PASS)
         self.assertEqual(verdicts(killed, given_up(11, 'Maps'))['gpu.promise-given-up'], INFO)
 
+    def test_compositor_foreign_waits_excuses_only_promises_in_promise_unkept_windows(self):
+        judged = [
+            c for c in checks.GROUPS['gpu'] if c.name in {checks.PROMISE_UNKEPT_WINDOWS, 'gpu.compositor-foreign-waits'}
+        ]
+
+        def record(second: int, message: str, path: str = '/kernel', subsystem: str = '', boot: str = 'B00T') -> dict:
+            return {
+                'timestamp': f'2026-11-23 09:00:{second:02d}.000000-0800',
+                'bootUUID': boot,
+                'processImagePath': path,
+                'subsystem': subsystem,
+                'category': '',
+                'messageType': 'Default',
+                'eventMessage': message,
+            }
+
+        def stats(
+            second: int,
+            jobs: int,
+            fences: int,
+            promises: int,
+            events: int,
+            host1x: int = 0,
+            boot: str = 'B00T',
+        ) -> dict:
+            return record(
+                second,
+                f'tegra-gm20b: {jobs} compositor jobs waited on foreign work ({fences} fences, '
+                f'{promises} promises, {events} events; {host1x} host1x waits), queue mean 100 us max 200 us ({jobs})',
+                boot=boot,
+            )
+
+        def verdict(*log: dict) -> str:
+            got = {r.check.name: r.verdict for r in devicerun.run_checks(list(log), judged)[0]}
+            return got['gpu.compositor-foreign-waits']
+
+        promise_unkept_test = record(
+            15,
+            'HWTEST gpu.path.promise_unkept PASS d_abandoned=1 waited_ms=5002 ms=5200.0',
+            path='/Applications/SwitchHWTest.app/SwitchHWTest',
+            subsystem=hwtest.SUBSYSTEM,
+        )
+        promise_unkept_bare = record(
+            15,
+            'HWTEST gpu.path.promise_unkept PASS ms=5200.0',
+            path='/Applications/SwitchHWTest.app/SwitchHWTest',
+            subsystem=hwtest.SUBSYSTEM,
+        )
+        present_promise_test = record(
+            15,
+            'HWTEST gpu.path.present_promise PASS flags=0x1 ms=500.0',
+            path='/Applications/SwitchHWTest.app/SwitchHWTest',
+            subsystem=hwtest.SUBSYSTEM,
+        )
+        promise_given_up = record(
+            15,
+            "tegra-gm20b: SwitchHWTest's writer promise at fence offset 256 (value 9) was not kept: "
+            'backboardd waited 5000 ms for it in a composite; it goes on without the promised writes',
+        )
+        production_given_up = record(
+            15,
+            "tegra-gm20b: MobileSafari's writer promise at fence offset 256 (value 9) was not kept: "
+            'backboardd waited 5000 ms for it in a composite; it goes on without the promised writes',
+        )
+
+        self.assertEqual(verdict(stats(10, 0, 0, 0, 0, host1x=0)), PASS)
+        self.assertEqual(verdict(stats(10, 0, 0, 0, 0, host1x=5)), PASS)
+        self.assertEqual(verdict(stats(10, 1, 1, 0, 0)), FAIL)
+        self.assertEqual(verdict(stats(10, 1, 0, 0, 1)), FAIL)
+        self.assertEqual(verdict(stats(12, 1, 1, 0, 0), promise_unkept_test), FAIL)
+        self.assertEqual(verdict(stats(12, 1, 0, 0, 1), promise_unkept_test), FAIL)
+        self.assertEqual(verdict(stats(12, 2, 1, 1, 0), promise_unkept_test), FAIL)
+        self.assertEqual(verdict(stats(12, 1, 0, 1, 0), promise_unkept_test), PASS)
+        self.assertEqual(verdict(stats(12, 1, 0, 1, 0), promise_unkept_bare), PASS)
+        self.assertEqual(verdict(stats(18, 1, 0, 1, 0), promise_unkept_test), PASS)
+        self.assertEqual(verdict(stats(15, 1, 0, 1, 0), present_promise_test), PASS)
+        self.assertEqual(verdict(stats(18, 1, 0, 1, 0), present_promise_test), PASS)
+        self.assertEqual(verdict(stats(15, 1, 1, 0, 0), present_promise_test), FAIL)
+        self.assertEqual(verdict(stats(12, 1, 0, 1, 0), promise_given_up), PASS)
+        self.assertEqual(verdict(stats(18, 1, 0, 1, 0), promise_given_up), PASS)
+        self.assertEqual(verdict(stats(12, 1, 0, 1, 0), production_given_up), FAIL)
+        self.assertEqual(verdict(stats(30, 1, 0, 1, 0), promise_unkept_test), FAIL)
+        self.assertEqual(verdict(stats(30, 1, 0, 1, 0), promise_given_up), FAIL)
+        self.assertEqual(verdict(stats(12, 1, 0, 1, 0)), FAIL)
+        self.assertEqual(verdict(stats(12, 1, 0, 1, 0, boot='B00T2'), promise_unkept_test), FAIL)
+
     def test_a_refused_vic_read_and_an_old_vblank_phase_line_fail(self):
         judged = [c for g in ('gpu', 'display') for c in checks.GROUPS[g] if c.owner == 'lost-work-3']
 

@@ -773,6 +773,12 @@ int tgm_promise_was_cpu_raised(uint32_t offset, uint32_t value);
 uint64_t tgm_stats_cpu_ns(void);
 uint64_t tgm_stats_zero_fills(void);
 void tgm_stats_import_cost(const struct tgm_import_cost *cost);
+
+struct tgm_foreign_waits {
+	uint64_t jobs, fences, promises, events, host1x;
+};
+
+void tgm_foreign_waits_totals(struct tgm_foreign_waits *out);
 #else
 static inline uint64_t tgm_stats_cpu_ns(void)
 {

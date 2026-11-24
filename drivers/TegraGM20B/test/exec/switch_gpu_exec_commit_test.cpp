@@ -741,6 +741,22 @@ TEST_F(ExecCommit, CompositorForeignWaitsCountFencesPromisesEventsHost1xAndQueue
 	EXPECT_EQ(got.timed, 0u);
 	EXPECT_EQ(got.queue_sum, 0u);
 	EXPECT_EQ(got.queue_max, 0u);
+
+	struct tgm_foreign_waits totals = {};
+	tgm_foreign_waits_totals(&totals);
+	EXPECT_EQ(totals.jobs, 4u);
+	EXPECT_EQ(totals.fences, 3u);
+	EXPECT_EQ(totals.promises, 2u);
+	EXPECT_EQ(totals.events, 3u);
+	EXPECT_EQ(totals.host1x, 2u);
+
+	EXPECT_EQ(run_one(consumer, {foreign_fence}, {}, pt + 1000, 1500).first, 0);
+	tgm_foreign_waits_totals(&totals);
+	EXPECT_EQ(totals.jobs, 5u);
+	EXPECT_EQ(totals.fences, 4u);
+	EXPECT_EQ(totals.promises, 2u);
+	EXPECT_EQ(totals.events, 3u);
+	EXPECT_EQ(totals.host1x, 2u);
 }
 
 TEST_F(ExecCommit, L2InvalidateStatsSplitHostWrittenTlbAndKernelPush)
