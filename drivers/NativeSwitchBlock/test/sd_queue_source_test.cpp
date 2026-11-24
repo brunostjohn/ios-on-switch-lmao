@@ -111,8 +111,10 @@ TEST(SdQueueSource, SharedPartitionOwnership)
     EXPECT_THAT(body("bool ownsDevice("), HasSubstr("gOwner->device"));
     EXPECT_THAT(body("int findVolume("), HasSubstr("entry == gOwner->device"));
     const auto config = body("bool NativeSwitchBlockDevice::configure(");
-    EXPECT_THAT(config, HasSubstr("shared ? kIOPropertyPhysicalInterconnectTypePCIExpress : \"SD\""));
-    EXPECT_THAT(config, HasSubstr("shared ? kIOPropertyExternalKey : kIOPropertyInternalKey"));
+    EXPECT_THAT(config, HasSubstr("putString(protocol, kIOPropertyPhysicalInterconnectTypeKey, \"SD\")"));
+    EXPECT_THAT(config,
+                HasSubstr("putString(protocol, kIOPropertyPhysicalInterconnectLocationKey, kIOPropertyInternalKey)"));
+    EXPECT_THAT(config, Not(HasSubstr("kIOPropertyExternalKey")));
     EXPECT_THAT(config, HasSubstr("!shared && provider->canUnmap()"));
     EXPECT_THAT(body("IOReturn NativeSwitchBlockDevice::doUnmap("), HasSubstr("shared ? kIOReturnUnsupported"));
     EXPECT_THAT(body("int NativeSwitchBlock::erase("), HasSubstr("!rootWindow.contains(first, last - first + 1)"));

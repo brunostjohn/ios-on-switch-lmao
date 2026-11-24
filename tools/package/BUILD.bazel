@@ -112,6 +112,7 @@ py_test(
         "launchd_catalog_test.py",
     ],
     data = [
+        "//drivers/NativeSwitchBlock:helper/com.brunostjohn.switch.sdwake.plist",
         "//drivers/SwitchAppRegistration:com.brunostjohn.switch.bootstrap-apps.plist",
     ],
     imports = ["."],

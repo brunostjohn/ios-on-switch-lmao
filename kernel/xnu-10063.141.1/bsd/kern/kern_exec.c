@@ -8666,6 +8666,7 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		    "<key>DMUserDataDisposition</key><dict><key>SyntheticDidUpgrade</key><false/>"
 		    "<key>buildVersion</key><string>" SWITCH_IPSW_BUILD "</string></dict>"), kSetupOnce},
 	};
+	static const char da_prefs[] = SWITCH_PLIST("<key>DAEnableUserFSMountInternal</key><true/>");
 #undef SWITCH_SPRINGBOARD
 #undef SWITCH_PLIST
 	/* Directories a restore creates on Data (UniXNU prepare-offline-data.py): usermanagerd keeps its
@@ -8683,6 +8684,8 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 		{"/private/var/db/dslocal/nodes/Default/users", 0, 0755},
 		{"/private/var/db/dslocal/nodes/Default/groups", 0, 0755},
 		{"/private/var/db/dslocal/nodes/Default/config", 0, 0755},
+		{"/private/var/preferences", 0, 0755},
+		{"/private/var/preferences/SystemConfiguration", 0, 0755},
 		{"/private/var/mobile/Documents", 501, 0755},
 	};
 	int error = 0;
@@ -8729,6 +8732,11 @@ native_switch_setup_state(proc_t p, user_addr_t scratch, mount_t data_mount)
 	}
 	if (error) printf("SwitchRawBoot: first-boot state failed at %s: %d\n", path, error);
 	else {
+		static const char da_path[] =
+		    "/private/var/preferences/SystemConfiguration/com.apple.DiskArbitration.diskarbitrationd.plist";
+		int da_error = native_switch_watchdog_file(p, scratch, da_path, da_prefs, (int)(sizeof(da_prefs) - 1),
+		    data_mount, 0, 0, 0644);
+		if (da_error) printf("SwitchRawBoot: %s failed: %d\n", da_path, da_error);
 		native_switch_portrait_cache(p, scratch, data_mount);
 		native_switch_rotation_lock_release(p, scratch, data_mount);
 		native_switch_never_dim_release(p, scratch, data_mount);

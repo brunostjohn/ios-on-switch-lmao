@@ -913,12 +913,11 @@ bool NativeSwitchBlockDevice::configure(NativeSwitchBlock *provider, const Switc
     setProperty(kIOMaximumByteCountReadKey, static_cast<unsigned long long>(provider->maxSectors) * kSector, 64);
     setProperty(kIOMaximumByteCountWriteKey, static_cast<unsigned long long>(provider->maxWriteSectors) * kSector, 64);
     if (OSDictionary *protocol = OSDictionary::withCapacity(2)) {
-        // Apple's stock diskarbitrationd and userfsd LaunchEvents match External PCI-Express IOMedia on both iOS 17
-        // and 27 (no Secure Digital rule exists on iPadOS).
-        const bool hasType = putString(protocol, kIOPropertyPhysicalInterconnectTypeKey,
-                                       shared ? kIOPropertyPhysicalInterconnectTypePCIExpress : "SD");
-        const bool hasLocation = putString(protocol, kIOPropertyPhysicalInterconnectLocationKey,
-                                           shared ? kIOPropertyExternalKey : kIOPropertyInternalKey);
+        // Report SwitchSDSharedVolume as Internal so SKDisk.isInternal hides Erase in Files.app; /etc/fstab,
+        // DAEnableUserFSMountInternal, and switch-sdwake handle auto-mounting it via UserFS.
+        const bool hasType = putString(protocol, kIOPropertyPhysicalInterconnectTypeKey, "SD");
+        const bool hasLocation =
+            putString(protocol, kIOPropertyPhysicalInterconnectLocationKey, kIOPropertyInternalKey);
         const bool installed = setProperty(kIOPropertyProtocolCharacteristicsKey, protocol);
         protocol->release();
         if (shared && !(hasType && hasLocation && installed))
