@@ -575,10 +575,24 @@ struct PackKernelEntry {
     uint16_t offset;
     uint8_t kind;  // PackKernelEntryKind
     uint8_t slot;
-    // buffers: kernelBufferWindow, kernelResidualWord; textures: the header's word 0 m2v bound (format, swizzle);
-    // samplers: kernelSamplerPairs (v26)
+    // buffers: kernelBufferWindow, kernelResidualWord; textures: header word 0 (bits 0-30) and kKernelWindowSrgb
+    // (bit 31: m2v's view format is sRGB); samplers: kernelSamplerPairs (v26)
     uint32_t window;
 };
+
+// TEXHEAD_BL word 0 leaves bit 31 unused; texture entries store whether m2v's VkImageView is sRGB there so
+// RawTexture UNORM reads of sRGB textures do not collide with sRGB sampled reads.
+constexpr uint32_t kKernelWindowSrgb = 1u << 31;
+
+inline uint32_t kernelTextureWord0(uint32_t window)
+{
+    return window & ~kKernelWindowSrgb;
+}
+
+inline bool kernelTextureSrgb(uint32_t window)
+{
+    return (window & kKernelWindowSrgb) != 0;
+}
 
 // A sampler entry's window: bit 31 set where the record holds the texture slots whose reads the sampler samples, bits
 // 0-30 (none: it samples only images at no slot, or none); clear where it does not know them

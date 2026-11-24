@@ -653,4 +653,60 @@ TEST_F(DeviceComputeStatedMaps, ARecordMadeUnderItsKeysMapsBindsItsHeaderAsMade)
     EXPECT_EQ(why, "a kernel sampler whose modes a converted texture's address map changes, compiled without that map");
 }
 
+class DeviceComputeViews : public harness::DeviceTest {};
+
+TEST_F(DeviceComputeViews, RawUnormReadOfSrgbTextureBindsLinearViewWhileSrgbReadKeepsOwn)
+{
+    constexpr uint32_t kRgba8Srgb = 71;
+    gm20b::Texture srgb;
+    ASSERT_TRUE(dev.createTexture(16, 16, kRgba8Srgb, srgb));
+    const gm20b::FormatInfo *info = gm20b::formatInfo(kRgba8Srgb);
+    ASSERT_NE(info, nullptr);
+    ASSERT_NE(gm20b::DeviceHarness::header(dev, srgb.tic)[4] & (1u << 22), 0u);
+
+    auto run = [&](uint32_t window) -> uint32_t {
+        gm20b::ComputeRecord r;
+        r.code.assign(64, 0);
+        r.cbufType[0] = gm20b::CbufRoot;
+        r.cbufs = 1;
+        r.kernel.regionWord = -1;
+        r.kernel.qmd[kQmdCbufValid] |= 1;
+        r.kernel.setBytes = 4;
+        r.kernel.entries = 1;
+        r.kernel.entry[0] = {0, gm20b::KernelTexture, 0, window};
+        r.kernel.readOnlyEntries = 1;
+        const gm20b::ComputeState *k = gm20b::placeCompute(dev, r);
+        EXPECT_NE(k, nullptr);
+        gm20b::CommandBuffer *cb = dev.begin();
+        EXPECT_NE(cb, nullptr);
+        uint32_t tic = 0;
+        {
+            gm20b::ComputeEncoder e(*cb, dev);
+            e.setState(k);
+            e.setTexture(0, &srgb);
+            const uint32_t groups[3] = {1, 1, 1}, threads[3] = {1, 1, 1};
+            const char *why = nullptr;
+            EXPECT_TRUE(e.dispatch(groups, threads, &why)) << (why ? why : "");
+            if (const uint32_t *set = gm20b::DeviceHarness::kernelSet(e))
+                tic = set[0] & 0xfffffu;
+            e.end();
+        }
+        uint32_t seqno = 0;
+        EXPECT_TRUE(cb->commit(seqno));
+        return tic;
+    };
+
+    const uint32_t rawTic = run(info->tic0);
+    ASSERT_NE(rawTic, 0u);
+    EXPECT_NE(rawTic, srgb.tic);
+    const auto rawHeader = gm20b::DeviceHarness::header(dev, rawTic);
+    EXPECT_EQ(rawHeader[0], info->tic0);
+    EXPECT_EQ(rawHeader[4] & (1u << 22), 0u) << "RawTexture UNORM view strips S_R_G_B_CONVERSION";
+
+    const uint32_t sampledTic = run(info->tic0 | gm20b::kKernelWindowSrgb);
+    EXPECT_EQ(sampledTic, srgb.tic) << "sRGB sampled view keeps the texture's own sRGB header";
+
+    dev.destroyTexture(srgb);
+}
+
 }  // namespace

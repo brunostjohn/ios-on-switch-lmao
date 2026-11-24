@@ -100,7 +100,7 @@ gm20b::SlotView entryView(const gm20b::PackKernelEntry &x, const gm20b::Texture 
 {
     const gm20b::FormatInfo *f = gm20b::formatInfo(b.format);
     return f ? gm20b::slotView(x.window, f->tic0, gm20b::swizzledWord0(f->tic0, b.swizzle), f->bpp,
-                               gm20b::blockCompressed(f))
+                               gm20b::blockCompressed(f), f->srgb)
              : gm20b::SlotView::Own;
 }
 

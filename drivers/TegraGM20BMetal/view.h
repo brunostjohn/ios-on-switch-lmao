@@ -59,13 +59,23 @@ inline uint32_t texelBytes(uint32_t word0)
     }
 }
 
-// The header m2v binds at a slot of word 0 `window` (0: the record names none), for a texture of `bytes` a texel
-// or block whose format's word 0 is `tic0` and whose own header's is `own` (tic0 under the texture's swizzle)
-inline SlotView slotView(uint32_t window, uint32_t tic0, uint32_t own, uint32_t bytes, bool blocks)
+// Matches pack.h kKernelWindowSrgb (bit 31 is unused in TEXHEAD_BL word 0).
+constexpr uint32_t kSlotViewSrgb = 1u << 31;
+
+// The header m2v binds at a slot of `window` (0: the record names none; bits 0-30 word 0, bit 31 sRGB view), for a
+// texture of `bytes` a texel or block whose format's word 0 is `tic0` and whose own header's is `own` (tic0 under the
+// texture's swizzle)
+inline SlotView slotView(uint32_t window, uint32_t tic0, uint32_t own, uint32_t bytes, bool blocks, bool srgb = false)
 {
-    if (!window || window == tic0 || window == own)
+    if (!window)
         return SlotView::Own;
-    return !blocks && texelBytes(window) == bytes ? SlotView::View : SlotView::None;
+    const uint32_t word0 = window & ~kSlotViewSrgb;
+    const bool wantSrgb = (window & kSlotViewSrgb) != 0;
+    if ((word0 == tic0 || word0 == own) && wantSrgb == srgb)
+        return SlotView::Own;
+    if (wantSrgb)
+        return SlotView::None;
+    return !blocks && texelBytes(word0) == bytes ? SlotView::View : SlotView::None;
 }
 
 // The header of the texture headed by `own` viewed as word 0 `word0`. No sRGB conversion: m2v reads and writes an

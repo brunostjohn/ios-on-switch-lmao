@@ -47,6 +47,16 @@ TEST(SlotView, NoneForTexelsOfAnotherSizeOrBlocks)
     EXPECT_EQ(slotView(kRgba16Uint, kDxt1, kDxt1, 8, true), SlotView::None);
 }
 
+TEST(SlotView, RawUnormViewOfSrgbTextureUsesLinearViewWhileSrgbViewKeepsOwn)
+{
+    EXPECT_EQ(slotView(kRgba8, kRgba8, kRgba8, 4, false, true), SlotView::View);
+    EXPECT_EQ(slotView(kRgba8 | kSlotViewSrgb, kRgba8, kRgba8, 4, false, true), SlotView::Own);
+    EXPECT_EQ(slotView(kBgra8 | kSlotViewSrgb, kRgba8, kBgra8, 4, false, true), SlotView::Own);
+    EXPECT_EQ(slotView(kDxt1 | kSlotViewSrgb, kDxt1, kDxt1, 8, true, true), SlotView::Own);
+    EXPECT_EQ(slotView(kDxt1, kDxt1, kDxt1, 8, true, true), SlotView::None);
+    EXPECT_EQ(slotView(kRgba8 | kSlotViewSrgb, kRgba8, kRgba8, 4, false, false), SlotView::None);
+}
+
 TEST(ViewHeader, TheTexturesHeaderWithM2vsWordZeroAndNoSrgbConversion)
 {
     // a 32x16 block-linear texture's header, its S_R_G_B_CONVERSION set

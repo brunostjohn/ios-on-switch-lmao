@@ -40,6 +40,8 @@ constexpr uint32_t kInvalidateData = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, DAT
                    kFlushData = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, FLUSH_DATA, TRUE),
                    kInvalidateConstant = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, CONSTANT, TRUE);
 constexpr uint32_t kEncoderWords = 1 << 12;
+static_assert(kSlotViewSrgb == kKernelWindowSrgb);
+
 // PackKernelEntry.slot of a constexpr sampler: its index in the pack's (pack/kernels.py CONSTEXPR)
 constexpr uint8_t kConstexprSampler = 0x80;
 
@@ -447,7 +449,7 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
             if (t && !writes && t->standIn) {
                 const FormatInfo *s = formatInfo(t->standIn->format);
                 if (s && slotView(e.window, s->tic0, swizzledWord0(s->tic0, t->standIn->swizzle), s->bpp,
-                                  blockCompressed(s)) == SlotView::Own)
+                                  blockCompressed(s), s->srgb) == SlotView::Own)
                     t = t->standIn;
             }
             // a two-plane texture's color words at the slot's own entry, its alpha bytes at its plane entry
@@ -464,13 +466,15 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
             }
             uint32_t tic = t ? t->tic : 0;
             if (const FormatInfo *f = t ? formatInfo(t->format) : nullptr) {
-                const SlotView view =
-                    slotView(e.window, f->tic0, swizzledWord0(f->tic0, t->swizzle), f->bpp, blockCompressed(f));
+                const uint32_t own = swizzledWord0(f->tic0, t->swizzle);
+                const SlotView view = slotView(e.window, f->tic0, own, f->bpp, blockCompressed(f), f->srgb);
                 if (view == SlotView::None) {
                     *why = "a kernel m2v binds a view of another texel size at a texture slot";
                     return false;
                 }
-                if (view == SlotView::View && !(tic = dev_.viewTic(*t, e.window, ViewAccess::Texture))) {
+                const uint32_t word0 = kernelTextureWord0(e.window);
+                const uint32_t targetWord0 = word0 == f->tic0 ? own : word0;
+                if (view == SlotView::View && !(tic = dev_.viewTic(*t, targetWord0, ViewAccess::Texture))) {
                     *why = "no texture header left for a kernel's view of another format";
                     failure_ = ComputeFailure::OutOfMemory;
                     return false;

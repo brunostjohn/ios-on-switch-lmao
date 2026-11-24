@@ -152,6 +152,8 @@ private:
             why = "a texture view of VkFormat " + std::to_string(kw.viewFormat) + " NVK has no header for";
             return false;
         }
+        if (vkFormatSrgb(kw.viewFormat))
+            word0 |= kKernelWindowSrgb;
         entries.push_back({offset, kw.plane ? KernelTexturePlane : KernelTexture, uint8_t(w.slot), word0});
         return true;
     }
