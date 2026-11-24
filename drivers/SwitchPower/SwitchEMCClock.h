@@ -21,10 +21,12 @@ unsigned SwitchEMC::reconcileRate(uint32_t observed, bool quiesced)
         const uint32_t running = refused ? observed : restored;
         if (!programMemory(running, running, true))
             uncoveredDisplayMemory(running, "the BPMP did not restore a rate in the table");
+        programGpuMc(running);
         return row < count ? row : cur;
     }
     if (!programMemory(restored, restored, true))
         uncoveredDisplayMemory(restored, "the restored rate");
+    programGpuMc(restored);
     return now;
 }
 
@@ -83,6 +85,7 @@ bool SwitchEMC::moveTo(unsigned asked, switch_emc_reason reason)
     cur = actual;
     if (!programMemory(khz[cur], khz[cur], true))
         uncoveredDisplayMemory(khz[cur], "the rate the BPMP set");
+    programGpuMc(khz[cur]);
     return cur >= index;
 }
 
@@ -134,6 +137,7 @@ IOReturn SwitchEMC::governAction(OSObject *owner, void *resume, void *, void *, 
     self->memoryDirty = true;
     if (!self->moveTo(self->cur, SWITCH_EMC_REASON_GOVERN))
         return kIOReturnError;
+    self->programGpuMc(self->khz[self->cur]);
     self->governing = true;
     self->startActmon();
     return kIOReturnSuccess;

@@ -24,6 +24,7 @@
 #include "../../kits/SwitchMMIO/SwitchMMIOWords.h"
 #include "SwitchClocks.h"
 #include "SwitchDisplayMemoryState.h"
+#include "SwitchGpuMcLa.h"
 #include "SwitchEMC.h"
 #include "SwitchEMCGovernor.h"
 #include "SwitchEMCHold.h"
@@ -119,6 +120,7 @@ class SwitchEMC : public OSObject {
     unsigned memoryFloor(unsigned first) const;
     void uncoveredDisplayMemory(uint32_t runningKhz, const char *why);
     bool programMemory(uint32_t before, uint32_t after, bool force = false);
+    void programGpuMc(uint32_t dramKhz, bool logDump = false);
     static IOReturn memoryAction(OSObject *owner, void *request, void *result, void *, void *);
     static IOReturn displayAction(OSObject *owner, void *bytes, void *result, void *, void *);
     bool setup(char *why, size_t size);
@@ -239,6 +241,8 @@ bool SwitchEMC::setup(char *why, size_t size)
     if (!memoryQualified)
         IOLog("SwitchEMC: display memory admission off: HIDREV %#x FBIO_CFG5 %#x is not a T21x with LPDDR4\n", hidrev,
               fbio);
+    else
+        programGpuMc(khz[cur], true);
     if (fixed)
         IOLog("SwitchEMC: no BPMP firmware: the EMC stays at %u kHz (%s), where display memory admission plans\n", now,
               switchclk::emcSourceName(switchclk::readEmc(car).source));
@@ -267,6 +271,30 @@ bool SwitchEMC::setup(char *why, size_t size)
 bool SwitchEMC::held(uint64_t now)
 {
     return now < switch_emc_hold_end(&holdState, hintUntil(), switch_idle_last_frame());
+}
+
+void SwitchEMC::programGpuMc(uint32_t dramKhz, bool logDump)
+{
+    if (!__atomic_load_n(&memoryQualified, __ATOMIC_ACQUIRE))
+        return;
+#if DEVELOPMENT || DEBUG
+    const switch_mc::GpuMcSnapshot before = logDump ? switch_mc::captureGpuMc(mcRegs) : switch_mc::GpuMcSnapshot{};
+#else
+    (void)logDump;
+#endif
+    switch_mc::programGpuMc(mcRegs, dramKhz);
+#if DEVELOPMENT || DEBUG
+    if (logDump) {
+        const switch_mc::GpuMcSnapshot after = switch_mc::captureGpuMc(mcRegs);
+        os_log(OS_LOG_DEFAULT,
+               "SwitchEMC: GPU MC @ %u kHz: LA_GPU_0 %#x->%#x LA_GPU2_0 %#x GK_PTSA rate=%#x min=%#x->%#x "
+               "max=%#x->%#x GK2_PTSA rate=%#x min=%#x max=%#x OUT_REQ %#x RING3 %#x NISO %#x MISC0 %#x "
+               "THROT r3=%#x niso=%#x GRANT_DEC %#x",
+               dramKhz, before.gpu0, after.gpu0, after.gpu2, after.gkRate, before.gkMin, after.gkMin, before.gkMax,
+               after.gkMax, after.gk2Rate, after.gk2Min, after.gk2Max, after.outstandingReq, after.outstandingRing3,
+               after.outstandingNiso, after.arbMisc0, after.ring3Throttle, after.nisoThrottle, after.grantDec);
+    }
+#endif
 }
 
 // ACTMON's watermarks for the rate now; its sample count restarts there.

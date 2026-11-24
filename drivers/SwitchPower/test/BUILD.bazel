@@ -201,11 +201,30 @@ host_test(
         "//drivers/SwitchPower:SwitchDisplayMemoryRegisters.h",
         "//drivers/SwitchPower:SwitchDisplayMemoryState.h",
         "//drivers/SwitchPower:SwitchDisplayMemoryEMC.h",
+        "//drivers/SwitchPower:SwitchGpuMcLa.h",
         "//drivers/SwitchPower:SwitchEMCGovernor.h",
         "//drivers/SwitchPower:SwitchEMCClock.h",
         "//drivers/SwitchPower:SwitchEMCFixed.h",
     ],
     defines = ["DEVELOPMENT=1"],
+)
+
+host_test(
+    name = "switch_gpu_mc_la_test",
+    srcs = [
+        "switch_gpu_mc_la_test.cpp",
+        "//drivers/SwitchPower:SwitchGpuMcLa.h",
+    ],
+    data = [
+        "//drivers/SwitchPower:SwitchEMC.cpp",
+        "//drivers/SwitchPower:SwitchEMCClock.h",
+        "//drivers/SwitchPower:SwitchEMCFixed.h",
+    ],
+    defines = [
+        'SWITCH_EMC_CPP=\\"$(rootpath //drivers/SwitchPower:SwitchEMC.cpp)\\"',
+        'SWITCH_EMC_CLOCK_H=\\"$(rootpath //drivers/SwitchPower:SwitchEMCClock.h)\\"',
+        'SWITCH_EMC_FIXED_H=\\"$(rootpath //drivers/SwitchPower:SwitchEMCFixed.h)\\"',
+    ],
 )
 
 host_test(
