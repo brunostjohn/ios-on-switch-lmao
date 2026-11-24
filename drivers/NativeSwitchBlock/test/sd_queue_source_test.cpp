@@ -74,7 +74,7 @@ TEST(SdQueueSource, GapChains)
     const std::string &source = driver();
     const std::string begin = body("void NativeSwitchBlock::beginBatch(");
     EXPECT_THAT(begin, HasSubstr("if (first->write && payload != sectors)"));
-    EXPECT_LT(Index(begin, "outside the APFS partition"), Index(begin, "if (first->write && payload != sectors)"));
+    EXPECT_LT(Index(begin, "outside its partition"), Index(begin, "if (first->write && payload != sectors)"));
     const std::string table = body("SwitchAdmaRefusal NativeSwitchBlock::buildTable(");
     EXPECT_EQ(Count(table, "staging.addSink(sinkPA, gap(r))"), 1u);
     EXPECT_EQ(Count(table, "table.addSealed(sinkPA, gap(r))"), 1u);
@@ -83,4 +83,42 @@ TEST(SdQueueSource, GapChains)
     EXPECT_THAT(body("bool NativeSwitchBlock::stageChain("), HasSubstr("toClient);"));
     // The cache maintenance leaves the sink alone.
     EXPECT_THAT(source, HasSubstr("if (pa - skip < skipBytes)\n            continue;"));
+}
+
+TEST(SdQueueSource, PowerCycleChecksBootCardWhenSharedVolumeIsAbsentOrOffline)
+{
+    const auto startup = body("bool NativeSwitchBlock::setup()");
+    EXPECT_LT(Index(startup, "switch_sd_boot_card_cid(cid)"), Index(startup, "findFiles("));
+    EXPECT_LT(Index(startup, "memcpy(cid, filesSlice.cid, sizeof(cid))"),
+              Index(startup, "__atomic_store_n(&filesOnline, true"));
+    const auto init = body("bool NativeSwitchBlock::reinitialize(");
+    EXPECT_THAT(init, HasSubstr("readR2(cid);"));
+    EXPECT_THAT(init, HasSubstr("else if (haveCid) {"));
+    EXPECT_LT(Index(init, "readR2(currentCid)"), Index(init, "memcmp(currentCid, cid, 15)"));
+    EXPECT_LT(Index(init, "memcmp(currentCid, cid, 15)"), Index(init, "fail(\"boot card changed\", 0)"));
+    EXPECT_THAT(init, Not(HasSubstr("filesPresent()")));
+    const auto recovery = body("void NativeSwitchBlock::resume()");
+    EXPECT_LT(Index(recovery, "reinitialize("), Index(recovery, "dmaResume();"));
+}
+
+TEST(SdQueueSource, SharedPartitionOwnership)
+{
+    const auto publish = body("extern \"C\" int switch_block_publish(");
+    EXPECT_LT(Index(publish, "owner->device = device;"), Index(publish, "device->registerService();"));
+    EXPECT_LT(Index(publish, "device->registerService();"), Index(publish, "owner->publishFiles();"));
+    EXPECT_THAT(body("void NativeSwitchBlock::publishFiles()"),
+                HasSubstr("IOService::serviceMatching(\"IOMediaBSDClient\")"));
+    EXPECT_THAT(body("bool ownsDevice("), HasSubstr("gOwner->device"));
+    EXPECT_THAT(body("int findVolume("), HasSubstr("entry == gOwner->device"));
+    const auto config = body("bool NativeSwitchBlockDevice::configure(");
+    EXPECT_THAT(config, HasSubstr("shared ? kIOPropertyPhysicalInterconnectTypePCIExpress : \"SD\""));
+    EXPECT_THAT(config, HasSubstr("shared ? kIOPropertyExternalKey : kIOPropertyInternalKey"));
+    EXPECT_THAT(config, HasSubstr("!shared && provider->canUnmap()"));
+    EXPECT_THAT(body("IOReturn NativeSwitchBlockDevice::doUnmap("), HasSubstr("shared ? kIOReturnUnsupported"));
+    EXPECT_THAT(body("int NativeSwitchBlock::erase("), HasSubstr("!rootWindow.contains(first, last - first + 1)"));
+    const auto sleep = body("void NativeSwitchBlock::suspend()");
+    EXPECT_LT(Index(sleep, "syncLocked(&rootWindow, false)"), Index(sleep, "powerOffCard();"));
+    EXPECT_LT(Index(sleep, "syncLocked(&filesWindow, false)"), Index(sleep, "powerOffCard();"));
+    EXPECT_LT(Index(body("void NativeSwitchBlock::resume()"), "verifyFilesCard();"),
+              Index(body("void NativeSwitchBlock::resume()"), "suspended = false;"));
 }

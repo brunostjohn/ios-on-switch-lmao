@@ -46,6 +46,7 @@ struct switch_gpt_workspace {
     uint8_t sectors[2][512];
     struct switch_gpt_header headers[2];
     struct switch_gpt_extent used[SWITCH_GPT_MAX_ENTRIES];
+    uint32_t writable_hos_data_at_zero;
 };
 
 /* Strict GPT validation only, shared by FAT selection and raw APFS discovery.

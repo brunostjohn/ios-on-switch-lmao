@@ -18,6 +18,7 @@ struct Request {
     bool write;
     bool chained;
     int id;
+    bool shared = false;
 };
 
 // A queue built from (lba, sectors, write) in queue order; ids are queue positions (0 = oldest).
@@ -742,4 +743,27 @@ TEST(SdQueue, WriteLimits)
 TEST(SdQueue, WriteRandomQueues)
 {
     writeRandomQueues();
+}
+
+TEST(SdQueue, DistinctWindowsCannotShareCommands)
+{
+    Queue q({{100, 8, false}, {108, 8, false}, {120, 8, false}});
+    q.at(1)->shared = true;
+    q.at(2)->shared = true;
+    REQUIRE(pick(q, 0, 2048, 256, 128, 64, 64).chain == std::vector<int>{0});
+    REQUIRE((pick(q, 1, 2048, 256, 128, 64, 64).chain == std::vector<int>{1, 2}));
+    Queue invalid({{100, 8, false}, {108, 8, false}});
+    invalid.at(1)->shared = true;
+    invalid.at(0)->chained = invalid.at(1)->chained = true;
+    REQUIRE(!switchChainTiles(invalid.head, 100, 16, 2));
+
+    Queue qw({{100, 8, true}, {108, 8, true}, {116, 8, true}});
+    qw.at(1)->shared = true;
+    qw.at(2)->shared = true;
+    REQUIRE(pickWrites(qw, 0).chain == std::vector<int>{0});
+    REQUIRE((pickWrites(qw, 1).chain == std::vector<int>{1, 2}));
+    Queue invalidWrite({{100, 8, true}, {108, 8, true}});
+    invalidWrite.at(1)->shared = true;
+    invalidWrite.at(0)->chained = invalidWrite.at(1)->chained = true;
+    REQUIRE(!switchWriteChainTiles(invalidWrite.head, 100, 16, 2));
 }

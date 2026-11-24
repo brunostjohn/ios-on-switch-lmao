@@ -108,6 +108,15 @@ host_test(
 )
 
 host_test(
+    name = "sd_window_test",
+    srcs = [
+        "sd_window_test.cpp",
+        "//drivers/NativeSwitchBlock:SwitchSdWindow.h",
+        "//drivers/NativeSwitchBlock:SwitchSdWriteFence.h",
+    ],
+)
+
+host_test(
     name = "cryptex_map_test",
     size = "medium",
     srcs = [
@@ -199,4 +208,19 @@ host_test(
         "//diagnostics/switch:SwitchRawMount.h",
     ],
     deps = [":source_checks"],
+)
+
+host_test(
+    name = "sd_files_volume_test",
+    srcs = [
+        "sd_files_volume_test.cpp",
+        "//diagnostics/switch:storage/fat32.h",
+        "//diagnostics/switch:storage/partition.c",
+        "//diagnostics/switch:storage/partition.h",
+        "//diagnostics/switch:storage/sd_reference.c",
+        "//diagnostics/switch:storage/sd_reference.h",
+        "//drivers/NativeSwitchBlock:SwitchSdVolume.cpp",
+        "//drivers/NativeSwitchBlock:SwitchSdVolume.h",
+        "//drivers/NativeSwitchBlock:SwitchSdVolumeInternal.h",
+    ],
 )

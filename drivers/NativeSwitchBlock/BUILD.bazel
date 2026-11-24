@@ -35,9 +35,11 @@ kernel_driver(
         "NativeSwitchBlock.cpp",
         "original-bindings.S",
         "SwitchCryptex.cpp",
+        "SwitchSdVolume.cpp",
     ],
     copts = BLOCK_FLAGS,
     hdr_deps = [
+        "diagnostics/switch",
         "drivers/ArmGIC",
         "drivers/SwitchBrightness",
         "drivers/SwitchPower",

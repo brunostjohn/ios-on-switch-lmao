@@ -132,6 +132,9 @@ def run_machine(
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument('--kind', choices=sorted(KINDS), required=True)
     parser.add_argument('--sd', help="IOS27.SII.001, a raw stage image (populated.img) or none (default: //:image's)")
+    parser.add_argument(
+        '--sd-filesystem', choices=('fat32', 'exfat'), default='fat32', help='format of emulated hos_data'
+    )
     parser.add_argument('--bootargs', help='switchroot/ios/bootargs.txt for this run, e.g. -v')
     parser.add_argument('--out', type=Path, help='the run directory (default out/emu/<kind>-<time>)')
     parser.add_argument('--package', type=Path, help='a //:boot output to boot instead of building one')
@@ -151,7 +154,7 @@ def prepare(args: argparse.Namespace) -> tuple[Path, machine.Inputs]:
     run = (args.out or workspace() / 'out/emu' / f'{args.kind}-{time.strftime("%Y%m%d-%H%M%S")}').resolve()
     run.mkdir(parents=True, exist_ok=True)
     image = None if args.sd == 'none' else Path(args.sd) if args.sd else default_image(args.kind)
-    card = sdcard.card_for_run(image, run, card_files(package, run, args.bootargs))
+    card = sdcard.card_for_run(image, run, card_files(package, run, args.bootargs), args.sd_filesystem)
     inputs = machine.Inputs(
         qemu=binary,
         package=package,

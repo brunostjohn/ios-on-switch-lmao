@@ -128,6 +128,12 @@ py_test(
     deps = [":emu_lib"],
 )
 
+py_test(
+    name = "sdcard_test",
+    srcs = ["sdcard_test.py"],
+    deps = [":emu_lib"],
+)
+
 # bazel run //tools/emu:boot -- --kind=ios17|ios27 [--sd IMAGE] [--seconds N] (README.md).
 py_library(
     name = "boot_lib",
