@@ -330,6 +330,8 @@ IOReturn AGXDeviceUserClient::channelCreate(const TegraGM20BAbiChannelCreate *in
 	switch_gpu_chan_visibility(
 		chans_[slot], fence_va_ + TegraGM20BFencePageVisibleFirst / 4 + slot,
 		fence_gpu_ + TegraGM20BFencePageVisibleFirst + uint64_t(slot) * 4);
+	switch_gpu_chan_progress(chans_[slot], fence + TegraGM20BFencePageChannelProgressOffset /
+							       sizeof(uint32_t));
 	auto *semantic = reinterpret_cast<volatile TegraGM20BAbiFenceSemantic *>(fence + 4);
 	switch_gpu_chan_semantic_visibility(chans_[slot], semantic);
 	auto *identity = reinterpret_cast<volatile TegraGM20BAbiFenceIdentity *>(fence + 8);

@@ -679,7 +679,7 @@ extern "C" uint32_t switch_gpu_info_flags(void)
 			 TegraGM20BInfoCanonicalSurfaceLayout | TegraGM20BInfoChannelEpoch |
 			 TegraGM20BInfoPushFences;
 	flags |= TegraGM20BInfoPackImage | TegraGM20BInfoBoPark | TegraGM20BInfoVolatileWrites |
-		 TegraGM20BInfoPriorityReply;
+		 TegraGM20BInfoPriorityReply | TegraGM20BInfoChannelProgress;
 	if (info.comptag_lines && switch_gpu_compression_on())
 		flags |= TegraGM20BInfoCompression;
 	if (switch_tiled_cache_on())

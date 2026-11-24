@@ -357,6 +357,15 @@ void switch_gpu_chan_visibility(struct tgm_chan *chan, volatile uint32_t *visibl
 	switch_gpu_timeline_visibility(chan->timeline, visible_cpu);
 }
 
+void switch_gpu_chan_progress(struct tgm_chan *chan, volatile uint32_t *progress_cpu)
+{
+	const u32 initial = progress_cpu ? READ_ONCE(*progress_cpu) : 0;
+
+	chan->progress_cpu = progress_cpu;
+	WRITE_ONCE(chan->progress_word_seen, initial);
+	WRITE_ONCE(chan->stall_progress_word, initial);
+}
+
 __attribute__((weak)) void switch_sched_render_submitted(void)
 {
 }

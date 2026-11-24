@@ -156,6 +156,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		wantIn = sizeof(TegraGM20BAbiChannel);
 		wantOut = sizeof(TegraGM20BAbiStatus);
 		break;
+	case TegraGM20BMethodChannelProgress:
+		wantIn = sizeof(TegraGM20BAbiChannel);
+		wantOut = sizeof(TegraGM20BAbiChannelProgressReply);
+		break;
 	case TegraGM20BMethodMap:
 		wantIn = sizeof(TegraGM20BAbiMap);
 		wantOut = sizeof(TegraGM20BAbiMapReply);
@@ -279,6 +283,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		break;
 	case TegraGM20BMethodChannelDestroy:
 	case TegraGM20BMethodGetStatus:
+	case TegraGM20BMethodChannelProgress:
 		if (!reservedZero(static_cast<const TegraGM20BAbiChannel *>(in)->reserved))
 			return kIOReturnBadArgument;
 		break;
@@ -482,6 +487,20 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		ret = getStatus(static_cast<const TegraGM20BAbiChannel *>(in),
 				static_cast<TegraGM20BAbiStatus *>(out));
 		break;
+	case TegraGM20BMethodChannelProgress: {
+		const auto *input = static_cast<const TegraGM20BAbiChannel *>(in);
+		if (!input->channel || input->channel > kMaxChannels ||
+		    !chans_[input->channel - 1]) {
+			ret = kIOReturnBadArgument;
+			break;
+		}
+		const uint32_t slot = input->channel - 1;
+		*static_cast<TegraGM20BAbiChannelProgressReply *>(out) = {
+			fence_gpu_ + static_cast<uint64_t>(slot) * TegraGM20BFencePageRecordBytes +
+			TegraGM20BFencePageChannelProgressOffset};
+		ret = kIOReturnSuccess;
+		break;
+	}
 	case TegraGM20BMethodSurfaceWrites:
 		tgm_coherency_gpu_writes(
 			static_cast<const TegraGM20BAbiSurfaceWrites *>(in)->surface_id);

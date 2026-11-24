@@ -256,6 +256,7 @@ struct tgm_chan {
 	struct nvif_vma ring_vma;
 	volatile u32 *fence_cpu;
 	volatile u32 *visible_cpu;
+	volatile u32 *progress_cpu;
 	u64 visible_gpu;
 	u64 fence_gpu;
 	u32 submitted;
@@ -280,7 +281,9 @@ struct tgm_chan {
 	u64 progress_held;
 	u32 progress_done;
 	u32 seen_done; /* a hang check's last look at the fence word (chan_progress_ns; tgm_live_lock) */
+	u32 progress_word_seen;
 	u32 stall_done; /* tgm_chan_check_progress: completed seqno first seen stalled, and when */
+	u32 stall_progress_word;
 	u64 stall_ns, stall_held;
 	int app;     /* a user channel: the hold may take it from its first submission */
 	int tracked; /* the hold may take it (tgm_hold_track) */

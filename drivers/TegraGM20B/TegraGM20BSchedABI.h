@@ -8,13 +8,33 @@
 enum {
 	/* GetInfo.flags: MethodPriority accepts an optional TegraGM20BAbiPriorityReply */
 	TegraGM20BInfoPriorityReply = 1u << 30,
+	/* GetInfo.flags: MethodChannelProgress returns a channel's GPU progress word VA */
+	TegraGM20BInfoChannelProgress = 1u << 31,
 	/* TegraGM20BAbiPriorityReply.flags: connection is the UI-critical compositor */
 	TegraGM20BPriorityCritical = 1u << 0,
+
+	TegraGM20BMethodChannelProgress = 42,
+	/* Byte offset inside each 64-byte channel slot of Channels (after AbiFence + Semantic + Identity) */
+	TegraGM20BFencePageChannelProgressOffset = 40,
 };
 
 struct TegraGM20BAbiPriorityReply {
 	uint32_t flags;
 	uint32_t reserved;
 };
+
+struct TegraGM20BAbiChannelProgressReply {
+	uint64_t gpu_va;
+};
+
+#ifdef __cplusplus
+static_assert(sizeof(TegraGM20BAbiPriorityReply) == 8, "TegraGM20BAbiPriorityReply layout");
+static_assert(sizeof(TegraGM20BAbiChannelProgressReply) == 8,
+	      "TegraGM20BAbiChannelProgressReply layout");
+#else
+_Static_assert(sizeof(struct TegraGM20BAbiPriorityReply) == 8, "TegraGM20BAbiPriorityReply layout");
+_Static_assert(sizeof(struct TegraGM20BAbiChannelProgressReply) == 8,
+	       "TegraGM20BAbiChannelProgressReply layout");
+#endif
 
 #endif

@@ -319,6 +319,7 @@ void switch_gpu_chan_semantic_visibility(struct tgm_chan *,
 					 volatile struct TegraGM20BAbiFenceSemantic *);
 void switch_gpu_chan_visibility(struct tgm_chan *chan, volatile uint32_t *visible_cpu,
 				uint64_t visible_gpu);
+void switch_gpu_chan_progress(struct tgm_chan *chan, volatile uint32_t *progress_cpu);
 void switch_gpu_fence_hold(const volatile uint32_t *fence);
 void switch_gpu_fence_put(const volatile uint32_t *fence);
 /* A word of the user fence pages by its byte offset in the pool (what every address space's fence view adds to its

@@ -458,6 +458,14 @@ static inline int tgm_progress_seen(uint32_t completed, uint32_t irq_done, uint3
 	return 1;
 }
 
+static inline int tgm_progress_word_seen(uint32_t word, uint32_t *seen)
+{
+	if (word == *seen)
+		return 0;
+	*seen = word;
+	return 1;
+}
+
 /* The first seqno a kill fails: the one a GR error stopped in, taken at the error (gpu_fault.c tgm_gr_fault) because
  * GR can finish that job and release its fence before the kill comes; else the first not complete. */
 static inline uint32_t tgm_kill_first(int faulted, uint32_t fault_seqno, uint32_t completed)
