@@ -8493,6 +8493,7 @@ impl Op {
                 | Op::PCnt(_)
                 | Op::Bra(_)
                 | Op::Nanosleep(_)
+                | Op::SrcBar(_)
                 | Op::Exit(_)
         )
     }
@@ -9036,6 +9037,7 @@ impl Instr {
             | Op::OutFinal(_)
             | Op::Isbewr(_)
             | Op::Nanosleep(_)
+            | Op::SrcBar(_)
             | Op::Annotate(_) => false,
             Op::BMov(op) => !op.clear,
             _ => true,
