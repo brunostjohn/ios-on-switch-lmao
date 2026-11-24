@@ -14,6 +14,7 @@ METAL_HOST_HEADERS = [
     "//drivers/TegraGM20B:TegraGM20BJobABI.h",
     "//drivers/TegraGM20B:TegraGM20BLayout.h",
     "//drivers/TegraGM20B:TegraGM20BPathsABI.h",
+    "//drivers/TegraGM20B:TegraGM20BSchedABI.h",
     "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",
     "//drivers/TegraGM20B:TegraGM20BVolatileABI.h",
     "//drivers/TegraGM20B:TegraGM20BZcullABI.h",

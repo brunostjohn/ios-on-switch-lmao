@@ -26,6 +26,7 @@
 #include "TegraGM20BCompilerABI.h"
 #include "TegraGM20BFencePageABI.h"
 #include "TegraGM20BJobABI.h"
+#include "TegraGM20BSchedABI.h"
 #include "TegraGM20BVolatileABI.h"
 #include <IOKit/IOKitLib.h>
 #include <mach/mach.h>
@@ -330,6 +331,7 @@ struct Model {
     unsigned notResponding = 0;  // WaitFences answered kIOReturnNotResponding while GetStatus calls the channel healthy
     bool foreignTakesFreedSlot = false;
     bool volatileWrites = true;
+    bool priorityCritical = false;
     unsigned creates = 0, destroys = 0, staleReads = 0, cpuAcquireCalls = 0;
     // the channel epoch's count (channelEpochMoves)
     uint32_t epoch = 0;
@@ -851,8 +853,8 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         info = {};
         info.abi_version = TegraGM20BAbiVersion;
         info.flags = TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord |
-                     TegraGM20BInfoCpuAccess | TegraGM20BInfoChannelEpoch |
-                     (model.volatileWrites ? TegraGM20BInfoVolatileWrites : 0u) |
+                     TegraGM20BInfoCpuAccess | TegraGM20BInfoChannelEpoch | TegraGM20BInfoPriority |
+                     TegraGM20BInfoPriorityReply | (model.volatileWrites ? TegraGM20BInfoVolatileWrites : 0u) |
                      (model.packImage.enabled ? TegraGM20BInfoPackImage : 0u) | model.infoFlags;
         info.fence_token = kernel_model::kFenceToken;
         info.cls_copy = 0xb0b5;
@@ -1225,6 +1227,17 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         if (!wait || !input)
             return kIOReturnNotFound;
         return wait(*static_cast<const uint64_t *>(input));
+    }
+    case TegraGM20BMethodPriority: {
+        const auto &in = *static_cast<const TegraGM20BAbiPriority *>(input);
+        if (in.priority == 3 || in.priority > TegraGM20BMaxPriority || in.background_priority > TegraGM20BMaxPriority)
+            return kIOReturnBadArgument;
+        if (output) {
+            const bool top = in.priority == 0 || in.priority == 5;
+            *static_cast<TegraGM20BAbiPriorityReply *>(output) = {
+                top && model.priorityCritical ? uint32_t(TegraGM20BPriorityCritical) : 0u, 0};
+        }
+        return KERN_SUCCESS;
     }
     case TegraGM20BMethodSurfaceLayout:
         *static_cast<TegraGM20BAbiSurfaceLayoutReply *>(output) = {model.surfaceLayout, 0};

@@ -90,10 +90,12 @@ TEST(SwitchGpuRefusalSites, OnlyTheCompositorsRefusalsLoseItsFrame)
 // no frame; the compositor's, which also holds graphics-restart-no-kill, does
 TEST(SwitchGpuRefusalSites, AnAppAtTheTopPriorityLosesNoFrame)
 {
-	const enum tgm_level top = tgm_priority_level(uint32_t(tgm_priority_granted(0)), 4, 0);
-	EXPECT_FALSE(switch_gpu_refusal_loses_frame(tgm_compositor(top, 0) != 0,
+	const uint32_t top = uint32_t(tgm_priority_granted(0));
+	const enum tgm_level appLevel = tgm_priority_level(top, 4, 0, 0);
+	const enum tgm_level compLevel = tgm_priority_level(top, 4, 0, 1);
+	EXPECT_FALSE(switch_gpu_refusal_loses_frame(tgm_compositor(appLevel, 0) != 0,
 						    SwitchGpuRefusal::Push, kBadArgument));
-	EXPECT_TRUE(switch_gpu_refusal_loses_frame(tgm_compositor(top, 1) != 0,
+	EXPECT_TRUE(switch_gpu_refusal_loses_frame(tgm_compositor(compLevel, 1) != 0,
 						   SwitchGpuRefusal::Push, kBadArgument));
 }
 

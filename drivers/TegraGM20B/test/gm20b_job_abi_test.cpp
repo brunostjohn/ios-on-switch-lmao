@@ -8,6 +8,7 @@
 #include "drivers/TegraGM20B/TegraGM20BJobABI.h"
 #include "drivers/TegraGM20B/TegraGM20BReadbackABI.h"
 #include "drivers/TegraGM20B/TegraGM20BRegDumpABI.h"
+#include "drivers/TegraGM20B/TegraGM20BSchedABI.h"
 #include "drivers/TegraGM20B/TegraGM20BVolatileABI.h"
 
 TEST(JobAbi, MethodsFollowTheHashedHeadersOnes)
@@ -50,6 +51,8 @@ TEST(JobAbi, TheHashedAbiHeaderNeverIncludesIt)
 	EXPECT_EQ(abi.find("TegraGM20BGrPreemptABI.h"), std::string::npos);
 	EXPECT_EQ(abi.find("TegraGM20BVolatileABI.h"), std::string::npos);
 	EXPECT_EQ(jobAbi.find("TegraGM20BVolatileABI.h"), std::string::npos);
+	EXPECT_EQ(abi.find("TegraGM20BSchedABI.h"), std::string::npos);
+	EXPECT_EQ(jobAbi.find("TegraGM20BSchedABI.h"), std::string::npos);
 
 	constexpr uint32_t kInfoBits =
 		uint32_t(TegraGM20BInfoSparse) | TegraGM20BInfoHostImport | TegraGM20BInfoZcull |
@@ -64,7 +67,11 @@ TEST(JobAbi, TheHashedAbiHeaderNeverIncludesIt)
 				      TegraGM20BJobAdmission | TegraGM20BJobFulfills |
 				      TegraGM20BJobEventReleases;
 	EXPECT_EQ(uint32_t(TegraGM20BInfoVolatileWrites) & kInfoBits, 0u);
+	EXPECT_EQ(uint32_t(TegraGM20BInfoPriorityReply) &
+			  (kInfoBits | TegraGM20BInfoVolatileWrites),
+		  0u);
 	EXPECT_EQ(uint32_t(TegraGM20BJobVolatileWrites) & kJobBits, 0u);
+	EXPECT_EQ(sizeof(TegraGM20BAbiPriorityReply), 8u);
 }
 
 // What attachSet and the raw kernel model refuse a method 31 record for before its BO lookup

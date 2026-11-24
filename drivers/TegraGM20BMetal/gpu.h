@@ -247,18 +247,18 @@ public:
 
     bool gpuPriority(uint32_t priority, uint32_t background)
     {
-        if (!k_.priority(priority, background))
+        bool critical = false;
+        if (!k_.priority(priority, background, &critical))
             return false;
-        // 5, RealTime, is scheduled as 0 (TegraGM20BABI.h method 18)
-        highPriority_.store(priority == 0 || priority == 5, std::memory_order_relaxed);
+        criticalPriority_.store(critical, std::memory_order_relaxed);
         return true;
     }
 
-    // Its channel is the kernel's high level (TegraGM20BSchedPolicy.h tgm_priority_level): the render server's, or a
-    // process whose queues asked for GPU priority 0. Nothing preempts it, so its draws are never banded.
+    // Its channel is the kernel's critical level (TegraGM20BSchedPolicy.h tgm_compositor): the render server's, or a
+    // connection the kernel answered TegraGM20BPriorityCritical for. Nothing preempts it, so its draws are never banded.
     bool compositorClass() const
     {
-        return role_ == Role::RenderServer || highPriority_.load(std::memory_order_relaxed);
+        return role_ == Role::RenderServer || criticalPriority_.load(std::memory_order_relaxed);
     }
 
     uint64_t bandBudgetNs() const
@@ -1343,7 +1343,7 @@ private:
     static const Sizes kSizes[2];
     Role role_ = Role::RenderServer;
     OpenFailure openFailure_ = OpenFailure::Structural;
-    std::atomic<bool> highPriority_{false};
+    std::atomic<bool> criticalPriority_{false};
     Sizes sizes_ = kSizes[0];
     gm20b::Mutex lock_;
     Kernel k_;

@@ -4,6 +4,7 @@
 #include "lock.h"
 #include "kernel.h"
 #include "TegraGM20BClockABI.h"
+#include "TegraGM20BSchedABI.h"
 #include "TegraGM20BVolatileABI.h"
 #include "encode_profile.h"
 
@@ -263,12 +264,24 @@ bool Kernel::surfaceGpuWrites(uint32_t surfaceId)
     return false;
 }
 
-bool Kernel::priority(uint32_t priority, uint32_t background)
+bool Kernel::priority(uint32_t priority, uint32_t background, bool *critical)
 {
     if (!(info_.flags & TegraGM20BInfoPriority))
         return false;
     const TegraGM20BAbiPriority in = {priority, background};
-    return call(TegraGM20BMethodPriority, &in, sizeof in, nullptr, 0) == KERN_SUCCESS;
+    if (info_.flags & TegraGM20BInfoPriorityReply) {
+        TegraGM20BAbiPriorityReply out = {};
+        if (call(TegraGM20BMethodPriority, &in, sizeof in, &out, sizeof out) != KERN_SUCCESS)
+            return false;
+        if (critical)
+            *critical = (out.flags & TegraGM20BPriorityCritical) != 0;
+        return true;
+    }
+    if (call(TegraGM20BMethodPriority, &in, sizeof in, nullptr, 0) != KERN_SUCCESS)
+        return false;
+    if (critical)
+        *critical = false;
+    return true;
 }
 
 uint32_t Kernel::surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, uint32_t bpp, uint32_t bytesPerRow,

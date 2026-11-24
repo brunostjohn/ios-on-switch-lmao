@@ -286,7 +286,8 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 void AGXDeviceUserClient::applyLevel(bool allChannels)
 {
 	level_ = tgm_priority_level(priority_, backgroundPriority_,
-				    static_cast<int>(backgroundRole_));
+				    static_cast<int>(backgroundRole_),
+				    static_cast<int>(restartNoKill_));
 	const bool wasCritical = critical_;
 	critical_ = tgm_compositor(static_cast<enum tgm_level>(level_),
 				   static_cast<int>(restartNoKill_));

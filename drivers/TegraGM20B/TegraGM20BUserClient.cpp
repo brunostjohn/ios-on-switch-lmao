@@ -12,6 +12,7 @@
 #include "SwitchGpuConnectionQuota.h"
 #include "SwitchGpuShaderCompiler.h"
 #include "TegraGM20BCompilerABI.h"
+#include "TegraGM20BSchedABI.h"
 #include "TegraGM20BVolatileABI.h"
 #include "TegraGM20BZcullABI.h"
 
@@ -677,7 +678,8 @@ extern "C" uint32_t switch_gpu_info_flags(void)
 			 TegraGM20BInfoSubmitAddress | TegraGM20BInfoCpuPreserveDirty |
 			 TegraGM20BInfoCanonicalSurfaceLayout | TegraGM20BInfoChannelEpoch |
 			 TegraGM20BInfoPushFences;
-	flags |= TegraGM20BInfoPackImage | TegraGM20BInfoBoPark | TegraGM20BInfoVolatileWrites;
+	flags |= TegraGM20BInfoPackImage | TegraGM20BInfoBoPark | TegraGM20BInfoVolatileWrites |
+		 TegraGM20BInfoPriorityReply;
 	if (info.comptag_lines && switch_gpu_compression_on())
 		flags |= TegraGM20BInfoCompression;
 	if (switch_tiled_cache_on())

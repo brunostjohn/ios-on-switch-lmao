@@ -213,4 +213,29 @@ TEST_F(DeviceMeasure, AMeasuredDrawTheGpuHasNotRunWaits)
     EXPECT_EQ(pl->bandRate.samples.load(), 1u);
 }
 
+TEST_F(DeviceMeasure, PriorityZeroNonCriticalAppIsNotCompositorClassAndIsBanded)
+{
+    kernel_model::model.priorityCritical = false;
+    ASSERT_TRUE(dev.gpuPriority(0, 4));
+    EXPECT_FALSE(dev.compositorClass());
+
+    const Words w = pass(1);
+    ASSERT_EQ(w.stamps.size(), 2u);
+    const uint64_t ticks[2] = {1000, 1000 + 10 * 614'400};
+    for (size_t i = 0; i < 2; i++) {
+        const gm20b::StampRelease r{w.stamps[i].second, 0, ticks[i]};
+        memcpy(kernel_model::model.host(w.stamps[i].first), &r, sizeof r);
+    }
+    const uint64_t bandsBefore = dev.stats.bands.load();
+    pass(1);
+    EXPECT_EQ(dev.stats.bands.load() - bandsBefore, 10u);
+
+    kernel_model::model.priorityCritical = true;
+    ASSERT_TRUE(dev.gpuPriority(0, 4));
+    EXPECT_TRUE(dev.compositorClass());
+    const uint64_t bandsAfter = dev.stats.bands.load();
+    pass(1);
+    EXPECT_EQ(dev.stats.bands.load(), bandsAfter);
+}
+
 }  // namespace

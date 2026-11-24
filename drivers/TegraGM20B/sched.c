@@ -9,7 +9,7 @@
  * high channel's kick preempts the app channel GR or the PBDMA is on (PFIFO_PREEMPT, as gf100_chan_preempt), so the host
  * leaves it at its next wait-for-idle instead of at the end of its timeslice. Nothing waits for a preempt: a context that
  * never saves trips the engine's context-switch timeout, which recovers its channel (TegraGM20BRecover.h). Apps run at
- * runningboardd's background or foreground level below the compositor's, three levels interleaved the same way.
+ * runningboardd's background, foreground, or app-high level below the compositor's, four levels interleaved the same way.
  */
 #include <core/device.h>
 #include <core/memory.h>

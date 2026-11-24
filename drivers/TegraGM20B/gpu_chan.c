@@ -268,7 +268,7 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 	}
 	list_add_tail(&chan->live, &tgm_live_chans);
 	switch_gpu_busy_open(&tgm_busy, chan->chid, chan->submitted);
-	switch_gpu_busy_level(&tgm_busy, chan->chid, 1);
+	switch_gpu_busy_level(&tgm_busy, chan->chid, !chan->high);
 	switch_gpu_chan_table_set(&tgm_chan_table, chan->chid, chan);
 	tgm_fault_publish(chan);
 	mutex_unlock(&tgm_live_lock);

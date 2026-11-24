@@ -53,19 +53,30 @@ TEST(GpuChanNew, AnAbandonedCompositorChannelIsKilledAsADeadClients)
 	EXPECT_EQ(switch_chan_new_isolated_critical(), 0);
 }
 
-// An app that asks for priority 0 is scheduled high but is no compositor: a kill of its channel fails its work as an
-// ordinary client's (gpu_hang.c reads `critical`). Only the compositor's high channel is critical.
-TEST(GpuChanNew, AHighChannelIsCriticalOnlyAsTheCompositors)
+TEST(GpuChanNew, AppHighChannelIsNeitherHighNorCriticalAndRemainsHoldable)
 {
 	ASSERT_EQ(switch_chan_new_make(6, 0), 0);
-	switch_chan_new_set_level(1, 0);
-	EXPECT_TRUE(switch_chan_new_high());
+	EXPECT_TRUE(switch_chan_new_busy_low());
+	switch_chan_new_set_raw_level(2 /* TGM_LEVEL_APP_HIGH */, 0);
+	EXPECT_FALSE(switch_chan_new_high());
 	EXPECT_FALSE(switch_chan_new_critical());
+	EXPECT_TRUE(switch_chan_new_busy_low());
 	switch_chan_new_set_level(1, 1);
+	EXPECT_TRUE(switch_chan_new_high());
 	EXPECT_TRUE(switch_chan_new_critical());
+	EXPECT_FALSE(switch_chan_new_busy_low());
 	switch_chan_new_set_level(0, 0);
 	EXPECT_FALSE(switch_chan_new_high());
 	EXPECT_FALSE(switch_chan_new_critical());
+	EXPECT_TRUE(switch_chan_new_busy_low());
+	switch_chan_new_delete();
+}
+
+TEST(GpuChanNew, ACriticalChannelStartsNotMarkedLow)
+{
+	ASSERT_EQ(switch_chan_new_make(8, 1), 0);
+	EXPECT_TRUE(switch_chan_new_high());
+	EXPECT_FALSE(switch_chan_new_busy_low());
 	switch_chan_new_delete();
 }
 

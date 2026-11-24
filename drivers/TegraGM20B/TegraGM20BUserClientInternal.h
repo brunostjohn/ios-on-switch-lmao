@@ -34,6 +34,7 @@
 #include "TegraGM20BReadback.h"
 #include "TegraGM20BRegDumpABI.h"
 #include "TegraGM20BCopyResetABI.h"
+#include "TegraGM20BSchedABI.h"
 #include "TegraGM20BSchedPolicy.h"
 #include "TegraGM20BSharedWiring.h"
 #include "SwitchGpuPin.h"
@@ -686,7 +687,7 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout *in,
 				   TegraGM20BAbiSurfaceLayoutInfo *out, bool canonical);
 	void applyLevel(bool allChannels = true);
-	IOReturn setPriority(const TegraGM20BAbiPriority &asked);
+	IOReturn setPriority(const TegraGM20BAbiPriority &asked, TegraGM20BAbiPriorityReply *reply);
 	IOReturn resourceSetCreate(const TegraGM20BAbiResourceSetCreate *in,
 				   TegraGM20BAbiResourceSetCreateReply *out);
 	IOReturn attachSet(const TegraGM20BAbiResourceSetCreate *in, TegraGM20BAbiSurfaceUse *uses,
