@@ -2667,7 +2667,10 @@ _read_trace_events(struct kd_dest *dest, size_t event_count, size_t *events_writ
 	if (!(kd_control_trace.kdc_flags & KDBG_BUFINIT) || kd_buffer_trace.kdcopybuf == NULL) {
 		return EINVAL;
 	}
-	thread_set_eager_preempt(current_thread());
+	bool set_preempt = !(thread_is_eager_preempt(current_thread()));
+	if (set_preempt) {
+		thread_set_eager_preempt(current_thread());
+	}
 
 	// Capture the current time.  Only sort events that have occured
 	// before now.  Since the IOPs are being flushed here, it is possible
@@ -2691,7 +2694,9 @@ _read_trace_events(struct kd_dest *dest, size_t event_count, size_t *events_writ
 	    old_live_flags);
 	should_disable = should_disable || (disabled_during_read && no_wrapping);
 
-	thread_clear_eager_preempt(current_thread());
+	if (set_preempt) {
+		thread_clear_eager_preempt(current_thread());
+	}
 
 	if (should_disable) {
 		kernel_debug_disable();
