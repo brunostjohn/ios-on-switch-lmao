@@ -117,6 +117,7 @@ int tgm_vm_map_ordered(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tg
 		       uint64_t offset, uint8_t kind, int read_only, uint8_t *page_shift);
 int tgm_vm_unmap(struct tgm_vm *vm, uint64_t va, uint64_t range);
 int tgm_vm_unmap_pages(struct tgm_vm *vm, uint64_t va, uint64_t range, uint8_t page_shift);
+int tgm_vm_unmap_volatile(struct tgm_vm *vm, uint64_t va, uint64_t range);
 struct switch_gpu_mapping;
 int switch_gpu_vm_map(struct tgm_vm *vm, uint64_t va, uint64_t range, struct tgm_mem *mem,
 		      uint64_t offset, uint8_t kind, int read_only,
@@ -126,6 +127,9 @@ int switch_gpu_vm_map_volatile(struct tgm_vm *vm, uint64_t va, uint64_t range, s
 			       struct switch_gpu_mapping **mapping);
 /* Whether a map of `kind` may be volatile: every map path (now, prepared, installed) refuses a compressed one. */
 int switch_gpu_vm_volatile_kind_ok(uint8_t kind, int vol);
+int switch_gpu_mapping_needs_ltc_flush(const struct switch_gpu_mapping *mapping);
+void switch_gpu_mapping_mark_l2_clean(struct switch_gpu_mapping *mapping);
+void switch_gpu_mapping_mark_l2_flushed(struct switch_gpu_mapping *mapping);
 void switch_gpu_vm_unmap(struct tgm_vm *vm, struct switch_gpu_mapping **mapping);
 /* Cuts [va, va + range) out of *mapping, made by switch_gpu_vm_map_volatile or _prepare of mem with kind, and consumes
  * it, changing no PTE. What stays below and above the range comes back as *below and *above, the range's own entries as
@@ -375,6 +379,7 @@ struct tgm_prof {
 
 uint32_t tgm_chan_submitted(struct tgm_chan *chan);
 uint32_t tgm_chan_completed(struct tgm_chan *chan);
+int tgm_chan_visible_at(struct tgm_chan *chan, uint32_t seqno);
 /* `fenced(arg)` from the interrupt pass whenever the channel's fence may have moved, and once when it is killed (its
  * fence then released): under nvkm's event lock, so it must not block (a thread call does the work). */
 void tgm_chan_on_fence(struct tgm_chan *chan, void (*fenced)(void *arg), void *arg);

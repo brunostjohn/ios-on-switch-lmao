@@ -458,3 +458,97 @@ TEST_F(VmMap, PendingEntryThatCannotBeInstalledLeavesItsMappingOutsideTheOrdered
 	EXPECT_FALSE(calls.back().deferred);
 	switch_gpu_vm_unmap(&a, &mapping);
 }
+
+TEST_F(VmMap, UnmapSkipsLtcFlushWhenProvablyCleanAndKeepsFlushWhenWritableOrCompressed)
+{
+	switch_gpu_mapping *mapping = nullptr;
+
+	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, 4 * PAGE_SIZE, &memory, 0, 0, 1, &mapping), 0);
+	flushes = 0;
+	switch_gpu_vm_unmap(&a, &mapping);
+	EXPECT_EQ(flushes, 0u) << "read-only mapping cannot dirty L2";
+
+	ASSERT_EQ(switch_gpu_vm_map_volatile(&a, 0x40000000, 4 * PAGE_SIZE, &memory, 0, 0, 0, 1,
+					     &mapping),
+		  0);
+	flushes = 0;
+	switch_gpu_vm_unmap(&a, &mapping);
+	EXPECT_EQ(flushes, 0u) << "volatile mapping bypasses L2";
+
+	ASSERT_EQ(switch_gpu_vm_prepare(&a, 0x40000000, 4 * PAGE_SIZE, &memory, 0, 0, &mapping), 0);
+	calls.clear();
+	flushes = 0;
+	switch_gpu_vm_unmap(&a, &mapping);
+	EXPECT_EQ(flushes, 0u) << "all-pending mapping never installed PTEs";
+	EXPECT_TRUE(calls.empty());
+
+	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, 4 * PAGE_SIZE, &memory, 0, 0, 0, &mapping), 0);
+	flushes = 0;
+	switch_gpu_vm_unmap(&a, &mapping);
+	EXPECT_EQ(flushes, 1u) << "dirty writable non-volatile mapping must flush L2";
+
+	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, 4 * PAGE_SIZE, &memory, 0, 0, 0, &mapping), 0);
+	switch_gpu_mapping_mark_l2_clean(mapping);
+	flushes = 0;
+	switch_gpu_vm_unmap(&a, &mapping);
+	EXPECT_EQ(flushes, 0u) << "externally flushed uncompressed mapping skips L2 flush";
+
+	memory.page = memory.mem.shift = 17;
+	memory.bytes = memory.mem.bytes = 32 * PAGE_SIZE;
+	memory.npages = 32;
+	tgm_gpu.mmu.kind[0x42] = 0xfe;
+	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, memory.bytes, &memory, 0, 0x42, 0, &mapping),
+		  0);
+	switch_gpu_mapping_mark_l2_clean(mapping);
+	flushes = 0;
+	switch_gpu_vm_unmap(&a, &mapping);
+	EXPECT_EQ(flushes, 1u) << "compressed mapping still flushes CBC on clean mark";
+
+	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, memory.bytes, &memory, 0, 0x42, 0, &mapping),
+		  0);
+	switch_gpu_mapping_mark_l2_flushed(mapping);
+	flushes = 0;
+	switch_gpu_vm_unmap(&a, &mapping);
+	EXPECT_EQ(flushes, 0u) << "batch-flushed compressed mapping skips redundant flush";
+}
+
+TEST_F(VmMap, UnmapVolatileSkipsLtcFlushAndUnmapsSynchronously)
+{
+	calls.clear();
+	flushes = 0;
+	EXPECT_EQ(tgm_vm_unmap_volatile(&a, 0x40000000, 4 * PAGE_SIZE), 0);
+	EXPECT_EQ(flushes, 0u);
+	ASSERT_EQ(calls.size(), 2u);
+	EXPECT_EQ(calls[0].operation, 'u');
+	EXPECT_FALSE(calls[0].deferred);
+	EXPECT_EQ(calls[1].operation, 'p');
+	EXPECT_FALSE(calls[1].deferred);
+}
+
+TEST_F(VmMap, SplitPreservesReadOnlyAndPendingLtcFlushState)
+{
+	switch_gpu_mapping *mapping = nullptr, *below = nullptr, *taken = nullptr, *above = nullptr;
+
+	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, 8 * PAGE_SIZE, &memory, 0, 0, 1, &mapping), 0);
+	ASSERT_EQ(switch_gpu_vm_split(&a, &mapping, &memory, 0, 1, 0, 0x40002000, 2 * PAGE_SIZE,
+				      &below, &taken, &above),
+		  0);
+	flushes = 0;
+	switch_gpu_vm_unmap(&a, &below);
+	switch_gpu_vm_unmap(&a, &taken);
+	switch_gpu_vm_unmap(&a, &above);
+	EXPECT_EQ(flushes, 0u);
+
+	mem_prepare_big_views(&memory);
+	ASSERT_EQ(map(a, &mapping), 0);
+	ASSERT_EQ(switch_gpu_vm_split(&a, &mapping, &memory, 0, 0, 0, 0x40008000, PAGE_SIZE, &below,
+				      &taken, &above),
+		  0);
+	flushes = 0;
+	switch_gpu_vm_unmap(&a, &below);
+	EXPECT_EQ(flushes, 0u) << "below has only pending entries from the cut big page";
+	switch_gpu_vm_unmap(&a, &taken);
+	EXPECT_EQ(flushes, 1u) << "taken holds the installed writable big page";
+	switch_gpu_vm_unmap(&a, &above);
+	EXPECT_EQ(flushes, 2u) << "above has an installed tail entry";
+}

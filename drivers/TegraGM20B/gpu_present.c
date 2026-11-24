@@ -271,7 +271,7 @@ int tgm_present_map(uint64_t va, struct tgm_mem *mem, uint64_t bytes, uint8_t ki
 
 int tgm_present_unmap(uint64_t va, uint64_t bytes)
 {
-	return tgm_present.vm ? tgm_vm_unmap(tgm_present.vm, va, bytes) : -ENODEV;
+	return tgm_present.vm ? tgm_vm_unmap_volatile(tgm_present.vm, va, bytes) : -ENODEV;
 }
 
 #if TGM_STATS

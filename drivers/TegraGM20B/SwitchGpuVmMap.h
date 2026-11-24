@@ -80,7 +80,8 @@ int tgm_vm_unmap_pages(struct tgm_vm *vm, uint64_t va, uint64_t range, uint8_t p
 		return -EINVAL;
 	tgm_gate_enter();
 	mutex_lock(&vm->map_lock);
-	nvkm_ltc_flush(tgm_gpu.device->ltc);
+	if (l2_on())
+		nvkm_ltc_flush(tgm_gpu.device->ltc);
 	ret = nvif_vmm_raw_unmap(&vm->vmm, va, range, page_shift, false);
 	nvif_vmm_raw_put(&vm->vmm, va, range, page_shift);
 	mutex_unlock(&vm->map_lock);
@@ -91,6 +92,20 @@ int tgm_vm_unmap_pages(struct tgm_vm *vm, uint64_t va, uint64_t range, uint8_t p
 int tgm_vm_unmap(struct tgm_vm *vm, uint64_t va, uint64_t range)
 {
 	return tgm_vm_unmap_pages(vm, va, range, PAGE_SHIFT);
+}
+
+int tgm_vm_unmap_volatile(struct tgm_vm *vm, uint64_t va, uint64_t range)
+{
+	int ret = 0;
+	if (va < TGM_USER_VA_START || range > TGM_KERNEL_VA || va > TGM_KERNEL_VA - range)
+		return -EINVAL;
+	tgm_gate_enter();
+	mutex_lock(&vm->map_lock);
+	ret = nvif_vmm_raw_unmap(&vm->vmm, va, range, PAGE_SHIFT, false);
+	nvif_vmm_raw_put(&vm->vmm, va, range, PAGE_SHIFT);
+	mutex_unlock(&vm->map_lock);
+	gate_leave();
+	return ret;
 }
 
 static void mem_prepare_big_views(struct tgm_mem *mem)
@@ -191,6 +206,8 @@ int switch_gpu_vm_map_volatile(struct tgm_vm *vm, u64 va, u64 range, struct tgm_
 	if (!made)
 		return -ENOMEM;
 	made->count = count;
+	made->compressed = compressed ? 1 : 0;
+	made->l2_writable = (!read_only && !args.vol) ? 1 : 0;
 	at = 0;
 	for (i = 0; i < count; ++i) {
 		if (compressed)
@@ -253,15 +270,42 @@ int switch_gpu_vm_map(struct tgm_vm *vm, u64 va, u64 range, struct tgm_mem *mem,
 	return switch_gpu_vm_map_volatile(vm, va, range, mem, offset, kind, read_only, 0, mapping);
 }
 
+int switch_gpu_mapping_installed(const struct switch_gpu_mapping *mapping);
+
+int switch_gpu_mapping_needs_ltc_flush(const struct switch_gpu_mapping *mapping)
+{
+	if (!mapping || !mapping->l2_writable || mapping->l2_clean)
+		return 0;
+	return switch_gpu_mapping_installed(mapping);
+}
+
+void switch_gpu_mapping_mark_l2_clean(struct switch_gpu_mapping *mapping)
+{
+	if (mapping && !mapping->compressed)
+		mapping->l2_clean = 1;
+}
+
+void switch_gpu_mapping_mark_l2_flushed(struct switch_gpu_mapping *mapping)
+{
+	if (mapping)
+		mapping->l2_clean = 1;
+}
+
 void switch_gpu_vm_unmap(struct tgm_vm *vm, struct switch_gpu_mapping **mapping)
 {
 	struct switch_gpu_mapping *made = *mapping;
 	u32 i;
 	if (!made)
 		return;
+	if (!switch_gpu_mapping_installed(made)) {
+		kfree(made);
+		*mapping = NULL;
+		return;
+	}
 	tgm_gate_enter();
 	mutex_lock(&vm->map_lock);
-	nvkm_ltc_flush(tgm_gpu.device->ltc);
+	if (switch_gpu_mapping_needs_ltc_flush(made))
+		nvkm_ltc_flush(tgm_gpu.device->ltc);
 	for (i = 0; i < made->count; ++i) {
 		const struct switch_gpu_mapping_entry *entry = &made->entries[i];
 		if (entry->pending)
@@ -332,8 +376,11 @@ int switch_gpu_vm_split(struct tgm_vm *vm, struct switch_gpu_mapping **mapping, 
 				kfree(parts[p]);
 			return -ENOMEM;
 		}
-		if (parts[p])
+		if (parts[p]) {
 			parts[p]->sparse = old->sparse;
+			parts[p]->l2_writable = old->l2_writable;
+			parts[p]->compressed = old->compressed;
+		}
 	}
 	for (i = 0; i < old->count; ++i) {
 		const struct switch_gpu_mapping_entry *e = &old->entries[i];
@@ -396,6 +443,7 @@ int switch_gpu_vm_prepare(struct tgm_vm *vm, u64 va, u64 range, struct tgm_mem *
 	made = mapping_alloc(count);
 	if (!made)
 		return -ENOMEM;
+	made->compressed = tgm_gpu.mmu.kind[kind] != kind ? 1 : 0;
 	for (at = 0; at < range; at += run.bytes) {
 		if (tgm_gpu.mmu.kind[kind] != kind)
 			run = (struct switch_gpu_mapping_run){range, SWITCH_GPU_BIG_SHIFT};
@@ -423,7 +471,7 @@ int switch_gpu_vm_install(struct tgm_vm *vm, struct switch_gpu_mapping *mapping,
 {
 	struct gf100_vmm_map_v0 args = {
 		.version = 0, .vol = !!vol || !l2_on(), .ro = !!read_only, .kind = kind};
-	u32 i, ordered_scope, failed = 0, failed_get = 0;
+	u32 i, ordered_scope, failed = 0, failed_get = 0, installed_any = 0;
 	int ret = 0;
 	if (!switch_gpu_vm_volatile_kind_ok(kind, vol))
 		return -EINVAL;
@@ -453,12 +501,22 @@ int switch_gpu_vm_install(struct tgm_vm *vm, struct switch_gpu_mapping *mapping,
 				e->pending =
 					2; /* got, not mapped: put below, outside the ordered scope */
 		}
-		if (!ret)
+		if (!ret) {
 			e->pending = 0;
-		else
+			installed_any = 1;
+		} else {
 			++failed;
+		}
 	}
 	nvxnu_gpu_ordered_end(ordered_scope);
+	if (installed_any && !mapping->sparse) {
+		if (tgm_gpu.mmu.kind[kind] != kind)
+			mapping->compressed = 1;
+		if (!read_only && !args.vol) {
+			mapping->l2_writable = 1;
+			mapping->l2_clean = 0;
+		}
+	}
 	tgm_tlb_mapped(&vm->tlb);
 	/* an entry that could not be mapped stays unmapped and leaves the mapping */
 	for (i = 0; failed && i < mapping->count;) {

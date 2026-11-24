@@ -102,6 +102,9 @@ struct switch_gpu_mapping_entry {
 struct switch_gpu_mapping {
 	u32 count;
 	u8 sparse; /* switch_gpu_vm_sparse's: no memory behind any entry */
+	u8 l2_writable;
+	u8 compressed;
+	u8 l2_clean;
 	struct switch_gpu_mapping_entry entries[];
 };
 

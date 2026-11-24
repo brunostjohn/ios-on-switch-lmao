@@ -112,16 +112,17 @@ TEST_F(VmSparse, APendingSparseRangeWritesNothingUntilInstalled)
 	switch_gpu_vm_unmap(&a, &mapping);
 }
 
-// An Unmap, or the cut of a Map over it, removes sparse PTEs as any: after an L2 flush, synchronously, each run's page
-// tables given back.
+// An Unmap, or the cut of a Map over it, removes sparse PTEs synchronously with no L2 flush
+// (sparse PTEs back no physical memory) and gives each run's page tables back.
 TEST_F(VmSparse, ItsRemovalIsAnyMappingsRemoval)
 {
 	switch_gpu_mapping *mapping = nullptr;
 	ASSERT_EQ(switch_gpu_vm_sparse(&a, kVa, kRange, 1, &mapping), 0);
 	calls.clear();
+	flushes = 0;
 	switch_gpu_vm_unmap(&a, &mapping);
 	EXPECT_EQ(mapping, nullptr);
-	EXPECT_EQ(flushes, 1u);
+	EXPECT_EQ(flushes, 0u);
 	ASSERT_EQ(calls.size(), 2 * kRuns.size());
 	for (size_t i = 0; i < kRuns.size(); ++i) {
 		EXPECT_EQ(calls[2 * i].operation, 'u');
