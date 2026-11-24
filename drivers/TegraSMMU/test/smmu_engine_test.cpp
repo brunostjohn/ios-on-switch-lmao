@@ -126,6 +126,39 @@ TEST_F(SmmuEngineTest, FullGpuAttachLatchesBothTranslationRegistersAndSurvivesRe
     engine.detach();
     engine.release();
 }
+
+TEST_F(SmmuEngineTest, MapRespectsReserveHeadroomAndUnmapsExactCount)
+{
+    TegraSMMUEngine engine;
+    ASSERT_TRUE(engine.init(TEGRA_SMMU_ASID_GPU, kWindowBase, kWindowBytes, 0));
+
+    std::vector<uint64_t> pages(16 * 16);
+    for (size_t i = 0; i < pages.size(); ++i)
+        pages[i] = 0x80000000ULL + (i << 12);
+
+    const uint64_t reserve = 2ULL << 20;
+    const uint64_t first = engine.map(pages.data(), static_cast<uint32_t>(pages.size()), true, reserve);
+    ASSERT_NE(first, 0u);
+    const uint64_t second = engine.map(pages.data(), static_cast<uint32_t>(pages.size()), true, reserve);
+    ASSERT_NE(second, 0u);
+    EXPECT_EQ(engine.map(pages.data(), 16, true, reserve), 0u) << "cannot dip into reserved 2 MiB";
+
+    const uint64_t comp = engine.map(pages.data(), static_cast<uint32_t>(pages.size()), true);
+    ASSERT_NE(comp, 0u) << "unreserved allocation still consumes reserved headroom";
+
+    uint64_t total = 0, freeBytes = 0;
+    engine.usage(&total, &freeBytes);
+    EXPECT_EQ(total, kWindowBytes);
+    EXPECT_EQ(freeBytes, 1ULL << 20);
+
+    engine.unmap(comp, static_cast<uint32_t>(pages.size()));
+    engine.unmap(second, static_cast<uint32_t>(pages.size()));
+    engine.unmap(first, static_cast<uint32_t>(pages.size()));
+    engine.usage(&total, &freeBytes);
+    EXPECT_EQ(freeBytes, kWindowBytes);
+
+    engine.release();
+}
 }  // namespace
 
 bool switch_dma_alloc(switch_dma_buffer *out, size_t size, uint64_t, IOOptionBits)

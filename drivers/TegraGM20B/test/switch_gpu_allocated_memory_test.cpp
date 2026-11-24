@@ -10,7 +10,8 @@ struct tgm_mem {
 
 namespace
 {
-std::atomic<unsigned> directNewCount, exclusiveNewCount, smmuNewCount, delCount;
+std::atomic<unsigned> directNewCount, exclusiveNewCount, smmuNewCount, bigSmmuNewCount, delCount;
+std::atomic<bool> bigSmmuFallbackToDirect{false};
 std::mutex hookMutex;
 std::function<void()> smmuHook;
 }  // namespace
@@ -43,6 +44,20 @@ extern "C" int tgm_mem_new_exclusive_smmu(tgm_vm *, const uint64_t *, uint32_t, 
 	return 0;
 }
 
+extern "C" int tgm_mem_new_smmu_big(tgm_vm *, const uint64_t *, uint32_t, tgm_mem **pmem)
+{
+	++bigSmmuNewCount;
+	std::function<void()> hook;
+	{
+		std::lock_guard<std::mutex> guard(hookMutex);
+		hook = smmuHook;
+	}
+	if (hook)
+		hook();
+	*pmem = new tgm_mem{!bigSmmuFallbackToDirect.load(std::memory_order_acquire), false};
+	return 0;
+}
+
 extern "C" int tgm_mem_can_compress(const tgm_mem *mem)
 {
 	return mem && mem->compressible ? 1 : 0;
@@ -70,7 +85,8 @@ protected:
 	void SetUp() override
 	{
 		Backing::SetUp();
-		directNewCount = exclusiveNewCount = smmuNewCount = delCount = 0;
+		directNewCount = exclusiveNewCount = smmuNewCount = bigSmmuNewCount = delCount = 0;
+		bigSmmuFallbackToDirect.store(false, std::memory_order_release);
 		std::lock_guard<std::mutex> guard(hookMutex);
 		smmuHook = {};
 	}
@@ -82,7 +98,8 @@ protected:
 			smmuHook = {};
 		}
 		Backing::TearDown();
-		EXPECT_EQ(directNewCount.load() + exclusiveNewCount.load() + smmuNewCount.load(),
+		EXPECT_EQ(directNewCount.load() + exclusiveNewCount.load() + smmuNewCount.load() +
+				  bigSmmuNewCount.load(),
 			  delCount.load());
 	}
 };
@@ -194,6 +211,111 @@ TEST_F(AllocatedMemoryCrossTu, ConcurrentDirectPaAndSmmuRaceNeverExposesBothAddr
 		} else {
 			EXPECT_EQ(directRet, -2);
 			EXPECT_FALSE(tgm_mem_is_smmu(smmuOut));
+		}
+		switch_gpu_backing_release(b);
+	}
+}
+
+TEST_F(AllocatedMemoryCrossTu, CrossTuBigSmmuCanonicalLookupReturnsSameUncompressedObject)
+{
+	auto *b = backing(900);
+	tgm_mem *fromPeer = nullptr;
+	ASSERT_EQ(peer_allocated_memory_big(b, 900, &fromPeer), 0);
+	ASSERT_NE(fromPeer, nullptr);
+	EXPECT_TRUE(tgm_mem_is_smmu(fromPeer));
+	EXPECT_FALSE(tgm_mem_can_compress(fromPeer));
+
+	tgm_mem *fromMain = nullptr, *fromSubrange = nullptr, *fromDirectCheck = nullptr;
+	ASSERT_EQ(allocatedMemoryBig(b, 900, &fromMain), 0);
+	ASSERT_EQ(switch_gpu_backing_tgm_mem_existing(b, 16, &fromSubrange), 0);
+	ASSERT_EQ(switch_gpu_backing_tgm_mem_existing_or_direct(b, 900, &fromDirectCheck), 0);
+	EXPECT_EQ(fromMain, fromPeer);
+	EXPECT_EQ(fromSubrange, fromPeer);
+	EXPECT_EQ(fromDirectCheck, fromPeer);
+	EXPECT_EQ(bigSmmuNewCount.load(), 1u);
+
+	const auto write = token(702, 1);
+	ASSERT_EQ(publish(b, SWITCH_GPU_BACKING_WRITE, write), 0);
+	switch_gpu_backing_release(b);
+	switch_gpu_backing_retire();
+	EXPECT_EQ(delCount.load(), 0u);
+	timelines[key(&write)].completed = 1;
+	switch_gpu_backing_completed();
+	switch_gpu_backing_retire();
+	EXPECT_EQ(delCount.load(), 1u);
+}
+
+TEST_F(AllocatedMemoryCrossTu, BigSmmuReserveFallbackLatchesDirectPaAndNeverUpgrades)
+{
+	auto *b = backing(900);
+	bigSmmuFallbackToDirect.store(true, std::memory_order_release);
+	tgm_mem *first = nullptr;
+	ASSERT_EQ(allocatedMemoryBig(b, 900, &first), 0);
+	ASSERT_NE(first, nullptr);
+	EXPECT_FALSE(tgm_mem_is_smmu(first));
+	EXPECT_FALSE(tgm_mem_can_compress(first));
+
+	bigSmmuFallbackToDirect.store(false, std::memory_order_release);
+	tgm_mem *second = nullptr;
+	ASSERT_EQ(peer_allocated_memory_big(b, 900, &second), 0);
+	EXPECT_EQ(second, first);
+	EXPECT_EQ(bigSmmuNewCount.load(), 1u);
+	switch_gpu_backing_release(b);
+}
+
+TEST_F(AllocatedMemoryCrossTu, ConcurrentDirectPaAndBigSmmuRaceNeverExposesBothAddressSpaces)
+{
+	{
+		auto *b = backing(900);
+		{
+			std::lock_guard<std::mutex> guard(hookMutex);
+			smmuHook = [&] {
+				tgm_mem *existing = nullptr;
+				EXPECT_EQ(
+					peer_allocated_memory_existing_or_direct(b, 900, &existing),
+					-2);
+				EXPECT_EQ(existing, nullptr);
+			};
+		}
+		tgm_mem *mem = nullptr;
+		ASSERT_EQ(allocatedMemoryBig(b, 900, &mem), 0);
+		ASSERT_NE(mem, nullptr);
+		EXPECT_FALSE(tgm_mem_is_smmu(mem));
+		EXPECT_EQ(bigSmmuNewCount.load(), 1u);
+		EXPECT_EQ(directNewCount.load(), 1u);
+		EXPECT_EQ(delCount.load(), 1u);
+		{
+			std::lock_guard<std::mutex> guard(hookMutex);
+			smmuHook = {};
+		}
+		switch_gpu_backing_release(b);
+	}
+
+	for (unsigned round = 0; round < 64; ++round) {
+		auto *b = backing(900);
+		std::atomic<bool> go{false};
+		tgm_mem *bigOut = nullptr, *directOut = nullptr;
+		int bigRet = -1, directRet = -1;
+		std::thread t1([&] {
+			while (!go.load(std::memory_order_acquire))
+				;
+			bigRet = allocatedMemoryBig(b, 900, &bigOut);
+		});
+		std::thread t2([&] {
+			while (!go.load(std::memory_order_acquire))
+				;
+			directRet = peer_allocated_memory_existing_or_direct(b, 900, &directOut);
+		});
+		go.store(true, std::memory_order_release);
+		t1.join();
+		t2.join();
+		ASSERT_EQ(bigRet, 0);
+		ASSERT_NE(bigOut, nullptr);
+		if (directRet == 0) {
+			EXPECT_EQ(directOut, bigOut);
+		} else {
+			EXPECT_EQ(directRet, -2);
+			EXPECT_FALSE(tgm_mem_is_smmu(bigOut));
 		}
 		switch_gpu_backing_release(b);
 	}

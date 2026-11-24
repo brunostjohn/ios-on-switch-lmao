@@ -77,4 +77,87 @@ TEST(SwitchGpuSmmu, ScatteredMisalignedAndCollidingParityChunksUseSmmu)
 	alternating.insert(alternating.end(), secondOdd.begin(), secondOdd.end());
 	EXPECT_FALSE(switch_gpu_smmu_should_map(alternating.data(), uint32_t(alternating.size())));
 }
+
+TEST(SwitchGpuSmmu, BigPagePrefixCoversNon64KMultiplesAndSkipsAlreadyAlignedRuns)
+{
+	EXPECT_EQ(switch_gpu_smmu_prefix_pages(0), 0u);
+	EXPECT_EQ(switch_gpu_smmu_prefix_pages(15), 0u);
+	EXPECT_EQ(switch_gpu_smmu_prefix_pages(16), 16u);
+	EXPECT_EQ(switch_gpu_smmu_prefix_pages(17), 16u);
+	EXPECT_EQ(switch_gpu_smmu_prefix_pages(90), 80u);
+	EXPECT_EQ(switch_gpu_smmu_prefix_pages(135), 128u);
+	EXPECT_EQ(switch_gpu_smmu_prefix_pages(900), 896u);
+
+	const auto small = contiguous(0x80001000ULL, 15);
+	EXPECT_FALSE(switch_gpu_smmu_should_map_big(small.data(), uint32_t(small.size())));
+	EXPECT_FALSE(switch_gpu_smmu_should_map_big(nullptr, 900));
+
+	// Uncompressed big pages need no bit-16 parity alternation: two aligned even blocks bypass SMMU.
+	auto sameParityAligned = contiguous(0x80000000ULL, 16);
+	auto secondEven = contiguous(0x80040000ULL, 16);
+	sameParityAligned.insert(sameParityAligned.end(), secondEven.begin(), secondEven.end());
+	EXPECT_FALSE(switch_gpu_smmu_should_map_big(sameParityAligned.data(),
+						    uint32_t(sameParityAligned.size())));
+
+	const auto alignedPanel = contiguous(0x80000000ULL, 900);
+	EXPECT_FALSE(
+		switch_gpu_smmu_should_map_big(alignedPanel.data(), uint32_t(alignedPanel.size())));
+
+	for (uint32_t npages : {16u, 17u, 90u, 135u, 900u}) {
+		auto pages = contiguous(0x80001000ULL, npages);
+		pages[7] += 0x4000;
+		EXPECT_TRUE(switch_gpu_smmu_should_map_big(pages.data(), npages)) << npages;
+	}
+
+	// Tail page aliasing a prefix page must bypass SMMU so L2 never sees BIT(34)|iova and direct PA.
+	auto tailAlias = contiguous(0x80001000ULL, 900);
+	tailAlias[898] = tailAlias[42];
+	EXPECT_FALSE(switch_gpu_smmu_should_map_big(tailAlias.data(), uint32_t(tailAlias.size())));
+}
+
+TEST(SwitchGpuSmmu, PageUniquenessRejectsDuplicatesInvalidPasAndOversizedAllocations)
+{
+	EXPECT_EQ(switch_gpu_smmu_pfn_table_cap(0), 0u);
+	EXPECT_EQ(switch_gpu_smmu_pfn_table_cap(16), 64u);
+	EXPECT_EQ(switch_gpu_smmu_pfn_table_cap(32), 64u);
+	EXPECT_EQ(switch_gpu_smmu_pfn_table_cap(33), 128u);
+	EXPECT_EQ(switch_gpu_smmu_pfn_table_cap(900), 2048u);
+	EXPECT_EQ(switch_gpu_smmu_pfn_table_cap((1u << 18) + 1u), 0u);
+
+	auto uniqueCheck = [](const std::vector<uint64_t> &pas) {
+		const uint32_t cap = switch_gpu_smmu_pfn_table_cap(uint32_t(pas.size()));
+		if (!cap)
+			return 0;
+		std::vector<uint32_t> table(cap, 0u);
+		return switch_gpu_smmu_pages_unique(pas.data(), uint32_t(pas.size()), table.data(),
+						    cap);
+	};
+
+	const auto panel = contiguous(0x80001000ULL, 900);
+	EXPECT_TRUE(uniqueCheck(panel));
+
+	auto dupInPrefix = panel;
+	dupInPrefix[200] = dupInPrefix[3];
+	EXPECT_FALSE(uniqueCheck(dupInPrefix));
+
+	auto dupAcrossTail = panel;
+	dupAcrossTail[899] = dupAcrossTail[100];
+	EXPECT_FALSE(uniqueCheck(dupAcrossTail));
+
+	auto dupInTail = panel;
+	dupInTail[899] = dupInTail[896];
+	EXPECT_FALSE(uniqueCheck(dupInTail));
+
+	auto badZero = contiguous(0x80000000ULL, 16);
+	badZero[4] = 0;
+	EXPECT_FALSE(uniqueCheck(badZero));
+
+	auto badUnaligned = contiguous(0x80000000ULL, 16);
+	badUnaligned[4] |= 0x100;
+	EXPECT_FALSE(uniqueCheck(badUnaligned));
+
+	auto badHigh = contiguous(0x80000000ULL, 16);
+	badHigh[4] = SWITCH_GPU_SMMU_BIT;
+	EXPECT_FALSE(uniqueCheck(badHigh));
+}
 }  // namespace

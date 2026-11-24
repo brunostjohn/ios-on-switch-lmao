@@ -3581,7 +3581,7 @@ genrule(
     outs = ["switch_gpu_mem_smmu_source.h"],
     cmd = """
 set -e
-awk '/^static int mem_new\\(/ { on = 1 } on { print } on && /^}$$/ { count++; if (count == 8) on = 0 } END { if (count != 8) exit 1 }' $< > $@
+awk '/^static int mem_smmu_pages_unique\\(/ { on = 1 } on { print } on && /^}$$/ { count++; if (count == 10) on = 0 } END { if (count != 10) exit 1 }' $< > $@
 """,
 )
 

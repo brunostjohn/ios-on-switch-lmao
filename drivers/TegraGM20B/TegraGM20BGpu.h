@@ -106,6 +106,8 @@ int tgm_mem_new_exclusive(struct tgm_vm *vm, const uint64_t *pas, uint32_t npage
 			  struct tgm_mem **pmem);
 int tgm_mem_new_exclusive_smmu(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
 			       struct tgm_mem **pmem);
+int tgm_mem_new_smmu_big(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
+			 struct tgm_mem **pmem);
 int tgm_mem_can_compress(const struct tgm_mem *mem);
 int tgm_mem_is_smmu(const struct tgm_mem *mem);
 struct switch_gpu_backing;
@@ -113,6 +115,8 @@ int switch_gpu_backing_tgm_mem_direct(struct switch_gpu_backing *backing, uint32
 				      struct tgm_mem **out);
 int switch_gpu_backing_tgm_mem(struct switch_gpu_backing *backing, uint32_t count,
 			       struct tgm_mem **out);
+int switch_gpu_backing_tgm_mem_big(struct switch_gpu_backing *backing, uint32_t count,
+				   struct tgm_mem **out);
 int switch_gpu_backing_tgm_mem_existing(struct switch_gpu_backing *backing, uint32_t count,
 					struct tgm_mem **out);
 int switch_gpu_backing_tgm_mem_existing_or_direct(struct switch_gpu_backing *backing,

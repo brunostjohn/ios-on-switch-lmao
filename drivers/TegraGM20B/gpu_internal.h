@@ -193,6 +193,7 @@ struct tgm_mem {
 	struct switch_gpu_memory_view *big_views;
 	bool big_views_ready;
 	u64 smmu_iova;
+	u32 smmu_npages;
 	u64 *smmu_pages;
 };
 

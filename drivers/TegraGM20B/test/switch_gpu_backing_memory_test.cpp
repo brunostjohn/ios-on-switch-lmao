@@ -442,3 +442,33 @@ TEST_F(BackingMemory, ConcurrentDirectPaLatchDiscardsUnpublishedSmmuCandidate)
 	EXPECT_EQ(destroyed.load(), 1u);
 	switch_gpu_backing_release(b);
 }
+
+TEST_F(BackingMemory, UncompressedSmmuMemoryFixesExtentAndPreventsAliasedGrowth)
+{
+	std::vector<uint64_t> pages(32);
+	for (uint32_t i = 0; i < 32; ++i)
+		pages[i] = next_page += 4096;
+	auto *b = switch_gpu_backing_register(pages.data(), 16, 0, nullptr, nullptr);
+	ASSERT_NE(b, nullptr);
+	auto createUncompressedSmmu = [](const uint64_t *p, uint32_t count, void **out,
+					 uint32_t *flags) {
+		++created;
+		*flags = SWITCH_GPU_BACKING_MEMORY_SMMU;
+		*out = new Memory{p, count, p[0]};
+		return 0;
+	};
+	void *object = nullptr;
+	ASSERT_EQ(switch_gpu_backing_memory_acquire_smmu(b, 16, createUncompressedSmmu,
+							 createMemory, destroyMemory, &object),
+		  0);
+	ASSERT_NE(object, nullptr);
+	EXPECT_EQ(switch_gpu_backing_register(pages.data(), 32, 0, nullptr, nullptr), nullptr)
+		<< "SMMU-backed uncompressed memory must refuse backing growth";
+	auto *prefix = switch_gpu_backing_register(pages.data(), 8, 0, nullptr, nullptr);
+	ASSERT_EQ(prefix, b);
+	void *reused = nullptr;
+	ASSERT_EQ(switch_gpu_backing_memory_existing(prefix, 8, destroyMemory, &reused), 0);
+	EXPECT_EQ(reused, object);
+	switch_gpu_backing_release(prefix);
+	switch_gpu_backing_release(b);
+}

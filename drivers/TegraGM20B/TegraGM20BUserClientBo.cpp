@@ -480,7 +480,12 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	if (!ret && !bo->chunked && !smmuComp && !(in->flags & TegraGM20BBoCoherent))
 		ret = ioreturn(switch_gpu_backing_cpu_track(bo->backing));
 	if (!ret) {
-		const auto acquire = compressible ? allocatedMemorySmmu : allocatedMemory;
+		const bool bigSmmu =
+			!compressible && !bo->pool_va && !(in->flags & TegraGM20BBoContiguous) &&
+			bo->npages >= SWITCH_GPU_SMMU_GRANULE_PAGES && switch_gpu_smmu_ready();
+		const auto acquire = compressible ? allocatedMemorySmmu
+				     : bigSmmu    ? allocatedMemoryBig
+						  : allocatedMemory;
 		ret = ioreturn(acquire(bo->backing, bo->npages, &bo->mem));
 		bo->backingMemory = ret == kIOReturnSuccess;
 		if (!ret && compressible && !tgm_mem_can_compress(bo->mem)) {

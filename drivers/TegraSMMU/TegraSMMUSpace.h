@@ -53,12 +53,16 @@ struct TegraSMMUSpace {
         }
     }
 
-    // The lowest free run of `bytes` (rounded up to granules); 0 when none.
-    uint64_t alloc(uint64_t bytes)
+    // The lowest free run of `bytes` (rounded up to granules) leaving at least `reserveBytes` free; 0 when none.
+    uint64_t alloc(uint64_t bytes, uint64_t reserveBytes = 0)
     {
-        if (!used || !bytes || round(bytes) / kGranule > free)
+        if (!used || !bytes)
             return 0;
-        const uint32_t count = static_cast<uint32_t>(round(bytes) / kGranule);
+        const uint64_t rounded = round(bytes);
+        const uint64_t avail = bytesFree();
+        if (rounded < bytes || avail < rounded || avail - rounded < reserveBytes)
+            return 0;
+        const uint32_t count = static_cast<uint32_t>(rounded / kGranule);
         uint32_t run = 0;
         uint32_t first = 0;
         for (uint32_t i = 0; i < granules && run < count;) {

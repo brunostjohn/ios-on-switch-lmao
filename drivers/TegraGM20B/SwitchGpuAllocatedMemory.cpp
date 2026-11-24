@@ -22,6 +22,15 @@ int allocatedMemorySmmuCreate(const uint64_t *pages, uint32_t count, void **out,
 	return result;
 }
 
+int allocatedMemoryBigCreate(const uint64_t *pages, uint32_t count, void **out, uint32_t *flags)
+{
+	tgm_mem *memory = nullptr;
+	const int result = tgm_mem_new_smmu_big(nullptr, pages, count, &memory);
+	*out = memory;
+	*flags = tgm_mem_is_smmu(memory) ? SWITCH_GPU_BACKING_MEMORY_SMMU : 0;
+	return result;
+}
+
 int allocatedMemoryDirectFallbackCreate(const uint64_t *pages, uint32_t count, void **out,
 					uint32_t *flags)
 {
@@ -56,6 +65,17 @@ extern "C" int switch_gpu_backing_tgm_mem(struct switch_gpu_backing *backing, ui
 	void *object = nullptr;
 	const int result = switch_gpu_backing_memory_acquire_smmu(
 		backing, count, allocatedMemorySmmuCreate, allocatedMemoryDirectFallbackCreate,
+		switch_gpu_allocated_memory_destroy, &object);
+	*out = static_cast<tgm_mem *>(object);
+	return result;
+}
+
+extern "C" int switch_gpu_backing_tgm_mem_big(struct switch_gpu_backing *backing, uint32_t count,
+					      struct tgm_mem **out)
+{
+	void *object = nullptr;
+	const int result = switch_gpu_backing_memory_acquire_smmu(
+		backing, count, allocatedMemoryBigCreate, allocatedMemoryDirectFallbackCreate,
 		switch_gpu_allocated_memory_destroy, &object);
 	*out = static_cast<tgm_mem *>(object);
 	return result;

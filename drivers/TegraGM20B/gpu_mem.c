@@ -229,13 +229,32 @@ void tgm_vm_claim_connection(struct tgm_vm *vm, const void *connection)
 
 static void mem_prepare_big_views(struct tgm_mem *mem);
 
-static int mem_new(const uint64_t *pas, uint32_t npages, u8 page, int compute_comp, int allow_smmu,
+static int mem_smmu_pages_unique(const uint64_t *pas, uint32_t npages)
+{
+	uint32_t small_table[64] = {0};
+	const uint32_t cap = switch_gpu_smmu_pfn_table_cap(npages);
+	uint32_t *table = NULL;
+	int unique = 0;
+	if (!cap)
+		return 0;
+	if (cap <= 64u)
+		return switch_gpu_smmu_pages_unique(pas, npages, small_table, 64u);
+	table = kzalloc((size_t)cap * sizeof(*table), GFP_KERNEL);
+	if (!table)
+		return 0;
+	unique = switch_gpu_smmu_pages_unique(pas, npages, table, cap);
+	kfree(table);
+	return unique;
+}
+
+static int mem_new(const uint64_t *pas, uint32_t npages, u8 page, int compute_comp, int smmu_mode,
 		   struct tgm_mem **pmem, uint64_t *lock_wait_ns)
 {
 	struct nvif_mem_ram_v0 args = {.version = 0, .dma = NULL, .sgl = NULL};
 	struct tgm_mem *mem = NULL;
 	const uint64_t *effective = pas;
 	u64 smmu_iova = 0;
+	u32 smmu_npages = 0;
 	u64 *smmu_pages = NULL;
 	u64 asked = 0;
 	int ret = 0;
@@ -245,22 +264,37 @@ static int mem_new(const uint64_t *pas, uint32_t npages, u8 page, int compute_co
 	if (!mem)
 		return -ENOMEM;
 	/* GM20B's L2 sits upstream of Tegra SMMU and tags lines by pre-SMMU address (BIT(34)|iova
-	 * vs direct PA). Only canonical exclusive compressible memory may acquire an SMMU IOVA. */
-	if (allow_smmu && compute_comp && switch_gpu_smmu_should_map(pas, npages)) {
+	 * vs direct PA). Only canonical backing-owned memory acquires an SMMU IOVA: mode 1 compacts
+	 * exact 64 KiB-multiple compressible allocations; mode 2 compacts the 64 KiB-aligned prefix
+	 * of uncompressed allocations under the headroom reserve, keeping any tail on direct PA. */
+	if (smmu_mode == 1 && compute_comp && switch_gpu_smmu_should_map(pas, npages) &&
+	    mem_smmu_pages_unique(pas, npages)) {
 		smmu_iova = switch_gpu_smmu_map(pas, npages);
-		if (smmu_iova) {
-			smmu_pages = kmalloc_array(npages, sizeof(*smmu_pages), GFP_KERNEL);
-			if (smmu_pages) {
-				uint32_t i = 0;
-				for (i = 0; i < npages; ++i) {
-					const u64 page_iova = smmu_iova + ((u64)i << PAGE_SHIFT);
-					smmu_pages[i] = switch_gpu_smmu_pa(page_iova);
-				}
-				effective = smmu_pages;
-			} else {
-				switch_gpu_smmu_unmap(smmu_iova, npages);
-				smmu_iova = 0;
+		if (smmu_iova)
+			smmu_npages = npages;
+	} else if (smmu_mode == 2 && switch_gpu_smmu_should_map_big(pas, npages) &&
+		   mem_smmu_pages_unique(pas, npages)) {
+		const u32 prefix = switch_gpu_smmu_prefix_pages(npages);
+		smmu_iova = switch_gpu_smmu_map_reserved(pas, prefix,
+							 SWITCH_GPU_SMMU_UNCOMPRESSED_RESERVE);
+		if (smmu_iova)
+			smmu_npages = prefix;
+	}
+	if (smmu_iova) {
+		smmu_pages = kmalloc_array(npages, sizeof(*smmu_pages), GFP_KERNEL);
+		if (smmu_pages) {
+			uint32_t i = 0;
+			for (i = 0; i < smmu_npages; ++i) {
+				const u64 page_iova = smmu_iova + ((u64)i << PAGE_SHIFT);
+				smmu_pages[i] = switch_gpu_smmu_pa(page_iova);
 			}
+			for (; i < npages; ++i)
+				smmu_pages[i] = pas[i];
+			effective = smmu_pages;
+		} else {
+			switch_gpu_smmu_unmap(smmu_iova, smmu_npages);
+			smmu_iova = 0;
+			smmu_npages = 0;
 		}
 	}
 	if (compute_comp)
@@ -271,6 +305,7 @@ static int mem_new(const uint64_t *pas, uint32_t npages, u8 page, int compute_co
 	mem->pages = effective;
 	mem->npages = npages;
 	mem->smmu_iova = smmu_iova;
+	mem->smmu_npages = smmu_npages;
 	mem->smmu_pages = smmu_pages;
 	asked = stats_on() && lock_wait_ns ? nvxnu_nanotime() : 0;
 	tgm_gpu_lock();
@@ -283,7 +318,7 @@ static int mem_new(const uint64_t *pas, uint32_t npages, u8 page, int compute_co
 	mutex_unlock(&tgm_gpu.lock);
 	if (ret) {
 		if (smmu_iova)
-			switch_gpu_smmu_unmap(smmu_iova, npages);
+			switch_gpu_smmu_unmap(smmu_iova, smmu_npages);
 		kfree(smmu_pages);
 		kfree(mem);
 		return ret;
@@ -320,7 +355,14 @@ int tgm_mem_new_exclusive_smmu(struct tgm_vm *vm, const uint64_t *pas, uint32_t 
 {
 	const int comp = tgm_gpu.stage >= 2 && tgm_gpu.device->ltc->num_tags;
 	(void)vm;
-	return mem_new(pas, npages, PAGE_SHIFT, comp, comp, pmem, NULL);
+	return mem_new(pas, npages, PAGE_SHIFT, comp, comp ? 1 : 0, pmem, NULL);
+}
+
+int tgm_mem_new_smmu_big(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
+			 struct tgm_mem **pmem)
+{
+	(void)vm;
+	return mem_new(pas, npages, PAGE_SHIFT, 0, 2, pmem, NULL);
 }
 
 int tgm_mem_can_compress(const struct tgm_mem *mem)
@@ -343,7 +385,7 @@ void tgm_mem_del(struct tgm_mem **pmem)
 	nvif_mem_dtor(&mem->mem);
 	mutex_unlock(&tgm_gpu.lock);
 	if (mem->smmu_iova)
-		switch_gpu_smmu_unmap(mem->smmu_iova, mem->npages);
+		switch_gpu_smmu_unmap(mem->smmu_iova, mem->smmu_npages);
 	kfree(mem->smmu_pages);
 	kfree(mem);
 	*pmem = NULL;

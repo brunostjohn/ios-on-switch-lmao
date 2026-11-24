@@ -47,11 +47,17 @@ extern "C" int switch_gpu_smmu_ready(void)
 	return __atomic_load_n(&gReady, __ATOMIC_ACQUIRE);
 }
 
-extern "C" uint64_t switch_gpu_smmu_map(const uint64_t *pas, uint32_t npages)
+extern "C" uint64_t switch_gpu_smmu_map_reserved(const uint64_t *pas, uint32_t npages,
+						 uint64_t reserve_bytes)
 {
 	if (!switch_gpu_smmu_ready() || !pas || !npages)
 		return 0;
-	return gEngine.map(pas, npages, true);
+	return gEngine.map(pas, npages, true, reserve_bytes);
+}
+
+extern "C" uint64_t switch_gpu_smmu_map(const uint64_t *pas, uint32_t npages)
+{
+	return switch_gpu_smmu_map_reserved(pas, npages, 0);
 }
 
 extern "C" void switch_gpu_smmu_unmap(uint64_t iova, uint32_t npages)
