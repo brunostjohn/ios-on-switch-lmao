@@ -72,10 +72,9 @@ TEST(SdCardSource, Cmd23FramingIsGated)
                           "window, descPA);"));
     EXPECT_THAT(body("int NativeSwitchBlock::run("),
                 HasSubstr("command(static_cast<uint32_t>(lba), sectors, write, descriptors, &status, false, window);"));
-    EXPECT_TRUE(
-        Search(source, R"(int command\(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, )"
-                       R"(uint32_t \*status, bool cmd23 = false,\s*const SwitchSdWindow \*window = nullptr,\s*)"
-                       R"(uint64_t descPA = 0\);)"));
+    EXPECT_TRUE(Search(source, R"(int command\(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, )"
+                               R"(uint32_t \*status, bool cmd23 = false,\s*const SwitchSdWindow \*window = nullptr,\s*)"
+                               R"(uint64_t descPA = 0\);)"));
     // setup(): from the registers (switchSdPath: ADMA2, and the SCR listing CMD23).
     EXPECT_THAT(body("bool NativeSwitchBlock::setup()"),
                 HasSubstr("autoCmd23 = switchSdPath(r32(CAPABILITIES), r16(HOST_CONTROL2), haveScr ? &scr : nullptr)"));
@@ -88,7 +87,8 @@ TEST(SdCardSource, WriteCacheContract)
     const std::string configure = body("bool NativeSwitchBlockDevice::configure(");
     EXPECT_THAT(configure, HasSubstr("if (!provider->writeCacheEnabled())"));
     EXPECT_THAT(body("IOReturn NativeSwitchBlockDevice::doSynchronize("), HasSubstr("owner->synchronize(window)"));
-    EXPECT_THAT(body("IOReturn NativeSwitchBlockDevice::doSynchronizeCache()"), HasSubstr("owner->synchronize(window)"));
+    EXPECT_THAT(body("IOReturn NativeSwitchBlockDevice::doSynchronizeCache()"),
+                HasSubstr("owner->synchronize(window)"));
     EXPECT_THAT(body("IOReturn NativeSwitchBlock::synchronize("), HasSubstr("syncLocked(window)"));
     EXPECT_THAT(body("IOReturn NativeSwitchBlockDevice::getWriteCacheState("), HasSubstr("owner->writeCacheEnabled()"));
     const std::string setup = body("bool NativeSwitchBlock::setup()");

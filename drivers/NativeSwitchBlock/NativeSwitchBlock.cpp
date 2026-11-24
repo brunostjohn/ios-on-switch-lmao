@@ -1002,6 +1002,7 @@ IOReturn NativeSwitchBlockDevice::getWriteCacheState(bool *value)
     *value = owner->writeCacheEnabled();
     return kIOReturnSuccess;
 }
+
 IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block, UInt64 count,
                                                    IOStorageAttributes *attributes, IOStorageCompletion *completion)
 {
