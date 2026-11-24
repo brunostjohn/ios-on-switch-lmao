@@ -116,6 +116,36 @@
       "union": "/usr/share"
     },
     {
+      "path": "/usr/share/Switch/bootstrap/packages/openssh-client.deb",
+      "source": "build/switch-bootstrap/packages/openssh-client.deb",
+      "union": "/usr/share",
+      "debug": true
+    },
+    {
+      "path": "/usr/share/Switch/bootstrap/packages/openssh-sftp-server.deb",
+      "source": "build/switch-bootstrap/packages/openssh-sftp-server.deb",
+      "union": "/usr/share",
+      "debug": true
+    },
+    {
+      "path": "/usr/share/Switch/bootstrap/packages/openssh-server.deb",
+      "source": "build/switch-bootstrap/packages/openssh-server.deb",
+      "union": "/usr/share",
+      "debug": true
+    },
+    {
+      "path": "/usr/share/Switch/bootstrap/packages/switch-ssh.deb",
+      "source": "build/switch-bootstrap/packages/switch-ssh.deb",
+      "union": "/usr/share",
+      "debug": true
+    },
+    {
+      "path": "/usr/share/Switch/bootstrap/packages/top.deb",
+      "source": "build/switch-bootstrap/packages/top.deb",
+      "union": "/usr/share",
+      "debug": true
+    },
+    {
       "path": "/usr/lib/libSwitchInstallPolicy.dylib",
       "source": "build/switch-apps/libSwitchInstallPolicy.dylib",
       "trust": true
