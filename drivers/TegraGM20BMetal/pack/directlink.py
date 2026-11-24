@@ -697,7 +697,10 @@ def split_identities(states: list[dict], pid_cache: dict[int, str] | None = None
         identities.append((whole, identity))
     for rec, (whole, identity) in zip(states, identities, strict=True):
         if len(variants[whole]) > 1:
-            rec['programs'][1] = dict(rec['programs'][1], identity=identity, storage_id=whole)
+            old = rec['programs'][1]
+            if pid_cache is not None:
+                pid_cache.pop(id(old), None)
+            rec['programs'][1] = dict(old, identity=identity, storage_id=whole)
 
 
 def split_programs(

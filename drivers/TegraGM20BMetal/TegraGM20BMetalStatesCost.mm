@@ -4,6 +4,7 @@
 
 #if SWITCH_METAL_DIAGNOSTICS
 #include <mach/mach.h>
+#include <mutex>
 #include <sys/mman.h>
 #include <unistd.h>
 #import "TegraGM20BMetalStatesKey.h"
@@ -108,13 +109,14 @@ void gm20bPackNoteTier1Use(const gm20b::Pack &pack, const gm20b::PackRun &run, u
                            uint32_t cardPages, std::set<uintptr_t> &seenPages, SwitchMetalPipeline *p,
                            MTLRenderPipelineDescriptor *d, const std::string &ownKey)
 {
-    static gm20b::Mutex seenLock;
+    static std::mutex seenLock;
     static std::set<uint64_t> seenStates;
     {
-        std::lock_guard<gm20b::Mutex> hold(seenLock);
+        std::lock_guard<std::mutex> hold(seenLock);
         if (!seenStates.insert(name).second)
             return;
     }
+    const gm20b::CreationWork savedWork = gm20b::tCreationWork;
     const gm20b::PackHeader *hdr = pack.header();
     const gm20b::PackProgram *programs = pack.section<gm20b::PackProgram>(gm20b::PackPrograms);
     const uint8_t *heap = pack.section<uint8_t>(gm20b::PackHeap);
@@ -156,6 +158,7 @@ void gm20bPackNoteTier1Use(const gm20b::Pack &pack, const gm20b::PackRun &run, u
     os_log(gm20bLog(), "SwitchMetal: tier-1 pack state %016llx %016llx in %{public}s: %u pieces, card=%u",
            (unsigned long long)fast, (unsigned long long)name, getprogname(), pieces, cardPages);
     gm20b::logHarvestParts(name, d.label, p->_packable ? gm20bStateKey(p) : ownKey);
+    gm20b::tCreationWork = savedWork;
 }
 
 void gm20bPackCreations(uint64_t &hits, uint64_t &misses, uint64_t &cold, uint64_t &card)

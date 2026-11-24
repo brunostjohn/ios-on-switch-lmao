@@ -235,6 +235,26 @@ class PackSerialisation(unittest.TestCase):
         self.assertEqual(baseline, {0x0414: 6, 0x1E40: 1})
         self.assertLess(took, CEILING_S, f'split_registers took {took:.2f} s')
 
+    def test_split_identities_evicts_replaced_program_ids(self):
+        states = []
+        for i in range(64):
+            shared_fs = {'image': bytes(80) + b'\x01' * 64, 'data': b'', 'cbufs': [1], 'far_ubos': []}
+            split_fs = {'image': bytes(80) + bytes([i]) * 64, 'data': b'', 'cbufs': [1], 'far_ubos': []}
+            prologue = {'image': bytes(80) + bytes([i ^ 0x55]) * 64, 'data': b'', 'cbufs': [], 'far_ubos': []}
+            states.append(
+                {
+                    'programs': [
+                        {'image': bytes(80) + b'\x02' * 32, 'data': b'', 'cbufs': [], 'far_ubos': []},
+                        shared_fs,
+                    ],
+                    'split': {'record': bytes([i]) * 16, 'programs': [split_fs, prologue]},
+                }
+            )
+        pid_cache: dict[int, str] = {}
+        directlink.split_identities(states, pid_cache)
+        for rec in states:
+            self.assertEqual(directlink._pid(rec['programs'][1], pid_cache), directlink.program_id(rec['programs'][1]))
+
 
 if __name__ == '__main__':
     unittest.main()
