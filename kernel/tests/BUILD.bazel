@@ -247,7 +247,10 @@ host_test(
         "//kernel/switch:diag/workloop.c",
         "//kernel/switch:include/switch/diag.h",
         "//kernel/xnu-10063.141.1/bsd:kern/kern_event.c",
+        "//kernel/xnu-10063.141.1/bsd:sys/event_private.h",
         "//kernel/xnu-12377.121.6/bsd:kern/kern_event.c",
+        "//kernel/xnu-12377.121.6/bsd:sys/event_private.h",
+        "//kernel/xnu-12377.121.6/bsd:sys/eventvar.h",
     ],
     includes = ["."],
 )
