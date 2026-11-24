@@ -35,7 +35,7 @@ struct Words {
     std::vector<long> stampAt, flushAt;  // their places among the methods
 };
 
-Words read(const std::vector<uint32_t> &words)
+Words read(const std::vector<uint32_t> &words, uint64_t cbStampPage)
 {
     Words w;
     std::vector<switch_gm20b_method> m(words.size());
@@ -47,7 +47,10 @@ Words read(const std::vector<uint32_t> &words)
             w.flushAt.push_back(i);
         }
         if (m[i].method == NVB197_SET_REPORT_SEMAPHORE_D && m[i].value == gm20b::kDrawStampRelease && i >= 3) {
-            w.stamps.push_back({uint64_t(m[i - 3].value) << 32 | m[i - 2].value, m[i - 1].value});
+            const uint64_t va = uint64_t(m[i - 3].value) << 32 | m[i - 2].value;
+            if (va >= cbStampPage && va < cbStampPage + gm20b::kDrawStampBase)
+                continue;
+            w.stamps.push_back({va, m[i - 1].value});
             w.stampAt.push_back(i);
         }
     }
@@ -97,7 +100,7 @@ protected:
         for (size_t j = before; j < kernel_model::model.jobs.size(); j++)
             words.insert(words.end(), kernel_model::model.jobs[j].words.begin(),
                          kernel_model::model.jobs[j].words.end());
-        return read(words);
+        return read(words, dev.loopRecordVa(1) - gm20b::kLoopWordsBase);
     }
 };
 

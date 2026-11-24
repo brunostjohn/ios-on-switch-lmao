@@ -298,6 +298,7 @@ void RenderEncoder::end()
                    !called_ && pass_.color[c.target].texture->compressed);
         d.clearZbc(*t, !r.x0 && !r.y0 && r.x1 >= t->width && r.y1 >= t->height, v);
         clearRect(p, r.x0, r.y0, r.x1, r.y1, v, 0, 0, layers);
+        cb_->tiledCacheDirty_ = true;
         own = true;
     }
     if (own) {
@@ -360,8 +361,10 @@ void RenderEncoder::end()
                         : zs.texture->format == kDepth16Unorm ? 1.0f
                                                               : 2.0f,
                         stencil, zs.loaded ? 0xffu : zs.stencil);
-        if (depth || stencil)
+        if (depth || stencil) {
             clearZeta(p, planeArea(), zetaClearBits(depth, stencil), own, layers - own);
+            cb_->tiledCacheDirty_ = true;
+        }
     }
     // NVK clears depth and stencil with the first color the pass clears over its render area, else on their own
     uint32_t zsBits = zs.texture ? zetaClearBits(zs.clearDepth && zetaHasDepth(zs.texture->format),
@@ -386,13 +389,16 @@ void RenderEncoder::end()
         d.clearZbc(*t, !r.x0 && !r.y0 && r.x1 >= t->width && r.y1 >= t->height, v);
         const bool area = !mixed && !c.x0 && !c.y0 && c.x1 == areaW_ && c.y1 == areaH_;
         clearRect(p, r.x0, r.y0, r.x1, r.y1, v, c.target, area ? zsBits : 0, layers);
+        cb_->tiledCacheDirty_ = true;
         zsBits = area ? 0 : zsBits;
     }
     if (mixed) {
         p.m(ZT_SELECT, 1);
         sampleWords(p, rasterSamples_, d.root_.va, pass_.positions, rot_);
-        if (zsBits)
+        if (zsBits) {
             clearZeta(p, planeArea(), zsBits, 0, layers);
+            cb_->tiledCacheDirty_ = true;
+        }
         zsBits = 0;
         tirOn(p, rasterSamples_);
 #if SWITCH_METAL_DIAGNOSTICS
@@ -402,8 +408,12 @@ void RenderEncoder::end()
         if (zcullAfterTir)
             zcullWords();
     }
-    if (zsBits)
+    if (zsBits) {
         clearZeta(p, planeArea(), zsBits, 0, layers);
+        cb_->tiledCacheDirty_ = true;
+    }
+    if (drew_)
+        cb_->tiledCacheDirty_ = !flush;
     if (measured)
         emitDrawStamp(p, d.stamps_.va, candidate_.slot, false, candidate_.payload);
     SWITCH_METAL_DIAGNOSTIC(markSpan(p, prologueMark_, SpanKind::Prologue));

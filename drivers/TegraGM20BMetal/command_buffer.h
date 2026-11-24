@@ -299,6 +299,7 @@ private:
     bool inRender_ = false;
     bool passBufferWrites_ = false;
     bool prevBufferWrites_ = false;
+    bool tiledCacheDirty_ = false;
     std::map<uint64_t, KindRanges> cbArenaKinds_;
     std::map<uint64_t, uint64_t> cbCrossSeen_;
     bool hasEncodedWork() const;

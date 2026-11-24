@@ -108,6 +108,7 @@ CommandBuffer *Device::begin()
     cb.inRender_ = false;
     cb.passBufferWrites_ = false;
     cb.prevBufferWrites_ = false;
+    cb.tiledCacheDirty_ = false;
     cb.cbArenaKinds_.clear();
     cb.cbCrossSeen_.clear();
     cb.named_.clear();
@@ -395,7 +396,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
         uint64_t va;
         auto *tail = reinterpret_cast<uint32_t *>(d.alloc(d.push_, (kTiledCacheFlushWords + kStampWords) * 4, 4, va));
         Push p{tail, tail + kTiledCacheFlushWords + kStampWords};
-        if (tiledCache(d.k_.info()))
+        if (tiledCache(d.k_.info()) && tiledCacheDirty_)
             p.at = tiledCacheFlush(p.at);
         emitEndStamp(p, d.stamps_.va, stamp);
         segment(tail, p.at);
@@ -638,6 +639,7 @@ void CommandBuffer::abandon()
     inRender_ = false;
     passBufferWrites_ = false;
     prevBufferWrites_ = false;
+    tiledCacheDirty_ = false;
     pendingKindSwitch_ = false;
     arenaKindInvalidate_ = false;
 }

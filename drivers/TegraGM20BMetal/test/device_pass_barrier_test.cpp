@@ -601,4 +601,89 @@ TEST(DeviceTiledCacheSize, DynamicTileSizeTracksPassFootprintAndShadowCaches)
     dev.destroyTexture(bgra8);
 }
 
+TEST(DeviceTiledCacheTail, TailTiledCacheFlushRunsOnlyWhenDirty)
+{
+    constexpr uint32_t kTiledCacheFlush = SWITCH_NVB197_TILED_CACHE_FLUSH;
+    kernel_model::model = {};
+    kernel_model::model.infoFlags = TegraGM20BInfoTiledCache;
+    gm20b::Device dev;
+    std::string err;
+    ASSERT_TRUE(dev.open(harness::emptyPack().c_str(), 0, err, gm20b::Device::Role::Client)) << err;
+
+    gm20b::Buffer buf;
+    gm20b::Texture color;
+    ASSERT_TRUE(dev.createBuffer(4096, buf, true));
+    ASSERT_TRUE(dev.createTexture(128, 128, kBgra8, color, false, true));
+
+    gm20b::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    gm20b::BlitEncoder *b = cb->blit();
+    b->fillBytes(buf.va, 256, 0x11);
+    b->end();
+    uint32_t seqno = 0;
+    ASSERT_TRUE(cb->commit(seqno));
+    std::vector<uint32_t> m = methods(kernel_model::model.jobs.back().words);
+    EXPECT_EQ(std::count(m.begin(), m.end(), kTiledCacheFlush), 0);
+
+    cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    gm20b::PassDesc pass;
+    pass.color[0].texture = &color;
+    pass.color[0].load = gm20b::ColorAttachment::Clear;
+    pass.count = 1;
+    cb->render(pass)->end();
+    ASSERT_TRUE(cb->commit(seqno));
+    m = methods(kernel_model::model.jobs.back().words);
+    EXPECT_EQ(std::count(m.begin(), m.end(), kTiledCacheFlush), 1);
+
+    {
+        constexpr uint32_t kDepth32Float = 252;
+        gm20b::Texture fourColor, twoZeta;
+        ASSERT_TRUE(dev.createArray(64, 64, 4, kBgra8, gm20b::fx::kTexTwoDArray, fourColor));
+        ASSERT_TRUE(dev.createOwnedZeta(64, 64, kDepth32Float, 1, false, twoZeta, 2));
+        cb = dev.begin();
+        ASSERT_NE(cb, nullptr);
+        gm20b::PassDesc shadowPass;
+        shadowPass.color[0].texture = &fourColor;
+        shadowPass.color[0].load = gm20b::ColorAttachment::Load;
+        shadowPass.color[0].store = true;
+        shadowPass.count = 1;
+        shadowPass.layers = 4;
+        shadowPass.depthStencil = {&twoZeta, false, false, 0.75f, 0};
+        shadowPass.depthStencil.loaded = true;
+        cb->render(shadowPass)->end();
+        ASSERT_TRUE(cb->commit(seqno));
+        m = methods(kernel_model::model.jobs.back().words);
+        EXPECT_EQ(std::count(m.begin(), m.end(), kTiledCacheFlush), 1);
+        dev.destroyTexture(twoZeta);
+        dev.destroyTexture(fourColor);
+    }
+
+    {
+        constexpr uint32_t kDepth32Float = 252, kStencil8 = 253;
+        gm20b::Texture sepDepth, sepStencil;
+        ASSERT_TRUE(dev.createOwnedZeta(128, 128, kDepth32Float, 1, false, sepDepth));
+        ASSERT_TRUE(dev.createOwnedZeta(128, 128, kStencil8, 1, false, sepStencil));
+        cb = dev.begin();
+        ASSERT_NE(cb, nullptr);
+        gm20b::PassDesc sepPass;
+        sepPass.color[0].texture = &color;
+        sepPass.color[0].load = gm20b::ColorAttachment::Clear;
+        sepPass.count = 1;
+        sepPass.depthStencil.texture = &sepDepth;
+        sepPass.depthStencil.clearDepth = true;
+        sepPass.depthStencil.clearStencil = true;
+        sepPass.separate = {&sepDepth, &sepStencil, false, false, true, true};
+        cb->render(sepPass)->end();
+        ASSERT_TRUE(cb->commit(seqno));
+        m = methods(kernel_model::model.jobs.back().words);
+        EXPECT_EQ(std::count(m.begin(), m.end(), kTiledCacheFlush), 1);
+        dev.destroyTexture(sepStencil);
+        dev.destroyTexture(sepDepth);
+    }
+
+    dev.destroyTexture(color);
+    dev.destroyBuffer(buf);
+}
+
 }  // namespace

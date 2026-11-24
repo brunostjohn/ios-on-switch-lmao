@@ -423,14 +423,21 @@ TEST(GM20BFacadeHandlers, MeasuredDrawsTimingsStayTheSubmitWorkersBesideItsCompl
     for (id<MTLCommandBuffer> cb in kept)
         EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
     uint32_t stamps = 0;
+    const uint64_t cbStampPage = gRM->raw->loopRecordVa(1) - gm20b::kLoopWordsBase;
     std::lock_guard<std::mutex> l(kernel_model::callLock);
     for (size_t j = first; j < kernel_model::model.jobs.size(); j++) {
         const std::vector<uint32_t> &words = kernel_model::model.jobs[j].words;
         std::vector<switch_gm20b_method> m(words.size());
         const long n = switch_gm20b_push_decode(words.data(), words.size(), m.data(), m.size());
-        for (long i = 0; i < n; i++)
-            stamps +=
-                m[size_t(i)].method == NVB197_SET_REPORT_SEMAPHORE_D && m[size_t(i)].value == gm20b::kDrawStampRelease;
+        for (long i = 0; i < n; i++) {
+            if (m[size_t(i)].method != NVB197_SET_REPORT_SEMAPHORE_D ||
+                m[size_t(i)].value != gm20b::kDrawStampRelease || i < 3)
+                continue;
+            const uint64_t va = uint64_t(m[size_t(i - 3)].value) << 32 | m[size_t(i - 2)].value;
+            if (va >= cbStampPage && va < cbStampPage + gm20b::kDrawStampBase)
+                continue;
+            stamps++;
+        }
     }
     EXPECT_GE(stamps, 2 * gm20b::kWarmSamples) << "no draw was measured: the test reaches no timing";
 }
