@@ -233,7 +233,8 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 				  NVDEF(NV906F, SEMAPHORED, RELEASE_SIZE, 16BYTE));
 		drained = 1;
 	}
-	if (external && chan->visible_cpu) {
+	/* TGM_FENCE_VOLATILE_WRITES skips L2_FLUSH_DIRTY, so it must not advance visible_cpu past earlier L2-cached jobs. */
+	if (external == 1 && chan->visible_cpu) {
 		PUSH_MTHD(push, NV906F, SEMAPHOREA, upper_32_bits(chan->visible_gpu), SEMAPHOREB,
 			  lower_32_bits(chan->visible_gpu), SEMAPHOREC, next, SEMAPHORED,
 			  NVDEF(NV906F, SEMAPHORED, OPERATION, RELEASE) |
@@ -669,7 +670,12 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 	int host_written = !(visibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT) ||
 			   (visibility & SWITCH_GPU_SUBMIT_HOST_WRITTEN);
 	int external = !(visibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT) ||
-		       (visibility & SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY) || !chan->visible_cpu;
+				       (visibility & SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY) ||
+				       !chan->visible_cpu
+			       ? 1
+		       : (visibility & SWITCH_GPU_SUBMIT_VOLATILE_VISIBILITY)
+			       ? TGM_FENCE_VOLATILE_WRITES
+			       : 0;
 	int quiet = (visibility & SWITCH_GPU_SUBMIT_QUIET) &&
 		    __atomic_load_n(&chan->wake, __ATOMIC_ACQUIRE);
 

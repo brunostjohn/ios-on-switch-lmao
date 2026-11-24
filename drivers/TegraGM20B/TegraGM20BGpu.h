@@ -260,6 +260,8 @@ enum {
 	/* the job's end raises no interrupt unless a waiter asked for one (SwitchGpuQuiet.h); only on a channel with an owner
 	 * that pushes wake entries (tgm_chan_on_wake) */
 	SWITCH_GPU_SUBMIT_QUIET = 1u << 4,
+	/* volatile-mapped GPU writes: WFI + FB_FLUSH, no L2_FLUSH_DIRTY, does not advance visible_cpu */
+	SWITCH_GPU_SUBMIT_VOLATILE_VISIBILITY = 1u << 5,
 };
 
 int switch_gpu_chan_exec_visibility(struct tgm_chan *chan, const struct tgm_push *push,

@@ -51,6 +51,8 @@ TEST_F(ExecWfi, ExternalFenceEmitsExactlyOneHostWfiAcrossAllReleases)
 					   SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY,
 				   releases, 2);
 	EXPECT_EQ(counts.method_wfis, 1u);
+	EXPECT_EQ(counts.fb_flushes, 2u);
+	EXPECT_EQ(counts.l2_flushes, 1u);
 	EXPECT_EQ(counts.visible_wfi_en, 0u);
 	EXPECT_EQ(counts.visible_wfi_dis, 1u);
 	EXPECT_EQ(counts.fence_wfi_en, 0u);
@@ -79,6 +81,8 @@ TEST_F(ExecWfi, InternalFenceDrainsOnceThenDisablesWfiOnTrailingReleases)
 	};
 	const auto counts = submit(SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT, releases, 2);
 	EXPECT_EQ(counts.method_wfis, 0u);
+	EXPECT_EQ(counts.fb_flushes, 0u);
+	EXPECT_EQ(counts.l2_flushes, 0u);
 	EXPECT_EQ(counts.visible_wfi_en, 0u);
 	EXPECT_EQ(counts.visible_wfi_dis, 0u);
 	EXPECT_EQ(counts.extra_wfi_en, 0u);
@@ -98,6 +102,38 @@ TEST_F(ExecWfi, InternalFenceDrainsOnceThenDisablesWfiOnTrailingReleases)
 	EXPECT_EQ(counts.fence_wfi_en, 0u);
 	EXPECT_EQ(counts.fence_wfi_dis, 1u);
 	EXPECT_EQ(counts.release_wfi_en, 2u);
+#endif
+}
+
+TEST_F(ExecWfi, VolatileFenceEmitsWfiAndFbFlushWithoutL2FlushOrVisibleAdvance)
+{
+	const switch_gpu_release releases[2] = {
+		{0x3000000800ull, 7},
+		{0x3000000804ull, 8},
+	};
+	const auto counts = submit(SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT |
+					   SWITCH_GPU_SUBMIT_VOLATILE_VISIBILITY,
+				   releases, 2);
+	EXPECT_EQ(counts.method_wfis, 1u);
+	EXPECT_EQ(counts.fb_flushes, 1u);
+	EXPECT_EQ(counts.l2_flushes, 0u);
+	EXPECT_EQ(counts.visible_wfi_en, 0u);
+	EXPECT_EQ(counts.visible_wfi_dis, 0u);
+	EXPECT_EQ(counts.fence_wfi_en, 0u);
+	EXPECT_EQ(counts.fence_wfi_dis, 1u);
+	EXPECT_EQ(counts.extra_wfi_en, 0u);
+	EXPECT_EQ(counts.extra_wfi_dis, 2u);
+#if SWITCH_EXEC_WFI_RELEASE
+	EXPECT_EQ(counts.start_stamps_en, 0u);
+	EXPECT_EQ(counts.start_stamps_dis, 0u);
+	EXPECT_EQ(counts.end_stamps_en, 0u);
+	EXPECT_EQ(counts.end_stamps_dis, 0u);
+	EXPECT_EQ(counts.release_wfi_en, 0u);
+#else
+	EXPECT_EQ(counts.start_stamps_en, 1u);
+	EXPECT_EQ(counts.end_stamps_en, 0u);
+	EXPECT_EQ(counts.end_stamps_dis, 1u);
+	EXPECT_EQ(counts.release_wfi_en, 1u);
 #endif
 }
 

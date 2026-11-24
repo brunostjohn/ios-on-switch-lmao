@@ -1627,7 +1627,7 @@ TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePubl
 	const CodeText fence = Block(gpu(), "static u32 chan_fence_job(");
 	EXPECT_TRUE(fence.has("if (external && (l2_on() || chan->kernel))"));
 	EXPECT_TRUE(fence.before("NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY",
-				 "if (external && chan->visible_cpu)"));
+				 "if (external == 1 && chan->visible_cpu)"));
 	EXPECT_TRUE(
 		fence.before("lower_32_bits(chan->visible_gpu)", "lower_32_bits(chan->fence_gpu)"));
 	EXPECT_TRUE(fence.has("RELEASE_WFI, EN"));
