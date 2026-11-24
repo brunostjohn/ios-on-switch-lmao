@@ -465,7 +465,7 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
         OSIncrementAtomic64((SInt64 *)&a64x_images_marked);
         return 0;
     }
-    if (kind == A64X_IMAGE_ARM64E) {
+    {
         int error = a64x_map_translation(map, vp, slice_off, lay, exec_va);
         if (error != ENOENT) {
             return error;
