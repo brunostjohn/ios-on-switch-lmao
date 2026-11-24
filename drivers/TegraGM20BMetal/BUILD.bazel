@@ -523,6 +523,17 @@ py_test(
     deps = [":pack"],
 )
 
+py_test(
+    name = "rbclosure_test",
+    srcs = ["pack/rb/rbclosure_test.py"],
+    data = [
+        "pack/rb/demand-24B119.json",
+        "precompile/corpus.log",
+    ],
+    main = "pack/rb/rbclosure_test.py",
+    deps = [":pack"],
+)
+
 # pack/fetchfree_link.py: where a colour matrix form's draws read the matrix uniform.
 py_test(
     name = "fetchfree_link_test",

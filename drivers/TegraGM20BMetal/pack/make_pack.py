@@ -136,7 +136,8 @@ def cold_line(line: str) -> str:
 def ca_corpus(qc: Path, corpus: Path, work: Path, names: list[str] = (), preferences: Path = STAGER) -> Path:
     """Give the corpus with its Core Animation lines as harvested and those made from their names (ca/ tables).
 
-    Without this QuartzCore's tables in ca/, the corpus as it is.
+    RenderBox's states follow the corpus's own, with the tier-1 closure rb/rbclosure.py makes of them. Without this
+    QuartzCore's tables in ca/, the corpus as it is.
     """
     digest = hashlib.sha256(qc.read_bytes()).hexdigest()
     for path in sorted((HERE / 'ca').glob('qc-*.json')):
@@ -158,6 +159,7 @@ def ca_corpus(qc: Path, corpus: Path, work: Path, names: list[str] = (), prefere
     renderbox, why = renderbox_tagger(digest)
     with open(out, 'w') as dst:
         dst.writelines(renderbox(line) for line in lines if not caspec.corpus_fields(line)[0])
+        dst.writelines(cold_line(renderbox(line)) + '\n' for line in renderbox_closure(digest, lines))
         for tier, made in ca_states(path, corpus, names, cif10):
             dst.writelines(line + '\n' for line in made)
             print(f'make_pack: Core Animation states, {tier}: {len(made)}')
@@ -178,6 +180,19 @@ def renderbox_tagger(digest: str) -> tuple[Callable[[str], str], dict[str, int]]
     if made is None:
         print(f'make_pack: no RenderBox tables for QuartzCore {digest[:16]}: its states as they are')
         return (lambda line: line), {}
+    return made
+
+
+def renderbox_closure(digest: str, lines: list[str]) -> list[str]:
+    """Give the RenderBox states rb/rbclosure.py makes of the corpus's that the corpus lacks.
+
+    For the IPSW whose QuartzCore library has SHA-256 `digest`; none where its rb/ table has no closure.
+    """
+    sys.path.insert(0, str(HERE / 'rb'))
+    import rbclosure  # noqa: PLC0415 (rb/ is only on the path here)
+
+    made = rbclosure.made(HERE / 'rb', digest, lines, state_key)
+    print(f'make_pack: RenderBox states, closure: {len(made)}')
     return made
 
 

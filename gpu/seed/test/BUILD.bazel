@@ -31,6 +31,7 @@ RAW = [
     "ca/deepcolour.py",
     "ca/fetchfree.py",
     "ca/qc-21H461.json",
+    "rb/rbclosure.py",
     "rb/rbfree.py",
     "rb/rbspec.py",
     "rb/rb-21H461.json",

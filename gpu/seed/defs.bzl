@@ -274,6 +274,7 @@ _METAL_SPLIT = _METAL_STAMP + [
     "iterated/programs_long.py",
     "iterated/table.py",
     "iterated/ucode.py",
+    "rb/rbclosure.py",
     "rb/rbfree.py",
     "rb/rbspec.py",
 ]
