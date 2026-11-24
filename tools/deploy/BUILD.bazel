@@ -27,6 +27,7 @@ py_library(
         "poster_snapshots.py",
         "pull_logs.py",
         "registration.py",
+        "ssh_keys.py",
         "system_apps.py",
     ],
     imports = ["../.."],
@@ -124,6 +125,13 @@ lint_test(
         "ruff",
         "ruff_format",
     ],
+)
+
+py_test(
+    name = "ssh_keys_test",
+    size = "small",
+    srcs = ["ssh_keys_test.py"],
+    deps = [":lib"],
 )
 
 py_test(

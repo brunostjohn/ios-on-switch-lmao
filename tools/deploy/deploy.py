@@ -66,6 +66,7 @@ from tools.deploy import (
     joycon_pairing,
     poster_snapshots,
     pull_logs,
+    ssh_keys,
     system_apps,
 )
 from tools.install import (
@@ -156,6 +157,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument('--reset-gallery-snapshots', nargs='+', metavar='BUNDLE', default=None)
     parser.add_argument('--no-eject', action='store_true')
     parser.add_argument('--no-joycon-pairing', action='store_true')
+    parser.add_argument(
+        '--ssh-authorized-keys',
+        help='public key file or directory staged on dev images (default: $SWITCH_SSH_AUTHORIZED_KEYS or ~/.ssh/*.pub)',
+    )
+    parser.add_argument(
+        '--no-ssh-authorized-keys',
+        action='store_true',
+        help='do not stage SSH keys and remove any staged authorized_keys',
+    )
     parser.add_argument('--boot-package', required=True)
     parser.add_argument('--spec', required=True)
     parser.add_argument('--ipsw', help="the IPSW kind's pins (//install:ipsw_pins): the System volume it installs")
@@ -188,11 +198,19 @@ def _checked(args: argparse.Namespace, log: host.Log) -> tuple[cards.Card, dict,
     return card, spec, fat, target, data
 
 
-def _plan(args: argparse.Namespace, changes: list, removed: list, pairing: dict | None) -> list[str]:
+def _plan(
+    args: argparse.Namespace,
+    changes: list,
+    removed: list,
+    pairing: dict | None,
+    key_plan: ssh_keys.KeyPlan | None = None,
+) -> list[str]:
     """Return the steps a deploy would take, for the log."""
     steps = ['pull logs'] if args.pull_logs else []
     steps += ['harvest the m2v journals'] if args.harvest else []
     steps += [f'boot entry: {len(changes)} to copy, {len(removed)} stale', 'overlay']
+    if key_plan is not None:
+        steps.append(ssh_keys.plan_description(key_plan))
     if not args.no_joycon_pairing:
         controllers = f'stage {len(pairing["controllers"])} controller(s) for host {pairing["host"]}' if pairing else ''
         steps.append('Joy-Con pairing: ' + (controllers or 'remove any staged dump'))
@@ -295,6 +313,12 @@ class _Steps:
             return None
 
 
+def _stage_ssh_keys(args: argparse.Namespace, data_root: Path, log: host.Log) -> bool:
+    options = ssh_keys.Options(path=args.ssh_authorized_keys, disabled=args.no_ssh_authorized_keys)
+    plan = ssh_keys.load(Path(args.boot_package), log, options)
+    return ssh_keys.stage(data_root, plan, log)
+
+
 def _write(
     args: argparse.Namespace, data_root: Path, volumes: Volumes, pairing: dict | None, log: host.Log
 ) -> list[str]:
@@ -332,6 +356,7 @@ def _write(
         force = any((args.rerun_migration, restaged, interrupted))
         steps.run('system apps registration', system_apps.register, data_root, apps, log, next_boot, force)
     steps.run('stale logging profiles', remove_stale_logging_profiles, data_root, log)
+    steps.run('SSH authorized_keys', _stage_ssh_keys, args, data_root, log)
     if not args.no_joycon_pairing:
         steps.run('Joy-Con pairing', joycon_pairing.stage, data_root, pairing, log)
     _stage_gpu(args, data_root, log)
@@ -366,8 +391,10 @@ def main(argv: list[str] | None = None) -> int:
             with cards.mounted(fat.identifier, log) as fat_root:
                 changes, removed = cards.sync_boot_entry(fat_root, args.boot_package, log, dry_run=True)
                 pairing = None if args.no_joycon_pairing else joycon_pairing.read(fat_root, log)
+            ssh_options = ssh_keys.Options(path=args.ssh_authorized_keys, disabled=args.no_ssh_authorized_keys)
+            key_plan = ssh_keys.load(Path(args.boot_package), log, ssh_options)
         log(f'card {card.disk}: FAT {fat.identifier}, iPad Data {data}')
-        for step in _plan(args, changes, removed, pairing):
+        for step in _plan(args, changes, removed, pairing, key_plan):
             log('  plan:', step)
         if not args.yes:
             log('dry run: nothing written (add --yes)')
@@ -393,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
     except cards.RefusedError as error:
         log('REFUSED:', error)
         return 2
-    except (host.HostError, OSError) as error:
+    except (host.HostError, OSError, ValueError) as error:
         log('FAILED:', error)
         return 1
 

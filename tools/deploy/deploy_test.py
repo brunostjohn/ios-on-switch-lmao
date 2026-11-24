@@ -1,18 +1,20 @@
 """Boot-entry and overlay sync, and the log pull, on plain directories (no card)."""
 
+import base64
 import contextlib
 import hashlib
 import io
 import json
 import os
 import plistlib
+import struct
 import tarfile
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from tools.deploy import deploy, deployed, joycon_pairing, poster_snapshots, pull_logs, system_apps
+from tools.deploy import deploy, deployed, joycon_pairing, poster_snapshots, pull_logs, ssh_keys, system_apps
 from tools.install import bootstrap, bootstrap_migration, card as cards, renamed
 
 
@@ -582,6 +584,58 @@ class InterruptedMigrationDeployTest(unittest.TestCase):
         self.assertTrue(sentinel.is_file())
         self.assertTrue(store.is_file())
         self.assertEqual(pending.read_text(), 'a' * 64 + '\n')
+
+
+class SshAuthorizedKeysDeployTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def _run_write(self, pkg: Path, data: Path, extra_args: list[str]) -> list[str]:
+        fat = self.root / 'fat'
+        fat.mkdir(exist_ok=True)
+        args = deploy._parser().parse_args(
+            ['disk9', '--boot-package', str(pkg), '--spec', 'unused', '--no-joycon-pairing', *extra_args]
+        )
+        with (
+            mock.patch.object(deploy.cards, 'mounted', side_effect=lambda *_, **__: contextlib.nullcontext(fat)),
+            mock.patch.object(deploy.deployed, 'record'),
+            mock.patch.object(deploy, '_stage_gpu'),
+            mock.patch.object(deploy.icon_cache, 'present'),
+            mock.patch.object(deploy.bootstrap, 'stage'),
+        ):
+            return deploy._write(args, data, deploy.Volumes('disk9s1', None), None, Log())
+
+    def test_deploy_stages_keys_for_dev_and_removes_them_for_release(self):
+        dev_pkg = self.root / 'dev-pkg'
+        package(dev_pkg)
+        deb = dev_pkg / ssh_keys.OVERLAY_DEB
+        deb.parent.mkdir(parents=True)
+        deb.write_bytes(b'switch-ssh')
+
+        rel_pkg = self.root / 'rel-pkg'
+        package(rel_pkg)
+
+        key_blob = base64.b64encode(struct.pack('>I', 11) + b'ssh-ed25519' + b'\x07' * 32).decode('ascii')
+        key_line = f'ssh-ed25519 {key_blob} dev@host'
+        keys_file = self.root / 'keys.pub'
+        keys_file.write_text(key_line + '\n')
+
+        data = self.root / 'data'
+        data.mkdir()
+
+        self.assertEqual(self._run_write(dev_pkg, data, ['--ssh-authorized-keys', str(keys_file)]), [])
+        staged = data / ssh_keys.STAGED
+        self.assertEqual(staged.read_text(), key_line + '\n')
+
+        self.assertEqual(self._run_write(rel_pkg, data, ['--ssh-authorized-keys', str(keys_file)]), [])
+        self.assertFalse(staged.exists())
+
+        self.assertEqual(self._run_write(dev_pkg, data, ['--ssh-authorized-keys', str(keys_file)]), [])
+        self.assertTrue(staged.is_file())
+        self.assertEqual(self._run_write(dev_pkg, data, ['--no-ssh-authorized-keys']), [])
+        self.assertFalse(staged.exists())
 
 
 if __name__ == '__main__':
