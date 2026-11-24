@@ -337,6 +337,19 @@ static void splitCommittedRange(SwitchMetalCommandBuffer *cb)
     SWITCH_METAL_DIAGNOSTIC(gm20b::frameCpuCounts().rangeSplits.fetch_add(1, std::memory_order_relaxed));
 }
 
+static size_t aheadSplitPoint(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &range)
+{
+    const Ahead &a = ahead();
+    if (a.cb != cb || !a.open || range.from || range.event || range.held || range.from >= range.to)
+        return 0;
+    const SwitchMetalRangeEncode &encode = gm20bRangeEncode();
+    if (cb->_pipelineVeto.load(std::memory_order_acquire) || !gRM->raw->channelCurrent(encode.generation()))
+        return 0;
+    const size_t stop = stopOf(a);
+    const size_t at = stop != SIZE_MAX ? stop : encode.betweenEncoders() ? encode.position() : 0;
+    return at > range.from && at < range.to ? at : 0;
+}
+
 void gm20bPipelineSplit(SwitchMetalCommandBuffer *cb)
 {
     if (cb->_segNext >= cb->_segs.size())
@@ -348,9 +361,7 @@ void gm20bPipelineSplit(SwitchMetalCommandBuffer *cb)
     if (a.cb == cb && a.open && !range.from) {
         const SwitchMetalRangeEncode &encode = gm20bRangeEncode();
         if (!cb->_pipelineVeto.load(std::memory_order_acquire) && gRM->raw->channelCurrent(encode.generation())) {
-            const size_t stop = stopOf(a);
-            const size_t at = stop != SIZE_MAX ? stop : encode.betweenEncoders() ? encode.position() : 0;
-            if (at > range.from && at < range.to) {
+            if (const size_t at = aheadSplitPoint(cb, range)) {
                 SwitchMetalSegment rest = range;
                 rest.from = range.to = uint32_t(at);
                 rest.gpuWait = false;
@@ -361,6 +372,37 @@ void gm20bPipelineSplit(SwitchMetalCommandBuffer *cb)
         }
     }
     splitCommittedRange(cb);
+}
+
+void gm20bPipelineEarlyWork(SwitchMetalCommandBuffer *cb, uint32_t cap, uint32_t &remaining, bool &multiRange)
+{
+    multiRange = cb->_segs.size() > 1;
+    if (!cb->_segs.empty() && aheadSplitPoint(cb, cb->_segs[0]))
+        multiRange = true;
+    remaining = 0;
+    const SwitchMetalCommandPlan &plan = cb->_plan;
+    const Ahead &a = ahead();
+    const SwitchMetalRangeEncode &encode = gm20bRangeEncode();
+    const bool aheadReady = a.cb == cb && a.open && !cb->_pipelineVeto.load(std::memory_order_acquire) &&
+                            gRM->raw->channelCurrent(encode.generation()) && stopOf(a) == SIZE_MAX &&
+                            encode.betweenEncoders();
+    for (size_t s = cb->_segNext; s < cb->_segs.size() && remaining < cap; ++s) {
+        const SwitchMetalSegment &seg = cb->_segs[s];
+        if (seg.event || seg.held)
+            continue;
+        size_t at = seg.from;
+        if (!s && !seg.from && aheadReady)
+            at = std::min<size_t>(encode.position(), seg.to);
+        for (; at < seg.to && remaining < cap;) {
+            if (!SwitchMetalCommandPlan::isEncoderBegin(plan.operation(at).op)) {
+                ++at;
+                continue;
+            }
+            ++remaining;
+            const size_t end = plan.encoderEnd(at);
+            at = end > at ? end : at + 1;
+        }
+    }
 }
 
 void gm20bPipelineSealed(SwitchMetalCommandBuffer *cb, size_t to)

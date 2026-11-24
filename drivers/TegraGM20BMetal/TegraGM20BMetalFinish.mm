@@ -404,6 +404,7 @@ static void finishScheduledTurn(SwitchMetalCommandBuffer *cb)
 
 void gm20bFinishEmpty(SwitchMetalCommandBuffer *cb)
 {
+    cb->_submittedAll.store(true, std::memory_order_release);
     SwitchMetalCommandBuffer *before = cb->_before;
     if (before && !before->_scheduledTurn.ran()) {
         void *later = (__bridge_retained void *)cb;
@@ -503,7 +504,7 @@ static void finished(SwitchMetalCommandBuffer *cb)
     cancelPromises(cb);
     releaseEventWaits(cb);
     unhold(cb);
-    if (error && cb->_presents && !cb->_scheduledSent.load(std::memory_order_acquire))
+    if (error && cb->_presents && !cb->_submittedAll.load(std::memory_order_acquire))
         withholdPresents(cb);
     // A completed command buffer is scheduled. Its scheduled handlers scheduled() never took run here, before the completed ones:
     // one whose fence passed before its submitting thread's scheduled() (the completion thread wakes on work it was just handed),

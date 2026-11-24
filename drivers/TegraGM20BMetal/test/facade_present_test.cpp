@@ -741,6 +741,545 @@ void postCommitPresentBeforeAndAfterCompletionAndDroppedUncommitted()
     EXPECT_EQ(afterFail.presents, 0);
 }
 
+id<MTLTexture> plainTarget(id<MTLDevice> device)
+{
+    MTLTextureDescriptor *td =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:kPacked width:64 height:64 mipmapped:NO];
+    td.storageMode = MTLStorageModePrivate;
+    td.usage = MTLTextureUsageRenderTarget;
+    return [device newTextureWithDescriptor:td];
+}
+
+void drawManyInto(id<MTLCommandBuffer> cb, id<MTLTexture> t, id<MTLRenderPipelineState> state, int passes)
+{
+    for (int p = 0; p < passes; ++p)
+        drawInto(cb, t, state);
+}
+
+struct SemGuard {
+    dispatch_semaphore_t sem;
+    bool released = false;
+
+    void release()
+    {
+        if (!released) {
+            released = true;
+            dispatch_semaphore_signal(sem);
+        }
+    }
+
+    ~SemGuard()
+    {
+        release();
+    }
+};
+
+bool waitScheduledWithin(id<MTLCommandBuffer> cb, std::chrono::milliseconds timeout, std::thread &waiter)
+{
+    auto done = std::make_shared<std::promise<void>>();
+    std::future<void> waited = done->get_future();
+    waiter = std::thread([cb, done] {
+        [cb waitUntilScheduled];
+        done->set_value();
+    });
+    return waited.wait_for(timeout) == std::future_status::ready;
+}
+
+void compositorEarlyScheduledPresentsOnPromiseBeforeLastRangeSubmits()
+{
+    const Opened o = openPacked(true);
+    ASSERT_TRUE(o.device != nil && o.state != nil) << o.why;
+    id<MTLCommandQueue> queue = [o.device newCommandQueue];
+    id<MTLCommandQueue> blockQueue = [o.device newCommandQueue];
+    id<MTLTexture> frame = surfaceTarget(o.device);
+    id<MTLTexture> scratch = plainTarget(o.device);
+    ASSERT_TRUE(frame != nil && scratch != nil);
+    ASSERT_GE(jobsOfDrawn(queue, frame, o.state, nil), 1u);
+
+    CountingDrawable *drawable = [CountingDrawable new];
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    drawManyInto(cb, frame, o.state, 15);
+    [cb presentDrawable:drawable];
+    id<MTLCommandBuffer> blocker = [blockQueue commandBuffer];
+    drawInto(blocker, scratch, o.state);
+
+    kernel_model::Model &m = kernel_model::model;
+    dispatch_semaphore_t inBlock = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseBlock = dispatch_semaphore_create(0);
+    dispatch_semaphore_t inJob = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseJob = dispatch_semaphore_create(0);
+    std::atomic<int> jobNo{0};
+    const size_t jobsBefore = m.jobs.size();
+    const kernel_model::HooksCleared cleared;
+    std::atomic<size_t> makes{0};
+    SemGuard blockGuard{releaseBlock};
+    SemGuard jobGuard{releaseJob};
+
+    {
+        std::lock_guard<std::mutex> l(kernel_model::callLock);
+        m.promiseCalled = [&m, &makes] {
+            if (m.promiseCalls.back().op == TegraGM20BPromiseMake)
+                makes.fetch_add(1, std::memory_order_release);
+        };
+        m.jobAdded = [&m, &jobNo, inBlock, releaseBlock, inJob, releaseJob] {
+            const auto &j = m.jobs.back();
+            __atomic_store_n(&m.fence(j.channel - 1).completed, j.seqno, __ATOMIC_RELEASE);
+            const int n = jobNo.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (n == 1) {
+                dispatch_semaphore_signal(inBlock);
+                dispatch_semaphore_wait(releaseBlock, DISPATCH_TIME_FOREVER);
+            } else if (n == 2) {
+                dispatch_semaphore_signal(inJob);
+                dispatch_semaphore_wait(releaseJob, DISPATCH_TIME_FOREVER);
+            }
+        };
+    }
+
+    [blocker commit];
+    ASSERT_FALSE(dispatch_semaphore_wait(inBlock, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))));
+    [cb commit];
+    blockGuard.release();
+
+    ASSERT_FALSE(dispatch_semaphore_wait(inJob, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))))
+        << "first range never entered SubmitJob";
+    std::thread waiter;
+    const bool early = waitScheduledWithin(cb, std::chrono::seconds(2), waiter);
+    EXPECT_TRUE(early) << "RenderServer waitUntilScheduled blocked on the submit worker";
+    EXPECT_EQ(makes.load(std::memory_order_acquire), 1u);
+    if (early) {
+        EXPECT_EQ(drawable.presents, 1);
+        EXPECT_EQ(cb.status, MTLCommandBufferStatusScheduled);
+    }
+
+    jobGuard.release();
+    waiter.join();
+    [blocker waitUntilCompleted];
+    [cb waitUntilCompleted];
+    EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+    EXPECT_EQ(drawable.presents, 1);
+
+    std::lock_guard<std::mutex> l(kernel_model::callLock);
+    ASSERT_GT(m.jobs.size(), jobsBefore + 2);
+    EXPECT_EQ(m.jobs[jobsBefore + 1].flags & TegraGM20BJobFulfills, 0u);
+    EXPECT_NE(m.jobs.back().flags & TegraGM20BJobFulfills, 0u);
+    ASSERT_EQ(m.promiseCalls.size(), 1u);
+    EXPECT_EQ(m.promiseCalls[0].op, uint32_t(TegraGM20BPromiseMake));
+    ASSERT_EQ(m.promiseCalls[0].handles.size(), 1u);
+    EXPECT_EQ(m.imports.count(m.promiseCalls[0].handles[0]), 1u);
+}
+
+void compositorEarlyScheduledRefusedFrameWithdrawsPromiseAndEndsProcess()
+{
+    const Opened o = openPacked(true);
+    ASSERT_TRUE(o.device != nil && o.state != nil) << o.why;
+    id<MTLCommandQueue> queue = [o.device newCommandQueue];
+    id<MTLCommandQueue> blockQueue = [o.device newCommandQueue];
+    id<MTLTexture> frame = surfaceTarget(o.device);
+    id<MTLTexture> scratch = plainTarget(o.device);
+    ASSERT_TRUE(frame != nil && scratch != nil);
+    ASSERT_GE(jobsOfDrawn(queue, frame, o.state, nil), 1u);
+
+    CountingDrawable *drawable = [CountingDrawable new];
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    drawManyInto(cb, frame, o.state, 15);
+    [cb presentDrawable:drawable];
+    id<MTLCommandBuffer> blocker = [blockQueue commandBuffer];
+    drawInto(blocker, scratch, o.state);
+
+    kernel_model::Model &m = kernel_model::model;
+    dispatch_semaphore_t inBlock = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseBlock = dispatch_semaphore_create(0);
+    dispatch_semaphore_t inJob = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseJob = dispatch_semaphore_create(0);
+    std::atomic<int> jobNo{0};
+    const kernel_model::HooksCleared cleared;
+    SemGuard blockGuard{releaseBlock};
+    SemGuard jobGuard{releaseJob};
+
+    {
+        std::lock_guard<std::mutex> l(kernel_model::callLock);
+        m.promiseCalled = [&m] {
+            const auto &call = m.promiseCalls.back();
+            if (call.op == TegraGM20BPromiseWithdraw) {
+                fprintf(stderr, "promise_withdraw:%u\n", call.promise);
+                fflush(stderr);
+            }
+        };
+        m.jobAdded = [&m, &jobNo, inBlock, releaseBlock, inJob, releaseJob] {
+            const auto &j = m.jobs.back();
+            __atomic_store_n(&m.fence(j.channel - 1).completed, j.seqno, __ATOMIC_RELEASE);
+            const int n = jobNo.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (n == 1) {
+                dispatch_semaphore_signal(inBlock);
+                dispatch_semaphore_wait(releaseBlock, DISPATCH_TIME_FOREVER);
+            } else if (n == 2) {
+                dispatch_semaphore_signal(inJob);
+                dispatch_semaphore_wait(releaseJob, DISPATCH_TIME_FOREVER);
+                m.refuse = 1;
+            }
+        };
+    }
+
+    [blocker commit];
+    ASSERT_FALSE(dispatch_semaphore_wait(inBlock, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))));
+    [cb commit];
+    blockGuard.release();
+
+    ASSERT_FALSE(dispatch_semaphore_wait(inJob, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))));
+    std::thread waiter;
+    const bool early = waitScheduledWithin(cb, std::chrono::seconds(2), waiter);
+    if (!early) {
+        jobGuard.release();
+        waiter.join();
+        ADD_FAILURE() << "RenderServer waitUntilScheduled blocked before refusal";
+        return;
+    }
+    waiter.join();
+    ASSERT_EQ(drawable.presents, 1);
+    jobGuard.release();
+    [cb waitUntilCompleted];
+    ADD_FAILURE() << "refused early-scheduled RenderServer frame did not end the process";
+}
+
+void compositorEarlyScheduledRefusedNonPresentingFrameWithdrawsPromise()
+{
+    const Opened o = openPacked(true);
+    ASSERT_TRUE(o.device != nil && o.state != nil) << o.why;
+    id<MTLCommandQueue> queue = [o.device newCommandQueue];
+    id<MTLCommandQueue> blockQueue = [o.device newCommandQueue];
+    id<MTLTexture> frame = surfaceTarget(o.device);
+    id<MTLTexture> scratch = plainTarget(o.device);
+    ASSERT_TRUE(frame != nil && scratch != nil);
+    ASSERT_GE(jobsOfDrawn(queue, frame, o.state, nil), 1u);
+
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    drawManyInto(cb, frame, o.state, 15);
+    id<MTLCommandBuffer> blocker = [blockQueue commandBuffer];
+    drawInto(blocker, scratch, o.state);
+
+    kernel_model::Model &m = kernel_model::model;
+    dispatch_semaphore_t inBlock = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseBlock = dispatch_semaphore_create(0);
+    dispatch_semaphore_t inJob = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseJob = dispatch_semaphore_create(0);
+    std::atomic<int> jobNo{0};
+    const kernel_model::HooksCleared cleared;
+    SemGuard blockGuard{releaseBlock};
+    SemGuard jobGuard{releaseJob};
+
+    {
+        std::lock_guard<std::mutex> l(kernel_model::callLock);
+        m.jobAdded = [&m, &jobNo, inBlock, releaseBlock, inJob, releaseJob] {
+            const auto &j = m.jobs.back();
+            __atomic_store_n(&m.fence(j.channel - 1).completed, j.seqno, __ATOMIC_RELEASE);
+            const int n = jobNo.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (n == 1) {
+                dispatch_semaphore_signal(inBlock);
+                dispatch_semaphore_wait(releaseBlock, DISPATCH_TIME_FOREVER);
+            } else if (n == 2) {
+                dispatch_semaphore_signal(inJob);
+                dispatch_semaphore_wait(releaseJob, DISPATCH_TIME_FOREVER);
+                m.refuse = 1;
+            }
+        };
+    }
+
+    [blocker commit];
+    ASSERT_FALSE(dispatch_semaphore_wait(inBlock, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))));
+    [cb commit];
+    blockGuard.release();
+
+    ASSERT_FALSE(dispatch_semaphore_wait(inJob, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))));
+    std::thread waiter;
+    const bool early = waitScheduledWithin(cb, std::chrono::seconds(2), waiter);
+    EXPECT_TRUE(early);
+    jobGuard.release();
+    waiter.join();
+    [blocker waitUntilCompleted];
+    [cb waitUntilCompleted];
+    EXPECT_EQ(cb.status, MTLCommandBufferStatusError);
+
+    {
+        std::lock_guard<std::mutex> l(kernel_model::callLock);
+        ASSERT_EQ(m.promiseCalls.size(), 2u);
+        EXPECT_EQ(m.promiseCalls[0].op, uint32_t(TegraGM20BPromiseMake));
+        EXPECT_EQ(m.promiseCalls[1].op, uint32_t(TegraGM20BPromiseWithdraw));
+        EXPECT_EQ(m.promiseCalls[1].promise, m.promiseCalls[0].promise);
+        EXPECT_TRUE(m.promiseCalls[1].handles.empty());
+        m.jobAdded = nullptr;
+    }
+
+    id<MTLCommandBuffer> next = [queue commandBuffer];
+    drawInto(next, frame, o.state);
+    [next commit];
+    [next waitUntilCompleted];
+    EXPECT_EQ(next.status, MTLCommandBufferStatusCompleted);
+}
+
+void nonCompositorClientNeverEarlySchedulesAndDefersPresent()
+{
+    const Opened o = openPacked(false);
+    ASSERT_TRUE(o.device != nil && o.state != nil) << o.why;
+    id<MTLCommandQueue> queue = [o.device newCommandQueue];
+    id<MTLCommandQueue> blockQueue = [o.device newCommandQueue];
+    id<MTLTexture> frame = surfaceTarget(o.device);
+    id<MTLTexture> scratch = plainTarget(o.device);
+    ASSERT_TRUE(frame != nil && scratch != nil);
+    ASSERT_GE(jobsOfDrawn(queue, frame, o.state, nil), 1u);
+
+    CountingDrawable *drawable = [CountingDrawable new];
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    drawManyInto(cb, frame, o.state, 15);
+    [cb presentDrawable:drawable];
+    id<MTLCommandBuffer> blocker = [blockQueue commandBuffer];
+    drawInto(blocker, scratch, o.state);
+
+    kernel_model::Model &m = kernel_model::model;
+    dispatch_semaphore_t inBlock = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseBlock = dispatch_semaphore_create(0);
+    dispatch_semaphore_t inJob = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseJob = dispatch_semaphore_create(0);
+    std::atomic<int> jobNo{0};
+    std::atomic<size_t> makes{0};
+    const kernel_model::HooksCleared cleared;
+    SemGuard blockGuard{releaseBlock};
+    SemGuard jobGuard{releaseJob};
+
+    {
+        std::lock_guard<std::mutex> l(kernel_model::callLock);
+        m.promiseCalled = [&m, &makes] {
+            if (m.promiseCalls.back().op == TegraGM20BPromiseMake)
+                makes.fetch_add(1, std::memory_order_release);
+        };
+        m.jobAdded = [&m, &jobNo, inBlock, releaseBlock, inJob, releaseJob] {
+            const auto &j = m.jobs.back();
+            __atomic_store_n(&m.fence(j.channel - 1).completed, j.seqno, __ATOMIC_RELEASE);
+            const int n = jobNo.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (n == 1) {
+                dispatch_semaphore_signal(inBlock);
+                dispatch_semaphore_wait(releaseBlock, DISPATCH_TIME_FOREVER);
+            } else if (n == 2) {
+                dispatch_semaphore_signal(inJob);
+                dispatch_semaphore_wait(releaseJob, DISPATCH_TIME_FOREVER);
+            }
+        };
+    }
+
+    [blocker commit];
+    ASSERT_FALSE(dispatch_semaphore_wait(inBlock, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))));
+    [cb commit];
+    blockGuard.release();
+
+    ASSERT_FALSE(dispatch_semaphore_wait(inJob, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))));
+    std::thread waiter;
+    const bool early = waitScheduledWithin(cb, std::chrono::milliseconds(200), waiter);
+    EXPECT_FALSE(early) << "non-compositor client must never early-schedule";
+    EXPECT_EQ(drawable.presents, 0);
+    EXPECT_EQ(makes.load(std::memory_order_acquire), 0u);
+
+    jobGuard.release();
+    waiter.join();
+    [blocker waitUntilCompleted];
+    [cb waitUntilCompleted];
+    EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+    EXPECT_EQ(drawable.presents, 1);
+    {
+        std::lock_guard<std::mutex> l(kernel_model::callLock);
+        EXPECT_TRUE(m.promiseCalls.empty());
+    }
+}
+
+void compositorSerializesEarlyPromisesOnSameSurface()
+{
+    const Opened o = openPacked(true);
+    ASSERT_TRUE(o.device != nil && o.state != nil) << o.why;
+    id<MTLCommandQueue> queue = [o.device newCommandQueue];
+    id<MTLCommandQueue> blockQueue = [o.device newCommandQueue];
+    id<MTLTexture> frame = surfaceTarget(o.device);
+    id<MTLTexture> scratch = plainTarget(o.device);
+    ASSERT_TRUE(frame != nil && scratch != nil);
+    ASSERT_GE(jobsOfDrawn(queue, frame, o.state, nil), 1u);
+
+    id<MTLCommandBuffer> cb1 = [queue commandBuffer];
+    drawManyInto(cb1, frame, o.state, 15);
+    id<MTLCommandBuffer> cb2 = [queue commandBuffer];
+    drawManyInto(cb2, frame, o.state, 15);
+    id<MTLCommandBuffer> blocker = [blockQueue commandBuffer];
+    drawInto(blocker, scratch, o.state);
+
+    kernel_model::Model &m = kernel_model::model;
+    dispatch_semaphore_t inBlock = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseBlock = dispatch_semaphore_create(0);
+    dispatch_semaphore_t inRange0 = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseRange0 = dispatch_semaphore_create(0);
+    dispatch_semaphore_t inRange1 = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseRange1 = dispatch_semaphore_create(0);
+    std::atomic<int> jobNo{0};
+    std::atomic<size_t> makes{0};
+    const kernel_model::HooksCleared cleared;
+    SemGuard blockGuard{releaseBlock};
+    SemGuard range0Guard{releaseRange0};
+    SemGuard range1Guard{releaseRange1};
+
+    {
+        std::lock_guard<std::mutex> l(kernel_model::callLock);
+        m.promiseCalled = [&m, &makes] {
+            if (m.promiseCalls.back().op == TegraGM20BPromiseMake)
+                makes.fetch_add(1, std::memory_order_release);
+        };
+        m.jobAdded = [&m, &jobNo, inBlock, releaseBlock, inRange0, releaseRange0, inRange1, releaseRange1] {
+            const auto &j = m.jobs.back();
+            __atomic_store_n(&m.fence(j.channel - 1).completed, j.seqno, __ATOMIC_RELEASE);
+            const int n = jobNo.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (n == 1) {
+                dispatch_semaphore_signal(inBlock);
+                dispatch_semaphore_wait(releaseBlock, DISPATCH_TIME_FOREVER);
+            } else if (n == 2) {
+                dispatch_semaphore_signal(inRange0);
+                dispatch_semaphore_wait(releaseRange0, DISPATCH_TIME_FOREVER);
+            } else if (n == 3) {
+                dispatch_semaphore_signal(inRange1);
+                dispatch_semaphore_wait(releaseRange1, DISPATCH_TIME_FOREVER);
+            }
+        };
+    }
+
+    [blocker commit];
+    ASSERT_FALSE(dispatch_semaphore_wait(inBlock, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))));
+    [cb1 commit];
+    blockGuard.release();
+
+    ASSERT_FALSE(dispatch_semaphore_wait(inRange0, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))));
+    std::thread waiter1;
+    const bool early1 = waitScheduledWithin(cb1, std::chrono::seconds(2), waiter1);
+    EXPECT_TRUE(early1) << "first compositor CB must early-schedule";
+    EXPECT_EQ(makes.load(std::memory_order_acquire), 1u);
+
+    [cb2 commit];
+    range0Guard.release();
+    waiter1.join();
+
+    // Waiting for cb1's second range guarantees the submit worker ran applyChange(cb2) while cb1 still held its
+    // early-promised surface entry.
+    ASSERT_FALSE(dispatch_semaphore_wait(inRange1, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))));
+    std::thread waiter2;
+    const bool early2 = waitScheduledWithin(cb2, std::chrono::milliseconds(200), waiter2);
+    EXPECT_FALSE(early2) << "second compositor CB writing same IOSurface must wait until first early promise retires";
+    EXPECT_EQ(makes.load(std::memory_order_acquire), 1u);
+
+    range1Guard.release();
+    waiter2.join();
+    [blocker waitUntilCompleted];
+    [cb1 waitUntilCompleted];
+    [cb2 waitUntilCompleted];
+    EXPECT_EQ(cb1.status, MTLCommandBufferStatusCompleted);
+    EXPECT_EQ(cb2.status, MTLCommandBufferStatusCompleted);
+    EXPECT_EQ(makes.load(std::memory_order_acquire), 2u);
+}
+
+void compositorEarlyPromisesCoverSurfaceBufferAndTextureBufferWrites()
+{
+    const Opened o = openPacked(true);
+    ASSERT_TRUE(o.device != nil && o.state != nil) << o.why;
+    id<MTLCommandQueue> queue = [o.device newCommandQueue];
+    id<MTLCommandQueue> blockQueue = [o.device newCommandQueue];
+    id<MTLTexture> frame = surfaceTarget(o.device);
+    id<MTLTexture> scratch = plainTarget(o.device);
+    ASSERT_TRUE(frame != nil && scratch != nil);
+    ASSERT_GE(jobsOfDrawn(queue, frame, o.state, nil), 1u);
+
+    IOSurfaceRef bufSurface = IOSurfaceCreate((__bridge CFDictionaryRef) @{
+        (id)kIOSurfaceWidth : @64,
+        (id)kIOSurfaceHeight : @64,
+        (id)kIOSurfaceBytesPerElement : @4,
+        (id)kIOSurfaceBytesPerRow : @256,
+        (id)kIOSurfaceAllocSize : @(64 * 256),
+        (id)kIOSurfacePixelFormat : @(uint32_t('BGRA'))
+    });
+    ASSERT_NE(bufSurface, nullptr);
+    id<MTLBuffer> surfBuf = [(id)o.device newBufferWithIOSurface:bufSurface];
+    CFRelease(bufSurface);
+    ASSERT_NE(surfBuf, nil);
+
+    IOSurfaceRef tbSurface = IOSurfaceCreate((__bridge CFDictionaryRef) @{
+        (id)kIOSurfaceWidth : @64,
+        (id)kIOSurfaceHeight : @64,
+        (id)kIOSurfaceBytesPerElement : @4,
+        (id)kIOSurfaceBytesPerRow : @256,
+        (id)kIOSurfaceAllocSize : @(64 * 256),
+        (id)kIOSurfacePixelFormat : @(uint32_t('BGRA'))
+    });
+    ASSERT_NE(tbSurface, nullptr);
+    id<MTLBuffer> tbBuf = [(id)o.device newBufferWithIOSurface:tbSurface];
+    CFRelease(tbSurface);
+    ASSERT_NE(tbBuf, nil);
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                  width:64
+                                                                                 height:64
+                                                                              mipmapped:NO];
+    td.storageMode = MTLStorageModeShared;
+    td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    id<MTLTexture> texBuf = [tbBuf newTextureWithDescriptor:td offset:0 bytesPerRow:256];
+    ASSERT_NE(texBuf, nil);
+
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    drawManyInto(cb, frame, o.state, 10);
+    id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+    [blit fillBuffer:surfBuf range:NSMakeRange(0, 256) value:0x5a];
+    [blit endEncoding];
+    drawInto(cb, texBuf, o.state);
+    id<MTLCommandBuffer> blocker = [blockQueue commandBuffer];
+    drawInto(blocker, scratch, o.state);
+
+    kernel_model::Model &m = kernel_model::model;
+    dispatch_semaphore_t inBlock = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseBlock = dispatch_semaphore_create(0);
+    dispatch_semaphore_t inJob = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseJob = dispatch_semaphore_create(0);
+    std::atomic<int> jobNo{0};
+    const kernel_model::HooksCleared cleared;
+    SemGuard blockGuard{releaseBlock};
+    SemGuard jobGuard{releaseJob};
+
+    {
+        std::lock_guard<std::mutex> l(kernel_model::callLock);
+        m.jobAdded = [&m, &jobNo, inBlock, releaseBlock, inJob, releaseJob] {
+            const auto &j = m.jobs.back();
+            __atomic_store_n(&m.fence(j.channel - 1).completed, j.seqno, __ATOMIC_RELEASE);
+            const int n = jobNo.fetch_add(1, std::memory_order_acq_rel) + 1;
+            if (n == 1) {
+                dispatch_semaphore_signal(inBlock);
+                dispatch_semaphore_wait(releaseBlock, DISPATCH_TIME_FOREVER);
+            } else if (n == 2) {
+                dispatch_semaphore_signal(inJob);
+                dispatch_semaphore_wait(releaseJob, DISPATCH_TIME_FOREVER);
+            }
+        };
+    }
+
+    [blocker commit];
+    ASSERT_FALSE(dispatch_semaphore_wait(inBlock, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))));
+    [cb commit];
+    blockGuard.release();
+
+    ASSERT_FALSE(dispatch_semaphore_wait(inJob, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))));
+    std::thread waiter;
+    const bool early = waitScheduledWithin(cb, std::chrono::seconds(2), waiter);
+    EXPECT_TRUE(early) << "compositor CB writing surface buffer and texture-buffer must early-schedule";
+    jobGuard.release();
+    waiter.join();
+    [blocker waitUntilCompleted];
+    [cb waitUntilCompleted];
+    EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+
+    std::lock_guard<std::mutex> l(kernel_model::callLock);
+    ASSERT_EQ(m.promiseCalls.size(), 1u);
+    EXPECT_EQ(m.promiseCalls[0].op, uint32_t(TegraGM20BPromiseMake));
+    EXPECT_EQ(m.promiseCalls[0].handles.size(), 3u);
+    for (uint64_t h : m.promiseCalls[0].handles)
+        EXPECT_EQ(m.imports.count(h), 1u);
+}
+
 }  // namespace
 
 TEST(GM20BFacadePresent, TheRenderServersFailedFrameEndsItsProcessWithTheCause)
@@ -797,4 +1336,36 @@ TEST(GM20BFacadePresent, RenderServerKeepsScheduledTimePresent)
 TEST(GM20BFacadePresent, PostCommitPresentsAndUncommittedDropBehaveCleanly)
 {
     switch_ios::test::ExpectPassesInFreshProcess(postCommitPresentBeforeAndAfterCompletionAndDroppedUncommitted);
+}
+
+TEST(GM20BFacadePresent, CompositorEarlyScheduledPresentsOnPromiseBeforeLastRangeSubmits)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(compositorEarlyScheduledPresentsOnPromiseBeforeLastRangeSubmits);
+}
+
+TEST(GM20BFacadePresent, CompositorEarlyScheduledRefusedFrameWithdrawsPromiseAndEndsProcess)
+{
+    switch_ios::test::ExpectExitInFreshProcess(
+        compositorEarlyScheduledRefusedFrameWithdrawsPromiseAndEndsProcess, 70,
+        "promise_withdraw:[0-9]+\nabort_with_reason: SwitchMetal: the compositor's frame failed in the driver: .+");
+}
+
+TEST(GM20BFacadePresent, CompositorEarlyScheduledRefusedNonPresentingFrameWithdrawsPromise)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(compositorEarlyScheduledRefusedNonPresentingFrameWithdrawsPromise);
+}
+
+TEST(GM20BFacadePresent, NonCompositorClientNeverEarlySchedulesAndDefersPresent)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(nonCompositorClientNeverEarlySchedulesAndDefersPresent);
+}
+
+TEST(GM20BFacadePresent, CompositorSerializesEarlyPromisesOnSameSurface)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(compositorSerializesEarlyPromisesOnSameSurface);
+}
+
+TEST(GM20BFacadePresent, CompositorEarlyPromisesCoverSurfaceBufferAndTextureBufferWrites)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(compositorEarlyPromisesCoverSurfaceBufferAndTextureBufferWrites);
 }

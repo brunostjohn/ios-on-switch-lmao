@@ -42,6 +42,7 @@ void gm20bPipelineAbandoned(SwitchMetalCommandBuffer *cb, uint32_t veto);
 // only in part split where the encode ahead stopped or reached between two encoders, so what was encoded ahead goes to
 // the GPU at once and the rest is encoded whole after it
 void gm20bPipelineSplit(SwitchMetalCommandBuffer *cb);
+void gm20bPipelineEarlyWork(SwitchMetalCommandBuffer *cb, uint32_t cap, uint32_t &remaining, bool &multiRange);
 // The worker's, once a raw range of `cb` ending at `to` was submitted: its counts of encoders encoded ahead
 void gm20bPipelineSealed(SwitchMetalCommandBuffer *cb, size_t to);
 // The worker's, when the device goes idle: an encode ahead whose command buffer no one else holds (it can never be

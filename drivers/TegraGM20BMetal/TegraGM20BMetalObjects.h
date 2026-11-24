@@ -287,6 +287,7 @@ enum class SwitchMetalShareable : uint8_t {
     std::atomic<void *> _last;   // the command buffer enqueued last, retained until its completed handlers ran
     // the submit worker's: the kernel's bound on the writer promises of a command buffer held behind its held head
     gm20b::EventDeadline::Time _heldBound;
+    uint32_t _unscheduled;
     uint32_t _gpuPriority, _backgroundGpuPriority;  // what it asked for (TegraGM20BMetalQueuePriority.mm)
 }
 @end
@@ -533,6 +534,7 @@ static inline void gm20bRunDeferredPresent(const SwitchMetalDeferredPresent &p)
     std::atomic<uint8_t> _enqueueState;  // 0: none, 1: commit claimed queue slot, 2: explicit enqueue pushed to worker
     gm20b::SubmitQueue<void *, SwitchMetalCommandBuffer *>::Reservation _reservation;
     bool _reserved;  // the submit worker's: its reservation made
+    bool _countedUnscheduled, _earlyPromised;
     std::vector<size_t> _eventWaits;
     gm20b::EventDeadline::Time _eventStart;
     std::unordered_set<void *> _variantObserved;
@@ -582,7 +584,7 @@ static inline void gm20bRunDeferredPresent(const SwitchMetalDeferredPresent &p)
     // command buffer held for a shared event is scheduled at its commit, eventHeld). A handler is added under _lock after its
     // list's flag is set, and the lists are taken under _lock only where the flag says one was added: taking exchanges the
     // sent flag first, so no handler is both missed and not run (gm20bTakeHandlers).
-    std::atomic<bool> _scheduledSent, _completedSent, _hasScheduledHandlers, _hasCompletedHandlers;
+    std::atomic<bool> _scheduledSent, _submittedAll, _completedSent, _hasScheduledHandlers, _hasCompletedHandlers;
     gm20b::ChangeWord _changes;  // a state change its waits read (gm20bChanged), with no lock (word_wait.h)
     gm20b::Mutex _lock;
     uint32_t _seqno;

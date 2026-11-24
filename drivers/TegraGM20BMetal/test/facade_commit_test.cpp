@@ -5,8 +5,10 @@
 // the commit to its return, to waitUntilScheduled's and to the first job's submission (commit_latency.txt).
 #include "scale_frames.h"
 #include "timed_gpu.h"
+#include "bazel/testing/fresh_process.h"
 #include "../TegraGM20BMetalPassCache.h"
 
+#import <IOSurface/IOSurface.h>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <chrono>
@@ -124,6 +126,119 @@ NSDictionary *pipelined(id<MTLCommandBuffer> cb)
 std::string path(id<MTLCommandBuffer> cb)
 {
     return [[(id)cb performSelector:@selector(switchMetalPath)] UTF8String];
+}
+
+void compositorWaitUntilScheduledReturnsBeforeLongRangeSubmits()
+{
+    const std::string pack = harness::writePack(harness::packKey(MTLPixelFormatBGRA8Unorm));
+    const std::string metallib = harness::writeMetallib();
+    metal_prepare(pack.c_str(), 0);
+    id<MTLDevice> device = harness::open(pack);
+    ASSERT_NE(device, nil);
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithURL:[NSURL fileURLWithPath:@(metallib.c_str())] error:&error];
+    ASSERT_NE(library, nil);
+    id<MTLRenderPipelineState> state =
+        [device newRenderPipelineStateWithDescriptor:harness::descriptor(library, MTLPixelFormatBGRA8Unorm)
+                                               error:&error];
+    ASSERT_NE(state, nil);
+
+    IOSurfaceRef surface = IOSurfaceCreate((__bridge CFDictionaryRef) @{
+        (id)kIOSurfaceWidth : @64,
+        (id)kIOSurfaceHeight : @64,
+        (id)kIOSurfaceBytesPerElement : @4,
+        (id)kIOSurfaceBytesPerRow : @256,
+        (id)kIOSurfaceAllocSize : @(64 * 256),
+        (id)kIOSurfacePixelFormat : @(uint32_t('BGRA'))
+    });
+    ASSERT_NE(surface, nullptr);
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                  width:64
+                                                                                 height:64
+                                                                              mipmapped:NO];
+    td.storageMode = MTLStorageModeShared;
+    td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    id<MTLTexture> frame = [device newTextureWithDescriptor:td iosurface:surface plane:0];
+    CFRelease(surface);
+    ASSERT_NE(frame, nil);
+
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    const scale_frames::Shape warmShape{1, 4, 1, 64, 64};
+    id<MTLCommandBuffer> warm = scale_frames::record(queue, state, {frame}, warmShape, 0);
+    [warm commit];
+    [warm waitUntilCompleted];
+    ASSERT_EQ(warm.status, MTLCommandBufferStatusCompleted);
+
+    kernel_model::Model &m = kernel_model::model;
+    dispatch_semaphore_t inJob = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseJob = dispatch_semaphore_create(0);
+    std::atomic<bool> held{false};
+    const size_t jobsBefore = jobCount();
+    const kernel_model::HooksCleared cleared;
+    std::atomic<size_t> makeCalls{0};
+
+    struct ReleaseGuard {
+        dispatch_semaphore_t sem;
+        bool released = false;
+
+        ~ReleaseGuard()
+        {
+            if (!released)
+                dispatch_semaphore_signal(sem);
+        }
+    } guard{releaseJob};
+
+    {
+        std::lock_guard<std::mutex> l(kernel_model::callLock);
+        m.promiseCalled = [&m, &makeCalls] {
+            if (m.promiseCalls.back().op == TegraGM20BPromiseMake)
+                makeCalls.fetch_add(1, std::memory_order_release);
+        };
+        m.jobAdded = [&m, &held, inJob, releaseJob] {
+            const auto &j = m.jobs.back();
+            __atomic_store_n(&m.fence(j.channel - 1).completed, j.seqno, __ATOMIC_RELEASE);
+            if (!held.exchange(true, std::memory_order_acq_rel)) {
+                dispatch_semaphore_signal(inJob);
+                dispatch_semaphore_wait(releaseJob, DISPATCH_TIME_FOREVER);
+            }
+        };
+    }
+
+    const scale_frames::Shape shape{15, 90, 1, 64, 64};
+    id<MTLCommandBuffer> cb = scale_frames::record(queue, state, {frame}, shape, 1);
+    [cb commit];
+    ASSERT_FALSE(dispatch_semaphore_wait(inJob, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))))
+        << "first range never entered SubmitJob";
+
+    auto done = std::make_shared<std::promise<void>>();
+    std::future<void> waited = done->get_future();
+    std::thread waiter([cb, done] {
+        [cb waitUntilScheduled];
+        done->set_value();
+    });
+    const bool early = waited.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    EXPECT_TRUE(early) << "waitUntilScheduled blocked until the submit worker finished the long range";
+    EXPECT_GE(makeCalls.load(std::memory_order_acquire), 1u);
+    if (early)
+        EXPECT_EQ(cb.status, MTLCommandBufferStatusScheduled);
+
+    guard.released = true;
+    dispatch_semaphore_signal(releaseJob);
+    waiter.join();
+    [cb waitUntilCompleted];
+    EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+
+    std::lock_guard<std::mutex> l(kernel_model::callLock);
+    ASSERT_GE(m.jobs.size(), jobsBefore + 1);
+    for (size_t i = jobsBefore; i + 1 < m.jobs.size(); ++i)
+        EXPECT_EQ(m.jobs[i].flags & TegraGM20BJobFulfills, 0u);
+    EXPECT_NE(m.jobs.back().flags & TegraGM20BJobFulfills, 0u);
+    EXPECT_EQ(m.promiseCalls.size(), 1u);
+}
+
+TEST(GM20BFacadeCommit, CompositorWaitUntilScheduledReturnsBeforeLongRangeSubmits)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(compositorWaitUntilScheduledReturnsBeforeLongRangeSubmits);
 }
 
 TEST(GM20BFacadeCommit, ParallelRecordingsSurviveTrimAndReturnTheirBanksAfterSplice)

@@ -226,6 +226,7 @@ bool submitRange(SwitchMetalCommandBuffer *cb, bool followed)
         return true;
     }
     if (cb->_segNext == cb->_segs.size()) {
+        cb->_submittedAll.store(true, std::memory_order_release);
         finish(cb, nil);
         return true;
     }
@@ -259,6 +260,7 @@ bool submitRange(SwitchMetalCommandBuffer *cb, bool followed)
         if (range.from == range.to) {
             ++cb->_segNext;
             if (last) {
+                cb->_submittedAll.store(true, std::memory_order_release);
                 scheduled(cb);
                 finish(cb, nil);
             }
@@ -340,8 +342,10 @@ bool submitRange(SwitchMetalCommandBuffer *cb, bool followed)
             SWITCH_METAL_ENCODE_SPAN(Retire);
             // Core Animation's waitUntilScheduled returns before the retirement's bookkeeping: a waitUntilCompleted that
             // follows finds its range in flight or wakes the completion thread for it (retireRawRange)
-            if (last)
+            if (last) {
+                cb->_submittedAll.store(true, std::memory_order_release);
                 scheduled(cb);
+            }
             retireRawRange(cb, range.from, range.to);
         }
 #if SWITCH_FRAME_TIMELINE
@@ -349,8 +353,10 @@ bool submitRange(SwitchMetalCommandBuffer *cb, bool followed)
 #endif
     }
     ++cb->_segNext;
-    if (last && range.event)
+    if (last && range.event) {
+        cb->_submittedAll.store(true, std::memory_order_release);
         scheduled(cb);
+    }
     if (last)
         finish(cb, nil);  // joins every submitted range before handlers/resources are released
     return last;
