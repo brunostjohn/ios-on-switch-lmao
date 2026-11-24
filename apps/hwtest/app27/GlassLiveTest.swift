@@ -108,8 +108,8 @@ struct UIGlassLiveTest: HWTest {
         metrics.set("pngs", pngs.isEmpty ? "-" : String(pngs.prefix(4).joined(separator: ",").prefix(160)))
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try? encoder.encode(summaries.map(LiveSummary.Detail.init)).write(
-            to: directory.appendingPathComponent("frames.json")
+        try? encoder.encode(summaries.map(LiveSummary.Detail.init)).place(
+            at: directory.appendingPathComponent("frames.json")
         )
         guard summaries.contains(where: { !$0.frames.isEmpty }) else {
             return .skip("the read-back caught no presented frame", metrics)
