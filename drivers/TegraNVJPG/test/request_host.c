@@ -123,16 +123,22 @@ int main(void)
     CHECK(p.extent.rows[0] == 1088 && p.writeEnd == 7680ull * 1088 && p.writeEnd > d.length - 0 - 0,
           "1080p BGRA padded: 8 rows run past the surface into the sink (%llu, length %llu)",
           (unsigned long long)p.writeEnd, (unsigned long long)d.length);
-    // CoreVideo's 16 KiB plane alignment leaves 3.7 rows after the luma: 8 padded rows would land in the chroma.
+    // CoreVideo's 16 KiB plane alignment leaves 3.7 rows after the luma: direct writes would touch chroma, so the
+    // planner stages into 64B-aligned scratch and Copy Engine DMA-repacks exact picture rows.
     d = surface(f420, 1920, 1080);
-    expect("1080p 420f padded", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_UNSUPPORTED, "another plane", &p);
+    expect("1080p 420f padded", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_OK, NULL, &p);
+    CHECK(p.repack == TEGRA_NVJPG_REPACK_CE && p.planes == 2 && p.target.pitch[0] == 1920 &&
+              p.target.pitch[1] == 1920 && p.copyRows[0] == 1080 && p.copyRows[1] == 540 &&
+              p.copyRowBytes[0] == 1920 && p.copyRowBytes[1] == 1920 && p.copyDstStart[1] == d.planeOffset[1],
+          "1080p 420f padded: CE repack plan");
     d.planeOffset[1] = 1920ull * 1080;  // chroma straight after the luma
     d.length = d.planeOffset[1] + 1920ull * 540;
-    expect("1080p 420f packed planes", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_UNSUPPORTED, "another plane", &p);
+    expect("1080p 420f packed planes", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_OK, NULL, &p);
+    CHECK(p.repack == TEGRA_NVJPG_REPACK_CE && p.copyDstStart[1] == 1920ull * 1080, "1080p 420f packed: CE repack");
     TegraNVJPGAbility clipped = kAll;
     clipped.clipped = 1;
     expect("1080p 420f packed, clipped engine", &r, &img, &d, &clipped, TEGRA_NVJPG_PLAN_OK, NULL, &p);
-    CHECK(p.extent.rows[0] == 1080 && p.extent.rows[1] == 540, "clipped extent");
+    CHECK(!p.repack && p.extent.rows[0] == 1080 && p.extent.rows[1] == 540, "clipped extent");
 
     d = surface(TEGRA_NVJPG_FOURCC('4', '2', '0', 'v'), 1920, 1080);
     expect("420v", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_UNSUPPORTED, "pixel format", &p);
@@ -250,7 +256,12 @@ int main(void)
     expect("offset 64,3", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_OK, NULL, &p);
     CHECK(p.planeStart[0] == 3ull * 4096 + 256, "offset plane start %llu", (unsigned long long)p.planeStart[0]);
     r.x_offset = 8;
-    expect("offset 8", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_UNSUPPORTED, "256 bytes", &p);
+    expect("offset 8", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_OK, NULL, &p);
+    CHECK(p.repack == TEGRA_NVJPG_REPACK_CE && p.copyDstStart[0] == 3ull * 4096 + 32 && p.copyDstPitch[0] == 4096 &&
+              p.copyRowBytes[0] == 2048 && p.copyRows[0] == 512,
+          "offset 8: CE repack");
+    r.x_offset = 1;  // 4 bytes: not 16-byte aligned for Copy Engine either
+    expect("offset 1", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_UNSUPPORTED, "256 bytes", &p);
     r.x_offset = 600;
     expect("does not fit", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_BAD, "fit", &p);
     r.x_offset = 0x2000;
@@ -263,7 +274,16 @@ int main(void)
     r = request(512, 512, TEGRA_NVJPG_SUB_420, 0);
     d = surface(bgra, 512, 512);
     d.planeBytesPerRow[0] = 2080;  // 16-byte rows (a CPU-made buffer)
-    expect("stride 2080", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_UNSUPPORTED, "multiple of 64", &p);
+    d.length = align(2080ull * 512, 16384);
+    expect("stride 2080", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_OK, NULL, &p);
+    CHECK(p.repack == TEGRA_NVJPG_REPACK_CE && p.target.pitch[0] == 2048 && p.copyDstPitch[0] == 2080 &&
+              p.copyRowBytes[0] == 2048 && p.copyRows[0] == 512 && p.planeStart[0] == 0,
+          "stride 2080: CE repack plan");
+    d.length = 2048ull * 512;  // too short for 512 rows at stride 2080
+    expect("stride 2080 short surface", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_BAD, "picture runs past", &p);
+    d = surface(bgra, 512, 512);
+    d.planeBytesPerRow[0] = 2000;  // shorter than one 512-pixel BGRA row
+    expect("stride below row", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_BAD, "stride below", &p);
     d = surface(bgra, 512, 512);
     d.protection = 1;
     expect("protected", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_BAD, "protected", &p);
@@ -350,6 +370,19 @@ int main(void)
               "%u BGRA block linear: the output setup of the planned target agrees", size);
         why = tegra_nvjpg_plan_block_linear(&rt, dt.length - blockRowBytes, kSink, l.row_bytes, l.y_log2, &p, &st);
         CHECK(why && strstr(why, "runs past"), "%u BGRA, a block row short: %s", size, why ? why : "ok");
+        // When direct block-linear fails on a tight destination, CE DMA fallback stages pitch-linear into scratch.
+        TegraNVJPGPlan fb = p;
+        fb.target.blockLinear = 0;
+        nvjpg_dec_drv_pic_setup_s fbs = st;
+        CHECK(tegra_nvjpg_plan_fallback_ce(&rt, &dt, 256ull << 20, true, l.width, l.height, l.bpp, false, &fb, &fbs),
+              "%u BGRA tight block-linear falls back to CE repack", size);
+        CHECK(fb.repack == TEGRA_NVJPG_REPACK_CE && !fb.target.blockLinear && fbs.tile_mode == TEGRA_NVJPG_TILE_PITCH &&
+                  fb.copyRowBytes[0] == size * 4 && fb.copyRows[0] == size,
+              "%u BGRA CE fallback geometry", size);
+        TegraNVJPGPlan fbComp = p;
+        fbComp.target.blockLinear = 0;
+        CHECK(!tegra_nvjpg_plan_fallback_ce(&rt, &dt, 256ull << 20, true, l.width, l.height, l.bpp, true, &fbComp, &fbs),
+              "%u BGRA compressed stays refused for CE fallback", size);
     }
 
     // Placed one 16-GOB block down and four GOBs in: the plane starts on that block. Off a GOB, or off a block's rows,
