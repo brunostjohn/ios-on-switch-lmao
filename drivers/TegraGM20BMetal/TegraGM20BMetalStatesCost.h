@@ -6,7 +6,14 @@
 #if SWITCH_METAL_DIAGNOSTICS
 #import <Metal/Metal.h>
 #include <cstdint>
+#include <set>
+#include <string>
 #include "encode_profile.h"
+
+namespace gm20b {
+class Pack;
+struct PackRun;
+}  // namespace gm20b
 
 @class SwitchMetalPipeline;
 
@@ -30,6 +37,12 @@ private:
     bool finished_ = false;
 };
 
-// This process's render state creations since its device opened: those the pack held, and every other
-void gm20bPackCreations(uint64_t &hits, uint64_t &misses);
+bool gm20bPackIsTier1(const gm20b::Pack &pack, const gm20b::PackRun &run);
+void gm20bPackCountColdPages(const void *base, size_t len, std::set<uintptr_t> &seenPages, uint32_t &coldPages);
+void gm20bPackNoteTier1Use(const gm20b::Pack &pack, const gm20b::PackRun &run, uint64_t fast, uint64_t name,
+                           uint32_t cardPages, std::set<uintptr_t> &seenPages, SwitchMetalPipeline *p,
+                           MTLRenderPipelineDescriptor *d, const std::string &ownKey);
+// This process's render state creations since its device opened: those the pack held, every other, tier-1 first uses,
+// and tier-1 first uses whose pages were cold on the card before import
+void gm20bPackCreations(uint64_t &hits, uint64_t &misses, uint64_t &cold, uint64_t &card);
 #endif

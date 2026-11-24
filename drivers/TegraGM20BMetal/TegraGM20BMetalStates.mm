@@ -213,6 +213,13 @@ SwitchMetalPipeline *gm20bPipelineShell(SwitchMetalDevice *device, MTLRenderPipe
     // A state the pack holds is found by its fast key; the text of its key is made only for a state the pack lacks
     const uint64_t fast = p->_completable ? gm20bKeepKey(p, d, vf, ff) : 0;
     const gm20b::PackRun held = p->_packable ? gRM->raw->pack().fastRun(fast) : gm20b::PackRun();
+#if SWITCH_METAL_DIAGNOSTICS
+    std::set<uintptr_t> tier1SeenPages;
+    uint32_t tier1RecordCard = 0;
+    if (gm20bPackIsTier1(gRM->raw->pack(), held))
+        gm20bPackCountColdPages(held.first, size_t(held.records) * sizeof(gm20b::PackPipeline), tier1SeenPages,
+                                tier1RecordCard);
+#endif
     uint64_t keyHash = held.records ? held.first->keyHash : 0;
     if (!keyHash) {
         const std::string &key = gm20bStateKey(p);
@@ -231,6 +238,18 @@ SwitchMetalPipeline *gm20bPipelineShell(SwitchMetalDevice *device, MTLRenderPipe
     p->_packKey = packKey;
     SWITCH_METAL_CREATION_SINCE(keyBegan, keyTicks);
     if (lookedUp) {
+#if SWITCH_METAL_DIAGNOSTICS
+        {
+            const gm20b::Pack &pack = gRM->raw->pack();
+            const gm20b::PackRun tierRun = held.records ? held : pack.run(packKey);
+            if (gm20bPackIsTier1(pack, tierRun) && pack.find(tierRun, gm20b::PackForm::Default)) {
+                if (!held.records)
+                    gm20bPackCountColdPages(tierRun.first, size_t(tierRun.records) * sizeof(gm20b::PackPipeline),
+                                            tier1SeenPages, tier1RecordCard);
+                gm20bPackNoteTier1Use(pack, tierRun, fast, packKey, tier1RecordCard, tier1SeenPages, p, d, own.key);
+            }
+        }
+#endif
         {
             SWITCH_METAL_CREATION_SPAN(placeTicks);
             p->_raw = held.records ? gRM->raw->pipeline(held, keyHash, gm20b::PackForm::Default, p->_caTransform)

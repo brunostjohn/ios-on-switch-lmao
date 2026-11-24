@@ -4,11 +4,14 @@
 
 #if SWITCH_METAL_DIAGNOSTICS
 #include <mach/mach.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#import "TegraGM20BMetalStatesKey.h"
 #include "ca_catch_all.h"
 
 namespace {
 
-std::atomic<uint64_t> gPackHits{0}, gPackMisses{0};
+std::atomic<uint64_t> gPackHits{0}, gPackMisses{0}, gPackCold{0}, gPackCard{0};
 thread_local gm20b::CreationCost tLastCreation;
 
 void taskEvents(uint64_t &faults, uint64_t &pageins)
@@ -75,10 +78,92 @@ void logCreation(const gm20b::CreationCost &c, SwitchMetalPipeline *p, MTLRender
 
 }  // namespace
 
-void gm20bPackCreations(uint64_t &hits, uint64_t &misses)
+bool gm20bPackIsTier1(const gm20b::Pack &pack, const gm20b::PackRun &run)
+{
+    if (!pack.header() || !run.records)
+        return false;
+    const gm20b::PackPipeline *tier1 = pack.section<gm20b::PackPipeline>(gm20b::PackPipelines) +
+                                       pack.tier0Entries(gm20b::PackPipelines, sizeof(gm20b::PackPipeline));
+    return run.first >= tier1;
+}
+
+void gm20bPackCountColdPages(const void *base, size_t len, std::set<uintptr_t> &seenPages, uint32_t &coldPages)
+{
+    if (!base || !len)
+        return;
+    const size_t page = size_t(getpagesize());
+    const uintptr_t addr = uintptr_t(base);
+    const uintptr_t start = addr & ~(page - 1);
+    const uintptr_t end = (addr + len + page - 1) & ~(page - 1);
+    const size_t pages = (end - start) / page;
+    std::vector<char> vec(pages);
+    if (mincore(reinterpret_cast<const void *>(start), pages * page, vec.data()) != 0)
+        return;
+    for (size_t i = 0; i < pages; ++i)
+        if (seenPages.insert(start + i * page).second && !(vec[i] & MINCORE_INCORE))
+            ++coldPages;
+}
+
+void gm20bPackNoteTier1Use(const gm20b::Pack &pack, const gm20b::PackRun &run, uint64_t fast, uint64_t name,
+                           uint32_t cardPages, std::set<uintptr_t> &seenPages, SwitchMetalPipeline *p,
+                           MTLRenderPipelineDescriptor *d, const std::string &ownKey)
+{
+    static gm20b::Mutex seenLock;
+    static std::set<uint64_t> seenStates;
+    {
+        std::lock_guard<gm20b::Mutex> hold(seenLock);
+        if (!seenStates.insert(name).second)
+            return;
+    }
+    const gm20b::PackHeader *hdr = pack.header();
+    const gm20b::PackProgram *programs = pack.section<gm20b::PackProgram>(gm20b::PackPrograms);
+    const uint8_t *heap = pack.section<uint8_t>(gm20b::PackHeap);
+    const uint64_t heapBytes = pack.bytes(gm20b::PackHeap);
+    const uint64_t tier0Heap = hdr->tier0[gm20b::PackHeap];
+    std::set<uint32_t> programIds;
+    auto collect = [&](uint32_t idx) {
+        if (idx < hdr->programs)
+            programIds.insert(idx);
+    };
+    for (const gm20b::PackPipeline *rec = run.first; rec != run.first + run.records; ++rec) {
+        collect(rec->vs);
+        if (gm20b::pixelStage(*rec))
+            collect(rec->fs);
+        if (gm20b::tessellates(*rec)) {
+            collect(rec->tessPrograms[0]);
+            collect(rec->tessPrograms[1]);
+        }
+        for (uint32_t stage = 0; stage < 2; ++stage) {
+            uint32_t count = 0;
+            if (const gm20b::PackVariant *vars = pack.variants(*rec, stage, count))
+                for (uint32_t i = 0; i < count; ++i)
+                    collect(vars[i].program);
+        }
+    }
+    uint32_t pieces = 0;
+    for (uint32_t idx : programIds) {
+        const gm20b::PackProgram &prog = programs[idx];
+        if (uint64_t(prog.heapOffset) + prog.bytes > heapBytes)
+            continue;
+        if (uint64_t(prog.heapOffset) + prog.bytes > tier0Heap) {
+            ++pieces;
+            gm20bPackCountColdPages(heap + prog.heapOffset, prog.bytes, seenPages, cardPages);
+        }
+    }
+    gPackCold.fetch_add(1, std::memory_order_relaxed);
+    if (cardPages > 0)
+        gPackCard.fetch_add(1, std::memory_order_relaxed);
+    os_log(gm20bLog(), "SwitchMetal: tier-1 pack state %016llx %016llx in %{public}s: %u pieces, card=%u",
+           (unsigned long long)fast, (unsigned long long)name, getprogname(), pieces, cardPages);
+    gm20b::logHarvestParts(name, d.label, p->_packable ? gm20bStateKey(p) : ownKey);
+}
+
+void gm20bPackCreations(uint64_t &hits, uint64_t &misses, uint64_t &cold, uint64_t &card)
 {
     hits = gPackHits.load(std::memory_order_relaxed);
     misses = gPackMisses.load(std::memory_order_relaxed);
+    cold = gPackCold.load(std::memory_order_relaxed);
+    card = gPackCard.load(std::memory_order_relaxed);
 }
 
 // No thread CPU clock or thread_info: backboardd's sandbox kills on thread_selfusage (syscall 482) and some refuse thread_info.

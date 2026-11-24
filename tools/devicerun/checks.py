@@ -853,6 +853,23 @@ GROUPS: dict[str, list[Check]] = {
             'imports and no pack-image refusal or per-piece placement',
         ),
         Check(
+            'pack.tier1-uses',
+            'pack-hit',
+            'SwitchMetal: tier-1 pack state ',
+            REPORT,
+            process='!SwitchHWTest',
+            subsystem=GPU_METAL_SUBSYSTEM,
+            regex=(
+                r'^SwitchMetal: tier-1 pack state (?P<fast>[0-9a-f]{16}) (?P<name>[0-9a-f]{16}) '
+                r'in (?P<proc>\S+): (?P<pieces>\d+) pieces, card=(?P<card>\d+)'
+            ),
+            show=('process', 'name', 'pieces', 'card'),
+            source='drivers/TegraGM20BMetal/TegraGM20BMetalStatesCost.mm (debug builds)',
+            note='OS states drawn from tier 1 of the pack (first use per process, pieces imported and cold card '
+            'pages before import); run `bazel run //tools/gpu:logharvest` on the pull to promote them into '
+            'corpus.log so the next pack places them in tier 0',
+        ),
+        Check(
             'compiler.library-time',
             'compiler-speed',
             'SwitchShaderCompiler: made in',
