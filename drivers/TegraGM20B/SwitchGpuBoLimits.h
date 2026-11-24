@@ -12,7 +12,8 @@ constexpr uint64_t SWITCH_GPU_BO_CHUNK_BYTES = 64ULL << 10;
 constexpr uint32_t SWITCH_GPU_BO_FLAGS_MASK = static_cast<uint32_t>(TegraGM20BBoCoherent) |
 					      static_cast<uint32_t>(TegraGM20BBoContiguous) |
 					      static_cast<uint32_t>(TegraGM20BBoCompressible) |
-					      static_cast<uint32_t>(TegraGM20BBoControl);
+					      static_cast<uint32_t>(TegraGM20BBoControl) |
+					      static_cast<uint32_t>(TegraGM20BBoSystem);
 
 constexpr uint64_t switch_gpu_bo_alloc_limit(uint32_t flags)
 {
@@ -22,10 +23,15 @@ constexpr uint64_t switch_gpu_bo_alloc_limit(uint32_t flags)
 constexpr bool switch_gpu_bo_alloc_args_ok(uint64_t bytes, uint32_t align_log2, uint32_t flags)
 {
 	const bool compressible = (flags & TegraGM20BBoCompressible) != 0u;
+	const bool system = (flags & TegraGM20BBoSystem) != 0u;
+	const uint32_t systemForbidden =
+		TegraGM20BBoCompressible | TegraGM20BBoControl | TegraGM20BBoContiguous;
+	const bool systemBad =
+		system && (!(flags & TegraGM20BBoCoherent) || (flags & systemForbidden) != 0u);
 	return bytes != 0u && (bytes & 0xfffULL) == 0u &&
 	       bytes <= switch_gpu_bo_alloc_limit(flags) && align_log2 >= 12u &&
 	       align_log2 <= 21u && (flags & ~SWITCH_GPU_BO_FLAGS_MASK) == 0u &&
-	       !((flags & TegraGM20BBoControl) && !(flags & TegraGM20BBoCoherent)) &&
+	       !((flags & TegraGM20BBoControl) && !(flags & TegraGM20BBoCoherent)) && !systemBad &&
 	       !(compressible && (flags != TegraGM20BBoCompressible ||
 				  (bytes & (SWITCH_GPU_BO_CHUNK_BYTES - 1u)) != 0u));
 }

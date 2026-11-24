@@ -232,6 +232,8 @@ enum {
 	TegraGM20BBoCompressible = 1u << 2,
 	TegraGM20BBoControl = 1u
 		<< 3, /* Coherent command/control allocation; bounded ready-page preference. */
+	TegraGM20BBoSystem = 1u
+		<< 4, /* Coherent write-combined system pages (bypasses GPU pool; parkable). */
 };
 
 /* Method 2. Zero-filled pages below 4 GiB. map_token is the clientMemoryForType type for IOConnectMapMemory64. */

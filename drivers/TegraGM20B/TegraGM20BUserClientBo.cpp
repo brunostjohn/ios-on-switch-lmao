@@ -160,6 +160,7 @@ static IOReturn allocateSmmuCompressible(uint64_t bytes, uint64_t *pas,
 AGXDeviceUserClient::BoCharge AGXDeviceUserClient::chargeBo(const TegraGM20BAbiBoAlloc *in)
 {
 	BoCharge c = {nullptr, nullptr, 0, 0, 0, 0, critical_};
+	const bool systemOnly = (in->flags & TegraGM20BBoSystem) != 0u;
 	if (in->flags & TegraGM20BBoCompressible) {
 		c.refused = compressibleRefusal(in->bytes);
 		if (switch_gpu_smmu_ready() &&
@@ -168,7 +169,7 @@ AGXDeviceUserClient::BoCharge AGXDeviceUserClient::chargeBo(const TegraGM20BAbiB
 			c.smmuComp = in->bytes;
 			smmu_compressible_bytes_ += c.smmuComp;
 		}
-	} else if (in->flags & TegraGM20BBoCoherent) {
+	} else if ((in->flags & TegraGM20BBoCoherent) && !systemOnly) {
 		const uint64_t pages = (in->bytes + PAGE_SIZE - 1) & ~(uint64_t(PAGE_SIZE) - 1);
 		const bool control = tgm_pool::controlReserve(
 			(in->flags & TegraGM20BBoControl) != 0, control_bytes_, pages);
@@ -176,7 +177,8 @@ AGXDeviceUserClient::BoCharge AGXDeviceUserClient::chargeBo(const TegraGM20BAbiB
 		c.refused = control ? nullptr : poolRefusal(in->bytes, pool_bytes_, critical_);
 		c.control = !c.refused && (in->flags & TegraGM20BBoControl) ? pages : 0;
 	}
-	if (!c.refused && (in->flags & (TegraGM20BBoCompressible | TegraGM20BBoCoherent)))
+	if (!c.refused && ((in->flags & TegraGM20BBoCompressible) ||
+			   ((in->flags & TegraGM20BBoCoherent) && !systemOnly)))
 		c.pool = in->bytes;
 	pool_bytes_ += c.pool;
 	control_bytes_ += c.control;
@@ -199,7 +201,8 @@ IOReturn AGXDeviceUserClient::settleBo(const TegraGM20BAbiBoAlloc *in, const BoC
 		      (pool_bytes_ - charge.pool) >> 20, tgm_pool_avail() >> 20);
 		compressibleLogged_ = true;
 	}
-	if (system && !systemLogged_) {
+	const bool systemFallback = system && !(in->flags & TegraGM20BBoSystem);
+	if (systemFallback && !systemLogged_) {
 		IOLog("tegra-gm20b: %s: coherent BoAlloc of %llu KiB from system memory, "
 		      "write-combined: %s "
 		      "(client holds %llu MiB of the pool, %llu MiB free); further ones "
@@ -208,7 +211,7 @@ IOReturn AGXDeviceUserClient::settleBo(const TegraGM20BAbiBoAlloc *in, const BoC
 		      charge.refused ? charge.refused : "the pool has no room",
 		      (pool_bytes_ - charge.pool) >> 20, tgm_pool_avail() >> 20);
 	}
-	systemLogged_ = systemLogged_ || system;
+	systemLogged_ = systemLogged_ || systemFallback;
 	if (!ret) {
 		bo->system = system;
 		bo->compositorPool = bo->pool_va && charge.critical;
@@ -337,16 +340,21 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	// VectorKit (on Maps' first 4 MiB buffer).
 	bool system = false;
 	if (!ret && (in->flags & TegraGM20BBoCoherent)) {
-		if (!charge.refused) {
-			uint64_t align =
-				(in->flags & TegraGM20BBoContiguous) ? 1ULL << in->align_log2 : 0;
-			if (in->bytes >= kChunkBytes && align < kChunkBytes)
-				align = kChunkBytes;
-			bo->pool_va = tgm_pool_alloc_ready(in->bytes, align, charge.readyReserve,
-							   &bo->pool_pa);
+		if (in->flags & TegraGM20BBoSystem) {
+			system = true;
+		} else {
+			if (!charge.refused) {
+				uint64_t align = (in->flags & TegraGM20BBoContiguous)
+							 ? 1ULL << in->align_log2
+							 : 0;
+				if (in->bytes >= kChunkBytes && align < kChunkBytes)
+					align = kChunkBytes;
+				bo->pool_va = tgm_pool_alloc_ready(
+					in->bytes, align, charge.readyReserve, &bo->pool_pa);
+			}
+			system = tgm_pool::coherentSource(charge.refused, bo->pool_va != nullptr) ==
+				 tgm_pool::FromSystem;
 		}
-		system = tgm_pool::coherentSource(charge.refused, bo->pool_va != nullptr) ==
-			 tgm_pool::FromSystem;
 	}
 	if (!ret && !bo->pool_va && !compressible && !system &&
 	    !(in->flags & TegraGM20BBoContiguous))

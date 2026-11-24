@@ -345,6 +345,17 @@ IOReturn AGXDeviceUserClient::boUnpark(const TegraGM20BAbiBoUnpark *in,
 		IOLockUnlock(lock_);
 		return kIOReturnBadArgument;
 	}
+	if (bo->parkState == SwitchGpuParkState::Reclaiming) {
+		if (!parkWaitStableLocked(in->handle) || submitGate_.closed()) {
+			IOLockUnlock(lock_);
+			return kIOReturnNotOpen;
+		}
+		bo = findBo(in->handle);
+		if (!bo || bo->freeing) {
+			IOLockUnlock(lock_);
+			return kIOReturnBadArgument;
+		}
+	}
 	const SwitchGpuParkAction action = switch_gpu_park_begin_unpark(bo->parkState);
 	if (action == SwitchGpuParkAction::Reclaimed) {
 		*out = {bo->parkedVa, bo->bytes, TegraGM20BUnparkReclaimed, 0};

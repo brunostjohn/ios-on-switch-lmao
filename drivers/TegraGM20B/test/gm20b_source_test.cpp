@@ -1789,6 +1789,15 @@ TEST(GM20BParkedBoSource, LockOrderAndOffLockVmCalls)
 	EXPECT_TRUE(unpark.before("IOLockUnlock(lock_);", "switch_iokit_unpark_range("));
 	EXPECT_FALSE(unpark.between("IOLockLock(lock_);", "IOLockUnlock(lock_);")
 			     .has("switch_iokit_unpark_range("));
+	EXPECT_TRUE(unpark.before("if (bo->parkState == SwitchGpuParkState::Reclaiming)",
+				  "parkWaitStableLocked(in->handle)"));
+	EXPECT_TRUE(unpark.before("parkWaitStableLocked(in->handle)",
+				  "switch_gpu_park_begin_unpark(bo->parkState)"));
+	const CodeText wait = unpark.between("parkWaitStableLocked(in->handle)",
+					     "switch_gpu_park_begin_unpark(bo->parkState)");
+	EXPECT_TRUE(wait.has("submitGate_.closed()"));
+	EXPECT_TRUE(wait.has("findBo(in->handle)"));
+	EXPECT_TRUE(wait.has("bo->freeing"));
 
 	const CodeText freeMethod = Block(client(), "IOReturn AGXDeviceUserClient::boFreeMethod(");
 	EXPECT_TRUE(freeMethod.before("IOLockUnlock(lock_);", "switch_iokit_drop_parked_range("));

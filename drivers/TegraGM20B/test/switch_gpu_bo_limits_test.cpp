@@ -37,7 +37,8 @@ TEST(SwitchGpuBoLimits, AllocAdmitsLargePlainCachedBosAndKeepsFlaggedBosAt256MiB
 
 	for (uint32_t flags : {uint32_t(TegraGM20BBoCoherent), uint32_t(TegraGM20BBoContiguous),
 			       uint32_t(TegraGM20BBoCompressible),
-			       uint32_t(TegraGM20BBoCoherent | TegraGM20BBoControl)}) {
+			       uint32_t(TegraGM20BBoCoherent | TegraGM20BBoControl),
+			       uint32_t(TegraGM20BBoCoherent | TegraGM20BBoSystem)}) {
 		EXPECT_EQ(switch_gpu_bo_alloc_limit(flags), SWITCH_GPU_MAX_BUFFER_BYTES) << flags;
 		EXPECT_TRUE(switch_gpu_bo_alloc_args_ok(SWITCH_GPU_MAX_BUFFER_BYTES, 16, flags))
 			<< flags;
@@ -54,6 +55,16 @@ TEST(SwitchGpuBoLimits, AllocAdmitsLargePlainCachedBosAndKeepsFlaggedBosAt256MiB
 	EXPECT_FALSE(switch_gpu_bo_alloc_args_ok(4096, 12, TegraGM20BBoCompressible));
 	EXPECT_FALSE(switch_gpu_bo_alloc_args_ok(SWITCH_GPU_BO_CHUNK_BYTES, 12,
 						 TegraGM20BBoCompressible | TegraGM20BBoCoherent));
+	EXPECT_FALSE(switch_gpu_bo_alloc_args_ok(4096, 12, TegraGM20BBoSystem));
+	EXPECT_FALSE(
+		switch_gpu_bo_alloc_args_ok(4096, 12, TegraGM20BBoSystem | TegraGM20BBoControl));
+	EXPECT_FALSE(switch_gpu_bo_alloc_args_ok(
+		4096, 12, TegraGM20BBoCoherent | TegraGM20BBoSystem | TegraGM20BBoControl));
+	const uint32_t sysComp =
+		TegraGM20BBoCoherent | TegraGM20BBoSystem | TegraGM20BBoCompressible;
+	EXPECT_FALSE(switch_gpu_bo_alloc_args_ok(SWITCH_GPU_BO_CHUNK_BYTES, 12, sysComp));
+	EXPECT_FALSE(switch_gpu_bo_alloc_args_ok(
+		4096, 12, TegraGM20BBoCoherent | TegraGM20BBoSystem | TegraGM20BBoContiguous));
 	EXPECT_FALSE(switch_gpu_bo_alloc_args_ok(4096, 12, 1u << 31));
 }
 
@@ -64,11 +75,24 @@ TEST(SwitchGpuBoLimits, UserClientCallsPolicyWithExplicitRefusalsAndGuardsSpares
 	EXPECT_TRUE(import.has("if (!switch_gpu_bo_import_args_ok(in->address, in->bytes))"));
 	EXPECT_TRUE(import.has("switch_refusal( \"bo-import\", \"arguments\","));
 
-	const CodeText alloc = Block(SourceText("../TegraGM20BUserClientBo.cpp"),
-				     "IOReturn AGXDeviceUserClient::boAlloc(");
+	const std::string boSrc = SourceText("../TegraGM20BUserClientBo.cpp");
+	const CodeText alloc = Block(boSrc, "IOReturn AGXDeviceUserClient::boAlloc(");
 	EXPECT_TRUE(alloc.has(
 		"if (!switch_gpu_bo_alloc_args_ok(in->bytes, in->align_log2, in->flags))"));
 	EXPECT_TRUE(alloc.has("switch_refusal(\"bo-alloc\", \"arguments\","));
+	EXPECT_TRUE(alloc.before("if (in->flags & TegraGM20BBoSystem) { system = true; } else {",
+				 "bo->pool_va = tgm_pool_alloc_ready("));
+
+	const CodeText charge =
+		Block(boSrc, "AGXDeviceUserClient::BoCharge AGXDeviceUserClient::chargeBo(");
+	EXPECT_TRUE(charge.has("const bool systemOnly = (in->flags & TegraGM20BBoSystem) != 0u;"));
+	EXPECT_TRUE(charge.has("else if ((in->flags & TegraGM20BBoCoherent) && !systemOnly)"));
+
+	const CodeText settle = Block(boSrc, "IOReturn AGXDeviceUserClient::settleBo(");
+	EXPECT_TRUE(settle.has(
+		"const bool systemFallback = system && !(in->flags & TegraGM20BBoSystem);"));
+	EXPECT_TRUE(settle.has("if (systemFallback && !systemLogged_)"));
+	EXPECT_TRUE(settle.has("systemLogged_ = systemLogged_ || systemFallback;"));
 
 	const CodeText keep = Block(SourceText("../TegraGM20BUserClientSpares.cpp"),
 				    "bool spareKeep(const SwitchGpuCachedBuffer &buffer,");

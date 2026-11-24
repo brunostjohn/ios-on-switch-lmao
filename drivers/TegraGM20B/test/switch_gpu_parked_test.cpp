@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -29,6 +30,7 @@ TEST(SwitchGpuParkedAbi, SelectorsFlagsAndRecordLayouts)
 	EXPECT_EQ(uint32_t(TegraGM20BInfoBoPark), 1u << 28);
 	EXPECT_NE(uint32_t(TegraGM20BInfoBoPark), uint32_t(TegraGM20BInfoPackImage));
 	EXPECT_NE(uint32_t(TegraGM20BInfoBoPark), uint32_t(TegraGM20BInfoPushFences));
+	EXPECT_EQ(uint32_t(TegraGM20BBoSystem), 1u << 4);
 	EXPECT_EQ(uint32_t(TegraGM20BParkGuard), 1u << 0);
 	EXPECT_EQ(uint32_t(TegraGM20BUnparkResident), 0u);
 	EXPECT_EQ(uint32_t(TegraGM20BUnparkReclaimed), 1u);
@@ -473,4 +475,45 @@ TEST(SwitchGpuParkedConcurrency, ParkUnparkReclaimAndFreeRespectLockOrder)
 	EXPECT_EQ(global.lru.totalBytes(), 0u);
 	EXPECT_GT(global.parkedCount.load(), 0u);
 	EXPECT_GT(global.reclaimedCount.load(), 0u);
+}
+
+TEST(SwitchGpuParkedConcurrency, BoUnparkWaitsForReclaimingAndReturnsReclaimed)
+{
+	std::mutex lock;
+	std::condition_variable parkWait;
+	SwitchGpuParkState state = SwitchGpuParkState::Reclaiming;
+	bool closed = false;
+	bool freeing = false;
+	bool waiterEntered = false;
+
+	SwitchGpuParkAction result = SwitchGpuParkAction::InvalidState;
+	std::thread unparker([&] {
+		std::unique_lock<std::mutex> lg(lock);
+		if (state == SwitchGpuParkState::Reclaiming) {
+			waiterEntered = true;
+			parkWait.notify_all();
+			parkWait.wait(lg, [&] {
+				return closed || !switch_gpu_park_is_transient(state);
+			});
+		}
+		if (!closed && !freeing)
+			result = switch_gpu_park_begin_unpark(state);
+	});
+
+	{
+		std::unique_lock<std::mutex> lg(lock);
+		parkWait.wait(lg, [&] {
+			return waiterEntered;
+		});
+		EXPECT_EQ(switch_gpu_park_finish_reclaim(state), SwitchGpuParkAction::Ok);
+		state = SwitchGpuParkState::Reclaimed;
+		parkWait.notify_all();
+	}
+	unparker.join();
+	EXPECT_EQ(result, SwitchGpuParkAction::Reclaimed);
+
+	EXPECT_EQ(switch_gpu_park_begin_unpark(SwitchGpuParkState::Parking),
+		  SwitchGpuParkAction::Busy);
+	EXPECT_EQ(switch_gpu_park_begin_unpark(SwitchGpuParkState::Unparking),
+		  SwitchGpuParkAction::Busy);
 }
