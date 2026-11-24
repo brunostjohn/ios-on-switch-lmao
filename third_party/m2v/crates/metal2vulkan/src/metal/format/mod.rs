@@ -186,7 +186,10 @@ impl FormatEmulation {
                 )
             }
             FormatEmulation::YCbCr => {
-                matches!(usage, U::SampledImage | U::SampledImageFilterLinear)
+                matches!(
+                    usage,
+                    U::SampledImage | U::SampledImageFilterLinear | U::UniformTexelBuffer
+                )
             }
             FormatEmulation::YCbCrRendered | FormatEmulation::YCbCrPassRefused => {
                 usage == U::ColorAttachment

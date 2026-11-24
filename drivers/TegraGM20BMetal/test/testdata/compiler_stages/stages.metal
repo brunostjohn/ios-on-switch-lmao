@@ -55,3 +55,17 @@ kernel void stages_specialized_kernel(array<texture2d<float, access::read>, 4> t
     if (slot >= 0 && id.x < t[slot].get_width() && id.y < t[slot].get_height())
         out[id.y * t[slot].get_width() + id.x] = t[slot].read(id) + float(kStagesSlot3 + kStagesNamed);
 }
+
+kernel void stages_texel_write(texture_buffer<float, access::write> t [[texture(0)]],
+                               uint id [[thread_position_in_grid]])
+{
+    if (id < t.get_width())
+        t.write(float4(0.5f, 0.25f, -0.25f, 0.75f), id);
+}
+
+kernel void stages_texel_read(texture_buffer<float, access::read> t [[texture(0)]],
+                              device float4 *out [[buffer(0)]], uint id [[thread_position_in_grid]])
+{
+    if (id < t.get_width())
+        out[id] = t.read(id);
+}

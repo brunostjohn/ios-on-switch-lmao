@@ -145,12 +145,14 @@ pub(crate) fn dropped_stores(
                 t.slot
             ));
         }
-        if let Some(BoundTexture::Texture { facts, .. }) = state
+        match state
             .stages
             .get_mut(&Stage::Kernel)
             .and_then(|table| table.textures.get_mut(&t.slot))
         {
-            facts.pixel_format = WRITES_DROPPED;
+            Some(BoundTexture::Texture { facts, .. }) => facts.pixel_format = WRITES_DROPPED,
+            Some(BoundTexture::Buffer { pixel_format, .. }) => *pixel_format = WRITES_DROPPED,
+            _ => {}
         }
     }
     Ok(state)
@@ -180,8 +182,9 @@ pub(crate) fn bind_state(run: Run, dispatch: &NmbDirectDispatch, stage_in: bool)
     for t in counted(dispatch.textures, dispatch.texture_count) {
         let bound = if raw::<TextureType>(t.texture_type, "texture type")? == TextureType::TextureBuffer {
             // the texel buffer view raw binds is the texture's own header (Device::createTexelBuffer), not this range
+            let read = kernel_texture(raw::<PixelFormat>(t.pixel_format, "pixel format")?, t.planes);
             BoundTexture::Buffer {
-                pixel_format: raw::<PixelFormat>(t.pixel_format, "pixel format")?,
+                pixel_format: read.format,
                 offset: 0,
                 length: u64::from(TAG_BYTES),
                 bytes_per_row: u64::from(TAG_BYTES),
@@ -309,5 +312,39 @@ mod tests {
             PixelFormat::RGB10A2Unorm,
             "a slot only read keeps the image raw binds"
         );
+    }
+
+    #[test]
+    fn texture_buffer_binds_map_packed_and_p3_ycbcr_through_kernel_texture() {
+        let buf = |slot, pixel_format, planes| NmbDirectBoundTexture {
+            texture_type: u64::from(TextureType::TextureBuffer.as_raw()),
+            ..bound(slot, pixel_format, planes)
+        };
+        let textures = [
+            buf(0, 500, 0),
+            buf(1, 500, (1 << 15) | (3 << 8)),
+            buf(2, 588, 0),
+            buf(3, 589, 0),
+            buf(4, 554, 0),
+        ];
+        let ask = NmbDirectDispatch {
+            threads: [64, 1, 1],
+            memory: [0; 31],
+            textures: textures.as_ptr(),
+            texture_count: textures.len() as u32,
+            samplers: std::ptr::null(),
+            sampler_count: 0,
+            region_mode: 0,
+        };
+        let state = bind_state(Run::Bytes, &ask, false).unwrap();
+        let buf_fmt = |slot| match &state.stages[&Stage::Kernel].textures[&slot] {
+            BoundTexture::Buffer { pixel_format, .. } => *pixel_format,
+            other => panic!("slot {slot}: {other:?}"),
+        };
+        assert_eq!(buf_fmt(0), PixelFormat::YCBCR84202P);
+        assert_eq!(buf_fmt(1), PixelFormat::RGB84202P);
+        assert_eq!(buf_fmt(2), PixelFormat::RGB10A2Unorm);
+        assert_eq!(buf_fmt(3), PixelFormat::RGB10A2Unorm);
+        assert_eq!(buf_fmt(4), PixelFormat::BGR10XR);
     }
 }
