@@ -59,10 +59,12 @@ TEST(SdQueueSource, MergeChains)
     // Fallback path keeps adjacent-only merging and checks active in-flight overlap for writes.
     EXPECT_THAT(pick, HasSubstr("last->next->lba == last->lba + last->sectors"));
     EXPECT_THAT(pick, HasSubstr("!overlapsInFlight(last->next)"));
-    // Worker passes any pending batch's LBA range to pickLocked so writes check overlap against active work.
+    // Worker passes any active slot's LBA range to pickLocked so writes check overlap against active work.
     const std::string worker = body("void NativeSwitchBlock::worker(");
-    EXPECT_THAT(worker, HasSubstr("SwitchLbaRange{pending->first->lba, pending->sectors}"));
-    EXPECT_THAT(worker, HasSubstr("self->pickLocked(&next->sectors, &next->count, &active,"));
+    EXPECT_THAT(worker, HasSubstr("activeRange = {self->pipe.active->lba, self->pipe.active->sectors};"));
+    EXPECT_THAT(
+        worker,
+        HasSubstr("self->pickLocked(&cand->batch.sectors, &cand->batch.count, &activeRange, hwActive ? 1u : 0u)"));
     // Every request starts unchained.
     EXPECT_TRUE(
         Search(source, R"(static_cast<uint8_t>\(priority >> 6\),\s*direction == kIODirectionOut,\s*false,\s*false,)"));
@@ -72,9 +74,9 @@ TEST(SdQueueSource, MergeChains)
 TEST(SdQueueSource, GapChains)
 {
     const std::string &source = driver();
-    const std::string begin = body("void NativeSwitchBlock::beginBatch(");
-    EXPECT_THAT(begin, HasSubstr("if (first->write && payload != sectors)"));
-    EXPECT_LT(Index(begin, "outside its partition"), Index(begin, "if (first->write && payload != sectors)"));
+    const std::string prep = body("void NativeSwitchBlock::prepareAndPublishSlot(");
+    EXPECT_THAT(prep, HasSubstr("if (first->write && payload != sectors)"));
+    EXPECT_LT(Index(prep, "outside its partition"), Index(prep, "if (first->write && payload != sectors)"));
     const std::string table = body("SwitchAdmaRefusal NativeSwitchBlock::buildTable(");
     EXPECT_EQ(Count(table, "staging.addSink(sinkPA, gap(r))"), 1u);
     EXPECT_EQ(Count(table, "table.addSealed(sinkPA, gap(r))"), 1u);

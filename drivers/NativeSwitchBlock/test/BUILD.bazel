@@ -117,6 +117,17 @@ host_test(
 )
 
 host_test(
+    name = "sd_pipeline_test",
+    srcs = [
+        "sd_pipeline_test.cpp",
+        "//drivers/NativeSwitchBlock:SwitchAdma.h",
+        "//drivers/NativeSwitchBlock:SwitchSdBus.h",
+        "//drivers/NativeSwitchBlock:SwitchSdCard.h",
+        "//drivers/NativeSwitchBlock:SwitchSdPipeline.h",
+    ],
+)
+
+host_test(
     name = "cryptex_map_test",
     size = "medium",
     srcs = [

@@ -64,17 +64,18 @@ TEST(SdCardSource, Cmd23FramingIsGated)
     EXPECT_THAT(complete, HasSubstr("if (r16(AUTO_CMD_ERROR) & 0x9f)\n            return 8;"));
     EXPECT_THAT(complete, HasSubstr("if (!cmd23 && (r32(STOP_RESPONSE) & R1_STOP_ERRORS))\n            return 9;"));
     // The data path: direct (ADMA2) multi-block commands only.
-    EXPECT_THAT(body("void NativeSwitchBlock::beginBatch("),
+    EXPECT_THAT(body("void NativeSwitchBlock::prepareAndPublishSlot("),
                 HasSubstr("b.cmd23 = b.direct && sectors > 1 && autoCmd23;"));
     // Retries go back to CMD12 (command()'s default), as do transfer()/run() (the bounce path and the proofs).
     EXPECT_THAT(body("int NativeSwitchBlock::retry("),
                 HasSubstr("step = command(static_cast<uint32_t>(lba), sectors, write, descriptors, &status, false, "
-                          "window);"));
+                          "window, descPA);"));
     EXPECT_THAT(body("int NativeSwitchBlock::run("),
                 HasSubstr("command(static_cast<uint32_t>(lba), sectors, write, descriptors, &status, false, window);"));
-    EXPECT_TRUE(Search(source,
-                       R"(int command\(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, )"
-                       R"(uint32_t \*status, bool cmd23 = false,\s*const SwitchSdWindow \*window = nullptr\);)"));
+    EXPECT_TRUE(
+        Search(source, R"(int command\(uint32_t lba, uint32_t sectors, bool write, unsigned descriptors, )"
+                       R"(uint32_t \*status, bool cmd23 = false,\s*const SwitchSdWindow \*window = nullptr,\s*)"
+                       R"(uint64_t descPA = 0\);)"));
     // setup(): from the registers (switchSdPath: ADMA2, and the SCR listing CMD23).
     EXPECT_THAT(body("bool NativeSwitchBlock::setup()"),
                 HasSubstr("autoCmd23 = switchSdPath(r32(CAPABILITIES), r16(HOST_CONTROL2), haveScr ? &scr : nullptr)"));

@@ -83,11 +83,9 @@ struct SwitchAdmaTable {
         return kAdmaOk;
     }
 
-    // [pa, pa + length) as transfer descriptors, continuing the previous descriptor when the memory continues it.
-    template <typename PageOk> SwitchAdmaRefusal add(uint64_t pa, uint64_t length, PageOk pageOk)
+    // Append [pa, pa + length) assuming check() already passed.
+    SwitchAdmaRefusal addChecked(uint64_t pa, uint64_t length)
     {
-        if (const SwitchAdmaRefusal refusal = check(pa, length, pageOk))
-            return refusal;
         if (pa + length > kAdma4GiB)
             high += pa >= kAdma4GiB ? length : pa + length - kAdma4GiB;
         while (length) {
@@ -117,6 +115,14 @@ struct SwitchAdmaTable {
             bytes += n;
         }
         return kAdmaOk;
+    }
+
+    // [pa, pa + length) as transfer descriptors, continuing the previous descriptor when the memory continues it.
+    template <typename PageOk> SwitchAdmaRefusal add(uint64_t pa, uint64_t length, PageOk pageOk)
+    {
+        if (const SwitchAdmaRefusal refusal = check(pa, length, pageOk))
+            return refusal;
+        return addChecked(pa, length);
     }
 
     // r14-sdcq: [pa, pa + length) in descriptors of their own: they continue no earlier descriptor and no later bytes
@@ -164,6 +170,55 @@ struct SwitchAdmaTable {
 inline uint64_t switchAdmaAddress(const SwitchAdmaDescriptor &descriptor)
 {
     return static_cast<uint64_t>(descriptor.addressHigh) << 32 | descriptor.addressLow;
+}
+
+// Whether any descriptor in `a` overlaps any descriptor in `b` (excluding [skip, skip + skipBytes), e.g. the gap sink).
+// All descriptors are already 64-byte cache-line aligned, so byte-range overlap equals cache-line overlap.
+inline bool switchAdmaTablesOverlap(const SwitchAdmaTable &a, const SwitchAdmaTable &b, uint64_t skip = 0,
+                                    uint64_t skipBytes = 0)
+{
+    if (!a.count || !b.count)
+        return false;
+    uint64_t aMin = ~0ULL, aMax = 0, bMin = ~0ULL, bMax = 0;
+    for (uint32_t i = 0; i < a.count; ++i) {
+        const uint64_t pa = switchAdmaAddress(a.entries[i]);
+        if (skipBytes && pa - skip < skipBytes)
+            continue;
+        if (pa < aMin)
+            aMin = pa;
+        if (pa + a.entries[i].length > aMax)
+            aMax = pa + a.entries[i].length;
+    }
+    if (aMin >= aMax)
+        return false;
+    for (uint32_t i = 0; i < b.count; ++i) {
+        const uint64_t pa = switchAdmaAddress(b.entries[i]);
+        if (skipBytes && pa - skip < skipBytes)
+            continue;
+        if (pa < bMin)
+            bMin = pa;
+        if (pa + b.entries[i].length > bMax)
+            bMax = pa + b.entries[i].length;
+    }
+    if (bMin >= bMax || aMax <= bMin || bMax <= aMin)
+        return false;
+    for (uint32_t i = 0; i < a.count; ++i) {
+        const uint64_t aLo = switchAdmaAddress(a.entries[i]);
+        if (skipBytes && aLo - skip < skipBytes)
+            continue;
+        const uint64_t aHi = aLo + a.entries[i].length;
+        if (aHi <= bMin || aLo >= bMax)
+            continue;
+        for (uint32_t j = 0; j < b.count; ++j) {
+            const uint64_t bLo = switchAdmaAddress(b.entries[j]);
+            if (skipBytes && bLo - skip < skipBytes)
+                continue;
+            const uint64_t bHi = bLo + b.entries[j].length;
+            if (aLo < bHi && bLo < aHi)
+                return true;
+        }
+    }
+    return false;
 }
 
 // r12-sdio: a read chain's table where each physical segment goes straight to the card when it may (check()) and only the
@@ -233,7 +288,7 @@ template <typename Memory> struct SwitchAdmaStaging {
             if (!why) {
                 if (const SwitchAdmaRefusal refusal = closeRun())
                     return refusal;
-                if (const SwitchAdmaRefusal refusal = table->add(pa, segment, pageOk))
+                if (const SwitchAdmaRefusal refusal = table->addChecked(pa, segment))
                     return refusal;
             } else {
                 if (run == kNoRun)
