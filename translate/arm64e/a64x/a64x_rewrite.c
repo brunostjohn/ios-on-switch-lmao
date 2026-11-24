@@ -181,6 +181,45 @@ bool a64x_rewrite1_kernel(uint32_t w, uint32_t *out)
     return false;
 }
 
+void a64x_decode_ldra(uint32_t w, int32_t *out_imm, bool *out_wb)
+{
+    int32_t imm = (int32_t)((BIT(w, 22) << 9) | BITS(w, 20, 12));
+    if (imm & 0x200) {
+        imm -= 0x400;
+    }
+    *out_imm = imm * 8;
+    *out_wb = BIT(w, 11) != 0;
+}
+
+bool a64x_eval_jscvt(uint64_t bits, uint32_t *out_w)
+{
+    uint64_t sign = bits >> 63;
+    int32_t exp = (int32_t)((bits >> 52) & 0x7FFu) - 1023;
+    uint64_t frac = bits & ((1ull << 52) - 1);
+    if (exp < 0) {
+        *out_w = 0;
+        return bits == 0;
+    }
+    if (exp >= 84) {
+        *out_w = 0;
+        return false;
+    }
+    uint64_t mant = (1ull << 52) | frac;
+    uint32_t u;
+    bool exact;
+    if (exp < 52) {
+        int32_t rshift = 52 - exp;
+        bool has_frac = (mant & ((1ull << rshift) - 1)) != 0;
+        u = (uint32_t)(mant >> rshift);
+        exact = (exp < 31 && !has_frac) || bits == 0xC1E0000000000000ull;
+    } else {
+        u = ((uint32_t)mant) << (exp - 52);
+        exact = false;
+    }
+    *out_w = sign ? (uint32_t)(0u - u) : u;
+    return exact;
+}
+
 bool a64x_rewrite1(uint32_t w, uint32_t *out)
 {
     enum a64x_class c = a64x_classify(w);
@@ -204,12 +243,10 @@ bool a64x_rewrite1(uint32_t w, uint32_t *out)
         return true;
     case A64X_PAC_LDRA: {
         /* LDRAA/LDRAB Xt, [Xn, #simm10*8]{!}: the address is Xn + offset, unauthenticated */
-        int32_t imm = (int32_t)((BIT(w, 22) << 9) | BITS(w, 20, 12));
-        if (imm & 0x200) {
-            imm -= 0x400;
-        }
-        imm *= 8;
-        if (BIT(w, 11)) {
+        int32_t imm = 0;
+        bool wb = false;
+        a64x_decode_ldra(w, &imm, &wb);
+        if (wb) {
             if (imm >= -256 && imm <= 255) {
                 *out = 0xF8400C00u | (((uint32_t)imm & 0x1FF) << 12) | (rn << 5) | rt; /* LDR Xt, [Xn, #imm]! */
                 return true;
