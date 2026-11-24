@@ -100,8 +100,27 @@ public:
     // Sleep on an in-flight async Compile (`cookie` from compileAsync) via TegraGM20BMethodCompileWait,
     // donating the calling thread's priority to the compiler worker. Returns true if the caller should retry.
     bool waitAsync(uint64_t cookie);
+    // Register a client library slice via TegraGM20BMethodCompilerRegisterLibrary (CoW snapshot), caching the
+    // handle per (address, size, digest) for this connection. Returns 0 when unsupported or refused (caller
+    // falls back to inline bytes).
+    uint64_t registerLibrary(const void *bytes, size_t size, const Digest &digest);
 
 private:
+    struct RegisteredLibrary {
+        const void *address = nullptr;
+        size_t size = 0;
+        Digest digest{};
+
+        bool operator<(const RegisteredLibrary &o) const
+        {
+            if (address != o.address)
+                return address < o.address;
+            if (size != o.size)
+                return size < o.size;
+            return digest < o.digest;
+        }
+    };
+
     struct Mapping {
         uint32_t generation = 0;
         const uint8_t *base = nullptr;
@@ -124,9 +143,11 @@ private:
     std::atomic<bool> expected_{false}, declined_{false};
     std::atomic<bool> absent_{false};
     std::atomic<bool> waitSupported_{true};
+    std::atomic<bool> librariesSupported_{false};
     std::atomic<const Mapping *> mapping_{nullptr};
     std::atomic<uint32_t> latest_{0};  // the newest generation a completion named
-    gm20b::Mutex mapLock_, asyncLock_;
+    gm20b::Mutex mapLock_, asyncLock_, libraryLock_;
+    std::map<RegisteredLibrary, uint64_t> registeredLibraries_;
     std::vector<const Mapping *> mappings_;  // every one ever made: a reader may still be inside an older one
 
     // One notification port per class an answer is taken at, each with a queue of that class: the kernel's answer

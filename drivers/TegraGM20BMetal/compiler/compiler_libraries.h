@@ -19,6 +19,7 @@
 #include <mutex>
 #include <string>
 #include "../compile_request.h"
+#include "compiler_client_libraries.h"
 
 namespace switch_compiler {
 
@@ -32,7 +33,8 @@ public:
     void began();
     void ended();
     // The library `l` names, nil with `why`
-    id<MTLLibrary> library(const gm20b::RequestLibrary &l, std::string &why);
+    id<MTLLibrary> library(const gm20b::RequestLibrary &l, std::string &why,
+                           const std::shared_ptr<const MappedClientLibrary> &mapped = nullptr);
 
 private:
     static constexpr int64_t kKeptForNs = 5 * int64_t(NSEC_PER_SEC);

@@ -158,8 +158,8 @@ private:
     bool renderRequest(const Ask &a, const CacheKey &k, bool bytes, CompileRequest &r, Digest &name, bool every = false,
                        RequestKind kind = RequestKind::Render);
     // A reflection entry of `k` from the store, else asked of the compiler with `request`'s (`every`: as renderRequest's)
-    bool storedReflection(const std::function<bool(bool every, CompileRequest &, Digest &)> &request, const CacheKey &k,
-                          std::string &blob, std::string &why);
+    bool storedReflection(const std::function<bool(bool bytes, bool every, CompileRequest &, Digest &)> &request,
+                          const CacheKey &k, std::string &blob, std::string &why);
     // storedReflection of one function of this facade as a request's one stage tagged `tag`
     bool functionReflection(const char *tag, id function, const CacheKey &k, std::string &blob, std::string &why);
     RecordCache::Found fromStore(const Digest &name, const CacheKey &k, RuntimeRecord &record, std::string &why);

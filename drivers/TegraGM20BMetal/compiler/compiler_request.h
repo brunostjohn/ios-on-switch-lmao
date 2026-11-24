@@ -5,11 +5,13 @@
 // request whose fields or libraries give another key is refused, and nothing else the client computed is kept.
 #pragma once
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 #include "../compile_request.h"
 #include "../metallib.h"
+#include "compiler_client_libraries.h"
 
 namespace switch_compiler {
 
@@ -35,9 +37,11 @@ struct Prepared {
     gm20b::CacheKey key;
     std::string packKey;  // the key Direct makes the record under (a kernel's compute key)
     gm20b::Digest name{};
+    std::vector<std::shared_ptr<const MappedClientLibrary>> clientLibraries;
 };
 
-bool prepare(const std::string &bytes, uint64_t stack, SystemLibraries &system, Prepared &out, std::string &why);
+bool prepare(const std::string &bytes, uint64_t stack, SystemLibraries &system, Prepared &out, std::string &why,
+             uint64_t client = 0, ClientLibraries *clientLibraries = nullptr);
 
 // The request `bytes` as one of stack `stack`, which prepare then keys from its fields as this build keys a state: what
 // an earlier build logged, made again under this build's key. Bytes of another layout (its magic, compile_request.cpp)

@@ -219,7 +219,8 @@ std::string restacked(const std::string &bytes, uint64_t stack)
     return gm20b::encodeRequest(r);
 }
 
-bool prepare(const std::string &bytes, uint64_t stack, SystemLibraries &system, Prepared &out, std::string &why)
+bool prepare(const std::string &bytes, uint64_t stack, SystemLibraries &system, Prepared &out, std::string &why,
+             uint64_t client, ClientLibraries *clientLibraries)
 {
     Prepared p;
     if (!gm20b::decodeRequest(bytes, p.request))
@@ -234,12 +235,25 @@ bool prepare(const std::string &bytes, uint64_t stack, SystemLibraries &system, 
     }
     std::vector<std::map<std::string, gm20b::AirHash>> air(p.request.libraries.size());
     std::vector<gm20b::LibraryIdentity> identities;
+    p.clientLibraries.resize(p.request.libraries.size());
     for (size_t i = 0; i < p.request.libraries.size(); ++i) {
         const gm20b::RequestLibrary &library = p.request.libraries[i];
-        const bool read = library.system
-                              ? system.air(library.path, air[i], why)
-                              : gm20b::metallibAirHashes(reinterpret_cast<const uint8_t *>(library.bytes.data()),
-                                                         library.bytes.size(), air[i]);
+        bool read = false;
+        if (library.system) {
+            read = system.air(library.path, air[i], why);
+        } else if (library.libraryId) {
+            if (!client || !clientLibraries)
+                return why = "a library handle with no client mapping", false;
+            std::shared_ptr<const MappedClientLibrary> mapped;
+            if (!clientLibraries->resolve(client, library.libraryId, library.digest, mapped, why))
+                return false;
+            air[i] = mapped->air;
+            p.clientLibraries[i] = std::move(mapped);
+            read = true;
+        } else {
+            read = gm20b::metallibAirHashes(reinterpret_cast<const uint8_t *>(library.bytes.data()),
+                                            library.bytes.size(), air[i]);
+        }
         if (!read)
             return why = why.empty() ? "a library that is not a metallib" : why, false;
         identities.push_back(gm20b::identityOf(library));

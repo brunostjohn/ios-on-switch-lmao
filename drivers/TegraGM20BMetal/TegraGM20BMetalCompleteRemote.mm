@@ -56,7 +56,7 @@ void logComputeHarvest(const char *kind, const CacheKey &k, const CompileRequest
 // can name (another device's). The bytes are the AIR slice the facade read; `every` sends a system library's too, as a data
 // library.
 bool addStage(CompileRequest &r, std::vector<LibraryIdentity> &ids, std::map<const LibrarySource *, uint32_t> &seen,
-              const char *tag, id function, bool bytes, bool every = false)
+              const char *tag, id function, bool bytes, bool every = false, Remote *remote = nullptr)
 {
     if (![function isKindOfClass:[SwitchMetalFunction class]])
         return false;
@@ -72,10 +72,18 @@ bool addStage(CompileRequest &r, std::vector<LibraryIdentity> &ids, std::map<con
         RequestLibrary library;
         library.path = f->_source->path;
         library.system = f->_source->system && !every;
-        if ((bytes || every) && !library.system)
-            library.bytes.assign(static_cast<const char *>(data), length);
-        // sent as its bytes, the library is named by them, as the compiler names it (compiler_request.mm)
-        ids.push_back(every ? identityOf(library) : f->_source->identity(data, length));
+        const LibraryIdentity identity =
+            every ? LibraryIdentity{false, sha256(data, length)} : f->_source->identity(data, length);
+        if ((bytes || every) && !library.system) {
+            const uint64_t handle = remote ? remote->registerLibrary(data, length, identity.digest) : 0;
+            if (handle) {
+                library.libraryId = handle;
+                library.digest = identity.digest;
+            } else {
+                library.bytes.assign(static_cast<const char *>(data), length);
+            }
+        }
+        ids.push_back(identity);
         r.libraries.push_back(std::move(library));
     }
     RequestStage s;
@@ -94,22 +102,22 @@ bool addStage(CompileRequest &r, std::vector<LibraryIdentity> &ids, std::map<con
 // (compute_key.h computeLinkedText)
 bool addKernelStages(CompileRequest &r, std::vector<LibraryIdentity> &ids,
                      std::map<const LibrarySource *, uint32_t> &seen, id kernel, MTLComputePipelineDescriptor *d,
-                     bool bytes, bool every)
+                     bool bytes, bool every, Remote *remote = nullptr)
 {
-    if (!addStage(r, ids, seen, "k", kernel, bytes, every))
+    if (!addStage(r, ids, seen, "k", kernel, bytes, every, remote))
         return false;
     for (id f in d.linkedFunctions.functions)
-        if (!addStage(r, ids, seen, "kl", f, bytes, every))
+        if (!addStage(r, ids, seen, "kl", f, bytes, every, remote))
             return false;
     for (id f in d.linkedFunctions.privateFunctions)
-        if (!addStage(r, ids, seen, "kp", f, bytes, every))
+        if (!addStage(r, ids, seen, "kp", f, bytes, every, remote))
             return false;
     for (id f in d.linkedFunctions.binaryFunctions)
-        if (!addStage(r, ids, seen, "kb", f, bytes, every))
+        if (!addStage(r, ids, seen, "kb", f, bytes, every, remote))
             return false;
     for (NSString *group in [d.linkedFunctions.groups.allKeys sortedArrayUsingSelector:@selector(compare:)])
         for (id f in d.linkedFunctions.groups[group]) {
-            if (!addStage(r, ids, seen, "kg", f, bytes, every))
+            if (!addStage(r, ids, seen, "kg", f, bytes, every, remote))
                 return false;
             r.stages.back().group.assign(group.UTF8String ?: "",
                                          [group lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
@@ -146,8 +154,8 @@ bool Completion::renderRequest(const Ask &a, const CacheKey &k, bool bytes, Comp
     std::vector<LibraryIdentity> ids;
     std::map<const LibrarySource *, uint32_t> seen;
     @autoreleasepool {
-        if (!addStage(r, ids, seen, "v", d.vertexFunction, bytes, every) ||
-            (d.fragmentFunction && !addStage(r, ids, seen, "f", d.fragmentFunction, bytes, every)))
+        if (!addStage(r, ids, seen, "v", d.vertexFunction, bytes, every, remote_.get()) ||
+            (d.fragmentFunction && !addStage(r, ids, seen, "f", d.fragmentFunction, bytes, every, remote_.get())))
             return false;
         const std::pair<const char *, NSArray *> linked[] = {{"vl", d.vertexLinkedFunctions.functions},
                                                              {"vp", d.vertexLinkedFunctions.privateFunctions},
@@ -155,7 +163,7 @@ bool Completion::renderRequest(const Ask &a, const CacheKey &k, bool bytes, Comp
                                                              {"fp", d.fragmentLinkedFunctions.privateFunctions}};
         for (const auto &[tag, functions] : linked)
             for (id f in functions)
-                if (!addStage(r, ids, seen, tag, f, bytes, every))
+                if (!addStage(r, ids, seen, tag, f, bytes, every, remote_.get()))
                     return false;
     }
     if (r.stages.size() > kRequestStageLimit)
@@ -268,7 +276,7 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k,
 {
     CompileRequest r;
     Digest name;
-    if (!renderRequest(a, k, true, r, name, again)) {
+    if (!renderRequest(a, k, false, r, name, again)) {
         done(nullptr);
         return true;
     }
@@ -295,7 +303,7 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k,
         settle(found, record, why);
         return true;
     }
-    if (!remote_->taking()) {
+    if (!remote_->taking() || !renderRequest(a, k, true, r, name, again)) {
         done(nullptr);
         return true;
     }
@@ -348,7 +356,7 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
     CompileRequest r;
     Digest name;
     std::vector<LibraryIdentity> ids;
-    const auto request = [&](bool every) {
+    const auto request = [&](bool bytes, bool every) {
         r = {};
         ids.clear();
         r.stack = stack_;
@@ -365,7 +373,7 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
         q.stageIn = stageInFieldsOf(descriptor.stageInputDescriptor);
         std::map<const LibrarySource *, uint32_t> seen;
         if (q.textures.size() > kRequestBindLimit || q.samplers.size() > kRequestBindLimit ||
-            !addKernelStages(r, ids, seen, facadeFunction, descriptor, true, every))
+            !addKernelStages(r, ids, seen, facadeFunction, descriptor, bytes, every, remote_.get()))
             return false;
         name = storeName(k, r, ids);
         return true;
@@ -376,12 +384,12 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
             return RecordCache::Found::None;
         return decodeKernelEntry(bytes, k, record, why);
     };
-    if (!request(false))
+    if (!request(false, false))
         return Compiler::Outcome::Failed;
     RecordCache::Found found = stored();
     AskFailure failure = AskFailure::None;
     for (const bool again : {false, true}) {
-        if (found != RecordCache::Found::None || !remote_->taking() || (again && !request(true)))
+        if (found != RecordCache::Found::None || !remote_->taking() || !request(true, again))
             break;
         const Remote::Answer answer = remote_->compile(encodeRequest(r));
         if (answer == Remote::Answer::Made || answer == Remote::Answer::Refused)
@@ -408,7 +416,7 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
     return found == RecordCache::Found::Record ? Compiler::Outcome::Made : Compiler::Outcome::Refused;
 }
 
-bool Completion::storedReflection(const std::function<bool(bool, CompileRequest &, Digest &)> &request,
+bool Completion::storedReflection(const std::function<bool(bool, bool, CompileRequest &, Digest &)> &request,
                                   const CacheKey &k, std::string &blob, std::string &why)
 {
     CompileRequest r;
@@ -419,11 +427,11 @@ bool Completion::storedReflection(const std::function<bool(bool, CompileRequest 
         std::string bytes;
         return remote_->find(name, bytes) && decodeReflectionEntry(bytes, k, made, text);
     };
-    if (!request(false, r, name))
+    if (!request(false, false, r, name))
         return why = kInexpressible, false;
     bool found = stored();
     for (const bool again : {false, true}) {
-        if (found || !remote_->taking() || (again && !request(true, r, name)))
+        if (found || !remote_->taking() || !request(true, again, r, name))
             break;
         const Remote::Answer answer = remote_->compile(encodeRequest(r));
         if (answer == Remote::Answer::Made || answer == Remote::Answer::Refused)
@@ -445,8 +453,8 @@ bool Completion::reflection(Ask a, std::string &blob, std::string &why)
     if (!keyOf(a, k))
         return why = kInexpressible, false;
     return storedReflection(
-        [&](bool every, CompileRequest &r, Digest &name) {
-            return renderRequest(a, k, true, r, name, every, RequestKind::Reflection);
+        [&](bool bytes, bool every, CompileRequest &r, Digest &name) {
+            return renderRequest(a, k, bytes, r, name, every, RequestKind::Reflection);
         },
         k, blob, why);
 }
@@ -456,7 +464,7 @@ bool Completion::reflection(id function, MTLComputePipelineDescriptor *descripto
 {
     const CacheKey k = computeReflectionKey(stack_, stateKey);
     return storedReflection(
-        [&](bool every, CompileRequest &r, Digest &name) {
+        [&](bool bytes, bool every, CompileRequest &r, Digest &name) {
             r = {};
             r.stack = stack_;
             r.kind = RequestKind::Reflection;
@@ -466,7 +474,7 @@ bool Completion::reflection(id function, MTLComputePipelineDescriptor *descripto
             r.kernel.stageIn = stageInFieldsOf(descriptor.stageInputDescriptor);
             std::vector<LibraryIdentity> ids;
             std::map<const LibrarySource *, uint32_t> seen;
-            if (!addKernelStages(r, ids, seen, function, descriptor, true, every))
+            if (!addKernelStages(r, ids, seen, function, descriptor, bytes, every, remote_.get()))
                 return false;
             name = storeName(k, r, ids);
             return true;
@@ -478,14 +486,14 @@ bool Completion::functionReflection(const char *tag, id function, const CacheKey
                                     std::string &why)
 {
     return storedReflection(
-        [&](bool every, CompileRequest &r, Digest &name) {
+        [&](bool bytes, bool every, CompileRequest &r, Digest &name) {
             r = {};
             r.stack = stack_;
             r.kind = RequestKind::Reflection;
             r.key = k.key;
             std::vector<LibraryIdentity> ids;
             std::map<const LibrarySource *, uint32_t> seen;
-            if (!addStage(r, ids, seen, tag, function, true, every))
+            if (!addStage(r, ids, seen, tag, function, bytes, every, remote_.get()))
                 return false;
             name = storeName(k, r, ids);
             return true;
@@ -520,7 +528,7 @@ bool Completion::facts(id facadeFunction, MTLComputePipelineDescriptor *descript
         r.kernel.stageIn = stageInFieldsOf(descriptor.stageInputDescriptor);
         ids.clear();
         std::map<const LibrarySource *, uint32_t> seen;
-        if (!addKernelStages(r, ids, seen, facadeFunction, descriptor, bytes, every))
+        if (!addKernelStages(r, ids, seen, facadeFunction, descriptor, bytes, every, remote_.get()))
             return false;
         name = storeName(k, r, ids);
         return true;

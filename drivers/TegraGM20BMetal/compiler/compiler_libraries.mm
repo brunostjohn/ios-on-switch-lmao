@@ -40,12 +40,17 @@ void LibraryCache::release(uint64_t generation)
     }
 }
 
-id<MTLLibrary> LibraryCache::library(const gm20b::RequestLibrary &l, std::string &why)
+id<MTLLibrary> LibraryCache::library(const gm20b::RequestLibrary &l, std::string &why,
+                                     const std::shared_ptr<const MappedClientLibrary> &mapped)
 {
     std::string real;
     if (l.system && !SystemLibraries::resolve(root_, l.path, real, why))
         return nil;
-    const gm20b::Digest digest = l.system ? gm20b::Digest{} : gm20b::sha256(l.bytes.data(), l.bytes.size());
+    if (!l.system && l.libraryId && !mapped)
+        return why = "a library handle with no mapping", nil;
+    const gm20b::Digest digest = l.system ? gm20b::Digest{}
+                                 : mapped ? mapped->digest
+                                          : gm20b::sha256(l.bytes.data(), l.bytes.size());
     std::shared_ptr<Slot> slot;
     {
         std::lock_guard<std::mutex> g(lock_);
@@ -69,6 +74,13 @@ id<MTLLibrary> LibraryCache::library(const gm20b::RequestLibrary &l, std::string
     GM20BOfflineDevice *device = [GM20BOfflineDevice new];
     if (l.system) {
         slot->made = [device newSealedLibraryWithURL:[NSURL fileURLWithPath:@(real.c_str())] error:&error];
+    } else if (mapped) {
+        std::shared_ptr<const MappedClientLibrary> keep = mapped;
+        dispatch_data_t bytes =
+            dispatch_data_create(mapped->data, mapped->size, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                (void)keep;
+            });
+        slot->made = [device newLibraryWithData:bytes error:&error];
     } else {
         dispatch_data_t bytes =
             dispatch_data_create(l.bytes.data(), l.bytes.size(), nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);

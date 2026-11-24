@@ -53,9 +53,11 @@ enum class RequestForm : uint8_t {
 };
 
 struct RequestLibrary {
-    std::string path;     // where the client loaded it from ("": made from data)
-    bool system = false;  // systemLibraryPath(path): the compiler reads it there, and `bytes` is empty
-    std::string bytes;
+    std::string path;        // where the client loaded it from ("": made from data)
+    bool system = false;     // systemLibraryPath(path): the compiler reads it there, and `bytes` is empty
+    std::string bytes;       // inline bytes when !system && libraryId == 0
+    uint64_t libraryId = 0;  // connection-scoped CoW handle (TegraGM20BMethodCompilerRegisterLibrary)
+    Digest digest{};         // expected SHA-256 of the registered library when libraryId != 0
 };
 
 // A stage's function: for a render state the vertex function, the fragment function, then the linked ones (tags "vl",

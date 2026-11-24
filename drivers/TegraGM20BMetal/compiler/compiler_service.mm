@@ -117,6 +117,7 @@ private:
     RequestLog log_;
     std::unique_ptr<ConfirmedRefusals> refusals_;  // this build's refusals (compiler_refusals.h), made at open
     SystemLibraries system_;
+    std::unique_ptr<ClientLibraries> clientLibraries_;
     std::unique_ptr<Pool> pool_;
     size_t bufferBytes_ = 1u << 20;
     std::unique_ptr<uint8_t[]> buffer_ = untouched(bufferBytes_);
@@ -301,11 +302,17 @@ void Service::take(uint64_t stack)
     const Waiter waiter = {reply.id, reply.client, bandOf(reply.qos, waited), false};
     Prepared prepared;
     std::string why;
-    if (!prepare(request, stack, system_, prepared, why)) {
+    if (!prepare(request, stack, system_, prepared, why, reply.client, clientLibraries_.get())) {
         os_log_error(logger(), "SwitchShaderCompiler: pid %d's request not taken: %{public}s", reply.pid, why.c_str());
         return complete(waiter, TegraGM20BCompileUnavailable, TegraGM20BCompileCompiled);
     }
-    submit(std::move(prepared), std::move(request), waiter, reply.pid);
+    bool hasHandles = false;
+    for (const gm20b::RequestLibrary &l : prepared.request.libraries)
+        if (l.libraryId) {
+            hasHandles = true;
+            break;
+        }
+    submit(std::move(prepared), hasHandles ? std::string() : std::move(request), waiter, reply.pid);
 }
 
 bool Service::connect(std::string &why, StartFailure &failure)
@@ -452,6 +459,28 @@ void Service::serve()
     armDeath();  // before the sandbox, which looks up no notification center
 #endif
     open(stack);
+    clientLibraries_ = std::make_unique<ClientLibraries>(
+        [this](uint64_t client, uint64_t id, const uint8_t *&data, size_t &size, std::string &why) {
+            const TegraGM20BAbiCompilerMapLibrary in = {id, client, 0, 0};
+            TegraGM20BAbiCompilerMapLibraryReply reply = {};
+            const int error = call(TegraGM20BMethodCompilerMapLibrary, &in, sizeof in, &reply, sizeof reply);
+            if (error || !reply.address || !reply.bytes) {
+                char text[64];
+                snprintf(text, sizeof text, "client library map failed (0x%x)", error);
+                why = text;
+                return false;
+            }
+            data = reinterpret_cast<const uint8_t *>(uintptr_t(reply.address));
+            size = size_t(reply.bytes);
+            return true;
+        },
+        [this](uint64_t client, uint64_t id) {
+            const TegraGM20BAbiCompilerUnmapLibrary in = {id, client, 0, 0};
+            const int error = call(TegraGM20BMethodCompilerUnmapLibrary, &in, sizeof in, nullptr, 0);
+            if (error && error != kIOReturnNotFound)
+                os_log_error(logger(), "SwitchShaderCompiler: unmapping client %llu library %llu: 0x%x",
+                             (unsigned long long)client, (unsigned long long)id, error);
+        });
     Pool::Hooks hooks;
     hooks.run = [this](Work &work, const std::function<void(int32_t)> &primary) {
         const int32_t result = run(work);
