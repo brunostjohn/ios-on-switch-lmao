@@ -330,7 +330,7 @@ void gm20bHeapForget(SwitchMetalHeap *heap, uint64_t va)
     SwitchMetalBuffer *made = (SwitchMetalBuffer *)b;
     made->_heap = self;
     made->_heapBytes = need.size;
-    gm20bHeapHold(self, {made->_raw.va, made->_raw.length, made->_raw.hostVisible});
+    gm20bHeapHold(self, {made->_raw.va, made->_raw.length, made->_raw.hostVisible, made->_raw.gpuVolatile});
     return (id<MTLBuffer>)b;
 }
 
@@ -361,8 +361,8 @@ void gm20bHeapForget(SwitchMetalHeap *heap, uint64_t va)
     made->_heap = self;
     made->_heapBytes = need.size;
     const gm20b::Texture::StorageRange storage = made->_raw.storageRange();
-    gm20bHeapHold(self,
-                  {storage.bytes ? storage.va : made->_raw.va, storage.bytes ? storage.bytes : 1, storage.hostVisible});
+    gm20bHeapHold(self, {storage.bytes ? storage.va : made->_raw.va, storage.bytes ? storage.bytes : 1,
+                         storage.hostVisible, storage.gpuVolatile});
     return (id<MTLTexture>)t;
 }
 

@@ -244,7 +244,7 @@ bool Device::createBufferTexture(const Buffer &b, uint64_t offset, uint32_t widt
     std::lock_guard<gm20b::Mutex> l(lock_);
     t.pitch = pitch;
     t.va = b.va + offset;
-    t.storage = {t.va, image * layers, b.hostVisible, b.span.storage};
+    t.storage = {t.va, image * layers, b.hostVisible, b.span.storage, b.gpuVolatile};
     if (layers > 1) {
         t.layers = layers;
         t.layerBytes = image;
@@ -285,7 +285,7 @@ bool Device::createTexelBuffer(const Buffer &b, uint64_t offset, uint32_t elemen
         t.pitch = elements * t.bpp;
         t.type = fx::kTexOneDBuffer;
         t.va = b.va + offset;
-        t.storage = {t.va, bytes, b.hostVisible, b.span.storage};
+        t.storage = {t.va, bytes, b.hostVisible, b.span.storage, b.gpuVolatile};
         t.cpu = b.cpu ? b.cpu + offset : nullptr;
         if (!(t.tic = allocTic()))
             return false;

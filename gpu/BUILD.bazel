@@ -185,6 +185,7 @@ PLUGIN_HDRS = [
     "//drivers/TegraGM20B:TegraGM20BHost.h",
     "//drivers/TegraGM20B:TegraGM20BPathsABI.h",
     "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",
+    "//drivers/TegraGM20B:TegraGM20BVolatileABI.h",
     "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
     "//kits/SwitchGM20B:class_headers",
     "//kits/SwitchGM20B:SwitchGM20BCaps.h",

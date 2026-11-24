@@ -909,6 +909,13 @@ void RenderEncoder::fetchBarrier(Push &p)
         break;
     }
 #endif
+    for (uint32_t j = 0; j < pass_.count && j < 8; j++) {
+        const Texture *t = pass_.color[j].texture;
+        if (t && !shadowOf_[j] && t->storageRange().gpuVolatile) {
+            kit(p, switch_gm20b_pixel_shader_barrier_sysmem);
+            return;
+        }
+    }
     kit(p, switch_gm20b_pixel_shader_barrier);
 }
 

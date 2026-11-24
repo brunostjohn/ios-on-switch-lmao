@@ -294,6 +294,34 @@ TEST_F(DevicePassBarrier, AFullSizeTargetKeepsTheDrain)
     EXPECT_EQ(unrelated.second, 0u);
 }
 
+TEST_F(DevicePassBarrier, VolatilePitchBufferTextureTargetKeepsTheDrain)
+{
+    constexpr uint32_t kWidth = 320, kHeight = 180, kPitch = kWidth * 4;
+    gm20b::Buffer volBuf, cachedBuf;
+    gm20b::Texture volTex, cachedTex, pyramid;
+    ASSERT_TRUE(dev.createBuffer(uint64_t(kPitch) * kHeight, volBuf, true, true, true));
+    ASSERT_TRUE(dev.createBuffer(uint64_t(kPitch) * kHeight, cachedBuf, true, true, false));
+    ASSERT_TRUE(dev.createBufferTexture(volBuf, 0, kWidth, kHeight, kPitch, kBgra8, volTex));
+    ASSERT_TRUE(dev.createBufferTexture(cachedBuf, 0, kWidth, kHeight, kPitch, kBgra8, cachedTex));
+    ASSERT_TRUE(dev.createTexture(160, 90, kBgra8, pyramid, false, true));
+    ASSERT_TRUE(volTex.renderable && !volTex.shadowTarget && volTex.storageRange().gpuVolatile);
+    ASSERT_TRUE(cachedTex.renderable && !cachedTex.shadowTarget && !cachedTex.storageRange().gpuVolatile);
+
+    const auto cachedResult = twoPasses(cachedTex, pyramid, &cachedTex, true);
+    EXPECT_EQ(cachedResult.first, 1u);
+    EXPECT_EQ(cachedResult.second, 0u);
+
+    const auto volResult = twoPasses(volTex, pyramid, &volTex, true);
+    EXPECT_EQ(volResult.first, 0u);
+    EXPECT_EQ(volResult.second, 1u);
+
+    dev.destroyTexture(pyramid);
+    dev.destroyTexture(cachedTex);
+    dev.destroyTexture(volTex);
+    dev.destroyBuffer(cachedBuf);
+    dev.destroyBuffer(volBuf);
+}
+
 TEST_F(DevicePassBarrier, FallbackDrainAvoidsDoubleWfiAndDropsConstantsOnlyAfterBufferWrite)
 {
     const auto shaderInvalValues = [](const std::vector<uint32_t> &words, uint32_t targetMethod) {

@@ -596,4 +596,58 @@ TEST_F(DeviceFetch, ConvexTwoTriangleQuadElidesIntraDrawBarrierAndDisjointQuadsE
     EXPECT_EQ(jobMethods().count(NVB197_PIXEL_SHADER_BARRIER), 1u);
 }
 
+TEST_F(DeviceFetch, FetchBarrierUsesSysmemBarOnlyForDirectVolatilePitchTargets)
+{
+    gm20b::Pipeline *pl = pipeline(false);
+    ASSERT_NE(pl, nullptr);
+
+    const auto barrierValues = [&]() {
+        const std::vector<uint32_t> &words = kernel_model::model.jobs.back().words;
+        std::vector<switch_gm20b_method> methods(words.size());
+        const long count = switch_gm20b_push_decode(words.data(), words.size(), methods.data(), methods.size());
+        EXPECT_GE(count, 0);
+        std::vector<uint32_t> out;
+        for (long i = 0; i < count; i++)
+            if (!methods[i].subchannel && methods[i].method == NVB197_PIXEL_SHADER_BARRIER)
+                out.push_back(methods[i].value);
+        return out;
+    };
+
+    const auto drawTwo = [&](gm20b::Texture &dest) {
+        into = &dest;
+        const Drawn d = drawOnce(pl, [](gm20b::RenderEncoder &e, const char **w) {
+            return e.draw(kTriangle, 0, 3, 1, 0, w) && e.draw(kTriangle, 0, 3, 1, 0, w);
+        });
+        into = &target;
+        EXPECT_TRUE(d.ok) << d.why;
+        EXPECT_EQ(d.split, 0u);
+        return barrierValues();
+    };
+
+    constexpr uint32_t kPitch = 64 * 4;
+    gm20b::Buffer volBuf, cachedBuf;
+    gm20b::Texture volDirect, volShadowed, cachedDirect;
+    ASSERT_TRUE(dev.createBuffer(uint64_t(kPitch) * 64 + 128, volBuf, true, true, true));
+    ASSERT_TRUE(dev.createBuffer(uint64_t(kPitch) * 64, cachedBuf, true, true, false));
+    ASSERT_TRUE(dev.createBufferTexture(volBuf, 0, 64, 64, kPitch, kRGBA8, volDirect));
+    ASSERT_TRUE(dev.createBufferTexture(volBuf, 64, 64, 64, kPitch, kRGBA8, volShadowed));
+    ASSERT_TRUE(dev.createBufferTexture(cachedBuf, 0, 64, 64, kPitch, kRGBA8, cachedDirect));
+    ASSERT_TRUE(volDirect.renderable && !volDirect.shadowTarget && volDirect.storageRange().gpuVolatile);
+    ASSERT_TRUE(!volShadowed.renderable && volShadowed.shadowTarget && volShadowed.storageRange().gpuVolatile);
+    ASSERT_TRUE(cachedDirect.renderable && !cachedDirect.shadowTarget && !cachedDirect.storageRange().gpuVolatile);
+
+    EXPECT_EQ(drawTwo(volDirect), (std::vector<uint32_t>{uint32_t(NVB197_PIXEL_SHADER_BARRIER_SYSMEMBAR_ENABLE_TRUE)}));
+    EXPECT_EQ(drawTwo(cachedDirect),
+              (std::vector<uint32_t>{uint32_t(NVB197_PIXEL_SHADER_BARRIER_SYSMEMBAR_ENABLE_FALSE)}));
+    EXPECT_EQ(drawTwo(volShadowed),
+              (std::vector<uint32_t>{uint32_t(NVB197_PIXEL_SHADER_BARRIER_SYSMEMBAR_ENABLE_FALSE)}));
+    EXPECT_EQ(drawTwo(target), (std::vector<uint32_t>{uint32_t(NVB197_PIXEL_SHADER_BARRIER_SYSMEMBAR_ENABLE_FALSE)}));
+
+    dev.destroyTexture(cachedDirect);
+    dev.destroyTexture(volShadowed);
+    dev.destroyTexture(volDirect);
+    dev.destroyBuffer(cachedBuf);
+    dev.destroyBuffer(volBuf);
+}
+
 }  // namespace

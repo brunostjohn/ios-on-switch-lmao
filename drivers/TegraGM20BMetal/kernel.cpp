@@ -4,6 +4,7 @@
 #include "lock.h"
 #include "kernel.h"
 #include "TegraGM20BClockABI.h"
+#include "TegraGM20BVolatileABI.h"
 #include "encode_profile.h"
 
 #include <IOKit/IOKitLib.h>
@@ -94,6 +95,7 @@ bool Kernel::open(std::string &err)
         err = "GetInfo failed";
         return false;
     }
+    volatileWrites_ = (info_.flags & TegraGM20BInfoVolatileWrites) != 0;
     const uint64_t start = (info_.va_start + kVaGranule - 1) & ~(kVaGranule - 1);
     uint64_t end = info_.va_end & ~(kVaGranule - 1);
     if (supportsPackImage() && end > TGM_PACK_WINDOW_VA)

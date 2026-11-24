@@ -578,8 +578,9 @@ public:
                                           const uint32_t origin[3], const uint32_t size[3], void *bytes, uint64_t row,
                                           uint64_t image, bool write, std::shared_ptr<void> owner);
     // `wc`: from the write-combined GPU pool (Buffer::wc), else (or full) pool memory as before; `hostVisible`: the CPU
-    // reads or writes it (Buffer::hostVisible), else it takes no CPU lease
-    bool createBuffer(uint64_t length, Buffer &b, bool wc = false, bool hostVisible = true);
+    // reads or writes it (Buffer::hostVisible), else it takes no CPU lease; `gpuVolatile`: bind WC memory VOL=1 in its own
+    // chunk pool so CPU writes never trigger whole-L2 invalidates and GPU writes flush FB without L2_FLUSH_DIRTY
+    bool createBuffer(uint64_t length, Buffer &b, bool wc = false, bool hostVisible = true, bool gpuVolatile = false);
 
     // The write-combined chunks held (non-dedicated) and their bytes (test/poolcheck.cpp: they follow what is in them)
     uint32_t wcChunksHeld();
@@ -1766,8 +1767,15 @@ private:
     std::vector<Chunk> zChunks_[kZetaFormats];
     // write-combined buffers' memory: GPU-pool BOs (BoAlloc coherent: the CPU maps them write-combined), sub-allocated by page
     std::vector<Chunk> wcChunks_;
+    // separate VOL=1 WC chunks for streaming shared buffers so shared textures in wcChunks_ stay L2-cached
+    std::vector<Chunk> volatileWcChunks_;
+    bool wcPoolAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &pool, uint64_t bytes, bool gpuVolatile,
+                     Span &s);
+    void wcPoolFree(std::vector<Chunk> &pool, Span &s, DeferredFrees &deferred);
     bool wcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s);
     void wcFree(Span &s, DeferredFrees &deferred);
+    bool volatileWcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s);
+    void volatileWcFree(Span &s, DeferredFrees &deferred);
 
     bool blAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, uint64_t align, Span &s)
     {
@@ -2111,6 +2119,11 @@ private:
     static Memory memoryOf(const Texture &t)
     {
         return t.arena ? Memory::Arena : t.blockLinear ? Memory::Bl : t.wc ? Memory::Wc : Memory::Pool;
+    }
+
+    static Memory memoryOf(const Buffer &b)
+    {
+        return b.arena ? Memory::Arena : b.wc ? (b.gpuVolatile ? Memory::VolatileWc : Memory::Wc) : Memory::Pool;
     }
 
     // Scratch colors occupy distinct tags within a pass and reuse them after its GPU boundary. Depth and shader-test

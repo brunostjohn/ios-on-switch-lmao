@@ -311,4 +311,63 @@ TEST(PassHazard, IndependentPassesNeedNoBarrierWhileSharedScratchKeepsPixelBarri
     EXPECT_TRUE(gm20b::pixelBarrierHolds(scratchChain, nextScratch));
 }
 
+TEST(PassHazard, VolatilePitchTextureIsExcludedFromPlainAndPixelBarrier)
+{
+    struct MockTexture {
+        struct Import {
+            uint64_t base = 0, bytes = 0;
+        };
+
+        struct Chain {
+            struct {
+                uint64_t bytes = 0;
+            } layout;
+        };
+
+        struct {
+            uint64_t bytes = 0;
+        } span;
+
+        struct {
+            bool gpuVolatile = false;
+        } storage;
+
+        uint64_t va = 0, layerBytes = 0;
+        uint32_t format = 0, width = 0, height = 0, pitch = 0, depth = 1, layers = 1;
+        uint8_t samples = 1;
+        bool comptags = false, blockLinear = false, memoryless = false, zeta = false, planar = false;
+        const Import *import = nullptr;
+        const Chain *chain = nullptr;
+    };
+
+    MockTexture cached;
+    cached.va = 0x10000;
+    cached.format = gm20b::kHazardBgra8;
+    cached.width = 320;
+    cached.height = 180;
+    cached.pitch = 320 * 4;
+    cached.storage.gpuVolatile = false;
+
+    MockTexture vol = cached;
+    vol.storage.gpuVolatile = true;
+
+    const HazardImage cachedImg = gm20b::hazardImage(cached);
+    const HazardImage volImg = gm20b::hazardImage(vol);
+    EXPECT_TRUE(cachedImg.plain);
+    EXPECT_EQ(cachedImg.layout, HazardLayout::Pitch);
+    EXPECT_FALSE(volImg.plain);
+    EXPECT_EQ(volImg.layout, HazardLayout::Pitch);
+
+    PassUses cachedLevel = pass(160, 90);
+    cachedLevel.write(image(0x200000, gm20b::kHazardBgra8, 160, 90));
+    cachedLevel.sample(cachedImg, false);
+    EXPECT_TRUE(gm20b::pixelBarrierHolds(after(cachedImg), cachedLevel));
+
+    PassUses volLevel = pass(160, 90);
+    volLevel.write(image(0x200000, gm20b::kHazardBgra8, 160, 90));
+    volLevel.sample(volImg, false);
+    EXPECT_FALSE(gm20b::pixelBarrierHolds(after(volImg), volLevel));
+    EXPECT_EQ(gm20b::drainCause(after(volImg), volLevel), gm20b::DrainCause::Read);
+}
+
 }  // namespace

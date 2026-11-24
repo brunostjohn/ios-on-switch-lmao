@@ -26,6 +26,7 @@
 #include "TegraGM20BCompilerABI.h"
 #include "TegraGM20BFencePageABI.h"
 #include "TegraGM20BJobABI.h"
+#include "TegraGM20BVolatileABI.h"
 #include <IOKit/IOKitLib.h>
 #include <mach/mach.h>
 #include <mach/memory_object_types.h>
@@ -328,7 +329,8 @@ struct Model {
     int refusal = kIOReturnNoResources;
     unsigned notResponding = 0;  // WaitFences answered kIOReturnNotResponding while GetStatus calls the channel healthy
     bool foreignTakesFreedSlot = false;
-    unsigned creates = 0, destroys = 0, staleReads = 0;
+    bool volatileWrites = true;
+    unsigned creates = 0, destroys = 0, staleReads = 0, cpuAcquireCalls = 0;
     // the channel epoch's count (channelEpochMoves)
     uint32_t epoch = 0;
     std::vector<uint64_t> freed;             // BoFree's handles, in order
@@ -850,6 +852,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         info.abi_version = TegraGM20BAbiVersion;
         info.flags = TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord |
                      TegraGM20BInfoCpuAccess | TegraGM20BInfoChannelEpoch |
+                     (model.volatileWrites ? TegraGM20BInfoVolatileWrites : 0u) |
                      (model.packImage.enabled ? TegraGM20BInfoPackImage : 0u) | model.infoFlags;
         info.fence_token = kernel_model::kFenceToken;
         info.cls_copy = 0xb0b5;
@@ -1046,6 +1049,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         const uint64_t handle = static_cast<const TegraGM20BAbiCpuAccess *>(input)->handle;
         if (model.bos.count(handle) && model.bos.at(handle).parkState != kernel_model::ParkState::Live)
             return kIOReturnNotReady;
+        model.cpuAcquireCalls++;
         model.cpuLease(handle);
         return KERN_SUCCESS;
     }

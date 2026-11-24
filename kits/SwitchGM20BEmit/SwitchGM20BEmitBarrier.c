@@ -63,6 +63,12 @@ void switch_gm20b_pixel_shader_barrier(struct nv_push *p)
     __push_immd(p, SUBC_NVB197, SWITCH_NVB197_INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED, 0);
 }
 
+void switch_gm20b_pixel_shader_barrier_sysmem(struct nv_push *p)
+{
+    P_IMMD(p, NVB197, PIXEL_SHADER_BARRIER, SYSMEMBAR_ENABLE_TRUE);
+    __push_immd(p, SUBC_NVB197, SWITCH_NVB197_INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED, 0);
+}
+
 void switch_gm20b_pass_barrier(struct nv_push *p, bool tiled_cache)
 {
     if (tiled_cache)

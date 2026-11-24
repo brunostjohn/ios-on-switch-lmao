@@ -31,6 +31,7 @@ struct TexelRows;  // texel_rows.h
 enum class Memory : uint8_t {
     Pool,
     Wc,
+    VolatileWc,
     Import,
     Bl,
     Arena
@@ -194,6 +195,7 @@ struct Texture {
         uint64_t va = 0, bytes = 0;
         bool hostVisible = false;
         const ArenaStorage *arena = nullptr;
+        bool gpuVolatile = false;
     } storage;
 
     StorageRange storageRange() const;
@@ -419,6 +421,7 @@ struct Buffer {
     // in memory once a DSB drains it (CommandBuffer::commit's, the replay's) and nothing is cleaned for the GPU, nor invalidated
     // after its writes; the CPU reading it is slow (uncached), which Core Animation's buffers (written, then drawn) never do.
     bool wc = false;
+    bool gpuVolatile = false;
     Import *import = nullptr;  // a caller's no-copy pages, else
     Span span;                 // pool memory
     Lease *lease = nullptr;    // as Texture::lease

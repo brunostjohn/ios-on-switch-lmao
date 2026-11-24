@@ -250,6 +250,7 @@ TEST(Emit3D, BarriersAsRawWritesThem)
 {
     expectRawSays("kit(p_, switch_gm20b_pass_barrier, tiledCache(dev_->k_.info()));");
     expectRawSays("kit(p, switch_gm20b_pass_drain, false);");
+    expectRawSays("kit(p, switch_gm20b_pixel_shader_barrier_sysmem);");
     expectRawSays("kit(p, switch_gm20b_pixel_shader_barrier);\n}");
     for (const bool tiled : {false, true}) {
         EXPECT_EQ(Words(ours([&](nv_push *p) {
@@ -280,6 +281,13 @@ TEST(Emit3D, BarriersAsRawWritesThem)
               })),
               Words(theirs([&](gm20b::Push &p) {
                   p.m(uint32_t(g::c_PIXEL_SHADER_BARRIER), 0);
+                  p.m(uint32_t(g::c_INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED), 0);
+              })));
+    EXPECT_EQ(Words(ours([&](nv_push *p) {
+                  switch_gm20b_pixel_shader_barrier_sysmem(p);
+              })),
+              Words(theirs([&](gm20b::Push &p) {
+                  p.m(uint32_t(g::c_PIXEL_SHADER_BARRIER), 1);
                   p.m(uint32_t(g::c_INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED), 0);
               })));
 }

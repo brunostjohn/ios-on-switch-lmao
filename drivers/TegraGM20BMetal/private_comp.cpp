@@ -305,7 +305,7 @@ bool Device::compressedFromPlain(Texture &t)
         headersOf(t.tic, tics);
     }
     Buffer headers;
-    const bool named = createBuffer(32 * tics.size(), headers, true);
+    const bool named = createBuffer(32 * tics.size(), headers, true, true, true);
     for (size_t i = 0; named && i < tics.size(); i++) {
         uint32_t w[8];
         memcpy(w, tic_.cpu + 32 * tics[i], 32);
@@ -343,7 +343,7 @@ bool Device::compressedFromPlain(Texture &t)
     if (!copied) {
         compReadyPush(bo, kind);
         if (named)
-            freeSpan(l, headers.span, headers.wc ? Memory::Wc : Memory::Pool, headers.lease, deferred);
+            freeSpan(l, headers.span, memoryOf(headers), headers.lease, deferred);
         os_log_error(OS_LOG_DEFAULT,
                      "SwitchMetal: a plain %ux%u texture of format %u could not move to compressed memory", t.width,
                      t.height, t.format);
@@ -405,7 +405,7 @@ void Device::freeMovedPlain()
             tiledFree(zChunks_[it->zeta], it->span, deferred);
         else
             freeSpan(l, it->span, Memory::Bl, none, deferred);
-        freeSpan(l, it->headers.span, it->headers.wc ? Memory::Wc : Memory::Pool, it->headers.lease, deferred);
+        freeSpan(l, it->headers.span, memoryOf(it->headers), it->headers.lease, deferred);
 #if SWITCH_METAL_DIAGNOSTICS
         if (glassMem)
             for (const uint32_t tic : it->tics)

@@ -316,6 +316,7 @@ private:
     UseMemo named_;  // (use_memo.h)
     JobVisibility visibility_ = JobVisibility::Legacy;
     bool externalWrites_ = false;
+    bool volatileWrites_ = false;
     EventPublication publication_;
     BarrierEngine lastEngine_ = BarrierEngine::None;  // the engine of the work encoded last (barrier_forms.h)
     PassChain chain_;                                 // the passes since the last drain (pass_hazard.h)

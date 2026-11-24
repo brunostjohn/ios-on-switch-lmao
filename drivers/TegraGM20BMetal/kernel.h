@@ -305,6 +305,11 @@ public:
         return (info_.flags & TegraGM20BInfoSubmitAddress) != 0;
     }
 
+    bool volatileWrites() const
+    {
+        return volatileWrites_;
+    }
+
     // Internal fences a job may carry (TegraGM20BPushFence); 0: each fence is a submission of its own.
     uint32_t maxFences() const
     {
@@ -372,6 +377,7 @@ private:
     void freeVa(uint64_t va, uint64_t bytes);
     uint32_t conn_ = 0;
     bool tunnel_ = false;
+    bool volatileWrites_ = false;
     FreeObserver *freeObserver_ = nullptr;
     // A SurfaceWrites failed: imports stop saying the GPU only samples them.
     std::atomic<bool> importsWritten_{false};

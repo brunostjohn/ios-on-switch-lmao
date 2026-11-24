@@ -119,6 +119,7 @@ CommandBuffer *Device::begin()
     cb.loops_ = {};
     cb.visibility_ = JobVisibility::Legacy;
     cb.externalWrites_ = false;
+    cb.volatileWrites_ = false;
     cb.publication_ = {};
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     cb.forceWholePrograms_ = cb.inlineStates_ = false;
@@ -513,8 +514,10 @@ bool CommandBuffer::commit(uint32_t &seqno)
     }
     const bool pushed = segments_.submit(maxPushes, maxFences, [&](size_t at, size_t n) {
         const bool closing = at + n == segments_.size();
+        const JobVisibility volatileVis = d.k_.volatileWrites() ? JobVisibility::Volatile : JobVisibility::External;
         const JobVisibility visibility = visibility_ == JobVisibility::Legacy ? JobVisibility::Legacy
                                          : externalWrites_ && closing         ? JobVisibility::External
+                                         : volatileWrites_ && closing         ? volatileVis
                                                                               : JobVisibility::Internal;
         const uint32_t waitCount = uint32_t(sharedWaits_.size() - waited);
         const uint32_t signalCount =

@@ -203,7 +203,7 @@ std::string Device::vaOwner(uint64_t va)
                     [&](const std::vector<Chunk> &z) {
                         return chunk(z, "a zeta chunk");
                     }) ||
-        chunk(wcChunks_, "a write-combined chunk"))
+        chunk(wcChunks_, "a write-combined chunk") || chunk(volatileWcChunks_, "a volatile write-combined chunk"))
         return line;
     for (const auto &[key, i] : surfaces_)
         if (in(i->bo, i->bo.bytes, i->kind == TGM_LAYOUT_KIND ? "a block-linear IOSurface" : "a pitch IOSurface"))

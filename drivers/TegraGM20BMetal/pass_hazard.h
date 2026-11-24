@@ -107,8 +107,8 @@ template <class Texture> HazardImage hazardImage(const Texture &t)
     i.width = t.width;
     i.height = t.height;
     i.layout = t.comptags ? HazardLayout::Compressed : t.blockLinear ? HazardLayout::BlockLinear : HazardLayout::Pitch;
-    i.plain =
-        t.va && !t.memoryless && t.samples == 1 && t.layers == 1 && t.depth == 1 && !t.chain && !t.zeta && !t.planar;
+    i.plain = t.va && !t.memoryless && !t.storage.gpuVolatile && t.samples == 1 && t.layers == 1 && t.depth == 1 &&
+              !t.chain && !t.zeta && !t.planar;
     return i;
 }
 

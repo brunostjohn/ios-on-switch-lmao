@@ -113,7 +113,7 @@ Bo Device::bufferBoLocked(const Buffer &buffer) const
     const uint32_t index = buffer.span.chunk;
     if (buffer.arena)
         return index < arenas_.size() && !arenas_[index].purged ? arenas_[index].bo : Bo{};
-    const auto &chunks = buffer.wc ? wcChunks_ : chunks_;
+    const auto &chunks = buffer.wc ? (buffer.gpuVolatile ? volatileWcChunks_ : wcChunks_) : chunks_;
     return index < chunks.size() ? chunks[index].bo : Bo{};
 }
 
@@ -249,6 +249,10 @@ bool Device::hostAccess(const Buffer &buffer, const void *cpu, uint64_t bytes, b
 {
     if (!hostRangeContains(buffer.cpu, buffer.length, cpu, bytes))
         return false;
+    // WC + VOL=1 bypasses both CPU D-cache and GPU L2; taking a kernel CPU lease would evict the volatile chunk from
+    // ResourceSet, stall on host1x-bridge, and bump host_epoch.
+    if (buffer.wc && buffer.gpuVolatile)
+        return true;
     if (buffer.span.storage)
         return hostArenaAccess(*buffer.span.storage, cpu, bytes, write, access);
     Bo bo;
@@ -360,6 +364,9 @@ void Device::dropLocked(std::unique_lock<gm20b::Mutex> &l, Lease *lease, Deferre
     case Memory::Wc:
         wcFree(lease->span, deferred);
         break;
+    case Memory::VolatileWc:
+        volatileWcFree(lease->span, deferred);
+        break;
     case Memory::Import:
         release(lease->import, deferred);
         break;
@@ -394,6 +401,9 @@ void Device::freeSpan(std::unique_lock<gm20b::Mutex> &l, Span &span, Memory from
             break;
         case Memory::Wc:
             wcFree(span, deferred);
+            break;
+        case Memory::VolatileWc:
+            volatileWcFree(span, deferred);
             break;
         case Memory::Import:
             break;

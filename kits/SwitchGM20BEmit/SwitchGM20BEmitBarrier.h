@@ -41,6 +41,9 @@ void switch_gm20b_tiled_cache_flush(struct nv_push *p);
 // A fragment reading what earlier fragments of the same pass wrote (texture barrier, framebuffer fetch)
 void switch_gm20b_pixel_shader_barrier(struct nv_push *p);
 
+// Same barrier with SYSMEMBAR_ENABLE_TRUE so VOL=1 targets that bypass L2 drain ROP writes to DRAM before TEX reads
+void switch_gm20b_pixel_shader_barrier_sysmem(struct nv_push *p);
+
 // In-pass memory barrier: INVALIDATE_SHADER_CACHES with FLUSH_DATA waits for idle on Maxwell before flushing SM L1
 void switch_gm20b_pass_barrier(struct nv_push *p, bool tiled_cache);
 

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 // A buffer of private storage, which no CPU reads or writes, takes no CPU lease as it is made: a lease reaches the
 // kernel's whole BO, the pool chunk the buffer lies in, and takes that chunk out of the device's resource set for good
-// (SwitchGpuResourceSet.cpp cpu_reached), so each later job names every resource in it as a use of its own. A shared
-// one keeps its lease, and a private buffer placed in a chunk a host-visible buffer touched before keeps its lease too.
+// (SwitchGpuResourceSet.cpp cpu_reached), so each later job names every resource in it as a use of its own. A volatile
+// write-combined shared buffer likewise stays in the resource set; a shared fallback into pool memory takes its lease,
+// and a private buffer placed in a chunk a host-visible buffer touched before keeps its lease too.
 #include "facade_harness.h"
 #include "bazel/testing/fresh_process.h"
 
@@ -44,9 +45,10 @@ void aPrivateBufferTakesNoLease()
     id<MTLBuffer> shared = [device newBufferWithLength:kLength options:MTLResourceStorageModeShared];
     ASSERT_TRUE(shared != nil);
     EXPECT_NE(shared.contents, nullptr);
+    EXPECT_TRUE(((SwitchMetalBuffer *)shared)->_raw.gpuVolatile);
     const kernel_model::BoState *sharedBo = boAt(((SwitchMetalBuffer *)shared)->_raw.va);
     ASSERT_NE(sharedBo, nullptr);
-    EXPECT_TRUE(sharedBo->cpuReached) << "a shared buffer keeps its initial CPU lease";
+    EXPECT_FALSE(sharedBo->cpuReached) << "a volatile write-combined shared buffer stays in the resource set";
 }
 
 std::atomic<bool> gRefuseCoherent{false};

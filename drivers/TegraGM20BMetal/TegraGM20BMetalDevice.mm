@@ -291,7 +291,7 @@
     // before a draw reads it, nothing to scan for the vertices an indexed draw reads (r16: 600-1300 KB cleaned a command buffer)
     const bool wc = (o & MTLResourceStorageModeMask) == MTLResourceStorageModeShared;
     const bool hostVisible = (o & MTLResourceStorageModeMask) != MTLResourceStorageModePrivate;
-    if (!gRM->raw->createBuffer(n ? n : 16, b->_raw, wc, hostVisible)) {
+    if (!gRM->raw->createBuffer(n ? n : 16, b->_raw, wc, hostVisible, wc)) {
         os_log_error(gm20bLog(), "SwitchMetal: %{public}s: no memory for a %lu-byte buffer: none made", getprogname(),
                      (unsigned long)n);
         return nil;

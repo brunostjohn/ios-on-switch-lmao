@@ -107,6 +107,11 @@ TEST(DeviceParkedTsan, ConcurrentParkUnparkReclaimAllocPurgeRestoreHeldAndSubmit
                     wc.cpu[0] = uint8_t(r);
                     dev.destroyBuffer(wc);
                 }
+                gm20b::Buffer volWc;
+                if (dev.createBuffer(64 << 10, volWc, true, true, true)) {
+                    volWc.cpu[0] = uint8_t(r);
+                    dev.destroyBuffer(volWc);
+                }
                 gm20b::Texture tiled;
                 if (dev.createTexture(512, 512, kBgra8, tiled, false, true))
                     dev.destroyTexture(tiled);
@@ -326,6 +331,17 @@ TEST(DeviceParkedTsan, TeardownWaitsForInFlightOffLockParkUnparkAndAllocWithoutU
         [](gm20b::Device &d) {
             gm20b::Buffer b;
             const bool ok = d.createBuffer(4 << 20, b, false);
+            if (ok)
+                d.destroyBuffer(b);
+            return ok;
+        },
+        true);
+
+    runCase(
+        "volatileWcAlloc", TegraGM20BMethodBoAlloc, [](gm20b::Device &) {},
+        [](gm20b::Device &d) {
+            gm20b::Buffer b;
+            const bool ok = d.createBuffer(64 << 10, b, true, true, true);
             if (ok)
                 d.destroyBuffer(b);
             return ok;
