@@ -143,8 +143,6 @@ switch_gpu_backing_collision collision(const switch_gpu_backing *found, const ui
 		return SWITCH_GPU_BACKING_OTHER_PAGES;
 	if (grows && (found->gpu_memory_flags & SWITCH_GPU_BACKING_MEMORY_FIXED))
 		return SWITCH_GPU_BACKING_GROWS_FIXED;
-	if (grows && found->mapping_engines)
-		return SWITCH_GPU_BACKING_GROWS_MAPPED;
 	if (grows && found->owner && !owner)
 		return SWITCH_GPU_BACKING_GROWS_UNOWNED;
 	if (grows && (found->cpu_readers || found->cpu_writers || found->gpu_admission_readers ||

@@ -355,6 +355,7 @@ host_test(
         "//drivers/TegraVIC:TegraVICConfig.h",
         "//drivers/TegraVIC:TegraVICFormats.h",
         "//drivers/TegraVIC:TegraVIC.h",
+        "//drivers/TegraVIC:SwitchVICSurfaceRange.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
