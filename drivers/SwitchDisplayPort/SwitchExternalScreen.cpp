@@ -207,13 +207,14 @@ void SwitchExternalScreen::publishScanoutLimits()
     publishLimits(this, "DisplayPipePlaneBaseAlignment", base, 1, 64);
     const Limit layers[] = {{"MaxNumLayers", 1}};
     publishLimits(this, "IOMFBNumLayers", layers, 1, 32);
-    const Limit scaling[] = {{"RGBLayer_MinScaleFraction", 1}, {"RGBLayer_MaxScale", 1},
+    const Limit scaling[] = {{"RGBLayer_MinScaleFraction", switch_external::kMinScaleFraction},
+                             {"RGBLayer_MaxScale", switch_external::kMaxScale},
                              {"YUVLayer_MinScaleFraction", 1}, {"YUVLayer_MaxScale", 1}};
     publishLimits(this, "IOMFBScalingLimits", scaling, 4, 32);
     setProperty("IOMFBYUVPackedUnSupported", true);
     setProperty("IOMFBYUV420UnSupported", true);
     setProperty("IOMFBDisableFlip", true);
-    publishSourceLimits(148500000u);
+    publishSourceLimits(SWITCH_DP_MAX_PIXEL_KHZ * 1000u);
 }
 
 bool SwitchExternalScreen::publishSourceLimits(uint32_t clockHz)
@@ -423,7 +424,7 @@ void SwitchExternalScreen::clearSinkProperties()
     removeProperty("Transport");
     removeProperty("IOMFBUUID");
     removeProperty("EDID");
-    publishSourceLimits(148500000u);
+    publishSourceLimits(SWITCH_DP_MAX_PIXEL_KHZ * 1000u);
 }
 
 bool SwitchExternalScreen::getRefreshAttributes(uint64_t *periods, uint32_t internal)

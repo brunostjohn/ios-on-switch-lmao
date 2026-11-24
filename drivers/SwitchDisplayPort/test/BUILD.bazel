@@ -110,6 +110,7 @@ host_test(
         "//drivers/SwitchDisplayPort:TegraDisplayB.h",
         "//drivers/SwitchDisplayPort:TegraDpaux1.h",
         "//drivers/SwitchDisplayPort:TegraSor1.h",
+        "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
         "//drivers/SwitchPower:SwitchDisplayMemory.h",
         "//drivers/TegraDisplayFlip:SwitchDisplayPriority.h",
         "//drivers/TegraSMMU:TegraSMMU.h",

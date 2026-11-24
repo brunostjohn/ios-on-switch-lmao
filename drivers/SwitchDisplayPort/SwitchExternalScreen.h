@@ -53,9 +53,9 @@ public:
     void platformRefreshRates() override {}
 private:
     static constexpr unsigned kSlots = 3;
-    static constexpr uint64_t kSlotBase = 0x10000000, kSlotSpan = 16ULL << 20;
+    static constexpr uint64_t kSlotBase = 0x10000000, kSlotSpan = 68ULL << 20;
     static constexpr uint32_t kTablePages = 1 + kSlots * (kSlotSpan >> 22);
-    static_assert(kTablePages == 13);
+    static_assert(kTablePages == 52);
     static_assert(kTablePages == 1 + TegraSMMUDomain::tablesFor(kSlotBase, kSlots * kSlotSpan));
     struct Slot {
         SwitchNativeScanout read;

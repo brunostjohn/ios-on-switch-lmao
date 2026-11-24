@@ -20,7 +20,7 @@ static inline int switch_gpu_surface_is_external_scanout(uint32_t width, uint32_
 {
 	if (!external_active || !compositor || bpp != 4u || !width || !height)
 		return 0;
-	return (width <= 1920u && height <= 1200u) || (width <= 1200u && height <= 1920u);
+	return width <= 4096u && height <= 4096u;
 }
 
 static inline uint32_t switch_gpu_surface_comp_kind(uint32_t width, uint32_t height, uint32_t bpp,

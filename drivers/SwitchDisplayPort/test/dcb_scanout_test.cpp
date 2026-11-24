@@ -14,8 +14,10 @@ constexpr uintptr_t kStateAccess = dc + 4 * 0x40, kDispWinOptions = dc + 4 * 0x4
 constexpr uintptr_t kDisplayCmd = dc + 4 * 0x32, kDisplayPwr = dc + 4 * 0x36;
 constexpr uintptr_t kWinBufCtrl = dc + 4 * 0x702, kWinColorDepth = dc + 4 * 0x703, kWinPos = dc + 4 * 0x704;
 constexpr uintptr_t kWinSize = dc + 4 * 0x705, kWinPrescaled = dc + 4 * 0x706;
+constexpr uintptr_t kWinHInit = dc + 4 * 0x707, kWinVInit = dc + 4 * 0x708, kWinDda = dc + 4 * 0x709;
 constexpr uintptr_t kWinLineStride = dc + 4 * 0x70a, kWinBufStride = dc + 4 * 0x70b, kWinUvBufStride = dc + 4 * 0x70c,
                     kWinBlend = dc + 4 * 0x716;
+constexpr uintptr_t kWinHFilter0 = dc + 4 * 0x601, kWinVFilter0 = dc + 4 * 0x619;
 constexpr uintptr_t kWinHOffset = dc + 4 * 0x806, kWinVOffset = dc + 4 * 0x808, kWinKind = dc + 4 * 0x80b,
                     kWinStartAddrHi = dc + 4 * 0x80d, kWinCdeCtrl = dc + 4 * 0x82f;
 constexpr uint32_t kMcHotResetCtrl = 0x200, kMcHotResetStatus = 0x204, kMcHotResetDcb = 1u << 3;
@@ -83,6 +85,11 @@ TEST(DisplayB, OnlyAnActivatedWindowCanRetireOrReleaseItsBandwidth)
     EXPECT_EQ(xusbModel().registers.at(kWinUvBufStride), 0u);
     EXPECT_EQ(xusbModel().registers.at(kWinStartAddrHi), 0u);
     EXPECT_EQ(xusbModel().registers.at(kWinCdeCtrl), 0u);
+    EXPECT_EQ(xusbModel().registers.at(kWinHFilter0), 0x00008000u);
+    EXPECT_EQ(xusbModel().registers.at(kWinHFilter0 + 4 * 15), 0x3c7c08f1u);
+    EXPECT_EQ(xusbModel().registers.at(kWinVFilter0), 128u);
+    EXPECT_EQ(xusbModel().registers.at(kWinVFilter0 + 4 * 15), 8u);
+    EXPECT_LT(xusbFirstWrite(options, 0u), xusbFirstWrite(kWinHFilter0));
     xusbModel().log.clear();
     admit = false;
     ASSERT_TRUE(display.scanout(fullFrame(0x10000000)));
@@ -197,10 +204,58 @@ TEST(DisplayB, ProgramsWindowGeometryForPillarboxedAndSubRectFrames)
     EXPECT_EQ(xusbWritesTo(kWinVOffset), std::vector<uint32_t>{22u});
     EXPECT_EQ(xusbWritesTo(kWinKind), std::vector<uint32_t>{0x42u});
     EXPECT_EQ(xusbWritesTo(address), std::vector<uint32_t>{0x1004c000u});
-    EXPECT_EQ(plans.size(), 1u);
+    ASSERT_EQ(plans.size(), 2u);
+    EXPECT_EQ(plans.back().windows[0].required_buffering_bytes, 608u * 4u);
 
     xusbModel().registers[control] = 0;
     EXPECT_EQ(display.windowLatch(0x1004c000u), TegraDisplayB::Latch::Active);
+}
+
+TEST(DisplayB, ProgramsHardwareScalingDdaFiltersAndMemoryWindow)
+{
+    xusbModelReset();
+    plans.clear();
+    admit = true;
+    TegraDisplayB display;
+    char why[96] = {};
+    ASSERT_TRUE(display.powerUp(why, sizeof(why))) << why;
+    const switch_dp_mode ultrawide = {319750, 3440, 48, 32, 80, 1440, 3, 10, 28, true, true, true};
+    display.setMode(ultrawide);
+
+    xusbModel().log.clear();
+    const TegraDisplayB::Frame upscaled = {
+        0x10000000u, 5120u, 0x42u, 12u, 440u, (1440u << 16) | 2560u, (720u << 16) | (1280u * 4u),
+        0u, 0u, (0x0800u << 16) | 0x0800u, 0u, 0u, (1u << 30) | (1u << 8) | (1u << 10),
+    };
+    ASSERT_TRUE(display.scanout(upscaled));
+    EXPECT_EQ(xusbWritesTo(options), std::vector<uint32_t>{(1u << 30) | (1u << 8) | (1u << 10)});
+    EXPECT_EQ(xusbWritesTo(kWinDda), std::vector<uint32_t>{(0x0800u << 16) | 0x0800u});
+    EXPECT_EQ(xusbWritesTo(kWinHInit), std::vector<uint32_t>{0u});
+    EXPECT_EQ(xusbWritesTo(kWinVInit), std::vector<uint32_t>{0u});
+    ASSERT_EQ(plans.size(), 1u);
+    EXPECT_EQ(plans.back().peak_bytes_per_second, 319750000ULL * 4u);
+    EXPECT_EQ(plans.back().windows[0].required_buffering_bytes, 1280u * 3u * 4u);
+
+    xusbModel().log.clear();
+    auto nextAddr = upscaled;
+    nextAddr.iova = 0x14400000u;
+    ASSERT_TRUE(display.scanout(nextAddr));
+    EXPECT_TRUE(xusbWritesTo(options).empty());
+    EXPECT_TRUE(xusbWritesTo(kWinDda).empty());
+    EXPECT_EQ(plans.size(), 1u);
+
+    xusbModel().log.clear();
+    const TegraDisplayB::Frame downscaled = {
+        0x18800000u, 10240u, 0x42u, 12u, 0u, (720u << 16) | 1280u, (1440u << 16) | (2560u * 4u),
+        0u, 0u, (0x2000u << 16) | 0x2000u, 0x0800u, 0x0800u, (1u << 30) | (1u << 8) | (1u << 10),
+    };
+    ASSERT_TRUE(display.scanout(downscaled));
+    EXPECT_EQ(xusbWritesTo(kWinDda), std::vector<uint32_t>{(0x2000u << 16) | 0x2000u});
+    EXPECT_EQ(xusbWritesTo(kWinHInit), std::vector<uint32_t>{0x0800u});
+    EXPECT_EQ(xusbWritesTo(kWinVInit), std::vector<uint32_t>{0x0800u});
+    ASSERT_EQ(plans.size(), 2u);
+    EXPECT_EQ(plans.back().peak_bytes_per_second, 319750000ULL * 4u * 4u);
+    EXPECT_EQ(plans.back().windows[0].required_buffering_bytes, 2560u * 3u * 4u);
 }
 
 TEST(DisplayB, TeardownUsesActiveWriteMuxAndFlushesMcHotResetBeforeReset)

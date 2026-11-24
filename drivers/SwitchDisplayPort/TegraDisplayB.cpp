@@ -13,6 +13,7 @@
 #include "TegraDisplayB.h"
 
 #include <IOKit/IOLib.h>
+#include "../SwitchPower/SwitchDisplayBandwidth.h"
 #include "../TegraDisplayFlip/SwitchDisplayPriority.h"
 #include "../TegraSMMU/TegraSMMU.h"
 
@@ -55,6 +56,8 @@ enum : uint32_t {
     DC_DISP_DISP_COLOR_CONTROL = 0x430,
     DC_DISP_DC_MCCIF_FIFOCTRL = 0x480,
     DC_DISP_BLEND_BACKGROUND_COLOR = 0x4e4,
+    DC_WINC_H_FILTER_P00 = 0x601,
+    DC_WINC_V_FILTER_P00 = 0x619,
     DC_WIN_WIN_OPTIONS = 0x700,
     DC_WIN_BYTE_SWAP = 0x701,
     DC_WIN_BUFFER_CONTROL = 0x702,
@@ -84,6 +87,16 @@ constexpr uint32_t kGeneralActReq = 1u << 0, kWinAActReq = 1u << 1, kGeneralUpda
 constexpr uint32_t kFrameEnd = 1u << 1, kContinuousDisplay = 1u << 5, kSor1Enable = 1u << 26;
 constexpr uint32_t kPowerAll = 0x50155;  // PW0..PW4, PM0, PM1
 constexpr uint32_t kWindowA = 1u << 4, kWinEnable = 1u << 30, kB8G8R8A8 = 12, kDdaOne = 0x1000;
+constexpr uint32_t kHFilterTaps[16] = {0x00008000, 0x3e087ce1, 0x3b117ac1, 0x591b73aa, 0x57256d9a, 0x552f668b,
+                                       0x73385e8b, 0x72435583, 0x714c4c8b, 0x70554393, 0x715e389b, 0x71662faa,
+                                       0x536d25ba, 0x55731bca, 0x387a11d9, 0x3c7c08f1};
+
+bool sameMemoryWindow(const switch_display_memory_window &a, const switch_display_memory_window &b)
+{
+    return a.active == b.active && a.peak_bytes_per_second == b.peak_bytes_per_second &&
+           a.required_buffering_bytes == b.required_buffering_bytes &&
+           a.latency_buffering_bytes == b.latency_buffering_bytes;
+}
 
 struct Reg {
     uint32_t index, value;
@@ -161,10 +174,17 @@ void TegraDisplayB::setMode(const struct switch_dp_mode &mode)
 {
     memory = {1, mode.pixel_khz * 1000u, mode.hactive, mode.vactive,
               switch_dp_mode_htotal(&mode), switch_dp_mode_vtotal(&mode), 0, 0, {}};
+    requestedWindow = {};
     active = {};
     windowEnabled = false;
     emcRefusedLogged = false;
     write(DC_CMD_DISPLAY_WINDOW_HEADER, kWindowA);
+    write(DC_WIN_WIN_OPTIONS, 0);
+    // WINC filter tap registers are unshadowed (TRM 24.5.4) and must be programmed while window A is off.
+    for (uint32_t i = 0; i < 16u; ++i) {
+        write(DC_WINC_H_FILTER_P00 + i, kHFilterTaps[i]);
+        write(DC_WINC_V_FILTER_P00 + i, 128u - 8u * i);
+    }
     write(DC_WIN_BUFFER_CONTROL, 0);
     write(DC_WIN_COLOR_DEPTH, kB8G8R8A8);
     write(DC_WIN_BYTE_SWAP, 0);
@@ -212,24 +232,34 @@ void TegraDisplayB::enableSor(bool on)
 
 bool TegraDisplayB::scanout(const Frame &frame)
 {
-    if (!windowEnabled) {
-        auto next = memory;
-        next.peak_bytes_per_second = uint64_t(next.pixel_clock_hz) * 4;
-        if (!switch_display::memoryWindow(next.windows[0], next.peak_bytes_per_second, next.active_width,
-                                          next.active_height, next.active_width, next.active_height, false,
-                                          frame.kind == 0, false))
-            return false;
+    const uint32_t srcW = (frame.prescaled & 0xffffu) / 4u;
+    const uint32_t srcH = frame.prescaled >> 16;
+    const uint32_t dstW = frame.size & 0xffffu;
+    const uint32_t dstH = frame.size >> 16;
+    auto next = memory;
+    uint64_t bw = uint64_t(next.pixel_clock_hz) * 4u;
+    bw = switch_display::scaled(bw, srcW, dstW);
+    bw = switch_display::scaled(bw, srcH, dstH);
+    next.peak_bytes_per_second = bw;
+    if (!switch_display::memoryWindow(next.windows[0], bw, srcW, srcH, dstW, dstH, false, frame.kind == 0, false))
+        return false;
+    if (!windowEnabled || !sameMemoryWindow(requestedWindow, next.windows[0])) {
+        requestedWindow = next.windows[0];
         if (const int err = switch_emc_display_memory_reserve(&next); err == 0) {
             memory = next;
+            emcRefusedLogged = false;
         } else if (!emcRefusedLogged) {
             emcRefusedLogged = true;
             IOLog("SwitchDisplayPort: DCB memory plan refused (%d); continuing without EMC reservation\n", err);
         }
     }
+    const uint32_t options = frame.options | kWinEnable;
     write(DC_CMD_DISPLAY_WINDOW_HEADER, kWindowA);
-    if (!windowEnabled) {
+    if (!windowEnabled)
         write(DC_WINBUF_BLEND_LAYER_CONTROL, (1u << 24) | 255);
-        write(DC_WIN_WIN_OPTIONS, kWinEnable);
+    if (!windowEnabled || active.options != options) {
+        active.options = options;
+        write(DC_WIN_WIN_OPTIONS, active.options);
     }
     if (!windowEnabled || active.colorDepth != frame.colorDepth) {
         active.colorDepth = frame.colorDepth;
@@ -246,6 +276,18 @@ bool TegraDisplayB::scanout(const Frame &frame)
     if (!windowEnabled || active.prescaled != frame.prescaled) {
         active.prescaled = frame.prescaled;
         write(DC_WIN_PRESCALED_SIZE, active.prescaled);
+    }
+    if (!windowEnabled || active.hInitial != frame.hInitial) {
+        active.hInitial = frame.hInitial;
+        write(DC_WIN_H_INITIAL_DDA, active.hInitial);
+    }
+    if (!windowEnabled || active.vInitial != frame.vInitial) {
+        active.vInitial = frame.vInitial;
+        write(DC_WIN_V_INITIAL_DDA, active.vInitial);
+    }
+    if (!windowEnabled || active.dda != frame.dda) {
+        active.dda = frame.dda;
+        write(DC_WIN_DDA_INC, active.dda);
     }
     if (!windowEnabled || active.stride != frame.stride) {
         active.stride = frame.stride;
@@ -274,12 +316,14 @@ bool TegraDisplayB::scanout(const Frame &frame)
 void TegraDisplayB::resetWindowCache()
 {
     windowEnabled = false;
+    requestedWindow = {};
     active = {};
 }
 
 void TegraDisplayB::windowOff()
 {
     windowEnabled = false;
+    requestedWindow = {};
     write(DC_CMD_DISPLAY_WINDOW_HEADER, kWindowA);
     write(DC_WIN_WIN_OPTIONS, 0);
     commit(kWinAActReq);
@@ -337,6 +381,7 @@ void TegraDisplayB::powerDown()
     frameInterruptEnabled = false;
     windowEnabled = false;
     emcRefusedLogged = false;
+    requestedWindow = {};
     active = {};
     write(DC_CMD_INT_MASK, 0);
     write(DC_CMD_STATE_ACCESS, kStateAccessReadActive | kStateAccessWriteActive);

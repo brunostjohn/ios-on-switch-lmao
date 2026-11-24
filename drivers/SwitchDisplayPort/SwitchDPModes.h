@@ -8,10 +8,11 @@
 #include <stdint.h>
 
 // NOLINTBEGIN(modernize-avoid-c-style-cast,modernize-loop-convert): plain C, compiled by C host tests as well
-#define SWITCH_DP_MAX_WIDTH      1920u
-#define SWITCH_DP_MAX_HEIGHT     1080u
+#define SWITCH_DP_MAX_WIDTH      4096u
+#define SWITCH_DP_MAX_HEIGHT     4096u
+#define SWITCH_DP_MAX_PIXEL_KHZ  750000u
 #define SWITCH_DP_BITS_PER_PIXEL 24u
-#define SWITCH_DP_MAX_MODES      32u
+#define SWITCH_DP_MAX_MODES      64u
 
 struct switch_dp_mode {
     uint32_t pixel_khz;
@@ -47,7 +48,7 @@ static inline bool switch_dp_source_timing(const struct switch_dp_mode *m)
 {
     const uint64_t total = (uint64_t)switch_dp_mode_htotal(m) * switch_dp_mode_vtotal(m);
     return m->hactive <= SWITCH_DP_MAX_WIDTH && m->vactive <= SWITCH_DP_MAX_HEIGHT &&
-           m->pixel_khz <= 750000u && (uint64_t)m->pixel_khz * 10000u <= total * 605u;
+           m->pixel_khz <= SWITCH_DP_MAX_PIXEL_KHZ && (uint64_t)m->pixel_khz * 10000u <= total * 605u;
 }
 
 static inline bool switch_dp_edid_block_valid(const uint8_t *block)
@@ -199,7 +200,7 @@ static inline void switch_dp_edid_cta(const uint8_t *block, struct switch_dp_mod
             if (switch_dp_cta_vic(vic, &mode)) {
                 mode.preferred = svd >= 129 && svd <= 192;
                 switch_dp_modes_add(list, &mode);
-                if (vic == 4 || vic == 16) {
+                if (vic == 4 || vic == 16 || vic == 95 || vic == 97 || vic == 100 || vic == 102) {
                     mode.pixel_khz = (mode.pixel_khz * 1000u + 500u) / 1001u;
                     mode.preferred = false;
                     switch_dp_modes_add(list, &mode);
@@ -255,12 +256,73 @@ static inline bool switch_dp_standard_timing(uint8_t b0, uint8_t b1, bool edid13
     return false;
 }
 
+static inline void switch_dp_edid_displayid(const uint8_t *block, struct switch_dp_mode_list *list)
+{
+    const unsigned section_len = block[2];
+    if (block[0] != 0x70u || section_len > 121u)
+        return;
+    uint8_t sum = 0;
+    for (unsigned i = 1; i <= 5u + section_len; ++i)
+        sum = (uint8_t)(sum + block[i]);
+    if (sum != 0)
+        return;
+    const unsigned section_end = 5u + section_len;
+    for (unsigned at = 5u; at + 3u <= section_end;) {
+        const uint8_t tag = block[at];
+        const unsigned len = block[at + 2u];
+        if (at + 3u + len > section_end)
+            break;
+        if (tag == 0x03u || tag == 0x22u) {
+            for (unsigned d = at + 3u; d + 20u <= at + 3u + len; d += 20u) {
+                const uint8_t *t = block + d;
+                if ((t[3] & 0x10u) != 0)
+                    continue;
+                const uint32_t raw_clk =
+                    ((uint32_t)t[0] | ((uint32_t)t[1] << 8) | ((uint32_t)t[2] << 16)) + 1u;
+                if (tag == 0x03u && raw_clk > SWITCH_DP_MAX_PIXEL_KHZ / 10u)
+                    continue;
+                const uint32_t pixel_khz = tag == 0x03u ? raw_clk * 10u : raw_clk;
+                const uint32_t hactive = ((uint32_t)t[4] | ((uint32_t)t[5] << 8)) + 1u;
+                const uint32_t hblank = ((uint32_t)t[6] | ((uint32_t)t[7] << 8)) + 1u;
+                const uint32_t hfront = ((uint32_t)t[8] | (((uint32_t)t[9] & 0x7Fu) << 8)) + 1u;
+                const uint32_t hsync = ((uint32_t)t[10] | ((uint32_t)t[11] << 8)) + 1u;
+                const uint32_t vactive = ((uint32_t)t[12] | ((uint32_t)t[13] << 8)) + 1u;
+                const uint32_t vblank = ((uint32_t)t[14] | ((uint32_t)t[15] << 8)) + 1u;
+                const uint32_t vfront = ((uint32_t)t[16] | (((uint32_t)t[17] & 0x7Fu) << 8)) + 1u;
+                const uint32_t vsync = ((uint32_t)t[18] | ((uint32_t)t[19] << 8)) + 1u;
+                if (hactive > SWITCH_DP_MAX_WIDTH || vactive > SWITCH_DP_MAX_HEIGHT || hblank > 0x7FFFu ||
+                    vblank > 0x7FFFu || hfront + hsync >= hblank || vfront + vsync >= vblank)
+                    continue;
+                const struct switch_dp_mode mode = {
+                    pixel_khz,
+                    (uint16_t)hactive,
+                    (uint16_t)hfront,
+                    (uint16_t)hsync,
+                    (uint16_t)(hblank - hfront - hsync),
+                    (uint16_t)vactive,
+                    (uint16_t)vfront,
+                    (uint16_t)vsync,
+                    (uint16_t)(vblank - vfront - vsync),
+                    (t[9] & 0x80u) != 0,
+                    (t[17] & 0x80u) != 0,
+                    (t[3] & 0x80u) != 0,
+                };
+                switch_dp_modes_add(list, &mode);
+            }
+        }
+        at += 3u + len;
+    }
+}
+
 static inline bool switch_dp_edid_block_modes(const uint8_t *edid, bool base, struct switch_dp_mode_list *list)
 {
     if (!base) {
         if (!switch_dp_edid_block_valid(edid))
             return false;
-        switch_dp_edid_cta(edid, list);
+        if (edid[0] == 0x02u)
+            switch_dp_edid_cta(edid, list);
+        else if (edid[0] == 0x70u)
+            switch_dp_edid_displayid(edid, list);
         return true;
     }
     list->count = 0;

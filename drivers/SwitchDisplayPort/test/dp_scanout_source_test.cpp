@@ -56,15 +56,17 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     const auto limits = Block(lifecycle, "void SwitchExternalScreen::publishScanoutLimits()");
     EXPECT_TRUE(limits.has("IOMFBYUV420UnSupported"));
     EXPECT_TRUE(limits.has("IOMFBDisableFlip"));
-    EXPECT_TRUE(limits.has("publishSourceLimits(148500000u)"));
+    EXPECT_TRUE(limits.has("switch_external::kMinScaleFraction"));
+    EXPECT_TRUE(limits.has("switch_external::kMaxScale"));
+    EXPECT_TRUE(limits.has("publishSourceLimits(SWITCH_DP_MAX_PIXEL_KHZ * 1000u)"));
     EXPECT_NE(lifecycle.find("SwitchExternalScreen::getMatrix("), std::string::npos);
     EXPECT_NE(lifecycle.find("SwitchExternalScreen::setMatrix("), std::string::npos);
     EXPECT_NE(lifecycle.find("SwitchExternalScreen::swapSetColorMatrix("), std::string::npos);
     EXPECT_NE(lifecycle.find("SwitchExternalScreen::setAccessibilityScale("), std::string::npos);
 
     const auto header = SourceText("../SwitchExternalScreen.h");
-    EXPECT_NE(header.find("kSlotSpan = 16ULL << 20"), std::string::npos);
-    EXPECT_NE(header.find("static_assert(kTablePages == 13);"), std::string::npos);
+    EXPECT_NE(header.find("kSlotSpan = 68ULL << 20"), std::string::npos);
+    EXPECT_NE(header.find("static_assert(kTablePages == 52);"), std::string::npos);
     EXPECT_EQ(header.find("getWorkLoop()"), std::string::npos);
     EXPECT_NE(header.find("setPowerState(unsigned long ordinal, IOService *whatDevice) override"), std::string::npos);
     EXPECT_NE(header.find("void stop(IOService *provider) override"), std::string::npos);

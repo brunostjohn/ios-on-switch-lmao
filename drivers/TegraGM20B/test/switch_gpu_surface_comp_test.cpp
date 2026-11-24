@@ -48,14 +48,18 @@ TEST(SwitchGpuSurfaceComp, PanelScanoutAndIneligibleSurfacesStayUncompressed)
 TEST(SwitchGpuSurfaceComp, ExternalScanoutSuppressesOnlyCompositor4BppWithinDpBounds)
 {
 	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(1920, 1080, 4, 1, 1));
-	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(1024, 768, 4, 1, 1));
-	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(1280, 1024, 4, 1, 1));
-	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(1920, 1200, 4, 1, 1));
-	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(1080, 1920, 4, 1, 1));
+	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(2560, 1440, 4, 1, 1));
+	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(3440, 1440, 4, 1, 1));
+	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(3840, 2160, 4, 1, 1));
+	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(4096, 2560, 4, 1, 1));
+	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(2160, 3840, 4, 1, 1));
+	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(4096, 4096, 4, 1, 1));
 	EXPECT_FALSE(switch_gpu_surface_is_external_scanout(1920, 1080, 4, 1, 0));
 	EXPECT_FALSE(switch_gpu_surface_is_external_scanout(1920, 1080, 4, 0, 1));
 	EXPECT_FALSE(switch_gpu_surface_is_external_scanout(1920, 1080, 8, 1, 1));
-	EXPECT_FALSE(switch_gpu_surface_is_external_scanout(2560, 1440, 4, 1, 1));
+	EXPECT_FALSE(switch_gpu_surface_is_external_scanout(4097, 1440, 4, 1, 1));
+	EXPECT_FALSE(switch_gpu_surface_is_external_scanout(5120, 1440, 4, 1, 1));
+	EXPECT_FALSE(switch_gpu_surface_is_external_scanout(1440, 4097, 4, 1, 1));
 	EXPECT_FALSE(switch_gpu_surface_is_external_scanout(0, 1080, 4, 1, 1));
 }
 }  // namespace

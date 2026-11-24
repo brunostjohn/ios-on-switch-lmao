@@ -78,6 +78,10 @@ TEST(ExternalGeometry, FullScreen1080p)
     EXPECT_EQ(frame.prescaled, (1080u << 16) | (1920u * 4u));
     EXPECT_EQ(frame.hOffset, 0u);
     EXPECT_EQ(frame.vOffset, 0u);
+    EXPECT_EQ(frame.dda, (kDdaOne << 16) | kDdaOne);
+    EXPECT_EQ(frame.hInitial, 0u);
+    EXPECT_EQ(frame.vInitial, 0u);
+    EXPECT_EQ(frame.options, kWinEnable);
 }
 
 TEST(ExternalGeometry, Pillarboxed608x1080)
@@ -102,6 +106,66 @@ TEST(ExternalGeometry, Pillarboxed608x1080)
     EXPECT_EQ(frame.prescaled, (1080u << 16) | (608u * 4u));
     EXPECT_EQ(frame.hOffset, 0u);
     EXPECT_EQ(frame.vOffset, 0u);
+    EXPECT_EQ(frame.dda, (kDdaOne << 16) | kDdaOne);
+    EXPECT_EQ(frame.hInitial, 0u);
+    EXPECT_EQ(frame.vInitial, 0u);
+    EXPECT_EQ(frame.options, kWinEnable);
+}
+
+TEST(ExternalGeometry, UltrawidePillarboxAndHardwareScaling)
+{
+    const Rect src720 = {0, 0, 1280, 720};
+    const Rect dstPillar = {440, 0, 2560, 1440};
+    LayerDesc layers[kLayers] = {};
+    layers[0] = makeLayer(1280, 720, 5120, src720, dstPillar);
+    const bool one[kLayers] = {true, false, false, false};
+
+    const auto check = validateSwap(0x80000001u, 0x80000000u, kOpaqueBlack, one, layers);
+    ASSERT_TRUE(check.valid);
+
+    const auto upscaled = switch_external_frame(pitchLayout(1280, 720, 5120), src720, dstPillar, 3440, 1440);
+    ASSERT_TRUE(upscaled.valid);
+    EXPECT_TRUE(upscaled.visible);
+    EXPECT_EQ(upscaled.position, 440u);
+    EXPECT_EQ(upscaled.size, (1440u << 16) | 2560u);
+    EXPECT_EQ(upscaled.prescaled, (720u << 16) | (1280u * 4u));
+    EXPECT_EQ(upscaled.dda, (0x0800u << 16) | 0x0800u);
+    EXPECT_EQ(upscaled.hInitial, 0u);
+    EXPECT_EQ(upscaled.vInitial, 0u);
+    EXPECT_EQ(upscaled.options, kWinEnable | kHFilterOn | kVFilterOn);
+
+    const auto fourK = switch_external_frame(pitchLayout(1280, 720, 5120), src720, {0, 0, 3840, 2160}, 3840, 2160);
+    ASSERT_TRUE(fourK.valid);
+    EXPECT_EQ(fourK.size, (2160u << 16) | 3840u);
+    EXPECT_EQ(fourK.prescaled, (720u << 16) | (1280u * 4u));
+    EXPECT_EQ(fourK.dda, (1365u << 16) | 1365u);
+    EXPECT_EQ(fourK.options, kWinEnable | kHFilterOn | kVFilterOn);
+
+    const Rect src2560 = {0, 0, 2560, 1440};
+    layers[0] = makeLayer(2560, 1440, 10240, src2560, {0, 0, 1280, 720});
+    ASSERT_TRUE(validateSwap(1u, 0u, 0u, one, layers).valid);
+    const auto down = switch_external_frame(pitchLayout(2560, 1440, 10240), src2560, {0, 0, 1280, 720}, 3440, 1440);
+    ASSERT_TRUE(down.valid);
+    EXPECT_EQ(down.dda, (0x2000u << 16) | 0x2000u);
+    EXPECT_EQ(down.hInitial, 0x0800u);
+    EXPECT_EQ(down.vInitial, 0x0800u);
+    EXPECT_EQ(down.prescaled, (1440u << 16) | (2560u * 4u));
+    EXPECT_EQ(down.options, kWinEnable | kHFilterOn | kVFilterOn);
+
+    const auto clipped = switch_external_frame(pitchLayout(1280, 720, 5120), src720, {-1, 0, 2560, 1440}, 3440, 1440);
+    ASSERT_TRUE(clipped.valid);
+    EXPECT_EQ(clipped.position, 0u);
+    EXPECT_EQ(clipped.size, (1440u << 16) | 2559u);
+    EXPECT_EQ(clipped.hOffset, 0u);
+    EXPECT_EQ(clipped.hInitial, 0x0800u);
+    EXPECT_EQ(clipped.vInitial, 0u);
+
+    const auto maxLayout = blockLayout(4096, 4096, 4);
+    const auto maxFrame = switch_external_frame(maxLayout, {0, 0, 4096, 2560}, {0, 0, 4096, 2560}, 4096, 2560);
+    ASSERT_TRUE(maxFrame.valid);
+    EXPECT_EQ(maxFrame.size, (2560u << 16) | 4096u);
+    EXPECT_EQ(maxFrame.prescaled, (2560u << 16) | (4096u * 4u));
+    EXPECT_EQ(maxFrame.options, kWinEnable);
 }
 
 TEST(ExternalGeometry, Letterboxed1920x720)
@@ -271,8 +335,12 @@ TEST(ExternalGeometry, RejectsInvalidSwaps)
     layers[0] = makeLayer(608, 1080, 2432, r, r, kFourccBgra, 0, 1);
     EXPECT_EQ(validateSwap(1u, 0u, 0u, one, layers).reason, kRejectTransform);
 
-    layers[0] = makeLayer(608, 1080, 2432, r, {0, 0, 1216, 1080});
+    layers[0] = makeLayer(608, 1080, 2432, r, {0, 0, 608 * 4 + 1, 1080});
     EXPECT_EQ(validateSwap(1u, 0u, 0u, one, layers).reason, kRejectScale);
+    layers[0] = makeLayer(608, 1080, 2432, r, {0, 0, 608, 539});
+    EXPECT_EQ(validateSwap(1u, 0u, 0u, one, layers).reason, kRejectScale);
+    layers[0] = makeLayer(4097, 1080, 4097 * 4 + 60, {0, 0, 4097, 1080}, {0, 0, 4097, 1080});
+    EXPECT_EQ(validateSwap(1u, 0u, 0u, one, layers).reason, kRejectSourceRect);
 
     layers[0] = makeLayer(608, 1080, 2432, r, r, 0x34323076u, 2);
     EXPECT_EQ(validateSwap(1u, 0u, 0u, one, layers).reason, kRejectFormat);

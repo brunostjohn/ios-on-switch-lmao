@@ -502,6 +502,10 @@ void SwitchExternalScreen::latchFrame()
         pendingFrame.prescaled,
         pendingFrame.hOffset,
         pendingFrame.vOffset,
+        pendingFrame.dda,
+        pendingFrame.hInitial,
+        pendingFrame.vInitial,
+        pendingFrame.options,
     };
     if (dcb->scanout(frame)) {
         latched = true;
@@ -517,9 +521,9 @@ void SwitchExternalScreen::latchFrame()
             diagLastSurfW = slot.width;
             diagLastSurfH = slot.height;
             diagLastKind = frame.kind;
-            IOLog("SwitchDisplayPort: scanout iova=%#x surf=%ux%u pos=(%u,%u) size=%ux%u stride=%u kind=%#x depth=%u\n",
+            IOLog("SwitchDisplayPort: scanout iova=%#x surf=%ux%u pos=(%u,%u) size=%ux%u dda=%#x stride=%u kind=%#x depth=%u\n",
                   iova, slot.width, slot.height, frame.position & 0xffffu, frame.position >> 16,
-                  frame.size & 0xffffu, frame.size >> 16, frame.stride, frame.kind, frame.colorDepth);
+                  frame.size & 0xffffu, frame.size >> 16, frame.dda, frame.stride, frame.kind, frame.colorDepth);
         }
 #endif
         return;

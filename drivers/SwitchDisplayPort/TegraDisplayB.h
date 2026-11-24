@@ -24,6 +24,10 @@ public:
         uint32_t prescaled = 0;
         uint32_t hOffset = 0;
         uint32_t vOffset = 0;
+        uint32_t dda = 0x10001000u;
+        uint32_t hInitial = 0;
+        uint32_t vInitial = 0;
+        uint32_t options = 1u << 30;
     };
     // The DISB partition with DISP2 (already sourced from pll_d2_out0) and the controller's base configuration.
     bool powerUp(char *why, size_t size);
@@ -41,6 +45,7 @@ public:
 private:
     volatile uint8_t *base = nullptr;
     switch_display_memory_head memory = {};
+    switch_display_memory_window requestedWindow = {};
     Frame active = {};
     bool windowEnabled = false, frameInterruptEnabled = false, emcRefusedLogged = false;
     void releaseBandwidth();

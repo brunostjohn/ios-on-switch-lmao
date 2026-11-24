@@ -88,7 +88,50 @@ switch_dp_mode_list parse(const std::vector<Block> &blocks)
     return list;
 }
 
+Block displayId(uint8_t tag, uint32_t clock_units, unsigned ha, unsigned hf, unsigned hs, unsigned hb, unsigned va,
+                unsigned vf, unsigned vs, unsigned vb, bool preferred = true, bool interlaced = false)
+{
+    Block b{};
+    b[0] = 0x70;
+    b[1] = tag == 0x22 ? 0x20 : 0x13;
+    b[2] = 23;
+    b[3] = 0x03;
+    b[4] = 0;
+    b[5] = tag;
+    b[6] = 0;
+    b[7] = 20;
+    uint8_t *t = b.data() + 8;
+    const uint32_t clk = clock_units - 1u;
+    t[0] = static_cast<uint8_t>(clk & 0xFFu);
+    t[1] = static_cast<uint8_t>((clk >> 8) & 0xFFu);
+    t[2] = static_cast<uint8_t>((clk >> 16) & 0xFFu);
+    t[3] = static_cast<uint8_t>((preferred ? 0x80u : 0u) | (interlaced ? 0x10u : 0u));
+    const auto put16 = [](uint8_t *p, unsigned v) {
+        const unsigned enc = v - 1u;
+        p[0] = static_cast<uint8_t>(enc & 0xFFu);
+        p[1] = static_cast<uint8_t>((enc >> 8) & 0xFFu);
+    };
+    const unsigned hblank = hf + hs + hb, vblank = vf + vs + vb;
+    put16(t + 4, ha);
+    put16(t + 6, hblank);
+    put16(t + 8, hf);
+    t[9] |= 0x80u;
+    put16(t + 10, hs);
+    put16(t + 12, va);
+    put16(t + 14, vblank);
+    put16(t + 16, vf);
+    t[17] |= 0x80u;
+    put16(t + 18, vs);
+    uint8_t sum = 0;
+    for (unsigned i = 1; i < 5u + b[2]; ++i)
+        sum = static_cast<uint8_t>(sum + b[i]);
+    b[5u + b[2]] = static_cast<uint8_t>(0x100u - sum);
+    checksum(b);
+    return b;
+}
+
 const auto k2160p60 = dtd(594000, 3840, 176, 88, 296, 2160, 8, 10, 72);
+const auto k3440p60 = dtd(319750, 3440, 48, 32, 80, 1440, 3, 10, 28);
 const auto k1440p144 = dtd(586590, 2560, 48, 32, 80, 1440, 3, 5, 62);
 const auto k1080p60 = dtd(148500, 1920, 88, 44, 148, 1080, 4, 5, 36);
 const uint64_t kHbr2Four = switch_dp_payload_kbps(SWITCH_DP_RATE_HBR2, 4);
@@ -121,14 +164,24 @@ TEST(Edid, InterlacedAndDescriptorsAreSkipped)
     EXPECT_FALSE(switch_dp_edid_dtd(name.data(), &mode));
 }
 
-TEST(SourceLimits, UltrawideAndFastModesLeaveRoomForSupportedEdidTimings)
+TEST(SourceLimits, AdmitsUltrawideAndFourKWithinControllerHardwareCeiling)
 {
-    const auto ultrawide = dtd(319750, 3440, 48, 32, 80, 1440, 3, 10, 28);
-    const auto list = parse({base({ultrawide, k2160p60, k1440p144, k1080p60}, 0)});
-    ASSERT_EQ(list.count, 2u);
-    EXPECT_EQ(list.modes[0].hactive, 1920);
+    const auto list = parse({base({k3440p60, k2160p60, k1440p144, k1080p60}, 0)});
+    ASSERT_EQ(list.count, 4u);
+    EXPECT_EQ(list.modes[0].hactive, 3440);
+    EXPECT_EQ(list.modes[0].vactive, 1440);
+    EXPECT_TRUE(list.modes[0].preferred);
+    EXPECT_EQ(list.modes[1].hactive, 3840);
+    EXPECT_EQ(list.modes[1].vactive, 2160);
+    EXPECT_EQ(list.modes[2].hactive, 1920);
     EXPECT_TRUE(switch_dp_prefer(&list.modes[0], &list.modes[1]));
-    auto timing = list.modes[0];
+    EXPECT_TRUE(switch_dp_prefer(&list.modes[1], &list.modes[2]));
+
+    EXPECT_TRUE(switch_dp_mode_allowed(&list.modes[0], kHbr2Four));
+    EXPECT_TRUE(switch_dp_mode_allowed(&list.modes[1], kHbr2Four));
+    EXPECT_FALSE(switch_dp_mode_allowed(&list.modes[1], switch_dp_payload_kbps(SWITCH_DP_RATE_HBR, 4)));
+
+    auto timing = list.modes[2];
     EXPECT_TRUE(switch_dp_mode_allowed(&timing, switch_dp_payload_kbps(SWITCH_DP_RATE_HBR, 2)));
     timing.pixel_khz = 149500;
     EXPECT_TRUE(switch_dp_mode_allowed(&timing, kHbr2Four));
@@ -137,6 +190,15 @@ TEST(SourceLimits, UltrawideAndFastModesLeaveRoomForSupportedEdidTimings)
     timing.pixel_khz = 148352;
     EXPECT_TRUE(switch_dp_mode_allowed(&timing, kHbr2Four));
     EXPECT_EQ(switch_dp_refresh_period(&timing), (uint64_t{2200} * 1125 << 32) / 148352000u);
+
+    const switch_dp_mode dci4k{594000, 4096, 88, 88, 128, 2160, 8, 10, 72, true, true, false};
+    const switch_dp_mode trmMax{672000, 4096, 48, 32, 80, 2560, 3, 10, 58, true, true, false};
+    const switch_dp_mode portrait4k{594000, 2160, 88, 44, 208, 3840, 8, 10, 102, true, true, false};
+    const switch_dp_mode superWide{472000, 5120, 48, 32, 80, 1440, 3, 10, 28, true, true, false};
+    EXPECT_TRUE(switch_dp_mode_allowed(&dci4k, kHbr2Four));
+    EXPECT_TRUE(switch_dp_mode_allowed(&trmMax, kHbr2Four));
+    EXPECT_TRUE(switch_dp_mode_allowed(&portrait4k, kHbr2Four));
+    EXPECT_FALSE(switch_dp_mode_allowed(&superWide, kHbr2Four));
 }
 
 TEST(SourceLimits, AcceptsVesa60HzToleranceAndRejectsHigherRates)
@@ -160,7 +222,7 @@ TEST(SourceLimits, AcceptsVesa60HzToleranceAndRejectsHigherRates)
 
 TEST(Edid, ParsesStandardTimingsAt60Hz)
 {
-    Block b = base({k2160p60}, 0, false);
+    Block b = base({}, 0, false);
     const uint8_t stdTimings[16] = {
         0xD1, 0xC0,  // 1920x1080 @ 60 Hz
         0xA9, 0xC0,  // 1600x900 @ 60 Hz
@@ -189,15 +251,45 @@ TEST(Edid, ParsesStandardTimingsAt60Hz)
     }
 }
 
-TEST(Edid, PublishesBoth1080RatesWhenFourKIsExcluded)
+TEST(Edid, PublishesFourKAndFractionalRatesFromCta)
 {
     const auto list = parse({base({}, 1, false), cta({97, 95, 0x80 | 16})});
-    ASSERT_EQ(list.count, 2u);
-    EXPECT_EQ(list.modes[0].hactive, 1920);
+    ASSERT_EQ(list.count, 6u);
+    EXPECT_EQ(list.modes[0].hactive, 3840);
     EXPECT_EQ(switch_dp_mode_refresh_mhz(&list.modes[0]), 60000u);
     EXPECT_EQ(switch_dp_mode_refresh_mhz(&list.modes[1]), 59940u);
+    EXPECT_EQ(list.modes[2].hactive, 3840);
+    EXPECT_EQ(switch_dp_mode_refresh_mhz(&list.modes[2]), 30000u);
+    EXPECT_EQ(switch_dp_mode_refresh_mhz(&list.modes[3]), 29970u);
+    EXPECT_EQ(list.modes[4].hactive, 1920);
+    EXPECT_TRUE(list.modes[4].preferred);
+    EXPECT_EQ(switch_dp_mode_refresh_mhz(&list.modes[5]), 59940u);
+}
+
+TEST(Edid, ParsesDisplayIdType1AndType7TimingsAndRejectsBrokenSections)
+{
+    const auto type1 = displayId(0x03, 31975, 3440, 48, 32, 80, 1440, 3, 10, 28, true);
+    const auto type7 = displayId(0x22, 672000, 4096, 48, 32, 80, 2560, 3, 10, 58, false);
+    const auto list = parse({base({}, 2, false), type1, type7});
+    ASSERT_EQ(list.count, 2u);
+    EXPECT_EQ(list.modes[0].hactive, 3440);
+    EXPECT_EQ(list.modes[0].vactive, 1440);
+    EXPECT_EQ(list.modes[0].pixel_khz, 319750u);
     EXPECT_TRUE(list.modes[0].preferred);
-    EXPECT_EQ(parse({base({}, 1, false), cta({97, 95})}).count, 0u);
+    EXPECT_TRUE(list.modes[0].hsync_high);
+    EXPECT_TRUE(list.modes[0].vsync_high);
+    EXPECT_EQ(list.modes[1].hactive, 4096);
+    EXPECT_EQ(list.modes[1].vactive, 2560);
+    EXPECT_EQ(list.modes[1].pixel_khz, 672000u);
+    EXPECT_FALSE(list.modes[1].preferred);
+
+    auto badChecksum = type1;
+    badChecksum[5 + badChecksum[2]] ^= 1;
+    checksum(badChecksum);
+    EXPECT_EQ(parse({base({}, 1, false), badChecksum}).count, 0u);
+
+    const auto interlaced = displayId(0x03, 14850, 1920, 88, 44, 148, 540, 2, 5, 15, false, true);
+    EXPECT_EQ(parse({base({}, 1, false), interlaced}).count, 0u);
 }
 
 TEST(Edid, RepeatedDetailedAndCtaTimingsShareOneModeId)
@@ -225,9 +317,12 @@ TEST(SourceLimits, RejectsTimingsTheControllerCannotEncode)
 {
     switch_dp_mode mode{};
     ASSERT_TRUE(switch_dp_cta_vic(16, &mode));
-    mode.hactive = 8192;
+    mode.hactive = 4097;
     EXPECT_FALSE(switch_dp_mode_allowed(&mode, kHbr2Four));
     mode.hactive = 1920;
+    mode.vactive = 4097;
+    EXPECT_FALSE(switch_dp_mode_allowed(&mode, kHbr2Four));
+    mode.vactive = 1080;
     mode.vfront = 1;
     EXPECT_FALSE(switch_dp_mode_allowed(&mode, kHbr2Four));
     mode.vfront = 4;
