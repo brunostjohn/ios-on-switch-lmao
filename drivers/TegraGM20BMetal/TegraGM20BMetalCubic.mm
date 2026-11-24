@@ -47,7 +47,7 @@ static void cubicBinds(__unsafe_unretained SwitchMetalRenderEncoder *encoder, co
 
 void packedVariants(SwitchMetalPipeline *p, const gm20b::PackRun &run)
 {
-    std::lock_guard<gm20b::Mutex> lock(p->_variantLock);
+    // p is unshared until gm20bPipelineShell returns it.
     for (const auto &[name, pl] : gRM->raw->variantPipelines(run, p->_caTransform)) {
         auto variant = std::make_shared<gm20b::Variant<gm20b::Pipeline>>();
         variant->publish(pl);

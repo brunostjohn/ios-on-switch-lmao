@@ -297,6 +297,7 @@ _METAL_LINK = [
     "layouts.py",
     "packfile.py",
     "probelog.py",
+    "segments.py",
     "splits.py",
     "archives.py",
     "draw_context.txt",

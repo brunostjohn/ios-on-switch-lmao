@@ -1553,6 +1553,36 @@ private:
     // by header: its attachment parts' key and header (attachmentTic)
     std::unordered_multimap<uint32_t, std::pair<uint64_t, uint32_t>> partTics_;
     uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0, neutralCompareTsc_ = 0;
+
+    // Tier-0 pack pipelines published lock-free via atomic CAS on first hit; owned here for the device's lifetime.
+    struct Tier0PipelineSlots {
+        std::unique_ptr<std::atomic<Pipeline *>[]> slots;
+        uint32_t count = 0;
+
+        void reset(uint32_t n)
+        {
+            clear();
+            count = n;
+            if (n)
+                slots = std::make_unique<std::atomic<Pipeline *>[]>(n);
+        }
+
+        void clear()
+        {
+            if (slots)
+                for (uint32_t i = 0; i < count; ++i)
+                    delete slots[i].exchange(nullptr, std::memory_order_acq_rel);
+            slots.reset();
+            count = 0;
+        }
+
+        ~Tier0PipelineSlots()
+        {
+            clear();
+        }
+    };
+
+    Tier0PipelineSlots tier0Pipelines_;
     // the pack's, by record index, each made at its first lookup (a process uses a few of the pack's thousands); a node
     // container, so the pointers pipeline() hands out stay valid
     std::unordered_map<uint32_t, Pipeline> pipelines_;
@@ -1574,6 +1604,12 @@ private:
     // the per-warp size the channel was last given (commit; 0 on a new channel): the submitting thread's
     uint64_t slmChannel_ = 0;
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
+
+    bool slmReady(uint64_t perWarp) const
+    {
+        return perWarp <= slmPerWarp_.load(std::memory_order_acquire);
+    }
+
     bool slmNeed(uint64_t perWarp);
     bool initPackWindow(std::string &err);
     bool place(uint32_t prog, uint32_t &program, uint64_t &data);
@@ -1586,19 +1622,27 @@ private:
     const uint8_t *heapCpu(uint64_t at) const;
     // `spills`: its argument tables' words (PackPipeline::spillWords), null where it has none. `far`: its far block
     // (set_entries.h), null where it has kPackEntries entries or fewer. `tess`: a tessellation state's control and
-    // evaluation programs (null: not one)
+    // evaluation programs (null: not one). `prebuilt`: PackSegments entry in tier 0 of PackHeap (null: build dynamically).
     void build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
                const uint32_t *blob, const char *keyString, bool caTransform, const uint32_t *spills,
-               const uint32_t *far, const PlacedProgram *tess = nullptr);
+               const uint32_t *far, const PlacedProgram *tess = nullptr, const PackSegment *prebuilt = nullptr);
+    const PackSegment *prebuiltPipelineSegment(uint32_t recIndex) const;
+    const PackSegment *prebuiltVariantSegment(uint32_t recIndex, uint32_t comboIndex) const;
+    // Lock-free tier-0 pack placement when all programs, SLM and prebuilt segments reside in the pack window; falls back to
+    // lock_ + placeRecord otherwise.
+    Pipeline *placePackedRecord(const PackPipeline &pp, bool caTransform);
+    std::unique_ptr<Pipeline> tryBuildTier0LockFree(const PackPipeline &pp, uint32_t recIndex, bool caTransform);
     // lock_ held: pack record `pp` placed (its programs in the heap) and built, once; null where the heap has no room
     Pipeline *placeRecord(const PackPipeline &pp, bool caTransform);
-    // lock_ held: `pl`'s split offered, its twin made when a draw first takes it (makeSplit)
+    // `pl`'s split offered, its twin made when a draw first takes it (makeSplit)
     void offerSplit(Pipeline &pl, SplitSource &&source);
-    void offerVariants(Pipeline &pl, const PackPipeline &pp);
+    void offerVariants(Pipeline &pl, const PackPipeline &pp, uint32_t recIndex);
+    bool offerVariantsLockFree(Pipeline &pl, const PackPipeline &pp, uint32_t recIndex);
     bool placeRequiredVariants(const PackPipeline &pp, uint64_t &slm);
-    Pipeline *placeVariant(Pipeline &pl, const std::array<uint32_t, 2> &programs);
+    Pipeline *placeVariant(Pipeline &pl, const std::array<uint32_t, 2> &programs, uint32_t recIndex,
+                           uint32_t comboIndex);
     bool placePackProgram(uint32_t index, PlacedProgram &out);
-    std::deque<Pipeline> variantPipelines_;
+    bool placePackWindowProgram(uint32_t index, PlacedProgram &out) const;
     std::deque<Pipeline> reachPipelines_;
     std::deque<PackPipeline> reachRecords_;
     std::deque<std::vector<uint32_t>> reachFar_;  // their far blocks, each its record's
@@ -1607,7 +1651,6 @@ private:
     SplitState *makeSplit(Pipeline &pl);
     bool placeSplitPrograms(const SplitSource &source, PlacedProgram &fs, uint32_t &prologue, uint64_t &prologueData,
                             uint32_t &prologueDataBytes);
-    std::deque<SplitSource> splitSources_;
     std::deque<SplitState> splitStates_;
     // The constexpr samplers' header indices, the pack's then the runtime records' (addRecord, under lock_). A slot is written
     // once, before the state that names it is published, and never moves: a draw reads it without lock_.

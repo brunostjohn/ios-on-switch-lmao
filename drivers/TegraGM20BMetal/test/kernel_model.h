@@ -162,6 +162,9 @@ struct Model {
     // [va, va + bytes) in the host memory of the one bind that holds all of it; null where it does not
     uint8_t *host(uint64_t va, uint64_t bytes)
     {
+        if (packMappedBytes && packImage.hostData && va >= packMappedVa && va - packMappedVa < packMappedBytes &&
+            bytes <= packMappedBytes - (va - packMappedVa))
+            return const_cast<uint8_t *>(packImage.hostData + (va - packMappedVa));
         auto bound = binds.upper_bound(va);
         if (bound == binds.begin())
             return nullptr;
@@ -314,6 +317,7 @@ struct Model {
         uint64_t stack = 0;
         uint64_t waitedNs = 0;
         uint64_t vmPageBytes = 0;
+        const uint8_t *hostData = nullptr;
         std::function<void()> onMap;
     };
 

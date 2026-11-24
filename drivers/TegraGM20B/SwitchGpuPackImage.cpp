@@ -355,11 +355,42 @@ IOReturn switch_gpu_pack_image_acquire(const char *procName, SwitchGpuPackImageV
 	return kIOReturnSuccess;
 }
 
+namespace
+{
+uint64_t gPackCpuWiredBytes = 0;
+
+bool reserveCpuWireBytes(uint64_t bytes)
+{
+	uint64_t cur = __atomic_load_n(&gPackCpuWiredBytes, __ATOMIC_RELAXED);
+	for (;;) {
+		if (bytes > kSwitchGpuPackMaxCpuWireBytes ||
+		    cur > kSwitchGpuPackMaxCpuWireBytes - bytes)
+			return false;
+		if (__atomic_compare_exchange_n(&gPackCpuWiredBytes, &cur, cur + bytes, false,
+						__ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+			return true;
+	}
+}
+
+void releaseCpuWireBytes(uint64_t bytes)
+{
+	if (bytes)
+		__atomic_fetch_sub(&gPackCpuWiredBytes, bytes, __ATOMIC_RELEASE);
+}
+}  // namespace
+
 IOReturn switch_gpu_pack_client_wire_cpu(task_t task, const TegraGM20BAbiPackCpuRange *ranges,
 					 uint32_t count, IOMemoryDescriptor **outDescriptors,
 					 uint64_t *outBytes)
 {
 	uint64_t total = 0;
+	for (uint32_t i = 0; i < count; ++i) {
+		if (ranges[i].bytes > kSwitchGpuPackMaxCpuWireBytes - total)
+			return kIOReturnNoResources;
+		total += ranges[i].bytes;
+	}
+	if (!reserveCpuWireBytes(total))
+		return kIOReturnNoResources;
 	for (uint32_t i = 0; i < count; ++i) {
 		IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRange(
 			ranges[i].address, ranges[i].bytes, kIODirectionOut, task);
@@ -371,10 +402,10 @@ IOReturn switch_gpu_pack_client_wire_cpu(task_t task, const TegraGM20BAbiPackCpu
 				outDescriptors[j]->release();
 				outDescriptors[j] = nullptr;
 			}
+			releaseCpuWireBytes(total);
 			return kIOReturnBadArgument;
 		}
 		outDescriptors[i] = md;
-		total += ranges[i].bytes;
 	}
 	if (outBytes)
 		*outBytes = total;
@@ -393,6 +424,8 @@ void switch_gpu_pack_client_release_cpu(SwitchGpuPackClient *client)
 		}
 	}
 	client->cpuWiredCount = 0;
+	releaseCpuWireBytes(client->cpuWiredBytes);
+	client->cpuWiredBytes = 0;
 }
 
 void switch_gpu_pack_client_unmap_gpu(tgm_vm *vm, SwitchGpuPackClient *client)
@@ -455,6 +488,7 @@ void switch_gpu_pack_image_reset_for_test(void)
 		gPack.lock = nullptr;
 	}
 	gPack = {};
+	__atomic_store_n(&gPackCpuWiredBytes, 0u, __ATOMIC_SEQ_CST);
 	__atomic_store_n(&gShutdown, 0u, __ATOMIC_SEQ_CST);
 }
 

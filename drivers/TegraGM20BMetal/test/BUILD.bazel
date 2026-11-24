@@ -3922,9 +3922,11 @@ host_test(
         "//drivers/TegraGM20BMetal:pack_scan.h",
         "//drivers/TegraGM20BMetal:program_pages.h",
         "//drivers/TegraGM20BMetal:program_stores.h",
+        "//drivers/TegraGM20BMetal:push.h",
         "//drivers/TegraGM20BMetal:sample_shading.h",
         "//drivers/TegraGM20BMetal:set_entries.h",
         "//drivers/TegraGM20BMetal:set_reads.h",
+        "//drivers/TegraGM20BMetal:slm.h",
         "//drivers/TegraGM20BMetal:storage.h",
     ],
     cxx_std = "c++17",
@@ -6772,6 +6774,66 @@ host_test(
     sanitize = False,
     deps = [
         ":runtime_plugin" + plugin,
+        "//kits/SwitchRefusal:switch_refusal",
+    ] + METAL_HOST_DEPS,
+) for suffix, plugin, tsan in [
+    (
+        "",
+        "_host",
+        [],
+    ),
+    (
+        "_tsan",
+        "_tsan",
+        ["-fsanitize=thread"],
+    ),
+]]
+
+py_binary(
+    name = "pack_v34_fixture_bin",
+    srcs = ["pack_v34_fixture.py"],
+    main = "pack_v34_fixture.py",
+    data = [
+        "//drivers/TegraGM20BMetal:chip_facts.h",
+        "//drivers/TegraGM20BMetal:own_states.h",
+        "//drivers/TegraGM20BMetal:owned.h",
+    ],
+    deps = ["//drivers/TegraGM20BMetal:pack"],
+)
+
+genrule(
+    name = "pack_v34_fixture",
+    outs = ["pack_v34_fixture.bin"],
+    cmd = "$(execpath :pack_v34_fixture_bin) $@",
+    tools = [":pack_v34_fixture_bin"],
+)
+
+[host_test(
+    name = "device_pack_hit" + suffix + "_test",
+    size = "medium",
+    srcs = [
+        "device_pack_hit_test.cpp",
+        "empty_pack.h",
+        "facade_harness.h",
+        "job_methods.h",
+        "made_metallib.h",
+        "translate_absent.cpp",
+        "kernel_model.h",
+    ] + METAL_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + METAL_HOST_COPTS + tsan,
+    cxx_std = "c++17",
+    data = [":pack_v34_fixture"],
+    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
+    linkopts = FACADE_LINKOPTS + tsan,
+    sanitize = False,
+    deps = [
+        ":facade_plugin" + plugin,
+        ":runtime_plugin" + plugin,
+        "//kits/SwitchGM20BEmit/test:method_checks",
         "//kits/SwitchRefusal:switch_refusal",
     ] + METAL_HOST_DEPS,
 ) for suffix, plugin, tsan in [

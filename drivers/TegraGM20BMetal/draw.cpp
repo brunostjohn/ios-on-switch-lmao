@@ -201,7 +201,7 @@ StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
 {
     if (!pl.storageBits)
         return StorageFallback::None;
-    if (const Pipeline *twin = pl.barrierTwin;
+    if (const Pipeline *twin = __atomic_load_n(&pl.barrierTwin, __ATOMIC_ACQUIRE);
         twin && fetchesOnlyUnwritten(pl.fetchBits, pl.writeBits, pl.storageWriteBits, twin->fetchBits, twin->writeBits))
         return StorageFallback::ReadOnly;
     StorageFallback reason = StorageFallback::None;
@@ -217,7 +217,7 @@ StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
 // is of unorm8 codes, and whether the pass loads it over an earlier command buffer's rung-2 blends decide rule fetch.blend
 Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
 {
-    Pipeline *free = pl.fetchFree;
+    Pipeline *free = __atomic_load_n(&pl.fetchFree, __ATOMIC_ACQUIRE);
     if (!free)
         return nullptr;
     const FetchFreeForm &f = free->freeForm;
@@ -249,10 +249,12 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
 Pipeline *RenderEncoder::formFor(Pipeline *pl, const FetchDraw &shape)
 {
     uint8_t forced = 0;
+    Pipeline *blendTwin = pl ? __atomic_load_n(&pl->blendTwin, __ATOMIC_ACQUIRE) : nullptr;
+    Pipeline *barrierTwin = pl ? __atomic_load_n(&pl->barrierTwin, __ATOMIC_ACQUIRE) : nullptr;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
     if (pl && (forced == kProbeBlendTwinTriangles || forced == kProbeBlendTwinWhole))
-        if (Pipeline *twin = pl->blendTwin ? pl->blendTwin : pl->barrierTwin) {
+        if (Pipeline *twin = blendTwin ? blendTwin : barrierTwin) {
             dev_->stats.fetch.blendTwin++;
             return twin;
         }
@@ -263,23 +265,23 @@ Pipeline *RenderEncoder::formFor(Pipeline *pl, const FetchDraw &shape)
     if (!pl || !pl->storageBits)
         return pl;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (cb_->forms_.barrierFetch && pl->barrierTwin)
-        return pl->barrierTwin;
+    if (cb_->forms_.barrierFetch && barrierTwin)
+        return barrierTwin;
 #endif
     const StorageFallback reason = storageFallback(*pl);
     if (reason == StorageFallback::None) {
-        Pipeline *twin = pl->blendTwin ? pl->blendTwin : pl->barrierTwin;
+        Pipeline *twin = blendTwin ? blendTwin : barrierTwin;
         if (forced || !twin || !twinTaken({shape, twin->primitiveId, uint64_t(areaW_) * areaH_, amplifications_ > 1}))
             return pl;
         SWITCH_METAL_DIAGNOSTIC(cb_->counts_.twinRule++);
         return twin;
     }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    const StorageFallback counted = pl->barrierTwin ? reason : StorageFallback::NoTwin;
+    const StorageFallback counted = barrierTwin ? reason : StorageFallback::NoTwin;
     dev_->stats.fetch.storageFallback[size_t(counted)]++;
     dev_->stats.fetch.fallbackKeys.note(pl->rec->keyHash);
 #endif
-    return pl->barrierTwin ? pl->barrierTwin : pl;
+    return barrierTwin ? barrierTwin : pl;
 }
 
 void RenderEncoder::refuseFetch(const Pipeline &pl, FetchRefusal refusal, uint32_t primitive, uint32_t count,

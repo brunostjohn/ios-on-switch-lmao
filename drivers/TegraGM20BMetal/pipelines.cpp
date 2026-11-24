@@ -6,6 +6,7 @@
 #include "dynamic_push.h"
 #include "blend_reads.h"
 #include "gpu.h"
+#include "pack_window.h"
 #include "mme.h"
 #include "mip.h"
 #include "owned.h"
@@ -216,6 +217,43 @@ static PackRun searched(const Pack &pack, uint64_t keyHash)
     return pack.run(keyHash);
 }
 
+static uint8_t setCbufSlot(const PackProgram &prog)
+{
+    for (uint8_t c = 1; c < prog.cbufs; c++)
+        if (prog.cbufType[c] == CbufSet)
+            return c;
+    return 0;
+}
+
+static bool needsArguments(const PackPipeline &pp)
+{
+    return pp.rootTableWord[0] || pp.rootTableWord[1] || pp.statusWord[0] || pp.statusWord[1] || pp.heapArrays;
+}
+
+const PackSegment *Device::prebuiltPipelineSegment(uint32_t recIndex) const
+{
+    if (!packWindowBytes_)
+        return nullptr;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (probeExactCbufs.load(std::memory_order_relaxed))
+        return nullptr;
+#endif
+    const PackSegment *seg = pack_.pipelineSegment(recIndex);
+    return seg && packWindowContainsSegment(*seg, packWindowBytes_) ? seg : nullptr;
+}
+
+const PackSegment *Device::prebuiltVariantSegment(uint32_t recIndex, uint32_t comboIndex) const
+{
+    if (!packWindowBytes_)
+        return nullptr;
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (probeExactCbufs.load(std::memory_order_relaxed))
+        return nullptr;
+#endif
+    const PackSegment *seg = pack_.variantSegment(recIndex, comboIndex);
+    return seg && packWindowContainsSegment(*seg, packWindowBytes_) ? seg : nullptr;
+}
+
 Pipeline *Device::pipeline(uint64_t keyHash, PackForm form, bool caTransform)
 {
     return pipeline(searched(pack_, keyHash), keyHash, form, caTransform);
@@ -232,17 +270,20 @@ Pipeline *Device::pipeline(const PackRun &run, uint64_t keyHash, PackForm form, 
 {
     Pipeline *pl = placePipeline(run, keyHash, form, caTransform);
     if (form == PackForm::Default && pl && pl->fetchBits && fetchFreeReachable(run)) {
-        Pipeline *free = placePipeline(run, keyHash, PackForm::FetchFree, caTransform);
-        std::lock_guard<gm20b::Mutex> l(lock_);
-        if (free && free != pl && free->freeForm.rung != FetchNone)
-            pl->fetchFree = free;
+        if (!__atomic_load_n(&pl->fetchFree, __ATOMIC_ACQUIRE)) {
+            Pipeline *free = placePipeline(run, keyHash, PackForm::FetchFree, caTransform);
+            if (free && free != pl && free->freeForm.rung != FetchNone)
+                __atomic_store_n(&pl->fetchFree, free, __ATOMIC_RELEASE);
+        }
     }
     if (form != PackForm::Default || !pl || !pl->storageBits)
         return pl;
-    Pipeline *twin = placePipeline(run, keyHash, PackForm::Barrier, caTransform);
-    std::lock_guard<gm20b::Mutex> l(lock_);
-    if (twin && twin != pl && !twin->storageBits)
-        (pl->storageBlendBits ? pl->blendTwin : pl->barrierTwin) = twin;
+    Pipeline **slot = pl->storageBlendBits ? &pl->blendTwin : &pl->barrierTwin;
+    if (!__atomic_load_n(slot, __ATOMIC_ACQUIRE)) {
+        Pipeline *twin = placePipeline(run, keyHash, PackForm::Barrier, caTransform);
+        if (twin && twin != pl && !twin->storageBits)
+            __atomic_store_n(slot, twin, __ATOMIC_RELEASE);
+    }
     return pl;
 }
 
@@ -267,24 +308,30 @@ std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(uint64_
 std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(const PackRun &run, bool caTransform)
 {
     std::vector<std::pair<std::string, Pipeline *>> out;
+    bool anyVariant = false;
+    for (uint32_t i = 0; i < run.records; ++i)
+        if (run.first[i].flags & PipelineVariantRecord) {
+            anyVariant = true;
+            break;
+        }
+    if (!anyVariant)
+        return out;
     for (const PackPipeline *rec : pack_.variantRecords(run)) {
         const std::string name = pack_.string(rec->variantName);
         // a barrier record is a storage form's twin unless it is the variant's one record (its storage form refused)
         if ((rec->flags & PipelineBarrierForm) && pack_.variantRecord(run, name, PackForm::Default))
             continue;
-        Pipeline *pl = nullptr;
-        {
-            std::lock_guard<gm20b::Mutex> l(lock_);
-            pl = placeRecord(*rec, caTransform);
-        }
+        Pipeline *pl = placePackedRecord(*rec, caTransform);
         // a storage form's barrier twin, as Device::pipeline gives a state's own
         const PackPipeline *barrier =
             pl && pl->storageBits ? pack_.variantRecord(run, name, PackForm::Barrier) : nullptr;
         if (barrier) {
-            std::lock_guard<gm20b::Mutex> l(lock_);
-            Pipeline *twin = placeRecord(*barrier, caTransform);
-            if (twin && twin != pl && !twin->storageBits)
-                (pl->storageBlendBits ? pl->blendTwin : pl->barrierTwin) = twin;
+            Pipeline **slot = pl->storageBlendBits ? &pl->blendTwin : &pl->barrierTwin;
+            if (!__atomic_load_n(slot, __ATOMIC_ACQUIRE)) {
+                Pipeline *twin = placePackedRecord(*barrier, caTransform);
+                if (twin && twin != pl && !twin->storageBits)
+                    __atomic_store_n(slot, twin, __ATOMIC_RELEASE);
+            }
         }
         out.emplace_back(name, pl);
     }
@@ -294,12 +341,11 @@ std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(const P
 Pipeline *Device::placePipeline(const PackRun &run, uint64_t keyHash, PackForm form, bool caTransform)
 {
     const PackPipeline *rec = pack_.find(run, form);
+    if (rec)
+        return placePackedRecord(*rec, caTransform);
     std::lock_guard<gm20b::Mutex> l(lock_);
-    if (!rec) {
-        const auto made = completed_.find(keyHash);
-        return form == PackForm::Default && made != completed_.end() ? made->second : nullptr;
-    }
-    return placeRecord(*rec, caTransform);
+    const auto made = completed_.find(keyHash);
+    return form == PackForm::Default && made != completed_.end() ? made->second : nullptr;
 }
 
 // A pack record is drawn as addRecord draws a runtime record of the same state: a tessellation state's control and
@@ -313,11 +359,90 @@ std::vector<uint32_t> restoreWords(const uint32_t *pairs, uint32_t dwords)
     return {words.data(), w.at};
 }
 
+std::unique_ptr<Pipeline> Device::tryBuildTier0LockFree(const PackPipeline &pp, uint32_t idx, bool caTransform)
+{
+    const PackSegment *prebuilt = prebuiltPipelineSegment(idx);
+    if (!prebuilt || needsArguments(pp))
+        return nullptr;
+    const bool tess = tessellates(pp);
+    PlacedProgram vs, fs = noPixelProgram(), tessPlaced[2];
+    if (!placePackWindowProgram(pp.vs, vs) || (pixelStage(pp) && !placePackWindowProgram(pp.fs, fs)) ||
+        (tess && (!placePackWindowProgram(pp.tessPrograms[0], tessPlaced[0]) ||
+                  !placePackWindowProgram(pp.tessPrograms[1], tessPlaced[1]))))
+        return nullptr;
+    uint64_t slm = std::max(slmPerWarpOfHeader(vs.header), slmPerWarpOfHeader(fs.header));
+    for (uint32_t k = 0; tess && k < 2; k++)
+        slm = std::max(slm, slmPerWarpOfHeader(tessPlaced[k].header));
+    if (!slmReady(slm))
+        return nullptr;
+    Pipeline *twin = nullptr;
+    if (pp.strideTwin) {
+        if (pp.strideTwin - 1 >= tier0Pipelines_.count)
+            return nullptr;
+        twin = placePackedRecord(pack_.section<PackPipeline>(PackPipelines)[pp.strideTwin - 1], caTransform);
+        if (!twin)
+            return nullptr;
+    }
+    auto built = std::make_unique<Pipeline>();
+    Pipeline &pl = *built;
+    build(pl, pp, vs, fs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString), caTransform,
+          pack_.spills(pp), pack_.far(pp), tess ? tessPlaced : nullptr, prebuilt);
+    if (pp.restoreDwords && uint64_t(pp.restoreAt) + pp.restoreDwords <= pack_.bytes(PackBlob) / 4) {
+        const std::vector<uint32_t> words =
+            restoreWords(pack_.section<uint32_t>(PackBlob) + pp.restoreAt, pp.restoreDwords);
+        pl.restore.insert(pl.restore.end(), words.begin(), words.end());
+    }
+    pl.strideTwin = twin;
+    if (!offerVariantsLockFree(pl, pp, idx))
+        return nullptr;
+    if (const PackSplit *split = pixelStage(pp) ? pack_.split(pp.fs) : nullptr; split && !pl.storageBits) {
+        SplitSource source;
+        source.rec = *split;
+        source.packed = true;
+        source.pp = &pp;
+        source.blob = pack_.section<uint32_t>(PackBlob) + pp.blob;
+        source.far = pack_.far(pp);
+        source.keyString = pack_.string(pp.keyString);
+        source.vs = vs;
+        source.caTransform = caTransform;
+        offerSplit(pl, std::move(source));
+    }
+    return built;
+}
+
+Pipeline *Device::placePackedRecord(const PackPipeline &pp, bool caTransform)
+{
+    const uint32_t idx = uint32_t(&pp - pack_.section<PackPipeline>(PackPipelines));
+    if (idx < tier0Pipelines_.count) {
+        std::atomic<Pipeline *> &slot = tier0Pipelines_.slots[idx];
+        if (Pipeline *existing = slot.load(std::memory_order_acquire))
+            return existing;
+        if (std::unique_ptr<Pipeline> built = tryBuildTier0LockFree(pp, idx, caTransform)) {
+            Pipeline *expected = nullptr;
+            Pipeline *raw = built.get();
+            if (slot.compare_exchange_strong(expected, raw, std::memory_order_acq_rel, std::memory_order_acquire)) {
+                built.release();
+                SWITCH_METAL_DIAGNOSTIC(stats.blendKillStates += raw->blendKill);
+                SWITCH_METAL_DIAGNOSTIC(for (const auto &v : raw->ownedVariants) stats.blendKillStates += v->blendKill);
+                return raw;
+            }
+            return expected;
+        }
+    }
+    std::lock_guard<gm20b::Mutex> l(lock_);
+    return placeRecord(pp, caTransform);
+}
+
 Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
 {
-    Pipeline &pl = pipelines_[&pp - pack_.section<PackPipeline>(PackPipelines)];
-    if (pl.rec)
-        return &pl;
+    const uint32_t idx = uint32_t(&pp - pack_.section<PackPipeline>(PackPipelines));
+    const bool tier0 = idx < tier0Pipelines_.count;
+    if (tier0) {
+        if (Pipeline *existing = tier0Pipelines_.slots[idx].load(std::memory_order_acquire))
+            return existing;
+    } else if (const auto it = pipelines_.find(idx); it != pipelines_.end() && it->second.rec) {
+        return &it->second;
+    }
     const bool tess = tessellates(pp);
     PlacedProgram vs, fs = noPixelProgram(), tessPlaced[2];
     if (!placePackProgram(pp.vs, vs) || (pixelStage(pp) && !placePackProgram(pp.fs, fs)) ||
@@ -337,15 +462,20 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
     if (pp.strideTwin &&
         !(twin = placeRecord(pack_.section<PackPipeline>(PackPipelines)[pp.strideTwin - 1], caTransform)))
         return nullptr;
+    std::unique_ptr<Pipeline> owned;
+    if (tier0)
+        owned = std::make_unique<Pipeline>();
+    Pipeline &pl = tier0 ? *owned : pipelines_[idx];
+    const PackSegment *prebuilt = prebuiltPipelineSegment(idx);
     build(pl, pp, vs, fs, pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString), caTransform,
-          pack_.spills(pp), pack_.far(pp), tess ? tessPlaced : nullptr);
+          pack_.spills(pp), pack_.far(pp), tess ? tessPlaced : nullptr, prebuilt);
     if (pp.restoreDwords && uint64_t(pp.restoreAt) + pp.restoreDwords <= pack_.bytes(PackBlob) / 4) {
         const std::vector<uint32_t> words =
             restoreWords(pack_.section<uint32_t>(PackBlob) + pp.restoreAt, pp.restoreDwords);
         pl.restore.insert(pl.restore.end(), words.begin(), words.end());
     }
     pl.strideTwin = twin;
-    offerVariants(pl, pp);
+    offerVariants(pl, pp, idx);
     if (const PackSplit *split = pixelStage(pp) ? pack_.split(pp.fs) : nullptr; split && !pl.storageBits) {
         SplitSource source;
         source.rec = *split;
@@ -358,14 +488,27 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
         source.caTransform = caTransform;
         offerSplit(pl, std::move(source));
     }
+    if (tier0) {
+        Pipeline *expected = nullptr;
+        Pipeline *raw = owned.get();
+        if (tier0Pipelines_.slots[idx].compare_exchange_strong(expected, raw, std::memory_order_acq_rel,
+                                                               std::memory_order_acquire)) {
+            owned.release();
+            SWITCH_METAL_DIAGNOSTIC(if (prebuilt) stats.blendKillStates += raw->blendKill);
+            SWITCH_METAL_DIAGNOSTIC(for (const auto &v : raw->ownedVariants) if (v->prebuiltWords)
+                                        stats.blendKillStates += v->blendKill);
+            return raw;
+        }
+        return expected;
+    }
     return &pl;
 }
 
-// lock_ held: `pl` of record `pp`, whose programs are placed at `vs` and `fs`, whose registers are `blob` (method, value pairs)
+// `pl` of record `pp`, whose programs are placed at `vs` and `fs`, whose registers are `blob` (method, value pairs)
 // and whose key's attachment and vertex fields are `keyString`
 void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
                    const uint32_t *blob, const char *keyString, bool caTransform, const uint32_t *spills,
-                   const uint32_t *far, const PlacedProgram *tess)
+                   const uint32_t *far, const PlacedProgram *tess, const PackSegment *prebuilt)
 {
     SWITCH_METAL_CREATION_SPAN(buildTicks);
     SWITCH_METAL_CREATION_COUNT(builds, 1);
@@ -383,8 +526,12 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.writesMemory[0] = writesMemory(vs) || (tess && (writesMemory(tess[0]) || writesMemory(tess[1])));
     pl.writesMemory[1] = writesMemory(fs);
     pl.memoryEntries = pp.memoryEntries;
-    std::vector<uint32_t> words(64 + 16 + kStageSwitchWords + (tess ? 64 : 0) + pp.blobDwords * 2);
-    Push w{words.data(), words.data() + words.size()};
+    std::vector<uint32_t> words;
+    Push w{nullptr, nullptr};
+    if (!prebuilt) {
+        words.resize(64 + 16 + kStageSwitchWords + (tess ? 64 : 0) + pp.blobDwords * 2);
+        w = {words.data(), words.data() + words.size()};
+    }
     uint32_t writes[8];
     uint32_t interlockControl = 0;
     uint32_t sampleControl = 1;
@@ -412,42 +559,55 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
             pl.namesViewportClip = true;
         }
         pl.namesViewportClipRange |= m == NVB197_SET_VIEWPORT_CLIP_MIN_Z(0) || m == NVB197_SET_VIEWPORT_CLIP_MAX_Z(0);
-        w.m(m, v);
+        if (!prebuilt)
+            w.m(m, v);
     }
-    w.m(PIXEL_SHADER_INTERLOCK_CONTROL, legalInterlockControl(interlockControl, sampleControl));
-    w.m(HYBRID_ANTI_ALIAS_CONTROL, sampleControl);
     pl.blendKill = iteratedBlendNoop(blob, pp.blobDwords, writes, keyString,
                                      (pp.flags & PipelineStorageMetadata) ? pp.storageMask : 0) == kNoopSourceRgba0000;
-    w.m(kIteratedBlendOptimization, pl.blendKill ? kNoopSourceRgba0000 : kNoopNever);
-    SWITCH_METAL_DIAGNOSTIC(stats.blendKillStates += pl.blendKill);
+    if (!prebuilt) {
+        w.m(PIXEL_SHADER_INTERLOCK_CONTROL, legalInterlockControl(interlockControl, sampleControl));
+        w.m(HYBRID_ANTI_ALIAS_CONTROL, sampleControl);
+        w.m(kIteratedBlendOptimization, pl.blendKill ? kNoopSourceRgba0000 : kNoopNever);
+        SWITCH_METAL_DIAGNOSTIC(stats.blendKillStates += pl.blendKill);
+    }
     for (uint32_t c = 0; c < 8; c++)
         if (writes[c] & 0x1111)  // R_ENABLE, G_ENABLE, B_ENABLE, A_ENABLE
             pl.writeBits |= uint8_t(1u << c);
-    w.m(0x2044, vs.program);  // SET_PIPELINE_PROGRAM(VERTEX)
-    w.m(PIPELINE_REGISTER_COUNT_VERTEX, vs.record->gprs);
-    if (pixelStage(pp)) {
-        w.m(0x2144, fs.program);  // SET_PIPELINE_PROGRAM(PIXEL)
-        w.m(PIPELINE_REGISTER_COUNT_PIXEL, fs.record->gprs);
-    }
-    if (fs.record->boundTextures)
-        w.m(BINDLESS_TEXTURE, fs.record->boundTextures - 1u);
     bool exactCbufs = false;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     exactCbufs = probeExactCbufs.load(std::memory_order_relaxed);
 #endif
-    pl.setSlot[0] = bindProgramCbufs(w, *vs.record, kSetGroups[0], vs.data, root_.va, exactCbufs);
-    pl.setSlot[1] = bindProgramCbufs(w, *fs.record, kSetGroups[1], fs.data, root_.va, exactCbufs);
+    if (!prebuilt) {
+        w.m(0x2044, vs.program);  // SET_PIPELINE_PROGRAM(VERTEX)
+        w.m(PIPELINE_REGISTER_COUNT_VERTEX, vs.record->gprs);
+        if (pixelStage(pp)) {
+            w.m(0x2144, fs.program);  // SET_PIPELINE_PROGRAM(PIXEL)
+            w.m(PIPELINE_REGISTER_COUNT_PIXEL, fs.record->gprs);
+        }
+        if (fs.record->boundTextures)
+            w.m(BINDLESS_TEXTURE, fs.record->boundTextures - 1u);
+        pl.setSlot[0] = bindProgramCbufs(w, *vs.record, kSetGroups[0], vs.data, root_.va, exactCbufs);
+        pl.setSlot[1] = bindProgramCbufs(w, *fs.record, kSetGroups[1], fs.data, root_.va, exactCbufs);
+    } else {
+        pl.setSlot[0] = setCbufSlot(*vs.record);
+        pl.setSlot[1] = setCbufSlot(*fs.record);
+    }
     const PackProgram *programs[4] = {vs.record, fs.record};
     const uint16_t *farUbos[4] = {vs.farUbos, fs.farUbos};
-    if (tess) {
+    if (tess && !prebuilt) {
         // SET_PATCH is in kOwnedMethods so the blob loop drops it; m2v's tessellation states always draw 1-point
         // patches.
         w.m(NVB197_SET_PATCH, 1);
     }
     for (uint32_t k = 0; tess && k < 2; k++) {
-        w.m(PIPELINE_PROGRAM_TESS + kPipelineStageStride * k, tess[k].program);
-        w.m(PIPELINE_REGISTER_COUNT_TESS + kPipelineStageStride * k, tess[k].record->gprs);
-        pl.setSlot[2 + k] = bindProgramCbufs(w, *tess[k].record, kSetGroups[2 + k], tess[k].data, root_.va, exactCbufs);
+        if (!prebuilt) {
+            w.m(PIPELINE_PROGRAM_TESS + kPipelineStageStride * k, tess[k].program);
+            w.m(PIPELINE_REGISTER_COUNT_TESS + kPipelineStageStride * k, tess[k].record->gprs);
+            pl.setSlot[2 + k] =
+                bindProgramCbufs(w, *tess[k].record, kSetGroups[2 + k], tess[k].data, root_.va, exactCbufs);
+        } else {
+            pl.setSlot[2 + k] = setCbufSlot(*tess[k].record);
+        }
         programs[2 + k] = tess[k].record;
         pl.heapSlot[2 + k] = heapCbufSlot(*tess[k].record);
         farUbos[2 + k] = tess[k].farUbos;
@@ -467,14 +627,19 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
             if (entry < entries.size())
                 pl.ubos[pl.uboCount++] = {group, c, uint16_t(entry)};
         }
-    stageSwitches(pp, keyString, w, pl.restore);
+    if (!prebuilt) {
+        stageSwitches(pp, keyString, w, pl.restore);
+        pl.methods.assign(words.data(), w.at);
+    } else {
+        stageSwitchesRestore(pp, keyString, pl.restore);
+    }
     pl.stagesOff = !pixelStage(pp) || rasterOff(keyString);
-    pl.methods.assign(words.data(), w.at);
     memcpy(pl.push, pp.pushWords, sizeof pl.push);
     pl.pushMask = pp.pushMask;
     pl.heapSlot[0] = heapCbufSlot(*vs.record);
     pl.heapSlot[1] = heapCbufSlot(*fs.record);
-    bindArguments(pl, pp);
+    if (needsArguments(pp))
+        bindArguments(pl, pp);
     for (uint32_t k = 0; k < 2; k++)
         if (spillEntryOf(pp, k))
             pl.spill[k] = spills ? spills + (k ? pp.spillWords[0] : 0) : nullptr;
@@ -553,8 +718,11 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
         pl.readBits |= uint8_t(1u << pl.freeForm.colour);
         if (pl.freeForm.rung == FetchIteratedBlend) {
             pl.restore.clear();
-            iteratedBlendWords(*pack_.iterated(pp), pl.freeForm.colour, pl.colorFormats[pl.freeForm.colour], pl.methods,
-                               pl.restore);
+            if (prebuilt)
+                iteratedBlendRestore(pl.colorFormats[pl.freeForm.colour], pl.restore);
+            else
+                iteratedBlendWords(*pack_.iterated(pp), pl.freeForm.colour, pl.colorFormats[pl.freeForm.colour],
+                                   pl.methods, pl.restore);
         }
     }
     pl.turnRefused = pp.flags & PipelineTurnRefused;
@@ -562,7 +730,15 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.writtenSlots = writtenSlots(pp);
     pl.own = isOwnState(pp.keyHash);
     pl.rec = &pp;
-    pl.segment = segmentHeap_.place(pl.methods.data(), uint32_t(pl.methods.size()));
+    if (prebuilt) {
+        pl.prebuiltWords = reinterpret_cast<const uint32_t *>(pack_.section<uint8_t>(PackHeap) + prebuilt->heapOffset);
+        pl.prebuiltWordCount = prebuilt->words;
+        pl.reselectRoot = (prebuilt->flags & kPackSegmentReselectRoot) != 0;
+        pl.segment = {packWindowVa_ + prebuilt->heapOffset, prebuilt->words,
+                      (prebuilt->flags & kPackSegmentKeptAcrossPasses) != 0};
+    } else {
+        pl.segment = segmentHeap_.place(pl.methods.data(), uint32_t(pl.methods.size()));
+    }
 }
 
 Pipeline *Device::ycbcrPipeline(uint8_t output)
@@ -623,7 +799,7 @@ Pipeline *Device::resolvePipeline(uint32_t format, uint32_t samples)
 {
     const char *name = resolveState(format, samples);
     Pipeline *pl = ownPipeline(name);
-    SWITCH_METAL_DIAGNOSTIC(if (pl) pl->spanName = name);
+    SWITCH_METAL_DIAGNOSTIC(if (pl) __atomic_store_n(&pl->spanName, name, __ATOMIC_RELEASE));
     return pl;
 }
 

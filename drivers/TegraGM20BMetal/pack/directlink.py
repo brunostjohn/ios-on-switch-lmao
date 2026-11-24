@@ -27,6 +27,7 @@ import fetchfree_link
 import kernels
 import mkpack
 import packfile
+import segments
 import splits
 
 PIPELINE = struct.Struct('<QIIIIIBBBBHHI')
@@ -900,6 +901,8 @@ def main() -> None:
         tier0_programs,
         tier0_heap,
     )
+    segments.build_tier0_segments(pack, report)
+    phase('segments')
     data, blob = write_outputs(out_dir, pack, varying, programs, phase, hashes=[pipe_hashes[id(r)] for r in pack.pipes])
     unshared = sum(len(p['blob']) * 2 for p in pipes)
     report.append(

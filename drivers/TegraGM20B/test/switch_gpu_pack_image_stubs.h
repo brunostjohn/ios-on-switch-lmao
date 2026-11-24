@@ -45,6 +45,7 @@ constexpr IOReturn kIOReturnAborted = -4;
 constexpr IOReturn kIOReturnNotPermitted = -5;
 constexpr IOReturn kIOReturnNotOpen = -6;
 constexpr IOReturn kIOReturnExclusiveAccess = -7;
+constexpr IOReturn kIOReturnNoResources = -8;
 
 constexpr kern_return_t KERN_SUCCESS = 0;
 constexpr kern_return_t KERN_FAILURE = 5;

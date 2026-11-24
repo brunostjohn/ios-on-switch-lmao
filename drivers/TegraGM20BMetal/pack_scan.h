@@ -8,6 +8,7 @@
 #include "program_pages.h"
 #include "program_stores.h"
 #include "set_entries.h"
+#include "slm.h"
 #include "storage.h"
 
 #include <cstdio>
@@ -139,6 +140,58 @@ inline std::vector<std::string> packScan(const Pack &pack)
             one &= p[k.first + r].keyHash == state;
         if (!whole || !one)
             say("fast key", k.fast, "not its state's records alone and all of them");
+    }
+    if (const uint64_t segBytes = pack.bytes(PackSegments)) {
+        if (segBytes < sizeof(PackSegmentTable)) {
+            say("segments", segBytes, "shorter than table header");
+        } else {
+            PackSegmentTable tbl = {};
+            memcpy(&tbl, pack.section<uint8_t>(PackSegments), sizeof tbl);
+            const uint64_t need = sizeof(PackSegmentTable) +
+                                  uint64_t(tbl.pipelineCount) * (sizeof(PackSegment) + sizeof(uint32_t)) +
+                                  uint64_t(tbl.variantComboCount) * sizeof(PackSegment);
+            if (need != segBytes || tbl.pipelineCount != launchRecords) {
+                say("segments", tbl.pipelineCount, "table size or count does not match tier 0");
+            } else {
+                const uint64_t tier0Heap = h.tier0[PackHeap];
+                const auto checkSeg = [&](const PackSegment &seg, uint64_t id) {
+                    if (!seg.words)
+                        return;
+                    if ((seg.heapOffset & 15u) != 0 || uint64_t(seg.heapOffset) > tier0Heap ||
+                        uint64_t(seg.words) * 4 > tier0Heap - seg.heapOffset)
+                        say("segment", id, "unaligned or outside tier-0 heap");
+                };
+                uint64_t maxSlm = 0;
+                const auto noteSlm = [&](uint32_t progIdx) {
+                    if (progIdx < h.programs && uint64_t(programs[progIdx].program) + 16 <= h.section[PackHeap].bytes)
+                        maxSlm = std::max(maxSlm, slmPerWarpOfHeader(heap + programs[progIdx].program));
+                };
+                for (uint32_t i = 0; i < tbl.pipelineCount; i++) {
+                    if (const PackSegment *s = pack.pipelineSegment(i))
+                        checkSeg(*s, i);
+                    noteSlm(p[i].vs);
+                    if (pixelStage(p[i]))
+                        noteSlm(p[i].fs);
+                    if (tessellates(p[i])) {
+                        noteSlm(p[i].tessPrograms[0]);
+                        noteSlm(p[i].tessPrograms[1]);
+                    }
+                    uint32_t c0 = 0, c1 = 0;
+                    const PackVariant *v0 = pack.variants(p[i], 0, c0);
+                    const PackVariant *v1 = pack.variants(p[i], 1, c1);
+                    for (uint32_t k = 0; k < c0; k++)
+                        noteSlm(v0[k].program);
+                    for (uint32_t k = 0; k < c1; k++)
+                        noteSlm(v1[k].program);
+                    const uint32_t combos = (c0 || c1) ? (c0 + 1u) * (c1 + 1u) - 1u : 0u;
+                    for (uint32_t slot = 0; slot < combos; slot++)
+                        if (const PackSegment *vs = pack.variantSegment(i, slot))
+                            checkSeg(*vs, (uint64_t(i) << 32) | slot);
+                }
+                if (uint64_t(h.tier0SlmPerWarp) < maxSlm)
+                    say("slm", h.tier0SlmPerWarp, "below tier-0 graphics programs' requirement");
+            }
+        }
     }
     return out;
 }

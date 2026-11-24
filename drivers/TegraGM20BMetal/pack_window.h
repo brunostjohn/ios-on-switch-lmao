@@ -40,6 +40,12 @@ inline bool packWindowContainsProgram(const PackProgram &p, uint64_t packWindowB
            uint64_t(p.bytes) + kProgramPrefetchBytes <= packWindowBytes - p.heapOffset;
 }
 
+inline bool packWindowContainsSegment(const PackSegment &s, uint64_t packWindowBytes)
+{
+    return packWindowBytes != 0 && s.words != 0 && (s.heapOffset & 15u) == 0 &&
+           uint64_t(s.heapOffset) <= packWindowBytes && uint64_t(s.words) * 4 <= packWindowBytes - s.heapOffset;
+}
+
 inline uint32_t packWindowCollectCpuRanges(const uint8_t *packBase, const PackHeader &h, uint64_t vmPageBytes,
                                            TegraGM20BAbiPackCpuRange *out, uint32_t maxRanges = kPackWindowMaxCpuRanges,
                                            uint64_t maxBytes = kPackWindowMaxCpuWireBytes)
@@ -58,8 +64,8 @@ inline uint32_t packWindowCollectCpuRanges(const uint8_t *packBase, const PackHe
         return 0;
 
     static constexpr PackSectionId kPriority[] = {
-        PackFastKeys, PackPipelines, PackPrograms, PackVariants, PackBlob,     PackStrings,
-        PackSplits,   PackIterated,  PackInit,     PackBaseline, PackSamplers,
+        PackFastKeys, PackPipelines, PackPrograms, PackSegments, PackVariants, PackBlob,
+        PackStrings,  PackSplits,    PackIterated, PackInit,     PackBaseline, PackSamplers,
     };
 
     std::vector<std::pair<uint64_t, uint64_t>> intervals;

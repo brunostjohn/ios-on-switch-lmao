@@ -28,9 +28,10 @@ MAGIC = b'GM20BPK1'
 # blob section, an argument table's entry past 254), programs' uniform buffers past set-0 byte 496 (a far table in the
 # blob section); 28: the selector section (PackSelectors), a state's shader-side stencil push word (shadow_stencil_word)
 # 31: the selector section gone; 32: the fast keys section (PackFastKeys); 33: two tiers (the header's tier0 table, each
-# section's tier 0 first, a stride twin as its record's index + 1), programs' facts (PackProgram.facts)
-VERSION = 33
-SECTIONS = 16  # runtime/pack.h PackSectionCount
+# section's tier 0 first, a stride twin as its record's index + 1), programs' facts (PackProgram.facts); 34: pre-built
+# tier-0 state segments in tier 0 of PackHeap (PackSegments) and tier0SlmPerWarp in PackHeader
+VERSION = 34
+SECTIONS = 17  # runtime/pack.h PackSectionCount
 ENTRY_COMPARES = 1  # runtime/pack.h kEntryCompares: a handle's sampler slot the state samples by comparison
 ENTRY_ARRAY_VIEW = 2  # runtime/pack.h kEntryArrayView: a handle bound as a 2D-array view (m2v cube_as_array)
 # PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, uniformWords, reserved, alphaSource,
@@ -630,12 +631,14 @@ class Pack:
     # tier 0's programs and heap bytes (directlink.py lay_out_tiers); None: every program is tier 0's
     tier0_programs: int | None = None
     tier0_heap: int | None = None
+    segments: bytes = b''  # the PackSegments section (segments.py)
+    tier0_slm_per_warp: int = 0
 
 
 # The heap section starts on this boundary (runtime/pack.h kPackTierAlign), so its tier 0 ends on one in the file too
 TIER_ALIGN = 128 << 10
 # The sections whose tier 0 is the whole section: read at a process's open, or as a whole (the blob's runs are shared)
-WHOLE_SECTIONS = (2, 3, 4, 5, 12)  # samplers, baseline, init, blob, iterated
+WHOLE_SECTIONS = (2, 3, 4, 5, 12, 16)  # samplers, baseline, init, blob, iterated, segments
 # The sections no state of the launch set reads at its creation: their tier 0 is empty
 UNTIERED_SECTIONS = (8, 11, 13, 14)  # kernels, archives, compute states, reflections
 SECTION_NAMES = (
@@ -655,6 +658,7 @@ SECTION_NAMES = (
     'compute states',
     'reflections',
     'fast keys',
+    'segments',
 )
 
 
@@ -911,9 +915,10 @@ def pack_bytes(pack: Pack, hashes: list[int] | None = None) -> tuple[bytes, list
     ]
     fast_bin, fast_rows = fast_key_bytes(pack.fast_keys, pack.pipes, hashes=hashes)
     sections.append(fast_bin)
+    sections.append(pack.segments)
     assert len(sections) == SECTIONS
     tier0 = tier0_prefixes(pack, *tier0_strings_variants, fast_rows, sections)
-    # the section table, then the stack key, chip facts and reserved, then the tier-0 table
+    # the section table, then the stack key, chip facts and tier0SlmPerWarp, then the tier-0 table
     header_size = 8 + 4 * 4 + 8 * 2 * len(sections) + 16 + 8 * len(sections)
     offs, at = [], (header_size + 255) // 256 * 256
     body = bytearray()
@@ -924,7 +929,7 @@ def pack_bytes(pack: Pack, hashes: list[int] | None = None) -> tuple[bytes, list
         body += s
     hdr = MAGIC + struct.pack('<IIII', VERSION, len(pack.programs), len(pack.pipes), len(pack.constexpr_tsc))
     hdr += struct.pack(f'<{2 * len(sections)}Q', *[x for o in offs for x in o])
-    hdr += struct.pack('<QII', 0, chip_facts(), 0)  # the stack key (make_pack.py stamps it), chip facts, reserved
+    hdr += struct.pack('<QII', 0, chip_facts(), pack.tier0_slm_per_warp)  # stack (make_pack.py), chip facts, tier0 SLM
     hdr += struct.pack(f'<{len(sections)}Q', *tier0)
     return hdr + bytes((header_size + 255) // 256 * 256 - len(hdr)) + body, blob
 

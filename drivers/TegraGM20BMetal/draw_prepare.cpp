@@ -102,7 +102,8 @@ uint32_t RenderEncoder::colorTargets() const
 }
 
 #if SWITCH_METAL_DIAGNOSTICS
-static void probeUniforms(Pipeline &pl, uint32_t stage, uint32_t slot, const uint8_t *bytes, uint64_t length)
+static void probeUniforms(Pipeline &pl, const char *probe, uint32_t stage, uint32_t slot, const uint8_t *bytes,
+                          uint64_t length)
 {
     const NonFiniteUniforms found = nonFiniteUniforms(bytes, length);
     if (!found.words && (!found.halves || pl.uniformHalvesReported))
@@ -116,10 +117,10 @@ static void probeUniforms(Pipeline &pl, uint32_t stage, uint32_t slot, const uin
            "first at "
            "+%llu; "
            "+%llu: %{public}s(mach %llu)",
-           pl.uniformProbe, stage, slot, found.words, found.halves, (unsigned long long)length,
-           (unsigned long long)found.first, (unsigned long long)from, hex, (unsigned long long)mach_absolute_time());
+           probe, stage, slot, found.words, found.halves, (unsigned long long)length, (unsigned long long)found.first,
+           (unsigned long long)from, hex, (unsigned long long)mach_absolute_time());
     if (found.words)
-        pl.uniformProbe = nullptr;
+        __atomic_store_n(&pl.uniformProbe, nullptr, __ATOMIC_RELEASE);
     else
         pl.uniformHalvesReported = true;
 }
@@ -176,8 +177,8 @@ __attribute__((always_inline)) inline bool RenderEncoder::writeSetEntry(Pipeline
         if (b.buffer && b.buffer->hostVisible && !b.buffer->wc)
             cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(desc.range - desc.residual, b.size));
 #if SWITCH_METAL_DIAGNOSTICS
-        if (pl->uniformProbe && b.cpu)
-            probeUniforms(*pl, e.stage, e.slot, b.cpu, std::min<uint64_t>(desc.range - desc.residual, b.size));
+        if (const char *probe = __atomic_load_n(&pl->uniformProbe, __ATOMIC_ACQUIRE); probe && b.cpu)
+            probeUniforms(*pl, probe, e.stage, e.slot, b.cpu, std::min<uint64_t>(desc.range - desc.residual, b.size));
 #endif
         // a slot bound to nothing reads the zero page: no buffer load is bounds-checked (nak_target.h)
         const uint64_t base = b.va ? desc.base : d.zero_.va;
@@ -498,7 +499,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     if (!prepareShaderTests(*pl, why))
         return false;
-    if (p_.room() < 1024 + pl->methods.size() + (cb_->extrasLive_ ? cb_->extrasLive_->restore.size() : 0) +
+    if (p_.room() < 1024 + pl->methodCount() + (cb_->extrasLive_ ? cb_->extrasLive_->restore.size() : 0) +
                         (views_.dirtyViewports | views_.dirtyScissors ? 24 * kMaxViewports : 0))
         reserve();
     Device &d = *dev_;
@@ -532,7 +533,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     if (zcull_.candidate && !zcull_.invalidated && (dsChanged || pl != zcullProgram_)) {
         zcullProgram_ = pl;
-        const bool earlyTests = pl->writesMemory[1] && zcullEarlyFragmentTests(pl->methods.data(), pl->methods.size());
+        const bool earlyTests = pl->writesMemory[1] && zcullEarlyFragmentTests(pl->methodWords(), pl->methodCount());
         if (zcullInvalidates(zcull_, ds_, zeta && zetaHasDepth(zeta->format), zeta && zetaHasStencil(zeta->format),
                              pl->fragmentDepth, shaderTestsActive_ != 0, pl->writesMemory[1], earlyTests)) {
             p.m(kInvalidateZcull, 0);
@@ -860,7 +861,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         WrittenRegion::nonOverlappingQuad(geometryAnalysis, primitive == 3));
     SWITCH_METAL_ENCODE_END(barrierSpan);
 #if SWITCH_METAL_DIAGNOSTICS
-    if (pipeline_ && pipeline_->caName)
+    if (pipeline_ && __atomic_load_n(&pipeline_->caName, __ATOMIC_ACQUIRE))
         probeDraw(*pipeline_, *pl, primitive, first, count, indexed, {x[0], y[0], x[1], y[1]});
 #endif
     SWITCH_METAL_DIAGNOSTIC(cb_->counts_.interlockDraws += pl->storageBits != 0);
@@ -868,7 +869,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
 #if SWITCH_METAL_DIAGNOSTICS
     if (pl->rec && pl->storageBits)
         dev_->stats.fetch.interlockKeys.note(pl->rec->keyHash);
-    if (pl->rec && pl->genericState)
+    if (pl->rec && __atomic_load_n(&pl->genericState, __ATOMIC_RELAXED))
         dev_->stats.fetch.genericKeys.note(pl->rec->keyHash);
 #endif
     SWITCH_METAL_DIAGNOSTIC(cb_->counts_.interlocked += (pl->fetchBits & pl->storageBits) != 0);

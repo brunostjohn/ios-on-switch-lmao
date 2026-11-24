@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 import directlink  # noqa: E402
 import mkpack  # noqa: E402
 import packfile  # noqa: E402
+import segments  # noqa: E402
 
 COUNT = 40_000
 CEILING_S = 3.0
@@ -254,6 +255,180 @@ class PackSerialisation(unittest.TestCase):
         directlink.split_identities(states, pid_cache)
         for rec in states:
             self.assertEqual(directlink._pid(rec['programs'][1], pid_cache), directlink.program_id(rec['programs'][1]))
+
+
+class Tier0Segments(unittest.TestCase):
+    def _make_prog(
+        self,
+        heap: bytearray,
+        *,
+        data_bytes: int = 0,
+        slm_per_thread: int = 0,
+        crs: int = 0,
+        gprs: int = 16,
+        bound_textures: int = 0,
+    ) -> dict:
+        off = len(heap)
+        slot = bytearray(0x100 + data_bytes)
+        # SPH at +0x30: word 1 = slm_per_thread (24-bit), word 3 = crs (24-bit)
+        slot[0x34:0x38] = slm_per_thread.to_bytes(4, 'little')
+        slot[0x3C:0x40] = crs.to_bytes(4, 'little')
+        heap.extend(slot)
+        cbufs = [1, 2] if data_bytes else [1, 3]
+        return {
+            'heap_offset': off,
+            'program': off + 0x30,
+            'bytes': len(slot),
+            'data_offset': 0x100 if data_bytes else 0,
+            'data_bytes': data_bytes,
+            'cbufs': cbufs,
+            'gprs': gprs,
+            'bound_textures': bound_textures,
+            'far_ubos': [],
+            'facts': 0,
+        }
+
+    def test_build_tier0_segments_scales_linearly_and_preserves_tier1_offsets(self):
+        heap = bytearray()
+        programs = [
+            self._make_prog(heap, data_bytes=0x100, slm_per_thread=64, crs=512),
+            self._make_prog(heap, data_bytes=0, slm_per_thread=0, crs=0, bound_textures=2),
+            self._make_prog(heap, data_bytes=0, slm_per_thread=32, crs=0),
+        ]
+        # Compute program with large QMD/SPH-like bytes outside graphics programs must not inflate tier0_slm_per_warp.
+        comp_off = len(heap)
+        comp_slot = bytearray(0x100)
+        comp_slot[0x34:0x38] = (4096).to_bytes(4, 'little')
+        heap.extend(comp_slot)
+        programs.append(
+            {
+                'heap_offset': comp_off,
+                'program': comp_off + 0x30,
+                'bytes': len(comp_slot),
+                'data_offset': 0,
+                'data_bytes': 0,
+                'cbufs': [1],
+                'gprs': 0,
+                'bound_textures': 0,
+                'far_ubos': [],
+                'facts': 0,
+            }
+        )
+        tier0_progs = len(programs)
+        # Pad tier 0 heap to TIER_ALIGN so tier-1 starts on a clean boundary; make segments overflow TIER_ALIGN to test delta > 0.
+        heap.extend(bytes(packfile.TIER_ALIGN - len(heap)))
+        tier0_heap_before = len(heap)
+        tier1_marker = bytes((i * 13 + 7) & 0xFF for i in range(0x200))
+        t1_off = len(heap)
+        heap.extend(tier1_marker)
+        programs.append(
+            {
+                'heap_offset': t1_off,
+                'program': t1_off + 0x30,
+                'bytes': len(tier1_marker),
+                'data_offset': 0,
+                'data_bytes': 0,
+                'cbufs': [1],
+                'gprs': 12,
+                'bound_textures': 0,
+                'far_ubos': [],
+                'facts': 0,
+            }
+        )
+
+        # 3,500 distinct tier-0 pipelines + duplicates so segments exceed 128 KiB and exercise delta > 0 and deduplication.
+        n_tier0 = 3_500
+        pipes = []
+        for i in range(n_tier0):
+            unique = i % 2500
+            blob = [
+                (0x1A00, 0x1111),
+                (0x1200, unique),
+                (0x1204, unique + 1),
+                (0x1208, unique + 2),
+                (0x120C, unique + 3),
+            ]
+            if i == 1:
+                blob.append((0x0DC0, 1))  # PASS_WRITE_METHODS: SET_POLY_OFFSET_POINT
+            pipes.append(
+                {
+                    'tier': 0,
+                    'key': f'samples=1 c0=80:15:0:1:0:0:1:0:0 | v fv | f ff_{i}',
+                    'vs': 0 if i % 2 == 0 else 2,
+                    'fs': 1,
+                    'blob': blob,
+                    'entries': [],
+                    'push': [],
+                    'vbs': [],
+                    'set_size': 0,
+                    'fetch': False,
+                    'variants': [{'stage': 1, 'assume': 1, 'program': 2}] if i == 0 else [],
+                }
+            )
+        pipes.append(
+            {
+                'tier': 1,
+                'key': 'samples=1 c0=80:15:0:1:0:0:1:0:0 | v fv_cold | f ff_cold',
+                'vs': tier0_progs,
+                'fs': tier0_progs,
+                'blob': [(0x1A00, 0x1111)],
+                'entries': [],
+                'push': [],
+                'vbs': [],
+                'set_size': 0,
+                'fetch': False,
+            }
+        )
+        pipes.sort(key=lambda r: (r['tier'], packfile.key_hash(r)))
+        pack = packfile.Pack(
+            pipes=pipes,
+            programs=programs,
+            constexpr_tsc=[],
+            baseline={0x1A00: 0x1111},
+            init=[],
+            heap=heap,
+            kernels=[],
+            tier0_programs=tier0_progs,
+            tier0_heap=tier0_heap_before,
+        )
+
+        start = time.monotonic()
+        segments.build_tier0_segments(pack)
+        data, _blob = packfile.pack_bytes(pack)
+        took = time.monotonic() - start
+
+        self.assertLess(took, CEILING_S, f'{n_tier0} tier-0 segments + pack_bytes took {took:.2f} s')
+        self.assertGreater(len(data), 0)
+        self.assertEqual(pack.tier0_slm_per_warp, 64 * 32 + 512)
+        self.assertGreater(pack.tier0_heap, tier0_heap_before)
+        self.assertEqual(pack.tier0_heap % packfile.TIER_ALIGN, 0)
+        delta = pack.tier0_heap - tier0_heap_before
+        self.assertEqual(programs[tier0_progs]['heap_offset'], t1_off + delta)
+        self.assertEqual(programs[tier0_progs]['program'], t1_off + delta + 0x30)
+        self.assertEqual(bytes(pack.heap[t1_off + delta : t1_off + delta + len(tier1_marker)]), tier1_marker)
+
+        pipe_count, combo_count = segments._SEGMENT_TABLE.unpack_from(pack.segments, 0)
+        self.assertEqual(pipe_count, n_tier0)
+        self.assertEqual(combo_count, 1)
+        distinct_offsets = set()
+        reselect_seen = False
+        not_kept_seen = False
+        kept_seen = False
+        for i in range(pipe_count):
+            off, words, flags = segments._SEGMENT_ENTRY.unpack_from(pack.segments, 8 + 8 * i)
+            self.assertGreater(words, segments.SEGMENT_BIND_WORDS)
+            self.assertEqual(off & 15, 0)
+            self.assertLessEqual(off + words * 4, pack.tier0_heap)
+            distinct_offsets.add(off)
+            reselect_seen |= bool(flags & segments.FLAG_RESELECT_ROOT)
+            if flags & segments.FLAG_KEPT_ACROSS_PASSES:
+                kept_seen = True
+            else:
+                not_kept_seen = True
+        self.assertLess(len(distinct_offsets), n_tier0)
+        self.assertTrue(reselect_seen)
+        self.assertTrue(kept_seen)
+        self.assertTrue(not_kept_seen)
 
 
 if __name__ == '__main__':

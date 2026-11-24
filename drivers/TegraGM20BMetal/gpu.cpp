@@ -547,6 +547,9 @@ bool Device::init(std::string &err)
         const uint64_t packEnd = std::max(packWindowBytes_, packPages_.windowEnd());
         heapCopiesAt_ = heapBound_ = heapPlaced_ = (packEnd + kHeapStep - 1) & ~(kHeapStep - 1);
         heapStoresAt_ = heapCopiesAt_ + kHeapCopiesWindow;
+        tier0Pipelines_.reset(uint32_t(pack_.tier0Entries(PackPipelines, sizeof(PackPipeline))));
+        if (packWindowBytes_ && h.tier0SlmPerWarp)
+            (void)slmNeed(h.tier0SlmPerWarp);
     }
     if (role_ == Role::Client)
         return true;
@@ -762,7 +765,7 @@ bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
 // (CommandBuffer::commit). False: no memory for it.
 bool Device::slmNeed(uint64_t perWarp)
 {
-    if (perWarp <= slmPerWarp_)
+    if (perWarp <= slmPerWarp_.load(std::memory_order_acquire))
         return true;
     const SlmArea a = slmArea(perWarp, k_.info().tpc_count);
     Bo area;

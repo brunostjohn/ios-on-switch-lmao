@@ -35,10 +35,11 @@ enum PackSectionId {
     PackComputeStates,
     PackReflections,
     PackFastKeys,
+    PackSegments,
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 33;
+constexpr uint32_t kPackVersion = 34;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bit 26 of its pass, bits 17-25 of the chip
@@ -87,7 +88,7 @@ struct PackHeader {
     uint64_t stack;  // the build's stack key (build-tegra-gm20b-metal.py: the plugin is compiled with the same one)
     // the chip facts (kChipAssumptions) the pack's builder took as proven on the device: a draw's facts always hold them
     uint32_t chipFacts;
-    uint32_t reserved;
+    uint32_t tier0SlmPerWarp;          // v34: max slmPerWarpOfHeader across tier-0 graphics programs
     uint64_t tier0[PackSectionCount];  // v33
 };
 
@@ -212,6 +213,25 @@ struct PackIteratedBlend {
 struct PackFastKey {
     uint64_t fast;
     uint32_t first, records;
+};
+
+// Pre-built GM20B state segment living inside tier 0 of PackHeap at TGM_PACK_WINDOW_VA + heapOffset (v34).
+// PackSegments layout: PackSegmentTable, PackSegment base[pipelineCount], uint32_t variantBase[pipelineCount]
+// (~0u: no variant table), PackSegment variantCombos[variantComboCount].
+enum PackSegmentFlag : uint16_t {
+    kPackSegmentKeptAcrossPasses = 1u << 0,
+    kPackSegmentReselectRoot = 1u << 1,
+};
+
+struct PackSegment {
+    uint32_t heapOffset;
+    uint16_t words;
+    uint16_t flags;
+};
+
+struct PackSegmentTable {
+    uint32_t pipelineCount;
+    uint32_t variantComboCount;
 };
 
 // The bytes of a uniform buffer entry a pipeline's programs read: from its bind offset, in 16-byte units
@@ -765,6 +785,7 @@ static_assert(sizeof(PackArchive) == 16, "pack layout");
 static_assert(sizeof(PackComputeFacts) == 24, "pack layout: packfile.py compute_facts_bytes");
 static_assert(sizeof(PackReflection) == 16, "pack layout: packfile.py reflection_bytes");
 static_assert(sizeof(PackFastKey) == 16, "pack layout: packfile.py fast_key_bytes");
+static_assert(sizeof(PackSegment) == 8 && sizeof(PackSegmentTable) == 8, "pack layout: packfile.py segments");
 static_assert(sizeof(PackHeader) == 24 + 16 * PackSectionCount + 16 + 8 * PackSectionCount,
               "pack layout: packfile.py pack_bytes header_size");
 static_assert(sizeof(PackKernel) == 18 + 256 + 14 + 128 + 8 * kKernelEntries + 84 + 12, "pack layout");
@@ -838,6 +859,8 @@ public:
     // The reflection blob of the render state (or, with `compute`, the compute state) of `keyHash`, its `length`;
     // nullptr: the pack holds none
     const uint8_t *reflection(uint64_t keyHash, bool compute, uint32_t &length) const;
+    const PackSegment *pipelineSegment(uint32_t recIndex) const;
+    const PackSegment *variantSegment(uint32_t recIndex, uint32_t comboIndex) const;
 
     const char *string(uint32_t off) const
     {

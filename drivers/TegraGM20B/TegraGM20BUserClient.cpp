@@ -550,7 +550,7 @@ IOReturn AGXDeviceUserClient::packImageMap(const TegraGM20BAbiPackImageMap *in,
 		IOLockUnlock(lock_);
 		return kIOReturnExclusiveAccess;
 	}
-	const bool knownCompositor = critical_ || restartNoKill_;
+	const bool knownCompositor = critical_;
 	const bool checkEntitlement = !knownCompositor && !entitlementsRead_ && in->cpu_range_count;
 	IOLockUnlock(lock_);
 
@@ -580,6 +580,7 @@ IOReturn AGXDeviceUserClient::packImageMap(const TegraGM20BAbiPackImageMap *in,
 			return wireRet;
 		}
 		staged.cpuWiredCount = in->cpu_range_count;
+		staged.cpuWiredBytes = wiredBytes;
 	}
 
 	IOLockLock(lock_);
@@ -611,6 +612,7 @@ IOReturn AGXDeviceUserClient::packImageMap(const TegraGM20BAbiPackImageMap *in,
 				packClient_.gpuMapping = gpuMapping;
 				packClient_.gpuBytes = view.tier0HeapBytes;
 				packClient_.cpuWiredCount = staged.cpuWiredCount;
+				packClient_.cpuWiredBytes = staged.cpuWiredBytes;
 				for (uint32_t i = 0; i < staged.cpuWiredCount; ++i)
 					packClient_.cpuWired[i] = staged.cpuWired[i];
 				staged = {};
@@ -645,11 +647,13 @@ void AGXDeviceUserClient::releaseMappings()
 	maps_ = nullptr;
 	SwitchGpuPackClient packCpu = {};
 	packCpu.cpuWiredCount = packClient_.cpuWiredCount;
+	packCpu.cpuWiredBytes = packClient_.cpuWiredBytes;
 	for (uint32_t i = 0; i < packCpu.cpuWiredCount; ++i) {
 		packCpu.cpuWired[i] = packClient_.cpuWired[i];
 		packClient_.cpuWired[i] = nullptr;
 	}
 	packClient_.cpuWiredCount = 0;
+	packClient_.cpuWiredBytes = 0;
 	IOLockUnlock(lock_);
 	switch_gpu_pack_client_release_cpu(&packCpu);
 	while (list) {
