@@ -592,6 +592,23 @@ public:
     // the pack's and the shader compiler's store's pages bound in the program window, where larger programs run in place
     uint64_t heapInPlaceBytes();
 
+    uint64_t packWindowVa() const
+    {
+        return packWindowVa_;
+    }
+
+    uint64_t packWindowBytes() const
+    {
+        return packWindowBytes_;
+    }
+
+    const uint8_t *packWindowCpu() const
+    {
+        return packWindowCpu_;
+    }
+
+    bool packWindowProgram(uint32_t prog, uint32_t &program, uint64_t &data) const;
+
     // Where the shader compiler's program slots are, as this process maps its store (TegraGM20BMetalComplete.mm): a slot's bytes found
     // there in place, with that mapping's first byte and size, else null. A copied slot of a page or more is looked up
     // there first and runs in place where it is found. Null: none.
@@ -1381,6 +1398,11 @@ private:
     std::vector<HeapPart> heapParts_;
     uint64_t heapCopiesAt_ = 0, heapBound_ = 0;
     ProgramPages packPages_;
+    uint64_t packWindowVa_ = 0, packWindowBytes_ = 0;
+    const uint8_t *packWindowCpu_ = nullptr;
+#if SWITCH_METAL_DIAGNOSTICS
+    uint32_t packPieceLogs_ = 0;
+#endif
 
     // each mapping of the shader compiler's store slots ran from, its pages from window offset heapStoresAt_ on, a mapping
     // after another's (a store written again is mapped again; the old mapping stays)
@@ -1472,7 +1494,7 @@ private:
     // each own state's (ownPipeline) once a lookup placed it: any recording thread may place it first, the others read
     // it without lock_ after
     std::array<std::atomic<Pipeline *>, std::size(kOwnStates)> own_{};
-    std::vector<uint32_t> placed_;  // each pack program's heap offset, ~0u: not placed
+    std::unordered_map<uint32_t, uint32_t> placedCold_;
     uint64_t heapPlaced_ = 0;
     // Programs placed so far, in place or copied, and that count as of the last submission whose prologue invalidated the
     // SMs' instruction caches (~0: none on this channel). The instruction cache prefetches past a program's end, where the
@@ -1488,6 +1510,7 @@ private:
     uint64_t slmChannel_ = 0;
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
     bool slmNeed(uint64_t perWarp);
+    bool initPackWindow(std::string &err);
     bool place(uint32_t prog, uint32_t &program, uint64_t &data);
     bool heapGrow(uint64_t end);
     const HeapPart *heapPartAt(uint64_t at) const;

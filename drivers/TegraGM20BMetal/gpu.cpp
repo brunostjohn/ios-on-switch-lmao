@@ -7,6 +7,7 @@
 #include "lock.h"
 #include "creation_cost.h"
 #include "gpu.h"
+#include "pack_window.h"
 #include "mme.h"
 #include "owned.h"
 #include "cbuf.h"
@@ -18,8 +19,14 @@
 #include "tiled_cache.h"
 
 #include <mach/mach.h>
+#if SWITCH_METAL_DIAGNOSTICS
+#include <mach/mach_time.h>
+#endif
+#include <mach/vm_page_size.h>
 #include <os/log.h>
+#include <sys/mman.h>
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 #include "gm20b_gpu_internal.h"
@@ -434,12 +441,8 @@ bool Device::init(std::string &err)
                (unsigned long long)tickets_.va);
     });
 #endif
-    heap_.bytes = kProgramWindow;
-    heap_.va = heap_.vaBase = k_.reserveVa(kProgramWindow);
-    if (!heap_.va) {
-        err = "no GPU VA for the shader heap's program window";
+    if (!initPackWindow(err))
         return false;
-    }
     memset(tic_.cpu, 0, tic_.bytes);
     memset(tsc_.cpu, 0, tsc_.bytes);
     memset(root_.cpu, 0, root_.bytes);
@@ -503,7 +506,6 @@ bool Device::init(std::string &err)
     for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
         if (base[2 * i] >= CT_WRITE && base[2 * i] < CT_WRITE + 32)
             ctWrite_[(base[2 * i] - CT_WRITE) / 4] = base[2 * i + 1];
-    placed_.assign(pack_.header()->programs, ~0u);
     segmentHeap_.setGrow([this](uint64_t bytes, SegmentChunk &chunk) {
         Bo bo;
         if (!k_.allocControl(bytes, bo, ControlUse::StateSegments))
@@ -518,8 +520,10 @@ bool Device::init(std::string &err)
         uint64_t mapped = 0;
         for (const PackSection &section : h.section)
             mapped = std::max(mapped, (section.offset + section.bytes + page - 1) / page * page);
-        packPages_.reset(h.section[PackHeap].offset, mapped, mapped, 0);
-        heapCopiesAt_ = heapBound_ = heapPlaced_ = (packPages_.windowEnd() + kHeapStep - 1) & ~(kHeapStep - 1);
+        const uint64_t heapStart = h.section[PackHeap].offset + packWindowBytes_;
+        packPages_.reset(heapStart, mapped, mapped, packWindowBytes_);
+        const uint64_t packEnd = std::max(packWindowBytes_, packPages_.windowEnd());
+        heapCopiesAt_ = heapBound_ = heapPlaced_ = (packEnd + kHeapStep - 1) & ~(kHeapStep - 1);
         heapStoresAt_ = heapCopiesAt_ + kHeapCopiesWindow;
     }
     if (role_ == Role::Client)
@@ -533,7 +537,8 @@ bool Device::init(std::string &err)
     {
         DeferredFrees deferred(*this);
         std::lock_guard<gm20b::Mutex> l(lock_);
-        heapGrow(heapCopiesAt_ + std::min<uint64_t>(pack_.bytes(PackHeap) + kHeapSlack, kHeapAtOpen));
+        if (!packWindowBytes_)
+            heapGrow(heapCopiesAt_ + std::min<uint64_t>(pack_.bytes(PackHeap) + kHeapSlack, kHeapAtOpen));
         Span first;
         if (blAlloc(1, 0, first))
             blFree(first, deferred);
@@ -603,6 +608,87 @@ bool Device::openChannel(std::string &err, bool &gaveBack)
     return true;
 }
 
+bool Device::initPackWindow(std::string &err)
+{
+    heap_.bytes = kProgramWindow;
+    const PackHeader &h = *pack_.header();
+    if (k_.supportsPackImage() && packWindowEligible(h, kProgramWindow)) {
+        TegraGM20BAbiPackCpuRange cpuRanges[kPackWindowMaxCpuRanges] = {};
+        uint32_t cpuRangeCount = 0;
+        if (role_ == Role::RenderServer) {
+            const auto *base = reinterpret_cast<const uint8_t *>(pack_.header());
+            cpuRangeCount = packWindowCollectCpuRanges(base, h, uint64_t(vm_page_size), cpuRanges);
+            for (uint32_t i = 0; i < cpuRangeCount; ++i)
+                madvise(reinterpret_cast<void *>(uintptr_t(cpuRanges[i].address)), size_t(cpuRanges[i].bytes),
+                        MADV_SEQUENTIAL);
+        }
+#if SWITCH_METAL_DIAGNOSTICS
+        const uint64_t mapBegan = mach_absolute_time();
+#endif
+        TegraGM20BAbiPackImageMapReply reply = {};
+        const int kr = k_.packImageMap(cpuRanges, cpuRangeCount, reply);
+        for (uint32_t i = 0; i < cpuRangeCount; ++i)
+            madvise(reinterpret_cast<void *>(uintptr_t(cpuRanges[i].address)), size_t(cpuRanges[i].bytes), MADV_NORMAL);
+        const os_log_t log = os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b");
+        const char *proc = getprogname();
+        const char *who = proc ? proc : "unknown";
+        if (kr != KERN_SUCCESS) {
+            os_log_error(log, "SwitchMetal: %{public}s: pack image map failed (0x%x): using per-piece placement", who,
+                         unsigned(kr));
+        } else if (reply.status == TegraGM20BPackStatusRefused) {
+            os_log_error(log, "SwitchMetal: %{public}s: pack image refused (status %u): using per-piece placement", who,
+                         reply.status);
+        } else if (!packWindowMatchesReply(h, reply, TGM_PACK_WINDOW_VA, kProgramWindow)) {
+            os_log_error(log,
+                         "SwitchMetal: %{public}s: pack image mismatch (status %u, va 0x%llx, tier0 %llu/%llu, heap "
+                         "%llu/%llu): using per-piece placement",
+                         who, reply.status, (unsigned long long)reply.gpu_va,
+                         (unsigned long long)reply.tier0_heap_bytes, (unsigned long long)h.tier0[PackHeap],
+                         (unsigned long long)reply.heap_bytes, (unsigned long long)h.section[PackHeap].bytes);
+        } else {
+            heap_.va = heap_.vaBase = reply.gpu_va;
+            packWindowVa_ = reply.gpu_va;
+            packWindowBytes_ = reply.tier0_heap_bytes;
+            packWindowCpu_ = reinterpret_cast<const uint8_t *>(uintptr_t(reply.cpu_address));
+#if SWITCH_METAL_DIAGNOSTICS
+            static mach_timebase_info_data_t tb = [] {
+                mach_timebase_info_data_t t = {};
+                mach_timebase_info(&t);
+                return t;
+            }();
+            const uint64_t mapNs = tb.denom ? (mach_absolute_time() - mapBegan) * tb.numer / tb.denom : 0;
+            if (reply.waited_ns >= 1000000ull)
+                os_log(log, "SwitchMetal: %{public}s: waited %llu ms at device open for the pack image", who,
+                       (unsigned long long)(reply.waited_ns / 1000000ull));
+            os_log(log, "SwitchMetal: %{public}s: pack window mapped in %llu us (%llu MiB tier 0)", who,
+                   (unsigned long long)(mapNs / 1000ull), (unsigned long long)(reply.tier0_heap_bytes >> 20));
+            if (reply.cpu_wired_bytes)
+                os_log(log, "SwitchMetal: pack window: %llu MiB of CPU ranges wired in %llu ms",
+                       (unsigned long long)(reply.cpu_wired_bytes >> 20), (unsigned long long)(mapNs / 1000000ull));
+#endif
+            return true;
+        }
+    }
+    heap_.va = heap_.vaBase = k_.reserveVa(kProgramWindow);
+    if (!heap_.va) {
+        err = "no GPU VA for the shader heap's program window";
+        return false;
+    }
+    return true;
+}
+
+bool Device::packWindowProgram(uint32_t prog, uint32_t &program, uint64_t &data) const
+{
+    if (!packWindowBytes_ || !pack_.header() || prog >= pack_.header()->programs)
+        return false;
+    const PackProgram &p = pack_.section<PackProgram>(PackPrograms)[prog];
+    if (!packWindowContainsProgram(p, packWindowBytes_))
+        return false;
+    program = p.program;
+    data = p.dataBytes ? packWindowVa_ + p.heapOffset + p.dataOffset : 0;
+    return true;
+}
+
 // lock_ held: program `prog`'s slot in the program window the first time a state uses it, its SET_PIPELINE_PROGRAM value and
 // its shader data's GPU address (0: none). A slot of a page or more, or one whose pages are bound already, runs in place from
 // the pack's pages; a smaller one is copied into the heap's host memory, since importing its page would wire a page for a
@@ -611,20 +697,37 @@ bool Device::openChannel(std::string &err, bool &gaveBack)
 // state stays m2v's).
 bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
 {
+    if (packWindowProgram(prog, program, data))
+        return true;
     const PackProgram &p = pack_.section<PackProgram>(PackPrograms)[prog];
-    if (placed_[prog] == ~0u) {
+    auto it = placedCold_.find(prog);
+    if (it == placedCold_.end()) {
         uint64_t at = 0;
         const uint8_t *file = reinterpret_cast<const uint8_t *>(pack_.header());
         const uint64_t fileOffset = pack_.header()->section[PackHeap].offset + p.heapOffset;
-        const bool inPlace = p.bytes >= k_.info().page_size || packPages_.bound(fileOffset, p.bytes + kHeapSlack);
+        const bool inPlace = packWindowBytes_ != 0 || p.bytes >= k_.info().page_size ||
+                             packPages_.bound(fileOffset, p.bytes + kHeapSlack);
+#if SWITCH_METAL_DIAGNOSTICS
+        const size_t importsBefore = inPlaceImports_.size();
+#endif
         if (!(inPlace && placeInPlace(packPages_, file, fileOffset, p.bytes, false, at)) &&
             !heapPlace(pack_.section<uint8_t>(PackHeap) + p.heapOffset, p.bytes, at))
             return false;
-        placed_[prog] = uint32_t(at);
+#if SWITCH_METAL_DIAGNOSTICS
+        if (const size_t added = inPlaceImports_.size() - importsBefore; added && packPieceLogs_ < 16) {
+            ++packPieceLogs_;
+            const uint32_t tier = packWindowContainsProgram(p, pack_.header()->tier0[PackHeap]) ? 0u : 1u;
+            const char *proc = getprogname();
+            os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+                   "SwitchMetal: %{public}s: pack piece import: tier %u, %zu piece(s) at heap 0x%x",
+                   proc ? proc : "unknown", tier, added, p.heapOffset);
+        }
+#endif
+        it = placedCold_.emplace(prog, uint32_t(at)).first;
         SWITCH_METAL_DIAGNOSTIC(stats.programsPlaced++);
     }
-    program = placed_[prog] + (p.program - p.heapOffset);
-    data = p.dataBytes ? heap_.va + placed_[prog] + p.dataOffset : 0;
+    program = it->second + (p.program - p.heapOffset);
+    data = p.dataBytes ? heap_.va + it->second + p.dataOffset : 0;
     return true;
 }
 
@@ -805,6 +908,8 @@ void Device::runSlotsFrom(SlotLookup lookup)
 // none)
 const uint8_t *Device::heapCpu(uint64_t at) const
 {
+    if (at < packWindowBytes_)
+        return packWindowCpu_ ? packWindowCpu_ + at : pack_.section<uint8_t>(PackHeap) + at;
     if (packPages_.holdsWindow(at))
         return reinterpret_cast<const uint8_t *>(pack_.header()) + packPages_.fileOffset(at);
     for (const StoreRegion &r : storeRegions_)

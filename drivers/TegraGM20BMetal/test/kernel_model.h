@@ -27,6 +27,7 @@
 #include "TegraGM20BFencePageABI.h"
 #include "TegraGM20BJobABI.h"
 #include <IOKit/IOKitLib.h>
+#include <unistd.h>
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
@@ -206,9 +207,36 @@ struct Model {
     bool refuseAllocs = false;  // every BoAlloc answered kIOReturnNoMemory
     // the next BoAllocs and BoImports refused, kIOReturnNoMemory: memory the kernel has none of, pages it cannot wire
     unsigned refuseAllocCount = 0, refuseImports = 0;
-    // GetInfo's client VA end: a gm20b::Device's shader heap reserves a 4 GiB program window in its quarter
+    // GetInfo's client VA range: a gm20b::Device's shader heap reserves a 4 GiB program window in its quarter
+    uint64_t vaStart = 0x1000000;
     uint64_t vaEnd = uint64_t(1) << 40;
     uint32_t infoFlags = 0;  // GetInfo's flags beyond the model's own (TegraGM20BInfoTiledCache)
+
+    struct PackImageConfig {
+        bool enabled = false;
+        uint32_t status = TegraGM20BPackStatusReady;
+        int error = KERN_SUCCESS;
+        bool allowCpuWire = true;
+        uint64_t gpuVa = TGM_PACK_WINDOW_VA;
+        uint64_t cpuAddress = 0;
+        uint64_t tier0HeapBytes = 0;
+        uint64_t heapBytes = 0;
+        uint64_t stack = 0;
+        uint64_t waitedNs = 0;
+        uint64_t vmPageBytes = 0;
+        std::function<void()> onMap;
+    };
+
+    struct PackImageCall {
+        uint32_t flags = 0;
+        std::vector<TegraGM20BAbiPackCpuRange> cpuRanges;
+        uint32_t status = 0;
+        int kr = KERN_SUCCESS;
+    };
+
+    PackImageConfig packImage;
+    std::vector<PackImageCall> packImageCalls;
+    uint64_t packMappedVa = 0, packMappedBytes = 0;
     // A test's answer to a method the model does not implement, its reply written into `output`; unset, every such
     // method is refused kIOReturnUnsupported, as a kernel without the feature refuses it (ZcullInfo: no zcull RAM)
     std::function<kern_return_t(uint32_t method, void *output)> otherMethod;
@@ -680,6 +708,7 @@ inline void clearHooks()
         m.compilerFlags = 0;
         m.store = nullptr;
         m.storeBytes = 0;
+        m.packImage.onMap = nullptr;
         if (m.blockUntil)
             m.blockUntil = nullptr;
     };
@@ -724,11 +753,12 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         info = {};
         info.abi_version = TegraGM20BAbiVersion;
         info.flags = TegraGM20BInfoKernelMap | TegraGM20BInfoSubmitAddress | TegraGM20BInfoKillRecord |
-                     TegraGM20BInfoCpuAccess | TegraGM20BInfoChannelEpoch | model.infoFlags;
+                     TegraGM20BInfoCpuAccess | TegraGM20BInfoChannelEpoch |
+                     (model.packImage.enabled ? TegraGM20BInfoPackImage : 0u) | model.infoFlags;
         info.fence_token = kernel_model::kFenceToken;
         info.cls_copy = 0xb0b5;
         info.cls_eng3d = 0xb197;
-        info.va_start = 0x1000000;
+        info.va_start = model.vaStart;
         info.va_end = model.vaEnd;
         info.page_size = 4096;
         return KERN_SUCCESS;
@@ -769,6 +799,14 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         return KERN_SUCCESS;
     case TegraGM20BMethodVmBind: {
         const auto &b = *static_cast<const TegraGM20BAbiVmBind *>(input);
+        if (model.packMappedBytes) {
+            const uint64_t packEnd = model.packMappedVa + model.packMappedBytes;
+            for (uint32_t i = 0; i < b.count; i++) {
+                const TegraGM20BAbiBindOp &op = b.ops[i];
+                if (op.range && op.va < packEnd && model.packMappedVa < op.va + op.range)
+                    return kIOReturnBadArgument;
+            }
+        }
         for (uint32_t i = 0; i < b.count; i++) {
             const TegraGM20BAbiBindOp &op = b.ops[i];
             model.binds[op.va] = {op.handle, op.range};
@@ -913,6 +951,72 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         *static_cast<TegraGM20BAbiClockAnchorsReply *>(output) = {
             kernel_model::kFenceToken + TegraGM20BClockAnchorOffset, kernel_model::kFenceToken, 0};
         return KERN_SUCCESS;
+    case TegraGM20BMethodPackImageMap: {
+        if (!model.packImage.enabled)
+            return kIOReturnUnsupported;
+        const auto &in = *static_cast<const TegraGM20BAbiPackImageMap *>(input);
+        auto &out = *static_cast<TegraGM20BAbiPackImageMapReply *>(output);
+        out = {};
+        const auto record = [&](int kr) {
+            kernel_model::Model::PackImageCall call;
+            call.flags = in.flags;
+            const uint32_t n = std::min<uint32_t>(in.cpu_range_count, TegraGM20BMaxPackCpuRanges);
+            call.cpuRanges.assign(in.cpu_ranges, in.cpu_ranges + n);
+            call.status = out.status;
+            call.kr = kr;
+            model.packImageCalls.push_back(std::move(call));
+            return kr;
+        };
+        if (in.flags != 0 || in.cpu_range_count > TegraGM20BMaxPackCpuRanges)
+            return record(kIOReturnBadArgument);
+        for (uint32_t i = in.cpu_range_count; i < TegraGM20BMaxPackCpuRanges; ++i)
+            if (in.cpu_ranges[i].address || in.cpu_ranges[i].bytes)
+                return record(kIOReturnBadArgument);
+        const uint64_t vmPage = model.packImage.vmPageBytes ? model.packImage.vmPageBytes : uint64_t(getpagesize());
+        uint64_t wiredBytes = 0;
+        for (uint32_t i = 0; i < in.cpu_range_count; ++i) {
+            const uint64_t addr = in.cpu_ranges[i].address, bytes = in.cpu_ranges[i].bytes;
+            if (!addr || !bytes || (addr & (vmPage - 1)) || (bytes & (vmPage - 1)) || addr > UINT64_MAX - bytes ||
+                bytes > (64ULL << 20) - wiredBytes)
+                return record(kIOReturnBadArgument);
+            wiredBytes += bytes;
+        }
+        if (model.packMappedBytes)
+            return record(kIOReturnExclusiveAccess);
+        if (in.cpu_range_count && !model.packImage.allowCpuWire)
+            return record(kIOReturnNotPermitted);
+        if (const auto hook = model.packImage.onMap) {
+            hold.unlock();
+            hook();
+            hold.lock();
+        }
+        if (model.packImage.error != KERN_SUCCESS)
+            return record(model.packImage.error);
+        if (model.packImage.status != TegraGM20BPackStatusReady) {
+            out.status = model.packImage.status;
+            out.waited_ns = model.packImage.waitedNs;
+            return record(KERN_SUCCESS);
+        }
+        if (model.packMappedBytes)
+            return record(kIOReturnExclusiveAccess);
+        const uint64_t va = model.packImage.gpuVa;
+        const uint64_t bytes = model.packImage.tier0HeapBytes;
+        const uint64_t packEnd = va + bytes;
+        for (const auto &[bva, bound] : model.binds)
+            if (bva < packEnd && va < bva + bound.second)
+                return record(kIOReturnBadArgument);
+        model.packMappedVa = va;
+        model.packMappedBytes = bytes;
+        out.status = TegraGM20BPackStatusReady;
+        out.gpu_va = va;
+        out.cpu_address = model.packImage.cpuAddress;
+        out.tier0_heap_bytes = bytes;
+        out.heap_bytes = model.packImage.heapBytes;
+        out.stack = model.packImage.stack;
+        out.cpu_wired_bytes = wiredBytes;
+        out.waited_ns = model.packImage.waitedNs;
+        return record(KERN_SUCCESS);
+    }
     default:
         return model.otherMethod ? model.otherMethod(method, output) : kIOReturnUnsupported;
     }
@@ -934,7 +1038,9 @@ extern "C" kern_return_t IOServiceOpen(io_service_t, task_port_t, uint32_t, io_c
     }
     *connection = model.nextConnection++;
     auto &other = model.others[*connection] = std::make_unique<kernel_model::Model>();
+    other->vaStart = model.vaStart;
     other->vaEnd = model.vaEnd;
+    other->packImage = model.packImage;
     other->opened = true;
     other->epochWord() = model.epoch;
     const uint32_t published = model.anchors.published;

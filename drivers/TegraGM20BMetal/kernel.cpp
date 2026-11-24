@@ -95,8 +95,27 @@ bool Kernel::open(std::string &err)
         return false;
     }
     const uint64_t start = (info_.va_start + kVaGranule - 1) & ~(kVaGranule - 1);
-    vaFree_[start] = (info_.va_end & ~(kVaGranule - 1)) - start;
+    uint64_t end = info_.va_end & ~(kVaGranule - 1);
+    if (supportsPackImage() && end > TGM_PACK_WINDOW_VA)
+        end = TGM_PACK_WINDOW_VA;
+    if (end > start)
+        vaFree_[start] = end - start;
     return true;
+}
+
+int Kernel::packImageMap(const TegraGM20BAbiPackCpuRange *cpuRanges, uint32_t cpuRangeCount,
+                         TegraGM20BAbiPackImageMapReply &reply)
+{
+    reply = {};
+    if (!supportsPackImage())
+        return kIOReturnUnsupported;
+    if (cpuRangeCount > TegraGM20BMaxPackCpuRanges || (cpuRangeCount && !cpuRanges))
+        return kIOReturnBadArgument;
+    TegraGM20BAbiPackImageMap in = {};
+    in.cpu_range_count = cpuRangeCount;
+    for (uint32_t i = 0; i < cpuRangeCount; ++i)
+        in.cpu_ranges[i] = cpuRanges[i];
+    return call(TegraGM20BMethodPackImageMap, &in, sizeof in, &reply, sizeof reply);
 }
 
 uint64_t Kernel::allocVa(uint64_t bytes, uint64_t align)

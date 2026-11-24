@@ -175,6 +175,14 @@ public:
         return (info_.flags & TegraGM20BInfoSparse) != 0;
     }
 
+    bool supportsPackImage() const
+    {
+        return (info_.flags & TegraGM20BInfoPackImage) != 0;
+    }
+
+    int packImageMap(const TegraGM20BAbiPackCpuRange *cpuRanges, uint32_t cpuRangeCount,
+                     TegraGM20BAbiPackImageMapReply &reply);
+
     // One VmBind: `bo` whole at `va`, a reservation's granule, and [va + bo.bytes, va + bytes) sparse (whole pages). BoFree
     // unbinds only the BO's own binding: unbind [va, va + bytes) before releasing the reservation
     bool bindWindow(const Bo &bo, uint64_t va, uint32_t kind, uint64_t bytes);

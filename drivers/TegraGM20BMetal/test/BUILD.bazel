@@ -3596,6 +3596,19 @@ host_test(
 )
 
 host_test(
+    name = "pack_window_test",
+    srcs = [
+        "pack_window_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20BMetal:pack.h",
+        "//drivers/TegraGM20BMetal:pack_window.h",
+        "//drivers/TegraGM20BMetal:program_pages.h",
+    ],
+    copts = ["-Idrivers/TegraGM20B"],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "metallib_functions_test",
     srcs = [
         "made_metallib.h",
@@ -6636,6 +6649,40 @@ host_test(
     srcs = [
         "device_import_test.cpp",
         "empty_pack.h",
+        "translate_absent.cpp",
+        "kernel_model.h",
+    ] + METAL_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + METAL_HOST_COPTS + tsan,
+    cxx_std = "c++17",
+    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
+    linkopts = FACADE_LINKOPTS + tsan,
+    sanitize = False,
+    deps = [
+        ":runtime_plugin" + plugin,
+        "//kits/SwitchRefusal:switch_refusal",
+    ] + METAL_HOST_DEPS,
+) for suffix, plugin, tsan in [
+    (
+        "",
+        "_host",
+        [],
+    ),
+    (
+        "_tsan",
+        "_tsan",
+        ["-fsanitize=thread"],
+    ),
+]]
+
+[host_test(
+    name = "device_pack_window" + suffix + "_test",
+    size = "medium",
+    srcs = [
+        "device_pack_window_test.cpp",
         "translate_absent.cpp",
         "kernel_model.h",
     ] + METAL_HOST_HEADERS,

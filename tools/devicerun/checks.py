@@ -967,6 +967,28 @@ GROUPS: dict[str, list[Check]] = {
             '(CA_DISABLE_GENERIC_SHADERS=1 in xnu-12377 kern_exec.c; 21H461 keeps the generic)',
         ),
         Check(
+            'boot.pack-pieces',
+            'pack-hit',
+            (
+                'tegra-gm20b: pack image: refused',
+                'tegra-gm20b: slow import backboardd ',
+                'SwitchMetal: backboardd: pack image ',
+                'SwitchMetal: backboardd: pack piece import:',
+            ),
+            regex=(
+                r'^(?:tegra-gm20b: pack image: (?=refused \()'
+                r'|tegra-gm20b: slow import backboardd (?=(?:16|32|48|64) KiB read-only surface 0:)'
+                r'|SwitchMetal: backboardd: pack (?=image (?:refused|map failed|mismatch)|piece import: tier \d+))'
+                r'(?P<detail>refused \([^)]+\)|(?:16|32|48|64) KiB read-only surface 0'
+                r'|image (?:refused|map failed|mismatch)[^:]*|piece import: tier \d+)'
+            ),
+            show=('process', 'detail'),
+            source='drivers/TegraGM20B/SwitchGpuPackImage.cpp, drivers/TegraGM20B/gpu_stats.c, '
+            'drivers/TegraGM20BMetal/gpu.cpp',
+            note='backboardd runs tier-0 states from the shared pack window with zero slow read-only pack-piece '
+            'imports and no pack-image refusal or per-piece placement',
+        ),
+        Check(
             'compiler.library-time',
             'compiler-speed',
             'SwitchShaderCompiler: made in',

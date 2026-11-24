@@ -644,6 +644,100 @@ class Rules(unittest.TestCase):
         self.assertEqual(results[0].verdict, FAIL)
         self.assertIn('max(cag) 3', results[0].observed)
 
+    def test_boot_pack_pieces_fails_on_refusal_slow_import_or_piece_import(self):
+        rule = [c for c in checks.GROUPS['boot'] if c.name == 'boot.pack-pieces']
+        self.assertEqual(len(rule), 1)
+
+        def rec(path: str, subsystem: str, message: str, second: int = 10) -> dict:
+            return {
+                'timestamp': f'2026-11-24 10:00:{second:02d}.000000+0000',
+                'bootUUID': 'B00T',
+                'processImagePath': path,
+                'subsystem': subsystem,
+                'category': 'gm20b',
+                'messageType': 'Default',
+                'eventMessage': message,
+            }
+
+        healthy = [
+            rec(
+                '/kernel.development',
+                '',
+                'tegra-gm20b: pack image: tier 0 124 MiB built in 900 ms for cameracaptured '
+                '(pagein requests 125, copy 14 ms, big-page bytes 130023424)',
+                1,
+            ),
+            rec(
+                '/usr/libexec/backboardd',
+                checks.GPU_METAL_SUBSYSTEM,
+                'SwitchMetal: backboardd: pack window mapped in 140 us (124 MiB tier 0)',
+                2,
+            ),
+            rec(
+                '/usr/libexec/backboardd',
+                checks.GPU_METAL_SUBSYSTEM,
+                'SwitchMetal: pack window: 5 MiB of CPU ranges wired in 42 ms (pageins 310)',
+                3,
+            ),
+            rec(
+                '/kernel.development',
+                '',
+                'tegra-gm20b: slow import backboardd 3840 KiB surface 42: 6500 us = wire 6000',
+                4,
+            ),
+            rec(
+                '/kernel.development',
+                '',
+                'tegra-gm20b: slow import SwitchHWTest 64 KiB read-only surface 0: 9500 us = wire 9000',
+                5,
+            ),
+        ]
+        results, _ = devicerun.run_checks(healthy, rule)
+        self.assertEqual(results[0].verdict, PASS, results[0].observed)
+
+        bad_cases = [
+            (
+                rec('/kernel.development', '', 'tegra-gm20b: pack image: refused (open failed, err 2)'),
+                'refused (open failed, err 2)',
+            ),
+            (
+                rec(
+                    '/kernel.development',
+                    '',
+                    'tegra-gm20b: slow import backboardd 64 KiB read-only surface 0: 21000 us = wire 20500',
+                ),
+                '64 KiB read-only surface 0',
+            ),
+            (
+                rec(
+                    '/usr/libexec/backboardd',
+                    checks.GPU_METAL_SUBSYSTEM,
+                    'SwitchMetal: backboardd: pack image refused (status 2): using per-piece placement',
+                ),
+                'image refused (status 2)',
+            ),
+            (
+                rec(
+                    '/usr/libexec/backboardd',
+                    checks.GPU_METAL_SUBSYSTEM,
+                    'SwitchMetal: backboardd: pack image map failed (0xe00002c2): using per-piece placement',
+                ),
+                'image map failed (0xe00002c2)',
+            ),
+            (
+                rec(
+                    '/usr/libexec/backboardd',
+                    checks.GPU_METAL_SUBSYSTEM,
+                    'SwitchMetal: backboardd: pack piece import: tier 0, 1 piece(s) at heap 0x0',
+                ),
+                'piece import: tier 0',
+            ),
+        ]
+        for bad, expected_detail in bad_cases:
+            results, _ = devicerun.run_checks([*healthy, bad], rule)
+            self.assertEqual(results[0].verdict, FAIL, expected_detail)
+            self.assertIn(expected_detail, results[0].observed)
+
     def test_the_setup_before_launchd_is_timed_on_boots_that_sync_nothing(self):
         rows = [c for c in checks.GROUPS['boot'] if c.name in {'boot.prefs-before-launchd', 'boot.prefs-synced'}]
 
