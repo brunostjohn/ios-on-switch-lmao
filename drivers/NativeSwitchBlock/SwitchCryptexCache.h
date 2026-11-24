@@ -3,15 +3,15 @@
 // runs this exact code against a model. The caller holds a lock around every call, owns the windows' memory, issues
 // the reads this returns and copies the blocks out.
 //
-// APFS reads the cryptex volumes' files one 4 KiB block at a time, each after the last. A card command costs ~0.30 ms
-// for 4 KiB and ~1.6 ms for 128 KiB, and of every 128 KiB window of the System image a boot reads at all it reads ~81%
-// (89% of 64 KiB windows, 73% of 256 KiB): 64-256 KiB windows cost about the same card time, 128 KiB the least, a
-// fifth of reading the blocks one by one. So the image is cached in aligned windows of kSwitchWindowBlocks blocks:
-//  - a small request that misses reads its whole window (every block of it not held or being read), and waits;
+// APFS reads the cryptex volumes' files in small blocks (4 KiB metadata and 16 KiB page-ins). Caching in aligned
+// 32 KiB windows (kSwitchWindowBlocks = 8) bounds random-miss read amplification to 32 KiB while keeping 4x as many
+// windows in the 8 MiB steady cache:
+//  - a small request (<= 16 KiB) that misses reads its whole window (every block of it not held or being read), and
+//    waits;
 //  - a request for blocks being read waits for that read: a block is never read twice at once, and never read while
 //    it is held (a held block's bytes never change while it is held, so copies out of it need no lock);
-//  - readAhead reads exactly the blocks asked for (the boot prefetch's runs), for the page-ins that follow;
-//  - a large request is served here only if every block is held or being read, else straight into its own pages;
+//  - readAhead reads exactly the blocks asked for, for the page-ins that follow;
+//  - a larger request is served here only if every block is held or being read, else straight into its own pages;
 //  - an idle window (no request holding it, no read filling it) is reused least recently used first, and a window whose
 //    held blocks have all been served (they are in the files' page cache now) goes to the cold end at once.
 #ifndef SWITCH_CRYPTEX_CACHE_H
@@ -20,11 +20,12 @@
 #include <stdint.h>
 
 constexpr uint32_t kSwitchCacheBlock = 4096;
-constexpr uint32_t kSwitchWindowBlocks = 32;  // 128 KiB: one bit per block in a uint32_t
+constexpr uint32_t kSwitchWindowBlocks = 8;  // 32 KiB: one bit per block in a uint32_t
+constexpr uint32_t kSwitchWindowFullMask = kSwitchWindowBlocks >= 32 ? ~0u : (1u << kSwitchWindowBlocks) - 1u;
 constexpr uint32_t kSwitchWindowBytes = kSwitchWindowBlocks * kSwitchCacheBlock;
-constexpr uint32_t kSwitchSpanWindows = 9;                        // windows a request of up to 1 MiB can touch
+constexpr uint32_t kSwitchSpanWindows = 33;                       // windows a request of up to 1 MiB can touch
 constexpr uint32_t kSwitchWindowReads = kSwitchWindowBlocks / 2;  // most separate reads one window can need
-constexpr uint32_t kSwitchAroundWindows = 2;  // windows a read-around request may touch (at most 16 blocks)
+constexpr uint32_t kSwitchAroundWindows = 2;  // windows a read-around request may touch (at most 4 blocks)
 constexpr uint64_t kSwitchNoTag = ~0ULL;
 
 struct SwitchCacheRequest;
@@ -86,8 +87,8 @@ struct SwitchCacheStats {
 // The blocks [from, to) of a window as a mask (0 <= from <= to <= kSwitchWindowBlocks).
 inline uint32_t switchWindowMask(uint32_t from, uint32_t to)
 {
-    const uint32_t high = to >= kSwitchWindowBlocks ? ~0u : (1u << to) - 1;
-    const uint32_t low = from >= kSwitchWindowBlocks ? ~0u : (1u << from) - 1;
+    const uint32_t high = to >= kSwitchWindowBlocks ? kSwitchWindowFullMask : (1u << to) - 1u;
+    const uint32_t low = from >= kSwitchWindowBlocks ? kSwitchWindowFullMask : (1u << from) - 1u;
     return high & ~low;
 }
 
@@ -377,7 +378,7 @@ private:
     // The window's blocks inside an image of imageBlocks blocks.
     static uint32_t within(uint64_t tag, uint64_t imageBlocks)
     {
-        return imageBlocks - tag >= kSwitchWindowBlocks ? ~0u
+        return imageBlocks - tag >= kSwitchWindowBlocks ? kSwitchWindowFullMask
                                                         : switchWindowMask(0, static_cast<uint32_t>(imageBlocks - tag));
     }
 
