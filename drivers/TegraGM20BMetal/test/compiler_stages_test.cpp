@@ -227,3 +227,39 @@ TEST_F(CompilerStages, ASystemLibraryIsReadOncePerProcess)
     EXPECT_EQ(cache->library(system, why), first) << "a system library let go";
     EXPECT_NE(cache->library(data, why), firstData) << "a client's data library kept at rest";
 }
+
+TEST_F(CompilerStages, SpecializedComputeFactsPreserveConstants)
+{
+    const std::string bytes = fileBytes(library());
+    ASSERT_FALSE(bytes.empty());
+    std::map<std::string, gm20b::AirHash> hashes;
+    gm20b::metallibAirHashes(reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size(), hashes);
+    ASSERT_TRUE(hashes.count("stages_specialized_kernel"));
+
+    // Constant #0 = -1, #1 = 2, #2 = -1, #3 = 0, #4 = true, #5 = 1 (encoded as type:hex-le-bytes).
+    // Any UAF of newIndexedConstantArray's wrappers corrupts #0/#1 into a large index and trips SlotPastTable.
+    const std::string constants = "#0:29:ffffffff #1:29:02000000 #2:29:ffffffff #3:29:00000000 #4:53:01 #5:29:01000000";
+
+    nmb_keep_translations(0);
+    Compiler compiler(false);
+    gm20b::CompileRequest r;
+    r.kind = gm20b::RequestKind::Facts;
+    gm20b::RequestLibrary l;
+    l.path = kLibrary;
+    l.bytes = bytes;
+    r.libraries.push_back(l);
+    gm20b::RequestStage s;
+    s.tag = "k";
+    s.function = s.name = "stages_specialized_kernel";
+    s.specialized = true;
+    s.constants = constants;
+    r.stages.push_back(s);
+    r.key =
+        gm20b::factsCacheKey(0, gm20b::computeStateKey(hashes["stages_specialized_kernel"], constants, 0, false)).key;
+    for (int round = 0; round < 8; ++round) {
+        std::vector<std::vector<uint8_t>> churn(64, std::vector<uint8_t>(16, 0x22));
+        (void)churn;
+        const Made made = compiler.compile(r);
+        ASSERT_EQ(made.result, TegraGM20BCompileMade) << "round " << round << ": " << made.why;
+    }
+}

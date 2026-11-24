@@ -19,10 +19,17 @@
 namespace switch_compiler {
 namespace {
 
-// The constants as the translator takes them, indexed then named (TegraGM20BMetalOffline.mm)
-bool constantsOf(MTLFunctionConstantValues *values, std::vector<NmbConstant> &out, std::string &why)
+// The constants as the translator takes them, indexed then named (TegraGM20BMetalOffline.mm).
+// `newIndexedConstantArray` and `newNamedConstantArray` allocate wrapper objects that own and free
+// `v.data` on dealloc, so `keep` retains both arrays across nmb_offline_function_new_specialized.
+bool constantsOf(MTLFunctionConstantValues *values, std::vector<NmbConstant> &out, NSMutableArray *keep,
+                 std::string &why)
 {
     NSArray *indexed = [values newIndexedConstantArray], *named = [values newNamedConstantArray];
+    if (indexed)
+        [keep addObject:indexed];
+    if (named)
+        [keep addObject:named];
     for (unsigned group = 0; group < 2; group++)
         for (id<SwitchMetalConstantValue> v in (group ? named : indexed)) {
             const uint64_t bytes = gm20b::constantBytes(v.dataType);
@@ -34,8 +41,7 @@ bool constantsOf(MTLFunctionConstantValues *values, std::vector<NmbConstant> &ou
 }
 
 NmbOfflineFunction *functionOf(const NmbOfflineLibrary *library, const gm20b::RequestStage &s,
-                               std::vector<NmbConstant> &constants, MTLFunctionConstantValues *__strong &values,
-                               std::string &why)
+                               std::vector<NmbConstant> &constants, NSMutableArray *keep, std::string &why)
 {
     if (!s.specialized) {
         if (!s.constants.empty())
@@ -44,9 +50,11 @@ NmbOfflineFunction *functionOf(const NmbOfflineLibrary *library, const gm20b::Re
                    ? nmb_offline_function_new(library, s.function.c_str())
                    : nmb_offline_function_new_specialized(library, s.function.c_str(), s.name.c_str(), nullptr, 0);
     }
-    if (!(values = gm20b::constantValuesOf(s.constants)))
+    MTLFunctionConstantValues *values = gm20b::constantValuesOf(s.constants);
+    if (!values)
         return why = "constants it cannot read: " + s.constants, nullptr;
-    if (!constantsOf(values, constants, why))
+    [keep addObject:values];
+    if (!constantsOf(values, constants, keep, why))
         return nullptr;
     return nmb_offline_function_new_specialized(library, s.function.c_str(),
                                                 s.name != s.function ? s.name.c_str() : nullptr, constants.data(),
@@ -127,10 +135,7 @@ public:
             const NmbOfflineLibrary *library = offline::libraryHandle(held);
             if (!library)
                 return why = "a library the translator does not hold", false;
-            MTLFunctionConstantValues *values = nil;
-            NmbOfflineFunction *f = functionOf(library, s, constants_.emplace_back(), values, why);
-            if (values)
-                [values_ addObject:values];
+            NmbOfflineFunction *f = functionOf(library, s, constants_.emplace_back(), values_, why);
             if (!f) {
                 if (why.empty())
                     why = "no function " + s.function + ": " + nmb_last_error();
