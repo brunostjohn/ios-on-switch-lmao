@@ -149,6 +149,7 @@ CommandBuffer *Device::begin()
     cb.rtLayer_ = rtLayer_;
     cb.alphaHeld_ = alphaHeld_;
     cb.sampleMaskHeld_ = sampleMaskHeld_;
+    cb.tiledCacheSize_ = tiledCacheSize_;
     cb.ds_ = ds_;
     cb.extrasLive_ = extrasLive_;
     cb.heldSegment_ = heldSegment_;
@@ -562,6 +563,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
     d.rtLayer_ = rtLayer_;
     d.alphaHeld_ = alphaHeld_;
     d.sampleMaskHeld_ = sampleMaskHeld_;
+    d.tiledCacheSize_ = tiledCacheSize_;
     d.ds_ = ds_;
     d.extrasLive_ = extrasLive_;
     d.heldSegment_ = heldSegment_;

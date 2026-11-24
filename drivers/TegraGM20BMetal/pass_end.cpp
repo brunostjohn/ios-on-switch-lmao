@@ -218,9 +218,10 @@ void RenderEncoder::end()
                           startStampCount_ * counters::kTimestampWords + kDrawStampWords +
                           (separate_.stencil ? 64 + 128 * layers : 0) + (zetaShadowOf_ ? zetaShadowWords(layers) : 0) +
                           (rasterSamples_ > samples_ ? kSampleWords + kTirWords + 16 : 0) + kTimedPassWords;
+    const uint32_t totalRoom = room + (uint32_t(cl.size()) + 1) * kTiledCacheSizeWords;
     uint64_t va;
-    uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, room * 4, 256, va));
-    Push p{start, start + room};
+    uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, totalRoom * 4, 256, va));
+    Push p{start, start + totalRoom};
     SWITCH_METAL_DIAGNOSTIC(if (cb_->drawTimes_) d.emitDrawTime(p, betweenTime_));
     p.raw(restore.data(), uint32_t(restore.size()));
     const BarrierEngine before = cb_->lastEngine_;
@@ -283,6 +284,8 @@ void RenderEncoder::end()
         colorTarget(p, 0, *t, layers);
         kit(p, switch_gm20b_render_area, 1u, r.x1, r.y1);
         p.m(ZT_SELECT, 0);
+        tiledCacheSetSize(p, d.k_.info(), tiledCacheTileSize(t->bpp * std::max<uint32_t>(t->samples, 1u)),
+                          cb_->tiledCacheSize_);
         uint32_t v[4] = {};
         clearWords(pass_.color[c.target].texture->format, c.value, v,
                    !called_ && pass_.color[c.target].texture->compressed);
@@ -308,6 +311,13 @@ void RenderEncoder::end()
     kit(p, switch_gm20b_render_area, count, planeArea().x1, planeArea().y1);
     const DepthStencilAttachment &zs = pass_.depthStencil;
     zetaTargetWords(p, zs.texture, layers);
+    uint32_t totalBpp = 0;
+    for (uint32_t j = 0; j < count; j++)
+        if (const Texture *t = pass_.color[j].texture)
+            totalBpp += t->bpp * std::max<uint32_t>(t->samples, 1u);
+    if (const Texture *z = zs.texture)
+        totalBpp += z->bpp * std::max<uint32_t>(z->samples, 1u);
+    tiledCacheSetSize(p, d.k_.info(), tiledCacheTileSize(totalBpp), cb_->tiledCacheSize_);
     // ahead of the depth clear, which sets the region, or the load of a stored one; over the plane the pass renders (a
     // turned drawable's own axes, zcullBegin)
     bool zcullAfterTir = false;

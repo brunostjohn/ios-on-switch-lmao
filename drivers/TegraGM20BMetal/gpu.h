@@ -1603,6 +1603,7 @@ private:
     uint32_t alphaHeld_ = ~0u;       // and SET_ANTI_ALIAS_ALPHA_CONTROL (~0: not known)
     uint32_t sampleMaskHeld_ = ~0u;  // and SET_SAMPLE_MASK_X0_Y0..X1_Y1 (~0: not known)
     DepthStencilRegs ds_;            // and its depth/stencil registers
+    uint32_t tiledCacheSize_ = kTiledCacheDefaultSize;
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, Import *> surfaces_;
     // The surfaces being imported with lock_ released (importSurface), each with the threads that wait for its import,
     // which imported_ wakes once it is published or failed

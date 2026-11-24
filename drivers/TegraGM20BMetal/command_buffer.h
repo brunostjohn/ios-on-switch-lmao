@@ -41,6 +41,7 @@
 #include "stats.h"
 #include "stencil_bits.h"
 #include "surfaces.h"
+#include "tiled_cache.h"
 #include "turn_copy.h"
 #include "use_memo.h"
 #include "zcull_planes.h"
@@ -363,6 +364,7 @@ private:
     BlitEncoder blit_;
     uint64_t pushStart_ = 0, uploadStart_ = 0;
     uint32_t rootPush_[32] = {};
+    uint32_t tiledCacheSize_ = kTiledCacheDefaultSize;
     uint32_t restart_ = 0;                  // SET_DA_PRIMITIVE_RESTART_INDEX as the GPU will hold it
     uint32_t rtLayer_ = ~0u;                // and SET_RT_LAYER (~0: not known)
     uint32_t alphaHeld_ = ~0u;              // and SET_ANTI_ALIAS_ALPHA_CONTROL (~0: not known)

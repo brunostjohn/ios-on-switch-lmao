@@ -367,6 +367,7 @@ void Device::emitContext(Push &p)
     stageSwitchesOn(p);
     mme::install(p, root_.va, zero_.va);
     tiledCacheInit(p, k_.info());
+    tiledCacheSize_ = kTiledCacheDefaultSize;
     // the depth/stencil registers (the runtime's, as NVK leaves them for Metal's default state in a pass without the attachment)
     {
         DepthStencilRegs unknown;

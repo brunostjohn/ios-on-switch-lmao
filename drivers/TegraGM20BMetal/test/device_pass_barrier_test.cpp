@@ -291,4 +291,116 @@ TEST_F(DevicePassBarrier, AFullSizeTargetKeepsTheDrain)
     EXPECT_EQ(unrelated.first, 1u) << "nothing of the pass before is read or written";
 }
 
+TEST(DeviceTiledCacheSize, DynamicTileSizeTracksPassFootprintAndShadowCaches)
+{
+    constexpr uint32_t kRgba16f = 115, kDepth32Stencil8 = 260, kTileSize = 0x0f64;
+    kernel_model::model = {};
+    kernel_model::model.infoFlags = TegraGM20BInfoTiledCache;
+    gm20b::Device dev;
+    std::string err;
+    ASSERT_TRUE(dev.open(harness::emptyPack().c_str(), 0, err, gm20b::Device::Role::Client)) << err;
+
+    gm20b::Texture bgra8, rgba16f, depth, ms4Color, ms4Depth;
+    ASSERT_TRUE(dev.createTexture(128, 128, kBgra8, bgra8, false, true));
+    ASSERT_TRUE(dev.createTexture(128, 128, kRgba16f, rgba16f, false, true));
+    ASSERT_TRUE(dev.createOwnedZeta(128, 128, kDepth32Stencil8, 1, false, depth));
+    ASSERT_TRUE(dev.createStoredMultisample(128, 128, kRgba16f, 4, ms4Color));
+    ASSERT_TRUE(dev.createOwnedZeta(128, 128, kDepth32Stencil8, 4, false, ms4Depth));
+
+    const auto runPass = [&](gm20b::Texture &color, gm20b::Texture *zs) {
+        gm20b::CommandBuffer *cb = dev.begin();
+        EXPECT_NE(cb, nullptr);
+        gm20b::PassDesc pass;
+        pass.color[0].texture = &color;
+        pass.color[0].load = gm20b::ColorAttachment::Clear;
+        pass.count = 1;
+        if (zs) {
+            pass.depthStencil.texture = zs;
+            pass.depthStencil.clearDepth = true;
+            pass.depthStencil.clearStencil = true;
+        }
+        gm20b::RenderEncoder *e = cb->render(pass);
+        EXPECT_NE(e, nullptr);
+        e->end();
+        uint32_t seqno = 0;
+        EXPECT_TRUE(cb->commit(seqno));
+        std::vector<uint32_t> sizes;
+        const std::vector<uint32_t> &words = kernel_model::model.jobs.back().words;
+        for (size_t at = 0; at < words.size();) {
+            const uint32_t h = words[at++], form = h >> 29, count = (h >> 16) & 0x1fff, subc = (h >> 13) & 7,
+                           method = (h & 0xfff) << 2;
+            if (!h)
+                continue;
+            if (form == 4) {
+                if (subc == 0 && method == kTileSize)
+                    sizes.push_back(count);
+                continue;
+            }
+            for (uint32_t i = 0; i < count && at < words.size(); i++, at++) {
+                const uint32_t m = form == 3 ? method : form == 5 && i ? method + 4 : method + 4 * (form == 1 ? i : 0);
+                if (subc == 0 && m == kTileSize)
+                    sizes.push_back(words[at]);
+            }
+        }
+        return sizes;
+    };
+
+    EXPECT_TRUE(runPass(bgra8, nullptr).empty());
+    EXPECT_EQ(runPass(rgba16f, nullptr), (std::vector<uint32_t>{64u | (128u << 16)}));
+    EXPECT_TRUE(runPass(rgba16f, nullptr).empty());
+    EXPECT_EQ(runPass(rgba16f, &depth), (std::vector<uint32_t>{64u | (64u << 16)}));
+    EXPECT_EQ(runPass(ms4Color, nullptr), (std::vector<uint32_t>{64u | (32u << 16)}));
+    EXPECT_EQ(runPass(ms4Color, &ms4Depth), (std::vector<uint32_t>{32u | (32u << 16)}));
+    EXPECT_EQ(runPass(bgra8, nullptr), (std::vector<uint32_t>{128u | (128u << 16)}));
+
+    EXPECT_EQ(runPass(ms4Color, &ms4Depth), (std::vector<uint32_t>{32u | (32u << 16)}));
+    {
+        gm20b::CommandBuffer *cb = dev.begin();
+        ASSERT_NE(cb, nullptr);
+        gm20b::PassDesc pass;
+        pass.color[0].texture = &bgra8;
+        pass.color[0].load = gm20b::ColorAttachment::Clear;
+        pass.color[0].store = true;
+        pass.count = 1;
+        pass.depthStencil.texture = &depth;
+        pass.depthStencil.clearDepth = true;
+        pass.width = 64;
+        pass.height = 64;
+        gm20b::RenderEncoder *e = cb->render(pass);
+        ASSERT_NE(e, nullptr);
+        e->end();
+        uint32_t seqno = 0;
+        ASSERT_TRUE(cb->commit(seqno));
+        std::vector<std::pair<uint32_t, uint32_t>> events;
+        const std::vector<uint32_t> &words = kernel_model::model.jobs.back().words;
+        for (size_t at = 0; at < words.size();) {
+            const uint32_t h = words[at++], form = h >> 29, count = (h >> 16) & 0x1fff, subc = (h >> 13) & 7,
+                           method = (h & 0xfff) << 2;
+            if (!h)
+                continue;
+            if (form == 4) {
+                if (subc == 0 && (method == kTileSize || method == NVB197_CLEAR_SURFACE))
+                    events.emplace_back(method, count);
+                continue;
+            }
+            for (uint32_t i = 0; i < count && at < words.size(); i++, at++) {
+                const uint32_t m = form == 3 ? method : form == 5 && i ? method + 4 : method + 4 * (form == 1 ? i : 0);
+                if (subc == 0 && (m == kTileSize || m == NVB197_CLEAR_SURFACE))
+                    events.emplace_back(m, words[at]);
+            }
+        }
+        ASSERT_GE(events.size(), 4u);
+        EXPECT_EQ(events[0], (std::pair<uint32_t, uint32_t>{kTileSize, 128u | (128u << 16)}));
+        EXPECT_EQ(events[1].first, uint32_t(NVB197_CLEAR_SURFACE));
+        EXPECT_EQ(events[2], (std::pair<uint32_t, uint32_t>{kTileSize, 64u | (64u << 16)}));
+        EXPECT_EQ(events[3].first, uint32_t(NVB197_CLEAR_SURFACE));
+    }
+
+    dev.destroyTexture(ms4Depth);
+    dev.destroyTexture(ms4Color);
+    dev.destroyTexture(depth);
+    dev.destroyTexture(rgba16f);
+    dev.destroyTexture(bgra8);
+}
+
 }  // namespace
