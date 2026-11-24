@@ -584,4 +584,121 @@ TEST(Pretranslate, TheVerifierCatchesAFipsMacLeftAsItWas)
     EXPECT_NE(std::string(x.err).find("FIPS"), std::string::npos) << x.err;
 }
 
+TEST(Pretranslate, CheckedEditsApplyVerifySignAndPreserveOriginalCdhash)
+{
+    Spec s = typical();
+    const uint32_t base = static_cast<uint32_t>(s.code.size());
+    s.starts.push_back(base);
+    // Case 225 sequence matching 24B119 /usr/libexec/locationd at 0x7f0a3c and check-only tail at +0x20.
+    const std::vector<uint32_t> case225 = {
+        0xD2800013u, 0xD2917E55u, 0xF2A28C35u, 0xF2C00275u, 0x14000134u,
+        0xD2800013u, 0xD2800255u, 0xD503201Fu, 0xF2C00035u, 0x1400012Fu,
+    };
+    s.code.insert(s.code.end(), case225.begin(), case225.end());
+
+    const uint8_t stock0[20] = {0x13, 0x00, 0x80, 0xd2, 0x55, 0x7e, 0x91, 0xd2, 0x35, 0x8c,
+                                0xa2, 0xf2, 0x75, 0x02, 0xc0, 0xf2, 0x34, 0x01, 0x00, 0x14};
+    const uint8_t patched0[12] = {0x15, 0x20, 0x80, 0xd2, 0x15, 0x04, 0xa2, 0xf2, 0x06, 0x00, 0x00, 0x14};
+    const uint8_t stock1[8] = {0x35, 0x00, 0xc0, 0xf2, 0x2f, 0x01, 0x00, 0x14};
+    const uint64_t off0 = kTextOff + 4ull * base;
+    const a64x_pt_edit edits[2] = {
+        {off0, stock0, sizeof(stock0), 0, patched0, sizeof(patched0)},
+        {off0 + 0x20, stock1, sizeof(stock1), 0, nullptr, 0},
+    };
+
+    Result plain;
+    run(s, plain);
+    ASSERT_EQ(plain.r.status, A64X_PT_TRANSLATED) << plain.r.why;
+
+    Result edited;
+    edited.in = plain.in;
+    edited.out.assign(edited.in.size(), 0);
+    ASSERT_EQ(a64x_macho_parse(edited.in.data(), edited.in.size(), &edited.m, edited.err, sizeof(edited.err)), 0);
+    ASSERT_EQ(
+        a64x_pretranslate_edits(&edited.m, edited.out.data(), edits, 2, &edited.r, edited.err, sizeof(edited.err)), 0)
+        << edited.err;
+    ASSERT_EQ(edited.r.status, A64X_PT_TRANSLATED) << edited.r.why;
+    EXPECT_EQ(memcmp(edited.r.cdhash_in, plain.r.cdhash_in, A64X_CDHASH_SIZE), 0);
+    EXPECT_NE(memcmp(edited.r.cdhash_out, plain.r.cdhash_out, A64X_CDHASH_SIZE), 0);
+
+    a64x_pt_check v;
+    EXPECT_EQ(a64x_pt_verify_edits(&edited.m, edited.out.data(), edits, 2, &v, edited.err, sizeof(edited.err)), 2)
+        << edited.err;
+    EXPECT_LT(a64x_pt_verify(&edited.m, edited.out.data(), &v, edited.err, sizeof(edited.err)), 0);
+    EXPECT_EQ(memcmp(edited.out.data() + off0, patched0, sizeof(patched0)), 0);
+    EXPECT_EQ(memcmp(edited.out.data() + off0 + 0x20, stock1, sizeof(stock1)), 0);
+}
+
+TEST(Pretranslate, CheckedEditsFailLoudOnStockMismatchOrBaselineInstruction)
+{
+    Spec s = typical();
+    const uint32_t base = static_cast<uint32_t>(s.code.size());
+    s.starts.push_back(base);
+    s.code.push_back(0xD2800013u);
+    s.code.push_back(kRet);
+    const std::vector<uint8_t> in = build(s);
+    std::vector<uint8_t> out(in.size(), 0);
+    a64x_macho m{};
+    a64x_pt_result r{};
+    char err[256] = {};
+    ASSERT_EQ(a64x_macho_parse(in.data(), in.size(), &m, err, sizeof(err)), 0);
+
+    const uint8_t wrong_stock[4] = {0x00, 0x00, 0x80, 0xd2};
+    const uint8_t nop[4] = {0x1f, 0x20, 0x03, 0xd5};
+    const a64x_pt_edit bad_stock = {kTextOff + 4ull * base, wrong_stock, sizeof(wrong_stock), 0, nop, sizeof(nop)};
+    EXPECT_LT(a64x_pretranslate_edits(&m, out.data(), &bad_stock, 1, &r, err, sizeof(err)), 0);
+    EXPECT_NE(std::string(err).find("stock bytes differ"), std::string::npos) << err;
+
+    const uint8_t right_stock[4] = {0x13, 0x00, 0x80, 0xd2};
+    uint8_t casal[4];
+    memcpy(casal, &kCasal, 4);
+    const a64x_pt_edit bad_insn = {kTextOff + 4ull * base, right_stock, sizeof(right_stock), 0, casal, sizeof(casal)};
+    EXPECT_LT(a64x_pretranslate_edits(&m, out.data(), &bad_insn, 1, &r, err, sizeof(err)), 0);
+    EXPECT_NE(std::string(err).find("patched word"), std::string::npos) << err;
+
+    const uint64_t site = kTextOff + 4ull * base;
+    const uint32_t sb_word = 0xD50330FFu;
+    uint8_t sb[4];
+    memcpy(sb, &sb_word, 4);
+    const a64x_pt_edit bad_sb = {site, right_stock, sizeof(right_stock), 0, sb, sizeof(sb)};
+    EXPECT_LT(a64x_pretranslate_edits(&m, out.data(), &bad_sb, 1, &r, err, sizeof(err)), 0);
+    EXPECT_NE(std::string(err).find("patched word"), std::string::npos) << err;
+
+    const uint8_t udf[4] = {0x00, 0x00, 0x00, 0x00};
+    const a64x_pt_edit bad_udf = {site, right_stock, sizeof(right_stock), 0, udf, sizeof(udf)};
+    EXPECT_LT(a64x_pretranslate_edits(&m, out.data(), &bad_udf, 1, &r, err, sizeof(err)), 0);
+    EXPECT_NE(std::string(err).find("unallocated"), std::string::npos) << err;
+
+    const uint8_t unalloc[4] = {0x00, 0x00, 0x00, 0x02};
+    const a64x_pt_edit bad_unalloc = {site, right_stock, sizeof(right_stock), 0, unalloc, sizeof(unalloc)};
+    EXPECT_LT(a64x_pretranslate_edits(&m, out.data(), &bad_unalloc, 1, &r, err, sizeof(err)), 0);
+    EXPECT_NE(std::string(err).find("unallocated"), std::string::npos) << err;
+
+    const a64x_pt_edit hdr_edit = {0, in.data(), 4, 0, nop, sizeof(nop)};
+    EXPECT_LT(a64x_pretranslate_edits(&m, out.data(), &hdr_edit, 1, &r, err, sizeof(err)), 0);
+    EXPECT_NE(std::string(err).find("outside executable code"), std::string::npos) << err;
+
+    uint64_t tlo = 0, thi = 0;
+    a64x_pt_tail(&m, &tlo, &thi);
+    ASSERT_LT(tlo, thi);
+    const a64x_pt_edit tail_edit = {tlo, in.data() + tlo, 4, 0, nop, sizeof(nop)};
+    EXPECT_LT(a64x_pretranslate_edits(&m, out.data(), &tail_edit, 1, &r, err, sizeof(err)), 0);
+    EXPECT_NE(std::string(err).find("outside executable code"), std::string::npos) << err;
+
+    const uint8_t pair_stock[8] = {0x13, 0x00, 0x80, 0xd2, 0xc0, 0x03, 0x5f, 0xd6};
+    const a64x_pt_edit overlap[2] = {
+        {kTextOff + 4ull * base, pair_stock, sizeof(pair_stock), 0, nop, sizeof(nop)},
+        {kTextOff + 4ull * (base + 1), pair_stock + 4, 4, 0, nop, sizeof(nop)},
+    };
+    EXPECT_LT(a64x_pretranslate_edits(&m, out.data(), overlap, 2, &r, err, sizeof(err)), 0);
+    EXPECT_NE(std::string(err).find("overlaps"), std::string::npos) << err;
+
+    Result plain;
+    run(s, plain);
+    ASSERT_EQ(plain.r.status, A64X_PT_TRANSLATED);
+    a64x_pt_check v{};
+    EXPECT_LT(a64x_pt_verify_edits(&plain.m, plain.out.data(), &hdr_edit, 1, &v, err, sizeof(err)), 0);
+    EXPECT_NE(std::string(err).find("outside executable code"), std::string::npos) << err;
+}
+
 }  // namespace

@@ -78,4 +78,16 @@ MOTION = [
         source=SOURCE,
         note='boot 2: locationd 4 x2, 8 x2, 24 x2',
     ),
+    Check(
+        'motion.locationd-spu',
+        OWNER,
+        (ADDED, *NOT_READY, GIVE_UP),
+        REPORT,
+        process='locationd',
+        subsystem=SUBSYSTEM,
+        regex=r'(?:\{65292, (?P<usage>1|5|7|26)\}|Giving up\.)',
+        show=('usage',),
+        source='translate/arm64e/pretranslate/edits_24B119.json',
+        note='report until 24B119 os.trustcache is regenerated with edits_24B119.json; boot 2: 24 not-ready, 2 give-ups',
+    ),
 ]

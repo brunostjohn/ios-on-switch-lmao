@@ -24,6 +24,8 @@ def _pretranslated_delta_impl(ctx):
     args.add("--driver", info.driver)
     args.add("--tool", info.tool)
     args.add_all(info.apple_trustcaches, before_each = "--apple-trustcache")
+    if info.edits:
+        args.add("--edits", info.edits)
     pairs = [delta[DeltaInfo] for delta in ctx.attr.pairs]
     for pair in pairs:
         args.add("--cdhash-pairs", "{}/{}.cdhash-pairs".format(pair.dir.path, pair.role))
@@ -31,7 +33,7 @@ def _pretranslated_delta_impl(ctx):
     ctx.actions.run(
         executable = ctx.executable._translate,
         arguments = [args],
-        inputs = [ctx.file.image, ctx.file.pins] + info.apple_trustcaches + [pair.dir for pair in pairs],
+        inputs = [ctx.file.image, ctx.file.pins] + info.apple_trustcaches + ([info.edits] if info.edits else []) + [pair.dir for pair in pairs],
         tools = [info.driver_run, info.tool_run],
         outputs = [out],
         mnemonic = "Pretranslate",
