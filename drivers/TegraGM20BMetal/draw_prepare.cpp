@@ -816,7 +816,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     const AttachmentBarrier needed = access.after(attachmentWrites_.rop, attachmentWrites_.storage);
     if (needed != AttachmentBarrier::None) {
-        if (needed == AttachmentBarrier::Pixel && !fetchedCompressed && !written_.meets(geometryAnalysis)) {
+        if (needed == AttachmentBarrier::Pixel &&
+            !(fetchedCompressed ? written_.meetsTiles(geometryAnalysis) : written_.meets(geometryAnalysis))) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             SWITCH_METAL_DIAGNOSTIC(dev_->stats.fetchBarriersElided++);
 #endif

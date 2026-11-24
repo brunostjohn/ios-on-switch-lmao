@@ -6,7 +6,9 @@
 //
 // Skipping the barrier where no written pixel is fetched is exact on uncompressed (pitch and generic block-linear)
 // targets: a texel's bytes change only where the ROP writes that pixel, so a fetch of any other pixel reads the same
-// bytes whether or not the earlier writes have landed, from the texture cache or from L2.
+// bytes whether or not the earlier writes have landed, from the texture cache or from L2. Compressed targets share
+// per-tile compression metadata, so elision requires disjoint 32x32 pixel tiles (meetsTiles), which align to GM20B
+// C32/C64/C128 compression tiles across 1x/2x/4x MSAA.
 #pragma once
 #include <algorithm>
 #include <array>
@@ -125,6 +127,39 @@ public:
         return false;
     }
 
+    bool meetsTiles(const DrawGeometry &g)
+    {
+        Analysis analysis(g);
+        return meetsTiles(analysis);
+    }
+
+    bool meetsTiles(Analysis &analysis)
+    {
+        const DrawGeometry &g = analysis.geometry();
+        if (g.limit.empty())
+            return false;
+        if (!boxCount_ && pending_.empty() && overflowLimit_.empty() && !tileOnly_ && !outOfGrid_)
+            return false;
+        materializePending();
+        PixelBox box;
+        if (g.bounded)
+            box = analysis.bounds(box) ? box : g.limit;
+        else
+            box = g.limit;
+        if (box.empty())
+            return false;
+        if (tilesOverlap(box))
+            return true;
+        if (!outOfGrid_)
+            return false;
+        if (tileOnly_)
+            return boxesShareTile(outOfGridBox_, box);
+        for (uint32_t i = boxCount_; i-- > 0;)
+            if ((boxes_[i].x1 > kGridMax || boxes_[i].y1 > kGridMax) && boxesShareTile(boxes_[i], box))
+                return true;
+        return false;
+    }
+
     // Whether a 2-triangle draw (4-vertex strip or 6-vertex list sharing an exact edge) has strictly disjoint triangle
     // interiors on opposite sides of the shared diagonal under fp32 and subpixel snap slack, inside the X/Y guard band.
     static bool nonOverlappingQuad(Analysis &analysis, bool list)
@@ -228,6 +263,14 @@ public:
     }
 
 private:
+    static bool boxesShareTile(const PixelBox &a, const PixelBox &b)
+    {
+        return (a.x0 >> kTileShift) <= ((b.x1 - 1u) >> kTileShift) &&
+               (b.x0 >> kTileShift) <= ((a.x1 - 1u) >> kTileShift) &&
+               (a.y0 >> kTileShift) <= ((b.y1 - 1u) >> kTileShift) &&
+               (b.y0 >> kTileShift) <= ((a.y1 - 1u) >> kTileShift);
+    }
+
     static uint64_t rowMask(uint32_t tx0, uint32_t tx1)
     {
         return (~0ull >> (63u - (tx1 - tx0))) << tx0;
