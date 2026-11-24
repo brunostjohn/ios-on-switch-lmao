@@ -28,24 +28,33 @@ filegroup(
 # This package's headers (kernel_headers): what other drivers' hdr_deps name.
 kernel_headers()
 
-# SwitchAudio: kernel service + Tegra I2S1/ADMA backend, and the RT5639 codec (SwitchRT5639).
+# SwitchAudio: kernel service + Tegra APE (ADMA/ADMAIF/AXBAR/MIXER/SFC/MVC/OPE/I2S1) and RT5639 codec.
 kernel_driver(
     name = "SwitchAudio",
     srcs = [
         "SwitchAudio.cpp",
         "SwitchAudioClocks.cpp",
         "SwitchAudioCodec.cpp",
+        "SwitchAudioMixer.cpp",
+        "SwitchAudioMvc.cpp",
+        "SwitchAudioOpe.cpp",
+        "SwitchAudioSfc.cpp",
         "SwitchAudioStream.cpp",
+        "SwitchAudioSysctl.cpp",
         "SwitchRT5639.cpp",
     ],
     hdr_deps = [
         "drivers/ArmGIC",
         "drivers/TegraGPIO",
         "drivers/TegraI2C",
+        "drivers/TegraSMMU",
         "kits/SwitchCAR",
         "kits/SwitchDMA",
+        "kits/SwitchEngineGate",
         "kits/SwitchMMIO",
         "kits/SwitchRefusal",
+        "kits/SwitchSysctl",
+        "kits/SwitchTime",
     ],
 )
 

@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "../hal/SwitchAudioObjects.h"
@@ -181,17 +182,19 @@ TEST_F(PlugIn, CodecControls)
     const auto input = List(kCodec, kAudioObjectPropertyControlList, kAudioObjectPropertyScopeInput);
     const auto output = List(kCodec, kAudioObjectPropertyControlList, kAudioObjectPropertyScopeOutput);
     if (!kJ181) {
-        EXPECT_THAT(all, ElementsAre(kCodecVolume));
+        EXPECT_THAT(all, UnorderedElementsAre(kCodecVolume, kCodecMute));
         EXPECT_THAT(input, IsEmpty());
+        EXPECT_THAT(output, UnorderedElementsAre(kCodecVolume, kCodecMute));
         std::vector<uint8_t> out;
         EXPECT_EQ(Get(kCodecJackOut, kAudioObjectPropertyClass, out), kAudioHardwareBadObjectError);
         return;
     }
-    EXPECT_THAT(all, UnorderedElementsAre(kCodecVolume, kCodecJackOut, kCodecJackIn, kCodecSources));
+    EXPECT_THAT(all, UnorderedElementsAre(kCodecVolume, kCodecMute, kCodecJackOut, kCodecJackIn, kCodecSources));
     EXPECT_THAT(input, UnorderedElementsAre(kCodecJackIn, kCodecSources));
-    EXPECT_THAT(output, UnorderedElementsAre(kCodecVolume, kCodecJackOut));
+    EXPECT_THAT(output, UnorderedElementsAre(kCodecVolume, kCodecMute, kCodecJackOut));
     EXPECT_THAT(List(kCodec, kAudioObjectPropertyOwnedObjects),
-                UnorderedElementsAre(kCodecIn, kCodecOut, kCodecVolume, kCodecJackOut, kCodecJackIn, kCodecSources));
+                UnorderedElementsAre(kCodecIn, kCodecOut, kCodecVolume, kCodecMute, kCodecJackOut, kCodecJackIn,
+                                     kCodecSources));
 
     for (const auto [jack, scope] : {std::pair{kCodecJackOut, kAudioObjectPropertyScopeOutput},
                                      std::pair{kCodecJackIn, kAudioObjectPropertyScopeInput}}) {
@@ -239,11 +242,39 @@ TEST_F(PlugIn, DigitalMicSources)
     EXPECT_FALSE(Settable(kMicSources, kAudioSelectorControlPropertyCurrentItem));
 }
 
+TEST_F(PlugIn, OutputMuteControlsAndTiming)
+{
+    EXPECT_THAT(List(kSpeaker, kAudioObjectPropertyControlList, kAudioObjectPropertyScopeOutput),
+                UnorderedElementsAre(kVolume, kSpeakerMute));
+    for (const auto [mute, owner, elem] :
+         {std::tuple<AudioObjectID, AudioObjectID, AudioObjectPropertyElement>{kSpeakerMute, kSpeaker,
+                                                                               kAudioObjectPropertyElementMain},
+          std::tuple<AudioObjectID, AudioObjectID, AudioObjectPropertyElement>{kCodecMute, kCodec, 1u}}) {
+        EXPECT_EQ(Value<AudioClassID>(mute, kAudioObjectPropertyClass), (AudioClassID)kAudioMuteControlClassID);
+        EXPECT_EQ(Value<AudioClassID>(mute, kAudioObjectPropertyBaseClass), (AudioClassID)kAudioBooleanControlClassID);
+        EXPECT_EQ(Value<AudioObjectID>(mute, kAudioObjectPropertyOwner), owner);
+        EXPECT_EQ(Value<AudioObjectPropertyScope>(mute, kAudioControlPropertyScope), kAudioObjectPropertyScopeOutput);
+        EXPECT_EQ(Value<AudioObjectPropertyElement>(mute, kAudioControlPropertyElement), elem);
+        EXPECT_TRUE(Settable(mute, kAudioBooleanControlPropertyValue));
+        const AudioObjectPropertyAddress addr = {kAudioBooleanControlPropertyValue, kAudioObjectPropertyScopeGlobal,
+                                                 kAudioObjectPropertyElementMain};
+        UInt32 on = 1u, off = 0u;
+        EXPECT_EQ((*driver_)->SetPropertyData(driver_, mute, 0, &addr, 0, nullptr, sizeof on, &on), 0);
+        EXPECT_EQ(Value<UInt32>(mute, kAudioBooleanControlPropertyValue), 1u);
+        EXPECT_EQ((*driver_)->SetPropertyData(driver_, mute, 0, &addr, 0, nullptr, sizeof off, &off), 0);
+        EXPECT_EQ(Value<UInt32>(mute, kAudioBooleanControlPropertyValue), 0u);
+    }
+
+    EXPECT_EQ(Value<UInt32>(kSpeaker, kAudioDevicePropertyLatency), 480u);
+    EXPECT_EQ(Value<UInt32>(kSpeaker, kAudioDevicePropertySafetyOffset, kAudioObjectPropertyScopeOutput), 960u);
+    EXPECT_EQ(Value<UInt32>(kSpeaker, kAudioDevicePropertyZeroTimeStampPeriod), 16384u);
+}
+
 // The audio server drops an object whose custom property list does not answer (empty here).
 TEST_F(PlugIn, EveryObjectListsNoCustomProperties)
 {
-    std::vector<AudioObjectID> objects = {kPlugIn,  kSpeaker,  kSpeakerOut,  kSpeakerTap, kVolume, kCodec,
-                                          kCodecIn, kCodecOut, kCodecVolume, kMic,        kMicIn};
+    std::vector<AudioObjectID> objects = {kPlugIn,  kSpeaker,  kSpeakerOut,  kSpeakerTap, kVolume, kSpeakerMute, kCodec,
+                                          kCodecIn, kCodecOut, kCodecVolume, kCodecMute,  kMic,    kMicIn};
     if (kJ181)
         objects.insert(objects.end(), {kCodecJackOut, kCodecJackIn, kCodecSources, kMicSources});
     for (const AudioObjectID object : objects) {
