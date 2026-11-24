@@ -155,6 +155,7 @@ extern struct mutex tgm_gate_lock;
 void tgm_gate_enter(void);
 int cpu_number(void);
 int tgm_clk_raise(char *line, unsigned int len);
+void tgm_clk_suspend(struct nvkm_device *device);
 int tgm_m2_device_init(struct nvkm_device *device, const char **at);
 extern u64 tgm_cpu_zeroes, tgm_cpu_zero_bytes;
 

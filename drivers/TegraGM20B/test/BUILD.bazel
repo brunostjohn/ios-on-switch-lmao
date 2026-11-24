@@ -2164,6 +2164,23 @@ host_test(
 )
 
 host_test(
+    name = "gm20b_napll_test",
+    srcs = [
+        "gm20b_napll_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BNapll.h",
+        "//drivers/TegraGM20B:TegraGM20BNapllMath.h",
+    ],
+    data = [
+        "//drivers/TegraGM20B:gpu_clock.c",
+        "//drivers/TegraGM20B:gpu_power.c",
+    ],
+    defines = [
+        'GPU_CLOCK_C=\\"$(rootpath //drivers/TegraGM20B:gpu_clock.c)\\"',
+        'GPU_POWER_C=\\"$(rootpath //drivers/TegraGM20B:gpu_power.c)\\"',
+    ],
+)
+
+host_test(
     name = "switch_gpu_cpu_surface_test",
     srcs = [
         "switch_gpu_cpu_surface_test.cpp",

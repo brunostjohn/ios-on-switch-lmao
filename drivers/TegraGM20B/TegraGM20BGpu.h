@@ -654,7 +654,7 @@ int tgm_gpu_held(void (*fn)(struct nvkm_device *device, void *arg), void *arg);
  * at the PL it last set; -EIO otherwise, -EBUSY before M3. */
 struct tgm_rail_look {
 	int fence; /* 0, -ETIMEDOUT or -ENODEV */
-	uint32_t fence_us, coeff, cfg, pl, expect_pl, wake_coeff;
+	uint32_t fence_us, coeff, cfg, dvfs1, pl, expect_pl, wake_coeff;
 	int khz, vco_ok;
 };
 
