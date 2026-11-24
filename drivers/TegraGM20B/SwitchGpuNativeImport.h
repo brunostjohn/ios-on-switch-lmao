@@ -53,18 +53,23 @@ IOReturn AGXDeviceUserClient::nativeSurfaceView(const TegraGM20BAbiNativeSurface
 						TegraGM20BAbiNativeSurfaceViewReply *out)
 {
 	*out = {};
+	const bool writable = (in->flags & TegraGM20BNativeSurfaceWrite) != 0;
 	const Bo *source = findBo(in->source_handle);
-	if (in->flags || in->reserved || !source || !source->surface || source->nativeView)
+	if ((in->flags & ~uint32_t(TegraGM20BNativeSurfaceWrite)) || in->reserved || !source ||
+	    !source->surface || source->nativeView)
 		return kIOReturnBadArgument;
 	if (!boIndex_.reserve())
 		return kIOReturnNoMemory;
-	if (!switch_native_surface_gpu_acquire || !switch_native_surface_gpu_release)
+	if ((writable ? !switch_native_surface_gpu_acquire_write
+		      : !switch_native_surface_gpu_acquire) ||
+	    !switch_native_surface_gpu_release)
 		return kIOReturnUnsupported;
 	auto *view = IONewZero(switch_gpu_native_surface_view, 1);
 	if (!view)
 		return kIOReturnNoMemory;
 	IOLockUnlock(lock_);
-	int result = switch_native_surface_gpu_acquire(source->surface, view);
+	int result = writable ? switch_native_surface_gpu_acquire_write(source->surface, view)
+			      : switch_native_surface_gpu_acquire(source->surface, view);
 	IOLockLock(lock_);
 	if (!result && submitGate_.closed())
 		result = -19;
@@ -106,7 +111,7 @@ IOReturn AGXDeviceUserClient::nativeSurfaceView(const TegraGM20BAbiNativeSurface
 	bo->pas = const_cast<uint64_t *>(allocation.pages);
 	bo->npages = bo->backing_pages = allocation.page_count;
 	bo->bytes = out->bytes;
-	bo->readOnly = true;
+	bo->readOnly = !writable;
 	bo->handle = next_handle_++;
 	bo->next = bos_;
 	bos_ = bo;

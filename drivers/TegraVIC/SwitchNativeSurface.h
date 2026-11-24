@@ -45,6 +45,8 @@ void switch_native_surface_release(SwitchNativeSurfaceView *view);
 // a surface.
 int switch_native_surface_publish(const TegraVICSurface *surface, const TegraVICPicture *picture,
                                   const char **why = nullptr, bool *fresh = nullptr, bool *first = nullptr);
+int switch_native_surface_publish_gpu(const TegraVICSurface *surface, SwitchNativeSurfaceView *view);
+extern "C" void switch_native_surface_gpu_written(void *owner);
 // `destination` (a whole NV12 surface) is `source`'s picture turned by `op` (a quarter turn of a source rectangle onto
 // the whole destination): its rows are made by VIC only when something other than the display reads them. `events`
 // (the request's, prepared): taken by the record when it is published, its waits ordered before every reader and its

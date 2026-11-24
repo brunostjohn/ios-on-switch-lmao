@@ -1047,6 +1047,50 @@ TEST_F(Backing, PitchProxyRequiresItsGenerationAndNeverAuthorizesWrites)
 	switch_gpu_backing_release(logical);
 }
 
+TEST_F(Backing, WritableNativeViewAuthorizesWritesOnNativeAndGuardsLogical)
+{
+	auto *logical = backing(), *native = backing();
+	volatile uint64_t payload = 1, representation = 5;
+	switch_gpu_native_surface_view view = {};
+	view.logical = logical;
+	view.native = native;
+	view.payload = {logical, &payload, 1};
+	view.representation = {logical, &representation, 5};
+	switch_gpu_backing_use uses[2] = {};
+	switch_gpu_backing_guard guards[2] = {};
+	uint32_t useCount = 0, guardCount = 0;
+	EXPECT_EQ(switch_gpu_native_surface_add_use(view, true, SWITCH_GPU_BACKING_WRITE, uses,
+						    guards, 2, useCount, guardCount),
+		  -22);
+	ASSERT_EQ(switch_gpu_native_surface_add_use(view, false, SWITCH_GPU_BACKING_WRITE, uses,
+						    guards, 2, useCount, guardCount),
+		  0);
+	EXPECT_EQ(useCount, 2u);
+	EXPECT_EQ(guardCount, 2u);
+	EXPECT_EQ(uses[0].backing, native);
+	EXPECT_EQ(uses[0].access, uint32_t(SWITCH_GPU_BACKING_WRITE));
+	EXPECT_EQ(uses[1].backing, logical);
+	EXPECT_EQ(uses[1].access, uint32_t(SWITCH_GPU_BACKING_READ));
+	switch_gpu_backing_transaction transaction = {};
+	const auto writer = token(108);
+	ASSERT_EQ(switch_gpu_backing_begin_checked(uses, useCount, guards, guardCount, &writer,
+						   &transaction),
+		  0);
+	switch_gpu_backing_commit(&transaction);
+	const auto reader = token(109, 1, SWITCH_GPU_ENGINE_VIC);
+	switch_gpu_backing_use readUse = {native, SWITCH_GPU_BACKING_READ, 0};
+	ASSERT_EQ(switch_gpu_backing_begin(&readUse, 1, &reader, &transaction), 0);
+	switch_gpu_backing_token dependency = {};
+	uint32_t needed = 0;
+	ASSERT_EQ(switch_gpu_backing_dependencies(&transaction, &dependency, 1, &needed), 0);
+	EXPECT_EQ(needed, 1u);
+	EXPECT_EQ(dependency.value, writer.value);
+	switch_gpu_backing_abort(&transaction);
+	complete(writer);
+	switch_gpu_backing_release(logical);
+	switch_gpu_backing_release(native);
+}
+
 namespace
 {
 bool hostAcquire(switch_gpu_backing *allocation, switch_gpu_backing_token completion)

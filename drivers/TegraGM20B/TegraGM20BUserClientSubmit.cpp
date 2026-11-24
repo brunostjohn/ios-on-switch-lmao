@@ -118,13 +118,16 @@ bool AGXDeviceUserClient::reserveJob(JobScratch &job, uint32_t uses)
 		auto *surfaces = IONew(SwitchGpuSurfaceRefresh, capacity);
 		auto **leases = IONew(switch_gpu_cpu_lease *, capacity);
 		auto **written = IONew(tgm_coh *, capacity);
-		if (!made || !writes || !guards || !surfaces || !leases || !written) {
+		auto **nativeWritten = IONew(void *, capacity);
+		if (!made || !writes || !guards || !surfaces || !leases || !written ||
+		    !nativeWritten) {
 			IODelete(made, switch_gpu_backing_use, capacity);
 			IODelete(writes, switch_gpu_backing_write_range, capacity);
 			IODelete(guards, switch_gpu_backing_guard, capacity);
 			IODelete(surfaces, SwitchGpuSurfaceRefresh, capacity);
 			IODelete(leases, switch_gpu_cpu_lease *, capacity);
 			IODelete(written, tgm_coh *, capacity);
+			IODelete(nativeWritten, void *, capacity);
 			return false;
 		}
 		IODelete(job.uses, switch_gpu_backing_use, job.capacity);
@@ -133,9 +136,11 @@ bool AGXDeviceUserClient::reserveJob(JobScratch &job, uint32_t uses)
 		IODelete(job.surfaces, SwitchGpuSurfaceRefresh, job.capacity);
 		IODelete(job.leases, switch_gpu_cpu_lease *, job.capacity);
 		IODelete(job.written, tgm_coh *, job.capacity);
+		IODelete(job.nativeWritten, void *, job.capacity);
 		job.surfaces = surfaces;
 		job.leases = leases;
 		job.written = written;
+		job.nativeWritten = nativeWritten;
 		job.uses = made;
 		job.writes = writes;
 		job.guards = guards;
@@ -158,5 +163,6 @@ void AGXDeviceUserClient::freeJob(JobScratch &job)
 	IODelete(job.surfaces, SwitchGpuSurfaceRefresh, job.capacity);
 	IODelete(job.leases, switch_gpu_cpu_lease *, job.capacity);
 	IODelete(job.written, tgm_coh *, job.capacity);
+	IODelete(job.nativeWritten, void *, job.capacity);
 	job = {};
 }

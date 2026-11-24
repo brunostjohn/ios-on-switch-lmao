@@ -16,6 +16,9 @@ struct switch_gpu_backing {
     uint32_t pageCount = 1024, readers = 0, writers = 0, concurrentReaders = 0, concurrentWriters = 0;
     uint64_t content = 1;
     switch_gpu_backing_token producer = {11, 1, SWITCH_GPU_ENGINE_NVDEC, 7};
+    void *owner = nullptr;
+    void (*releaseOwner)(void *) = nullptr;
+    bool heapOwned = false;
     std::mutex lock;
     std::condition_variable changed;
 };
@@ -45,11 +48,56 @@ struct Surface : OSObject {
 
 std::atomic<unsigned> transfers{0}, seeds{0}, descriptions{0}, registrations{0}, finishedViews{0};
 int transferError = 0, generationError = 0;
-unsigned gpuReservations = 0, queuedTransfers = 0, cpuAcquisitions = 0;
+unsigned gpuReservations = 0, queuedTransfers = 0, cpuAcquisitions = 0, gpuPageAllocs = 0, gpuPageFrees = 0;
 bool reservingGpu = false;
 bool ready = true;
+bool surfaceUnwritten = true;
 TegraVICSurfaceDesc convertedDesc;
 std::function<void()> duringTransfer, duringGeneration, duringExport;
+}
+
+extern "C" int tgm_surface_unwritten(void *)
+{
+    return surfaceUnwritten ? 1 : 0;
+}
+
+bool switch_dma_pages_alloc(switch_dma_pages *out, size_t size, IOOptionBits)
+{
+    if (!out || !size)
+        return false;
+    *out = {};
+    const uint32_t count = static_cast<uint32_t>((size + 4095) / 4096);
+    out->pages = new uint64_t[count];
+    for (uint32_t i = 0; i < count; ++i)
+        out->pages[i] = 0x80000000ull + uint64_t(gpuPageAllocs) * 0x1000000ull + uint64_t(i) * 4096ull;
+    out->count = count;
+    out->size = size;
+    ++gpuPageAllocs;
+    return true;
+}
+
+void switch_dma_pages_free(switch_dma_pages *buffer)
+{
+    if (!buffer)
+        return;
+    delete[] buffer->pages;
+    *buffer = {};
+    ++gpuPageFrees;
+}
+
+extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *pages, uint32_t count, uint32_t,
+                                                           void *owner, void (*release_owner)(void *))
+{
+    if (!pages || !count || count > 1024)
+        return nullptr;
+    auto *backing = new switch_gpu_backing;
+    memcpy(backing->pages, pages, count * sizeof(uint64_t));
+    backing->pageCount = count;
+    backing->producer = {};
+    backing->owner = owner;
+    backing->releaseOwner = release_owner;
+    backing->heapOwned = true;
+    return backing;
 }
 
 extern "C" void switch_gpu_surface_finish(void *descriptor)
@@ -115,7 +163,11 @@ extern "C" void switch_gpu_backing_retain(switch_gpu_backing *backing)
 
 extern "C" void switch_gpu_backing_release(switch_gpu_backing *backing)
 {
-    --backing->refs;
+    if (--backing->refs == 0 && backing->heapOwned) {
+        if (backing->releaseOwner)
+            backing->releaseOwner(backing->owner);
+        delete backing;
+    }
 }
 
 extern "C" void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_gpu_backing_info *info)
@@ -355,8 +407,9 @@ protected:
     {
         transfers = seeds = descriptions = registrations = 0;
         ready = true;
-        gpuReservations = queuedTransfers = cpuAcquisitions = 0;
+        gpuReservations = queuedTransfers = cpuAcquisitions = gpuPageAllocs = gpuPageFrees = 0;
         reservingGpu = false;
+        surfaceUnwritten = true;
         transferError = generationError = 0;
         duringTransfer = duringGeneration = duringExport = {};
         memory = new IOMemoryDescriptor;
@@ -1378,4 +1431,75 @@ TEST_F(NativeSurface, AdmissionDoesNotWaitForPreparationAndRejectsAnotherBacking
     EXPECT_EQ(switch_native_surface_gpu_admission(object, kRead, &logical), 1);
     payload->release();
     SwitchMemoryAttachment::leaveCpu(memory);
+}
+
+TEST_F(NativeSurface, GpuWritableNativePublicationAllocatesOnceReusesAndRematerializesOnGpuWrite)
+{
+    switch_gpu_native_surface_view first = {}, second = {};
+    ASSERT_EQ(switch_native_surface_gpu_acquire_write(object, &first), 0);
+    EXPECT_EQ(gpuPageAllocs, 1u);
+    EXPECT_NE(first.owner, nullptr);
+    EXPECT_EQ(first.layout.planes[0].layout, uint32_t(SWITCH_GPU_BACKING_BLOCK_LINEAR));
+    EXPECT_EQ(first.layout.planes[0].block_height_log2, 1u);
+    EXPECT_EQ(first.layout.planes[0].pitch, 1280u);
+    EXPECT_EQ(first.layout.planes[1].offset, 1280u * 736u);
+    EXPECT_EQ(first.native->readers, 0u) << "GPU-owned native picture holds no blocking CPU read lease";
+
+    // Second plane / recycled frame reuses the exact same BL2 allocation even once seed moved.
+    surfaceUnwritten = false;
+    ASSERT_EQ(switch_native_surface_gpu_acquire_write(object, &second), 0);
+    EXPECT_EQ(gpuPageAllocs, 1u);
+    EXPECT_EQ(second.native, first.native);
+    EXPECT_EQ(second.owner, first.owner);
+
+    // Direct NVENC acquire succeeds on the GPU-owned native picture; direct display scanout declines it.
+    SwitchNativeSurfaceView nvenc = {};
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &nvenc, true), 0);
+    EXPECT_EQ(nvenc.native, first.native);
+    switch_native_surface_release(&nvenc);
+    SwitchNativeScanout scanout = {};
+    EXPECT_EQ(switch_native_scanout_acquire(object, &scanout), -2);
+
+    // CPU read materializes once; a subsequent GPU write clears pitchValid so the next CPU read rematerializes.
+    switch_gpu_backing *backing = nullptr;
+    switch_gpu_cpu_lease *owned = nullptr;
+    ASSERT_EQ(prepareCpu(object, 1, &backing, &owned), 0);
+    EXPECT_EQ(transfers, 1u);
+    finishCpu(object, backing, &owned);
+    ASSERT_EQ(prepareCpu(object, 1, &backing, &owned), 0);
+    EXPECT_EQ(transfers, 1u);
+    finishCpu(object, backing, &owned);
+    switch_native_surface_gpu_written(first.owner);
+    ASSERT_EQ(prepareCpu(object, 1, &backing, &owned), 0);
+    EXPECT_EQ(transfers, 2u);
+    finishCpu(object, backing, &owned);
+
+    // A concurrent GPU write during prepare leaves pitchValid false so the next CPU read sees the newer frame.
+    switch_native_surface_gpu_written(first.owner);
+    duringTransfer = [&] {
+        switch_native_surface_gpu_written(first.owner);
+    };
+    ASSERT_EQ(prepareCpu(object, 1, &backing, &owned), 0);
+    EXPECT_EQ(transfers, 3u);
+    finishCpu(object, backing, &owned);
+    duringTransfer = {};
+    ASSERT_EQ(prepareCpu(object, 1, &backing, &owned), 0);
+    EXPECT_EQ(transfers, 4u);
+    finishCpu(object, backing, &owned);
+
+    switch_native_surface_gpu_release(&second);
+    switch_native_surface_gpu_release(&first);
+}
+
+TEST_F(NativeSurface, GpuWritableNativePublicationRefusesWrittenOrDecoderOwnedSurfaces)
+{
+    surfaceUnwritten = false;
+    switch_gpu_native_surface_view view = {};
+    EXPECT_EQ(switch_native_surface_gpu_acquire_write(object, &view), -2);
+    EXPECT_EQ(gpuPageAllocs, 0u);
+
+    surfaceUnwritten = true;
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
+    EXPECT_EQ(switch_native_surface_gpu_acquire_write(object, &view), -2);
+    EXPECT_EQ(gpuPageAllocs, 0u);
 }

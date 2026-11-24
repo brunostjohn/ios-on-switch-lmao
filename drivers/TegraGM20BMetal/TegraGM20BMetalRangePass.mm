@@ -174,6 +174,10 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
 #endif
         }
         p.color[j].texture = target != &t->_raw ? target : standIn ? standIn : &t->_raw;
+        if (p.color[j].texture == &t->_raw && t->_raw.nativePlane != ~0u) {
+            if (const gm20b::Texture *native = rc->writeTexture(&t->_raw); native != &t->_raw)
+                p.color[j].texture = const_cast<gm20b::Texture *>(native);
+        }
         if (standIn && t->_raw.rotation) {  // laid out as its planes (TegraGM20BMetalRotated.mm): drawn turned
             levelTargets_[j] = *standIn;
             levelTargets_[j].rotation = t->_raw.rotation;

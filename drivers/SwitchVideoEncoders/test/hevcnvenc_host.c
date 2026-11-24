@@ -481,6 +481,49 @@ static void checkSyntax(void)
     checkPSyntax(&c, &params, &l);
 }
 
+static void checkFast(void)
+{
+    HEVCEncConfig c = {.width = 1920, .height = 1080, .fast = true, .fps_num = 60, .fps_den = 1};
+    CHECK(hevcnvenc_configure(&c) == 0, "fast: configure");
+    CHECK(!c.amp && c.max_tr_depth_inter == 1 && c.max_tr_depth_intra == 1, "fast: coding tree");
+    uint8_t sps[192], pps[64];
+    const size_t spsSize = hevcenc_write_sps(&c, sps, sizeof(sps)), ppsSize = hevcenc_write_pps(&c, pps, sizeof(pps));
+    static HEVCParams params;
+    memset(&params, 0, sizeof(params));
+    CHECK(hevc_parse_sps(&params, sps, spsSize) == 0 && hevc_parse_pps(&params, pps, ppsSize) == 0,
+          "fast: AVD parser refused SPS or PPS");
+    H264EncLayout l;
+    hevcnvenc_layout(&c, TEGRA_NVENC_LAYOUT_TILED16, &l);
+    const HEVCEncPicture idr = {.idr = true, .qp = 26};
+    const HEVCEncPicture p = {.poc = 1, .qp = 28, .picture_index = 1};
+    static TegraNVENCSubmit s;
+    hevcnvenc_fill_submit(&c, TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, &l, &idr, &kHandles, &s);
+    const char *why = check(&s);
+    CHECK(!why, "fast: checker refused IDR: %s", why ? why : "");
+    const nvenc_h265_drv_pic_setup_s *setup = setupOf(&s);
+    CHECK(!setup->sps_data.amp_enabled_flag && !params.sps[0].amp, "fast: AMP off in setup and SPS");
+    CHECK(!setup->pps_data.transform_skip_enabled_flag && !params.pps[0].transform_skip,
+          "fast: transform skip off in setup and PPS");
+    CHECK(params.sps[0].max_th_depth_inter == 1 && params.sps[0].max_th_depth_intra == 1, "fast: transform depth 1");
+    const TegraNVENCEntry *ctrl = entry(&s, NVC5B7_SET_CONTROL_PARAMS);
+    CHECK(ctrl && !(ctrl->value & (1u << 11)), "fast: SLICE_STAT_ON off");
+    const nvenc_h264_me_control_s *me = (const nvenc_h264_me_control_s *)(s.setup + setup->pic_control.me_control_offset);
+    CHECK(me->shape1.bitmask[0] == me->shape0.bitmask[0] && me->shape1.bitmask[1] == me->shape0.bitmask[1],
+          "fast: compact ME shape1");
+    const nvenc_h265_md_control_s *md = (const nvenc_h265_md_control_s *)(s.setup + setup->pic_control.md_control_offset);
+    CHECK(!md->cu16x16_part_NxN_enable && !md->cu32x32_part_2NxnU_enable && !md->cu32x32_part_2NxnD_enable &&
+              !md->cu32x32_part_nLx2N_enable && !md->cu32x32_part_nRx2N_enable && md->chroma_eval_mode == 1,
+          "fast: IDR MD complexity trimmed");
+
+    hevcnvenc_fill_submit(&c, TEGRA_NVENC_LAYOUT_TILED16, TEGRA_NVENC_CHROMA_OFFSET, &l, &p, &kHandles, &s);
+    why = check(&s);
+    CHECK(!why, "fast: checker refused P: %s", why ? why : "");
+    md = (const nvenc_h265_md_control_s *)(s.setup + setupOf(&s)->pic_control.md_control_offset);
+    CHECK(!md->intra_mode_8x8_enable && !md->h265_intra_luma8x8_mode_enable && !md->h265_intra_luma_mode_enable_leftbits,
+          "fast: P intra 8x8 off");
+    checkPSyntax(&c, &params, &l);
+}
+
 int main(void)
 {
     checkSize(1280, 720, kHeader1280, kSlice1280);
@@ -490,6 +533,7 @@ int main(void)
     checkReferenceBound();
     checkChromaMethodInput();
     checkSyntax();
+    checkFast();
     if (gFailures) {
         printf("FAIL hevcnvenc: %d failures\n", gFailures);
         return 1;

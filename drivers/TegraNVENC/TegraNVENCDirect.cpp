@@ -181,17 +181,24 @@ int tegra_nvenc_direct_prepare(const TegraNVENCSubmit *s, task_t task, TegraNVEN
     nvenc_h264_surface_cfg_s cfg;
     memcpy(&cfg, s->setup + offsetof(nvenc_h264_drv_pic_setup_s, input_cfg), sizeof(cfg));
     TegraNVENCDirectPlan plan = {};
-    *why = tegra_nvenc_direct_plan(&cfg, &s->source, &d->view.layout, d->view.crop.x, d->view.crop.y,
-                                   d->view.crop.width, d->view.crop.height, &plan);
-    if (*why)
-        return -95;
-    d->map = tegra_nvenc_native_map(d->view.native, &d->block.iova, &d->block.size);
-    if (!d->map) {
-        *why = "no room in NVENC's address space for the native picture";
+    const char *reason = tegra_nvenc_direct_plan(&cfg, &s->source, &d->view.layout, d->view.crop.x, d->view.crop.y,
+                                                 d->view.crop.width, d->view.crop.height, &plan);
+    if (reason) {
+        if (why)
+            *why = reason;
         return -95;
     }
-    if (const int error = bridgeGpuWriters(d))
+    d->map = tegra_nvenc_native_map(d->view.native, &d->block.iova, &d->block.size);
+    if (!d->map) {
+        if (why)
+            *why = "no room in NVENC's address space for the native picture";
+        return -95;
+    }
+    if (const int error = bridgeGpuWriters(d)) {
+        if (why)
+            *why = "source IOSurface GPU writers could not be bridged";
         return error;
+    }
     *patched = *s;
     patched->source = {};
     tegra_nvenc_direct_config(&plan, &cfg);

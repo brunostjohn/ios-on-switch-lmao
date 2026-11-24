@@ -461,6 +461,7 @@ host_test(
 host_shims(
     name = "native_surface_kernel",
     headers = [
+        "IOKit/IOBufferMemoryDescriptor.h",
         "IOKit/IOLib.h",
         "IOKit/IOLocks.h",
         "IOKit/IOMemoryDescriptor.h",
@@ -506,6 +507,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20B:TegraGM20BTiled.h",
         "//drivers/TegraGM20B:TegraGM20BViews.h",
+        "//kits/SwitchDMA:SwitchDMAPages.h",
     ],
     additional_compiler_inputs = [
         "//drivers/TegraVIC:SwitchNativeSurface.cpp",
@@ -688,6 +690,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20B:TegraGM20BTiled.h",
         "//drivers/TegraGM20B:TegraGM20BViews.h",
+        "//kits/SwitchDMA:SwitchDMAPages.h",
     ],
     additional_compiler_inputs = [
         "//drivers/TegraVIC:SwitchVICSurfaceAccess.cpp",

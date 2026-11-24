@@ -86,6 +86,24 @@ extern "C" int switch_native_surface_gpu_acquire(void *object, switch_gpu_native
     return error;
 }
 
+extern "C" int switch_native_surface_gpu_acquire_write(void *object, switch_gpu_native_surface_view *out)
+{
+    if (!out)
+        return -22;
+    *out = {};
+    TegraVICSurface surface = {};
+    const int described = switch_vic_surface_from_object(static_cast<OSObject *>(object), 0, &surface);
+    if (described)
+        return described;
+    SwitchNativeSurfaceView view = {};
+    const int error = switch_native_surface_publish_gpu(&surface, &view);
+    if (!error)
+        *out = {view.owner,    view.descriptor, view.logical, view.native, view.guard,      view.representation,
+                view.producer, view.layout,     view.crop.x,  view.crop.y, view.crop.width, view.crop.height};
+    tegra_vic_surface_release(&surface);
+    return error;
+}
+
 extern "C" void switch_native_surface_gpu_release(switch_gpu_native_surface_view *view)
 {
     if (!view)

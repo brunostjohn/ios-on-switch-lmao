@@ -224,7 +224,7 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 	const tgm_prof *profile = nullptr;
 #endif
 	uint32_t useTotal = 0, writeCount = 0, surfaceCount = 0, nativeGuardCount = 0,
-		 writtenCount = 0, rangedUses = 0, nativeReads = 0;
+		 writtenCount = 0, nativeWrittenCount = 0, rangedUses = 0, nativeReads = 0;
 	bool hostWritten = (head.flags & TegraGM20BJobHostWritten) ||
 			   (set && switch_gpu_set_take_host_written(set));
 	bool unlockedWrites = false, scanoutWrites = false;
@@ -262,15 +262,21 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 		if (bo->nativeView) {
 			++nativeReads;
 			const uint32_t first = useTotal;
-			if (const int error = switch_gpu_native_surface_add_read(
-				    *bo->nativeView, access, job.uses, job.guards, job.capacity,
-				    useTotal, nativeGuardCount))
+			if (const int error = switch_gpu_native_surface_add_use(
+				    *bo->nativeView, bo->readOnly, access, job.uses, job.guards,
+				    job.capacity, useTotal, nativeGuardCount))
 				return refuseWrites(switch_gpu_refuse(
 					why, SwitchGpuRefusal::NativeRead, ioreturn(error), i,
 					switch_gpu_refusal_errno(error)));
 			for (uint32_t u = first; u < useTotal; ++u)
 				job.uses[u].access |=
 					switch_gpu_claim_use(claim, job.uses[u].access);
+			if (access & TegraGM20BSurfaceWrite) {
+				unlockedWrites = true;
+				if (bo->nativeView->owner)
+					job.nativeWritten[nativeWrittenCount++] =
+						bo->nativeView->owner;
+			}
 			continue;
 		}
 		job.uses[useTotal++] = {bo->backing, access | switch_gpu_claim_use(claim, access),
@@ -461,6 +467,10 @@ refresh:
 		events->commit();
 		if (set && (count || (head.flags & TegraGM20BJobHasEvents)))
 			switch_gpu_set_note_job(set, slot, &completion);
+		if (count && switch_native_surface_gpu_written) {
+			for (uint32_t i = 0; i < nativeWrittenCount; ++i)
+				switch_native_surface_gpu_written(job.nativeWritten[i]);
+		}
 	}
 	switch_gpu_chan_submit_leave();
 	SwitchGpuSurfaceRefresh::release(job.surfaces, surfaceCount);

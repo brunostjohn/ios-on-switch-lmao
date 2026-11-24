@@ -39,7 +39,7 @@ struct tgm_mem {
 namespace
 {
 int lockDepth = 1, acquireError, memError;
-unsigned acquired, released, constructed, directPaLatches;
+unsigned acquired, acquiredWrites, released, constructed, directPaLatches;
 uint64_t pages[] = {0x100000, 0x101000, 0x102000};
 volatile uint64_t representation = 3, payload = 1;
 switch_gpu_backing logical, physical;
@@ -77,6 +77,19 @@ int acquire(void *surface, switch_gpu_native_surface_view *out)
 	return 0;
 }
 
+int acquireWrite(void *surface, switch_gpu_native_surface_view *out)
+{
+	EXPECT_NE(surface, nullptr);
+	EXPECT_EQ(lockDepth, 0);
+	++acquiredWrites;
+	if (acquireError)
+		return acquireError;
+	*out = answer;
+	++out->native->refs;
+	++out->logical->refs;
+	return 0;
+}
+
 void release(switch_gpu_native_surface_view *view)
 {
 	++released;
@@ -88,6 +101,7 @@ void release(switch_gpu_native_surface_view *view)
 }
 
 auto acquireFn = acquire;
+auto acquireWriteFn = acquireWrite;
 auto releaseFn = release;
 
 int tgm_mem_new(tgm_vm *, const uint64_t *addresses, uint32_t count, tgm_mem **out)
@@ -189,10 +203,12 @@ extern "C" void switch_gpu_path_taken(enum switch_gpu_path, uint32_t)
 }
 #endif
 
-#define switch_native_surface_gpu_acquire acquireFn
-#define switch_native_surface_gpu_release releaseFn
+#define switch_native_surface_gpu_acquire       acquireFn
+#define switch_native_surface_gpu_acquire_write acquireWriteFn
+#define switch_native_surface_gpu_release       releaseFn
 #include "drivers/TegraGM20B/SwitchGpuNativeImport.h"
 #undef switch_native_surface_gpu_acquire
+#undef switch_native_surface_gpu_acquire_write
 #undef switch_native_surface_gpu_release
 
 class NativeImport : public testing::Test
@@ -208,13 +224,14 @@ protected:
 	{
 		lockDepth = 1;
 		acquireError = memError = 0;
-		acquired = released = constructed = directPaLatches = 0;
+		acquired = acquiredWrites = released = constructed = directPaLatches = 0;
 		logical = {};
 		physical = {};
 		existingBackingMem = nullptr;
 		representation = 3;
 		payload = 1;
 		acquireFn = acquire;
+		acquireWriteFn = acquireWrite;
 		releaseFn = release;
 		answer = {};
 		answer.descriptor = &surface;
@@ -391,4 +408,19 @@ TEST_F(NativeImport, DirectFallbackLatchesDirectPaBeforeAllocatingMem)
 	ASSERT_EQ(client.nativeSurfaceView(&request, &reply), 0);
 	EXPECT_EQ(directPaLatches, 1u);
 	EXPECT_EQ(constructed, 1u);
+}
+
+TEST_F(NativeImport, WritableFlagAcquiresWritableNativeBoAndRejectsUnknownFlags)
+{
+	request.flags = TegraGM20BNativeSurfaceWrite;
+	ASSERT_EQ(client.nativeSurfaceView(&request, &reply), 0);
+	ASSERT_NE(reply.handle, 0u);
+	const auto *bo = client.findBo(reply.handle);
+	ASSERT_NE(bo, nullptr);
+	EXPECT_FALSE(bo->readOnly);
+	EXPECT_EQ(acquiredWrites, 1u);
+	EXPECT_EQ(acquired, 0u);
+
+	request.flags = TegraGM20BNativeSurfaceWrite | (1u << 1);
+	EXPECT_EQ(client.nativeSurfaceView(&request, &reply), kIOReturnBadArgument);
 }

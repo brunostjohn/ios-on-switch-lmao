@@ -165,6 +165,7 @@ public:
     std::string setRefused;
     std::shared_ptr<ResourceReadyCompletion> resourceReadiness(std::function<void()> ready, int &result);
     const Texture *readTexture(const Texture *texture);
+    const Texture *writeTexture(const Texture *texture);
     void requirePitch(const Import *source, bool writes);
     // An import required pitch after a texture over it was read through its native image
     bool pitchAfterNativeRead() const;
@@ -361,6 +362,7 @@ private:
     TimedBuffer *drawTimes_ = nullptr;  // its slot in a frame-weights capture (draw_capture.h); null: none
 #endif
     std::map<const Texture *, const Texture *> nativeReads_;
+    std::map<const Texture *, const Texture *> nativeWrites_;
     std::vector<NativeSurface *> nativeSurfaces_;
     std::vector<const Import *> pitchImports_;
     GeometryBudget geometryBudget_;

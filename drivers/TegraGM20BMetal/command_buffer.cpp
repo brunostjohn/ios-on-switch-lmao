@@ -143,6 +143,7 @@ CommandBuffer *Device::begin()
     cb.notSubmitted = nullptr;
     cb.setRefused.clear();
     cb.nativeReads_.clear();
+    cb.nativeWrites_.clear();
     cb.nativeSurfaces_.clear();
     cb.pitchImports_.clear();
     overflowing_ = false;

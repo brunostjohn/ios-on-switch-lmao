@@ -1673,6 +1673,7 @@ private:
     std::vector<std::unique_ptr<NativeSurface>> nativeSurfaces_;
     uint64_t nativeGeneration_ = 0;
     const Texture *nativeRead(const Texture &source, NativeSurface *&owner, int &error);
+    const Texture *nativeWrite(const Texture &source, NativeSurface *&owner, int &error);
     // What teardown, trim, purge or creation rollback detaches under lock_ and frees synchronously once lock_ is let go
     // (alias.cpp): BOs, VA reservations, arena host ranges and CF owner references, freed in FIFO order.
     enum class RetireKind : uint8_t {

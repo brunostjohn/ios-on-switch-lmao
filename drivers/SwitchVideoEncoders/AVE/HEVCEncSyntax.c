@@ -235,7 +235,6 @@ size_t hevcenc_write_sps(const HEVCEncConfig *c, uint8_t *out, size_t cap)
 
 size_t hevcenc_write_pps(const HEVCEncConfig *c, uint8_t *out, size_t cap)
 {
-    (void)c;
     uint8_t rbsp[32];
     H264Bits b;
     h264bits_init(&b, rbsp, sizeof(rbsp));
@@ -250,7 +249,7 @@ size_t hevcenc_write_pps(const HEVCEncConfig *c, uint8_t *out, size_t cap)
     h264bits_ue(&b, 0);    // num_ref_idx_l1_default_active_minus1
     h264bits_se(&b, 0);    // init_qp_minus26
     h264bits_u(&b, 0, 1);  // constrained_intra_pred_flag
-    h264bits_u(&b, 1, 1);  // transform_skip_enabled_flag
+    h264bits_u(&b, c && c->fast ? 0 : 1, 1);  // transform_skip_enabled_flag
     h264bits_u(&b, 0, 1);  // cu_qp_delta_enabled_flag: one QP a picture
     h264bits_se(&b, 0);    // pps_cb_qp_offset
     h264bits_se(&b, 0);    // pps_cr_qp_offset

@@ -331,13 +331,14 @@ uint32_t Kernel::surfaceLayout(const Bo &bo, uint32_t width, uint32_t height, ui
     return out.layout;
 }
 
-int Kernel::nativeSurfaceView(const Bo &source, Bo &view, TegraGM20BAbiNativeSurfaceViewReply &layout)
+int Kernel::nativeSurfaceView(const Bo &source, Bo &view, TegraGM20BAbiNativeSurfaceViewReply &layout, bool writable)
 {
     layout = {};
     view = {};
     if (!exactJobs())
         return KERN_SUCCESS;
-    const TegraGM20BAbiNativeSurfaceView in = {source.handle, 0, 0};
+    const TegraGM20BAbiNativeSurfaceView in = {source.handle, writable ? uint32_t(TegraGM20BNativeSurfaceWrite) : 0u,
+                                               0};
     const int result = call(TegraGM20BMethodNativeSurfaceView, &in, sizeof in, &layout, sizeof layout);
     if (result != KERN_SUCCESS || !layout.handle)
         return result;

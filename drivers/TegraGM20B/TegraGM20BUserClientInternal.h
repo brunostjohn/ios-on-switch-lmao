@@ -301,8 +301,11 @@ struct SwitchGpuJobRecord;
 
 extern "C" int switch_native_surface_gpu_acquire(void *, switch_gpu_native_surface_view *)
 	__attribute__((weak));
+extern "C" int switch_native_surface_gpu_acquire_write(void *, switch_gpu_native_surface_view *)
+	__attribute__((weak));
 extern "C" void switch_native_surface_gpu_release(switch_gpu_native_surface_view *)
 	__attribute__((weak));
+extern "C" void switch_native_surface_gpu_written(void *) __attribute__((weak));
 
 // IOGPUFamily's marker of a UI-critical GPU client, which no GPU restart kills (the same string in 21H461's and
 // 24B119's): backboardd; on 24B119 SpringBoard and the WidgetRenderer apps too
@@ -449,6 +452,7 @@ class AGXDeviceUserClient : public IOUserClient
 		switch_gpu_cpu_lease **leases;
 		tgm_coh **
 			written;  // the listed uses' imports a job writes, as its uses resolved them
+		void **nativeWritten;
 		uint32_t capacity;
 		SwitchGpuEventJob *events;
 		SubmitPhases phases;
