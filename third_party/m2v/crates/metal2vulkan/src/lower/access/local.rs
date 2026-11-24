@@ -1489,7 +1489,10 @@ fn compare(
     let space = cx
         .value_ty(a)
         .and_then(|t| cx.entry.module.types().ptr_space(t));
-    if !matches!(space, Some(AddrSpace::Thread | AddrSpace::Threadgroup)) {
+    if !matches!(
+        space,
+        Some(AddrSpace::Thread | AddrSpace::ArrayRef | AddrSpace::Threadgroup)
+    ) {
         return Ok(None);
     }
     let null = |cx: &SelectCx<'_>, v: Value| match v {
