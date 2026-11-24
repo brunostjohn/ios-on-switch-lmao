@@ -524,7 +524,8 @@ int switch_native_surface_publish_gpu(const TegraVICSurface *surface, SwitchNati
     if ((desc.fourcc != 0x34323076u && desc.fourcc != 0x34323066u) || desc.planes != 2 || desc.protection ||
         surface->baseOffset || desc.width < 32 || desc.height < 32 || desc.width > 4096 || desc.height > 4096 ||
         ((desc.width | desc.height) & 1) ||
-        !switch_vic_surface_owns_descriptor(surface->memory->getLength(), surface->baseOffset, desc.length, PAGE_SIZE) ||
+        !switch_vic_surface_owns_descriptor(surface->memory->getLength(), surface->baseOffset, desc.length,
+                                            PAGE_SIZE) ||
         !tegra_vic_present_ready())
         return -2;
     int acquired = switch_native_surface_acquire(surface, view, false);

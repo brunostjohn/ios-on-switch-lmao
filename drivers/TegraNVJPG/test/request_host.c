@@ -128,8 +128,8 @@ int main(void)
     d = surface(f420, 1920, 1080);
     expect("1080p 420f padded", &r, &img, &d, &kAll, TEGRA_NVJPG_PLAN_OK, NULL, &p);
     CHECK(p.repack == TEGRA_NVJPG_REPACK_CE && p.planes == 2 && p.target.pitch[0] == 1920 &&
-              p.target.pitch[1] == 1920 && p.copyRows[0] == 1080 && p.copyRows[1] == 540 &&
-              p.copyRowBytes[0] == 1920 && p.copyRowBytes[1] == 1920 && p.copyDstStart[1] == d.planeOffset[1],
+              p.target.pitch[1] == 1920 && p.copyRows[0] == 1080 && p.copyRows[1] == 540 && p.copyRowBytes[0] == 1920 &&
+              p.copyRowBytes[1] == 1920 && p.copyDstStart[1] == d.planeOffset[1],
           "1080p 420f padded: CE repack plan");
     d.planeOffset[1] = 1920ull * 1080;  // chroma straight after the luma
     d.length = d.planeOffset[1] + 1920ull * 540;
@@ -381,8 +381,9 @@ int main(void)
               "%u BGRA CE fallback geometry", size);
         TegraNVJPGPlan fbComp = p;
         fbComp.target.blockLinear = 0;
-        CHECK(!tegra_nvjpg_plan_fallback_ce(&rt, &dt, 256ull << 20, true, l.width, l.height, l.bpp, true, &fbComp, &fbs),
-              "%u BGRA compressed stays refused for CE fallback", size);
+        CHECK(
+            !tegra_nvjpg_plan_fallback_ce(&rt, &dt, 256ull << 20, true, l.width, l.height, l.bpp, true, &fbComp, &fbs),
+            "%u BGRA compressed stays refused for CE fallback", size);
     }
 
     // Placed one 16-GOB block down and four GOBs in: the plane starts on that block. Off a GOB, or off a block's rows,

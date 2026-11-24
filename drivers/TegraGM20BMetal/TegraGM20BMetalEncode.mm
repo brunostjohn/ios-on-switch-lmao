@@ -177,14 +177,12 @@ bool SwitchMetalRangeEncode::resources(size_t from, size_t to)
             const Cmd c = cb_->_plan.legacy(at);
             if (c.op == OpBlit || c.op == OpCompute) {
                 const size_t end = std::min(cb_->_plan.encoderEnd(at), to);
-                cb_->_plan.forEachResource(at, end, SwitchMetalResourceKind::Texture,
-                                           [&](const SwitchMetalRangeResource &use) {
-                                               __unsafe_unretained SwitchMetalTexture *texture =
-                                                   (__bridge SwitchMetalTexture *)use.object;
-                                               if (texture->_raw.nativePlane != ~0u)
-                                                   rc->requirePitch(texture->_raw.import,
-                                                                    use.access & gm20b::ResourceUse::Write);
-                                           });
+                cb_->_plan.forEachResource(
+                    at, end, SwitchMetalResourceKind::Texture, [&](const SwitchMetalRangeResource &use) {
+                        __unsafe_unretained SwitchMetalTexture *texture = (__bridge SwitchMetalTexture *)use.object;
+                        if (texture->_raw.nativePlane != ~0u)
+                            rc->requirePitch(texture->_raw.import, use.access & gm20b::ResourceUse::Write);
+                    });
             } else if (c.op == OpRender) {
                 const SwitchMetalPass &pass = cb_->_passes[c.x];
                 for (const SwitchMetalPass::Color &a : pass.color) {

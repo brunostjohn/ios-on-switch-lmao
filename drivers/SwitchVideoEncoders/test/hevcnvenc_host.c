@@ -507,10 +507,12 @@ static void checkFast(void)
     CHECK(params.sps[0].max_th_depth_inter == 1 && params.sps[0].max_th_depth_intra == 1, "fast: transform depth 1");
     const TegraNVENCEntry *ctrl = entry(&s, NVC5B7_SET_CONTROL_PARAMS);
     CHECK(ctrl && !(ctrl->value & (1u << 11)), "fast: SLICE_STAT_ON off");
-    const nvenc_h264_me_control_s *me = (const nvenc_h264_me_control_s *)(s.setup + setup->pic_control.me_control_offset);
+    const nvenc_h264_me_control_s *me =
+        (const nvenc_h264_me_control_s *)(s.setup + setup->pic_control.me_control_offset);
     CHECK(me->shape1.bitmask[0] == me->shape0.bitmask[0] && me->shape1.bitmask[1] == me->shape0.bitmask[1],
           "fast: compact ME shape1");
-    const nvenc_h265_md_control_s *md = (const nvenc_h265_md_control_s *)(s.setup + setup->pic_control.md_control_offset);
+    const nvenc_h265_md_control_s *md =
+        (const nvenc_h265_md_control_s *)(s.setup + setup->pic_control.md_control_offset);
     CHECK(!md->cu16x16_part_NxN_enable && !md->cu32x32_part_2NxnU_enable && !md->cu32x32_part_2NxnD_enable &&
               !md->cu32x32_part_nLx2N_enable && !md->cu32x32_part_nRx2N_enable && md->chroma_eval_mode == 1,
           "fast: IDR MD complexity trimmed");
@@ -519,7 +521,8 @@ static void checkFast(void)
     why = check(&s);
     CHECK(!why, "fast: checker refused P: %s", why ? why : "");
     md = (const nvenc_h265_md_control_s *)(s.setup + setupOf(&s)->pic_control.md_control_offset);
-    CHECK(!md->intra_mode_8x8_enable && !md->h265_intra_luma8x8_mode_enable && !md->h265_intra_luma_mode_enable_leftbits,
+    CHECK(!md->intra_mode_8x8_enable && !md->h265_intra_luma8x8_mode_enable &&
+              !md->h265_intra_luma_mode_enable_leftbits,
           "fast: P intra 8x8 off");
     checkPSyntax(&c, &params, &l);
 }

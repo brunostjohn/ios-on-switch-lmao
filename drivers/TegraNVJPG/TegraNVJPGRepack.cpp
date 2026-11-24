@@ -126,9 +126,9 @@ void queueCeRepack(void *context, uint32_t syncpt, uint32_t fence)
         const tegra_gm20b_ce_plane dst = {q->destination->memory, q->destination->baseOffset + p->copyDstStart[i],
                                           p->copyDstPitch[i]};
         __atomic_add_fetch(&q->wait->pending, 1u, __ATOMIC_RELAXED);
-        const int error = tegra_gm20b_ce_copy_plane_checked(
-            &src, &dst, p->copyRowBytes[i], p->copyRows[i], &after, &done, gBacking, p->planeStart[i],
-            q->access->backing, q->access->offset + p->copyDstStart[i], &ownership, &none);
+        const int error = tegra_gm20b_ce_copy_plane_checked(&src, &dst, p->copyRowBytes[i], p->copyRows[i], &after,
+                                                            &done, gBacking, p->planeStart[i], q->access->backing,
+                                                            q->access->offset + p->copyDstStart[i], &ownership, &none);
         if (error) {
             int expected = 0;
             __atomic_compare_exchange_n(&q->wait->status, &expected, error, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED);

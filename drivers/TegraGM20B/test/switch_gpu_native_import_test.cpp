@@ -203,9 +203,9 @@ extern "C" void switch_gpu_path_taken(enum switch_gpu_path, uint32_t)
 }
 #endif
 
-#define switch_native_surface_gpu_acquire       acquireFn
+#define switch_native_surface_gpu_acquire acquireFn
 #define switch_native_surface_gpu_acquire_write acquireWriteFn
-#define switch_native_surface_gpu_release       releaseFn
+#define switch_native_surface_gpu_release releaseFn
 #include "drivers/TegraGM20B/SwitchGpuNativeImport.h"
 #undef switch_native_surface_gpu_acquire
 #undef switch_native_surface_gpu_acquire_write

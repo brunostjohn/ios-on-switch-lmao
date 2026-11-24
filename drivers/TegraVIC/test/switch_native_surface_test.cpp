@@ -85,8 +85,8 @@ void switch_dma_pages_free(switch_dma_pages *buffer)
     ++gpuPageFrees;
 }
 
-extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *pages, uint32_t count, uint32_t,
-                                                           void *owner, void (*release_owner)(void *))
+extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *pages, uint32_t count, uint32_t, void *owner,
+                                                           void (*release_owner)(void *))
 {
     if (!pages || !count || count > 1024)
         return nullptr;
