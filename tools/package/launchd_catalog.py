@@ -3,13 +3,10 @@ import hashlib
 import plistlib
 import re
 import subprocess
-import tempfile
 from pathlib import Path
 
-from tools.install import disks, host
 from tools.trustcache.trustcache import trust_module
 
-CATALOG = 'System/Library/xpc/launchd.plist'
 LABEL = 'com.brunostjohn.switch.bootstrap'
 JOB_PATH = f'/System/Library/LaunchDaemons/{LABEL}.plist'
 APPS_LABEL = 'com.brunostjohn.switch.bootstrap-apps'
@@ -45,10 +42,9 @@ def add_bootstrap_jobs(catalog: bytes, job: dict, apps_job: dict) -> bytes:
     return plistlib.dumps(value, fmt=plistlib.FMT_BINARY, sort_keys=False)
 
 
-def read_pinned_catalog(root: Path, catalog_hash: str, signature_hash: str) -> bytes:
-    source = root / CATALOG
-    catalog = source.read_bytes()
-    signature = source.with_suffix('.plist.sig').read_bytes()
+def read_pinned_catalog(catalog_path: Path, signature_path: Path, catalog_hash: str, signature_hash: str) -> bytes:
+    catalog = catalog_path.read_bytes()
+    signature = signature_path.read_bytes()
     if hashlib.sha256(catalog).hexdigest() != catalog_hash or hashlib.sha256(signature).hexdigest() != signature_hash:
         raise ValueError('native launchd catalogue or detached signature differs from the IPSW pins')
     return catalog
@@ -102,28 +98,16 @@ def sign_catalog(catalog: Path, signature: Path) -> bytes:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    for name in ('os', 'job', 'apps-job', 'catalog', 'signature', 'trust', 'digest'):
+    for name in ('native-catalog', 'native-signature', 'job', 'apps-job', 'catalog', 'signature', 'trust', 'digest'):
         parser.add_argument('--' + name, type=Path, required=True)
-    for name in ('volume-uuid', 'catalog-sha256', 'signature-sha256'):
+    for name in ('catalog-sha256', 'signature-sha256'):
         parser.add_argument('--' + name, required=True)
     args = parser.parse_args()
     job = plistlib.loads(args.job.read_bytes())
     apps_job = plistlib.loads(args.apps_job.read_bytes())
-    with tempfile.TemporaryDirectory(prefix='switch-launchd-catalog-') as temporary:
-        log = host.Log(Path(temporary) / 'mount.log')
-        try:
-            with disks.interrupts(), disks.attached(args.os, log, writable=False) as image:
-                volumes = [
-                    volume
-                    for volume in image.volumes
-                    if (host.disk_info(volume) or {}).get('VolumeUUID', '').upper() == args.volume_uuid.upper()
-                ]
-                if len(volumes) != 1:
-                    raise ValueError('selected IPSW System volume UUID not found')
-                with disks.mounted(volumes[0], log, owners=False, read_only=True) as root:
-                    catalog = read_pinned_catalog(root, args.catalog_sha256, args.signature_sha256)
-        finally:
-            log.file.close()
+    catalog = read_pinned_catalog(
+        args.native_catalog, args.native_signature, args.catalog_sha256, args.signature_sha256
+    )
     args.catalog.parent.mkdir(parents=True, exist_ok=True)
     revised = add_bootstrap_jobs(catalog, job, apps_job)
     args.catalog.write_bytes(revised)
@@ -141,5 +125,5 @@ if __name__ == '__main__':
         raise SystemExit(
             detail.decode(errors='replace') if isinstance(detail, bytes) else detail or str(error)
         ) from None
-    except (KeyError, OSError, TypeError, ValueError, host.HostError) as error:
+    except (KeyError, OSError, TypeError, ValueError) as error:
         raise SystemExit(str(error)) from None

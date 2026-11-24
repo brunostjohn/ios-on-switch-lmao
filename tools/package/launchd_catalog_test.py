@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from launchd_catalog import APPS_JOB_PATH, APPS_LABEL, CATALOG, JOB_PATH, LABEL, add_bootstrap_jobs, read_pinned_catalog
+from launchd_catalog import APPS_JOB_PATH, APPS_LABEL, JOB_PATH, LABEL, add_bootstrap_jobs, read_pinned_catalog
 
 
 class LaunchdCatalogTest(unittest.TestCase):
@@ -56,19 +56,18 @@ class LaunchdCatalogTest(unittest.TestCase):
     def test_both_input_files_must_match_their_pins(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            catalogue = root / CATALOG
-            catalogue.parent.mkdir(parents=True)
+            catalogue = root / 'launchd.plist'
             catalogue.write_bytes(self.catalog)
-            signature = catalogue.with_suffix('.plist.sig')
+            signature = root / 'launchd.plist.sig'
             signature.write_bytes(b'native signature')
             catalog_hash = hashlib.sha256(self.catalog).hexdigest()
             signature_hash = hashlib.sha256(b'native signature').hexdigest()
-            self.assertEqual(read_pinned_catalog(root, catalog_hash, signature_hash), self.catalog)
+            self.assertEqual(read_pinned_catalog(catalogue, signature, catalog_hash, signature_hash), self.catalog)
             with self.assertRaisesRegex(ValueError, 'differs from the IPSW pins'):
-                read_pinned_catalog(root, 'bad', signature_hash)
+                read_pinned_catalog(catalogue, signature, 'bad', signature_hash)
             signature.write_bytes(b'altered signature')
             with self.assertRaisesRegex(ValueError, 'differs from the IPSW pins'):
-                read_pinned_catalog(root, catalog_hash, signature_hash)
+                read_pinned_catalog(catalogue, signature, catalog_hash, signature_hash)
 
 
 if __name__ == '__main__':
