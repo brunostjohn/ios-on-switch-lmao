@@ -192,7 +192,7 @@ void RenderEncoder::end()
         tiledCacheDrain(p_, d.k_.info());
     if (measured)
         emitDrawStamp(p_, d.stamps_.va, candidate_.slot, true, candidate_.payload);
-    if (attachmentWrites_.storage)
+    if (attachmentWrites_.storage || cb_->passBufferWrites_ || passShaderWrites_ || planned_.shaderWrites)
         p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateData);
     checkRoom(p_, "a pass body");
     if (p_.at > bodyStart_)
@@ -227,12 +227,19 @@ void RenderEncoder::end()
     const BarrierEngine before = cb_->lastEngine_;
     const BarrierForms forms = cb_->barrierForms();
     const PassUses uses = passUses();
+    const bool hadBufferWrites =
+        cb_->passBufferWrites_ || planned_.bufferWrites || passWritesMemory_ || (!uses.known && !rot_.turned());
+    cb_->passBufferWrites_ = false;
+    cb_->inRender_ = false;
     const PassForm pass = forms.pass != PassForm::Rule ? forms.pass : passRule(before, uses);
     const Opened opened = passOpening(p, pass, switchFormFor(forms.switchForm, before, BarrierEngine::ThreeD),
-                                      entryFormFor(forms.entry), before);
+                                      entryFormFor(forms.entry), before, cb_->prevBufferWrites_);
     if (cb_->takeKindSwitch())
         kit(p, switch_gm20b_kind_switch);
     advanceChain(cb_->chain_, uses, opened != Opened::Pass);
+    if (opened != Opened::Pass)
+        cb_->prevBufferWrites_ = false;
+    cb_->prevBufferWrites_ |= hadBufferWrites;
     cb_->lastEngine_ = BarrierEngine::ThreeD;
     SWITCH_METAL_DIAGNOSTIC(cb_->taken_.count(opened));
     SWITCH_METAL_DIAGNOSTIC(cb_->pixelOpenings_ += opened == Opened::Pass && pass == PassForm::PixelOrdered);
@@ -294,7 +301,7 @@ void RenderEncoder::end()
         own = true;
     }
     if (own) {
-        kit(p, switch_gm20b_pass_barrier, false);
+        kit(p, switch_gm20b_pass_drain, false);
     }
     uint32_t count = 0;
     for (uint32_t j = 0; j < pass_.count && j < 8; j++)
@@ -455,6 +462,7 @@ void RenderEncoder::end()
         copySeparateZeta(q, aspects, false);
         checkRoom(q, "a pass's separate depth and stencil stores");
         cb_->segment(at, q.at);
+        cb_->lastEngine_ = BarrierEngine::Copy;
         d.push_.head = uint64_t(reinterpret_cast<uint8_t *>(q.at) - d.push_.bo.cpu);
         SWITCH_METAL_DIAGNOSTIC(d.stats.pushBytes += uint64_t(q.at - at) * 4);
     }

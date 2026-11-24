@@ -16,19 +16,40 @@ struct BarrierKit {
     let seeded: MTLRenderPipelineState
     let tap: MTLRenderPipelineState
     let box: MTLRenderPipelineState
+    let depthWrite: MTLDepthStencilState?
 
+    var isDepth: Bool { format == .depth32Float }
+    var atlasFormat: MTLPixelFormat { isDepth ? .r32Float : format }
     var bytesPerTexel: Int { format == .rgba32Float ? 16 : format == .rgba16Float ? 8 : 4 }
-    var name: String { format == .rgba32Float ? "rgba32f" : format == .rgba16Float ? "rgba16f" : "bgra8" }
+    var name: String {
+        switch format {
+        case .depth32Float: return "d32f"
+        case .rgba32Float: return "rgba32f"
+        case .rgba16Float: return "rgba16f"
+        default: return "bgra8"
+        }
+    }
 
-    /// BGRA8Unorm, RGBA16Float or RGBA32Float (whose tap and box are the unorm ones: they return float4)
+    /// BGRA8Unorm, RGBA16Float, RGBA32Float or Depth32Float
     init(_ gpu: GPU, _ format: MTLPixelFormat) throws {
         self.gpu = gpu
         self.format = format
+        if format == .depth32Float {
+            seeded = try gpu.render(fragment: "x1_seeded_depth", format: .invalid, depth: .depth32Float)
+            tap = try gpu.render(fragment: "x1_tap_depth", format: .r32Float)
+            box = tap
+            let ds = MTLDepthStencilDescriptor()
+            ds.depthCompareFunction = .always
+            ds.isDepthWriteEnabled = true
+            depthWrite = gpu.device.makeDepthStencilState(descriptor: ds)
+            return
+        }
         let half = format == .rgba16Float
         let seed = format == .rgba32Float ? "x1_seeded_float" : half ? "x1_seeded_half" : "x1_seeded_unorm"
         seeded = try gpu.render(fragment: seed, format: format)
         tap = try gpu.render(fragment: half ? "x1_tap_half" : "x1_tap_unorm", format: format)
         box = try gpu.render(fragment: half ? "x1_box_half" : "x1_box_unorm", format: format)
+        depthWrite = nil
     }
 
     enum Layout: String {
@@ -58,7 +79,7 @@ struct BarrierKit {
     }
 
     func atlas(_ trials: Int) throws -> MTLTexture {
-        try gpu.texture(format, Self.tile, Self.tile * trials, usage: [.renderTarget, .shaderRead])
+        try gpu.texture(atlasFormat, Self.tile, Self.tile * trials, usage: [.renderTarget, .shaderRead])
     }
 
     static func pass(_ target: MTLTexture) -> MTLRenderPassDescriptor {
@@ -69,12 +90,22 @@ struct BarrierKit {
         return pass
     }
 
+    static func depthPass(_ target: MTLTexture) -> MTLRenderPassDescriptor {
+        let pass = MTLRenderPassDescriptor()
+        pass.depthAttachment.texture = target
+        pass.depthAttachment.loadAction = .load
+        pass.depthAttachment.storeAction = .store
+        return pass
+    }
+
     /// Pass A: `seed`'s pattern over [x0, x1) x [y0, y1) of `target` (all of it by default), `spin` rounds a pixel
     func seed(
         _ commands: MTLCommandBuffer, _ target: MTLTexture, seed: Int, spin: Int, window: (Int, Int, Int, Int)? = nil
     ) {
-        let encoder = commands.makeRenderCommandEncoder(descriptor: Self.pass(target))!
+        let pass = isDepth ? Self.depthPass(target) : Self.pass(target)
+        let encoder = commands.makeRenderCommandEncoder(descriptor: pass)!
         encoder.setRenderPipelineState(seeded)
+        if let depthWrite = depthWrite { encoder.setDepthStencilState(depthWrite) }
         var params = (UInt32(seed), UInt32(spin), Float(0), UInt32(0))
         encoder.setFragmentBytes(&params, length: 16, index: 0)
         let (x0, y0, x1, y1) = window ?? (0, 0, target.width, target.height)
@@ -170,7 +201,14 @@ struct BarrierKit {
                 for x in 0 ..< Self.tile {
                     let sx = min(max(Int(base.x) + x * Int(step.x), 0), width - 1)
                     let sy = min(max(Int(base.y) + y * Int(step.y), 0), height - 1)
-                    pattern.put(sx, sy, seed: seed, into: bytes, at: (y * Self.tile + x) * bytesPerTexel)
+                    let offset = (y * Self.tile + x) * bytesPerTexel
+                    if isDepth {
+                        let v = probeHash(UInt32(sx), UInt32(sy), UInt32(seed))
+                        let d = Float(v & 0xfffff) * (1.0 / 1_048_576.0)
+                        bytes.storeBytes(of: d.bitPattern.littleEndian, toByteOffset: offset, as: UInt32.self)
+                    } else {
+                        pattern.put(sx, sy, seed: seed, into: bytes, at: offset)
+                    }
                 }
             }
         }

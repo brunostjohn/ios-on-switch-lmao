@@ -105,6 +105,9 @@ CommandBuffer *Device::begin()
     cb.kindSwitchGen_ = 0;
     cb.encodersOpened_ = 0;
     cb.activeBlit_ = nullptr;
+    cb.inRender_ = false;
+    cb.passBufferWrites_ = false;
+    cb.prevBufferWrites_ = false;
     cb.cbArenaKinds_.clear();
     cb.cbCrossSeen_.clear();
     cb.named_.clear();
@@ -632,6 +635,9 @@ void CommandBuffer::abandon()
     cbArenaKinds_.clear();
     cbCrossSeen_.clear();
     activeBlit_ = nullptr;
+    inRender_ = false;
+    passBufferWrites_ = false;
+    prevBufferWrites_ = false;
     pendingKindSwitch_ = false;
     arenaKindInvalidate_ = false;
 }

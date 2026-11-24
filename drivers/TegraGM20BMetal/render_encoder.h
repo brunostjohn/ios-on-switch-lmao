@@ -638,6 +638,8 @@ private:
     uint32_t samplePasses_ = 1;
     uint32_t tirControlHeld_ = ~0u;  // SET_TIR_CONTROL since the pass began (mixed_samples.h), ~0: not written
     AttachmentWrites attachmentWrites_;
+    bool passShaderWrites_ = false;
+    bool passWritesMemory_ = false;
     bool memoryless_[8] = {};
     bool hiddenZeta_ = false;  // pass_.depthStencil.texture is PassDesc::hiddenZeta's backing: the pass declares none
     // The hidden zeta: over the plane the colors' backings cover (once they are taken), of the pass's samples

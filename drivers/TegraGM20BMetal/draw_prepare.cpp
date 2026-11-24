@@ -850,6 +850,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     SWITCH_METAL_DIAGNOSTIC(cb_->counts_.interlockedBlends += pl->storageBlendBits != 0);
     attachmentWrites_.rop |= pl->writeBits;
     attachmentWrites_.storage |= pl->storageWriteBits;
+    passShaderWrites_ |= pl->writtenSlots != 0 || pl->writesMemory[0] || pl->writesMemory[1];
+    passWritesMemory_ |= pl->writesMemory[0] || pl->writesMemory[1];
     if (pl->writeBits)
         written_.add(geometryAnalysis);
     // Reuse a bound already established for split/coverage/fetch decisions. Admission never triggers new CPU geometry

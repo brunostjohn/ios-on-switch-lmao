@@ -296,6 +296,9 @@ private:
     uint32_t kindSwitchGen_ = 0;
     uint32_t encodersOpened_ = 0;
     BlitEncoder *activeBlit_ = nullptr;
+    bool inRender_ = false;
+    bool passBufferWrites_ = false;
+    bool prevBufferWrites_ = false;
     std::map<uint64_t, KindRanges> cbArenaKinds_;
     std::map<uint64_t, uint64_t> cbCrossSeen_;
     bool hasEncodedWork() const;

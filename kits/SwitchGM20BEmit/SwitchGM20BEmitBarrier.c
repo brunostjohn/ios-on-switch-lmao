@@ -67,9 +67,16 @@ void switch_gm20b_pass_barrier(struct nv_push *p, bool tiled_cache)
 {
     if (tiled_cache)
         switch_gm20b_tiled_cache_flush(p);
-    switch_gm20b_wait_for_idle(p);
     switch_gm20b_invalidate_shader_caches(p, SWITCH_GM20B_SHADER_FLUSH_DATA | SWITCH_GM20B_SHADER_DATA |
                                                  SWITCH_GM20B_SHADER_CONSTANTS);
+    switch_gm20b_invalidate_texture_data(p);
+}
+
+void switch_gm20b_pass_drain(struct nv_push *p, bool invalidate_constants)
+{
+    const uint32_t caches = SWITCH_GM20B_SHADER_DATA | (invalidate_constants ? SWITCH_GM20B_SHADER_CONSTANTS : 0u);
+    switch_gm20b_wait_for_idle(p);
+    switch_gm20b_invalidate_shader_caches_no_wfi(p, caches);
     switch_gm20b_invalidate_texture_data(p);
 }
 

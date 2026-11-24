@@ -3,6 +3,7 @@
 // block-linear target the pass before rendered opens with PIXEL_SHADER_BARRIER and no drain; one sampling a 1280x720
 // target, and one the encode never described, open with today's; a memoryless colour's backing is no dependency.
 #include "device_harness.h"
+#include "../record.h"
 
 namespace {
 
@@ -287,8 +288,205 @@ TEST_F(DevicePassBarrier, AFullSizeTargetKeepsTheDrain)
 {
     const auto read = twoPasses(big, half, &big, true);
     EXPECT_EQ(read.first, 0u);
+    EXPECT_EQ(read.second, 1u);
     const auto unrelated = twoPasses(big, half, nullptr, true);
-    EXPECT_EQ(unrelated.first, 1u) << "nothing of the pass before is read or written";
+    EXPECT_EQ(unrelated.first, 0u);
+    EXPECT_EQ(unrelated.second, 0u);
+}
+
+TEST_F(DevicePassBarrier, FallbackDrainAvoidsDoubleWfiAndDropsConstantsOnlyAfterBufferWrite)
+{
+    const auto shaderInvalValues = [](const std::vector<uint32_t> &words, uint32_t targetMethod) {
+        std::vector<uint32_t> values;
+        for (size_t at = 0; at < words.size();) {
+            const uint32_t h = words[at++], form = h >> 29, count = (h >> 16) & 0x1fff, subc = (h >> 13) & 7,
+                           method = (h & 0xfff) << 2;
+            if (!h)
+                continue;
+            if (form == 4) {
+                if (subc == 0 && method == targetMethod)
+                    values.push_back(count);
+                continue;
+            }
+            for (uint32_t i = 0; i < count && at < words.size(); i++, at++) {
+                const uint32_t m = form == 3 ? method : form == 5 && i ? method + 4 : method + 4 * (form == 1 ? i : 0);
+                if (subc == 0 && m == targetMethod)
+                    values.push_back(words[at]);
+            }
+        }
+        return values;
+    };
+
+    const auto read = twoPasses(big, half, &big, true);
+    EXPECT_EQ(read.first, 0u);
+    EXPECT_EQ(read.second, 1u);
+    const std::vector<uint32_t> &ropWords = kernel_model::model.jobs.back().words;
+    const std::vector<uint32_t> ropMethods = methods(ropWords);
+    EXPECT_EQ(std::count(ropMethods.begin(), ropMethods.end(), kShaderCaches), 0);
+    const std::vector<uint32_t> ropNoWfi = shaderInvalValues(ropWords, kShaderCachesNoWfi);
+    ASSERT_GE(ropNoWfi.size(), 2u);
+    EXPECT_EQ(ropNoWfi.back(), uint32_t(NVDEF(NVB197, INVALIDATE_SHADER_CACHES_NO_WFI, GLOBAL_DATA, TRUE)));
+
+    gm20b::Buffer ssbo;
+    ASSERT_TRUE(dev.createBuffer(4096, ssbo, true));
+    gm20b::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    gm20b::PassUses uses;
+    uses.known = true;
+    gm20b::RenderEncoder *a = cb->render(cleared(big));
+    cb->use(ssbo, true, true);
+    a->plan(uses);
+    a->end();
+    gm20b::RenderEncoder *b = cb->render(cleared(half));
+    b->plan(uses);
+    b->end();
+    uint32_t seqno = 0;
+    ASSERT_TRUE(cb->commit(seqno));
+    const std::vector<uint32_t> &bufWords = kernel_model::model.jobs.back().words;
+    const std::vector<uint32_t> bufMethods = methods(bufWords);
+    EXPECT_EQ(std::count(bufMethods.begin(), bufMethods.end(), kWaitForIdle), 1);
+    EXPECT_EQ(std::count(bufMethods.begin(), bufMethods.end(), kShaderCaches), 1);
+    const std::vector<uint32_t> bufNoWfi = shaderInvalValues(bufWords, kShaderCachesNoWfi);
+    ASSERT_GE(bufNoWfi.size(), 2u);
+    EXPECT_EQ(bufNoWfi.back(), uint32_t(NVDEF(NVB197, INVALIDATE_SHADER_CACHES_NO_WFI, GLOBAL_DATA, TRUE) |
+                                        NVDEF(NVB197, INVALIDATE_SHADER_CACHES_NO_WFI, CONSTANT, TRUE)));
+    dev.destroyBuffer(ssbo);
+}
+
+TEST_F(DevicePassBarrier, ShaderWritesFlushDataAndInvalidateNextPassConstants)
+{
+    const auto methodValues = [](const std::vector<uint32_t> &words, uint32_t targetMethod) {
+        std::vector<uint32_t> values;
+        for (size_t at = 0; at < words.size();) {
+            const uint32_t h = words[at++], form = h >> 29, count = (h >> 16) & 0x1fff, subc = (h >> 13) & 7,
+                           method = (h & 0xfff) << 2;
+            if (!h)
+                continue;
+            if (form == 4) {
+                if (subc == 0 && method == targetMethod)
+                    values.push_back(count);
+                continue;
+            }
+            for (uint32_t i = 0; i < count && at < words.size(); i++, at++) {
+                const uint32_t m = form == 3 ? method : form == 5 && i ? method + 4 : method + 4 * (form == 1 ? i : 0);
+                if (subc == 0 && m == targetMethod)
+                    values.push_back(words[at]);
+            }
+        }
+        return values;
+    };
+    const uint32_t flushAndData = uint32_t(NVDEF(NVB197, INVALIDATE_SHADER_CACHES, FLUSH_DATA, TRUE) |
+                                           NVDEF(NVB197, INVALIDATE_SHADER_CACHES, DATA, TRUE));
+    const uint32_t dataAndConst = uint32_t(NVDEF(NVB197, INVALIDATE_SHADER_CACHES_NO_WFI, GLOBAL_DATA, TRUE) |
+                                           NVDEF(NVB197, INVALIDATE_SHADER_CACHES_NO_WFI, CONSTANT, TRUE));
+
+    {
+        gm20b::Texture storageTex;
+        ASSERT_TRUE(dev.createTexture(64, 64, kBgra8, storageTex));
+        gm20b::RuntimeRecord r;
+        r.keyString = "samples=1 c0=80 ds=0/0 ";
+        for (gm20b::CapturedProgram &p : r.programs) {
+            p.image.assign(80 + 64, 0);
+            p.gprs = 8;
+        }
+        gm20b::PackPipeline &pp = r.pipeline;
+        pp.keyHash = 0x4b4201;
+        pp.flags = gm20b::PipelinePushMetadata;
+        pp.setBytes = 16;
+        gm20b::setEntryCount(pp, 1);
+        pp.entry[0] = {0, gm20b::EntryTexture, 2, 1, 0, 0, 0};
+        pp.writtenFormat[1] = kBgra8;
+        r.blob = {0x1a00, 0x1111};
+        std::string whyStr;
+        gm20b::Pipeline *pl = dev.addRecord(r, false, whyStr);
+        ASSERT_NE(pl, nullptr) << whyStr;
+        ASSERT_NE(pl->writtenSlots, 0u);
+        ASSERT_FALSE(pl->writesMemory[0]);
+        ASSERT_FALSE(pl->writesMemory[1]);
+
+        gm20b::CommandBuffer *cb = dev.begin();
+        ASSERT_NE(cb, nullptr);
+        gm20b::PassUses uses;
+        uses.known = true;
+        gm20b::RenderEncoder *a = cb->render(cleared(big));
+        ASSERT_NE(a, nullptr);
+        a->setPipeline(pl);
+        a->setTexture(2, 1, &storageTex);
+        const char *why = nullptr;
+        ASSERT_TRUE(a->draw(3, 0, 3, 1, 0, &why)) << (why ? why : "");
+        a->plan(uses);
+        a->end();
+        gm20b::RenderEncoder *b = cb->render(cleared(half));
+        ASSERT_NE(b, nullptr);
+        b->plan(uses);
+        b->end();
+        uint32_t seqno = 0;
+        ASSERT_TRUE(cb->commit(seqno));
+        const auto &words = kernel_model::model.jobs.back().words;
+        const auto flushes = methodValues(words, kShaderCaches);
+        ASSERT_EQ(flushes.size(), 1u);
+        EXPECT_EQ(flushes[0], flushAndData);
+        const auto noWfi = methodValues(words, kShaderCachesNoWfi);
+        ASSERT_GE(noWfi.size(), 2u);
+        EXPECT_EQ(noWfi.back(), dataAndConst);
+        dev.destroyTexture(storageTex);
+    }
+
+    {
+        gm20b::Buffer addrBuf;
+        ASSERT_TRUE(dev.createBuffer(4096, addrBuf, true));
+        gm20b::CommandBuffer *cb = dev.begin();
+        ASSERT_NE(cb, nullptr);
+        gm20b::PassUses uses;
+        uses.known = true;
+        gm20b::RenderEncoder *a = cb->render(cleared(big));
+        ASSERT_NE(a, nullptr);
+        cb->useAddress(addrBuf.va, 256, true);
+        a->plan(uses);
+        a->end();
+        gm20b::RenderEncoder *b = cb->render(cleared(half));
+        ASSERT_NE(b, nullptr);
+        b->plan(uses);
+        b->end();
+        uint32_t seqno = 0;
+        ASSERT_TRUE(cb->commit(seqno));
+        const auto &words = kernel_model::model.jobs.back().words;
+        const auto flushes = methodValues(words, kShaderCaches);
+        ASSERT_EQ(flushes.size(), 1u);
+        EXPECT_EQ(flushes[0], flushAndData);
+        const auto noWfi = methodValues(words, kShaderCachesNoWfi);
+        ASSERT_GE(noWfi.size(), 2u);
+        EXPECT_EQ(noWfi.back(), dataAndConst);
+        dev.destroyBuffer(addrBuf);
+    }
+
+    {
+        gm20b::CommandBuffer *cb = dev.begin();
+        ASSERT_NE(cb, nullptr);
+        gm20b::PassUses planned;
+        planned.known = false;
+        planned.shaderWrites = true;
+        planned.bufferWrites = true;
+        gm20b::RenderEncoder *a = cb->render(cleared(big));
+        ASSERT_NE(a, nullptr);
+        a->plan(planned);
+        a->end();
+        gm20b::PassUses clean;
+        clean.known = true;
+        gm20b::RenderEncoder *b = cb->render(cleared(half));
+        ASSERT_NE(b, nullptr);
+        b->plan(clean);
+        b->end();
+        uint32_t seqno = 0;
+        ASSERT_TRUE(cb->commit(seqno));
+        const auto &words = kernel_model::model.jobs.back().words;
+        const auto flushes = methodValues(words, kShaderCaches);
+        ASSERT_EQ(flushes.size(), 1u);
+        EXPECT_EQ(flushes[0], flushAndData);
+        const auto noWfi = methodValues(words, kShaderCachesNoWfi);
+        ASSERT_GE(noWfi.size(), 2u);
+        EXPECT_EQ(noWfi.back(), dataAndConst);
+    }
 }
 
 TEST(DeviceTiledCacheSize, DynamicTileSizeTracksPassFootprintAndShadowCaches)

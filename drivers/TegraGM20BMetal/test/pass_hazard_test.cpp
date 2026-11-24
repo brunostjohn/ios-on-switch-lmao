@@ -273,4 +273,42 @@ TEST(PassHazard, EachDrainSaysWhy)
     EXPECT_EQ(gm20b::drainCause(after(big), depth), gm20b::DrainCause::Depth);
 }
 
+TEST(PassHazard, IndependentPassesNeedNoBarrierWhileSharedScratchKeepsPixelBarrier)
+{
+    const HazardImage a = image(0x10000, gm20b::kHazardBgra8, 1280, 720),
+                      b = image(0x900000, gm20b::kHazardBgra8, 640, 360),
+                      sharedTex = image(0x1200000, gm20b::kHazardBgra8, 64, 64),
+                      backing = image(0x2000000, gm20b::kHazardRgba16f, 320, 180);
+    PassUses first = pass(1280, 720);
+    first.write(a);
+    first.sample(sharedTex, false);
+    PassChain chain;
+    gm20b::advanceChain(chain, first, true);
+
+    PassUses disjoint = pass(640, 360);
+    disjoint.write(b);
+    disjoint.sample(sharedTex, false);
+    EXPECT_TRUE(gm20b::passesIndependent(chain, disjoint));
+
+    PassUses readsA = pass(640, 360);
+    readsA.write(b);
+    readsA.sample(a, false);
+    EXPECT_FALSE(gm20b::passesIndependent(chain, readsA));
+
+    PassUses writesSharedTex = pass(64, 64);
+    writesSharedTex.write(sharedTex);
+    EXPECT_FALSE(gm20b::passesIndependent(chain, writesSharedTex));
+
+    PassUses withScratch = pass(320, 180);
+    withScratch.write(a);
+    withScratch.scratchWrite(backing);
+    PassChain scratchChain;
+    gm20b::advanceChain(scratchChain, withScratch, true);
+    PassUses nextScratch = pass(320, 180);
+    nextScratch.write(b);
+    nextScratch.scratchWrite(backing);
+    EXPECT_FALSE(gm20b::passesIndependent(scratchChain, nextScratch));
+    EXPECT_TRUE(gm20b::pixelBarrierHolds(scratchChain, nextScratch));
+}
+
 }  // namespace

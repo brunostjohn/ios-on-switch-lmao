@@ -88,6 +88,8 @@ void CommandBuffer::useAddress(uint64_t va, uint64_t bytes, bool write)
 {
     SWITCH_METAL_ENCODE_SPAN(Use);
     SWITCH_METAL_ENCODE_COUNT(Uses);
+    if (va && write && inRender_)
+        passBufferWrites_ = true;
     if (va && dev_->k_.exactJobs() && !useMember(va, bytes ? bytes : 1, write, false)) {
         SWITCH_METAL_ENCODE_COUNT(UseAdds);
         surfaces_.addAddress(va, bytes ? bytes : 1, write, bytes && bytes <= UINT32_MAX ? TegraGM20BSurfaceRange : 0u);
@@ -152,8 +154,11 @@ void CommandBuffer::use(const Buffer &buffer, bool write, bool noted)
     // Ahead of the memo: a buffer named once is written again after a release, which then has host-visible data to flush
     publication_.wrote(write && buffer.hostVisible);
     // ahead of the memo too: a buffer named written by a draw that writes nothing is written by a later one
-    if (write && noted)
+    if (write && noted) {
         bufferWrites_.note(buffer.va, buffer.length);
+        if (inRender_)
+            passBufferWrites_ = true;
+    }
     noteArenaKind(buffer.span.storage);
     if (named_.named(&buffer, buffer.va, buffer.length, buffer.import, write))
         return;

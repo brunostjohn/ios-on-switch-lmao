@@ -340,6 +340,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
                 if (t)
                     __atomic_store_n(&t->ropBlendSerial, uint64_t(0), __ATOMIC_RELAXED);
     passes++;
+    inRender_ = true;
     return &e;
 }
 
