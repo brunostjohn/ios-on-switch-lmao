@@ -16,6 +16,7 @@ struct tgm_gate tgm_sc7_gate;
 DEFINE_MUTEX(tgm_gate_lock);
 LIST_HEAD(tgm_live_chans);
 DEFINE_MUTEX(tgm_live_lock);
+struct switch_gpu_live_dir tgm_live_dir;
 
 static struct nvkm_device device;
 static u32 parked;
@@ -27,6 +28,7 @@ void switch_exec_reset_driver(void)
 {
 	memset(&tgm_stats, 0, sizeof(tgm_stats));
 	memset(&tgm_busy, 0, sizeof(tgm_busy));
+	memset(&tgm_live_dir, 0, sizeof(tgm_live_dir));
 	test_sched_kick = SWITCH_EXEC_KICK_CLEAR;
 	test_deadline_later = 0;
 	test_ptimer = 0;
@@ -99,10 +101,20 @@ int switch_gpu_promise_park_locked(uint32_t offset, uint32_t value, const char *
 				   const char *who, const struct switch_gpu_giveup_job *reader,
 				   int display)
 {
-	if (!switch_exec_mutex_held())
-		nvxnu_panic("promise parked outside live owner");
+	if (switch_exec_mutex_held())
+		nvxnu_panic("promise parked while holding tgm_live_lock");
 	++parked;
 	return 1;
+}
+
+void switch_exec_live_lock(void)
+{
+	mutex_lock(&tgm_live_lock);
+}
+
+void switch_exec_live_unlock(void)
+{
+	mutex_unlock(&tgm_live_lock);
 }
 
 uint32_t switch_exec_parked_promises(void)

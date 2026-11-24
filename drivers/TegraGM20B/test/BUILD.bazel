@@ -3442,6 +3442,7 @@ host_test(
     srcs = [
         "switch_gpu_chan_table_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuChanTable.h",
+        "//drivers/TegraGM20B:SwitchGpuLiveDir.h",
     ],
 )
 
@@ -3450,6 +3451,7 @@ host_test(
     srcs = [
         "switch_gpu_chan_table_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuChanTable.h",
+        "//drivers/TegraGM20B:SwitchGpuLiveDir.h",
     ],
     copts = ["-fsanitize=thread"],
     linkopts = ["-fsanitize=thread"],

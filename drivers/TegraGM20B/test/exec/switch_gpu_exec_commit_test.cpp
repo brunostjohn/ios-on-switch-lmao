@@ -514,7 +514,7 @@ TEST_F(ExecCommit, ForcedEmptyWaitJobsTakeNoOwnershipOrder)
 		const uint64_t own = ioLockTakes().load(), live = switch_exec_mutex_takes();
 		ASSERT_EQ(exec(nullptr, 0, kJob | SWITCH_GPU_SUBMIT_FORCE_FENCE), 0);
 		EXPECT_EQ(ioLockTakes().load() - own, 0u);
-		EXPECT_EQ(switch_exec_mutex_takes() - live, mode == 1 ? 1u : 0u);
+		EXPECT_EQ(switch_exec_mutex_takes() - live, 0u);
 		expect_published(false, false);
 		if (mode < 2)
 			EXPECT_EQ(switch_exec_chan_word_acquires(consumer, 0x100, 1), 1u);
@@ -546,7 +546,7 @@ TEST_F(ExecCommit, CombinedWaitsReadEachDependencyOnceUnderOneLiveHold)
 	const uint32_t parked = switch_exec_parked_promises();
 	ASSERT_EQ(exec(&kPush, 1), 0);
 	EXPECT_EQ(switch_exec_backing::status_reads() - status, dependency_count);
-	EXPECT_EQ(switch_exec_mutex_takes() - live, 1u);
+	EXPECT_EQ(switch_exec_mutex_takes() - live, 0u);
 	EXPECT_EQ(switch_exec_parked_promises() - parked, 2u);
 	expect_published();
 	for (auto *source : {first, second})
@@ -576,6 +576,55 @@ TEST_F(ExecCommit, PlainAndHostOnlyJobsTakeNoLiveLock)
 			EXPECT_EQ(switch_exec_chan_syncpt_waits(consumer, 7, 3), 1u);
 		kicks.clear();
 	}
+}
+
+TEST_F(ExecCommit, DependenciesAcquireWithoutTakingLiveLockEvenWhileHeld)
+{
+	auto *a = switch_exec_backing::make();
+	auto *source = producer(0x105, 3, a);
+	ASSERT_EQ(begin({{a, SWITCH_GPU_BACKING_READ, 0}, {written, SWITCH_GPU_BACKING_WRITE, 0}}),
+		  0);
+	switch_exec_chan_high(consumer, 1);
+
+	std::mutex gate;
+	std::condition_variable cv;
+	bool holding = false;
+	bool release = false;
+	std::thread holder([&] {
+		switch_exec_live_lock();
+		{
+			std::lock_guard<std::mutex> g(gate);
+			holding = true;
+			cv.notify_all();
+		}
+		{
+			std::unique_lock<std::mutex> g(gate);
+			cv.wait(g, [&] {
+				return release;
+			});
+		}
+		switch_exec_live_unlock();
+	});
+	{
+		std::unique_lock<std::mutex> g(gate);
+		cv.wait(g, [&] {
+			return holding;
+		});
+	}
+
+	const uint64_t live = switch_exec_mutex_takes();
+	const int ret = exec(&kPush, 1);
+	const uint64_t live_after = switch_exec_mutex_takes();
+	{
+		std::lock_guard<std::mutex> g(gate);
+		release = true;
+		cv.notify_all();
+	}
+	holder.join();
+
+	EXPECT_EQ(ret, 0);
+	EXPECT_EQ(live_after - live, 0u);
+	EXPECT_EQ(switch_exec_chan_acquires(consumer, source, 1), 1u);
 }
 
 TEST_F(ExecCommit, LaterCompositorKicksCountFramesPerFrameMaxAndQueueMax)

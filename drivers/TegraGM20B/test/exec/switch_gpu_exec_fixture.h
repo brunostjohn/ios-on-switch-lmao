@@ -47,6 +47,8 @@ uint32_t switch_exec_chan_syncpt_waits(struct switch_exec_chan *waiter, uint32_t
 uint32_t switch_exec_parked_promises(void);
 uint64_t switch_exec_mutex_takes(void);
 int switch_exec_mutex_held(void);
+void switch_exec_live_lock(void);
+void switch_exec_live_unlock(void);
 void switch_exec_chan_high(struct switch_exec_chan *chan, int high);
 void switch_exec_chan_critical(struct switch_exec_chan *chan, int critical);
 void switch_exec_chan_share_vm(struct switch_exec_chan *chan, struct switch_exec_chan *with);

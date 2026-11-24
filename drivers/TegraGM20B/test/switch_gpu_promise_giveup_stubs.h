@@ -8,8 +8,10 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <gtest/gtest.h>
 #include "switch_gpu_interrupts_off_stubs.h"
@@ -139,31 +141,41 @@ struct spinlock_t {
 #define spin_lock_irqsave(l, f) ((f) = switch_linux_irq_save(), (l)->held = 1)
 #define spin_unlock_irqrestore(l, f) ((l)->held = 0, switch_linux_irq_restore(f))
 
+#define DEFINE_MUTEX(n) struct mutex n = {nullptr}
+
 inline struct mutex tgm_live_lock;
 inline int tgm_live_locked = 0;
 inline unsigned tgm_live_takes = 0;
 
-// tgm_live_lock sleeps as the kernel's does: a thread that takes it waits for the call holding it. Taken and given
-// through these, as the kernel's lck_mtx is, outside clang's thread-safety analysis of the code under test.
-inline std::mutex tgm_live_held;
-
-__attribute__((no_thread_safety_analysis)) inline void tgm_live_take()
+inline std::mutex &mutex_impl(struct mutex *m)
 {
-	tgm_live_held.lock();
+	static std::mutex map_lock;
+	static std::unordered_map<struct mutex *, std::unique_ptr<std::mutex>> map;
+	std::lock_guard<std::mutex> guard(map_lock);
+	auto &entry = map[m];
+	if (!entry)
+		entry = std::make_unique<std::mutex>();
+	return *entry;
 }
 
-__attribute__((no_thread_safety_analysis)) inline void tgm_live_give()
+__attribute__((no_thread_safety_analysis)) inline void mutex_take(struct mutex *m)
 {
-	tgm_live_held.unlock();
+	mutex_lock(m);
+	mutex_impl(m).lock();
+	if (m == &tgm_live_lock) {
+		++tgm_live_takes;
+		++tgm_live_locked;
+	}
 }
 
-inline void mutex_unlock(struct mutex *)
+__attribute__((no_thread_safety_analysis)) inline void mutex_unlock(struct mutex *m)
 {
-	--tgm_live_locked;
-	tgm_live_give();
+	if (m == &tgm_live_lock)
+		--tgm_live_locked;
+	mutex_impl(m).unlock();
 }
 
-#define mutex_lock(m) (mutex_lock(m), tgm_live_take(), ++tgm_live_takes, ++tgm_live_locked)
+#define mutex_lock(m) mutex_take(m)
 
 inline volatile uint32_t *tgm_fence_word(uint32_t offset)
 {

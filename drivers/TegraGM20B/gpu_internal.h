@@ -75,6 +75,7 @@
 #include "SwitchGpuQuiet.h"
 #include "SwitchGpuWakeWord.h"
 #include "SwitchGpuChanTable.h"
+#include "SwitchGpuLiveDir.h"
 #include "SwitchGpuWriterPromise.h"
 #include "SwitchGpuPromiseGiveUp.h"
 #include "SwitchGpuJobTiming.h"
@@ -384,6 +385,7 @@ struct tgm_chan {
 #define CHAN_SCRUB 2 /* the pool scrubber's */
 extern struct list_head tgm_live_chans;
 extern struct switch_gpu_chan_table tgm_chan_table;
+extern struct switch_gpu_live_dir tgm_live_dir;
 /* The interrupt pass, after nvkm's handlers or the nonstall line's acknowledgement (shim/xnu_glue.cpp gpuInterrupt):
  * every channel with work in flight; how many of them progressed. */
 unsigned tgm_chans_completed(void);
