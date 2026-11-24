@@ -935,6 +935,31 @@ host_test(
 )
 
 host_test(
+    name = "gm20b_gr_preempt_test",
+    srcs = [
+        "gm20b_gr_preempt_test.cpp",
+        "gm20b_zcull_context_fixture.h",
+        "//drivers/TegraGM20B:TegraGM20BGrPreempt.h",
+        "//drivers/TegraGM20B:TegraGM20BGrPreemptContext.h",
+        "//drivers/TegraGM20B:TegraGM20BRamfcOrder.h",
+        "//drivers/TegraGM20B:TegraGM20BZcull.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullContext.h",
+    ],
+    data = [
+        "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/ctxgf100.h",
+        "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/ctxgm20b.c",
+        "//drivers/TegraGM20B:nouveau/nvkm/engine/gr/gf100.c",
+    ],
+    defines = [
+        'CTXGF100_H=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/engine/gr/ctxgf100.h)\\"',
+        'CTXGM20B_C=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/engine/gr/ctxgm20b.c)\\"',
+        'GF100_C=\\"$(rootpath //drivers/TegraGM20B:nouveau/nvkm/engine/gr/gf100.c)\\"',
+    ],
+    deps = [":zcull_context_kernel"],
+)
+
+host_test(
     name = "gm20b_regdump_test",
     srcs = [
         "gm20b_regdump_test.cpp",
