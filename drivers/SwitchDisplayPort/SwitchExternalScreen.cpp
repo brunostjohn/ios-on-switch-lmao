@@ -21,7 +21,6 @@ extern "C" IOMemoryDescriptor *native_legacy_surface_descriptor(OSObject *);
 extern "C" uint64_t native_legacy_surface_width(OSObject *), native_legacy_surface_height(OSObject *);
 extern "C" uint64_t native_legacy_surface_stride(OSObject *), native_legacy_surface_allocation(OSObject *);
 extern "C" uint32_t native_legacy_surface_format(OSObject *), native_legacy_surface_planes(OSObject *);
-extern "C" int tegra_gm20b_surface_layout(uint64_t, struct tgm_layout *);
 
 OSDefineMetaClassAndStructors(SwitchExternalScreen, IOMobileFramebufferLegacy);
 
@@ -60,6 +59,10 @@ void SwitchExternalScreen::releaseEventSources()
 
 void SwitchExternalScreen::stop(IOService *provider)
 {
+    if (connected) {
+        connected = false;
+        tegra_gm20b_set_external_scanout(0);
+    }
     if (logicalPM) {
         PMstop();
         logicalPM = false;
@@ -70,6 +73,10 @@ void SwitchExternalScreen::stop(IOService *provider)
 
 void SwitchExternalScreen::free()
 {
+    if (connected) {
+        connected = false;
+        tegra_gm20b_set_external_scanout(0);
+    }
     if (logicalPM) {
         PMstop();
         logicalPM = false;
@@ -292,6 +299,7 @@ bool SwitchExternalScreen::publish(const struct switch_dp_mode_list &list, const
     }
     connected = true;
     publishActiveGeometry();
+    tegra_gm20b_set_external_scanout(1);
     setProperty("IOMFBHotplugKeysChangedKey", kOSBooleanTrue);
     IOMobileFramebufferLegacy::hotPlugNotify(1);
     return true;
@@ -378,8 +386,10 @@ void SwitchExternalScreen::detach()
     publishActiveGeometry();
     clearSinkProperties();
     drainSwapQueue();
-    if (wasConnected)
+    if (wasConnected) {
         IOMobileFramebufferLegacy::hotPlugNotify(0);
+        tegra_gm20b_set_external_scanout(0);
+    }
 }
 
 void SwitchExternalScreen::modeFailed()
@@ -575,7 +585,7 @@ bool SwitchExternalScreen::validateSwap(const OriginalLegacySwapRequest *request
 
     bool hasSurface[switch_external::kLayers] = {};
     switch_external::LayerDesc layers[switch_external::kLayers] = {};
-    bool badObject = false;
+    bool badObject = false, compressedSurface = false;
 #if DEVELOPMENT || DEBUG
     int firstLayer = -1;
 #endif
@@ -593,6 +603,14 @@ bool SwitchExternalScreen::validateSwap(const OriginalLegacySwapRequest *request
         }
         auto &layer = layers[i];
         auto *memory = native_legacy_surface_descriptor(surfaces[i]);
+        if (memory) {
+            IOByteCount segLen = 0;
+            const addr64_t firstPa = memory->getPhysicalSegment(0, &segLen, kIOMemoryMapperNone);
+            if (firstPa && tegra_gm20b_surface_compressed(firstPa & ~0xfffULL)) {
+                compressedSurface = true;
+                continue;
+            }
+        }
         layer.format = native_legacy_surface_format(surfaces[i]);
         layer.planes = native_legacy_surface_planes(surfaces[i]);
         layer.transform = transforms[i] & 7u;
@@ -604,11 +622,12 @@ bool SwitchExternalScreen::validateSwap(const OriginalLegacySwapRequest *request
         layer.src = sources[i];
         layer.dst = destinations[i];
     }
-    if (badObject) {
+    if (badObject || compressedSurface) {
 #if DEVELOPMENT || DEBUG
         if (__atomic_fetch_add(&diagValidateRejects, 1u, __ATOMIC_RELAXED) < 8u) {
-            IOLog("SwitchDisplayPort: validateSwap rejected (non-IOSurface) updated=%#x disabled=%#x bg=%#x mode=%ux%u\n",
-                  updated, disabled, background, static_cast<uint32_t>(geometry >> 32), static_cast<uint32_t>(geometry));
+            IOLog("SwitchDisplayPort: validateSwap rejected (%s) updated=%#x disabled=%#x bg=%#x mode=%ux%u\n",
+                  badObject ? "non-IOSurface" : "compressed", updated, disabled, background,
+                  static_cast<uint32_t>(geometry >> 32), static_cast<uint32_t>(geometry));
         }
 #endif
         return false;

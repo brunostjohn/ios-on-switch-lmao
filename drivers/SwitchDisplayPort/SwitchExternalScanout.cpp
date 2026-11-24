@@ -14,7 +14,6 @@ extern "C" IOMemoryDescriptor *native_legacy_surface_descriptor(OSObject *);
 extern "C" uint64_t native_legacy_surface_width(OSObject *), native_legacy_surface_height(OSObject *);
 extern "C" uint64_t native_legacy_surface_stride(OSObject *), native_legacy_surface_allocation(OSObject *);
 extern "C" uint32_t native_legacy_surface_format(OSObject *), native_legacy_surface_planes(OSObject *);
-extern "C" int tegra_gm20b_surface_layout(uint64_t, struct tgm_layout *);
 
 bool SwitchExternalScreen::mapDomain()
 {
@@ -76,6 +75,12 @@ bool SwitchExternalScreen::applyTiledLayout(Slot &slot, uint64_t firstPage, uint
 {
     int tiled = 0;
     void *held = tegra_gm20b_surface_hold(firstPage, &tiled);
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    if (tegra_gm20b_surface_compressed(firstPage)) {
+        if (held)
+            tegra_gm20b_surface_unhold(held);
+        return false;
+    }
     if (!tiled) {
         slot.layout = held;
         return true;
@@ -123,8 +128,19 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
         auto &slot = slots[i];
         if (slot.memory == memory && slot.surface == surface && slot.pages == pages && slot.offset == offset &&
             slot.allocationId == allocation.allocation_id && slot.generation == allocation.allocation_generation) {
-            if (!slot.layout && !applyTiledLayout(slot, allocation.pages[offset / 4096], bytes)) {
+            const uint64_t firstPage = allocation.pages[offset / 4096] & ~0xfffULL;
+            __atomic_thread_fence(__ATOMIC_SEQ_CST);
+            if (tegra_gm20b_surface_compressed(firstPage)) {
                 switch_native_scanout_release(&snapshot);
+                if (static_cast<int>(i) != front && static_cast<int>(i) != drawing)
+                    releaseSlot(i);
+                return -1;
+            }
+            if (!slot.layout && !applyTiledLayout(slot, firstPage, bytes)) {
+                switch_native_scanout_release(&snapshot);
+                if (static_cast<int>(i) != front && static_cast<int>(i) != drawing &&
+                    tegra_gm20b_surface_compressed(firstPage))
+                    releaseSlot(i);
                 return -1;
             }
             if (slot.read.lease) {
@@ -195,7 +211,7 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
     if (slot.counted)
         switch_surface_use_increment(surface, 0);
     slot.stride = static_cast<uint32_t>(pitch);
-    if (!applyTiledLayout(slot, allocation.pages[offset / 4096], bytes)) {
+    if (!applyTiledLayout(slot, allocation.pages[offset / 4096] & ~0xfffULL, bytes)) {
         releaseSlot(index);
         return -1;
     }
@@ -347,9 +363,12 @@ void SwitchExternalScreen::requestFrame()
                   (slots[index].presented ? TEGRA_SCANOUT_COPY_PRODUCER_WATCH : 0u) |
                   (tiled ? TEGRA_SCANOUT_COPY_SOURCE_BLOCK : 0u);
     offer.sourceBlockHeightLog2 = tiled ? ((slots[index].kind >> 4) & 7u) : 0u;
-    offer.dependencies = tokens;
-    offer.dependencyCount = switch_native_scanout_dependencies(slots[index].read, tokens,
-                                                               SWITCH_SCANOUT_MAX_DEPENDENCIES);
+    uint32_t depCount = 0;
+    for (uint32_t i = 0; i < slots[index].read.view.waitCount && depCount < SWITCH_SCANOUT_MAX_DEPENDENCIES; ++i)
+        if (slots[index].read.view.waits[i].engine)
+            tokens[depCount++] = slots[index].read.view.waits[i];
+    offer.dependencies = depCount ? tokens : nullptr;
+    offer.dependencyCount = depCount;
     gpuPending = true;
     const int result = tegra_gm20b_scanout_copy(&offer);
     if (result) {

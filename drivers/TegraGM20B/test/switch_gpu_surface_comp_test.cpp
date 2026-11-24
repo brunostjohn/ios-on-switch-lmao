@@ -44,4 +44,18 @@ TEST(SwitchGpuSurfaceComp, PanelScanoutAndIneligibleSurfacesStayUncompressed)
 	EXPECT_EQ(switch_gpu_surface_comp_kind(512, 512, 16, 64 * kGranule, 64 * kGranule, 0, 1, 1),
 		  0u);
 }
+
+TEST(SwitchGpuSurfaceComp, ExternalScanoutSuppressesOnlyCompositor4BppWithinDpBounds)
+{
+	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(1920, 1080, 4, 1, 1));
+	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(1024, 768, 4, 1, 1));
+	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(1280, 1024, 4, 1, 1));
+	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(1920, 1200, 4, 1, 1));
+	EXPECT_TRUE(switch_gpu_surface_is_external_scanout(1080, 1920, 4, 1, 1));
+	EXPECT_FALSE(switch_gpu_surface_is_external_scanout(1920, 1080, 4, 1, 0));
+	EXPECT_FALSE(switch_gpu_surface_is_external_scanout(1920, 1080, 4, 0, 1));
+	EXPECT_FALSE(switch_gpu_surface_is_external_scanout(1920, 1080, 8, 1, 1));
+	EXPECT_FALSE(switch_gpu_surface_is_external_scanout(2560, 1440, 4, 1, 1));
+	EXPECT_FALSE(switch_gpu_surface_is_external_scanout(0, 1080, 4, 1, 1));
+}
 }  // namespace

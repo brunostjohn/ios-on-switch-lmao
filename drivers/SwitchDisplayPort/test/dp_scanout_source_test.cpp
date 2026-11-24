@@ -134,4 +134,13 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_TRUE(auxTimer.has("self->aux.resetAux();"));
     EXPECT_TRUE(auxTimer.has("self->cecComplete(false);"));
     EXPECT_TRUE(auxTimer.has("self->fail(\"DPAUX1\", why);"));
+
+    EXPECT_TRUE(publish.before("tegra_gm20b_set_external_scanout(1);", "IOMobileFramebufferLegacy::hotPlugNotify(1);"));
+    EXPECT_TRUE(detach.has("tegra_gm20b_set_external_scanout(0);"));
+    EXPECT_TRUE(validate.has("tegra_gm20b_surface_compressed(firstPa & ~0xfffULL)"));
+    const auto tiledLayout = Block(source, "bool SwitchExternalScreen::applyTiledLayout(");
+    EXPECT_TRUE(tiledLayout.before("tegra_gm20b_surface_hold(firstPage, &tiled)", "__atomic_thread_fence(__ATOMIC_SEQ_CST);"));
+    EXPECT_TRUE(tiledLayout.before("__atomic_thread_fence(__ATOMIC_SEQ_CST);", "tegra_gm20b_surface_compressed(firstPage)"));
+    EXPECT_TRUE(prepare.before("__atomic_thread_fence(__ATOMIC_SEQ_CST);", "tegra_gm20b_surface_compressed(firstPage)"));
+    EXPECT_FALSE(request.has("switch_native_scanout_dependencies("));
 }
