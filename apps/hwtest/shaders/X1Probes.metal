@@ -53,11 +53,13 @@ kernel void x1_sample_points(texture2d<float> texture [[texture(0)]], device con
     out[i] = texture.sample(linear, uv[i], level(0)).r;
 }
 
-/// gpu.x1.rop_unorm10_rounding: pixel (x, y) returns value y * width + x as it is
+/// gpu.x1.rop_unorm10_rounding: pixel (x, y) returns value y * width + x clamped to size for odd-height quad helpers
 fragment float4 x1_value_fragment(float4 position [[position]], device const float4 *values [[buffer(0)]],
-                                  constant uint &width [[buffer(1)]])
+                                  constant uint2 &size [[buffer(1)]])
 {
-    return values[uint(position.y) * width + uint(position.x)];
+    const uint x = min(uint(position.x), size.x - 1u);
+    const uint y = min(uint(position.y), size.y - 1u);
+    return values[y * size.x + x];
 }
 
 /// metal.float32_filtering: linear samples of a 32-bit float texture at (u, v, lod) triples, mip levels blended linearly

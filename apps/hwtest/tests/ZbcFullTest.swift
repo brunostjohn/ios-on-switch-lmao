@@ -15,8 +15,8 @@ import Metal
 /// Reported: zbc_hits, full_lines (this process's "table is full" lines since the test began, as logd had them; the
 /// pulled log lists them by process: raw.zbc-full-lines), and where drained zbc_dropped, the colours neither added nor
 /// refused, with zbc_inexact and zbc_misses over the test: a colour is dropped before any ask where its clear is not
-/// exact (zbc_inexact) or where this process's list of values (zbc.h ZbcTable, 40, none held or refused let go) has
-/// no room left by the tests before it.
+/// exact (zbc_inexact) or where this process's list of values (zbc.h ZbcTable, 64, evicting seen and refused entries
+/// while keeping held, wanted, and asking) has no room left by the tests before it.
 struct ZbcFullTest: HWTest {
     let id = "gpu.gm20b.zbc_full"
     let name = "The GPU's ZBC colour table fills: every clear exact, the refusals counted, one line a process"
