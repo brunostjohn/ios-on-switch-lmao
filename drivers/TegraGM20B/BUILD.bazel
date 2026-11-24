@@ -174,6 +174,7 @@ kernel_driver(
         "SwitchGpuCachedBuffer.cpp",
         "SwitchGpuPackImage.cpp",
         "SwitchGpuPackTransfer.cpp",
+        "SwitchGpuSmmu.cpp",
         "SwitchGpuEventClient.cpp",
         "SwitchGpuShaderCompiler.cpp",
         "SwitchGpuShaderCompilerQueue.cpp",

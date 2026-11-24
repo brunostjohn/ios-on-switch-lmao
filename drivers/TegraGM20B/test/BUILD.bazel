@@ -3463,3 +3463,12 @@ host_test(
         ":pack_image_kernel",
     ],
 )
+
+host_test(
+    name = "switch_gpu_smmu_test",
+    srcs = [
+        "switch_gpu_smmu_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuSmmu.h",
+        "//drivers/TegraSMMU:TegraSMMU.h",
+    ],
+)
