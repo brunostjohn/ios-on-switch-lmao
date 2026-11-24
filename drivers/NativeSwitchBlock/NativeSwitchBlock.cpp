@@ -251,6 +251,7 @@ enum : uint32_t {
     UHS_SDR12 = 0,
     UHS_SDR25 = 1,
     UHS_SDR104 = 3,
+    UHS_DDR50 = 4,
     CONTROL2_1V8 = 1u << 3,
     CONTROL2_EXEC_TUNING = 1u << 6,
     CONTROL2_TUNED = 1u << 7,
@@ -275,9 +276,10 @@ enum : uint32_t {
     // PLLC4 = 38.4 MHz / M 4 * N 104 = 998.4 MHz, P 1; OUT2 is VCO / 5 = 199.68 MHz (hekate clock.c:602).
     PLLC4_CONFIG = (104u << 8) | 4u,
     PLLC4_DIVIDERS = 0x00f8ffffu,
-    // CLK_SOURCE bits 31:29 (hekate clock.c:725-726); PLLP_OUT0 is 408 MHz with a U7.1 divider below.
+    // CLK_SOURCE bits 31:29 (hekate clock.c:725-727); PLLP_OUT0 is 408 MHz with a U7.1 divider below.
     SOURCE_PLLP = 0,
     SOURCE_PLLC4_OUT2 = 3,
+    SOURCE_PLLC4_OUT0 = 7,
     PLLP_KHZ = 408000,
     APB_GP_HIDREV = 0x804,
     APB_SDMMC1_CLK_LOOPBACK = 0x8d4,
@@ -317,6 +319,9 @@ constexpr Speed kSpeeds[] = {{SOURCE_PLLC4_OUT2, 0, 0, 199680},
                              {SOURCE_PLLC4_OUT2, 0, 1, 99840},
                              {SOURCE_PLLC4_OUT2, 0, 2, 49920}};
 constexpr unsigned kSpeedCount = sizeof(kSpeeds) / sizeof(kSpeeds[0]);
+// UHS DDR200 (hekate clock.c:793-799, sdmmc.c:1426-1464): PLLC4_OUT0 (998.4 MHz) / CAR 2.5 (3) = 399.36 MHz,
+// SDHCI /2 (divider 1) in UHS_DDR50 host mode -> 199.68 MHz DDR (~170-190 MB/s on non-DLL cards).
+constexpr uint32_t kDdr200CmdSys = 14, kDdr200CarDivider = 3, kDdr200SdhciDivider = 1, kDdr200KHz = 199680;
 
 inline uint32_t le32(const uint8_t *p)
 {
@@ -654,6 +659,8 @@ class NativeSwitchBlock : public IOService {
     uint32_t busKHz = 0;
     uint32_t rca = 0, initStatus = 0;
     bool tuned = false;
+    bool ddr200 = false;
+    bool ddr200Allowed = true;
     unsigned speed = 0;
     // System sleep and shutdown: the worker stops between commands while suspended; the card was in 1.8 V signalling
     // at boot (so it is taken back there after SC7); LBA 1 as read at boot, compared after re-initialization.
@@ -780,8 +787,9 @@ class NativeSwitchBlock : public IOService {
     bool calibratePads();
     bool switchTo1V8(uint8_t ldo2);
     bool enablePllc4();
-    void tuneStep();
+    void tuneStep(int manualTap = -1);
     bool tune();
+    bool tuneDdr200(uint32_t *windowOut = nullptr);
     bool clockAndTune(unsigned from);
     void retune(bool slower);
     bool raiseBusSpeed();
@@ -1445,7 +1453,8 @@ int NativeSwitchBlock::retry(int step, uint32_t status, uint64_t lba, uint32_t s
         switch_dcache_sync();
     }
     step = command(static_cast<uint32_t>(lba), sectors, write, descriptors, &status, false, window);
-    if (step && !failed(step, status, lba, sectors, write, descriptors, true) && tuned && speed + 1 < kSpeedCount)
+    if (step && !failed(step, status, lba, sectors, write, descriptors, true) && tuned &&
+        (ddr200 || speed + 1 < kSpeedCount))
         retune(true);
     return step;
 }
@@ -3251,8 +3260,9 @@ bool NativeSwitchBlock::enablePllc4()
 
 // hekate _sdmmc_tuning_execute_once (sdmmc_driver.c:604) verbatim, including the CMD/DAT reset
 // right after issuing CMD19 with the card clock gated: one 64-byte tuning block (4-bit bus), the
-// controller compares it itself and moves to the next tap; buffer-read-ready says the step ended.
-void NativeSwitchBlock::tuneStep()
+// controller compares it itself and moves to the next tap (or uses `manualTap` for DDR200);
+// buffer-read-ready says the step ended.
+void NativeSwitchBlock::tuneStep(int manualTap)
 {
     if (!awaitTuningIdle(2000000000)) {
         resetLines();
@@ -3265,6 +3275,11 @@ void NativeSwitchBlock::tuneStep()
     w32(STATUS_ENABLE, r32(STATUS_ENABLE) | INT_READ_READY);
     w16(STATUS, r16(STATUS));
     w16(CLOCK, r16(CLOCK) & ~4u);
+    if (manualTap >= 0) {
+        w32(VENDOR_TUNING0, r32(VENDOR_TUNING0) & ~(1u << 17));
+        w32(VENDOR_CLOCK, (r32(VENDOR_CLOCK) & ~0xff0000u) | (static_cast<uint32_t>(manualTap) & 0xffu) << 16);
+        w32(VENDOR_TUNING0, r32(VENDOR_TUNING0) | 1u << 17);
+    }
     w32(ARGUMENT, 0);
     w16(COMMAND, 19u << 8 | RSP_R1 | CMD_DATA);
     (void)r16(CLOCK);
@@ -3283,6 +3298,42 @@ void NativeSwitchBlock::tuneStep()
     w32(STATUS_ENABLE, r32(STATUS_ENABLE) & ~INT_READ_READY);
     (void)r16(CLOCK);
     IODelay(1);
+}
+
+// hekate sdmmc_tuning_execute_ddr200 (sdmmc_driver.c:732): manual 128-tap sweep in UHS_DDR50 host mode.
+bool NativeSwitchBlock::tuneDdr200(uint32_t *windowOut)
+{
+    uint32_t results[4] = {};
+    w32(VENDOR_TUNING1, 0);
+    w32(VENDOR_TUNING0, (r32(VENDOR_TUNING0) & 0xffff1fffu) | 2u << 13);
+    w32(VENDOR_TUNING0, (r32(VENDOR_TUNING0) & 0xffffe03fu) | 1u << 6);
+    w32(VENDOR_TUNING0, r32(VENDOR_TUNING0) | 1u << 17);
+    w16(HOST_CONTROL2, r16(HOST_CONTROL2) | CONTROL2_EXEC_TUNING);
+    for (uint32_t i = 0; i < kSdManualTuneTaps; ++i) {
+        tuneStep(static_cast<int>(i));
+        if (r16(HOST_CONTROL2) & CONTROL2_TUNED)
+            results[i / 32] |= 1u << (i % 32);
+        if (!(r16(HOST_CONTROL2) & CONTROL2_EXEC_TUNING))
+            break;
+    }
+    w32(STATUS, 0xffffffff);
+    w16(HOST_CONTROL2, r16(HOST_CONTROL2) & ~CONTROL2_EXEC_TUNING);
+    const SwitchSdTapWindow best = switchSdBestTapWindow(results, kSdManualTuneTaps, kSdMinTuneWindow);
+    if (windowOut)
+        *windowOut = best.window;
+    if (!best.ok || !awaitTuningIdle(2000000000)) {
+        w16(HOST_CONTROL2, r16(HOST_CONTROL2) & ~(CONTROL2_EXEC_TUNING | CONTROL2_TUNED));
+        resetLines();
+        return false;
+    }
+    w16(CLOCK, r16(CLOCK) & ~4u);
+    w32(VENDOR_TUNING0, r32(VENDOR_TUNING0) & ~(1u << 17));
+    w32(VENDOR_CLOCK, (r32(VENDOR_CLOCK) & ~0xff0000u) | (best.tap & 0xffu) << 16);
+    w32(VENDOR_TUNING0, r32(VENDOR_TUNING0) | 1u << 17);
+    w16(HOST_CONTROL2, r16(HOST_CONTROL2) | CONTROL2_TUNED);
+    w16(CLOCK, r16(CLOCK) | 4);
+    (void)r16(CLOCK);
+    return true;
 }
 
 // hekate sdmmc_tuning_execute (sdmmc_driver.c:760) for SDR104: step size 1, 128 tries, 1x
@@ -3334,6 +3385,28 @@ bool NativeSwitchBlock::clockAndTune(unsigned from)
 void NativeSwitchBlock::retune(bool slower)
 {
     stats.retunes++;
+    if (ddr200) {
+        uint32_t window = 0;
+        if (!slower && tuneDdr200(&window)) {
+            IOLog("SwitchSD: DDR200 re-tuned at %u kHz, tap %u (window %u)\n", busKHz, (r32(VENDOR_CLOCK) >> 16) & 0xff,
+                  window);
+            return;
+        }
+        // Step down from DDR200 to SDR104 without cutting card power (preserving any dirty volatile write cache).
+        setTiming(UHS_DDR50, false, SOURCE_PLLP, kPllpDivider48MHz, 1);
+        (void)switchFunction(true, 1, 0);
+        (void)switchFunction(true, 0, UHS_SDR104);
+        ddr200 = false;
+        ddr200Allowed = false;
+        if (clockAndTune(0)) {
+            IOLog("SwitchSD: stepped down from DDR200 to SDR104 %u kHz, tap %u\n", busKHz,
+                  (r32(VENDOR_CLOCK) >> 16) & 0xff);
+            return;
+        }
+        panic("SwitchSD: DDR200 step-down to SDR104 found no sampling window (hc2 0x%04x, %llu errors); "
+              "boot with switch-no-sd-ddr200",
+              r16(HOST_CONTROL2), stats.errors);
+    }
     if (slower ? !clockAndTune(speed + 1) : !tune() && !clockAndTune(speed + 1)) {
         panic("SwitchSD: SDR104 tuning finds no sampling window down to %u kHz (hc2 0x%04x, %llu errors); "
               "boot with switch-no-sd-uhs",
@@ -3360,6 +3433,8 @@ bool NativeSwitchBlock::raiseBusSpeed()
     busMode = "inherited";
     // With switch-no-sd-uhs nothing below runs (no CMD0, no PLLC4, no PMIC access).
     unsigned off = 0;
+    unsigned noDdr200 = 0;
+    ddr200Allowed = !(PE_parse_boot_argn("switch-no-sd-ddr200", &noDdr200, sizeof(noDdr200)) && noDdr200);
     const char *skip = nullptr;
     uint8_t ldo2 = 0;
     if (PE_parse_boot_argn("switch-no-sd-uhs", &off, sizeof(off)) && off) {
@@ -3403,6 +3478,7 @@ bool NativeSwitchBlock::reinitialize(uint32_t baseKHz, uint8_t ldo2, bool uhs, b
     };
     rca = 0;
     tuned = false;
+    ddr200 = false;
     speed = 0;
 
     // Host defaults hekate's sdmmc_init sets and U-Boot does not (sdmmc_driver.c:1390-1391, 1257):
@@ -3492,9 +3568,47 @@ bool NativeSwitchBlock::reinitialize(uint32_t baseKHz, uint8_t ldo2, bool uhs, b
     if (error)
         fail("CMD6 query", error);
     const uint32_t access = bounce[13] | static_cast<uint32_t>(bounce[12]) << 8;
+    const uint32_t cmdSystem = bounce[11] | static_cast<uint32_t>(bounce[10]) << 8;
     const uint32_t power = bounce[7] | static_cast<uint32_t>(bounce[6]) << 8;
     const char *limit = "";
-    if (lowVoltage && (access & 1u << UHS_SDR104)) {
+    uint32_t ddr200Window = 0;
+    if (lowVoltage && ddr200Allowed && (cmdSystem & (1u << kDdr200CmdSys)) && (r32(CAPABILITIES_HI) & 4)) {
+        if (switchFunction(true, 3, power & 2 ? 1 : 0)) {
+            limit = ", power limit unchanged";
+        } else {
+            limit = ((static_cast<uint32_t>(bounce[15]) >> 4) & 0xf) == 1 ? ", 1.44 W" : ", 0.72 W";
+        }
+        const int checkErr = switchFunction(false, 1, kDdr200CmdSys);
+        if (!checkErr && ((bounce[16] >> 4) & 0xf) == kDdr200CmdSys &&
+            (static_cast<uint32_t>(bounce[0]) << 8 | bounce[1]) <= 800) {
+            const int setErr = switchFunction(true, 1, kDdr200CmdSys);
+            if (!setErr && ((bounce[16] >> 4) & 0xf) == kDdr200CmdSys) {
+                setTiming(UHS_DDR50, false, SOURCE_PLLC4_OUT0, kDdr200CarDivider, kDdr200SdhciDivider);
+                const bool tuneOk = tuneDdr200(&ddr200Window);
+                uint32_t statusR1 = 0;
+                const int statusErr = tuneOk ? cardCommand(13, rca << 16, RSP_R1, &statusR1) : -1;
+                if (tuneOk && !statusErr && !(statusR1 & R1_ERRORS) && ((statusR1 >> 9) & 0xf) == 4) {
+                    ddr200 = true;
+                    tuned = true;
+                    speed = 0;
+                    busMode = "DDR200";
+                    busKHz = kDdr200KHz;
+                } else {
+                    IOLog("SwitchSD: DDR200 rejected (window %u < %u, CMD13 err %d); power-cycling to SDR104\n",
+                          ddr200Window, kSdMinTuneWindow, statusErr);
+                    ddr200Allowed = false;
+                    if (irqSource)
+                        irqSource->disable();
+                    powerOffCard();
+                    powerOnController();
+                    if (irqSource)
+                        irqSource->enable();
+                    return reinitialize(PLLP_KHZ * 2 / (kPllpDivider48MHz + 2), 0xc0 | kLdo3V3, true, resume);
+                }
+            }
+        }
+    }
+    if (!tuned && lowVoltage && (access & 1u << UHS_SDR104)) {
         // hekate: 1.44 W power limit when offered (its result is not checked there either: the card
         // keeps 0.72 W), then check and switch to SDR104 if the card draws at most 800 mA there (the
         // board's max-current-800ma), else SDR25.
@@ -3541,9 +3655,15 @@ bool NativeSwitchBlock::reinitialize(uint32_t baseKHz, uint8_t ldo2, bool uhs, b
         fail("CMD13 transfer state", error ? error : static_cast<int>(r >> 9 & 0xf));
     lowVoltageBus = lowVoltage;
     if (!resume) {
-        IOLog("SwitchSD: bus now %s %u kHz %s V 4-bit%s, tap %u%s, RCA 0x%04x, %llu ms\n", busMode, busKHz,
-              lowVoltage ? "1.8" : "3.3", limit, (r32(VENDOR_CLOCK) >> 16) & 0xff, tuned ? " (tuned)" : "", rca,
-              (switch_now_ns() - start) / 1000000);
+        if (ddr200) {
+            IOLog("SwitchSD: bus now %s %u kHz %s V 4-bit%s, tap %u (window %u), RCA 0x%04x, %llu ms\n", busMode,
+                  busKHz, lowVoltage ? "1.8" : "3.3", limit, (r32(VENDOR_CLOCK) >> 16) & 0xff, ddr200Window, rca,
+                  (switch_now_ns() - start) / 1000000);
+        } else {
+            IOLog("SwitchSD: bus now %s %u kHz %s V 4-bit%s, tap %u%s, RCA 0x%04x, %llu ms\n", busMode, busKHz,
+                  lowVoltage ? "1.8" : "3.3", limit, (r32(VENDOR_CLOCK) >> 16) & 0xff, tuned ? " (tuned)" : "", rca,
+                  (switch_now_ns() - start) / 1000000);
+        }
     }
     return true;
 }

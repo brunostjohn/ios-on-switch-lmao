@@ -939,3 +939,60 @@ TEST(SdCard, EnableAndFlushCache)
         EXPECT_EQ(switchSdFlushCache(true, crosses, bus).step, SwitchSdFlushStep::kBadAddress);
     }
 }
+
+TEST(SdCard, ManualTapWindow)
+{
+    const auto setRange = [](uint32_t mask[4], uint32_t lo, uint32_t hi) {
+        for (uint32_t i = lo; i <= hi; ++i)
+            mask[i / 32] |= 1u << (i % 32);
+    };
+    // Empty and narrow (< 8 taps, DLL-only cards) windows are rejected.
+    {
+        const uint32_t empty[4] = {};
+        const SwitchSdTapWindow w = switchSdBestTapWindow(empty);
+        EXPECT_FALSE(w.ok);
+        EXPECT_EQ(w.window, 0u);
+    }
+    {
+        uint32_t narrow[4] = {};
+        setRange(narrow, 40, 46);  // 7 taps
+        const SwitchSdTapWindow w = switchSdBestTapWindow(narrow);
+        EXPECT_FALSE(w.ok);
+        EXPECT_EQ(w.window, 7u);
+    }
+    // Picks midpoint of widest contiguous window.
+    {
+        uint32_t two[4] = {};
+        setRange(two, 10, 19);  // 10 taps
+        setRange(two, 50, 73);  // 24 taps -> midpoint 61
+        const SwitchSdTapWindow w = switchSdBestTapWindow(two);
+        EXPECT_TRUE(w.ok);
+        EXPECT_EQ(w.window, 24u);
+        EXPECT_EQ(w.tap, 61u);
+    }
+    // Leading [0..7] and trailing [120..127] edges.
+    {
+        uint32_t lead[4] = {};
+        setRange(lead, 0, 7);
+        const SwitchSdTapWindow w = switchSdBestTapWindow(lead);
+        EXPECT_TRUE(w.ok);
+        EXPECT_EQ(w.window, 8u);
+        EXPECT_EQ(w.tap, 3u);
+    }
+    {
+        uint32_t trail[4] = {};
+        setRange(trail, 120, 127);
+        const SwitchSdTapWindow w = switchSdBestTapWindow(trail);
+        EXPECT_TRUE(w.ok);
+        EXPECT_EQ(w.window, 8u);
+        EXPECT_EQ(w.tap, 123u);
+    }
+    // All 128 taps passing.
+    {
+        const uint32_t full[4] = {~0u, ~0u, ~0u, ~0u};
+        const SwitchSdTapWindow w = switchSdBestTapWindow(full);
+        EXPECT_TRUE(w.ok);
+        EXPECT_EQ(w.window, 128u);
+        EXPECT_EQ(w.tap, 63u);
+    }
+}

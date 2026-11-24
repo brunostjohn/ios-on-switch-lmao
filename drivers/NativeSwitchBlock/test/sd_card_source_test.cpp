@@ -103,3 +103,17 @@ TEST(SdCardSource, WriteCacheContract)
     const std::string resume = body("void NativeSwitchBlock::resume()");
     EXPECT_LT(Index(resume, "dmaResume();"), Index(resume, "enableCache(true)"));
 }
+
+// UHS DDR200 uses PLLC4_OUT0 / 2.5 with SDHCI /2 in UHS_DDR50 mode, manual 128-tap tuning (>= 8 taps), and falls back
+// cleanly to SDR104 (with power-cycle at boot, or CMD6 step-down at runtime).
+TEST(SdCardSource, Ddr200HasFallbackToSdr104)
+{
+    const std::string reinit = body("bool NativeSwitchBlock::reinitialize(");
+    EXPECT_THAT(reinit,
+                HasSubstr("setTiming(UHS_DDR50, false, SOURCE_PLLC4_OUT0, kDdr200CarDivider, kDdr200SdhciDivider)"));
+    EXPECT_THAT(reinit, HasSubstr("tuneDdr200(&ddr200Window)"));
+    EXPECT_THAT(reinit, HasSubstr("powerOffCard();"));
+    EXPECT_THAT(reinit, HasSubstr("powerOnController();"));
+    EXPECT_THAT(body("void NativeSwitchBlock::retune("), HasSubstr("switchFunction(true, 1, 0)"));
+    EXPECT_THAT(body("bool NativeSwitchBlock::raiseBusSpeed()"), HasSubstr("switch-no-sd-ddr200"));
+}

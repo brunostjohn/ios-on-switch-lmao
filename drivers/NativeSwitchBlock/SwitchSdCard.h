@@ -574,6 +574,40 @@ inline SwitchSdPowerOff switchSdPowerOffNotify(bool havePower, const SwitchSdExt
     }
 }
 
+// ---- Manual DDR200 tap tuning (Tegra X1 SDMMC1) -------------------------------------------------------------------
+// Tegra X1 has no hardware tuning in DDR mode; manual tuning sweeps CMD19 across 128 taps and picks the midpoint of
+// the widest passing window, rejecting windows narrower than kSdMinTuneWindow (DLL-only cards fail this check).
+constexpr uint32_t kSdManualTuneTaps = 128;
+constexpr uint32_t kSdMinTuneWindow = 8;
+
+struct SwitchSdTapWindow {
+    bool ok;
+    uint32_t tap;
+    uint32_t window;
+};
+
+inline SwitchSdTapWindow switchSdBestTapWindow(const uint32_t results[4], uint32_t count = kSdManualTuneTaps,
+                                               uint32_t minWindow = kSdMinTuneWindow)
+{
+    uint32_t runStart = count, runLen = 0, bestTap = 0, bestLen = 0;
+    for (uint32_t i = 0; i <= count; ++i) {
+        const bool pass = i < count && ((results[i / 32] >> (i % 32)) & 1u) != 0u;
+        if (pass) {
+            if (runStart == count)
+                runStart = i;
+            ++runLen;
+        } else if (runStart != count) {
+            if (runLen > bestLen) {
+                bestLen = runLen;
+                bestTap = (runStart + (i - 1)) / 2;
+            }
+            runStart = count;
+            runLen = 0;
+        }
+    }
+    return {bestTap != 0 && bestLen >= minWindow, bestTap, bestLen};
+}
+
 // ---- Data command framing ------------------------------------------------------------------------------------------
 // SDHCI TRANSFER_MODE (0x0c) bits and the COMMAND (0x0e) low byte of a data command with an R1 response (48-bit, CRC and
 // index checked, data present).

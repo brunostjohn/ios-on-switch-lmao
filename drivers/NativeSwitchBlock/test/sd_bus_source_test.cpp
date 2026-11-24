@@ -69,12 +69,13 @@ TEST(SdBusSource, EveryCommandClaimsAndEnds)
     EXPECT_EQ(Count(driver(), "w16(COMMAND,"), 6u);
 }
 
-// SDR104 tuning raises no transfer complete, so its PRESENT_STATE wait stays; nothing on the I/O path reaches it.
+// SDR104/DDR200 tuning raises no transfer complete, so its PRESENT_STATE wait stays; nothing on the I/O path reaches it.
 TEST(SdBusSource, TuningWaitStaysInTuning)
 {
-    EXPECT_EQ(Count(driver(), "awaitTuningIdle("), 4u);  // declaration, definition, tuneStep, tune
-    EXPECT_THAT(body("void NativeSwitchBlock::tuneStep()"), HasSubstr("awaitTuningIdle("));
+    EXPECT_EQ(Count(driver(), "awaitTuningIdle("), 5u);  // declaration, definition, tuneStep, tune, tuneDdr200
+    EXPECT_THAT(body("void NativeSwitchBlock::tuneStep("), HasSubstr("awaitTuningIdle("));
     EXPECT_THAT(body("bool NativeSwitchBlock::tune()"), HasSubstr("awaitTuningIdle("));
+    EXPECT_THAT(body("bool NativeSwitchBlock::tuneDdr200("), HasSubstr("awaitTuningIdle("));
     for (const char *signature : {"int NativeSwitchBlock::issue(", "int NativeSwitchBlock::complete(",
                                   "void NativeSwitchBlock::beginBatch(", "void NativeSwitchBlock::endBatch(",
                                   "int NativeSwitchBlock::controlCommand(", "void NativeSwitchBlock::worker("}) {

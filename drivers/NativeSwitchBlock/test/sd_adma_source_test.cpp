@@ -93,7 +93,7 @@ TEST(SdAdmaSource, PipelinedWorker)
     EXPECT_THAT(body("void NativeSwitchBlock::interruptLost("), HasSubstr("panic(\"SwitchSD: SDMMC1 interrupt lost"));
     // Card commands, the recovery's CMD12 and each tuning block sleep on the interrupt too.
     for (const char *waiter : {"int NativeSwitchBlock::cardCommand(", "void NativeSwitchBlock::recover(",
-                               "void NativeSwitchBlock::tuneStep()"})
+                               "void NativeSwitchBlock::tuneStep("})
         EXPECT_THAT(body(waiter), HasSubstr("awaitStatus(")) << waiter;
     // endBatch: a split command's errors take run()'s retry, and a read's pages are invalidated after the command.
     const std::string end = body("void NativeSwitchBlock::endBatch(");
