@@ -1,5 +1,7 @@
-import HWTestGPU
+import HWTestCommon
 import HWTestKit
+import HWTestScenes
+@testable import SwitchHWTest27Tests
 
 /// What only iOS 27 has: QuartzCore 27's glass states on the driver, Metal 4, Liquid Glass through UIKit and the
 /// render server, True Tone's default, and VideoToolbox's frame processors. The frame processors run after the rest:

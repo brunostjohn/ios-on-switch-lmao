@@ -127,7 +127,7 @@ public enum GM20BFacade {
         (ask(buffer, "switchMetalInlineStates") as? NSNumber)?.boolValue ?? false
     }
 
-    static func ask(_ object: Any, _ name: String) -> Any? {
+    public static func ask(_ object: Any, _ name: String) -> Any? {
         let selector = NSSelectorFromString(name)
         guard let object = object as? NSObject, object.responds(to: selector) else { return nil }
         return object.perform(selector)?.takeUnretainedValue()

@@ -2,6 +2,8 @@ import AVFoundation
 import CoreMedia
 import CoreVideo
 import HWTestCore
+import HWTestKit
+import HWTestShared
 import IOSurface
 import UIKit
 

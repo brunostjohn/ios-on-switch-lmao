@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestX1
 import Metal
 
 /// The 2D engine (FERMI_TWOD_A) per (format, operation), held to CPU rules: each cell's texels against the exact

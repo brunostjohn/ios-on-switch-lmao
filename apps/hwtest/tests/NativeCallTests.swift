@@ -1,4 +1,6 @@
+import HWTestCommon
 import HWTestCore
+import HWTestKit
 
 /// Metal calls the facade answers itself where they were answered zero before: each runs on the driver, or its
 /// feature answers NO wherever Metal lets a caller ask.

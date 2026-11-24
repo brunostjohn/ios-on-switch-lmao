@@ -1,7 +1,9 @@
 import Darwin
 import Foundation
+import HWTestCommon
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 
 /// A GPU job call the kernel refuses writes one error line naming why (drivers/TegraGM20B/SwitchGpuRefusalSites.h).
 /// Boot 21 and 22 refused metal.native.counters' SubmitJob, and iconservicesagent's at 13:34:22.551, with no line at

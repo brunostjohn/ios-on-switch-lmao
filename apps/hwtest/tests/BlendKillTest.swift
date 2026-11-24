@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// The ROP's zero-source pixel kill (drivers/TegraGM20BMetal/blend_kill.h): a source-over state draws

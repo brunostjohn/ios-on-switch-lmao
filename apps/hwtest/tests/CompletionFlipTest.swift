@@ -1,5 +1,8 @@
 import Foundation
+import HWTestCommon
 import HWTestCore
+import HWTestKit
+import HWTestShared
 import UIKit
 
 /// A direct frame's window A flip is written by its producer's own completion (the GPU's interrupt pass for a watched

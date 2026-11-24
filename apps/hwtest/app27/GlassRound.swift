@@ -1,7 +1,9 @@
 import Foundation
+import HWTestCommon
 import HWTestCore
 import HWTestGPU
 import HWTestKit
+import HWTestShared
 import UIKit
 
 /// The glass stage of ui.glass_first, ui.glass_motion and ui.glass_ab: stripes on the left half, flat grey on the

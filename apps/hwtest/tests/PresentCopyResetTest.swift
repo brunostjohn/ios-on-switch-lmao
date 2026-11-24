@@ -2,6 +2,8 @@ import Darwin
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
+import HWTestShared
 import UIKit
 
 /// A copy engine reset under the display's present, as a context-switch timeout on the present's channel gets one

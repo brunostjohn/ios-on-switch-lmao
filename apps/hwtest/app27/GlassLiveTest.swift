@@ -2,6 +2,7 @@ import Foundation
 import HWTestCore
 import HWTestGPU
 import HWTestKit
+import HWTestShared
 import UIKit
 
 /// Liquid Glass on screen while what is behind it moves, judged on what the display was handed rather than on a

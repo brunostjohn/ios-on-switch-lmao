@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// A one-sample colour beside a 4x depth (MixedSamplesCases), which decides two inferred fields of the driver's mixed

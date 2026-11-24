@@ -1,6 +1,8 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestGPUForms
+import HWTestKit
 import Metal
 
 /// The shader compiler's branch layout: sm53_layout_paths (nested if/else, a loop with continue and break, every

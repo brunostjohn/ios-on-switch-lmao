@@ -2,6 +2,7 @@ import CoreVideo
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// RGB10A8_2P_XR10 (550) over a 'b3a8' surface, as Core Animation's backdrop blur makes it, rendered through its

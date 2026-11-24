@@ -1,6 +1,8 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestGPUModels
+import HWTestKit
 import Metal
 
 /// Fetching draws of every kind of storage-form state keep Metal's order inside the pixel interlock on the driver: a

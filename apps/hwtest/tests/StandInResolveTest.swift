@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// Multisampled targets of the formats the driver renders through a stand-in (11, 41, 42, 44, 93, 553, 555, 84, 85)

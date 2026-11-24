@@ -1,5 +1,7 @@
 import Foundation
 import HWTestCore
+import HWTestKit
+import HWTestShared
 
 /// The display's window probes (drivers/NativeMobileDisplay/DisplayWindowProbe.h, debug kernels): each shows test
 /// pictures on the panel for about 0.7 s, through a route the display does not use yet and through a known-good one,

@@ -1,6 +1,8 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestGPUModels
+import HWTestKit
 import Metal
 
 /// Passes over one memoryless attachment's scratch memory open without a drain between them (gpu/ScratchOrder.swift):

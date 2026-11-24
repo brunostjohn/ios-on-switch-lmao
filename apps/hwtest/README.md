@@ -18,9 +18,10 @@ boot's identity alongside the original run. When a GPU test times out, a one-fil
 if the probe hangs too, the later tests that draw are skipped and named after the test that wedged it. `pull_logs`
 copies the reports off the card, and `//tools/hwtest` compares each run with the ones before it.
 
-One library, `HWTestKit` (`kit/` and `tests/`), holds the tests, the runner, the log lines and the report. Each iOS
-version has an app that wraps it and adds the tests only that version has: `SwitchHWTest17` (`app17/`, built for iOS
-17.4) and `SwitchHWTest27` (`app27/`, built for iOS 27, adding Liquid Glass, QuartzCore 27's glass states, Metal 4 and
+`HWTestKit` (`kit/`) holds the runner, log lines, report and bundled resources, while `tests/` and `gpu/` split into
+per-family Swift modules listed in `modules.bzl` and assembled by `HWTestRegistry`. Each iOS version has an app that
+wraps them and adds the tests only that version has: `SwitchHWTest17` (`app17/`, built for iOS 17.4) and
+`SwitchHWTest27` (`app27/`, built for iOS 27, adding Liquid Glass, QuartzCore 27's glass states, Metal 4 and
 VideoToolbox's frame processors). The apps use the compiler's default CPU for their deployment target. From iOS 26 on
 that is an A12, so the 27 app carries LSE and FP16 code the A57 lacks, as any app built for iOS 27 does, and
 `a64x.self` checks that the a64x loader translated it.

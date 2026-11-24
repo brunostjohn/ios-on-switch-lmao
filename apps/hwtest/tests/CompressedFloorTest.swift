@@ -1,7 +1,9 @@
 import Darwin
 import Foundation
+import HWTestCommon
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 
 /// Compressed memory down to the GPU pool's floor for an app (drivers/TegraGM20B/TegraGM20BPoolPolicy.h
 /// compressibleRefusal). Boot 22 refused 187 compressible BoAllocs, SwitchHWTest's first one at 49 MiB ready (the pool

@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestX1
 import Metal
 
 /// gpu.gm20b.resolve_twod's format arms (resolve_rule.h twodResolveFit): per format and sample count the codes the

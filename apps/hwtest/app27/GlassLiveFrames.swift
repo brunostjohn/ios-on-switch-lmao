@@ -1,4 +1,5 @@
 import Foundation
+import HWTestGPU
 import ImageIO
 import UniformTypeIdentifiers
 

@@ -1,6 +1,8 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
+import HWTestShared
 import Metal
 
 /// The GPU's ZBC colour table filling up (drivers/TegraGM20BMetal/zbc.h: 15 colour entries, every

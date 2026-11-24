@@ -1,6 +1,8 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
+import HWTestShared
 import Metal
 
 /// GM20B colour and depth compression for memoryless targets follows what a pass needs now (boot 15: backboardd and

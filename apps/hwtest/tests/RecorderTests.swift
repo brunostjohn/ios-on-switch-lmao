@@ -1,6 +1,8 @@
 import Darwin
 import Foundation
 import HWTestCore
+import HWTestKit
+import HWTestShared
 
 /// The flight recorder (kernel/switch/recorder, kernels built with --//kernel:recorder): the app's main thread held off
 /// its run loop for 400 ms must be taken for a hang of this thread and dumped. The test owns that dump: writing its

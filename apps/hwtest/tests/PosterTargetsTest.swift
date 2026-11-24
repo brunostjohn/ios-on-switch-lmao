@@ -1,6 +1,8 @@
 import Darwin
+import HWTestCommon
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import UIKit
 
 /// Lock screen posters and their snapshots render no target larger than the panel: the GM20B kernel's largest

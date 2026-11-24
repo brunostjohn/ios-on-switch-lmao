@@ -1,5 +1,6 @@
 import Foundation
 import HWTestCore
+import HWTestKit
 
 /// The bench's stale cells in its own shape: a 64x64 BGRA8 target the GPU writes and the bench frees, then one of the
 /// same size on the same span, filled by the CPU and blended into by a program the bench has placed before.

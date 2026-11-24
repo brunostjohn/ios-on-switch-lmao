@@ -21,19 +21,19 @@ public final class BenchRunner {
         return BenchRunner(bench)
     }
 
-    var summary: String {
+    public var summary: String {
         var line = [CChar](repeating: 0, count: 512)
         switch_bench_describe(bench, &line, line.count)
         return String(cString: line)
     }
 
-    static var knownData: [UInt32] {
+    public static var knownData: [UInt32] {
         var words = [UInt32](repeating: 0, count: 4)
         switch_bench_known_data(&words)
         return words
     }
 
-    static var knownKernel: Data {
+    public static var knownKernel: Data {
         var bytes = [UInt8](repeating: 0, count: 256)
         return Data(bytes.prefix(switch_bench_known_kernel(&bytes, bytes.count)))
     }
@@ -61,7 +61,7 @@ public final class BenchRunner {
 
     /// All of `surface` (one plane, of a format the driver renders) filled with `color` (an RGBA8 word) by the 2D engine
     /// on the bench's own connection and channel, waited for: "ok", else the status and why.
-    func fill(_ surface: IOSurfaceRef, format: MTLPixelFormat, color: UInt32) -> String {
+    public func fill(_ surface: IOSurfaceRef, format: MTLPixelFormat, color: UInt32) -> String {
         var r = switch_bench_result()
         switch_bench_fill_surface(
             bench, Unmanaged.passUnretained(surface).toOpaque(), UInt32(format.rawValue), color, &r

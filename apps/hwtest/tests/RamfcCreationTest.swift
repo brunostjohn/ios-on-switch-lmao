@@ -1,5 +1,8 @@
 import Darwin
+import HWTestCommon
 import HWTestCore
+import HWTestKit
+import HWTestShared
 
 /// A channel's first RAMFC words as the host keeps them (debug.switch_gpu_ramfc, debug kernels). nvkm puts a new channel
 /// on its runlist enabled, so the host may load its RAMFC before its first submission and save that copy over a word

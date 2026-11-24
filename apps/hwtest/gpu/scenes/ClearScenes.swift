@@ -1,5 +1,6 @@
 import Foundation
 import HWTestCore
+import HWTestGPU
 import Metal
 
 /// Load-action clears of every common format into private (block-linear where the shape tiles) targets, small and

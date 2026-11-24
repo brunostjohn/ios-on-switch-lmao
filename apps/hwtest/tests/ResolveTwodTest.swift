@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// Rule resolve.twod (drivers/TegraGM20BMetal/resolve_rule.h): a 720x1280 BGRA8 4x pass, every sample

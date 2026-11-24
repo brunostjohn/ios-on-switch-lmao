@@ -1,5 +1,6 @@
 import Foundation
 import HWTestCore
+import HWTestGPU
 import Metal
 
 /// gpu.gm20b.scratch_order's passes: two passes of different sizes over a memoryless colour 1 of one format, which the

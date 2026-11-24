@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestShared
 import Metal
 
 /// gpu.gm20b.compressed_targets' ZBC arms (drivers/TegraGM20BMetal/zbc.h zbcColorEntry, zbcDepthEntry): a

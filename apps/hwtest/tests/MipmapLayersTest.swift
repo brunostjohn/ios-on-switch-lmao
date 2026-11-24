@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// generateMipmaps of arrays and cubes whose steps are the 3D engine's (formats with a pack mip state and no 2D-engine

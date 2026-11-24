@@ -1,6 +1,8 @@
 import Foundation
+import HWTestCommon
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// The kernel makes a new spare without zeroing it on the CPU: its pages keep what their last owner left until the

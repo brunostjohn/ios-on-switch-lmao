@@ -1,5 +1,19 @@
+@testable import HWTestCommon
 import HWTestCore
-import HWTestGPU
+@testable import HWTestDepth
+@testable import HWTestDisplay
+@testable import HWTestForms
+import HWTestKit
+@testable import HWTestMetal
+@testable import HWTestNative
+@testable import HWTestPaths
+@testable import HWTestRecovery
+import HWTestScenes
+@testable import HWTestShaders
+@testable import HWTestShared
+@testable import HWTestSystem
+@testable import HWTestTextures
+@testable import HWTestVideoTests
 
 public enum Registry {
     /// The GPU scenes come first: the first of them reproduces the process's first command buffer.

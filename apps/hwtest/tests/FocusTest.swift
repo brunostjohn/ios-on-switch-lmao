@@ -1,5 +1,6 @@
 import GameController
 import HWTestCore
+import HWTestKit
 import UIKit
 
 /// Whether UIKit runs a focus system with no keyboard and no game controller connected. UIKitCore 24B119 sets one up in

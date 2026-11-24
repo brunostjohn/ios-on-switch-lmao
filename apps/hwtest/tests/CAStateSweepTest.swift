@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// Core Animation's states, one per class of the pack's corpus (gpu/CAStateSweep.swift), each drawn by the raw

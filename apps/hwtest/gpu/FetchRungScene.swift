@@ -1,5 +1,6 @@
 import Foundation
 import HWTestCore
+import HWTestGPU
 import Metal
 
 /// A Core Animation state that blends by fetching its colour, drawn by the facade with the fetch rung a debug

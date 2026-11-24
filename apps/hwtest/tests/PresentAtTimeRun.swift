@@ -1,5 +1,6 @@
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 import QuartzCore
 import UIKit

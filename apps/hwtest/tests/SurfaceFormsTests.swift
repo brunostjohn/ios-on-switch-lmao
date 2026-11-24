@@ -1,6 +1,8 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestGPUForms
+import HWTestKit
 import Metal
 
 /// A 550 over a 'w30r' a 554 render target was cleared in first (gpu/XrTiledSurface.swift), against an M4 Max: made

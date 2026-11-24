@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestKit
+import HWTestShared
 import UIKit
 
 /// Settings' Liquid Glass over its right column going partly black as it appears or the column scrolls, judged on what

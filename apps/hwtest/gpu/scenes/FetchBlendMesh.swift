@@ -1,5 +1,6 @@
 import Foundation
 import HWTestCore
+import HWTestGPU
 import Metal
 
 /// fetch_blend_vertex's pipelines (FramebufferFetch.metal): a float4 vertex attribute (clip x, y, tag), an instance

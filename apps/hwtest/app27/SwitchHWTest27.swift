@@ -1,5 +1,7 @@
 import HWTestKit
+import HWTestRegistry
 import SwiftUI
+@testable import SwitchHWTest27Tests
 
 @main
 struct SwitchHWTest27: App {

@@ -1,4 +1,5 @@
 import HWTestKit
+import HWTestRegistry
 import SwiftUI
 
 @main

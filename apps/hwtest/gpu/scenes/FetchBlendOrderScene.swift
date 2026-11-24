@@ -1,5 +1,6 @@
 import Foundation
 import HWTestCore
+import HWTestGPU
 import Metal
 
 /// Draws that fetch the colour they blend into: the fragment reads [[color(n)]] and the pipeline blends One/One on that

@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import HWTestCore
+import HWTestKit
 
 /// LaunchServices compares a bundle's device with its volume container before accepting an audited file handoff.
 /// The boot overlay retains its backing Data identity; statfs separately identifies System for FrontBoard admission.

@@ -2,6 +2,7 @@ import CoreGraphics
 import Darwin
 import Foundation
 import HWTestCore
+import HWTestKit
 import ImageIO
 
 /// SplashBoard keeps an app's launch snapshot only once APFS marks its file purgeable, and boot 21's APFS refused all 99
