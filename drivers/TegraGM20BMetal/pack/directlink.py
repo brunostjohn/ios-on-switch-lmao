@@ -283,6 +283,8 @@ def entries_of(
             entry = {'off': off, 'kind': 'handle', 'tex': (TEXTURE_KINDS[kind], slot) if kind else None, 'smp': None}
             if stage == 1:
                 entry['stage'] = 'v'
+            if pad & packfile.ENTRY_ARRAY_VIEW:
+                entry['array_view'] = True
             if sampler_kind == SAMPLER_SLOT:
                 entry['smp'] = ('slot', sampler)
                 entry['compare'] = bool(pad & packfile.ENTRY_COMPARES)

@@ -69,6 +69,33 @@ TEST(ViewHeader, TheTexturesHeaderWithM2vsWordZeroAndNoSrgbConversion)
         EXPECT_EQ(view[i], own[i]) << "word " << i;
 }
 
+TEST(ViewHeader, ArrayViewHeaderTurnsCubeAndCubeArrayIntoTwoDArrayPreservingSrgb)
+{
+    fx::MipChain c;
+    ASSERT_TRUE(fx::arrayLayout(16, 16, 6, 3, 4, c));
+    uint32_t cube[8], asArray[8], want[8];
+    fx::mipChainTic(c, 0x200000, kRgba8, true, 1, 2, cube, fx::kTexCube);
+    fx::mipChainTic(c, 0x200000, kRgba8, true, 1, 2, want, fx::kTexTwoDArray);
+    arrayViewHeader(cube, asArray);
+    for (int w = 0; w < 8; w++)
+        EXPECT_EQ(asArray[w], want[w]) << "cube word " << w;
+
+    uint32_t linearAsArray[8], wantLinear[8];
+    fx::mipChainTic(c, 0x200000, kRgba8, false, 1, 2, wantLinear, fx::kTexTwoDArray);
+    viewHeader(cube, kRgba8, linearAsArray, 0, 0, true);
+    for (int w = 0; w < 8; w++)
+        EXPECT_EQ(linearAsArray[w], wantLinear[w]) << "linear cube word " << w;
+
+    fx::MipChain c2;
+    ASSERT_TRUE(fx::arrayLayout(16, 16, 12, 2, 4, c2));
+    uint32_t cubeArray[8], asArray2[8], want2[8];
+    fx::mipChainTic(c2, 0x400000, kRgba8, false, 0, 2, cubeArray, fx::kTexCubeArray);
+    fx::mipChainTic(c2, 0x400000, kRgba8, false, 0, 2, want2, fx::kTexTwoDArray);
+    arrayViewHeader(cubeArray, asArray2);
+    for (int w = 0; w < 8; w++)
+        EXPECT_EQ(asArray2[w], want2[w]) << "cube array word " << w;
+}
+
 // NIL's headers of a multisampled image at 0x100000 (fx/test/nilimage.c ms), as a texture and as a storage image: the
 // storage header's WIDTH and HEIGHT are the sample grid's
 struct NilStorageView {

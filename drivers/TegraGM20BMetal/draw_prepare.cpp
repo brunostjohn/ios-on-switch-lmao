@@ -261,7 +261,17 @@ __attribute__((always_inline)) inline bool RenderEncoder::writeSetEntry(Pipeline
         } else if (t) {
             cb_->use(t->standIn ? *t->standIn : t->sampled ? *t->sampled : *t, false);
         }
-        tic = !t ? 0 : image ? image->tic : pair ? t->tic : t->standIn && !written ? t->standIn->tic : t->tic;
+        const Texture *bound = !t ? nullptr : image ? image : pair ? t : t->standIn && !written ? t->standIn : t;
+        tic = bound ? bound->tic : 0;
+        if (bound && !image && !pair && entryArrayView(e) &&
+            (bound->type == fx::kTexCube || bound->type == fx::kTexCubeArray)) {
+            tic = dev_->arrayViewTic(*bound);
+            if (!tic) {
+                *why = "no texture header left for a cube's 2D array view";
+                cb_->refusal = {RefViewHeader, e.slot, bound->format, bound->width};
+                return false;
+            }
+        }
     } else if (e.kind == EntryFetch) {
         const ColorAttachment &a = pass_.color[e.slot];
         const Texture *t = a.texture;

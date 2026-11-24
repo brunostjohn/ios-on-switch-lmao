@@ -472,7 +472,7 @@ uint32_t Device::levelTic(const Texture &t, uint32_t level, bool codes)
     return tic;
 }
 
-uint32_t Device::viewTic(const Texture &t, uint32_t word0, ViewAccess access)
+uint32_t Device::viewTic(const Texture &t, uint32_t word0, ViewAccess access, bool asArray)
 {
     uint8_t sxLog2 = 0, syLog2 = 0;
     if (access == ViewAccess::Storage && t.samples > 1) {
@@ -482,7 +482,7 @@ uint32_t Device::viewTic(const Texture &t, uint32_t word0, ViewAccess access)
         sxLog2 = grid.sxLog2;
         syLog2 = grid.syLog2;
     }
-    const uint64_t key = word0 | uint64_t(sxLog2) << 32 | uint64_t(syLog2) << 40;
+    const uint64_t key = word0 | uint64_t(sxLog2) << 32 | uint64_t(syLog2) << 40 | (asArray ? 1ull << 48 : 0);
     if (!t.tic)
         return 0;
     if (const uint32_t seen = views_.find(t.tic, key))
@@ -499,10 +499,36 @@ uint32_t Device::viewTic(const Texture &t, uint32_t word0, ViewAccess access)
         return 0;
     uint32_t own[8], w[8];
     memcpy(own, headerNow(t.tic), 32);
-    viewHeader(own, word0, w, sxLog2, syLog2);
+    viewHeader(own, word0, w, sxLog2, syLog2, asArray);
     memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
     viewTics_.emplace(t.tic, std::make_pair(key, tic));
     views_.keep(t.tic, key, tic);
+    return tic;
+}
+
+uint32_t Device::arrayViewTic(const Texture &t)
+{
+    constexpr uint64_t kArrayViewKey = 1ull << 49;
+    if (!t.tic)
+        return 0;
+    if (const uint32_t seen = views_.find(t.tic, kArrayViewKey))
+        return seen;
+    SWITCH_METAL_ENCODE_LOCK(l, lock_);
+    const auto views = viewTics_.equal_range(t.tic);
+    for (auto v = views.first; v != views.second; ++v)
+        if (v->second.first == kArrayViewKey) {
+            views_.keep(t.tic, kArrayViewKey, v->second.second);
+            return v->second.second;
+        }
+    const uint32_t tic = allocTic();
+    if (!tic)
+        return 0;
+    uint32_t own[8], w[8];
+    memcpy(own, headerNow(t.tic), 32);
+    arrayViewHeader(own, w);
+    memcpy(tic_.cpu + 32 * tic, w, 32);  // visible at the next submission's header invalidate
+    viewTics_.emplace(t.tic, std::make_pair(kArrayViewKey, tic));
+    views_.keep(t.tic, kArrayViewKey, tic);
     return tic;
 }
 

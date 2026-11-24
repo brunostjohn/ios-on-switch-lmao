@@ -403,8 +403,9 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
     uint8_t map = 0;
     bool levelZero = false, other = false;
     for (uint32_t i = 0; i < r.entries; i++)
-        if (r.entry[i].kind == KernelTexture && r.entry[i].slot < 31 && textures_[r.entry[i].slot]) {
-            const Texture &t = *textures_[r.entry[i].slot];
+        if (r.entry[i].kind == KernelTexture && kernelTextureSlot(r.entry[i]) < 31 &&
+            textures_[kernelTextureSlot(r.entry[i])]) {
+            const Texture &t = *textures_[kernelTextureSlot(r.entry[i])];
             map = std::max(map, t.addressMap);
             if (!kernelEntryWrites(r, i)) {
                 levelZero |= t.levelZero;
@@ -438,7 +439,9 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
             at[2] = b.va ? desc.range : 0;
             at[3] = 0;
         } else if (e.kind == KernelTexture || e.kind == KernelTexturePlane) {
-            const Texture *t = writes ? textures_[e.slot] : cb_.readTexture(textures_[e.slot]);
+            const uint8_t slot = kernelTextureSlot(e);
+            const Texture *bound = slot < 31 ? textures_[slot] : nullptr;
+            const Texture *t = writes ? bound : cb_.readTexture(bound);
             if (t && !t->tic) {  // memoryless, or depth without ShaderRead: a load reads header 0's zeros
                 if (writes) {
                     *why = "a kernel stores a texture with no memory a shader can address";
@@ -465,6 +468,8 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
                     cb_.use(*t->sampled, writes);
             }
             uint32_t tic = t ? t->tic : 0;
+            const bool cubeAsArray =
+                t && kernelTextureArray(e) && (t->type == fx::kTexCube || t->type == fx::kTexCubeArray);
             if (const FormatInfo *f = t ? formatInfo(t->format) : nullptr) {
                 const uint32_t own = swizzledWord0(f->tic0, t->swizzle);
                 const SlotView view = slotView(e.window, f->tic0, own, f->bpp, blockCompressed(f), f->srgb);
@@ -472,13 +477,23 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
                     *why = "a kernel m2v binds a view of another texel size at a texture slot";
                     return false;
                 }
-                const uint32_t word0 = kernelTextureWord0(e.window);
-                const uint32_t targetWord0 = word0 == f->tic0 ? own : word0;
-                if (view == SlotView::View && !(tic = dev_.viewTic(*t, targetWord0, ViewAccess::Texture))) {
-                    *why = "no texture header left for a kernel's view of another format";
+                if (view == SlotView::View) {
+                    const uint32_t word0 = kernelTextureWord0(e.window);
+                    const uint32_t targetWord0 = word0 == f->tic0 ? own : word0;
+                    if (!(tic = dev_.viewTic(*t, targetWord0, ViewAccess::Texture, cubeAsArray))) {
+                        *why = "no texture header left for a kernel's view of another format";
+                        failure_ = ComputeFailure::OutOfMemory;
+                        return false;
+                    }
+                } else if (cubeAsArray && !(tic = dev_.arrayViewTic(*t))) {
+                    *why = "no texture header left for a kernel's 2D array view of a cube";
                     failure_ = ComputeFailure::OutOfMemory;
                     return false;
                 }
+            } else if (cubeAsArray && !(tic = dev_.arrayViewTic(*t))) {
+                *why = "no texture header left for a kernel's 2D array view of a cube";
+                failure_ = ComputeFailure::OutOfMemory;
+                return false;
             }
             at[0] |= tic;
         } else if (e.kind == KernelSpillTable) {
@@ -514,8 +529,9 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
             const Sampler *s = e.slot < 16 ? samplers_[e.slot] : nullptr;
             const Texture *sampled = nullptr;
             for (uint32_t j = 0; s && s->desc.border && j < r.entries; j++)
-                if (r.entry[j].kind == KernelTexture && r.entry[j].offset == e.offset && r.entry[j].slot < 31)
-                    sampled = textures_[r.entry[j].slot];
+                if (r.entry[j].kind == KernelTexture && r.entry[j].offset == e.offset &&
+                    kernelTextureSlot(r.entry[j]) < 31)
+                    sampled = textures_[kernelTextureSlot(r.entry[j])];
             const uint8_t sampledMap = levelZero ? kLevelZeroMap : map;
             const uint32_t mapped = s && sampledMap ? s->mapped[sampledMap] : 0;
             if (s && levelZero && !mapped) {

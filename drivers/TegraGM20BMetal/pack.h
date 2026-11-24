@@ -286,12 +286,18 @@ inline uint32_t handleStage(const PackEntry &e)
     return e.stage == 1 ? 0 : 1;
 }
 
-// PackEntry::pad of a handle whose sampler slot the state samples by comparison: the sampler's compare header goes there
+// PackEntry::pad of a handle: bit 0 samples by comparison; bit 1 binds a 2D-array view (m2v cube_as_array).
 constexpr uint8_t kEntryCompares = 1;
+constexpr uint8_t kEntryArrayView = 2;
 
 inline bool entryCompares(const PackEntry &e)
 {
     return e.kind != EntryUbo && e.samplerKind == SamplerSlot && (e.pad & kEntryCompares);
+}
+
+inline bool entryArrayView(const PackEntry &e)
+{
+    return e.kind == EntryTexture && (e.pad & kEntryArrayView);
 }
 
 // A buffer entry: storage, else uniform (NVK rounds its range up to the 256-byte cbuf alignment)
@@ -579,6 +585,19 @@ struct PackKernelEntry {
     // (bit 31: m2v's view format is sRGB); samplers: kernelSamplerPairs (v26)
     uint32_t window;
 };
+
+// Texture entries use slots 0-30, so bit 7 marks a 2D-array view (m2v cube_as_array).
+constexpr uint8_t kKernelTextureArray = 0x80;
+
+inline uint8_t kernelTextureSlot(const PackKernelEntry &e)
+{
+    return e.slot & ~kKernelTextureArray;
+}
+
+inline bool kernelTextureArray(const PackKernelEntry &e)
+{
+    return (e.slot & kKernelTextureArray) != 0;
+}
 
 // TEXHEAD_BL word 0 leaves bit 31 unused; texture entries store whether m2v's VkImageView is sRGB there so
 // RawTexture UNORM reads of sRGB textures do not collide with sRGB sampled reads.

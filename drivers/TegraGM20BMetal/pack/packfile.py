@@ -29,6 +29,7 @@ MAGIC = b'GM20BPK1'
 VERSION = 33
 SECTIONS = 16  # runtime/pack.h PackSectionCount
 ENTRY_COMPARES = 1  # runtime/pack.h kEntryCompares: a handle's sampler slot the state samples by comparison
+ENTRY_ARRAY_VIEW = 2  # runtime/pack.h kEntryArrayView: a handle bound as a 2D-array view (m2v cube_as_array)
 # PackIteratedBlend: count, enable, constants, uniformSlot, uniformOffset, uniformWords, reserved, alphaSource,
 # alphaDest, name, reservedName, constant[8][3], program[128]
 ITERATED = struct.Struct('<BBBBHBBIIQQ24H128I')
@@ -128,7 +129,7 @@ def entry_bytes(entries: list[dict]) -> bytearray:
             tkind = 0 if tk is None else {'slot': 2, 'fetch': 3, 'tex3d': 4, 'depth_test': 6, 'stencil_test': 7}[tk[0]]
             skind = 0 if sk is None else (1 if sk[0] == 'slot' else 2)
             stage = 1 if e.get('stage') == 'v' else 2
-            compares = ENTRY_COMPARES if e.get('compare') else 0  # pack.h kEntryCompares
+            pad = (ENTRY_COMPARES if e.get('compare') else 0) | (ENTRY_ARRAY_VIEW if e.get('array_view') else 0)
             ents += struct.pack(
                 '<HBBBBBB',
                 e['off'],
@@ -137,7 +138,7 @@ def entry_bytes(entries: list[dict]) -> bytearray:
                 0 if tk is None else tk[1],
                 skind,
                 0 if sk is None else sk[1],
-                compares,
+                pad,
             )
     if len(entries) < PACK_ENTRIES:
         ents += bytes(8 * (PACK_ENTRIES - len(entries)))

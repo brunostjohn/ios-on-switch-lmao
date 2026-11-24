@@ -488,7 +488,8 @@ public:
     // of the same texel size; a storage view of a multisampled texture spans its sample grid), made on first use and freed
     // with t's header; 0: no header slot left. The encoding thread's: what it answered is kept there and answered again
     // with no lock (view_cache.h, keyed as viewTics_)
-    uint32_t viewTic(const Texture &t, uint32_t word0, ViewAccess access = ViewAccess::Texture);
+    uint32_t viewTic(const Texture &t, uint32_t word0, ViewAccess access = ViewAccess::Texture, bool asArray = false);
+    uint32_t arrayViewTic(const Texture &t);
     // The header of view `v` of `owner`, an attachment's image (v.part) or the attachment itself (attachment_view.h),
     // made on first use and freed with owner's header; 0: none (`why`)
     uint32_t attachmentViewTic(const Texture &owner, const AttachmentView &v, const char **why);

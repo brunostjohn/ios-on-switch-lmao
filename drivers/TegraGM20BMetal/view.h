@@ -78,6 +78,17 @@ inline SlotView slotView(uint32_t window, uint32_t tic0, uint32_t own, uint32_t 
     return !blocks && texelBytes(word0) == bytes ? SlotView::View : SlotView::None;
 }
 
+// Reinterprets a cube or cube-array header as a 2D array of its 6 * cubes faces (TEXTURE_TYPE = TWO_D_ARRAY,
+// DEPTH_MINUS_ONE = 6 * cubes - 1), preserving format, swizzle, base VA, mip range and S_R_G_B_CONVERSION.
+inline void arrayViewHeader(const uint32_t own[8], uint32_t out[8])
+{
+    for (int i = 0; i < 8; i++)
+        out[i] = own[i];
+    const uint32_t cubes = ((own[5] >> 16) & 0x3fffu) + 1u;
+    out[4] = (out[4] & ~(0xfu << 23)) | (5u << 23);
+    out[5] = (out[5] & ~(0x3fffu << 16)) | ((cubes * 6u - 1u) << 16);
+}
+
 // The header of the texture headed by `own` viewed as word 0 `word0`. No sRGB conversion: m2v reads and writes an
 // sRGB texture in a kernel through its UNORM twin, encoding in the shader, and NVK's view of a format of other data
 // types converts none.
@@ -87,10 +98,15 @@ inline SlotView slotView(uint32_t window, uint32_t tic0, uint32_t own, uint32_t 
 // MULTI_SAMPLE_COUNT and bounds each load and store by WIDTH and HEIGHT alone, while NAK addresses each sample at its
 // place in the grid (nak_nir_lower_tex.c lower_msaa_image_access, which reads MULTI_SAMPLE_COUNT through TXQ). At the
 // pixel extent every surface op outside the grid's top-left width x height is dropped.
-inline void viewHeader(const uint32_t own[8], uint32_t word0, uint32_t out[8], uint8_t sxLog2 = 0, uint8_t syLog2 = 0)
+inline void viewHeader(const uint32_t own[8], uint32_t word0, uint32_t out[8], uint8_t sxLog2 = 0, uint8_t syLog2 = 0,
+                       bool asArray = false)
 {
-    for (int i = 0; i < 8; i++)
-        out[i] = own[i];
+    if (asArray) {
+        arrayViewHeader(own, out);
+    } else {
+        for (int i = 0; i < 8; i++)
+            out[i] = own[i];
+    }
     out[0] = word0;
     out[4] &= ~(1u << 22);                                                     // S_R_G_B_CONVERSION (bit 150)
     out[4] = (out[4] & ~0xffffu) | ((((out[4] & 0xffff) + 1) << sxLog2) - 1);  // WIDTH_MINUS_ONE (143:128)

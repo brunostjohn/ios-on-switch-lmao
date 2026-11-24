@@ -12,6 +12,7 @@ import struct
 import packfile
 
 CONSTEXPR = 0x80  # PackKernelEntry.slot of a constexpr sampler: its index in the pack's constexpr samplers
+TEXTURE_ARRAY = 0x80  # PackKernelEntry.slot bit 7: 2D-array view (runtime/pack.h kKernelTextureArray)
 # runtime/pack.h PackKernelEntryKind
 BUFFER, TEXTURE, SAMPLER, TEXTURE_TABLE, SAMPLER_TABLE, SPILL_TABLE, TEXTURE_PLANE = range(7)
 TWO_PLANES = 'xr2p'  # a tex= field's mark of an RGB10A8_2P_XR10 texture held in two planes (runtime/compute_key.h)
@@ -83,15 +84,16 @@ def views_other_texel_size(key: str, entries: list[dict]) -> list[int]:
         if e['kind'] not in PLANE_BYTES or not e['window']:
             continue
         texel = TEXEL_BYTES.get(e['window'] & 0x7F)
-        if e['slot'] in planes:
+        slot = e['slot'] & ~TEXTURE_ARRAY
+        if slot in planes:
             fmt = PLANE_BYTES[e['kind']]
         elif e['kind'] == TEXTURE_PLANE:
-            other.append(e['slot'])
+            other.append(slot)
             continue
         else:
-            fmt = FORMAT_BYTES.get(bound.get(e['slot'], -1))
+            fmt = FORMAT_BYTES.get(bound.get(slot, -1))
         if texel and fmt and texel != fmt:
-            other.append(e['slot'])
+            other.append(slot)
     return other
 
 

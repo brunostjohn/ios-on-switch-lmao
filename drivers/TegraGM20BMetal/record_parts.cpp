@@ -163,6 +163,8 @@ bool handleEntry(const LayoutEntry &e, RuntimeRecord &rec, PackEntry &p, std::st
         break;
     }
     }
+    if (e.texArrayView)
+        p.pad |= kEntryArrayView;
     return true;
 }
 
