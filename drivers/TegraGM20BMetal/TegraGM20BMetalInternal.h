@@ -205,6 +205,7 @@ struct GM20BState {
     // the submit worker is about to wait or waits for a change: a command buffer's hand-offs after its first wake it only
     // then (gm20bPublishEncoder; with its _published, a store then a load on each side, both sequentially consistent)
     std::atomic<bool> submitAsleep{false};
+    std::atomic<uint32_t> submitThread{0};  // mach thread port name of submitLoop, for OwnedWord priority inheritance
     // ranges handed to the kernel and not completed (gm20bRangeHandedOff): the idle deadline's drain and its
     // in-flight count, which a command buffer parked on an event the CPU has not signalled holds no part of
     std::atomic<uint32_t> rangesInFlight{0};
@@ -544,6 +545,9 @@ void gm20bPoolEncoders();
 void gm20bPoolCommandBuffers();
 // cb's state changed: its waiters woken, with no lock
 void gm20bChanged(SwitchMetalCommandBuffer *cb);
+void gm20bSetCompileWaits(SwitchMetalCommandBuffer *cb, std::vector<std::function<bool()>> waits);
+void gm20bClearCompileWaits(SwitchMetalCommandBuffer *cb);
+void gm20bNoteCompileWaitReady(SwitchMetalCommandBuffer *cb);
 // its scheduled or completed handlers (`list`) taken, once its sent flag was exchanged: under its lock only where `added`
 // says one was added
 NSArray *gm20bTakeHandlers(SwitchMetalCommandBuffer *cb, NSMutableArray *__strong &list, std::atomic<bool> &added);
@@ -601,7 +605,8 @@ void submitLoop();
 bool admitComputeDispatch(SwitchMetalCommandBuffer *cb, size_t at,
                           const gm20b::ComputeKernelSet<gm20b::ComputeState> *kernels, const char **why);
 // 1 ready, 0 still being made, -1 refused (`why`), -2 failed to compile
-int computeReadiness(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &range, const char **why);
+int computeReadiness(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &range, const char **why,
+                     std::vector<std::function<bool()>> &compileWaits);
 // TegraGM20BMetalComputeAdmission.mm: an admitted dispatch's textures and buffers, and the encoder's resources it may reach
 void kernelUses(SwitchMetalCommandBuffer *cb, size_t at, std::vector<gm20b::KernelUse> &uses);
 

@@ -303,7 +303,8 @@ bool admitComputeDispatch(SwitchMetalCommandBuffer *cb, size_t at,
     return true;
 }
 
-int computeReadiness(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &range, const char **why)
+int computeReadiness(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &range, const char **why,
+                     std::vector<std::function<bool()>> &compileWaits)
 {
     using Job = gm20b::ComputeKernelSet<gm20b::ComputeState>;
     const auto &dispatches = cb->_plan.pendingComputes(range.from, range.to);
@@ -313,7 +314,8 @@ int computeReadiness(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &ran
     for (size_t at : dispatches) {
         auto *job = static_cast<Job *>(cb->_plan.dispatch(at).pending);
         std::function<void()> observer;
-        if (cb->_variantObserved.insert(job).second) {
+        const bool firstSeen = cb->_variantObserved.insert(job).second;
+        if (firstSeen) {
             void *queue = (__bridge void *)cb->_queue;
             observer = [queue] {
                 wakeSubmit(queue);
@@ -328,8 +330,20 @@ int computeReadiness(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &ran
             *why = "a compute kernel the shader compiler refused";
             return -1;
         }
-        if (state == Job::State::Pending)
+        if (state == Job::State::Pending) {
             pending = true;
+            if (firstSeen) {
+                __weak SwitchMetalCommandBuffer *weakCb = cb;
+                job->observeWait([weakCb] {
+                    if (SwitchMetalCommandBuffer *strong = weakCb)
+                        gm20bNoteCompileWaitReady(strong);
+                });
+            }
+            if (auto it = cb->_computeJobs.find(job); it != cb->_computeJobs.end())
+                compileWaits.push_back([keep = it->second] {
+                    return keep->waitPending();
+                });
+        }
     }
     if (pending)
         return 0;

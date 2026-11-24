@@ -136,6 +136,81 @@ void aPendingVariantIsNotEncodedAhead(unsigned cubicPass)
     EXPECT_EQ(size_t(madeDraws + baseDraws), drawn.size());
 }
 
+// A client thread calling waitUntilScheduled on a command buffer parked on HeadWait::compile must enter
+// kernel CompileWait (0x534b) to donate its priority to the compiler worker while submitLoop stays free
+// to submit unrelated queues' command buffers.
+void waitingOnParkedVariantEntersCompileWaitWithoutBlockingAnotherQueue()
+{
+    RenderCompiler compiler;
+    AsyncCompileTracker tracker;
+    const std::string directory = dir() + "/compile-wait-" + std::to_string(getpid());
+    mkdir(directory.c_str(), 0700);
+    ASSERT_TRUE(compiler.serve(directory));
+    const auto held = std::make_shared<HeldCompile>();
+    kernel_model::model.compiler = [held, compile = kernel_model::model.compiler](const std::string &bytes) {
+        gm20b::CompileRequest request;
+        if (gm20b::decodeRequest(bytes, request) && !request.variant.cubic.empty()) {
+            std::unique_lock<std::mutex> l(held->lock);
+            held->opened.wait(l, [&] {
+                return !held->held;
+            });
+        }
+        return compile(bytes);
+    };
+    NSString *why = nil;
+    id<MTLDevice> device = metal_device_open(
+        writePack(packKey(MTLPixelFormatBGRA8Unorm), {}, {}, true, "", {}, kSampled).c_str(), 0, 0, &why);
+    ASSERT_TRUE(device != nil) << (why ? why.UTF8String : "");
+    const std::string cache = directory + "/cache";
+    mkdir(cache.c_str(), 0700);
+    metal_complete_states(cache.c_str(), nullptr);
+    id<MTLLibrary> library = [device newLibraryWithURL:[NSURL fileURLWithPath:@(writeMetallib().c_str())] error:nil];
+    ASSERT_TRUE(library != nil);
+    id<MTLRenderPipelineState> state =
+        [device newRenderPipelineStateWithDescriptor:descriptor(library, MTLPixelFormatBGRA8Unorm) error:nil];
+    id<MTLTexture> sampled = image(device, MTLTextureUsageShaderRead);
+    id<MTLTexture> targetA = image(device, MTLTextureUsageRenderTarget);
+    id<MTLTexture> targetB = image(device, MTLTextureUsageRenderTarget);
+    id<MTLSamplerState> cubic = cubicSampler(device);
+    ASSERT_TRUE(state != nil && sampled != nil && targetA != nil && targetB != nil && cubic != nil);
+
+    id<MTLCommandQueue> queueA = [device newCommandQueue];
+    id<MTLCommandQueue> queueB = [device newCommandQueue];
+
+    id<MTLCommandBuffer> cbA = [queueA commandBuffer];
+    id<MTLRenderCommandEncoder> encA = [cbA renderCommandEncoderWithDescriptor:colourPass(targetA, MTLLoadActionClear)];
+    [encA setRenderPipelineState:state];
+    texture(encA, 2, sampled);
+    sampler(encA, 2, cubic);
+    [encA drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encA endEncoding];
+    [cbA commit];
+
+    std::thread waiterA([&] {
+        [cbA waitUntilScheduled];
+    });
+
+    // While queueA is parked waiting on the held cubic compile, an unrelated queue must complete immediately.
+    id<MTLCommandBuffer> cbB = [queueB commandBuffer];
+    id<MTLRenderCommandEncoder> encB = [cbB renderCommandEncoderWithDescriptor:colourPass(targetB, MTLLoadActionClear)];
+    [encB setRenderPipelineState:state];
+    texture(encB, 2, sampled);
+    [encB drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encB endEncoding];
+    [cbB commit];
+    [cbB waitUntilCompleted];
+    EXPECT_EQ(cbB.status, MTLCommandBufferStatusCompleted);
+
+    // waiterA must enter kernel CompileWait for cbA's pending cubic variant while the compile is held.
+    const bool enteredCompileWait = tracker.waitForCompileWait(1, std::chrono::milliseconds(1500));
+    held->open();
+    waiterA.join();
+    [cbA waitUntilCompleted];
+    EXPECT_TRUE(enteredCompileWait)
+        << "waitUntilScheduled on a command buffer parked on HeadWait::compile never entered CompileWait";
+    EXPECT_EQ(cbA.status, MTLCommandBufferStatusCompleted) << cbA.error.description.UTF8String;
+}
+
 }  // namespace
 
 TEST(GM20BFacadePendingVariant, ABindingOfAVariantStillBeingMadeIsNotEncodedAhead)
@@ -149,5 +224,12 @@ TEST(GM20BFacadePendingVariant, PassesBeforeABindingOfAVariantStillBeingMadeAreE
 {
     switch_ios::test::ExpectPassesInFreshProcess([] {
         aPendingVariantIsNotEncodedAhead(2);
+    });
+}
+
+TEST(GM20BFacadePendingVariant, WaitingOnParkedVariantEntersCompileWaitWithoutBlockingAnotherQueue)
+{
+    switch_ios::test::ExpectPassesInFreshProcess([] {
+        waitingOnParkedVariantEntersCompileWaitWithoutBlockingAnotherQueue();
     });
 }

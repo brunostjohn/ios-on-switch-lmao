@@ -477,6 +477,14 @@ void Service::serve()
     hooks.lower = [](void *token) {
         pthread_override_qos_class_end_np(static_cast<pthread_override_t>(token));
     };
+    hooks.registerWorker = [this](uint32_t worker) {
+        const TegraGM20BAbiCompilerServe in = {0, worker, 0};
+        call(TegraGM20BMethodCompilerServe, &in, sizeof in, nullptr, 0);
+    };
+    hooks.serve = [this](uint64_t id, uint32_t worker) {
+        const TegraGM20BAbiCompilerServe in = {id, worker, 0};
+        call(TegraGM20BMethodCompilerServe, &in, sizeof in, nullptr, 0);
+    };
     hooks.idle = idle;
     pool_ = std::make_unique<Pool>(std::move(hooks));
     std::thread([this] {

@@ -128,10 +128,12 @@ static void dispatchScheduled(SwitchMetalCommandBuffer *cb, NSArray *handlers)
         cb->_frame.mark(switch_frame::Scheduled);
 #endif
         cb->_scheduledDone = true;
+        cb->_submitOwner.clear();
         gm20bChanged(cb);
         return;
     }
     cb->_handlersQueued = true;
+    cb->_submitOwner.clear();
     dispatch_async(cb->_queue->_handlers, ^{
         for (MTLCommandBufferHandler h in handlers)
             h((id<MTLCommandBuffer>)cb);
@@ -139,6 +141,7 @@ static void dispatchScheduled(SwitchMetalCommandBuffer *cb, NSArray *handlers)
         cb->_frame.mark(switch_frame::Scheduled);
 #endif
         cb->_scheduledDone = true;
+        cb->_submitOwner.clear();
         gm20bChanged(cb);
     });
 }
@@ -332,6 +335,8 @@ static void completeBuffer(SwitchMetalCommandBuffer *cb)
         gm20bRecordingDone(cur);
         cur->_scheduledDone = true;
         cur->_completedDone = true;
+        gm20bClearCompileWaits(cur);
+        cur->_submitOwner.clear();
         gm20bChanged(cur);
         gRM->committed.fetch_sub(1, std::memory_order_acq_rel);
 #if SWITCH_FRAME_TIMELINE
@@ -485,8 +490,11 @@ void finish(SwitchMetalCommandBuffer *cb, NSError *error)
         return;
     }
     // A failed command buffer submits no more: its waitUntilScheduled returns now, not once its earlier work completes
-    if (error)
+    if (error) {
+        gm20bClearCompileWaits(cb);
+        cb->_submitOwner.clear();
         gm20bChanged(cb);
+    }
 }
 
 // It submits no more and nothing of it is in flight: completed, once (finish_state.h)
@@ -557,6 +565,8 @@ static void finished(SwitchMetalCommandBuffer *cb)
         finishScheduledTurn(cb);
     }
     const bool behindScheduled = cb->_handlersQueued;
+    gm20bClearCompileWaits(cb);
+    cb->_submitOwner.clear();
     gm20bChanged(cb);
 #if SWITCH_METAL_DIAGNOSTICS
     if (cb->_gpuStamped)

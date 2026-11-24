@@ -87,6 +87,7 @@ SWITCH_OBJECTS = {
         ("osfmk/kern/sched_prim.c", "diag/stall_frame.c", []),
         ("osfmk/kern/sched_prim.c", "diag/heartbeat.c", []),
         ("osfmk/kern/sched_prim.c", "sched/busy.c", []),
+        ("osfmk/kern/sched_prim.c", "sched/user_turnstile.c", []),
         ("osfmk/kern/sched_prim.c", "diag/unnest.c", []),
         ("osfmk/vm/bsd_vm.c", "diag/pagein.c", []),
         ("osfmk/vm/vm_pageout.c", "vm/prefetch_vm.c", []),

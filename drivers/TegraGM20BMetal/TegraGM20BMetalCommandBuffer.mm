@@ -15,6 +15,38 @@ void gm20bChanged(SwitchMetalCommandBuffer *cb)
     cb->_changes.changed();
 }
 
+void gm20bSetCompileWaits(SwitchMetalCommandBuffer *cb, std::vector<std::function<bool()>> waits)
+{
+    {
+        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        cb->_compileWaits = std::move(waits);
+    }
+    cb->_compileWaitGen.fetch_add(1, std::memory_order_acq_rel);
+    cb->_submitOwner.clear();
+    gm20bChanged(cb);
+}
+
+void gm20bClearCompileWaits(SwitchMetalCommandBuffer *cb)
+{
+    std::vector<std::function<bool()>> cleared;
+    {
+        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        cleared.swap(cb->_compileWaits);
+    }
+}
+
+void gm20bNoteCompileWaitReady(SwitchMetalCommandBuffer *cb)
+{
+    cb->_compileWaitGen.fetch_add(1, std::memory_order_acq_rel);
+    gm20bChanged(cb);
+}
+
+static std::vector<std::function<bool()>> copyCompileWaits(SwitchMetalCommandBuffer *cb)
+{
+    std::lock_guard<gm20b::Mutex> l(cb->_lock);
+    return cb->_compileWaits;
+}
+
 NSArray *gm20bTakeHandlers(SwitchMetalCommandBuffer *cb, NSMutableArray *__strong &list, std::atomic<bool> &added)
 {
     if (!added.load())
@@ -34,7 +66,41 @@ static bool presents(id<MTLCommandBuffer> cb)
 
 template <typename Done> static void waitFor(SwitchMetalCommandBuffer *cb, Done &&done)
 {
-    cb->_changes.waitFor(done);
+    uint32_t triedCompileGen = 0;
+    uint32_t failedOwner = 0;
+    for (;;) {
+        if (done())
+            return;
+        const uint32_t gen = cb->_compileWaitGen.load(std::memory_order_acquire);
+        if (gen != 0 && gen != triedCompileGen) {
+            bool retry = false;
+            for (const auto &wait : copyCompileWaits(cb)) {
+                if (done())
+                    return;
+                if (wait && wait()) {
+                    retry = true;
+                    break;
+                }
+            }
+            if (!retry)
+                triedCompileGen = gen;
+            continue;
+        }
+        const uint32_t owner = cb->_submitOwner.owner();
+        const uint32_t self = gm20b::OwnedWord::currentOwner();
+        if (owner && owner != failedOwner && owner != self) {
+            if (cb->_submitOwner.waitOnce(done))
+                continue;
+            if (cb->_submitOwner.owner() == owner)
+                failedOwner = owner;
+            continue;
+        }
+        cb->_changes.waitOnce([&] {
+            const uint32_t curOwner = cb->_submitOwner.owner();
+            const bool usableOwner = curOwner && curOwner != failedOwner && curOwner != self;
+            return done() || usableOwner || cb->_compileWaitGen.load(std::memory_order_acquire) != triedCompileGen;
+        });
+    }
 }
 
 // On the thread that let go of the last reference, which may not be the one that completed it. The completion's last

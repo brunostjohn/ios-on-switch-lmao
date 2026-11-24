@@ -259,6 +259,8 @@ void commitBuffer(SwitchMetalCommandBuffer *cb)
 #endif
     armEventWaits(cb);
     SWITCH_METAL_DIAGNOSTIC(r.stats.deferred++);
+    if (const uint32_t submitter = r.submitThread.load(std::memory_order_acquire))
+        cb->_submitOwner.setOwner(submitter);
     r.schedule.push({SwitchMetalScheduleChange::Commit, cb});
 }
 
@@ -476,6 +478,7 @@ static void applyChange(GM20BState &r, const SwitchMetalScheduleChange &change)
             promiseWrites(cb, writtenSurfaces(cb));
             cb->_held = true;
             armBound(cb, cb->_queue->_heldBound);
+            cb->_submitOwner.clear();
             gm20bChanged(cb);
         } else {
             const bool workerBusy = r.waiting.committed() > 1 || r.waiting.parked() != 0;
@@ -513,14 +516,16 @@ static NSError *refusedAtReadiness(const char *why)
                            userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"%s", why ?: ""]}];
 }
 
-static int variantReadiness(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &range, const char **why)
+static int variantReadiness(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &range, const char **why,
+                            std::vector<std::function<bool()>> &compileWaits)
 {
     using Variant = gm20b::Variant<gm20b::Pipeline>;
     bool pending = false;
     for (void *object : cb->_plan.renderVariants(range.from, range.to)) {
         auto *variant = static_cast<Variant *>(object);
         std::function<void()> observer;
-        if (cb->_variantObserved.insert(object).second) {
+        const bool firstSeen = cb->_variantObserved.insert(object).second;
+        if (firstSeen) {
             void *queue = (__bridge void *)cb->_queue;
             observer = [queue] {
                 wakeSubmit(queue);
@@ -533,8 +538,20 @@ static int variantReadiness(SwitchMetalCommandBuffer *cb, const SwitchMetalSegme
             *why = "a render state variant the shader compiler refused";
             return -1;
         }
-        if (state == Variant::State::Pending)
+        if (state == Variant::State::Pending) {
             pending = true;
+            if (firstSeen) {
+                __weak SwitchMetalCommandBuffer *weakCb = cb;
+                variant->observeWait([weakCb] {
+                    if (SwitchMetalCommandBuffer *strong = weakCb)
+                        gm20bNoteCompileWaitReady(strong);
+                });
+            }
+            if (auto keep = variant->weak_from_this().lock())
+                compileWaits.push_back([keep = std::move(keep)] {
+                    return keep->waitPending();
+                });
+        }
     }
     return pending ? 0 : 1;
 }
@@ -566,8 +583,10 @@ static void markHeld(std::vector<SwitchMetalCommandBuffer *> &buffers, bool held
         cb->_held = held;
         if (held && cb != head)
             armBound(cb, cb->_queue->_heldBound);
-        if (held)
+        if (held) {
+            cb->_submitOwner.clear();
             gm20bChanged(cb);
+        }
     }
     buffers.clear();
 }
@@ -586,6 +605,8 @@ void submitLoop()
 {
     GM20BState &r = *gRM;
     tSubmitWorker = true;
+    const uint32_t selfPort = gm20b::OwnedWord::currentOwner();
+    r.submitThread.store(selfPort, std::memory_order_release);
     std::vector<SwitchMetalCommandBuffer *> marked;
     for (;;) {
         @autoreleasepool {
@@ -623,11 +644,18 @@ void submitLoop()
             }
             const uint64_t judged = r.progress.visit();
             SwitchMetalCommandBuffer *cb = ticket.value;
+            gm20bClearCompileWaits(cb);
+            if (!cb->_scheduledSent.load(std::memory_order_acquire) && !cb->_held.load(std::memory_order_acquire) &&
+                !cb->_submitOwner.hasOwner()) {
+                cb->_submitOwner.setOwner(selfPort);
+                gm20bChanged(cb);
+            }
             SWITCH_METAL_DIAGNOSTIC(gm20bNoteTaken(cb));
             auto deadline = gm20b::EventDeadline::Time::max();
             uint32_t dependencies = 0;
             bool blocked = false;
             gm20b::HeadWait wait = gm20b::HeadWait::signal;
+            std::vector<std::function<bool()>> compileWaits;
             const auto failed = [cb]() -> NSError * {
                 if (!cb->_segError.set())
                     return nil;
@@ -652,9 +680,9 @@ void submitLoop()
                     dependencies = SwitchMetalRawProgress;
                 } else if (!range.event) {
                     const char *why = "";
-                    int ready = variantReadiness(cb, range, &why);
+                    int ready = variantReadiness(cb, range, &why, compileWaits);
                     if (ready > 0)
-                        ready = computeReadiness(cb, range, &why);
+                        ready = computeReadiness(cb, range, &why, compileWaits);
                     if (ready == -2) {
                         error = [NSError
                             errorWithDomain:MTLCommandBufferErrorDomain
@@ -674,6 +702,10 @@ void submitLoop()
                     continue;
                 }
                 r.waiting.park(ticket, dependencies, deadline);
+                if (wait == gm20b::HeadWait::compile)
+                    gm20bSetCompileWaits(cb, std::move(compileWaits));
+                else
+                    cb->_submitOwner.clear();
                 SWITCH_METAL_DIAGNOSTIC(gm20bNoteParked(cb, unsigned(wait)));
                 if (!gm20b::holds(wait)) {
                     markHeld(marked, true);
@@ -700,6 +732,7 @@ void submitLoop()
             }
             r.waiting.release(ticket.key, marked);
             if (submitted) {
+                cb->_submitOwner.clear();
                 r.waiting.retire(ticket);
                 markQueueScheduled(cb);
                 releaseEarlyPromised(cb);

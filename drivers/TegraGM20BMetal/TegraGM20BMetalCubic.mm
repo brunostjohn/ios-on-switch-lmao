@@ -101,6 +101,9 @@ static gm20b::Variant<gm20b::Pipeline> *renderVariant(SwitchMetalPipeline *p, co
     request.own = !p->_packable;
     request.variant = forms;
     request.resolveDescriptor = true;
+    request.bindWait = [variant](std::function<bool()> wait) {
+        variant->setWait(std::move(wait));
+    };
     completion->askVariant(std::move(request), [variant, key](gm20b::Pipeline *made, const std::string &failure) {
         if (made)
             variant->publish(made);
@@ -116,17 +119,48 @@ static void awaitSettled(const std::vector<gm20b::Variant<gm20b::Pipeline> *> &v
 {
     if (variants.empty())
         return;
-    dispatch_semaphore_t settled = dispatch_semaphore_create(0);
-    size_t pending = 0;
+
+    struct State {
+        gm20b::ChangeWord changed;
+        std::atomic<uint32_t> waitGen{1};
+    };
+
+    auto shared = std::make_shared<State>();
     for (gm20b::Variant<gm20b::Pipeline> *variant : variants) {
-        const auto state = variant->observe([settled] {
-            dispatch_semaphore_signal(settled);
-        });
-        if (state == gm20b::Variant<gm20b::Pipeline>::State::Pending)
-            pending++;
+        if (variant->observe([shared] {
+                shared->changed.changed();
+            }) == gm20b::Variant<gm20b::Pipeline>::State::Pending) {
+            variant->observeWait([shared] {
+                shared->waitGen.fetch_add(1, std::memory_order_acq_rel);
+                shared->changed.changed();
+            });
+        }
     }
-    for (; pending; pending--)
-        dispatch_semaphore_wait(settled, DISPATCH_TIME_FOREVER);
+    const auto allSettled = [&] {
+        for (gm20b::Variant<gm20b::Pipeline> *variant : variants)
+            if (variant->state() == gm20b::Variant<gm20b::Pipeline>::State::Pending)
+                return false;
+        return true;
+    };
+    uint32_t triedGen = 0;
+    while (!allSettled()) {
+        const uint32_t gen = shared->waitGen.load(std::memory_order_acquire);
+        if (gen != triedGen) {
+            bool retry = false;
+            for (gm20b::Variant<gm20b::Pipeline> *variant : variants) {
+                if (variant->state() == gm20b::Variant<gm20b::Pipeline>::State::Pending && variant->waitPending()) {
+                    retry = true;
+                    break;
+                }
+            }
+            if (!retry)
+                triedGen = gen;
+            continue;
+        }
+        shared->changed.waitOnce([&] {
+            return allSettled() || shared->waitGen.load(std::memory_order_acquire) != triedGen;
+        });
+    }
 }
 
 // The test classes drawnTests (shader_test_push.h) can give a draw of `pl` in a pass of the creation's depth and

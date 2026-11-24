@@ -585,7 +585,10 @@ static inline void gm20bRunDeferredPresent(const SwitchMetalDeferredPresent &p)
     // list's flag is set, and the lists are taken under _lock only where the flag says one was added: taking exchanges the
     // sent flag first, so no handler is both missed and not run (gm20bTakeHandlers).
     std::atomic<bool> _scheduledSent, _submittedAll, _completedSent, _hasScheduledHandlers, _hasCompletedHandlers;
-    gm20b::ChangeWord _changes;  // a state change its waits read (gm20bChanged), with no lock (word_wait.h)
+    gm20b::ChangeWord _changes;     // a state change its waits read (gm20bChanged), with no lock (word_wait.h)
+    gm20b::OwnedWord _submitOwner;  // submitLoop's thread port while committed and actively queued for submission
+    std::atomic<uint32_t> _compileWaitGen;
+    std::vector<std::function<bool()>> _compileWaits;  // under _lock: blocking compile waits while parked
     gm20b::Mutex _lock;
     uint32_t _seqno;
     uint32_t _stamp;  // its raw submission's GPU time stamps (gm20b::CommandBuffer::stamp), 0 for any other

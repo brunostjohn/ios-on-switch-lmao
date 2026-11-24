@@ -3008,10 +3008,14 @@ host_shims(
     headers = [
         "IOKit/IOBufferMemoryDescriptor.h",
         "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
         "IOKit/IOMemoryDescriptor.h",
         "IOKit/IOUserClient.h",
+        "kern/locks.h",
+        "kern/thread.h",
         "libkern/c++/OSBoolean.h",
         "pexpert/pexpert.h",
+        "switch/user_turnstile.h",
     ],
     stubs = "switch_gpu_async_rights_stubs.h",
 )
@@ -3050,6 +3054,17 @@ host_library(
 host_test(
     name = "switch_gpu_compiler_rights_test",
     srcs = ["switch_gpu_compiler_rights_test.cpp"],
+    copts = ["-Idrivers/TegraGM20B"],
+    defines = ["DEVELOPMENT=1"],
+    deps = [
+        ":async_rights_kernel",
+        ":compiler_broker",
+    ],
+)
+
+host_test(
+    name = "switch_gpu_compiler_turnstile_test",
+    srcs = ["switch_gpu_compiler_turnstile_test.cpp"],
     copts = ["-Idrivers/TegraGM20B"],
     defines = ["DEVELOPMENT=1"],
     deps = [

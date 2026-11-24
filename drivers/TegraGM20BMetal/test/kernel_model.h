@@ -190,6 +190,8 @@ struct Model {
     uint64_t storeBytes = 0;
     uint32_t storeGeneration = 1;
     std::function<int32_t(const std::string &request)> compiler;
+    bool asyncCompile = false;
+    std::function<int(uint64_t cookie)> compileWait;
     std::vector<std::string> compileRequests;  // each compile's request bytes, as the client sent them
 
     struct CompileCall {
@@ -690,6 +692,7 @@ inline Model &model = *new Model;
 // held through every call but a WaitFence, and by a test GPU's reads of the model
 inline std::mutex &callLock = *new std::mutex;
 constexpr io_connect_t kFirstConnection = 42;
+constexpr uint32_t kMethodCompileWait = 0x534b;
 
 // What a test put in the model for a device's threads to call or read, under callLock: each connection's bound,
 // jobAdded and compiler hooks and the compiler store it served, which the model reads and calls only under callLock, so
@@ -705,6 +708,8 @@ inline void clearHooks()
         m.jobAdded = nullptr;
         m.promiseCalled = nullptr;
         m.compiler = nullptr;
+        m.asyncCompile = false;
+        m.compileWait = nullptr;
         m.compilerFlags = 0;
         m.store = nullptr;
         m.storeBytes = 0;
@@ -745,7 +750,7 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
             return kr;
     kernel_model::Model &model = kernel_model::connected(connection);
     std::unique_lock<std::mutex> hold(kernel_model::callLock, std::defer_lock);
-    if (method != TegraGM20BMethodWaitFence)
+    if (method != TegraGM20BMethodWaitFence && method != kernel_model::kMethodCompileWait)
         hold.lock();
     switch (method) {
     case TegraGM20BMethodGetInfo: {
@@ -914,6 +919,16 @@ extern "C" kern_return_t IOConnectCallStructMethod(mach_port_t connection, uint3
         }
         reply.result = model.compileResults[at];
         return KERN_SUCCESS;
+    }
+    case kernel_model::kMethodCompileWait: {
+        std::function<int(uint64_t)> wait;
+        {
+            std::lock_guard<std::mutex> l(kernel_model::callLock);
+            wait = model.compileWait;
+        }
+        if (!wait || !input)
+            return kIOReturnNotFound;
+        return wait(*static_cast<const uint64_t *>(input));
     }
     case TegraGM20BMethodSurfaceLayout:
         *static_cast<TegraGM20BAbiSurfaceLayoutReply *>(output) = {model.surfaceLayout, 0};

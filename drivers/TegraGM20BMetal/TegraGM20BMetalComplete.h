@@ -55,6 +55,7 @@ public:
         MTLRenderPipelineDescriptor *facade = nil;
         uint32_t qos = 0;  // ask(): the asking thread's class, which the compiler runs it at
         bool waited = true;
+        std::function<void(std::function<bool()>)> bindWait;
     };
 
     // The state's pipeline handed to `ready` once made, or null for a permanent refusal. Temporary allocation
@@ -147,7 +148,7 @@ private:
     gm20b::Mutex kernelLock_;  // map membership only; each kernel owns its single-flight lock
     std::map<uint64_t, std::shared_ptr<Kernel>> kernels_;
 
-    std::unique_ptr<Remote> remote_;
+    std::shared_ptr<Remote> remote_;
 
     bool keyOf(Ask &a, CacheKey &k);
 

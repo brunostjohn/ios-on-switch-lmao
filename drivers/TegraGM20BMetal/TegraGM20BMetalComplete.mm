@@ -76,7 +76,7 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, con
         return Compiler::Outcome::Failed;
     });
     const gm20b::Kernel &kernel = device_.kernel();
-    remote_ = std::make_unique<Remote>(
+    remote_ = std::make_shared<Remote>(
         KernelTransport{kernel.connection(), kernel.tunnelled(), kernel.tunnelSelector()}, stack_);
     Remote *remote = remote_.get();
     const RecordCache *cache = &cache_;

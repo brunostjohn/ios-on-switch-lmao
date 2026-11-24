@@ -233,6 +233,136 @@ TEST(GM20BFacadeHandlers, CompositorEarlyScheduledFramesKeepOrder)
     switch_ios::test::ExpectPassesInFreshProcess(compositorEarlyScheduledFramesKeepOrder);
 }
 
+void earlyScheduledWaitUntilScheduledReturnsBeforeGpuCompletion()
+{
+    const std::string pack = harness::writePack(harness::packKey(MTLPixelFormatBGRA8Unorm));
+    const std::string metallib = harness::writeMetallib();
+    metal_prepare(pack.c_str(), 0);
+    id<MTLDevice> device = harness::open(pack);
+    ASSERT_NE(device, nil);
+    NSError *error = nil;
+    id<MTLLibrary> library = [device newLibraryWithURL:[NSURL fileURLWithPath:@(metallib.c_str())] error:&error];
+    ASSERT_NE(library, nil);
+    id<MTLRenderPipelineState> state =
+        [device newRenderPipelineStateWithDescriptor:harness::descriptor(library, MTLPixelFormatBGRA8Unorm)
+                                               error:&error];
+    ASSERT_NE(state, nil);
+
+    IOSurfaceRef surface = IOSurfaceCreate((__bridge CFDictionaryRef) @{
+        (id)kIOSurfaceWidth : @64,
+        (id)kIOSurfaceHeight : @64,
+        (id)kIOSurfaceBytesPerElement : @4,
+        (id)kIOSurfaceBytesPerRow : @256,
+        (id)kIOSurfaceAllocSize : @(64 * 256),
+        (id)kIOSurfacePixelFormat : @(uint32_t('BGRA'))
+    });
+    ASSERT_NE(surface, nullptr);
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                  width:64
+                                                                                 height:64
+                                                                              mipmapped:NO];
+    td.storageMode = MTLStorageModeShared;
+    td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    id<MTLTexture> target = [device newTextureWithDescriptor:td iosurface:surface plane:0];
+    CFRelease(surface);
+    ASSERT_NE(target, nil);
+
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    const scale_frames::Shape small{1, 4, 1, 64, 64}, large{12, 48, 1, 64, 64};
+    id<MTLCommandBuffer> warm = scale_frames::record(queue, state, {target}, small, 0);
+    [warm commit];
+    [warm waitUntilCompleted];
+    ASSERT_EQ(warm.status, MTLCommandBufferStatusCompleted);
+
+    kernel_model::Model &m = kernel_model::model;
+    dispatch_semaphore_t handlerStarted = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseHandler = dispatch_semaphore_create(0);
+    dispatch_semaphore_t jobSubmitted = dispatch_semaphore_create(0);
+    dispatch_semaphore_t releaseGpu = dispatch_semaphore_create(0);
+    std::atomic<bool> handlerDone{false};
+    const kernel_model::HooksCleared cleared;
+
+    struct ReleaseGuard {
+        dispatch_semaphore_t handler, gpu;
+        bool handlerReleased = false, gpuReleased = false;
+
+        void releaseH()
+        {
+            if (!handlerReleased) {
+                handlerReleased = true;
+                dispatch_semaphore_signal(handler);
+            }
+        }
+
+        void releaseG()
+        {
+            if (!gpuReleased) {
+                gpuReleased = true;
+                dispatch_semaphore_signal(gpu);
+            }
+        }
+
+        ~ReleaseGuard()
+        {
+            releaseH();
+            releaseG();
+        }
+    } guard{releaseHandler, releaseGpu};
+
+    {
+        std::lock_guard<std::mutex> l(kernel_model::callLock);
+        m.jobAdded = [jobSubmitted] {
+            dispatch_semaphore_signal(jobSubmitted);
+        };
+        m.blockUntil = [&m, releaseGpu](uint32_t channel, uint32_t seqno) -> bool {
+            dispatch_semaphore_wait(releaseGpu, DISPATCH_TIME_FOREVER);
+            __atomic_store_n(&m.fence(channel - 1).completed, seqno, __ATOMIC_RELEASE);
+            return true;
+        };
+    }
+
+    id<MTLCommandBuffer> cb = scale_frames::record(queue, state, {target}, large, 1);
+    std::atomic<bool> *const handlerDonePtr = &handlerDone;
+    [cb addScheduledHandler:^(id<MTLCommandBuffer>) {
+        dispatch_semaphore_signal(handlerStarted);
+        dispatch_semaphore_wait(releaseHandler, DISPATCH_TIME_FOREVER);
+        handlerDonePtr->store(true, std::memory_order_release);
+    }];
+    [cb commit];
+
+    ASSERT_EQ(dispatch_semaphore_wait(handlerStarted, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))), 0);
+    ASSERT_EQ(dispatch_semaphore_wait(jobSubmitted, dispatch_time(DISPATCH_TIME_NOW, 10 * int64_t(NSEC_PER_SEC))), 0);
+    // Drain submitLoop through a synchronous move so cb has been fully retired before waitUntilScheduled runs.
+    gm20bExcludingSubmissions([] {
+        return true;
+    });
+
+    auto scheduled = std::make_shared<std::promise<void>>();
+    std::future<void> waited = scheduled->get_future();
+    std::thread waiter([cb, scheduled] {
+        [cb waitUntilScheduled];
+        scheduled->set_value();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    EXPECT_EQ(waited.wait_for(std::chrono::milliseconds(0)), std::future_status::timeout);
+
+    guard.releaseH();
+    const bool wokeBeforeGpu = waited.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    EXPECT_TRUE(wokeBeforeGpu) << "waitUntilScheduled missed _scheduledDone wakeup while GPU completion was held";
+    EXPECT_TRUE(handlerDone.load(std::memory_order_acquire));
+    EXPECT_NE(cb.status, MTLCommandBufferStatusCompleted);
+
+    guard.releaseG();
+    waiter.join();
+    [cb waitUntilCompleted];
+    EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+}
+
+TEST(GM20BFacadeHandlers, EarlyScheduledWaitUntilScheduledReturnsBeforeGpuCompletion)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(earlyScheduledWaitUntilScheduledReturnsBeforeGpuCompletion);
+}
+
 TEST(GM20BFacadeHandlers, ScheduledHandlersRunBeforeCompletedOnesInQueueOrder)
 {
     ASSERT_TRUE(opened().device != nil && opened().state != nil);
