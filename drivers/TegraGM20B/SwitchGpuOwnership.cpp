@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "SwitchGpuOwnershipInternal.h"
 #include "SwitchGpuPathStats.h"
-extern "C" void switch_gpu_surface_sweep(void) __attribute__((weak));
 
 using namespace switch_gpu_ownership;
 
@@ -126,20 +125,6 @@ uint32_t merge(uint32_t a, uint32_t b)
 	return ((a | b) & ~kBesideCpu) | (a & b & kBesideCpu);
 }
 
-// A dead client's IOSurface lease can refuse or slow down only a job that uses its backing, and keep waiting only what
-// waits for CPU holders to leave. With neither, the job takes no global lock for it.
-bool sweep_wanted(const switch_gpu_backing_use *uses, uint32_t count)
-{
-	if (__atomic_load_n(&switch_gpu_cpu_sleepers, __ATOMIC_ACQUIRE) ||
-	    switch_gpu_ready_waiting())
-		return true;
-	for (uint32_t i = 0; i < count; ++i)
-		if (__atomic_load_n(&uses[i].backing->cpu_readers, __ATOMIC_RELAXED) ||
-		    __atomic_load_n(&uses[i].backing->cpu_writers, __ATOMIC_RELAXED))
-			return true;
-	return false;
-}
-
 // An engine with timeline references takes the job's at once, after every use is checked: one for each record commit
 // adds (one it replaces is on the same timeline and passes its reference on) and each host acquire. A job that only
 // replaces records takes none and finds the timeline's handle in a record it replaces: its timeline's lock is taken when
@@ -191,8 +176,6 @@ int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_lease *co
 		else
 			uses[unique++] = uses[i];
 	}
-	if (!lease_count && switch_gpu_surface_sweep && sweep_wanted(uses, unique))
-		switch_gpu_surface_sweep();
 	for (uint32_t i = 0; i < guard_count; ++i) {
 		if (!guards[i].backing || !guards[i].generation ||
 		    (uintptr_t(guards[i].generation) & 7) || !guards[i].expected)

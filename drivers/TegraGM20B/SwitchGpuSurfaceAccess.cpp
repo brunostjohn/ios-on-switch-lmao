@@ -2,11 +2,18 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOUserClient.h>
+#ifdef KERNEL
+#include <IOKit/IOMessage.h>
+#include <IOKit/IOService.h>
+#include <kern/thread_call.h>
+#endif
 #include <kern/thread.h>
 #include "SwitchGpuBacking.h"
 #include "TegraGM20BGpu.h"
 #include "TegraGM20BViews.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
+
+extern "C" void switch_gpu_surface_sweep(void);
 
 namespace
 {
@@ -34,16 +41,70 @@ struct Pending {
 	uint32_t index;
 };
 
+struct ClientWatch {
+	ClientWatch *next;
+	IOUserClient *client;
+	IONotifier *notifier;
+	uint32_t refs;
+	bool registering;
+};
+
 IOLock *lock;
 Lease *leases, *free_leases;
 uint32_t lease_count;  // leases' length, read without the lock by switch_gpu_surface_sweep
 Pending *pending, *free_pending;
 Association *associations;
+ClientWatch *watches;
+#ifdef KERNEL
+thread_call_t sweep_call;
+
+void sweep_work(thread_call_param_t, thread_call_param_t)
+{
+	switch_gpu_surface_sweep();
+}
+
+void schedule_sweep()
+{
+	if (thread_call_t call = __atomic_load_n(&sweep_call, __ATOMIC_ACQUIRE))
+		thread_call_enter(call);
+}
+
+IOReturn client_interest(void *, void *, UInt32 message_type, IOService *, void *, vm_size_t)
+{
+	if (message_type == kIOMessageServiceIsTerminated)
+		schedule_sweep();
+	return kIOReturnSuccess;
+}
+#else
+void schedule_sweep()
+{
+	switch_gpu_surface_sweep();
+}
+
+int client_interest(void *, void *, uint32_t message_type, IOService *, void *, size_t)
+{
+	if (message_type == kIOMessageServiceIsTerminated)
+		schedule_sweep();
+	return 0;
+}
+#endif
 
 bool initialize()
 {
 	if (__atomic_load_n(&lock, __ATOMIC_ACQUIRE))
 		return true;
+#ifdef KERNEL
+	if (!__atomic_load_n(&sweep_call, __ATOMIC_ACQUIRE)) {
+		thread_call_t call = thread_call_allocate_with_options(
+			sweep_work, nullptr, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+		if (!call)
+			return false;
+		thread_call_t no_call = nullptr;
+		if (!__atomic_compare_exchange_n(&sweep_call, &no_call, call, false,
+						 __ATOMIC_RELEASE, __ATOMIC_ACQUIRE))
+			thread_call_free(call);
+	}
+#endif
 	IOLock *made = IOLockAlloc(), *expected = nullptr;
 	if (!made)
 		return false;
@@ -51,6 +112,24 @@ bool initialize()
 					 __ATOMIC_ACQUIRE))
 		IOLockFree(made);
 	return true;
+}
+
+ClientWatch *find_watch_locked(IOUserClient *client)
+{
+	for (auto *watch = watches; watch; watch = watch->next)
+		if (watch->client == client)
+			return watch;
+	return nullptr;
+}
+
+void unlink_watch_locked(ClientWatch *target)
+{
+	for (auto **at = &watches; *at; at = &(*at)->next) {
+		if (*at == target) {
+			*at = target->next;
+			return;
+		}
+	}
 }
 
 Lease **find(void *client, uint32_t id)
@@ -91,13 +170,25 @@ bool take_pending(Lease *lease, uint32_t index)
 
 void recycle(Lease *lease)
 {
-	lease->client->release();
-	if (lease->backing)
-		switch_gpu_backing_release(lease->backing);
+	IOUserClient *client = lease->client;
+	switch_gpu_backing *backing = lease->backing;
+	IONotifier *drop_notifier = nullptr;
 	IOLockLock(lock);
+	if (ClientWatch *watch = find_watch_locked(client)) {
+		if (!--watch->refs && !watch->registering) {
+			unlink_watch_locked(watch);
+			drop_notifier = watch->notifier;
+			IODelete(watch, ClientWatch, 1);
+		}
+	}
 	lease->next = free_leases;
 	free_leases = lease;
 	IOLockUnlock(lock);
+	if (drop_notifier)
+		drop_notifier->remove();
+	client->release();
+	if (backing)
+		switch_gpu_backing_release(backing);
 }
 
 void release_one(void *client, uint32_t id, uint32_t options, bool failed)
@@ -329,15 +420,31 @@ acquire_backing:
 	if (client->isInactive() ||
 	    (lease && (lease->backing != backing || lease->descriptor != descriptor)))
 		result = -19;
+	ClientWatch *register_watch = nullptr;
 	if (!result && !lease) {
 		lease = free_leases;
 		if (lease)
 			free_leases = lease->next;
 		else
 			lease = IONew(Lease, 1);
+		ClientWatch *watch = lease ? find_watch_locked(client) : nullptr;
+		if (lease && !watch) {
+			watch = IONew(ClientWatch, 1);
+			if (!watch) {
+				lease->next = free_leases;
+				free_leases = lease;
+				lease = nullptr;
+			} else {
+				*watch = {watches, client, nullptr, 0, true};
+				watches = watch;
+				register_watch = watch;
+				client->retain();
+			}
+		}
 		if (!lease) {
 			result = -12;
 		} else {
+			++watch->refs;
 			*lease = {leases, client, backing, descriptor, bytes, id, flags, {}, {}};
 			client->retain();
 			if (backing)
@@ -355,6 +462,28 @@ acquire_backing:
 		free_pending = item;
 	}
 	IOLockUnlock(lock);
+	if (register_watch) {
+		IONotifier *notifier = client->registerInterest(gIOGeneralInterest, client_interest,
+								nullptr, nullptr);
+		IONotifier *drop_notifier = nullptr;
+		bool need_sweep = false;
+		IOLockLock(lock);
+		register_watch->registering = false;
+		if (!register_watch->refs) {
+			unlink_watch_locked(register_watch);
+			IODelete(register_watch, ClientWatch, 1);
+			drop_notifier = notifier;
+		} else {
+			register_watch->notifier = notifier;
+			need_sweep = !notifier || client->isInactive();
+		}
+		IOLockUnlock(lock);
+		if (drop_notifier)
+			drop_notifier->remove();
+		client->release();
+		if (need_sweep)
+			schedule_sweep();
+	}
 	if (result) {
 		if (backing)
 			switch_gpu_backing_cpu_cancel(backing, flags | access(index));

@@ -154,8 +154,6 @@ int switch_gpu_backing_adopt_locked(switch_gpu_backing *backing,
 /* Something outside the set reaches a member, or its layout changes: the set's jobs become its users and it leaves. */
 void switch_gpu_set_reached(switch_gpu_backing *backing, uint32_t cause);
 
-// Threads asleep until a backing's CPU holders leave. A holder whose IOSurface client died leaves only at a sweep
-// (switch_gpu_surface_sweep), which GPU jobs run while any thread or ready watch (switch_gpu_ready_waiting) waits.
 extern uint32_t switch_gpu_cpu_sleepers;
 void switch_gpu_backing_sleep_cpu_locked(switch_gpu_backing *backing);
 
