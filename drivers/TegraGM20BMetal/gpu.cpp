@@ -357,14 +357,17 @@ void Device::emitContext(Push &p)
     const PackInitMethod *im = pack_.section<PackInitMethod>(PackInit);
     const InitAddresses here{heap_.va, zero_.va, root_.va, tic_.va, tsc_.va, kTicCount - 1, kTscCount - 1, tickets_.va};
     for (uint32_t i = 0; i < initCount; i++) {
+        if (im[i].subc == 0 && im[i].mthd == NVB197_SET_ZCULL_STATS)
+            continue;
         const uint32_t d = relocated(im[i], here);
         p.m(im[i].mthd, d, im[i].subc);
     }
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
     for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
-        if (!ownedMethod(base[2 * i]))
+        if (!ownedMethod(base[2 * i]) && base[2 * i] != NVB197_SET_ZCULL_STATS)
             p.m(base[2 * i], base[2 * i + 1]);
     stageSwitchesOn(p);
+    p.m(NVB197_SET_ZCULL_STATS, NVB197_SET_ZCULL_STATS_ENABLE_FALSE);
     mme::install(p, root_.va, zero_.va);
     tiledCacheInit(p, k_.info());
     tiledCacheSize_ = kTiledCacheDefaultSize;

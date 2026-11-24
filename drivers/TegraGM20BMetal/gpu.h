@@ -2091,6 +2091,7 @@ private:
     Backing *compBacking(const Texture &m, uint32_t tag, uint32_t kind);
     // What was asked for, made, `l` dropped around each kernel allocation
     void compMake(std::unique_lock<gm20b::Mutex> &l);
+    uint64_t compEvictIdleReady(const CompWant &w, bool comptagExhausted, std::vector<Bo> &evict);
     void compStop();
     // Asks compThread_ for `w` unless it was
     void compAsk(const CompWant &w);
@@ -2108,7 +2109,7 @@ private:
     // This process gave compressed memory back, lock_ held: the asks refused for a shortage may be made again, and each
     // a plain private texture still wants is (the one event that can change the kernel's answer that this process sees;
     // another process's give-back raises none)
-    void compGaveBack();
+    void compGaveBack(const CompWant *keepRefused = nullptr);
     // Made buffers no backing took while stale, at `now`
     void compTrim(uint64_t now, DeferredFrees &deferred);
     // When compressed or shared plain memory, a made buffer or a retired backing next turns stale (compClock()), 0 with

@@ -172,15 +172,30 @@ void Device::compRelease(PrivateComp comp, DeferredFrees &deferred)
     deferred.noteCompFreed();
 }
 
-void Device::compGaveBack()
+void Device::compGaveBack(const CompWant *keepRefused)
 {
+    const bool hadRefused = !comp_.refused.empty();
     std::vector<CompWant> again;
-    for (const auto &[texture, w] : privateWants_) {
-        const CompWant ask{compBytes(w.bytes), w.kind};
-        if (w.views.empty() && std::find(comp_.refused.begin(), comp_.refused.end(), ask) != comp_.refused.end())
-            again.push_back(ask);
+    if (hadRefused) {
+        for (const auto &[texture, w] : privateWants_) {
+            if (!w.views.empty())
+                continue;
+            const CompWant ask{compBytes(w.bytes), w.kind};
+            if (keepRefused && (ask == *keepRefused || ask.bytes >= keepRefused->bytes))
+                continue;
+            if (comp_.fit(ask.bytes, ask.kind) == comp_.ready.end())
+                again.push_back(ask);
+        }
     }
-    comp_.freed();
+    if (keepRefused) {
+        comp_.refused.erase(std::remove_if(comp_.refused.begin(), comp_.refused.end(),
+                                           [&](const CompWant &r) {
+                                               return !(r == *keepRefused) && r.bytes < keepRefused->bytes;
+                                           }),
+                            comp_.refused.end());
+    } else {
+        comp_.freed();
+    }
     if (stopping_)
         return;
     for (const CompWant &w : again)
