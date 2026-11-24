@@ -234,6 +234,7 @@ bool Device::reopen()
         generations_.closed(retiring);
         channel_.store(0, std::memory_order_release);
         fence_.store(&kNoFence, std::memory_order_release);
+        setView_.useCache.clear();
         progressVa_ = 0;
         progressSeq_ = 0;
     }

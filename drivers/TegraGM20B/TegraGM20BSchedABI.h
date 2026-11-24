@@ -6,12 +6,16 @@
 #include <stdint.h>
 
 enum {
+	/* GetInfo.flags: SubmitJob accepts TegraGM20BJobSameUses */
+	TegraGM20BInfoSameUses = 1u << 25,
 	/* GetInfo.flags: MethodPriority accepts an optional TegraGM20BAbiPriorityReply */
 	TegraGM20BInfoPriorityReply = 1u << 30,
 	/* GetInfo.flags: MethodChannelProgress returns a channel's GPU progress word VA */
 	TegraGM20BInfoChannelProgress = 1u << 31,
 	/* TegraGM20BAbiPriorityReply.flags: connection is the UI-critical compositor */
 	TegraGM20BPriorityCritical = 1u << 0,
+	/* TegraGM20BAbiJob.flags: reuse the channel's last resolved shared uses (shared_count == 0) */
+	TegraGM20BJobSameUses = 1u << 10,
 
 	TegraGM20BMethodChannelProgress = 42,
 	/* Byte offset inside each 64-byte channel slot of Channels (after AbiFence + Semantic + Identity) */

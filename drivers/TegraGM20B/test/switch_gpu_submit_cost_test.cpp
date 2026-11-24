@@ -332,6 +332,17 @@ TEST_F(SubmitCost, ACpuWriteLockedTextureCostsNoExtraOwnershipLocks)
 	EXPECT_EQ(ownership_takes() - after, 61u);
 }
 
+TEST_F(SubmitCost, CompletedReadsReplaceInPlaceWithZeroTimelineLocks)
+{
+	scene(60);
+	const uint32_t held = compositor.timeline->refs;
+	compositor.fence = frame;
+	const Cost cost = composite();
+	EXPECT_EQ(cost.global, 0u);
+	EXPECT_EQ(cost.own, 61u);
+	EXPECT_EQ(compositor.timeline->refs, held);
+}
+
 // A job over its resource set alone, no shared use: no ownership lock.
 TEST_F(SubmitCost, AJobWithNoSharedUseTakesNoOwnershipLock)
 {

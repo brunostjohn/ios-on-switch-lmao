@@ -125,3 +125,18 @@ TEST(JobRecord, AdmissionCookieFollowsTheSharedUses)
 	memcpy(zero.data() + sizeof(cancel), &lease, sizeof(lease));
 	EXPECT_TRUE(SwitchGpuJobRecord::parse(zero.data(), zero.size()).valid());
 }
+
+TEST(JobRecord, SameUsesAcceptsZeroSharedUsesAndRejectsListedUsesOrCancel)
+{
+	EXPECT_TRUE(Record({1, 2, 0, 0, 0, TegraGM20BJobSameUses}).parse().valid());
+	const uint32_t sameQuiet = uint32_t(TegraGM20BJobSameUses) | TegraGM20BJobQuiet;
+	EXPECT_TRUE(Record({1, 2, 1, 7, 0, sameQuiet}).parse().valid());
+	EXPECT_FALSE(Record({1, 2, 0, 0, 1, TegraGM20BJobSameUses}).parse().valid());
+	const TegraGM20BAbiJob cancelSame = {
+		3, 0, 0, 0, 0, uint32_t(TegraGM20BJobAdmissionCancel) | TegraGM20BJobSameUses};
+	const TegraGM20BAbiSubmitAdmission lease = {41, 0};
+	std::vector<uint8_t> bytes(sizeof(cancelSame) + sizeof(lease));
+	memcpy(bytes.data(), &cancelSame, sizeof(cancelSame));
+	memcpy(bytes.data() + sizeof(cancelSame), &lease, sizeof(lease));
+	EXPECT_FALSE(SwitchGpuJobRecord::parse(bytes.data(), bytes.size()).valid());
+}

@@ -116,6 +116,7 @@ IOReturn AGXDeviceUserClient::nativeSurfaceView(const TegraGM20BAbiNativeSurface
 	bo->next = bos_;
 	bos_ = bo;
 	boIndex_.insert(bo->handle, bo);
+	bumpBoGen();
 	out->handle = bo->handle;
 	switch_gpu_path_taken(SWITCH_GPU_PATH_NATIVE_VIEW, 1);
 	switch_gpu_path_taken(SWITCH_GPU_PATH_NATIVE_TILED, out->kind == 0xfe ? 1 : 0);

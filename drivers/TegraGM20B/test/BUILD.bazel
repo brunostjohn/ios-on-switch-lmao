@@ -497,7 +497,36 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BFencePageABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedABI.h",
         "//drivers/TegraGM20B:TegraGM20BVolatileABI.h",
+    ],
+)
+
+host_test(
+    name = "switch_gpu_use_cache_test",
+    srcs = [
+        "switch_gpu_use_cache_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuBindingTable.h",
+        "//drivers/TegraGM20B:SwitchGpuBindings.h",
+        "//drivers/TegraGM20B:SwitchGpuBoIndex.h",
+        "//drivers/TegraGM20B:SwitchGpuSurfaceRefresh.h",
+        "//drivers/TegraGM20B:SwitchGpuUseCache.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BFencePageABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//drivers/TegraGM20B:TegraGM20BJobABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedABI.h",
+        "//drivers/TegraGM20B:TegraGM20BTiled.h",
+        "//drivers/TegraGM20B:TegraGM20BViews.h",
+    ],
+    data = [
+        "//drivers/TegraGM20B:SwitchGpuClientRetirement.h",
+        "//drivers/TegraGM20B:TegraGM20BUserClientBo.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientJob.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientJobSubmit.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientPark.cpp",
     ],
 )
 

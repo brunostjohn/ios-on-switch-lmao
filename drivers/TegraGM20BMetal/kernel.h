@@ -13,6 +13,7 @@
 #include <vector>
 #include "TegraGM20BABI.h"
 #include "TegraGM20BLayout.h"
+#include "TegraGM20BSchedABI.h"
 #include "surfaces.h"
 #include "shared_events.h"
 #include "cpu_completion.h"
@@ -72,6 +73,7 @@ struct KernelJob {
     // writer promises (method 34) the job keeps: its end releases them
     const uint32_t *promises = nullptr;
     uint32_t promiseCount = 0;
+    bool sameUses = false;
 };
 
 class Kernel;
@@ -187,6 +189,11 @@ public:
     bool supportsBoPark() const
     {
         return (info_.flags & TegraGM20BInfoBoPark) != 0;
+    }
+
+    bool supportsSameUses() const
+    {
+        return (info_.flags & TegraGM20BInfoSameUses) != 0;
     }
 
     int park(uint64_t handle, bool guardNone);

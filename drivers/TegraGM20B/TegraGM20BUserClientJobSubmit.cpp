@@ -238,73 +238,105 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 		switch_gpu_backing_writes_refused(job.uses, useTotal);
 		return ret;
 	};
-	for (uint32_t i = 0; i < head.shared_count; ++i) {
-		const TegraGM20BAbiSurfaceUse &use = record.uses[i];
-		const bool addressed = use.access & TegraGM20BSurfaceGpuAddress;
-		const uint64_t bytes = use.access & TegraGM20BSurfaceRange ? use.reserved : 0;
-		if (!(use.access & kUseAccess) || (use.access & ~kUseFlags) ||
-		    (!bytes && use.reserved))
-			return refuseWrites(switch_gpu_refuse(why, SwitchGpuRefusal::UseAccess,
-							      kIOReturnBadArgument, i, use.access,
-							      use.reserved));
-		rangedUses += bytes != 0;
-		const BindingTable::Entry *binding =
-			addressed ? bindTable_.find(use.handle, bytes ? bytes : 1) : nullptr;
-		const Bo *bo = addressed ? (binding ? binding->bo : nullptr) : findBo(use.handle);
-		uint64_t offset = 0;
-		if (const SwitchGpuRefusal refused = useRefusal(bo, binding, use, bytes, offset);
-		    refused != SwitchGpuRefusal::None)
-			return refuseWrites(switch_gpu_refuse(
-				why, refused, kIOReturnBadArgument, i, use.handle,
-				refused == SwitchGpuRefusal::UseReadOnly ? use.access : bytes));
-		hostWritten |= (use.access & TegraGM20BSurfaceHostWritten) != 0;
-		const uint32_t access = use.access & kUseAccess;
-		if (bo->nativeView) {
-			++nativeReads;
-			const uint32_t first = useTotal;
-			if (const int error = switch_gpu_native_surface_add_use(
-				    *bo->nativeView, bo->readOnly, access, job.uses, job.guards,
-				    job.capacity, useTotal, nativeGuardCount))
+	const uint64_t chanUid = tgm_chan_uid(chan);
+	const uint64_t snapBindGen = __atomic_load_n(&bindGen_, __ATOMIC_ACQUIRE);
+	const uint64_t snapBoGen = __atomic_load_n(&boGen_, __ATOMIC_ACQUIRE);
+	const bool sameUses = (head.flags & TegraGM20BJobSameUses) != 0;
+	bool usesHostWritten = false;
+	if (sameUses) {
+		if (!job.useCache.matches(chanUid, snapBindGen, snapBoGen, claim, head.set)) {
+			job.useCache.invalidate();
+			return switch_gpu_refuse(why, SwitchGpuRefusal::StaleUses,
+						 kIOReturnNotReady, snapBindGen, snapBoGen);
+		}
+		job.useCache.restore(job.uses, useTotal, job.writes, writeCount, job.surfaces,
+				     surfaceCount, job.written, writtenCount, rangedUses,
+				     unlockedWrites, hostWritten);
+		for (uint32_t i = 0; i < writeCount; ++i)
+			scanoutWrites |= switch_gpu_backing_scanned(job.writes[i].backing) != 0;
+	} else {
+		job.useCache.invalidate();
+		for (uint32_t i = 0; i < head.shared_count; ++i) {
+			const TegraGM20BAbiSurfaceUse &use = record.uses[i];
+			const bool addressed = use.access & TegraGM20BSurfaceGpuAddress;
+			const uint64_t bytes =
+				use.access & TegraGM20BSurfaceRange ? use.reserved : 0;
+			if (!(use.access & kUseAccess) || (use.access & ~kUseFlags) ||
+			    (!bytes && use.reserved))
 				return refuseWrites(switch_gpu_refuse(
-					why, SwitchGpuRefusal::NativeRead, ioreturn(error), i,
-					switch_gpu_refusal_errno(error)));
-			for (uint32_t u = first; u < useTotal; ++u)
-				job.uses[u].access |=
-					switch_gpu_claim_use(claim, job.uses[u].access);
-			if (access & TegraGM20BSurfaceWrite) {
-				unlockedWrites = true;
-				if (bo->nativeView->owner)
-					job.nativeWritten[nativeWrittenCount++] =
-						bo->nativeView->owner;
+					why, SwitchGpuRefusal::UseAccess, kIOReturnBadArgument, i,
+					use.access, use.reserved));
+			rangedUses += bytes != 0;
+			const BindingTable::Entry *binding =
+				addressed ? bindTable_.find(use.handle, bytes ? bytes : 1)
+					  : nullptr;
+			const Bo *bo =
+				addressed ? (binding ? binding->bo : nullptr) : findBo(use.handle);
+			uint64_t offset = 0;
+			if (const SwitchGpuRefusal refused =
+				    useRefusal(bo, binding, use, bytes, offset);
+			    refused != SwitchGpuRefusal::None)
+				return refuseWrites(switch_gpu_refuse(
+					why, refused, kIOReturnBadArgument, i, use.handle,
+					refused == SwitchGpuRefusal::UseReadOnly ? use.access
+										 : bytes));
+			usesHostWritten |= (use.access & TegraGM20BSurfaceHostWritten) != 0;
+			hostWritten |= usesHostWritten;
+			const uint32_t access = use.access & kUseAccess;
+			if (bo->nativeView) {
+				++nativeReads;
+				const uint32_t first = useTotal;
+				if (const int error = switch_gpu_native_surface_add_use(
+					    *bo->nativeView, bo->readOnly, access, job.uses,
+					    job.guards, job.capacity, useTotal, nativeGuardCount))
+					return refuseWrites(switch_gpu_refuse(
+						why, SwitchGpuRefusal::NativeRead, ioreturn(error),
+						i, switch_gpu_refusal_errno(error)));
+				for (uint32_t u = first; u < useTotal; ++u)
+					job.uses[u].access |=
+						switch_gpu_claim_use(claim, job.uses[u].access);
+				if (access & TegraGM20BSurfaceWrite) {
+					unlockedWrites = true;
+					if (bo->nativeView->owner)
+						job.nativeWritten[nativeWrittenCount++] =
+							bo->nativeView->owner;
+				}
+				continue;
 			}
-			continue;
+			job.uses[useTotal++] = {bo->backing,
+						access | switch_gpu_claim_use(claim, access), 0};
+			if (access & TegraGM20BSurfaceWrite) {
+				job.writes[writeCount++] = {bo->backing,
+							    bo->representation ? 0 : offset,
+							    bo->representation ? 0 : bytes};
+				unlockedWrites |= bo->unlockedReads;
+				scanoutWrites |= switch_gpu_backing_scanned(bo->backing) != 0;
+				job.written[writtenCount++] = bo->coh;
+			}
+			if (bo->representation)
+				job.surfaces[surfaceCount++] = {
+					bo->backing,
+					bo->surface,
+					bo->representation,
+					&const_cast<Bo *>(bo)->representationValue,
+					tgm_coh_surface_id(bo->coh),
+					access,
+					0,
+					nullptr,
+					nullptr,
+					nullptr};
 		}
-		job.uses[useTotal++] = {bo->backing, access | switch_gpu_claim_use(claim, access),
-					0};
-		if (access & TegraGM20BSurfaceWrite) {
-			job.writes[writeCount++] = {bo->backing, bo->representation ? 0 : offset,
-						    bo->representation ? 0 : bytes};
-			unlockedWrites |= bo->unlockedReads;
-			scanoutWrites |= switch_gpu_backing_scanned(bo->backing) != 0;
-			job.written[writtenCount++] = bo->coh;
-		}
-		if (bo->representation)
-			job.surfaces[surfaceCount++] = {bo->backing,
-							bo->surface,
-							bo->representation,
-							&const_cast<Bo *>(bo)->representationValue,
-							tgm_coh_surface_id(bo->coh),
-							access,
-							0,
-							nullptr,
-							nullptr,
-							nullptr};
 	}
 	const uint32_t guardCount = surfaceCount + nativeGuardCount;
 	[[maybe_unused]] uint32_t backings = 0;
 	if (admissionContinue && !admission.covers(job.uses, useTotal))
 		return refuseWrites(switch_gpu_refuse(why, SwitchGpuRefusal::AdmissionCover,
 						      kIOReturnBadArgument, useTotal));
+	if (!sameUses && !nativeReads)
+		job.useCache.save(chanUid, snapBindGen, snapBoGen, claim, head.set, job.uses,
+				  useTotal, job.writes, writeCount, job.surfaces, surfaceCount,
+				  job.written, writtenCount, rangedUses, unlockedWrites,
+				  usesHostWritten);
 	tgm_views_job_writes(job.written, writtenCount);
 	job.phases.end(TGM_SUBMIT_RESOLVE);
 	SwitchGpuEventJob *events = job.events;

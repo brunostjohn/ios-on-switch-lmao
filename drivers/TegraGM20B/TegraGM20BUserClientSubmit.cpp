@@ -164,5 +164,6 @@ void AGXDeviceUserClient::freeJob(JobScratch &job)
 	IODelete(job.leases, switch_gpu_cpu_lease *, job.capacity);
 	IODelete(job.written, tgm_coh *, job.capacity);
 	IODelete(job.nativeWritten, void *, job.capacity);
+	job.useCache.release();
 	job = {};
 }

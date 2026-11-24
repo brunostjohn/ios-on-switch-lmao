@@ -67,6 +67,7 @@
 #include "SwitchGpuFenceRecord.h"
 #include "SwitchGpuJobStats.h"
 #include "SwitchGpuPackImage.h"
+#include "SwitchGpuUseCache.h"
 
 #include "SwitchGpuSurfaceGeometry.h"
 #include "shim/include/switch_tiled_cache.h"
@@ -457,6 +458,7 @@ class AGXDeviceUserClient : public IOUserClient
 		uint32_t capacity;
 		SwitchGpuEventJob *events;
 		SubmitPhases phases;
+		SwitchGpuUseCache<KernelMemory> useCache;
 	};
 
 	SwitchGpuEventClient events_;
@@ -549,6 +551,7 @@ class AGXDeviceUserClient : public IOUserClient
 	uint32_t nbinds_ = 0, cap_binds_ = 0;
 	uint64_t next_handle_ = 1;
 	uint32_t next_token_ = 1;
+	uint64_t bindGen_ = 1, boGen_ = 1;
 	bool counted_ = false;
 	char owner_[17] = {};  // the opening process
 	int32_t ownerPid_ = 0;
@@ -613,6 +616,17 @@ class AGXDeviceUserClient : public IOUserClient
 	void pushWakes();
 	void unbindOverlaps(uint64_t va, uint64_t range, Bo *only);
 	void publishBindings(BindingTable::Snapshot *made);
+
+	void bumpBindGen()
+	{
+		__atomic_add_fetch(&bindGen_, 1u, __ATOMIC_RELEASE);
+	}
+
+	void bumpBoGen()
+	{
+		__atomic_add_fetch(&boGen_, 1u, __ATOMIC_RELEASE);
+	}
+
 	bool passSubmitters(bool wait);
 	void dropLeft(const Left &left);
 	void keepLeft(const Left &left);

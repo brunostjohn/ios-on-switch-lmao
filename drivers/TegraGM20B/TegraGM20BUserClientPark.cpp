@@ -226,6 +226,7 @@ IOReturn AGXDeviceUserClient::boPark(const TegraGM20BAbiBoPark *in)
 			bo->parkState = SwitchGpuParkState::Parking;
 			bo->parkedBacking = bo->backing;
 			bo->backing = nullptr;
+			bumpBoGen();
 			detachedMap = *foundLink;
 			*foundLink = detachedMap->next;
 			detachedMap->next = nullptr;
@@ -261,6 +262,7 @@ IOReturn AGXDeviceUserClient::boPark(const TegraGM20BAbiBoPark *in)
 			still->view = oldView;
 			still->parkState = SwitchGpuParkState::Live;
 			oldView = nullptr;
+			bumpBoGen();
 		}
 		if (open && !staleDropped) {
 			detachedMap->next = maps_;
@@ -303,6 +305,7 @@ IOReturn AGXDeviceUserClient::boPark(const TegraGM20BAbiBoPark *in)
 			still->backing = still->parkedBacking;
 			still->parkedBacking = nullptr;
 			still->parkState = SwitchGpuParkState::Live;
+			bumpBoGen();
 		}
 		IOLockWakeup(lock_, &parkWait_, false);
 		IOLockUnlock(lock_);
@@ -402,6 +405,7 @@ IOReturn AGXDeviceUserClient::boUnpark(const TegraGM20BAbiBoUnpark *in,
 			still->backing = still->parkedBacking;
 			still->parkedBacking = nullptr;
 			still->parkState = SwitchGpuParkState::Live;
+			bumpBoGen();
 			still->parkedVa = 0;
 			still->parkedGuard = false;
 			still->parkedReadOnly = false;

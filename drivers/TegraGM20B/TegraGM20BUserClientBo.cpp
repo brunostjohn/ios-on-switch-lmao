@@ -279,6 +279,7 @@ IOReturn AGXDeviceUserClient::publishBo(Bo *bo, bool mapped)
 	bo->next = bos_;
 	bos_ = bo;
 	boIndex_.insert(bo->handle, bo);
+	bumpBoGen();
 	if (SWITCH_GPU_OWNER_COUNTS)
 		ownerMemory_.change(bo->ownerKind, bo->bytes, true);
 	return kIOReturnSuccess;

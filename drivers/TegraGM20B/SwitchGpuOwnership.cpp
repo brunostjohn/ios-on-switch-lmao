@@ -125,6 +125,58 @@ uint32_t merge(uint32_t a, uint32_t b)
 	return ((a | b) & ~kBesideCpu) | (a & b & kBesideCpu);
 }
 
+int prepare_access_slot_locked(switch_gpu_backing *backing,
+			       const switch_gpu_backing_token &completion, uint32_t access,
+			       uint32_t *out_slot)
+{
+	const uint32_t kind = access_kind(access);
+	if (!backing->host_acquire.engine) {
+		if (!backing->access_count) {
+			*out_slot = 0;
+			return 0;
+		}
+		uint32_t match = backing->access_count;
+		bool pending = false;
+		bool can_drop_other = false;
+		bool invalid_order = false;
+		for (uint32_t j = 0; j < backing->access_count; ++j) {
+			auto &entry = backing->accesses[j];
+			const bool same = switch_gpu_backing_same_timeline(entry.token, completion);
+			if (same) {
+				if (!switch_gpu_backing_later(completion, entry.token)) {
+					invalid_order = true;
+					break;
+				}
+				if (entry.access == kind)
+					match = j;
+			}
+			const int st = switch_gpu_backing_access_status(entry);
+			if (st == 0) {
+				pending = true;
+			} else {
+				if (st < 0)
+					switch_gpu_backing_note_failure_locked(backing, entry, st);
+				const bool current_writer =
+					(entry.access & SWITCH_GPU_BACKING_WRITE) &&
+					entry.content == backing->content;
+				if (!current_writer && !(same && entry.access == kind))
+					can_drop_other = true;
+			}
+		}
+		if (!invalid_order && (pending || !can_drop_other)) {
+			*out_slot = match;
+			return 0;
+		}
+	}
+	switch_gpu_backing_prune_locked(backing);
+	for (uint32_t j = 0; j < backing->access_count; ++j)
+		if (switch_gpu_backing_same_timeline(backing->accesses[j].token, completion) &&
+		    !switch_gpu_backing_later(completion, backing->accesses[j].token))
+			return -22;
+	*out_slot = access_slot(backing, completion, access);
+	return 0;
+}
+
 // An engine with timeline references takes the job's at once, after every use is checked: one for each record commit
 // adds (one it replaces is on the same timeline and passes its reference on) and each host acquire. A job that only
 // replaces records takes none and finds the timeline's handle in a record it replaces: its timeline's lock is taken when
@@ -232,17 +284,13 @@ int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_lease *co
 		if (!result && !(uses[i].access & kBesideCpu) &&
 		    (writers || (readers && (uses[i].access & SWITCH_GPU_BACKING_WRITE))))
 			result = -16;
+		uint32_t slot = backing->access_count;
 		if (!result)
-			switch_gpu_backing_prune_locked(backing);
+			result = prepare_access_slot_locked(backing, *completion, uses[i].access,
+							    &slot);
 		if (completion->engine == SWITCH_GPU_ENGINE_GM20B &&
 		    backing->host_visible_epoch != backing->host_epoch)
 			transaction->host_written = 1;
-		for (uint32_t j = 0; !result && j < backing->access_count; ++j)
-			if (switch_gpu_backing_same_timeline(backing->accesses[j].token,
-							     *completion) &&
-			    !switch_gpu_backing_later(*completion, backing->accesses[j].token))
-				result = -22;
-		const uint32_t slot = access_slot(backing, *completion, uses[i].access);
 		const bool fresh = slot == backing->access_count;
 		if (!fresh && !replaced)
 			replaced = backing->accesses[slot].handle;
