@@ -24,6 +24,7 @@ class SwitchAudio : public IOService {
     IOInterruptEventSource *cascade = nullptr;
     uint64_t periods[2] = {};
     uint16_t xferSeen[2] = {};
+    uint64_t hwFifoOffset = 0;
     bool graced = false;
 
     // Runtime APE idle power-gating (Phase 3): held while any stream or codec session is active.
@@ -140,6 +141,7 @@ class SwitchAudio : public IOService {
     void publishHwAnchor(uint64_t sampleTime, uint64_t hostTime, bool bumpSeed);
     int32_t desiredMvcMdB() const;
     void applyMvcLive(bool immediate);
+    bool rampMvcMute();
     void reconfigureOpeForRoute();
 
     void tegraStart();

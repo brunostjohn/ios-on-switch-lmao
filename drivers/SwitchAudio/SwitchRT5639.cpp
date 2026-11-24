@@ -69,9 +69,10 @@ enum : unsigned {
     CP_PM_HP_HV = 2u << 8,
     // SPK_VOL / HP_VOL: left mute 15, left channel off 14, left volume 13:8 (0 = +12 dB, 1.5 dB steps), right 7/6/5:0
     V_MUTE = (1u << 15) | (1u << 7),
-    // SV_ZCD1, SV_ZCD2: analog soft volume + zero-cross detection for pop-free 1.5 dB PGA steps
+    V_OFF = (1u << 14) | (1u << 6),
+    // SV_ZCD1, SV_ZCD2: analog soft volume + zero-cross detection for pop-free 1.5 dB headphone PGA steps.
+    // Leave SV_SPO off so speaker hard-mute is immediate before Class-D / I2S power transitions.
     SV_EN = 1u << 15,
-    SV_SPO = 1u << 14,
     SV_HP = 1u << 12,
     ZCD_DIG = 1u << 11,
     ZCD_EN = 1u << 10,
@@ -79,8 +80,9 @@ enum : unsigned {
     ZCD_HP = 1u << 15,
 };
 
-constexpr uint16_t kSvZcd1 = static_cast<uint16_t>(SV_EN | SV_SPO | SV_HP | ZCD_DIG | ZCD_EN | SV_DELAY);
-static_assert(kSvZcd1 == 0xdc09u, "SV_ZCD1: SV + SPO/HP soft volume + ZCD, delay 0x09");
+constexpr uint16_t kSvZcd1 = static_cast<uint16_t>(SV_EN | SV_HP | ZCD_DIG | ZCD_EN | SV_DELAY);
+static_assert(kSvZcd1 == 0x9c09u, "SV_ZCD1: SV + HP soft volume + ZCD, delay 0x09 (SV_SPO off)");
+constexpr uint16_t kSpkMuteOff = static_cast<uint16_t>(V_MUTE | V_OFF);
 
 // Switchroot L4T UCM2 gain staging: speaker +6.0 dB (ALSA 35 -> reg 4), headphone unity 0.0 dB (ALSA 31 -> reg 8).
 // DAC ceilings follow rt5640.c: CUSTOM_DAC_SPK_MAX_VAL_FRIG 150 (-9.375 dB) and CUSTOM_DAC_HP_MAX_VAL 170 (-1.875 dB).
@@ -226,17 +228,17 @@ void SwitchRT5639::probe(bool ldoOn, bool capture)
     writeList(kEqOff);
     write(SV_ZCD1, kSvZcd1);
     update(SV_ZCD2, ZCD_HP, ZCD_HP);
-    // Mixer switches (a cleared bit routes): stereo DAC mixers <- DAC1, speaker mixers <- DAC1, speaker outputs
-    // <- SPKVOL, output mixers <- DAC1, HPO mixer <- HPVOL.
+    // Mixer switches (a cleared bit routes): stereo DAC mixers <- DAC1, speaker mixers <- DAC1, output mixers <- DAC1,
+    // HPO mixer <- HPVOL. Keep SPO mixers muted (bit 12 set) until routeUp(kRouteSpeaker) powers Class-D cleanly.
     update(STO_DAC_MIXER, (1u << 14) | (1u << 6), 0);
     update(SPK_L_MIXER, 1u << 3, 0);
     update(SPK_R_MIXER, 1u << 3, 0);
-    update(SPO_L_MIXER, 1u << 12, 0);
-    update(SPO_R_MIXER, 1u << 12, 0);
+    update(SPO_L_MIXER, 1u << 12, 1u << 12);
+    update(SPO_R_MIXER, 1u << 12, 1u << 12);
     update(OUT_L3_MIXER, 1u, 0);
     update(OUT_R3_MIXER, 1u, 0);
     update(HPO_MIXER, 1u << 13, 0);
-    write(SPK_VOL, V_MUTE | kSpkVol);
+    write(SPK_VOL, kSpkMuteOff | kSpkVol);
     write(HP_VOL, V_MUTE | kHpVol);
     if (capture) {
         // IN1P -> BST1 -> REC_L2 -> ADC_L -> STO_ADC_L -> IF1 (left copied to right via IF1_ADC_SEL_L2R).
@@ -254,7 +256,7 @@ void SwitchRT5639::biasStandby()
     if (biasOn)
         return;
     update(PWR_ANLG1, P_VREF1 | P_MB | P_BG | P_VREF2, P_VREF1 | P_MB | P_BG | P_VREF2);
-    IOSleep(15);
+    IOSleep(25);
     update(PWR_ANLG1, P_FV1 | P_FV2, P_FV1 | P_FV2);
     update(GEN_CTRL1, 0x0301, 0x0201);
     biasOn = true;
@@ -323,11 +325,18 @@ void SwitchRT5639::routeUp(Route to)
 {
     if (to == kRouteSpeaker) {
         outputMuted = true;
-        write(SPK_VOL, V_MUTE | kSpkVol);
-        update(PWR_DIG1, P_CLS_D, P_CLS_D);
+        write(SPK_VOL, kSpkMuteOff | kSpkVol);
+        update(SPO_L_MIXER, 1u << 12, 1u << 12);
+        update(SPO_R_MIXER, 1u << 12, 1u << 12);
+        // Bias speaker mixers and PGAs while disconnected, then bring Class-D up muted to avoid pop transients.
         update(PWR_MIXER, P_SM_L | P_SM_R, P_SM_L | P_SM_R);
         update(PWR_VOL, P_SV_L | P_SV_R, P_SV_L | P_SV_R);
         write(DAC1_DIG_VOL, kDacSpeaker);
+        IOSleep(15);
+        update(PWR_DIG1, P_CLS_D, P_CLS_D);
+        IOSleep(15);
+        update(SPO_L_MIXER, 1u << 12, 0);
+        update(SPO_R_MIXER, 1u << 12, 0);
     } else if (to == kRouteHeadphones) {
         outputMuted = true;
         write(HP_VOL, hpVolWord(hpAnalogReg, true));
@@ -356,9 +365,13 @@ void SwitchRT5639::routeDown()
 {
     mute(true);
     if (currentRoute == kRouteSpeaker) {
+        // Shut down Class-D while mixers, PGAs, and VREF remain biased so their rail collapse cannot click the speaker.
+        update(SPO_L_MIXER, 1u << 12, 1u << 12);
+        update(SPO_R_MIXER, 1u << 12, 1u << 12);
+        update(PWR_DIG1, P_CLS_D, 0);
+        IOSleep(15);
         update(PWR_VOL, P_SV_L | P_SV_R, 0);
         update(PWR_MIXER, P_SM_L | P_SM_R, 0);
-        update(PWR_DIG1, P_CLS_D, 0);
     } else if (currentRoute == kRouteHeadphones) {
         depop(false);  // "HP Amp" PRE_PMD
         IOSleep(30);
@@ -382,7 +395,7 @@ void SwitchRT5639::mute(bool muted)
     const bool wasHpMuted = outputMuted || headphoneMuted;
     outputMuted = muted;
     if (currentRoute == kRouteSpeaker) {
-        write(SPK_VOL, static_cast<uint16_t>((muted ? V_MUTE : 0u) | kSpkVol));
+        write(SPK_VOL, static_cast<uint16_t>((muted ? kSpkMuteOff : 0u) | kSpkVol));
     } else if (currentRoute == kRouteHeadphones) {
         const bool nowHpMuted = outputMuted || headphoneMuted;
         if (nowHpMuted != wasHpMuted)

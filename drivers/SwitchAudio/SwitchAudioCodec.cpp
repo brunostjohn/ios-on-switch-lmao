@@ -69,8 +69,10 @@ void SwitchAudio::codecPowerDown()
 {
     if (codecOn)
         codec.routeDown();
-    if (codec.biasIsOn())
+    if (codec.biasIsOn()) {
         codec.biasOff();
+        IOSleep(5);
+    }
     codecOn = false;
     captureCodecOn = false;
 }

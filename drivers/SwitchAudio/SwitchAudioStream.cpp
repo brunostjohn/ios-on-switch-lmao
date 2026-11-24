@@ -62,6 +62,22 @@ void SwitchAudio::applyMvcLive(bool immediate)
     (void)switch_audio_ahub::mvcSetVolume(ahub, desiredMvcMdB(), muted, immediate);
 }
 
+bool SwitchAudio::rampMvcMute()
+{
+    if (!tegra || !loop || !gate || hardwareLost || !apeGate.powered())
+        return false;
+    bool ramped = false;
+    const IOCommandGate::Action thunk = [](OSObject *owner, void *out, void *, void *, void *) -> IOReturn {
+        auto *self = static_cast<SwitchAudio *>(owner);
+        if (self->hardwareLost || !self->apeGate.powered() || !self->ahubActive)
+            return kIOReturnSuccess;
+        *static_cast<bool *>(out) = switch_audio_ahub::mvcSetVolume(self->ahub, -120000, true, false);
+        return kIOReturnSuccess;
+    };
+    gate->runAction(thunk, &ramped);
+    return ramped;
+}
+
 // Per TRM Ch. 23.2.12, OPE1 cannot change live; pause ADMA ch0 briefly while disabling and re-enabling it.
 void SwitchAudio::reconfigureOpeForRoute()
 {
@@ -149,6 +165,7 @@ void SwitchAudio::tegraStart()
     switch_mmio_write32(adma, CH_CMD, 1);
     switch_mmio_write32(adma, GLOBAL_CG, 7);
     ahubActive = true;
+    hwFifoOffset = 0;
     publishHwAnchor(0, anchorHost, true);
 
     periods[kChOut] = 0;
@@ -263,7 +280,14 @@ void SwitchAudio::playedPeriod()
     switch_audio_sample_t *slot =
         ring(SwitchAudioMemoryOutput) + (n % kOutPeriods) * kOutPeriodFrames * SWITCH_AUDIO_OUT_CHANNELS;
     const uint64_t done = (n + 1) * kOutPeriodFrames;
-    publishHwAnchor(done, irqHost, false);
+    if (n == 0) {
+        const uint64_t expected = (static_cast<uint64_t>(kOutPeriodFrames) * control->ticks_per_frame_q32) >> 32;
+        const uint64_t idealHost = control->anchor_host + expected;
+        const uint64_t early = idealHost > irqHost ? idealHost - irqHost : 0;
+        const uint64_t cap = hz / 100;  // <= 10 ms AHUB FIFO prefill lead
+        hwFifoOffset = early < cap ? early : cap;
+    }
+    publishHwAnchor(done, irqHost + hwFifoOffset, false);
     const uint64_t now = nowFrame();
 #if DEVELOPMENT || DEBUG
     if (statsTimer)
@@ -501,6 +525,8 @@ IOReturn SwitchAudio::request(uint32_t selector)
     const uint32_t bit = (selector == SwitchAudioStartOutput || selector == SwitchAudioStopOutput)
                              ? SwitchAudioOutputRunning
                              : SwitchAudioInputRunning;
+    const bool startingFirst = run && !control->state;
+    const bool stoppingLast = !run && !(control->state & ~bit);
     if (run) {
         if (!acquireApe())
             return kIOReturnNotReady;
@@ -511,11 +537,17 @@ IOReturn SwitchAudio::request(uint32_t selector)
     } else if (selector == SwitchAudioStopInput) {
         codecStep(kCodecCaptureOff);
     }
-    if (!run && !(control->state & ~bit))
+    if (stoppingLast) {
+        if (rampMvcMute())
+            IOSleep(18);
         codecStep(kCodecPause);
+    }
     void *const argument = reinterpret_cast<void *>(static_cast<uintptr_t>(selector));
     const IOReturn result = gate->runAction(&SwitchAudio::requestGated, argument);
-    if (run)
+    if (run) {
+        if (startingFirst)
+            IOSleep(5);
         codecStep(kCodecUnmute);
+    }
     return result;
 }

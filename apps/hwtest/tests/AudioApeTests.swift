@@ -156,8 +156,8 @@ struct AudioApePipelineTest: HWTest {
             ("MVC1 enabled and unmuted", s2.mvcEn == 1 && s2.mvcMuted == 0),
             ("OPE1 enabled with route-matched PEQ/MBDRC", s2.opeEn == 1 && opeMatchesRoute),
             (
-                "RT5639 128x DAC/ADC OSR and SV_ZCD enabled",
-                s2.codecOk == 1 && (s2.addaClk1 & 0xf) == 0 && s2.svZcd1 == 0xdc09
+                "RT5639 128x DAC/ADC OSR and HP SV_ZCD enabled",
+                s2.codecOk == 1 && (s2.addaClk1 & 0xf) == 0 && s2.svZcd1 == 0x9c09
             ),
             ("RT5639 HP analog PGA at or below unity (0 dB)", hpL >= 8 && hpR >= 8),
             ("zero playback underruns across the window", s2.underruns == s1.underruns),
