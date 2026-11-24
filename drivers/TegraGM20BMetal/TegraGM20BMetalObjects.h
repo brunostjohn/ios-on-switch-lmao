@@ -408,6 +408,33 @@ struct SwitchMetalSharedEventWait {
     std::shared_ptr<gm20b::SharedEventCompletion> completion = {};
 };
 
+struct SwitchMetalDeferredPresent {
+    enum class Kind : uint8_t {
+        Immediate,
+        AtTime,
+        AfterMinimumDuration
+    };
+
+    id<MTLDrawable> drawable;
+    Kind kind;
+    CFTimeInterval value;
+};
+
+static inline void gm20bRunDeferredPresent(const SwitchMetalDeferredPresent &p)
+{
+    switch (p.kind) {
+    case SwitchMetalDeferredPresent::Kind::Immediate:
+        [p.drawable present];
+        break;
+    case SwitchMetalDeferredPresent::Kind::AtTime:
+        [p.drawable presentAtTime:p.value];
+        break;
+    case SwitchMetalDeferredPresent::Kind::AfterMinimumDuration:
+        [p.drawable presentAfterMinimumDuration:p.value];
+        break;
+    }
+}
+
 @interface SwitchMetalCommandBuffer : SwitchMetalObject {
 @public
     uint64_t _protection;  // setProtectionOptions: (kept, no effect)
@@ -453,7 +480,8 @@ struct SwitchMetalSharedEventWait {
     // a drawable present was added (its completion is observed), cleared once it failed before all its work was
     // submitted (none is made, TegraGM20BMetalFinish.mm withholdPresents); the range being submitted ends quiet
     // (completion_source.h)
-    bool _presents, _rangeQuiet, _rangeHeld;
+    std::atomic<bool> _presents;
+    bool _rangeQuiet, _rangeHeld;
     // writer promises (Device::promise) made when it counted as scheduled before its work reached the kernel, under
     // _lock; taken once its last raw range carries them to the kernel or finish() cancels or withdraws them. _promised:
     // any were asked for, or its failure's unpromised writes were withdrawn (cancelPromises); read without the lock
@@ -495,6 +523,9 @@ struct SwitchMetalSharedEventWait {
     NSArray *_doneHandlers;     // its completed handlers, from finish() until they ran
     bool _doneBehindScheduled;  // they run behind its scheduled handlers on the queue's handler queue
     bool _emptyPendingCompletion;
+    std::vector<SwitchMetalDeferredPresent> _deferredPresents, _donePresents;
+    std::atomic<bool> _hasDeferredPresents;
+    bool _latePresent;
     gm20b::HandlerTurn _scheduledTurn, _turn;
     std::atomic<MTLCommandBufferStatus> _status;
     NSError *_error;

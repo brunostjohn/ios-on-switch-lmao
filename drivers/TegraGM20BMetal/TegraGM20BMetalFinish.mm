@@ -277,6 +277,18 @@ void segmentCompleted(SwitchMetalCommandBuffer *cb, NSError *error, const gm20b:
 // frame's presentDrawable. The queue's turns keep its completed handlers one at a time, in order.
 static void deliverCompletion(SwitchMetalCommandBuffer *cb);
 
+static std::vector<SwitchMetalDeferredPresent> takeDeferredPresents(SwitchMetalCommandBuffer *cb, bool &latePresent)
+{
+    latePresent = false;
+    if (!cb->_hasDeferredPresents.load(std::memory_order_seq_cst))
+        return {};
+    std::lock_guard<gm20b::Mutex> l(cb->_lock);
+    latePresent = std::exchange(cb->_latePresent, false);
+    std::vector<SwitchMetalDeferredPresent> taken;
+    taken.swap(cb->_deferredPresents);
+    return taken;
+}
+
 static void prepareEmptyCompletion(SwitchMetalCommandBuffer *cb)
 {
     SWITCH_METAL_DIAGNOSTIC(gRM->stats.finished.fetch_add(1, std::memory_order_relaxed));
@@ -289,15 +301,25 @@ static void prepareEmptyCompletion(SwitchMetalCommandBuffer *cb)
     cb->_gpuEnd = t.gpuEnd;
     cb->_completedSent = true;
     cb->_doneHandlers = gm20bTakeHandlers(cb, cb->_completedHandlers, cb->_hasCompletedHandlers);
+    bool latePresent = false;
+    cb->_donePresents = takeDeferredPresents(cb, latePresent);
+    if (latePresent)
+        gRM->completionWaiters.fetch_sub(1, std::memory_order_relaxed);
     cb->_doneBehindScheduled = cb->_handlersQueued;
     gm20bChanged(cb);
 }
 
-// Its completed handlers run, it is done, and the command buffer behind it that waited for its turn is delivered
+// Its deferred presents and completed handlers run, it is done, and the command buffer behind it that waited for its
+// turn is delivered
 static void completeBuffer(SwitchMetalCommandBuffer *cb)
 {
     SwitchMetalCommandBuffer *cur = cb;
     while (cur) {
+        std::vector<SwitchMetalDeferredPresent> presents;
+        presents.swap(cur->_donePresents);
+        for (const SwitchMetalDeferredPresent &p : presents)
+            gm20bRunDeferredPresent(p);
+        presents.clear();
         NSArray *handlers = cur->_doneHandlers;
         cur->_doneHandlers = nil;
         for (MTLCommandBufferHandler h in handlers)
@@ -326,7 +348,8 @@ static void completeBuffer(SwitchMetalCommandBuffer *cb)
             later->_emptyPendingCompletion = false;
             prepareEmptyCompletion(later);
         }
-        if (!later->_doneBehindScheduled && !later->_queue->_completionQueue && !later->_doneHandlers.count) {
+        if (gm20b::inlineCompletion(later->_doneBehindScheduled, later->_queue->_completionQueue != nil,
+                                    later->_doneHandlers.count != 0, !later->_donePresents.empty())) {
             cur = later;
             continue;
         }
@@ -410,7 +433,8 @@ static void completeOnTarget(void *context)
 static void deliverCompletion(SwitchMetalCommandBuffer *cb)
 {
     dispatch_queue_t q = cb->_queue->_completionQueue;
-    if (!cb->_doneBehindScheduled && !q && !cb->_doneHandlers.count) {
+    if (gm20b::inlineCompletion(cb->_doneBehindScheduled, q != nil, cb->_doneHandlers.count != 0,
+                                !cb->_donePresents.empty())) {
         completeBuffer(cb);
         return;
     }
@@ -515,6 +539,15 @@ static void finished(SwitchMetalCommandBuffer *cb)
     }
     cb->_completedSent = true;
     NSArray *handlers = gm20bTakeHandlers(cb, cb->_completedHandlers, cb->_hasCompletedHandlers);
+    bool latePresent = false;
+    std::vector<SwitchMetalDeferredPresent> presents = takeDeferredPresents(cb, latePresent);
+    if (latePresent)
+        gRM->completionWaiters.fetch_sub(1, std::memory_order_relaxed);
+    if (error) {
+        if (!presents.empty() && cb->_presents.load(std::memory_order_acquire))
+            withholdPresents(cb);
+        presents.clear();
+    }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     const uint64_t heldReturnUs = cb->_heldReturnUs.exchange(0);
 #endif
@@ -534,6 +567,7 @@ static void finished(SwitchMetalCommandBuffer *cb)
 #endif
     // A handler may submit and wait for another queue's command buffer, so none runs on a GPU worker. One that waits for a
     // later command buffer of its own queue waits for good, as it does on Metal's serial per-queue completion queue.
+    cb->_donePresents = std::move(presents);
     cb->_doneHandlers = handlers;
     cb->_doneBehindScheduled = behindScheduled;
     SwitchMetalCommandBuffer *before = cb->_before;

@@ -4961,6 +4961,19 @@ facade_test(
 )
 
 facade_test(
+    name = "facade_present_tsan_test",
+    size = "medium",
+    srcs = [
+        "facade_drawn.h",
+        "facade_present_test.cpp",
+    ],
+    copts = ["-fsanitize=thread"],
+    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
+    linkopts = ["-fsanitize=thread"],
+    plugin = "_tsan",
+)
+
+facade_test(
     name = "facade_held_test",
     srcs = [
         "facade_drawn.h",

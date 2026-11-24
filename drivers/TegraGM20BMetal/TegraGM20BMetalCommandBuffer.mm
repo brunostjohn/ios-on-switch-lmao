@@ -52,8 +52,10 @@ static void commandBufferDropped(void *object)
     if (b->_lateWriteSampled)
         gm20bDropLateWrites(b);
 #endif
-    if (!completed)
+    if (!completed) {
+        b->_deferredPresents.clear();
         gm20bRecordingDone(b);
+    }
 }
 
 // Command-buffer objects use the same instance pool as encoders (object_pool.h). Dealloc returns an unsubmitted
@@ -422,31 +424,84 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
         block((id<MTLCommandBuffer>)self);
 }
 
+static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable, SwitchMetalDeferredPresent::Kind kind,
+                         CFTimeInterval value)
+{
+    if (!drawable)
+        return;
+    if (!cb->_committed.load(std::memory_order_relaxed)) {
+        cb->_presents.store(true, std::memory_order_relaxed);
+        cb->_deferredPresents.push_back({drawable, kind, value});
+        cb->_hasDeferredPresents.store(true, std::memory_order_relaxed);
+        return;
+    }
+    cb->_hasDeferredPresents.store(true, std::memory_order_seq_cst);
+    bool completed = false;
+    bool failed = false;
+    bool wake = false;
+    {
+        std::lock_guard<gm20b::Mutex> l(cb->_lock);
+        completed = cb->_completedSent.load(std::memory_order_seq_cst);
+        if (!completed) {
+            cb->_presents.store(true, std::memory_order_release);
+            cb->_deferredPresents.push_back({drawable, kind, value});
+            if (!cb->_latePresent) {
+                cb->_latePresent = true;
+                gRM->completionWaiters.fetch_add(1, std::memory_order_seq_cst);
+                wake = true;
+            }
+        } else {
+            failed = cb->_error != nil;
+        }
+    }
+    if (wake)
+        gRM->inflight.wake();
+    else if (completed && !failed) {
+        dispatch_queue_t q = cb->_queue->_completionQueue;
+        SwitchMetalDeferredPresent p{drawable, kind, value};
+        dispatch_async(q ?: followingRootQueue(), ^{
+            gm20bRunDeferredPresent(p);
+        });
+    }
+}
+
 - (void)presentDrawable:(id<MTLDrawable>)drawable
 {
-    _presents = true;
-    [self addScheduledHandler:^(id<MTLCommandBuffer> cb) {
-        if (presents(cb))
-            [drawable present];
-    }];
+    if (gRM->raw->role() == gm20b::Device::Role::RenderServer) {
+        _presents = true;
+        [self addScheduledHandler:^(id<MTLCommandBuffer> cb) {
+            if (presents(cb))
+                [drawable present];
+        }];
+        return;
+    }
+    deferPresent(self, drawable, SwitchMetalDeferredPresent::Kind::Immediate, 0);
 }
 
 - (void)presentDrawable:(id<MTLDrawable>)drawable atTime:(CFTimeInterval)t
 {
-    _presents = true;
-    [self addScheduledHandler:^(id<MTLCommandBuffer> cb) {
-        if (presents(cb))
-            [drawable presentAtTime:t];
-    }];
+    if (gRM->raw->role() == gm20b::Device::Role::RenderServer) {
+        _presents = true;
+        [self addScheduledHandler:^(id<MTLCommandBuffer> cb) {
+            if (presents(cb))
+                [drawable presentAtTime:t];
+        }];
+        return;
+    }
+    deferPresent(self, drawable, SwitchMetalDeferredPresent::Kind::AtTime, t);
 }
 
 - (void)presentDrawable:(id<MTLDrawable>)drawable afterMinimumDuration:(CFTimeInterval)d
 {
-    _presents = true;
-    [self addScheduledHandler:^(id<MTLCommandBuffer> cb) {
-        if (presents(cb))
-            [drawable presentAfterMinimumDuration:d];
-    }];
+    if (gRM->raw->role() == gm20b::Device::Role::RenderServer) {
+        _presents = true;
+        [self addScheduledHandler:^(id<MTLCommandBuffer> cb) {
+            if (presents(cb))
+                [drawable presentAfterMinimumDuration:d];
+        }];
+        return;
+    }
+    deferPresent(self, drawable, SwitchMetalDeferredPresent::Kind::AfterMinimumDuration, d);
 }
 
 - (void)enqueue
