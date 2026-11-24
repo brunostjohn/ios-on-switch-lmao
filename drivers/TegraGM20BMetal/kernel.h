@@ -13,7 +13,6 @@
 #include <vector>
 #include "TegraGM20BABI.h"
 #include "TegraGM20BLayout.h"
-#include "TegraGM20BSchedABI.h"
 #include "surfaces.h"
 #include "shared_events.h"
 #include "cpu_completion.h"
@@ -193,7 +192,7 @@ public:
 
     bool supportsSameUses() const
     {
-        return (info_.flags & TegraGM20BInfoSameUses) != 0;
+        return sameUses_;
     }
 
     int park(uint64_t handle, bool guardNone);
@@ -388,6 +387,7 @@ private:
     uint32_t conn_ = 0;
     bool tunnel_ = false;
     bool volatileWrites_ = false;
+    bool sameUses_ = false;
     FreeObserver *freeObserver_ = nullptr;
     // A SurfaceWrites failed: imports stop saying the GPU only samples them.
     std::atomic<bool> importsWritten_{false};

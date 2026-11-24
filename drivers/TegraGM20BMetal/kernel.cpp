@@ -97,6 +97,7 @@ bool Kernel::open(std::string &err)
         return false;
     }
     volatileWrites_ = (info_.flags & TegraGM20BInfoVolatileWrites) != 0;
+    sameUses_ = (info_.flags & TegraGM20BInfoSameUses) != 0;
     const uint64_t start = (info_.va_start + kVaGranule - 1) & ~(kVaGranule - 1);
     uint64_t end = info_.va_end & ~(kVaGranule - 1);
     if (supportsPackImage() && end > TGM_PACK_WINDOW_VA)

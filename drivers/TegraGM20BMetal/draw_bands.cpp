@@ -4,7 +4,6 @@
 #include "gpu.h"
 #include "mme.h"
 #include "stamps.h"
-#include "tiled_cache.h"
 #include "../../kits/SwitchGM20B/SwitchGM20B.h"
 
 namespace gm20b {
@@ -141,14 +140,12 @@ void RenderEncoder::emitDraw(bool indexed, uint32_t first, uint32_t count, uint3
                       emitted_->fragmentInstructions,
                       bands};
         cb_->timings.push_back(selfTiming);
-        if (p_.room() < kTiledCacheFlushWords + kDrawStampWords)
+        if (p_.room() < kDrawStampWords)
             reserve();
-        if (passDraws_ > 1)
-            tiledCacheDrain(p_, dev_->k_.info());
         emitDrawStamp(p_, dev_->stamps_.va, selfTiming.slot, false, selfTiming.payload);
     }
     uint32_t bandIndex = 0;
-    const uint32_t perBandRoom = kBandWords + kTiledCacheFlushWords + kDrawStampWords + kProgressReleaseWords;
+    const uint32_t perBandRoom = kBandWords + kDrawStampWords + kProgressReleaseWords;
     emitBandGrid(
         p_, rot_, area, drawBox_, grid,
         [&] {
@@ -157,14 +154,15 @@ void RenderEncoder::emitDraw(bool indexed, uint32_t first, uint32_t count, uint3
         },
         words,
         [&] {
-            if (selfMeasured && ++bandIndex == bands) {
-                tiledCacheDrain(p_, dev_->k_.info());
-                emitDrawStamp(p_, dev_->stamps_.va, selfTiming.slot, true, selfTiming.payload);
-            }
             if (progressVa)
                 emitProgressRelease(p_, progressVa, dev_->nextProgressSeq());
             else
                 cutBatch();
+            if (selfMeasured && ++bandIndex == bands) {
+                if (p_.room() < kDrawStampWords)
+                    reserve();
+                emitDrawStamp(p_, dev_->stamps_.va, selfTiming.slot, true, selfTiming.payload);
+            }
         });
     if (progressVa)
         cb_->batchWork_ = {};

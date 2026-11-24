@@ -164,7 +164,13 @@ public:
 	void *lock_ = nullptr;
 	tgm_vm *vm_ = nullptr;
 	uint64_t next_handle_ = 2;
+	uint64_t boGen_ = 1;
 	Bo *bos_;
+
+	void bumpBoGen()
+	{
+		++boGen_;
+	}
 
 	struct HostMemory {
 		template <typename T> static T *allocate(uint32_t count)

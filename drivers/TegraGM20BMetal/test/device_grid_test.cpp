@@ -50,10 +50,16 @@ struct Launch {
 
 class DeviceGrid : public harness::DeviceTest {
 protected:
-    // The launches one dispatch of `groups` threadgroups of one thread submits, in order; false where it was refused
-    bool dispatched(const uint32_t groups[3], std::vector<Launch> &out, const char **why)
+    bool dispatched(const uint32_t groups[3], std::vector<Launch> &out, const char **why, bool measured = true)
     {
         const gm20b::ComputeState *k = gm20b::placeCompute(dev, rootKernel());
+        if (k) {
+            auto &rate = const_cast<gm20b::BandRate &>(k->rate);
+            rate.psPerUnit.store(0, std::memory_order_relaxed);
+            rate.samples.store(0, std::memory_order_relaxed);
+            if (measured)
+                gm20b::learn(rate, 40'000, 1'000'000);
+        }
         gm20b::CommandBuffer *cb = dev.begin();
         if (!k || !cb)
             return false;
@@ -139,6 +145,15 @@ TEST_F(DeviceGrid, AGridWithinTheQmdIsOneLaunch)
     ASSERT_EQ(launches.size(), 1u);
     EXPECT_EQ(launches[0].height, 65535u);
     EXPECT_EQ(launches[0].depth, 2u);
+}
+
+TEST_F(DeviceGrid, AnUnmeasuredLargeGridIsCutIntoMaxPieces)
+{
+    const uint32_t groups[3] = {3, 70000, 1};
+    std::vector<Launch> launches;
+    const char *why = nullptr;
+    ASSERT_TRUE(dispatched(groups, launches, &why, false)) << (why ? why : "");
+    EXPECT_EQ(launches.size(), gm20b::kMaxBands);
 }
 
 TEST_F(DeviceGrid, AnIndirectCommandsSliceIsItsOwnLaunch)
