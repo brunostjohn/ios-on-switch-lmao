@@ -32,7 +32,7 @@ def pull_commands(out: Path, udid: str | None, age_s: int) -> list[list[str]]:
 def pull(out: Path, udid: str | None, age_s: int) -> Path:
     """Pull a session into a new folder under out and return its .logarchive."""
     folder = out / datetime.now(UTC).strftime('%Y%m%d-%H%M%S')
-    folder.mkdir(parents=True)
+    (folder / 'crash').mkdir(parents=True)
     for cmd in pull_commands(folder, udid, age_s):
         if not shutil.which(cmd[0]):
             raise SystemExit(f'{cmd[0]} is not installed (brew install libimobiledevice)')

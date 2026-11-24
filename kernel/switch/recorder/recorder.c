@@ -235,6 +235,7 @@ static int switch_recorder_create(const char *path, vnode_t *vp, vfs_context_t c
 /* The ring as kdbg_dump_trace_to_file writes it: its bytes, 0 when nothing was written. */
 static uint64_t switch_recorder_trace(const char *path, vfs_context_t ctx)
 {
+    const bool was_eager = thread_is_eager_preempt(current_thread());
     vnode_t vp = NULLVP;
     off_t size = 0;
 
@@ -242,9 +243,17 @@ static uint64_t switch_recorder_trace(const char *path, vfs_context_t ctx)
         return 0;
     }
     vnode_close(vp, FWRITE, ctx);
+    /* kdbg_dump_trace_to_file unconditionally calls thread_set_eager_preempt(), which asserts it is unset;
+     * THREAD_CALL_PRIORITY_USER callout threads inherit TH_SFLAG_EAGERPREEMPT from thread_call_thread_create(). */
+    if (was_eager) {
+        thread_clear_eager_preempt(current_thread());
+    }
     os_atomic_store(&switch_recorder.dumper, current_thread(), relaxed);
     kdbg_dump_trace_to_file(path, true);
     os_atomic_store(&switch_recorder.dumper, THREAD_NULL, relaxed);
+    if (was_eager && !thread_is_eager_preempt(current_thread())) {
+        thread_set_eager_preempt(current_thread());
+    }
     if (vnode_lookup(path, VNODE_LOOKUP_NOFOLLOW, &vp, ctx) == 0) {
         (void)vnode_size(vp, &size, ctx);
         vnode_put(vp);

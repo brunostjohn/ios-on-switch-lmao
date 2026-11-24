@@ -68,4 +68,19 @@ TEST(XnuRecorderHooksSource, EverySourceWithARecorderHookGetsTheDefine)
     }
 }
 
+TEST(XnuRecorderHooksSource, DumpTraceClearsInheritedEagerPreemptAroundKdbgDump)
+{
+    const std::string body =
+        Between(SourceText("../switch/recorder/recorder.c"), "switch_recorder_trace(", "\nstatic uint64_t");
+    const size_t clear = body.find("thread_clear_eager_preempt(");
+    const size_t dump = body.find("kdbg_dump_trace_to_file(", clear);
+    const size_t restore = body.find("thread_set_eager_preempt(", dump);
+
+    ASSERT_NE(clear, std::string::npos);
+    ASSERT_NE(dump, std::string::npos);
+    ASSERT_NE(restore, std::string::npos);
+    EXPECT_LT(clear, dump);
+    EXPECT_LT(dump, restore);
+}
+
 }  // namespace
