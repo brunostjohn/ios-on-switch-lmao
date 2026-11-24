@@ -10,6 +10,8 @@
 
 #define BCM2837
 #define ARM_ARCH_TIMER
+#define SWITCH_ARMV8_PMUV3        1
+#define CPMU_AIC_PMI              1
 
 #define __ARM_ARCH__              8
 #define __ARM_VMSA__              8
@@ -25,9 +27,7 @@
 
 #ifndef ASSEMBLER
 #define PLATFORM_PANIC_LOG_DISABLED
-/* Apple CPMU registers are implementation defined; counters stay off and
- * this only sizes the per-CPU counter state. */
-#define CPMU_PMC_COUNT 10
+#define CPMU_PMC_COUNT 7
 #endif /* ! ASSEMBLER */
 
 #endif /* ! _PEXPERT_ARM_BCM2837_H */

@@ -11,6 +11,8 @@
 #define BCM2837
 #define BCM2837_BRINGUP
 #define ARM_ARCH_TIMER
+#define SWITCH_ARMV8_PMUV3        1
+#define CPMU_AIC_PMI              1
 
 #define __ARM_ARCH__              8
 #define __ARM_VMSA__              8

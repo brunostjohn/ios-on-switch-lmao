@@ -1866,3 +1866,54 @@ host_test(
     ],
     includes = ["."],
 )
+
+copy_file(
+    name = "switch_pmuv3",
+    src = "//kernel/switch:include/switch/pmuv3.h",
+    out = "switch/pmuv3.h",
+)
+
+host_test(
+    name = "xnu_pmuv3_test",
+    srcs = [
+        "switch/pmuv3.h",
+        "xnu_pmuv3_test.cpp",
+    ],
+    data = [
+        "//drivers/ArmCpu:ArmCpu.cpp",
+        "//drivers/ArmGIC:ArmGIC.cpp",
+        "//kernel/switch:include/switch/pmuv3.h",
+        "//kernel/xnu-10063.141.1/config:MASTER.arm64.bcm2837",
+        "//kernel/xnu-10063.141.1/osfmk:arm64/kpc.c",
+        "//kernel/xnu-10063.141.1/osfmk:arm64/monotonic.h",
+        "//kernel/xnu-10063.141.1/osfmk:arm64/monotonic_arm64.c",
+        "//kernel/xnu-10063.141.1/osfmk:kern/kern_monotonic.c",
+        "//kernel/xnu-10063.141.1/pexpert:pexpert/arm64/BCM2837.h",
+        "//kernel/xnu-10063.141.1/pexpert:pexpert/arm64/board_config.h",
+        "//kernel/xnu-12377.121.6/config:MASTER.arm64.bcm2837",
+        "//kernel/xnu-12377.121.6/osfmk:arm64/cpc_arm64.c",
+        "//kernel/xnu-12377.121.6/osfmk:arm64/cpc_arm64.h",
+        "//kernel/xnu-12377.121.6/osfmk:arm64/kpc.c",
+        "//kernel/xnu-12377.121.6/pexpert:pexpert/arm64/BCM2837.h",
+        "//kernel/xnu-12377.121.6/pexpert:pexpert/arm64/board_config.h",
+    ],
+    defines = [
+        'ARM_CPU_PATH=\\"$(rootpath //drivers/ArmCpu:ArmCpu.cpp)\\"',
+        'ARM_GIC_PATH=\\"$(rootpath //drivers/ArmGIC:ArmGIC.cpp)\\"',
+        'BCM2837_10063_PATH=\\"$(rootpath //kernel/xnu-10063.141.1/pexpert:pexpert/arm64/BCM2837.h)\\"',
+        'BCM2837_12377_PATH=\\"$(rootpath //kernel/xnu-12377.121.6/pexpert:pexpert/arm64/BCM2837.h)\\"',
+        'BOARD_10063_PATH=\\"$(rootpath //kernel/xnu-10063.141.1/pexpert:pexpert/arm64/board_config.h)\\"',
+        'BOARD_12377_PATH=\\"$(rootpath //kernel/xnu-12377.121.6/pexpert:pexpert/arm64/board_config.h)\\"',
+        'CPC_ARM64_C_12377_PATH=\\"$(rootpath //kernel/xnu-12377.121.6/osfmk:arm64/cpc_arm64.c)\\"',
+        'CPC_ARM64_H_12377_PATH=\\"$(rootpath //kernel/xnu-12377.121.6/osfmk:arm64/cpc_arm64.h)\\"',
+        'KERN_MONOTONIC_10063_PATH=\\"$(rootpath //kernel/xnu-10063.141.1/osfmk:kern/kern_monotonic.c)\\"',
+        'KPC_10063_PATH=\\"$(rootpath //kernel/xnu-10063.141.1/osfmk:arm64/kpc.c)\\"',
+        'KPC_12377_PATH=\\"$(rootpath //kernel/xnu-12377.121.6/osfmk:arm64/kpc.c)\\"',
+        'MASTER_10063_PATH=\\"$(rootpath //kernel/xnu-10063.141.1/config:MASTER.arm64.bcm2837)\\"',
+        'MASTER_12377_PATH=\\"$(rootpath //kernel/xnu-12377.121.6/config:MASTER.arm64.bcm2837)\\"',
+        'MONOTONIC_ARM64_10063_PATH=\\"$(rootpath //kernel/xnu-10063.141.1/osfmk:arm64/monotonic_arm64.c)\\"',
+        'MONOTONIC_H_10063_PATH=\\"$(rootpath //kernel/xnu-10063.141.1/osfmk:arm64/monotonic.h)\\"',
+        'PMUV3_HEADER_PATH=\\"$(rootpath //kernel/switch:include/switch/pmuv3.h)\\"',
+    ],
+    includes = ["."],
+)
