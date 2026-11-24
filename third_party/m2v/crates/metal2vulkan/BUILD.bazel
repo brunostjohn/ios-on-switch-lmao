@@ -367,3 +367,24 @@ rust_test(
     ("group_linking_test", "tests::engine_linking::groups::"),
     ("signed_linking_test", "tests::engine_linking::signed::"),
 ]]
+
+rust_test(
+    name = "spirv_edit_test",
+    args = [
+        "spirv::dead::tests::",
+        "spirv::ir::edit::tests::",
+        "spirv::roll::tests::",
+    ],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    data = [
+        "//third_party/m2v:translation_test_inputs",
+        "@spirv_tools//:spirv-dis",
+        "@spirv_tools//:spirv-val",
+    ],
+    env = {
+        "METAL2VULKAN_SPIRV_DIS": "$(rootpath @spirv_tools//:spirv-dis)",
+        "METAL2VULKAN_SPIRV_VAL": "$(rootpath @spirv_tools//:spirv-val)",
+    },
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
