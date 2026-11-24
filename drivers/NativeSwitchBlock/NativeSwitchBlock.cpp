@@ -141,12 +141,13 @@ constexpr uint64_t kUnmapRefusal = switch_refusal_key("SwitchSD", "discard");
 // specified busy at a time, only once System Boot Complete has come and the queue has been quiet for kTrimQuietNs
 // (kTrimQuietLitNs with the display on), and kTrimBootSectors a boot at most. A request waits behind at most that one
 // erase. The cursor survives reboots in NVRAM, so successive boots' budgets cover the whole card.
-constexpr uint64_t kTrimRunMs = 1100, kTrimMarginNs = 500000000ULL;
-constexpr uint64_t kTrimQuietNs = 10000000000ULL, kTrimQuietLitNs = 60000000000ULL;
-constexpr uint64_t kTrimBootSectors = 8ULL << 21;
+constexpr uint64_t kTrimRunMs = 500, kTrimMarginNs = 500000000ULL;
+constexpr uint64_t kTrimQuietNs = 2000000000ULL, kTrimQuietLitNs = 3000000000ULL;
+constexpr uint64_t kTrimBootSectors = 16ULL << 21;
 constexpr uint64_t kTrimCursorEveryAus = 64;
 constexpr uint32_t kSdEraseArgument = 0;
 constexpr uint64_t kEraseRefusal = switch_refusal_key("SwitchSD", "erase");
+constexpr uint64_t kFlushRefusal = switch_refusal_key("SwitchSD", "cache flush");
 constexpr char kTrimCursorVariable[] = "switch-sd-trim-cursor";
 // r12-sdio: the most separate stretches of a read chain staged through the bounce buffer (SwitchAdmaStaging; consecutive
 // segments of one request make one): one per page of a 1 MiB chain of 4 KiB pages. More: the whole chain bounces.
@@ -369,6 +370,13 @@ struct Unmap {
     bool finished;
 };
 
+// One doSynchronize / doSynchronizeCache waiter, flushed by the worker once no chain is in flight.
+struct SyncWaiter {
+    SyncWaiter *next;
+    IOReturn result;
+    bool finished;
+};
+
 // r12-sdio: one chain's way through the worker (worker()): picked, begun (beginBatch: the table built and, when the chain is
 // one ADMA2 command, its pages synced and the command issued), ended (endBatch: that command waited for, retried and
 // checked; or the whole bounce path), then completed (completeBatch). The worker begins the next chain before it completes
@@ -426,6 +434,8 @@ struct Stats {
     uint64_t cmd23, gapChains, gapBytes;
     // Erase-based trim: erase commands, the sectors they freed and the time the card was busy with them.
     uint64_t trimErases, trimSectors, trimNs;
+    // Volatile write cache flushes (doSynchronize / suspend / shutdown).
+    uint64_t cacheFlushes, cacheFlushNs;
 #if DEVELOPMENT || DEBUG
     // SwitchSdBus.h: commands refused because the bus was not free at their one PRESENT_STATE read, and DAT0 releases
     // awaited by CMD13 with busy (the card still programming after a transfer complete). ADMA2 chains that reached a
@@ -532,21 +542,9 @@ public:
 
     IOReturn reportMediaState(bool *present, bool *changed) override;
 
-    // Writes complete only after the card releases busy and with no card cache enabled, so every completed write is
-    // already durable. Nothing turns the card's cache on, and setup() turns off one found on before any write
-    // (disableFoundCache).
-    IOReturn doSynchronize(UInt64, UInt64, IOOptionBits) override
-    {
-        return doSynchronizeCache();
-    }
-
+    IOReturn doSynchronize(UInt64, UInt64, IOOptionBits) override;
     IOReturn doSynchronizeCache() override;
-
-    IOReturn getWriteCacheState(bool *value) override
-    {
-        *value = false;
-        return kIOReturnSuccess;
-    }
+    IOReturn getWriteCacheState(bool *value) override;
 
     IOReturn setWriteCacheState(bool) override
     {
@@ -582,7 +580,12 @@ class NativeSwitchBlock : public IOService {
     Request *requestSlab = nullptr;
     SwitchSdPool<Request> requestPool = {};
     Request *head = nullptr, *tail = nullptr;
-    Unmap *unmaps = nullptr;  // under queueLock, oldest first
+    Unmap *unmaps = nullptr;      // under queueLock, oldest first
+    SyncWaiter *syncs = nullptr;  // under queueLock: callers awaiting CMD49 Flush Cache
+    bool wantCache = false;       // SD 6.00 volatile write cache enabled at boot (re-enabled on resume)
+    bool cacheEnabled = false;    // card's volatile write cache is currently enabled
+    bool writesDirty = false;     // under queueLock: writes completed since last successful flush
+    bool activeWrite = false;     // under queueLock: a write chain is currently executing in the worker
     // Erase-based trim (cards without discard): the map and the quiet-period timer, under queueLock.
     SwitchSdTrimMap trim;
     uint64_t *trimBits = nullptr;
@@ -768,6 +771,10 @@ class NativeSwitchBlock : public IOService {
     bool extRead(uint8_t fno, uint32_t address, uint32_t length, uint8_t *out);
     void identify();
     void disableFoundCache();
+    void configureCache();
+    bool enableCache(bool resume);
+    bool flushCache();
+    void powerOffNotify();
     int switchFunction(bool set, unsigned group, uint32_t value);
     void setTiming(int uhs, bool highSpeed, int source, uint32_t carDivider, uint32_t divider);
     bool calibratePads();
@@ -824,7 +831,6 @@ public:
 
     bool findFiles(switch_sd_files_slice *);
     void verifyFilesCard();
-    IOReturn sync(const SwitchSdWindow *window);
     IOReturn syncLocked(const SwitchSdWindow *window, bool acknowledgeErrors = true);
     void publishFiles();
     void publishFilesNow();
@@ -838,6 +844,12 @@ public:
     int transfer(uint64_t lba, uint32_t sectors, bool write, uint8_t *bytes, const SwitchSdWindow *window = nullptr);
     IOReturn submit(const Request &);
     IOReturn unmap(const IOBlockStorageDeviceExtent *extents, uint32_t count, uint64_t blocks);
+    IOReturn synchronize(const SwitchSdWindow *window);
+
+    bool writeCacheEnabled() const
+    {
+        return __atomic_load_n(&cacheEnabled, __ATOMIC_ACQUIRE);
+    }
 
     bool filesPresent() const
     {
@@ -930,9 +942,11 @@ bool NativeSwitchBlockDevice::configure(NativeSwitchBlock *provider, const Switc
         setProperty(kIOPropertyDeviceCharacteristicsKey, device);
         device->release();
     }
-    // Force Unit Access: every write completes only once it is on flash (doSynchronize). Unmap: SD discard.
+    // Force Unit Access only when the card's volatile write cache is off; with it on, durability goes through
+    // doSynchronize / doSynchronizeCache (CMD49 Flush Cache). Unmap: SD discard or idle erase.
     if (OSDictionary *features = OSDictionary::withCapacity(2)) {
-        features->setObject(kIOStorageFeatureForceUnitAccess, kOSBooleanTrue);
+        if (!provider->writeCacheEnabled())
+            features->setObject(kIOStorageFeatureForceUnitAccess, kOSBooleanTrue);
         if (!shared && provider->canUnmap())
             features->setObject(kIOStorageFeatureUnmap, kOSBooleanTrue);
         setProperty(kIOStorageFeaturesKey, features);
@@ -950,11 +964,21 @@ IOReturn NativeSwitchBlockDevice::reportMediaState(bool *present, bool *changed)
     return kIOReturnSuccess;
 }
 
-IOReturn NativeSwitchBlockDevice::doSynchronizeCache()
+IOReturn NativeSwitchBlockDevice::doSynchronize(UInt64, UInt64, IOOptionBits)
 {
-    return owner->sync(window);
+    return owner->synchronize(window);
 }
 
+IOReturn NativeSwitchBlockDevice::doSynchronizeCache()
+{
+    return owner->synchronize(window);
+}
+
+IOReturn NativeSwitchBlockDevice::getWriteCacheState(bool *value)
+{
+    *value = owner->writeCacheEnabled();
+    return kIOReturnSuccess;
+}
 IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block, UInt64 count,
                                                    IOStorageAttributes *attributes, IOStorageCompletion *completion)
 {
@@ -1426,14 +1450,6 @@ int NativeSwitchBlock::retry(int step, uint32_t status, uint64_t lba, uint32_t s
     return step;
 }
 
-IOReturn NativeSwitchBlock::sync(const SwitchSdWindow *window)
-{
-    IOLockLock(queueLock);
-    const IOReturn result = syncLocked(window);
-    IOLockUnlock(queueLock);
-    return result;
-}
-
 IOReturn NativeSwitchBlock::syncLocked(const SwitchSdWindow *window, bool acknowledgeErrors)
 {
     auto &fence = writes(window);
@@ -1587,6 +1603,36 @@ IOReturn NativeSwitchBlock::unmap(const IOBlockStorageDeviceExtent *extents, uin
     return job.result;
 }
 
+IOReturn NativeSwitchBlock::synchronize(const SwitchSdWindow *window)
+{
+    IOLockLock(queueLock);
+    const IOReturn drained = syncLocked(window);
+    if (drained != kIOReturnSuccess || !writeCacheEnabled()) {
+        IOLockUnlock(queueLock);
+        return drained;
+    }
+    if (shutdownDone) {
+        IOLockUnlock(queueLock);
+        return kIOReturnNotReady;
+    }
+    if (!writesDirty && !activeWrite) {
+        IOLockUnlock(queueLock);
+        return kIOReturnSuccess;
+    }
+    if (current_thread() == workerThread) {
+        IOLockUnlock(queueLock);
+        return kIOReturnBusy;
+    }
+    SyncWaiter waiter = {nullptr, kIOReturnSuccess, false};
+    waiter.next = syncs;
+    syncs = &waiter;
+    IOLockWakeup(queueLock, &head, true);
+    while (!waiter.finished)
+        IOLockSleep(queueLock, &syncs, THREAD_UNINT);
+    IOLockUnlock(queueLock);
+    return waiter.result;
+}
+
 // Worker thread, no chain in flight: the job's next discard. Extents are the APFS partition's blocks: rootWindow.first
 // maps them onto the card. True once the job is finished (result set).
 bool NativeSwitchBlock::stepUnmap(Unmap &job)
@@ -1687,7 +1733,7 @@ void NativeSwitchBlock::trimStep()
         IOLockLock(queueLock);
         trim.cursor = found ? cursor : 0;
         trimCursorLoaded = true;
-        if (head || unmaps || suspended || switch_now_ns() < trimQuietUntil())
+        if (head || unmaps || syncs || suspended || switch_now_ns() < trimQuietUntil())
             return;  // I/O came while NVRAM was read
     }
     uint64_t lba = 0;
@@ -2385,7 +2431,7 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
 #if DEVELOPMENT || DEBUG
         bool wokeFromIdle = false;
 #endif
-        while (!pending && ((!self->head && !self->unmaps) || self->suspended)) {
+        while (!pending && ((!self->head && !self->unmaps && !self->syncs) || self->suspended)) {
             if (!self->suspended && self->trimRunnable()) {
                 const uint64_t now = switch_now_ns();
                 const uint64_t until = self->trimQuietUntil();
@@ -2414,8 +2460,37 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
             IOLockUnlock(self->queueLock);
             continue;
         }
+        // Cache flush takes priority once no command is in flight so APFS barriers do not wait behind reads.
+        const bool syncTurn = (self->syncs != nullptr) && !self->suspended;
+        if (syncTurn && !pending) {
+            SyncWaiter *batch = self->syncs;
+            self->syncs = nullptr;
+            const bool dirty = self->writesDirty;
+            self->working = true;
+#if DEVELOPMENT || DEBUG
+            self->prevIrqNs = 0;
+#endif
+            IOLockUnlock(self->queueLock);
+            const IOReturn syncResult = (!dirty || self->flushCache()) ? kIOReturnSuccess : kIOReturnIOError;
+            IOLockLock(self->queueLock);
+            if (dirty && syncResult == kIOReturnSuccess)
+                self->writesDirty = false;
+            while (batch) {
+                SyncWaiter *nextWaiter = batch->next;
+                batch->next = nullptr;
+                batch->result = syncResult;
+                batch->finished = true;
+                batch = nextWaiter;
+            }
+            IOLockWakeup(self->queueLock, &self->syncs, false);
+            self->working = false;
+            if (self->suspended)
+                IOLockWakeup(self->queueLock, &self->working, false);
+            IOLockUnlock(self->queueLock);
+            continue;
+        }
         // A discard needs no chain in flight: on its turn no chain is picked, so the pending one completes first.
-        const bool discardTurn = (self->unmaps != nullptr) && !self->suspended &&
+        const bool discardTurn = (self->unmaps != nullptr) && !self->suspended && !syncTurn &&
                                  ((self->head == nullptr) || self->chainsSinceUnmap >= kUnmapEveryChains);
         if (discardTurn && !pending) {
             Unmap *job = self->unmaps;
@@ -2439,7 +2514,7 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
             continue;
         }
         Batch *next = nullptr;
-        if (self->head && !self->suspended && !discardTurn) {
+        if (self->head && !self->suspended && !discardTurn && !syncTurn) {
             if (self->unmaps)
                 ++self->chainsSinceUnmap;
             next = &batches[turn];
@@ -2458,6 +2533,8 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
             next->oldestQueuedNs = oldest;
 #endif
             self->working = true;
+            if (next->first->write)
+                self->activeWrite = true;
         }
         IOLockUnlock(self->queueLock);
         // The next chain's command goes to the card first; the previous chain's completions run while it moves data. A
@@ -2486,6 +2563,10 @@ void NativeSwitchBlock::worker(void *context, wait_result_t)
         self->endBatch(*next);
         pending = next;
         IOLockLock(self->queueLock);
+        if (next->write) {
+            self->writesDirty = true;
+            self->activeWrite = false;
+        }
         const bool drain = self->suspended;
         IOLockUnlock(self->queueLock);
         if (drain) {
@@ -2585,7 +2666,7 @@ void NativeSwitchBlock::logThroughput()
     for (const uint64_t count : stats.bounced)
         bounced += count;
     const uint64_t perRequest = stats.direct ? stats.descriptors * 10 / stats.direct : 0;
-    char extras[160] = "";
+    char extras[192] = "";
 #if DEVELOPMENT || DEBUG
     // SwitchSdBus.h: commands refused at their PRESENT_STATE read and DAT0 releases awaited by CMD13 (both 0 per the
     // spec).
@@ -2603,6 +2684,11 @@ void NativeSwitchBlock::logThroughput()
         const size_t at = strlen(extras);
         snprintf(extras + at, sizeof(extras) - at, " trim %llu/%lluM/%llums due %llu", stats.trimErases,
                  stats.trimSectors >> 11, stats.trimNs / 1000000, trim.pending);
+    }
+    if (writeCacheEnabled() || stats.cacheFlushes) {
+        const size_t at = strlen(extras);
+        snprintf(extras + at, sizeof(extras) - at, " cache %s %llu/%llums", writeCacheEnabled() ? "on" : "off",
+                 stats.cacheFlushes, stats.cacheFlushNs / 1000000);
     }
     const uint64_t readRate = stats.readNs ? stats.readBytes * 10000 / stats.readNs : 0;
     const uint64_t writeRate = stats.writeNs ? stats.writeBytes * 10000 / stats.writeNs : 0;
@@ -2949,6 +3035,87 @@ void NativeSwitchBlock::disableFoundCache()
           "cache 0x%02x flush 0x%02x)",
           static_cast<unsigned>(off.step), off.error, off.r1, irq, static_cast<unsigned>(off.cacheEnable),
           static_cast<unsigned>(off.flushCache));
+}
+
+bool NativeSwitchBlock::enableCache(bool resume)
+{
+    const ExtRegBus cacheBus{this, true};
+    const SwitchSdCacheOn on = switchSdEnableCache(havePerf, extInfo.perf, perf, cacheBus);
+    if (on.step == SwitchSdCacheOnStep::kDone) {
+        __atomic_store_n(&cacheEnabled, true, __ATOMIC_RELEASE);
+        writesDirty = false;
+        if (!resume)
+            IOLog("SwitchSD: card volatile write cache enabled\n");
+        return true;
+    }
+    __atomic_store_n(&cacheEnabled, false, __ATOMIC_RELEASE);
+    if (on.step != SwitchSdCacheOnStep::kSkipped) {
+        const uint32_t irq = on.step == SwitchSdCacheOnStep::kReadBackFailed ? initStatus : cardLastIrq;
+        IOLog("SwitchSD: card volatile write cache enable failed%s (step %u, err %d, R1 0x%08x, irq 0x%08x, "
+              "cache 0x%02x)\n",
+              resume ? " after sleep" : "", static_cast<unsigned>(on.step), on.error, on.r1, irq,
+              static_cast<unsigned>(on.cacheEnable));
+    }
+    return false;
+}
+
+void NativeSwitchBlock::configureCache()
+{
+    unsigned noCache = 0;
+    const bool allowCache = !(PE_parse_boot_argn("switch-no-sd-cache", &noCache, sizeof(noCache)) && noCache);
+    if (allowCache && havePerf && perf.cache && havePower && power.offNotification) {
+        if (enableCache(false)) {
+            wantCache = true;
+            return;
+        }
+    }
+    disableFoundCache();
+}
+
+bool NativeSwitchBlock::flushCache()
+{
+    if (!writeCacheEnabled())
+        return true;
+    const uint64_t began = switch_now_ns();
+    const ExtRegBus cacheBus{this, true};
+    SwitchSdFlush flush = switchSdFlushCache(havePerf, extInfo.perf, cacheBus);
+    if ((flush.step == SwitchSdFlushStep::kFlushFailed || flush.step == SwitchSdFlushStep::kReadBackFailed) && tuned &&
+        !inShutdown) {
+        retune(false);
+        flush = switchSdFlushCache(havePerf, extInfo.perf, cacheBus);
+    }
+    const uint64_t elapsed = switch_now_ns() - began;
+    if (flush.step == SwitchSdFlushStep::kDone || flush.step == SwitchSdFlushStep::kSkipped) {
+        ++stats.cacheFlushes;
+        stats.cacheFlushNs += elapsed;
+        return true;
+    }
+    const uint32_t irq = flush.step == SwitchSdFlushStep::kReadBackFailed ? initStatus : cardLastIrq;
+    switch_refusal_k(switch_refusal_key_with(kFlushRefusal, static_cast<uint64_t>(flush.step)), "SwitchSD",
+                     "cache flush", "card cache flush failed (step %u, err %d, R1 0x%08x, irq 0x%08x, flush 0x%02x)",
+                     static_cast<unsigned>(flush.step), flush.error, flush.r1, irq,
+                     static_cast<unsigned>(flush.flushCache));
+    return false;
+}
+
+void NativeSwitchBlock::powerOffNotify()
+{
+    // SD 6.00 Figure 5-18 allows only CMD48 after POFN=1, so suppress CMD13 release fallback on CMD49.
+    const ExtRegBus extBus{this, false};
+    const SwitchSdPowerOff pon = switchSdPowerOffNotify(havePower, extInfo.power, power, extBus);
+    if (pon.step == SwitchSdPowerOffStep::kDone) {
+        if (inShutdown)
+            IOLog("SwitchSD: power off notification ready (status 0x%02x)\n", static_cast<unsigned>(pon.status));
+    } else if (pon.step != SwitchSdPowerOffStep::kSkipped) {
+        uint32_t irq = 0;
+        if (pon.step == SwitchSdPowerOffStep::kNotifyFailed) {
+            irq = cardLastIrq;
+        } else if (pon.step == SwitchSdPowerOffStep::kReadBackFailed) {
+            irq = initStatus;
+        }
+        IOLog("SwitchSD: power off notification failed (step %u, err %d, R1 0x%08x, irq 0x%08x, status 0x%02x)\n",
+              static_cast<unsigned>(pon.step), pon.error, pon.r1, irq, static_cast<unsigned>(pon.status));
+    }
 }
 
 // hekate sdmmc_setup_clock (sdmmc_driver.c:307): card clock gated, default tap (TAP_HW_UPDATED
@@ -3466,7 +3633,14 @@ void NativeSwitchBlock::suspend()
     IOLockWakeup(queueLock, &filesWrites, false);
     while (working)
         IOLockSleep(queueLock, &working, THREAD_UNINT);
+    const bool dirty = writesDirty;
     IOLockUnlock(queueLock);
+    if (writeCacheEnabled() && dirty && flushCache()) {
+        IOLockLock(queueLock);
+        writesDirty = false;
+        IOLockUnlock(queueLock);
+    }
+    powerOffNotify();
     dmaSuspend();
     if (irqSource)
         irqSource->disable();
@@ -3523,6 +3697,17 @@ Request *NativeSwitchBlock::drainQueueLocked()
     }
     IOLockWakeup(queueLock, &rootWrites, false);
     IOLockWakeup(queueLock, &filesWrites, false);
+    if (SyncWaiter *s = syncs) {
+        syncs = nullptr;
+        while (s) {
+            SyncWaiter *next = s->next;
+            s->next = nullptr;
+            s->result = kIOReturnNotReady;
+            s->finished = true;
+            s = next;
+        }
+        IOLockWakeup(queueLock, &syncs, false);
+    }
     if (Unmap *u = unmaps) {
         unmaps = nullptr;
         while (u) {
@@ -3615,21 +3800,9 @@ void NativeSwitchBlock::shutdown()
     inShutdown = true;
     if (trimCall)
         thread_call_cancel(trimCall);
-    // SD 6.00 Figure 5-18 allows only CMD48 after POFN=1, so suppress CMD13 release fallback on CMD49.
-    const ExtRegBus extBus{this, false};
-    const SwitchSdPowerOff pon = switchSdPowerOffNotify(havePower, extInfo.power, power, extBus);
-    if (pon.step == SwitchSdPowerOffStep::kDone) {
-        IOLog("SwitchSD: power off notification ready (status 0x%02x)\n", static_cast<unsigned>(pon.status));
-    } else if (pon.step != SwitchSdPowerOffStep::kSkipped) {
-        uint32_t irq = 0;
-        if (pon.step == SwitchSdPowerOffStep::kNotifyFailed) {
-            irq = cardLastIrq;
-        } else if (pon.step == SwitchSdPowerOffStep::kReadBackFailed) {
-            irq = initStatus;
-        }
-        IOLog("SwitchSD: power off notification failed (step %u, err %d, R1 0x%08x, irq 0x%08x, status 0x%02x)\n",
-              static_cast<unsigned>(pon.step), pon.error, pon.r1, irq, static_cast<unsigned>(pon.status));
-    }
+    if (writeCacheEnabled() && writesDirty && flushCache())
+        writesDirty = false;
+    powerOffNotify();
     dmaSuspend();
     if (irqSource)
         irqSource->disable();
@@ -3664,6 +3837,8 @@ void NativeSwitchBlock::resume()
     }
     verifyFilesCard();
     dmaResume();
+    if (wantCache)
+        (void)enableCache(true);
     IOLockLock(queueLock);
     suspended = false;
     IOLockWakeup(queueLock, &head, false);
@@ -3759,7 +3934,7 @@ bool NativeSwitchBlock::setup()
     if (!haveCid)
         haveCid = switch_sd_boot_card_cid(cid);
     identify();
-    disableFoundCache();
+    configureCache();
     const uint64_t entriesLBA = le64(header + 72);
     const uint32_t entryCount = le32(header + 80);
     const uint32_t entrySize = le32(header + 84);

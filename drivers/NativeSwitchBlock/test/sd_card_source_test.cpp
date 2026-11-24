@@ -79,3 +79,27 @@ TEST(SdCardSource, Cmd23FramingIsGated)
     EXPECT_THAT(body("bool NativeSwitchBlock::setup()"),
                 HasSubstr("autoCmd23 = switchSdPath(r32(CAPABILITIES), r16(HOST_CONTROL2), haveScr ? &scr : nullptr)"));
 }
+
+// Volatile write cache: enabled only with Power Off Notification support, FUA withdrawn when on, doSynchronize flushes,
+// suspend/shutdown flush before PON, and resume re-enables cache after power cycle.
+TEST(SdCardSource, WriteCacheContract)
+{
+    const std::string configure = body("bool NativeSwitchBlockDevice::configure(");
+    EXPECT_THAT(configure, HasSubstr("if (!provider->writeCacheEnabled())"));
+    EXPECT_THAT(body("IOReturn NativeSwitchBlockDevice::doSynchronize("), HasSubstr("owner->synchronize(window)"));
+    EXPECT_THAT(body("IOReturn NativeSwitchBlockDevice::doSynchronizeCache()"), HasSubstr("owner->synchronize(window)"));
+    EXPECT_THAT(body("IOReturn NativeSwitchBlock::synchronize("), HasSubstr("syncLocked(window)"));
+    EXPECT_THAT(body("IOReturn NativeSwitchBlockDevice::getWriteCacheState("), HasSubstr("owner->writeCacheEnabled()"));
+    const std::string setup = body("bool NativeSwitchBlock::setup()");
+    EXPECT_LT(Index(setup, "identify();"), Index(setup, "configureCache();"));
+    const std::string cfgCache = body("void NativeSwitchBlock::configureCache()");
+    EXPECT_THAT(cfgCache, HasSubstr("perf.cache && havePower && power.offNotification"));
+    EXPECT_THAT(cfgCache, HasSubstr("disableFoundCache();"));
+    const std::string suspend = body("void NativeSwitchBlock::suspend()");
+    EXPECT_LT(Index(suspend, "flushCache()"), Index(suspend, "powerOffNotify();"));
+    EXPECT_LT(Index(suspend, "powerOffNotify();"), Index(suspend, "powerOffCard();"));
+    const std::string shutdown = body("void NativeSwitchBlock::shutdown()");
+    EXPECT_LT(Index(shutdown, "flushCache()"), Index(shutdown, "powerOffNotify();"));
+    const std::string resume = body("void NativeSwitchBlock::resume()");
+    EXPECT_LT(Index(resume, "dmaResume();"), Index(resume, "enableCache(true)"));
+}
