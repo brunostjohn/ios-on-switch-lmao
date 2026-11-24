@@ -6792,12 +6792,12 @@ host_test(
 py_binary(
     name = "pack_v34_fixture_bin",
     srcs = ["pack_v34_fixture.py"],
-    main = "pack_v34_fixture.py",
     data = [
         "//drivers/TegraGM20BMetal:chip_facts.h",
         "//drivers/TegraGM20BMetal:own_states.h",
         "//drivers/TegraGM20BMetal:owned.h",
     ],
+    main = "pack_v34_fixture.py",
     deps = ["//drivers/TegraGM20BMetal:pack"],
 )
 

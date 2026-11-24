@@ -335,6 +335,10 @@ class Tier0Segments(unittest.TestCase):
                 'facts': 0,
             }
         )
+        # Tier-1 program sharing a tier-0 storage_id keeps its tier-0 heap slot when tier 0 grows.
+        shared_t0_off = programs[1]['heap_offset']
+        programs.append(dict(programs[1]))
+        shared_t1_idx = len(programs) - 1
 
         # 3,500 distinct tier-0 pipelines + duplicates so segments exceed 128 KiB and exercise delta > 0 and deduplication.
         n_tier0 = 3_500
@@ -405,6 +409,8 @@ class Tier0Segments(unittest.TestCase):
         delta = pack.tier0_heap - tier0_heap_before
         self.assertEqual(programs[tier0_progs]['heap_offset'], t1_off + delta)
         self.assertEqual(programs[tier0_progs]['program'], t1_off + delta + 0x30)
+        self.assertEqual(programs[shared_t1_idx]['heap_offset'], shared_t0_off)
+        self.assertEqual(programs[shared_t1_idx]['program'], shared_t0_off + 0x30)
         self.assertEqual(bytes(pack.heap[t1_off + delta : t1_off + delta + len(tier1_marker)]), tier1_marker)
 
         pipe_count, combo_count = segments._SEGMENT_TABLE.unpack_from(pack.segments, 0)

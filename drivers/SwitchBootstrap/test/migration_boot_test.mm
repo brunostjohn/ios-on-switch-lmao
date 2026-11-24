@@ -318,8 +318,8 @@ static void switch_test_interrupted_retries(void)
     assert(([switch_test_calls isEqual:@[ @"not-ready", @"failed:preparation" ]]));
     assert(switch_test_receipt == SwitchMigrationFailed && switch_test_recorded_error == ECANCELED &&
            switch_test_attempt == 2);
-    assert([[NSString stringWithContentsOfFile:pending encoding:NSASCIIStringEncoding error:nil]
-        isEqual:[switch_test_generation stringByAppendingString:@"\n"]]);
+    assert([[NSString stringWithContentsOfFile:pending encoding:NSASCIIStringEncoding
+                                         error:nil] isEqual:[switch_test_generation stringByAppendingString:@"\n"]]);
     switch_test_home = 0;
     [switch_test_calls removeAllObjects];
     assert(!switch_test_run());
@@ -330,9 +330,8 @@ static void switch_test_interrupted_retries(void)
     switch_test_phase = @"runtime";
     switch_test_home = 1;
     assert(!switch_test_run());
-    assert(([switch_test_calls isEqual:@[
-        @"working:runtime", @"validate-prepared", @"not-ready", @"runtime", @"ready", @"complete"
-    ]]));
+    assert(([switch_test_calls
+        isEqual:@[ @"working:runtime", @"validate-prepared", @"not-ready", @"runtime", @"ready", @"complete" ]]));
     assert(switch_test_receipt == SwitchMigrationComplete && switch_test_ready);
 
     switch_test_reset(SwitchMigrationWorking);
@@ -348,8 +347,8 @@ static void switch_test_interrupted_retries(void)
     assert(switch_test_run() == ECANCELED);
     assert(([switch_test_calls isEqual:@[ @"failed:unscheduled" ]]));
     assert(switch_test_attempt == 1);
-    assert([[NSString stringWithContentsOfFile:pending encoding:NSASCIIStringEncoding error:nil]
-        isEqual:[switch_test_generation stringByAppendingString:@"\n"]]);
+    assert([[NSString stringWithContentsOfFile:pending encoding:NSASCIIStringEncoding
+                                         error:nil] isEqual:[switch_test_generation stringByAppendingString:@"\n"]]);
     switch_test_home = 0;
     [switch_test_calls removeAllObjects];
     assert(!switch_test_run());
@@ -376,9 +375,8 @@ static void switch_test_interrupted_retries(void)
         assert([[NSData data] writeToFile:native atomically:YES]);
         assert([[NSData data] writeToFile:switch_test_marker atomically:YES]);
         assert(!switch_test_run());
-        assert(([switch_test_calls isEqual:@[
-            @"not-ready", [@"failed:" stringByAppendingString:phase], @"validate", @"repair-register"
-        ]]));
+        assert(([switch_test_calls
+            isEqual:@[ @"not-ready", [@"failed:" stringByAppendingString:phase], @"validate", @"repair-register" ]]));
         assert(switch_test_receipt == SwitchMigrationFailed && switch_test_attempt == switch_migration_max_attempts);
         assert(![files fileExistsAtPath:pending] && ![files fileExistsAtPath:native]);
         assert([files fileExistsAtPath:switch_test_marker]);
@@ -479,9 +477,8 @@ static void switch_test_transactions(void)
     switch_test_phase = @"native-migration";
     switch_test_failure = @"validate-prepared";
     assert(switch_test_run() == EIO);
-    assert(([switch_test_calls isEqual:@[
-        @"working:native-migration", @"validate-prepared", @"not-ready", @"failed:validation"
-    ]]));
+    assert(([switch_test_calls
+        isEqual:@[ @"working:native-migration", @"validate-prepared", @"not-ready", @"failed:validation" ]]));
 
     switch_test_reset(SwitchMigrationWorking);
     switch_test_phase = @"native-migration";

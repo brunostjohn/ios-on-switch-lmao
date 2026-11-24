@@ -284,13 +284,13 @@ int switch_migration_boot(NSString *base, NSString *root, NSString *generation)
     if (fullPrepare)
         error = switch_migration_write(base, generation, SwitchMigrationWorking, "preparation", 0, activeAttempt);
     else if (resume)
-        error = switch_migration_write(base, generation, SwitchMigrationWorking, lastPhase.UTF8String, 0,
-                                       activeAttempt);
+        error =
+            switch_migration_write(base, generation, SwitchMigrationWorking, lastPhase.UTF8String, 0, activeAttempt);
     if (!error && !fullPrepare)
         phase = "validation";
     if (!error)
-        error = fullPrepare ? switch_bootstrap_prepare_packages(base, root)
-                            : switch_bootstrap_validate_root(root, resume);
+        error =
+            fullPrepare ? switch_bootstrap_prepare_packages(base, root) : switch_bootstrap_validate_root(root, resume);
     if (!error && (!ready || recovery || migrating))
         error = switch_bootstrap_readiness(0);
     if (!error && registerApps) {

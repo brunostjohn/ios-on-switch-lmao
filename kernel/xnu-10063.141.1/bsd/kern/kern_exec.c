@@ -5997,8 +5997,10 @@ native_switch_exec_environment(const struct image_params *imgp)
 	}
 	static const char backboardd[] = "/usr/libexec/backboardd";
 	if (!strncmp(executable, backboardd, sizeof(backboardd))) {
-		const int single = !native_legacy_detach_ready();
-		return single ? native_switch_backboardd_environment : native_switch_backboardd_environment + 1;
+		if (!native_legacy_detach_ready()) {
+			return native_switch_backboardd_environment;
+		}
+		return native_switch_backboardd_environment + 1;
 	}
 	return NULL;
 }

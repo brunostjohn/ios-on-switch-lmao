@@ -552,8 +552,8 @@ def build_tier0_segments(pack: packfile.Pack, report: list[str] | None = None) -
             if pack.tier0_heap is not None:
                 pack.tier0_heap = new_tier0_heap
             shifted: set[int] = set()
-            for pr in programs[tier0_progs:]:
-                if id(pr) not in shifted:
+            for pr in programs:
+                if id(pr) not in shifted and pr['heap_offset'] >= old_tier0_heap:
                     shifted.add(id(pr))
                     pr['heap_offset'] += delta
                     pr['program'] += delta
