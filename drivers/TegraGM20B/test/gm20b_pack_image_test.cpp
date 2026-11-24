@@ -26,6 +26,7 @@ using switch_ios::test::Body;
 using switch_ios::test::Count;
 using switch_ios::test::SourceText;
 using testing::HasSubstr;
+using testing::Not;
 
 struct tgm_vm {
 	uint32_t id = 0;
@@ -974,9 +975,6 @@ TEST_F(PackImageTest, CompositorCpuRangeWiringDropsOnCloseWhileSharedImageSurviv
 
 	switch_pack_task compositorTask = {42};
 	SwitchGpuPackClient client = {};
-	constexpr IOOptionBits kMapOpts = kIOMapAnywhere | kIOMapReadOnly;
-	client.cpuMap = view.cpuMemory->createMappingInTask(&compositorTask, 0, kMapOpts);
-	ASSERT_NE(client.cpuMap, nullptr);
 
 	TegraGM20BAbiPackCpuRange ranges[2] = {
 		{0x40000000ULL, 0x10000ULL},
@@ -993,7 +991,6 @@ TEST_F(PackImageTest, CompositorCpuRangeWiringDropsOnCloseWhileSharedImageSurviv
 
 	const int sharedRefsBefore = view.cpuMemory->refs.load();
 	switch_gpu_pack_client_release_cpu(&client);
-	EXPECT_EQ(client.cpuMap, nullptr);
 	EXPECT_EQ(client.cpuWiredCount, 0u);
 	EXPECT_EQ(gModel.liveMaps, 0);
 	EXPECT_EQ(view.cpuMemory->refs.load(), sharedRefsBefore);
@@ -1006,19 +1003,6 @@ TEST_F(PackImageTest, CompositorCpuRangeWiringDropsOnCloseWhileSharedImageSurviv
 		  kIOReturnBadArgument);
 	EXPECT_EQ(restarted.cpuWired[0], nullptr);
 	EXPECT_EQ(restarted.cpuWired[1], nullptr);
-
-	// Two connections in one task share an IOMemoryMap via copyCompatible(); closing one must not unmap the other.
-	SwitchGpuPackClient first = {}, second = {};
-	first.cpuMap = view.cpuMemory->createMappingInTask(&compositorTask, 0, kMapOpts);
-	second.cpuMap = view.cpuMemory->createMappingInTask(&compositorTask, 0, kMapOpts);
-	ASSERT_EQ(first.cpuMap, second.cpuMap);
-	EXPECT_EQ(gModel.liveMaps, 1);
-	switch_gpu_pack_client_release_cpu(&first);
-	EXPECT_EQ(first.cpuMap, nullptr);
-	EXPECT_FALSE(second.cpuMap->unmapped);
-	EXPECT_EQ(gModel.liveMaps, 1);
-	switch_gpu_pack_client_release_cpu(&second);
-	EXPECT_EQ(gModel.liveMaps, 0);
 }
 
 TEST_F(PackImageTest, WiredOrAbsentUplFallsBackToExactReadWithoutRefusingPack)
@@ -1149,4 +1133,13 @@ TEST_F(PackImageTest, XnuBootCompleteAndShutdownHooksWiredInBothTrees)
 	EXPECT_THAT(shutdown,
 		    HasSubstr("extern void switch_gpu_pack_shutdown(void) __attribute__((weak));"));
 	EXPECT_GE(Count(shutdown, "switch_gpu_pack_shutdown()"), 2u);
+}
+
+TEST_F(PackImageTest, PackImageMapDoesNotMapKernelMemoryIntoClientTasks)
+{
+	const std::string uc = SourceText("../TegraGM20BUserClient.cpp");
+	const std::string body = Between(uc, "IOReturn AGXDeviceUserClient::packImageMap(",
+					 "\nvoid AGXDeviceUserClient::releaseMappings()");
+	EXPECT_THAT(body, Not(HasSubstr("createMappingInTask")));
+	EXPECT_THAT(body, HasSubstr("out->cpu_address = 0;"));
 }

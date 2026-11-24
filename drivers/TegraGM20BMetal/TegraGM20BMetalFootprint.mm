@@ -6,6 +6,8 @@
 #import "TegraGM20BMetalPassCache.h"
 
 #include <dlfcn.h>
+#include <atomic>
+#include <cerrno>
 #include <cstdlib>
 #include <mach/mach.h>
 #include <malloc/malloc.h>
@@ -39,6 +41,9 @@ constexpr uint64_t kNoLimit = (1ULL << 63) - 1;
 
 bool ledgerFootprint(Footprint &f)
 {
+    static std::atomic<bool> refused{false};
+    if (refused.load(std::memory_order_relaxed))
+        return false;
     using Ledger = int (*)(int, caddr_t, caddr_t, caddr_t);
     static const auto ledger = reinterpret_cast<Ledger>(dlsym(RTLD_DEFAULT, "ledger"));
     if (!ledger)
@@ -46,13 +51,19 @@ bool ledgerFootprint(Footprint &f)
     std::vector<LedgerTemplateInfo> names(256);
     int count = int(names.size());
     if (ledger(kLedgerTemplateInfo, reinterpret_cast<caddr_t>(names.data()), reinterpret_cast<caddr_t>(&count),
-               nullptr))
+               nullptr)) {
+        if (errno == EPERM || errno == EACCES || errno == ENOSYS)
+            refused.store(true, std::memory_order_relaxed);
         return false;
+    }
     std::vector<LedgerEntryInfo> entries(size_t(std::max(count, 0)));
     int entryCount = count;
     if (ledger(kLedgerEntryInfo, reinterpret_cast<caddr_t>(intptr_t(getpid())),
-               reinterpret_cast<caddr_t>(entries.data()), reinterpret_cast<caddr_t>(&entryCount)))
+               reinterpret_cast<caddr_t>(entries.data()), reinterpret_cast<caddr_t>(&entryCount))) {
+        if (errno == EPERM || errno == EACCES || errno == ENOSYS)
+            refused.store(true, std::memory_order_relaxed);
         return false;
+    }
     const std::pair<const char *, int64_t *> wanted[] = {
         {"phys_footprint", &f.footprint},        {"internal", &f.internal},
         {"internal_compressed", &f.compressed},  {"iokit_mapped", &f.iokit},
@@ -106,15 +117,23 @@ StoreRegion storeRegion()
     if (!gRM->completion)
         return r;
     const uint8_t *base = gRM->completion->compilerStoreMapping(r.mapped);
+    static std::atomic<bool> refused{false};
+    if (refused.load(std::memory_order_relaxed))
+        return r;
     for (vm_address_t at = vm_address_t(uintptr_t(base)); base && at < uintptr_t(base) + r.mapped;) {
         vm_address_t address = at;
         vm_size_t size = 0;
         vm_region_extended_info_data_t info = {};
         mach_msg_type_number_t count = VM_REGION_EXTENDED_INFO_COUNT;
         mach_port_t object = MACH_PORT_NULL;
-        if (vm_region_64(mach_task_self(), &address, &size, VM_REGION_EXTENDED_INFO,
-                         reinterpret_cast<vm_region_info_t>(&info), &count, &object) != KERN_SUCCESS ||
-            address > at)
+        const kern_return_t kr = vm_region_64(mach_task_self(), &address, &size, VM_REGION_EXTENDED_INFO,
+                                              reinterpret_cast<vm_region_info_t>(&info), &count, &object);
+        if (kr != KERN_SUCCESS) {
+            if (kr != KERN_INVALID_ADDRESS)
+                refused.store(true, std::memory_order_relaxed);
+            break;
+        }
+        if (address > at)
             break;
         r.resident += uint64_t(info.pages_resident) * vm_page_size;
         r.external = r.external && info.external_pager;

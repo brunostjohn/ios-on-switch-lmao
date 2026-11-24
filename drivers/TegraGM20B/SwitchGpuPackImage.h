@@ -9,7 +9,6 @@
 #include <IOKit/IOReturn.h>
 #include <mach/mach_types.h>
 class IOMemoryDescriptor;
-class IOMemoryMap;
 #endif
 
 struct tgm_mem;
@@ -188,7 +187,6 @@ inline uint32_t switch_gpu_pack_warm_ranges(const SwitchGpuPackHeader *hdr, uint
 struct SwitchGpuPackClient {
 	switch_gpu_mapping *gpuMapping;
 	uint64_t gpuBytes;
-	IOMemoryMap *cpuMap;
 	IOMemoryDescriptor *cpuWired[TegraGM20BMaxPackCpuRanges];
 	uint32_t cpuWiredCount;
 };

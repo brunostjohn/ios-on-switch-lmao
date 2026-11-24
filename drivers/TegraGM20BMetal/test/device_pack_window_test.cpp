@@ -32,7 +32,6 @@ constexpr uint32_t kCbSelectorA = 0x2380;
 
 struct BuiltPack {
     std::string path;
-    std::vector<uint8_t> tier0Heap;
 };
 
 BuiltPack writeTwoTierPack(const char *name)
@@ -123,7 +122,6 @@ BuiltPack writeTwoTierPack(const char *name)
     const char *dir = std::getenv("TEST_TMPDIR");
     BuiltPack out;
     out.path = std::string(dir ? dir : "/tmp") + "/" + name + ".bin";
-    out.tier0Heap.assign(file.begin() + kHeapOffset, file.begin() + kHeapOffset + kTier0HeapBytes);
     std::ofstream(out.path, std::ios::binary)
         .write(reinterpret_cast<const char *>(file.data()), std::streamsize(file.size()));
     return out;
@@ -225,14 +223,14 @@ void drawState(gm20b::Device &dev, gm20b::Pipeline *pl)
     dev.destroyTexture(rt);
 }
 
-void configureReadyPackImage(const BuiltPack &pack)
+void configureReadyPackImage()
 {
     kernel_model::model = {};
     kernel_model::model.vaEnd = uint64_t(1) << 39;
     kernel_model::model.packImage.enabled = true;
     kernel_model::model.packImage.status = TegraGM20BPackStatusReady;
     kernel_model::model.packImage.gpuVa = TGM_PACK_WINDOW_VA;
-    kernel_model::model.packImage.cpuAddress = uint64_t(uintptr_t(pack.tier0Heap.data()));
+    kernel_model::model.packImage.cpuAddress = 0;
     kernel_model::model.packImage.tier0HeapBytes = kTier0HeapBytes;
     kernel_model::model.packImage.heapBytes = kTotalHeapBytes;
     kernel_model::model.packImage.stack = kPackStack;
@@ -242,7 +240,7 @@ void configureReadyPackImage(const BuiltPack &pack)
 TEST(GM20BDevicePackWindow, Tier0ExecutesFromSharedWindowWithZeroImportsInRenderServerAndClient)
 {
     const BuiltPack pack = writeTwoTierPack("pack-window-tier0");
-    configureReadyPackImage(pack);
+    configureReadyPackImage();
 
     gm20b::Device server;
     std::string err;
@@ -250,6 +248,7 @@ TEST(GM20BDevicePackWindow, Tier0ExecutesFromSharedWindowWithZeroImportsInRender
     ASSERT_EQ(kernel_model::model.packImageCalls.size(), 1u);
     EXPECT_EQ(kernel_model::model.packImageCalls[0].kr, KERN_SUCCESS);
     EXPECT_EQ(kernel_model::model.packImageCalls[0].status, TegraGM20BPackStatusReady);
+    EXPECT_EQ(server.packWindowCpu(), nullptr);
     EXPECT_EQ(server.heapBytes(), 0u);
     EXPECT_EQ(server.heapInPlaceBytes(), 0u);
     EXPECT_TRUE(kernel_model::model.imports.empty());
@@ -282,6 +281,7 @@ TEST(GM20BDevicePackWindow, Tier0ExecutesFromSharedWindowWithZeroImportsInRender
     const kernel_model::Model &clientModel = *kernel_model::model.others.begin()->second;
     ASSERT_EQ(clientModel.packImageCalls.size(), 1u);
     EXPECT_TRUE(clientModel.packImageCalls[0].cpuRanges.empty());
+    EXPECT_EQ(client.packWindowCpu(), nullptr);
 
     gm20b::Pipeline *clientA = client.pipeline(kTier0StateA);
     drawState(client, clientA);
@@ -294,7 +294,7 @@ TEST(GM20BDevicePackWindow, Tier0ExecutesFromSharedWindowWithZeroImportsInRender
 TEST(GM20BDevicePackWindow, RenderServerPassesAlignedTier0MetadataCpuRangesAndClientPassesNone)
 {
     const BuiltPack pack = writeTwoTierPack("pack-window-cpu-ranges");
-    configureReadyPackImage(pack);
+    configureReadyPackImage();
 
     gm20b::Device server;
     std::string err;
@@ -337,12 +337,13 @@ TEST(GM20BDevicePackWindow, RenderServerPassesAlignedTier0MetadataCpuRangesAndCl
     const kernel_model::Model &clientModel = *kernel_model::model.others.begin()->second;
     ASSERT_EQ(clientModel.packImageCalls.size(), 1u);
     EXPECT_TRUE(clientModel.packImageCalls[0].cpuRanges.empty());
+    EXPECT_EQ(client.packWindowCpu(), nullptr);
 }
 
 TEST(GM20BDevicePackWindow, Tier1ProgramsImportGrainsOnDemandAfterPackWindow)
 {
     const BuiltPack pack = writeTwoTierPack("pack-window-tier1");
-    configureReadyPackImage(pack);
+    configureReadyPackImage();
 
     gm20b::Device dev;
     std::string err;
@@ -400,7 +401,7 @@ TEST(GM20BDevicePackWindow, RefusedErrorAndMismatchUsePerPiecePlacement)
 
     for (const Case &c : cases) {
         SCOPED_TRACE(c.label);
-        configureReadyPackImage(pack);
+        configureReadyPackImage();
         kernel_model::model.packImage.status = c.status;
         kernel_model::model.packImage.error = c.error;
         kernel_model::model.packImage.stack = c.stack;
@@ -457,7 +458,7 @@ TEST(GM20BDevicePackWindow, GeneralVaAllocatorExcludesPackWindow)
 TEST(GM20BDevicePackWindow, ConcurrentTier0AndTier1CreationUnderTSan)
 {
     const BuiltPack pack = writeTwoTierPack("pack-window-tsan");
-    configureReadyPackImage(pack);
+    configureReadyPackImage();
 
     gm20b::Device dev;
     std::string err;

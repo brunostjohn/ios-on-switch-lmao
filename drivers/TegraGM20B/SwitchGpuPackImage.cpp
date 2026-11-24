@@ -385,10 +385,6 @@ void switch_gpu_pack_client_release_cpu(SwitchGpuPackClient *client)
 {
 	if (!client)
 		return;
-	if (client->cpuMap) {
-		client->cpuMap->release();
-		client->cpuMap = nullptr;
-	}
 	for (uint32_t i = 0; i < client->cpuWiredCount; ++i) {
 		if (client->cpuWired[i]) {
 			client->cpuWired[i]->complete(kIODirectionOut);

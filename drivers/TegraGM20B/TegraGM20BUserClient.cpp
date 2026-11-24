@@ -569,14 +569,7 @@ IOReturn AGXDeviceUserClient::packImageMap(const TegraGM20BAbiPackImageMap *in,
 		return kIOReturnSuccess;
 	}
 
-	IOMemoryMap *cpuMap =
-		view.cpuMemory->createMappingInTask(task_, 0, kIOMapAnywhere | kIOMapReadOnly);
-	if (!cpuMap)
-		return kIOReturnNoMemory;
-	const uint64_t cpuAddress = cpuMap->getAddress();
-
 	SwitchGpuPackClient staged = {};
-	staged.cpuMap = cpuMap;
 	uint64_t wiredBytes = 0;
 	if (in->cpu_range_count) {
 		const IOReturn wireRet = switch_gpu_pack_client_wire_cpu(
@@ -616,7 +609,6 @@ IOReturn AGXDeviceUserClient::packImageMap(const TegraGM20BAbiPackImageMap *in,
 			} else {
 				packClient_.gpuMapping = gpuMapping;
 				packClient_.gpuBytes = view.tier0HeapBytes;
-				packClient_.cpuMap = staged.cpuMap;
 				packClient_.cpuWiredCount = staged.cpuWiredCount;
 				for (uint32_t i = 0; i < staged.cpuWiredCount; ++i)
 					packClient_.cpuWired[i] = staged.cpuWired[i];
@@ -632,7 +624,10 @@ IOReturn AGXDeviceUserClient::packImageMap(const TegraGM20BAbiPackImageMap *in,
 	}
 	out->status = TegraGM20BPackStatusReady;
 	out->gpu_va = TGM_PACK_WINDOW_VA;
-	out->cpu_address = cpuAddress;
+	// Do not map view.cpuMemory into task_: XNU charges kernel IOBufferMemoryDescriptor
+	// mappings in full to the client's iokit_mapped phys_footprint. Clients already read
+	// pack.bin via their own read-only file mmap (external pager, zero footprint).
+	out->cpu_address = 0;
 	out->tier0_heap_bytes = view.tier0HeapBytes;
 	out->heap_bytes = view.heapBytes;
 	out->stack = view.stack;
@@ -648,8 +643,6 @@ void AGXDeviceUserClient::releaseMappings()
 	Mapping *list = maps_;
 	maps_ = nullptr;
 	SwitchGpuPackClient packCpu = {};
-	packCpu.cpuMap = packClient_.cpuMap;
-	packClient_.cpuMap = nullptr;
 	packCpu.cpuWiredCount = packClient_.cpuWiredCount;
 	for (uint32_t i = 0; i < packCpu.cpuWiredCount; ++i) {
 		packCpu.cpuWired[i] = packClient_.cpuWired[i];
