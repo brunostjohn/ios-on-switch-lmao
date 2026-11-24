@@ -114,6 +114,9 @@ class BootstrapTest(unittest.TestCase):
             f'repair {first}',
             f'working {first} prepare',
             f'failed {first} register 5',
+            f'failed {first} register-apps 89',
+            f'working {first} preparation 3',
+            f'failed {first} preparation 89 3',
         ):
             receipt.write_text(status + '\n')
             self.assertFalse(self.stage())
@@ -125,7 +128,7 @@ class BootstrapTest(unittest.TestCase):
         self.assertTrue(guard.is_file())
         self.assertFalse(sentinel.exists())
         self.assertEqual(pending.read_text(), second + '\n')
-        self.assertEqual(receipt.read_text(), f'failed {first} register 5\n')
+        self.assertEqual(receipt.read_text(), f'failed {first} preparation 89 3\n')
 
     def test_new_generation_preserves_an_explicit_native_migration_request(self):
         self.stage()
@@ -137,7 +140,7 @@ class BootstrapTest(unittest.TestCase):
         self.assertTrue(sentinel.is_file())
         self.assertEqual((self.installed() / bootstrap_migration.PENDING).read_text(), 'a' * 64 + '\n')
 
-    def test_redeploy_rearms_only_an_interrupted_native_migration_with_both_requests(self):
+    def test_redeploy_rearms_interrupted_and_canceled_migrations_within_retry_bound(self):
         self.stage()
         generation = 'a' * 64
         base = self.installed()
@@ -146,16 +149,12 @@ class BootstrapTest(unittest.TestCase):
         guard = self.data / 'Switch/system-app-migration'
         sentinel = self.data / 'datamigrator/migrate'
         sentinel.parent.mkdir()
-        guard.touch()
-        working = f'working {generation} native-migration\n'
-        receipt.write_text(working)
 
         def schedule() -> bool:
             return bootstrap_migration.schedule(self.data, PINS['build'], generation, self.log.append, None)
 
-        self.assertFalse(schedule())
-        pending.write_text('b' * 64 + '\n')
-        self.assertFalse(schedule())
+        guard.touch()
+        receipt.write_text(f'working {generation} native-migration\n')
         pending.write_text(generation + '\n')
         self.assertFalse(schedule())
         sentinel.symlink_to(guard)
@@ -163,18 +162,33 @@ class BootstrapTest(unittest.TestCase):
             schedule()
         sentinel.unlink()
         sentinel.touch()
-        for value in (f'working {generation} preparation\n', f'failed {generation} native-migration 5\n'):
+
+        for value in (
+            f'failed {generation} native-migration 5\n',
+            f'failed {generation} register-apps 89\n',
+            f'working {generation} preparation 3\n',
+            f'failed {generation} preparation 89 3\n',
+        ):
             receipt.write_text(value)
             self.assertFalse(schedule())
         self.assertTrue(guard.exists())
 
-        receipt.write_text(working)
-        self.assertTrue(schedule())
-        self.assertFalse(guard.exists())
-        self.assertFalse(schedule())
-        self.assertEqual(receipt.read_text(), working)
-        self.assertEqual(pending.read_text(), generation + '\n')
-        self.assertEqual(sentinel.read_bytes(), b'')
+        for value in (
+            f'working {generation} preparation\n',
+            f'working {generation} native-migration 2\n',
+            f'working {generation} runtime\n',
+            f'failed {generation} preparation 89\n',
+            f'failed {generation} unscheduled 89 2\n',
+        ):
+            guard.touch()
+            pending.unlink(missing_ok=True)
+            receipt.write_text(value)
+            self.assertTrue(schedule())
+            self.assertFalse(guard.exists())
+            self.assertEqual(pending.read_text(), generation + '\n')
+            self.assertEqual(sentinel.read_bytes(), b'')
+            self.assertFalse(schedule())
+            self.assertEqual(receipt.read_text(), value)
 
     def test_corrupt_or_linked_migration_receipts_keep_the_previous_boot_request(self):
         self.stage()
@@ -189,7 +203,14 @@ class BootstrapTest(unittest.TestCase):
         def schedule() -> bool:
             return bootstrap_migration.schedule(self.data, PINS['build'], 'a' * 64, self.log.append, None)
 
-        for contents in (b'', b'x' * 160, b'complete ' + b'z' * 64 + b'\n', b'failed ' + b'b' * 64 + b' bad 0\n'):
+        for contents in (
+            b'',
+            b'x' * 160,
+            b'complete ' + b'z' * 64 + b'\n',
+            b'working ' + b'b' * 64 + b' preparation 0\n',
+            b'failed ' + b'b' * 64 + b' bad 0\n',
+            b'failed ' + b'b' * 64 + b' bad 5 0\n',
+        ):
             receipt.write_bytes(contents)
             with self.assertRaises(host.HostError):
                 schedule()

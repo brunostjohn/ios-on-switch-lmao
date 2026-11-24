@@ -314,6 +314,8 @@ def _write(
     apps = steps.run('system apps registration', system_apps.apps, data_root)
     cards.sync_overlay(data_root, args.boot_package, log)
     pins = json.loads(Path(args.ipsw).read_text()) if args.ipsw else {}
+    # Capture an interrupted native migration before bootstrap.stage unlinks Switch/system-app-migration.
+    interrupted = steps.run('interrupted migration', system_apps.interrupted_migration, data_root)
     steps.run('bootstrap migration', bootstrap.stage, data_root, args.boot_package, pins, log)
     steps.run(
         'deployed.json',
@@ -327,7 +329,7 @@ def _write(
     restaged = steps.run('system apps restage', _restage_system_apps, volumes.system, data_root, log)
     if apps is not None:
         next_boot = app_journal.NextBoot(_ios_version(args.ipsw), boot_args)
-        force = args.rerun_migration or bool(restaged)
+        force = any((args.rerun_migration, restaged, interrupted))
         steps.run('system apps registration', system_apps.register, data_root, apps, log, next_boot, force)
     steps.run('stale logging profiles', remove_stale_logging_profiles, data_root, log)
     if not args.no_joycon_pairing:
