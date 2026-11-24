@@ -267,6 +267,13 @@ TEST(Priority, TheCompositorAsksForTheTopPriorityAndHoldsTheMarker)
 	EXPECT_FALSE(tgm_compositor(tgm_priority_level(0, 4, 1, 1), 1)) << "entitled, GPU denied";
 }
 
+TEST(Timeslice, EncodesDefaultAndCriticalFiftyMillisecondWords)
+{
+	EXPECT_EQ(tgm_timeslice_word(1024), 0x10003080u);
+	EXPECT_EQ(tgm_timeslice_word(4096), 0x10005080u);
+	EXPECT_EQ(tgm_timeslice_word(50000), 0x100080c3u);
+}
+
 TEST(Deadline, AChannelIsHeldItsPreemptionLatencyBeforeTheCompositorsLatestStart)
 {
 	const uint64_t vblank = 1000 * kMs, expected = 6 * kMs, latency = 2 * kMs;

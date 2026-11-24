@@ -52,6 +52,21 @@ static inline int tgm_compositor(enum tgm_level level, int restart_no_kill)
 	return level == TGM_LEVEL_HIGH && restart_no_kill;
 }
 
+/* RAMFC 0xf8 (PFIFO 0x2310) timeslice word: enable bit 28, scale bits 15:12, timeout bits 7:0. */
+static inline uint32_t tgm_timeslice_word(uint32_t us)
+{
+	uint32_t timeout = us;
+	uint32_t scale = 0;
+
+	while (timeout >= 256u && scale < 15u) {
+		timeout >>= 1;
+		scale++;
+	}
+	if (timeout > 255u)
+		timeout = 255u;
+	return 0x10000000u | (scale << 12) | timeout;
+}
+
 /* What a high channel's kick should preempt, from engine 0's (GR's) status, whether its resident channel is high, and the
  * PBDMA's: the app channel holding GR, else the one holding the PBDMA; TGM_VICTIM_SWITCHING while GR is mid-switch (the
  * host already leaves a channel, and with the runlist interleaved goes to a high one next). A TSG id names no channel. */

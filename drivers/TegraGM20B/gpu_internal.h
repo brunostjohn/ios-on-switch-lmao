@@ -403,7 +403,7 @@ void tgm_engine_state(char *buf, unsigned int len);
 #define TGM_ACQUIRE_NS (2 * TGM_STUCK_NS)
 #define RAMFC_TIMESLICE 0xf8
 #define RAMFC_TIMESLICE_DEFAULT 0x10003080
-#define RAMFC_TIMESLICE_HIGH 0x10005080
+#define RAMFC_TIMESLICE_HIGH 0x100080c3
 void tgm_ramfc_write(u32 chid, u32 offset, u32 value);
 #if TGM_STATS
 u32 tgm_ramfc_read(u32 chid, u32 offset);
