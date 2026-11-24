@@ -185,6 +185,9 @@ extern "C" __attribute__((weak)) int tegra_gm20b_scanout_outstanding(const void 
 extern "C" __attribute__((weak)) void tegra_gm20b_scanout_bypassed(void)
 {}
 
+extern "C" __attribute__((weak)) void tegra_gm20b_scanout_presented(uint64_t)
+{}
+
 extern "C" __attribute__((weak)) void *tegra_gm20b_surface_hold(uint64_t, int *tiled)
 {
     *tiled = 0;
@@ -4562,8 +4565,10 @@ public:
         const int entry = directSlotFor(surface, memory, stride, allocation, tiled);
         if (entry == kNoBuffer)
             return false;
-        if (presentDirectVisible(request, entry, width, height, kickAt))
+        if (presentDirectVisible(request, entry, width, height, kickAt)) {
+            tegra_gm20b_scanout_presented(ticksNs(kickAt));
             return true;
+        }
         TegraScanoutCopy copy = {};
         copy.version = TEGRA_SCANOUT_COPY_VERSION;
         copy.width = width;

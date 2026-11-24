@@ -18,6 +18,7 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 static void present_deliver(void (*done)(void *, int), void *arg, int status)
 {
 	switch_gpu_present_deliver(&tgm_present.completing, done, arg, status);
+	switch_gpu_admission_changed();
 	gate_leave();
 }
 
@@ -81,7 +82,8 @@ static void present_watch_complete(int status, int from_pass)
 #endif
 
 	nvxnu_work_cancel(tgm_present.deadline_work);
-	tgm_deadline_presented(tgm_present.queued, from_pass);
+	if (tgm_present.primary)
+		tgm_deadline_presented(tgm_present.queued, from_pass);
 	switch_gpu_present_watch_reset(&tgm_present.watch);
 	__atomic_store_n(&tgm_present.typed_pending, 0, __ATOMIC_RELEASE);
 #if TGM_STATS
@@ -175,7 +177,8 @@ void tgm_present_pass(void)
 {
 	if (tgm_present.fenced_due) {
 		tgm_present.fenced_due = 0;
-		tgm_deadline_presented(tgm_present.fenced_queued, 1);
+		if (tgm_present.fenced_primary)
+			tgm_deadline_presented(tgm_present.fenced_queued, 1);
 		nvxnu_work_schedule(tgm_present.completion_work);
 	}
 	if (switch_gpu_present_watch_state(&tgm_present.watch) != SWITCH_GPU_PRESENT_WATCH_DUE)
@@ -412,6 +415,8 @@ static int present_copy(uint64_t src_va, uint64_t stride, int32_t src_block_log2
 	tgm_present.done = done;
 	tgm_present.arg = arg;
 	tgm_present.queued = nvxnu_nanotime();
+	tgm_present.primary = tgm_present_filter_is_owner(
+		__atomic_load_n(&tgm_present.filter_display, __ATOMIC_ACQUIRE));
 	__atomic_store_n(&tgm_present.typed_pending, 1, __ATOMIC_RELEASE);
 	__atomic_store_n(&tgm_present.pending, chan->submitted + 1, __ATOMIC_RELEASE);
 	tgm_present.recheck = TGM_PRESENT_NS;
@@ -567,6 +572,8 @@ int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,
 		tgm_present.done = done;
 		tgm_present.arg = arg;
 		tgm_present.queued = nvxnu_nanotime();
+		tgm_present.primary = tgm_present_filter_is_owner(
+			__atomic_load_n(&tgm_present.filter_display, __ATOMIC_ACQUIRE));
 		tgm_present.late = 0;
 		__atomic_store_n(&tgm_present.typed_pending, 1, __ATOMIC_RELEASE);
 		tgm_present.recheck = TGM_PRESENT_NS;

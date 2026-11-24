@@ -6,6 +6,7 @@
 #include "../NativeMobileDisplay/SwitchSurfaceUse.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
+#include "../TegraHost1x/SwitchHost1xTokenFence.h"
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUPublish.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
@@ -109,7 +110,16 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
     for (const auto &slot : slots)
         if (slot.surface == surface && slot.memory == memory)
             held = slot.backing;
-    if (!held || switch_native_scanout_pitch_held(surface, held, &snapshot)) {
+    if (held) {
+        const int heldError = switch_native_scanout_pitch_held(surface, held, &snapshot);
+        if (heldError == -16)
+            return -16;
+        if (heldError) {
+            const int error = switch_native_scanout_pitch(surface, &snapshot);
+            if (error)
+                return error;
+        }
+    } else {
         const int error = switch_native_scanout_pitch(surface, &snapshot);
         if (error)
             return error;
@@ -344,10 +354,57 @@ void SwitchExternalScreen::requestFrame()
     pending = request;
     gpuGeneration = linkGeneration;
     const auto &producer = slots[index].read.view.producer;
-    if (!switch_gpu_backing_promised(slots[index].backing) &&
-        (!producer.engine || switch_gpu_backing_token_external_status(&producer) == 1)) {
+    const bool promised = switch_gpu_backing_promised(slots[index].backing) != 0;
+    switch_gpu_backing_token hostTokens[SWITCH_HOST1X_TOKEN_FENCE_MAX] = {};
+    uint32_t hostCount = 0;
+    bool hostOnly = !promised;
+    bool readyNow = !promised;
+    const auto inspectToken = [&](const switch_gpu_backing_token &token) {
+        if (!token.engine || switch_gpu_backing_token_external_status(&token) == 1)
+            return;
+        readyNow = false;
+        if (hostOnly && (token.engine == SWITCH_GPU_ENGINE_VIC || token.engine == SWITCH_GPU_ENGINE_NVDEC) &&
+            hostCount < SWITCH_HOST1X_TOKEN_FENCE_MAX) {
+            hostTokens[hostCount++] = token;
+        } else {
+            hostOnly = false;
+        }
+    };
+    inspectToken(producer);
+    for (uint32_t i = 0; i < slots[index].read.view.waitCount; ++i)
+        inspectToken(slots[index].read.view.waits[i]);
+    if (readyNow) {
         latchFrame();
         return;
+    }
+    if (hostOnly && hostCount) {
+        gpuPending = true;
+        const int fenceResult = switch_host1x_token_fence(
+            hostTokens, hostCount,
+            [](void *context, int status) {
+                static_cast<SwitchExternalScreen *>(context)->gpuComplete(status);
+            },
+            this);
+        if (!fenceResult) {
+            ++sequence;
+            return;
+        }
+        gpuPending = false;
+        if (fenceResult != -16) {
+            pending = nullptr;
+            drawing = -1;
+            if (front != prepared)
+                releaseRead(index);
+#if DEVELOPMENT || DEBUG
+            if (diagScanoutFailures < 8u) {
+                ++diagScanoutFailures;
+                IOLog("SwitchDisplayPort: switch_host1x_token_fence failed err=%d surf=%ux%u count=%u\n",
+                      fenceResult, slots[index].width, slots[index].height, hostCount);
+            }
+#endif
+            dropFrame(request);
+            return;
+        }
     }
     switch_gpu_backing_token tokens[SWITCH_SCANOUT_MAX_DEPENDENCIES] = {};
     TegraScanoutCopy offer = {};

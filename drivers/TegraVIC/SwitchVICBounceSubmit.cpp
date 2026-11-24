@@ -67,11 +67,12 @@ struct Side {
     uint64_t memoryOffset, backingOffset;
 };
 
-int copy(const Side &from, const Side &to, Work *work, const switch_gpu_event_submission &events)
+int copy(const Side &from, const Side &to, Work *work, const switch_gpu_event_submission &events,
+         const SwitchVICWriteReservation *dstReserve)
 {
     const auto *format = tegra_vic_format(from.desc->fourcc);
     const tegra_gm20b_ce_done done = {TEGRA_GM20B_CE_NO_SYNCPT, completed, work};
-    switch_gpu_cpu_lease *leases[2] = {};
+    switch_gpu_cpu_lease *leases[3] = {};
     switch_gpu_backing_guard guards[2] = {};
     uint32_t leaseCount = 0, guardCount = 0;
     for (const auto &access : work->access) {
@@ -81,6 +82,9 @@ int copy(const Side &from, const Side &to, Work *work, const switch_gpu_event_su
         if (access.owned)
             leases[leaseCount++] = access.owned;
     }
+    if (dstReserve && dstReserve->lease && !work->access[1].owned &&
+        (dstReserve->backing == from.backing || dstReserve->backing == to.backing))
+        leases[leaseCount++] = dstReserve->lease;
     const switch_gpu_copy_ownership ownership = {leases, leaseCount, guards, guardCount};
     for (uint32_t p = 0; p < format->planes; ++p) {
         const tegra_gm20b_ce_plane src = {from.memory, from.memoryOffset + from.desc->planeOffset[p],
@@ -123,6 +127,13 @@ Side scratch(const SwitchVICBounceBuffer &buffer)
 int switch_vic_bounce_submit(const TegraVICSurface *source, const TegraVICSurface *destination,
                              const TegraVICPlan *plan, uint32_t chromaSite, void (*completion)(void *, int),
                              void *context, SwitchVICEvents *events)
+{
+    return switch_vic_bounce_submit(source, destination, plan, chromaSite, completion, context, events, nullptr);
+}
+
+int switch_vic_bounce_submit(const TegraVICSurface *source, const TegraVICSurface *destination,
+                             const TegraVICPlan *plan, uint32_t chromaSite, void (*completion)(void *, int),
+                             void *context, SwitchVICEvents *events, SwitchVICWriteReservation *dstReserve)
 {
     if (!destination || !plan || !completion || !plan->count || plan->count > 3 || (plan->readsSource && !source))
         return -22;
@@ -197,12 +208,14 @@ int switch_vic_bounce_submit(const TegraVICSurface *source, const TegraVICSurfac
         release(work);
         return -22;
     }
-    switch_gpu_cpu_lease *leases[2] = {};
+    switch_gpu_cpu_lease *leases[3] = {};
     switch_gpu_backing_guard guards[4] = {work->access[1].guard};
     uint32_t leaseCount = 0, guardCount = 1;
     for (auto &access : work->access)
         if (access.owned)
             leases[leaseCount++] = access.owned;
+    if (dstReserve && dstReserve->lease && !work->access[1].owned && dstReserve->backing == work->access[1].backing)
+        leases[leaseCount++] = dstReserve->lease;
     if (plan->readsSource && !alias && !work->native.owner)
         guards[guardCount++] = work->access[0].guard;
     if (work->native.owner) {
@@ -212,9 +225,10 @@ int switch_vic_bounce_submit(const TegraVICSurface *source, const TegraVICSurfac
     switch_gpu_event_submission dependencies = {};
     switch_vic_events_submission(events, false, &dependencies);
     if (bounceSrc)
-        error = copy(original(*source, sourceAccess), scratch(sourceBuffer), work, dependencies);
+        error = copy(original(*source, sourceAccess), scratch(sourceBuffer), work, dependencies, dstReserve);
     if (!error && bounceDst && !switch_vic_overwrites(*plan, destination->desc))
-        error = copy(original(*destination, work->access[1]), scratch(destinationBuffer), work, dependencies);
+        error =
+            copy(original(*destination, work->access[1]), scratch(destinationBuffer), work, dependencies, dstReserve);
     switch_gpu_backing_use uses[5] = {{output, SWITCH_GPU_BACKING_WRITE, 0}};
     uint32_t useCount = 1;
     if (plan->readsSource)
@@ -243,7 +257,7 @@ int switch_vic_bounce_submit(const TegraVICSurface *source, const TegraVICSurfac
     if (!error && bounceDst) {
         switch_gpu_event_submission final = {};
         switch_vic_events_submission(events, true, &final);
-        error = copy(scratch(destinationBuffer), original(*destination, work->access[1]), work, final);
+        error = copy(scratch(destinationBuffer), original(*destination, work->access[1]), work, final, dstReserve);
         if (!error)
             switch_vic_events_commit(events);
     }
@@ -254,6 +268,8 @@ int switch_vic_bounce_submit(const TegraVICSurface *source, const TegraVICSurfac
     const bool accepted = work->accepted;
     for (auto &access : work->access)
         switch_vic_surface_unreserve(&access);
+    if (dstReserve)
+        switch_vic_surface_release_write(dstReserve);
     release(work);
     return accepted ? 1 : error;
 }

@@ -299,6 +299,18 @@ bool SwitchExternalScreen::publish(const struct switch_dp_mode_list &list, const
     }
     connected = true;
     publishActiveGeometry();
+    unsigned best = 0;
+    for (unsigned i = 0; i < modes.count; ++i)
+        if (modes.modes[i].preferred) {
+            best = i;
+            break;
+        }
+    if (modes.count) {
+        refreshPeriod = switch_dp_refresh_period(&modes.modes[best]);
+        interval = periodTicks(refreshPeriod);
+        if (!native_legacy_set_display_refresh_properties(this))
+            IOLog("SwitchDisplayPort: could not publish the preferred refresh interval\n");
+    }
     tegra_gm20b_set_external_scanout(1);
     setProperty("IOMFBHotplugKeysChangedKey", kOSBooleanTrue);
     IOMobileFramebufferLegacy::hotPlugNotify(1);
@@ -381,6 +393,8 @@ void SwitchExternalScreen::detach()
     connected = false;
     selectedMode = -1;
     device = 0;
+    refreshPeriod = 0;
+    interval = 0;
     setDisplayWidth(0);
     setDisplayHeight(0);
     publishActiveGeometry();
@@ -414,7 +428,7 @@ void SwitchExternalScreen::clearSinkProperties()
 
 bool SwitchExternalScreen::getRefreshAttributes(uint64_t *periods, uint32_t internal)
 {
-    if (!dcb)
+    if (!refreshPeriod)
         return IOMobileFramebufferLegacy::getRefreshAttributes(periods, internal);
     constexpr uint64_t externalLongest = (1ull << 32) / 24;
     periods[0] = refreshPeriod;

@@ -415,3 +415,26 @@ TEST(DisplayB, CombinedTeardownKeepsPllD2RunningThroughDcbPowerDown)
     EXPECT_TRUE(model.log.empty());
     EXPECT_EQ(xusbWritesTo(kDpaux + 0x138).size(), 0u);
 }
+
+TEST(DisplayB, WindowLatchSelectsWindowABeforeReadingWindowRegisters)
+{
+    xusbModelReset();
+    plans.clear();
+    admit = true;
+    TegraDisplayB display;
+    char why[96] = {};
+    ASSERT_TRUE(display.powerUp(why, sizeof(why))) << why;
+    switch_dp_mode mode = {};
+    ASSERT_TRUE(switch_dp_cta_vic(16, &mode));
+    display.setMode(mode);
+    ASSERT_TRUE(display.scanout(fullFrame(0x10000000u)));
+
+    xusbModel().log.clear();
+    EXPECT_EQ(display.windowLatch(0x10000000u), TegraDisplayB::Latch::Pending);
+    EXPECT_TRUE(xusbWritesTo(header).empty());
+
+    xusbModel().registers[control] = 0;
+    xusbModel().log.clear();
+    EXPECT_EQ(display.windowLatch(0x10000000u), TegraDisplayB::Latch::Active);
+    EXPECT_EQ(xusbWritesTo(header), std::vector<uint32_t>{1u << 4});
+}

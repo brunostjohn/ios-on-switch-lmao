@@ -142,5 +142,11 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_TRUE(tiledLayout.before("tegra_gm20b_surface_hold(firstPage, &tiled)", "__atomic_thread_fence(__ATOMIC_SEQ_CST);"));
     EXPECT_TRUE(tiledLayout.before("__atomic_thread_fence(__ATOMIC_SEQ_CST);", "tegra_gm20b_surface_compressed(firstPage)"));
     EXPECT_TRUE(prepare.before("__atomic_thread_fence(__ATOMIC_SEQ_CST);", "tegra_gm20b_surface_compressed(firstPage)"));
+    EXPECT_TRUE(prepare.has("if (heldError == -16) return -16;"));
+    EXPECT_TRUE(request.has("slots[index].read.view.waits[i]"));
+    EXPECT_TRUE(request.has("switch_host1x_token_fence("));
     EXPECT_FALSE(request.has("switch_native_scanout_dependencies("));
+    EXPECT_TRUE(publish.before("native_legacy_set_display_refresh_properties(this)",
+                               "IOMobileFramebufferLegacy::hotPlugNotify(1);"));
+    EXPECT_TRUE(Block(lifecycle, "bool SwitchExternalScreen::getRefreshAttributes(").has("if (!refreshPeriod)"));
 }

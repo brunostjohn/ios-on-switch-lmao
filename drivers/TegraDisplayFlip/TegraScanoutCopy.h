@@ -115,6 +115,7 @@ int tegra_gm20b_scanout_outstanding(const void *display);
 // direct frame flipped from the kick, a CPU, VIC or blank frame), so the scanout read-back has no frame before the next
 // offer to re-read (TegraGM20BReadbackABI.h). Under the display's gate, in thread context.
 void tegra_gm20b_scanout_bypassed(void);
+void tegra_gm20b_scanout_presented(uint64_t queued_ns);
 // Provided by the GPU driver (weak in NativeLegacyDisplay): whether the IOSurface whose first page is `pa` holds
 // block-linear pixels. A surface's layout is decided once, at its first GPU import, and holds while any GPU client
 // imports it; a CPU lock never changes what its pages hold. Thread context; never waits for the GPU.

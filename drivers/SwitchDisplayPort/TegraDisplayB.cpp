@@ -300,6 +300,7 @@ TegraDisplayB::Latch TegraDisplayB::windowLatch(uint32_t address)
 {
     if (read(DC_CMD_STATE_CONTROL) & kWinAActReq)
         return Latch::Pending;
+    write(DC_CMD_DISPLAY_WINDOW_HEADER, kWindowA);
     if (windowEnabled) {
         if (read(DC_WINBUF_START_ADDR) != address)
             return Latch::Missed;

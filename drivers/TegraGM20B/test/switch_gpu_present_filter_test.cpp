@@ -504,10 +504,19 @@ TEST(PresentFilterSource, TheWatchAttachesBeforeItsArmAndEachClaimDetachesFirst)
 		  watch.find("switch_gpu_present_watch_arm_many("));
 	const auto copy = Block(present, "static int present_copy(");
 	EXPECT_TRUE(copy.before("tgm_present_filter_attach_for(", "switch_gpu_chan_fence_sealed("));
+	EXPECT_TRUE(copy.has("tgm_present.primary = tgm_present_filter_is_owner("));
+	const auto deliver = Block(present, "static void present_deliver(");
+	EXPECT_TRUE(deliver.before(
+		"switch_gpu_present_deliver(&tgm_present.completing, done, arg, status);",
+		"switch_gpu_admission_changed();"));
+	EXPECT_TRUE(Block(present, "static void present_watch_complete(")
+			    .has("if (tgm_present.primary) tgm_deadline_presented("));
 	const std::string pass = Between(present, "void tgm_present_pass(void)\n{", "\n}\n");
+	EXPECT_NE(pass.find("if (tgm_present.fenced_primary)"), std::string::npos);
 	EXPECT_LT(pass.find("switch_gpu_present_watch_take_visible("),
 		  pass.find("tgm_present_filter_detach_for("));
-	EXPECT_LT(pass.find("tgm_present_filter_detach_for("), pass.find("present_watch_complete("));
+	EXPECT_LT(pass.find("tgm_present_filter_detach_for("),
+		  pass.find("present_watch_complete("));
 	const std::string work =
 		Between(present, "static void present_watch_work(void *unused)", "\n}\n");
 	EXPECT_LT(work.find("switch_gpu_present_watch_claim("),
