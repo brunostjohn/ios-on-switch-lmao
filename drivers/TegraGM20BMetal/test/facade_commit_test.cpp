@@ -925,6 +925,75 @@ TEST(GM20BFacadeCommit, GiveBackDropsUncommittedEncodeAheadAndPurgesVolatileHeap
     EXPECT_GE([p[@"pipelined"] intValue], 1) << [[p description] UTF8String];
 }
 
+TEST(GM20BFacadeCommit, PostFirstDrawVertexBytesShadowInCachedMemory)
+{
+    ASSERT_TRUE(opened().device != nil && opened().state != nil);
+    id<MTLCommandQueue> queue = [opened().device newCommandQueue];
+    const auto into = scale_frames::targets(opened().device, {1, 1, 1});
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
+    MTLRenderPassDescriptor *d = [MTLRenderPassDescriptor renderPassDescriptor];
+    d.colorAttachments[0].texture = into[0];
+    d.colorAttachments[0].loadAction = MTLLoadActionClear;
+    d.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:d];
+    [e setRenderPipelineState:opened().state];
+
+    const float v0a[16] = {-1, -1, 0, 1, 1, -1, 0, 1, -1, 1, 0, 1, 1, 1, 0, 1};
+    const float m2a[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    const float frag[4] = {1, 0, 0, 1};
+    [e setVertexBytes:v0a length:sizeof v0a atIndex:0];
+    [e setVertexBytes:m2a length:sizeof m2a atIndex:2];
+    [e setFragmentBytes:frag length:sizeof frag atIndex:0];
+    [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+
+    const float v0b[16] = {0, 0, 0, 1, 0.5f, 0, 0, 1, 0, 0.5f, 0, 1, 0.5f, 0.5f, 0, 1};
+    uint8_t v1b[288];
+    for (size_t i = 0; i < sizeof v1b; ++i)
+        v1b[i] = uint8_t(i ^ 0x5a);
+    const float m2b[16] = {2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    const float v3b[16] = {3, 3, 3, 3};
+    [e setVertexBytes:v0b length:sizeof v0b atIndex:0];
+    [e setVertexBytes:v1b length:sizeof v1b atIndex:1];
+    [e setVertexBytes:m2b length:sizeof m2b atIndex:2];
+    [e setVertexBytes:v3b length:sizeof v3b atIndex:3];
+    [e setFragmentBytes:frag length:sizeof frag atIndex:0];
+    [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+
+    std::vector<uint8_t> big(1028, 0x3c);
+    [e setVertexBytes:big.data() length:big.size() atIndex:1];
+    [e drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+
+    SwitchMetalCommandBuffer *raw = (SwitchMetalCommandBuffer *)cb;
+    std::vector<size_t> drawOps;
+    for (size_t i = 0; i < raw->_plan.size(); ++i)
+        if (raw->_plan.operation(i).op == OpDraw)
+            drawOps.push_back(i);
+    ASSERT_EQ(drawOps.size(), 3u);
+
+    const auto &state1 = raw->_plan.renderStates[raw->_plan.draw(drawOps[1]).state];
+    const gm20b::BufferBinding &b0 = raw->_plan.buffers[0][state1.buffers[0]][0];
+    const gm20b::BufferBinding &b1 = raw->_plan.buffers[0][state1.buffers[0]][1];
+    const gm20b::BufferBinding &b2 = raw->_plan.buffers[0][state1.buffers[0]][2];
+    const gm20b::BufferBinding &b3 = raw->_plan.buffers[0][state1.buffers[0]][3];
+    const gm20b::BufferBinding &bf = raw->_plan.buffers[1][state1.buffers[1]][0];
+    ASSERT_NE(b0.shadow, 0u);
+    ASSERT_NE(b1.shadow, 0u);
+    ASSERT_NE(b2.shadow, 0u);
+    EXPECT_EQ(b3.shadow, 0u);
+    EXPECT_EQ(bf.shadow, 0u);
+    EXPECT_EQ(memcmp(raw->_shadow.ownData() + b0.shadow - 1, v0b, sizeof v0b), 0);
+    EXPECT_EQ(memcmp(raw->_shadow.ownData() + b1.shadow - 1, v1b, sizeof v1b), 0);
+    EXPECT_EQ(memcmp(raw->_shadow.ownData() + b2.shadow - 1, m2b, sizeof m2b), 0);
+
+    const auto &state2 = raw->_plan.renderStates[raw->_plan.draw(drawOps[2]).state];
+    EXPECT_EQ(raw->_plan.buffers[0][state2.buffers[0]][1].shadow, 0u);
+
+    [e endEncoding];
+    [cb commit];
+    [cb waitUntilCompleted];
+    EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted) << cb.error.description.UTF8String;
+}
+
 TEST(GM20BFacadeCommit, CommitLatency)
 {
     ASSERT_TRUE(opened().device != nil);

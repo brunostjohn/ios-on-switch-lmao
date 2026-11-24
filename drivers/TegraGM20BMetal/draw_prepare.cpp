@@ -370,6 +370,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const uint32_t count = vCount;
     const bool firstDraw = !drew_;
     drew_ = true;
+    written_.setLastNonOverlappingQuad(false);
     ++passDraws_;
     readBits_ |= pl->readBits | pl->fetchBits;
     // the pixels it may write: its scissor within its viewport's pixels (m2v vk_scissors, viewport_pixels), over each
@@ -392,13 +393,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const uint32_t facts = bindingFacts(*pl);
     Pipeline *prepared = dev_->variant(*pl, facts | (rot_.turned() ? AssumeTurned : 0u));
     SWITCH_METAL_ENCODE_BEGIN(geometrySpan, Geometry);
-    // only a pass's first draw is bounded by its vertices, for the cover test below (its vertex bytes the recording's
-    // cached copy, SwitchMetalCommandBuffer::_shadow); every other decision takes the draw's pixel limit
     DrawGeometry g;
-    if (!firstDraw || (pl->storageBits && !(pl->fetchBits & ~pl->storageBits)))
-        g.limit = {x[0], y[0], x[1], y[1]};
-    else
+    if (firstDraw || pl->writeBits || (pl->fetchBits & ~pl->storageBits))
         g = geometry(*pl, primitive, first, indexed ? drawIndexCount_ : count, {x[0], y[0], x[1], y[1]});
+    else
+        g.limit = {x[0], y[0], x[1], y[1]};
     auto geometryAnalysis = geometryCache_.analysis(g, bindingRevision_, cb_->geometryBudget_, &cb_->geometryPool_);
     SWITCH_METAL_ENCODE_BEGIN(variantSpan, Variant);
     // a turned draw of a turned variant's state takes the variant over the generic program's split twin
@@ -799,8 +798,16 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     // A fetch through the texture unit that meets only ROP writes needs the barrier only where its pixels meet theirs
     // (region.h); nothing bounds a storage access's pixels.
     SWITCH_METAL_ENCODE_BEGIN(barrierSpan, Barriers);
-    const AttachmentAccess access{pl->readBits, pl->writeBits, uint8_t(pl->fetchBits & ~pl->storageBits),
-                                  pl->storageBits};
+    const uint8_t textureFetchBits = uint8_t(pl->fetchBits & ~pl->storageBits);
+    const AttachmentAccess access{pl->readBits, pl->writeBits, textureFetchBits, pl->storageBits};
+    bool fetchedCompressed = false;
+    for (uint8_t m = textureFetchBits; m; m &= m - 1) {
+        const uint32_t c = __builtin_ctz(m);
+        if (c < pass_.count && pass_.color[c].texture && pass_.color[c].texture->comptags) {
+            fetchedCompressed = true;
+            break;
+        }
+    }
     if (firstDraw && !indirectGeometry_ && !pl->dropsPixels && !(alphaWanted_ & kAlphaToCoverage)) {
         const uint8_t opaque = pl->writeBits & ~(pl->readBits | pl->fetchBits | pl->storageBits);
         if (opaque && geometryAnalysis.covers(primitive == 3, areaW_, areaH_))
@@ -808,7 +815,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     const AttachmentBarrier needed = access.after(attachmentWrites_.rop, attachmentWrites_.storage);
     if (needed != AttachmentBarrier::None) {
-        if (needed == AttachmentBarrier::Pixel && !written_.meets(geometryAnalysis)) {
+        if (needed == AttachmentBarrier::Pixel && !fetchedCompressed && !written_.meets(geometryAnalysis)) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             SWITCH_METAL_DIAGNOSTIC(dev_->stats.fetchBarriersElided++);
 #endif
@@ -833,6 +840,12 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
             written_.clear();
         }
     }
+    const uint32_t drawCount = indexed ? drawIndexCount_ : count;
+    written_.setLastNonOverlappingQuad(
+        !fetchedCompressed && fetchesOwnColor(pl->fetchBits, pl->writeBits, pl->storageBits) && !indirectGeometry_ &&
+        !amplifies() && raster_.fill == 0 && (!pl->viewportIndex || views_.viewports <= 1) &&
+        (primitive == 3 || primitive == 4) && drawCount == (primitive == 3 ? 6u : 4u) &&
+        WrittenRegion::nonOverlappingQuad(geometryAnalysis, primitive == 3));
     SWITCH_METAL_ENCODE_END(barrierSpan);
 #if SWITCH_METAL_DIAGNOSTICS
     if (pipeline_ && pipeline_->caName)

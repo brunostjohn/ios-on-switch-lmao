@@ -480,4 +480,120 @@ TEST_F(DeviceFetch, ASlotWithNoResidualWordBoundOffItsAlignmentIsDrawn)
     EXPECT_TRUE(d.ok) << d.why;
 }
 
+TEST_F(DeviceFetch, ConvexTwoTriangleQuadElidesIntraDrawBarrierAndDisjointQuadsElideInterDrawBarrier)
+{
+    gm20b::RuntimeRecord r = fetchingRecord(0xca01, false);
+    r.keyString = "samples=1 c0=70:15:0 ds=0/0 a0=31:0:0:16:1:1 ";
+    r.pipeline.vertexSlot = 0;
+    r.pipeline.vertexStride = 16;
+    r.blob = {0x1a00, 0x1111, 0x1c00, (1u << 12) | 16};
+    std::string why;
+    gm20b::Pipeline *pl = dev.addRecord(r, true, why);
+    ASSERT_NE(pl, nullptr) << why;
+    ASSERT_TRUE(pl->caTransform && pl->positionComponents == 4);
+
+    const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    const float quadA[16] = {-1.0f, 1.0f, 0, 1, -0.5f, 1.0f, 0, 1, -1.0f, 0.5f, 0, 1, -0.5f, 0.5f, 0, 1};
+    const float quadB[16] = {0.0f, 0.0f, 0, 1, 0.5f, 0.0f, 0, 1, 0.0f, -0.5f, 0, 1, 0.5f, -0.5f, 0, 1};
+    const float quadOverlap[16] = {-0.75f, 0.75f, 0, 1, -0.25f, 0.75f, 0, 1, -0.75f, 0.25f, 0, 1, -0.25f, 0.25f, 0, 1};
+    const float quadList[24] = {-1.0f, 1.0f, 0, 1, -0.5f, 1.0f, 0, 1, -1.0f, 0.5f, 0, 1,
+                                -0.5f, 1.0f, 0, 1, -0.5f, 0.5f, 0, 1, -1.0f, 0.5f, 0, 1};
+    const float foldedStrip[16] = {-1.0f, 1.0f, 0, 1, -0.5f, 1.0f, 0, 1, -0.5f, 0.5f, 0, 1, -1.0f, 0.5f, 0, 1};
+    const float overlapList[24] = {-1.0f, 1.0f, 0, 1, 0.0f,  1.0f, 0, 1, -0.5f,  0.0f, 0, 1,
+                                   0.0f,  1.0f, 0, 1, -0.5f, 0.0f, 0, 1, -0.75f, 0.5f, 0, 1};
+
+    const Drawn convexStrip = drawOnce(pl, [&](gm20b::RenderEncoder &e, const char **w) {
+        e.setBytes(1, 2, identity, sizeof identity);
+        e.setBytes(1, 0, quadA, sizeof quadA);
+        return e.draw(kStrip, 0, 4, 1, 0, w);
+    });
+    EXPECT_TRUE(convexStrip.ok) << convexStrip.why;
+    EXPECT_EQ(convexStrip.split, 0u);
+    EXPECT_TRUE(fetchCalls().empty());
+
+    const Drawn convexList = drawOnce(pl, [&](gm20b::RenderEncoder &e, const char **w) {
+        e.setBytes(1, 2, identity, sizeof identity);
+        e.setBytes(1, 0, quadList, sizeof quadList);
+        return e.draw(kTriangle, 0, 6, 1, 0, w);
+    });
+    EXPECT_TRUE(convexList.ok) << convexList.why;
+    EXPECT_EQ(convexList.split, 0u);
+    EXPECT_TRUE(fetchCalls().empty());
+
+    const Drawn folded = drawOnce(pl, [&](gm20b::RenderEncoder &e, const char **w) {
+        e.setBytes(1, 2, identity, sizeof identity);
+        e.setBytes(1, 0, foldedStrip, sizeof foldedStrip);
+        return e.draw(kStrip, 0, 4, 1, 0, w);
+    });
+    EXPECT_TRUE(folded.ok) << folded.why;
+    EXPECT_EQ(folded.split, 1u);
+    EXPECT_EQ(folded.triangles, 2u);
+
+    const Drawn overlapping = drawOnce(pl, [&](gm20b::RenderEncoder &e, const char **w) {
+        e.setBytes(1, 2, identity, sizeof identity);
+        e.setBytes(1, 0, overlapList, sizeof overlapList);
+        return e.draw(kTriangle, 0, 6, 1, 0, w);
+    });
+    EXPECT_TRUE(overlapping.ok) << overlapping.why;
+    EXPECT_EQ(overlapping.split, 1u);
+    EXPECT_EQ(overlapping.triangles, 2u);
+
+    const Drawn wireframe = drawOnce(pl, [&](gm20b::RenderEncoder &e, const char **w) {
+        e.setFillMode(1);
+        e.setBytes(1, 2, identity, sizeof identity);
+        e.setBytes(1, 0, quadA, sizeof quadA);
+        return e.draw(kStrip, 0, 4, 1, 0, w);
+    });
+    EXPECT_TRUE(wireframe.ok) << wireframe.why;
+    EXPECT_EQ(wireframe.split, 1u);
+
+    const Drawn instancedQuad = drawOnce(pl, [&](gm20b::RenderEncoder &e, const char **w) {
+        e.setBytes(1, 2, identity, sizeof identity);
+        e.setBytes(1, 0, quadA, sizeof quadA);
+        return e.draw(kStrip, 0, 4, 2, 0, w);
+    });
+    EXPECT_TRUE(instancedQuad.ok) << instancedQuad.why;
+    EXPECT_EQ(instancedQuad.split, 1u);
+
+    const Drawn disjoint = drawOnce(pl, [&](gm20b::RenderEncoder &e, const char **w) {
+        e.setBytes(1, 2, identity, sizeof identity);
+        e.setBytes(1, 0, quadA, sizeof quadA);
+        if (!e.draw(kStrip, 0, 4, 1, 0, w))
+            return false;
+        e.setBytes(1, 0, quadB, sizeof quadB);
+        return e.draw(kStrip, 0, 4, 1, 0, w);
+    });
+    EXPECT_TRUE(disjoint.ok) << disjoint.why;
+    EXPECT_EQ(disjoint.split, 0u);
+    EXPECT_EQ(jobMethods().count(NVB197_PIXEL_SHADER_BARRIER), 0u);
+
+    const Drawn colliding = drawOnce(pl, [&](gm20b::RenderEncoder &e, const char **w) {
+        e.setBytes(1, 2, identity, sizeof identity);
+        e.setBytes(1, 0, quadA, sizeof quadA);
+        if (!e.draw(kStrip, 0, 4, 1, 0, w))
+            return false;
+        e.setBytes(1, 0, quadOverlap, sizeof quadOverlap);
+        return e.draw(kStrip, 0, 4, 1, 0, w);
+    });
+    EXPECT_TRUE(colliding.ok) << colliding.why;
+    EXPECT_EQ(colliding.split, 0u);
+    EXPECT_EQ(jobMethods().count(NVB197_PIXEL_SHADER_BARRIER), 1u);
+
+    gm20b::Texture compressed = target;
+    compressed.comptags = true;
+    into = &compressed;
+    const Drawn compDisjoint = drawOnce(pl, [&](gm20b::RenderEncoder &e, const char **w) {
+        e.setBytes(1, 2, identity, sizeof identity);
+        e.setBytes(1, 0, quadA, sizeof quadA);
+        if (!e.draw(kStrip, 0, 4, 1, 0, w))
+            return false;
+        e.setBytes(1, 0, quadB, sizeof quadB);
+        return e.draw(kStrip, 0, 4, 1, 0, w);
+    });
+    into = &target;
+    EXPECT_TRUE(compDisjoint.ok) << compDisjoint.why;
+    EXPECT_EQ(compDisjoint.split, 2u);
+    EXPECT_EQ(jobMethods().count(NVB197_PIXEL_SHADER_BARRIER), 1u);
+}
+
 }  // namespace

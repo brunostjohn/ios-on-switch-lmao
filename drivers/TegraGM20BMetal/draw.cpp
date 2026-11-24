@@ -121,19 +121,23 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     readBits_ |= pl->fetchBits;
     if (!count || !instances)
         return true;
-    if (orderedFetch(*pl, {primitive, count, instances, false, false})) {
-        if (primitive == icb::kPatchPrimitive) {
-            refuseFetch(*pl, FetchRefusal::Geometry, primitive, count, instances, why);
-            return false;
-        }
-        if (!prepare(pl, primitive, first, first, count, false, why))
-            return skippedDraw();
+    const bool ordered = orderedFetch(*pl, {primitive, count, instances, false, false});
+    if (ordered && primitive == icb::kPatchPrimitive) {
+        refuseFetch(*pl, FetchRefusal::Geometry, primitive, count, instances, why);
+        return false;
+    }
+    if (!prepare(pl, primitive, first, first, count, false, why))
+        return skippedDraw();
+    bool wholeQuad = instances == 1 && written_.lastNonOverlappingQuad();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (dev_->probeFetchRung.load(std::memory_order_relaxed) == kProbeBlendTwinTriangles)
+        wholeQuad = false;
+#endif
+    if (ordered && !wholeQuad) {
         fetchDraw(primitive, false, first, count, instances, first, baseInstance);
         cb_->draws++;
         return true;
     }
-    if (!prepare(pl, primitive, first, first, count, false, why))
-        return skippedDraw();
     cb_->draws += amplifies() ? amplifications_ : 1;
     const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -371,7 +375,12 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         ibEnd_ = last;
         ibSize_ = indexSize;
     }
-    if (ordered) {
+    bool wholeQuad = instances == 1 && written_.lastNonOverlappingQuad();
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (dev_->probeFetchRung.load(std::memory_order_relaxed) == kProbeBlendTwinTriangles)
+        wholeQuad = false;
+#endif
+    if (ordered && !wholeQuad) {
         fetchDraw(primitive, true, 0, count, instances, uint32_t(baseVertex), baseInstance);
         cb_->draws++;
         return true;

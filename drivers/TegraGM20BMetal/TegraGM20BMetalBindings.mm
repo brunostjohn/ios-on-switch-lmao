@@ -67,7 +67,8 @@ static void bindBytes(__unsafe_unretained SwitchMetalRenderEncoder *e, int stage
         e->_bufVa[stage][index] = 0;  // its own 256-byte-aligned upload chunk
         e->_buf[stage][index] = nil;
     }
-    recordBytes(e->_cb, cmd(OpBytes, uint8_t(stage), uint16_t(index)), bytes, length, stage == 1 && !e->_drew);
+    recordBytes(e->_cb, cmd(OpBytes, uint8_t(stage), uint16_t(index)), bytes, length,
+                stage == 1 && (!e->_drew || index <= 2));
 }
 
 - (void)setVertexBytes:(const void *)bytes length:(NSUInteger)length atIndex:(NSUInteger)index

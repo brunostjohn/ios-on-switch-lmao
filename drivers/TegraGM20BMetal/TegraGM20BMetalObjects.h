@@ -508,8 +508,8 @@ static inline void gm20bRunDeferredPresent(const SwitchMetalDeferredPresent &p)
     // each submitted range's written resources, for its completion (captureWrittenRange): the first _retired of them
     std::deque<gm20b::RetirementWrites> _retirements;
     size_t _retired;
-    // a pass's vertex setBytes before its first draw, again in cached memory (Cmd::x: offset + 1): the draw's geometry
-    // the encode reads (the first draw's cover test) is not read from the write-combined chunk
+    // vertex setBytes before a pass's first draw, and post-first vertex slots 0..2 (Core Animation's vertices and
+    // transform), again in cached memory (Cmd::shadow: offset + 1): encode geometry never reads write-combined chunks
     gm20b::GrowList<uint8_t> _shadow;
     gm20b::GrowList<uint64_t> _extra;
     std::vector<id> _owners;
