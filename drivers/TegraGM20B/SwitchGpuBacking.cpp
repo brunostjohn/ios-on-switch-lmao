@@ -194,7 +194,7 @@ extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *pages
 		return nullptr;
 	auto *copy = copy_pages(pages, count);
 	IOLock *lock = registry_lock();
-	if (!copy || !lock || !switch_gpu_backing_order()) {
+	if (!copy || !lock) {
 		free_pages(copy);
 		return nullptr;
 	}
