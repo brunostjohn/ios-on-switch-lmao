@@ -7,12 +7,23 @@ void AGXDeviceUserClient::accountRelease(Bo *bo)
 		pool_bytes_ -= bo->bytes;
 	if (bo->handle && bo->pool_va && (bo->flags & TegraGM20BBoControl))
 		control_bytes_ -= bo->controlCharge;
+#ifdef KERNEL
+	if (SWITCH_GPU_OWNER_COUNTS && bo->handle && !bo->parkReclaimed)
+		ownerMemory_.change(bo->ownerKind, bo->bytes, false);
+#else
 	if (SWITCH_GPU_OWNER_COUNTS && bo->handle)
 		ownerMemory_.change(bo->ownerKind, bo->bytes, false);
+#endif
 }
 
 void AGXDeviceUserClient::readyBo(Bo *bo)
 {
+#ifdef KERNEL
+	if (bo->parkState == SwitchGpuParkState::Reclaiming && !bo->bindings && !bo->zombieLink) {
+		parkFinishReclaimLocked(bo);
+		return;
+	}
+#endif
 	if (!bo->zombieLink || bo->bindings)
 		return;
 	*bo->zombieLink = bo->next;
@@ -227,6 +238,19 @@ void AGXDeviceUserClient::releaseLeft()
 	IOLockLock(lock_);
 	const Left left = left_;
 	left_ = {};
+#ifdef KERNEL
+	while ((left.bos || left.indexes || left.bindings || reclaimDeferredCount_) &&
+	       submitGate_.mutating())
+		IOLockSleep(lock_, &submitGate_, THREAD_UNINT);
+	const uint64_t reclaimSeq = reclaimDeferredCount_ ? reclaimSeq_ : 0u;
+	IOLockUnlock(lock_);
+	if (!left.bos && !left.indexes && !left.bindings && !reclaimSeq)
+		return;
+	passSubmitters(true);
+	dropLeft(left);
+	if (reclaimSeq)
+		drainDeferredReclaims(reclaimSeq);
+#else
 	while ((left.bos || left.indexes || left.bindings) && submitGate_.mutating())
 		IOLockSleep(lock_, &submitGate_, THREAD_UNINT);
 	IOLockUnlock(lock_);
@@ -234,6 +258,7 @@ void AGXDeviceUserClient::releaseLeft()
 		return;
 	passSubmitters(true);
 	dropLeft(left);
+#endif
 }
 
 void AGXDeviceUserClient::releaseWork(thread_call_param_t owner, thread_call_param_t)
@@ -323,10 +348,16 @@ void AGXDeviceUserClient::drainResources()
 	IOLockLock(lock_);
 	submitGate_.close(lock_);
 	__atomic_store_n(&retirementStopped_, 1u, __ATOMIC_RELEASE);
+#ifdef KERNEL
+	parkUnlinkAllLocked();
+#endif
 	IOLockUnlock(lock_);
 	events_.stop();
 	resources_.stop();
 	releaseMappings();
+#ifdef KERNEL
+	drainParkedRanges();
+#endif
 #if TGM_STATS
 	tgm_readback_closed(this);
 #endif
@@ -409,6 +440,10 @@ IOReturn AGXDeviceUserClient::freeBo(Bo **p)
 	if (bound && !snapshot)
 		return kIOReturnNoMemory;
 	*p = bo->next;
+#ifdef KERNEL
+	parkUnlinkLocked(bo, false);
+	bo->parkedVa = 0;
+#endif
 	switch_gpu_backing_member_freed(bo->backing);
 	boIndex_.erase(bo->handle);
 	for (uint32_t i = 0; i < nbinds_;) {

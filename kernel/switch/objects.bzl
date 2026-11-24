@@ -64,11 +64,13 @@ SWITCH_OBJECTS = {
     "iokit": [
         ("iokit/Kernel/IOBufferMemoryDescriptor.cpp", "iokit/fresh_memory.cpp", []),
         ("iokit/Kernel/IOMemoryDescriptor.cpp", "iokit/memory_attachment.cpp", []),
+        ("iokit/Kernel/IOMemoryDescriptor.cpp", "iokit/park_mapping.cpp", []),
         ("iokit/Kernel/IOUserClient.cpp", "iokit/iosurface.cpp", []),
         ("iokit/Kernel/IOUserClient.cpp", "security/app_capabilities.cpp", []),
     ],
     "osfmk": [
         ("osfmk/vm/vm_map.c", "security/dyld_policy.c", [], ["12377.121.6"]),
+        ("osfmk/vm/vm_map.c", "vm/park_vm.c", []),
         ("osfmk/arm/model_dep.c", "diag/threads.c", []),
         ("osfmk/ipc/ipc_kmsg.c", "diag/frames.c", []),
         ("osfmk/arm64/arm_vm_init.c", "ram/ram.c", [_KERNEL_VIRT_BASE]),

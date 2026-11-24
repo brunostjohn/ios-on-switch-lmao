@@ -64,6 +64,19 @@ void giveConnection(int pid)
 constexpr uint64_t kPrefaultMaxBytes = 256ULL << 10;
 }  // namespace
 
+namespace tgm_uc
+{
+IOOptionBits boMapOptions(bool coherent, bool system, bool fullView, bool readOnly, uint64_t bytes)
+{
+	IOOptionBits opts = coherent ? kIOMapWriteCombineCache : kIOMapDefaultCache;
+	if (readOnly)
+		opts |= kIOMapReadOnly;
+	if (fullView && !system && bytes <= kPrefaultMaxBytes)
+		opts |= kIOMapPrefault;
+	return opts;
+}
+}  // namespace tgm_uc
+
 OSDefineMetaClassAndStructors(AGXDeviceUserClient, IOUserClient)
 
 #include "SwitchGpuClientRetirement.h"
@@ -214,7 +227,7 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 	// another connection), which keeps the pages while a task still maps the view. Cached and system BOs need no such
 	// care: their mappings hold the buffer itself, and releasing one waits for nothing.
 	PoolOrphan *orphan = nullptr;
-	if (bo->system && bo->handle) {
+	if (bo->system && bo->handle && !bo->parkReclaimed) {
 		__atomic_sub_fetch(&gSystemCoherent, 1, __ATOMIC_RELAXED);
 		__atomic_sub_fetch(&gSystemCoherentBytes, bo->bytes, __ATOMIC_RELAXED);
 	}
@@ -266,6 +279,9 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 	if (bo->pas)
 		IODelete(bo->pas, uint64_t, bo->backing_pages);
 	switch_gpu_backing_release(bo->backing);
+	switch_gpu_backing_release(bo->parkedBacking);
+	if (bo->reclaimPayload)
+		IODelete(bo->reclaimPayload, ReclaimedBacking, 1);
 	OSSafeReleaseNULL(bo->surface);
 	IODelete(bo, Bo, 1);
 }
@@ -385,26 +401,89 @@ IOReturn AGXDeviceUserClient::mapToken(const TegraGM20BAbiMap *in, TegraGM20BAbi
 	Mapping *mapping = IONew(Mapping, 1);
 	if (!mapping)
 		return kIOReturnNoMemory;
-	IOOptionBits options = fixed ? kIOMapOverwrite : kIOMapAnywhere;
-	if (in->flags & TegraGM20BMapReadOnly)
-		options |= kIOMapReadOnly;
-	// clientMemoryForType takes lock_: called without it, as IOKit's own map path calls it
-	IOMemoryMap *map = mapClientMemory64(in->token, task_, options, in->address);
-	if (!map) {
+	uint64_t boHandle = 0;
+	IOLockLock(lock_);
+	if (submitGate_.closed()) {
+		IOLockUnlock(lock_);
 		IODelete(mapping, Mapping, 1);
-		return kIOReturnBadArgument;  // IOConnectMapMemory64's answer
+		return kIOReturnNotOpen;
+	}
+	if (Bo *bo = findToken(in->token)) {
+		if (bo->parkState != SwitchGpuParkState::Live || !bo->view) {
+			const IOReturn deny = bo->parkState != SwitchGpuParkState::Live
+						      ? kIOReturnNotReady
+						      : kIOReturnBadArgument;
+			IOLockUnlock(lock_);
+			IODelete(mapping, Mapping, 1);
+			return deny;
+		}
+		++bo->mappingRefs;
+		boHandle = bo->handle;
+	}
+	IOLockUnlock(lock_);
+	const auto dropMapRef = [&]() {
+		if (!boHandle)
+			return;
+		IOLockLock(lock_);
+		if (Bo *still = findBo(boHandle))
+			--still->mappingRefs;
+		IOLockUnlock(lock_);
+	};
+	IOMemoryMap *map = nullptr;
+	bool readOnly = (in->flags & TegraGM20BMapReadOnly) != 0u || in->token == kFenceToken;
+	if (fixed) {
+		IOOptionBits descOptions = 0;
+		IOMemoryDescriptor *desc = nullptr;
+		const IOReturn memRet = memoryForType(in->token, &descOptions, &desc);
+		if (memRet != kIOReturnSuccess || !desc) {
+			dropMapRef();
+			IODelete(mapping, Mapping, 1);
+			return memRet != kIOReturnSuccess ? memRet : kIOReturnBadArgument;
+		}
+		if (descOptions & kIOMapReadOnly)
+			readOnly = true;
+		IOOptionBits opts = descOptions;
+		if (readOnly)
+			opts |= kIOMapReadOnly;
+		const IOReturn mapRet =
+			switch_iokit_map_fixed(desc, task_, in->address, opts, &map);
+		desc->release();
+		if (mapRet != kIOReturnSuccess || !map) {
+			dropMapRef();
+			IODelete(mapping, Mapping, 1);
+			return mapRet != kIOReturnSuccess ? mapRet : kIOReturnBadArgument;
+		}
+	} else {
+		IOOptionBits options = kIOMapAnywhere;
+		if (in->flags & TegraGM20BMapReadOnly)
+			options |= kIOMapReadOnly;
+		// clientMemoryForType takes lock_: called without it, as IOKit's own map path calls it
+		map = mapClientMemory64(in->token, task_, options, 0);
+		if (!map) {
+			dropMapRef();
+			IODelete(mapping, Mapping, 1);
+			return kIOReturnBadArgument;  // IOConnectMapMemory64's answer
+		}
 	}
 	out->address = map->getAddress();
 	out->bytes = map->getSize();
 	IOLockLock(lock_);
+	if (boHandle) {
+		if (Bo *still = findBo(boHandle))
+			--still->mappingRefs;
+	}
 	if (submitGate_.closed()) {
 		IOLockUnlock(lock_);
-		map->unmap();
-		map->release();
+		if (fixed) {
+			switch_iokit_unmap_overwrite(task_, map, out->address, out->bytes);
+		} else {
+			map->unmap();
+			map->release();
+		}
 		IODelete(mapping, Mapping, 1);
 		return kIOReturnNotOpen;
 	}
-	*mapping = {maps_, map, in->token, out->address};
+	*mapping = {maps_, map, in->token, out->address, out->bytes, fixed, readOnly};
 	maps_ = mapping;
 	IOLockUnlock(lock_);
 	return kIOReturnSuccess;
@@ -430,9 +509,13 @@ IOReturn AGXDeviceUserClient::unmapToken(const TegraGM20BAbiUnmap *in)
 	IOLockUnlock(lock_);
 	if (!found)
 		return kIOReturnBadArgument;
-	if (!shared)
-		found->map->unmap();
-	found->map->release();
+	if (found->overwrite) {
+		switch_iokit_unmap_overwrite(task_, found->map, found->address, found->bytes);
+	} else {
+		if (!shared)
+			found->map->unmap();
+		found->map->release();
+	}
 	IODelete(found, Mapping, 1);
 	// A freed pool BO's pages wait for its last mapping (a client unmaps after its BoFree): release them now.
 	if (__atomic_load_n(&gPoolOrphans, __ATOMIC_ACQUIRE))
@@ -572,8 +655,12 @@ void AGXDeviceUserClient::releaseMappings()
 	switch_gpu_pack_client_release_cpu(&packCpu);
 	while (list) {
 		Mapping *next = list->next;
-		list->map->unmap();
-		list->map->release();
+		if (list->overwrite) {
+			switch_iokit_unmap_overwrite(task_, list->map, list->address, list->bytes);
+		} else {
+			list->map->unmap();
+			list->map->release();
+		}
 		IODelete(list, Mapping, 1);
 		list = next;
 	}
@@ -592,7 +679,7 @@ extern "C" uint32_t switch_gpu_info_flags(void)
 			 TegraGM20BInfoSubmitAddress | TegraGM20BInfoCpuPreserveDirty |
 			 TegraGM20BInfoCanonicalSurfaceLayout | TegraGM20BInfoChannelEpoch |
 			 TegraGM20BInfoPushFences;
-	flags |= TegraGM20BInfoPackImage;
+	flags |= TegraGM20BInfoPackImage | TegraGM20BInfoBoPark;
 	if (info.comptag_lines && switch_gpu_compression_on())
 		flags |= TegraGM20BInfoCompression;
 	if (switch_tiled_cache_on())
@@ -754,21 +841,21 @@ IOReturn AGXDeviceUserClient::memoryForType(UInt32 type, IOOptionBits *options,
 		*memory = fence_view_;
 		*options = kIOMapAnywhere | kIOMapReadOnly | kIOMapWriteCombineCache;
 		ret = kIOReturnSuccess;
-	} else if (const Bo *bo = findToken(type); bo && bo->view) {
+	} else if (const Bo *bo = findToken(type);
+		   bo && bo->view && bo->parkState == SwitchGpuParkState::Live) {
 		bo->view->retain();
 		*memory = bo->view;
-		*options = kIOMapAnywhere |
-			   ((bo->flags & TegraGM20BBoCoherent) ? kIOMapWriteCombineCache
-							       : kIOMapDefaultCache);
+		const bool isBuffer = bo->buffer.memory != nullptr;
+		const bool prefault = isBuffer && bo->view == bo->buffer.memory;
+		*options = kIOMapAnywhere | (isBuffer ? kIOMapUnique : 0u) |
+			   boMapOptions((bo->flags & TegraGM20BBoCoherent) != 0u, bo->system,
+					prefault, false, bo->bytes);
 		// Pool views are physical: IOKit puts their pages in the mapping's device pager at map time
 		// (populateDevicePager), but enters them in the pmap only for kernel_map, so a task's first CPU touch of each
 		// 4 KiB still faults (the "device" class on the kprof faults line), and IOKit drops kIOMapPrefault for device
 		// pager memory. A cached BO's buffer is prepared (BoAlloc), which kIOMapPrefault requires.
-		if (bo->buffer.memory && bo->view == bo->buffer.memory && !bo->system &&
-		    bo->bytes <= kPrefaultMaxBytes) {
-			*options |= kIOMapPrefault;
+		if (*options & kIOMapPrefault)
 			tgm_stats_prefault(bo->bytes);
-		}
 		ret = kIOReturnSuccess;
 	}
 	IOLockUnlock(lock_);

@@ -13,8 +13,10 @@
 #include <kern/thread_call.h>
 #include <mach/vm_region.h>
 #include "SwitchGpuSpares.h"
+#include "SwitchGpuParked.h"
 #include "SwitchGpuCachedBuffer.h"
 #include "SwitchGpuMethodGate.h"
+#include <switch/park_mapping.h>
 #include <stddef.h>
 #include <string.h>
 #include <sys/systm.h>
@@ -170,6 +172,17 @@ struct Spare {
 	switch_gpu_cached_mapping *mapping;
 };
 
+struct ReclaimedBacking {
+	ReclaimedBacking *next;
+	SwitchGpuCachedBuffer buffer;
+	uint64_t *pas;
+	uint32_t backingPages;
+	uint64_t bytes;
+	switch_gpu_cached_mapping *cachedMapping;
+	switch_gpu_backing *backing;
+	bool system;
+};
+
 struct PoolZero {
 	PoolZero *next;
 	void *va;
@@ -207,6 +220,20 @@ Spare *spareTake(uint64_t bytes);
 void spareIneligible();
 bool spareKeep(const SwitchGpuCachedBuffer &buffer, uint64_t *pas, uint64_t bytes,
 	       switch_gpu_cached_mapping *mapping = nullptr);
+bool sparesPressure();
+bool sparesHasRoom();
+void kickSpareWork();
+bool reclaimParkedStep(bool pressure, bool room);
+bool parkedPoolEnsure();
+bool parkedPoolPush(SwitchGpuParkedNode *node, bool countStat);
+bool parkedNotifyDemand(uint64_t bytes);
+bool parkedHasAny();
+IOOptionBits boMapOptions(bool coherent, bool system, bool fullView, bool readOnly, uint64_t bytes);
+#if TGM_STATS
+void parkedStatUnpark(bool reclaimed);
+void parkedStatsTake(uint64_t *parked, uint64_t *unparkResident, uint64_t *unparkReclaimed,
+		     uint64_t *reclaimedCached, uint64_t *reclaimedSystem);
+#endif
 
 // With the stats (also gpu_stats_tick.c's stats lines): the method stream of every kScanEvery-th submission of each
 // connection is read back and what it asks of the GPU is counted, one line per process every 5 s ("tegra-gm20b: push
@@ -327,6 +354,19 @@ class AGXDeviceUserClient : public IOUserClient
 		uint32_t bindings;
 		Bo **zombieLink;
 		SwitchGpuOwnerKind ownerKind;
+		bool bufferKernelMap;
+		uint32_t mappingRefs;
+		bool freeing;
+		bool parkReclaimed;
+		bool parkedGuard;
+		bool parkedReadOnly;
+		bool reclaimDeferred;
+		SwitchGpuParkState parkState;
+		uint64_t parkedVa;
+		uint64_t reclaimSeq;
+		switch_gpu_backing *parkedBacking;
+		ReclaimedBacking *reclaimPayload;
+		SwitchGpuParkedNode parkedNode;
 	};
 
 	struct RetiredBinding {
@@ -355,6 +395,9 @@ class AGXDeviceUserClient : public IOUserClient
 		IOMemoryMap *map;
 		uint32_t token;
 		uint64_t address;
+		uint64_t bytes;
+		bool overwrite;
+		bool readOnly;
 	};
 
 	struct CpuLease {
@@ -459,6 +502,9 @@ class AGXDeviceUserClient : public IOUserClient
 	};
 
 	Left left_ = {};  // lock_: for releaseCall_
+	uint32_t reclaimDeferredCount_ = 0;
+	uint64_t reclaimSeq_ = 0;
+	uint32_t parkWait_ = 0;
 	thread_call_t releaseCall_ = nullptr;
 	RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
 	// a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
@@ -596,6 +642,20 @@ class AGXDeviceUserClient : public IOUserClient
 	static void adoptWiring(Bo *bo, SharedWiring *w);
 	void publishWiring(Bo *bo, const TegraGM20BAbiBoImport *in);
 	IOReturn boFree(const TegraGM20BAbiBoFree *in);
+	IOReturn boFreeMethod(const TegraGM20BAbiBoFree *in);
+	IOReturn boPark(const TegraGM20BAbiBoPark *in);
+	IOReturn boUnpark(const TegraGM20BAbiBoUnpark *in, TegraGM20BAbiBoUnparkReply *out);
+	IOReturn vmBindParkedRefusal(const TegraGM20BAbiVmBind *in, uint32_t count);
+	bool cpuAcquireParkedRefusal(const TegraGM20BAbiCpuAccess *in);
+	bool boGpuBusyLocked(const Bo *bo) const;
+	void parkUnlinkLocked(Bo *bo, bool consumeDemand);
+	bool parkWaitStableLocked(uint64_t handle);
+	ReclaimedBacking *detachReclaimedLocked(Bo *bo);
+	void parkFinishReclaimLocked(Bo *bo);
+	void drainDeferredReclaims(uint64_t upToSeq);
+	void releaseReclaimedList(ReclaimedBacking *list);
+	void parkUnlinkAllLocked();
+	void drainParkedRanges();
 	Bo **findLink(uint64_t handle);
 	IOReturn freeBo(Bo **p);
 	IOReturn cpuComplete(const TegraGM20BAbiCpuComplete *, TegraGM20BAbiCpuCompleteReply *);
@@ -665,6 +725,7 @@ class AGXDeviceUserClient : public IOUserClient
 
 public:
 	bool setUp(task_t task);
+	bool reclaimParkedBo(uint64_t handle);
 	int hungInterlocks(const uint64_t *va, const uint32_t *dwords, uint32_t n,
 			   uint64_t *interlocks, uint32_t *lastEngine);
 

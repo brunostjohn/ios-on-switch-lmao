@@ -372,6 +372,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		if (bo->chunked)
 			bo->backing = switch_gpu_pin_chunks(bo->pas, bo->npages);
 		else if (bo->buffer.memory && !system && !(in->flags & TegraGM20BBoContiguous)) {
+			bo->bufferKernelMap = bo->buffer.map != nullptr;
 			bo->backing = switch_gpu_pin_cached(bo->pas, bo->backing_pages, bo->npages,
 							    bo->buffer, bo->cachedMapping);
 			if (bo->backing) {

@@ -738,3 +738,33 @@ extern "C" int switch_gpu_backing_token_physical_status(const switch_gpu_backing
 	return external ? switch_gpu_backing_token_external_status(token)
 			: switch_gpu_backing_token_status(token);
 }
+
+extern "C" int switch_gpu_backing_parkable(switch_gpu_backing *backing)
+{
+	if (!backing)
+		return -95;
+	IOLock *lock = registry_lock();
+	if (!lock)
+		return -16;
+	IOLockLock(lock);
+	const bool claimed = switch_gpu_backing_enter(backing);
+	switch_gpu_backing_prune_locked(backing);
+	bool pending = backing->host_acquire.engine != 0u;
+	for (uint32_t i = 0; i < backing->access_count && !pending; ++i)
+		pending = switch_gpu_backing_access_status(backing->accesses[i]) == 0;
+	const bool busy = backing->refs != 1u || backing->retiring || backing->set || pending ||
+			  backing->cpu_readers || backing->cpu_writers ||
+			  backing->gpu_admission_readers || backing->gpu_admission_writers ||
+			  backing->mapping_engines ||
+			  __atomic_load_n(&backing->mapped_engines, __ATOMIC_ACQUIRE) ||
+			  backing->promise_count ||
+			  __atomic_load_n(&backing->scanout_holds, __ATOMIC_ACQUIRE);
+	int err = 0;
+	if (backing->shared || backing->surface_id)
+		err = -95;
+	else if (busy)
+		err = -16;
+	switch_gpu_backing_leave(backing, claimed);
+	IOLockUnlock(lock);
+	return err;
+}

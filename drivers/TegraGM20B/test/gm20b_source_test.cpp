@@ -27,10 +27,11 @@ const std::string &client()
 {
 	static const std::string source = [] {
 		std::string units;
-		for (const char *unit : {"", "Pool", "Spares", "Bo", "Import", "Channel", "Submit",
-					 "Dispatch", "Present", "Job", "JobSubmit"})
+		for (const char *unit : {"", "Pool", "Spares", "Bo", "Park", "Import", "Channel",
+					 "Submit", "Dispatch", "Present", "Job", "JobSubmit"})
 			units += SourceText(std::string("../TegraGM20BUserClient") + unit + ".cpp");
-		return units + SourceText("../TegraGM20BPushScanRun.cpp") +
+		return units + SourceText("../SwitchGpuParkedPool.cpp") +
+		       SourceText("../TegraGM20BPushScanRun.cpp") +
 		       SourceText("../TegraGM20BUserClientInternal.h") +
 		       SourceText("../SwitchGpuClientRetirement.h") +
 		       SourceText("../SwitchGpuClientBinds.h");
@@ -1743,4 +1744,138 @@ TEST(GM20BRopSource, ZropAndCropCountTheL2SlicesAsNvgpuDoes)
 	EXPECT_TRUE(init.has("nvkm_wr32(device, 0x408850, ltc_count);"));
 	EXPECT_TRUE(init.has("nvkm_wr32(device, 0x408958, ltc_count);"));
 	EXPECT_TRUE(CodeText(gr).has(".init_rop_active_fbps = gm20b_gr_init_rop_active_ltcs,"));
+}
+
+TEST(GM20BParkedBoSource, LockOrderAndOffLockVmCalls)
+{
+	const CodeText run = Block(client(), "IOReturn AGXDeviceUserClient::run(");
+	EXPECT_TRUE(run.before("return boPark(", "switch_gpu_method_closes_gate(method)"));
+	EXPECT_TRUE(run.before("return boUnpark(", "switch_gpu_method_closes_gate(method)"));
+	EXPECT_TRUE(run.before("return boFreeMethod(", "switch_gpu_method_closes_gate(method)"));
+	EXPECT_TRUE(run.before("vmBindParkedRefusal(", "vmBind("));
+	EXPECT_TRUE(run.has("cpuAcquireParkedRefusal("));
+
+	const CodeText park = Block(client(), "IOReturn AGXDeviceUserClient::boPark(");
+	EXPECT_TRUE(park.before("IOLockUnlock(lock_);", "switch_iokit_park_replace("));
+	EXPECT_FALSE(park.between("IOLockLock(lock_);", "IOLockUnlock(lock_);")
+			     .has("switch_iokit_park_replace("));
+
+	const CodeText unpark = Block(client(), "IOReturn AGXDeviceUserClient::boUnpark(");
+	EXPECT_TRUE(unpark.before("IOLockUnlock(lock_);", "switch_iokit_unpark_range("));
+	EXPECT_FALSE(unpark.between("IOLockLock(lock_);", "IOLockUnlock(lock_);")
+			     .has("switch_iokit_unpark_range("));
+
+	const CodeText freeMethod = Block(client(), "IOReturn AGXDeviceUserClient::boFreeMethod(");
+	EXPECT_TRUE(freeMethod.before("IOLockUnlock(lock_);", "switch_iokit_drop_parked_range("));
+
+	const CodeText work =
+		Block(client(), "void spareWork(thread_call_param_t param, thread_call_param_t)");
+	EXPECT_TRUE(work.before("reclaimParkedStep(", "IOLockLock(p->lock);"));
+
+	const CodeText take = Block(client(), "Spare *spareTake(uint64_t bytes)");
+	EXPECT_TRUE(take.before("IOLockUnlock(p->lock);", "parkedNotifyDemand("));
+	EXPECT_TRUE(take.before("IOLockUnlock(p->lock);", "parkedHasAny()"));
+
+	const CodeText stats = Block(client(), "extern \"C\" unsigned long tgm_owner_stats(");
+	EXPECT_TRUE(stats.before("parkedStatsTake(", "IOLockLock(p->lock);"));
+}
+
+TEST(GM20BParkedBoSource, OverwriteMappingsAndXnuHelpersPreserveVmSafety)
+{
+	const CodeText map = Block(client(), "IOReturn AGXDeviceUserClient::mapToken(");
+	EXPECT_TRUE(map.has("switch_iokit_map_fixed("));
+	EXPECT_TRUE(map.has("switch_iokit_unmap_overwrite("));
+	EXPECT_TRUE(map.has("mappingRefs"));
+	EXPECT_TRUE(Block(client(), "IOReturn AGXDeviceUserClient::unmapToken(")
+			    .has("switch_iokit_unmap_overwrite("));
+	EXPECT_TRUE(Block(client(), "void AGXDeviceUserClient::releaseMappings()")
+			    .has("switch_iokit_unmap_overwrite("));
+	EXPECT_TRUE(Block(client(), "extern \"C\" uint32_t switch_gpu_info_flags(void)")
+			    .has("TegraGM20BInfoBoPark"));
+	const CodeText memType = Block(client(), "IOReturn AGXDeviceUserClient::memoryForType(");
+	EXPECT_TRUE(memType.has("bo->parkState == SwitchGpuParkState::Live"));
+	EXPECT_TRUE(memType.has("isBuffer ? kIOMapUnique : 0u"));
+
+	const CodeText parkFn = Block(client(), "IOReturn AGXDeviceUserClient::boPark(");
+	EXPECT_TRUE(parkFn.has("bo->mappingRefs != 0u"));
+	EXPECT_TRUE(parkFn.has("backingParkable(bo->backing)"));
+	EXPECT_FALSE(parkFn.has("switch_gpu_backing_member_freed("));
+	EXPECT_FALSE(parkFn.has("switch_iokit_unpark_range("));
+
+	const CodeText gpuBusy = Block(client(), "bool AGXDeviceUserClient::boGpuBusyLocked(");
+	EXPECT_TRUE(gpuBusy.has("switch_gpu_mapping_pending("));
+	EXPECT_TRUE(gpuBusy.has("liveBinds != bo->bindings"));
+
+	const CodeText bindRefuse =
+		Block(client(), "IOReturn AGXDeviceUserClient::vmBindParkedRefusal(");
+	EXPECT_TRUE(bindRefuse.has("binds_[j].bo"));
+
+	const CodeText reclaimFn = Block(client(), "bool AGXDeviceUserClient::reclaimParkedBo(");
+	EXPECT_TRUE(reclaimFn.has("retirementStopped_"));
+	EXPECT_TRUE(reclaimFn.has("switch_gpu_vm_unmap(vm_, &record->mapping)"));
+	EXPECT_FALSE(reclaimFn.has("switch_gpu_mapping_mark_l2_clean("));
+	EXPECT_TRUE(reclaimFn.before("passSubmitters(false)", "detachReclaimedLocked(still)"));
+
+	const CodeText drain = Block(client(), "void AGXDeviceUserClient::drainParkedRanges()");
+	EXPECT_FALSE(drain.has("IONew("));
+	EXPECT_TRUE(drain.has("switch_iokit_drop_parked_range("));
+
+	const std::string backingCpp = SourceText("../SwitchGpuBacking.cpp");
+	const CodeText parkable =
+		Block(backingCpp, "extern \"C\" int switch_gpu_backing_parkable(");
+	EXPECT_TRUE(parkable.before("IOLockLock(lock);", "switch_gpu_backing_enter(backing)"));
+	EXPECT_TRUE(parkable.has("switch_gpu_backing_access_status("));
+	EXPECT_TRUE(parkable.has("backing->refs != 1u"));
+	EXPECT_TRUE(parkable.has("backing->retiring"));
+	EXPECT_TRUE(parkable.has("__atomic_load_n(&backing->mapped_engines, __ATOMIC_ACQUIRE)"));
+	EXPECT_TRUE(parkable.has("__atomic_load_n(&backing->scanout_holds, __ATOMIC_ACQUIRE)"));
+
+	const std::string parkCpp = SourceText("../../../kernel/switch/iokit/park_mapping.cpp");
+	const CodeText replace = Block(parkCpp, "kern_return_t switch_iokit_park_replace(");
+	EXPECT_TRUE(replace.before("switch_iokit_map_check_or_neuter(", "switch_vm_park_range("));
+	EXPECT_TRUE(replace.before("buffer_mem->getRetainCount()", "switch_vm_park_range("));
+	EXPECT_TRUE(replace.before("old_view->getRetainCount()", "switch_vm_park_range("));
+	EXPECT_TRUE(replace.before("switch_vm_park_range(", "switch_vm_range_has_objects("));
+	EXPECT_TRUE(
+		replace.has("switch_iokit_map_neuter_after_park(old_map); old_map->release();"));
+
+	const CodeText unparkHelper = Block(parkCpp, "IOReturn switch_iokit_unpark_range(");
+	EXPECT_TRUE(unparkHelper.has("switch_vm_repark_matching("));
+	EXPECT_TRUE(unparkHelper.has("desc_is_physical(desc)"));
+	const CodeText fixedHelper = Block(parkCpp, "IOReturn switch_iokit_map_fixed(");
+	EXPECT_TRUE(fixedHelper.has("switch_vm_unmap_matching("));
+	EXPECT_TRUE(fixedHelper.has("desc_is_physical(desc)"));
+	EXPECT_TRUE(fixedHelper.has("switch_iokit_map_is_unique(map)"));
+
+	const std::string parkVm = SourceText("../../../kernel/switch/vm/park_vm.c");
+	const CodeText vmCode(parkVm);
+	EXPECT_FALSE(vmCode.has("entry_is_iokit_kernel"));
+	EXPECT_FALSE(vmCode.has("vm_map_ilk_lock_shared"));
+	EXPECT_TRUE(vmCode.has("VM_MAP_PAGE_MASK(map)"));
+	EXPECT_TRUE(vmCode.has("vm_map_range_ex_lock("));
+	EXPECT_TRUE(vmCode.has("vm_map_range_sh_lock("));
+	EXPECT_TRUE(vmCode.has("VME_IS_SENTINEL("));
+	EXPECT_TRUE(vmCode.has("vm_object_lock(obj)"));
+	EXPECT_TRUE(vmCode.has("obj->shadowed"));
+	EXPECT_TRUE(vmCode.has("obj->vo_copy == VM_OBJECT_NULL"));
+	EXPECT_TRUE(vmCode.has("e->zero_wired_pages = FALSE;"));
+	EXPECT_TRUE(vmCode.has("VME_OBJECT_SET(e, VM_OBJECT_NULL, false, 0)"));
+	EXPECT_TRUE(vmCode.has("vm_map_iokit_unmapped_region("));
+	EXPECT_TRUE(vmCode.has("VM_MAP_REMOVE_GAPS_FAIL"));
+	EXPECT_TRUE(vmCode.has("vm_map_remove_and_unlock("));
+	EXPECT_TRUE(vmCode.has("mach_memory_entry_from_port("));
+}
+
+TEST(GM20BParkedBoSource, ParkedDiagnosticsCompileOutOfRelease)
+{
+	for (const char *file : {"../TegraGM20BUserClientPark.cpp", "../SwitchGpuParkedPool.cpp"}) {
+		const std::string src = SourceText(file);
+		const CodeText release(Configured(src, "TGM_STATS", false));
+		EXPECT_EQ(release.count("parkedStatsTake"), 0u);
+		EXPECT_EQ(release.count("parkedStatUnpark"), 0u);
+		EXPECT_EQ(release.count("unparkResident"), 0u);
+		EXPECT_EQ(release.count("unparkReclaimed"), 0u);
+		EXPECT_EQ(release.count("reclaimedCached"), 0u);
+		EXPECT_EQ(release.count("reclaimedSystem"), 0u);
+	}
 }

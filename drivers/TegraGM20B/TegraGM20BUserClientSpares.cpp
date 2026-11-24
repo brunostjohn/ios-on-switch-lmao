@@ -163,6 +163,8 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 {
 	SparePool *p = static_cast<SparePool *>(param);
 	for (;;) {
+		if (reclaimParkedStep(memoryPressure(), spareRoom()))
+			continue;
 		IOLockLock(p->lock);
 		if (PoolZero *z = p->poolDirty) {  // first: pool pages are the scarcer
 			p->poolDirty = z->next;
@@ -360,14 +362,36 @@ Spare *spareTake(uint64_t bytes)
 		++p->misses[why];
 #endif
 	}
-	const bool kick =
-		memoryPressure() ? p->clean != 0 : spareRoom() && p->count[c] < p->target[c];
+	const bool pressure = memoryPressure();
+	const bool room = spareRoom();
+	const bool kick = pressure ? p->clean != 0 : room && p->count[c] < p->target[c];
 	if (kick)
 		p->fillFailed = false;
 	IOLockUnlock(p->lock);
-	if (kick)
+	bool wake = kick;
+	if (!s && !pressure && room && parkedNotifyDemand(classBytes(c)))
+		wake = true;
+	else if (pressure && !wake && parkedHasAny())
+		wake = true;
+	if (wake)
 		thread_call_enter(p->call);
 	return s;
+}
+
+bool sparesPressure()
+{
+	return memoryPressure();
+}
+
+bool sparesHasRoom()
+{
+	return spareRoom();
+}
+
+void kickSpareWork()
+{
+	if (SparePool *p = spares())
+		thread_call_enter(p->call);
 }
 
 // Debug kernels: a cached BoAlloc that no spare can serve by its flags (contiguous, write-combined).
@@ -387,6 +411,8 @@ void spareIneligible()
 bool spareKeep(const SwitchGpuCachedBuffer &buffer, uint64_t *pas, uint64_t bytes,
 	       switch_gpu_cached_mapping *mapping)
 {
+	if (memoryPressure() || !spareRoom())
+		return false;
 	if (bytes > kSpareCapBytes || classUp(bytes) >= kClasses)
 		return false;
 	SparePool *p = spares();
@@ -441,6 +467,10 @@ extern "C" unsigned long tgm_owner_stats(char *out, unsigned long size)
 	if (!TGM_STATS || !p || !size)
 		return 0;
 	out[0] = 0;
+	uint64_t parked = 0, unparkResident = 0, unparkReclaimed = 0, reclaimedCached = 0,
+		 reclaimedSystem = 0;
+	parkedStatsTake(&parked, &unparkResident, &unparkReclaimed, &reclaimedCached,
+			&reclaimedSystem);
 	IOLockLock(p->lock);
 	for (uint32_t i = 0; i < kOwners && p->owners[i].n; i++) {
 		const OwnerStat &o = p->owners[i];
@@ -468,6 +498,14 @@ extern "C" unsigned long tgm_owner_stats(char *out, unsigned long size)
 		       : 0;
 	if (n > 0)
 		at = at + size_t(n) < size ? at + size_t(n) : size - 1;
+	if (parked || unparkResident || unparkReclaimed || reclaimedCached || reclaimedSystem) {
+		const int pn = snprintf(out + at, size - at,
+					"%sparked %llu (res %llu, rec %llu, cached %llu, sys %llu)",
+					at ? "; " : "", parked, unparkResident, unparkReclaimed,
+					reclaimedCached, reclaimedSystem);
+		if (pn > 0)
+			at = at + size_t(pn) < size ? at + size_t(pn) : size - 1;
+	}
 	bzero(p->owners, sizeof(p->owners));
 	bzero(p->misses, sizeof(p->misses));
 	p->zeroBusy = p->zeroFailed = p->refillRefused = p->notUnits = 0;

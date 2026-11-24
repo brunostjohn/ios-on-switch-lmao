@@ -130,6 +130,8 @@ kernel_driver(
         "TegraGM20BUserClientPool.cpp",
         "TegraGM20BUserClientSpares.cpp",
         "TegraGM20BUserClientBo.cpp",
+        "TegraGM20BUserClientPark.cpp",
+        "SwitchGpuParkedPool.cpp",
         "TegraGM20BUserClientImport.cpp",
         "TegraGM20BUserClientChannel.cpp",
         "TegraGM20BPushScanRun.cpp",
@@ -204,6 +206,7 @@ kernel_driver(
     hdrs = [
         "//kernel/switch:include/switch/fresh_memory.h",
         "//kernel/switch:include/switch/memory_attachment.h",
+        "//kernel/switch:include/switch/park_mapping.h",
     ],
     abi = [
         "IOSurface",

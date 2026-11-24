@@ -1246,3 +1246,47 @@ TEST_F(Backing, TheDisplaysProducerIsTheLastWriterAndFollowsEveryEarlierOne)
 	ASSERT_EQ(switch_gpu_backing_cpu_release_owned(&lease, 0), 0);
 	switch_gpu_backing_release(allocation);
 }
+
+TEST_F(Backing, ParkableChecksExclusivityAndBusyState)
+{
+	EXPECT_EQ(switch_gpu_backing_parkable(nullptr), -95);
+
+	auto *allocation = backing();
+	EXPECT_EQ(switch_gpu_backing_parkable(allocation), 0);
+
+	switch_gpu_backing_retain(allocation);
+	EXPECT_EQ(switch_gpu_backing_parkable(allocation), -16);
+	switch_gpu_backing_release(allocation);
+	EXPECT_EQ(switch_gpu_backing_parkable(allocation), 0);
+
+	switch_gpu_backing_scanout(allocation, 1);
+	EXPECT_EQ(switch_gpu_backing_parkable(allocation), -16);
+	switch_gpu_backing_scanout(allocation, 0);
+	EXPECT_EQ(switch_gpu_backing_parkable(allocation), 0);
+
+	ASSERT_EQ(switch_gpu_backing_cpu_acquire(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
+	EXPECT_EQ(switch_gpu_backing_parkable(allocation), -16);
+	ASSERT_EQ(switch_gpu_backing_cpu_release(allocation, 0, 4096, SWITCH_GPU_BACKING_READ), 0);
+	EXPECT_EQ(switch_gpu_backing_parkable(allocation), 0);
+
+	const auto job = token(91, 1);
+	ASSERT_EQ(publish(allocation, SWITCH_GPU_BACKING_WRITE, job), 0);
+	EXPECT_EQ(switch_gpu_backing_parkable(allocation), -16);
+	complete(job);
+	EXPECT_EQ(switch_gpu_backing_parkable(allocation), 0);
+
+	switch_gpu_backing_info info = {};
+	switch_gpu_backing_describe(allocation, &info);
+	auto *found = switch_gpu_backing_find_pa(info.pages[0]);
+	ASSERT_EQ(found, allocation);
+	EXPECT_EQ(switch_gpu_backing_parkable(allocation), -95);
+	switch_gpu_backing_release(found);
+	EXPECT_EQ(switch_gpu_backing_parkable(allocation), -95);
+	switch_gpu_backing_release(allocation);
+
+	const uint64_t surfPage = next_page += 4096;
+	auto *surf = switch_gpu_backing_register(&surfPage, 1, 77u, nullptr, nullptr);
+	ASSERT_NE(surf, nullptr);
+	EXPECT_EQ(switch_gpu_backing_parkable(surf), -95);
+	switch_gpu_backing_release(surf);
+}

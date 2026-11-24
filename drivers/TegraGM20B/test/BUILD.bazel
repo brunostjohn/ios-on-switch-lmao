@@ -914,6 +914,29 @@ host_test(
 )
 
 host_test(
+    name = "switch_gpu_parked_test",
+    srcs = [
+        "switch_gpu_parked_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuParked.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
+    name = "switch_gpu_parked_tsan_test",
+    srcs = [
+        "switch_gpu_parked_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuParked.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+    ],
+    copts = ["-fsanitize=thread"],
+    cxx_std = "c++17",
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+)
+
+host_test(
     name = "gm20b_gr_init_test",
     srcs = ["gm20b_gr_init_test.cpp"],
     data = [
@@ -1142,7 +1165,11 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BSurfaceClient.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClient.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientBo.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientPark.cpp",
+        "//drivers/TegraGM20B:SwitchGpuParkedPool.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientImport.cpp",
+        "//kernel/switch:iokit/park_mapping.cpp",
+        "//kernel/switch:vm/park_vm.c",
         "//drivers/TegraGM20B:TegraGM20BPushScan.h",
         "//drivers/TegraGM20B:TegraGM20BPushScanRun.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientChannel.cpp",

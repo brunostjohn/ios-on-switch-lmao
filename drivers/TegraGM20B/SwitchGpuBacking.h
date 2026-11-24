@@ -428,6 +428,8 @@ int switch_gpu_backing_wait(struct switch_gpu_backing *backing, uint32_t access)
  * would follow, and the CPU owners (readers and writers, an export's read lease among them) holding the backing now. */
 int switch_gpu_backing_pending(struct switch_gpu_backing *backing, uint32_t access,
 			       uint32_t *engines, uint32_t *cpu_owners);
+/* 0 when the backing is private, unpinned elsewhere and idle enough to park; -95 unsupported, -16 busy. */
+int switch_gpu_backing_parkable(struct switch_gpu_backing *backing);
 
 #ifdef __cplusplus
 }

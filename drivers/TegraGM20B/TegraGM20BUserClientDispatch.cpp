@@ -96,6 +96,13 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	case TegraGM20BMethodBoFree:
 		wantIn = sizeof(TegraGM20BAbiBoFree);
 		break;
+	case TegraGM20BMethodBoPark:
+		wantIn = sizeof(TegraGM20BAbiBoPark);
+		break;
+	case TegraGM20BMethodBoUnpark:
+		wantIn = sizeof(TegraGM20BAbiBoUnpark);
+		wantOut = sizeof(TegraGM20BAbiBoUnparkReply);
+		break;
 	case TegraGM20BMethodCpuComplete:
 		wantIn = sizeof(TegraGM20BAbiCpuComplete);
 		wantOut = sizeof(TegraGM20BAbiCpuCompleteReply);
@@ -232,6 +239,17 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		    ~static_cast<uint32_t>(TegraGM20BImportGpuReads))
 			return kIOReturnBadArgument;
 		break;
+	case TegraGM20BMethodBoPark:
+		if (!reservedZero(static_cast<const TegraGM20BAbiBoPark *>(in)->reserved) ||
+		    (static_cast<const TegraGM20BAbiBoPark *>(in)->flags &
+		     ~static_cast<uint32_t>(TegraGM20BParkGuard)))
+			return kIOReturnBadArgument;
+		break;
+	case TegraGM20BMethodBoUnpark:
+		if (!reservedZero(static_cast<const TegraGM20BAbiBoUnpark *>(in)->reserved) ||
+		    static_cast<const TegraGM20BAbiBoUnpark *>(in)->flags)
+			return kIOReturnBadArgument;
+		break;
 	case TegraGM20BMethodSurfaceWrites:
 		if (!reservedZero(static_cast<const TegraGM20BAbiSurfaceWrites *>(in)->reserved))
 			return kIOReturnBadArgument;
@@ -315,9 +333,14 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	if (method == TegraGM20BMethodCpuComplete)
 		return cpuComplete(static_cast<const TegraGM20BAbiCpuComplete *>(in),
 				   static_cast<TegraGM20BAbiCpuCompleteReply *>(out));
-	if (method == TegraGM20BMethodCpuAcquire || method == TegraGM20BMethodCpuRelease)
-		return cpuAccess(static_cast<const TegraGM20BAbiCpuAccess *>(in),
-				 method == TegraGM20BMethodCpuRelease);
+	if (method == TegraGM20BMethodCpuAcquire || method == TegraGM20BMethodCpuRelease) {
+		const auto *access = static_cast<const TegraGM20BAbiCpuAccess *>(in);
+		const IOReturn ret = cpuAccess(access, method == TegraGM20BMethodCpuRelease);
+		if (method == TegraGM20BMethodCpuAcquire && ret == kIOReturnBadArgument &&
+		    cpuAcquireParkedRefusal(access))
+			return kIOReturnNotReady;
+		return ret;
+	}
 	// BoAlloc and BoImport make the BO without lock_ (the wiring, zero-fill and clean are the calling thread's own) and
 	// take it to publish the BO. Map and Unmap take lock_ themselves (Map's clientMemoryForType must run without it).
 	if (method == TegraGM20BMethodBoAlloc)
@@ -326,6 +349,13 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	if (method == TegraGM20BMethodBoImport)
 		return boImport(static_cast<const TegraGM20BAbiBoImport *>(in),
 				static_cast<TegraGM20BAbiBoAllocReply *>(out));
+	if (method == TegraGM20BMethodBoPark)
+		return boPark(static_cast<const TegraGM20BAbiBoPark *>(in));
+	if (method == TegraGM20BMethodBoUnpark)
+		return boUnpark(static_cast<const TegraGM20BAbiBoUnpark *>(in),
+				static_cast<TegraGM20BAbiBoUnparkReply *>(out));
+	if (method == TegraGM20BMethodBoFree)
+		return boFreeMethod(static_cast<const TegraGM20BAbiBoFree *>(in));
 	if (method == TegraGM20BMethodMap) {
 		return mapToken(static_cast<const TegraGM20BAbiMap *>(in),
 				static_cast<TegraGM20BAbiMapReply *>(out));
@@ -428,11 +458,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		ret = nativeSurfaceView(static_cast<const TegraGM20BAbiNativeSurfaceView *>(in),
 					static_cast<TegraGM20BAbiNativeSurfaceViewReply *>(out));
 		break;
-	case TegraGM20BMethodBoFree:
-		ret = boFree(static_cast<const TegraGM20BAbiBoFree *>(in));
-		break;
 	case TegraGM20BMethodVmBind:
-		ret = vmBind(static_cast<const TegraGM20BAbiVmBind *>(in), count);
+		ret = vmBindParkedRefusal(static_cast<const TegraGM20BAbiVmBind *>(in), count);
+		if (!ret)
+			ret = vmBind(static_cast<const TegraGM20BAbiVmBind *>(in), count);
 		break;
 	case TegraGM20BMethodChannelCreate:
 		ret = channelCreate(static_cast<const TegraGM20BAbiChannelCreate *>(in),

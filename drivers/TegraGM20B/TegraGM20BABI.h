@@ -41,6 +41,8 @@ enum {
 	TegraGM20BMethodEventObserve = 28,
 	TegraGM20BMethodResourceObserve = 29,
 	TegraGM20BMethodCpuComplete = 30,
+	TegraGM20BMethodBoPark = 35,
+	TegraGM20BMethodBoUnpark = 36,
 	TegraGM20BMethodPackImageMap = 41,
 
 	TegraGM20BMaxBindOps = 100,
@@ -74,6 +76,7 @@ enum {
 	TegraGM20BInfoChannelEpoch = 1u << 17, /* the fence page holds TegraGM20BChannelEpochWord */
 	TegraGM20BInfoPushFences = 1u << 26,   /* SubmitJob takes TegraGM20BPushFence */
 	TegraGM20BInfoPackImage = 1u << 27,    /* PackImageMap (method 41) is implemented */
+	TegraGM20BInfoBoPark = 1u << 28, /* BoPark / BoUnpark (methods 35, 36) are implemented */
 };
 
 /* CpuComplete maintains cached CPU ranges only while the accepted channel prefix still owns their current
@@ -309,6 +312,39 @@ struct TegraGM20BAbiSurfaceLayoutInfo {
  * submitted at the time of this call. Any VA still bound to it is unbound first. */
 struct TegraGM20BAbiBoFree {
 	uint64_t handle;
+};
+
+/* TegraGM20BAbiBoPark.flags */
+enum {
+	TegraGM20BParkGuard = 1u << 0, /* VM_PROT_NONE reservation; else untouched RW zero-fill */
+};
+
+/* Method 35. Replaces a BO's CPU mapping with a zero-footprint reservation and places its pages in
+ * the kernel's reclaimable parked LRU. */
+struct TegraGM20BAbiBoPark {
+	uint64_t handle;
+	uint32_t flags; /* TegraGM20BPark* */
+	uint32_t reserved;
+};
+
+/* TegraGM20BAbiBoUnparkReply.status */
+enum {
+	TegraGM20BUnparkResident = 0,  /* original BO remapped at its parked VA; GPU binds intact */
+	TegraGM20BUnparkReclaimed = 1, /* kernel reclaimed pages; parked VA reservation kept */
+};
+
+/* Method 36. Remaps a parked BO at its parked VA, or reports TegraGM20BUnparkReclaimed. */
+struct TegraGM20BAbiBoUnpark {
+	uint64_t handle;
+	uint32_t flags;
+	uint32_t reserved;
+};
+
+struct TegraGM20BAbiBoUnparkReply {
+	uint64_t address;
+	uint64_t bytes;
+	uint32_t status; /* TegraGM20BUnpark* */
+	uint32_t reserved;
 };
 
 /* Method 5. Applied in order. An unmap (and a map's unbind of what it overlaps) has invalidated the GPU's L2 and TLB
@@ -598,6 +634,9 @@ TEGRA_GM20B_ASSERT(TegraGM20BAbiSurfaceLayout, 32);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiSurfaceLayoutReply, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiSurfaceLayoutInfo, 48);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBoFree, 8);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiBoPark, 16);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiBoUnpark, 16);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiBoUnparkReply, 24);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiBindOp, 40);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiVmBind, 4008);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiChannelCreate, 8);
