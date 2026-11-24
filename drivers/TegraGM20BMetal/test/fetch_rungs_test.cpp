@@ -42,6 +42,28 @@ TEST(GM20BFetchRungs, EachFormatTheFormatArmsJudgeTakesTheRop)
     }
 }
 
+TEST(GM20BFetchRungs, FloatTargetTakesComputedLayersAtAnyDepthAndCountsNoEightBitLayers)
+{
+    gm20b::FixedBlendAsk a = screenLayer();
+    a.format = 115;
+    a.eightBitSources = false;
+    a.computedLayers = 8;
+    EXPECT_EQ(gm20b::fixedBlendAcceptable(a), gm20b::fixedBlendProven());
+    a.readable = true;
+    EXPECT_FALSE(gm20b::fixedBlendAcceptable(a));
+    a.readable = false;
+    a.accumulates = true;
+    EXPECT_FALSE(gm20b::fixedBlendAcceptable(a));
+    EXPECT_FALSE(gm20b::fixedBlendCountsLayer(115, false));
+    EXPECT_FALSE(gm20b::fixedBlendCountsLayer(115, true));
+    EXPECT_FALSE(gm20b::fixedBlendCountsLayer(80, true));
+    EXPECT_FALSE(gm20b::fixedBlendCountsLayer(70, true));
+    EXPECT_TRUE(gm20b::fixedBlendCountsLayer(80, false));
+    EXPECT_TRUE(gm20b::fixedBlendCountsLayer(70, false));
+    EXPECT_TRUE(gm20b::fixedBlendCountsLayer(81, true));
+    EXPECT_TRUE(gm20b::fixedBlendCountsLayer(71, true));
+}
+
 TEST(GM20BFetchRungs, AnSrgbTargetTakesEightBitSourcesTwoLayersDeepAsComputedColour)
 {
     for (uint16_t format : {uint16_t(81), uint16_t(71)}) {

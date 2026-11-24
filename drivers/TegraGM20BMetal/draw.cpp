@@ -237,7 +237,8 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl)
 #endif
     if (!fetchFreeTaken(f, draw, forced))
         return nullptr;
-    if (f.rung == FetchBlend && ropLayers_[f.colour] < 255)
+    if (f.rung == FetchBlend && fixedBlendCountsLayer(uint16_t(t->format), draw.eightBitSources) &&
+        ropLayers_[f.colour] < 255)
         ropLayers_[f.colour]++;
     if (f.rung == FetchBlend)
         __atomic_store_n(&t->ropBlendSerial, cb_->serial, __ATOMIC_RELAXED);
