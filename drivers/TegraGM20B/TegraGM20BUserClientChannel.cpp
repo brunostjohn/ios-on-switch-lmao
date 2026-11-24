@@ -57,7 +57,9 @@ bool AGXDeviceUserClient::bindCuts(const TegraGM20BAbiVmBind *in, uint32_t count
 IOReturn AGXDeviceUserClient::bindOp(const TegraGM20BAbiBindOp &op, bool &changed)
 {
 	if (((op.va | op.range | op.bo_offset) & 0xfff) || !op.range || op.va < TGM_USER_VA_START ||
-	    op.range > TGM_KERNEL_VA || op.va > TGM_KERNEL_VA - op.range || op.kind > 0xff) {
+	    op.range > TGM_KERNEL_VA || op.va > TGM_KERNEL_VA - op.range || op.kind > 0xff ||
+	    (packClient_.gpuBytes && op.va < TGM_PACK_WINDOW_VA + packClient_.gpuBytes &&
+	     op.va + op.range > TGM_PACK_WINDOW_VA)) {
 		switch_refusal("vm-bind", "arguments",
 			       "op %u of VA %#llx+%#llx, BO %llu at %#llx, kind %#x: not whole "
 			       "pages, outside the "

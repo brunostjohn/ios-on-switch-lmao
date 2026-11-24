@@ -41,6 +41,7 @@ enum {
 	TegraGM20BMethodEventObserve = 28,
 	TegraGM20BMethodResourceObserve = 29,
 	TegraGM20BMethodCpuComplete = 30,
+	TegraGM20BMethodPackImageMap = 41,
 
 	TegraGM20BMaxBindOps = 100,
 	TegraGM20BMaxPushes = 255,
@@ -49,6 +50,7 @@ enum {
 	TegraGM20BMaxJobFences = 128,
 	TegraGM20BMaxJobEvents = 32,
 	TegraGM20BMaxJobDependencies = TegraGM20BMaxJobUses + TegraGM20BMaxJobEvents,
+	TegraGM20BMaxPackCpuRanges = 16,
 };
 
 /* TegraGM20BAbiInfo.flags */
@@ -71,6 +73,7 @@ enum {
 	TegraGM20BInfoCanonicalSurfaceLayout = 1u << 16,
 	TegraGM20BInfoChannelEpoch = 1u << 17, /* the fence page holds TegraGM20BChannelEpochWord */
 	TegraGM20BInfoPushFences = 1u << 26,   /* SubmitJob takes TegraGM20BPushFence */
+	TegraGM20BInfoPackImage = 1u << 27,    /* PackImageMap (method 41) is implemented */
 };
 
 /* CpuComplete maintains cached CPU ranges only while the accepted channel prefix still owns their current
@@ -544,6 +547,43 @@ struct TegraGM20BAbiZbcReply {
 	uint32_t reserved;
 };
 
+/* Method 41. Maps the kernel's shared read-only tier-0 pipeline pack heap into the caller's GPU
+ * address space at TGM_PACK_WINDOW_VA and into the caller's CPU address space (read-only). On the
+ * first call of the boot, a kernel thread builds the image once from TGM_PACK_PATH using the GPU
+ * copy engine; concurrent callers wait until it is Ready or Refused. A compositor connection may
+ * also supply read-only CPU-read tier-0 ranges to wire for its lifetime. */
+#define TGM_PACK_WINDOW_VA ((1ULL << 39) - (4ULL << 30))
+#define TGM_PACK_WINDOW_BYTES (4ULL << 30)
+#define TGM_PACK_PATH "/System/Library/Extensions/TegraGM20BMetal.pack/pack.bin"
+
+enum {
+	TegraGM20BPackStatusReady = 1,
+	TegraGM20BPackStatusRefused = 2,
+};
+
+struct TegraGM20BAbiPackCpuRange {
+	uint64_t address;
+	uint64_t bytes;
+};
+
+struct TegraGM20BAbiPackImageMap {
+	uint32_t flags;
+	uint32_t cpu_range_count;
+	struct TegraGM20BAbiPackCpuRange cpu_ranges[TegraGM20BMaxPackCpuRanges];
+};
+
+struct TegraGM20BAbiPackImageMapReply {
+	uint32_t status;
+	uint32_t reserved;
+	uint64_t gpu_va;
+	uint64_t cpu_address;
+	uint64_t tier0_heap_bytes;
+	uint64_t heap_bytes;
+	uint64_t stack;
+	uint64_t cpu_wired_bytes;
+	uint64_t waited_ns;
+};
+
 #ifdef __cplusplus
 #define TEGRA_GM20B_ASSERT(x, n) static_assert(sizeof(x) == (n), #x " layout")
 #else
@@ -578,5 +618,8 @@ TEGRA_GM20B_ASSERT(TegraGM20BAbiUnmap, 16);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiPriority, 8);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiZbc, 40);
 TEGRA_GM20B_ASSERT(TegraGM20BAbiZbcReply, 8);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiPackCpuRange, 16);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiPackImageMap, 264);
+TEGRA_GM20B_ASSERT(TegraGM20BAbiPackImageMapReply, 64);
 #undef TEGRA_GM20B_ASSERT
 #endif

@@ -24,6 +24,8 @@
 #include <switch/shutdown.h>
 #include "SwitchPowerTrail.h"
 
+extern void switch_gpu_pack_shutdown(void) __attribute__((weak));
+
 #if DEVELOPMENT || DEBUG
 #define DEADLINE_S 25u
 #define WATCHDOG_S 45u
@@ -78,6 +80,8 @@ void switch_shutdown_begin(int howto)
 {
     if (switch_prefetch_shutdown != NULL)
         switch_prefetch_shutdown();
+    if (switch_gpu_pack_shutdown != NULL)
+        switch_gpu_pack_shutdown();
     shutdown_howto = howto;
     switch_power_trail("reboot(%#x) began", howto);
     switch_shutdown_mark_sync(SWITCH_MARK_HALT_BEGAN);
@@ -131,6 +135,8 @@ void switch_shutdown_begin(int howto __unused)
 {
     if (switch_prefetch_shutdown != NULL)
         switch_prefetch_shutdown();
+    if (switch_gpu_pack_shutdown != NULL)
+        switch_gpu_pack_shutdown();
 }
 
 void switch_shutdown_step(const char *what __unused, const void *pc __unused, uint64_t elapsed __unused)

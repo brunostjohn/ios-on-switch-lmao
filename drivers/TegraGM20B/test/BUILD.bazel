@@ -3320,3 +3320,64 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BUserClientSpares.cpp",
     ],
 )
+
+host_shims(
+    name = "pack_image_kernel",
+    headers = [
+        "IOKit/IOBufferMemoryDescriptor.h",
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+        "IOKit/IOMemoryDescriptor.h",
+        "IOKit/IOMultiMemoryDescriptor.h",
+        "IOKit/IOReturn.h",
+        "kern/clock.h",
+        "kern/thread.h",
+        "mach/mach_types.h",
+        "mach/memory_object_types.h",
+        "mach/vm_param.h",
+        "sys/systm.h",
+        "sys/ubc.h",
+        "sys/vnode.h",
+    ],
+    stubs = "switch_gpu_pack_image_stubs.h",
+)
+
+host_library(
+    name = "pack_image",
+    srcs = [
+        "//drivers/TegraGM20B:SwitchGpuPackImage.cpp",
+        "//drivers/TegraGM20B:SwitchGpuPackTransfer.cpp",
+    ],
+    hdrs = [
+        "//drivers/TegraGM20B:SwitchGpuCachedZero.h",
+        "//drivers/TegraGM20B:SwitchGpuMapping.h",
+        "//drivers/TegraGM20B:SwitchGpuPackImage.h",
+        "//drivers/TegraGM20B:SwitchGpuPackTransfer.h",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+        "//kits/SwitchDMA:SwitchDcache.h",
+    ],
+    copts = [
+        "-DSWITCH_GPU_PACK_IMAGE_HOST_TEST=1",
+        "-DDEVELOPMENT=1",
+    ],
+    deps = [":pack_image_kernel"],
+)
+
+host_test(
+    name = "gm20b_pack_image_test",
+    srcs = [
+        "gm20b_pack_image_test.cpp",
+        "//drivers/TegraGM20BMetal:pack.h",
+    ],
+    copts = ["-DSWITCH_GPU_PACK_IMAGE_HOST_TEST=1"],
+    data = [
+        "//kernel/switch:shutdown/shutdown.c",
+        "//kernel/xnu-10063.141.1/iokit:Kernel/IOPMrootDomain.cpp",
+        "//kernel/xnu-12377.121.6/iokit:Kernel/IOPMrootDomain.cpp",
+    ],
+    deps = [
+        ":pack_image",
+        ":pack_image_kernel",
+    ],
+)

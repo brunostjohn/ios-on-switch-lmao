@@ -149,6 +149,7 @@ void AGXDeviceUserClient::free()
 				IOLockFree(submitLock);
 		if (fence_view_)
 			fence_view_->release();
+		switch_gpu_pack_client_unmap_gpu(vm_, &packClient_);
 		tgm_mem_del(&fence_mem_);
 		tgm_vm_del(&vm_);
 		tgm_fence_page_put(fence_va_);
@@ -439,13 +440,136 @@ IOReturn AGXDeviceUserClient::unmapToken(const TegraGM20BAbiUnmap *in)
 	return kIOReturnSuccess;
 }
 
+IOReturn AGXDeviceUserClient::packImageMap(const TegraGM20BAbiPackImageMap *in,
+					   TegraGM20BAbiPackImageMapReply *out)
+{
+	*out = {};
+	uint64_t expectedWireBytes = 0;
+	if (in->flags != 0 ||
+	    !switch_gpu_pack_validate_cpu_ranges(in->cpu_ranges, in->cpu_range_count, PAGE_SIZE,
+						 &expectedWireBytes))
+		return kIOReturnBadArgument;
+	if (current_task() != task_)
+		return kIOReturnNotPermitted;
+
+	IOLockLock(lock_);
+	if (submitGate_.closed()) {
+		IOLockUnlock(lock_);
+		return kIOReturnNotOpen;
+	}
+	if (packClient_.gpuMapping) {
+		IOLockUnlock(lock_);
+		return kIOReturnExclusiveAccess;
+	}
+	const bool knownCompositor = critical_ || restartNoKill_;
+	const bool checkEntitlement = !knownCompositor && !entitlementsRead_ && in->cpu_range_count;
+	IOLockUnlock(lock_);
+
+	if (in->cpu_range_count && !knownCompositor &&
+	    (!checkEntitlement ||
+	     !switch_gpu_task_entitled(task_, kSwitchGpuUiCriticalEntitlement)))
+		return kIOReturnNotPermitted;
+
+	SwitchGpuPackImageView view = {};
+	uint64_t waitedNs = 0;
+	const IOReturn acquireRet = switch_gpu_pack_image_acquire(owner_, &view, &waitedNs);
+	if (acquireRet != kIOReturnSuccess)
+		return acquireRet;
+	if (!view.ready) {
+		out->status = TegraGM20BPackStatusRefused;
+		out->waited_ns = waitedNs;
+		return kIOReturnSuccess;
+	}
+
+	IOMemoryMap *cpuMap =
+		view.cpuMemory->createMappingInTask(task_, 0, kIOMapAnywhere | kIOMapReadOnly);
+	if (!cpuMap)
+		return kIOReturnNoMemory;
+	const uint64_t cpuAddress = cpuMap->getAddress();
+
+	SwitchGpuPackClient staged = {};
+	staged.cpuMap = cpuMap;
+	uint64_t wiredBytes = 0;
+	if (in->cpu_range_count) {
+		const IOReturn wireRet = switch_gpu_pack_client_wire_cpu(
+			task_, in->cpu_ranges, in->cpu_range_count, staged.cpuWired, &wiredBytes);
+		if (wireRet != kIOReturnSuccess) {
+			switch_gpu_pack_client_release_cpu(&staged);
+			return wireRet;
+		}
+		staged.cpuWiredCount = in->cpu_range_count;
+	}
+
+	IOLockLock(lock_);
+	IOReturn ret = kIOReturnSuccess;
+	if (submitGate_.closed()) {
+		ret = kIOReturnNotOpen;
+	} else if (packClient_.gpuMapping) {
+		ret = kIOReturnExclusiveAccess;
+	} else {
+		const uint64_t packEnd = TGM_PACK_WINDOW_VA + view.tier0HeapBytes;
+		for (uint32_t i = 0; i < nbinds_; ++i) {
+			if (binds_[i].va < packEnd &&
+			    TGM_PACK_WINDOW_VA < binds_[i].va + binds_[i].range) {
+				ret = kIOReturnBadArgument;
+				break;
+			}
+		}
+		if (ret == kIOReturnSuccess && workQueued(TGM_PACK_WINDOW_VA, view.tier0HeapBytes))
+			ret = kIOReturnBusy;
+		if (ret == kIOReturnSuccess) {
+			takeRetiredOverlaps(TGM_PACK_WINDOW_VA, view.tier0HeapBytes);
+			switch_gpu_mapping *gpuMapping = nullptr;
+			const uint64_t bytes = view.tier0HeapBytes;
+			const int mapErr = switch_gpu_vm_map_volatile(
+				vm_, TGM_PACK_WINDOW_VA, bytes, view.mem, 0, 0, 1, 0, &gpuMapping);
+			if (mapErr != 0) {
+				ret = ioreturn(mapErr);
+			} else {
+				packClient_.gpuMapping = gpuMapping;
+				packClient_.gpuBytes = view.tier0HeapBytes;
+				packClient_.cpuMap = staged.cpuMap;
+				packClient_.cpuWiredCount = staged.cpuWiredCount;
+				for (uint32_t i = 0; i < staged.cpuWiredCount; ++i)
+					packClient_.cpuWired[i] = staged.cpuWired[i];
+				staged = {};
+			}
+		}
+	}
+	IOLockUnlock(lock_);
+
+	if (ret != kIOReturnSuccess) {
+		switch_gpu_pack_client_release_cpu(&staged);
+		return ret;
+	}
+	out->status = TegraGM20BPackStatusReady;
+	out->gpu_va = TGM_PACK_WINDOW_VA;
+	out->cpu_address = cpuAddress;
+	out->tier0_heap_bytes = view.tier0HeapBytes;
+	out->heap_bytes = view.heapBytes;
+	out->stack = view.stack;
+	out->cpu_wired_bytes = wiredBytes;
+	out->waited_ns = waitedNs;
+	return kIOReturnSuccess;
+}
+
 // Every mapping method 12 made, unmapped (close and free: the task's mappings go with its connection).
 void AGXDeviceUserClient::releaseMappings()
 {
 	IOLockLock(lock_);
 	Mapping *list = maps_;
 	maps_ = nullptr;
+	SwitchGpuPackClient packCpu = {};
+	packCpu.cpuMap = packClient_.cpuMap;
+	packClient_.cpuMap = nullptr;
+	packCpu.cpuWiredCount = packClient_.cpuWiredCount;
+	for (uint32_t i = 0; i < packCpu.cpuWiredCount; ++i) {
+		packCpu.cpuWired[i] = packClient_.cpuWired[i];
+		packClient_.cpuWired[i] = nullptr;
+	}
+	packClient_.cpuWiredCount = 0;
 	IOLockUnlock(lock_);
+	switch_gpu_pack_client_release_cpu(&packCpu);
 	while (list) {
 		Mapping *next = list->next;
 		list->map->unmap();
@@ -468,6 +592,7 @@ extern "C" uint32_t switch_gpu_info_flags(void)
 			 TegraGM20BInfoSubmitAddress | TegraGM20BInfoCpuPreserveDirty |
 			 TegraGM20BInfoCanonicalSurfaceLayout | TegraGM20BInfoChannelEpoch |
 			 TegraGM20BInfoPushFences;
+	flags |= TegraGM20BInfoPackImage;
 	if (info.comptag_lines && switch_gpu_compression_on())
 		flags |= TegraGM20BInfoCompression;
 	if (switch_tiled_cache_on())

@@ -63,6 +63,7 @@
 #include "SwitchGpuResourceSet.h"
 #include "SwitchGpuFenceRecord.h"
 #include "SwitchGpuJobStats.h"
+#include "SwitchGpuPackImage.h"
 
 #include "SwitchGpuSurfaceGeometry.h"
 #include "shim/include/switch_tiled_cache.h"
@@ -526,6 +527,7 @@ class AGXDeviceUserClient : public IOUserClient
 	// atomic: each site's refusals, for its line's rate bound, and the lines written
 	uint32_t refusals_[size_t(SwitchGpuRefusal::Count)] = {};
 	uint32_t refusalLines_ = 0;
+	SwitchGpuPackClient packClient_ = {};
 
 	Bo *findBo(uint64_t handle);
 	Bo *findAddress(uint64_t address, uint64_t bytes = 1);
@@ -657,6 +659,8 @@ class AGXDeviceUserClient : public IOUserClient
 			    SwitchGpuRefusalNote &why);
 	void destroySets();
 	IOReturn unmapToken(const TegraGM20BAbiUnmap *in);
+	IOReturn packImageMap(const TegraGM20BAbiPackImageMap *in,
+			      TegraGM20BAbiPackImageMapReply *out);
 	void releaseMappings();
 
 public:

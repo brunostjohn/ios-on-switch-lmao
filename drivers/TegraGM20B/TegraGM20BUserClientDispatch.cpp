@@ -179,6 +179,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	case TegraGM20BMethodClockAnchors:
 		wantOut = sizeof(TegraGM20BAbiClockAnchorsReply);
 		break;
+	case TegraGM20BMethodPackImageMap:
+		wantIn = sizeof(TegraGM20BAbiPackImageMap);
+		wantOut = sizeof(TegraGM20BAbiPackImageMapReply);
+		break;
 #if TGM_STATS
 	case TegraGM20BMethodReadback:
 		wantIn = sizeof(TegraGM20BAbiReadback);
@@ -328,6 +332,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	}
 	if (method == TegraGM20BMethodUnmap)
 		return unmapToken(static_cast<const TegraGM20BAbiUnmap *>(in));
+	if (method == TegraGM20BMethodPackImageMap)
+		return packImageMap(static_cast<const TegraGM20BAbiPackImageMap *>(in),
+				    static_cast<TegraGM20BAbiPackImageMapReply *>(out));
 	if (method == TegraGM20BMethodClockAnchors) {
 		*static_cast<TegraGM20BAbiClockAnchorsReply *>(out) = {
 			fence_gpu_ + TegraGM20BClockAnchorOffset, kFenceToken, 0};
