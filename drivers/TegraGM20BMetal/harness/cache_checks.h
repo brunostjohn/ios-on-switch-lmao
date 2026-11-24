@@ -237,7 +237,7 @@ inline void run(const std::vector<std::pair<std::string, gm20b::RuntimeRecord>> 
             std::vector<std::thread> askers;
             for (int t = 0; t < 8; t++)
                 askers.emplace_back([&] {
-                    compiler.ask(k, [&](const gm20b::RuntimeRecord *, const std::string &) {
+                    compiler.ask(k, [&](std::shared_ptr<const gm20b::RuntimeRecord>, const std::string &) {
                         dones++;
                     });
                 });
@@ -246,7 +246,7 @@ inline void run(const std::vector<std::pair<std::string, gm20b::RuntimeRecord>> 
             compiler.ask(keyOf(stack, refusedKey, 7), nullptr);
             compiler.ask(keyOf(stack, "failed", 7), nullptr);
             compiler.drain();
-            const gm20b::RuntimeRecord *rec = nullptr;
+            std::shared_ptr<const gm20b::RuntimeRecord> rec;
             check(compiler.ask(k, nullptr, &rec) == gm20b::Compiler::State::Ready && rec && same(*rec, model),
                   "an asked state is ready");
             check(makes == 3 && dones == 8, "eight threads asking one state make it once and each hears of it");

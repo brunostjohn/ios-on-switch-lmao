@@ -240,7 +240,7 @@ SwitchMetalPipeline *gm20bPipelineShell(SwitchMetalDevice *device, MTLRenderPipe
         markProbes(p->_raw, d.label);
 #endif
         p->_packed = p->_raw && gRM->raw->packHolds(*p->_raw);
-        if (p->_packed && !held.records)
+        if (p->_packed && p->_packable && !held.records)
             os_log_error(gm20bLog(),
                          "SwitchMetal: pack state %016llx found by its key's text and not by its fast key %016llx: "
                          "the pack's fast keys are not the runtime's",

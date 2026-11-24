@@ -520,6 +520,8 @@ void gm20bWantCompressed(id<MTLTexture> texture);
 // or not
 void gm20bMoveWanting();
 
+// TegraGM20BMetalCompiledLibraries.mm: drop cached front-end function specializations on memory pressure
+void gm20bTrimCompiledLibraries();
 // TegraGM20BMetalCommandBuffer.mm: the kept recordings and setBytes chunks past what steady frames take, given back
 void releaseRecordings();
 void gm20bTakeRecording(SwitchMetalCommandBuffer *cb);

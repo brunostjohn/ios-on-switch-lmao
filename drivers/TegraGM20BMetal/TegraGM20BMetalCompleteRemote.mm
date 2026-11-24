@@ -262,8 +262,8 @@ bool Completion::remoteNow(const Ask &a, const CacheKey &k, Compiler::State &sta
     return true;
 }
 
-bool Completion::remoteLater(const Ask &a, const CacheKey &k, std::function<void(const RuntimeRecord *)> done,
-                             bool again)
+bool Completion::remoteLater(const Ask &a, const CacheKey &k,
+                             std::function<void(std::shared_ptr<const RuntimeRecord>)> done, bool again)
 {
     CompileRequest r;
     Digest name;
@@ -271,18 +271,21 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k, std::function<void
         done(nullptr);
         return true;
     }
-    // the record as the process table keeps it, so it outlives this answer for place()
     const auto settle = [this, k, done](RecordCache::Found found, const RuntimeRecord &record, const std::string &why) {
         compiler_->keep(k, found, record, why);
-        const RuntimeRecord *kept = nullptr;
+        if (found == RecordCache::Found::Record) {
+            done(std::make_shared<const RuntimeRecord>(record));
+            return;
+        }
+        std::shared_ptr<const RuntimeRecord> kept;
         const Compiler::State state = compiler_->ask(
             k,
-            [done](const RuntimeRecord *made, const std::string &) {
-                done(made);
+            [done](std::shared_ptr<const RuntimeRecord> made, const std::string &) {
+                done(std::move(made));
             },
             &kept);
         if (state == Compiler::State::Ready || state == Compiler::State::Refused)
-            done(state == Compiler::State::Ready ? kept : nullptr);
+            done(state == Compiler::State::Ready ? std::move(kept) : nullptr);
     };
     RuntimeRecord record;
     std::string why;

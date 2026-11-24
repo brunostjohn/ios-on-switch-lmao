@@ -46,6 +46,7 @@
 #include <sys/stat.h>
 #include <string.h>
 #include <unistd.h>
+#include <xpc/xpc.h>
 #include "TegraGM20BMetal.h"
 #include "device_open.h"
 
@@ -137,6 +138,45 @@ bool writable(const char *dir)
     return wrote;
 }
 
+extern "C" XPC_RETURNS_RETAINED xpc_object_t xpc_copy_entitlement_for_self(const char *key);
+
+bool entitledToSystemContainer(const char *identifier)
+{
+    const auto matches = [&](const char *key, bool allowWildcard) -> bool {
+        xpc_object_t value = xpc_copy_entitlement_for_self(key);
+        if (!value)
+            return false;
+        __block bool ok = false;
+        const xpc_type_t type = xpc_get_type(value);
+        if (type == XPC_TYPE_BOOL) {
+            ok = xpc_bool_get_value(value);
+        } else if (type == XPC_TYPE_STRING) {
+            const char *s = xpc_string_get_string_ptr(value);
+            ok = s && (!strcmp(s, identifier) || (allowWildcard && !strcmp(s, "*")));
+        } else if (type == XPC_TYPE_ARRAY) {
+            xpc_array_apply(value, ^bool(size_t, xpc_object_t item) {
+                if (xpc_get_type(item) == XPC_TYPE_STRING) {
+                    const char *s = xpc_string_get_string_ptr(item);
+                    if (s && (!strcmp(s, identifier) || (allowWildcard && !strcmp(s, "*")))) {
+                        ok = true;
+                        return false;
+                    }
+                }
+                return true;
+            });
+        }
+#if !__has_feature(objc_arc)
+        xpc_release(value);
+#endif
+        return ok;
+    };
+    return matches("com.apple.security.system-container", false) ||
+           matches("com.apple.private.security.system-container", false) ||
+           matches("com.apple.security.system-containers", true) ||
+           matches("com.apple.private.security.storage.SystemContainers", false) ||
+           matches("com.apple.private.MobileContainerManager.allowed", false);
+}
+
 // <process system container>/Library/Caches/TegraGM20BMetal. The container survives reboots and the process's sandbox writes it once
 // container_system_path_for_identifier (libsystem_containermanager: identifier, error out; a malloc'd path) has consumed its
 // extension; backboardd's StartWindowServer makes the same lookup for Core Animation's shader cache before Metal opens. The
@@ -154,6 +194,10 @@ bool systemContainerCache(char *out, size_t size)
     CFStringRef bundle = CFBundleGetIdentifier(CFBundleGetMainBundle());
     if (!bundle || !CFStringGetCString(bundle, identifier, sizeof identifier, kCFStringEncodingUTF8))
         snprintf(identifier, sizeof identifier, "com.apple.%s", getprogname());
+    // Unentitled daemons such as iconservicesagent and cameracaptured can reach containermanagerd.system over Mach,
+    // which triggers a containermanagerd fault if they ask for a systemData container without the entitlement.
+    if (!entitledToSystemContainer(identifier))
+        return false;
     uint64_t error = 0;
     char *container = lookup(identifier, &error);
     if (!container)

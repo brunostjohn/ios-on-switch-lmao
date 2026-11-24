@@ -93,6 +93,7 @@ public:
     bool library(uint32_t type, const std::string &bytes, MadeLibrary &out, std::string &failure, bool &refused);
 
     void backgroundKernel(std::function<void()> work);
+    void trim();
 
     Compiler::Stats stats() const;
 
@@ -130,7 +131,7 @@ private:
     void request(Ask asked, std::shared_ptr<Pending> pending);
     std::string failureOf(const CacheKey &k, bool creation);
     // `qos`: the asker's class, which the record is placed at (answer_class.h)
-    void place(const CacheKey &key, const RuntimeRecord *record, bool caTransform, uint32_t qos,
+    void place(const CacheKey &key, std::shared_ptr<const RuntimeRecord> record, bool caTransform, uint32_t qos,
                std::shared_ptr<Pending> pending);
 
     struct Kernel {
@@ -170,7 +171,7 @@ private:
     bool remoteNow(const Ask &a, const CacheKey &k, Compiler::State &state, RuntimeRecord &record,
                    std::string &failure);
     // The state asked of the compiler with `done` called once it answers, null where it made none
-    bool remoteLater(const Ask &a, const CacheKey &k, std::function<void(const RuntimeRecord *)> done,
+    bool remoteLater(const Ask &a, const CacheKey &k, std::function<void(std::shared_ptr<const RuntimeRecord>)> done,
                      bool again = false);
     // A kernel's record from the store or made by the compiler while this thread sleeps; Failed with `taken` false: none
     // made (the kernel is refused: no process compiles one itself while a compiler serves)

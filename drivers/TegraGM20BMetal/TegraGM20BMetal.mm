@@ -360,6 +360,9 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
 #endif
             gRM->raw->trimArenas(gRM->committed);
             releaseRecordings();
+            gm20bTrimCompiledLibraries();
+            if (gRM->completion)
+                gRM->completion->trim();
             // A daemon over its inactive jetsam limit is killed when it goes inactive, without a pressure notification that
             // would have made malloc give back the dirty pages its zones keep free (a compile's working memory)
             const size_t relieved = malloc_zone_pressure_relief(nullptr, 0);

@@ -13,6 +13,7 @@
 #include <sys/sysctl.h>
 #include <unistd.h>
 #include <algorithm>
+#include <atomic>
 #include <functional>
 #include <mutex>
 #include "MetalABI.h"
@@ -120,7 +121,10 @@ void keepReply(const std::string &dir, const std::string &name, const uint8_t uu
     auto *bytes = static_cast<uint8_t *>(file.mutableBytes);
     CC_SHA256(bytes + sizeof h, CC_LONG(made.warnings.size() + made.metallib.size()),
               reinterpret_cast<ReplyHeader *>(bytes)->digest);
-    const std::string path = dir + "/" + name, temporary = path + "." + std::to_string(getpid()) + ".tmp";
+    static std::atomic<uint64_t> tempSeq{0};
+    const std::string path = dir + "/" + name,
+                      temporary = path + "." + std::to_string(getpid()) + "." +
+                                  std::to_string(tempSeq.fetch_add(1, std::memory_order_relaxed)) + ".tmp";
     if (![file writeToFile:@(temporary.c_str()) atomically:NO] || rename(temporary.c_str(), path.c_str())) {
         unlink(temporary.c_str());
         return;
@@ -188,8 +192,9 @@ void answered(Answer &a, int32_t status, const uint8_t *reply, size_t length, co
 
 struct CodeGen::State {
     CodeGenPaths paths;
+    std::mutex loadLock;
     std::mutex lock;
-    bool loaded = false;
+    std::atomic<bool> loaded{false};
     std::string refusal;
     Create create = nullptr;
     Build build = nullptr;
@@ -201,9 +206,11 @@ struct CodeGen::State {
 
 bool CodeGen::State::load(std::string &why)
 {
-    if (loaded)
+    if (loaded.load(std::memory_order_acquire))
         return build ? true : (why = refusal, false);
-    loaded = true;
+    std::lock_guard<std::mutex> guard(loadLock);
+    if (loaded.load(std::memory_order_relaxed))
+        return build ? true : (why = refusal, false);
 #if SWITCH_DEBUG
     const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
 #endif
@@ -214,6 +221,7 @@ bool CodeGen::State::load(std::string &why)
         refusal = std::string("the system's Metal compiler did not load from " SWITCH_METAL_COMPILER ": ") +
                   (library ? "no code generation service" : dlerror());
         os_log_error(logger(), "SwitchShaderCompiler: %{public}s", refusal.c_str());
+        loaded.store(true, std::memory_order_release);
         return why = refusal, false;
     }
     build = found;
@@ -223,6 +231,7 @@ bool CodeGen::State::load(std::string &why)
     os_log(logger(), "SwitchShaderCompiler: the system's Metal compiler loaded for its first library in %llu ms",
            (unsigned long long)((clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - began) / 1000000));
 #endif
+    loaded.store(true, std::memory_order_release);
     return true;
 }
 
@@ -242,9 +251,6 @@ int32_t CodeGen::make(const Prepared &p, std::string &entry, std::string &why)
                                     : r.codeGen;
     if (request.empty())
         return why = "a library request the front end cannot read", TegraGM20BCompileUnavailable;
-    // One code generation service, asked one request at a time as Apple's MTLCompilerService and m2v's frontend ask it:
-    // a library is made once per build, and the pool's other workers keep making states meanwhile
-    std::lock_guard<std::mutex> one(s.lock);
     if (!s.load(why))
         return TegraGM20BCompileUnavailable;
     const std::string name = replyName(s.uuid, r.codeGenType, request);
@@ -253,16 +259,21 @@ int32_t CodeGen::make(const Prepared &p, std::string &entry, std::string &why)
         entry = gm20b::encodeLibraryEntry(p.key, &kept, "");
         return TegraGM20BCompileMade;
     }
-    if (!s.service && !(s.service = s.create("SwitchShaderCompiler")))
-        return why = "the system's Metal compiler made no code generation service", TegraGM20BCompileUnavailable;
     Answer a;
-    Answer *answer = &a;
-    const bool ran = onLargeStack([&] {
-        s.build(s.service, nullptr, r.codeGenType, request.data(), request.size(),
-                ^(int32_t status, const void *reply, size_t length, const char *message) {
-                    answered(*answer, status, static_cast<const uint8_t *>(reply), length, message);
-                });
-    });
+    bool ran = false;
+    {
+        // Only the front end's code generation service itself is serialized; reply reads/writes stay lock-free.
+        std::lock_guard<std::mutex> one(s.lock);
+        if (!s.service && !(s.service = s.create("SwitchShaderCompiler")))
+            return why = "the system's Metal compiler made no code generation service", TegraGM20BCompileUnavailable;
+        Answer *answer = &a;
+        ran = onLargeStack([&] {
+            s.build(s.service, nullptr, r.codeGenType, request.data(), request.size(),
+                    ^(int32_t status, const void *reply, size_t length, const char *message) {
+                        answered(*answer, status, static_cast<const uint8_t *>(reply), length, message);
+                    });
+        });
+    }
     if (!ran)
         return why = "no thread for the system's Metal compiler", TegraGM20BCompileFailed;
     if (!a.called)

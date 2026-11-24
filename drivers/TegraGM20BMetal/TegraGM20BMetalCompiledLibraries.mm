@@ -6,8 +6,11 @@
 // own.
 #import "TegraGM20BMetalInternal.h"
 
+#include <CommonCrypto/CommonDigest.h>
 #include <cstdlib>
+#include <list>
 #include <os/log.h>
+#include <unordered_map>
 #include "ImageFilterLink.h"
 #include "codegen_request.h"
 #include "library_entry.h"
@@ -113,6 +116,107 @@ static id<MTLLibrary> compiled(id device, uint32_t type, const std::string &requ
     return (id<MTLLibrary>)library;
 }
 
+namespace {
+constexpr size_t kMaxSpecializedLibraries = 128;
+constexpr size_t kMaxSpecializedBytes = 8u << 20;
+
+struct DigestHash {
+    size_t operator()(const gm20b::Digest &d) const noexcept
+    {
+        size_t h = 0;
+        memcpy(&h, d.data(), sizeof h);
+        return h;
+    }
+};
+
+struct SpecializedEntry {
+    gm20b::Digest key;
+    SwitchMetalLibrary *library;
+    size_t bytes;
+};
+
+struct SpecializedCache {
+    gm20b::Mutex lock;
+    std::list<SpecializedEntry> lru;
+    std::unordered_map<gm20b::Digest, std::list<SpecializedEntry>::iterator, DigestHash> index;
+    size_t totalBytes = 0;
+
+    SwitchMetalLibrary *find(const gm20b::Digest &key)
+    {
+        std::lock_guard<gm20b::Mutex> guard(lock);
+        const auto it = index.find(key);
+        if (it == index.end())
+            return nil;
+        lru.splice(lru.begin(), lru, it->second);
+        return it->second->library;
+    }
+
+    void put(const gm20b::Digest &key, SwitchMetalLibrary *library, size_t bytes)
+    {
+        if (!library || bytes > kMaxSpecializedBytes)
+            return;
+        std::lock_guard<gm20b::Mutex> guard(lock);
+        const auto existing = index.find(key);
+        if (existing != index.end()) {
+            totalBytes -= existing->second->bytes;
+            existing->second->library = library;
+            existing->second->bytes = bytes;
+            totalBytes += bytes;
+            lru.splice(lru.begin(), lru, existing->second);
+        } else {
+            lru.push_front({key, library, bytes});
+            index.emplace(key, lru.begin());
+            totalBytes += bytes;
+        }
+        while (lru.size() > kMaxSpecializedLibraries || totalBytes > kMaxSpecializedBytes) {
+            const SpecializedEntry &oldest = lru.back();
+            totalBytes -= oldest.bytes;
+            index.erase(oldest.key);
+            lru.pop_back();
+        }
+    }
+
+    void clear()
+    {
+        std::lock_guard<gm20b::Mutex> guard(lock);
+        index.clear();
+        lru.clear();
+        totalBytes = 0;
+    }
+};
+
+SpecializedCache &specializedCache()
+{
+    static SpecializedCache *cache = new SpecializedCache;
+    return *cache;
+}
+
+gm20b::Digest specializationCacheKey(const gm20b::AirHash &air, const std::string &name, const std::string &called,
+                                     const std::string &constants)
+{
+    CC_SHA256_CTX ctx;
+    CC_SHA256_Init(&ctx);
+    CC_SHA256_Update(&ctx, air.data(), CC_LONG(air.size()));
+    const auto feed = [&](const std::string &s) {
+        const uint64_t len = s.size();
+        CC_SHA256_Update(&ctx, &len, sizeof len);
+        if (!s.empty())
+            CC_SHA256_Update(&ctx, s.data(), CC_LONG(s.size()));
+    };
+    feed(name);
+    feed(called);
+    feed(constants);
+    gm20b::Digest digest;
+    CC_SHA256_Final(digest.data(), &ctx);
+    return digest;
+}
+}  // namespace
+
+void gm20bTrimCompiledLibraries()
+{
+    specializedCache().clear();
+}
+
 // `function`'s bitcode as Metal's own function holds it for the front end: its library's AIR, or for one made with constant
 // values or under a specialized name, the front end's specialization of that AIR (MTLSpecializeFunctionToArchive), named
 // as the function is. `kept` holds the specialization's library, whose bytes the bitcode is in.
@@ -137,13 +241,23 @@ static bool frontEndBitcode(id device, id function, gm20b::codegen::Bitcode &out
                        error);
     const std::string constants(static_cast<const char *>(data), size);
     free(data);
-    const std::string request =
-        gm20b::codegen::specializationRequest(name, name == called ? "" : called, out, *f->_air, constants);
-    if (request.empty())
-        return refused(MTLLibraryErrorCompileFailure, "function " + called + " has no specialization request", error);
-    id<MTLLibrary> library = compiled(device, gm20b::kCodeGenSpecialize, request, "a specialized function", error);
-    if (!library)
-        return false;
+    const gm20b::Digest cacheKey = specializationCacheKey(*f->_air, name, called, constants);
+    id<MTLLibrary> library = (id<MTLLibrary>)specializedCache().find(cacheKey);
+    if (!library) {
+        const std::string request =
+            gm20b::codegen::specializationRequest(name, name == called ? "" : called, out, *f->_air, constants);
+        if (request.empty())
+            return refused(MTLLibraryErrorCompileFailure, "function " + called + " has no specialization request",
+                           error);
+        library = compiled(device, gm20b::kCodeGenSpecialize, request, "a specialized function", error);
+        if (!library)
+            return false;
+        if ([library isKindOfClass:[SwitchMetalLibrary class]]) {
+            auto *smLib = static_cast<SwitchMetalLibrary *>(library);
+            const size_t bytes = smLib->_source ? smLib->_source->size : 0;
+            specializedCache().put(cacheKey, smLib, bytes);
+        }
+    }
     [kept addObject:library];
     if (!bitcodeOf([library newFunctionWithName:@(called.c_str())], out))
         return refused(MTLLibraryErrorInternal, "the front end's specialization holds no " + called, error);
