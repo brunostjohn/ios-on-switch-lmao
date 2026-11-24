@@ -223,6 +223,10 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 		if (!bo->backing)
 			tgm_pool_free_chunks(bo->pas, bo->npages);
 	}
+	if (bo->smmuCompressible && bo->handle) {
+		__atomic_sub_fetch(&gSmmuCompressibleBytes, bo->bytes, __ATOMIC_RELAXED);
+		__atomic_sub_fetch(&gSmmuCompressibles, 1, __ATOMIC_RELAXED);
+	}
 	// A pool BO's view and pages go to the thread call (releaseOrphans: releasing the view can wait for an import on
 	// another connection), which keeps the pages while a task still maps the view. Cached and system BOs need no such
 	// care: their mappings hold the buffer itself, and releasing one waits for nothing.
@@ -711,7 +715,7 @@ IOReturn AGXDeviceUserClient::getInfo(TegraGM20BAbiInfo *out)
 	out->va_start = TGM_USER_VA_START;
 	out->va_end = TGM_KERNEL_VA;
 	out->page_size = 4096;
-	out->big_page_size = 0x20000;
+	out->big_page_size = 0x10000;
 	out->max_bo_bytes = kMaxBoBytes;
 	static_assert(sizeof(out->zcull) == sizeof(TegraGM20BAbiZcullInfo),
 		      "zcull[] is method 'ZC's record");

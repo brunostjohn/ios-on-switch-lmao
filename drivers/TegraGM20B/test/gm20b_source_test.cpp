@@ -214,6 +214,16 @@ TEST(GM20BPoolPolicySource, CompressibleBosArePoolChunksNoTaskMaps)
 			  "int nvxnu_pool_alloc_chunks(unsigned long count, unsigned "
 			  "long long *pas)")
 			    .has("tgm_comp_pick_chunks(pool_map, pool_dirty, pool_npages,"));
+	EXPECT_TRUE(Block(client(), "IOReturn AGXDeviceUserClient::cpuAccess(")
+			    .has("bo->chunked || bo->smmuCompressible"));
+	EXPECT_TRUE(Block(SourceText("../SwitchGpuUserCpuComplete.h"),
+			  "IOReturn AGXDeviceUserClient::cpuComplete(")
+			    .has("bo->chunked || bo->smmuCompressible"));
+	EXPECT_TRUE(Block(client(), "void AGXDeviceUserClient::noteBind(")
+			    .has("else if (bo->chunked || bo->smmuCompressible) "
+				 "n.origin = TGM_BIND_COMPRESSIBLE;"));
+	EXPECT_TRUE(Block(client(), "IOReturn AGXDeviceUserClient::boPark(")
+			    .has("bo->chunked || bo->smmuCompressible,"));
 }
 
 TEST(GM20BPoolScrubSource, NoCpuClearOfTheReservedPool)

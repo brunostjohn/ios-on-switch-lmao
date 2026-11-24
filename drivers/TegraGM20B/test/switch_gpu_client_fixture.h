@@ -419,7 +419,7 @@ public:
 		Bo *next = nullptr;
 		uint64_t handle = 1, bytes = 4096, controlCharge = 0;
 		void *pool_va = nullptr;
-		bool chunked = false, readOnly = false;
+		bool chunked = false, smmuCompressible = false, readOnly = false;
 		tgm_mem *mem = nullptr;
 		uint32_t bindings = 0, flags = 0;
 		Bo **zombieLink = nullptr;
@@ -541,7 +541,8 @@ public:
 	uint32_t promisesKept_ = 0;
 	uint32_t retiredCount_ = 0, retireRemaining_ = 0, retirementPending_ = 0,
 		 retirementStopped_ = 0;
-	uint64_t retirementEpoch_ = 0, retireScanEpoch_ = 0, pool_bytes_ = 0, control_bytes_ = 0;
+	uint64_t retirementEpoch_ = 0, retireScanEpoch_ = 0, pool_bytes_ = 0, control_bytes_ = 0,
+		 smmu_compressible_bytes_ = 0;
 	SwitchGpuOwnerMemory ownerMemory_ = {};
 	Binding binds_[256] = {};
 	uint32_t nbinds_ = 0;

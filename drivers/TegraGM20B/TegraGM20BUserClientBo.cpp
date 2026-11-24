@@ -2,6 +2,7 @@
 // BO allocation and its pool policy, and a BO's publication.
 #include "TegraGM20BUserClientInternal.h"
 #include "SwitchGpuAllocatedMemory.h"
+#include "SwitchGpuSmmu.h"
 #include "TegraGM20BRecord.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 
@@ -23,6 +24,28 @@ constexpr uint64_t kChunkBytes = SWITCH_GPU_BO_CHUNK_BYTES;
 // never opened (r7j). A refused BoAlloc is kIOReturnNoMemory, logged once per connection with the rule that refused it.
 constexpr uint64_t kPoolSmallBytes = 1ULL << 20, kPoolFloorBytes = 16ULL << 20;
 constexpr uint64_t kClientPoolBytes = 64ULL << 20, kPoolReserveBytes = 32ULL << 20;
+constexpr tgm_pool::SmmuCompLimits kSmmuCompLimits = {256ULL << 20, 96ULL << 20, 64ULL << 20};
+
+bool reserveSmmuCompressible(uint64_t bytes, uint64_t clientHeld, bool compositor, const char **why)
+{
+	uint64_t total = 0, freeBytes = 0;
+	switch_gpu_smmu_usage(&total, &freeBytes);
+	uint64_t globalHeld = __atomic_load_n(&gSmmuCompressibleBytes, __ATOMIC_ACQUIRE);
+	for (;;) {
+		const char *refused = tgm_pool::smmuCompressibleRefusal(
+			bytes, globalHeld, clientHeld, freeBytes, kSmmuCompLimits, compositor);
+		if (refused) {
+			*why = refused;
+			return false;
+		}
+		if (__atomic_compare_exchange_n(&gSmmuCompressibleBytes, &globalHeld,
+						globalHeld + bytes, true, __ATOMIC_ACQ_REL,
+						__ATOMIC_ACQUIRE)) {
+			*why = nullptr;
+			return true;
+		}
+	}
+}
 
 uint64_t clientPoolBytes()
 {
@@ -103,13 +126,48 @@ static IOReturn collectKernelPages(const void *va, uint64_t bytes, uint64_t *pas
 	return kIOReturnSuccess;
 }
 
+static IOReturn allocateSmmuCompressible(uint64_t bytes, uint64_t *pas,
+					 IOMemoryDescriptor **outDescriptor)
+{
+	const IOOptionBits options = static_cast<IOOptionBits>(kIODirectionInOut) |
+				     static_cast<IOOptionBits>(kIOMemoryMapperNone);
+	IOBufferMemoryDescriptor *bmd = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+		kernel_task, options, bytes, 0x3ffffffffULL);
+	if (!bmd || bmd->prepare() != kIOReturnSuccess) {
+		if (bmd)
+			bmd->release();
+		return kIOReturnNoMemory;
+	}
+	void *va = bmd->getBytesNoCopy();
+	if (!va) {
+		bmd->complete();
+		bmd->release();
+		return kIOReturnNoMemory;
+	}
+	cleanZeros(va, bytes);
+	const IOReturn ret = collectKernelPages(va, bytes, pas);
+	if (ret != kIOReturnSuccess) {
+		bmd->complete();
+		bmd->release();
+		return ret;
+	}
+	*outDescriptor = bmd;
+	return kIOReturnSuccess;
+}
+
 // The pool tiers' answer for a BoAlloc and what it charged the connection, under lock_: BoAllocs of one connection made
 // at once each see the others' charge, while the BO itself is made without lock_.
 AGXDeviceUserClient::BoCharge AGXDeviceUserClient::chargeBo(const TegraGM20BAbiBoAlloc *in)
 {
-	BoCharge c = {nullptr, 0, 0, 0, critical_};
+	BoCharge c = {nullptr, nullptr, 0, 0, 0, 0, critical_};
 	if (in->flags & TegraGM20BBoCompressible) {
 		c.refused = compressibleRefusal(in->bytes);
+		if (switch_gpu_smmu_ready() &&
+		    reserveSmmuCompressible(in->bytes, smmu_compressible_bytes_, critical_,
+					    &c.smmuRefused)) {
+			c.smmuComp = in->bytes;
+			smmu_compressible_bytes_ += c.smmuComp;
+		}
 	} else if (in->flags & TegraGM20BBoCoherent) {
 		const uint64_t pages = (in->bytes + PAGE_SIZE - 1) & ~(uint64_t(PAGE_SIZE) - 1);
 		const bool control = tgm_pool::controlReserve(
@@ -135,7 +193,9 @@ IOReturn AGXDeviceUserClient::settleBo(const TegraGM20BAbiBoAlloc *in, const BoC
 		      "(client holds %llu MiB of the pool, %llu MiB free); "
 		      "further ones not logged\n",
 		      owner_, in->bytes >> 10,
-		      charge.refused ? charge.refused : "no free 128 KiB chunks",
+		      charge.smmuRefused ? charge.smmuRefused
+		      : charge.refused   ? charge.refused
+					 : "no free 64 KiB chunks",
 		      (pool_bytes_ - charge.pool) >> 20, tgm_pool_avail() >> 20);
 		compressibleLogged_ = true;
 	}
@@ -160,6 +220,11 @@ IOReturn AGXDeviceUserClient::settleBo(const TegraGM20BAbiBoAlloc *in, const BoC
 	const bool pooled = !ret && (bo->chunked || bo->pool_va);
 	if (!pooled)
 		pool_bytes_ -= charge.pool;
+	const bool keptSmmuComp = !ret && bo && bo->smmuCompressible;
+	if (!keptSmmuComp && charge.smmuComp) {
+		smmu_compressible_bytes_ -= charge.smmuComp;
+		__atomic_sub_fetch(&gSmmuCompressibleBytes, charge.smmuComp, __ATOMIC_RELAXED);
+	}
 	if (ret || !bo->controlCharge)
 		control_bytes_ -= charge.control;
 	if (ret && !quotaLogged_ && bo && (bo->chunked || !(in->flags & TegraGM20BBoCompressible)))
@@ -171,6 +236,8 @@ IOReturn AGXDeviceUserClient::settleBo(const TegraGM20BAbiBoAlloc *in, const BoC
 		__atomic_add_fetch(&gCompressibleBytes, bo->bytes, __ATOMIC_RELAXED);
 		__atomic_add_fetch(&gCompressibles, 1, __ATOMIC_RELAXED);
 	}
+	if (bo->smmuCompressible)
+		__atomic_add_fetch(&gSmmuCompressibles, 1, __ATOMIC_RELAXED);
 	if (bo->controlCharge)
 		switch_gpu_path_taken(SWITCH_GPU_PATH_CONTROL_BO, 1);
 	if (bo->compositorPool)
@@ -253,10 +320,17 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	int kind = TGM_BO_CACHED;
 	Spare *spare = nullptr;
 	bool chunksRefused = false;
+	bool smmuComp = false;
+	IOMemoryDescriptor *smmuDesc = nullptr;
 	if (!ret && compressible) {
 		ret = charge.refused ? kIOReturnNoMemory : takeChunks(in->bytes, bo->pas);
 		bo->chunked = ret == kIOReturnSuccess;
-		chunksRefused = !bo->chunked;
+		if (!bo->chunked && charge.smmuComp && switch_gpu_smmu_ready()) {
+			ret = allocateSmmuCompressible(in->bytes, bo->pas, &smmuDesc);
+			smmuComp = ret == kIOReturnSuccess;
+			bo->smmuCompressible = smmuComp;
+		}
+		chunksRefused = !bo->chunked && !smmuComp;
 	}
 	// A coherent BO the pool does not serve (its tiers keep it out, or the pool has no room) is not refused: it is a
 	// write-combined buffer of ordinary pages made below (tgm_pool::FromSystem). A refusal would abort clients such as
@@ -371,6 +445,8 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	if (!ret) {
 		if (bo->chunked)
 			bo->backing = switch_gpu_pin_chunks(bo->pas, bo->npages);
+		else if (smmuDesc)
+			bo->backing = switch_gpu_pin_memory(bo->pas, bo->npages, 0, smmuDesc, true);
 		else if (bo->buffer.memory && !system && !(in->flags & TegraGM20BBoContiguous)) {
 			bo->bufferKernelMap = bo->buffer.map != nullptr;
 			bo->backing = switch_gpu_pin_cached(bo->pas, bo->backing_pages, bo->npages,
@@ -387,11 +463,21 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		if (!bo->backing)
 			ret = kIOReturnNoMemory;
 	}
-	if (!ret && !bo->chunked && !(in->flags & TegraGM20BBoCoherent))
+	if (smmuDesc) {
+		smmuDesc->complete();
+		smmuDesc->release();
+		smmuDesc = nullptr;
+	}
+	if (!ret && !bo->chunked && !smmuComp && !(in->flags & TegraGM20BBoCoherent))
 		ret = ioreturn(switch_gpu_backing_cpu_track(bo->backing));
 	if (!ret) {
-		ret = ioreturn(allocatedMemory(bo->backing, bo->npages, &bo->mem));
+		const auto acquire = compressible ? allocatedMemorySmmu : allocatedMemory;
+		ret = ioreturn(acquire(bo->backing, bo->npages, &bo->mem));
 		bo->backingMemory = ret == kIOReturnSuccess;
+		if (!ret && compressible && !tgm_mem_can_compress(bo->mem)) {
+			ret = kIOReturnNoMemory;
+			chunksRefused = true;
+		}
 	}
 	lap(3);
 	IOLockLock(lock_);

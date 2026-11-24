@@ -8,7 +8,7 @@
 
 constexpr uint64_t SWITCH_GPU_MAX_BUFFER_BYTES = 256ULL << 20;
 constexpr uint64_t SWITCH_GPU_MAX_BO_BYTES = 2ULL << 30;
-constexpr uint64_t SWITCH_GPU_BO_CHUNK_BYTES = 128ULL << 10;
+constexpr uint64_t SWITCH_GPU_BO_CHUNK_BYTES = 64ULL << 10;
 constexpr uint32_t SWITCH_GPU_BO_FLAGS_MASK = static_cast<uint32_t>(TegraGM20BBoCoherent) |
 					      static_cast<uint32_t>(TegraGM20BBoContiguous) |
 					      static_cast<uint32_t>(TegraGM20BBoCompressible) |

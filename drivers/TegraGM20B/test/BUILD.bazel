@@ -1184,6 +1184,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BUserClientJobSubmit.cpp",
         "//drivers/TegraGM20B:SwitchGpuClientRetirement.h",
         "//drivers/TegraGM20B:SwitchGpuClientBinds.h",
+        "//drivers/TegraGM20B:SwitchGpuUserCpuComplete.h",
         "//drivers/TegraGM20B:SwitchGpuGatedMethods.h",
         "//drivers/TegraGM20B:SwitchGpuNativeImport.h",
         "//drivers/TegraGM20B:SwitchGpuPathStats.cpp",
@@ -2799,6 +2800,42 @@ host_test(
 )
 
 host_test(
+    name = "switch_gpu_allocated_memory_test",
+    srcs = [
+        "switch_gpu_allocated_memory_peer.cpp",
+        "switch_gpu_allocated_memory_peer.h",
+        "switch_gpu_allocated_memory_test.cpp",
+        "switch_gpu_backing_fixture.h",
+        "//drivers/TegraGM20B:SwitchGpuAllocatedMemory.cpp",
+        "//drivers/TegraGM20B:SwitchGpuAllocatedMemory.h",
+        "//drivers/TegraGM20B:SwitchGpuBackingMemory.h",
+        "//drivers/TegraGM20B:TegraGM20BGpu.h",
+    ],
+    deps = [
+        ":backing",
+        ":coherency_kernel",
+    ],
+)
+
+host_test(
+    name = "switch_gpu_allocated_memory_tsan_test",
+    srcs = [
+        "switch_gpu_allocated_memory_peer.cpp",
+        "switch_gpu_allocated_memory_peer.h",
+        "switch_gpu_allocated_memory_test.cpp",
+        "switch_gpu_backing_completion_stub.cpp",
+        "switch_gpu_backing_fixture.h",
+        "switch_gpu_dependency_stub.cpp",
+        "//drivers/TegraGM20B:SwitchGpuAllocatedMemory.cpp",
+        "//drivers/TegraGM20B:SwitchGpuAllocatedMemory.h",
+    ] + BACKING_SRCS + BACKING_HDRS,
+    copts = ["-fsanitize=thread"],
+    linkopts = ["-fsanitize=thread"],
+    sanitize = False,
+    deps = [":coherency_kernel"],
+)
+
+host_test(
     name = "switch_gpu_memory_tags_test",
     srcs = [
         "switch_gpu_memory_tags_test.cpp",
@@ -3470,5 +3507,26 @@ host_test(
         "switch_gpu_smmu_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuSmmu.h",
         "//drivers/TegraSMMU:TegraSMMU.h",
+    ],
+)
+
+genrule(
+    name = "switch_gpu_mem_smmu_source",
+    testonly = True,
+    srcs = ["//drivers/TegraGM20B:gpu_mem.c"],
+    outs = ["switch_gpu_mem_smmu_source.h"],
+    cmd = """
+set -e
+awk '/^static int mem_new\\(/ { on = 1 } on { print } on && /^}$$/ { count++; if (count == 8) on = 0 } END { if (count != 8) exit 1 }' $< > $@
+""",
+)
+
+host_test(
+    name = "switch_gpu_mem_smmu_test",
+    srcs = [
+        "switch_gpu_mem_smmu_test.cpp",
+        ":switch_gpu_mem_smmu_source",
+        "//drivers/TegraGM20B:SwitchGpuSmmu.h",
+        "//drivers/TegraGM20B:TegraGM20BComp.h",
     ],
 )

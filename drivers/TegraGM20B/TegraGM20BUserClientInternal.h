@@ -125,6 +125,7 @@ extern PoolOrphan *gPoolOrphans;
 extern volatile uint64_t gSystemCoherent, gSystemCoherentBytes;
 extern volatile uint64_t gClientPoolBytes, gOrphanBytes, gOrphans;
 extern volatile uint64_t gCompressibleBytes, gCompressibles;
+extern volatile uint64_t gSmmuCompressibleBytes, gSmmuCompressibles;
 void pushOrphan(PoolOrphan *orphan);
 
 bool poolZeroLater(void *va, uint64_t pa, uint64_t bytes);
@@ -333,6 +334,7 @@ class AGXDeviceUserClient : public IOUserClient
 		void *pool_va;  // Coherent BOs: pool memory (write-combined, contiguous)
 		uint64_t pool_pa;
 		bool chunked;  // Compressible BOs: pas are pool chunks (tgm_pool_alloc_chunks); no view, never CPU-mapped
+		bool smmuCompressible;
 		switch_gpu_cached_mapping *cachedMapping;
 		SwitchGpuCachedBuffer buffer;  // cached and system BOs
 		IOMemoryDescriptor *wired;     // imports
@@ -566,6 +568,7 @@ class AGXDeviceUserClient : public IOUserClient
 		false;  // a coherent BoAlloc served from system memory (tgm_pool::FromSystem), logged once
 	uint64_t pool_bytes_ = 0;  // pool BOs held
 	uint64_t control_bytes_ = 0;
+	uint64_t smmu_compressible_bytes_ = 0;
 	// the thread about to take a hang's line while it holds lock_ (tgm_chan_hung, tgm_chan_del), so hungInterlocks
 	// reads the binds without taking it again
 	thread_t hangHolder_ = nullptr;
@@ -627,7 +630,8 @@ class AGXDeviceUserClient : public IOUserClient
 
 	struct BoCharge {
 		const char *refused;  // the pool tiers' refusal, or null
-		uint64_t readyReserve, pool, control;
+		const char *smmuRefused;
+		uint64_t readyReserve, pool, control, smmuComp;
 		bool critical;
 	};
 

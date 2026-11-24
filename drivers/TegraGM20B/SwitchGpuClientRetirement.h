@@ -5,6 +5,8 @@ void AGXDeviceUserClient::accountRelease(Bo *bo)
 {
 	if (bo->handle && (bo->pool_va || bo->chunked))
 		pool_bytes_ -= bo->bytes;
+	if (bo->handle && bo->smmuCompressible)
+		smmu_compressible_bytes_ -= bo->bytes;
 	if (bo->handle && bo->pool_va && (bo->flags & TegraGM20BBoControl))
 		control_bytes_ -= bo->controlCharge;
 #ifdef KERNEL

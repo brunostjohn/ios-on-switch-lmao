@@ -62,7 +62,7 @@ TEST_F(VmMap, MixedPagesUsePreparedViewsAndRetireSynchronously)
 	switch_gpu_mapping *mapping = nullptr;
 	ASSERT_EQ(map(a, &mapping), 0);
 	ASSERT_EQ(mapping->count, 2u);
-	EXPECT_EQ(mapping->entries[0].shift, 17);
+	EXPECT_EQ(mapping->entries[0].shift, 16);
 	EXPECT_EQ(mapping->entries[1].shift, 12);
 	EXPECT_EQ(constructors, 1);
 	EXPECT_EQ(a.tlb.gen, 2u);
@@ -210,33 +210,33 @@ TEST_F(VmMap, OrdinaryAndKernelMappingsKeepSynchronousVisibility)
 
 TEST_F(VmMap, PhysicalInteriorUsesItsOwnBigViewOffset)
 {
-	pages.resize(64);
+	pages.resize(48);
 	for (unsigned i = 0; i < pages.size(); ++i)
-		pages[i] = 0x80010000 + i * PAGE_SIZE;
+		pages[i] = 0x80008000 + i * PAGE_SIZE;
 	memory.pages = pages.data();
 	memory.npages = u32(pages.size());
 	memory.bytes = pages.size() * PAGE_SIZE;
 	memory.mem.bytes = memory.bytes;
 	mem_prepare_big_views(&memory);
 	ASSERT_NE(memory.big_views, nullptr);
-	EXPECT_EQ(memory.big_views->offset, 16 * PAGE_SIZE);
+	EXPECT_EQ(memory.big_views->offset, 8 * PAGE_SIZE);
 	switch_gpu_mapping *mapping = nullptr;
-	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, 48 * PAGE_SIZE, &memory, 16 * PAGE_SIZE, 0, 0,
+	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, 40 * PAGE_SIZE, &memory, 8 * PAGE_SIZE, 0, 0,
 				    &mapping),
 		  0);
 	ASSERT_EQ(mapping->count, 2u);
-	EXPECT_EQ(mapping->entries[0].shift, 17);
+	EXPECT_EQ(mapping->entries[0].shift, 16);
 	ASSERT_EQ(calls.size(), 4u);
 	EXPECT_EQ(calls[1].offset, 0u);
-	EXPECT_EQ(calls[3].offset, 48 * PAGE_SIZE);
+	EXPECT_EQ(calls[3].offset, 40 * PAGE_SIZE);
 	switch_gpu_vm_unmap(&a, &mapping);
 }
 
 TEST_F(VmMap, CompressedAliasesInDifferentSpacesUseOnlyCanonicalMemory)
 {
-	memory.page = memory.mem.shift = 17;
-	memory.bytes = memory.mem.bytes = 32 * PAGE_SIZE;
-	memory.npages = 32;
+	memory.page = memory.mem.shift = 16;
+	memory.bytes = memory.mem.bytes = 16 * PAGE_SIZE;
+	memory.npages = 16;
 	tgm_gpu.mmu.kind[0x42] = 0xfe;
 	mem_prepare_big_views(&memory);
 	EXPECT_EQ(memory.big_views, nullptr);
@@ -248,7 +248,7 @@ TEST_F(VmMap, CompressedAliasesInDifferentSpacesUseOnlyCanonicalMemory)
 	for (const auto &call : calls) {
 		if (call.operation == 'm') {
 			EXPECT_EQ(call.memory, &memory.mem);
-			EXPECT_EQ(call.shift, 17);
+			EXPECT_EQ(call.shift, 16);
 			++maps;
 		}
 	}
@@ -261,16 +261,16 @@ TEST_F(VmMap, PreparedUncompressedBigViewCannotBecomeIndependentCompressionAutho
 {
 	mem_prepare_big_views(&memory);
 	ASSERT_NE(memory.big_views, nullptr);
-	ASSERT_EQ(memory.big_views->mem.shift, 17);
+	ASSERT_EQ(memory.big_views->mem.shift, 16);
 	tgm_gpu.mmu.kind[0x42] = 0xfe;
 	switch_gpu_mapping *mapping = nullptr;
-	EXPECT_EQ(switch_gpu_vm_map(&a, 0x40000000, 32 * PAGE_SIZE, &memory, 0, 0x42, 0, &mapping),
+	EXPECT_EQ(switch_gpu_vm_map(&a, 0x40000000, 16 * PAGE_SIZE, &memory, 0, 0x42, 0, &mapping),
 		  -EINVAL);
 	EXPECT_EQ(mapping, nullptr);
 	EXPECT_TRUE(calls.empty());
 }
 
-// MapVolatile of a block-linear kind (uncompressed) maps, in 128 KiB PTEs where its pages allow, each PTE volatile with
+// MapVolatile of a block-linear kind (uncompressed) maps, in 64 KiB PTEs where its pages allow, each PTE volatile with
 // its kind; was refused for any nonzero kind.
 TEST_F(VmMap, VolatileMapOfAnUncompressedKindMaps)
 {
@@ -280,7 +280,7 @@ TEST_F(VmMap, VolatileMapOfAnUncompressedKindMaps)
 					     &mapping),
 		  0);
 	ASSERT_EQ(mapping->count, 2u);
-	EXPECT_EQ(mapping->entries[0].shift, 17);
+	EXPECT_EQ(mapping->entries[0].shift, 16);
 	unsigned maps = 0;
 	for (const auto &call : calls)
 		if (call.operation == 'm') {
@@ -295,9 +295,9 @@ TEST_F(VmMap, VolatileMapOfAnUncompressedKindMaps)
 // A compressible kind compresses through the L2, which a volatile map bypasses: refused now and when installed later.
 TEST_F(VmMap, VolatileCompressedKindIsRefusedNowAndAtInstall)
 {
-	memory.page = memory.mem.shift = 17;
-	memory.bytes = memory.mem.bytes = 32 * PAGE_SIZE;
-	memory.npages = 32;
+	memory.page = memory.mem.shift = 16;
+	memory.bytes = memory.mem.bytes = 16 * PAGE_SIZE;
+	memory.npages = 16;
 	tgm_gpu.mmu.kind[0x42] = 0xfe;
 	switch_gpu_mapping *mapping = nullptr;
 	EXPECT_EQ(switch_gpu_vm_map_volatile(&a, 0x40000000, memory.bytes, &memory, 0, 0x42, 0, 1,
@@ -316,7 +316,7 @@ TEST_F(VmMap, VolatileCompressedKindIsRefusedNowAndAtInstall)
 }
 
 // A refilled spare's pages (SwitchGpuSpares.h switch_gpu_spare_layout): 128 KiB units anywhere in memory, each aligned,
-// then a tail of single pages. Each unit maps as one 128 KiB PTE, the tail in 4 KiB ones.
+// then a tail of single pages. Each unit maps as two 64 KiB PTEs, the tail in 4 KiB ones.
 TEST_F(VmMap, ASparesUnitsMapAsBigPages)
 {
 	pages.clear();
@@ -338,7 +338,7 @@ TEST_F(VmMap, ASparesUnitsMapAsBigPages)
 	ASSERT_EQ(map(a, &mapping), 0);
 	u64 big = 0, small = 0;
 	for (u32 i = 0; i < mapping->count; ++i)
-		(mapping->entries[i].shift == 17 ? big : small) += mapping->entries[i].bytes;
+		(mapping->entries[i].shift == 16 ? big : small) += mapping->entries[i].bytes;
 	EXPECT_EQ(big, 3 * (128ULL << 10));
 	EXPECT_EQ(small, 16 * PAGE_SIZE);
 	switch_gpu_vm_unmap(&a, &mapping);
@@ -382,7 +382,7 @@ TEST_F(VmMap, CutBigPageKeepsItsPteUntilRetirementAndItsRestWaitsForInstall)
 	mem_prepare_big_views(&memory);
 	switch_gpu_mapping *mapping = nullptr, *below = nullptr, *taken = nullptr, *above = nullptr;
 	ASSERT_EQ(map(a, &mapping), 0);
-	ASSERT_EQ(mapping->entries[0].shift, 17);
+	ASSERT_EQ(mapping->entries[0].shift, 16);
 	calls.clear();
 	ASSERT_EQ(switch_gpu_vm_split(&a, &mapping, &memory, 0, 0, 0, 0x40008000, 0x1000, &below,
 				      &taken, &above),
@@ -390,7 +390,7 @@ TEST_F(VmMap, CutBigPageKeepsItsPteUntilRetirementAndItsRestWaitsForInstall)
 	EXPECT_TRUE(calls.empty());
 	ASSERT_NE(taken, nullptr);
 	ASSERT_EQ(taken->count, 1u);
-	EXPECT_EQ(taken->entries[0].shift, 17);
+	EXPECT_EQ(taken->entries[0].shift, 16);
 	EXPECT_EQ(taken->entries[0].bytes, 0x20000u);
 	ASSERT_EQ(below->count, 1u);
 	EXPECT_TRUE(below->entries[0].pending);
@@ -401,7 +401,7 @@ TEST_F(VmMap, CutBigPageKeepsItsPteUntilRetirementAndItsRestWaitsForInstall)
 	switch_gpu_vm_unmap(&a, &taken);
 	ASSERT_EQ(calls.size(), 2u);
 	EXPECT_EQ(calls[0].operation, 'u');
-	EXPECT_EQ(calls[0].shift, 17);
+	EXPECT_EQ(calls[0].shift, 16);
 	calls.clear();
 	ASSERT_EQ(switch_gpu_vm_install(&a, below, &memory, 0, 0, 0), 0);
 	ASSERT_EQ(switch_gpu_vm_install(&a, above, &memory, 0, 0, 0), 0);
@@ -428,9 +428,9 @@ TEST_F(VmMap, CutBigPageKeepsItsPteUntilRetirementAndItsRestWaitsForInstall)
 
 TEST_F(VmMap, CompressedMappingCutInsideABigPageIsRefusedUntouched)
 {
-	memory.page = memory.mem.shift = 17;
-	memory.bytes = memory.mem.bytes = 32 * PAGE_SIZE;
-	memory.npages = 32;
+	memory.page = memory.mem.shift = 16;
+	memory.bytes = memory.mem.bytes = 16 * PAGE_SIZE;
+	memory.npages = 16;
 	tgm_gpu.mmu.kind[0x42] = 0xfe;
 	switch_gpu_mapping *mapping = nullptr, *below = nullptr, *taken = nullptr, *above = nullptr;
 	ASSERT_EQ(switch_gpu_vm_map(&a, 0x40000000, memory.bytes, &memory, 0, 0x42, 0, &mapping),

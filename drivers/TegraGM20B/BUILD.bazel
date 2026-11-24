@@ -148,6 +148,7 @@ kernel_driver(
         "SwitchGpuBackingOrder.cpp",
         "SwitchGpuBackingRefs.cpp",
         "SwitchGpuBackingMemory.cpp",
+        "SwitchGpuAllocatedMemory.cpp",
         "SwitchGpuAdmission.cpp",
         "SwitchGpuReady.cpp",
         "SwitchGpuResourceClient.cpp",

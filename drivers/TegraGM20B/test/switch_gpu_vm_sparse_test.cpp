@@ -11,10 +11,10 @@ struct Run {
 	u8 shift;
 };
 
-// [0x40011000, 0x40063000): 4 KiB pages up to the first 128 KiB boundary, the two whole big pages, the 4 KiB tail
+// [0x40011000, 0x40063000): 4 KiB pages up to the first 64 KiB boundary, the four whole big pages, the 4 KiB tail
 constexpr u64 kVa = 0x40011000, kRange = 0x52000;
 const std::vector<Run> kRuns = {
-	{0x40011000, 0xf000, 12}, {0x40020000, 0x40000, 17}, {0x40060000, 0x3000, 12}};
+	{0x40011000, 0xf000, 12}, {0x40020000, 0x40000, 16}, {0x40060000, 0x3000, 12}};
 
 void expectRun(const Call &call, const Run &run)
 {
@@ -148,7 +148,7 @@ TEST_F(VmSparse, ACutBigPageStaysSparseAndItsRestIsWrittenSparseAgain)
 		  0);
 	EXPECT_TRUE(calls.empty());
 	ASSERT_EQ(taken->count, 1u);
-	EXPECT_EQ(taken->entries[0].shift, 17);
+	EXPECT_EQ(taken->entries[0].shift, 16);
 	EXPECT_EQ(taken->entries[0].bytes, 0x40000u);
 	EXPECT_FALSE(taken->entries[0].pending);
 	EXPECT_TRUE(below->sparse && taken->sparse && above->sparse);

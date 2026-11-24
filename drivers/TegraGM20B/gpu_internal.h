@@ -84,6 +84,7 @@
 #include "SwitchGpuPresentTokens.h"
 #include "SwitchGpuPresentWatch.h"
 #include "SwitchGpuMapping.h"
+#include "SwitchGpuSmmu.h"
 #include "SwitchGpuPathStats.h"
 #include "SwitchGpuJobStats.h"
 #include "SwitchGpuEventStats.h"
@@ -190,6 +191,8 @@ struct tgm_mem {
 	u32 npages;
 	struct switch_gpu_memory_view *big_views;
 	bool big_views_ready;
+	u64 smmu_iova;
+	u64 *smmu_pages;
 };
 
 int tgm_vm_kmap_raw(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_only,

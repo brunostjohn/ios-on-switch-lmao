@@ -203,7 +203,7 @@ IOReturn AGXDeviceUserClient::boPark(const TegraGM20BAbiBoPark *in)
 			bo->buffer.memory != nullptr,
 			bo->wired != nullptr,
 			bo->pool_va != nullptr,
-			bo->chunked,
+			bo->chunked || bo->smmuCompressible,
 			(bo->flags & TegraGM20BBoContiguous) != 0u,
 			(bo->flags & TegraGM20BBoControl) != 0u,
 			bo->nativeView != nullptr,

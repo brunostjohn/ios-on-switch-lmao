@@ -16,7 +16,7 @@
 namespace gm20b {
 namespace {
 constexpr uint64_t kVaGranule = 0x10000;
-constexpr uint64_t kBigPageAlignment = 0x20000;
+constexpr uint64_t kBigPageAlignment = 0x10000;
 }  // namespace
 
 Kernel::~Kernel()

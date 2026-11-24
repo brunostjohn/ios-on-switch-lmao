@@ -104,7 +104,19 @@ int tgm_mem_new_waited(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
 /* The same for pages no other memory object will ever name (a BO's own): such memory may take compressible kinds. */
 int tgm_mem_new_exclusive(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
 			  struct tgm_mem **pmem);
+int tgm_mem_new_exclusive_smmu(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
+			       struct tgm_mem **pmem);
 int tgm_mem_can_compress(const struct tgm_mem *mem);
+int tgm_mem_is_smmu(const struct tgm_mem *mem);
+struct switch_gpu_backing;
+int switch_gpu_backing_tgm_mem_direct(struct switch_gpu_backing *backing, uint32_t count,
+				      struct tgm_mem **out);
+int switch_gpu_backing_tgm_mem(struct switch_gpu_backing *backing, uint32_t count,
+			       struct tgm_mem **out);
+int switch_gpu_backing_tgm_mem_existing(struct switch_gpu_backing *backing, uint32_t count,
+					struct tgm_mem **out);
+int switch_gpu_backing_tgm_mem_existing_or_direct(struct switch_gpu_backing *backing,
+						  uint32_t count, struct tgm_mem **out);
 void tgm_mem_del(struct tgm_mem **pmem);
 /* User range [TGM_USER_VA_START, TGM_KERNEL_VA): raw binds. read_only: the GPU may only read the range (a write is an
  * MMU fault). tgm_vm_map and tgm_vm_unmap invalidate the L2 and the TLB before they return; tgm_vm_map_ordered (a
