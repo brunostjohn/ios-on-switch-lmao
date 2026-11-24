@@ -26,6 +26,7 @@ static u64 test_ptimer;
 void switch_exec_reset_driver(void)
 {
 	memset(&tgm_stats, 0, sizeof(tgm_stats));
+	memset(&tgm_busy, 0, sizeof(tgm_busy));
 	test_sched_kick = SWITCH_EXEC_KICK_CLEAR;
 	test_deadline_later = 0;
 	test_ptimer = 0;
@@ -44,15 +45,20 @@ void switch_exec_set_ptimer(uint64_t pt)
 
 void switch_exec_take_later_stats(struct switch_exec_later_stats *out)
 {
+#if TGM_STATS
 	out->kicks = __atomic_exchange_n(&tgm_stats.later_kicks, 0, __ATOMIC_RELAXED);
 	out->frames = __atomic_exchange_n(&tgm_stats.later_frames, 0, __ATOMIC_RELAXED);
 	out->frame_max = __atomic_exchange_n(&tgm_stats.later_frame_max, 0, __ATOMIC_RELAXED);
 	out->queue_max = __atomic_exchange_n(&tgm_stats.later_queue_max, 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&tgm_stats.later_in_frame, 0, __ATOMIC_RELAXED);
+#else
+	memset(out, 0, sizeof(*out));
+#endif
 }
 
 void switch_exec_take_foreign_stats(struct switch_exec_foreign_stats *out)
 {
+#if TGM_STATS
 	out->jobs = __atomic_exchange_n(&tgm_stats.foreign_jobs, 0, __ATOMIC_RELAXED);
 	out->fences = __atomic_exchange_n(&tgm_stats.foreign_fences, 0, __ATOMIC_RELAXED);
 	out->promises = __atomic_exchange_n(&tgm_stats.foreign_promises, 0, __ATOMIC_RELAXED);
@@ -61,15 +67,22 @@ void switch_exec_take_foreign_stats(struct switch_exec_foreign_stats *out)
 	out->timed = __atomic_exchange_n(&tgm_stats.foreign_timed, 0, __ATOMIC_RELAXED);
 	out->queue_sum = __atomic_exchange_n(&tgm_stats.foreign_queue_sum, 0, __ATOMIC_RELAXED);
 	out->queue_max = __atomic_exchange_n(&tgm_stats.foreign_queue_max, 0, __ATOMIC_RELAXED);
+#else
+	memset(out, 0, sizeof(*out));
+#endif
 }
 
 void switch_exec_take_l2_inval_stats(struct switch_exec_l2_inval_stats *out)
 {
+#if TGM_STATS
 	out->total = __atomic_exchange_n(&tgm_stats.l2_inval, 0, __ATOMIC_RELAXED);
 	out->host_written = __atomic_exchange_n(&tgm_stats.l2_inval_host, 0, __ATOMIC_RELAXED);
 	out->compositor = __atomic_exchange_n(&tgm_stats.l2_inval_host_comp, 0, __ATOMIC_RELAXED);
 	out->tlb = __atomic_exchange_n(&tgm_stats.l2_inval_tlb, 0, __ATOMIC_RELAXED);
 	out->kernel_push = __atomic_exchange_n(&tgm_stats.l2_inval_kernel, 0, __ATOMIC_RELAXED);
+#else
+	memset(out, 0, sizeof(*out));
+#endif
 }
 
 __attribute__((constructor)) static void switch_exec_device(void)
@@ -210,6 +223,7 @@ void tgm_stats_gr_context(void)
 {
 }
 
+#if TGM_STATS
 void switch_gpu_compositor_job(uint64_t ns)
 {
 }
@@ -217,6 +231,7 @@ void switch_gpu_compositor_job(uint64_t ns)
 void switch_gpu_compositor_sync(uint32_t syncs, uint64_t ns, int behind)
 {
 }
+#endif
 
 int nvif_event_allow(struct nvif_event *event)
 {

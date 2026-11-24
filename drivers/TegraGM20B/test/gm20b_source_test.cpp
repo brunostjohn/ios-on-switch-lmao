@@ -1611,7 +1611,7 @@ TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePubl
 				"NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE"));
 	EXPECT_TRUE(exec.has(
 		"*seqno = chan_fence_job(chan, external, chan->submitted + 1, last, quiet, "
-		"releases, release_count, owned);"));
+		"releases, release_count, owned, waits);"));
 	// A batch's internal fence orders execution only: no L2 flush, no visible release, no interrupt. Its kick is the
 	// GPFIFO entry that keeps it between the batches; the job's own kick writes GP_PUT.
 	const CodeText internal = Block(gpu(), "static void chan_job_fence(");
@@ -1625,7 +1625,8 @@ TEST(GM20BVisibilitySource, InternalFenceKeepsExecutionOrderAndExternalFencePubl
 	EXPECT_TRUE(fence.before("chan->chan.defer_kick = true;", "PUSH_KICK(push);"));
 	EXPECT_TRUE(fence.before("PUSH_KICK(push);", "chan_doorbell(chan);"));
 	EXPECT_TRUE(fence.before(
-		"job = switch_gpu_jobs_kick(&chan->jobs, first, next, chan->submit_ns, !announce);",
+		"job = switch_gpu_jobs_kick_waits(&chan->jobs, first, next, chan->submit_ns, "
+		"!announce, waits);",
 		"PUSH_KICK(push);"));
 	for (const char *signature : {"int tgm_vm_unmap_pages(", "void switch_gpu_vm_unmap("}) {
 		const CodeText unmap = Block(gpu(), signature);
