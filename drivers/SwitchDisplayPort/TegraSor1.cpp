@@ -58,6 +58,8 @@ enum : uint32_t {
     PLL3 = 0x1a,
     LVDS = 0x1c,
     LANE_SEQ_CTL = 0x21,
+    SEQ_INST0 = 0x22,
+    SEQ_INST8 = 0x2a,
     XBAR_CTRL = 0x4a,
     XBAR_POL = 0x4b,
     DP_LINKCTL0 = 0x4c,
@@ -94,6 +96,7 @@ constexpr uint32_t kSpareSeqEnable = 1u << 0, kSparePanelInternal = 1u << 1, kSp
 constexpr uint32_t kPadCalPd = 1u << 23, kTxPuEnable = 1u << 22, kTxPuMask = 0xffu << 8;
 constexpr uint32_t kLaneSeqTrigger = 1u << 31, kLaneSeqDown = 1u << 20, kLaneStateDown = 1u << 16;
 constexpr uint32_t kLaneSeqBusy = 1u << 28;
+constexpr uint32_t kSeqInstWaitVsync = 2u << 12, kSeqInstHalt = 1u << 15, kSeqInstDrivePwmLo = 1u << 23;
 constexpr uint32_t kLinkEnable = 1u << 0, kEnhancedFrame = 1u << 14, kLaneCountMask = 0x1fu << 16;
 constexpr uint32_t kTuSizeMask = 0x7fu << 2;
 constexpr uint32_t kProtocolMask = 0xfu << 8, kProtocolDpA = 0x8u << 8, kOwnerMask = 0xfu, kSubownerMask = 3u << 4;
@@ -181,16 +184,19 @@ bool TegraSor1::pixelClock(uint32_t pixel_khz, char *why, size_t size)
         snprintf(why, size, "PLL_D2 cannot make %u kHz", pixel_khz);
         return false;
     }
-    switch_car_rmw(PLLD2_BASE, kPllEnable | kPllIddq, 0);
-    IODelay(5);
     const uint32_t dividers = (pll.pdiv_hw << 19) | (pll.n << 8) | pll.m;
-    switch_car_write(PLLD2_BASE, dividers);
+    switch_car_rmw(PLLD2_BASE, kPllEnable, 0);
+    IODelay(1);
+    switch_car_write(PLLD2_BASE, dividers | kPllIddq);
+    IODelay(2);
     switch_car_write(PLLD2_MISC0, b01 ? 0x40000000 : 0x40000020);
     switch_car_write(PLLD2_MISC2, b01 ? 0xf6e0f620 : 0);
     switch_car_write(PLLD2_MISC3, (b01 ? 0x00010000u : 0) | pll.sdm_din);
     if (b01)
         switch_car_write(PLLD2_MISC4, 0);
     switch_car_write(PLLD2_MISC1, 0x10000000 | kSdmEnable);
+    switch_car_write(PLLD2_BASE, dividers);
+    IODelay(5);
     switch_car_write(PLLD2_BASE, dividers | kPllEnable);
     if (!switch_car_wait(PLLD2_BASE, kPllLock, kPllLock, 300)) {
         snprintf(why, size, "PLL_D2 did not lock (base %#x)", switch_car_read(PLLD2_BASE));
@@ -283,14 +289,14 @@ bool TegraSor1::startLink(const struct switch_dp_link &link, bool enhanced, char
     switch_car_clock_enable(kClockSor1);
     rmw(CLK_CNTRL, kClkSelMask | kLinkSpeedMask, kClkSelDiffDp | (uint32_t)(link.rate & 0x1fu) << 2);
     IODelay(300);
-    const uint32_t loadAdjust = link.rate == SWITCH_DP_RATE_RBR ? 3u : link.rate == SWITCH_DP_RATE_HBR ? 4u : 6u;
     if (switch_car_soc_t210b01()) {
         rmw(PLL0, 0x000f0000, 0x00050000);
-        rmw(PLL1, kPll1LoadAdjMask | kPll1Term, (loadAdjust << 20) | kPll1Term);
+        rmw(PLL1, kPll1LoadAdjMask | kPll1Term, (4u << 20) | kPll1Term);
         rmw(PLL4, 0x00400000, 0);
         rmw(PADCTL2, 0xff000000, 0x34000000);
         rmw(DP_PADCTL0, kTxPuMask, link.rate == SWITCH_DP_RATE_HBR2 ? 0x2000u : 0x3000u);
     } else {
+        const uint32_t loadAdjust = link.rate == SWITCH_DP_RATE_RBR ? 3u : link.rate == SWITCH_DP_RATE_HBR ? 4u : 6u;
         rmw(PLL0, (0xfu << 24) | (0xfu << 8) | kPll0ResistorExt, (1u << 24) | (3u << 8) | kPll0ResistorExt);
         rmw(PLL1, kPll1LoadAdjMask, loadAdjust << 20);
         rmw(PLL3, 0, kPll3Vdd3V3);
@@ -388,7 +394,7 @@ bool TegraSor1::attach(const struct switch_dp_mode &mode, const struct switch_dp
 
     rmw(STATE1, kPixelDepthMask | (3u << 6) | kOwnerMask | kHsyncLow | kVsyncLow,
         kBpp24 | kCrcComplete | (kHead + 1) | (mode.hsync_high ? 0 : kHsyncLow) | (mode.vsync_high ? 0 : kVsyncLow));
-    const uint32_t vtotal = switch_dp_mode_vtotal(&mode), htotal = switch_dp_mode_htotal(&mode);
+    const uint32_t vtotal = switch_dp_mode_vtotal(&mode) - 1u, htotal = switch_dp_mode_htotal(&mode) - 1u;
     const uint32_t vse = mode.vsync - 1u, hse = mode.hsync - 1u;
     const uint32_t vbe = vse + mode.vback, hbe = hse + mode.hback;
     write(HEAD_STATE0 + kHead, 0);
@@ -399,11 +405,16 @@ bool TegraSor1::attach(const struct switch_dp_mode &mode, const struct switch_dp
     write(HEAD_STATE5 + kHead, 1);
     update();
 
+    // Reset SEQ_INST leaves TRISTATE_IOS=1 (TRM 27.8.24); clear it before triggering SOR_PWR.
+    const uint32_t seqInst = 1u | kSeqInstWaitVsync | kSeqInstHalt | kSeqInstDrivePwmLo;
+    write(SEQ_INST0, seqInst);
+    write(SEQ_INST8, seqInst);
     rmw(PWR, 0, kTrigger | kNormalPowerUp);
     if (!waitClear(PWR, kTrigger, kHandshakeUs)) {
         snprintf(why, size, "SOR1 did not power up (PWR %#x)", read(PWR));
         return false;
     }
+    headAttached = true;
     write(SUPER_STATE1, kAttached);
     superUpdate();
     if (!switch_mmio_wait32(base, TEST * 4u, kTestAttached, kTestAttached, kHandshakeUs)) {
@@ -428,9 +439,11 @@ bool TegraSor1::wake(char *why, size_t size)
 
 void TegraSor1::detachHead()
 {
-    if (base == nullptr || !switch_car_clock_enabled(kClockSor1)) {
+    if (!headAttached || base == nullptr || !switch_car_clock_enabled(kClockSor1)) {
+        headAttached = false;
         return;
     }
+    headAttached = false;
     rmw(SUPER_STATE1, kModeNormal, 0);
     superUpdate();
     (void)switch_mmio_wait32(base, PWR * 4u, kModeSafe, kModeSafe, kHandshakeUs);
@@ -446,6 +459,7 @@ void TegraSor1::detachHead()
 
 void TegraSor1::powerDown()
 {
+    headAttached = false;
     if (base == nullptr || !switch_car_clock_enabled(kClockSor1)) {
         return;
     }
@@ -467,7 +481,7 @@ void TegraSor1::powerDown()
     (void)switch_pmc_io_pad_off(kPadLvds);
     switch_car_reset_assert(kClockSor1);
     switch_car_clock_disable(kClockSor1);
-    switch_car_write(PLLD2_BASE, switch_car_read(PLLD2_BASE) & ~kPllEnable);
+    switch_car_write(PLLD2_BASE, (switch_car_read(PLLD2_BASE) & ~kPllEnable) | kPllIddq);
     const uint8_t off = kLdo8Off;
     (void)tegra_i2c_write(kPmicBus, kPmic, kLdo8Config, &off, 1);
     lanes = 0;

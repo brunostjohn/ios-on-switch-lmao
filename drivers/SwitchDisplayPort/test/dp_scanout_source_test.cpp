@@ -92,6 +92,10 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     const auto publish = Block(lifecycle, "bool SwitchExternalScreen::publish(");
     EXPECT_TRUE(publish.before("setProperty(\"IOMFBHotplugKeysChangedKey\", kOSBooleanTrue);",
                                "IOMobileFramebufferLegacy::hotPlugNotify(1);"));
+    const auto clearProps = Block(lifecycle, "void SwitchExternalScreen::clearSinkProperties()");
+    EXPECT_TRUE(clearProps.has("removeProperty(\"IOMFBHotplugKeysChangedKey\");"));
+    const auto publishGeom = Block(lifecycle, "void SwitchExternalScreen::publishActiveGeometry()");
+    EXPECT_TRUE(publishGeom.has("connected && device == 2 && selectedMode >= 0"));
 
     EXPECT_TRUE(detach.has("setDisplayWidth(0);"));
     EXPECT_TRUE(detach.has("setDisplayHeight(0);"));
@@ -106,6 +110,7 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_FALSE(prepare.has("allocation.pages[0]"));
 
     EXPECT_TRUE(latch.has("if (receipt == TegraDisplayB::Latch::Missed)"));
+    EXPECT_TRUE(latch.has("dcb->resetWindowCache();"));
     EXPECT_FALSE(latch.has("return false;"));
     EXPECT_TRUE(latch.has("dcb->frameInterrupt(true);"));
 
@@ -114,7 +119,9 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
 
     const auto selectMode = Block(service, "IOReturn SwitchDisplayPort::selectMode(");
     EXPECT_TRUE(selectMode.has("gate->runAction("));
-    EXPECT_TRUE(selectMode.has("commandSleep(&self->trainingEvent, deadline, THREAD_ABORTSAFE)"));
+    EXPECT_TRUE(selectMode.has("}, &req);"));
+    EXPECT_FALSE(selectMode.has("this, &req"));
+    EXPECT_TRUE(selectMode.has("commandSleep(&self->trainingEvent, deadline, THREAD_UNINT)"));
     EXPECT_TRUE(selectMode.has("self->stage == Stage::Running && self->wantedMode == r.index"));
 
     const auto session = SourceText("../SwitchDPSession.cpp");

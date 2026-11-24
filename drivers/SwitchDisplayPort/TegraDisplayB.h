@@ -32,6 +32,7 @@ public:
     bool scanout(const Frame &frame);
     enum class Latch { Pending, Active, Missed };
     Latch windowLatch(uint32_t address);
+    void resetWindowCache();
     void windowOff();
     void frameInterrupt(bool enable);
     uint32_t takeInterrupt();

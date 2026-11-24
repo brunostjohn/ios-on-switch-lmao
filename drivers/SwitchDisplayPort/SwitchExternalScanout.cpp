@@ -490,6 +490,7 @@ bool SwitchExternalScreen::frameEnd()
                 IOLog("SwitchDisplayPort: window A missed latch for iova=%#x\n", latchedAddr);
             }
 #endif
+            dcb->resetWindowCache();
             latched = false;
             latchedAddr = 0;
             if (drawing >= 0 && drawing != front)

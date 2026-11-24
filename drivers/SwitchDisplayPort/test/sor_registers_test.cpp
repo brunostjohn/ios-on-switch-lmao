@@ -240,15 +240,19 @@ TEST_F(SorRegisters, ProgramsTheB01PixelClockWithoutAFixedPostDivider)
     xusbModel().log.clear();
     ASSERT_TRUE(sor.pixelClock(74250, why, sizeof(why))) << why;
     const auto &r = xusbModel().registers;
-    const long iddqClear = firstMaskedWrite(kPllD2, (1u << 30) | (1u << 18), 0);
-    const long divs = firstMaskedWrite(kPllD2, 0xffffffff, 0x00481701u, iddqClear);
-    const long misc0 = firstMaskedWrite(kCar + 0x4bc, 0xffffffff, 0x40000000u, divs);
-    const long enable = firstMaskedWrite(kPllD2, 0xffffffff, 0x40481701u, misc0);
-    ASSERT_GE(iddqClear, 0);
-    ASSERT_GE(divs, 0);
+    const long disabled = firstMaskedWrite(kPllD2, 1u << 30, 0);
+    const long iddqDivs = firstMaskedWrite(kPllD2, 0xffffffff, 0x00481701u | (1u << 18), disabled);
+    const long misc0 = firstMaskedWrite(kCar + 0x4bc, 0xffffffff, 0x40000000u, iddqDivs);
+    const long iddqClear = firstMaskedWrite(kPllD2, 0xffffffff, 0x00481701u, misc0);
+    const long enable = firstMaskedWrite(kPllD2, 0xffffffff, 0x40481701u, iddqClear);
+    ASSERT_GE(disabled, 0);
+    ASSERT_GE(iddqDivs, 0);
     ASSERT_GE(misc0, 0);
+    ASSERT_GE(iddqClear, 0);
     ASSERT_GE(enable, 0);
-    EXPECT_TRUE(hasDelay(5, iddqClear, divs));
+    EXPECT_TRUE(hasDelay(1, disabled, iddqDivs));
+    EXPECT_TRUE(hasDelay(2, iddqDivs, misc0));
+    EXPECT_TRUE(hasDelay(5, iddqClear, enable));
     EXPECT_EQ(r.at(kPllD2) & ~(1u << 27), 0x40481701u);
     EXPECT_EQ(r.at(kCar + 0x4bc), 0x40000000u);
     EXPECT_EQ(r.at(kCar + 0x570), 0x90000000u);
@@ -258,6 +262,9 @@ TEST_F(SorRegisters, ProgramsTheB01PixelClockWithoutAFixedPostDivider)
     const int64_t effective = ((r.at(kPllD2) >> 8) & 0xff) * 8192 + 4096 +
                               static_cast<int16_t>(r.at(kCar + 0x578));
     EXPECT_EQ(38400000 * effective / (8192 * 12), 74250000);
+
+    sor.powerDown();
+    EXPECT_EQ(r.at(kPllD2) & ((1u << 30) | (1u << 18)), 1u << 18);
 }
 
 TEST_F(SorRegisters, AppliesMaskedB01ProdOnTheSafeClock)
@@ -451,20 +458,32 @@ TEST_F(SorRegisters, RetainsBoardSetupOnRepeatedStart)
     ASSERT_TRUE(start(4, SWITCH_DP_RATE_HBR2)) << why;
     const auto &r = xusbModel().registers;
     EXPECT_EQ(r.at(kPll0) & 0x000f0000u, 0x00050000u);
-    EXPECT_EQ(r.at(kPll1) & 0x00f00100u, 0x00600100u);
+    EXPECT_EQ(r.at(kPll1) & 0x00f00100u, 0x00400100u);
     EXPECT_EQ(r.at(kPadctl0) & 0x0000ff00u, 0x00002000u);
     EXPECT_EQ(r.at(kPll4) & 0x00400000u, 0u);
     EXPECT_EQ(r.at(kPadctl2), 0x34123456u);
     EXPECT_EQ(r.at(kDpSpare0) & 0x7u, 0x5u);
     sor.powerDown();
     ASSERT_TRUE(start(2, SWITCH_DP_RATE_RBR)) << why;
-    EXPECT_EQ(r.at(kPll1) & 0x00f00100u, 0x00300100u);
+    EXPECT_EQ(r.at(kPll1) & 0x00f00100u, 0x00400100u);
     EXPECT_EQ(r.at(kPadctl0) & 0x0000ff00u, 0x00003000u);
+    sor.powerDown();
+
+    xusbModel().registers[0x70000804] = (0x21u << 8) | (1u << 4);
+    ASSERT_TRUE(start(4, SWITCH_DP_RATE_HBR2)) << why;
+    EXPECT_EQ(r.at(kPll1) & 0x00f00000u, 0x00600000u);
+    sor.powerDown();
+    ASSERT_TRUE(start(2, SWITCH_DP_RATE_RBR)) << why;
+    EXPECT_EQ(r.at(kPll1) & 0x00f00000u, 0x00300000u);
 }
 
 TEST_F(SorRegisters, AttachAndWakeFollowTrmHandshakeOrder)
 {
     ASSERT_TRUE(start(2, SWITCH_DP_RATE_HBR)) << why;
+    xusbModel().log.clear();
+    sor.detachHead();
+    EXPECT_TRUE(xusbModel().log.empty());
+
     switch_dp_mode mode{};
     ASSERT_TRUE(switch_dp_cta_vic(4, &mode));
     switch_dp_tu tu{};
@@ -474,6 +493,17 @@ TEST_F(SorRegisters, AttachAndWakeFollowTrmHandshakeOrder)
     ASSERT_TRUE(sor.attach(mode, tu, why, sizeof(why))) << why;
     EXPECT_EQ(xusbWritesTo(kSor + 0x018), (std::vector<uint32_t>{0u}));
     EXPECT_LT(xusbFirstWrite(kSor + 0x018), xusbFirstWrite(kSor + 0x020));
+    const uint32_t expectedHead1 =
+        ((switch_dp_mode_vtotal(&mode) - 1u) << 16) | (switch_dp_mode_htotal(&mode) - 1u);
+    EXPECT_EQ(xusbModel().registers.at(kSor + 0x020), expectedHead1);
+    const long seq0 = firstMaskedWrite(kSor + 0x088, 0xffffffff, 0x0080a001u);
+    const long seq8 = firstMaskedWrite(kSor + 0x0a8, 0xffffffff, 0x0080a001u);
+    const long pwr = firstMaskedWrite(kSor + 0x054, (1u << 31) | 1u, (1u << 31) | 1u);
+    ASSERT_GE(seq0, 0);
+    ASSERT_GE(seq8, 0);
+    ASSERT_GE(pwr, 0);
+    EXPECT_LT(seq0, pwr);
+    EXPECT_LT(seq8, pwr);
     EXPECT_EQ(xusbWritesTo(kSuperState1), (std::vector<uint32_t>{0x8u, 0xcu}));
     const long attachWrite = firstMaskedWrite(kSuperState1, 0xffffffff, 0x8u);
     const long normalWrite = firstMaskedWrite(kSuperState1, 0xffffffff, 0xcu, attachWrite);

@@ -485,9 +485,9 @@ IOReturn SwitchDisplayPort::selectMode(int index, bool enable)
             self->modePending = true;
             self->scheduleAux();
             uint64_t deadline = 0;
-            clock_interval_to_deadline(500, kMillisecondScale, &deadline);
+            clock_interval_to_deadline(2500, kMillisecondScale, &deadline);
             while (myGen == self->modeGeneration && (self->modePending || self->stage == Stage::Training)) {
-                const IOReturn wait = self->gate->commandSleep(&self->trainingEvent, deadline, THREAD_ABORTSAFE);
+                const IOReturn wait = self->gate->commandSleep(&self->trainingEvent, deadline, THREAD_UNINT);
                 if (wait == THREAD_TIMED_OUT || wait == THREAD_INTERRUPTED || wait == THREAD_RESTART) {
                     if (myGen == self->modeGeneration && (self->modePending || self->stage == Stage::Training)) {
                         self->teardownLink();
@@ -503,7 +503,7 @@ IOReturn SwitchDisplayPort::selectMode(int index, bool enable)
                 return kIOReturnSuccess;
             return myGen != self->modeGeneration ? kIOReturnAborted : kIOReturnNotReady;
         },
-        this, &req);
+        &req);
 }
 
 bool SwitchDisplayPort::gpuComplete(void *display, int status)

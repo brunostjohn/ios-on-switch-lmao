@@ -261,7 +261,7 @@ bool SwitchExternalScreen::publishModes(OSString *uuid)
 void SwitchExternalScreen::publishActiveGeometry()
 {
     uint64_t geometry = 0;
-    if (connected && selectedMode >= 0 && static_cast<unsigned>(selectedMode) < modes.count) {
+    if (connected && device == 2 && selectedMode >= 0 && static_cast<unsigned>(selectedMode) < modes.count) {
         const auto &selected = modes.modes[selectedMode];
         geometry = (static_cast<uint64_t>(selected.hactive) << 32) | selected.vactive;
     }
@@ -392,6 +392,7 @@ void SwitchExternalScreen::modeFailed()
 void SwitchExternalScreen::clearSinkProperties()
 {
     removeProperty("IOMFBDisplayRefresh");
+    removeProperty("IOMFBHotplugKeysChangedKey");
     removeProperty("TimingElements");
     removeProperty("PreferredTimingElements");
     removeProperty("ColorElements");
@@ -534,20 +535,19 @@ IOReturn SwitchExternalScreen::selectOutput(bool timing, uint32_t value)
                     self->drainSwapQueue();
             }
         } else if (self->selectionGeneration == selGen) {
-            if (prevDevice == 2 && !self->dcb) {
+            self->device = prevDevice;
+            if (!self->dcb) {
                 self->selectedMode = -1;
-                self->device = prevDevice;
                 self->setDisplayWidth(0);
                 self->setDisplayHeight(0);
-                self->publishActiveGeometry();
-                self->drainSwapQueue();
             } else {
                 self->selectedMode = prevMode;
-                self->device = prevDevice;
                 self->setDisplayWidth(prevWidth);
                 self->setDisplayHeight(prevHeight);
-                self->publishActiveGeometry();
             }
+            self->publishActiveGeometry();
+            if (!self->dcb)
+                self->drainSwapQueue();
         }
         return result;
     }, this, &selection);

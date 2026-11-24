@@ -9,9 +9,9 @@
 // GPU interrupt pass. Offers come one at a time under the display's gate: nothing here waits for the GPU.
 //   targets   the display's scanout buffers (three: latest-frame-wins flips), physically contiguous, mapped once
 //             each at kPresentTarget + i * 4 MiB, kind 0xfe
-//   surfaces  the last four swapped surfaces, like the display's own surface maps: each keeps a retained and prepared
+//   surfaces  recently swapped surfaces, like the display's own surface maps: each keeps a retained and prepared
 //             (wired) descriptor and its GPU mapping at kPresentSurface + i * 16 MiB; the least recently offered one goes
-//             when a fifth surface comes. Its CPU caches are cleaned once, when it is imported (the GPU, which wrote it,
+//             when the table fills. Its CPU caches are cleaned once, when it is imported (the GPU, which wrote it,
 //             does not snoop them, and a dirty line written back later would land on its pixels).
 //   read-back debug kernels: two buffers at 0x50000000 + i * 8 MiB (TegraGM20BReadback.cpp)
 // native_legacy_gpu_complete (NativeLegacyDisplay.cpp, declared by TegraScanoutCopy.h) is a plain reference: the kernel's static
@@ -44,9 +44,9 @@ struct PresentSurface {
 };
 
 // TegraScanoutCopy.h: the boot framebuffer and the display's two other buffers
-constexpr unsigned kPresentTargets = 3;
+constexpr unsigned kPresentTargets = 3, kPresentSurfaces = 8;
 PresentTarget gTargets[kPresentTargets];
-PresentSurface gSurfaces[4];
+PresentSurface gSurfaces[kPresentSurfaces];
 uint64_t gSurfaceUses;
 IOLock *gPresentLock;
 SwitchGpuScanoutSnapshot gPresentSnapshot;
@@ -147,7 +147,7 @@ uint64_t presentSurface(IOMemoryDescriptor *memory, uint64_t bytes, bool blockLi
 	uint32_t kind = compressed ? compKind : (blockLinear ? TGM_LAYOUT_KIND : 0);
 	unsigned slot = 0;
 	bool replaceSlot = false;
-	for (unsigned i = 0; i < 4; i++) {
+	for (unsigned i = 0; i < kPresentSurfaces; i++) {
 		if (gSurfaces[i].memory == memory) {
 			bool staleAlias = false;
 			if (gSurfaces[i].ownsMemory && gSurfaces[i].backing) {

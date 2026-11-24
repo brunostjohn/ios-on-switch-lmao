@@ -45,6 +45,7 @@ public:
 private:
     volatile uint8_t *base = nullptr;
     uint8_t lanes = 0;
+    bool headAttached = false;
     uint32_t read(uint32_t word) const;
     void write(uint32_t word, uint32_t value);
     void rmw(uint32_t word, uint32_t clear, uint32_t set);

@@ -197,7 +197,7 @@ void TegraDisplayB::setMode(const struct switch_dp_mode &mode)
 #if DEVELOPMENT || DEBUG
     write(DC_WINBUF_AD_UFLOW_STATUS, 0);
 #endif
-    commit(kGeneralActReq);
+    commit(kGeneralActReq | kWinAActReq);
 }
 
 void TegraDisplayB::enableSor(bool on)
@@ -225,7 +225,9 @@ bool TegraDisplayB::scanout(const Frame &frame)
             emcRefusedLogged = true;
             IOLog("SwitchDisplayPort: DCB memory plan refused (%d); continuing without EMC reservation\n", err);
         }
-        write(DC_CMD_DISPLAY_WINDOW_HEADER, kWindowA);
+    }
+    write(DC_CMD_DISPLAY_WINDOW_HEADER, kWindowA);
+    if (!windowEnabled) {
         write(DC_WINBUF_BLEND_LAYER_CONTROL, (1u << 24) | 255);
         write(DC_WIN_WIN_OPTIONS, kWinEnable);
     }
@@ -267,6 +269,12 @@ bool TegraDisplayB::scanout(const Frame &frame)
     commit(kWinAActReq);
     frameInterrupt(true);
     return true;
+}
+
+void TegraDisplayB::resetWindowCache()
+{
+    windowEnabled = false;
+    active = {};
 }
 
 void TegraDisplayB::windowOff()

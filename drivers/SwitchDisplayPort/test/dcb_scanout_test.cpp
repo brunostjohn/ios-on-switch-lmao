@@ -72,7 +72,9 @@ TEST(DisplayB, OnlyAnActivatedWindowCanRetireOrReleaseItsBandwidth)
     ASSERT_TRUE(display.powerUp(why, sizeof(why))) << why;
     switch_dp_mode mode = {};
     ASSERT_TRUE(switch_dp_cta_vic(16, &mode));
+    xusbModel().log.clear();
     display.setMode(mode);
+    EXPECT_EQ(xusbWritesTo(control), (std::vector<uint32_t>{0x300u, 0x3u}));
     EXPECT_EQ(xusbModel().registers.at(dc + 4 * 0x405), 1u);
     EXPECT_EQ(xusbModel().registers.at(dc + 4 * 0x40), 1u);
     EXPECT_EQ(xusbModel().registers.at(dc + 4 * 0x43) & 4u, 0u);
@@ -118,22 +120,32 @@ TEST(DisplayB, OnlyAnActivatedWindowCanRetireOrReleaseItsBandwidth)
     display.frameInterrupt(false);
     EXPECT_EQ(xusbWritesTo(dc + 4 * 0x39), std::vector<uint32_t>{0});
     EXPECT_EQ(xusbWritesTo(address), std::vector<uint32_t>{0x20000000});
+    EXPECT_EQ(xusbWritesTo(header), std::vector<uint32_t>{1u << 4});
+    EXPECT_LT(xusbFirstWrite(header), xusbFirstWrite(address));
     EXPECT_TRUE(xusbWritesTo(kWinSize).empty());
     EXPECT_TRUE(xusbWritesTo(kWinLineStride).empty());
     EXPECT_EQ(plans.size(), 2u);
+
+    xusbModel().log.clear();
+    display.resetWindowCache();
+    ASSERT_TRUE(display.scanout(fullFrame(0x20000000, 7680, 0x42u)));
+    EXPECT_EQ(xusbWritesTo(options), std::vector<uint32_t>{1u << 30});
+    EXPECT_EQ(xusbWritesTo(kWinSize), std::vector<uint32_t>{(1080u << 16) | 1920u});
+    EXPECT_EQ(xusbWritesTo(kWinLineStride), std::vector<uint32_t>{7680u});
+    EXPECT_EQ(plans.size(), 3u);
     xusbModel().log.clear();
     display.windowOff();
     EXPECT_EQ(xusbWritesTo(header), std::vector<uint32_t>{1u << 4});
     EXPECT_LT(xusbFirstWrite(header), xusbFirstWrite(options));
     EXPECT_EQ(display.windowLatch(0), Latch::Pending);
-    EXPECT_EQ(plans.size(), 2u);
+    EXPECT_EQ(plans.size(), 3u);
     xusbModel().registers[control] = 0;
     xusbModel().registers[options] = 1u << 30;
     EXPECT_EQ(display.windowLatch(0), Latch::Missed);
-    EXPECT_EQ(plans.size(), 2u);
+    EXPECT_EQ(plans.size(), 3u);
     xusbModel().registers[options] = 0;
     EXPECT_EQ(display.windowLatch(0), Latch::Active);
-    ASSERT_EQ(plans.size(), 3u);
+    ASSERT_EQ(plans.size(), 4u);
     EXPECT_EQ(plans.back().head, 1u);
     EXPECT_EQ(plans.back().peak_bytes_per_second, 0u);
 }
