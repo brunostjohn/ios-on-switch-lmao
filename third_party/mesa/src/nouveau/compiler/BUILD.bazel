@@ -676,3 +676,57 @@ py_test(
     data = [":nak_interlock_test_host"],
     main = "run_host_test.py",
 )
+
+mesa_cc_library(
+    name = "nak_fp_inval_test_objects",
+    testonly = True,
+    c_args = mesa_args(
+        "c",
+        include_dirs = [
+            "include",
+            "gen:include",
+            "src",
+            "gen:src",
+            "src/compiler",
+            "gen:src/compiler",
+            "src/compiler/nir",
+            "gen:src/compiler/nir",
+            "gen:src/util",
+            "gen:src/util/format",
+        ],
+    ),
+    sources = ["nak_fp_inval_test.c"],
+)
+
+fs_depth_test_binary(
+    name = "nak_fp_inval_test_bin",
+    testonly = True,
+    archives = [
+        ":nak_fp_inval_test_objects",
+        "//third_party/mesa/src/compiler/nir:nir",
+        "//third_party/mesa/src/compiler:compiler",
+        "//third_party/mesa/src/util:mesa_util",
+        "//third_party/mesa/src/util:mesa_util_simd",
+        "//third_party/mesa/src/c11/impl:mesa_util_c11",
+        "//third_party/mesa/src/util/blake3",
+    ],
+)
+
+mesa_files(
+    name = "nak_fp_inval_test_host",
+    testonly = True,
+    srcs = [":nak_fp_inval_test_bin"],
+    platform = "macos",
+)
+
+py_test(
+    name = "fp_inval_test",
+    size = "small",
+    srcs = ["run_host_test.py"],
+    args = [
+        "$(rootpath :nak_fp_inval_test_host)",
+        "fp-inval",
+    ],
+    data = [":nak_fp_inval_test_host"],
+    main = "run_host_test.py",
+)
