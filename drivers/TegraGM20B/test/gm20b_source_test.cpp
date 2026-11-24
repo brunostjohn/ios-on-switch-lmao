@@ -415,8 +415,9 @@ TEST(GM20BPresentSource, OneL2FlushPerPresent)
 	EXPECT_TRUE(
 		Block(gpu(), "void tgm_present_push_copy(")
 			.before("NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", "tgm_copy_texels("));
+	EXPECT_TRUE(copy.has("switch_gpu_present_tokens_need_l2_flush("));
 	EXPECT_TRUE(copy.has(
-		"switch_gpu_chan_fence_sealed(chan, dst_va ? TGM_FENCE_VOLATILE_WRITES : 1,"));
+		"switch_gpu_chan_fence_sealed(chan, need_flush ? 1 : TGM_FENCE_VOLATILE_WRITES,"));
 	const CodeText fence = Block(gpu(), "static u32 chan_fence_job(");
 	EXPECT_TRUE(
 		fence.before("NVB06F_FB_FLUSH, 0); if (external != TGM_FENCE_VOLATILE_WRITES) {",
@@ -1326,8 +1327,8 @@ TEST(GM20BJobSource, AWriterPromiseIsTheConnectionsAndEndsWithIt)
 TEST(GM20BPresentSource, AWatchedPresentIsCompletedByItsProducersInterruptPass)
 {
 	const CodeText fenced = Block(gpu(), "static inline void present_watch_fenced(");
-	EXPECT_TRUE(fenced.has("switch_gpu_present_watch_fenced(&tgm_present.watch, chan->id, "
-			       "tgm_chan_completed(chan))"));
+	EXPECT_TRUE(fenced.has("switch_gpu_present_watch_fenced_any(&tgm_present.watch, chan->id, "
+			       "tgm_chan_completed(chan), &matched)"));
 	EXPECT_FALSE(fenced.has("mutex_lock"));
 	EXPECT_FALSE(fenced.has("finish_visible"));
 	const CodeText killed =
@@ -1353,14 +1354,13 @@ TEST(GM20BPresentSource, AWatchedPresentIsCompletedByItsProducersInterruptPass)
 	EXPECT_FALSE(deliver.has("mutex_lock"));
 	const CodeText arm = Block(
 		gpu(), "int tgm_present_watch_dependencies(void (*done)(void *, int), void *arg,");
-	EXPECT_TRUE(
-		arm.before("switch_gpu_present_watch_arm(", "mutex_unlock(&tgm_present.lock);"));
-	EXPECT_TRUE(arm.before("gate_leave();", "present_physical(&tgm_present.watch.token)"));
-	// every producer is asked, of the channel its token names, between the arm and the last look: the job that keeps a
-	// writer promise in the promise's place once it is submitted
-	const char *const ask = "tgm_chan_need_tokens(kept.engine ? &kept : dependencies, "
-				"kept.engine ? 1 : dependency_count);";
-	EXPECT_TRUE(arm.before("switch_gpu_present_watch_arm(", ask));
+	EXPECT_TRUE(arm.before("switch_gpu_present_watch_arm_many(",
+			       "mutex_unlock(&tgm_present.lock);"));
+	EXPECT_TRUE(arm.before("gate_leave();",
+			       "switch_gpu_present_watch_check(&tgm_present.watch, watch_gen, "
+			       "watch_tokens, watch_count, present_physical)"));
+	const char *const ask = "tgm_chan_need_tokens(watch_tokens, watch_count);";
+	EXPECT_TRUE(arm.before("switch_gpu_present_watch_arm_many(", ask));
 	EXPECT_TRUE(arm.before("gate_leave();", ask));
 	EXPECT_TRUE(arm.before("tgm_present_promise_watch(&kept);",
 			       "switch_gpu_present_watch_promise("));
@@ -1374,8 +1374,9 @@ TEST(GM20BPresentSource, AWatchedPresentIsCompletedByItsProducersInterruptPass)
 				"tgm_chan_need_tokens(producer, 1);"));
 	EXPECT_TRUE(kept.before("tgm_chan_need_tokens(producer, 1);",
 				"switch_gpu_backing_token_physical_status(producer, 0)"));
-	EXPECT_TRUE(
-		arm.before("tgm_chan_need_tokens(", "present_physical(&tgm_present.watch.token)"));
+	EXPECT_TRUE(arm.before("tgm_chan_need_tokens(",
+			       "switch_gpu_present_watch_check(&tgm_present.watch, watch_gen, "
+			       "watch_tokens, watch_count, present_physical)"));
 	EXPECT_FALSE(arm.has("tgm_chan_need_uid("));
 	EXPECT_TRUE(
 		arm.has("nvxnu_work_schedule_after(tgm_present.deadline_work, TGM_PRESENT_NS);"));
@@ -1384,10 +1385,10 @@ TEST(GM20BPresentSource, AWatchedPresentIsCompletedByItsProducersInterruptPass)
 	// the deadline never delivers a watch: it follows the work an asked interrupt is behind, or panics for a lost one
 	const CodeText deadline = Block(gpu(), "void tgm_present_deadline(void *arg)");
 	EXPECT_FALSE(deadline.has("present_watch_work("));
-	EXPECT_TRUE(deadline.before(
-		"watched = switch_gpu_backing_token_physical_status(&tgm_present.watch.token, 0);",
-		"mutex_lock(&tgm_live_lock);"));
-	EXPECT_TRUE(deadline.before("if (watch_late(watched, age, &waited, &seqno)) {",
+	EXPECT_TRUE(
+		deadline.before("switch_gpu_backing_token_physical_status(&watch_tokens[i], 0);",
+				"mutex_lock(&tgm_live_lock);"));
+	EXPECT_TRUE(deadline.before("if (watch_late(&late_token, watched, age, &waited, &seqno)) {",
 				    "tgm_hang_recover("));
 	const CodeText late = Block(gpu(), "static int watch_late(");
 	EXPECT_TRUE(late.before("switch_gpu_quiet_interrupt(", "nvxnu_panic("));

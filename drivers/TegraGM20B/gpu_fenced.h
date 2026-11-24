@@ -300,9 +300,10 @@ static inline void present_fenced(struct tgm_chan *chan)
  * watch to the work item. */
 static inline void present_watch_fenced(struct tgm_chan *chan, int killed)
 {
-	if (switch_gpu_present_watch_fenced(&tgm_present.watch, chan->id,
-					    tgm_chan_completed(chan)) &&
-	    killed)
+	int matched = 0;
+	const int due = switch_gpu_present_watch_fenced_any(&tgm_present.watch, chan->id,
+							    tgm_chan_completed(chan), &matched);
+	if (killed && (due || matched))
 		nvxnu_work_schedule(tgm_present.watch_work);
 }
 
