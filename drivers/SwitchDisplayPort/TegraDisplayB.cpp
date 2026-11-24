@@ -57,6 +57,7 @@ enum : uint32_t {
     DC_DISP_BLEND_BACKGROUND_COLOR = 0x4e4,
     DC_WIN_WIN_OPTIONS = 0x700,
     DC_WIN_BYTE_SWAP = 0x701,
+    DC_WIN_BUFFER_CONTROL = 0x702,
     DC_WIN_COLOR_DEPTH = 0x703,
     DC_WIN_POSITION = 0x704,
     DC_WIN_SIZE = 0x705,
@@ -65,6 +66,8 @@ enum : uint32_t {
     DC_WIN_V_INITIAL_DDA = 0x708,
     DC_WIN_DDA_INC = 0x709,
     DC_WIN_LINE_STRIDE = 0x70a,
+    DC_WIN_BUF_STRIDE = 0x70b,
+    DC_WIN_UV_BUF_STRIDE = 0x70c,
     DC_WIN_BUFFER_ADDR_MODE = 0x70d,
     DC_WIN_DV_CONTROL = 0x70e,
     DC_WINBUF_BLEND_LAYER_CONTROL = 0x716,
@@ -72,6 +75,8 @@ enum : uint32_t {
     DC_WINBUF_ADDR_H_OFFSET = 0x806,
     DC_WINBUF_ADDR_V_OFFSET = 0x808,
     DC_WINBUF_SURFACE_KIND = 0x80b,
+    DC_WINBUF_START_ADDR_HI = 0x80d,
+    DC_WINBUF_CDE_CONTROL = 0x82f,
     DC_WINBUF_AD_UFLOW_STATUS = 0xbca,
 };
 
@@ -122,6 +127,9 @@ void TegraDisplayB::write(uint32_t word, uint32_t value)
 
 void TegraDisplayB::commit(uint32_t update)
 {
+#if defined(__aarch64__) && !defined(SWITCH_MMIO_HOST_MODEL)
+    __asm__ volatile("dsb sy" ::: "memory");
+#endif
     write(DC_CMD_STATE_CONTROL, update << 8);
     write(DC_CMD_STATE_CONTROL, update);
 }
@@ -142,6 +150,7 @@ bool TegraDisplayB::powerUp(char *why, size_t size)
     switch_car_rmw(kLvl2ClockGateOverrideA, kOverrideDisb, 0);
     IODelay(1);
     tegra_mc_hot_reset(kMcHotResetControl, kMcHotResetDcb, false);
+    emcRefusedLogged = false;
     for (const Reg &reg : kInit) {
         write(reg.index, reg.value);
     }
@@ -154,7 +163,9 @@ void TegraDisplayB::setMode(const struct switch_dp_mode &mode)
               switch_dp_mode_htotal(&mode), switch_dp_mode_vtotal(&mode), 0, 0, {}};
     active = {};
     windowEnabled = false;
+    emcRefusedLogged = false;
     write(DC_CMD_DISPLAY_WINDOW_HEADER, kWindowA);
+    write(DC_WIN_BUFFER_CONTROL, 0);
     write(DC_WIN_COLOR_DEPTH, kB8G8R8A8);
     write(DC_WIN_BYTE_SWAP, 0);
     write(DC_WIN_POSITION, 0);
@@ -163,9 +174,13 @@ void TegraDisplayB::setMode(const struct switch_dp_mode &mode)
     write(DC_WIN_H_INITIAL_DDA, 0);
     write(DC_WIN_V_INITIAL_DDA, 0);
     write(DC_WIN_DDA_INC, (kDdaOne << 16) | kDdaOne);
+    write(DC_WIN_BUF_STRIDE, 0);
+    write(DC_WIN_UV_BUF_STRIDE, 0);
     write(DC_WIN_BUFFER_ADDR_MODE, 0);
     write(DC_WINBUF_ADDR_H_OFFSET, 0);
     write(DC_WINBUF_ADDR_V_OFFSET, 0);
+    write(DC_WINBUF_START_ADDR_HI, 0);
+    write(DC_WINBUF_CDE_CONTROL, 0);
     write(DC_DISP_DISP_CLOCK_CONTROL, 0);
     write(DC_DISP_DISP_TIMING_OPTIONS, 1u);
     write(DC_DISP_REF_TO_SYNC, (1u << 16) | 1u);
@@ -187,8 +202,11 @@ void TegraDisplayB::setMode(const struct switch_dp_mode &mode)
 
 void TegraDisplayB::enableSor(bool on)
 {
+    const uint32_t value = on ? kSor1Enable : 0u;
+    write(DC_CMD_STATE_ACCESS, kStateAccessReadActive);
+    write(DC_DISP_DISP_WIN_OPTIONS, value);
     write(DC_CMD_STATE_ACCESS, kStateAccessReadActive | kStateAccessWriteActive);
-    write(DC_DISP_DISP_WIN_OPTIONS, on ? kSor1Enable : 0u);
+    write(DC_DISP_DISP_WIN_OPTIONS, value);
     write(DC_CMD_STATE_ACCESS, kStateAccessReadActive);
 }
 
@@ -198,10 +216,15 @@ bool TegraDisplayB::scanout(const Frame &frame)
         auto next = memory;
         next.peak_bytes_per_second = uint64_t(next.pixel_clock_hz) * 4;
         if (!switch_display::memoryWindow(next.windows[0], next.peak_bytes_per_second, next.active_width,
-                                         next.active_height, next.active_width, next.active_height, false, false, false) ||
-            switch_emc_display_memory_reserve(&next))
+                                          next.active_height, next.active_width, next.active_height, false,
+                                          frame.kind == 0, false))
             return false;
-        memory = next;
+        if (const int err = switch_emc_display_memory_reserve(&next); err == 0) {
+            memory = next;
+        } else if (!emcRefusedLogged) {
+            emcRefusedLogged = true;
+            IOLog("SwitchDisplayPort: DCB memory plan refused (%d); continuing without EMC reservation\n", err);
+        }
         write(DC_CMD_DISPLAY_WINDOW_HEADER, kWindowA);
         write(DC_WINBUF_BLEND_LAYER_CONTROL, (1u << 24) | 255);
         write(DC_WIN_WIN_OPTIONS, kWinEnable);
@@ -249,6 +272,7 @@ bool TegraDisplayB::scanout(const Frame &frame)
 void TegraDisplayB::windowOff()
 {
     windowEnabled = false;
+    write(DC_CMD_DISPLAY_WINDOW_HEADER, kWindowA);
     write(DC_WIN_WIN_OPTIONS, 0);
     commit(kWinAActReq);
 }
@@ -291,6 +315,7 @@ uint32_t TegraDisplayB::takeInterrupt()
 {
     const uint32_t cause = read(DC_CMD_INT_STATUS);
     write(DC_CMD_INT_STATUS, cause);
+    (void)read(DC_CMD_INT_STATUS);
     return cause;
 }
 
@@ -302,6 +327,7 @@ void TegraDisplayB::powerDown()
     write(DC_CMD_INT_ENABLE, 0);
     frameInterruptEnabled = false;
     windowEnabled = false;
+    emcRefusedLogged = false;
     active = {};
     write(DC_CMD_INT_MASK, 0);
     write(DC_CMD_STATE_ACCESS, kStateAccessReadActive | kStateAccessWriteActive);

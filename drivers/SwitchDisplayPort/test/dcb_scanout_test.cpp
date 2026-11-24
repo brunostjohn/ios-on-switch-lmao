@@ -8,13 +8,16 @@
 namespace {
 constexpr uintptr_t dc = 0x54240000, kSor = 0x54580000, kDpaux = 0x54040000;
 constexpr uintptr_t kCar = 0x60006000, kPmc = 0x7000e400;
-constexpr uintptr_t control = dc + 4 * 0x41, options = dc + 4 * 0x700, address = dc + 4 * 0x800;
+constexpr uintptr_t control = dc + 4 * 0x41, header = dc + 4 * 0x42, options = dc + 4 * 0x700,
+                    address = dc + 4 * 0x800;
 constexpr uintptr_t kStateAccess = dc + 4 * 0x40, kDispWinOptions = dc + 4 * 0x402;
 constexpr uintptr_t kDisplayCmd = dc + 4 * 0x32, kDisplayPwr = dc + 4 * 0x36;
-constexpr uintptr_t kWinColorDepth = dc + 4 * 0x703, kWinPos = dc + 4 * 0x704;
+constexpr uintptr_t kWinBufCtrl = dc + 4 * 0x702, kWinColorDepth = dc + 4 * 0x703, kWinPos = dc + 4 * 0x704;
 constexpr uintptr_t kWinSize = dc + 4 * 0x705, kWinPrescaled = dc + 4 * 0x706;
-constexpr uintptr_t kWinLineStride = dc + 4 * 0x70a, kWinBlend = dc + 4 * 0x716;
-constexpr uintptr_t kWinHOffset = dc + 4 * 0x806, kWinVOffset = dc + 4 * 0x808, kWinKind = dc + 4 * 0x80b;
+constexpr uintptr_t kWinLineStride = dc + 4 * 0x70a, kWinBufStride = dc + 4 * 0x70b, kWinUvBufStride = dc + 4 * 0x70c,
+                    kWinBlend = dc + 4 * 0x716;
+constexpr uintptr_t kWinHOffset = dc + 4 * 0x806, kWinVOffset = dc + 4 * 0x808, kWinKind = dc + 4 * 0x80b,
+                    kWinStartAddrHi = dc + 4 * 0x80d, kWinCdeCtrl = dc + 4 * 0x82f;
 constexpr uint32_t kMcHotResetCtrl = 0x200, kMcHotResetStatus = 0x204, kMcHotResetDcb = 1u << 3;
 std::vector<switch_display_memory_head> plans;
 bool admit;
@@ -73,25 +76,42 @@ TEST(DisplayB, OnlyAnActivatedWindowCanRetireOrReleaseItsBandwidth)
     EXPECT_EQ(xusbModel().registers.at(dc + 4 * 0x405), 1u);
     EXPECT_EQ(xusbModel().registers.at(dc + 4 * 0x40), 1u);
     EXPECT_EQ(xusbModel().registers.at(dc + 4 * 0x43) & 4u, 0u);
+    EXPECT_EQ(xusbModel().registers.at(kWinBufCtrl), 0u);
+    EXPECT_EQ(xusbModel().registers.at(kWinBufStride), 0u);
+    EXPECT_EQ(xusbModel().registers.at(kWinUvBufStride), 0u);
+    EXPECT_EQ(xusbModel().registers.at(kWinStartAddrHi), 0u);
+    EXPECT_EQ(xusbModel().registers.at(kWinCdeCtrl), 0u);
     xusbModel().log.clear();
     admit = false;
-    EXPECT_FALSE(display.scanout(fullFrame(0x10000000)));
-    EXPECT_TRUE(xusbWritesTo(options).empty());
-    EXPECT_TRUE(xusbWritesTo(address).empty());
-    admit = true;
     ASSERT_TRUE(display.scanout(fullFrame(0x10000000)));
+    EXPECT_EQ(xusbWritesTo(options), std::vector<uint32_t>{1u << 30});
+    EXPECT_EQ(xusbWritesTo(address), std::vector<uint32_t>{0x10000000});
+    ASSERT_EQ(plans.size(), 1u);
+    EXPECT_EQ(plans.back().windows[0].required_buffering_bytes, 0u);
+    display.windowOff();
+    xusbModel().registers[control] = 0;
+    xusbModel().registers[options] = 0;
+    EXPECT_EQ(display.windowLatch(0), TegraDisplayB::Latch::Active);
+    EXPECT_EQ(plans.size(), 1u);
+
+    xusbModel().log.clear();
+    admit = true;
+    ASSERT_TRUE(display.scanout(fullFrame(0x10000000, 7680, 0x42u)));
     ASSERT_EQ(plans.size(), 2u);
     EXPECT_EQ(plans.back().head, 1u);
     EXPECT_EQ(plans.back().peak_bytes_per_second, 594000000u);
+    EXPECT_GT(plans.back().windows[0].required_buffering_bytes, 0u);
     using Latch = TegraDisplayB::Latch;
     EXPECT_EQ(display.windowLatch(0x10000000), Latch::Pending);
     xusbModel().registers[control] = 0;
     EXPECT_EQ(display.windowLatch(0x20000000), Latch::Missed);
     EXPECT_EQ(display.windowLatch(0x10000000), Latch::Active);
     xusbModel().log.clear();
-    ASSERT_TRUE(display.scanout(fullFrame(0x20000000)));
+    ASSERT_TRUE(display.scanout(fullFrame(0x20000000, 7680, 0x42u)));
     xusbModel().registers[dc + 4 * 0x37] = 2;
+    const unsigned statusReadsBefore = xusbModel().reads[dc + 4 * 0x37];
     EXPECT_EQ(display.takeInterrupt(), 2u);
+    EXPECT_EQ(xusbModel().reads[dc + 4 * 0x37], statusReadsBefore + 2u);
     EXPECT_EQ(display.windowLatch(0x20000000), Latch::Pending);
     display.frameInterrupt(true);
     EXPECT_TRUE(xusbWritesTo(dc + 4 * 0x39).empty());
@@ -101,7 +121,10 @@ TEST(DisplayB, OnlyAnActivatedWindowCanRetireOrReleaseItsBandwidth)
     EXPECT_TRUE(xusbWritesTo(kWinSize).empty());
     EXPECT_TRUE(xusbWritesTo(kWinLineStride).empty());
     EXPECT_EQ(plans.size(), 2u);
+    xusbModel().log.clear();
     display.windowOff();
+    EXPECT_EQ(xusbWritesTo(header), std::vector<uint32_t>{1u << 4});
+    EXPECT_LT(xusbFirstWrite(header), xusbFirstWrite(options));
     EXPECT_EQ(display.windowLatch(0), Latch::Pending);
     EXPECT_EQ(plans.size(), 2u);
     xusbModel().registers[control] = 0;
@@ -197,18 +220,18 @@ TEST(DisplayB, TeardownUsesActiveWriteMuxAndFlushesMcHotResetBeforeReset)
 
     model.log.clear();
     display.enableSor(true);
-    EXPECT_EQ(xusbWritesTo(kStateAccess), (std::vector<uint32_t>{5u, 1u}));
-    EXPECT_EQ(xusbWritesTo(kDispWinOptions), (std::vector<uint32_t>{1u << 26}));
+    EXPECT_EQ(xusbWritesTo(kStateAccess), (std::vector<uint32_t>{1u, 5u, 1u}));
+    EXPECT_EQ(xusbWritesTo(kDispWinOptions), (std::vector<uint32_t>{1u << 26, 1u << 26}));
     EXPECT_LT(xusbFirstWrite(kStateAccess), xusbFirstWrite(kDispWinOptions));
     EXPECT_EQ(model.registers[kDispWinOptions], 1u << 26);
 
     model.log.clear();
     display.enableSor(false);
-    EXPECT_EQ(xusbWritesTo(kStateAccess), (std::vector<uint32_t>{5u, 1u}));
-    EXPECT_EQ(xusbWritesTo(kDispWinOptions), (std::vector<uint32_t>{0u}));
-    const long activeMux = xusbFirstWrite(kStateAccess);
+    EXPECT_EQ(xusbWritesTo(kStateAccess), (std::vector<uint32_t>{1u, 5u, 1u}));
+    EXPECT_EQ(xusbWritesTo(kDispWinOptions), (std::vector<uint32_t>{0u, 0u}));
+    const long activeMux = xusbFirstWrite(kStateAccess, 5u);
     const long clearSor = xusbFirstWrite(kDispWinOptions);
-    EXPECT_LT(activeMux, clearSor);
+    EXPECT_GT(activeMux, clearSor);
 
     model.log.clear();
     mcStatusReads = 0;

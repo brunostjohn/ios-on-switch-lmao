@@ -183,6 +183,33 @@ TEST(ExternalGeometry, BlockLinearOffsetsAndKind)
     EXPECT_EQ(frame.size, (800u << 16) | 500u);
 }
 
+TEST(ExternalGeometry, BlockLinearNon16PxClonedWidths)
+{
+    struct Case {
+        uint32_t w, h, modeW, modeH;
+    };
+    const Case cases[] = {
+        {405, 720, 1280, 720},
+        {506, 900, 1600, 900},
+        {605, 1080, 1920, 1080},
+    };
+    for (const auto &c : cases) {
+        const auto layout = blockLayout(c.w, c.h, 4);
+        EXPECT_NE((c.w * 4u) % 64u, 0u);
+        EXPECT_EQ(layout.rowBytes % 64u, 0u);
+        const Rect src = {0, 0, static_cast<int32_t>(c.w), static_cast<int32_t>(c.h)};
+        const Rect dst = {static_cast<int32_t>((c.modeW - c.w) / 2u), 0, static_cast<int32_t>(c.w),
+                          static_cast<int32_t>(c.h)};
+        const auto frame = switch_external_frame(layout, src, dst, c.modeW, c.modeH);
+        ASSERT_TRUE(frame.valid) << c.w << "x" << c.h;
+        EXPECT_TRUE(frame.visible);
+        EXPECT_EQ(frame.stride, layout.rowBytes);
+        EXPECT_EQ(frame.size, (c.h << 16) | c.w);
+        EXPECT_EQ(frame.prescaled, (c.h << 16) | (c.w * 4u));
+        EXPECT_EQ(frame.kind, 2u | (4u << 4));
+    }
+}
+
 TEST(ExternalGeometry, FormatsAndLayerIndices)
 {
     EXPECT_EQ(colorDepthOf(kFourccBgra, 0), kDepthB8G8R8A8);

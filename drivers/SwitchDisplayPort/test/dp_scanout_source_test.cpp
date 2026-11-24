@@ -65,8 +65,61 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     const auto header = SourceText("../SwitchExternalScreen.h");
     EXPECT_NE(header.find("kSlotSpan = 16ULL << 20"), std::string::npos);
     EXPECT_NE(header.find("static_assert(kTablePages == 13);"), std::string::npos);
+    EXPECT_EQ(header.find("getWorkLoop()"), std::string::npos);
+    EXPECT_NE(header.find("setPowerState(unsigned long ordinal, IOService *whatDevice) override"), std::string::npos);
+    EXPECT_NE(header.find("void stop(IOService *provider) override"), std::string::npos);
 
     const auto service = SourceText("../SwitchDisplayPort.cpp");
+    const auto beginPort = Block(service, "bool SwitchDisplayPort::begin()");
+    EXPECT_TRUE(beginPort.before("screen = OSTypeAlloc(SwitchExternalScreen);", "loop = screen->getWorkLoop();"));
+    EXPECT_TRUE(beginPort.before("loop = screen->getWorkLoop();", "loop->retain();"));
+    EXPECT_TRUE(beginPort.before("loop->retain();", "screen->begin(this, loop)"));
+    EXPECT_FALSE(beginPort.has("IOWorkLoop::workLoop()"));
+
+    const auto beginScreen = Block(lifecycle, "bool SwitchExternalScreen::begin(");
+    EXPECT_TRUE(beginScreen.before("setInternalDisplay(false);", "IOMobileFramebufferLegacy::start(nub)"));
+    EXPECT_FALSE(beginScreen.has("registerService();"));
+    EXPECT_TRUE(beginScreen.before("PMinit();", "nub->joinPMtree(this);"));
+    EXPECT_TRUE(beginScreen.before("nub->joinPMtree(this);", "registerPowerDriver(this, states, 2)"));
+    EXPECT_TRUE(beginScreen.before("registerPowerDriver(this, states, 2)", "changePowerStateToPriv(1)"));
+
+    const auto power = Block(lifecycle, "IOReturn SwitchExternalScreen::setPowerState(");
+    EXPECT_TRUE(power.has("if (ordinal > 1) return kIOReturnUnsupported;"));
+    EXPECT_TRUE(power.has("IOMobileFramebufferLegacy::setPowerState(ordinal, whatDevice)"));
+    EXPECT_TRUE(power.has("self->drainSwapQueue();"));
+    EXPECT_TRUE(power.has("self->kickSwapQueue();"));
+
+    const auto publish = Block(lifecycle, "bool SwitchExternalScreen::publish(");
+    EXPECT_TRUE(publish.before("setProperty(\"IOMFBHotplugKeysChangedKey\", kOSBooleanTrue);",
+                               "IOMobileFramebufferLegacy::hotPlugNotify(1);"));
+
+    EXPECT_TRUE(detach.has("setDisplayWidth(0);"));
+    EXPECT_TRUE(detach.has("setDisplayHeight(0);"));
+    EXPECT_TRUE(Block(lifecycle, "void SwitchExternalScreen::linkUp(").has("dcb->frameInterrupt(true);"));
+    EXPECT_TRUE(select.before("self->device = device;", "self->transport->selectMode(index, device == 2)"));
+    EXPECT_TRUE(validate.has("layer.transform = transforms[i] & 7u;"));
+
+    const auto mapDom = Block(source, "bool SwitchExternalScreen::mapDomain()");
+    EXPECT_TRUE(mapDom.has("(1u << 2) | (1u << 4) | (1u << 6)"));
+    EXPECT_FALSE(mapDom.has("1u << 17"));
+    EXPECT_TRUE(prepare.has("allocation.pages[offset / 4096]"));
+    EXPECT_FALSE(prepare.has("allocation.pages[0]"));
+
+    EXPECT_TRUE(latch.has("if (receipt == TegraDisplayB::Latch::Missed)"));
+    EXPECT_FALSE(latch.has("return false;"));
+    EXPECT_TRUE(latch.has("dcb->frameInterrupt(true);"));
+
+    const auto dcIrq = Block(service, "void SwitchDisplayPort::dcInterrupt(");
+    EXPECT_FALSE(dcIrq.has("self->fail(\"DCB\""));
+
+    const auto selectMode = Block(service, "IOReturn SwitchDisplayPort::selectMode(");
+    EXPECT_TRUE(selectMode.has("gate->runAction("));
+    EXPECT_TRUE(selectMode.has("commandSleep(&self->trainingEvent, deadline, THREAD_ABORTSAFE)"));
+    EXPECT_TRUE(selectMode.has("self->stage == Stage::Running && self->wantedMode == r.index"));
+
+    const auto session = SourceText("../SwitchDPSession.cpp");
+    EXPECT_TRUE(Block(session, "void SwitchDisplayPort::trained()").has("wakeModeWaiters(false);"));
+
     const auto teardown = Block(service, "void SwitchDisplayPort::teardownLink()");
     EXPECT_TRUE(teardown.before("dcb.powerDown();", "sor.powerDown();"));
     const auto auxTimer = Block(service, "void SwitchDisplayPort::auxTimerFired(");

@@ -3,6 +3,8 @@
 #include "SwitchDisplayPort.h"
 
 #include <IOKit/IOLib.h>
+#include <kern/clock.h>
+#include <kern/sched_prim.h>
 #include <kern/thread_call.h>
 #include <libkern/OSKextLib.h>
 
@@ -69,6 +71,63 @@ extern "C" void switch_displayport_alt_mode(unsigned lanes, bool flipped, bool d
     thread_call_enter(gApply);
 }
 
+void SwitchDisplayPort::releaseResources()
+{
+    if (loop) {
+        if (cecTimer)
+            loop->removeEventSource(cecTimer);
+        if (stepTimer)
+            loop->removeEventSource(stepTimer);
+        if (auxTimer)
+            loop->removeEventSource(auxTimer);
+        if (dcSource)
+            loop->removeEventSource(dcSource);
+        if (auxSource)
+            loop->removeEventSource(auxSource);
+        if (gate)
+            loop->removeEventSource(gate);
+    }
+    OSSafeReleaseNULL(cecTimer);
+    OSSafeReleaseNULL(stepTimer);
+    OSSafeReleaseNULL(auxTimer);
+    OSSafeReleaseNULL(dcSource);
+    OSSafeReleaseNULL(auxSource);
+    OSSafeReleaseNULL(gate);
+    OSSafeReleaseNULL(screen);
+    OSSafeReleaseNULL(loop);
+}
+
+void SwitchDisplayPort::stop(IOService *provider)
+{
+    if (loop) {
+        loop->runAction(
+            [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
+                auto *self = static_cast<SwitchDisplayPort *>(owner);
+                self->powerOff();
+                if (self->screen)
+                    self->screen->detach();
+                return kIOReturnSuccess;
+            },
+            this);
+    }
+    releaseResources();
+    IOService::stop(provider);
+}
+
+void SwitchDisplayPort::free()
+{
+    releaseResources();
+    IOService::free();
+}
+
+void SwitchDisplayPort::wakeModeWaiters(bool abort)
+{
+    if (abort)
+        ++modeGeneration;
+    if (gate)
+        gate->commandWakeup(&trainingEvent, false);
+}
+
 bool SwitchDisplayPort::begin()
 {
     if (!gScreenClassRegistered) {
@@ -78,15 +137,25 @@ bool SwitchDisplayPort::begin()
             return false;
         gScreenClassRegistered = true;
     }
-    loop = IOWorkLoop::workLoop();
-    gate = loop ? IOCommandGate::commandGate(this) : nullptr;
+    screen = OSTypeAlloc(SwitchExternalScreen);
+    if (!screen || !screen->init()) {
+        OSSafeReleaseNULL(screen);
+        return false;
+    }
+    loop = screen->getWorkLoop();
+    if (!loop) {
+        OSSafeReleaseNULL(screen);
+        return false;
+    }
+    loop->retain();
+    gate = IOCommandGate::commandGate(this);
     IOService *auxNub = switch_interrupt_nub(TEGRA_DPAUX1_INTID, false);
     IOService *dcNub = switch_interrupt_nub(TEGRA_DISPLAY_B_INTID, false);
-    auxSource = loop && auxNub ? IOInterruptEventSource::interruptEventSource(this, &auxInterrupt, auxNub, 0) : nullptr;
-    dcSource = loop && dcNub ? IOInterruptEventSource::interruptEventSource(this, &dcInterrupt, dcNub, 0) : nullptr;
-    auxTimer = loop ? IOTimerEventSource::timerEventSource(this, &auxTimerFired) : nullptr;
-    stepTimer = loop ? IOTimerEventSource::timerEventSource(this, &stepTimerFired) : nullptr;
-    cecTimer = loop ? IOTimerEventSource::timerEventSource(this, &cecTimerFired) : nullptr;
+    auxSource = auxNub ? IOInterruptEventSource::interruptEventSource(this, &auxInterrupt, auxNub, 0) : nullptr;
+    dcSource = dcNub ? IOInterruptEventSource::interruptEventSource(this, &dcInterrupt, dcNub, 0) : nullptr;
+    auxTimer = IOTimerEventSource::timerEventSource(this, &auxTimerFired);
+    stepTimer = IOTimerEventSource::timerEventSource(this, &stepTimerFired);
+    cecTimer = IOTimerEventSource::timerEventSource(this, &cecTimerFired);
     if (gate == nullptr || auxSource == nullptr || dcSource == nullptr || auxTimer == nullptr || stepTimer == nullptr ||
         cecTimer == nullptr || loop->addEventSource(gate) != kIOReturnSuccess ||
         loop->addEventSource(auxSource) != kIOReturnSuccess || loop->addEventSource(dcSource) != kIOReturnSuccess ||
@@ -95,9 +164,10 @@ bool SwitchDisplayPort::begin()
         panic("SwitchDisplayPort: cannot attach the DPAUX1 (INTID %u) or display controller B (INTID %u) interrupt",
               TEGRA_DPAUX1_INTID, TEGRA_DISPLAY_B_INTID);
     }
-    screen = OSTypeAlloc(SwitchExternalScreen);
-    if (!screen || !screen->init() || !screen->begin(this, loop))
+    if (!screen->begin(this, loop)) {
+        releaseResources();
         return false;
+    }
     setName("SwitchDisplayPort");
     registerService();
     return true;
@@ -178,8 +248,8 @@ void SwitchDisplayPort::dcInterrupt(OSObject *owner, IOInterruptEventSource *, i
     if (!self->dcbUp)
         return;
     const uint32_t cause = self->dcb.takeInterrupt();
-    if ((cause & (1u << 1)) && !self->screen->frameEnd())
-        self->fail("DCB", "window A activation completed with a different scanout");
+    if (cause & (1u << 1))
+        (void)self->screen->frameEnd();
 }
 
 void SwitchDisplayPort::auxStart(const struct switch_dp_aux_request &transaction, Next then)
@@ -285,6 +355,7 @@ void SwitchDisplayPort::fail(const char *what, const char *why)
     if (stage != Stage::Off) {
         stage = probed ? Stage::Ready : Stage::Waiting;
     }
+    wakeModeWaiters(true);
     if (probed)
         screen->modeFailed();
 }
@@ -339,6 +410,7 @@ void SwitchDisplayPort::powerOff()
         aux.powerDown();
     }
     stage = Stage::Off;
+    wakeModeWaiters(true);
 }
 
 void SwitchDisplayPort::plugged()
@@ -365,6 +437,7 @@ void SwitchDisplayPort::unplugged()
     cecReleasePending = true;
     cecRestartPending = false;
     stage = Stage::Waiting;
+    wakeModeWaiters(true);
     scheduleAux();
 }
 
@@ -378,27 +451,59 @@ void SwitchDisplayPort::irqHpd()
 
 IOReturn SwitchDisplayPort::selectMode(int index, bool enable)
 {
-    if (!enable) {
-        if (stage == Stage::Running || stage == Stage::Training) {
-            teardownLink();
-            stage = Stage::Ready;
-        }
-        modePending = false;
-        scheduleAux();
-        return kIOReturnSuccess;
-    }
-    if (sleeping || index < 0 || static_cast<unsigned>(index) >= modes.count ||
-        (stage != Stage::Ready && stage != Stage::Running && stage != Stage::Training))
+    if (!gate)
         return kIOReturnNotReady;
-    if (wantedMode == index && (stage == Stage::Running || stage == Stage::Training))
-        return kIOReturnSuccess;
-    if (stage != Stage::Ready)
-        teardownLink();
-    stage = Stage::Ready;
-    wantedMode = index;
-    modePending = true;
-    scheduleAux();
-    return modePending || stage == Stage::Training ? kIOReturnSuccess : kIOReturnUnsupported;
+    struct Request {
+        int index;
+        bool enable;
+    } req = {index, enable};
+    return gate->runAction(
+        [](OSObject *owner, void *argument, void *, void *, void *) -> IOReturn {
+            auto *self = static_cast<SwitchDisplayPort *>(owner);
+            const auto &r = *static_cast<Request *>(argument);
+            if (!r.enable) {
+                if (self->stage == Stage::Running || self->stage == Stage::Training) {
+                    self->teardownLink();
+                    self->stage = Stage::Ready;
+                }
+                self->modePending = false;
+                self->wakeModeWaiters(true);
+                self->scheduleAux();
+                return kIOReturnSuccess;
+            }
+            if (self->sleeping || r.index < 0 || static_cast<unsigned>(r.index) >= self->modes.count ||
+                (self->stage != Stage::Ready && self->stage != Stage::Running && self->stage != Stage::Training))
+                return kIOReturnNotReady;
+            if (self->stage == Stage::Running && self->wantedMode == r.index && !self->modePending)
+                return kIOReturnSuccess;
+            if (self->stage != Stage::Ready)
+                self->teardownLink();
+            self->stage = Stage::Ready;
+            self->wakeModeWaiters(true);
+            const uint64_t myGen = self->modeGeneration;
+            self->wantedMode = r.index;
+            self->modePending = true;
+            self->scheduleAux();
+            uint64_t deadline = 0;
+            clock_interval_to_deadline(500, kMillisecondScale, &deadline);
+            while (myGen == self->modeGeneration && (self->modePending || self->stage == Stage::Training)) {
+                const IOReturn wait = self->gate->commandSleep(&self->trainingEvent, deadline, THREAD_ABORTSAFE);
+                if (wait == THREAD_TIMED_OUT || wait == THREAD_INTERRUPTED || wait == THREAD_RESTART) {
+                    if (myGen == self->modeGeneration && (self->modePending || self->stage == Stage::Training)) {
+                        self->teardownLink();
+                        if (self->stage != Stage::Off)
+                            self->stage = Stage::Ready;
+                        self->wakeModeWaiters(true);
+                        self->screen->modeFailed();
+                    }
+                    return wait == THREAD_TIMED_OUT ? kIOReturnNotReady : kIOReturnAborted;
+                }
+            }
+            if (myGen == self->modeGeneration && self->stage == Stage::Running && self->wantedMode == r.index)
+                return kIOReturnSuccess;
+            return myGen != self->modeGeneration ? kIOReturnAborted : kIOReturnNotReady;
+        },
+        this, &req);
 }
 
 bool SwitchDisplayPort::gpuComplete(void *display, int status)

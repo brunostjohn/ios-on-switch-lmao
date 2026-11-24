@@ -17,6 +17,7 @@ class TegraDisplayB;
 class SwitchExternalScreen : public IOMobileFramebufferLegacy {
     OSDeclareDefaultStructors(SwitchExternalScreen);
 public:
+    void stop(IOService *provider) override;
     void free() override;
     bool begin(SwitchDisplayPort *transport, IOWorkLoop *workLoop);
     bool publish(const struct switch_dp_mode_list &modes, const uint8_t *edid, unsigned bytes);
@@ -27,7 +28,7 @@ public:
     bool frameEnd();
     void gpuComplete(int status);
     bool requested() const { return device == 2; }
-    IOWorkLoop *getWorkLoop() const override { return loop; }
+    IOReturn setPowerState(unsigned long ordinal, IOService *whatDevice) override;
     bool isMainDisplay() override { return false; }
     bool startHardware() override { return true; }
     bool getRefreshAttributes(uint64_t *periods, uint32_t internal) override;
@@ -86,10 +87,10 @@ private:
     uint32_t accessibilityScale = 0x10000u;
     uint32_t latchedAddr = 0;
     uint64_t sequence = 0, slotUses = 0, refreshPeriod = 0, interval = 0, linkGeneration = 0, gpuGeneration = 0;
-    uint64_t activeGeometry = 0;
+    uint64_t activeGeometry = 0, selectionGeneration = 0;
     int selectedMode = -1, front = -1, drawing = -1;
     uint32_t device = 0;
-    bool connected = false, mapped = false, gpuPending = false, latched = false, kicking = false;
+    bool logicalPM = false, connected = false, mapped = false, gpuPending = false, latched = false, kicking = false;
     const OriginalLegacySwapRequest *pending = nullptr;
     int gpuStatus = 0;
 #if DEVELOPMENT || DEBUG
@@ -99,6 +100,7 @@ private:
     uint32_t diagLastPos = ~0u, diagLastSize = ~0u, diagLastSurfW = 0, diagLastSurfH = 0, diagLastKind = ~0u;
 #endif
     static void completionFired(OSObject *owner, IOInterruptEventSource *, int);
+    void releaseEventSources();
     void publishActiveGeometry();
     void drainSwapQueue();
     void clearLayerState();

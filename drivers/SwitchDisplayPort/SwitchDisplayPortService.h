@@ -26,6 +26,8 @@ class SwitchDisplayPort : public IOService {
 
 public:
     bool begin();
+    void stop(IOService *provider) override;
+    void free() override;
 
     IOWorkLoop *getWorkLoop() const override
     {
@@ -80,6 +82,8 @@ private:
     bool flipped = false, nintendoDock = false;
     bool dcbUp = false, sorUp = false, sleeping = false;
     int wantedMode = -1;
+    uint64_t modeGeneration = 0;
+    uint8_t trainingEvent = 0;
 
     struct switch_dp_aux_request request = {};
     Next next = Next::Caps;
@@ -123,6 +127,8 @@ private:
     void fail(const char *what, const char *why);
     void teardownLink();
     void powerOff();
+    void wakeModeWaiters(bool abort);
+    void releaseResources();
 
     void plugged();
     void unplugged();

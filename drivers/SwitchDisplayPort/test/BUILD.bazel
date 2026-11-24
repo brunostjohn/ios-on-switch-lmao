@@ -130,6 +130,7 @@ host_test(
     name = "dp_scanout_source_test",
     srcs = ["dp_scanout_source_test.cpp"],
     data = [
+        "//drivers/SwitchDisplayPort:SwitchDPSession.cpp",
         "//drivers/SwitchDisplayPort:SwitchDisplayPort.cpp",
         "//drivers/SwitchDisplayPort:SwitchExternalScanout.cpp",
         "//drivers/SwitchDisplayPort:SwitchExternalScreen.cpp",

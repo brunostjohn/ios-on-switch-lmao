@@ -2,11 +2,14 @@
 #include "SwitchExternalScreen.h"
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOPlatformExpert.h>
+#include <IOKit/pwr_mgt/IOPM.h>
+#include <IOKit/pwr_mgt/IOPMpowerState.h>
 #include <libkern/c++/OSArray.h>
 #include <libkern/c++/OSNumber.h>
 #include <mach/mach_time.h>
 #include "SwitchDPProperties.h"
 #include "SwitchDisplayPortService.h"
+#include "TegraDisplayB.h"
 #include "../NativeMobileDisplay/NativeLegacyRequest.h"
 #include "../NativeMobileDisplay/SwitchSurfaceUse.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
@@ -42,8 +45,36 @@ uint64_t periodTicks(uint64_t period)
 
 }
 
+void SwitchExternalScreen::releaseEventSources()
+{
+    if (loop) {
+        if (readySource)
+            loop->removeEventSource(readySource);
+        if (completion)
+            loop->removeEventSource(completion);
+    }
+    OSSafeReleaseNULL(readySource);
+    OSSafeReleaseNULL(completion);
+    loop = nullptr;
+}
+
+void SwitchExternalScreen::stop(IOService *provider)
+{
+    if (logicalPM) {
+        PMstop();
+        logicalPM = false;
+    }
+    releaseEventSources();
+    IOMobileFramebufferLegacy::stop(provider);
+}
+
 void SwitchExternalScreen::free()
 {
+    if (logicalPM) {
+        PMstop();
+        logicalPM = false;
+    }
+    releaseEventSources();
     if (colorLock) {
         IOLockFree(colorLock);
         colorLock = nullptr;
@@ -53,6 +84,8 @@ void SwitchExternalScreen::free()
 
 bool SwitchExternalScreen::begin(SwitchDisplayPort *port, IOWorkLoop *workLoop)
 {
+    if (!workLoop || workLoop != getWorkLoop())
+        return false;
     transport = port;
     loop = workLoop;
     setIdentityMatrix(harmonyMatrix);
@@ -62,25 +95,83 @@ bool SwitchExternalScreen::begin(SwitchDisplayPort *port, IOWorkLoop *workLoop)
     completion = IOInterruptEventSource::interruptEventSource(this, &completionFired);
     readySource = IOInterruptEventSource::interruptEventSource(this, &readyFired);
     if (!colorLock || !completion || !readySource || loop->addEventSource(completion) != kIOReturnSuccess ||
-        loop->addEventSource(readySource) != kIOReturnSuccess)
+        loop->addEventSource(readySource) != kIOReturnSuccess) {
+        releaseEventSources();
         return false;
+    }
     auto *node = IORegistryEntry::fromPath("/arm-io/display-external", gIODTPlane);
     auto *nub = OSTypeAlloc(IOPlatformDevice);
     auto *platform = IOService::getPlatform();
-    const bool ready = node && nub && platform && nub->init(node, gIODTPlane) && nub->attach(platform) &&
-                       nub->start(platform);
+    const bool nubReady = node && nub && platform && nub->init(node, gIODTPlane) && nub->attach(platform) &&
+                          nub->start(platform);
     OSSafeReleaseNULL(node);
-    if (!ready) {
+    if (!nubReady) {
         OSSafeReleaseNULL(nub);
+        releaseEventSources();
         return false;
     }
     setName("SwitchExternalDisplay");
     setProperty("external", kOSBooleanTrue);
+    setInternalDisplay(false);
     publishScanoutLimits();
-    if (!attach(nub) || !IOMobileFramebufferLegacy::start(nub))
+    if (!attach(nub) || !IOMobileFramebufferLegacy::start(nub)) {
+        IOService::detach(nub);
+        OSSafeReleaseNULL(nub);
+        releaseEventSources();
         return false;
-    registerService();
+    }
+    static IOPMPowerState states[2] = {};
+    states[0].version = states[1].version = 1;
+    states[1].capabilityFlags = kIOPMDeviceUsable;
+    PMinit();
+    logicalPM = initialized;
+    if (!logicalPM) {
+        IOMobileFramebufferLegacy::stop(nub);
+        IOService::detach(nub);
+        OSSafeReleaseNULL(nub);
+        releaseEventSources();
+        return false;
+    }
+    nub->joinPMtree(this);
+    IOReturn status = registerPowerDriver(this, states, 2);
+    if (status == kIOReturnSuccess)
+        status = changePowerStateToPriv(1);
+    if (status != kIOReturnSuccess) {
+        PMstop();
+        logicalPM = false;
+        IOMobileFramebufferLegacy::stop(nub);
+        IOService::detach(nub);
+        OSSafeReleaseNULL(nub);
+        releaseEventSources();
+        return false;
+    }
+    OSSafeReleaseNULL(nub);
     return true;
+}
+
+IOReturn SwitchExternalScreen::setPowerState(unsigned long ordinal, IOService *whatDevice)
+{
+    if (ordinal > 1)
+        return kIOReturnUnsupported;
+    const IOReturn status = IOMobileFramebufferLegacy::setPowerState(ordinal, whatDevice);
+    if (whatDevice != nullptr && status >= 0 && loop != nullptr) {
+        loop->runAction(
+            [](OSObject *owner, void *argument, void *, void *, void *) -> IOReturn {
+                auto *self = static_cast<SwitchExternalScreen *>(owner);
+                const auto state = reinterpret_cast<uintptr_t>(argument);
+                if (state == 0) {
+                    self->drainSwapQueue();
+                } else if (self->dcb != nullptr) {
+                    struct { uint32_t skipRequested, requested, skipPowered, powered; uint8_t changed; uint8_t pad[11]; }
+                        power = {1, 0, 0, 1, 1, {}};
+                    self->setDisplayPowerState(&power, false);
+                    self->kickSwapQueue();
+                }
+                return kIOReturnSuccess;
+            },
+            this, reinterpret_cast<void *>(static_cast<uintptr_t>(ordinal)));
+    }
+    return status;
 }
 
 namespace {
@@ -201,6 +292,7 @@ bool SwitchExternalScreen::publish(const struct switch_dp_mode_list &list, const
     }
     connected = true;
     publishActiveGeometry();
+    setProperty("IOMFBHotplugKeysChangedKey", kOSBooleanTrue);
     IOMobileFramebufferLegacy::hotPlugNotify(1);
     return true;
 }
@@ -238,6 +330,7 @@ void SwitchExternalScreen::linkUp(const struct switch_dp_mode &timing, TegraDisp
     interval = periodTicks(refreshPeriod);
     if (!native_legacy_set_display_refresh_properties(this))
         IOLog("SwitchDisplayPort: could not publish the selected refresh interval\n");
+    dcb->frameInterrupt(true);
     struct { uint32_t skipRequested, requested, skipPowered, powered; uint8_t changed; uint8_t pad[11]; }
         power = {1, 0, 0, 1, 1, {}};
     setDisplayPowerState(&power, false);
@@ -276,9 +369,12 @@ void SwitchExternalScreen::detach()
             releaseSlot(i);
     clearLayerState();
     const bool wasConnected = connected;
+    ++selectionGeneration;
     connected = false;
     selectedMode = -1;
     device = 0;
+    setDisplayWidth(0);
+    setDisplayHeight(0);
     publishActiveGeometry();
     clearSinkProperties();
     drainSwapQueue();
@@ -417,13 +513,41 @@ IOReturn SwitchExternalScreen::selectOutput(bool timing, uint32_t value)
         const uint32_t device = s.timing ? self->device : s.value;
         if (device == 2 && !self->connected)
             return kIOReturnNotReady;
-        const auto result = index < 0 && device == 2 ? kIOReturnSuccess : self->transport->selectMode(index, device == 2);
+        const int prevMode = self->selectedMode;
+        const uint32_t prevDevice = self->device;
+        uint32_t prevWidth = 0, prevHeight = 0;
+        self->getDisplayDimensions(&prevWidth, &prevHeight);
+        const uint64_t selGen = ++self->selectionGeneration;
+        self->selectedMode = index;
+        self->device = device;
+        if (device == 2 && index >= 0) {
+            self->setDisplayWidth(self->modes.modes[index].hactive);
+            self->setDisplayHeight(self->modes.modes[index].vactive);
+        }
+        self->publishActiveGeometry();
+        const auto result = index < 0 && device == 2
+                                ? kIOReturnSuccess
+                                : self->transport->selectMode(index, device == 2);
         if (result == kIOReturnSuccess) {
-            self->selectedMode = index;
-            self->device = device;
-            self->publishActiveGeometry();
-            if (device != 2)
+            if (self->selectionGeneration == selGen) {
+                if (device != 2)
+                    self->drainSwapQueue();
+            }
+        } else if (self->selectionGeneration == selGen) {
+            if (prevDevice == 2 && !self->dcb) {
+                self->selectedMode = -1;
+                self->device = prevDevice;
+                self->setDisplayWidth(0);
+                self->setDisplayHeight(0);
+                self->publishActiveGeometry();
                 self->drainSwapQueue();
+            } else {
+                self->selectedMode = prevMode;
+                self->device = prevDevice;
+                self->setDisplayWidth(prevWidth);
+                self->setDisplayHeight(prevHeight);
+                self->publishActiveGeometry();
+            }
         }
         return result;
     }, this, &selection);
@@ -471,7 +595,7 @@ bool SwitchExternalScreen::validateSwap(const OriginalLegacySwapRequest *request
         auto *memory = native_legacy_surface_descriptor(surfaces[i]);
         layer.format = native_legacy_surface_format(surfaces[i]);
         layer.planes = native_legacy_surface_planes(surfaces[i]);
-        layer.transform = transforms[i];
+        layer.transform = transforms[i] & 7u;
         layer.surfW = static_cast<uint32_t>(native_legacy_surface_width(surfaces[i]));
         layer.surfH = static_cast<uint32_t>(native_legacy_surface_height(surfaces[i]));
         layer.stride = native_legacy_surface_stride(surfaces[i]);

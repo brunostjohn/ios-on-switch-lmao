@@ -463,7 +463,8 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 	    !copy->height || copy->width > 16384 ||
 	    copy->sourceStride < uint64_t(copy->width) * 4 || copy->sourceStride > UINT32_MAX ||
 	    copy->sourceBytes < copy->sourceStride * sourceLines ||
-	    (sourceBlock && (copy->width * 4) % 64) ||
+	    (!fenceOnly && sourceBlock && (copy->width * 4) % 64) ||
+	    (fenceOnly && sourceBlock && (copy->sourceStride % 64)) ||
 	    (!fenceOnly && (copy->targetPitch < copy->width * 4 || copy->blockHeightLog2 > 5)))
 		return kIOReturnBadArgument;
 	// the block-linear target must hold the frame: whole block rows of targetPitch bytes x (8 << blockHeightLog2) lines
@@ -504,6 +505,7 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 #endif
 	if (!ret) {
 		gPresentSnapshot.display = copy->display;
+		tgm_present_set_filter_display(copy->display);
 #if TGM_STATS
 		tgm_present_read reads[TGM_PRESENT_READS] = {};
 		const uint32_t nreads = tgm_readback_take(copy, source, blockLog2, target, reads);
@@ -579,6 +581,7 @@ extern "C" int tegra_gm20b_scanout_fence(void *display, uint64_t pa)
 #endif
 	if (!ret) {
 		gPresentSnapshot.display = display;
+		tgm_present_set_filter_display(nullptr);
 		gPresentSnapshot.done = presentDone;
 		// No copy (dst_va 0): only the acquires on the surface's producer and the fence; nothing of it is mapped.
 		ret = tgm_present_copy_dependencies(

@@ -245,6 +245,7 @@ void SwitchDisplayPort::trained()
     IOLog("SwitchDisplayPort: link up at %u Mb/s x%u (TU %u, watermark %u)\n", switch_dp_rate_khz(link.rate) / 100,
           link.lanes, tu.tu_size, tu.watermark);
     screen->linkUp(mode, &dcb);
+    wakeModeWaiters(false);
     switch_displayport_audio_sink(edid, validEdidBlocks, true);
     scheduleAux();
 }

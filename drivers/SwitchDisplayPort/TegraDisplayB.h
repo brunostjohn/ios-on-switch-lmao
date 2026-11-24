@@ -41,7 +41,7 @@ private:
     volatile uint8_t *base = nullptr;
     switch_display_memory_head memory = {};
     Frame active = {};
-    bool windowEnabled = false, frameInterruptEnabled = false;
+    bool windowEnabled = false, frameInterruptEnabled = false, emcRefusedLogged = false;
     void releaseBandwidth();
     uint32_t read(uint32_t word) const;
     void write(uint32_t word, uint32_t value);

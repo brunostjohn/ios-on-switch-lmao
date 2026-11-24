@@ -759,6 +759,7 @@ struct present_state {
 	int fenced_due;
 	void (*done)(void *, int);
 	void *arg;
+	const void *filter_display;
 	u32 completing; /* completions claimed and not yet handed to their callback */
 	u32 stamped;    /* stats: seqno of the present in flight, whose copy is stamped */
 	u32 presents;   /* stats */

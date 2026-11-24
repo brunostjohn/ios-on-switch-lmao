@@ -28,7 +28,7 @@ bool SwitchExternalScreen::mapDomain()
     cleanDomain();
     char why[128];
     mapped = tegra_smmu_attach(TEGRA_SMMU_ASID_DISPLAY_B, domain.ptb(), TEGRA_SMMU_DCB_ASID,
-                              TEGRA_SMMU_TRANSLATION_ENABLE_0, (1u << 2) | (1u << 4) | (1u << 6) | (1u << 17),
+                              TEGRA_SMMU_TRANSLATION_ENABLE_0, (1u << 2) | (1u << 4) | (1u << 6),
                               why, sizeof(why)) == 0;
     if (!mapped)
         IOLog("SwitchDisplayPort: external scanout: %s\n", why);
@@ -123,7 +123,7 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
         auto &slot = slots[i];
         if (slot.memory == memory && slot.surface == surface && slot.pages == pages && slot.offset == offset &&
             slot.allocationId == allocation.allocation_id && slot.generation == allocation.allocation_generation) {
-            if (!slot.layout && !applyTiledLayout(slot, allocation.pages[0], bytes)) {
+            if (!slot.layout && !applyTiledLayout(slot, allocation.pages[offset / 4096], bytes)) {
                 switch_native_scanout_release(&snapshot);
                 return -1;
             }
@@ -195,7 +195,7 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
     if (slot.counted)
         switch_surface_use_increment(surface, 0);
     slot.stride = static_cast<uint32_t>(pitch);
-    if (!applyTiledLayout(slot, allocation.pages[0], bytes)) {
+    if (!applyTiledLayout(slot, allocation.pages[offset / 4096], bytes)) {
         releaseSlot(index);
         return -1;
     }
@@ -483,9 +483,21 @@ bool SwitchExternalScreen::frameEnd()
         return true;
     if (latched) {
         const auto receipt = dcb->windowLatch(latchedAddr);
-        if (receipt == TegraDisplayB::Latch::Missed)
-            return false;
-        if (receipt == TegraDisplayB::Latch::Active) {
+        if (receipt == TegraDisplayB::Latch::Missed) {
+#if DEVELOPMENT || DEBUG
+            if (diagScanoutFailures < 8u) {
+                ++diagScanoutFailures;
+                IOLog("SwitchDisplayPort: window A missed latch for iova=%#x\n", latchedAddr);
+            }
+#endif
+            latched = false;
+            latchedAddr = 0;
+            if (drawing >= 0 && drawing != front)
+                releaseRead(static_cast<unsigned>(drawing));
+            drawing = -1;
+            retire(pending, false);
+            pending = nullptr;
+        } else if (receipt == TegraDisplayB::Latch::Active) {
             latched = false;
             latchedAddr = 0;
             if (front >= 0 && front != drawing)
@@ -505,6 +517,6 @@ bool SwitchExternalScreen::frameEnd()
         native_legacy_vsync_notify(this, mach_absolute_time(), mach_continuous_time(), interval);
     kickSwapQueue();
     if (dcb)
-        dcb->frameInterrupt(latched || switch_abi_load<const void *>(this, vsyncClientList));
+        dcb->frameInterrupt(true);
     return true;
 }

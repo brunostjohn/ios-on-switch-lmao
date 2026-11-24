@@ -92,6 +92,7 @@ void native_legacy_gpu_complete(void *display, int status);
 // is delivered on another, so fn checks the offer it writes for; offers the producer's own pass cannot finish (a present
 // job, a semantic wait in front) never call it. fn only stores to memory and registers under a simple lock of its own.
 // Registered once.
+void tgm_present_filter_owner(const void *display);
 void tgm_present_filter_callout(void (*fn)(void *ctx, int status), void *ctx);
 // Why a swapped frame is not there (an offer's answer or its completion's status), the GPU driver's SwitchGpuBacking.h
 // WRITER_GONE, WRITER_FAILED and WRITE_REFUSED. The display shows nothing of the frame, through the copy or the CPU, and

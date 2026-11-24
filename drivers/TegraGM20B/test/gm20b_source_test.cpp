@@ -527,6 +527,9 @@ TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
 	const CodeText scanout = Block(client(), "extern \"C\" int tegra_gm20b_scanout_copy(");
 	EXPECT_TRUE(scanout.has(
 		"sourceBlock ? static_cast<int32_t>(copy->sourceBlockHeightLog2) : -1;"));
+	EXPECT_TRUE(scanout.has("(!fenceOnly && sourceBlock && (copy->width * 4) % 64)"));
+	EXPECT_TRUE(scanout.has("(fenceOnly && sourceBlock && (copy->sourceStride % 64))"));
+	EXPECT_TRUE(scanout.has("tgm_present_set_filter_display(copy->display);"));
 	EXPECT_TRUE(scanout.has("tgm_readback_take(copy, source, blockLog2, target, reads)"));
 	EXPECT_FALSE(Block(SourceText("../TegraGM20BReadback.cpp"), "uint32_t tgm_readback_take(")
 			     .has("TEGRA_SCANOUT_TILED"));
