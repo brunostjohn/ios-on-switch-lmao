@@ -17,6 +17,7 @@
 #include "bazel/testing/source_text.h"
 
 #include <gtest/gtest.h>
+#include <filesystem>
 
 // Another device's vertex function, as a render state's creation reads one
 @interface ForeignVertexFunction : NSObject
@@ -123,6 +124,30 @@ TEST(GM20BFacadeCreation, DebugAndReleaseClientsCompleteStatesAlike)
                   switch_ios::test::Configured(source, "SWITCH_DEBUG", false))
             << file;
     }
+}
+
+TEST(GM20BFacadeCreation, ClientRuntimeUsesNoThreadCpuClockOrThreadInfo)
+{
+    size_t checked = 0;
+    for (const char *dir : {"..", "../plugin"}) {
+        const std::filesystem::path root = switch_ios::test::PackagePath(dir);
+        ASSERT_TRUE(std::filesystem::is_directory(root)) << root;
+        for (const auto &entry : std::filesystem::directory_iterator(root)) {
+            if (!entry.is_regular_file())
+                continue;
+            const std::string ext = entry.path().extension().string();
+            if (ext != ".mm" && ext != ".cpp" && ext != ".h")
+                continue;
+            const std::string rel = std::string(dir) + "/" + entry.path().filename().string();
+            const std::string source = switch_ios::test::SourceText(rel);
+            ++checked;
+            for (const char *forbidden :
+                 {"CLOCK_THREAD_CPUTIME_ID", "CLOCK_PROCESS_CPUTIME_ID", "thread_selfusage", "thread_info("}) {
+                EXPECT_TRUE(switch_ios::test::Occurrences(source, forbidden).empty()) << rel << " uses " << forbidden;
+            }
+        }
+    }
+    EXPECT_GT(checked, 0u);
 }
 
 TEST(GM20BFacadeCreation, ARequestTheCompilerDoesNotTakeIsAskedOnceMoreThenFails)

@@ -4,7 +4,6 @@
 
 #if SWITCH_METAL_DIAGNOSTICS
 #include <mach/mach.h>
-#include <time.h>
 #include "ca_catch_all.h"
 
 namespace {
@@ -61,7 +60,7 @@ void logCreation(const gm20b::CreationCost &c, SwitchMetalPipeline *p, MTLRender
            "SwitchMetal: %{public}s: render state %016llx %{public}s in %llu us: key %llu us, place %llu us (%llu "
            "lookups %llu us, %llu pieces %llu us, %llu copies %llu bytes, %llu builds %llu us, %llu variants), packed "
            "variants %llu us, record %llu us, other %llu us; %llu text keys; %llu locks, %llu waited %llu us; %llu "
-           "kernel calls %.0f us; on CPU %llu us; task faults %llu, pageins %llu: %{public}s",
+           "kernel calls %.0f us; task faults %llu, pageins %llu: %{public}s",
            getprogname(), (unsigned long long)(p ? p->_packKey : 0),
            p && p->_packed ? "from the pack" : "the pack lacks", (unsigned long long)wall, (unsigned long long)key,
            (unsigned long long)place, (unsigned long long)w.lookups, (unsigned long long)ticksUs(w.lookupTicks),
@@ -70,8 +69,8 @@ void logCreation(const gm20b::CreationCost &c, SwitchMetalPipeline *p, MTLRender
            (unsigned long long)w.variants, (unsigned long long)variants, (unsigned long long)record,
            (unsigned long long)(wall > phases ? wall - phases : 0), (unsigned long long)w.textKeys,
            (unsigned long long)c.locks, (unsigned long long)c.lockWaits, (unsigned long long)ticksUs(c.lockWaitTicks),
-           (unsigned long long)c.kernelCalls, c.kernelUs, (unsigned long long)(c.cpuNs / 1000),
-           (unsigned long long)c.faults, (unsigned long long)c.pageins, d.label.UTF8String ?: "-");
+           (unsigned long long)c.kernelCalls, c.kernelUs, (unsigned long long)c.faults, (unsigned long long)c.pageins,
+           d.label.UTF8String ?: "-");
 }
 
 }  // namespace
@@ -82,11 +81,11 @@ void gm20bPackCreations(uint64_t &hits, uint64_t &misses)
     misses = gPackMisses.load(std::memory_order_relaxed);
 }
 
+// No thread CPU clock or thread_info: backboardd's sandbox kills on thread_selfusage (syscall 482) and some refuse thread_info.
 SwitchMetalCreationMeter::SwitchMetalCreationMeter() : work_(gm20b::tCreationWork), saved_(gm20b::tEncodeProfile)
 {
     const uint64_t probed = mach_absolute_time();
     gm20b::LockCount::here(locks_, waits_, waitTicks_);
-    cpuNs_ = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID);
     taskEvents(faults_, pageins_);
     gm20b::tEncodeProfile = &profile_;
     began_ = mach_absolute_time();
@@ -108,7 +107,6 @@ void SwitchMetalCreationMeter::finish(SwitchMetalPipeline *p, MTLRenderPipelineD
     c.wallTicks = ended - began_;
     uint64_t locks = 0, waits = 0, waitTicks = 0, faults = 0, pageins = 0;
     gm20b::LockCount::here(locks, waits, waitTicks);
-    c.cpuNs = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - cpuNs_;
     taskEvents(faults, pageins);
     c.locks = locks - locks_;
     c.lockWaits = waits - waits_;
@@ -144,7 +142,6 @@ void SwitchMetalCreationMeter::finish(SwitchMetalPipeline *p, MTLRenderPipelineD
     return @{
         @"wall_us" : @(ticksUs(c.wallTicks)),
         @"probe_us" : @(ticksUs(c.probeTicks)),
-        @"cpu_us" : @(c.cpuNs / 1000),
         @"key_us" : @(ticksUs(w.keyTicks)),
         @"place_us" : @(ticksUs(w.placeTicks)),
         @"variants_us" : @(ticksUs(w.variantTicks)),

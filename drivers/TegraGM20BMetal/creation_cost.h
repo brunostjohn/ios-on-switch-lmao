@@ -31,7 +31,7 @@ inline uint64_t gPackLoadTicks = 0;
 
 // One creation's costs on its thread; ticks are mach_absolute_time's. probeTicks: what reading them took
 struct CreationCost {
-    uint64_t wallTicks = 0, probeTicks = 0, cpuNs = 0;
+    uint64_t wallTicks = 0, probeTicks = 0;
     CreationWork work;
     uint64_t kernelCalls = 0;
     double kernelUs = 0;

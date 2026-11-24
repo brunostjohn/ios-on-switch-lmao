@@ -26,7 +26,7 @@ private:
     gm20b::CreationWork work_;
     gm20b::EncodeProfile profile_;
     gm20b::EncodeProfile *saved_;
-    uint64_t began_ = 0, probe_ = 0, cpuNs_ = 0, locks_ = 0, waits_ = 0, waitTicks_ = 0, faults_ = 0, pageins_ = 0;
+    uint64_t began_ = 0, probe_ = 0, locks_ = 0, waits_ = 0, waitTicks_ = 0, faults_ = 0, pageins_ = 0;
     bool finished_ = false;
 };
 
