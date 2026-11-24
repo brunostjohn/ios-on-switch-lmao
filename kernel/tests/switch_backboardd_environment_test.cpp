@@ -56,18 +56,22 @@ TEST(BackboarddEnvironment, Ios27DisablesGenericShadersWithAndWithoutDetached)
               (std::vector<std::string>{"CA_DISABLE_GENERIC_SHADERS=1"}));
 }
 
-TEST(BackboarddEnvironment, Ios17KeepsItsEnvironmentUnchanged)
+TEST(BackboarddEnvironment, Ios17DisablesGenericShadersWithAndWithoutDetached)
 {
     detach_ready = false;
     EXPECT_EQ(envFor(xnu17::native_switch_exec_environment, "/usr/libexec/backboardd"),
-              (std::vector<std::string>{"CA_DISABLE_DETACHED=1"}));
+              (std::vector<std::string>{"CA_DISABLE_DETACHED=1", "CA_DISABLE_GENERIC_SHADERS=1"}));
     detach_ready = true;
-    EXPECT_TRUE(envFor(xnu17::native_switch_exec_environment, "/usr/libexec/backboardd").empty());
+    EXPECT_EQ(envFor(xnu17::native_switch_exec_environment, "/usr/libexec/backboardd"),
+              (std::vector<std::string>{"CA_DISABLE_GENERIC_SHADERS=1"}));
 }
 
 TEST(BackboarddEnvironment, OtherProcessesKeepTheirOwnEnvironment)
 {
     detach_ready = false;
+    EXPECT_TRUE(envFor(xnu17::native_switch_exec_environment, "/sbin/launchd").empty());
+    EXPECT_EQ(envFor(xnu17::native_switch_exec_environment, "/usr/sbin/bluetoothd"),
+              (std::vector<std::string>{"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000"}));
     EXPECT_TRUE(envFor(xnu27::native_switch_exec_environment, "/sbin/launchd").empty());
     EXPECT_EQ(envFor(xnu27::native_switch_exec_environment, "/usr/sbin/bluetoothd"),
               (std::vector<std::string>{"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000"}));

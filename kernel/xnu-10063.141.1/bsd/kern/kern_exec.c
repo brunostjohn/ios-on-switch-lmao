@@ -5978,7 +5978,9 @@ switch_bootstrap_environment(struct image_params *imgp, int pointer_size)
 static const char *const native_switch_bluetoothd_environment[] = {
 	"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000", NULL
 };
-static const char *const native_switch_backboardd_environment[] = {"CA_DISABLE_DETACHED=1", NULL};
+static const char *const native_switch_backboardd_environment[] = {
+	"CA_DISABLE_DETACHED=1", "CA_DISABLE_GENERIC_SHADERS=1", NULL
+};
 
 /* The extra environment strings for imgp's executable, NULL-terminated, or NULL for none. */
 static const char *const *
@@ -5995,9 +5997,8 @@ native_switch_exec_environment(const struct image_params *imgp)
 	}
 	static const char backboardd[] = "/usr/libexec/backboardd";
 	if (!strncmp(executable, backboardd, sizeof(backboardd))) {
-		if (!native_legacy_detach_ready()) {
-			return native_switch_backboardd_environment;
-		}
+		const int single = !native_legacy_detach_ready();
+		return single ? native_switch_backboardd_environment : native_switch_backboardd_environment + 1;
 	}
 	return NULL;
 }
