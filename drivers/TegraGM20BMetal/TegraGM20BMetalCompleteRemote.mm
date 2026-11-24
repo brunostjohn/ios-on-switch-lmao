@@ -27,10 +27,11 @@ const char *classText(uint32_t qos)
                                              : "fixed";
 }
 
-// A kernel the shader compiler answered at run time, whole, for tools/gpu/kernelharvest.py: the function its library names,
-// that library (a system library's path, else data:<SHA-256 of its bytes>), " spec" where the function was made with
-// constant values, and its cache key, in parts of 700 characters
-void logKernelHarvest(const CacheKey &k, const CompileRequest &r, const std::vector<LibraryIdentity> &ids)
+// A kernel or compute-state facts the shader compiler answered at run time, whole, for tools/gpu/kernelharvest.py:
+// the function its library names, that library (a system library's path, else data:<SHA-256 of its bytes>), " spec"
+// where the function was made with constant values, and its cache key, in parts of 700 characters
+void logComputeHarvest(const char *kind, const CacheKey &k, const CompileRequest &r,
+                       const std::vector<LibraryIdentity> &ids)
 {
     const RequestStage &s = r.stages[0];
     std::string lib = r.libraries[s.library].path;
@@ -46,7 +47,7 @@ void logKernelHarvest(const CacheKey &k, const CompileRequest &r, const std::vec
     constexpr size_t kPart = 700;
     const size_t parts = (text.size() + kPart - 1) / kPart;
     for (size_t i = 0; i < parts; i++)
-        os_log(gm20bLog(), "SwitchMetal: kernel harvest %016llx %zu/%zu %{public}s", (unsigned long long)k.name(),
+        os_log(gm20bLog(), "SwitchMetal: %{public}s %016llx %zu/%zu %{public}s", kind, (unsigned long long)k.name(),
                i + 1, parts, text.substr(i * kPart, kPart).c_str());
 }
 #endif
@@ -402,7 +403,7 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
     }
     taken = true;
 #if SWITCH_METAL_DIAGNOSTICS
-    logKernelHarvest(k, r, ids);
+    logComputeHarvest("kernel harvest", k, r, ids);
 #endif
     return found == RecordCache::Found::Record ? Compiler::Outcome::Made : Compiler::Outcome::Refused;
 }
@@ -508,6 +509,7 @@ bool Completion::facts(id facadeFunction, MTLComputePipelineDescriptor *descript
     const CacheKey k = factsCacheKey(stack_, stateKey);
     CompileRequest r;
     Digest name;
+    std::vector<LibraryIdentity> ids;
     const auto request = [&](bool bytes, bool every) {
         r = {};
         r.stack = stack_;
@@ -516,7 +518,7 @@ bool Completion::facts(id facadeFunction, MTLComputePipelineDescriptor *descript
         r.kernel.maxThreads = uint32_t(descriptor.maxTotalThreadsPerThreadgroup);
         r.kernel.multipleOfWidth = descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth;
         r.kernel.stageIn = stageInFieldsOf(descriptor.stageInputDescriptor);
-        std::vector<LibraryIdentity> ids;
+        ids.clear();
         std::map<const LibrarySource *, uint32_t> seen;
         if (!addKernelStages(r, ids, seen, facadeFunction, descriptor, bytes, every))
             return false;
@@ -570,6 +572,7 @@ bool Completion::facts(id facadeFunction, MTLComputePipelineDescriptor *descript
            fromStore ? "from the shader compiler's store" : "by the shader compiler",
            (unsigned long long)((nowUs() - began) / 1000), out.maxThreads, out.executionWidth, out.staticMemory,
            stateKey.c_str());
+    logComputeHarvest("facts harvest", k, r, ids);
 #endif
     return true;
 }

@@ -16,6 +16,7 @@ TEXTURE_ARRAY = 0x80  # PackKernelEntry.slot bit 7: 2D-array view (runtime/pack.
 # runtime/pack.h PackKernelEntryKind
 BUFFER, TEXTURE, SAMPLER, TEXTURE_TABLE, SAMPLER_TABLE, SPILL_TABLE, TEXTURE_PLANE = range(7)
 TWO_PLANES = 'xr2p'  # a tex= field's mark of an RGB10A8_2P_XR10 texture held in two planes (runtime/compute_key.h)
+FACTS_ONLY_TAG = ' | tg=0,0,0 | '  # kernel_shapes.h facts-only D line: carries PackComputeFacts without a PackKernel
 PLANE_BYTES = {TEXTURE: 4, TEXTURE_PLANE: 1}  # a two-plane texture's color words (R32Uint) and alpha bytes (R8Uint)
 HEAD = struct.Struct('<QIIBb')
 ENTRY = struct.Struct('<HBBI')
@@ -164,6 +165,8 @@ def from_records(records: list[dict], constexpr_tsc: list[list[int]]) -> tuple[l
         seen.add(rec['key'])
         if rec['outcome']:
             skipped.append((rec['key'], rec['why']))
+            continue
+        if FACTS_ONLY_TAG in rec['key']:
             continue
         made = kernel(rec, constexpr_tsc)
         if slots := views_other_texel_size(rec['key'], made['entries']):
