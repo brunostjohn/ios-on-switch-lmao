@@ -20,12 +20,29 @@ Boolean switch_audio_display_object(AudioObjectID object)
     return object == kDisplay || object == kDisplayOut;
 }
 
+// The rate and rates[] the audio server last heard about: a re-probe for another sink can change both.
+static uint32_t gPublishedClock[SWITCH_AUDIO_MAX_RATES + 1];
+
+static Boolean rememberClock(void)
+{
+    uint32_t clock[SWITCH_AUDIO_MAX_RATES + 1] = {0};
+    if (gControl) {
+        clock[0] = gControl->rate;
+        for (UInt32 i = 0; i < SWITCH_AUDIO_MAX_RATES; ++i)
+            clock[i + 1] = gControl->rates[i];
+    }
+    const Boolean changed = memcmp(clock, gPublishedClock, sizeof(clock)) != 0;
+    memcpy(gPublishedClock, clock, sizeof(clock));
+    return changed;
+}
+
 void switch_audio_display_attach(AudioServerPlugInHostRef host, SwitchAudioControl *control, void *output)
 {
     gHost = host;
     gOutput = output;
     gControl = control;
     __atomic_store_n(&gAvailable, control && __atomic_load_n(&control->jack, __ATOMIC_ACQUIRE), __ATOMIC_RELEASE);
+    (void)rememberClock();
 }
 
 Boolean switch_audio_display_available(void)
@@ -36,7 +53,23 @@ Boolean switch_audio_display_available(void)
 void switch_audio_display_changed(void)
 {
     const uint32_t available = gControl && __atomic_load_n(&gControl->jack, __ATOMIC_ACQUIRE);
-    if (__atomic_exchange_n(&gAvailable, available, __ATOMIC_ACQ_REL) == available || !gHost)
+    const Boolean alive = __atomic_exchange_n(&gAvailable, available, __ATOMIC_ACQ_REL) != available;
+    if (rememberClock() && gHost) {
+        const AudioObjectPropertyAddress clock[] = {
+            {kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain},
+            {kAudioDevicePropertyAvailableNominalSampleRates, kAudioObjectPropertyScopeGlobal,
+             kAudioObjectPropertyElementMain}};
+        const AudioObjectPropertyAddress formats[] = {
+            {kAudioStreamPropertyPhysicalFormat, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain},
+            {kAudioStreamPropertyVirtualFormat, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain},
+            {kAudioStreamPropertyAvailablePhysicalFormats, kAudioObjectPropertyScopeGlobal,
+             kAudioObjectPropertyElementMain},
+            {kAudioStreamPropertyAvailableVirtualFormats, kAudioObjectPropertyScopeGlobal,
+             kAudioObjectPropertyElementMain}};
+        gHost->PropertiesChanged(gHost, kDisplay, 2, clock);
+        gHost->PropertiesChanged(gHost, kDisplayOut, 4, formats);
+    }
+    if (!alive || !gHost)
         return;
     const AudioObjectPropertyAddress device = {kAudioDevicePropertyDeviceIsAlive, kAudioObjectPropertyScopeGlobal,
                                                kAudioObjectPropertyElementMain};

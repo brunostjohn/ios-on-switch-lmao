@@ -99,7 +99,8 @@ bool SwitchHDA::discover(uint32_t formats)
         setClock(rates[0]);
     const uint32_t gcap = core(GCAP) & 0xffff;
     stripe = converterCaps & kCapStripe ? switch_hda_stripe(gcap, control->sample_bits) : 0;
-    if (!verb(converter, kVerbSetChannelStreamId, kStreamTag1) || !verb(converter, kVerbSetDigiConvert1, 1) ||
+    if (!programFormat(switch_hda_stream_format(control->sample_bits, control->rate)) ||
+        !verb(converter, kVerbSetChannelStreamId, kStreamTag1) || !verb(converter, kVerbSetDigiConvert1, 1) ||
         !verb(converter, kVerbSetDigiConvert2, 0) || !verb(converter, kVerbSetChannelCount, 1) ||
         ((converterCaps & kCapStripe) && !verb(converter, kVerbSetStripeControl, stripe)) ||
         !verb(pin, kVerbSetPinWidgetControl, kPinOutEnable))

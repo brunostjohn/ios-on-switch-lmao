@@ -495,14 +495,11 @@ bool TegraSor1::audioFormat(uint32_t rate, uint32_t channels, uint32_t bits)
         (bits != 16 && bits != 24 && bits != 32))
         return false;
     // TRM 27.6.5 Table 162: MAUD is 102 MHz, N/(N + D_N) = 512 * fs / MAUD. DP's Naud is always 2^15; the NVAL
-    // registers reset to HDMI's N.
-    if (rate == 48000) {
-        write(DP_AUDIO_TIMESTAMP_0480, (512u << 16) | (2125u - 512u));
-        write(AUDIO_NVAL_0480, 0x8000);
-    } else {
-        write(DP_AUDIO_TIMESTAMP_0441, (2352u << 16) | (10625u - 2352u));
-        write(AUDIO_NVAL_0441, 0x8000);
-    }
+    // registers reset to HDMI's N. The SOR picks the pair for the rate the converter reports.
+    write(DP_AUDIO_TIMESTAMP_0480, (512u << 16) | (2125u - 512u));
+    write(AUDIO_NVAL_0480, 0x8000);
+    write(DP_AUDIO_TIMESTAMP_0441, (2352u << 16) | (10625u - 2352u));
+    write(AUDIO_NVAL_0441, 0x8000);
     rmw(AUDIO_CNTRL0, (3u << 20) | 1u, (2u << 20) | (1u << 12));
     return true;
 }

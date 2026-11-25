@@ -1,5 +1,5 @@
 // SwitchAudio's driver and plug-in invariants: clean integer/even PLLA clock tree across all 10 SFC rates,
-// SwitchAudioFormat.h single-source register words, ASoC unmute ordering, PZ4 power sequencing, S32 ABI v8,
+// SwitchAudioFormat.h single-source register words, ASoC unmute ordering, PZ4 power sequencing, S32 ABI v9,
 // hybrid headphone staging, and isolated capture path.
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -292,6 +292,8 @@ TEST(SwitchAudioSource, HdaReturnsDmaOwnershipBeforeReusingMemoryOrResetting)
     ordered(commands, "field(RIRBCTL,", "switch_mmio_wait32");
     ordered(body("bool SwitchHDA::reset()"), "if (!stop() || !stopCommands())", "coreWrite(GCTL, 0);");
     const std::string start = body("IOReturn SwitchHDA::start()");
+    EXPECT_THAT(start, Not(HasSubstr("verb(")));
+    EXPECT_THAT(start, Not(HasSubstr("programFormat(")));
     ordered(start, "if (!stop())", "bzero(");
     ordered(start, "if (!stop())", "coreWrite(stream, kStreamReset);");
     ordered(body("void SwitchHDA::disconnect()"), "stop();", "stopCommands();");

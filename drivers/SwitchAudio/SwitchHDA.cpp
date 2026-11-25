@@ -109,17 +109,23 @@ void SwitchHDA::setClock(uint32_t rate)
     control->ticks_per_frame_q32 = (hostHz << 32) / rate;
 }
 
+// The converter's format verb sleeps on the gate, so it is sent here and in discover() and never from start(): after
+// the verb this touches no hardware, and a sink that went away in the meantime is re-programmed by its next discover().
 IOReturn SwitchHDA::setRate(uint32_t rate)
 {
     if (control->state & SwitchAudioOutputRunning)
         return kIOReturnBusy;
-    for (uint32_t i = 0; i < SWITCH_AUDIO_MAX_RATES && control->rates[i]; ++i) {
-        if (control->rates[i] == rate) {
-            setClock(rate);
-            return kIOReturnSuccess;
-        }
-    }
-    return kIOReturnUnsupported;
+    bool offered = false;
+    for (uint32_t i = 0; i < SWITCH_AUDIO_MAX_RATES && control->rates[i]; ++i)
+        offered = offered || control->rates[i] == rate;
+    if (!offered)
+        return kIOReturnUnsupported;
+    if (rate == control->rate)
+        return kIOReturnSuccess;
+    if (ready && !programFormat(switch_hda_stream_format(control->sample_bits, rate)))
+        return kIOReturnNotReady;
+    setClock(rate);
+    return kIOReturnSuccess;
 }
 
 bool SwitchHDA::prepareHardware()
@@ -366,8 +372,9 @@ void SwitchHDA::disconnect()
     stopCommands();
     if (control)
         __atomic_store_n(&control->jack, 0, __ATOMIC_RELEASE);
+    responseValid = false;
     if (pending) {
-        pending = responseValid = false;
+        pending = false;
         gate->commandWakeup(&pending, false);
     }
 }
@@ -404,8 +411,6 @@ IOReturn SwitchHDA::start()
     if (!stop())
         return kIOReturnTimeout;
     const uint16_t format = switch_hda_stream_format(control->sample_bits, control->rate);
-    if (!programFormat(format))
-        return kIOReturnNotReady;
     const uint32_t frameBytes = control->sample_bits == 16 ? 4 : 8;
     const uint32_t bytes = SWITCH_AUDIO_RING_FRAMES * frameBytes;
     const uint32_t periodBytes = SWITCH_HDA_PERIOD_FRAMES * frameBytes;

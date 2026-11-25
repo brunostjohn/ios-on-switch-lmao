@@ -179,6 +179,22 @@ TEST_F(DisplayAudio, OffersTheSinksRatesAndSwitchesThroughAConfigurationChange)
               44100);
 }
 
+TEST_F(DisplayAudio, TellsTheAudioServerWhenAReprobeChangesTheClock)
+{
+    control.rate = 44100;
+    control.rates[0] = 48000;
+    control.rates[1] = 44100;
+    switch_audio_display_changed();
+    ASSERT_EQ(gNotifications.size(), 6u);
+    EXPECT_EQ(gNotifications[0].object, static_cast<AudioObjectID>(kDisplay));
+    EXPECT_EQ(gNotifications[0].selector, kAudioDevicePropertyNominalSampleRate);
+    EXPECT_EQ(gNotifications[1].selector, kAudioDevicePropertyAvailableNominalSampleRates);
+    EXPECT_EQ(gNotifications[2].object, static_cast<AudioObjectID>(kDisplayOut));
+    EXPECT_EQ(gNotifications[2].selector, kAudioStreamPropertyPhysicalFormat);
+    switch_audio_display_changed();
+    EXPECT_EQ(gNotifications.size(), 6u);
+}
+
 TEST_F(DisplayAudio, PlaybackClearingPeriodDoesNotIncreaseTheAudioServerWriteLead)
 {
     control.period_frames = 16384;
