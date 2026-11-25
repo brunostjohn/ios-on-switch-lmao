@@ -1456,6 +1456,37 @@ static void lsm6ds3hSession()
     teardown();
 }
 
+// Device motion on a data-ready part (no FIFO, so no sample times of its own): each gyroscope sample is integrated over
+// the time since the one before, so a sample the part overwrote while the work loop was late still turns the attitude.
+// Twenty interrupts at 208 Hz span 21 sample periods here (the first stands for one).
+static void lsm6ds3hDeviceMotionGaps()
+{
+    Lsm6ds3h chip;
+    check(start(chip), "LSM6DS3H gaps: started");
+    setFeature(kSwitchHIDDeviceMotion, 10000, 0);
+    gNow += 100000000;                       // past both sensors' settle times
+    const int16_t accel[3] = {0, 0, -8197};  // 2 g face up (ST Z = -z): no gravity correction
+    const int16_t gyro[3] = {0, 0, -1000};   // 1.22173 rad/s about the console's Z
+    const uint64_t period = 1000000000000ULL / 208000;
+    for (unsigned i = 0; i < 20; ++i) {
+        gNow += period;
+        chip.produce(accel, gyro);
+        if (i == 9) {
+            gNow += period;
+            chip.produce(accel, gyro);
+        }
+        check(deliver() == 1, "LSM6DS3H gaps: one interrupt per read");
+    }
+    const std::vector<SwitchDeviceMotionReport> &reports = hid(kSwitchHIDDeviceMotion)->motionReports;
+    REQUIRE(reports.size() == 10);
+    const double yaw = 2 * std::atan2(payloadFloat(reports.back(), 20), payloadFloat(reports.back(), 24));
+    const double want = 1.22173 * 21 * (period / 1000 / 1e6);
+    check(std::fabs(yaw - want) < 2e-4,
+          "LSM6DS3H gaps: turned " + std::to_string(yaw) + " rad over 21 periods, want " + std::to_string(want));
+    expectClean("LSM6DS3H gaps");
+    teardown();
+}
+
 // --- The scenarios, in this order in one process, as the harness has always run them: each session tears the driver
 // down (teardown()) before the next starts it again. Do not shard or shuffle.
 TEST(SwitchMotion, DecodeAndMapping)
@@ -1506,4 +1537,9 @@ TEST(SwitchMotion, Icm40607Session)
 TEST(SwitchMotion, Lsm6ds3hSession)
 {
     lsm6ds3hSession();
+}
+
+TEST(SwitchMotion, Lsm6ds3hDeviceMotionGaps)
+{
+    lsm6ds3hDeviceMotionGaps();
 }
