@@ -1,8 +1,8 @@
 """The Supplemental cryptex's jetsam overlay as this build's profile makes it (overlay/BUILD.bazel jetsam_properties).
 
 It holds the shader compiler's, the bootstrap helper's and the app registration daemon's Overrides in both profiles (the
-manifest stages their jobs in release too) and the texture peer's (HW Test's second process, which the manifest stages in debug alone) in
-debug alone; its merge refuses a label named twice.
+manifest stages their jobs in release too) and the texture peer's (HW Test's second process, which the manifest stages
+in debug alone) in debug alone; its merge refuses a label named twice.
 """
 
 import json
