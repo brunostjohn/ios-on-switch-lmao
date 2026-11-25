@@ -163,6 +163,28 @@ TEST(SwitchVICRequests, NothingTouchingItsSurfacesOvertakesARequestTakingItsRese
         EXPECT_EQ(queue.pop(), &request);
 }
 
+// Y, held back behind R for reading R's destination, holds back X on Y's own destination in turn.
+TEST(SwitchVICRequests, ARequestHeldBackBehindAReservingOneHoldsBackLaterRequestsOnItsSurfaces)
+{
+    Requests queue;
+    Conn conn;
+    int shared = 0, destination = 0;
+    auto requests = make(&conn, 3, true);
+    Request &r = requests[0], &y = requests[1], &x = requests[2];
+    r.touched[0] = &shared;
+    r.reserving = true;
+    y.touched[0] = &destination;
+    y.touched[1] = &shared;
+    x.touched[0] = &destination;
+    for (auto &request : requests)
+        queue.push(&request);
+    EXPECT_EQ(queue.pop(), nullptr) << "X wrote Y's destination before Y";
+    queue.reserved(&r);
+    EXPECT_EQ(queue.pop(), &r);
+    EXPECT_EQ(queue.pop(), &y);
+    EXPECT_EQ(queue.pop(), &x);
+}
+
 // A background client's job is still taking its reservation (its thread preempted, say): a compositor's job on other
 // surfaces queued behind it runs meanwhile, and one on its destination still waits for it.
 TEST(SwitchVICRequests, AnUnrelatedRequestRunsWhileAnotherIsStillTakingItsReservation)

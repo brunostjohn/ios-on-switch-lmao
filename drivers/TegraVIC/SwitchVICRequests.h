@@ -10,7 +10,8 @@
 // reservation while queued only if no listed request, and not the one the engine thread runs, touches that surface:
 // held by a later request, it stalls an earlier one that runs first on the surface (pop takes the first runnable one),
 // which waits on it from the engine thread. `reserving` marks one taking it: pop steps past it, but no request behind
-// it that touches one of its surfaces runs first, so writes to a surface keep their order.
+// it that touches one of its surfaces runs first, nor one behind those that touches theirs, so writes to a surface keep
+// their order.
 template <class Request> class SwitchVICRequests {
 public:
     static constexpr uint32_t kRunnable = 16, kWaitingPerConnection = 16;
@@ -87,12 +88,15 @@ public:
 
     Request *pop()
     {
-        // A reserving request has no events, so it counts against the runnable bound.
+        // The surfaces of runnable requests held back so far. Past the room for them (only a close's failed requests
+        // exceed the runnable bound), nothing runs until the reservation is taken.
         const void *held[2 * kRunnable];
         uint32_t holding = 0;
         Request *previous = nullptr;
         for (auto *request = head; request; previous = request, request = request->next) {
-            if (request->reserving) {
+            if (!request->eventReady)
+                continue;
+            if (request->reserving || touchesAny(*request, held, holding)) {
                 for (const void *surface : request->touched) {
                     if (!surface)
                         continue;
@@ -102,8 +106,6 @@ public:
                 }
                 continue;
             }
-            if (!request->eventReady || touchesAny(*request, held, holding))
-                continue;
             (previous ? previous->next : head) = request->next;
             if (tail == request)
                 tail = previous;
