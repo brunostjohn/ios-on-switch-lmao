@@ -53,21 +53,20 @@ class Motion(unittest.TestCase):
             self.assertEqual(got[name].verdict, FAIL, name)
         self.assertEqual(got['motion.spu-added-ungated'].verdict, INFO)
 
-    def test_locationds_own_copy_is_not_judged_here(self):
+    def test_locationd_is_judged_like_the_rest(self):
         got = results(
             record('[CLIoHidInterface] Adding new Device with usage pair {65292, 1}', LOCATIOND),
-            record('[CLIoHidInterface] Service for device with usage pair {65292, 1} is not ready', LOCATIOND, 1),
+            record('[CLIoHidInterface] Service for device with usage pair {65292, 5} is not ready', LOCATIOND, 1),
             record('[CLIoHidInterface] Could not set all properties after too many retries. Giving up.', LOCATIOND, 2),
         )
-        self.assertEqual(got['motion.spu-added'].verdict, PASS)
-        self.assertEqual(got['motion.spu-not-ready'].verdict, PASS)
-        self.assertEqual(got['motion.locationd-spu'].verdict, INFO)
-        self.assertEqual(len(got['motion.locationd-spu'].matches), 3)
+        self.assertEqual(got['motion.spu-added'].verdict, FAIL)
+        self.assertEqual(got['motion.spu-not-ready'].verdict, FAIL)
+        self.assertEqual(got['motion.give-up.locationd'].verdict, FAIL)
 
     def test_locationds_device_motion_is_switchmotions(self):
         got = results(record('[CLIoHidInterface] Adding new Device with usage pair {65292, 5}', LOCATIOND))
-        self.assertEqual(got['motion.locationd-spu'].matches, [])
         self.assertEqual(got['motion.spu-added'].verdict, PASS)
+        self.assertEqual(got['motion.spu-not-ready'].verdict, PASS)
 
     def test_switchmotions_device_motion_service_passes(self):
         got = results(
@@ -117,7 +116,6 @@ class Motion(unittest.TestCase):
         for name, result in got.items():
             if name not in (
                 'motion.spu-added-ungated',
-                'motion.locationd-spu',
                 'motion.device-motion-interval',
                 'motion.fastpath-open.backboardd',
             ):

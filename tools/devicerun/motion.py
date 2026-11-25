@@ -6,8 +6,9 @@ asked for and must be ready; the other page-0xff0c services are never opened.
 
 Boot 2 (22-23 Nov, iOS 27) is the baseline: 90 "not ready" lines for usages 1, 5 and 26 and 24 give-ups (locationd 2,
 SpringBoard 15, backboardd 6, SwitchHWTest 1); locationd also added usages 4, 7, 8 and 24 without setting a property.
-Usages 4, 8 and 24 are reported, not judged: their creation gates were not read. The checks judge the processes that
-run CoreMotion's table from the cache; locationd has its own copy of it, outside the cache.
+Usages 4, 8 and 24 are reported, not judged: their creation gates were not read. locationd has its own copy of the
+table, outside the cache, which edits_24B119.json gives the same word (15032ab57's trust cache trusts the result), so it
+is judged with the rest.
 
 The fast path (SwitchHIDFastPath.cpp): 24B119's sandbox profiles let SpringBoard (by its user-client-class entitlement)
 and locationd open IOHIDEventServiceFastPathUserClient, so their opens must succeed. backboardd's profile admits the
@@ -31,30 +32,27 @@ CLEARED = r'\{65292, (?P<usage>1|7|26)\}'
 DEVICE_MOTION = '[CLIoHidInterface] Property for usage pair {65292, 5}: {ReportInterval = '
 FASTPATH_OPEN = '[FastPath] openFastPathPrivate() failed'
 FASTPATH_COPY = '[FastPath] copyEventPrivate() Failed'
-CACHE_COPY = '!locationd'
 
 MOTION = [
     Check(
         'motion.spu-added',
         OWNER,
         ADDED,
-        process=CACHE_COPY,
         subsystem=SUBSYSTEM,
         regex=CLEARED,
         show=('usage',),
         source=SOURCE,
-        note='a coprocessor service CoreMotion no longer asks for; boot 2: 26 x2',
+        note='a coprocessor service CoreMotion no longer asks for; boot 2: 26 x2, and 7 in locationd',
     ),
     Check(
         'motion.spu-not-ready',
         OWNER,
         NOT_READY,
-        process=CACHE_COPY,
         subsystem=SUBSYSTEM,
         regex=USAGE,
-        show=('usage',),
+        show=('process', 'usage'),
         source=SOURCE,
-        note='boot 2: usage 5 x25, 26 x41',
+        note='boot 2: usage 5 x25, 26 x41, locationd 24',
     ),
     *(
         Check(
@@ -66,7 +64,7 @@ MOTION = [
             source=SOURCE,
             note=f'boot 2: {count}',
         )
-        for process, count in (('SpringBoard', 15), ('backboardd', 6), ('SwitchHWTest', 1))
+        for process, count in (('SpringBoard', 15), ('backboardd', 6), ('SwitchHWTest', 1), ('locationd', 2))
     ),
     Check(
         'motion.fastpath-null',
@@ -143,19 +141,5 @@ MOTION = [
         show=('usage',),
         source=SOURCE,
         note='boot 2: locationd 4 x2, 8 x2, 24 x2',
-    ),
-    Check(
-        'motion.locationd-spu',
-        OWNER,
-        (ADDED, *NOT_READY, GIVE_UP),
-        REPORT,
-        process='locationd',
-        subsystem=SUBSYSTEM,
-        regex=r'(?:\{65292, (?P<usage>1|7|26)\}|Giving up\.)',
-        show=('usage',),
-        source='translate/arm64e/pretranslate/edits_24B119.json',
-        note=(
-            'report until 24B119 os.trustcache is regenerated with edits_24B119.json; boot 2: 24 not-ready, 2 give-ups'
-        ),
     ),
 ]
