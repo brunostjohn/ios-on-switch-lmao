@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #import "TegraGM20BMetalInternal.h"
+#include "compute.h"
+#include "compute_lookup.h"
 #include "scheduled_wait.h"
 #include "texel_rows.h"
 #include "TegraGM20BJobABI.h"
@@ -236,6 +238,8 @@ static bool canFastPathEmpty(SwitchMetalCommandBuffer *cb)
     return true;
 }
 
+static bool scheduleAppEarly(SwitchMetalCommandBuffer *cb, bool atCommit);
+
 void commitBuffer(SwitchMetalCommandBuffer *cb)
 {
     gm20b::followers().committing();
@@ -258,6 +262,8 @@ void commitBuffer(SwitchMetalCommandBuffer *cb)
     }
 #endif
     armEventWaits(cb);
+    if (r.raw->role() != gm20b::Device::Role::RenderServer)
+        scheduleAppEarly(cb, true);
     SWITCH_METAL_DIAGNOSTIC(r.stats.deferred++);
     if (const uint32_t submitter = r.submitThread.load(std::memory_order_acquire))
         cb->_submitOwner.setOwner(submitter);
@@ -425,11 +431,44 @@ static bool promiseWritesEarly(SwitchMetalCommandBuffer *cb, const std::vector<u
     return true;
 }
 
+// An app's command buffer is scheduled once its dependencies (shared events) are met and its queue's earlier command
+// buffer is scheduled, before its encode and its kernel submission: SubmitJob waits in the kernel for room on the app's
+// channel while the GPU is behind (gpu_exec.c tgm_chan_wait_ready), and Metal's waitUntilScheduled does not wait on GPU
+// progress (25 Nov: Maps' main thread hung 603 ms in endFrame's waitUntilScheduled behind the worker's room wait). An
+// app's drawable is presented at its completion (deferPresent), so no present reads a surface before the kernel knows
+// its writes. The render server keeps tryEarlySchedule's promise path. At the commit (the committing thread, before the
+// worker is handed the command buffer) it needs its queue's earlier one scheduled; at its queue head (the worker) that
+// holds by the queue's order.
+static bool scheduleAppEarly(SwitchMetalCommandBuffer *cb, bool atCommit)
+{
+    if (cb->_scheduledSent.load(std::memory_order_acquire) || cb->_held.load(std::memory_order_acquire) ||
+        cb->_segError.set() || cb->_segs.empty() || cb->_predicates.recorded())
+        return false;
+    for (const SwitchMetalSegment &seg : cb->_segs)
+        if (seg.event || seg.held)
+            return false;
+    // a pipeline still being made keeps it: its waitUntilScheduled lends the compile its priority (CompileWait)
+    if (cb->_pipelineVeto.load(std::memory_order_acquire) & VetoVariant)
+        return false;
+    for (const auto &[set, kernels] : cb->_computeJobs)
+        if (kernels->state() == gm20b::ComputeKernelSet<gm20b::ComputeState>::State::Pending)
+            return false;
+    const bool ordered = atCommit || cb->_enqueueState.load(std::memory_order_acquire) == 1;
+    if (ordered && cb->_before && !cb->_before->_scheduledTurn.ran())
+        return false;
+    SWITCH_METAL_DIAGNOSTIC(
+        gm20b::frameCpuCounts().early[size_t(gm20b::EarlyOutcome::Made)].fetch_add(1, std::memory_order_relaxed));
+    scheduled(cb);
+    if (!atCommit)
+        markQueueScheduled(cb);
+    return true;
+}
+
 static bool tryEarlySchedule(GM20BState &r, SwitchMetalCommandBuffer *cb, bool queueHead, bool workerBusy,
                              bool readyChecked)
 {
     if (r.raw->role() != gm20b::Device::Role::RenderServer)
-        return false;
+        return queueHead && scheduleAppEarly(cb, false);
 #if SWITCH_METAL_DIAGNOSTICS
     // a commit's try is followed by its queue head's: the head's is the one counted
     const auto refused = [queueHead](gm20b::EarlyOutcome why) {
