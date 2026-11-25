@@ -19,7 +19,7 @@ struct TegraSMMURamViewEnv {
     void clean(const void *va, size_t bytes);
     void sync();
     void flushAsid(uint32_t asid);
-    void flushEntries(uint32_t asid, uint64_t pa, uint64_t bytes, uint64_t iova, uint64_t iovaBytes);
+    void flush(uint32_t asid, const switch_smmu_table_flush *tables, uint32_t count);
 };
 
 class TegraSMMURamView {
@@ -44,6 +44,14 @@ public:
     bool holdPages(const uint64_t *pages, uint32_t count);
     // release of each page of `pages` and a commit.
     void releasePages(const uint64_t *pages, uint32_t count);
+    // body(core) under the view's lock: a batch of TegraSMMUIdentityCore holds and releases and their commit take the
+    // lock once.
+    template <class Body> void locked(Body &&body)
+    {
+        IOLockLock(lock_);
+        body(core_);
+        IOLockUnlock(lock_);
+    }
 
     bool ready() const
     {

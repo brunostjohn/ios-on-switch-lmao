@@ -3,6 +3,7 @@
 // only while held, and each commit's cleans and flushes.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -27,7 +28,7 @@ struct ModelEnv {
         pages.emplace_back(new uint32_t[1024]());
         users.emplace_back(new uint16_t[1024]());
         tables.emplace_back(
-            new TegraSMMUIdentityTable{pages.back().get(), nextPa, 0, users.back().get(), 0, 0, nullptr});
+            new TegraSMMUIdentityTable{pages.back().get(), nextPa, 0, users.back().get(), 0, 0, nullptr, 0, 0, 0, {}});
         nextPa += 4096;
         events.emplace_back("table");
         return tables.back().get();
@@ -48,13 +49,16 @@ struct ModelEnv {
         events.emplace_back("flush asid " + std::to_string(asid));
     }
 
-    void flushEntries(uint32_t asid, uint64_t pa, uint64_t bytes, uint64_t iova, uint64_t iovaBytes)
+    void flush(uint32_t asid, const switch_smmu_table_flush *tables, uint32_t count)
     {
-        char line[160];
-        snprintf(line, sizeof(line), "flush asid %u table %#llx+%llu iova %#llx+%#llx", asid,
-                 static_cast<unsigned long long>(pa), static_cast<unsigned long long>(bytes),
-                 static_cast<unsigned long long>(iova), static_cast<unsigned long long>(iovaBytes));
-        events.emplace_back(line);
+        for (uint32_t i = 0; i < count; ++i) {
+            char line[160];
+            snprintf(line, sizeof(line), "flush asid %u table %#llx groups %#llx section %#x", asid,
+                     static_cast<unsigned long long>(tables[i].pa), static_cast<unsigned long long>(tables[i].groups),
+                     tables[i].iova);
+            events.emplace_back(line);
+        }
+        events.emplace_back("read back");
     }
 };
 
@@ -157,7 +161,9 @@ TEST_F(SmmuIdentity, ANewTableFlushesItsAsidWholeAndAPageChangeOnlyItsEntriesAnd
     ASSERT_TRUE(core.release(0x91001000ULL, 0x1000));
     core.commit();
     EXPECT_EQ(take(), (std::vector<std::string>{"clean 64", "sync",
-                                                "flush asid 113 table 0x90000004+64 iova 0x91001000+0x10000"}));
+                                                "flush asid 113 table 0x90000000 groups 0x1 section 0x91000000",
+                                                "read back"}))
+        << "the release's group, its atom and its section; the hold in an untouched group needs none";
     ASSERT_TRUE(core.hold(0x91000000ULL, 0x1000));
     core.commit();
     EXPECT_EQ(take(), std::vector<std::string>{"sync"}) << "a second holder writes nothing, flushes nothing";
@@ -170,8 +176,9 @@ TEST_F(SmmuIdentity, TheHighHalfFlushesItsOwnAsidAndIovas)
     take();
     ASSERT_TRUE(core.release(0x100400000ULL, 0x1000));
     core.commit();
-    EXPECT_EQ(take(),
-              (std::vector<std::string>{"clean 4", "sync", "flush asid 112 table 0x90000000+4 iova 0x400000+0x1000"}));
+    EXPECT_EQ(take(), (std::vector<std::string>{"clean 4", "sync",
+                                                "flush asid 112 table 0x90000000 groups 0x1 section 0x400000",
+                                                "read back"}));
 }
 
 // The SD card's view: every table made at setup, so a hold on the I/O path never allocates.
@@ -195,5 +202,78 @@ TEST_F(SmmuIdentity, TablesMadeBelow4GiBLeaveTheHighHalfToBeMadeOnDemand)
     env.outOfMemory = true;
     EXPECT_TRUE(core.hold(0xfffff000ULL, 0x1000));
     EXPECT_FALSE(core.hold(0x100000000ULL, 0x1000)) << "above 4 GiB a table is still made on demand";
+}
+// A page held in a group with no held page at the last commit is in neither the PTC nor the TLB: its commit is a cache
+// clean alone. A hold next to a held page, which the SMMU may have fetched with its group, flushes that group.
+TEST_F(SmmuIdentity, AHoldInAnUntouchedGroupFlushesNothingAndOneNextToAHeldPageFlushesItsGroup)
+{
+    ASSERT_TRUE(core.makeTables());
+    core.commit();
+    take();
+    ASSERT_TRUE(core.hold(0x90000000ULL, 0x1000));
+    core.commit();
+    EXPECT_EQ(take(), (std::vector<std::string>{"clean 4", "sync"}));
+    ASSERT_TRUE(core.hold(0x9000f000ULL, 0x1000));
+    core.commit();
+    EXPECT_EQ(take(), (std::vector<std::string>{"clean 4", "sync",
+                                                "flush asid 113 table 0x90040000 groups 0x1 section 0x90000000",
+                                                "read back"}))
+        << "the same 16-page group";
+    ASSERT_TRUE(core.hold(0x90010000ULL, 0x1000));
+    core.commit();
+    EXPECT_EQ(take(), (std::vector<std::string>{"clean 4", "sync"})) << "the next group is untouched";
+    ASSERT_TRUE(core.release(0x90010000ULL, 0x1000));
+    core.commit();
+    take();
+    ASSERT_TRUE(core.hold(0x90010000ULL, 0x1000));
+    core.commit();
+    EXPECT_EQ(take(), (std::vector<std::string>{"clean 4", "sync"})) << "flushed empty by the release: untouched again";
+}
+
+TEST_F(SmmuIdentity, APageHeldAndLetGoBetweenCommitsWasNeverPublishedAndFlushesNothing)
+{
+    ASSERT_TRUE(core.hold(0x90000000ULL, 0x1000));
+    core.commit();
+    take();
+    ASSERT_TRUE(core.hold(0x90010000ULL, 0x1000));
+    ASSERT_TRUE(core.release(0x90010000ULL, 0x1000));
+    env.outOfMemory = true;
+    EXPECT_FALSE(core.hold(0x903ff000ULL, 0x2000)) << "the next 4 MiB has no table: the first page is given back";
+    EXPECT_EQ(core.holders(0x903ff000ULL), 0u);
+    core.commit();
+    for (const std::string &event : take())
+        EXPECT_EQ(event.rfind("flush", 0), std::string::npos) << event;
+}
+
+TEST_F(SmmuIdentity, ReleasesInTwoGroupsOfATableFlushBothWithOneSectionWrite)
+{
+    ASSERT_TRUE(core.makeTables());
+    ASSERT_TRUE(core.hold(0x90000000ULL, 0x1000));
+    ASSERT_TRUE(core.hold(0x90030000ULL, 0x1000));
+    core.commit();
+    take();
+    ASSERT_TRUE(core.release(0x90000000ULL, 0x1000));
+    ASSERT_TRUE(core.release(0x90030000ULL, 0x1000));
+    core.commit();
+    EXPECT_EQ(take(), (std::vector<std::string>{"clean 196", "sync",
+                                                "flush asid 113 table 0x90040000 groups 0x9 section 0x90000000",
+                                                "read back"}));
+}
+
+TEST_F(SmmuIdentity, OneCommitsReleasesAcrossTablesShareOneReadBack)
+{
+    ASSERT_TRUE(core.makeTables());
+    for (uint64_t pa : {0x90000000ULL, 0xa0000000ULL, 0xb0000000ULL})
+        ASSERT_TRUE(core.hold(pa, 0x1000));
+    core.commit();
+    take();
+    for (uint64_t pa : {0x90000000ULL, 0xa0000000ULL, 0xb0000000ULL})
+        ASSERT_TRUE(core.release(pa, 0x1000));
+    core.commit();
+    const auto events = take();
+    EXPECT_EQ(std::count(events.begin(), events.end(), std::string("read back")), 1);
+    EXPECT_EQ(std::count_if(events.begin(), events.end(),
+                            [](const std::string &e) { return e.rfind("flush asid 113 table", 0) == 0; }),
+              3);
 }
 }  // namespace

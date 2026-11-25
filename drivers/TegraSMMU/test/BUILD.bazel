@@ -40,6 +40,7 @@ host_test(
         "smmu_identity_test.cpp",
         "//drivers/TegraSMMU:TegraSMMUDomain.h",
         "//drivers/TegraSMMU:TegraSMMUIdentity.h",
+        "//drivers/TegraSMMU:TegraSMMU.h",
     ],
 )
 

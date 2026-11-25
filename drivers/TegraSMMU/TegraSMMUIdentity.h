@@ -11,12 +11,23 @@
 // a page of their 4 MiB is held and kept.
 //
 // Holds and releases only write memory; commit() publishes them: the table bytes cleaned to memory (the SMMU does not
-// snoop the CPU's caches), then the PTC's copies of those bytes and the ASID's TLB entries for their 4 MiB sections
-// flushed (one directory change flushes that ASID whole). The device may use a held page only after the commit, and a
-// released page may go back to the VM only after it. Plain state: the caller locks and supplies Env (allocations,
-// cache cleaning, flushes); the host test drives it with a model.
+// snoop the CPU's caches), then the SMMU's stale copies flushed, every table of the commit under one MC lock and one
+// read-back (one directory change flushes that ASID whole). The device may use a held page only after the commit, and
+// a released page may go back to the VM only after it.
+//
+// What is flushed: the SMMU caches page entries a group of 16 at a time, the PTC by the group's 64-byte memory atom and
+// the TLB by a line of 16 entries (T210 TRM 18.6.3.3, 18.11.1.10), and fills either only on a client's access. A client
+// accesses only pages that are held (any other access faults and panics), so only a group that had a held entry at the
+// last commit can be in either. A change in such a group (a release; a hold next to a held page) flushes the group's
+// atom from the PTC and its table's 4 MiB section from the TLB. A hold in any other group needs no flush: the commit
+// cleans its entry and the first access fetches it. A boot's page-in storm holds scattered pages in empty groups, so
+// its holds publish with a cache clean alone and only its releases reach the MC.
+//
+// Plain state: the caller locks and supplies Env (allocations, cache cleaning, flushes); the host tests drive it with a
+// model.
 #pragma once
 #include <stdint.h>
+#include "TegraSMMU.h"
 #include "TegraSMMUDomain.h"
 
 struct TegraSMMUIdentityTable {
@@ -26,6 +37,10 @@ struct TegraSMMUIdentityTable {
     uint16_t *users;               // holders per entry
     uint32_t dirtyLow, dirtyHigh;  // entries written since the last commit
     TegraSMMUIdentityTable *nextDirty;
+    uint64_t held;       // bit g: group g (entries 16g to 16g + 15) has a held entry
+    uint64_t published;  // held at the last commit: the groups the PTC or TLB may hold
+    uint64_t touched;    // groups written since the last commit
+    uint8_t valid[64];   // held entries per group
 };
 
 template <class Env> struct TegraSMMUIdentityCore {
@@ -33,6 +48,7 @@ template <class Env> struct TegraSMMUIdentityCore {
     static constexpr uint64_t kSpan = TegraSMMUDomain::kSpan;
     static constexpr uint32_t kTables = static_cast<uint32_t>((kRamEnd - kRamBase) / kSpan);
     static constexpr uint32_t kEntries = TegraSMMUDomain::kEntries, kMaxUsers = UINT16_MAX;
+    static constexpr uint32_t kGroup = 16, kTablesAtOnce = 8;
 
     struct Half {
         uint32_t asid;
@@ -95,18 +111,19 @@ template <class Env> struct TegraSMMUIdentityCore {
             return false;
         const uint64_t first = pa & ~(kPage - 1);
         const uint64_t end = (pa + bytes + kPage - 1) & ~(kPage - 1);
-        for (uint64_t page = first; page < end; page += kPage) {
-            const TegraSMMUIdentityTable *t = table(page, true);
-            if (!t || t->users[entryOf(page)] == kMaxUsers)
-                return false;
-        }
-        for (uint64_t page = first; page < end; page += kPage) {
-            TegraSMMUIdentityTable *t = table(page, false);
-            const uint32_t e = entryOf(page);
-            if (t->users[e]++ == 0)
-                write(t, e,
-                      static_cast<uint32_t>(page >> 12) | TegraSMMUDomain::kRead | TegraSMMUDomain::kWrite |
-                          TegraSMMUDomain::kNonSecure);
+        for (uint64_t at = first; at < end;) {
+            TegraSMMUIdentityTable *t = table(at, true);
+            if (!t)
+                return undo(first, at, false);
+            const uint64_t stop = segmentEnd(t, end);
+            for (uint32_t e = entryOf(at); at < stop; ++e, at += kPage) {
+                if (t->users[e] == kMaxUsers)
+                    return undo(first, at, false);
+                if (t->users[e]++ == 0)
+                    write(t, e,
+                          static_cast<uint32_t>(at >> 12) | TegraSMMUDomain::kRead | TegraSMMUDomain::kWrite |
+                              TegraSMMUDomain::kNonSecure);
+            }
         }
         return true;
     }
@@ -119,16 +136,17 @@ template <class Env> struct TegraSMMUIdentityCore {
             return false;
         const uint64_t first = pa & ~(kPage - 1);
         const uint64_t end = (pa + bytes + kPage - 1) & ~(kPage - 1);
-        for (uint64_t page = first; page < end; page += kPage) {
-            const TegraSMMUIdentityTable *t = table(page, false);
-            if (!t || t->users[entryOf(page)] == 0)
-                return false;
-        }
-        for (uint64_t page = first; page < end; page += kPage) {
-            TegraSMMUIdentityTable *t = table(page, false);
-            const uint32_t e = entryOf(page);
-            if (--t->users[e] == 0)
-                write(t, e, 0);
+        for (uint64_t at = first; at < end;) {
+            TegraSMMUIdentityTable *t = table(at, false);
+            if (!t)
+                return undo(first, at, true);
+            const uint64_t stop = segmentEnd(t, end);
+            for (uint32_t e = entryOf(at); at < stop; ++e, at += kPage) {
+                if (t->users[e] == 0)
+                    return undo(first, at, true);
+                if (--t->users[e] == 0)
+                    write(t, e, 0);
+            }
         }
         return true;
     }
@@ -163,10 +181,8 @@ template <class Env> struct TegraSMMUIdentityCore {
     void commit()
     {
         for (uint32_t i = 0; i < 2; ++i) {
-            Half &h = halves[i];
-            if (!h.directoryDirty)
-                continue;
-            env->clean(h.directory, kPage);
+            if (halves[i].directoryDirty)
+                env->clean(halves[i].directory, kPage);
         }
         for (TegraSMMUIdentityTable *t = dirty; t; t = t->nextDirty)
             env->clean(t->entries + t->dirtyLow, (t->dirtyHigh - t->dirtyLow) * sizeof(uint32_t));
@@ -175,19 +191,28 @@ template <class Env> struct TegraSMMUIdentityCore {
             if (halves[i].directoryDirty)
                 env->flushAsid(halves[i].asid);
         }
+        switch_smmu_table_flush stale[2][kTablesAtOnce];
+        uint32_t count[2] = {0, 0};
         while (TegraSMMUIdentityTable *t = dirty) {
             dirty = t->nextDirty;
-            const uint64_t at = t->base;
-            const Half &h = halves[at >> 32];
-            if (!h.directoryDirty) {
-                const uint64_t iova = (at & 0xffffffffULL) + static_cast<uint64_t>(t->dirtyLow) * kPage;
-                env->flushEntries(h.asid, t->pa + t->dirtyLow * sizeof(uint32_t),
-                                  (t->dirtyHigh - t->dirtyLow) * sizeof(uint32_t), iova,
-                                  static_cast<uint64_t>(t->dirtyHigh - t->dirtyLow) * kPage);
+            const uint32_t i = static_cast<uint32_t>(t->base >> 32);
+            const uint64_t groups = t->touched & t->published;
+            if (groups && !halves[i].directoryDirty) {
+                stale[i][count[i]++] = {t->pa, groups, static_cast<uint32_t>(t->base)};
+                if (count[i] == kTablesAtOnce) {
+                    env->flush(halves[i].asid, stale[i], count[i]);
+                    count[i] = 0;
+                }
             }
+            t->published = t->held;
+            t->touched = 0;
             t->nextDirty = nullptr;
             t->dirtyLow = kEntries;
             t->dirtyHigh = 0;
+        }
+        for (uint32_t i = 0; i < 2; ++i) {
+            if (count[i])
+                env->flush(halves[i].asid, stale[i], count[i]);
         }
         halves[0].directoryDirty = halves[1].directoryDirty = false;
     }
@@ -196,6 +221,19 @@ private:
     static uint32_t entryOf(uint64_t pa)
     {
         return static_cast<uint32_t>(pa >> 12) & (kEntries - 1);
+    }
+
+    // The pages [first, upto) of a hold (or release) that stopped there, given back (taken again), and false.
+    bool undo(uint64_t first, uint64_t upto, bool wasRelease)
+    {
+        if (upto > first)
+            (void)(wasRelease ? hold(first, upto - first) : release(first, upto - first));
+        return false;
+    }
+
+    static uint64_t segmentEnd(const TegraSMMUIdentityTable *t, uint64_t end)
+    {
+        return end < t->base + kSpan ? end : t->base + kSpan;
     }
 
     // The table covering pa; made and installed when create (env's allocation), else null when there is none.
@@ -211,6 +249,9 @@ private:
         made->dirtyLow = kEntries;
         made->dirtyHigh = 0;
         made->nextDirty = nullptr;
+        made->held = made->published = made->touched = 0;
+        for (uint8_t &v : made->valid)
+            v = 0;
         Half &h = halves[pa >> 32];
         h.directory[(pa >> 22) & (kEntries - 1)] = static_cast<uint32_t>(made->pa >> 12) | TegraSMMUDomain::kRead |
                                                    TegraSMMUDomain::kWrite | TegraSMMUDomain::kNonSecure |
@@ -223,6 +264,15 @@ private:
     void write(TegraSMMUIdentityTable *t, uint32_t e, uint32_t value)
     {
         t->entries[e] = value;
+        const uint32_t g = e / kGroup;
+        const uint64_t group = 1ULL << g;
+        if (value) {
+            ++t->valid[g];
+            t->held |= group;
+        } else if (--t->valid[g] == 0) {
+            t->held &= ~group;
+        }
+        t->touched |= group;
         if (t->dirtyLow >= t->dirtyHigh) {
             t->nextDirty = dirty;
             dirty = t;

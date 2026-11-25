@@ -163,6 +163,16 @@ void tegra_smmu_flush(uint32_t asid);
 // tablesPa + tableBytes), then the ASID's TLB entries in the 4 MiB sections of [iova, iova + iovaBytes). Other ASIDs,
 // the display's isochronous fetches among them, keep their cached translations. TegraSMMUPublish.h calls it.
 void switch_smmu_flush_range(uint32_t asid, uint64_t tablesPa, uint64_t tableBytes, uint64_t iova, uint64_t iovaBytes);
+// One page table's part of switch_smmu_flush_tables: the table's 64-byte groups of 16 entries in `groups` (bit g:
+// entries 16g to 16g + 15) and the 4 MiB section at `iova`, the one the table maps.
+struct switch_smmu_table_flush {
+    uint64_t pa;
+    uint64_t groups;
+    uint32_t iova;
+};
+// As switch_smmu_flush_range for each table's groups and section, under one hold of the MC lock and with one read-back
+// at the end.
+void switch_smmu_flush_tables(uint32_t asid, const struct switch_smmu_table_flush *tables, uint32_t count);
 // The MC register at offset (for a driver's own checks and FAIL lines).
 uint32_t tegra_smmu_read(uint32_t offset);
 // Sets or clears a memory client's hot-reset bit in MC_CLIENT_HOTRESET_CTRL (0x200) or CTRL_1 (0x970); the flush has

@@ -64,6 +64,27 @@ void flushRange(Registers &io, uint32_t asid, uint64_t pa, uint64_t bytes, uint6
     (void)io.read(kPtbAsid);
 }
 
+// flushRange for each table's groups (both 32-byte steps of each) and its section, then one read. Every table lies
+// below 4 GiB (TegraSMMUDomain::kLimit), so PTC_FLUSH_1 is written once.
+template <class Registers, class Table>
+void flushTables(Registers &io, uint32_t asid, const Table *tables, uint32_t count)
+{
+    if (!count)
+        return;
+    io.write(kPtcFlushHi, static_cast<uint32_t>(tables[0].pa >> 32) & 3);
+    for (uint32_t i = 0; i < count; ++i) {
+        for (uint64_t groups = tables[i].groups; groups; groups &= groups - 1) {
+            const uint32_t at =
+                static_cast<uint32_t>(tables[i].pa) + static_cast<uint32_t>(__builtin_ctzll(groups)) * kPtcSixteenEntries;
+            io.write(kPtcFlush, at | kPtcNoWaitIdle | kPtcFlushAddress);
+            io.write(kPtcFlush, (at + kPtcGroup) | kPtcNoWaitIdle | kPtcFlushAddress);
+        }
+        io.write(kTlbFlush,
+                 kTlbAsidMatch | (asid << 24) | ((tables[i].iova >> 12) & kTlbSectionField) | kTlbMatchSection);
+    }
+    (void)io.read(kPtbAsid);
+}
+
 template <class Registers>
 int program(Registers &io, const tegra_smmu_attachment &a, char *line, size_t size,
             const tegra_smmu_attachments *attachments = nullptr)

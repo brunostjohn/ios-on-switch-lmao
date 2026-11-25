@@ -27,7 +27,7 @@ TegraSMMUIdentityTable *TegraSMMURamViewEnv::makeTable()
     }
     bzero(users, TegraSMMUDomain::kEntries * sizeof(uint16_t));
     const uint64_t at = static_cast<uint64_t>(chunkUsed++) * TegraSMMUDomain::kPage;
-    *table = {reinterpret_cast<uint32_t *>(chunk.va + at), chunk.pa + at, 0, users, 0, 0, nullptr};
+    *table = {reinterpret_cast<uint32_t *>(chunk.va + at), chunk.pa + at, 0, users, 0, 0, nullptr, 0, 0, 0, {}};
     return table;  // kept for good with its chunk: a view's tables outlive every hold
 }
 
@@ -46,9 +46,9 @@ void TegraSMMURamViewEnv::flushAsid(uint32_t asid)
     tegra_smmu_flush(asid);
 }
 
-void TegraSMMURamViewEnv::flushEntries(uint32_t asid, uint64_t pa, uint64_t bytes, uint64_t iova, uint64_t iovaBytes)
+void TegraSMMURamViewEnv::flush(uint32_t asid, const switch_smmu_table_flush *tables, uint32_t count)
 {
-    switch_smmu_flush_range(asid, pa, bytes, iova, iovaBytes);
+    switch_smmu_flush_tables(asid, tables, count);
 }
 
 bool TegraSMMURamView::init(uint32_t asidLow, uint32_t asidHigh)

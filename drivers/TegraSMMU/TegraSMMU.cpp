@@ -238,6 +238,16 @@ extern "C" void switch_smmu_flush_range(uint32_t asid, uint64_t tablesPa, uint64
     IOSimpleLockUnlock(gLock);
 }
 
+extern "C" void switch_smmu_flush_tables(uint32_t asid, const switch_smmu_table_flush *tables, uint32_t count)
+{
+    if (!ready() || !count)
+        return;
+    IOSimpleLockLock(gLock);
+    RegisterAccess io;
+    switch_smmu::flushTables(io, asid, tables, count);
+    IOSimpleLockUnlock(gLock);
+}
+
 extern "C" uint32_t tegra_smmu_read(uint32_t offset)
 {
     return ready() ? r32(offset) : 0;
