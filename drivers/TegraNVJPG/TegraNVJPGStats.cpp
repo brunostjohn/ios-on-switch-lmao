@@ -138,10 +138,16 @@ void tegra_nvjpg_note_route(uint32_t route, bool held, uint32_t rowBytes, uint32
     if (!held && (noted & bit))
         return;
     noted |= bit;
-    IOLog("TegraNVJPG: decode by %s: %ux%u into a destination GM20B %s (row bytes %u, y_log2 %u), %u backing pages; "
-          "NVJPG told tile_mode %d block height %d stride %d\n",
-          route < sizeof(kRoutes) / sizeof(kRoutes[0]) ? kRoutes[route] : "?", width, height,
-          held ? "decided block-linear" : "did not lay out block-linear", rowBytes, yLog2, pages, setup->tile_mode,
-          setup->block_linear_height, setup->output_stride_luma);
+    char line[280];
+    snprintf(line, sizeof(line),
+             "TegraNVJPG: decode by %s: %ux%u into a destination GM20B %s (row bytes %u, y_log2 %u), %u backing pages; "
+             "NVJPG told tile_mode %d block height %d stride %d",
+             route < sizeof(kRoutes) / sizeof(kRoutes[0]) ? kRoutes[route] : "?", width, height,
+             held ? "decided block-linear" : "did not lay out block-linear", rowBytes, yLog2, pages, setup->tile_mode,
+             setup->block_linear_height, setup->output_stride_luma);
+    if (held)
+        os_log(OS_LOG_DEFAULT, "%s", line);
+    else
+        IOLog("%s\n", line);
 }
 #endif
