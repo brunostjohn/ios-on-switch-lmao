@@ -10,10 +10,10 @@ import IOSurface
 import Metal
 import VideoToolbox
 
-/// JobVisibility (bit 18): a pass that writes only a private texture ends Internal, with no L2 flush. Shared buffers are
-/// volatile write-combined memory (8f6e44c20), so the blit into one that reads the texture back ends Volatile: a wait
-/// for idle and a frame-buffer flush, no L2 flush. A blit into a no-copy buffer over the process's own cached pages ends
-/// External. The CPU reads the pass's colour from both.
+/// JobVisibility (bit 18): a pass that writes only a private texture ends Internal, with no L2 flush. Shared buffers
+/// are volatile write-combined memory (8f6e44c20), so the blit into one that reads the texture back ends Volatile: a
+/// wait for idle and a frame-buffer flush, no L2 flush. A blit into a no-copy buffer over the process's own cached
+/// pages ends External. The CPU reads the pass's colour from both.
 struct JobVisibilityPathTest: GPUPathTest {
     let id = "gpu.path.job_visibility"
     let name = "Internal jobs skip the L2 flush; Volatile and External ones put CPU-read bytes in DRAM"
