@@ -251,20 +251,17 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
             pass.zeta[0].store != MTLStoreActionDontCare || pass.zeta[1].store != MTLStoreActionDontCare;
         p.depthStencil.depthEnabled = (pass.zetaAspects & 1) != 0;
         p.depthStencil.stencilEnabled = (pass.zetaAspects & 2) != 0;
-        bool loadedLater = false;
-        if (whole_) {
-            for (size_t k = cb->_plan.encoderEnd(at); k < to_;) {
-                const Op nextOp = cb->_plan.operation(k).op;
-                if (nextOp == OpRender) {
-                    const SwitchMetalPass &later = cb->_passes[cb->_plan.legacy(k).x];
-                    if (later.depth == pass.depth && later.depthLoad == MTLLoadActionLoad) {
-                        loadedLater = true;
-                        break;
-                    }
-                }
-                const size_t nextEnd = SwitchMetalCommandPlan::isEncoderBegin(nextOp) ? cb->_plan.encoderEnd(k) : k + 1;
-                k = std::max(nextEnd, k + 1);
+        // encoded ahead, the passes that may load it are not all recorded yet: its region is stored, as NVK stores its
+        // plane at every end that stores the depth. From the commit on, every pass after it is known.
+        bool loadedLater = ahead_;
+        for (size_t k = cb->_plan.encoderEnd(at); !loadedLater && k < to_;) {
+            const Op nextOp = cb->_plan.operation(k).op;
+            if (nextOp == OpRender) {
+                const SwitchMetalPass &later = cb->_passes[cb->_plan.legacy(k).x];
+                loadedLater = later.depth == pass.depth && later.depthLoad == MTLLoadActionLoad;
             }
+            const size_t nextEnd = SwitchMetalCommandPlan::isEncoderBegin(nextOp) ? cb->_plan.encoderEnd(k) : k + 1;
+            k = std::max(nextEnd, k + 1);
         }
         p.depthStencil.loadedLater = loadedLater;
         p.depthStencil.depth = gm20b::metalClearDepth(pass.clearDepth, z->_raw.format);

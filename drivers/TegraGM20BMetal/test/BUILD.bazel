@@ -5267,6 +5267,14 @@ facade_test(
     plugin = "_tsan",
 )
 
+facade_test(
+    name = "facade_zcull_ahead_test",
+    srcs = [
+        "facade_zcull_ahead_test.cpp",
+        "scale_frames.h",
+    ],
+)
+
 # A raw command buffer's scheduled and completed stages as its caller sees them (facade_handlers_test.cpp), plain and
 # thread-sanitized
 facade_test(
