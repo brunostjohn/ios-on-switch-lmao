@@ -1,10 +1,12 @@
 /* SPDX-License-Identifier: MIT */
 /* Debug kernels: where a compositor kick's preempt of an app landed (hold.c). GM20B leaves a graphics context only at a
- * wait for idle, and the driver's banded draws end each band in a seqno release (draw_bands.h), so a preempt asked
- * mid-job should land at a band's release: the app's last release seen before the compositor's start stamp, at or after
- * the ask, names it. That release ending a batch inside a job is a landing mid-job; ending the job's last batch, at the
- * job's end; none between the ask and the start (the switch came elsewhere, or the release is not read yet), unknown.
- * Each latency also goes in a bucket. Plain C for the host test (test/gm20b_preempt_landing_test.cpp). */
+ * wait for idle, and the driver's banded draws end each band in a wait-for-idle release (draw_bands.h), so a preempt
+ * asked mid-job should land at a band's release. A channel with a progress stamp (every app channel asks for one at
+ * creation) ends a band in a progress release, which ends no batch; one without, in a seqno release ending a batch. The
+ * app's last batch release before the compositor's start stamp, at or after the ask, names a batch landing: inside a
+ * job, mid-job; the job's last batch, at the job's end. Failing that, a progress stamp between the ask and the start is
+ * a landing mid-job. Neither (the switch came elsewhere, or the release is not read yet): unknown. Each latency also
+ * goes in a bucket. Plain C for the host test (test/gm20b_preempt_landing_test.cpp). */
 #ifndef SWITCH_GPU_PREEMPT_LANDING_H
 #define SWITCH_GPU_PREEMPT_LANDING_H
 #include <stdint.h>
