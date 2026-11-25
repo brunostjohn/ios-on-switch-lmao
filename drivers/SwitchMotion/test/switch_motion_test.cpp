@@ -596,6 +596,13 @@ void switch_hid_forget_latest(IOService *device)
         ++static_cast<HidDevice *>(device)->forgotten;
 }
 
+#if DEVELOPMENT || DEBUG
+uint64_t switch_hid_fastpath_copies()
+{
+    return 0;
+}
+#endif
+
 void switch_hid_set_feature_handler(IOService *device, SwitchHIDFeatureHandler handler, void *context)
 {
     static_cast<HidDevice *>(device)->handler = handler;

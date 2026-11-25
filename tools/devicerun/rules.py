@@ -300,8 +300,7 @@ def failed_text(check: Check, verdict: str, observed: str) -> str:
 
 
 def excused(check: Check, matches: list[dict], by_name: dict[str, list[dict]]) -> list[dict]:
-    """Return the lines `unless` does not excuse: none in a boot it matched in, or only those near one of its lines (of
-    the same `key` value, when set)."""
+    """Return the lines `unless` does not excuse: none in its boots, or only those near its lines (of the same key)."""
     excusers = by_name.get(check.unless, [])
     if not check.unless_within:
         boots = {fields['boot'] for fields in excusers}

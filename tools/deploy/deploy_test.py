@@ -386,8 +386,17 @@ class KindTest(unittest.TestCase):
         trust = self.pins.parent / 'os.trustcache'
         trust.write_bytes(b'')
         args = deploy._parser().parse_args(
-            ['disk9', '--boot-package', 'unused', '--ipsw', str(self.pins), '--spec', 'unused']
-            + ['--pretranslated-trust', str(trust)]
+            [
+                'disk9',
+                '--boot-package',
+                'unused',
+                '--ipsw',
+                str(self.pins),
+                '--spec',
+                'unused',
+                '--pretranslated-trust',
+                str(trust),
+            ]
         )
         target = mock.Mock(content='Apple_APFS')
         with (
