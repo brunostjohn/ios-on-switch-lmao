@@ -17,7 +17,9 @@ read as a migration that never ended, which it deletes unrun. So a requested mig
 The same migration installs the removable apps a restore leaves in /private/var/staged_system_apps (MISystemAppMigrator)
 and consumes each staged copy whether installd accepts it or not. An app MobileInstallation still wants installed that
 Data does not hold installed is copied back from the System volume when its staged copy is gone too (restage), and the
-next boot migrates again.
+next boot migrates again, once per set of such apps (RESTAGED records it): on iOS 27 every requested migration is a full
+LaunchServices rebuild (98-134 s of boot on 24 Nov), so a set the migration could not install is not retried on every
+deploy. --rerun-migration still asks again.
 """
 
 import os
@@ -31,6 +33,7 @@ from tools.install import host, renamed
 
 SENTINEL = 'datamigrator/migrate'
 MARKER = f'{renamed.DATA_FOLDER}/system-app-migration'
+RESTAGED = f'{renamed.DATA_FOLDER}/system-app-restage'
 APPLICATIONS = 'overlay/Applications'
 STAGED = 'staged_system_apps'
 INSTALLED = 'containers/Bundle/Application'
@@ -150,10 +153,13 @@ def _copy_bundle(source: Path, target: Path) -> None:
 def restage(system_root: Path, data_root: Path, log: host.Log) -> bool:
     """Copy the missing() apps Data's staged_system_apps lacks back into it, each whole or not at all.
 
-    True when any app is missing, staged already or not: a migration cut short leaves them staged and uninstalled, and
-    the kernel's one-try marker keeps it from running again by itself.
+    True when any app is missing, staged already or not, unless a migration already tried this same set (RESTAGED): a
+    migration cut short leaves them staged and uninstalled, and the kernel's one-try marker keeps it from running again
+    by itself.
     """
     names = missing(system_root, data_root)
+    record = Path(data_root) / RESTAGED
+    tried = record.is_file() and not record.is_symlink() and record.read_text().split() == names
     staged = Path(data_root) / STAGED
     copied = [name for name in names if not (staged / name).is_dir()]
     for name in copied:
@@ -163,6 +169,16 @@ def restage(system_root: Path, data_root: Path, log: host.Log) -> bool:
         partial.parent.mkdir(exist_ok=True)
         _copy_bundle(Path(system_root) / 'private/var' / STAGED / name, partial)
         partial.rename(staged / name)
+    if names and tried:
+        log(
+            f'system apps: {len(names)} still not installed after a migration tried them, not migrating again '
+            f'(--rerun-migration retries): {", ".join(names)}'
+        )
+        return False
     if names:
         log(f'system apps: {len(names)} not installed, {len(copied)} restaged: {", ".join(names)}')
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(''.join(f'{name}\n' for name in names))
+    else:
+        record.unlink(missing_ok=True)
     return bool(names)
