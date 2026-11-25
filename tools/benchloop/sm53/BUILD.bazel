@@ -96,6 +96,7 @@ py_library(
         "overlap.py",
         "powr_native.py",
         "powr_verdict.py",
+        "readers.py",
     ],
     deps = [
         ":encode",
@@ -135,6 +136,7 @@ py_library(
         "intops_test",
         "overlap_test",
         "powr_native_test",
+        "readers_test",
     ]
 ]
 
