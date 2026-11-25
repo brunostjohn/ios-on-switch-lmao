@@ -176,6 +176,15 @@ cc_library(
 )
 
 host_test(
+    name = "sd_smmu_test",
+    srcs = [
+        "sd_smmu_test.cpp",
+        "//drivers/NativeSwitchBlock:SwitchAdma.h",
+        "//drivers/NativeSwitchBlock:SwitchSdSmmu.h",
+    ],
+)
+
+host_test(
     name = "sd_adma_source_test",
     srcs = ["sd_adma_source_test.cpp"],
     copts = ["-O1"],
