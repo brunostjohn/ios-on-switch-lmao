@@ -99,12 +99,35 @@ TEST(BandRates, BandsOfAGeometryBoundStateDoNotFeedTheirOwnPrice)
         d.cols = 1280;
         d.unmeasured = !gm20b::measuredOnce(rate);
         bands = gm20b::bandGrid(d, TGM_APP_BAND_NS, gm20b::kMaxTileBands, gm20b::kMaxTileBands).total();
-        gm20b::learn(rate, kPixelNs + bands * kPerBandNs, kScreen, bands, staticPixelNs);
+        gm20b::learn(rate, kPixelNs + bands * kPerBandNs, kScreen, bands);
         if (round >= 3)
             EXPECT_LE(bands, 2u) << "round " << round;
     }
     EXPECT_NEAR(double(gm20b::estimatedNs(rate, kScreen, staticPixelNs)), double(kPixelNs), kPixelNs * 0.5);
     EXPECT_NEAR(double(rate.nsPerBand.load()), double(kPerBandNs), kPerBandNs * 0.5);
+}
+
+// A memory-bound state (the static price 3 ms, its pixels 12 ms, a band's repeat 50 us) drawn, measured and drawn again:
+// the fit gives the pixels their time, so its draws stay banded by their length, and the bands' cost stays small
+TEST(BandRates, AMemoryBoundStateKeepsItsBandsWhileTheFitLearnsIt)
+{
+    constexpr uint64_t kPixelNs = 12'000'000, kPerBandNs = 50'000, kStaticNs = 3'000'000;
+    BandRate rate;
+    uint32_t bands = 0;
+    for (int round = 0; round < 12; round++) {
+        BandDraw d;
+        d.fragmentNs = gm20b::estimatedNs(rate, kScreen, kStaticNs);
+        d.vertexNs = rate.nsPerBand.load();
+        d.rows = 720;
+        d.cols = 1280;
+        d.unmeasured = !gm20b::measuredOnce(rate);
+        bands = gm20b::bandGrid(d, TGM_APP_BAND_NS, gm20b::kMaxTileBands, gm20b::kMaxTileBands).total();
+        gm20b::learn(rate, kPixelNs + bands * kPerBandNs, kScreen, bands);
+        if (round >= 3)
+            EXPECT_GE(bands, 8u) << "round " << round;
+    }
+    EXPECT_NEAR(double(gm20b::estimatedNs(rate, kScreen, kStaticNs)), double(kPixelNs), kPixelNs * 0.2);
+    EXPECT_LT(rate.nsPerBand.load(), 200'000u);
 }
 
 TEST(BandRates, ACopiedStateKeepsItsRate)

@@ -202,7 +202,7 @@ void Device::learnCompleted()
         const auto *slot = reinterpret_cast<const volatile StampSlot *>(stamps_.cpu + drawStampOffset(t.slot, false));
         uint64_t ns = 0;
         if (stampedNanoseconds(*slot, t.payload, ns)) {
-            learn(*t.rate, ns, t.units, t.bands, workNs(laneWork(t.units, t.instructions)));
+            learn(*t.rate, ns, t.units, t.bands);
             SWITCH_METAL_DIAGNOSTIC(stats.learnedDraws++);
 #if SWITCH_METAL_DIAGNOSTICS
             if (ns >= kLongDrawNs)
