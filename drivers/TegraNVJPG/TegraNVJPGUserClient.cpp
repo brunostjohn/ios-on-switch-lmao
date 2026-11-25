@@ -106,6 +106,11 @@ IOReturn ioreturn(int err)
 // caller's TegraNVJPGRouteCounts, through the selector CMPhoto's own decodes use, which the app's sandbox admits where
 // it may deny a registry or sysctl read.
 constexpr uint32_t kRouteMagic = 0x5050;  // 'PP', as TegraGM20BMethodPaths
+#if TEGRA_NVJPG_STATS
+// A selector 7 decode with this at +0xcac, the tile mode at +0xcb0 and the block height code at +0xcb4: HW Test's
+// image.nvjpg_tile_probe (TegraNVJPGRoute.h tegra_nvjpg_route_tile_probe)
+constexpr uint32_t kTileProbeMagic = 0x5054;
+#endif
 #endif
 
 uint32_t gFirstLogged;  // bit n: a decode into TEGRA_NVJPG_OUT_n has been logged (engine thread)
@@ -139,6 +144,10 @@ struct Job {
     uint64_t engineUs;
     int pid;
     bool done;
+#if TEGRA_NVJPG_STATS
+    bool tileProbe;  // HW Test's tile probe (kTileProbeMagic): tileMode and tileGob go to the setup unchanged
+    uint32_t tileMode, tileGob;
+#endif
 
     union {
         TegraNVJPGDecodeRequest base;
@@ -240,12 +249,22 @@ const char *routeJob(Job *job, const SwitchNVJPGBacking &target, void **hold, ui
             layout.described && tegra_gm20b_surface_compressed && tegra_gm20b_surface_compressed(target.pages[0]);
     }
     const TegraNVJPGSurface d = surfaceDesc(job->dst.desc);
-    const char *why = tegra_nvjpg_route(&job->request.base, &d, kTegraNVJPGOutputBytes, job->dst.memory != nullptr,
-                                        &layout, &job->plan, &job->engine.setup, route);
 #if TEGRA_NVJPG_STATS
-    if (!why)
+    const char *why = job->tileProbe
+                          ? tegra_nvjpg_route_tile_probe(&job->request.base, job->dst.desc.length, &layout,
+                                                         job->tileMode, job->tileGob, &job->plan, &job->engine.setup,
+                                                         route)
+                          : tegra_nvjpg_route(&job->request.base, &d, kTegraNVJPGOutputBytes,
+                                              job->dst.memory != nullptr, &layout, &job->plan, &job->engine.setup,
+                                              route);
+    if (!why) {
         tegra_nvjpg_note_route(*route, layout.held, layout.layout.row_bytes, layout.layout.y_log2, target.count,
                                &job->engine.setup, job->plan.extent.width, job->plan.extent.height);
+        tegra_nvjpg_count_route(job->pid, *route);
+    }
+#else
+    const char *why = tegra_nvjpg_route(&job->request.base, &d, kTegraNVJPGOutputBytes, job->dst.memory != nullptr,
+                                        &layout, &job->plan, &job->engine.setup, route);
 #endif
     return why;
 }
@@ -561,6 +580,13 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
         return kIOReturnNoMemory;
     memcpy(&job->request, in, inSize);
     const auto *req = &job->request;
+#if TEGRA_NVJPG_STATS
+    if (kind == kSelector7 && req->v2024.rsvdcac == kTileProbeMagic) {
+        job->tileProbe = true;
+        memcpy(&job->tileMode, req->v2024.rsvd, sizeof(job->tileMode));
+        memcpy(&job->tileGob, req->v2024.rsvd + 4, sizeof(job->tileGob));
+    }
+#endif
     const TegraNVJPGDecodeRequest &r = req->base;
     IOReturn ret = kIOReturnSuccess;
     const char *why = nullptr;

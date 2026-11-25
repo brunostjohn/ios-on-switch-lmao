@@ -23,7 +23,8 @@ enum {
     TEGRA_NVJPG_ROUTE_ROWS = 0,         // NVJPG writes the destination's rows
     TEGRA_NVJPG_ROUTE_COPY_ROWS = 1,    // NVJPG writes scratch rows, the copy engine the destination's rows
     TEGRA_NVJPG_ROUTE_COPY_BLOCKS = 2,  // NVJPG writes scratch rows, the copy engine the destination's blocks
-    TEGRA_NVJPG_ROUTE_COUNT = 3,
+    TEGRA_NVJPG_ROUTE_TILE_PROBE = 3,   // debug kernels: NVJPG told the tiling HW Test's probe asks for
+    TEGRA_NVJPG_ROUTE_COUNT = 4,
 };
 
 // The copy engine writes a block-linear side only whole (TegraGM20BCopy.cpp's layout): the plan's one copy must be the
@@ -64,6 +65,34 @@ static inline const char *tegra_nvjpg_route(const TegraNVJPGDecodeRequest *r, co
                                         false, p, s)
                ? NULL
                : "a picture that is not the whole of its block-linear destination, or past the copy engine's scratch";
+}
+
+// HW Test image.nvjpg_tile_probe's decode (debug kernels): the picture whole into the blocks GM20B laid the destination
+// out in, from its first byte, with `tileMode` and `gob` written to the setup's tile_mode and block_linear_height
+// unchanged, which the T210's firmware passes to PDMA_PIC_INFO1. Told tile_mode 2 the engine wrote rows
+// (TegraNVJPGJpeg.h); this settles every mode and block height on the device. NULL with *route, or why not.
+static inline const char *tegra_nvjpg_route_tile_probe(const TegraNVJPGDecodeRequest *r, uint64_t length,
+                                                       const TegraNVJPGDestinationLayout *l, uint32_t tileMode,
+                                                       uint32_t gob, TegraNVJPGPlan *p, nvjpg_dec_drv_pic_setup_s *s,
+                                                       uint32_t *route)
+{
+    if (!l->held || !l->described || l->compressed)
+        return "a tile probe into a destination GM20B did not lay out block-linear, uncompressed";
+    if (p->repack != TEGRA_NVJPG_REPACK_NONE || p->planes != 1 || p->fillChroma || r->x_offset || r->y_offset ||
+        tileMode > 3 || gob > 7)
+        return "a tile probe of more than one plane, placed, or of a tiling the setup has no field for";
+    const uint64_t blockRows = 8ull << l->layout.y_log2;
+    const uint64_t end = (p->extent.rows[0] + blockRows - 1) / blockRows * blockRows * l->layout.row_bytes;
+    if (p->extent.rowBytes[0] > l->layout.row_bytes || end > length)
+        return "a tile probe whose block rows run past the destination";
+    p->target.pitch[0] = l->layout.row_bytes;
+    p->planeStart[0] = 0;
+    p->writeEnd = end;
+    s->output_stride_luma = (int)l->layout.row_bytes;
+    s->tile_mode = (int)tileMode;
+    s->block_linear_height = (int)gob;
+    *route = TEGRA_NVJPG_ROUTE_TILE_PROBE;
+    return NULL;
 }
 
 #ifdef __cplusplus

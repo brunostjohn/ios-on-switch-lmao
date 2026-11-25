@@ -239,6 +239,9 @@ void tegra_nvjpg_counts_of(int, TegraNVJPGRouteCounts *out)
 void tegra_nvjpg_stats_line(void)
 {}
 
+void tegra_nvjpg_count_route(int, uint32_t)
+{}
+
 std::vector<uint32_t> gRoutes;
 
 void tegra_nvjpg_note_route(uint32_t route, bool, uint32_t, uint32_t, uint32_t, const nvjpg_dec_drv_pic_setup_s *,
