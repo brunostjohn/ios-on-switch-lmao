@@ -34,7 +34,8 @@ struct EncodeCostPathTest: HWTest {
 
     static let parts = [
         "resources", "loop", "state", "apply", "pass", "pass_begin", "fusion", "pass_end", "pass_prologue", "draw",
-        "prepare", "geometry", "variant", "descriptors", "textures", "bind", "use", "uniforms", "tail", "commit",
+        "prepare", "geometry", "variant_lookup", "variant", "descriptors", "textures", "bind", "use", "uniforms", "tail",
+        "commit",
         "exec", "retire",
     ]
     static let events = [

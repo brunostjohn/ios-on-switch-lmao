@@ -333,11 +333,12 @@ size_t metal_encode_rates(char *out, size_t size)
     const int tail = snprintf(
         out + head, size - head,
         " walk=%.0f rself=%.0f tself=%.0f sself=%.0f dself=%.0f pself=%.0f eself=%.0f apply=%.0f tex=%.0f retire=%.0f "
-        "pbeg=%.0f "
+        "pbeg=%.0f vlook=%.0f "
         "mal=%.1f free=%.1f lk=%.1f snd=%.1f applied=%.2f/d useadd=%.1f/%.1f descb=%.1f descu=%.1f geov=%.1f",
         own(EncodePart::Loop), own(EncodePart::Resources), own(EncodePart::Tail), own(EncodePart::State),
         own(EncodePart::Draw), own(EncodePart::Prepare), own(EncodePart::PassEnd), part(EncodePart::Apply),
-        part(EncodePart::Textures), part(EncodePart::Retire), part(EncodePart::PassBegin), mallocs, frees,
+        part(EncodePart::Textures), part(EncodePart::Retire), part(EncodePart::PassBegin),
+        part(EncodePart::VariantLookup), mallocs, frees,
         events(gm20b::EncodeCount::Locks), events(gm20b::EncodeCount::Sends),
         draws ? events(gm20b::EncodeCount::Applied) / draws : 0.0, events(gm20b::EncodeCount::UseAdds),
         events(gm20b::EncodeCount::Uses), events(gm20b::EncodeCount::DescriptorBuilds),
