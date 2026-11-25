@@ -19,9 +19,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
+
+extern "C" int thread_selfcounts(int type, void *buf, size_t nbytes);
 
 namespace {
 
@@ -67,6 +70,13 @@ double us(Clock::duration d)
     return double(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count()) / 1000.0;
 }
 
+// The calling thread's instructions retired (thread_selfcounts THSC_CPI): steadier than its time on a shared executor
+uint64_t instructions()
+{
+    uint64_t words[2] = {};
+    return thread_selfcounts(1, words, sizeof words) ? 0 : words[0];
+}
+
 double threadUs()
 {
     return double(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)) / 1000.0;
@@ -90,6 +100,15 @@ double fieldCalls(const std::string &line, const char *key)
     const size_t slash = line.find('/', at + k.size());
     const size_t space = line.find(' ', at + k.size());
     return slash != std::string::npos && slash < space ? strtod(line.c_str() + slash + 1, nullptr) : -1;
+}
+
+size_t promiseMakes()
+{
+    std::lock_guard<std::mutex> l(kernel_model::callLock);
+    return size_t(std::count_if(kernel_model::model.promiseCalls.begin(), kernel_model::model.promiseCalls.end(),
+                                [](const auto &c) {
+                                    return c.op == TegraGM20BPromiseMake;
+                                }));
 }
 
 std::string encodeLine()
@@ -135,10 +154,11 @@ std::string measure(const scale_frames::Shape &shape, bool presenting)
     const auto framebuffer = framebuffers(o.device, shape);
     const auto pace = std::chrono::microseconds(6000 / std::max(shape.passes, 1));
     std::vector<double> record, commit, scheduled, firstJob;
+    uint64_t fewest = UINT64_MAX;
     std::vector<id<MTLCommandBuffer>> inFlight;
     gm20b::FrameCpuCounts &fc = gm20b::frameCpuCounts();
     uint64_t w0 = 0, q0 = 0, p0 = 0, e0 = 0, h0 = 0, o0 = 0, made0 = 0, small0 = 0;
-    size_t jobs0 = 0;
+    size_t jobs0 = 0, promises0 = 0;
     auto next = Clock::now();
     for (int frame = 0; frame < kWarm + kFrames; frame++) {
         if (frame == kWarm) {
@@ -153,6 +173,7 @@ std::string measure(const scale_frames::Shape &shape, bool presenting)
             made0 = fc.early[size_t(gm20b::EarlyOutcome::Made)];
             small0 = fc.early[size_t(gm20b::EarlyOutcome::Small)];
             jobs0 = gpu.submitted();
+            promises0 = promiseMakes();
         }
         if (inFlight.size() == 2) {
             [inFlight.front() waitUntilCompleted];
@@ -162,14 +183,17 @@ std::string measure(const scale_frames::Shape &shape, bool presenting)
         if (presenting)
             [cb enqueue];
         double recordUs = 0;
+        uint64_t recordInstructions = 0;
         for (int p = 0; p < shape.passes; p++) {
             const double began = threadUs();
+            const uint64_t counted = instructions();
             if (presenting && p == shape.passes - 1)
                 scale_frames::pass(cb, o.state, {framebuffer[size_t(frame) % framebuffer.size()]}, shape, shape.targets,
                                    uint32_t(frame));
             else
                 scale_frames::pass(cb, o.state, into, shape, p, uint32_t(frame));
             recordUs += threadUs() - began;
+            recordInstructions += instructions() - counted;
             std::this_thread::sleep_for(pace);
         }
         const size_t before = gpu.submitted();
@@ -182,6 +206,7 @@ std::string measure(const scale_frames::Shape &shape, bool presenting)
             std::this_thread::sleep_for(std::chrono::microseconds(50));
         if (frame >= kWarm) {
             record.push_back(recordUs);
+            fewest = std::min(fewest, recordInstructions);
             commit.push_back(us(returned - committing));
             scheduled.push_back(us(done - returned));
             firstJob.push_back(us(gpu.submittedAt(before) - committing));
@@ -204,22 +229,27 @@ std::string measure(const scale_frames::Shape &shape, bool presenting)
                  execs = fieldCalls(enc, "exec") * perCb;
     char line[1024];
     snprintf(line, sizeof line,
-             "compositor%s %d passes %d draws: record p50 %.1f us (%.2f a pass, %.3f a draw); commit p50 %.1f us; "
+             "compositor%s %d passes %d draws: record p50 %.1f us (%.2f a pass, %.3f a draw), fewest %llu instructions "
+             "(%llu a pass); commit p50 %.1f us; "
              "waitUntilScheduled p50 %.1f p90 %.1f us (queued %.0f parked %.0f encoding %.0f handlers %.0f other "
              "%.0f; early %llu, too small %llu); commit to first job p50 %.1f p90 %.1f us; jobs %.2f a frame; worker "
              "after commit %.1f us a "
              "frame (pass %.1f, draw %.1f, kernel %.1f in %.2f job calls)\n",
              presenting ? " presenting" : "", shape.passes, shape.draws, percentile(record, 0.5),
              percentile(record, 0.5) / shape.passes, percentile(record, 0.5) / std::max(shape.draws, 1),
-             percentile(commit, 0.5), percentile(scheduled, 0.5), percentile(scheduled, 0.9),
-             double(fc.waitQueued - q0) / waits, double(fc.waitParked - p0) / waits,
-             double(fc.waitEncoding - e0) / waits, double(fc.waitHandlers - h0) / waits,
-             double(fc.waitOther - o0) / waits, (unsigned long long)made, (unsigned long long)small,
-             percentile(firstJob, 0.5), percentile(firstJob, 0.9), double(gpu.submitted() - jobs0) / kFrames, wall,
-             pass, draw, kern, execs);
-    // every frame of more passes than the floor leaves after its commit is scheduled before its encode (frame line early=)
-    if (shape.passes >= 3)
+             (unsigned long long)fewest, (unsigned long long)(fewest / uint64_t(shape.passes)), percentile(commit, 0.5),
+             percentile(scheduled, 0.5), percentile(scheduled, 0.9), double(fc.waitQueued - q0) / waits,
+             double(fc.waitParked - p0) / waits, double(fc.waitEncoding - e0) / waits,
+             double(fc.waitHandlers - h0) / waits, double(fc.waitOther - o0) / waits, (unsigned long long)made,
+             (unsigned long long)small, percentile(firstJob, 0.5), percentile(firstJob, 0.9),
+             double(gpu.submitted() - jobs0) / kFrames, wall, pass, draw, kern, execs);
+    // every frame of more passes than the floor leaves after its commit is scheduled before its encode (frame line
+    // early=), and a presenting one promises its framebuffer's writes to the kernel to be
+    if (shape.passes >= 3) {
         EXPECT_EQ(made, uint64_t(kFrames)) << line;
+        if (presenting)
+            EXPECT_EQ(promiseMakes() - promises0, size_t(kFrames)) << line;
+    }
     return line;
 }
 
