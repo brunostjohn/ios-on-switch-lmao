@@ -5,8 +5,9 @@ empties them at launch unless their __cache_info__ names the system's ProductBui
 initWithURL:], 21H461 and 24B119). On Apple's devices an update that changes how icons draw also changes that build;
 here the GPU build changes alone, and the icons it drew before stay. So the deploy writes the staged GPU build (the
 stager's whole-list digest, the first line of ngpu/stage.tsv.gz) to <Data>/Switch/icon-cache-gpu, and the next boot's
-kernel removes each __cache_info__ (21H461's at the cache folder's top, 24B119's in its salt folders) before launchd
-starts, once per GPU build (kernel/switch/boot/icon_cache.c). The deploy does not read the cache
+kernel lets the cache go before launchd starts, once per GPU build (kernel/switch/boot/icon_cache.c): 21H461's by its
+top-level __cache_info__; 24B119's salt folders are kept aside for the build that drew them and come back when the card
+returns to that build. The deploy does not read the cache
 itself: on a Data volume mounted with owners ignored the Mac's user can still be refused it (EACCES at __cache_info__,
 14 Nov), and only root on the device always gets in.
 """

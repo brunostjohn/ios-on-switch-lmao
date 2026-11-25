@@ -1,7 +1,7 @@
 // kernel/switch/boot/icon_cache.c over a host directory laid out as the Data volume, in the cache layout of the XNU
-// this target compiles it for: XNU_12377_121_6 atomically renames 24B119's salt folders aside into
-// Switch/icon-cache-trash and sweeps them post-boot; XNU_10063_141_1 keeps unlinking 21H461's top-level
-// __cache_info__.
+// this target compiles it for: XNU_12377_121_6 atomically renames 24B119's salt folders aside, into
+// Switch/icon-cache-keep for the build the marker names (and back when that build returns) or into
+// Switch/icon-cache-trash, swept post-boot; XNU_10063_141_1 keeps unlinking 21H461's top-level __cache_info__.
 #include <gtest/gtest.h>
 
 #include <dirent.h>
@@ -28,9 +28,11 @@ namespace fs = std::filesystem;
 const fs::path kCache =
     "containers/Shared/SystemGroup/systemgroup.com.apple.lsd.iconscache/Library/Caches/com.apple.IconsCache";
 const fs::path kTrash = SWITCH_ICON_CACHE_TRASH;
+const fs::path kKeep = SWITCH_ICON_CACHE_KEEP;
 const char *const kSalts[] = {"28A6C7EA-97A4-3002-8473-901196984E6C", "5D0D51D1-4930-479F-AA26-F31E82658A70"};
 const char kSession[] = "3349B3E8-362E-46C3-A562-EB07470C449B";
 const std::string kBuildA = std::string(64, 'a') + "\n", kBuildB = std::string(64, 'b') + "\n";
+const std::string kBuildC = std::string(64, 'c') + "\n";
 
 struct Data {
     fs::path root;
@@ -245,17 +247,88 @@ TEST_F(SwitchIconCache, NoCacheYetRecordsTheBuild)
 }
 
 #if XNU_12377_121_6
-TEST_F(SwitchIconCache, Xnu12377RenamesEverySaltFolderAsideAndWritesMarker)
+const char kKeyA[] = "aaaaaaaaaaaa", kKeyB[] = "bbbbbbbbbbbb";
+
+TEST_F(SwitchIconCache, Xnu12377KeepsTheMarkersBuildsFoldersAndWritesMarker)
 {
     Put(data.root / "Switch/icon-cache-gpu", kBuildB);
     Put(data.root / "Switch/icon-cache-reset", kBuildA);
     const switch_icon_cache_result result = Drop();
     EXPECT_TRUE(result.requested);
     EXPECT_EQ(result.error, 0);
-    EXPECT_EQ(result.dropped, 2);
-    EXPECT_TRUE(result.trash_pending);
-    EXPECT_STREQ(result.build, "bbbbbbbbbbbb");
+    EXPECT_EQ(result.kept, 2);
+    EXPECT_EQ(result.dropped, 0);
+    EXPECT_EQ(result.restored, 0);
+    EXPECT_FALSE(result.trash_pending);
+    EXPECT_STREQ(result.build, kKeyB);
     EXPECT_TRUE(data.unlinked.empty()) << "24B119 renames salt folders aside instead of unlinking __cache_info__";
+    ASSERT_EQ(data.mkdirs.size(), 2u);
+    EXPECT_EQ(data.mkdirs[0].first, SWITCH_ICON_CACHE_KEEP);
+    EXPECT_EQ(data.mkdirs[1].first, (kKeep / kKeyA).string());
+    EXPECT_EQ(data.mkdirs[1].second, 0700u);
+    for (const char *salt : kSalts) {
+        EXPECT_FALSE(fs::exists(data.root / kCache / salt)) << salt;
+        const fs::path kept = data.root / kKeep / kKeyA / salt;
+        EXPECT_EQ(Contents(kept / "__cache_info__"), salt);
+        EXPECT_TRUE(fs::exists(kept / "__METAL_CACHE__" / "shader.bin")) << salt;
+    }
+    EXPECT_TRUE(fs::exists(data.root / kCache / "__cache_info__")) << "24B119 moves salt folders only";
+    EXPECT_EQ(Contents(data.root / "Switch/icon-cache-reset"), kBuildB);
+    EXPECT_FALSE(fs::exists(data.root / kTrash));
+}
+
+TEST_F(SwitchIconCache, Xnu12377AReturningBuildGetsItsFoldersBack)
+{
+    Put(data.root / "Switch/icon-cache-gpu", kBuildB);
+    Put(data.root / "Switch/icon-cache-reset", kBuildA);
+    ASSERT_EQ(Drop().kept, 2);
+    for (const char *salt : kSalts)
+        Put(data.root / kCache / salt / "__cache_info__", std::string("drawn by B ") + salt);
+    Put(data.root / "Switch/icon-cache-gpu", kBuildA);
+    const switch_icon_cache_result result = Drop();
+    EXPECT_EQ(result.error, 0);
+    EXPECT_EQ(result.kept, 2);
+    EXPECT_EQ(result.restored, 2);
+    EXPECT_EQ(result.dropped, 0);
+    EXPECT_TRUE(result.trash_pending) << "the emptied keep folder goes to the sweep";
+    for (const char *salt : kSalts) {
+        EXPECT_EQ(Contents(data.root / kCache / salt / "__cache_info__"), salt) << "A's own icons are back";
+        EXPECT_EQ(Contents(data.root / kKeep / kKeyB / salt / "__cache_info__"), std::string("drawn by B ") + salt);
+    }
+    EXPECT_FALSE(fs::exists(data.root / kKeep / kKeyA));
+    EXPECT_TRUE(fs::exists(data.root / kTrash / (std::string(kSession) + "-keep-" + kKeyA)));
+    EXPECT_EQ(Contents(data.root / "Switch/icon-cache-reset"), kBuildA);
+}
+
+TEST_F(SwitchIconCache, Xnu12377TheKeepHoldsOneBuild)
+{
+    Put(data.root / "Switch/icon-cache-gpu", kBuildB);
+    Put(data.root / "Switch/icon-cache-reset", kBuildA);
+    ASSERT_EQ(Drop().kept, 2);
+    for (const char *salt : kSalts)
+        Put(data.root / kCache / salt / "store.index", "B");
+    Put(data.root / "Switch/icon-cache-gpu", kBuildC);
+    const switch_icon_cache_result result = Drop();
+    EXPECT_EQ(result.error, 0);
+    EXPECT_EQ(result.kept, 2);
+    EXPECT_EQ(result.restored, 0);
+    EXPECT_TRUE(result.trash_pending);
+    EXPECT_FALSE(fs::exists(data.root / kKeep / kKeyA));
+    EXPECT_TRUE(fs::exists(data.root / kKeep / kKeyB));
+    EXPECT_TRUE(fs::exists(data.root / kTrash / (std::string(kSession) + "-keep-" + kKeyA)));
+    for (const char *salt : kSalts)
+        EXPECT_FALSE(fs::exists(data.root / kCache / salt)) << "C starts with an empty cache";
+}
+
+TEST_F(SwitchIconCache, Xnu12377WithoutAMarkerMovesEverySaltFolderToTrash)
+{
+    Put(data.root / "Switch/icon-cache-gpu", kBuildB);
+    const switch_icon_cache_result result = Drop();
+    EXPECT_TRUE(result.requested);
+    EXPECT_EQ(result.error, 0);
+    EXPECT_EQ(result.dropped, 2);
+    EXPECT_EQ(result.kept, 0);
+    EXPECT_TRUE(result.trash_pending);
     ASSERT_EQ(data.mkdirs.size(), 1u);
     EXPECT_EQ(data.mkdirs[0].first, SWITCH_ICON_CACHE_TRASH);
     EXPECT_EQ(data.mkdirs[0].second, 0700u);
@@ -267,7 +340,6 @@ TEST_F(SwitchIconCache, Xnu12377RenamesEverySaltFolderAsideAndWritesMarker)
         EXPECT_TRUE(fs::exists(moved / "store.index")) << salt;
         EXPECT_TRUE(fs::exists(moved / "__METAL_CACHE__" / "shader.bin")) << salt;
     }
-    EXPECT_TRUE(fs::exists(data.root / kCache / "__cache_info__")) << "24B119 moves salt folders only";
     EXPECT_EQ(Contents(data.root / "Switch/icon-cache-reset"), kBuildB);
 
     data.renamed.clear();
@@ -303,9 +375,15 @@ TEST_F(SwitchIconCache, FailedRenameFailsClosedWithoutAdvancingMarker)
     const switch_icon_cache_result result = Drop();
     EXPECT_TRUE(result.requested);
     EXPECT_EQ(result.error, EIO);
-    EXPECT_EQ(result.dropped, 1);
-    EXPECT_TRUE(result.trash_pending) << "the first moved folder still needs post-boot sweep";
+    EXPECT_EQ(result.kept, 1);
     EXPECT_EQ(Contents(data.root / "Switch/icon-cache-reset"), kBuildA);
+
+    data.renameError = 0;
+    const switch_icon_cache_result again = Drop();
+    EXPECT_EQ(again.error, 0);
+    EXPECT_EQ(again.kept, 1) << "the folder left in the cache is kept; the half-kept one goes to the sweep";
+    EXPECT_TRUE(again.trash_pending);
+    EXPECT_EQ(Contents(data.root / "Switch/icon-cache-reset"), kBuildB);
 }
 
 TEST_F(SwitchIconCache, FailedMkdirFailsClosedWithoutRenamingOrAdvancingMarker)
@@ -316,6 +394,7 @@ TEST_F(SwitchIconCache, FailedMkdirFailsClosedWithoutRenamingOrAdvancingMarker)
     const switch_icon_cache_result result = Drop();
     EXPECT_EQ(result.error, EACCES);
     EXPECT_EQ(result.dropped, 0);
+    EXPECT_EQ(result.kept, 0);
     EXPECT_TRUE(data.renamed.empty());
     EXPECT_EQ(Contents(data.root / "Switch/icon-cache-reset"), kBuildA);
 }
@@ -328,19 +407,18 @@ TEST_F(SwitchIconCache, RenameEnoentIsNonFatal)
     data.renameFailAt = 1;
     const switch_icon_cache_result result = Drop();
     EXPECT_EQ(result.error, 0);
-    EXPECT_EQ(result.dropped, 1);
+    EXPECT_EQ(result.kept, 1);
     EXPECT_EQ(Contents(data.root / "Switch/icon-cache-reset"), kBuildB);
 }
 
 TEST_F(SwitchIconCache, InvalidBootSessionFailsClosed)
 {
     Put(data.root / "Switch/icon-cache-gpu", kBuildB);
-    Put(data.root / "Switch/icon-cache-reset", kBuildA);
     data.session = "bad/session";
     const switch_icon_cache_result result = Drop();
     EXPECT_EQ(result.error, EINVAL);
     EXPECT_TRUE(data.renamed.empty());
-    EXPECT_EQ(Contents(data.root / "Switch/icon-cache-reset"), kBuildA);
+    EXPECT_FALSE(fs::exists(data.root / "Switch/icon-cache-reset"));
 }
 
 struct SweepHost {

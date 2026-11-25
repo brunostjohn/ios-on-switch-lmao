@@ -9557,7 +9557,8 @@ native_switch_icon_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	}
 #if DEVELOPMENT || DEBUG
 	else if (result.requested) {
-		printf("SwitchRawBoot: icon cache for GPU build %s: %d folder(s) moved to trash\n", result.build, result.dropped);
+		printf("SwitchRawBoot: icon cache for GPU build %s: %d folder(s) kept for the previous build, %d moved to trash, "
+		    "%d restored\n", result.build, result.kept, result.dropped, result.restored);
 	}
 #endif
 }
