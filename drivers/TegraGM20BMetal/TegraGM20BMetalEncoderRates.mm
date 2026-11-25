@@ -337,6 +337,9 @@ size_t metal_frame_rates(char *out, size_t size)
         (unsigned long long)take(c.longestParts[0]), (unsigned long long)take(c.longestParts[1]),
         (unsigned long long)take(c.longestParts[2]), (unsigned long long)take(c.longestParts[3]),
         (unsigned long long)take(c.longestParts[4]));
+    put(line, " early=");
+    for (size_t k = 0; k < size_t(gm20b::EarlyOutcome::Count); k++)
+        put(line, "%s%llu", k ? "/" : "", (unsigned long long)take(c.early[k]));
     using E = gm20b::EnqueueTiming;
     put(line, " enq=%llu/%llu/%llu latew=%llu/%llu/%llu/%llu",
         (unsigned long long)take(c.enqueues[size_t(E::BeforeFirstEncoder)]),

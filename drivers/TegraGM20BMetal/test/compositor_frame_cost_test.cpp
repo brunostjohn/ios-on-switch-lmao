@@ -11,6 +11,8 @@
 #include "../TegraGM20BMetal.h"
 #include "../frame_cpu_counts.h"
 
+#import <IOSurface/IOSurface.h>
+
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <chrono>
@@ -97,17 +99,45 @@ std::string encodeLine()
     return std::string(out, n);
 }
 
-std::string measure(const scale_frames::Shape &shape)
+// Core Animation's framebuffer: a BGRA8 IOSurface its last pass of a frame draws into, one of three in turn
+std::vector<id<MTLTexture>> framebuffers(id<MTLDevice> device, const scale_frames::Shape &shape)
+{
+    std::vector<id<MTLTexture>> made;
+    for (int i = 0; i < 3; i++) {
+        IOSurfaceRef surface = IOSurfaceCreate((__bridge CFDictionaryRef) @{
+            (id)kIOSurfaceWidth : @(shape.width),
+            (id)kIOSurfaceHeight : @(shape.height),
+            (id)kIOSurfaceBytesPerElement : @4,
+            (id)kIOSurfaceBytesPerRow : @(shape.width * 4),
+            (id)kIOSurfaceAllocSize : @(shape.width * 4 * shape.height),
+            (id)kIOSurfacePixelFormat : @(uint32_t('BGRA'))
+        });
+        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                      width:shape.width
+                                                                                     height:shape.height
+                                                                                  mipmapped:NO];
+        td.storageMode = MTLStorageModeShared;
+        td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        made.push_back([device newTextureWithDescriptor:td iosurface:surface plane:0]);
+        CFRelease(surface);
+    }
+    return made;
+}
+
+// `presenting`: as Core Animation records: the command buffer enqueued before its first encoder, its last pass into one
+// of three framebuffer IOSurfaces
+std::string measure(const scale_frames::Shape &shape, bool presenting)
 {
     const Opened &o = renderServer();
     timed_gpu::Gpu gpu;
     id<MTLCommandQueue> queue = [o.device newCommandQueue];
-    const auto into = scale_frames::targets(o.device, shape);
+    auto into = scale_frames::targets(o.device, shape);
+    const auto framebuffer = framebuffers(o.device, shape);
     const auto pace = std::chrono::microseconds(6000 / std::max(shape.passes, 1));
     std::vector<double> record, commit, scheduled, firstJob;
     std::vector<id<MTLCommandBuffer>> inFlight;
     gm20b::FrameCpuCounts &fc = gm20b::frameCpuCounts();
-    uint64_t w0 = 0, q0 = 0, p0 = 0, e0 = 0, h0 = 0, o0 = 0;
+    uint64_t w0 = 0, q0 = 0, p0 = 0, e0 = 0, h0 = 0, o0 = 0, made0 = 0, small0 = 0;
     size_t jobs0 = 0;
     auto next = Clock::now();
     for (int frame = 0; frame < kWarm + kFrames; frame++) {
@@ -120,6 +150,8 @@ std::string measure(const scale_frames::Shape &shape)
             (void)encodeLine();
             w0 = fc.waits, q0 = fc.waitQueued, p0 = fc.waitParked, e0 = fc.waitEncoding, h0 = fc.waitHandlers,
             o0 = fc.waitOther;
+            made0 = fc.early[size_t(gm20b::EarlyOutcome::Made)];
+            small0 = fc.early[size_t(gm20b::EarlyOutcome::Small)];
             jobs0 = gpu.submitted();
         }
         if (inFlight.size() == 2) {
@@ -127,10 +159,16 @@ std::string measure(const scale_frames::Shape &shape)
             inFlight.erase(inFlight.begin());
         }
         id<MTLCommandBuffer> cb = [queue commandBuffer];
+        if (presenting)
+            [cb enqueue];
         double recordUs = 0;
         for (int p = 0; p < shape.passes; p++) {
             const double began = threadUs();
-            scale_frames::pass(cb, o.state, into, shape, p, uint32_t(frame));
+            if (presenting && p == shape.passes - 1)
+                scale_frames::pass(cb, o.state, {framebuffer[size_t(frame) % framebuffer.size()]}, shape, shape.targets,
+                                   uint32_t(frame));
+            else
+                scale_frames::pass(cb, o.state, into, shape, p, uint32_t(frame));
             recordUs += threadUs() - began;
             std::this_thread::sleep_for(pace);
         }
@@ -157,6 +195,8 @@ std::string measure(const scale_frames::Shape &shape)
         EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
     }
     const std::string enc = encodeLine();
+    const uint64_t made = fc.early[size_t(gm20b::EarlyOutcome::Made)] - made0,
+                   small = fc.early[size_t(gm20b::EarlyOutcome::Small)] - small0;
     const double waits = double(std::max<uint64_t>(fc.waits - w0, 1));
     const double encodes = field(enc, "n"), perCb = encodes > 0 ? encodes / kFrames : 0;
     const double wall = field(enc, "wall") * perCb, pass = field(enc, "pass") * perCb,
@@ -164,16 +204,22 @@ std::string measure(const scale_frames::Shape &shape)
                  execs = fieldCalls(enc, "exec") * perCb;
     char line[1024];
     snprintf(line, sizeof line,
-             "compositor %d passes %d draws: record p50 %.1f us (%.2f a pass, %.3f a draw); commit p50 %.1f us; "
+             "compositor%s %d passes %d draws: record p50 %.1f us (%.2f a pass, %.3f a draw); commit p50 %.1f us; "
              "waitUntilScheduled p50 %.1f p90 %.1f us (queued %.0f parked %.0f encoding %.0f handlers %.0f other "
-             "%.0f); commit to first job p50 %.1f p90 %.1f us; jobs %.2f a frame; worker after commit %.1f us a "
+             "%.0f; early %llu, too small %llu); commit to first job p50 %.1f p90 %.1f us; jobs %.2f a frame; worker "
+             "after commit %.1f us a "
              "frame (pass %.1f, draw %.1f, kernel %.1f in %.2f job calls)\n",
-             shape.passes, shape.draws, percentile(record, 0.5), percentile(record, 0.5) / shape.passes,
-             percentile(record, 0.5) / std::max(shape.draws, 1), percentile(commit, 0.5),
-             percentile(scheduled, 0.5), percentile(scheduled, 0.9), double(fc.waitQueued - q0) / waits,
-             double(fc.waitParked - p0) / waits, double(fc.waitEncoding - e0) / waits,
-             double(fc.waitHandlers - h0) / waits, double(fc.waitOther - o0) / waits, percentile(firstJob, 0.5),
-             percentile(firstJob, 0.9), double(gpu.submitted() - jobs0) / kFrames, wall, pass, draw, kern, execs);
+             presenting ? " presenting" : "", shape.passes, shape.draws, percentile(record, 0.5),
+             percentile(record, 0.5) / shape.passes, percentile(record, 0.5) / std::max(shape.draws, 1),
+             percentile(commit, 0.5), percentile(scheduled, 0.5), percentile(scheduled, 0.9),
+             double(fc.waitQueued - q0) / waits, double(fc.waitParked - p0) / waits,
+             double(fc.waitEncoding - e0) / waits, double(fc.waitHandlers - h0) / waits,
+             double(fc.waitOther - o0) / waits, (unsigned long long)made, (unsigned long long)small,
+             percentile(firstJob, 0.5), percentile(firstJob, 0.9), double(gpu.submitted() - jobs0) / kFrames, wall,
+             pass, draw, kern, execs);
+    // every frame of more passes than the floor leaves after its commit is scheduled before its encode (frame line early=)
+    if (shape.passes >= 3)
+        EXPECT_EQ(made, uint64_t(kFrames)) << line;
     return line;
 }
 
@@ -183,11 +229,12 @@ TEST(GM20BCompositorFrameCost, ScaleFrames)
     const char *at = getenv("TEST_UNDECLARED_OUTPUTS_DIR");
     std::ofstream report(std::string(at ? at : ".") + "/compositor_frame_cost.txt");
     const scale_frames::Shape shapes[] = {{1, 6, 1}, {3, 18, 2}, {9, 30, 4}, {15, 90, 4}};
-    for (const scale_frames::Shape &shape : shapes) {
-        const std::string line = measure(shape);
-        report << line;
-        printf("%s", line.c_str());
-    }
+    for (const bool presenting : {false, true})
+        for (const scale_frames::Shape &shape : shapes) {
+            const std::string line = measure(shape, presenting);
+            report << line;
+            printf("%s", line.c_str());
+        }
 }
 
 }  // namespace

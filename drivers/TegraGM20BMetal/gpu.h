@@ -902,12 +902,15 @@ public:
 
     // A writer promise (TegraGM20BJobABI.h method 34) of the device's channel for the IOSurface imports `handles`, kept by
     // the job that names it (CommandBuffer::promises) or cancelled
-    bool promise(const std::vector<uint64_t> &handles, uint32_t &id)
+    bool promise(const std::vector<uint64_t> &handles, uint32_t &id, int *result = nullptr)
     {
         if (!ensureChannel())
             return false;
         const uint32_t ch = channel_.load(std::memory_order_acquire);
-        return ch && k_.promise(ch, handles, id) == KERN_SUCCESS;
+        const int kr = ch ? k_.promise(ch, handles, id) : kIOReturnNotReady;
+        if (result)
+            *result = kr;
+        return kr == KERN_SUCCESS;
     }
 
     // withdrawn: its command buffer failed, so the promised writes never come (TegraGM20BPromiseWithdraw). The

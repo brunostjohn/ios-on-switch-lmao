@@ -367,12 +367,27 @@ static void earlyWrittenSurfaces(SwitchMetalCommandBuffer *cb, std::vector<uint6
     });
 }
 
+// A refusal the kernel answered once per process: an early schedule it refuses leaves Core Animation waiting for the
+// submit worker's encode every frame
+static void noteEarlyRefused(int kr, size_t surfaces)
+{
+    static std::atomic<bool> told{false};
+    if (!told.exchange(true, std::memory_order_relaxed))
+        os_log_error(
+            gm20bLog(),
+            "SwitchMetal: the kernel refused the render server's early writer promise for %zu surfaces (0x%x): "
+            "its frames wait for their encode",
+            surfaces, kr);
+}
+
 static bool promiseWritesEarly(SwitchMetalCommandBuffer *cb, const std::vector<uint64_t> &handles)
 {
     if (handles.empty())
         return true;
-    if (handles.size() > size_t(TegraGM20BMaxJobPromises) * TegraGM20BMaxPromiseUses)
+    if (handles.size() > size_t(TegraGM20BMaxJobPromises) * TegraGM20BMaxPromiseUses) {
+        noteEarlyRefused(kIOReturnNoSpace, handles.size());
         return false;
+    }
     {
         std::lock_guard<gm20b::Mutex> l(cb->_lock);
         if (cb->_promised.load(std::memory_order_relaxed) || cb->_promisesTaken)
@@ -384,9 +399,11 @@ static bool promiseWritesEarly(SwitchMetalCommandBuffer *cb, const std::vector<u
                                          handles.begin() +
                                              ptrdiff_t(std::min(handles.size(), at + TegraGM20BMaxPromiseUses)));
         uint32_t id = 0;
-        if (!gRM->raw->promise(part, id)) {
+        int kr = KERN_SUCCESS;
+        if (!gRM->raw->promise(part, id, &kr)) {
             for (uint32_t prior : made)
                 gRM->raw->cancelPromise(prior, false);
+            noteEarlyRefused(kr, handles.size());
             return false;
         }
         made.push_back(id);
@@ -413,32 +430,46 @@ static bool tryEarlySchedule(GM20BState &r, SwitchMetalCommandBuffer *cb, bool q
 {
     if (r.raw->role() != gm20b::Device::Role::RenderServer)
         return false;
+#if SWITCH_METAL_DIAGNOSTICS
+    // a commit's try is followed by its queue head's: the head's is the one counted
+    const auto refused = [queueHead](gm20b::EarlyOutcome why) {
+        if (queueHead)
+            gm20b::frameCpuCounts().early[size_t(why)].fetch_add(1, std::memory_order_relaxed);
+        return false;
+    };
+#else
+    const auto refused = [](auto) {
+        return false;
+    };
+#endif
+    using O = gm20b::EarlyOutcome;
     if (cb->_scheduledSent.load(std::memory_order_acquire) || cb->_held.load(std::memory_order_acquire) ||
         cb->_segError.set() || cb->_segs.empty() || cb->_predicates.recorded())
-        return false;
+        return refused(O::Shape);
     const bool allChecked = readyChecked && cb->_segs.size() == 1;
     const bool variantPending = (cb->_pipelineVeto.load(std::memory_order_acquire) & VetoVariant) != 0;
     if (!allChecked && (!cb->_computeJobs.empty() || variantPending))
-        return false;
+        return refused(O::Pending);
     for (const SwitchMetalSegment &seg : cb->_segs)
         if (seg.event || seg.held)
-            return false;
+            return refused(O::Shape);
     const uint8_t enqueueState = cb->_enqueueState.load(std::memory_order_acquire);
     if (!queueHead && (cb->_queue->_unscheduled != 1 || enqueueState == 2))
         return false;
     if (enqueueState == 1 && cb->_before && !cb->_before->_scheduledTurn.ran())
-        return false;
+        return refused(O::Order);
     uint32_t remaining = 0;
     bool multiRange = false;
     gm20bPipelineEarlyWork(cb, gm20b::kEarlySchedulePasses, remaining, multiRange);
     if (!gm20b::earlySchedule(true, workerBusy, remaining, multiRange))
-        return false;
+        return refused(O::Small);
     static thread_local std::vector<uint64_t> handles;
     earlyWrittenSurfaces(cb, handles);
     if (!handles.empty() && hasEarlyPromisedHandle(handles))
-        return false;
+        return refused(O::Busy);
     if (!promiseWritesEarly(cb, handles))
-        return false;
+        return refused(O::Kernel);
+    SWITCH_METAL_DIAGNOSTIC(gm20b::frameCpuCounts().early[size_t(O::Made)].fetch_add(1, std::memory_order_relaxed));
     if (!handles.empty()) {
         earlyPromised().push_back({(__bridge void *)cb, handles});
         cb->_earlyPromised = true;
