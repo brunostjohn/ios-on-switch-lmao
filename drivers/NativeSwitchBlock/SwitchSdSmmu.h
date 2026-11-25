@@ -24,38 +24,45 @@ inline bool switchSdOwned(uint64_t pa, const SwitchSdOwnedRange *owned, unsigned
     return false;
 }
 
-// The request pages of a built table, held and committed before the command may be issued. False (nothing held, the
-// chain goes through the bounce buffer) when the view could not take one.
+// The request pages of a built table, held and committed under one lock of the view before the command may be
+// issued. False (nothing held, the chain goes through the bounce buffer) when the view could not take one.
 template <class View>
 bool switchSdHoldChain(View &view, const SwitchAdmaTable &table, const SwitchSdOwnedRange *owned, unsigned ownedCount)
 {
     uint32_t held = 0;
-    for (; held < table.count; ++held) {
-        const SwitchAdmaDescriptor &d = table.entries[held];
-        if (!switchSdOwned(switchAdmaAddress(d), owned, ownedCount) && !view.hold(switchAdmaAddress(d), d.length))
-            break;
-    }
-    if (held < table.count) {
-        for (uint32_t i = 0; i < held; ++i) {
-            const SwitchAdmaDescriptor &d = table.entries[i];
-            if (!switchSdOwned(switchAdmaAddress(d), owned, ownedCount))
-                view.release(switchAdmaAddress(d), d.length);
+    view.locked([&](auto &core) {
+        for (; held < table.count; ++held) {
+            const SwitchAdmaDescriptor &d = table.entries[held];
+            if (!switchSdOwned(switchAdmaAddress(d), owned, ownedCount) && !core.hold(switchAdmaAddress(d), d.length))
+                break;
         }
-    }
-    view.commit();
+        if (held < table.count) {
+            for (uint32_t i = 0; i < held; ++i) {
+                const SwitchAdmaDescriptor &d = table.entries[i];
+                if (!switchSdOwned(switchAdmaAddress(d), owned, ownedCount))
+                    (void)core.release(switchAdmaAddress(d), d.length);
+            }
+        }
+        core.commit();
+    });
     return held == table.count;
 }
 
 // The same table's holds end once the controller can no longer reach them: after its transfer completed, or after a
-// failed command's reset, and before its requests complete (their pages may go back to the VM).
+// failed command's reset, and before its requests complete (their pages may go back to the VM). False when a page had
+// no hold to end: the chain's accounting is wrong.
 template <class View>
-void switchSdReleaseChain(View &view, const SwitchAdmaTable &table, const SwitchSdOwnedRange *owned,
+bool switchSdReleaseChain(View &view, const SwitchAdmaTable &table, const SwitchSdOwnedRange *owned,
                           unsigned ownedCount)
 {
-    for (uint32_t i = 0; i < table.count; ++i) {
-        const SwitchAdmaDescriptor &d = table.entries[i];
-        if (!switchSdOwned(switchAdmaAddress(d), owned, ownedCount))
-            view.release(switchAdmaAddress(d), d.length);
-    }
-    view.commit();
+    bool released = true;
+    view.locked([&](auto &core) {
+        for (uint32_t i = 0; i < table.count; ++i) {
+            const SwitchAdmaDescriptor &d = table.entries[i];
+            if (!switchSdOwned(switchAdmaAddress(d), owned, ownedCount))
+                released &= core.release(switchAdmaAddress(d), d.length);
+        }
+        core.commit();
+    });
+    return released;
 }

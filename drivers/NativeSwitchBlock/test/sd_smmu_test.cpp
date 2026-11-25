@@ -17,8 +17,14 @@ namespace {
 struct View {
     std::map<uint64_t, int> pages;
     std::vector<std::pair<uint64_t, uint64_t>> held;
-    unsigned commits = 0;
+    unsigned commits = 0, locks = 0;
     uint64_t refuse = ~0ULL;
+
+    template <class Body> void locked(Body &&body)
+    {
+        ++locks;
+        body(*this);
+    }
 
     bool hold(uint64_t pa, uint64_t bytes)
     {
@@ -30,11 +36,15 @@ struct View {
         return true;
     }
 
-    void release(uint64_t pa, uint64_t bytes)
+    bool release(uint64_t pa, uint64_t bytes)
     {
-        for (uint64_t page = pa & ~4095ULL; page < pa + bytes; page += 4096)
+        for (uint64_t page = pa & ~4095ULL; page < pa + bytes; page += 4096) {
+            if (pages.count(page) == 0)
+                return false;
             if (--pages[page] == 0)
                 pages.erase(page);
+        }
+        return true;
     }
 
     void commit()
@@ -75,10 +85,12 @@ TEST(SdSmmu, AChainHoldsItsRequestPagesButNotTheDriversBuffersAndReleasesTheSame
     ASSERT_TRUE(switchSdHoldChain(view, t.table, kOwned, 2));
     EXPECT_EQ(view.held, (std::vector<std::pair<uint64_t, uint64_t>>{{0x17fffe000ULL, 0x2000}, {0x91234040ULL, 0x40}}));
     EXPECT_EQ(view.commits, 1u) << "one commit for the chain";
+    EXPECT_EQ(view.locks, 1u) << "its holds and commit under one lock";
     EXPECT_EQ(view.pages.count(kBounce + 0x4000), 0u);
-    switchSdReleaseChain(view, t.table, kOwned, 2);
+    EXPECT_TRUE(switchSdReleaseChain(view, t.table, kOwned, 2));
     EXPECT_TRUE(view.pages.empty());
     EXPECT_EQ(view.commits, 2u);
+    EXPECT_EQ(view.locks, 2u);
 }
 
 TEST(SdSmmu, TwoChainsSharingAPageEachHoldItAndTheFirstToFinishLeavesItHeld)
@@ -91,10 +103,11 @@ TEST(SdSmmu, TwoChainsSharingAPageEachHoldItAndTheFirstToFinishLeavesItHeld)
     ASSERT_TRUE(switchSdHoldChain(view, a.table, kOwned, 2));
     ASSERT_TRUE(switchSdHoldChain(view, b.table, kOwned, 2));
     EXPECT_EQ(view.pages[0x90000000ULL], 2);
-    switchSdReleaseChain(view, a.table, kOwned, 2);
+    EXPECT_TRUE(switchSdReleaseChain(view, a.table, kOwned, 2));
     EXPECT_EQ(view.pages[0x90000000ULL], 1) << "the second chain's command may still be reading it";
-    switchSdReleaseChain(view, b.table, kOwned, 2);
+    EXPECT_TRUE(switchSdReleaseChain(view, b.table, kOwned, 2));
     EXPECT_TRUE(view.pages.empty());
+    EXPECT_FALSE(switchSdReleaseChain(view, b.table, kOwned, 2)) << "a second release has no hold to end";
 }
 
 TEST(SdSmmu, ARefusedHoldReleasesWhatTheChainHadHeld)

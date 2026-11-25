@@ -467,6 +467,8 @@ struct Stats {
     // awaited by CMD13 with busy (the card still programming after a transfer complete). ADMA2 chains that reached a
     // non-cacheable page (dmaPage).
     uint64_t busRefused, releases, uncachedChains;
+    // Chains held and released through the SMMU (SwitchSdSmmu.h) and the worker time both took (part of busyNs).
+    uint64_t smmuChains, smmuNs;
 #endif
 };
 }
@@ -2028,15 +2030,29 @@ bool NativeSwitchBlock::holdOwned(uint64_t pa, uint64_t bytes, bool skippedInCha
 
 void NativeSwitchBlock::holdChain(PipeSlot &slot)
 {
+#if DEVELOPMENT || DEBUG
+    const uint64_t began = switch_now_ns();
+#endif
     slot.held = switchSdHoldChain(smmu, slot.table, owned, ownedCount);
+#if DEVELOPMENT || DEBUG
+    stats.smmuNs += switch_now_ns() - began;
+#endif
 }
 
 void NativeSwitchBlock::releaseChain(PipeSlot &slot)
 {
     if (!slot.held)
         return;
-    switchSdReleaseChain(smmu, slot.table, owned, ownedCount);
+#if DEVELOPMENT || DEBUG
+    const uint64_t began = switch_now_ns();
+#endif
+    if (!switchSdReleaseChain(smmu, slot.table, owned, ownedCount))
+        panic("SwitchSD: a chain of %u descriptors released a page the SMMU view had no hold on", slot.table.count);
     slot.held = false;
+#if DEVELOPMENT || DEBUG
+    ++stats.smmuChains;
+    stats.smmuNs += switch_now_ns() - began;
+#endif
 }
 
 bool NativeSwitchBlock::copyStaged(PipeSlot &slot)
@@ -3102,6 +3118,11 @@ void NativeSwitchBlock::logThroughput()
     if (stats.uncachedChains) {
         const size_t at = strlen(extras);
         snprintf(extras + at, sizeof(extras) - at, " uncached %llu", stats.uncachedChains);
+    }
+    if (stats.smmuChains) {
+        const size_t at = strlen(extras);
+        snprintf(extras + at, sizeof(extras) - at, " smmu %llu chains %lluns each", stats.smmuChains,
+                 stats.smmuNs / stats.smmuChains);
     }
 #endif
     // Erase-based trim: erases, MiB freed and the card's busy ms for them (since boot), and AUs still due.
