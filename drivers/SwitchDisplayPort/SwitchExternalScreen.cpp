@@ -215,6 +215,10 @@ bool publishLimits(IOService *screen, const char *name, const Limit *limits, uns
 }
 }
 
+#if SWITCH_IPSW_KIND_24B119
+static_assert(switch_external::kPackedYuvUnsupported, "24B119 copies detached video to packed 10-bit without the key");
+#endif
+
 void SwitchExternalScreen::publishScanoutLimits()
 {
     const auto &published = switch_external::kPublished;

@@ -1,4 +1,5 @@
 load("//bazel/lint:defs.bzl", "lint_files")
+load("//kernel/rules:driver_flags.bzl", "IPSW_KIND_FLAGS")
 load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
 
 package(default_visibility = ["//visibility:public"])
@@ -46,6 +47,8 @@ kernel_driver(
         "TegraSor1.cpp",
     ],
     abi = ["IOMobileFramebufferLegacy", "IOSurface"],
+    # The IPSW kind (SWITCH_IPSW_KIND_*): the limits SwitchExternalPlanes.h publishes.
+    copts = IPSW_KIND_FLAGS,
     hdr_deps = [
         "drivers/ArmGIC",
         "drivers/NativeMobileDisplay",

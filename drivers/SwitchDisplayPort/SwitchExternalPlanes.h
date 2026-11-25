@@ -39,6 +39,10 @@ constexpr uint32_t kMaxLayers = 3, kMinScaleFraction = 1, kMaxScale = 4;
 constexpr uint32_t kStrideAlignment = 64;
 constexpr uint64_t kBaseAlignment = 4096;
 
+#if !defined(SWITCH_IPSW_KIND_24B119) && !defined(SWITCH_IPSW_KIND_21H461)
+#error "SwitchExternalPlanes.h: the published limits are the IPSW kind's; compile with -include switch_ipsw_volumes.h"
+#endif
+
 #if SWITCH_IPSW_KIND_24B119
 constexpr native_planes::Limits kPanelLimits = native_planes::kLimits24B119;
 #else
