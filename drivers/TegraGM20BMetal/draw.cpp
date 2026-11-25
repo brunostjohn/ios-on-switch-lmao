@@ -258,7 +258,10 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl, [[maybe_unused]] Stora
     if (!free)
         return nullptr;
     const FetchFreeForm &f = free->freeForm;
-    SWITCH_METAL_DIAGNOSTIC(if (route) { route->free = FreeMiss::NoTarget; route->rung = f.rung; });
+    SWITCH_METAL_DIAGNOSTIC(if (route) {
+        route->free = FreeMiss::NoTarget;
+        route->rung = f.rung;
+    });
     const Texture *t = f.colour < pass_.count ? pass_.color[f.colour].texture : nullptr;
     if (t && f.colour < 8 && shadowOf_[f.colour])
         t = shadowOf_[f.colour];  // the texture the client holds, not the pool image the pass renders it through
@@ -273,7 +276,10 @@ Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl, [[maybe_unused]] Stora
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     forced = dev_->probeFetchRung.load(std::memory_order_relaxed);
 #endif
-    SWITCH_METAL_DIAGNOSTIC(if (route) { route->free = FreeMiss::Rule; route->draw = draw; });
+    SWITCH_METAL_DIAGNOSTIC(if (route) {
+        route->free = FreeMiss::Rule;
+        route->draw = draw;
+    });
     if (!fetchFreeTaken(f, draw, forced))
         return nullptr;
     SWITCH_METAL_DIAGNOSTIC(if (route) route->free = FreeMiss::None);
