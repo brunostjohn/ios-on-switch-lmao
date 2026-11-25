@@ -14,7 +14,7 @@ struct ControllersTest: HWTest {
         let controllers = await MainActor.run { GCController.controllers() }
         var metrics = Metrics()
         metrics.set("connected", controllers.count)
-        guard !controllers.isEmpty else { return .skip("no game controller connected", metrics) }
+        guard !controllers.isEmpty else { return .skip(ControllerSkip.reason(railsRunning: Self.railsRunning()), metrics) }
         metrics.set("names", controllers.map { $0.vendorName ?? "?" }.joined(separator: ","))
         metrics.set("extended", controllers.filter { $0.extendedGamepad != nil }.count)
         if let level = controllers.compactMap({ $0.battery?.batteryLevel }).min() {
@@ -22,6 +22,11 @@ struct ControllersTest: HWTest {
         }
         let profiled = controllers.allSatisfy { $0.extendedGamepad != nil || $0.microGamepad != nil }
         return .judged([("every controller has a gamepad profile", profiled)], metrics)
+    }
+
+    static func railsRunning() -> [String]? {
+        guard case .value(let rails) = RailTest.read() else { return nil }
+        return rails.filter(\.value.running).map(\.key)
     }
 }
 
@@ -69,7 +74,9 @@ struct JoyConInputTest: HWTest {
         let readings = await MainActor.run { GCController.controllers().filter(Self.isJoyCon).map(Reading.init) }
         var metrics = Metrics()
         metrics.set("joycons", readings.count)
-        guard !readings.isEmpty else { return .skip("no Joy-Con connected", metrics) }
+        guard !readings.isEmpty else {
+            return .skip(ControllerSkip.reason(railsRunning: ControllersTest.railsRunning()), metrics)
+        }
         metrics.set("names", readings.map(\.name).joined(separator: ","))
         let axes = readings.flatMap { reading in
             reading.sticks.sorted { $0.key < $1.key }.map { _, value in
