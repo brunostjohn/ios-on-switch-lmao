@@ -1,0 +1,33 @@
+# The installer's toolchain check: Rust calling one C file, built for the six desktop platforms (bazel/desktop).
+#
+#   bazel build //install/hello:all_ffi
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+cc_library(
+    name = "switch_hello_c",
+    srcs = ["switch_hello.c"],
+)
+
+rust_library(
+    name = "switch_hello_core",
+    srcs = ["core.rs"],
+    link_deps = [":switch_hello_c"],
+)
+
+rust_binary(
+    name = "switch_hello_ffi",
+    srcs = ["ffi_main.rs"],
+    deps = [":switch_hello_core"],
+)
+
+desktop_binaries(
+    name = "all_ffi",
+    binary = ":switch_hello_ffi",
+)

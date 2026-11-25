@@ -9,8 +9,24 @@ LLVM_RELEASE = {
 }
 
 # ld.lld, the loader's linker (a symlink to lld); llvm-objcopy (late objects, loader.bin); llvm-readelf (a symlink to
-# llvm-readobj) and llvm-objdump (the loader builder's checks); clang-format and clang-tidy (//bazel/lint).
-TOOLS = ["lld", "ld.lld", "llvm-objcopy", "llvm-readobj", "llvm-readelf", "llvm-objdump", "clang-format", "clang-tidy"]
+# llvm-readobj) and llvm-objdump (the loader builder's checks); clang-format and clang-tidy (//bazel/lint). clang (a
+# symlink to clang-23), clang-cl, lld-link, llvm-ar and llvm-lib: the Linux and Windows C toolchains (bazel/desktop).
+TOOLS = [
+    "lld",
+    "ld.lld",
+    "llvm-objcopy",
+    "llvm-readobj",
+    "llvm-readelf",
+    "llvm-objdump",
+    "clang-format",
+    "clang-tidy",
+    "clang-23",
+    "clang",
+    "clang-cl",
+    "lld-link",
+    "llvm-ar",
+    "llvm-lib",
+]
 
 # clang's own headers (stddef.h, stdarg.h, arm_acle.h, ...), which clang-tidy parses every unit with: the resource
 # directory of this release's clang.
