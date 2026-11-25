@@ -666,6 +666,21 @@ cc_library(
     target_compatible_with = ["@platforms//os:ios"],
 )
 
+swift_interop_hint(
+    name = "shared_cache_probe_module",
+    module_name = "SwitchSharedCacheProbe",
+)
+
+# system.shared_cache_nested's walk of the mapped dyld cache and of the app's own map over its read-only data.
+cc_library(
+    name = "shared_cache_probe",
+    srcs = ["system/switch_shared_cache_probe.c"],
+    hdrs = ["system/switch_shared_cache_probe.h"],
+    aspect_hints = [":shared_cache_probe_module"],
+    copts = ["-O2"],
+    target_compatible_with = ["@platforms//os:ios"],
+)
+
 # The probe's header alone, as :bench_api is the bench's
 cc_library(
     name = "compiler_probe_api",
@@ -1117,6 +1132,7 @@ swift_library(
         ":kit_common",
         ":kit_shared",
         ":sched_probe",
+        ":shared_cache_probe",
         ":workloop_probe",
         "//apps/hwtest/dispatch:sync_handoff",
     ],
