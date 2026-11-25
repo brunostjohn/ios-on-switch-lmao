@@ -332,12 +332,13 @@ static int reserveSurface(const TegraVICSurface *surface, const switch_gpu_backi
         return -12;
     if (*logical == picture)
         return -22;
-    if (held && held->lease && held->backing == *logical && borrowed) {
+    const bool holding = held && held->lease;
+    if (holding && held->backing == *logical && borrowed) {
         *owned = held->lease;
         *borrowed = true;
         return 0;
     }
-    return switch_gpu_backing_conversion_reserve(*logical, kWrite, 0, owned);
+    return switch_gpu_backing_conversion_reserve(*logical, kWrite, holding ? 1 : 0, owned);
 }
 
 // `next` in place of the surface's native picture: its own rows invalidated, the attachment replaced. first: the

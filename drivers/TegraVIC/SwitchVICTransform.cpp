@@ -80,7 +80,7 @@ int switch_vic_transform(const TegraVICSurface *source, const TegraVICSurface *d
     work->completion = completion;
     work->context = context;
     const TegraVICTraits *traits = tegra_vic_traits();
-    int error = switch_vic_surface_access(destination, true, &work->access[1]);
+    int error = switch_vic_surface_access_destination(destination, &work->access[1], dstReserve);
     SwitchVICTiledDst tiledDst = {};
     bool directTiledDst = false;
     if (!error) {

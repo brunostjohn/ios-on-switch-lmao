@@ -25,6 +25,7 @@ std::vector<switch_gpu_backing_use> declaredUses;
 std::vector<switch_gpu_backing_guard> declaredGuards;
 std::vector<switch_gpu_cpu_lease *> declaredLeases;
 unsigned writeReleases = 0;
+int gateRefusals = 0;  // destination accesses that would not wait refused (a publisher holds the gate)
 }
 
 extern "C" const TegraVICTraits *tegra_vic_traits()
@@ -63,9 +64,13 @@ extern "C" void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_
     info->page_count = 1024;
 }
 
-int switch_vic_surface_access(const TegraVICSurface *surface, bool write, SwitchVICSurfaceAccess *access, bool,
+int switch_vic_surface_access(const TegraVICSurface *surface, bool write, SwitchVICSurfaceAccess *access, bool avoid,
                               switch_gpu_backing *)
 {
+    if (write && avoid && gateRefusals) {
+        --gateRefusals;
+        return -16;
+    }
     ++gates;
     pitchInputs += !write;
     access->descriptor = surface->memory;
@@ -233,6 +238,7 @@ protected:
         declaredGuards.clear();
         declaredLeases.clear();
         writeReleases = 0;
+        gateRefusals = 0;
         source.surface = &inputObject;
         source.memory = &inputMemory;
         source.desc.fourcc = TEGRA_VIC_FOURCC('4', '2', '0', 'v');
@@ -413,6 +419,23 @@ TEST_F(SwitchVICTransformTest, PreReservedWriteLeaseIsForwardedAndReleasedAfterS
     EXPECT_EQ(writeReleases, 1u);
     EXPECT_EQ(reservation.lease, nullptr);
     EXPECT_EQ(reservation.backing, nullptr);
+}
+
+// A publisher holding the destination's gate may be waiting on the job's reservation: the job gives it up rather than
+// wait for the gate, and its copy goes ahead without it.
+TEST_F(SwitchVICTransformTest, ADestinationGateItCannotEnterCostsTheJobItsReservationNotAWait)
+{
+    immediate = true;
+    gateRefusals = 1;
+    auto *lease = reinterpret_cast<switch_gpu_cpu_lease *>(0x1ea5e);
+    ++outputPitch.refs;
+    SwitchVICWriteReservation reservation{&outputPitch, lease};
+    ASSERT_EQ(switch_vic_transform(&source, &destination, &plan, 0, done, nullptr, nullptr, nullptr, &reservation), 1);
+    EXPECT_EQ(gateRefusals, 0);
+    EXPECT_EQ(writeReleases, 1u);
+    EXPECT_EQ(reservation.lease, nullptr);
+    EXPECT_TRUE(declaredLeases.empty());
+    EXPECT_EQ(notifications, 1);
 }
 
 TEST_F(SwitchVICTransformTest, BounceFallbackPreservesPreReservedWriteLeaseForCaller)
