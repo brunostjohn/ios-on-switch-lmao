@@ -25,8 +25,7 @@
 //   - The DRBG: 64 bytes into the kernel PRNG (write_random) at start.
 //   - Work stays on the A57s' AES/SHA instructions below each algorithm's cutover (gCutover), code-signing's page
 //     hashes included. A debug kernel's timing run 90 s after start (1 KiB to 1 MiB, every algorithm, each engine
-//     against the CPU) sets each cutover to the smallest size at which every engine is no slower; an algorithm slower
-//     at every size stays on the CPU.
+//     against the CPU) lowers each cutover to the smallest size at which every engine is no slower.
 //
 // Correctness: known answers per algorithm on each engine at start; then the first 32 operations of each algorithm and
 // one in 512 after are also done on the CPU and compared. A failed answer or a mismatch logs one line and moves that
@@ -208,11 +207,12 @@ struct AlgState {
 };
 
 AlgState gAlg[ALGS];
-// From this many bytes an algorithm goes to the engines. 25 Nov's run (both engines over the AHB) measured the CPU
-// faster at every size and algorithm, so nothing goes until a debug kernel's timing run replaces these with measured
-// crossovers.
-constexpr size_t kNever = ~static_cast<size_t>(0);
-volatile size_t gCutover[ALGS] = {kNever, kNever, kNever, kNever, kNever, kNever, kNever, kNever, kNever, kNever};
+// From this many bytes an algorithm goes to the engines. 25 Nov's timing run (both engines over the AHB) had the CPU
+// answer sooner at every size to 1 MiB; past that the engines still free the CPU for the whole transfer, which is the
+// bulk route debug kernels ran then (2 MiB). Code-signing's page hashes (16 KiB at most) stay on the CPU. A debug
+// kernel's timing run lowers a cutover where it measures every engine no slower.
+constexpr size_t kBulk = 2u << 20;
+volatile size_t gCutover[ALGS] = {kBulk, kBulk, kBulk, kBulk, kBulk, kBulk, kBulk, kBulk, kBulk, kBulk};
 // The driver's own known-answer and timing threads: every size to the engines, whatever the cutover.
 thread_t volatile gForced[2];
 
@@ -318,9 +318,9 @@ bool filter(OSObject *, IOFilterInterruptEventSource *sender)
 
 void wipeSlots(Engine &e);
 
-// Until now every operation wrote only the driver's own buffers (bring-up, and a debug kernel's timing run, with every
-// cutover still never). From here a lost end interrupt or an output that never drains may have DMA in flight into a
-// caller's pages, so it panics instead of turning the engine off.
+// Until now every operation wrote only the driver's own buffers (bring-up). From here callers' pages reach the engines,
+// and a lost end interrupt or an output that never drains may have DMA in flight into them: a panic instead of the
+// engine turned off.
 void prove()
 {
     for (Engine &e : gEngines)
@@ -1403,6 +1403,8 @@ void release(Dma *dma)
     dma->pa = 0;
 }
 
+constexpr size_t kNever = ~static_cast<size_t>(0);
+
 // Per algorithm and size: microseconds of the whole call on each engine (lists, cache maintenance, interrupt, wake)
 // against the CPU (kernel corecrypto, input cold in the cache like the engine's), best of 5; then each algorithm's
 // cutover set to the smallest size at which every engine is no slower than the CPU; then both engines at once.
@@ -1472,18 +1474,15 @@ void timing()
         if (rowCut > cutover[row.alg])
             cutover[row.alg] = rowCut;  // the slowest variant of the algorithm decides
     }
-    prove();
     char line[256];
     int at = snprintf(line, sizeof line, "TegraSE: cutover (bytes; CPU below):");
     for (unsigned alg = 0; alg < ALGS; ++alg) {
         if (!gAlg[alg].on)
             continue;
-        gCutover[alg] = cutover[alg] ? cutover[alg] : kNever;
+        gCutover[alg] = cutover[alg] && cutover[alg] < kBulk ? cutover[alg] : kBulk;
         if (at > 0 && static_cast<size_t>(at) < sizeof line) {
-            at += gCutover[alg] == kNever
-                      ? snprintf(line + at, sizeof line - static_cast<size_t>(at), " %s CPU", kAlgName[alg])
-                      : snprintf(line + at, sizeof line - static_cast<size_t>(at), " %s %zu", kAlgName[alg],
-                                 gCutover[alg]);
+            at += snprintf(line + at, sizeof line - static_cast<size_t>(at), " %s %zu%s", kAlgName[alg], gCutover[alg],
+                           cutover[alg] == kNever ? " (slower at every size)" : "");
         }
     }
     IOLog("%s\n", line);
@@ -1642,9 +1641,7 @@ void seThread(void *, wait_result_t)
     if (reseeded)
         write_random(seed, sizeof seed);
     bzero(seed, sizeof seed);
-#if !(DEVELOPMENT || DEBUG)
     prove();
-#endif
     gReady = true;
     if (gStateLoad)
         switch_digest_compress_hook = compressHook;
@@ -1659,7 +1656,6 @@ void seThread(void *, wait_result_t)
     IOSleep(90000);  // the timing run waits for the boot to be over
     if (clockOn())
         timing();
-    prove();
     for (;;) {
         stats(gStateLoad ? "traffic" : "traffic (hook off)");
         IOSleep(300000);
