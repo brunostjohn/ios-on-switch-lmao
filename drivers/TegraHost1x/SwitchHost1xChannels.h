@@ -7,7 +7,8 @@
 
 bool switch_host1x_channels_alloc(volatile uint8_t *host, volatile uint8_t *sync, IOLock *lock);
 // Boot and resume: every channel stopped, emptied and started again on its push buffer; submits are taken from here on.
-void switch_host1x_channels_program();
+// `clockKHz`: host1x's clock, which debug builds' channel counters count (163200 from PLLP / 2.5).
+void switch_host1x_channels_program(uint32_t clockKHz);
 // The channels (bit n: channel n) whose gather filter stayed on when program cleared it: their streams' host1x-class
 // waits would not run.
 uint32_t switch_host1x_channels_filter_stuck();

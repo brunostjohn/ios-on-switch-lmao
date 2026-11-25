@@ -128,6 +128,48 @@ host_test(
     deps = [":submit_kernel"],
 )
 
+# The same with DEVELOPMENT: the channels' tick and stall counters and the stats line that reads them.
+host_test(
+    name = "switch_host1x_submit_debug_test",
+    srcs = [
+        "switch_host1x_submit_test.cpp",
+        "//drivers/ArmGIC:SwitchInterrupts.h",
+        "//drivers/TegraHost1x:SwitchHost1xArena.h",
+        "//drivers/TegraHost1x:SwitchHost1xChannels.h",
+        "//drivers/TegraHost1x:SwitchHost1xDisplay.h",
+        "//drivers/TegraHost1x:SwitchHost1xDisplayChannel.h",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraHost1x:SwitchHost1xGatherStats.h",
+        "//drivers/TegraHost1x:SwitchHost1xCpuIncrement.h",
+        "//drivers/TegraHost1x:SwitchHost1xFailureRelease.h",
+        "//drivers/TegraHost1x:SwitchHost1xFence.h",
+        "//drivers/TegraHost1x:SwitchHost1xIntr.h",
+        "//drivers/TegraHost1x:TegraHost1x.h",
+        "//drivers/TegraSMMU:TegraSMMU.h",
+        "//kits/SwitchCAR:SwitchCAR.h",
+        "//kits/SwitchDMA:SwitchDMABuffer.h",
+        "//kits/SwitchDMA:SwitchDcache.h",
+        "//kits/SwitchIdle:switch_idle.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+        "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+        "//kits/SwitchTime:SwitchTime.h",
+    ],
+    additional_compiler_inputs = [
+        "//drivers/TegraHost1x:SwitchHost1xChannels.cpp",
+        "//drivers/TegraHost1x:TegraHost1x.cpp",
+    ],
+    data = [
+        "//drivers/TegraNVDEC:SwitchNVDECJobs.cpp",
+        "//drivers/TegraNVDEC:TegraNVDEC.cpp",
+        "//drivers/TegraNVENC:TegraNVENC.cpp",
+        "//drivers/TegraNVJPG:TegraNVJPG.cpp",
+        "//drivers/TegraVIC:SwitchVICJobs.cpp",
+        "//drivers/TegraVIC:TegraVIC.cpp",
+    ],
+    defines = ["DEVELOPMENT=1"],
+    deps = [":submit_kernel"],
+)
+
 host_test(
     name = "switch_host1x_fence_list_test",
     srcs = [

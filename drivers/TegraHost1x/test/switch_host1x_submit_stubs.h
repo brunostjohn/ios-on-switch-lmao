@@ -73,9 +73,11 @@ inline void IODelay(unsigned)
     throw std::runtime_error("panic");
 }
 
+inline uint64_t switch_test_now_abs;  // nanoseconds: absolutetime_to_nanoseconds below is the identity
+
 inline uint64_t mach_absolute_time()
 {
-    return 0;
+    return switch_test_now_abs;
 }
 
 inline void clock_interval_to_deadline(uint32_t interval, uint32_t scale, uint64_t *deadline)

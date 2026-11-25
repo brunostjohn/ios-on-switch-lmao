@@ -51,8 +51,15 @@ enum : uint32_t {  // channel registers, channel 0 at the start of the aperture
     DMACTRL_STOP = 1u << 0,
     DMACTRL_GETRST = 1u << 1,
     DMACTRL_INITGET = 1u << 2,
+    CH_TICKCOUNT_HI = 0x90,
+    CH_TICKCOUNT_LO = 0x94,
     CH_CHANNELCTRL = 0x98,
+    CHANNELCTRL_ENABLETICKCNT = 1u << 0,
     CHANNELCTRL_KERNEL_FILTER_GBUFFER = 1u << 2,
+    CH_STALLCTRL = 0xa0,
+    STALLCTRL_ENABLE_CHANNEL_STALL = 1u << 0,
+    CH_STALLCOUNT_HI = 0xa4,
+    CH_STALLCOUNT_LO = 0xa8,
 };
 
 enum : uint32_t {  // sync unit
@@ -229,12 +236,40 @@ void releaseLocked(uint32_t id, uint32_t threshold)
 }
 
 #if SWITCH_HOST1X_STATS
+// HI, LO, then HI again: LO wraps every 26 s at 163.2 MHz, and HI carries it (TRM 14.4.4.1, p644).
+uint64_t channelCounter(uint32_t channel, uint32_t hi, uint32_t lo)
+{
+    uint32_t high = channelRead(channel, hi), low = channelRead(channel, lo);
+    if (const uint32_t again = channelRead(channel, hi); again != high) {
+        high = again;
+        low = channelRead(channel, lo);
+    }
+    return uint64_t(high) << 32 | low;
+}
+
+void startCounters(uint32_t channel)
+{
+    channelWrite(channel, CH_TICKCOUNT_LO, 0);
+    channelWrite(channel, CH_TICKCOUNT_HI, 0);
+    channelWrite(channel, CH_STALLCOUNT_LO, 0);
+    channelWrite(channel, CH_STALLCOUNT_HI, 0);
+    channelWrite(channel, CH_STALLCTRL, STALLCTRL_ENABLE_CHANNEL_STALL);
+}
+
+// The counters are read only with the channels running: a failed submit also gets here, with host1x suspended.
 void statsLine()
 {
-    char line[200];
+    char line[320];
+    SwitchHost1xChannelCounters counters[TEGRA_HOST1X_CHANNELS];
     const uint64_t now = switch_now_us();
     IOLockLock(gChannelLock);
-    const bool due = gGatherStats.line(now, line, sizeof(line));
+    bool due = gGatherStats.due(now);
+    if (due && gRunning)
+        for (uint32_t n = 0; n < TEGRA_HOST1X_CHANNELS; n++)
+            counters[n] = {channelCounter(n, CH_TICKCOUNT_HI, CH_TICKCOUNT_LO),
+                           channelCounter(n, CH_STALLCOUNT_HI, CH_STALLCOUNT_LO)};
+    if (due)
+        due = gGatherStats.line(now, gRunning ? counters : nullptr, line, sizeof(line));
     IOLockUnlock(gChannelLock);
     if (due)
         os_log(OS_LOG_DEFAULT, "%s", line);
@@ -259,9 +294,10 @@ bool switch_host1x_channels_alloc(volatile uint8_t *host, volatile uint8_t *sync
     return true;
 }
 
-void switch_host1x_channels_program()
+void switch_host1x_channels_program(uint32_t clockKHz)
 {
     uint32_t stuck = 0;
+    constexpr uint32_t ticks = SWITCH_HOST1X_STATS ? CHANNELCTRL_ENABLETICKCNT : 0;
     for (uint32_t n = 0; n < TEGRA_HOST1X_CHANNELS; n++) {
         Channel &c = gChannels[n];
         uint32_t *ring = pushRing(c);
@@ -270,7 +306,10 @@ void switch_host1x_channels_program()
         switch_dcache_clean(ring, SwitchHost1xPush::kBytes + 4);
         syncSet(SYNC_CMDPROC_STOP, syncRead(SYNC_CMDPROC_STOP) & ~(1u << n));
         channelWrite(n, CH_DMACTRL, DMACTRL_STOP);
-        channelWrite(n, CH_CHANNELCTRL, channelRead(n, CH_CHANNELCTRL) & ~CHANNELCTRL_KERNEL_FILTER_GBUFFER);
+#if SWITCH_HOST1X_STATS
+        startCounters(n);
+#endif
+        channelWrite(n, CH_CHANNELCTRL, (channelRead(n, CH_CHANNELCTRL) & ~CHANNELCTRL_KERNEL_FILTER_GBUFFER) | ticks);
         if (channelRead(n, CH_CHANNELCTRL) & CHANNELCTRL_KERNEL_FILTER_GBUFFER)
             stuck |= 1u << n;
         channelWrite(n, CH_DMASTART, static_cast<uint32_t>(c.pushMemory.pa));
@@ -282,6 +321,11 @@ void switch_host1x_channels_program()
         dropJobs(c);
     }
     gFilterStuck = stuck;
+#if SWITCH_HOST1X_STATS
+    gGatherStats.restarted(clockKHz);
+#else
+    (void)clockKHz;
+#endif
     gRunning = true;
 }
 
