@@ -98,7 +98,7 @@ struct Panic : std::runtime_error {
     } while (0)
 
 class OSObject {
-    int refs = 1;
+    mutable int refs = 1;
 
 public:
     virtual ~OSObject() = default;
@@ -106,15 +106,16 @@ public:
     virtual void free()
     {}
 
-    void retain()
+    // const, as libkern's: a const pointer releases too
+    void retain() const
     {
         ++refs;
     }
 
-    void release()
+    void release() const
     {
         if (--refs == 0) {
-            free();
+            const_cast<OSObject *>(this)->free();
             delete this;
         }
     }
