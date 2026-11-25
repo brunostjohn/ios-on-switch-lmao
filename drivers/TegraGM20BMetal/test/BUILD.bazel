@@ -2640,6 +2640,16 @@ host_test(
     deps = ["//kits/SwitchGM20B:classes"],
 )
 
+# The reason a command buffer that was not submitted logs and fails with (command_buffer.cpp describeRefusal).
+host_test(
+    name = "refusal_text_test",
+    srcs = [
+        "refusal_text_test.cpp",
+        "//drivers/TegraGM20BMetal:refusal_text.h",
+    ],
+    cxx_std = "c++17",
+)
+
 host_test(
     name = "stamps_test",
     srcs = [

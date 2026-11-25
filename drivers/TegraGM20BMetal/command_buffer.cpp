@@ -7,6 +7,7 @@
 #include "slm.h"
 #include "stamps.h"
 #include "native_surface.h"
+#include "refusal_text.h"
 #include "tiled_cache.h"
 
 #include <mach/mach.h>
@@ -296,27 +297,24 @@ void CommandBuffer::foldCounts()
 }
 #endif
 
-void CommandBuffer::describeRefusal(char *line, size_t size) const
+static NotSubmitted refusalOf(const CommandBuffer &cb)
 {
-    if (!setRefused.empty())
-        snprintf(line, size, "%s", setRefused.c_str());
-    else if (kernelResult)
-        snprintf(line, size, "the kernel refused its job (0x%x)", unsigned(kernelResult));
-    else if (nativeError)
-        snprintf(line, size, "a view of a surface's own planes was not made (0x%x)", unsigned(nativeError));
-    else
-        snprintf(line, size, "%s", notSubmitted ? notSubmitted : "nothing named why");
+    return {cb.setRefused.c_str(), unsigned(cb.kernelResult), unsigned(cb.nativeError), cb.notSubmitted};
 }
 
-// One error line a commit that submits nothing more for a reason its caller does not take up again (the CPU holding a
-// use, a native surface changed under it): the first 16, then every 256th
+void CommandBuffer::describeRefusal(char *line, size_t size) const
+{
+    gm20b::describeRefusal(refusalOf(*this), line, size);
+}
+
+// One error line a commit that submits nothing more for a reason its caller does not take up again (refusal_text.h)
 static void logNotSubmitted(const CommandBuffer &cb)
 {
-    if (cb.kernelResult == kIOReturnCannotLock || (cb.nativeError && cb.kernelResult == cb.nativeError))
-        return;
     static std::atomic<uint32_t> lines{0};
+    if (takenUpAgain(refusalOf(cb), unsigned(kIOReturnCannotLock)))
+        return;
     const uint32_t n = lines.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (n > 16 && n % 256)
+    if (!notSubmittedLineDue(n))
         return;
     char why[192];
     cb.describeRefusal(why, sizeof why);
