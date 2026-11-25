@@ -41,6 +41,8 @@ SWITCH_OBJECTS = {
         ("bsd/kern/kern_exec.c", "boot/icon_cache_sweep.c", [], ["12377.121.6"]),
         ("bsd/kern/kern_exit.c", "diag/exit.c", []),
         ("bsd/kern/kdebug.c", "recorder/recorder.c", []),
+        ("bsd/kern/kdebug.c", "recorder/capture.c", []),
+        ("bsd/kern/kdebug.c", "recorder/store.c", []),
         ("bsd/kern/kern_event.c", "diag/workloop.c", []),
         ("bsd/net/necp.c", "diag/necp.c", [], ["12377.121.6"]),
         ("bsd/net/necp.c", "diag/necp_table.c", [], ["12377.121.6"]),
@@ -144,7 +146,9 @@ _RECORDER_OBJECTS = {
         "bsd/kern/kdebug.c",
         "bsd/kern/kdebug_common.c",
         "bsd/kern/kern_shutdown.c",
+        "switch:recorder/capture.c",
         "switch:recorder/recorder.c",
+        "switch:recorder/store.c",
     ],
     "osfmk": [
         "osfmk/kperf/kperf.c",

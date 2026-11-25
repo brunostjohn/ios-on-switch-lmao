@@ -38,7 +38,9 @@
 #   xnu_sched_slots_test     kernel/switch/sched/slots.h: watched threads' slots taken without a lock, freed only from
 #                            the report's snapshot, filter bits cleared only when no taken id needs them
 #   xnu_recorder_test        kernel/switch/recorder/recorder.h: a UI main thread's busy stretch as one hang, latched
-#                            only when taken; a hang taking a queued tail; the gap, the slots, the status line's cost
+#                            only when taken; every mark taken and served first, one automatic ask at a time outside
+#                            the gap; refusals logged once a second; the slot a capture replaces (never a mark for an
+#                            automatic one); the dump header read back; the status line HW Test reads
 #   xnu_recorder_hooks_source_test  every source in kernel/switch and both trees' bsd and osfmk that names
 #                            SWITCH_RECORDER is in objects.bzl's _RECORDER_OBJECTS, and every listed one names it
 #   xnu_kprof_role_test      kernel/switch/include/switch/kprof_role.h: main-thread vs worker user-sample bucketing,
