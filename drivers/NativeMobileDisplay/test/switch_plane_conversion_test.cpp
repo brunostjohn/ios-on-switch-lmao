@@ -435,6 +435,19 @@ TEST_F(PlaneConversion, ASmallTurnedVideoIsScaledByVICAndShownOneToOne)
     EXPECT_EQ(image.dda, 0x10001000u);
 }
 
+// A turned layer one pixel on the screen (sliding in) is a plane of VIC's smallest side, 2, which the window halves.
+TEST_F(PlaneConversion, AOnePixelSliverIsAPlaneVICTakes)
+{
+    layer.transform = 4;
+    layer.dst = {719, 200, 128, 256};
+    ASSERT_GE(convert(), 0);
+    EXPECT_EQ(lastOperation.dstW, 2u);
+    EXPECT_EQ(lastOperation.dstH, 256u);
+    EXPECT_GE(lastOperation.srcH, 1u << 16);
+    EXPECT_EQ(image.position, (200u << 16) | 719u);
+    EXPECT_EQ(image.size, (256u << 16) | 1u);
+}
+
 // Only the part on the screen is converted: for word 4 (transpose, flip Y) the columns cut on the left are the source's
 // bottom rows.
 TEST_F(PlaneConversion, AClippedTurnedLayerConvertsOnlyItsPartOnTheScreen)

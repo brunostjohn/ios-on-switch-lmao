@@ -69,17 +69,20 @@ std::string turnedUnshown(const Layer &l)
         return "no conversion of a visible layer";
     const bool transpose = turnOf(l.transform).transpose;
     const uint64_t sw = transpose ? c.srcH : c.srcW, sh = transpose ? c.srcW : c.srcH;
-    const uint64_t dw = static_cast<uint64_t>(c.screen.w) << 16, dh = static_cast<uint64_t>(c.screen.h) << 16;
+    const uint64_t dw = static_cast<uint64_t>(c.width) << 16, dh = static_cast<uint64_t>(c.height) << 16;
     if (sw > dw * 16 || sh > dh * 16 || dw > sw * 16 || dh > sh * 16)
         return "VIC scale past 16x";
     if (c.srcW < (1u << 16) || c.srcH < (1u << 16) || c.srcX + c.srcW > static_cast<uint64_t>(l.surface.width) << 16 ||
         c.srcY + c.srcH > static_cast<uint64_t>(l.surface.height) << 16)
         return "VIC source outside the surface";
     Image shown;
-    const Layer plane = turnedConversionLayer(c, roundUp(static_cast<uint32_t>(c.screen.w) * 4, 256));
+    if (c.width < 2 || c.height < 2)
+        return "a plane VIC refuses (a side under 2)";
+    const Layer plane = turnedConversionLayer(c, roundUp(static_cast<uint32_t>(c.width) * 4, 256));
     if (!imageOf(plane, W, H, shown) || !shown.visible)
         return "the plane has no window image";
-    if (shown.dda != 0x10001000u || shown.position != image.position || shown.size != image.size)
+    const bool widened = c.width != c.screen.w || c.height != c.screen.h;
+    if ((!widened && shown.dda != 0x10001000u) || shown.position != image.position || shown.size != image.size)
         return format("the plane is not shown 1:1 where the layer goes: dda %#x", shown.dda);
     return "";
 }

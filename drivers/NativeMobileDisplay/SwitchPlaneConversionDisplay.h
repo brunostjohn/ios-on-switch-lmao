@@ -172,8 +172,9 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
     native_planes::TurnedConversion turned = {};
     if (layer.transform && !native_planes::turnedConversionOf(layer, width, height, turned))
         return -2;
-    const uint32_t outWidth = layer.transform ? uint32_t(turned.screen.w) : layer.surface.width;
-    const uint32_t outHeight = layer.transform ? uint32_t(turned.screen.h) : layer.surface.height;
+    static_assert(native_planes::kConvertedMinimumSide == TEGRA_VIC_MIN_DIM, "VIC's smallest surface side");
+    const uint32_t outWidth = layer.transform ? uint32_t(turned.width) : layer.surface.width;
+    const uint32_t outHeight = layer.transform ? uint32_t(turned.height) : layer.surface.height;
     const uint32_t pitch = (outWidth * 4 + 255) & ~255u;
     const uint64_t bytes = uint64_t(pitch) * outHeight;
     if (!bytes || bytes > kPlaneSlotSpan)

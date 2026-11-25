@@ -330,6 +330,25 @@ host_test(
 )
 
 host_test(
+    name = "turned_conversion_vic_test",
+    srcs = [
+        "turned_conversion_vic_test.cpp",
+        "//drivers/NativeMobileDisplay:NativePlanes.h",
+        "//drivers/NativeMobileDisplay:NativePlanesTurn.h",
+        "//drivers/NativeMobileDisplay:SwitchWindowCaps.h",
+        "//drivers/NativeMobileDisplay:SwitchWindowFormatImage.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraVIC:SwitchSurfaceColor.h",
+        "//drivers/TegraVIC:TegraVICColor.h",
+        "//drivers/TegraVIC:TegraVICConfig.h",
+        "//drivers/TegraVIC:TegraVICFormats.h",
+        "//drivers/TegraVIC/test:TegraVICProbe.h",
+        "//drivers/TegraVIC/test:vic_model.h",
+        "//drivers/TegraVIC/test:vic_model_color.h",
+    ],
+)
+
+host_test(
     name = "display_plane_fence_test",
     srcs = [
         "display_plane_fence_test.cpp",

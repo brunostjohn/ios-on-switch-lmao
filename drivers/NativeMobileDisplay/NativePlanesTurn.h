@@ -66,11 +66,16 @@ inline bool clipped(const Rect &d, uint32_t width, uint32_t height, int64_t &x0,
 
 // What the conversion job makes of a turned layer: its part on the screen, turned and scaled by VIC to the size it is
 // shown at, so the window scans the plane 1:1 (an RGB window stops at 1/4 across, where a YUV layer may come at 1/6).
-// srcX..srcH: VIC's source rectangle in the untransformed surface, 16.16.
+// srcX..srcH: VIC's source rectangle in the untransformed surface, 16.16. width x height: the plane, the screen part's
+// size but at least VIC's smallest surface side, so a sliver one pixel on the screen is a 2-pixel plane the window
+// shows halved.
 struct TurnedConversion {
     Rect screen;
     uint64_t srcX, srcY, srcW, srcH;
+    int32_t width, height;
 };
+
+constexpr int32_t kConvertedMinimumSide = 2;
 
 inline void turnedConversionAxis(int32_t s, int32_t sn, int32_t d, int32_t dn, int64_t d0, int64_t d1, uint64_t &start,
                                  uint64_t &length)
@@ -105,6 +110,8 @@ inline bool turnedConversionOf(const Layer &l, uint32_t width, uint32_t height, 
         c.srcY = (static_cast<uint64_t>(l.surface.height) << 16) - c.srcY - c.srcH;
     c.screen = {static_cast<int32_t>(x0), static_cast<int32_t>(y0), static_cast<int32_t>(x1 - x0),
                 static_cast<int32_t>(y1 - y0)};
+    c.width = c.screen.w < kConvertedMinimumSide ? kConvertedMinimumSide : c.screen.w;
+    c.height = c.screen.h < kConvertedMinimumSide ? kConvertedMinimumSide : c.screen.h;
     return true;
 }
 
@@ -114,12 +121,12 @@ inline Layer turnedConversionLayer(const TurnedConversion &c, uint32_t pitch)
     Layer rgb;
     rgb.kind = kKindBgra;
     rgb.surface.format = fourcc('B', 'G', 'R', 'A');
-    rgb.surface.width = static_cast<uint32_t>(c.screen.w);
-    rgb.surface.height = static_cast<uint32_t>(c.screen.h);
+    rgb.surface.width = static_cast<uint32_t>(c.width);
+    rgb.surface.height = static_cast<uint32_t>(c.height);
     rgb.surface.stride[0] = pitch;
     rgb.surface.planeHeight[0] = rgb.surface.height;
     rgb.surface.allocation = rgb.surface.descriptorBytes = static_cast<uint64_t>(pitch) * rgb.surface.height;
-    rgb.src = {0, 0, c.screen.w, c.screen.h};
+    rgb.src = {0, 0, c.width, c.height};
     rgb.dst = c.screen;
     return rgb;
 }
