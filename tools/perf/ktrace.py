@@ -42,6 +42,19 @@ DKIO_READ = 0x02
 DKIO_ASYNC = 0x04
 DKIO_META = 0x08
 DKIO_PAGING = 0x10
+DKIO_PASSIVE = 0x40
+DKIO_TIER_MASK, DKIO_TIER_SHIFT = 0xF00, 8
+VM_FAULT = code(1, 0x30, 2)  # vm_fault_internal: START, END with its result and the fault's type
+FAULT_KINDS = {
+    1: 'zero fill',
+    2: 'page-in',
+    3: 'copy',
+    4: 'cache hit',
+    7: 'page-in',
+    8: 'page-in',
+    9: 'compressor',
+    10: 'swap-in',
+}
 PERF_TI_DATA = code(37, 1, 1)
 PERF_CS_KDATA, PERF_CS_UDATA = code(37, 2, 3), code(37, 2, 4)
 PERF_CS_KHDR, PERF_CS_UHDR = code(37, 2, 5), code(37, 2, 6)
@@ -144,6 +157,16 @@ class DiskIO:
     read: bool
     paging: bool
     meta: bool
+    tier: int = 0  # the I/O throttle tier it went out at (0: none)
+    passive: bool = False
+
+
+@dataclass(frozen=True)
+class Fault:
+    tid: int
+    start: int
+    end: int
+    kind: str
 
 
 @dataclass(frozen=True)
@@ -342,7 +365,7 @@ def vnode_paths(events: list[Event]) -> dict[int, str]:
 def pageins(events: list[Event]) -> tuple[list[DiskIO], list[PageIn]]:
     """Decode DKRW disk I/O (with vnode paths from VFS_LOOKUP) and FSRW cluster_pagein requests."""
     paths = vnode_paths(events)
-    inflight: dict[int, tuple[int, int, int]] = {}  # bp_id: (start_ts, tid, nbytes)
+    inflight: dict[int, tuple[int, int, int, int]] = {}  # bp_id: (start_ts, tid, nbytes, the issue's code)
     disk_ios: list[DiskIO] = []
     fs_pageins: list[PageIn] = []
     for e in events:
@@ -356,6 +379,7 @@ def pageins(events: list[Event]) -> tuple[list[DiskIO], list[PageIn]]:
         if dkcode & DKIO_DONE:
             start = inflight.pop(bp, None)
             vnode = e.args[1]
+            issued = start[3] if start else dkcode
             disk_ios.append(
                 DiskIO(
                     ts=e.ts,
@@ -367,11 +391,27 @@ def pageins(events: list[Event]) -> tuple[list[DiskIO], list[PageIn]]:
                     read=bool(dkcode & DKIO_READ),
                     paging=bool(dkcode & DKIO_PAGING),
                     meta=bool(dkcode & DKIO_META),
+                    tier=(issued & DKIO_TIER_MASK) >> DKIO_TIER_SHIFT,
+                    passive=bool(issued & DKIO_PASSIVE),
                 )
             )
         else:
-            inflight[bp] = (e.ts, e.tid, e.args[3])
+            inflight[bp] = (e.ts, e.tid, e.args[3], dkcode)
     return disk_ios, fs_pageins
+
+
+def faults(events: list[Event]) -> list[Fault]:
+    """Return each thread's VM faults, their start to their end, and the kind its end names."""
+    open_at: dict[int, int] = {}
+    out = []
+    for e in events:
+        if e.id != VM_FAULT:
+            continue
+        if e.func == FUNC_START:
+            open_at[e.tid] = e.ts
+        elif e.func == FUNC_END and (began := open_at.pop(e.tid, None)) is not None:
+            out.append(Fault(e.tid, began, e.ts, FAULT_KINDS.get(e.args[3] & 0xFF, 'other')))
+    return out
 
 
 def _syscall_name(debugid: int) -> str | None:

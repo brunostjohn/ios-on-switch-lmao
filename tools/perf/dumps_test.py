@@ -183,6 +183,34 @@ class DumpTest(unittest.TestCase):
         self.assertIn('GPU: no submission ended in the window', text)
         self.assertIn('GPU: left out, a start stamp older than the ring: channel 21 1', text)
 
+    def test_a_hang_names_its_faults_and_the_reads_its_page_ins_waited_behind(self):
+        """Dump 4 of 25 Nov: SpringBoard's main faulted 145 ms behind the pack warm's tier-0 passive 512 KiB reads."""
+        warm = 3360
+        fault = ktrace.VM_FAULT
+        tiered = ktrace.code(3, 2, ktrace.DKIO_READ | ktrace.DKIO_PAGING | ktrace.DKIO_PASSIVE)
+        done = ktrace.code(3, 2, ktrace.DKIO_DONE | ktrace.DKIO_READ | ktrace.DKIO_PAGING)
+        own = ktrace.code(3, 2, ktrace.DKIO_READ | ktrace.DKIO_PAGING | (3 << ktrace.DKIO_TIER_SHIFT))
+        events = [
+            event(100, fault | ktrace.FUNC_START, (0, 0x1000), MAIN),
+            event(101, tiered, (0xB1, 1, 0, 512 << 10), warm),
+            event(102, own, (0xB2, 1, 0, 16 << 10), MAIN),
+            event(120, done, (0xB1, 0, 0, 0), 0),
+            event(125, done, (0xB2, 0, 0, 0), 0),
+            event(130, fault | ktrace.FUNC_END, (0, 0x1000, 0, 2), MAIN),
+            event(140, fault | ktrace.FUNC_START, (0, 0x2000), MAIN),
+            event(141, fault | ktrace.FUNC_END, (0, 0x2000, 0, 1), MAIN),
+            event(400, ktrace.TRIGGER, (2, MAIN, 300), 0),
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, 'Switch-recorder-2.ktrace')
+            with open(p, 'wb') as f:
+                f.write(pack_ring(events))
+            text = '\n'.join(dumps.summary(p, p[:-7] + '.kcdata', None, {}))
+        self.assertIn('its faults: 2, page-in 30.0 ms, zero fill 1.0 ms; the longest 30.0 ms', text)
+        self.assertIn('disk reads during its page-ins: 2, 528 KiB', text)
+        self.assertIn(f'?[0] ({warm}) tier 0 passive 512 KiB, its own tier 3 16 KiB', text)
+        self.assertIn('by tier (p: passive): 0p 1, 3 1', text)
+
     def test_a_stack_handoff_is_a_context_switch(self):
         """thread_invoke's handoff path logs MACH_STACK_HANDOFF, not MACH_SCHED (hitch-shots-codex, 25 Nov)."""
         events = [

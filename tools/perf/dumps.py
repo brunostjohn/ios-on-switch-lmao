@@ -239,6 +239,7 @@ def pagein_lines(ring: ktrace.Ring, n: Names, lo: int, hi: int) -> list[str]:
     if not dk_in and not fs_in:
         return []
     paging_dk = [io for io in dk_in if io.paging]
+    tiers = Counter(f'{io.tier}{"p" if io.passive else ""}' for io in paging_dk or dk_in)
     parts = []
     if fs_in:
         parts.append(f'{len(fs_in)} FSRW page-ins ({sum(p.nbytes for p in fs_in) // 1024} KiB)')
@@ -250,7 +251,12 @@ def pagein_lines(ring: ktrace.Ring, n: Names, lo: int, hi: int) -> list[str]:
     elif dk_in:
         kib = sum(io.nbytes for io in dk_in) // 1024
         parts.append(f'{len(dk_in)} DKRW reads ({kib} KiB, {ms(sum(io.duration for io in dk_in)):.1f} ms)')
-    out = ['page-ins: ' + '; '.join(parts)]
+    out = [
+        'page-ins: '
+        + '; '.join(parts)
+        + '; by tier (p: passive): '
+        + ', '.join(f'{k} {v}' for k, v in sorted(tiers.items()))
+    ]
     by_file: Counter[str] = Counter()
     for io in paging_dk or dk_in:
         label = io.path or (f'vnode 0x{io.vnode:x}' if io.vnode else '(unnamed)')
@@ -262,6 +268,42 @@ def pagein_lines(ring: ktrace.Ring, n: Names, lo: int, hi: int) -> list[str]:
         for p in fs_in:
             by_thr[n.who(p.tid)] += p.nbytes
         out.append('page-in threads: ' + ', '.join(f'{t} {b // 1024} KiB' for t, b in by_thr.most_common(4)))
+    return out
+
+
+def fault_lines(ring: ktrace.Ring, n: Names, tid: int, lo: int, hi: int) -> list[str]:
+    """Return the thread's own fault time in [lo, hi] by kind, and the disk reads its page-ins waited behind.
+
+    A read in flight while the thread was in a page-in fault, its own or another thread's, is one it waited for or
+    queued behind on the card; its issuer and tier say whose fill it joined and at what priority.
+    """
+    mine = [f for f in ktrace.faults(ring.events) if f.tid == tid and f.end >= lo and f.start <= hi]
+    if not mine:
+        return []
+    by: Counter[str] = Counter()
+    for f in mine:
+        by[f.kind] += f.end - f.start
+    out = [
+        f'its faults: {len(mine)}, '
+        + ', '.join(f'{k} {ms(t):.1f} ms' for k, t in by.most_common())
+        + f'; the longest {ms(max(f.end - f.start for f in mine)):.1f} ms'
+    ]
+    pageins = [f for f in mine if f.kind == 'page-in']
+    reads = [
+        io
+        for io in ktrace.pageins(ring.events)[0]
+        if io.read and any(io.ts - io.duration <= f.end and io.ts >= f.start for f in pageins)
+    ]
+    if reads:
+        issuers: Counter[str] = Counter()
+        for io in reads:
+            who = 'its own' if io.tid == tid else n.who(io.tid)
+            issuers[f'{who} tier {io.tier}{" passive" if io.passive else ""}'] += io.nbytes
+        out.append(
+            f'disk reads during its page-ins: {len(reads)}, {sum(io.nbytes for io in reads) // 1024} KiB, '
+            f'{ms(max(io.duration for io in reads)):.1f} ms the longest; by issuer: '
+            + ', '.join(f'{k} {b // 1024} KiB' for k, b in issuers.most_common(TOP))
+        )
     return out
 
 
@@ -338,6 +380,7 @@ def summary(
             + (', '.join(f'{n.who(w)} {c}' for w, c in sorted(woken.items(), key=lambda kv: -kv[1])[:4]) or 'nobody')
         )
         out += ['  ' + line for line in stacks(ring, n, tid, uuid_paths, syms)]
+        out += ['  ' + line for line in fault_lines(ring, n, tid, lo, at)]
     out += ['  ' + line for line in pagein_lines(ring, n, lo, at)]
     out += ['  ' + line for line in unnest_lines(ring, n, lo, at)]
     out += ['  ' + line for line in gpu(ring, n, at - int(GPU_BEFORE_S * TICK_HZ), at)]
