@@ -383,6 +383,7 @@ TEST_F(NativeImport, InvalidPlaneExtentFailsBeforeGpuMemoryConstruction)
 	ASSERT_EQ(refusals.size(), 1u);
 	EXPECT_NE(refusals[0].find("native-view plane-extent: "), std::string::npos) << refusals[0];
 	EXPECT_NE(refusals[0].find("do not fit"), std::string::npos) << refusals[0];
+	EXPECT_NE(refusals[0].find("(plane 1 "), std::string::npos) << refusals[0];
 }
 
 // HW Test gpu.gm20b.ycbcr_texel_buffer_wide: a '420v' 20000 wide (pitch planes 20000x2 and 10000x1) read through a

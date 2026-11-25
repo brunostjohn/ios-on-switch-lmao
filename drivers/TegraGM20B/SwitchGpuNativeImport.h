@@ -7,6 +7,7 @@
 // process and key)
 struct SwitchGpuNativeRefusal {
 	const char *key, *why;
+	uint32_t plane;  // the plane the refusal is about
 };
 
 // No key when `out` describes the view. A plane's extent is its memory's, not a texture's: each texture over it is
@@ -40,17 +41,17 @@ static SwitchGpuNativeRefusal switch_gpu_native_reply(const switch_gpu_native_su
 		    plane.bytes_per_element > 16 ||
 		    (plane.bytes_per_element & (plane.bytes_per_element - 1)))
 			return {"plane-shape",
-				"a plane is empty, or its element size is not 1, 2, 4, 8 or 16"};
+				"a plane is empty, or its element size is not 1, 2, 4, 8 or 16", i};
 		if (plane.layout > SWITCH_GPU_BACKING_BLOCK_LINEAR || plane.block_height_log2 > 5 ||
 		    plane.layout != view.layout.planes[0].layout)
 			return {"plane-layout",
-				"a plane's layout is unknown or differs from the first plane's"};
+				"a plane's layout is unknown or differs from the first plane's", i};
 		if (plane.offset > out.bytes || !plane.bytes ||
 		    plane.bytes > out.bytes - plane.offset ||
 		    uint64_t(plane.width) * plane.bytes_per_element > plane.pitch ||
 		    uint64_t(plane.pitch) * plane.height > plane.bytes)
 			return {"plane-extent",
-				"a plane's rows do not fit its bytes, or its bytes the allocation"};
+				"a plane's rows do not fit its bytes, or its bytes the allocation", i};
 		out.planes[i] = {plane.offset,
 				 plane.bytes,
 				 plane.width,
@@ -98,13 +99,14 @@ IOReturn AGXDeviceUserClient::nativeSurfaceView(const TegraGM20BAbiNativeSurface
 		const SwitchGpuNativeRefusal refused =
 			switch_gpu_native_reply(*view, allocation, *out);
 		if (refused.key) {
-			const auto &plane = view->layout.planes[0];
+			const auto &plane = view->layout.planes[refused.plane];
 			switch_refusal(
 				"native-view", refused.key,
-				"a view of format %#x, %u planes (the first %ux%u, pitch %u, "
-				"%llu bytes), in %u pages: %s",
-				view->layout.format, view->layout.plane_count, plane.width,
-				plane.height, plane.pitch, (unsigned long long)plane.bytes,
+				"a view of format %#x, %u planes (plane %u %ux%u, pitch %u, "
+				"%llu bytes at %llu), in %u pages: %s",
+				view->layout.format, view->layout.plane_count, refused.plane,
+				plane.width, plane.height, plane.pitch,
+				(unsigned long long)plane.bytes, (unsigned long long)plane.offset,
 				allocation.page_count, refused.why);
 			result = -22;
 		}
