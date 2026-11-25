@@ -2204,6 +2204,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuNativeSurface.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//kits/SwitchRefusal:SwitchRefusal.h",
     ],
 )
 
