@@ -140,6 +140,7 @@ __attribute__((objc_externally_retained)) bool SwitchMetalRangeEncode::open(Swit
 bool SwitchMetalRangeEncode::resources(size_t from, size_t to)
 {
     gm20b::CommandBuffer *rc = rc_;
+    rc->namingResources(true);
     const auto buffers = [&](auto visit) {
         cb_->_plan.forEachResource(from, to, SwitchMetalResourceKind::Buffer, visit);
     };
@@ -232,6 +233,7 @@ bool SwitchMetalRangeEncode::resources(size_t from, size_t to)
         if (__unsafe_unretained SwitchMetalHeap *heap = (__bridge SwitchMetalHeap *)use.object; heap->_members)
             rc->useHeap(*heap->_members);
     });
+    rc->namingResources(false);
     return true;
 }
 
@@ -299,23 +301,8 @@ uint32_t SwitchMetalRangeEncode::ineligible(size_t from, size_t until, size_t &s
         });
         if (planar)
             return VetoPlanar;
-        if (op == OpRender && loadsAStoredDepth(plan.legacy(at).x))
-            return VetoZcull;
     }
     return 0;
-}
-
-// The pass at `x` loads a depth an earlier pass of the command buffer stores: whether that one keeps its zcull region
-// (gm20b::DepthStencilAttachment::loadedLater) is read from the passes after it, which only the whole range's encode has
-bool SwitchMetalRangeEncode::loadsAStoredDepth(size_t x)
-{
-    const SwitchMetalPass *passes = cb_->_passes.data();
-    const SwitchMetalPass &pass = passes[x];
-    return pass.depth && pass.depthLoad == MTLLoadActionLoad &&
-           std::any_of(passes, passes + x, [&](const SwitchMetalPass &earlier) {
-               return earlier.depth == pass.depth && (earlier.zeta[0].store != MTLStoreActionDontCare ||
-                                                      earlier.zeta[1].store != MTLStoreActionDontCare);
-           });
 }
 
 // Encoded ahead, the encoder at `begin` is entered: its resources named, its opaque borders' sampler headers made, the

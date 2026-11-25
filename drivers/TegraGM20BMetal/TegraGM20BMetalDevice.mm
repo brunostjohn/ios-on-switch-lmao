@@ -46,7 +46,7 @@
     d[@"pipeline_handoff_wakes"] = @(s.handoffWakes.load());
     static const char *const vetoes[VetoKinds] = {"-",        "counters",   "shadows", "variant", "probes",
                                                   "parallel", "ops",        "refused", "planar",  "native",
-                                                  "failed",   "other_work", "device",  "zcull",   "channel"};
+                                                  "failed",   "other_work", "device",  "channel"};
     for (uint32_t k = 0; k < VetoKinds; ++k)
         if (const uint64_t n = s.pipelineAbandons[k].load())
             d[[NSString stringWithFormat:@"pipeline_abandons.%s", vetoes[k]]] = @(n);

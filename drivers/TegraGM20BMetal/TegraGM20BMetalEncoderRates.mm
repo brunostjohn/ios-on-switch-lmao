@@ -44,7 +44,7 @@ constexpr uint64_t kLongWaitUs = 50000;
 
 const char *const kVetoNames[32] = {
     "-",      "counters", "shadows", "variant", "probes", "parallel", "ops",     "refused",
-    "planar", "native",   "failed",  "other",   "device", "zcull",    "channel",
+    "planar", "native",   "failed",  "other",   "device", "channel",
 };
 
 const char *const kLostNames[] = {"-", "short", "busy", "late"};

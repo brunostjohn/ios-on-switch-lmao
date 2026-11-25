@@ -690,9 +690,8 @@ enum SwitchMetalPipelineVeto : uint32_t {
     VetoFailed = 1u << 10,     // its encode failed ahead (the commit's encode meets the failure again, as before)
     VetoOtherWork = 1u << 11,  // the worker needed the device for another command buffer
     VetoDevice = 1u << 12,     // a purge, or a channel made again since it began
-    VetoZcull = 1u << 13,      // a pass loads a depth an earlier pass stored (zcull_planes.h)
-    VetoChannel = 1u << 14,    // the kernel gave its begin no channel (the commit's encode asks again)
-    VetoKinds = 15
+    VetoChannel = 1u << 13,    // the kernel gave its begin no channel (the commit's encode asks again)
+    VetoKinds = 14
 };
 
 static inline void gm20bPipelineVeto(SwitchMetalCommandBuffer *cb, uint32_t reason)

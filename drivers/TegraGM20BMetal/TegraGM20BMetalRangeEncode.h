@@ -119,7 +119,6 @@ private:
     bool refused();
     bool stop(uint32_t veto);
     uint32_t ineligible(size_t from, size_t until, size_t &stopAt);
-    bool loadsAStoredDepth(size_t x);
     bool enter(size_t begin);
     bool resources(size_t from, size_t to);
     bool borderHeaders(size_t from, size_t to);

@@ -293,6 +293,33 @@ static bool sharesRenderTarget(SwitchMetalCommandBuffer *cb, size_t first, size_
     return a.color[0].texture && a.color[0].texture == b.color[0].texture && b.color[0].load == MTLLoadActionLoad;
 }
 
+// Whether cutting [from, to) at `at` leaves every pass after the cut that loads a depth in the range of the pass before it
+// that stored the depth: a stored zcull region lives in its range's job alone (zcull_planes.h), so a cut between them
+// loses the region the loading pass would cull with
+static bool cutKeepsZcull(SwitchMetalCommandBuffer *cb, size_t from, size_t at, size_t to)
+{
+    const SwitchMetalCommandPlan &plan = cb->_plan;
+    const auto next = [&](size_t k) {
+        return std::max(SwitchMetalCommandPlan::isEncoderBegin(plan.operation(k).op) ? plan.encoderEnd(k) : k + 1, k + 1);
+    };
+    for (size_t k = at; k < to; k = next(k)) {
+        if (plan.operation(k).op != OpRender)
+            continue;
+        const SwitchMetalPass &loading = cb->_passes[plan.legacy(k).x];
+        if (!loading.depth || loading.depthLoad != MTLLoadActionLoad)
+            continue;
+        for (size_t j = from; j < at; j = next(j)) {
+            if (plan.operation(j).op != OpRender)
+                continue;
+            const SwitchMetalPass &storing = cb->_passes[plan.legacy(j).x];
+            if (storing.depth == loading.depth && (storing.zeta[0].store != MTLStoreActionDontCare ||
+                                                   storing.zeta[1].store != MTLStoreActionDontCare))
+                return false;
+        }
+    }
+    return true;
+}
+
 static void splitCommittedRange(SwitchMetalCommandBuffer *cb)
 {
     constexpr size_t kMaxKickRanges = 3, kMinSplitEncoders = 10, kTargetChunkMin = 5;
@@ -324,7 +351,7 @@ static void splitCommittedRange(SwitchMetalCommandBuffer *cb)
     size_t picked = 0, pickedDist = SIZE_MAX, anyCut = 0, anyDist = SIZE_MAX;
     size_t prev = 0, idx = 0;
     for (size_t at = range.from; at < range.to; ++idx) {
-        if (idx >= low && idx <= high && !gm20bContinuesPass(cb, at)) {
+        if (idx >= low && idx <= high && !gm20bContinuesPass(cb, at) && cutKeepsZcull(cb, range.from, at, range.to)) {
             const size_t dist = idx >= target ? idx - target : target - idx;
             if (dist <= anyDist) {
                 anyCut = at;
@@ -359,7 +386,7 @@ static size_t aheadSplitPoint(SwitchMetalCommandBuffer *cb, const SwitchMetalSeg
         return 0;
     const size_t stop = stopOf(a);
     const size_t at = stop != SIZE_MAX ? stop : encode.betweenEncoders() ? encode.position() : 0;
-    return at > range.from && at < range.to ? at : 0;
+    return at > range.from && at < range.to && cutKeepsZcull(cb, range.from, at, range.to) ? at : 0;
 }
 
 void gm20bPipelineSplit(SwitchMetalCommandBuffer *cb)
