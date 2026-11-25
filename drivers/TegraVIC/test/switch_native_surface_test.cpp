@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <gtest/gtest.h>
 #include <future>
+#include <thread>
 #include <vector>
 #include "switch_native_surface_stubs.h"
 #include "../SwitchNativeSurface.cpp"
@@ -633,6 +634,44 @@ TEST_F(TurnedSurface, ARecordMadeUnderTheJobsReservationTakesNoSecondOne)
     EXPECT_EQ(view.native, &native);
     EXPECT_EQ(view.turn.transform, 7u);
     switch_native_surface_release(&view);
+}
+
+// An IOSurface CPU lock of the destination while the job is queued enters as a CPU user and then waits for the job's
+// reservation. The record is refused rather than waiting for that user to leave, and the job copies.
+TEST_F(TurnedSurface, ARecordUnderTheJobsReservationDoesNotWaitForACpuLockWaitingOnIt)
+{
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
+    SwitchVICWriteReservation held = {};
+    switch_vic_surface_reserve_write(&turned, &held);
+    ASSERT_NE(held.lease, nullptr);
+    auto locker = std::async(std::launch::async, [&] {
+        if (SwitchMemoryAttachment::enterCpu(turnedMemory, false))
+            return -1;
+        switch_gpu_cpu_lease *lease = nullptr;
+        const int error = acquire(&replacement, kWrite, &lease);
+        if (!error)
+            switch_gpu_backing_cpu_release_owned(&lease, 0);
+        SwitchMemoryAttachment::leaveCpu(turnedMemory);
+        return error;
+    });
+    while (!SwitchMemoryAttachment::cpuUsers(turnedMemory))
+        std::this_thread::yield();
+    SwitchNativeSurfaceView source = {};
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &source, false), 0);
+    auto published = std::async(std::launch::async, [&] {
+        return switch_native_surface_publish_turned(&turned, source, op, 0, nullptr, nullptr, &held);
+    });
+    const bool waited = published.wait_for(std::chrono::seconds(5)) != std::future_status::ready;
+    switch_vic_surface_release_write(&held);  // the job's end; also frees a publication stuck behind the locker
+    EXPECT_FALSE(waited) << "the record waited on a CPU user that waits on the job's reservation";
+    EXPECT_EQ(published.get(), waited ? 0 : -16);
+    EXPECT_EQ(locker.get(), 0);
+    switch_native_surface_release(&source);
+    SwitchNativeSurfaceView view = {};
+    if (!waited) {
+        EXPECT_NE(switch_native_surface_acquire(&turned, &view, false, true), 0);
+    }
+    EXPECT_EQ(replacement.writers, 0u);
 }
 
 // The display's acquire of a turned destination (SwitchLandscapeSelection.h): the decoder's picture, read-leased, with

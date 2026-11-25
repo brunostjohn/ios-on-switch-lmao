@@ -345,8 +345,12 @@ static int reserveSurface(const TegraVICSurface *surface, const switch_gpu_backi
 static int install(const TegraVICSurface *surface, SwitchNativeSurface *next, const char **why, bool *first,
                    const SwitchVICWriteReservation *held = nullptr)
 {
-    *why = "native export into a surface another publication holds";
-    int error = SwitchMemoryAttachment::enterExclusive(surface->memory, false);
+    // A caller holding its write reservation must not wait for the surface's CPU users: one of them may be an IOSurface
+    // lock waiting on that very reservation. It is refused instead (and copies, entering as a CPU user itself).
+    const bool holding = held && held->lease;
+    *why = holding ? "native export into a surface a CPU user or another publication holds"
+                   : "native export into a surface another publication holds";
+    int error = SwitchMemoryAttachment::enterExclusive(surface->memory, holding);
     if (error)
         return error;
     switch_gpu_backing *logical = nullptr;
