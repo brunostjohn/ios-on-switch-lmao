@@ -183,14 +183,19 @@ TEST(OrderedExecutor, EachItemDrainsItsAutoreleasesAndItsCapturesBeforeTheNext)
 
     auto exec = started();
     Watched watched;
-    Latch done;
+    Latch go, done;
     std::atomic<bool> runGone{false}, releaseGone{false};
     auto captured = std::make_shared<ReleasesOnLast>();
     captured->watched = &watched;
+    // held until this thread has let its reference go, so the capture's last release is the executor's
+    exec->enqueue([&go] {
+        go.wait();
+    });
     exec->enqueue([&watched, captured] {
         autoreleaseWatched(watched.inRun);
     });
     captured.reset();
+    go.open();
     exec->enqueue([&] {
         runGone = watched.inRun == nil;
         releaseGone = watched.inRelease == nil;
