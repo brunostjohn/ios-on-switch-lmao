@@ -248,6 +248,42 @@ extern "C" void switch_smmu_flush_tables(uint32_t asid, const switch_smmu_table_
     IOSimpleLockUnlock(gLock);
 }
 
+#if DEVELOPMENT || DEBUG
+namespace {
+// Tenths of a percent.
+uint32_t share(uint32_t part, uint32_t other)
+{
+    const uint64_t all = uint64_t(part) + other;
+    return all ? static_cast<uint32_t>(uint64_t(part) * 1000 / all) : 0;
+}
+}  // namespace
+
+extern "C" void switch_smmu_stats_window(char *line, size_t size)
+{
+    static switch_smmu::Stats last;  // the GPU's stats tick is the one caller, one window at a time
+    if (!ready()) {
+        snprintf(line, size, "no MC registers");
+        return;
+    }
+    RegisterAccess io;
+    IOSimpleLockLock(gLock);
+    const uint32_t tlbConfig = r32(switch_smmu::kTlbConfig), ptcConfig = r32(switch_smmu::kPtcConfig);
+    const bool counting = switch_smmu::statsOn(io);
+    const switch_smmu::Stats now = switch_smmu::stats(io);
+    IOSimpleLockUnlock(gLock);
+    const switch_smmu::Stats d = {now.tlbHit - last.tlbHit, now.tlbMiss - last.tlbMiss, now.ptcHit - last.ptcHit,
+                                  now.ptcMiss - last.ptcMiss};
+    last = now;
+    if (!counting) {
+        snprintf(line, size, "counters on from here (TLB_CONFIG %#x PTC_CONFIG %#x)", tlbConfig, ptcConfig);
+        return;
+    }
+    const uint32_t tlb = share(d.tlbHit, d.tlbMiss), ptc = share(d.ptcHit, d.ptcMiss);
+    snprintf(line, size, "tlb %u hits %u misses (%u.%u%% hit), ptc %u hits %u misses (%u.%u%% hit)", d.tlbHit,
+             d.tlbMiss, tlb / 10, tlb % 10, d.ptcHit, d.ptcMiss, ptc / 10, ptc % 10);
+}
+#endif
+
 extern "C" uint32_t tegra_smmu_read(uint32_t offset)
 {
     return ready() ? r32(offset) : 0;

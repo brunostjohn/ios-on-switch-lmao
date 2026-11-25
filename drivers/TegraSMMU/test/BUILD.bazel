@@ -18,6 +18,16 @@ load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
 lint_files()
 
 host_test(
+    name = "smmu_stats_test",
+    srcs = [
+        "smmu_stats_test.cpp",
+        "//drivers/TegraSMMU:SwitchSmmuRegisters.h",
+        "//drivers/TegraSMMU:TegraSMMU.h",
+        "//drivers/TegraSMMU:TegraSMMUAttachments.h",
+    ],
+)
+
+host_test(
     name = "smmu_domain_test",
     srcs = [
         "smmu_domain_test.cpp",

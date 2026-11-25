@@ -205,6 +205,12 @@ void switch_mc_errors_resume(void);
 void switch_mc_errors_detached(uint32_t asidReg);
 
 #if DEVELOPMENT || DEBUG
+// The SMMU's TLB and PTC hits and misses since the previous call, every client's together (the counters are global, T210
+// TRM 18.5.4.3), as "tlb H hits M misses (P% hit), ptc ...". The counters are on from the first call (TLB_CONFIG and
+// PTC_CONFIG bit 31, 18.11.1.6-7), and again after SC7 reset them; the line then names both registers and counts from
+// there. Their offsets (0x1f0 + 8 x {TLB, PTC} + 4 x {hit, miss}) are L4T's tegra-smmu.h. Thread context.
+void switch_smmu_stats_window(char *line, size_t size);
+
 // A deliberate SMMU fault (TegraVIC's MC fault probe). From switch_mc_errors_expect until the end, the interrupt's
 // filter takes each INVALID_SMMU_PAGE that `client` raises at an address in [low, high) below 4 GiB without panicking,
 // and counts it; every other error goes the usual way. The fault must be at an address the client's page directory

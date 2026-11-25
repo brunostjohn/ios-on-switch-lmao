@@ -157,4 +157,28 @@ int restore(Registers &io, const tegra_smmu_attachments &attachments, uint32_t a
     snprintf(line, size, "no retained directory for ASID %u swgroup %#x", asid, asidReg);
     return -1;
 }
+
+// The TLB's and PTC's hit and miss counters (TegraSMMU.h switch_smmu_stats_window). They wrap and have no reset, so a
+// window is the difference of two readings.
+constexpr uint32_t kTlbConfig = 0x14, kPtcConfig = 0x18, kStatsEnable = 1u << 31, kStatsCounts = 0x1f0;
+
+struct Stats {
+    uint32_t tlbHit, tlbMiss, ptcHit, ptcMiss;
+};
+
+// Both caches' counters on, every other bit of their configuration kept; false when either was off (reset, SC7).
+template <class Registers> bool statsOn(Registers &io)
+{
+    const uint32_t tlb = io.read(kTlbConfig), ptc = io.read(kPtcConfig);
+    if (tlb & ptc & kStatsEnable)
+        return true;
+    io.write(kTlbConfig, tlb | kStatsEnable);
+    io.write(kPtcConfig, ptc | kStatsEnable);
+    return false;
+}
+
+template <class Registers> Stats stats(Registers &io)
+{
+    return {io.read(kStatsCounts), io.read(kStatsCounts + 4), io.read(kStatsCounts + 8), io.read(kStatsCounts + 12)};
+}
 }
