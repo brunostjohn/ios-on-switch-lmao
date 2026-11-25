@@ -38,14 +38,14 @@
 #include <machine/machine_routines.h>
 #if DEVELOPMENT || DEBUG
 #include <machine/cpu_number.h>
-#include "../TegraSMMU/TegraSMMU.h"
-#include "../TegraSMMU/TegraSMMURamView.h"
 #endif
 #include <sys/types.h>
 #include <sys/param.h>
 #include <pexpert/pexpert.h>
 #include <vm/pmap.h>
 #include "../ArmGIC/SwitchInterrupts.h"
+#include "../TegraSMMU/TegraSMMU.h"
+#include "../TegraSMMU/TegraSMMURamView.h"
 #include "../TegraI2C/TegraI2C.h"
 #include "../TegraGPIO/TegraGPIO.h"
 #include "../../kits/SwitchCAR/SwitchPMC.h"
