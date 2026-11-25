@@ -1,7 +1,7 @@
 """The Supplemental cryptex's jetsam overlay as this build's profile makes it (overlay/BUILD.bazel jetsam_properties).
 
-It holds the shader compiler's and the bootstrap helper's Overrides in both profiles (the manifest stages both daemons'
-jobs in release too) and the texture peer's (HW Test's second process, which the manifest stages in debug alone) in
+It holds the shader compiler's, the bootstrap helper's and the app registration daemon's Overrides in both profiles (the
+manifest stages their jobs in release too) and the texture peer's (HW Test's second process, which the manifest stages in debug alone) in
 debug alone; its merge refuses a label named twice.
 """
 
@@ -20,6 +20,7 @@ PEER = Path('apps/hwtest/peer/com.brunostjohn.switch.texpeer.jetsam.plist')
 MANIFEST = Path('overlay/manifest.json')
 COMPILER_LABEL = 'com.brunostjohn.switch.shadercompiler'
 BOOTSTRAP_LABEL = 'com.brunostjohn.switch.bootstrap'
+APPREG_LABELS = {'com.brunostjohn.switch.appregd', 'com.brunostjohn.switch.bootstrap-apps'}
 PEER_LABEL = 'com.brunostjohn.switch.texpeer'
 
 
@@ -34,8 +35,12 @@ class ProfileTest(unittest.TestCase):
     def test_the_shader_compiler_has_its_override_in_both_profiles(self):
         self.assertEqual(self.override[COMPILER_LABEL], override(COMPILER)[COMPILER_LABEL])
 
+    def test_the_app_registration_daemon_is_above_the_global_6_mb(self):
+        for label in APPREG_LABELS:
+            self.assertEqual(self.override[label], {'ActiveSoftMemoryLimit': 32, 'InactiveHardMemoryLimit': 32})
+
     def test_the_texture_peer_has_its_override_in_debug_alone(self):
-        labels = {COMPILER_LABEL, BOOTSTRAP_LABEL} | ({PEER_LABEL} if PROFILE == 'debug' else set())
+        labels = {COMPILER_LABEL, BOOTSTRAP_LABEL} | APPREG_LABELS | ({PEER_LABEL} if PROFILE == 'debug' else set())
         self.assertEqual(set(self.override), labels)
         if PROFILE == 'debug':
             self.assertEqual(self.override[PEER_LABEL], {'ActiveSoftMemoryLimit': 40, 'InactiveHardMemoryLimit': 40})

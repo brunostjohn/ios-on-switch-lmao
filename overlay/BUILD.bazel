@@ -9,16 +9,20 @@ exports_files([
     "manifest.json",
     "supplemental/com.brunostjohn.switch.shadercompiler.jetsam.plist",
     "supplemental/com.brunostjohn.switch.bootstrap.jetsam.plist",
+    "supplemental/com.brunostjohn.switch.appregd.jetsam.plist",
 ])
 
 # The jetsam properties overlay iOS 27's launchd reads for our daemons in the Supplemental cryptex's LaunchDaemons, one
-# file (tools/package/jetsam_overlay.py): the shader compiler's limits, and in debug the texture peer's, which the
-# manifest stages in debug alone.
+# file (tools/package/jetsam_overlay.py): the shader compiler's limits, the bootstrap helper's and the app registration
+# daemon's (J181's Daemon Override Global gives an unlisted daemon 6 MB, under one LaunchServices registration: on
+# 25 Nov switch-appregd crossed it mid-registration, 5.6 MB internal, and left a corpse for ReportCrash), and in debug
+# the texture peer's, which the manifest stages in debug alone.
 genrule(
     name = "jetsam_properties",
     srcs = [
         "supplemental/com.brunostjohn.switch.shadercompiler.jetsam.plist",
         "supplemental/com.brunostjohn.switch.bootstrap.jetsam.plist",
+        "supplemental/com.brunostjohn.switch.appregd.jetsam.plist",
     ] + select({
         "//bazel:debug": ["//apps/hwtest:peer/com.brunostjohn.switch.texpeer.jetsam.plist"],
         "//conditions:default": [],
