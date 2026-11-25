@@ -1,6 +1,7 @@
 # Source lists for split Swift modules in //apps/hwtest.
 
 GPU_SRCS = [
+    "gpu/AegirMoon.swift",
     "gpu/CACorpus.swift",
     "gpu/CAState.swift",
     "gpu/CAStateSweep.swift",
@@ -237,6 +238,7 @@ KIT_COMMON_SRCS = [
 ]
 
 TESTS_DEPTH_SRCS = [
+    "tests/AegirMoonTest.swift",
     "tests/AlphaToCoverageTest.swift",
     "tests/Bgra10XrResolveTest.swift",
     "tests/BlendKillTest.swift",
