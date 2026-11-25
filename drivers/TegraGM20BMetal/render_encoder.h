@@ -454,7 +454,7 @@ private:
     BandGrid drawBands(uint32_t vertices, uint32_t instances, uint64_t units) const;
     void noteCandidate(uint64_t units, uint32_t bands);
 #if SWITCH_METAL_DIAGNOSTICS
-    void notePrice(uint64_t units, uint32_t bands) const;
+    void notePrice(uint64_t units, BandGrid grid, uint32_t instances) const;
 #endif
     bool measurePass(bool drained);
     uint32_t passDraws_ = 0;
