@@ -29,12 +29,20 @@ struct Counters {
     uint64_t windowStartMs;
     Bytes window, total;
     uint64_t copiedTotal;
+    // Since boot: tier-0 requests that raised a fill they joined, and doSetPriority calls (XNU's busy-page
+    // reprioritisation through IOStorageFamily).
+    uint64_t joinedRaises, setPriorityCalls;
 };
 
 inline Counters &counters()
 {
     static Counters c;
     return c;
+}
+
+inline void count(uint64_t Counters::*field)
+{
+    __atomic_fetch_add(&(counters().*field), 1, __ATOMIC_RELAXED);
 }
 
 inline uint64_t take(uint64_t &counter)
@@ -68,9 +76,11 @@ inline void report(uint64_t now)
     os_log(
         OS_LOG_DEFAULT,
         "SwitchCryptex: %llu ms: %llu completions, client %llu us (max %llu us); copied %llu KiB in %llu us, %llu KiB "
-        "of it waited for; direct %llu KiB; card into windows %llu KiB; raised to high %llu KiB",
+        "of it waited for; direct %llu KiB; card into windows %llu KiB; raised to high %llu KiB; raises since boot: "
+        "joined %llu, doSetPriority %llu",
         now - start, completions, clientUs, clientMaxUs, copiedKiB, copyUs, take(c.window.waited) >> 10,
-        take(c.window.direct) >> 10, take(c.window.card) >> 10, take(c.window.raised) >> 10);
+        take(c.window.direct) >> 10, take(c.window.card) >> 10, take(c.window.raised) >> 10,
+        __atomic_load_n(&c.joinedRaises, __ATOMIC_RELAXED), __atomic_load_n(&c.setPriorityCalls, __ATOMIC_RELAXED));
 }
 
 // finishRequest: `copyAbs` spent copying `copied` bytes out of the windows (`waited`: the request waited for a window

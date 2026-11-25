@@ -81,16 +81,18 @@ TEST(CryptexSource, SmallReadsGoThroughTheCache)
     EXPECT_THAT(job, Not(HasSubstr("client.action")));
 }
 
-// A window fill reads at its first requester's priority; a better requester that joins it raises it through the SD
-// device's doSetPriority, outside gCache.lock (the SD queueLock is never taken under it). XNU's own busy-page
-// reprioritisation reaches the same code through this device's doSetPriority.
+// A window fill reads at High for a tier-0 requester and Default for any other; a tier-0 requester that joins it
+// raises it through the SD device's doSetPriority, outside gCache.lock (the SD queueLock is never taken under it).
+// XNU's own busy-page reprioritisation reaches the same code through this device's doSetPriority.
 TEST(CryptexSource, JoinedFillsAreRaised)
 {
     const std::string read = body("IOReturn SwitchCryptexDevice::doAsyncReadWrite(");
-    EXPECT_THAT(read, HasSubstr("cachePriority = attributes ? attributes->priority : kIOStoragePriorityDefault;"));
+    EXPECT_THAT(read, HasSubstr("attributes && (attributes->priority >> 6) == 0 ? kIOStoragePriorityHigh : "
+                                "kIOStoragePriorityDefault"));
     const std::string plan = body("bool SwitchCryptexDevice::cacheRead(");
     EXPECT_LT(plan.find("joined = p->cache.joined;"), plan.find("IOLockUnlock(gCache.lock);"));
     EXPECT_LT(plan.find("IOLockUnlock(gCache.lock);"), plan.find("raiseQueuedReads(block, count, priority);"));
+    EXPECT_THAT(plan, HasSubstr("if (joined && priority == kIOStoragePriorityHigh) {"));
     EXPECT_LT(plan.find("raiseQueuedReads(block, count, priority);"), plan.find("pieceDone(this, p,"));
     const std::string raise = body("void SwitchCryptexDevice::raiseQueuedReads(");
     EXPECT_THAT(raise, HasSubstr("sd->doSetPriority(pieces, n, priority);"));

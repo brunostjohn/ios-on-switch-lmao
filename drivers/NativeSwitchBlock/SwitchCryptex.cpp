@@ -593,8 +593,12 @@ IOReturn SwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt6
     p->status = kIOReturnSuccess;
     p->remaining = 1;
     p->cached = p->waited = false;
-    // A window fill reads at its first requester's priority; a better one that joins it raises it (cacheRead).
-    const IOStoragePriority cachePriority = attributes ? attributes->priority : kIOStoragePriorityDefault;
+    // A window fill reads at High for a tier-0 requester and at Default for any other: a thread that faults a page a
+    // fill has busy sleeps in vm_page_sleep and never reaches cacheRead, so only XNU's DKIOCSETTIER (doSetPriority)
+    // could raise a fill made at Low or Background, and the debug line counts whether it does. A tier-0 request that
+    // joins a fill raises it (cacheRead).
+    const IOStoragePriority cachePriority =
+        attributes && (attributes->priority >> 6) == 0 ? kIOStoragePriorityHigh : kIOStoragePriorityDefault;
     if (cacheRead(p, buffer, block, count, cachePriority))
         return kIOReturnSuccess;
     uint32_t pieces = 0;
@@ -680,8 +684,12 @@ bool SwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint
         cardReads += issueRead(p->reads[i], priority);
     reportDirect(p->length, cardReads);
     // After gCache.lock is dropped: the SD driver's queueLock is never taken under gCache.lock.
-    if (joined && priority <= kIOStoragePriorityLow)
+    if (joined && priority == kIOStoragePriorityHigh) {
         raiseQueuedReads(block, count, priority);
+#if DEVELOPMENT || DEBUG
+        switch_cryptex_stats::count(&switch_cryptex_stats::Counters::joinedRaises);
+#endif
+    }
     pieceDone(this, p, kIOReturnSuccess, 0);  // the issuing reference
     return true;
 }
@@ -724,6 +732,9 @@ IOReturn SwitchCryptexDevice::doSetPriority(IOBlockStorageDeviceExtent *extentLi
     }
     for (UInt32 i = 0; i < count; ++i)
         raiseQueuedReads(extentList[i].blockStart, extentList[i].blockCount, priority);
+#if DEVELOPMENT || DEBUG
+    switch_cryptex_stats::count(&switch_cryptex_stats::Counters::setPriorityCalls);
+#endif
     return kIOReturnSuccess;
 }
 
