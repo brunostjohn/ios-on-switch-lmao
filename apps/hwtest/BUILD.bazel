@@ -358,6 +358,24 @@ py_test(
     deps = ["//drivers/TegraGM20BMetal:pack"],
 )
 
+# gpu/CACorpus.swift's lines: 21H461's as corpus.log has them, iOS 27's as pack/ca/caspec.py makes them with its tables
+py_test(
+    name = "ca_corpus_test",
+    size = "small",
+    srcs = ["ca_corpus_test.py"],
+    data = [
+        "gpu/CACorpus.swift",
+        "//drivers/TegraGM20BMetal:pack/ca/qc-24B119.json",
+        "//drivers/TegraGM20BMetal:precompile/corpus.log",
+    ],
+    env = {
+        "CA_CORPUS": "$(rootpath //drivers/TegraGM20BMetal:precompile/corpus.log)",
+        "CA_CORPUS_SWIFT": "$(rootpath gpu/CACorpus.swift)",
+        "QC_24B119": "$(rootpath //drivers/TegraGM20BMetal:pack/ca/qc-24B119.json)",
+    },
+    deps = ["//drivers/TegraGM20BMetal:pack"],
+)
+
 py_test(
     name = "ca_states_test",
     size = "small",
