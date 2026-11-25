@@ -39,12 +39,12 @@
 //   * Third-party apps' CMMotionManager (accelerometer, gyroscope, device motion) is served by locationd over XPC
 //     (kCLConnectionMessage...), which reads these same services; SpringBoard and backboardd run CoreMotion in process.
 //   * Device motion is fused here, as J120's and J181's motion coprocessor fuses it: CoreMotion's 6-axis device motion
-//     (CLSensorFusionService6AxisSPU, the capability bit 21H461 gives J120 and switch_ui_scale_sites_24B119.h keeps for
-//     J181) opens the device motion service {0xff0c, 5} (SwitchHID.h), sets its ReportInterval and takes one report
-//     per interval instead of streaming both raw services into every client process and fusing there. The part runs
-//     at twice the device motion rate (the gyroscope rate CoreMotion's own fusion asks for), every sample is fused
-//     (SwitchMotionFusion.h) and each report leaves with its last sample's time; on the ICM-42607 the FIFO watermark
-//     is one report's samples, so one interrupt per report.
+//     (CLSensorFusionService6AxisSPU: capability bit 3 of J120's word on 21H461, bit 4 of J181's on 24B119, which
+//     switch_ui_scale_sites_24B119.h keeps) opens the device motion service {0xff0c, 5} (SwitchHID.h), sets its
+//     ReportInterval and takes one report per interval instead of streaming both raw services into every client
+//     process and fusing there. The part runs at twice the device motion rate (the gyroscope rate CoreMotion's own
+//     fusion asks for), every sample is fused (SwitchMotionFusion.h) and each report leaves with its last sample's
+//     time; on the ICM-42607 the FIFO watermark is one report's samples, so one interrupt per report.
 // Sampling: the part converts only while a client has a nonzero report interval (the services' Report Interval
 // feature, SwitchHID.h) or the orientation detector runs, which it does while the panel is lit
 // (switch_motion_display_power, SwitchMotion.h): with the panel off nothing converts for it and nothing wakes the CPU.

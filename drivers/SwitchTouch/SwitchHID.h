@@ -134,16 +134,19 @@ struct __attribute__((packed)) SwitchOrientationReport {
 };
 
 // Device motion, AppleVendorMotion 0xff0c / 5: the 6-axis device motion a real iPad's motion coprocessor fuses, which
-// CoreMotion's CLSensorFusionService6AxisSPU opens (21H461 on J120 as shipped; 24B119 once its J181 capability word
-// keeps the 6-axis bit, switch_ui_scale_sites_24B119.h). Input report 1 is one payload element, inside an AppleVendor
-// Message collection, so IOHIDEventDriver dispatches each report as one vendor-defined event carrying the payload's
-// bytes at the report's time (../SwitchMotion/SwitchMotionFusion.h has the payload); feature report 1 is the motion
-// sensors' Report Interval and Report Latency. CoreMotion sets only ReportInterval, its update interval.
-// The payload's length is the build's: CoreMotion drops a report of any other (21H461 52 bytes, 24B119 60).
+// CoreMotion's CLSensorFusionService6AxisSPU opens: on 21H461 when J120's capability word has bit 3, as shipped; on
+// 24B119 when J181's has bit 4, which switch_ui_scale_sites_24B119.h keeps. Input report 1 is one payload element,
+// inside an AppleVendor Message collection, so IOHIDEventDriver dispatches each report as one vendor-defined event
+// carrying the payload's bytes at the report's time (../SwitchMotion/SwitchMotionFusion.h has the payload); feature
+// report 1 is the motion sensors' Report Interval and Report Latency. CoreMotion sets only ReportInterval, its update
+// interval. The payload's length is the build's own: populateDeviceMotion turns any other into "Bad device motion
+// report" (its size table by report type: 21H461 {5, 100, 52, 52}, 24B119 {5, 108, 60, 60}).
 #if SWITCH_IPSW_KIND_24B119
 constexpr size_t kSwitchDeviceMotionPayload = 60;
-#else
+#elif SWITCH_IPSW_KIND_21H461
 constexpr size_t kSwitchDeviceMotionPayload = 52;
+#else
+#error "SwitchHID.h: no device motion report length for this IPSW kind (CoreMotion populateDeviceMotion's size table)"
 #endif
 
 struct __attribute__((packed)) SwitchDeviceMotionReport {
