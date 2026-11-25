@@ -296,8 +296,9 @@ TEST_F(SwitchIconCache, Xnu12377AReturningBuildGetsItsFoldersBack)
         EXPECT_EQ(Contents(data.root / kKeep / kKeyB / salt / "__cache_info__"), std::string("drawn by B ") + salt);
     }
     EXPECT_FALSE(fs::exists(data.root / kKeep / kKeyA));
-    EXPECT_TRUE(fs::exists(data.root / kTrash / (std::string(kSession) + "-keep-" + kKeyA)));
+    EXPECT_TRUE(fs::is_empty(data.root / kTrash / (std::string(kSession) + "-keep-" + kKeyA)));
     EXPECT_EQ(Contents(data.root / "Switch/icon-cache-reset"), kBuildA);
+    EXPECT_EQ(Contents(data.root / "Switch/icon-cache-restored"), kBuildA);
 }
 
 TEST_F(SwitchIconCache, Xnu12377TheKeepHoldsOneBuild)
@@ -315,9 +316,13 @@ TEST_F(SwitchIconCache, Xnu12377TheKeepHoldsOneBuild)
     EXPECT_TRUE(result.trash_pending);
     EXPECT_FALSE(fs::exists(data.root / kKeep / kKeyA));
     EXPECT_TRUE(fs::exists(data.root / kKeep / kKeyB));
-    EXPECT_TRUE(fs::exists(data.root / kTrash / (std::string(kSession) + "-keep-" + kKeyA)));
-    for (const char *salt : kSalts)
+    EXPECT_TRUE(fs::is_empty(data.root / kTrash / (std::string(kSession) + "-keep-" + kKeyA)));
+    for (const char *salt : kSalts) {
         EXPECT_FALSE(fs::exists(data.root / kCache / salt)) << "C starts with an empty cache";
+        const fs::path evicted = data.root / kTrash / (std::string(kSession) + "-keep-" + kKeyA + "-" + salt);
+        EXPECT_TRUE(fs::exists(evicted / "__METAL_CACHE__" / "shader.bin")) << "at the sweep's depth for a salt folder";
+    }
+    EXPECT_FALSE(fs::exists(data.root / "Switch/icon-cache-restored"));
 }
 
 TEST_F(SwitchIconCache, Xnu12377WithoutAMarkerMovesEverySaltFolderToTrash)

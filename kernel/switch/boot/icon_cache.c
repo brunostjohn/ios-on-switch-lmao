@@ -8,8 +8,8 @@
  * aside, off SpringBoard's critical path: into Switch/icon-cache-keep/<marker's build> when the marker names one, else
  * into Switch/icon-cache-trash/<boot-session>-<salt>; and when the keep holds the named build's folders (the card went
  * back to a build it ran before, as sessions sharing it restage each other's), they move back into the cache, which
- * then holds icons that build drew and needs no reset. The keep holds one build; anything else in it, and the trash,
- * are swept after System Boot Complete.
+ * then holds icons that build drew and needs no reset (Switch/icon-cache-restored names it). The keep holds one build;
+ * anything else in it, and the trash, are swept after System Boot Complete.
  */
 #include <switch/icon_cache.h>
 
@@ -33,6 +33,9 @@ static const char switch_icon_cache_folder[] =
 
 static const char switch_icon_cache_request[] = "Switch/icon-cache-gpu";
 static const char switch_icon_cache_marker[] = "Switch/icon-cache-reset";
+/* Written, with the named build, on a boot that moved that build's kept folders back (HW Test system.icon_cache_reset:
+ * such a drop is not followed by the agent's reset). */
+static const char switch_icon_cache_restored[] = "Switch/icon-cache-restored";
 
 enum {
     kPath = 256,
@@ -146,6 +149,51 @@ static int switch_icon_cache_walk_from(struct switch_icon_cache_walk *walk, cons
     return error == ENOENT ? 0 : error;
 }
 
+/* Moves a kept build's folder to the trash: its salt folders one by one, as <session>-keep-<build>-<salt>, so the sweep
+ * meets them at the depth it meets any salt folder, then the emptied folder. The build named `stay` stays. */
+struct switch_icon_cache_evict {
+    struct switch_icon_cache_walk *walk;
+    const char *stay;
+};
+
+static int switch_icon_cache_evict_build(void *opaque, const char *name)
+{
+    struct switch_icon_cache_evict *evict = opaque;
+    struct switch_icon_cache_walk *walk = evict->walk;
+    struct switch_icon_cache_walk salts = {.ops = walk->ops, .result = walk->result};
+    char dir[kPath], prefix[kPath];
+
+    if (!switch_icon_cache_valid_name(name)) {
+        return EINVAL;
+    }
+    if (evict->stay && !strcmp(name, evict->stay)) {
+        return 0;
+    }
+    int error = switch_icon_cache_join(dir, SWITCH_ICON_CACHE_KEEP "/", name, "");
+    if (!error) {
+        error = switch_icon_cache_join(prefix, "keep-", name, "-");
+    }
+    if (!error) {
+        error = switch_icon_cache_walk_from(&salts, dir, NULL, prefix, NULL);
+    }
+    if (!error) {
+        walk->from = SWITCH_ICON_CACHE_KEEP;
+        walk->to = NULL;
+        walk->prefix = "keep-";
+        walk->stay = NULL;
+        error = switch_icon_cache_move(walk, name);
+    }
+    return error;
+}
+
+static int switch_icon_cache_evict_keep(struct switch_icon_cache_walk *walk, const char *stay)
+{
+    struct switch_icon_cache_evict evict = {walk, stay};
+    const int error =
+        walk->ops->folders(walk->ops->context, SWITCH_ICON_CACHE_KEEP, switch_icon_cache_evict_build, &evict);
+    return error == ENOENT ? 0 : error;
+}
+
 /* `kept_for`: the build the cache's icons were drawn for (the marker's), or NULL; `wanted`: the build the deploy named,
  * or NULL. Order: the keep loses every build but `wanted`, the cache's folders go into the keep for `kept_for` (or the
  * trash), then `wanted`'s come back. Cut short at any step, the marker stays and the next boot runs it again; the
@@ -167,7 +215,7 @@ static int switch_icon_cache_clear(const struct switch_icon_cache_ops *ops, stru
     }
     int error = 0;
     if (ops->exists(ops->context, SWITCH_ICON_CACHE_KEEP)) {
-        error = switch_icon_cache_walk_from(&walk, SWITCH_ICON_CACHE_KEEP, NULL, "keep-", wanted);
+        error = switch_icon_cache_evict_keep(&walk, wanted);
     }
     if (!error && kept_for) {
         error = switch_icon_cache_join(kept, SWITCH_ICON_CACHE_KEEP "/", kept_for, "");
@@ -191,7 +239,7 @@ static int switch_icon_cache_clear(const struct switch_icon_cache_ops *ops, stru
             error = switch_icon_cache_walk_from(&walk, back, switch_icon_cache_folder, "", NULL);
             result->restored = walk.moved;
             if (!error) {
-                error = switch_icon_cache_walk_from(&walk, SWITCH_ICON_CACHE_KEEP, NULL, "keep-", kept_for);
+                error = switch_icon_cache_evict_keep(&walk, kept_for);
             }
         }
     }
@@ -256,6 +304,9 @@ void switch_icon_cache_drop(const struct switch_icon_cache_ops *ops, struct swit
         if (!error) {
             error =
                 switch_icon_cache_clear(ops, result, known ? kept_for : NULL, result->build[0] ? result->build : NULL);
+        }
+        if (!error && result->restored) {
+            error = ops->write(ops->context, switch_icon_cache_restored, build, length);
         }
         if (!error) {
             error = ops->write(ops->context, switch_icon_cache_marker, build, length);
