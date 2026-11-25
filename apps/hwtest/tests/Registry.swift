@@ -16,9 +16,12 @@ import HWTestScenes
 @testable import HWTestVideoTests
 
 public enum Registry {
-    /// The GPU scenes come first: the first of them reproduces the process's first command buffer.
+    /// The GPU scenes come first: the first of them reproduces the process's first command buffer. The compressed
+    /// targets follow it, while the GPU's ZBC table still has the entries they ask for (CompressedTargetsTest).
     static let gpuScenes: [any HWTest] =
-        Scenes.all.map { GPUSceneTest(scene: $0) } + [PackHitCostTest(), CAStateSweepTest(), CAAskedFormsTest()]
+        [GPUSceneTest(scene: Scenes.firstSurface), CompressedTargetsTest()]
+            + Scenes.all.dropFirst().map { GPUSceneTest(scene: $0) }
+            + [PackHitCostTest(), CAStateSweepTest(), CAAskedFormsTest()]
 
     static let metal: [any HWTest] = [
         MetalDeviceTest(), MetalComputeTest(), MetalColorPassTest(), MetalDepthStencilTest(), MetalMSAATest(),
@@ -34,7 +37,7 @@ public enum Registry {
         Float32FilterTest(), CompareSamplerTest(), SurfaceBufferTest(), OwnAnswersTest(), ComputeFactsTest(),
         SourceLibraryTest(), StitchedLibraryTest(), SamplerTableTest(), FunctionTagsTest(),
         FunctionArgumentEncoderTest(), ArgumentGridsTest(), PlainStructEncoderTest(), BufferTexture16Test(),
-        PlaneRows16Test(), CompressedTargetsTest(), ZcullTest(), MipTwodTest(), MipCandidatesTest(), MipLodTest(),
+        PlaneRows16Test(), ZcullTest(), MipTwodTest(), MipCandidatesTest(), MipLodTest(),
         MipmapVolumeTest(), ShadowStencilTest(), ShadowStencilDepthTest(),
         VisibilityTest(), FixedBlendRuleTest(), FixedBlendFormatsTest(), PrivateCompressionTest(),
         PackSlotCleanTest(), ZoomTargetTest(),
