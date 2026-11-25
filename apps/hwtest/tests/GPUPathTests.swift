@@ -10,12 +10,14 @@ import IOSurface
 import Metal
 import VideoToolbox
 
-/// JobVisibility (bit 18): a pass that writes only a private texture ends Internal, with no L2 flush; the blit into a
-/// shared buffer that reads it back ends External, and the CPU reads the pass's colour from it.
+/// JobVisibility (bit 18): a pass that writes only a private texture ends Internal, with no L2 flush. Shared buffers are
+/// volatile write-combined memory (8f6e44c20), so the blit into one that reads the texture back ends Volatile: a wait
+/// for idle and a frame-buffer flush, no L2 flush. A blit into a no-copy buffer over the process's own cached pages ends
+/// External. The CPU reads the pass's colour from both.
 struct JobVisibilityPathTest: GPUPathTest {
     let id = "gpu.path.job_visibility"
-    let name = "Internal jobs skip the L2 flush, External ones put CPU-read bytes in DRAM"
-    let counters = ["internal_jobs", "external_jobs"]
+    let name = "Internal jobs skip the L2 flush; Volatile and External ones put CPU-read bytes in DRAM"
+    let counters = ["internal_jobs", "volatile_jobs", "external_jobs"]
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
         let target = try gpu.texture(.rgba8Unorm, 64, 64)
@@ -27,6 +29,19 @@ struct JobVisibilityPathTest: GPUPathTest {
             pass.colorAttachments[0].storeAction = .store
             commands.makeRenderCommandEncoder(descriptor: pass)!.endEncoding()
         }
+        let want = Array([UInt8]([51, 102, 153, 255]).repeated(64 * 64))
+        let shared = Self.wrong(try await gpu.read(target, bytesPerPixel: 4), want)
+        let noCopy = Self.wrong(try await Self.noCopyRead(gpu, target), want)
+        metrics.set("wrong_bytes_shared", shared)
+        metrics.set("wrong_bytes_no_copy", noCopy)
+        var failures: [String] = []
+        if shared != 0 { failures.append("\(shared) bytes read back wrong through a shared buffer") }
+        if noCopy != 0 { failures.append("\(noCopy) bytes read back wrong through a no-copy buffer") }
+        return failures
+    }
+
+    /// The 64x64 RGBA8 texture blitted into a shared buffer over page-aligned memory this process allocated
+    static func noCopyRead(_ gpu: GPU, _ target: MTLTexture) async throws -> [UInt8] {
         let length = 64 * 64 * 4
         let page = Int(getpagesize())
         let allocBytes = (length + page - 1) & ~(page - 1)
@@ -53,10 +68,7 @@ struct JobVisibilityPathTest: GPUPathTest {
             )
             blit.endEncoding()
         }
-        let bytes = Array(UnsafeRawBufferPointer(start: memory, count: length))
-        let wrong = Self.wrong(bytes, Array([UInt8]([51, 102, 153, 255]).repeated(64 * 64)))
-        metrics.set("wrong_bytes", wrong)
-        return wrong == 0 ? [] : ["\(wrong) bytes of the cleared texture read back wrong"]
+        return Array(UnsafeRawBufferPointer(start: readback.contents(), count: length))
     }
 }
 
