@@ -93,6 +93,7 @@ host_test(
     srcs = [
         "sd_queue_test.cpp",
         "//drivers/NativeSwitchBlock:SwitchQueue.h",
+        "//drivers/NativeSwitchBlock:SwitchSdWriteFence.h",
     ],
     copts = ["-O1"],
 )

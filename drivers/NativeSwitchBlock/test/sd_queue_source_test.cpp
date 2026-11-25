@@ -37,8 +37,9 @@ TEST(SdQueueSource, MergeChains)
     const std::string pick = body("Request *NativeSwitchBlock::pickLocked(");
     EXPECT_THAT(pick, HasSubstr("if (merge && mergeAnywhere) {"));
     EXPECT_THAT(pick, HasSubstr("if (first->write) {"));
-    EXPECT_TRUE(Search(pick, R"(switchGatherWrites\(head, first, limit, kMaxChain, kMergeScan, &start, &sectors,\s*)"
-                             R"(inFlight,\s*inFlightCount\))"));
+    EXPECT_TRUE(Search(pick,
+                       R"(switchGatherWrites\(head, first, limit, kMaxChain, kMergeScan, &start, &sectors,\s*)"
+                       R"(inFlight,\s*inFlightCount,\s*writes\(windowOf\(first->shared\)\)\.waiters != nullptr\))"));
     EXPECT_TRUE(Search(pick, R"(switchGatherReads\(head, first, maxSectors, kMaxChain, kMergeScan, &start, )"
                              R"(&sectors,\s*maxGap,\s*gapBudget\))"));
     // r14-sdcq: gaps only on reads while gap reads are on, within the cost model's bounds.

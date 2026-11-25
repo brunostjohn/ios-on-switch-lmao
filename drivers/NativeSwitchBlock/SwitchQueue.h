@@ -106,10 +106,13 @@ inline uint32_t switchGatherReads(Request *head, Request *first, uint32_t limit,
     return count;
 }
 
+// `inOrder`: a synchronize waits on this window's writes. Its barrier counts completions (SwitchSdWriteFence.h), so
+// while it waits no write may join past an older write still queued: one submitted after the barrier would complete in
+// the place of one it waits for. With no barrier waiting, any barrier that begins later counts both writes.
 template <typename Request>
 inline uint32_t switchGatherWrites(Request *head, Request *first, uint32_t limit, uint32_t maxCount, unsigned scan,
                                    uint64_t *start, uint32_t *sectors, const SwitchLbaRange *inFlight = nullptr,
-                                   unsigned inFlightCount = 0)
+                                   unsigned inFlightCount = 0, bool inOrder = false)
 {
     first->chained = true;
     uint64_t low = first->lba;
@@ -137,8 +140,10 @@ inline uint32_t switchGatherWrites(Request *head, Request *first, uint32_t limit
             bool overlaps = false;
             for (unsigned i = 0; i < inFlightCount && !overlaps; ++i)
                 overlaps = switchOverlapsRange(r, inFlight[i]);
-            for (const Request *older = head; older != r && !overlaps; older = older->next)
-                overlaps = !older->chained && switchOverlaps(older, r);
+            for (const Request *older = head; older != r && !overlaps; older = older->next) {
+                overlaps = !older->chained &&
+                           (switchOverlaps(older, r) || (inOrder && older->write && switchSameWindow(older, r, 0)));
+            }
             if (overlaps)
                 continue;
             r->chained = true;
