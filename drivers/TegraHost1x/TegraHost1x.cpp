@@ -8,8 +8,8 @@
 //   tegra210.dtsi host1x@50000000: interrupts SPI 65 (syncpt) and 67 (general), CAR clock and reset 28.
 //   drivers/memory/tegra/tegra210.c: MC SMMU ASID of HC 0x250, client hot reset HC 0x200 bit 6.
 //   hekate bdk/soc/clock.c _clock_host1x: PLLP / 2.5 = 163.2 MHz, enabled for the display (di.c waits on syncpt 9).
-// The SMMU stays bypassed as for every other driver here: host1x fetches its commands (SwitchHost1xChannels.cpp) by
-// physical address.
+// host1x fetches its commands (SwitchHost1xChannels.cpp) by physical address, through the SMMU at those addresses
+// (SwitchHost1xSmmu.cpp): the push buffers and arenas are held, every other address faults.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
@@ -168,6 +168,12 @@ int bringUp()
         return fail("cannot attach the syncpoint interrupt, INTID", kIntid);
     if (!switch_host1x_channels_alloc(gHost, gHost + kSyncOffset, gSubmitLock))
         return fail("no push buffer or command arena below 4 GiB", 0);
+    char why[160] = {};
+    if (switch_host1x_channels_confine(why, sizeof(why)))
+        IOLog("TegraHost1x: command DMA through the SMMU (ASID %u): host1x reaches its push buffers and arenas\n",
+              TEGRA_SMMU_ASID_HOST1X);
+    else
+        IOLog("TegraHost1x: command DMA not behind the SMMU (%s): host1x can reach all of RAM below 4 GiB\n", why);
     switch_host1x_channels_program();
     gState = 1;
     switch_host1x_intr_start();

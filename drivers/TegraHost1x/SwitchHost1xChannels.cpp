@@ -11,9 +11,9 @@
 // host1x04/05's gather filter (channel_hw.c host1x_enable_gather_filter: CHANNELCTRL KERNEL_FILTER_GBUFFER) and keeps
 // its waits in the push buffer instead, so here the filter is cleared on every channel: it exists to keep a user's
 // gathers from host1x's own methods, and every stream here is the kernel's.
-// host1x fetches the push buffer and the gathers by physical address with the SMMU bypassed (TegraHost1x.cpp), so both
-// are contiguous, below 4 GiB (DMASTART and the GATHER address are 32-bit on host1x05) and cleaned to the point of
-// coherency before DMAPUT.
+// host1x fetches the push buffer and the gathers by physical address (held at those addresses in the SMMU,
+// SwitchHost1xSmmu.cpp), so both are contiguous, below 4 GiB (DMASTART and the GATHER address are 32-bit on host1x05)
+// and cleaned to the point of coherency before DMAPUT.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <string.h>
@@ -257,6 +257,18 @@ bool switch_host1x_channels_alloc(volatile uint8_t *host, volatile uint8_t *sync
     gChannelSync = sync;
     gChannelLock = lock;
     return true;
+}
+
+uint32_t switch_host1x_channels_buffers(const switch_dma_buffer **out, uint32_t room)
+{
+    uint32_t count = 0;
+    for (const Channel &c : gChannels) {
+        if (count + 2 > room)
+            break;
+        out[count++] = &c.pushMemory;
+        out[count++] = &c.arenaMemory;
+    }
+    return count;
 }
 
 void switch_host1x_channels_program()
