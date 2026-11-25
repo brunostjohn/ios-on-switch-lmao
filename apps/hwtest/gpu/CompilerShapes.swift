@@ -154,6 +154,37 @@ public enum CompilerShapes {
 }
 
 extension CompilerShapes {
+    /// Metal's fmax of two halves as the language defines it: y where x < y or x is a NaN, x otherwise
+    public static func metalMax(_ x: Float16, _ y: Float16) -> Float16 { x.isNaN || x < y ? y : x }
+
+    /// Metal's fmin: y where y < x or x is a NaN, x otherwise
+    public static func metalMin(_ x: Float16, _ y: Float16) -> Float16 { x.isNaN || y < x ? y : x }
+
+    /// Whether `got` is `want` as the GPU wrote it to an RGBA32F target: the same half, a NaN any NaN, and either zero
+    /// for a zero (which zero a tie of +0 and -0 gives is the compiler's choice)
+    public static func sameHalf(_ got: Float, _ want: Float16) -> Bool {
+        want.isNaN ? got.isNaN : Float(want) == got && (want == 0 || got.sign == want.sign)
+    }
+
+    /// half_min_max's tests of a pair: abs(x) < y, plus two for x < 0 (a NaN compares false)
+    public static func curveTests(_ x: Float16, _ y: Float16) -> Float {
+        Float(abs(x) < y ? 1 : 0) + Float(x < 0 ? 2 : 0)
+    }
+
+    /// half_min_max's fmax, fmin, clamp and tests of each pair (nil where the command buffer failed)
+    public static func minMaxAnswers(_ gpu: GPU) async throws -> ([SIMD4<Float>]?, GPU.Timing) {
+        let texture = try target(gpu)
+        let pairs = try gpu.buffer(powrPairs)
+        var shape = SIMD2<UInt32>(UInt32(width), UInt32(powrPairs.count))
+        let timing = try await draw(gpu, "half_min_max", into: texture) { encoder in
+            encoder.setFragmentBuffer(pairs, offset: 0, index: 0)
+            encoder.setFragmentBytes(&shape, length: 8, index: 1)
+        }
+        guard !timing.path.hasPrefix("error:") else { return (nil, timing) }
+        let got = try await texels(gpu, texture)
+        return (powrPairs.indices.map { got[$0] }, timing)
+    }
+
     /// powr_specials' answer to each pair (nil where the command buffer failed)
     public static func powrAnswers(_ gpu: GPU) async throws -> ([Float]?, GPU.Timing) {
         let texture = try target(gpu)
