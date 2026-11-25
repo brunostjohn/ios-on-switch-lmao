@@ -251,7 +251,7 @@ StorageFallback RenderEncoder::storageFallback(const Pipeline &pl) const
 // The state's fetch-free form where this draw takes it (fetch_free.h): the blended colour's target in the pass,
 // CPU-visible memory that is not a surface, the rung-2 blends already over it, whether every image its program samples
 // is of unorm8 codes, and whether the pass loads it over an earlier command buffer's rung-2 blends decide rule fetch.blend
-Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl, StorageRoute *route)
+Pipeline *RenderEncoder::fetchFreeFor(const Pipeline &pl, [[maybe_unused]] StorageRoute *route)
 {
     Pipeline *free = __atomic_load_n(&pl.fetchFree, __ATOMIC_ACQUIRE);
     SWITCH_METAL_DIAGNOSTIC(if (route) route->free = FreeMiss::NoForm);
@@ -308,8 +308,18 @@ Pipeline *RenderEncoder::formFor(Pipeline *pl, const FetchDraw &shape)
     if (pl)
         if (Pipeline *free = fetchFreeFor(*pl, SWITCH_METAL_DIAGNOSTICS ? &route : nullptr))
             return free;
-    if (!pl || !pl->storageBits)
+    if (!pl || !pl->storageBits) {
+#if SWITCH_METAL_DIAGNOSTICS
+        if (pl && pl->fetchBits && pl->rec) {
+            route.key = pl->rec->keyHash;
+            route.barrier = true;
+            route.triangles = triangles(shape);
+            route.areaPixels = areaW_ * areaH_;
+            noteStorageRoute(route);
+        }
+#endif
         return pl;
+    }
     const StorageFallback reason = storageFallback(*pl);
     if (reason == StorageFallback::None) {
         Pipeline *twin = blendTwin ? blendTwin : barrierTwin;

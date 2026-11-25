@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-// Why a fetching state's draw takes its storage form (the pixel interlock) rather than a cheaper route: its fetch-free
-// form (fetch_free.h, rules fetch.blend and fetch.iterated) or its barrier twin (twin_rule.h, rule fetch.twin). A debug
+// Why a fetching state's draw takes its storage form (the pixel interlock) or its barrier form (a barrier a triangle,
+// where its record has no storage form) rather than a cheaper route: its fetch-free form (fetch_free.h, rules
+// fetch.blend and fetch.iterated) or, from the storage form, its barrier twin (twin_rule.h, rule fetch.twin). A debug
 // build says so once per state (noteStorageRoute), so a state that never reaches a cheaper route names what stops it.
 #pragma once
 #include <atomic>
@@ -35,6 +36,7 @@ struct StorageRoute {
     uint8_t rung = FetchNone;  // the fetch-free form's
     FetchFreeDraw draw;        // what rule fetch.blend read, where `free` is Rule
     TwinMiss twin = TwinMiss::None;
+    bool barrier = false;  // drawn by its barrier form, a triangle at a time
     uint32_t triangles = 0, areaPixels = 0;
 };
 
@@ -69,9 +71,9 @@ constexpr const char *twinMissName(TwinMiss m)
 }
 
 #if SWITCH_METAL_DIAGNOSTICS
-// Logs `r` the first time its state is drawn by its storage form in this process. The states logged are a fixed
-// open-addressed table of keys, claimed by compare-and-swap, so encoding threads need no lock; past 1024 states nothing
-// more is logged.
+// Logs `r` the first time its state is drawn by its storage or barrier form in this process. The states logged are a
+// fixed open-addressed table of keys, claimed by compare-and-swap, so encoding threads need no lock; past 1024 states
+// nothing more is logged.
 inline void noteStorageRoute(const StorageRoute &r)
 {
     constexpr uint32_t kSlots = 1024;
@@ -89,11 +91,12 @@ inline void noteStorageRoute(const StorageRoute &r)
     if (!claimed)
         return;
     os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
-           "SwitchMetal: fetch route k%016llx takes its storage form: fetch-free %{public}s (rung %u, format %u, "
+           "SwitchMetal: fetch route k%016llx takes its %{public}s form: fetch-free %{public}s (rung %u, format %u, "
            "readable %d, rop layers %u, 8-bit sources %d, accumulates %d); barrier twin %{public}s (%u triangles over "
            "%u px)",
-           (unsigned long long)r.key, freeMissName(r.free), r.rung, r.draw.format, r.draw.readable, r.draw.ropLayers,
-           r.draw.eightBitSources, r.draw.accumulates, twinMissName(r.twin), r.triangles, r.areaPixels);
+           (unsigned long long)r.key, r.barrier ? "barrier" : "storage", freeMissName(r.free), r.rung, r.draw.format,
+           r.draw.readable, r.draw.ropLayers, r.draw.eightBitSources, r.draw.accumulates,
+           r.barrier ? "- (no storage form in the record)" : twinMissName(r.twin), r.triangles, r.areaPixels);
 }
 #endif
 
