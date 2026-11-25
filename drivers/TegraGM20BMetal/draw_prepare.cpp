@@ -497,16 +497,10 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
         compatible_ = pl;
     }
-    const MixedDraw mixed = mixedDraw(*pl, ds_, pass_.depthStencil, samples_, rasterSamples_);
-    if (mixed == MixedDraw::Refused) {
-        *why =
-            "a four-sample state writing colour, depth or stencil and memory in a pass of one-sample colour beside a "
-            "four-sample depth: no draw of its samples 1-3 runs its memory writes once: skipped";
-        cb_->skipped = {RefSamples, pl->samples, samples_, pl->samplePasses};
-        cb_->skips++;
-        skipDraw_ = true;
-        return false;
-    }
+    const MixedDraw mixed =
+        mixedDraw(*pl, ds_, pass_.depthStencil, samples_, rasterSamples_, (alphaWanted_ & kAlphaToCoverage) != 0);
+    SWITCH_METAL_DIAGNOSTIC(if (mixed == MixedDraw::Covering) dev_->stats.mixedCovering++;
+                            if (mixed == MixedDraw::Split) dev_->stats.mixedStageOff++);
     if (!prepareShaderTests(*pl, why))
         return false;
     if (p_.room() < 1024 + pl->methodCount() + (cb_->extrasLive_ ? cb_->extrasLive_->restore.size() : 0) +
@@ -714,8 +708,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                       pl->blendKill);
     if (rebinds && cb_->sampleMaskHeld_ != kSampleMaskAll)
         cb_->sampleMaskHeld_ = kSampleMaskUnknown;
-    const uint32_t wantMask =
-        mixed == MixedDraw::Whole ? compatibleRasterMask_ : compatibleRasterMask_ & kFirstSampleMask;
+    const uint32_t wantMask = mixed == MixedDraw::Whole || mixed == MixedDraw::Covering
+                                  ? compatibleRasterMask_
+                                  : compatibleRasterMask_ & kFirstSampleMask;
     if (wantMask != cb_->sampleMaskHeld_) {
         p.inc(NVB197_SET_SAMPLE_MASK_X0_Y0, {wantMask, wantMask, wantMask, wantMask});
         cb_->sampleMaskHeld_ = wantMask;

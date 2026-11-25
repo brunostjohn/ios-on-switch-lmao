@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <utility>
 #include <vector>
+#include "alpha_control.h"
 #include "attachment_order.h"
 #include "attachment_view.h"
 #include "band_rates.h"
@@ -20,6 +21,7 @@
 #include "fetch_order.h"
 #include "geometry.h"
 #include "icb.h"
+#include "mixed_samples.h"
 #include "mme.h"
 #include "pack.h"
 #include "pass_desc.h"
@@ -389,6 +391,13 @@ private:
     bool amplifies() const
     {
         return amplifications_ > 1 && !amplifying_;
+    }
+
+    // How the bound state's draw keeps a mixed pass's sample rule (mixed_samples.h)
+    MixedDraw mixedForm() const
+    {
+        return mixedDraw(*emitted_, ds_, pass_.depthStencil, samples_, rasterSamples_,
+                         (alphaWanted_ & kAlphaToCoverage) != 0);
     }
 
     bool runsPerAmplification(uint32_t primitive, uint32_t count, uint32_t instances, bool indexed);

@@ -1111,6 +1111,8 @@ public:
         std::atomic<uint64_t> splitPrologues{0};         // split draws' prologue launches (split.cpp)
         std::atomic<uint64_t> reopenTicks{0};            // the last reopen that made a channel, mach_absolute_time
         std::atomic<uint64_t> bandedDraws{0}, bands{0};  // draw_bands.h
+        // mixed passes' draws of MixedDraw::Covering, and of MixedDraw::Split (samples 1-3 with the pixel stage off)
+        std::atomic<uint64_t> mixedCovering{0}, mixedStageOff{0};
         std::atomic<uint64_t> learnedDraws{0};           // band_rates.h
         std::atomic<uint64_t> bandedDispatches{0};       // dispatch_bands.h
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
