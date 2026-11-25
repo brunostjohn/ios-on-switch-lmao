@@ -649,3 +649,49 @@ fn ieee_composition_is_metals_half_powr_at_every_special_operand() {
     }
     assert!(checked > 1000);
 }
+
+/// A `half` division by native device maths is the device's quotient rounded to `half`, with no
+/// scale: the `float` divisor bound `2^126` is `+inf` as a `half`, so its test was false on every
+/// lane.
+#[test]
+fn native_half_division_takes_no_divisor_scale() {
+    let h = float(16);
+    let body = |fb: &mut FunctionBuilder<'_>, x: &[Value]| -> BResult<Value> {
+        fb.module()
+            .set_quantize_form(crate::spirv::builder::QuantizeForm::Converted);
+        super::super::divide::native(fb, h, x[0], x[1])
+    };
+    let selects = |m: TypedModule| {
+        let w = crate::spirv::serialize::serialize(m).expect("words").words;
+        let (mut n, mut i) = (0, 5);
+        while i < w.len() {
+            n += usize::from(w[i] & 0xFFFF == 169);
+            i += ((w[i] >> 16) as usize).max(1);
+        }
+        n
+    };
+    let framed = selects(
+        kernel(&[h, h], h, &|fb, x| {
+            fb.binary_with(BinOp::FAdd, x[0], x[1], Contraction::Allowed)
+        })
+        .expect("kernel"),
+    );
+    assert_eq!(selects(kernel(&[h, h], h, &body).expect("kernel")), framed);
+    let halves: Vec<u64> = vec![
+        0, 0x8000, 0x0001, 0x03FF, 0x0400, 0x3C00, 0xBC00, 0x3555, 0x7BFF, 0xFBFF, 0x7C00, 0xFC00,
+        0x7E00,
+    ];
+    let cases = pairs(&halves, &halves);
+    check(
+        "native half division",
+        &[h, h],
+        h,
+        &body,
+        &cases,
+        &|c| {
+            let (x, y) = (f16_to_f64(arg(c, 0) as u16), f16_to_f64(arg(c, 1) as u16));
+            Some(vec![u64::from(f64_to_f16(f64::from(x as f32 / y as f32)))])
+        },
+        false,
+    );
+}
