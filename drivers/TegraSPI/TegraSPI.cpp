@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// Tegra210 SPI master: PIO blocks, one IOLock per bus, every completion by interrupt (TegraSPI.h).
+// Tegra210 SPI master: PIO blocks, packed four bytes to a FIFO word, one IOLock per bus, every completion by interrupt
+// (TegraSPI.h).
 // The command word, FIFO handling and interrupt handling follow Linux spi-tegra114.c (tegra_spi_setup_transfer_one,
 // tegra_spi_start_cpu_based_transfer, tegra_spi_isr, handle_cpu_based_xfer, tegra_spi_clear_fifo; T210 chip data:
 // intr_mask_reg); clock, reset and pinmux bring-up as ../TegraI2C (hekate clock_enable).
@@ -12,6 +13,7 @@
 #include <kern/sched_prim.h>
 #include <libkern/OSAtomic.h>
 #include "TegraSPI.h"
+#include "TegraSPIWords.h"
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
 
@@ -107,6 +109,7 @@ struct Bus {
     // The transfer in flight (under irqLock; state and fifo also written by the filter).
     uint8_t *rx;
     size_t len, done;
+    bool packed;
     uint32_t state;  // kIdle, kActive, kDone
     uint32_t fifo;   // FIFO_STATUS when the filter saw RDY: the RX word count and the error bits
 };
@@ -158,8 +161,8 @@ void clearStatus(const Bus &b)
     switch_mmio_write32(b.regs, FIFO_STATUS, FIFO_ERR | FIFO_ERRORS);
 }
 
-// Master, the bus's mode, 8-bit unpacked words MSB first, chip select 0 under software control and high; no DMA;
-// the RDY and FIFO error interrupts unmasked (tegra_spi_probe def_command1_reg, tegra_spi_set_intr_mask).
+// Master, the bus's mode, 8-bit packets MSB first (packed per block), chip select 0 under software control and high; no
+// DMA; the RDY and FIFO error interrupts unmasked (tegra_spi_probe def_command1_reg, tegra_spi_set_intr_mask).
 int configure(Bus &b, const BusInfo &info)
 {
     uint32_t cmd = switch_mmio_read32(b.regs, COMMAND1);
@@ -207,8 +210,9 @@ bool filterInterrupt(OSObject *, IOFilterInterruptEventSource *sender)
 void noAction(OSObject *, IOInterruptEventSource *, int)
 {}
 
-// Thread context, the block ended by RDY (kDone): its bytes from the RX FIFO, one word per byte clocked
-// (handle_cpu_based_xfer), counted by the FIFO_STATUS the filter saw.
+// Thread context, the block ended by RDY (kDone): its bytes from the RX FIFO (handle_cpu_based_xfer), a word per byte
+// clocked or, packed, per four (TegraSPIWords.h; the last word's bytes past the block's end are not data), counted by
+// the FIFO_STATUS the filter saw.
 int take(Bus &b)
 {
     const uint32_t fifo = __atomic_load_n(&b.fifo, __ATOMIC_RELAXED);
@@ -219,9 +223,7 @@ int take(Bus &b)
             overflow = true;
             continue;
         }
-        if (b.rx)
-            b.rx[b.done] = static_cast<uint8_t>(word);
-        ++b.done;
+        b.done = tegra_spi_rx_word(word, b.rx, b.done, b.len, b.packed);
     }
     __atomic_store_n(&b.state, kIdle, __ATOMIC_RELAXED);
     return (fifo & FIFO_ERRORS) || overflow || b.done != b.len ? TEGRA_SPI_EIO : TEGRA_SPI_OK;
@@ -266,23 +268,26 @@ int sleepForAction(unsigned bus, Bus &b, uint64_t us)
     return take(b);  // the filter ended it after all
 }
 
-// One PIO block (tegra_spi_start_cpu_based_transfer): empty FIFOs, chip select low, TX words queued, block length,
-// then PIO starts the clock. The budget is the block's bit time plus 2 ms.
+// One PIO block (tegra_spi_start_cpu_based_transfer): empty FIFOs, chip select low, TX words queued, block length in
+// packets, then PIO starts the clock (TegraSPIWords.h packs them). The budget is the block's bit time plus 2 ms.
 int block(unsigned bus, Bus &b, unsigned cs, const uint8_t *tx, uint8_t *rx, size_t len)
 {
     IOLockLock(b.irqLock);
     int result = flushFifos(b) ? TEGRA_SPI_OK : TEGRA_SPI_ETIMEDOUT;
     if (result == TEGRA_SPI_OK) {
         clearStatus(b);
+        const bool packed = tegra_spi_packed(len);
         const uint32_t cmd = (b.idle & ~(CMD1_CS_SS_VAL | CMD1_CS_SEL_MASK)) |
-                             (static_cast<uint32_t>(cs) << CMD1_CS_SEL_SHIFT) | CMD1_TX_EN | CMD1_RX_EN;
+                             (static_cast<uint32_t>(cs) << CMD1_CS_SEL_SHIFT) | CMD1_TX_EN | CMD1_RX_EN |
+                             (packed ? CMD1_PACKED : 0);
         switch_mmio_write32(b.regs, COMMAND1, cmd);
-        for (size_t i = 0; i < len; ++i)
-            switch_mmio_write32(b.regs, TX_FIFO, tx ? tx[i] : 0);
+        for (size_t i = 0; i < tegra_spi_words(len, packed); ++i)
+            switch_mmio_write32(b.regs, TX_FIFO, tegra_spi_tx_word(tx, len, packed, i));
         switch_mmio_write32(b.regs, DMA_BLK, static_cast<uint32_t>(len) - 1);
         b.rx = rx;
         b.len = len;
         b.done = 0;
+        b.packed = packed;
         __atomic_store_n(&b.state, kActive, __ATOMIC_RELEASE);
         __asm__ volatile("dmb sy" ::: "memory");  // kActive is visible to the filter's CPU before the clock starts
         switch_mmio_write32(b.regs, COMMAND1, cmd | CMD1_PIO);
