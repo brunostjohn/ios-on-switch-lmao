@@ -17,7 +17,8 @@ struct OverlayAppRecordsTest: HWTest {
             names = try FileManager.default.contentsOfDirectory(atPath: applications)
         } catch {
             return .fail(
-                "\(applications) is unreadable, though the app's entitlements grant it: \(error.localizedDescription)"
+                "\(applications) is unreadable, though the app's entitlements grant it: "
+                    + error.localizedDescription
             )
         }
         let apps = names.sorted().map { applications + "/" + $0 }.filter(OverlayAppsTest.isOverlay)

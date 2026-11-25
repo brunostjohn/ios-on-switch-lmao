@@ -75,7 +75,8 @@ struct IconRenderTest: HWTest {
     }
 
     static func over(_ mb: Int, limit: Int) -> String {
-        "\(agent) holds \(mb) MB once its GPU memory went back after an icon render, over its \(limit) MB inactive limit"
+        "\(agent) holds \(mb) MB once its GPU memory went back after an icon render, "
+            + "over its \(limit) MB inactive limit"
     }
 
     struct Reading {

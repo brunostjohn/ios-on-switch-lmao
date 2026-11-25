@@ -19,7 +19,8 @@ struct OverlayAppsTest: HWTest {
             names = try FileManager.default.contentsOfDirectory(atPath: Self.applications)
         } catch {
             return .fail(
-                "\(Self.applications) is unreadable, though the app's entitlements grant it: \(error.localizedDescription)"
+                "\(Self.applications) is unreadable, though the app's entitlements grant it: "
+                    + error.localizedDescription
             )
         }
         let apps = names.sorted().map { Self.applications + "/" + $0 }.filter(Self.isOverlay)

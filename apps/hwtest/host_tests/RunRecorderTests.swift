@@ -72,9 +72,12 @@ final class RunRecorderTests: XCTestCase {
 
     func testAChoiceTheCardRefusedThrowsToTheCaller() async throws {
         try "not a directory".write(to: store.directory, atomically: true, encoding: .utf8)
+        var refused: Error?
         do {
             try await recorder.close(planned(["a"]))
-            XCTFail("the close went through a file where the directory should be")
-        } catch {}
+        } catch {
+            refused = error
+        }
+        XCTAssertNotNil(refused, "the close went through a file where the directory should be")
     }
 }
