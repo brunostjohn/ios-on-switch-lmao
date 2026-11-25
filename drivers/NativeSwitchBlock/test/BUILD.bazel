@@ -243,6 +243,19 @@ host_test(
     deps = [":source_checks"],
 )
 
+# c37a9bd1c: the Priority feature on both devices, and the throttle both XNU trees keep on them.
+host_test(
+    name = "sd_priority_source_test",
+    srcs = ["sd_priority_source_test.cpp"],
+    copts = ["-O1"],
+    data = [
+        "//drivers/NativeSwitchBlock:NativeSwitchBlock.cpp",
+        "//drivers/NativeSwitchBlock:SwitchCryptex.cpp",
+        "//kernel/xnu-10063.141.1/bsd:vfs/vfs_subr.c",
+        "//kernel/xnu-12377.121.6/bsd:vfs/vfs_subr.c",
+    ],
+)
+
 host_test(
     name = "sd_pool_source_test",
     srcs = ["sd_pool_source_test.cpp"],

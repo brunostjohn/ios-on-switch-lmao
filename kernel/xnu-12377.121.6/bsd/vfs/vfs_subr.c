@@ -4732,9 +4732,10 @@ vfs_init_io_attributes(vnode_t devvp, mount_t mp)
 	if (iosched_enabled && (features & DK_FEATURE_PRIORITY)) {
 		mp->mnt_ioflags |= MNT_IOFLAGS_IOSCHED_SUPPORTED;
 		/*
-		 * Switch: the SD card's devices (SwitchSD and the cryptex images over it) schedule by tier and take
-		 * doSetPriority, but the card serves one command at a time and the four cores are what the throttled
-		 * threads would take instead, so the software throttle stays on, as it does for a fusion drive.
+		 * Switch: the software throttle stays on for every device that reports Priority, as it does for a fusion
+		 * drive. SwitchSD and the cryptex images over it schedule by tier and take doSetPriority, but the card
+		 * serves one command at a time and the four cores are what the throttled threads would take instead. A USB
+		 * drive or disk image that reports Priority keeps the throttle too.
 		 */
 #if DEVELOPMENT || DEBUG
 		printf("SwitchIOSched: %s (%s, bsd unit %d) schedules I/O by tier, software throttle kept\n",
