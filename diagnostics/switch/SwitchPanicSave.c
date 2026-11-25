@@ -28,7 +28,7 @@
 // log (backtraces, kexts). With hekate_on, PMC_SCRATCH37 would be set at panic entry to hekate's L4T panic magic
 // 'TPAN' (off: hekate would add SD:/L4T_panic.* files and wait for a button). TMR5/WDT0 is armed to reset through the PMC (Linux tegra_wdt.c: 1 MHz timer at 250 ms, reset on the 4th WDT
 // expiry) in case the rest of the panic path hangs. After the panic log, reboot_s seconds after the panic
-// (0: never, the panic screen stays up for a photo) the PMC main reset (PMC_CNTRL bit 4, L4T pmc.c tegra_pmc_restart_notify) warm-resets the SoC:
+// the PMC main reset (PMC_CNTRL bit 4, L4T pmc.c tegra_pmc_restart_notify) warm-resets the SoC:
 // the PMIC keeps DRAM powered, hekate comes back with RAM as it was, saves the text to SD:/L4T_panic.txt (and the 2 MiB to
 // SD:/L4T_panic.bin) and waits for a button. The next iPadOS boot writes /private/var/Switch/panic-<UTC>.log on Data
 // (kern_exec.c, before launchd) and clears the record. A record whose panic log was never appended (reset by the
@@ -44,6 +44,8 @@
 // like a Switch that would not wake, and was forced off, record and all). A panic once the kernel is shutting down
 // (get_system_inshutdown: reboot(2) has begun) warm-resets SHUTDOWN_REBOOT_S after it: the panel is dark or about to
 // be, the console was meant to go off, and POWER held would lose the record within seconds.
+// Any other panic has its screen up: it warm-resets SCREEN_REBOOT_S after the panic, a minute to photograph the
+// screen, and the record then reaches hekate and Data instead of being lost to POWER held.
 #include <stdint.h>
 #include <stddef.h>
 #include <stdarg.h>
@@ -106,6 +108,7 @@ extern unsigned char iso_font[256 * 16];
 #define WATCHDOG_REBOOT_S 60u
 #define DARK_REBOOT_S     15u
 #define SHUTDOWN_REBOOT_S 3u
+#define SCREEN_REBOOT_S   60u
 #define EARLY_REBOOT_S    15u
 #define MSGBUF_TAIL       (64u << 10)
 #define PMC_PA            UINT64_C(0x7000e000) /* the page; APBDEV_PMC at +0x400 (hekate t210.h PMC_BASE) */
@@ -146,7 +149,7 @@ struct switch_panic_stackshot {
     uint32_t header_crc;  /* of everything above */
 };
 
-static unsigned save_on, hekate_on, reboot_s; /* 0: the panic screen stays up (10-31: the user photographs it) */
+static unsigned save_on, hekate_on, reboot_s; /* reboot_s: set by switch_panic_begin (or the early panic) */
 static const unsigned reboot_arg = 0;         /* a fixed reboot delay: it would decide for watchdog panics too */
 static volatile uint8_t *region;              /* write-combined */
 static volatile uint32_t *pmc, *tmr, *screen;
@@ -446,6 +449,7 @@ static void draw_log_area(const char *title, const char *text, size_t length)
 }
 
 static int watchdog_panic; /* the panic string is a watchdog timeout (switch_panic_begin) */
+static int photo_window;   /* the reset waits SCREEN_REBOOT_S for a photo of the screen (switch_panic_begin) */
 
 static int starts_with(const char *s, const char *prefix)
 {
@@ -464,13 +468,16 @@ static void draw_status(void)
                  "Watchdog panic: saved in RAM. Warm reset %us after the panic; iPadOS then writes "
                  "/private/var/Switch/panic-*.log and .kcdata (the stackshot).",
                  reboot_s);
-    } else if (save_on && region && reboot_s) {
+    } else if (save_on && region && photo_window) {
+        snprintf(line, sizeof(line),
+                 "Saved in RAM. Photograph now: warm reset %us after the panic, then hekate writes "
+                 "SD:/L4T_panic.txt, iPadOS /private/var/Switch/panic-*.log. Holding POWER loses it.",
+                 reboot_s);
+    } else if (save_on && region) {
         snprintf(line, sizeof(line),
                  "Saved in RAM. Warm reset %us after the panic: hekate writes SD:/L4T_panic.txt, iPadOS "
                  "/private/var/Switch/panic-*.log.",
                  reboot_s);
-    } else if (save_on && region) {
-        snprintf(line, sizeof(line), "Saved in RAM (no reset). Holding POWER loses it.");
     } else {
         snprintf(line, sizeof(line), "Not saved (%s). Hold POWER to turn off.", save_off_reason);
     }
@@ -631,6 +638,9 @@ int switch_panic_begin(const char *format, va_list *args, unsigned long caller, 
         reboot_s = SHUTDOWN_REBOOT_S;
     if (!switch_display_is_on() && !reboot_arg && !reboot_s)
         reboot_s = DARK_REBOOT_S; /* nothing to photograph */
+    photo_window = !reboot_arg && !reboot_s;
+    if (photo_window)
+        reboot_s = SCREEN_REBOOT_S;
     screen_taken = take_screen && screen;
     if (save_on && region) {
         clock_sec_t secs = 0;
