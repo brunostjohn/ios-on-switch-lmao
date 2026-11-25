@@ -314,6 +314,17 @@ class LogHarvestTest(unittest.TestCase):
         boot = logharvest.read_boots(logged)[BOOT]
         self.assertEqual(logharvest.whole(boot, 'backboardd', '000000000000000a'), (CA_LABEL, key))
 
+    def test_a_core_animation_state_our_own_app_made_is_harvested(self):
+        records = [
+            record(BOOT, 'x', 'OS version: 24B119'),
+            made(BOOT, 'SwitchHWTest', '0000000000000014', CA),
+            *parts(BOOT, 'SwitchHWTest', '0000000000000014', CA_LABEL, CA),
+        ]
+        boots = logharvest.read_boots(records)
+        new, report = logharvest.harvest(boots, CORPUS.splitlines(), None, Path('/nonexistent'))
+        self.assertEqual(report.left['SwitchHWTest', 'our own app'], 0)
+        self.assertEqual([logharvest.make_pack.state_key(line) for line in new], [CA])
+
     def test_left_out_states_are_counted_by_reason(self):
         boots = logharvest.read_boots(boot_records())
         _, report = logharvest.harvest(boots, CORPUS.splitlines(), None, Path('/nonexistent'))

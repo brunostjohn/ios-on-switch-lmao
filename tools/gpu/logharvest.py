@@ -49,7 +49,8 @@ specializations (S lines) name for that function. The line carries the state's k
 keys an AIR-keyed state by the AIR of the library it loads (pack/direct_states.h), so its record is the device's
 only where that library is the one the device loaded.
 
-Left out and counted: our own apps' states (SwitchHWTest*), a key the log cut with no whole parts (or parts that
+Left out and counted: our own apps' states (SwitchHWTest*) but Core Animation's (any app may render with them, and no
+process draws Core Animation's catch-all), a key the log cut with no whole parts (or parts that
 disagree with it), a function no one library is named for, an AIR-keyed state that links functions, a Core Animation
 state that links functions or has no label, a framework whose library path none of those name, a variant whose state the
 corpus lacks, and the states the device refused.
@@ -348,7 +349,7 @@ def harvest_boot(boot: Boot, build: str, libraries: Libraries, held: set[str], r
     """Give the lines of one boot's states `held` lacks (a variant's state first), adding their keys to it."""
     new = []
     for process, outcome, label, key, missing in states(boot, held):
-        if process.startswith(OWN_APPS):
+        if process.startswith(OWN_APPS) and not (label or '').startswith(CA_LABEL):
             report.left[process, 'our own app'] += 1
         elif outcome == 'refused':
             report.left[process, 'refused on the device'] += 1
