@@ -5052,6 +5052,12 @@ facade_test(
     srcs = ["facade_errors_test.cpp"],
 )
 
+# A new Private buffer on a span a freed one left dirty is filled by the copy engine ahead of its first use, once
+facade_test(
+    name = "facade_fresh_buffer_test",
+    srcs = ["facade_fresh_buffer_test.cpp"],
+)
+
 # A call Metal's validation stops for an object another device made, or nil where Metal takes none, fails its command
 # buffer InvalidResource as it is recorded, a parallel pass's sub-encoder's too; m2v never asked
 facade_test(

@@ -302,6 +302,8 @@
                      (unsigned long)n);
         return nil;
     }
+    if (b->_raw.freshFill)
+        establishFreshBuffer(b);
     return (id<MTLBuffer>)b;
 }
 
