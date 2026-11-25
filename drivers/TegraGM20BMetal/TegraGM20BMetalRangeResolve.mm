@@ -53,6 +53,7 @@ static ResolveEnd resolveByState(gm20b::Device &d, gm20b::CommandBuffer &rc, gm2
     p.count = 1;
     p.width = width;
     p.height = height;
+    p.readsBackings = true;
     gm20b::RenderEncoder *e = rc.render(p, why);
     if (!e)
         return ResolveEnd::NoMemory;
