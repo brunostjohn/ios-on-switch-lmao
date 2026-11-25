@@ -4,13 +4,13 @@
 // DC A latches a flip only at a frame end, so a flip armed now shows from the next frame end at the earliest: a swap
 // waits while that frame end is more than half a period before its target.
 //
-// A swap stamped no more than a period and a half after it was accepted is the render server's ordinary frame, for
-// its next vsync: it goes at once. The clause was written for a render-server timer at any phase to DC A's frame end.
-// The device shows otherwise: no vsync client registers, the render server's timer is phased from frame info's
-// Presentation_time (the frame end), and its render thread woke within 250 us of a frame end for 659 of 873 late
-// swaps (one boot, 22 Nov). A swap it stamps for the second frame end ahead is then shown a frame early (Ordinary)
-// when it comes in the second half of the period, and on time when it comes in the first. The debug counters
-// (kern.switch_frame_info_ordinary, _unphased, _early and the "SwitchDisplay requested" line) say how often.
+// The render server's frame clock is phased by frame info's Presentation_time (the frame end), so its stamp names a
+// frame end and the stamp alone decides. In some windows it stamps the second frame end ahead: shown at once when
+// accepted late in the period and held when accepted early, consecutive frames would latch two periods apart. With the
+// frame ends masked there is no phase to judge the stamp by: a swap stamped no more than a period and a half after it
+// was accepted is the render server's frame for its next vsync and goes at once (OrdinaryUnphased); a later target
+// waits for the next frame end. The debug counters (kern.switch_frame_info_unphased, _early and the "SwitchDisplay
+// requested" line) say how often.
 #pragma once
 #include <stdint.h>
 
@@ -28,13 +28,12 @@ enum class Decision {
     Due,
     Early,             // the next frame end is too early for it
     NeedsPhase,        // the frame ends were masked: the next one says which frame end is the target's
-    Ordinary,          // too early for the next frame end, and goes at once as the render server's ordinary frame
     OrdinaryUnphased,  // the frame ends were masked, and it goes at once as the render server's ordinary frame
 };
 
 inline bool due(Decision d)
 {
-    return d == Decision::Due || d == Decision::Ordinary || d == Decision::OrdinaryUnphased;
+    return d == Decision::Due || d == Decision::OrdinaryUnphased;
 }
 
 inline Decision decide(uint64_t requestedContinuous, const Clock &c)
@@ -47,13 +46,12 @@ inline Decision decide(uint64_t requestedContinuous, const Clock &c)
     const uint64_t requested = requestedContinuous - asleep;
     if (requested <= c.nowAbsolute + c.period / 2 || requested - c.nowAbsolute > c.horizon)
         return Decision::Due;
-    const bool ordinary = c.accepted && requested <= c.accepted + c.period + c.period / 2;
-    if (!c.lastFrameEnd || c.lastFrameEnd > c.nowAbsolute || c.nowAbsolute - c.lastFrameEnd >= 2 * c.period)
+    if (!c.lastFrameEnd || c.lastFrameEnd > c.nowAbsolute || c.nowAbsolute - c.lastFrameEnd >= 2 * c.period) {
+        const bool ordinary = c.accepted && requested <= c.accepted + c.period + c.period / 2;
         return ordinary ? Decision::OrdinaryUnphased : Decision::NeedsPhase;
+    }
     const uint64_t nextFrameEnd = c.lastFrameEnd + ((c.nowAbsolute - c.lastFrameEnd) / c.period + 1) * c.period;
-    if (requested <= nextFrameEnd + c.period / 2)
-        return Decision::Due;
-    return ordinary ? Decision::Ordinary : Decision::Early;
+    return requested <= nextFrameEnd + c.period / 2 ? Decision::Due : Decision::Early;
 }
 
 }  // namespace switch_timed_present

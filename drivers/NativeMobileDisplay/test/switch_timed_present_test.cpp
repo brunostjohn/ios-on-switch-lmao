@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchTimedPresent.h: a swap flips at the frame end before its requested presentation, never earlier, and a swap
-// stamped for the next vblank (every Core Animation frame) or with no target flips exactly as before.
+// stamped for the next vblank or with no target flips at once.
 #include <gtest/gtest.h>
 
 #include <string>
+#include <vector>
 
 #include "../SwitchTimedPresent.h"
 #include "bazel/testing/source_text.h"
@@ -40,45 +41,75 @@ TEST(TimedPresent, TheNextVblanksFrameFlipsAsBefore)
     }
 }
 
-// A swap stamped within a period and a half of its acceptance goes at once even when the next frame end is more than
-// half a period before its stamp. The render server's timer does not sit at any phase to DC A's frame end, as the
-// clause assumed: on the device its render thread wakes at the frame end, and its swap comes 7-10 ms later.
-TEST(TimedPresent, AnOrdinaryFrameGoesAtOnceThoughTheNextFrameEndIsEarly)
+// With the phase known the stamp alone decides, whatever the swap's acceptance time: a frame stamped for the second
+// frame end ahead waits for the frame end before it, accepted early or late in the period.
+TEST(TimedPresent, AcceptanceTimeDoesNotMoveAPhasedSwap)
 {
-    const uint64_t tick = kFrameEnd + 10000, now = tick + 1500;
-    EXPECT_EQ(decide(tick + kPeriod, at(now)), Decision::Early);
-    EXPECT_TRUE(switch_timed_present::due(decide(tick + kPeriod, at(now, 0, kFrameEnd, now - 200))));
-    EXPECT_EQ(decide(tick + 2 * kPeriod, at(now, 0, kFrameEnd, now - 200)), Decision::Early);
+    const uint64_t target = kFrameEnd + 2 * kPeriod;
+    for (uint64_t into : {2000ULL, 9000ULL, 12000ULL, 16000ULL}) {
+        const uint64_t now = kFrameEnd + into;
+        EXPECT_EQ(decide(target, at(now, 0, kFrameEnd, now - 200)), Decision::Early) << into;
+        EXPECT_EQ(decide(target, at(now)), Decision::Early) << into;
+    }
 }
 
-// The ordinary-frame clause latches a swap at a frame end more than half a period before its requested presentation:
-// it says so (Ordinary), for the debug count, and stays due. Decided without a phase (the frame ends were masked) it
-// says that (OrdinaryUnphased) and stays due. A swap the next frame end suits is plainly Due.
-TEST(TimedPresent, TheOrdinaryClauseIsNamedWhereItShowsAFrameEarly)
+// Decided without a phase (the frame ends were masked), a swap stamped within a period and a half of its acceptance is
+// the render server's ordinary frame and goes at once (OrdinaryUnphased); without an acceptance time it waits for a
+// frame end to learn the phase from.
+TEST(TimedPresent, AnUnphasedOrdinaryFrameGoesAtOnce)
 {
-    const uint64_t tick = kFrameEnd + 10000, now = tick + 1500, accepted = now - 200;
-    EXPECT_EQ(decide(tick + kPeriod, at(now, 0, kFrameEnd, accepted)), Decision::Ordinary);
-    EXPECT_TRUE(switch_timed_present::due(Decision::Ordinary));
     EXPECT_FALSE(switch_timed_present::due(Decision::Early));
     EXPECT_FALSE(switch_timed_present::due(Decision::NeedsPhase));
-    EXPECT_EQ(decide(kFrameEnd + kPeriod, at(now, 0, kFrameEnd, accepted)), Decision::Due);
     const uint64_t stale = kFrameEnd + 10 * kPeriod + 1500;
     EXPECT_EQ(decide(stale + kPeriod, at(stale, 0, kFrameEnd, stale - 200)), Decision::OrdinaryUnphased);
     EXPECT_TRUE(switch_timed_present::due(Decision::OrdinaryUnphased));
     EXPECT_EQ(decide(stale + kPeriod, at(stale)), Decision::NeedsPhase);
+    EXPECT_EQ(decide(stale + 3 * kPeriod, at(stale, 0, kFrameEnd, stale - 200)), Decision::NeedsPhase);
 }
 
-// The display treats the clause's swaps as due and counts each once (debug kernels), when the kick takes it: a kick
-// that defers it for another reason asks the gate again, which must not count it twice.
-TEST(TimedPresentSource, TheDisplayCountsAnOrdinarySwapOnceAtItsTake)
+// One swap per period from a render thread woken at each frame end, stamped `lead` frame ends ahead and accepted at a
+// phase that varies frame to frame (the 25 Nov captures: 2.5-15 ms after the frame end). The display asks the gate at
+// acceptance and again at every frame end while it holds the swap (kickAtIdleFrameEnd, ~80 us after it); a flip armed
+// at t latches at the first frame end after t. Every frame must latch one period after the one before.
+std::vector<uint64_t> replay(unsigned lead)
+{
+    const uint64_t accepts[] = {2500, 9500, 3000, 12000, 4000, 15000, 8500, 8000, 2600, 11000, 5000, 14500};
+    std::vector<uint64_t> latched;
+    for (unsigned k = 0; k < sizeof(accepts) / sizeof(accepts[0]); ++k) {
+        const uint64_t frameEnd = kFrameEnd + k * kPeriod;
+        const uint64_t accepted = frameEnd + accepts[k];
+        const uint64_t requested = frameEnd + lead * kPeriod;
+        uint64_t asked = accepted, lastFrameEnd = frameEnd;
+        while (!switch_timed_present::due(decide(requested, at(asked, 0, lastFrameEnd, accepted)))) {
+            lastFrameEnd += kPeriod;
+            asked = lastFrameEnd + 80;
+        }
+        latched.push_back(kFrameEnd + ((asked - kFrameEnd) / kPeriod + 1) * kPeriod);
+    }
+    return latched;
+}
+
+TEST(TimedPresent, ConsecutiveFramesLatchOnePeriodApartAtEitherLead)
+{
+    for (unsigned lead : {1U, 2U}) {
+        const std::vector<uint64_t> latched = replay(lead);
+        for (size_t i = 0; i < latched.size(); ++i)
+            EXPECT_EQ(latched[i], kFrameEnd + (i + lead) * kPeriod) << "lead " << lead << " frame " << i;
+    }
+}
+
+// The display counts a swap the unphased clause let go once (debug kernels), when the kick takes it: a kick that
+// defers it for another reason asks the gate again, which must not count it twice.
+TEST(TimedPresentSource, TheDisplayCountsAnUnphasedSwapOnceAtItsTake)
 {
     const std::string source = SourceText("../SwitchTimedPresentDisplay.h");
     const CodeText gate = Block(source, "bool presentNotDue(");
-    EXPECT_TRUE(gate.before("Decision::Ordinary ? request : nullptr", "if (switch_timed_present::due(decision))"));
-    EXPECT_FALSE(gate.has("timedOrdinary"));
-    EXPECT_TRUE(Block(source, "void noteOrdinaryTaken(").has("++frameInfo->pending.timedOrdinary;"));
+    EXPECT_TRUE(
+        gate.before("Decision::OrdinaryUnphased ? request : nullptr", "if (switch_timed_present::due(decision))"));
+    EXPECT_FALSE(gate.has("timedUnphased"));
+    EXPECT_TRUE(Block(source, "void noteUnphasedTaken(").has("++frameInfo->pending.timedUnphased;"));
     EXPECT_TRUE(Block(SourceText("../NativeLegacyDisplay.cpp"), "void noteFrameInfoTaken(")
-                    .before("noteOrdinaryTaken(request);", "frameInfo->pending.take("));
+                    .before("noteUnphasedTaken(request);", "frameInfo->pending.take("));
 }
 
 TEST(TimedPresent, ATargetTwoFramesOutWaitsForTheFrameEndBeforeIt)

@@ -12,19 +12,14 @@ static inline const OriginalLegacySwapRequest *timedHeldRequest = nullptr;
 bool timedHoldLogged = false;
 #endif
 #if SWITCH_FRAME_TIMELINE
-// The swap the gate's last decision let go by the ordinary-frame clause: counted once, when the kick takes it (a kick
-// that defers it for another reason asks the gate again).
-static inline const OriginalLegacySwapRequest *ordinaryRequest = nullptr;
+// The swap the gate's last decision let go by the ordinary-frame clause with the frame ends masked: counted once, when
+// the kick takes it (a kick that defers it for another reason asks the gate again).
 static inline const OriginalLegacySwapRequest *unphasedRequest = nullptr;
 #endif
 
-void noteOrdinaryTaken(const OriginalLegacySwapRequest *request)
+void noteUnphasedTaken(const OriginalLegacySwapRequest *request)
 {
 #if SWITCH_FRAME_TIMELINE
-    if (request && request == ordinaryRequest) {
-        ordinaryRequest = nullptr;
-        ++frameInfo->pending.timedOrdinary;
-    }
     if (request && request == unphasedRequest) {
         unphasedRequest = nullptr;
         ++frameInfo->pending.timedUnphased;
@@ -48,7 +43,6 @@ bool presentNotDue(const OriginalLegacySwapRequest *request)
                                                submittedAt(request)};
     const auto decision = switch_timed_present::decide(requested, clock);
 #if SWITCH_FRAME_TIMELINE
-    ordinaryRequest = decision == switch_timed_present::Decision::Ordinary ? request : nullptr;
     unphasedRequest = decision == switch_timed_present::Decision::OrdinaryUnphased ? request : nullptr;
 #endif
     if (switch_timed_present::due(decision))
@@ -75,11 +69,10 @@ bool presentNotDue(const OriginalLegacySwapRequest *request)
 
 // display.present_at_time's view of frame info (debug kernels): kern.switch_frame_info_shown and _unsent, the swaps the
 // gate held for their presentation time whose frame info went out, and those replaced before any frame showed them;
-// _ordinary, the swaps the gate let go as ordinary frames although the next frame end was too early for them;
-// _unphased, those it let go so with the frame ends masked; _early, the swaps shown more than half a period before
-// their requested presentation.
+// _unphased, the swaps it let go as ordinary frames with the frame ends masked; _early, the swaps shown more than half a
+// period before their requested presentation.
 #if SWITCH_FRAME_TIMELINE
-static constexpr unsigned kFrameInfoTimedOids = 5;
+static constexpr unsigned kFrameInfoTimedOids = 4;
 static inline struct sysctl_oid frameInfoTimedOids[kFrameInfoTimedOids] = {};
 
 static int frameInfoTimedSysctl(struct sysctl_oid *, void *, int which, struct sysctl_req *req)
@@ -89,8 +82,7 @@ static int frameInfoTimedSysctl(struct sysctl_oid *, void *, int which, struct s
     if (display && display->frameInfo) {
         const auto &pending = display->frameInfo->pending;
         const uint32_t *const counts[kFrameInfoTimedOids] = {&pending.timedShown, &pending.timedUnsent,
-                                                             &pending.timedOrdinary, &pending.shownEarly,
-                                                             &pending.timedUnphased};
+                                                             &pending.shownEarly, &pending.timedUnphased};
         if (which >= 0 && static_cast<unsigned>(which) < kFrameInfoTimedOids)
             value = static_cast<int>(__atomic_load_n(counts[which], __ATOMIC_RELAXED));
     }
@@ -100,8 +92,7 @@ static int frameInfoTimedSysctl(struct sysctl_oid *, void *, int which, struct s
 static void frameInfoTimedRegister()
 {
     static const char *const names[kFrameInfoTimedOids] = {"switch_frame_info_shown", "switch_frame_info_unsent",
-                                                           "switch_frame_info_ordinary", "switch_frame_info_early",
-                                                           "switch_frame_info_unphased"};
+                                                           "switch_frame_info_early", "switch_frame_info_unphased"};
     for (unsigned i = 0; i < kFrameInfoTimedOids; ++i) {
         if (frameInfoTimedOids[i].oid_name)
             continue;
