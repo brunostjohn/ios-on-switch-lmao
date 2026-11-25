@@ -25,6 +25,8 @@ FRAME_BEFORE_S = 0.1
 DSC_SPAN = 0x200000000  # a shared cache's mapped size is well under 8 GiB
 IMAGE_SPAN = 256 << 20
 TOP = 8
+# kcdata.h's ts_ss_flags: which shared region a task is attached to
+REGION_NONE, REGION_SYSTEM, REGION_OTHER = 0x20000000, 0x40000000, 0x80000000
 
 
 @dataclass
@@ -69,10 +71,45 @@ def uuid_text(raw: object) -> str:
     return str(raw)
 
 
+def cache_base_slide(info: dict | None) -> tuple[int, int] | None:
+    """Return a shared cache's (slid base, slide) from either of kcdata's load-info layouts."""
+    if not info:
+        return None
+    if 'sharedCacheSlide' in info:
+        return int(info.get('sharedCacheSlidFirstMapping', 0)), int(info['sharedCacheSlide'])
+    return int(info.get('imageSlidBaseAddress', 0)), int(info.get('imageLoadAddress', 0))
+
+
+Cache = tuple[int, int]  # (slid base, slide)
+
+
+def task_cache(task: dict, system: Cache | None, others: dict[int, Cache]) -> Cache | None:
+    """Return the shared cache a task maps.
+
+    Older stackshots carry it in every task. Newer ones carry the system cache once at the top level and give a task
+    only its region flags, plus a cache id when it maps another one.
+    """
+    own = cache_base_slide(task.get('shared_cache_dyld_load_info'))
+    if own:
+        return own
+    flags = int((task.get('task_snapshot') or {}).get('ts_ss_flags', 0))
+    if flags & REGION_OTHER:
+        return others.get(int(task.get('sharedCacheID', 0)))
+    if flags & REGION_NONE:
+        return None
+    return system
+
+
 def names(kcdata: dict) -> Names:
     out = Names()
     shot = kcdata.get('kcdata_stackshot') or {}
     tasks = {**(shot.get('task_snapshots') or {}), **(shot.get('transitioning_task_snapshots') or {})}
+    system = cache_base_slide(shot.get('shared_cache_dyld_load_info'))
+    others = {}
+    for entry in (shot.get('shared_caches') or {}).values():
+        info = entry.get('shared_cache_dyld_load_info') or {}
+        if (found := cache_base_slide(info)) and 'sharedCacheID' in info:
+            others[int(info['sharedCacheID'])] = found
     for task in tasks.values():
         snap = task.get('task_snapshot') or {}
         pid = int(snap.get('ts_pid', -1))
@@ -81,9 +118,8 @@ def names(kcdata: dict) -> Names:
             out.thread[tid] = (pid, snap.get('ts_p_comm', '?'), thread.get('pth_name', ''))
         loads = task.get('dyld_load_info') or []
         out.images[pid] = sorted((int(i['imageLoadAddress']), uuid_text(i.get('imageUUID'))) for i in loads)
-        sc = task.get('shared_cache_dyld_load_info')
-        if sc:
-            out.dsc[pid] = (int(sc.get('imageSlidBaseAddress', 0)), int(sc.get('imageLoadAddress', 0)))
+        if cache := task_cache(task, system, others):
+            out.dsc[pid] = cache
     return out
 
 

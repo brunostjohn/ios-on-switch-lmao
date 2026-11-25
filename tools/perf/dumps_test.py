@@ -199,6 +199,50 @@ class DumpTest(unittest.TestCase):
         self.assertIn('shared-cache layout: 1 maps (8.0 ms)', text)
 
 
+TESTDATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'testdata')
+
+
+class RealDumpTest(unittest.TestCase):
+    """Dump 4 of boot 2693043C (25 Nov, iOS 27): SpringBoard's task and its main thread's samples, cut from the pair.
+
+    Its stackshot carries the shared cache's slide once at the top level, not in each task.
+    """
+
+    def test_shared_cache_frames_take_the_system_slide(self):
+        decoder = os.environ.get('KCDATA', '')
+        self.assertTrue(os.path.isfile(decoder), f'kcdata.py not found at {decoder!r}')
+        path = os.path.join(TESTDATA, 'Switch-recorder-3')
+        n = dumps.names(dumps.decode_kcdata(path + '.kcdata', decoder))
+        self.assertEqual(n.thread[514][:2], (30, 'SpringBoard'))
+        self.assertEqual(n.dsc[30], (0x189D20000, 0x9D20000))
+        text = '\n'.join(dumps.summary(path + '.ktrace', path + '.kcdata', decoder, {}))
+        self.assertIn('hang, thread SpringBoard[30] (514), value 320', text)
+        stack = next(line for line in text.splitlines() if 'most common stack' in line).split(': ', 1)[1]
+        self.assertEqual(stack.split(' < ')[:3], ['dsc 0x189ad0398', 'dsc 0x189acfdf0', 'dsc 0x189acfbf8'])
+        self.assertTrue(all(frame.startswith('dsc 0x') for frame in stack.split(' < ')))
+
+    def test_a_task_on_another_cache_or_none_is_resolved_by_its_flags(self):
+        shot = {
+            'shared_cache_dyld_load_info': {'imageSlidBaseAddress': 0x190000000, 'imageLoadAddress': 0x10000000},
+            'shared_caches': {
+                '2': {
+                    'shared_cache_dyld_load_info': {
+                        'sharedCacheID': 2,
+                        'sharedCacheSlide': 0x4000,
+                        'sharedCacheSlidFirstMapping': 0x280004000,
+                    }
+                }
+            },
+            'task_snapshots': {
+                '1': {'task_snapshot': {'ts_pid': 1, 'ts_ss_flags': dumps.REGION_SYSTEM}},
+                '2': {'task_snapshot': {'ts_pid': 2, 'ts_ss_flags': dumps.REGION_OTHER}, 'sharedCacheID': 2},
+                '3': {'task_snapshot': {'ts_pid': 3, 'ts_ss_flags': dumps.REGION_NONE}},
+            },
+        }
+        n = dumps.names({'kcdata_stackshot': shot})
+        self.assertEqual(n.dsc, {1: (0x190000000, 0x10000000), 2: (0x280004000, 0x4000)})
+
+
 class MemoryClockTest(unittest.TestCase):
     def test_a_window_names_the_memory_clocks_residency(self):
         t0 = datetime(2026, 11, 23, 0, 15, 26, tzinfo=UTC)

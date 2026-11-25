@@ -46,9 +46,12 @@ py_test(
     deps = [":lib"],
 )
 
+# testdata/Switch-recorder-3.*: one task and one thread's samples cut from a real iOS 27 dump pair.
 py_test(
     name = "dumps_test",
     size = "small",
     srcs = ["dumps_test.py"],
+    data = glob(["testdata/*"]) + ["@xnu_base//:tools/lldbmacros/kcdata.py"],
+    env = {"KCDATA": "$(rootpath @xnu_base//:tools/lldbmacros/kcdata.py)"},
     deps = [":lib"],
 )
