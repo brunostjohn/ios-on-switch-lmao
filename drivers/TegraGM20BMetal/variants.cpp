@@ -6,7 +6,6 @@
 #include "creation_cost.h"
 #include "gpu.h"
 #include "pack_window.h"
-#include "set_reads.h"
 #include "slm.h"
 #include "variants.h"
 
@@ -14,6 +13,14 @@ namespace gm20b {
 namespace {
 
 constexpr uint32_t kUniformAlignment = 256;  // residual.h bufferBaseAlignment(false)
+
+// The set-0 entries combination (v, f) of `pl`'s stage variants reads past its record's (PackVariant::memoryEntries): v or
+// f equal to its stage's count is that stage's generic program, whose reads are the record's
+uint32_t variantSetReads(const Pipeline &pl, uint32_t v, uint32_t f)
+{
+    return (v < pl.variantCount[0] ? pl.variants[0][v].memoryEntries : 0u) |
+           (f < pl.variantCount[1] ? pl.variants[1][f].memoryEntries : 0u);
+}
 
 void attachVariantSplit(Device &dev, const Pack &pack, Pipeline &made, const PackPipeline &pp, const PlacedProgram &vs,
                         uint32_t fsIndex, void (Device::*offer)(Pipeline &, SplitSource &&))
@@ -54,7 +61,7 @@ bool Device::placeRequiredVariants(const PackPipeline &pp, uint64_t &slm)
             PlacedProgram placed;
             if (!placePackProgram(variants[i].program, placed))
                 return false;
-            slm = std::max(slm, slmPerWarpOfHeader(placed.header));
+            slm = std::max(slm, programSlm(placed));
         }
     }
     return true;
@@ -85,7 +92,7 @@ void Device::offerVariants(Pipeline &pl, const PackPipeline &pp, uint32_t recInd
             pl.chosen[comboIndex] = placeVariant(
                 pl,
                 {v < count[0] ? pl.variants[0][v].program : pp.vs, f < count[1] ? pl.variants[1][f].program : pp.fs},
-                recIndex, comboIndex);
+                variantSetReads(pl, v, f), recIndex, comboIndex);
         }
 }
 
@@ -119,16 +126,14 @@ bool Device::offerVariantsLockFree(Pipeline &pl, const PackPipeline &pp, uint32_
             if (!placePackWindowProgram(index[0], placed[0]) ||
                 (pixelStage(pp) && !placePackWindowProgram(index[1], placed[1])))
                 return false;
-            if (!slmReady(std::max(slmPerWarpOfHeader(placed[0].header), slmPerWarpOfHeader(placed[1].header))))
+            if (!slmReady(std::max(programSlm(placed[0]), programSlm(placed[1]))))
                 return false;
             auto owned = std::make_unique<Pipeline>();
             Pipeline &made = *owned;
             SWITCH_METAL_CREATION_COUNT(variants, 1);
             build(made, pp, placed[0], placed[1], pack_.section<uint32_t>(PackBlob) + pp.blob,
                   pack_.string(pp.keyString), pl.caTransform, pack_.spills(pp), pack_.far(pp), nullptr, prebuilt);
-            for (uint32_t s = 0; s < 2; s++)
-                if (index[s] != (s ? pp.fs : pp.vs))
-                    made.memoryEntries |= placedSetReads(placed[s].header, *placed[s].record, made.entries);
+            made.memoryEntries |= variantSetReads(pl, v, f);
             made.restore = pl.restore;
             made.strideTwin = pl.strideTwin;
             attachVariantSplit(*this, pack_, made, pp, placed[0], index[1], &Device::offerSplit);
@@ -149,14 +154,14 @@ Pipeline *Device::variant(Pipeline &pl, uint32_t facts)
     return pl.chosen[v * (pl.variantCount[1] + 1u) + f];
 }
 
-Pipeline *Device::placeVariant(Pipeline &pl, const std::array<uint32_t, 2> &index, uint32_t recIndex,
+Pipeline *Device::placeVariant(Pipeline &pl, const std::array<uint32_t, 2> &index, uint32_t setReads, uint32_t recIndex,
                                uint32_t comboIndex)
 {
     const PackPipeline &pp = *pl.rec;
     PlacedProgram placed[2] = {{}, noPixelProgram()};
     bool placedBoth =
         placePackProgram(index[0], placed[0]) && (!pixelStage(pp) || placePackProgram(index[1], placed[1]));
-    if (placedBoth && !slmNeed(std::max(slmPerWarpOfHeader(placed[0].header), slmPerWarpOfHeader(placed[1].header)))) {
+    if (placedBoth && !slmNeed(std::max(programSlm(placed[0]), programSlm(placed[1])))) {
         stats.heapFull++;
         placedBoth = false;
     }
@@ -168,9 +173,7 @@ Pipeline *Device::placeVariant(Pipeline &pl, const std::array<uint32_t, 2> &inde
     SWITCH_METAL_CREATION_COUNT(variants, 1);
     build(made, pp, placed[0], placed[1], pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString),
           pl.caTransform, pack_.spills(pp), pack_.far(pp), nullptr, prebuilt);
-    for (uint32_t s = 0; s < 2; s++)
-        if (index[s] != (s ? pp.fs : pp.vs))
-            made.memoryEntries |= placedSetReads(placed[s].header, *placed[s].record, made.entries);
+    made.memoryEntries |= setReads;
     made.restore = pl.restore;
     made.strideTwin = pl.strideTwin;
     attachVariantSplit(*this, pack_, made, pp, placed[0], index[1], &Device::offerSplit);

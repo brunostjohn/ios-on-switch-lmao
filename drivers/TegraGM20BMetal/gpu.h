@@ -1622,6 +1622,7 @@ private:
     }
 
     bool slmNeed(uint64_t perWarp);
+    uint64_t programSlm(const PlacedProgram &p) const;
     bool initPackWindow(std::string &err);
     bool place(uint32_t prog, uint32_t &program, uint64_t &data);
     bool heapGrow(uint64_t end);
@@ -1650,7 +1651,7 @@ private:
     void offerVariants(Pipeline &pl, const PackPipeline &pp, uint32_t recIndex);
     bool offerVariantsLockFree(Pipeline &pl, const PackPipeline &pp, uint32_t recIndex);
     bool placeRequiredVariants(const PackPipeline &pp, uint64_t &slm);
-    Pipeline *placeVariant(Pipeline &pl, const std::array<uint32_t, 2> &programs, uint32_t recIndex,
+    Pipeline *placeVariant(Pipeline &pl, const std::array<uint32_t, 2> &programs, uint32_t setReads, uint32_t recIndex,
                            uint32_t comboIndex);
     bool placePackProgram(uint32_t index, PlacedProgram &out);
     bool placePackWindowProgram(uint32_t index, PlacedProgram &out);
