@@ -61,7 +61,7 @@ bool Device::tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t heigh
 
 bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface,
                                   uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch, uint32_t format,
-                                  Texture &t, bool writes, uint64_t readable, bool pooled, bool allowTile)
+                                  Texture &t, bool writes, uint64_t readable, bool pooled)
 {
     const uint64_t page = pageSize(),
                    mapped = ((uintptr_t(base) + allocBytes + page - 1) & ~(page - 1)) - uintptr_t(base);
@@ -97,8 +97,8 @@ bool Device::createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t alloc
     std::unique_lock<gm20b::Mutex> l(lock_);
     t.pitch = pitch;
     const LayoutAsk ask = {t.width, t.height, t.bpp, pitch, writes && !offset && !sampled && !blocks};
-    t.import = importSurface(l, surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface,
-                             allowTile ? &ask : nullptr);
+    t.import =
+        importSurface(l, surfaceId, base, (allocBytes + pageSize() - 1) & ~uint64_t(pageSize() - 1), surface, &ask);
     if (!t.import)
         surfaceRefusal = "its import: the kernel's BoImport, SurfaceLayout or VmBind (their bo-import, "
                          "iosurface-layout or vm-bind line), or no GPU VA left";

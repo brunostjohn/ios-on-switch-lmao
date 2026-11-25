@@ -5,6 +5,8 @@
 // is compiled once; and the table of which inputs each field reaches, per stage, is the one stated here.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+// ahead of the compiler's headers, which name a Sampler of their own
+#include "../resources.h"
 #include "compiler_stage_cases.h"
 #include "../compiler/compiler_facts.h"
 #include "../compiler/compiler_libraries.h"
@@ -317,7 +319,11 @@ uint32_t slotTextureWindow(const Made &made, uint8_t slot)
 
 }  // namespace
 
-TEST_F(CompilerStages, StandInOnlyFormats44And85CompileWithNativeViewWords)
+// A kernel's float read of each stand-in format binds, by the window its record names, the header the dispatch takes
+// under the format's own row (compute.cpp, view.h slotView): BGRA4Unorm and ARGB8Unorm their own; R8Unorm_sRGB and
+// ARGB8Unorm_sRGB their own sRGB headers, which decode as a draw's fetch of them does; the extended-range sRGB twins their
+// codes, which the kernel reads at float precision, not the half stand-in a draw samples
+TEST_F(CompilerStages, StandInFormatKernelReadsBindTheirOwnHeadersOrCodes)
 {
     const std::string bytes = fileBytes(library());
     nmb_keep_translations(0);
@@ -325,20 +331,26 @@ TEST_F(CompilerStages, StandInOnlyFormats44And85CompileWithNativeViewWords)
 
     const struct {
         uint64_t format;
-        uint32_t tic0;
-        uint32_t bpp;
+        uint32_t window;
+        gm20b::SlotView view;
     } cases[] = {
-        {44, 0x54e24912u, 2},  // BGRA4Unorm
-        {85, 0x2b1a4908u, 4},  // ARGB8Unorm_sRGB
+        {44, 0x54e24912u, gm20b::SlotView::Own},                             // BGRA4Unorm
+        {84, 0x2b1a4908u, gm20b::SlotView::Own},                             // ARGB8Unorm
+        {85, 0x2b1a4908u | gm20b::kKernelWindowSrgb, gm20b::SlotView::Own},  // ARGB8Unorm_sRGB
+        {11, 0x7012491du | gm20b::kKernelWindowSrgb, gm20b::SlotView::Own},  // R8Unorm_sRGB
+        {553, 0x58d49203u, gm20b::SlotView::Own},                            // BGRA10_XR_sRGB
+        {555, 0x6014920fu, gm20b::SlotView::Own},                            // BGR10_XR_sRGB
     };
 
     for (const auto &c : cases) {
+        const gm20b::FormatInfo *f = gm20b::formatInfo(uint32_t(c.format));
+        ASSERT_NE(f, nullptr) << c.format;
         const Made made = compiler.compile(
             textureKernelRequest(bytes, "stages_kernel", c.format, MTLTextureType2D, MTLTextureUsageShaderRead));
         ASSERT_EQ(made.result, TegraGM20BCompileMade) << c.format << ": " << made.why;
         const uint32_t window = slotTextureWindow(made, 0);
-        EXPECT_EQ(window, c.tic0) << c.format;
-        EXPECT_EQ(gm20b::slotView(window, c.tic0, c.tic0, c.bpp, false), gm20b::SlotView::Own) << c.format;
+        EXPECT_EQ(window, c.window) << c.format;
+        EXPECT_EQ(gm20b::slotView(window, f->tic0, f->tic0, f->bpp, false, f->srgb), c.view) << c.format;
     }
 }
 
