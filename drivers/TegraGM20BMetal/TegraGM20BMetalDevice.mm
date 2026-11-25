@@ -193,7 +193,9 @@
         @"heap_unparks_resident" : @(d.stats.heapUnparksResident.load()),
         @"heap_unparks_reclaimed" : @(d.stats.heapUnparksReclaimed.load()),
         @"scrubbed_bytes" : @(d.stats.scrubbedBytes.load()),
-        @"scrubbed_runs" : @(d.stats.scrubbedRuns.load())
+        @"scrubbed_runs" : @(d.stats.scrubbedRuns.load()),
+        @"compressed_moves" : @(d.stats.compressedMoves.load()),
+        @"compressed_move_bytes" : @(d.stats.compressedMoveBytes.load())
     };
 }
 

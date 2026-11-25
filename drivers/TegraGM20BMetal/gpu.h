@@ -1061,6 +1061,9 @@ public:
         std::atomic<uint64_t> textureBytes{0};
         // Shared spans zeroed at the front of a command buffer, and the command buffers that carried them (scrubs.cpp)
         std::atomic<uint64_t> scrubbedBytes{0}, scrubbedRuns{0};
+        // private textures made in plain memory and moved into compressed memory later (a copy-engine job on the
+        // submit worker each), and their bytes
+        std::atomic<uint64_t> compressedMoves{0}, compressedMoveBytes{0};
         // diagnostics: color targets the driver rendered whose address or pitch is not a multiple of 128 (NVK renders
         // those through a tiled shadow: nvk_cmd_draw.c nvk_image_plane_aligned_for_linear_attachment), and the last one's pitch
         std::atomic<uint64_t> rtUnaligned{0};
