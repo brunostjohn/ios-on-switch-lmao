@@ -82,8 +82,7 @@ int TegraSMMURamView::attachNarrow(uint32_t asidReg, uint32_t translationReg, ui
         snprintf(line, size, "no memory for the view's directories");
         return -1;
     }
-    return tegra_smmu_attach(core_.halves[0].asid, core_.ptb(0), asidReg, translationReg, translationBits, line,
-                             size);
+    return tegra_smmu_attach(core_.halves[0].asid, core_.ptb(0), asidReg, translationReg, translationBits, line, size);
 }
 
 bool TegraSMMURamView::reserveTables()

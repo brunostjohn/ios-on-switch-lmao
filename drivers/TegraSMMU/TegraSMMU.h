@@ -68,9 +68,9 @@ enum tegra_smmu_register {
     TEGRA_SMMU_SE1_ASID = 0xac8,
     TEGRA_SMMU_ISP2B_ASID = 0xaa4,
     TEGRA_SMMU_ISP2B1_ASID = 0x808,
-    TEGRA_SMMU_NVJPG_ASID = 0xac0,    // swgroup "nvjpg" (clients nvjpgsrd/nvjpgswr: TRANSLATION_ENABLE_3 bits 30/31)
-    TEGRA_SMMU_NVDEC_ASID = 0xab4,    // swgroup "nvdec" (clients nvdecsrd/nvdecswr: TRANSLATION_ENABLE_3 bits 24/25)
-    TEGRA_SMMU_NVENC_ASID = 0x264,    // swgroup "nvenc" (nvencsrd: TRANSLATION_ENABLE_0 bit 28, nvencswr: _1 bit 11)
+    TEGRA_SMMU_NVJPG_ASID = 0xac0,  // swgroup "nvjpg" (clients nvjpgsrd/nvjpgswr: TRANSLATION_ENABLE_3 bits 30/31)
+    TEGRA_SMMU_NVDEC_ASID = 0xab4,  // swgroup "nvdec" (clients nvdecsrd/nvdecswr: TRANSLATION_ENABLE_3 bits 24/25)
+    TEGRA_SMMU_NVENC_ASID = 0x264,  // swgroup "nvenc" (nvencsrd: TRANSLATION_ENABLE_0 bit 28, nvencswr: _1 bit 11)
 };
 
 // Two drivers on one ASID or one swgroup register would translate through each other's tables. Every enumerator above

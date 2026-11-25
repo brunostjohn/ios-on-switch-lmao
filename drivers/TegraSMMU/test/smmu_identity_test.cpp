@@ -173,6 +173,7 @@ TEST_F(SmmuIdentity, TheHighHalfFlushesItsOwnAsidAndIovas)
     EXPECT_EQ(take(),
               (std::vector<std::string>{"clean 4", "sync", "flush asid 112 table 0x90000000+4 iova 0x400000+0x1000"}));
 }
+
 // The SD card's view: every table made at setup, so a hold on the I/O path never allocates.
 TEST_F(SmmuIdentity, MadeTablesLetEveryHoldInRamGoWithoutAnAllocation)
 {

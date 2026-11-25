@@ -280,7 +280,9 @@ TEST(SwitchAudioSource, HdaReturnsDmaOwnershipBeforeReusingMemoryOrResetting)
         ASSERT_NE(after, std::string::npos) << second;
         EXPECT_LT(before, after) << first << " before " << second;
     };
-    const auto body = [&](const char *signature) { return Between(source, signature, "\n}\n"); };
+    const auto body = [&](const char *signature) {
+        return Between(source, signature, "\n}\n");
+    };
     EXPECT_THAT(source, Not(HasSubstr("panic(")));
     const std::string stop = body("bool SwitchHDA::stop()");
     EXPECT_THAT(stop, HasSubstr("kBar + stream, kRun, 0, 40"));
@@ -326,8 +328,8 @@ TEST(SwitchAudioSource, ApeIsConfinedToItsRingsBeforeTheAdmaRuns)
 {
     const std::string source = SourceText("../SwitchAudioClocks.cpp");
     const std::string init = Between(source, "void SwitchAudio::tegraInit()", "\n}\n");
-    const size_t rings = init.find("ringPA[type] = static_cast<uint32_t>(pa);"), confine = init.find("confineApe(ringPA);"),
-                 dma = init.find("tegraAhubAndDma();");
+    const size_t rings = init.find("ringPA[type] = static_cast<uint32_t>(pa);"),
+                 confine = init.find("confineApe(ringPA);"), dma = init.find("tegraAhubAndDma();");
     ASSERT_NE(confine, std::string::npos);
     EXPECT_LT(rings, confine);
     EXPECT_LT(confine, dma);
