@@ -151,6 +151,7 @@ _RECORDER_OBJECTS = {
         "switch:recorder/store.c",
     ],
     "osfmk": [
+        "osfmk/kern/switch_kprof.c",
         "osfmk/kperf/kperf.c",
         "osfmk/kperf/kptimer.c",
         "switch:diag/stall.c",
