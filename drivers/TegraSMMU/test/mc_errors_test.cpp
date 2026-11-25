@@ -25,6 +25,7 @@ uint32_t &mc(uint32_t offset)
 }
 
 unsigned gNubAsks;
+bool gIntmaskStuck;
 bool gStartReturnedBeforeTheGic;
 std::vector<std::string> gLatchedLines;
 
@@ -191,7 +192,7 @@ TEST_F(McErrors, AStormOfDroppedWritesPrintsFourLinesAndACountAtSc7)
 
 switch_mc::Error smmuFault(uint32_t client, uint32_t address)
 {
-    return {1u << 10, 0x6a000000 | client, address};
+    return {1u << 10, 0x6a000000 | client, address, 0, 0, 0};
 }
 
 // A run of one client: its first four in full, then one count line once its swgroup detaches.
@@ -251,11 +252,54 @@ TEST(McErrorRuns, AQuietClientsRunEndsAndSc7EndsTheRest)
     EXPECT_EQ(ended[0].client, 0x79u);
 }
 
-TEST(McErrorsDescribe, AKindWithItsOwnCaptureRegistersIsNamedAlone)
+TEST(McErrorsDescribe, AKindWithItsOwnCaptureRegistersNamesItsClientAndAddressFromThem)
 {
-    char line[256];
-    EXPECT_STREQ(switch_mc::describe({1u << 12, 0x6000006c, 0x1000}, line, sizeof(line)),
+    char line[320];
+    EXPECT_STREQ(switch_mc::describe({1u << 12, 0, 0, 1u << 12, 0x0011006c, 0x81000000}, line, sizeof(line)),
+                 "DECERR_VPR: DECERR_VPR: a write by csr_vicsrd (VIC) (client 0x6c) at 0x181000000; INTSTATUS 0x1000 "
+                 "ERR_VPR_STATUS 0x11006c ERR_VPR_ADR 0x81000000");
+    EXPECT_STREQ(switch_mc::describe({1u << 12, 0, 0, 0, 0, 0}, line, sizeof(line)),
                  "DECERR_VPR (not captured in MC_ERR_STATUS); INTSTATUS 0x1000");
+}
+
+// MC_ERR_SEC_STATUS 0x67c and ADR 0x680 (TRM 18.11.1.101-102) read before the clear; the client is 6:0 there.
+TEST_F(McErrors, ASecCarveoutViolationPanicsWithItsOwnCapture)
+{
+    mc(0x0) = 1u << 13;
+    mc(0x67c) = 0x00000080 | 0x16;
+    mc(0x680) = 0x80123000;
+    EXPECT_EQ(panicked(), "TegraSMMU: MC error SECERR_SEC: SECERR_SEC: a read by csr_host1xdmar (host1x) (client 0x16) at "
+                          "0x80123000; INTSTATUS 0x2000 ERR_SEC_STATUS 0x96 ERR_SEC_ADR 0x80123000");
+    EXPECT_EQ(gReads, (std::vector<uint32_t>{0x0, 0x8, 0xc, 0x67c, 0x680}));
+    ASSERT_EQ(gWrites.size(), 1u);
+    EXPECT_EQ(gWrites[0], std::make_pair(0x0u, 1u << 13)) << "cleared after every capture was read";
+}
+
+TEST_F(McErrors, AnSmmuFaultAndAnMtsViolationTogetherNameBoth)
+{
+    mc(0x0) = 1u << 10 | 1u << 16;
+    mc(0x8) = 0x6a00006c;
+    mc(0xc) = 0x4001d400;
+    mc(0x9b0) = 0x00010064;
+    mc(0x9b4) = 0x90000000;
+    EXPECT_EQ(panicked(), "TegraSMMU: MC error INVALID_SMMU_PAGE+DECERR_MTS: INVALID_SMMU_PAGE (page readable 1 "
+                          "writable 0 nonsecure 1), a read by csr_vicsrd (VIC) (client 0x6c) at 0x4001d400; DECERR_MTS: "
+                          "a write by csw_sdmmcwa (SDMMC1) (client 0x64) at 0x90000000; INTSTATUS 0x10400 ERR_STATUS "
+                          "0x6a00006c ERR_ADR 0x4001d400 ERR_MTS_STATUS 0x10064 ERR_MTS_ADR 0x90000000");
+}
+
+// A write to INTMASK that does not take leaves every confined client's faults unreported: that panics.
+TEST_F(McErrors, AnIntmaskThatDoesNotTakePanics)
+{
+    gIntmaskStuck = true;
+    try {
+        switch_mc_errors_resume();
+        ADD_FAILURE() << "no panic";
+    } catch (const switch_test_panic &p) {
+        EXPECT_EQ(std::string(p.what()), "TegraSMMU: MC error interrupt (INTID 109) masked: INTMASK reads 0 after "
+                                         "0x33d40 was written");
+    }
+    gIntmaskStuck = false;
 }
 
 // TegraVIC's MC fault probe: VIC reads a page its directory leaves empty, at 0x08000000 (below its windows).
@@ -375,6 +419,8 @@ uint32_t switch_mmio_model_read32(uintptr_t address)
 void switch_mmio_model_write32(uintptr_t address, uint32_t value)
 {
     gWrites.emplace_back(static_cast<uint32_t>(address - kMc), value);
+    if (gIntmaskStuck && address == kMc + 0x4)
+        return;
     gRegisters[address] = address == kMc ? gRegisters[address] & ~value : value;
 }
 

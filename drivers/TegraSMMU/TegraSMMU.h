@@ -191,8 +191,8 @@ int tegra_smmu_resume(void);
 // ERR_ADR: each decode, security or SMMU error a client raises is one line naming its kind, client, direction and
 // address, and its INTSTATUS bit is cleared so the next is captured. Nobody else clears INTSTATUS: a driver that wants
 // the MC's errors in its own line reads tegra_mc_error_latest. A client's run of errors prints its first few in full and
-// then one count line when it ends (TegraMCErrors.h Runs). Thread context, at boot; returns at once, its own thread
-// attaching once the GIC is up; -1 with one line when that thread or the registers cannot be had.
+// then one count line when it ends (TegraMCErrors.h Runs). Thread context, at boot; returns 0 at once, its own thread
+// attaching once the GIC is up. An interrupt that cannot be attached or unmasked panics.
 int tegra_mc_errors_start(void);
 // How many errors the interrupt took since boot, and the latest one (zeros before the first). Any context.
 uint32_t tegra_mc_error_latest(uint32_t *intstatus, uint32_t *status, uint32_t *address);

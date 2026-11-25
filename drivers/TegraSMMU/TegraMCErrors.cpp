@@ -7,7 +7,7 @@
 // run, so the action reads that slot with no other writer. The action
 // prints the line (the first Runs::kFullLines of a client's run, then one count line when the run ends) and publishes
 // the error to readers in other drivers (GM20B's stats and hang lines, the engines' stall lines) under a spin lock: they
-// read it from any context, and a published error is three words that must stay together. The runs are the work
+// read it from any context, and a published error is several words that must stay together. The runs are the work
 // loop's: a detach or SC7 ends them through its gate.
 //
 // The start returns at once: its own thread waits for the GIC, attaches, and takes what latched meanwhile, so nothing
@@ -106,7 +106,7 @@ void panicIfFatal(const switch_mc::Error &error)
 {
     if (!(error.intstatus & switch_mc::kFatal))
         return;
-    char line[256];
+    char line[384];
     panic("TegraSMMU: MC error %s", switch_mc::describe(error, line, sizeof(line)));
 }
 
@@ -154,7 +154,7 @@ void occurred(OSObject *, IOInterruptEventSource *, int)
     unsigned count = 0;
     const bool full = gRuns.error(error, ended, count);
     printEnded(ended, count);
-    char line[256];
+    char line[384];
     if (full)
         IOLog("TegraSMMU: MC error %s\n", switch_mc::describe(error, line, sizeof(line)));
 }
@@ -186,16 +186,20 @@ IOReturn endRuns(OSObject *, void *swgroup, void *, void *, void *)
     return kIOReturnSuccess;
 }
 
+// A missing or masked MC error interrupt would leave every confined client's fault squashed with nothing said
+// (TRM 18.5.12.2: the MC drops a faulting write's bytes and returns ones for a read), so either panics.
 void unmask()
 {
     gIo.write(switch_mc::kIntMask, switch_mc::kErrors);
-    (void)gIo.read(switch_mc::kIntMask);
+    const uint32_t mask = gIo.read(switch_mc::kIntMask);
+    if ((mask & switch_mc::kErrors) != switch_mc::kErrors)
+        panic("TegraSMMU: MC error interrupt (INTID %u) masked: INTMASK reads %#x after %#x was written", kIntid, mask,
+              switch_mc::kErrors);
 }
 
-void notAttached()
+[[noreturn]] void notAttached(const char *why)
 {
-    IOLog("TegraSMMU: MC error interrupt (INTID %u) could not be attached: memory controller errors go unreported\n",
-          kIntid);
+    panic("TegraSMMU: MC error interrupt (INTID %u) could not be attached: %s", kIntid, why);
 }
 
 IOFilterInterruptEventSource *source()
@@ -207,16 +211,18 @@ IOFilterInterruptEventSource *source()
 void attach(void *, wait_result_t)
 {
     IOService *nub = switch_interrupt_nub(kIntid, false);
+    if (!nub)
+        notAttached("no interrupt nub");
     IOFilterInterruptEventSource *made =
-        nub ? IOFilterInterruptEventSource::filterInterruptEventSource(gLoop, &occurred, &filter, nub, 0) : nullptr;
-    if (!made || gLoop->addEventSource(made) != kIOReturnSuccess) {
-        notAttached();
-    } else {
-        gLoop->runAction(&takeLatched, nullptr);
-        made->enable();
-        unmask();
-        __atomic_store_n(&gSource, made, __ATOMIC_RELEASE);
-    }
+        IOFilterInterruptEventSource::filterInterruptEventSource(gLoop, &occurred, &filter, nub, 0);
+    if (!made)
+        notAttached("no event source");
+    if (gLoop->addEventSource(made) != kIOReturnSuccess)
+        notAttached("the work loop refused the event source");
+    gLoop->runAction(&takeLatched, nullptr);
+    made->enable();
+    unmask();
+    __atomic_store_n(&gSource, made, __ATOMIC_RELEASE);
 }  // returning ends the thread (Call_continuation -> thread_terminate)
 }  // namespace
 
@@ -226,10 +232,10 @@ extern "C" int tegra_mc_errors_start(void)
     gLatestLock = IOSimpleLockAlloc();
     gLoop = IOWorkLoop::workLoop();
     thread_t thread = nullptr;
-    if (!gIo.mc || !gLatestLock || !gLoop || kernel_thread_start(&attach, nullptr, &thread) != KERN_SUCCESS) {
-        notAttached();
-        return -1;
-    }
+    if (!gIo.mc || !gLatestLock || !gLoop)
+        notAttached("no registers, lock or work loop");
+    if (kernel_thread_start(&attach, nullptr, &thread) != KERN_SUCCESS)
+        notAttached("no thread to attach it");
     thread_deallocate(thread);
     return 0;
 }
