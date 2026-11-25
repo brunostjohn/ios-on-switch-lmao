@@ -10,6 +10,7 @@ import re
 import zlib
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from tools.perf.source import TICK_HZ, Rec
 
@@ -149,4 +150,19 @@ def recorder_lines(recs: list[Rec]) -> list[str]:
             f'written: {len(written)}, {quantile(ages, 0.5):.1f} s after their trigger at the median, '
             f'{max(ages):.1f} s at most; {sum(int(m["kib"]) for m in written) // 1024} MiB on the card'
         )
+    return out
+
+
+def busy(recs: list[Rec]) -> list[tuple[datetime, datetime, str]]:
+    """Return when the recorder itself worked: each capture (trigger to in memory) and each write, as wall times.
+
+    A capture line is logged once the capture is in memory, a dump line once its file is written.
+    """
+    out = []
+    for r in recs:
+        if m := CAPTURE.search(r.msg):
+            out.append((r.time - timedelta(microseconds=int(m['done_after'])), r.time, f'capture {m["seq"]}'))
+        elif m := WRITTEN.search(r.msg):
+            took = int(m['deflate_us']) + int(m['write_us'])
+            out.append((r.time - timedelta(microseconds=took), r.time, f'the write of capture {m["seq"]}'))
     return out

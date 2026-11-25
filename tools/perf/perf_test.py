@@ -9,7 +9,7 @@ import zlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from tools.perf import dumps, ips, pacing, perf, recfile, report, session, source, symbols, vm, windows, work
+from tools.perf import cpu, dumps, ips, pacing, perf, recfile, report, session, source, symbols, vm, windows, work
 from tools.perf.source import TICK_HZ, Rec
 
 T0 = datetime(2026, 11, 23, 0, 13, 20, tzinfo=UTC)
@@ -246,6 +246,14 @@ class RecFileTest(unittest.TestCase):
 
 
 class WindowsTest(unittest.TestCase):
+    def test_a_recorder_builds_kprof_says_it_sampled_the_boot_window_alone(self):
+        recs = [
+            rec('SwitchKprof: sampling every 4 ms of CPU work, 9000 kernel functions, summary every 10 s', 1.0),
+            rec('SwitchKprof: boot window over: off after 240 s of uptime (a recorder build)', 240.0),
+        ]
+        state, _ = cpu.kprof(recs)
+        self.assertTrue(state.startswith('the boot window only, until'), state)
+
     def test_a_press_is_springboards_line_with_the_recorders_answer(self):
         sb = {'subsystem': 'com.apple.SpringBoard', 'category': 'HIDKeyboardEvents'}
         recs = [
@@ -281,6 +289,38 @@ class WindowsTest(unittest.TestCase):
             ],
         )
         self.assertEqual([w.name for w in windows.marks(recs)], ['ui.title_scroll.back.1'])
+
+    def test_a_hang_after_a_press_names_the_recorder_work_it_overlapped(self):
+        sb = {'subsystem': 'com.apple.SpringBoard', 'category': 'HIDKeyboardEvents'}
+        hang = (
+            '__##__signpost.description#____#begin_time#_##_#{begin}##__##, '
+            '__##__signpost.description#____#end_time#_##_#{end}##__##, '
+            'type=__##__signpost.telemetry#____#string2#_##_#Hang##__##'
+        )
+        recs = [
+            rec('Snapshot button pressed down', 10.0, 'SpringBoard', **sb),
+            rec(
+                'SwitchRecorder: capture 4 (mark ask 30, thread 0, value 0) at 1: stackshot 1 KiB in 1 us (+1 us), '
+                'ring 1 KiB in 1 us (+1 us), in memory +40000 us',
+                10.34,
+            ),
+            rec(
+                hang.format(begin=MACH0 + int(10.31 * TICK_HZ), end=MACH0 + int(10.6 * TICK_HZ)),
+                10.6,
+                'ScreenshotServicesService',
+                name='HangInterval',
+            ),
+            rec(
+                hang.format(begin=MACH0 + int(13.0 * TICK_HZ), end=MACH0 + int(13.4 * TICK_HZ)),
+                13.4,
+                'SpringBoard',
+                name='HangInterval',
+            ),
+        ]
+        s = session.build('B', recs)
+        text = report.hangs_after(s, s.windows['press'][0])
+        self.assertIn('ScreenshotServicesService 0.29 s at +0.3 s (during capture 4)', text)
+        self.assertIn('SpringBoard 0.40 s at +3.0 s (no recorder work)', text)
 
     def test_a_test_window_ends_at_its_line_and_lasts_its_ms(self):
         line = rec('HWTEST display.snapshot PASS frames=12 ms=17210.4', 20.0, 'SwitchHWTest', pid=560)

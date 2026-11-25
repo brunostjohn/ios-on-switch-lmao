@@ -203,9 +203,20 @@ def gpu(ring: ktrace.Ring, n: Names, lo: int, hi: int) -> list[str]:
 
     A submission's time runs from its first batch's start to its end, other channels' slices inside it included.
     """
-    inside = [s for s in ktrace.submissions(ring.events) if lo <= s.ts <= hi]
+    span_ms = ms(ring.events[-1].ts - ring.events[0].ts) if ring.events else 0.0
+    ended = [s for s in ktrace.submissions(ring.events) if lo <= s.ts <= hi]
+    inside = [s for s in ended if s.ms <= span_ms]
+    impossible = Counter(s.channel for s in ended if s.ms > span_ms)
+    note = (
+        [
+            'GPU: left out, a start stamp older than the ring: '
+            + ', '.join(f'channel {c} {n}' for c, n in impossible.items())
+        ]
+        if impossible
+        else []
+    )
     if not inside:
-        return ['GPU: no submission ended in the window']
+        return ['GPU: no submission ended in the window', *note]
     by: Counter[str] = Counter()
     for s in inside:
         by[n.who(s.tid).split(' (')[0]] += s.ms
@@ -217,6 +228,7 @@ def gpu(ring: ktrace.Ring, n: Names, lo: int, hi: int) -> list[str]:
         f'GPU: {len(inside)} submissions ended; GPU time by process: {shares}',
         f'GPU: longest submission channel {longest.channel} seqno {seqnos}{kind} {longest.ms:.1f} ms, by '
         + n.who(longest.tid),
+        *note,
     ]
 
 
@@ -306,7 +318,7 @@ def summary(
         )
     else:
         at, reason, tid, value = ktrace.trigger(ring.events) or (last, 'none', 0, 0)
-    lo = at - int(BEFORE_S * TICK_HZ)
+    lo = max(first, at - int(BEFORE_S * TICK_HZ))
     out = [
         f'{base}: {reason}, thread {n.who(tid) if tid else "-"}, value {value}; ring '
         f'{ms(last - first) / 1000:.2f} s, {len(ring.events)} events, trigger at {ms(at - first) / 1000:.2f} s'
@@ -314,12 +326,15 @@ def summary(
     ]
     if dump:
         out.append('  ' + dump.describe())
+    if at - lo < BEFORE_S * TICK_HZ:
+        before = f'capture {dump.number("seq") - 1}' if dump and dump.number('seq') else 'the capture before it'
+        out.append(f'  the ring reaches {ms(at - lo):.0f} ms before the trigger: {before} read the rest')
     out.append('  threads by time on a core in the second before it: ' + ', '.join(busiest(ring, n, lo, at)))
     if tid:
         held = ktrace.on_core(ktrace.runs(ring.events).get(tid, []), lo, at)
         woken = ktrace.wakers(ring.events, tid, lo, at)
         out.append(
-            f'  its thread: on a core {ms(held):.0f} ms of the last {BEFORE_S * 1000:.0f}; woken by '
+            f'  its thread: on a core {ms(held):.0f} ms of the last {ms(at - lo):.0f}; woken by '
             + (', '.join(f'{n.who(w)} {c}' for w, c in sorted(woken.items(), key=lambda kv: -kv[1])[:4]) or 'nobody')
         )
         out += ['  ' + line for line in stacks(ring, n, tid, uuid_paths, syms)]

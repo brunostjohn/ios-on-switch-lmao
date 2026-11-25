@@ -173,13 +173,16 @@ def core_waits(recs: list[Rec]) -> dict[str, Waits]:
 
 
 def kprof(recs: list[Rec]) -> tuple[str, list[Rec]]:
-    """Return kprof's state in this boot (off, absent or on) and its per-window lines about processes."""
+    """Return kprof's state in this boot (off, absent, on, or the boot window alone) and its per-window lines."""
     lines = [r for r in recs if r.proc == 'kernel' and r.msg.startswith('SwitchKprof')]
     if not lines:
         return 'absent', []
     if any(r.msg.startswith('SwitchKprof: off') for r in lines):
         return 'off (built without --//kernel:kprof)', []
-    return 'on', [r for r in lines if r.msg.startswith(KPROF_KEEP)]
+    kept = [r for r in lines if r.msg.startswith(KPROF_KEEP)]
+    if over := next((r for r in lines if r.msg.startswith('SwitchKprof: boot window over')), None):
+        return f'the boot window only, until {over.time:%H:%M:%S} (a --//kernel:recorder build)', kept
+    return 'on', kept
 
 
 def _parse_spots(body: str) -> tuple[tuple[KprofSpot, ...], int]:

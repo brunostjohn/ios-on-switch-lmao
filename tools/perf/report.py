@@ -46,8 +46,9 @@ LIMITS = (
         '"dropped" counts on those lines say how many a window lost.'
     ),
     (
-        'Without --//kernel:recorder or --//kernel:kprof, no line names the user functions a thread ran over a window; '
-        'pass --dsc (or extract tables under ~/Library/Application Support/switch-ios/symbols/<build>/) to symbolize.'
+        'Without --//kernel:kprof, no line names the user functions a thread ran over a window, except in the first '
+        'four minutes of a --//kernel:recorder boot and inside its dumps; pass --dsc (or extract tables under '
+        '~/Library/Application Support/switch-ios/symbols/<build>/) to symbolize.'
     ),
     (
         'HangTracer measures every main-thread hang but writes no report with stacks on this device, and tailspin is '
@@ -116,11 +117,17 @@ def window_rows(s: Session, kind: str, ws: list[Window]) -> list[str]:
 
 
 def hangs_after(s: Session, w: Window) -> str:
-    return ', '.join(
-        f'{h.proc} {h.name} at +{(h.start - w.end).total_seconds():.1f} s'
-        for h in s.windows['hang']
-        if 0 <= (h.start - w.end).total_seconds() <= PRESS_AFTER_S
-    )
+    """Return the hangs starting soon after a press, each with the recorder's own work it overlapped, if any."""
+    work = recfile.busy(s.recs)
+    out = []
+    for h in s.windows['hang']:
+        if 0 <= (h.start - w.end).total_seconds() <= PRESS_AFTER_S:
+            during = [label for a, b, label in work if a <= h.end and h.start <= b]
+            out.append(
+                f'{h.proc} {h.name} at +{(h.start - w.end).total_seconds():.1f} s'
+                + (f' (during {", ".join(during)})' if during else ' (no recorder work)' if work else '')
+            )
+    return ', '.join(out)
 
 
 def pacing_section(s: Session) -> list[str]:

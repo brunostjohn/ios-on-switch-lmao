@@ -98,7 +98,8 @@ class DumpTest(unittest.TestCase):
             uuid = '01234567-89AB-CDEF-0123-456789ABCDEF'
             text = '\n'.join(dumps.summary(path + '.ktrace', path + '.kcdata', decoder, {uuid: '/x/SwitchHWTest'}))
         self.assertIn('Switch-recorder-0.ktrace: hang, thread SwitchHWTest[42] main (200), value 412', text)
-        self.assertIn('its thread: on a core 300 ms of the last 1000', text)
+        self.assertIn('its thread: on a core 300 ms of the last 400', text)
+        self.assertIn('the ring reaches 400 ms before the trigger: the capture before it read the rest', text)
         self.assertIn('leaves: dsc 0x180000040 1', text)
         self.assertIn('most common stack (1): dsc 0x180000040 < SwitchHWTest+0x10 < dsc 0x180000080', text)
         self.assertIn('GPU: 1 submissions ended', text)
@@ -165,6 +166,22 @@ class DumpTest(unittest.TestCase):
         (sub,) = ktrace.submissions(ktrace.parse(pack_ring(events)).events)
         self.assertEqual((sub.channel, sub.first, sub.last, sub.tid), (12, 143, 210, SUBMITTER))
         self.assertAlmostEqual(sub.ms, 50.2, places=3)
+
+    def test_a_submission_older_than_the_ring_is_left_out(self):
+        """Maps' channel 21 on 25 Nov: start stamps about 1188 s before their end, in a ring of a second or two."""
+        job = ktrace.GPU_JOB
+        events = [
+            event(1, ktrace.SUBMIT, (21, 9, 0), SUBMITTER),
+            event(900, job, ((9 << 32) | 21, 5, 5 + int(1188e9 * ktrace.PTIMER_PER_NS)), 0),
+            event(1000, ktrace.TRIGGER, (2, MAIN, 300), 0),
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, 'Switch-recorder-2.ktrace')
+            with open(p, 'wb') as f:
+                f.write(pack_ring(events))
+            text = '\n'.join(dumps.summary(p, p[:-7] + '.kcdata', None, {}))
+        self.assertIn('GPU: no submission ended in the window', text)
+        self.assertIn('GPU: left out, a start stamp older than the ring: channel 21 1', text)
 
     def test_a_stack_handoff_is_a_context_switch(self):
         """thread_invoke's handoff path logs MACH_STACK_HANDOFF, not MACH_SCHED (hitch-shots-codex, 25 Nov)."""
