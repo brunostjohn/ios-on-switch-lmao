@@ -79,7 +79,8 @@ Moved aheadPair(void (^between)(id<MTLCommandBuffer>, id<MTLTexture>), bool apar
     const auto into = scale_frames::targets(openedWithZcull().device, kShape);
     id<MTLTexture> depth = depthTexture();
     EXPECT_TRUE(depth != nil);
-    const long long passes = counter(@"zcull_passes"), loads = counter(@"zcull_loads"), fused = counter(@"fused_passes");
+    const long long passes = counter(@"zcull_passes"), loads = counter(@"zcull_loads"),
+                    fused = counter(@"fused_passes");
     id<MTLCommandBuffer> cb = [queue commandBuffer];
     for (int p = 0; p < kShape.passes; p++) {
         scale_frames::pass(cb, openedWithZcull().state, into, kShape, p, 0);
@@ -112,11 +113,13 @@ TEST(GM20BFacadeZcullAhead, APassAfterABlitLoadsTheRegionAPassEncodedAheadStored
 {
     ASSERT_TRUE(openedWithZcull().device != nil);
     id<MTLBuffer> other = [openedWithZcull().device newBufferWithLength:256 options:MTLResourceStorageModeShared];
-    const Moved m = aheadPair(^(id<MTLCommandBuffer> cb, id<MTLTexture>) {
-        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
-        [blit fillBuffer:other range:NSMakeRange(0, 256) value:0];
-        [blit endEncoding];
-    }, true);
+    const Moved m = aheadPair(
+        ^(id<MTLCommandBuffer> cb, id<MTLTexture>) {
+            id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+            [blit fillBuffer:other range:NSMakeRange(0, 256) value:0];
+            [blit endEncoding];
+        },
+        true);
     EXPECT_EQ(m.status, MTLCommandBufferStatusCompleted);
     EXPECT_GE(m.pipelined, kShape.passes + 2);
     EXPECT_EQ(m.passes, 2);
@@ -130,11 +133,13 @@ TEST(GM20BFacadeZcullAhead, ACopyIntoTheDepthBetweenLeavesTheLoadingPassNoRegion
     ASSERT_TRUE(openedWithZcull().device != nil);
     id<MTLTexture> source = depthTexture();
     ASSERT_TRUE(source != nil);
-    const Moved m = aheadPair(^(id<MTLCommandBuffer> cb, id<MTLTexture> depth) {
-        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
-        [blit copyFromTexture:source toTexture:depth];
-        [blit endEncoding];
-    }, true);
+    const Moved m = aheadPair(
+        ^(id<MTLCommandBuffer> cb, id<MTLTexture> depth) {
+            id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+            [blit copyFromTexture:source toTexture:depth];
+            [blit endEncoding];
+        },
+        true);
     EXPECT_EQ(m.status, MTLCommandBufferStatusCompleted);
     EXPECT_EQ(m.passes, 1);
     EXPECT_EQ(m.loads, 0);
@@ -156,18 +161,21 @@ TEST(GM20BFacadeZcullAhead, AStopBetweenTheStoreAndTheLoadEncodesTheRangeWhole)
     ASSERT_TRUE(sampled != nil && ((SwitchMetalTexture *)sampled)->_raw.sampled != nullptr);
     id<MTLTexture> colour = scale_frames::targets(openedWithZcull().device, kShape)[0];
     __block id<MTLCommandBuffer> recorded = nil;
-    const Moved m = aheadPair(^(id<MTLCommandBuffer> cb, id<MTLTexture>) {
-        recorded = cb;
-        MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-        pass.colorAttachments[0].texture = colour;
-        pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
-        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-        id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:pass];
-        [e setFragmentTexture:sampled atIndex:0];
-        [e endEncoding];
-    }, true);
+    const Moved m = aheadPair(
+        ^(id<MTLCommandBuffer> cb, id<MTLTexture>) {
+            recorded = cb;
+            MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+            pass.colorAttachments[0].texture = colour;
+            pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+            pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+            id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:pass];
+            [e setFragmentTexture:sampled atIndex:0];
+            [e endEncoding];
+        },
+        true);
     EXPECT_EQ(m.status, MTLCommandBufferStatusCompleted);
-    NSDictionary *p = ((NSDictionary * (*)(id, SEL)) objc_msgSend)((id)recorded, sel_registerName("switchMetalPipelined"));
+    NSDictionary *p =
+        ((NSDictionary * (*)(id, SEL)) objc_msgSend)((id)recorded, sel_registerName("switchMetalPipelined"));
     EXPECT_NE([p[@"stopped"] intValue] & int(VetoShadows), 0) << [[p description] UTF8String];
     EXPECT_NE([p[@"given_back"] intValue] & int(VetoShadows), 0) << [[p description] UTF8String];
     // the encode given back counted the storing pass it had encoded before the whole encode did it again

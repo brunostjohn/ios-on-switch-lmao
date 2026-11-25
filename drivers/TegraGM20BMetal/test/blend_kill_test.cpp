@@ -57,9 +57,8 @@ uint32_t decide(const State &s)
         0x153c, s.alphaControl, 0x1360, s.blending ? 1u : 0u, 0x1e04, s.rgb.op,    0x1e08, s.rgb.src,
         0x1e0c, s.rgb.dst,      0x1e10, s.alpha.op,           0x1e14, s.alpha.src, 0x1e18, s.alpha.dst,
     };
-    const std::string key =
-        "samples=1 topo=3 ds=" + s.ds + " c0=" + std::to_string(s.format) + ":15:1:1:5:0:1:5:0" + s.moreTargets +
-        " | v vs | f fs";
+    const std::string key = "samples=1 topo=3 ds=" + s.ds + " c0=" + std::to_string(s.format) + ":15:1:1:5:0:1:5:0" +
+                            s.moreTargets + " | v vs | f fs";
     return gm20b::iteratedBlendNoop(blob.data(), uint32_t(blob.size()), s.writes, key.c_str(), s.storage);
 }
 

@@ -43,8 +43,8 @@ uint64_t hashPrefix(const uint8_t *bytes, size_t n)
 constexpr uint64_t kLongWaitUs = 50000;
 
 const char *const kVetoNames[32] = {
-    "-",      "counters", "shadows", "variant", "probes", "parallel", "ops",     "refused",
-    "planar", "native",   "failed",  "other",   "device", "channel",
+    "-",       "counters", "shadows", "variant", "probes", "parallel", "ops",
+    "refused", "planar",   "native",  "failed",  "other",  "device",   "channel",
 };
 
 const char *const kLostNames[] = {"-", "short", "busy", "late"};

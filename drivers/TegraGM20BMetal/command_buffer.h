@@ -262,6 +262,7 @@ public:
     // memory but no program of the draw does
     void use(const Buffer &buffer, bool write, bool noted = true);
     void use(const Texture &texture, bool write);
+
     // The range encode naming a range's resources ahead of its commands (the whole range at once, or an encoder as an
     // encode ahead enters it): no write in command order, so no depth's stored zcull region goes stale by it. The
     // commands' own uses, a pass's attachments at its begin among them, mark the regions their writes reach.

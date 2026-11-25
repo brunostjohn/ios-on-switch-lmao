@@ -329,8 +329,8 @@ static bool cutKeepsZcull(SwitchMetalCommandBuffer *cb, size_t from, size_t at, 
             if (plan.operation(j).op != OpRender)
                 continue;
             const SwitchMetalPass &storing = cb->_passes[plan.legacy(j).x];
-            if (storing.depth == loading->depth && (storing.zeta[0].store != MTLStoreActionDontCare ||
-                                                    storing.zeta[1].store != MTLStoreActionDontCare))
+            if (storing.depth == loading->depth &&
+                (storing.zeta[0].store != MTLStoreActionDontCare || storing.zeta[1].store != MTLStoreActionDontCare))
                 return false;
         }
     }

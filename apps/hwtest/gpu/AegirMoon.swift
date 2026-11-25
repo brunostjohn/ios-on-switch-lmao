@@ -17,9 +17,9 @@ public enum AegirMoon {
     public static let discCode: UInt32 = 846
 
     public struct Reading: Sendable {
-        public var mask: [UInt8] = []  // side x side, rows packed, read under the surface's lock
-        public var bloom2: [UInt8] = []  // the bloom chain's level 2, rows packed
-        public var drawable: [UInt32] = []  // side x side words, read under the surface's lock
+        public var mask: [UInt8] = [] // side x side, rows packed, read under the surface's lock
+        public var bloom2: [UInt8] = [] // the bloom chain's level 2, rows packed
+        public var drawable: [UInt32] = [] // side x side words, read under the surface's lock
         public var path = ""
     }
 
@@ -35,7 +35,12 @@ public enum AegirMoon {
     }
 
     static func texture(_ gpu: GPU, _ surface: IOSurfaceRef, _ format: MTLPixelFormat) throws -> MTLTexture {
-        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: side, height: side, mipmapped: false)
+        let d = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: format,
+            width: side,
+            height: side,
+            mipmapped: false
+        )
         d.usage = [.renderTarget, .shaderRead]
         d.storageMode = .shared
         guard let texture = gpu.device.makeTexture(descriptor: d, iosurface: surface, plane: 0) else {
@@ -93,7 +98,10 @@ public enum AegirMoon {
     }
 
     public static func run(_ gpu: GPU) async throws -> Reading {
-        let drawableSurface = try surface("w30r", bytesPerElement: 4), maskSurface = try surface("A008", bytesPerElement: 1)
+        let drawableSurface = try surface("w30r", bytesPerElement: 4), maskSurface = try surface(
+            "A008",
+            bytesPerElement: 1
+        )
         let drawable = try texture(gpu, drawableSurface, .bgr10_xr_srgb), mask = try texture(gpu, maskSurface, .r8Unorm)
         let bloom = try gpu.texture(.r8Unorm, bloomSide, bloomSide, mipmaps: 3)
         let formats: [MTLPixelFormat] = [.bgr10_xr_srgb, .r8Unorm]
