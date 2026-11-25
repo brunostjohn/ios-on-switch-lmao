@@ -247,6 +247,75 @@ static int mem_smmu_pages_unique(const uint64_t *pas, uint32_t npages)
 	return unique;
 }
 
+/* The GPU's pool is RAM the kernel never gives the VM (xnu_glue.cpp nvxnu_pool_init): the one memory the GPU reaches
+ * with a[34] = 0, which no SMMU can confine. */
+static int mem_pool_page(u64 pa)
+{
+	return pa - nvxnu_pool_base_pa() < nvxnu_pool_size();
+}
+
+/* Pages [from, npages) of pas that are not the pool's reach the GPU through GPUB's view of RAM (SwitchGpuSmmu.h),
+ * held until the memory object goes (mem_release_ram): a GPU access to such a page after that faults at the MC. pages
+ * gets their encoded addresses; it may be NULL when none needs one. */
+static int mem_hold_ram(const uint64_t *pas, uint32_t from, uint32_t npages, u64 **pages)
+{
+	u64 *ram = NULL;
+	u32 count = 0;
+	u32 i = 0;
+	int ret = 0;
+	if (!switch_gpu_smmu_ram_ready())
+		return 0;
+	for (i = from; i < npages; ++i)
+		count += !mem_pool_page(pas[i]);
+	if (!count)
+		return 0;
+	ram = kmalloc_array(count, sizeof(*ram), GFP_KERNEL);
+	if (!*pages) {
+		*pages = kmalloc_array(npages, sizeof(**pages), GFP_KERNEL);
+		if (*pages)
+			memcpy(*pages, pas, (size_t)npages * sizeof(**pages));
+	}
+	if (!ram || !*pages) {
+		kfree(ram);
+		return -ENOMEM;
+	}
+	count = 0;
+	for (i = from; i < npages; ++i) {
+		if (!mem_pool_page(pas[i]))
+			ram[count++] = pas[i];
+	}
+	ret = switch_gpu_smmu_hold(ram, count);
+	kfree(ram);
+	if (ret)
+		return ret;
+	for (i = from; i < npages; ++i) {
+		if (!mem_pool_page(pas[i]))
+			(*pages)[i] = switch_gpu_smmu_ram_pa(pas[i]);
+	}
+	return 0;
+}
+
+/* The holds mem_hold_ram took, found again from the encoded addresses, in batches that need no allocation. */
+static void mem_release_ram(const u64 *pages, u32 npages)
+{
+	u64 batch[64];
+	u32 n = 0;
+	u32 i = 0;
+	if (!pages)
+		return;
+	for (i = 0; i < npages; ++i) {
+		if (!switch_gpu_smmu_is_ram_pa(pages[i]))
+			continue;
+		batch[n++] = pages[i] & ~SWITCH_GPU_SMMU_BIT;
+		if (n == ARRAY_SIZE(batch)) {
+			switch_gpu_smmu_release(batch, n);
+			n = 0;
+		}
+	}
+	if (n)
+		switch_gpu_smmu_release(batch, n);
+}
+
 static int mem_new(const uint64_t *pas, uint32_t npages, u8 page, int compute_comp, int smmu_mode,
 		   struct tgm_mem **pmem, uint64_t *lock_wait_ns)
 {
@@ -290,13 +359,22 @@ static int mem_new(const uint64_t *pas, uint32_t npages, u8 page, int compute_co
 			}
 			for (; i < npages; ++i)
 				smmu_pages[i] = pas[i];
-			effective = smmu_pages;
 		} else {
 			switch_gpu_smmu_unmap(smmu_iova, smmu_npages);
 			smmu_iova = 0;
 			smmu_npages = 0;
 		}
 	}
+	ret = mem_hold_ram(pas, smmu_npages, npages, &smmu_pages);
+	if (ret) {
+		if (smmu_iova)
+			switch_gpu_smmu_unmap(smmu_iova, smmu_npages);
+		kfree(smmu_pages);
+		kfree(mem);
+		return ret;
+	}
+	if (smmu_pages)
+		effective = smmu_pages;
 	if (compute_comp)
 		page = (u8)tgm_comp_page_shift(effective, npages);
 	args.dma = (dma_addr_t *)effective;
@@ -317,6 +395,7 @@ static int mem_new(const uint64_t *pas, uint32_t npages, u8 page, int compute_co
 		mem_prepare_big_views(mem);
 	mutex_unlock(&tgm_gpu.lock);
 	if (ret) {
+		mem_release_ram(smmu_pages, npages);
 		if (smmu_iova)
 			switch_gpu_smmu_unmap(smmu_iova, smmu_npages);
 		kfree(smmu_pages);
@@ -388,6 +467,7 @@ void tgm_mem_del(struct tgm_mem **pmem)
 	if (mem->smmu_iova && l2_on())
 		nvkm_ltc_invalidate(tgm_gpu.device->ltc);
 	mutex_unlock(&tgm_gpu.lock);
+	mem_release_ram(mem->smmu_pages, mem->npages);
 	if (mem->smmu_iova)
 		switch_gpu_smmu_unmap(mem->smmu_iova, mem->smmu_npages);
 	kfree(mem->smmu_pages);
@@ -421,6 +501,7 @@ void tgm_mem_del_finish(struct tgm_mem *later)
 	mutex_unlock(&tgm_gpu.lock);
 	while (later) {
 		struct tgm_mem *next = later->later;
+		mem_release_ram(later->smmu_pages, later->npages);
 		switch_gpu_smmu_unmap(later->smmu_iova, later->smmu_npages);
 		kfree(later->smmu_pages);
 		kfree(later);
