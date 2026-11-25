@@ -108,6 +108,7 @@ public enum Registry {
             YcbcrRowsPastPageTest(),
             SM53LayoutTest(),
             FloatTestsTest(),
+            PowrSpecialsTest(),
             YcbcrOverlapRowsTest(), YcbcrOverlapWordsTest(), XrCopyClampTest(),
             XrPlanesRowsOff32Test(), XrWrittenOnePlaneTest(),
             XrNextPlaneTest(), YcbcrAnySurfaceTest(), XrPlanesOff16Test(), XrAlphaSinkTest(),

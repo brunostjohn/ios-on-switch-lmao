@@ -57,6 +57,36 @@ struct FloatTestsTest: HWTest {
     }
 }
 
+/// Half powr at every special operand: powr_specials over each pair of CompilerShapes.powrHalves (the specials, class
+/// boundaries and two curve exponents, 400 pairs), each answer against Metal's (CompilerShapes.powrRight: its special
+/// answers exactly, the rest within two half ulps). The shader compiler gives a half powr on GM20B as exp2(y * log2(x))
+/// alone, with none of the selects around it that answer the specials on other devices: this is that rule's proof.
+struct PowrSpecialsTest: HWTest {
+    let id = "gpu.gm20b.powr_specials"
+    let name = "Half powr at every special operand, as Metal answers, on raw"
+    let subsystem = Subsystem.metal
+    var timeout: TimeInterval { 30 }
+
+    func run(_ context: TestContext) async throws -> Outcome {
+        try await CompilerShapeRun.judged { gpu, metrics in
+            let (answers, timing) = try await CompilerShapes.powrAnswers(gpu)
+            guard let answers else { return [("powr_specials failed: \(timing.facadePath)", false)] }
+            let pairs = CompilerShapes.powrPairs
+            let operands = pairs.map { (Float16(bitPattern: $0.x), Float16(bitPattern: $0.y)) }
+            let wrong = pairs.indices.filter { !CompilerShapes.powrRight(operands[$0].0, operands[$0].1, answers[$0]) }
+            let special = pairs.indices.filter { CompilerShapes.powrSpecial(operands[$0].0, operands[$0].1) != nil }
+            metrics.set("wrong", wrong.count)
+            metrics.set("wrong_special", wrong.filter(special.contains).count)
+            metrics.set("pairs", pairs.count)
+            if let i = wrong.first {
+                let hex = { (v: UInt16) in String(v, radix: 16) }
+                metrics.set("first_wrong", "\(hex(pairs[i].x))_\(hex(pairs[i].y)):\(answers[i])")
+            }
+            return [("wrong=\(wrong.count) of \(pairs.count)", wrong.isEmpty)]
+        }
+    }
+}
+
 enum CompilerShapeRun {
     /// `body`'s checks on the facade's device, with its failures, skips and paths judged
     static func judged(
