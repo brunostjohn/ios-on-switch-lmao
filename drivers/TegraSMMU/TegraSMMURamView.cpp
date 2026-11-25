@@ -94,11 +94,13 @@ int TegraSMMURamView::attachNarrow(uint32_t asidReg, uint32_t translationReg, ui
     return tegra_smmu_attach(core_.halves[0].asid, core_.ptb(0), asidReg, translationReg, translationBits, line, size);
 }
 
-bool TegraSMMURamView::reserveTables()
+bool TegraSMMURamView::reserveTables(uint64_t limit)
 {
+    using Core = TegraSMMUIdentityCore<TegraSMMURamViewEnv>;
     IOLockLock(lock_);
-    env_.chunkTables = TegraSMMUIdentityCore<TegraSMMURamViewEnv>::kTables;
-    const bool made = core_.makeTables();
+    env_.chunkTables = static_cast<uint32_t>(((limit < Core::kRamEnd ? limit : Core::kRamEnd) - Core::kRamBase) /
+                                             Core::kSpan);
+    const bool made = core_.makeTables(limit);
     env_.chunkTables = TegraSMMURamViewEnv::kChunkTables;
     core_.commit();
     IOLockUnlock(lock_);

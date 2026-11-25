@@ -188,4 +188,12 @@ TEST_F(SmmuIdentity, MadeTablesLetEveryHoldInRamGoWithoutAnAllocation)
         EXPECT_NE(event, "table");
     EXPECT_EQ(env.tables.size(), 1024u) << "4 GiB of RAM in 4 MiB tables";
 }
+TEST_F(SmmuIdentity, TablesMadeBelow4GiBLeaveTheHighHalfToBeMadeOnDemand)
+{
+    ASSERT_TRUE(core.makeTables(1ULL << 32));
+    EXPECT_EQ(env.tables.size(), 512u) << "0x8000_0000-0xffff_ffff in 4 MiB tables";
+    env.outOfMemory = true;
+    EXPECT_TRUE(core.hold(0xfffff000ULL, 0x1000));
+    EXPECT_FALSE(core.hold(0x100000000ULL, 0x1000)) << "above 4 GiB a table is still made on demand";
+}
 }  // namespace

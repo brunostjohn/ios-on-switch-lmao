@@ -30,9 +30,9 @@ public:
     // the fault ASID, for each translation register the swgroup's clients are in. 0, or -1 with one line.
     int attach(uint32_t asidReg, uint32_t translationReg, uint32_t translationBits, bool alwaysTranslated,
                uint32_t asid2, uint32_t ptb2, char *line, size_t size);
-    // Every page table of RAM made and installed now (one 4 MiB buffer and 2 KiB of holder counts per 4 MiB of RAM: 6
+    // Every page table of RAM below `limit` made and installed now (one 4 MiB buffer and 2 KiB of holder counts per 4 MiB of RAM: 6
     // MiB), so holds never allocate.
-    bool reserveTables();
+    bool reserveTables(uint64_t limit = TegraSMMUIdentityCore<TegraSMMURamViewEnv>::kRamEnd);
     // A 32-bit client's swgroup (one ASID field) to the view's directory for RAM below 4 GiB. 0, or -1 with one line.
     int attachNarrow(uint32_t asidReg, uint32_t translationReg, uint32_t translationBits, char *line, size_t size);
     // The device may use [pa, pa + bytes) once a commit follows; false (nothing held) as TegraSMMUIdentityCore::hold.

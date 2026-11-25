@@ -75,10 +75,12 @@ template <class Env> struct TegraSMMUIdentityCore {
         return bytes != 0 && pa >= kRamBase && pa < kRamEnd && bytes <= kRamEnd - pa;
     }
 
-    // Every table of RAM, made now, so no hold allocates: for a storage driver, whose I/O path must not wait for memory.
-    bool makeTables()
+    // Every table of RAM below `limit`, made now, so no hold there allocates: for a holder whose path must not wait for
+    // memory (a storage driver's I/O, the kernel's crypto hooks).
+    bool makeTables(uint64_t limit = kRamEnd)
     {
-        for (uint32_t i = 0; i < kTables; ++i) {
+        const uint64_t end = limit < kRamEnd ? limit : kRamEnd;
+        for (uint32_t i = 0; kRamBase + static_cast<uint64_t>(i) * kSpan < end; ++i) {
             if (!table(kRamBase + static_cast<uint64_t>(i) * kSpan, true))
                 return false;
         }

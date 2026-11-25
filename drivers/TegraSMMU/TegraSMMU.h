@@ -38,7 +38,9 @@ enum tegra_smmu_asid {
     TEGRA_SMMU_ASID_SDMMC1_LOW = 113,
     TEGRA_SMMU_ASID_SDMMC1_HIGH = 112,
     TEGRA_SMMU_ASID_HOST1X = 111,
-    TEGRA_SMMU_ASID_APE = 110
+    TEGRA_SMMU_ASID_APE = 110,
+    TEGRA_SMMU_ASID_SE1 = 109,
+    TEGRA_SMMU_ASID_SE2 = 108
 };
 
 enum tegra_smmu_register {
@@ -96,6 +98,8 @@ static inline void tegra_smmu_ids_distinct(enum tegra_smmu_asid asid, enum tegra
     case TEGRA_SMMU_ASID_SDMMC1_HIGH:
     case TEGRA_SMMU_ASID_HOST1X:
     case TEGRA_SMMU_ASID_APE:
+    case TEGRA_SMMU_ASID_SE1:
+    case TEGRA_SMMU_ASID_SE2:
         break;
     }
     switch (reg) {
