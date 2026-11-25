@@ -145,6 +145,40 @@ TEST(CryptexCache, ARequestWaitingOnAnotherRequestsReadIsJoined)
     EXPECT_EQ(rig.cache.check(), nullptr);
 }
 
+// A window is urgent while a tier-0 request waits on its reads or XNU raised them (SwitchCryptex.cpp issueRead raises a
+// fill planned before the mark once it is queued); the mark goes when nothing is reading the window, and on reuse.
+TEST(CryptexCache, AWindowIsUrgentWhileATierZeroRequestWaitsOnItsReads)
+{
+    Rig rig(1, 8, 100, 10);
+    SwitchCacheRead reads[32], none[32];
+    uint32_t n = 0, m = 0;
+    SwitchCacheRequest a{}, b{}, c{}, d{};
+    ASSERT_TRUE(rig.cache.plan(&a, 0, 2, 1, 100, SwitchCache::kReadAround, reads, 32, &n));
+    ASSERT_EQ(n, 1u);
+    SwitchWindow *w = reads[0].window;
+    EXPECT_FALSE(w->urgent) << "its own read, at its own priority";
+    ASSERT_TRUE(rig.cache.plan(&b, 0, 3, 1, 100, SwitchCache::kReadAround, none, 32, &m));
+    EXPECT_FALSE(w->urgent) << "a joiner below tier 0";
+    ASSERT_TRUE(rig.cache.plan(&c, 0, 4, 1, 100, SwitchCache::kReadAround, none, 32, &m, true));
+    EXPECT_TRUE(c.joined);
+    EXPECT_TRUE(w->urgent);
+    for (SwitchCacheRequest *r : list(rig.finish(reads[0], true)))
+        rig.cache.release(r, true);
+    EXPECT_FALSE(w->urgent) << "nothing reading it";
+
+    rig.cache.markUrgent(0, 0, kSwitchWindowBlocks);
+    EXPECT_FALSE(w->urgent) << "a raise of blocks it holds";
+    rig.cache.markUrgent(0, 0, 0);
+    ASSERT_TRUE(rig.cache.plan(&d, 0, 40, 1, 100, SwitchCache::kReadAround, reads, 32, &n));
+    ASSERT_EQ(reads[0].window, w) << "the one window is reused";
+    rig.cache.markUrgent(0, 40, 1);
+    EXPECT_TRUE(w->urgent) << "XNU raised a fill being read";
+    for (SwitchCacheRequest *r : list(rig.finish(reads[0], true)))
+        rig.cache.release(r, true);
+    EXPECT_FALSE(w->urgent);
+    EXPECT_EQ(rig.cache.check(), nullptr);
+}
+
 TEST(CryptexCache, TheLastWindowStopsAtTheImageEnd)
 {
     constexpr uint64_t kImage = kSwitchWindowBlocks + 3;

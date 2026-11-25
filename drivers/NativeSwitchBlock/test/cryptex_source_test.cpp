@@ -65,7 +65,7 @@ TEST(CryptexSource, SmallReadsGoThroughTheCache)
     EXPECT_THAT(issue, HasSubstr("IOStorageCompletion pieceCompletion = {this, jobPieceDone, j};"));
     EXPECT_THAT(issue, HasSubstr("attrs.priority = priority;"));
     EXPECT_THAT(issue, HasSubstr("piece.length / kSdSector, &attrs, &pieceCompletion)"));
-    EXPECT_THAT(issue, Not(HasSubstr("kIOStoragePriorityHigh")));
+    EXPECT_THAT(issue, Not(HasSubstr("attrs.priority = kIOStoragePriorityHigh")));  // issued at its requester's
     EXPECT_THAT(issue, HasSubstr("bzero(bytes + done, piece.length);"));
     for (const char *copy : {"copypv", "memcpy", "bcopy", "writeBytes", "readBytes"})
         EXPECT_THAT(issue, Not(HasSubstr(copy)));
@@ -99,6 +99,28 @@ TEST(CryptexSource, JoinedFillsAreRaised)
     EXPECT_THAT(raise, Not(HasSubstr("gCache.lock")));
     const std::string set = body("IOReturn SwitchCryptexDevice::doSetPriority(");
     EXPECT_LT(set.find("return kIOReturnBadArgument;"), set.find("raiseQueuedReads("));
+    EXPECT_THAT(plan, HasSubstr("&n, priority == kIOStoragePriorityHigh);"));
+}
+
+// Review S3: a raise that comes between a fill's plan and its queuing finds nothing in the SD queue. The raiser marks
+// the window (a tier-0 joiner in plan, XNU's doSetPriority here) before it promotes; the issuer reads the mark after
+// its pieces are queued and before its issuing reference goes, and raises its own blocks.
+TEST(CryptexSource, AFillPlannedButNotYetQueuedIsRaisedByItsIssuer)
+{
+    const std::string set = body("IOReturn SwitchCryptexDevice::doSetPriority(");
+    EXPECT_LT(set.find("gCache.cache.markUrgent("), set.find("raiseQueuedReads("));
+    EXPECT_LT(set.find("IOLockLock(gCache.lock);"), set.find("gCache.cache.markUrgent("));
+    EXPECT_LT(set.find("gCache.cache.markUrgent("), set.find("IOLockUnlock(gCache.lock);"));
+    const std::string issue = body("uint32_t SwitchCryptexDevice::issueRead(");
+    const size_t queued = issue.rfind("sd->doAsyncReadWrite(");
+    const size_t checked = issue.find("__atomic_load_n(&read.window->urgent, __ATOMIC_ACQUIRE)");
+    const size_t released = issue.rfind("jobPieceDone(this, j, kIOReturnSuccess, 0);");
+    ASSERT_NE(checked, std::string::npos);
+    EXPECT_LT(queued, checked);
+    EXPECT_LT(checked, released);
+    EXPECT_THAT(issue, HasSubstr("raiseQueuedReads(read.window->tag + read.first, read.count, kIOStoragePriorityHigh);"));
+    EXPECT_EQ(Count(cryptex(), "issueRead(p->reads[i], priority)"), 1u) << "cacheRead is its only caller";
+    EXPECT_EQ(Count(cryptex(), "issueRead("), 3u) << "the declaration, the definition and cacheRead";
 }
 
 TEST(CryptexSource, MapIsCheckedAndFallsBackToDiskImages)

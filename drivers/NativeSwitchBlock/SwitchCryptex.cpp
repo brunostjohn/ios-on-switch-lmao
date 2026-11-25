@@ -665,7 +665,7 @@ bool SwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint
     uint32_t n = 0;
     IOLockLock(gCache.lock);
     const bool taken = gCache.cache.plan(&p->cache, static_cast<uint8_t>(index), block, static_cast<uint32_t>(count),
-                                         blocks, mode, p->reads, kRequestReads, &n);
+                                         blocks, mode, p->reads, kRequestReads, &n, priority == kIOStoragePriorityHigh);
     bool joined = false;
     if (taken) {
         p->remaining = p->cache.waiting ? 2 : 1;  // the issuing reference, and the wait for the windows
@@ -730,6 +730,13 @@ IOReturn SwitchCryptexDevice::doSetPriority(IOBlockStorageDeviceExtent *extentLi
         if (extentList[i].blockStart >= blocks || extentList[i].blockCount > blocks - extentList[i].blockStart)
             return kIOReturnBadArgument;
     }
+    // A fill planned and not yet queued is raised by its issuer, which reads the mark after queuing it (issueRead).
+    if (priority == kIOStoragePriorityHigh && __atomic_load_n(&gCache.on, __ATOMIC_ACQUIRE)) {
+        IOLockLock(gCache.lock);
+        for (UInt32 i = 0; i < count; ++i)
+            gCache.cache.markUrgent(static_cast<uint8_t>(index), extentList[i].blockStart, extentList[i].blockCount);
+        IOLockUnlock(gCache.lock);
+    }
     for (UInt32 i = 0; i < count; ++i)
         raiseQueuedReads(extentList[i].blockStart, extentList[i].blockCount, priority);
 #if DEVELOPMENT || DEBUG
@@ -791,6 +798,15 @@ uint32_t SwitchCryptexDevice::issueRead(const SwitchCacheRead &read, IOStoragePr
 #if DEVELOPMENT || DEBUG
     switch_cryptex_stats::add(&switch_cryptex_stats::Bytes::card, done);
 #endif
+    // A tier-0 request joined this fill, or XNU raised it, between its plan and its queuing: the SD queue held nothing
+    // for that raise. Its pieces are queued now, under the SD's queueLock, so either the raiser's promote found them or
+    // the mark it set before promoting is seen here. The window stays reading until the issuing reference goes.
+    if (priority != kIOStoragePriorityHigh && __atomic_load_n(&read.window->urgent, __ATOMIC_ACQUIRE)) {
+        raiseQueuedReads(read.window->tag + read.first, read.count, kIOStoragePriorityHigh);
+#if DEVELOPMENT || DEBUG
+        switch_cryptex_stats::count(&switch_cryptex_stats::Counters::lateRaises);
+#endif
+    }
     jobPieceDone(this, j, kIOReturnSuccess, 0);  // the issuing reference
     return pieces;
 }

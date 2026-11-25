@@ -35,7 +35,8 @@ units are erased in small runs during idle periods after boot completes.
 `SwitchCryptex` maps cryptex image extents onto the block device below DiskImages and the image files' page cache. Small
 reads (up to 16 KiB) go through an 8 MiB cache of 32 KiB windows, and larger misses go straight to the card by ADMA2.
 Window fills read at `kIOStoragePriorityHigh` for tier-0 callers and at Default for everyone else; a tier-0 read that
-waits on a fill raises it.
+waits on a fill raises it. A raise that comes before the fill is queued marks its window, and the fill's issuer raises
+it once queued.
 
 ## Tests
 
