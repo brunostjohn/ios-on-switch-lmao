@@ -316,7 +316,8 @@ static bool loadsADepth(SwitchMetalCommandBuffer *cb, size_t from, size_t to)
 
 // Whether cutting [from, to) at `at` leaves every pass after the cut that loads a depth in the range of the pass before it
 // that stored the depth: a stored zcull region lives in its range's job alone (zcull_planes.h), so a cut between them
-// loses the region the loading pass would cull with
+// loses the region the loading pass would cull with. Its callers run from the commit on, when the submit worker owns
+// the command buffer's plan and passes.
 static bool cutKeepsZcull(SwitchMetalCommandBuffer *cb, size_t from, size_t at, size_t to)
 {
     const SwitchMetalCommandPlan &plan = cb->_plan;
@@ -394,7 +395,8 @@ static void splitCommittedRange(SwitchMetalCommandBuffer *cb)
     SWITCH_METAL_DIAGNOSTIC(gm20b::frameCpuCounts().rangeSplits.fetch_add(1, std::memory_order_relaxed));
 }
 
-static size_t aheadSplitPoint(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &range)
+// Where the encode ahead ended within `range`, 0: nowhere a cut may go
+static size_t aheadEnd(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &range)
 {
     const Ahead &a = ahead();
     if (a.cb != cb || !a.open || range.from || range.event || range.held || range.from >= range.to)
@@ -404,7 +406,13 @@ static size_t aheadSplitPoint(SwitchMetalCommandBuffer *cb, const SwitchMetalSeg
         return 0;
     const size_t stop = stopOf(a);
     const size_t at = stop != SIZE_MAX ? stop : encode.betweenEncoders() ? encode.position() : 0;
-    return at > range.from && at < range.to && cutKeepsZcull(cb, range.from, at, range.to) ? at : 0;
+    return at > range.from && at < range.to ? at : 0;
+}
+
+static size_t aheadSplitPoint(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &range)
+{
+    const size_t at = aheadEnd(cb, range);
+    return at && cutKeepsZcull(cb, range.from, at, range.to) ? at : 0;
 }
 
 void gm20bPipelineSplit(SwitchMetalCommandBuffer *cb)
@@ -424,6 +432,10 @@ void gm20bPipelineSplit(SwitchMetalCommandBuffer *cb)
                 rest.gpuWait = false;
                 cb->_segs.insert(cb->_segs.begin() + ptrdiff_t(cb->_segNext) + 1, rest);
                 SWITCH_METAL_DIAGNOSTIC(gm20b::frameCpuCounts().splits.fetch_add(1, std::memory_order_relaxed));
+            } else if (aheadEnd(cb, range) && stopOf(a) != SIZE_MAX) {
+                // the encoders from the recording's stop on need the whole encode, which only a range of their own
+                // gives them past an encode ahead: with the cut refused, the whole range is encoded at its turn
+                giveBack(cb->_aheadStopped.load(std::memory_order_relaxed) ?: uint32_t(VetoOps));
             }
             return;
         }
