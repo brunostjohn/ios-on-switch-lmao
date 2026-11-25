@@ -461,7 +461,6 @@ void switch_prefetch_save_next(struct switch_record_entry *log, uint32_t appende
         struct switch_prefetch_header header = *expected_key;
         header.runs = count;
         header.files = files;
-        header.checksum = switch_prefetch_fnv((const uint8_t *)runs, (uint64_t)count * sizeof(*runs));
         static const struct switch_prefetch_file_ops ops = {
             .write_file = kernel_write_file,
             .rename_file = kernel_rename_file,
