@@ -42,6 +42,7 @@
 #include <vm/vm_pageout.h>
 
 #include <kern/thread_call.h>
+#include <switch/callouts.h>
 #include <kern/timer_call.h>
 
 #include <libkern/OSAtomic.h>
@@ -1690,7 +1691,9 @@ thread_call_invoke(thread_call_func_t func,
 	    (unsigned) (tc_ttd & 0xFFFFFFFF), is_delayed, call);
 #endif
 
+	const uint64_t switch_begin = switch_callout_begin();
 	(*func)(param0, param1);
+	switch_callout_end(SWITCH_CALLOUT_FUNCTION, (const void *)func, switch_begin);
 
 #if CONFIG_DTRACE
 	DTRACE_TMR6(thread_callout__end, thread_call_func_t, func, int, 0, int, (tc_ttd >> 32),

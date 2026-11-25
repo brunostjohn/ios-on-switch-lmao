@@ -36,6 +36,7 @@ void switch_sched_render_swapped(void);
 /* cpu.c: each core's and each process's CPU in the report's window (`line`: its LINE-byte buffer), and a process's
  * exit (diag/exit.c), whose CPU since the last report would leave no row otherwise. */
 void switch_sched_cpu_report(char *line, uint64_t window_ns);
+void switch_sched_cpu_boot_totals(char *line, uint64_t boot_ns);
 void switch_sched_cpu_exited(task_t task);
 
 /* busy.c: SpringBoard's and backboardd's main threads between two waits in their run loops (sched/busy.h). */
@@ -75,6 +76,15 @@ void switch_sched_commit_sent(uint64_t now);
 bool switch_sched_commit_server(thread_t thread, uint64_t now, bool departing);
 void switch_sched_commit_server_named(uint64_t tid);
 void switch_sched_commit_report(char *line, size_t size, uint64_t window_ns);
+
+/* systime.c: user threads' kernel time by what entered the kernel (sched/systime.h). sleh_synchronous, once it has
+ * marked a synchronous exception from EL0 and before it enables interrupts; recount, for each slice of kernel-level
+ * time it gives a non-idle thread, interrupts masked. Each writes only its own CPU's counts. */
+void switch_systime_entered(thread_t thread);
+void switch_systime_absorb(thread_t thread, task_t task, uint64_t mach);
+void switch_sched_systime_report(char *line, size_t size, uint64_t window_ns);
+/* callouts.c: thread call functions and timer actions by CPU (<switch/callouts.h>). */
+void switch_sched_callout_report(char *line, size_t size, uint64_t window_ns);
 
 /* thread_invoke, under the incoming thread's lock: the scheduler's hot path, so three loads while nothing is watched. */
 static inline void switch_sched_on_core(thread_t thread, uint64_t now)
@@ -132,6 +142,12 @@ static inline void switch_sched_tick(__unused uint64_t now)
 {}
 
 static inline void switch_sched_boot_complete(void)
+{}
+
+static inline void switch_systime_entered(__unused thread_t thread)
+{}
+
+static inline void switch_systime_absorb(__unused thread_t thread, __unused task_t task, __unused uint64_t mach)
 {}
 
 #endif /* DEVELOPMENT || DEBUG */

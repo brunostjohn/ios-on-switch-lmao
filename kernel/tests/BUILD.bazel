@@ -29,6 +29,13 @@
 #                            to its swap into running, blocked and waiting for a core
 #   xnu_sched_cpu_test       kernel/switch/sched/cpu.h: each process's CPU in a window, counted once across its exit and
 #                            an exec, a full table's misses counted; the cores and tasks lines
+#   xnu_sched_callouts_test  kernel/switch/sched/callouts.h: thread call functions and timer actions by CPU, each window's
+#                            top four; both trees bracket thread_call_invoke's function and IOTimerEventSource's actions
+#   xnu_diag_deployed_test   kernel/switch/diag/deployed.h: the commit, branch, build and dirty flag deployed.json gives
+#   xnu_a64x_traps_test      <switch/a64x_traps.h>: the translator's traps by CPU ring, window and line, one writer and
+#                            one reader losing nothing a ring kept; every handled trap in a64x_emulate_user is noted
+#   xnu_sched_systime_test   kernel/switch/sched/systime.h: user threads' kernel time by what entered the kernel and its
+#                            line; both trees' sleh_synchronous count each entry and recount hands over each slice
 #   xnu_sched_watch_test     kernel/switch/sched/watch.h and commit.h: a committing or touch-sending thread's stretch to
 #                            each event, one per burst, its cause and line; a commit through the render server to the
 #                            display thread's wake; nothing under the thread lock that locks or logs
@@ -486,6 +493,85 @@ host_test(
     srcs = [
         "sched/cpu.h",
         "xnu_sched_cpu_test.cpp",
+    ],
+    includes = ["."],
+)
+
+# --- kernel/switch/sched/systime.h ----------------------------------------------------------------------------------------
+copy_file(
+    name = "switch_sched_systime",
+    src = "//kernel/switch:sched/systime.h",
+    out = "sched/systime.h",
+)
+
+host_test(
+    name = "xnu_sched_systime_test",
+    srcs = [
+        "sched/systime.h",
+        "xnu_sched_systime_test.cpp",
+    ],
+    data = [
+        "//kernel/switch:include/switch/sched.h",
+        "//kernel/switch:sched/systime.c",
+        "//kernel/xnu-10063.141.1/osfmk:arm64/sleh.c",
+        "//kernel/xnu-10063.141.1/osfmk:kern/recount.c",
+        "//kernel/xnu-12377.121.6/osfmk:arm64/sleh.c",
+        "//kernel/xnu-12377.121.6/osfmk:kern/recount.c",
+    ],
+    includes = ["."],
+)
+
+# --- kernel/switch/include/switch/a64x_traps.h ----------------------------------------------------------------------------
+copy_file(
+    name = "switch_a64x_traps",
+    src = "//kernel/switch:include/switch/a64x_traps.h",
+    out = "switch/a64x_traps.h",
+)
+
+host_test(
+    name = "xnu_a64x_traps_test",
+    srcs = [
+        "switch/a64x_traps.h",
+        "xnu_a64x_traps_test.cpp",
+    ],
+    data = ["//kernel/switch:translate/a64x_xnu.c"],
+    includes = ["."],
+)
+
+# --- kernel/switch/diag/deployed.h ----------------------------------------------------------------------------------------
+copy_file(
+    name = "switch_diag_deployed",
+    src = "//kernel/switch:diag/deployed.h",
+    out = "diag/deployed.h",
+)
+
+host_test(
+    name = "xnu_diag_deployed_test",
+    srcs = [
+        "diag/deployed.h",
+        "xnu_diag_deployed_test.cpp",
+    ],
+    includes = ["."],
+)
+
+# --- kernel/switch/sched/callouts.h ---------------------------------------------------------------------------------------
+copy_file(
+    name = "switch_sched_callouts",
+    src = "//kernel/switch:sched/callouts.h",
+    out = "sched/callouts.h",
+)
+
+host_test(
+    name = "xnu_sched_callouts_test",
+    srcs = [
+        "sched/callouts.h",
+        "xnu_sched_callouts_test.cpp",
+    ],
+    data = [
+        "//kernel/xnu-10063.141.1/iokit:Kernel/IOTimerEventSource.cpp",
+        "//kernel/xnu-10063.141.1/osfmk:kern/thread_call.c",
+        "//kernel/xnu-12377.121.6/iokit:Kernel/IOTimerEventSource.cpp",
+        "//kernel/xnu-12377.121.6/osfmk:kern/thread_call.c",
     ],
     includes = ["."],
 )

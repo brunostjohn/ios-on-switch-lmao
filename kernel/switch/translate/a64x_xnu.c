@@ -913,6 +913,7 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
                     OSIncrementAtomic64((SInt64 *)&a64x_jit_patches);
                 }
 #endif
+                switch_a64x_trap_noted(c, true);
                 return 1;
             }
         }
@@ -1017,6 +1018,7 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
         }
         set_pc(state, get_saved_state_lr(state));
         OSIncrementAtomic64((SInt64 *)&a64x_traps);
+        switch_a64x_trap_noted(c, false);
         return 1;
     case A64X_PAC_BR:
         if (!is_jit) {
@@ -1024,6 +1026,7 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
         }
         set_pc(state, reg(state, rn));
         OSIncrementAtomic64((SInt64 *)&a64x_traps);
+        switch_a64x_trap_noted(c, false);
         return 1;
     case A64X_PAC_BLR: {
         if (!is_jit) {
@@ -1033,6 +1036,7 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
         set_lr(state, pc + 4);
         set_pc(state, target);
         OSIncrementAtomic64((SInt64 *)&a64x_traps);
+        switch_a64x_trap_noted(c, false);
         return 1;
     }
     default:
@@ -1057,6 +1061,7 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
     add_saved_state_pc(state, 4);
 #endif
     OSIncrementAtomic64((SInt64 *)&a64x_traps);
+    switch_a64x_trap_noted(c, false);
     return 1;
 }
 

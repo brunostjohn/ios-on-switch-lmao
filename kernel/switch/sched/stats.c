@@ -20,6 +20,7 @@
 #include <switch/xnu.h>
 
 #include "stats.h"
+#include "../diag/deployed.h"
 #include "SwitchPowerTrail.h"
 
 #include <kern/clock.h>
@@ -493,6 +494,7 @@ static size_t append_kernel_top(char *line, size_t at)
 static void switch_sched_report(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 {
     static uint64_t last_ns;
+    static bool boot_totals_logged;
     static char line[LINE];
     uint64_t now_ns = 0;
     uint64_t window_ns = 0;
@@ -523,6 +525,13 @@ static void switch_sched_report(__unused thread_call_param_t p0, __unused thread
     append_slots(line, MIN(at, LINE - 1), FIRST_GPU, SLOTS);
     os_log(OS_LOG_DEFAULT, "%s", line);
     switch_sched_cpu_report(line, window_ns);
+    if (boot_ns != 0 && !boot_totals_logged) {
+        boot_totals_logged = true;
+        switch_sched_cpu_boot_totals(line, boot_ns);
+        switch_log_deployed();
+    }
+    switch_sched_systime_report(line, LINE, window_ns);
+    switch_sched_callout_report(line, LINE, window_ns);
     switch_sched_watch_report(line, LINE, window_ns);
     switch_diag_pagein_report(line, LINE, window_ns);
     report_asked(line);

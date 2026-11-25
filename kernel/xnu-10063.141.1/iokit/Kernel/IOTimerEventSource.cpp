@@ -32,6 +32,7 @@
 __BEGIN_DECLS
 #include <kern/thread_call.h>
 __END_DECLS
+#include <switch/callouts.h>
 
 #include <IOKit/assert.h>
 #include <IOKit/system.h>
@@ -153,7 +154,9 @@ IOTimerEventSource::timeout(void *self)
 			IOStatisticsCloseGate();
 			doit = me->action;
 			if (doit && me->enabled && AbsoluteTime_to_scalar(&me->abstime)) {
+				const uint64_t switch_begin = switch_callout_begin();
 				me->invokeAction(doit, me, me->owner, me->workLoop);
+				switch_callout_end(SWITCH_CALLOUT_TIMER_ACTION, (const void *)doit, switch_begin);
 			}
 			IOStatisticsOpenGate();
 			wl->openGate();
@@ -181,7 +184,9 @@ IOTimerEventSource::timeoutAndRelease(void * self, void * c)
 			doit = me->action;
 			if (doit && (me->reserved->calloutGeneration == count)) {
 				thread_call_start_iotes_invocation((thread_call_t)me->calloutEntry);
+				const uint64_t switch_begin = switch_callout_begin();
 				me->invokeAction(doit, me, me->owner, me->workLoop);
+				switch_callout_end(SWITCH_CALLOUT_TIMER_ACTION, (const void *)doit, switch_begin);
 			}
 			IOStatisticsOpenGate();
 			wl->openGate();
