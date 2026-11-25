@@ -502,8 +502,8 @@ struct HidDevice : IOService {
     SwitchHIDFeatureHandler handler = nullptr;
     void *context = nullptr;
     std::vector<SwitchMotionReport> reports;
-    std::vector<uint64_t> times;  // switch_hid_post_at's sample times (0: switch_hid_post)
-    unsigned forgotten = 0;       // switch_hid_forget_latest calls
+    std::vector<uint64_t> times;     // switch_hid_post_at's sample times (0: switch_hid_post)
+    mutable unsigned forgotten = 0;  // switch_hid_forget_latest calls
     // The device orientation service: the reports IOHIDFamily took, their report times (IOHIDDevice::handleReport's
     // clock_get_uptime, or switch_hid_post_at's time) and their bit masks; `refuse` reports are refused first, as
     // IOHIDDevice refuses them until it is ready for input reports.
@@ -590,10 +590,10 @@ bool switch_hid_supports_timestamps(IOService *)
     return gTimedPosts;
 }
 
-void switch_hid_forget_latest(IOService *device)
+void switch_hid_forget_latest(const IOService *device)
 {
     if (device)
-        ++static_cast<HidDevice *>(device)->forgotten;
+        ++static_cast<const HidDevice *>(device)->forgotten;
 }
 
 void switch_motion_totals_register()

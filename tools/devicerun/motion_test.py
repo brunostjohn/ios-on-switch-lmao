@@ -159,6 +159,11 @@ class Motion(unittest.TestCase):
         self.assertEqual(results(denied)['motion.tcc-denied'].verdict, NO_DATA)
         other = {**denied, 'eventMessage': denied['eventMessage'].replace('MotionSensors', 'Camera')}
         self.assertEqual(results(IOS27, other)['motion.tcc-denied'].verdict, PASS, 'another TCC service')
+        redacted = {
+            **denied,
+            'eventMessage': 'Connection: <private> denied match of service <private>: TCC <private> right:0',
+        }
+        self.assertEqual(results(IOS27, redacted)['motion.tcc-denied'].verdict, FAIL, 'as the log redacts it')
 
     def test_a_report_coremotion_refuses_fails(self):
         got = results(record('Bad device motion report,type,3,size,52', SPRINGBOARD))

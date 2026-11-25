@@ -18,6 +18,8 @@ J181 refuses its open as well and its CoreMotion takes the pushed sample: report
 On iPadOS 27 the accelerometer, gyroscope and device motion services carry J181's TCCService kTCCServiceMotionSensors
 (drivers/SwitchTouch/SwitchHIDMotionAccess.cpp). IOKit's event system then matches them only for platform binaries or
 connections TCC allows, and logs each connection it refuses. A refusal there means a motion client lost the services.
+The log redacts the line's arguments as <private>; only these services carry a TCCService here, so a redacted one is
+judged as theirs.
 """
 
 from tools.devicerun.rules import REPORT, Check
@@ -230,9 +232,9 @@ MOTION = [
         ' denied match of service ',
         regex=(
             r'^Connection: (?P<connection>.*?) denied match of service .*: '
-            r'TCC kTCCServiceMotionSensors right:(?P<right>\d+)'
+            r'TCC (?P<tcc>kTCCServiceMotionSensors|<private>) right:(?P<right>\d+)'
         ),
-        show=('connection', 'right'),
+        show=('connection', 'tcc', 'right'),
         applies=IOS27,
         needs='motion.kernel',
         boots=IOS27_BOOT,
