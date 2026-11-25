@@ -18,6 +18,8 @@ import struct
 ALPHA2 = 'a2'
 HALF = 'h'
 SRGB8 = 's8'
+# a component the target's format has no channel for: the ROP stores nothing of it
+UNSTORED = 'x'
 
 # Metal pixel formats whose channels store as unorm codes, each channel's width (the shader's RGBA order)
 UNORM = {
@@ -55,12 +57,8 @@ def half_toward_zero(bits: int) -> int:
 
 def store_code(bits: int, width: int | str) -> int:
     """Give the code GM20B stores for the f32 `bits` in a channel of `width` (unorm bits, RGB10A2's alpha, a half)."""
-    if width == HALF:
-        return half_toward_zero(bits)
-    if width == ALPHA2:
-        return store_code(bits, 10) >> 8
-    if width == SRGB8:
-        return srgb_code(bits)
+    if isinstance(width, str):
+        return _STORE[width](bits)
     exponent = bits >> 23 & 0xFF
     if bits >> 31 or bits & 0x7FFFFFFF == 0 or (exponent == 0xFF and bits & 0x7FFFFF):
         return 0
@@ -85,6 +83,14 @@ def srgb_code(bits: int) -> int:
     return min(255, math.floor(encoded * 255 + 0.5))
 
 
+_STORE = {
+    UNSTORED: lambda _: 0,
+    HALF: half_toward_zero,
+    ALPHA2: lambda bits: store_code(bits, 10) >> 8,
+    SRGB8: srgb_code,
+}
+
+
 def widths(key: str, omap: int) -> list[int | str | None]:
     """Give each output register's stored channel (None: stored as written) for a state key's attachments.
 
@@ -100,5 +106,8 @@ def widths(key: str, omap: int) -> list[int | str | None]:
         for component in range(4):
             if omap >> (4 * target + component) & 1:
                 channels = UNORM.get(formats.get(target, -1), ())
-                out.append(channels[component] if component < len(channels) else None)
+                if component < len(channels):
+                    out.append(channels[component])
+                else:
+                    out.append(UNSTORED if channels else None)
     return out
