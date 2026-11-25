@@ -9,6 +9,12 @@
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 
 struct TegraSMMURamViewEnv {
+    // Tables come from chunks of chunkTables pages: a 4 KiB table alone would take a whole VM page (16 KiB here).
+    static constexpr uint32_t kChunkTables = 4;
+    uint32_t chunkTables = kChunkTables;
+    switch_dma_buffer chunk = {};  // the one tables are taken from, kept for good like them
+    uint32_t chunkUsed = 0;
+
     TegraSMMUIdentityTable *makeTable();
     void clean(const void *va, size_t bytes);
     void sync();
@@ -24,7 +30,8 @@ public:
     // the fault ASID, for each translation register the swgroup's clients are in. 0, or -1 with one line.
     int attach(uint32_t asidReg, uint32_t translationReg, uint32_t translationBits, bool alwaysTranslated,
                uint32_t asid2, uint32_t ptb2, char *line, size_t size);
-    // Every page table of RAM made and installed now (4 KiB + 2 KiB per 4 MiB of RAM), so holds never allocate.
+    // Every page table of RAM made and installed now (one 4 MiB buffer and 2 KiB of holder counts per 4 MiB of RAM: 6
+    // MiB), so holds never allocate.
     bool reserveTables();
     // A 32-bit client's swgroup (one ASID field) to the view's directory for RAM below 4 GiB. 0, or -1 with one line.
     int attachNarrow(uint32_t asidReg, uint32_t translationReg, uint32_t translationBits, char *line, size_t size);

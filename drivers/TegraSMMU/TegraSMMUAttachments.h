@@ -10,7 +10,8 @@
 extern "C" {
 #endif
 
-#define TEGRA_SMMU_ATTACHMENTS 20u
+// One per swgroup and translation register its clients are in (NVENC, AFI, GPUB and HC take two each).
+#define TEGRA_SMMU_ATTACHMENTS 32u
 
 struct tegra_smmu_attachment {
     uint32_t asid, ptb, asidReg, translationReg, translationBits;

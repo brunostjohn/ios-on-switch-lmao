@@ -263,7 +263,9 @@ extern "C" int tegra_smmu_resume(void)
 {
     if (!__atomic_load_n(&gLock, __ATOMIC_ACQUIRE) || !ready())
         return 0;
-    char failed[TEGRA_SMMU_ATTACHMENTS][96] = {};
+    // SC7's wake runs this once, on one thread: the lines need not be on its stack.
+    static char failed[TEGRA_SMMU_ATTACHMENTS][96];
+    bzero(failed, sizeof(failed));
     IOSimpleLockLock(gLock);
     const uint32_t count = gAttached.count;
     for (uint32_t i = 0; i < count; ++i) {

@@ -7,10 +7,18 @@
 
 TegraSMMUIdentityTable *TegraSMMURamViewEnv::makeTable()
 {
-    switch_dma_buffer page = {};
+    if (chunk.va && chunkUsed == chunk.size / TegraSMMUDomain::kPage)
+        chunk = {};
+    if (!chunk.va) {
+        if (!switch_dma_alloc(&chunk, static_cast<size_t>(chunkTables) * TegraSMMUDomain::kPage)) {
+            chunk = {};
+            return nullptr;
+        }
+        chunkUsed = 0;
+    }
     auto *table = IONew(TegraSMMUIdentityTable, 1);
     auto *users = IONew(uint16_t, TegraSMMUDomain::kEntries);
-    if (!table || !users || !switch_dma_alloc(&page, TegraSMMUDomain::kPage)) {
+    if (!table || !users) {
         if (table)
             IODelete(table, TegraSMMUIdentityTable, 1);
         if (users)
@@ -18,8 +26,9 @@ TegraSMMUIdentityTable *TegraSMMURamViewEnv::makeTable()
         return nullptr;
     }
     bzero(users, TegraSMMUDomain::kEntries * sizeof(uint16_t));
-    *table = {reinterpret_cast<uint32_t *>(page.va), page.pa, 0, users, 0, 0, nullptr};
-    return table;  // kept for good with its page: a view's tables outlive every hold
+    const uint64_t at = static_cast<uint64_t>(chunkUsed++) * TegraSMMUDomain::kPage;
+    *table = {reinterpret_cast<uint32_t *>(chunk.va + at), chunk.pa + at, 0, users, 0, 0, nullptr};
+    return table;  // kept for good with its chunk: a view's tables outlive every hold
 }
 
 void TegraSMMURamViewEnv::clean(const void *va, size_t bytes)
@@ -88,7 +97,9 @@ int TegraSMMURamView::attachNarrow(uint32_t asidReg, uint32_t translationReg, ui
 bool TegraSMMURamView::reserveTables()
 {
     IOLockLock(lock_);
+    env_.chunkTables = TegraSMMUIdentityCore<TegraSMMURamViewEnv>::kTables;
     const bool made = core_.makeTables();
+    env_.chunkTables = TegraSMMURamViewEnv::kChunkTables;
     core_.commit();
     IOLockUnlock(lock_);
     return made;
