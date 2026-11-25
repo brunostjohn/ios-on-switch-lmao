@@ -169,6 +169,24 @@ TEST(AttachmentLifetime, EverySimultaneousScratchMaskHasDisjointStorage)
     }
 }
 
+// A pass that samples an earlier pass's memoryless backing (a YCbCr target's store passes read its stand-in) takes no
+// transient colour tag: backings of one tag share memory, and its pool-image targets' copy-in would land in what it reads
+TEST(AttachmentLifetime, ABackingReadersScratchTagsAreNoTransientPassesTags)
+{
+    for (unsigned reader = 1; reader < 256; ++reader) {
+        std::set<uint32_t> read;
+        for (const auto tag : gm20b::transientColorTags(uint8_t(reader), gm20b::kBackingReaderColorTag))
+            if (tag) {
+                ASSERT_GE(tag, gm20b::kBackingReaderColorTag);
+                ASSERT_LT(tag, gm20b::kBackingReaderColorTag + 8);
+                read.insert(tag);
+            }
+        for (unsigned pass = 1; pass < 256; ++pass)
+            for (const auto tag : gm20b::transientColorTags(uint8_t(pass)))
+                ASSERT_EQ(read.count(tag), 0u) << reader << " " << pass;
+    }
+}
+
 TEST(AttachmentLifetime, DisjointPassesUsePeakLiveStorageAcrossAllSlotPermutations)
 {
     for (unsigned first = 0; first < 256; ++first)

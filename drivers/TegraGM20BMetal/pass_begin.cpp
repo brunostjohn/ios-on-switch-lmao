@@ -174,7 +174,8 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
         if (const Texture *t = pass.color[j].texture; t && (backed(*t) || t->shadowTarget || t->zetaPages || t->zeta ||
                                                             shortOf(*t) || (blockLinear && !t->blockLinear)))
             scratchMask |= uint8_t(1u << j);
-    const auto scratchTags = transientColorTags(scratchMask);
+    const auto scratchTags =
+        transientColorTags(scratchMask, pass.readsBackings ? kBackingReaderColorTag : kTransientColorTag);
     for (uint32_t j = 0; j < pass.count && j < 8; j++) {
         const Texture *t = pass.color[j].texture;
         if (!t)

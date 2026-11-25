@@ -9,11 +9,15 @@
 namespace gm20b {
 
 constexpr uint32_t kTransientColorTag = 9;
+// The transient colour tags of a pass that samples an earlier pass's memoryless backing (PassDesc::readsBackings): the
+// backings of one tag share memory, so at kTransientColorTag's the copy-in of its own pool-image target would overwrite
+// the backing it reads. Past kPlaneImageTag's eight (attachment_target.h) and below kTurnTag's (turned_pass.cpp).
+constexpr uint32_t kBackingReaderColorTag = 32;
 
-inline std::array<uint32_t, 8> transientColorTags(uint8_t scratch)
+inline std::array<uint32_t, 8> transientColorTags(uint8_t scratch, uint32_t first = kTransientColorTag)
 {
     std::array<uint32_t, 8> tags{};
-    uint32_t next = kTransientColorTag;
+    uint32_t next = first;
     for (uint32_t slot = 0; slot < tags.size(); ++slot)
         if (scratch & (1u << slot))
             tags[slot] = next++;

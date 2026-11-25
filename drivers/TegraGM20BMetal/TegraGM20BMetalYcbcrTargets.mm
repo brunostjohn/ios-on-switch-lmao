@@ -116,6 +116,7 @@ int storeYcbcrPlanes(gm20b::CommandBuffer *rc, const gm20b::Texture &t, const gm
         p.color[0].load = masked ? gm20b::ColorAttachment::Load : gm20b::ColorAttachment::DontCare;
         p.color[0].store = true;
         p.count = 1;
+        p.readsBackings = true;
         gm20b::RenderEncoder *e = rc->render(p);
         if (!e) {
             *why = "a YCbCr texture's plane the driver cannot render";
