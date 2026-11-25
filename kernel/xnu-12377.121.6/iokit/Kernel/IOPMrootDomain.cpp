@@ -8508,7 +8508,7 @@ IOPMrootDomain::dispatchPowerEvent(
 		if (systemBooting) {
 			systemBooting = false;
 			/* Switch: SpringBoard finished startup (backboardd sets this): the boot band's daemons get their CPU back
-			 * (if its 60 s bound has not already), and the boot's full clocks end: from here the CPU governor and the
+			 * (if its 120 s bound has not already), and the boot's full clocks end: from here the CPU governor and the
 			 * GPU's idle clock decide, whenever this comes (r8a: 74 s of uptime, after the band's bound). */
 			switch_boot_band_lift("System Boot Complete");
 			switch_perf_hint(4); /* SWITCH_PERF_HINT_BOOT_DONE */
