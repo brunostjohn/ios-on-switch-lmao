@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 #include <future>
 #include <string>
+#include <thread>
 #include <vector>
 #include "switch_native_surface_stubs.h"
 #include "../SwitchNativeSurface.cpp"
@@ -61,7 +62,7 @@ bool reservingGpu = false;
 bool ready = true;
 bool surfaceUnwritten = true;
 TegraVICSurfaceDesc convertedDesc;
-std::function<void()> duringTransfer, duringGeneration, duringExport;
+std::function<void()> duringTransfer, duringGeneration, duringExport, duringWaitingReserve;
 }
 
 extern "C" int tgm_surface_unwritten(void *)
@@ -217,6 +218,8 @@ extern "C" int switch_gpu_backing_conversion_reserve(switch_gpu_backing *backing
                                                      switch_gpu_cpu_lease **out)
 {
     ++gpuReservations;
+    if (!avoid && duringWaitingReserve)
+        duringWaitingReserve();
     reservingGpu = true;
     const int error = switch_gpu_backing_cpu_acquire_owned(backing, 0, uint64_t(backing->pageCount) * 4096,
                                                            access | kNoCache | (avoid ? kAvoidSync : 0), out);
@@ -419,7 +422,7 @@ protected:
         reservingGpu = false;
         surfaceUnwritten = true;
         transferError = generationError = 0;
-        duringTransfer = duringGeneration = duringExport = {};
+        duringTransfer = duringGeneration = duringExport = duringWaitingReserve = {};
         memory = new IOMemoryDescriptor;
         memory->length = 1536 * 720 * 3 / 2;
         memory->backing = &logical;
@@ -608,6 +611,110 @@ TEST_F(TurnedSurface, TheDestinationIsTheDecodersPictureTurnedForTheDisplayOnly)
     EXPECT_EQ(view.turn.height, 720u);
     EXPECT_EQ(view.layout.planes[0].height, 736u);
     switch_native_surface_release(&view);
+}
+
+// TegraVIC reserves a job's destination for writing when it queues the job, so the external display does not latch it
+// before VIC is done, and its engine thread holds that reservation while it records the turn. The record is made under
+// it: a reservation of its own would wait on the job's for ever.
+TEST_F(TurnedSurface, ARecordMadeUnderTheJobsReservationTakesNoSecondOne)
+{
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
+    SwitchVICWriteReservation held = {};
+    switch_vic_surface_reserve_write(&turned, &held);
+    ASSERT_NE(held.lease, nullptr);
+    ASSERT_EQ(held.backing, &replacement);
+    const unsigned reservations = gpuReservations;
+    SwitchNativeSurfaceView source = {};
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &source, false), 0);
+    auto published = std::async(std::launch::async, [&] {
+        return switch_native_surface_publish_turned(&turned, source, op, 0, nullptr, nullptr, &held);
+    });
+    const bool waited = published.wait_for(std::chrono::seconds(5)) != std::future_status::ready;
+    if (waited)
+        switch_vic_surface_release_write(&held);  // lets the stuck publication through so the test can end
+    EXPECT_FALSE(waited) << "the record waited on the job's own reservation";
+    EXPECT_EQ(published.get(), 0);
+    switch_native_surface_release(&source);
+    EXPECT_EQ(gpuReservations, reservations);
+    EXPECT_EQ(replacement.writers, waited ? 0u : 1u);
+    switch_vic_surface_release_write(&held);
+    EXPECT_EQ(replacement.writers, 0u);
+    SwitchNativeSurfaceView view = {};
+    ASSERT_EQ(switch_native_surface_acquire(&turned, &view, false, true), 0);
+    EXPECT_EQ(view.native, &native);
+    EXPECT_EQ(view.turn.transform, 7u);
+    switch_native_surface_release(&view);
+}
+
+// A decoder publishing onto a VIC job's destination holds the destination's gate while it waits for the destination's
+// reservation, which the job holds. The job's access to its destination does not wait for the gate while holding it:
+// it gives the reservation up, the publication goes through, and then the job enters.
+TEST_F(NativeSurface, AJobsDestinationAccessGivesItsReservationToAPublisherWaitingForIt)
+{
+    SwitchVICWriteReservation held = {};
+    switch_vic_surface_reserve_write(&surface, &held);
+    ASSERT_NE(held.lease, nullptr);
+    std::promise<void> parked;
+    std::atomic<bool> once{false};
+    duringWaitingReserve = [&] {
+        if (!once.exchange(true))
+            parked.set_value();
+    };
+    auto published = std::async(std::launch::async, [&] { return switch_native_surface_publish(&surface, &picture); });
+    ASSERT_EQ(parked.get_future().wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    duringWaitingReserve = {};
+    auto entered = std::async(std::launch::async, [&] {
+        SwitchVICSurfaceAccess access = {};
+        const int error = switch_vic_surface_access_destination(&surface, &access, &held);
+        switch_vic_surface_release_access(&access);
+        return error;
+    });
+    const bool waited = entered.wait_for(std::chrono::seconds(5)) != std::future_status::ready;
+    if (waited)
+        switch_vic_surface_release_write(&held);  // frees the publication, and the job behind it, so the test can end
+    EXPECT_FALSE(waited) << "the job waited for a gate whose holder waited for the job's reservation";
+    EXPECT_EQ(published.get(), 0);
+    EXPECT_EQ(entered.get(), 0);
+    EXPECT_EQ(held.lease, nullptr);
+    EXPECT_EQ(logical.writers, 0u);
+}
+
+// An IOSurface CPU lock of the destination while the job is queued enters as a CPU user and then waits for the job's
+// reservation. The record is refused rather than waiting for that user to leave, and the job copies.
+TEST_F(TurnedSurface, ARecordUnderTheJobsReservationDoesNotWaitForACpuLockWaitingOnIt)
+{
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
+    SwitchVICWriteReservation held = {};
+    switch_vic_surface_reserve_write(&turned, &held);
+    ASSERT_NE(held.lease, nullptr);
+    auto locker = std::async(std::launch::async, [&] {
+        if (SwitchMemoryAttachment::enterCpu(turnedMemory, false))
+            return -1;
+        switch_gpu_cpu_lease *lease = nullptr;
+        const int error = acquire(&replacement, kWrite, &lease);
+        if (!error)
+            switch_gpu_backing_cpu_release_owned(&lease, 0);
+        SwitchMemoryAttachment::leaveCpu(turnedMemory);
+        return error;
+    });
+    while (!SwitchMemoryAttachment::cpuUsers(turnedMemory))
+        std::this_thread::yield();
+    SwitchNativeSurfaceView source = {};
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &source, false), 0);
+    auto published = std::async(std::launch::async, [&] {
+        return switch_native_surface_publish_turned(&turned, source, op, 0, nullptr, nullptr, &held);
+    });
+    const bool waited = published.wait_for(std::chrono::seconds(5)) != std::future_status::ready;
+    switch_vic_surface_release_write(&held);  // the job's end; also frees a publication stuck behind the locker
+    EXPECT_FALSE(waited) << "the record waited on a CPU user that waits on the job's reservation";
+    EXPECT_EQ(published.get(), waited ? 0 : -16);
+    EXPECT_EQ(locker.get(), 0);
+    switch_native_surface_release(&source);
+    SwitchNativeSurfaceView view = {};
+    if (!waited) {
+        EXPECT_NE(switch_native_surface_acquire(&turned, &view, false, true), 0);
+    }
+    EXPECT_EQ(replacement.writers, 0u);
 }
 
 // The display's acquire of a turned destination (SwitchLandscapeSelection.h): the decoder's picture, read-leased, with

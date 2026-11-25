@@ -557,6 +557,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//kits/SwitchDMA:SwitchDcache.h",
+        "//kits/SwitchRefusal:SwitchRefusal.h",
     ],
     additional_compiler_inputs = [
         "//drivers/TegraVIC:SwitchVICTransform.cpp",
@@ -952,5 +953,11 @@ host_test(
 host_test(
     name = "switch_vic_first_failure_source_test",
     srcs = ["switch_vic_first_failure_source_test.cpp"],
+    data = ["//drivers/TegraVIC:TegraVICUserClient.cpp"],
+)
+
+host_test(
+    name = "switch_vic_reservation_source_test",
+    srcs = ["switch_vic_reservation_source_test.cpp"],
     data = ["//drivers/TegraVIC:TegraVICUserClient.cpp"],
 )
