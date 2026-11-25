@@ -98,6 +98,12 @@ static bool archivesAnswer(SwitchMetalComputeState *s, SwitchMetalFunction *f, c
     if (answer != gm20b::ArchiveAnswer::Missed ||
         gm20bPackHoldsKernels(gm20b::computeStateKey(s->_air, s->_constants, s->_maxThreads, s->_multipleOfWidth)))
         return true;
+    os_log_error(
+        gm20bLog(),
+        "SwitchMetal: %{public}s: no compute state %{public}s (%{public}s): the archives it lists miss %016llx "
+        "under FailOnBinaryArchiveMiss: %{public}s",
+        getprogname(), f.name.UTF8String ?: "-", s->_direct.label.UTF8String ?: "-",
+        (unsigned long long)gm20b::Pack::fnv(key.data(), key.size()), key.c_str());
     if (error)
         *error = gm20bArchiveMissError(f.name, "compute");
     return false;
@@ -112,6 +118,9 @@ static bool compilerAnswers(SwitchMetalComputeState *s, SwitchMetalFunction *f, 
     const std::string key = gm20b::computeStateKey(s->_air, s->_constants, s->_maxThreads, s->_multipleOfWidth);
     gm20bNoteMiss("compute", gm20b::Pack::fnv(key.data(), key.size()), key, s->_direct.label);
     if (!gRM->completion || !gRM->completion->facts(f, s->_direct, key, made, failure)) {
+        os_log_error(
+            gm20bLog(), "SwitchMetal: %{public}s: no compute state %{public}s (%{public}s): %{public}s: %{public}s",
+            getprogname(), f.name.UTF8String ?: "-", s->_direct.label.UTF8String ?: "-", failure.c_str(), key.c_str());
         if (error)
             *error = gm20bCreationError(failure);
         return false;
