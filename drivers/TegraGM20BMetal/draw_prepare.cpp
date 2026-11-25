@@ -912,6 +912,8 @@ const char *Device::fetchBarrierName(FetchBarrier b)
         return "psonly";
     case FetchBarrier::None:
         return "none";
+    case FetchBarrier::Tiles:
+        return "tiles";
     }
     return "?";
 }
@@ -929,6 +931,13 @@ void RenderEncoder::fetchBarrier(Push &p)
         return;
     case Device::FetchBarrier::PixelShaderOnly:
         p.m(PIXEL_SHADER_BARRIER, 0);
+        return;
+    case Device::FetchBarrier::Tiles:
+        // the tile barrier orders nothing while the tiled cache is off: the shipped barrier there, as ddaf1338f had it
+        if (!tiledCache(dev_->k_.info()))
+            break;
+        p.m(SWITCH_NVB197_TILED_CACHE_BARRIER, 0);
+        p.m(INVALIDATE_TEXTURE_DATA_CACHE_PIXEL_ORDERED, 0);
         return;
     case Device::FetchBarrier::PixelShader:
         break;

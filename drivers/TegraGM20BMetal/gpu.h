@@ -1222,12 +1222,15 @@ public:
     // (TegraGM20BMetal.mm's debug notifications): PIXEL_SHADER_BARRIER and 0x0f74 (the shipped form), WAIT_FOR_IDLE and
     // INVALIDATE_TEXTURE_DATA_CACHE_NO_WFI (the form before it, the stress's reference), PIXEL_SHADER_BARRIER alone, which
     // tells a hang's method apart, and none at all. PixelShaderOnly and None let a fetching draw read colors its
-    // predecessors have not finished writing: measurements of what the barrier costs, never shipped
+    // predecessors have not finished writing: measurements of what the barrier costs, never shipped. Tiles is deko3d's
+    // DkBarrier_Tiles (TILED_CACHE_BARRIER, then the pixel-ordered texture invalidate), which orders a tile's earlier
+    // pixels without draining the binned batch: the A/B of learn/deko3d.md probe P1, judged by the device
     enum class FetchBarrier : uint8_t {
         PixelShader,
         WaitForIdle,
         PixelShaderOnly,
-        None
+        None,
+        Tiles
     };
 
     std::atomic<FetchBarrier> fetchBarrier{FetchBarrier::PixelShader};
