@@ -119,7 +119,12 @@ int attach(const tegra_smmu_attachment &attachment, char *line, size_t size)
     int ret = -1;
     const uint32_t was = r32(attachment.asidReg);
     const bool retained = tegra_smmu_attachments_find(&gAttached, attachment.asidReg) != UINT32_MAX;
-    if (!retained && translatedElsewhere(attachment, was)) {
+    if (attachment.alwaysTranslated && !(was & ASID_ENABLE)) {
+        // The MC behind these registers is not one whose GPUB always translates (an emulator's): a[34] = 1 accesses
+        // would not go through any directory programmed here.
+        snprintf(line, size, "the swgroup's enable reads 0 (MC %#x = %#x), but Tegra X1 hardwires it to 1",
+                 attachment.asidReg, was);
+    } else if (!retained && translatedElsewhere(attachment, was)) {
         snprintf(line, size, "the swgroup is already translated by ASID %u (MC %#x = %#x)", was & 0x7f,
                  attachment.asidReg, was);
     } else {

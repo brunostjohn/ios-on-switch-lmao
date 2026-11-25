@@ -22,6 +22,7 @@ std::map<uint32_t, uint32_t> gRegisters;
 std::map<uint32_t, uint32_t> gPtbByAsid;
 std::vector<uint32_t> gDetached;
 unsigned gDmaLive;
+bool gGpubHardwired = true;
 uint64_t gNextDmaPa = 0x90000000ULL;
 
 class SmmuEngineTest : public testing::Test {
@@ -173,6 +174,20 @@ TEST_F(SmmuEngineTest, GpubsResetValueRefusesAPlainAttachButNotAnAlwaysTranslate
     tegra_smmu_detach(TEGRA_SMMU_ASID_GPU_LOW, TEGRA_SMMU_GPUB_ASID);
 }
 
+// The emulator's MC keeps what is written to 0xaac; its GPU never sends a[34] = 1 through a directory.
+TEST_F(SmmuEngineTest, AGpubWhoseEnableReadsZeroIsNotTegraX1sAndIsNotAttached)
+{
+    gRegisters[TEGRA_SMMU_TRANSLATION_ENABLE_2] = kGpubBits2;
+    gGpubHardwired = false;
+    char line[160] = {};
+    EXPECT_EQ(tegra_smmu_attach_split(kGpubAsids, kGpubPtbs, TEGRA_SMMU_GPUB_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_2,
+                                      kGpubBits2, true, line, sizeof(line)),
+              -1);
+    gGpubHardwired = true;
+    EXPECT_STREQ(line, "the swgroup's enable reads 0 (MC 0xaac = 0), but Tegra X1 hardwires it to 1");
+    EXPECT_EQ(gRegisters[TEGRA_SMMU_GPUB_ASID], 0u);
+}
+
 TEST_F(SmmuEngineTest, AGpubAttachWithOtherDirectoriesOrSomeoneElsesTranslationIsRefused)
 {
     gRegisters[TEGRA_SMMU_TRANSLATION_ENABLE_2] = kGpubBits2;
@@ -277,7 +292,7 @@ uint32_t switch_mmio_model_read32(uintptr_t address)
     const uint32_t offset = static_cast<uint32_t>(address - kMc);
     if (offset == kPtbData)
         return gPtbByAsid[gRegisters[kPtbAsid] & 0x7fu];
-    if (offset == TEGRA_SMMU_GPUB_ASID)
+    if (offset == TEGRA_SMMU_GPUB_ASID && gGpubHardwired)
         return gRegisters[offset] | 1u << 31;
     return gRegisters[offset];
 }
