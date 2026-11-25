@@ -180,8 +180,12 @@ Cost measure(uint32_t runs, uint32_t pages, uint32_t commands)
         const double holds = double(instructions() - bare);
         if (spent < fewest) {
             fewest = spent;
-            cost = {spent / commands, double(env.io.writes) / commands, double(env.io.reads) / commands,
-                    double(env.cleans) / commands, locks, holds / commands};
+            cost = {spent / commands,
+                    double(env.io.writes) / commands,
+                    double(env.io.reads) / commands,
+                    double(env.cleans) / commands,
+                    locks,
+                    holds / commands};
         }
     }
     return cost;
