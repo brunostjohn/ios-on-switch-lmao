@@ -111,13 +111,24 @@ constexpr bool switch_gpu_spares_give_back(int pressure_level, uint64_t availabl
 constexpr uint16_t SWITCH_GPU_SPARE_DEPTH_MAX = 8;
 
 // The deepest a class of `bytes` is kept: its spares together a quarter of the pool's cap at most, one at least, so a
-// class of 16-32 MiB (a render server's dedicated chunk) learns a depth without crowding out the smaller ones
-inline uint16_t switch_gpu_spare_depth_cap(uint64_t bytes, uint64_t cap)
+// class of 16-32 MiB (a render server's dedicated chunk) learns a depth without crowding out the smaller ones. Two at
+// least in a class the compositor allocates from, whose last spare other clients leave to it
+// (switch_gpu_spare_kept_for_compositor): their miss teaches the class a second spare.
+inline uint16_t switch_gpu_spare_depth_cap(uint64_t bytes, uint64_t cap, bool compositor_class = false)
 {
+	const uint16_t floor = compositor_class ? 2 : 1;
 	const uint64_t most = bytes ? cap / 4 / bytes : SWITCH_GPU_SPARE_DEPTH_MAX;
-	return most < 1                            ? 1
+	return most < floor                        ? floor
 	       : most < SWITCH_GPU_SPARE_DEPTH_MAX ? uint16_t(most)
 						   : SWITCH_GPU_SPARE_DEPTH_MAX;
+}
+
+// Whether a BoAlloc passes over a class's ready spares: it is not the compositor's, the compositor allocates from the
+// class, and one spare is left. The warm 24 MiB spare kept for backboardd's Photos attachment is then still there for
+// it, and the other client's miss raises the class's depth so the refill makes it one too.
+constexpr bool switch_gpu_spare_kept_for_compositor(bool critical, bool compositor_class, uint16_t ready)
+{
+	return !critical && compositor_class && ready <= 1;
 }
 
 // The class to give a ready spare back from so that a class below its depth fits under the cap: the largest class

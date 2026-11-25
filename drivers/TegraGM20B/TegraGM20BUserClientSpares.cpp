@@ -383,9 +383,11 @@ Spare *spareTake(uint64_t bytes, bool critical)
 	if (!p || c >= kClasses)
 		return nullptr;
 	IOLockLock(p->lock);
+	if (critical)
+		p->compositorClass[c] = true;
 	Spare *s = nullptr;
 	for (uint32_t d = c; d < kClasses && switch_gpu_spare_serves(c, d) && !s; d++) {
-		if (!critical && p->target[d] >= 2 && p->count[d] <= 1)
+		if (switch_gpu_spare_kept_for_compositor(critical, p->compositorClass[d], p->count[d]))
 			continue;
 		s = p->ready[d];
 		if (s) {
@@ -401,7 +403,8 @@ Spare *spareTake(uint64_t bytes, bool critical)
 						 memoryPressure());
 		const uint16_t learnt = switch_gpu_spare_depth_after_miss(
 			p->target[c], classBytes(c) <= kLearnMaxBytes, why);
-		const uint16_t most = switch_gpu_spare_depth_cap(classBytes(c), kSpareCapBytes);
+		const uint16_t most =
+			switch_gpu_spare_depth_cap(classBytes(c), kSpareCapBytes, p->compositorClass[c]);
 		p->target[c] = learnt < most ? learnt : most;
 #if TGM_STATS
 		++p->misses[why];
