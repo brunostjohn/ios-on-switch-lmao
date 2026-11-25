@@ -200,6 +200,7 @@ TESTS: dict[str, bool] = {
             'gpu.compile.answer_latency',
             'gpu.compile.shared_stages',
             'gpu.sched.long_draw_bands',
+            'gpu.sched.band_planar_instanced',
             'gpu.sched.long_dispatch_pieces',
             'gpu.sched.probe_cta',
             'gpu.sched.probe_macro_wfi',

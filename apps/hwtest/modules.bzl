@@ -527,6 +527,7 @@ TESTS_NATIVE_SRCS = [
 
 TESTS_PATHS_SRCS = [
     "tests/AheadMovesTest.swift",
+    "tests/BandsPlanarInstancedTest.swift",
     "tests/CommitLatencyPathTest.swift",
     "tests/DispatchPiecesTest.swift",
     "tests/DrawBandsTest.swift",
