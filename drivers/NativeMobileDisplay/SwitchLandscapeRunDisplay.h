@@ -12,6 +12,7 @@ struct LandscapeRunState {
     uint32_t want, savedCrc;
     bool holding, overlayLatched, charging, failNext;
     uint32_t portraitFrames;  // read in any context (landscapeReady)
+    uint32_t copyFrames;      // read in any context (the kick's direct choice)
     SwitchVICTurnCounters vicAt;
     uint64_t displayTicks;
 };
@@ -29,7 +30,8 @@ IOReturn landscapeRunCall(const SwitchDisplayLandscapeRequest &request, SwitchDi
     if (!getWorkLoop())
         return kIOReturnNotReady;
     if (request.op != SWITCH_DISPLAY_LANDSCAPE_SAMPLE && request.op != SWITCH_DISPLAY_LANDSCAPE_QUERY &&
-        request.op != SWITCH_DISPLAY_LANDSCAPE_FAIL && request.op != SWITCH_DISPLAY_LANDSCAPE_PORTRAIT)
+        request.op != SWITCH_DISPLAY_LANDSCAPE_FAIL && request.op != SWITCH_DISPLAY_LANDSCAPE_PORTRAIT &&
+        request.op != SWITCH_DISPLAY_LANDSCAPE_COPY)
         return kIOReturnBadArgument;
     windowProbeOnLoop([&] {
         if (request.op == SWITCH_DISPLAY_LANDSCAPE_FAIL)
@@ -39,6 +41,12 @@ IOReturn landscapeRunCall(const SwitchDisplayLandscapeRequest &request, SwitchDi
                                         ? request.value
                                         : SWITCH_DISPLAY_LANDSCAPE_PORTRAIT_FRAMES;
             __atomic_store_n(&landscapeRun.portraitFrames, frames, __ATOMIC_RELAXED);
+        }
+        if (request.op == SWITCH_DISPLAY_LANDSCAPE_COPY) {
+            const uint32_t frames = request.value < SWITCH_DISPLAY_LANDSCAPE_PORTRAIT_FRAMES
+                                        ? request.value
+                                        : SWITCH_DISPLAY_LANDSCAPE_PORTRAIT_FRAMES;
+            __atomic_store_n(&landscapeRun.copyFrames, frames, __ATOMIC_RELAXED);
         }
         const int error = request.op == SWITCH_DISPLAY_LANDSCAPE_SAMPLE ? landscapeRunStart(request.value) : 0;
         reply = landscapeRun.reply;
@@ -105,12 +113,19 @@ static bool landscapeRunHoldsPortrait()
     return __atomic_load_n(&landscapeRun.portraitFrames, __ATOMIC_RELAXED) != 0;
 }
 
+static bool landscapeRunHoldsCopy()
+{
+    return __atomic_load_n(&landscapeRun.copyFrames, __ATOMIC_RELAXED) != 0;
+}
+
 // Every DC A frame end, last.
 void landscapeRunFrameEnd()
 {
     LandscapeRunState &s = landscapeRun;
     if (const uint32_t portrait = __atomic_load_n(&s.portraitFrames, __ATOMIC_RELAXED))
         __atomic_store_n(&s.portraitFrames, portrait - 1, __ATOMIC_RELAXED);
+    if (const uint32_t copy = __atomic_load_n(&s.copyFrames, __ATOMIC_RELAXED))
+        __atomic_store_n(&s.copyFrames, copy - 1, __ATOMIC_RELAXED);
     if (!landscapeRunSampling())
         return;
     SwitchDisplayLandscapeReply &r = s.reply;
@@ -190,6 +205,11 @@ static bool landscapeRunFailsEnter()
 }
 
 static bool landscapeRunHoldsPortrait()
+{
+    return false;
+}
+
+static bool landscapeRunHoldsCopy()
 {
     return false;
 }
