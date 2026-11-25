@@ -1,8 +1,8 @@
 load("//bazel/lint:defs.bzl", "lint_files")
+load("//kernel/rules:driver_flags.bzl", "IPSW_KIND_FLAGS")
 
 # drivers/SwitchTouch: moved from out/native-a57/root-v1/tree/drivers/SwitchTouch by the layout move.
 load("//kernel/rules:kernel.bzl", "kernel_driver", "kernel_headers")
-load("//kernel/rules:driver_flags.bzl", "IPSW_KIND_FLAGS")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -32,14 +32,14 @@ kernel_headers()
 # archive), so it is a late object.
 kernel_driver(
     name = "SwitchTouch",
-    # SwitchHID.h's report lengths are the IPSW kind's.
-    copts = IPSW_KIND_FLAGS,
     srcs = [
         "SwitchHIDDevice.cpp",
         "SwitchHIDFastPath.cpp",
         "SwitchTouch.cpp",
     ],
     abi = ["IOHIDDevice"],
+    # SwitchHID.h's report lengths are the IPSW kind's.
+    copts = IPSW_KIND_FLAGS,
     hdr_deps = [
         "drivers/ArmGIC",
         "drivers/NativeMobileDisplay",

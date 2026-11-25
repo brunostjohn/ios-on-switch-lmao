@@ -104,6 +104,7 @@ bool openForClient(IOService *, IOService *, IOOptionBits, OSDictionary *, void 
 
 void closeForClient(IOService *, IOService *, void *, IOOptionBits)
 {}
+
 // NOLINTEND(misc-const-correctness)
 
 void publishPlugIn(IOService *driver)

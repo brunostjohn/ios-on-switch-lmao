@@ -98,6 +98,7 @@ TEST(SwitchMotionSource, DeviceMotionTakesTheFastPath)
     EXPECT_THAT(fast, HasSubstr("\"IOHIDFamily.kext/PlugIns/IOHIDLib.plugin\""));
     EXPECT_THAT(fast, HasSubstr("#if SWITCH_IPSW_KIND_24B119 || SWITCH_IPSW_KIND_21H461"));
     EXPECT_THAT(fast, HasSubstr("gIOFirstPublishNotification"));
-    const std::string create = Body(SourceText("../../SwitchTouch/SwitchHIDDevice.cpp"), "IOService *switch_hid_create(");
+    const std::string create =
+        Body(SourceText("../../SwitchTouch/SwitchHIDDevice.cpp"), "IOService *switch_hid_create(");
     EXPECT_LT(create.find("switch_hid_fastpath_watch(device)"), create.find("device->start(resources)"));
 }
