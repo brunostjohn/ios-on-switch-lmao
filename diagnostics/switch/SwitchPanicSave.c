@@ -470,8 +470,8 @@ static void draw_status(void)
                  reboot_s);
     } else if (save_on && region && photo_window) {
         snprintf(line, sizeof(line),
-                 "Saved in RAM. Photograph now: warm reset %us after the panic, then hekate writes "
-                 "SD:/L4T_panic.txt, iPadOS /private/var/Switch/panic-*.log. Holding POWER loses it.",
+                 "Saved in RAM; POWER loses it. Photograph now: warm reset %us after the panic, then hekate "
+                 "writes SD:/L4T_panic.txt, iPadOS /private/var/Switch/panic-*.log.",
                  reboot_s);
     } else if (save_on && region) {
         snprintf(line, sizeof(line),
