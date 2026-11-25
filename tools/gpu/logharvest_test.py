@@ -325,6 +325,19 @@ class LogHarvestTest(unittest.TestCase):
         self.assertEqual(report.left['SwitchHWTest', 'our own app'], 0)
         self.assertEqual([logharvest.make_pack.state_key(line) for line in new], [CA])
 
+    def test_the_release_miss_line_carries_a_state_whole(self):
+        records = [
+            record(BOOT, 'x', 'OS version: 24B119'),
+            record(
+                BOOT,
+                'SwitchHWTest',
+                f'SwitchMetal: SwitchHWTest: a render state the pack lacks 0000000000000015 ({CA_LABEL}): {CA}',
+            ),
+        ]
+        boots = logharvest.read_boots(records)
+        new, _ = logharvest.harvest(boots, CORPUS.splitlines(), None, Path('/nonexistent'))
+        self.assertEqual([logharvest.make_pack.state_key(line) for line in new], [CA])
+
     def test_left_out_states_are_counted_by_reason(self):
         boots = logharvest.read_boots(boot_records())
         _, report = logharvest.harvest(boots, CORPUS.splitlines(), None, Path('/nonexistent'))
