@@ -31,6 +31,7 @@ enum Probe : uint32_t {
     kOverlayBlockYuv = 1,
     kColumnScanYuv = 2,
     kOffsetCrop = 3,
+    kColumnScanBgra = 7,
 };
 
 struct Plan;
@@ -46,6 +47,8 @@ inline const char *probeName(Probe p)
         return "V3";
     case kOffsetCrop:
         return "V5c";
+    case kColumnScanBgra:
+        return "V6";
     default:
         return extraProbeName(p);
     }
@@ -292,6 +295,18 @@ inline Window columnWindow(const Surface &s, bool hDirection, bool vDirection = 
     return w;
 }
 
+// Landscape BGRA `s` column-scanned onto the panel at 1:1 by window B: as columnWindow, with H counting 4 bytes a pixel.
+inline Window columnWindowBgra(const Surface &s, bool hDirection, bool vDirection = false)
+{
+    Window w = rowWindow(s);
+    w.options = native_planes::kWinEnable | native_column_scan::kScanColumn |
+                (hDirection ? native_column_scan::kHDirection : 0) | (vDirection ? native_column_scan::kVDirection : 0);
+    w.prescaled = s.width << 16 | s.height * 4;
+    w.hOffset = hDirection ? s.width * 4 - 1 : 0;
+    w.vOffset = vDirection ? s.height - 1 : 0;
+    return w;
+}
+
 // --- The plans ---------------------------------------------------------------------------------------------------------
 enum Check : uint8_t {
     kShown,   // a reference
@@ -407,6 +422,34 @@ inline Plan columnScanYuvPlan()
     return p;
 }
 
+// V6: window B column-scanning a landscape BGRA surface in the GPU's 16-GOB blocks (a Metal layer Core Animation would
+// hand the display unturned), both quarter turns, against the picture turned in memory and scanned row by row on window
+// B. scan_b_pixel starts H_DIRECTION at the last pixel's first byte instead of L4T's last byte; it is reported, not
+// judged, so a run says which of the two the window takes.
+inline Plan columnScanBgraPlan()
+{
+    Plan p;
+    p.probe = kColumnScanBgra;
+    p.mismatchFails = false;
+    const Window off;
+    const Surface land = p.surface[addSurface(p, bgra(kLandscapeWidth, kLandscapeHeight, 4))];
+    Surface turned = bgra(kPanelWidth, kPanelHeight, kPitch);
+    turned.content = Content::Turned;
+    turned = p.surface[addSurface(p, turned)];
+    Surface turnedV = bgra(kPanelWidth, kPanelHeight, kPitch);
+    turnedV.content = Content::TurnedV;
+    turnedV = p.surface[addSurface(p, turnedV)];
+    Window pixelStart = columnWindowBgra(land, true);
+    pixelStart.hOffset = (land.width - 1) * 4;
+    addStep(p, "turned_b", off, rowWindow(turned));
+    addStep(p, "scan_b", off, columnWindowBgra(land, true), kEqual, 0);
+    addStep(p, "control", off, columnWindowBgra(land, false), kDiffer, 0);
+    addStep(p, "turned_v", off, rowWindow(turnedV));
+    addStep(p, "scan_v", off, columnWindowBgra(land, false, true), kEqual, 3);
+    addStep(p, "scan_b_pixel", off, pixelStart, kReport, 0);
+    return p;
+}
+
 inline Plan offsetCropPlan()
 {
     Plan p;
@@ -445,6 +488,9 @@ inline bool planOf(Probe probe, Plan &plan)
         return true;
     case kOffsetCrop:
         plan = offsetCropPlan();
+        return true;
+    case kColumnScanBgra:
+        plan = columnScanBgraPlan();
         return true;
     default:
         return extraPlanOf(probe, plan);

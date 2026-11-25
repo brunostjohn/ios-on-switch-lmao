@@ -134,7 +134,7 @@ uint32_t crcOf(const std::vector<uint32_t> &panel)
 std::vector<Plan> allPlans()
 {
     std::vector<Plan> plans;
-    for (const Probe p : {kOverlayBlockYuv, kColumnScanYuv, kOffsetCrop}) {
+    for (const Probe p : {kOverlayBlockYuv, kColumnScanYuv, kOffsetCrop, kColumnScanBgra}) {
         Plan plan;
         EXPECT_TRUE(planOf(p, plan));
         plans.push_back(plan);
@@ -239,7 +239,7 @@ TEST(WindowProbePlans, WindowBsHeaviestStepPassesTheMemoryMath)
         SCOPED_TRACE(probeName(plan.probe));
         native_planes::Image image;
         ASSERT_TRUE(heaviestOverlay(plan.step, plan.steps, image));
-        EXPECT_EQ(image.yuv, plan.probe != kColumnScanYuv);  // V3's is the UI's BGRA
+        EXPECT_EQ(image.yuv, plan.probe != kColumnScanYuv && plan.probe != kColumnScanBgra);  // V3's: the UI's BGRA
         const uint32_t bpp = image.yuv ? 1 : 4;
         switch_display_memory_window out = {};
         EXPECT_TRUE(switch_display::memoryWindow(
@@ -277,6 +277,25 @@ TEST(WindowProbePlans, ColumnScanRegistersFollowTheColumnScanRules)
     EXPECT_EQ(w.hOffset, 1279u);  // (x + w) * Bpp - 1
     EXPECT_EQ(w.kind, 0x12u);     // BLOCK, 2-GOB blocks: NVDEC's
     EXPECT_EQ(w.lineStride, 1280u << 16 | 1280u);
+}
+
+TEST(WindowProbePlans, BgraColumnScanRegistersFollowTheColumnScanRules)
+{
+    Plan plan;
+    ASSERT_TRUE(planOf(kColumnScanBgra, plan));
+    const Window &w = plan.step[1].b;
+    EXPECT_FALSE(plan.step[1].a.on());
+    EXPECT_EQ(w.options, 0x40000011u);            // WIN_ENABLE, SCAN_COLUMN, H_DIRECTION; no CSC, no filter at 1:1
+    EXPECT_EQ(w.prescaled, 1280u << 16 | 2880u);  // V: the source width, H: its height in bytes
+    EXPECT_EQ(w.size, 1280u << 16 | 720u);
+    EXPECT_EQ(w.dda, 0x10001000u);
+    EXPECT_EQ(w.hOffset, 5119u);  // (x + w) * Bpp - 1
+    EXPECT_EQ(w.kind, 0x42u);     // BLOCK, 16-GOB blocks: the GPU's render targets
+    EXPECT_EQ(w.lineStride, 5120u);
+    EXPECT_EQ(plan.step[4].b.vOffset, 719u);
+    EXPECT_EQ(plan.step[4].b.options, 0x40000014u);  // SCAN_COLUMN, V_DIRECTION: transform 4
+    EXPECT_EQ(plan.step[5].b.hOffset, 5116u);
+    EXPECT_EQ(plan.step[5].check, kReport);
 }
 
 // --- The run -------------------------------------------------------------------------------------------------------

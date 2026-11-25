@@ -589,6 +589,7 @@ TESTS: dict[str, bool] = {
     'display.x1.overlay_block_yuv': False,
     'display.x1.column_scan_yuv': False,
     'display.x1.offset_crop': False,
+    'display.x1.column_scan_bgra': False,
     'display.x1.window_formats': False,
     'display.x1.window_wide': False,
     'display.x1.window_palette': False,
