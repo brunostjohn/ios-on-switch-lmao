@@ -137,8 +137,9 @@ public enum JPEGSurfaceDecode {
     /// (JpegLayoutGuess)
     public static func explained(_ got: [UInt8], _ surface: IOSurface) -> String {
         JpegLayoutGuess.best(
-            got, width: surface.width, height: surface.height, allocation: surface.allocationSize, tolerance: tolerance,
-            picture: byte
+            got,
+            JpegLayoutGuess.Surface(width: surface.width, height: surface.height, allocation: surface.allocationSize),
+            tolerance: tolerance, picture: byte
         )
     }
 

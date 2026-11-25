@@ -24,7 +24,10 @@ final class JpegLayoutGuessTests: XCTestCase {
     }
 
     func guess(_ got: [UInt8], _ side: Int) -> String {
-        JpegLayoutGuess.best(got, width: side, height: side, allocation: 1 << 24, tolerance: 0, picture: Self.picture)
+        JpegLayoutGuess.best(
+            got, JpegLayoutGuess.Surface(width: side, height: side, allocation: 1 << 24), tolerance: 0,
+            picture: Self.picture
+        )
     }
 
     func testEachArrangementIsToldApartAtNoBytesOff() {

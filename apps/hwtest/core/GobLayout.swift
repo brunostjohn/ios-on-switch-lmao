@@ -31,6 +31,19 @@ public enum GobLayout {
 /// 64-byte pitch, at the bare width and at a 256-byte pitch; GOB blocks of 2^0 to 2^5 GOBs; 16-byte by 16-row tiles.
 /// The answer is `<candidate>:<bytes off>` for the closest, so a near miss is told from no match.
 public enum JpegLayoutGuess {
+    /// A 4-byte-texel surface's size and allocation, which bounds the block height GM20B can give it
+    public struct Surface {
+        public let width: Int
+        public let height: Int
+        public let allocation: Int
+
+        public init(width: Int, height: Int, allocation: Int) {
+            self.width = width
+            self.height = height
+            self.allocation = allocation
+        }
+    }
+
     public struct Candidate {
         public let name: String
         public let offset: (Int, Int) -> Int
@@ -53,14 +66,15 @@ public enum JpegLayoutGuess {
         return list
     }
 
-    /// `got`: the read's rows, `width` 4-byte texels each; `picture`: the byte the decode should leave at (x, y, c);
+    /// `got`: the read's rows, `surface.width` 4-byte texels each; `picture`: the byte the decode should leave at (x, y, c);
     /// `tolerance`: how far a byte may be and still match.
     public static func best(
-        _ got: [UInt8], width: Int, height: Int, allocation: Int, tolerance: Int, picture: (Int, Int, Int) -> UInt8
+        _ got: [UInt8], _ surface: Surface, tolerance: Int, picture: (Int, Int, Int) -> UInt8
     ) -> String {
+        let (width, height) = (surface.width, surface.height)
         let rowBytes = (width * 4 + 63) & ~63
         var decided = GobLayout.blockHeightLog2(height)
-        while decided > 0, rowBytes * GobLayout.blockRows(height, decided) > allocation { decided -= 1 }
+        while decided > 0, rowBytes * GobLayout.blockRows(height, decided) > surface.allocation { decided -= 1 }
         let span = max(rowBytes, (width * 4 + 255) & ~255) * GobLayout.blockRows(height, 5)
         var best = ("-", Int.max)
         for candidate in candidates(width: width, rowBytes: rowBytes) {
