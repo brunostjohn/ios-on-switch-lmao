@@ -133,39 +133,13 @@ public enum JPEGSurfaceDecode {
         return kr == KERN_SUCCESS ? nil : TestFailure("selector 7 \(String(UInt32(bitPattern: kr), radix: 16))")
     }
 
-    /// The layout NVJPG's writes match when a read is wrong: the picture written as rows (`rows`) or into blocks of 2^n
-    /// GOBs (`y<n>`), read back through the blocks GM20B decided for the surface (TegraGM20BLayoutFit.h); `-` for none
+    /// The arrangement NVJPG's writes match when a read is wrong, and how many bytes even that one leaves off
+    /// (JpegLayoutGuess)
     public static func explained(_ got: [UInt8], _ surface: IOSurface) -> String {
-        let rowBytes = (surface.width * 4 + 63) & ~63
-        var decided = SurfaceCrossProcessTest.blockHeightLog2(surface.height)
-        while decided > 0, rowBytes * blockRows(surface.height, decided) > surface.allocationSize { decided -= 1 }
-        var best = ("-", Int.max)
-        for candidate in [-1, 0, 1, 2, 3, 4, 5] {
-            var memory = [UInt8](repeating: 0, count: rowBytes * blockRows(surface.height, 5))
-            for y in 0 ..< surface.height {
-                for xB in 0 ..< (surface.width * 4) {
-                    let at =
-                        candidate < 0
-                            ? y * rowBytes + xB : SurfaceCrossProcessTest.gobOffset(rowBytes, candidate, xB, y)
-                    if at < memory.count { memory[at] = byte(xB / 4, y, xB % 4) }
-                }
-            }
-            var wrong = 0
-            for y in 0 ..< surface.height {
-                for xB in 0 ..< (surface.width * 4) {
-                    let at = SurfaceCrossProcessTest.gobOffset(rowBytes, decided, xB, y)
-                    let read = at < memory.count ? Int(memory[at]) : 0
-                    if abs(read - Int(got[y * surface.width * 4 + xB])) > tolerance { wrong += 1 }
-                }
-            }
-            if wrong < best.1 { best = (candidate < 0 ? "rows" : "y\(candidate)", wrong) }
-        }
-        return best.1 == 0 ? best.0 : "-"
-    }
-
-    static func blockRows(_ height: Int, _ yLog2: Int) -> Int {
-        let block = 8 << yLog2
-        return (height + block - 1) / block * block
+        JpegLayoutGuess.best(
+            got, width: surface.width, height: surface.height, allocation: surface.allocationSize, tolerance: tolerance,
+            picture: byte
+        )
     }
 
     /// Bytes further than `tolerance` from the picture, and the first one's offset in the rows (-1: none)
