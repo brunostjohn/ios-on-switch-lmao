@@ -44,10 +44,6 @@ TEST(CryptexSource, ReadsGoToTheCardWithoutACopy)
     EXPECT_EQ(Count(read, "writeBytes("), 1u);
     EXPECT_THAT(read, HasSubstr("buffer->writeBytes(done + k, gZeros, kImageBlock)"));
     EXPECT_THAT(read, HasSubstr("return kIOReturnNotWritable;"));
-    // Direct reads keep the caller's I/O priority class untouched; cache reads only use high when the caller asked for
-    // it.
-    EXPECT_THAT(read, HasSubstr("attributes && (attributes->priority >> 6) == 0 ? kIOStoragePriorityHigh : "
-                                "kIOStoragePriorityDefault"));
     const std::string done = body("void pieceDone(void *, void *parameter, IOReturn status, UInt64 actualByteCount)");
     EXPECT_THAT(done, HasSubstr("thread_call_enter(p->call);"));
     EXPECT_THAT(done, Not(HasSubstr("client.action")));
@@ -83,6 +79,24 @@ TEST(CryptexSource, SmallReadsGoThroughTheCache)
     EXPECT_THAT(job, HasSubstr("gCache.cache.finished(j->window, j->first, j->count, j->status == kIOReturnSuccess)"));
     EXPECT_LT(job.find("IOLockUnlock(gCache.lock);"), job.find("pieceDone(nullptr, ready->owner,"));
     EXPECT_THAT(job, Not(HasSubstr("client.action")));
+}
+
+// A window fill reads at its first requester's priority; a better requester that joins it raises it through the SD
+// device's doSetPriority, outside gCache.lock (the SD queueLock is never taken under it). XNU's own busy-page
+// reprioritisation reaches the same code through this device's doSetPriority.
+TEST(CryptexSource, JoinedFillsAreRaised)
+{
+    const std::string read = body("IOReturn SwitchCryptexDevice::doAsyncReadWrite(");
+    EXPECT_THAT(read, HasSubstr("cachePriority = attributes ? attributes->priority : kIOStoragePriorityDefault;"));
+    const std::string plan = body("bool SwitchCryptexDevice::cacheRead(");
+    EXPECT_LT(plan.find("joined = p->cache.joined;"), plan.find("IOLockUnlock(gCache.lock);"));
+    EXPECT_LT(plan.find("IOLockUnlock(gCache.lock);"), plan.find("raiseQueuedReads(block, count, priority);"));
+    EXPECT_LT(plan.find("raiseQueuedReads(block, count, priority);"), plan.find("pieceDone(this, p,"));
+    const std::string raise = body("void SwitchCryptexDevice::raiseQueuedReads(");
+    EXPECT_THAT(raise, HasSubstr("sd->doSetPriority(pieces, n, priority);"));
+    EXPECT_THAT(raise, Not(HasSubstr("gCache.lock")));
+    const std::string set = body("IOReturn SwitchCryptexDevice::doSetPriority(");
+    EXPECT_LT(set.find("return kIOReturnBadArgument;"), set.find("raiseQueuedReads("));
 }
 
 TEST(CryptexSource, MapIsCheckedAndFallsBackToDiskImages)

@@ -63,6 +63,7 @@ struct SwitchCacheRequest {
     uint32_t windows;  // windows held
     uint32_t waiting;  // windows it still waits on: ready to copy at 0
     bool failed;       // a read of a block it needed failed: complete it with an error
+    bool joined;       // it waits on blocks a read issued before its plan is filling (another request's priority)
 };
 
 // One read for the caller to issue: blocks [first, first + count) of `window`, into window->bytes at first * 4 KiB.
@@ -137,7 +138,7 @@ public:
     {
         *count = 0;
         r->windows = r->waiting = 0;
-        r->failed = false;
+        r->failed = r->joined = false;
         r->nextReady = nullptr;
         if (!blocks || first >= imageBlocks || blocks > imageBlocks - first)
             return refuse(r, 0);
@@ -167,6 +168,8 @@ public:
         }
         for (uint32_t i = 0; i < n; ++i) {
             SwitchWindow *w = r->window[i];
+            if (r->need[i] & w->reading)
+                r->joined = true;
             if (mode == kReadAround)
                 *count += emit(w, within(w->tag, imageBlocks) & ~(w->valid | w->reading), false, reads + *count);
             const uint32_t pending = r->need[i] & ~w->valid;

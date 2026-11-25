@@ -121,6 +121,30 @@ TEST(CryptexCache, AColdMissReadsItsWholeWindowOnceAndNeighboursWaitForIt)
     EXPECT_EQ(rig.cache.check(), nullptr);
 }
 
+// A request waiting on a read another request issued is joined (SwitchCryptex.cpp then raises that read to its
+// priority); one waiting only on reads its own plan issued is not.
+TEST(CryptexCache, ARequestWaitingOnAnotherRequestsReadIsJoined)
+{
+    Rig rig(4, 8, 100, 10);
+    SwitchCacheRead reads[32];
+    uint32_t n = 0;
+    SwitchCacheRequest a{}, b{}, c{}, d{};
+    ASSERT_TRUE(rig.cache.plan(&a, 0, 2, 1, 100, SwitchCache::kReadAround, reads, 32, &n));
+    EXPECT_FALSE(a.joined);
+    SwitchCacheRead none[32];
+    uint32_t m = 0;
+    ASSERT_TRUE(rig.cache.plan(&b, 0, 3, 2, 100, SwitchCache::kReadAround, none, 32, &m));
+    EXPECT_TRUE(b.joined);
+    ASSERT_TRUE(rig.cache.plan(&c, 0, 0, kSwitchWindowBlocks, 100, SwitchCache::kCoveredOnly, none, 32, &m));
+    EXPECT_TRUE(c.joined);
+    for (SwitchCacheRequest *r : list(rig.finish(reads[0], true)))
+        rig.cache.release(r, true);
+    ASSERT_TRUE(rig.cache.plan(&d, 0, 4, 1, 100, SwitchCache::kReadAround, none, 32, &m));
+    EXPECT_FALSE(d.joined) << "every block it needs is held";
+    rig.cache.release(&d, true);
+    EXPECT_EQ(rig.cache.check(), nullptr);
+}
+
 TEST(CryptexCache, TheLastWindowStopsAtTheImageEnd)
 {
     constexpr uint64_t kImage = kSwitchWindowBlocks + 3;
