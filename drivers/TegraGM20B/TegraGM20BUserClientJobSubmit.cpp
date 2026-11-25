@@ -296,6 +296,9 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 					job.uses[u].access |=
 						switch_gpu_claim_use(claim, job.uses[u].access);
 				if (access & TegraGM20BSurfaceWrite) {
+					switch_gpu_backing *native = bo->nativeView->native;
+					job.writes[writeCount++] = {native, 0, 0};
+					scanoutWrites |= switch_gpu_backing_scanned(native) != 0;
 					unlockedWrites = true;
 					if (bo->nativeView->owner)
 						job.nativeWritten[nativeWrittenCount++] =
