@@ -8,7 +8,7 @@
  *   - a capture: capture.c's from switch_recorder_store_begin to store.c's push, then the store's pending list (its
  *     mutex) until the store's thread call takes it off the list, then that call's alone until it is freed;
  *   - the store's slot table, deflate stream and output buffer: the store's thread call alone (THREAD_CALL_OPTIONS_ONCE:
- *     it never runs twice at once).
+ *     it never runs twice at once); the capture thread's deflate stream: that thread alone.
  */
 #ifndef SWITCH_RECORDER_STATE_H
 #define SWITCH_RECORDER_STATE_H
@@ -26,6 +26,8 @@ struct switch_recorder_capture {
     size_t shot_alloc;
     void *ring; /* a RAW_VERSION1 header page, then head.ring_bytes - its size of events */
     size_t ring_alloc;
+    void *packed; /* the stackshot and the ring as the file's body (head.deflate_bytes), the two freed */
+    size_t packed_alloc;
 };
 
 /* recorder.c */
@@ -38,6 +40,7 @@ uint64_t switch_recorder_expected(void);
 void switch_recorder_expect_done(uint64_t tid);
 
 /* capture.c */
+bool switch_recorder_capture_init(void);
 void switch_recorder_capture_call(void *p0, void *p1);
 
 /* store.c */
@@ -49,5 +52,7 @@ void switch_recorder_store_push(struct switch_recorder_capture *c);
 void switch_recorder_capture_free(struct switch_recorder_capture *c);
 void switch_recorder_store_counts(struct switch_recorder_counts *n, struct switch_recorder_last *last);
 bool switch_recorder_store_quiet(void);
+uint64_t switch_recorder_store_held(void);
+void switch_recorder_store_packed(void);
 
 #endif

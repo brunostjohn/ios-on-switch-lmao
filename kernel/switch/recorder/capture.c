@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * The flight recorder's capture (--//kernel:recorder; state.h): a thread call at THREAD_CALL_PRIORITY_HIGH that turns
- * each due ask into a capture in memory, a stackshot and the ring, and hands it to the store (store.c), which writes it
- * later at low priority. On 25 Nov the dump's thread call, at the user priority, ran 13 s after its trigger at boot and
- * then kept tracing off for the 56 s it took to write the ring: a capture must not wait behind the load it records,
- * and must not write while the moment it records lasts.
+ * The flight recorder's capture (--//kernel:recorder; state.h): a kernel thread at SWITCH_RECORDER_CAPTURE_PRI, woken
+ * by recorder.c's thread call, that turns each due ask into a capture in memory, a stackshot and the ring, and hands
+ * it to the store (store.c), which writes it later at low priority. On 25 Nov the dump's thread call, at the user
+ * priority, ran 13 s after its trigger at boot and then kept tracing off for the 56 s it took to write the ring: a
+ * capture must not wait behind the load it records, and must not write while the moment it records lasts.
  *
  * A hang's stackshot is taken first, while its thread still hangs; any other's after the ring, which the stackshot's
  * stop of every CPU (about 3 ms on 25 Nov) would otherwise end. Reading the ring turns tracing off for that read alone
@@ -20,6 +20,10 @@
 #include <kern/clock.h>
 #include <kern/debug.h>
 #include <kern/kalloc.h>
+#include <kern/sched_prim.h>
+#include <kern/thread.h>
+#include <libkern/zlib.h>
+#include <os/atomic_private.h>
 #include <os/log.h>
 #include <string.h>
 #include <uuid/uuid.h>
@@ -28,7 +32,12 @@
 
 #if SWITCH_RECORDER
 
-#define SWITCH_RECORDER_SHOT_BYTES (4u << 20)
+/* Fixed priority, between SpringBoard's main thread and the boot's launch storm (47 and under, where the 25 Nov dump's
+ * thread call starved) and the display's primary thread and the render server (54, 55), which it must not delay. */
+#define SWITCH_RECORDER_CAPTURE_PRI 52
+#define SWITCH_RECORDER_WBITS       15
+#define SWITCH_RECORDER_MEMLEVEL    8
+#define SWITCH_RECORDER_SHOT_BYTES  (4u << 20)
 #define SWITCH_RECORDER_SHOT_MAX   (8u << 20) /* stackshot's cap (max_tracebuf_size) */
 #define SWITCH_RECORDER_SHOT_FLAGS                                                                 \
     ((uint64_t)(STACKSHOT_KCDATA_FORMAT | STACKSHOT_SAVE_LOADINFO | STACKSHOT_SAVE_KEXT_LOADINFO | \
@@ -38,8 +47,18 @@
 #define SWITCH_RECORDER_RAW_V1   0x55aa0101u
 
 extern struct kd_buffer kd_buffer_trace;
+/* osfmk's, private to Mach; bsd/kern/kern_memorystatus.c declares it the same way for its own threads. */
+extern kern_return_t kernel_thread_start_priority(thread_continue_t continuation, void *parameter, integer_t priority,
+                                                  thread_t *new_thread);
 extern uuid_string_t bootsessionuuid_string;
 extern char kernel_uuid_string[37];
+
+static uint32_t switch_recorder_wake; /* set by the thread call, taken by the capture thread */
+static z_stream switch_recorder_zs;   /* the capture thread's alone */
+static uint8_t *switch_recorder_zmem;
+static size_t switch_recorder_zmem_size, switch_recorder_zmem_used;
+
+static void switch_recorder_capture_loop(void *param, wait_result_t wr);
 
 struct switch_recorder_raw_header {
     int32_t version_no;
@@ -163,6 +182,119 @@ static void switch_recorder_ring(struct switch_recorder_capture *c, bool mark)
     c->ring_alloc = want;
 }
 
+static void *switch_recorder_zalloc(__unused void *opaque, u_int items, u_int size)
+{
+    const size_t n = ((size_t)items * size + 15) & ~(size_t)15;
+    void *p = NULL;
+
+    if (switch_recorder_zmem_used + n > switch_recorder_zmem_size) {
+        return NULL;
+    }
+    p = switch_recorder_zmem + switch_recorder_zmem_used;
+    switch_recorder_zmem_used += n;
+    return p;
+}
+
+static void switch_recorder_zfree(__unused void *opaque, __unused void *ptr)
+{
+}
+
+/* recorder.c's start: the capture thread and its deflate stream. */
+bool switch_recorder_capture_init(void)
+{
+    thread_t thread = THREAD_NULL;
+
+    switch_recorder_zmem_size = zlib_deflate_memory_size(SWITCH_RECORDER_WBITS, SWITCH_RECORDER_MEMLEVEL) + 256;
+    if ((switch_recorder_zmem = kalloc_data(switch_recorder_zmem_size, Z_WAITOK)) == NULL) {
+        return false;
+    }
+    switch_recorder_zs.zalloc = switch_recorder_zalloc;
+    switch_recorder_zs.zfree = switch_recorder_zfree;
+    if (deflateInit2(&switch_recorder_zs, Z_BEST_SPEED, Z_DEFLATED, -SWITCH_RECORDER_WBITS, SWITCH_RECORDER_MEMLEVEL,
+                     Z_DEFAULT_STRATEGY) != Z_OK ||
+        kernel_thread_start_priority(switch_recorder_capture_loop, NULL, SWITCH_RECORDER_CAPTURE_PRI, &thread) !=
+            KERN_SUCCESS) {
+        return false;
+    }
+    thread_set_thread_name(thread, "switch_recorder_capture");
+    thread_deallocate(thread);
+    return true;
+}
+
+/* One input through the stream into buf (size bytes, total_out of it used): false when it does not fit. A single
+ * deflate call consumes all the input unless the output fills; the last input's finishes the stream. */
+static bool switch_recorder_squeeze(uint8_t *buf, size_t size, const void *in, size_t bytes, bool last)
+{
+    int z = Z_OK;
+
+    switch_recorder_zs.next_in = (Bytef *)(uintptr_t)in;
+    switch_recorder_zs.avail_in = (uInt)bytes;
+    switch_recorder_zs.next_out = buf + switch_recorder_zs.total_out;
+    switch_recorder_zs.avail_out = (uInt)(size - switch_recorder_zs.total_out);
+    z = deflate(&switch_recorder_zs, last ? Z_FINISH : Z_NO_FLUSH);
+    if (last) {
+        return z == Z_STREAM_END;
+    }
+    return (z == Z_OK || z == Z_BUF_ERROR) && switch_recorder_zs.avail_in == 0;
+}
+
+/*
+ * The store is behind (recorder.h's switch_recorder_compress_now): the capture becomes the file's body in memory now,
+ * at this thread's priority, and its stackshot and ring are freed. Left as it is when the body does not fit in a
+ * third of its size (the store compresses it later).
+ */
+static void switch_recorder_pack(struct switch_recorder_capture *c, bool mark)
+{
+    struct switch_recorder_head *h = &c->head;
+    const size_t raw = c->shot_alloc + c->ring_alloc;
+    const size_t size = (size_t)(h->shot_bytes + h->ring_bytes) / 3 + (64u << 10);
+    const uint64_t held = switch_recorder_store_held();
+    uint8_t *buf = NULL;
+
+    if (!switch_recorder_compress_now(held > raw ? held - raw : 0, raw) ||
+        !switch_recorder_store_room(size, mark)) {
+        return;
+    }
+    if ((buf = kalloc_data(size, Z_WAITOK)) == NULL) {
+        switch_recorder_store_unroom(size);
+        return;
+    }
+    (void)deflateReset(&switch_recorder_zs);
+    if (!switch_recorder_squeeze(buf, size, c->shot, h->shot_bytes, c->ring == NULL) ||
+        (c->ring != NULL && !switch_recorder_squeeze(buf, size, c->ring, h->ring_bytes, true))) {
+        kfree_data(buf, size);
+        switch_recorder_store_unroom(size);
+        return;
+    }
+    h->deflate_bytes = switch_recorder_zs.total_out;
+    if ((c->packed = kalloc_data((size_t)h->deflate_bytes, Z_WAITOK)) == NULL ||
+        !switch_recorder_store_room((size_t)h->deflate_bytes, mark)) {
+        if (c->packed != NULL) {
+            kfree_data(c->packed, (size_t)h->deflate_bytes);
+            c->packed = NULL;
+        }
+        h->deflate_bytes = 0;
+        kfree_data(buf, size);
+        switch_recorder_store_unroom(size);
+        return;
+    }
+    memcpy(c->packed, buf, (size_t)h->deflate_bytes);
+    c->packed_alloc = (size_t)h->deflate_bytes;
+    kfree_data(buf, size);
+    switch_recorder_store_unroom(size);
+    if (c->shot != NULL) {
+        kfree_data(c->shot, c->shot_alloc);
+        c->shot = NULL;
+    }
+    if (c->ring != NULL) {
+        kfree_data(c->ring, c->ring_alloc);
+        c->ring = NULL;
+    }
+    switch_recorder_store_unroom(raw);
+    c->shot_alloc = c->ring_alloc = 0;
+    switch_recorder_store_packed();
+}
+
 static const char *switch_recorder_lost(uint32_t why)
 {
     switch (why) {
@@ -202,6 +334,7 @@ static void switch_recorder_capture_one(const struct switch_recorder_ask *ask)
         switch_recorder_shot(c, mark);
     }
     c->head.done_at = mach_absolute_time();
+    switch_recorder_pack(c, mark);
     h = c->head;
     switch_recorder_store_push(c);
     os_log(OS_LOG_DEFAULT,
@@ -212,14 +345,30 @@ static void switch_recorder_capture_one(const struct switch_recorder_ask *ask)
            switch_recorder_us(h.at, h.done_at), switch_recorder_lost(h.ring_lost));
 }
 
+/* recorder.c's thread call, at an ask's due time or a refusal: wakes the capture thread. */
 void switch_recorder_capture_call(__unused void *p0, __unused void *p1)
+{
+    os_atomic_store(&switch_recorder_wake, 1, release);
+    thread_wakeup((event_t)&switch_recorder_wake);
+}
+
+/* The wake flag is set before the wakeup and taken after the wait is asserted, so no wake between them is lost. */
+static void switch_recorder_capture_loop(__unused void *param, __unused wait_result_t wr)
 {
     struct switch_recorder_ask ask;
 
-    switch_recorder_log_refusals();
-    while (switch_recorder_next(mach_absolute_time(), &ask)) {
-        switch_recorder_capture_one(&ask);
+    for (;;) {
+        assert_wait((event_t)&switch_recorder_wake, THREAD_UNINT);
+        if (os_atomic_xchg(&switch_recorder_wake, 0, acquire) == 0) {
+            (void)thread_block(THREAD_CONTINUE_NULL);
+            continue;
+        }
+        clear_wait(current_thread(), THREAD_AWAKENED);
         switch_recorder_log_refusals();
+        while (switch_recorder_next(mach_absolute_time(), &ask)) {
+            switch_recorder_capture_one(&ask);
+            switch_recorder_log_refusals();
+        }
     }
 }
 

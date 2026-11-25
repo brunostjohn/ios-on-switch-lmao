@@ -1,18 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * The flight recorder's store (--//kernel:recorder; state.h): captures wait in memory until a thread call at
- * THREAD_CALL_PRIORITY_LOW, which runs only when nothing else wants a core, compresses each into one file in mobile's
- * CrashReporter at the throttled I/O tier, so `idevicecrashreport` fetches it and the write never competes with the
- * moment it recorded. A file holds one capture: a text header (recorder.h's switch_recorder_header) written last, so a
- * file pulled mid-write reads as incomplete, then the stackshot and the ring as one raw deflate stream.
+ * THREAD_CALL_PRIORITY_LOW, which runs only when nothing else wants a core, compresses each (unless the capture thread
+ * already did) into one file in mobile's CrashReporter, so `idevicecrashreport` fetches it and the write never competes
+ * with the moment it recorded. The call asks for IOPOL_THROTTLE; whether a kernel_task thread's I/O gets that tier is
+ * open (the 25 Nov pack warm's reads, asked the same, went out at tier 0). A file holds one capture: a text header
+ * (recorder.h's switch_recorder_header) written last, so a file pulled mid-write reads as incomplete, then the
+ * stackshot and the ring as one raw deflate stream.
  *
  * The files are slots Switch-recorder-<n>.rec, as many as a tenth of the volume's free space holds
  * (switch_recorder_slots_for, read once a boot), and recorder.h's switch_recorder_pick_slot chooses which one the next
  * capture replaces: other boots' first, then this boot's automatic captures past its first ones; an owner's mark is
  * never replaced by an automatic capture.
  *
- * Memory: the captures waiting hold at most `budget` bytes. A mark that does not fit takes the ring of the newest
- * automatic capture still waiting (it keeps its stackshot), so a store starved of CPU at boot still keeps every mark.
+ * Memory: the captures waiting hold at most `budget` bytes. While the store is behind, the capture thread compresses
+ * new captures itself (recorder.h's switch_recorder_compress_now), so about five times as many fit; a mark that still
+ * does not fit takes the ring of the newest automatic capture still waiting (it keeps its stackshot).
  */
 
 #include <switch/recorder.h>
@@ -42,8 +45,8 @@
 #define STORE_DIR       "/private/var/mobile/Library/Logs/CrashReporter"
 #define STORE_MOBILE    501
 #define STORE_OUT       (256u << 10) /* compressed bytes written at a time */
-#define STORE_RAM_SHARE 64u          /* captures in memory take at most 1/64 of it */
-#define STORE_RAM_MAX   (64ull << 20)
+#define STORE_RAM_SHARE 32u          /* captures in memory take at most 1/32 of it */
+#define STORE_RAM_MAX   (96ull << 20)
 #define STORE_WBITS     15
 #define STORE_MEMLEVEL  8
 
@@ -60,7 +63,7 @@ static struct {
     uint32_t pending, capturing, seq;
     bool writing;
     uint64_t room;
-    uint32_t dumps, dropped, no_ring;
+    uint32_t dumps, dropped, no_ring, packed;
     unsigned nslots;
     struct switch_recorder_last last;
     /* The store call's alone. */
@@ -168,6 +171,9 @@ void switch_recorder_capture_free(struct switch_recorder_capture *c)
     if (c->ring != NULL) {
         kfree_data(c->ring, c->ring_alloc);
     }
+    if (c->packed != NULL) {
+        kfree_data(c->packed, c->packed_alloc);
+    }
     kfree_type(struct switch_recorder_capture, c);
 }
 
@@ -190,6 +196,23 @@ void switch_recorder_store_push(struct switch_recorder_capture *c)
     thread_call_enter(store.call);
 }
 
+uint64_t switch_recorder_store_held(void)
+{
+    uint64_t held = 0;
+
+    lck_mtx_lock(&store_mtx);
+    held = store.room;
+    lck_mtx_unlock(&store_mtx);
+    return held;
+}
+
+void switch_recorder_store_packed(void)
+{
+    lck_mtx_lock(&store_mtx);
+    store.packed++;
+    lck_mtx_unlock(&store_mtx);
+}
+
 bool switch_recorder_store_quiet(void)
 {
     bool quiet = false;
@@ -207,6 +230,7 @@ void switch_recorder_store_counts(struct switch_recorder_counts *n, struct switc
     n->dumps = store.dumps;
     n->dropped = store.dropped;
     n->no_ring = store.no_ring;
+    n->packed = store.packed;
     n->pending = store.pending;
     n->pending_bytes = store.room;
     n->slots = store.nslots;
@@ -219,21 +243,23 @@ static void store_path(char *out, size_t size, unsigned slot)
     snprintf(out, size, STORE_DIR "/Switch-recorder-%u.rec", slot);
 }
 
-/* The slots for this boot: as many as the volume's free space holds, each as its file's header says. */
-static void store_scan(vfs_context_t ctx)
+/* The slots for this boot: as many as the volume's free space holds, each as its file's header says. False while the
+ * directory cannot be found (Data not mounted yet): the next capture scans again. */
+static bool store_scan(vfs_context_t ctx)
 {
     char path[96], h[SWITCH_RECORDER_HEADER];
     uint64_t free_bytes = 0;
     vnode_t dvp = NULLVP;
+    mount_t mp = NULL;
 
-    store.scanned = true;
-    if (vnode_lookup(STORE_DIR, 0, &dvp, ctx) == 0) {
-        mount_t mp = vnode_mount(dvp);
-
-        (void)vfs_update_vfsstat(mp, ctx, VFS_KERNEL_EVENT);
-        free_bytes = (uint64_t)vfs_statfs(mp)->f_bavail * vfs_statfs(mp)->f_bsize;
-        vnode_put(dvp);
+    if (vnode_lookup(STORE_DIR, 0, &dvp, ctx) != 0) {
+        return false;
     }
+    mp = vnode_mount(dvp);
+    (void)vfs_update_vfsstat(mp, ctx, VFS_KERNEL_EVENT);
+    free_bytes = (uint64_t)vfs_statfs(mp)->f_bavail * vfs_statfs(mp)->f_bsize;
+    vnode_put(dvp);
+    store.scanned = true;
     store.nslots = switch_recorder_slots_for(free_bytes);
     for (unsigned i = 0; i < store.nslots; i++) {
         vnode_t vp = NULLVP;
@@ -253,6 +279,7 @@ static void store_scan(vfs_context_t ctx)
     }
     os_log(OS_LOG_DEFAULT, "SwitchRecorder: store of %u slots in " STORE_DIR " (%llu MiB free)", store.nslots,
            free_bytes >> 20);
+    return true;
 }
 
 /* An empty file at path, owned by mobile and readable by all, left open for writing in *vp. */
@@ -336,8 +363,10 @@ static bool store_persist(struct switch_recorder_capture *c, struct switch_recor
     int error = 0;
     int slot = 0;
 
-    if (!store.scanned) {
-        store_scan(ctx);
+    if (!store.scanned && !store_scan(ctx)) {
+        os_log(OS_LOG_DEFAULT, "SwitchRecorder: capture %u (%s) dropped: no " STORE_DIR " yet", h->seq,
+               switch_recorder_reason_name(h->reason));
+        return false;
     }
     if ((slot = switch_recorder_pick_slot(store.slots, store.nslots, mark)) < 0) {
         os_log(OS_LOG_DEFAULT, "SwitchRecorder: capture %u (%s) dropped: every slot holds a mark or a kept capture",
@@ -349,10 +378,15 @@ static bool store_persist(struct switch_recorder_capture *c, struct switch_recor
         os_log(OS_LOG_DEFAULT, "SwitchRecorder: capture %u: %s refused (%d)", h->seq, path, error);
         return false;
     }
-    (void)deflateReset(&store.zs);
-    error = store_deflate(vp, c->shot, h->shot_bytes, c->ring == NULL, &at, ctx, &zticks, &wticks);
-    if (error == 0 && c->ring != NULL) {
-        error = store_deflate(vp, c->ring, h->ring_bytes, true, &at, ctx, &zticks, &wticks);
+    if (c->packed != NULL) {
+        error = store_write(vp, c->packed, h->deflate_bytes, at, ctx, &wticks);
+        at += (off_t)h->deflate_bytes;
+    } else {
+        (void)deflateReset(&store.zs);
+        error = store_deflate(vp, c->shot, h->shot_bytes, c->ring == NULL, &at, ctx, &zticks, &wticks);
+        if (error == 0 && c->ring != NULL) {
+            error = store_deflate(vp, c->ring, h->ring_bytes, true, &at, ctx, &zticks, &wticks);
+        }
     }
     h->deflate_bytes = (uint64_t)at - SWITCH_RECORDER_HEADER;
     if (error == 0 && !switch_recorder_header(text, h)) {
@@ -405,7 +439,7 @@ static void store_call(__unused thread_call_param_t p0, __unused thread_call_par
         lck_mtx_lock(&store_mtx);
         store.writing = false;
         store.pending--;
-        store.room -= c->shot_alloc + c->ring_alloc;
+        store.room -= c->shot_alloc + c->ring_alloc + c->packed_alloc;
         if (written) {
             store.dumps++;
             store.last = last;

@@ -58,20 +58,26 @@ switch_recorder_ask Ask(uint32_t reason, uint64_t at_ms, uint64_t tid = 0, uint3
     return {.at = at_ms * kMs, .tid = tid, .value = 0, .reason = reason, .seq = seq};
 }
 
-constexpr uint64_t kGap = SWITCH_RECORDER_GAP_NS;
 constexpr uint64_t kTail = SWITCH_RECORDER_TAIL_NS;
+
+switch_recorder_recent Spacing()
+{
+    switch_recorder_recent r{};
+    r.gap = SWITCH_RECORDER_GAP_NS;
+    r.repeat = SWITCH_RECORDER_REPEAT_NS;
+    return r;
+}
 
 // 25 Nov: the owner pressed Capture eight times in the first 3.5 minutes after boot, each while a dump was being
 // written or inside the gap after one; none was dumped. A mark is taken whatever else waits.
 TEST(XnuRecorder, EveryMarkIsTakenWhileAnAutomaticCaptureWaits)
 {
     switch_recorder_asks q{};
-    const uint64_t last_auto = 1000 * kMs;
+    switch_recorder_recent r = Spacing();
 
-    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 1000, 606)), 0, kGap, 0, 0),
-              SWITCH_RECORDER_ADMITTED);
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 1000, 606)), &r, 0, 0), SWITCH_RECORDER_ADMITTED);
     for (uint32_t i = 0; i < 8; i++) {
-        EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_MARK, 1100 + i * 100)), last_auto, kGap, 0, 0),
+        EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_MARK, 1100 + i * 100)), &r, 0, 0),
                   SWITCH_RECORDER_ADMITTED)
             << "mark " << i;
     }
@@ -81,62 +87,80 @@ TEST(XnuRecorder, EveryMarkIsTakenWhileAnAutomaticCaptureWaits)
 TEST(XnuRecorder, OneAutomaticAskWaitsAtATimeAndAHangReplacesALowerOne)
 {
     switch_recorder_asks q{};
+    switch_recorder_recent r = Spacing();
+    r.gap = r.repeat = 0;
 
-    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_LATE_FRAME, 100)), 0, kGap, 0, 0),
-              SWITCH_RECORDER_ADMITTED);
-    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_LATE_FRAME, 120)), 0, kGap, 0, 0),
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_LATE_FRAME, 100)), &r, 0, 0), SWITCH_RECORDER_ADMITTED);
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_LATE_FRAME, 120)), &r, 0, 0),
               SWITCH_RECORDER_REFUSED_QUEUED);
-    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 150, 514)), 0, kGap, 0, 0),
-              SWITCH_RECORDER_ADMITTED);
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 150, 514)), &r, 0, 0), SWITCH_RECORDER_ADMITTED);
     ASSERT_EQ(q.n, 1u);
     EXPECT_EQ(q.a[0].reason, SWITCH_RECORDER_HANG) << "the hang took the late frame's place";
-    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 160, 606)), 0, kGap, 0, 0),
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 160, 606)), &r, 0, 0),
               SWITCH_RECORDER_REFUSED_QUEUED);
 }
 
-TEST(XnuRecorder, AnAutomaticAskInsideTheGapIsRefusedUnlessHWTestHoldsItsThread)
+// A capture stops every CPU for its stackshot and takes 16 MiB: another thread's waits 2 s after any automatic one,
+// the same thread's same reason 10 s.
+TEST(XnuRecorder, AutomaticCapturesAreSpacedAndHWTestsHeldThreadGoesThrough)
 {
     switch_recorder_asks q{};
-    const uint64_t last = 1000 * kMs;
-    const uint64_t until = last + SWITCH_RECORDER_EXPECT_NS;
+    switch_recorder_recent r = Spacing();
+    const uint64_t until = (1000 + 5000) * kMs;
 
-    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 1000 + 1999, 514)), last, kGap, 0, 0),
+    ASSERT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 1000, 514)), &r, 0, 0), SWITCH_RECORDER_ADMITTED);
+    q = {};
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 2999, 606)), &r, 0, 0),
               SWITCH_RECORDER_REFUSED_GAP);
-    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 1000 + 1500, 514)), last, kGap, 77, until),
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 3000, 606)), &r, 0, 0), SWITCH_RECORDER_ADMITTED)
+        << "another thread after the gap";
+    q = {};
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 6000, 514)), &r, 0, 0),
+              SWITCH_RECORDER_REFUSED_REPEAT);
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_LATE_FRAME, 6000, 514)), &r, 0, 0),
+              SWITCH_RECORDER_ADMITTED)
+        << "the same thread for another reason";
+    q = {};
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 11000, 514)), &r, 0, 0),
+              SWITCH_RECORDER_ADMITTED)
+        << "the same thread and reason after the repeat";
+    q = {};
+    switch_recorder_recent held = Spacing();
+    ASSERT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 1000, 514)), &held, 0, 0),
+              SWITCH_RECORDER_ADMITTED);
+    q = {};
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 1500, 514)), &held, 77, until),
               SWITCH_RECORDER_REFUSED_HELD)
         << "another thread while HW Test holds the recorder";
-    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 1000 + 1500, 77)), last, kGap, 77, until),
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 1500, 77)), &held, 77, until),
               SWITCH_RECORDER_ADMITTED)
-        << "the held thread goes through the gap";
-    switch_recorder_asks fresh{};
-    EXPECT_EQ(switch_recorder_admit(&fresh, ptr(Ask(SWITCH_RECORDER_HANG, 1000 + 2000, 514)), last, kGap, 0, 0),
-              SWITCH_RECORDER_ADMITTED);
+        << "the held thread goes through the spacing";
 }
 
 TEST(XnuRecorder, AFullQueueOfMarksRefusesTheNextAndAMarkTakesTheAutomaticPlace)
 {
     switch_recorder_asks q{};
+    switch_recorder_recent r = Spacing();
 
-    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 1, 9)), 0, kGap, 0, 0), SWITCH_RECORDER_ADMITTED);
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 1, 9)), &r, 0, 0), SWITCH_RECORDER_ADMITTED);
     for (uint32_t i = 1; i < SWITCH_RECORDER_ASKS; i++) {
-        ASSERT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_MARK, 10 + i)), 0, kGap, 0, 0),
-                  SWITCH_RECORDER_ADMITTED);
+        ASSERT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_MARK, 10 + i)), &r, 0, 0), SWITCH_RECORDER_ADMITTED);
     }
-    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_MARK, 500)), 0, kGap, 0, 0), SWITCH_RECORDER_ADMITTED);
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_MARK, 500)), &r, 0, 0), SWITCH_RECORDER_ADMITTED);
     EXPECT_EQ(switch_recorder_queued_auto(&q), q.n) << "the mark took the hang's place";
-    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_MARK, 600)), 0, kGap, 0, 0),
-              SWITCH_RECORDER_REFUSED_FULL);
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_MARK, 600)), &r, 0, 0), SWITCH_RECORDER_REFUSED_FULL);
 }
 
 TEST(XnuRecorder, MarksAreCapturedFirstAndATailWaitsItsTime)
 {
     switch_recorder_asks q{};
+    switch_recorder_recent r = Spacing();
     switch_recorder_ask got{};
     uint64_t next = 0;
 
-    switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_LATE_FRAME, 100, 0, 1)), 0, kGap, 0, 0);
-    switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_MARK, 150, 0, 2)), 0, kGap, 0, 0);
-    switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_MARK, 120, 0, 3)), 0, kGap, 0, 0);
+    switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_LATE_FRAME, 100, 0, 1)), &r, 0, 0);
+    switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_MARK, 150, 0, 2)), &r, 0, 0);
+    switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_MARK, 120, 0, 3)), &r, 0, 0);
     EXPECT_FALSE(switch_recorder_take(&q, 200 * kMs, kTail, &got, &next)) << "no tail has passed";
     EXPECT_EQ(next, 100 * kMs + kTail);
     ASSERT_TRUE(switch_recorder_take(&q, 500 * kMs, kTail, &got, &next));
@@ -147,8 +171,8 @@ TEST(XnuRecorder, MarksAreCapturedFirstAndATailWaitsItsTime)
     EXPECT_EQ(got.seq, 1u);
     EXPECT_FALSE(switch_recorder_take(&q, 500 * kMs, kTail, &got, &next));
     EXPECT_EQ(next, UINT64_MAX);
-    switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 600, 514, 4)), 0, kGap, 0, 0);
-    EXPECT_TRUE(switch_recorder_take(&q, 600 * kMs, kTail, &got, &next)) << "a hang is due at once";
+    switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 9000, 514, 4)), &r, 0, 0);
+    EXPECT_TRUE(switch_recorder_take(&q, 9000 * kMs, kTail, &got, &next)) << "a hang is due at once";
 }
 
 // dumpcost.txt, 25 Nov: one refused hang fired ten times in 1.25 s, once per scheduler tick.
@@ -162,6 +186,32 @@ TEST(XnuRecorder, ARefusalIsLoggedOnceASecondPerReasonAndThread)
     }
     EXPECT_TRUE(switch_recorder_refusal_logged(&seen, ptr(Ask(SWITCH_RECORDER_HANG, 2100, 606)), 1000 * kMs));
     EXPECT_TRUE(switch_recorder_refusal_logged(&seen, ptr(Ask(SWITCH_RECORDER_HANG, 2150, 514)), 1000 * kMs));
+    EXPECT_FALSE(switch_recorder_refusal_logged(&seen, ptr(Ask(SWITCH_RECORDER_HANG, 2275, 606)), 1000 * kMs))
+        << "two threads alternating are each once a second";
+    EXPECT_FALSE(switch_recorder_refusal_logged(&seen, ptr(Ask(SWITCH_RECORDER_HANG, 2400, 514)), 1000 * kMs));
+}
+
+// 25 Nov: no core was idle for minutes after boot, so the store's low-priority call would not run, and raw captures
+// (a 16 MiB ring and a stackshot) would fill its memory after a few. Once one waits unwritten, the capture thread
+// compresses the next ones itself (capture.c: a buffer of a third of the input while it deflates, then its exact size;
+// a ring compressed 5.0x on 25 Nov).
+TEST(XnuRecorder, TheCaptureThreadCompressesOnceTheStoreIsBehind)
+{
+    const uint64_t raw = (16ull << 20) + (1ull << 20), deflating = raw / 3 + (64ull << 10);
+    const uint64_t packed = raw / 5, budget = 96ull << 20;
+    uint64_t held = 0;
+    unsigned kept = 0;
+
+    EXPECT_FALSE(switch_recorder_compress_now(0, raw)) << "a store that keeps up compresses at its own priority";
+    for (;;) {
+        const bool now = switch_recorder_compress_now(held, raw);
+        if (held + raw + (now ? deflating : 0) > budget) {
+            break;
+        }
+        held += now ? packed : raw;
+        kept++;
+    }
+    EXPECT_GE(kept, 15u) << "captures kept with their ring while the store is starved";
 }
 
 switch_recorder_slot Slot(bool this_boot, bool mark, uint32_t seq)
@@ -286,7 +336,8 @@ TEST(XnuRecorder, TheStatusLineCarriesTheCostAndEveryFieldHWTestReads)
     const std::string s(line);
     for (const char *want :
          {"ring=262144 ", "span_ms=2000 ", "events_s=131072 ", "samples=12345 ", "captures=5 ", "dumps=4 ",
-          "pending=1 ", "pending_kib=19456 ", "skipped=2 ", "held=1 ", "taken=0 ", "hang=3 ", "late_frame=0 ", "mark=0 ",
+          "pending=1 ", "pending_kib=19456 ", "skipped=2 ", "repeat=0 ", "held=1 ", "packed=0 ", "taken=0 ", "hang=3 ",
+          "late_frame=0 ", "mark=0 ",
           "last_reason=hang ", "last_tid=77 ", "last_value=412 ", "last_slot=3 ", "last_trace_bytes=16777216 ",
           "last_shot_bytes=1048576 ", "last_latency_us=50000 ", "last_trace_us=0 ", "last_shot_us=0 ",
           "last_age_ms=1500"}) {

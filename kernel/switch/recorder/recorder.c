@@ -5,9 +5,9 @@
  * kdebug_startup starts kdebug wrapping through SWITCH_RECORDER_RING_EVENTS with switch_recorder_filter, owned by the
  * kernel, and kperf_init_early starts kperf's timer sampling the running thread's kernel and user stacks into the same
  * ring (sample.c). A trigger records one tracepoint and asks for a capture: recorder.h's switch_recorder_admit takes
- * every owner's mark, and an automatic ask (a late frame, a hang, slow work) when no other waits, outside the gap of
- * the last automatic one. A taken ask arms the capture call (capture.c, high priority) for its due time; a refused one
- * is kept for that call to log. The capture copies the ring and a stackshot into memory in tens of milliseconds, and
+ * every owner's mark, and an automatic ask (a late frame, a hang, slow work) when no other waits and recent ones are far
+ * enough apart. A taken ask arms the capture call for its due time, which wakes capture.c's thread; a refused one is
+ * kept for that thread to log. The capture copies the ring and a stackshot into memory in tens of milliseconds, and
  * the store (store.c) compresses and writes them later from a low-priority call, so nothing slow happens at the moment
  * being measured. A ring another process took (a ktrace session) is never read: its captures keep their stackshot.
  */
@@ -53,7 +53,7 @@ extern struct kd_buffer kd_buffer_trace;
 
 static struct {
     thread_call_t call; /* the capture call, published with the times below (release); NULL until kperf is set up */
-    uint64_t tail, gap, expect_window, refusal_every;
+    uint64_t tail, expect_window, refusal_every;
     thread_t dumper; /* the capture thread inside switch_recorder_kdebug_read: only it compares equal to itself */
     bool owns_ring;  /* the ring is the one kdebug_startup started for the recorder, never taken since */
     bool taken_logged;
@@ -61,7 +61,8 @@ static struct {
     uint64_t expect_tid, expect_until;
     /* Under the trigger lock. */
     struct switch_recorder_asks asks;
-    uint64_t last_auto, armed;
+    struct switch_recorder_recent recent;
+    uint64_t armed;
     uint32_t seq;
     struct switch_recorder_ask refusal[SWITCH_RECORDER_REFUSALS];
     uint8_t refusal_why[SWITCH_RECORDER_REFUSALS];
@@ -86,14 +87,17 @@ void switch_recorder_start(void)
 {
     thread_call_t call = NULL;
 
-    if (!switch_recorder_store_init()) {
-        os_log(OS_LOG_DEFAULT, "SwitchRecorder: off (no memory for the store)");
+    if (!switch_recorder_store_init() || !switch_recorder_capture_init()) {
+        os_log(OS_LOG_DEFAULT, "SwitchRecorder: off (no memory for the store or the capture thread)");
         return;
     }
+    /* The call only wakes the capture thread: its group's priority runs it on time, the thread's keeps the capture
+     * under the render server. */
     call = thread_call_allocate_with_options(switch_recorder_capture_call, NULL, THREAD_CALL_PRIORITY_HIGH,
                                              THREAD_CALL_OPTIONS_ONCE);
     nanoseconds_to_absolutetime(SWITCH_RECORDER_TAIL_NS, &switch_recorder.tail);
-    nanoseconds_to_absolutetime(SWITCH_RECORDER_GAP_NS, &switch_recorder.gap);
+    nanoseconds_to_absolutetime(SWITCH_RECORDER_GAP_NS, &switch_recorder.recent.gap);
+    nanoseconds_to_absolutetime(SWITCH_RECORDER_REPEAT_NS, &switch_recorder.recent.repeat);
     nanoseconds_to_absolutetime(SWITCH_RECORDER_EXPECT_NS, &switch_recorder.expect_window);
     nanoseconds_to_absolutetime(SWITCH_RECORDER_REFUSAL_NS, &switch_recorder.refusal_every);
     os_atomic_store(&switch_recorder.call, call, release);
@@ -169,13 +173,10 @@ bool switch_recorder_trigger(unsigned int reason, uint64_t tid, uint64_t value)
     const boolean_t intrs = ml_set_interrupts_enabled(FALSE);
     simple_lock(&switch_recorder_trigger_lock, LCK_GRP_NULL);
     ask.seq = ++switch_recorder.seq;
-    refusal = switch_recorder_admit(&switch_recorder.asks, &ask, switch_recorder.last_auto, switch_recorder.gap,
+    refusal = switch_recorder_admit(&switch_recorder.asks, &ask, &switch_recorder.recent,
                                     os_atomic_load(&switch_recorder.expect_tid, acquire),
                                     os_atomic_load(&switch_recorder.expect_until, relaxed));
     if (refusal == SWITCH_RECORDER_ADMITTED) {
-        if (switch_recorder_automatic(reason)) {
-            switch_recorder.last_auto = ask.at;
-        }
         switch_recorder_arm(call, switch_recorder_due(&ask, switch_recorder.tail));
     } else {
         os_atomic_inc(&switch_recorder.refused[refusal], relaxed);
@@ -191,7 +192,7 @@ bool switch_recorder_trigger(unsigned int reason, uint64_t tid, uint64_t value)
     return refusal == SWITCH_RECORDER_ADMITTED;
 }
 
-/* capture.c: the next due ask, taken out of the queue; when none is due, the call is armed for the next. */
+/* capture.c's thread: the next due ask, taken out of the queue; when none is due, the call is armed for the next. */
 bool switch_recorder_next(uint64_t now, struct switch_recorder_ask *out)
 {
     thread_call_t call = os_atomic_load(&switch_recorder.call, acquire);
@@ -332,7 +333,7 @@ static bool switch_recorder_expect_met(void)
 /*
  * HW Test's recorder test owns the next automatic capture: a write of its main thread's id waits until the store is
  * quiet (no ask waiting, nothing in memory unwritten), then for SWITCH_RECORDER_EXPECT_NS turns away every other
- * thread's automatic trigger and lets this thread's through the gap. A read of debug.switch_recorder_wait then waits
+ * thread's automatic trigger and lets this thread's through the spacing. A read of debug.switch_recorder_wait then waits
  * for that thread's capture to be written (or the window's end) and returns the status line. Anybody may write it: it
  * captures nothing itself, and holds the recorder for five seconds at most.
  */
@@ -350,7 +351,7 @@ static int switch_recorder_expect_sysctl(__unused struct sysctl_oid *oidp, __unu
         return EINVAL;
     }
     while (!switch_recorder_quiet()) {
-        if (!switch_recorder_sleep(&switch_recorder.expect_tid, mach_absolute_time() + switch_recorder.gap,
+        if (!switch_recorder_sleep(&switch_recorder.expect_tid, mach_absolute_time() + switch_recorder.recent.gap,
                                    switch_recorder_quiet)) {
             return EINTR;
         }
@@ -367,7 +368,7 @@ static int switch_recorder_wait_sysctl(__unused struct sysctl_oid *oidp, __unuse
         const uint64_t until = os_atomic_load(&switch_recorder.expect_until, relaxed);
         const uint64_t now = mach_absolute_time();
 
-        if (!switch_recorder_sleep(&switch_recorder.expect_tid, until > now ? until : now + switch_recorder.gap,
+        if (!switch_recorder_sleep(&switch_recorder.expect_tid, until > now ? until : now + switch_recorder.recent.gap,
                                    switch_recorder_expect_met)) {
             return EINTR;
         }

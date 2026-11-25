@@ -28,13 +28,15 @@ static inline const char *switch_recorder_reason_name(uint32_t reason)
 }
 
 #define SWITCH_RECORDER_HANG_NS    250000000ull  /* HangTracer's bound for a hang */
-#define SWITCH_RECORDER_GAP_NS     2000000000ull /* the least time between two automatic captures */
+#define SWITCH_RECORDER_GAP_NS     2000000000ull  /* the least time between two automatic captures */
+#define SWITCH_RECORDER_REPEAT_NS  10000000000ull /* ... of the same reason and thread */
 #define SWITCH_RECORDER_TAIL_NS    300000000ull  /* how long after a frame or a mark the ring is frozen */
 #define SWITCH_RECORDER_EXPECT_NS  5000000000ull /* how long debug.switch_recorder_expect holds other triggers */
 #define SWITCH_RECORDER_REFUSAL_NS 1000000000ull /* one refusal line per reason and thread in this long */
 #define SWITCH_RECORDER_SLOW_MS    100u /* the least creation or import time debug.switch_recorder_slow takes */
 #define SWITCH_RECORDER_ASKS       32u  /* triggers taken and not yet captured */
 #define SWITCH_RECORDER_REFUSALS   16u  /* refusals not yet logged */
+#define SWITCH_RECORDER_RECENT     8u   /* automatic captures, and refusals logged, remembered for their spacing */
 #define SWITCH_RECORDER_BOOT_KEEP  8u   /* a boot's first automatic captures, kept against its later ones */
 #define SWITCH_RECORDER_SLOTS_MIN  16u
 #define SWITCH_RECORDER_SLOTS_MAX  128u
@@ -86,18 +88,60 @@ struct switch_recorder_asks {
 
 enum switch_recorder_refusal {
     SWITCH_RECORDER_ADMITTED = 0,
-    SWITCH_RECORDER_REFUSED_GAP,   /* an automatic capture within the gap of the last one */
+    SWITCH_RECORDER_REFUSED_GAP,    /* an automatic capture within SWITCH_RECORDER_GAP_NS of the last one */
     SWITCH_RECORDER_REFUSED_QUEUED, /* an automatic ask of the same or a higher rank is already waiting */
-    SWITCH_RECORDER_REFUSED_HELD,  /* debug.switch_recorder_expect holds the recorder for another thread */
-    SWITCH_RECORDER_REFUSED_FULL,  /* no room for the ask: every place holds a mark */
+    SWITCH_RECORDER_REFUSED_HELD,   /* debug.switch_recorder_expect holds the recorder for another thread */
+    SWITCH_RECORDER_REFUSED_FULL,   /* no room for the ask: every place holds a mark */
+    SWITCH_RECORDER_REFUSED_REPEAT, /* the same reason and thread within SWITCH_RECORDER_REPEAT_NS */
     SWITCH_RECORDER_REFUSALS_KINDS
 };
 
 static inline const char *switch_recorder_refusal_name(unsigned refusal)
 {
-    static const char *const names[SWITCH_RECORDER_REFUSALS_KINDS] = {"admitted", "gap", "queued", "held", "full"};
+    static const char *const names[SWITCH_RECORDER_REFUSALS_KINDS] = {"admitted", "gap",  "queued",
+                                                                      "held",     "full", "repeat"};
 
     return names[refusal < SWITCH_RECORDER_REFUSALS_KINDS ? refusal : 0];
+}
+
+/*
+ * The automatic captures taken lately. A capture costs a stackshot's stop of every CPU, the ring's read with tracing
+ * off and 16 MiB of memory, and the HW Test triage of 25 Nov counts dumps among the pacing tests' confounds: a second
+ * automatic capture waits `gap` after any, and `repeat` after one of the same reason and thread.
+ */
+struct switch_recorder_recent {
+    struct {
+        uint64_t at, tid;
+        uint32_t reason;
+    } e[SWITCH_RECORDER_RECENT];
+    uint32_t next;
+    uint64_t gap, repeat;
+};
+
+static inline unsigned switch_recorder_spacing(const struct switch_recorder_recent *r,
+                                               const struct switch_recorder_ask *ask)
+{
+    for (uint32_t i = 0; i < SWITCH_RECORDER_RECENT; i++) {
+        if (r->e[i].at == 0 || ask->at < r->e[i].at) {
+            continue;
+        }
+        if (ask->at - r->e[i].at < r->gap) {
+            return SWITCH_RECORDER_REFUSED_GAP;
+        }
+        if (r->e[i].reason == ask->reason && r->e[i].tid == ask->tid && ask->at - r->e[i].at < r->repeat) {
+            return SWITCH_RECORDER_REFUSED_REPEAT;
+        }
+    }
+    return SWITCH_RECORDER_ADMITTED;
+}
+
+static inline void switch_recorder_remember(struct switch_recorder_recent *r, const struct switch_recorder_ask *ask)
+{
+    const uint32_t i = r->next++ % SWITCH_RECORDER_RECENT;
+
+    r->e[i].at = ask->at;
+    r->e[i].tid = ask->tid;
+    r->e[i].reason = ask->reason;
 }
 
 /* The waiting automatic ask, or n: none. At most one waits, so marks keep the rest of the queue. */
@@ -113,17 +157,19 @@ static inline uint32_t switch_recorder_queued_auto(const struct switch_recorder_
 
 /*
  * Whether an ask is taken, and if so into the queue. A mark is always taken while the queue has room, and takes the
- * waiting automatic ask's place when it has none. An automatic ask is turned away inside the gap since the last
- * automatic capture, while HW Test's hold (expect_tid until expect_until) names another thread, or while an automatic
- * ask of its rank or higher waits; one of a higher rank replaces the waiting one (a hang cannot wait behind a late
- * frame's tail). The held thread's own ask is never turned away by the gap.
+ * waiting automatic ask's place when it has none. An automatic ask is turned away by the spacing of recent ones
+ * (switch_recorder_spacing), while HW Test's hold (expect_tid until expect_until) names another thread, or while an
+ * automatic ask of its rank or higher waits; one of a higher rank replaces the waiting one (a hang cannot wait behind
+ * a late frame's tail). The held thread's own ask is never turned away by the spacing. A taken automatic ask is
+ * remembered in `recent`.
  */
 static inline unsigned switch_recorder_admit(struct switch_recorder_asks *q, const struct switch_recorder_ask *ask,
-                                             uint64_t last_auto, uint64_t gap, uint64_t expect_tid,
+                                             struct switch_recorder_recent *recent, uint64_t expect_tid,
                                              uint64_t expect_until)
 {
     const uint32_t waiting = switch_recorder_queued_auto(q);
     const bool held = expect_tid != 0 && ask->at < expect_until;
+    unsigned spaced = SWITCH_RECORDER_ADMITTED;
 
     if (!switch_recorder_automatic(ask->reason)) {
         if (q->n < SWITCH_RECORDER_ASKS) {
@@ -139,20 +185,20 @@ static inline unsigned switch_recorder_admit(struct switch_recorder_asks *q, con
     if (held && ask->tid != expect_tid) {
         return SWITCH_RECORDER_REFUSED_HELD;
     }
-    if (!(held && ask->tid == expect_tid) && last_auto != 0 && ask->at - last_auto < gap) {
-        return SWITCH_RECORDER_REFUSED_GAP;
+    if (!held && (spaced = switch_recorder_spacing(recent, ask)) != SWITCH_RECORDER_ADMITTED) {
+        return spaced;
     }
     if (waiting < q->n) {
         if (switch_recorder_rank(ask->reason) <= switch_recorder_rank(q->a[waiting].reason)) {
             return SWITCH_RECORDER_REFUSED_QUEUED;
         }
         q->a[waiting] = *ask;
-        return SWITCH_RECORDER_ADMITTED;
-    }
-    if (q->n == SWITCH_RECORDER_ASKS) {
+    } else if (q->n == SWITCH_RECORDER_ASKS) {
         return SWITCH_RECORDER_REFUSED_FULL;
+    } else {
+        q->a[q->n++] = *ask;
     }
-    q->a[q->n++] = *ask;
+    switch_recorder_remember(recent, ask);
     return SWITCH_RECORDER_ADMITTED;
 }
 
@@ -191,24 +237,48 @@ static inline bool switch_recorder_take(struct switch_recorder_asks *q, uint64_t
 }
 
 /*
- * A refusal is logged unless the last one logged for the same reason and thread came within `every`: a hang the gap
- * turns away is asked again at every scheduler tick it lasts.
+ * A refusal is logged unless one of the same reason and thread was logged within `every`: a hang the spacing turns
+ * away is asked again at every scheduler tick it lasts, and two such threads may alternate.
  */
 struct switch_recorder_refusal_seen {
-    uint64_t at, tid;
-    uint32_t reason;
+    struct {
+        uint64_t at, tid;
+        uint32_t reason;
+    } e[SWITCH_RECORDER_RECENT];
+    uint32_t next;
 };
 
 static inline bool switch_recorder_refusal_logged(struct switch_recorder_refusal_seen *seen,
                                                   const struct switch_recorder_ask *ask, uint64_t every)
 {
-    if (seen->reason == ask->reason && seen->tid == ask->tid && seen->at != 0 && ask->at - seen->at < every) {
+    uint32_t i = 0;
+
+    for (i = 0; i < SWITCH_RECORDER_RECENT; i++) {
+        if (seen->e[i].at != 0 && seen->e[i].reason == ask->reason && seen->e[i].tid == ask->tid) {
+            break;
+        }
+    }
+    if (i < SWITCH_RECORDER_RECENT && ask->at >= seen->e[i].at && ask->at - seen->e[i].at < every) {
         return false;
     }
-    seen->at = ask->at;
-    seen->tid = ask->tid;
-    seen->reason = ask->reason;
+    if (i == SWITCH_RECORDER_RECENT) {
+        i = seen->next++ % SWITCH_RECORDER_RECENT;
+    }
+    seen->e[i].at = ask->at;
+    seen->e[i].tid = ask->tid;
+    seen->e[i].reason = ask->reason;
     return true;
+}
+
+/*
+ * Whether the capture thread compresses a new capture of `bytes` in memory before handing it to the store: when the
+ * captures the store has not written yet already hold that much (`held`, this one's not counted), the store is behind
+ * (starved of CPU, as at boot on 25 Nov, when no core was idle for minutes), and raw captures would fill its memory
+ * after five. Compressed, about five times as many fit; otherwise the compression waits for the store's low priority.
+ */
+static inline bool switch_recorder_compress_now(uint64_t held, uint64_t bytes)
+{
+    return held >= bytes;
 }
 
 /* A slot of the store as its file's header says, or unused. */
@@ -379,6 +449,7 @@ struct switch_recorder_counts {
     uint32_t dumps;    /* captures written to the store */
     uint32_t dropped;  /* captures the store had no slot for */
     uint32_t no_ring;  /* captures kept without their ring: no memory for it */
+    uint32_t packed;   /* captures compressed by the capture thread: the store was behind */
     uint32_t pending;  /* captures in memory, not yet written */
     uint64_t pending_bytes;
     uint32_t slots;
@@ -394,15 +465,16 @@ static inline int switch_recorder_status(char *out, size_t size, const struct sw
     return snprintf(
         out, size,
         "ring=%u span_ms=%llu events_s=%llu samples=%llu captures=%u dumps=%u pending=%u pending_kib=%llu slots=%u "
-        "skipped=%u held=%u queued=%u full=%u dropped=%u no_ring=%u taken=%u late_frame=%u hang=%u slow_work=%u mark=%u "
+        "skipped=%u repeat=%u held=%u queued=%u full=%u dropped=%u no_ring=%u packed=%u taken=%u late_frame=%u hang=%u "
+        "slow_work=%u mark=%u "
         "last_reason=%s last_tid=%llu last_value=%llu last_slot=%u last_seq=%u last_trace_bytes=%llu "
         "last_shot_bytes=%llu last_deflate_bytes=%llu last_trace_us=%llu last_shot_us=%llu last_latency_us=%llu "
         "last_deflate_us=%llu last_write_us=%llu last_age_ms=%llu",
         c->ring, (unsigned long long)c->span_ms, (unsigned long long)switch_recorder_events_s(c),
         (unsigned long long)c->samples, n->captures, n->dumps, n->pending, (unsigned long long)(n->pending_bytes >> 10),
-        n->slots, n->refused[SWITCH_RECORDER_REFUSED_GAP], n->refused[SWITCH_RECORDER_REFUSED_HELD],
-        n->refused[SWITCH_RECORDER_REFUSED_QUEUED], n->refused[SWITCH_RECORDER_REFUSED_FULL], n->dropped, n->no_ring,
-        n->taken, n->triggers[SWITCH_RECORDER_LATE_FRAME], n->triggers[SWITCH_RECORDER_HANG],
+        n->slots, n->refused[SWITCH_RECORDER_REFUSED_GAP], n->refused[SWITCH_RECORDER_REFUSED_REPEAT],
+        n->refused[SWITCH_RECORDER_REFUSED_HELD], n->refused[SWITCH_RECORDER_REFUSED_QUEUED],
+        n->refused[SWITCH_RECORDER_REFUSED_FULL], n->dropped, n->no_ring, n->packed, n->taken, n->triggers[SWITCH_RECORDER_LATE_FRAME], n->triggers[SWITCH_RECORDER_HANG],
         n->triggers[SWITCH_RECORDER_SLOW_WORK], n->triggers[SWITCH_RECORDER_MARK], switch_recorder_reason_name(h->reason),
         (unsigned long long)h->tid, (unsigned long long)h->value, l->slot, h->seq, (unsigned long long)h->ring_bytes,
         (unsigned long long)h->shot_bytes, (unsigned long long)h->deflate_bytes, (unsigned long long)h->ring_us,
