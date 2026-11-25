@@ -12,8 +12,11 @@ struct OverlayAppRecordsTest: HWTest {
 
     func run(_ context: TestContext) async throws -> Outcome {
         let applications = OverlayAppsTest.applications
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: applications) else {
-            return .skip("the sandbox lets the app list no \(applications)")
+        let names: [String]
+        do {
+            names = try FileManager.default.contentsOfDirectory(atPath: applications)
+        } catch {
+            return .fail("\(applications) is unreadable, though the app's entitlements grant it: \(error.localizedDescription)")
         }
         let apps = names.sorted().map { applications + "/" + $0 }.filter(OverlayAppsTest.isOverlay)
         var checks: [(String, Bool)] = [("the overlay shows an app", !apps.isEmpty)]

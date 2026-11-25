@@ -14,8 +14,11 @@ struct OverlayAppsTest: HWTest {
     static let prefix = "com.brunostjohn.switch."
 
     func run(_ context: TestContext) async throws -> Outcome {
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: Self.applications) else {
-            return .skip("the sandbox lets the app list no \(Self.applications)")
+        let names: [String]
+        do {
+            names = try FileManager.default.contentsOfDirectory(atPath: Self.applications)
+        } catch {
+            return .fail("\(Self.applications) is unreadable, though the app's entitlements grant it: \(error.localizedDescription)")
         }
         let apps = names.sorted().map { Self.applications + "/" + $0 }.filter(Self.isOverlay)
         var root = statfs()

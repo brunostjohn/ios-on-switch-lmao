@@ -28,6 +28,7 @@
 	</array>
 	<key>com.apple.security.exception.files.absolute-path.read-only</key>
 	<array>
+		<string>/Applications/</string>
 		<string>/private/var/mobile/Library/Logs/CrashReporter/</string>
 		<string>/private/var/Switch/icon-cache-gpu</string>
 		<string>/private/var/Switch/icon-cache-reset</string>
