@@ -243,8 +243,15 @@ bool SwitchMetalRangeEncode::resolvePasses()
             done = rc->resolveTwod(source, *target, route == gm20b::ResolveByComplement, r.keepSamples);
         }
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-        if (!done && !turned && rc->probeForms().resolveTwoD)
+        if (!done && !turned && rc->probeForms().resolveTwoD) {
             done = rc->probeResolve(source, *target);
+            // T11 reads the engine's resolve of 4x sRGB through this probe, which has taken none since 14 Nov
+            if (!done)
+                os_log(gm20bLog(),
+                       "SwitchMetal: resolve probe declined: format %u into %u, %ux%u x%u samples into %ux%u",
+                       source.format, target->format, source.width, source.height, source.samples, target->width,
+                       target->height);
+        }
 #endif
         if (!done) {
             gm20b::Pipeline *state = d.resolvePipeline(source.format, source.samples);
