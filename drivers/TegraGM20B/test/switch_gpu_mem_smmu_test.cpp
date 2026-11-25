@@ -62,7 +62,8 @@ struct FakeGpu {
 	int lock = 0;
 } tgm_gpu;
 
-unsigned gSmmuMaps, gSmmuUnmaps, gCtorCalls, gDtorCalls;
+unsigned gSmmuMaps, gSmmuUnmaps, gCtorCalls, gDtorCalls, gLtcFlushes, gLtcInvalidates;
+unsigned gLtcFlushesBeforeLastUnmap, gLtcInvalidatesBeforeLastUnmap;
 uint64_t gNextIova = 0x10000000ULL;
 uint64_t gSmmuFreeBytes = SWITCH_GPU_SMMU_MAX_WINDOW_BYTES;
 uint64_t gLastReserveBytes;
@@ -131,6 +132,21 @@ int nvif_mem_ctor_type(int *, const char *, int, int, u8 page, u64 bytes, nvif_m
 	return 0;
 }
 
+int l2_on()
+{
+	return 1;
+}
+
+void nvkm_ltc_flush(FakeLtc *)
+{
+	++gLtcFlushes;
+}
+
+void nvkm_ltc_invalidate(FakeLtc *)
+{
+	++gLtcInvalidates;
+}
+
 void nvif_mem_dtor(nvif_mem *)
 {
 	++gDtorCalls;
@@ -167,6 +183,8 @@ extern "C" uint64_t switch_gpu_smmu_map(const uint64_t *pas, uint32_t npages)
 
 extern "C" void switch_gpu_smmu_unmap(uint64_t, uint32_t npages)
 {
+	gLtcFlushesBeforeLastUnmap = gLtcFlushes;
+	gLtcInvalidatesBeforeLastUnmap = gLtcInvalidates;
 	++gSmmuUnmaps;
 	gLastUnmappedPages = npages;
 	const uint64_t bytes = ((uint64_t(npages) << 12) + SWITCH_GPU_SMMU_GRANULE - 1u) &
@@ -186,7 +204,9 @@ protected:
 		tgm_gpu = {};
 		tgm_gpu.device = &tgm_gpu.deviceStorage;
 		tgm_gpu.deviceStorage.ltc = &tgm_gpu.deviceStorage.ltcStorage;
-		gSmmuMaps = gSmmuUnmaps = gCtorCalls = gDtorCalls = 0;
+		gSmmuMaps = gSmmuUnmaps = gCtorCalls = gDtorCalls = gLtcFlushes = gLtcInvalidates =
+			0;
+		gLtcFlushesBeforeLastUnmap = gLtcInvalidatesBeforeLastUnmap = 0;
 		gNextIova = 0x10000000ULL;
 		gSmmuFreeBytes = SWITCH_GPU_SMMU_MAX_WINDOW_BYTES;
 		gLastReserveBytes = 0;
@@ -285,6 +305,8 @@ TEST_F(GpuMemSmmuTest, ExclusiveSmmuCompactsOnly64KMultipleScatteredAndCleansUp)
 	EXPECT_EQ(compMem->pages[16] - compMem->pages[0], 0x10000ULL);
 	tgm_mem_del(&compMem);
 	EXPECT_EQ(gSmmuUnmaps, 1u);
+	EXPECT_EQ(gLtcFlushesBeforeLastUnmap, 1u);
+	EXPECT_EQ(gLtcInvalidatesBeforeLastUnmap, 1u);
 }
 
 TEST_F(GpuMemSmmuTest, ExclusiveSmmuUnmapsOnCtorFailureAndSkipsWhenCompDisabled)

@@ -28,6 +28,20 @@ TEST(GM20BPreemptLanding, NoReleaseBetweenTheAskAndTheStartIsUnknown)
 	EXPECT_EQ(switch_gpu_preempt_landing(&none, 0, 1100), SWITCH_GPU_LANDED_UNKNOWN);
 }
 
+TEST(GM20BPreemptLanding, AProgressStampBetweenAskAndStartCountsAsMidJob)
+{
+	const switch_gpu_batch_release prior = {800, 1};
+	EXPECT_EQ(switch_gpu_preempt_landing_with_progress(&prior, 1000, 900, 1100),
+		  SWITCH_GPU_LANDED_MID_JOB);
+	EXPECT_EQ(switch_gpu_preempt_landing_with_progress(&prior, 850, 900, 1100),
+		  SWITCH_GPU_LANDED_UNKNOWN);
+	EXPECT_EQ(switch_gpu_preempt_landing_with_progress(&prior, 1200, 900, 1100),
+		  SWITCH_GPU_LANDED_UNKNOWN);
+	const switch_gpu_batch_release jobEnd = {1050, 1};
+	EXPECT_EQ(switch_gpu_preempt_landing_with_progress(&jobEnd, 1000, 900, 1100),
+		  SWITCH_GPU_LANDED_JOB_END);
+}
+
 TEST(GM20BPreemptLanding, LatenciesBucketUnder250UsThenDoublingTo4Ms)
 {
 	EXPECT_EQ(switch_gpu_preempt_bucket(0), 0u);

@@ -280,9 +280,11 @@
     return [self newCommandQueue];
 }
 
-- (id<MTLBuffer>)newBufferWithLength:(NSUInteger)n options:(MTLResourceOptions)o
+- (id<MTLBuffer>)allocBufferWithLength:(NSUInteger)n options:(MTLResourceOptions)o zero:(BOOL)zero
 {
-    SWITCH_API(ApiObject);
+    const uint64_t maxBo = gRM->raw->kernelInfo().max_bo_bytes;
+    if (maxBo && uint64_t(n) > maxBo)
+        return nil;
     SwitchMetalBuffer *b = [SwitchMetalBuffer new];
     b->_device = self;
     b->_options = o;
@@ -291,7 +293,7 @@
     // before a draw reads it, nothing to scan for the vertices an indexed draw reads (r16: 600-1300 KB cleaned a command buffer)
     const bool wc = (o & MTLResourceStorageModeMask) == MTLResourceStorageModeShared;
     const bool hostVisible = (o & MTLResourceStorageModeMask) != MTLResourceStorageModePrivate;
-    if (!gRM->raw->createBuffer(n ? n : 16, b->_raw, wc, hostVisible, wc)) {
+    if (!gRM->raw->createBuffer(n ? n : 16, b->_raw, wc, hostVisible, wc, zero)) {
         os_log_error(gm20bLog(), "SwitchMetal: %{public}s: no memory for a %lu-byte buffer: none made", getprogname(),
                      (unsigned long)n);
         return nil;
@@ -299,10 +301,16 @@
     return (id<MTLBuffer>)b;
 }
 
+- (id<MTLBuffer>)newBufferWithLength:(NSUInteger)n options:(MTLResourceOptions)o
+{
+    SWITCH_API(ApiObject);
+    return [self allocBufferWithLength:n options:o zero:YES];
+}
+
 - (id<MTLBuffer>)newBufferWithBytes:(const void *)p length:(NSUInteger)n options:(MTLResourceOptions)o
 {
     SWITCH_API(ApiObject);
-    id<MTLBuffer> b = [self newBufferWithLength:n options:o];
+    id<MTLBuffer> b = [self allocBufferWithLength:n options:o zero:(p == nullptr || n == 0)];
     if (!b || !p || !n)
         return b;
     SwitchMetalBuffer *buffer = (SwitchMetalBuffer *)b;

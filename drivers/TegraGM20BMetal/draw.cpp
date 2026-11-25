@@ -56,8 +56,9 @@ void RenderEncoder::finishDraw(uint32_t vertices, uint32_t instances, bool indir
 #endif
     SWITCH_METAL_DIAGNOSTIC(if (cb_->drawTimes_) timeDraw(vertices, instances, indirect));
     const uint64_t vertexWork = BatchWork::product(BatchWork::product(vertices, instances), pl.vertexInstructions);
-    const uint64_t fragmentWork = BatchWork::product(BatchWork::product(drawPixels_, instances),
-                                                     uint64_t(pl.fragmentInstructions) * pl.samplePasses);
+    const uint64_t fragmentCost =
+        BatchWork::product(uint64_t(pl.fragmentInstructions) * pl.samplePasses, pl.writesMemory[1] ? 32u : 1u);
+    const uint64_t fragmentWork = BatchWork::product(BatchWork::product(drawPixels_, instances), fragmentCost);
     if (cb_->batchWork_.add(indirect ? BatchWork::kSaturated : vertexWork + fragmentWork, cb_->batchLimit()))
         cutBatch();
 }
@@ -154,11 +155,32 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
         return true;
     }
 #endif
-    if (drawnWhole(*pl)) {
-        wholeDraw(*pl, false, first, count, instances, first, baseInstance);
-        finishDraw(count, drawnInstances);
-    } else {
-        emitDraw(false, first, count, instances, first, baseInstance);
+    const auto emit = [&] {
+        if (drawnWhole(*pl)) {
+            wholeDraw(*pl, false, first, count, instances, first, baseInstance);
+            finishDraw(count, drawnInstances);
+        } else {
+            emitDraw(false, first, count, instances, first, baseInstance);
+        }
+    };
+    emit();
+    if (rasterSamples_ > samples_ && pl->samples > samples_ && pass_.depthStencil.texture &&
+        (compatibleRasterMask_ & 0xeeeeu)) {
+        const uint32_t m = compatibleRasterMask_ & 0xeeeeu;
+        const uint32_t targets = std::min(pass_.count, 8u);
+        const uint32_t zeros[8] = {};
+        if (p_.room() < 32)
+            reserve();
+        p_.inc(NVB197_SET_SAMPLE_MASK_X0_Y0, {m, m, m, m});
+        cb_->sampleMaskHeld_ = m;
+        if (targets)
+            p_.incArray(CT_WRITE, zeros, targets);
+        emit();
+        if (targets) {
+            if (p_.room() < 16)
+                reserve();
+            p_.incArray(CT_WRITE, pl->ctWrite, targets);
+        }
     }
     return true;
 }
@@ -259,15 +281,16 @@ Pipeline *RenderEncoder::formFor(Pipeline *pl, const FetchDraw &shape)
             return twin;
         }
 #endif
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (pl && pl->storageBits && cb_->forms_.barrierFetch)
+        if (Pipeline *twin = barrierTwin ? barrierTwin : blendTwin)
+            return twin;
+#endif
     if (pl)
         if (Pipeline *free = fetchFreeFor(*pl))
             return free;
     if (!pl || !pl->storageBits)
         return pl;
-#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
-    if (cb_->forms_.barrierFetch && barrierTwin)
-        return barrierTwin;
-#endif
     const StorageFallback reason = storageFallback(*pl);
     if (reason == StorageFallback::None) {
         Pipeline *twin = blendTwin ? blendTwin : barrierTwin;
@@ -388,11 +411,32 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         cb_->draws++;
         return true;
     }
-    if (drawnWhole(*pl)) {
-        wholeDraw(*pl, true, 0, count, instances, uint32_t(baseVertex), baseInstance);
-        finishDraw(count, amplifies() ? instances * amplifications_ : instances);
-    } else {
-        emitDraw(true, 0, count, instances, uint32_t(baseVertex), baseInstance);
+    const auto emit = [&] {
+        if (drawnWhole(*pl)) {
+            wholeDraw(*pl, true, 0, count, instances, uint32_t(baseVertex), baseInstance);
+            finishDraw(count, amplifies() ? instances * amplifications_ : instances);
+        } else {
+            emitDraw(true, 0, count, instances, uint32_t(baseVertex), baseInstance);
+        }
+    };
+    emit();
+    if (rasterSamples_ > samples_ && pl->samples > samples_ && pass_.depthStencil.texture &&
+        (compatibleRasterMask_ & 0xeeeeu)) {
+        const uint32_t m = compatibleRasterMask_ & 0xeeeeu;
+        const uint32_t targets = std::min(pass_.count, 8u);
+        const uint32_t zeros[8] = {};
+        if (p_.room() < 32)
+            reserve();
+        p_.inc(NVB197_SET_SAMPLE_MASK_X0_Y0, {m, m, m, m});
+        cb_->sampleMaskHeld_ = m;
+        if (targets)
+            p_.incArray(CT_WRITE, zeros, targets);
+        emit();
+        if (targets) {
+            if (p_.room() < 16)
+                reserve();
+            p_.incArray(CT_WRITE, pl->ctWrite, targets);
+        }
     }
     cb_->draws += amplifies() ? amplifications_ : 1;
     return true;

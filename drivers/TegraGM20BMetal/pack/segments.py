@@ -213,15 +213,22 @@ def _noop_source_coeff(c: int, normalized: bool) -> bool:
     return normalized and 0x4304 <= c <= 0x4308
 
 
-def _iterated_blend_noop(blob: list[tuple[int, int]], writes: list[int], key_string: str, storage_bits: int) -> int:
+def _iterated_blend_noop(
+    blob: list[tuple[int, int]],
+    writes: list[int],
+    key_string: str,
+    storage_bits: int,
+    default_per_target: list[int] | None = None,
+    default_seen: int = 0,
+) -> int:
     for j in range(1, 8):
         if writes[j] & 0x1111:
             return NOOP_NEVER
     if not (writes[0] & 0x1111) or (storage_bits & 1) or not key_string:
         return NOOP_NEVER
     blends = False
-    per_target = [0] * 6
-    seen = 0
+    per_target = list(default_per_target) if default_per_target is not None else [0] * 6
+    seen = default_seen if default_per_target is not None else 0
     for m, v in blob:
         if m == 0x153C and (v & 0x11):
             return NOOP_NEVER
@@ -340,6 +347,8 @@ def build_pipeline_stream(
     iterated_list: list[dict],
     tess: tuple[dict, dict] | None,
     dropped: frozenset[int],
+    base_blend: list[int] | None = None,
+    base_blend_seen: int = 0,
 ) -> tuple[list[int], int]:
     """Build a pipeline's GM20B state-segment method words and PackSegmentFlag mask."""
     key = rec['key']
@@ -369,7 +378,9 @@ def build_pipeline_stream(
     _push_m(words, PIXEL_SHADER_INTERLOCK_CONTROL, _legal_interlock(interlock, sample_control))
     _push_m(words, HYBRID_ANTI_ALIAS_CONTROL, sample_control)
     storage_mask = rec.get('storage_mask', 0)
-    blend_kill = _iterated_blend_noop(blob, writes, key_string, storage_mask if storage_mask else 0)
+    blend_kill = _iterated_blend_noop(
+        blob, writes, key_string, storage_mask if storage_mask else 0, base_blend, base_blend_seen
+    )
     _push_m(words, ITERATED_BLEND_OPTIMIZATION, blend_kill)
     _push_m(words, SET_PIPELINE_PROGRAM_VS, vs['program'])
     _push_m(words, SET_PIPELINE_REGISTER_COUNT_VS, vs.get('gprs', 0))
@@ -437,9 +448,20 @@ def build_tier0_segments(pack: packfile.Pack, report: list[str] | None = None) -
         return
 
     base_ct_write = [0] * 8
+    base_blend = [0] * 6
+    base_blend_seen = 0
+    for sc, m, d, _ in pack.init:
+        if sc == 0 and 0x1E04 <= m <= 0x1E18:
+            idx = (m - 0x1E04) >> 2
+            base_blend[idx] = d
+            base_blend_seen |= 1 << idx
     for m, v in pack.baseline.items():
         if CT_WRITE <= m < CT_WRITE + 32:
             base_ct_write[(m - CT_WRITE) >> 2] = v
+        elif 0x1E04 <= m <= 0x1E18:
+            idx = (m - 0x1E04) >> 2
+            base_blend[idx] = v
+            base_blend_seen |= 1 << idx
 
     dropped = _dropped_methods()
     facts_base = packfile.chip_facts()
@@ -489,7 +511,9 @@ def build_tier0_segments(pack: packfile.Pack, report: list[str] | None = None) -
             gfx_prog_indices.add(t0)
             gfx_prog_indices.add(t1)
 
-        words, flags = build_pipeline_stream(rec, vs, fs, base_ct_write, pack.iterated, tess, dropped)
+        words, flags = build_pipeline_stream(
+            rec, vs, fs, base_ct_write, pack.iterated, tess, dropped, base_blend, base_blend_seen
+        )
         base_entries.append(place_stream(words, flags))
 
         variants = rec.get('variants')
@@ -521,7 +545,9 @@ def build_tier0_segments(pack: packfile.Pack, report: list[str] | None = None) -
                     continue
                 p0 = programs[p0_idx]
                 p1 = None if p1_idx == packfile.NO_PROGRAM else programs[p1_idx]
-                vw, vf = build_pipeline_stream(rec, p0, p1, base_ct_write, pack.iterated, None, dropped)
+                vw, vf = build_pipeline_stream(
+                    rec, p0, p1, base_ct_write, pack.iterated, None, dropped, base_blend, base_blend_seen
+                )
                 var_combos.append(place_stream(vw, vf))
 
     max_slm = 0

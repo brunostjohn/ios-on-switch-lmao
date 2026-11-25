@@ -457,8 +457,11 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
             [_scheduledHandlers addObject:[block copy]];
         } else {
             _handlersQueued = true;
-            dispatch_async(_queue->_handlers, ^{
-                block((id<MTLCommandBuffer>)self);
+            MTLCommandBufferHandler copy = [block copy];
+            _queue->_handlerExec.enqueue([self, copy] {
+                @autoreleasepool {
+                    copy((id<MTLCommandBuffer>)self);
+                }
             });
         }
     }
@@ -804,13 +807,13 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 {
     if ((self = [super init])) {
         queuePriorityAdd(self);
-        _handlers = followingSerialQueue("com.brunostjohn.switch.gm20b.command.handlers");
     }
     return self;
 }
 
 - (void)dealloc
 {
+    _handlerExec.stop();
     queuePriorityRemove(self);
 }
 

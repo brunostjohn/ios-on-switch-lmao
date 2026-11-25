@@ -455,6 +455,7 @@ struct Stats {
     uint64_t cacheFlushes, cacheFlushNs;
     // Primary-IRQ fast-issued ADMA2 commands (SwitchSdPipeline.h).
     uint64_t fastIssued;
+    uint64_t lastBusyEndNs, lastCompleteStartNs, lastCompleteEndNs;
 #if DEVELOPMENT || DEBUG
     // SwitchSdBus.h: commands refused because the bus was not free at their one PRESENT_STATE read, and DAT0 releases
     // awaited by CMD13 with busy (the card still programming after a transfer complete). ADMA2 chains that reached a
@@ -762,7 +763,7 @@ class NativeSwitchBlock : public IOService {
     Request *pickLocked(uint32_t *sectors, uint32_t *count, const SwitchLbaRange *inFlight = nullptr,
                         unsigned inFlightCount = 0);
     void takenLocked(Request *first, uint32_t count, uint64_t pickNs);
-    void account(Batch &);
+    void account(const PipeSlot &);
     void completeBatch(Batch &);
     int controlCommand(uint32_t index, uint32_t argument, uint32_t flags, uint32_t *response, int data,
                        uint64_t limitNs = 1500000000ULL, bool allowRelease = true);
@@ -2270,7 +2271,7 @@ void NativeSwitchBlock::completeSlot(PipeSlot &slot, int step)
         stats.bounced[b.why] += b.count;
     }
     b.result = result;
-    account(b);
+    account(slot);
     if (b.write) {
         IOLockLock(queueLock);
         writesDirty = true;
@@ -2362,8 +2363,9 @@ void NativeSwitchBlock::waitForPipeline(bool wakeOnSubmit)
 // The stats for a chain whose command has ended. Card and copies first, completions after: busy time
 // covers the card, the copies and the cache maintenance, completeNs the callbacks (IOStorageFamily/APFS work that runs on
 // this thread; r12-sdio: while the next command runs, their time inside this chain's span is not this chain's busy time).
-void NativeSwitchBlock::account(Batch &b)
+void NativeSwitchBlock::account(const PipeSlot &slot)
 {
+    const Batch &b = slot.batch;
     const bool write = b.write;
     const IOReturn result = b.result;
     for (const Request *r = b.first; r; r = r->next) {
@@ -2383,15 +2385,29 @@ void NativeSwitchBlock::account(Batch &b)
             stats.sequential++;
         lastEnd = r->lba + r->sectors;
     }
-    const uint64_t span = switch_now_ns() - b.beganNs;
-    const uint64_t latency = span > b.overlapNs ? span - b.overlapNs : 0;
+    const uint64_t now = switch_now_ns();
+    uint64_t idleCallback = 0;
+    if (slot.direct && slot.irqAt && stats.lastCompleteEndNs > slot.irqAt) {
+        const uint64_t cbStart = stats.lastCompleteStartNs > slot.irqAt ? stats.lastCompleteStartNs : slot.irqAt;
+        idleCallback = stats.lastCompleteEndNs - cbStart;
+    }
+    const uint64_t cmdStart = (slot.direct && slot.issuedAt && (slot.fastIssued || b.beganNs < stats.lastBusyEndNs))
+                                  ? slot.issuedAt
+                                  : b.beganNs;
+    const uint64_t cmdSpan = now > cmdStart ? now - cmdStart : 0;
+    const uint64_t latency = cmdSpan > idleCallback ? cmdSpan - idleCallback : 0;
+    const uint64_t busyStart = b.beganNs > stats.lastBusyEndNs ? b.beganNs : stats.lastBusyEndNs;
+    const uint64_t busySpan = now > busyStart ? now - busyStart : 0;
+    const uint64_t busyDelta = busySpan > idleCallback ? busySpan - idleCallback : 0;
+    if (now > stats.lastBusyEndNs)
+        stats.lastBusyEndNs = now;
     stats.commands++;
     if (b.gapSectors) {
         ++stats.gapChains;
         stats.gapBytes += static_cast<uint64_t>(b.gapSectors) * kSector;
     }
-    stats.busyNs += latency;
-    (write ? stats.writeNs : stats.readNs) += latency;
+    stats.busyNs += busyDelta;
+    (write ? stats.writeNs : stats.readNs) += busyDelta;
 #if DEVELOPMENT || DEBUG
     gIo.command[write ? 1 : 0][switchSdSize(static_cast<uint64_t>(b.sectors) * kSector)].add(latency);
 #endif
@@ -2447,14 +2463,15 @@ void NativeSwitchBlock::completeBatch(Batch &b)
         }
     };
 
-#if DEVELOPMENT || DEBUG
     const uint64_t began = switch_now_ns();
-#endif
     Request *const first = b.first;
     b.first = nullptr;
     switchSdPoolComplete<kCompleteChunk, Request, Done>(requestPool, first, Ops{this, b.result});
+    const uint64_t ended = switch_now_ns();
+    stats.lastCompleteStartNs = began;
+    stats.lastCompleteEndNs = ended;
 #if DEVELOPMENT || DEBUG
-    stats.completeNs += switch_now_ns() - began;
+    stats.completeNs += ended - began;
 #endif
 }
 

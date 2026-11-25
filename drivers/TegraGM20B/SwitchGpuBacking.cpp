@@ -9,6 +9,7 @@ namespace
 constexpr uint32_t kBuckets = 256;
 IOLock *registry;
 switch_gpu_backing *buckets[kBuckets];
+switch_gpu_backing *surface_buckets[kBuckets];
 switch_gpu_backing *retiring, **retiring_tail = &retiring;
 switch_gpu_backing *expiry_first, *expiry_last;
 uint32_t retirement_pending, retirement_count, scan_remaining;
@@ -43,6 +44,32 @@ IOLock *registry_lock()
 uint32_t bucket(uint64_t pa)
 {
 	return uint32_t((pa >> 12) ^ (pa >> 20)) & (kBuckets - 1);
+}
+
+uint32_t surface_bucket(uint32_t surface_id)
+{
+	return (surface_id ^ (surface_id >> 8) ^ (surface_id >> 16)) & (kBuckets - 1);
+}
+
+void surface_link_locked(switch_gpu_backing *backing)
+{
+	if (!backing->surface_id)
+		return;
+	const uint32_t b = surface_bucket(backing->surface_id);
+	backing->surface_next = surface_buckets[b];
+	surface_buckets[b] = backing;
+}
+
+void surface_unlink_locked(switch_gpu_backing *backing)
+{
+	if (!backing->surface_id)
+		return;
+	auto **entry = &surface_buckets[surface_bucket(backing->surface_id)];
+	while (*entry && *entry != backing)
+		entry = &(*entry)->surface_next;
+	if (*entry)
+		*entry = backing->surface_next;
+	backing->surface_next = nullptr;
 }
 
 switch_gpu_backing_pages *copy_pages(const uint64_t *pages, uint32_t count)
@@ -258,8 +285,11 @@ extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *pages
 			found->release_owner = release_owner;
 			owner = nullptr;
 		}
-		if (surface_id)
+		if (surface_id && found->surface_id != surface_id) {
+			surface_unlink_locked(found);
 			found->surface_id = surface_id;
+			surface_link_locked(found);
+		}
 		// A retiring backing found again is its pages handed out anew, not shared.
 		if (!found->retiring)
 			__atomic_store_n(&found->shared, true, __ATOMIC_RELEASE);
@@ -289,6 +319,7 @@ extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *pages
 	made->host_epoch = 1;
 	made->next = buckets[bucket(pages[0])];
 	buckets[bucket(pages[0])] = made;
+	surface_link_locked(made);
 	IOLockUnlock(lock);
 	return made;
 }
@@ -335,11 +366,10 @@ extern "C" switch_gpu_backing *switch_gpu_backing_find_pa(uint64_t first_page)
 	auto *found = buckets[bucket(first_page)];
 	while (found && found->pages->addresses[0] != first_page)
 		found = found->next;
-	const bool member = found && reached_locked(found);
 	if (found)
 		++found->refs;
 	IOLockUnlock(lock);
-	if (member)
+	if (found && reached_locked(found))
 		switch_gpu_set_reached(found, SWITCH_GPU_SET_CAUSE_SHARED);
 	return found;
 }
@@ -351,16 +381,14 @@ extern "C" switch_gpu_backing *switch_gpu_backing_find_surface(uint32_t surface_
 		return nullptr;
 	IOLockLock(lock);
 	switch_gpu_backing *found = nullptr;
-	for (uint32_t i = 0; i < kBuckets; ++i)
-		for (auto *at = buckets[i]; at; at = at->next)
-			if (at->surface_id == surface_id &&
-			    (!found || at->pages->count > found->pages->count))
-				found = at;
-	const bool member = found && reached_locked(found);
+	for (auto *at = surface_buckets[surface_bucket(surface_id)]; at; at = at->surface_next)
+		if (at->surface_id == surface_id &&
+		    (!found || at->pages->count > found->pages->count))
+			found = at;
 	if (found)
 		++found->refs;
 	IOLockUnlock(lock);
-	if (member)
+	if (found && reached_locked(found))
 		switch_gpu_set_reached(found, SWITCH_GPU_SET_CAUSE_SHARED);
 	return found;
 }
@@ -464,6 +492,7 @@ extern "C" void switch_gpu_backing_retire(void)
 				entry = &(*entry)->next;
 			if (*entry)
 				*entry = backing->next;
+			surface_unlink_locked(backing);
 			backing->retiring_next = ready;
 			ready = backing;
 		}

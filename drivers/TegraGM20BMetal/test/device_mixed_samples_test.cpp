@@ -46,7 +46,7 @@ TEST_F(DevicePassForms, AOneSampleColourBesideAFourSampleDepthRasterisesAtTheDep
     }
     EXPECT_TRUE(on);
     EXPECT_EQ(lastOf(ms, NVB197_SET_TIR), uint32_t(NVB197_SET_TIR_MODE_DISABLED));
-    EXPECT_EQ(lastOf(ms, NVB197_SET_ANTI_ALIAS_RASTER), uint32_t(NVB197_SET_ANTI_ALIAS_RASTER_SAMPLES_MODE_1X1));
+    EXPECT_EQ(lastOf(ms, NVB197_SET_ANTI_ALIAS_RASTER), uint32_t(NVB197_SET_ANTI_ALIAS_RASTER_SAMPLES_MODE_2X2));
     EXPECT_EQ(lastOf(ms, NVB197_SET_ANTI_ALIAS), uint32_t(NVB197_SET_ANTI_ALIAS_SAMPLES_MODE_1X1));
 }
 
@@ -119,11 +119,17 @@ TEST_F(DevicePassForms, AMixedPassSetsEachStatesCoverageRule)
         &why);
     ASSERT_FALSE(ms.empty()) << why;
     const std::vector<uint32_t> controls = values(ms, NVB197_SET_TIR_CONTROL);
-    ASSERT_GE(controls.size(), 3u);
-    EXPECT_EQ(controls[controls.size() - 2], gm20b::tirControl(4));
-    EXPECT_EQ(controls.back(), gm20b::tirControl(1));
-    for (const uint32_t m : values(ms, NVB197_SET_SAMPLE_MASK_X0_Y0))
-        EXPECT_EQ(m, 0xffffu);
+    ASSERT_GE(controls.size(), 1u);
+    for (const uint32_t c : controls)
+        EXPECT_EQ(c, uint32_t(NVB197_SET_TIR_CONTROL_REDUCE_COVERAGE_ENABLE << 1));
+    const std::vector<uint32_t> masks = values(ms, NVB197_SET_SAMPLE_MASK_X0_Y0);
+    ASSERT_GE(masks.size(), 3u);
+    EXPECT_NE(std::find(masks.begin(), masks.end(), 0x1111u), masks.end());
+    EXPECT_NE(std::find(masks.begin(), masks.end(), 0xeeeeu), masks.end());
+    EXPECT_EQ(masks.back(), 0xffffu);
+    const std::vector<uint32_t> ctWrites = values(ms, NVB197_SET_CT_WRITE(0));
+    EXPECT_NE(std::find(ctWrites.begin(), ctWrites.end(), 0u), ctWrites.end());
+    EXPECT_EQ(ctWrites.back(), 0x1111u);
 }
 
 constexpr uint32_t kSetActiveZcullRegion = 0x1590;  // 0: the pass's region; 0x3f: none (zcull.h)
@@ -192,11 +198,11 @@ TEST_F(DevicePassForms, AMixedPassEndsInEachProbeRowsOrder)
         return 1u | uint32_t(end) << 8 | raster << 12;
     };
     const std::vector<std::pair<uint32_t, Tail>> rows = {
-        {row(gm20b::TirEnd::Mode), {{kTir, 0}, {kRaster, 0}}},
+        {row(gm20b::TirEnd::Mode), {{kTir, 0}}},
         {row(gm20b::TirEnd::RasterFirst), {{kRaster, 0}, {kTir, 0}}},
-        {row(gm20b::TirEnd::ZetaOff), {{kZt, 0}, {kTir, 0}, {kRaster, 0}}},
+        {row(gm20b::TirEnd::ZetaOff), {{kZt, 0}, {kTir, 0}}},
         {row(gm20b::TirEnd::ModeOnly), {{kTir, 0}}},
-        {row(gm20b::TirEnd::RasterDisabled), {{kEnable, 0}, {kTir, 0}, {kRaster, 0}, {kEnable, 1}}},
+        {row(gm20b::TirEnd::RasterDisabled), {{kEnable, 0}, {kTir, 0}, {kEnable, 1}}},
         {row(gm20b::TirEnd::Value, 6), {{kTir, 0}, {kRaster, 6}, {kZt, 0}, {kRaster, 0}}},
     };
     for (const auto &[probe, want] : rows) {

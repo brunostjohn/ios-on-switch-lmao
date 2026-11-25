@@ -224,6 +224,7 @@ public:
     // cannot be (its programs find no room in the heap)
     std::vector<std::pair<std::string, Pipeline *>> variantPipelines(uint64_t keyHash, bool caTransform);
     std::vector<std::pair<std::string, Pipeline *>> variantPipelines(const PackRun &run, bool caTransform);
+    Pipeline *variantPipeline(const PackRun &run, const std::string &name, bool caTransform);
     // A state the runtime made a record of (record.h), drawn from then on as the pack's are; null: its programs find no room
     // in the heap or its samplers none in the header pool (`why`)
     Pipeline *addRecord(const RuntimeRecord &r, bool caTransform, std::string &why, bool *retry = nullptr);
@@ -301,7 +302,7 @@ public:
     // `pooled`: sampled and rendered through a pool image (Texture::sampled) whatever its rows
     bool createSurfaceTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface, uint64_t offset,
                               uint32_t width, uint32_t height, uint32_t pitch, uint32_t format, Texture &t,
-                              bool writes = false, uint64_t readable = 0, bool pooled = false);
+                              bool writes = false, uint64_t readable = 0, bool pooled = false, bool allowTile = true);
     // A two-plane YCbCr surface's texture of `width` x `height` as `plan` reads its planes, its image one of the pool
     bool createYcbcrTexture(uint64_t surfaceId, void *base, uint64_t allocBytes, const void *surface,
                             const YcbcrPlan &plan, uint32_t width, uint32_t height, Texture &t);
@@ -591,7 +592,8 @@ public:
     // `wc`: from the write-combined GPU pool (Buffer::wc), else (or full) pool memory as before; `hostVisible`: the CPU
     // reads or writes it (Buffer::hostVisible), else it takes no CPU lease; `gpuVolatile`: bind WC memory VOL=1 in its own
     // chunk pool so CPU writes never trigger whole-L2 invalidates and GPU writes flush FB without L2_FLUSH_DIRTY
-    bool createBuffer(uint64_t length, Buffer &b, bool wc = false, bool hostVisible = true, bool gpuVolatile = false);
+    bool createBuffer(uint64_t length, Buffer &b, bool wc = false, bool hostVisible = true, bool gpuVolatile = false,
+                      bool zero = true);
 
     // The write-combined chunks held (non-dedicated) and their bytes (test/poolcheck.cpp: they follow what is in them)
     uint32_t wcChunksHeld();
@@ -1307,6 +1309,7 @@ private:
         uint64_t bytes = 0;
         std::map<uint64_t, uint64_t> free;  // offset -> bytes, coalesced
         uint64_t used = 0;
+        uint64_t highWater = 0;
         bool dedicated = false;
         uint64_t pitchVa = 0;  // a block-linear chunk's kind-0 view (blPitchVa), made at its first ask
         // a pool chunk a host-visible buffer was placed in: the CPU writes such a buffer outside any lease, so lines
@@ -1338,7 +1341,8 @@ private:
     void collectParkableChunksLocked(std::vector<ParkCandidate> &out);
     void finishParkChunks(std::vector<ParkCandidate> &candidates);
     bool tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uint32_t zetaIndex, uint64_t bytes,
-                        bool dedicated, uint64_t align, uint32_t setAccess, uint32_t &index, bool &resident);
+                        bool dedicated, uint64_t align, uint32_t setAccess, uint32_t &index, bool &resident,
+                        uint64_t maxBytes = 0);
     void releaseParkedChunksOnClose();
 
     // A role's memory steps: the shared pool chunk (a span over half of one gets its own), a chunk of block-linear images, a
@@ -1604,6 +1608,8 @@ private:
     // the per-warp size the channel was last given (commit; 0 on a new channel): the submitting thread's
     uint64_t slmChannel_ = 0;
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
+    uint32_t blendPerTarget_[6] = {};
+    uint8_t blendPerTargetSeen_ = 0;
 
     bool slmReady(uint64_t perWarp) const
     {
@@ -1642,7 +1648,7 @@ private:
     Pipeline *placeVariant(Pipeline &pl, const std::array<uint32_t, 2> &programs, uint32_t recIndex,
                            uint32_t comboIndex);
     bool placePackProgram(uint32_t index, PlacedProgram &out);
-    bool placePackWindowProgram(uint32_t index, PlacedProgram &out) const;
+    bool placePackWindowProgram(uint32_t index, PlacedProgram &out);
     std::deque<Pipeline> reachPipelines_;
     std::deque<PackPipeline> reachRecords_;
     std::deque<std::vector<uint32_t>> reachFar_;  // their far blocks, each its record's
@@ -1828,11 +1834,11 @@ private:
     // separate VOL=1 WC chunks for streaming shared buffers so shared textures in wcChunks_ stay L2-cached
     std::vector<Chunk> volatileWcChunks_;
     bool wcPoolAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &pool, uint64_t bytes, bool gpuVolatile,
-                     Span &s);
+                     Span &s, bool *dirty = nullptr);
     void wcPoolFree(std::vector<Chunk> &pool, Span &s, DeferredFrees &deferred);
-    bool wcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s);
+    bool wcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s, bool *dirty = nullptr);
     void wcFree(Span &s, DeferredFrees &deferred);
-    bool volatileWcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s);
+    bool volatileWcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s, bool *dirty = nullptr);
     void volatileWcFree(Span &s, DeferredFrees &deferred);
 
     bool blAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, uint64_t align, Span &s)
@@ -2150,7 +2156,7 @@ private:
     uint32_t allocTicPair();
     void freeTicPair(uint32_t first);
     void writeTic(const Texture &t);
-    bool poolAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s);
+    bool poolAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s, bool *dirty = nullptr);
     void poolFree(Span &s, DeferredFrees &deferred);
     bool tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch, Texture &t,
                              Texture *sampled, DeferredFrees &deferred);

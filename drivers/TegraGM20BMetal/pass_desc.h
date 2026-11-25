@@ -33,6 +33,7 @@ struct DepthStencilAttachment {
     uint32_t stencil = 0;
     bool loaded = true, stored = true;  // an aspect is loaded, or stored: its contents outside the pass matter
     bool loadedLater = false;           // a later pass of the command buffer loads this depth
+    bool depthEnabled = true, stencilEnabled = true;
 };
 
 // A pass whose depth and stencil attachments are two textures, a Depth32Float and a Stencil8 of one extent and sample count:

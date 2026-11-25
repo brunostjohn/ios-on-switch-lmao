@@ -1796,7 +1796,7 @@ private:
         char line[960];
         size_t at = 0;
         auto add = [&](const char *format, auto... values) {
-            if (at < sizeof(line))
+            if (logged && at < sizeof(line))
                 at += static_cast<size_t>(snprintf(line + at, sizeof(line) - at, format, values...));
         };
         const auto span = [&](const char *name, const Span &value) {

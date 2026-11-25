@@ -45,12 +45,12 @@ struct TegraGM20BAbiPathsSpan {
 
 /* Counts: "flags=0x... pid=N name=N ...", NUL-terminated */
 struct TegraGM20BAbiPathsReply {
-	char line[512];
+	char line[1024];
 };
 
 #ifdef __cplusplus
 static_assert(sizeof(TegraGM20BAbiPaths) == 8, "TegraGM20BAbiPaths layout");
-static_assert(sizeof(TegraGM20BAbiPathsReply) == 512, "TegraGM20BAbiPathsReply layout");
+static_assert(sizeof(TegraGM20BAbiPathsReply) == 1024, "TegraGM20BAbiPathsReply layout");
 static_assert(sizeof(TegraGM20BAbiPathsSpan) == 120, "TegraGM20BAbiPathsSpan layout");
 #endif
 #endif

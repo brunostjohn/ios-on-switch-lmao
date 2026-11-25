@@ -262,6 +262,8 @@ enum class SwitchMetalShareable : uint8_t {
     std::string _key;
     MTLRenderPipelineDescriptor *_madeFrom;
     uint64_t _packKey;  // the hash the pack finds its records and reflection by (its key's, or its key and AIR's)
+    gm20b::PackRun _packRun;
+    bool _hasPackVariants;
     gm20b::Mutex _variantLock;
     // every variant asked of it, by name, for its life: plans and encoders name each by address
     std::map<std::string, std::shared_ptr<gm20b::Variant<gm20b::Pipeline>>> _variants;
@@ -279,12 +281,13 @@ enum class SwitchMetalShareable : uint8_t {
 @end
 
 #include "TegraGM20BMetalPlan.h"
+#include "ordered_executor.h"
 
 @interface SwitchMetalQueue : SwitchMetalObject {
 @public
     dispatch_queue_t _completionQueue;
-    dispatch_queue_t _handlers;  // its command buffers' scheduled handlers, in its order
-    std::atomic<void *> _last;   // the command buffer enqueued last, retained until its completed handlers ran
+    gm20b::OrderedExecutor _handlerExec;  // its command buffers' scheduled handlers, in its order
+    std::atomic<void *> _last;            // the command buffer enqueued last, retained until its completed handlers ran
     // the submit worker's: the kernel's bound on the writer promises of a command buffer held behind its held head
     gm20b::EventDeadline::Time _heldBound;
     uint32_t _unscheduled;
@@ -309,6 +312,7 @@ struct SwitchMetalPass {
     __unsafe_unretained id depth;
     NSUInteger depthSlice = 0;  // a 2D array's or cube's layer
     MTLLoadAction depthLoad, stencilLoad;
+    uint8_t zetaAspects = 3;
 
     // the descriptor's depth (0) and stencil (1) attachments as the encode reads them, the store as the encoder set it (a
     // resolve's, MultisampleResolve and StoreAndMultisampleResolve, as DontCare and Store)

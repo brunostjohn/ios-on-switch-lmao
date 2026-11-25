@@ -123,7 +123,7 @@ int pathsSysctl SYSCTL_HANDLER_ARGS
 	(void)oidp;
 	(void)arg1;
 	(void)arg2;
-	char line[512];
+	char line[1024];
 	switch_gpu_path_line(line, sizeof(line));
 	return SYSCTL_OUT(req, line, strlen(line) + 1);
 }

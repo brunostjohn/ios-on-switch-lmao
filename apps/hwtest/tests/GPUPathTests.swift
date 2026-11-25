@@ -27,7 +27,33 @@ struct JobVisibilityPathTest: GPUPathTest {
             pass.colorAttachments[0].storeAction = .store
             commands.makeRenderCommandEncoder(descriptor: pass)!.endEncoding()
         }
-        let bytes = try await gpu.read(target, bytesPerPixel: 4)
+        let length = 64 * 64 * 4
+        let page = Int(getpagesize())
+        let allocBytes = (length + page - 1) & ~(page - 1)
+        var allocation: UnsafeMutableRawPointer?
+        guard posix_memalign(&allocation, page, allocBytes) == 0, let memory = allocation else {
+            throw TestFailure("aligned readback allocation failed")
+        }
+        memory.initializeMemory(as: UInt8.self, repeating: 0, count: allocBytes)
+        guard
+            let readback = gpu.device.makeBuffer(
+                bytesNoCopy: memory, length: allocBytes, options: .storageModeShared,
+                deallocator: { pointer, _ in free(pointer) }
+            )
+        else {
+            free(memory)
+            throw TestFailure("no-copy readback buffer creation failed")
+        }
+        try await gpu.run { commands in
+            let blit = commands.makeBlitCommandEncoder()!
+            blit.copy(
+                from: target, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(),
+                sourceSize: MTLSize(width: 64, height: 64, depth: 1), to: readback, destinationOffset: 0,
+                destinationBytesPerRow: 64 * 4, destinationBytesPerImage: length
+            )
+            blit.endEncoding()
+        }
+        let bytes = Array(UnsafeRawBufferPointer(start: memory, count: length))
         let wrong = Self.wrong(bytes, Array([UInt8]([51, 102, 153, 255]).repeated(64 * 64)))
         metrics.set("wrong_bytes", wrong)
         return wrong == 0 ? [] : ["\(wrong) bytes of the cleared texture read back wrong"]

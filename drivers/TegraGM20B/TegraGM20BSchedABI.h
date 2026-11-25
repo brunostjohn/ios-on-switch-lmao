@@ -18,8 +18,8 @@ enum {
 	TegraGM20BJobSameUses = 1u << 10,
 
 	TegraGM20BMethodChannelProgress = 42,
-	/* Byte offset inside each 64-byte channel slot of Channels (after AbiFence + Semantic + Identity) */
-	TegraGM20BFencePageChannelProgressOffset = 40,
+	/* Byte offset inside each 64-byte channel slot of Channels (16-byte tgm_stamp after AbiFence + Semantic + Identity) */
+	TegraGM20BFencePageChannelProgressOffset = 48,
 };
 
 struct TegraGM20BAbiPriorityReply {

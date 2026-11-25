@@ -105,10 +105,17 @@ public:
         values_.clear();
         changed_.clear();
         pending_ = ~0u;
-        current_ = {};
+        if (generation_)
+            current_ = {};
         generation_ = 0;
         captured_ = std::numeric_limits<uint64_t>::max();
         index_ = kNoSnapshot;
+    }
+
+    void swapClean(StateSnapshots &other) noexcept
+    {
+        values_.swap(other.values_);
+        changed_.swap(other.changed_);
     }
 };
 

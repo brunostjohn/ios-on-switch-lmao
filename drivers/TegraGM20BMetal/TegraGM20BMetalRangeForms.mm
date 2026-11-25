@@ -232,6 +232,7 @@ bool SwitchMetalRangeEncode::depth16Tested(const SwitchMetalPass &pass, gm20b::P
     p.separate.depth = &separatePart_[0];
     p.depthStencil.clearStencil = true;
     p.depthStencil.stencil = 0;
+    p.depthStencil.stencilEnabled = true;
     return depth16Zeta(pass, p, true);
 }
 

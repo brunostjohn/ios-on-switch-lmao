@@ -249,6 +249,8 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
         p.depthStencil.loaded = pass.depthLoad == MTLLoadActionLoad || pass.stencilLoad == MTLLoadActionLoad;
         p.depthStencil.stored =
             pass.zeta[0].store != MTLStoreActionDontCare || pass.zeta[1].store != MTLStoreActionDontCare;
+        p.depthStencil.depthEnabled = (pass.zetaAspects & 1) != 0;
+        p.depthStencil.stencilEnabled = (pass.zetaAspects & 2) != 0;
         bool loadedLater = false;
         if (whole_) {
             for (size_t k = cb->_plan.encoderEnd(at); k < to_;) {

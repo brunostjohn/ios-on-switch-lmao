@@ -82,9 +82,9 @@ TEST(JobAbi, TheHashedAbiHeaderNeverIncludesIt)
 					    sizeof(TegraGM20BAbiFenceSemantic) +
 					    sizeof(TegraGM20BAbiFenceIdentity);
 	EXPECT_GE(uint32_t(TegraGM20BFencePageChannelProgressOffset), kUsedSlotBytes);
-	EXPECT_LE(uint32_t(TegraGM20BFencePageChannelProgressOffset) + sizeof(uint32_t),
+	EXPECT_LE(uint32_t(TegraGM20BFencePageChannelProgressOffset) + 16u,
 		  uint32_t(TegraGM20BFencePageRecordBytes));
-	EXPECT_EQ(uint32_t(TegraGM20BFencePageChannelProgressOffset) % 4u, 0u);
+	EXPECT_EQ(uint32_t(TegraGM20BFencePageChannelProgressOffset) % 16u, 0u);
 }
 
 // What attachSet and the raw kernel model refuse a method 31 record for before its BO lookup

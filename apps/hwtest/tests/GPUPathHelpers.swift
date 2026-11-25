@@ -16,9 +16,11 @@ public struct GPUPaths {
     public static let method: UInt32 = 0x5050
     public static let foreignWaitsOp: UInt32 = 6
 
+    public static let replySize = 1024
+
     public static func foreignWaits(_ connection: GPUConnection?) -> [String: Int]? {
         guard let connection else { return nil }
-        let (kr, reply) = connection.call(method, GPUConnection.words([foreignWaitsOp, 0]), outputSize: 512)
+        let (kr, reply) = connection.call(method, GPUConnection.words([foreignWaitsOp, 0]), outputSize: replySize)
         guard kr == KERN_SUCCESS else { return nil }
         return parse(String(decoding: reply.prefix { $0 != 0 }, as: UTF8.self)).counts
     }
@@ -33,7 +35,7 @@ public struct GPUPaths {
     public static func read(_ connection: GPUConnection?) -> Reading {
         var asked = "no_connection"
         if let connection {
-            let (kr, reply) = connection.call(method, GPUConnection.words([0, 0]), outputSize: 512)
+            let (kr, reply) = connection.call(method, GPUConnection.words([0, 0]), outputSize: replySize)
             if kr == KERN_SUCCESS { return .counts(parse(String(decoding: reply.prefix { $0 != 0 }, as: UTF8.self))) }
             asked = kr == GPUConnection.kIOReturnUnsupported ? "release_kernel" : GPUConnection.hex(kr)
         }

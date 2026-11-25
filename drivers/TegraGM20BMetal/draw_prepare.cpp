@@ -313,8 +313,8 @@ __attribute__((always_inline)) inline bool RenderEncoder::writeSetEntry(Pipeline
             return false;
         }
         if (t)
-            cb_->use(*t, written);
-        tic = t ? t->tic : 0;
+            cb_->use(t->standIn && !written ? *t->standIn : *t, written);
+        tic = t ? (t->standIn && !written ? t->standIn->tic : t->tic) : 0;
     }
     const Texture *mapped = e.kind == EntryTexture ? boundTexture(e) : nullptr;
     const uint8_t map = !mapped ? 0 : mapped->levelZero ? kLevelZeroMap : mapped->addressMap;
@@ -517,7 +517,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const bool dsChanged = dsDirty_;
     if (dsDirty_) {
         SWITCH_METAL_ENCODE_SPAN(Bind);
-        const bool depth = zeta && zetaHasDepth(zeta->format), stencil = zeta && zetaHasStencil(zeta->format);
+        const bool depth = zeta && zetaHasDepth(zeta->format) && pass_.depthStencil.depthEnabled,
+                   stencil = zeta && zetaHasStencil(zeta->format) && pass_.depthStencil.stencilEnabled;
         const bool fixedStencil = stencil && !shadowStencil_, shaderTests = shaderTestsActive_ && !shadowStencil_;
         SWITCH_METAL_DIAGNOSTIC(cb_->counts_.segmentCopies += !shaderTests && !measuringInline() && !bindsBySegment() &&
                                                               dsState_->segment(depth, fixedStencil));
@@ -534,7 +535,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     if (zcull_.candidate && !zcull_.invalidated && (dsChanged || pl != zcullProgram_)) {
         zcullProgram_ = pl;
         const bool earlyTests = pl->writesMemory[1] && zcullEarlyFragmentTests(pl->methodWords(), pl->methodCount());
-        if (zcullInvalidates(zcull_, ds_, zeta && zetaHasDepth(zeta->format), zeta && zetaHasStencil(zeta->format),
+        if (zcullInvalidates(zcull_, ds_, zeta && zetaHasDepth(zeta->format) && pass_.depthStencil.depthEnabled,
+                             zeta && zetaHasStencil(zeta->format) && pass_.depthStencil.stencilEnabled,
                              pl->fragmentDepth, shaderTestsActive_ != 0, pl->writesMemory[1], earlyTests)) {
             p.m(kInvalidateZcull, 0);
             SWITCH_METAL_DIAGNOSTIC(d.stats.zcullInvalidations++);
@@ -702,10 +704,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                       pl->blendKill);
     if (rebinds && cb_->sampleMaskHeld_ != kSampleMaskAll)
         cb_->sampleMaskHeld_ = kSampleMaskUnknown;
-    if (compatibleRasterMask_ != cb_->sampleMaskHeld_) {
-        const uint32_t m = compatibleRasterMask_;
-        p.inc(NVB197_SET_SAMPLE_MASK_X0_Y0, {m, m, m, m});
-        cb_->sampleMaskHeld_ = m;
+    const uint32_t wantMask = (rasterSamples_ > samples_ && pl->samples > samples_) ? (compatibleRasterMask_ & 0x1111u)
+                                                                                    : compatibleRasterMask_;
+    if (wantMask != cb_->sampleMaskHeld_) {
+        p.inc(NVB197_SET_SAMPLE_MASK_X0_Y0, {wantMask, wantMask, wantMask, wantMask});
+        cb_->sampleMaskHeld_ = wantMask;
     }
     if (rasterSamples_ > samples_ && tirControl(pl->samples) != tirControlHeld_) {
         tirControlHeld_ = tirControl(pl->samples);

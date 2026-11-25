@@ -368,6 +368,8 @@ void switch_gpu_chan_progress(struct tgm_chan *chan, volatile uint32_t *progress
 	chan->progress_cpu = progress_cpu;
 	WRITE_ONCE(chan->progress_word_seen, initial);
 	WRITE_ONCE(chan->stall_progress_word, initial);
+	if (TGM_STATS)
+		tgm_hold_progress(chan->chid, progress_cpu);
 }
 
 __attribute__((weak)) void switch_sched_render_submitted(void)

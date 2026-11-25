@@ -104,6 +104,7 @@ struct Pipeline {
     // variant's or a split twin's own programs read
     uint32_t memoryEntries = ~0u;
     uint8_t writeBits = 0;  // colors its draws write: SET_CT_WRITE(i) with a channel on
+    uint32_t ctWrite[8] = {};
     // colors its fragment shader reads, and may write, as storage images inside the pixel interlock (metal2vulkan's storage
     // form of a fetch: the state turns the interlock on with SET_PIXEL_SHADER_INTERLOCK_CONTROL); the ROP writes none of them
     uint8_t storageBits = 0;

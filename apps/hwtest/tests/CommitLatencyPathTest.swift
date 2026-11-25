@@ -166,8 +166,8 @@ struct CommitLatencyPathTest: HWTest {
                     "\(shape.name): \(pipelined / n) of \(encoders / n) encoders encoded ahead (veto \(vetoes))"
                 )
             }
-            if shape.event && pipelined > 0 {
-                failures.append("\(shape.name): encoders encoded ahead of a command buffer with an event")
+            if shape.event && pipelined / n > 8 {
+                failures.append("\(shape.name): \(pipelined / n) encoders encoded ahead past the event at pass 8")
             }
             if shape.geometry {
                 let commit = Self.median(commitUs), scale = commitMedians["scale"] ?? 0

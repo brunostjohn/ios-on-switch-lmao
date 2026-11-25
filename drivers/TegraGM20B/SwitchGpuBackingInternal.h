@@ -24,6 +24,7 @@ struct switch_gpu_backing_access {
 
 struct switch_gpu_backing {
 	switch_gpu_backing *next;
+	switch_gpu_backing *surface_next;
 	switch_gpu_backing *retiring_next, *expiry_next, *expiry_prev;
 	IOLock *lock;
 	uint64_t id, generation, content, host_epoch, host_visible_epoch;

@@ -47,11 +47,14 @@ static void cubicBinds(__unsafe_unretained SwitchMetalRenderEncoder *encoder, co
 
 void packedVariants(SwitchMetalPipeline *p, const gm20b::PackRun &run)
 {
-    // p is unshared until gm20bPipelineShell returns it.
-    for (const auto &[name, pl] : gRM->raw->variantPipelines(run, p->_caTransform)) {
-        auto variant = std::make_shared<gm20b::Variant<gm20b::Pipeline>>();
-        variant->publish(pl);
-        p->_variants.emplace(name, std::move(variant));
+    // p is unshared until gm20bPipelineShell returns it; variants are placed on first draw selection.
+    p->_packRun = run;
+    p->_hasPackVariants = false;
+    for (uint32_t i = 0; i < run.records; ++i) {
+        if (run.first[i].flags & gm20b::PipelineVariantRecord) {
+            p->_hasPackVariants = true;
+            break;
+        }
     }
 }
 
@@ -86,6 +89,12 @@ static gm20b::Variant<gm20b::Pipeline> *renderVariant(SwitchMetalPipeline *p, co
         else if (!at->second->reopen())
             return at->second.get();
         variant = at->second;
+    }
+    if (p->_hasPackVariants) {
+        if (gm20b::Pipeline *pl = gRM->raw->variantPipeline(p->_packRun, name, p->_caTransform)) {
+            variant->publish(pl);
+            return variant.get();
+        }
     }
     const std::string key = gm20bStateKey(p) + name;
     gm20b::Completion *completion = gRM->completion.get();

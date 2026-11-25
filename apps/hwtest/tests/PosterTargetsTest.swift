@@ -25,7 +25,7 @@ struct PosterTargetsTest: HWTest {
         metrics.set("panel", "\(width)x\(height)")
         guard let connection = GPUConnection() else { return .skip("no TegraGM20B connection", metrics) }
         let (kr, reply) = connection.call(
-            GPUPaths.method, GPUConnection.words([Self.targetPeaksOp, 0]), outputSize: 512
+            GPUPaths.method, GPUConnection.words([Self.targetPeaksOp, 0]), outputSize: GPUPaths.replySize
         )
         guard kr == KERN_SUCCESS else {
             let why =

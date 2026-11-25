@@ -123,20 +123,24 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsCachedBosDo)
 TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 {
 	const CodeText alloc = Block(client(), "IOReturn AGXDeviceUserClient::boAlloc(");
-	EXPECT_TRUE(
-		alloc.has("if (!ret && !bo->pool_va && !compressible && !system && "
-			  "!(in->flags & TegraGM20BBoContiguous)) spare = spareTake(in->bytes);"));
+	EXPECT_TRUE(alloc.has("if (!ret && !bo->pool_va && !compressible && !system && "
+			      "!(in->flags & TegraGM20BBoContiguous)) spare = spareTake(in->bytes, "
+			      "critical_);"));
 	EXPECT_TRUE(alloc.has("(in->flags & TegraGM20BBoContiguous) || system ? kClasses : "
 			      "classUp(in->bytes);"));
 	EXPECT_TRUE(alloc.has("cleanZeros(va, backing);"));
 	EXPECT_FALSE(Block(client(), "Spare *spareMake(SparePool *p, uint64_t bytes)")
 			     .has("cleanZeros"));
+	const CodeText recycle = Block(
+		client(), "void spareRecycleWork(thread_call_param_t param, thread_call_param_t)");
 	const CodeText work =
 		Block(client(), "void spareWork(thread_call_param_t param, thread_call_param_t)");
-	EXPECT_TRUE(work.has("switch_gpu_cached_zero(s->pas"));
+	EXPECT_TRUE(recycle.has("switch_gpu_cached_zero(s->pas"));
+	EXPECT_FALSE(recycle.has("cleanZeros(s->buffer"));
+	EXPECT_FALSE(recycle.has("p->ready[c] = s;"));
 	EXPECT_FALSE(work.has("cleanZeros(s->buffer"));
 	EXPECT_FALSE(work.has("p->ready[c] = s;"));
-	EXPECT_EQ(work.count("p->dirty = s;"), 2u)
+	EXPECT_EQ(recycle.count("p->dirty = s;") + work.count("p->dirty = s;"), 2u)
 		<< "a busy scrub's spare put back, and the refill's new one";
 	const CodeText completed = Block(client(), "void spareZeroed(void *context, int result)");
 	EXPECT_TRUE(
@@ -1810,11 +1814,12 @@ TEST(GM20BParkedBoSource, LockOrderAndOffLockVmCalls)
 	const CodeText freeMethod = Block(client(), "IOReturn AGXDeviceUserClient::boFreeMethod(");
 	EXPECT_TRUE(freeMethod.before("IOLockUnlock(lock_);", "switch_iokit_drop_parked_range("));
 
-	const CodeText work =
-		Block(client(), "void spareWork(thread_call_param_t param, thread_call_param_t)");
-	EXPECT_TRUE(work.before("reclaimParkedStep(", "IOLockLock(p->lock);"));
+	const CodeText reclaim =
+		Block(client(), "void spareReclaimWork(thread_call_param_t, thread_call_param_t)");
+	EXPECT_TRUE(reclaim.has("reclaimParkedStep("));
+	EXPECT_FALSE(reclaim.has("IOLockLock(p->lock);"));
 
-	const CodeText take = Block(client(), "Spare *spareTake(uint64_t bytes)");
+	const CodeText take = Block(client(), "Spare *spareTake(uint64_t bytes, bool critical)");
 	EXPECT_TRUE(take.before("IOLockUnlock(p->lock);", "parkedNotifyDemand("));
 	EXPECT_TRUE(take.before("IOLockUnlock(p->lock);", "parkedHasAny()"));
 

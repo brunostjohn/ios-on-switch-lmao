@@ -239,7 +239,7 @@ void tally(volatile uint64_t &counter, uint64_t bytes)
     if (&counter == &gUnsleepable) {
         switch_refusal("TegraSE", "cannot sleep", "%llu bytes done on the CPU: the caller cannot wait for an engine",
                        bytes);
-    } else {
+    } else if (&counter == &gUnreachable) {
         switch_refusal("TegraSE", "unreachable buffer", "%llu bytes done on the CPU: a buffer the engines cannot map",
                        bytes);
     }
@@ -1588,11 +1588,11 @@ void seThread(void *, wait_result_t)
             continue;
         forceOnly(&e);
         Engine *got = acquire();
-        forceOnly(nullptr);
         if (got) {  // held (busy and claimed) until giveBack
             reseeded = rng(*got, seed);
             giveBack(got);
         }
+        forceOnly(nullptr);
     }
     gForced[0] = nullptr;
     if (reseeded)

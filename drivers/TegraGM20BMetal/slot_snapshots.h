@@ -173,10 +173,19 @@ public:
         changed_.clear();
         pending_ = everySlot<Mask>();
         edited_ = Mask{};
-        current_ = {};
+        if (generation_)
+            current_ = {};
         generation_ = 0;
         captured_ = std::numeric_limits<uint64_t>::max();
         index_ = std::numeric_limits<uint32_t>::max();
+    }
+
+    // Both snapshots must be freshly constructed or cleared (generation_ == 0, current_ zeroed).
+    void swapClean(SlotSnapshots &other) noexcept
+    {
+        headers_.swap(other.headers_);
+        chunks_.swap(other.chunks_);
+        changed_.swap(other.changed_);
     }
 
 private:
@@ -305,6 +314,12 @@ public:
         objects_.clear();
         sets_.clear();
         set_ = Mask{};
+    }
+
+    void swapClean(ObjectSnapshots &other) noexcept
+    {
+        objects_.swapClean(other.objects_);
+        sets_.swap(other.sets_);
     }
 
 private:

@@ -19,7 +19,7 @@ struct PushScanTargetsTest: HWTest {
         var metrics = Metrics()
         guard let connection = GPUConnection() else { return .skip("no TegraGM20B connection", metrics) }
         let (kr, reply) = connection.call(
-            GPUPaths.method, GPUConnection.words([PosterTargetsTest.targetPeaksOp, 0]), outputSize: 512
+            GPUPaths.method, GPUConnection.words([PosterTargetsTest.targetPeaksOp, 0]), outputSize: GPUPaths.replySize
         )
         guard kr == KERN_SUCCESS else {
             let why =

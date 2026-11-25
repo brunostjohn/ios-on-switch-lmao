@@ -244,6 +244,7 @@ static int pl_switch(u32 pl)
 	u32 back = 0;
 
 	if (old != pl) {
+		preempt_disable();
 		/* the VCO divider at 1:2 around the change, written twice (linear divider operation) */
 		/* nouveau's nvkm_mask computes in int and declares two locals. */
 		/* NOLINTNEXTLINE(bugprone-signed-bitwise,readability-isolate-declaration) */
@@ -268,6 +269,7 @@ static int pl_switch(u32 pl)
 		/* NOLINTNEXTLINE(bugprone-signed-bitwise,readability-isolate-declaration) */
 		nvkm_mask(device, GPC2CLK_OUT_R, 0x3f00, 0);
 		nvkm_rd32(device, GPC2CLK_OUT_R);
+		preempt_enable();
 	}
 	back = nvkm_rd32(device, GPCPLL_COEFF_R);
 	return ((back >> 16) & 0x3f) == pl &&

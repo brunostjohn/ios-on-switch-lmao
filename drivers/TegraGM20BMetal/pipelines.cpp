@@ -338,6 +338,26 @@ std::vector<std::pair<std::string, Pipeline *>> Device::variantPipelines(const P
     return out;
 }
 
+Pipeline *Device::variantPipeline(const PackRun &run, const std::string &name, bool caTransform)
+{
+    const PackPipeline *rec = pack_.variantRecord(run, name, PackForm::Default);
+    if (!rec)
+        rec = pack_.variantRecord(run, name, PackForm::Barrier);
+    if (!rec)
+        return nullptr;
+    Pipeline *pl = placePackedRecord(*rec, caTransform);
+    const PackPipeline *barrier = pl && pl->storageBits ? pack_.variantRecord(run, name, PackForm::Barrier) : nullptr;
+    if (barrier) {
+        Pipeline **slot = pl->storageBlendBits ? &pl->blendTwin : &pl->barrierTwin;
+        if (!__atomic_load_n(slot, __ATOMIC_ACQUIRE)) {
+            Pipeline *twin = placePackedRecord(*barrier, caTransform);
+            if (twin && twin != pl && !twin->storageBits)
+                __atomic_store_n(slot, twin, __ATOMIC_RELEASE);
+        }
+    }
+    return pl;
+}
+
 Pipeline *Device::placePipeline(const PackRun &run, uint64_t keyHash, PackForm form, bool caTransform)
 {
     const PackPipeline *rec = pack_.find(run, form);
@@ -562,8 +582,10 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
         if (!prebuilt)
             w.m(m, v);
     }
+    memcpy(pl.ctWrite, writes, sizeof writes);
     pl.blendKill = iteratedBlendNoop(blob, pp.blobDwords, writes, keyString,
-                                     (pp.flags & PipelineStorageMetadata) ? pp.storageMask : 0) == kNoopSourceRgba0000;
+                                     (pp.flags & PipelineStorageMetadata) ? pp.storageMask : 0, blendPerTarget_,
+                                     blendPerTargetSeen_) == kNoopSourceRgba0000;
     if (!prebuilt) {
         w.m(PIXEL_SHADER_INTERLOCK_CONTROL, legalInterlockControl(interlockControl, sampleControl));
         w.m(HYBRID_ANTI_ALIAS_CONTROL, sampleControl);

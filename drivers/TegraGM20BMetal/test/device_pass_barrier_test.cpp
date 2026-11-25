@@ -590,6 +590,7 @@ TEST(DeviceTiledCacheSize, DynamicTileSizeTracksPassFootprintAndShadowCaches)
         pass.count = 1;
         pass.depthStencil.texture = &depth;
         pass.depthStencil.clearDepth = true;
+        pass.depthStencil.stored = false;
         pass.width = 64;
         pass.height = 64;
         gm20b::RenderEncoder *e = cb->render(pass);
@@ -708,6 +709,32 @@ TEST(DeviceTiledCacheTail, TailTiledCacheFlushRunsOnlyWhenDirty)
         EXPECT_EQ(std::count(m.begin(), m.end(), kTiledCacheFlush), 1);
         dev.destroyTexture(sepStencil);
         dev.destroyTexture(sepDepth);
+    }
+
+    {
+        gm20b::Texture second;
+        ASSERT_TRUE(dev.createTexture(128, 128, kBgra8, second, false, true));
+        cb = dev.begin();
+        ASSERT_NE(cb, nullptr);
+        gm20b::PassDesc firstPass;
+        firstPass.color[0].texture = &color;
+        firstPass.color[0].load = gm20b::ColorAttachment::Clear;
+        firstPass.count = 1;
+        cb->render(firstPass)->end();
+        gm20b::PassDesc secondPass;
+        secondPass.color[0].texture = &second;
+        secondPass.color[0].load = gm20b::ColorAttachment::Clear;
+        secondPass.count = 1;
+        cb->render(secondPass)->end();
+        ASSERT_TRUE(cb->commit(seqno));
+        m = methods(kernel_model::model.jobs.back().words);
+        const auto firstFlush = std::find(m.begin(), m.end(), kTiledCacheFlush);
+        const auto drainWfi = std::find(m.begin(), m.end(), kWaitForIdle);
+        ASSERT_NE(firstFlush, m.end());
+        ASSERT_NE(drainWfi, m.end());
+        EXPECT_LT(firstFlush, drainWfi);
+        EXPECT_EQ(std::count(m.begin(), m.end(), kTiledCacheFlush), 2);
+        dev.destroyTexture(second);
     }
 
     dev.destroyTexture(color);

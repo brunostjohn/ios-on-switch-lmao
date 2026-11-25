@@ -200,7 +200,8 @@ void AGXDeviceUserClient::parkUnlinkAllLocked()
 {
 	for (Bo *bo = bos_; bo; bo = bo->next)
 		parkUnlinkLocked(bo, false);
-	IOLockWakeup(lock_, &parkWait_, false);
+	parkOwner_ = nullptr;
+	switch_gpu_wakeup_inheritor(lock_, &parkWait_);
 }
 
 void AGXDeviceUserClient::drainParkedRanges()
@@ -249,7 +250,8 @@ ReclaimedBacking *AGXDeviceUserClient::detachReclaimedLocked(Bo *bo)
 			__atomic_sub_fetch(&gSystemCoherentBytes, bo->bytes, __ATOMIC_RELAXED);
 		}
 	}
-	IOLockWakeup(lock_, &parkWait_, false);
+	parkOwner_ = nullptr;
+	switch_gpu_wakeup_inheritor(lock_, &parkWait_);
 	return rb;
 }
 

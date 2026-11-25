@@ -47,7 +47,7 @@ Words read(const std::vector<uint32_t> &words, uint64_t cbStampPage, uint64_t pr
     EXPECT_GE(n, 0);
     constexpr uint32_t kProgressRelease = NVDEF(NVB06F, SEMAPHORED, OPERATION, RELEASE) |
                                           NVDEF(NVB06F, SEMAPHORED, RELEASE_WFI, EN) |
-                                          NVDEF(NVB06F, SEMAPHORED, RELEASE_SIZE, 4BYTE);
+                                          NVDEF(NVB06F, SEMAPHORED, RELEASE_SIZE, 16BYTE);
     for (long i = 0; i < n; i++) {
         if (m[i].method == kTiledCacheFlush) {
             w.flushes++;

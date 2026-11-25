@@ -146,7 +146,9 @@ enum StandInResolveCases {
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             encoder.endEncoding()
         }
-        return try await gpu.texels(texture)
+        return try await YcbcrPackedTargetTest.read(
+            gpu, try gpu.render(fragment: "texel_read", format: .rgba32Float), texture
+        )
     }
 
     static func judged(_ f: WordMipFormat, _ got: [UInt8], apple: [UInt8]) -> (off: Int, far: Int, worst: Int) {

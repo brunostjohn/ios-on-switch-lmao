@@ -86,7 +86,7 @@ bool AGXDeviceUserClient::parkWaitStableLocked(uint64_t handle)
 		const Bo *bo = findBo(handle);
 		if (!bo || !switch_gpu_park_is_transient(bo->parkState))
 			return true;
-		IOLockSleep(lock_, &parkWait_, THREAD_UNINT);
+		switch_gpu_sleep_inheritor(lock_, &parkWait_, parkOwner_);
 	}
 }
 
@@ -224,6 +224,7 @@ IOReturn AGXDeviceUserClient::boPark(const TegraGM20BAbiBoPark *in)
 			ret = backingParkable(bo->backing);
 		if (!ret) {
 			bo->parkState = SwitchGpuParkState::Parking;
+			parkOwner_ = switch_gpu_current_thread();
 			bo->parkedBacking = bo->backing;
 			bo->backing = nullptr;
 			bumpBoGen();
@@ -271,7 +272,8 @@ IOReturn AGXDeviceUserClient::boPark(const TegraGM20BAbiBoPark *in)
 		}
 		if (open)
 			submitGate_.endMutation(lock_);
-		IOLockWakeup(lock_, &parkWait_, false);
+		parkOwner_ = nullptr;
+		switch_gpu_wakeup_inheritor(lock_, &parkWait_);
 		IOLockUnlock(lock_);
 		if (oldView)
 			oldView->release();
@@ -307,7 +309,8 @@ IOReturn AGXDeviceUserClient::boPark(const TegraGM20BAbiBoPark *in)
 			still->parkState = SwitchGpuParkState::Live;
 			bumpBoGen();
 		}
-		IOLockWakeup(lock_, &parkWait_, false);
+		parkOwner_ = nullptr;
+		switch_gpu_wakeup_inheritor(lock_, &parkWait_);
 		IOLockUnlock(lock_);
 		switch_iokit_drop_parked_range(task_, snap.va, snap.bytes, snap.guard);
 		return kIOReturnNotOpen;
@@ -321,7 +324,8 @@ IOReturn AGXDeviceUserClient::boPark(const TegraGM20BAbiBoPark *in)
 				     still->bytes, snap.system, false};
 		wakeReaper = parkedPoolPush(&still->parkedNode, true);
 	}
-	IOLockWakeup(lock_, &parkWait_, false);
+	parkOwner_ = nullptr;
+	switch_gpu_wakeup_inheritor(lock_, &parkWait_);
 	IOLockUnlock(lock_);
 	if (wakeReaper)
 		kickSpareWork();
@@ -373,6 +377,7 @@ IOReturn AGXDeviceUserClient::boUnpark(const TegraGM20BAbiBoUnpark *in,
 		return actionToReturn(action);
 	}
 	bo->parkState = SwitchGpuParkState::Unparking;
+	parkOwner_ = switch_gpu_current_thread();
 	parkUnlinkLocked(bo, false);
 	snap = {bo->buffer.memory,
 		bo->parkedVa,
@@ -417,7 +422,8 @@ IOReturn AGXDeviceUserClient::boUnpark(const TegraGM20BAbiBoUnpark *in,
 			newMap = nullptr;
 		}
 		submitGate_.endMutation(lock_);
-		IOLockWakeup(lock_, &parkWait_, false);
+		parkOwner_ = nullptr;
+		switch_gpu_wakeup_inheritor(lock_, &parkWait_);
 		IOLockUnlock(lock_);
 		if (newMap)
 			switch_iokit_unmap_overwrite(task_, newMap, snap.va, snap.bytes);
@@ -438,7 +444,8 @@ IOReturn AGXDeviceUserClient::boUnpark(const TegraGM20BAbiBoUnpark *in,
 		if (!closed)
 			wakeReaper = parkedPoolPush(&still->parkedNode, false);
 	}
-	IOLockWakeup(lock_, &parkWait_, false);
+	parkOwner_ = nullptr;
+	switch_gpu_wakeup_inheritor(lock_, &parkWait_);
 	IOLockUnlock(lock_);
 	if (wakeReaper)
 		kickSpareWork();

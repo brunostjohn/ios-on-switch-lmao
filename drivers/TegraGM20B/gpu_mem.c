@@ -383,6 +383,10 @@ void tgm_mem_del(struct tgm_mem **pmem)
 	tgm_gpu_lock();
 	mem_big_views_drop(mem);
 	nvif_mem_dtor(&mem->mem);
+	if (mem->smmu_iova && l2_on()) {
+		nvkm_ltc_flush(tgm_gpu.device->ltc);
+		nvkm_ltc_invalidate(tgm_gpu.device->ltc);
+	}
 	mutex_unlock(&tgm_gpu.lock);
 	if (mem->smmu_iova)
 		switch_gpu_smmu_unmap(mem->smmu_iova, mem->smmu_npages);

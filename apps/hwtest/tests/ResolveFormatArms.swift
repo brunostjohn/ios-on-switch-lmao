@@ -17,6 +17,7 @@ extension ResolveTwodTest {
         let format: X1Format
         let samples: Int
         let exact: Bool
+        let twod: Bool
         let pass: Bool
         var name: String { "\(format.name)_\(samples)x" }
     }
@@ -26,7 +27,7 @@ extension ResolveTwodTest {
             [2, 4].map { n in
                 FormatCell(
                     format: format, samples: n, exact: format.name == "rgba16f" && n == 2,
-                    pass: format.name != "rgb10a2"
+                    twod: !(format.name.hasSuffix("srgb") && n == 4), pass: format.name != "rgb10a2"
                 )
             }
         }
@@ -69,7 +70,9 @@ extension ResolveTwodTest {
             passMs = String(format: "%.3f", pass.gpuMs)
         }
         metrics.set("\(cell.name)_ms", String(format: "%.3f", picked.gpuMs) + "/" + passMs)
-        if route != "twod" { wrong.append("\(cell.name)_not_twod") }
+        if route != (cell.twod ? "twod" : "pass") {
+            wrong.append("\(cell.name)_not_\(cell.twod ? "twod" : "pass")")
+        }
         if picked.path != "gm20b" { wrong.append("\(cell.name)_path") }
         if beyond > 0 { wrong.append("\(cell.name)_beyond_one") }
         if cell.exact && off > 0 { wrong.append("\(cell.name)_off_metal") }
@@ -179,6 +182,12 @@ extension ResolveTwodTest {
                                                         want = X1Rounding.nearest.code(
                                                             X1Channel.encoded(sum * invN), channel
                                                         )
+                                                    case .float(10):
+                                                        var sum = channel.value(c0[c])
+                                                        if n > 1 { sum += channel.value(c1[c]) }
+                                                        if n > 2 { sum += channel.value(c2[c]) }
+                                                        if n > 3 { sum += channel.value(c3[c]) }
+                                                        want = X1Rounding.nearest.code(sum * invN, channel)
                                                     default:
                                                         var sum = channel.value(c0[c])
                                                         if n > 1 { sum += channel.value(c1[c]) }
@@ -217,6 +226,9 @@ extension ResolveTwodTest {
             case .srgb8:
                 let linear = samples.map { X1Channel.linear(channel.value($0[c])) }.reduce(0, +) / Double(n)
                 return X1Rounding.nearest.code(X1Channel.encoded(linear), channel)
+            case .float(10):
+                let mean = samples.map { channel.value($0[c]) }.reduce(0, +) / Double(n)
+                return X1Rounding.nearest.code(mean, channel)
             default:
                 let mean = samples.map { channel.value($0[c]) }.reduce(0, +) / Double(n)
                 return X1Rounding.tiesEven.code(mean, channel)

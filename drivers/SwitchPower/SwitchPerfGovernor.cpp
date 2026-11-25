@@ -148,18 +148,22 @@ bool step(const switchperf::Config &config, uint64_t now, bool *boot, uint64_t *
     const uint64_t until = switchperf::boostUntil();
     if (until > now)
         switch_gov_boost(&gTick.gov, gTick.gov.count - 1, until, now);
+#if DEVELOPMENT || DEBUG
     switchperf::lineWindow(&gTick.stats, busy);
+#endif
     *boot = now < __atomic_load_n(&switchperf::gBootUntil, __ATOMIC_RELAXED);
     if (*boot)
         busy = 1000;  // the boot runs at the top point (the ceiling: thermal limits still apply)
     switch_gov_step(&gTick.gov, now, busy);
     __atomic_store_n(&switchperf::gDecided, gTick.gov.cur | gTick.generation << 8, __ATOMIC_RELEASE);
     bool line = false;
+#if DEVELOPMENT || DEBUG
     if (now >= gTick.logDue) {
         line = true;
         gTick.logDue = now + config.logWindow;
         switchperf::linePublish(&gTick.stats, &gTick.gov, now);
     }
+#endif
     return line || gTick.gov.cur != __atomic_load_n(&switchperf::gApplied, __ATOMIC_RELAXED);
 }
 
@@ -352,16 +356,20 @@ unsigned switchperf::take(char *line, size_t len)
         return 0;
     const uint64_t now = mach_absolute_time();
     const bool fellBack = closeBootWindow(now);
+#if DEVELOPMENT || DEBUG
     LineTaken taken = {};
     const bool logDue = lineTake(&taken);
+#endif
     const unsigned index = indexNow(now);
     if (fellBack) {
         IOLog("SwitchPerf: boot done at %llu s of uptime (no System Boot Complete by then): the CPU governor (ceiling "
               "%u MHz) and the GPU's idle clock decide from here\n",
               static_cast<unsigned long long>(kBootFallbackSeconds), khzAt(ceiling()) / 1000);
     }
+#if DEVELOPMENT || DEBUG
     if (logDue && line && len)
         lineFormat(taken, index, line, len);
+#endif
     return index;
 }
 

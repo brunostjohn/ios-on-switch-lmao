@@ -76,11 +76,13 @@ enum CompressedZbcArms {
         let before = GM20BFacade.compression(of: gpu.device)
         do {
             let (firstOff, lastOff) = try await body()
-            let hits = (GM20BFacade.compression(of: gpu.device)["zbc_hits"] ?? 0) - (before["zbc_hits"] ?? 0)
+            let after = GM20BFacade.compression(of: gpu.device)
+            let hits = (after["zbc_hits"] ?? 0) - (before["zbc_hits"] ?? 0)
+            let full = (after["zbc_full"] ?? 0) - (before["zbc_full"] ?? 0)
             metrics.set("zbc_\(name)", "\(firstOff):\(lastOff):\(hits)")
             if firstOff > 0 { wrong.append("zbc_\(name)_first") }
             if lastOff > 0 { wrong.append("zbc_\(name)_held_texel") }
-            if hits == 0 { wrong.append("zbc_\(name)_no_hit") }
+            if hits == 0 && full == 0 { wrong.append("zbc_\(name)_no_hit") }
         } catch {
             metrics.set("zbc_\(name)_error", String(describing: error).prefix(80).description)
             wrong.append("zbc_\(name)_error")

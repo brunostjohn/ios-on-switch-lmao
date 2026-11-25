@@ -197,14 +197,16 @@ IOReturn AGXDeviceUserClient::surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout
 		object->retain();
 	IOLockUnlock(lock_);
 	const bool packed = switch_gpu_surface_packed(surface);
+	const bool asksLayout = in->width || in->height || in->bpp || in->bytes_per_row ||
+				(in->flags & TegraGM20BLayoutWrites);
 	const bool same = switch_gpu_surface_shape_matches(surface, in->width, in->height, in->bpp,
 							   in->bytes_per_row);
 	const bool exclusive = switch_gpu_surface_layout_exclusive(object, true) == 0;
-	const int writes =
-		tgm_layout_ask_flags(exclusive, packed, surface.client_memory, canonical || same,
-				     (in->flags & TegraGM20BLayoutWrites) != 0,
-				     tgm_surface_unwritten(object), firstAsk) |
-		(canCompress ? TGM_LAYOUT_ASK_COMPRESS : 0);
+	const int writes = tgm_layout_ask_flags(exclusive, packed, surface.client_memory,
+						asksLayout && (canonical || same),
+						(in->flags & TegraGM20BLayoutWrites) != 0,
+						tgm_surface_unwritten(object), firstAsk) |
+			   (canCompress ? TGM_LAYOUT_ASK_COMPRESS : 0);
 	const uint32_t width = uint32_t(surface.width), height = uint32_t(surface.height),
 		       pitch = uint32_t(surface.pitch);
 	const int layout =

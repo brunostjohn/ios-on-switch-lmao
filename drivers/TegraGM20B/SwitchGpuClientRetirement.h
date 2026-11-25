@@ -243,7 +243,7 @@ void AGXDeviceUserClient::releaseLeft()
 #ifdef KERNEL
 	while ((left.bos || left.indexes || left.bindings || reclaimDeferredCount_) &&
 	       submitGate_.mutating())
-		IOLockSleep(lock_, &submitGate_, THREAD_UNINT);
+		switch_gpu_sleep_inheritor(lock_, &submitGate_, submitGate_.mutator());
 	const uint64_t reclaimSeq = reclaimDeferredCount_ ? reclaimSeq_ : 0u;
 	IOLockUnlock(lock_);
 	if (!left.bos && !left.indexes && !left.bindings && !reclaimSeq)
@@ -254,7 +254,7 @@ void AGXDeviceUserClient::releaseLeft()
 		drainDeferredReclaims(reclaimSeq);
 #else
 	while ((left.bos || left.indexes || left.bindings) && submitGate_.mutating())
-		IOLockSleep(lock_, &submitGate_, THREAD_UNINT);
+		switch_gpu_sleep_inheritor(lock_, &submitGate_, submitGate_.mutator());
 	IOLockUnlock(lock_);
 	if (!left.bos && !left.indexes && !left.bindings)
 		return;

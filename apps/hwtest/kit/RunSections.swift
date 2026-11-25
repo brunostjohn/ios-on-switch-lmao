@@ -28,7 +28,10 @@ struct RunningRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ProgressView().frame(width: 52)
+            Text("RUN")
+                .font(.caption2.bold().monospaced())
+                .foregroundStyle(.secondary)
+                .frame(width: 52)
             VStack(alignment: .leading, spacing: 3) {
                 Text(row.test.name).font(.headline)
                 Text("\(row.test.id) · \(row.test.subsystem.rawValue) · since \(started)")

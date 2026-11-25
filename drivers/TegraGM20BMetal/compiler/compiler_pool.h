@@ -104,15 +104,17 @@ private:
 
     Hooks hooks_;
     mutable std::mutex lock_;
-    std::condition_variable work_, idle_;
+    std::condition_variable work_, idle_, idleWork_;
     std::map<Name, std::shared_ptr<Job>> jobs_;
     std::vector<std::thread> workers_;
+    std::thread idleWorker_;
     unsigned foregroundRunning_ = 0, backgroundStarting_ = 0;
-    uint64_t arrivals_ = 0;
+    uint64_t arrivals_ = 0, idleEpoch_ = 0, idleHandled_ = 0;
     bool stopping_ = false;
     Stats stats_;
 
     void workerLoop(unsigned slot);
+    void idleLoop();
     std::shared_ptr<Job> next();
     void primary(const std::shared_ptr<Job> &job, int32_t result);
     void finish(const std::shared_ptr<Job> &job, int32_t splitResult);

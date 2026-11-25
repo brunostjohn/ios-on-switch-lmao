@@ -60,7 +60,28 @@ struct InterlockSpinScene: GPUScene {
                     }
                     encoder.endEncoding()
                 }
-                let warm = try await gpu.run(tolerateError: true, draw)
+                let runArm: () async throws -> GPU.Timing = {
+                    if arm.0 == "default",
+                       let forced = try await GM20BFacade.forcingFetchRung(
+                           4,
+                           on: gpu.device,
+                           { try await gpu.run(draw) }
+                       )
+                    {
+                        return forced
+                    }
+                    return try await gpu.run(draw)
+                }
+                let warm: GPU.Timing
+                if arm.0 == "default",
+                   let forced = try await GM20BFacade.forcingFetchRung(
+                       4, on: gpu.device, { try await gpu.run(tolerateError: true, draw) }
+                   )
+                {
+                    warm = forced
+                } else {
+                    warm = try await gpu.run(tolerateError: true, draw)
+                }
                 guard !warm.path.hasPrefix("error:"), kind != "gm20b" || warm.path == "gm20b" else {
                     result.expect(false, "\(label): \(warm.path)")
                     continue
@@ -68,7 +89,7 @@ struct InterlockSpinScene: GPUScene {
                 let before = GM20BFacade.counters(of: gpu.device)
                 var times: [Double] = []
                 for _ in 0 ..< Self.runs {
-                    let timing = try await gpu.run(draw)
+                    let timing = try await runArm()
                     result.expect(kind != "gm20b" || timing.path == "gm20b", "\(label): \(timing.path)")
                     result.expect(timing.gpuTimed && timing.gpuClock != "host", "\(label): no GPU timestamp")
                     times.append(timing.gpuTimed && timing.gpuClock != "host" ? timing.gpuMilliseconds : 0)

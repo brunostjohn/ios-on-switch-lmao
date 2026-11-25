@@ -116,8 +116,16 @@ bool readsStandIn(const gm20b::PackKernelEntry &x, SwitchMetalTexture *t, bool w
 // `standIn`: the dispatch reads the texture through its stand-in, drawn from texels a write leaves stale
 gm20b::KernelUse textureUse(SwitchMetalTexture *t, bool writes, bool standIn)
 {
-    if (gm20b::xrPlanesPooled(t->_raw))  // its kernels read and store its planes' pools (xr_pools.h)
-        return {(__bridge const void *)t, gm20b::kernelTextureSpan(*t->_raw.luma), true, writes, standIn};
+    if (gm20b::xrPlanesPooled(t->_raw)) {
+        gm20b::ByteSpan span = gm20b::kernelTextureSpan(*t->_raw.luma);
+        if (t->_raw.chroma && !t->_raw.chroma->memoryless) {
+            const gm20b::ByteSpan alpha = gm20b::kernelTextureSpan(*t->_raw.chroma);
+            const uint64_t lo = std::min(span.va, alpha.va);
+            const uint64_t hi = std::max(span.va + span.bytes, alpha.va + alpha.bytes);
+            span = {lo, hi - lo};
+        }
+        return {(__bridge const void *)t, span, true, writes, standIn};
+    }
     if (const gm20b::TexelRows *rows = t->_raw.texelRows)  // its texels lie in its surface's image (texel_rows.h)
         return {(__bridge const void *)t, {rows->import->bo.va, rows->import->layout.bytes}, true, writes, standIn};
     const gm20b::KernelTextureForm form = gm20b::kernelTextureForm(t->_raw, standIn);
@@ -150,8 +158,8 @@ void kernelUses(SwitchMetalCommandBuffer *cb, size_t at, std::vector<gm20b::Kern
         for (uint32_t i = 0; i < record.entries; ++i) {
             const auto &e = record.entry[i];
             const bool writes = gm20b::kernelEntryWrites(record, i);
-            if (e.kind == gm20b::KernelTexture && gm20b::kernelTextureSlot(e) < 31 &&
-                textures[gm20b::kernelTextureSlot(e)]) {
+            if ((e.kind == gm20b::KernelTexture || e.kind == gm20b::KernelTexturePlane) &&
+                gm20b::kernelTextureSlot(e) < 31 && textures[gm20b::kernelTextureSlot(e)]) {
                 SwitchMetalTexture *t = (__bridge SwitchMetalTexture *)textures[gm20b::kernelTextureSlot(e)];
                 uses.push_back(textureUse(t, writes, readsStandIn(e, t, writes)));
             } else if (e.kind == gm20b::KernelBuffer && e.slot < 31 &&
@@ -210,7 +218,7 @@ bool admitComputeDispatch(SwitchMetalCommandBuffer *cb, size_t at,
             const bool standIn = readsStandIn(x, t, writes);
             const gm20b::KernelTextureForm form =
                 t ? gm20b::kernelTextureForm(t->_raw, standIn) : gm20b::KernelTextureForm::InPlace;
-            if (form == gm20b::KernelTextureForm::Shadow)
+            if (form == gm20b::KernelTextureForm::Shadow || (t && gm20b::xrPlanesPooled(t->_raw)))
                 shadowSlots |= 1u << slot;
             // a sampler entry that holds its pairs samples a converted texture with the modes its kernel was compiled with,
             // right where the texture's map leaves them; the others, not paired with a texture as a draw's handles are,
@@ -290,7 +298,8 @@ bool admitComputeDispatch(SwitchMetalCommandBuffer *cb, size_t at,
                     const auto &binding = plan.buffers[2][state.buffers][entry.slot];
                     if (binding.source == gm20b::BufferBinding::Source::Buffer)
                         exact.push_back({binding.object, access});
-                } else if (entry.kind == gm20b::KernelTexture && gm20b::kernelTextureSlot(entry) < 31) {
+                } else if ((entry.kind == gm20b::KernelTexture || entry.kind == gm20b::KernelTexturePlane) &&
+                           gm20b::kernelTextureSlot(entry) < 31) {
                     exact.push_back({plan.kernelTextures[state.textures].objects[gm20b::kernelTextureSlot(entry)],
                                      uint8_t(access | gm20b::ResourceUse::Sample)});
                 } else if (entry.kind == gm20b::KernelSampler && entry.slot < 16) {

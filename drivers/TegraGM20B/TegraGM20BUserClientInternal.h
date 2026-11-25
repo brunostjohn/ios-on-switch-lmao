@@ -202,6 +202,8 @@ struct OwnerStat {
 struct SparePool {
 	IOLock *lock;
 	thread_call_t call;
+	thread_call_t recycleCall;
+	thread_call_t reclaimCall;
 	Spare *dirty;         // freed, not yet zeroed
 	PoolZero *poolDirty;  // freed pool BOs, not yet zeroed
 	Spare *ready
@@ -219,7 +221,7 @@ struct SparePool {
 
 void cleanZeros(void *va, uint64_t bytes);
 SparePool *spares();
-Spare *spareTake(uint64_t bytes);
+Spare *spareTake(uint64_t bytes, bool critical = false);
 void spareIneligible();
 bool spareKeep(const SwitchGpuCachedBuffer &buffer, uint64_t *pas, uint64_t bytes,
 	       switch_gpu_cached_mapping *mapping = nullptr);
@@ -515,6 +517,7 @@ class AGXDeviceUserClient : public IOUserClient
 	uint32_t reclaimDeferredCount_ = 0;
 	uint64_t reclaimSeq_ = 0;
 	uint32_t parkWait_ = 0;
+	SwitchGpuThreadRef parkOwner_ = nullptr;
 	thread_call_t releaseCall_ = nullptr;
 	RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
 	// a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)

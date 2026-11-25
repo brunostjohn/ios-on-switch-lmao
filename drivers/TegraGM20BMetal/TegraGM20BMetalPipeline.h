@@ -28,6 +28,8 @@ bool gm20bPipelinePublished();
 // The worker's, before it submits a range of `cb` (null: before other work): the encode ahead of another command buffer,
 // or of this one where the range is not the one it began, given back
 void gm20bPipelineYield(SwitchMetalCommandBuffer *cb, size_t from, bool nativeRange);
+bool gm20bPipelineOpen();
+bool gm20bPipelineHasOpenAhead(SwitchMetalCommandBuffer *cb);
 // The worker's, before it finishes `cb` on an error found before any range of it was submitted: the encode ahead of `cb`
 // given back first, as gm20bPipelineYield gives it back before a range. That finish may complete `cb`, and its completion
 // returns the recording the encode reads to the pool for another command buffer to take.

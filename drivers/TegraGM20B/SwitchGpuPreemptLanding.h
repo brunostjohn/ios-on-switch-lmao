@@ -38,6 +38,20 @@ switch_gpu_preempt_landing(const struct switch_gpu_batch_release *last, uint64_t
 	return last->job_last ? SWITCH_GPU_LANDED_JOB_END : SWITCH_GPU_LANDED_MID_JOB;
 }
 
+static inline enum switch_gpu_landing
+switch_gpu_preempt_landing_with_progress(const struct switch_gpu_batch_release *last,
+					 uint64_t progress_pt, uint64_t asked_pt, uint64_t start_pt)
+{
+	const enum switch_gpu_landing landing =
+		switch_gpu_preempt_landing(last, asked_pt, start_pt);
+
+	if (landing != SWITCH_GPU_LANDED_UNKNOWN)
+		return landing;
+	if (progress_pt && progress_pt >= asked_pt && progress_pt <= start_pt)
+		return SWITCH_GPU_LANDED_MID_JOB;
+	return SWITCH_GPU_LANDED_UNKNOWN;
+}
+
 static inline unsigned switch_gpu_preempt_bucket(uint64_t ns)
 {
 	unsigned b = 0;

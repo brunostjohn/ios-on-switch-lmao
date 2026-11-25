@@ -45,6 +45,7 @@ uint32_t privateCompressedKind(MTLTextureDescriptor *d)
     facts.plainColour =
         f && f->rt && !gm20b::blockCompressed(f) && gm20b::xrForm(uint32_t(d.pixelFormat)) == gm20b::XrForm::None;
     facts.zeta = gm20b::zetaFormatIndex(uint32_t(d.pixelFormat)) < gm20b::kZetaFormats ? uint32_t(d.pixelFormat) : 0;
+    facts.format = uint32_t(d.pixelFormat);
     const bool cube = d.textureType == MTLTextureTypeCube || d.textureType == MTLTextureTypeCubeArray;
     facts.layers = uint32_t(std::max<NSUInteger>(d.arrayLength, 1)) * (cube ? 6 : 1);
     facts.bpp = f ? f->bpp : 0;
@@ -84,7 +85,8 @@ void gm20bMoveWanting()
     if (gMoving.empty())
         return;
     // a move's job is a command buffer of its own: an encode ahead holding the device's goes back first
-    gm20bPipelineYield(nil, SIZE_MAX, false);
+    if (gm20bPipelineOpen())
+        gm20bPipelineYield(nil, SIZE_MAX, false);
     for (SwitchMetalTexture *t : gMoving)
         d.compressedFromPlain(t->_raw);
     gMoving.clear();

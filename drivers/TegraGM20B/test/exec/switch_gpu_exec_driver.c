@@ -199,6 +199,10 @@ void tgm_hold_released(unsigned int chid, uint64_t end_pt, int job_last)
 {
 }
 
+void tgm_hold_progress(unsigned int chid, const volatile void *progress_cpu)
+{
+}
+
 void tgm_hold_track(struct nvkm_device *dev, unsigned int chid, int on)
 {
 }

@@ -23,12 +23,11 @@ inline bool mixedSamples(uint32_t colour, uint32_t zeta)
 
 constexpr uint32_t kTirWords = 10;
 
-// SET_TIR_CONTROL for a state of `stateSamples` in a mixed pass (REDUCE_COVERAGE is bit 1)
-inline uint32_t tirControl(uint32_t stateSamples)
+// GM20B b197 faults INVALID_TIR_COMBINATION05 (0x127) if REDUCE_COVERAGE is disabled under RASTER_N_TARGET_M.
+// A four-sample state's sample-0 colour rule is therefore split into two draws (draw.cpp) rather than toggling this bit.
+inline uint32_t tirControl(uint32_t)
 {
-    return (stateSamples == 1 ? NVB197_SET_TIR_CONTROL_REDUCE_COVERAGE_ENABLE
-                              : NVB197_SET_TIR_CONTROL_REDUCE_COVERAGE_DISABLE)
-           << 1;
+    return NVB197_SET_TIR_CONTROL_REDUCE_COVERAGE_ENABLE << 1;
 }
 
 inline void tirOn(Push &p, uint32_t rasterSamples)
@@ -42,10 +41,10 @@ inline void tirOn(Push &p, uint32_t rasterSamples)
     p.m(NVB197_SET_TIR, NVB197_SET_TIR_MODE_RASTER_N_TARGET_M);
 }
 
+// GM20B b197 faults INVALID_VALUE (0x004) on SET_ANTI_ALIAS_RASTER = 1X1 (0), even with SET_TIR disabled.
 inline void tirOff(Push &p)
 {
     p.m(NVB197_SET_TIR, NVB197_SET_TIR_MODE_DISABLED);
-    p.m(NVB197_SET_ANTI_ALIAS_RASTER, NVB197_SET_ANTI_ALIAS_RASTER_SAMPLES_MODE_1X1);
 }
 
 // HW Test's rows of a mixed pass's methods (Device::probeTir, debug builds; gpu.gm20b.zc_mixed, gpu.gm20b.mixed_end_rows),

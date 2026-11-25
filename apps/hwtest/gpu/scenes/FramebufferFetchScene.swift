@@ -32,7 +32,7 @@ struct FramebufferFetchScene: GPUScene {
                 let steps = mode >= 5 ? Self.stressSteps : Self.steps
                 let key = "\(format.rawValue.lowercased())_\(mode)"
                 let before = GM20BFacade.counters(of: gpu.device)
-                let timing = try await gpu.run { commands in
+                let encode: (MTLCommandBuffer) -> Void = { commands in
                     let pass = MTLRenderPassDescriptor()
                     pass.colorAttachments[0].texture = target
                     pass.colorAttachments[0].loadAction = .clear
@@ -74,6 +74,16 @@ struct FramebufferFetchScene: GPUScene {
                         destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin()
                     )
                     blit.endEncoding()
+                }
+                let timing: GPU.Timing
+                if let forced = try await GM20BFacade.forcingFetchRung(
+                    4,
+                    on: gpu.device,
+                    { try await gpu.run(encode) }
+                ) {
+                    timing = forced
+                } else {
+                    timing = try await gpu.run(encode)
                 }
                 let after = GM20BFacade.counters(of: gpu.device)
                 result.metrics.set("path_\(key)", timing.path)

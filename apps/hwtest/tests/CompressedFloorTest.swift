@@ -94,7 +94,9 @@ struct CompressedFloorTest: HWTest {
     /// The paths method's pool op: "ready_kib=N floor_kib=N held_kib=N clean_chunks=N", or nil when the kernel does not
     /// answer it
     static func pool(_ connection: GPUConnection) -> [String: Int]? {
-        let (kr, reply) = connection.call(GPUPaths.method, GPUConnection.words([pathsOpPool, 0]), outputSize: 512)
+        let (kr, reply) = connection.call(
+            GPUPaths.method, GPUConnection.words([pathsOpPool, 0]), outputSize: GPUPaths.replySize
+        )
         guard kr == KERN_SUCCESS else { return nil }
         var fields: [String: Int] = [:]
         for field in String(decoding: reply.prefix { $0 != 0 }, as: UTF8.self).split(separator: " ") {

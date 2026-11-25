@@ -179,7 +179,7 @@ Pipeline *Device::placeVariant(Pipeline &pl, const std::array<uint32_t, 2> &inde
     return result;
 }
 
-bool Device::placePackWindowProgram(uint32_t index, PlacedProgram &out) const
+bool Device::placePackWindowProgram(uint32_t index, PlacedProgram &out)
 {
     if (!packWindowProgram(index, out.program, out.data))
         return false;
@@ -187,6 +187,7 @@ bool Device::placePackWindowProgram(uint32_t index, PlacedProgram &out) const
     out.record = &programs[index];
     out.header = pack_.section<uint8_t>(PackHeap) + programs[index].program;
     out.farUbos = pack_.farUbos(programs[index]);
+    SWITCH_METAL_DIAGNOSTIC(stats.packSlotsInBoundGrains.fetch_add(1, std::memory_order_relaxed));
     return true;
 }
 

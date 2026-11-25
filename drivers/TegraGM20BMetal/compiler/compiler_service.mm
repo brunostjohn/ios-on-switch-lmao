@@ -99,7 +99,10 @@ std::unique_ptr<uint8_t[]> untouched(size_t bytes)
 // The heap the workers' compiles freed goes back to the system once the pool has nothing queued or running
 void idle()
 {
+    // Avoid holding libmalloc zone locks at background QoS while interactive compiles allocate.
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
     malloc_zone_pressure_relief(nullptr, 0);
+    pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0);
 #if SWITCH_DEBUG
     logFootprint(logger(), "idle");
 #endif

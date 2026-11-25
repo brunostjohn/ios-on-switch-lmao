@@ -133,16 +133,20 @@ static void dispatchScheduled(SwitchMetalCommandBuffer *cb, NSArray *handlers)
         return;
     }
     cb->_handlersQueued = true;
-    cb->_submitOwner.clear();
-    dispatch_async(cb->_queue->_handlers, ^{
-        for (MTLCommandBufferHandler h in handlers)
-            h((id<MTLCommandBuffer>)cb);
+    // Hand ownership directly from submitLoop to the queue's handler thread so waitUntilScheduled donates priority
+    // across handler queuing and execution with no ownerless gap.
+    cb->_submitOwner.setOwner(cb->_queue->_handlerExec.ownerPort());
+    cb->_queue->_handlerExec.enqueue([cb, handlers] {
+        @autoreleasepool {
+            for (MTLCommandBufferHandler h in handlers)
+                h((id<MTLCommandBuffer>)cb);
 #if SWITCH_FRAME_TIMELINE
-        cb->_frame.mark(switch_frame::Scheduled);
+            cb->_frame.mark(switch_frame::Scheduled);
 #endif
-        cb->_scheduledDone = true;
-        cb->_submitOwner.clear();
-        gm20bChanged(cb);
+            cb->_scheduledDone = true;
+            cb->_submitOwner.clear();
+            gm20bChanged(cb);
+        }
     });
 }
 
@@ -446,7 +450,9 @@ static void deliverCompletion(SwitchMetalCommandBuffer *cb)
     }
     void *context = (__bridge_retained void *)cb;
     if (cb->_doneBehindScheduled)
-        dispatch_async_f(cb->_queue->_handlers, context, completeOnTarget);
+        cb->_queue->_handlerExec.enqueue([context] {
+            completeOnTarget(context);
+        });
     else
         dispatch_async_f(q ?: followingRootQueue(), context, completeHeld);
 }

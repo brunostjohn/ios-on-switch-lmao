@@ -191,7 +191,8 @@ bool layersAsApple(SwitchMetalCommandBuffer *cb, MTLRenderPassDescriptor *pass)
         count(pass.colorAttachments[c]);
     if (!most)
         return false;
-    pass.renderTargetArrayLength = plain ? std::min(layers, most) : least;
+    if (!plain)
+        pass.renderTargetArrayLength = least;
     if (plain || least >= std::min(layers, most))
         return false;
     skip(cb, PredPassAttLevel, std::min(layers, most), least,

@@ -96,6 +96,8 @@ uint32_t Device::compKind(const Texture &m, bool blockLinear, bool copied) const
     if (probePlainMemory.load(std::memory_order_relaxed))
         return 0;
 #endif
+    if (!m.zeta && !formatCompressesC32(m.format))
+        return 0;
     return backingKind((k_.info().flags & TegraGM20BInfoCompression) != 0, blockLinear, m.zeta ? m.format : 0, m.bpp,
                        std::max<uint32_t>(m.samples, 1), copied, zetaProbe);
 }

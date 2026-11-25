@@ -63,14 +63,14 @@ inline bool writesMemory(const uint8_t *header)
     return (word0 >> 16 & 1) != 0;
 }
 
-// 4-byte host WFI semaphore release into the channel's progress word (no interrupt): gives the host a preempt point
-// and the kernel's hang rule visible progress without spending an internal job fence.
+// 16-byte host WFI semaphore release into the channel's progress stamp (no interrupt): gives the host a preempt point,
+// the kernel's hang rule visible progress, and hold_stats a PTIMER stamp for mid-job preempt landings.
 inline void emitProgressRelease(Push &p, uint64_t va, uint32_t payload)
 {
     p.inc(NVB06F_SEMAPHOREA,
           {uint32_t(va >> 32) & 0xff, uint32_t(va), payload,
            NVDEF(NVB06F, SEMAPHORED, OPERATION, RELEASE) | NVDEF(NVB06F, SEMAPHORED, RELEASE_WFI, EN) |
-               NVDEF(NVB06F, SEMAPHORED, RELEASE_SIZE, 4BYTE)});
+               NVDEF(NVB06F, SEMAPHORED, RELEASE_SIZE, 16BYTE)});
 }
 
 // A draw's GPU time: its pixels' (band_rates.h: learned, else the static estimate), and its vertices', which every band

@@ -212,7 +212,7 @@ constexpr bool formatStandInSamples(uint32_t format, uint32_t samples, bool memo
 // sample's store code and that mean (pack/xr_target.metal)
 constexpr const char *formatResolveState(uint32_t format)
 {
-    if (xrTarget(format))
+    if (format == 552 || format == 554)
         return xrTargetState(format, XrStep::Resolve);
     return format == kRgb9e5Float ? "raw.fmt.fmt_resolve_rgb9e5_frag" : nullptr;
 }

@@ -511,7 +511,6 @@ cpc_cpu_transition(cpc_cpu_event_t event, void *vcpu_data)
 		break;
 
 	case CPC_CPU_OFFLINE:
-	case CPC_CPU_IDLE:
 		switch_pmuv3_stop();
 		switch_pmuv3_write_pmintenclr(SWITCH_PMUV3_ALL_HW_MASK);
 		cpc_hw_update(CPC_HW_CPMU);
@@ -519,7 +518,11 @@ cpc_cpu_transition(cpc_cpu_event_t event, void *vcpu_data)
 		__builtin_arm_isb(ISB_SY);
 		break;
 
+	case CPC_CPU_IDLE:
 	case CPC_CPU_ACTIVE_WARM:
+		// Bare A57 WFI clock-gates without power-gating, retaining PMUv3 state across idle.
+		break;
+
 	case CPC_CPU_ACTIVE_COLD:
 		switch_pmuv3_quiesce_hw();
 		cpc_hw_configure(CPC_HW_CPMU, cpu_data->cpu_number,

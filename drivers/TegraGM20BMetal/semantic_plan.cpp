@@ -486,6 +486,48 @@ void SwitchMetalCommandPlan::clear()
     kernelUseSpans_.clear();
 }
 
+void SwitchMetalCommandPlan::swapClean(SwitchMetalCommandPlan &other) noexcept
+{
+    operations_.swap(other.operations_);
+    begins_.swap(other.begins_);
+    draws_.swap(other.draws_);
+    rasterGroups_.swap(other.rasterGroups_);
+    dispatches_.swap(other.dispatches_);
+    patches_.swap(other.patches_);
+    transfers_.swap(other.transfers_);
+    controls_.swap(other.controls_);
+    events_.swap(other.events_);
+    uses_.swap(other.uses_);
+    useSpans_.swap(other.useSpans_);
+    ranges_.swap(other.ranges_);
+    rangeIndex_.swap(other.rangeIndex_);
+    resourceFacts_.swap(other.resourceFacts_);
+    spanMarks_.swap(other.spanMarks_);
+    std::swap(spanStamp_, other.spanStamp_);
+    mergedUses_.swap(other.mergedUses_);
+    mergedPipelines_.swap(other.mergedPipelines_);
+    mergedVariants_.swap(other.mergedVariants_);
+    mergedComputes_.swap(other.mergedComputes_);
+    usePositions_.swap(other.usePositions_);
+    drawUseSpans_.swap(other.drawUseSpans_);
+    kernelUseSpans_.swap(other.kernelUseSpans_);
+    mergeUses_.swap(other.mergeUses_);
+    buildUses_.swap(other.buildUses_);
+    recordUses_.swap(other.recordUses_);
+    for (size_t i = 0; i < 3; ++i)
+        buffers[i].swapClean(other.buffers[i]);
+    for (size_t i = 0; i < 2; ++i)
+        textures[i].swapClean(other.textures[i]);
+    kernelTextures.swapClean(other.kernelTextures);
+    for (size_t i = 0; i < 3; ++i)
+        samplers[i].swapClean(other.samplers[i]);
+    raster.swapClean(other.raster);
+    kernel.swapClean(other.kernel);
+    renderStates.swap(other.renderStates);
+    kernelStates.swap(other.kernelStates);
+    viewArrays.swap(other.viewArrays);
+}
+
 void SwitchMetalCommandPlan::forgetRecentRenderUses()
 {
     recentRenderKeys_.fill({UINT64_MAX, 0});

@@ -163,7 +163,8 @@ void Device::finishParkChunks(std::vector<ParkCandidate> &candidates)
 }
 
 bool Device::tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uint32_t zetaIndex, uint64_t bytes,
-                            bool dedicated, uint64_t align, uint32_t setAccess, uint32_t &index, bool &resident)
+                            bool dedicated, uint64_t align, uint32_t setAccess, uint32_t &index, bool &resident,
+                            uint64_t maxBytes)
 {
     index = ~0u;
     resident = false;
@@ -175,7 +176,7 @@ bool Device::tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uin
         const Chunk &ch = chunks[i];
         if (ch.park != ChunkPark::Parked || ch.used || ch.dedicated != dedicated)
             continue;
-        if (dedicated ? ch.bytes != bytes : ch.bytes < bytes)
+        if (dedicated ? ch.bytes != bytes : (ch.bytes < bytes || (maxBytes && ch.bytes > maxBytes)))
             continue;
         if (align && (ch.bo.va & (align - 1)))
             continue;
@@ -229,6 +230,7 @@ bool Device::tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uin
         slot.memory = bo.cpu;
         slot.parkedVa = 0;
         slot.park = ChunkPark::Live;
+        slot.highWater = chBytes;
         if (!dedicated) {
             slot.free.clear();
             slot.free[0] = chBytes;

@@ -255,12 +255,16 @@ public:
     {
         for (uint32_t i = 0; i < r->windows; ++i) {
             SwitchWindow *w = r->window[i];
+#if !defined(KERNEL) || DEVELOPMENT || DEBUG
             if (copied) {
                 const uint32_t fresh = r->need[i] & w->valid & ~w->served;
                 st.served += switchBlockCount(fresh);
                 st.aheadServed += switchBlockCount(fresh & w->ahead);
                 w->served |= fresh;
             }
+#else
+            (void)copied;
+#endif
             unpin(w);
         }
         r->windows = 0;

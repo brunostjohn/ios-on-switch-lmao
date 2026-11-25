@@ -171,6 +171,10 @@ TEST(GM20BComp, CopiedBackingsCompressOnlyAtProvenKinds)
     EXPECT_EQ(gm20b::backingKind(false, true, 260, 8, 1, false), 0u);  // compression off
     EXPECT_EQ(gm20b::backingKind(true, true, 0, 2, 1, false), 0u);     // no compressible kind
     EXPECT_EQ(gm20b::backingKind(true, true, 253, 1, 1, false), 0u);   // Stencil8
+    for (uint32_t fmt : {53u, 54u, 55u})
+        EXPECT_FALSE(gm20b::formatCompressesC32(fmt)) << fmt;
+    for (uint32_t fmt : {70u, 71u, 80u, 81u, 90u, 94u, 105u, 115u, 125u})
+        EXPECT_TRUE(gm20b::formatCompressesC32(fmt)) << fmt;
 }
 
 // A stored depth texture binds its compressible kind at one sample and one layer, where the copy engine (its readback

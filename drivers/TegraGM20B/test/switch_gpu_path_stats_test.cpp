@@ -8,6 +8,7 @@
 #include "switch_gpu_path_stats_stubs.h"
 #include "drivers/TegraGM20B/SwitchGpuPathStats.h"
 #include "drivers/TegraGM20B/TegraGM20BGpu.h"
+#include "drivers/TegraGM20B/TegraGM20BPathsABI.h"
 extern "C" {
 #include "drivers/TegraGM20B/TegraGM20BSched.h"
 }
@@ -137,4 +138,20 @@ TEST(PathStats, AKernelThreadCountsForTheProcessItIsChargedTo)
 	charged = 0;
 	pid = 4604;
 	EXPECT_NE(line().find(" promise_waits=1 "), std::string::npos) << line();
+}
+
+TEST(PathStats, AbiReplyLineHoldsEveryCounterWithoutTruncation)
+{
+	pid = 9090;
+	for (uint32_t i = 0; i < SWITCH_GPU_PATH_COUNT; ++i)
+		switch_gpu_path_taken(static_cast<switch_gpu_path>(i), 1000000u + i);
+	TegraGM20BAbiPathsReply reply = {};
+	switch_gpu_path_line(reply.line, sizeof(reply.line));
+	const std::string text(reply.line);
+	EXPECT_LT(text.size(), sizeof(reply.line) - 1);
+	EXPECT_NE(text.find(" internal_jobs="), std::string::npos) << text;
+	EXPECT_NE(text.find(" external_jobs="), std::string::npos) << text;
+	EXPECT_NE(text.find(" ranged_uses="), std::string::npos) << text;
+	EXPECT_NE(text.find(" promise_waits="), std::string::npos) << text;
+	EXPECT_NE(text.find(" preempt_ge4000_us="), std::string::npos) << text;
 }

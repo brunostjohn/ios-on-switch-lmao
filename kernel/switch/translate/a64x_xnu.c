@@ -1060,24 +1060,26 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
     return 1;
 }
 
-SYSCTL_NODE(_kern, OID_AUTO, a64x, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "arm64e translation");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, images, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_images, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, text_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_pages, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, cache_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_cache_pages, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, stub_words, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_stub_words, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, stub_mismatch, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_mismatch, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, traps, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_traps, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, traps_unhandled, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_traps_unhandled, "");
+SYSCTL_NODE(_kern, OID_AUTO, a64x, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_KERN, 0, "arm64e translation");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, images, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, text_pages, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_pages, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, cache_pages, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_cache_pages, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, stub_words, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_stub_words, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, stub_mismatch, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_mismatch, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, traps, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_traps, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, traps_unhandled, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_traps_unhandled,
+            "");
 #if DEVELOPMENT || DEBUG
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, jit_patches, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_jit_patches, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, jit_patches, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_jit_patches, "");
 #endif
 /* arm64 images that needed nothing (mapped as is) and images marked as built for this core */
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_native, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_images_native, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_marked, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_images_marked, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_native, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images_native, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_marked, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images_marked, "");
 /* images of installed staged system apps mapped from the pretranslated tree */
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_installed, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_images_installed, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_installed, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images_installed,
+            "");
 /* words of __text found to be data (assembler tables) and left untranslated */
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, island_words, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_island_words, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, island_words, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_island_words, "");
 
 bool switch_a64x_mmap_refused(vm_map_t map, struct vnode *vp, off_t file_pos, vm_map_offset_t addr, vm_map_size_t size)
 {

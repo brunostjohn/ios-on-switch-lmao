@@ -523,11 +523,26 @@ bool Device::init(std::string &err)
         }
     }
     constexprMappedCount_ = constexprCount_;
+    const uint32_t initCount = uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod));
+    const PackInitMethod *im = pack_.section<PackInitMethod>(PackInit);
+    for (uint32_t i = 0; i < initCount; i++) {
+        if (im[i].subc == 0 && im[i].mthd >= 0x1e04 && im[i].mthd <= 0x1e18) {
+            const uint32_t idx = (im[i].mthd - 0x1e04) / 4;
+            blendPerTarget_[idx] = im[i].data;
+            blendPerTargetSeen_ |= uint8_t(1u << idx);
+        }
+    }
     // SET_CT_WRITE(i), as the baseline leaves it where a state's registers do not set it
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
-    for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
+    for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++) {
         if (base[2 * i] >= CT_WRITE && base[2 * i] < CT_WRITE + 32)
             ctWrite_[(base[2 * i] - CT_WRITE) / 4] = base[2 * i + 1];
+        else if (base[2 * i] >= 0x1e04 && base[2 * i] <= 0x1e18) {
+            const uint32_t idx = (base[2 * i] - 0x1e04) / 4;
+            blendPerTarget_[idx] = base[2 * i + 1];
+            blendPerTargetSeen_ |= uint8_t(1u << idx);
+        }
+    }
     segmentHeap_.setGrow([this](uint64_t bytes, SegmentChunk &chunk) {
         Bo bo;
         if (!k_.allocControl(bytes, bo, ControlUse::StateSegments))

@@ -57,7 +57,7 @@ struct JobRefusalLinesTest: HWTest {
     /// The paths method's refusals op: "lines=N", or nil when the kernel does not answer it
     static func lines(_ connection: GPUConnection) -> Int? {
         let (kr, reply) = connection.call(
-            GPUPaths.method, GPUConnection.words([pathsOpRefusals, 0]), outputSize: 512
+            GPUPaths.method, GPUConnection.words([pathsOpRefusals, 0]), outputSize: GPUPaths.replySize
         )
         guard kr == KERN_SUCCESS else { return nil }
         let text = String(decoding: reply.prefix { $0 != 0 }, as: UTF8.self)

@@ -249,7 +249,8 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 	}
 	const bool wantCompMem = in->surface_id != 0 && (bo->npages % TGM_COMP_PAGES) == 0 &&
 				 switch_gpu_smmu_ready() && switch_gpu_compression_on();
-	const bool wantBigMem = !wantCompMem && bo->npages >= SWITCH_GPU_SMMU_GRANULE_PAGES &&
+	const bool wantBigMem = !wantCompMem && in->surface_id != 0 &&
+				bo->npages >= SWITCH_GPU_SMMU_GRANULE_PAGES &&
 				switch_gpu_smmu_ready();
 	tgm_mem *canonical = nullptr;
 	bool gotCanonical = false;

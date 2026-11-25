@@ -510,7 +510,9 @@ static void presented_run(void *arg)
 			}
 		}
 		if (p->pass && !tail && ours && !READ_ONCE(dl.pass_biased) && frame_ns) {
-			WRITE_ONCE(dl.expected, tgm_expect(dl.expected, frame_ns));
+			const u64 cap = READ_ONCE(dl.interval) ?: 16666667ull;
+			const u64 sample = frame_ns > cap ? cap : frame_ns;
+			WRITE_ONCE(dl.expected, tgm_expect(dl.expected, sample));
 			if (TGM_STATS)
 				tgm_deadline_learned(frame_ns);
 		}

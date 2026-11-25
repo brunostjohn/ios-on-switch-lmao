@@ -70,7 +70,8 @@ TEST(GM20BMemSource, BoAllocAndBoImportBuildOutsideTheConnectionLock)
 	EXPECT_EQ(alloc.count("IOLockLock(lock_);"), 2u);
 	EXPECT_TRUE(alloc.between("IOLockLock(lock_);", "IOLockUnlock(lock_);")
 			    .has("const BoCharge charge = chargeBo(in);"));
-	EXPECT_TRUE(alloc.before("const BoCharge charge = chargeBo(in);", "spareTake(in->bytes)"));
+	EXPECT_TRUE(alloc.before("const BoCharge charge = chargeBo(in);",
+				 "spareTake(in->bytes, critical_)"));
 	EXPECT_TRUE(alloc.before("cleanZeros(va, backing);",
 				 "ret = settleBo(in, charge, bo, ret, chunksRefused, system);"));
 	EXPECT_FALSE(alloc.has("beginMutation"));
@@ -122,8 +123,8 @@ TEST(GM20BMemSource, RetirementFreesWhatLeftTheTablesAfterEverySubmitLock)
 	const CodeText left = Block(retirement, "void AGXDeviceUserClient::releaseLeft()");
 	EXPECT_TRUE(left.before("left_ = {};", "IOLockUnlock(lock_);"));
 	EXPECT_TRUE(left.between("left_ = {};", "IOLockUnlock(lock_);")
-			    .has("submitGate_.mutating()) IOLockSleep(lock_, &submitGate_, "
-				 "THREAD_UNINT);"));
+			    .has("submitGate_.mutating()) switch_gpu_sleep_inheritor(lock_, "
+				 "&submitGate_, submitGate_.mutator());"));
 	EXPECT_TRUE(left.before("passSubmitters(true);", "dropLeft(left);"));
 	EXPECT_FALSE(Block(retirement, "bool AGXDeviceUserClient::passSubmitters(bool wait)")
 			     .has("lock_"));

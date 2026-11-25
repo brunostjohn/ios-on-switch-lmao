@@ -311,8 +311,16 @@ struct DrawBandsTest: HWTest {
         let target = try gpu.texture(.bgra8Unorm, Self.width, Self.height)
         let msaa = test.samples > 1 ? try gpu.texture(.bgra8Unorm, Self.width, Self.height, samples: test.samples) : nil
         let before = GM20BFacade.counters(of: gpu.device)
-        let timing = try await gpu.run { commands in
+        let encode: (MTLCommandBuffer) -> Void = { commands in
             Self.encode(commands, pipeline, msaa ?? target, samples: test.samples, resolve: msaa == nil ? nil : target)
+        }
+        let timing: GPU.Timing
+        if test.name == "fetch",
+           let forced = try await GM20BFacade.forcingFetchRung(4, on: gpu.device, { try await gpu.run(encode) })
+        {
+            timing = forced
+        } else {
+            timing = try await gpu.run(encode)
         }
         let after = GM20BFacade.counters(of: gpu.device)
         let drawsBanded = (after["banded_draws"] ?? 0) - (before["banded_draws"] ?? 0)

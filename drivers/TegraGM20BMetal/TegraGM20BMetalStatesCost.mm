@@ -5,7 +5,6 @@
 #if SWITCH_METAL_DIAGNOSTICS
 #include <mach/mach.h>
 #include <mutex>
-#include <sys/mman.h>
 #include <unistd.h>
 #import "TegraGM20BMetalStatesKey.h"
 #include "ca_catch_all.h"
@@ -88,21 +87,9 @@ bool gm20bPackIsTier1(const gm20b::Pack &pack, const gm20b::PackRun &run)
     return run.first >= tier1;
 }
 
-void gm20bPackCountColdPages(const void *base, size_t len, std::set<uintptr_t> &seenPages, uint32_t &coldPages)
+void gm20bPackCountColdPages(const void *, size_t, std::set<uintptr_t> &, uint32_t &)
 {
-    if (!base || !len)
-        return;
-    const size_t page = size_t(getpagesize());
-    const uintptr_t addr = uintptr_t(base);
-    const uintptr_t start = addr & ~(page - 1);
-    const uintptr_t end = (addr + len + page - 1) & ~(page - 1);
-    const size_t pages = (end - start) / page;
-    std::vector<char> vec(pages);
-    if (mincore(reinterpret_cast<const void *>(start), pages * page, vec.data()) != 0)
-        return;
-    for (size_t i = 0; i < pages; ++i)
-        if (seenPages.insert(start + i * page).second && !(vec[i] & MINCORE_INCORE))
-            ++coldPages;
+    // mincore(2) is denied by iOS sandboxes (e.g. backboardd) with SIGKILL.
 }
 
 void gm20bPackNoteTier1Use(const gm20b::Pack &pack, const gm20b::PackRun &run, uint64_t fast, uint64_t name,
