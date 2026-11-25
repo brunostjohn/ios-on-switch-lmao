@@ -260,6 +260,7 @@ TEST(XnuRecorder, TheHeaderFitsItsPlaceAndReadsBackAsItsSlot)
     h.shot_at = h.frozen_at = h.done_at = UINT64_MAX;
     h.shot_us = h.ring_us = h.tod_s = h.shot_bytes = h.ring_bytes = h.deflate_bytes = h.tid = h.value = UINT64_MAX;
     h.tod_us = 999999;
+    h.ask = h.on_ms = h.blocked_ms = h.runnable_ms = h.ring_lost = UINT32_MAX;
     ASSERT_TRUE(switch_recorder_header(text, &h)) << "the widest header fits";
     EXPECT_EQ(text[SWITCH_RECORDER_HEADER - 1], '\n');
     EXPECT_EQ(std::strncmp(text, "SwitchRecorder 2 boot=2693043C", 30), 0);
@@ -279,7 +280,8 @@ TEST(XnuRecorder, TheHeaderIsTheLineToolsPerfReads)
     "SwitchRecorder 2 boot=2693043C-01C2-4E03-9DA5-FDBCF1DD9490 kernel=724459E3-00EE-E993-E2A1-D165FC9289"
     "3A seq=3 ask=41 reason=hang tid=514 value=320 at=4340000000 shot_at=4340057600 frozen_at=4340096000 "
     "done_at=4340672000 shot_us=3000 ring_us=30000 tod=1795548000.250000 shot=19536 ring=23552 deflate=90"
-    "00 ring_lost=0";
+    "00 ring_lost=0"
+    " on_ms=20 blocked_ms=145 runnable_ms=98";
     switch_recorder_head h{};
     char text[SWITCH_RECORDER_HEADER];
 
@@ -301,6 +303,9 @@ TEST(XnuRecorder, TheHeaderIsTheLineToolsPerfReads)
     h.shot_bytes = 19536;
     h.ring_bytes = 23552;
     h.deflate_bytes = 9000;
+    h.on_ms = 20;
+    h.blocked_ms = 145;
+    h.runnable_ms = 98;
     ASSERT_TRUE(switch_recorder_header(text, &h));
     std::string line(text, sizeof(text));
     line.erase(line.find_last_not_of(" \n") + 1);

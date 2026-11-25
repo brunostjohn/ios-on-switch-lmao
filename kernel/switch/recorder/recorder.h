@@ -42,7 +42,7 @@ static inline const char *switch_recorder_reason_name(uint32_t reason)
 #define SWITCH_RECORDER_SLOTS_MAX  128u
 #define SWITCH_RECORDER_SLOT_BYTES (6ull << 20) /* a slot's share of the volume: a compressed ring and stackshot */
 #define SWITCH_RECORDER_FREE_SHARE 10u          /* the store takes at most 1/10 of the volume's free space */
-#define SWITCH_RECORDER_HEADER     512u         /* a dump file's text header; the compressed body follows */
+#define SWITCH_RECORDER_HEADER     1024u        /* a dump file's text header; the compressed body follows */
 #define SWITCH_RECORDER_VERSION    2u
 
 /* One trigger, taken and waiting for its capture. */
@@ -52,6 +52,9 @@ struct switch_recorder_ask {
     uint64_t value;
     uint32_t reason;
     uint32_t seq; /* the trigger's number since boot */
+    /* a hang's stretch so far (ms): on a core, blocked, waiting for a core; a hang that only waited for a core is the
+     * CPU's, not its thread's */
+    uint32_t on_ms, blocked_ms, runnable_ms;
 };
 
 /* Which ask a capture serves first: the owner's mark, then a hang (its thread is still stuck), then the rest. */
@@ -355,6 +358,7 @@ struct switch_recorder_head {
     uint64_t tod_s, tod_us;                   /* the wall time the ring was frozen */
     uint64_t shot_bytes, ring_bytes, deflate_bytes;
     uint32_t ring_lost; /* 0, or why the capture has no ring: 1 the ring was another process's, 2 no memory for it */
+    uint32_t on_ms, blocked_ms, runnable_ms; /* the ask's */
 };
 
 /* The header text, padded with spaces to SWITCH_RECORDER_HEADER and ended by a newline; false when it does not fit. */
@@ -364,13 +368,13 @@ static inline bool switch_recorder_header(char *out, const struct switch_recorde
         out, SWITCH_RECORDER_HEADER,
         "SwitchRecorder %u boot=%s kernel=%s seq=%u ask=%u reason=%s tid=%llu value=%llu at=%llu shot_at=%llu "
         "frozen_at=%llu done_at=%llu shot_us=%llu ring_us=%llu tod=%llu.%06llu shot=%llu ring=%llu deflate=%llu "
-        "ring_lost=%u",
+        "ring_lost=%u on_ms=%u blocked_ms=%u runnable_ms=%u",
         SWITCH_RECORDER_VERSION, h->boot, h->kernel, h->seq, h->ask, switch_recorder_reason_name(h->reason),
         (unsigned long long)h->tid, (unsigned long long)h->value, (unsigned long long)h->at,
         (unsigned long long)h->shot_at, (unsigned long long)h->frozen_at, (unsigned long long)h->done_at,
         (unsigned long long)h->shot_us, (unsigned long long)h->ring_us, (unsigned long long)h->tod_s,
         (unsigned long long)h->tod_us, (unsigned long long)h->shot_bytes, (unsigned long long)h->ring_bytes,
-        (unsigned long long)h->deflate_bytes, h->ring_lost);
+        (unsigned long long)h->deflate_bytes, h->ring_lost, h->on_ms, h->blocked_ms, h->runnable_ms);
 
     if (n < 0 || (unsigned)n >= SWITCH_RECORDER_HEADER - 1) {
         return false;

@@ -156,16 +156,16 @@ static void switch_recorder_arm(thread_call_t call, uint64_t when)
     thread_call_enter_delayed(call, when);
 }
 
-bool switch_recorder_trigger(unsigned int reason, uint64_t tid, uint64_t value)
+static bool switch_recorder_ask(struct switch_recorder_ask ask)
 {
     thread_call_t call = os_atomic_load(&switch_recorder.call, acquire);
-    struct switch_recorder_ask ask = {.tid = tid, .value = value, .reason = reason};
+    const unsigned int reason = ask.reason;
     unsigned refusal = SWITCH_RECORDER_ADMITTED;
 
     if (reason == SWITCH_RECORDER_NONE || reason >= SWITCH_RECORDER_REASONS) {
         return false;
     }
-    KDBG(SWITCH_RECORDER_KDBG(SWITCH_RECORDER_KDBG_TRIGGER), reason, tid, value);
+    KDBG(SWITCH_RECORDER_KDBG(SWITCH_RECORDER_KDBG_TRIGGER), reason, ask.tid, ask.value);
     os_atomic_inc(&switch_recorder.triggers[reason], relaxed);
     if (call == NULL) {
         return false;
@@ -191,6 +191,22 @@ bool switch_recorder_trigger(unsigned int reason, uint64_t tid, uint64_t value)
     simple_unlock(&switch_recorder_trigger_lock);
     (void)ml_set_interrupts_enabled(intrs);
     return refusal == SWITCH_RECORDER_ADMITTED;
+}
+
+bool switch_recorder_trigger(unsigned int reason, uint64_t tid, uint64_t value)
+{
+    return switch_recorder_ask((struct switch_recorder_ask){.tid = tid, .value = value, .reason = reason});
+}
+
+/* watch.c: a UI main thread's hang, with its stretch's split so far. */
+bool switch_recorder_hang(uint64_t tid, uint64_t ms, uint32_t on_ms, uint32_t blocked_ms, uint32_t runnable_ms)
+{
+    return switch_recorder_ask((struct switch_recorder_ask){.tid = tid,
+                                                           .value = ms,
+                                                           .reason = SWITCH_RECORDER_HANG,
+                                                           .on_ms = on_ms,
+                                                           .blocked_ms = blocked_ms,
+                                                           .runnable_ms = runnable_ms});
 }
 
 /* capture.c's thread: the next due ask, taken out of the queue; when none is due, the call is armed for the next. */

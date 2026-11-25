@@ -70,14 +70,14 @@ struct RecorderHangDumpTest: HWTest {
     }
 }
 
-/// A dump's ring as tools/perf/dumps.py reads it. The file (kernel/switch/recorder/store.c) is a 512-byte text header
+/// A dump's ring as tools/perf/dumps.py reads it. The file (kernel/switch/recorder/store.c) is a 1024-byte text header
 /// ("SwitchRecorder 2 ... shot=<bytes> ring=<bytes> deflate=<bytes> ..."), then the stackshot and the ring as one raw
 /// deflate stream. The ring is RAW_VERSION1 kdebug: its header at offset 0, padding to 4 KiB, then 64-byte events
 /// (mach time, four arguments, thread, debug id, CPU).
 struct RecorderRing {
     static let version: UInt32 = 0x55AA_0101
     static let trigger: UInt32 = (6 << 24) | (18 << 16) | (0x3E0 << 2)
-    static let header = 512
+    static let header = 1024
     var events = 0
     var triggers = Set<UInt64>()
     var error: String?

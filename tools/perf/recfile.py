@@ -1,6 +1,6 @@
 """A flight-recorder dump file, Switch-recorder-<slot>.rec (kernel/switch/recorder/store.c).
 
-A 512-byte text header, "SwitchRecorder 2 key=value ...", written last, then the capture's stackshot (kcdata) and its
+A 1024-byte text header, "SwitchRecorder 2 key=value ...", written last, then the capture's stackshot (kcdata) and its
 ring (RAW_VERSION1 kdebug) as one raw deflate stream. A file pulled while the kernel wrote it has no header yet.
 """
 
@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 from tools.perf.source import TICK_HZ, Rec
 
-HEADER = 512
+HEADER = 1024
 MAGIC = 'SwitchRecorder 2 '
 RING_LOST = {'1': 'kdebug was off or another process owned it', '2': 'no memory for it'}
 
@@ -45,11 +45,18 @@ class Dump:
             if (ms := self.after_trigger_ms(key)) is not None:
                 steps.append(f'{name} +{ms:.1f} ms')
         lost = RING_LOST.get(h.get('ring_lost', '0'))
+        split = (
+            f'; its stretch: on a core {self.number("on_ms")} ms, blocked {self.number("blocked_ms")} ms, waiting for '
+            f'a core {self.number("runnable_ms")} ms'
+            if h.get('reason') == 'hang'
+            else ''
+        )
         return (
             f'capture {h.get("seq", "?")} of boot {h.get("boot", "?")[:8]} (ask {h.get("ask", "?")}): '
             + ', '.join(steps)
             + f'; stackshot {self.number("shot_us") / 1000:.1f} ms, ring read {self.number("ring_us") / 1000:.1f} ms'
             + (f'; no ring: {lost}' if lost else '')
+            + split
         )
 
 
@@ -103,7 +110,8 @@ CAPTURE = re.compile(
     r'SwitchRecorder: capture (?P<seq>\d+) \((?P<reason>\w+) ask (?P<ask>\d+), thread (?P<tid>\d+), value '
     r'(?P<value>\d+)\) at (?P<at>\d+): stackshot (?P<shot_kib>\d+) KiB in (?P<shot_us>\d+) us \(\+(?P<shot_after>\d+) '
     r'us\), ring (?P<ring_kib>\d+) KiB in (?P<ring_us>\d+) us \(\+(?P<frozen_after>\d+) us\), in memory '
-    r'\+(?P<done_after>\d+) us(?:; no ring: (?P<lost>.+))?'
+    r'\+(?P<done_after>\d+) us(?:; no ring: (?P<lost>[^;]+))?(?:; its stretch: on a core (?P<on_ms>\d+) ms, blocked '
+    r'(?P<blocked_ms>\d+) ms, waiting for a core (?P<runnable_ms>\d+) ms)?'
 )
 REFUSED = re.compile(
     r'SwitchRecorder: refused (?P<reason>\w+) ask (?P<ask>\d+) \(thread (?P<tid>\d+), value (?P<value>\d+)\) at '

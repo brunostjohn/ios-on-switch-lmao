@@ -71,6 +71,7 @@ uint64_t switch_recorder_samples(void);
  * scheduler lock: it takes the thread-call group's lock. The kexts call the named ones through weak stubs.
  */
 bool switch_recorder_trigger(unsigned int reason, uint64_t tid, uint64_t value);
+bool switch_recorder_hang(uint64_t tid, uint64_t ms, uint32_t on_ms, uint32_t blocked_ms, uint32_t runnable_ms);
 void switch_recorder_late_frame(uint64_t interval_us);
 void switch_recorder_mark(void);
 /* sched/stats.c and diag/stall.c: the UI main threads to watch for hangs, and the scheduler tick (watch.c). */

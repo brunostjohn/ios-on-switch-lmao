@@ -183,19 +183,20 @@ REC_HEADER = (
     '3A seq=3 ask=41 reason=hang tid=514 value=320 at=4340000000 shot_at=4340057600 frozen_at=4340096000 '
     'done_at=4340672000 shot_us=3000 ring_us=30000 tod=1795548000.250000 shot=19536 ring=23552 deflate=90'
     '00 ring_lost=0'
+    ' on_ms=20 blocked_ms=145 runnable_ms=98'
 )
 TESTDATA = Path(__file__).resolve().parent / 'testdata'
 
 
 def rec_file(folder: Path, header: str, shot: bytes, ring: bytes, cut: int = 0) -> Path:
-    """Write a dump as store.c does: the stackshot and the ring as one raw deflate stream after a 512-byte header."""
+    """Write a dump as store.c does: the stackshot and the ring as one raw deflate stream after its text header."""
     packer = zlib.compressobj(1, zlib.DEFLATED, -zlib.MAX_WBITS)
     body = packer.compress(shot + ring) + packer.flush()
     fields = dict(f.split('=', 1) for f in header.split()[2:])
     fields.update(shot=str(len(shot)), ring=str(len(ring)), deflate=str(len(body)))
     text = 'SwitchRecorder 2 ' + ' '.join(f'{k}={v}' for k, v in fields.items())
     path = folder / 'Switch-recorder-0.rec'
-    path.write_bytes((text.ljust(511) + '\n').encode() + body[: len(body) - cut])
+    path.write_bytes((text.ljust(recfile.HEADER - 1) + '\n').encode() + body[: len(body) - cut])
     return path
 
 
@@ -209,6 +210,7 @@ class RecFileTest(unittest.TestCase):
         self.assertAlmostEqual(d.after_trigger_ms('shot_at'), 3.0)
         self.assertAlmostEqual(d.after_trigger_ms('done_at'), 35.0)
         self.assertIn('stackshot +3.0 ms, ring frozen +5.0 ms, both in memory +35.0 ms', d.describe())
+        self.assertIn('its stretch: on a core 20 ms, blocked 145 ms, waiting for a core 98 ms', d.describe())
 
     def test_a_dump_file_inflates_to_its_stackshot_and_ring_and_a_partial_one_says_so(self):
         shot = (TESTDATA / 'Switch-recorder-3.kcdata').read_bytes()
@@ -221,7 +223,7 @@ class RecFileTest(unittest.TestCase):
             self.assertEqual(
                 recfile.read(str(rec_file(Path(d), REC_HEADER, shot, ring, cut=100))).problem[:12], 'the body is '
             )
-            path.write_bytes(bytes(512) + b'x')
+            path.write_bytes(bytes(recfile.HEADER) + b'x')
             self.assertTrue(recfile.read(str(path)).problem.startswith('no header'))
 
     def test_the_recorders_lines_add_up(self):

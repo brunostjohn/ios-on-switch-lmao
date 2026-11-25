@@ -118,6 +118,7 @@ void switch_recorder_role(struct task *task, int role, struct thread *main)
 void switch_recorder_tick(uint64_t now)
 {
     uint64_t tid[SWITCH_RECORDER_WATCHES] = {0}, woke[SWITCH_RECORDER_WATCHES] = {0}, ms[SWITCH_RECORDER_WATCHES] = {0};
+    uint64_t split[SWITCH_RECORDER_WATCHES][3] = {{0}};
 
     simple_lock(&switch_recorder_watch_lock, LCK_GRP_NULL);
     if (switch_recorder_watch_every == 0 || now - switch_recorder_watch_last < switch_recorder_watch_every) {
@@ -137,6 +138,9 @@ void switch_recorder_tick(uint64_t now)
         s = splsched();
         thread_lock(t);
         open = (t->state & TH_TERMINATE) == 0 && switch_sched_busy_open(t, &since);
+        if (open) {
+            switch_sched_busy_split(t, &split[i][0], &split[i][1], &split[i][2]);
+        }
         thread_unlock(t);
         splx(s);
         if (switch_recorder_watch_due(&switch_recorder_watch_state[i], open, since, now, switch_recorder_watch_bound)) {
@@ -148,7 +152,14 @@ void switch_recorder_tick(uint64_t now)
     }
     simple_unlock(&switch_recorder_watch_lock);
     for (unsigned int i = 0; i < SWITCH_RECORDER_WATCHES; i++) {
-        if (tid[i] == 0 || !switch_recorder_trigger(SWITCH_RECORDER_HANG, tid[i], ms[i])) {
+        uint64_t split_ms[3] = {0};
+
+        for (unsigned int k = 0; k < 3; k++) {
+            absolutetime_to_nanoseconds(split[i][k], &split_ms[k]);
+            split_ms[k] /= NSEC_PER_MSEC;
+        }
+        if (tid[i] == 0 || !switch_recorder_hang(tid[i], ms[i], (uint32_t)split_ms[0], (uint32_t)split_ms[1],
+                                                 (uint32_t)split_ms[2])) {
             continue;
         }
         simple_lock(&switch_recorder_watch_lock, LCK_GRP_NULL);

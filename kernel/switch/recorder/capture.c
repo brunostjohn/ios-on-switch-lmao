@@ -324,6 +324,9 @@ static void switch_recorder_capture_one(const struct switch_recorder_ask *ask)
     c->head.tid = ask->tid;
     c->head.value = ask->value;
     c->head.at = ask->at;
+    c->head.on_ms = ask->on_ms;
+    c->head.blocked_ms = ask->blocked_ms;
+    c->head.runnable_ms = ask->runnable_ms;
     strlcpy(c->head.boot, bootsessionuuid_string, sizeof(c->head.boot));
     strlcpy(c->head.kernel, kernel_uuid_string, sizeof(c->head.kernel));
     if (ask->reason == SWITCH_RECORDER_HANG) {
@@ -339,10 +342,12 @@ static void switch_recorder_capture_one(const struct switch_recorder_ask *ask)
     switch_recorder_store_push(c);
     os_log(OS_LOG_DEFAULT,
            "SwitchRecorder: capture %u (%s ask %u, thread %llu, value %llu) at %llu: stackshot %llu KiB in %llu us "
-           "(+%llu us), ring %llu KiB in %llu us (+%llu us), in memory +%llu us%s",
+           "(+%llu us), ring %llu KiB in %llu us (+%llu us), in memory +%llu us%s; its stretch: on a core %u ms, "
+           "blocked %u ms, waiting for a core %u ms",
            h.seq, switch_recorder_reason_name(h.reason), h.ask, h.tid, h.value, h.at, h.shot_bytes >> 10, h.shot_us,
            switch_recorder_us(h.at, h.shot_at), h.ring_bytes >> 10, h.ring_us, switch_recorder_us(h.at, h.frozen_at),
-           switch_recorder_us(h.at, h.done_at), switch_recorder_lost(h.ring_lost));
+           switch_recorder_us(h.at, h.done_at), switch_recorder_lost(h.ring_lost), h.on_ms, h.blocked_ms,
+           h.runnable_ms);
 }
 
 /* recorder.c's thread call, at an ask's due time or a refusal: wakes the capture thread. */

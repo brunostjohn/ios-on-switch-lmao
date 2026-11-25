@@ -50,6 +50,7 @@ void switch_sched_busy_dispatched(thread_t thread, uint64_t now);
 void switch_sched_busy_tick(void);
 void switch_sched_busy_focal(task_t task, int role, thread_t main);
 bool switch_sched_busy_open(thread_t thread, uint64_t *woke);
+void switch_sched_busy_split(thread_t thread, uint64_t *cpu, uint64_t *blocked, uint64_t *runnable);
 
 /* busy.c: a thread's user PC or LR (diag/stall.h switch_stall_user_where's place and value), and a waiting thread's
  * wait (sched/busy.h); under the thread's lock or on the thread itself. */
