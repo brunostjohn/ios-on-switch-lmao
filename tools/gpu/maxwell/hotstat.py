@@ -4,14 +4,17 @@
 usage: hotstat.py <pack dir> --corpus <hot corpus> [--json <out.json>] [--before <before.json>] [--top N]
                   [--dis <state hash prefix>]
 
-<pack dir> holds a linked pack's pack.json (//tools/gpu/maxwell:hot_pack, //gpu/seed:pack). Each R line of the corpus
-names a state's vertex and fragment programs, each D line a kernel. A program shared by several states counts once in
-the totals. --before compares with an earlier --json, program by program (matched by state and stage): the top N by
-the before side's cycles, then the totals.
+<pack dir> holds a linked pack's pack.json and pack.bin (//tools/gpu/maxwell:hot_pack, //gpu/seed:pack).
+A bundle's states, which the pack keys by their functions' AIR, are counted apart and not read. Each R line of the
+corpus names a state's vertex and fragment programs, each D line a kernel. A program shared by several states counts
+once in the totals. --before compares with an earlier --json, program by program (matched by state and stage): the
+top N by the before side's cycles, then the totals.
 """
 
 import argparse
 import json
+import re
+import struct
 import sys
 from collections import Counter
 from pathlib import Path
@@ -22,6 +25,8 @@ if __package__ in (None, ''):
 from tools.gpu.maxwell import cost, isa, nakstat
 
 HEADER = 80
+# A bundle's library or a framework's resource library: the pack keys its states by their functions' AIR
+AIR_KEYED = re.compile(r' lib=/System/Library/\S+?\.(?:bundle|framework/Resources)/')
 BRANCHES = ('SSY', 'SYNC', 'BRA', 'BRK', 'PBK', 'CONT', 'PCNT', 'KIL', 'EXIT')
 COMPARES = ('ISETP', 'FSETP', 'PSETP', 'HSETP2', 'DSETP')
 MIX = (
@@ -103,6 +108,8 @@ def programs_of(pack: dict, corpus: Path) -> tuple[dict, int, int]:
     kernels = {k['key']: k for k in pack.get('kernels', [])}
     out, named, matched = {}, 0, 0
     for line in corpus.read_text().splitlines():
+        if line.startswith('R ') and AIR_KEYED.search(line):
+            continue
         if line.startswith('R '):
             named += 1
             key = nakstat.state_key(line)
@@ -127,14 +134,30 @@ def programs_of(pack: dict, corpus: Path) -> tuple[dict, int, int]:
     return out, matched, named
 
 
+class Heap:
+    """A pack.bin's shader heap: each program's header and code at its slot (pack.h PackProgram, PackSectionHeap)."""
+
+    SECTION = 7
+    HEADER_AT = 0x30
+
+    def __init__(self, path: Path):
+        self.data = path.read_bytes()
+        self.start = struct.unpack_from('<Q', self.data, 24 + 16 * self.SECTION)[0]
+
+    def image(self, program: dict) -> bytes:
+        at = self.start + program['heap_offset'] + self.HEADER_AT
+        return self.data[at : at + HEADER + program['code']]
+
+
 def collect(pack_dir: Path, corpus: Path) -> dict:
     pack = json.loads((pack_dir / 'pack.json').read_text())
     programs = pack['programs']
+    heap = Heap(pack_dir / 'pack.bin')
     rows = {}
     found, matched, named = programs_of(pack, corpus)
     for key, (label, stage, index, state_hash) in found.items():
         p = programs[index]
-        image = bytes.fromhex(p['image']) if isinstance(p['image'], str) else p['image']
+        image = heap.image(p)
         rows[key] = {
             'label': label,
             'stage': stage,
@@ -202,7 +225,7 @@ def disassemble(pack_dir: Path, corpus: Path, prefix: str) -> None:
         if not f'{state_hash:016x}'.startswith(prefix):
             continue
         p = pack['programs'][index]
-        image = bytes.fromhex(p['image']) if isinstance(p['image'], str) else p['image']
+        image = Heap(pack_dir / 'pack.bin').image(p)
         print(f'== {label} {key.rsplit(" @", 1)[1]} program {index}, {p["gprs"]} GPRs')
         for i, word in enumerate(isa.instructions(image[HEADER:])):
             print(f'{i:5} {isa.name(word):14} {word:016x}')
