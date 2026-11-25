@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """The built pack's one-target source-over states take the ROP's zero-source kill (blend_kill.h, pack/segments.py).
 
-HW Test gpu.gm20b.blend_kill counts no state made with it (kill_states=0) on every boot. A record's blob holds only its
-own targets' SET_CT_WRITE (mkpack.foreign); another target's comes from the baseline, which keeps a target's register
-there when every state that draws that target writes it alike. So a one-target state reads targets 1-7 as written.
-They are no attachments of its passes (a pass's targets are its state's key), so the kill must not count them.
+A record's blob holds only its own targets' SET_CT_WRITE (mkpack.foreign); another target's comes from the baseline,
+which keeps a target's register there when every state that draws that target writes it alike, so a one-target state
+reads such a target as written. It is no attachment of the state's passes (a pass's targets are its state's key), and
+the kill counts only the key's targets.
 
 usage: blend_kill_pack_test.py <pack.bin>   (//gpu/seed:pack's, of the configured IPSW kind)
 """

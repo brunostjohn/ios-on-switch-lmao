@@ -4,9 +4,8 @@ import HWTestGPU
 import HWTestKit
 import Metal
 
-/// Weather's moon card drew a flat pale square (25 Nov, IMG_0026): the frame NanoUniverse's Aegir renderer draws it with
-/// (gpu/AegirMoon.swift), run as a fresh queue's first frame, and its bytes against Metal's, which an M4's GPU draws
-/// (host_gpu_tests/AegirMoonTests.swift): the 'A008' mask 255 outside the disc and 0 inside, bloom level 2 0 away from it,
+/// The frame NanoUniverse's Aegir renderer draws Weather's moon card with (gpu/AegirMoon.swift), run as a fresh queue's
+/// first frame, and its bytes against Metal's, which an M4's GPU draws (host_gpu_tests/AegirMoonTests.swift): the 'A008' mask 255 outside the disc and 0 inside, bloom level 2 0 away from it,
 /// the BGR10_XR_sRGB drawable XR 0.0 (code 384) outside and the disc's grey (code 846) inside. `<check>_off`: texels unlike Metal's
 /// (AegirMoon.misses); `<target>_centre`, `<target>_corner`: what the centre and a corner texel hold; path.
 struct AegirMoonTest: HWTest {
