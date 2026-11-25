@@ -54,10 +54,10 @@ void Device::retireScrubs(DeferredFrees *deferred)
 {
     if (scrubbing_.empty())
         return;
-    const uint64_t generation = channelGeneration();
     for (auto it = scrubbing_.begin(); it != scrubbing_.end();) {
-        if (it->generation != generation) {
-            // its job was on a channel since lost, which may have stopped before it
+        if (!channelCurrent(it->generation) || killed(it->seqno)) {
+            // its job was on a channel since lost, which may have stopped before it: a kill moves the fence past every
+            // seqno given out before begin() opens the next channel, so done() alone would retire a fill that never ran
             scrubWanted_.push_back(*it);
             scrubDue_.store(true, std::memory_order_relaxed);
         } else if (done(it->seqno)) {
@@ -86,7 +86,9 @@ bool Device::scrubFreed(bool wait)
     CommandBuffer *rc = begin();
     bool submitted = rc != nullptr;
     if (submitted) {
-        // VOL=1 memory: the job ends with WFI + FB_FLUSH, and the zeros are in DRAM for the CPU's write-combined view
+        // VOL=1 memory: the job ends Volatile (WFI + FB_FLUSH), and the zeros are in DRAM for the CPU's
+        // write-combined view
+        rc->internalCompletion();
         rc->volatileWrites_ = true;
         for (const Scrub &s : batch)
             rc->useAddress(s.va, s.bytes, true);

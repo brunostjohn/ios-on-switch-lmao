@@ -93,6 +93,43 @@ TEST_F(DeviceScrub, AFreedSharedBufferIsZeroedByTheCopyEngineBeforeItsSpanIsReus
     dev.destroyBuffer(neighbour);
 }
 
+TEST_F(DeviceScrub, TheScrubJobEndsVolatileSoItsZerosAreInDram)
+{
+    gm20b::Buffer neighbour, freed;
+    ASSERT_TRUE(dev.createBuffer(16 * 1024, neighbour, true, true, true));
+    ASSERT_TRUE(dev.createBuffer(16 * 1024, freed, true, true, true));
+    dev.destroyBuffer(freed);
+    const size_t before = kernel_model::model.jobs.size();
+    ASSERT_TRUE(dev.scrubFreed(false));
+    ASSERT_GT(kernel_model::model.jobs.size(), before);
+    EXPECT_TRUE(kernel_model::model.jobs.back().flags & TegraGM20BJobVolatileWrites);
+    EXPECT_FALSE(kernel_model::model.jobs.back().flags & TegraGM20BJobExternal);
+    dev.destroyBuffer(neighbour);
+}
+
+// A kill moves the fence past every seqno before the next begin() opens a channel: a scrub whose job was in flight is
+// not finished by that, and its span is filled again rather than handed back
+TEST_F(DeviceScrub, AKilledScrubIsFilledAgainNotRetired)
+{
+    constexpr uint64_t kBytes = 16 * 1024;
+    gm20b::Buffer neighbour, freed;
+    ASSERT_TRUE(dev.createBuffer(kBytes, neighbour, true, true, true));
+    ASSERT_TRUE(dev.createBuffer(kBytes, freed, true, true, true));
+    const uint64_t va = freed.va;
+    dev.destroyBuffer(freed);
+    kernel_model::model.inFlight = true;
+    ASSERT_TRUE(dev.scrubFreed(false));
+    kernel_model::model.kill(liveChannel(), 2);
+    kernel_model::model.inFlight = false;
+    dev.trim();  // retires what is finished, as an allocation that finds no room does
+    gm20b::Buffer taken;
+    ASSERT_TRUE(dev.createBuffer(kBytes, taken, true, true, true));
+    EXPECT_NE(taken.va, va) << "a span whose fill was killed came back unzeroed";
+    EXPECT_TRUE(dev.scrubDue());
+    dev.destroyBuffer(taken);
+    dev.destroyBuffer(neighbour);
+}
+
 TEST_F(DeviceScrub, NoFreedSpanNoScrubJob)
 {
     const size_t before = kernel_model::model.jobs.size();
