@@ -141,12 +141,6 @@ inline uint64_t compBytes(uint64_t bytes)
     return (bytes + kCompGranule - 1) & ~(kCompGranule - 1);
 }
 
-// Single-channel 32-bit formats corrupt when bound as C32_2CRA (0xdb).
-constexpr bool formatCompressesC32(uint32_t format)
-{
-    return format != 53 && format != 54 && format != 55;
-}
-
 // The compressible kind of a Device::backing of `bpp`-byte texels with the kernel's compression on: a memoryless zeta's of
 // Metal format `zeta`, or a colour target's. The copy engine fills and drains a shadow (`copied`) and the zeta of a pass
 // whose draws test in the shader (Depth32Float and multisampled Depth32Float_Stencil8: shader_tests.h), so those

@@ -46,7 +46,6 @@ struct PrivateTextureFacts {
     bool compressibleUsage = false;
     bool plainColour = false;  // a colour format the 3D engine renders, no extended-range or planar form
     uint32_t zeta = 0;         // a depth/stencil texture's Metal format (zeta.h), else 0
-    uint32_t format = 0;       // a colour texture's Metal format (0: unspecified)
     uint32_t layers = 1;       // an array's or a cube's (six a cube)
     uint32_t bpp = 0;
     bool compression = false;  // the kernel compresses (TegraGM20BInfoCompression)
@@ -75,8 +74,6 @@ inline uint32_t privateCompressedKind(const PrivateTextureFacts &f)
     if (f.zeta)
         return f.levels == 1 ? storedZetaKind(true, f.zeta, f.samples, f.layers) : 0;
     if (!privateShapeCompresses(f) || !f.plainColour)
-        return 0;
-    if (f.format && !formatCompressesC32(f.format))
         return 0;
     const uint32_t kind = compressedKind(f.bpp, 0, std::max(f.samples, 1u));
     return copyEngineReadsCompressed(kind) ? kind : 0;
