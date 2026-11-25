@@ -32,6 +32,7 @@ static inline void switch_fsctl_failed(__unused struct vnode *vp, __unused unsig
 #endif
 
 #define SWITCH_FSCTL_MARK_PURGEABLE 111u /* APFS's 'J' 111: mark a file or directory purgeable */
+#define SWITCH_FSCTL_SET_PURGEABLE  68u  /* APFS's 'J' 68: SplashBoard's snapshot marks (refused 22 on 25 Nov) */
 #define SWITCH_FSCTL_MARK_LINES     128u /* boot 21 refused 106 marks */
 #define SWITCH_FSCTL_OTHER_LINES    32u
 
@@ -44,6 +45,11 @@ enum switch_fsctl_mark {
     SWITCH_FSCTL_MARK_OTHER,
     SWITCH_FSCTL_MARK_KINDS,
 };
+
+static inline int switch_fsctl_is_mark(unsigned long cmd)
+{
+    return (cmd & 0xff) == SWITCH_FSCTL_MARK_PURGEABLE || (cmd & 0xff) == SWITCH_FSCTL_SET_PURGEABLE;
+}
 
 static inline enum switch_fsctl_mark switch_fsctl_mark_for(int error, int compressed)
 {

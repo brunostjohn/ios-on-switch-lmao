@@ -85,7 +85,7 @@ void switch_fsctl_failed(vnode_t vp, unsigned long cmd, const void *data, int er
     if (IOCGROUP(cmd) != 'J') {
         return;
     }
-    if ((cmd & 0xff) == SWITCH_FSCTL_MARK_PURGEABLE) {
+    if (switch_fsctl_is_mark(cmd)) {
         fsctl_mark_count(vp, error, ctx);
     }
     if (error == 0) {

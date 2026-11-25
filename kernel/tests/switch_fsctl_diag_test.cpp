@@ -114,4 +114,12 @@ TEST(SwitchFsctlMark, ARefusalIsCountedByItsCause)
     EXPECT_EQ(switch_fsctl_mark_for(22, 0), SWITCH_FSCTL_MARK_OTHER);
 }
 
+// SpringBoard's marks came as 'J' 111 and SplashBoard's snapshot marks as 'J' 68: both are counted
+TEST(SwitchFsctlMark, BothMarkCommandsCount)
+{
+    EXPECT_TRUE(switch_fsctl_is_mark(0xc0304a6f));
+    EXPECT_TRUE(switch_fsctl_is_mark(0xc0084a44));
+    EXPECT_FALSE(switch_fsctl_is_mark(0x40084a47));
+}
+
 }  // namespace
