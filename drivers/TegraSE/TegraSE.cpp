@@ -6,12 +6,12 @@
 //   - Both engines behind one queue: a caller takes whichever is free (TegraSE.h), so two callers run in parallel.
 //     The AppleKeyStore stand-in's boot probe shares them through tegra_se_claim.
 //   - DMA straight from the caller's pages: a linked list (one {address, size} entry per physically contiguous run)
-//     built from the kernel virtual range (ml_vtophys), cleaned/invalidated in place, read and written through the
-//     engines' own memory-controller clients (CRYPTO_CONFIG MEMIF = MCCIF, sesrd/seswr, as L4T's tegra210b01 chip data
-//     sets mccif_supported): over the AHB, which takes one outstanding read per master (TRM 19.4.1), both engines ran
-//     at about 120 MB/s for every algorithm, a tenth of the A57s' AES and SHA instructions. The engine takes 32-bit
-//     addresses: a buffer with any byte above 4 GiB goes through the engine's bounce buffer (256 KiB, below 4 GiB) and
-//     is counted, as is anything bigger the engine cannot reach (then the CPU does it).
+//     built from the kernel virtual range (ml_vtophys), cleaned/invalidated in place. SE1 reads and writes through its
+//     own memory-controller clients (CRYPTO_CONFIG MEMIF = MCCIF, sesrd/seswr, as L4T's tegra210b01 chip data sets
+//     mccif_supported): over the AHB, which takes one outstanding read per master (TRM 19.4.1), both engines ran at
+//     about 120 MB/s for every algorithm, a tenth of the A57s' AES and SHA instructions. SE2 stays on the AHB (kMemif).
+//     The engine takes 32-bit addresses: a buffer with any byte above 4 GiB goes through the engine's bounce buffer
+//     (256 KiB, below 4 GiB) and is counted, as is anything bigger the engine cannot reach (then the CPU does it).
 //   - Keyslots 1..13 of each engine as a key cache (0 is L4T's SRK slot, 14/15 Mariko's boot keys and the
 //     AppleKeyStore stand-in's): a key already in a slot is not written again.
 //   - Completion by interrupt. After the end interrupt the only wait is the bounded drain T210B01 needs before the
@@ -125,12 +125,14 @@ constexpr uint32_t kDstHash = 1u << 2;
 // LNR_CTR 3), VCTRAM_SEL << 5 (AHB 0, AESOUT 2, PREVAHB 3), IV_SEL << 7 (original 0), CORE_SEL << 8 (encrypt 1),
 // CTR_CNTN << 11, KEY_INDEX << 24, MEMIF << 31 (AHB 0, MCCIF 1).
 constexpr uint32_t kCryptoEncrypt = 1u << 8, kCryptoMccif = 1u << 31;
-// The MC_SMMU_<swgroup>_ASID registers of each engine's memory clients, whose bit 31 would translate the MCCIF
-// addresses (physical here): the Switch device tree's iommus, SE1 swgroups 35 (SE, 0xabc) and 38 (SE1, 0xac8), SE2
-// swgroups 29 (0xaa4, ISP2B's register in the T210 manual) and 53, which neither the manual nor L4T's swgroup table
-// gives a register for.
+// Each engine's MEMIF, and the MC_SMMU_<swgroup>_ASID registers of the memory clients an MCCIF engine uses, whose
+// bit 31 would translate its addresses (physical here). The Switch device tree's iommus put SE1 in swgroups 35 (SE,
+// 0xabc) and 38 (SE1, 0xac8), SE2 in 29 (ISP2B, 0xaa4) and 53. L4T's tegra210b01-soc-base.dtsi names SE2's ISP2B and
+// ISP2B1; neither the T210 manual nor L4T's swgroup table gives 53 a register, so whether it translates is unknown and
+// SE2 stays on the AHB, the path it ran on 25 Nov.
+constexpr uint32_t kMemif[2] = {kCryptoMccif, 0};
 constexpr uint64_t kMcPA = 0x70019000;
-constexpr uint32_t kSmmuAsid[2][2] = {{0xabc, 0xac8}, {0xaa4, 0}};
+constexpr uint32_t kSmmuAsid[2][2] = {{0xabc, 0xac8}, {}};
 constexpr uint32_t kSmmuTranslates = 1u << 31;
 constexpr uint32_t kCarSuperSe = 0x704;
 
@@ -273,7 +275,7 @@ void wr(const Engine &e, uint32_t offset, uint32_t value)
 
 void crypto(const Engine &e, uint32_t config)
 {
-    wr(e, CRYPTO_CONFIG, config | kCryptoMccif);
+    wr(e, CRYPTO_CONFIG, config | kMemif[&e - gEngines]);
 }
 
 bool clockOn()

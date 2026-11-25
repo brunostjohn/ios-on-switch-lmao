@@ -16,13 +16,13 @@ using switch_ios::test::SourceText;
 using testing::HasSubstr;
 using testing::Not;
 
-TEST(TegraSESource, EveryOperationMovesDataThroughTheEnginesMemoryClients)
+TEST(TegraSESource, EveryOperationTakesItsEnginesMemoryInterface)
 {
     const std::string source = SourceText("../TegraSE.cpp");
     EXPECT_EQ(Count(source, "CRYPTO_CONFIG,"), 1u);
     EXPECT_THAT(Body(source, "void crypto(const Engine &e, uint32_t config)\n"),
-                HasSubstr("wr(e, CRYPTO_CONFIG, config | kCryptoMccif);"));
-    EXPECT_THAT(source, HasSubstr("kCryptoMccif = 1u << 31"));
+                HasSubstr("wr(e, CRYPTO_CONFIG, config | kMemif[&e - gEngines]);"));
+    EXPECT_THAT(source, HasSubstr("constexpr uint32_t kMemif[2] = {kCryptoMccif, 0};"));
 }
 
 TEST(TegraSESource, NothingGoesToAnEngineUntilItIsMeasuredNoSlower)
