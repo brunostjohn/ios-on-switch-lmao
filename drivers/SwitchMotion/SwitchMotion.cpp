@@ -917,7 +917,7 @@ void SwitchMotion::apply()
     const uint32_t motionUS = __atomic_load_n(&intervalUS[DeviceMotion], __ATOMIC_ACQUIRE);
     if ((motionUS != 0) != fusing) {
         fusing = motionUS != 0;
-        fusion.reset();
+        fusion.restart();
         motionCount = 0;
     }
     const bool want[2] = {interval[Accel] != 0 || detector || fusing, interval[Gyro] != 0 || fusing};
@@ -979,6 +979,7 @@ void SwitchMotion::apply()
         if (!converting) {
             converting = true;
             samples = empty = 0;
+            fusion.restart();  // after sleep or the panel off, the console may lie any way up
             irq->enable();
             switch_check_after_ms(watchdog, kWatchdogMS);
         }

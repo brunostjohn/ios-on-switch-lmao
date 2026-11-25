@@ -9,8 +9,11 @@
 // The quaternion rotates device-frame vectors into CoreMotion's reference frame (Z up), so the gravity it implies in the
 // device frame is -(2(xz - wy), 2(yz + wx), w^2 - x^2 - y^2 + z^2): identity lying face up, (0, -1, 0) held upright in
 // portrait. The filter is Mahony's: the measured gravity direction pulls the attitude through a proportional gain and a
-// gyroscope bias integral, only while the acceleration is close to 1 g. The first accelerometer sample seeds the tilt
-// (yaw 0), as CoreMotion's xArbitraryZVertical frame allows.
+// gyroscope bias integral, only while the acceleration is close to 1 g. Gravity says nothing about rotation about the
+// vertical, so the bias is also learned on all three axes whenever the console is still (the gyroscope steady near
+// its running mean, the acceleration steady at 1 g), and it outlives a session: restart() resets only the attitude.
+// The first accelerometer sample of a session seeds the tilt (yaw 0), as CoreMotion's xArbitraryZVertical frame
+// allows.
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
@@ -79,16 +82,25 @@ struct SwitchMotionFusion {
     static constexpr int64_t kKiMilli = 20;
     static constexpr int64_t kMaxBiasNanoRad = 100000000;  // 0.1 rad/s: far beyond the IMU's datasheet offsets
     static constexpr int64_t kNearOneG = 150000;           // correct only within 0.15 g of 1 g
+    static constexpr int64_t kStillNanoRad = 10000000;     // still: every axis within 0.01 rad/s of its running mean,
+    static constexpr int64_t kStillMicroG = 50000;         // the acceleration within 0.05 g of 1 g,
+    static constexpr unsigned kStillSamples = 100;         // for this many gyroscope samples in a row
 
     int64_t q[4] = {kSwitchOne, 0, 0, 0};  // w, x, y, z
     int64_t biasNanoRad[3] = {};
+    int64_t meanNanoRad[3] = {};  // the raw gyroscope's running mean (1/32 a sample)
+    unsigned stillSamples = 0;
     int32_t accel[3] = {};  // the latest accelerometer sample, micro-g
     bool haveAccel = false;
     bool seeded = false;
 
-    void reset()
+    // A new session: the attitude from the next accelerometer sample; the learned bias stays.
+    void restart()
     {
-        *this = SwitchMotionFusion{};
+        q[0] = kSwitchOne;
+        q[1] = q[2] = q[3] = 0;
+        haveAccel = seeded = false;
+        stillSamples = 0;
     }
 
     // The gravity the attitude implies, device frame, Q30.
@@ -114,6 +126,7 @@ struct SwitchMotionFusion {
     // One gyroscope sample over `dtMicros` since the last.
     void addGyro(const int32_t sample[3], uint32_t dtMicros)
     {
+        learnWhileStill(sample);
         if (!seeded)
             return;
         int64_t omega[3] = {sample[0], sample[1], sample[2]};
@@ -163,6 +176,30 @@ struct SwitchMotionFusion {
     }
 
 private:
+    void learnWhileStill(const int32_t sample[3])
+    {
+        bool still = haveAccel && accelWithin(kStillMicroG);
+        for (unsigned i = 0; i < 3; ++i) {
+            const int64_t nano = int64_t{sample[i]} * 1000;
+            meanNanoRad[i] += (nano - meanNanoRad[i]) / 32;
+            const int64_t spread = nano - meanNanoRad[i];
+            still = still && spread < kStillNanoRad && spread > -kStillNanoRad && meanNanoRad[i] < kMaxBiasNanoRad &&
+                    meanNanoRad[i] > -kMaxBiasNanoRad;
+        }
+        stillSamples = still ? stillSamples + 1 : 0;
+        if (stillSamples < kStillSamples)
+            return;
+        for (unsigned i = 0; i < 3; ++i)
+            biasNanoRad[i] += (meanNanoRad[i] - biasNanoRad[i]) / 64;
+    }
+
+    bool accelWithin(int64_t microG) const
+    {
+        const int64_t n2 = int64_t{accel[0]} * accel[0] + int64_t{accel[1]} * accel[1] + int64_t{accel[2]} * accel[2];
+        const int64_t norm = static_cast<int64_t>(switchIsqrt(static_cast<uint64_t>(n2)));
+        return norm > 1000000 - microG && norm < 1000000 + microG;
+    }
+
     // The measured gravity direction, Q30, when the acceleration is close enough to 1 g to be gravity alone.
     bool unitAccel(int64_t out[3]) const
     {

@@ -76,6 +76,11 @@ class Motion(unittest.TestCase):
         self.assertEqual(got['motion.spu-added'].verdict, PASS)
         self.assertEqual(got['motion.spu-not-ready'].verdict, PASS)
         self.assertEqual(got['motion.device-motion-interval'].verdict, INFO)
+        self.assertEqual(got['motion.device-motion-rejected'].verdict, PASS)
+
+    def test_a_report_coremotion_refuses_fails(self):
+        got = results(record('Bad device motion report,type,3,size,52', SPRINGBOARD))
+        self.assertEqual(got['motion.device-motion-rejected'].verdict, FAIL)
 
     def test_the_accelerometer_and_gyroscope_alone_pass(self):
         got = results(

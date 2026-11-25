@@ -188,7 +188,11 @@ struct DeviceMotionTest: HWTest {
         )
         let latencies = samples.map(\.latency)
         let latency = Stats.mean(latencies)
-        let fused = (before != nil && after != nil) ? Double(after! &- before!) : 0
+        let readable = before != nil && after != nil
+        let fused = readable ? Double(after! &- before!) : 0
+        // Lying flat, a wrongly conjugated attitude still matches the accelerometer: only a tilted console tells.
+        let accelNorm = sqrt(meanAccel.map { $0 * $0 }.reduce(0, +))
+        let tilt = accelNorm > 0 ? acos(max(-1, min(1, -meanAccel[2] / accelNorm))) * 180 / .pi : 0
         let orientation = await MainActor.run { () -> Int in
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             defer { UIDevice.current.endGeneratingDeviceOrientationNotifications() }
@@ -201,17 +205,20 @@ struct DeviceMotionTest: HWTest {
         metrics.set("user_accel_g", user, digits: 3)
         metrics.set("latency_ms", latency * 1000, digits: 1)
         metrics.set("driver_reports", fused, digits: 0)
+        metrics.set("tilt_deg", tilt, digits: 1)
         metrics.set("orientation", orientation)
         return .judged(
             [
                 ("at least 80 Hz of the 100 asked", rate >= 80),
                 ("unit gravity vector", abs(gravity - 1) < 0.05),
-                (
-                    "fused in SwitchMotion (its reports grew with the samples; debug kernel)",
-                    fused >= 0.8 * Double(samples.count)
-                ),
+                ("SwitchMotion's DeviceMotionReports readable (debug kernel)", readable),
+                ("fused in SwitchMotion: its reports grew with the samples", fused >= 0.8 * Double(samples.count)),
                 ("each sample within 25 ms of its sample time", latency < 0.025 && (latencies.min() ?? -1) > -0.001),
-                ("gravity within 5 degrees of the accelerometer's", angle < 5),
+                (
+                    tilt < 10
+                        ? "gravity within 5 degrees of the accelerometer's (lying flat: tilt it for a real test)"
+                        : "gravity within 5 degrees of the accelerometer's", angle < 5
+                ),
                 ("little user acceleration while still (< 0.1 g)", user < 0.1),
             ], metrics
         )

@@ -782,6 +782,12 @@ static void icm42607DeviceMotion()
     const SwitchDeviceMotionReport &last = motion->motionReports.back();
     check(last.payload[0] == 3 && last.payload[1] == 0x00 && last.payload[2] == 0x01,
           "device motion: 6-axis report, initialized");
+#if SWITCH_IPSW_KIND_24B119
+    check(sizeof(last.payload) == 60 && payloadFloat(last, 52) == -1.0f && payloadFloat(last, 56) == 0.0f,
+          "device motion: 24B119's 60 bytes, its last two floats as CoreMotion defaults them");
+#else
+    check(sizeof(last.payload) == 52, "device motion: 21H461's 52 bytes");
+#endif
     const float x = payloadFloat(last, 12), y = payloadFloat(last, 16), z = payloadFloat(last, 20),
                 w = payloadFloat(last, 24);
     const double gravity[3] = {-2.0 * (x * z - w * y), -2.0 * (y * z + w * x), -(w * w - x * x - y * y + z * z)};

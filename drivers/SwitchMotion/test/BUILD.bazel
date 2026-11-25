@@ -61,6 +61,24 @@ host_test(
     ],
 )
 
+# The same as a 24B119 kernel builds it (the kind header's SWITCH_IPSW_KIND_24B119): device motion reports of 60 bytes.
+host_test(
+    name = "switch_motion_24b119_test",
+    srcs = [
+        "orientation_pipeline_model.h",
+        "switch_motion_test.cpp",
+    ],
+    additional_compiler_inputs = ["//drivers/SwitchMotion:SwitchMotion.cpp"],
+    copts = [
+        "-DSWITCH_IPSW_KIND_24B119=1",
+        "-Wno-unused-parameter",
+    ],
+    deps = [
+        ":headers",
+        ":kernel",
+    ],
+)
+
 host_test(
     name = "switch_motion_fusion_test",
     srcs = [

@@ -71,6 +71,19 @@ MOTION = [
         note='the 6-axis coprocessor service opened in process; boot 2: SpringBoard 2, SwitchHWTest 1',
     ),
     Check(
+        'motion.device-motion-rejected',
+        OWNER,
+        (
+            'Bad device motion report',
+            'Unexpected device motion report type',
+            'Device motion not initialized',
+            '#Warning Device motion event ref invalid',
+        ),
+        subsystem=SUBSYSTEM,
+        source='drivers/SwitchMotion/SwitchMotionFusion.h',
+        note="CoreMotion refused SwitchMotion's device motion report (length, type or the initialized bit)",
+    ),
+    Check(
         'motion.device-motion-interval',
         OWNER,
         DEVICE_MOTION,
