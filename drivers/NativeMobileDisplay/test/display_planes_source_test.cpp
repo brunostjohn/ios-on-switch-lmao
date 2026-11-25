@@ -131,6 +131,9 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     EXPECT_TRUE(limits.before("#if SWITCH_IPSW_KIND_24B119", "native_planes::kLimits24B119;"));
     EXPECT_TRUE(limits.has("if (limits.packedYuvUnsupported) setProperty(\"IOMFBYUVPackedUnSupported\", true);"));
     EXPECT_TRUE(limits.has("if (limits.flipUnsupported) setProperty(\"IOMFBDisableFlip\", true);"));
+    // A swap refused for a transform names the transform word once per value (the line a device check reads).
+    EXPECT_TRUE(code.has("if (reason == native_planes::kTransformed) noteTransformRefused(layers);"));
+    EXPECT_TRUE(Block(source, "static void noteTransformRefused(").has("__atomic_fetch_or(&transformsRefused, bit"));
     // The service is found as J120's: IOServiceMatching("AppleCLCD").
     EXPECT_TRUE(code.has(": OSMetaClass(\"AppleCLCD\", NativeLegacyDisplay::superClass, sizeof(NativeLegacyDisplay))"));
 }

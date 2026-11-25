@@ -2057,7 +2057,8 @@ private:
         if (!__atomic_load_n(&frameEndUnmasked, __ATOMIC_RELAXED))
             return;
         fe::Holder holder = frameEndHolder();
-        if (holder == fe::kNone && (columnScanBusy() || windowProbeHolds() || host1xFlipBusy() || landscapeRunSampling()))
+        if (holder == fe::kNone &&
+            (columnScanBusy() || windowProbeHolds() || host1xFlipBusy() || landscapeRunSampling()))
             holder = fe::kExperiment;
         if (holder == fe::kNone && __atomic_load_n(&gFrameEndHolds, __ATOMIC_ACQUIRE))
             holder = fe::kHold;
@@ -4949,6 +4950,8 @@ public:
                         verdict.layers[i] = layers[i];
                 }
                 accepted = (reason == 0u);
+                if (reason == native_planes::kTransformed)
+                    noteTransformRefused(layers);
                 if (reason == 4 || reason == native_planes::kFormat || reason == native_planes::kAlignment) {
                     native_legacy_surface_rejected(
                         native_legacy_surface_width(surface), native_legacy_surface_height(surface),
@@ -4967,6 +4970,21 @@ public:
             publishVerdict(verdict);
         native_legacy_swap_validation_observed(accepted, reason, request, surface);
         return accepted;
+    }
+
+    // On the client's thread: one line for each transform word a refused swap first carries (Core Animation sends a
+    // refused swap again every frame, so the transform says which display_supports_rotation_p answer let it through).
+    static inline uint32_t transformsRefused = 0;
+
+    static void noteTransformRefused(const native_planes::Layer (&layers)[native_planes::kLayers])
+    {
+        for (unsigned i = 0; i < native_planes::kLayers; ++i) {
+            const uint32_t bit = 1u << (layers[i].transform & 7);
+            if (!layers[i].transform || (__atomic_fetch_or(&transformsRefused, bit, __ATOMIC_RELAXED) & bit))
+                continue;
+            IOLog("SwitchDisplay: swap refused: layer %u has transform %u (format %#x, %ux%u)\n", i,
+                  layers[i].transform, layers[i].surface.format, layers[i].surface.width, layers[i].surface.height);
+        }
     }
 
     // On the client's thread: the verdict, for the gate to take (drainVerdicts).
