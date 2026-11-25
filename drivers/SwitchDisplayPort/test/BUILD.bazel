@@ -4,6 +4,7 @@
 #   dp_link_test    the link for a mode, SOR1's transfer units (Linux's numbers), PLL_D2, training against a model sink
 #   dp_aux_test     DPAUX1 control words (Linux's), replies, retries, the EDID read plan
 #   policy_c11      every header again as C11 under -Wconversion -Wsign-conversion
+#   external_planes_<kind>_test  SwitchExternalPlanes.h: clone swaps onto DC B's windows, the published limits
 #
 #   bazel test //drivers/SwitchDisplayPort/test:all
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -100,6 +101,34 @@ host_test(
         "//drivers/SwitchDisplayPort:SwitchExternalGeometry.h",
     ],
 )
+
+PLANES = [
+    "//drivers/NativeMobileDisplay:NativePlanes.h",
+    "//drivers/NativeMobileDisplay:SwitchDisplayTraits.h",
+    "//drivers/NativeMobileDisplay:SwitchNativePlane.h",
+    "//drivers/NativeMobileDisplay:SwitchWindowCaps.h",
+    "//drivers/NativeMobileDisplay:SwitchWindowFormatImage.h",
+    "//drivers/SwitchDisplayPort:SwitchDPModes.h",
+    "//drivers/SwitchDisplayPort:SwitchExternalPlanes.h",
+    "//drivers/SwitchDisplayPort:SwitchExternalWindows.h",
+    "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
+    "//drivers/SwitchPower:SwitchDisplayMemory.h",
+    "//drivers/SwitchPower:SwitchDisplayMemoryMath.h",
+    "//drivers/TegraGM20B:SwitchGpuBacking.h",
+    "//drivers/TegraGM20B:TegraGM20BLayout.h",
+    "//drivers/TegraVIC:SwitchSurfaceColor.h",
+]
+
+# The planner as each IPSW kind builds it (the published dictionary differs).
+[
+    host_test(
+        name = "external_planes_{}_test".format(kind),
+        srcs = ["external_planes_test.cpp"] + PLANES,
+        copts = ["-O1"],
+        defines = ["SWITCH_IPSW_KIND_{}=1".format(kind)],
+    )
+    for kind in ("21H461", "24B119")
+]
 
 host_test(
     name = "dcb_scanout_test",

@@ -1,0 +1,310 @@
+// SPDX-License-Identifier: BSD-2-Clause-Patent
+// Hardware planes on the external display (display controller B): what its IOMobileFramebuffer publishes, which swaps it
+// accepts, and which of DC B's windows A, B and C shows each layer. Plain C++, no IOKit: SwitchExternalScreen uses it and
+// test/external_planes_test.cpp runs it on the host. The swap request, window formats, images and blend words are
+// NativePlanes.h's.
+//
+// The external display is always the panel's clone, and Core Animation builds its swaps in clone_update (QuartzCore
+// 24B119 IOMFBDisplay::clone_update 0x1846a6d24, 21H461 0x1896da164):
+//  - layer 2, a detached video: a VIC copy of the panel's detached source in the source's format, as large as the clone's
+//    destination rectangle, with the whole surface as source and no transform;
+//  - the panel's UI layer index (0 or 1): a BGRA VIC copy of the panel's framebuffer with its alpha, aspect-fit (so
+//    pillarboxed), over the video; the other of 0 and 1 off;
+//  - layer 3 only with a dedicated cursor plane, which is never published.
+// A display with a clone detaches only while the clone publishes IOMFBNumLayers' MaxNumLayers above 1 (24B119
+// AppleDisplay::update_display_limits clears bit 0x2000 otherwise and set_clone_master copies it into the clone; 21H461
+// the same with bit 0x400). The clone path reads no scaling limits (IOMFBDisplay::scale_cloned_layer_p returns 1), so a
+// swap is held to what DC B's registers express, not to the published scaling: Core Animation sends a refused swap again
+// every frame, and the published limits are the only refusal channel.
+#pragma once
+#include <stdint.h>
+
+#include "SwitchDPModes.h"
+#include "SwitchExternalWindows.h"
+#include "../NativeMobileDisplay/NativePlanes.h"
+#include "../NativeMobileDisplay/SwitchNativePlane.h"
+#include "../SwitchPower/SwitchDisplayBandwidth.h"
+
+namespace switch_external {
+
+using native_planes::Image;
+using native_planes::kLayers;
+using native_planes::Layer;
+
+// Scaling as published. DC B's windows scale RGB down to 1/4 across and 1/2 down, YUV to 1/4 both ways (TRM 24.1.3), and
+// up without a bound; the fraction published is the largest at which the UI and two more windows, all full screen,
+// stay inside the EMC's isochronous ceiling at SWITCH_DP_MAX_PIXEL_KHZ (external_planes_test WorstCaseMemoryFits). 1/2
+// is over it already at 4K60. The clone path never reads these, so they hold back no clone swap.
+constexpr uint32_t kMaxLayers = 3, kMinScaleFraction = 1, kMaxScale = 4;
+constexpr uint32_t kStrideAlignment = 64;
+constexpr uint64_t kBaseAlignment = 4096;
+
+#if SWITCH_IPSW_KIND_24B119
+constexpr native_planes::Limits kPanelLimits = native_planes::kLimits24B119;
+#else
+constexpr native_planes::Limits kPanelLimits;
+#endif
+// IOMFBYUVPackedUnSupported, as the panel publishes it (NativePlanes.h kLimits24B119).
+constexpr bool kPackedYuvUnsupported = kPanelLimits.packedYuvUnsupported;
+
+struct PublishedNumber {
+    const char *dictionary, *key;
+    uint64_t value;
+    unsigned bits;
+};
+
+// Entries of one dictionary are adjacent.
+constexpr PublishedNumber kPublished[] = {
+    {"DisplayPipeStrideRequirements", "StrideLinearHorizontal", kStrideAlignment, 32},
+    {"DisplayPipePlaneBaseAlignment", "PlaneBaseAlignmentLinear", kBaseAlignment, 64},
+    {"IOMFBNumLayers", "MaxNumLayers", kMaxLayers, 32},
+    {"IOMFBScalingLimits", "RGBLayer_MinScaleFraction", kMinScaleFraction, 32},
+    {"IOMFBScalingLimits", "RGBLayer_MaxScale", kMaxScale, 32},
+    {"IOMFBScalingLimits", "YUVLayer_MinScaleFraction", kMinScaleFraction, 32},
+    {"IOMFBScalingLimits", "YUVLayer_MaxScale", kMaxScale, 32},
+};
+
+// What the windows' registers express, which a swap is held to: sources and buffers to 4096 x 4096 (TRM Table 120), rows
+// on 64 bytes, plane bases on the DC's pitch alignment, and every scale imageOf's DDA increments take (H 4.0 at 4 bytes
+// a pixel and 8.0 at 1-2, V 15.0) up to 4096x.
+constexpr native_planes::Limits kScan = {
+    .minScaleFraction = 16,
+    .maxScale = 4096,
+    .yuvMinScaleFraction = 16,
+    .maxSrcRectWidth = SWITCH_DP_MAX_WIDTH,
+    .maxSrcRectTotal = uint64_t{SWITCH_DP_MAX_WIDTH} * SWITCH_DP_MAX_HEIGHT,
+    .maxSrcBuffer = SWITCH_DP_MAX_WIDTH,
+    .maxSrcBufferHeight = SWITCH_DP_MAX_HEIGHT,
+    .planeBaseAlignment = 64,
+    .strideAlignment = kStrideAlignment,
+    .maxLayers = kMaxLayers,
+};
+
+// validateSwap's decision on the updated layers: the background black or none, each layer with a surface one a window
+// shows, and at most kMaxLayers of them.
+inline unsigned checkSwap(uint32_t updated, uint32_t background, const bool hasSurface[kLayers],
+                          const Layer layers[kLayers], uint32_t width, uint32_t height)
+{
+    using namespace native_planes;
+    if ((updated & ~(kLayerBits | kBackgroundBit)) || (background && background != kOpaqueBlack) ||
+        ((updated & kBackgroundBit) && background != kOpaqueBlack))
+        return kLayerState;
+    unsigned surfaces = 0;
+    for (unsigned i = 0; i < kLayers; ++i) {
+        if (!(updated & (1u << i)) || !hasSurface[i])
+            continue;
+        ++surfaces;
+        if (const unsigned why = checkDetached(layers[i], width, height, kScan))
+            return why;
+    }
+    return surfaces > kMaxLayers ? kTwoUi : kAccepted;
+}
+
+// How a surface's pixels lie: its own rows, the GPU's block-linear layout of a single plane (TegraGM20BLayout.h), or two
+// planes a producer laid out block-linear (the backing's layout, as VIC reads a destination's).
+struct Layout {
+    enum Kind {
+        kRows,
+        kBlock,
+        kBlockPlanes
+    } kind = kRows;
+
+    tgm_layout block = {};
+    switch_gpu_backing_layout planes = {};
+};
+
+inline Layout layoutOf(const tgm_layout *gpu, const switch_gpu_backing_layout &backing)
+{
+    Layout layout;
+    if (gpu) {
+        layout.kind = Layout::kBlock;
+        layout.block = *gpu;
+    } else if (backing.plane_count == 2 && backing.planes[0].layout == SWITCH_GPU_BACKING_BLOCK_LINEAR &&
+               backing.planes[1].layout == SWITCH_GPU_BACKING_BLOCK_LINEAR) {
+        layout.kind = Layout::kBlockPlanes;
+        layout.planes = backing;
+    }
+    return layout;
+}
+
+// A two-plane YUV layer laid out block-linear: each plane from its base, as windows scan a decoder's own picture
+// (SwitchNativePlane.h): the whole picture as imageOf places it, or for 4:2:0 any source rectangle through H and V_OFFSET.
+inline bool blockPlanesImage(const Layer &l, uint32_t width, uint32_t height, const switch_gpu_backing_layout &planes,
+                             Image &image)
+{
+    if (!native_planes::isNv12(l.kind) && !native_planes::isNv16(l.kind))
+        return false;
+    if (!native_planes::imageOf(l, width, height, image))
+        return false;
+    if (!image.visible)
+        return true;
+    const bool whole = !image.hOffset && image.start[0] == l.surface.offset[0] && image.start[1] == l.surface.offset[1];
+    if (!whole &&
+        (!native_planes::isNv12(l.kind) || !switch_native_plane_offset_image(l, width, height, planes, 0, 0, image)))
+        return false;
+    return switch_native_plane_planes(l, planes, image);
+}
+
+constexpr uint32_t kPaletteEnable = 1u << 16;  // WIN_OPTIONS CP_ENABLE
+
+// The image a window scans of l as it lies, or false when no window reads it so. Every byte it reads is in the surface's
+// allocation, which is what a slot maps.
+inline bool imageFor(const Layer &l, const Layout &layout, uint32_t width, uint32_t height, Image &image)
+{
+    bool ok = false;
+    switch (layout.kind) {
+    case Layout::kRows:
+        ok = native_planes::imageOf(l, width, height, image);
+        break;
+    case Layout::kBlock:
+        ok = native_planes::imageOf(l, width, height, image, &layout.block);
+        break;
+    case Layout::kBlockPlanes:
+        ok = blockPlanesImage(l, width, height, layout.planes, image);
+        break;
+    }
+    // imageOf adds DC A's palette (the panel's gamma table); DC B's palettes hold nothing.
+    image.options &= ~kPaletteEnable;
+    return ok && (!image.visible || image.readHigh <= ((l.surface.allocation + 4095) & ~4095ULL));
+}
+
+struct Placement {
+    bool on = false;
+    bool csc = false;  // the window's CSC is written with this frame
+    int layer = -1;
+    unsigned depth = 0;
+};
+
+struct Plan {
+    Placement window[kWindows];
+    // Layers with an image on the screen that no window shows: below the third, or a YUV layer that no window it may
+    // take can scan with its matrix and range now.
+    uint32_t unshown = 0;
+};
+
+// Which window shows which layer. Depth follows the swap's stack order (NativePlanes.h stackPosition), 0 in front. The
+// topmost RGB layer (the UI) takes window A and the others B and C first. A YUV layer takes a window whose CSC holds its
+// matrix and range already, else one that is not scanning, whose CSC is written with the frame. With neither it is not
+// shown this frame; the window it would have replaced turns off at this latch, so the next frame finds one idle.
+inline Plan planWindows(const bool present[kLayers], const Image images[kLayers], const WindowState state[kWindows])
+{
+    Plan plan;
+    unsigned order[kLayers] = {};
+    unsigned count = 0;
+    for (unsigned position = kLayers; position-- > 0;)
+        for (unsigned layer = 0; layer < kLayers; ++layer)
+            if (native_planes::stackPosition(layer) == position && present[layer] && images[layer].visible)
+                order[count++] = layer;
+    for (unsigned k = kWindows; k < count; ++k)
+        plan.unshown |= 1u << order[k];
+    if (count > kWindows)
+        count = kWindows;
+    constexpr Window kPreference[] = {kB, kC, kA};
+    bool placed[kWindows] = {};
+    const auto place = [&](Window w, unsigned k, bool csc) {
+        plan.window[w] = {true, csc, int(order[k]), k};
+        placed[k] = true;
+    };
+    for (unsigned k = 0; k < count; ++k)
+        if (!images[order[k]].yuv) {
+            place(kA, k, false);
+            break;
+        }
+    for (unsigned k = 0; k < count; ++k) {
+        const Image &m = images[order[k]];
+        if (!m.yuv)
+            continue;
+        int chosen = -1;
+        for (const Window w : kPreference)
+            if (chosen < 0 && !plan.window[w].on && state[w].matrix == int(m.matrix) &&
+                state[w].fullRange == int(m.fullRange))
+                chosen = int(w);
+        const bool csc = chosen < 0;
+        for (const Window w : kPreference)
+            if (chosen < 0 && !plan.window[w].on && !state[w].live)
+                chosen = int(w);
+        if (chosen < 0)
+            plan.unshown |= 1u << order[k];
+        else
+            place(Window(chosen), k, csc);
+    }
+    for (unsigned k = 0; k < count; ++k) {
+        if (placed[k] || images[order[k]].yuv)
+            continue;
+        for (const Window w : kPreference)
+            if (!placed[k] && !plan.window[w].on)
+                place(w, k, false);
+    }
+    return plan;
+}
+
+// A window's registers for image m at `depth`, its surface mapped from `iova`. RGB is premultiplied over what lies
+// behind; YUV is opaque through its CSC.
+inline WindowRegisters registersOf(const Image &m, unsigned depth, bool csc, uint32_t iova)
+{
+    using namespace native_planes;
+    WindowRegisters r;
+    r.on = true;
+    r.options = m.options;
+    r.colorDepth = m.colorDepth;
+    r.byteSwap = m.byteSwap;
+    r.position = m.position;
+    r.size = m.size;
+    r.prescaled = m.prescaled;
+    r.hInitial = m.hInitial;
+    r.vInitial = m.vInitial;
+    r.dda = m.dda;
+    r.lineStride = m.lineStride;
+    r.blend = (m.yuv ? kBlendBypass : kBlendPremultiplied) | depth;
+    r.blendSelect = m.yuv ? 0 : kBlendOver;
+    r.start = iova + static_cast<uint32_t>(m.start[0]);
+    r.startU = m.yuv ? iova + static_cast<uint32_t>(m.start[1]) : 0;
+    r.hOffset = m.hOffset;
+    r.vOffset = m.vOffset;
+    r.kind = m.surfaceKind;
+    if (m.yuv) {
+        r.matrix = int(m.matrix);
+        r.fullRange = m.fullRange ? 1 : 0;
+        r.csc = csc;
+        for (unsigned i = 0; i < 8; ++i)
+            r.cscWords[i] = kCsc[m.matrix][m.fullRange ? 1 : 0][i];
+    }
+    return r;
+}
+
+// What a window scanning m fetches at the head's pixel clock: its bytes a pixel, more for a source larger than its
+// destination on either axis.
+inline switch_display::Demand demandOf(const Image &m, uint32_t pixelClockHz)
+{
+    switch_display::Demand d = {m.position & 0xffff, m.position >> 16, m.size & 0xffff, m.size >> 16,
+                                uint64_t(pixelClockHz) * native_planes::fetchBytesPerPixel(m)};
+    const uint32_t sourceWidth = (m.prescaled & 0xffff) / native_planes::prescaledBytesPerPixel(m);
+    d.bytesPerSecond = switch_display::scaled(d.bytesPerSecond, sourceWidth, d.width);
+    d.bytesPerSecond = switch_display::scaled(d.bytesPerSecond, m.prescaled >> 16, d.height);
+    return d;
+}
+
+// The frame for a plan: each window's registers (its layer's surface mapped at iova[layer]) and the memory the windows
+// fetch, their peak the most any overlap of them fetches at once.
+inline Frame frameOf(const Plan &plan, const Image images[kLayers], const uint32_t iova[kLayers], uint32_t pixelClockHz)
+{
+    Frame frame;
+    switch_display::Demand demands[kWindows] = {};
+    unsigned count = 0;
+    for (unsigned w = 0; w < kWindows; ++w) {
+        const Placement &p = plan.window[w];
+        if (!p.on)
+            continue;
+        const Image &m = images[p.layer];
+        frame.window[w] = registersOf(m, p.depth, p.csc, iova[p.layer]);
+        const switch_display::Demand d = demandOf(m, pixelClockHz);
+        const uint32_t sourceWidth = (m.prescaled & 0xffff) / native_planes::prescaledBytesPerPixel(m);
+        (void)switch_display::memoryWindow(frame.memory[w], d.bytesPerSecond, sourceWidth, m.prescaled >> 16, d.width,
+                                           d.height, m.yuv, !m.surfaceKind, false);
+        demands[count++] = d;
+    }
+    frame.peakBytes = switch_display::peak(demands, count);
+    return frame;
+}
+
+}  // namespace switch_external
