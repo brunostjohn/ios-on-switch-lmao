@@ -462,14 +462,14 @@ TEST(FrameEndSource, VerdictsReachTheTableThroughTheGate)
 // release kernel counts nothing (stats is SWITCH_FRAME_TIMELINE: DEVELOPMENT || DEBUG).
 TEST(DisplayStatsSource, LocksPerFrameEndLine)
 {
-    const CodeText window = method("void noteLocksWindow(uint64_t us, uint32_t swaps)");
+    const CodeText window = method("void noteLocksWindow(uint64_t us, uint32_t swaps, uint32_t irqs)");
     EXPECT_TRUE(window.startsWith("if (!stats) return;"));
     EXPECT_TRUE(window.has("os_log(OS_LOG_DEFAULT, \"SwitchDisplay locks: %s\", line);"));
     for (const char *count : {"color->lockTakes()", "intMaskTakes", "switch_vic_surface_cache_locks()", "flipClaims()"})
         EXPECT_TRUE(window.has(count)) << count;
-    EXPECT_TRUE(method("void noteStatsWindow()").has("noteLocksWindow(us, swaps);"));
+    EXPECT_TRUE(method("void noteStatsWindow()").has("noteLocksWindow(us, swaps, irqs);"));
     EXPECT_TRUE(method("void notePass()").startsWith("if (stats) ++stPasses;"));
-    EXPECT_TRUE(window.has("routedLine(line + used, sizeof(line) - used, us, swaps);"));
+    EXPECT_TRUE(window.has("routedLine(line + used, sizeof(line) - used, us, swaps, irqs);"));
 }
 
 // validateSwap runs on the client's thread: it decides and observes, and everything the gate owns (the overlay's

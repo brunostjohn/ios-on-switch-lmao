@@ -468,13 +468,24 @@ GROUPS: dict[str, list[Check]] = {
             'display.frame-end-idle',
             'r32-color',
             'SwitchDisplay locks: ',
-            'max(routed/ms*1000) < 5',
+            'max(unexplained/ms*1000) < 5',
             process=KERNEL,
-            regex=r'; (?P<ms>\d+) ms, (?P<swaps>\d+) swaps, routed for release holders (?P<routed>\d+)',
+            regex=r'; (?P<ms>\d+) ms, (?P<swaps>\d+) swaps, (?P<irqs>\d+) DC A interrupts, (?P<unexplained>\d+) not '
+            r'explained by debug holders',
             where='swaps == 0',
             source='drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp (noteFrameEndRouted, SwitchFrameEndHolder.h)',
-            note='frame ends/s after which FRAME_END stayed routed in windows with no swaps, leaving out the debug-only '
-            'holders (console tape, probes, display experiments); the line names each holder; was ~60; debug kernels',
+            note='DC A interrupts/s in windows with no swaps, less the frame ends the debug-only holders (console tape, '
+            'probes, display experiments) kept routed; the line names each holder; was ~60; debug kernels',
+        ),
+        Check(
+            'display.timed-ordinary-17',
+            'big-display',
+            'SwitchDisplay requested: ',
+            REPORT,
+            process=KERNEL,
+            note='on a 21H461 boot (it keeps the ordinary-frame clause, SwitchTimedPresent.h phasedOrdinary): a "-1" bin '
+            'and "shown early" above 0 mean its render server stamps the second frame end ahead as 24B119 does, and the '
+            'clause skips frame ends there too: drop it for 21H461; all in the 0 bin means its stamps name the next frame end',
         ),
         Check(
             'display.vblank-phase-gone',

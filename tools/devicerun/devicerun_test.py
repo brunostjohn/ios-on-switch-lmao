@@ -152,9 +152,9 @@ class Rules(unittest.TestCase):
     def test_frame_end_idle_leaves_out_debug_only_holders(self):
         check = next(c for c in checks.GROUPS['display'] if c.name == 'display.frame-end-idle')
         locks = 'SwitchDisplay locks: 300 frame ends; per 100: colour 0, INT_MASK 0; work-loop passes 100; '
-        debug = locks + '5011 ms, 0 swaps, routed for release holders 2 first 2 tape 300'
-        busy = locks + '5000 ms, 300 swaps, routed for release holders 300 ring 300'
-        leak = locks + '5000 ms, 0 swaps, routed for release holders 295 hold 295'
+        debug = locks + '5011 ms, 0 swaps, 302 DC A interrupts, 2 not explained by debug holders, routed for release'
+        busy = locks + '5000 ms, 300 swaps, 300 DC A interrupts, 300 not explained by debug holders, routed for release'
+        leak = locks + '5000 ms, 0 swaps, 295 DC A interrupts, 295 not explained by debug holders, routed for release'
 
         def verdict(*messages: str) -> str:
             records = [record(i, m) for i, m in enumerate(messages)]

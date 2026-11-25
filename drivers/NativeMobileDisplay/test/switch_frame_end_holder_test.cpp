@@ -31,6 +31,16 @@ TEST(FrameEndHolder, DebugOnlyHoldersAreNotCountedAsRelease)
     EXPECT_EQ(counts.release(), 3u);
 }
 
+TEST(FrameEndHolder, RoutedCountsEveryHolderButNone)
+{
+    RoutedCounts counts;
+    counts.add(kNone);
+    counts.add(kTape);
+    counts.add(kRing);
+    EXPECT_EQ(counts.routed(), 2u);
+    EXPECT_EQ(counts.routed() - counts.release(), 1u);
+}
+
 TEST(FrameEndHolder, NoneIsNeverARelease)
 {
     RoutedCounts counts;
@@ -55,9 +65,13 @@ TEST(FrameEndHolderSource, TheNoteNamesTheDisplaysReasonFirst)
 {
     const std::string display = SourceText("../NativeLegacyDisplay.cpp");
     const auto note = Block(display, "void noteFrameEndRouted()");
-    EXPECT_TRUE(note.before("if (!__atomic_load_n(&frameEndUnmasked", "Holder holder = frameEndHolder();"));
-    EXPECT_TRUE(note.before("holder = fe::kExperiment;", "holder = fe::kHold;"));
+    EXPECT_TRUE(note.before("if (!__atomic_load_n(&frameEndUnmasked", "fe::Holder holder = experiment"));
     EXPECT_TRUE(note.before("holder = fe::kHold;", "holder = fe::kPanel;"));
+    // The debug-only holders are asked last: a release holder they overlap is the release kernel's.
+    const auto holder = Block(display, "switch_frame_end::Holder frameEndHolder()");
+    EXPECT_TRUE(holder.before("return fe::kBlank;", "return fe::kTape;"));
+    EXPECT_TRUE(holder.before("return fe::kTape;", "return fe::kProbe;"));
+    EXPECT_TRUE(holder.before("return fe::kProbe;", "return fe::kNone;"));
     EXPECT_TRUE(Block(display, "bool frameEndNeeded()").has("return frameEndHolder() != switch_frame_end::kNone;"));
 }
 

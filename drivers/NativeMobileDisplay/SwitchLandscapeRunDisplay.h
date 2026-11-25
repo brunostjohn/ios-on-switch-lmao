@@ -71,7 +71,7 @@ int landscapeRunStart(uint32_t frames)
     s.holding = true;
     native_legacy_frame_end_hold();
     s.reply.state = SWITCH_DISPLAY_LANDSCAPE_SAMPLING;
-    IOLog("SwitchDisplay: landscape sample of %u frames from frame end %llu: landscape %d wanted %d switching %d, "
+    IOLog("SwitchDisplay: landscape sample of %u frames after frame end %llu: landscape %d wanted %d switching %d, "
           "portrait hold %u\n",
           frames, frameEnds, landscapeOn() ? 1 : 0, landscapeState.wanted ? 1 : 0, landscapeState.switching ? 1 : 0,
           __atomic_load_n(&s.portraitFrames, __ATOMIC_RELAXED));

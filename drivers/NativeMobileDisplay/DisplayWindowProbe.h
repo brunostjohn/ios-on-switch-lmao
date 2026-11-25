@@ -295,7 +295,7 @@ inline Window columnWindow(const Surface &s, bool hDirection, bool vDirection = 
     return w;
 }
 
-// Landscape BGRA `s` column-scanned onto the panel at 1:1 by window B: as columnWindow, with H counting 4 bytes a pixel.
+// Landscape BGRA `s` column-scanned onto the panel at 1:1 by window B: as columnWindow, H counting 4 bytes a pixel.
 inline Window columnWindowBgra(const Surface &s, bool hDirection, bool vDirection = false)
 {
     Window w = rowWindow(s);

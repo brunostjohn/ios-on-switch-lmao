@@ -20,9 +20,10 @@ namespace {
 constexpr uint64_t kPeriod = 16667, kHorizon = 1000000;  // microsecond ticks keep the arithmetic readable
 constexpr uint64_t kFrameEnd = 1000000;
 
-Clock at(uint64_t now, uint64_t asleep = 0, uint64_t lastFrameEnd = kFrameEnd, uint64_t accepted = 0)
+Clock at(uint64_t now, uint64_t asleep = 0, uint64_t lastFrameEnd = kFrameEnd, uint64_t accepted = 0,
+         bool phasedOrdinary = false)
 {
-    return {now, now + asleep, lastFrameEnd, kPeriod, kHorizon, accepted};
+    return {now, now + asleep, lastFrameEnd, kPeriod, kHorizon, accepted, phasedOrdinary};
 }
 
 TEST(TimedPresent, NoTargetOrAPastOneIsDue)
@@ -53,9 +54,9 @@ TEST(TimedPresent, AcceptanceTimeDoesNotMoveAPhasedSwap)
     }
 }
 
-// Decided without a phase (the frame ends were masked), a swap stamped within a period and a half of its acceptance is
-// the render server's ordinary frame and goes at once (OrdinaryUnphased); without an acceptance time it waits for a
-// frame end to learn the phase from.
+// Decided without a phase (the frame ends were masked), a swap stamped for the next vsync (within a period and the wake
+// jitter of its acceptance) is the render server's ordinary frame and goes at once (OrdinaryUnphased); without an
+// acceptance time it waits for a frame end to learn the phase from.
 TEST(TimedPresent, AnUnphasedOrdinaryFrameGoesAtOnce)
 {
     EXPECT_FALSE(switch_timed_present::due(Decision::Early));
@@ -65,6 +66,47 @@ TEST(TimedPresent, AnUnphasedOrdinaryFrameGoesAtOnce)
     EXPECT_TRUE(switch_timed_present::due(Decision::OrdinaryUnphased));
     EXPECT_EQ(decide(stale + kPeriod, at(stale)), Decision::NeedsPhase);
     EXPECT_EQ(decide(stale + 3 * kPeriod, at(stale, 0, kFrameEnd, stale - 200)), Decision::NeedsPhase);
+}
+
+// The first swap after an idle stretch: stamped two frame ends ahead and accepted 12 ms into the period, it waits a
+// frame end for the phase instead of going a period early (the start-of-burst skip, review-display item 2).
+TEST(TimedPresent, AnIdleLeadTwoSwapWaitsForThePhase)
+{
+    const uint64_t tick = kFrameEnd + 10 * kPeriod, accepted = tick + 12000;
+    EXPECT_EQ(decide(tick + 2 * kPeriod, at(accepted + 100, 0, kFrameEnd, accepted)), Decision::NeedsPhase);
+    // A stamp for the next vsync goes at once: under half a period away, or the render server's ordinary frame.
+    EXPECT_EQ(decide(tick + kPeriod, at(accepted + 100, 0, kFrameEnd, accepted)), Decision::Due);
+    const uint64_t early = tick + 3000;
+    EXPECT_EQ(decide(tick + kPeriod, at(early + 100, 0, kFrameEnd, early)), Decision::OrdinaryUnphased);
+}
+
+// A frame end the filter stamped after the clock was read is taken as now, not as a lost phase.
+TEST(TimedPresent, AFrameEndNewerThanNowIsNow)
+{
+    const uint64_t now = kFrameEnd + 3 * kPeriod + 12000;
+    EXPECT_EQ(decide(now + 2 * kPeriod, at(now, 0, now + 40, now - 200)), Decision::Early);
+}
+
+// The phase holds for two periods of frame ends and is lost at the second; the next frame end regains it.
+TEST(TimedPresent, ThePhaseIsLostAtTwoPeriodsAndRegainedAtTheNextFrameEnd)
+{
+    const uint64_t target = kFrameEnd + 4 * kPeriod;
+    const uint64_t before = kFrameEnd + 2 * kPeriod - 1, at2 = kFrameEnd + 2 * kPeriod;
+    EXPECT_EQ(decide(target, at(before)), Decision::Early);
+    EXPECT_EQ(decide(target, at(at2)), Decision::NeedsPhase);
+    EXPECT_EQ(decide(target, at(at2 + kPeriod + 50, 0, at2 + kPeriod)), Decision::Due);
+}
+
+// 21H461 keeps the ordinary-frame clause (kPhasedOrdinary): a phased swap within 1.5 periods of its acceptance goes at
+// once, and its unphased span stays 1.5 periods. 24B119's stamp alone decides.
+TEST(TimedPresent, The21H461ClauseIsKeptWhereItIsAsked)
+{
+    const uint64_t tick = kFrameEnd + 10000, now = tick + 1500, accepted = now - 200;
+    EXPECT_EQ(decide(tick + kPeriod, at(now, 0, kFrameEnd, accepted, true)), Decision::Ordinary);
+    EXPECT_TRUE(switch_timed_present::due(Decision::Ordinary));
+    EXPECT_EQ(decide(tick + kPeriod, at(now, 0, kFrameEnd, accepted, false)), Decision::Early);
+    const uint64_t idle = kFrameEnd + 10 * kPeriod, late = idle + 12000;
+    EXPECT_EQ(decide(idle + 2 * kPeriod, at(late + 100, 0, kFrameEnd, late, true)), Decision::OrdinaryUnphased);
 }
 
 // One swap per period from a render thread woken at each frame end, stamped `lead` frame ends ahead and accepted at a
@@ -100,6 +142,20 @@ TEST(TimedPresent, ConsecutiveFramesLatchOnePeriodApartAtEitherLead)
 
 // The display counts a swap the unphased clause let go once (debug kernels), when the kick takes it: a kick that
 // defers it for another reason asks the gate again, which must not count it twice.
+// The gate's answer is what kickAtIdleFrameEnd reads (headHeldForTime), set from the decision before the due return,
+// per kind as built, and cleared when the kick takes the head.
+TEST(TimedPresentSource, TheGateRecordsItsAnswerForTheFrameEndKick)
+{
+    const std::string source = SourceText("../SwitchTimedPresentDisplay.h");
+    const CodeText gate = Block(source, "bool presentNotDue(");
+    EXPECT_TRUE(gate.before("headHeldForTime = !switch_timed_present::due(decision);",
+                            "if (switch_timed_present::due(decision)) return false;"));
+    EXPECT_TRUE(gate.before("const uint64_t lastFrameEnd = __atomic_load_n(&feStamp", "mach_absolute_time()"));
+    EXPECT_TRUE(CodeText(source).has("static constexpr bool kPhasedOrdinary = false;"));
+    EXPECT_TRUE(
+        Block(SourceText("../NativeLegacyDisplay.cpp"), "void noteFrameInfoTaken(").has("headHeldForTime = false;"));
+}
+
 TEST(TimedPresentSource, TheDisplayCountsAnUnphasedSwapOnceAtItsTake)
 {
     const std::string source = SourceText("../SwitchTimedPresentDisplay.h");

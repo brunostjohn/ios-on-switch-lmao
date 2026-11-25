@@ -19,7 +19,8 @@ import UIKit
 /// control's <key>_hc_ms) against its commit: a presented handler within a few ms of its commit, with no
 /// presentedTime, is a drawable QuartzCore released at presentAtTime: without queueing it. d_fi_* (debug kernels)
 /// count the display's swaps: held for their time and shown or replaced unsent, shown more than half a period before
-/// their requested presentation, and let go as the render server's ordinary frame with the frame ends masked. Two phases settle why timed drawables come back with no time (QuartzCore 24B119 finishes every drawable
+/// their requested presentation, and let go as the render server's ordinary frame with the frame ends masked. Two
+/// phases settle why timed drawables come back with no time (QuartzCore 24B119 finishes every drawable
 /// of a layer that had no presented report for a second, the one presented now included): alt_plain= and alt_timed=,
 /// plain and timed presents in turn on one layer (timed ones shown here: the server shows and reports them, and what
 /// fails alone is the layer's report going stale; none: the server never takes or never reports a timed image); and

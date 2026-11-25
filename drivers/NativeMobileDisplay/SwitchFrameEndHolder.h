@@ -31,8 +31,8 @@ enum Holder : unsigned {
 };
 
 inline constexpr const char *kHolderNames[kHolders] = {
-    "none",  "first",      "vsync", "tape",   "kick",  "present",    "ring", "rotation", "probe",
-    "planes", "landscape", "completion", "offer", "attach", "blank", "experiment", "hold", "panel"};
+    "none",   "first",     "vsync",      "tape",  "kick",   "present", "ring",       "rotation", "probe",
+    "planes", "landscape", "completion", "offer", "attach", "blank",   "experiment", "hold",     "panel"};
 
 inline bool debugOnly(Holder h)
 {
@@ -46,6 +46,14 @@ struct RoutedCounts {
     void add(Holder h)
     {
         ++by[h < kHolders ? h : kNone];
+    }
+
+    uint32_t routed() const
+    {
+        uint32_t n = 0;
+        for (unsigned h = kFirst; h < kHolders; ++h)
+            n += by[h];
+        return n;
     }
 
     uint32_t release() const

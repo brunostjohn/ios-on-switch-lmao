@@ -5,6 +5,11 @@
 // SwitchRetireDisplay.h; under the gate.
 
 static constexpr uint64_t kTimedPresentHorizonNs = 1000000000ULL;
+#if SWITCH_IPSW_KIND_24B119
+static constexpr bool kPhasedOrdinary = false;  // 24B119's render server stamps the frame end it wants (D1)
+#else
+static constexpr bool kPhasedOrdinary = true;
+#endif
 // The kick's last answer from the gate: the head waits only for its requested presentation (kickAtIdleFrameEnd).
 static inline bool headHeldForTime = false;
 // The swap the gate holds, for frame info's count of timed swaps. Static: the instance is at the 16 KiB a kalloc_type
@@ -37,12 +42,11 @@ bool presentNotDue(const OriginalLegacySwapRequest *request)
     memcpy(&requested, reinterpret_cast<const unsigned char *>(request) + swapRequestedPresentation, sizeof(requested));
     uint64_t horizon = 0;
     nanoseconds_to_absolutetime(kTimedPresentHorizonNs, &horizon);
-    const switch_timed_present::Clock clock = {mach_absolute_time(),
-                                               mach_continuous_time(),
-                                               __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE),
-                                               vsyncInterval,
-                                               horizon,
-                                               submittedAt(request)};
+    const uint64_t lastFrameEnd = __atomic_load_n(&feStamp, __ATOMIC_ACQUIRE);
+    const uint64_t nowAbsolute = mach_absolute_time();
+    const uint64_t nowContinuous = mach_continuous_time();
+    const switch_timed_present::Clock clock = {nowAbsolute, nowContinuous,        lastFrameEnd,   vsyncInterval,
+                                               horizon,     submittedAt(request), kPhasedOrdinary};
     const auto decision = switch_timed_present::decide(requested, clock);
     headHeldForTime = !switch_timed_present::due(decision);
 #if SWITCH_FRAME_TIMELINE

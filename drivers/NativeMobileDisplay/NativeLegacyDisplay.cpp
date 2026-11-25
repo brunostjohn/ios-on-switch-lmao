@@ -1577,8 +1577,6 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             return fe::kFirst;
         if (vsyncArmed)
             return fe::kVsync;
-        if (tapeAttached || tapeSettle)
-            return fe::kTape;
         if (kickDeferred)
             return fe::kKick;
         if (presentDeferred)
@@ -1588,9 +1586,6 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             return fe::kRing;
         if (rotated && !rotationLatched)
             return fe::kRotation;
-        if (probeRequest || probe.active() || (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) ||
-            planeProbe.active())
-            return fe::kProbe;
         if ((planesOn && planeLatch.requested()) || planeHeldSet || planeRecoveryWaits())
             return fe::kPlanes;
         if (landscapeState.wanted)
@@ -1603,6 +1598,12 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             return fe::kAttach;
         if (colourBlankSwap.waiting())
             return fe::kBlank;
+        // The debug-only holders last: a release holder they overlap is counted as the release kernel's.
+        if (tapeAttached || tapeSettle)
+            return fe::kTape;
+        if (probeRequest || probe.active() || (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) ||
+            planeProbe.active())
+            return fe::kProbe;
         return fe::kNone;
     }
 
@@ -1994,7 +1995,7 @@ private:
         statsStart = now;
         stReadDue = true;
         stRead = 0;
-        noteLocksWindow(us, swaps);
+        noteLocksWindow(us, swaps, irqs);
     }
 
     // Debug kernels: how far from Core Animation's requested presentation the frames this window were shown
@@ -2056,10 +2057,9 @@ private:
         namespace fe = switch_frame_end;
         if (!__atomic_load_n(&frameEndUnmasked, __ATOMIC_RELAXED))
             return;
-        fe::Holder holder = frameEndHolder();
-        if (holder == fe::kNone &&
-            (columnScanBusy() || windowProbeHolds() || host1xFlipBusy() || landscapeRunSampling()))
-            holder = fe::kExperiment;
+        // A debug display experiment defers kicks and holds the frame end itself: its frame ends are its own.
+        const bool experiment = columnScanBusy() || windowProbeHolds() || host1xFlipBusy() || landscapeRunSampling();
+        fe::Holder holder = experiment ? fe::kExperiment : frameEndHolder();
         if (holder == fe::kNone && __atomic_load_n(&gFrameEndHolds, __ATOMIC_ACQUIRE))
             holder = fe::kHold;
         if (holder == fe::kNone && !tegra_panel_holds_frame_end())
@@ -2069,7 +2069,7 @@ private:
 
     // "routed": the frame ends after which FRAME_END stayed unmasked, by what held it (SwitchFrameEndHolder.h), and how
     // many of them a release kernel would have taken too, with the window's swaps: display.frame-end-idle reads it.
-    size_t routedLine(char *line, size_t size, uint64_t us, uint32_t swaps)
+    size_t routedLine(char *line, size_t size, uint64_t us, uint32_t swaps, uint32_t irqs)
     {
         namespace fe = switch_frame_end;
         size_t at = 0;
@@ -2077,7 +2077,9 @@ private:
             if (at < size)
                 at += static_cast<size_t>(snprintf(line + at, size - at, format, values...));
         };
-        add("; %llu ms, %u swaps, routed for release holders %u", static_cast<unsigned long long>(us / 1000), swaps,
+        const uint32_t debugRouted = stRouted.routed() - stRouted.release();
+        add("; %llu ms, %u swaps, %u DC A interrupts, %u not explained by debug holders, routed for release holders %u",
+            static_cast<unsigned long long>(us / 1000), swaps, irqs, irqs > debugRouted ? irqs - debugRouted : 0u,
             stRouted.release());
         for (unsigned h = fe::kNone; h < fe::kHolders; ++h)
             if (stRouted.by[h])
@@ -2086,7 +2088,7 @@ private:
         return at < size ? at : size - 1;
     }
 
-    void noteLocksWindow(uint64_t us, uint32_t swaps)
+    void noteLocksWindow(uint64_t us, uint32_t swaps, uint32_t irqs)
     {
         if (!stats)
             return;
@@ -2112,7 +2114,7 @@ private:
         stPasses = 0;
         const size_t used = written > 0 ? static_cast<size_t>(written) : 0;
         if (used < sizeof(line))
-            routedLine(line + used, sizeof(line) - used, us, swaps);
+            routedLine(line + used, sizeof(line) - used, us, swaps, irqs);
         os_log(OS_LOG_DEFAULT, "SwitchDisplay locks: %s", line);
     }
 
@@ -4626,6 +4628,7 @@ public:
         const bool timed = request == timedHeldRequest;
         if (timed)
             timedHeldRequest = nullptr;
+        headHeldForTime = false;
         noteUnphasedTaken(request);
         frameInfo->pending.take(seqOf(request), id, requested, timed);
         frameInfo->tickets.take(request, seqOf(request));
