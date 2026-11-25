@@ -201,6 +201,12 @@ int planeCompositeSlot(const switch_display::Overlay wanted[2], const int select
         if (!wanted[index].on)
             continue;
         const auto &layer = planeLayers[selected[index]].layer;
+        // VIC turns a job's whole output, never one compose slot: a turned overlay stays the window's turn or the
+        // conversion job's.
+        if (layer.transform) {
+            planeCompositeRefuse("a turned overlay");
+            return -95;
+        }
         const auto *native = planeSlots[wanted[index].slot].native;
         if (!native || !native->lease || !switch_display::compositePart(layer, width, height, parts[count]))
             return -95;

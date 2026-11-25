@@ -676,6 +676,17 @@ TEST_F(PlaneComposite, TheArmedProbeComposesWhatAdmissionTakesAndTheReportDisarm
     EXPECT_EQ(composites, 1u);
 }
 
+TEST_F(PlaneComposite, ATurnedOverlayIsNotComposedUnturned)
+{
+    reserveLimit = twoVideos() - 1;
+    display->planeLayers[2].layer.transform = 4;
+    EXPECT_FALSE(display->planeComposeWaits(wanted, selected, 720, 1280));
+    EXPECT_EQ(composites, 0u);
+    EXPECT_EQ(retains, 0u);
+    EXPECT_EQ(wanted[0].slot, 1);
+    EXPECT_EQ(wanted[1].slot, 3);
+}
+
 TEST_F(PlaneComposite, WithoutMultiSlotTwoOverlaysAreNotComposed)
 {
     reserveLimit = twoVideos() - 1;
