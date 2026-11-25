@@ -514,7 +514,8 @@ void tgm_present_pass(void);
 /* SwitchGpuPresentFilter.cpp: the armed watch's token, read by the nonstall interrupt's primary filter
  * (tgm_present_filter); attached once armed, detached at its claim before its tokens drop and before done runs. */
 void tgm_present_filter_attach(const struct switch_gpu_backing_token *token);
-void tgm_present_filter_attach_for(const void *display, const struct switch_gpu_backing_token *token);
+void tgm_present_filter_attach_for(const void *display,
+				   const struct switch_gpu_backing_token *token);
 void tgm_present_filter_detach(void);
 void tgm_present_filter_detach_for(const void *display);
 int tgm_present_filter_is_owner(const void *display);

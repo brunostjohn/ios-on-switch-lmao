@@ -395,7 +395,7 @@ struct Batch {
     bool cmd23;  // r14-sdcq: framed with Auto CMD23 (a multi-block ADMA2 command while that is on for its direction)
     uint32_t gapSectors;  // r14-sdcq: of `sectors`, those in gaps between the requests (read and discarded)
     SwitchAdmaRefusal why;
-    int issueStep;                // issue()'s result when the command never reached the card
+    int issueStep;     // issue()'s result when the command never reached the card
     uint64_t beganNs;  // when beginBatch started
 #if DEVELOPMENT || DEBUG
     uint64_t oldestQueuedNs, issuedNs;

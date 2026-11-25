@@ -18,9 +18,9 @@ typedef int wait_result_t;
 typedef int kern_return_t;
 typedef uint32_t UInt32;
 
-#define LCK_SLEEP_DEFAULT    0u
-#define THREAD_UNINT         0
-#define THREAD_AWAKENED      0
+#define LCK_SLEEP_DEFAULT 0u
+#define THREAD_UNINT 0
+#define THREAD_AWAKENED 0
 #define TIMEOUT_WAIT_FOREVER ((uint64_t)0)
 
 lck_mtx_t *IOLockGetMachLock(IOLock *lock);

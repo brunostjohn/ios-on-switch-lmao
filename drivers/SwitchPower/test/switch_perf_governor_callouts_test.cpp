@@ -472,7 +472,7 @@ TEST(SwitchPerfBootWindow, TheFallbackWakesTheOwnerWhenTheClockStays)
         tick(gNow);
         REQUIRE(own() == kTop);
         REQUIRE(!switch_perf_boot_done());
-        gNow = switchperf::kBootFallbackSeconds * 1000 * kMs + 8 * kMs;
+        gNow = uint64_t{switchperf::kBootFallbackSeconds} * 1000 * kMs + 8 * kMs;
         const unsigned signals = gSignals.load();
         tick(gNow);
         EXPECT_GT(gSignals.load(), signals) << "the tick past the fallback woke the owner";

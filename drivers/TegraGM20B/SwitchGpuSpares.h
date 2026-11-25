@@ -82,7 +82,8 @@ inline switch_gpu_spare_units switch_gpu_spare_layout(uint64_t bytes)
 // Whether a class's spares, ready or on their way (zeroing on the copy engine, or on the dirty list waiting for it), fall
 // short of its depth. The refill makes one only then: a spare it made is counted from the moment it exists, so a copy
 // engine too busy to take the dirty list bounds the refill at the depth, not at memory pressure.
-constexpr bool switch_gpu_spare_short(uint16_t ready, uint16_t zeroing, uint16_t dirty, uint16_t target)
+constexpr bool switch_gpu_spare_short(uint16_t ready, uint16_t zeroing, uint16_t dirty,
+				      uint16_t target)
 {
 	return uint32_t(ready) + zeroing + dirty < target;
 }
@@ -114,7 +115,8 @@ constexpr uint16_t SWITCH_GPU_SPARE_DEPTH_MAX = 8;
 // class of 16-32 MiB (a render server's dedicated chunk) learns a depth without crowding out the smaller ones. Two at
 // least in a class the compositor allocates from, whose last spare other clients leave to it
 // (switch_gpu_spare_kept_for_compositor): their miss teaches the class a second spare.
-inline uint16_t switch_gpu_spare_depth_cap(uint64_t bytes, uint64_t cap, bool compositor_class = false)
+inline uint16_t switch_gpu_spare_depth_cap(uint64_t bytes, uint64_t cap,
+					   bool compositor_class = false)
 {
 	const uint16_t floor = compositor_class ? 2 : 1;
 	const uint64_t most = bytes ? cap / 4 / bytes : SWITCH_GPU_SPARE_DEPTH_MAX;
@@ -126,7 +128,8 @@ inline uint16_t switch_gpu_spare_depth_cap(uint64_t bytes, uint64_t cap, bool co
 // Whether a BoAlloc passes over a class's ready spares: it is not the compositor's, the compositor allocates from the
 // class, and one spare is left. The warm 24 MiB spare kept for backboardd's Photos attachment is then still there for
 // it, and the other client's miss raises the class's depth so the refill makes it one too.
-constexpr bool switch_gpu_spare_kept_for_compositor(bool critical, bool compositor_class, uint16_t ready)
+constexpr bool switch_gpu_spare_kept_for_compositor(bool critical, bool compositor_class,
+						    uint16_t ready)
 {
 	return !critical && compositor_class && ready <= 1;
 }

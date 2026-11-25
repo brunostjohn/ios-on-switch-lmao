@@ -150,9 +150,9 @@ void spareZeroed(void *context, int result)
 	const bool firstFailure = result && !p->fillFailed;
 	p->fillFailed = p->fillFailed || result;
 	const bool hasDirty = p->dirty != nullptr || p->poolDirty != nullptr;
-	const bool needFill = !p->fillFailed && spareRoom() &&
-			      switch_gpu_spare_short(p->count[c], p->zeroing[c], p->dirtyCount[c],
-						     p->target[c]);
+	const bool needFill =
+		!p->fillFailed && spareRoom() &&
+		switch_gpu_spare_short(p->count[c], p->zeroing[c], p->dirtyCount[c], p->target[c]);
 	IOLockUnlock(p->lock);
 	if (firstFailure)
 		IOLog("tegra-gm20b: the copy engine's zero-fill of a %llu KiB spare "
@@ -387,7 +387,8 @@ Spare *spareTake(uint64_t bytes, bool critical)
 		p->compositorClass[c] = true;
 	Spare *s = nullptr;
 	for (uint32_t d = c; d < kClasses && switch_gpu_spare_serves(c, d) && !s; d++) {
-		if (switch_gpu_spare_kept_for_compositor(critical, p->compositorClass[d], p->count[d]))
+		if (switch_gpu_spare_kept_for_compositor(critical, p->compositorClass[d],
+							 p->count[d]))
 			continue;
 		s = p->ready[d];
 		if (s) {
@@ -397,14 +398,12 @@ Spare *spareTake(uint64_t bytes, bool critical)
 		}
 	}
 	if (!s) {
-		const switch_gpu_spare_miss why =
-			switch_gpu_spare_miss_of(p->target[c],
-						 uint16_t(p->zeroing[c] + p->dirtyCount[c]),
-						 memoryPressure());
+		const switch_gpu_spare_miss why = switch_gpu_spare_miss_of(
+			p->target[c], uint16_t(p->zeroing[c] + p->dirtyCount[c]), memoryPressure());
 		const uint16_t learnt = switch_gpu_spare_depth_after_miss(
 			p->target[c], classBytes(c) <= kLearnMaxBytes, why);
-		const uint16_t most =
-			switch_gpu_spare_depth_cap(classBytes(c), kSpareCapBytes, p->compositorClass[c]);
+		const uint16_t most = switch_gpu_spare_depth_cap(classBytes(c), kSpareCapBytes,
+								 p->compositorClass[c]);
 		p->target[c] = learnt < most ? learnt : most;
 #if TGM_STATS
 		++p->misses[why];

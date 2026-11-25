@@ -1835,11 +1835,14 @@ TEST(GM20BSparesSource, TheRefillCountsDirtySpares)
 	for (const char *fn : {"void spareZeroed(void *context, int result)",
 			       "void spareWork(thread_call_param_t param, thread_call_param_t)",
 			       "Spare *spareTake(uint64_t bytes, bool critical)"})
-		EXPECT_TRUE(Block(client(), fn).has("switch_gpu_spare_short(p->count[c], p->zeroing[c], p->dirtyCount[c],"))
+		EXPECT_TRUE(Block(client(), fn)
+				    .has("switch_gpu_spare_short(p->count[c], p->zeroing[c], "
+					 "p->dirtyCount[c],"))
 			<< fn;
-	for (const char *fn : {"void spareRecycleWork(thread_call_param_t param, thread_call_param_t)",
-			       "void spareWork(thread_call_param_t param, thread_call_param_t)",
-			       "bool spareKeep(const SwitchGpuCachedBuffer &buffer"}) {
+	for (const char *fn :
+	     {"void spareRecycleWork(thread_call_param_t param, thread_call_param_t)",
+	      "void spareWork(thread_call_param_t param, thread_call_param_t)",
+	      "bool spareKeep(const SwitchGpuCachedBuffer &buffer"}) {
 		const CodeText body = Block(client(), fn);
 		EXPECT_EQ(body.count("p->dirtyBytes += ") + body.count("p->dirtyBytes -= "),
 			  body.count("++p->dirtyCount[") + body.count("--p->dirtyCount["))
@@ -1853,8 +1856,10 @@ TEST(GM20BSparesSource, TheCompositorsClassesKeepTheirLastSpareForIt)
 {
 	const CodeText take = Block(client(), "Spare *spareTake(uint64_t bytes, bool critical)");
 	EXPECT_TRUE(take.before("if (critical) p->compositorClass[c] = true;",
-				"switch_gpu_spare_kept_for_compositor(critical, p->compositorClass[d], p->count[d])"));
-	EXPECT_TRUE(take.has("switch_gpu_spare_depth_cap(classBytes(c), kSpareCapBytes, p->compositorClass[c]);"));
+				"switch_gpu_spare_kept_for_compositor(critical, "
+				"p->compositorClass[d], p->count[d])"));
+	EXPECT_TRUE(take.has("switch_gpu_spare_depth_cap(classBytes(c), kSpareCapBytes, "
+			     "p->compositorClass[c]);"));
 	EXPECT_FALSE(take.has("p->target[d] >= 2"));
 }
 
@@ -1873,8 +1878,9 @@ TEST(GM20BParkedBoSource, ParkWaitersPushTheirBosOwnMover)
 {
 	EXPECT_FALSE(CodeText(client()).has("parkWait_"));
 	EXPECT_FALSE(CodeText(client()).has("parkOwner_"));
-	EXPECT_TRUE(Block(client(), "bool AGXDeviceUserClient::parkWaitStableLocked(")
-			    .has("switch_gpu_sleep_inheritor(lock_, &bo->parkOwner, bo->parkOwner);"));
+	EXPECT_TRUE(
+		Block(client(), "bool AGXDeviceUserClient::parkWaitStableLocked(")
+			.has("switch_gpu_sleep_inheritor(lock_, &bo->parkOwner, bo->parkOwner);"));
 	const CodeText reclaim = Block(client(), "bool AGXDeviceUserClient::reclaimParkedBo(");
 	EXPECT_TRUE(reclaim.before("bo->parkOwner = switch_gpu_current_thread();",
 				   "parkUnlinkLocked(bo, true);"));

@@ -204,8 +204,8 @@ protected:
 		tgm_gpu.device = &tgm_gpu.deviceStorage;
 		tgm_gpu.deviceStorage.ltc = &tgm_gpu.deviceStorage.ltcStorage;
 		gSmmuMaps = gSmmuUnmaps = gCtorCalls = gDtorCalls = gLtcInvalidates = 0;
-		gLtcInvalidatesBeforeFirstUnmap = gLtcInvalidatesBeforeLastUnmap = gDtorsBeforeInvalidate =
-			0;
+		gLtcInvalidatesBeforeFirstUnmap = gLtcInvalidatesBeforeLastUnmap =
+			gDtorsBeforeInvalidate = 0;
 		gNextIova = 0x10000000ULL;
 		gSmmuFreeBytes = SWITCH_GPU_SMMU_MAX_WINDOW_BYTES;
 		gLastReserveBytes = 0;
