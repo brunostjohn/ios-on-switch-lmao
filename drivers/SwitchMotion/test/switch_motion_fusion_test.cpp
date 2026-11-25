@@ -1,13 +1,14 @@
 // SwitchMotionFusion.h on the host: its float bit patterns against the host's floats, the attitude it seeds and
-// integrates against closed-form rotations, its gyroscope bias estimate, and the device motion report's layout in both
-// builds' lengths.
+// integrates against closed-form rotations and against CoreMotion's own reading of the report, its gyroscope bias
+// estimate (switch_motion_bias_test has the stillness cases), and the device motion report's layout in both builds'
+// lengths.
 #include <gtest/gtest.h>
 
 #include <cmath>
 #include <cstring>
 #include <random>
 
-#include "drivers/SwitchMotion/SwitchMotionFusion.h"
+#include "drivers/SwitchMotion/test/fusion_sim.h"
 
 namespace {
 float FromBits(uint32_t bits)
@@ -38,6 +39,37 @@ void Gravity(const SwitchMotionFusion &fusion, double out[3])
     fusion.gravity(g);
     for (unsigned i = 0; i < 3; ++i)
         out[i] = static_cast<double>(g[i]) / static_cast<double>(kSwitchOne);
+}
+
+// CoreMotion 24B119's reading of a type-3 report, written from its disassembly rather than from SwitchMotionFusion.h:
+// the gravity it derives from the quaternion (x, y, z, w) and its attitude prediction q * dq(rate * dt)
+// (CLSensorFusionService_Predict::applyConstantRotationRate).
+void Quaternion(const uint8_t *payload, double q[4])
+{
+    for (unsigned i = 0; i < 4; ++i)
+        q[i] = PayloadFloat(payload, 12 + 4 * i);
+}
+
+void CoreMotionGravity(const double q[4], double out[3])
+{
+    const double x = q[0];
+    const double y = q[1];
+    const double z = q[2];
+    const double w = q[3];
+    out[0] = 2 * (w * y - x * z);
+    out[1] = -2 * (w * x + y * z);
+    out[2] = 2 * (x * x + y * y) - 1;
+}
+
+void CoreMotionPredict(const double q[4], const double rate[3], double dt, double out[4])
+{
+    const double half = std::sqrt(rate[0] * rate[0] + rate[1] * rate[1] + rate[2] * rate[2]) * dt / 2;
+    const double scale = half > 0 ? std::sin(half) / (2 * half) * dt : 0;
+    const double d[4] = {rate[0] * scale, rate[1] * scale, rate[2] * scale, std::cos(half)};
+    out[0] = d[3] * q[0] + d[2] * q[1] - d[1] * q[2] + d[0] * q[3];
+    out[1] = -d[2] * q[0] + d[3] * q[1] + d[0] * q[2] + d[1] * q[3];
+    out[2] = d[1] * q[0] - d[0] * q[1] + d[3] * q[2] + d[2] * q[3];
+    out[3] = -d[0] * q[0] - d[1] * q[1] - d[2] * q[2] + d[3] * q[3];
 }
 
 // Feeds `seconds` of samples at 200 Hz: a fixed accelerometer and gyroscope reading.
@@ -183,6 +215,65 @@ TEST(SwitchMotionFusion, ASteadyTurnIsNotTakenForBias)
     const int32_t turn[3] = {0, 0, 200000};  // 0.2 rad/s about the vertical, past any plausible offset
     Feed(fusion, down, turn, 10.0);
     EXPECT_EQ(fusion.biasNanoRad[2], 0);
+}
+
+// A conjugated quaternion convention reads as the mirrored tilt: (0, +1, 0) instead of (0, -1, 0) here.
+TEST(SwitchMotionFusion, CoreMotionReadsTheRealGravityFromTheReport)
+{
+    SwitchMotionFusion fusion;
+    const int32_t faceUp[3] = {0, 0, -2000000};
+    fusion.addAccel(faceUp);
+    double down[3] = {0, 0, -1};
+    const double none[3] = {};
+    const double aboutX[3] = {M_PI / 2, 0, 0};
+    const double aboutZ[3] = {0, 0, M_PI / 2};
+    const double oblique[3] = {0.3, -0.7, 0.4};
+    uint8_t payload[kSwitchDeviceMotion24B119];
+    const int32_t still[3] = {};
+    for (const double *rate : {aboutX, aboutZ, oblique}) {
+        SimTurn(fusion, down, rate, none, 1.0, 2.0, [](const int32_t *) {});
+        switchDeviceMotionPayload(fusion, still, payload, sizeof(payload));
+        double q[4];
+        double g[3];
+        Quaternion(payload, q);
+        CoreMotionGravity(q, g);
+        for (unsigned i = 0; i < 3; ++i)
+            EXPECT_NEAR(g[i], down[i], 2e-3) << i;
+    }
+}
+
+// CoreMotion carries the attitude forward between reports with the report's own rotation rate, the increment on the
+// right in the device frame. A quaternion in the other convention, or the increment on the other side, predicts away
+// from the next report.
+TEST(SwitchMotionFusion, CoreMotionsPredictionLandsOnTheNextReport)
+{
+    SwitchMotionFusion fusion;
+    const int32_t tilted[3] = {300000, -400000, -866025};
+    fusion.addAccel(tilted);
+    double down[3] = {0.3, -0.4, -0.866025};
+    const double rate[3] = {0.9, -0.6, 1.4};
+    const double none[3] = {};
+    uint8_t payload[kSwitchDeviceMotion24B119];
+    double before[4] = {};
+    double reportedRate[3] = {};
+    unsigned n = 0;
+    SimTurn(fusion, down, rate, none, 1.0, 2.0, [&](const int32_t *gyro) {
+        if (++n % 10)
+            return;
+        switchDeviceMotionPayload(fusion, gyro, payload, sizeof(payload));
+        double q[4];
+        Quaternion(payload, q);
+        if (n > 10) {
+            double predicted[4];
+            CoreMotionPredict(before, reportedRate, 10 * kSimDt, predicted);
+            for (unsigned i = 0; i < 4; ++i)
+                EXPECT_NEAR(predicted[i], q[i], 1e-4) << "report " << n / 10 << ", component " << i;
+        }
+        for (unsigned i = 0; i < 4; ++i)
+            before[i] = q[i];
+        for (unsigned i = 0; i < 3; ++i)
+            reportedRate[i] = PayloadFloat(payload, 28 + 4 * i);
+    });
 }
 
 TEST(SwitchMotionFusion, ReportLayoutInBothBuildsLengths)
