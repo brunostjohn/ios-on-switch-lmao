@@ -85,6 +85,20 @@ TEST_P(XnuSchedSystimeSource, RecountHandsOverEveryKernelSlice)
                                   "to_add->rsn_time_mach);\n\t\t}\n"));
 }
 
+TEST_P(XnuSchedSystimeSource, TheTrapIsKeptUntilItsLastSliceIsHandedOver)
+{
+    const std::string tree = GetParam();
+    const std::string recount = switch_ios::test::SourceText("../" + tree + "/osfmk/kern/recount.c");
+    EXPECT_THAT(
+        switch_ios::test::Body(recount, "\nrecount_enter_user(void)"),
+        HasSubstr("recount_transition(RCT_LVL_KERNEL, RCT_LVL_USER);\n\tswitch_systime_returned(current_thread());"))
+        << "sleh clears exception_trace_code before this transition hands over the trap's last kernel slice";
+    EXPECT_THAT(switch_ios::test::SourceText("../" + tree + "/osfmk/arm/thread.h"),
+                HasSubstr("\tuint16_t                  exception_trace_code;\n\tuint8_t                   "
+                          "switch_systime_trap;"))
+        << "the reserved byte after the trace code, so machine_thread keeps its layout";
+}
+
 INSTANTIATE_TEST_SUITE_P(BothTrees, XnuSchedSystimeSource, testing::Values("xnu-10063.141.1", "xnu-12377.121.6"));
 
 TEST(XnuSchedSystimeSource, ReleaseKernelsCompileTheHooksToNothing)
@@ -93,6 +107,7 @@ TEST(XnuSchedSystimeSource, ReleaseKernelsCompileTheHooksToNothing)
     const std::string stubs = header.substr(header.find("#else /* DEVELOPMENT || DEBUG */"));
     EXPECT_THAT(stubs, HasSubstr("static inline void switch_systime_entered("));
     EXPECT_THAT(stubs, HasSubstr("static inline void switch_systime_absorb("));
+    EXPECT_THAT(stubs, HasSubstr("static inline void switch_systime_returned("));
     EXPECT_THAT(switch_ios::test::SourceText("../switch/sched/systime.c"), HasSubstr("\n#if DEVELOPMENT || DEBUG\n"));
 }
 

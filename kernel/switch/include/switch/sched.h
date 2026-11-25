@@ -79,9 +79,11 @@ void switch_sched_commit_report(char *line, size_t size, uint64_t window_ns);
 
 /* systime.c: user threads' kernel time by what entered the kernel (sched/systime.h). sleh_synchronous, once it has
  * marked a synchronous exception from EL0 and before it enables interrupts; recount, for each slice of kernel-level
- * time it gives a non-idle thread, interrupts masked. Each writes only its own CPU's counts. */
+ * time it gives a non-idle thread, interrupts masked; recount_enter_user, after it has handed over a trap's last slice.
+ * Each writes only its own CPU's counts and the thread on (or leaving) that CPU. */
 void switch_systime_entered(thread_t thread);
 void switch_systime_absorb(thread_t thread, task_t task, uint64_t mach);
+void switch_systime_returned(thread_t thread);
 void switch_sched_systime_report(char *line, size_t size, uint64_t window_ns);
 /* callouts.c: thread call functions and timer actions by CPU (<switch/callouts.h>). */
 void switch_sched_callout_report(char *line, size_t size, uint64_t window_ns);
@@ -163,6 +165,9 @@ static inline void switch_systime_entered(__unused thread_t thread)
 {}
 
 static inline void switch_systime_absorb(__unused thread_t thread, __unused task_t task, __unused uint64_t mach)
+{}
+
+static inline void switch_systime_returned(__unused thread_t thread)
 {}
 
 #endif /* DEVELOPMENT || DEBUG */

@@ -1281,6 +1281,7 @@ void
 recount_enter_user(void)
 {
 	recount_transition(RCT_LVL_KERNEL, RCT_LVL_USER);
+	switch_systime_returned(current_thread());
 }
 
 void

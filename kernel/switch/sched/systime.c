@@ -52,15 +52,25 @@ static void add(uint64_t *count, uint64_t n)
 
 void switch_systime_entered(thread_t thread)
 {
-    add(&systime_cpu[cpu_number()].counts.entries[bucket_of(thread)], 1);
+    const enum switch_systime_bucket bucket = bucket_of(thread);
+
+    add(&systime_cpu[cpu_number()].counts.entries[bucket], 1);
+    thread->machine.switch_systime_trap = (uint8_t)(bucket + 1);
 }
 
 void switch_systime_absorb(thread_t thread, task_t task, uint64_t mach)
 {
+    const uint8_t trap = thread->machine.switch_systime_trap;
+
     if (task == kernel_task || mach == 0) {
         return;
     }
-    add(&systime_cpu[cpu_number()].counts.time[bucket_of(thread)], mach);
+    add(&systime_cpu[cpu_number()].counts.time[trap ? trap - 1 : SWITCH_SYSTIME_OUTSIDE], mach);
+}
+
+void switch_systime_returned(thread_t thread)
+{
+    thread->machine.switch_systime_trap = 0;
 }
 
 /*

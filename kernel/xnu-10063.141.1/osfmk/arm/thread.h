@@ -147,7 +147,7 @@ struct machine_thread {
 	struct cpu_data *         CpuDatap;               /* current per cpu data */
 	unsigned int              preemption_count;       /* preemption count */
 	uint16_t                  exception_trace_code;
-	uint8_t                   reserved7;
+	uint8_t                   switch_systime_trap;    /* 1 + <switch/sched.h>'s bucket of the EL0 trap it is in */
 	bool                      reserved8;
 #if defined(HAS_APPLE_PAC)
 	uint64_t                  rop_pid;

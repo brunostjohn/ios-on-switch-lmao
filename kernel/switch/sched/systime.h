@@ -2,10 +2,11 @@
 /*
  * User threads' kernel time by what brought each thread into the kernel (systime.c, debug kernels). sleh_synchronous
  * marks a thread's synchronous exception from EL0 in thread->machine.exception_trace_code (ARM64_KDBG_CODE_USER | the
- * ESR class) until it returns, a syscall's whole life included; recount hands every slice of kernel-level time to the
- * thread it belongs to. So a slice is put in the bucket of the exception the thread is in at that moment, and a slice
- * with none (an interrupt or an AST taken from EL0, the path back to user mode) is "outside a trap". Plain C, free of
- * kernel types, so kernel/tests runs it on the host; the including file declares snprintf. Times are mach ticks.
+ * ESR class); recount hands every slice of kernel-level time to the thread it belongs to. sleh clears the mark before
+ * the trap's last slice is handed over (recount_enter_user, on the way back to EL0), so the bucket is kept in the
+ * thread's machine.switch_systime_trap from the mark until recount_enter_user has handed that slice over. A slice with
+ * no trap kept (an interrupt or an AST taken from EL0) is "outside a trap". Plain C, free of kernel types, so
+ * kernel/tests runs it on the host; the including file declares snprintf. Times are mach ticks.
  */
 #ifndef SWITCH_SCHED_SYSTIME_H
 #define SWITCH_SCHED_SYSTIME_H

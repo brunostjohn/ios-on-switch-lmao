@@ -37,7 +37,8 @@
 #   xnu_a64x_traps_test      <switch/a64x_traps.h>: the translator's traps by CPU ring, window and line, one writer and
 #                            one reader losing nothing a ring kept; every handled trap in a64x_emulate_user is noted
 #   xnu_sched_systime_test   kernel/switch/sched/systime.h: user threads' kernel time by what entered the kernel and its
-#                            line; both trees' sleh_synchronous count each entry and recount hands over each slice
+#                            line; both trees' sleh_synchronous count each entry and recount hands over each slice,
+#                            the trap kept per thread until recount_enter_user has handed over its last one
 #   xnu_sched_watch_test     kernel/switch/sched/watch.h and commit.h: a committing or touch-sending thread's stretch to
 #                            each event, one per burst, its cause and line; a commit through the render server to the
 #                            display thread's wake; nothing under the thread lock that locks or logs
@@ -515,8 +516,10 @@ host_test(
     data = [
         "//kernel/switch:include/switch/sched.h",
         "//kernel/switch:sched/systime.c",
+        "//kernel/xnu-10063.141.1/osfmk:arm/thread.h",
         "//kernel/xnu-10063.141.1/osfmk:arm64/sleh.c",
         "//kernel/xnu-10063.141.1/osfmk:kern/recount.c",
+        "//kernel/xnu-12377.121.6/osfmk:arm/thread.h",
         "//kernel/xnu-12377.121.6/osfmk:arm64/sleh.c",
         "//kernel/xnu-12377.121.6/osfmk:kern/recount.c",
     ],
