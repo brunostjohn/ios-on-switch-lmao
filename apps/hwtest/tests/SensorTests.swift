@@ -99,9 +99,15 @@ struct GyroscopeTest: HWTest {
     }
 }
 
-/// How many device motion reports SwitchMotion has fused and sent since boot (debug kernels: its DeviceMotionReports
-/// property, drivers/SwitchMotion/SwitchMotion.cpp); nil without the driver or the property.
+/// What SwitchMotion reports of itself on debug kernels (drivers/SwitchMotion/SwitchMotion.cpp serializeProperties):
+/// the device motion reports it has fused and sent since boot, and the raw gyroscope's report interval, 0 while no
+/// client streams it. nil without the driver or the properties (a release kernel).
 enum MotionDriver {
+    struct State {
+        let reports: UInt64
+        let gyroUS: UInt32
+    }
+
     typealias Matching = @convention(c) (UnsafePointer<CChar>) -> CFMutableDictionary?
     typealias Service = @convention(c) (mach_port_t, CFDictionary?) -> mach_port_t
     typealias Properties =
@@ -109,7 +115,7 @@ enum MotionDriver {
         -> kern_return_t
     typealias Release = @convention(c) (mach_port_t) -> kern_return_t
 
-    static func reports() -> UInt64? {
+    static func state() -> State? {
         guard let iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW),
               let matching = dlsym(iokit, "IOServiceMatching"),
               let service = dlsym(iokit, "IOServiceGetMatchingService"),
@@ -125,14 +131,19 @@ enum MotionDriver {
         guard unsafeBitCast(properties, to: Properties.self)(motion, &table, kCFAllocatorDefault, 0) == KERN_SUCCESS,
               let dictionary = table?.takeRetainedValue() as NSDictionary?
         else { return nil }
-        return (dictionary["DeviceMotionReports"] as? NSNumber)?.uint64Value
+        guard let reports = dictionary["DeviceMotionReports"] as? NSNumber,
+              let gyro = dictionary["GyroReportInterval"] as? NSNumber
+        else { return nil }
+        return State(reports: reports.uint64Value, gyroUS: gyro.uint32Value)
     }
 }
 
 /// Sensor fusion (CMDeviceMotion) and the orientation UIKit derives from it. Device motion is fused in SwitchMotion as
-/// a motion coprocessor fuses it: the driver's report count has to grow with the samples received (it stays put when
-/// CoreMotion fuses the raw accelerometer and gyroscope itself), each sample arrives soon after its sample time, and
-/// at rest its gravity is the accelerometer's.
+/// a motion coprocessor fuses it: the driver's report count has to grow with the samples received, and the raw
+/// gyroscope has to stay unstreamed meanwhile, since CoreMotion fusing on the CPU (here or in another process) needs
+/// it. Each sample arrives soon after its sample time, and at rest its gravity is the accelerometer's. Lying flat, a
+/// conjugated attitude matches the accelerometer as well as the right one does, so a flat console never passes: with
+/// every other check holding, the verdict is SKIP until the console is tilted (docked, handheld, propped up).
 struct DeviceMotionTest: HWTest {
     let id = "sensor.device_motion"
     let name = "Device motion and orientation"
@@ -157,7 +168,8 @@ struct DeviceMotionTest: HWTest {
         manager.deviceMotionUpdateInterval = Motion.interval
         manager.accelerometerUpdateInterval = Motion.interval
         let accelerations = MotionSamples<CMAcceleration>()
-        let before = MotionDriver.reports()
+        let before = MotionDriver.state()
+        var during: MotionDriver.State?
         let (samples, rate) = try await Motion.collect(
             start: { (sink: MotionSamples<Sample>) in
                 manager.startAccelerometerUpdates(to: Motion.queue) { data, _ in
@@ -169,11 +181,11 @@ struct DeviceMotionTest: HWTest {
                     }
                 }
             }, stop: {
+                during = MotionDriver.state()
                 manager.stopDeviceMotionUpdates()
                 manager.stopAccelerometerUpdates()
             }
         )
-        let after = MotionDriver.reports()
         let motions = samples.map(\.motion)
         let gravity = Stats.mean(motions.map { Self.length([$0.gravity.x, $0.gravity.y, $0.gravity.z]) })
         let meanGravity = [
@@ -189,9 +201,6 @@ struct DeviceMotionTest: HWTest {
         )
         let latencies = samples.map(\.latency)
         let latency = Stats.mean(latencies)
-        let readable = before != nil && after != nil
-        let fused = readable ? Double(after! &- before!) : 0
-        // Lying flat, a wrongly conjugated attitude still matches the accelerometer: only a tilted console tells.
         let tilt = Self.degrees(between: meanAccel, [0, 0, -1])
         let orientation = await MainActor.run { () -> Int in
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
@@ -204,23 +213,33 @@ struct DeviceMotionTest: HWTest {
         metrics.set("gravity_vs_accel_deg", angle, digits: 2)
         metrics.set("user_accel_g", user, digits: 3)
         metrics.set("latency_ms", latency * 1000, digits: 1)
-        metrics.set("driver_reports", fused, digits: 0)
         metrics.set("tilt_deg", tilt, digits: 1)
         metrics.set("orientation", orientation)
-        return .judged(
-            [
-                ("at least 80 Hz of the 100 asked", rate >= 80),
-                ("unit gravity vector", abs(gravity - 1) < 0.05),
-                ("SwitchMotion's DeviceMotionReports readable (debug kernel)", readable),
+        var checks = [
+            ("at least 80 Hz of the 100 asked", rate >= 80),
+            ("unit gravity vector", abs(gravity - 1) < 0.05),
+            ("each sample within 25 ms of its sample time", latency < 0.025 && (latencies.min() ?? -1) > -0.001),
+            ("gravity within 5 degrees of the accelerometer's", angle < 5),
+            ("little user acceleration while still (< 0.1 g)", user < 0.1),
+        ]
+        var detail = ""
+        if let before, let during {
+            let fused = Double(during.reports &- before.reports)
+            metrics.set("driver_reports", fused, digits: 0)
+            metrics.set("raw_gyro_us", Int(during.gyroUS))
+            checks += [
                 ("fused in SwitchMotion: its reports grew with the samples", fused >= 0.8 * Double(samples.count)),
-                ("each sample within 25 ms of its sample time", latency < 0.025 && (latencies.min() ?? -1) > -0.001),
-                (
-                    tilt < 10
-                        ? "gravity within 5 degrees of the accelerometer's (lying flat: tilt it for a real test)"
-                        : "gravity within 5 degrees of the accelerometer's", angle < 5
-                ),
-                ("little user acceleration while still (< 0.1 g)", user < 0.1),
-            ], metrics
+                ("nobody streamed the raw gyroscope (CPU fusion needs it)", during.gyroUS == 0),
+            ]
+        } else {
+            detail = "SwitchMotion's counters are not published (release kernel): where it was fused is not checked"
+        }
+        let outcome = Outcome.judged(checks, metrics, detail: detail)
+        guard outcome.verdict == .pass, tilt < 10 else { return outcome }
+        return .skip(
+            "lying flat (\(String(format: "%.1f", tilt)) degrees): a conjugated attitude passes too; tilt the console "
+                + "10 degrees or more",
+            metrics
         )
     }
 }

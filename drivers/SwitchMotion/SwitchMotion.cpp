@@ -576,14 +576,18 @@ class SwitchMotion : public IOService {
 
 public:
 #if DEVELOPMENT || DEBUG
-    // Debug kernels: DeviceMotionReports, the device motion reports sent since boot, read live by SwitchHWTest's
+    // Debug kernels: DeviceMotionReports, the device motion reports sent since boot, and GyroReportInterval, the raw
+    // gyroscope's client interval (0: nobody streams it, so nobody fuses on the CPU), read live by SwitchHWTest's
     // sensor.device_motion through IORegistryEntryCreateCFProperties.
     bool serializeProperties(OSSerialize *serializer) const override
     {
         OSDictionary *properties = dictionaryWithProperties();
         const OSNumber *reports = OSNumber::withNumber(__atomic_load_n(&motionReports, __ATOMIC_RELAXED), 64);
-        const bool ok = (properties != nullptr) && (reports != nullptr) &&
-                        properties->setObject("DeviceMotionReports", reports) && properties->serialize(serializer);
+        const OSNumber *gyro = OSNumber::withNumber(__atomic_load_n(&intervalUS[Gyro], __ATOMIC_RELAXED), 32);
+        const bool ok = (properties != nullptr) && (reports != nullptr) && (gyro != nullptr) &&
+                        properties->setObject("DeviceMotionReports", reports) &&
+                        properties->setObject("GyroReportInterval", gyro) && properties->serialize(serializer);
+        OSSafeReleaseNULL(gyro);
         OSSafeReleaseNULL(reports);
         OSSafeReleaseNULL(properties);
         return ok;
