@@ -86,21 +86,40 @@ void SwitchHDA::field(uint32_t offset, uint32_t mask, uint32_t value)
     coreWrite(aligned, (word & ~(mask << shift)) | ((value & mask) << shift));
 }
 
-bool SwitchHDA::initialize(IOCommandGate *commandGate, SwitchAudioControl *page, uint64_t hostHz)
+bool SwitchHDA::initialize(IOCommandGate *commandGate, SwitchAudioControl *page, uint64_t hz)
 {
     gate = commandGate;
     control = page;
+    hostHz = hz;
     control->magic = SWITCH_AUDIO_MAGIC;
     control->version = SWITCH_AUDIO_VERSION;
-    control->rate = 48000;
     control->rates[0] = 48000;
     control->out_channels = 2;
     control->ring_frames = SWITCH_AUDIO_RING_FRAMES;
     control->period_frames = SWITCH_HDA_PERIOD_FRAMES;
     control->lead_frames = 2 * SWITCH_AUDIO_PERIOD_FRAMES;
     control->backend = SwitchAudioBackendTegraHDA;
-    control->ticks_per_frame_q32 = (hostHz << 32) / 48000;
+    setClock(48000);
     return true;
+}
+
+void SwitchHDA::setClock(uint32_t rate)
+{
+    control->rate = rate;
+    control->ticks_per_frame_q32 = (hostHz << 32) / rate;
+}
+
+IOReturn SwitchHDA::setRate(uint32_t rate)
+{
+    if (control->state & SwitchAudioOutputRunning)
+        return kIOReturnBusy;
+    for (uint32_t i = 0; i < SWITCH_AUDIO_MAX_RATES && control->rates[i]; ++i) {
+        if (control->rates[i] == rate) {
+            setClock(rate);
+            return kIOReturnSuccess;
+        }
+    }
+    return kIOReturnUnsupported;
 }
 
 bool SwitchHDA::prepareHardware()
@@ -384,6 +403,9 @@ IOReturn SwitchHDA::start()
         return kIOReturnSuccess;
     if (!stop())
         return kIOReturnTimeout;
+    const uint16_t format = switch_hda_stream_format(control->sample_bits, control->rate);
+    if (!programFormat(format))
+        return kIOReturnNotReady;
     const uint32_t frameBytes = control->sample_bits == 16 ? 4 : 8;
     const uint32_t bytes = SWITCH_AUDIO_RING_FRAMES * frameBytes;
     const uint32_t periodBytes = SWITCH_HDA_PERIOD_FRAMES * frameBytes;
@@ -410,7 +432,7 @@ IOReturn SwitchHDA::start()
     switch_dma_publish();
     coreWrite(stream + SD_CBL, bytes);
     field(stream + SD_LVI, 0xffff, kPeriods - 1);
-    field(stream + SD_FMT, 0xffff, switch_hda_stream_format(control->sample_bits));
+    field(stream + SD_FMT, 0xffff, format);
     coreWrite(stream + SD_BDPL, static_cast<uint32_t>(commands.pa + kBdlOffset));
     coreWrite(stream + SD_BDPU, 0);
     lastPeriod = 0;

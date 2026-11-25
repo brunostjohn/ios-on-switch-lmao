@@ -2,14 +2,18 @@
 #pragma once
 #include <stdint.h>
 
+// Sink formats: CTA-861 SAD sample sizes in the low byte, its 44.1 and 48 kHz rate bits shifted into the next.
 enum {
     SWITCH_HDA_S16 = 1,
     SWITCH_HDA_S24 = 4,
+    SWITCH_HDA_SINK_44K1 = 2u << 8,
+    SWITCH_HDA_SINK_48K = 4u << 8,
     SWITCH_HDA_PERIOD_FRAMES = 16384
 };
 
 static inline uint32_t switch_hda_sink_formats(const uint8_t *edid, uint32_t valid_blocks)
 {
+    const uint32_t rates = (SWITCH_HDA_SINK_44K1 | SWITCH_HDA_SINK_48K) >> 8;
     uint32_t formats = 0;
     if (!edid || !(valid_blocks & 1u))
         return 0;
@@ -20,7 +24,7 @@ static inline uint32_t switch_hda_sink_formats(const uint8_t *edid, uint32_t val
         if (cta[0] != 2)
             continue;
         if (cta[3] & 0x40)
-            formats |= SWITCH_HDA_S16;
+            formats |= SWITCH_HDA_S16 | SWITCH_HDA_SINK_44K1 | SWITCH_HDA_SINK_48K;
         const uint32_t end = cta[2];
         if (end < 4 || end > 127)
             continue;
@@ -31,8 +35,8 @@ static inline uint32_t switch_hda_sink_formats(const uint8_t *edid, uint32_t val
                 break;
             if (tag == 1) {
                 for (uint32_t sad = at; sad + 3 <= at + length; sad += 3) {
-                    if ((cta[sad] >> 3) == 1 && (cta[sad] & 7) >= 1 && (cta[sad + 1] & 4))
-                        formats |= cta[sad + 2] & (SWITCH_HDA_S16 | SWITCH_HDA_S24);
+                    if ((cta[sad] >> 3) == 1 && (cta[sad] & 7) >= 1 && (cta[sad + 1] & rates))
+                        formats |= (cta[sad + 2] & (SWITCH_HDA_S16 | SWITCH_HDA_S24)) | (cta[sad + 1] & rates) << 8;
                 }
             }
             at += length;
@@ -50,9 +54,21 @@ static inline uint32_t switch_hda_sample_bits(uint32_t sink_formats, uint32_t pc
     return 0;
 }
 
-static inline uint16_t switch_hda_stream_format(uint32_t bits)
+// The rates both ends play, 48 kHz first, 0-terminated: the sink's formats against the converter's PCM rate bits.
+static inline uint32_t switch_hda_rates(uint32_t sink_formats, uint32_t pcm, uint32_t rates[3])
 {
-    return (uint16_t)((bits == 24 ? 3u : 1u) << 4 | 1u);
+    uint32_t n = 0;
+    if ((sink_formats & SWITCH_HDA_SINK_48K) && (pcm & (1u << 6)))
+        rates[n++] = 48000;
+    if ((sink_formats & SWITCH_HDA_SINK_44K1) && (pcm & (1u << 5)))
+        rates[n++] = 44100;
+    rates[n] = 0;
+    return n;
+}
+
+static inline uint16_t switch_hda_stream_format(uint32_t bits, uint32_t rate)
+{
+    return (uint16_t)((rate == 44100 ? 1u << 14 : 0u) | (bits == 24 ? 3u : 1u) << 4 | 1u);
 }
 
 // Stereo at 48 kHz across GCAP's SDO lines. Tegra's legacy SDO design drops streams whose

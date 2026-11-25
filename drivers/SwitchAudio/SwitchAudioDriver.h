@@ -227,6 +227,7 @@ public:
     void displaySink();
     void displayStartProbe();
     IOReturn displayRequest(bool start);
+    IOReturn displaySetRate(uint32_t rate);
     bool start(IOService *provider) override;
     void free() override;
     IOReturn request(uint32_t selector);

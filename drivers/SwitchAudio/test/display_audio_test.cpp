@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <gtest/gtest.h>
+#include <utility>
 #include <vector>
 #include "../hal/SwitchDisplayAudio.h"
 #include "../hal/SwitchAudioObjects.h"
@@ -21,8 +22,8 @@ extern "C" kern_return_t IOConnectMapMemory64(io_connect_t, uint32_t type, task_
     return gMapResult;
 }
 
-extern "C" kern_return_t IOConnectCallScalarMethod(mach_port_t, uint32_t selector, const uint64_t *, uint32_t,
-                                                   uint64_t *, uint32_t *)
+extern "C" kern_return_t IOConnectCallScalarMethod(mach_port_t, uint32_t selector, const uint64_t *input,
+                                                   uint32_t count, uint64_t *, uint32_t *)
 {
     if (selector == SwitchAudioStartDisplayOutput) {
         ++gStarts;
@@ -30,6 +31,8 @@ extern "C" kern_return_t IOConnectCallScalarMethod(mach_port_t, uint32_t selecto
     } else if (selector == SwitchAudioStopDisplayOutput) {
         ++gStops;
         gKernelControl->state = 0;
+    } else if (selector == SwitchAudioSetDisplayRate && count == 1) {
+        gKernelControl->rate = static_cast<uint32_t>(input[0]);
     } else {
         ADD_FAILURE() << "unexpected selector " << selector;
         return kIOReturnBadArgument;
@@ -44,6 +47,7 @@ struct Notification {
 };
 
 std::vector<Notification> gNotifications;
+std::vector<std::pair<AudioObjectID, UInt64>> gConfigurationChanges;
 
 OSStatus changed(AudioServerPlugInHostRef, AudioObjectID object, UInt32 count,
                  const AudioObjectPropertyAddress *addresses)
@@ -53,7 +57,13 @@ OSStatus changed(AudioServerPlugInHostRef, AudioObjectID object, UInt32 count,
     return 0;
 }
 
-AudioServerPlugInHostInterface gCallbacks = {changed, nullptr, nullptr, nullptr, nullptr};
+OSStatus requestChange(AudioServerPlugInHostRef, AudioObjectID object, UInt64 action, void *)
+{
+    gConfigurationChanges.emplace_back(object, action);
+    return 0;
+}
+
+AudioServerPlugInHostInterface gCallbacks = {changed, nullptr, nullptr, nullptr, requestChange};
 
 class DisplayAudio : public testing::Test {
 protected:
@@ -62,6 +72,7 @@ protected:
     void SetUp() override
     {
         gNotifications.clear();
+        gConfigurationChanges.clear();
         gMaps = gStarts = gStops = 0;
         gMapResult = KERN_SUCCESS;
         gKernelControl = &control;
@@ -135,6 +146,37 @@ TEST_F(DisplayAudio, RejectsUnsupportedRatesAndHasNoInputStream)
     EXPECT_EQ(bytes, 0u);
     EXPECT_EQ(property<AudioObjectID>(kDisplay, kAudioDevicePropertyStreams, kAudioObjectPropertyScopeOutput),
               static_cast<AudioObjectID>(kDisplayOut));
+}
+
+TEST_F(DisplayAudio, OffersTheSinksRatesAndSwitchesThroughAConfigurationChange)
+{
+    control.rate = 48000;
+    control.rates[0] = 48000;
+    control.rates[1] = 44100;
+    AudioValueRange ranges[4] = {};
+    UInt32 bytes = 0;
+    const AudioObjectPropertyAddress available = {kAudioDevicePropertyAvailableNominalSampleRates,
+                                                  kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    EXPECT_EQ(switch_audio_display_get(kDisplay, &available, sizeof(ranges), &bytes, ranges), 0);
+    ASSERT_EQ(bytes, 2 * sizeof(AudioValueRange));
+    EXPECT_EQ(ranges[0].mMinimum, 48000);
+    EXPECT_EQ(ranges[1].mMinimum, 44100);
+
+    const AudioObjectPropertyAddress rate = {kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal,
+                                             kAudioObjectPropertyElementMain};
+    const Float64 current = 48000, other = 44100;
+    EXPECT_EQ(switch_audio_display_set(kDisplay, &rate, sizeof(current), &current), 0);
+    EXPECT_TRUE(gConfigurationChanges.empty());
+    EXPECT_EQ(switch_audio_display_set(kDisplay, &rate, sizeof(other), &other), 0);
+    ASSERT_EQ(gConfigurationChanges.size(), 1u);
+    EXPECT_EQ(gConfigurationChanges[0].first, static_cast<AudioObjectID>(kDisplay));
+    EXPECT_EQ(gConfigurationChanges[0].second, 44100u);
+
+    EXPECT_EQ(switch_audio_display_perform(1, 44100), 0);
+    EXPECT_EQ(control.rate, 44100u);
+    EXPECT_EQ(property<Float64>(kDisplay, kAudioDevicePropertyNominalSampleRate), 44100);
+    EXPECT_EQ(property<AudioStreamBasicDescription>(kDisplayOut, kAudioStreamPropertyPhysicalFormat).mSampleRate,
+              44100);
 }
 
 TEST_F(DisplayAudio, PlaybackClearingPeriodDoesNotIncreaseTheAudioServerWriteLead)

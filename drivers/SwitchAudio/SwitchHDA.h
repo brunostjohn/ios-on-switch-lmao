@@ -22,6 +22,7 @@ class SwitchHDA {
 #endif
     uint32_t corbMask = 0, rirbMask = 0, corbWrite = 0, rirbRead = 0;
     uint32_t response = 0;
+    uint64_t hostHz = 0;
     bool pending = false, responseValid = false, ready = false, attached = false, mapped = false, prepared = false,
          powered = false;
     bool ringEmpty = true;
@@ -36,6 +37,8 @@ class SwitchHDA {
     bool reset();
     bool verb(uint32_t node, uint32_t operation, uint32_t payload, uint32_t *value = nullptr);
     bool discover(uint32_t formats);
+    bool programFormat(uint16_t format);
+    void setClock(uint32_t rate);
 
 public:
     bool initialize(IOCommandGate *commandGate, SwitchAudioControl *page, uint64_t hostHz);
@@ -45,6 +48,7 @@ public:
     void disconnect();
     bool connect(uint32_t formats);
     IOReturn start();
+    IOReturn setRate(uint32_t rate);
     bool stop();
     void sleep(bool entering);
     static constexpr uint32_t kIntid = 32 + 81;

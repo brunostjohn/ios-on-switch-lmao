@@ -588,6 +588,13 @@ static OSStatus PerformDeviceConfigurationChange(AudioServerPlugInDriverRef d, A
 {
     (void)d;
     (void)i;
+    if (o == kDisplay) {
+        pthread_mutex_lock(&gLock);
+        const OSStatus result =
+            connectService() ? kAudioHardwareNotRunningError : switch_audio_display_perform(gConnect, a);
+        pthread_mutex_unlock(&gLock);
+        return result;
+    }
     if (o == kMic || (Float64)a == atomic_load_explicit(&gRate, memory_order_acquire))
         return 0;
     const uint64_t rate = a;

@@ -76,9 +76,11 @@ enum : uint32_t {
     PLL4 = 0x72,
     PADCTL2 = 0x73,
     AUDIO_CNTRL0 = 0xfc,
+    AUDIO_NVAL_0441 = 0x100,
     AUDIO_NVAL_0480 = 0x103,
     AUDIO_HDA_ELD_BUFWR = 0x10c,
     AUDIO_HDA_PRESENSE = 0x10d,
+    DP_AUDIO_TIMESTAMP_0441 = 0x134,
     DP_AUDIO_TIMESTAMP_0480 = 0x137,
 };
 
@@ -489,11 +491,18 @@ void TegraSor1::powerDown()
 
 bool TegraSor1::audioFormat(uint32_t rate, uint32_t channels, uint32_t bits)
 {
-    if (!base || !lanes || rate != 48000 || channels != 2 || (bits != 16 && bits != 24 && bits != 32))
+    if (!base || !lanes || (rate != 48000 && rate != 44100) || channels != 2 ||
+        (bits != 16 && bits != 24 && bits != 32))
         return false;
-    // TRM 27.8.216: MAUD is 102 MHz, N/(N + D_N) = 512 * fs / MAUD.
-    write(DP_AUDIO_TIMESTAMP_0480, (512u << 16) | (2125u - 512u));
-    write(AUDIO_NVAL_0480, 0x8000);
+    // TRM 27.6.5 Table 162: MAUD is 102 MHz, N/(N + D_N) = 512 * fs / MAUD. DP's Naud is always 2^15; the NVAL
+    // registers reset to HDMI's N.
+    if (rate == 48000) {
+        write(DP_AUDIO_TIMESTAMP_0480, (512u << 16) | (2125u - 512u));
+        write(AUDIO_NVAL_0480, 0x8000);
+    } else {
+        write(DP_AUDIO_TIMESTAMP_0441, (2352u << 16) | (10625u - 2352u));
+        write(AUDIO_NVAL_0441, 0x8000);
+    }
     rmw(AUDIO_CNTRL0, (3u << 20) | 1u, (2u << 20) | (1u << 12));
     return true;
 }
@@ -534,7 +543,7 @@ void TegraSor1::audioPresence(const uint8_t *eld, uint32_t bytes, bool present)
 #if DEVELOPMENT || DEBUG
 void TegraSor1::logAudioState(const char *when)
 {
-    IOLog("SwitchDisplayPort: SOR audio %s: DP_AUDIO_CTRL %#x, AUDIO_CNTRL0 %#x, timestamp %#x, N %#x\n", when,
-          read(DP_AUDIO_CTRL), read(AUDIO_CNTRL0), read(DP_AUDIO_TIMESTAMP_0480), read(AUDIO_NVAL_0480));
+    IOLog("SwitchDisplayPort: SOR audio %s: DP_AUDIO_CTRL %#x, AUDIO_CNTRL0 %#x, N 44.1k %#x 48k %#x\n", when,
+          read(DP_AUDIO_CTRL), read(AUDIO_CNTRL0), read(AUDIO_NVAL_0441), read(AUDIO_NVAL_0480));
 }
 #endif

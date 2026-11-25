@@ -147,11 +147,21 @@ IOReturn SwitchAudio::displayRequest(bool start)
 {
     const auto *page =
         static_cast<const SwitchAudioControl *>(memory[SwitchAudioMemoryDisplayControl]->getBytesNoCopy());
-    if (start && (!page->jack || !switch_displayport_audio_format(48000, 2, page->sample_bits)))
+    if (start && (!page->jack || !switch_displayport_audio_format(page->rate, 2, page->sample_bits)))
         return kIOReturnNotReady;
     const IOReturn result = gate->runAction(displayRequestGated, start ? this : nullptr);
     switch_displayport_audio_enable(start && result == kIOReturnSuccess);
     return result;
+}
+
+IOReturn SwitchAudio::displaySetRate(uint32_t rate)
+{
+    return gate->runAction(
+        [](OSObject *owner, void *value, void *, void *, void *) -> IOReturn {
+            return static_cast<SwitchAudio *>(owner)->displayAudio.setRate(
+                static_cast<uint32_t>(reinterpret_cast<uintptr_t>(value)));
+        },
+        reinterpret_cast<void *>(static_cast<uintptr_t>(rate)));
 }
 
 IOReturn SwitchAudio::displaySleepGated(OSObject *owner, void *entering, void *, void *, void *)

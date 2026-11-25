@@ -23,20 +23,38 @@ Edid sink()
     return edid;
 }
 
-TEST(HdaSink, RequiresStereo48kLpcmOrBasicAudio)
+TEST(HdaSink, RequiresStereoLpcmAt44k1Or48kOrBasicAudio)
 {
     auto edid = sink();
-    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 5u);
+    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 5u | SWITCH_HDA_SINK_48K);
     edid[134] = 2;
+    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 5u | SWITCH_HDA_SINK_44K1);
+    edid[134] = 6;
+    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 5u | SWITCH_HDA_SINK_44K1 | SWITCH_HDA_SINK_48K);
+    edid[134] = 1;
     EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 0u);
     edid[131] = 0x40;
-    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 1u);
+    EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 1u | SWITCH_HDA_SINK_44K1 | SWITCH_HDA_SINK_48K);
     edid[131] = 0;
     edid[134] = 4;
     edid[133] = 0x08;
     EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 0u);
     edid[133] = 0x11;
     EXPECT_EQ(switch_hda_sink_formats(edid.data(), 3), 0u);
+}
+
+TEST(HdaSink, PlaysTheRatesSinkAndConverterShare48kFirst)
+{
+    uint32_t rates[3];
+    EXPECT_EQ(switch_hda_rates(SWITCH_HDA_SINK_44K1 | SWITCH_HDA_SINK_48K, (1u << 5) | (1u << 6), rates), 2u);
+    EXPECT_EQ(rates[0], 48000u);
+    EXPECT_EQ(rates[1], 44100u);
+    EXPECT_EQ(rates[2], 0u);
+    EXPECT_EQ(switch_hda_rates(SWITCH_HDA_SINK_44K1 | SWITCH_HDA_SINK_48K, 1u << 6, rates), 1u);
+    EXPECT_EQ(rates[0], 48000u);
+    EXPECT_EQ(rates[1], 0u);
+    EXPECT_EQ(switch_hda_rates(SWITCH_HDA_SINK_44K1, 1u << 6, rates), 0u);
+    EXPECT_EQ(rates[0], 0u);
 }
 
 TEST(HdaSink, RespectsProvidedExtensionAndDataBlockBounds)
@@ -115,10 +133,12 @@ TEST(HdaEld, LimitsDescriptorsAcrossExtensions)
     EXPECT_EQ(eld[65], 0);
 }
 
-TEST(HdaProtocol, Encodes48kStereoAnd16BitVerbPayloads)
+TEST(HdaProtocol, EncodesStereoFormatsAndVerbPayloads)
 {
-    EXPECT_EQ(switch_hda_stream_format(16), 0x11);
-    EXPECT_EQ(switch_hda_stream_format(24), 0x31);
+    EXPECT_EQ(switch_hda_stream_format(16, 48000), 0x11);
+    EXPECT_EQ(switch_hda_stream_format(24, 48000), 0x31);
+    EXPECT_EQ(switch_hda_stream_format(16, 44100), 0x4011);
+    EXPECT_EQ(switch_hda_stream_format(24, 44100), 0x4031);
     EXPECT_EQ(switch_hda_verb(2, 3, 0x200, 0x31), 0x20320031u);
     EXPECT_EQ(switch_hda_verb(0, 7, 0xf00, 9), 0x007f0009u);
     EXPECT_EQ(switch_hda_verb(1, 4, 0x707, 0x40), 0x10470740u);

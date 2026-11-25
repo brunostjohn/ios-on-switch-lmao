@@ -36,7 +36,7 @@ std::string Driver()
     return text;
 }
 
-static_assert(SWITCH_AUDIO_VERSION == 8u);
+static_assert(SWITCH_AUDIO_VERSION == 9u);
 static_assert(SWITCH_AUDIO_MAX_RATES == 10u);
 static_assert(std::is_same_v<switch_audio_sample_t, int32_t>);
 static_assert(SWITCH_AUDIO_RING_FRAMES * switch_audio_linux::kChannels * sizeof(switch_audio_sample_t) == 512 * 1024);

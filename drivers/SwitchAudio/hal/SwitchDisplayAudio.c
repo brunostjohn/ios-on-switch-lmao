@@ -47,9 +47,46 @@ void switch_audio_display_changed(void)
     gHost->PropertiesChanged(gHost, kPlugIn, 2, plugin);
 }
 
-static AudioStreamBasicDescription format(void)
+static Float64 currentRate(void)
 {
-    return (AudioStreamBasicDescription){48000,
+    const uint32_t rate = gControl ? gControl->rate : 0;
+    return rate ? rate : 48000;
+}
+
+static UInt32 availableRates(Float64 rates[SWITCH_AUDIO_MAX_RATES])
+{
+    UInt32 n = 0;
+    for (UInt32 i = 0; gControl && i < SWITCH_AUDIO_MAX_RATES && gControl->rates[i]; ++i)
+        rates[n++] = gControl->rates[i];
+    if (!n)
+        rates[n++] = currentRate();
+    return n;
+}
+
+static Boolean supportedRate(Float64 rate)
+{
+    Float64 rates[SWITCH_AUDIO_MAX_RATES];
+    const UInt32 n = availableRates(rates);
+    for (UInt32 i = 0; i < n; ++i) {
+        if (rates[i] == rate)
+            return true;
+    }
+    return false;
+}
+
+static OSStatus requestRate(Float64 rate)
+{
+    if (rate == currentRate())
+        return 0;
+    if (!supportedRate(rate))
+        return kAudioDeviceUnsupportedFormatError;
+    return gHost ? gHost->RequestDeviceConfigurationChange(gHost, kDisplay, (UInt64)rate, NULL)
+                 : kAudioHardwareNotRunningError;
+}
+
+static AudioStreamBasicDescription format(Float64 rate)
+{
+    return (AudioStreamBasicDescription){rate,
                                          kAudioFormatLinearPCM,
                                          kAudioFormatFlagIsFloat | kAudioFormatFlagsNativeEndian |
                                              kAudioFormatFlagIsPacked,
@@ -112,10 +149,19 @@ OSStatus switch_audio_display_get(AudioObjectID object, const AudioObjectPropert
             REPLY(UInt32, 0);
         case kAudioStreamPropertyVirtualFormat:
         case kAudioStreamPropertyPhysicalFormat:
-            REPLY(AudioStreamBasicDescription, format());
+            REPLY(AudioStreamBasicDescription, format(currentRate()));
         case kAudioStreamPropertyAvailableVirtualFormats:
-        case kAudioStreamPropertyAvailablePhysicalFormats:
-            REPLY(AudioStreamRangedDescription, ((AudioStreamRangedDescription){format(), {48000, 48000}}));
+        case kAudioStreamPropertyAvailablePhysicalFormats: {
+            Float64 rates[SWITCH_AUDIO_MAX_RATES];
+            UInt32 n = availableRates(rates);
+            if (capacity / sizeof(AudioStreamRangedDescription) < n)
+                n = capacity / (UInt32)sizeof(AudioStreamRangedDescription);
+            for (UInt32 i = 0; i < n; ++i)
+                ((AudioStreamRangedDescription *)data)[i] =
+                    (AudioStreamRangedDescription){format(rates[i]), {rates[i], rates[i]}};
+            *bytes = n * (UInt32)sizeof(AudioStreamRangedDescription);
+            return 0;
+        }
         default:
             return kAudioHardwareUnknownPropertyError;
         }
@@ -162,9 +208,17 @@ OSStatus switch_audio_display_get(AudioObjectID object, const AudioObjectPropert
     case kAudioDevicePropertyZeroTimeStampPeriod:
         REPLY(UInt32, SWITCH_AUDIO_RING_FRAMES);
     case kAudioDevicePropertyNominalSampleRate:
-        REPLY(Float64, 48000);
-    case kAudioDevicePropertyAvailableNominalSampleRates:
-        REPLY(AudioValueRange, ((AudioValueRange){48000, 48000}));
+        REPLY(Float64, currentRate());
+    case kAudioDevicePropertyAvailableNominalSampleRates: {
+        Float64 rates[SWITCH_AUDIO_MAX_RATES];
+        UInt32 n = availableRates(rates);
+        if (capacity / sizeof(AudioValueRange) < n)
+            n = capacity / (UInt32)sizeof(AudioValueRange);
+        for (UInt32 i = 0; i < n; ++i)
+            ((AudioValueRange *)data)[i] = (AudioValueRange){rates[i], rates[i]};
+        *bytes = n * (UInt32)sizeof(AudioValueRange);
+        return 0;
+    }
     case kAudioDevicePropertyStreams:
         if (input)
             return 0;
@@ -202,30 +256,41 @@ OSStatus switch_audio_display_set(AudioObjectID object, const AudioObjectPropert
                                   const void *data)
 {
     if (object == kDisplay && address->mSelector == kAudioDevicePropertyNominalSampleRate)
-        return bytes < sizeof(Float64)           ? kAudioHardwareBadPropertySizeError
-               : *(const Float64 *)data == 48000 ? 0
-                                                 : kAudioDeviceUnsupportedFormatError;
+        return bytes < sizeof(Float64) ? kAudioHardwareBadPropertySizeError : requestRate(*(const Float64 *)data);
     if (object == kDisplayOut) {
         if (address->mSelector == kAudioStreamPropertyIsActive)
             return bytes >= sizeof(UInt32) ? 0 : kAudioHardwareBadPropertySizeError;
         if (address->mSelector == kAudioStreamPropertyVirtualFormat ||
             address->mSelector == kAudioStreamPropertyPhysicalFormat) {
-            const AudioStreamBasicDescription wanted = format();
-            if (bytes < sizeof(wanted))
-                return kAudioDeviceUnsupportedFormatError;
             const AudioStreamBasicDescription *offered = data;
-            return offered->mSampleRate == wanted.mSampleRate && offered->mFormatID == wanted.mFormatID &&
-                           offered->mFormatFlags == wanted.mFormatFlags &&
+            if (bytes < sizeof(*offered))
+                return kAudioDeviceUnsupportedFormatError;
+            const AudioStreamBasicDescription wanted = format(offered->mSampleRate);
+            return offered->mFormatID == wanted.mFormatID && offered->mFormatFlags == wanted.mFormatFlags &&
                            offered->mBytesPerPacket == wanted.mBytesPerPacket &&
                            offered->mFramesPerPacket == wanted.mFramesPerPacket &&
                            offered->mBytesPerFrame == wanted.mBytesPerFrame &&
                            offered->mChannelsPerFrame == wanted.mChannelsPerFrame &&
                            offered->mBitsPerChannel == wanted.mBitsPerChannel
-                       ? 0
+                       ? requestRate(offered->mSampleRate)
                        : kAudioDeviceUnsupportedFormatError;
         }
     }
     return kAudioHardwareUnknownPropertyError;
+}
+
+OSStatus switch_audio_display_perform(io_connect_t connection, UInt64 rate)
+{
+    const uint64_t value = rate;
+    const kern_return_t result =
+        IOConnectCallScalarMethod(connection, SwitchAudioSetDisplayRate, &value, 1, NULL, NULL);
+    if (result != KERN_SUCCESS) {
+        os_log_error(OS_LOG_DEFAULT, "SwitchAudio: display rate %llu Hz refused (%#x)", (unsigned long long)rate,
+                     result);
+        return kAudioHardwareIllegalOperationError;
+    }
+    os_log(OS_LOG_DEFAULT, "SwitchAudio: display clock now %llu Hz", (unsigned long long)rate);
+    return 0;
 }
 
 OSStatus switch_audio_display_start(io_connect_t connection)
@@ -249,7 +314,8 @@ OSStatus switch_audio_display_start(io_connect_t connection)
             return kAudioHardwareNotRunningError;
         }
         ++gSeed;
-        os_log(OS_LOG_DEFAULT, "SwitchAudio: display IO started (%u-bit)", gControl->sample_bits);
+        os_log(OS_LOG_DEFAULT, "SwitchAudio: display IO started (%u-bit, %u Hz)", gControl->sample_bits,
+               gControl->rate);
     }
     ++gUsers;
     return 0;

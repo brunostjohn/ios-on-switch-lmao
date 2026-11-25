@@ -343,6 +343,10 @@ public:
         case SwitchAudioStopDisplayOutput:
             return args->scalarInputCount == 0 ? audio->displayRequest(selector == SwitchAudioStartDisplayOutput)
                                                : kIOReturnBadArgument;
+        case SwitchAudioSetDisplayRate:
+            return args->scalarInputCount == 1 && args->scalarInput[0] <= UINT32_MAX
+                       ? audio->displaySetRate(static_cast<uint32_t>(args->scalarInput[0]))
+                       : kIOReturnBadArgument;
         default:
             return kIOReturnBadArgument;
         }

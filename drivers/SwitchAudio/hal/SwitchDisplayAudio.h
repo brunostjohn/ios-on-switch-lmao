@@ -18,6 +18,7 @@ OSStatus switch_audio_display_get(AudioObjectID object, const AudioObjectPropert
                                   UInt32 *bytes, void *data);
 OSStatus switch_audio_display_set(AudioObjectID object, const AudioObjectPropertyAddress *address, UInt32 bytes,
                                   const void *data);
+OSStatus switch_audio_display_perform(io_connect_t connection, UInt64 rate);
 OSStatus switch_audio_display_start(io_connect_t connection);
 OSStatus switch_audio_display_stop(io_connect_t connection);
 OSStatus switch_audio_display_timestamp(Float64 *sample, UInt64 *host, UInt64 *seed);

@@ -29,7 +29,7 @@ constexpr uint32_t kFuncTypeAudio = 0x01u;
 constexpr uint32_t kWidgetTypeAudioOut = 0x0u, kWidgetTypePin = 0x4u;
 constexpr uint32_t kCapStereo = 0x001u, kCapFormatOverride = 0x010u, kCapStripe = 0x020u, kCapDigital = 0x200u;
 constexpr uint32_t kPinSensePresentEldValid = 0xc0000000u;
-constexpr uint32_t kFormatPcm = 1u << 0, kPcmRate48k = 1u << 6;
+constexpr uint32_t kFormatPcm = 1u << 0;
 constexpr uint32_t kStreamTag1 = 0x10u, kPinOutEnable = 0x40u;
 }  // namespace
 
@@ -86,23 +86,33 @@ bool SwitchHDA::discover(uint32_t formats)
         (converterCaps & (kCapDigital | kCapStereo)) != (kCapDigital | kCapStereo))
         return false;
     const uint32_t formatNode = converterCaps & kCapFormatOverride ? converter : afg;
+    uint32_t rates[3];
     if (!verb(formatNode, kVerbGetParameter, kParamStreamFormats, &value) || !(value & kFormatPcm) ||
-        !verb(formatNode, kVerbGetParameter, kParamPcmRates, &value) || !(value & kPcmRate48k))
+        !verb(formatNode, kVerbGetParameter, kParamPcmRates, &value) || !switch_hda_rates(formats, value, rates))
         return false;
     control->sample_bits = switch_hda_sample_bits(formats, value);
     if (!control->sample_bits)
         return false;
+    for (uint32_t i = 0; i < SWITCH_AUDIO_MAX_RATES; ++i)
+        control->rates[i] = i < 3 ? rates[i] : 0;
+    if (control->rate != rates[0] && control->rate != rates[1])
+        setClock(rates[0]);
     const uint32_t gcap = core(GCAP) & 0xffff;
     stripe = converterCaps & kCapStripe ? switch_hda_stripe(gcap, control->sample_bits) : 0;
-    if (!verb(converter, kVerbSetStreamFormat, switch_hda_stream_format(control->sample_bits)) ||
-        !verb(converter, kVerbSetChannelStreamId, kStreamTag1) || !verb(converter, kVerbSetDigiConvert1, 1) ||
+    if (!verb(converter, kVerbSetChannelStreamId, kStreamTag1) || !verb(converter, kVerbSetDigiConvert1, 1) ||
         !verb(converter, kVerbSetDigiConvert2, 0) || !verb(converter, kVerbSetChannelCount, 1) ||
         ((converterCaps & kCapStripe) && !verb(converter, kVerbSetStripeControl, stripe)) ||
         !verb(pin, kVerbSetPinWidgetControl, kPinOutEnable))
         return false;
 #if DEVELOPMENT || DEBUG
-    IOLog("SwitchAudio: HDA display codec %u: AFG %u, pin %u, converter %u (caps %#x), GCAP %#x, stripe %u, %u-bit\n",
-          codec, afg, pin, converter, converterCaps, gcap, stripe, control->sample_bits);
+    IOLog("SwitchAudio: HDA display codec %u: AFG %u, pin %u, converter %u (caps %#x), GCAP %#x, stripe %u, %u-bit, "
+          "%u/%u Hz\n",
+          codec, afg, pin, converter, converterCaps, gcap, stripe, control->sample_bits, rates[0], rates[1]);
 #endif
     return attached;
+}
+
+bool SwitchHDA::programFormat(uint16_t format)
+{
+    return verb(converter, kVerbSetStreamFormat, format);
 }

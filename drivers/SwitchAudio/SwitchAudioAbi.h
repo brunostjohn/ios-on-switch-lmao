@@ -7,7 +7,8 @@
  * (S32_LE, full scale +-2^31): the playback ring ring_frames (SWITCH_AUDIO_RING_FRAMES) frames, the capture ring
  * SWITCH_AUDIO_IN_RING_FRAMES; sample time t lives at frame t modulo the ring's size. The Tegra backend hands them
  * to the APE as they are (SwitchAudioFormat.h): the codec plays the top 24 bits of each.
- * Memory types 3 and 4 are the display's separate control page and playback ring, on its own 48 kHz timeline.
+ * Memory types 3 and 4 are the display's separate control page and playback ring, on its own timeline at its own
+ * rate (one of its rates[]: what the sink's EDID and the HDA codec both play, 48 and 44.1 kHz).
  * Its jack is nonzero only after the sink's EDID and HDA codec agree on stereo PCM. sample_bits selects packed
  * S16_LE or 24 significant bits in left-justified S32_LE containers; both rings use the same cache ownership.
  *
@@ -21,7 +22,7 @@
 
 #define SWITCH_AUDIO_CLASS          "SwitchAudio"
 #define SWITCH_AUDIO_MAGIC          0x53574155u /* 'SWAU' */
-#define SWITCH_AUDIO_VERSION        8u
+#define SWITCH_AUDIO_VERSION        9u
 #define SWITCH_AUDIO_RATE           48000u /* the rate a service starts at */
 #define SWITCH_AUDIO_MAX_RATES      10u
 #define SWITCH_AUDIO_OUT_CHANNELS   2u
@@ -60,7 +61,9 @@ enum {
     /* One scalar: speaker attenuation in millidecibels applied in APE MVC1 (0 = full level). */
     SwitchAudioSetSpeakerLevel = 9,
     SwitchAudioStartDisplayOutput = 10,
-    SwitchAudioStopDisplayOutput = 11
+    SwitchAudioStopDisplayOutput = 11,
+    /* One scalar: the display's nominal rate in Hz, one of its control page's rates[]; refused while it plays. */
+    SwitchAudioSetDisplayRate = 12
 };
 
 enum {
