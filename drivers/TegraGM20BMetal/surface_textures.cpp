@@ -34,6 +34,7 @@ bool Device::tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t heigh
     }
     t.va = t.import->bo.va;
     t.cpu = reinterpret_cast<uint8_t *>(t.import->base);
+    t.rowsPitch = pitch;
     t.pitch = l.row_bytes;
     t.blockLinear = true;
     t.blockHeight = l.y_log2;

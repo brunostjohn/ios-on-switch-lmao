@@ -105,6 +105,20 @@ void gm20bBufferCopyImage(SwitchMetalTexture *t, uint32_t level, gm20b::Texture 
         image = gm20b::storedRows(image, image);
 }
 
+// Plane 0's `w` x `h` from (sx, sy) into `to` at (dx, dy, dz): a pitch plane's lines `pitch` apart, each its texels'
+// bytes in one run; a block-linear plane's runs in their pieces along the surface's rows (blit_planes.h planeRunPieces)
+static void copyPlaneRuns(gm20b::BlitEncoder *be, const gm20b::Texture &from, uint32_t sx, uint32_t sy,
+                          const gm20b::Texture &to, uint32_t dx, uint32_t dy, uint32_t dz, uint32_t w, uint32_t h)
+{
+    if (!from.blockLinear) {
+        be->copyTexels(from, sx, sy, 0, to, dx, dy, dz, w, h);
+        return;
+    }
+    gm20b::planeRunPieces(from, sx, sy, w, h, [&](const gm20b::PlaneRunPiece &p) {
+        be->copyTexels(from, p.x, sy + p.row, 0, to, dx + p.at, dy, dz, p.w, h);
+    });
+}
+
 // Plane 0's bytes of the side or sides held through planes, counted in the destination's texel (kCopyPlaneBytes): the
 // copy engine's lines `pitch` apart, each its texels' bytes in one run, which past a row's end are the next rows' (a
 // source's lines may overlap); a plain source of another texel size read in it (blit_planes.h imageInUnits)
@@ -119,14 +133,17 @@ static void copyPlaneBytes(gm20b::BlitEncoder *be, SwitchMetalTexture *s, uint32
     else
         blitImage(t, dl, to);
     gm20b::Texture image;
-    if (fromPlanes)
+    const uint32_t toZ = intoPlanes ? 0 : layerOrPlane(to, ds, dz);
+    if (fromPlanes) {
         gm20b::planeBytesRead(s->_raw, to.bpp, sx, sy, w, h, from);
-    else if (blitImage(s, sl, image) && image.bpp != to.bpp)
+        copyPlaneRuns(be, from, sx, sy, to, dx, dy, toZ, w, h);
+        return;
+    }
+    if (blitImage(s, sl, image) && image.bpp != to.bpp)
         gm20b::imageInUnits(image, to.bpp, from);
     else
         from = image;
-    be->copyTexels(from, sx, sy, fromPlanes ? 0 : layerOrPlane(from, ss, sz), to, dx, dy,
-                   intoPlanes ? 0 : layerOrPlane(to, ds, dz), w, h);
+    be->copyTexels(from, sx, sy, layerOrPlane(from, ss, sz), to, dx, dy, toZ, w, h);
 }
 
 // Two textures held through planes (kCopyPlanes): plane 0's bytes in the destination's unit, and plane 1 a byte a texel
@@ -139,7 +156,7 @@ static void copyPlanePair(gm20b::BlitEncoder *be, const gm20b::Texture &s, uint3
     gm20b::Texture from, to;
     if (!gm20b::planeBytesRead(s, unit, sx, sy, w, h, from) || !gm20b::planeBytes(d, unit, to, true))
         return;
-    be->copyTexels(from, sx, sy, 0, to, dx, dy, 0, w, h);
+    copyPlaneRuns(be, from, sx, sy, to, dx, dy, 0, w, h);
     gm20b::Texture fromOne, toOne;
     if (!gm20b::planeOneRows(d, to.pitch, toOne) || !gm20b::planeOneRows(s, from.pitch, fromOne))
         return;
