@@ -199,20 +199,24 @@ def stacks(
 
 
 def gpu(ring: ktrace.Ring, n: Names, lo: int, hi: int) -> list[str]:
-    done, submitter = ktrace.jobs(ring.events)
-    inside = [j for j in done if lo <= j.ts <= hi]
+    """Return the GPU's submissions that ended in [lo, hi], their time by process, and the longest.
+
+    A submission's time runs from its first batch's start to its end, other channels' slices inside it included.
+    """
+    inside = [s for s in ktrace.submissions(ring.events) if lo <= s.ts <= hi]
     if not inside:
-        return ['GPU: no job ended in the window']
+        return ['GPU: no submission ended in the window']
     by: Counter[str] = Counter()
-    for j in inside:
-        by[n.who(submitter.get(j.channel, 0)).split(' (')[0]] += max(0, j.end_ns - j.start_ns) if j.start_ns else 0
-    longest = max(inside, key=lambda j: j.end_ns - j.start_ns if j.start_ns else 0)
-    longest_ms = (longest.end_ns - longest.start_ns) / 1e6 if longest.start_ns else 0
-    shares = ', '.join(f'{k} {v / 1e6:.1f} ms' for k, v in by.most_common(TOP))
+    for s in inside:
+        by[n.who(s.tid).split(' (')[0]] += s.ms
+    longest = max(inside, key=lambda s: s.ms)
+    shares = ', '.join(f'{k} {v:.1f} ms' for k, v in by.most_common(TOP))
     kind = ' (compositor)' if longest.compositor else ''
+    seqnos = f'{longest.first}-{longest.last}' if longest.last != longest.first else f'{longest.last}'
     return [
-        f'GPU: {len(inside)} jobs ended; GPU time by process: {shares}',
-        f'GPU: longest job channel {longest.channel} seqno {longest.seqno}{kind} {longest_ms:.1f} ms',
+        f'GPU: {len(inside)} submissions ended; GPU time by process: {shares}',
+        f'GPU: longest submission channel {longest.channel} seqno {seqnos}{kind} {longest.ms:.1f} ms, by '
+        + n.who(longest.tid),
     ]
 
 

@@ -101,8 +101,8 @@ class DumpTest(unittest.TestCase):
         self.assertIn('its thread: on a core 300 ms of the last 1000', text)
         self.assertIn('leaves: dsc 0x180000040 1', text)
         self.assertIn('most common stack (1): dsc 0x180000040 < SwitchHWTest+0x10 < dsc 0x180000080', text)
-        self.assertIn('GPU: 1 jobs ended', text)
-        self.assertIn('longest job channel 7 seqno 5 (compositor) 3.0 ms', text)
+        self.assertIn('GPU: 1 submissions ended', text)
+        self.assertIn('longest submission channel 7 seqno 5 (compositor) 4.9 ms', text)
 
     def test_a_hang_dump_symbolizes_with_dsc_and_bundle_tables(self):
         with tempfile.TemporaryDirectory() as d:
@@ -152,6 +152,19 @@ class DumpTest(unittest.TestCase):
             pulled = report.Pulled(dumps=[(trunc, trunc[:-7] + '.kcdata')])
             rendered = report.render(session.build('B', [rec]), pulled)
         self.assertIn('Switch-recorder-1.ktrace: unreadable dump', rendered)
+
+    def test_a_submission_of_several_batches_runs_from_its_first_start_to_its_last_end(self):
+        """Slot 7 of 25 Nov: SpringBoard's seqnos 143-210 were one 50.2 ms submission (hitch-shots-codex/jobs.txt)."""
+        job = ktrace.GPU_JOB
+        events = [
+            event(1, ktrace.SUBMIT, (12, 210, 0), SUBMITTER),
+            event(60, job, ((143 << 32) | 12, 1_000_000, 0), 0),
+            *[event(60 + i * 0.1, job, (((143 + i) << 32) | 12, 0, 0), 0) for i in range(1, 67)],
+            event(70, job, ((210 << 32) | 12, 0, 1_000_000 + int(50.2e6 * ktrace.PTIMER_PER_NS)), 0),
+        ]
+        (sub,) = ktrace.submissions(ktrace.parse(pack_ring(events)).events)
+        self.assertEqual((sub.channel, sub.first, sub.last, sub.tid), (12, 143, 210, SUBMITTER))
+        self.assertAlmostEqual(sub.ms, 50.2, places=3)
 
     def test_a_stack_handoff_is_a_context_switch(self):
         """thread_invoke's handoff path logs MACH_STACK_HANDOFF, not MACH_SCHED (hitch-shots-codex, 25 Nov)."""

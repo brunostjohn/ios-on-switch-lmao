@@ -54,6 +54,9 @@ FRAME_POINTS = {
     )
 }
 REASONS = ('none', 'late frame', 'hang', 'slow work', 'mark')
+# The GPU's stamps are PTIMER units: its 19.2 MHz source with a 32 ns step meant for 31.25 MHz runs at 0.6144 times real
+# time (drivers/TegraGM20B/gpu_stats_tick.c).
+PTIMER_PER_NS = 0.6144
 BSD_SYSCALLS = {
     73: 'munmap',
     74: 'mprotect',
@@ -110,6 +113,24 @@ class Job:
     compositor: bool
     start_ns: int
     end_ns: int
+
+
+@dataclass(frozen=True)
+class Submission:
+    """One user submission on the GPU: from its first batch's start stamp to its last seqno's end stamp."""
+
+    channel: int
+    first: int
+    last: int
+    start: int  # PTIMER units
+    end: int
+    ts: int  # when the interrupt pass saw its last seqno done
+    tid: int  # the thread that kicked it
+    compositor: bool
+
+    @property
+    def ms(self) -> float:
+        return (self.end - self.start) / PTIMER_PER_NS / 1e6
 
 
 @dataclass(frozen=True)
@@ -265,6 +286,27 @@ def jobs(events: list[Event]) -> tuple[list[Job], dict[int, int]]:
         elif e.id == SUBMIT:
             submitter[e.args[0]] = e.tid
     return out, submitter
+
+
+def submissions(events: list[Event]) -> list[Submission]:
+    """Return each channel's submissions as their jobs pair up.
+
+    A submission of several batches has several seqnos: the first batch's job carries the start stamp, and the last
+    seqno, the one its SWITCH_KDBG_SUBMIT names, carries the end. A job between them carries neither.
+    """
+    kicked = {(e.args[0], e.args[1]): e.tid for e in events if e.id == SUBMIT}
+    started: dict[int, Job] = {}
+    out = []
+    for j in jobs(events)[0]:
+        if j.start_ns:
+            started[j.channel] = j
+        if (j.channel, j.seqno) not in kicked:
+            continue
+        first = started.pop(j.channel, None)
+        if first and j.end_ns >= first.start_ns:
+            tid = kicked[(j.channel, j.seqno)]
+            out.append(Submission(j.channel, first.seqno, j.seqno, first.start_ns, j.end_ns, j.ts, tid, j.compositor))
+    return out
 
 
 def _words_to_bytes(words: tuple[int, ...]) -> bytes:
