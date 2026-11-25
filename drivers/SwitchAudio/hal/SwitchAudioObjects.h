@@ -22,6 +22,8 @@ enum {
     kMicSources = 15,
     kSpeakerMute = 16,
     kCodecMute = 17,
+    kDisplay = 18,
+    kDisplayOut = 19,
 };
 
 #endif

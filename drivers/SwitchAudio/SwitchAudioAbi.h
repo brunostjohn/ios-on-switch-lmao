@@ -7,6 +7,9 @@
  * (S32_LE, full scale +-2^31): the playback ring ring_frames (SWITCH_AUDIO_RING_FRAMES) frames, the capture ring
  * SWITCH_AUDIO_IN_RING_FRAMES; sample time t lives at frame t modulo the ring's size. The Tegra backend hands them
  * to the APE as they are (SwitchAudioFormat.h): the codec plays the top 24 bits of each.
+ * Memory types 3 and 4 are the display's separate control page and playback ring, on its own 48 kHz timeline.
+ * Its jack is nonzero only after the sink's EDID and HDA codec agree on stereo PCM. sample_bits selects packed
+ * S16_LE or 24 significant bits in left-justified S32_LE containers; both rings use the same cache ownership.
  *
  * Sample time 0 is host time anchor_host, and one frame lasts ticks_per_frame_q32 / 2^32 host ticks. Hardware period
  * interrupts also publish a lock-free (hw_seq, hw_sample_time, hw_host_time, hw_seed) anchor for drift-free zero time
@@ -32,7 +35,9 @@ typedef int32_t switch_audio_sample_t;     /* a ring sample: S32_LE */
 enum {
     SwitchAudioMemoryControl = 0,
     SwitchAudioMemoryOutput = 1,
-    SwitchAudioMemoryInput = 2
+    SwitchAudioMemoryInput = 2,
+    SwitchAudioMemoryDisplayControl = 3,
+    SwitchAudioMemoryDisplayOutput = 4
 };
 
 enum {
@@ -53,7 +58,9 @@ enum {
     /* One scalar: SwitchAudioRoute* hint from HAL so AVAudioSession route overrides (e.g. .speaker) take effect. */
     SwitchAudioSetRoute = 8,
     /* One scalar: speaker attenuation in millidecibels applied in APE MVC1 (0 = full level). */
-    SwitchAudioSetSpeakerLevel = 9
+    SwitchAudioSetSpeakerLevel = 9,
+    SwitchAudioStartDisplayOutput = 10,
+    SwitchAudioStopDisplayOutput = 11
 };
 
 enum {
@@ -80,7 +87,8 @@ enum {
 
 enum {
     SwitchAudioBackendNull = 0,
-    SwitchAudioBackendTegraI2S = 1
+    SwitchAudioBackendTegraI2S = 1,
+    SwitchAudioBackendTegraHDA = 2
 };
 
 typedef struct {
@@ -107,6 +115,7 @@ typedef struct {
     volatile uint64_t hw_host_time;   /* host timestamp at hw_sample_time */
     volatile uint32_t active_route;   /* SwitchAudioRoute* currently driven */
     volatile uint32_t muted;          /* 1 = MVC1 output mute active */
+    uint32_t sample_bits;
 } SwitchAudioControl;
 
 #endif

@@ -207,6 +207,11 @@ void IOSimpleLockUnlock(IOSimpleLock *lock)
 }
 
 extern "C" {
+int switch_emc_display_memory_reserve(const switch_display_memory_head *)
+{
+    return 0;
+}
+
 uint32_t switch_mmio_model_read32(uintptr_t address)
 {
     if (address == kMc + kStatus1)
@@ -283,7 +288,7 @@ uintptr_t ml_io_map(uintptr_t phys_addr, uintptr_t)
     return phys_addr;
 }
 
-bool switch_pmc_power_up(unsigned, unsigned, unsigned)
+bool switch_pmc_power_up(unsigned, unsigned, unsigned, const switch_pmc_mc_client *)
 {
     return true;
 }

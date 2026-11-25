@@ -181,7 +181,7 @@ def base(first_part: Path | None) -> Path:
         state = json.loads(first_part.with_name('state.json').read_text())
         identity = {'image': first_part.name, 'state': state, 'size': stat.st_size, 'mtime': stat.st_mtime_ns}
     key = cache.digest({'image': identity, 'revision': LAYOUT_REVISION})
-    return cache.entry('sd-base', key, lambda tmp, _: make_base(tmp, first_part))
+    return cache.entry(cache.ROOT / 'sd-base', key, lambda tmp, _: make_base(tmp, first_part))
 
 
 def copy_files(fat: Path, files: dict[str, Path]) -> None:

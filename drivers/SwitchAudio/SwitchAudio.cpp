@@ -3,6 +3,7 @@
 // Drives the Tegra210 APE pipeline (ADMAIF1 -> MIXER1 -> SFC1 -> MVC1 -> OPE1 -> I2S1 -> RT5639; capture
 // I2S1 -> [SFC2] -> ADMAIF1) with runtime APE power-gating, or a timer-driven null backend under switch-no-audio.
 #include "SwitchAudioDriver.h"
+#include "../SwitchDisplayPort/SwitchDisplayPort.h"
 
 using namespace switch_audio_hw;
 
@@ -109,6 +110,9 @@ IOReturn SwitchAudio::powerMessage(void *target, void *, UInt32 type, IOService 
 
 void SwitchAudio::systemShutdown()
 {
+    gate->runAction(&SwitchAudio::displaySleepGated, this);
+    if (!tegra)
+        return;
     codecStep(kCodecMute);
     gate->runAction(&SwitchAudio::shutdownGated);
     codecGate->runAction(&SwitchAudio::codecShutdownGated);
@@ -116,6 +120,7 @@ void SwitchAudio::systemShutdown()
 
 void SwitchAudio::systemSleep(bool entering)
 {
+    gate->runAction(&SwitchAudio::displaySleepGated, entering ? this : nullptr);
     if (!tegra)
         return;
     if (entering) {
@@ -182,13 +187,14 @@ bool SwitchAudio::start(IOService *provider)
     }
     if (!timer || loop->addEventSource(timer) != kIOReturnSuccess)
         return false;
-    if (tegra) {
-        shutdownNotifier =
-            getPMRootDomain() ? registerPrioritySleepWakeInterest(&SwitchAudio::powerMessage, this) : nullptr;
-        if (!shutdownNotifier)
-            IOLog("SwitchAudio: no shut down notification; the codec loses power with the PMIC\n");
-    }
+    // registerPrioritySleepWakeInterest dereferences the root domain unchecked.
+    shutdownNotifier =
+        getPMRootDomain() ? registerPrioritySleepWakeInterest(&SwitchAudio::powerMessage, this) : nullptr;
+    if (!shutdownNotifier)
+        IOLog("SwitchAudio: no shut down notification; the codec loses power with the PMIC\n");
     control->anchor_host = mach_absolute_time();
+    if (!displayInit())
+        return false;
 
     setProperty("NativeSandboxGrantProcess", "audiomxd");
     setProperty("IOUserClientClass", "SwitchAudioUserClient");
@@ -210,6 +216,7 @@ bool SwitchAudio::start(IOService *provider)
 
 void SwitchAudio::free()
 {
+    displayFree();
     if (shutdownNotifier)
         shutdownNotifier->remove();
     if (timer)
@@ -256,7 +263,7 @@ void SwitchAudio::free()
 
 IOMemoryDescriptor *SwitchAudio::copyMemory(uint32_t type)
 {
-    if (type > SwitchAudioMemoryInput)
+    if (type > SwitchAudioMemoryDisplayOutput || !memory[type])
         return nullptr;
     memory[type]->retain();
     return memory[type];
@@ -289,6 +296,7 @@ public:
     {
         audio->request(SwitchAudioStopOutput);
         audio->request(SwitchAudioStopInput);
+        audio->displayRequest(false);
         terminate();
         return kIOReturnSuccess;
     }
@@ -331,6 +339,10 @@ public:
             return args->scalarInputCount == 1 && args->scalarInput[0] <= UINT32_MAX
                        ? audio->setRoute(static_cast<uint32_t>(args->scalarInput[0]))
                        : kIOReturnBadArgument;
+        case SwitchAudioStartDisplayOutput:
+        case SwitchAudioStopDisplayOutput:
+            return args->scalarInputCount == 0 ? audio->displayRequest(selector == SwitchAudioStartDisplayOutput)
+                                               : kIOReturnBadArgument;
         default:
             return kIOReturnBadArgument;
         }
@@ -340,6 +352,35 @@ public:
 OSDefineMetaClassAndStructors(SwitchAudioUserClient, IOUserClient)
 
     static SwitchAudio *gAudio;
+static SwitchAudioSink gDisplaySink;
+
+SwitchAudioSink switch_audio_display_sink()
+{
+    SwitchAudioSink sink;
+    __atomic_load(&gDisplaySink, &sink, __ATOMIC_ACQUIRE);
+    return sink;
+}
+
+extern "C" void switch_displayport_audio_sink(const uint8_t *edid, unsigned valid_blocks, bool connected)
+{
+    const uint32_t formats = connected ? switch_hda_sink_formats(edid, valid_blocks) : 0;
+    SwitchAudioSink sink = switch_audio_display_sink();
+    if (!formats && !sink.formats)
+        return;
+    sink.formats = formats;
+    ++sink.generation;
+    __atomic_store(&gDisplaySink, &sink, __ATOMIC_RELEASE);
+    if (SwitchAudio *audio = __atomic_load_n(&gAudio, __ATOMIC_ACQUIRE))
+        audio->displaySink();
+}
+
+extern "C" bool switch_displayport_audio_eld(const uint8_t *edid, unsigned valid_blocks)
+{
+    uint8_t eld[128];
+    const uint32_t bytes = switch_hda_eld(edid, valid_blocks, eld);
+    switch_displayport_audio_presence(eld, bytes, bytes != 0);
+    return bytes != 0;
+}
 
 extern "C" int switch_audio_publish(void)
 {
@@ -359,7 +400,9 @@ extern "C" int switch_audio_publish(void)
         IOLog("SwitchAudio: start failed\n");
         return -1;
     }
-    gAudio = audio;
+    __atomic_store_n(&gAudio, audio, __ATOMIC_RELEASE);
+    if (switch_audio_display_sink().formats)
+        audio->displayStartProbe();
     audio->release();
     published = true;
     IOLog("SwitchAudio: started\n");

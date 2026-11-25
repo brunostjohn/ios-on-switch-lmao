@@ -52,6 +52,38 @@ static inline void switch_audio_mix_s32(int32_t *dst, const float *src, uint32_t
 #endif
 }
 
+static inline void switch_audio_write_s32(int32_t *dst, const float *src, uint32_t samples)
+{
+    uint32_t i = 0;
+#if defined(__ARM_NEON)
+    for (; i + 4 <= samples; i += 4)
+        vst1q_s32(dst + i, vcvtq_n_s32_f32(vld1q_f32(src + i), 31));
+#endif
+    for (; i < samples; ++i) {
+        const float v = src[i] * 0x1p31f;
+        dst[i] = v != v ? 0 : v >= 0x1p31f ? INT32_MAX : v <= -0x1p31f ? INT32_MIN : (int32_t)v;
+    }
+}
+
+static inline void switch_audio_write_s16(int16_t *dst, const float *src, uint32_t samples)
+{
+    uint32_t i = 0;
+#if defined(__ARM_NEON)
+    for (; i + 4 <= samples; i += 4) {
+        const int16x4_t sample = vqmovn_s32(vcvtq_n_s32_f32(vld1q_f32(src + i), 15));
+        vst1_s16(dst + i, sample);
+    }
+#endif
+    for (; i < samples; ++i) {
+        const float value = src[i] * 32768.0f;
+        const int32_t sample = value != value       ? 0
+                               : value >= 32767.0f  ? INT16_MAX
+                               : value <= -32768.0f ? INT16_MIN
+                                                    : (int32_t)value;
+        dst[i] = (int16_t)sample;
+    }
+}
+
 /* An IO cycle's interleaved output (frames of channels, sample time first) mixed into a ring of ring_frames frames,
  * in the two runs either side of the ring's end; at most one ring's worth (the rest would only overwrite). Returns the
  * frames in the first run (from frame first % ring_frames; the rest start at frame 0), for the caller's cache clean. */

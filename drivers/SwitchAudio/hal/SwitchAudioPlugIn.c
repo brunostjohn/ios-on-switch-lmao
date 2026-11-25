@@ -80,6 +80,7 @@
 #include "SwitchAudioConvert.h"
 #include "SwitchAudioFormat.h"
 #include "SwitchAudioObjects.h"
+#include "SwitchDisplayAudio.h"
 #include "../../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../../kits/SwitchRefusal/SwitchRefusal.h"
 
@@ -208,6 +209,11 @@ static int connectService(void)
     SwitchAudioControl *c = control;
     gOut = out;
     gIn = in;
+    void *displayControl = NULL;
+    if (!mapType(SwitchAudioMemoryDisplayControl, &displayControl) &&
+        ((SwitchAudioControl *)displayControl)->magic == SWITCH_AUDIO_MAGIC &&
+        ((SwitchAudioControl *)displayControl)->version == SWITCH_AUDIO_VERSION)
+        switch_audio_display_attach(gHost, displayControl, NULL);
     atomic_store_explicit(&gTicksPerFrame, (Float64)c->ticks_per_frame_q32 / 4294967296.0, memory_order_release);
     if (c->rate)
         atomic_store_explicit(&gRate, (Float64)c->rate, memory_order_release);
@@ -244,6 +250,7 @@ static void jackChanged(void *refcon, io_service_t service, uint32_t type, void 
     const SwitchAudioControl *c = __atomic_load_n(&gControl, __ATOMIC_ACQUIRE);
     if (type != kIOMessageServicePropertyChange || !c)
         return;
+    switch_audio_display_changed();
     const uint32_t now = c->jack, was = __atomic_exchange_n(&gJack, now, __ATOMIC_RELAXED);
     AudioObjectPropertyAddress changed[2];
     UInt32 n = 0;
@@ -647,6 +654,11 @@ static Boolean HasProperty(AudioServerPlugInDriverRef d, AudioObjectID o, pid_t 
 {
     (void)d;
     (void)pid;
+    if (switch_audio_display_object(o)) {
+        UInt8 scratch[256];
+        UInt32 written = 0;
+        return switch_audio_display_get(o, a, sizeof scratch, &written, scratch) == 0;
+    }
     const AudioObjectPropertySelector s = a->mSelector;
     if (o == kPlugIn) {
         switch (s) {
@@ -783,6 +795,10 @@ static OSStatus IsPropertySettable(AudioServerPlugInDriverRef d, AudioObjectID o
                                    const AudioObjectPropertyAddress *a, Boolean *out)
 {
     const AudioObjectPropertySelector s = a->mSelector;
+    if (switch_audio_display_object(o)) {
+        *out = switch_audio_display_settable(s);
+        return HasProperty(d, o, pid, a) ? 0 : kAudioHardwareUnknownPropertyError;
+    }
     *out =
         (isVolume(o) && (s == kAudioLevelControlPropertyScalarValue || s == kAudioLevelControlPropertyDecibelValue)) ||
         (isMute(o) && s == kAudioBooleanControlPropertyValue) ||
@@ -814,6 +830,8 @@ static OSStatus SetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
     (void)pid;
     (void)qs;
     (void)q;
+    if (switch_audio_display_object(o))
+        return switch_audio_display_set(o, a, size, data);
     if (isVolume(o) && size >= sizeof(Float32)) {
         const Float32 min = minDbOf(o);
         Float32 v = *(const Float32 *)data;
@@ -895,6 +913,8 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
     (void)d;
     (void)pid;
     const AudioObjectPropertySelector s = a->mSelector;
+    if (switch_audio_display_object(o))
+        return switch_audio_display_get(o, a, inDataSize, outDataSize, outData);
     // Lists the audio server reads for each new device and that must answer, empty: custom properties on every
     // object, boxes and clock devices on the plug-in, taps on the streams (an unknown-property error drops the device).
     // The speaker's tap stream answers 'taps' with 1 (top of file).
@@ -919,8 +939,8 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
             REPLY_STR("Switch");
         case kAudioObjectPropertyOwnedObjects:
         case kAudioPlugInPropertyDeviceList: {
-            static const AudioObjectID devices[] = {kSpeaker, kCodec, kMic};
-            UInt32 n = sizeof devices / sizeof devices[0];
+            const AudioObjectID devices[] = {kSpeaker, kCodec, kMic, kDisplay};
+            UInt32 n = switch_audio_display_available() ? 4 : 3;
             if (inDataSize / sizeof(AudioObjectID) < n)
                 n = inDataSize / (UInt32)sizeof(AudioObjectID);
             memcpy(outData, devices, n * sizeof(AudioObjectID));
@@ -936,6 +956,9 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
                 device = kCodec;
             if (uid && CFStringCompare(uid, CFSTR(kMicUID), 0) == kCFCompareEqualTo)
                 device = kMic;
+            if (uid && switch_audio_display_available() &&
+                CFStringCompare(uid, CFSTR(SWITCH_AUDIO_DISPLAY_UID), 0) == kCFCompareEqualTo)
+                device = kDisplay;
             REPLY(AudioObjectID, device);
         }
         case kAudioPlugInPropertyResourceBundle:
@@ -1274,6 +1297,12 @@ static OSStatus StartIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 cl
 {
     (void)d;
     (void)client;
+    if (o == kDisplay) {
+        pthread_mutex_lock(&gLock);
+        const OSStatus result = connectService() ? kAudioHardwareNotRunningError : switch_audio_display_start(gConnect);
+        pthread_mutex_unlock(&gLock);
+        return result;
+    }
     if (!isDevice(o))
         return kAudioHardwareBadObjectError;
     OSStatus r = 0;
@@ -1328,6 +1357,12 @@ static OSStatus StopIO(AudioServerPlugInDriverRef d, AudioObjectID o, UInt32 cli
 {
     (void)d;
     (void)client;
+    if (o == kDisplay) {
+        pthread_mutex_lock(&gLock);
+        const OSStatus result = switch_audio_display_stop(gConnect);
+        pthread_mutex_unlock(&gLock);
+        return result;
+    }
     if (!isDevice(o))
         return kAudioHardwareBadObjectError;
     pthread_mutex_lock(&gLock);
@@ -1364,6 +1399,8 @@ static OSStatus GetZeroTimeStamp(AudioServerPlugInDriverRef d, AudioObjectID o, 
 {
     (void)d;
     (void)client;
+    if (o == kDisplay)
+        return switch_audio_display_timestamp(sampleTime, hostTime, seed);
     if (o == kMic) {
         const uint64_t origin = atomic_load_explicit(&gMicOrigin, memory_order_acquire);
         const uint64_t now = mach_absolute_time();
@@ -1402,8 +1439,8 @@ static OSStatus WillDoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o,
 {
     (void)d;
     (void)client;
-    *will = (op == kAudioServerPlugInIOOperationWriteMix && (o == kSpeaker || o == kCodec)) ||
-            op == kAudioServerPlugInIOOperationReadInput;
+    *will = (op == kAudioServerPlugInIOOperationWriteMix && (o == kSpeaker || o == kCodec || o == kDisplay)) ||
+            (op == kAudioServerPlugInIOOperationReadInput && o != kDisplay);
     *inPlace = true;
     return 0;
 }
@@ -1428,6 +1465,10 @@ static OSStatus DoIOOperation(AudioServerPlugInDriverRef d, AudioObjectID o, Aud
     (void)o;
     (void)client;
     (void)secondary;
+    if (o == kDisplay && stream == kDisplayOut && op == kAudioServerPlugInIOOperationWriteMix) {
+        switch_audio_display_mix(frames, info, main);
+        return 0;
+    }
     if (op == kAudioServerPlugInIOOperationReadInput && (stream == kSpeakerTap || stream == kMicIn)) {
         memset(main, 0, (size_t)frames * channelsOf(stream) * sizeof(Float32));  // silent inputs (top of file)
         return 0;

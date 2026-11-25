@@ -253,6 +253,17 @@ host_test(
 )
 
 host_test(
+    name = "xnu_shared_cache_source_test",
+    srcs = ["xnu_shared_cache_source_test.cpp"],
+    data = [
+        "//diagnostics/switch:SwitchRawMount.h",
+        "//kernel/switch:vm/shared_cache.c",
+        "//kernel/xnu-10063.141.1/bsd:vm/vm_unix.c",
+        "//kernel/xnu-12377.121.6/bsd:vm/vm_unix.c",
+    ],
+)
+
+host_test(
     name = "xnu_memcmp_source_test",
     srcs = ["xnu_memcmp_source_test.cpp"],
     data = [

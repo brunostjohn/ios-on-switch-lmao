@@ -8,27 +8,47 @@
 #include <stdint.h>
 
 #include "SwitchDPModes.h"
+#include "../SwitchPower/SwitchDisplayMemory.h"
 
 #define TEGRA_DISPLAY_B_INTID (32u + 74u)
 
 class TegraDisplayB {
 public:
+    struct Frame {
+        uint32_t iova = 0;
+        uint32_t stride = 0;
+        uint32_t kind = 0;
+        uint32_t colorDepth = 12;
+        uint32_t position = 0;
+        uint32_t size = 0;
+        uint32_t prescaled = 0;
+        uint32_t hOffset = 0;
+        uint32_t vOffset = 0;
+        uint32_t dda = 0x10001000u;
+        uint32_t hInitial = 0;
+        uint32_t vInitial = 0;
+        uint32_t options = 1u << 30;
+    };
     // The DISB partition with DISP2 (already sourced from pll_d2_out0) and the controller's base configuration.
     bool powerUp(char *why, size_t size);
-    // The mode's timing; the controller runs continuously from here, every window off. The frame-end interrupt is on
-    // only while a flip waits to be taken: a still screen costs the CPU nothing.
     void setMode(const struct switch_dp_mode &mode);
     void enableSor(bool on);
-    // Window A scans `width` x `height` BGRA at `iova` (rows of `stride` bytes) from the next frame on; its frame end
-    // interrupt says it was taken.
-    void scanout(uint32_t iova, uint32_t width, uint32_t height, uint32_t stride);
+    bool scanout(const Frame &frame);
+    enum class Latch { Pending, Active, Missed };
+    Latch windowLatch(uint32_t address);
+    void resetWindowCache();
     void windowOff();
-    // The interrupt's cause, cleared; the frame-end interrupt off again until the next scanout().
+    void frameInterrupt(bool enable);
     uint32_t takeInterrupt();
     void powerDown();
 
 private:
     volatile uint8_t *base = nullptr;
+    switch_display_memory_head memory = {};
+    switch_display_memory_window requestedWindow = {};
+    Frame active = {};
+    bool windowEnabled = false, frameInterruptEnabled = false, emcRefusedLogged = false;
+    void releaseBandwidth();
     uint32_t read(uint32_t word) const;
     void write(uint32_t word, uint32_t value);
     void commit(uint32_t update);

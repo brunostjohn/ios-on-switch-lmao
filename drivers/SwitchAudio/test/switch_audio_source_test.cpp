@@ -271,4 +271,52 @@ TEST(SwitchAudioSource, CapturePathFollowsInput)
     EXPECT_THAT(plugin, HasSubstr("switch_audio_ring_read_s32(main, gIn, SWITCH_AUDIO_IN_RING_FRAMES,"));
 }
 
+TEST(SwitchAudioSource, HdaReturnsDmaOwnershipBeforeReusingMemoryOrResetting)
+{
+    const std::string source = SourceText("../SwitchHDA.cpp");
+    const auto ordered = [](const std::string &body, const char *first, const char *second) {
+        const size_t before = body.find(first), after = body.find(second);
+        ASSERT_NE(before, std::string::npos) << first;
+        ASSERT_NE(after, std::string::npos) << second;
+        EXPECT_LT(before, after) << first << " before " << second;
+    };
+    const auto body = [&](const char *signature) { return Between(source, signature, "\n}\n"); };
+    EXPECT_THAT(source, Not(HasSubstr("panic(")));
+    const std::string stop = body("bool SwitchHDA::stop()");
+    EXPECT_THAT(stop, HasSubstr("kBar + stream, kRun, 0, 40"));
+    ordered(stop, "coreWrite(stream,", "switch_mmio_wait32");
+    ordered(stop, "switch_mmio_wait32", "control->state = 0;");
+    const std::string commands = body("bool SwitchHDA::stopCommands()");
+    EXPECT_THAT(commands, HasSubstr("kBar + CORBCTL, kRun, 0, 1000"));
+    EXPECT_THAT(commands, HasSubstr("kBar + RIRBCTL, kRun, 0, 1000"));
+    ordered(commands, "field(RIRBCTL,", "switch_mmio_wait32");
+    ordered(body("bool SwitchHDA::reset()"), "if (!stop() || !stopCommands())", "coreWrite(GCTL, 0);");
+    const std::string start = body("IOReturn SwitchHDA::start()");
+    ordered(start, "if (!stop())", "bzero(");
+    ordered(start, "if (!stop())", "coreWrite(stream, kStreamReset);");
+    ordered(body("void SwitchHDA::disconnect()"), "stop();", "stopCommands();");
+    ordered(body("void SwitchHDA::sleep(bool entering)"), "disconnect();", "power(false);");
+    const std::string release = body("void SwitchHDA::release()");
+    ordered(release, "disconnect();", "power(false);");
+    ordered(release, "power(false);", "tegra_smmu_detach");
+}
+
+TEST(SwitchAudioSource, SleepWaitsForTheExternalPresenceTransactionBeforeReturning)
+{
+    const std::string source = SourceText("../SwitchDisplayAudio.cpp");
+    const std::string sleep = Between(source, "IOReturn SwitchAudio::displaySleepGated(", "\n}\n");
+    EXPECT_THAT(sleep, HasSubstr("clock_interval_to_deadline("));
+    EXPECT_THAT(sleep, HasSubstr("while (self->displayPresencePending)"));
+    EXPECT_THAT(sleep, HasSubstr("commandSleep(&self->displayPresencePending, deadline, THREAD_UNINT)"));
+    EXPECT_THAT(sleep, HasSubstr("THREAD_TIMED_OUT"));
+    EXPECT_THAT(sleep, HasSubstr("displayAudio.sleep(true)"));
+    EXPECT_LT(sleep.find("commandSleep("), sleep.find("displayAudio.sleep(true)"));
+    const std::string complete = Between(source, "IOReturn SwitchAudio::displayConnectGated(", "\n}\n");
+    EXPECT_THAT(complete, HasSubstr("displayPresencePending = false"));
+    EXPECT_THAT(complete, HasSubstr("displayAudio.sleep(true)"));
+    EXPECT_THAT(complete, HasSubstr("commandWakeup(&self->displayPresencePending, false)"));
+    EXPECT_LT(complete.find("displayPresencePending = false"), complete.find("commandWakeup("));
+    EXPECT_LT(complete.find("displayAudio.sleep(true)"), complete.find("commandWakeup("));
+}
+
 }  // namespace
