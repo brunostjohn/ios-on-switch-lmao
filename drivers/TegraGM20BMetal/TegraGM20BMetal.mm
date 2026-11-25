@@ -351,6 +351,11 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
         [](void *) {
             gm20bReleaseAhead(gRM->raw->hasBoundVolatileArena());
             const SwitchMetalPassTrim passes = gm20bPassTrim();
+            // freed Shared spans zeroed and back in their chunks first, so an idle chunk they were in can park
+            if (gRM->raw->scrubDue())
+                gm20bExcludingSubmissions([] {
+                    return gRM->raw->scrubFreed(true);
+                });
             const gm20b::Device::Trimmed kept = gRM->raw->trim();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             gm20b::Device::PurgeStats purge;
