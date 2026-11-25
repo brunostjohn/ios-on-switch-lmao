@@ -1718,6 +1718,21 @@ host_test(
     ],
 )
 
+# A GPU write into a native view (SwitchGpuNativeUse.h) through the job's ownership transaction and its write ranges, as
+# runJobUses builds them: a write use with no range naming its native backing is refused.
+host_test(
+    name = "switch_gpu_native_write_test",
+    srcs = [
+        "switch_gpu_backing_fixture.h",
+        "switch_gpu_native_write_test.cpp",
+    ],
+    data = ["//drivers/TegraGM20B:TegraGM20BUserClientJobSubmit.cpp"],
+    deps = [
+        ":backing",
+        ":coherency_kernel",
+    ],
+)
+
 # The kernel's copy-engine pushes on kits/SwitchGM20BEmit, as TegraGM20B_emit builds them for the kernel.
 host_library(
     name = "copy_emit",

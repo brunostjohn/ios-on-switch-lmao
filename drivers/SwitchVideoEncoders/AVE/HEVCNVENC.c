@@ -60,7 +60,10 @@ int hevcnvenc_configure(HEVCEncConfig *c)
     c->log2_min_cb = 3;
     c->log2_min_tb = 2;
     c->log2_max_tb = 5;
-    c->max_tr_depth_inter = c->max_tr_depth_intra = c->fast ? 1 : 3;
+    // App 3 writes these depths and the PPS transform-skip flag only into the stream's syntax; the engine picks TUs from
+    // the MD control's tusize enables (SOURCE-H265). The stream must allow every TU the MD control enables, in every
+    // preset: a 32x32 CU split to 4x4 TUs needs depth 3.
+    c->max_tr_depth_inter = c->max_tr_depth_intra = 3;
     c->amp = !c->fast;
     c->sao = c->temporal_mvp = c->strong_intra_smoothing = false;
     if (hevcenc_configure(c))
@@ -197,7 +200,7 @@ static void setup(const HEVCEncConfig *c, uint32_t layout, uint32_t chromaMode, 
     sps->max_transform_depth_intra = c->max_tr_depth_intra;
     sps->amp_enabled_flag = c->amp;
     sps->num_short_term_ref_pic_sets = 1;
-    s->pps_data.transform_skip_enabled_flag = c->fast ? 0 : 1;
+    s->pps_data.transform_skip_enabled_flag = 1;
     s->pps_data.pps_loop_filter_across_slices_enabled_flag = 1;
     rateControl(&s->rate_control, p->idr || p->qp < 2 ? qp(p->qp) : qp(p->qp - 2u));  // a P picture's is I + 2
     pictureControl(c, l, p, &s->pic_control);

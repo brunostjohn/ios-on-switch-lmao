@@ -235,37 +235,38 @@ size_t hevcenc_write_sps(const HEVCEncConfig *c, uint8_t *out, size_t cap)
 
 size_t hevcenc_write_pps(const HEVCEncConfig *c, uint8_t *out, size_t cap)
 {
+    (void)c;
     uint8_t rbsp[32];
     H264Bits b;
     h264bits_init(&b, rbsp, sizeof(rbsp));
-    h264bits_ue(&b, 0);                       // pps_pic_parameter_set_id
-    h264bits_ue(&b, 0);                       // pps_seq_parameter_set_id
-    h264bits_u(&b, 0, 1);                     // dependent_slice_segments_enabled_flag
-    h264bits_u(&b, 0, 1);                     // output_flag_present_flag
-    h264bits_u(&b, 0, 3);                     // num_extra_slice_header_bits
-    h264bits_u(&b, 0, 1);                     // sign_data_hiding_enabled_flag
-    h264bits_u(&b, 0, 1);                     // cabac_init_present_flag
-    h264bits_ue(&b, 0);                       // num_ref_idx_l0_default_active_minus1
-    h264bits_ue(&b, 0);                       // num_ref_idx_l1_default_active_minus1
-    h264bits_se(&b, 0);                       // init_qp_minus26
-    h264bits_u(&b, 0, 1);                     // constrained_intra_pred_flag
-    h264bits_u(&b, c && c->fast ? 0 : 1, 1);  // transform_skip_enabled_flag
-    h264bits_u(&b, 0, 1);                     // cu_qp_delta_enabled_flag: one QP a picture
-    h264bits_se(&b, 0);                       // pps_cb_qp_offset
-    h264bits_se(&b, 0);                       // pps_cr_qp_offset
-    h264bits_u(&b, 0, 1);                     // pps_slice_chroma_qp_offsets_present_flag
-    h264bits_u(&b, 0, 1);                     // weighted_pred_flag
-    h264bits_u(&b, 0, 1);                     // weighted_bipred_flag
-    h264bits_u(&b, 0, 1);                     // transquant_bypass_enabled_flag
-    h264bits_u(&b, 0, 1);                     // tiles_enabled_flag
-    h264bits_u(&b, 0, 1);                     // entropy_coding_sync_enabled_flag
-    h264bits_u(&b, 1, 1);                     // pps_loop_filter_across_slices_enabled_flag
-    h264bits_u(&b, 0, 1);                     // deblocking_filter_control_present_flag
-    h264bits_u(&b, 0, 1);                     // pps_scaling_list_data_present_flag
-    h264bits_u(&b, 0, 1);                     // lists_modification_present_flag
-    h264bits_ue(&b, 0);                       // log2_parallel_merge_level_minus2
-    h264bits_u(&b, 0, 1);                     // slice_segment_header_extension_present_flag
-    h264bits_u(&b, 0, 1);                     // pps_extension_present_flag
+    h264bits_ue(&b, 0);    // pps_pic_parameter_set_id
+    h264bits_ue(&b, 0);    // pps_seq_parameter_set_id
+    h264bits_u(&b, 0, 1);  // dependent_slice_segments_enabled_flag
+    h264bits_u(&b, 0, 1);  // output_flag_present_flag
+    h264bits_u(&b, 0, 3);  // num_extra_slice_header_bits
+    h264bits_u(&b, 0, 1);  // sign_data_hiding_enabled_flag
+    h264bits_u(&b, 0, 1);  // cabac_init_present_flag
+    h264bits_ue(&b, 0);    // num_ref_idx_l0_default_active_minus1
+    h264bits_ue(&b, 0);    // num_ref_idx_l1_default_active_minus1
+    h264bits_se(&b, 0);    // init_qp_minus26
+    h264bits_u(&b, 0, 1);  // constrained_intra_pred_flag
+    h264bits_u(&b, 1, 1);  // transform_skip_enabled_flag
+    h264bits_u(&b, 0, 1);  // cu_qp_delta_enabled_flag: one QP a picture
+    h264bits_se(&b, 0);    // pps_cb_qp_offset
+    h264bits_se(&b, 0);    // pps_cr_qp_offset
+    h264bits_u(&b, 0, 1);  // pps_slice_chroma_qp_offsets_present_flag
+    h264bits_u(&b, 0, 1);  // weighted_pred_flag
+    h264bits_u(&b, 0, 1);  // weighted_bipred_flag
+    h264bits_u(&b, 0, 1);  // transquant_bypass_enabled_flag
+    h264bits_u(&b, 0, 1);  // tiles_enabled_flag
+    h264bits_u(&b, 0, 1);  // entropy_coding_sync_enabled_flag
+    h264bits_u(&b, 1, 1);  // pps_loop_filter_across_slices_enabled_flag
+    h264bits_u(&b, 0, 1);  // deblocking_filter_control_present_flag
+    h264bits_u(&b, 0, 1);  // pps_scaling_list_data_present_flag
+    h264bits_u(&b, 0, 1);  // lists_modification_present_flag
+    h264bits_ue(&b, 0);    // log2_parallel_merge_level_minus2
+    h264bits_u(&b, 0, 1);  // slice_segment_header_extension_present_flag
+    h264bits_u(&b, 0, 1);  // pps_extension_present_flag
     return finish(&b, NAL_PPS, out, cap);
 }
 
