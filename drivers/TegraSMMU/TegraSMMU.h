@@ -31,7 +31,12 @@ enum tegra_smmu_asid {
     TEGRA_SMMU_ASID_DISPLAY_B = 120,
     TEGRA_SMMU_ASID_HDA = 119,
     TEGRA_SMMU_ASID_AFI = 118,
-    TEGRA_SMMU_ASID_GPU = 117
+    TEGRA_SMMU_ASID_GPU = 117,       // GM20B's compaction window (SwitchGpuSmmu.cpp), field 2 of GPUB
+    TEGRA_SMMU_ASID_FAULT = 116,     // an empty directory: every access through it faults (tegra_smmu_fault_ptb)
+    TEGRA_SMMU_ASID_GPU_LOW = 115,   // GM20B's RAM below 4 GiB at its own address, field 0 of GPUB
+    TEGRA_SMMU_ASID_GPU_HIGH = 114,  // GM20B's RAM above 4 GiB at its own address less 4 GiB, field 1 of GPUB
+    TEGRA_SMMU_ASID_SDMMC1_LOW = 113,
+    TEGRA_SMMU_ASID_SDMMC1_HIGH = 112
 };
 
 enum tegra_smmu_register {
@@ -47,10 +52,14 @@ enum tegra_smmu_register {
     TEGRA_SMMU_VIC_ASID = 0x284,
     TEGRA_SMMU_XUSB_HOST_ASID = 0x288,  // swgroup "xusb_host" (xusb_hostr/xusb_hostw: TRANSLATION_ENABLE_2 bits 10/11)
     TEGRA_SMMU_XUSB_DEV_ASID = 0x28c,   // swgroup "xusb_dev" (xusb_devr/xusb_devw: TRANSLATION_ENABLE_2 bits 12/13)
-    TEGRA_SMMU_GPU_ASID = 0xaac,        // swgroup "gpu" (gpusrd/gpuswr: _2 bits 24/25; gpusrd2/gpuswr2: _4 bits 8/9)
-    TEGRA_SMMU_NVJPG_ASID = 0xac0,      // swgroup "nvjpg" (clients nvjpgsrd/nvjpgswr: TRANSLATION_ENABLE_3 bits 30/31)
-    TEGRA_SMMU_NVDEC_ASID = 0xab4,      // swgroup "nvdec" (clients nvdecsrd/nvdecswr: TRANSLATION_ENABLE_3 bits 24/25)
-    TEGRA_SMMU_NVENC_ASID = 0x264,      // swgroup "nvenc" (nvencsrd: TRANSLATION_ENABLE_0 bit 28, nvencswr: _1 bit 11)
+    // swgroup GPUB, what GM20B's a[34] = 1 accesses use (gpusrd/gpuswr: _2 bits 24/25; gpusrd2/gpuswr2: _4 bits 8/9; all
+    // four read-only and set). Its enable bit reads 1 whatever is written: GPUB always translates (TRM 18.11.1.136).
+    // Swgroup GPU (0xaa8, a[34] = 0) never does.
+    TEGRA_SMMU_GPUB_ASID = 0xaac,
+    TEGRA_SMMU_SDMMC1A_ASID = 0xa94,  // swgroup "sdmmc1a" (sdmmcra/sdmmcwa: TRANSLATION_ENABLE_3 bits 0/4)
+    TEGRA_SMMU_NVJPG_ASID = 0xac0,    // swgroup "nvjpg" (clients nvjpgsrd/nvjpgswr: TRANSLATION_ENABLE_3 bits 30/31)
+    TEGRA_SMMU_NVDEC_ASID = 0xab4,    // swgroup "nvdec" (clients nvdecsrd/nvdecswr: TRANSLATION_ENABLE_3 bits 24/25)
+    TEGRA_SMMU_NVENC_ASID = 0x264,    // swgroup "nvenc" (nvencsrd: TRANSLATION_ENABLE_0 bit 28, nvencswr: _1 bit 11)
 };
 
 // Two drivers on one ASID or one swgroup register would translate through each other's tables. Every enumerator above
@@ -69,6 +78,11 @@ static inline void tegra_smmu_ids_distinct(enum tegra_smmu_asid asid, enum tegra
     case TEGRA_SMMU_ASID_HDA:
     case TEGRA_SMMU_ASID_AFI:
     case TEGRA_SMMU_ASID_GPU:
+    case TEGRA_SMMU_ASID_FAULT:
+    case TEGRA_SMMU_ASID_GPU_LOW:
+    case TEGRA_SMMU_ASID_GPU_HIGH:
+    case TEGRA_SMMU_ASID_SDMMC1_LOW:
+    case TEGRA_SMMU_ASID_SDMMC1_HIGH:
         break;
     }
     switch (reg) {
@@ -84,7 +98,8 @@ static inline void tegra_smmu_ids_distinct(enum tegra_smmu_asid asid, enum tegra
     case TEGRA_SMMU_VIC_ASID:
     case TEGRA_SMMU_XUSB_HOST_ASID:
     case TEGRA_SMMU_XUSB_DEV_ASID:
-    case TEGRA_SMMU_GPU_ASID:
+    case TEGRA_SMMU_GPUB_ASID:
+    case TEGRA_SMMU_SDMMC1A_ASID:
     case TEGRA_SMMU_NVJPG_ASID:
     case TEGRA_SMMU_NVDEC_ASID:
     case TEGRA_SMMU_NVENC_ASID:
@@ -101,9 +116,18 @@ int tegra_smmu_attach(uint32_t asid, uint32_t ptb, uint32_t asidReg, uint32_t tr
 // The same for a 34-bit client's swgroup (XUSB_HOST, XUSB_DEV): asid in all four of its ASID fields, one per va[33:32].
 int tegra_smmu_attach_wide(uint32_t asid, uint32_t ptb, uint32_t asidReg, uint32_t translationReg,
                            uint32_t translationBits, char *line, size_t size);
+// A swgroup register's four fields (va[33:32] = 0..3), each through its own ASID and directory: for a client whose
+// addresses reach RAM above 4 GiB (TegraSMMUIdentity.h). alwaysTranslated: the swgroup's enable bit is hardwired to 1
+// (GPUB), so its reset value names ASID 0 without anyone owning it, and its detach parks every field on
+// TEGRA_SMMU_ASID_FAULT. Otherwise as tegra_smmu_attach.
+int tegra_smmu_attach_split(const uint32_t asids[4], const uint32_t ptbs[4], uint32_t asidReg, uint32_t translationReg,
+                            uint32_t translationBits, bool alwaysTranslated, char *line, size_t size);
+// PTB_DATA of an empty directory, made by the first caller (thread context): every access through
+// TEGRA_SMMU_ASID_FAULT faults (INVALID_SMMU_PAGE). 0 when no memory.
+uint32_t tegra_smmu_fault_ptb(void);
 // Restore a retained attachment after reset, before that client resumes DMA. A different or detached identity is refused.
 int switch_smmu_restore(uint32_t asid, uint32_t ptb, uint32_t asidReg, char *line, size_t size);
-// The swgroup back to bypass, the ASID's directory cleared, a flush.
+// The swgroup back to bypass (an always-translated one onto the fault ASID), its ASIDs' directories cleared, a flush.
 void tegra_smmu_detach(uint32_t asid, uint32_t asidReg);
 // After a change to the ASID's directory (cleaned to memory first): every ASID's PTC entries, then the ASID's TLB.
 void tegra_smmu_flush(uint32_t asid);

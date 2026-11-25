@@ -20,9 +20,9 @@ std::vector<uint64_t> contiguous(uint64_t base, uint32_t pages)
 TEST(SwitchGpuSmmu, RegistersAndBit34EncodingMatchTegra210)
 {
 	EXPECT_EQ(static_cast<uint32_t>(TEGRA_SMMU_ASID_GPU), 117u);
-	EXPECT_EQ(static_cast<uint32_t>(TEGRA_SMMU_GPU_ASID), 0xaacu);
+	EXPECT_EQ(static_cast<uint32_t>(TEGRA_SMMU_GPUB_ASID), 0xaacu);
 	EXPECT_EQ(static_cast<uint32_t>(TEGRA_SMMU_TRANSLATION_ENABLE_4), 0xb98u);
-	tegra_smmu_ids_distinct(TEGRA_SMMU_ASID_GPU, TEGRA_SMMU_GPU_ASID);
+	tegra_smmu_ids_distinct(TEGRA_SMMU_ASID_GPU, TEGRA_SMMU_GPUB_ASID);
 
 	const uint64_t pa = switch_gpu_smmu_pa(0x10010000ULL);
 	EXPECT_EQ(pa, (1ULL << 34) | 0x10010000ULL);

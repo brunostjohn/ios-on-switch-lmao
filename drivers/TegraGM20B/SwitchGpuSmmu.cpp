@@ -7,8 +7,8 @@
 namespace
 {
 constexpr TegraSMMUSwgroup kGpuGroups[] = {
-	{TEGRA_SMMU_GPU_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_2, (1u << 24) | (1u << 25)},
-	{TEGRA_SMMU_GPU_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_4, (1u << 8) | (1u << 9)},
+	{TEGRA_SMMU_GPUB_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_2, (1u << 24) | (1u << 25)},
+	{TEGRA_SMMU_GPUB_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_4, (1u << 8) | (1u << 9)},
 };
 constexpr uint64_t kWindowSizes[] = {1ULL << 30, 512ULL << 20, 256ULL << 20};
 

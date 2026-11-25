@@ -85,6 +85,30 @@ int programLocked(const tegra_smmu_attachment &a, const tegra_smmu_attachments &
 }  // namespace
 
 namespace {
+// Whether an attachment of b's would translate through another's directory for one of a's ASIDs.
+bool sharesAsid(const tegra_smmu_attachment &a, const tegra_smmu_attachment &b)
+{
+    for (uint32_t i = 0; i < tegra_smmu_attachment_fields(&a); ++i) {
+        for (uint32_t j = 0; j < tegra_smmu_attachment_fields(&b); ++j) {
+            if (tegra_smmu_attachment_asid(&a, i) == tegra_smmu_attachment_asid(&b, j) &&
+                tegra_smmu_attachment_ptb(&a, i) != tegra_smmu_attachment_ptb(&b, j))
+                return true;
+        }
+    }
+    return false;
+}
+
+// Whether the swgroup register's value says another owner translates it. A swgroup that always translates reads
+// enabled at reset, with ASID 0, and after our own detach, on the fault ASID: neither is an owner.
+bool translatedElsewhere(const tegra_smmu_attachment &attachment, uint32_t was)
+{
+    if (attachment.alwaysTranslated) {
+        return was != ASID_ENABLE && was != switch_smmu::parked(attachment, TEGRA_SMMU_ASID_FAULT) &&
+               was != switch_smmu::selection(attachment);
+    }
+    return (was & ASID_ENABLE) && (was & 0x7f) != attachment.asid;
+}
+
 int attach(const tegra_smmu_attachment &attachment, char *line, size_t size)
 {
     if (!ready()) {
@@ -94,17 +118,16 @@ int attach(const tegra_smmu_attachment &attachment, char *line, size_t size)
     IOSimpleLockLock(gLock);
     int ret = -1;
     const uint32_t was = r32(attachment.asidReg);
-    if ((was & ASID_ENABLE) && (was & 0x7f) != attachment.asid) {
+    const bool retained = tegra_smmu_attachments_find(&gAttached, attachment.asidReg) != UINT32_MAX;
+    if (!retained && translatedElsewhere(attachment, was)) {
         snprintf(line, size, "the swgroup is already translated by ASID %u (MC %#x = %#x)", was & 0x7f,
                  attachment.asidReg, was);
     } else {
         bool conflict = false;
         for (uint32_t i = 0; i < gAttached.count; ++i) {
             const auto &owned = gAttached.entry[i];
-            conflict |=
-                (owned.asid == attachment.asid && owned.ptb != attachment.ptb) ||
-                (owned.asidReg == attachment.asidReg &&
-                 (owned.asid != attachment.asid || owned.ptb != attachment.ptb || owned.wide != attachment.wide));
+            conflict |= sharesAsid(owned, attachment) || (owned.asidReg == attachment.asidReg &&
+                                                          !tegra_smmu_attachment_same_directories(&owned, &attachment));
         }
         tegra_smmu_attachments pending = gAttached;
         if (conflict)
@@ -126,13 +149,31 @@ int attach(const tegra_smmu_attachment &attachment, char *line, size_t size)
 extern "C" int tegra_smmu_attach(uint32_t asid, uint32_t ptb, uint32_t asidReg, uint32_t translationReg,
                                  uint32_t translationBits, char *line, size_t size)
 {
-    return attach({asid, ptb, asidReg, translationReg, translationBits, false}, line, size);
+    return attach(tegra_smmu_attachment_of(asid, ptb, asidReg, translationReg, translationBits, false), line, size);
 }
 
 extern "C" int tegra_smmu_attach_wide(uint32_t asid, uint32_t ptb, uint32_t asidReg, uint32_t translationReg,
                                       uint32_t translationBits, char *line, size_t size)
 {
-    return attach({asid, ptb, asidReg, translationReg, translationBits, true}, line, size);
+    return attach(tegra_smmu_attachment_of(asid, ptb, asidReg, translationReg, translationBits, true), line, size);
+}
+
+extern "C" int tegra_smmu_attach_split(const uint32_t asids[4], const uint32_t ptbs[4], uint32_t asidReg,
+                                       uint32_t translationReg, uint32_t translationBits, bool alwaysTranslated,
+                                       char *line, size_t size)
+{
+    tegra_smmu_attachment split =
+        tegra_smmu_attachment_of(asids[0], ptbs[0], asidReg, translationReg, translationBits, false);
+    split.alwaysTranslated = alwaysTranslated;
+    for (uint32_t field = 1; field < 4; ++field) {
+        if (!asids[field] || !ptbs[field]) {
+            snprintf(line, size, "field %u of swgroup %#x names no ASID or directory", field, asidReg);
+            return -1;
+        }
+        split.upperAsid[field - 1] = asids[field];
+        split.upperPtb[field - 1] = ptbs[field];
+    }
+    return attach(split, line, size);
 }
 
 extern "C" int switch_smmu_restore(uint32_t asid, uint32_t ptb, uint32_t asidReg, char *line, size_t size)
@@ -153,12 +194,21 @@ extern "C" void tegra_smmu_detach(uint32_t asid, uint32_t asidReg)
     if (!ready())
         return;
     IOSimpleLockLock(gLock);
+    const uint32_t at = tegra_smmu_attachments_find(&gAttached, asidReg);
+    tegra_smmu_attachment gone = tegra_smmu_attachment_of(asid, 0, asidReg, 0, 0, false);
+    if (at != UINT32_MAX)
+        gone = gAttached.entry[at];
     tegra_smmu_attachments_forget(&gAttached, asidReg);
-    w32(asidReg, 0);
+    w32(asidReg, switch_smmu::parked(gone, TEGRA_SMMU_ASID_FAULT));
     (void)r32(asidReg);
-    w32(PTB_ASID, asid);
-    w32(PTB_DATA, 0);
-    flushLocked(asid);
+    for (uint32_t field = 0; field < tegra_smmu_attachment_fields(&gone); ++field) {
+        const uint32_t fieldAsid = tegra_smmu_attachment_asid(&gone, field);
+        if (!switch_smmu::firstUse(gone, field) || fieldAsid == TEGRA_SMMU_ASID_FAULT)
+            continue;
+        w32(PTB_ASID, fieldAsid);
+        w32(PTB_DATA, 0);
+        flushLocked(fieldAsid);
+    }
     IOSimpleLockUnlock(gLock);
     switch_mc_errors_detached(asidReg);
 }

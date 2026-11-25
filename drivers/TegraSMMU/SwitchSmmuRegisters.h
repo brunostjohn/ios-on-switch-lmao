@@ -18,11 +18,32 @@ template <class Registers> void flush(Registers &io, uint32_t asid)
     (void)io.read(kPtbAsid);
 }
 
-// The swgroup register's value: enabled, with the ASID in the one field, or in all four of a 34-bit client's swgroup
-// (one per va[33:32]; T210 TRM 18.11.1.84-85, p.894-895), as L4T's tegra-smmu writes them.
-constexpr uint32_t selection(const tegra_smmu_attachment &a)
+// The swgroup register's value: enabled, with the ASID in the one field, in all four of a 34-bit client's swgroup
+// (one per va[33:32]; T210 TRM 18.11.1.84-85, p.894-895) as L4T's tegra-smmu writes them, or a split attachment's
+// ASID in each field.
+inline uint32_t selection(const tegra_smmu_attachment &a)
 {
-    return kAsidEnable | a.asid | (a.wide ? a.asid << 8 | a.asid << 16 | a.asid << 24 : 0u);
+    uint32_t value = kAsidEnable;
+    for (uint32_t field = 0; field < tegra_smmu_attachment_fields(&a); ++field)
+        value |= tegra_smmu_attachment_asid(&a, field) << (8 * field);
+    return value;
+}
+
+// Whether field is the first of the attachment's fields to name its ASID (a wide attachment names one ASID four times).
+inline bool firstUse(const tegra_smmu_attachment &a, uint32_t field)
+{
+    for (uint32_t earlier = 0; earlier < field; ++earlier) {
+        if (tegra_smmu_attachment_asid(&a, earlier) == tegra_smmu_attachment_asid(&a, field))
+            return false;
+    }
+    return true;
+}
+
+// What a detach leaves in the swgroup register: bypass, or for a swgroup that always translates every field on the
+// fault ASID, whose directory is empty.
+inline uint32_t parked(const tegra_smmu_attachment &a, uint32_t faultAsid)
+{
+    return a.alwaysTranslated ? kAsidEnable | faultAsid | faultAsid << 8 | faultAsid << 16 | faultAsid << 24 : 0u;
 }
 
 // After page entries changed (TRM 18.6.3.3): the PTC's copies of the table bytes [pa, pa + bytes), then the ASID's TLB
@@ -50,23 +71,27 @@ int program(Registers &io, const tegra_smmu_attachment &a, char *line, size_t si
     if (attachments) {
         for (uint32_t i = 0; i < attachments->count; ++i) {
             const auto &client = attachments->entry[i];
-            if (client.asidReg == a.asidReg &&
-                (client.asid != a.asid || client.ptb != a.ptb || client.wide != a.wide)) {
+            if (client.asidReg == a.asidReg && !tegra_smmu_attachment_same_directories(&client, &a)) {
                 snprintf(line, size, "conflicting retained directory for swgroup %#x", a.asidReg);
                 return -1;
             }
         }
     }
-    io.write(kPtbAsid, a.asid);
-    io.write(kPtbData, a.ptb);
-    (void)io.read(kPtbAsid);
-    io.write(kPtbAsid, a.asid);
-    const uint32_t directory = io.read(kPtbData);
-    if (directory != a.ptb) {
-        snprintf(line, size, "ASID %u directory did not take (PTB_DATA %#x, wrote %#x)", a.asid, directory, a.ptb);
-        return -1;
+    for (uint32_t field = 0; field < tegra_smmu_attachment_fields(&a); ++field) {
+        if (!firstUse(a, field))
+            continue;
+        const uint32_t asid = tegra_smmu_attachment_asid(&a, field), ptb = tegra_smmu_attachment_ptb(&a, field);
+        io.write(kPtbAsid, asid);
+        io.write(kPtbData, ptb);
+        (void)io.read(kPtbAsid);
+        io.write(kPtbAsid, asid);
+        const uint32_t directory = io.read(kPtbData);
+        if (directory != ptb) {
+            snprintf(line, size, "ASID %u directory did not take (PTB_DATA %#x, wrote %#x)", asid, directory, ptb);
+            return -1;
+        }
+        flush(io, asid);
     }
-    flush(io, a.asid);
     // The per-client translation enables are secure-only (T210 TRM 18.11.1.66-69, p.886-887): reset and bl31 set them,
     // a write from here is dropped, and what reads back here is checked.
     const uint32_t count = attachments ? attachments->count : 1;
@@ -88,7 +113,10 @@ int program(Registers &io, const tegra_smmu_attachment &a, char *line, size_t si
         snprintf(line, size, "swgroup ASID did not take (MC %#x = %#x)", a.asidReg, selected);
         return -1;
     }
-    flush(io, a.asid);
+    for (uint32_t field = 0; field < tegra_smmu_attachment_fields(&a); ++field) {
+        if (firstUse(a, field))
+            flush(io, tegra_smmu_attachment_asid(&a, field));
+    }
     return 0;
 }
 
