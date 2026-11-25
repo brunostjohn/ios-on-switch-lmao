@@ -822,13 +822,35 @@ GROUPS: dict[str, list[Check]] = {
             'ca-closure',
             ' cag=',
             'max(cag) == 0',
-            process='backboardd',
             subsystem=GPU_METAL_SUBSYSTEM,
             regex=r'\bgm20b \d+s c=\d+\(.*?\bcag=(?P<cag>\d+)',
-            show=('cag',),
+            show=('process', 'cag'),
             source='drivers/TegraGM20BMetal/TegraGM20BMetalRates.mm (debug builds)',
-            note='backboardd draws zero Core Animation catch-all shaders across the boot on iOS 27 '
-            '(CA_DISABLE_GENERIC_SHADERS=1 in xnu-12377 kern_exec.c; 21H461 keeps the generic)',
+            note='no process draws a Core Animation catch-all shader across the boot: both kernels pass '
+            'CA_DISABLE_GENERIC_SHADERS=1 to every executable (kern_exec.c native_switch_exec_environment); before, '
+            'only backboardd, and SwitchHWTest drew up to 52 a window on 25 Nov',
+        ),
+        Check(
+            'boot.ca-pack-covers-all',
+            'ca-closure',
+            (
+                'SwitchMetal: harvest ',
+                'SwitchMetal: in-process state the pack lacks ',
+                ' state the pack lacks ',
+            ),
+            subsystem=GPU_METAL_SUBSYSTEM,
+            regex=(
+                r'^SwitchMetal: (?:harvest [0-9a-f]{16} 1/\d+ label='
+                r'|in-process state the pack lacks [0-9a-f]{16} \((?:record|refusal)\): label='
+                r'|\S+: a render (?:variant )?state the pack lacks [0-9a-f]{16} \()'
+                r'com\.apple\.coreanimation\.(?P<ca>[^\s)]+)'
+            ),
+            show=('process', 'ca'),
+            source='drivers/TegraGM20BMetal/TegraGM20BMetalStatesMiss.mm (every build), '
+            'TegraGM20BMetalComplete{,Remote}.mm (debug builds)',
+            note='a Core Animation state any process made that the pack lacks, our own apps included: with the '
+            'catch-all off everywhere, each one is made at its first draw; `logharvest` adds them to the corpus. '
+            '25 Nov: SwitchHWTest 18 (13 named in-process), every other process 0',
         ),
         Check(
             'boot.pack-pieces',
