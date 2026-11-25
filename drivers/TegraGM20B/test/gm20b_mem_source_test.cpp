@@ -71,7 +71,7 @@ TEST(GM20BMemSource, BoAllocAndBoImportBuildOutsideTheConnectionLock)
 	EXPECT_TRUE(alloc.between("IOLockLock(lock_);", "IOLockUnlock(lock_);")
 			    .has("const BoCharge charge = chargeBo(in);"));
 	EXPECT_TRUE(alloc.before("const BoCharge charge = chargeBo(in);",
-				 "spareTake(in->bytes, charge.critical)"));
+				 "spareTake(in->bytes, critical_)"));
 	EXPECT_TRUE(alloc.before("cleanZeros(va, backing);",
 				 "ret = settleBo(in, charge, bo, ret, chunksRefused, system);"));
 	EXPECT_FALSE(alloc.has("beginMutation"));

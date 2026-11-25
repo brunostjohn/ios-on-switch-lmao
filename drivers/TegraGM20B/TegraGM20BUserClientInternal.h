@@ -210,7 +210,6 @@ struct SparePool {
 		[kClasses];  // zeroed and clean, by class (classUp(bytes) <= class of a spare's bytes)
 	// by class: ready, the depth kept, on the copy engine, on the dirty list
 	uint16_t count[kClasses], target[kClasses], zeroing[kClasses], dirtyCount[kClasses];
-	bool compositorClass[kClasses];  // the compositor has asked for a spare of the class
 	uint64_t clean, dirtyBytes, cleaningBytes,
 		poolZeroing;  // bytes ready, freed and waiting, pool bytes waiting
 	// a copy-engine fill failed: no spare is made until the next BoAlloc asks

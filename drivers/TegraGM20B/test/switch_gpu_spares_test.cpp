@@ -39,30 +39,6 @@ TEST(Spares, ReadyZeroingAndDirtySparesAllCountTowardTheDepth)
 	EXPECT_FALSE(switch_gpu_spare_short(0, 0, 0, 0));
 }
 
-// 22 Nov: backboardd zero-filled Photos' 24 MiB attachment for 17.3 ms on its render thread with no spare of the class.
-// The class is warm with one spare, and a quarter of the cap is one 24 MiB spare: an app's launch target took it first.
-TEST(Spares, AnAppLeavesTheCompositorsLastSpareAndTeachesTheClassASecond)
-{
-	constexpr uint64_t k24MiB = 24ULL << 20;
-	uint16_t depth = 1, ready = 1;
-	EXPECT_EQ(switch_gpu_spare_depth_cap(k24MiB, SWITCH_GPU_SPARE_CAP_BYTES), 1);
-	EXPECT_TRUE(switch_gpu_spare_kept_for_compositor(false, true, ready));
-	const uint16_t learnt = switch_gpu_spare_depth_after_miss(
-		depth, true, switch_gpu_spare_miss_of(depth, 0, false));
-	const uint16_t most = switch_gpu_spare_depth_cap(k24MiB, SWITCH_GPU_SPARE_CAP_BYTES, true);
-	depth = learnt < most ? learnt : most;
-	EXPECT_EQ(depth, 2);
-	EXPECT_FALSE(switch_gpu_spare_kept_for_compositor(true, true, ready));
-	ready = 2;
-	EXPECT_FALSE(switch_gpu_spare_kept_for_compositor(false, true, ready));
-}
-
-TEST(Spares, AClassTheCompositorNeverAskedForIsFirstComeFirstServed)
-{
-	EXPECT_FALSE(switch_gpu_spare_kept_for_compositor(false, false, 1));
-	EXPECT_EQ(switch_gpu_spare_depth_cap(24ULL << 20, SWITCH_GPU_SPARE_CAP_BYTES, false), 1);
-}
-
 TEST(Spares, AWarmClassDoublesItsDepthAtEachMissUpToTheMaximum)
 {
 	uint16_t depth = 0;
