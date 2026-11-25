@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // The shader compiler's store (compiler/compiler_store.h) and request log (compiler_log.h): a store per stack and pack
 // rules, read whole by other processes and threads while the compiler writes it, whole after a writer killed mid-put, and
-// a full one keeping its newest entries; the log keeps whole requests across a torn tail and only those a replay keeps.
+// a full one keeping its newest entries; the log keeps whole requests across a torn tail and only those a replay keeps,
+// and a later boot reads no further than either one's durable end.
 #include "../compiler/compiler_log.h"
 #include "../compiler/compiler_store.h"
 #include "../gm20b_cache.h"
@@ -12,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <signal.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <atomic>
@@ -342,6 +344,94 @@ TEST_F(SharedStore, TheLogKeepsWholeRequestsAcrossATornTail)
         return true;
     });
     EXPECT_EQ(seen, (std::vector<std::string>{"request 0", "request 2", "request 9"}));
+}
+
+TEST_F(SharedStore, ALaterBootReadsTheLogToItsDurableEnd)
+{
+    const std::string path = (root / "requests").string();
+    {
+        switch_compiler::RequestLog log;
+        ASSERT_TRUE(log.open(path, "boot A"));
+        log.add(digest(0x60), "request 0");
+        log.add(digest(0x61), "request 1");
+        ASSERT_TRUE(log.persist());
+        log.add(digest(0x62), "request 2");
+    }
+    const auto replayed = [&](const char *boot) {
+        switch_compiler::RequestLog log;
+        EXPECT_TRUE(log.open(path, boot));
+        std::vector<std::string> seen;
+        log.replay([&](const std::string &request, gm20b::Digest &name) {
+            seen.push_back(request);
+            name = digest(0x63, uint32_t(seen.size()));
+            return true;
+        });
+        return seen;
+    };
+    EXPECT_EQ(replayed("boot A"), (std::vector<std::string>{"request 0", "request 1", "request 2"}));
+    EXPECT_EQ(replayed("boot B"), (std::vector<std::string>{"request 0", "request 1"}));
+}
+
+// The first layout: each request's length and its FNV-1a, with no header. Its requests are kept, unchecked, in the second.
+TEST_F(SharedStore, ALogOfTheFirstLayoutIsReadAndWrittenInTheSecond)
+{
+    const std::string path = (root / "requests").string();
+    {
+        std::ofstream file(path, std::ios::binary);
+        for (const std::string request : {"request 0", "request 1"}) {
+            const uint32_t head[2] = {uint32_t(request.size()), 0x12345678};
+            file.write(reinterpret_cast<const char *>(head), sizeof head);
+            file.write(request.data(), std::streamsize(request.size()));
+        }
+    }
+    switch_compiler::RequestLog log;
+    ASSERT_TRUE(log.open(path));
+    std::vector<std::string> seen;
+    log.replay([&](const std::string &request, gm20b::Digest &name) {
+        seen.push_back(request);
+        name = digest(0x64, uint32_t(seen.size()));
+        return true;
+    });
+    EXPECT_EQ(seen, (std::vector<std::string>{"request 0", "request 1"}));
+    std::ifstream file(path, std::ios::binary);
+    char magic[8] = {};
+    file.read(magic, sizeof magic);
+    EXPECT_EQ(std::string(magic, sizeof magic), "SWCLOG02");
+}
+
+TEST_F(SharedStore, AReplayThatDropsNothingLeavesTheLogFileAsItIs)
+{
+    const std::string path = (root / "requests").string();
+    {
+        switch_compiler::RequestLog log;
+        ASSERT_TRUE(log.open(path));
+        for (uint8_t i = 0; i < 3; ++i)
+            log.add(digest(0x65, i), "request " + std::to_string(i));
+    }
+    struct stat before = {}, after = {};
+    ASSERT_EQ(stat(path.c_str(), &before), 0);
+    switch_compiler::RequestLog log;
+    ASSERT_TRUE(log.open(path));
+    uint32_t seen = 0;
+    log.replay([&](const std::string &, gm20b::Digest &name) {
+        name = digest(0x66, seen++);
+        return true;
+    });
+    EXPECT_EQ(seen, 3u);
+    ASSERT_EQ(stat(path.c_str(), &after), 0);
+    EXPECT_EQ(after.st_ino, before.st_ino) << "the log was written again with what it already held";
+}
+
+TEST_F(SharedStore, APersistedStoreSyncsOnceForWhatWasPublished)
+{
+    switch_compiler::Store store;
+    open(store);
+    EXPECT_TRUE(store.persist());
+    ASSERT_EQ(store.put(digest(0x54, 1), entryOf(1)), switch_compiler::Store::Put::Added);
+    EXPECT_TRUE(store.persist());
+    EXPECT_TRUE(store.persist());
+    std::string bytes;
+    EXPECT_TRUE(store.find(digest(0x54, 1), bytes) && whole(bytes, 1));
 }
 
 TEST_F(SharedStore, AFullLogDropsItsOldestRequests)

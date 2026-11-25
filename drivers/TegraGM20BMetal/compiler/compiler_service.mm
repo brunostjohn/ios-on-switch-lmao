@@ -27,6 +27,7 @@
 #include "compiler_debug.h"
 #include "compiler_engine.h"
 #include "compiler_log.h"
+#include "compiler_persist.h"
 #include "compiler_pool.h"
 #include "compiler_refusals.h"
 #include "compiler_restart.h"
@@ -124,6 +125,7 @@ private:
     std::unique_ptr<Pool> pool_;
     size_t bufferBytes_ = 1u << 20;
     std::unique_ptr<uint8_t[]> buffer_ = untouched(bufferBytes_);
+    Persister persister_{[this] { persist(); }};
 
     int call(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize)
     {
@@ -145,6 +147,7 @@ private:
 
     std::mutex publishLock_;
 
+    void persist();
     int32_t run(Work &work);
     void remember(const Asked &asked, int32_t ran);
     bool publish(const gm20b::Digest *name, const gm20b::CacheKey &key, const std::string &entry, bool slots,
@@ -192,7 +195,18 @@ bool Service::publish(const gm20b::Digest *name, const gm20b::CacheKey &key, con
     }
     if (put != Store::Put::Added)
         why = "the store took no entry";
+    else
+        persister_.soon();
     return put == Store::Put::Added;
+}
+
+void Service::persist()
+{
+    if (!store_.persist())
+        os_log_error(logger(), "SwitchShaderCompiler: the store not synced (%d): a crash before the next sync drops its newest "
+                               "entries", errno);
+    if (!log_.persist())
+        os_log_error(logger(), "SwitchShaderCompiler: the request log not synced (%d)", errno);
 }
 
 int32_t Service::run(Work &work)
@@ -247,8 +261,10 @@ void Service::remember(const Asked &asked, int32_t ran)
     const int32_t result = ran & 0xff;
     if (ran & kStoredBit)
         return;
-    if ((result == TegraGM20BCompileMade || result == TegraGM20BCompileRefused) && !asked.request.empty())
+    if ((result == TegraGM20BCompileMade || result == TegraGM20BCompileRefused) && !asked.request.empty()) {
         log_.add(asked.prepared.name, asked.request);
+        persister_.soon();
+    }
     if (result == TegraGM20BCompileRefused)
         refusals_->confirm(asked.prepared.name);
 }

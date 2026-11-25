@@ -148,6 +148,7 @@ Store::Put Store::putProgramSlots(const gm20b::CacheKey &key, const std::string 
 
 bool Store::makeRoom(std::string &error)
 {
+    std::lock_guard<std::mutex> p(persistLock_);
     std::lock_guard<std::mutex> l(lock_);
     writer_.close();
     if (!switch_seed_pack::compactStore(path_, identity_, kSlots, kDataBytes, error, kDataBytes / 2, kSlots / 4)) {
@@ -155,6 +156,24 @@ bool Store::makeRoom(std::string &error)
         error = "the full store could not be written again (" + error + "): made anew";
     }
     return writer_.open(path_, identity_, kSlots, kDataBytes, error);
+}
+
+bool Store::persist()
+{
+    std::lock_guard<std::mutex> p(persistLock_);
+    switch_seed_pack::StoreWriter::Pending pending;
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        if (!writer_.pending(pending))
+            return true;
+    }
+    if (!writer_.sync(pending))
+        return false;
+    {
+        std::lock_guard<std::mutex> l(lock_);
+        writer_.markDurable(pending);
+    }
+    return writer_.syncMark();
 }
 
 }  // namespace switch_compiler

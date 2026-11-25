@@ -3,8 +3,8 @@
 // <root>/raw-<stack>-<rules>/store, named by the build's stack key and the installed pack's rules (a device-made record
 // holds registers by the pack's varying set and baseline, which no stack key names), every other directory under <root>
 // removed when it opens. Its entries are the runtime's own (gm20b_cache.h encodeEntry, encodeKernelEntry: a record or
-// its refusal, checked against the full key and a checksum by every reader), each under its storeName. A full store is
-// written again with its newest half (makeRoom), never refusing an entry.
+// its refusal, checked against the full key by every reader), each under its storeName. A full store is written again
+// with its newest half (makeRoom), never refusing an entry. persist() makes what was published durable for a later boot.
 #pragma once
 #include <cstdint>
 #include <mutex>
@@ -43,6 +43,9 @@ public:
     // The store written again with its newest entries in half of it, renamed over the old file (which a client still
     // mapping keeps reading whole): its new mapping is to be registered again. False with `error`.
     bool makeRoom(std::string &error);
+    // Every entry published so far synced, and the store marked so (SwitchSeedStore.h StoreWriter::persist). Its syncs
+    // hold no lock a put or find takes; a makeRoom waits for one.
+    bool persist();
 
     const uint8_t *base() const
     {
@@ -66,6 +69,8 @@ public:
     }
 
 private:
+    // persistLock_ then lock_: a persist syncs the file outside lock_, so the file it syncs must stay open meanwhile
+    std::mutex persistLock_;
     mutable std::mutex lock_;
     switch_seed_pack::StoreWriter writer_;
     std::string path_;
