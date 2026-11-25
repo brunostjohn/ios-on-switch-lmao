@@ -602,6 +602,39 @@ TEST_F(TurnedSurface, TheDestinationIsTheDecodersPictureTurnedForTheDisplayOnly)
     switch_native_surface_release(&view);
 }
 
+// TegraVIC reserves a job's destination for writing when it queues the job, so the external display does not latch it
+// before VIC is done, and its engine thread holds that reservation while it records the turn. The record is made under
+// it: a reservation of its own would wait on the job's for ever.
+TEST_F(TurnedSurface, ARecordMadeUnderTheJobsReservationTakesNoSecondOne)
+{
+    ASSERT_EQ(switch_native_surface_publish(&surface, &picture), 0);
+    SwitchVICWriteReservation held = {};
+    switch_vic_surface_reserve_write(&turned, &held);
+    ASSERT_NE(held.lease, nullptr);
+    ASSERT_EQ(held.backing, &replacement);
+    const unsigned reservations = gpuReservations;
+    SwitchNativeSurfaceView source = {};
+    ASSERT_EQ(switch_native_surface_acquire(&surface, &source, false), 0);
+    auto published = std::async(std::launch::async, [&] {
+        return switch_native_surface_publish_turned(&turned, source, op, 0, nullptr, nullptr, &held);
+    });
+    const bool waited = published.wait_for(std::chrono::seconds(5)) != std::future_status::ready;
+    if (waited)
+        switch_vic_surface_release_write(&held);  // lets the stuck publication through so the test can end
+    EXPECT_FALSE(waited) << "the record waited on the job's own reservation";
+    EXPECT_EQ(published.get(), 0);
+    switch_native_surface_release(&source);
+    EXPECT_EQ(gpuReservations, reservations);
+    EXPECT_EQ(replacement.writers, waited ? 0u : 1u);
+    switch_vic_surface_release_write(&held);
+    EXPECT_EQ(replacement.writers, 0u);
+    SwitchNativeSurfaceView view = {};
+    ASSERT_EQ(switch_native_surface_acquire(&turned, &view, false, true), 0);
+    EXPECT_EQ(view.native, &native);
+    EXPECT_EQ(view.turn.transform, 7u);
+    switch_native_surface_release(&view);
+}
+
 // The display's acquire of a turned destination (SwitchLandscapeSelection.h): the decoder's picture, read-leased, with
 // the turn; without `turns` the destination is not a picture the display may scan as it is.
 TEST_F(TurnedSurface, TheDisplayAcquiresTheTurnedPictureItself)

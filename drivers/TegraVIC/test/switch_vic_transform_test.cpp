@@ -179,14 +179,17 @@ unsigned publishedTurns = 0;
 }
 
 SwitchVICEvents *publishedEvents = nullptr;
+const SwitchVICWriteReservation *publishedHeld = nullptr;
 
 int switch_native_surface_publish_turned(const TegraVICSurface *, const SwitchNativeSurfaceView &source,
-                                         const TegraVICOp &op, uint32_t, const char **, SwitchVICEvents *events)
+                                         const TegraVICOp &op, uint32_t, const char **, SwitchVICEvents *events,
+                                         const SwitchVICWriteReservation *held)
 {
     EXPECT_EQ(source.native, &inputNative);
     EXPECT_EQ(op.transform, 7u);
     ++publishedTurns;
     publishedEvents = events;
+    publishedHeld = held;
     return 0;
 }
 
@@ -478,6 +481,7 @@ protected:
         SwitchVICTransformTest::SetUp();
         publishedTurns = 0;
         publishedEvents = nullptr;
+        publishedHeld = nullptr;
         auto &d = destination.desc;
         d.fourcc = TEGRA_VIC_FOURCC('4', '2', '0', 'v');
         d.width = 720;
@@ -493,11 +497,21 @@ protected:
         plan.op[0].transform = 7;
     }
 
-    int defer(SwitchVICEvents **events, const SwitchDisplayTraits &traits = kProven)
+    int defer(SwitchVICEvents **events, const SwitchDisplayTraits &traits = kProven,
+              const SwitchVICWriteReservation *held = nullptr)
     {
-        return switch_vic_turn_defer(&source, &destination, &plan, 0, events, traits);
+        return switch_vic_turn_defer(&source, &destination, &plan, 0, events, traits, held);
     }
 };
+
+// The job's write reservation from when it was queued is the record's: TegraVIC's engine thread holds it across the
+// turn, so a reservation of the record's own would never be granted.
+TEST_F(TurnDefer, TheJobsReservationGoesWithTheRecord)
+{
+    SwitchVICWriteReservation held = {};
+    EXPECT_EQ(defer(nullptr, kProven, &held), 1);
+    EXPECT_EQ(publishedHeld, &held);
+}
 
 TEST_F(TurnDefer, AProvenTurnIsRecordedAndNothingIsSubmitted)
 {

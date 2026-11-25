@@ -102,7 +102,8 @@ int switch_vic_turn_surface(const SwitchNativeSurfaceView &source, const TegraVI
 }
 
 int switch_vic_turn_defer(const TegraVICSurface *source, const TegraVICSurface *destination, const TegraVICPlan *plan,
-                          uint32_t chromaSite, SwitchVICEvents **events, const SwitchDisplayTraits &traits)
+                          uint32_t chromaSite, SwitchVICEvents **events, const SwitchDisplayTraits &traits,
+                          const SwitchVICWriteReservation *held)
 {
     if (!traits.columnScanYuv || !source || !destination || !plan || plan->count != 1 || !plan->readsSource ||
         source->memory == destination->memory)
@@ -120,7 +121,8 @@ int switch_vic_turn_defer(const TegraVICSurface *source, const TegraVICSurface *
                         kTegraVICWindowBase + TEGRA_VIC_WINDOW_DST * kTegraVICWindowBytes, &check);
     SwitchVICEvents *taken = events ? *events : nullptr;
     const int error =
-        why ? -95 : switch_native_surface_publish_turned(destination, picture, plan->op[0], chromaSite, nullptr, taken);
+        why ? -95
+            : switch_native_surface_publish_turned(destination, picture, plan->op[0], chromaSite, nullptr, taken, held);
     switch_native_surface_release(&picture);
     if (error)
         return 0;

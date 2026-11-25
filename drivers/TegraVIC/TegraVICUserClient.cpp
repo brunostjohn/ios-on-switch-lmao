@@ -331,7 +331,8 @@ bool runJob(Job *job, IOReturn *status)
     SwitchDisplayTraits traits = switch_display_traits();
     traits.columnScanYuv = traits.columnScanYuv && switch_display_landscape_ready();
     if (!job->bounceDst &&
-        switch_vic_turn_defer(&job->src, &job->dst, &job->plan, job->chromaSite, &job->events, traits)) {
+        switch_vic_turn_defer(&job->src, &job->dst, &job->plan, job->chromaSite, &job->events, traits,
+                              &dstReserve.reservation)) {
 #if TEGRA_VIC_STATS
         switch_vic_turn_count(job->origin, false, true, eventTurn, mach_absolute_time() - entered);
 #endif
@@ -629,9 +630,7 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
     IOLockUnlock(conn->lock);
     job->eventReady = job->events == nullptr;
     const bool async = job->async;
-    const bool mayDeferTurn = !job->bounceDst && job->plan.count == 1 &&
-                              (job->plan.op[0].transform & TEGRA_VIC_ROT90) != 0 && job->dst.desc.planes == 2;
-    if (!job->events && !mayDeferTurn)
+    if (!job->events)
         switch_vic_surface_reserve_write(&job->dst, &job->dstReserve);
     switch_vic_events_arm(job->events);
     if (!queueJob(job)) {

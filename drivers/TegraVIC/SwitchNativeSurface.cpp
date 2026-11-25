@@ -11,6 +11,7 @@
 #include "SwitchVICSurfaceRange.h"
 #include "SwitchVICTurn.h"
 #include "SwitchVICEvents.h"
+#include "SwitchVICSurfaceAccess.h"
 #include "../TegraGM20B/TegraGM20BViews.h"
 #include "../TegraGM20B/SwitchGpuAdmission.h"
 #include "../../kits/SwitchDMA/SwitchDMAPages.h"
@@ -317,8 +318,11 @@ static bool claimPrepare(SwitchNativeSurface *native)
     return claimed;
 }
 
+// held: the caller's own write reservation on this surface (SwitchVICSurfaceAccess.h). Its lease stands in for a new
+// one, which would wait on it for ever; *borrowed then says the lease stays the caller's to release.
 static int reserveSurface(const TegraVICSurface *surface, const switch_gpu_backing *picture,
-                          switch_gpu_backing **logical, switch_gpu_cpu_lease **owned, const char **why)
+                          switch_gpu_backing **logical, switch_gpu_cpu_lease **owned, const char **why,
+                          const SwitchVICWriteReservation *held = nullptr, bool *borrowed = nullptr)
 {
     *logical = switch_vic_surface_backing(surface);
     *why = !*logical             ? "native export into a surface without a backing of its own"
@@ -326,12 +330,20 @@ static int reserveSurface(const TegraVICSurface *surface, const switch_gpu_backi
                                  : "native export into a surface whose backing would not reserve a conversion";
     if (!*logical)
         return -12;
-    return *logical == picture ? -22 : switch_gpu_backing_conversion_reserve(*logical, kWrite, 0, owned);
+    if (*logical == picture)
+        return -22;
+    if (held && held->lease && held->backing == *logical && borrowed) {
+        *owned = held->lease;
+        *borrowed = true;
+        return 0;
+    }
+    return switch_gpu_backing_conversion_reserve(*logical, kWrite, 0, owned);
 }
 
 // `next` in place of the surface's native picture: its own rows invalidated, the attachment replaced. first: the
 // surface had no native picture before.
-static int install(const TegraVICSurface *surface, SwitchNativeSurface *next, const char **why, bool *first)
+static int install(const TegraVICSurface *surface, SwitchNativeSurface *next, const char **why, bool *first,
+                   const SwitchVICWriteReservation *held = nullptr)
 {
     *why = "native export into a surface another publication holds";
     int error = SwitchMemoryAttachment::enterExclusive(surface->memory, false);
@@ -339,7 +351,8 @@ static int install(const TegraVICSurface *surface, SwitchNativeSurface *next, co
         return error;
     switch_gpu_backing *logical = nullptr;
     switch_gpu_cpu_lease *owned = nullptr;
-    error = reserveSurface(surface, next->native, &logical, &owned, why);
+    bool borrowed = false;
+    error = reserveSurface(surface, next->native, &logical, &owned, why, held, &borrowed);
     auto *old = error ? nullptr : copy(surface->memory);
     *first = !old;
     bool installed = false;
@@ -366,7 +379,7 @@ static int install(const TegraVICSurface *surface, SwitchNativeSurface *next, co
     }
     if (!error)
         tegra_vic_surface_written(surface);
-    if (owned)
+    if (owned && !borrowed)
         switch_gpu_backing_cpu_release_owned(&owned, 0);
     if (logical)
         switch_gpu_backing_release(logical);
@@ -644,7 +657,7 @@ extern "C" void switch_native_surface_gpu_written(void *owner)
 
 int switch_native_surface_publish_turned(const TegraVICSurface *destination, const SwitchNativeSurfaceView &source,
                                          const TegraVICOp &op, uint32_t chromaSite, const char **why,
-                                         SwitchVICEvents *events)
+                                         SwitchVICEvents *events, const SwitchVICWriteReservation *held)
 {
     const char *unused = nullptr;
     if (!why)
@@ -686,7 +699,7 @@ int switch_native_surface_publish_turned(const TegraVICSurface *destination, con
     }
     next->events = events;
     if (!error)
-        error = install(destination, next, why, &first);
+        error = install(destination, next, why, &first, held);
     if (!error)
         switch_native_surface_count(made, first);
     if (error)
