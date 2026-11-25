@@ -162,6 +162,28 @@ struct DeviceMotionTest: HWTest {
         return acos(max(-1, min(1, zip(a, b).map { $0 * $1 }.reduce(0, +) / norms))) * 180 / .pi
     }
 
+    /// Where the samples were fused, from SwitchMotion's counters across the run; the detail when they are absent.
+    /// 24B119 opens {0xff0c, 5} for this frame (CLDeviceMotion::enableSensorFusionWithMode, mode 3, caps bit 4); which
+    /// 21H461 mode .xArbitraryZVertical takes was not read, and there SpringBoard's parallax streams the raw gyroscope
+    /// itself, so the rows are 24B119's only.
+    static func driverChecks(
+        _ before: MotionDriver.State?, _ during: MotionDriver.State?, samples: Int, _ checks: inout [(String, Bool)],
+        _ metrics: inout Metrics
+    ) -> String {
+        guard let before, let during else {
+            return "SwitchMotion's counters are not published (release kernel): where it was fused is not checked"
+        }
+        let fused = Double(during.reports &- before.reports)
+        metrics.set("driver_reports", fused, digits: 0)
+        metrics.set("raw_gyro_us", Int(during.gyroUS))
+        guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 else { return "" }
+        checks += [
+            ("fused in SwitchMotion: its reports grew with the samples", fused >= 0.8 * Double(samples)),
+            ("nobody streamed the raw gyroscope (CPU fusion needs it)", during.gyroUS == 0),
+        ]
+        return ""
+    }
+
     func run(_ context: TestContext) async throws -> Outcome {
         let manager = Motion.manager
         guard manager.isDeviceMotionAvailable else { return .fail("isDeviceMotionAvailable is false") }
@@ -222,24 +244,7 @@ struct DeviceMotionTest: HWTest {
             ("gravity within 5 degrees of the accelerometer's", angle < 5),
             ("little user acceleration while still (< 0.1 g)", user < 0.1),
         ]
-        var detail = ""
-        // 24B119 opens {0xff0c, 5} for this frame (CLDeviceMotion::enableSensorFusionWithMode, mode 3, caps bit 4);
-        // which 21H461 mode .xArbitraryZVertical takes was not read, and there SpringBoard's parallax streams the raw
-        // gyroscope itself, so the driver rows are 24B119's only.
-        let judgesDriver = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27
-        if let before, let during {
-            let fused = Double(during.reports &- before.reports)
-            metrics.set("driver_reports", fused, digits: 0)
-            metrics.set("raw_gyro_us", Int(during.gyroUS))
-            if judgesDriver {
-                checks += [
-                    ("fused in SwitchMotion: its reports grew with the samples", fused >= 0.8 * Double(samples.count)),
-                    ("nobody streamed the raw gyroscope (CPU fusion needs it)", during.gyroUS == 0),
-                ]
-            }
-        } else {
-            detail = "SwitchMotion's counters are not published (release kernel): where it was fused is not checked"
-        }
+        let detail = Self.driverChecks(before, during, samples: samples.count, &checks, &metrics)
         let outcome = Outcome.judged(checks, metrics, detail: detail)
         guard outcome.verdict == .pass, tilt < 10 else { return outcome }
         return .skip(
