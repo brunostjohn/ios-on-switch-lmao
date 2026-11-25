@@ -117,12 +117,8 @@ public struct SurfaceCrossProcessTest: HWTest {
         if order == "unlocked" { return (surface, sampler) }
         if order == "nvjpg" {
             guard let file = JPEGSurfaceDecode.file(size) else { throw TestFailure("no JPEG of \(size)") }
-            let before = try? JPEGRoute.decodes().get()
             let failure = JPEGSurfaceDecode.decode(file, into: surface)
             metrics.set("nvjpg\(size)_decode", failure?.description ?? "ok")
-            if let before, let after = try? JPEGRoute.decodes().get() {
-                metrics.set("nvjpg\(size)_route", JPEGRoute.routes(from: before, to: after))
-            }
             return failure == nil ? (surface, sampler) : nil
         }
         if order == "cpu" {
