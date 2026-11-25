@@ -11,6 +11,7 @@
 #   bazel build --config=ios27 //tools/gpu/maxwell:hot_pack   (the states devices drew, in minutes: hotcorpus.py)
 #   bazel run //tools/gpu/maxwell:hotstat -- <hot_pack dir> --corpus $PWD/tools/gpu/maxwell/testdata/hot_24B119.corpus
 #       [--json out.json] [--before before.json]   (every stage's code, by state; a before/after table)
+#   python3 tools/gpu/maxwell/hotgate.py <before hot_pack dir> <after> --corpus ...   (gate.py over two hot packs)
 #
 # direct_exec_test runs the driver's direct compile of direct/exec.metal's states and kernels and the counter resolve
 # kernel (direct/directrun.mm, built on this Mac beside the shader tools' mock GM20B) and executes their programs here.
