@@ -1,5 +1,6 @@
 """Boot-entry and overlay sync, and the log pull, on plain directories (no card)."""
 
+import contextlib
 import json
 import os
 import plistlib
@@ -378,6 +379,28 @@ class KindTest(unittest.TestCase):
             ):
                 deploy._checked(args, Log())
             self.assertEqual(resolve.call_count, int(build == '24B119'))
+
+    def test_the_card_is_refused_before_anything_is_written_when_its_translated_tree_is_untrusted(self):
+        data = self.pins.parent / 'data'
+        (data / 'Switch').mkdir(parents=True)
+        trust = self.pins.parent / 'os.trustcache'
+        trust.write_bytes(b'')
+        args = deploy._parser().parse_args(
+            ['disk9', '--boot-package', 'unused', '--ipsw', str(self.pins), '--spec', 'unused']
+            + ['--pretranslated-trust', str(trust)]
+        )
+        target = mock.Mock(content='Apple_APFS')
+        with (
+            mock.patch.object(deploy.host, 'check_tools'),
+            mock.patch.object(pull_logs, 'load_spec', return_value={'volumes': {'data': {'uuid': 'data'}}}),
+            mock.patch.object(cards, 'resolve', return_value=self.card),
+            mock.patch.object(cards, 'check_layout_unprivileged', return_value=(mock.Mock(), target)),
+            mock.patch.object(pull_logs, 'data_volume', return_value='disk9s5'),
+            mock.patch.object(cards, 'mounted', return_value=contextlib.nullcontext(data)) as mounted,
+            self.assertRaisesRegex(cards.RefusedError, '//install:sd'),
+        ):
+            deploy._checked(args, Log())
+        mounted.assert_called_once_with('disk9s5', mock.ANY, read_only=True)
 
 
 class JoyConPairingTest(unittest.TestCase):

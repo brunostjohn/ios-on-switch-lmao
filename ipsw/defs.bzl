@@ -152,7 +152,10 @@ def _ipsw_pretranslated_impl(ctx):
     return [
         DefaultInfo(files = depset(checked.values())),
         PretranslatedPinsInfo(trust = trust, cache_list = checked.get(_CACHE_LIST), pins = pins_file),
-        OutputGroupInfo(pins = depset([pins_file] if pins_file else [])),
+        OutputGroupInfo(
+            pins = depset([pins_file] if pins_file else []),
+            os_trust = depset([checked["os.trustcache"]] if "os.trustcache" in checked else []),
+        ),
     ]
 
 ipsw_pretranslated = rule(

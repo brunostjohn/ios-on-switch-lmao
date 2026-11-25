@@ -11,7 +11,9 @@ Steps:
   2 boot entry     switchroot/ios/* and bootloader/ini/ios.ini on the FAT: only files that differ are
                    copied, stale files in switchroot/ios/ removed (never the user's bootargs.txt or the install
                    images' NAME.SII.NNN parts), AppleDouble files by name; nothing else on the FAT. Refused
-                   when the card's iOS is another kind than the build's (its System volume is not the IPSW's)
+                   when the card's iOS is another kind than the build's (its System volume is not the IPSW's),
+                   and on iOS 27 when a translated System file on the card is not in this build's os.trustcache
+                   (translated_tree.py: that tree is //install:sd's)
   3 overlay        <Data>/Switch/overlay := the package's overlay/; <Data>/Switch/deployed.json := the checkout's
                    commit, which tools/hwtest joins HW Test's reports with (deployed.py); each app the overlay's
                    /Applications added, changed or removed goes into <Data>/Switch/app-registration.plist, which
@@ -67,6 +69,7 @@ from tools.deploy import (
     poster_snapshots,
     pull_logs,
     system_apps,
+    translated_tree,
 )
 from tools.install import (
     bootstrap,
@@ -159,6 +162,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument('--boot-package', required=True)
     parser.add_argument('--spec', required=True)
     parser.add_argument('--ipsw', help="the IPSW kind's pins (//install:ipsw_pins): the System volume it installs")
+    parser.add_argument(
+        '--pretranslated-trust', help="iOS 27: this build's os.trustcache (//ipsw:pretranslated_os_trust)"
+    )
     parser.add_argument('--gpu-bundle')
     parser.add_argument('--stager')
     parser.add_argument('--kcdata')
@@ -182,6 +188,9 @@ def _checked(args: argparse.Namespace, log: host.Log) -> tuple[cards.Card, dict,
     if not data:
         raise cards.RefusedError(f'{card.disk}: no iPad Data volume {data_uuid}')
     check_kind(card, args.ipsw)
+    if args.pretranslated_trust:
+        with cards.mounted(data, log, read_only=True) as data_root:
+            translated_tree.check(data_root, Path(args.pretranslated_trust))
     gpu = Path(args.gpu_bundle) if args.gpu_bundle else None
     if not args.remove_gpu and not (gpu and (gpu.is_file() or (gpu / 'TegraGM20BMetal.trustcache').is_file())):
         raise host.HostError('no GPU bundle (--//deploy:gpu_bundle names //gpu:bundle or a directory like //gpu:base)')
@@ -355,7 +364,7 @@ def _eject(card: cards.Card, target: object, log: host.Log) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    for name in ('boot_package', 'spec', 'ipsw', 'gpu_bundle', 'stager', 'kcdata'):
+    for name in ('boot_package', 'spec', 'ipsw', 'pretranslated_trust', 'gpu_bundle', 'stager', 'kcdata'):
         setattr(args, name, paths.located(getattr(args, name)))
     log = host.Log(args.log or paths.run_log('deploy', 'switch-ios-install'))
     try:
