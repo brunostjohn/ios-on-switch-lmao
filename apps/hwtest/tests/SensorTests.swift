@@ -102,12 +102,29 @@ struct GyroscopeTest: HWTest {
 /// What SwitchMotion reports of itself on debug kernels (drivers/SwitchMotion/SwitchMotion.cpp serializeProperties):
 /// the device motion reports it has fused and sent since boot, the fast path copies that answered one
 /// (SwitchHIDFastPath.cpp), and the raw gyroscope's report interval, 0 while no client streams it. nil without the
-/// driver or the properties (a release kernel).
+/// driver or the properties.
 enum MotionDriver {
     struct State {
         let reports: UInt64
         let copies: UInt64
         let gyroUS: UInt32
+    }
+
+    enum Kernel: Equatable {
+        case development, release
+        case unknown(String)
+    }
+
+    /// From kern.version's object directory (".../DEVELOPMENT_ARM64_BCM2837"): only a release kernel lacks the counters.
+    static func kernel() -> Kernel {
+        switch KernelSysctl.string("kern.version") {
+        case .value(let version):
+            if version.contains("/RELEASE_") { return .release }
+            if version.contains("/DEVELOPMENT_") { return .development }
+            return .unknown("kern.version names neither configuration: \(version)")
+        case .failed(let error):
+            return .unknown("kern.version unreadable (\(KernelSysctl.code(error)))")
+        }
     }
 
     typealias Matching = @convention(c) (UnsafePointer<CChar>) -> CFMutableDictionary?
@@ -165,8 +182,8 @@ struct DeviceMotionTest: HWTest {
         return acos(max(-1, min(1, zip(a, b).map { $0 * $1 }.reduce(0, +) / norms))) * 180 / .pi
     }
 
-    /// Where the samples were fused, from SwitchMotion's counters across the run; the detail when they are absent.
-    /// 24B119 opens {0xff0c, 5} for this frame
+    /// Where the samples were fused, from SwitchMotion's counters across the run; the detail when they are absent. A
+    /// development kernel always publishes them, so their absence there fails. 24B119 opens {0xff0c, 5} for this frame
     /// (CLDeviceMotion::enableSensorFusionWithMode, mode 3, caps bit 4) and reads the latest report through the fast path
     /// (CLSensorFusionServiceSPU); which 21H461 mode .xArbitraryZVertical takes was not read, and there SpringBoard's
     /// parallax streams the raw gyroscope itself, so the fusion rows are 24B119's only.
@@ -174,8 +191,18 @@ struct DeviceMotionTest: HWTest {
         _ before: MotionDriver.State?, _ during: MotionDriver.State?, samples: Int, _ checks: inout [(String, Bool)],
         _ metrics: inout Metrics
     ) -> String {
+        switch MotionDriver.kernel() {
+        case .release:
+            return "a release kernel publishes no SwitchMotion counters: where it was fused is not checked"
+        case .unknown(let what):
+            checks.append(("the kernel's configuration is known", false))
+            return what
+        case .development:
+            break
+        }
         guard let before, let during else {
-            return "SwitchMotion's counters are not published (release kernel): where it was fused is not checked"
+            checks.append(("SwitchMotion publishes its counters (a development kernel)", false))
+            return "no SwitchMotion service, or no DeviceMotionReports/DeviceMotionFastPathCopies/GyroReportInterval"
         }
         let fused = Double(during.reports &- before.reports)
         let copied = during.copies &- before.copies
