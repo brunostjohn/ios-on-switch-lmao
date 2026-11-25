@@ -83,11 +83,25 @@ class Motion(unittest.TestCase):
         self.assertEqual(got['motion.device-motion-interval'].verdict, INFO)
         self.assertEqual(got['motion.device-motion-rejected'].verdict, PASS)
 
-    def test_a_fast_path_coremotion_cannot_open_fails(self):
-        got = results(record('[FastPath] openFastPathPrivate() failed,serviceRef,<IOHIDServiceClient>', SPRINGBOARD))
-        self.assertEqual(got['motion.fastpath-open.SpringBoard'].verdict, FAIL)
-        got = results(record('[FastPath] openFastPathPrivate() failed,serviceRef,<IOHIDServiceClient>', LOCATIOND))
-        self.assertEqual(got['motion.fastpath-open.locationd'].verdict, INFO)
+    def test_a_fast_path_coremotion_cannot_open_fails_where_the_sandbox_admits_it(self):
+        failed = '[FastPath] openFastPathPrivate() failed,serviceRef,<IOHIDServiceClient>'
+        for process, name in ((SPRINGBOARD, 'SpringBoard'), (LOCATIOND, 'locationd')):
+            self.assertEqual(results(record(failed, process))[f'motion.fastpath-open.{name}'].verdict, FAIL, name)
+        self.assertEqual(results(record(failed, BACKBOARDD))['motion.fastpath-open.backboardd'].verdict, INFO)
+
+    def test_a_copy_without_a_report_is_expected_only_as_its_process_starts_a_session(self):
+        start = '[CLIoHidInterface] Property for usage pair {65292, 5}: {ReportInterval = 10000} was set successfully'
+        copy = '[FastPath] copyEventPrivate() Failed (e00002c0)'
+        got = results(
+            record(start, SPRINGBOARD), {**record(copy, SPRINGBOARD), 'timestamp': '2026-11-22 23:53:00.500000+0000'}
+        )
+        self.assertEqual(got['motion.fastpath-copy'].verdict, PASS)
+        got = results(record(start, SPRINGBOARD), record(copy, SPRINGBOARD, 5))
+        self.assertEqual(got['motion.fastpath-copy'].verdict, FAIL)
+        got = results(
+            record(start, SPRINGBOARD), {**record(copy, LOCATIOND), 'timestamp': '2026-11-22 23:53:00.500000+0000'}
+        )
+        self.assertEqual(got['motion.fastpath-copy'].verdict, FAIL)
 
     def test_a_report_coremotion_refuses_fails(self):
         got = results(record('Bad device motion report,type,3,size,52', SPRINGBOARD))
@@ -105,9 +119,7 @@ class Motion(unittest.TestCase):
                 'motion.spu-added-ungated',
                 'motion.locationd-spu',
                 'motion.device-motion-interval',
-                'motion.fastpath-copy',
                 'motion.fastpath-open.backboardd',
-                'motion.fastpath-open.locationd',
             ):
                 self.assertEqual(result.verdict, PASS, name)
 

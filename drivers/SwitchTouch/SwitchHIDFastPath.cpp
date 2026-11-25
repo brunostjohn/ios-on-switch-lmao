@@ -17,7 +17,8 @@
 //    the sandbox's call (tools/devicerun/motion.py);
 //  * copyEventForClient (reserved 15) answers the latest report's event, retained; the user client copies it into the
 //    shared memory its client reads. None between sessions (switch_hid_forget_latest): CoreMotion then logs a failed
-//    copy and takes the pushed sample (21H461's getter, locationd 0x100528874), which beats one from the session before;
+//    copy and takes the pushed sample (21H461's getter, locationd 0x100528874), which beats one from the session before.
+//    Debug kernels count the answers (switch_hid_fastpath_copies);
 //  * closeForClient (reserved 19) has nothing to undo;
 //  * dispatchEvent (reserved 8, as the touch edge wrapper's) dispatches the event, then keeps it as the latest, so a
 //    copy never answers an event the event system has not had yet.
@@ -68,6 +69,9 @@ uintptr_t originalDispatch;
 // A spin lock around a pointer swap and a retain.
 IOSimpleLock *lock;
 OSObject *latest;
+#if DEVELOPMENT || DEBUG
+uint64_t copies;
+#endif
 
 template <typename R, typename... A> R call(void *object, unsigned slot, A... args)
 {
@@ -99,6 +103,10 @@ OSObject *copyEventForClient(IOService *, OSObject *, IOOptionBits, void *)
     if (event)
         event->retain();
     IOSimpleLockUnlock(lock);
+#if DEVELOPMENT || DEBUG
+    if (event)
+        __atomic_fetch_add(&copies, 1, __ATOMIC_RELAXED);
+#endif
     return event;
 }
 
@@ -206,3 +214,10 @@ void switch_hid_forget_latest(IOService *device)
     if (device == motionDevice && __atomic_load_n(&lock, __ATOMIC_ACQUIRE))
         keep(nullptr);
 }
+
+#if DEVELOPMENT || DEBUG
+uint64_t switch_hid_fastpath_copies()
+{
+    return __atomic_load_n(&copies, __ATOMIC_RELAXED);
+}
+#endif

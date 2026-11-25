@@ -576,18 +576,22 @@ class SwitchMotion : public IOService {
 
 public:
 #if DEVELOPMENT || DEBUG
-    // Debug kernels: DeviceMotionReports, the device motion reports sent since boot, and GyroReportInterval, the raw
-    // gyroscope's client interval (0: nobody streams it, so nobody fuses on the CPU), read live by SwitchHWTest's
-    // sensor.device_motion through IORegistryEntryCreateCFProperties.
+    // Debug kernels: DeviceMotionReports, the device motion reports sent since boot, DeviceMotionFastPathCopies, the
+    // fast path copies that answered one (SwitchHIDFastPath.cpp), and GyroReportInterval, the raw gyroscope's client
+    // interval (0: nobody streams it, so nobody fuses on the CPU), read live by SwitchHWTest's sensor.device_motion
+    // through IORegistryEntryCreateCFProperties.
     bool serializeProperties(OSSerialize *serializer) const override
     {
         OSDictionary *properties = dictionaryWithProperties();
         const OSNumber *reports = OSNumber::withNumber(__atomic_load_n(&motionReports, __ATOMIC_RELAXED), 64);
+        const OSNumber *copies = OSNumber::withNumber(switch_hid_fastpath_copies(), 64);
         const OSNumber *gyro = OSNumber::withNumber(__atomic_load_n(&intervalUS[Gyro], __ATOMIC_RELAXED), 32);
-        const bool ok = (properties != nullptr) && (reports != nullptr) && (gyro != nullptr) &&
+        const bool ok = (properties != nullptr) && (reports != nullptr) && (copies != nullptr) && (gyro != nullptr) &&
                         properties->setObject("DeviceMotionReports", reports) &&
+                        properties->setObject("DeviceMotionFastPathCopies", copies) &&
                         properties->setObject("GyroReportInterval", gyro) && properties->serialize(serializer);
         OSSafeReleaseNULL(gyro);
+        OSSafeReleaseNULL(copies);
         OSSafeReleaseNULL(reports);
         OSSafeReleaseNULL(properties);
         return ok;

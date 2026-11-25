@@ -100,11 +100,13 @@ struct GyroscopeTest: HWTest {
 }
 
 /// What SwitchMotion reports of itself on debug kernels (drivers/SwitchMotion/SwitchMotion.cpp serializeProperties):
-/// the device motion reports it has fused and sent since boot, and the raw gyroscope's report interval, 0 while no
-/// client streams it. nil without the driver or the properties (a release kernel).
+/// the device motion reports it has fused and sent since boot, the fast path copies that answered one
+/// (SwitchHIDFastPath.cpp), and the raw gyroscope's report interval, 0 while no client streams it. nil without the
+/// driver or the properties (a release kernel).
 enum MotionDriver {
     struct State {
         let reports: UInt64
+        let copies: UInt64
         let gyroUS: UInt32
     }
 
@@ -132,16 +134,17 @@ enum MotionDriver {
               let dictionary = table?.takeRetainedValue() as NSDictionary?
         else { return nil }
         guard let reports = dictionary["DeviceMotionReports"] as? NSNumber,
+              let copies = dictionary["DeviceMotionFastPathCopies"] as? NSNumber,
               let gyro = dictionary["GyroReportInterval"] as? NSNumber
         else { return nil }
-        return State(reports: reports.uint64Value, gyroUS: gyro.uint32Value)
+        return State(reports: reports.uint64Value, copies: copies.uint64Value, gyroUS: gyro.uint32Value)
     }
 }
 
 /// Sensor fusion (CMDeviceMotion) and the orientation UIKit derives from it. Device motion is fused in SwitchMotion as
-/// a motion coprocessor fuses it: the driver's report count has to grow with the samples received, and the raw
-/// gyroscope has to stay unstreamed meanwhile, since CoreMotion fusing on the CPU (here or in another process) needs
-/// it. Each sample arrives soon after its sample time, and at rest its gravity is the accelerometer's. Lying flat, a
+/// a motion coprocessor fuses it: the driver's report count has to grow with the samples received, CoreMotion has to
+/// read reports through the fast path, and the raw gyroscope has to stay unstreamed meanwhile, since CoreMotion fusing
+/// on the CPU (here or in another process) needs it. Each sample arrives soon after its sample time, and at rest its gravity is the accelerometer's. Lying flat, a
 /// conjugated attitude matches the accelerometer as well as the right one does, so a flat console never passes: with
 /// every other check holding, the verdict is SKIP until the console is tilted (docked, handheld, propped up).
 struct DeviceMotionTest: HWTest {
@@ -163,9 +166,10 @@ struct DeviceMotionTest: HWTest {
     }
 
     /// Where the samples were fused, from SwitchMotion's counters across the run; the detail when they are absent.
-    /// 24B119 opens {0xff0c, 5} for this frame (CLDeviceMotion::enableSensorFusionWithMode, mode 3, caps bit 4); which
-    /// 21H461 mode .xArbitraryZVertical takes was not read, and there SpringBoard's parallax streams the raw gyroscope
-    /// itself, so the rows are 24B119's only.
+    /// 24B119 opens {0xff0c, 5} for this frame
+    /// (CLDeviceMotion::enableSensorFusionWithMode, mode 3, caps bit 4) and reads the latest report through the fast path
+    /// (CLSensorFusionServiceSPU); which 21H461 mode .xArbitraryZVertical takes was not read, and there SpringBoard's
+    /// parallax streams the raw gyroscope itself, so the fusion rows are 24B119's only.
     static func driverChecks(
         _ before: MotionDriver.State?, _ during: MotionDriver.State?, samples: Int, _ checks: inout [(String, Bool)],
         _ metrics: inout Metrics
@@ -174,11 +178,14 @@ struct DeviceMotionTest: HWTest {
             return "SwitchMotion's counters are not published (release kernel): where it was fused is not checked"
         }
         let fused = Double(during.reports &- before.reports)
+        let copied = during.copies &- before.copies
         metrics.set("driver_reports", fused, digits: 0)
+        metrics.set("fastpath_copies", Int(copied))
         metrics.set("raw_gyro_us", Int(during.gyroUS))
         guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 else { return "" }
         checks += [
             ("fused in SwitchMotion: its reports grew with the samples", fused >= 0.8 * Double(samples)),
+            ("CoreMotion read reports through the fast path", copied > 0),
             ("nobody streamed the raw gyroscope (CPU fusion needs it)", during.gyroUS == 0),
         ]
         return ""
@@ -201,6 +208,8 @@ struct DeviceMotionTest: HWTest {
                     if let data {
                         sink.add(Sample(motion: data, latency: ProcessInfo.processInfo.systemUptime - data.timestamp))
                     }
+                    // A pull as well as the push, in case CoreMotion takes the fast path only for one of them.
+                    _ = manager.deviceMotion
                 }
             }, stop: {
                 during = MotionDriver.state()

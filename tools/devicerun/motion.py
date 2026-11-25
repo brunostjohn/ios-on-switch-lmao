@@ -8,6 +8,11 @@ Boot 2 (22-23 Nov, iOS 27) is the baseline: 90 "not ready" lines for usages 1, 5
 SpringBoard 15, backboardd 6, SwitchHWTest 1); locationd also added usages 4, 7, 8 and 24 without setting a property.
 Usages 4, 8 and 24 are reported, not judged: their creation gates were not read. The checks judge the processes that
 run CoreMotion's table from the cache; locationd has its own copy of it, outside the cache.
+
+The fast path (SwitchHIDFastPath.cpp): 24B119's sandbox profiles let SpringBoard (by its user-client-class entitlement)
+and locationd open IOHIDEventServiceFastPathUserClient, so their opens must succeed. backboardd's profile admits the
+class only by that entitlement, which backboardd lacks, so J181 refuses its open as well and its CoreMotion takes the
+pushed sample. A copy that finds no report yet is expected only as a session starts.
 """
 
 from tools.devicerun.rules import REPORT, Check
@@ -95,37 +100,38 @@ MOTION = [
         source='drivers/SwitchMotion/SwitchMotion.cpp',
         note="SwitchMotion's device motion service taking a client's interval",
     ),
-    Check(
-        'motion.fastpath-open.SpringBoard',
-        OWNER,
-        FASTPATH_OPEN,
-        process='SpringBoard',
-        subsystem=SUBSYSTEM,
-        source='drivers/SwitchTouch/SwitchHIDFastPath.cpp',
-        note='CoreMotion could not open the device motion fast path: the plug-in type, openForClient or the slots',
-    ),
-    # Their sandboxes' access to IOHIDEventServiceFastPathUserClient was not read (SpringBoard's lists the class).
     *(
         Check(
             f'motion.fastpath-open.{process}',
             OWNER,
             FASTPATH_OPEN,
-            REPORT,
             process=process,
             subsystem=SUBSYSTEM,
             source='drivers/SwitchTouch/SwitchHIDFastPath.cpp',
-            note='CoreMotion could not open the device motion fast path here; its user client class may be denied',
+            note='CoreMotion could not open the device motion fast path: the plug-in type, openForClient or the slots',
         )
-        for process in ('backboardd', 'locationd')
+        for process in ('SpringBoard', 'locationd')
+    ),
+    Check(
+        'motion.fastpath-open.backboardd',
+        OWNER,
+        FASTPATH_OPEN,
+        REPORT,
+        process='backboardd',
+        subsystem=SUBSYSTEM,
+        source='drivers/SwitchTouch/SwitchHIDFastPath.cpp',
+        note="expected: backboardd's 24B119 sandbox profile denies it IOHIDEventServiceFastPathUserClient, as on J181",
     ),
     Check(
         'motion.fastpath-copy',
         OWNER,
         FASTPATH_COPY,
-        REPORT,
         subsystem=SUBSYSTEM,
+        unless='motion.device-motion-interval',
+        unless_within=1.0,
+        key='process',
         source='drivers/SwitchTouch/SwitchHIDFastPath.cpp',
-        note='a fast path copy with no sample yet: expected only as a session starts, before its first report',
+        note='a fast path copy that found no report, more than 1 s from its process setting a ReportInterval',
     ),
     Check(
         'motion.spu-added-ungated',

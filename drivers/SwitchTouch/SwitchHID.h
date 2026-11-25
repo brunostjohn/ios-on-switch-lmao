@@ -224,6 +224,10 @@ void switch_hid_set_feature_handler(IOService *device, SwitchHIDFeatureHandler h
 // Device motion only: drops the event its fast path answers (SwitchHIDFastPath.cpp), when a session ends, so the next
 // session's first copy is never the last one's sample.
 void switch_hid_forget_latest(IOService *device);
+#if DEVELOPMENT || DEBUG
+// The fast path copies that answered an event, since boot (SwitchMotion's DeviceMotionFastPathCopies).
+uint64_t switch_hid_fastpath_copies();
+#endif
 
 // Touch only: bit n set = contact n began within the edge band. Its finger events then carry
 // kIOHIDDigitizerEventFromEdgeTip, which UIKit needs for the home and app-switcher edge gestures.
