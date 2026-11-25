@@ -11,12 +11,15 @@
 //
 // A still window is half a second in which every gyroscope sample stays within 0.01 rad/s of the window's mean (about
 // ten times the parts' noise) and every accelerometer axis within 10 mg of the window's first sample, at 1 g within
-// 0.05 g. The first offset needs two such windows in a row that agree within 5 mrad/s. The component along the first
-// rest's gravity needs two more at an attitude 30 degrees or more away. After that each window moves the offset a quarter
-// of the way, at most 1.25 mrad/s per window, so a smoothly changing linear acceleration (which the tilt estimate takes
-// for a tilt) moves it little. A window that turns about the vertical faster than any offset the part can have is a
-// turn, and is skipped: its centripetal acceleration tilts the measured gravity and leaks the turn into the
-// perpendicular part.
+// 0.05 g. The tilt is taken off only when the accelerometer's change between the window's halves stands out of the
+// change's own noise (its square past nine times its variance): at rest the tilt estimate is the accelerometer's noise,
+// several times the gyroscope mean's. The first offset is the mean of two such windows in a row that agree within
+// 5 mrad/s. The component along the first rest's gravity is the mean of four more at an attitude 30 degrees or more
+// away, whose solve doubles the noise at 30 degrees. After that each window moves the offset a sixteenth of the way (a
+// quarter while that component is missing), at most 1.25 mrad/s per window, so a smoothly changing linear acceleration
+// (which the tilt estimate takes for a tilt) moves it little. A window that turns about the vertical faster than any
+// offset the part can have is a turn, and is skipped: its centripetal acceleration tilts the measured gravity and leaks
+// the turn into the perpendicular part.
 #pragma once
 #include <stdint.h>
 #include <string.h>
@@ -30,6 +33,8 @@ struct SwitchGyroBias {
     static constexpr int64_t kAgreeNanoRad = 5000000;
     static constexpr int64_t kStepNanoRad = 1250000;
     static constexpr int64_t kSecondAttitude = kSwitchOne / 4;  // sin^2(30 degrees)
+    static constexpr unsigned kFirstWindows = 2;
+    static constexpr unsigned kSecondWindows = 4;
 
     enum class Learned : uint8_t {
         Nothing,
@@ -63,6 +68,7 @@ struct SwitchGyroBias {
         for (unsigned i = 0; i < 3; ++i) {
             window.gyroSum[i] += gyro[i];
             window.accelSum[half][i] += accel[i];
+            window.accelSquares[half][i] += int64_t{accel[i]} * accel[i];
         }
         window.timeSum[half] += window.micros;
         ++window.count[half];
@@ -71,7 +77,7 @@ struct SwitchGyroBias {
             return;
         const Window done = window;
         window = {};
-        if (!done.count[0] || !done.count[1]) {
+        if (done.count[0] < 2 || done.count[1] < 2) {
             agreeing = 0;
             return;
         }
@@ -85,7 +91,8 @@ private:
     struct Window {
         int64_t gyroSum[3];
         int64_t accelSum[2][3];  // each half of the window
-        int64_t timeSum[2];      // micros into the window
+        int64_t accelSquares[2][3];
+        int64_t timeSum[2];  // micros into the window
         uint32_t count[2];
         int32_t firstAccel[3];
         uint32_t samples, micros;
@@ -93,7 +100,8 @@ private:
 
     Window window = {};
     unsigned agreeing = 0;      // still windows in a row whose proposed offsets agree
-    int64_t candidate[3] = {};  // the last of them, nano-rad/s
+    int64_t candidate[3] = {};  // the first of them, nano-rad/s
+    int64_t total[3] = {};      // their sum
 
     static int64_t dot(const int64_t a[3], const int64_t b[3])
     {
@@ -138,6 +146,25 @@ private:
         return true;
     }
 
+    // Whether the change between the halves' accelerometer means (micro-g) is a tilt rather than noise: its square past
+    // nine times its variance, which the halves' own spread gives.
+    static bool tilted(const Window &w, const int64_t change[3])
+    {
+        const int64_t n0 = w.count[0], n1 = w.count[1];
+        int64_t variance = 0;
+        int64_t moved = 0;
+        for (unsigned i = 0; i < 3; ++i) {
+            int64_t spread = 0;
+            for (unsigned h = 0; h < 2; ++h) {
+                const int64_t squares = w.accelSquares[h][i] - w.accelSum[h][i] * w.accelSum[h][i] / w.count[h];
+                spread += squares > 0 ? squares : 0;
+            }
+            variance += spread / (n0 + n1 - 2);
+            moved += change[i] * change[i];
+        }
+        return moved > 9 * (variance * (n0 + n1) / (n0 * n1));
+    }
+
     // The window's gyroscope mean less the tilt its accelerometer saw (micro-rad/s), and its gravity direction (Q30). The
     // measured down direction turns as dg/dt = -w x g, so the rotation perpendicular to it is (dg/dt) x g, here from the
     // mean of each half of the window.
@@ -149,6 +176,7 @@ private:
             mean[i] = (w.accelSum[0][i] + w.accelSum[1][i]) / w.samples;
             change[i] = w.accelSum[1][i] / w.count[1] - w.accelSum[0][i] / w.count[0];
         }
+        const bool tiltSeen = tilted(w, change);
         const int64_t norm = static_cast<int64_t>(
             switchIsqrt(static_cast<uint64_t>(mean[0] * mean[0] + mean[1] * mean[1] + mean[2] * mean[2])));
         int64_t turned[3];
@@ -163,7 +191,7 @@ private:
             (turned[0] * down[1] - turned[1] * down[0]) >> kSwitchQ,
         };
         for (unsigned i = 0; i < 3; ++i)
-            rate[i] = w.gyroSum[i] / w.samples - ((tilt[i] * 1000000 / micros) * 1000000 >> kSwitchQ);
+            rate[i] = w.gyroSum[i] / w.samples - (tiltSeen ? (tilt[i] * 1000000 / micros) * 1000000 >> kSwitchQ : 0);
     }
 
     void stillWindow(const int64_t rate[3], const int64_t down[3], int64_t bias[3], int64_t limit)
@@ -199,8 +227,9 @@ private:
             return;
         }
         agreeing = 0;
+        const int64_t gain = learned == Learned::All ? 16 : 4;
         for (unsigned i = 0; i < 3; ++i)
-            bias[i] = clamp(bias[i] + clamp(across[i] * 1000 / 4, kStepNanoRad), limit);
+            bias[i] = clamp(bias[i] + clamp(across[i] * 1000 / gain, kStepNanoRad), limit);
     }
 
     void acquire(const int64_t proposed[3], const int64_t down[3], int64_t bias[3], int64_t limit)
@@ -208,11 +237,17 @@ private:
         if (!agreeing || !within(proposed, candidate, kAgreeNanoRad)) {
             agreeing = 1;
             memcpy(candidate, proposed, sizeof(candidate));
+            memcpy(total, proposed, sizeof(total));
             return;
         }
-        agreeing = 0;
+        ++agreeing;
         for (unsigned i = 0; i < 3; ++i)
-            bias[i] = clamp(proposed[i], limit);
+            total[i] += proposed[i];
+        if (agreeing < (learned == Learned::Nothing ? kFirstWindows : kSecondWindows))
+            return;
+        for (unsigned i = 0; i < 3; ++i)
+            bias[i] = clamp(total[i] / agreeing, limit);
+        agreeing = 0;
         if (learned == Learned::Nothing) {
             learned = Learned::AllButGravity;
             memcpy(unlearned, down, sizeof(unlearned));
