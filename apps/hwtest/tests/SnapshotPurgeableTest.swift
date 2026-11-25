@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import HWTestCore
 import HWTestKit
+import HWTestShared
 import ImageIO
 
 /// SplashBoard keeps an app's launch snapshot only once APFS marks its file purgeable. An app's sandbox denies it the
