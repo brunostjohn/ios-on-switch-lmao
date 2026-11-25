@@ -31,6 +31,7 @@ void switch_sched_boot_complete(void);
 void switch_sched_render_on_core(thread_t thread, uint64_t now);
 void switch_sched_render_vsync(uint64_t stamp, uint64_t period);
 void switch_sched_render_submitted(void);
+bool switch_sched_render_window(uint64_t *vsync, int64_t *woke_us, int64_t *first_us);
 void switch_sched_render_swapped(void);
 
 /* cpu.c: each core's and each process's CPU in the report's window (`line`: its LINE-byte buffer), and a process's
