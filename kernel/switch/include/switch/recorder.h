@@ -19,7 +19,8 @@
 __BEGIN_DECLS
 
 /* Our tracepoints share the frame timeline's class and subclass (TegraDisplayFlip/SwitchFrameTimeline.h: DBG_DRIVERS,
- * DBG_DRVGRAPHICS, codes from 0x3f0); the recorder's take 0x3e0-0x3e7, the GPU job ring's 0x3e8-0x3ef. */
+ * DBG_DRVGRAPHICS, codes from 0x3f0); the recorder's take 0x3e0-0x3e7, the GPU job ring's 0x3e8-0x3ef, the SD queue's
+ * (NativeSwitchBlock) 0x3d8-0x3df. */
 #define SWITCH_RECORDER_KDBG(code)   ((6u << 24) | (18u << 16) | ((uint32_t)(code) << 2))
 #define SWITCH_RECORDER_KDBG_TRIGGER 0x3e0 /* reason, thread id (0: none), value */
 #define SWITCH_RECORDER_KDBG_DUMP    0x3e1 /* DBG_FUNC_START / END around a dump: reason, slot */
