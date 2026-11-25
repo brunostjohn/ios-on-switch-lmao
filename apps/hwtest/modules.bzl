@@ -285,6 +285,7 @@ TESTS_DEPTH_SRCS = [
     "tests/ResolveCodesPartsTest.swift",
     "tests/ResolveCodesTest.swift",
     "tests/ResolveCostTest.swift",
+    "tests/ResolveEngineArms.swift",
     "tests/ResolveFormatArms.swift",
     "tests/ResolveOneSampleSwapTest.swift",
     "tests/ResolveOtherCountTest.swift",

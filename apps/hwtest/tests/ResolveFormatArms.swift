@@ -15,7 +15,9 @@ import Metal
 /// `<cell>=<route>:<grade>:<texels off Metal>:<channels beyond one>`, `<cell>_pass=` the
 /// same of the pass (the reference's control), `<cell>_ms=<picked>/<pass>` GPU ms. FAIL: a cell off resolve.twod, a
 /// channel beyond one code, or an exact cell (RGBA16Float at 2x) off Metal, where its read arm
-/// (`rgba16f_2x_read=<route>:<off>`) must take resolve.twod too; `<cell>_error`: the cell could not run.
+/// (`rgba16f_2x_read=<route>:<off>`) must take resolve.twod too; `<cell>_error`: the cell could not run. Then the
+/// engine arms (ResolveEngineArms.swift). A cell or arm with a channel beyond one code adds
+/// `<cell>[_<arm>]_beyond_texels` to the report.
 extension ResolveTwodTest {
     struct FormatCell {
         let format: X1Format
@@ -61,7 +63,8 @@ extension ResolveTwodTest {
         )
         let (off, beyond) = Self.offMetal(format, picked.bytes, stored)
         let route = picked.twod > 0 ? "twod" : "pass"
-        metrics.set(cell.name, "\(route):\(off == 0 ? "exact" : beyond == 0 ? "near" : "wrong"):\(off):\(beyond)")
+        metrics.set(cell.name, "\(route):\(Self.grade(off, beyond)):\(off):\(beyond)")
+        Self.noteBeyond(cell.name, Self.beyondTexels(format, picked.bytes, stored), beyond, &metrics)
         var passMs = "-"
         if cell.pass {
             let pass = try await switched(facade, Self.drawSelector) {
@@ -71,6 +74,7 @@ extension ResolveTwodTest {
             }
             let (passOff, passBeyond) = Self.offMetal(format, pass.bytes, stored)
             metrics.set("\(cell.name)_pass", "\(pass.path):\(passOff):\(passBeyond)")
+            Self.noteBeyond(cell.name + "_pass", Self.beyondTexels(format, pass.bytes, stored), passBeyond, &metrics)
             passMs = String(format: "%.3f", pass.gpuMs)
         }
         metrics.set("\(cell.name)_ms", String(format: "%.3f", picked.gpuMs) + "/" + passMs)
@@ -80,13 +84,15 @@ extension ResolveTwodTest {
         if picked.path != "gm20b" { wrong.append("\(cell.name)_path") }
         if beyond > 0 { wrong.append("\(cell.name)_beyond_one") }
         if cell.exact && off > 0 { wrong.append("\(cell.name)_off_metal") }
+        await engineArms(ArmScene(cell: cell, gpu: gpu, state: state, stored: stored), facade, &metrics, &wrong)
         guard cell.exact else { return }
         let read = try await readInCommandBuffer(
             gpu, state, samples: cell.samples, format: format.pixelFormat, bytesPerTexel: size
         )
-        let (readOff, _) = Self.offMetal(format, read.bytes, stored)
+        let (readOff, readBeyond) = Self.offMetal(format, read.bytes, stored)
         let readRoute = read.twod > 0 ? "twod" : "pass"
         metrics.set("\(cell.name)_read", "\(readRoute):\(readOff)")
+        Self.noteBeyond(cell.name + "_read", Self.beyondTexels(format, read.bytes, stored), readBeyond, &metrics)
         if readRoute != "twod" { wrong.append("\(cell.name)_read_not_twod") }
         if readOff > 0 { wrong.append("\(cell.name)_read_off_metal") }
     }
