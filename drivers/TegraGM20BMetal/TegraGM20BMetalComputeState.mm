@@ -3,6 +3,7 @@
 #import "TegraGM20BMetalBinaryArchive.h"
 #import "TegraGM20BMetalComputeState.h"
 #import "TegraGM20BMetalReflection.h"
+#import "TegraGM20BMetalStatesKey.h"
 #include "TegraGM20BMetalComplete.h"
 #include "TegraGM20BMetalCompileRequest.h"
 #include "compute_key.h"
@@ -109,6 +110,7 @@ static bool compilerAnswers(SwitchMetalComputeState *s, SwitchMetalFunction *f, 
     std::string failure = "no shader compiler comes this boot";
     gm20b::PackComputeFacts made = {};
     const std::string key = gm20b::computeStateKey(s->_air, s->_constants, s->_maxThreads, s->_multipleOfWidth);
+    gm20bNoteMiss("compute", gm20b::Pack::fnv(key.data(), key.size()), key, s->_direct.label);
     if (!gRM->completion || !gRM->completion->facts(f, s->_direct, key, made, failure)) {
         if (error)
             *error = gm20bCreationError(failure);
