@@ -58,16 +58,23 @@ TEST_F(SwitchNativePlaneTest, NativePlanesUseTheirPaddedOffsetsAndPitch)
     EXPECT_EQ(image.size, (405u << 16) | 720u);
 }
 
-// A picture with a transform is never scanned untransformed here, whole or cropped: the landscape route or the
-// conversion job turns it.
-TEST_F(SwitchNativePlaneTest, ATransformedPictureIsNotScannedAsIs)
+// A turned picture, whole or cropped, is never scanned unturned: it keeps its blocks for the conversion job to read in
+// place, with no pitch copy ahead of the turn.
+TEST_F(SwitchNativePlaneTest, ATurnedPictureIsTheConversionJobsFromItsBlocks)
 {
-    ASSERT_TRUE(admit());
-    ASSERT_TRUE(admit(16, 8, kProven));
     for (uint32_t t = 1; t < 8; ++t) {
         layer.transform = t;
-        EXPECT_FALSE(admit()) << t;
-        EXPECT_FALSE(admit(16, 8, kProven)) << t;
+        layer.dst = native_planes::turnOf(t).transpose ? native_planes::Rect{0, 437, 405, 720}
+                                                       : native_planes::Rect{0, 437, 720, 405};
+        for (const uint32_t crop : {0u, 16u}) {
+            ASSERT_TRUE(admit(crop, crop / 2, kProven)) << t << " " << crop;
+            EXPECT_TRUE(image.convert) << t;
+            EXPECT_EQ(image.options & 0x15u, 0u) << t;
+            EXPECT_EQ(image.start[1], 1536u * 736) << t;
+            EXPECT_EQ(image.readLow, 0u);
+            EXPECT_EQ(image.readHigh, (1536u * (736 + 368) + 4095u) & ~4095u);
+            EXPECT_EQ(image.surfaceKind, 0x12u);
+        }
     }
 }
 

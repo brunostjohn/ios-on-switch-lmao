@@ -397,6 +397,29 @@ TEST_F(PlaneConversion, ATurnedVideoBecomesAnUntransformedTurnedPlane)
     EXPECT_EQ(conversions, 2u);
 }
 
+// A turned decoder picture is turned straight from its blocks from the decoder's crop on: one VIC job, no pitch copy.
+TEST_F(PlaneConversion, ATurnedDecoderPictureIsReadFromItsBlocks)
+{
+    auto &view = display->snapshots[0].view;
+    view.layout.format = TEGRA_VIC_FOURCC('4', '2', '0', 'v');
+    view.layout.plane_count = 2;
+    view.layout.color_matrix = 2;
+    view.layout.planes[0] = {0, 256 * 64, 144, 64, 256, 1, SWITCH_GPU_BACKING_BLOCK_LINEAR, 1};
+    view.layout.planes[1] = {256 * 64, 256 * 32, 72, 32, 256, 2, SWITCH_GPU_BACKING_BLOCK_LINEAR, 1};
+    view.crop = {16, 0, 128, 64};
+    layer.transform = 7;
+    layer.dst = {100, 200, 128, 256};
+    ASSERT_GE(convert(), 0);
+    EXPECT_EQ(conversions, 1u);
+    EXPECT_TRUE(lastInput.blockLinear);
+    EXPECT_EQ(lastInput.pitch[0], 256u);
+    EXPECT_EQ(lastOperation.srcX, uint64_t(16) << 16);
+    EXPECT_EQ(lastOperation.srcW, uint64_t(128) << 16);
+    EXPECT_EQ(lastOperation.transform, 7u);
+    EXPECT_EQ(lastOperation.dstW, 64u);
+    EXPECT_EQ(lastOperation.dstH, 128u);
+}
+
 // A packed RGB layer the windows cannot scan turned (scaled, or pitch-linear with a quarter turn) converts the same way.
 TEST_F(PlaneConversion, APackedLayerTheWindowCannotTurnConvertsToo)
 {
