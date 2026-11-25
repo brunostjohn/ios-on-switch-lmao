@@ -413,7 +413,7 @@ class Tier0Segments(unittest.TestCase):
         self.assertEqual(programs[shared_t1_idx]['program'], shared_t0_off + 0x30)
         self.assertEqual(bytes(pack.heap[t1_off + delta : t1_off + delta + len(tier1_marker)]), tier1_marker)
 
-        pipe_count, combo_count = segments._SEGMENT_TABLE.unpack_from(pack.segments, 0)
+        pipe_count, combo_count, words_at, words_bytes = segments._SEGMENT_TABLE.unpack_from(pack.segments, 0)
         self.assertEqual(pipe_count, n_tier0)
         self.assertEqual(combo_count, 1)
         distinct_offsets = set()
@@ -421,8 +421,11 @@ class Tier0Segments(unittest.TestCase):
         not_kept_seen = False
         kept_seen = False
         for i in range(pipe_count):
-            off, words, flags = segments._SEGMENT_ENTRY.unpack_from(pack.segments, 8 + 8 * i)
+            off, words, flags = segments._SEGMENT_ENTRY.unpack_from(
+                pack.segments, segments._SEGMENT_TABLE.size + segments._SEGMENT_ENTRY.size * i
+            )
             self.assertGreater(words, segments.SEGMENT_BIND_WORDS)
+            self.assertTrue(words_at <= off and off + words * 4 <= words_at + words_bytes)
             self.assertEqual(off & 15, 0)
             self.assertLessEqual(off + words * 4, pack.tier0_heap)
             distinct_offsets.add(off)

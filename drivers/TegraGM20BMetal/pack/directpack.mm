@@ -41,6 +41,7 @@
 #include <cstdlib>
 #include <set>
 #include "../emit.h"
+#include "../record_parts.h"
 #include "../xr_pass.h"
 #include "../zeta.h"
 #include "TwoPlaneStandIn.h"
