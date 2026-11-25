@@ -114,6 +114,7 @@
 		<string>kern.memorystatus_level</string>
 		<string>kern.proc.all</string>
 		<string>kern.switch_shader_compiler</string>
+		<string>kern.switch_fsctl_marks</string>
 	</array>
 	<key>com.apple.security.exception.sysctl.read-write</key>
 	<array>
