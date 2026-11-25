@@ -172,8 +172,8 @@ private:
     uint64_t diagShape = 0;
     void noteShape(uint32_t updated, const native_planes::Layer layers[], const bool present[],
                    const switch_external::Plan &plan, const int slotOf[]);
-    void noteUnshown(unsigned layer, int why);
 #endif
+    void noteUnshown(unsigned layer, int why);
     static void completionFired(OSObject *owner, IOInterruptEventSource *, int);
     static void fenceFired(OSObject *owner, IOInterruptEventSource *, int);
     static native_planes::Layer layerOf(const uint8_t *request, unsigned layer, OSObject *surface);
@@ -192,6 +192,7 @@ private:
     void recordLayers(const uint8_t *request);
     bool takeLayers(const uint8_t *request, bool present[], native_planes::Layer layers[], OSObject *surfaces[]);
     void releaseUnshown(uint32_t building);
+    bool betterVictim(unsigned i, int victim, uint64_t bytes) const;
     int prepareConversion(OSObject *surface, unsigned layer, uint32_t building);
     int runConversions();
     void unshownFrame(int error, unsigned layer, uint32_t building, const OriginalLegacySwapRequest *request);

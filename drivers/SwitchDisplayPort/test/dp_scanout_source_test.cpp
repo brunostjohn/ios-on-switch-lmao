@@ -42,6 +42,10 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_TRUE(detach.has("clearLayerState();"));
     EXPECT_TRUE(Block(lifecycle, "void SwitchExternalScreen::drainSwapQueue()")
                     .before("recordLayers(reinterpret_cast<const uint8_t *>(request));", "retire(request, false)"));
+    // Unplugged, a drained swap's surfaces are not recorded: detach cleared the records and nothing would release them.
+    EXPECT_TRUE(Block(lifecycle, "void SwitchExternalScreen::drainSwapQueue()")
+                    .has("if (connected) recordLayers(reinterpret_cast<const uint8_t *>(request));"));
+    EXPECT_TRUE(Block(lifecycle, "void SwitchExternalScreen::linkUp(").has("unshownErrors = 0;"));
     EXPECT_TRUE(Block(source, "void SwitchExternalScreen::recordLayers(").has("surface->retain();"));
     EXPECT_TRUE(Block(source, "void SwitchExternalScreen::requestFrame()")
                     .has("if (!takeLayers(bytes, present, layers, surfaces)) { dropFrame(request); return; }"));
@@ -75,10 +79,15 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_TRUE(Block(convert, "void SwitchExternalScreen::unshownFrame(").has("dropFrame(request);"));
     EXPECT_TRUE(Block(convert, "void SwitchExternalScreen::unscannable(").has("panic("));
     EXPECT_TRUE(Block(convert, "int SwitchExternalScreen::runConversions()").has("switch_vic_scanout_convert("));
+    EXPECT_TRUE(Block(convert, "int SwitchExternalScreen::prepareConversion(").has("betterVictim(i, victim, c.bytes)"));
+    EXPECT_TRUE(Block(convert, "bool SwitchExternalScreen::betterVictim(").has("return slot.conversion;"));
 
     const auto complete = Block(present, "void SwitchExternalScreen::completionFired(");
-    EXPECT_TRUE(complete.has("if (!self->connected || self->selectedMode < 0 || self->device != 2)"));
-    EXPECT_TRUE(complete.has("self->drainSwapQueue();"));
+    EXPECT_TRUE(complete.has("const bool showing = self->connected && self->selectedMode >= 0 && self->device == 2;"));
+    EXPECT_TRUE(complete.has("if (!showing) self->drainSwapQueue();"));
+    // A conversion waiting for the GPU is tried again when it is ready, as prepareSlot's -16 and STALE are.
+    EXPECT_TRUE(complete.before("retryable(status)) { self->pending = nullptr; self->retryWhenReady(); return; }",
+                                "self->retire(self->pending, false);"));
 
     const auto limits = Block(lifecycle, "void SwitchExternalScreen::publishScanoutLimits()");
     EXPECT_FALSE(limits.has("IOMFBYUV420UnSupported"));

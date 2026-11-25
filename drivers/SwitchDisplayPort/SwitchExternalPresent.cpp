@@ -20,6 +20,11 @@ void SwitchExternalScreen::kickSwapQueue()
 }
 
 namespace {
+bool retryable(int error)
+{
+    return error == -16 || error == SWITCH_GPU_BACKING_STALE;
+}
+
 void fenced(void *context, int status)
 {
     static_cast<SwitchExternalScreen *>(context)->gpuComplete(status);
@@ -100,13 +105,14 @@ void SwitchExternalScreen::fenceFrame()
     fenceSource->interruptOccurred(nullptr, nullptr, 0);
 }
 
-// A conversion VIC refuses retires the swap unshown with this line, the screen keeping its frame.
+// A conversion VIC refuses retires the swap unshown with this line, the screen keeping its frame; one waiting for the GPU
+// (-16, STALE) is tried again when it is ready, as prepareSlot's are.
 void SwitchExternalScreen::fenceFired(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = static_cast<SwitchExternalScreen *>(owner);
     if (self->fenceConverts) {
         if (const int error = self->runConversions()) {
-            if (self->unshownErrors++ < 8u)
+            if (!retryable(error) && self->unshownErrors++ < 8u)
                 IOLog("SwitchDisplayPort: VIC refused a layer's conversion (%d); the swap is not shown\n", error);
             self->gpuComplete(error);
             return;
@@ -169,9 +175,15 @@ void SwitchExternalScreen::completionFired(OSObject *owner, IOInterruptEventSour
             else
                 self->releaseRead(static_cast<unsigned>(k));
         }
+        const bool showing = self->connected && self->selectedMode >= 0 && self->device == 2;
+        if (showing && !gone && self->dcb && retryable(status)) {
+            self->pending = nullptr;
+            self->retryWhenReady();
+            return;
+        }
         self->retire(self->pending, false);
         self->pending = nullptr;
-        if (!self->connected || self->selectedMode < 0 || self->device != 2)
+        if (!showing)
             self->drainSwapQueue();
         else
             self->kickSwapQueue();
@@ -304,18 +316,20 @@ void SwitchExternalScreen::noteShape(uint32_t updated, const native_planes::Laye
     }
     IOLog("SwitchDisplayPort: clone swap %s\n", line);
 }
+#endif
 
-// A swap retired unshown, the screen keeping its frame, for one layer. why: -2 its inherited surface has no record,
-// otherwise the error mapping or converting it.
+// A swap retired unshown, the screen keeping its frame, for one layer: eight lines a link. why: -2 its inherited
+// surface has no record, otherwise the error mapping or converting it.
 void SwitchExternalScreen::noteUnshown(unsigned layer, int why)
 {
-    if (diagScanoutFailures >= 8u)
+    if (unshownErrors >= 8u)
         return;
-    ++diagScanoutFailures;
+    ++unshownErrors;
     if (why == -2) {
         IOLog("SwitchDisplayPort: swap not shown: layer %u's inherited surface has no record\n", layer);
         return;
     }
+#if DEVELOPMENT || DEBUG
     const auto &l = layerRecords[layer].layer;
     const uint32_t f = l.surface.format;
     IOLog("SwitchDisplayPort: swap not shown: layer %u (%d) '%c%c%c%c' %ux%u planes %u strides %u/%u src (%d,%d "
@@ -323,5 +337,7 @@ void SwitchExternalScreen::noteUnshown(unsigned layer, int why)
           layer, why, static_cast<char>(f >> 24), static_cast<char>(f >> 16), static_cast<char>(f >> 8),
           static_cast<char>(f), l.surface.width, l.surface.height, l.surface.planes, l.surface.stride[0],
           l.surface.stride[1], l.src.x, l.src.y, l.src.w, l.src.h, l.dst.x, l.dst.y, l.dst.w, l.dst.h);
-}
+#else
+    IOLog("SwitchDisplayPort: swap not shown: layer %u (%d)\n", layer, why);
 #endif
+}

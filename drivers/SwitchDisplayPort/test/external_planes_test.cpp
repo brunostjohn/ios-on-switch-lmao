@@ -302,6 +302,43 @@ TEST(ExternalPlanes, MisSitedChromaIsConverted)
     EXPECT_EQ(plan.convert, 0u);
 }
 
+// Packed 4:2:2 that VIC reads ('yuvs') is converted when its chroma is mis-sited; 'yuvf', which VIC has no format for, is
+// scanned co-sited instead, and with no window for its matrix it is left for requestFrame's panic, never sent to VIC.
+TEST(ExternalPlanes, PackedYuvVicCannotReadIsScannedAsItIs)
+{
+    Swap s = cloneSwap();
+    Layer &video = s.layers[2];
+    video.kind = native_planes::kKindExtraYuv;
+    video.surface.planes = 1;
+    video.surface.offset[1] = video.surface.stride[1] = video.surface.planeHeight[1] = 0;
+    video.surface.stride[0] = uint32_t(roundUp(uint64_t(video.surface.width) * 2, 64));
+    video.surface.allocation = uint64_t(video.surface.stride[0]) * video.surface.height;
+    video.surface.descriptorBytes = roundUp(video.surface.allocation, 16384);
+    video.surface.chromaTop = video.surface.chromaBottom = 2;
+    Plan plan;
+
+    video.surface.format = fourcc('y', 'u', 'v', 's');
+    ASSERT_EQ(s.check(kUltraW, kUltraH), native_planes::kAccepted);
+    ASSERT_TRUE(s.image(kUltraW, kUltraH));
+    ASSERT_TRUE(planSwap(s.present, s.layers, s.images, kIdle, kUltraW, kUltraH, plan));
+    EXPECT_EQ(plan.convert, 1u << 2);
+
+    video.surface.format = fourcc('y', 'u', 'v', 'f');
+    ASSERT_EQ(s.check(kUltraW, kUltraH), native_planes::kAccepted);
+    ASSERT_TRUE(s.image(kUltraW, kUltraH));
+    EXPECT_FALSE(s.images[2].convert);
+    ASSERT_TRUE(planSwap(s.present, s.layers, s.images, kIdle, kUltraW, kUltraH, plan));
+    EXPECT_EQ(plan.convert, 0u);
+    EXPECT_EQ(plan.unshown, 0u);
+    EXPECT_EQ(plan.window[kB].layer, 2);
+    EXPECT_TRUE(s.images[2].yuv);
+
+    const WindowState busy[kWindows] = {{true, -1, -1}, {true, 0, 0}, {true, 0, 0}};
+    ASSERT_TRUE(planSwap(s.present, s.layers, s.images, busy, kUltraW, kUltraH, plan));
+    EXPECT_EQ(plan.convert, 0u);
+    EXPECT_EQ(plan.unshown, 1u << 2);
+}
+
 // A YUV layer narrowed between 4x and 8x (a YUV window's H DDA takes it, an RGB one's does not) converts to a quarter of
 // its width, so its BGRA still has a window.
 TEST(ExternalPlanes, NarrowedConversionKeepsAWindow)

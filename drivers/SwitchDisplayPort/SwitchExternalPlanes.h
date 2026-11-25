@@ -23,6 +23,7 @@
 #include "SwitchExternalWindows.h"
 #include "../NativeMobileDisplay/NativePlanes.h"
 #include "../SwitchPower/SwitchDisplayBandwidth.h"
+#include "../TegraVIC/TegraVICFormats.h"
 
 namespace switch_external {
 
@@ -105,13 +106,21 @@ inline unsigned checkSwap(uint32_t updated, uint32_t background, const bool hasS
 
 constexpr uint32_t kPaletteEnable = 1u << 16;  // WIN_OPTIONS CP_ENABLE
 
+// Whether VIC reads l's format, so it can convert l (TegraVICFormats.h has no 'yuvf').
+inline bool vicConverts(const Layer &l)
+{
+    return tegra_vic_format(l.surface.format) != nullptr;
+}
+
 // The image a window scans of l, in rows or (block, the GPU's layout: TegraGM20BLayout.h) block-linear, or false when no
-// window reads it so. Every byte it reads is in the surface's allocation, which is what a slot maps.
+// window reads it so. Every byte it reads is in the surface's allocation, which is what a slot maps. Chroma that VIC
+// cannot resample is scanned co-sited, as SwitchSurfaceColor.h scans a siting VIC has no conversion for.
 inline bool imageFor(const Layer &l, const tgm_layout *block, uint32_t width, uint32_t height, Image &image)
 {
     const bool ok = native_planes::imageOf(l, width, height, image, block);
     // imageOf adds DC A's palette (the panel's gamma table); DC B's palettes hold nothing.
     image.options &= ~kPaletteEnable;
+    image.convert = image.convert && vicConverts(l);
     return ok && (!image.visible || image.readHigh <= ((l.surface.allocation + 4095) & ~4095ULL));
 }
 
@@ -124,7 +133,10 @@ struct Placement {
 
 struct Plan {
     Placement window[kWindows];
-    uint32_t unshown = 0;  // layers with an image below the third: more than the display publishes
+    // Layers with an image below the third (more than the display publishes), or a YUV layer VIC cannot convert that
+    // finds no window. A clone frame never has either: its one YUV layer and one RGB leave a window that the frame
+    // before had off.
+    uint32_t unshown = 0;
     // YUV layers VIC converts to BGRA for a window: chroma sited where no window samples it (Image::convert, as the
     // panel's windows), or no window free that holds the layer's matrix and range or may have its CSC written now.
     uint32_t convert = 0;
@@ -133,8 +145,9 @@ struct Plan {
 // Which window shows which layer. Depth follows the swap's stack order (NativePlanes.h stackPosition), 0 in front. The
 // topmost RGB layer (the UI) takes window A and the others B and C first. A YUV layer takes a window whose CSC holds its
 // matrix and range already, else one that is not scanning, whose CSC is written with the frame; with neither it is
-// converted (planSwap).
-inline Plan planWindows(const bool present[kLayers], const Image images[kLayers], const WindowState state[kWindows])
+// converted (planSwap) when it is one of the `convertible` layers.
+inline Plan planWindows(const bool present[kLayers], const Image images[kLayers], const WindowState state[kWindows],
+                        uint32_t convertible = (1u << kLayers) - 1)
 {
     Plan plan;
     unsigned order[kLayers] = {};
@@ -175,10 +188,12 @@ inline Plan planWindows(const bool present[kLayers], const Image images[kLayers]
         for (const Window w : kPreference)
             if (chosen < 0 && !plan.window[w].on && !state[w].live)
                 chosen = int(w);
-        if (chosen < 0)
+        if (chosen >= 0)
+            place(Window(chosen), k, csc);
+        else if (convertible & (1u << order[k]))
             plan.convert |= 1u << order[k];
         else
-            place(Window(chosen), k, csc);
+            plan.unshown |= 1u << order[k];
     }
     for (unsigned k = 0; k < count; ++k) {
         if (placed[k] || images[order[k]].yuv)
@@ -230,9 +245,11 @@ inline bool convertedImage(const Layer &l, uint32_t width, uint32_t height, Imag
 inline bool planSwap(const bool present[kLayers], const Layer layers[kLayers], Image images[kLayers],
                      const WindowState state[kWindows], uint32_t width, uint32_t height, Plan &plan)
 {
-    uint32_t converted = 0;
+    uint32_t converted = 0, convertible = 0;
+    for (unsigned i = 0; i < kLayers; ++i)
+        convertible |= uint32_t(present[i] && vicConverts(layers[i])) << i;
     for (;;) {
-        plan = planWindows(present, images, state);
+        plan = planWindows(present, images, state, convertible);
         if (!plan.convert) {
             plan.convert = converted;
             return true;

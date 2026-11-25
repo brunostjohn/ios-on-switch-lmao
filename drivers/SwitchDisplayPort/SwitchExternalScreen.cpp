@@ -309,7 +309,9 @@ void SwitchExternalScreen::drainSwapQueue()
 {
     if (!gpuPending) {
         for (const auto *request = pendingSwapRequest(); request; request = pendingSwapRequest()) {
-            recordLayers(reinterpret_cast<const uint8_t *>(request));
+            // Unplugged, the records would hold the clone's surfaces until free(): detach cleared them.
+            if (connected)
+                recordLayers(reinterpret_cast<const uint8_t *>(request));
             if (!retire(request, false))
                 break;
         }
@@ -366,6 +368,7 @@ void SwitchExternalScreen::linkUp(const struct switch_dp_mode &timing, TegraDisp
                 releaseSlot(i);
         clearLayerState();
     }
+    unshownErrors = 0;
 #if DEVELOPMENT || DEBUG
     __atomic_store_n(&diagValidateRejects, 0u, __ATOMIC_RELAXED);
     diagScanoutFailures = 0;

@@ -60,6 +60,23 @@ const char *conversionInput(const native_planes::Surface &s, uint64_t offset, Te
 }
 }  // namespace
 
+// Whether free slot i takes a conversion of `bytes` before `victim`: an idle conversion buffer before an empty or RGB
+// slot, so buffers are allocated only while every one is on the screen or in the frame being built (two for a video:
+// the frame shown and the next). Then one with room for it, then the least recently used.
+bool SwitchExternalScreen::betterVictim(unsigned i, int victim, uint64_t bytes) const
+{
+    if (victim < 0)
+        return true;
+    const Slot &slot = slots[i], &other = slots[victim];
+    if (slot.conversion != other.conversion)
+        return slot.conversion;
+    const bool fits = slot.conversion && slot.allocationBytes >= bytes;
+    const bool otherFits = other.conversion && other.allocationBytes >= bytes;
+    if (fits != otherFits)
+        return fits;
+    return slot.used < other.used;
+}
+
 // The slot showing `layer` converted: one that already holds this picture so converted, or a free one with a VIC job
 // queued for the fence thread (convertPending). Errors as prepareSlot's.
 int SwitchExternalScreen::prepareConversion(OSObject *surface, unsigned layer, uint32_t building)
@@ -103,8 +120,7 @@ int SwitchExternalScreen::prepareConversion(OSObject *surface, unsigned layer, u
             slot.used = ++slotUses;
             return static_cast<int>(i);
         }
-        if (!slotShown(static_cast<int>(i)) && !(building & (1u << i)) &&
-            (victim < 0 || slot.used < slots[victim].used))
+        if (!slotShown(static_cast<int>(i)) && !(building & (1u << i)) && betterVictim(i, victim, c.bytes))
             victim = static_cast<int>(i);
     }
     TegraVICImage input = {};
@@ -181,21 +197,14 @@ void SwitchExternalScreen::unshownFrame(int error, unsigned layer, uint32_t buil
         retryWhenReady();
         return;
     }
-#if DEVELOPMENT || DEBUG
     noteUnshown(layer, error);
-#else
-    if (unshownErrors < 8u) {
-        ++unshownErrors;
-        IOLog("SwitchDisplayPort: swap not shown: layer %u (%d)\n", layer, error);
-    }
-#endif
     dropFrame(request);
 }
 
 // A layer validateSwap accepted that no window reads, as it is or converted: checkSwap holds every layer to what imageOf
 // scans in rows, the GPU lays out only RGB block-linear, and a conversion's BGRA keeps the DDA within an RGB window's.
 // A fourth visible layer is one checkSwap did not count (an earlier swap left it on), and clone_update shows at most
-// layers 0 or 1 and 2 (SwitchExternalPlanes.h).
+// layers 0 or 1 and 2 (SwitchExternalPlanes.h); so a YUV layer VIC cannot convert always finds a window (Plan::unshown).
 void SwitchExternalScreen::unscannable(unsigned layer) const
 {
     const auto &l = layerRecords[layer].layer;

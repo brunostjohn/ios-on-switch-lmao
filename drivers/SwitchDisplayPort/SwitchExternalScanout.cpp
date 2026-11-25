@@ -301,9 +301,7 @@ bool SwitchExternalScreen::takeLayers(const uint8_t *request, bool present[], na
         if (!surface) {
             OSSafeReleaseNULL(record.surface);
         } else if (surface != record.surface) {
-#if DEVELOPMENT || DEBUG
             noteUnshown(i, -2);
-#endif
             return false;
         }
         present[i] = surface != nullptr;
