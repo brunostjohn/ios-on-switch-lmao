@@ -659,4 +659,30 @@ TEST_F(FacadeZetaPass, ADepthStencilTextureAttachedAsDepthAloneTestsAStencilOfIt
     }
 }
 
+// Two such passes back to back, each loading and storing the depth: fused, the second would test the stencil the first
+// left in the shared scratch, where Metal starts each pass's at 0. Each clears a stencil of its own.
+TEST_F(FacadeZetaPass, TwoDepthAlonePassesOfADepthStencilTextureTestingStencilDoNotFuse)
+{
+    id<MTLTexture> combined = zeta(MTLPixelFormatDepth32Float_Stencil8);
+    ASSERT_TRUE(combined != nil);
+    MTLDepthStencilDescriptor *tests = [MTLDepthStencilDescriptor new];
+    tests.frontFaceStencil.stencilCompareFunction = MTLCompareFunctionNotEqual;
+    tests.backFaceStencil.stencilCompareFunction = MTLCompareFunctionNotEqual;
+    id<MTLDepthStencilState> state = [gDevice newDepthStencilStateWithDescriptor:tests];
+    ASSERT_TRUE(state != nil);
+    const size_t first = kernel_model::model.jobs.size();
+    id<MTLCommandBuffer> cb = [[gDevice newCommandQueue] commandBuffer];
+    for (int k = 0; k < 2; k++) {
+        id<MTLRenderCommandEncoder> e =
+            [cb renderCommandEncoderWithDescriptor:pass(combined, nil, MTLLoadActionLoad, MTLStoreActionStore)];
+        [e setDepthStencilState:state];
+        [e endEncoding];
+    }
+    [cb commit];
+    [cb waitUntilCompleted];
+    EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted) << cb.error.description.UTF8String;
+    const auto targets = zetaTargets(first);
+    EXPECT_EQ(std::count_if(targets.begin(), targets.end(), [](const auto &t) { return t.second; }), 2);
+}
+
 }  // namespace

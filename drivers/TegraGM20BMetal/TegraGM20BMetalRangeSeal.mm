@@ -100,7 +100,8 @@ static bool testedLaidOut(SwitchMetalCommandBuffer *cb, size_t open, size_t next
     __unsafe_unretained SwitchMetalTexture *depth = (SwitchMetalTexture *)pass.zeta[0].texture;
     if (!depth)
         return true;
-    if (depth->_raw.format == MTLPixelFormatDepth32Float)
+    if (depth->_raw.format == MTLPixelFormatDepth32Float ||
+        (depth->_raw.format == MTLPixelFormatDepth32Float_Stencil8 && !(pass.zetaAspects & 2)))
         return !pass.testsStencil && !first.testsStencil;
     if (depth->_raw.format == MTLPixelFormatDepth16Unorm)
         return !pass.testsStencil && !first.testsStencil && (!pass.shaderTestsDepth || first.shaderTestsDepth);
