@@ -175,6 +175,7 @@ typedef struct vm_shared_region_slide_info {
 	vm_object_t             si_slide_object;    /* The source object for the pages to be modified */
 	mach_vm_size_t          si_slide_info_size; /* size of dyld provided relocation information */
 	vm_shared_region_slide_info_entry_t si_slide_info_entry; /* dyld provided relocation information */
+	const struct switch_fvariant_cache *si_switch_fvariant; /* the pager fills these slots (switch/fvariant.h) */
 } *vm_shared_region_slide_info_t;
 
 /*

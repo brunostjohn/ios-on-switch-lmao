@@ -76,6 +76,7 @@ extern bool a64x_cache_pretranslated(struct vnode *vp);
 #include <vm/vm_protos_internal.h>
 #include <vm/vm_object_internal.h>
 #include <vm/vm_shared_region.h>
+#include <switch/fvariant.h>
 
 #include <vm/vm_protos.h>
 #if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
@@ -2779,6 +2780,7 @@ vm_shared_region_slide_mapping(
 	si->si_start = start;
 	si->si_end = si->si_start + size;
 	si->si_slide = slide;
+	si->si_switch_fvariant = switch_fvariant_for_region(sr);
 #if __has_feature(ptrauth_calls)
 	/*
 	 * If there is authenticated pointer data in this slid mapping,

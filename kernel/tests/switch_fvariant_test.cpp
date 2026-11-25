@@ -1,0 +1,201 @@
+// <switch/fvariant.h>: the dyld cache function-variant slots the shared region pager fills, checked against 24B119's
+// own bytes with dyld's selection rule, and what dyld does with the page before and after the fill.
+#include <gtest/gtest.h>
+
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <vector>
+
+#include "../switch/include/switch/fvariant.h"
+
+namespace {
+
+// 24B119's cache: the header's functionVariantInfo (unslid 0x2e5043190, 0xe8 bytes) and the FunctionVariants blobs
+// its entries point at (unslid 0x2f50df0a0..0x2f50df170), both in dyld_shared_cache_arm64e.79.dyldlinkedit.
+const std::array<uint8_t, 0xe8> kVariantInfo = {
+    0x01, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x80, 0x9e, 0xed, 0x01, 0x00, 0x00, 0x00, 0xa0, 0xf0,
+    0x0d, 0xf5, 0x02, 0x00, 0x00, 0x00, 0x00, 0x40, 0x2d, 0x84, 0x01, 0x00, 0x00, 0x00, 0x00, 0x30, 0x00, 0x00,
+    0x0e, 0x00, 0x24, 0x00, 0x08, 0x80, 0x9e, 0xed, 0x01, 0x00, 0x00, 0x00, 0xa0, 0xf0, 0x0d, 0xf5, 0x02, 0x00,
+    0x00, 0x00, 0x00, 0x40, 0x2d, 0x84, 0x01, 0x00, 0x00, 0x00, 0x01, 0x30, 0x00, 0x00, 0x0e, 0x00, 0x24, 0x00,
+    0x10, 0x80, 0x9e, 0xed, 0x01, 0x00, 0x00, 0x00, 0xa0, 0xf0, 0x0d, 0xf5, 0x02, 0x00, 0x00, 0x00, 0x00, 0x40,
+    0x2d, 0x84, 0x01, 0x00, 0x00, 0x00, 0x02, 0x30, 0x00, 0x00, 0x0e, 0x00, 0x24, 0x00, 0x18, 0x80, 0x9e, 0xed,
+    0x01, 0x00, 0x00, 0x00, 0xa0, 0xf0, 0x0d, 0xf5, 0x02, 0x00, 0x00, 0x00, 0x00, 0x40, 0x2d, 0x84, 0x01, 0x00,
+    0x00, 0x00, 0x03, 0x30, 0x00, 0x00, 0x0e, 0x00, 0x24, 0x00, 0x20, 0x80, 0x9e, 0xed, 0x01, 0x00, 0x00, 0x00,
+    0xa0, 0xf0, 0x0d, 0xf5, 0x02, 0x00, 0x00, 0x00, 0x00, 0x40, 0x2d, 0x84, 0x01, 0x00, 0x00, 0x00, 0x04, 0x30,
+    0x00, 0x00, 0x0e, 0x00, 0x24, 0x00, 0x28, 0x80, 0x9e, 0xed, 0x01, 0x00, 0x00, 0x00, 0x30, 0xf1, 0x0d, 0xf5,
+    0x02, 0x00, 0x00, 0x00, 0x00, 0xa0, 0x3c, 0xaf, 0x01, 0x00, 0x00, 0x00, 0x00, 0x30, 0x00, 0x00, 0xeb, 0x00,
+    0x08, 0x00, 0x00, 0x00, 0x8d, 0x75, 0x02, 0x00, 0x00, 0x00, 0x50, 0xf1, 0x0d, 0xf5, 0x02, 0x00, 0x00, 0x00,
+    0x00, 0xf0, 0x50, 0x07, 0x02, 0x00, 0x00, 0x00, 0x00, 0x30, 0x00, 0x00, 0xa8, 0x02, 0x08, 0x00,
+};
+constexpr uint64_t kTablesAddress = 0x2f50df0a0;
+const std::array<uint8_t, 0xd0> kVariantTables = {
+    0x05, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00, 0x30, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00, 0x60, 0x00, 0x00,
+    0x00, 0x78, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0xd0, 0xcc, 0x21, 0x00, 0x02, 0x00,
+    0x00, 0x00, 0xc8, 0xcc, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0xd0,
+    0xcc, 0x21, 0x00, 0x02, 0x00, 0x00, 0x00, 0xc8, 0xcc, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0x00, 0xd0, 0xcc, 0x21, 0x00, 0x02, 0x00, 0x00, 0x00, 0xc8, 0xcc, 0x21, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0xd0, 0xcc, 0x21, 0x00, 0x02, 0x00, 0x00, 0x00, 0xc8, 0xcc,
+    0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0xd0, 0xcc, 0x21, 0x00, 0x02,
+    0x00, 0x00, 0x00, 0xc8, 0xcc, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x80, 0x69, 0x03, 0x00, 0x02, 0x00, 0x00, 0x00, 0x88, 0x69, 0x03,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00,
+    0x00, 0x00, 0x0c, 0xdb, 0x5a, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0xdb, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// dyld's per-process flags (ProcessConfig::Process::evaluateFunctionVariantFlags in 24B119's dyld): bit 0 always,
+// bit 2 when apple[] has has_sec_transition.
+constexpr uint64_t kDefaultProcess = 1;
+constexpr uint64_t kSecTransitionProcess = 1 | 4;
+constexpr uint32_t kSlide = 0x13fc000;  // Switch-recorder-5's
+
+uint32_t U32(const uint8_t *p)
+{
+    uint32_t v = 0;
+    std::memcpy(&v, p, sizeof(v));
+    return v;
+}
+
+uint64_t U64(const uint8_t *p)
+{
+    uint64_t v = 0;
+    std::memcpy(&v, p, sizeof(v));
+    return v;
+}
+
+// mach_o::FunctionVariants and ProcessConfig::Process::selectFromFunctionVariants: the first entry whose flag bits are
+// all set wins; the last entry is the default.
+uint64_t Select(const uint8_t *blob, uint32_t table, uint64_t perProcessFlags)
+{
+    const uint8_t *runtime = blob + U32(blob + 4 + 4 * size_t{table});
+    EXPECT_EQ(U32(runtime), 1U) << "a per-process table";
+    const uint32_t count = U32(runtime + 4);
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint8_t *entry = runtime + 8 + 8 * size_t{i};
+        const uint32_t impl = U32(entry);
+        int flagCount = 0;
+        for (int f = 0; f < 4; ++f) {
+            if (entry[4 + f] != 0)
+                flagCount = f + 1;
+        }
+        bool all = true;
+        for (int f = 0; f < flagCount; ++f) {
+            all = all && (perProcessFlags & (uint64_t{1} << entry[4 + f])) != 0;
+        }
+        if (all) {
+            EXPECT_EQ(impl >> 31, 0U) << "no nested tables in 24B119";
+            return impl & 0x7fffffffU;
+        }
+    }
+    ADD_FAILURE() << "no default entry";
+    return 0;
+}
+
+struct Location {
+    uint64_t slot;
+    uint64_t target;
+};
+
+// DyldSharedCache::forEachFunctionVariantPatchLocation over kVariantInfo, with the implementation dyld selects.
+std::vector<Location> DyldLocations(uint64_t perProcessFlags)
+{
+    std::vector<Location> out;
+    const uint32_t count = U32(kVariantInfo.data() + 4);
+    EXPECT_EQ(8 + 32 * size_t{count}, kVariantInfo.size());
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint8_t *entry = kVariantInfo.data() + 8 + 32 * size_t{i};
+        const uint64_t blobAt = U64(entry + 8) - kTablesAddress;
+        const uint32_t bits = U32(entry + 24);
+        EXPECT_LT(blobAt, kVariantTables.size());
+        EXPECT_EQ((bits >> 12) & 1, 1U) << "authenticated: plain on this kernel";
+        out.push_back(
+            {U64(entry), U64(entry + 16) + Select(kVariantTables.data() + blobAt, bits & 0xfff, perProcessFlags)});
+    }
+    return out;
+}
+
+// Loader::adjustFunctionVariantsInDyldCache: does dyld have to store into this page (and so take the lazy cache
+// writer, which remaps every DATA_CONST region of the cache when the kernel passes no dyld_hw_tpro_pagers)?
+bool DyldStores(const std::vector<uint8_t> &page, uint64_t uaddr, uint64_t perProcessFlags)
+{
+    bool stores = false;
+    for (const Location &l : DyldLocations(perProcessFlags)) {
+        const uint64_t at = l.slot + kSlide;
+        if (at >= uaddr && at + 8 <= uaddr + page.size()) {
+            stores = stores || U64(page.data() + (at - uaddr)) != l.target + kSlide;
+        }
+    }
+    return stores;
+}
+
+const struct switch_fvariant_cache *Cache24B119()
+{
+    const uint8_t uuid[16] = {0xa2, 0xdc, 0xa9, 0x08, 0x96, 0x84, 0x35, 0x07,
+                              0xb8, 0x7f, 0xfe, 0x22, 0xb8, 0x86, 0x69, 0x7a};
+    return switch_fvariant_lookup(uuid);
+}
+
+TEST(SwitchFvariant, PinsAreWhatDyldSelectsWithoutSecTransition)
+{
+    const struct switch_fvariant_cache *cache = Cache24B119();
+    ASSERT_NE(cache, nullptr);
+    const std::vector<Location> dyld = DyldLocations(kDefaultProcess);
+    ASSERT_EQ(cache->count, dyld.size());
+    for (size_t i = 0; i < dyld.size(); ++i) {
+        EXPECT_EQ(cache->slots[i].slot, dyld[i].slot) << i;
+        EXPECT_EQ(cache->slots[i].target, dyld[i].target) << i;
+    }
+}
+
+TEST(SwitchFvariant, ShippedPageMakesDyldStoreAndFilledPageDoesNot)
+{
+    const struct switch_fvariant_cache *cache = Cache24B119();
+    ASSERT_NE(cache, nullptr);
+    // .25.dylddata's and .54.dylddata's first __TPRO_CONST pages as the pager slides them: all 0, no rebases.
+    for (const uint64_t unslid : {UINT64_C(0x1ed9e8000), UINT64_C(0x2758d0000)}) {
+        std::vector<uint8_t> page(0x4000, 0);
+        const uint64_t uaddr = unslid + kSlide;
+        EXPECT_TRUE(DyldStores(page, uaddr, kDefaultProcess));
+        EXPECT_GT(switch_fvariant_fill(cache, kSlide, page.data(), uaddr, page.size()), 0U);
+        EXPECT_FALSE(DyldStores(page, uaddr, kDefaultProcess));
+        // A process dyld picks the other implementation for still stores its own.
+        EXPECT_TRUE(DyldStores(page, uaddr, kSecTransitionProcess));
+    }
+}
+
+TEST(SwitchFvariant, FillsOnlyShippedZeroSlotsInsideThePart)
+{
+    const struct switch_fvariant_cache *cache = Cache24B119();
+    ASSERT_NE(cache, nullptr);
+    const uint64_t page = 0x1ed9e8000 + kSlide;
+
+    std::vector<uint8_t> part(0x1000, 0);
+    EXPECT_EQ(switch_fvariant_fill(cache, kSlide, part.data(), page, part.size()), 6U);
+    EXPECT_EQ(U64(part.data()), 0x1844f0cc8 + kSlide);
+    EXPECT_EQ(U64(part.data() + 0x28), 0x1af400988 + kSlide);
+    EXPECT_EQ(U64(part.data() + 0x30), 0U);
+
+    std::vector<uint8_t> later(0x1000, 0);
+    EXPECT_EQ(switch_fvariant_fill(cache, kSlide, later.data(), page + 0x1000, later.size()), 0U);
+
+    std::vector<uint8_t> written(0x4000, 0);
+    const uint64_t mine = 0x1234;
+    std::memcpy(written.data() + 8, &mine, sizeof(mine));
+    EXPECT_EQ(switch_fvariant_fill(cache, kSlide, written.data(), page, written.size()), 5U);
+    EXPECT_EQ(U64(written.data() + 8), mine);
+
+    std::vector<uint8_t> tail(0x30, 0);
+    EXPECT_EQ(switch_fvariant_fill(cache, kSlide, tail.data(), page + 0x8, tail.size()), 5U);
+    EXPECT_EQ(switch_fvariant_fill(cache, kSlide, tail.data(), page, 7), 0U);
+    EXPECT_EQ(switch_fvariant_fill(nullptr, kSlide, tail.data(), page, tail.size()), 0U);
+}
+
+TEST(SwitchFvariant, OtherCachesHaveNoSlots)
+{
+    uint8_t uuid[16] = {0xa2, 0xdc, 0xa9, 0x08, 0x96, 0x84, 0x35, 0x07, 0xb8, 0x7f, 0xfe, 0x22, 0xb8, 0x86, 0x69, 0x7b};
+    EXPECT_EQ(switch_fvariant_lookup(uuid), nullptr);
+    std::memset(uuid, 0, sizeof(uuid));
+    EXPECT_EQ(switch_fvariant_lookup(uuid), nullptr);
+}
+
+}  // namespace
