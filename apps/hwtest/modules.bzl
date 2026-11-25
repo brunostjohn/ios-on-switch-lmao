@@ -244,6 +244,7 @@ TESTS_DEPTH_SRCS = [
     "tests/CoherenceBench.swift",
     "tests/CoherenceRewriteTest.swift",
     "tests/CompressedFloorTest.swift",
+    "tests/CompressedR32Arms.swift",
     "tests/CompressedShadowCases.swift",
     "tests/CompressedTargetsTest.swift",
     "tests/CompressedZbcArms.swift",
