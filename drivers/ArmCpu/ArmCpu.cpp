@@ -781,10 +781,13 @@ void ArmCpu::registerPmuInterrupt()
     constexpr uint64_t kTegra210DistPhys = 0x50041000ULL;
     constexpr uint32_t kPmuIntidBase = 32U + 144U;
     if (!gicV2 || pmiHandler == nullptr || logicalId >= SWITCH_SMP_CORE_COUNT || gDistPhys != kTegra210DistPhys) {
+        IOLog("ArmCpu: CPU%u PMU interrupt not registered (GICv2 %d, PMI handler %d, distributor %#llx)\n", logicalId,
+              gicV2, pmiHandler != nullptr, static_cast<unsigned long long>(gDistPhys));
         return;
     }
     const uint32_t expectedTarget = __atomic_load_n(&armcpu_gic_targets[logicalId], __ATOMIC_ACQUIRE);
     if (expectedTarget == 0U || dist == 0) {
+        IOLog("ArmCpu: CPU%u PMU interrupt not registered: no GIC target published\n", logicalId);
         return;
     }
     const uint32_t intid = kPmuIntidBase + logicalId;

@@ -122,7 +122,14 @@ void switch_idle_wfi(struct cpu_data *cdp)
                       : SWITCH_IDLE_WFI;
     if (core->state == SWITCH_IDLE_C7) {
         core->wake_at = switch_idle_c7_wake_at(deadline, core->lead);
+#if DEVELOPMENT || DEBUG
+        const uint64_t pmu_from = mach_absolute_time();
         idle_pmu_save(cdp);
+        core->counts.pmu_save_ticks += mach_absolute_time() - pmu_from;
+        core->counts.pmu_saves++;
+#else
+        idle_pmu_save(cdp);
+#endif
         const int64_t rc =
             idle_platform->power_down(cpu, switch_idle_timer_ticks(now, core->wake_at, idle_platform->wake_ticks_max));
         idle_pmu_returned(cdp);

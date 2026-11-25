@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * User threads' kernel time by what entered the kernel (systime.h), debug kernels: one line with each 10 s scheduling
- * report (stats.c). Each CPU's counts have one writer, that CPU: sleh_synchronous counts an entry before it enables
+ * report (stats.c), and one on what the PMU costs and whether its overflow interrupts arrive. Each CPU's counts have one writer, that CPU: sleh_synchronous counts an entry before it enables
  * interrupts, and recount absorbs a slice with interrupts masked. The report reads every CPU's counts from its own
  * thread, so a count it reads may miss the slice being added at that moment; the next window has it.
  */
@@ -20,6 +20,10 @@
 #include <os/atomic_private.h>
 #include <os/log.h>
 #include <pexpert/arm64/board_config.h>
+#include <arm/cpu_data_internal.h>
+#include <arm64/switch_smp.h>
+#include <switch/idle.h>
+#include <switch/pmuv3.h>
 
 #if DEVELOPMENT || DEBUG
 
@@ -59,6 +63,68 @@ void switch_systime_absorb(thread_t thread, task_t task, uint64_t mach)
     add(&systime_cpu[cpu_number()].counts.time[bucket_of(thread)], mach);
 }
 
+/*
+ * What precise user/kernel PMC accounting costs (CONFIG_PERVASIVE_CPI): recount reads the cycle counter and
+ * INST_RETIRED at every user/kernel transition beside the timestamp. The two reads timed against a timestamp read,
+ * interrupts masked, in ticks per 64 transitions.
+ */
+static uint64_t pmc_read_ticks(void)
+{
+    const boolean_t enabled = ml_set_interrupts_enabled(FALSE);
+    uint64_t sink = 0;
+    const uint64_t t0 = mach_absolute_time();
+    for (unsigned int i = 0; i < 64; i++) {
+        sink += switch_pmuv3_read_pmccntr() + switch_pmuv3_read_evcntr(0);
+    }
+    const uint64_t t1 = mach_absolute_time();
+    for (unsigned int i = 0; i < 64; i++) {
+        sink += mach_absolute_time();
+    }
+    const uint64_t t2 = mach_absolute_time();
+    ml_set_interrupts_enabled(enabled);
+    __asm__ volatile("" ::"r"(sink));
+    return (t1 - t0) > (t2 - t1) ? (t1 - t0) - (t2 - t1) : 0;
+}
+
+/* PMIs each CPU took (cpu_stat.pmi_cnt_wake, both trees' PMI handlers), the C7 PMU saves, and the precise reads. */
+static void report_pmu(char *line, size_t size, uint64_t window_ns, uint64_t transitions)
+{
+    static uint64_t pmis_seen[MAX_CPUS], saves_seen[SWITCH_SMP_CORE_COUNT], save_ticks_seen[SWITCH_SMP_CORE_COUNT];
+    const unsigned int cpus = MIN((unsigned int)ml_get_max_cpu_number() + 1, (unsigned int)MAX_CPUS);
+    uint64_t saves = 0, save_ticks = 0, ns = 0;
+    const uint64_t read_ticks = pmc_read_ticks();
+    size_t at =
+        switch_systime_put(size, 0, snprintf(line, size, "SwitchSched pmu (%llu ms): PMIs", window_ns / NSEC_PER_MSEC));
+
+    for (unsigned int cpu = 0; cpu < cpus; cpu++) {
+        const cpu_data_t *cdp = cpu_datap((int)cpu);
+        const uint64_t pmis = cdp != NULL ? os_atomic_load(&cdp->cpu_stat.pmi_cnt_wake, relaxed) : 0;
+
+        at = switch_systime_put(size, at,
+                                snprintf(line + at, size - at, " cpu%u %llu", cpu, pmis - MIN(pmis, pmis_seen[cpu])));
+        pmis_seen[cpu] = pmis;
+    }
+    for (uint32_t cpu = 0; cpu < SWITCH_SMP_CORE_COUNT; cpu++) {
+        struct switch_idle_counts c;
+
+        if (switch_idle_read_counts(cpu, &c) == 0) {
+            saves += c.pmu_saves - MIN(c.pmu_saves, saves_seen[cpu]);
+            save_ticks += c.pmu_save_ticks - MIN(c.pmu_save_ticks, save_ticks_seen[cpu]);
+            saves_seen[cpu] = c.pmu_saves;
+            save_ticks_seen[cpu] = c.pmu_save_ticks;
+        }
+    }
+    absolutetime_to_nanoseconds(save_ticks, &ns);
+    at = switch_systime_put(
+        size, at, snprintf(line + at, size - at, "; C7 PMU saves %llu, %llu ns each", saves, saves ? ns / saves : 0));
+    absolutetime_to_nanoseconds(read_ticks, &ns);
+    (void)snprintf(
+        line + at, size - at,
+        "; precise transition reads %llu ns each beyond the timestamp, %llu transitions from traps (%llu us)", ns / 64,
+        transitions, ns * transitions / 64 / NSEC_PER_USEC);
+    os_log(OS_LOG_DEFAULT, "%s", line);
+}
+
 void switch_sched_systime_report(char *line, size_t size, uint64_t window_ns)
 {
     struct switch_systime now = {{0}};
@@ -85,6 +151,11 @@ void switch_sched_systime_report(char *line, size_t size, uint64_t window_ns)
                                      window_ns / NSEC_PER_MSEC));
     switch_systime_format(line + at, size - at, &window, tb.numer, tb.denom);
     os_log(OS_LOG_DEFAULT, "%s", line);
+    uint64_t entries = 0;
+    for (unsigned int b = 0; b < SWITCH_SYSTIME_OUTSIDE; b++) {
+        entries += window.entries[b];
+    }
+    report_pmu(line, size, window_ns, 2 * entries);
 }
 
 #endif /* DEVELOPMENT || DEBUG */
