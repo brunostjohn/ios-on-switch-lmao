@@ -117,16 +117,24 @@ def pacing_section(s: Session) -> list[str]:
 def slow_section(s: Session, syms: symbols.Symbols) -> list[str]:
     stages: Counter[str] = Counter()
     periods: Counter[str] = Counter()
+    before: Counter[str] = Counter()
     for x in s.slows:
         stages[x.stage] += 1
-        periods[x.stage] += x.frame.frames - 1
+        periods[x.stage] += x.chain_periods
+        before[x.stage] += x.frame.frames - 1 - x.chain_periods
     joined = sum(1 for x in s.slows if x.render)
+    windowed = sum(1 for x in s.slows if x.window)
     out = [
         '',
         '## Slow presents: the stage that lost the period',
-        f'{len(s.slows)} slow presents, {joined} joined with their render thread line',
+        f'{len(s.slows)} slow presents, {joined} joined with their render thread line, {windowed} carry its window',
+        "periods: those lost in the present's own chain; before its vsync: the rest of its interval",
     ]
-    out += [f'  {stage}: {n} presents, {periods[stage]} periods' for stage, n in stages.most_common()]
+    out += [
+        f'  {stage}: {n} presents, {periods[stage]} periods'
+        + (f', {before[stage]} before its vsync' if before[stage] else '')
+        for stage, n in stages.most_common()
+    ]
     sites = Counter(x.render.longest for x in s.slows if x.stage == pacing.WAITED and x.render)
     out += [
         f'  the render thread waited at {syms.resolve_where(site)}: {n} presents' for site, n in sites.most_common(4)

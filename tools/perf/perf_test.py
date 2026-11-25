@@ -109,6 +109,46 @@ class PacingTest(unittest.TestCase):
         expected = ['render thread waited', 'record, on core', 'record', 'gap before it', 'display queue', 'unanchored']
         self.assertEqual(stages, expected)
 
+    def test_a_first_submit_before_the_vsync_or_none_still_places_the_frame(self):
+        """Lines of boot 2693043C (25 Nov), which the classifier used to call unclassified."""
+        before = (
+            'SwitchFrame: latch {latch} after 3 frames (49999 us), cause ca; origin vsync {origin}; first submit '
+            '-24689, last submit 8756 (2, exec 35 us), swap 8845, offer 8971, gpu done 17602, flip 17604, latch 33332 '
+            'us; other submits 2; swap thread base 54 sched 54 mode 2 qos 0; cpu 1785 MHz at vsync 1785 at swap; imp 2 '
+            '211 us, bind 2 45 us, alloc 0 0 us, free 2, clean 32 KiB 12 us; gpu busy 33.5%'
+        )
+        none = (
+            'SwitchFrame: latch {latch} after 2 frames (33315 us), cause ca; origin vsync {origin}; first submit -1, '
+            'last submit -1 (0, exec 0 us), swap 18375, offer 18437, gpu done -1, flip 18472, latch 33314 us; other '
+            'submits 0; swap thread base 54 sched 54 mode 2 qos 0; cpu 1785 MHz at vsync 1785 at swap; imp 0 0 us, '
+            'bind 0 0 us, alloc 0 0 us, free 0, clean 0 KiB 0 us; gpu busy 0.0%'
+        )
+        slows = pacing.slow_presents([frame(before, 0.04, MACH0 + 1000), frame(none, 1.04, MACH0 + 60 * PERIOD_TICKS)])
+        self.assertEqual([s.stage for s in slows], ['gpu', 'encode'])
+        self.assertEqual([(s.chain_periods, s.frame.frames - 1) for s in slows], [(1, 2), (1, 1)])
+        self.assertIn('lost in: gpu (1 in its chain, 1 before its vsync)', pacing.timeline(slows[0])[0])
+
+    def test_the_render_threads_window_on_the_frame_line_places_its_wake_and_recording(self):
+        origin = MACH0 + 1000
+        window = '; render vsync {vsync} woke {woke} first {first}'
+        late_first = LATE_RECORD.replace('first submit 22523', 'first submit -3000') + window
+        recs = [
+            frame(late_first, 0.04, origin, vsync=origin + 768, woke=150, first=21000),
+            frame(
+                LATE_RECORD + window,
+                1.04,
+                origin + 60 * PERIOD_TICKS,
+                vsync=origin + 60 * PERIOD_TICKS,
+                woke=18000,
+                first=-1,
+            ),
+            frame(LATE_RECORD + window, 2.04, origin + 120 * PERIOD_TICKS, vsync=origin, woke=18000, first=-1),
+        ]
+        slows = pacing.slow_presents(recs)
+        self.assertEqual([s.stage for s in slows], ['record', 'late wake', 'record'])
+        self.assertEqual([s.window for s in slows], [(150, 21000), (18000, -1), None])
+        self.assertIn('render thread window: woke +0.1 ms, first submit +21.0 ms', '\n'.join(pacing.timeline(slows[0])))
+
     def test_the_commits_before_the_swap_join_the_present(self):
         origin = MACH0 + 1000
         commit = origin + int(0.020 * TICK_HZ)
