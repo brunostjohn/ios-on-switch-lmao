@@ -11,7 +11,9 @@ final class ZbcArmVerdictTests: XCTestCase {
     }
 
     func testAnArmThatAskedNothingAndHitNothingFails() {
-        XCTAssertEqual(ZbcArmVerdict.wrong("rgb10a2", firstOff: 0, lastOff: 0, hits: 0, refused: 0), ["zbc_rgb10a2_no_hit"])
+        XCTAssertEqual(
+            ZbcArmVerdict.wrong("rgb10a2", firstOff: 0, lastOff: 0, hits: 0, refused: 0), ["zbc_rgb10a2_no_hit"]
+        )
     }
 
     func testAnArmThatHitItsEntryWithItsTexelsPasses() {

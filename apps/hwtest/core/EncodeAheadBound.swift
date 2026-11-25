@@ -10,7 +10,8 @@ public enum EncodeAheadBound {
     /// sixteen whose worker had not run by the commit takes the mean half an encoder under.
     public static let eventShortfall = 1.0
 
-    /// Why the shape's encode ahead is out of bounds, nil where it is in them; `eventAfter`: the encoders before its event
+    /// Why the shape's encode ahead is out of bounds, nil where it is in them; `eventAfter`: the encoders before its
+    /// event
     public static func failure(
         _ shape: String, pipelined: Double, encoders: Double, passes: Int, eventAfter: Int?
     ) -> String? {

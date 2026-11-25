@@ -1,8 +1,8 @@
 import Foundation
 
 /// One of gpu.gm20b.compressed_targets' ZBC arms judged: its first clear's texels off the value, its last clear's off
-/// the first's, its full clears that hit an entry, and its entry asks the kernel refused. A refused ask leaves the arm's
-/// clears ordinary ones, so ZBC was never exercised for its format: that fails on its own, never as a pass.
+/// the first's, its full clears that hit an entry, and its entry asks the kernel refused. A refused ask leaves the
+/// arm's clears ordinary ones, so ZBC was never exercised for its format: that fails on its own, never as a pass.
 public enum ZbcArmVerdict {
     public static func wrong(_ arm: String, firstOff: Int, lastOff: Int, hits: Int, refused: Int) -> [String] {
         var wrong: [String] = []
