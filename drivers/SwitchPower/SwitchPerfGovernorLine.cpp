@@ -35,6 +35,11 @@ void copyLine(switchperf::LineTaken *to, const switchperf::LineTaken *from)
         to->residency[i] = get(&from->residency[i]);
     to->span = get(&from->span);
     to->busySum = get(&from->busySum);
+    to->peakSum = get(&from->peakSum);
+    to->allSum = get(&from->allSum);
+    to->efficiencySum = get(&from->efficiencySum);
+    to->topOneCore = get(&from->topOneCore);
+    to->topEfficiency = get(&from->topEfficiency);
     to->ups = get(&from->ups);
     to->downs = get(&from->downs);
     to->jumps = get(&from->jumps);
@@ -58,16 +63,26 @@ uint32_t boostsSince(unsigned source, uint32_t now)
 #endif
 }  // namespace
 
-void switchperf::lineWindow(LineStats *stats, uint32_t busy)
+void switchperf::lineWindow(LineStats *stats, const WindowBusy &busy, uint32_t upPermille)
 {
 #if DEVELOPMENT || DEBUG
     ++stats->windows;
-    stats->busySum += busy;
-    if (busy > stats->busyPeak)
-        stats->busyPeak = busy;
+    stats->busySum += busy.decision;
+    stats->peakSum += busy.peak;
+    stats->allSum += busy.all;
+    stats->efficiencySum += busy.efficiency;
+    if (busy.decision > stats->busyPeak)
+        stats->busyPeak = busy.decision;
+    if (busy.decision >= upPermille) {
+        if (busy.peak >= upPermille && busy.all - busy.peak < 1000 - upPermille)
+            ++stats->topOneCore;
+        if (busy.all - busy.efficiency < upPermille)
+            ++stats->topEfficiency;
+    }
 #else
     (void)stats;
     (void)busy;
+    (void)upPermille;
 #endif
 }
 
@@ -93,6 +108,11 @@ void switchperf::linePublish(LineStats *stats, switch_gov *gov, uint64_t now)
     }
     put(&gLine.span, now - stats->since);
     put(&gLine.busySum, stats->busySum);
+    put(&gLine.peakSum, stats->peakSum);
+    put(&gLine.allSum, stats->allSum);
+    put(&gLine.efficiencySum, stats->efficiencySum);
+    put(&gLine.topOneCore, stats->topOneCore);
+    put(&gLine.topEfficiency, stats->topEfficiency);
     put(&gLine.ups, gov->ups);
     put(&gLine.downs, gov->downs);
     put(&gLine.jumps, gov->jumps);
@@ -183,6 +203,14 @@ void switchperf::lineFormat(const LineTaken &taken, unsigned index, char *line, 
             taken.windows ? taken.busySum / taken.windows / 10 : 0, taken.busyPeak / 10, taken.windows, touches, frames,
             launches, foreground, taken.boot ? ", boot floor" : "", in.khz[taken.lo] / 1000, in.khz[taken.hi] / 1000,
             in.khz[index] / 1000, target / 1000000, measured / 1000000, vdd));
+    }
+    if (n < len && taken.windows) {
+        n += static_cast<size_t>(snprintf(
+            line + n, len - n,
+            "; busy by CPU: busiest mean %llu%%, all summed %llu%% of %u00%%, utility and background %llu%%; top-point "
+            "windows from one CPU alone %u, from utility and background work alone %u",
+            taken.peakSum / taken.windows / 10, taken.allSum / taken.windows / 10, in.cpus,
+            taken.efficiencySum / taken.windows / 10, taken.topOneCore, taken.topEfficiency));
     }
     if (n < len) {
         n += static_cast<size_t>(snprintf(line + n, len - n, "; owner wakes: tick %u, touch %u, frame %u, launch %u",

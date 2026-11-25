@@ -13,6 +13,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <stdexcept>
@@ -93,7 +94,7 @@ void tick(uint64_t at)
 // The owner's work loop after a signal: the index switchperf decided, applied.
 unsigned own()
 {
-    char line[760];
+    char line[960];
     const unsigned index = switchperf::take(line, sizeof(line));
     switchperf::applied(index);
     return index;
@@ -437,7 +438,7 @@ TEST_F(SwitchPerfCallouts, EveryContextAtOnce)
 // The periodic line: the tick publishes it once per 10 s, the owner's take() makes it, with who woke the owner.
 TEST_F(SwitchPerfCallouts, TheTenSecondLineCountsTheOwnersWakes)
 {
-    char line[760] = "";
+    char line[960] = "";
     for (unsigned lines = 0; lines < 2;) {
         gNow += 8 * kMs;
         if (lines == 1 && line[0] == 0 && gTouchSent == 0) {
@@ -455,6 +456,67 @@ TEST_F(SwitchPerfCallouts, TheTenSecondLineCountsTheOwnersWakes)
     EXPECT_NE(text.find("boosts touch 1 frame 0 launch 0 (0 foreground)"), std::string::npos) << text;
     EXPECT_NE(text.find("; owner wakes: tick "), std::string::npos) << text;
     EXPECT_NE(text.find(", touch 1, frame 0, launch 0"), std::string::npos) << text;
+}
+
+// One utility thread spinning on one CPU while the others idle: the clock goes to the top as before (the decision is
+// the CPUs' busy time summed), and the line says that one CPU alone, and utility work alone, put it there.
+TEST_F(SwitchPerfCallouts, TheLineTellsOneSpinningUtilityThreadFromSharedLoad)
+{
+    char line[960] = "";
+    perfcontrol_thread_data utility = {0, PERFCONTROL_CLASS_UTILITY};
+    for (unsigned lines = 0; lines < 2;) {
+        const uint64_t start = gNow.load();
+        gCallbacks.load()->csw(CONTEXT_SWITCH, 0, start, 0, nullptr, &utility, nullptr, nullptr);
+        for (uint32_t cpu = 1; cpu < 4; ++cpu)
+            contextSwitch(cpu, true, start);
+        gNow = start + 8 * kMs;
+        line[0] = 0;
+        tick(gNow);
+        switchperf::applied(switchperf::take(line, sizeof(line)));
+        if (line[0])
+            ++lines;
+    }
+    EXPECT_EQ(own(), kTop);
+    const std::string text = line;
+    unsigned windows = 0;
+    unsigned oneCpu = 0;
+    unsigned efficiency = 0;
+    ASSERT_EQ(sscanf(text.c_str() + text.find(" over "), " over %u windows", &windows), 1) << text;
+    EXPECT_NE(text.find("busy by CPU: busiest mean 100%, all summed 100% of 400%, utility and background 100%"),
+              std::string::npos)
+        << text;
+    const size_t at = text.find("top-point windows from one CPU alone ");
+    ASSERT_NE(at, std::string::npos) << text;
+    ASSERT_EQ(sscanf(text.c_str() + at,
+                     "top-point windows from one CPU alone %u, from utility and background work "
+                     "alone %u",
+                     &oneCpu, &efficiency),
+              2)
+        << text;
+    EXPECT_EQ(oneCpu, windows);
+    EXPECT_EQ(efficiency, windows);
+}
+
+// The same spin on a UI thread: one CPU alone, but not utility work.
+TEST_F(SwitchPerfCallouts, AUiThreadsSpinIsNotCountedAsUtilityWork)
+{
+    char line[960] = "";
+    perfcontrol_thread_data ui = {0, PERFCONTROL_CLASS_UI};
+    for (unsigned lines = 0; lines < 2;) {
+        const uint64_t start = gNow.load();
+        gCallbacks.load()->csw(CONTEXT_SWITCH, 0, start, 0, nullptr, &ui, nullptr, nullptr);
+        for (uint32_t cpu = 1; cpu < 4; ++cpu)
+            contextSwitch(cpu, true, start);
+        gNow = start + 8 * kMs;
+        line[0] = 0;
+        tick(gNow);
+        switchperf::applied(switchperf::take(line, sizeof(line)));
+        if (line[0])
+            ++lines;
+    }
+    const std::string text = line;
+    EXPECT_NE(text.find("utility and background 0%"), std::string::npos) << text;
+    EXPECT_NE(text.find(", from utility and background work alone 0"), std::string::npos) << text;
 }
 
 // No System Boot Complete: the first tick past the fallback wakes the owner, which closes the boot window, though the

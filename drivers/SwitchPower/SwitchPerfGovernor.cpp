@@ -12,9 +12,8 @@
 //     expiry and interrupt wake-up of an idle CPU. While the system runs it fires within a context switch of each
 //     kCpuWindowUs; a fully idle system has no ticks and needs none (its clock was already lowered, or is lowered at
 //     the first wake-up after the hold).
-//   * Decision (SwitchGovernor.h, host-tested): a window's busy share is the busiest CPU's, or the sum over all CPUs
-//     capped at one CPU, whichever is larger (the cluster shares one clock, and a thread that migrated between CPUs in
-//     the window shows up in the sum). At or above kCpuUpPermille: the top point at once; else the lowest point whose
+//   * Decision (SwitchGovernor.h, host-tested): a window's busy share is the sum over all CPUs capped at one CPU (the
+//     cluster shares one clock, and a thread that migrated between CPUs in the window shows up in the sum). At or above kCpuUpPermille: the top point at once; else the lowest point whose
 //     kCpuTargetPermille share covers the work; down only after kCpuDownHoldUs of lower targets.
 //   * Boosts (switch_perf_hint, SwitchPower.h): a touch (SwitchTouch's interrupt), a frame that took two or more
 //     refresh periods (NativeLegacyDisplay's present stamps), an exec (XNU exec_activate_image) or an app's task taking
@@ -81,6 +80,9 @@ struct Tick {
     uint32_t generation;  // gGeneration this state was made for
     switch_gov gov;
     uint64_t prevTotal[switchperf::kCpus], prevNow;
+#if DEVELOPMENT || DEBUG
+    uint64_t prevEfficiency[switchperf::kCpus];
+#endif
     uint32_t limits;  // gLimits as last folded in
     uint64_t logDue;
     switchperf::LineStats stats;
@@ -92,8 +94,12 @@ void restartTick(const switchperf::Config &config, uint32_t generation, uint64_t
 {
     gTick.generation = generation;
     switch_gov_init(&gTick.gov, config.khz, config.count, config.start, config.tunables, now);
-    for (unsigned c = 0; c < switchperf::kCpus; ++c)
+    for (unsigned c = 0; c < switchperf::kCpus; ++c) {
         gTick.prevTotal[c] = switch_cpu_load_busy(&switchperf::gLoad[c], now);
+#if DEVELOPMENT || DEBUG
+        gTick.prevEfficiency[c] = switch_cpu_load_busy(&switchperf::gLoadEfficiency[c], now);
+#endif
+    }
     gTick.prevNow = now;
     gTick.limits = switchperf::packLimits(0, config.count - 1);
     gTick.logDue = now + config.logWindow;
@@ -101,37 +107,61 @@ void restartTick(const switchperf::Config &config, uint32_t generation, uint64_t
     gTick.stats.since = now;
 }
 
-// The scheduler's context-switch callout (interrupts masked, the switching CPU's own slot only).
-void csw(perfcontrol_event event, uint32_t cpu, uint64_t timestamp, uint32_t, struct perfcontrol_thread_data *,
-         struct perfcontrol_thread_data *, struct perfcontrol_cpu_counters *, switchperf::CswTimeout)
+#if DEVELOPMENT || DEBUG
+bool efficiencyClass(const struct perfcontrol_thread_data *oncore)
 {
-    if (cpu < switchperf::kCpus)
-        switch_cpu_load_switch(&switchperf::gLoad[cpu], timestamp, event != IDLE);
+    return oncore && (oncore->perfctl_class == PERFCONTROL_CLASS_BACKGROUND ||
+                      oncore->perfctl_class == PERFCONTROL_CLASS_UTILITY);
+}
+#endif
+
+// The scheduler's context-switch callout (interrupts masked, the switching CPU's own slots only).
+void csw(perfcontrol_event event, uint32_t cpu, uint64_t timestamp, uint32_t, struct perfcontrol_thread_data *,
+         struct perfcontrol_thread_data *oncore, struct perfcontrol_cpu_counters *, switchperf::CswTimeout)
+{
+    if (cpu >= switchperf::kCpus)
+        return;
+    switch_cpu_load_switch(&switchperf::gLoad[cpu], timestamp, event != IDLE);
+#if DEVELOPMENT || DEBUG
+    switch_cpu_load_switch(&switchperf::gLoadEfficiency[cpu], timestamp, event != IDLE && efficiencyClass(oncore));
+#else
+    (void)oncore;
+#endif
 }
 
-// One window's busy share, in permille; `cpuTime` the CPUs' busy time in it, summed over them.
-uint32_t windowBusy(const switchperf::Config &config, uint64_t now, uint64_t *cpuTime)
+uint32_t permilleOf(uint64_t done, uint64_t span)
+{
+    const uint64_t permille = span ? done * 1000 / span : 0;
+    return static_cast<uint32_t>(permille > 1000 ? 1000 : permille);
+}
+
+// One window's busy shares; `cpuTime` the CPUs' busy time in it, summed over them. The decision is all CPUs' busy time
+// capped at one CPU (the cluster shares one clock, and a thread that migrated in the window shows up in the sum); the
+// busiest CPU's share never exceeds it.
+switchperf::WindowBusy windowBusy(const switchperf::Config &config, uint64_t now, uint64_t *cpuTime)
 {
     const uint64_t span = now - gTick.prevNow;
-    uint64_t sum = 0;
-    uint64_t peak = 0;
+    switchperf::WindowBusy busy = {};
     *cpuTime = 0;
     for (unsigned c = 0; c < config.cpus; ++c) {
         const uint64_t total = switch_cpu_load_busy(&switchperf::gLoad[c], now);
         const uint64_t done = total > gTick.prevTotal[c] ? total - gTick.prevTotal[c] : 0;
         gTick.prevTotal[c] = total;
         *cpuTime += done;
-        uint64_t permille = span ? done * 1000 / span : 0;
-        if (permille > 1000)
-            permille = 1000;
-        sum += permille;
-        if (permille > peak)
-            peak = permille;
+        const uint32_t permille = permilleOf(done, span);
+        busy.all += permille;
+        if (permille > busy.peak)
+            busy.peak = permille;
+#if DEVELOPMENT || DEBUG
+        const uint64_t efficiency = switch_cpu_load_busy(&switchperf::gLoadEfficiency[c], now);
+        const uint64_t efficient = efficiency > gTick.prevEfficiency[c] ? efficiency - gTick.prevEfficiency[c] : 0;
+        gTick.prevEfficiency[c] = efficiency;
+        busy.efficiency += permilleOf(efficient < done ? efficient : done, span);
+#endif
     }
     gTick.prevNow = now;
-    if (sum > 1000)
-        sum = 1000;
-    return static_cast<uint32_t>(peak > sum ? peak : sum);
+    busy.decision = busy.all > 1000 ? 1000 : busy.all;
+    return busy;
 }
 
 // One window: the limits and boosts the other sides posted, folded in; the step; the decision published. Returns
@@ -139,7 +169,8 @@ uint32_t windowBusy(const switchperf::Config &config, uint64_t now, uint64_t *cp
 // `boot` whether the boot window runs, `cpuTime` the window's busy time.
 bool step(const switchperf::Config &config, uint64_t now, bool *boot, uint64_t *cpuTime)
 {
-    uint32_t busy = windowBusy(config, now, cpuTime);
+    const switchperf::WindowBusy shares = windowBusy(config, now, cpuTime);
+    uint32_t busy = shares.decision;
     const uint32_t limits = __atomic_load_n(&switchperf::gLimits, __ATOMIC_RELAXED);
     if (limits != gTick.limits) {
         gTick.limits = limits;
@@ -149,7 +180,7 @@ bool step(const switchperf::Config &config, uint64_t now, bool *boot, uint64_t *
     if (until > now)
         switch_gov_boost(&gTick.gov, gTick.gov.count - 1, until, now);
 #if DEVELOPMENT || DEBUG
-    switchperf::lineWindow(&gTick.stats, busy);
+    switchperf::lineWindow(&gTick.stats, shares, config.tunables.up_permille);
 #endif
     const uint64_t bootUntil = __atomic_load_n(&switchperf::gBootUntil, __ATOMIC_RELAXED);
     *boot = now < bootUntil;
@@ -227,6 +258,9 @@ bool gRunning;
 Signal gSignal;
 void *gCtx;
 switch_cpu_load gLoad[kCpus];
+#if DEVELOPMENT || DEBUG
+switch_cpu_load gLoadEfficiency[kCpus];
+#endif
 Boost gTouch, gFrame, gLaunch[kCpus];
 uint32_t gApplied, gAppliedKhz;
 uint32_t gDecided;
