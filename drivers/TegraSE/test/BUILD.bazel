@@ -37,6 +37,7 @@ host_test(
     name = "tegra_se_bringup_test",
     srcs = [
         "tegra_se_bringup_test.cpp",
+        "tegra_se_model.h",
         "//drivers/ArmGIC:SwitchInterrupts.h",
         "//drivers/TegraSE:TegraSE.h",
         "//kits/SwitchCAR:SwitchCAR.h",
@@ -50,6 +51,28 @@ host_test(
     additional_compiler_inputs = ["//drivers/TegraSE:TegraSE.cpp"],
     # A release kernel's bring-up: a debug one's thread goes on to its timing run and never returns.
     copts = ["-UDEBUG"],
+    defines = ["SWITCH_MMIO_HOST_MODEL=1"],
+    deps = [":kernel"],
+)
+
+# A debug kernel's timing run against the same model: an engine that never ends one of the run's operations is off and
+# the run goes on without it.
+host_test(
+    name = "tegra_se_timing_test",
+    srcs = [
+        "tegra_se_timing_test.cpp",
+        "tegra_se_model.h",
+        "//drivers/ArmGIC:SwitchInterrupts.h",
+        "//drivers/TegraSE:TegraSE.h",
+        "//kits/SwitchCAR:SwitchCAR.h",
+        "//kits/SwitchDMA:SwitchDMABuffer.h",
+        "//kits/SwitchDMA:SwitchDcache.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+        "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+        "//kits/SwitchRefusal:SwitchRefusal.h",
+        "//kits/SwitchTime:SwitchTime.h",
+    ],
+    additional_compiler_inputs = ["//drivers/TegraSE:TegraSE.cpp"],
     defines = ["SWITCH_MMIO_HOST_MODEL=1"],
     deps = [":kernel"],
 )

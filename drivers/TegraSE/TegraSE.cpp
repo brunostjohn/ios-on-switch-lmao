@@ -31,8 +31,8 @@
 // one in 512 after are also done on the CPU and compared. A failed answer or a mismatch logs one line and moves that
 // algorithm (or that engine) back to the CPU for the boot; the caller still gets the CPU's result. An engine that
 // never ends an operation, or whose end interrupt does not arrive, is one line and off during bring-up, which runs
-// every kind of operation on it into the driver's own buffers; after that (DMA possibly in flight into a caller's
-// pages) it is a one-line panic.
+// every kind of operation on it into the driver's own buffers, and in a debug kernel's timing run, which does the same
+// at every size; serving a caller (DMA possibly in flight into its pages) it is a one-line panic.
 //
 // Registers and sequences: Linux L4T drivers/crypto/tegra-se.c (NVIDIA; GPL-2.0) tegra_se_config_algo/config_crypto/
 // config_sha/start_operation/read_hash_result/write_key_table with the tegra210b01 chip data; hekate bdk/sec/se.c and
@@ -322,7 +322,7 @@ void wipeSlots(Engine &e);
 
 // Until now every operation wrote only the driver's own buffers (bring-up). From here callers' pages reach the engines,
 // and a lost end interrupt or an output that never drains may have DMA in flight into them: a panic instead of the
-// engine turned off.
+// engine turned off. The driver's own threads (forced) still write only buffers that outlive an engine turned off.
 void prove()
 {
     for (Engine &e : gEngines)
@@ -366,7 +366,7 @@ bool run(Engine &e, uint32_t in, uint32_t out)
         char gic[160];
         switch_interrupt_describe(e.intid, gic, sizeof gic);
         const bool ended = (status & (kIntDone | kIntError)) != 0u;
-        if (e.proven) {
+        if (e.proven && !forced()) {
             panic("TegraSE: %s %s in %u ms (INT_STATUS %#x STATUS %#x ERR %#x; %s)", e.name,
                   ended ? "end interrupt lost" : "operation never ended", kOpTimeoutMs, status, rd(e, STATUS),
                   rd(e, ERR_STATUS), gic);
@@ -386,7 +386,7 @@ bool run(Engine &e, uint32_t in, uint32_t out)
     }
     for (unsigned i = 0; (rd(e, STATUS) & kStatusBusy) || (switch_mmio_read32(gAhb, kAhbWrque) & e.ahbMaster); ++i) {
         if (i > 100000) {
-            if (e.proven)
+            if (e.proven && !forced())
                 panic("TegraSE: %s output never drained (STATUS %#x)", e.name, rd(e, STATUS));
             snprintf(gWhy, sizeof gWhy, "output never drained (STATUS %#x)", rd(e, STATUS));
             engineOff(e, gWhy);
@@ -772,6 +772,14 @@ void algOff(unsigned alg, const char *what)
     IOLog("TegraSE: %s back on the CPU for this boot: %s\n", kAlgName[alg], what);
 }
 
+// An operation that failed on an engine still up is the algorithm's (an error the engine reported); one that turned
+// its engine off leaves the algorithm on the other engine.
+void runFailed(const Engine &e, unsigned alg)
+{
+    if (e.up)
+        algOff(alg, gWhy);
+}
+
 bool canSleep()
 {
     return (ml_at_interrupt_context() == 0) && (ml_get_interrupts_enabled() != 0) && get_preemption_level() == 0;
@@ -804,7 +812,7 @@ int aesLocked(tegra_se_mode mode, bool encrypt, const uint8_t *key, unsigned key
             result = 0;
         } else {
             result = -2;  // the engine ran (or tried): the output buffer may hold anything
-            algOff(alg, gWhy);
+            runFailed(*e, alg);
         }
     } else {
         tally(gUnreachable, whole);
@@ -991,7 +999,7 @@ extern "C" int tegra_se_cmac(const uint8_t *key, unsigned keyBytes, const void *
             tally(gAlg[CMAC].bytes, len);
             result = 0;
         } else {
-            algOff(CMAC, gWhy);
+            runFailed(*e, CMAC);
         }
         bzero(e->list.va + kScratch, 16);
     } else {
@@ -1056,7 +1064,7 @@ extern "C" int tegra_se_digest(unsigned which, const void *in, size_t len, uint8
             counted(alg, len, a, a);
             result = 0;
         } else {
-            algOff(alg, gWhy);
+            runFailed(*e, alg);
         }
     } else {
         tally(gUnreachable, len);
@@ -1102,7 +1110,7 @@ int compressHook(const struct ccdigest_info *original, ccdigest_state_t state, s
             counted(alg, len, a, a);
             result = 0;
         } else {
-            algOff(alg, gWhy);
+            runFailed(*e, alg);
         }
     } else {
         tally(gUnreachable, len);
@@ -1416,26 +1424,43 @@ void release(Dma *dma)
 }
 
 constexpr size_t kNever = ~static_cast<size_t>(0);
+constexpr uint32_t kTimingSizes[5] = {1024, 4096, 16384, 65536, 1048576};
+
+unsigned enginesUp()
+{
+    unsigned up = 0;
+    for (const Engine &e : gEngines)
+        up += e.up ? 1u : 0u;
+    return up;
+}
+
+// The timing run's input and output. An engine turned off mid-operation may still write the pair it was given, so
+// that pair stays allocated for the boot and the run goes on with a new one.
+bool timingBuffers(Dma *in, Dma *out)
+{
+    *in = {};
+    *out = {};
+    if (!allocate(in, kTimingSizes[4]) || !allocate(out, kTimingSizes[4])) {
+        IOLog("TegraSE: timing run ended: no 1 MiB DMA buffers below 4 GiB\n");
+        release(in);
+        return false;
+    }
+    for (uint32_t i = 0; i < kTimingSizes[4]; ++i)
+        in->va[i] = static_cast<uint8_t>(i * 2654435761u >> 13);
+    return true;
+}
 
 // Per algorithm and size: microseconds of the whole call on each engine (lists, cache maintenance, interrupt, wake)
 // against the CPU (kernel corecrypto, input cold in the cache like the engine's), best of 5; then each algorithm's
 // cutover set to the smallest size at which every engine is no slower than the CPU; then both engines at once.
 void timing()
 {
-    static const uint32_t sizes[5] = {1024, 4096, 16384, 65536, 1048576};
-    Dma in = {};
-    Dma out = {};
-    if (!allocate(&in, sizes[4]) || !allocate(&out, sizes[4])) {
-        IOLog("TegraSE: timing run skipped: no 1 MiB DMA buffers below 4 GiB\n");
-        release(&in);
+    const uint32_t *const sizes = kTimingSizes;
+    Dma in;
+    Dma out;
+    if (!timingBuffers(&in, &out))
         return;
-    }
-    for (uint32_t i = 0; i < sizes[4]; ++i)
-        in.va[i] = static_cast<uint8_t>(i * 2654435761u >> 13);
     gForced[0] = current_thread();
-    unsigned upAtStart = 0;
-    for (const Engine &e : gEngines)
-        upAtStart += e.up ? 1u : 0u;
     size_t cutover[ALGS] = {};
     for (const Row &row : kRows) {
         if (!gAlg[row.alg].on)
@@ -1470,7 +1495,9 @@ void timing()
                     if (c1 < cpuBest)
                         cpuBest = c1;
                 }
-                if (seBest <= cpuBest && engineCut == kNever)
+                if (!e.up)
+                    break;
+                if (seBest != ~0ULL && seBest <= cpuBest && engineCut == kNever)
                     engineCut = n;
                 const uint64_t a = tenths(seBest);
                 const uint64_t c = tenths(cpuBest);
@@ -1478,6 +1505,13 @@ void timing()
                     at += snprintf(line + at, sizeof line - static_cast<size_t>(at), " %uK %llu.%llu vs %llu.%llu%s",
                                    n / 1024, a / 10, a % 10, c / 10, c % 10, s < 4 ? "," : "");
                 }
+            }
+            if (!e.up) {  // its off line says why; it no longer decides a cutover
+                if (!timingBuffers(&in, &out)) {
+                    gForced[0] = nullptr;
+                    return;
+                }
+                continue;
             }
             IOLog("%s\n", line);
             if (engineCut > rowCut)
@@ -1499,6 +1533,7 @@ void timing()
     }
     IOLog("%s\n", line);
     // Both engines at once: two threads hashing 1 MiB 16 times each, against one thread alone.
+    const unsigned upBeforeParallel = enginesUp();
     if (gEngines[0].up && gEngines[1].up && gAlg[SHA256].on) {
         gAlg[SHA256].ops = kCheckFirst + 1;
         Parallel p = {1, 16, in.va, sizes[4], false};
@@ -1524,11 +1559,8 @@ void timing()
         }
     }
     gForced[0] = nullptr;
-    unsigned upAtEnd = 0;
-    for (const Engine &e : gEngines)
-        upAtEnd += e.up ? 1u : 0u;
-    if (upAtEnd < upAtStart)
-        return;  // an engine turned off mid-operation may still write these: they stay allocated
+    if (enginesUp() < upBeforeParallel)
+        return;  // see timingBuffers
     bzero(in.va, sizes[4]);
     release(&in);
     release(&out);
