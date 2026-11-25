@@ -16,6 +16,7 @@
 #include "../pack_scan.h"
 #include "TwoPlaneStandIn.h"
 #include "record_compare.h"
+#include "pipeline_capture.h"
 
 namespace {
 
@@ -89,14 +90,14 @@ void dumpRecord(const char *dir, const std::string &key, const gm20b::RuntimeRec
                     hexOf(v.program.image) + "\"}";
     }
     fprintf(f,
-            "{\"key\": %s, \"vs\": \"%s\", \"fs\": \"%s\", \"fs_gprs\": %u, \"fs_bound_textures\": %u, \"blob\": [%s], "
+            "{\"key\": %s, \"vs\": \"%s\", \"fs\": \"%s\", \"vs_gprs\": %u, \"fs_gprs\": %u, \"fs_bound_textures\": %u, \"blob\": [%s], "
             "\"split_fs\": \"%s\", \"split_prologue\": \"%s\", \"residual_words\": [%s], \"variants\": [%s], "
             "\"storage_mask\": %u, \"storage_blend_mask\": %u, \"storage_blend_model\": %u, "
             "\"half_blend_color_word\": %u, \"free_rung\": %d, \"free_colour\": %u, \"free_program\": %s, "
             "\"uniform\": [%s], \"entries\": [%s], \"fs_set_banks\": [%s], \"storage_write_mask\": %u, "
             "\"fs_cbufs\": [%s], \"fs_data\": \"%s\"",
             jsonString(key).c_str(), hexOf(rec.programs[0].image).c_str(), hexOf(rec.programs[1].image).c_str(),
-            rec.programs[1].gprs, rec.programs[1].boundTextures, blob.c_str(),
+            rec.programs[0].gprs, rec.programs[1].gprs, rec.programs[1].boundTextures, blob.c_str(),
             rec.split ? hexOf(rec.splitPrograms[0].image).c_str() : "",
             rec.split ? hexOf(rec.splitPrograms[1].image).c_str() : "", residuals.c_str(), variants.c_str(),
             rec.pipeline.storageMask, rec.pipeline.storageBlendMask, rec.pipeline.storageBlendModel,
@@ -159,7 +160,7 @@ int main(int argc, char **argv)
                 return 1;
             }
         }
-        gm20b::Direct direct(gm20b::PackRules::of(pack), false, offline::translator());
+        gm20b::Direct direct(gm20b::PackRules::of(pack), false, pipeline_capture::translator());
         direct.makeVariants(true);
         FILE *met = getenv("DIRECTCHECK_MET") ? fopen(getenv("DIRECTCHECK_MET"), "a") : nullptr;
         uint32_t states = 0, same = 0, barriers = 0, refused = 0, bad = 0, splits = 0;
