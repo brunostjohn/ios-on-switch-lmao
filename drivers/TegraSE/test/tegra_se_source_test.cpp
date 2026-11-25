@@ -46,3 +46,13 @@ TEST(TegraSESource, AnEngineIsProvenBeforeCallersPagesReachIt)
     EXPECT_LT(bringUp.find("rng(*got, seed)"), proven);
     EXPECT_EQ(Count(source, "prove();"), 1u);
 }
+
+// An engine turned off with an operation in flight may still write the outputs it was given.
+TEST(TegraSESource, KnownAnswersWriteBuffersThatOutliveTheirEngine)
+{
+    const std::string source = SourceText("../TegraSE.cpp");
+    const std::string answers = Body(source, "uint32_t knownAnswers(const Engine &only)\n");
+    EXPECT_THAT(answers, Not(HasSubstr("uint8_t buf[64]")));
+    EXPECT_THAT(answers, Not(HasSubstr("uint8_t out[64]")));
+    EXPECT_THAT(answers, HasSubstr("gAnswers[&only - gEngines].out"));
+}

@@ -223,6 +223,7 @@ bool forced()
 }
 
 volatile bool gReady;  // bring-up done: other callers may use the engines
+const Engine *gOnly;   // forceOnly's engine, under gQueue
 
 // Only `only` (or none) handed out by the queue, under its lock: the known answers and the timing run.
 void forceOnly(const Engine *only)
@@ -240,6 +241,7 @@ void forceOnly(const Engine *only)
     }
     for (Engine &e : gEngines)
         e.busy = (only != nullptr) && &e != only;
+    gOnly = only;
     IOLockUnlock(gQueue);
 }
 
@@ -402,12 +404,12 @@ bool claim(Engine &e, uint32_t owner)
     return __sync_bool_compare_and_swap(&e.owner, 0u, owner) || e.owner == owner;
 }
 
-// Any free engine (both run in parallel for two callers); null when none is up.
+// Any free engine (both run in parallel for two callers); null when none is up, or forceOnly's engine is down.
 Engine *acquire()
 {
     IOLockLock(gQueue);
     for (;;) {
-        if (gSleeping) {
+        if (gSleeping || (gOnly && !gOnly->up)) {
             IOLockUnlock(gQueue);
             return nullptr;
         }
@@ -1156,48 +1158,58 @@ const uint8_t kAbc[5][16] = {
     {0xdd, 0xaf, 0x35, 0xa1, 0x93, 0x61, 0x7a, 0xba, 0xcc, 0x41, 0x73, 0x49, 0xae, 0x20, 0x41, 0x31},  // SHA-512
 };
 
-// Runs every known answer on one engine (forced onto it); returns the algorithms that answered right.
+// The known answers' outputs, which an engine writes straight into when they are whole cache lines. An engine turned
+// off with an operation in flight may still write them, so they outlive it, one pair per engine.
+struct alignas(64) AnswerBuffers {
+    uint8_t buf[64], out[64];
+};
+
+AnswerBuffers gAnswers[kEngines];
+
+// Runs every known answer on one engine (forced onto it) until it answers or goes off; returns the algorithms that
+// answered right.
 uint32_t knownAnswers(const Engine &only)
 {
     gForced[0] = current_thread();
     forceOnly(&only);  // the queue hands out only this engine meanwhile
     uint32_t good = 0;
-    uint8_t buf[64];
-    uint8_t out[64];
+    uint8_t *const buf = gAnswers[&only - gEngines].buf;
+    uint8_t *const out = gAnswers[&only - gEngines].out;
     uint8_t iv[16];
-    for (unsigned alg = SHA1; alg <= SHA512; ++alg) {
+    for (unsigned alg = SHA1; alg <= SHA512 && only.up; ++alg) {
         static const unsigned which[] = {1, 224, 256, 384, 512};
         gAlg[alg].on = true;
         if (!tegra_se_digest(which[alg], "abc", 3, out) && !memcmp(out, kAbc[alg], 16))
             good |= 1u << alg;
     }
     gAlg[ECB].on = true;
-    bool ecb = true;
-    for (unsigned k = 0; k < 3; ++k) {
-        ecb &= (tegra_se_aes(TEGRA_SE_ECB, true, kKey256, 16 + 8 * k, nullptr, kFipsPlain, out, 16) == 0) &&
-               (memcmp(out, kFips[k], 16) == 0);
-        ecb &= (tegra_se_aes(TEGRA_SE_ECB, false, kKey256, 16 + 8 * k, nullptr, kFips[k], out, 16) == 0) &&
-               (memcmp(out, kFipsPlain, 16) == 0);
+    bool ecb = only.up;
+    for (unsigned k = 0; k < 3 && ecb; ++k) {
+        ecb = (tegra_se_aes(TEGRA_SE_ECB, true, kKey256, 16 + 8 * k, nullptr, kFipsPlain, out, 16) == 0) &&
+              (memcmp(out, kFips[k], 16) == 0) &&
+              (tegra_se_aes(TEGRA_SE_ECB, false, kKey256, 16 + 8 * k, nullptr, kFips[k], out, 16) == 0) &&
+              (memcmp(out, kFipsPlain, 16) == 0);
     }
     if (ecb)
         good |= 1u << ECB;
     gAlg[CBC].on = true;
     memcpy(iv, kIv, 16);
-    bool cbc = (tegra_se_aes(TEGRA_SE_CBC, true, kKey, 16, iv, kPlain, buf, 64) == 0) && (memcmp(buf, kCbc1, 16) == 0);
+    bool cbc = only.up && (tegra_se_aes(TEGRA_SE_CBC, true, kKey, 16, iv, kPlain, buf, 64) == 0) &&
+               (memcmp(buf, kCbc1, 16) == 0);
     memcpy(iv, kIv, 16);
     cbc = cbc && (tegra_se_aes(TEGRA_SE_CBC, false, kKey, 16, iv, buf, out, 64) == 0) && (memcmp(out, kPlain, 64) == 0);
     if (cbc)
         good |= 1u << CBC;
     gAlg[CTR].on = true;
     memcpy(iv, kCtrIv, 16);
-    if (!tegra_se_aes(TEGRA_SE_CTR, true, kKey, 16, iv, kPlain, out, 64) && !memcmp(out + 48, kCtr4, 16))
+    if (only.up && !tegra_se_aes(TEGRA_SE_CTR, true, kKey, 16, iv, kPlain, out, 64) && !memcmp(out + 48, kCtr4, 16))
         good |= 1u << CTR;
     gAlg[OFB].on = true;
     memcpy(iv, kIv, 16);
-    if (!tegra_se_aes(TEGRA_SE_OFB, true, kKey, 16, iv, kPlain, out, 64) && !memcmp(out, kOfb1, 16))
+    if (only.up && !tegra_se_aes(TEGRA_SE_OFB, true, kKey, 16, iv, kPlain, out, 64) && !memcmp(out, kOfb1, 16))
         good |= 1u << OFB;
     gAlg[CMAC].on = true;
-    if (!tegra_se_cmac(kKey, 16, kPlain, 16, out) && !memcmp(out, kCmac16, 16) &&
+    if (only.up && !tegra_se_cmac(kKey, 16, kPlain, 16, out) && !memcmp(out, kCmac16, 16) && only.up &&
         !tegra_se_cmac(kKey, 16, kPlain, 40, out) && !memcmp(out, kCmac40, 16))
         good |= 1u << CMAC;
     for (AlgState &state : gAlg) {
@@ -1213,7 +1225,7 @@ uint32_t knownAnswers(const Engine &only)
 // initial value: what the hook needs. Runs on one engine (forced) with gAlg on for the duration.
 bool stateLoadWorks(const Engine &only, unsigned alg, const struct ccdigest_info *di)
 {
-    if (!di)
+    if (!di || !only.up)
         return false;
     forceOnly(&only);
     static uint8_t data[4096];
@@ -1618,7 +1630,7 @@ void seThread(void *, wait_result_t)
             gStateLoad && ((answered & (1u << SHA256)) != 0u) && stateLoadWorks(e, SHA256, switch_digest_originals[1]);
         gStateLoad =
             gStateLoad && ((answered & (1u << SHA512)) != 0u) && stateLoadWorks(e, SHA512, switch_digest_originals[3]);
-        if ((answered & (1u << SHA1)) && !stateLoadWorks(e, SHA1, switch_digest_originals[0]))
+        if (e.up && (answered & (1u << SHA1)) && !stateLoadWorks(e, SHA1, switch_digest_originals[0]))
             answered &= ~(1u << SHA1);
     }
     for (unsigned alg = 0; alg < ALGS; ++alg)
