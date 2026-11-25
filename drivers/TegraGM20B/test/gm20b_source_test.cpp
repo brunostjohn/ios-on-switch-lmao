@@ -1867,27 +1867,24 @@ TEST(GM20BParkedBoSource, LockOrderAndOffLockVmCalls)
 	EXPECT_TRUE(stats.before("parkedStatsTake(", "IOLockLock(p->lock);"));
 }
 
-// Every refill decision counts a class's spares on the dirty list (SwitchGpuSpares.h switch_gpu_spare_short), and every
-// push onto or pop off that list keeps the count.
-TEST(GM20BSparesSource, TheRefillCountsDirtySpares)
+// Every refill, keep and take decision is the books' (SwitchGpuSpareBooks.h, replayed in switch_gpu_spare_books_test):
+// the kernel compares no byte count with the cap itself, and every push onto the dirty list is counted in the books.
+TEST(GM20BSparesSource, ThePoolDecidesThroughTheBooks)
 {
-	EXPECT_FALSE(CodeText(client()).has("p->count[c] + p->zeroing[c]"));
-	for (const char *fn : {"void spareZeroed(void *context, int result)",
-			       "void spareWork(thread_call_param_t param, thread_call_param_t)",
-			       "Spare *spareTake(uint64_t bytes, bool critical)"})
-		EXPECT_TRUE(Block(client(), fn)
-				    .has("switch_gpu_spare_short(p->count[c], p->zeroing[c], "
-					 "p->dirtyCount[c],"))
-			<< fn;
-	for (const char *fn :
-	     {"void spareRecycleWork(thread_call_param_t param, thread_call_param_t)",
-	      "void spareWork(thread_call_param_t param, thread_call_param_t)",
-	      "bool spareKeep(const SwitchGpuCachedBuffer &buffer"}) {
-		const CodeText body = Block(client(), fn);
-		EXPECT_EQ(body.count("p->dirtyBytes += ") + body.count("p->dirtyBytes -= "),
-			  body.count("++p->dirtyCount[") + body.count("--p->dirtyCount["))
-			<< fn;
-	}
+	const CodeText work = Block(client(), "void spareWork(thread_call_param_t param, thread_call_param_t)");
+	EXPECT_TRUE(work.has("switch_gpu_spare_books_refill(b, kSpareCapBytes)"));
+	EXPECT_TRUE(work.before("++b.dirty[c];", "spareMake(p, classBytes(c))"));
+	const CodeText recycle =
+		Block(client(), "void spareRecycleWork(thread_call_param_t param, thread_call_param_t)");
+	EXPECT_TRUE(recycle.has("switch_gpu_spare_books_keep(b, c, kSpareCapBytes)"));
+	const CodeText take = Block(client(), "Spare *spareTake(uint64_t bytes, bool critical)");
+	EXPECT_TRUE(take.has("switch_gpu_spare_books_take(b, c, critical)"));
+	EXPECT_TRUE(take.has("switch_gpu_spare_books_learn(b, c, why, kLearnMaxBytes, kSpareCapBytes);"));
+	for (const CodeText &body : {work, recycle, take})
+		EXPECT_FALSE(body.has("<= kSpareCapBytes") || body.has("> kSpareCapBytes"));
+	const CodeText keep = Block(client(), "bool spareKeep(const SwitchGpuCachedBuffer &buffer");
+	EXPECT_TRUE(keep.before("p->dirty = s;", "++p->books.dirty[spareClass(bytes)];"));
+	EXPECT_TRUE(keep.has("p->books.held += bytes;"));
 }
 
 // A refilled spare's page list comes from its prepared descriptor, not from its kernel view: the view of 128 KiB units

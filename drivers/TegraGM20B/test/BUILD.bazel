@@ -983,6 +983,15 @@ host_test(
 )
 
 host_test(
+    name = "switch_gpu_spare_books_test",
+    srcs = [
+        "switch_gpu_spare_books_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuSpareBooks.h",
+        "//drivers/TegraGM20B:SwitchGpuSpares.h",
+    ],
+)
+
+host_test(
     name = "switch_gpu_parked_test",
     srcs = [
         "switch_gpu_parked_test.cpp",

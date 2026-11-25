@@ -12,7 +12,7 @@
 #include <kern/thread.h>
 #include <kern/thread_call.h>
 #include <mach/vm_region.h>
-#include "SwitchGpuSpares.h"
+#include "SwitchGpuSpareBooks.h"
 #include "SwitchGpuParked.h"
 #include "SwitchGpuCachedBuffer.h"
 #include "SwitchGpuMethodGate.h"
@@ -208,10 +208,8 @@ struct SparePool {
 	PoolZero *poolDirty;  // freed pool BOs, not yet zeroed
 	Spare *ready
 		[kClasses];  // zeroed and clean, by class (classUp(bytes) <= class of a spare's bytes)
-	// by class: ready, the depth kept, on the copy engine, on the dirty list
-	uint16_t count[kClasses], target[kClasses], zeroing[kClasses], dirtyCount[kClasses];
-	uint64_t clean, dirtyBytes, cleaningBytes,
-		poolZeroing;  // bytes ready, freed and waiting, pool bytes waiting
+	switch_gpu_spare_books books;  // the lists' counts and bytes, and the depths (SwitchGpuSpareBooks.h)
+	uint64_t poolZeroing;          // pool bytes waiting for the scrub
 	// a copy-engine fill failed: no spare is made until the next BoAlloc asks
 	bool fillFailed;
 #if TGM_STATS
