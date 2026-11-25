@@ -383,16 +383,49 @@ void tgm_mem_del(struct tgm_mem **pmem)
 	tgm_gpu_lock();
 	mem_big_views_drop(mem);
 	nvif_mem_dtor(&mem->mem);
-	if (mem->smmu_iova && l2_on()) {
-		nvkm_ltc_flush(tgm_gpu.device->ltc);
+	/* L2 lines are tagged by the pre-SMMU address: none may outlive the IOVA's mapping. nvkm_ltc_invalidate flushes
+	 * first. */
+	if (mem->smmu_iova && l2_on())
 		nvkm_ltc_invalidate(tgm_gpu.device->ltc);
-	}
 	mutex_unlock(&tgm_gpu.lock);
 	if (mem->smmu_iova)
 		switch_gpu_smmu_unmap(mem->smmu_iova, mem->smmu_npages);
 	kfree(mem->smmu_pages);
 	kfree(mem);
 	*pmem = NULL;
+}
+
+void tgm_mem_del_later(struct tgm_mem **pmem, struct tgm_mem **later)
+{
+	struct tgm_mem *mem = *pmem;
+	if (!mem || !mem->smmu_iova) {
+		tgm_mem_del(pmem);
+		return;
+	}
+	tgm_gpu_lock();
+	mem_big_views_drop(mem);
+	nvif_mem_dtor(&mem->mem);
+	mutex_unlock(&tgm_gpu.lock);
+	mem->later = *later;
+	*later = mem;
+	*pmem = NULL;
+}
+
+void tgm_mem_del_finish(struct tgm_mem *later)
+{
+	if (!later)
+		return;
+	tgm_gpu_lock();
+	if (l2_on())
+		nvkm_ltc_invalidate(tgm_gpu.device->ltc);
+	mutex_unlock(&tgm_gpu.lock);
+	while (later) {
+		struct tgm_mem *next = later->later;
+		switch_gpu_smmu_unmap(later->smmu_iova, later->smmu_npages);
+		kfree(later->smmu_pages);
+		kfree(later);
+		later = next;
+	}
 }
 
 #include "SwitchGpuVmMap.h"

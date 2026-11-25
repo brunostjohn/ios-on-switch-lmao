@@ -193,7 +193,10 @@ bool reached_locked(switch_gpu_backing *backing)
 	return member;
 }
 
-void destroy(switch_gpu_backing *backing)
+// A retired backing's GPU side, its memory included. Its owner (the pinned pages) goes in release_pages, only after the
+// batch's L2 flush and SMMU unmaps (switch_gpu_memory_retire_end): neither may write back into or map a page that went
+// back to the VM.
+void release_gpu_side(switch_gpu_backing *backing)
 {
 	switch_gpu_backing_forget_mapped(backing);
 	switch_gpu_backing_writer_free_locked(backing);
@@ -205,6 +208,10 @@ void destroy(switch_gpu_backing *backing)
 	IODelete(backing->cpu_current, uint64_t, backing->cpu_current_pages);
 	if (backing->gpu_memory)
 		backing->release_gpu_memory(backing->gpu_memory);
+}
+
+void release_pages(switch_gpu_backing *backing)
+{
 	if (backing->owner && backing->release_owner)
 		backing->release_owner(backing->owner);
 	free_pages(backing->pages);
@@ -442,6 +449,8 @@ extern "C" void switch_gpu_bridge_completed(void) __attribute__((weak));
 extern "C" void switch_gpu_events_completed(void) __attribute__((weak));
 extern "C" void switch_gpu_copy_completed(void) __attribute__((weak));
 extern "C" void switch_gpu_copy_retire(void) __attribute__((weak));
+extern "C" void switch_gpu_memory_retire_begin(void) __attribute__((weak));
+extern "C" void switch_gpu_memory_retire_end(void) __attribute__((weak));
 
 extern "C" void switch_gpu_backing_completed(void)
 {
@@ -504,9 +513,16 @@ extern "C" void switch_gpu_backing_retire(void)
 									   __ATOMIC_ACQUIRE));
 	arm_expiry_locked();
 	IOLockUnlock(registry);
+	const bool batch = ready && switch_gpu_memory_retire_begin && switch_gpu_memory_retire_end;
+	if (batch)
+		switch_gpu_memory_retire_begin();
+	for (auto *backing = ready; backing; backing = backing->retiring_next)
+		release_gpu_side(backing);
+	if (batch)
+		switch_gpu_memory_retire_end();
 	while (ready) {
 		auto *next = ready->retiring_next;
-		destroy(ready);
+		release_pages(ready);
 		ready = next;
 	}
 	if (again)

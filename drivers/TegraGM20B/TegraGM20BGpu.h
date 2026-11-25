@@ -122,6 +122,10 @@ int switch_gpu_backing_tgm_mem_existing(struct switch_gpu_backing *backing, uint
 int switch_gpu_backing_tgm_mem_existing_or_direct(struct switch_gpu_backing *backing,
 						  uint32_t count, struct tgm_mem **out);
 void tgm_mem_del(struct tgm_mem **pmem);
+/* tgm_mem_del for a batch: the GMMU mapping goes now, and SMMU-backed memory waits on `*later` for tgm_mem_del_finish,
+ * whose one L2 flush and invalidate covers the whole batch before any of its IOVAs goes back. */
+void tgm_mem_del_later(struct tgm_mem **pmem, struct tgm_mem **later);
+void tgm_mem_del_finish(struct tgm_mem *later);
 /* User range [TGM_USER_VA_START, TGM_KERNEL_VA): raw binds. read_only: the GPU may only read the range (a write is an
  * MMU fault). tgm_vm_map and tgm_vm_unmap invalidate the L2 and the TLB before they return; tgm_vm_map_ordered (a
  * claimed space's) leaves both to the next submission of each of its channels (TegraGM20BTlb.h). A compressible kind
