@@ -4,7 +4,9 @@
 // state's own ROP blend (its blob's registers, not the Metal descriptor: m2v may blend in the program instead), for every
 // value the target can hold:
 //  - one target written (SET_CT_WRITE), target 0; the probe drew one target, and a pixel kill decided on one output would
-//    drop the writes of the others;
+//    drop the writes of the others. Only the targets the state's key names count: a pass's attachments are its state's,
+//    and the pack's baseline keeps a target's SET_CT_WRITE where every state drawing that target writes it alike (24B119:
+//    targets 6 and 7 at 0x1111), which a state without that target reads as written;
 //  - its ROP blends (SET_BLEND), colour and alpha alike: op ADD or REVERSE_SUBTRACT (0 + D and D - 0 are D; SUBTRACT
 //    gives -D, MIN and MAX ignore the coefficients); destination coefficient ONE, ONE_MINUS_SRC_COLOR or
 //    ONE_MINUS_SRC_ALPHA (each 1 with that source); source coefficient one that is finite with that source, so 0 times it
@@ -93,11 +95,11 @@ inline uint32_t iteratedBlendNoop(const uint32_t *blob, uint32_t dwords, const u
                                   const char *keyString, uint8_t storageBits,
                                   const uint32_t *defaultPerTarget = nullptr, uint8_t defaultSeen = 0)
 {
-    for (uint32_t j = 1; j < 8; j++)
-        if (writes[j] & 0x1111)
-            return kNoopNever;
     if (!(writes[0] & 0x1111) || (storageBits & 1) || !keyString)
         return kNoopNever;
+    for (uint32_t j = 1; j < 8; j++)
+        if ((writes[j] & 0x1111) && keyColorFormat(keyString, j))
+            return kNoopNever;
     bool blends = false;
     uint32_t perTarget[6] = {};
     bool seen[6] = {};

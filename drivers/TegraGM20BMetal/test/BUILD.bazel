@@ -2245,6 +2245,22 @@ py_test(
     deps = ["//drivers/TegraGM20BMetal:pack"],
 )
 
+py_test(
+    name = "blend_kill_pack_test",
+    srcs = [
+        "blend_kill_pack_test.py",
+        "make_pack_targets_test.py",
+    ],
+    args = ["$(rootpath //gpu/seed:pack)/pack.bin"],
+    data = [
+        "//drivers/TegraGM20BMetal:owned.h",  # mkpack.py reads it at import
+        "//gpu/seed:pack",
+    ],
+    main = "blend_kill_pack_test.py",
+    tags = ["pack"],
+    deps = ["//drivers/TegraGM20BMetal:pack"],
+)
+
 host_test(
     name = "ycbcr_test",
     srcs = [
