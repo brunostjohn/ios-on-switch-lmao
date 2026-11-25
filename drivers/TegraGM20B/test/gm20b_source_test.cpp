@@ -802,9 +802,13 @@ TEST(GM20BRoomSource, SubmissionMethodsCountTheirPaths)
 			       "return kIOReturnSuccess;"));
 	EXPECT_TRUE(job.before("switch_gpu_path_taken(SWITCH_GPU_PATH_SET_JOB, set ? 1 : 0);",
 			       "return kIOReturnSuccess;"));
-	EXPECT_TRUE(
-		job.before("switch_gpu_path_taken(SWITCH_GPU_PATH_SHARED_USE, head.shared_count);",
-			   "return kIOReturnSuccess;"));
+	EXPECT_TRUE(job.before("switch_gpu_path_taken(SWITCH_GPU_PATH_SHARED_USE, sharedNamed);",
+			       "return kIOReturnSuccess;"));
+	// a job reusing the channel's last uses (TegraGM20BJobSameUses, shared_count 0) counts the uses it stands for
+	EXPECT_TRUE(job.has(
+		"const uint32_t sharedNamed = sameUses ? job.useCache.named : head.shared_count;"));
+	EXPECT_TRUE(job.before("job.useCache.named = head.shared_count;",
+			       "const uint32_t sharedNamed"));
 	const std::string paths = SourceText("../SwitchGpuPathStats.cpp");
 	for (const char *name :
 	     {"\"submit_jobs\"", "\"set_jobs\"", "\"stale_sets\"", "\"shared_uses\""})

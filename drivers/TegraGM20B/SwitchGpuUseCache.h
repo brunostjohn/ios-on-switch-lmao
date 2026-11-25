@@ -21,6 +21,8 @@ template <typename Memory> struct SwitchGpuUseCache {
 	uint32_t surfaceCount = 0;
 	uint32_t writtenCount = 0;
 	uint32_t rangedUses = 0;
+	uint32_t named =
+		0;  // the shared uses the saved job named (TegraGM20BAbiJob.shared_count): a reuse's count
 	bool unlockedWrites = false;
 	bool hostWritten = false;
 	bool valid = false;

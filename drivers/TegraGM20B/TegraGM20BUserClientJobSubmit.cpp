@@ -335,11 +335,14 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 	if (admissionContinue && !admission.covers(job.uses, useTotal))
 		return refuseWrites(switch_gpu_refuse(why, SwitchGpuRefusal::AdmissionCover,
 						      kIOReturnBadArgument, useTotal));
-	if (!sameUses && !nativeReads)
+	if (!sameUses && !nativeReads) {
 		job.useCache.save(chanUid, snapBindGen, snapBoGen, claim, head.set, job.uses,
 				  useTotal, job.writes, writeCount, job.surfaces, surfaceCount,
 				  job.written, writtenCount, rangedUses, unlockedWrites,
 				  usesHostWritten);
+		job.useCache.named = head.shared_count;
+	}
+	const uint32_t sharedNamed = sameUses ? job.useCache.named : head.shared_count;
 	tgm_views_job_writes(job.written, writtenCount);
 	job.phases.end(TGM_SUBMIT_RESOLVE);
 	SwitchGpuEventJob *events = job.events;
@@ -544,12 +547,12 @@ refresh:
 	}
 	job.phases.end(TGM_SUBMIT_COMMIT);
 #if TGM_STATS
-	switch_gpu_job_submitted(job.phases.ns, set != nullptr, head.shared_count, backings,
-				 siblingCount, critical_);
+	switch_gpu_job_submitted(job.phases.ns, set != nullptr, sharedNamed, backings, siblingCount,
+				 critical_);
 #endif
 	switch_gpu_path_taken(SWITCH_GPU_PATH_SUBMIT_JOB, 1);
 	switch_gpu_path_taken(SWITCH_GPU_PATH_SET_JOB, set ? 1 : 0);
-	switch_gpu_path_taken(SWITCH_GPU_PATH_SHARED_USE, head.shared_count);
+	switch_gpu_path_taken(SWITCH_GPU_PATH_SHARED_USE, sharedNamed);
 	switch_gpu_path_taken(SWITCH_GPU_PATH_QUIET_JOB,
 			      (jobVisibility & SWITCH_GPU_SUBMIT_QUIET) && count ? 1 : 0);
 #if TGM_STATS
