@@ -146,7 +146,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     }
     if (!prepare(pl, primitive, first, first, count, false, why))
         return skippedDraw();
-    const bool split = mixedDraw(*pl, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split;
+    const bool split = mixedDraw(*emitted_, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split;
     const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
     // samples 1-3 write no colour: no fetch of a colour they wrote to order, so the plain draw
     const auto laterSamples = [&] {
@@ -415,7 +415,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         ibEnd_ = last;
         ibSize_ = indexSize;
     }
-    const bool split = mixedDraw(*pl, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split;
+    const bool split = mixedDraw(*emitted_, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split;
     const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
     const auto laterSamples = [&] {
         drawLaterSamples(
@@ -520,7 +520,7 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
         mme::indirectHeader(p_, indexed);
     }
     argumentWords();
-    if (mixedDraw(pl, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split)
+    if (mixedDraw(*emitted_, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split)
         drawLaterSamples(
             p_,
             [this] {
@@ -668,7 +668,7 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
     if (ordered)
         mme::fetchCommands(p_, false);
     // the commands again for samples 1-3, which write no colour: drawn whole, not a primitive at a time
-    if (mixedDraw(pl, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split)
+    if (mixedDraw(*emitted_, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split)
         drawLaterSamples(
             p_,
             [this] {
