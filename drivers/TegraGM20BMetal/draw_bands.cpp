@@ -22,10 +22,12 @@ BandGrid RenderEncoder::drawBands(uint32_t vertices, uint32_t instances, uint64_
     const bool hasProgress = dev_->channelProgressVa() != 0;
     if (!hasProgress && cb_->bands >= kBandsPerCommandBuffer)
         return {};
-    const bool unmeasured = units >= kMeasureUnits && pl.bandRate.psPerUnit.load(std::memory_order_relaxed) == 0;
+    const bool unmeasured = units >= kMeasureUnits && !measuredOnce(pl.bandRate);
     BandDraw d;
     d.fragmentNs = estimatedNs(pl.bandRate, units, workNs(laneWork(units, pl.fragmentInstructions)));
-    d.vertexNs = workNs(laneWork(laneWork(vertices, instances), pl.vertexInstructions));
+    // what each band repeats: its vertices at their static price, or what its banded draws were measured to repeat
+    d.vertexNs = std::max<uint64_t>(workNs(laneWork(laneWork(vertices, instances), pl.vertexInstructions)),
+                                    pl.bandRate.nsPerBand.load(std::memory_order_relaxed));
     d.rows = drawBox_.empty() ? 0 : drawBox_.y1 - drawBox_.y0;
     d.cols = drawBox_.empty() ? 0 : drawBox_.x1 - drawBox_.x0;
     d.unmeasured = unmeasured;
@@ -200,7 +202,7 @@ void Device::learnCompleted()
         const auto *slot = reinterpret_cast<const volatile StampSlot *>(stamps_.cpu + drawStampOffset(t.slot, false));
         uint64_t ns = 0;
         if (stampedNanoseconds(*slot, t.payload, ns)) {
-            learn(*t.rate, ns, t.units);
+            learn(*t.rate, ns, t.units, t.bands, workNs(laneWork(t.units, t.instructions)));
             SWITCH_METAL_DIAGNOSTIC(stats.learnedDraws++);
 #if SWITCH_METAL_DIAGNOSTICS
             if (ns >= kLongDrawNs)

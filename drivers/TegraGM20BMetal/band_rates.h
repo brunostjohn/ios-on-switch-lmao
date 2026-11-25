@@ -25,7 +25,9 @@ constexpr uint32_t kMeasuredPerCommandBuffer = 16;
 constexpr uint32_t kRateWeight = 4;  // a new sample moves a warm rate by a quarter of the difference
 
 struct BandRate {
-    std::atomic<uint32_t> psPerUnit{0};  // 0: not measured yet
+    std::atomic<uint32_t> psPerUnit{0};  // a unit's share of a draw's time, its pixels' (0: not measured yet)
+    // what each band of a banded draw repeats: its vertices and the drain at its end (0: not measured yet)
+    std::atomic<uint32_t> nsPerBand{0};
     std::atomic<uint32_t> samples{0};
     std::atomic<uint32_t> picks{0};
 
@@ -39,19 +41,29 @@ struct BandRate {
     BandRate &operator=(const BandRate &o)
     {
         psPerUnit.store(o.psPerUnit.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        nsPerBand.store(o.nsPerBand.load(std::memory_order_relaxed), std::memory_order_relaxed);
         samples.store(o.samples.load(std::memory_order_relaxed), std::memory_order_relaxed);
         picks.store(o.picks.load(std::memory_order_relaxed), std::memory_order_relaxed);
         return *this;
     }
 };
 
+inline uint64_t unitsNs(uint64_t units, uint64_t ps)
+{
+    return units > UINT64_MAX / ps ? UINT64_MAX / 1000 : units * ps / 1000;
+}
+
 // The work's GPU time: `units` at the learned rate, else the static estimate
 inline uint64_t estimatedNs(const BandRate &r, uint64_t units, uint64_t staticNs)
 {
     const uint64_t ps = r.psPerUnit.load(std::memory_order_relaxed);
-    if (!ps)
-        return staticNs;
-    return units > UINT64_MAX / ps ? UINT64_MAX / 1000 : units * ps / 1000;
+    return ps ? unitsNs(units, ps) : staticNs;
+}
+
+// Whether any of its draws was measured, whole or banded
+inline bool measuredOnce(const BandRate &r)
+{
+    return r.psPerUnit.load(std::memory_order_relaxed) || r.nsPerBand.load(std::memory_order_relaxed);
 }
 
 inline bool picked(uint32_t pick)
@@ -76,11 +88,28 @@ inline bool wouldMeasure(const BandRate &r, uint64_t units)
     return units >= kMeasureUnits && picked(r.picks.load(std::memory_order_relaxed));
 }
 
-// A measured draw: `ns` of GPU time over `units`
-inline void learn(BandRate &r, uint64_t ns, uint64_t units)
+// A measured draw: `ns` of GPU time over `units`, drawn in `bands` (1: whole); `staticPixelNs` its pixels' instruction
+// count price. Each band repeats the draw's vertices and drains at its end, so a banded draw takes its pixels' time plus
+// bands x that, learned apart: booked as pixel cost, the repeat would price the state's next draw longer and band it
+// more (25 Nov: VectorKit's ground draws of 48-208 instructions took 8-17 ms in Maps at 1.0-2.9 ms a band, where their
+// pixels cost 0.06-0.8 ms). A banded draw teaches the band's cost, what its time holds past its pixels' (the learned
+// rate's, else the static price); a whole draw teaches the pixels' rate, what its time holds past one band's repeat.
+inline void learn(BandRate &r, uint64_t ns, uint64_t units, uint32_t bands = 1, uint64_t staticPixelNs = 0)
 {
     if (!units || !ns)
         return;
+    if (bands > 1) {
+        const uint64_t ps = r.psPerUnit.load(std::memory_order_relaxed);
+        const uint64_t pixelNs = ps ? unitsNs(units, ps) : staticPixelNs;
+        const uint64_t sample = std::min<uint64_t>((ns > pixelNs ? ns - pixelNs : 0) / bands, UINT32_MAX);
+        const uint64_t old = r.nsPerBand.load(std::memory_order_relaxed);
+        const uint64_t perBand = !old ? sample : (old * (kRateWeight - 1) + sample) / kRateWeight;
+        r.nsPerBand.store(uint32_t(std::max<uint64_t>(perBand, 1)), std::memory_order_relaxed);
+        r.samples.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    const uint64_t repeat = r.nsPerBand.load(std::memory_order_relaxed);
+    ns = ns > repeat ? ns - repeat : 1;
     const uint64_t sample = std::clamp<uint64_t>(ns * 1000 / units, 1, UINT32_MAX);
     const uint64_t old = r.psPerUnit.load(std::memory_order_relaxed);
     const uint64_t rate = !old || sample > old ? sample : (old * (kRateWeight - 1) + sample) / kRateWeight;

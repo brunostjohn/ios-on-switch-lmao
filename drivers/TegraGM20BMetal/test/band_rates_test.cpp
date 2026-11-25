@@ -80,6 +80,33 @@ TEST(BandRates, ItsFirstLargeDrawsAreMeasuredThenOneInAWhile)
     EXPECT_EQ(measured, 4u);
 }
 
+// A geometry-bound state (VectorKit's ground draws, 25 Nov: 48-208 instructions, 8-17 ms in Maps at 1.0-2.9 ms a band)
+// drawn, measured and drawn again: every band repeats its vertices, so a rate that booked that repeat as pixel cost
+// priced each next draw longer and banded it more. With the band's cost learned apart, it settles on few bands at its
+// pixels' own rate.
+TEST(BandRates, BandsOfAGeometryBoundStateDoNotFeedTheirOwnPrice)
+{
+    constexpr uint64_t kPixelNs = 500'000, kPerBandNs = 2'000'000;
+    constexpr uint32_t kInstructions = 64;
+    const uint64_t staticPixelNs = gm20b::workNs(gm20b::laneWork(kScreen, kInstructions));
+    BandRate rate;
+    uint32_t bands = 0;
+    for (int round = 0; round < 12; round++) {
+        BandDraw d;
+        d.fragmentNs = gm20b::estimatedNs(rate, kScreen, staticPixelNs);
+        d.vertexNs = rate.nsPerBand.load();
+        d.rows = 720;
+        d.cols = 1280;
+        d.unmeasured = !gm20b::measuredOnce(rate);
+        bands = gm20b::bandGrid(d, TGM_APP_BAND_NS, gm20b::kMaxTileBands, gm20b::kMaxTileBands).total();
+        gm20b::learn(rate, kPixelNs + bands * kPerBandNs, kScreen, bands, staticPixelNs);
+        if (round >= 3)
+            EXPECT_LE(bands, 2u) << "round " << round;
+    }
+    EXPECT_NEAR(double(gm20b::estimatedNs(rate, kScreen, staticPixelNs)), double(kPixelNs), kPixelNs * 0.5);
+    EXPECT_NEAR(double(rate.nsPerBand.load()), double(kPerBandNs), kPerBandNs * 0.5);
+}
+
 TEST(BandRates, ACopiedStateKeepsItsRate)
 {
     BandRate rate;
