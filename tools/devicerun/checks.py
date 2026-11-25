@@ -1242,6 +1242,21 @@ GROUPS: dict[str, list[Check]] = {
             note="runnable-to-running p99 per 10 s; boot 15 up to 275359 us. TS DF after startup is backboardd's own",
         ),
         Check(
+            'sched.backboardd-main-longest',
+            'r116-sched',
+            'SwitchSched 1/2',
+            'max(max) < 250000',
+            process=KERNEL,
+            regex=r'backboardd\.main\[\d+\] \d+/\d+ (?P<mode>\S+) (?P<qos>\S+) \S+: (?P<runs>\d+) runs '
+            r'(?P<p50>\d+)/(?P<p99>\d+)/(?P<max>\d+) us',
+            show=('mode', 'qos', 'runs'),
+            source='kernel/switch/sched/stats.c',
+            note=(
+                'the longest runnable-to-running wait of any 10 s window, however few runs it had: on 25 Nov a window '
+                'of 2 runs held 9169075 us and one of 12 runs 32555950 us, which the p99 check skips'
+            ),
+        ),
+        Check(
             'sched.kernel-high-cpu',
             'r116-sched',
             'SwitchSched 1/2',
