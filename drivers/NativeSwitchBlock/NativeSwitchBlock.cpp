@@ -61,6 +61,7 @@
 #include "SwitchAdma.h"
 #include "SwitchQueue.h"
 #include "SwitchSdPool.h"
+#include "SwitchSdRoot.h"
 #include "SwitchSdVolume.h"
 #include "SwitchSdWindow.h"
 #include "SwitchSdWriteFence.h"
@@ -316,28 +317,6 @@ constexpr Speed kSpeeds[] = {{SOURCE_PLLC4_OUT2, 0, 0, 199680},
                              {SOURCE_PLLC4_OUT2, 0, 1, 99840},
                              {SOURCE_PLLC4_OUT2, 0, 2, 49920}};
 constexpr unsigned kSpeedCount = sizeof(kSpeeds) / sizeof(kSpeeds[0]);
-
-inline uint32_t le32(const uint8_t *p)
-{
-    return p[0] | static_cast<uint32_t>(p[1]) << 8 | static_cast<uint32_t>(p[2]) << 16 |
-           static_cast<uint32_t>(p[3]) << 24;
-}
-
-inline uint64_t le64(const uint8_t *p)
-{
-    return le32(p) | static_cast<uint64_t>(le32(p + 4)) << 32;
-}
-
-bool partitionNamed(const uint8_t *entry, const char *name)
-{
-    const uint8_t *field = entry + 56;
-    unsigned i = 0;
-    for (; name[i]; ++i) {
-        if (i == 36 || field[2 * static_cast<size_t>(i)] != static_cast<uint8_t>(name[i]) || field[2 * i + 1])
-            return false;
-    }
-    return i == 36 || ((field[2 * static_cast<size_t>(i)] == 0u) && (field[2 * i + 1] == 0u));
-}
 
 struct Request {
     Request *next;
@@ -822,7 +801,7 @@ public:
     bool filesOnline = false;
     bool filesPublishQueued = false;
 
-    bool findFiles(switch_sd_files_slice *);
+    int findFiles(switch_sd_files_slice *);
     void verifyFilesCard();
     IOReturn sync(const SwitchSdWindow *window);
     IOReturn syncLocked(const SwitchSdWindow *window, bool acknowledgeErrors = true);
@@ -3760,41 +3739,27 @@ bool NativeSwitchBlock::setup()
         haveCid = switch_sd_boot_card_cid(cid);
     identify();
     disableFoundCache();
-    const uint64_t entriesLBA = le64(header + 72);
-    const uint32_t entryCount = le32(header + 80);
-    const uint32_t entrySize = le32(header + 84);
-    if (memcmp(header, "EFI PART", 8) || entrySize < 128 || entrySize > 512 || (entrySize & 7) || !entryCount ||
-        entryCount > (64 * 1024) / entrySize || entriesLBA < 2 || entriesLBA > UINT32_MAX) {
+    SwitchSdGptArray array;
+    if (!switchSdGptArray(header, &array)) {
         IOLog("SwitchSD: invalid GPT header\n");
         return false;
     }
-    const uint32_t entrySectors = (entryCount * entrySize + kSector - 1) / kSector;
-    if (entrySectors - 1 > UINT32_MAX - entriesLBA)
+    const uint32_t entrySectors = switchSdGptArraySectors(array);
+    if (!entrySectors)
         return false;
-    static uint8_t entries[64 * 1024];
+    static uint8_t entries[kSwitchSdGptArrayBytes];
     for (uint32_t done = 0; done < entrySectors;) {
         const uint32_t n = entrySectors - done > 64 ? 64 : entrySectors - done;
-        if (transfer(entriesLBA + done, n, false, entries + static_cast<size_t>(done) * kSector)) {
+        if (transfer(array.lba + done, n, false, entries + static_cast<size_t>(done) * kSector)) {
             IOLog("SwitchSD: GPT entry read failed\n");
             return false;
         }
         done += n;
     }
-    unsigned found = 0;
-    for (uint32_t i = 0; i < entryCount; ++i) {
-        const uint8_t *e = entries + static_cast<size_t>(i) * entrySize;
-        if (memcmp(e, kApfsType, 16) && !partitionNamed(e, kPartitionName))
-            continue;
-        const uint64_t first = le64(e + 32);
-        const uint64_t last = le64(e + 40);
-        if (!first || last < first || last > UINT32_MAX)
-            continue;
-        rootWindow.first = first;
-        rootWindow.count = last - first + 1;
-        ++found;
-    }
-    if (found != 1 || !rootWindow.contains(rootWindow.first, rootWindow.count)) {
-        IOLog("SwitchSD: expected one APFS or \"%s\" partition, found %u\n", kPartitionName, found);
+    const SwitchSdRoot root = switchSdFindRoot(entries, array, kApfsType, kPartitionName);
+    rootWindow = root.window;
+    if (!root.unique()) {
+        IOLog("SwitchSD: expected one APFS or \"%s\" partition, found %u\n", kPartitionName, root.found);
         return false;
     }
 
@@ -3824,13 +3789,17 @@ bool NativeSwitchBlock::setup()
               gapsOn ? "on" : "off (no sink page below 4 GiB)");
     }
 
-    if (findFiles(&filesSlice) && (!haveCid || !memcmp(cid, filesSlice.cid, 15))) {
+    const int lookup = findFiles(&filesSlice);
+    const int files = switchSdFilesStatus(lookup, haveCid, cid, filesSlice.cid);
+    if (files == SWITCH_GPT_OK) {
         if (!haveCid) {
             memcpy(cid, filesSlice.cid, sizeof(cid));
             haveCid = true;
         }
         filesWindow = {filesSlice.first_sector, filesSlice.sector_count};
         __atomic_store_n(&filesOnline, true, __ATOMIC_RELEASE);
+    } else {
+        IOLog("SwitchSD: no shared SD volume (%s)\n", switchSdFilesReason(files));
     }
 
     requestSlab = static_cast<Request *>(IOMallocZero(kRequestPool * sizeof(Request)));
@@ -3850,12 +3819,12 @@ bool NativeSwitchBlock::setup()
     return true;
 }
 
-bool NativeSwitchBlock::findFiles(switch_sd_files_slice *slice)
+int NativeSwitchBlock::findFiles(switch_sd_files_slice *slice)
 {
     const auto read = [](void *arg, uint64_t lba, uint8_t *sector) {
         return static_cast<NativeSwitchBlock *>(arg)->transfer(lba, 1, false, sector);
     };
-    return switch_sd_files_volume(read, this, rootWindow.first, rootWindow.count, slice) == 0;
+    return switch_sd_files_volume(read, this, rootWindow.first, rootWindow.count, slice);
 }
 
 void NativeSwitchBlock::verifyFilesCard()
@@ -3863,8 +3832,8 @@ void NativeSwitchBlock::verifyFilesCard()
     if (!filesPresent())
         return;
     switch_sd_files_slice current = {};
-    if (findFiles(&current) && current.first_sector == filesWindow.first && current.sector_count == filesWindow.count &&
-        current.exfat == filesSlice.exfat &&
+    if (findFiles(&current) == SWITCH_GPT_OK && current.first_sector == filesWindow.first &&
+        current.sector_count == filesWindow.count && current.exfat == filesSlice.exfat &&
         !memcmp(current.unique_guid, filesSlice.unique_guid, sizeof(current.unique_guid)))
         return;
     IOLockLock(queueLock);
