@@ -79,7 +79,8 @@ TEST(SwitchMotionBias, AnOffsetAsLargeAsThePartsBoundIsLearned)
     EXPECT_NEAR(Bias(fusion, 2), 0.15, 0.0002);
 }
 
-TEST(SwitchMotionBias, AnOffsetPastThePartsBoundIsLeftToTheGravityCorrection)
+// About the vertical nothing else can see it: past the part's bound it is not learned at all.
+TEST(SwitchMotionBias, AnOffsetPastThePartsBoundIsNotLearnedFromStillness)
 {
     SwitchMotionFusion fusion;
     double down[3] = {0, 0, -1};
@@ -87,6 +88,19 @@ TEST(SwitchMotionBias, AnOffsetPastThePartsBoundIsLeftToTheGravityCorrection)
     SimRest(fusion, down, offset, 5.0);
     EXPECT_FALSE(fusion.biasKnown);
     EXPECT_EQ(fusion.biasNanoRad[2], 0);
+}
+
+// About a tilt axis gravity sees an offset of any size: the correction's integral absorbs one past the part's bound.
+TEST(SwitchMotionBias, ATiltAxisOffsetPastThePartsBoundIsAbsorbedByTheGravityCorrection)
+{
+    SwitchMotionFusion fusion;
+    double down[3] = {0, 0, -1};
+    const double offset[3] = {0.0524, 0, 0};  // 3 dps, past the ICM parts' 2
+    SimRest(fusion, down, offset, 300.0);
+    EXPECT_NEAR(Bias(fusion, 0), 0.0524, 0.003);
+    int64_t g[3];
+    fusion.gravity(g);
+    EXPECT_NEAR(static_cast<double>(g[1]) / kSwitchOne, 0, 0.005) << "no standing tilt";
 }
 
 TEST(SwitchMotionBias, ADriftingOffsetIsFollowed)

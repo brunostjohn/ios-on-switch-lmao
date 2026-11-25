@@ -93,7 +93,8 @@ struct SwitchMotionFusion {
     // second and a gyroscope bias in tens of seconds at rest.
     static constexpr int64_t kKpMicroRad = 1000000;
     static constexpr int64_t kKiMilli = 20;
-    static constexpr int64_t kNearOneG = 150000;  // correct only within 0.15 g of 1 g
+    static constexpr int64_t kNearOneG = 150000;               // correct only within 0.15 g of 1 g
+    static constexpr int64_t kMaxIntegralNanoRad = 100000000;  // 0.1 rad/s: the correction's integral, at least
     // Stillness (learnWhileStill): half-second windows in which no gyroscope sample strays 0.01 rad/s from the window's
     // mean (about ten times the parts' noise) and no accelerometer axis moves 10 mg from the window's first sample, at
     // 1 g within 0.05 g. A tilt at 0.02 rad/s moves gravity 10 mg in half a second, so a still window is at most a slow
@@ -116,7 +117,7 @@ struct SwitchMotionFusion {
     int64_t biasNanoRad[3] = {};
     bool biasKnown = false;
     // The bound of the part's zero-rate offset (initial tolerance and its drift over temperature): the largest bias
-    // stillness may learn, and the clamp of the gravity correction's integral.
+    // stillness may learn. Gravity sees a tilt axis's offset whatever its size, so its integral is not held to it.
     int64_t zeroRateNanoRad = kDefaultZeroRateNanoRad;
     int32_t accel[3] = {};  // the latest accelerometer sample, micro-g
     int64_t accelNorm = 0;  // its magnitude
@@ -174,10 +175,11 @@ struct SwitchMotionFusion {
             for (unsigned i = 0; i < 3; ++i) {
                 // Mahony adds the error's integral to the rate; the bias is that integral's negative.
                 int64_t bias = biasNanoRad[i] - ((kKiMilli * error[i] * dtMicros) >> kSwitchQ);
-                if (bias > zeroRateNanoRad)
-                    bias = zeroRateNanoRad;
-                if (bias < -zeroRateNanoRad)
-                    bias = -zeroRateNanoRad;
+                const int64_t clamp = zeroRateNanoRad > kMaxIntegralNanoRad ? zeroRateNanoRad : kMaxIntegralNanoRad;
+                if (bias > clamp)
+                    bias = clamp;
+                if (bias < -clamp)
+                    bias = -clamp;
                 biasNanoRad[i] = bias;
                 omega[i] += (kKpMicroRad * error[i]) >> kSwitchQ;
             }
