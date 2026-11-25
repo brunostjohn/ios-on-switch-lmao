@@ -39,7 +39,8 @@ std::vector<uint64_t> colourZero(size_t first)
     return out;
 }
 
-// 'p420' 128x16: plane 0 of 43 words a row, rows 176 bytes apart, then plane 1
+// 'p420' 128x16: plane 0 of 43 words a row, rows 176 bytes apart, then plane 1 (described in bytes and pairs, as
+// facade_surface_forms_test's 'p420' is)
 IOSurfaceRef packed420()
 {
     NSMutableArray *planes = [NSMutableArray array];
@@ -47,7 +48,7 @@ IOSurfaceRef packed420()
         [planes addObject:@{
             (id)kIOSurfacePlaneWidth : @(kWidth >> plane),
             (id)kIOSurfacePlaneHeight : @(kHeight >> plane),
-            (id)kIOSurfacePlaneBytesPerElement : @4,
+            (id)kIOSurfacePlaneBytesPerElement : @(plane + 1),
             (id)kIOSurfacePlaneBytesPerRow : @(kPitch),
             (id)kIOSurfacePlaneOffset : @(plane ? 4096 : 0),
             (id)kIOSurfacePlaneSize : @(kPitch * (kHeight >> plane))
