@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * The flight recorder's hang trigger (--//kernel:recorder). SpringBoard's and backboardd's main threads (diag/stall.c's
- * exec hook) and the focal app's (sched/stats.c's role hook) are read at the scheduler's tick (diag/stall.c's, on the
+ * exec hook) and every focal app's (sched/stats.c's role hook, <switch/focal.h>) are read at the scheduler's tick
+ * (diag/stall.c's, on the
  * maintenance thread: no timer of its own). A hang is the thread's busy stretch as sched/busy.c keeps it from its
  * departures and dispatches: open, away from its run loop's wait, for SWITCH_RECORDER_HANG_NS. Its trigger carries
  * the thread id and the milliseconds the stretch has lasted, and its dump takes the stackshot while it still hangs.
  */
 
+#include <switch/focal.h>
 #include <switch/recorder.h>
 #include <switch/sched.h>
 #include <switch/xnu.h>
@@ -28,8 +30,8 @@
 enum switch_recorder_watch_slot {
     SWITCH_RECORDER_WATCH_SPRINGBOARD,
     SWITCH_RECORDER_WATCH_BACKBOARDD,
-    SWITCH_RECORDER_WATCH_APP,
-    SWITCH_RECORDER_WATCHES,
+    SWITCH_RECORDER_WATCH_APP, /* the first of SWITCH_FOCAL_PLACES, one per focal app */
+    SWITCH_RECORDER_WATCHES = SWITCH_RECORDER_WATCH_APP + SWITCH_FOCAL_PLACES,
 };
 
 #define SWITCH_RECORDER_WATCH_EVERY_NS 100000000ull /* the most often the tick reads them */
@@ -39,7 +41,24 @@ enum switch_recorder_watch_slot {
 static SIMPLE_LOCK_DECLARE(switch_recorder_watch_lock, 0);
 static thread_t switch_recorder_watch_thread[SWITCH_RECORDER_WATCHES]; /* +1 each */
 static struct switch_recorder_watch switch_recorder_watch_state[SWITCH_RECORDER_WATCHES];
+static struct switch_focal switch_recorder_focal; /* the tasks of the app slots */
 static uint64_t switch_recorder_watch_bound, switch_recorder_watch_every, switch_recorder_watch_last;
+
+/* Under the watch lock: the slot watches thread (+1, consumed; THREAD_NULL: nothing), and the old one's reference. */
+static thread_t switch_recorder_watch_put(unsigned slot, thread_t thread)
+{
+    const thread_t old = switch_recorder_watch_thread[slot];
+
+    if (switch_recorder_watch_bound == 0) {
+        nanoseconds_to_absolutetime(SWITCH_RECORDER_HANG_NS, &switch_recorder_watch_bound);
+        nanoseconds_to_absolutetime(SWITCH_RECORDER_WATCH_EVERY_NS, &switch_recorder_watch_every);
+    }
+    switch_recorder_watch_thread[slot] = thread;
+    if (old != thread) {
+        switch_recorder_watch_state[slot] = (struct switch_recorder_watch){0};
+    }
+    return old;
+}
 
 /* Consumes the reference on thread (THREAD_NULL: stop watching the slot). */
 static void switch_recorder_watch_set(enum switch_recorder_watch_slot slot, thread_t thread)
@@ -47,13 +66,7 @@ static void switch_recorder_watch_set(enum switch_recorder_watch_slot slot, thre
     thread_t old = THREAD_NULL;
 
     simple_lock(&switch_recorder_watch_lock, LCK_GRP_NULL);
-    if (switch_recorder_watch_bound == 0) {
-        nanoseconds_to_absolutetime(SWITCH_RECORDER_HANG_NS, &switch_recorder_watch_bound);
-        nanoseconds_to_absolutetime(SWITCH_RECORDER_WATCH_EVERY_NS, &switch_recorder_watch_every);
-    }
-    old = switch_recorder_watch_thread[slot];
-    switch_recorder_watch_thread[slot] = thread;
-    switch_recorder_watch_state[slot] = (struct switch_recorder_watch){0};
+    old = switch_recorder_watch_put(slot, thread);
     simple_unlock(&switch_recorder_watch_lock);
     if (old != THREAD_NULL) {
         thread_deallocate(old);
@@ -72,27 +85,29 @@ void switch_recorder_exec(struct thread *thread)
     }
 }
 
-/* main: the task's main thread, the caller's reference (THREAD_NULL when it has none). */
+/* main: the task's main thread, the caller's reference (THREAD_NULL when it has none). Every focal app has its own
+ * slot: one leaving the role leaves the others watched. */
 void switch_recorder_role(struct task *task, int role, struct thread *main)
 {
+    const uint64_t key = (uint64_t)(uintptr_t)task;
+    const bool focal = role == TASK_FOREGROUND_APPLICATION && main != THREAD_NULL;
     char name[32];
     thread_t gone = THREAD_NULL;
+    uint64_t evicted = 0;
+    unsigned place = SWITCH_FOCAL_PLACES;
 
     switch_task_name(task, name, sizeof(name));
     if (strcmp(name, "SpringBoard") == 0) {
         return;
     }
-    if (role == TASK_FOREGROUND_APPLICATION && main != THREAD_NULL) {
+    if (focal) {
         thread_reference(main);
-        switch_recorder_watch_set(SWITCH_RECORDER_WATCH_APP, main);
-        return;
     }
     simple_lock(&switch_recorder_watch_lock, LCK_GRP_NULL);
-    gone = switch_recorder_watch_thread[SWITCH_RECORDER_WATCH_APP];
-    if (gone != THREAD_NULL && get_threadtask(gone) == task) {
-        switch_recorder_watch_thread[SWITCH_RECORDER_WATCH_APP] = THREAD_NULL;
-    } else {
-        gone = THREAD_NULL;
+    place = focal ? switch_focal_enter(&switch_recorder_focal, key, mach_absolute_time(), &evicted)
+                  : switch_focal_leave(&switch_recorder_focal, key);
+    if (place < SWITCH_FOCAL_PLACES) {
+        gone = switch_recorder_watch_put(SWITCH_RECORDER_WATCH_APP + place, focal ? main : THREAD_NULL);
     }
     simple_unlock(&switch_recorder_watch_lock);
     if (gone != THREAD_NULL) {

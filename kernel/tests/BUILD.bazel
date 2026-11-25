@@ -41,6 +41,8 @@
 #                            only when taken; every mark taken and served first, one automatic ask at a time outside
 #                            the gap; refusals logged once a second; the slot a capture replaces (never a mark for an
 #                            automatic one); the dump header read back; the status line HW Test reads
+#   xnu_focal_test           kernel/switch/include/switch/focal.h: one place per focal app, one leaving the role
+#                            leaving the others watched
 #   xnu_recorder_hooks_source_test  every source in kernel/switch and both trees' bsd and osfmk that names
 #                            SWITCH_RECORDER is in objects.bzl's _RECORDER_OBJECTS, and every listed one names it
 #   xnu_kprof_role_test      kernel/switch/include/switch/kprof_role.h: main-thread vs worker user-sample bucketing,
@@ -504,6 +506,22 @@ host_test(
     srcs = [
         "recorder/recorder.h",
         "xnu_recorder_test.cpp",
+    ],
+    includes = ["."],
+)
+
+# --- kernel/switch/include/switch/focal.h ---------------------------------------------------------------------------------
+copy_file(
+    name = "switch_focal",
+    src = "//kernel/switch:include/switch/focal.h",
+    out = "switch/focal.h",
+)
+
+host_test(
+    name = "xnu_focal_test",
+    srcs = [
+        "switch/focal.h",
+        "xnu_focal_test.cpp",
     ],
     includes = ["."],
 )
