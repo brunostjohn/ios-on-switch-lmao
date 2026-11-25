@@ -70,6 +70,20 @@ TEST(SdQueueSource, MergeChains)
         Search(source, R"(static_cast<uint8_t>\(priority >> 6\),\s*direction == kIODirectionOut,\s*false,\s*false,)"));
 }
 
+// The chain's first request comes from SwitchSdPick.h (sd_pick_test.cpp), with a synchronize's writes ranked as reads;
+// doSetPriority raises queued requests under queueLock and never lowers one.
+TEST(SdQueueSource, PickAndRaise)
+{
+    const std::string pick = body("Request *NativeSwitchBlock::pickLocked(");
+    EXPECT_THAT(pick, HasSubstr("const bool syncWaiting = rootWrites.waiters || filesWrites.waiters;"));
+    EXPECT_THAT(pick, HasSubstr("switchSdPick(head, queuedReads, syncWaiting, pickNs, &pickState)"));
+    const std::string promote = body("void NativeSwitchBlock::promote(");
+    EXPECT_LT(promote.find("IOLockLock(queueLock);"), promote.find("switchSdPromote("));
+    EXPECT_LT(promote.find("switchSdPromote("), promote.find("IOLockUnlock(queueLock);"));
+    const std::string set = body("IOReturn NativeSwitchBlockDevice::doSetPriority(");
+    EXPECT_LT(set.find("return kIOReturnBadArgument;"), set.find("owner->promote("));
+}
+
 // r14-sdcq: a read chain's gaps go to the sink and nowhere else; a write chain never has one.
 TEST(SdQueueSource, GapChains)
 {

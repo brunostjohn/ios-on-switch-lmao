@@ -60,6 +60,7 @@
 #include "SwitchClientCopy.h"
 #include "SwitchAdma.h"
 #include "SwitchQueue.h"
+#include "SwitchSdPick.h"
 #include "SwitchSdPool.h"
 #include "SwitchSdVolume.h"
 #include "SwitchSdWindow.h"
@@ -415,10 +416,8 @@ struct PipeSlot : SwitchSdPipeSlot {
     Batch batch = {};
 };
 
-// r6-lows: a high-class read may be taken before older requests of lower classes (worker), never before an older request it
-// overlaps, and never once the oldest request has waited kAgeNs (then FIFO again, so nothing starves). Writes keep FIFO order.
-constexpr unsigned kClasses = 4;
-constexpr uint64_t kAgeNs = 100000000;  // 100 ms
+// Which request a chain starts with: SwitchSdPick.h. Writes keep FIFO order among themselves.
+constexpr unsigned kClasses = kSwitchSdPickClasses;
 
 // Queue time (submit to the command that carries it) per class over one throughput line's interval.
 struct ClassWait {
@@ -506,6 +505,7 @@ public:
     }
 
     IOReturn doUnmap(IOBlockStorageDeviceExtent *extents, UInt32 count, IOStorageUnmapOptions) override;
+    IOReturn doSetPriority(IOBlockStorageDeviceExtent *extents, UInt32 count, IOStoragePriority priority) override;
 
     char *getVendorString() override
     {
@@ -620,6 +620,10 @@ class NativeSwitchBlock : public IOService {
     uint32_t queuedReads[kClasses] = {};   // r6-lows: reads waiting per class, under queueLock
     ClassWait waits[kClasses] = {};        // r6-lows: per class since the last throughput line, under queueLock
     uint64_t passed = 0, passedTotal = 0;  // r6-lows: reads taken before older requests (this line, since boot)
+    SwitchSdPickState pickState = {};      // under queueLock
+#if DEVELOPMENT || DEBUG
+    uint64_t promoteCalls = 0, promoteRaised = 0;  // doSetPriority since boot, under queueLock
+#endif
     uint64_t submitted = 0, serviced = 0;  // for the root-wait report
     uint64_t lastEnd = 0;                  // card LBA after the previous request (sequential count)
     static constexpr uint64_t statsEveryNs = 10 * 1000000000ULL;
@@ -869,6 +873,8 @@ public:
     int transfer(uint64_t lba, uint32_t sectors, bool write, uint8_t *bytes, const SwitchSdWindow *window = nullptr);
     IOReturn submit(const Request &);
     IOReturn unmap(const IOBlockStorageDeviceExtent *extents, uint32_t count, uint64_t blocks);
+    void promote(const SwitchSdWindow *window, const IOBlockStorageDeviceExtent *extents, uint32_t count,
+                 uint8_t klass);
     IOReturn synchronize(const SwitchSdWindow *window);
 
     bool writeCacheEnabled() const
@@ -1617,6 +1623,39 @@ IOReturn NativeSwitchBlock::submit(const Request &spec)
 IOReturn NativeSwitchBlockDevice::doUnmap(IOBlockStorageDeviceExtent *extents, UInt32 count, IOStorageUnmapOptions)
 {
     return shared ? kIOReturnUnsupported : owner->unmap(extents, count, window->count);
+}
+
+// XNU raises a page-in to the tier of a thread that waits on one of its busy pages (vm_page_handle_prio_inversion ->
+// DKIOCSETTIER -> IOMedia::setPriority -> here), and SwitchCryptex raises the window fills a foreground read joined.
+IOReturn NativeSwitchBlockDevice::doSetPriority(IOBlockStorageDeviceExtent *extents, UInt32 count,
+                                                IOStoragePriority priority)
+{
+    if (count && !extents)
+        return kIOReturnBadArgument;
+    for (UInt32 i = 0; i < count; ++i) {
+        if (extents[i].blockStart >= window->count || extents[i].blockCount > window->count - extents[i].blockStart)
+            return kIOReturnBadArgument;
+    }
+    owner->promote(window, extents, count, static_cast<uint8_t>(priority >> 6));
+    return kIOReturnSuccess;
+}
+
+// Requests already in a pipeline slot are past the queue and keep their class.
+void NativeSwitchBlock::promote(const SwitchSdWindow *window, const IOBlockStorageDeviceExtent *extents, uint32_t count,
+                                uint8_t klass)
+{
+    IOLockLock(queueLock);
+    uint32_t raised = 0;
+    for (uint32_t i = 0; i < count; ++i)
+        raised +=
+            switchSdPromote(head, window->first + extents[i].blockStart, extents[i].blockCount, klass, queuedReads);
+#if DEVELOPMENT || DEBUG
+    ++promoteCalls;
+    promoteRaised += raised;
+#else
+    (void)raised;
+#endif
+    IOLockUnlock(queueLock);
 }
 
 // Thread context: queues the extents for the worker and sleeps until it has run them, so the controller keeps one
@@ -2564,35 +2603,14 @@ int NativeSwitchBlock::controlCommand(uint32_t index, uint32_t argument, uint32_
 Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCount, const SwitchLbaRange *inFlight,
                                        unsigned inFlightCount)
 {
-    Request *prev = nullptr;
-    Request *first = head;
     const uint64_t pickNs = switch_now_ns();
-    // r6-lows: a read of a higher IOStoragePriority class goes first (the UI's page-ins, I/O tier 0, behind up to ~100 queued
-    // background requests at ~0.5 ms each otherwise): the oldest read of the best class queued, unless it overlaps an older
-    // request or the head has waited kAgeNs.
-    if (first->next && first->klass && pickNs - first->queuedNs < kAgeNs) {
-        unsigned better = 0;
-        while (better < first->klass && !queuedReads[better])
-            ++better;
-        if (better < first->klass) {
-            for (Request *before = first, *candidate = first->next; candidate;
-                 before = candidate, candidate = candidate->next) {
-                if (candidate->write || candidate->klass != better)
-                    continue;
-                bool overlaps = false;
-                for (const Request *older = head; older != candidate && !overlaps; older = older->next) {
-                    overlaps = older->lba < candidate->lba + candidate->sectors &&
-                               candidate->lba < older->lba + older->sectors;
-                }
-                if (overlaps)
-                    continue;
-                prev = before;
-                first = candidate;
-                ++passed;
-                ++passedTotal;
-                break;
-            }
-        }
+    const bool syncWaiting = rootWrites.waiters || filesWrites.waiters;
+    const SwitchSdPicked<Request> picked = switchSdPick(head, queuedReads, syncWaiting, pickNs, &pickState);
+    Request *const prev = picked.prev;
+    Request *first = picked.first;
+    if (picked.passed) {
+        ++passed;
+        ++passedTotal;
     }
     uint32_t sectors = first->sectors;
     uint32_t count = 1;
@@ -2985,7 +3003,13 @@ void NativeSwitchBlock::logThroughput()
             waits[c] = {};
         }
         if (at < sizeof(classes))
-            snprintf(classes + at, sizeof(classes) - at, " passed %llu/%llu", passed, passedTotal);
+            at += static_cast<size_t>(
+                snprintf(classes + at, sizeof(classes) - at, " passed %llu/%llu", passed, passedTotal));
+#if DEVELOPMENT || DEBUG
+        // doSetPriority calls since boot / queued requests they raised.
+        if (at < sizeof(classes))
+            snprintf(classes + at, sizeof(classes) - at, " reprio %llu/%llu", promoteCalls, promoteRaised);
+#endif
         passed = 0;
         IOLockUnlock(queueLock);
     }
