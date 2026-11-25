@@ -9,7 +9,8 @@
 // A request names the surfaces it reads or writes (`touched`, null where none). It may take its destination's write
 // reservation while queued only if no listed request, and not the one the engine thread runs, touches that surface:
 // held by a later request, it stalls an earlier one that runs first on the surface (pop takes the first runnable one),
-// which waits on it from the engine thread. `reserving` marks one taking it, which nothing behind it overtakes.
+// which waits on it from the engine thread. `reserving` marks one taking it: pop steps past it, but no request behind
+// it that touches one of its surfaces runs first, so writes to a surface keep their order.
 template <class Request> class SwitchVICRequests {
 public:
     static constexpr uint32_t kRunnable = 16, kWaitingPerConnection = 16;
@@ -86,11 +87,22 @@ public:
 
     Request *pop()
     {
+        // A reserving request has no events, so it counts against the runnable bound.
+        const void *held[2 * kRunnable];
+        uint32_t holding = 0;
         Request *previous = nullptr;
         for (auto *request = head; request; previous = request, request = request->next) {
-            if (request->reserving)
-                return nullptr;
-            if (!request->eventReady)
+            if (request->reserving) {
+                for (const void *surface : request->touched) {
+                    if (!surface)
+                        continue;
+                    if (holding == 2 * kRunnable)
+                        return nullptr;
+                    held[holding++] = surface;
+                }
+                continue;
+            }
+            if (!request->eventReady || touchesAny(*request, held, holding))
                 continue;
             (previous ? previous->next : head) = request->next;
             if (tail == request)
@@ -106,6 +118,15 @@ public:
     }
 
 private:
+    static bool touchesAny(const Request &request, const void *const *surfaces, uint32_t count)
+    {
+        for (uint32_t i = 0; i < count; ++i) {
+            if (request.touched[0] == surfaces[i] || request.touched[1] == surfaces[i])
+                return true;
+        }
+        return false;
+    }
+
     Request *head = nullptr, *tail = nullptr;
     uint32_t runnable = 0;
     const void *running[2] = {};

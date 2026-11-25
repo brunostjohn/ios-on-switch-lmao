@@ -142,18 +142,51 @@ TEST(SwitchVICRequests, ASurfaceIsAloneOnlyWhenNoListedOrRunningRequestTouchesIt
     EXPECT_TRUE(queue.alone(&source));
 }
 
-TEST(SwitchVICRequests, NothingOvertakesARequestTakingItsReservation)
+TEST(SwitchVICRequests, NothingTouchingItsSurfacesOvertakesARequestTakingItsReservation)
 {
     Requests queue;
     Conn conn;
-    auto requests = make(&conn, 2, true);
+    int source = 0, destination = 0, elsewhere = 0;
+    auto requests = make(&conn, 4, true);
+    requests[0].touched[0] = &destination;
+    requests[0].touched[1] = &source;
     requests[0].reserving = true;
-    queue.push(&requests[0]);
-    queue.push(&requests[1]);
-    EXPECT_EQ(queue.pop(), nullptr);
+    requests[1].touched[0] = &destination;
+    requests[2].touched[0] = &elsewhere;
+    requests[2].touched[1] = &destination;
+    requests[3].touched[0] = &source;
+    for (auto &request : requests)
+        queue.push(&request);
+    EXPECT_EQ(queue.pop(), nullptr) << "each later request writes the destination, reads it, or writes the source";
     queue.reserved(&requests[0]);
-    EXPECT_EQ(queue.pop(), &requests[0]);
-    EXPECT_EQ(queue.pop(), &requests[1]);
+    for (auto &request : requests)
+        EXPECT_EQ(queue.pop(), &request);
+}
+
+// A background client's job is still taking its reservation (its thread preempted, say): a compositor's job on other
+// surfaces queued behind it runs meanwhile, and one on its destination still waits for it.
+TEST(SwitchVICRequests, AnUnrelatedRequestRunsWhileAnotherIsStillTakingItsReservation)
+{
+    Requests queue;
+    Conn background, compositor;
+    int destination = 0, source = 0, frame = 0, layer = 0;
+    auto reserving = make(&background, 1, true);
+    reserving[0].touched[0] = &destination;
+    reserving[0].touched[1] = &source;
+    reserving[0].reserving = true;
+    auto later = make(&compositor, 2, true);
+    later[0].touched[0] = &destination;
+    later[1].touched[0] = &frame;
+    later[1].touched[1] = &layer;
+    queue.push(&reserving[0]);
+    for (auto &request : later)
+        queue.push(&request);
+    EXPECT_EQ(queue.pop(), &later[1]);
+    queue.finished();
+    EXPECT_EQ(queue.pop(), nullptr);
+    queue.reserved(&reserving[0]);
+    EXPECT_EQ(queue.pop(), &reserving[0]);
+    EXPECT_EQ(queue.pop(), &later[0]);
 }
 
 namespace {
@@ -204,6 +237,7 @@ struct Engine {
     Destination destination;
     std::vector<const Request *> ran;
     std::function<void(const Request &)> popped;
+    std::function<void(const Request &)> beforeReserving;
 
     void queueJob(Request *request, bool eventFree)
     {
@@ -215,6 +249,8 @@ struct Engine {
         held.unlock();
         if (!reserve)
             return;
+        if (beforeReserving)
+            beforeReserving(*request);
         destination.tryReserve(request);
         held.lock();
         queue.reserved(request);
@@ -300,4 +336,40 @@ TEST(SwitchVICRequests, AJobQueuedWhileAnotherRunsOnItsDestinationDoesNotStallIt
     engine.queueJob(&a, false);
     EXPECT_TRUE(served(engine, 2, b)) << "A waited on B's reservation and B waited behind A";
     EXPECT_EQ(engine.ran, (std::vector<const Request *>{&a, &b}));
+}
+
+// B's thread is preempted between queueing B and taking B's reservation; C, on surfaces of its own, is queued behind B
+// by another client and must run meanwhile.
+TEST(SwitchVICRequests, AJobOnOtherSurfacesRunsWhileAnEarlierOneIsTakingItsReservation)
+{
+    Engine engine;
+    Conn background, compositor;
+    int frame = 0;
+    auto requests = make(&background, 1, true);
+    auto others = make(&compositor, 1, true);
+    Request &b = requests[0], &c = others[0];
+    b.touched[0] = &engine.destination;
+    c.touched[0] = &frame;
+    std::promise<void> resume, queued;
+    auto resumed = resume.get_future();
+    engine.beforeReserving = [&](const Request &) {
+        queued.set_value();
+        resumed.wait();
+    };
+    std::thread client([&] {
+        engine.queueJob(&b, true);
+    });
+    queued.get_future().wait();
+    engine.queueJob(&c, false);
+    auto served = std::async(std::launch::async, [&] {
+        engine.serve(1);
+    });
+    const bool ran = served.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+    resume.set_value();
+    client.join();
+    served.get();
+    EXPECT_TRUE(ran) << "C waited for B's thread to take B's reservation";
+    EXPECT_EQ(engine.ran, (std::vector<const Request *>{&c}));
+    engine.serve(2);
+    EXPECT_EQ(engine.ran, (std::vector<const Request *>{&c, &b}));
 }
