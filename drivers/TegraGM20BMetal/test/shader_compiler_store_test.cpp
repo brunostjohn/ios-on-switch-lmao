@@ -8,6 +8,7 @@
 #include "../compute_slot.h"
 #include "../program_pages.h"
 #include "../record_parts.h"
+#include "../store_key.h"
 
 #include <gtest/gtest.h>
 

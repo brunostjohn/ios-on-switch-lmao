@@ -4,6 +4,7 @@
 #include "lock.h"
 #include "remote.h"
 #include "stats.h"
+#include "store_key.h"
 
 #include <IOKit/IOKitLib.h>
 #include <dispatch/dispatch.h>

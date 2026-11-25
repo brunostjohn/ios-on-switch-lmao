@@ -10,6 +10,7 @@
 #include "../cache_io.h"
 #include "../obtained.h"
 #include "../program_pages.h"
+#include "../store_key.h"
 #include "TegraGM20BABI.h"
 #include "TegraGM20BCompilerABI.h"
 

@@ -11,6 +11,7 @@
 #include "../compute_key.h"
 #include "../function_attributes.h"
 #include "../render_key.h"
+#include "../store_key.h"
 
 namespace switch_compiler {
 namespace {
@@ -168,7 +169,9 @@ bool libraryKey(Prepared &p, uint64_t stack, std::string &why)
     p.key = gm20b::libraryCacheKey(stack, r.codeGenType, r.codeGen);
     if (p.key.key != r.key)
         return why = "a library request whose bytes give another key than its own", false;
-    p.name = gm20b::storeName(p.key, r, {});
+    gm20b::StoreKey store = gm20b::storeKeyOf(p.key, r, {});
+    p.content = std::move(store.content);
+    p.name = store.name;
     return true;
 }
 
@@ -234,7 +237,6 @@ bool prepare(const std::string &bytes, uint64_t stack, SystemLibraries &system, 
         return true;
     }
     std::vector<std::map<std::string, gm20b::AirHash>> air(p.request.libraries.size());
-    std::vector<gm20b::LibraryIdentity> identities;
     p.clientLibraries.resize(p.request.libraries.size());
     for (size_t i = 0; i < p.request.libraries.size(); ++i) {
         const gm20b::RequestLibrary &library = p.request.libraries[i];
@@ -256,7 +258,6 @@ bool prepare(const std::string &bytes, uint64_t stack, SystemLibraries &system, 
         }
         if (!read)
             return why = why.empty() ? "a library that is not a metallib" : why, false;
-        identities.push_back(gm20b::identityOf(library));
     }
     const gm20b::RequestKind kind = p.request.kind;
     const bool keyed = gm20b::functionAttributes(p.request)  ? attributesKey(p, air, stack, why)
@@ -270,7 +271,13 @@ bool prepare(const std::string &bytes, uint64_t stack, SystemLibraries &system, 
     if (p.key.key != p.request.key)
         return why = "a request whose fields give another key than its own: " + keyDifference(p.request.key, p.key.key),
                false;
-    p.name = gm20b::storeName(p.key, p.request, identities);
+    std::vector<gm20b::AirHash> stageAir(p.request.stages.size());
+    for (size_t i = 0; i < stageAir.size(); ++i)
+        if (!airOf(p.request, air, p.request.stages[i], stageAir[i], why))
+            return false;
+    gm20b::StoreKey store = gm20b::storeKeyOf(p.key, p.request, stageAir);
+    p.content = std::move(store.content);
+    p.name = store.name;
     out = std::move(p);
     return true;
 }

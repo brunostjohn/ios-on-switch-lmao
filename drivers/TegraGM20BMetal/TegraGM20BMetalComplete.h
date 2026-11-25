@@ -22,6 +22,7 @@
 #include "obtained.h"
 #include "remote.h"
 #include "render_variant.h"
+#include "store_key.h"
 
 struct NmbDirectDispatch;
 
@@ -131,8 +132,13 @@ private:
     void request(Ask asked, std::shared_ptr<Pending> pending);
     std::string failureOf(const CacheKey &k, bool creation);
     // `qos`: the asker's class, which the record is placed at (answer_class.h)
-    void place(const CacheKey &key, std::shared_ptr<const RuntimeRecord> record, bool caTransform, uint32_t qos,
+    void place(const Ask &a, const CacheKey &key, std::shared_ptr<const RuntimeRecord> record, uint32_t qos,
                std::shared_ptr<Pending> pending);
+    // TegraGM20BMetalCompleteRemote.mm: storage form `made`'s barrier twin, as Device::pipeline gives a pack state its
+    // own: from the store, else asked of the compiler at the background class, so no creation waits for it; attached to
+    // `made` once placed (draws load the slot with acquire), and asked once per pipeline
+    void askTwin(const Ask &a, const CacheKey &k, Pipeline *made);
+    void attachTwin(Pipeline *made, const RuntimeRecord &record, bool caTransform);
 
     struct Kernel {
         gm20b::Mutex lock;
@@ -147,6 +153,10 @@ private:
     dispatch_group_t pending_;
     std::atomic<bool> stopping_{false};
     gm20b::Mutex kernelLock_;  // map membership only; each kernel owns its single-flight lock
+    // the pipelines whose twins were asked: creation threads and the answer queue ask at once, each once per storage
+    // form's creation, never at a draw
+    gm20b::Mutex twinLock_;
+    std::set<const Pipeline *> twinsAsked_;
     std::map<uint64_t, std::shared_ptr<Kernel>> kernels_;
 
     std::shared_ptr<Remote> remote_;
@@ -155,14 +165,17 @@ private:
 
     // TegraGM20BMetalCompleteRemote.mm: the system shader compiler's side
     // `every`: each library's bytes, a system one's too, as a data library
-    bool renderRequest(const Ask &a, const CacheKey &k, bool bytes, CompileRequest &r, Digest &name, bool every = false,
-                       RequestKind kind = RequestKind::Render);
-    // A reflection entry of `k` from the store, else asked of the compiler with `request`'s (`every`: as renderRequest's)
-    bool storedReflection(const std::function<bool(bool bytes, bool every, CompileRequest &, Digest &)> &request,
-                          const CacheKey &k, std::string &blob, std::string &why);
+    bool renderRequest(const Ask &a, const CacheKey &k, bool bytes, CompileRequest &r, StoreKey &store,
+                       bool every = false, RequestKind kind = RequestKind::Render,
+                       RequestForm form = RequestForm::Primary);
+    // A reflection entry from the store, else asked of the compiler with `request`'s (`every`: as renderRequest's)
+    bool storedReflection(const std::function<bool(bool bytes, bool every, CompileRequest &, StoreKey &)> &request,
+                          std::string &blob, std::string &why);
     // storedReflection of one function of this facade as a request's one stage tagged `tag`
     bool functionReflection(const char *tag, id function, const CacheKey &k, std::string &blob, std::string &why);
-    RecordCache::Found fromStore(const Digest &name, const CacheKey &k, RuntimeRecord &record, std::string &why);
+    // The render record the store holds under `store`, keyed by this process's pack key of it (store_key.h rekeyRecord)
+    RecordCache::Found fromStore(const StoreKey &store, const std::string &packKey, RuntimeRecord &record,
+                                 std::string &why);
     // Why a state's creation fails where no compiler makes it (makeNow's `failure`)
     static constexpr const char kInexpressible[] = "a function no compile request can name: another device's";
     static constexpr const char kNotTaken[] = "the shader compiler did not take the state";

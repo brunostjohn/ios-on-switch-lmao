@@ -2,10 +2,8 @@
 // A compile request, as a GPU client hands it to the system's shader compiler (drivers/TegraGM20BMetal/compiler) through the
 // kernel: a render state's descriptor fields, or a kernel's limits, stage input and dispatch, each stage's function and the
 // library it comes from, and the variant. It carries the key the client made, which the compiler checks against the key it
-// makes itself from the rest (TegraGM20BMetalCompileRequest.mm), and no record. A record is filed under a store name that binds that key
-// to the exact libraries it was compiled from: a system volume's library by its path (the compiler reads it there), any
-// other by the SHA-256 of its bytes (which the request carries). A client only ever finds a record made from what it holds
-// itself.
+// makes itself from the rest (TegraGM20BMetalCompileRequest.mm), and no record. The record is filed under the request's
+// content (store_key.h), so a client finds a record any process made from the same functions.
 #pragma once
 #include <array>
 #include <cstddef>
@@ -46,10 +44,13 @@ enum class RequestKind : uint8_t {
 constexpr uint32_t kCodeGenImageFilters = 5, kCodeGenSource = 13, kCodeGenStitch = 14, kCodeGenSpecialize = 15;
 
 // Primary: the state's record; Split: the same with its fragment program's split, which the compiler makes after the
-// primary record is published and nobody waits for
+// primary record is published and nobody waits for; Barrier: a storage form's barrier twin (Direct::make's
+// PackForm::Barrier), which a client asks at the background class once its primary record is a storage form, as the
+// pack gives each of its storage forms one
 enum class RequestForm : uint8_t {
     Primary,
-    Split
+    Split,
+    Barrier
 };
 
 struct RequestLibrary {
@@ -110,20 +111,14 @@ std::string encodeRequest(const CompileRequest &r);
 // False: not a request this build reads (a bound passed, a stage naming no library, a system library given bytes)
 bool decodeRequest(const std::string &bytes, CompileRequest &out);
 
-// What a library is to the store name: a system library's path, else its bytes
+// A library's digest as a client registers it with the compiler (remote.h registerLibrary), which checks the bytes it
+// maps against it
 struct LibraryIdentity {
     bool system = false;
     Digest digest{};
 };
 
 Digest sha256(const void *bytes, size_t size);
-LibraryIdentity identityOf(const RequestLibrary &library);
-// The store's name of a program slot's bytes (record.h programSlot), apart from every record's name
-Digest programSlotName(const void *slot, size_t size);
-
-// The store's name of the record of `k` made from `r`'s stages in these libraries, and of `r`'s fields and dispatch beyond
-// what the key names
-Digest storeName(const CacheKey &k, const CompileRequest &r, const std::vector<LibraryIdentity> &libraries);
 
 // The CacheKey of a kernel's compute key (TegraGM20BMetalComplete.mm kernel())
 CacheKey kernelCacheKey(uint64_t stack, const std::string &computeKey);

@@ -256,7 +256,7 @@ int32_t CodeGen::make(const Prepared &p, std::string &entry, std::string &why)
     const std::string name = replyName(s.uuid, r.codeGenType, request);
     gm20b::MadeLibrary kept;
     if (readReply(s.paths.replies, name, kept) || readReply(s.paths.seed, name, kept)) {
-        entry = gm20b::encodeLibraryEntry(p.key, &kept, "");
+        entry = gm20b::encodeLibraryEntry(p.content, &kept, "");
         return TegraGM20BCompileMade;
     }
     Answer a;
@@ -280,11 +280,11 @@ int32_t CodeGen::make(const Prepared &p, std::string &entry, std::string &why)
         return why = "the system's Metal compiler did not answer", TegraGM20BCompileFailed;
     if (a.refused) {
         why = a.log;
-        entry = gm20b::encodeLibraryEntry(p.key, nullptr, a.log);
+        entry = gm20b::encodeLibraryEntry(p.content, nullptr, a.log);
         return TegraGM20BCompileRefused;
     }
     keepReply(s.paths.replies, name, s.uuid, r.codeGenType, request, a.made);
-    entry = gm20b::encodeLibraryEntry(p.key, &a.made, "");
+    entry = gm20b::encodeLibraryEntry(p.content, &a.made, "");
     return TegraGM20BCompileMade;
 }
 

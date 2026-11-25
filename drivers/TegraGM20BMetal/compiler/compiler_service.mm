@@ -205,7 +205,7 @@ int32_t Service::run(Work &work)
 #endif
     std::string entry, why;
     if (store_.find(p.name, entry)) {
-        const int32_t stored = storedResult(entry, p.key);
+        const int32_t stored = storedResult(entry, p.content);
         if (stored >= 0) {
             noCompile();
             return packed(stored, true, workerClass);
@@ -218,7 +218,7 @@ int32_t Service::run(Work &work)
 #if SWITCH_DEBUG
     const uint64_t publishing = uptimeNs();
 #endif
-    if (!entry.empty() && !publish(&p.name, p.key, entry, result == TegraGM20BCompileMade, why))
+    if (!entry.empty() && !publish(&p.name, p.content, entry, result == TegraGM20BCompileMade, why))
         result = TegraGM20BCompileFailed;
 #if SWITCH_DEBUG
     tJobSplit.storeNs = uptimeNs() - publishing;
@@ -259,7 +259,7 @@ bool Service::submit(Prepared prepared, std::string request, const Waiter &waite
 {
     std::string bytes;
     if (store_.find(prepared.name, bytes)) {
-        const int32_t stored = storedResult(bytes, prepared.key);
+        const int32_t stored = storedResult(bytes, prepared.content);
         if (stored >= 0) {
             complete(waiter, stored, TegraGM20BCompileStored);
             return false;
@@ -432,7 +432,7 @@ void Service::warm(uint64_t stack)
             return false;
         }
         name = prepared.name;
-        const gm20b::CacheKey key = prepared.key;
+        const gm20b::CacheKey key = prepared.content;
         std::string bytes;
         const int32_t stored = store_.find(name, bytes) ? storedResult(bytes, key) : -1;
         const bool unconfirmed = stored == TegraGM20BCompileRefused && !confirmed.confirmed(name);
@@ -442,7 +442,7 @@ void Service::warm(uint64_t stack)
             (unconfirmed ? refusals : again)++;
             if (submit(std::move(prepared), std::string(), {0, 0, Band::Background, false}, 0, ran))
                 dispatch_semaphore_wait(ran, DISPATCH_TIME_FOREVER);
-        } else if (stored == TegraGM20BCompileMade && !publish(nullptr, prepared.key, bytes, true, why)) {
+        } else if (stored == TegraGM20BCompileMade && !publish(nullptr, prepared.content, bytes, true, why)) {
             os_log_error(logger(), "SwitchShaderCompiler: a stored record's program slots not kept: %{public}s",
                          why.c_str());
         }

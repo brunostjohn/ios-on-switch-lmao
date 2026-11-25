@@ -2,7 +2,8 @@
 // A request as the compiler takes it (compile_request.h): decoded, each system library's function list read from the
 // system volume itself (a path that leaves /System, through a link or otherwise, is refused), and the state's CacheKey made
 // from what was read, the way the runtime keys a state or a kernel. The key the client sent is only checked against it: a
-// request whose fields or libraries give another key is refused, and nothing else the client computed is kept.
+// request whose fields or libraries give another key is refused, and nothing else the client computed is kept. Its store
+// key is made of the same: each stage's AIR as the library the compiler reads lists it.
 #pragma once
 #include <map>
 #include <memory>
@@ -35,7 +36,8 @@ private:
 struct Prepared {
     gm20b::CompileRequest request;
     gm20b::CacheKey key;
-    std::string packKey;  // the key Direct makes the record under (a kernel's compute key)
+    std::string packKey;      // the key Direct makes the record under (a kernel's compute key)
+    gm20b::CacheKey content;  // what its store entry's head holds (store_key.h), from the AIR the compiler read itself
     gm20b::Digest name{};
     std::vector<std::shared_ptr<const MappedClientLibrary>> clientLibraries;
 };

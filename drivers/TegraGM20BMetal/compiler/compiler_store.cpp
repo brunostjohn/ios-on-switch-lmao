@@ -3,6 +3,7 @@
 #include "compiler_store.h"
 #include "../compute_slot.h"
 #include "../program_pages.h"
+#include "../store_key.h"
 
 #include <dirent.h>
 #include <sys/stat.h>

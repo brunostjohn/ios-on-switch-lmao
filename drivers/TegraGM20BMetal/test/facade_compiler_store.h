@@ -8,6 +8,7 @@
 #include "../compute_record.h"
 #include "../library_entry.h"
 #include "../reflection_blob.h"
+#include "request_store_key.h"
 #include "../../../kits/SwitchSeedPack/SwitchSeedStore.h"
 #include "../../../kits/SwitchGM20B/SwitchGM20B.h"
 #include "../../../kits/SwitchGM20BEmit/SwitchGM20BPushDecode.h"
@@ -27,9 +28,11 @@ struct LibraryCompiler {
 
     int32_t compute(const gm20b::CompileRequest &r)
     {
-        gm20b::CacheKey key;
-        key.stack = r.stack;
-        key.key = r.key;
+        gm20b::CacheKey made;
+        made.stack = r.stack;
+        made.key = r.key;
+        const gm20b::StoreKey store = requestStoreKey(made, r);
+        const gm20b::CacheKey &key = store.content;
         std::string entry;
         if (r.kind == gm20b::RequestKind::Facts) {
             const uint32_t facts[] = {256, 32, 0};
@@ -58,11 +61,7 @@ struct LibraryCompiler {
             return TegraGM20BCompileUnavailable;
         }
         consumers.push_back(r);
-        std::vector<gm20b::LibraryIdentity> ids;
-        for (const auto &library : r.libraries)
-            ids.push_back(gm20b::identityOf(library));
-        store.put(gm20b::storeName(key, r, ids).data(), reinterpret_cast<const uint8_t *>(entry.data()),
-                  uint32_t(entry.size()));
+        this->store.put(store.name.data(), reinterpret_cast<const uint8_t *>(entry.data()), uint32_t(entry.size()));
         return TegraGM20BCompileMade;
     }
 
@@ -86,9 +85,9 @@ struct LibraryCompiler {
             const gm20b::CacheKey k = gm20b::libraryCacheKey(r.stack, r.codeGenType, r.codeGen);
             if (k.key != r.key || !gm20b::codegen::requestOk(r.codeGenType, r.codeGen))
                 return int32_t(TegraGM20BCompileUnavailable);
-            const std::string entry = gm20b::encodeLibraryEntry(k, log.empty() ? &made : nullptr, log);
-            store.put(gm20b::storeName(k, r, {}).data(), reinterpret_cast<const uint8_t *>(entry.data()),
-                      uint32_t(entry.size()), true);
+            const gm20b::StoreKey key = gm20b::storeKeyOf(k, r, {});
+            const std::string entry = gm20b::encodeLibraryEntry(key.content, log.empty() ? &made : nullptr, log);
+            store.put(key.name.data(), reinterpret_cast<const uint8_t *>(entry.data()), uint32_t(entry.size()), true);
             return int32_t(log.empty() ? TegraGM20BCompileMade : TegraGM20BCompileRefused);
         };
         return true;

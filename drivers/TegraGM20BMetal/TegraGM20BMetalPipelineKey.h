@@ -298,40 +298,9 @@ inline uint64_t fastKey(const PipelineFields &f, uint64_t vertex, uint64_t fragm
                         uint64_t framework)
 {
     KeyWords k;
-    for (const uint64_t w : {f.samples, f.topology, f.depthFormat, f.stencilFormat})
+    keyFieldWords(f, [&k](uint64_t w) {
         k.add(w);
-    for (unsigned i = 0; i < 8; i++) {
-        const ColorFields &c = f.color[i];
-        if (!c.format)
-            continue;
-        for (const uint64_t w : {uint64_t(0x100 + i), c.format, c.writeMask, c.blending, c.sourceRGB, c.destinationRGB,
-                                 c.operationRGB, c.sourceAlpha, c.destinationAlpha, c.operationAlpha})
-            k.add(w);
-    }
-    for (unsigned i = 0; i < 31; i++) {
-        const AttributeFields &a = f.attributes[i];
-        if (!a.format)
-            continue;
-        const uint64_t stride = a.stride == UINT64_MAX ? UINT32_MAX : a.stride;
-        for (const uint64_t w : {uint64_t(0x200 + i), a.format, a.offset, a.buffer, stride, a.step, a.rate})
-            k.add(w);
-    }
-    if (f.patchType) {
-        const TessellationFields &t = f.tessellation;
-        for (const uint64_t w : {uint64_t(0x300), t.partition, t.factorFormat, t.factorStep, t.winding,
-                                 t.controlPointIndex, t.maxFactor, t.factorScale})
-            k.add(w);
-    }
-    if (f.amplification > 1) {
-        k.add(0x400);
-        k.add(f.amplification);
-    }
-    if (f.textureWriteRounding == 2)
-        k.add(0x500);
-    if (!f.rasterization)
-        k.add(0x600);
-    if (f.alphaToCoverage)
-        k.add(0x680);
+    });
     for (const uint64_t w : {uint64_t(0x700), vertex, fragment, linked, framework})
         k.add(w);
     return k.done();
