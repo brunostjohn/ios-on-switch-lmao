@@ -18,6 +18,24 @@ from pathlib import Path
 from tools.perf import dumps, ips, report, session, source, symbols
 
 KCDATA = Path(__file__).resolve().parents[2] / 'kernel/xnu-12377.121.6/tools/lldbmacros/kcdata.py'
+SESSION = '%Y%m%d-%H%M%S'  # a pulled session's folder: the time of its pull
+PULL_OVERLAP_S = 60
+
+
+def pull_age(out: Path, asked_s: int, now: datetime) -> int:
+    """Return the seconds of log a pull takes: what was asked, or back to the last pull under out if that is longer.
+
+    On 25 Nov two pulls of 15 minutes each, at 19:49:44 and 20:13:23, left 19:49:45-19:58:24 pulled by neither.
+    """
+    pulls = []
+    for d in out.iterdir() if out.is_dir() else ():
+        try:
+            pulls.append(datetime.strptime(d.name, SESSION).replace(tzinfo=UTC))
+        except ValueError:
+            continue
+    if not pulls:
+        return asked_s
+    return max(asked_s, int((now - max(pulls)).total_seconds()) + PULL_OVERLAP_S)
 
 
 def pull_commands(out: Path, udid: str | None, age_s: int) -> list[list[str]]:
@@ -30,8 +48,12 @@ def pull_commands(out: Path, udid: str | None, age_s: int) -> list[list[str]]:
 
 
 def pull(out: Path, udid: str | None, age_s: int) -> Path:
-    """Pull a session into a new folder under out and return its .logarchive."""
-    folder = out / datetime.now(UTC).strftime('%Y%m%d-%H%M%S')
+    """Pull a session into a new folder under out and return its .logarchive: from the last pull's end at least."""
+    now = datetime.now(UTC)
+    if (reach := pull_age(out, age_s, now)) > age_s:
+        print(f'pulling {reach} s of log, back to the last pull under {out}, not {age_s} s', file=sys.stderr)
+    age_s = reach
+    folder = out / now.strftime(SESSION)
     (folder / 'crash').mkdir(parents=True)
     for cmd in pull_commands(folder, udid, age_s):
         if not shutil.which(cmd[0]):

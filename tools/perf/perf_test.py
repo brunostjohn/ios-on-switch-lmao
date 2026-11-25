@@ -467,6 +467,17 @@ class SessionTest(unittest.TestCase):
 
 
 class PullTest(unittest.TestCase):
+    def test_a_pull_reaches_back_to_the_last_pull_and_the_report_names_a_hole(self):
+        with tempfile.TemporaryDirectory() as d:
+            now = datetime(2026, 11, 25, 20, 13, 23, tzinfo=UTC)
+            self.assertEqual(perf.pull_age(Path(d), 900, now), 900)
+            (Path(d) / '20261125-194944').mkdir()
+            (Path(d) / '1125-2005-hitches').mkdir()
+            self.assertEqual(perf.pull_age(Path(d), 900, now), 1419 + perf.PULL_OVERLAP_S)
+            self.assertEqual(perf.pull_age(Path(d), 7200, now), 7200)
+        recs = [rec('SwitchSched cores (10000 ms)', 0.0), rec('SwitchSched cores (10000 ms)', 519.0)]
+        self.assertIn('log holes (no record at all', '\n'.join(report.head(session.build('B', recs), report.Pulled())))
+
     def test_a_pull_takes_the_log_archive_and_the_crash_folder(self):
         cmds = perf.pull_commands(perf.Path('/s'), 'abc', 600)
         self.assertEqual(cmds[0], ['idevicesyslog', '-u', 'abc', 'archive', '/s/archive.tar', '--age-limit', '600'])

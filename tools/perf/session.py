@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import bisect
+import itertools
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -94,6 +95,14 @@ def families(s: Session) -> Counter[str]:
         elif r.name:
             counts[f'signpost {r.name}'] += 1
     return counts
+
+
+HOLE = timedelta(seconds=120)  # the kernel's stats lines come every 5-10 s: this long without a record is a hole
+
+
+def holes(recs: list[Rec]) -> list[tuple[datetime, datetime]]:
+    """Return the stretches of the boot with no record at all: a pull's window, or a log daemon's loss."""
+    return [(a.time, b.time) for a, b in itertools.pairwise(recs) if b.time - a.time >= HOLE]
 
 
 def lost(slows: list[pacing.Slow]) -> list[pacing.Slow]:

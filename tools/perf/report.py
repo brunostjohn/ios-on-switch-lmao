@@ -7,7 +7,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from tools.perf import cpu, dumps, gpu, ips, ktrace, pacing, recfile, symbols, vm, work
+from tools.perf import cpu, dumps, gpu, ips, ktrace, pacing, recfile, session, symbols, vm, work
 from tools.perf.session import Session, dossier, families, lost, pacing_row, slows_in
 from tools.perf.windows import BOOTSTRAPPED, Window
 
@@ -82,6 +82,7 @@ def head(s: Session, pulled: Pulled) -> list[str]:
     fam = families(s)
     state, _ = cpu.kprof(s.recs)
     sym_state = 'loaded' if pulled.syms.active else 'none (pass --dsc for shared-cache symbols)'
+    gaps = session.holes(s.recs)
     return [
         (
             f'# Boot {s.boot}: {first:%Y-%m-%d %H:%M:%S} to {last:%H:%M:%S} UTC '
@@ -94,6 +95,14 @@ def head(s: Session, pulled: Pulled) -> list[str]:
             f'{sum(1 for r in s.recs if recfile.CAPTURE.search(r.msg))}; symbols: {sym_state}'
         ),
         'windows: ' + ', '.join(f'{k} {len(v)}' for k, v in s.windows.items()),
+        *(
+            [
+                "log holes (no record at all; pull again from the last pull's end): "
+                + ', '.join(f'{a:%H:%M:%S}-{b:%H:%M:%S} ({(b - a).total_seconds() / 60:.1f} min)' for a, b in gaps)
+            ]
+            if gaps
+            else []
+        ),
     ]
 
 
