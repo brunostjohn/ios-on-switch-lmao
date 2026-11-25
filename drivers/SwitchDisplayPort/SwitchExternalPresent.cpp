@@ -262,21 +262,21 @@ void SwitchExternalScreen::noteShape(uint32_t updated, const native_planes::Laye
     IOLog("SwitchDisplayPort: clone swap %s\n", line);
 }
 
-// why: -2 an inherited surface no kick gave geometry to, otherwise prepareSlot's answer (or its slot when no window
-// reads the layout).
+// A swap retired unshown, the screen keeping its frame, for one layer. why: -2 its inherited surface has no record,
+// otherwise the error mapping or converting it.
 void SwitchExternalScreen::noteUnshown(unsigned layer, int why)
 {
     if (diagScanoutFailures >= 8u)
         return;
     ++diagScanoutFailures;
     if (why == -2) {
-        IOLog("SwitchDisplayPort: layer %u not shown: its inherited surface came with no geometry\n", layer);
+        IOLog("SwitchDisplayPort: swap not shown: layer %u's inherited surface has no record\n", layer);
         return;
     }
     const auto &l = layerRecords[layer].layer;
     const uint32_t f = l.surface.format;
-    IOLog("SwitchDisplayPort: layer %u not shown (%d) '%c%c%c%c' %ux%u planes %u strides %u/%u src (%d,%d %dx%d) "
-          "dst (%d,%d %dx%d)\n",
+    IOLog("SwitchDisplayPort: swap not shown: layer %u (%d) '%c%c%c%c' %ux%u planes %u strides %u/%u src (%d,%d "
+          "%dx%d) dst (%d,%d %dx%d)\n",
           layer, why, static_cast<char>(f >> 24), static_cast<char>(f >> 16), static_cast<char>(f >> 8),
           static_cast<char>(f), l.surface.width, l.surface.height, l.surface.planes, l.surface.stride[0],
           l.surface.stride[1], l.src.x, l.src.y, l.src.w, l.src.h, l.dst.x, l.dst.y, l.dst.w, l.dst.h);

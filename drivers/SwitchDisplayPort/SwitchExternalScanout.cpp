@@ -260,32 +260,53 @@ native_planes::Layer SwitchExternalScreen::layerOf(const uint8_t *request, unsig
     return l;
 }
 
-// The layers a kicked swap shows: an updated layer as the swap gives it, any other as an earlier kick took it. A layer
-// whose inherited surface is not the one taken (a swap retired unkicked set it) has no known geometry and is not shown.
-void SwitchExternalScreen::takeLayers(const uint8_t *request, bool present[], native_planes::Layer layers[],
-                                      OSObject *surfaces[])
+// Every swap the family hands over, shown or drained, records the layers it updates: a later swap inherits them. The
+// surface is retained, so an inherited pointer that matches a record is that record's surface.
+void SwitchExternalScreen::recordLayers(const uint8_t *request)
 {
     const uint32_t updated = native_planes::wordAt(request, swapUpdated);
     OSObject *effective[kLayers] = {};
     memcpy(effective, request + swapEffectiveSurfaces, sizeof(effective));
     for (unsigned i = 0; i < kLayers; ++i) {
+        if (!(updated & (1u << i)))
+            continue;
         OSObject *surface = effective[i] && effective[i]->metaCast("IOSurface") ? effective[i] : nullptr;
         LayerRecord &record = layerRecords[i];
-        if (updated & (1u << i)) {
-            record.surface = surface;
+        if (surface != record.surface) {
+            OSSafeReleaseNULL(record.surface);
             if (surface)
-                record.layer = layerOf(request, i, surface);
+                surface->retain();
+            record.surface = surface;
+        }
+        if (surface)
+            record.layer = layerOf(request, i, surface);
+    }
+}
+
+// The layers a kicked swap shows: an updated layer as the swap gives it, any other as the records hold it. False when an
+// inherited surface has no record (its geometry is not known), so the swap cannot be shown whole.
+bool SwitchExternalScreen::takeLayers(const uint8_t *request, bool present[], native_planes::Layer layers[],
+                                      OSObject *surfaces[])
+{
+    recordLayers(request);
+    OSObject *effective[kLayers] = {};
+    memcpy(effective, request + swapEffectiveSurfaces, sizeof(effective));
+    for (unsigned i = 0; i < kLayers; ++i) {
+        OSObject *surface = effective[i] && effective[i]->metaCast("IOSurface") ? effective[i] : nullptr;
+        LayerRecord &record = layerRecords[i];
+        if (!surface) {
+            OSSafeReleaseNULL(record.surface);
         } else if (surface != record.surface) {
 #if DEVELOPMENT || DEBUG
-            if (surface)
-                noteUnshown(i, -2);
+            noteUnshown(i, -2);
 #endif
-            record.surface = nullptr;
+            return false;
         }
-        present[i] = record.surface != nullptr;
+        present[i] = surface != nullptr;
         layers[i] = record.layer;
-        surfaces[i] = record.surface;
+        surfaces[i] = surface;
     }
+    return true;
 }
 
 void SwitchExternalScreen::releaseUnshown(uint32_t building)
@@ -304,7 +325,10 @@ void SwitchExternalScreen::requestFrame()
     bool present[kLayers] = {};
     native_planes::Layer layers[kLayers];
     OSObject *surfaces[kLayers] = {};
-    takeLayers(bytes, present, layers, surfaces);
+    if (!takeLayers(bytes, present, layers, surfaces)) {
+        dropFrame(request);
+        return;
+    }
     native_planes::Image images[kLayers];
     int slotOf[kLayers] = {-1, -1, -1, -1};
     uint32_t building = 0;

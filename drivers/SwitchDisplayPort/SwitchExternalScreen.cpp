@@ -90,6 +90,7 @@ void SwitchExternalScreen::free()
         IOLockFree(colorLock);
         colorLock = nullptr;
     }
+    clearLayerState();
     if (slots) {
         for (unsigned i = 0; i < kSlots; ++i)
             releaseSlot(i);
@@ -307,7 +308,10 @@ void SwitchExternalScreen::publishActiveGeometry()
 void SwitchExternalScreen::drainSwapQueue()
 {
     if (!gpuPending) {
-        while (retire(pendingSwapRequest(), false)) {
+        for (const auto *request = pendingSwapRequest(); request; request = pendingSwapRequest()) {
+            recordLayers(reinterpret_cast<const uint8_t *>(request));
+            if (!retire(request, false))
+                break;
         }
     }
 }
@@ -348,9 +352,10 @@ bool SwitchExternalScreen::publish(const struct switch_dp_mode_list &list, const
 
 void SwitchExternalScreen::clearLayerState()
 {
-    for (auto &record : layerRecords)
+    for (auto &record : layerRecords) {
+        OSSafeReleaseNULL(record.surface);
         record = {};
-    pendingFrame = {};
+    }
 }
 
 void SwitchExternalScreen::linkUp(const struct switch_dp_mode &timing, TegraDisplayB *controller)
@@ -359,8 +364,8 @@ void SwitchExternalScreen::linkUp(const struct switch_dp_mode &timing, TegraDisp
         for (unsigned i = 0; i < kSlots; ++i)
             if (slots[i].surface && !slotShown(static_cast<int>(i)))
                 releaseSlot(i);
+        clearLayerState();
     }
-    clearLayerState();
 #if DEVELOPMENT || DEBUG
     __atomic_store_n(&diagValidateRejects, 0u, __ATOMIC_RELAXED);
     diagScanoutFailures = 0;
@@ -390,7 +395,6 @@ void SwitchExternalScreen::linkDown()
     ++linkGeneration;
     switch_gpu_ready_cancel(&ready);
     latched = false;
-    clearLayerState();
     for (auto &shown : front) {
         const int k = shown;
         shown = -1;

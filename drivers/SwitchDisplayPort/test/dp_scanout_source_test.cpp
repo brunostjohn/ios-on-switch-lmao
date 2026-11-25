@@ -36,6 +36,16 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_TRUE(select.has("if (device != 2) self->drainSwapQueue();"));
     EXPECT_TRUE(Block(lifecycle, "void SwitchExternalScreen::linkUp(").has("mode.hactive != timing.hactive"));
 
+    // Layer records outlive a link drop (a retrain mid-video keeps the inherited UI) and follow drained swaps too.
+    EXPECT_FALSE(off.has("clearLayerState"));
+    EXPECT_TRUE(Block(lifecycle, "void SwitchExternalScreen::linkUp(").has("releaseSlot(i); clearLayerState(); }"));
+    EXPECT_TRUE(detach.has("clearLayerState();"));
+    EXPECT_TRUE(Block(lifecycle, "void SwitchExternalScreen::drainSwapQueue()")
+                    .before("recordLayers(reinterpret_cast<const uint8_t *>(request));", "retire(request, false)"));
+    EXPECT_TRUE(Block(source, "void SwitchExternalScreen::recordLayers(").has("surface->retain();"));
+    EXPECT_TRUE(Block(source, "void SwitchExternalScreen::requestFrame()")
+                    .has("if (!takeLayers(bytes, present, layers, surfaces)) { dropFrame(request); return; }"));
+
     const auto validate = Block(lifecycle, "bool SwitchExternalScreen::validateSwap(");
     EXPECT_TRUE(validate.has("__atomic_load_n(&activeGeometry, __ATOMIC_ACQUIRE)"));
     EXPECT_FALSE(validate.has("modes.modes[selectedMode]"));

@@ -73,7 +73,8 @@ private:
         bool counted;
     };
     Slot *slots = nullptr;  // kSlots of them, allocated at begin: the object stays within the kernel's 16 KiB
-    // Each layer as the swaps kicked so far gave it (a layer a swap does not update keeps its surface and geometry).
+    // Each layer as the swaps handed over so far gave it (a layer a swap does not update keeps its surface, retained, and
+    // geometry); kept across a link drop, cleared at a detach or a change of geometry.
     struct LayerRecord {
         OSObject *surface;
         native_planes::Layer layer;
@@ -126,7 +127,8 @@ private:
     bool slotShown(int slot) const;
     int prepareSlot(OSObject *surface, uint32_t building);
     static const tgm_layout *slotBlock(const Slot &slot);
-    void takeLayers(const uint8_t *request, bool present[], native_planes::Layer layers[], OSObject *surfaces[]);
+    void recordLayers(const uint8_t *request);
+    bool takeLayers(const uint8_t *request, bool present[], native_planes::Layer layers[], OSObject *surfaces[]);
     void releaseUnshown(uint32_t building);
     void abandonDrawing();
     void promoteDrawing();
