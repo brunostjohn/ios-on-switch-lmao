@@ -115,4 +115,10 @@ extension X1Format {
             if case .float = $0 { return true }; return $0 == .float32
         } ? .tiesEven : .nearest
     }
+
+    /// Metal's rounding for a resolve's mean: an M4 Max rounds RGBA16Float's to nearest with ties up, every other
+    /// format's as it stores (tests/ResolveFormatArms.swift)
+    var metalResolveRounding: X1Rounding {
+        channels.contains(.float(mantissa: 10)) ? .nearest : metalRounding
+    }
 }

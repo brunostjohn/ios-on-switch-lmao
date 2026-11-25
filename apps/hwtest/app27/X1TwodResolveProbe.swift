@@ -47,7 +47,7 @@ extension X1TwodProbes {
             }
             let colors = try sampleColors(gpu, format)
             let isSrgb = format.channels.contains(.srgb8)
-            let metalRule = format.metalRounding
+            let metalRule = format.metalResolveRounding
             for samples in [2, 4] where gpu.device.supportsTextureSampleCount(samples) {
                 let name = "\(format.name)_\(samples)x"
                 journal.starting(name)
