@@ -10,6 +10,7 @@
 #include "xnu_sched_stats_harness.h"
 
 using testing::HasSubstr;
+using testing::Not;
 
 namespace {
 std::string Format(const char *label, int pid, uint8_t base, uint8_t sched, uint8_t mode, uint8_t qos, uint8_t bucket,
@@ -75,6 +76,44 @@ TEST(XnuSchedStats, EntryNamesTheClassAndTheWaits)
 
     xnu_sched_set_counts(3, 2, 5400);
     EXPECT_THAT(Format("display.primary", 53, 31, 31, 3, 0, 3), HasSubstr(", 3 fail-safe, CPU limit 2/5400 us"));
+}
+
+// 25 Nov: backboardd's main thread had no run in the 19:16:42-52 and 19:16:52-17:02 windows, then waited 32.6 s for its
+// first run of 19:17:02-12. The wait was real (SwitchBusy saw 63.96 s of the stretch waiting for a core), but its entry
+// read as a wait inside the window.
+TEST(XnuSchedStats, ALongestWaitThatBeganBeforeTheWindowSaysSo)
+{
+    xnu_sched_reset();
+    xnu_sched_note(32555950);
+    xnu_sched_take_longest(32555950, 1036000, 1058555);
+    EXPECT_EQ(xnu_sched_before_ms(), 22555u);
+    EXPECT_THAT(Format("backboardd.main", 69, 53, 53, 3, 4, 1),
+                HasSubstr("1 runs 32555950/32555950/32555950 us, longest began 22555 ms before the window"));
+}
+
+TEST(XnuSchedStats, ALongestWaitInsideTheWindowSaysNothingMore)
+{
+    xnu_sched_reset();
+    xnu_sched_note(900);
+    xnu_sched_take_longest(900, 1060000, 1058555);
+    EXPECT_EQ(xnu_sched_before_ms(), 0u);
+    xnu_sched_take_longest(0, 0, 1058555);
+    EXPECT_EQ(xnu_sched_max(), 0u);
+    EXPECT_EQ(xnu_sched_before_ms(), 0u);
+    xnu_sched_take_longest(900, 1000, 0);
+    EXPECT_EQ(xnu_sched_before_ms(), 0u);
+    EXPECT_THAT(Format("display.primary", 53, 54, 54, 2, 0, 0), Not(HasSubstr("began")));
+}
+
+// The word's halves saturate rather than wrap, and its order is the wait's: a longer wait wins whatever its start.
+TEST(XnuSchedStats, TheLongestWordSaturatesAndOrdersByWait)
+{
+    EXPECT_GT(xnu_sched_longest(2, 0), xnu_sched_longest(1, UINT32_MAX));
+    EXPECT_EQ(xnu_sched_longest(UINT64_MAX, UINT64_MAX), UINT64_MAX);
+    xnu_sched_reset();
+    xnu_sched_take_longest(1ULL << 40, 5, 10);
+    EXPECT_EQ(xnu_sched_max(), UINT32_MAX);
+    EXPECT_EQ(xnu_sched_before_ms(), 5u);
 }
 
 TEST(XnuSchedStats, EntryStaysInsideItsBuffer)

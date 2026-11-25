@@ -26,6 +26,21 @@ void xnu_sched_note(uint64_t us)
     switch_sched_note(&window, us);
 }
 
+void xnu_sched_take_longest(uint64_t us, uint64_t began_ms, uint64_t start_ms)
+{
+    switch_sched_take_longest(&window, switch_sched_longest(us, began_ms), start_ms);
+}
+
+uint64_t xnu_sched_longest(uint64_t us, uint64_t began_ms)
+{
+    return switch_sched_longest(us, began_ms);
+}
+
+uint64_t xnu_sched_before_ms(void)
+{
+    return window.max_before_ms;
+}
+
 void xnu_sched_set_counts(uint32_t failsafe_runs, uint32_t limit_blocks, uint64_t limit_us)
 {
     window.failsafe_runs = failsafe_runs;
