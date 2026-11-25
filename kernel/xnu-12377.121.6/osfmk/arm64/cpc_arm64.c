@@ -520,7 +520,8 @@ cpc_cpu_transition(cpc_cpu_event_t event, void *vcpu_data)
 
 	case CPC_CPU_IDLE:
 	case CPC_CPU_ACTIVE_WARM:
-		// Bare A57 WFI clock-gates without power-gating, retaining PMUv3 state across idle.
+		// WFI only clock-gates, so the PMU keeps counting across it. Before a C7 power-down, switch_idle_wfi
+		// (kernel/switch/idle/idle.c) saves the counters through CPC_CPU_OFFLINE.
 		break;
 
 	case CPC_CPU_ACTIVE_COLD:

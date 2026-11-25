@@ -117,11 +117,13 @@
 #                            no hook, and a release kernel compiles them to nothing
 #   xnu_workloop_owner_test  12377's filt_wlupdate over reference-counted threads: iOS 27's owner hint (0x388) never
 #                            wakes or attaches, takes an idle workloop, and costs a current owner no reference
+#   xnu_idle_cpc_test        kernel/switch/idle/idle.c as 12377 builds it with CPU counters: a C7 request saves the PMU
+#                            counters first and restarts them if the firmware returns; a WFI idle leaves them running
 #
 #   bazel test //kernel/tests:all
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("//bazel/lint:defs.bzl", "lint_files")
-load("//bazel/testing:defs.bzl", "host_library", "host_test")
+load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
 
 lint_files()
 
@@ -307,6 +309,51 @@ host_test(
         "//kernel/switch:vm/shared_cache.c",
         "//kernel/xnu-10063.141.1/bsd:vm/vm_unix.c",
         "//kernel/xnu-12377.121.6/bsd:vm/vm_unix.c",
+    ],
+)
+
+# --- kernel/switch/idle/idle.c with 12377's CPU counters ---------------------------------------------------------
+host_shims(
+    name = "idle_cpc_kernel",
+    headers = [
+        "arm/cpu_data_internal.h",
+        "arm/rtclock.h",
+        "arm64/switch_smp.h",
+        "kern/clock.h",
+        "kern/cpc.h",
+        "kern/thread_call.h",
+        "machine/machine_cpc.h",
+        "os/atomic_private.h",
+        "os/log.h",
+    ],
+    stubs = "xnu_idle_cpc_stubs.h",
+)
+
+IDLE_HEADERS = [
+    "//kernel/switch:include/switch/idle.h",
+    "//kits/SwitchIdle:switch_idle.h",
+    "//kits/SwitchIdle:switch_idle_governor.h",
+]
+
+host_library(
+    name = "idle_cpc",
+    srcs = ["//kernel/switch:idle/idle.c"] + IDLE_HEADERS,
+    copts = ["-Ikernel/switch/include"],
+    defines = [
+        "CONFIG_CPU_COUNTERS=1",
+        "DEVELOPMENT=1",
+        "XNU_12377_121_6=1",
+    ],
+    deps = [":idle_cpc_kernel"],
+)
+
+host_test(
+    name = "xnu_idle_cpc_test",
+    srcs = ["xnu_idle_cpc_test.cpp"] + IDLE_HEADERS,
+    copts = ["-Ikernel/switch/include"],
+    deps = [
+        ":idle_cpc",
+        ":idle_cpc_kernel",
     ],
 )
 

@@ -17,6 +17,10 @@
 #include <kern/thread_call.h>
 #include <os/atomic_private.h>
 #include <os/log.h>
+#if XNU_12377_121_6 && CONFIG_CPU_COUNTERS
+#include <kern/cpc.h>
+#include <machine/machine_cpc.h>
+#endif
 
 #include "../../../kits/SwitchIdle/switch_idle_governor.h"
 
@@ -67,6 +71,28 @@ static void idle_refused(struct idle_core *core, int64_t rc)
     thread_call_enter(idle_report_call);
 }
 
+/* 12377's CPC_CPU_IDLE leaves the PMU counting, as WFI keeps its state; power-down loses it. The counts since the
+ * last read are folded in and PMIs masked first. A core that powered down comes back through cpu_idle_exit(TRUE)'s
+ * CPC_CPU_ACTIVE_COLD; one the firmware returned has its counters restarted here, since CPC_CPU_ACTIVE_WARM does
+ * nothing. 10063's mt_cpu_idle already stops the counters on every idle. */
+static void idle_pmu_save(struct cpu_data *cdp)
+{
+#if XNU_12377_121_6 && CONFIG_CPU_COUNTERS
+    cpc_cpu_transition(CPC_CPU_OFFLINE, cdp);
+#else
+    (void)cdp;
+#endif
+}
+
+static void idle_pmu_returned(struct cpu_data *cdp)
+{
+#if XNU_12377_121_6 && CONFIG_CPU_COUNTERS
+    cpc_cpu_transition(CPC_CPU_ACTIVE_COLD, cdp);
+#else
+    (void)cdp;
+#endif
+}
+
 static void idle_exit(struct idle_core *core, uint64_t now)
 {
     const uint64_t idle = now - core->entered;
@@ -96,8 +122,10 @@ void switch_idle_wfi(struct cpu_data *cdp)
                       : SWITCH_IDLE_WFI;
     if (core->state == SWITCH_IDLE_C7) {
         core->wake_at = switch_idle_c7_wake_at(deadline, core->lead);
+        idle_pmu_save(cdp);
         const int64_t rc =
             idle_platform->power_down(cpu, switch_idle_timer_ticks(now, core->wake_at, idle_platform->wake_ticks_max));
+        idle_pmu_returned(cdp);
         if (rc != 0) {
             idle_refused(core, rc);
         }
