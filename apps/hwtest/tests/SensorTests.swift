@@ -99,16 +99,22 @@ struct GyroscopeTest: HWTest {
     }
 }
 
-/// What SwitchMotion reports of itself on debug kernels (drivers/SwitchMotion/SwitchMotion.cpp serializeProperties):
-/// the device motion reports it has fused and sent since boot, the fast path copies that answered one
-/// (SwitchHIDFastPath.cpp), and the raw gyroscope's report interval, 0 while no client streams it. nil without the
-/// driver or the properties.
+/// What SwitchMotion counts on debug kernels (drivers/SwitchMotion/SwitchMotionTotals.cpp): the device motion reports
+/// it has fused and sent since boot, the fast path copies that answered one (SwitchHIDFastPath.cpp), and the raw
+/// gyroscope's report interval, 0 while no client streams it. Sysctls, since the app sandbox drops a registry entry's
+/// properties it does not know.
 enum MotionDriver {
     struct State {
         let reports: UInt64
         let copies: UInt64
-        let gyroUS: UInt32
+        let gyroUS: UInt64
     }
+
+    static let names = [
+        "kern.switch_motion_reports",
+        "kern.switch_motion_fastpath_copies",
+        "kern.switch_motion_gyro_us",
+    ]
 
     enum Kernel: Equatable {
         case development, release
@@ -127,34 +133,16 @@ enum MotionDriver {
         }
     }
 
-    typealias Matching = @convention(c) (UnsafePointer<CChar>) -> CFMutableDictionary?
-    typealias Service = @convention(c) (mach_port_t, CFDictionary?) -> mach_port_t
-    typealias Properties =
-        @convention(c) (mach_port_t, UnsafeMutablePointer<Unmanaged<CFMutableDictionary>?>, CFAllocator?, UInt32)
-        -> kern_return_t
-    typealias Release = @convention(c) (mach_port_t) -> kern_return_t
-
-    static func state() -> State? {
-        guard let iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW),
-              let matching = dlsym(iokit, "IOServiceMatching"),
-              let service = dlsym(iokit, "IOServiceGetMatchingService"),
-              let properties = dlsym(iokit, "IORegistryEntryCreateCFProperties"),
-              let release = dlsym(iokit, "IOObjectRelease")
-        else { return nil }
-        let motion = unsafeBitCast(service, to: Service.self)(
-            0, unsafeBitCast(matching, to: Matching.self)("SwitchMotion")
-        )
-        guard motion != 0 else { return nil }
-        defer { _ = unsafeBitCast(release, to: Release.self)(motion) }
-        var table: Unmanaged<CFMutableDictionary>?
-        guard unsafeBitCast(properties, to: Properties.self)(motion, &table, kCFAllocatorDefault, 0) == KERN_SUCCESS,
-              let dictionary = table?.takeRetainedValue() as NSDictionary?
-        else { return nil }
-        guard let reports = dictionary["DeviceMotionReports"] as? NSNumber,
-              let copies = dictionary["DeviceMotionFastPathCopies"] as? NSNumber,
-              let gyro = dictionary["GyroReportInterval"] as? NSNumber
-        else { return nil }
-        return State(reports: reports.uint64Value, copies: copies.uint64Value, gyroUS: gyro.uint32Value)
+    /// The counters, or the errno of the first read that failed.
+    static func state() -> KernelSysctl.Read<State> {
+        var values: [UInt64] = []
+        for name in names {
+            switch KernelSysctl.integer(name, as: UInt64.self) {
+            case .value(let value): values.append(value)
+            case .failed(let error): return .failed(error)
+            }
+        }
+        return .value(State(reports: values[0], copies: values[1], gyroUS: values[2]))
     }
 }
 
@@ -188,8 +176,8 @@ struct DeviceMotionTest: HWTest {
     /// (CLSensorFusionServiceSPU); which 21H461 mode .xArbitraryZVertical takes was not read, and there SpringBoard's
     /// parallax streams the raw gyroscope itself, so the fusion rows are 24B119's only.
     static func driverChecks(
-        _ before: MotionDriver.State?, _ during: MotionDriver.State?, samples: Int, _ checks: inout [(String, Bool)],
-        _ metrics: inout Metrics
+        _ before: KernelSysctl.Read<MotionDriver.State>, _ during: KernelSysctl.Read<MotionDriver.State>, samples: Int,
+        _ checks: inout [(String, Bool)], _ metrics: inout Metrics
     ) -> String {
         switch MotionDriver.kernel() {
         case .release:
@@ -200,9 +188,10 @@ struct DeviceMotionTest: HWTest {
         case .development:
             break
         }
-        guard let before, let during else {
-            checks.append(("SwitchMotion publishes its counters (a development kernel)", false))
-            return "no SwitchMotion service, or no DeviceMotionReports/DeviceMotionFastPathCopies/GyroReportInterval"
+        guard case .value(let before) = before, case .value(let during) = during else {
+            checks.append(("SwitchMotion's counters read (a development kernel)", false))
+            let error = before.error != 0 ? before.error : during.error
+            return MotionDriver.names.joined(separator: ", ") + ": " + KernelSysctl.code(error)
         }
         let fused = Double(during.reports &- before.reports)
         let copied = during.copies &- before.copies
@@ -225,7 +214,7 @@ struct DeviceMotionTest: HWTest {
         manager.accelerometerUpdateInterval = Motion.interval
         let accelerations = MotionSamples<CMAcceleration>()
         let before = MotionDriver.state()
-        var during: MotionDriver.State?
+        var during = KernelSysctl.Read<MotionDriver.State>.failed(0)
         let (samples, rate) = try await Motion.collect(
             start: { (sink: MotionSamples<Sample>) in
                 manager.startAccelerometerUpdates(to: Motion.queue) { data, _ in

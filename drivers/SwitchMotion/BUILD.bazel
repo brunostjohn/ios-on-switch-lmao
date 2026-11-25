@@ -40,5 +40,6 @@ kernel_driver(
         "drivers/TegraGPIO",
         "drivers/TegraSPI",
         "kits/SwitchRefusal",
+        "kits/SwitchSysctl",
     ],
 )

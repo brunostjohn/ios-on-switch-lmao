@@ -114,3 +114,15 @@ TEST(SwitchMotionSource, TheFastPathAnswersOnlyWhatWasDispatched)
     EXPECT_THAT(Body(fast, "bool openForClient("), HasSubstr("getObject(\"aonBuffer\")"));
     EXPECT_THAT(Body(fast, "bool published("), Not(HasSubstr("installed")));
 }
+
+// HW Test's sensor.device_motion reads these three sysctls (apps/hwtest/tests/SensorTests.swift, its entitlements'
+// sysctl list): registered once the driver has started.
+TEST(SwitchMotionSource, DebugTotalsAreTheSysctlsHWTestReads)
+{
+    const std::string totals = SourceText("../SwitchMotionTotals.cpp");
+    for (const char *name :
+         {"\"switch_motion_reports\"", "\"switch_motion_fastpath_copies\"", "\"switch_motion_gyro_us\""})
+        EXPECT_THAT(totals, HasSubstr(name));
+    const std::string start = Body(SourceText("../SwitchMotion.cpp"), "extern \"C\" int switch_motion_start(");
+    EXPECT_LT(start.find("__atomic_store_n(&gMotion, candidate"), start.find("switch_motion_totals_register()"));
+}

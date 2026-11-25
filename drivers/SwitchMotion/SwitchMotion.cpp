@@ -82,9 +82,6 @@
 #include "SwitchMotion.h"
 #include "SwitchMotionFusion.h"
 #if DEVELOPMENT || DEBUG
-#include <libkern/c++/OSDictionary.h>
-#include <libkern/c++/OSNumber.h>
-#include <libkern/c++/OSSerialize.h>
 #include "SwitchMotionStats.h"
 #endif
 
@@ -539,7 +536,7 @@ class SwitchMotion : public IOService {
             __atomic_fetch_add(&motionReports, 1, __ATOMIC_RELAXED);
     }
 
-    uint64_t motionReports = 0;  // since boot (serializeProperties)
+    uint64_t motionReports = 0;  // since boot (SwitchMotionTotals.cpp)
 #else
     void statsInterrupt()
     {}
@@ -576,25 +573,10 @@ class SwitchMotion : public IOService {
 
 public:
 #if DEVELOPMENT || DEBUG
-    // Debug kernels: DeviceMotionReports, the device motion reports sent since boot, DeviceMotionFastPathCopies, the
-    // fast path copies that answered one (SwitchHIDFastPath.cpp), and GyroReportInterval, the raw gyroscope's client
-    // interval (0: nobody streams it, so nobody fuses on the CPU), read live by SwitchHWTest's sensor.device_motion
-    // through IORegistryEntryCreateCFProperties.
-    bool serializeProperties(OSSerialize *serializer) const override
+    void totals(uint64_t *reports, uint32_t *gyroIntervalUS) const
     {
-        OSDictionary *properties = dictionaryWithProperties();
-        const OSNumber *reports = OSNumber::withNumber(__atomic_load_n(&motionReports, __ATOMIC_RELAXED), 64);
-        const OSNumber *copies = OSNumber::withNumber(switch_hid_fastpath_copies(), 64);
-        const OSNumber *gyro = OSNumber::withNumber(__atomic_load_n(&intervalUS[Gyro], __ATOMIC_RELAXED), 32);
-        const bool ok = (properties != nullptr) && (reports != nullptr) && (copies != nullptr) && (gyro != nullptr) &&
-                        properties->setObject("DeviceMotionReports", reports) &&
-                        properties->setObject("DeviceMotionFastPathCopies", copies) &&
-                        properties->setObject("GyroReportInterval", gyro) && properties->serialize(serializer);
-        OSSafeReleaseNULL(gyro);
-        OSSafeReleaseNULL(copies);
-        OSSafeReleaseNULL(reports);
-        OSSafeReleaseNULL(properties);
-        return ok;
+        *reports = __atomic_load_n(&motionReports, __ATOMIC_RELAXED);
+        *gyroIntervalUS = __atomic_load_n(&intervalUS[Gyro], __ATOMIC_RELAXED);
     }
 #endif
     bool start(IOService *provider) override;
@@ -1573,8 +1555,19 @@ extern "C" int switch_motion_start(void)
     }
     __atomic_store_n(&gMotion, candidate, __ATOMIC_RELEASE);
     candidate->release();  // the attachment keeps it
+    switch_motion_totals_register();
     return 0;
 }
+
+#if DEVELOPMENT || DEBUG
+extern "C" void switch_motion_totals(uint64_t *reports, uint32_t *gyroIntervalUS)
+{
+    *reports = 0;
+    *gyroIntervalUS = 0;
+    if (const SwitchMotion *motion = __atomic_load_n(&gMotion, __ATOMIC_ACQUIRE))
+        motion->totals(reports, gyroIntervalUS);
+}
+#endif
 
 extern "C" void switch_motion_suspend(void)
 {
