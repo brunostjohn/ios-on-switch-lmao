@@ -16,6 +16,15 @@ namespace {
 
 constexpr uint32_t kPools = 4, kKeptMost = 256;
 
+// Under TSan no block is kept: its allocator ends an instance's access history at free and starts the next one's at
+// calloc, and a block handed out again would carry the last instance's accesses into the next as races (the
+// happens-before through the instance's last release is libobjc's, which TSan does not see)
+#if __has_feature(thread_sanitizer)
+constexpr bool kKeepsBlocks = false;
+#else
+constexpr bool kKeepsBlocks = true;
+#endif
+
 struct InstancePool {
     std::atomic<Class> cls{nullptr};
     size_t size = 0;
@@ -110,7 +119,9 @@ void pooledDealloc(id self, SEL)
     objc_destructInstance(self);
     pool->alive.fetch_sub(1, std::memory_order_relaxed);
     uint32_t node;
-    void **slot = pool->blocks.kept() < pool->most.load(std::memory_order_relaxed) ? pool->blocks.room(node) : nullptr;
+    void **slot = kKeepsBlocks && pool->blocks.kept() < pool->most.load(std::memory_order_relaxed)
+                      ? pool->blocks.room(node)
+                      : nullptr;
     if (!slot) {
         pool->freed.fetch_add(1, std::memory_order_relaxed);
         free(self);
