@@ -56,8 +56,8 @@ TEST(FrameEndHolderSource, TheNoteNamesTheDisplaysReasonFirst)
     const std::string display = SourceText("../NativeLegacyDisplay.cpp");
     const auto note = Block(display, "void noteFrameEndRouted()");
     EXPECT_TRUE(note.before("if (!__atomic_load_n(&frameEndUnmasked", "Holder holder = frameEndHolder();"));
-    EXPECT_TRUE(note.before("holder = kExperiment;", "holder = kHold;"));
-    EXPECT_TRUE(note.before("holder = kHold;", "holder = kPanel;"));
+    EXPECT_TRUE(note.before("holder = fe::kExperiment;", "holder = fe::kHold;"));
+    EXPECT_TRUE(note.before("holder = fe::kHold;", "holder = fe::kPanel;"));
     EXPECT_TRUE(Block(display, "bool frameEndNeeded()").has("return frameEndHolder() != switch_frame_end::kNone;"));
 }
 

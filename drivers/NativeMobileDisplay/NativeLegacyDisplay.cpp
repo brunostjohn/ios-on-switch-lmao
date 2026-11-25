@@ -1572,38 +1572,38 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     // prove the interrupt alive.
     switch_frame_end::Holder frameEndHolder()
     {
-        using namespace switch_frame_end;
+        namespace fe = switch_frame_end;
         if (frameEnds < 2)
-            return kFirst;
+            return fe::kFirst;
         if (vsyncArmed)
-            return kVsync;
+            return fe::kVsync;
         if (tapeAttached || tapeSettle)
-            return kTape;
+            return fe::kTape;
         if (kickDeferred)
-            return kKick;
+            return fe::kKick;
         if (presentDeferred)
-            return kPresent;
+            return fe::kPresent;
         if (ring.pending != kNoBuffer || ring.superseded != kNoBuffer || ring.drawing != kNoBuffer ||
             ring.held != kNoBuffer)
-            return kRing;
+            return fe::kRing;
         if (rotated && !rotationLatched)
-            return kRotation;
+            return fe::kRotation;
         if (probeRequest || probe.active() || (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) ||
             planeProbe.active())
-            return kProbe;
+            return fe::kProbe;
         if ((planesOn && planeLatch.requested()) || planeHeldSet || planeRecoveryWaits())
-            return kPlanes;
+            return fe::kPlanes;
         if (landscapeState.wanted)
-            return kLandscape;
+            return fe::kLandscape;
         if (completionFlipOut())
-            return kCompletion;
+            return fe::kCompletion;
         if (offerAged && gpuScanout)
-            return kOffer;
+            return fe::kOffer;
         if (scanoutAttachHoldsFrameEnds())
-            return kAttach;
+            return fe::kAttach;
         if (colourBlankSwap.waiting())
-            return kBlank;
-        return kNone;
+            return fe::kBlank;
+        return fe::kNone;
     }
 
     bool frameEndNeeded()
@@ -2053,16 +2053,16 @@ private:
     // Debug kernels, at the end of the frame-end action: what keeps FRAME_END routed to the next frame end.
     void noteFrameEndRouted()
     {
-        using namespace switch_frame_end;
+        namespace fe = switch_frame_end;
         if (!__atomic_load_n(&frameEndUnmasked, __ATOMIC_RELAXED))
             return;
-        Holder holder = frameEndHolder();
-        if (holder == kNone && (columnScanBusy() || windowProbeHolds() || host1xFlipBusy() || landscapeRunSampling()))
-            holder = kExperiment;
-        if (holder == kNone && __atomic_load_n(&gFrameEndHolds, __ATOMIC_ACQUIRE))
-            holder = kHold;
-        if (holder == kNone && !tegra_panel_holds_frame_end())
-            holder = kPanel;
+        fe::Holder holder = frameEndHolder();
+        if (holder == fe::kNone && (columnScanBusy() || windowProbeHolds() || host1xFlipBusy() || landscapeRunSampling()))
+            holder = fe::kExperiment;
+        if (holder == fe::kNone && __atomic_load_n(&gFrameEndHolds, __ATOMIC_ACQUIRE))
+            holder = fe::kHold;
+        if (holder == fe::kNone && !tegra_panel_holds_frame_end())
+            holder = fe::kPanel;
         stRouted.add(holder);
     }
 
@@ -2070,7 +2070,7 @@ private:
     // many of them a release kernel would have taken too, with the window's swaps: display.frame-end-idle reads it.
     size_t routedLine(char *line, size_t size, uint64_t us, uint32_t swaps)
     {
-        using namespace switch_frame_end;
+        namespace fe = switch_frame_end;
         size_t at = 0;
         const auto add = [&](const char *format, auto... values) {
             if (at < size)
@@ -2078,9 +2078,9 @@ private:
         };
         add("; %llu ms, %u swaps, routed for release holders %u", static_cast<unsigned long long>(us / 1000), swaps,
             stRouted.release());
-        for (unsigned h = kNone; h < kHolders; ++h)
+        for (unsigned h = fe::kNone; h < fe::kHolders; ++h)
             if (stRouted.by[h])
-                add(" %s %u", kHolderNames[h], stRouted.by[h]);
+                add(" %s %u", fe::kHolderNames[h], stRouted.by[h]);
         stRouted = {};
         return at < size ? at : size - 1;
     }
