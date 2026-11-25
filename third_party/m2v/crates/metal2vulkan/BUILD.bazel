@@ -201,6 +201,23 @@ rust_test(
     deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
 )
 
+# Metal's sRGB decode of every byte and encode at every threshold, run on the interpreter, and the words each charges
+rust_test(
+    name = "srgb_conversions_test",
+    args = [
+        "lower::arith::tests::narrow::srgb_conversions_",
+        "lower::arith::srgb_conversions::",
+    ],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    data = [
+        "//third_party/m2v:translation_test_inputs",
+        "@spirv_tools//:spirv-val",
+    ],
+    env = {"METAL2VULKAN_SPIRV_VAL": "$(rootpath @spirv_tools//:spirv-val)"},
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)
+
 rust_test(
     name = "store_code_test",
     args = ["lower::arith::tests::store_code::"],
