@@ -58,6 +58,19 @@ TEST_F(SwitchNativePlaneTest, NativePlanesUseTheirPaddedOffsetsAndPitch)
     EXPECT_EQ(image.size, (405u << 16) | 720u);
 }
 
+// A picture with a transform is never scanned untransformed here, whole or cropped: the landscape route or the
+// conversion job turns it.
+TEST_F(SwitchNativePlaneTest, ATransformedPictureIsNotScannedAsIs)
+{
+    ASSERT_TRUE(admit());
+    ASSERT_TRUE(admit(16, 8, kProven));
+    for (uint32_t t = 1; t < 8; ++t) {
+        layer.transform = t;
+        EXPECT_FALSE(admit()) << t;
+        EXPECT_FALSE(admit(16, 8, kProven)) << t;
+    }
+}
+
 TEST_F(SwitchNativePlaneTest, NativeFullRangeAnd2020MetadataRemainExplicit)
 {
     layer.kind = native_planes::kKindNv12Full;

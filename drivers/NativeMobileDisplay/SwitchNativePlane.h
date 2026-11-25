@@ -88,7 +88,8 @@ inline bool switch_native_plane_image(const native_planes::Layer &layer, uint32_
                                       const SwitchDisplayTraits &traits = kSwitchDisplayTraits)
 {
     using namespace native_planes;
-    if (!isNv12(layer.kind) || layout.format != layer.surface.format || layout.plane_count != 2 ||
+    // A transformed picture is the landscape route's or the conversion job's (NativePlanesTurn.h).
+    if (layer.transform || !isNv12(layer.kind) || layout.format != layer.surface.format || layout.plane_count != 2 ||
         layout.color_matrix > 3 || layout.color_range != (layer.kind == kKindNv12Full ? 2u : 1u))
         return false;
     Layer native = layer;
