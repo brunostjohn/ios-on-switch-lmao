@@ -605,6 +605,8 @@ class SwitchBattery : public SWITCH_BATTERY_SUPER {
     uint64_t updateTime = 0;
     uint64_t dateOfFirstUse = 0;              // powerd's, kept in NVRAM (SwitchBatteryStore.h)
     OSDictionary *shipChargeLimit = nullptr;  // the same
+    // Saves them from a kernel thread: setProperties runs on powerd's thread, where IODTNVRAM would judge powerd.
+    IOTimerEventSource *storeSave = nullptr;
 #endif
 
     static void timerFired(OSObject *owner, IOTimerEventSource *sender);
@@ -624,6 +626,7 @@ class SwitchBattery : public SWITCH_BATTERY_SUPER {
 #if SWITCH_IPSW_KIND_24B119
     bool takeStored(const OSDictionary *dict);
     void publishStored();
+    static void saveStored(OSObject *owner, IOTimerEventSource *sender);
 #endif
     int disableInput(bool preparePd);
     void releasePdInput(bool resetInput);
@@ -703,6 +706,11 @@ bool SwitchBattery::start(IOService *provider)
     timer->setTimeoutMS(1);
     __atomic_store_n(&gBatteryService, this, __ATOMIC_RELEASE);
 #if SWITCH_IPSW_KIND_24B119
+    storeSave = IOTimerEventSource::timerEventSource(this, &SwitchBattery::saveStored);
+    if (storeSave && loop->addEventSource(storeSave) != kIOReturnSuccess)
+        OSSafeReleaseNULL(storeSave);
+    if (!storeSave)
+        IOLog("SwitchBattery: no NVRAM save timer: powerd's battery data lasts until the next boot\n");
     loop->runAction(
         [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
             static_cast<SwitchBattery *>(owner)->restoreStored();
@@ -732,6 +740,14 @@ void SwitchBattery::free()
             loop->removeEventSource(timer);
         timer->release();
     }
+#if SWITCH_IPSW_KIND_24B119
+    if (storeSave) {
+        storeSave->cancelTimeout();
+        if (loop)
+            loop->removeEventSource(storeSave);
+        OSSafeReleaseNULL(storeSave);
+    }
+#endif
     OSSafeReleaseNULL(loop);
 #if SWITCH_IPSW_KIND_24B119
     if (pack) {
@@ -1424,10 +1440,18 @@ bool SwitchBattery::takeStored(const OSDictionary *dict)
         OSSafeReleaseNULL(shipChargeLimit);
         shipChargeLimit = copy;
     }
-    if (!switch_battery_store_save(date ? dateOfFirstUse : 0, copy))
-        IOLog("SwitchBattery: powerd's battery data not saved to NVRAM: it lasts until the next boot\n");
+    if (storeSave)
+        storeSave->setTimeoutMS(1);
     publishStored();
     return true;
+}
+
+// The work loop's timer, on a kernel thread with the gate held: what takeStored took, to NVRAM.
+void SwitchBattery::saveStored(OSObject *owner, IOTimerEventSource *)
+{
+    auto *self = OSDynamicCast(SwitchBattery, owner);
+    if (self && !switch_battery_store_save(self->dateOfFirstUse, self->shipChargeLimit))
+        IOLog("SwitchBattery: powerd's battery data not saved to NVRAM: it lasts until the next boot\n");
 }
 
 void SwitchBattery::publishStored()

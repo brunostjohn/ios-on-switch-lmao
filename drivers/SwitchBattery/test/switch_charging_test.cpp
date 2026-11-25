@@ -1685,7 +1685,7 @@ static void zeroBudgetRefreshBeforePublication()
     gCheckPdInputOrder = true;
     IOTimerEventSource *refresh = nullptr;
     for (auto *timer : IOTimerEventSource::all)
-        if (dynamic_cast<IOPMPowerSource *>(timer->owner))
+        if (!refresh && dynamic_cast<IOPMPowerSource *>(timer->owner))
             refresh = timer;
     check(refresh != nullptr, "Battery refresh timer");
     if (!refresh)
@@ -2218,9 +2218,11 @@ static void batteryStore()
     const IOReturn r = battery()->setProperties(&dict);
 #if SWITCH_IPSW_KIND_24B119
     check(r == kIOReturnSuccess, "powerd's writes taken: " + std::to_string(r));
-    check(gNvram.count(SWITCH_BATTERY_NVRAM_DATE_OF_FIRST_USE) && gNvram.count(SWITCH_BATTERY_NVRAM_SHIP_CHARGE_LIMIT),
-          "both kept in NVRAM");
+    check(gNvram.empty(), "not saved on powerd's thread");
     check(gGauge.reg == gaugeBefore, "the gauge is not written");
+    advance(10);
+    check(gNvram.count(SWITCH_BATTERY_NVRAM_DATE_OF_FIRST_USE) && gNvram.count(SWITCH_BATTERY_NVRAM_SHIP_CHARGE_LIMIT),
+          "both kept in NVRAM, from the work loop's timer");
     check(packData().numbers["DateOfFirstUse"] == 1795564800, "DateOfFirstUse on the pack, where powerd looks first");
     check(battery()->ps["DateOfFirstUse"] == 1795564800, "DateOfFirstUse on the battery");
     check(battery()->dicts.count("ShipChargeLimitData") &&
