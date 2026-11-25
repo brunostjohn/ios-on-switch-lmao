@@ -66,11 +66,11 @@ const char *poolRefusal(uint64_t bytes, uint64_t held, bool compositor)
 		compositor);
 }
 
-const char *compressibleRefusal(uint64_t bytes)
+const char *compressibleRefusal(uint64_t bytes, bool compositor)
 {
 	const tgm_pool::Limits limits = {kPoolSmallBytes, kPoolFloorBytes, poolReserveBytes(),
 					 clientPoolBytes()};
-	return tgm_pool::compressibleRefusal(bytes, tgm_pool_avail(), limits);
+	return tgm_pool::compressibleRefusal(bytes, tgm_pool_avail(), limits, compositor);
 }
 
 IOReturn takeChunks(uint64_t bytes, uint64_t *pas)
@@ -162,7 +162,7 @@ AGXDeviceUserClient::BoCharge AGXDeviceUserClient::chargeBo(const TegraGM20BAbiB
 	BoCharge c = {nullptr, nullptr, 0, 0, 0, 0, critical_};
 	const bool systemOnly = (in->flags & TegraGM20BBoSystem) != 0u;
 	if (in->flags & TegraGM20BBoCompressible) {
-		c.refused = compressibleRefusal(in->bytes);
+		c.refused = compressibleRefusal(in->bytes, critical_);
 		if (switch_gpu_smmu_ready() &&
 		    reserveSmmuCompressible(in->bytes, smmu_compressible_bytes_, critical_,
 					    &c.smmuRefused)) {

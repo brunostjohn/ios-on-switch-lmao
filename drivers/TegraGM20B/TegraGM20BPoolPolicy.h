@@ -54,9 +54,21 @@ inline const char *refusal(uint64_t bytes, uint64_t held, uint64_t avail, const 
 // nvkm's page tables and channels are physically contiguous too and have only the pool: the floor stays theirs, and is
 // the only room any client's compressed memory leaves. Boot 22's largest step of that share in a 5 s window was 8 MiB,
 // its peak 55 MiB. A refusal is no failure: the target renders uncompressed.
-inline const char *compressibleRefusal(uint64_t bytes, uint64_t avail, const Limits &l)
+//
+// Above the floor, an app leaves CompositorCompressedBytes for the compositor's next compressed targets. 25 Nov 19:47
+// and 19:59: 255 of backboardd's compressed targets were refused at the floor, with SwitchHWTest holding 116-148 MiB of
+// the pool and compressed memory 87-109 MiB of it, so the screen's targets rendered uncompressed. One of its
+// screen-sized targets (7488 KiB) fits in the reserve, and boot 22's icons (21 MiB from 48 MiB free) still do.
+constexpr uint64_t CompositorCompressedBytes = 8ULL << 20;
+
+inline const char *compressibleRefusal(uint64_t bytes, uint64_t avail, const Limits &l,
+				       bool compositor = false)
 {
-	return avail < bytes + l.floorBytes ? "the pool's last 16 MiB stay for nvkm" : nullptr;
+	if (avail < bytes + l.floorBytes)
+		return "the pool's last 16 MiB stay for nvkm";
+	if (!compositor && avail < bytes + l.floorBytes + CompositorCompressedBytes)
+		return "the next 8 MiB stay for the compositor's compressed targets";
+	return nullptr;
 }
 
 struct SmmuCompLimits {
