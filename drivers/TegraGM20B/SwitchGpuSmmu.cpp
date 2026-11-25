@@ -119,8 +119,19 @@ extern "C" int switch_gpu_smmu_hold(const uint64_t *pas, uint32_t npages)
 	return switch_gpu_smmu_ram_ready() && gRam.holdPages(pas, npages) ? 0 : -12;
 }
 
-extern "C" void switch_gpu_smmu_release(const uint64_t *pas, uint32_t npages)
+extern "C" void switch_gpu_smmu_release_ram(const uint64_t *pages, uint32_t npages)
 {
-	if (npages && switch_gpu_smmu_ram_ready())
-		gRam.releasePages(pas, npages);
+	if (!npages || !switch_gpu_smmu_ram_ready())
+		return;
+	bool released = true;
+	gRam.locked([&](auto &core) {
+		for (uint32_t i = 0; i < npages; ++i) {
+			if (switch_gpu_smmu_is_ram_pa(pages[i]))
+				released &= core.release(pages[i] & ~SWITCH_GPU_SMMU_BIT, TegraSMMUDomain::kPage);
+		}
+		core.commit();
+	});
+	if (!released)
+		panic("tegra-gm20b: a release of %u pages from %#llx found a page GPUB's RAM view had no hold on", npages,
+		      static_cast<unsigned long long>(pages[0]));
 }

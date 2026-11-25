@@ -226,13 +226,16 @@ extern "C" int switch_gpu_smmu_hold(const uint64_t *pas, uint32_t npages)
 	return 0;
 }
 
-extern "C" void switch_gpu_smmu_release(const uint64_t *pas, uint32_t npages)
+extern "C" void switch_gpu_smmu_release_ram(const uint64_t *pages, uint32_t npages)
 {
 	++gReleaseCalls;
 	for (uint32_t i = 0; i < npages; ++i) {
-		EXPECT_GT(gHeld[pas[i]], 0) << "a release with no hold";
-		if (--gHeld[pas[i]] <= 0)
-			gHeld.erase(pas[i]);
+		if (!switch_gpu_smmu_is_ram_pa(pages[i]))
+			continue;
+		const uint64_t pa = pages[i] & ~SWITCH_GPU_SMMU_BIT;
+		EXPECT_GT(gHeld[pa], 0) << "a release with no hold";
+		if (--gHeld[pa] <= 0)
+			gHeld.erase(pa);
 	}
 }
 
@@ -525,6 +528,18 @@ TEST_F(GpuMemSmmuTest, PagesThatAreNotThePoolsReachTheGpuThroughGpubsViewWhileTh
 	}
 	EXPECT_EQ(gHoldCalls, 1u) << "one hold, so one publish, for the whole object";
 	tgm_mem_del(&mem);
+	EXPECT_TRUE(gHeld.empty());
+}
+
+TEST_F(GpuMemSmmuTest, ALargeObjectsDeletionReleasesEveryHoldInOneCommit)
+{
+	gRamReady = true;
+	const auto pages = scattered(2048);
+	tgm_mem *mem = nullptr;
+	ASSERT_EQ(tgm_mem_new(&vm, pages.data(), 2048, &mem), 0);
+	EXPECT_EQ(gHeld.size(), 2048u);
+	tgm_mem_del(&mem);
+	EXPECT_EQ(gReleaseCalls, 1u) << "one view lock and one MC flush for the object, not one per 64 pages";
 	EXPECT_TRUE(gHeld.empty());
 }
 

@@ -295,25 +295,11 @@ static int mem_hold_ram(const uint64_t *pas, uint32_t from, uint32_t npages, u64
 	return 0;
 }
 
-/* The holds mem_hold_ram took, found again from the encoded addresses, in batches that need no allocation. */
+/* The holds mem_hold_ram took, found again from the encoded addresses: one commit for the whole object. */
 static void mem_release_ram(const u64 *pages, u32 npages)
 {
-	u64 batch[64];
-	u32 n = 0;
-	u32 i = 0;
-	if (!pages)
-		return;
-	for (i = 0; i < npages; ++i) {
-		if (!switch_gpu_smmu_is_ram_pa(pages[i]))
-			continue;
-		batch[n++] = pages[i] & ~SWITCH_GPU_SMMU_BIT;
-		if (n == ARRAY_SIZE(batch)) {
-			switch_gpu_smmu_release(batch, n);
-			n = 0;
-		}
-	}
-	if (n)
-		switch_gpu_smmu_release(batch, n);
+	if (pages)
+		switch_gpu_smmu_release_ram(pages, npages);
 }
 
 static int mem_holds_ram(const struct tgm_mem *mem)

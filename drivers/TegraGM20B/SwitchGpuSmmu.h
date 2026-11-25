@@ -151,8 +151,10 @@ int switch_gpu_smmu_ram_ready(void);
 /* Holds of 4 KiB RAM pages (raw physical addresses) in GPUB's view, published before return; all or nothing. 0, or -12
  * when a page table could not be had. Thread context. */
 int switch_gpu_smmu_hold(const uint64_t *pas, uint32_t npages);
-/* Ends those holds, published before return: a page no other holder holds faults from then on. */
-void switch_gpu_smmu_release(const uint64_t *pas, uint32_t npages);
+/* Ends the holds of the RAM-view entries of `pages` (addresses as switch_gpu_smmu_ram_pa made them; other entries are
+ * skipped), under one lock of the view and one commit, published before return: a page no other holder holds faults
+ * from then on. A page with no hold panics. Thread context. */
+void switch_gpu_smmu_release_ram(const uint64_t *pages, uint32_t npages);
 uint64_t switch_gpu_smmu_map(const uint64_t *pas, uint32_t npages);
 uint64_t switch_gpu_smmu_map_reserved(const uint64_t *pas, uint32_t npages, uint64_t reserve_bytes);
 void switch_gpu_smmu_unmap(uint64_t iova, uint32_t npages);
