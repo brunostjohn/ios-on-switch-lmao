@@ -2208,6 +2208,7 @@ gm20b_directcheck(
         "//drivers/TegraGM20B:TegraGM20BFencePageABI.h",
         "//drivers/TegraGM20BMetal:harness/directcheck.mm",
         "//drivers/TegraGM20BMetal:harness/pipeline_capture.h",
+        "//kits/SwitchSeedPack:SwitchSeedPack.h",
         "//drivers/TegraGM20BMetal:harness/record_compare.h",
         "//drivers/TegraGM20BMetal:gm20b_runtime_headers",
         "//drivers/TegraGM20BMetal:stack_key_sources",

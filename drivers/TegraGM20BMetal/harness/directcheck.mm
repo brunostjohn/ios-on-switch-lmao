@@ -17,6 +17,7 @@
 #include "TwoPlaneStandIn.h"
 #include "record_compare.h"
 #include "pipeline_capture.h"
+#include "../gm20b_cache.h"
 
 namespace {
 
@@ -195,6 +196,22 @@ int main(int argc, char **argv)
             if (const char *dir = getenv("DIRECTCHECK_DUMP"); dir && *dir && outcome == gm20b::CompileOutcome::Made) {
                 dumpRecord(dir, key, rec);
                 dumpFetchFree(direct, s, line, key, textures, dir);
+            }
+            if (const char *dir = getenv("DIRECTCHECK_REPLAY_DIR"); dir && *dir && outcome == gm20b::CompileOutcome::Made) {
+                NSString *name = [NSString stringWithFormat:@"%016llx", (unsigned long long)gm20b::packKeyHash(key)];
+                gm20b::CacheKey identity = {};
+                identity.key = name.UTF8String;
+                const std::string bytes = gm20b::encodeEntry(identity, &rec, {});
+                std::string reflection;
+                if (!offline::renderReflection(s.d, reflection, why) || reflection.empty()) {
+                    fprintf(stderr, "directcheck: replay reflection: %s\n", why.c_str());
+                    exit(1);
+                }
+                NSString *file = [@(dir) stringByAppendingPathComponent:name];
+                pipeline_capture::writeData([NSData dataWithBytes:bytes.data() length:bytes.size()],
+                                            [file stringByAppendingPathExtension:@"rec"]);
+                pipeline_capture::writeData([NSData dataWithBytes:reflection.data() length:reflection.size()],
+                                            [file stringByAppendingPathExtension:@"reflection"]);
             }
             std::string verdict;
             if (outcome == gm20b::CompileOutcome::Failed) {
