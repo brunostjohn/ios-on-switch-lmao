@@ -22,7 +22,7 @@ void gm20bSetCompileWaits(SwitchMetalCommandBuffer *cb, std::vector<std::functio
         cb->_compileWaits = std::move(waits);
     }
     cb->_compileWaitGen.fetch_add(1, std::memory_order_acq_rel);
-    cb->_submitOwner.clear();
+    cb->_submitOwner.clearIf(gRM->submitThread.load(std::memory_order_relaxed));
     gm20bChanged(cb);
 }
 

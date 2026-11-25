@@ -133,9 +133,12 @@ static void dispatchScheduled(SwitchMetalCommandBuffer *cb, NSArray *handlers)
         return;
     }
     cb->_handlersQueued = true;
-    // Hand ownership directly from submitLoop to the queue's handler thread so waitUntilScheduled donates priority
-    // across handler queuing and execution with no ownerless gap.
+    // Ownership goes straight from the submit worker to the queue's handler thread, so waitUntilScheduled donates
+    // priority across the handlers' queuing and run with no ownerless gap. The worker's own clears after this are
+    // clearIf(its port): they leave the handler thread owning it. A waiter asleep on _changes (no owner: held or parked)
+    // takes the new owner at the change.
     cb->_submitOwner.setOwner(cb->_queue->_handlerExec.ownerPort());
+    gm20bChanged(cb);
     cb->_queue->_handlerExec.enqueue([cb, handlers] {
         @autoreleasepool {
             for (MTLCommandBufferHandler h in handlers)
@@ -498,7 +501,7 @@ void finish(SwitchMetalCommandBuffer *cb, NSError *error)
     // A failed command buffer submits no more: its waitUntilScheduled returns now, not once its earlier work completes
     if (error) {
         gm20bClearCompileWaits(cb);
-        cb->_submitOwner.clear();
+        cb->_submitOwner.clearIf(gRM->submitThread.load(std::memory_order_relaxed));
         gm20bChanged(cb);
     }
 }
@@ -572,7 +575,7 @@ static void finished(SwitchMetalCommandBuffer *cb)
     }
     const bool behindScheduled = cb->_handlersQueued;
     gm20bClearCompileWaits(cb);
-    cb->_submitOwner.clear();
+    cb->_submitOwner.clearIf(gRM->submitThread.load(std::memory_order_relaxed));
     gm20bChanged(cb);
 #if SWITCH_METAL_DIAGNOSTICS
     if (cb->_gpuStamped)

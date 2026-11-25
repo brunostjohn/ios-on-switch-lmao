@@ -231,6 +231,60 @@ TEST(OwnedWord, MultiWaiterOwnerHandoffReturnsTrueForEveryWaiter)
     owner2.join();
 }
 
+// As the submit worker hands a command buffer to its queue's handler thread: the worker's own clear after the hand-off
+// leaves the handler thread owning it, so a waiter keeps donating to that thread until it clears its own ownership
+TEST(OwnedWord, ClearIfLeavesAHandedOnOwnerInPlace)
+{
+    gm20b::OwnedWord word;
+    std::atomic<uint32_t> workerPort{0}, handlerPort{0};
+    std::atomic<bool> releaseOwners{false};
+    gm20b::ChangeWord ownerGate;
+    const auto owner = [&](std::atomic<uint32_t> &port) {
+        return std::thread([&] {
+            port.store(gm20b::OwnedWord::currentOwner());
+            ownerGate.changed();
+            ownerGate.waitFor([&] {
+                return releaseOwners.load();
+            });
+        });
+    };
+    std::thread worker = owner(workerPort), handler = owner(handlerPort);
+    ownerGate.waitFor([&] {
+        return workerPort.load() != 0 && handlerPort.load() != 0;
+    });
+
+    word.setOwner(workerPort.load());
+    word.setOwner(handlerPort.load());
+    word.clearIf(workerPort.load());
+    EXPECT_EQ(word.owner(), handlerPort.load());
+    word.clearIf(0);
+    EXPECT_EQ(word.owner(), handlerPort.load());
+
+    std::atomic<bool> done{false}, returned{false};
+    std::thread waiter([&] {
+        word.waitWhileOwned([&] {
+            return done.load();
+        });
+        returned = true;
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    word.clearIf(workerPort.load());
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    EXPECT_FALSE(returned.load());
+    EXPECT_EQ(word.owner(), handlerPort.load());
+
+    done = true;
+    word.clearIf(handlerPort.load());
+    waiter.join();
+    EXPECT_TRUE(returned.load());
+    EXPECT_FALSE(word.hasOwner());
+
+    releaseOwners = true;
+    ownerGate.changed();
+    worker.join();
+    handler.join();
+}
+
 TEST(OwnedWord, SelfOwnedWaitDoesNotBlockOrSpin)
 {
     gm20b::OwnedWord word;
