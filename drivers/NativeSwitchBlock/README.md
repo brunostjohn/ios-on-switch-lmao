@@ -19,10 +19,12 @@ finishes cache invalidation, staged copies, and client completions.
 
 Requests leave the queue in I/O tier order (`SwitchSdPick.h`), and within a tier reads go before writes. A request can
 pass older requests of a worse rank unless it overlaps an older write. A write also may not overlap any request it
-passes, and never passes an older write. While a synchronize waits, writes rank with tier 0. A request passed over for
-100 ms goes first once, and again after every 50 ms or 8 chains. Both block devices publish IOStorage's Priority feature
-and implement `doSetPriority`, so XNU raises a lower-tier page-in that a foreground thread is waiting on. Both XNU trees
-keep the software throttle on for them (`bsd/vfs/vfs_subr.c`).
+passes, and never passes an older write. While a synchronize waits, the writes it counts rank with tier 0. A request
+that may not pass an older one lends that one its rank, so a page-in inside a queued write, or a write a synchronize
+waits for, is not held to the share turn. A request passed over for 100 ms goes first once, and again after every 50 ms
+or 8 chains. Both block devices publish IOStorage's Priority feature and implement `doSetPriority`, so XNU raises a
+lower-tier page-in that a foreground thread is waiting on. Both XNU trees keep the software throttle on for them
+(`bsd/vfs/vfs_subr.c`).
 
 When the card exposes the SD 6.00 Performance Enhancement extension with cache support, `setup()` enables the card's
 volatile write cache and `doSynchronize` / `doSynchronizeCache` flush it with CMD49. At suspend, shutdown, and restart,

@@ -3,6 +3,7 @@
 // only while the head is under 100 ms old).
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -99,7 +100,7 @@ TEST(SdPick, BackgroundIsNeverStarved)
                 before.worstByClass[3] / 1e6, after.worstByClass[3] / 1e6, before.worstByClass[0] / 1e6,
                 after.worstByClass[0] / 1e6);
     EXPECT_GT(after.worstByClass[3], 0u);
-    EXPECT_LT(after.worstByClass[3], kSwitchSdStarveNs + 20 * kSwitchSdShareNs + 50 * kMs);
+    EXPECT_LT(after.worstByClass[3], 400 * kMs);  // 224 ms; the 50 ms share alone, without 8 passes, gave 1,010 ms
 }
 
 // A synchronize waiting for writes makes them rank with tier-0 reads: its writes are not passed, at tier 0 or at
@@ -133,6 +134,7 @@ TEST(SdPick, AwaitedWritesPassOlderLowerReads)
                 before.worstByClass[1] / 1e6, after.worstByClass[1] / 1e6, before.uiTotalNs / 1e6,
                 after.uiTotalNs / 1e6);
     EXPECT_LE(after.worstByClass[1], before.worstByClass[1]);
+    EXPECT_LT(after.worstByClass[1], 25 * kMs);  // 20.9 ms; held to the share turn, as before c91064983, 100 ms
 }
 
 // APFS writing steadily (200 scattered 4 KiB writes a second, tier 1) beside tier-0 reads that keep the card ~75% busy
@@ -157,21 +159,67 @@ TEST(SdPick, RankAndPass)
 {
     std::vector<Request> q(4);
     q[0] = {&q[1], 100, 8, 0, true, false, 0, 0, false, 0};   // tier-0 write, head
-    q[1] = {&q[2], 100, 8, 0, false, false, 0, 1, false, 0};  // overlaps it: must wait
-    q[2] = {&q[3], 300, 8, 0, false, false, 0, 2, false, 0};  // passes
+    q[1] = {&q[2], 300, 8, 0, false, false, 0, 1, false, 0};  // passes
+    q[2] = {&q[3], 100, 8, 0, false, false, 0, 2, false, 0};  // overlaps the head
     q[3] = {nullptr, 500, 8, 2, false, false, 0, 3, false, 0};
     SwitchSdPickState state = {};
-    SwitchSdPicked<Request> picked = switchSdPick(q.data(), false, kMs, &state);
-    EXPECT_EQ(picked.first, &q[2]);
-    EXPECT_EQ(picked.prev, &q[1]);
+    SwitchSdPicked<Request> picked = switchSdPick(q.data(), kNoSync, kMs, &state);
+    EXPECT_EQ(picked.first, &q[1]);
+    EXPECT_EQ(picked.prev, q.data());
     EXPECT_TRUE(picked.passed);
-    picked = switchSdPick(q.data(), true, kMs, &state);
+    picked = switchSdPick(q.data(), kSyncAfterAll, kMs, &state);
     EXPECT_EQ(picked.first, q.data());
-    picked = switchSdPick(q.data(), false, kSwitchSdStarveNs, &state);
+    picked = switchSdPick(q.data(), kNoSync, kSwitchSdStarveNs, &state);
     EXPECT_EQ(picked.first, q.data());
     EXPECT_TRUE(picked.starved);
-    picked = switchSdPick(q.data(), false, kSwitchSdStarveNs + 1, &state);
-    EXPECT_EQ(picked.first, &q[2]);
+    picked = switchSdPick(q.data(), kNoSync, kSwitchSdStarveNs + 1, &state);
+    EXPECT_EQ(picked.first, &q[1]);
+}
+
+// A better request that may not pass an older one lends its rank to it, however its rank came to be better: queued at
+// tier 0, raised by doSetPriority, or counted by a synchronize that began.
+TEST(SdPick, ABlockedRequestLendsItsRankToWhatHoldsItBack)
+{
+    std::vector<Request> q(5);
+    q[0] = {&q[1], 900, 8, 1, false, false, 0, 0, false, 0};    // tier-1 read, head
+    q[1] = {&q[2], 100, 64, 3, true, false, 0, 1, false, 0};    // tier-3 write
+    q[2] = {&q[3], 2000, 8, 1, false, false, 0, 2, false, 0};   // tier-1 read
+    q[3] = {&q[4], 3000, 8, 1, false, false, 0, 3, false, 0};   // tier-1 read
+    q[4] = {nullptr, 160, 8, 0, false, false, 0, 4, false, 0};  // tier-0 page-in over the write's end
+    SwitchSdPickState state = {};
+    EXPECT_EQ(switchSdPick(q.data(), kNoSync, kMs, &state).first, &q[1]);
+
+    q[4].klass = 2;
+    EXPECT_EQ(switchSdPick(q.data(), kNoSync, kMs, &state).first, q.data());
+    uint32_t reads[4] = {0, 3, 1, 0};
+    EXPECT_EQ(switchSdPromote(q.data(), 164, 4, 0, reads), 1u);  // the page-in's part past the write
+    EXPECT_EQ(switchSdPick(q.data(), kNoSync, kMs, &state).first, &q[1]);
+
+    std::vector<Request> w(3);
+    w[0] = {&w[1], 900, 8, 1, false, false, 5, 0, false, 0};   // tier-1 read, head
+    w[1] = {&w[2], 100, 64, 2, false, false, 6, 1, false, 0};  // tier-2 read
+    w[2] = {nullptr, 104, 8, 2, true, false, 7, 2, false, 0};  // tier-2 write inside it
+    EXPECT_EQ(switchSdPick(w.data(), kNoSync, kMs, &state).first, w.data());
+    const uint64_t rootWaits[2] = {10, 0};
+    const SwitchSdPicked<Request> picked = switchSdPick(w.data(), rootWaits, kMs, &state);
+    EXPECT_EQ(picked.first, &w[1]);
+    EXPECT_EQ(picked.prev, w.data());
+}
+
+// The pick on a queue 1,024 deep: a tier-0 page-in at the tail inside the newest of 1,023 tier-3 writes lends its rank
+// to the oldest write, which the newest may not pass.
+TEST(SdPick, ADeepQueue)
+{
+    std::vector<Request> q(1024);
+    for (size_t i = 0; i + 1 < q.size(); ++i)
+        q[i] = {&q[i + 1], 1000 + i * 64, 64, 3, true, false, 0, static_cast<int>(i), false, 0};
+    q.back() = {nullptr, 1000 + (q.size() - 2) * 64, 8, 0, false, false, 0, 1023, false, 0};
+    SwitchSdPickState state = {};
+    const auto started = std::chrono::steady_clock::now();
+    for (int i = 0; i < 1000; ++i)
+        EXPECT_EQ(switchSdPick(q.data(), kNoSync, kMs, &state).first, q.data());
+    const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - started).count();
+    std::printf("1,024-deep pick: %.1f us each (host)\n", us / 1000);
 }
 
 // Writes and reads pass by the same rank: a tier-0 write goes ahead of an older tier-2 read even when no read could
@@ -184,9 +232,24 @@ TEST(SdPick, AWritePassesByRankAlone)
     q[2] = {&q[3], 300, 8, 0, true, false, 0, 2, false, 0};  // tier-0 write: passes both reads
     q[3] = {nullptr, 400, 8, 0, true, false, 0, 3, false, 0};
     SwitchSdPickState state = {};
-    EXPECT_EQ(switchSdPick(q.data(), false, kMs, &state).first, &q[2]);
+    EXPECT_EQ(switchSdPick(q.data(), kNoSync, kMs, &state).first, &q[2]);
     q[2].lba = 104;  // now overlaps the head read: it waits, and the write behind it may not pass it
-    EXPECT_EQ(switchSdPick(q.data(), false, kMs, &state).first, q.data());
+    EXPECT_EQ(switchSdPick(q.data(), kNoSync, kMs, &state).first, q.data());
+}
+
+// Only the writes a waiting synchronize counts rank with tier 0: those of its window queued before it began.
+TEST(SdPick, OnlyCountedWritesRankWithTierZero)
+{
+    Request counted = {nullptr, 0, 8, 2, true, false, 10, 0, false, 0};
+    Request later = {nullptr, 0, 8, 2, true, false, 30, 1, false, 0};
+    Request otherWindow = {nullptr, 0, 8, 2, true, false, 10, 2, false, 0, true};
+    Request read = {nullptr, 0, 8, 2, false, false, 10, 3, false, 0};
+    const uint64_t rootWaits[2] = {20, 0};
+    EXPECT_EQ(switchSdRank(&counted, rootWaits), 0u);
+    EXPECT_EQ(switchSdRank(&later, rootWaits), 5u);
+    EXPECT_EQ(switchSdRank(&otherWindow, rootWaits), 5u);
+    EXPECT_EQ(switchSdRank(&read, rootWaits), 4u);
+    EXPECT_EQ(switchSdRank(&counted, kNoSync), 5u);
 }
 
 TEST(SdPick, PromoteRaisesOnly)
@@ -206,4 +269,14 @@ TEST(SdPick, PromoteRaisesOnly)
     EXPECT_EQ(switchSdPromote(q.data(), 0, 1000, 0, reads), 2u);
     EXPECT_EQ(reads[0], 2u);
     EXPECT_EQ(reads[1], 0u);
+}
+
+// An empty extent raises nothing, not even a request that straddles its start.
+TEST(SdPick, AnEmptyExtentRaisesNothing)
+{
+    std::vector<Request> q(1);
+    q[0] = {nullptr, 100, 64, 3, false, false, 0, 0, false, 0};
+    uint32_t reads[4] = {0, 0, 0, 1};
+    EXPECT_EQ(switchSdPromote(q.data(), 120, 0, 0, reads), 0u);
+    EXPECT_EQ(q[0].klass, 3);
 }

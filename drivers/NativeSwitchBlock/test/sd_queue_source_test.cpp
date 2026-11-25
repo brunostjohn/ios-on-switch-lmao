@@ -76,8 +76,9 @@ TEST(SdQueueSource, MergeChains)
 TEST(SdQueueSource, PickAndRaise)
 {
     const std::string pick = body("Request *NativeSwitchBlock::pickLocked(");
-    EXPECT_THAT(pick, HasSubstr("const bool syncWaiting = rootWrites.waiters || filesWrites.waiters;"));
-    EXPECT_THAT(pick, HasSubstr("switchSdPick(head, syncWaiting, pickNs, &pickState)"));
+    EXPECT_THAT(pick, HasSubstr("writes(windowOf(false)).awaitedBeforeNs()"));
+    EXPECT_THAT(pick, HasSubstr("writes(windowOf(true)).awaitedBeforeNs()"));
+    EXPECT_THAT(pick, HasSubstr("switchSdPick(head, awaitedBeforeNs, pickNs, &pickState)"));
     const std::string promote = body("void NativeSwitchBlock::promote(");
     EXPECT_LT(promote.find("IOLockLock(queueLock);"), promote.find("switchSdPromote("));
     EXPECT_LT(promote.find("switchSdPromote("), promote.find("IOLockUnlock(queueLock);"));

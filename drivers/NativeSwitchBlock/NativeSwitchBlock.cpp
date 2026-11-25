@@ -1520,7 +1520,7 @@ IOReturn NativeSwitchBlock::syncLocked(const SwitchSdWindow *window, bool acknow
 {
     auto &fence = writes(window);
     SwitchSdWriteFence::Barrier barrier;
-    fence.begin(barrier);
+    fence.begin(barrier, switch_now_ns());
     IOReturn result = kIOReturnSuccess;
     while (fence.completed < barrier.target) {
         if (window == &filesWindow && !filesPresent())
@@ -2607,8 +2607,9 @@ Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCo
                                        unsigned inFlightCount)
 {
     const uint64_t pickNs = switch_now_ns();
-    const bool syncWaiting = rootWrites.waiters || filesWrites.waiters;
-    const SwitchSdPicked<Request> picked = switchSdPick(head, syncWaiting, pickNs, &pickState);
+    const uint64_t awaitedBeforeNs[2] = {writes(windowOf(false)).awaitedBeforeNs(),
+                                         writes(windowOf(true)).awaitedBeforeNs()};
+    const SwitchSdPicked<Request> picked = switchSdPick(head, awaitedBeforeNs, pickNs, &pickState);
     Request *const prev = picked.prev;
     Request *first = picked.first;
     if (picked.passed) {

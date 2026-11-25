@@ -24,6 +24,9 @@ constexpr uint32_t kMaxSectors = 1024 * 1024 / kSector;
 constexpr uint32_t kMaxChain = 256;
 constexpr uint64_t kUs = 1000, kMs = 1000 * kUs;
 constexpr uint64_t kThinkNs = 300 * kUs;
+// switchSdPick's awaitedBeforeNs: no synchronize waiting, or one that began after every write.
+constexpr uint64_t kNoSync[2] = {0, 0};
+constexpr uint64_t kSyncAfterAll[2] = {~0ULL, ~0ULL};
 
 struct Request {
     Request *next;
@@ -129,6 +132,19 @@ public:
         fencing = true;
     }
 
+    // A synchronize's waiter leaves the fence (SwitchSdWriteFence::end) this long after its count is reached: the time
+    // the woken thread takes to run.
+    void wakeAfter(uint64_t ns)
+    {
+        wakeNs = ns;
+    }
+
+    // The rule before the synchronize's start time counted: while any synchronize waits, every write ranks with tier 0.
+    void awaitEveryWrite()
+    {
+        awaitAll = true;
+    }
+
     // pickLocked after a chain did not fit: requests merge only with the requests right behind them.
     void mergeOnlyBehind()
     {
@@ -154,10 +170,15 @@ public:
 private:
     static constexpr uint64_t kNever = ~0ULL;
 
+    struct Barrier {
+        uint64_t target, beganNs;
+        uint64_t endsAt = kNever;  // set once the count is reached
+    };
+
     struct Fence {
         uint64_t submitted = 0, completed = 0;
         std::vector<Request *> writes;  // in submission order
-        std::vector<uint64_t> targets;  // the barriers waiting
+        std::vector<Barrier> waiting;   // oldest first
     };
 
     Rule rule;
@@ -169,6 +190,8 @@ private:
     bool syncWaiting;
     bool fencing = false;
     bool anywhere = true;
+    bool awaitAll = false;
+    uint64_t wakeNs = 0;
     std::vector<Sync> planned;
     size_t plannedAt = 0;
     Fence fences[2];
@@ -184,7 +207,33 @@ private:
 
     bool waiting(bool shared) const
     {
-        return fencing ? !fences[shared].targets.empty() : syncWaiting;
+        if (!fencing)
+            return syncWaiting;
+        return std::any_of(fences[shared].waiting.begin(), fences[shared].waiting.end(), [&](const Barrier &b) {
+            return b.endsAt > now;
+        });
+    }
+
+    uint64_t newestBeganNs(bool shared) const
+    {
+        for (auto it = fences[shared].waiting.rbegin(); it != fences[shared].waiting.rend(); ++it) {
+            if (it->endsAt > now)
+                return it->beganNs;
+        }
+        return 0;
+    }
+
+    // SwitchSdWriteFence::awaitedBeforeNs() of each window.
+    void awaited(uint64_t out[2]) const
+    {
+        for (int w = 0; w < 2; ++w) {
+            if (!fencing)
+                out[w] = syncWaiting ? ~0ULL : 0;
+            else if (awaitAll)
+                out[w] = waiting(false) || waiting(true) ? ~0ULL : 0;
+            else
+                out[w] = newestBeganNs(w == 1);
+        }
     }
 
     uint64_t nextArrival() const
@@ -215,7 +264,7 @@ private:
         now = at;
         if (plannedAt < planned.size() && planned[plannedAt].at == at) {
             Fence &fence = fences[planned[plannedAt++].shared];
-            fence.targets.push_back(fence.submitted);
+            fence.waiting.push_back({fence.submitted, at});
             endSyncs(fence);
         } else if (uiNext == at) {
             const uint64_t lba = 40000000 + random() % 20000000;
@@ -255,15 +304,13 @@ private:
     // Ends the barriers whose count is reached, checking each one's writes are all done.
     void endSyncs(Fence &fence)
     {
-        for (auto it = fence.targets.begin(); it != fence.targets.end();) {
-            if (fence.completed < *it) {
-                ++it;
+        for (Barrier &barrier : fence.waiting) {
+            if (barrier.endsAt != kNever || fence.completed < barrier.target)
                 continue;
-            }
-            for (uint64_t i = 0; i < *it; ++i)
+            for (uint64_t i = 0; i < barrier.target; ++i)
                 result.fenced = result.fenced && fence.writes[i]->done;
             ++result.syncsEnded;
-            it = fence.targets.erase(it);
+            barrier.endsAt = now + wakeNs;
         }
     }
 
@@ -333,7 +380,9 @@ private:
         if (rule == Rule::kOld) {
             first = oldFirst(head, queuedReads, now, &prev);
         } else {
-            first = switchSdPick(head, waiting(false) || waiting(true), now, &state).first;
+            uint64_t awaitedBeforeNs[2];
+            awaited(awaitedBeforeNs);
+            first = switchSdPick(head, awaitedBeforeNs, now, &state).first;
         }
         (void)prev;
         for (const Request *older = head; first->write && older != first; older = older->next)

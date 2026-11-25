@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <random>
 #include <vector>
 
@@ -94,4 +95,34 @@ TEST(SdFence, ASynchronizeThatBeginsOverAChainAlreadyPicked)
     EXPECT_EQ(result.outOfOrderWrites, 1u);
     EXPECT_TRUE(result.fenced);
     EXPECT_EQ(result.syncsEnded, 1u);
+}
+
+// A synchronize's five tier-1 writes complete within a few milliseconds, but its thread takes 150 ms to run again and
+// leave the fence (a CPU storm). A tier-2 bulk writer keeps writing 64 KiB every millisecond, in places that do not
+// merge, and the UI takes 10 faults. Those bulk writes came after the synchronize began, so it does not count them and
+// they keep tier 2; ranked with tier 0 while any synchronize waits, as before, the UI's reads queued behind them all.
+TEST(SdFence, WritesQueuedAfterASynchronizeKeepTheirTier)
+{
+    std::vector<Arrival> background = scattered(5, 4 * kMs, 8, 1, true, 21);
+    for (int i = 0; i < 100; ++i) {
+        background.push_back(
+            {6 * kMs + static_cast<uint64_t>(i) * kMs, 50000000 + static_cast<uint64_t>(i) * 4096, 128, 2, true});
+    }
+    Result results[2];
+    for (bool everyWrite : {true, false}) {
+        Card card(Rule::kNew, background, 10, 10 * kMs);
+        card.syncAt({{5 * kMs, false}});
+        card.wakeAfter(150 * kMs);
+        if (everyWrite)
+            card.awaitEveryWrite();
+        Result &result = results[everyWrite ? 0 : 1];
+        result = card.run();
+        EXPECT_TRUE(result.fenced);
+        EXPECT_EQ(result.syncsEnded, 1u);
+    }
+    std::printf("bulk writes after a synchronize: UI 10 faults %.1f -> %.1f ms, worst tier-1 write %.1f -> %.1f ms\n",
+                results[0].uiTotalNs / 1e6, results[1].uiTotalNs / 1e6, results[0].worstByClass[1] / 1e6,
+                results[1].worstByClass[1] / 1e6);
+    EXPECT_LT(results[1].uiTotalNs * 2, results[0].uiTotalNs);
+    EXPECT_LE(results[1].worstByClass[1], results[0].worstByClass[1]);
 }

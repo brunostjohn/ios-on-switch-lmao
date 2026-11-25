@@ -5,9 +5,10 @@
 //
 // A request's rank is its IOStoragePriority class (0 = I/O tier 0, the UI's page-ins) doubled, plus one for a write:
 // a read goes before a write of its own class, because a write's completion blocks no thread unless a synchronize
-// waits for it. While one does, every write ranks with tier-0 reads (IOSCHED puts metadata writes at tier 1, and the
-// waiter may be the UI). The oldest request of the best rank goes before a head of worse rank, past every older request
-// it is allowed to pass; for a write that is only the oldest write.
+// waits for it. The writes a waiting synchronize counts rank with tier-0 reads (IOSCHED puts metadata writes at tier 1,
+// and the waiter may be the UI); a write queued after it began keeps its own tier. `awaitedBeforeNs` holds, per window
+// (indexed by `shared`), SwitchSdWriteFence::awaitedBeforeNs(). The oldest request of the best rank goes before a head
+// of worse rank, past every older request it is allowed to pass; for a write that is only the oldest write.
 //
 // Nothing ages back into FIFO order: a head passed over for kSwitchSdStarveNs goes first once, then again after
 // kSwitchSdShareNs or kSwitchSdShareChains passes, whichever comes first, so lower classes keep at least one chain in
@@ -36,37 +37,64 @@ template <typename Request> struct SwitchSdPicked {
     bool starved;   // the head went first because it had been passed over for too long
 };
 
-template <typename Request> inline unsigned switchSdRank(const Request *r, bool syncWaiting)
+template <typename Request> inline unsigned switchSdRank(const Request *r, const uint64_t awaitedBeforeNs[2])
 {
-    if (r->write)
-        return syncWaiting ? 0u : 2u * r->klass + 1u;
-    return 2u * r->klass;
+    if (!r->write)
+        return 2u * r->klass;
+    const uint64_t awaited = awaitedBeforeNs[r->shared ? 1 : 0];
+    return awaited && r->queuedNs <= awaited ? 0u : 2u * r->klass + 1u;
 }
 
-template <typename Request>
-inline SwitchSdPicked<Request> switchSdPick(Request *head, bool syncWaiting, uint64_t now, SwitchSdPickState *state)
+// The oldest request older than `r` that `r` may not pass (and its predecessor), or nullptr. A read may not pass a write
+// it overlaps; a write passes no request it overlaps and no older write, because the write fence counts completions in
+// submission order.
+template <typename Request> inline Request *switchSdBlocker(Request *head, const Request *r, Request **prev)
 {
-    const unsigned headRank = switchSdRank(head, syncWaiting);
-    // The oldest request of the best rank that may pass. A read may not pass a write it overlaps; a write passes no
-    // request it overlaps and no older write, because the write fence counts completions in submission order.
-    Request *first = nullptr;
+    *prev = nullptr;
+    for (Request *before = nullptr, *older = head; older != r; before = older, older = older->next) {
+        if ((older->write && r->write) || ((older->write || r->write) && switchOverlaps(older, r))) {
+            *prev = before;
+            return older;
+        }
+    }
+    return nullptr;
+}
+
+// How far a better request's rank is lent down the requests that hold it back before the pick gives up on it.
+constexpr unsigned kSwitchSdLendHops = 4;
+
+// The oldest request of the best rank goes first. One that may not pass an older request lends its rank to the oldest
+// request holding it back, and that one's own oldest blocker in turn, until one may go: a tier-0 page-in behind a
+// tier-3 write it overlaps, or a write a synchronize waits for behind older writes, does not wait for the share turn.
+template <typename Request>
+inline SwitchSdPicked<Request> switchSdPick(Request *head, const uint64_t awaitedBeforeNs[2], uint64_t now,
+                                            SwitchSdPickState *state)
+{
+    Request *first = head;
     Request *prev = nullptr;
-    unsigned firstRank = headRank;
-    bool olderWrite = head->write;
+    unsigned firstRank = switchSdRank(head, awaitedBeforeNs);
     for (Request *before = head, *candidate = head->next; candidate && firstRank;
          before = candidate, candidate = candidate->next) {
-        const unsigned rank = switchSdRank(candidate, syncWaiting);
-        bool blocked = rank >= firstRank || (candidate->write && olderWrite);
-        for (const Request *older = head; older != candidate && !blocked; older = older->next)
-            blocked = (older->write || candidate->write) && switchOverlaps(older, candidate);
-        if (!blocked) {
-            first = candidate;
-            prev = before;
+        const unsigned rank = switchSdRank(candidate, awaitedBeforeNs);
+        if (rank >= firstRank)
+            continue;
+        Request *go = candidate;
+        Request *goPrev = before;
+        for (unsigned hops = 0; go; ++hops) {
+            Request *blockerPrev = nullptr;
+            Request *const blocker = switchSdBlocker(head, go, &blockerPrev);
+            if (!blocker)
+                break;
+            go = hops < kSwitchSdLendHops ? blocker : nullptr;
+            goPrev = blockerPrev;
+        }
+        if (go) {
+            first = go;
+            prev = goPrev;
             firstRank = rank;
         }
-        olderWrite = olderWrite || candidate->write;
     }
-    if (!first)
+    if (first == head)
         return {head, nullptr, false, false};
     if (now - head->queuedNs >= kSwitchSdStarveNs &&
         (now >= state->lowerDueNs || state->passes >= kSwitchSdShareChains)) {
@@ -85,7 +113,7 @@ inline uint32_t switchSdPromote(Request *head, uint64_t lba, uint64_t sectors, u
                                 uint32_t queuedReads[kSwitchSdPickClasses])
 {
     uint32_t raised = 0;
-    for (Request *r = head; r; r = r->next) {
+    for (Request *r = sectors ? head : nullptr; r; r = r->next) {
         if (r->klass <= klass || !(r->lba < lba + sectors && lba < r->lba + r->sectors))
             continue;
         if (!r->write) {

@@ -444,7 +444,7 @@ static void writeFenceOrder()
         fence.submitted = 2;
         SwitchSdWriteFence::Barrier barrier;
         if (waiting)
-            fence.begin(barrier);
+            fence.begin(barrier, 1);
         ++fence.submitted;
         Picked p{};
         const uint32_t count = switchGatherWrites(q.head, q.at(0), 2048, 256, 128, &p.start, &p.sectors, nullptr, 0,
