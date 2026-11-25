@@ -247,14 +247,15 @@ bool SwitchMetalRangeEncode::seal(size_t to)
         // process's GPU write of its surface) would be refused again
         if (rc->nativeError == kIOReturnNotReady)
             rc->invalidateNativeReads();
-        if (rc->nativeError && !rc->partial)
-            failCommandBuffer(cb,
-                              rc->nativeError == kIOReturnNotReady
-                                  ? @"A surface it reads changed while it was submitted"
-                                  : @"Native ownership or event dependency failed",
-                              MTLCommandBufferErrorInternal, PredEncKernel);
         char reason[192];
         rc->describeRefusal(reason, sizeof reason);
+        if (rc->nativeError && !rc->partial)
+            failCommandBuffer(
+                cb,
+                rc->nativeError == kIOReturnNotReady
+                    ? @"A surface it reads changed while it was submitted"
+                    : [NSString stringWithFormat:@"Native ownership or event dependency failed: %s", reason],
+                MTLCommandBufferErrorInternal, PredEncKernel);
         // as Metal fails a command buffer its driver could not submit: nothing of it runs elsewhere
         if (!ahead_ && !rc->partial && !rc->nativeError)
             failCommandBuffer(
@@ -267,7 +268,8 @@ bool SwitchMetalRangeEncode::seal(size_t to)
                                                          @"kernel refused the rest: %s",
                                                          reason],
                               MTLCommandBufferErrorInternal);
-        return fail(PredEncKernel, "the kernel refused the submission", uint32_t(rc->kernelResult), 0, reason);
+        return fail(PredEncKernel, "the kernel refused the submission",
+                    uint32_t(rc->kernelResult ? rc->kernelResult : rc->nativeError), 0, reason);
     }
     firstContents_->submitted(cb);
     if (rc->skips)
