@@ -241,6 +241,8 @@ struct Job {
     SwitchVICEvents *events;
     bool eventReady, listed;
     int eventStatus;
+    const void *touched[2];  // SwitchVICRequests.h
+    bool reserving, reserveWhenRun;
     IOUserClient *client;  // retained
     struct Conn *conn;
     TegraVICSurface src, dst;
@@ -323,6 +325,8 @@ bool runJob(Job *job, IOReturn *status)
         *status = ioreturn(prepared);
         return true;
     }
+    if (job->reserveWhenRun)
+        switch_vic_surface_reserve_write(&job->dst, &dstReserve.reservation);
 #if TEGRA_VIC_STATS
     const uint64_t entered = mach_absolute_time();
     const bool eventTurn = job->events && job->plan.count == 1 && (job->plan.op[0].transform & TEGRA_VIC_ROT90);
@@ -405,6 +409,9 @@ void engineThread(void *, wait_result_t)
         switch_gpu_events_charge(job->caller);
         const bool finished = runJob(job, &status);
         switch_gpu_events_charge(0);
+        IOLockLock(gQueueLock);
+        gRequests.finished();
+        IOLockUnlock(gQueueLock);
         if (finished)
             finishJob(job, status);
     }
@@ -452,20 +459,34 @@ void finishJob(Job *job, IOReturn status)
 
 namespace {
 // Interruptible, so a client stalled behind its own events that never fire can still be killed; its close then fails
-// those jobs.
+// those jobs. A job without events reserves its destination for writing (so the external display does not latch it
+// before VIC writes it) from now if no other job touches it, else when it runs. The reservation is taken outside the
+// queue's lock: it can register the surface's backing.
 bool queueJob(Job *job)
 {
     IOLockLock(gQueueLock);
     bool interrupted = false;
     while (!__atomic_load_n(&job->conn->closing, __ATOMIC_ACQUIRE) && !gRequests.admits(*job) && !interrupted)
         interrupted = IOLockSleep(gQueueLock, &gRequests, THREAD_ABORTSAFE) == THREAD_INTERRUPTED;
+    bool reserve = false;
     if (!interrupted) {
         if (__atomic_load_n(&job->conn->closing, __ATOMIC_ACQUIRE))
             gRequests.fail(job, -125);
+        const bool reserves = !job->events && !job->eventStatus;
+        reserve = reserves && gRequests.alone(job->dst.memory);
+        job->reserving = reserve;
+        job->reserveWhenRun = reserves && !reserve;
         gRequests.push(job);
         IOLockWakeup(gQueueLock, &gRequests, false);
     }
     IOLockUnlock(gQueueLock);
+    if (reserve) {
+        switch_vic_surface_reserve_write(&job->dst, &job->dstReserve);
+        IOLockLock(gQueueLock);
+        gRequests.reserved(job);
+        IOLockWakeup(gQueueLock, &gRequests, false);
+        IOLockUnlock(gQueueLock);
+    }
     return !interrupted;
 }
 
@@ -629,9 +650,9 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
         iouc_set_async_reference64(job->ref, port, r.cb_fn, r.cb_refcon, conn->task);
     IOLockUnlock(conn->lock);
     job->eventReady = job->events == nullptr;
+    job->touched[0] = job->dst.memory;
+    job->touched[1] = job->plan.readsSource ? job->src.memory : nullptr;
     const bool async = job->async;
-    if (!job->events)
-        switch_vic_surface_reserve_write(&job->dst, &job->dstReserve);
     switch_vic_events_arm(job->events);
     if (!queueJob(job)) {
         abandonUnqueued(job);

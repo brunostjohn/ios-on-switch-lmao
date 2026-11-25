@@ -5,6 +5,11 @@
 // IOSurfaceAccelerator requests waiting for VIC's engine thread. One whose events have not fired counts against its own
 // connection, a runnable one against the shared bound, so a client whose events never fire stalls only itself. The
 // caller holds one lock across every call.
+//
+// A request names the surfaces it reads or writes (`touched`, null where none). It may take its destination's write
+// reservation while queued only if no listed request, and not the one the engine thread runs, touches that surface:
+// held by a later request, it stalls an earlier one that runs first on the surface (pop takes the first runnable one),
+// which waits on it from the engine thread. `reserving` marks one taking it, which nothing behind it overtakes.
 template <class Request> class SwitchVICRequests {
 public:
     static constexpr uint32_t kRunnable = 16, kWaitingPerConnection = 16;
@@ -50,6 +55,28 @@ public:
         ready(request, status);
     }
 
+    bool alone(const void *surface) const
+    {
+        if (!surface || running[0] == surface || running[1] == surface)
+            return false;
+        for (const auto *request = head; request; request = request->next) {
+            if (request->touched[0] == surface || request->touched[1] == surface)
+                return false;
+        }
+        return true;
+    }
+
+    void reserved(Request *request)
+    {
+        request->reserving = false;
+    }
+
+    // The popped request's run is over: its surfaces are not touched any more.
+    void finished()
+    {
+        running[0] = running[1] = nullptr;
+    }
+
     template <class Connection> void cancel(const Connection *conn, int status)
     {
         for (auto *request = head; request; request = request->next)
@@ -61,6 +88,8 @@ public:
     {
         Request *previous = nullptr;
         for (auto *request = head; request; previous = request, request = request->next) {
+            if (request->reserving)
+                return nullptr;
             if (!request->eventReady)
                 continue;
             (previous ? previous->next : head) = request->next;
@@ -69,6 +98,8 @@ public:
             request->next = nullptr;
             request->listed = false;
             --runnable;
+            running[0] = request->touched[0];
+            running[1] = request->touched[1];
             return request;
         }
         return nullptr;
@@ -77,4 +108,5 @@ public:
 private:
     Request *head = nullptr, *tail = nullptr;
     uint32_t runnable = 0;
+    const void *running[2] = {};
 };
