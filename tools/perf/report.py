@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -109,6 +110,27 @@ def head(s: Session, pulled: Pulled) -> list[str]:
 PRESS_AFTER_S = 6  # a hang starting this soon after a press may be the press's own cost
 
 
+LABEL = re.compile(r'SwitchLabels: icon label image (?P<n>\d+) set')
+HOME_VISIBLE = 'from hidden to visible'
+
+
+def labels_row(s: Session) -> list[str]:
+    """Return when the Home Screen's icon labels got their images against when the Home Screen became visible."""
+    shown = next((r.time for r in s.recs if r.proc == 'SpringBoard' and HOME_VISIBLE in r.msg), None)
+    sets = [r.time for r in s.recs if LABEL.search(r.msg)]
+    if not sets:
+        missing = next((r.msg for r in s.recs if r.msg.startswith('SwitchLabels: no ')), '')
+        return [f'label set vs Home Screen visible: no label lines{": " + missing if missing else ""}']
+    if shown is None:
+        return [f'label set vs Home Screen visible: {len(sets)} label images, no Home Screen line']
+    nth = sets[min(len(sets), 20) - 1]
+    return [
+        f'label set vs Home Screen visible ({shown:%H:%M:%S.%f}'[:-3]
+        + f'): first label image {(sets[0] - shown).total_seconds():+.1f} s, the {min(len(sets), 20)}th '
+        f'{(nth - shown).total_seconds():+.1f} s, {len(sets)} logged'
+    ]
+
+
 def window_rows(s: Session, kind: str, ws: list[Window]) -> list[str]:
     out = []
     for w in ws:
@@ -140,7 +162,7 @@ def hangs_after(s: Session, w: Window) -> str:
 
 
 def pacing_section(s: Session) -> list[str]:
-    out = ['', '## Frame pacing by scenario', 'whole boot: ' + pacing_row(s, whole(s))]
+    out = ['', '## Frame pacing by scenario', 'whole boot: ' + pacing_row(s, whole(s)), *labels_row(s)]
     for kind in ('press', 'mark', 'launch', 'touch'):
         out += window_rows(s, kind, s.windows[kind])
     tests = s.windows['test']

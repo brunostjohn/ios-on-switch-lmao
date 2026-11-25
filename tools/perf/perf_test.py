@@ -293,6 +293,31 @@ class WindowsTest(unittest.TestCase):
         )
         self.assertEqual([w.name for w in windows.marks(recs)], ['ui.title_scroll.back.1'])
 
+    def test_label_images_against_the_home_screen_becoming_visible(self):
+        icon = {'subsystem': 'com.apple.SpringBoard', 'category': 'Icon'}
+        metal = {'subsystem': 'com.brunostjohn.switch.TegraGM20BMetal'}
+        recs = [
+            rec(
+                'Changing content visibility of icon manager 0x79cb8b700 from hidden to visible',
+                10.0,
+                'SpringBoard',
+                **icon,
+            ),
+            *[
+                rec(f'SwitchLabels: icon label image {n} set at {n}', 60.0 + n, 'SpringBoard', **metal)
+                for n in range(1, 25)
+            ],
+        ]
+        (row,) = report.labels_row(session.build('B', recs))
+        self.assertIn('first label image +51.0 s, the 20th +70.0 s, 24 logged', row)
+        missing = [
+            rec('SwitchLabels: no -[SBIconPLKLegibilityView setImage:] in this SpringBoard: no label times', 1.0)
+        ]
+        self.assertIn(
+            'no label lines: SwitchLabels: no -[SBIconPLKLegibilityView',
+            report.labels_row(session.build('B', missing))[0],
+        )
+
     def test_a_hang_after_a_press_names_the_recorder_work_it_overlapped(self):
         sb = {'subsystem': 'com.apple.SpringBoard', 'category': 'HIDKeyboardEvents'}
         hang = (
