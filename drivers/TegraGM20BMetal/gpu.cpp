@@ -430,6 +430,11 @@ bool Device::open(const char *packPath, uint64_t stack, std::string &err, Role r
     return init(err);
 }
 
+// The interlock's ticket words (nak_nir_lower_fs_interlock.c interlock_ticket_word): word (SR_AFFINITY & 0xff) * 256 +
+// (ticket & 0xff), as NVIDIA's own programs index them. Nothing bounds the affinity byte below 256, and a word past the
+// buffer would spin on and add into the control memory mapped after it without a fault
+constexpr uint32_t kTicketBytes = 256 * 256 * 4;
+
 // Every process's: the header pools, the root table, the zero page, the interlock tickets and the shader heap's reservation,
 // which textures, samplers and states need before any submission. The render server's channel, heap and first chunks too.
 bool Device::init(std::string &err)
@@ -438,7 +443,7 @@ bool Device::init(std::string &err)
         !k_.allocControl(kTscCount * 32, tsc_, ControlUse::SamplerHeaders) ||
         !k_.allocControl(0x1000, root_, ControlUse::RootTable) ||
         !k_.allocControl(0x10000, zero_, ControlUse::ZeroPage) ||
-        !k_.allocControl(0x1000, tickets_, ControlUse::InterlockTickets) ||
+        !k_.allocControl(kTicketBytes, tickets_, ControlUse::InterlockTickets) ||
         !k_.allocControl(kColorTableBytes, colorTable_, ControlUse::ColorTable) ||
         !k_.allocControl(cbufBindBytes(kSrgbEncodeEntries * 2), srgbEncode_, ControlUse::ColorTable) ||
         !k_.allocControl(kStampBytes, stamps_, ControlUse::Stamps)) {
