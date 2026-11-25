@@ -1833,6 +1833,9 @@ fn float_fn_core(
         }
         F::FastPowr => {
             let y = arg(args, 1)?;
+            if ieee_half_powr(fb, f) {
+                return exact_exp2_of_product(fb, lib, op, f, y, a);
+            }
             let r = exp2_of_product(fb, lib, op, f, y, a)?;
             fast_powr_special(fb, f, a, y, r)
         }
@@ -1843,6 +1846,8 @@ fn float_fn_core(
             let ax = glsl(fb, GlslOp::FAbs, &[a])?;
             let magnitude = if op == F::Pow {
                 routine_or(fb, lib, op, f, libm::Fun::Powr, GlslOp::Pow, &[ax, y])?
+            } else if ieee_half_powr(fb, f) {
+                exact_exp2_of_product(fb, lib, op, f, y, ax)?
             } else {
                 let r = exp2_of_product(fb, lib, op, f, y, ax)?;
                 infinite_product(fb, f, y, ax, r)?
@@ -3115,6 +3120,29 @@ fn exp2_of_product(
 ) -> BResult<Value> {
     let l = routine_or(fb, lib, op, f, libm::Fun::Log2, GlslOp::Log2, &[x])?;
     let p = bin(fb, BinOp::FMul, y, l)?;
+    routine_or(fb, lib, op, f, libm::Fun::Exp2, GlslOp::Exp2, &[p])
+}
+
+/// Whether `fast::powr` of form `f` is the device's [`exact_exp2_of_product`] alone, with no
+/// selects around it: a `half` on a device whose composition is Metal's at every special operand
+/// (`NativeShaderTarget::ieee_half_powr`).
+fn ieee_half_powr(fb: &mut FunctionBuilder<'_>, f: Form) -> bool {
+    f.float_fmt() == Some(FloatFmt::Half) && fb.module().ieee_half_powr()
+}
+
+/// [`exp2_of_product`] with its product `NoContraction`: what the device computes at the special
+/// operands is its IEEE value only if no compiler folds the product, and an exact operation is one
+/// no fast-math rule rewrites.
+fn exact_exp2_of_product(
+    fb: &mut FunctionBuilder<'_>,
+    lib: &Lib<'_>,
+    op: FloatFn,
+    f: Form,
+    y: Value,
+    x: Value,
+) -> BResult<Value> {
+    let l = routine_or(fb, lib, op, f, libm::Fun::Log2, GlslOp::Log2, &[x])?;
+    let p = fb.binary_with(BinOp::FMul, y, l, Contraction::Forbidden)?;
     routine_or(fb, lib, op, f, libm::Fun::Exp2, GlslOp::Exp2, &[p])
 }
 
