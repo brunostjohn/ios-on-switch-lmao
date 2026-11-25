@@ -740,6 +740,27 @@ exports_files(
     visibility = ["//tools/benchloop:__pkg__"],
 )
 
+config_setting(
+    name = "compiler_comparison",
+    flag_values = {
+        "//bazel:diagnostics": "true",
+        "//bazel:profile": "debug",
+        "//ipsw:kind": "24B119",
+    },
+)
+
+swift_interop_hint(
+    name = "compiler_bench_module",
+    module_name = "SwitchCompilerBench",
+)
+
+cc_library(
+    name = "compiler_bench_api",
+    hdrs = ["bench/compiler_api.h"],
+    aspect_hints = [":compiler_bench_module"],
+    implementation_deps = [":bench"],
+)
+
 swift_interop_hint(
     name = "bench_module",
     module_name = "SwitchBench",
@@ -839,7 +860,23 @@ cc_library(
         "//drivers/TegraGM20BMetal:vertex_streams.cpp",
         "//drivers/TegraGM20BMetal:zeta.cpp",
         "//drivers/TegraGM20BMetal:gm20b_runtime_headers",
-    ],
+    ] + select({
+        ":compiler_comparison": [
+            "bench/compiler_bind.cpp",
+            "bench/compiler_compare.cpp",
+            "bench/compiler_draw.h",
+            "bench/compiler_run.cpp",
+            "//drivers/TegraGM20BMetal:cache_io.h",
+            "//drivers/TegraGM20BMetal:gm20b_cache.cpp",
+            "//drivers/TegraGM20BMetal:gm20b_cache.h",
+            "//drivers/TegraGM20BMetal:kernel_cache.cpp",
+            "//drivers/TegraGM20BMetal:visibility.cpp",
+            "//drivers/TegraGM20BMetal:visibility_pass.cpp",
+            "//kits/SwitchSeedPack:SwitchSeedPack.h",
+            "//kits/SwitchSeedPack:SwitchSeedStore.h",
+        ],
+        "//conditions:default": [],
+    }),
     hdrs = ["bench/switch_bench.h"],
     additional_compiler_inputs = ["//drivers/TegraGM20BMetal:completed.cpp"],
     copts = [
@@ -1221,8 +1258,14 @@ swift_library(
     srcs = [
         "app27/SwitchHWTest27.swift",
         "app27/Tests27.swift",
-    ],
-    copts = SWIFT_COPTS,
+    ] + select({
+        ":compiler_comparison": ["app27/CompilerCompare.swift"],
+        "//conditions:default": [],
+    }),
+    copts = SWIFT_COPTS + select({
+        ":compiler_comparison": ["-DSWITCH_COMPILER_COMPARISON"],
+        "//conditions:default": [],
+    }),
     module_name = "SwitchHWTest27",
     target_compatible_with = ["@platforms//os:ios"],
     deps = [
@@ -1231,7 +1274,13 @@ swift_library(
         ":kit",
         ":kit_common",
         ":kit_registry",
-    ],
+    ] + select({
+        ":compiler_comparison": [
+            ":compiler_bench_api",
+            ":core",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 # Each iOS version's app is /Applications/SwitchHWTest.app on its own image (the debug //:boot of that kind,

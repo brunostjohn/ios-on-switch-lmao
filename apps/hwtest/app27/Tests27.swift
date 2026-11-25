@@ -8,6 +8,11 @@ import HWTestScenes
 /// they may reach hardware J181 has and the Switch lacks. The X1 hardware probes come last, the risky ones at the end.
 /// ui.glass_ab runs before every other UIKit glass test: its first round is then the first glass stage a test built.
 enum Tests27 {
+    #if SWITCH_COMPILER_COMPARISON
+    static let compilerCases: [any HWTest] = CompilerCompare.cases
+    #else
+    static let compilerCases: [any HWTest] = []
+    #endif
     static let all: [any HWTest] =
         [
             GPUSceneTest(scene: Scenes.glass), CAGlassSplitTest(), GPUSceneTest(scene: CAFetchRouteScene()),
@@ -17,5 +22,5 @@ enum Tests27 {
             TrueToneDefaultTest(), GlassPacing.over,
             GlassPacing.under, NoCameraTest(), FocusReload27Test(), FocusReloadNavigation27Test(),
             FrameProcessorTest(),
-        ] + X1Probes.all
+        ] + X1Probes.all + compilerCases
 }
