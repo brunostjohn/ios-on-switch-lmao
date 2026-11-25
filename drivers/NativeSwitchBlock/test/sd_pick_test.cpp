@@ -228,13 +228,14 @@ private:
         if (rule == Rule::kOld) {
             first = oldFirst(head, queuedReads, now, &prev);
         } else {
-            first = switchSdPick(head, queuedReads, syncWaiting, now, &state).first;
+            first = switchSdPick(head, syncWaiting, now, &state).first;
         }
         (void)prev;
         uint64_t start = 0;
         uint32_t sectors = 0;
         const uint32_t count =
-            first->write ? switchGatherWrites(head, first, kMaxSectors, kMaxChain, kMaxChain, &start, &sectors)
+            first->write ? switchGatherWrites(head, first, kMaxSectors, kMaxChain, kMaxChain, &start, &sectors, nullptr,
+                                              0, syncWaiting && rule == Rule::kNew)
                          : switchGatherReads(head, first, kMaxSectors, kMaxChain, kMaxChain, &start, &sectors);
         checkOrder();
         Request *chain = switchUnlinkChain(head, tail, count);
@@ -321,14 +322,15 @@ TEST(SdPick, MetadataWritesNoLongerHoldTheUi)
     EXPECT_LT(after.lowerWorstNs, 1000 * kMs);
 }
 
-// The same writes as IOSCHED marks them (metadata writes at tier 1, passive: spec_strategy).
+// The same writes as IOSCHED marks them (metadata writes at tier 1, passive: spec_strategy). They now also pass the
+// older tier-2 reads, which costs the UI a command or so at most.
 TEST(SdPick, MetadataWritesAtTierOne)
 {
     const auto background = join(scattered(73, 5 * kMs, 8, 1, true, 1), scattered(30, 20 * kMs, 64, 2, false, 2));
     const Result before = run(Rule::kOld, background);
     const Result after = run(Rule::kNew, background);
     report("dump 5, IOSCHED tiers", before, after);
-    EXPECT_LE(after.uiTotalNs, before.uiTotalNs);
+    EXPECT_LE(after.uiTotalNs, before.uiTotalNs + kMs);
     EXPECT_LT(after.uiWorstNs, 5 * kMs);
 }
 
@@ -443,19 +445,33 @@ TEST(SdPick, RankAndPass)
     q[1] = {&q[2], 100, 8, 0, false, false, 0, 1, false, 0};  // overlaps it: must wait
     q[2] = {&q[3], 300, 8, 0, false, false, 0, 2, false, 0};  // passes
     q[3] = {nullptr, 500, 8, 2, false, false, 0, 3, false, 0};
-    uint32_t reads[4] = {2, 0, 1, 0};
     SwitchSdPickState state = {};
-    SwitchSdPicked<Request> picked = switchSdPick(q.data(), reads, false, kMs, &state);
+    SwitchSdPicked<Request> picked = switchSdPick(q.data(), false, kMs, &state);
     EXPECT_EQ(picked.first, &q[2]);
     EXPECT_EQ(picked.prev, &q[1]);
     EXPECT_TRUE(picked.passed);
-    picked = switchSdPick(q.data(), reads, true, kMs, &state);
+    picked = switchSdPick(q.data(), true, kMs, &state);
     EXPECT_EQ(picked.first, q.data());
-    picked = switchSdPick(q.data(), reads, false, kSwitchSdStarveNs, &state);
+    picked = switchSdPick(q.data(), false, kSwitchSdStarveNs, &state);
     EXPECT_EQ(picked.first, q.data());
     EXPECT_TRUE(picked.starved);
-    picked = switchSdPick(q.data(), reads, false, kSwitchSdStarveNs + 1, &state);
+    picked = switchSdPick(q.data(), false, kSwitchSdStarveNs + 1, &state);
     EXPECT_EQ(picked.first, &q[2]);
+}
+
+// Writes and reads pass by the same rank: a tier-0 write goes ahead of an older tier-2 read even when no read could
+// pass that head, but never past an older write or a request it overlaps.
+TEST(SdPick, AWritePassesByRankAlone)
+{
+    std::vector<Request> q(4);
+    q[0] = {&q[1], 100, 8, 2, false, false, 0, 0, false, 0};  // tier-2 read, head
+    q[1] = {&q[2], 200, 8, 2, false, false, 0, 1, false, 0};
+    q[2] = {&q[3], 300, 8, 0, true, false, 0, 2, false, 0};  // tier-0 write: passes both reads
+    q[3] = {nullptr, 400, 8, 0, true, false, 0, 3, false, 0};
+    SwitchSdPickState state = {};
+    EXPECT_EQ(switchSdPick(q.data(), false, kMs, &state).first, &q[2]);
+    q[2].lba = 104;  // now overlaps the head read: it waits, and the write behind it may not pass it
+    EXPECT_EQ(switchSdPick(q.data(), false, kMs, &state).first, q.data());
 }
 
 TEST(SdPick, PromoteRaisesOnly)

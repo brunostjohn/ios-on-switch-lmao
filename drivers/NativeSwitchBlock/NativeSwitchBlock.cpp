@@ -2608,7 +2608,7 @@ Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCo
 {
     const uint64_t pickNs = switch_now_ns();
     const bool syncWaiting = rootWrites.waiters || filesWrites.waiters;
-    const SwitchSdPicked<Request> picked = switchSdPick(head, queuedReads, syncWaiting, pickNs, &pickState);
+    const SwitchSdPicked<Request> picked = switchSdPick(head, syncWaiting, pickNs, &pickState);
     Request *const prev = picked.prev;
     Request *first = picked.first;
     if (picked.passed) {
