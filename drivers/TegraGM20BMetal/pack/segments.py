@@ -221,11 +221,12 @@ def _iterated_blend_noop(
     default_per_target: list[int] | None = None,
     default_seen: int = 0,
 ) -> int:
-    for j in range(1, 8):
-        if writes[j] & 0x1111:
-            return NOOP_NEVER
     if not (writes[0] & 0x1111) or (storage_bits & 1) or not key_string:
         return NOOP_NEVER
+    # only the key's targets: the baseline's SET_CT_WRITE of a target the state lacks is no attachment of its passes
+    for j in range(1, 8):
+        if writes[j] & 0x1111 and _key_color_format(key_string, j):
+            return NOOP_NEVER
     blends = False
     per_target = list(default_per_target) if default_per_target is not None else [0] * 6
     seen = default_seen if default_per_target is not None else 0
