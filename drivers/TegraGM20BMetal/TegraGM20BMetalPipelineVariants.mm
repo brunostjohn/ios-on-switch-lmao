@@ -25,7 +25,7 @@ void settleUnmade(RenderVariant &variant, const std::string &key, const std::str
 // compiler to ask is no answer: the next pass that needs the variant asks again (renderVariant's reopen), and that ask
 // checks the compiler as a state's creation does (TegraGM20BMetalComplete.mm Completion::request).
 void askCompiler(SwitchMetalPipeline *p, const std::shared_ptr<RenderVariant> &variant,
-                 const gm20b::RenderVariant &forms)
+                 const gm20b::RenderVariant &forms, qos_class_t asker)
 {
     gm20b::Completion *completion = gRM->completion.get();
     if (!completion) {
@@ -42,6 +42,7 @@ void askCompiler(SwitchMetalPipeline *p, const std::shared_ptr<RenderVariant> &v
     request.own = !p->_packable;
     request.variant = forms;
     request.resolveDescriptor = true;
+    request.qos = uint32_t(asker);
     request.bindWait = [variant](std::function<bool()> wait) {
         variant->setWait(std::move(wait));
     };
@@ -84,6 +85,9 @@ void gm20bPlaceVariant(SwitchMetalPipeline *p, const std::shared_ptr<RenderVaria
 {
     const gm20b::RenderVariant asked = forms;
     const std::shared_ptr<RenderVariant> placing = variant;
+    // the placer's threads take the committers' fixed priority and no QoS class: the compiler is asked at the class of
+    // the thread that drew
+    const qos_class_t asker = qos_class_self();
     dispatch_async(gm20bVariantPlacer(), ^{
         const auto placer = std::make_shared<gm20b::OwnedWord>();
         placer->setOwner(gm20b::OwnedWord::currentOwner());
@@ -93,7 +97,7 @@ void gm20bPlaceVariant(SwitchMetalPipeline *p, const std::shared_ptr<RenderVaria
         if (pl)
             placing->publish(pl);
         else
-            askCompiler(p, placing, asked);
+            askCompiler(p, placing, asked, asker);
         placer->clear();
     });
 }

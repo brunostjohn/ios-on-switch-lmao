@@ -154,7 +154,8 @@ void Completion::ask(Ask asked, std::function<void(Pipeline *)> ready)
 
 void Completion::askVariant(Ask asked, Ready ready)
 {
-    asked.qos = uint32_t(qos_class_self());
+    if (!asked.qos)
+        asked.qos = uint32_t(qos_class_self());
     request(std::move(asked), std::make_shared<Pending>(pending_, std::move(ready), false));
 }
 
