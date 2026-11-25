@@ -14,7 +14,7 @@ constexpr uint32_t kRampDurationInv = (1u << 31) / kRampDurationFrames;
 constexpr uint32_t kPolyN1 = 16u;
 constexpr uint32_t kPolyN2 = 63u;
 constexpr uint32_t kPeakCtrlWindowed = 0x000012c0u;
-constexpr uint32_t kStereoChannels = 2u;
+constexpr uint32_t kMvcMaxChannels = 8u;
 
 constexpr int32_t kDefaultPolyCoeffs[9] = {
     23738319, 659403, -3680, 15546680, 2530732, -120985, 12048422, 5527252, -785042,
@@ -35,9 +35,19 @@ bool waitReg(const volatile uint8_t *ahub, uint32_t offset, uint32_t mask, uint3
 #endif
 }
 
+bool writeCfgRam(volatile uint8_t *ahub, uint32_t addr, uint32_t value)
+{
+    if (!waitReg(ahub, kBase + kMvcCfgRamCtrl, kRamCtrlReadBusy, 0u, kTimeoutUs)) {
+        return false;
+    }
+    switch_mmio_write32(ahub, kBase + kMvcCfgRamCtrl, kRamCtrlWriteSeq | (addr & 0x1ffu));
+    switch_mmio_write32(ahub, kBase + kMvcCfgRamData, value);
+    return true;
+}
+
 uint32_t ctrlWord(bool muted)
 {
-    return kMvcCtrlCurveLinear | kMvcCtrlRoundingUnbias | (muted ? kMvcCtrlMuteMask : 0u);
+    return kMvcCtrlPerChanEn | kMvcCtrlCurveLinear | kMvcCtrlRoundingUnbias | (muted ? kMvcCtrlMuteMask : 0u);
 }
 
 }  // namespace
@@ -62,21 +72,19 @@ bool mvcConfigure(volatile uint8_t *ahub, uint32_t channels, int32_t initialMdB,
     switch_mmio_write32(ahub, kBase + kMvcDurationInv, kRampDurationInv);
     switch_mmio_write32(ahub, kBase + kMvcPolyN1, kPolyN1);
     switch_mmio_write32(ahub, kBase + kMvcPolyN2, kPolyN2);
-    if (!waitReg(ahub, kBase + kMvcCfgRamCtrl, kRamCtrlReadBusy, 0u, kTimeoutUs)) {
-        return false;
-    }
-    switch_mmio_write32(ahub, kBase + kMvcCfgRamCtrl, kRamCtrlWriteSeq);
-    for (const int32_t coeff : kDefaultPolyCoeffs) {
-        switch_mmio_write32(ahub, kBase + kMvcCfgRamData, static_cast<uint32_t>(coeff));
+    for (uint32_t i = 0; i < 9u; ++i) {
+        if (!writeCfgRam(ahub, i, static_cast<uint32_t>(kDefaultPolyCoeffs[i]))) {
+            return false;
+        }
     }
     switch_mmio_write32(ahub, kBase + kMvcCtrl, ctrlWord(muted));
     const uint32_t vol = static_cast<uint32_t>(switch_audio_mvc_linear_db_q8(initialMdB));
-    for (uint32_t ch = 0; ch < kStereoChannels; ++ch) {
+    for (uint32_t ch = 0; ch < kMvcMaxChannels; ++ch) {
         switch_mmio_write32(ahub, kBase + kMvcInitVol + 4u * ch, vol);
         switch_mmio_write32(ahub, kBase + kMvcTargetVol + 4u * ch, vol);
     }
     switch_mmio_write32(ahub, kBase + kMvcPeakCtrl, kPeakCtrlWindowed);
-    switch_mmio_write32(ahub, kBase + kMvcSwitch, kMvcSwitchVolume | kMvcSwitchDuration);
+    switch_mmio_write32(ahub, kBase + kMvcSwitch, kMvcSwitchVolume);
     return true;
 }
 
@@ -104,7 +112,7 @@ bool mvcSetVolume(volatile uint8_t *ahub, int32_t targetMdB, bool muted, bool im
     }
     switch_mmio_write32(ahub, kBase + kMvcCtrl, ctrlWord(muted));
     const uint32_t vol = static_cast<uint32_t>(switch_audio_mvc_linear_db_q8(targetMdB));
-    for (uint32_t ch = 0; ch < kStereoChannels; ++ch) {
+    for (uint32_t ch = 0; ch < kMvcMaxChannels; ++ch) {
         if (immediate) {
             switch_mmio_write32(ahub, kBase + kMvcInitVol + 4u * ch, vol);
         }
@@ -115,11 +123,31 @@ bool mvcSetVolume(volatile uint8_t *ahub, int32_t targetMdB, bool muted, bool im
 }
 
 // NOLINTNEXTLINE(misc-const-correctness): signature fixed in SwitchAudioAhub.h
-uint32_t mvcReadPeak(volatile uint8_t *ahub)
+void mvcReadPeakChannels(volatile uint8_t *ahub, uint32_t *left, uint32_t *right)
 {
     const uint32_t ch0 = switch_mmio_read32(ahub, kBase + kMvcPeakValue);
     const uint32_t ch1 = switch_mmio_read32(ahub, kBase + kMvcPeakValue + 4u);
+    if (left) {
+        *left = ch0;
+    }
+    if (right) {
+        *right = ch1;
+    }
+}
+
+// NOLINTNEXTLINE(misc-const-correctness): signature fixed in SwitchAudioAhub.h
+uint32_t mvcReadPeak(volatile uint8_t *ahub)
+{
+    uint32_t ch0 = 0u;
+    uint32_t ch1 = 0u;
+    mvcReadPeakChannels(ahub, &ch0, &ch1);
     return ch0 > ch1 ? ch0 : ch1;
+}
+
+// NOLINTNEXTLINE(misc-const-correctness): signature fixed in SwitchAudioAhub.h
+uint32_t mvcReadConfigErr(volatile uint8_t *ahub)
+{
+    return switch_mmio_read32(ahub, kBase + kMvcConfigErr);
 }
 
 }  // namespace switch_audio_ahub

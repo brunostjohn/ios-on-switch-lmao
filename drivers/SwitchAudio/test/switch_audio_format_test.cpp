@@ -78,16 +78,14 @@ TEST(SwitchAudioFormat, I2sWordsAreL4tS32)
     EXPECT_EQ(neon_h_i2s_tx_cif(), linux_::cif(tx));
 }
 
-TEST(SwitchAudioFormat, CodecWordsAreRt5640TwentyFourBitWith128xOsr)
+TEST(SwitchAudioFormat, CodecWordsAreRt5640TwentyFourBit)
 {
     const std::optional<linux_::Rt5640> codec = linux_::rt5640(24, kChannels, kRate, 256 * kRate);
     ASSERT_TRUE(codec.has_value());
     EXPECT_EQ(neon_h_rt5640_sdp_mask(), codec->sdpMask);
     EXPECT_EQ(neon_h_rt5640_sdp(), codec->sdp);
-    // ADDA_CLK1 mask also clears bits [3:0] to override silicon reset DAC_OSR=64x -> 128x.
-    EXPECT_EQ(neon_h_rt5640_adda_mask(), codec->addaMask | 0xfu);
+    EXPECT_EQ(neon_h_rt5640_adda_mask(), codec->addaMask);
     EXPECT_EQ(neon_h_rt5640_adda(), codec->adda);
-    EXPECT_EQ(neon_h_rt5640_adda() & 0xfu, 0u);
     EXPECT_EQ(neon_h_codec_bits(), 24u);
     EXPECT_EQ(codec->bclkFs, neon_h_bclk_fs());
     EXPECT_FALSE(linux_::rt5640(32, kChannels, kRate, 256 * kRate).has_value());

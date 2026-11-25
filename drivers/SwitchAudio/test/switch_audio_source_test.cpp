@@ -49,12 +49,12 @@ struct ClockFamily {
     double hz;
 };
 
-// Both link families from the 38.4 MHz oscillator: PLLA_OUT0 = PLLA / 5 = 1536 fs, MCLK = PLLA_OUT0 / 6 (even 50%
-// duty), BCLK = PLLA_OUT0 / 24 (even 50% duty), < 1 ppm frequency error, and exact Q32 ticks for all 10 SFC rates.
+// Both link families from the 38.4 MHz oscillator: PLLA_OUT0 = PLLA / 7.5 = 1024 fs (49.152 / 45.1584 MHz), MCLK =
+// PLLA_OUT0 / 4 (even 50% duty), BCLK = PLLA_OUT0 / 16 (even 50% duty), < 1 ppm frequency error, and exact Q32 ticks.
 TEST(SwitchAudioSource, ClockFamiliesDivideToTheirRates)
 {
-    for (const ClockFamily &family : {ClockFamily{0, Fraction(2949121875, 8), 46, 10, 48000.031},
-                                      ClockFamily{1, Fraction(1354753125, 4), 46, 10, 44100.037}}) {
+    for (const ClockFamily &family : {ClockFamily{0, Fraction(2949121875, 8), 30, 6, 48000.031},
+                                      ClockFamily{1, Fraction(1354753125, 4), 30, 6, 44100.037}}) {
         uint32_t f[7];
         neon_h_clock(family.index, f);
         const uint32_t rate = f[0], m = f[1], p = f[3], out0x2 = f[5], perFs = f[6];

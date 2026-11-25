@@ -24,13 +24,13 @@ class SwitchAudio : public IOService {
     IOInterruptEventSource *cascade = nullptr;
     uint64_t periods[2] = {};
     uint16_t xferSeen[2] = {};
-    uint64_t hwFifoOffset = 0;
     bool graced = false;
 
     // Runtime APE idle power-gating (Phase 3): held while any stream or codec session is active.
     SwitchEngineGate<SwitchEngineGateKernel> apeGate;
     bool apeHeld = false;
     bool ahubActive = false;
+    bool playbackSfcActive = false;
     bool captureSfcActive = false;
 
     IOWorkLoop *codecLoop = nullptr;
@@ -56,6 +56,7 @@ class SwitchAudio : public IOService {
     uint32_t statStarts = 0, statStartsShown = 0, statUnderruns = 0;
     bool statsArmed = false, statsShown = false;
     int statPeak = 0;
+    uint32_t statRingPeakL = 0, statRingPeakR = 0;
     int64_t statLagMin = INT64_MAX, statLagMax = INT64_MIN, statLeadMin = INT64_MAX;
     uint64_t periodTicksQ16 = 0;
 #endif

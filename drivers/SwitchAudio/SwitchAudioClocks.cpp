@@ -108,7 +108,7 @@ void SwitchAudio::tegraClocksAndPads()
 void SwitchAudio::tegraAhubAndDma()
 {
     switch_mmio_write32(ahub, ADMAIF_GLOBAL_ENABLE, 1);
-    switch_audio_ahub::xbarRoutePlayback(ahub);
+    switch_audio_ahub::xbarRoutePlayback(ahub, false);
     switch_audio_ahub::xbarRouteCapture(ahub, false);
     switch_mmio_write32(adma, GLOBAL_INT_CLEAR, 1);
     switch_mmio_write32(adma, GLOBAL_SOFT_RESET, 1);

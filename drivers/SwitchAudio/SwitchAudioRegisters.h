@@ -102,8 +102,8 @@ constexpr uint32_t kSupportedRates[SWITCH_AUDIO_MAX_RATES] = {48000u, 44100u, 96
 static_assert(kClocks[0].rate == SWITCH_AUDIO_RATE, "a service starts at SWITCH_AUDIO_RATE");
 constexpr uint32_t kPllaPHw = 1, kApeSource = (4u << 29) | 30;
 static_assert(kClocks[0].p == 2 && kClocks[1].p == 2, "p 2 is hardware 1");
-static_assert(switch_audio_i2s_divider(kClocks[0].out0_per_fs) == 46, "I2S0 = PLLA_OUT0 / 24 (50% duty)");
-static_assert(switch_audio_extern1_divider(kClocks[0].out0_per_fs) == 10, "EXTERN1 = PLLA_OUT0 / 6 (50% duty)");
+static_assert(switch_audio_i2s_divider(kClocks[0].out0_per_fs) == 30, "I2S0 = PLLA_OUT0 / 16 (50% duty)");
+static_assert(switch_audio_extern1_divider(kClocks[0].out0_per_fs) == 6, "EXTERN1 = PLLA_OUT0 / 4 (50% duty)");
 
 constexpr uint32_t pllaMnp(const switch_audio_clock &c)
 {

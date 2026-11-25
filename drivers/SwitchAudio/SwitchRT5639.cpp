@@ -67,11 +67,10 @@ enum : unsigned {
     CP_OSW_L = 1u << 11,
     CP_OSW_R = 1u << 10,
     CP_PM_HP_HV = 2u << 8,
-    // SPK_VOL / HP_VOL: left mute 15, left channel off 14, left volume 13:8 (0 = +12 dB, 1.5 dB steps), right 7/6/5:0
+    // SPK_VOL / HP_VOL: left mute 15, left volume 13:8 (0 = +12 dB, 1.5 dB steps), right 7 / 5:0
     V_MUTE = (1u << 15) | (1u << 7),
-    V_OFF = (1u << 14) | (1u << 6),
     // SV_ZCD1, SV_ZCD2: analog soft volume + zero-cross detection for pop-free 1.5 dB headphone PGA steps.
-    // Leave SV_SPO off so speaker hard-mute is immediate before Class-D / I2S power transitions.
+    // Enabled only on the headphone route so speaker PGA updates stay immediate and bypass ZCD gating.
     SV_EN = 1u << 15,
     SV_HP = 1u << 12,
     ZCD_DIG = 1u << 11,
@@ -80,15 +79,15 @@ enum : unsigned {
     ZCD_HP = 1u << 15,
 };
 
-constexpr uint16_t kSvZcd1 = static_cast<uint16_t>(SV_EN | SV_HP | ZCD_DIG | ZCD_EN | SV_DELAY);
-static_assert(kSvZcd1 == 0x9c09u, "SV_ZCD1: SV + HP soft volume + ZCD, delay 0x09 (SV_SPO off)");
-constexpr uint16_t kSpkMuteOff = static_cast<uint16_t>(V_MUTE | V_OFF);
+constexpr uint16_t kSvZcd1Default = 0x0809u;
+constexpr uint16_t kSvZcd1Hp = static_cast<uint16_t>(SV_EN | SV_HP | ZCD_DIG | ZCD_EN | SV_DELAY);
+static_assert(kSvZcd1Hp == 0x9c09u, "SV_ZCD1: SV + HP soft volume + ZCD, delay 0x09 (SV_SPO off)");
 
-// Switchroot L4T UCM2 gain staging: speaker +6.0 dB (ALSA 35 -> reg 4), headphone unity 0.0 dB (ALSA 31 -> reg 8).
+// Speaker -1.5 dB (nvaudio_conf.xml reg 9), headphone unity 0.0 dB (ALSA 31 -> reg 8).
 // DAC ceilings follow rt5640.c: CUSTOM_DAC_SPK_MAX_VAL_FRIG 150 (-9.375 dB) and CUSTOM_DAC_HP_MAX_VAL 170 (-1.875 dB).
 constexpr uint8_t kHpAnalogMin = 8;
 constexpr uint8_t kHpAnalogMax = 39;
-constexpr uint16_t kSpkVol = (4u << 8u) | 4u;
+constexpr uint16_t kSpkVol = (9u << 8u) | 9u;
 constexpr uint16_t kHpVol = static_cast<uint16_t>((static_cast<unsigned>(kHpAnalogMin) << 8u) | kHpAnalogMin);
 constexpr uint16_t kDacSpeaker = 0x9696;
 constexpr uint16_t kDacHeadphone = 0xaaaa;
@@ -221,13 +220,11 @@ void SwitchRT5639::probe(bool ldoOn, bool capture)
     update(MICBIAS, (3u << 9) | (1u << 11), 1u << 11);
     update(IRQ_CTRL2, 1u << 11, 0);  // external microphone: no sticky over-current
     write(IRQ_CTRL1, 1u << 15);      // IRQ_JD_NOR
-    // Slave, normal BCLK, 24-bit, I2S; sysclk = MCLK; BCLK 64 fs, pre-divider 1, 128x DAC/ADC OSR.
+    // Slave, normal BCLK, 24-bit, I2S; sysclk = MCLK; BCLK 64 fs, pre-divider 1, 64x DAC / 128x ADC OSR.
     update(I2S1_SDP, SWITCH_AUDIO_RT5640_SDP_MASK, SWITCH_AUDIO_RT5640_SDP);
     update(GLB_CLK, 3u << 14, 0);
     update(ADDA_CLK1, SWITCH_AUDIO_RT5640_ADDA_MASK, SWITCH_AUDIO_RT5640_ADDA);
     writeList(kEqOff);
-    write(SV_ZCD1, kSvZcd1);
-    update(SV_ZCD2, ZCD_HP, ZCD_HP);
     // Mixer switches (a cleared bit routes): stereo DAC mixers <- DAC1, speaker mixers <- DAC1, output mixers <- DAC1,
     // HPO mixer <- HPVOL. Keep SPO mixers muted (bit 12 set) until routeUp(kRouteSpeaker) powers Class-D cleanly.
     update(STO_DAC_MIXER, (1u << 14) | (1u << 6), 0);
@@ -238,7 +235,7 @@ void SwitchRT5639::probe(bool ldoOn, bool capture)
     update(OUT_L3_MIXER, 1u, 0);
     update(OUT_R3_MIXER, 1u, 0);
     update(HPO_MIXER, 1u << 13, 0);
-    write(SPK_VOL, kSpkMuteOff | kSpkVol);
+    write(SPK_VOL, V_MUTE | kSpkVol);
     write(HP_VOL, V_MUTE | kHpVol);
     if (capture) {
         // IN1P -> BST1 -> REC_L2 -> ADC_L -> STO_ADC_L -> IF1 (left copied to right via IF1_ADC_SEL_L2R).
@@ -325,7 +322,7 @@ void SwitchRT5639::routeUp(Route to)
 {
     if (to == kRouteSpeaker) {
         outputMuted = true;
-        write(SPK_VOL, kSpkMuteOff | kSpkVol);
+        write(SPK_VOL, V_MUTE | kSpkVol);
         update(SPO_L_MIXER, 1u << 12, 1u << 12);
         update(SPO_R_MIXER, 1u << 12, 1u << 12);
         // Bias speaker mixers and PGAs while disconnected, then bring Class-D up muted to avoid pop transients.
@@ -339,6 +336,8 @@ void SwitchRT5639::routeUp(Route to)
         update(SPO_R_MIXER, 1u << 12, 0);
     } else if (to == kRouteHeadphones) {
         outputMuted = true;
+        write(SV_ZCD1, kSvZcd1Hp);
+        update(SV_ZCD2, ZCD_HP, ZCD_HP);
         write(HP_VOL, hpVolWord(hpAnalogReg, true));
         update(PWR_ANLG1, P_HP_L | P_HP_R, P_HP_L | P_HP_R);
         // "Improve HP Amp Drv": hp_amp_power_on.
@@ -384,6 +383,8 @@ void SwitchRT5639::routeDown()
         write(DEPOP_M2, 0x1100);
         writeList(kEqOff);
         write(ADJ_HPF, 0x0000);
+        write(SV_ZCD1, kSvZcd1Default);
+        update(SV_ZCD2, ZCD_HP, 0);
     }
     currentRoute = kRouteNone;
 }
@@ -395,7 +396,7 @@ void SwitchRT5639::mute(bool muted)
     const bool wasHpMuted = outputMuted || headphoneMuted;
     outputMuted = muted;
     if (currentRoute == kRouteSpeaker) {
-        write(SPK_VOL, static_cast<uint16_t>((muted ? kSpkMuteOff : 0u) | kSpkVol));
+        write(SPK_VOL, static_cast<uint16_t>((muted ? V_MUTE : 0u) | kSpkVol));
     } else if (currentRoute == kRouteHeadphones) {
         const bool nowHpMuted = outputMuted || headphoneMuted;
         if (nowHpMuted != wasHpMuted)

@@ -30,6 +30,9 @@ struct ApeSnapshot {
     int32_t mvcVol = 0;
     uint32_t mvcMuted = 0;
     uint32_t mvcPeak = 0;
+    uint32_t mvcPeakL = 0;
+    uint32_t mvcPeakR = 0;
+    uint32_t mvcErr = 0;
     uint32_t opeEn = 0;
     uint32_t peqEn = 0;
     uint32_t mbdrcEn = 0;
@@ -54,7 +57,7 @@ const char *routeName(uint32_t route)
 
 int audioSysctl(struct sysctl_oid *, void *, int, struct sysctl_req *req)
 {
-    char line[512] = "down";
+    char line[576] = "down";
     if (SwitchAudio *audio = __atomic_load_n(&gSysctlAudio, __ATOMIC_ACQUIRE))
         audio->formatSysctl(line, sizeof(line));
     return SYSCTL_OUT(req, line, strlen(line) + 1);
@@ -89,7 +92,9 @@ void SwitchAudio::formatSysctl(char *buf, size_t len)
             s->mvcEn = switch_mmio_read32(self->ahub, kMvc1Base + kMvcEnable) & 1u;
             s->mvcVol = static_cast<int32_t>(switch_mmio_read32(self->ahub, kMvc1Base + kMvcTargetVol));
             s->mvcMuted = (switch_mmio_read32(self->ahub, kMvc1Base + kMvcCtrl) & kMvcCtrlMuteMask) ? 1u : 0u;
-            s->mvcPeak = mvcReadPeak(self->ahub);
+            mvcReadPeakChannels(self->ahub, &s->mvcPeakL, &s->mvcPeakR);
+            s->mvcPeak = s->mvcPeakL > s->mvcPeakR ? s->mvcPeakL : s->mvcPeakR;
+            s->mvcErr = mvcReadConfigErr(self->ahub);
             s->opeEn = switch_mmio_read32(self->ahub, kOpe1Base + kOpeEnable) & 1u;
             s->peqEn = (switch_mmio_read32(self->ahub, kPeq1Base + kPeqCfg) & kPeqCfgModeActive) ? 1u : 0u;
             s->mbdrcEn = (switch_mmio_read32(self->ahub, kMbdrc1Base + kMbdrcCfg) & 0xfu) ? 1u : 0u;
@@ -122,15 +127,16 @@ void SwitchAudio::formatSysctl(char *buf, size_t len)
     snprintf(buf, len,
              "backend=%s state=%u powered=%u gates=%llu ungates=%llu resume_us=%llu "
              "rate=%u link_rate=%u plla_millihz=%llu sfc1_en=%u sfc1_coef=%u "
-             "mixer_en=%u mixer_samples=%u mvc_en=%u mvc_vol=%d mvc_muted=%u mvc_peak=%u "
-             "ope_en=%u peq_en=%u mbdrc_en=%u route=%s jack=%u hw_seed=%u hw_sample=%llu "
+             "mixer_en=%u mixer_samples=%u mvc_en=%u mvc_vol=%d mvc_muted=%u mvc_peak=%u mvc_peak_l=%u mvc_peak_r=%u "
+             "mvc_err=0x%x ope_en=%u peq_en=%u mbdrc_en=%u route=%s jack=%u hw_seed=%u hw_sample=%llu "
              "underruns=%u codec_ok=%u hp_vol=0x%04x spk_vol=0x%04x adda_clk1=0x%04x sv_zcd1=0x%04x",
              tegra ? "tegra" : "null", ape.state, powered, static_cast<unsigned long long>(gs.gates),
              static_cast<unsigned long long>(gs.ungates), static_cast<unsigned long long>(gs.lastResumeUs), ape.rate,
              ape.linkRate, static_cast<unsigned long long>(ape.pllaMilliHz), ape.sfc1En, ape.sfc1Coef, ape.mixerEn,
-             ape.mixerSamples, ape.mvcEn, ape.mvcVol, ape.mvcMuted, ape.mvcPeak, ape.opeEn, ape.peqEn, ape.mbdrcEn,
-             routeName(ape.activeRoute), ape.jack, ape.hwSeed, static_cast<unsigned long long>(ape.hwSample),
-             ape.underruns, cs.ok, cs.hpVol, cs.spkVol, cs.addaClk1, cs.svZcd1);
+             ape.mixerSamples, ape.mvcEn, ape.mvcVol, ape.mvcMuted, ape.mvcPeak, ape.mvcPeakL, ape.mvcPeakR, ape.mvcErr,
+             ape.opeEn, ape.peqEn, ape.mbdrcEn, routeName(ape.activeRoute), ape.jack, ape.hwSeed,
+             static_cast<unsigned long long>(ape.hwSample), ape.underruns, cs.ok, cs.hpVol, cs.spkVol, cs.addaClk1,
+             cs.svZcd1);
 }
 
 void SwitchAudio::registerSysctl()

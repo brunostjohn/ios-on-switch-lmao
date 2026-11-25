@@ -78,42 +78,41 @@ SWITCH_AUDIO_FN uint32_t switch_audio_i2s_timing(void)
 }
 
 /* CAR CLK_SOURCE_I2S0 7.1 divider (value = 2 * ratio - 2) for BCLK = 64 fs from PLLA_OUT0.
- * At PLLA_OUT0 = 1536 fs (73.728 / 67.7376 MHz): ratio = 24 (even, 50% duty) -> reg = 46. */
+ * At PLLA_OUT0 = 1024 fs (49.152 / 45.1584 MHz): ratio = 16 (even, 50% duty) -> reg = 30. */
 SWITCH_AUDIO_FN uint32_t switch_audio_i2s_divider(uint32_t pllaout0_per_fs)
 {
     return 2 * (pllaout0_per_fs / SWITCH_AUDIO_BCLK_FS) - 2;
 }
 
 /* CAR CLK_SOURCE_EXTERN1 7.1 divider for MCLK = 256 fs from PLLA_OUT0.
- * At PLLA_OUT0 = 1536 fs: ratio = 6 (even, 50% duty) -> reg = 10. */
+ * At PLLA_OUT0 = 1024 fs: ratio = 4 (even, 50% duty) -> reg = 6. */
 SWITCH_AUDIO_FN uint32_t switch_audio_extern1_divider(uint32_t pllaout0_per_fs)
 {
     return 2 * (pllaout0_per_fs / 256) - 2;
 }
 
-/* Clean integer/even T210B01 PLLA clock families from the 38.4 MHz oscillator (Tegra X1 TRM Fig. 7 p. 61 & Ch. 5.1.8):
- *   48 kHz:  PLLA = 368.640234 MHz (+0.64 ppm, VCO 737.28 MHz), PLLA_OUT0 /5 = 73.728 MHz (1536 fs),
- *            MCLK /6 = 12.288 MHz (50% duty), BCLK /24 = 3.072 MHz (50% duty).
- *   44.1 kHz: PLLA = 338.688281 MHz (+0.83 ppm, VCO 677.38 MHz), PLLA_OUT0 /5 = 67.7376 MHz (1536 fs),
- *            MCLK /6 = 11.2896 MHz (50% duty), BCLK /24 = 2.8224 MHz (50% duty). */
+/* T210B01 PLLA clock families from the 38.4 MHz oscillator, matching Tegra210's 49.152 MHz d_audio ceiling:
+ *   48 kHz:   PLLA = 368.640234 MHz (+0.64 ppm), PLLA_OUT0 /7.5 = 49.152 MHz (1024 fs),
+ *             MCLK /4 = 12.288 MHz (50% duty), BCLK /16 = 3.072 MHz (50% duty).
+ *   44.1 kHz: PLLA = 338.688281 MHz (+0.83 ppm), PLLA_OUT0 /7.5 = 45.1584 MHz (1024 fs),
+ *             MCLK /4 = 11.2896 MHz (50% duty), BCLK /16 = 2.8224 MHz (50% duty). */
 typedef struct {
     uint32_t rate, m, n, p, sdm, out0_x2, out0_per_fs;
 } switch_audio_clock;
 
-#define SWITCH_AUDIO_CLOCK_48000 {48000u, 2u, 38u, 2u, 0xfccdu, 10u, 1536u}
-#define SWITCH_AUDIO_CLOCK_44100 {44100u, 2u, 35u, 2u, 0xf8f6u, 10u, 1536u}
+#define SWITCH_AUDIO_CLOCK_48000 {48000u, 2u, 38u, 2u, 0xfccdu, 15u, 1024u}
+#define SWITCH_AUDIO_CLOCK_44100 {44100u, 2u, 35u, 2u, 0xf8f6u, 15u, 1024u}
 
 SWITCH_AUDIO_FN uint64_t switch_audio_clock_n_eff(switch_audio_clock c)
 {
     return (uint64_t)(8192 * (int64_t)c.n + 4096 + (int16_t)(uint16_t)c.sdm);
 }
 
-/* RT5639 (rt5640.h): I2S1_SDP master/slave 15 (1 = slave), BCLK polarity 7 (0 = normal), data length 3:2 (2 = 24
- * bits), format 1:0 (0 = I2S); ADDA_CLK1 BCLK/LRCK 15 (1 = 64), I2S1 pre-divider 14:12 (0 = /1), DAC_OSR 3:2
- * (0 = 128x, overriding silicon reset 64x), ADC_OSR 1:0 (0 = 128x). */
+/* RT5639 (rt5640.h): I2S1_SDP slave (15), normal BCLK (7=0), 24-bit (3:2=2), I2S (1:0=0); ADDA_CLK1 BCLK/LRCK 64
+ * (15=1) and I2S1 pre-divider /1 (14:12=0), preserving silicon/L4T 64x DAC OSR and 128x ADC OSR at MCLK = 256 fs. */
 #define SWITCH_AUDIO_RT5640_SDP_MASK  ((1u << 15) | (1u << 7) | (3u << 2) | 3u)
 #define SWITCH_AUDIO_RT5640_SDP       ((1u << 15) | (2u << 2))
-#define SWITCH_AUDIO_RT5640_ADDA_MASK ((1u << 15) | (7u << 12) | 0xfu)
+#define SWITCH_AUDIO_RT5640_ADDA_MASK ((1u << 15) | (7u << 12))
 #define SWITCH_AUDIO_RT5640_ADDA      (1u << 15)
 
 SWITCH_AUDIO_FN uint64_t switch_audio_gcd64(uint64_t a, uint64_t b)

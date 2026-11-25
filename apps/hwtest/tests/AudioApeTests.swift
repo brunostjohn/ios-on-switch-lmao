@@ -22,6 +22,9 @@ struct AudioKernelSnapshot {
     var mvcVol: Int { Int(fields["mvc_vol"] ?? "") ?? 0 }
     var mvcMuted: Int { Int(fields["mvc_muted"] ?? "") ?? 0 }
     var mvcPeak: UInt32 { UInt32(fields["mvc_peak"] ?? "") ?? 0 }
+    var mvcPeakL: UInt32 { UInt32(fields["mvc_peak_l"] ?? "") ?? 0 }
+    var mvcPeakR: UInt32 { UInt32(fields["mvc_peak_r"] ?? "") ?? 0 }
+    var mvcErr: UInt32 { Self.hex32(fields["mvc_err"]) }
     var opeEn: Int { Int(fields["ope_en"] ?? "") ?? 0 }
     var peqEn: Int { Int(fields["peq_en"] ?? "") ?? 0 }
     var mbdrcEn: Int { Int(fields["mbdrc_en"] ?? "") ?? 0 }
@@ -40,6 +43,12 @@ struct AudioKernelSnapshot {
         guard let text else { return 0 }
         let stripped = text.hasPrefix("0x") ? String(text.dropFirst(2)) : text
         return UInt16(stripped, radix: 16) ?? 0
+    }
+
+    private static func hex32(_ text: String?) -> UInt32 {
+        guard let text else { return 0 }
+        let stripped = text.hasPrefix("0x") ? String(text.dropFirst(2)) : text
+        return UInt32(stripped, radix: 16) ?? 0
     }
 }
 
@@ -128,17 +137,22 @@ struct AudioApePipelineTest: HWTest {
         let hpL = s2.hpVol & 0x3f
         let hpR = (s2.hpVol >> 8) & 0x3f
         let opeMatchesRoute =
-            (s2.route == "speaker" && s2.peqEn == 1 && s2.mbdrcEn == 1)
+            (s2.route == "speaker" && s2.peqEn == 1 && s2.mbdrcEn == 0)
             || (s2.route == "headphones" && s2.peqEn == 0 && s2.mbdrcEn == 0)
+        let expectedSvZcd1: UInt16 = s2.route == "headphones" ? 0x9c09 : 0x0809
 
         var metrics = Metrics()
         metrics.set("backend", s2.backend)
         metrics.set("route", s2.route)
         metrics.set("plla_millihz", Int(s2.pllaMilliHz))
+        metrics.set("sfc1_en", s2.sfc1En)
         metrics.set("mixer_en", s2.mixerEn)
         metrics.set("mixer_delta", Int(s2.mixerSamples &- s1.mixerSamples))
         metrics.set("mvc_en", s2.mvcEn)
         metrics.set("mvc_peak", Int(s2.mvcPeak))
+        metrics.set("mvc_peak_l", Int(s2.mvcPeakL))
+        metrics.set("mvc_peak_r", Int(s2.mvcPeakR))
+        metrics.set("mvc_err", String(format: "0x%x", s2.mvcErr))
         metrics.set("ope_en", s2.opeEn)
         metrics.set("peq_en", s2.peqEn)
         metrics.set("mbdrc_en", s2.mbdrcEn)
@@ -151,22 +165,23 @@ struct AudioApePipelineTest: HWTest {
 
         var checks: [(String, Bool)] = [
             ("Tegra APE backend active and powered", s2.backend == "tegra" && s2.powered == 1),
-            ("PLLA runs clean integer/even 48000.030 Hz", s2.linkRate == 48_000 && s2.pllaMilliHz == 48_000_030),
+            ("PLLA runs clean 48000.030 Hz", s2.linkRate == 48_000 && s2.pllaMilliHz == 48_000_030),
+            ("SFC1 bypassed on native 48 kHz link", s2.sfc1En == 0),
             ("MIXER1 enabled and sample counter advancing", s2.mixerEn == 1 && s2.mixerSamples != s1.mixerSamples),
-            ("MVC1 enabled and unmuted", s2.mvcEn == 1 && s2.mvcMuted == 0),
-            ("OPE1 enabled with route-matched PEQ/MBDRC", s2.opeEn == 1 && opeMatchesRoute),
+            ("MVC1 enabled, unmuted, and error-free", s2.mvcEn == 1 && s2.mvcMuted == 0 && s2.mvcErr == 0),
+            ("OPE1 enabled with route-matched PEQ", s2.opeEn == 1 && opeMatchesRoute),
             (
-                "RT5639 128x DAC/ADC OSR and HP SV_ZCD enabled",
-                s2.codecOk == 1 && (s2.addaClk1 & 0xf) == 0 && s2.svZcd1 == 0x9c09
+                "RT5639 64x DAC / 128x ADC OSR and route-matched SV_ZCD1",
+                s2.codecOk == 1 && (s2.addaClk1 & 0xf) == 0x4 && s2.svZcd1 == expectedSvZcd1
             ),
             ("RT5639 HP analog PGA at or below unity (0 dB)", hpL >= 8 && hpR >= 8),
             ("zero playback underruns across the window", s2.underruns == s1.underruns),
             ("render rate within 2% of 48 kHz", abs(measured - 48_000) <= 960),
         ]
         if outputVolume > 0.01 {
-            checks.append(("MVC1 hardware peak meter saw audio", s2.mvcPeak > 0))
+            checks.append(("MVC1 hardware peak meter saw stereo L+R audio", s2.mvcPeakL > 0 && s2.mvcPeakR > 0))
         }
-        return .judged(checks, metrics, proof: "route=\(s2.route) peak=\(s2.mvcPeak)")
+        return .judged(checks, metrics, proof: "route=\(s2.route) peak=\(s2.mvcPeakL)/\(s2.mvcPeakR)")
     }
 }
 
@@ -262,8 +277,8 @@ struct AudioRouteOverrideTest: HWTest {
             metrics.set("restore_kernel_route", r.route)
             metrics.set("restore_peq", r.peqEn)
             checks.append((
-                "kernel routed speaker with OPE1 PEQ+MBDRC active",
-                s.route == "speaker" && s.peqEn == 1 && s.mbdrcEn == 1
+                "kernel routed speaker with OPE1 PEQ active (MBDRC bypassed)",
+                s.route == "speaker" && s.peqEn == 1 && s.mbdrcEn == 0
             ))
             if (r.jack & 1) != 0 {
                 checks.append((
@@ -276,10 +291,10 @@ struct AudioRouteOverrideTest: HWTest {
     }
 }
 
-/// Drives a full-scale 0 dBFS burst through MVC1/OPE1 to confirm MBDRC speaker protection and zero underruns.
+/// Drives a full-scale 0 dBFS stereo burst through MVC1/OPE1 to confirm stereo headroom and zero underruns.
 struct AudioLimiterHeadroomTest: HWTest {
     let id = "audio.limiter_headroom"
-    let name = "Full-scale 0 dBFS playback through MVC1 and OPE1 MBDRC"
+    let name = "Full-scale 0 dBFS stereo playback through MVC1 and OPE1 PEQ"
     let subsystem = Subsystem.audio
 
     func run(_ context: TestContext) async throws -> Outcome {
@@ -303,6 +318,8 @@ struct AudioLimiterHeadroomTest: HWTest {
         if let s = during, s.backend == "tegra" {
             metrics.set("route", s.route)
             metrics.set("mvc_peak", Int(s.mvcPeak))
+            metrics.set("mvc_peak_l", Int(s.mvcPeakL))
+            metrics.set("mvc_peak_r", Int(s.mvcPeakR))
             metrics.set("mbdrc_en", s.mbdrcEn)
             metrics.set("peq_en", s.peqEn)
             if let b = before {
@@ -310,10 +327,10 @@ struct AudioLimiterHeadroomTest: HWTest {
                 checks.append(("zero underruns during 0 dBFS burst", s.underruns == b.underruns))
             }
             if session.outputVolume > 0.01 {
-                checks.append(("MVC1 peak meter registered signal", s.mvcPeak > 0))
+                checks.append(("MVC1 peak meter registered stereo L+R signal", s.mvcPeakL > 0 && s.mvcPeakR > 0))
             }
             if s.route == "speaker" {
-                checks.append(("OPE1 speaker PEQ and 3-band MBDRC active", s.peqEn == 1 && s.mbdrcEn == 1))
+                checks.append(("OPE1 speaker PEQ active with MBDRC bypassed", s.peqEn == 1 && s.mbdrcEn == 0))
             }
         }
         return .judged(checks, metrics, proof: "route=\(Audio.outputs())")

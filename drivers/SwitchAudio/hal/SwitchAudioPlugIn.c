@@ -1038,7 +1038,7 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
                 return kAudioHardwareBadPropertySizeError;
             const UInt32 channels = channelsOf(scopeIn || !output ? input : output);
             ((UInt32 *)outData)[0] = 1;
-            ((UInt32 *)outData)[1] = SWITCH_AUDIO_J181 && channels == 4 ? 3 : channels;
+            ((UInt32 *)outData)[1] = channels >= 2 ? 2 : 1;
             *outDataSize = 2 * sizeof(UInt32);
             return 0;
         }
@@ -1052,13 +1052,18 @@ static OSStatus GetPropertyData(AudioServerPlugInDriverRef d, AudioObjectID o, p
             memset(l, 0, bytes);
             l->mChannelLayoutTag = kAudioChannelLayoutTag_UseChannelDescriptions;
             l->mNumberChannelDescriptions = channels;
-            l->mChannelDescriptions[0].mChannelLabel =
-                channels == 1 ? kAudioChannelLabel_Mono : kAudioChannelLabel_Left;
-            if (channels == 2)
-                l->mChannelDescriptions[1].mChannelLabel = kAudioChannelLabel_Right;
-            // J181's speaker plays channels 0 and 2; 1 and 3 repeat them (top of file).
-            if (SWITCH_AUDIO_J181 && channels == 4)
-                l->mChannelDescriptions[2].mChannelLabel = kAudioChannelLabel_Right;
+            if (SWITCH_AUDIO_J181 && channels == 4) {
+                // VirtualAudio forwards this layout verbatim onto its 2-ch vdef stream. Matching ASDStream's
+                // kAudioChannelLabel_Unknown causes AQMEIO_HAL to fall back to PreferredChannelsForStereo {1, 2};
+                // labeling ch 0/2 Left/Right leaves vdef's 2-ch prefix {Left, Unused} and zeroes the right channel.
+                for (UInt32 i = 0; i < channels; ++i)
+                    l->mChannelDescriptions[i].mChannelLabel = kAudioChannelLabel_Unknown;
+            } else {
+                l->mChannelDescriptions[0].mChannelLabel =
+                    channels == 1 ? kAudioChannelLabel_Mono : kAudioChannelLabel_Left;
+                if (channels == 2)
+                    l->mChannelDescriptions[1].mChannelLabel = kAudioChannelLabel_Right;
+            }
             *outDataSize = bytes;
             return 0;
         }

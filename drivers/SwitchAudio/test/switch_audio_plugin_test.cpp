@@ -142,24 +142,26 @@ TEST_F(PlugIn, BuiltInInputIsAMicrophoneStream)
     EXPECT_EQ(format.mBytesPerFrame, format.mChannelsPerFrame * 4);
 }
 
-// J181's speaker stream has its four channels, so VirtualAudio passes the speaker graph's left, left, right, right
-// through instead of keeping channels 0 and 1; a stereo client of the device lands on channels 1 and 3 (1-based).
+// J181's speaker stream has its four channels so VirtualAudio passes the speaker graph's left, left, right, right
+// through instead of keeping channels 0 and 1. Its layout uses Unknown labels and {1, 2} stereo pair (matching
+// ASDAudioDevice/ASDStream) so VirtualAudio forwarding 'srnd' onto its 2-ch vdef stream does not drop right.
 TEST_F(PlugIn, SpeakerHasTheIPadsChannels)
 {
     const auto format = Value<AudioStreamBasicDescription>(kSpeakerOut, kAudioStreamPropertyVirtualFormat);
     EXPECT_EQ(format.mChannelsPerFrame, kJ181 ? 4u : 2u);
     const auto stereo = List(kSpeaker, kAudioDevicePropertyPreferredChannelsForStereo, kAudioObjectPropertyScopeOutput);
-    EXPECT_THAT(stereo, kJ181 ? ElementsAre(1u, 3u) : ElementsAre(1u, 2u));
+    EXPECT_THAT(stereo, ElementsAre(1u, 2u));
 
     std::vector<uint8_t> out;
     ASSERT_EQ(Get(kSpeaker, kAudioDevicePropertyPreferredChannelLayout, out, kAudioObjectPropertyScopeOutput), 0);
     const auto *layout = reinterpret_cast<const AudioChannelLayout *>(out.data());
+    EXPECT_EQ(layout->mChannelLayoutTag, kAudioChannelLayoutTag_UseChannelDescriptions);
     std::vector<AudioChannelLabel> labels;
     for (UInt32 i = 0; i < layout->mNumberChannelDescriptions; ++i)
         labels.push_back(layout->mChannelDescriptions[i].mChannelLabel);
     if (kJ181) {
-        EXPECT_THAT(labels, ElementsAre(kAudioChannelLabel_Left, kAudioChannelLabel_Unused, kAudioChannelLabel_Right,
-                                        kAudioChannelLabel_Unused));
+        EXPECT_THAT(labels, ElementsAre(kAudioChannelLabel_Unknown, kAudioChannelLabel_Unknown,
+                                        kAudioChannelLabel_Unknown, kAudioChannelLabel_Unknown));
     } else {
         EXPECT_THAT(labels, ElementsAre(kAudioChannelLabel_Left, kAudioChannelLabel_Right));
     }

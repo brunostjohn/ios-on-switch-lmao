@@ -244,6 +244,8 @@ void SwitchAudio::statsFired(OSObject *owner, IOTimerEventSource *sender)
     self->statStartsShown += starts;
     const int peak = self->statPeak;
     self->statPeak = 0;
+    const uint32_t ringPeakL = __atomic_exchange_n(&self->statRingPeakL, 0u, __ATOMIC_RELAXED);
+    const uint32_t ringPeakR = __atomic_exchange_n(&self->statRingPeakR, 0u, __ATOMIC_RELAXED);
     const uint64_t ioCycles = self->control->io_cycles;
     const uint64_t ioFrames = self->control->io_frames;
     const uint64_t cycles = ioCycles - self->statIoCyclesShown;
@@ -261,25 +263,44 @@ void SwitchAudio::statsFired(OSObject *owner, IOTimerEventSource *sender)
     self->statLeadMin = INT64_MAX;
     self->statLagMin = INT64_MAX;
     self->statLagMax = INT64_MIN;
-    char apeBuf[128] = "ape off";
+    char apeBuf[224] = "ape off";
     if (__atomic_load_n(&self->apeHeld, __ATOMIC_RELAXED) && self->apeGate.powered()) {
-        const uint32_t mvcPeak = self->ahubActive ? switch_audio_ahub::mvcReadPeak(self->ahub) : 0u;
-        snprintf(apeBuf, sizeof(apeBuf), "ADMA %#x xfer %u, I2S en %u rx %#x, ADMAIF tx %#x, MVC peak %#x",
-                 switch_mmio_read32(self->adma, CH_STATUS), switch_mmio_read32(self->adma, CH_XFER_STATUS) & 0xffffu,
-                 switch_mmio_read32(self->ahub, I2S_ENABLE), switch_mmio_read32(self->ahub, I2S_RX_STATUS),
-                 switch_mmio_read32(self->ahub, ADMAIF_TX_STATUS), mvcPeak);
+        uint32_t mvcPeakL = 0u;
+        uint32_t mvcPeakR = 0u;
+        uint32_t mvcErr = 0u;
+        uint32_t opeEn = 0u;
+        uint32_t peqEn = 0u;
+        uint32_t mbdrcEn = 0u;
+        if (self->ahubActive) {
+            using namespace switch_audio_ahub;
+            mvcReadPeakChannels(self->ahub, &mvcPeakL, &mvcPeakR);
+            mvcErr = mvcReadConfigErr(self->ahub);
+            opeEn = switch_mmio_read32(self->ahub, kOpe1Base + kOpeEnable) & 1u;
+            peqEn = (switch_mmio_read32(self->ahub, kPeq1Base + kPeqCfg) & kPeqCfgModeActive) ? 1u : 0u;
+            mbdrcEn = (switch_mmio_read32(self->ahub, kMbdrc1Base + kMbdrcCfg) & 0xfu) ? 1u : 0u;
+        }
+        snprintf(apeBuf, sizeof(apeBuf),
+                 "ring %#x/%#x, ADMA %#x xfer %u, I2S en %u rx %#x, ADMAIF tx %#x, SFC %u, MVC peak %#x/%#x err %#x, "
+                 "OPE %u/%u/%u",
+                 ringPeakL, ringPeakR, switch_mmio_read32(self->adma, CH_STATUS),
+                 switch_mmio_read32(self->adma, CH_XFER_STATUS) & 0xffffu, switch_mmio_read32(self->ahub, I2S_ENABLE),
+                 switch_mmio_read32(self->ahub, I2S_RX_STATUS), switch_mmio_read32(self->ahub, ADMAIF_TX_STATUS),
+                 self->playbackSfcActive ? 1u : 0u, mvcPeakL, mvcPeakR, mvcErr, opeEn, peqEn, mbdrcEn);
     }
     static const char *const routes[] = {"none", "speaker", "headphones"};
-    char line[448];
+    char line[640];
     snprintf(line, sizeof(line),
              "SwitchAudio stats: run %u starts %u moved %llu under %u peak %d io %llu x %llu f lead %s lag %s us | "
-             "%s | jack %s st %#x pv6 %d, %s | codec %04x %04x %04x %04x vol %04x %04x dac %04x",
+             "%s | jack %s st %#x pv6 %d, %s | codec %04x %04x %04x %04x vol %04x %04x dac %04x spo %04x/%04x clsd "
+             "%04x",
              self->control->state, starts, moved, self->statUnderruns, peak, cycles, cycles ? written / cycles : 0,
              lead, lag, apeBuf, self->jackIn ? "in" : "out", SwitchRT5639::read(rt5639::INT_IRQ_ST),
              tegra_gpio_read(kJackDetect), routes[self->codec.route()], SwitchRT5639::read(rt5639::PWR_DIG1),
              SwitchRT5639::read(rt5639::PWR_ANLG1), SwitchRT5639::read(rt5639::PWR_MIXER),
              SwitchRT5639::read(rt5639::PWR_VOL), SwitchRT5639::read(rt5639::SPK_VOL),
-             SwitchRT5639::read(rt5639::HP_VOL), SwitchRT5639::read(rt5639::DAC1_DIG_VOL));
+             SwitchRT5639::read(rt5639::HP_VOL), SwitchRT5639::read(rt5639::DAC1_DIG_VOL),
+             SwitchRT5639::read(rt5639::SPO_L_MIXER), SwitchRT5639::read(rt5639::SPO_R_MIXER),
+             SwitchRT5639::read(rt5639::CLS_D_OUT));
     os_log(OS_LOG_DEFAULT, "%s", line);  // log only, never the boot console
     sender->setTimeoutMS(kStatsMS);
 }

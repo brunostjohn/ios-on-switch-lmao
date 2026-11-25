@@ -107,13 +107,13 @@ constexpr uint32_t kMvcPeakCtrl = 0x100;
 constexpr uint32_t kMvcCfgRamCtrl = 0x104;
 constexpr uint32_t kMvcCfgRamData = 0x108;
 constexpr uint32_t kMvcPeakValue = 0x10c;
+constexpr uint32_t kMvcConfigErr = 0x12c;
 constexpr uint32_t kMvcCtrlPerChanEn = 1u << 30;
 constexpr uint32_t kMvcCtrlMuteShift = 8;
 constexpr uint32_t kMvcCtrlMuteMask = 0xffu << 8;
 constexpr uint32_t kMvcCtrlCurveLinear = 1u << 1;
 constexpr uint32_t kMvcCtrlRoundingUnbias = 1u << 0;
 constexpr uint32_t kMvcSwitchVolume = 1u << 2;
-constexpr uint32_t kMvcSwitchDuration = 1u << 0;
 
 // OPE1 / PEQ1 / MBDRC1 registers (relative to kOpe1Base, kPeq1Base, kMbdrc1Base).
 constexpr uint32_t kOpeRxCif = 0x20;
@@ -168,12 +168,16 @@ inline void xbarConnect(volatile uint8_t *ahub, uint32_t dst, XbarSource src)
         switch_mmio_write32(ahub, kXbarBase + dst + part * kXbarPartStride, part == src.part ? src.mask : 0u);
 }
 
-inline void xbarRoutePlayback(volatile uint8_t *ahub)
+inline void xbarRoutePlayback(volatile uint8_t *ahub, bool useSfc)
 {
-    // ADMAIF1 -> MIXER1 (RX1/TX1) -> SFC1 -> MVC1 -> OPE1 -> I2S1
     xbarConnect(ahub, kXbarDstMixer1Rx1, kSrcAdmaif1);
-    xbarConnect(ahub, kXbarDstSfc1, kSrcMixer1Tx1);
-    xbarConnect(ahub, kXbarDstMvc1, kSrcSfc1);
+    if (useSfc) {
+        xbarConnect(ahub, kXbarDstSfc1, kSrcMixer1Tx1);
+        xbarConnect(ahub, kXbarDstMvc1, kSrcSfc1);
+    } else {
+        xbarConnect(ahub, kXbarDstSfc1, kSrcNone);
+        xbarConnect(ahub, kXbarDstMvc1, kSrcMixer1Tx1);
+    }
     xbarConnect(ahub, kXbarDstOpe1, kSrcMvc1);
     xbarConnect(ahub, kXbarDstI2s1, kSrcOpe1);
 }
@@ -207,9 +211,11 @@ bool mvcConfigure(volatile uint8_t *ahub, uint32_t channels, int32_t initialMdB,
 void mvcEnable(volatile uint8_t *ahub);
 bool mvcStop(volatile uint8_t *ahub);
 bool mvcSetVolume(volatile uint8_t *ahub, int32_t targetMdB, bool muted, bool immediate);
+void mvcReadPeakChannels(volatile uint8_t *ahub, uint32_t *left, uint32_t *right);
 uint32_t mvcReadPeak(volatile uint8_t *ahub);
+uint32_t mvcReadConfigErr(volatile uint8_t *ahub);
 
-// OPE1 (SwitchAudioOpe.cpp): Switch OLED 32-bit Q30/Q29 PEQ + 3-band MBDRC for speakers, bypass for headphones.
+// OPE1 (SwitchAudioOpe.cpp): Switch OLED Q2.30 PEQ (MBDRC bypassed) for speakers, full bypass for headphones.
 bool opeConfigure(volatile uint8_t *ahub, uint32_t linkRate, bool speakerActive, uint32_t channels);
 void opeEnable(volatile uint8_t *ahub);
 bool opeStop(volatile uint8_t *ahub);

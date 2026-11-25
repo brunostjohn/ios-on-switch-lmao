@@ -4,6 +4,12 @@
 
 using namespace switch_audio_hw;
 
+namespace {
+// Combined AHUB playback FIFO prefill across ADMA, ADMAIF1, MIXER1, SFC1, MVC1, OPE1, and I2S1 (~4.5 ms at 44.1 kHz).
+// Shifting the initial anchor backward keeps hw_host_time <= mach_absolute_time() while avoiding a period-0 step.
+constexpr uint32_t kAhubFifoPrefillFrames = 198u;
+}  // namespace
+
 void SwitchAudio::tick(OSObject *owner, IOTimerEventSource *source)
 {
     auto *self = static_cast<SwitchAudio *>(owner);
@@ -129,7 +135,8 @@ void SwitchAudio::tegraStart()
     if (tegraCapture)
         i2sSoftReset(I2S_TX_SOFT_RESET, "I2S1 TX");
 
-    switch_audio_ahub::xbarRoutePlayback(ahub);
+    playbackSfcActive = clientRate != clock->rate;
+    switch_audio_ahub::xbarRoutePlayback(ahub, playbackSfcActive);
     const rt5639::Route route = wantedRoute();
     const bool muted =
         __atomic_load_n(&outputMuted, __ATOMIC_RELAXED) ||
@@ -140,8 +147,8 @@ void SwitchAudio::tegraStart()
         panic("SwitchAudio: OPE1 configure failed");
     if (!switch_audio_ahub::mvcConfigure(ahub, SWITCH_AUDIO_OUT_CHANNELS, desiredMvcMdB(), muted))
         panic("SwitchAudio: MVC1 configure failed");
-    if (!switch_audio_ahub::sfcConfigure(ahub, switch_audio_ahub::kSfc1Base, clientRate, clock->rate,
-                                         SWITCH_AUDIO_OUT_CHANNELS)) {
+    if (playbackSfcActive && !switch_audio_ahub::sfcConfigure(ahub, switch_audio_ahub::kSfc1Base, clientRate,
+                                                              clock->rate, SWITCH_AUDIO_OUT_CHANNELS)) {
         panic("SwitchAudio: SFC1 configure failed (%u -> %u Hz)", clientRate, clock->rate);
     }
     if (!switch_audio_ahub::mixerConfigure(ahub, SWITCH_AUDIO_OUT_CHANNELS))
@@ -155,7 +162,8 @@ void SwitchAudio::tegraStart()
     switch_mmio_write32(ahub, I2S_RX_ENABLE, 1);
     switch_audio_ahub::opeEnable(ahub);
     switch_audio_ahub::mvcEnable(ahub);
-    switch_audio_ahub::sfcEnable(ahub, switch_audio_ahub::kSfc1Base);
+    if (playbackSfcActive)
+        switch_audio_ahub::sfcEnable(ahub, switch_audio_ahub::kSfc1Base);
     switch_audio_ahub::mixerEnable(ahub);
     switch_mmio_write32(ahub, ADMAIF_TX_ENABLE, 1);
 
@@ -165,8 +173,8 @@ void SwitchAudio::tegraStart()
     switch_mmio_write32(adma, CH_CMD, 1);
     switch_mmio_write32(adma, GLOBAL_CG, 7);
     ahubActive = true;
-    hwFifoOffset = 0;
-    publishHwAnchor(0, anchorHost, true);
+    const uint64_t prefillTicks = (static_cast<uint64_t>(kAhubFifoPrefillFrames) * control->ticks_per_frame_q32) >> 32;
+    publishHwAnchor(0, anchorHost > prefillTicks ? anchorHost - prefillTicks : 0, true);
 
     periods[kChOut] = 0;
     xferSeen[kChOut] = static_cast<uint16_t>(switch_mmio_read32(adma, CH_XFER_STATUS));
@@ -262,8 +270,12 @@ void SwitchAudio::tegraStop()
     softReset(ADMAIF_TX_SOFT_RESET, "ADMAIF1 TX");
     if (!switch_audio_ahub::mixerStop(ahub))
         panic("SwitchAudio: MIXER1 did not stop");
-    if (!switch_audio_ahub::sfcStop(ahub, switch_audio_ahub::kSfc1Base))
-        panic("SwitchAudio: SFC1 did not stop");
+    if (playbackSfcActive) {
+        if (!switch_audio_ahub::sfcStop(ahub, switch_audio_ahub::kSfc1Base))
+            panic("SwitchAudio: SFC1 did not stop");
+        switch_audio_ahub::xbarRoutePlayback(ahub, false);
+        playbackSfcActive = false;
+    }
     if (!switch_audio_ahub::mvcStop(ahub))
         panic("SwitchAudio: MVC1 did not stop");
     if (!switch_audio_ahub::opeStop(ahub))
@@ -280,14 +292,7 @@ void SwitchAudio::playedPeriod()
     switch_audio_sample_t *slot =
         ring(SwitchAudioMemoryOutput) + (n % kOutPeriods) * kOutPeriodFrames * SWITCH_AUDIO_OUT_CHANNELS;
     const uint64_t done = (n + 1) * kOutPeriodFrames;
-    if (n == 0) {
-        const uint64_t expected = (static_cast<uint64_t>(kOutPeriodFrames) * control->ticks_per_frame_q32) >> 32;
-        const uint64_t idealHost = control->anchor_host + expected;
-        const uint64_t early = idealHost > irqHost ? idealHost - irqHost : 0;
-        const uint64_t cap = hz / 100;  // <= 10 ms AHUB FIFO prefill lead
-        hwFifoOffset = early < cap ? early : cap;
-    }
-    publishHwAnchor(done, irqHost + hwFifoOffset, false);
+    publishHwAnchor(done, irqHost, false);
     const uint64_t now = nowFrame();
 #if DEVELOPMENT || DEBUG
     if (statsTimer)
@@ -304,7 +309,7 @@ void SwitchAudio::playedPeriod()
 }
 
 #if DEVELOPMENT || DEBUG
-void SwitchAudio::notePlayed(const switch_audio_sample_t *, uint64_t done)
+void SwitchAudio::notePlayed(const switch_audio_sample_t *slot, uint64_t done)
 {
     statFrames += kOutPeriodFrames;
     const bool settled = done > kSettlePeriods * kOutPeriodFrames;
@@ -319,6 +324,22 @@ void SwitchAudio::notePlayed(const switch_audio_sample_t *, uint64_t done)
     }
     if (!(control->state & SwitchAudioOutputRunning))
         return;
+    uint32_t peakL = 0u;
+    uint32_t peakR = 0u;
+    for (uint32_t i = 0; i < kOutPeriodFrames; ++i) {
+        const int64_t l = slot[2u * i];
+        const int64_t r = slot[2u * i + 1u];
+        const uint32_t absL = static_cast<uint32_t>(l < 0 ? -l : l);
+        const uint32_t absR = static_cast<uint32_t>(r < 0 ? -r : r);
+        if (absL > peakL)
+            peakL = absL;
+        if (absR > peakR)
+            peakR = absR;
+    }
+    if (peakL > __atomic_load_n(&statRingPeakL, __ATOMIC_RELAXED))
+        __atomic_store_n(&statRingPeakL, peakL, __ATOMIC_RELAXED);
+    if (peakR > __atomic_load_n(&statRingPeakR, __ATOMIC_RELAXED))
+        __atomic_store_n(&statRingPeakR, peakR, __ATOMIC_RELAXED);
     const int64_t lead = static_cast<int64_t>(control->out_written) - static_cast<int64_t>(done);
     if (settled && lead < statLeadMin)
         statLeadMin = lead;

@@ -145,11 +145,11 @@ struct AhubModel {
         } else if (off == kMvc1Base + kMvcCfgRamData) {
             writeRam(mvcRam, value);
         } else if (off == kPeq1Base + kPeqRamCtrl) {
-            startRam(peqGainRam, value, 2u * kPeqGainWordsPerCh);
+            startRam(peqGainRam, value, 8u * kPeqGainWordsPerCh);
         } else if (off == kPeq1Base + kPeqRamData) {
             writeRam(peqGainRam, value);
         } else if (off == kPeq1Base + kPeqShiftCtrl) {
-            startRam(peqShiftRam, value, 2u * kPeqShiftWordsPerCh);
+            startRam(peqShiftRam, value, 8u * kPeqShiftWordsPerCh);
         } else if (off == kPeq1Base + kPeqShiftData) {
             writeRam(peqShiftRam, value);
         } else {
@@ -231,7 +231,14 @@ TEST_F(AhubTest, XbarPlaybackAndCaptureRoutingAreOneHot)
         }
     };
 
-    xbarRoutePlayback(ahub);
+    xbarRoutePlayback(ahub, false);
+    expectConn(kXbarDstMixer1Rx1, kSrcAdmaif1);
+    expectConn(kXbarDstSfc1, kSrcNone);
+    expectConn(kXbarDstMvc1, kSrcMixer1Tx1);
+    expectConn(kXbarDstOpe1, kSrcMvc1);
+    expectConn(kXbarDstI2s1, kSrcOpe1);
+
+    xbarRoutePlayback(ahub, true);
     expectConn(kXbarDstMixer1Rx1, kSrcAdmaif1);
     expectConn(kXbarDstSfc1, kSrcMixer1Tx1);
     expectConn(kXbarDstMvc1, kSrcSfc1);
@@ -301,6 +308,23 @@ TEST_F(AhubTest, MixerUnityGainRamAndGlobalEnable)
 {
     volatile uint8_t *ahub = AhubModel::basePtr();
     ASSERT_TRUE(mixerConfigure(ahub, 2u));
+    EXPECT_EQ(gModel.countWrites(kMixer1Base + kMixerRxSoftReset), 0u);
+    EXPECT_EQ(gModel.countWrites(kMixer1Base + kMixerTx1SoftReset), 0u);
+    size_t globalEnableIdx = gModel.writes.size();
+    size_t firstGainRamIdx = gModel.writes.size();
+    for (size_t i = 0; i < gModel.writes.size(); ++i) {
+        if (gModel.writes[i].first == kMixer1Base + kMixerGlobalEnable && gModel.writes[i].second == 1u &&
+            globalEnableIdx == gModel.writes.size()) {
+            globalEnableIdx = i;
+        }
+        if ((gModel.writes[i].first == kMixer1Base + kMixerGainRamCtrl ||
+             gModel.writes[i].first == kMixer1Base + kMixerGainRamData) &&
+            firstGainRamIdx == gModel.writes.size()) {
+            firstGainRamIdx = i;
+        }
+    }
+    EXPECT_LT(globalEnableIdx, firstGainRamIdx);
+    EXPECT_EQ(gModel.countWrites(kMixer1Base + kMixerGainRamData), 15u);
     EXPECT_EQ(gModel.regs[kMixer1Base + kMixerRxCif], switch_audio_ahub_cif(2u));
     EXPECT_EQ(gModel.regs[kMixer1Base + kMixerTx1Cif], switch_audio_ahub_cif(2u));
     EXPECT_EQ(gModel.regs[kMixer1Base + kMixerTx1AdderCfg], 1u);
@@ -326,6 +350,7 @@ TEST_F(AhubTest, MixerUnityGainRamAndGlobalEnable)
 TEST_F(AhubTest, MvcLinearRampVolumeMuteAndPeak)
 {
     volatile uint8_t *ahub = AhubModel::basePtr();
+    constexpr uint32_t kCtrlUnmuted = kMvcCtrlPerChanEn | kMvcCtrlCurveLinear | kMvcCtrlRoundingUnbias;
     ASSERT_TRUE(mvcConfigure(ahub, 2u, -6000, false));
     EXPECT_EQ(gModel.regs[kMvc1Base + kMvcRxCif], switch_audio_ahub_cif(2u));
     EXPECT_EQ(gModel.regs[kMvc1Base + kMvcTxCif], switch_audio_ahub_cif(2u));
@@ -334,34 +359,50 @@ TEST_F(AhubTest, MvcLinearRampVolumeMuteAndPeak)
     EXPECT_EQ(gModel.regs[kMvc1Base + kMvcPolyN1], 16u);
     EXPECT_EQ(gModel.regs[kMvc1Base + kMvcPolyN2], 63u);
     EXPECT_EQ(gModel.countWrites(kMvc1Base + kMvcCfgRamData), 9u);
-    EXPECT_EQ(gModel.regs[kMvc1Base + kMvcCtrl], kMvcCtrlCurveLinear | kMvcCtrlRoundingUnbias);
+    EXPECT_EQ(gModel.regs[kMvc1Base + kMvcCtrl], kCtrlUnmuted);
     const uint32_t minus6dB = static_cast<uint32_t>(switch_audio_mvc_linear_db_q8(-6000));
-    EXPECT_EQ(gModel.regs[kMvc1Base + kMvcInitVol], minus6dB);
-    EXPECT_EQ(gModel.regs[kMvc1Base + kMvcTargetVol], minus6dB);
+    for (uint32_t ch = 0; ch < 8u; ++ch) {
+        EXPECT_EQ(gModel.regs[kMvc1Base + kMvcInitVol + 4u * ch], minus6dB) << ch;
+        EXPECT_EQ(gModel.regs[kMvc1Base + kMvcTargetVol + 4u * ch], minus6dB) << ch;
+    }
     EXPECT_EQ(gModel.regs[kMvc1Base + kMvcPeakCtrl], 0x12c0u);
 
     mvcEnable(ahub);
     EXPECT_EQ(gModel.regs[kMvc1Base + kMvcEnable], 1u);
 
-    // Smooth ramp updates TARGET_VOL only, leaving INIT_VOL untouched.
     const size_t initWritesBefore = gModel.countWrites(kMvc1Base + kMvcInitVol);
     ASSERT_TRUE(mvcSetVolume(ahub, -12000, true, false));
     EXPECT_EQ(gModel.countWrites(kMvc1Base + kMvcInitVol), initWritesBefore);
     const uint32_t minus12dB = static_cast<uint32_t>(switch_audio_mvc_linear_db_q8(-12000));
-    EXPECT_EQ(gModel.regs[kMvc1Base + kMvcTargetVol], minus12dB);
-    EXPECT_EQ(gModel.regs[kMvc1Base + kMvcTargetVol + 4u], minus12dB);
-    EXPECT_EQ(gModel.regs[kMvc1Base + kMvcCtrl], kMvcCtrlCurveLinear | kMvcCtrlRoundingUnbias | kMvcCtrlMuteMask);
+    for (uint32_t ch = 0; ch < 8u; ++ch) {
+        EXPECT_EQ(gModel.regs[kMvc1Base + kMvcTargetVol + 4u * ch], minus12dB) << ch;
+    }
+    EXPECT_EQ(gModel.regs[kMvc1Base + kMvcCtrl], kCtrlUnmuted | kMvcCtrlMuteMask);
 
-    // Immediate update writes both INIT_VOL and TARGET_VOL.
     ASSERT_TRUE(mvcSetVolume(ahub, 0, false, true));
     EXPECT_GT(gModel.countWrites(kMvc1Base + kMvcInitVol), initWritesBefore);
-    EXPECT_EQ(gModel.regs[kMvc1Base + kMvcInitVol], 0u);
-    EXPECT_EQ(gModel.regs[kMvc1Base + kMvcTargetVol], 0u);
-    EXPECT_EQ(gModel.regs[kMvc1Base + kMvcCtrl], kMvcCtrlCurveLinear | kMvcCtrlRoundingUnbias);
+    for (uint32_t ch = 0; ch < 8u; ++ch) {
+        EXPECT_EQ(gModel.regs[kMvc1Base + kMvcInitVol + 4u * ch], 0u) << ch;
+        EXPECT_EQ(gModel.regs[kMvc1Base + kMvcTargetVol + 4u * ch], 0u) << ch;
+    }
+    EXPECT_EQ(gModel.regs[kMvc1Base + kMvcCtrl], kCtrlUnmuted);
+
+    for (const auto &[reg, val] : gModel.writes) {
+        if (reg == kMvc1Base + kMvcSwitch) {
+            EXPECT_EQ(val, kMvcSwitchVolume);
+        }
+    }
 
     gModel.regs[kMvc1Base + kMvcPeakValue] = 0x00100000u;
     gModel.regs[kMvc1Base + kMvcPeakValue + 4u] = 0x00250000u;
+    gModel.regs[kMvc1Base + kMvcConfigErr] = 0x5u;
+    uint32_t peakL = 0u;
+    uint32_t peakR = 0u;
+    mvcReadPeakChannels(ahub, &peakL, &peakR);
+    EXPECT_EQ(peakL, 0x00100000u);
+    EXPECT_EQ(peakR, 0x00250000u);
     EXPECT_EQ(mvcReadPeak(ahub), 0x00250000u);
+    EXPECT_EQ(mvcReadConfigErr(ahub), 0x5u);
 
     ASSERT_TRUE(mvcStop(ahub));
     EXPECT_EQ(gModel.regs[kMvc1Base + kMvcEnable], 0u);
@@ -371,61 +412,41 @@ TEST_F(AhubTest, OpeSpeakerDspAndHeadphoneBypass)
 {
     volatile uint8_t *ahub = AhubModel::basePtr();
 
-    // Headphone mode: clean bypass with zero PEQ/MBDRC RAM writes.
     ASSERT_TRUE(opeConfigure(ahub, 48000u, false, 2u));
     EXPECT_EQ(gModel.regs[kOpe1Base + kOpeDir], kOpeDirPeqToMbdrc);
     EXPECT_EQ(gModel.regs[kPeq1Base + kPeqCfg], kPeqCfgUnbias);
     EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcCfg], 0u);
     EXPECT_EQ(gModel.countWrites(kPeq1Base + kPeqRamData), 0u);
     EXPECT_EQ(gModel.countWrites(kMbdrc1Base + kMbdrcRamData), 0u);
-    // Standalone PEQ_SOFT_RESET (+0x04) must never be written.
     EXPECT_EQ(gModel.countWrites(kPeq1Base + 0x04u), 0u);
 
-    // Speaker mode at 48 kHz and 44.1 kHz.
     for (uint32_t linkRate : {48000u, 44100u}) {
         gModel.reset();
         ASSERT_TRUE(opeConfigure(ahub, linkRate, true, 2u)) << linkRate;
         EXPECT_EQ(gModel.countWrites(kPeq1Base + 0x04u), 0u);
         EXPECT_EQ(gModel.regs[kPeq1Base + kPeqCfg], (1u << kPeqCfgStagesShift) | kPeqCfgUnbias | kPeqCfgModeActive);
-        EXPECT_EQ(gModel.countWrites(kPeq1Base + kPeqRamData), 2u * kPeqGainWordsPerCh);
-        EXPECT_EQ(gModel.countWrites(kPeq1Base + kPeqShiftData), 2u * kPeqShiftWordsPerCh);
-        ASSERT_EQ(gModel.peqGainRam.words.size(), 2u * kPeqGainWordsPerCh);
-        ASSERT_EQ(gModel.peqShiftRam.words.size(), 2u * kPeqShiftWordsPerCh);
+        EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcCfg], 0u);
+        EXPECT_EQ(gModel.countWrites(kMbdrc1Base + kMbdrcRamData), 0u);
+        EXPECT_EQ(gModel.countWrites(kPeq1Base + kPeqRamData), 8u * kPeqGainWordsPerCh);
+        EXPECT_EQ(gModel.countWrites(kPeq1Base + kPeqShiftData), 8u * kPeqShiftWordsPerCh);
+        ASSERT_EQ(gModel.peqGainRam.words.size(), 8u * kPeqGainWordsPerCh);
+        ASSERT_EQ(gModel.peqShiftRam.words.size(), 8u * kPeqShiftWordsPerCh);
 
-        // Verify per-channel shift table: pre=0, stage0=30 (Q2.30), stage1=29 (Q3.29), post=30.
-        for (uint32_t ch = 0; ch < 2u; ++ch) {
+        for (uint32_t ch = 0; ch < 8u; ++ch) {
             const uint32_t sBase = ch * kPeqShiftWordsPerCh;
-            EXPECT_EQ(gModel.peqShiftRam.words[sBase + 0], 0u);
+            EXPECT_EQ(gModel.peqShiftRam.words[sBase + 0], 30u);
             EXPECT_EQ(gModel.peqShiftRam.words[sBase + 1], 30u);
-            EXPECT_EQ(gModel.peqShiftRam.words[sBase + 2], 29u);
-            EXPECT_EQ(gModel.peqShiftRam.words[sBase + 13], 30u);
+            EXPECT_EQ(gModel.peqShiftRam.words[sBase + 2], 30u);
+            EXPECT_EQ(gModel.peqShiftRam.words[sBase + 13], 28u);
 
             const uint32_t gBase = ch * kPeqGainWordsPerCh;
-            EXPECT_EQ(static_cast<int32_t>(gModel.peqGainRam.words[gBase + 0]), 1);
-            EXPECT_EQ(static_cast<int32_t>(gModel.peqGainRam.words[gBase + 61]), 862978048);
-            const int32_t expectedB0 = linkRate == 44100u ? 1069423538 : 1069773750;
-            EXPECT_EQ(static_cast<int32_t>(gModel.peqGainRam.words[gBase + 1]), expectedB0);
+            EXPECT_EQ(static_cast<int32_t>(gModel.peqGainRam.words[gBase + 0]), 862978048);
+            EXPECT_EQ(static_cast<int32_t>(gModel.peqGainRam.words[gBase + 61]), 1073741824);
+            const int32_t expectedS0B0 = linkRate == 44100u ? 534711769 : 534886875;
+            const int32_t expectedS1B0 = linkRate == 44100u ? 601123097 : 601224974;
+            EXPECT_EQ(static_cast<int32_t>(gModel.peqGainRam.words[gBase + 1]), expectedS0B0);
+            EXPECT_EQ(static_cast<int32_t>(gModel.peqGainRam.words[gBase + 6]), expectedS1B0);
         }
-
-        // Verify MBDRC: fixed FAST_FACTOR, little-endian thresholds, Band 2 offset-15 layout, active 3-band config.
-        EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcChanMask], 3u);
-        EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcFastFactor], switch_audio_mbdrc_fast_factor(0x3000u, 0x0800u));
-        EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcInThresh], switch_audio_mbdrc_pack_thresh(180u, 120u, 24u, 12u));
-        EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcOutThresh], switch_audio_mbdrc_pack_thresh(180u, 120u, 24u, 15u));
-        EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcCfg], (1u << 15) | (30u << 8) | (5u << 4) | 3u);
-        for (uint32_t band = 0; band < kMbdrcBands; ++band) {
-            ASSERT_EQ(gModel.mbdrcRam[band].words.size(), kMbdrcWordsPerBand);
-            const uint32_t off = 4u * band;
-            EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcInAttack + off], 1044928780u);
-            EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcInRelease + off], 138497695u);
-            EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcFastAttack + off], 2147483647u);
-            EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcGainAttack + off], 14268942u);
-            EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcGainRelease + off], 1044928780u);
-            EXPECT_EQ(gModel.regs[kMbdrc1Base + kMbdrcFastRelease + off], 2147480170u);
-        }
-        // Band 2 stages 0..2 are bypass {1<<30, 0, 0, 0, 0}, stage 3 begins at word 15.
-        EXPECT_EQ(static_cast<int32_t>(gModel.mbdrcRam[2].words[0]), 1073741824);
-        EXPECT_EQ(static_cast<int32_t>(gModel.mbdrcRam[2].words[15]), -619925131);
     }
 
     opeEnable(ahub);
@@ -445,9 +466,12 @@ TEST_F(AhubTest, NullAndTimeoutGuards)
 
     gModel.freezeSoftReset = true;
     EXPECT_FALSE(sfcConfigure(ahub, kSfc1Base, 48000u, 48000u, 2u));
-    EXPECT_FALSE(mixerConfigure(ahub, 2u));
     EXPECT_FALSE(mvcConfigure(ahub, 2u, 0, false));
     EXPECT_FALSE(opeConfigure(ahub, 48000u, true, 2u));
+
+    gModel.reset();
+    gModel.freezeStatus = true;
+    EXPECT_FALSE(mixerConfigure(ahub, 2u));
 
     gModel.reset();
     gModel.freezeMvcSwitch = true;
