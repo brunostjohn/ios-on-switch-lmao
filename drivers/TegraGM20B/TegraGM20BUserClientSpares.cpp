@@ -88,18 +88,6 @@ void cleanZeros(void *va, uint64_t bytes)
 namespace
 {
 
-// The page list of a wired kernel buffer.
-bool kernelPages(const void *va, uint64_t bytes, uint64_t *pas)
-{
-	for (uint64_t off = 0; off < bytes; off += 4096) {
-		const uint64_t pa = ml_vtophys(reinterpret_cast<vm_offset_t>(va) + off);
-		if (!pa || (pa & 0xfff) || pa + 4096 > (1ULL << 34))
-			return false;
-		pas[off >> 12] = pa;
-	}
-	return true;
-}
-
 // A wired cached BO of `bytes`, of 128 KiB units where its layout has them (each one GMMU big page), or nullptr. Its pages
 // hold what their last owner left: it is a dirty spare until the copy engine has zeroed it (spareWork). The refill
 // thread alone makes these: BoAlloc's own path on the allocating thread never searches for units.
@@ -119,7 +107,7 @@ Spare *spareMake(SparePool *p, uint64_t bytes)
 #endif
 	}
 	made = made || switch_gpu_cached_buffer_pages(bytes, &buffer);
-	if (s && pas && made && kernelPages(buffer.cpu, bytes, pas)) {
+	if (s && pas && made && switch_gpu_cached_buffer_page_list(buffer, bytes, pas)) {
 		*s = {nullptr, buffer, pas, bytes, nullptr};
 		return s;
 	}

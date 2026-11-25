@@ -1890,6 +1890,19 @@ TEST(GM20BSparesSource, TheRefillCountsDirtySpares)
 	}
 }
 
+// A refilled spare's page list comes from its prepared descriptor, not from its kernel view: the view of 128 KiB units
+// is a second mapping with no PTE until a page is touched, so ml_vtophys through it returned 0 and every spare of
+// 512 KiB or more was refused (25 Nov: "refill refused" 768 times, spares 3008 KiB in 47 at boot).
+TEST(GM20BSparesSource, ARefilledSparesPagesComeFromItsDescriptor)
+{
+	const CodeText make = Block(client(), "Spare *spareMake(SparePool *p, uint64_t bytes)");
+	EXPECT_TRUE(make.has("switch_gpu_cached_buffer_page_list(buffer, bytes, pas)"));
+	EXPECT_FALSE(make.has("kernelPages"));
+	const CodeText units = Block(SourceText("../SwitchGpuCachedBuffer.cpp"),
+				     "bool switch_gpu_cached_buffer_units(uint64_t bytes, SwitchGpuCachedBuffer *out)");
+	EXPECT_TRUE(units.has("createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapPrefault)"));
+}
+
 // The spare workers allocate, wire, free and sometimes memset memory: never above user priority.
 TEST(GM20BSparesSource, TheWorkersRunAtUserPriority)
 {

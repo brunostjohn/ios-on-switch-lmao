@@ -41,7 +41,10 @@ bool switch_gpu_cached_buffer_units(uint64_t bytes, SwitchGpuCachedBuffer *out)
 		multi->release();
 		return false;
 	}
-	IOMemoryMap *map = multi->createMappingInTask(kernel_task, 0, kIOMapAnywhere);
+	// Prefaulted: the scrub's cache maintenance and the BO's CPU leases go through this view, and a mapping of
+	// wired pages has no PTE until each page is touched
+	IOMemoryMap *map =
+		multi->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapPrefault);
 	if (!map) {
 		multi->complete();
 		multi->release();
@@ -69,6 +72,24 @@ SwitchGpuCachedBuffer switch_gpu_cached_buffer_of(IOMemoryDescriptor *memory)
 {
 	auto *buffer = OSDynamicCast(IOBufferMemoryDescriptor, memory);
 	return {memory, nullptr, buffer ? buffer->getBytesNoCopy() : nullptr};
+}
+
+bool switch_gpu_cached_buffer_page_list(const SwitchGpuCachedBuffer &buffer, uint64_t bytes,
+				       uint64_t *pas)
+{
+	for (uint64_t off = 0; off < bytes;) {
+		IOByteCount run = 0;
+		const addr64_t pa =
+			buffer.memory->getPhysicalSegment(off, &run, kIOMemoryMapperNone);
+		if (!pa || (pa & 0xfff) || run < 4096)
+			return false;
+		for (uint64_t at = 0; at + 4096 <= run && off < bytes; at += 4096, off += 4096) {
+			if (pa + at + 4096 > (1ULL << 34))
+				return false;
+			pas[off >> 12] = pa + at;
+		}
+	}
+	return true;
 }
 
 bool switch_gpu_cached_buffer_alone(const SwitchGpuCachedBuffer &buffer)
