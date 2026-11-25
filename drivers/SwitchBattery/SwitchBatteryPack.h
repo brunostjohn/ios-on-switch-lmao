@@ -17,6 +17,11 @@
 // 21H461's daemons read none of this, so only a 24B119 kernel publishes it. The classes keep Apple's names because
 // IOServiceMatching and IOObjectConformsTo match on them, as AppleKeyStore does in NativeKeyStoreEvents.
 #pragma once
+// The pack is chosen on SWITCH_IPSW_KIND_24B119, which an undefined macro silently turns off: 24B119's kernel once
+// shipped without it because the driver's BUILD left the kind header out.
+#ifndef SWITCH_IPSW_BUILD
+#error "SwitchBattery compiles with the IPSW kind's header (IPSW_KIND_FLAGS)"
+#endif
 #include <IOKit/IOService.h>
 #include <IOKit/pwr_mgt/IOPMPowerSource.h>
 #include <libkern/c++/OSDictionary.h>
