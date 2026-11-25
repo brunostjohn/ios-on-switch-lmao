@@ -478,7 +478,7 @@ static void applyChange(GM20BState &r, const SwitchMetalScheduleChange &change)
             promiseWrites(cb, writtenSurfaces(cb));
             cb->_held = true;
             armBound(cb, cb->_queue->_heldBound);
-            cb->_submitOwner.clear();
+            cb->_submitOwner.clearIf(r.submitThread.load(std::memory_order_relaxed));
             gm20bChanged(cb);
         } else {
             const bool workerBusy = r.waiting.committed() > 1 || r.waiting.parked() != 0;
@@ -584,7 +584,7 @@ static void markHeld(std::vector<SwitchMetalCommandBuffer *> &buffers, bool held
         if (held && cb != head)
             armBound(cb, cb->_queue->_heldBound);
         if (held) {
-            cb->_submitOwner.clear();
+            cb->_submitOwner.clearIf(gRM->submitThread.load(std::memory_order_relaxed));
             gm20bChanged(cb);
         }
     }
@@ -705,7 +705,7 @@ void submitLoop()
                 if (wait == gm20b::HeadWait::compile)
                     gm20bSetCompileWaits(cb, std::move(compileWaits));
                 else
-                    cb->_submitOwner.clear();
+                    cb->_submitOwner.clearIf(selfPort);
                 SWITCH_METAL_DIAGNOSTIC(gm20bNoteParked(cb, unsigned(wait)));
                 if (!gm20b::holds(wait)) {
                     markHeld(marked, true);
@@ -732,7 +732,7 @@ void submitLoop()
             }
             r.waiting.release(ticket.key, marked);
             if (submitted) {
-                cb->_submitOwner.clear();
+                cb->_submitOwner.clearIf(selfPort);
                 r.waiting.retire(ticket);
                 markQueueScheduled(cb);
                 releaseEarlyPromised(cb);

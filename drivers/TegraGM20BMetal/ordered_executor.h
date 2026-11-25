@@ -2,18 +2,19 @@
 #pragma once
 #include "follow.h"
 #include "handoff_queue.h"
-#include "lock.h"
 #include <pthread.h>
-#include <atomic>
 #include <functional>
 #include <memory>
-#include <mutex>
+
+extern "C" void *objc_autoreleasePoolPush(void);
+extern "C" void objc_autoreleasePoolPop(void *pool);
 
 namespace gm20b {
 
-// Serial executor backed by one lazily started follower pthread with a known Mach thread port, so
-// waitUntilScheduled can donate priority via OwnedWord across scheduled-handler execution with no
-// ownerless gap and without spawning a priority-31 root-queue thread under CPU saturation.
+// Serial executor over one follower pthread of its own with a known Mach thread port, so waitUntilScheduled can donate
+// priority via OwnedWord across scheduled-handler execution with no ownerless gap and without spawning a priority-31
+// root-queue thread under CPU saturation. Started once by its owner before any other thread can reach it, so enqueue
+// takes no lock.
 class OrderedExecutor {
 public:
     OrderedExecutor() = default;
@@ -26,52 +27,44 @@ public:
     OrderedExecutor(const OrderedExecutor &) = delete;
     OrderedExecutor &operator=(const OrderedExecutor &) = delete;
 
-    uint32_t ownerPort()
+    // False: no thread could be made (pthread_create's error in `err`), and nothing may be enqueued
+    bool start(int &err)
     {
-        const uint32_t existing = owner_.load(std::memory_order_acquire);
-        if (existing)
-            return existing;
-        std::lock_guard<gm20b::Mutex> l(lock_);
-        return ensureStartedLocked();
+        auto state = std::make_shared<State>();
+        auto *arg = new std::shared_ptr<State>(state);
+        pthread_attr_t attr;
+        followers().initAttr(&attr);
+        pthread_t thread = nullptr;
+        err = pthread_create(&thread, &attr, &OrderedExecutor::run, arg);
+        pthread_attr_destroy(&attr);
+        if (err != 0) {
+            delete arg;
+            return false;
+        }
+        // nothing joins it: the thread holds its own state, so it may outlive this executor (one destroyed from inside its
+        // own handler, or with items queued) and runs what was queued before the stop
+        pthread_detach(thread);
+        owner_ = uint32_t(pthread_mach_thread_np(thread));
+        state_ = std::move(state);
+        return true;
+    }
+
+    uint32_t ownerPort() const
+    {
+        return owner_;
     }
 
     void enqueue(std::function<void()> fn)
     {
-        if (!fn)
-            return;
-        std::shared_ptr<State> state;
-        {
-            std::lock_guard<gm20b::Mutex> l(lock_);
-            ensureStartedLocked();
-            state = state_;
-        }
-        if (state)
-            state->queue.push(std::move(fn));
+        if (fn)
+            state_->queue.push(std::move(fn));
     }
 
     void stop()
     {
-        std::shared_ptr<State> state;
-        pthread_t thread = nullptr;
-        bool hasThread = false;
-        {
-            std::lock_guard<gm20b::Mutex> l(lock_);
-            if (!started_)
-                return;
-            started_ = false;
-            hasThread = true;
-            thread = thread_;
-            state = std::move(state_);
-            owner_.store(0, std::memory_order_release);
-        }
-        if (state)
+        if (std::shared_ptr<State> state = std::move(state_))
             state->queue.push(std::function<void()>{});
-        if (hasThread) {
-            if (pthread_equal(pthread_self(), thread))
-                pthread_detach(thread);
-            else
-                pthread_join(thread, nullptr);
-        }
+        owner_ = 0;
     }
 
 private:
@@ -89,40 +82,24 @@ private:
             pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
         followers().join();
         for (;;) {
-            std::function<void()> fn = std::move(state->queue.front());
+            std::function<void()> &next = state->queue.front();
+            // the item's run and its captures' release (a command buffer's last, its handlers' blocks) both inside it: a
+            // thread that lives as long as its queue drains no pool of its own otherwise
+            void *pool = objc_autoreleasePoolPush();
+            std::function<void()> fn = std::move(next);
             state->queue.pop();
-            if (!fn)
+            const bool stopped = !fn;
+            if (fn)
+                fn();
+            fn = nullptr;
+            objc_autoreleasePoolPop(pool);
+            if (stopped)
                 return nullptr;
-            fn();
         }
     }
 
-    uint32_t ensureStartedLocked()
-    {
-        if (started_)
-            return owner_.load(std::memory_order_acquire);
-        state_ = std::make_shared<State>();
-        auto *arg = new std::shared_ptr<State>(state_);
-        pthread_attr_t attr;
-        followers().initAttr(&attr);
-        const int err = pthread_create(&thread_, &attr, &OrderedExecutor::run, arg);
-        pthread_attr_destroy(&attr);
-        if (err != 0) {
-            delete arg;
-            state_.reset();
-            return 0;
-        }
-        started_ = true;
-        const uint32_t port = uint32_t(pthread_mach_thread_np(thread_));
-        owner_.store(port, std::memory_order_release);
-        return port;
-    }
-
-    gm20b::Mutex lock_;
     std::shared_ptr<State> state_;
-    pthread_t thread_ = nullptr;
-    bool started_ = false;
-    std::atomic<uint32_t> owner_{0};
+    uint32_t owner_ = 0;
 };
 
 }  // namespace gm20b
