@@ -1847,6 +1847,15 @@ TEST(GM20BSparesSource, TheRefillCountsDirtySpares)
 	}
 }
 
+// The spare workers allocate, wire, free and sometimes memset memory: never above user priority.
+TEST(GM20BSparesSource, TheWorkersRunAtUserPriority)
+{
+	const CodeText make = Block(client(), "SparePool *spares()");
+	EXPECT_EQ(make.count("THREAD_CALL_PRIORITY_USER"), 3u);
+	EXPECT_FALSE(make.has("THREAD_CALL_PRIORITY_KERNEL"));
+	EXPECT_FALSE(make.has("thread_call_allocate_with_qos("));
+}
+
 // A waiter on a parking, unparking or reclaiming BO pushes that BO's own mover, on that BO's own event: one owner per
 // connection was overwritten and cleared by unrelated BOs, and the reaper never named itself.
 TEST(GM20BParkedBoSource, ParkWaitersPushTheirBosOwnMover)

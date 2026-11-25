@@ -5,12 +5,7 @@
 namespace
 {
 constexpr uint64_t kSpareCapBytes = SWITCH_GPU_SPARE_CAP_BYTES, kLearnMaxBytes = 32ULL << 20;
-constexpr int kThreadQosUserInteractive = 6;
 static_assert(kClasses == SWITCH_GPU_SPARE_CLASSES, "the pool's classes are the policy's");
-
-extern "C" thread_call_t thread_call_allocate_with_qos(thread_call_func_t func,
-						       thread_call_param_t param0, int qos_tier,
-						       thread_call_options_t options);
 }  // namespace
 
 namespace tgm_uc
@@ -346,11 +341,13 @@ SparePool *spares()
 	for (const switch_gpu_spare_warm &w : SWITCH_GPU_SPARE_WARM)
 		n->target[classUp(w.bytes)] = w.ready;
 	n->lock = IOLockAlloc();
+	// The workers allocate, wire, free and (when the copy engine cannot) zero memory on the CPU: at user priority, so
+	// they never take a core from app or render threads.
 	if (n->lock) {
-		n->call = thread_call_allocate_with_qos(spareWork, n, kThreadQosUserInteractive,
-							THREAD_CALL_OPTIONS_ONCE);
+		n->call = thread_call_allocate_with_options(spareWork, n, THREAD_CALL_PRIORITY_USER,
+							    THREAD_CALL_OPTIONS_ONCE);
 		n->recycleCall = thread_call_allocate_with_options(
-			spareRecycleWork, n, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+			spareRecycleWork, n, THREAD_CALL_PRIORITY_USER, THREAD_CALL_OPTIONS_ONCE);
 		n->reclaimCall = thread_call_allocate_with_options(
 			spareReclaimWork, n, THREAD_CALL_PRIORITY_USER, THREAD_CALL_OPTIONS_ONCE);
 	}
