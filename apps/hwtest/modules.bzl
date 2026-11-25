@@ -721,6 +721,7 @@ TESTS_VIDEO_SRCS = [
     "tests/JPEGMappingLifetimeTest.swift",
     "tests/MediaMapCounters.swift",
     "tests/NVENCInputLayoutTest.swift",
+    "tests/NVJPGTileProbeTest.swift",
     "tests/NativeExportTest.swift",
     "tests/PixelTransfer422Test.swift",
     "tests/PixelTransferRouteTest.swift",

@@ -140,7 +140,8 @@ public enum Registry {
 
     static let images: [any HWTest] =
         ImageDecodeTest.all + [
-            JPEGAfterIdleTest(), JPEGMappingLifetimeTest(), HEICEncodeTest(), CoreImageTest(), PixelTransferTest(),
+            JPEGAfterIdleTest(), JPEGMappingLifetimeTest(), NVJPGTileProbeTest(), HEICEncodeTest(), CoreImageTest(),
+            PixelTransferTest(),
             PixelTransfer422Test(),
             PixelTransferRouteTest(),
             VICLumaTest(),

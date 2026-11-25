@@ -545,6 +545,7 @@ TESTS: dict[str, bool] = {
     **{f'image.{still}': False for still in STILLS},
     'image.jpeg_after_idle': False,
     'image.jpeg_mapping_lifetime': False,
+    'image.nvjpg_tile_probe': False,
     'image.heic_encode': False,
     'image.coreimage': False,
     'image.pixel_transfer': False,

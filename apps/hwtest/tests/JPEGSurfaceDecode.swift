@@ -75,7 +75,11 @@ public enum JPEGSurfaceDecode {
     }
 
     /// NVJPG's decode of `file` into `surface` (BGRA, the file's size), or why there is none
-    public static func decode(_ file: Data, into surface: IOSurface) -> TestFailure? {
+    /// `tile`: a debug kernel's tile probe (TegraNVJPGRoute.h tegra_nvjpg_route_tile_probe): NVJPG writes the
+    /// destination's blocks told this tile_mode and block height code
+    public static func decode(_ file: Data, into surface: IOSurface, tile: (mode: UInt32, gob: UInt32)? = nil)
+        -> TestFailure?
+    {
         guard let sub = subsampling(file) else { return TestFailure("no baseline frame header in the JPEG") }
         let rowBytes = 4096
         let rows = (file.count + rowBytes - 1) / rowBytes
@@ -114,7 +118,7 @@ public enum JPEGSurfaceDecode {
             (0x08, IOSurfaceGetID(unsafeBitCast(surface, to: IOSurfaceRef.self))),
             (0x0c, UInt32(surface.allocationSize)), (0x14, UInt32(surface.width)), (0x18, UInt32(surface.height)),
             (0x2c, sub), (0x4c, UInt32(surface.width)), (0x50, UInt32(surface.height)),
-        ]
+        ] + (tile.map { [(0xcac, UInt32(0x5054)), (0xcb0, $0.mode), (0xcb4, $0.gob)] } ?? [])
         request.withUnsafeMutableBytes { raw in
             for (offset, value) in fields {
                 raw.storeBytes(of: value.littleEndian, toByteOffset: offset, as: UInt32.self)
@@ -134,19 +138,23 @@ public enum JPEGSurfaceDecode {
     }
 
     /// The layout NVJPG's writes match when a read is wrong: the picture written as rows (`rows`) or into blocks of 2^n
-    /// GOBs (`y<n>`), read back through the blocks GM20B decided for the surface (TegraGM20BLayoutFit.h); `-` for none
+    /// GOBs (`y<n>`, GM20B's Tegra GOBs; `fermi_y<n>`, NIL's Fermi GOBs), read back through the blocks GM20B decided for
+    /// the surface (TegraGM20BLayoutFit.h); `-` for none
     public static func explained(_ got: [UInt8], _ surface: IOSurface) -> String {
         let rowBytes = (surface.width * 4 + 63) & ~63
         var decided = SurfaceCrossProcessTest.blockHeightLog2(surface.height)
         while decided > 0, rowBytes * blockRows(surface.height, decided) > surface.allocationSize { decided -= 1 }
         var best = ("-", Int.max)
-        for candidate in [-1, 0, 1, 2, 3, 4, 5] {
+        for candidate in [-1, 0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15] {
             var memory = [UInt8](repeating: 0, count: rowBytes * blockRows(surface.height, 5))
             for y in 0 ..< surface.height {
                 for xB in 0 ..< (surface.width * 4) {
                     let at =
                         candidate < 0
-                            ? y * rowBytes + xB : SurfaceCrossProcessTest.gobOffset(rowBytes, candidate, xB, y)
+                            ? y * rowBytes + xB
+                            : candidate >= 10
+                            ? fermiOffset(rowBytes, candidate - 10, xB, y)
+                            : SurfaceCrossProcessTest.gobOffset(rowBytes, candidate, xB, y)
                     if at < memory.count { memory[at] = byte(xB / 4, y, xB % 4) }
                 }
             }
@@ -158,9 +166,21 @@ public enum JPEGSurfaceDecode {
                     if abs(read - Int(got[y * surface.width * 4 + xB])) > tolerance { wrong += 1 }
                 }
             }
-            if wrong < best.1 { best = (candidate < 0 ? "rows" : "y\(candidate)", wrong) }
+            if wrong < best.1 {
+                best = (candidate < 0 ? "rows" : candidate >= 10 ? "fermi_y\(candidate - 10)" : "y\(candidate)", wrong)
+            }
         }
         return best.1 == 0 ? best.0 : "-"
+    }
+
+    /// Byte `xB` of row `y` in blocks of 2^yLog2 GOBs whose 16-byte lines lie as NIL's Fermi GOB holds them
+    /// (nil/copy.rs CopyGOBFermi), not GM20B's Tegra GOB
+    static func fermiOffset(_ rowBytes: Int, _ yLog2: Int, _ xB: Int, _ y: Int) -> Int {
+        let lines = [[0x20, 0x30, 0x00, 0x10, 0xe0, 0xf0, 0xc0, 0xd0], [0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0]]
+        let blockRows = 8 << yLog2
+        let block = (y / blockRows) * (rowBytes / 64) + xB / 64
+        let inGob = ((xB % 64) / 32) * 256 + lines[(xB % 32) / 16][y % 8] + xB % 16
+        return block * (512 << yLog2) + ((y % blockRows) / 8) * 512 + inGob
     }
 
     static func blockRows(_ height: Int, _ yLog2: Int) -> Int {
