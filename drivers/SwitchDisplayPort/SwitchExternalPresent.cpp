@@ -106,7 +106,7 @@ void SwitchExternalScreen::fenceFired(OSObject *owner, IOInterruptEventSource *,
     auto *self = static_cast<SwitchExternalScreen *>(owner);
     if (self->fenceConverts) {
         if (const int error = self->runConversions()) {
-            if (self->conversionFailures++ < 8u)
+            if (self->unshownErrors++ < 8u)
                 IOLog("SwitchDisplayPort: VIC refused a layer's conversion (%d); the swap is not shown\n", error);
             self->gpuComplete(error);
             return;

@@ -226,7 +226,7 @@ inline bool convertedImage(const Layer &l, uint32_t width, uint32_t height, Imag
 }
 
 // planWindows, again with each layer it sends to VIC as its converted image, until none more is sent. False when a
-// converted image has no window (convertedImage fails), which no accepted layer reaches.
+// converted image has no window (convertedImage fails), which no accepted layer reaches; plan.convert is then that layer.
 inline bool planSwap(const bool present[kLayers], const Layer layers[kLayers], Image images[kLayers],
                      const WindowState state[kWindows], uint32_t width, uint32_t height, Plan &plan)
 {
@@ -238,8 +238,10 @@ inline bool planSwap(const bool present[kLayers], const Layer layers[kLayers], I
             return true;
         }
         for (unsigned i = 0; i < kLayers; ++i)
-            if ((plan.convert & (1u << i)) && !convertedImage(layers[i], width, height, images[i]))
+            if ((plan.convert & (1u << i)) && !convertedImage(layers[i], width, height, images[i])) {
+                plan.convert = 1u << i;
                 return false;
+            }
         converted |= plan.convert;
     }
 }

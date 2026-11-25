@@ -184,7 +184,10 @@ void SwitchExternalScreen::unshownFrame(int error, unsigned layer, uint32_t buil
 #if DEVELOPMENT || DEBUG
     noteUnshown(layer, error);
 #else
-    (void)layer;
+    if (unshownErrors < 8u) {
+        ++unshownErrors;
+        IOLog("SwitchDisplayPort: swap not shown: layer %u (%d)\n", layer, error);
+    }
 #endif
     dropFrame(request);
 }

@@ -151,7 +151,7 @@ private:
     // The fence thread's work, fixed on the work loop before it is signalled: the next frame's slots, whether VIC converts
     // into some of them first, and the producers a GPU fence waits for.
     switch_gpu_backing_token fenceTokens[kFenceTokens] = {};
-    uint32_t fenceCount = 0, conversionFailures = 0;
+    uint32_t fenceCount = 0, unshownErrors = 0;
     int fenceSlots[kWindows] = {-1, -1, -1};
     bool fenceConverts = false;
     int front[kWindows] = {-1, -1, -1}, drawing[kWindows] = {-1, -1, -1};
