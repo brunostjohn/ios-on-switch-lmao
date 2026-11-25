@@ -11,7 +11,7 @@
 static struct {
     uint64_t raw, encodeUs, draws, passes, copies, deferred, ringWaits, lastUs, poolStalls, eventsReleased, heldReturns,
         signalsPublished, signalsAfterWork, waitsOnPromise, scheduledWaits, scheduledWaitUs, completedWaits,
-        completedWaitUs, rtUnaligned, rtMixed, levelPasses;
+        completedWaitUs, rtUnaligned, rtMixed, levelPasses, zcullPasses, zcullInvalidations, zcullLoads;
 } gRates;
 
 #endif
@@ -88,6 +88,13 @@ size_t metal_rates(char *out, size_t size)
     }
     {
         const size_t used = strlen(diag);
+        snprintf(diag + used, sizeof diag - used, " zc=%llu/%llu/%llu",
+                 (unsigned long long)(k.zcullPasses.load() - gRates.zcullPasses),
+                 (unsigned long long)(k.zcullInvalidations.load() - gRates.zcullInvalidations),
+                 (unsigned long long)(k.zcullLoads.load() - gRates.zcullLoads));
+    }
+    {
+        const size_t used = strlen(diag);
         snprintf(diag + used, sizeof diag - used, " cag=%llu rtsync=%llu/%lluus",
                  (unsigned long long)gm20b::gCaCatchAllDraws.load(std::memory_order_relaxed),
                  (unsigned long long)gm20b::gRenderSyncCreations.load(std::memory_order_relaxed),
@@ -121,6 +128,9 @@ size_t metal_rates(char *out, size_t size)
     gRates.rtUnaligned = k.rtUnaligned.load();
     gRates.rtMixed = k.rtMixed.load();
     gRates.levelPasses = k.levelPasses.load();
+    gRates.zcullPasses = k.zcullPasses.load();
+    gRates.zcullInvalidations = k.zcullInvalidations.load();
+    gRates.zcullLoads = k.zcullLoads.load();
     const gm20b::ResourceSet::Counts sets = gRM->raw->setCounts();
     const gm20b::Device::Trimmed kept = gRM->raw->keptImports();
     const SwitchMetalPassTrim passes = gm20bPassHeld();
