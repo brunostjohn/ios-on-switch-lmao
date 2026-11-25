@@ -44,6 +44,9 @@ DKIO_META = 0x08
 DKIO_PAGING = 0x10
 DKIO_PASSIVE = 0x40
 DKIO_TIER_MASK, DKIO_TIER_SHIFT = 0xF00, 8
+TRACE_NEWTHREAD, TRACE_NEWTHREAD_NAME = code(7, 0, 1), code(7, 1, 1)  # new tid, pid; its process's name
+TRACE_EXEC, TRACE_EXEC_NAME = code(7, 0, 2), code(7, 1, 2)  # pid; the name it execs as
+TRACE_THREADNAME = code(7, 1, 4)  # a thread's own name, as it sets it
 VM_FAULT = code(1, 0x30, 2)  # vm_fault_internal: START, END with its result and the fault's type
 FAULT_KINDS = {
     1: 'zero fill',
@@ -398,6 +401,52 @@ def pageins(events: list[Event]) -> tuple[list[DiskIO], list[PageIn]]:
         else:
             inflight[bp] = (e.ts, e.tid, e.args[3], dkcode)
     return disk_ios, fs_pageins
+
+
+def _strings(events: list[Event], ids: set[int]) -> list[tuple[Event, str]]:
+    """Return each string kernel_debug_string_simple wrote (a START...END run per thread) with its first event."""
+    pending: dict[tuple[int, int], tuple[Event, bytearray]] = {}
+    out = []
+    for e in events:
+        if e.id not in ids:
+            continue
+        key = (e.tid, e.id)
+        if e.func & FUNC_START:
+            pending[key] = (e, bytearray())
+        if key not in pending:
+            continue
+        first, buf = pending[key]
+        buf += _words_to_bytes(e.args)
+        if e.func & FUNC_END or not e.func:
+            del pending[key]
+            out.append((first, bytes(buf).split(b'\0', 1)[0].decode('utf-8', 'replace')))
+    return out
+
+
+def thread_names(events: list[Event]) -> dict[int, tuple[int, str, str]]:
+    """Return the ring's own names of its threads: tid: (pid, process, thread name).
+
+    They come from the new threads, the execs and the names threads gave themselves while the ring recorded.
+    """
+    pid_of: dict[int, int] = {}
+    proc_of: dict[int, str] = {}
+    made_by: dict[int, int] = {}  # creator: the thread it made last
+    for e in events:
+        if e.id == TRACE_NEWTHREAD:
+            pid_of[e.args[0]] = e.args[1]
+            made_by[e.tid] = e.args[0]
+    exec_pid: dict[int, int] = {e.tid: e.args[0] for e in events if e.id == TRACE_EXEC}
+    for first, text in _strings(events, {TRACE_NEWTHREAD_NAME, TRACE_EXEC_NAME}):
+        if first.id == TRACE_NEWTHREAD_NAME and first.tid in made_by:
+            proc_of.setdefault(made_by[first.tid], text)
+        elif first.id == TRACE_EXEC_NAME:
+            proc_of[first.tid] = text
+            pid_of.setdefault(first.tid, exec_pid.get(first.tid, 0))
+    names = {first.tid: text for first, text in _strings(events, {TRACE_THREADNAME})}
+    return {
+        tid: (pid_of.get(tid, 0), proc_of.get(tid, '?'), names.get(tid, ''))
+        for tid in set(pid_of) | set(proc_of) | set(names)
+    }
 
 
 def faults(events: list[Event]) -> list[Fault]:

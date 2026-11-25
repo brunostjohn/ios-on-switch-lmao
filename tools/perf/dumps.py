@@ -158,15 +158,24 @@ def find(crashes: str | None) -> list[tuple[str, str]]:
 
 
 def load(ring_path: str, shot_path: str, kcdata_py: str | None) -> tuple[ktrace.Ring, Names, recfile.Dump | None]:
-    """Return a dump's ring, its stackshot's names, and its .rec file's header (None for a .ktrace pair)."""
+    """Return a dump's ring, its threads' names, and its .rec file's header (None for a .ktrace pair).
+
+    The stackshot names the threads alive when it was taken; the ring's own new-thread and name events name those that
+    ended before it.
+    """
+    dump = None
     if ring_path.endswith('.rec'):
         dump = recfile.read(ring_path)
         if dump.problem:
             raise ValueError(dump.problem)
         n = names(decode_shot(dump.shot, kcdata_py)) if dump.shot else Names()
-        return ktrace.parse(dump.ring) if dump.ring else ktrace.Ring(0, []), n, dump
-    n = names(decode_kcdata(shot_path, kcdata_py)) if os.path.isfile(shot_path) else Names()
-    return ktrace.read(ring_path), n, None
+        ring = ktrace.parse(dump.ring) if dump.ring else ktrace.Ring(0, [])
+    else:
+        n = names(decode_kcdata(shot_path, kcdata_py)) if os.path.isfile(shot_path) else Names()
+        ring = ktrace.read(ring_path)
+    for tid, named in ktrace.thread_names(ring.events).items():
+        n.thread.setdefault(tid, named)
+    return ring, n, dump
 
 
 def ms(ticks: int) -> float:

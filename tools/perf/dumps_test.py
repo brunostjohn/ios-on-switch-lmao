@@ -211,6 +211,29 @@ class DumpTest(unittest.TestCase):
         self.assertIn(f'?[0] ({warm}) tier 0 passive 512 KiB, its own tier 3 16 KiB', text)
         self.assertIn('by tier (p: passive): 0p 1, 3 1', text)
 
+    def test_a_thread_that_ended_before_the_stackshot_is_named_from_the_ring(self):
+        def words(text: str) -> tuple[int, ...]:
+            return struct.unpack('<QQQQ', text.encode().ljust(32, b'\0'))
+
+        events = [
+            event(1, ktrace.TRACE_NEWTHREAD, (777, 31, 0, 99), MAIN),
+            event(
+                1.01, ktrace.TRACE_NEWTHREAD_NAME | ktrace.FUNC_START | ktrace.FUNC_END, words('fileproviderd'), MAIN
+            ),
+            event(2, ktrace.TRACE_THREADNAME | ktrace.FUNC_START | ktrace.FUNC_END, words('com.apple.fp.sync'), 777),
+            event(3, ktrace.MACH_SCHED, (0, 777, 31, 31), MAIN),
+            event(50, ktrace.MACH_SCHED, (0, MAIN, 31, 31), 777),
+            event(100, ktrace.TRIGGER, (2, MAIN, 300), 0),
+        ]
+        names = ktrace.thread_names(ktrace.parse(pack_ring(events)).events)
+        self.assertEqual(names[777], (31, 'fileproviderd', 'com.apple.fp.sync'))
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, 'Switch-recorder-2.ktrace')
+            with open(p, 'wb') as f:
+                f.write(pack_ring(events))
+            text = '\n'.join(dumps.summary(p, p[:-7] + '.kcdata', None, {}))
+        self.assertIn('fileproviderd[31] com.apple.fp.sync (777) 47 ms', text)
+
     def test_a_stack_handoff_is_a_context_switch(self):
         """thread_invoke's handoff path logs MACH_STACK_HANDOFF, not MACH_SCHED (hitch-shots-codex, 25 Nov)."""
         events = [
