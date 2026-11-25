@@ -1,5 +1,6 @@
 """tools/perf over lines as boot 2 of 22 Nov logged them (iOS 27, a debug kernel), cut to what each test needs."""
 
+import gzip
 import json
 import os
 import struct
@@ -529,6 +530,28 @@ class Stage3DecodeAndSymbolTest(unittest.TestCase):
         with open(os.path.join(root, 'SpringBoard.tsv'), 'w') as f:
             f.write('S\t1000\tSBMainLoop\n')
         return symbols.load(symbols_dir=root)
+
+    def test_shared_cache_functions_resolve_through_their_index(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / 'dsc.tsv').write_text('I\t180404000\t180452000\tlibobjc.A.dylib\n')
+            with gzip.open(root / symbols.FUNCTIONS, 'wt') as f:
+                f.write('I\t180404000\t180452000\tlibobjc.A.dylib\n')
+                f.write('S\t180405264\tlibobjc.A.dylib\t_overflow_retain\n')
+                f.write('S\t180405240\tlibobjc.A.dylib\t_customRR_retain\n')
+            syms = symbols.load(symbols_dir=d)
+            self.assertEqual(syms.dsc_addr(0x180405248), 'libobjc.A.dylib _customRR_retain+0x8')
+            self.assertEqual(syms.dsc_addr(0x180405264), 'libobjc.A.dylib _overflow_retain')
+            self.assertEqual(syms.dsc_addr(0x180404010), 'libobjc.A.dylib+0x10')
+            self.assertTrue((root / symbols.FUNCTION_INDEX).is_file())
+            self.assertEqual(symbols.load(symbols_dir=d).dsc_addr(0x180405244), 'libobjc.A.dylib _customRR_retain+0x4')
+        row = '0x180405240:\t__TEXT.__text\t_customRR_retain\t/usr/lib/libobjc.A.dylib'
+        self.assertEqual(symbols.ipsw_symbol(row), 'S\t180405240\tlibobjc.A.dylib\t_customRR_retain\n')
+        self.assertIsNone(symbols.ipsw_symbol('0x180500000:\t__DATA.__data\t_x\t/usr/lib/libobjc.A.dylib'))
+        self.assertEqual(
+            symbols._parse_ipsw_entry({'load_address': 0x180404000, 'name': '/usr/lib/libobjc.A.dylib'}),
+            (0x180404000, 0, 'libobjc.A.dylib'),
+        )
 
     def test_symbols_resolve_dsc_kernel_and_bundle_with_fallback(self):
         with tempfile.TemporaryDirectory() as d:
