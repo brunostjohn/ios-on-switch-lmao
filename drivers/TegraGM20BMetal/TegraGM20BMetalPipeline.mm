@@ -293,27 +293,43 @@ static bool sharesRenderTarget(SwitchMetalCommandBuffer *cb, size_t first, size_
     return a.color[0].texture && a.color[0].texture == b.color[0].texture && b.color[0].load == MTLLoadActionLoad;
 }
 
+static size_t nextEncoder(const SwitchMetalCommandPlan &plan, size_t k)
+{
+    return std::max(SwitchMetalCommandPlan::isEncoderBegin(plan.operation(k).op) ? plan.encoderEnd(k) : k + 1, k + 1);
+}
+
+static const SwitchMetalPass *depthLoading(SwitchMetalCommandBuffer *cb, size_t k)
+{
+    if (cb->_plan.operation(k).op != OpRender)
+        return nullptr;
+    const SwitchMetalPass &pass = cb->_passes[cb->_plan.legacy(k).x];
+    return pass.depth && pass.depthLoad == MTLLoadActionLoad ? &pass : nullptr;
+}
+
+static bool loadsADepth(SwitchMetalCommandBuffer *cb, size_t from, size_t to)
+{
+    for (size_t k = from; k < to; k = nextEncoder(cb->_plan, k))
+        if (depthLoading(cb, k))
+            return true;
+    return false;
+}
+
 // Whether cutting [from, to) at `at` leaves every pass after the cut that loads a depth in the range of the pass before it
 // that stored the depth: a stored zcull region lives in its range's job alone (zcull_planes.h), so a cut between them
 // loses the region the loading pass would cull with
 static bool cutKeepsZcull(SwitchMetalCommandBuffer *cb, size_t from, size_t at, size_t to)
 {
     const SwitchMetalCommandPlan &plan = cb->_plan;
-    const auto next = [&](size_t k) {
-        return std::max(SwitchMetalCommandPlan::isEncoderBegin(plan.operation(k).op) ? plan.encoderEnd(k) : k + 1, k + 1);
-    };
-    for (size_t k = at; k < to; k = next(k)) {
-        if (plan.operation(k).op != OpRender)
+    for (size_t k = at; k < to; k = nextEncoder(plan, k)) {
+        const SwitchMetalPass *loading = depthLoading(cb, k);
+        if (!loading)
             continue;
-        const SwitchMetalPass &loading = cb->_passes[plan.legacy(k).x];
-        if (!loading.depth || loading.depthLoad != MTLLoadActionLoad)
-            continue;
-        for (size_t j = from; j < at; j = next(j)) {
+        for (size_t j = from; j < at; j = nextEncoder(plan, j)) {
             if (plan.operation(j).op != OpRender)
                 continue;
             const SwitchMetalPass &storing = cb->_passes[plan.legacy(j).x];
-            if (storing.depth == loading.depth && (storing.zeta[0].store != MTLStoreActionDontCare ||
-                                                   storing.zeta[1].store != MTLStoreActionDontCare))
+            if (storing.depth == loading->depth && (storing.zeta[0].store != MTLStoreActionDontCare ||
+                                                    storing.zeta[1].store != MTLStoreActionDontCare))
                 return false;
         }
     }
@@ -350,8 +366,10 @@ static void splitCommittedRange(SwitchMetalCommandBuffer *cb)
     const size_t low = kTargetChunkMin / 2, high = count - 2;
     size_t picked = 0, pickedDist = SIZE_MAX, anyCut = 0, anyDist = SIZE_MAX;
     size_t prev = 0, idx = 0;
+    const bool depthLoads = loadsADepth(cb, range.from, range.to);
     for (size_t at = range.from; at < range.to; ++idx) {
-        if (idx >= low && idx <= high && !gm20bContinuesPass(cb, at) && cutKeepsZcull(cb, range.from, at, range.to)) {
+        if (idx >= low && idx <= high && !gm20bContinuesPass(cb, at) &&
+            (!depthLoads || cutKeepsZcull(cb, range.from, at, range.to))) {
             const size_t dist = idx >= target ? idx - target : target - idx;
             if (dist <= anyDist) {
                 anyCut = at;
