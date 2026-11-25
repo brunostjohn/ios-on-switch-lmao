@@ -28,7 +28,6 @@ py_library(
         "pull_logs.py",
         "registration.py",
         "system_apps.py",
-        "translated_tree.py",
     ],
     imports = ["../.."],
     deps = [
@@ -37,7 +36,6 @@ py_library(
         "//tools/common:paths",
         "//tools/hwtest:lib",
         "//tools/install:lib",
-        "//tools/trustcache",
     ],
 )
 
@@ -89,14 +87,6 @@ py_test(
         ":deploy",
         ":lib",
     ],
-)
-
-py_test(
-    name = "translated_tree_test",
-    size = "small",
-    srcs = ["translated_tree_test.py"],
-    data = ["//ipsw:pretranslated/24B119/os.trustcache"],
-    deps = [":lib"],
 )
 
 py_test(

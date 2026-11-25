@@ -14,6 +14,13 @@ exports_files([
     "to_card.py",
 ])
 
+# The tree's index and the boot package's /chosen list of updates, which //tools/package:adt_edit writes too.
+py_library(
+    name = "overlay_index",
+    srcs = ["overlay_index.py"],
+    imports = ["../.."],
+)
+
 py_library(
     name = "lib",
     srcs = [
@@ -35,7 +42,6 @@ py_library(
         "host.py",
         "keys.py",
         "manifest.py",
-        "overlay_index.py",
         "owners.py",
         "pack.py",
         "populate.py",
@@ -48,14 +54,17 @@ py_library(
         "staged_apps.py",
         "target.py",
         "to_card.py",
+        "translated_tree.py",
     ],
     imports = ["../.."],
     deps = [
+        ":overlay_index",
         "//tools/common:files",
         "//tools/common:hashing",
         "//tools/common:paths",
         "//tools/common:seed_manifest",
         "//tools/common:sudo",
+        "//tools/trustcache",
     ],
 )
 
@@ -98,6 +107,18 @@ py_binary(
 )
 
 # Bazel runs it for iOS 27's deltas and translated cryptexes (install/translated.bzl).
+py_test(
+    name = "translated_tree_test",
+    size = "small",
+    srcs = ["translated_tree_test.py"],
+    data = [
+        "//ipsw:pretranslated/24B119/os.trustcache",
+        "//ipsw:pretranslated/24B119/os.updates.json",
+        "//translate/arm64e/pretranslate:edits_24B119.json",
+    ],
+    deps = [":lib"],
+)
+
 py_binary(
     name = "translate",
     srcs = ["translate.py"],

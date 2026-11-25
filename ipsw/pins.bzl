@@ -150,6 +150,7 @@ IPSWS = {
                 "a64x-cache-pretranslated.bin": "1415165dbfbe5246985ecf358a0dbe324f8799958b3bf2096b518bdcf1e30dff",
                 "app_cryptex.trustcache": "cfbb939e981575846f2da3218bb445a533eb22d6e2c981f0f35a05698459da75",
                 "os.trustcache": "359f249156c10a5dc640efd60e15987d3068975953db09f02ef1df1cf2f0d97b",
+                "os.updates.json": "f31a725cc55e256d9655e0de95559c443f877d18e71937ea021a631f1fe785c9",
                 "system_cryptex.trustcache": "e9d1ccf38eb03f4559f874e7e9321869b8551284795ae10975682b6537c59b44",
             },
             "quartzcore_metallib_sha256": "342e3ee16a83e7b04837dcdadf4a786020711e3179afcf0ca50a461e7331218b",

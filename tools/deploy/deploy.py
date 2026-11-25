@@ -13,8 +13,10 @@ Steps:
                    images' NAME.SII.NNN parts), AppleDouble files by name; nothing else on the FAT. Refused
                    when the card's iOS is another kind than the build's (its System volume is not the IPSW's),
                    and on iOS 27 when a translated System file on the card is not in this build's os.trustcache
-                   (translated_tree.py: that tree is //install:sd's)
-  3 overlay        <Data>/Switch/overlay := the package's overlay/; <Data>/Switch/deployed.json := the checkout's
+                   and the build carries no update for it (translated_tree.py)
+  3 overlay        <Data>/Switch/overlay := the package's overlay/; on iOS 27 <Data>/Switch/pretranslated-updates :=
+                   the build's translations of the card's stale translated System files (translated_tree.py), which
+                   the boot package's kernel serves in place of the tree's; <Data>/Switch/deployed.json := the checkout's
                    commit, which tools/hwtest joins HW Test's reports with (deployed.py); each app the overlay's
                    /Applications added, changed or removed goes into <Data>/Switch/app-registration.plist, which
                    switch-appregd applies at the next boot without a migration (app_journal.py; on iOS 17 with
@@ -69,7 +71,6 @@ from tools.deploy import (
     poster_snapshots,
     pull_logs,
     system_apps,
-    translated_tree,
 )
 from tools.install import (
     bootstrap,
@@ -78,6 +79,7 @@ from tools.install import (
     progress,
     renamed,
     staged_apps,
+    translated_tree,
 )
 
 # Logging profiles put on Data by hand during bring-up, which nothing else removes: com.apple.SystemConfiguration at
@@ -165,6 +167,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         '--pretranslated-trust', help="iOS 27: this build's os.trustcache (//ipsw:pretranslated_os_trust)"
     )
+    parser.add_argument(
+        '--pretranslated-updates', help="iOS 27: this build's translated updates (//install:pretranslated_updates)"
+    )
     parser.add_argument('--gpu-bundle')
     parser.add_argument('--stager')
     parser.add_argument('--kcdata')
@@ -188,9 +193,12 @@ def _checked(args: argparse.Namespace, log: host.Log) -> tuple[cards.Card, dict,
     if not data:
         raise cards.RefusedError(f'{card.disk}: no iPad Data volume {data_uuid}')
     check_kind(card, args.ipsw)
+    args.pretranslated_wanted = None
     if args.pretranslated_trust:
         with cards.mounted(data, log, read_only=True) as data_root:
-            translated_tree.check(data_root, Path(args.pretranslated_trust))
+            args.pretranslated_wanted = translated_tree.plan(
+                data_root, Path(args.pretranslated_trust), Path(args.pretranslated_updates)
+            )
     gpu = Path(args.gpu_bundle) if args.gpu_bundle else None
     if not args.remove_gpu and not (gpu and (gpu.is_file() or (gpu / 'TegraGM20BMetal.trustcache').is_file())):
         raise host.HostError('no GPU bundle (--//deploy:gpu_bundle names //gpu:bundle or a directory like //gpu:base)')
@@ -202,6 +210,11 @@ def _plan(args: argparse.Namespace, changes: list, removed: list, pairing: dict 
     steps = ['pull logs'] if args.pull_logs else []
     steps += ['harvest the m2v journals'] if args.harvest else []
     steps += [f'boot entry: {len(changes)} to copy, {len(removed)} stale', 'overlay']
+    wanted = getattr(args, 'pretranslated_wanted', None)
+    if wanted is not None:
+        steps.append(
+            'pretranslated updates: ' + (', '.join(sorted(wanted)) if wanted else 'none (the tree is current)')
+        )
     if not args.no_joycon_pairing:
         controllers = f'stage {len(pairing["controllers"])} controller(s) for host {pairing["host"]}' if pairing else ''
         steps.append('Joy-Con pairing: ' + (controllers or 'remove any staged dump'))
@@ -322,6 +335,9 @@ def _write(
     steps = _Steps(log)
     apps = steps.run('system apps registration', system_apps.apps, data_root)
     cards.sync_overlay(data_root, args.boot_package, log)
+    wanted = getattr(args, 'pretranslated_wanted', None)
+    if wanted is not None:
+        translated_tree.stage(data_root, Path(args.pretranslated_updates), wanted, log)
     pins = json.loads(Path(args.ipsw).read_text()) if args.ipsw else {}
     steps.run('bootstrap migration', bootstrap.stage, data_root, args.boot_package, pins, log)
     steps.run(
@@ -364,7 +380,16 @@ def _eject(card: cards.Card, target: object, log: host.Log) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    for name in ('boot_package', 'spec', 'ipsw', 'pretranslated_trust', 'gpu_bundle', 'stager', 'kcdata'):
+    for name in (
+        'boot_package',
+        'spec',
+        'ipsw',
+        'pretranslated_trust',
+        'pretranslated_updates',
+        'gpu_bundle',
+        'stager',
+        'kcdata',
+    ):
         setattr(args, name, paths.located(getattr(args, name)))
     log = host.Log(args.log or paths.run_log('deploy', 'switch-ios-install'))
     try:

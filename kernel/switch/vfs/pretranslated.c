@@ -20,6 +20,16 @@
  * signatures and copies them into app containers. Their translations are in the tree all the same, and the tree's
  * .originals pairs each original CDHash with its translation's, so an image mapped from such a copy takes its code
  * from the translation instead (switch_pretranslated_translation).
+ *
+ * A deploy keeps Data, and so the tree, but its boot package may translate a file differently (an edit of it): the boot
+ * package names each such file, by System path and CDHash, in /chosen (kits/SwitchPretranslated
+ * switch_pretranslated_updates.h), and the deploy writes its bytes under Switch/pretranslated-updates. Before the
+ * tables are built, each update whose CDHash the boot package pins takes over its file's index entries
+ * (switch_pt_apply_updates); the tree's copy stays protected. The mapping comes from the boot package, not from Data,
+ * and the bytes have to be signed as that CDHash, checked here before an update stands, so whoever wrote them (a Mac
+ * writes the user that mounted the card, uid 501, iOS's mobile) can serve nothing else. The kernel makes each update and its directory root's before it
+ * stands, as the install makes the tree's. An update that is missing or wrong is skipped with one log line and its
+ * file stays the tree's; without the /chosen list nothing here runs.
  */
 #if CONFIG_A64X
 #include <sys/param.h>
@@ -38,11 +48,16 @@
 #include <mach/machine.h>
 #include <os/atomic_private.h>
 #include <pexpert/device_tree.h>
+#include <libkern/crypto/sha2.h>
 
 #include <switch/auth_fs.h>
 #include <switch/pretranslated.h>
 
+#include "../../../kits/SwitchPretranslated/switch_pretranslated_updates.h"
+
 #define SWITCH_PT_TREE           "Switch/pretranslated"
+#define SWITCH_PT_UPDATES_DIR    "Switch/pretranslated-updates"
+#define SWITCH_PT_UPDATES_LIST   "switch-pretranslated-updates"
 #define SWITCH_PT_INDEX          ".index"
 #define SWITCH_PT_LOOKUP         (VNODE_LOOKUP_NOFOLLOW_ANY | VNODE_LOOKUP_NOCROSSMOUNT)
 #define SWITCH_PT_TRUST_PROPERTY "switch-pretranslated-cdhashes"
@@ -64,6 +79,11 @@ static struct {
     size_t originals_size;
     struct switch_pt_originals originals;
     uint32_t *original_files;
+    /* The updates applied: each one's System file, the tree copy it replaced (kept protected) and its directory. */
+    uint64_t update_systems[SWITCH_PT_MAX_UPDATES];
+    uint64_t replaced[SWITCH_PT_MAX_UPDATES];
+    uint64_t update_dirs[SWITCH_PT_MAX_UPDATES];
+    uint32_t updates;
 } switch_pt;
 
 unsigned int hash_string(const char *cp, int len);
@@ -200,6 +220,212 @@ static int switch_pt_read_trust(void)
     return switch_pt.trusted.count ? 0 : ENOENT;
 }
 
+/* Root:wheel, writable by its owner alone: as the install leaves the tree, for an entry a deploy wrote. */
+static int switch_pt_adopt(vnode_t vp, vfs_context_t ctx)
+{
+    struct vnode_attr va;
+    VATTR_INIT(&va);
+    VATTR_WANTED(&va, va_uid);
+    VATTR_WANTED(&va, va_gid);
+    VATTR_WANTED(&va, va_mode);
+    int error = vnode_getattr(vp, &va, ctx);
+    if (error) {
+        return error;
+    }
+    const mode_t mode = (mode_t)(va.va_mode & 07777 & ~(S_ISUID | S_ISGID | S_IWGRP | S_IWOTH));
+    if (va.va_uid == 0 && va.va_gid == 0 && (va.va_mode & 07777) == mode) {
+        return 0;
+    }
+    VATTR_INIT(&va);
+    VATTR_SET(&va, va_uid, 0);
+    VATTR_SET(&va, va_gid, 0);
+    VATTR_SET(&va, va_mode, mode);
+    return vnode_setattr(vp, &va, ctx);
+}
+
+#define SWITCH_PT_UPDATE_HEAD (32u << 10)
+
+static int switch_pt_read_at(vnode_t vp, void *buffer, uint32_t size, off_t offset, vfs_context_t ctx)
+{
+    int resid = 0;
+    int error = vn_rdwr(UIO_READ, vp, (caddr_t)buffer, (int)size, offset, UIO_SYSSPACE, IO_NODELOCKED,
+                        vfs_context_ucred(ctx), &resid, current_proc());
+    return error ? error : (resid ? EIO : 0);
+}
+
+/* Whether the update's SHA-256 CodeDirectory hashes to the CDHash the boot package names for it. */
+static bool switch_pt_update_signed(vnode_t vp, off_t size, const uint8_t *cdhash, vfs_context_t ctx)
+{
+    const uint32_t head_size = size < (off_t)SWITCH_PT_UPDATE_HEAD ? (uint32_t)size : SWITCH_PT_UPDATE_HEAD;
+    uint8_t *head = kalloc_data(head_size, Z_WAITOK);
+    uint8_t *blob = NULL;
+    uint32_t offset = 0, length = 0, cd = 0, cd_length = 0;
+    bool signed_as = false;
+    if (head && !switch_pt_read_at(vp, head, head_size, 0, ctx) &&
+        switch_pt_macho_signature(head, head_size, &offset, &length) && (off_t)offset + length <= size &&
+        (blob = kalloc_data(length, Z_WAITOK)) != NULL && !switch_pt_read_at(vp, blob, length, offset, ctx) &&
+        switch_pt_code_directory(blob, length, &cd, &cd_length)) {
+        uint8_t digest[SHA256_DIGEST_LENGTH];
+        SHA256_CTX sha;
+        SHA256_Init(&sha);
+        SHA256_Update(&sha, blob + cd, cd_length);
+        SHA256_Final(digest, &sha);
+        signed_as = memcmp(digest, cdhash, SWITCH_PT_CDHASH) == 0;
+    }
+    if (blob) {
+        kfree_data(blob, length);
+    }
+    if (head) {
+        kfree_data(head, head_size);
+    }
+    return signed_as;
+}
+
+static bool switch_pt_data_id_used(const struct switch_pt_index *index, uint64_t id)
+{
+    for (uint32_t i = 0; i < index->count; ++i) {
+        if (switch_pt_file_at(index, i).data_id == id) {
+            return true;
+        }
+    }
+    for (uint32_t i = 0; i < index->dirs; ++i) {
+        if (switch_pt_directory_at(index, i) == id) {
+            return true;
+        }
+    }
+    for (uint32_t i = 0; i < switch_pt.updates; ++i) {
+        if (switch_pt.replaced[i] == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* One update: its System file, its copy under the update tree, and the tree's entries pointed at the copy. */
+static const char *switch_pt_apply_update(vnode_t updates, const struct switch_pt_index *index,
+                                          const struct switch_pt_update *update, vfs_context_t ctx)
+{
+    if (!switch_cdhash_listed(&switch_pt.trusted, update->cdhash)) {
+        return "CDHash not pinned";
+    }
+    vnode_t system = NULLVP, copy = NULLVP, parent = NULLVP;
+    const char *failed = NULL;
+    struct vnode_attr va;
+    if (vnode_lookup(update->path, VNODE_LOOKUP_NOFOLLOW_ANY, &system, ctx) ||
+        vnode_mount(system) != switch_pt.system || !vnode_isreg(system)) {
+        failed = "System file";
+    }
+    uint64_t system_id = 0;
+    if (!failed) {
+        VATTR_INIT(&va);
+        VATTR_WANTED(&va, va_fileid);
+        if (vnode_getattr(system, &va, ctx) || !VATTR_IS_SUPPORTED(&va, va_fileid)) {
+            failed = "System file id";
+        }
+        system_id = va.va_fileid;
+    }
+    for (uint32_t i = 0; !failed && i < switch_pt.updates; ++i) {
+        if (switch_pt.update_systems[i] == system_id) {
+            failed = "a hard link of an update already applied";
+        }
+    }
+    if (!failed && (vnode_lookupat(switch_pt_update_relative(update), SWITCH_PT_LOOKUP, &copy, ctx, updates) ||
+                    vnode_mount(copy) != switch_pt.data || !vnode_isreg(copy) || vnode_isnamedstream(copy))) {
+        failed = "update file";
+    }
+    uint64_t copy_id = 0, parent_id = 0;
+    if (!failed) {
+        VATTR_INIT(&va);
+        VATTR_WANTED(&va, va_fileid);
+        VATTR_WANTED(&va, va_parentid);
+        VATTR_WANTED(&va, va_nlink);
+        VATTR_WANTED(&va, va_data_size);
+        if (vnode_getattr(copy, &va, ctx) || !VATTR_IS_SUPPORTED(&va, va_fileid) ||
+            !VATTR_IS_SUPPORTED(&va, va_parentid) || !VATTR_IS_SUPPORTED(&va, va_nlink) ||
+            !VATTR_IS_SUPPORTED(&va, va_data_size) || va.va_nlink != 1) {
+            failed = "update file ids";
+        }
+        copy_id = va.va_fileid;
+        parent_id = va.va_parentid;
+    }
+    if (!failed && !switch_pt_update_signed(copy, (off_t)va.va_data_size, update->cdhash, ctx)) {
+        failed = "not signed as its CDHash";
+    }
+    if (!failed && switch_pt_data_id_used(index, copy_id)) {
+        failed = "update file id";
+    }
+    if (!failed &&
+        ((parent = vnode_getparent(copy)) == NULLVP || switch_pt_adopt(parent, ctx) || switch_pt_adopt(copy, ctx))) {
+        failed = "update ownership";
+    }
+    uint64_t replaced = 0;
+    if (!failed && !switch_pt_index_point(switch_pt.raw, index, system_id, copy_id, update->cdhash, &replaced)) {
+        failed = "not in the tree";
+    }
+    if (!failed) {
+        switch_pt.update_systems[switch_pt.updates] = system_id;
+        switch_pt.replaced[switch_pt.updates] = replaced;
+        switch_pt.update_dirs[switch_pt.updates] = parent_id;
+        ++switch_pt.updates;
+    }
+    if (parent) {
+        vnode_put(parent);
+    }
+    if (copy) {
+        vnode_put(copy);
+    }
+    if (system) {
+        vnode_put(system);
+    }
+    return failed;
+}
+
+/* The boot package's updates, applied to the parsed index before its tables are built. Nothing here can turn the tree
+ * off: an update tree that cannot be used leaves every file the tree's. */
+static void switch_pt_apply_updates(vnode_t tree, const struct switch_pt_index *index, vfs_context_t ctx)
+{
+    DTEntry chosen;
+    const void *bytes = NULL;
+    unsigned int size = 0;
+    if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
+        SecureDTGetProperty(chosen, SWITCH_PT_UPDATES_LIST, &bytes, &size) != kSuccess) {
+        return;
+    }
+    struct switch_pt_updates list;
+    const enum switch_pt_error parsed = switch_pt_updates_parse((const uint8_t *)bytes, size, &list);
+    if (parsed != SWITCH_PT_OK) {
+        printf("SwitchPretranslated: no updates (/chosen/" SWITCH_PT_UPDATES_LIST ": %d)\n", (int)parsed);
+        return;
+    }
+    vnode_t data_switch = vnode_getparent(tree), updates = NULLVP;
+    uint64_t id = 0;
+    int error = data_switch ? switch_pt_owned_by_root(data_switch, VDIR, ctx, &id, NULL) : ENOENT;
+    if (!error) {
+        error = vnode_lookupat("pretranslated-updates", SWITCH_PT_LOOKUP, &updates, ctx, data_switch);
+    }
+    if (!error && (vnode_mount(updates) != switch_pt.data || !vnode_isdir(updates))) {
+        error = ENOTDIR;
+    }
+    if (!error) {
+        error = switch_pt_adopt(updates, ctx);
+    }
+    if (error) {
+        printf("SwitchPretranslated: %u updates named, none applied (/private/var/" SWITCH_PT_UPDATES_DIR ": %d)\n",
+               list.count, error);
+    }
+    for (uint32_t i = 0; !error && i < list.count; ++i) {
+        const struct switch_pt_update update = switch_pt_update_at(&list, i);
+        const char *failed = switch_pt_apply_update(updates, index, &update, ctx);
+        printf("SwitchPretranslated: %s %s\n", update.path, failed ? failed : "from the deploy's update");
+    }
+    if (updates) {
+        vnode_put(updates);
+    }
+    if (data_switch) {
+        vnode_put(data_switch);
+    }
+}
+
 static const char *switch_pt_build(vnode_t tree, vfs_context_t ctx, int *error)
 {
     uint64_t tree_id = 0, index_id = 0;
@@ -215,13 +441,22 @@ static const char *switch_pt_build(vnode_t tree, vfs_context_t ctx, int *error)
         *error = (int)parsed;
         return "index contents";
     }
-    /* the index and .originals: protected files no record lists */
-    switch_pt.storage_size = switch_pt_tables_bytes(&index, 2);
+    switch_pt_apply_updates(tree, &index, ctx);
+    /* the index and .originals: protected files no record lists; per update, the copy it replaced and its directory */
+    const uint32_t extra = 2 + 2 * switch_pt.updates;
+    switch_pt.storage_size = switch_pt_tables_bytes(&index, extra);
     switch_pt.storage = kalloc_data(switch_pt.storage_size, Z_WAITOK | Z_ZERO);
-    parsed = switch_pt_tables_build(&switch_pt.tables, &index, 2, switch_pt.storage, switch_pt.storage_size,
+    parsed = switch_pt_tables_build(&switch_pt.tables, &index, extra, switch_pt.storage, switch_pt.storage_size,
                                     switch_pt_name_hash);
     if (parsed == SWITCH_PT_OK && !switch_pt_map_put(&switch_pt.tables.data, index_id, SWITCH_PT_PROTECTED)) {
         parsed = SWITCH_PT_DUPLICATE_ID;
+    }
+    for (uint32_t i = 0; parsed == SWITCH_PT_OK && i < switch_pt.updates; ++i) {
+        if (!switch_pt_map_put(&switch_pt.tables.data, switch_pt.replaced[i], SWITCH_PT_PROTECTED) ||
+            (!switch_pt_map_get(&switch_pt.tables.data, switch_pt.update_dirs[i], NULL) &&
+             !switch_pt_map_put(&switch_pt.tables.data, switch_pt.update_dirs[i], SWITCH_PT_DIRECTORY))) {
+            parsed = SWITCH_PT_DUPLICATE_ID;
+        }
     }
     uint32_t root_kind = 0;
     if (parsed == SWITCH_PT_OK &&

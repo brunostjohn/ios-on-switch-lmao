@@ -276,6 +276,9 @@ def _boot_package_impl(ctx):
     if pretranslated.cache_list:
         args.add("--a64x-cache-pretranslated", pretranslated.cache_list)
         adt_inputs.append(pretranslated.cache_list)
+    if pretranslated.updates:
+        args.add("--pretranslated-updates", pretranslated.updates)
+        adt_inputs.append(pretranslated.updates)
 
     # Each role's CDHashes, which the kernel authenticates the role's files by: the cryptexes' (Apple's trust cache and,
     # on iOS 27, its pretranslated module) and the pretranslated tree's.
