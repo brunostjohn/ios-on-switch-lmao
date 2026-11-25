@@ -39,6 +39,23 @@ inline void IOLog(const char *format, ...)
     switch_test_lines.emplace_back(line);
 }
 
+// A panic is what a filter may do: it neither blocks nor allocates. The test catches it with the panic's text.
+struct switch_test_panic : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+[[noreturn]] inline void panic(const char *format, ...) __attribute__((format(printf, 1, 2)));
+
+inline void panic(const char *format, ...)
+{
+    char line[512];
+    va_list arguments;  // NOLINT(cppcoreguidelines-init-variables): va_start initialises it
+    va_start(arguments, format);
+    vsnprintf(line, sizeof(line), format, arguments);
+    va_end(arguments);
+    throw switch_test_panic(line);
+}
+
 struct IOSimpleLock {
     bool held;
 };

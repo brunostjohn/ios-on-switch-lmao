@@ -2,8 +2,9 @@
 // The memory controller's error interrupt, the one owner of MC_INTSTATUS, INTMASK and the capture registers (see
 // TegraSMMU.h tegra_mc_errors_start). MC General Interrupt: global 77 (Tegra X1 TRM ch.3, p.35), INTID 109, level.
 //
-// The filter takes the error (TegraMCErrors.h) into a slot only it writes; IOKit keeps a level line masked from a
-// filter that returns true until its action has run, so the action reads that slot with no other writer. The action
+// A fatal kind (TegraMCErrors.h kFatal) panics in the filter with the error's line. The filter takes any other error
+// into a slot only it writes; IOKit keeps a level line masked from a filter that returns true until its action has
+// run, so the action reads that slot with no other writer. The action
 // prints the line (the first Runs::kFullLines of a client's run, then one count line when the run ends) and publishes
 // the error to readers in other drivers (GM20B's stats and hang lines, the engines' stall lines) under a spin lock: they
 // read it from any context, and a published error is three words that must stay together. The runs are the work
@@ -67,10 +68,23 @@ IOSimpleLock *gLatestLock;
 switch_mc::Error gLatest;
 uint32_t gCount;
 
+// In the filter, interrupts off: a fatal error panics there, before the faulting client's next access, and with no
+// work loop needed (a wedged fabric never runs the action).
+void panicIfFatal(const switch_mc::Error &error)
+{
+    if (!(error.intstatus & switch_mc::kFatal))
+        return;
+    char line[256];
+    panic("TegraSMMU: MC error %s", switch_mc::describe(error, line, sizeof(line)));
+}
+
 // NOLINTNEXTLINE(misc-const-correctness): IOFilterInterruptEventSource::Filter's signature
 bool filter(OSObject *, IOFilterInterruptEventSource *)
 {
-    return switch_mc::take(gIo, &gTaken);
+    if (!switch_mc::take(gIo, &gTaken))
+        return false;
+    panicIfFatal(gTaken);
+    return true;
 }
 
 void printEnded(const switch_mc::Runs::Ended *ended, unsigned count)
@@ -98,8 +112,10 @@ void occurred(OSObject *, IOInterruptEventSource *, int)
 
 IOReturn takeLatched(OSObject *, void *, void *, void *, void *)
 {
-    if (switch_mc::take(gIo, &gTaken))
+    if (switch_mc::take(gIo, &gTaken)) {
+        panicIfFatal(gTaken);
         occurred(nullptr, nullptr, 0);
+    }
     return kIOReturnSuccess;
 }
 

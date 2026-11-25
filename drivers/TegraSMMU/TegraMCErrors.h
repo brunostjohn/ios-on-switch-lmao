@@ -19,6 +19,11 @@ constexpr uint32_t kIntStatus = 0x0, kIntMask = 0x4, kErrStatus = 0x8, kErrAdr =
 // ARBITRATION_EMEM (9) is a performance warning that also fires while the EMC back-pressures traffic for a clock change
 // (18.5.12.2): it stays masked.
 constexpr uint32_t kErrors = 1u << 6 | 1u << 8 | 1u << 10 | 1u << 11 | 1u << 12 | 1u << 13 | 1u << 16 | 1u << 17;
+// The kinds that panic: a memory client went where it may not (an SMMU page it was not given, an address with no DRAM, a
+// carveout or security region). The MC refuses the access, but the DMA that asked for it was built on a wrong address,
+// and the next one may land unchecked in another client's memory. INVALID_APB_ASID_UPDATE is a CPU's swgroup write the
+// MC dropped (a secure ASID); the writer reads its register back, so it is only logged.
+constexpr uint32_t kFatal = kErrors & ~(1u << 11);
 
 struct Error {
     uint32_t intstatus, status, address;
