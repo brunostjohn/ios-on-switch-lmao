@@ -485,7 +485,8 @@ TEST(SwitchPrefetchPace, RunsWaitUntilTheirRecordedUseIsNear)
     EXPECT_EQ(switch_pace_run_due_s(255, 15), 239u);
 }
 
-// The replay waits for each run's due time before it reads it, releasing its vnode first, and a stop ends the wait.
+// The replay waits for each run's due time before it reads it, releasing its vnode first, and a stop ends the wait. Its
+// I/O is passive, so it opens no throttle window for lower tiers.
 TEST(SwitchPrefetchSource, ReplayWaitsForEachRunsDueTime)
 {
     const std::string prefetch = SourceText("../switch/vm/prefetch.c");
@@ -498,6 +499,10 @@ TEST(SwitchPrefetchSource, ReplayWaitsForEachRunsDueTime)
     EXPECT_LT(due, put);
     EXPECT_LT(put, wait);
     EXPECT_LT(wait, pagein);
+    const size_t thread = prefetch.find("static void switch_prefetch_thread(");
+    const size_t passive = prefetch.find("throttle_set_thread_io_policy(IOPOL_PASSIVE);");
+    EXPECT_LT(thread, passive);
+    EXPECT_LT(passive, prefetch.find("switch_prefetch_replay_runs(runs, run_count, replayed_bits)"));
     const std::string vm = SourceText("../switch/vm/prefetch_vm.c");
     const size_t until = vm.find("bool switch_vm_prefetch_wait_until(uint64_t deadline_abs)");
     ASSERT_NE(until, std::string::npos);

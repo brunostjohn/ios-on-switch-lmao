@@ -16,6 +16,8 @@
 #include <sys/fcntl.h>
 #include <sys/mount.h>
 #include <sys/param.h>
+#include <sys/resource.h>
+#include <sys/systm.h>
 #include <sys/vnode.h>
 #include <vm/vnode_pager.h>
 #if XNU_12377_121_6
@@ -385,6 +387,10 @@ static void switch_prefetch_thread(void *parameter, wait_result_t w __unused)
 {
     struct switch_record_entry *log = (struct switch_record_entry *)parameter;
     const size_t log_bytes = (size_t)SWITCH_PREFETCH_LOG_ENTRIES * sizeof(*log);
+    /* Passive: the replay's reads go to the card in tier 0 but must not open XNU's throttle windows. Its 1.6 GB of
+     * speculative reads held every lower-tier thread in throttle_lowpri_io for the whole replay (17-117 threads in each
+     * boot stackshot), and processes that waited on those daemons waited with them. */
+    throttle_set_thread_io_policy(IOPOL_PASSIVE);
     struct switch_prefetch_header key;
     struct switch_prefetch_run *runs = NULL;
     uint8_t *replayed_bits = NULL;
