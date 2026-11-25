@@ -1039,7 +1039,7 @@ static void icm42607Fifo()
             chip.produce(accel, gyro);
         }
         check(deliver() == 1, "FIFO: late drain");
-        expectOps({"R 3a x5", "R 3f x48", "R 3f x32"}, "FIFO late drain: whole records, three a transfer");
+        expectOps({"R 3a x5", "R 3f x80"}, "FIFO late drain: whole records, up to 15 a packed transfer");
         const std::vector<uint64_t> &times = hid(kSwitchHIDGyro)->times;
         bool forward = times.size() == 8 && times.back() <= gNow;
         for (size_t i = 1; i < times.size(); ++i)
