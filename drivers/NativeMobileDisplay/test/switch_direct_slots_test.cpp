@@ -408,3 +408,13 @@ TEST_F(DirectSlots, PostHoldCompressionRaceRejectsIdleAndBusyCachedSlotsWithoutL
     EXPECT_EQ(leases, 1u);
     EXPECT_EQ(display->probeDomain.unmaps, 1u);
 }
+
+TEST_F(DirectSlots, SnapshotErrorsAreReportedToCaller)
+{
+    for (const int expected : {-16, int(SWITCH_GPU_BACKING_WRITER_GONE), int(SWITCH_GPU_BACKING_WRITER_FAILED)}) {
+        error = expected;
+        int snapError = 0;
+        EXPECT_EQ(display->directSlotFor(&surface, &memory, 256, 16384, false, &snapError), -1);
+        EXPECT_EQ(snapError, expected);
+    }
+}

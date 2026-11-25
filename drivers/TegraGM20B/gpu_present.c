@@ -22,6 +22,11 @@ static void present_deliver(void (*done)(void *, int), void *arg, int status)
 	gate_leave();
 }
 
+void tgm_present_set_owner(const void *display)
+{
+	__atomic_store_n(&tgm_present.owner, display, __ATOMIC_RELEASE);
+}
+
 void tgm_present_set_filter_display(const void *display)
 {
 	__atomic_store_n(&tgm_present.filter_display, display, __ATOMIC_RELEASE);
@@ -55,11 +60,14 @@ static void present_typed_complete(void *unused)
 
 int tgm_present_outstanding(const void *arg)
 {
-	if ((__atomic_load_n(&tgm_present.pending, __ATOMIC_SEQ_CST) ||
-	     switch_gpu_present_watch_armed(&tgm_present.watch)) &&
-	    tgm_present.arg == arg)
-		return 1;
-	return __atomic_load_n(&tgm_present.completing, __ATOMIC_SEQ_CST) != 0;
+	const int active = __atomic_load_n(&tgm_present.pending, __ATOMIC_SEQ_CST) ||
+			   switch_gpu_present_watch_armed(&tgm_present.watch) ||
+			   __atomic_load_n(&tgm_present.completing, __ATOMIC_SEQ_CST) != 0;
+	const void *owner = __atomic_load_n(&tgm_present.owner, __ATOMIC_ACQUIRE);
+
+	if (!active)
+		return 0;
+	return !arg || tgm_present.arg == arg || owner == arg;
 }
 
 static int present_physical(const struct switch_gpu_backing_token *token)

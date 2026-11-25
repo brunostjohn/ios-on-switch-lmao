@@ -211,12 +211,13 @@ int switch_vic_bounce_submit(const TegraVICSurface *source, const TegraVICSurfac
     switch_gpu_cpu_lease *leases[3] = {};
     switch_gpu_backing_guard guards[4] = {work->access[1].guard};
     uint32_t leaseCount = 0, guardCount = 1;
-    for (auto &access : work->access)
-        if (access.owned)
-            leases[leaseCount++] = access.owned;
+    if (work->access[1].owned)
+        leases[leaseCount++] = work->access[1].owned;
+    if (work->access[0].owned && !bounceSrc)
+        leases[leaseCount++] = work->access[0].owned;
     if (dstReserve && dstReserve->lease && !work->access[1].owned && dstReserve->backing == work->access[1].backing)
         leases[leaseCount++] = dstReserve->lease;
-    if (plan->readsSource && !alias && !work->native.owner)
+    if (plan->readsSource && !alias && !work->native.owner && !bounceSrc)
         guards[guardCount++] = work->access[0].guard;
     if (work->native.owner) {
         guards[guardCount++] = work->native.guard;
@@ -229,7 +230,7 @@ int switch_vic_bounce_submit(const TegraVICSurface *source, const TegraVICSurfac
     if (!error && bounceDst && !switch_vic_overwrites(*plan, destination->desc))
         error =
             copy(original(*destination, work->access[1]), scratch(destinationBuffer), work, dependencies, dstReserve);
-    switch_gpu_backing_use uses[5] = {{output, SWITCH_GPU_BACKING_WRITE, 0}};
+    switch_gpu_backing_use uses[4] = {{output, SWITCH_GPU_BACKING_WRITE, 0}};
     uint32_t useCount = 1;
     if (plan->readsSource)
         uses[useCount++] = {input, SWITCH_GPU_BACKING_READ, 0};
@@ -238,8 +239,6 @@ int switch_vic_bounce_submit(const TegraVICSurface *source, const TegraVICSurfac
     // Representation guards are evaluated with the logical allocations locked, even when scratch carries the bytes.
     if (bounceDst)
         uses[useCount++] = {work->access[1].backing, SWITCH_GPU_BACKING_READ, 0};
-    if (bounceSrc && !alias)
-        uses[useCount++] = {sourceAccess.backing, SWITCH_GPU_BACKING_READ, 0};
     const SwitchVICOwnership ownership = {uses, useCount, guards, guardCount, leases, leaseCount};
     SwitchVICEvents *stage = nullptr;
     if (!error && bounceDst)

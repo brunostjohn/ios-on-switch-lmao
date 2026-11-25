@@ -1916,3 +1916,24 @@ TEST(GM20BParkedBoSource, ParkedDiagnosticsCompileOutOfRelease)
 		EXPECT_EQ(release.count("reclaimedSystem"), 0u);
 	}
 }
+
+TEST(GM20BPresentSource, LargeFenceOnlyPresentAndDisplayOwnerTracking)
+{
+	const CodeText scanout = Block(client(), "extern \"C\" int tegra_gm20b_scanout_copy(");
+	EXPECT_TRUE(scanout.has("if (tgm_present_outstanding(nullptr) ||"));
+	EXPECT_TRUE(scanout.has("presentFenceBacking(memory, copy->sourceBytes)"));
+	EXPECT_TRUE(scanout.has("tgm_present_set_owner(copy->display);"));
+	EXPECT_TRUE(scanout.has("switch_gpu_backing_release(ownedSourceBacking);"));
+
+	const CodeText fence = Block(client(), "extern \"C\" int tegra_gm20b_scanout_fence(");
+	EXPECT_TRUE(fence.has("tgm_present_outstanding(nullptr)"));
+	EXPECT_TRUE(fence.has("tgm_present_set_owner(display);"));
+
+	const CodeText outstanding = Block(gpu(), "int tgm_present_outstanding(const void *arg)");
+	EXPECT_TRUE(outstanding.has("tgm_present.owner"));
+	EXPECT_TRUE(outstanding.has("!arg || tgm_present.arg == arg || owner == arg"));
+
+	const CodeText take =
+		Block(SourceText("../TegraGM20BReadback.cpp"), "uint32_t tgm_readback_take(");
+	EXPECT_TRUE(take.has("(direct && !source)"));
+}

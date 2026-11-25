@@ -297,6 +297,23 @@ uint64_t presentSurface(IOMemoryDescriptor *memory, uint64_t bytes, bool blockLi
 	return va;
 }
 
+switch_gpu_backing *presentFenceBacking(IOMemoryDescriptor *memory, uint64_t bytes)
+{
+	bytes = (bytes + 0xfff) & ~0xfffULL;
+	const uint64_t fullBytes = (memory->getLength() + 0xfff) & ~0xfffULL;
+	if (!bytes || bytes > fullBytes)
+		return nullptr;
+	tgm_vm *vm = nullptr;
+	if (tgm_present_open(&vm))
+		return nullptr;
+	if (memory->prepare(kIODirectionOut) != kIOReturnSuccess)
+		return nullptr;
+	IOByteCount firstLen = 0;
+	const addr64_t firstPa = memory->getPhysicalSegment(0, &firstLen, kIOMemoryMapperNone);
+	memory->complete();
+	return firstPa ? switch_gpu_backing_find_pa(firstPa & ~0xfffULL) : nullptr;
+}
+
 // The display's direct frame with its producer still running: the producer's interrupt pass completes it, no job.
 int presentWatched()
 {
@@ -475,7 +492,7 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 	if (!presentLock())
 		return kIOReturnNoMemory;
 	IOLockLock(gPresentLock);
-	if (tgm_present_outstanding(copy->display) ||
+	if (tgm_present_outstanding(nullptr) ||
 	    __atomic_load_n(&gPresentSnapshot.active, __ATOMIC_ACQUIRE)) {
 		IOLockUnlock(gPresentLock);
 		return kIOReturnBusy;
@@ -486,6 +503,7 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 		return ioreturn(ret);
 	}
 	switch_gpu_backing *sourceBacking = nullptr;
+	switch_gpu_backing *ownedSourceBacking = nullptr;
 	uint64_t sourcePa = 0;
 	// fence only: no target; the source is still imported (its first page names the channels that write it)
 	const uint64_t target = fenceOnly ? 0 : presentTarget(copy->target, copy->targetBytes);
@@ -493,7 +511,12 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 					? presentSurface(memory, copy->sourceBytes, sourceBlock,
 							 &sourcePa, &sourceBacking)
 					: 0;
-	ret = (target || fenceOnly) && source ? gPresentSnapshot.add(sourceBacking) : -12;
+	if (fenceOnly && !source) {
+		ownedSourceBacking = presentFenceBacking(memory, copy->sourceBytes);
+		sourceBacking = ownedSourceBacking;
+	}
+	const bool haveSource = fenceOnly ? sourceBacking != nullptr : (target != 0 && source != 0);
+	ret = haveSource ? gPresentSnapshot.add(sourceBacking) : -12;
 	if (!ret && copy->alsoWritten) {
 		auto *also = switch_gpu_backing_find_pa(copy->alsoWritten & ~0xfffULL);
 		ret = also ? gPresentSnapshot.add(also) : -19;
@@ -505,6 +528,7 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 #endif
 	if (!ret) {
 		gPresentSnapshot.display = copy->display;
+		tgm_present_set_owner(copy->display);
 		tgm_present_set_filter_display(copy->display);
 #if TGM_STATS
 		tgm_present_read reads[TGM_PRESENT_READS] = {};
@@ -539,6 +563,7 @@ extern "C" int tegra_gm20b_scanout_copy(const struct TegraScanoutCopy *copy)
 #if DEVELOPMENT || DEBUG
 	logPresentShown(shown);
 #endif
+	switch_gpu_backing_release(ownedSourceBacking);
 	if (ownershipBusy)
 		return kIOReturnCannotLock;
 	return offerStatus(ret);
@@ -568,7 +593,7 @@ extern "C" int tegra_gm20b_scanout_fence(void *display, uint64_t pa)
 	if (!backing)
 		return kIOReturnNotFound;
 	IOLockLock(gPresentLock);
-	int ret = tgm_present_outstanding(display) ||
+	int ret = tgm_present_outstanding(nullptr) ||
 				  __atomic_load_n(&gPresentSnapshot.active, __ATOMIC_ACQUIRE)
 			  ? -16
 			  : gPresentSnapshot.begin(nullptr, 0);
@@ -581,6 +606,7 @@ extern "C" int tegra_gm20b_scanout_fence(void *display, uint64_t pa)
 #endif
 	if (!ret) {
 		gPresentSnapshot.display = display;
+		tgm_present_set_owner(display);
 		tgm_present_set_filter_display(nullptr);
 		gPresentSnapshot.done = presentDone;
 		// No copy (dst_va 0): only the acquires on the surface's producer and the fence; nothing of it is mapped.
@@ -607,8 +633,8 @@ extern "C" int tegra_gm20b_scanout_fence(void *display, uint64_t pa)
 
 extern "C" int tegra_gm20b_scanout_outstanding(const void *display)
 {
-	return (__atomic_load_n(&gPresentSnapshot.active, __ATOMIC_ACQUIRE) &&
-		gPresentSnapshot.display == display) ||
+	const bool active = __atomic_load_n(&gPresentSnapshot.active, __ATOMIC_ACQUIRE) != 0;
+	return (active && (!display || gPresentSnapshot.display == display)) ||
 	       tgm_present_outstanding(display);
 }
 

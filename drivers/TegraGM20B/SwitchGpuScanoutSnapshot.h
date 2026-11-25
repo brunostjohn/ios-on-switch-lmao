@@ -19,6 +19,7 @@ struct SwitchGpuScanoutSnapshot {
 			return -22;
 		count = n;
 		leaseCount = 0;
+		display = nullptr;
 		for (uint32_t i = 0; i < n; ++i)
 			tokens[i] = dependencies[i];
 		__atomic_store_n(&active, 1u, __ATOMIC_RELEASE);
@@ -56,6 +57,7 @@ struct SwitchGpuScanoutSnapshot {
 			held[i] = leases[i];
 		leaseCount = 0;
 		count = 0;
+		display = nullptr;
 		__atomic_store_n(&active, 0u, __ATOMIC_RELEASE);
 		for (uint32_t i = n; i > 0; --i)
 			switch_gpu_backing_cpu_release_owned(&held[i - 1], 0);

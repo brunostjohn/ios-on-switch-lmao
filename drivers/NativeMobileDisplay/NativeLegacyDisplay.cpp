@@ -4236,6 +4236,8 @@ public:
             }
             if (offered == kIOReturnCannotLock)
                 return deferSource(request, planeShownUi);
+            if (offered == kIOReturnBusy && tegra_gm20b_scanout_outstanding(nullptr))
+                return deferSource(request, planeShownUi, true);
             if (stats)
                 ++stGpuDeclined;
             return false;
@@ -4562,9 +4564,20 @@ public:
     {
         if (!gpuCopy || !gpuDoneSource)
             return false;
-        const int entry = directSlotFor(surface, memory, stride, allocation, tiled);
-        if (entry == kNoBuffer)
+        int snapError = 0;
+        const int entry = directSlotFor(surface, memory, stride, allocation, tiled, &snapError);
+        if (entry == kNoBuffer) {
+            if (sourceUnshown(snapError, request, "direct")) {
+                noteTaken(request, kickAt);
+                planeNextSet = false;
+                native_legacy_transfer_observed(kIOReturnAborted, request, 0);
+                retireSwapUnshown(request, kNoBuffer);
+                return true;
+            }
+            if (snapError == -16 || snapError == SWITCH_GPU_BACKING_STALE)
+                return deferSource(request, planeShownUi);
             return false;
+        }
         if (presentDirectVisible(request, entry, width, height, kickAt)) {
             tegra_gm20b_scanout_presented(ticksNs(kickAt));
             return true;
@@ -4601,6 +4614,8 @@ public:
             }
             if (offered == kIOReturnCannotLock)
                 return deferSource(request, planeShownUi);
+            if (offered == kIOReturnBusy && tegra_gm20b_scanout_outstanding(nullptr))
+                return deferSource(request, planeShownUi, true);
             if (stats)
                 ++stGpuDeclined;
             return false;

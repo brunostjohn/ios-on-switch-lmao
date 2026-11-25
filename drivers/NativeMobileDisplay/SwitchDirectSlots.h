@@ -2,17 +2,24 @@
 // The slot entry holding memory (mapped now, into the least recently used slot neither scanned nor asked for, if not yet);
 // kNoBuffer when every slot is in use or the pages cannot be had. A surface a slot already holds is snapshotted through
 // the backing the slot holds scanned, not looked up in the IOSurface cache again (its lock, every swap).
-int directSlotFor(OSObject *surface, IOMemoryDescriptor *memory, uint64_t stride, uint64_t allocation, bool tiled)
+int directSlotFor(OSObject *surface, IOMemoryDescriptor *memory, uint64_t stride, uint64_t allocation, bool tiled,
+                  int *snapshotError = nullptr)
 {
+    if (snapshotError)
+        *snapshotError = 0;
     SwitchNativeScanout snapshot = {};
     switch_gpu_backing *held = nullptr;
     for (unsigned k = 0; k < kSlots && !held; ++k) {
         if (slots[k].memory == memory && slots[k].surface == surface)
             held = scanoutHeld[k];
     }
+    int snap = 0;
     if ((!held || switch_native_scanout_pitch_held(surface, held, &snapshot)) &&
-        switch_native_scanout_pitch(surface, &snapshot))
+        (snap = switch_native_scanout_pitch(surface, &snapshot)) != 0) {
+        if (snapshotError)
+            *snapshotError = snap;
         return kNoBuffer;
+    }
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
     switch_gpu_cpu_lease_look(snapshot.lease, &directLook);
 #endif

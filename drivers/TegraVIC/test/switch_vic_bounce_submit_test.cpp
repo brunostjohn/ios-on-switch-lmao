@@ -20,6 +20,7 @@ SwitchVICBounceSlot pool;
 std::vector<std::string> stages;
 std::vector<uint32_t> guardCounts;
 std::vector<std::vector<switch_gpu_cpu_lease *>> stageLeases;
+std::vector<switch_gpu_backing *> vicUses, vicGuards;
 std::vector<std::pair<uint32_t, uint32_t>> copybackPlanes, sourcePlanes;  // bytes a row, rows
 bool immediate = false;
 int failStage = -1, gates = 0, callbacks = 0, result = 0, unreservesAtCallback = -1;
@@ -82,6 +83,8 @@ protected:
         stages.clear();
         guardCounts.clear();
         stageLeases.clear();
+        vicUses.clear();
+        vicGuards.clear();
         copybackPlanes.clear();
         sourcePlanes.clear();
         failStage = -1;
@@ -272,7 +275,12 @@ int switch_vic_submit_checked(const TegraVICJob *, uint32_t, const TegraVICAcqui
 {
     stages.push_back("vic");
     stageLeases.emplace_back(ownership.leases, ownership.leases + ownership.leaseCount);
+    vicUses.clear();
+    vicGuards.clear();
+    for (uint32_t j = 0; j < ownership.useCount; ++j)
+        vicUses.push_back(ownership.uses[j].backing);
     for (uint32_t i = 0; i < ownership.guardCount; ++i) {
+        vicGuards.push_back(ownership.guards[i].backing);
         bool found = false;
         for (uint32_t j = 0; j < ownership.useCount; ++j)
             found |= ownership.guards[i].backing == ownership.uses[j].backing;
@@ -539,4 +547,23 @@ TEST_F(Bounce, PreReservedWriteLeaseCoversDestinationStagesAndReleasesBeforeCall
     EXPECT_EQ(writeReleasesAtCallback, 1);
     EXPECT_EQ(reservation.lease, nullptr);
     EXPECT_EQ(reservation.backing, nullptr);
+}
+
+TEST_F(Bounce, BouncedSourceDoesNotAttachOriginalSourceToVic)
+{
+    auto src = makeSurface(true, 192), dst = makeSurface(false, 256);
+    auto p = plan();
+    ASSERT_EQ(switch_vic_bounce_submit(&src, &dst, &p, 0, notify, nullptr, nullptr), 1);
+    EXPECT_EQ(stages, (std::vector<std::string>{"source", "vic"}));
+    EXPECT_EQ(vicUses, (std::vector<switch_gpu_backing *>{&destinationBacking, &scratchBacking[0]}));
+    EXPECT_EQ(vicGuards, (std::vector<switch_gpu_backing *>{&destinationBacking}));
+    finish();
+
+    stages.clear();
+    src = makeSurface(true, 256);
+    ASSERT_EQ(switch_vic_bounce_submit(&src, &dst, &p, 0, notify, nullptr, nullptr), 1);
+    EXPECT_EQ(stages, (std::vector<std::string>{"vic"}));
+    EXPECT_EQ(vicUses, (std::vector<switch_gpu_backing *>{&destinationBacking, &sourceBacking}));
+    EXPECT_EQ(vicGuards, (std::vector<switch_gpu_backing *>{&destinationBacking, &sourceBacking}));
+    finish();
 }

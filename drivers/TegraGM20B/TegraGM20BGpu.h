@@ -509,6 +509,7 @@ void tgm_present_filter_attach_for(const void *display, const struct switch_gpu_
 void tgm_present_filter_detach(void);
 void tgm_present_filter_detach_for(const void *display);
 int tgm_present_filter_is_owner(const void *display);
+void tgm_present_set_owner(const void *display);
 void tgm_present_set_filter_display(const void *display);
 void tgm_present_filter(void);
 
