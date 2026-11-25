@@ -729,6 +729,19 @@ impl<'a> ShaderFromNir<'a> {
                         }
                     }
 
+                    // ios-on-switch-lmao: the bytes above a 16-bit value
+                    // in its register are undefined (this PRMT fills them
+                    // with copies of byte 0), so a half already in the low
+                    // bytes is its register: SEL and MOV keep the PRMT,
+                    // where half ops fold it into their swizzle
+                    let in_place = bit_size == 16
+                        && prmt_srcs[1..].iter().all(Src::is_zero)
+                        && (0..num_bytes).all(|i| usize::from(prmt[i]) == i);
+                    if in_place {
+                        srcs_vec.push(Some(prmt_srcs[0].clone()));
+                        continue;
+                    }
+
                     srcs_vec.push(Some(b.prmt4(prmt_srcs, prmt).into()));
                 }
                 32 => match comps {
