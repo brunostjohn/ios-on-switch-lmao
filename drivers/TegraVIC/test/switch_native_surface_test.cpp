@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <gtest/gtest.h>
 #include <future>
+#include <string>
 #include <vector>
 #include "switch_native_surface_stubs.h"
 #include "../SwitchNativeSurface.cpp"
@@ -9,6 +10,13 @@
 #include "../SwitchNativeGpuView.cpp"
 #include "../SwitchVICSurfaceAccess.cpp"
 #include "../../../kernel/switch/iokit/memory_attachment.cpp"
+
+std::vector<std::string> refusals;
+
+extern "C" void switch_refusal(const char *domain, const char *reason_key, const char *, ...)
+{
+    refusals.push_back(std::string(domain) + " " + reason_key);
+}
 
 struct switch_gpu_backing {
     std::atomic<unsigned> refs{1};
@@ -1330,6 +1338,17 @@ TEST_F(NativeSurface, GpuAdapterTransfersExactLeaseAndInvalidationGuards)
     EXPECT_EQ(view.owner, nullptr);
     EXPECT_EQ(native.refs, references - 1);
     switch_native_surface_gpu_release(&view);
+}
+
+// A pitch '420v' whose luma runs into its chroma takes no GPU view, and says which check refused it
+TEST_F(NativeSurface, OverlappingPitchPlanesAreARefusedGpuView)
+{
+    refusals.clear();
+    object->desc.planeOffset[1] = 1536 * 719;
+    switch_gpu_native_surface_view view = {};
+    EXPECT_EQ(switch_native_surface_gpu_acquire(object, &view), -22);
+    EXPECT_EQ(view.native, nullptr);
+    EXPECT_EQ(refusals, std::vector<std::string>{"native-view pitch-planes-overlap"});
 }
 
 TEST_F(NativeSurface, OrdinaryPitchGpuViewIsInvalidatedByFirstNativePublication)

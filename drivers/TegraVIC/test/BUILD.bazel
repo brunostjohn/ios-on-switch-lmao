@@ -508,6 +508,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BTiled.h",
         "//drivers/TegraGM20B:TegraGM20BViews.h",
         "//kits/SwitchDMA:SwitchDMAPages.h",
+        "//kits/SwitchRefusal:SwitchRefusal.h",
     ],
     additional_compiler_inputs = [
         "//drivers/TegraVIC:SwitchNativeSurface.cpp",

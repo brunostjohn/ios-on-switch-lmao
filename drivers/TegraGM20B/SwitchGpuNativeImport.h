@@ -75,9 +75,19 @@ IOReturn AGXDeviceUserClient::nativeSurfaceView(const TegraGM20BAbiNativeSurface
 	*out = {};
 	const bool writable = (in->flags & TegraGM20BNativeSurfaceWrite) != 0;
 	const Bo *source = findBo(in->source_handle);
-	if ((in->flags & ~uint32_t(TegraGM20BNativeSurfaceWrite)) || in->reserved || !source ||
-	    !source->surface || source->nativeView)
+	if ((in->flags & ~uint32_t(TegraGM20BNativeSurfaceWrite)) || in->reserved) {
+		switch_refusal("native-view", "request", "a view asked with flags %#x, reserved %#x: no view",
+			       in->flags, in->reserved);
 		return kIOReturnBadArgument;
+	}
+	if (!source || !source->surface || source->nativeView) {
+		switch_refusal("native-view", "source",
+			       "a view of BO %llu: %s; no view", (unsigned long long)in->source_handle,
+			       !source		    ? "no such BO on the connection"
+			       : !source->surface ? "the BO is not an IOSurface's"
+						  : "the BO is a native view itself");
+		return kIOReturnBadArgument;
+	}
 	if (!boIndex_.reserve())
 		return kIOReturnNoMemory;
 	if ((writable ? !switch_native_surface_gpu_acquire_write
@@ -91,8 +101,12 @@ IOReturn AGXDeviceUserClient::nativeSurfaceView(const TegraGM20BAbiNativeSurface
 	int result = writable ? switch_native_surface_gpu_acquire_write(source->surface, view)
 			      : switch_native_surface_gpu_acquire(source->surface, view);
 	IOLockLock(lock_);
-	if (!result && submitGate_.closed())
+	if (!result && submitGate_.closed()) {
+		switch_refusal("native-view", "gate-closed",
+			       "a view of BO %llu while the GPU's submissions are shut (reset or sleep): no view",
+			       (unsigned long long)in->source_handle);
 		result = -19;
+	}
 	switch_gpu_backing_info allocation = {};
 	if (!result) {
 		switch_gpu_backing_describe(view->native, &allocation);

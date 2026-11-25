@@ -424,15 +424,22 @@ TEST_F(NativeImport, ClosingDuringUnlockedAcquisitionUnwindsView)
 	EXPECT_EQ(client.nativeSurfaceView(&request, &reply), -19);
 	EXPECT_EQ(released, 1u);
 	EXPECT_EQ(constructed, 0u);
+	ASSERT_EQ(refusals.size(), 1u);
+	EXPECT_NE(refusals[0].find("native-view gate-closed: "), std::string::npos) << refusals[0];
 }
 
 TEST_F(NativeImport, SourceMustBeAnAttestedOrdinarySurfaceBo)
 {
 	source.surface = nullptr;
 	EXPECT_EQ(client.nativeSurfaceView(&request, &reply), kIOReturnBadArgument);
+	ASSERT_EQ(refusals.size(), 1u);
+	EXPECT_NE(refusals[0].find("native-view source: "), std::string::npos) << refusals[0];
+	EXPECT_NE(refusals[0].find("not an IOSurface's"), std::string::npos) << refusals[0];
 	source.surface = &surface;
 	source.nativeView = &answer;
 	EXPECT_EQ(client.nativeSurfaceView(&request, &reply), kIOReturnBadArgument);
+	ASSERT_EQ(refusals.size(), 2u);
+	EXPECT_NE(refusals[1].find("a native view itself"), std::string::npos) << refusals[1];
 	EXPECT_EQ(acquired, 0u);
 }
 
@@ -476,4 +483,6 @@ TEST_F(NativeImport, WritableFlagAcquiresWritableNativeBoAndRejectsUnknownFlags)
 
 	request.flags = TegraGM20BNativeSurfaceWrite | (1u << 1);
 	EXPECT_EQ(client.nativeSurfaceView(&request, &reply), kIOReturnBadArgument);
+	ASSERT_EQ(refusals.size(), 1u);
+	EXPECT_NE(refusals[0].find("native-view request: "), std::string::npos) << refusals[0];
 }
