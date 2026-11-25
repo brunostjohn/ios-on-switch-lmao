@@ -150,10 +150,42 @@ algebraic_lowering += [
 
 # ios-on-switch-lmao: a half metal2vulkan widens to negate, clamp or select in
 # f32 and narrows again is that operation on the half itself, bit for bit.
-for op in ['fneg', 'fsat']:
+for op in ['fneg', 'fabs', 'fsat']:
     algebraic_lowering += [
         (('f2f16_rtne', (op, ('f2f32', 'a@16'))), (op, a), half_denorms_kept),
     ]
+# ios-on-switch-lmao: metal2vulkan compares and selects the magnitude or the
+# negation of a half it holds widened (Core Animation's transfer curves take
+# |x| and give the curve's value x's sign back). Widening is exact and commutes
+# with both, so each is the half's own compare (one HSETP2, |a| and -a its
+# operand modifiers) or select; zero is a half too.
+def widened_half(v, m):
+    return (m, ('f2f32', v + '@16')) if m else ('f2f32', v + '@16')
+
+def half_of(v, m):
+    return (m, v) if m else v
+
+half_mods = [None, 'fabs', 'fneg']
+for cmp in ['flt', 'fge', 'feq', 'fneu', 'fltu', 'fgeu', 'fequ', 'fneo']:
+    for ma, mb in itertools.product(half_mods, repeat=2):
+        if ma or mb:
+            algebraic_lowering += [
+                ((cmp, widened_half('a', ma), widened_half('b', mb)), (cmp, half_of(a, ma), half_of(b, mb)),
+                    'nak->sm >= 53 && nak->sm < 70 && ' + half_denorms_kept),
+            ]
+    for m in half_mods:
+        algebraic_lowering += [
+            ((cmp, widened_half('a', m), 0.0), (cmp, half_of(a, m), 0.0),
+                'nak->sm >= 53 && nak->sm < 70 && ' + half_denorms_kept),
+            ((cmp, 0.0, widened_half('a', m)), (cmp, 0.0, half_of(a, m)),
+                'nak->sm >= 53 && nak->sm < 70 && ' + half_denorms_kept),
+        ]
+for ma, mb in itertools.product(half_mods, repeat=2):
+    if ma or mb:
+        algebraic_lowering += [
+            (('f2f16_rtne', ('bcsel', c, widened_half('a', ma), widened_half('b', mb))),
+                ('bcsel', c, half_of(a, ma), half_of(b, mb)), half_denorms_kept),
+        ]
 algebraic_lowering += [
     (('f2f16_rtne', ('bcsel', c, ('f2f32', 'a@16'), ('f2f32', 'b@16'))), ('bcsel', c, a, b)),
     (('f2f16_rtne', ('bcsel', c, ('f2f32', 'a@16'), '#b@32(is_representable_as_f16)')),
