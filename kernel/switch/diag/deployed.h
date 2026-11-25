@@ -20,7 +20,8 @@ struct switch_deployed {
     bool dirty;
 };
 
-void switch_log_deployed(void);
+/* One line naming the deployed build; false while the file cannot be opened (Data not mounted yet). */
+bool switch_log_deployed(void);
 
 static inline const char *switch_deployed_value(const char *json, const char *key)
 {

@@ -1691,9 +1691,13 @@ thread_call_invoke(thread_call_func_t func,
 	    (unsigned) (tc_ttd & 0xFFFFFFFF), is_delayed, call);
 #endif
 
+#if DEVELOPMENT || DEBUG
 	const uint64_t switch_begin = switch_callout_begin();
+#endif
 	(*func)(param0, param1);
-	switch_callout_end(SWITCH_CALLOUT_FUNCTION, (const void *)func, switch_begin);
+#if DEVELOPMENT || DEBUG
+	switch_callout_end((const void *)func, thread_call_get_group(call)->tcg_name, switch_begin);
+#endif
 
 #if CONFIG_DTRACE
 	DTRACE_TMR6(thread_callout__end, thread_call_func_t, func, int, 0, int, (tc_ttd >> 32),

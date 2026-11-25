@@ -494,7 +494,7 @@ static size_t append_kernel_top(char *line, size_t at)
 static void switch_sched_report(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 {
     static uint64_t last_ns;
-    static bool boot_totals_logged;
+    static bool boot_totals_logged, deployed_logged;
     static char line[LINE];
     uint64_t now_ns = 0;
     uint64_t window_ns = 0;
@@ -528,7 +528,9 @@ static void switch_sched_report(__unused thread_call_param_t p0, __unused thread
     if (boot_ns != 0 && !boot_totals_logged) {
         boot_totals_logged = true;
         switch_sched_cpu_boot_totals(line, boot_ns);
-        switch_log_deployed();
+    }
+    if (!deployed_logged) {
+        deployed_logged = switch_log_deployed();
     }
     switch_sched_systime_report(line, LINE, window_ns);
     switch_sched_callout_report(line, LINE, window_ns);

@@ -28,10 +28,10 @@ struct switch_a64x_note {
 };
 
 struct switch_a64x_ring {
-    uint32_t head;          /* the writer's */
-    uint32_t dropped;       /* the writer's */
-    uint32_t tail;          /* the reader's */
-    uint32_t dropped_seen;  /* the reader's */
+    uint32_t head;         /* the writer's */
+    uint32_t dropped;      /* the writer's */
+    uint32_t tail;         /* the reader's */
+    uint32_t dropped_seen; /* the reader's */
     struct switch_a64x_note notes[SWITCH_A64X_RING];
 };
 
@@ -126,8 +126,8 @@ static inline size_t switch_a64x_window_format(char *out, size_t size, const str
         for (uint32_t i = 0; i < w->count; i++) {
             const uint32_t traps = w->processes[i].emulated + w->processes[i].patched;
 
-            if (!shown[i] && (best == SWITCH_A64X_PROCESSES ||
-                              traps > w->processes[best].emulated + w->processes[best].patched)) {
+            if (!shown[i] &&
+                (best == SWITCH_A64X_PROCESSES || traps > w->processes[best].emulated + w->processes[best].patched)) {
                 best = i;
             }
         }

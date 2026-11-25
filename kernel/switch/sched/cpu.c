@@ -224,7 +224,8 @@ void switch_sched_cpu_boot_totals(char *line, uint64_t boot_ns)
            "SwitchSched totals (System Boot Complete at %llu.%llu s, taken at %llu.%llu s; ms user+system each process "
            "used since it began): %u live, %u exited (%llu+%llu)",
            boot_ns / NSEC_PER_SEC, boot_ns % NSEC_PER_SEC / 100000000, now_ns / NSEC_PER_SEC,
-           now_ns % NSEC_PER_SEC / 100000000, count, exits, (unsigned long long)switch_cpu_ms(exit_user, tb.numer, tb.denom),
+           now_ns % NSEC_PER_SEC / 100000000, count, exits,
+           (unsigned long long)switch_cpu_ms(exit_user, tb.numer, tb.denom),
            (unsigned long long)switch_cpu_ms(exit_sys, tb.numer, tb.denom));
     for (uint32_t first = 0; first < count; lines++) {
         const size_t at = MIN((size_t)snprintf(line, LINE, "SwitchSched totals %u: ", lines + 1), LINE - 1);
@@ -243,8 +244,8 @@ void switch_sched_cpu_boot_totals(char *line, uint64_t boot_ns)
 static void report_a64x(char *line, uint64_t window_ns)
 {
 #if XNU_12377_121_6
-    size_t at = (size_t)snprintf(line, LINE, "SwitchSched a64x (%llu ms; traps the translator handled): ",
-                                 window_ns / NSEC_PER_MSEC);
+    size_t at = (size_t)snprintf(
+        line, LINE, "SwitchSched a64x (%llu ms; traps the translator handled): ", window_ns / NSEC_PER_MSEC);
 
     at = MIN(at, LINE - 1);
     if (switch_a64x_trap_window(line + at, LINE - at) != 0) {

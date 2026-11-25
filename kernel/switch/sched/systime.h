@@ -81,7 +81,8 @@ static inline size_t switch_systime_format(char *out, size_t size, const struct 
                                            uint32_t denom)
 {
     static const char *const names[SWITCH_SYSTIME_BUCKETS] = {
-        "unix", "mach_msg", "other mach", "data abort", "instruction abort", "undefined", "other sync", "outside a trap",
+        "unix",      "mach_msg",   "other mach",     "data abort", "instruction abort",
+        "undefined", "other sync", "outside a trap",
     };
     size_t at = 0;
 
@@ -93,7 +94,8 @@ static inline size_t switch_systime_format(char *out, size_t size, const struct 
         const unsigned long long ms = (unsigned long long)(w->time[b] * numer / denom / 1000000u);
 
         if (b == SWITCH_SYSTIME_OUTSIDE) {
-            at = switch_systime_put(size, at, snprintf(out + at, size - at, "%s%s %llu ms", b ? ", " : "", names[b], ms));
+            at = switch_systime_put(size, at,
+                                    snprintf(out + at, size - at, "%s%s %llu ms", b ? ", " : "", names[b], ms));
         } else {
             at = switch_systime_put(size, at,
                                     snprintf(out + at, size - at, "%s%s %llu ms (%llu)", b ? ", " : "", names[b], ms,

@@ -86,37 +86,42 @@ static uint64_t pmc_read_ticks(void)
     return (t1 - t0) > (t2 - t1) ? (t1 - t0) - (t2 - t1) : 0;
 }
 
-/* PMIs each CPU took (cpu_stat.pmi_cnt_wake, both trees' PMI handlers), the C7 PMU saves, and the precise reads. */
+/*
+ * Each CPU's PMIs (cpu_stat.pmi_cnt_wake, both trees' PMI handlers) beside its C7 entries: cpc_hw_configure re-bases
+ * the idle counters at every C7 exit (INST_RETIRED to 2^31), so a PMI needs 2^31 instructions on a core between two
+ * C7s. A core with no C7 in a busy window and no PMI says the overflow interrupt does not arrive. Then the C7 PMU
+ * saves' cost and the precise reads'.
+ */
 static void report_pmu(char *line, size_t size, uint64_t window_ns, uint64_t transitions)
 {
     static uint64_t pmis_seen[MAX_CPUS], saves_seen[SWITCH_SMP_CORE_COUNT], save_ticks_seen[SWITCH_SMP_CORE_COUNT];
     const unsigned int cpus = MIN((unsigned int)ml_get_max_cpu_number() + 1, (unsigned int)MAX_CPUS);
     uint64_t saves = 0, save_ticks = 0, ns = 0;
     const uint64_t read_ticks = pmc_read_ticks();
-    size_t at =
-        switch_systime_put(size, 0, snprintf(line, size, "SwitchSched pmu (%llu ms): PMIs", window_ns / NSEC_PER_MSEC));
+    size_t at = switch_systime_put(
+        size, 0, snprintf(line, size, "SwitchSched pmu (%llu ms): PMIs (C7 entries)", window_ns / NSEC_PER_MSEC));
 
     for (unsigned int cpu = 0; cpu < cpus; cpu++) {
         const cpu_data_t *cdp = cpu_datap((int)cpu);
         const uint64_t pmis = cdp != NULL ? os_atomic_load(&cdp->cpu_stat.pmi_cnt_wake, relaxed) : 0;
+        struct switch_idle_counts c = {0};
+        uint64_t core_saves = 0;
 
-        at = switch_systime_put(size, at,
-                                snprintf(line + at, size - at, " cpu%u %llu", cpu, pmis - MIN(pmis, pmis_seen[cpu])));
-        pmis_seen[cpu] = pmis;
-    }
-    for (uint32_t cpu = 0; cpu < SWITCH_SMP_CORE_COUNT; cpu++) {
-        struct switch_idle_counts c;
-
-        if (switch_idle_read_counts(cpu, &c) == 0) {
-            saves += c.pmu_saves - MIN(c.pmu_saves, saves_seen[cpu]);
+        if (cpu < SWITCH_SMP_CORE_COUNT && switch_idle_read_counts(cpu, &c) == 0) {
+            core_saves = c.pmu_saves - MIN(c.pmu_saves, saves_seen[cpu]);
+            saves += core_saves;
             save_ticks += c.pmu_save_ticks - MIN(c.pmu_save_ticks, save_ticks_seen[cpu]);
             saves_seen[cpu] = c.pmu_saves;
             save_ticks_seen[cpu] = c.pmu_save_ticks;
         }
+        at = switch_systime_put(
+            size, at,
+            snprintf(line + at, size - at, " cpu%u %llu (%llu)", cpu, pmis - MIN(pmis, pmis_seen[cpu]), core_saves));
+        pmis_seen[cpu] = pmis;
     }
     absolutetime_to_nanoseconds(save_ticks, &ns);
-    at = switch_systime_put(
-        size, at, snprintf(line + at, size - at, "; C7 PMU saves %llu, %llu ns each", saves, saves ? ns / saves : 0));
+    at = switch_systime_put(size, at,
+                            snprintf(line + at, size - at, "; C7 PMU save %llu ns each", saves ? ns / saves : 0));
     absolutetime_to_nanoseconds(read_ticks, &ns);
     (void)snprintf(
         line + at, size - at,
