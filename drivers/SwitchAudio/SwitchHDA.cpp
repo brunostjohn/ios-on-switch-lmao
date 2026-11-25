@@ -141,10 +141,12 @@ void SwitchHDA::power(bool on)
         powered = false;
         return;
     }
-    // MAUD must track the 48 MHz link at exactly 2.125x (T210 TRM 27.7.3).
+    // SOR1 derives DP's Maud from a 102 MHz MAUD that tracks the 48 MHz HDA2CODEC_2X from the same PLL (TRM 27.6.5).
+    // MAUD's divisor is 7.1 like the others: TRM 5.2.277 calls it integer, but L4T's working DP audio sets 102 MHz
+    // from PLLP as 6 (clk-tegra-periph.c MUX8), where 3 gives 163.2 MHz and a Maud 1.6x off.
     switch_car_write(CLK_SOURCE_HDA, 6);
     switch_car_write(CLK_SOURCE_HDA2CODEC_2X, 15);
-    switch_car_write(CLK_SOURCE_MAUD, 3);
+    switch_car_write(CLK_SOURCE_MAUD, 6);
     for (const unsigned id : clocks) {
         switch_car_clock_enable(id);
         switch_car_reset_deassert(id);
