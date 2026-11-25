@@ -10,10 +10,10 @@ kernel would refuse it at exec. The card's manifest of the tree names each file'
 import json
 from pathlib import Path
 
-from tools.install import card as cards, renamed
+from tools.install import card as cards, pretranslate, renamed
 from tools.trustcache import trustcache
 
-MANIFEST = 'pretranslated.json'
+MANIFEST = Path(pretranslate.OVERLAY_MANIFEST).name
 SHOWN = 4
 
 

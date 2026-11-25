@@ -10,7 +10,7 @@ from tools.install import card as cards
 from tools.trustcache import trustcache
 
 PINNED = Path(__file__).parents[2] / 'ipsw/pretranslated/24B119/os.trustcache'
-# locationd's translation before and after 15032ab57 kept capability bit 4 (edits_24B119.json).
+# locationd's translation before 15032ab57 kept capability bit 4 (edits_24B119.json): cards installed earlier carry it.
 LOCATIOND_BEFORE = 'ac43b78b6ebf882d05f51c6edf50289ec42b6b64'
 LOCATIOND_AFTER = '020e95fca17c66f80bc7d1d0e62860ca8b3cf097'
 OTHER = 'aa' * 20
@@ -63,7 +63,8 @@ class TranslatedTree(unittest.TestCase):
     def test_the_pinned_trust_cache_refuses_the_locationd_cards_carry_from_before_the_edit(self):
         pinned = PINNED.read_bytes()
         self.assertEqual(translated_tree.untrusted(manifest(LOCATIOND_BEFORE), pinned), ['/usr/libexec/locationd'])
-        self.assertEqual(translated_tree.untrusted(manifest(LOCATIOND_AFTER), pinned), [])
+        trusted = trustcache.module_entries(pinned)[0][: trustcache.CDHASH_BYTES].hex()
+        self.assertEqual(translated_tree.untrusted(manifest(trusted), pinned), [])
 
 
 if __name__ == '__main__':
