@@ -22,5 +22,5 @@ TEST(TegraVICReservation, EveryJobWithoutEventsReservesAndARecordedTurnUsesIt)
                                  "&job->dstReserve);"));
     EXPECT_THAT(queue, Not(HasSubstr("mayDeferTurn")));
     const std::string run = Body(source, "bool runJob(Job *job, IOReturn *status)\n");
-    EXPECT_THAT(run, HasSubstr("&job->events, traits,\n                              &dstReserve.reservation)"));
+    EXPECT_THAT(run, HasSubstr("traits, &dstReserve.reservation))"));
 }

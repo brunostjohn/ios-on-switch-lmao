@@ -311,6 +311,7 @@ bool runJob(Job *job, IOReturn *status)
             switch_vic_surface_release_write(&reservation);
         }
     };
+
     WriteReservationGuard dstReserve{job->dstReserve};
     job->dstReserve = {};
 
@@ -330,9 +331,8 @@ bool runJob(Job *job, IOReturn *status)
     // A quarter turn of a decoder's picture window A scans itself: recorded on the destination, nothing to submit.
     SwitchDisplayTraits traits = switch_display_traits();
     traits.columnScanYuv = traits.columnScanYuv && switch_display_landscape_ready();
-    if (!job->bounceDst &&
-        switch_vic_turn_defer(&job->src, &job->dst, &job->plan, job->chromaSite, &job->events, traits,
-                              &dstReserve.reservation)) {
+    if (!job->bounceDst && switch_vic_turn_defer(&job->src, &job->dst, &job->plan, job->chromaSite, &job->events,
+                                                 traits, &dstReserve.reservation)) {
 #if TEGRA_VIC_STATS
         switch_vic_turn_count(job->origin, false, true, eventTurn, mach_absolute_time() - entered);
 #endif
