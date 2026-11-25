@@ -66,15 +66,19 @@ TEST(BackboarddEnvironment, Ios17DisablesGenericShadersWithAndWithoutDetached)
               (std::vector<std::string>{"CA_DISABLE_GENERIC_SHADERS=1"}));
 }
 
-TEST(BackboarddEnvironment, OtherProcessesKeepTheirOwnEnvironment)
+// Any process may render Core Animation in-process (CARenderer, snapshots, widgets): none draws the catch-all
+TEST(BackboarddEnvironment, EveryOtherProcessDisablesGenericShaders)
 {
     detach_ready = false;
-    EXPECT_TRUE(envFor(xnu17::native_switch_exec_environment, "/sbin/launchd").empty());
-    EXPECT_EQ(envFor(xnu17::native_switch_exec_environment, "/usr/sbin/bluetoothd"),
-              (std::vector<std::string>{"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000"}));
-    EXPECT_TRUE(envFor(xnu27::native_switch_exec_environment, "/sbin/launchd").empty());
-    EXPECT_EQ(envFor(xnu27::native_switch_exec_environment, "/usr/sbin/bluetoothd"),
-              (std::vector<std::string>{"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000"}));
+    const std::vector<std::string> ca = {"CA_DISABLE_GENERIC_SHADERS=1"};
+    const std::vector<std::string> bluetoothd = {"BT_HCI_TRANSPORT=H4BC:POSIX:com.apple.uart.bluetooth,3000000",
+                                                 "CA_DISABLE_GENERIC_SHADERS=1"};
+    for (const auto fn : {xnu17::native_switch_exec_environment, xnu27::native_switch_exec_environment}) {
+        EXPECT_EQ(envFor(fn, "/sbin/launchd"), ca);
+        EXPECT_EQ(envFor(fn, "/System/Library/CoreServices/SpringBoard.app/SpringBoard"), ca);
+        EXPECT_EQ(envFor(fn, "/Applications/SwitchHWTest.app/SwitchHWTest"), ca);
+        EXPECT_EQ(envFor(fn, "/usr/sbin/bluetoothd"), bluetoothd);
+    }
 }
 
 }  // namespace
