@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// host1x's command DMA through the SMMU (swgroup HC, one ASID field; SwitchHost1xChannels.h
+// host1x's command DMA through the SMMU (swgroups HC and HC1, one ASID field each; SwitchHost1xChannels.h
 // switch_host1x_channels_confine). host1x fetches only the push buffers and the arenas their GATHERs point into, all
-// the driver's own and below 4 GiB, so they are held for good and every other address faults at the MC.
+// the driver's own and below 4 GiB, so they are held for good and every other address faults at the MC. host1xdmar
+// may tag a fetch with the in-band SWID hc1 instead of hc (TRM 18.5.3), so both swgroups go to the one view; a
+// confinement that cannot be whole is undone.
 #include <IOKit/IOLib.h>
 #include "SwitchHost1xChannels.h"
 #include "TegraHost1x.h"
@@ -13,7 +15,16 @@ namespace {
 TegraSMMURamView gView;
 // host1xdmar and host1xr (TRANSLATION_ENABLE_0 bits 22/23), host1xw (TRANSLATION_ENABLE_1 bit 22): T210 TRM
 // 18.11.1.66-67.
-constexpr uint32_t kHostReads = 1u << 22 | 1u << 23, kHostWrites = 1u << 22;
+constexpr uint32_t kHostReads = 1u << 22 | 1u << 23, kHostWrites = 1u << 22, kChannelFetch = 1u << 22;
+
+struct Swgroup {
+    uint32_t asidReg, translationReg, bits;
+};
+constexpr Swgroup kSwgroups[] = {
+    {TEGRA_SMMU_HC_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_0, kHostReads},
+    {TEGRA_SMMU_HC_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_1, kHostWrites},
+    {TEGRA_SMMU_HC1_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_0, kChannelFetch},
+};
 }  // namespace
 
 bool switch_host1x_channels_confine(char *line, size_t size)
@@ -31,6 +42,13 @@ bool switch_host1x_channels_confine(char *line, size_t size)
         }
     }
     gView.commit();
-    return !gView.attachNarrow(TEGRA_SMMU_HC_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_0, kHostReads, line, size) &&
-           !gView.attachNarrow(TEGRA_SMMU_HC_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_1, kHostWrites, line, size);
+    for (uint32_t i = 0; i < sizeof(kSwgroups) / sizeof(kSwgroups[0]); ++i) {
+        const Swgroup &g = kSwgroups[i];
+        if (!gView.attachNarrow(g.asidReg, g.translationReg, g.bits, line, size))
+            continue;
+        for (uint32_t j = 0; j < i; ++j)
+            tegra_smmu_detach(TEGRA_SMMU_ASID_HOST1X, kSwgroups[j].asidReg);
+        return false;
+    }
+    return true;
 }

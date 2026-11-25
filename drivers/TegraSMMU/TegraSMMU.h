@@ -62,6 +62,8 @@ enum tegra_smmu_register {
     TEGRA_SMMU_GPUB_ASID = 0xaac,
     TEGRA_SMMU_SDMMC1A_ASID = 0xa94,  // swgroup "sdmmc1a" (sdmmcra/sdmmcwa: TRANSLATION_ENABLE_3 bits 0/4)
     TEGRA_SMMU_HC_ASID = 0x250,       // swgroup "hc" (host1xdmar/host1xr: _0 bits 22/23; host1xw: _1 bit 22)
+    // host1xdmar's in-band SWID "hc1" (TRM 18.5.3 client table, 18.11.1.142): one ASID field, disabled at reset.
+    TEGRA_SMMU_HC1_ASID = 0xac4,
     TEGRA_SMMU_APE_ASID = 0xab8,      // swgroup "ape" (aper/apew: TRANSLATION_ENABLE_3 bits 26/27)
     // The Security Engines' swgroups (L4T tegra210b01-soc-base.dtsi iommus; tegra_smmu_se_swgroups): SE1 in SE and SE1
     // (TRM 18.11.1.140, .143), SE2 in ISP2B (18.11.1.134) and ISP2B1. ISP2B1 is T210B01's: L4T's tegra-swgroup.h
@@ -118,6 +120,7 @@ static inline void tegra_smmu_ids_distinct(enum tegra_smmu_asid asid, enum tegra
     case TEGRA_SMMU_GPUB_ASID:
     case TEGRA_SMMU_SDMMC1A_ASID:
     case TEGRA_SMMU_HC_ASID:
+    case TEGRA_SMMU_HC1_ASID:
     case TEGRA_SMMU_APE_ASID:
     case TEGRA_SMMU_SE_ASID:
     case TEGRA_SMMU_SE1_ASID:
