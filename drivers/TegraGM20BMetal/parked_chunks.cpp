@@ -248,6 +248,7 @@ bool Device::tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uin
         slot.parkedVa = 0;
         slot.park = ChunkPark::Live;
         slot.highWater = chBytes;
+        slot.unscrubbed = true;
         if (!dedicated) {
             slot.free.clear();
             slot.free[0] = chBytes;

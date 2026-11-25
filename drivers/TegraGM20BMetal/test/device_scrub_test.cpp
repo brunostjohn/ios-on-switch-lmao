@@ -57,10 +57,14 @@ protected:
 
 TEST_F(DeviceScrub, AFreedSharedBufferIsZeroedByTheCopyEngineBeforeItsSpanIsReused)
 {
-    constexpr uint64_t kBytes = 64 * 1024;
+    constexpr uint64_t kBytes = 16 * 1024;
+    // a neighbour keeps the chunk live: the free that empties a chunk lets it go back at once, unzeroed
+    gm20b::Buffer neighbour;
+    ASSERT_TRUE(dev.createBuffer(kBytes, neighbour, true, true, true));
     gm20b::Buffer first;
     ASSERT_TRUE(dev.createBuffer(kBytes, first, true, true, true));
     ASSERT_TRUE(first.gpuVolatile) << "a Shared buffer lives in the VOL=1 write-combined chunks";
+    ASSERT_EQ(first.span.chunk, neighbour.span.chunk) << "the test wants both in one chunk";
     const uint64_t va = first.va;
     uint8_t *const cpu = first.cpu;
     memset(cpu, 0xab, kBytes);
@@ -86,6 +90,7 @@ TEST_F(DeviceScrub, AFreedSharedBufferIsZeroedByTheCopyEngineBeforeItsSpanIsReus
     EXPECT_EQ(later.cpu[0], 0xab);
     EXPECT_EQ(later.cpu[kBytes - 1], 0xab);
     dev.destroyBuffer(later);
+    dev.destroyBuffer(neighbour);
 }
 
 TEST_F(DeviceScrub, NoFreedSpanNoScrubJob)

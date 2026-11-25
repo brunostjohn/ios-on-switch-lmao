@@ -745,8 +745,7 @@ bool Device::createBuffer(uint64_t length, Buffer &b, bool wc, bool hostVisible,
     // buffer was in its chunk before it. A lease takes the whole chunk out of the resource set for good
     // (SwitchGpuResourceSet.cpp cpu_reached), every resource in it a job use of its own from then on
     if (!cleaned) {
-        // a Shared buffer's span was zeroed by the copy engine when it was freed (scrubs.cpp)
-        if (zero && dirty && b.wc && !b.gpuVolatile && b.cpu) {
+        if (zero && dirty && b.wc && b.cpu) {
             memset(b.cpu, 0, length);
 #if defined(__aarch64__)
             __asm__ volatile("dsb st" ::: "memory");
@@ -827,7 +826,7 @@ bool Device::wcPoolAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &
                     if (left)
                         ch.free[at + bytes] = left;
                     if (dirty)
-                        *dirty = at < ch.highWater;
+                        *dirty = at < ch.highWater && (!gpuVolatile || ch.unscrubbed);
                     ch.highWater = std::max(ch.highWater, at + bytes);
                     ch.used += bytes;
                     s = {c, at, bytes, ch.bo.va + at, ch.bo.cpu + at};
@@ -900,13 +899,16 @@ void Device::wcPoolFree(std::vector<Chunk> &pool, Span &s, DeferredFrees &deferr
         return;
     Chunk &ch = pool[s.chunk];
     SWITCH_METAL_DIAGNOSTIC(stats.wcBytes -= s.bytes);
-    if (&pool == &volatileWcChunks_ && !ch.dedicated) {
+    // The free that empties its chunk lets it go back or park at once, as before: that span stays unzeroed, and the
+    // chunk is marked so the next buffer over it is cleared at its create
+    if (&pool == &volatileWcChunks_ && !ch.dedicated && ch.used > s.bytes) {
         scrubWanted_.push_back({s.chunk, s.offset, s.bytes, s.va});
         scrubDue_.store(true, std::memory_order_relaxed);
         s = {};
         return;
     }
     ch.used -= s.bytes;
+    ch.unscrubbed |= &pool == &volatileWcChunks_;
     if (ch.dedicated) {
         deferred.add({ch.bo, 0, 0, nullptr, 0, nullptr, ch.bytes, ch.bo.mapped, RetireKind::WcDedicated});
         ch = Chunk();

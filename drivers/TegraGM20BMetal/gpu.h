@@ -1330,6 +1330,9 @@ private:
         // a pool chunk a host-visible buffer was placed in: the CPU writes such a buffer outside any lease, so lines
         // it left may be dirty under a later owner of its span (Device::createBuffer)
         bool hostTouched = false;
+        // a VOL=1 write-combined chunk a span went back to unzeroed (the free that emptied it, or a resident unpark): its
+        // spans below highWater may hold old bytes (scrubs.cpp zeroes the others when they are freed)
+        bool unscrubbed = false;
         ChunkPark park = ChunkPark::Live;
         uint64_t parkedVa = 0;
     };
