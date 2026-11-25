@@ -146,6 +146,8 @@ filegroup(
         "owned.h",
         "program_pages.h",
         "program_stores.h",
+        "program_facts.h",
+        "viewports.h",
         "sample_shading.h",
         "pack.cpp",
         "pack.h",

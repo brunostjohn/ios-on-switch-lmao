@@ -1,4 +1,4 @@
-"""Generate a two-tier v34 pack fixture exercising every pre-built state-segment path.
+"""Generate a two-tier pack fixture (v34 and later) exercising every pre-built state-segment path.
 
 usage: pack_v34_fixture.py <out pack.bin>
 """
@@ -266,8 +266,8 @@ def build_fixture() -> packfile.Pack:
                 (0x136C, 0x00000052),
             ],
             variants=[
-                {'stage': 1, 'assume': 1 << 26, 'program': fs_turned},
-                {'stage': 1, 'assume': 1, 'program': fs_slm},
+                {'stage': 1, 'assume': 1 << 26, 'program': fs_turned, 'memory': 0},
+                {'stage': 1, 'assume': 1, 'program': fs_slm, 'memory': 0},
             ],
         ),
         # Stride twin target + main record with strideTwin and PipelineVariantRecord (" | tests=2").

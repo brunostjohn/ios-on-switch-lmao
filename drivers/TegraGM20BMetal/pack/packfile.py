@@ -29,8 +29,10 @@ MAGIC = b'GM20BPK1'
 # blob section); 28: the selector section (PackSelectors), a state's shader-side stencil push word (shadow_stencil_word)
 # 31: the selector section gone; 32: the fast keys section (PackFastKeys); 33: two tiers (the header's tier0 table, each
 # section's tier 0 first, a stride twin as its record's index + 1), programs' facts (PackProgram.facts); 34: pre-built
-# tier-0 state segments in tier 0 of PackHeap (PackSegments) and tier0SlmPerWarp in PackHeader
-VERSION = 34
+# tier-0 state segments in tier 0 of PackHeap (PackSegments) and tier0SlmPerWarp in PackHeader; 35: programs' header
+# facts (PackProgram.facts), a variant's set-0 memory reads (PackVariant.memoryEntries), the segments' words block
+# (PackSegmentTable)
+VERSION = 35
 SECTIONS = 17  # runtime/pack.h PackSectionCount
 ENTRY_COMPARES = 1  # runtime/pack.h kEntryCompares: a handle's sampler slot the state samples by comparison
 ENTRY_ARRAY_VIEW = 2  # runtime/pack.h kEntryArrayView: a handle bound as a 2D-array view (m2v cube_as_array)
@@ -113,7 +115,7 @@ PIPE_HEAD = struct.Struct('<QIIIIIBBBBHHI')
 PIPE_DYNAMIC = struct.Struct('<HH')
 PIPE_STORAGE = struct.Struct('<BBBB8I')
 PIPE_TESTS = struct.Struct('<BBBBIII')
-VARIANT_STRUCT = struct.Struct('<II')
+VARIANT_STRUCT = struct.Struct('<III')
 FAST_KEY_STRUCT = struct.Struct('<QII')
 SPILL_HIGH_STRUCT = struct.Struct('<H')
 PROG_RECORD = struct.Struct('<IIIIIB18sBB3sI')
@@ -726,13 +728,13 @@ def pipeline_sections(
             for m, v in pairs:
                 blob.append(m)
                 blob.append(v)
-        variants_off = len(variant_bin) >> 3
+        variants_off = len(variant_bin) // VARIANT_STRUCT.size
         variants = rec.get('variants')
         if variants:
             if len(variants) > 1:
                 variants = sorted(variants, key=lambda v: v['stage'])
             for v in variants:
-                variant_bin += pack_variant(v['assume'], v['program'])
+                variant_bin += pack_variant(v['assume'], v['program'], v.get('memory', ALL_ENTRIES))
         # the key's attachment and vertex fields (what the runtime reads of it: gpu.cpp Device::pipeline), not the
         # functions' constants (some 1.5 KB a fixed-function state; pack.json has the whole key)
         key = rec['key']

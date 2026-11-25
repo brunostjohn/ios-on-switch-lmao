@@ -1,4 +1,4 @@
-"""Pre-built GM20B state segments and tier-0 local-memory ceiling for pack v34.
+"""Pre-built GM20B state segments and tier-0 local-memory ceiling (pack v34; v35: the words block in the table).
 
 Each tier-0 pipeline record (and each reachable program-variant combination of it) gets its immutable
 3D method stream written once into tier 0 of PackHeap, 16-byte aligned and deduplicated, so the
@@ -110,7 +110,7 @@ _PASS_WRITE_RANGES = (
 )
 PASS_WRITE_METHODS = frozenset(m for lo, hi in _PASS_WRITE_RANGES for m in range(lo, hi, 4))
 
-_SEGMENT_TABLE = struct.Struct('<II')
+_SEGMENT_TABLE = struct.Struct('<IIII')  # pack.h PackSegmentTable
 _SEGMENT_ENTRY = struct.Struct('<IHH')
 _U32 = struct.Struct('<I')
 _SPH_HEAD = struct.Struct('<4I')
@@ -418,11 +418,17 @@ def _words_to_bytes(words: list[int]) -> bytes:
 
 
 def encode_table(
-    base: list[tuple[int, int, int]], var_bases: list[int], var_combos: list[tuple[int, int, int]]
+    base: list[tuple[int, int, int]],
+    var_bases: list[int],
+    var_combos: list[tuple[int, int, int]],
+    words: tuple[int, int] = (0, 0),
 ) -> bytes:
-    """Encode PackSegments section: header, base[N], variantBase[N], variantCombos[M]."""
+    """Encode PackSegments section: header, base[N], variantBase[N], variantCombos[M].
+
+    `words`: the PackHeap block (offset, bytes) every segment's words lie in.
+    """
     out = bytearray(_SEGMENT_TABLE.size + len(base) * (_SEGMENT_ENTRY.size + 4) + len(var_combos) * _SEGMENT_ENTRY.size)
-    _SEGMENT_TABLE.pack_into(out, 0, len(base), len(var_combos))
+    _SEGMENT_TABLE.pack_into(out, 0, len(base), len(var_combos), *words)
     at = _SEGMENT_TABLE.size
     pack_entry = _SEGMENT_ENTRY.pack_into
     for heap_off, count, flags in base:
@@ -556,10 +562,12 @@ def build_tier0_segments(pack: packfile.Pack, report: list[str] | None = None) -
     pack.tier0_slm_per_warp = max_slm
 
     old_tier0_heap = len(pack.heap) if pack.tier0_heap is None else pack.tier0_heap
+    words = (0, 0)
     if seg_blob:
         tier0_prog_end = max((pr['heap_offset'] + pr['bytes'] for pr in programs[:tier0_progs]), default=0)
         seg_start = (tier0_prog_end + PREFETCH + 15) & ~15
         seg_end = seg_start + len(seg_blob)
+        words = (seg_start, len(seg_blob))
         new_tier0_heap = max(old_tier0_heap, (seg_end + TIER_ALIGN - 1) & ~(TIER_ALIGN - 1))
         delta = new_tier0_heap - old_tier0_heap
         if delta == 0:
@@ -586,7 +594,7 @@ def build_tier0_segments(pack: packfile.Pack, report: list[str] | None = None) -
         base_entries = [(off + seg_start, n, f) if n else (0, 0, 0) for off, n, f in base_entries]
         var_combos = [(off + seg_start, n, f) if n else (0, 0, 0) for off, n, f in var_combos]
 
-    pack.segments = encode_table(base_entries, var_bases, var_combos)
+    pack.segments = encode_table(base_entries, var_bases, var_combos, words)
     if report is not None:
         report.append(
             f'tier 0 state segments: {len(base_entries)} pipelines, {sum(1 for _, n, _ in var_combos if n)} variant '

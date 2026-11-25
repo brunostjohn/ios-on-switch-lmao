@@ -111,6 +111,8 @@ bool assembleRecord(const RecordParts &parts, const std::string &key, const Pack
 // The set-0 entries the record's final programs read: its two programs' (PackPipeline::memoryEntries), its variants'
 // and its split's (entryMaskWords of its entries)
 std::vector<uint32_t> recordSetReads(const RuntimeRecord &rec);
+// The record's first 32 set-0 entries `program`, one of its variants, reads from the set's upload (PackVariant::memoryEntries)
+uint32_t variantSetReads(const RuntimeRecord &rec, const CapturedProgram &program);
 // A fetch whose set-0 words none of the record's programs reads fetches nothing (the compiler removed every access):
 // it leaves the record with the colour's storage view and rung, and the record fetches only where another one stays.
 // Returns the colours dropped.

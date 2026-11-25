@@ -202,11 +202,11 @@ class RecordsTest(unittest.TestCase):
             'key': rec['key'],
             'programs': programs[:2],
             'samplers': [],
-            'variants': [{'assume': 1, 'program': programs[2]}],
+            'variants': [{'assume': 1, 'program': programs[2], 'memory': 4}],
             'probe': {'index': 0, 'form': '', 'targets': 1, 'records': [{'regs': {}}]},
         }
         back = directlink.pipeline_of(record, [], ids, [])
-        self.assertEqual(back['variants'], [{'stage': 1, 'assume': 1, 'program': 2}])
+        self.assertEqual(back['variants'], [{'stage': 1, 'assume': 1, 'program': 2, 'memory': 4}])
         self.assertEqual((back['bound_entries'], back['uniform'], back['fetch_rung']), (1, uniform, rec['fetch_rung']))
         self.assertEqual(back['memory_entries'], packfile.ALL_ENTRIES)
         self.assertEqual(
@@ -217,7 +217,7 @@ class RecordsTest(unittest.TestCase):
         )
         self.assertEqual(packfile.pipeline_bytes(back, 0, 0, 5), data)
         pipes, _, _, variants = packfile.pipeline_sections([dict(back, key=rec['key']), dict(back, key=rec['key'])])
-        self.assertEqual(len(variants), 16)
+        self.assertEqual(len(variants), 2 * packfile.VARIANT_STRUCT.size)
         v15 = directlink.PIPELINE_BYTES + directlink.V20_AT - packfile.PIPELINE_V18.size - packfile.PIPELINE_V15.size
         self.assertEqual(struct.unpack_from('<I', pipes, v15), (1,))
 

@@ -10,6 +10,7 @@
 #include <set>
 #include "own_states.h"
 #include "owned.h"
+#include "program_facts.h"
 #include "program_stores.h"
 #include "set_reads.h"
 #include "spill_table.h"
@@ -513,6 +514,17 @@ std::vector<uint32_t> recordSetReads(const RuntimeRecord &rec)
     return reads;
 }
 
+uint32_t variantSetReads(const RuntimeRecord &rec, const CapturedProgram &program)
+{
+    const SetEntries entries = entriesOf(rec);
+    std::vector<uint32_t> reads(entryMaskWords(entries.size()));
+    if (program.image.size() > kProgramHeaderBytes && !reads.empty())
+        programSetReads(program.image.data() + kProgramHeaderBytes, program.image.size() - kProgramHeaderBytes,
+                        program.cbufTypes.data(), uint32_t(program.cbufTypes.size()), program.boundTextures, entries,
+                        reads.data());
+    return reads.empty() ? 0 : reads[0];
+}
+
 uint8_t dropUnreadFetches(RuntimeRecord &rec)
 {
     PackPipeline &p = rec.pipeline;
@@ -645,10 +657,10 @@ std::vector<uint8_t> programSlot(const CapturedProgram &p, PackProgram &info)
 
 uint32_t programFacts(const CapturedProgram &p)
 {
-    constexpr size_t kHeaderBytes = 0x50;
-    const bool writes = p.image.size() > kHeaderBytes &&
-                        programWritesMemory(p.image.data() + kHeaderBytes, p.image.size() - kHeaderBytes);
-    return writes ? kProgramWritesMemory : 0;
+    if (p.image.size() < kProgramHeaderBytes)
+        return 0;
+    const bool writes = programWritesMemory(p.image.data() + kProgramHeaderBytes, p.image.size() - kProgramHeaderBytes);
+    return headerFacts(p.image.data()) | (writes ? kProgramWritesMemory : 0);
 }
 
 }  // namespace gm20b

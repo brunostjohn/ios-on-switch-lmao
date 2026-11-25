@@ -39,7 +39,7 @@ enum PackSectionId {
     PackSectionCount
 };
 
-constexpr uint32_t kPackVersion = 34;
+constexpr uint32_t kPackVersion = 35;
 
 // What a record or a program variant (PackVariant) assumes, as bits of a mask: a draw takes a variant only where all of them
 // hold. Bits 0-15 are facts of the draw's bindings, bit 16 of its pipeline, bit 26 of its pass, bits 17-25 of the chip
@@ -123,11 +123,20 @@ struct PackProgram {
     // v27. Its uniform buffers past set-0 byte 496 (cbufType CbufUbo, bits 3-7 zero): the blob section's dword + 1 of its far
     // table, kProgramCbufs uint16_t of each slot's set-0 byte / 16 (0: none); 0: it has none (programFarUbos)
     uint8_t farUbos[3];
-    uint32_t facts;  // v33. PackProgramFact bits, found in its code when it was made
+    uint32_t facts;  // v33. PackProgramFact bits, found in its code (v35: and its header) when it was made
 };
 
+// v35: the header bits a state's creation needs are facts of the program record, so no creation reads a program's slot
+// out of the pack's heap pages, which no process keeps resident (record_parts.cpp programFacts)
 enum PackProgramFact : uint32_t {
     kProgramWritesMemory = 1u << 0,  // its code stores to memory (program_stores.h programWritesMemory)
+    kProgramGlobalStore = 1u << 1,   // SPH DOES_GLOBAL_STORE
+    kProgramWritesViewportIndex = 1u << 2,
+    kProgramWritesLayer = 1u << 3,
+    kProgramPrimitiveId = 1u << 4,       // SPH IMAP_PRIMITIVE_ID
+    kProgramKillsPixels = 1u << 5,       // SPH KILLS_PIXELS
+    kProgramWritesDepth = 1u << 6,       // SPH OMAP_DEPTH
+    kProgramWritesSampleMask = 1u << 7,  // SPH OMAP_SAMPLE_MASK
 };
 
 // One of a stage's programs compiled under assumptions about its draws (PackAssumption). A stage's variants are tried in order
@@ -137,6 +146,8 @@ enum PackProgramFact : uint32_t {
 struct PackVariant {
     uint32_t assume;
     uint32_t program;
+    // v35: the record's first 32 set-0 entries this program reads from the set's upload (set_reads.h placedSetReads)
+    uint32_t memoryEntries;
 };
 
 // A binary archive the IPSW's frameworks ship that declares states for the identity's GPU (pack/archives.py), so a creation
@@ -217,7 +228,9 @@ struct PackFastKey {
 
 // Pre-built GM20B state segment living inside tier 0 of PackHeap at TGM_PACK_WINDOW_VA + heapOffset (v34).
 // PackSegments layout: PackSegmentTable, PackSegment base[pipelineCount], uint32_t variantBase[pipelineCount]
-// (~0u: no variant table), PackSegment variantCombos[variantComboCount].
+// (~0u: no variant table), PackSegment variantCombos[variantComboCount]. v35: every segment's words lie in one block of
+// PackHeap, [wordsOffset, wordsOffset + wordsBytes), which the render server wires with the pack's tier-0 tables
+// (pack_window.h), so the CPU reads a segment's words (a copied bind, the zcull check) without an SD page-in.
 enum PackSegmentFlag : uint16_t {
     kPackSegmentKeptAcrossPasses = 1u << 0,
     kPackSegmentReselectRoot = 1u << 1,
@@ -232,6 +245,7 @@ struct PackSegment {
 struct PackSegmentTable {
     uint32_t pipelineCount;
     uint32_t variantComboCount;
+    uint32_t wordsOffset, wordsBytes;  // v35
 };
 
 // The bytes of a uniform buffer entry a pipeline's programs read: from its bind offset, in 16-byte units
@@ -780,12 +794,12 @@ static_assert(offsetof(PackPipeline, entriesHigh) == 31 && offsetof(PackPipeline
                   offsetof(PackPipeline, spillEntryHigh) == 702,
               "pack layout: packfile.py PIPELINE_V27");
 static_assert(sizeof(PackProgram) == 48 && offsetof(PackProgram, farUbos) == 41, "pack layout");
-static_assert(sizeof(PackVariant) == 8, "pack layout");
+static_assert(sizeof(PackVariant) == 12, "pack layout: packfile.py VARIANT_STRUCT");
 static_assert(sizeof(PackArchive) == 16, "pack layout");
 static_assert(sizeof(PackComputeFacts) == 24, "pack layout: packfile.py compute_facts_bytes");
 static_assert(sizeof(PackReflection) == 16, "pack layout: packfile.py reflection_bytes");
 static_assert(sizeof(PackFastKey) == 16, "pack layout: packfile.py fast_key_bytes");
-static_assert(sizeof(PackSegment) == 8 && sizeof(PackSegmentTable) == 8, "pack layout: packfile.py segments");
+static_assert(sizeof(PackSegment) == 8 && sizeof(PackSegmentTable) == 16, "pack layout: segments.py _SEGMENT_TABLE");
 static_assert(sizeof(PackHeader) == 24 + 16 * PackSectionCount + 16 + 8 * PackSectionCount,
               "pack layout: packfile.py pack_bytes header_size");
 static_assert(sizeof(PackKernel) == 18 + 256 + 14 + 128 + 8 * kKernelEntries + 84 + 12, "pack layout");
@@ -861,6 +875,8 @@ public:
     const uint8_t *reflection(uint64_t keyHash, bool compute, uint32_t &length) const;
     const PackSegment *pipelineSegment(uint32_t recIndex) const;
     const PackSegment *variantSegment(uint32_t recIndex, uint32_t comboIndex) const;
+    // The PackHeap block every segment's words lie in; false: the pack has no segments
+    bool segmentWords(uint32_t &heapOffset, uint32_t &bytes) const;
 
     const char *string(uint32_t off) const
     {

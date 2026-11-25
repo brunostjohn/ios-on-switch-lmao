@@ -195,7 +195,7 @@ def read_records(
             rec['samplers'] = r.headers()
             if r.u32():
                 rec['split'] = {'record': r.blob(), 'programs': [program(r), program(r)]}
-            rec['variants'] = [{'assume': r.u32(), 'program': program(r)} for _ in range(r.u32())]
+            rec['variants'] = [{'assume': r.u32(), 'program': program(r), 'memory': r.u32()} for _ in range(r.u32())]
             rec['iterated'] = r.blob().decode()
             rec['spill'] = r.words()
             mask, push = r.u32(), r.words()
@@ -571,6 +571,7 @@ def pipeline_of(
                 'stage': 0 if i < vertex_variants else 1,
                 'assume': v['assume'],
                 'program': prog_index[_pid(v['program'], pid_cache)],
+                'memory': v['memory'],
             }
             for i, v in enumerate(rec.get('variants', ()))
         ],
