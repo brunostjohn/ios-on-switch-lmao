@@ -95,17 +95,28 @@ MOTION = [
         source='drivers/SwitchMotion/SwitchMotion.cpp',
         note="SwitchMotion's device motion service taking a client's interval",
     ),
+    Check(
+        'motion.fastpath-open.SpringBoard',
+        OWNER,
+        FASTPATH_OPEN,
+        process='SpringBoard',
+        subsystem=SUBSYSTEM,
+        source='drivers/SwitchTouch/SwitchHIDFastPath.cpp',
+        note='CoreMotion could not open the device motion fast path: the plug-in type, openForClient or the slots',
+    ),
+    # Their sandboxes' access to IOHIDEventServiceFastPathUserClient was not read (SpringBoard's lists the class).
     *(
         Check(
             f'motion.fastpath-open.{process}',
             OWNER,
             FASTPATH_OPEN,
+            REPORT,
             process=process,
             subsystem=SUBSYSTEM,
             source='drivers/SwitchTouch/SwitchHIDFastPath.cpp',
-            note='CoreMotion could not open the device motion fast path: the plug-in type, openForClient or the slots',
+            note='CoreMotion could not open the device motion fast path here; its user client class may be denied',
         )
-        for process in ('SpringBoard', 'backboardd', 'locationd')
+        for process in ('backboardd', 'locationd')
     ),
     Check(
         'motion.fastpath-copy',

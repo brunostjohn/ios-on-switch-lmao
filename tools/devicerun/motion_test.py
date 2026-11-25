@@ -86,7 +86,8 @@ class Motion(unittest.TestCase):
     def test_a_fast_path_coremotion_cannot_open_fails(self):
         got = results(record('[FastPath] openFastPathPrivate() failed,serviceRef,<IOHIDServiceClient>', SPRINGBOARD))
         self.assertEqual(got['motion.fastpath-open.SpringBoard'].verdict, FAIL)
-        self.assertEqual(got['motion.fastpath-open.backboardd'].verdict, PASS)
+        got = results(record('[FastPath] openFastPathPrivate() failed,serviceRef,<IOHIDServiceClient>', LOCATIOND))
+        self.assertEqual(got['motion.fastpath-open.locationd'].verdict, INFO)
 
     def test_a_report_coremotion_refuses_fails(self):
         got = results(record('Bad device motion report,type,3,size,52', SPRINGBOARD))
@@ -105,6 +106,8 @@ class Motion(unittest.TestCase):
                 'motion.locationd-spu',
                 'motion.device-motion-interval',
                 'motion.fastpath-copy',
+                'motion.fastpath-open.backboardd',
+                'motion.fastpath-open.locationd',
             ):
                 self.assertEqual(result.verdict, PASS, name)
 
