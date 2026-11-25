@@ -906,9 +906,17 @@ bool SwitchBattery::refresh()
         adapter->release();
     }
 #if SWITCH_IPSW_KIND_24B119
-    packReading = {r.rawCapacity,  r.fullCapacity, r.designCapacity, static_cast<int>(r.millivolts),
-                   r.avgMilliamps, r.milliamps,    r.chargeAccum,    r.centiCelsius,
-                   r.cycles,       r.percent,      r.full};
+    packReading = {r.rawCapacity,
+                   r.fullCapacity,
+                   r.designCapacity,
+                   static_cast<int>(r.millivolts),
+                   r.avgMilliamps,
+                   r.milliamps,
+                   r.chargeAccum,
+                   r.centiCelsius,
+                   r.cycles,
+                   r.percent,
+                   r.full};
     if (pack)
         pack->update(packReading, serialString);
     // batteryintelligenced reads UpdateTime around the pack and bank: it goes to the registry with updateStatus, after
