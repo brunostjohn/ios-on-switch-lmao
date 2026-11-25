@@ -1548,9 +1548,9 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         size_t used = written > 0 ? static_cast<size_t>(written) : 0;
         if (used >= sizeof(line))
             used = sizeof(line) - 1;
-        const int busy = gpuBusy == UINT32_MAX
-                             ? snprintf(line + used, sizeof(line) - used, "; gpu busy -")
-                             : snprintf(line + used, sizeof(line) - used, "; gpu busy %u.%u%%", gpuBusy / 10, gpuBusy % 10);
+        const int busy = gpuBusy == UINT32_MAX ? snprintf(line + used, sizeof(line) - used, "; gpu busy -")
+                                               : snprintf(line + used, sizeof(line) - used, "; gpu busy %u.%u%%",
+                                                          gpuBusy / 10, gpuBusy % 10);
         used += busy > 0 ? static_cast<size_t>(busy) : 0;
         if (used >= sizeof(line))
             used = sizeof(line) - 1;

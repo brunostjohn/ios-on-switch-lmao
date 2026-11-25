@@ -338,11 +338,11 @@ size_t metal_encode_rates(char *out, size_t size)
         own(EncodePart::Loop), own(EncodePart::Resources), own(EncodePart::Tail), own(EncodePart::State),
         own(EncodePart::Draw), own(EncodePart::Prepare), own(EncodePart::PassEnd), part(EncodePart::Apply),
         part(EncodePart::Textures), part(EncodePart::Retire), part(EncodePart::PassBegin),
-        part(EncodePart::VariantLookup), mallocs, frees,
-        events(gm20b::EncodeCount::Locks), events(gm20b::EncodeCount::Sends),
-        draws ? events(gm20b::EncodeCount::Applied) / draws : 0.0, events(gm20b::EncodeCount::UseAdds),
-        events(gm20b::EncodeCount::Uses), events(gm20b::EncodeCount::DescriptorBuilds),
-        events(gm20b::EncodeCount::DescriptorUploads), events(gm20b::EncodeCount::GeometryVertices));
+        part(EncodePart::VariantLookup), mallocs, frees, events(gm20b::EncodeCount::Locks),
+        events(gm20b::EncodeCount::Sends), draws ? events(gm20b::EncodeCount::Applied) / draws : 0.0,
+        events(gm20b::EncodeCount::UseAdds), events(gm20b::EncodeCount::Uses),
+        events(gm20b::EncodeCount::DescriptorBuilds), events(gm20b::EncodeCount::DescriptorUploads),
+        events(gm20b::EncodeCount::GeometryVertices));
     size_t n = size_t(head) + (tail > 0 ? size_t(tail) : 0);
     // the pooled encoders' blocks made and freed since the process began (object_pool.h): with none freed, made is
     // the most of each kind this process had alive at once

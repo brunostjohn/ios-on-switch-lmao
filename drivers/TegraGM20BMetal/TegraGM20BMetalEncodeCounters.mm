@@ -5,11 +5,11 @@
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
 namespace {
 
-constexpr const char *kPartNames[] = {"resources",     "loop",  "state",    "pass",     "split_plan",  "fusion",
-                                      "pass_end",      "draw",  "prepare",  "geometry", "descriptors", "barriers",
-                                      "split_launch",  "blit",  "compute",  "tail",     "commit",      "prologues",
-                                      "kernel",        "exec",  "use",      "uniforms", "bind",        "variant",
-                                      "pass_prologue", "apply", "textures", "retire",   "pass_begin",  "variant_lookup"};
+constexpr const char *kPartNames[] = {
+    "resources",     "loop",      "state",       "pass",     "split_plan",   "fusion",        "pass_end", "draw",
+    "prepare",       "geometry",  "descriptors", "barriers", "split_launch", "blit",          "compute",  "tail",
+    "commit",        "prologues", "kernel",      "exec",     "use",          "uniforms",      "bind",     "variant",
+    "pass_prologue", "apply",     "textures",    "retire",   "pass_begin",   "variant_lookup"};
 static_assert(sizeof kPartNames / sizeof *kPartNames == gm20b::kEncodeParts);
 
 constexpr const char *kCountNames[] = {"mallocs",

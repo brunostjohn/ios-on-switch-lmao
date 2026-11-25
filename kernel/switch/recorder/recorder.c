@@ -202,11 +202,11 @@ bool switch_recorder_trigger(unsigned int reason, uint64_t tid, uint64_t value)
 bool switch_recorder_hang(uint64_t tid, uint64_t ms, uint32_t on_ms, uint32_t blocked_ms, uint32_t runnable_ms)
 {
     return switch_recorder_ask((struct switch_recorder_ask){.tid = tid,
-                                                           .value = ms,
-                                                           .reason = SWITCH_RECORDER_HANG,
-                                                           .on_ms = on_ms,
-                                                           .blocked_ms = blocked_ms,
-                                                           .runnable_ms = runnable_ms});
+                                                            .value = ms,
+                                                            .reason = SWITCH_RECORDER_HANG,
+                                                            .on_ms = on_ms,
+                                                            .blocked_ms = blocked_ms,
+                                                            .runnable_ms = runnable_ms});
 }
 
 /* capture.c's thread: the next due ask, taken out of the queue; when none is due, the call is armed for the next. */

@@ -77,7 +77,7 @@ static uint64_t busy_min;
 static LCK_GRP_DECLARE(busy_focal_grp, "switch_busy_focal");
 static LCK_MTX_DECLARE(busy_focal_mtx, &busy_focal_grp);
 static thread_t busy_focal_thread[SWITCH_FOCAL_PLACES]; /* +1 each, under busy_focal_mtx */
-static struct switch_focal busy_focal;                     /* their tasks, under busy_focal_mtx */
+static struct switch_focal busy_focal;                  /* their tasks, under busy_focal_mtx */
 
 static void busy_write(thread_call_param_t p0, thread_call_param_t p1);
 

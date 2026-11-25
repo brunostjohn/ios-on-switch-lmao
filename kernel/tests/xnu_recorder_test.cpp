@@ -121,8 +121,7 @@ TEST(XnuRecorder, AutomaticCapturesAreSpacedAndHWTestsHeldThreadGoesThrough)
               SWITCH_RECORDER_ADMITTED)
         << "the same thread for another reason";
     q = {};
-    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 11000, 514)), &r, 0, 0),
-              SWITCH_RECORDER_ADMITTED)
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 11000, 514)), &r, 0, 0), SWITCH_RECORDER_ADMITTED)
         << "the same thread and reason after the repeat";
     q = {};
     switch_recorder_recent held = Spacing();
@@ -144,7 +143,8 @@ TEST(XnuRecorder, AFullQueueOfMarksRefusesTheNextAndAMarkTakesTheAutomaticPlace)
 
     EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 1, 9)), &r, 0, 0), SWITCH_RECORDER_ADMITTED);
     for (uint32_t i = 1; i < SWITCH_RECORDER_ASKS; i++) {
-        ASSERT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_MARK, 10 + i)), &r, 0, 0), SWITCH_RECORDER_ADMITTED);
+        ASSERT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_MARK, 10 + i)), &r, 0, 0),
+                  SWITCH_RECORDER_ADMITTED);
     }
     EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_MARK, 500)), &r, 0, 0), SWITCH_RECORDER_ADMITTED);
     EXPECT_EQ(switch_recorder_queued_auto(&q), q.n) << "the mark took the hang's place";
@@ -222,7 +222,8 @@ switch_recorder_slot Slot(bool this_boot, bool mark, uint32_t seq)
 // 25 Nov: two of the eight slots held 24 Nov dumps, and this boot's first dumps were overwritten by later ones.
 TEST(XnuRecorder, ACaptureReplacesOtherBootsThenLaterAutomaticCapturesAndNeverAMarkForAnAutomaticOne)
 {
-    switch_recorder_slot s[4] = {Slot(true, false, 9), Slot(false, true, 1), Slot(false, false, 5), Slot(true, true, 3)};
+    switch_recorder_slot s[4] = {Slot(true, false, 9), Slot(false, true, 1), Slot(false, false, 5),
+                                 Slot(true, true, 3)};
 
     EXPECT_EQ(switch_recorder_pick_slot(s, 4, false), 2) << "another boot's automatic capture first";
     s[2] = Slot(true, false, 10);
@@ -277,11 +278,11 @@ TEST(XnuRecorder, TheHeaderFitsItsPlaceAndReadsBackAsItsSlot)
 TEST(XnuRecorder, TheHeaderIsTheLineToolsPerfReads)
 {
     const char *gold =
-    "SwitchRecorder 2 boot=2693043C-01C2-4E03-9DA5-FDBCF1DD9490 kernel=724459E3-00EE-E993-E2A1-D165FC9289"
-    "3A seq=3 ask=41 reason=hang tid=514 value=320 at=4340000000 shot_at=4340057600 frozen_at=4340096000 "
-    "done_at=4340672000 shot_us=3000 ring_us=30000 tod=1795548000.250000 shot=19536 ring=23552 deflate=90"
-    "00 ring_lost=0"
-    " on_ms=20 blocked_ms=145 runnable_ms=98";
+        "SwitchRecorder 2 boot=2693043C-01C2-4E03-9DA5-FDBCF1DD9490 kernel=724459E3-00EE-E993-E2A1-D165FC9289"
+        "3A seq=3 ask=41 reason=hang tid=514 value=320 at=4340000000 shot_at=4340057600 frozen_at=4340096000 "
+        "done_at=4340672000 shot_us=3000 ring_us=30000 tod=1795548000.250000 shot=19536 ring=23552 deflate=90"
+        "00 ring_lost=0"
+        " on_ms=20 blocked_ms=145 runnable_ms=98";
     switch_recorder_head h{};
     char text[SWITCH_RECORDER_HEADER];
 
@@ -339,13 +340,32 @@ TEST(XnuRecorder, TheStatusLineCarriesTheCostAndEveryFieldHWTestReads)
     last.slot = 3;
     switch_recorder_status(line, sizeof(line), &cost, &n, &last, 1500);
     const std::string s(line);
-    for (const char *want :
-         {"ring=262144 ", "span_ms=2000 ", "events_s=131072 ", "samples=12345 ", "captures=5 ", "dumps=4 ",
-          "pending=1 ", "pending_kib=19456 ", "skipped=2 ", "repeat=0 ", "held=1 ", "packed=0 ", "taken=0 ", "hang=3 ",
-          "late_frame=0 ", "mark=0 ",
-          "last_reason=hang ", "last_tid=77 ", "last_value=412 ", "last_slot=3 ", "last_trace_bytes=16777216 ",
-          "last_shot_bytes=1048576 ", "last_latency_us=50000 ", "last_trace_us=0 ", "last_shot_us=0 ",
-          "last_age_ms=1500"}) {
+    for (const char *want : {"ring=262144 ",
+                             "span_ms=2000 ",
+                             "events_s=131072 ",
+                             "samples=12345 ",
+                             "captures=5 ",
+                             "dumps=4 ",
+                             "pending=1 ",
+                             "pending_kib=19456 ",
+                             "skipped=2 ",
+                             "repeat=0 ",
+                             "held=1 ",
+                             "packed=0 ",
+                             "taken=0 ",
+                             "hang=3 ",
+                             "late_frame=0 ",
+                             "mark=0 ",
+                             "last_reason=hang ",
+                             "last_tid=77 ",
+                             "last_value=412 ",
+                             "last_slot=3 ",
+                             "last_trace_bytes=16777216 ",
+                             "last_shot_bytes=1048576 ",
+                             "last_latency_us=50000 ",
+                             "last_trace_us=0 ",
+                             "last_shot_us=0 ",
+                             "last_age_ms=1500"}) {
         EXPECT_NE(s.find(want), std::string::npos) << want << " in " << s;
     }
     EXPECT_LT(s.size(), sizeof(line) - 1);

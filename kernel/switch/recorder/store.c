@@ -90,15 +90,15 @@ static void *store_zalloc(__unused void *opaque, u_int items, u_int size)
 }
 
 static void store_zfree(__unused void *opaque, __unused void *ptr)
-{
-}
+{}
 
 bool switch_recorder_store_init(void)
 {
     store.zmem_size = zlib_deflate_memory_size(STORE_WBITS, STORE_MEMLEVEL) + 256;
     store.zmem = kalloc_data(store.zmem_size, Z_WAITOK);
     store.out = kalloc_data(STORE_OUT, Z_WAITOK);
-    store.call = thread_call_allocate_with_options(store_call, NULL, THREAD_CALL_PRIORITY_LOW, THREAD_CALL_OPTIONS_ONCE);
+    store.call =
+        thread_call_allocate_with_options(store_call, NULL, THREAD_CALL_PRIORITY_LOW, THREAD_CALL_OPTIONS_ONCE);
     store.budget = MIN(STORE_RAM_MAX, max_mem / STORE_RAM_SHARE);
     if (store.zmem == NULL || store.out == NULL || store.call == NULL) {
         return false;
@@ -308,8 +308,8 @@ static int store_write(vnode_t vp, const void *buf, size_t bytes, off_t at, vfs_
 {
     const uint64_t t = mach_absolute_time();
     int resid = 0;
-    const int error = vn_rdwr(UIO_WRITE, vp, (caddr_t)(uintptr_t)buf, (int)bytes, at, UIO_SYSSPACE,
-                              IO_NOAUTH | IO_UNIT, vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
+    const int error = vn_rdwr(UIO_WRITE, vp, (caddr_t)(uintptr_t)buf, (int)bytes, at, UIO_SYSSPACE, IO_NOAUTH | IO_UNIT,
+                              vfs_context_ucred(ctx), &resid, vfs_context_proc(ctx));
 
     *ticks += mach_absolute_time() - t;
     return error ? error : (resid ? EIO : 0);
@@ -396,7 +396,8 @@ static bool store_persist(struct switch_recorder_capture *c, struct switch_recor
         error = store_write(vp, text, sizeof(text), 0, ctx, &wticks);
     }
     vnode_close(vp, FWRITE, ctx);
-    store.slots[slot] = (struct switch_recorder_slot){.used = error == 0, .this_boot = true, .mark = mark, .seq = h->seq};
+    store.slots[slot] =
+        (struct switch_recorder_slot){.used = error == 0, .this_boot = true, .mark = mark, .seq = h->seq};
     if (error != 0) {
         os_log(OS_LOG_DEFAULT, "SwitchRecorder: capture %u: writing %s failed (%d)", h->seq, path, error);
         return false;

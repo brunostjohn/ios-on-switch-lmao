@@ -52,7 +52,7 @@ struct frame_report {
 
 static SIMPLE_LOCK_DECLARE(frame_lock, 0);
 static thread_t frame_watched[FRAME_THREADS]; /* +1 each */
-static struct switch_focal frame_focal;        /* the tasks of the app places, under frame_lock */
+static struct switch_focal frame_focal;       /* the tasks of the app places, under frame_lock */
 static thread_call_t frame_call;
 static bool frame_busy; /* a report taken and not yet written */
 static struct frame_report frame_pending;

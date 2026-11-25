@@ -27,12 +27,12 @@ static inline const char *switch_recorder_reason_name(uint32_t reason)
     return names[reason < SWITCH_RECORDER_REASONS ? reason : 0];
 }
 
-#define SWITCH_RECORDER_HANG_NS    250000000ull  /* HangTracer's bound for a hang */
+#define SWITCH_RECORDER_HANG_NS    250000000ull   /* HangTracer's bound for a hang */
 #define SWITCH_RECORDER_GAP_NS     2000000000ull  /* the least time between two automatic captures */
 #define SWITCH_RECORDER_REPEAT_NS  10000000000ull /* ... of the same reason and thread */
-#define SWITCH_RECORDER_TAIL_NS    300000000ull  /* how long after a frame or a mark the ring is frozen */
-#define SWITCH_RECORDER_EXPECT_NS  5000000000ull /* how long debug.switch_recorder_expect holds other triggers */
-#define SWITCH_RECORDER_REFUSAL_NS 1000000000ull /* one refusal line per reason and thread in this long */
+#define SWITCH_RECORDER_TAIL_NS    300000000ull   /* how long after a frame or a mark the ring is frozen */
+#define SWITCH_RECORDER_EXPECT_NS  5000000000ull  /* how long debug.switch_recorder_expect holds other triggers */
+#define SWITCH_RECORDER_REFUSAL_NS 1000000000ull  /* one refusal line per reason and thread in this long */
 #define SWITCH_RECORDER_SLOW_MS    100u /* the least creation or import time debug.switch_recorder_slow takes */
 #define SWITCH_RECORDER_ASKS       32u  /* triggers taken and not yet captured */
 #define SWITCH_RECORDER_REFUSALS   16u  /* refusals not yet logged */
@@ -117,6 +117,7 @@ struct switch_recorder_recent {
         uint64_t at, tid;
         uint32_t reason;
     } e[SWITCH_RECORDER_RECENT];
+
     uint32_t next;
     uint64_t gap, repeat;
 };
@@ -248,6 +249,7 @@ struct switch_recorder_refusal_seen {
         uint64_t at, tid;
         uint32_t reason;
     } e[SWITCH_RECORDER_RECENT];
+
     uint32_t next;
 };
 
@@ -478,12 +480,14 @@ static inline int switch_recorder_status(char *out, size_t size, const struct sw
         (unsigned long long)c->samples, n->captures, n->dumps, n->pending, (unsigned long long)(n->pending_bytes >> 10),
         n->slots, n->refused[SWITCH_RECORDER_REFUSED_GAP], n->refused[SWITCH_RECORDER_REFUSED_REPEAT],
         n->refused[SWITCH_RECORDER_REFUSED_HELD], n->refused[SWITCH_RECORDER_REFUSED_QUEUED],
-        n->refused[SWITCH_RECORDER_REFUSED_FULL], n->dropped, n->no_ring, n->packed, n->taken, n->triggers[SWITCH_RECORDER_LATE_FRAME], n->triggers[SWITCH_RECORDER_HANG],
-        n->triggers[SWITCH_RECORDER_SLOW_WORK], n->triggers[SWITCH_RECORDER_MARK], switch_recorder_reason_name(h->reason),
-        (unsigned long long)h->tid, (unsigned long long)h->value, l->slot, h->seq, (unsigned long long)h->ring_bytes,
-        (unsigned long long)h->shot_bytes, (unsigned long long)h->deflate_bytes, (unsigned long long)h->ring_us,
-        (unsigned long long)h->shot_us, (unsigned long long)(h->done_at > h->at ? h->done_at - h->at : 0),
-        (unsigned long long)l->deflate_us, (unsigned long long)l->write_us, (unsigned long long)age_ms);
+        n->refused[SWITCH_RECORDER_REFUSED_FULL], n->dropped, n->no_ring, n->packed, n->taken,
+        n->triggers[SWITCH_RECORDER_LATE_FRAME], n->triggers[SWITCH_RECORDER_HANG],
+        n->triggers[SWITCH_RECORDER_SLOW_WORK], n->triggers[SWITCH_RECORDER_MARK],
+        switch_recorder_reason_name(h->reason), (unsigned long long)h->tid, (unsigned long long)h->value, l->slot,
+        h->seq, (unsigned long long)h->ring_bytes, (unsigned long long)h->shot_bytes,
+        (unsigned long long)h->deflate_bytes, (unsigned long long)h->ring_us, (unsigned long long)h->shot_us,
+        (unsigned long long)(h->done_at > h->at ? h->done_at - h->at : 0), (unsigned long long)l->deflate_us,
+        (unsigned long long)l->write_us, (unsigned long long)age_ms);
 }
 
 /*

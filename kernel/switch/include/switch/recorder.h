@@ -43,9 +43,8 @@ __BEGIN_DECLS
     } while (0)
 /* kdebug's copy of merged events to a reader's buffer: the recorder's capture thread reads into a kernel buffer
  * (switch_recorder_kdebug_read), which copyout would refuse. */
-#define SWITCH_RECORDER_COPYOUT(src, dst, size)                                                              \
-    (switch_recorder_dumping() ? (memcpy((void *)(uintptr_t)(dst), (src), (size)), 0) : copyout((src), (dst), \
-                                                                                                 (size)))
+#define SWITCH_RECORDER_COPYOUT(src, dst, size) \
+    (switch_recorder_dumping() ? (memcpy((void *)(uintptr_t)(dst), (src), (size)), 0) : copyout((src), (dst), (size)))
 /* kern_shutdown.c: Apple's shutdown trace only for tracing someone asked for, not the recorder's own ring. */
 #define SWITCH_RECORDER_SHUTDOWN_TRACE(enabled) ((enabled) && !switch_recorder_owns_ring())
 /* kperf_init_early: without Apple's kperf= boot-arg, the recorder's timer and samplers, then its stack depths. */

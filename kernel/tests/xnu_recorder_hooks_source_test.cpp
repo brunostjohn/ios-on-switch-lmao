@@ -75,15 +75,16 @@ TEST(XnuRecorderHooksSource, TheCaptureReadsTheRingThroughKdebugsMergeIntoMemory
 {
     for (const char *tree : kTrees) {
         const std::string kdebug = SourceText(std::string("../") + tree + "/bsd/kern/kdebug.c");
-        const std::string read = Between(kdebug, "switch_recorder_kdebug_read(void *buf", "#endif /* SWITCH_RECORDER */");
+        const std::string read =
+            Between(kdebug, "switch_recorder_kdebug_read(void *buf", "#endif /* SWITCH_RECORDER */");
 
         EXPECT_NE(kdebug.find("= SWITCH_RECORDER_COPYOUT("), std::string::npos)
             << tree << ": the merged read's copy does not go through SWITCH_RECORDER_COPYOUT";
         EXPECT_NE(read.find("_read_merged_trace_events("), std::string::npos) << tree;
         EXPECT_NE(read.find("kdebug_enable = reenable;"), std::string::npos) << tree << ": tracing comes back on";
     }
-    const std::string capture = Between(SourceText("../switch/recorder/capture.c"), "static void switch_recorder_ring(",
-                                        "\nstatic const char");
+    const std::string capture =
+        Between(SourceText("../switch/recorder/capture.c"), "static void switch_recorder_ring(", "\nstatic const char");
     const size_t on = capture.find("switch_recorder_dumping_set(true);");
     const size_t read = capture.find("switch_recorder_kdebug_read(", on);
     const size_t off = capture.find("switch_recorder_dumping_set(false);", read);

@@ -158,8 +158,8 @@ void switch_recorder_tick(uint64_t now)
             absolutetime_to_nanoseconds(split[i][k], &split_ms[k]);
             split_ms[k] /= NSEC_PER_MSEC;
         }
-        if (tid[i] == 0 || !switch_recorder_hang(tid[i], ms[i], (uint32_t)split_ms[0], (uint32_t)split_ms[1],
-                                                 (uint32_t)split_ms[2])) {
+        if (tid[i] == 0 ||
+            !switch_recorder_hang(tid[i], ms[i], (uint32_t)split_ms[0], (uint32_t)split_ms[1], (uint32_t)split_ms[2])) {
             continue;
         }
         simple_lock(&switch_recorder_watch_lock, LCK_GRP_NULL);

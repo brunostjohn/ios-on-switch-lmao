@@ -105,16 +105,16 @@ struct RecorderRing {
         let text = String(decoding: file.prefix(header), as: UTF8.self)
         let fields = KernelLine.fields(text)
         guard text.hasPrefix("SwitchRecorder 2 "), let shot = Int(fields["shot"] ?? ""),
-            let ring = Int(fields["ring"] ?? ""), let packed = Int(fields["deflate"] ?? ""),
-            file.count >= header + packed
+              let ring = Int(fields["ring"] ?? ""), let packed = Int(fields["deflate"] ?? ""),
+              file.count >= header + packed
         else {
             return .failure(Unreadable(text: "no complete SwitchRecorder 2 header"))
         }
-        let body = file.subdata(in: header..<(header + packed)) as NSData
+        let body = file.subdata(in: header ..< (header + packed)) as NSData
         guard let whole = try? body.decompressed(using: .zlib) as Data, whole.count == shot + ring else {
             return .failure(Unreadable(text: "the body does not inflate to shot=\(shot) ring=\(ring)"))
         }
-        return .success(whole.subdata(in: shot..<(shot + ring)))
+        return .success(whole.subdata(in: shot ..< (shot + ring)))
     }
 
     init(ring data: Data) {

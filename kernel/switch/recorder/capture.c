@@ -38,7 +38,7 @@
 #define SWITCH_RECORDER_WBITS       15
 #define SWITCH_RECORDER_MEMLEVEL    8
 #define SWITCH_RECORDER_SHOT_BYTES  (4u << 20)
-#define SWITCH_RECORDER_SHOT_MAX   (8u << 20) /* stackshot's cap (max_tracebuf_size) */
+#define SWITCH_RECORDER_SHOT_MAX    (8u << 20) /* stackshot's cap (max_tracebuf_size) */
 #define SWITCH_RECORDER_SHOT_FLAGS                                                                 \
     ((uint64_t)(STACKSHOT_KCDATA_FORMAT | STACKSHOT_SAVE_LOADINFO | STACKSHOT_SAVE_KEXT_LOADINFO | \
                 STACKSHOT_THREAD_WAITINFO | STACKSHOT_NO_IO_STATS | STACKSHOT_INCLUDE_DRIVER_THREADS_IN_KERNEL))
@@ -161,8 +161,8 @@ static void switch_recorder_ring(struct switch_recorder_capture *c, bool mark)
     h->frozen_at = mach_absolute_time();
     clock_get_calendar_microtime(&secs, &usecs);
     switch_recorder_dumping_set(true);
-    error = switch_recorder_kdebug_read((char *)buf + SWITCH_RECORDER_RAW_PAGE, want - SWITCH_RECORDER_RAW_PAGE,
-                                        &events);
+    error =
+        switch_recorder_kdebug_read((char *)buf + SWITCH_RECORDER_RAW_PAGE, want - SWITCH_RECORDER_RAW_PAGE, &events);
     switch_recorder_dumping_set(false);
     h->ring_us = switch_recorder_us(h->frozen_at, mach_absolute_time());
     if (error != 0) {
@@ -196,8 +196,7 @@ static void *switch_recorder_zalloc(__unused void *opaque, u_int items, u_int si
 }
 
 static void switch_recorder_zfree(__unused void *opaque, __unused void *ptr)
-{
-}
+{}
 
 /* recorder.c's start: the capture thread and its deflate stream. */
 bool switch_recorder_capture_init(void)
@@ -251,8 +250,7 @@ static void switch_recorder_pack(struct switch_recorder_capture *c, bool mark)
     const uint64_t held = switch_recorder_store_held();
     uint8_t *buf = NULL;
 
-    if (!switch_recorder_compress_now(held > raw ? held - raw : 0, raw) ||
-        !switch_recorder_store_room(size, mark)) {
+    if (!switch_recorder_compress_now(held > raw ? held - raw : 0, raw) || !switch_recorder_store_room(size, mark)) {
         return;
     }
     if ((buf = kalloc_data(size, Z_WAITOK)) == NULL) {

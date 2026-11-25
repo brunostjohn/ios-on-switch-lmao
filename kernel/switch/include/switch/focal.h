@@ -16,7 +16,7 @@
 
 struct switch_focal {
     uint64_t owner[SWITCH_FOCAL_PLACES]; /* the focal task's address, 0: free */
-    uint64_t since[SWITCH_FOCAL_PLACES];  /* when it became focal */
+    uint64_t since[SWITCH_FOCAL_PLACES]; /* when it became focal */
 };
 
 /* The place `owner` takes on becoming focal at `now`: its own, else a free one, else the one focal the longest, whose
