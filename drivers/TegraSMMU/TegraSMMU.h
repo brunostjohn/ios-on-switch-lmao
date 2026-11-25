@@ -201,6 +201,23 @@ void switch_mc_errors_resume(void);
 // Swgroup register `asidReg` went back to bypass (tegra_smmu_detach): its clients' runs end. Thread context, no lock held.
 void switch_mc_errors_detached(uint32_t asidReg);
 
+#if DEVELOPMENT || DEBUG
+// A deliberate SMMU fault (TegraVIC's MC fault probe). From switch_mc_errors_expect until the end, the interrupt's
+// filter takes each INVALID_SMMU_PAGE that `client` raises at an address in [low, high) below 4 GiB without panicking,
+// and counts it; every other error goes the usual way. The fault must be at an address the client's page directory
+// leaves empty: the SMMU keeps no page-table group from it.
+struct switch_mc_expected {
+    uint32_t attached;                    // 0: the interrupt was never attached (nothing was taken)
+    uint32_t taken;                       // the expected errors the interrupt delivered
+    uint32_t intstatus, status, address;  // the first of them
+};
+void switch_mc_errors_expect(uint32_t client, uint32_t low, uint32_t high);
+// Once the faulting DMA is over: waits up to `ms` for the interrupt to have delivered one and for INTSTATUS to hold no
+// SMMU fault, then ends the expectation. An SMMU fault still latched then panics: the interrupt was lost. Thread
+// context.
+void switch_mc_errors_expect_end(uint32_t ms, struct switch_mc_expected *out);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

@@ -44,6 +44,16 @@ template <class Io> bool take(Io &io, Error *out)
     return true;
 }
 
+constexpr uint32_t kInvalidSmmuPage = 1u << 10;
+
+// A deliberate fault's error (TegraSMMU.h switch_mc_errors_expect): an SMMU fault alone, captured for `client` at an
+// address in [low, high) below 4 GiB.
+inline bool expected(const Error &e, uint32_t client, uint32_t low, uint32_t high)
+{
+    return e.intstatus == kInvalidSmmuPage && (e.status & 0xff) == client && !((e.status >> 20) & 3) &&
+           e.address >= low && e.address < high;
+}
+
 inline const char *bitNames(uint32_t intstatus, char *text, size_t size)
 {
     static const struct {

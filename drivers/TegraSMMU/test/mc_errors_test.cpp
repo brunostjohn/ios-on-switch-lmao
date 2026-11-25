@@ -257,6 +257,111 @@ TEST(McErrorsDescribe, AKindWithItsOwnCaptureRegistersIsNamedAlone)
     EXPECT_STREQ(switch_mc::describe({1u << 12, 0x6000006c, 0x1000}, line, sizeof(line)),
                  "DECERR_VPR (not captured in MC_ERR_STATUS); INTSTATUS 0x1000");
 }
+
+// TegraVIC's MC fault probe: VIC reads a page its directory leaves empty, at 0x08000000 (below its windows).
+constexpr uint32_t kVicRead = 0x6c, kFaultLow = 0x08000000, kFaultHigh = 0x08010000;
+
+void vicFaultLatched(uint32_t client = kVicRead, uint32_t address = kFaultLow + 0x40)
+{
+    mc(0x0) = 1u << 10;
+    mc(0x8) = 0x6a000000 | client;
+    mc(0xc) = address;
+}
+
+class McExpectedFault : public McErrors {
+protected:
+    void TearDown() override
+    {
+        switch_test_while_blocked = nullptr;
+        switch_test_blocks = 0;
+    }
+};
+
+TEST_F(McExpectedFault, IsTakenWithoutAPanicOrALineAndCountedAtTheEnd)
+{
+    switch_mc_errors_expect(kVicRead, kFaultLow, kFaultHigh);
+    vicFaultLatched();
+    EXPECT_EQ(panicked(), "");
+    EXPECT_TRUE(switch_test_lines.empty());
+    switch_mc_expected out;
+    switch_mc_errors_expect_end(100, &out);
+    EXPECT_EQ(switch_test_blocks, 0u) << "already delivered: no wait";
+    EXPECT_EQ(out.attached, 1u);
+    EXPECT_EQ(out.taken, 1u);
+    EXPECT_EQ(out.intstatus, 1u << 10);
+    EXPECT_EQ(out.status, 0x6a00006cu);
+    EXPECT_EQ(out.address, kFaultLow + 0x40);
+    uint32_t intstatus = 0, status = 0, address = 0;
+    const uint32_t before = tegra_mc_error_latest(&intstatus, &status, &address);
+    vicFaultLatched();
+    EXPECT_NE(panicked(), "") << "the expectation is over";
+    EXPECT_EQ(tegra_mc_error_latest(&intstatus, &status, &address), before) << "the expected one was not published";
+}
+
+TEST_F(McExpectedFault, AnyOtherClientOrAddressStillPanics)
+{
+    switch_mc_errors_expect(kVicRead, kFaultLow, kFaultHigh);
+    vicFaultLatched(0x6d);
+    EXPECT_NE(panicked(), "");
+    vicFaultLatched(kVicRead, kFaultHigh);
+    EXPECT_NE(panicked(), "");
+    mc(0x0) = 1u << 10 | 1u << 6;
+    mc(0x8) = 0x6a00006c;
+    mc(0xc) = kFaultLow;
+    EXPECT_NE(panicked(), "") << "an SMMU fault together with another kind";
+    switch_mc_expected out;
+    switch_mc_errors_expect_end(100, &out);
+    EXPECT_EQ(out.taken, 0u);
+}
+
+TEST_F(McExpectedFault, TheEndWaitsForTheInterruptOnItsWay)
+{
+    switch_mc_errors_expect(kVicRead, kFaultLow, kFaultHigh);
+    vicFaultLatched();
+    switch_test_while_blocked = [] { (void)started()->fire(); };
+    switch_mc_expected out;
+    switch_mc_errors_expect_end(100, &out);
+    EXPECT_EQ(switch_test_blocks, 1u);
+    EXPECT_EQ(out.taken, 1u);
+}
+
+TEST_F(McExpectedFault, ASecondFaultLatchedBehindTheFirstIsWaitedForToo)
+{
+    switch_mc_errors_expect(kVicRead, kFaultLow, kFaultHigh);
+    vicFaultLatched();
+    EXPECT_EQ(panicked(), "");
+    vicFaultLatched(kVicRead, kFaultLow + 0x1000);
+    switch_test_while_blocked = [] { (void)started()->fire(); };
+    switch_mc_expected out;
+    switch_mc_errors_expect_end(100, &out);
+    EXPECT_EQ(out.taken, 2u);
+    EXPECT_EQ(out.address, kFaultLow + 0x40) << "the first";
+}
+
+TEST_F(McExpectedFault, ALatchedFaultTheInterruptNeverDeliveredPanicsAsLost)
+{
+    switch_mc_errors_expect(kVicRead, kFaultLow, kFaultHigh);
+    vicFaultLatched();
+    switch_mc_expected out;
+    try {
+        switch_mc_errors_expect_end(100, &out);
+        ADD_FAILURE() << "no panic";
+    } catch (const switch_test_panic &p) {
+        EXPECT_EQ(std::string(p.what()), "TegraSMMU: MC error interrupt (INTID 109) lost: INTSTATUS 0x400 still latched "
+                                         "100 ms after a deliberate SMMU fault, 0 expected errors delivered");
+    }
+    gRegisters.clear();
+    switch_mc_errors_expect_end(0, &out);
+}
+
+TEST_F(McExpectedFault, NoFaultAtAllEndsWithNothingTaken)
+{
+    switch_mc_errors_expect(kVicRead, kFaultLow, kFaultHigh);
+    switch_mc_expected out;
+    switch_mc_errors_expect_end(100, &out);
+    EXPECT_EQ(out.attached, 1u);
+    EXPECT_EQ(out.taken, 0u);
+}
 }  // namespace
 
 extern "C" {
@@ -266,10 +371,11 @@ uint32_t switch_mmio_model_read32(uintptr_t address)
     return gRegisters[address];
 }
 
+// INTSTATUS's bits clear where a 1 is written (TRM 18.11.1.1).
 void switch_mmio_model_write32(uintptr_t address, uint32_t value)
 {
     gWrites.emplace_back(static_cast<uint32_t>(address - kMc), value);
-    gRegisters[address] = value;
+    gRegisters[address] = address == kMc ? gRegisters[address] & ~value : value;
 }
 
 uint16_t switch_mmio_model_read16(uintptr_t address)
