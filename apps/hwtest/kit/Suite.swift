@@ -79,8 +79,11 @@ public final class Suite: ObservableObject {
                     finished: Date()
                 )
         }
+        busy = true
         Task {
-            guard await acceptRunChoice(continued.report, ended: continued.order.isEmpty) else { return }
+            let saved = await acceptRunChoice(continued.report, ended: continued.order.isEmpty)
+            busy = false
+            guard saved else { return }
             notice = Self.continuationNotice(continued.cause) { id in byID[id]?.name ?? id }
             if let crash = continued.crash { Self.log(LogLine.format(crash)) }
             run(continued.order.compactMap { byID[$0] }, summarize: true)
@@ -90,16 +93,17 @@ public final class Suite: ObservableObject {
     func startNewRun() {
         guard var cancelled = pendingRun, !running, !busy else { return }
         cancelled.cancel(at: Date())
+        busy = true
         Task {
-            guard await acceptRunChoice(cancelled, ended: true) else { return }
-            runAll()
+            let saved = await acceptRunChoice(cancelled, ended: true)
+            busy = false
+            if saved { runAll() }
         }
     }
 
-    /// Saved before the run goes on: a run that continued from a choice the card never got would be offered again.
+    /// Saved before the run goes on: a run that continued from a choice the card never got would be offered again. The
+    /// caller holds `busy` from the tap until this returns.
     private func acceptRunChoice(_ chosen: Report, ended: Bool) async -> Bool {
-        busy = true
-        defer { busy = false }
         do {
             if ended { try await recorder.close(chosen) } else { try await recorder.checkpoint(chosen) }
         } catch {
