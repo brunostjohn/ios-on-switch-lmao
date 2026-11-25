@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Zero-on-free of Shared buffers' memory (gpu.h Scrub): a freed span of a VOL=1 write-combined chunk stays used until the
-// copy engine has written zeros over it, so every span such a chunk hands a new buffer is zero with no CPU work at the
-// create. Metal clears every buffer newBufferWithLength: makes, in every storage mode.
+// Zero-on-free of Shared buffers' memory (gpu.h Scrub): a span freed beside live buffers of a VOL=1 write-combined chunk
+// stays used until the copy engine has written zeros over it, so the create that takes it again does no CPU work (the
+// free that empties a chunk goes back at once: Chunk::unscrubbed). Metal clears every buffer newBufferWithLength: makes,
+// in every storage mode.
 #include "lock.h"
 #include "gpu.h"
 #include "blit_encoder.h"
