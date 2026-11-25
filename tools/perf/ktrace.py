@@ -26,6 +26,8 @@ def code(cls: int, sub: int, number: int) -> int:
 # bsd/sys/kdebug.h, osfmk/kperf/buffer.h, kernel/switch/include/switch/recorder.h and
 # TegraDisplayFlip/SwitchFrameTimeline.h
 MACH_SCHED = code(1, 0x40, 0)
+MACH_STACK_HANDOFF = code(1, 0x40, 2)  # a context switch that hands the kernel stack over: thread_invoke's fast path
+SWITCHES = {MACH_SCHED, MACH_STACK_HANDOFF}
 MACH_MAKE_RUNNABLE = code(1, 0x40, 6)
 VM_PMAP_UNNEST = code(1, 0x30, 0x161)
 SHARED_CACHE_LAYOUT = code(1, 0xA8, 0)
@@ -193,12 +195,12 @@ def read(path: str) -> Ring:
 
 
 def runs(events: list[Event]) -> dict[int, list[tuple[int, int, int]]]:
-    """Return each thread's stretches on a core, (start, end, cpu), from the context switches."""
+    """Return each thread's stretches on a core, (start, end, cpu), from the context switches of either kind."""
     on: dict[int, tuple[int, int]] = {}  # cpu: (thread, since)
     out: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
     first = events[0].ts if events else 0
     for e in events:
-        if e.id != MACH_SCHED:
+        if e.id not in SWITCHES:
             continue
         old_tid, since = on.get(e.cpu, (e.tid, first))
         out[old_tid].append((since, e.ts, e.cpu))

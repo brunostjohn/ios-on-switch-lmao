@@ -153,6 +153,18 @@ class DumpTest(unittest.TestCase):
             rendered = report.render(session.build('B', [rec]), pulled)
         self.assertIn('Switch-recorder-1.ktrace: unreadable dump', rendered)
 
+    def test_a_stack_handoff_is_a_context_switch(self):
+        """thread_invoke's handoff path logs MACH_STACK_HANDOFF, not MACH_SCHED (hitch-shots-codex, 25 Nov)."""
+        events = [
+            event(0, ktrace.MACH_SCHED, (0, MAIN, 31, 47), RENDER),
+            event(10, ktrace.MACH_STACK_HANDOFF, (0, SUBMITTER, 47, 31), MAIN),
+            event(30, ktrace.MACH_SCHED, (0, MAIN, 31, 47), SUBMITTER),
+            event(40, ktrace.MACH_SCHED, (0, RENDER, 47, 31), MAIN),
+        ]
+        stretches = ktrace.runs(ktrace.parse(pack_ring(events)).events)
+        self.assertAlmostEqual(dumps.ms(ktrace.on_core(stretches[SUBMITTER], 0, tick(40))), 20.0, places=1)
+        self.assertAlmostEqual(dumps.ms(ktrace.on_core(stretches[MAIN], 0, tick(40))), 20.0, places=1)
+
     def test_pageins_and_unnests_decode_with_vnode_paths_and_syscalls(self):
         dsc_path = '/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64e'
         dk_issue = ktrace.code(3, 2, ktrace.DKIO_READ | ktrace.DKIO_PAGING)
