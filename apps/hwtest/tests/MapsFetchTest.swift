@@ -11,9 +11,15 @@ import Metal
 /// colour masked), `draws` full-screen draws a pass, the median of `runs`:
 ///   us_<arm>          one draw's GPU time (the pass less a pass of no draw)
 ///   fetch_<arm>       the facade's fetch route counters over the arm's passes
-///   worst_<shape>     the largest code difference between the fetch arm's resolved image and the ROP arm's
+///   us_<shape>_twin1, us_<shape>_twinw  the fetch arm forced through the facade's probe channel onto its barrier twin,
+///                     a barrier a triangle and one for the draw (fetch_rungs.h): routes with no pixel interlock
+///   worst_<shape>     the largest code difference between the fetch arm's resolved image of one draw and the ROP
+///                     arm's
 ///   resolve_us        the 4x sRGB resolve (a pass of no draw resolved, less the same pass stored)
 ///   plain_us          a draw of a colour with no blend: the floor a draw of this target costs
+///   lost_<n>x         pixels of a 64x64 BGRA8Unorm target at n samples that did not count all `overlaps` overlapping
+///                     storage-form draws of fetch_add_fragment (one code each): an update lost between the interlocked
+///                     read and write (learn/maxwell-ext.md's .CV against .CG); 0 required
 /// PASS where every arm ran on the driver with GPU stamps and each fetch arm's image is within `bound` codes of its
 /// ROP arm's (GlowAlpha exactly).
 struct MapsFetchTest: HWTest {
@@ -48,6 +54,39 @@ struct MapsFetchTest: HWTest {
         try gpu.render(
             vertex: "maps_fetch_vertex", fragment: fragment, format: .bgra8Unorm_srgb, samples: Self.samples
         ) { blend($0.colorAttachments[0]) }
+    }
+
+    static let overlaps = 64
+
+    /// The pixels of a 64x64 target that missed one of `overlaps` full-target fetching draws adding a code each
+    func lostUpdates(_ gpu: GPU, samples: Int) async throws -> Int {
+        let pipeline = try gpu.render(
+            vertex: "fetch_vertex", fragment: "fetch_add_fragment", format: .bgra8Unorm, samples: samples
+        )
+        let target = try gpu.texture(.bgra8Unorm, 64, 64, usage: [.renderTarget, .shaderRead], samples: samples)
+        let resolved = try samples > 1 ? gpu.texture(.bgra8Unorm, 64, 64) : target
+        // the probe channel's 4 keeps the storage form, which rule fetch.twin would trade for the barrier twin here
+        let draw = { (commands: MTLCommandBuffer) in
+            let descriptor = MTLRenderPassDescriptor()
+            descriptor.colorAttachments[0].texture = target
+            descriptor.colorAttachments[0].resolveTexture = samples > 1 ? resolved : nil
+            descriptor.colorAttachments[0].loadAction = .clear
+            descriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+            descriptor.colorAttachments[0].storeAction = samples > 1 ? .multisampleResolve : .store
+            let encoder = commands.makeRenderCommandEncoder(descriptor: descriptor)!
+            encoder.setRenderPipelineState(pipeline)
+            var step = SIMD4<Float>(1.0 / 255, 1.0 / 255, 1.0 / 255, 1)
+            encoder.setFragmentBytes(&step, length: MemoryLayout<SIMD4<Float>>.stride, index: 0)
+            for _ in 0 ..< Self.overlaps { encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3) }
+            encoder.endEncoding()
+        }
+        if try await GM20BFacade.forcingFetchRung(4, on: gpu.device, { try await gpu.run(draw) }) == nil {
+            try await gpu.run(draw)
+        }
+        let bytes = try await gpu.read(resolved, bytesPerPixel: 4)
+        return stride(from: 0, to: bytes.count, by: 4).filter { at in
+            (0 ..< 3).contains { bytes[at + $0] != UInt8(Self.overlaps) }
+        }.count
     }
 
     func run(_ context: TestContext) async throws -> Outcome {
@@ -143,8 +182,23 @@ struct MapsFetchTest: HWTest {
                 )
                 checks.append(("\(arm.label) on the driver", paths.union(barePaths) == ["gm20b"]))
             }
-            _ = try await gpu.run(pass(arm, Self.draws, true))
+            _ = try await gpu.run(pass(arm, 1, true))
             images[arm.label] = try await gpu.read(resolved, bytesPerPixel: 4)
+            guard facade, arm.label.hasSuffix("_fetch") else { continue }
+            let shape = arm.label.dropLast("_fetch".count)
+            for (rung, form) in [(5, "twin1"), (6, "twinw")] {
+                let forced = try await GM20BFacade.forcingFetchRung(rung, on: gpu.device) {
+                    try await median(pass(arm, Self.draws, false))
+                }
+                if let forced {
+                    metrics.set("us_\(shape)_\(form)", max(0, forced.0 - bare) * 1000 / Double(Self.draws), digits: 1)
+                }
+            }
+        }
+        for samples in [1, Self.samples] {
+            let lost = try await lostUpdates(gpu, samples: samples)
+            metrics.set("lost_\(samples)x", lost)
+            checks.append(("\(samples)x: every overlapping fetch counted", lost == 0))
         }
         for (shape, bound) in [("hillshade", Self.bound), ("glow", 0)] {
             guard let fetched = images[shape + "_fetch"], let blended = images[shape + "_rop"] else { continue }
