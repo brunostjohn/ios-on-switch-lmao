@@ -1,0 +1,10 @@
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//bazel/testing:defs.bzl", "host_test")
+
+lint_files()
+
+host_test(
+    name = "tegra_se_source_test",
+    srcs = ["tegra_se_source_test.cpp"],
+    data = ["//drivers/TegraSE:TegraSE.cpp"],
+)
