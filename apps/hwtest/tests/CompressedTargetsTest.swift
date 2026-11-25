@@ -1,4 +1,5 @@
 import Foundation
+import HWTestCommon
 import HWTestCore
 import HWTestGPU
 import HWTestKit
@@ -18,9 +19,11 @@ import Metal
 /// (CompressedR32Arms: draws, clears and that collision on compressed R32Float, R32Uint and R32Sint, which add no
 /// entry), and a 4x BGRA8 target cleared to a value the table holds and to 0.5 (a ROP tie, never added): the GPU time
 /// of each. An entry the kernel refused fails (`zbc_table_full`, the arms' `zbc_<arm>_table_full`): its clears were
-/// ordinary ones. The GPU's table keeps 15 colour entries for the whole boot and its boot entries take 6; these cases
-/// ask for 4 more and the arms for 5, so the test runs right after the first GPU scene (Registry.gpuScenes), before
-/// gpu.clear.formats clears to more values than the table holds.
+/// ordinary ones. The GPU's table keeps 15 colour entries for the whole boot, every process's, and its boot entries
+/// take 6; these cases ask for 4 more and the arms for 5, so the test runs right after the first GPU scene
+/// (Registry.gpuScenes), before gpu.clear.formats clears to more values than the table holds. It reads the table first
+/// (ZbcBudget): the cases' entries must fit, or the test fails saying how full the table was; an arm the other
+/// processes left no slot for is `no_room` and not run (`zbc_free`, `zbc_no_room`).
 struct CompressedTargetsTest: HWTest {
     let id = "gpu.gm20b.compressed_targets"
     let name = "Multisampled and depth memoryless targets compress; repeated clears become zero-bandwidth"
@@ -68,6 +71,19 @@ struct CompressedTargetsTest: HWTest {
         ),
     ]
 
+    /// Zero, opaque white, RGBA32Float 0 and 1, opaque black as A8B8G8R8 and A8R8G8B8 (TegraGM20BABI.h method 19)
+    static let bootColourEntries = 6
+
+    /// The entry a case's clears ask for (zbc.h zbcColorEntry's formats)
+    static func value(_ c: Case) -> ZbcValue {
+        let clear = [c.clear.red, c.clear.green, c.clear.blue, c.clear.alpha]
+        switch c.colour {
+        case .rgba16Float: return ZbcValue.half(c.label, format: 0x16, clear)
+        case .rgba8Unorm: return ZbcValue.unorm(c.label, format: 0x28, clear, bits: [8, 8, 8, 8])
+        default: return ZbcValue.unorm(c.label, format: 0x18, clear, bits: [8, 8, 8, 8])
+        }
+    }
+
     static func pass(_ c: Case, colour: MTLTexture, depth: MTLTexture, resolve: MTLTexture?) -> MTLRenderPassDescriptor
     {
         let pass = MTLRenderPassDescriptor()
@@ -102,6 +118,16 @@ struct CompressedTargetsTest: HWTest {
         var metrics = Metrics()
         var wrong: [String] = []
         var paths: Set<String> = []
+        let budget = GPUPaths.zbcTable(GPUConnection()).map {
+            ZbcBudget($0, required: Self.cases.map(Self.value), optional: CompressedZbcArms.arms.map(CompressedZbcArms.value))
+        }
+        if let budget {
+            metrics.set("zbc_free", budget.free)
+            metrics.set("zbc_no_room", budget.noRoom.isEmpty ? "-" : budget.noRoom.joined(separator: ","))
+            if let refusal = budget.refusal(boot: Self.bootColourEntries) { wrong.append(refusal) }
+        } else {
+            metrics.set("zbc_free", "unread")
+        }
         let start = GM20BFacade.compression(of: gpu.device)
         let depthState = gpu.device.makeDepthStencilState(
             descriptor: {
@@ -173,10 +199,10 @@ struct CompressedTargetsTest: HWTest {
         metrics.set("views", after["views"] ?? 0)
         if delta("made") == 0 && (after["views"] ?? 0) == 0 { wrong.append("no_compressed_memory") }
         if delta("zbc_added") + delta("zbc_full") == 0 { wrong.append("no_zbc_entry_asked") }
-        if delta("zbc_full") > 0 { wrong.append("zbc_table_full") }
+        if delta("zbc_full") > 0 && budget?.requiredFits != false { wrong.append("zbc_table_full") }
         if delta("zbc_added") > 0 && delta("zbc_hits") == 0 { wrong.append("no_zbc_hit") }
         try await CompressedShadowCases.run(gpu, &metrics, &wrong)
-        await CompressedZbcArms.run(gpu, &metrics, &wrong)
+        await CompressedZbcArms.run(gpu, &metrics, &wrong, noRoom: Set(budget?.noRoom ?? []))
         await CompressedR32Arms.run(gpu, &metrics, &wrong)
         let (heldMs, tieMs) = try await Self.clearTimes(gpu)
         metrics.set("zbc_clear_gpu_ms", heldMs, digits: 3)
