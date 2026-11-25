@@ -248,10 +248,10 @@ ipsw_volumes_header(
 # NativeRamBlock's seed pins: a pure function of the pinned seed and its volume UUID (XNU_OWNER_DATA_VOLUME_UUID).
 tool_output(
     name = "native_data_seed_header",
-    srcs = ["//bazel/pinned:data-seed/data-v10.dbr"],
+    srcs = ["//bazel/pinned:data-seed/empty.dbr"],
     outs = ["build/native-ram-block/NativeDataSeed.h"],
     args = [
-        "$(execpath //bazel/pinned:data-seed/data-v10.dbr)",
+        "$(execpath //bazel/pinned:data-seed/empty.dbr)",
         "CCD5A1A2-2FDC-4B25-B322-AE1722871BC9",
         "{out}",
     ],

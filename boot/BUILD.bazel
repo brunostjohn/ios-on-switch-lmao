@@ -133,7 +133,7 @@ boot_package(
         "//conditions:default": "//bootstrap:payload",
     }),
     bt_patch = "//bazel/pinned:firmware/BCM4356A3.hcd",
-    data_seed = "//bazel/pinned:data-seed/data-v10.dbr",
+    data_seed = "//bazel/pinned:data-seed/empty.dbr",
     dtb = "//bazel/pinned:firmware/oled-sku3.dtb",
     exporter = "//bazel/pinned:firmware/exporter.uimg",
     icon = "//boot/logo:icon_ios_hue.bmp",

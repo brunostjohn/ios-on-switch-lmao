@@ -8,9 +8,9 @@
 #       run in a sandbox.
 #   kernel/verified-root-switch/trusted-key.S
 #       The owner verification key (openssl, never regenerated).
-#   data-seed/data-v10.dbr
-#       NativeRamBlock's packed 1 GiB Data seed (DBRDISK1). Contains Apple-derived /private/var content from the
-#       21H461 OS volume: check the licence before publishing the repository.
+#   data-seed/empty.dbr
+#       An empty 1 GiB DBRDISK1 seed (32-byte header, no extents). It fills NativeRamBlock's slot in the kernel window
+#       and its compiled-in hashes; the driver returns before reading it.
 #   prelink/dma-kernel.json.xz, prelink/dma-prelink.json
 #       The V20 prelink report the SMP prelink inherits (its parent pass no longer exists) and its roots.
 #   firmware/bl31.bin, bl33.bin, oled-sku3.dtb
