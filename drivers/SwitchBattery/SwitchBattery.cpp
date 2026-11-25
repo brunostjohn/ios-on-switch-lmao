@@ -50,6 +50,7 @@
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/pwr_mgt/IOPM.h>
 #include <IOKit/pwr_mgt/IOPMPowerSource.h>
+#include <kern/clock.h>
 #include <libkern/c++/OSBoolean.h>
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSNumber.h>
@@ -164,7 +165,7 @@ PdSnapshot unpackPd(uint64_t w)
 
 struct Reading {
     unsigned percent, rawPercent, millivolts, cycles;
-    int rawCapacity, fullCapacity, designCapacity, milliamps, avgMilliamps, centiCelsius, milliCelsius;
+    int rawCapacity, fullCapacity, designCapacity, milliamps, avgMilliamps, centiCelsius, milliCelsius, chargeAccum;
     bool external, charging, full;
     uint8_t charger[9];  // BQ24193 REG00-REG08 (one multi-read, [TI] 8.3.6.5.2)
     uint8_t fault;       // REG09: the latched read and the current one, OR'd ([TI] 8.3.4.3)
@@ -484,6 +485,16 @@ void statusFields(Reading *r)
     r->full = r->external && chrg == 3;
 }
 
+#if SWITCH_IPSW_KIND_24B119
+uint64_t calendarSeconds()
+{
+    clock_sec_t secs = 0;
+    clock_usec_t usecs = 0;
+    clock_get_calendar_microtime(&secs, &usecs);
+    return static_cast<uint64_t>(secs);
+}
+#endif
+
 int readAll(Reading *r)
 {
     uint16_t repCap = 0;
@@ -514,6 +525,12 @@ int readAll(Reading *r)
         err = gaugeWord(Cycles, &cycles);
     if (!err)
         err = gaugeWord(DesignCap, &designCap);
+#if SWITCH_IPSW_KIND_24B119
+    uint16_t qh = 0;
+    if (!err)
+        err = gaugeWord(QH, &qh);
+    r->chargeAccum = static_cast<int16_t>(qh) * static_cast<int>(SWITCH_BATTERY_QH_UAH) / 1000;
+#endif
     if (!err)
         err = readCharger(r->charger, &latched, &now);
     if (err)
@@ -546,8 +563,15 @@ static SwitchBattery *gBatteryService;
 
 extern "C" bool native_aks_device_digest(const char *label, uint8_t out[32]);
 
+// iPadOS 27's powerd and batteryintelligenced find the battery as an AppleSmartBattery (SwitchBatteryPack.h).
+#if SWITCH_IPSW_KIND_24B119
+#define SWITCH_BATTERY_SUPER AppleSmartBattery
+#else
+#define SWITCH_BATTERY_SUPER IOPMPowerSource
+#endif
+
 // NOLINTNEXTLINE(misc-use-internal-linkage): OSDefineMetaClassAndStructors needs the class's external linkage (its kalloc type view)
-class SwitchBattery : public IOPMPowerSource {
+class SwitchBattery : public SWITCH_BATTERY_SUPER {
     // NOLINTNEXTLINE(misc-explicit-constructor): IOKit's structors macro declares the metaclass constructor
     OSDeclareDefaultStructors(SwitchBattery);
     IOWorkLoop *loop = nullptr;
@@ -577,6 +601,7 @@ class SwitchBattery : public IOPMPowerSource {
 #if SWITCH_IPSW_KIND_24B119
     AppleSmartBatteryPack *pack = nullptr;  // published with the battery (SwitchBatteryPack.h)
     SwitchPackReading packReading = {};
+    uint64_t updateTime = 0;
 #endif
 
     static void timerFired(OSObject *owner, IOTimerEventSource *sender);
@@ -615,7 +640,7 @@ public:
     int preparePdInput(const SwitchPDState &current);
 };
 
-OSDefineMetaClassAndStructors(SwitchBattery, IOPMPowerSource);
+OSDefineMetaClassAndStructors(SwitchBattery, SWITCH_BATTERY_SUPER);
 
 void SwitchBattery::setKey(const char *key, OSObject *value)
 {
@@ -655,7 +680,7 @@ void SwitchBattery::setKeyNumber(const char *key, int64_t value)
 
 bool SwitchBattery::start(IOService *provider)
 {
-    if (!IOPMPowerSource::start(provider))
+    if (!SWITCH_BATTERY_SUPER::start(provider))
         return false;
     loop = IOWorkLoop::workLoop();
     timer = loop ? IOTimerEventSource::timerEventSource(this, &SwitchBattery::timerFired) : nullptr;
@@ -692,12 +717,12 @@ void SwitchBattery::free()
     OSSafeReleaseNULL(loop);
 #if SWITCH_IPSW_KIND_24B119
     if (pack) {
-        pack->detach(this);
+        pack->unpublish(this);
         OSSafeReleaseNULL(pack);
     }
 #endif
     OSSafeReleaseNULL(serialString);
-    IOPMPowerSource::free();
+    SWITCH_BATTERY_SUPER::free();
 }
 
 bool SwitchBattery::identify()
@@ -880,14 +905,23 @@ bool SwitchBattery::refresh()
         setKey(kIOPMPSAdapterDetailsKey, adapter);
         adapter->release();
     }
-    updateStatus();
 #if SWITCH_IPSW_KIND_24B119
     packReading = {r.rawCapacity,  r.fullCapacity, r.designCapacity, static_cast<int>(r.millivolts),
-                   r.avgMilliamps, r.centiCelsius, r.cycles,         r.percent,
-                   r.full};
+                   r.avgMilliamps, r.milliamps,    r.chargeAccum,    r.centiCelsius,
+                   r.cycles,       r.percent,      r.full};
     if (pack)
         pack->update(packReading, serialString);
+    // batteryintelligenced reads UpdateTime around the pack and bank: it goes to the registry with updateStatus, after
+    // them, and moves at every reading so a read that straddles one is retried.
+    const uint64_t now = calendarSeconds();
+    updateTime = updateTime < now ? now : updateTime + 1;
+    if (OSNumber *n = OSNumber::withNumber(updateTime, 64)) {
+        setKey("UpdateTime", n);
+        n->release();
+    }
+    setKeyNumber("BatteryPackCount", 1);
 #endif
+    updateStatus();
     // Acknowledge: re-centre the gauge's windows (releases ALRT).
     const uint16_t around = switch_max17050_talrt(r.milliCelsius);
     const uint16_t window =
@@ -1352,10 +1386,10 @@ void SwitchBattery::timerFired(OSObject *owner, IOTimerEventSource *sender)
         self->refresh();
     } else if (self->identify() && self->refresh()) {  // the first reading also arms the gauge window
         __atomic_store_n(&self->published, true, __ATOMIC_RELEASE);
-        self->registerService();
 #if SWITCH_IPSW_KIND_24B119
         self->pack = AppleSmartBatteryPack::publish(self, self->packReading, self->serialString);
 #endif
+        self->registerService();
         IOLog("SwitchBattery: started\n");
     }
     sender->setTimeoutMS(self->published ? kRefreshMS : kIdentifyRetryMS);
