@@ -193,7 +193,8 @@ SwitchHIDHook switch_hid_temperature_hook(IOService *device);
 OSObject *switch_hid_temperature_event(uint64_t timestamp, int32_t fixed);
 
 // Creates, attaches (under IOResources) and starts the device. The first call loads IOHIDFamily, registers the
-// device class and adds the IOHIDEventDriver personalities. Thread context; panics with the reason on failure.
+// device class and adds the IOHIDEventDriver personalities. Thread context; panics with the reason on failure. The
+// device comes back unretained: its attachment under IOResources keeps it.
 IOService *switch_hid_create(SwitchHIDKind kind);
 
 // Hands one input report to the device (and from there synchronously to its IOHIDEventDriver). Reports sent before
@@ -223,7 +224,7 @@ void switch_hid_set_feature_handler(IOService *device, SwitchHIDFeatureHandler h
 
 // Device motion only: drops the event its fast path answers (SwitchHIDFastPath.cpp), when a session ends, so the next
 // session's first copy is never the last one's sample.
-void switch_hid_forget_latest(IOService *device);
+void switch_hid_forget_latest(const IOService *device);
 #if DEVELOPMENT || DEBUG
 // The fast path copies that answered an event, since boot (SwitchMotion's DeviceMotionFastPathCopies).
 uint64_t switch_hid_fastpath_copies();

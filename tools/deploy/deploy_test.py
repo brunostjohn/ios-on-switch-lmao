@@ -383,8 +383,10 @@ class KindTest(unittest.TestCase):
             self.assertEqual(resolve.call_count, int(build == '24B119'))
 
     def checked_with_a_translated_tree(self, offered: dict) -> tuple[argparse.Namespace, mock.Mock]:
-        """deploy._checked over a card whose translated locationd this build no longer trusts, the build offering
-        `offered`; returns the arguments and the mount mock."""
+        """Return deploy._checked's arguments and mount mock for a card whose translated locationd is stale.
+
+        This build no longer trusts the card's locationd, and offers updates for the paths in `offered`.
+        """
         root = self.pins.parent
         data = root / 'data'
         (data / 'Switch').mkdir(parents=True, exist_ok=True)
@@ -396,7 +398,7 @@ class KindTest(unittest.TestCase):
         trust.write_bytes(trust_module([bytes.fromhex(current)]))
         carried = root / 'carried'
         carried.mkdir(exist_ok=True)
-        (carried / 'updates.json').write_text(json.dumps({path: current for path in offered}))
+        (carried / 'updates.json').write_text(json.dumps(dict.fromkeys(offered, current)))
         argv = ['disk9', '--boot-package', 'unused', '--ipsw', str(self.pins), '--spec', 'unused', '--remove-gpu']
         argv += ['--pretranslated-trust', str(trust), '--pretranslated-updates', str(carried)]
         args = deploy._parser().parse_args(argv)
@@ -424,7 +426,7 @@ class KindTest(unittest.TestCase):
 
     def test_ios_17_plans_no_translated_tree(self):
         self.assertIsNone(
-            getattr(deploy._parser().parse_args(['disk9', '--boot-package', 'x', '--spec', 'y']), 'pretranslated_trust')
+            deploy._parser().parse_args(['disk9', '--boot-package', 'x', '--spec', 'y']).pretranslated_trust
         )
 
 

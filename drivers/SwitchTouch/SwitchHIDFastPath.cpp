@@ -83,7 +83,7 @@ void keep(OSObject *event)
     if (event)
         event->retain();
     IOSimpleLockLock(lock);
-    OSObject *replaced = latest;
+    const OSObject *replaced = latest;
     latest = event;
     IOSimpleLockUnlock(lock);
     OSSafeReleaseNULL(replaced);
@@ -115,7 +115,7 @@ bool openForClient(IOService *, IOService *, IOOptionBits, OSDictionary *propert
     if (context)
         *context = nullptr;
     const auto *history = properties ? OSDynamicCast(OSBoolean, properties->getObject("aonBuffer")) : nullptr;
-    return !(history && history->isTrue());
+    return !(history != nullptr && history->isTrue());
 }
 
 void closeForClient(IOService *, IOService *, void *, IOOptionBits)
@@ -210,7 +210,7 @@ void switch_hid_fastpath_watch(IOService *device)
         IOLog("SwitchHID: device motion fast path off: no publish notification for its event driver\n");
 }
 
-void switch_hid_forget_latest(IOService *device)
+void switch_hid_forget_latest(const IOService *device)
 {
     if (device == motionDevice && __atomic_load_n(&lock, __ATOMIC_ACQUIRE))
         keep(nullptr);

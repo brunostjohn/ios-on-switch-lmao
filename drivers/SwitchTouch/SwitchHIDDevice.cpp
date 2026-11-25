@@ -880,6 +880,7 @@ IOService *switch_hid_create(SwitchHIDKind kind)
     if (!device->start(resources))
         panic("SwitchHID: %s: IOHIDDevice::start failed", profile.product);
     device->release();  // the attachment keeps it
+    // NOLINTNEXTLINE(clang-analyzer-osx.cocoa.RetainCount): the caller gets the device unretained, as SwitchHID.h says
     return device;
 }
 

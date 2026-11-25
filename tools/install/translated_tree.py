@@ -1,11 +1,11 @@
-"""iOS 27: the card's translated System files against this build's os.trustcache, and the updates that keep them current.
+"""iOS 27: the card's translated System files against this build's os.trustcache, and the updates keeping them current.
 
 The tree under Switch/pretranslated is placed once, by the install (tools/install/pretranslate.py), and the kernel
 refuses any change to it. A file this build translates differently (an edit of it: the card's manifest names a CDHash
-that the boot package's os.trustcache no longer holds) is carried by the build instead (//install:pretranslated_updates).
-The deploy puts it under Switch/pretranslated-updates, and the kernel points the tree's entry at it when the boot
-package's /chosen list names it (kernel/switch/vfs/pretranslated.c). A stale file the build does not carry needs a new
-tree, which only a reinstall of the container places, and that replaces Data.
+that the boot package's os.trustcache no longer holds) is carried by the build instead
+(//install:pretranslated_updates). The deploy puts it under Switch/pretranslated-updates, and the kernel points the
+tree's entry at it when the boot package's /chosen list names it (kernel/switch/vfs/pretranslated.c). A stale file the
+build does not carry needs a new tree, which only a reinstall of the container places, and that replaces Data.
 """
 
 import json
@@ -19,7 +19,10 @@ from tools.trustcache import trustcache
 MANIFEST = Path(pretranslate.OVERLAY_MANIFEST).name
 UPDATES = Path(pretranslate.UPDATES).name
 SHOWN = 4
-REINSTALL = 'reinstall the container, which replaces Data (bazel run //install:sd --config=ios27 -- <diskN> --reinstall-container)'
+REINSTALL = (
+    'reinstall the container, which replaces Data (bazel run //install:sd --config=ios27 -- <diskN> '
+    '--reinstall-container)'
+)
 
 
 def untrusted(manifest: dict, module: bytes) -> list[str]:
@@ -37,7 +40,7 @@ def _shown(paths: list[str]) -> str:
 
 
 def plan(data_root: Path, trust: Path, carried: Path) -> dict[str, str]:
-    """Return the updates the card needs, {System path: CDHash}; refuse a card whose stale files the build does not carry.
+    """Return the updates the card needs, {System path: CDHash}; refuse stale files the build does not carry.
 
     `trust` is this build's os.trustcache, `carried` its //install:pretranslated_updates directory.
     """
@@ -52,7 +55,8 @@ def plan(data_root: Path, trust: Path, carried: Path) -> dict[str, str]:
     if missing:
         raise cards.RefusedError(
             f"{len(missing)} of the card's translated System files are not in this build's os.trustcache and the "
-            f'build carries no update for them, so the kernel would refuse them at exec ({_shown(missing)}): {REINSTALL}'
+            f'build carries no update for them, so the kernel would refuse them at exec ({_shown(missing)}): '
+            f'{REINSTALL}'
         )
     return {path: offered[path] for path in stale}
 

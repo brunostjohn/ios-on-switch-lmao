@@ -16,10 +16,10 @@ Steps:
                    and the build carries no update for it (translated_tree.py)
   3 overlay        <Data>/Switch/overlay := the package's overlay/; on iOS 27 <Data>/Switch/pretranslated-updates :=
                    the build's translations of the card's stale translated System files (translated_tree.py), which
-                   the boot package's kernel serves in place of the tree's; <Data>/Switch/deployed.json := the checkout's
-                   commit, which tools/hwtest joins HW Test's reports with (deployed.py); each app the overlay's
-                   /Applications added, changed or removed goes into <Data>/Switch/app-registration.plist, which
-                   switch-appregd applies at the next boot without a migration (app_journal.py; on iOS 17 with
+                   the boot package's kernel serves in place of the tree's; <Data>/Switch/deployed.json := the
+                   checkout's commit, which tools/hwtest joins HW Test's reports with (deployed.py); each app the
+                   overlay's /Applications added, changed or removed goes into <Data>/Switch/app-registration.plist,
+                   which switch-appregd applies at the next boot without a migration (app_journal.py; on iOS 17 with
                    switch-no-bt in bootargs.txt nothing starts it, so the deploy asks for the migration instead);
                    --rerun-migration writes <Data>/datamigrator/migrate (system_apps.py, e.g. after a migration the
                    power cut short; from iOS 27 it also removes LaunchServices' store, whose rebuild is what registers
@@ -403,8 +403,7 @@ def _eject(card: cards.Card, target: object, log: host.Log) -> None:
     log('ejected', card.disk)
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+def _located(args: argparse.Namespace) -> None:
     for name in (
         'boot_package',
         'spec',
@@ -419,6 +418,11 @@ def main(argv: list[str] | None = None) -> int:
     ):
         setattr(args, name, paths.located(getattr(args, name)))
     args.system_trusted = [paths.located(path) for path in args.system_trusted]
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    _located(args)
     log = host.Log(args.log or paths.run_log('deploy', 'switch-ios-install'))
     try:
         with progress.step(f'deploy: checking {args.disk}', unit=None):

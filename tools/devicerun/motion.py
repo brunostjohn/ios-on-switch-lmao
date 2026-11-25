@@ -237,8 +237,8 @@ MOTION = [
         needs='motion.kernel',
         boots=IOS27_BOOT,
         source=MOTION_ACCESS,
-        note="IOKit's event system refused a connection the Motion & Fitness gated services: not a platform binary, and "
-        'TCC did not allow it',
+        note="IOKit's event system refused a connection the Motion & Fitness gated services: not a platform "
+        'binary, and TCC did not allow it',
     ),
     Check(
         'motion.spu-added-ungated',
