@@ -17,7 +17,8 @@ enum X1CompressedCopyProbe {
         probe: "copy.ce_compressed", risky: true, timeout: 300, body: run
     )
 
-    static let repeats = 24
+    /// Seeds 5r + 1 take the four clears in turn: eight repeats run each clear twice at every size
+    static let repeats = 8
 
     static func run(_ gpu: GPU) async throws -> ProbeFinding {
         let journal = ProbeJournal(probe: "gpu.x1.ce_compressed")

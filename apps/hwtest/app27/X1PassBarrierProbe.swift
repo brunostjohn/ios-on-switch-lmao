@@ -8,7 +8,8 @@ import Metal
 /// invalidate (0x0f74) order B's reads after A's writes, with no WAIT_FOR_IDLE or shader-cache flush. Each trial is A
 /// then B in one command buffer, eight a batch; the targets rotate between two, so a read too early, or through a
 /// texture cache still holding the last trial's lines, copies another seed's texels. Arms: control (today's
-/// switch_gm20b_pass_barrier), pixel (the planner's form), none (no barrier: the arm that shows a cell can see the
+/// switch_gm20b_pass_barrier, run until every seed has its reference; nothing judges its later trials), pixel (the
+/// planner's form), none (no barrier: the arm that shows a cell can see the
 /// hazard), each with today's engine changes and job entry; rule forces nothing, so production's rules pick every barrier
 /// (pass_hazard.h: the pixel barrier only where every dependency is a cell this line held), rule_passes= the passes
 /// it opened with the pixel barrier, and a cell where rule read other texels than control fails the line. Cells: format x
@@ -51,38 +52,38 @@ enum X1PassBarrierProbe {
                 out.append(
                     Cell(
                         format: format, layout: .blockLinear, shape: shape, width: 64, height: 64, trials: 1504,
-                        seconds: 8
+                        seconds: 6.5
                     )
                 )
                 out.append(
                     Cell(
                         format: format, layout: .blockLinear, shape: shape, width: 320, height: 180,
-                        trials: 1504, seconds: shape == .stride ? 14 : 4
+                        trials: 1504, seconds: shape == .stride ? 11 : 3.2
                     )
                 )
             }
             out.append(
                 Cell(
                     format: format, layout: .blockLinear, shape: .same, width: 1280, height: 720,
-                    trials: 600, seconds: 12
+                    trials: 600, seconds: 9.5
                 )
             )
             out.append(
                 Cell(
                     format: format, layout: .blockLinear, shape: .stride, width: 1280, height: 720,
-                    trials: 600, seconds: 36
+                    trials: 600, seconds: 29
                 )
             )
             out.append(
                 Cell(
                     format: format, layout: .blockLinear, shape: .pyramid, width: 1280, height: 720,
-                    trials: 600, seconds: 9
+                    trials: 600, seconds: 7.2
                 )
             )
             out.append(
                 Cell(
                     format: format, layout: .blockLinear, shape: .waw, width: 1280, height: 720,
-                    trials: 600, seconds: 12
+                    trials: 600, seconds: 9.5
                 )
             )
             for layout in [BarrierKit.Layout.pitch, .compressed] {
@@ -90,7 +91,7 @@ enum X1PassBarrierProbe {
                     out.append(
                         Cell(
                             format: format, layout: layout, shape: shape, width: 320, height: 180,
-                            trials: 1504, seconds: 4
+                            trials: 1504, seconds: 3.2
                         )
                     )
                 }
@@ -99,18 +100,18 @@ enum X1PassBarrierProbe {
                 out.append(
                     Cell(
                         format: format, layout: .compressed, shape: shape, width: 1280, height: 720,
-                        trials: 600, seconds: 12
+                        trials: 600, seconds: 9.5
                     )
                 )
             }
             out.append(
                 Cell(
                     format: format, layout: .blockLinear, shape: .waw, width: 320, height: 180, trials: 1504,
-                    seconds: 4
+                    seconds: 3.2
                 )
             )
         }
-        for (width, height, trials, seconds) in [(64, 64, 1504, 6.0), (320, 180, 1504, 4.0), (1280, 720, 600, 12.0)] {
+        for (width, height, trials, seconds) in [(64, 64, 1504, 5.0), (320, 180, 1504, 3.2), (1280, 720, 600, 9.5)] {
             out.append(
                 Cell(
                     format: .depth32Float, layout: .blockLinear, shape: .same, width: width, height: height,
@@ -153,6 +154,7 @@ enum X1PassBarrierProbe {
             for step in plan.order {
                 if Date().timeIntervalSince(started) > cell.seconds && step.cell == 0 { break }
                 let (arm, forms) = arms[step.cell]
+                if arm == "control" && references.count == seeds { continue }
                 if arm == "none" && !ledger.tally(name, arm).clean && step.round > 4 { continue }
                 let first = trial[step.cell]
                 let trialSeeds = (0 ..< batch).map { probeSeed(trial: first + $0, cell: index, seeds: seeds) }

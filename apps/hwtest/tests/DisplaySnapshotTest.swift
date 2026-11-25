@@ -61,14 +61,16 @@ public struct DisplaySnapshotTest: HWTest {
     }
 
     /// The render server's renders of `pattern` with ScreenshotServices' flash of `style` running over it, at
-    /// `sampleDelays` from its start; nil without the flash class.
+    /// `sampleDelays` from its start, the flash then awaited to its end (at most two seconds more); nil without the
+    /// flash class.
     static func flash(style: UInt, over pattern: UIView) async -> [Raster]? {
         guard let view = await MainActor.run(body: { flashView(style: style, frame: pattern.bounds) }) else {
             return nil
         }
+        let finished = Waiter<Bool>()
         await MainActor.run {
             pattern.addSubview(view)
-            let done: @convention(block) () -> Void = {}
+            let done: @convention(block) () -> Void = { finished.resume(true) }
             _ = view.perform(
                 NSSelectorFromString("flashWithCompletion:"), with: unsafeBitCast(done, to: AnyObject.self)
             )
@@ -80,7 +82,7 @@ public struct DisplaySnapshotTest: HWTest {
             elapsed = delay
             samples.append(await MainActor.run { Snapshots.composited(pattern) })
         }
-        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        _ = await finished.wait(timeout: 2)
         await MainActor.run { view.removeFromSuperview() }
         return samples
     }

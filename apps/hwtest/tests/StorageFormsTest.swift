@@ -22,7 +22,7 @@ import Metal
 /// cases that were not); no command buffer failed over the run, timing included (failed_cbs=0). Reported, not judged:
 /// bgr5a1_overlap8 and bgr5a1_overlap16, the texel of 8 and 16 triangles, Apple 951d and a204, raw 951b and a209
 /// (Apple's tile holds a half through the pass, raw stores a code at every write); gpu_us_storage_<kind> and
-/// gpu_us_twin_<kind>, the fastest of five draws of 64 such triangles at 1280x720 forced to the storage form (probe 4)
+/// gpu_us_twin_<kind>, the faster of two draws of 64 such triangles at 1280x720 forced to the storage form (probe 4)
 /// and to the barrier twin a triangle at a time (probe 5), the variant kinds' twin the same scene with no depth
 /// attachment; ratio_<kind> twin over storage, timing_twins= fetch_blend_twin draws.
 struct StorageFormsTest: HWTest {
