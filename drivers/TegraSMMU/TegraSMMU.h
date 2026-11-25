@@ -61,6 +61,13 @@ enum tegra_smmu_register {
     TEGRA_SMMU_SDMMC1A_ASID = 0xa94,  // swgroup "sdmmc1a" (sdmmcra/sdmmcwa: TRANSLATION_ENABLE_3 bits 0/4)
     TEGRA_SMMU_HC_ASID = 0x250,       // swgroup "hc" (host1xdmar/host1xr: _0 bits 22/23; host1xw: _1 bit 22)
     TEGRA_SMMU_APE_ASID = 0xab8,      // swgroup "ape" (aper/apew: TRANSLATION_ENABLE_3 bits 26/27)
+    // The Security Engines' swgroups (L4T tegra210b01-soc-base.dtsi iommus; tegra_smmu_se_swgroups): SE1 in SE and SE1
+    // (TRM 18.11.1.140, .143), SE2 in ISP2B (18.11.1.134) and ISP2B1. ISP2B1 is T210B01's: L4T's tegra-swgroup.h
+    // "TEGRA_SWGROUP_ISP2B1 53 /* 0x808, SE2 on t210b01 */". The T210 TRM has no MC register at 0x808.
+    TEGRA_SMMU_SE_ASID = 0xabc,
+    TEGRA_SMMU_SE1_ASID = 0xac8,
+    TEGRA_SMMU_ISP2B_ASID = 0xaa4,
+    TEGRA_SMMU_ISP2B1_ASID = 0x808,
     TEGRA_SMMU_NVJPG_ASID = 0xac0,    // swgroup "nvjpg" (clients nvjpgsrd/nvjpgswr: TRANSLATION_ENABLE_3 bits 30/31)
     TEGRA_SMMU_NVDEC_ASID = 0xab4,    // swgroup "nvdec" (clients nvdecsrd/nvdecswr: TRANSLATION_ENABLE_3 bits 24/25)
     TEGRA_SMMU_NVENC_ASID = 0x264,    // swgroup "nvenc" (nvencsrd: TRANSLATION_ENABLE_0 bit 28, nvencswr: _1 bit 11)
@@ -108,12 +115,21 @@ static inline void tegra_smmu_ids_distinct(enum tegra_smmu_asid asid, enum tegra
     case TEGRA_SMMU_SDMMC1A_ASID:
     case TEGRA_SMMU_HC_ASID:
     case TEGRA_SMMU_APE_ASID:
+    case TEGRA_SMMU_SE_ASID:
+    case TEGRA_SMMU_SE1_ASID:
+    case TEGRA_SMMU_ISP2B_ASID:
+    case TEGRA_SMMU_ISP2B1_ASID:
     case TEGRA_SMMU_NVJPG_ASID:
     case TEGRA_SMMU_NVDEC_ASID:
     case TEGRA_SMMU_NVENC_ASID:
         break;
     }
 }
+
+// Each Security Engine's swgroup registers, SE1 first: whether the SMMU translates an engine's memory clients is bit 31
+// of both of its registers.
+static const uint32_t tegra_smmu_se_swgroups[2][2] = {{TEGRA_SMMU_SE_ASID, TEGRA_SMMU_SE1_ASID},
+                                                      {TEGRA_SMMU_ISP2B_ASID, TEGRA_SMMU_ISP2B1_ASID}};
 
 // Points swgroup register asidReg at the directory ptb (TegraSMMUDomain::ptb) under asid: the directory (read back),
 // a flush, the clients' translation bits in translationReg checked (the secure world sets them), the swgroup, a flush.

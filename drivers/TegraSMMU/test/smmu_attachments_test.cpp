@@ -129,3 +129,13 @@ TEST(SmmuAttachments, HoldsEveryDefinedSwgroupSimultaneously)
     }
     EXPECT_EQ(t.count, sizeof(kAllSwgroups) / sizeof(kAllSwgroups[0]) + 3u);
 }
+
+// SE2's swgroups, settled 25 Nov: L4T's tegra210b01-soc-base.dtsi gives tegra_se2 (0x70412000) iommus ISP2B (29) and
+// ISP2B1 (53); L4T's tegra-swgroup.h gives 29 MC 0xaa4 (the T210 TRM's MC_SMMU_ISP2B_ASID) and 53 MC 0x808.
+TEST(SmmuSwgroups, EachSecurityEngineNamesBothOfItsSwgroupRegisters)
+{
+    EXPECT_EQ(tegra_smmu_se_swgroups[0][0], 0xabcu);
+    EXPECT_EQ(tegra_smmu_se_swgroups[0][1], 0xac8u);
+    EXPECT_EQ(tegra_smmu_se_swgroups[1][0], 0xaa4u);
+    EXPECT_EQ(tegra_smmu_se_swgroups[1][1], 0x808u);
+}
