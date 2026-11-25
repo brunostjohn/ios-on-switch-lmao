@@ -396,7 +396,7 @@ struct Batch {
     uint32_t gapSectors;  // r14-sdcq: of `sectors`, those in gaps between the requests (read and discarded)
     SwitchAdmaRefusal why;
     int issueStep;                // issue()'s result when the command never reached the card
-    uint64_t beganNs, overlapNs;  // when beginBatch started; the previous chain's completions that ran inside this one
+    uint64_t beganNs;  // when beginBatch started
 #if DEVELOPMENT || DEBUG
     uint64_t oldestQueuedNs, issuedNs;
     bool wokeFromIdle;
@@ -455,8 +455,9 @@ struct Stats {
     uint64_t cacheFlushes, cacheFlushNs;
     // Primary-IRQ fast-issued ADMA2 commands (SwitchSdPipeline.h).
     uint64_t fastIssued;
-    uint64_t lastBusyEndNs, lastCompleteStartNs, lastCompleteEndNs;
 #if DEVELOPMENT || DEBUG
+    // The last chain's busy end and its completions' span, to take overlap out of the next chain's busy time.
+    uint64_t lastBusyEndNs, lastCompleteStartNs, lastCompleteEndNs;
     // SwitchSdBus.h: commands refused because the bus was not free at their one PRESENT_STATE read, and DAT0 releases
     // awaited by CMD13 with busy (the card still programming after a transfer complete). ADMA2 chains that reached a
     // non-cacheable page (dmaPage).
@@ -2129,7 +2130,6 @@ void NativeSwitchBlock::prepareAndPublishSlot(PipeSlot &slot)
     b.gapSectors = static_cast<uint32_t>(sectors - payload);
     b.write = first->write;
     b.beganNs = switch_now_ns();
-    b.overlapNs = 0;
     b.issued = false;
     b.issueStep = 0;
     b.why = kAdmaOk;
@@ -2386,6 +2386,7 @@ void NativeSwitchBlock::account(const PipeSlot &slot)
         lastEnd = r->lba + r->sectors;
     }
     const uint64_t now = switch_now_ns();
+#if DEVELOPMENT || DEBUG
     uint64_t idleCallback = 0;
     if (slot.direct && slot.irqAt && stats.lastCompleteEndNs > slot.irqAt) {
         const uint64_t cbStart = stats.lastCompleteStartNs > slot.irqAt ? stats.lastCompleteStartNs : slot.irqAt;
@@ -2401,6 +2402,11 @@ void NativeSwitchBlock::account(const PipeSlot &slot)
     const uint64_t busyDelta = busySpan > idleCallback ? busySpan - idleCallback : 0;
     if (now > stats.lastBusyEndNs)
         stats.lastBusyEndNs = now;
+#else
+    // Release keeps busy time for reportState's error line alone: the chain's whole span.
+    const uint64_t latency = now > b.beganNs ? now - b.beganNs : 0;
+    const uint64_t busyDelta = latency;
+#endif
     stats.commands++;
     if (b.gapSectors) {
         ++stats.gapChains;
@@ -2463,14 +2469,16 @@ void NativeSwitchBlock::completeBatch(Batch &b)
         }
     };
 
+#if DEVELOPMENT || DEBUG
     const uint64_t began = switch_now_ns();
+#endif
     Request *const first = b.first;
     b.first = nullptr;
     switchSdPoolComplete<kCompleteChunk, Request, Done>(requestPool, first, Ops{this, b.result});
+#if DEVELOPMENT || DEBUG
     const uint64_t ended = switch_now_ns();
     stats.lastCompleteStartNs = began;
     stats.lastCompleteEndNs = ended;
-#if DEVELOPMENT || DEBUG
     stats.completeNs += ended - began;
 #endif
 }
