@@ -1,8 +1,9 @@
 import HWTestCore
 import SwiftUI
 
-/// The list while a run goes: the running test pinned at the top, the finished ones newest first under it, and the
-/// ones still to come folded at the bottom, so following a run never needs a scroll.
+/// The list while a run goes: the running test pinned at the top, the last few finished newest first under it, and
+/// the next few to come folded at the bottom, so following a run never needs a scroll. Every result is in the list by
+/// subsystem once the run ends.
 struct RunSections: View {
     @ObservedObject var list: RunList
     @State private var upNextShown = false
@@ -11,12 +12,12 @@ struct RunSections: View {
         Section("In progress") {
             if let row = list.current { RunningRow(row: row) }
         }
-        Section("Done (\(list.done.count))") {
-            ForEach(list.done) { TestRowView(row: $0) }
+        Section("Done (\(list.progress.finished)), latest") {
+            ForEach(list.done) { TestRowView(row: $0, compact: true) }
         }
         Section {
-            DisclosureGroup("Up next: \(list.upNext.count)", isExpanded: $upNextShown) {
-                ForEach(list.upNext) { TestRowView(row: $0) }
+            DisclosureGroup("Up next: \(list.remainingCount)", isExpanded: $upNextShown) {
+                ForEach(list.upNext) { TestRowView(row: $0, compact: true) }
             }
         }
     }

@@ -18,6 +18,12 @@ public final class Suite: ObservableObject {
     @Published private(set) var report: Report?
     @Published private(set) var pendingRun: Report?
     @Published private(set) var resumeError: String?
+    /// A run choice being saved, or the launch's or Run All's read of earlier runs, is on the recorder's queue: the
+    /// controls that start a run wait for it.
+    @Published private(set) var busy = false
+
+    /// Nothing runs, waits for a person's choice or waits for the card: a run may start.
+    var idle: Bool { !running && !busy && pendingRun == nil }
     /// What this launch found of the last one, shown above the results.
     @Published private(set) var notice = ""
 
@@ -26,7 +32,6 @@ public final class Suite: ObservableObject {
     let documents: URL
     private let tests: [any HWTest]
     let ios: Int
-    private let store: RunStore
     private let recorder: RunRecorder
     private var launched = false
     private var wedgedBy: String?
@@ -38,8 +43,7 @@ public final class Suite: ObservableObject {
         self.ios = ios
         list = RunList(tests: tests)
         documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        store = RunStore(directory: AppFiles.working)
-        recorder = RunRecorder(store: store)
+        recorder = RunRecorder(store: RunStore(directory: AppFiles.working), log: Suite.results)
     }
 
     /// A boot's first launch runs everything; an unfinished run waits for the person's choice;
@@ -47,20 +51,24 @@ public final class Suite: ObservableObject {
     func launch() {
         guard !launched else { return }
         launched = true
+        busy = true
         let boot = DeviceInfo.bootUUID
-        let recent = store.recent(boot: boot)
-        if let interrupted = Report.interrupted(recent) {
-            show(interrupted)
-            pendingRun = interrupted
-        } else if let last = recent.last(where: { $0.latestBootUUID == boot }) {
-            show(last)
-        } else {
-            runAll(stoppedIn: Report.lastBootStoppedIn(recent, boot: boot))
+        Task {
+            let recent = await recorder.recent(boot: boot)
+            busy = false
+            if let interrupted = Report.interrupted(recent) {
+                show(interrupted)
+                pendingRun = interrupted
+            } else if let last = recent.last(where: { $0.latestBootUUID == boot }) {
+                show(last)
+            } else {
+                runAll(stoppedIn: Report.lastBootStoppedIn(recent, boot: boot))
+            }
         }
     }
 
     func continueRun() {
-        guard let pending = pendingRun, !running else { return }
+        guard let pending = pendingRun, !running, !busy else { return }
         let byID = Dictionary(tests.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let continued = pending.continued(
             boot: DeviceInfo.bootUUID, at: Date(), identity: DeviceInfo.identity(ios: ios), available: Set(byID.keys)
@@ -71,22 +79,29 @@ public final class Suite: ObservableObject {
                     finished: Date()
                 )
         }
-        guard acceptRunChoice(continued.report, ended: continued.order.isEmpty) else { return }
-        notice = Self.continuationNotice(continued.cause) { id in byID[id]?.name ?? id }
-        if let crash = continued.crash { Self.log(LogLine.format(crash)) }
-        run(continued.order.compactMap { byID[$0] }, summarize: true)
+        Task {
+            guard await acceptRunChoice(continued.report, ended: continued.order.isEmpty) else { return }
+            notice = Self.continuationNotice(continued.cause) { id in byID[id]?.name ?? id }
+            if let crash = continued.crash { Self.log(LogLine.format(crash)) }
+            run(continued.order.compactMap { byID[$0] }, summarize: true)
+        }
     }
 
     func startNewRun() {
-        guard var cancelled = pendingRun, !running else { return }
+        guard var cancelled = pendingRun, !running, !busy else { return }
         cancelled.cancel(at: Date())
-        guard acceptRunChoice(cancelled, ended: true) else { return }
-        runAll()
+        Task {
+            guard await acceptRunChoice(cancelled, ended: true) else { return }
+            runAll()
+        }
     }
 
-    private func acceptRunChoice(_ chosen: Report, ended: Bool) -> Bool {
+    /// Saved before the run goes on: a run that continued from a choice the card never got would be offered again.
+    private func acceptRunChoice(_ chosen: Report, ended: Bool) async -> Bool {
+        busy = true
+        defer { busy = false }
         do {
-            if ended { try recorder.close(chosen) } else { try recorder.checkpoint(chosen) }
+            if ended { try await recorder.close(chosen) } else { try await recorder.checkpoint(chosen) }
         } catch {
             resumeError = "Could not save the run. Try again."
             Self.results.error("Run choice not saved: \(String(describing: error), privacy: .public)")
@@ -106,9 +121,14 @@ public final class Suite: ObservableObject {
     }
 
     func runAll() {
-        guard !running, pendingRun == nil else { return }
+        guard !running, !busy, pendingRun == nil else { return }
+        busy = true
         let boot = DeviceInfo.bootUUID
-        runAll(stoppedIn: Report.lastBootStoppedIn(store.recent(boot: boot), boot: boot))
+        Task {
+            let recent = await recorder.recent(boot: boot)
+            busy = false
+            runAll(stoppedIn: Report.lastBootStoppedIn(recent, boot: boot))
+        }
     }
 
     /// `stoppedIn`: the test the last boot went down in, which runs last.
@@ -137,7 +157,7 @@ public final class Suite: ObservableObject {
     }
 
     private func run(_ batch: [any HWTest], summarize: Bool) {
-        guard !running, pendingRun == nil, !batch.isEmpty else { return }
+        guard !running, !busy, pendingRun == nil, !batch.isEmpty else { return }
         running = true
         UIApplication.shared.isIdleTimerDisabled = true
         var planned = report ?? newReport()
@@ -151,6 +171,7 @@ public final class Suite: ObservableObject {
         )
         let recorder = recorder
         let main = ThreadTimes.current()
+        let mainPort = pthread_mach_thread_np(pthread_self())
         Task.detached(priority: .userInitiated) { [weak self] in
             let start = CFAbsoluteTimeGetCurrent()
             var harness = HarnessTally()
@@ -159,13 +180,22 @@ public final class Suite: ObservableObject {
             var cpu = ThreadTimes.sample(main: main)
             for test in batch {
                 guard let self else { return }
+                let mainBefore = ThreadTimes.nanoseconds(of: mainPort)
                 let wedged = await self.advance(finished, next: test.id)
                 let flush = await recorder.advance(finished, begin: test.id)
                 let mainWait = await Suite.mainThreadAnswer()
                 let begun = CFAbsoluteTimeGetCurrent()
-                if let ended { harness.add(boundaryMs: (begun - ended) * 1000, flushMs: flush, mainWaitMs: mainWait) }
+                if let ended {
+                    harness.add(
+                        boundaryMs: (begun - ended) * 1000, flushMs: flush, mainWaitMs: mainWait,
+                        mainCpuMs: Suite.cpuMs(of: mainPort, since: mainBefore)
+                    )
+                }
                 let ran = await Suite.outcome(of: test, context, wedgedBy: wedged, cpuSince: cpu)
                 harness.add(cpuSampleMs: ran.sampleMs)
+                if TestBudget.over(ran.record.milliseconds, interactive: test.interactive) {
+                    harness.add(overBudget: test.id)
+                }
                 cpu = ran.cpu
                 ended = begun + ran.record.milliseconds / 1000
                 finished = ran.record
@@ -186,6 +216,11 @@ public final class Suite: ObservableObject {
         if let finished, finished.outcome.metrics[Suite.gpuAnswersKey] == .flag(false) { wedgedBy = finished.id }
         list.advance(finished, next: next)
         return wedgedBy
+    }
+
+    nonisolated static func cpuMs(of port: thread_act_t, since before: UInt64?) -> Double? {
+        guard let before, let now = ThreadTimes.nanoseconds(of: port) else { return nil }
+        return Double(now - min(before, now)) / 1e6
     }
 
     nonisolated static func mainThreadAnswer() async -> Double {

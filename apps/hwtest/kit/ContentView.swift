@@ -35,15 +35,15 @@ public struct ContentView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Interactive") { suite.runInteractive() }
-                        .disabled(suite.running || suite.pendingRun != nil)
+                        .disabled(!suite.idle)
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Bench") { benchShown = true }
-                        .disabled(suite.running || suite.pendingRun != nil)
+                        .disabled(!suite.idle)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Run All") { suite.runAll() }
-                        .disabled(suite.running || suite.pendingRun != nil).bold()
+                        .disabled(!suite.idle).bold()
                 }
             }
         }
@@ -72,8 +72,8 @@ public struct ContentView: View {
                 if let error = suite.resumeError {
                     Text(error).foregroundStyle(.red)
                 }
-                Button("Continue run") { suite.continueRun() }.buttonStyle(.borderedProminent)
-                Button("Start new run") { suite.startNewRun() }.buttonStyle(.bordered)
+                Button("Continue run") { suite.continueRun() }.buttonStyle(.borderedProminent).disabled(suite.busy)
+                Button("Start new run") { suite.startNewRun() }.buttonStyle(.bordered).disabled(suite.busy)
             }
             .padding(24)
             .presentationDetents([.medium])
@@ -99,7 +99,7 @@ public struct ContentView: View {
             Section(group.subsystem.rawValue) {
                 ForEach(group.rows) { row in
                     TestRowView(row: row).contentShape(Rectangle()).onTapGesture {
-                        if !suite.running && suite.pendingRun == nil { suite.rerun(row.id) }
+                        if suite.idle { suite.rerun(row.id) }
                     }
                 }
             }
@@ -109,6 +109,9 @@ public struct ContentView: View {
 
 struct TestRowView: View {
     @ObservedObject var row: RowState
+    /// One line of metrics and detail: a row a run redraws at each test boundary, whose full metrics (hundreds for
+    /// some tests) would hold the main thread laying them out.
+    var compact = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -119,14 +122,17 @@ struct TestRowView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 if let outcome = row.record?.outcome {
                     if !outcome.metrics.keys.isEmpty {
-                        Text(outcome.metrics.ordered.map { "\($0.0)=\($0.1.logText)" }.joined(separator: "  "))
-                            .font(.caption.monospaced())
+                        Text(
+                            outcome.metrics.ordered.prefix(compact ? 8 : .max).map { "\($0.0)=\($0.1.logText)" }
+                                .joined(separator: "  ")
+                        )
+                        .font(.caption.monospaced()).lineLimit(compact ? 1 : nil)
                     }
                     if !outcome.proof.isEmpty {
                         Text("hw: " + outcome.proof).font(.caption).foregroundStyle(.teal)
                     }
                     if !outcome.detail.isEmpty {
-                        Text(outcome.detail).font(.caption).foregroundStyle(
+                        Text(outcome.detail).font(.caption).lineLimit(compact ? 2 : nil).foregroundStyle(
                             outcome.verdict == .fail ? .red : .secondary
                         )
                     }

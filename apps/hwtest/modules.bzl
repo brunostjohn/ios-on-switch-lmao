@@ -182,7 +182,6 @@ KIT_SRCS = [
     "kit/HWTest.swift",
     "kit/RunHeader.swift",
     "kit/RunList.swift",
-    "kit/RunRecorder.swift",
     "kit/RunSections.swift",
     "kit/Suite.swift",
     "kit/TestContext.swift",
