@@ -32,9 +32,10 @@ TEST(NVJPGLayoutWiring, TheSeedMovesBeforeTheLayoutIsReadAndTheHoldOutlastsTheDe
     EXPECT_LT(layout, decode);
     EXPECT_LT(decode, unhold);
     EXPECT_GT(run.find("runRepack(job)", seed), layout) << "no copy-engine re-pack before the ask";
-    const std::string route =
-        Body(source, "const char *routeJob(Job *job, const SwitchNVJPGBacking &target, void **hold, uint32_t *route)\n{");
-    EXPECT_LT(route.find("tegra_gm20b_surface_hold(target.pages[0], &tiled)"), route.find("tegra_gm20b_surface_layout("));
+    const std::string route = Body(
+        source, "const char *routeJob(Job *job, const SwitchNVJPGBacking &target, void **hold, uint32_t *route)\n{");
+    EXPECT_LT(route.find("tegra_gm20b_surface_hold(target.pages[0], &tiled)"),
+              route.find("tegra_gm20b_surface_layout("));
     EXPECT_THAT(route, HasSubstr("tegra_nvjpg_route("));
     const std::string direct =
         Body(source, "IOReturn runDirect(Job *job, const SwitchNVJPGBacking &target, uint32_t extent)\n{");
@@ -45,8 +46,9 @@ TEST(NVJPGLayoutWiring, TheSeedMovesBeforeTheLayoutIsReadAndTheHoldOutlastsTheDe
 // only the run itself holds the job lock.
 TEST(NVJPGLayoutWiring, TheDestinationIsMappedForThePlanTheRouteLeavesAndOnlyTheRunHoldsTheJobLock)
 {
-    const std::string direct = Body(SourceText("../TegraNVJPGUserClient.cpp"),
-                                    "IOReturn runDirect(Job *job, const SwitchNVJPGBacking &target, uint32_t extent)\n{");
+    const std::string direct =
+        Body(SourceText("../TegraNVJPGUserClient.cpp"),
+             "IOReturn runDirect(Job *job, const SwitchNVJPGBacking &target, uint32_t extent)\n{");
     const auto map = direct.find("switch_nvjpg_mapping(target, extent, p.writeEnd, &why, job->pid)");
     const auto lock = direct.find("tegra_nvjpg_lock();");
     const auto unlock = direct.find("tegra_nvjpg_unlock();");

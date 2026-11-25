@@ -48,13 +48,14 @@ int pitchView(const TegraVICSurface &surface, switch_gpu_native_surface_view *ou
         if (desc.planeWidth[p] < width || desc.planeHeight[p] < height ||
             uint64_t(desc.planeWidth[p]) * sample > desc.planeBytesPerRow[p] || offset > desc.length ||
             bytes > desc.length - offset || offset > UINT64_MAX - access.offset) {
-            switch_refusal("native-view", "pitch-plane-extent",
-                           "a %ux%u %#x pitch surface's plane %u of %llux%llu, %llu bytes a row, at %llu of %llu bytes: "
-                           "narrower or shorter than the picture, rows shorter than its width, or past the surface; no "
-                           "GPU view",
-                           desc.width, desc.height, desc.fourcc, p, (unsigned long long)desc.planeWidth[p],
-                           (unsigned long long)desc.planeHeight[p], (unsigned long long)desc.planeBytesPerRow[p],
-                           (unsigned long long)offset, (unsigned long long)desc.length);
+            switch_refusal(
+                "native-view", "pitch-plane-extent",
+                "a %ux%u %#x pitch surface's plane %u of %llux%llu, %llu bytes a row, at %llu of %llu bytes: "
+                "narrower or shorter than the picture, rows shorter than its width, or past the surface; no "
+                "GPU view",
+                desc.width, desc.height, desc.fourcc, p, (unsigned long long)desc.planeWidth[p],
+                (unsigned long long)desc.planeHeight[p], (unsigned long long)desc.planeBytesPerRow[p],
+                (unsigned long long)offset, (unsigned long long)desc.length);
             error = -22;
             break;
         }

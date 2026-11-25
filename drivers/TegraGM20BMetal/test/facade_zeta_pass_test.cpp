@@ -682,7 +682,11 @@ TEST_F(FacadeZetaPass, TwoDepthAlonePassesOfADepthStencilTextureTestingStencilDo
     [cb waitUntilCompleted];
     EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted) << cb.error.description.UTF8String;
     const auto targets = zetaTargets(first);
-    EXPECT_EQ(std::count_if(targets.begin(), targets.end(), [](const auto &t) { return t.second; }), 2);
+    EXPECT_EQ(std::count_if(targets.begin(), targets.end(),
+                            [](const auto &t) {
+                                return t.second;
+                            }),
+              2);
 }
 
 }  // namespace

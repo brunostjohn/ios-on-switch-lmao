@@ -816,7 +816,8 @@ TEST_F(NVJPGUserClient, TightBlockLinearDestinationFallsBackToCopyEngineRepack)
     EXPECT_EQ(gCeCopies[0].rowBytes, 1040u);
     EXPECT_EQ(gCeCopies[0].rows, 260u);
     EXPECT_EQ(gCeCopies[0].dstBacking, &d.backing);
-    EXPECT_EQ(gHoldsAtCopy, std::vector<int>{1}) << "the layout stays held until the copy engine has written its blocks";
+    EXPECT_EQ(gHoldsAtCopy, std::vector<int>{1})
+        << "the layout stays held until the copy engine has written its blocks";
     EXPECT_EQ(gHolds, 0);
     EXPECT_EQ(gRoutes, std::vector<uint32_t>{TEGRA_NVJPG_ROUTE_COPY_BLOCKS});
     EXPECT_EQ(d.backing.refs, 1);

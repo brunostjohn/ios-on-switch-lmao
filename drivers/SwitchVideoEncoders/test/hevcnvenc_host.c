@@ -130,8 +130,7 @@ static void checkStreamAllowsEngine(const TegraNVENCSubmit *s, const char *what)
         return;
     const uint32_t smallest = (uint32_t)__builtin_ctz(tus);
     const uint32_t largest = 31u - (uint32_t)__builtin_clz(tus);
-    CHECK(smallest >= sps->min_tu_size && largest <= sps->max_tu_size, "%s: enabled TUs outside the SPS's sizes",
-          what);
+    CHECK(smallest >= sps->min_tu_size && largest <= sps->max_tu_size, "%s: enabled TUs outside the SPS's sizes", what);
     const uint32_t depth = sps->max_cu_size + 1u - smallest;
     CHECK(sps->max_transform_depth_inter >= depth && sps->max_transform_depth_intra >= depth,
           "%s: SPS transform depth %u inter, %u intra; a %u-pixel CU split to %u-pixel TUs needs %u", what,
@@ -139,12 +138,10 @@ static void checkStreamAllowsEngine(const TegraNVENCSubmit *s, const char *what)
           depth);
     CHECK(!md->tusize_4x4_enable || setup->pps_data.transform_skip_enabled_flag,
           "%s: 4x4 TUs enabled with transform skip off in the PPS", what);
-    const bool amp = md->cu16x16_part_2NxnU_enable || md->cu16x16_part_2NxnD_enable ||
-                     md->cu16x16_part_nLx2N_enable || md->cu16x16_part_nRx2N_enable ||
-                     md->cu32x32_part_2NxnU_enable || md->cu32x32_part_2NxnD_enable ||
-                     md->cu32x32_part_nLx2N_enable || md->cu32x32_part_nRx2N_enable ||
-                     md->cu64x64_part_2NxnU_enable || md->cu64x64_part_2NxnD_enable ||
-                     md->cu64x64_part_nLx2N_enable || md->cu64x64_part_nRx2N_enable;
+    const bool amp = md->cu16x16_part_2NxnU_enable || md->cu16x16_part_2NxnD_enable || md->cu16x16_part_nLx2N_enable ||
+                     md->cu16x16_part_nRx2N_enable || md->cu32x32_part_2NxnU_enable || md->cu32x32_part_2NxnD_enable ||
+                     md->cu32x32_part_nLx2N_enable || md->cu32x32_part_nRx2N_enable || md->cu64x64_part_2NxnU_enable ||
+                     md->cu64x64_part_2NxnD_enable || md->cu64x64_part_nLx2N_enable || md->cu64x64_part_nRx2N_enable;
     CHECK(!amp || sps->amp_enabled_flag, "%s: AMP partitions enabled with AMP off in the SPS", what);
 }
 

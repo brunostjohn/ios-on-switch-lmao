@@ -430,12 +430,12 @@ int main(void)
         nvjpg_dec_drv_pic_setup_s st;
         TegraNVJPGExtent et;
         uint32_t route = TEGRA_NVJPG_ROUTE_COUNT;
-#define PLANNED(req, img)                                                                    \
-    do {                                                                                     \
-        expect("route", req, img, &dt, &kAll, TEGRA_NVJPG_PLAN_OK, NULL, &p);                \
-        memset(&st, 0, sizeof(st));                                                          \
-        CHECK(!tegra_nvjpg_setup_output(img, &p.target, true, &st, &et), "route: setup");    \
-        route = TEGRA_NVJPG_ROUTE_COUNT;                                                     \
+#define PLANNED(req, img)                                                                 \
+    do {                                                                                  \
+        expect("route", req, img, &dt, &kAll, TEGRA_NVJPG_PLAN_OK, NULL, &p);             \
+        memset(&st, 0, sizeof(st));                                                       \
+        CHECK(!tegra_nvjpg_setup_output(img, &p.target, true, &st, &et), "route: setup"); \
+        route = TEGRA_NVJPG_ROUTE_COUNT;                                                  \
     } while (0)
         PLANNED(&rt, &tile);
         const char *why = tegra_nvjpg_route(&rt, &dt, dt.length, kSink, repack, true, &none, &p, &st, &route);

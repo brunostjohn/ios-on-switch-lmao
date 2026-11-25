@@ -854,8 +854,7 @@ bool SwitchBattery::refresh()
     } else if (zoneControl) {
         followZone(r);
     }
-    if (managed || gPdInputBlocked ||
-        (appliedPd && (!pd.inputLimit || (r.charger[bq::InputSource] & bq::kHiZ))))
+    if (managed || gPdInputBlocked || (appliedPd && (!pd.inputLimit || (r.charger[bq::InputSource] & bq::kHiZ))))
         applyInput(r, pd);
     // What the charger does now (manage may just have stopped or started it), for what is published below.
     if (zoneControl && !tegra_i2c_read(kBus, kCharger, bq::SystemStatus, &r.charger[bq::SystemStatus], 1)) {
@@ -1078,8 +1077,8 @@ void SwitchBattery::releasePdInput(bool resetInput)
     gPdInputBlocked = false;
     int err = 0;
     if (resetInput && (!requests.inflowDisabled || gBoosting)) {
-        err = chargerUpdate(bq::InputSource, bq::kHiZ | bq::kIinlimMask,
-                            bq::encodeInputLimit(charge::kUnknownSourceMA));
+        err =
+            chargerUpdate(bq::InputSource, bq::kHiZ | bq::kIinlimMask, bq::encodeInputLimit(charge::kUnknownSourceMA));
         if (!err)
             appliedPd = false;
     }

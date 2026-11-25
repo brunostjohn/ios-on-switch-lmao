@@ -51,7 +51,8 @@ static SwitchGpuNativeRefusal switch_gpu_native_reply(const switch_gpu_native_su
 		    uint64_t(plane.width) * plane.bytes_per_element > plane.pitch ||
 		    uint64_t(plane.pitch) * plane.height > plane.bytes)
 			return {"plane-extent",
-				"a plane's rows do not fit its bytes, or its bytes the allocation", i};
+				"a plane's rows do not fit its bytes, or its bytes the allocation",
+				i};
 		out.planes[i] = {plane.offset,
 				 plane.bytes,
 				 plane.width,
@@ -76,14 +77,15 @@ IOReturn AGXDeviceUserClient::nativeSurfaceView(const TegraGM20BAbiNativeSurface
 	const bool writable = (in->flags & TegraGM20BNativeSurfaceWrite) != 0;
 	const Bo *source = findBo(in->source_handle);
 	if ((in->flags & ~uint32_t(TegraGM20BNativeSurfaceWrite)) || in->reserved) {
-		switch_refusal("native-view", "request", "a view asked with flags %#x, reserved %#x: no view",
-			       in->flags, in->reserved);
+		switch_refusal("native-view", "request",
+			       "a view asked with flags %#x, reserved %#x: no view", in->flags,
+			       in->reserved);
 		return kIOReturnBadArgument;
 	}
 	if (!source || !source->surface || source->nativeView) {
-		switch_refusal("native-view", "source",
-			       "a view of BO %llu: %s; no view", (unsigned long long)in->source_handle,
-			       !source		    ? "no such BO on the connection"
+		switch_refusal("native-view", "source", "a view of BO %llu: %s; no view",
+			       (unsigned long long)in->source_handle,
+			       !source            ? "no such BO on the connection"
 			       : !source->surface ? "the BO is not an IOSurface's"
 						  : "the BO is a native view itself");
 		return kIOReturnBadArgument;
@@ -103,7 +105,8 @@ IOReturn AGXDeviceUserClient::nativeSurfaceView(const TegraGM20BAbiNativeSurface
 	IOLockLock(lock_);
 	if (!result && submitGate_.closed()) {
 		switch_refusal("native-view", "gate-closed",
-			       "a view of BO %llu while the GPU's submissions are shut (reset or sleep): no view",
+			       "a view of BO %llu while the GPU's submissions are shut (reset or "
+			       "sleep): no view",
 			       (unsigned long long)in->source_handle);
 		result = -19;
 	}
@@ -114,14 +117,14 @@ IOReturn AGXDeviceUserClient::nativeSurfaceView(const TegraGM20BAbiNativeSurface
 			switch_gpu_native_reply(*view, allocation, *out);
 		if (refused.key) {
 			const auto &plane = view->layout.planes[refused.plane];
-			switch_refusal(
-				"native-view", refused.key,
-				"a view of format %#x, %u planes (plane %u %ux%u, pitch %u, "
-				"%llu bytes at %llu), in %u pages: %s",
-				view->layout.format, view->layout.plane_count, refused.plane,
-				plane.width, plane.height, plane.pitch,
-				(unsigned long long)plane.bytes, (unsigned long long)plane.offset,
-				allocation.page_count, refused.why);
+			switch_refusal("native-view", refused.key,
+				       "a view of format %#x, %u planes (plane %u %ux%u, pitch %u, "
+				       "%llu bytes at %llu), in %u pages: %s",
+				       view->layout.format, view->layout.plane_count, refused.plane,
+				       plane.width, plane.height, plane.pitch,
+				       (unsigned long long)plane.bytes,
+				       (unsigned long long)plane.offset, allocation.page_count,
+				       refused.why);
 			result = -22;
 		}
 	}

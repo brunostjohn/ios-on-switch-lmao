@@ -112,7 +112,8 @@ void noteReused(const tgm_coh *c, bool same)
 
 // Debug kernels: a first lock's fill past 2 ms, split into getting its scratch (one the pool lacks is made, wired and
 // pinned) and its move, so a slow CPU lock of a block-linear surface names where it waited; once a surface
-void noteSlowFill(const tgm_coh *c, tgm_tiled &t, uint64_t began, uint64_t got, uint64_t moved, bool reused)
+void noteSlowFill(const tgm_coh *c, tgm_tiled &t, uint64_t began, uint64_t got, uint64_t moved,
+		  bool reused)
 {
 #if TGM_STATS
 	if (moved - began < 2000000 || t.slow_fill_named)

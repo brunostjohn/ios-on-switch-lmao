@@ -50,8 +50,9 @@ protected:
 	// range, whole and unknown.
 	void use(Job &job, uint32_t access)
 	{
-		ASSERT_EQ(switch_gpu_native_surface_add_use(view(), false, access, job.uses, job.guards,
-							    8, job.useCount, job.guardCount),
+		ASSERT_EQ(switch_gpu_native_surface_add_use(view(), false, access, job.uses,
+							    job.guards, 8, job.useCount,
+							    job.guardCount),
 			  0);
 		if (access & SWITCH_GPU_BACKING_WRITE)
 			job.writes.push_back({native, 0, 0});
@@ -60,8 +61,8 @@ protected:
 	int submit(Job &job, const switch_gpu_backing_token &writer)
 	{
 		switch_gpu_backing_transaction transaction = {};
-		int result = switch_gpu_backing_begin_checked(job.uses, job.useCount, job.guards,
-							      job.guardCount, &writer, &transaction);
+		int result = switch_gpu_backing_begin_checked(
+			job.uses, job.useCount, job.guards, job.guardCount, &writer, &transaction);
 		if (result)
 			return result;
 		result = switch_gpu_backing_write_ranges(&transaction, job.writes.data(),
@@ -81,7 +82,8 @@ protected:
 		EXPECT_EQ(switch_gpu_backing_begin(&readUse, 1, &reader, &transaction), 0);
 		switch_gpu_backing_token dependency = {};
 		uint32_t needed = 0;
-		EXPECT_EQ(switch_gpu_backing_dependencies(&transaction, &dependency, 1, &needed), 0);
+		EXPECT_EQ(switch_gpu_backing_dependencies(&transaction, &dependency, 1, &needed),
+			  0);
 		switch_gpu_backing_abort(&transaction);
 		return needed ? dependency.value : 0;
 	}
@@ -116,7 +118,8 @@ TEST_F(NativeWrite, AWriteUseWithNoRangeNamingItsBackingIsRefused)
 	job.writes.clear();
 	EXPECT_EQ(submit(job, token(208, 9)), -22);
 	EXPECT_EQ(readerDependsOn(), 0u);
-	EXPECT_EQ(publish(native, SWITCH_GPU_BACKING_WRITE, token(210, 1, SWITCH_GPU_ENGINE_VIC)), 0)
+	EXPECT_EQ(publish(native, SWITCH_GPU_BACKING_WRITE, token(210, 1, SWITCH_GPU_ENGINE_VIC)),
+		  0)
 		<< "the refused job held nothing past its abort";
 }
 
