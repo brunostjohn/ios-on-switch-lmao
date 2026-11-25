@@ -43,7 +43,8 @@ struct IconRenderTest: HWTest {
             metrics.set("\(label)_peak_mb", reading.peakMB, digits: 1)
         }
         if !cold.rendered { return .fail("no image for Settings' icon", metrics) }
-        guard let pid = RunningProcesses.pid(named: Self.agent, in: RunningProcesses.list(sysctl: "kern.proc.all")) else {
+        guard let pid = RunningProcesses.pid(named: Self.agent, in: RunningProcesses.list(sysctl: "kern.proc.all"))
+        else {
             return .fail("\(Self.agent) is not running after the render", metrics)
         }
         switch JetsamExcess.read(pid: pid) {
@@ -62,7 +63,10 @@ struct IconRenderTest: HWTest {
             metrics.set("settled_excess_mb", reading.excessMB, digits: 1)
             if reading.excessBytes > 0 {
                 return .fail(
-                    Self.over(reading.inactiveLimitMB + Int(reading.excessMB.rounded(.up)), limit: reading.inactiveLimitMB),
+                    Self.over(
+                        reading.inactiveLimitMB + Int(reading.excessMB.rounded(.up)),
+                        limit: reading.inactiveLimitMB
+                    ),
                     metrics
                 )
             }

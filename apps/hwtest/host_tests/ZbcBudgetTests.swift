@@ -14,8 +14,18 @@ final class ZbcBudgetTests: XCTestCase {
     static let arms = [
         ZbcValue(name: "bgra8srgb", format: 0x1c, channels: [0.033, 0.133, 0.604, 1]),
         ZbcValue(name: "rgba8srgb", format: 0x2c, channels: [0.033, 0.133, 0.604, 1]),
-        ZbcValue.unorm("rgb10a2", format: 0x20, [300.0 / 1023, 600.0 / 1023, 900.0 / 1023, 2.0 / 3], bits: [10, 10, 10, 2]),
-        ZbcValue.unorm("rgba16unorm", format: 0x08, [10000.0 / 65535, 20000.0 / 65535, 40000.0 / 65535, 1], bits: [16, 16, 16, 16]),
+        ZbcValue.unorm(
+            "rgb10a2",
+            format: 0x20,
+            [300.0 / 1023, 600.0 / 1023, 900.0 / 1023, 2.0 / 3],
+            bits: [10, 10, 10, 2]
+        ),
+        ZbcValue.unorm(
+            "rgba16unorm",
+            format: 0x08,
+            [10000.0 / 65535, 20000.0 / 65535, 40000.0 / 65535, 1],
+            bits: [16, 16, 16, 16]
+        ),
         ZbcValue.float("rgba32f", format: 0x04, [0.3, -1.5, 7.25, 0.5]),
     ]
 
@@ -48,7 +58,11 @@ final class ZbcBudgetTests: XCTestCase {
     }
 
     func testAFreshBootFitsEveryValue() throws {
-        let budget = ZbcBudget(try XCTUnwrap(ZbcTable.parse(Self.line(Self.boot))), required: Self.cases, optional: Self.arms)
+        let budget = ZbcBudget(
+            try XCTUnwrap(ZbcTable.parse(Self.line(Self.boot))),
+            required: Self.cases,
+            optional: Self.arms
+        )
         XCTAssertEqual(budget.required, 4)
         XCTAssertTrue(budget.requiredFits)
         XCTAssertEqual(budget.run, Self.arms.map(\.name))
@@ -99,6 +113,10 @@ final class ZbcBudgetTests: XCTestCase {
         let held = ZbcValue(name: "", format: 0x1c, channels: [0.0331047, 0.1328683, 0.6038273, 1])
         let asked = ZbcValue(name: "x", format: 0x1c, channels: [0.03310477, 0.13286833, 0.60382736, 1])
         XCTAssertTrue(ZbcTable(used: 7, slots: 15, colours: [held]).holds(asked))
-        XCTAssertFalse(ZbcTable(used: 7, slots: 15, colours: [held]).holds(ZbcValue(name: "x", format: 0x2c, channels: asked.channels)))
+        XCTAssertFalse(ZbcTable(used: 7, slots: 15, colours: [held]).holds(ZbcValue(
+            name: "x",
+            format: 0x2c,
+            channels: asked.channels
+        )))
     }
 }

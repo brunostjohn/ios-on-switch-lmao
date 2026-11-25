@@ -83,6 +83,7 @@ reference after a harvest adds states; until then a new state counts as `no_gold
 environment to draw every corpus state instead of one per class.
 
 Run All keeps each test to seconds. `HWTEST_LONG=1` in the app's environment brings back the long forms:
+
 - the full trial targets of the barrier probes (pass_pixel_barrier, subchannel_switch_drain, job_boundary_idle);
 - storage_forms' timing sweep;
 - glass_live's plain variant.

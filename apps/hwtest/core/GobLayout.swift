@@ -47,7 +47,8 @@ public enum JpegLayoutGuess {
             list.append(Candidate(name: "y\(yLog2)") { xB, y in GobLayout.offset(rowBytes, yLog2, xB, y) })
         }
         list.append(
-            Candidate(name: "tiled16") { xB, y in ((y / 16) * (rowBytes / 16) + xB / 16) * 256 + (y % 16) * 16 + xB % 16 }
+            Candidate(name: "tiled16") { xB, y in
+                ((y / 16) * (rowBytes / 16) + xB / 16) * 256 + (y % 16) * 16 + xB % 16 }
         )
         return list
     }

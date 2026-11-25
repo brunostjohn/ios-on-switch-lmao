@@ -42,7 +42,8 @@ struct PosterTargetsTest: HWTest {
         guard !posters.isEmpty else {
             return .skip(
                 "no poster process among the kernel's \(peaks.count) target peaks; its push scan reads one submission "
-                    + "in four per connection (TegraGM20BPushScanRun.cpp), so a poster that drew with few may be missing",
+                    +
+                    "in four per connection (TegraGM20BPushScanRun.cpp), so a poster that drew with few may be missing",
                 metrics
             )
         }

@@ -16,7 +16,8 @@ struct ControllersTest: HWTest {
         let controllers = await Self.connected(context)
         var metrics = Metrics()
         metrics.set("connected", controllers.count)
-        guard !controllers.isEmpty else { return .skip(ControllerSkip.reason(railsRunning: Self.railsRunning()), metrics) }
+        guard !controllers.isEmpty
+        else { return .skip(ControllerSkip.reason(railsRunning: Self.railsRunning()), metrics) }
         metrics.set("names", controllers.map { $0.vendorName ?? "?" }.joined(separator: ","))
         metrics.set("extended", controllers.filter { $0.extendedGamepad != nil }.count)
         if let level = controllers.compactMap({ $0.battery?.batteryLevel }).min() {
@@ -116,7 +117,10 @@ struct JoyConInputTest: HWTest {
             metrics.set("joycons", 0)
             return .skip(ControllerSkip.reason(railsRunning: ControllersTest.railsRunning()), metrics)
         }
-        guard await Self.still(context, joycons) else { return .skip("the Joy-Cons never stayed still for a second", metrics) }
+        guard await Self.still(context, joycons) else { return .skip(
+            "the Joy-Cons never stayed still for a second",
+            metrics
+        ) }
         let readings = await MainActor.run { joycons.map(Reading.init) }
         metrics.set("joycons", readings.count)
         metrics.set("names", readings.map(\.name).joined(separator: ","))

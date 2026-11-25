@@ -151,7 +151,11 @@ struct SurfaceLocksSideBySideTest: GPUPathTest {
         let required = LockAheadBound.requiredMs(aGpuMs: aGpuMs, calibratedMs: jobMs)
         if ahead < required {
             failures.append(
-                String(format: "B's lock was %.1f ms ahead of A's, under half of A's %.1f ms render", ahead, required * 2)
+                String(
+                    format: "B's lock was %.1f ms ahead of A's, under half of A's %.1f ms render",
+                    ahead,
+                    required * 2
+                )
             )
         }
         if let connection = GPUConnection() {

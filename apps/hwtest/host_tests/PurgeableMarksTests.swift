@@ -16,6 +16,9 @@ final class PurgeableMarksTests: XCTestCase {
         let marks = PurgeableMarks(ok: 0, unsupported: 2, compressed: 12, other: 0)
         XCTAssertEqual(marks.checks.map(\.1), [false, false, true, false])
         XCTAssertEqual(marks.asked, 14)
-        XCTAssertEqual(PurgeableMarks(ok: 40, unsupported: 0, compressed: 0, other: 0).checks.map(\.1), [true, true, true, true])
+        XCTAssertEqual(
+            PurgeableMarks(ok: 40, unsupported: 0, compressed: 0, other: 0).checks.map(\.1),
+            [true, true, true, true]
+        )
     }
 }

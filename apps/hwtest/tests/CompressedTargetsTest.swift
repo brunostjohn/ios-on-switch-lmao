@@ -119,7 +119,11 @@ struct CompressedTargetsTest: HWTest {
         var wrong: [String] = []
         var paths: Set<String> = []
         let budget = GPUPaths.zbcTable(GPUConnection()).map {
-            ZbcBudget($0, required: Self.cases.map(Self.value), optional: CompressedZbcArms.arms.map(CompressedZbcArms.value))
+            ZbcBudget(
+                $0,
+                required: Self.cases.map(Self.value),
+                optional: CompressedZbcArms.arms.map(CompressedZbcArms.value)
+            )
         }
         if let budget {
             metrics.set("zbc_free", budget.free)

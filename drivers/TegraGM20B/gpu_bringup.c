@@ -468,8 +468,8 @@ void tgm_zbc_line(char *line, size_t size)
 	for (i = ltc->zbc_color_min; i <= ltc->zbc_color_max; i++) {
 		const struct gf100_gr_zbc_color *c = &gr->zbc_color[i];
 		if (c->format)
-			at += scnprintf(line + at, size - at, "%x:%x,%x,%x,%x;", c->format, c->ds[0],
-					c->ds[1], c->ds[2], c->ds[3]);
+			at += scnprintf(line + at, size - at, "%x:%x,%x,%x,%x;", c->format,
+					c->ds[0], c->ds[1], c->ds[2], c->ds[3]);
 	}
 	at += scnprintf(line + at, size - at, " d=");
 	for (i = ltc->zbc_depth_min; i <= ltc->zbc_depth_max; i++) {
