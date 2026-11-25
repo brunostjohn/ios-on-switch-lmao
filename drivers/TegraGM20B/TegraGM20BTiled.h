@@ -53,6 +53,7 @@ struct tgm_tiled {
 		window_ns; /* debug: locks this second, and whether the surface was named for them */
 	uint32_t window_locks;
 	int named;
+	int slow_fill_named; /* debug: whether a first lock's slow fill was named for the surface */
 };
 
 /* TegraGM20BCoherency.cpp: the entry's lock (held across a decision and a move), its layout slot (entry lock), whether

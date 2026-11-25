@@ -111,12 +111,13 @@ void noteReused(const tgm_coh *c, bool same)
 }
 
 // Debug kernels: a first lock's fill past 2 ms, split into getting its scratch (one the pool lacks is made, wired and
-// pinned) and its move, so a slow CPU lock of a block-linear surface names where it waited
-void noteSlowFill(const tgm_coh *c, uint64_t began, uint64_t got, uint64_t moved, bool reused)
+// pinned) and its move, so a slow CPU lock of a block-linear surface names where it waited; once a surface
+void noteSlowFill(const tgm_coh *c, tgm_tiled &t, uint64_t began, uint64_t got, uint64_t moved, bool reused)
 {
 #if TGM_STATS
-	if (moved - began < 2000000)
+	if (moved - began < 2000000 || t.slow_fill_named)
 		return;
+	t.slow_fill_named = 1;
 	char name[32];
 	proc_selfname(name, sizeof(name));
 	os_log(OS_LOG_DEFAULT,
@@ -128,6 +129,7 @@ void noteSlowFill(const tgm_coh *c, uint64_t began, uint64_t got, uint64_t moved
 	       (moved - got) / 1000);
 #else
 	(void)c;
+	(void)t;
 	(void)began;
 	(void)got;
 	(void)moved;
@@ -211,7 +213,7 @@ int fill(tgm_coh *c, tgm_tiled &t, uint32_t options)
 	}
 	tgm_cpu_clean_pages(rows.pas, rows.npages);
 	if (TGM_STATS)
-		noteSlowFill(c, began, got, tgm_timestamp_ns(), reused);
+		noteSlowFill(c, t, began, got, tgm_timestamp_ns(), reused);
 	t.scratch = scratch;
 	return 0;
 }
