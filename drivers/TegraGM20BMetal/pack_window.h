@@ -71,7 +71,8 @@ inline uint32_t packWindowCollectCpuRanges(const uint8_t *packBase, const PackHe
 
     std::vector<std::pair<uint64_t, uint64_t>> wanted;
     for (PackSectionId id : kPriority) {
-        const uint64_t clamped = std::min(h.tier0[id], h.section[id].bytes);
+        // every creation the pack lacks searches the fast keys of both tiers before it is known to miss
+        const uint64_t clamped = id == PackFastKeys ? h.section[id].bytes : std::min(h.tier0[id], h.section[id].bytes);
         if (clamped && h.section[id].offset <= UINT64_MAX - clamped)
             wanted.emplace_back(h.section[id].offset, clamped);
         PackSegmentTable table = {};

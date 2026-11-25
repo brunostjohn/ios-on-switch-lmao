@@ -315,19 +315,25 @@ TEST(GM20BDevicePackWindow, RenderServerPassesAlignedTier0MetadataCpuRangesAndCl
                 return true;
         return false;
     };
+    uint32_t wordsAt = 0, wordsBytes = 0;
+    const bool words = server.pack().segmentWords(wordsAt, wordsBytes);
+    const uint64_t wordsStart = (heapStart + wordsAt) & ~(page - 1);
+    const uint64_t wordsEnd = (heapStart + wordsAt + wordsBytes + page - 1) & ~(page - 1);
     for (const TegraGM20BAbiPackCpuRange &r : ranges) {
         EXPECT_GT(r.bytes, 0u);
         EXPECT_EQ(r.address % page, 0u);
         EXPECT_EQ(r.bytes % page, 0u);
         EXPECT_GE(r.address, packBase);
-        EXPECT_LE(r.address + r.bytes, heapStart);
+        // the heap's pages are the kernel image's, but for the segments' words, which the CPU reads at draws
+        if (r.address + r.bytes > heapStart)
+            EXPECT_TRUE(words && r.address >= wordsStart && r.address + r.bytes <= wordsEnd);
         EXPECT_GT(r.address, prevEnd);
         prevEnd = r.address + r.bytes;
         totalBytes += r.bytes;
     }
     EXPECT_LE(totalBytes, 64ULL << 20);
     const gm20b::PackHeader &hdr = *server.pack().header();
-    EXPECT_TRUE(covers(packBase + hdr.section[gm20b::PackFastKeys].offset, hdr.tier0[gm20b::PackFastKeys]));
+    EXPECT_TRUE(covers(packBase + hdr.section[gm20b::PackFastKeys].offset, hdr.section[gm20b::PackFastKeys].bytes));
     EXPECT_TRUE(covers(packBase + hdr.section[gm20b::PackPipelines].offset, hdr.tier0[gm20b::PackPipelines]));
     EXPECT_TRUE(covers(packBase + hdr.section[gm20b::PackPrograms].offset, hdr.tier0[gm20b::PackPrograms]));
 

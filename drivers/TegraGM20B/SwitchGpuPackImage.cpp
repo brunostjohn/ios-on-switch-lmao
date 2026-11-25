@@ -17,21 +17,10 @@
 #ifndef O_NOFOLLOW_ANY
 #define O_NOFOLLOW_ANY 0x20000000
 #endif
-#ifndef MAXPRI_THROTTLE
-#define MAXPRI_THROTTLE 4
-#endif
-#ifndef IOPOL_THROTTLE
-#define IOPOL_THROTTLE 3
-#endif
 
 extern "C" {
 // NOLINTNEXTLINE(readability-redundant-declaration): not declared in every kernel config's headers
-kern_return_t kernel_thread_start_priority(thread_continue_t continuation, void *parameter,
-					   integer_t priority, thread_t *new_thread);
-// NOLINTNEXTLINE(readability-redundant-declaration)
 kern_return_t thread_terminate(thread_t thread);
-// NOLINTNEXTLINE(readability-redundant-declaration)
-void throttle_set_thread_io_policy(int policy);
 // NOLINTNEXTLINE(readability-redundant-declaration)
 vfs_context_t vfs_context_kernel(void);
 }
@@ -42,9 +31,6 @@ struct PackImageStore {
 	IOLock *lock;
 	SwitchGpuPackState state;
 	bool buildActive;
-	bool warmRequested;
-	bool warmStarted;
-	bool warmActive;
 #ifdef SWITCH_GPU_PACK_IMAGE_HOST_TEST
 	uint32_t refusedCount;
 #endif
@@ -76,29 +62,6 @@ IOLock *packLock()
 		return expected;
 	}
 	return made;
-}
-
-void warmThread(void *, wait_result_t);
-
-void maybeStartWarmLocked(IOLock *lock)
-{
-	if (!gPack.warmRequested || gPack.warmStarted || gPack.state != SwitchGpuPackState::Ready ||
-	    switch_gpu_pack_shutdown_requested())
-		return;
-	gPack.warmStarted = true;
-	gPack.warmActive = true;
-	IOLockUnlock(lock);
-	thread_t worker = nullptr;
-	const kern_return_t kr =
-		kernel_thread_start_priority(warmThread, nullptr, MAXPRI_THROTTLE, &worker);
-	if (kr == KERN_SUCCESS) {
-		thread_deallocate(worker);
-		IOLockLock(lock);
-		return;
-	}
-	IOLockLock(lock);
-	gPack.warmActive = false;
-	IOLockWakeup(lock, &gPack.warmActive, false);
 }
 
 void finishRefused(IOLock *lock, const char *why, int err, bool silent)
@@ -228,7 +191,6 @@ void buildThread(void *, wait_result_t)
 #endif
 	IOLockWakeup(lock, &gPack.state, false);
 	IOLockWakeup(lock, &gPack.buildActive, false);
-	maybeStartWarmLocked(lock);
 	IOLockUnlock(lock);
 #if TGM_STATS
 	const uint64_t totalMs = (switch_gpu_pack_now_ns() - startedNs) / 1000000ULL;
@@ -243,43 +205,6 @@ void buildThread(void *, wait_result_t)
 	thread_terminate(current_thread());
 }
 
-void warmThread(void *, wait_result_t)
-{
-	throttle_set_thread_io_policy(IOPOL_THROTTLE);
-	IOLock *lock = packLock();
-#if TGM_STATS
-	const uint64_t startedNs = switch_gpu_pack_now_ns();
-#endif
-	SwitchGpuPackHeader hdr = {};
-	uint64_t fileSize = 0;
-	IOLockLock(lock);
-	const bool valid =
-		gPack.state == SwitchGpuPackState::Ready && !switch_gpu_pack_shutdown_requested();
-	if (valid) {
-		hdr = gPack.header;
-		fileSize = gPack.fileSize;
-	}
-	IOLockUnlock(lock);
-	SwitchGpuPackWarmStats stats = {};
-	if (valid)
-		switch_gpu_pack_warm_tier1(&hdr, fileSize, &stats);
-#if TGM_STATS
-	if (valid && !switch_gpu_pack_shutdown_requested()) {
-		const uint64_t elapsedMs = (switch_gpu_pack_now_ns() - startedNs) / 1000000ULL;
-		IOLog("tegra-gm20b: pack warm: %llu MiB of tier 1 read in %llu.%01llu s "
-		      "(throttled), %llu MiB already resident\n",
-		      (unsigned long long)(stats.readBytes >> 20),
-		      (unsigned long long)(elapsedMs / 1000ULL),
-		      (unsigned long long)((elapsedMs % 1000ULL) / 100ULL),
-		      (unsigned long long)(stats.residentBytes >> 20));
-	}
-#endif
-	IOLockLock(lock);
-	gPack.warmActive = false;
-	IOLockWakeup(lock, &gPack.warmActive, false);
-	IOLockUnlock(lock);
-	thread_terminate(current_thread());
-}
 }  // namespace
 
 bool switch_gpu_pack_shutdown_requested(void)
@@ -436,19 +361,6 @@ void switch_gpu_pack_client_unmap_gpu(tgm_vm *vm, SwitchGpuPackClient *client)
 	client->gpuBytes = 0;
 }
 
-extern "C" void switch_gpu_boot_complete(void)
-{
-	if (switch_gpu_pack_shutdown_requested())
-		return;
-	IOLock *lock = packLock();
-	if (!lock)
-		return;
-	IOLockLock(lock);
-	gPack.warmRequested = true;
-	maybeStartWarmLocked(lock);
-	IOLockUnlock(lock);
-}
-
 extern "C" void switch_gpu_pack_shutdown(void)
 {
 	// Dekker seq_cst pair with packLock(): either shutdown observes the initialized lock and
@@ -463,8 +375,6 @@ extern "C" void switch_gpu_pack_shutdown(void)
 	IOLockWakeup(lock, &gPack.state, false);
 	while (gPack.buildActive)
 		IOLockSleep(lock, &gPack.buildActive, THREAD_UNINT);
-	while (gPack.warmActive)
-		IOLockSleep(lock, &gPack.warmActive, THREAD_UNINT);
 	IOLockUnlock(lock);
 }
 
@@ -495,16 +405,5 @@ void switch_gpu_pack_image_reset_for_test(void)
 uint32_t switch_gpu_pack_image_refused_count_for_test(void)
 {
 	return gPack.refusedCount;
-}
-
-void switch_gpu_pack_image_wait_warm_for_test(void)
-{
-	IOLock *lock = __atomic_load_n(&gPack.lock, __ATOMIC_SEQ_CST);
-	if (!lock)
-		return;
-	IOLockLock(lock);
-	while (gPack.warmActive)
-		IOLockSleep(lock, &gPack.warmActive, THREAD_UNINT);
-	IOLockUnlock(lock);
 }
 #endif

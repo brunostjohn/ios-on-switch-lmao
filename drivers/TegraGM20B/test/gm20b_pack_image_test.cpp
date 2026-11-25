@@ -94,9 +94,6 @@ struct Model {
 	uint32_t srcCleanCalls = 0;
 	uint32_t dstCleanInvalOps = 0;
 	uint32_t dstInvalOps = 0;
-	uint32_t warmThreadsStarted = 0;
-	int lastWarmPriority = -1;
-	int lastIoPolicy = -1;
 	uint64_t nextPa = 0x80000000ULL;
 	uint64_t nextUserVa = 0x200000000ULL;
 	uint64_t clockNs = 1000000ULL;
@@ -104,7 +101,6 @@ struct Model {
 	std::map<uint64_t, uint64_t> pageCachePa;  // fileOff (16 KiB aligned) -> phys addr
 	std::map<std::pair<IOMemoryDescriptor *, task_t>, IOMemoryMap *> taskMaps;
 	std::vector<std::vector<uint8_t>> pageCacheStorage;
-	std::vector<std::pair<uint64_t, uint64_t>> warmPageins;
 	std::vector<std::string> logs;
 	std::vector<std::thread> detachedThreads;
 
@@ -121,8 +117,6 @@ struct Model {
 	bool pauseFirstPagein = false;
 	bool firstPageinEntered = false;
 	bool releaseFirstPagein = false;
-	bool setPressureOnSecondWarm = false;
-	bool warmPressureTriggered = false;
 	uint32_t sleepers = 0;
 	uint32_t unintSleepers = 0;
 
@@ -142,9 +136,6 @@ struct Model {
 		committedUpls = abortedUpls = 0;
 		copyCalls = pageinCalls = srcCleanCalls = 0;
 		dstCleanInvalOps = dstInvalOps = 0;
-		warmThreadsStarted = 0;
-		lastWarmPriority = -1;
-		lastIoPolicy = -1;
 		nextPa = 0x80000000ULL;
 		nextUserVa = 0x200000000ULL;
 		clockNs = 1000000ULL;
@@ -152,7 +143,6 @@ struct Model {
 		pageCachePa.clear();
 		taskMaps.clear();
 		pageCacheStorage.clear();
-		warmPageins.clear();
 		logs.clear();
 		failContigChunkIndex = -1;
 		allocChunkCounter = 0;
@@ -166,8 +156,6 @@ struct Model {
 		pauseFirstPagein = false;
 		firstPageinEntered = false;
 		releaseFirstPagein = false;
-		setPressureOnSecondWarm = false;
-		warmPressureTriggered = false;
 		sleepers = 0;
 		unintSleepers = 0;
 		memorystatus_vm_pressure_level = 0;
@@ -502,13 +490,6 @@ int vnode_pagein(vnode_t, upl_t, upl_offset_t, uint64_t f_offset, upl_size_t siz
 			*errorp = 1;
 		return EIO;
 	}
-	if (gModel.warmThreadsStarted > 0) {
-		gModel.warmPageins.emplace_back(f_offset, size);
-		if (gModel.setPressureOnSecondWarm && gModel.warmPageins.size() == 2) {
-			memorystatus_vm_pressure_level = 1;
-			gModel.warmPressureTriggered = true;
-		}
-	}
 	// Populate page-cache physical pages for [f_offset, f_offset + size).
 	for (uint64_t off = f_offset; off < f_offset + size; off += PAGE_SIZE) {
 		if (gModel.pageCachePa.count(off))
@@ -631,19 +612,6 @@ kern_return_t kernel_thread_start(thread_continue_t cont, void *param, thread_t 
 	return KERN_SUCCESS;
 }
 
-kern_return_t kernel_thread_start_priority(thread_continue_t cont, void *param, integer_t prio,
-					   thread_t *out)
-{
-	std::lock_guard<std::mutex> g(gModel.mu);
-	++gModel.warmThreadsStarted;
-	gModel.lastWarmPriority = prio;
-	gModel.detachedThreads.emplace_back([cont, param] {
-		cont(param, 0);
-	});
-	*out = nullptr;
-	return KERN_SUCCESS;
-}
-
 void thread_deallocate(thread_t)
 {
 }
@@ -656,12 +624,6 @@ thread_t current_thread(void)
 kern_return_t thread_terminate(thread_t)
 {
 	return KERN_SUCCESS;
-}
-
-void throttle_set_thread_io_policy(int policy)
-{
-	std::lock_guard<std::mutex> g(gModel.mu);
-	gModel.lastIoPolicy = policy;
 }
 
 void tgm_cpu_clean_pages(const uint64_t *, uint32_t)
@@ -1050,37 +1012,6 @@ TEST_F(PackImageTest, PartialAbsentUplRetriesAndCopyFailureCleansUpAllState)
 	EXPECT_EQ(switch_gpu_pack_image_refused_count_for_test(), 1u);
 }
 
-TEST_F(PackImageTest, BootCompleteWarmReadThrottlesAndRespectsPressureAndShutdown)
-{
-	// Full warm pass: tier-1 heap (1.5 MiB) + FastKeys + Programs + Variants.
-	gModel.fileBytes = makePackFile(128ULL << 10, 1536ULL << 10);
-	SwitchGpuPackImageView view = {};
-	ASSERT_EQ(switch_gpu_pack_image_acquire("backboardd", &view, nullptr), kIOReturnSuccess);
-	ASSERT_TRUE(view.ready);
-
-	switch_gpu_boot_complete();
-	switch_gpu_pack_image_wait_warm_for_test();
-	EXPECT_EQ(gModel.warmThreadsStarted, 1u);
-	EXPECT_EQ(gModel.lastWarmPriority, MAXPRI_THROTTLE);
-	EXPECT_EQ(gModel.lastIoPolicy, IOPOL_THROTTLE);
-	EXPECT_EQ(gModel.openVnodes, 0);
-	// Heap tier 1 (2 chunks: 1 MiB + 512 KiB) + FastKeys + Programs + Variants = 5 pagein calls.
-	EXPECT_EQ(gModel.warmPageins.size(), 5u);
-
-	// Memory pressure aborts warm pass early and closes vnode.
-	switch_gpu_pack_image_reset_for_test();
-	gModel.reset();
-	gModel.fileBytes = makePackFile(128ULL << 10, 3ULL << 20);
-	gModel.setPressureOnSecondWarm = true;
-	ASSERT_EQ(switch_gpu_pack_image_acquire("backboardd", &view, nullptr), kIOReturnSuccess);
-	ASSERT_TRUE(view.ready);
-	switch_gpu_boot_complete();
-	switch_gpu_pack_image_wait_warm_for_test();
-	EXPECT_TRUE(gModel.warmPressureTriggered);
-	EXPECT_EQ(gModel.warmPageins.size(), 2u);
-	EXPECT_EQ(gModel.openVnodes, 0);
-}
-
 TEST_F(PackImageTest, ShutdownDrainsActiveBuildClosesVnodeAndWakesWaiter)
 {
 	gModel.fileBytes = makePackFile(256ULL << 10, 0);
@@ -1115,21 +1046,16 @@ TEST_F(PackImageTest, ShutdownDrainsActiveBuildClosesVnodeAndWakesWaiter)
 	EXPECT_EQ(gModel.liveDescriptors, 0);
 }
 
-TEST_F(PackImageTest, XnuBootCompleteAndShutdownHooksWiredInBothTrees)
+// The pack reads nothing after boot: a tier-1 state's pages are read where it is first used. A read of the whole tier
+// after boot reached the card at tier 0 whatever the thread's I/O policy, in the UI's class for 150 s.
+TEST_F(PackImageTest, XnuShutdownHookWiredAndNoBootCompleteRead)
 {
 	const std::string pm10063 =
 		SourceText("../../../kernel/xnu-10063.141.1/iokit/Kernel/IOPMrootDomain.cpp");
 	const std::string pm12377 =
 		SourceText("../../../kernel/xnu-12377.121.6/iokit/Kernel/IOPMrootDomain.cpp");
-	for (const std::string &pm : {pm10063, pm12377}) {
-		EXPECT_THAT(pm, HasSubstr("extern \"C\" void switch_gpu_boot_complete(void) "
-					  "__attribute__((weak));"));
-		const std::string bootComplete =
-			Between(pm, "case kPowerEventSystemBootCompleted:", "\n\t\tbreak;");
-		EXPECT_THAT(bootComplete, HasSubstr("if (switch_gpu_boot_complete)"));
-		EXPECT_THAT(bootComplete, HasSubstr("switch_gpu_boot_complete();"));
-		EXPECT_EQ(Count(pm, "switch_gpu_boot_complete();"), 1u);
-	}
+	for (const std::string &pm : {pm10063, pm12377})
+		EXPECT_EQ(Count(pm, "switch_gpu_boot_complete"), 0u);
 	const std::string shutdown = SourceText("../../../kernel/switch/shutdown/shutdown.c");
 	EXPECT_THAT(shutdown,
 		    HasSubstr("extern void switch_gpu_pack_shutdown(void) __attribute__((weak));"));

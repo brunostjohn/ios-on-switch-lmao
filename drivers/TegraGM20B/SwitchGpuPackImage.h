@@ -71,11 +71,6 @@ enum class SwitchGpuPackState : uint32_t {
 	Refused = 3,
 };
 
-struct SwitchGpuPackByteRange {
-	uint64_t offset;
-	uint64_t bytes;
-};
-
 inline bool switch_gpu_pack_validate_header(const SwitchGpuPackHeader *hdr, uint64_t fileSize,
 					    const char **whyOut)
 {
@@ -149,41 +144,6 @@ inline bool switch_gpu_pack_validate_cpu_ranges(const TegraGM20BAbiPackCpuRange 
 	return true;
 }
 
-inline uint32_t switch_gpu_pack_warm_ranges(const SwitchGpuPackHeader *hdr, uint64_t fileSize,
-					    uint64_t vmPageBytes, SwitchGpuPackByteRange *out,
-					    uint32_t cap)
-{
-	if (!hdr || !out || !cap || !vmPageBytes || (vmPageBytes & (vmPageBytes - 1)) != 0)
-		return 0;
-	static constexpr uint32_t kSections[4] = {
-		kSwitchGpuPackHeap,
-		kSwitchGpuPackFastKeys,
-		kSwitchGpuPackPrograms,
-		kSwitchGpuPackVariants,
-	};
-	const uint64_t pageMask = vmPageBytes - 1;
-	const uint64_t fileEndAligned = (fileSize + pageMask) & ~pageMask;
-	uint32_t count = 0;
-	for (uint32_t s : kSections) {
-		if (count >= cap)
-			break;
-		const uint64_t secOff = hdr->section[s].offset;
-		const uint64_t secBytes = hdr->section[s].bytes;
-		const uint64_t t0 = hdr->tier0[s];
-		if (t0 >= secBytes)
-			continue;
-		const uint64_t rawStart = secOff + t0;
-		const uint64_t rawEnd = secOff + secBytes;
-		const uint64_t pageStart = rawStart & ~pageMask;
-		uint64_t pageEnd = (rawEnd + pageMask) & ~pageMask;
-		if (pageEnd > fileEndAligned)
-			pageEnd = fileEndAligned;
-		if (pageEnd > pageStart && pageStart < fileSize)
-			out[count++] = {pageStart, pageEnd - pageStart};
-	}
-	return count;
-}
-
 #if defined(KERNEL) || defined(SWITCH_GPU_PACK_IMAGE_HOST_TEST)
 struct SwitchGpuPackClient {
 	switch_gpu_mapping *gpuMapping;
@@ -211,7 +171,6 @@ void switch_gpu_pack_client_release_cpu(SwitchGpuPackClient *client);
 void switch_gpu_pack_client_unmap_gpu(tgm_vm *vm, SwitchGpuPackClient *client);
 
 extern "C" {
-void switch_gpu_boot_complete(void);
 void switch_gpu_pack_shutdown(void);
 }
 #endif
@@ -219,5 +178,4 @@ void switch_gpu_pack_shutdown(void);
 #ifdef SWITCH_GPU_PACK_IMAGE_HOST_TEST
 void switch_gpu_pack_image_reset_for_test(void);
 uint32_t switch_gpu_pack_image_refused_count_for_test(void);
-void switch_gpu_pack_image_wait_warm_for_test(void);
 #endif

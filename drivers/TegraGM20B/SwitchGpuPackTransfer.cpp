@@ -33,7 +33,6 @@ boolean_t upl_page_present(upl_page_info_t *upl, int index);
 boolean_t upl_valid_page(upl_page_info_t *upl, int index);
 // NOLINTNEXTLINE(readability-redundant-declaration)
 vfs_context_t vfs_context_kernel(void);
-extern int memorystatus_vm_pressure_level;
 }
 
 namespace
@@ -42,11 +41,6 @@ constexpr uint64_t kGpuPageBytes = 4096;
 constexpr uint64_t kDmaMask34 = 0x3ffffffffULL;
 constexpr uint64_t kContigMask = kDmaMask34 & ~(kSwitchGpuPackTierAlign - 1);
 constexpr uint32_t kMaxUplAttempts = 4;
-
-bool pressureActive()
-{
-	return __atomic_load_n(&memorystatus_vm_pressure_level, __ATOMIC_RELAXED) != 0;
-}
 
 bool collectDescriptorPages(IOMemoryDescriptor *md, uint64_t bytes, uint64_t *pas)
 {
@@ -337,71 +331,4 @@ bool switch_gpu_pack_stream_tier0(vnode_t vp, uint64_t heapOff, uint64_t tier0By
 	}
 	IODelete(srcPas, uint64_t, kMaxChunkGpuPages);
 	return ok;
-}
-
-void switch_gpu_pack_warm_tier1(const SwitchGpuPackHeader *hdr, uint64_t fileSize,
-				SwitchGpuPackWarmStats *stats)
-{
-	SwitchGpuPackByteRange ranges[4] = {};
-	const uint32_t rangeCount =
-		switch_gpu_pack_warm_ranges(hdr, fileSize, PAGE_SIZE, ranges, 4);
-	if (!rangeCount || switch_gpu_pack_shutdown_requested() || pressureActive())
-		return;
-	vfs_context_t ctx = vfs_context_kernel();
-	vnode_t vp = nullptr;
-	if (vnode_open(TGM_PACK_PATH, FREAD | O_NOFOLLOW_ANY, 0, 0, &vp, ctx) != 0 || !vp)
-		return;
-	struct vnode_attr va;
-	VATTR_INIT(&va);
-	VATTR_WANTED(&va, va_data_size);
-	bool keepGoing = vnode_isreg(vp) && vnode_getattr(vp, &va, ctx) == 0 &&
-			 VATTR_IS_SUPPORTED(&va, va_data_size) && va.va_data_size >= fileSize;
-	for (uint32_t r = 0; keepGoing && r < rangeCount; ++r) {
-		const uint64_t end = ranges[r].offset + ranges[r].bytes;
-		for (uint64_t off = ranges[r].offset; keepGoing && off < end;) {
-			if (switch_gpu_pack_shutdown_requested() || pressureActive()) {
-				keepGoing = false;
-				break;
-			}
-			const uint64_t len = end - off < kSwitchGpuPackTransferBytes
-						     ? end - off
-						     : kSwitchGpuPackTransferBytes;
-#if TGM_STATS
-			upl_t probeUpl = nullptr;
-			upl_page_info_t *probePl = nullptr;
-			uint64_t chunkResident = 0;
-			if (ubc_create_upl_external(vp, off_t(off), int(len), &probeUpl, &probePl,
-						    UPL_COPYOUT_FROM | UPL_SET_LITE |
-							    UPL_NOBLOCK) == KERN_SUCCESS &&
-			    probeUpl) {
-				const uint32_t vmPages = uint32_t(len / PAGE_SIZE);
-				for (uint32_t p = 0; probePl && p < vmPages; ++p)
-					if (upl_page_present(probePl, int(p)))
-						chunkResident += PAGE_SIZE;
-				ubc_upl_commit_range(probeUpl, 0, upl_size_t(len),
-						     UPL_COMMIT_FREE_ON_EMPTY |
-							     UPL_COMMIT_CLEAR_PRECIOUS);
-			}
-			stats->residentBytes += chunkResident;
-			if (chunkResident < len) {
-				int pagerErr = 0;
-				const int rc = vnode_pagein(vp, nullptr, 0, off, upl_size_t(len),
-							    UPL_IOSYNC, &pagerErr);
-				if (rc != 0 || pagerErr != 0)
-					keepGoing = false;
-				else
-					stats->readBytes += len - chunkResident;
-			}
-#else
-			(void)stats;
-			int pagerErr = 0;
-			const int rc = vnode_pagein(vp, nullptr, 0, off, upl_size_t(len),
-						    UPL_IOSYNC, &pagerErr);
-			if (rc != 0 || pagerErr != 0)
-				keepGoing = false;
-#endif
-			off += len;
-		}
-	}
-	vnode_close(vp, FREAD, ctx);
 }
