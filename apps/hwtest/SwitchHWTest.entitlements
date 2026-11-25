@@ -29,6 +29,7 @@
 		<string>/private/var/mobile/Library/Logs/CrashReporter/</string>
 		<string>/private/var/Switch/icon-cache-gpu</string>
 		<string>/private/var/Switch/icon-cache-reset</string>
+		<string>/private/var/Switch/icon-cache-restored</string>
 	</array>
 	<key>com.apple.security.exception.files.absolute-path.read-write</key>
 	<array>
