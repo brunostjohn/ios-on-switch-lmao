@@ -580,9 +580,16 @@ TEST(DeviceTiledCacheSize, DynamicTileSizeTracksPassFootprintAndShadowCaches)
     EXPECT_EQ(runPass(bgra8, nullptr), (std::vector<uint32_t>{128u | (128u << 16)}));
 
     EXPECT_EQ(runPass(ms4Color, &ms4Depth), (std::vector<uint32_t>{32u | (32u << 16)}));
-    {
+    // A clear-only pass of a 64x64 area over a stored 128x128 BGRA8 and a 128x128 depth: its colour's clear by a pass of
+    // its own (the whole attachment) at the colour's tile size, then a depth kept by the pass cleared over the area at the
+    // pass's, or a stored one cleared whole by a pass of its own at the zeta's and the pass's targets then set at the
+    // pass's. The tile size and CLEAR_SURFACE's words in order.
+    const auto clearOnly = [&](bool stored) {
+        std::vector<std::pair<uint32_t, uint32_t>> events;
         gm20b::CommandBuffer *cb = dev.begin();
-        ASSERT_NE(cb, nullptr);
+        EXPECT_NE(cb, nullptr);
+        if (!cb)
+            return events;
         gm20b::PassDesc pass;
         pass.color[0].texture = &bgra8;
         pass.color[0].load = gm20b::ColorAttachment::Clear;
@@ -590,15 +597,16 @@ TEST(DeviceTiledCacheSize, DynamicTileSizeTracksPassFootprintAndShadowCaches)
         pass.count = 1;
         pass.depthStencil.texture = &depth;
         pass.depthStencil.clearDepth = true;
-        pass.depthStencil.stored = false;
+        pass.depthStencil.stored = stored;
         pass.width = 64;
         pass.height = 64;
         gm20b::RenderEncoder *e = cb->render(pass);
-        ASSERT_NE(e, nullptr);
+        EXPECT_NE(e, nullptr);
+        if (!e)
+            return events;
         e->end();
         uint32_t seqno = 0;
-        ASSERT_TRUE(cb->commit(seqno));
-        std::vector<std::pair<uint32_t, uint32_t>> events;
+        EXPECT_TRUE(cb->commit(seqno));
         const std::vector<uint32_t> &words = kernel_model::model.jobs.back().words;
         for (size_t at = 0; at < words.size();) {
             const uint32_t h = words[at++], form = h >> 29, count = (h >> 16) & 0x1fff, subc = (h >> 13) & 7,
@@ -616,12 +624,19 @@ TEST(DeviceTiledCacheSize, DynamicTileSizeTracksPassFootprintAndShadowCaches)
                     events.emplace_back(m, words[at]);
             }
         }
-        ASSERT_GE(events.size(), 4u);
-        EXPECT_EQ(events[0], (std::pair<uint32_t, uint32_t>{kTileSize, 128u | (128u << 16)}));
-        EXPECT_EQ(events[1].first, uint32_t(NVB197_CLEAR_SURFACE));
-        EXPECT_EQ(events[2], (std::pair<uint32_t, uint32_t>{kTileSize, 64u | (64u << 16)}));
-        EXPECT_EQ(events[3].first, uint32_t(NVB197_CLEAR_SURFACE));
-    }
+        return events;
+    };
+    using Event = std::pair<uint32_t, uint32_t>;
+    constexpr uint32_t kClear = NVB197_CLEAR_SURFACE, kColourClear = 0x3c, kDepthClear = 1;
+    EXPECT_EQ(clearOnly(false), (std::vector<Event>{{kTileSize, 128u | (128u << 16)},
+                                                     {kClear, kColourClear},
+                                                     {kTileSize, 64u | (64u << 16)},
+                                                     {kClear, kDepthClear}}));
+    EXPECT_EQ(clearOnly(true), (std::vector<Event>{{kTileSize, 128u | (128u << 16)},
+                                                    {kClear, kColourClear},
+                                                    {kTileSize, 64u | (128u << 16)},
+                                                    {kClear, kDepthClear},
+                                                    {kTileSize, 64u | (64u << 16)}}));
 
     dev.destroyTexture(ms4Depth);
     dev.destroyTexture(ms4Color);

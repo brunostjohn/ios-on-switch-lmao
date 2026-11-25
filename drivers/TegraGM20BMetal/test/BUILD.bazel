@@ -663,6 +663,22 @@ device_test(
     ],
 )
 
+# A clear-only pass's Clear of a stored depth past its render area: the texture's own layers, a four-sample zeta's sample
+# layout, a turned pass's plane, and the zcull region the in-area clear initialises
+device_test(
+    name = "device_clear_only_zeta_test",
+    srcs = [
+        "device_clear_only_zeta_test.cpp",
+        "device_forms.h",
+        "//drivers/TegraGM20BMetal:area_load.cpp",
+        "//drivers/TegraGM20BMetal:reach.cpp",
+        "//drivers/TegraGM20BMetal:stencil_bits.cpp",
+        "//drivers/TegraGM20BMetal:turn_copy.cpp",
+        "//drivers/TegraGM20BMetal:turned_pass.cpp",
+        "//drivers/TegraGM20BMetal:zeta_colour.cpp",
+    ],
+)
+
 device_test(
     name = "device_pass_layers_test",
     srcs = [

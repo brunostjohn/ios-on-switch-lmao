@@ -221,7 +221,7 @@ void RenderEncoder::end()
                           kTurnWordsMethods + uint32_t(restore.size()) + kSpanMarkWords +
                           startStampCount_ * counters::kTimestampWords + kDrawStampWords +
                           (separate_.stencil ? 64 + 128 * layers : 0) + (zetaShadowOf_ ? zetaShadowWords(layers) : 0) +
-                          (rasterSamples_ > samples_ ? kSampleWords + kTirWords + 16 : 0) + kTimedPassWords;
+                          (rasterSamples_ > samples_ ? 3 * kSampleWords + kTirWords + 16 : 0) + kTimedPassWords;
     const uint32_t totalRoom = room + (uint32_t(cl.size()) + 3) * kTiledCacheSizeWords + 2 * kTiledCacheFlushWords;
     uint64_t va;
     uint32_t *start = reinterpret_cast<uint32_t *>(d.alloc(d.push_, totalRoom * 4, 256, va));
@@ -308,19 +308,31 @@ void RenderEncoder::end()
     const DepthStencilAttachment &zs = pass_.depthStencil;
     uint32_t ownZetaCleared = 0;
     if (!called_ && !pass_.drawn) {
+        bool zetaLayout = false;
         const auto ownZetaClear = [&](const Texture &t, uint32_t bits) {
-            if (!bits || (t.width <= areaW_ && t.height <= areaH_))
+            // a turned pass's zeta is a stand-in of its plane (turned_pass.h): the pass's frame turned
+            const Rotation frame = rot_.turned() ? rot_ : Rotation{0, t.width, t.height};
+            if (!bits || (frame.width <= areaW_ && frame.height <= areaH_))
                 return false;
+            const uint32_t zetaLayers = std::min(layers, std::max(t.layers, 1u));
             cb_->use(t, true);
-            const Rect r = planeRect(0, 0, t.width, t.height);
+            // a mixed pass's four-sample zeta under its own sample layout (the prologue left the colour's), and outside
+            // the zcull region the previous pass left active
+            if (rasterSamples_ > samples_ && !zetaLayout) {
+                sampleWords(p, t.samples, d.root_.va, pass_.positions, rot_);
+                zetaLayout = true;
+            }
+            if (d.zcullOn_)
+                zcullOffWords(p);
+            const Rect r = planeRect(0, 0, frame.width, frame.height);
             kit(p, switch_gm20b_render_area, 0u, r.x1, r.y1);
-            zetaTargetWords(p, &t, layers);
+            zetaTargetWords(p, &t, zetaLayers);
             tiledCacheSetSize(p, d.k_.info(), tiledCacheTileSize(t.bpp * std::max<uint32_t>(t.samples, 1u)),
                               cb_->tiledCacheSize_);
             zetaClearValues(p, bits & 1, zs.depth, bits & 2, zs.stencil);
             if (bits & 1)
                 d.clearZbcDepth(t, true, zs.depth);
-            clearZeta(p, r, bits, 0, layers);
+            clearZeta(p, r, bits, 0, zetaLayers);
             cb_->tiledCacheDirty_ = true;
             own = true;
             return true;
@@ -333,9 +345,13 @@ void RenderEncoder::end()
         } else if (zs.texture && !zetaShadowOf_ && zs.stored) {
             const uint32_t bits = zetaClearBits(zs.clearDepth && zetaHasDepth(zs.texture->format),
                                                 zs.clearStencil && zetaHasStencil(zs.texture->format));
+            // a zcull candidate's depth is cleared again over the render area once its region is set, which that
+            // clear initialises (zcull_planes.h zcullBegin)
             if (ownZetaClear(*zs.texture, bits))
-                ownZetaCleared = bits;
+                ownZetaCleared = zcull_.candidate ? bits & ~1u : bits;
         }
+        if (zetaLayout)
+            sampleWords(p, samples_, d.root_.va, pass_.positions, rot_);
     }
     if (own) {
         if (flush) {
