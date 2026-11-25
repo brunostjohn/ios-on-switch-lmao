@@ -499,8 +499,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     const MixedDraw mixed = mixedDraw(*pl, ds_, pass_.depthStencil, samples_, rasterSamples_);
     if (mixed == MixedDraw::Refused) {
-        *why = "a four-sample state writing colour, depth or stencil and memory in a pass of one-sample colour beside a "
-               "four-sample depth: no draw of its samples 1-3 runs its memory writes once: skipped";
+        *why =
+            "a four-sample state writing colour, depth or stencil and memory in a pass of one-sample colour beside a "
+            "four-sample depth: no draw of its samples 1-3 runs its memory writes once: skipped";
         cb_->skipped = {RefSamples, pl->samples, samples_, pl->samplePasses};
         cb_->skips++;
         skipDraw_ = true;

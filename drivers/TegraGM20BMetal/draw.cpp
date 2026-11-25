@@ -150,11 +150,16 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
     // samples 1-3 write no colour: no fetch of a colour they wrote to order, so the plain draw
     const auto laterSamples = [&] {
-        drawLaterSamples(p_, [this] { reserve(); }, cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite,
-                         std::min(pass_.count, 8u), [&] {
-                             wholeDraw(*pl, false, first, count, instances, first, baseInstance);
-                             finishDraw(count, drawnInstances);
-                         });
+        drawLaterSamples(
+            p_,
+            [this] {
+                reserve();
+            },
+            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u),
+            [&] {
+                wholeDraw(*pl, false, first, count, instances, first, baseInstance);
+                finishDraw(count, drawnInstances);
+            });
     };
     bool wholeQuad = instances == 1 && written_.lastNonOverlappingQuad();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -413,11 +418,16 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     const bool split = mixedDraw(*pl, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split;
     const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
     const auto laterSamples = [&] {
-        drawLaterSamples(p_, [this] { reserve(); }, cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite,
-                         std::min(pass_.count, 8u), [&] {
-                             wholeDraw(*pl, true, 0, count, instances, uint32_t(baseVertex), baseInstance);
-                             finishDraw(count, drawnInstances);
-                         });
+        drawLaterSamples(
+            p_,
+            [this] {
+                reserve();
+            },
+            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u),
+            [&] {
+                wholeDraw(*pl, true, 0, count, instances, uint32_t(baseVertex), baseInstance);
+                finishDraw(count, drawnInstances);
+            });
     };
     bool wholeQuad = instances == 1 && written_.lastNonOverlappingQuad();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -511,16 +521,21 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     }
     argumentWords();
     if (mixedDraw(pl, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split)
-        drawLaterSamples(p_, [this] { reserve(); }, cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite,
-                         std::min(pass_.count, 8u), [&] {
-                             if (p_.room() < 1 + bytes / 4)
-                                 reserve();
-                             if (amplifies())
-                                 mme::amplifyHeader(p_, indexed);
-                             else
-                                 mme::indirectHeader(p_, indexed);
-                             argumentWords();
-                         });
+        drawLaterSamples(
+            p_,
+            [this] {
+                reserve();
+            },
+            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u),
+            [&] {
+                if (p_.room() < 1 + bytes / 4)
+                    reserve();
+                if (amplifies())
+                    mme::amplifyHeader(p_, indexed);
+                else
+                    mme::indirectHeader(p_, indexed);
+                argumentWords();
+            });
     params_.unknown = true;
     cb_->draws += amplifies() ? amplifications_ : 1;
     finishDraw(0, 0, true);
@@ -654,8 +669,12 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
         mme::fetchCommands(p_, false);
     // the commands again for samples 1-3, which write no colour: drawn whole, not a primitive at a time
     if (mixedDraw(pl, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split)
-        drawLaterSamples(p_, [this] { reserve(); }, cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite,
-                         std::min(pass_.count, 8u), commands);
+        drawLaterSamples(
+            p_,
+            [this] {
+                reserve();
+            },
+            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u), commands);
     if (patches)
         icbPatchesDone();
     // the commands set the polygon offset of their own kinds (icb::polygonOffset)

@@ -626,12 +626,14 @@ TEST_F(FacadeZetaPass, ADepthStencilTextureAttachedAsDepthAloneTestsAStencilOfIt
     const auto setState = ^(id<MTLRenderCommandEncoder> e) {
         [e setDepthStencilState:state];
     };
+
     struct Case {
         const char *name;
         MTLLoadAction load;
         NSUInteger width;
         size_t conversionsIn;
     };
+
     for (const Case &c : {Case{"loaded", MTLLoadActionLoad, 0, 1}, Case{"cleared whole", MTLLoadActionClear, 0, 0},
                           Case{"cleared over part", MTLLoadActionClear, 16, 1}}) {
         SCOPED_TRACE(c.name);

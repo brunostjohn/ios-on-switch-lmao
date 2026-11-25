@@ -205,8 +205,8 @@ bool SwitchMetalRangeEncode::depth16Zeta(const SwitchMetalPass &pass, gm20b::Pas
 {
     const gm20b::Texture &z = *p.separate.depth;
     const bool depth16 = z.format == MTLPixelFormatDepth16Unorm;
-    if (!depth16 && !(convertDepth32 && (z.format == MTLPixelFormatDepth32Float ||
-                                         z.format == MTLPixelFormatDepth32Float_Stencil8)))
+    if (!depth16 && !(convertDepth32 &&
+                      (z.format == MTLPixelFormatDepth32Float || z.format == MTLPixelFormatDepth32Float_Stencil8)))
         return true;
     gm20b::Texture *scratch = rc_->turnScratch(gm20b::kZetaFormat, z.width, z.height, gm20b::kDepthConvertTag,
                                                z.samples, std::max<uint32_t>(pass.layers, 1));
@@ -216,8 +216,7 @@ bool SwitchMetalRangeEncode::depth16Zeta(const SwitchMetalPass &pass, gm20b::Pas
         gm20bPassWorkFails(cb_, ahead_, noScratch, MTLCommandBufferErrorOutOfMemory);
         return fail(PredEncPassRender, noScratch, z.width);
     }
-    const bool convertIn =
-        pass.depthLoad == MTLLoadActionLoad || (convertDepth32 && depthKeptPastArea(pass, p, z));
+    const bool convertIn = pass.depthLoad == MTLLoadActionLoad || (convertDepth32 && depthKeptPastArea(pass, p, z));
     if (convertIn && !rc_->depthConvert(*scratch, z, why_)) {
         gm20bPassWorkFails(cb_, ahead_, *why_, MTLCommandBufferErrorInternal);
         return fail(PredEncPassRender, *why_, z.width);

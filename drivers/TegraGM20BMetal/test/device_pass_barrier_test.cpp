@@ -629,14 +629,14 @@ TEST(DeviceTiledCacheSize, DynamicTileSizeTracksPassFootprintAndShadowCaches)
     using Event = std::pair<uint32_t, uint32_t>;
     constexpr uint32_t kClear = NVB197_CLEAR_SURFACE, kColourClear = 0x3c, kDepthClear = 1;
     EXPECT_EQ(clearOnly(false), (std::vector<Event>{{kTileSize, 128u | (128u << 16)},
-                                                     {kClear, kColourClear},
-                                                     {kTileSize, 64u | (64u << 16)},
-                                                     {kClear, kDepthClear}}));
-    EXPECT_EQ(clearOnly(true), (std::vector<Event>{{kTileSize, 128u | (128u << 16)},
                                                     {kClear, kColourClear},
-                                                    {kTileSize, 64u | (128u << 16)},
-                                                    {kClear, kDepthClear},
-                                                    {kTileSize, 64u | (64u << 16)}}));
+                                                    {kTileSize, 64u | (64u << 16)},
+                                                    {kClear, kDepthClear}}));
+    EXPECT_EQ(clearOnly(true), (std::vector<Event>{{kTileSize, 128u | (128u << 16)},
+                                                   {kClear, kColourClear},
+                                                   {kTileSize, 64u | (128u << 16)},
+                                                   {kClear, kDepthClear},
+                                                   {kTileSize, 64u | (64u << 16)}}));
 
     dev.destroyTexture(ms4Depth);
     dev.destroyTexture(ms4Color);
