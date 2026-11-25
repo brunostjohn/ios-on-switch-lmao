@@ -575,6 +575,16 @@ public:
         return privateMoveDue_.load(std::memory_order_relaxed);
     }
 
+    // The submit worker's, between its submissions (or a caller excluding them): one job zeroing every Shared buffer
+    // span freed since the last (scrubs.cpp), the spans earlier jobs zeroed back in their chunks first; `wait`: until this
+    // job completed and its spans are back too (the idle give-back, before trim). False: a job was due and not made.
+    bool scrubFreed(bool wait);
+
+    bool scrubDue() const
+    {
+        return scrubDue_.load(std::memory_order_relaxed);
+    }
+
     // The submit worker's look, where privateMoveDue: the flag cleared, and `take(owner)` for each texture ready memory
     // serves now, called under lock_, where an owner whose want is there is not freed yet (destroyTexture erases it)
     void privateMoves(void (*take)(void *owner));
@@ -1732,7 +1742,7 @@ private:
     // pooled surface every frame after it drops the last, and an import made again is bound, untiled, cleaned and laid
     // out again (boot 21: 3.4-4 ms of each app-close frame). Oldest first, at most kKeptImports and kKeptImportBytes;
     // trim (idle, memory pressure) gives them all back. Each holds its surface (Import::owner) until then.
-    static constexpr size_t kKeptImports = 8;
+    static constexpr size_t kKeptImports = 32;
     static constexpr uint64_t kKeptImportBytes = 64ull << 20;
     std::vector<Import *> keptImports_;
     uint64_t keptImportBytes_ = 0;
@@ -1838,6 +1848,21 @@ private:
     std::vector<Chunk> wcChunks_;
     // separate VOL=1 WC chunks for streaming shared buffers so shared textures in wcChunks_ stay L2-cached
     std::vector<Chunk> volatileWcChunks_;
+
+    // A freed span of a VOL=1 write-combined chunk (Shared buffers' alone), counted in its chunk's used bytes until the
+    // copy engine has zeroed it: wanted, then scrubbing in the job `seqno` on channel `generation`. lock_
+    struct Scrub {
+        uint32_t chunk = 0;
+        uint64_t offset = 0, bytes = 0, va = 0;
+        uint32_t seqno = 0;
+        uint64_t generation = 0;
+    };
+
+    std::vector<Scrub> scrubWanted_, scrubbing_;
+    std::atomic<bool> scrubDue_{false};
+    // lock_ held. Null `deferred`: an emptied chunk is kept (the allocation that asked will use it)
+    void retireScrubs(DeferredFrees *deferred);
+    void scrubbedFree(const Scrub &s, DeferredFrees *deferred);
     bool wcPoolAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &pool, uint64_t bytes, bool gpuVolatile,
                      Span &s, bool *dirty = nullptr);
     void wcPoolFree(std::vector<Chunk> &pool, Span &s, DeferredFrees &deferred);

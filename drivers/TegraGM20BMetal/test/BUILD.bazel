@@ -239,6 +239,7 @@ host_library(
         "pack",
         "parked_arena",
         "parked_chunks",
+        "scrubs",
         "pass_backings",
         "pass_begin",
         "pass_clears",
@@ -1007,6 +1008,14 @@ device_test(
     name = "device_fresh_fill_test",
     srcs = [
         "device_fresh_fill_test.cpp",
+    ],
+    deps = [":mme_simulator"],
+)
+
+device_test(
+    name = "device_scrub_test",
+    srcs = [
+        "device_scrub_test.cpp",
     ],
     deps = [":mme_simulator"],
 )
@@ -4769,6 +4778,7 @@ METAL_HOST_UNITS = ["//drivers/TegraGM20BMetal:fx/" + f for f in [
     "pack",
     "parked_arena",
     "parked_chunks",
+    "scrubs",
     "pass_backings",
     "pass_begin",
     "pass_clears",
