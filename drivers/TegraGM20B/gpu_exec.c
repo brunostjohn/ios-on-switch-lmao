@@ -106,6 +106,10 @@ static u8 chan_note_foreign(struct tgm_chan *chan,
 			    source.vm != chan->vm) {
 				flags |= TGM_STAT_FOREIGN_FENCE;
 				fences++;
+				nvxnu_kdebug(SWITCH_KDBG_GPU_WAIT,
+					     chan->chid | (u64)SWITCH_GPU_ENGINE_GM20B << 16 |
+						     (u64)source.chid << 32,
+					     dependencies[i].value, chan->submitted);
 			}
 		} else if (dependencies[i].engine == SWITCH_GPU_ENGINE_PROMISE) {
 			if (dependencies[i].queue / TGM_FENCE_SLOT != own_slot) {
@@ -117,6 +121,9 @@ static u8 chan_note_foreign(struct tgm_chan *chan,
 			   dependencies[i].engine == SWITCH_GPU_ENGINE_DISPLAY ||
 			   dependencies[i].engine == SWITCH_GPU_ENGINE_NVENC) {
 			host1x++;
+			nvxnu_kdebug(SWITCH_KDBG_GPU_WAIT,
+				     chan->chid | (u64)dependencies[i].engine << 16,
+				     dependencies[i].value, chan->submitted);
 		}
 	}
 	for (i = 0; i < word_wait_count; ++i) {

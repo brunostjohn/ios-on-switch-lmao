@@ -14,6 +14,10 @@
 
 #define SWITCH_KDBG_GPU_JOB \
 	0x3e8 /* kernel/switch/include/switch/recorder.h gives the job ring 0x3e8-0x3ef */
+/* A compositor job kicked behind a dependency not yet settled, one event each (TGM_STATS, chan_note_foreign): arg1 the
+ * waiting channel | the dependency's engine (SwitchGpuBacking.h) << 16 | its GM20B channel << 32 (0 for another
+ * engine), arg2 the value it waits for, arg3 the waiting channel's last submitted seqno. */
+#define SWITCH_KDBG_GPU_WAIT 0x3e9
 
 static inline void switch_gpu_job_ring(const struct tgm_chan *chan, u32 seqno, u64 start, u64 end)
 {
