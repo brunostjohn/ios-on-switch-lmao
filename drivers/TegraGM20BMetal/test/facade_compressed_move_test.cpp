@@ -103,12 +103,10 @@ TEST(GM20BFacadeCompressedMove, ASingleChannelWordTargetTakesItsTexelSizesKind)
         kernel_model::model.infoFlags |= TegraGM20BInfoCompression;
     }
     ASSERT_TRUE(opened().device != nil);
-    for (MTLPixelFormat format : {MTLPixelFormatR32Uint, MTLPixelFormatR32Sint, MTLPixelFormatR32Float,
-                                  MTLPixelFormatBGRA8Unorm}) {
-        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
-                                                                                      width:200
-                                                                                     height:120
-                                                                                  mipmapped:NO];
+    for (MTLPixelFormat format :
+         {MTLPixelFormatR32Uint, MTLPixelFormatR32Sint, MTLPixelFormatR32Float, MTLPixelFormatBGRA8Unorm}) {
+        MTLTextureDescriptor *td =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:200 height:120 mipmapped:NO];
         td.storageMode = MTLStorageModePrivate;
         td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
         EXPECT_EQ(privateCompressedKind(td), gm20b::kCompKindC32) << format;

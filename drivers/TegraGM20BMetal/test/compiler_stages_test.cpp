@@ -334,12 +334,12 @@ TEST_F(CompilerStages, StandInFormatKernelReadsBindTheirOwnHeadersOrCodes)
         uint32_t window;
         gm20b::SlotView view;
     } cases[] = {
-        {44, 0x54e24912u, gm20b::SlotView::Own},                            // BGRA4Unorm
-        {84, 0x2b1a4908u, gm20b::SlotView::Own},                            // ARGB8Unorm
+        {44, 0x54e24912u, gm20b::SlotView::Own},                             // BGRA4Unorm
+        {84, 0x2b1a4908u, gm20b::SlotView::Own},                             // ARGB8Unorm
         {85, 0x2b1a4908u | gm20b::kKernelWindowSrgb, gm20b::SlotView::Own},  // ARGB8Unorm_sRGB
         {11, 0x7012491du | gm20b::kKernelWindowSrgb, gm20b::SlotView::Own},  // R8Unorm_sRGB
-        {553, 0x58d49203u, gm20b::SlotView::Own},                           // BGRA10_XR_sRGB
-        {555, 0x6014920fu, gm20b::SlotView::Own},                           // BGR10_XR_sRGB
+        {553, 0x58d49203u, gm20b::SlotView::Own},                            // BGRA10_XR_sRGB
+        {555, 0x6014920fu, gm20b::SlotView::Own},                            // BGR10_XR_sRGB
     };
 
     for (const auto &c : cases) {
