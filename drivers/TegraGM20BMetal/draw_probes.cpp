@@ -172,7 +172,8 @@ void RenderEncoder::probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t p
 
 // The glass probe's line for a Core Animation draw (glass_probe.h): the form drawn as probeDraw names it, each
 // colour attachment as the pass bound it (format/bytes a texel/samples/layout[+comp][+ml]/size/load), the textures its
-// record samples and its uniform buffers
+// record samples and the window of each uniform buffer its program reads (Core Animation binds one ring of every draw's
+// uniforms: past the window it holds other draws')
 void RenderEncoder::probeGlassDraw(const Pipeline &bound, const Pipeline &drawn, const PixelBox &limit)
 {
     const PackPipeline &rec = *drawn.rec;
@@ -206,7 +207,9 @@ void RenderEncoder::probeGlassDraw(const Pipeline &bound, const Pipeline &drawn,
         if (const PackEntry &e = drawn.entries[k]; e.kind == EntryUbo && !bufferStorage(e)) {
             const Bound &b = bufs_[e.stage][e.slot];
             at += at ? size_t(snprintf(uniforms + at, sizeof uniforms - at, " ")) : 0;
-            const int n = glassProbeUniform(uniforms + at, sizeof uniforms - at, e.stage, e.slot, b.cpu, b.size);
+            const uint64_t window = (uint32_t(e.sampler) | uint32_t(e.pad) << 8) * 16;
+            const int n = glassProbeUniform(uniforms + at, sizeof uniforms - at, e.stage, e.slot, b.cpu,
+                                            window ? std::min<uint64_t>(window, b.size) : b.size);
             at += std::min(sizeof uniforms - at - 1, size_t(std::max(n, 0)));
         }
     char taps[160] = "";

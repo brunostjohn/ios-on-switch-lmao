@@ -2,8 +2,9 @@
 // DEVELOPMENT: what each Core Animation draw reads while HW Test's glass tests hold the glass probe armed in every
 // process (com.brunostjohn.switch.debug.glass-probe, TegraGM20BMetalGlassProbe.mm). A draw's line (gpu.cpp probeGlassDraw)
 // names its state, its program's form, its colour attachments, each texture it samples with whether this process ever
-// wrote it (a pass, copy, dispatch or upload) and the non-finite floats and halves in its uniform buffers' CPU view. A
-// command buffer logs each distinct line once; the window ends after kGlassProbeMs or kGlassProbeLines lines.
+// wrote it (a pass, copy, dispatch or upload) and the non-finite floats and halves in the CPU's view of the window of
+// each uniform buffer its program reads. A command buffer logs each distinct line once; the window ends after
+// kGlassProbeMs or kGlassProbeLines lines.
 #pragma once
 #include <mach/mach_time.h>
 #include <algorithm>
