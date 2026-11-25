@@ -42,8 +42,7 @@ TEST(NVJPGLayoutWiring, TheSeedMovesBeforeTheLayoutIsReadAndTheHoldOutlastsTheDe
     EXPECT_THAT(direct, Not(HasSubstr("unhold")));
 }
 
-// A block-linear destination's plan writes whole block rows, so its sink is sized from the plan the route leaves, and
-// only the run itself holds the job lock.
+// The destination is mapped for the plan the route leaves, and only the run itself holds the job lock.
 TEST(NVJPGLayoutWiring, TheDestinationIsMappedForThePlanTheRouteLeavesAndOnlyTheRunHoldsTheJobLock)
 {
     const std::string direct =
@@ -55,7 +54,6 @@ TEST(NVJPGLayoutWiring, TheDestinationIsMappedForThePlanTheRouteLeavesAndOnlyThe
     ASSERT_NE(map, std::string::npos);
     ASSERT_NE(lock, std::string::npos);
     ASSERT_NE(unlock, std::string::npos);
-    EXPECT_LT(direct.find("if (p.target.blockLinear)\n        extent = target.count;"), map);
     EXPECT_LT(map, lock);
     EXPECT_EQ(direct.substr(lock, unlock - lock),
               "tegra_nvjpg_lock();\n    const int error = tegra_nvjpg_run(&job->engine, &status, &busy);\n    ");

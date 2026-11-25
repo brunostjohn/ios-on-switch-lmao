@@ -767,31 +767,30 @@ TEST_F(NVJPGUserClient, UnalignedStrideExecutesViaCopyEngineRepackBehindNVJPGFen
     retire(&d.backing);
 }
 
-// A GM20B block-linear destination whose unrounded IOSurface length is shorter than its block rows, while its
-// page-rounded backing pages hold the blocks, decodes directly into those backing pages without refusing.
-TEST_F(NVJPGUserClient, BlockLinearDestinationUsesBackingPageExtentDirectly)
+// A GM20B block-linear destination the copy engine cannot reach: NVJPG writes rows only (the T210 wrote rows when told
+// tile_mode 2), so the decode is refused, never written as rows into the blocks.
+TEST_F(NVJPGUserClient, ABlockLinearDestinationTheCopyEngineCannotReachIsRefused)
 {
-    Destination d(72, 0x97000000);  // 294,912 bytes (16 KiB aligned); 260x260 BGRA alloc is 282,880, BL0 is 287,232
+    Destination d(72, 0x97000000);
     gSurfaceTiled = 1;
     gSurfaceLayout = {260, 260, 4, 1088, 264, 0, 4096, 287232};
     Job *job = decodeInto(d, 282880, 1088ULL * 272);
     job->request.base.out_width = 260;
     job->request.base.out_height = 260;
-    job->plan.extent.rowBytes[0] = 1088;
-    job->plan.extent.rows[0] = 272;
-    EXPECT_EQ(engineRuns(job), kIOReturnIOError);
-    EXPECT_TRUE(gRefusals.empty());
+    const size_t streams = gEngine.streams.size();
+    EXPECT_EQ(engineRuns(job), kIOReturnUnsupported);
+    EXPECT_EQ(gEngine.streams.size(), streams) << "NVJPG never ran";
+    ASSERT_EQ(gRefusals.size(), 1u);
+    EXPECT_EQ(gRefusals.back(), "block-linear destination the copy engine cannot reach");
     EXPECT_TRUE(gCeCopies.empty());
-    ASSERT_NE(d.mapping(), nullptr);
-    EXPECT_EQ(d.mapping()->count, 72u) << "maps all real backing pages, not truncated to unrounded alloc length";
-    EXPECT_EQ(gRoutes, std::vector<uint32_t>{TEGRA_NVJPG_ROUTE_BLOCKS});
     EXPECT_EQ(gHolds, 0);
+    EXPECT_EQ(d.mapping(), nullptr);
     retire(&d.backing);
 }
 
-// A tight block-linear destination whose blocks exceed even the backing's pages falls back to Copy Engine DMA repack
-// instead of refusing to CPU decode.
-TEST_F(NVJPGUserClient, TightBlockLinearDestinationFallsBackToCopyEngineRepack)
+// A block-linear destination: NVJPG writes its rows into the service's scratch and the copy engine writes the blocks,
+// with the layout held until it has
+TEST_F(NVJPGUserClient, ABlockLinearDestinationIsWrittenByTheCopyEngine)
 {
     Destination d(70, 0x98000000);  // 286,720 bytes < 287,232 BL0 block rows, >= 282,880 pitch picture
     IOMemoryDescriptor dstMem;

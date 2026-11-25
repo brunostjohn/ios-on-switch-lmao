@@ -21,10 +21,9 @@ typedef struct {
 
 enum {
     TEGRA_NVJPG_ROUTE_ROWS = 0,         // NVJPG writes the destination's rows
-    TEGRA_NVJPG_ROUTE_BLOCKS = 1,       // NVJPG writes the destination's blocks (tile_mode 2)
-    TEGRA_NVJPG_ROUTE_COPY_ROWS = 2,    // NVJPG writes scratch rows, the copy engine the destination's rows
-    TEGRA_NVJPG_ROUTE_COPY_BLOCKS = 3,  // NVJPG writes scratch rows, the copy engine the destination's blocks
-    TEGRA_NVJPG_ROUTE_COUNT = 4,
+    TEGRA_NVJPG_ROUTE_COPY_ROWS = 1,    // NVJPG writes scratch rows, the copy engine the destination's rows
+    TEGRA_NVJPG_ROUTE_COPY_BLOCKS = 2,  // NVJPG writes scratch rows, the copy engine the destination's blocks
+    TEGRA_NVJPG_ROUTE_COUNT = 3,
 };
 
 // The copy engine writes a block-linear side only whole (TegraGM20BCopy.cpp's layout): the plan's one copy must be the
@@ -36,13 +35,13 @@ static inline bool tegra_nvjpg_copy_covers_blocks(const TegraNVJPGPlan *p, const
 }
 
 // `p` (as tegra_nvjpg_plan left it, a single-surface plan: not VIC's re-pack) and its setup's output fields moved onto
-// the destination's layout `l`. `length` the destination's backing bytes, `sink` what may run past them, `maxRepack`
-// the copy engine's scratch, `copyEngine` whether the copy engine can reach the destination's memory. NULL with
-// *route, or why the destination's layout cannot be written.
+// the destination's layout `l`. NVJPG writes rows only (TegraNVJPGJpeg.h), so a destination GM20B laid out
+// block-linear takes them through the copy engine, which writes its blocks. `maxRepack` the copy engine's scratch,
+// `copyEngine` whether the copy engine can reach the destination's memory. NULL with *route, or why the destination's
+// layout cannot be written.
 static inline const char *tegra_nvjpg_route(const TegraNVJPGDecodeRequest *r, const TegraNVJPGSurface *d,
-                                            uint64_t length, uint64_t sink, uint64_t maxRepack, bool copyEngine,
-                                            const TegraNVJPGDestinationLayout *l, TegraNVJPGPlan *p,
-                                            nvjpg_dec_drv_pic_setup_s *s, uint32_t *route)
+                                            uint64_t maxRepack, bool copyEngine, const TegraNVJPGDestinationLayout *l,
+                                            TegraNVJPGPlan *p, nvjpg_dec_drv_pic_setup_s *s, uint32_t *route)
 {
     if (p->repack == TEGRA_NVJPG_REPACK_VIC)
         return "VIC's re-pack has no single destination layout to route";
@@ -55,19 +54,16 @@ static inline const char *tegra_nvjpg_route(const TegraNVJPGDecodeRequest *r, co
     if (l->compressed)
         return "compressed block-linear destination";
     *route = TEGRA_NVJPG_ROUTE_COPY_BLOCKS;
+    if (!copyEngine)
+        return "block-linear destination the copy engine cannot reach";
     if (p->repack == TEGRA_NVJPG_REPACK_CE)
-        return copyEngine && tegra_nvjpg_copy_covers_blocks(p, &l->layout)
+        return tegra_nvjpg_copy_covers_blocks(p, &l->layout)
                    ? NULL
                    : "copy-engine re-pack into part of a block-linear destination";
-    const char *why = tegra_nvjpg_plan_block_linear(r, length, sink, l->layout.row_bytes, l->layout.y_log2, p, s);
-    if (!why) {
-        *route = TEGRA_NVJPG_ROUTE_BLOCKS;
-        return NULL;
-    }
-    return copyEngine && tegra_nvjpg_plan_fallback_ce(r, d, maxRepack, true, l->layout.width, l->layout.height,
-                                                      l->layout.bpp, false, p, s)
+    return tegra_nvjpg_plan_fallback_ce(r, d, maxRepack, true, l->layout.width, l->layout.height, l->layout.bpp,
+                                        false, p, s)
                ? NULL
-               : why;
+               : "a picture that is not the whole of its block-linear destination, or past the copy engine's scratch";
 }
 
 #ifdef __cplusplus

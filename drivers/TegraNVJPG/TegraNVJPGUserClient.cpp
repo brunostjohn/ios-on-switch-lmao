@@ -240,10 +240,8 @@ const char *routeJob(Job *job, const SwitchNVJPGBacking &target, void **hold, ui
             layout.described && tegra_gm20b_surface_compressed && tegra_gm20b_surface_compressed(target.pages[0]);
     }
     const TegraNVJPGSurface d = surfaceDesc(job->dst.desc);
-    const uint64_t backingBytes =
-        SWITCH_MAX(job->dst.desc.length, static_cast<uint64_t>(target.count) << SWITCH_HW_PAGE_SHIFT);
-    const char *why = tegra_nvjpg_route(&job->request.base, &d, backingBytes, kSinkBytes, kTegraNVJPGOutputBytes,
-                                        job->dst.memory != nullptr, &layout, &job->plan, &job->engine.setup, route);
+    const char *why = tegra_nvjpg_route(&job->request.base, &d, kTegraNVJPGOutputBytes, job->dst.memory != nullptr,
+                                        &layout, &job->plan, &job->engine.setup, route);
 #if TEGRA_NVJPG_STATS
     if (!why)
         tegra_nvjpg_note_route(*route, layout.held, layout.layout.row_bytes, layout.layout.y_log2, target.count,
@@ -295,8 +293,6 @@ IOReturn runRepack(Job *job)
 IOReturn runDirect(Job *job, const SwitchNVJPGBacking &target, uint32_t extent)
 {
     const TegraNVJPGPlan &p = job->plan;
-    if (p.target.blockLinear)
-        extent = target.count;
     const char *why = nullptr;
     const SwitchNVJPGMapping *mapping = switch_nvjpg_mapping(target, extent, p.writeEnd, &why, job->pid);
     if (!mapping) {
