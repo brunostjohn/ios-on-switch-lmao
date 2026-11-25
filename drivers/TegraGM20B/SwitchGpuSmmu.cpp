@@ -75,7 +75,7 @@ extern "C" int switch_gpu_smmu_ram_ready(void)
 
 extern "C" int switch_gpu_smmu_ready(void)
 {
-	return 0;
+	return switch_gpu_smmu_ram_ready();
 }
 
 extern "C" uint64_t switch_gpu_smmu_map_reserved(const uint64_t *pas, uint32_t npages,
