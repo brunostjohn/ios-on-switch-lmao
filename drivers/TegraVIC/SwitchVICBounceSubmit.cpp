@@ -161,8 +161,12 @@ int switch_vic_bounce_submit(const TegraVICSurface *source, const TegraVICSurfac
     }
     auto &sourceAccess = work->access[alias ? 1 : 0];
     const TegraVICTraits *traits = tegra_vic_traits();
+    SwitchVICTiledDst tiledSrc = {};
+    const bool directTiledSrc =
+        plan->readsSource && !work->native.owner && !sharedDescriptor &&
+        switch_vic_tiled_src(source, sourceAccess.backing, sourceAccess.offset, traits, &tiledSrc);
     const bool bounceSrc =
-        plan->readsSource && !work->native.owner &&
+        plan->readsSource && !work->native.owner && !directTiledSrc &&
         (sharedDescriptor || tegra_vic_bounce_needed(&source->desc, tegra_vic_pitch_align(traits, true)) == 0 ||
          tiled(sourceAccess.backing));
     SwitchVICTiledDst tiledDst = {};
@@ -195,15 +199,19 @@ int switch_vic_bounce_submit(const TegraVICSurface *source, const TegraVICSurfac
     TegraVICImage src = {}, dst = {};
     const char *why = bounceDst ? tegra_vic_image_from(&destinationBuffer->desc, dstAddress, &dst)
                       : directTiledDst
-                          ? switch_vic_tiled_dst_image(destination, tiledDst, dstAddress, &dst)
+                          ? switch_vic_tiled_image(destination, tiledDst, dstAddress, &dst)
                           : tegra_vic_image_from(&destination->desc, dstAddress + work->access[1].offset, &dst);
     if (chromaSite)
         dst.chromaSite = chromaSite;
     if (!why && plan->readsSource) {
         const uint64_t address = switch_vic_mapping_address(bounceSrc ? sourceBuffer->mapping : work->maps[0]);
-        why = work->native.owner ? switch_native_vic_image(work->native, address, &src)
-                                 : tegra_vic_image_from(bounceSrc ? &sourceBuffer->desc : &source->desc,
-                                                        address + (bounceSrc ? 0 : sourceAccess.offset), &src);
+        if (work->native.owner)
+            why = switch_native_vic_image(work->native, address, &src);
+        else if (directTiledSrc)
+            why = switch_vic_tiled_image(source, tiledSrc, address, &src);
+        else
+            why = tegra_vic_image_from(bounceSrc ? &sourceBuffer->desc : &source->desc,
+                                       address + (bounceSrc ? 0 : sourceAccess.offset), &src);
     }
     for (uint32_t i = 0; !why && i < plan->count; ++i) {
         auto operation = plan->op[i];

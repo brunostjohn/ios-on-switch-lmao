@@ -464,6 +464,7 @@ typedef struct {
     uint32_t yccIn;              // what reading a 4:2:0 source was proven to do: TEGRA_VIC_YCC_IN_*
     uint32_t blockLinearIn;      // 1: a block-linear 4:2:0 source (NVDEC's layout) copies exactly into pitch linear
     uint32_t blockLinearOut;     // 1: an untransposed destination may be block linear (OutBlkKind 16Bx2)
+    uint32_t blockLinearRgbIn;   // 1: an RGB source in the GPU's block-linear layout is read in place
     uint32_t packedYcc;          // 1: packed 4:2:2 ('2vuy', 'yuvs') reads and writes one element a pixel
     uint32_t subRects;           // bit t: under transform t a destination rectangle inside a larger surface lands in
                                  // place (where the flips mirror is measured, not assumed); transform 0 always
@@ -496,7 +497,10 @@ static const TegraVICTraits kTegraVICTraits = {
     .yccIn = TEGRA_VIC_YCC_IN_RGB | TEGRA_VIC_YCC_IN_COPY,
     .blockLinearIn = 1,
     .blockLinearOut = 1,  // averne's nvtegra writes T210 VIC output in GENERIC_16Bx2: probe gpu.x1.vic_block_linear
-    .packedYcc = 1,       // one element a pixel, chroma bytes as TegraVICFormats.h names them: gpu.x1.vic_packed422
+    // The layout blockLinearOut writes and the GPU reads back, read the other way; the device run of a quarter-turned
+    // Metal layer (Maps) shows it.
+    .blockLinearRgbIn = 1,
+    .packedYcc = 1,  // one element a pixel, chroma bytes as TegraVICFormats.h names them: gpu.x1.vic_packed422
     .subRects = 0x41,
     .surfaceFlips = 1,
     .multiSlot = 1,  // probe gpu.x1.vic_compose: two slots compose bottom first (boots 19 and 21)
@@ -662,10 +666,12 @@ static inline const char *tegra_vic_build(const TegraVICImage *src, const TegraV
     if (!op->fill && op->transform && !t->surfaceFlips && !(t->subRects & (1u << op->transform)) &&
         (op->dstX || op->dstY || op->dstW != dst->width || op->dstH != dst->height))
         return "destination sub-rectangle this transform has not proven";
-    // NVDEC's pictures, the only block-linear sources the unit has run, are 4:2:0. An L8 source is such a picture's
-    // luma plane alone, the same GOBs (a 'v0a8' alpha plane: HW Test decode.hevc_alpha).
+    // NVDEC's pictures are 4:2:0; an L8 source is such a picture's luma plane alone, the same GOBs (a 'v0a8' alpha
+    // plane: HW Test decode.hevc_alpha). An RGB source is a GPU render target (switch_vic_tiled_src).
     if (!op->fill && src->blockLinear &&
-        (!t->blockLinearIn || !(src->format->subY || src->format->vic == TEGRA_VIC_T_L8)))
+        (src->format->kind == TEGRA_VIC_KIND_RGB
+             ? !t->blockLinearRgbIn
+             : !t->blockLinearIn || !(src->format->subY || src->format->vic == TEGRA_VIC_T_L8)))
         return "block-linear source this engine has not proven";
     if (!op->fill && src->format->kind != TEGRA_VIC_KIND_RGB) {
         const bool same = dst->format->kind == src->format->kind && src->standard == dst->standard &&
