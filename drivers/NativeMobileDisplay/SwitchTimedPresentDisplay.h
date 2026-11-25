@@ -5,6 +5,8 @@
 // SwitchRetireDisplay.h; under the gate.
 
 static constexpr uint64_t kTimedPresentHorizonNs = 1000000000ULL;
+// The kick's last answer from the gate: the head waits only for its requested presentation (kickAtIdleFrameEnd).
+static inline bool headHeldForTime = false;
 // The swap the gate holds, for frame info's count of timed swaps. Static: the instance is at the 16 KiB a kalloc_type
 // class may have.
 static inline const OriginalLegacySwapRequest *timedHeldRequest = nullptr;
@@ -42,6 +44,7 @@ bool presentNotDue(const OriginalLegacySwapRequest *request)
                                                horizon,
                                                submittedAt(request)};
     const auto decision = switch_timed_present::decide(requested, clock);
+    headHeldForTime = !switch_timed_present::due(decision);
 #if SWITCH_FRAME_TIMELINE
     unphasedRequest = decision == switch_timed_present::Decision::OrdinaryUnphased ? request : nullptr;
 #endif
