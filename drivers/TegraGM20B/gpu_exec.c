@@ -39,6 +39,16 @@ int tgm_chan_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 	return chan_room(chan, gpfifo_nr, push_nr);
 }
 
+static u64 chan_ring_position(struct tgm_chan *chan)
+{
+	return (u64)chan->chan.func->gpfifo.read_get(&chan->chan) << 32 | chan->chan.gpfifo.cur;
+}
+
+static u32 chan_done(const struct tgm_chan *chan)
+{
+	return chan->fence_cpu ? READ_ONCE(*chan->fence_cpu) : 0;
+}
+
 /* Room for gpfifo_nr entries and push_nr dwords, waited for by interrupt: every submission's GET report comes before its
  * fence's nonstall interrupt (chan_fence), whose pass ends in nvxnu_wake(), so nvif's own wait then finds the room at
  * once and never spins. Not the channel's word: a pass between the fence's release and the GET report finds no room,
@@ -49,6 +59,10 @@ int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 	u64 end = nvxnu_nanotime() + NSEC_PER_SEC;
 	int ret = 0;
 
+	if (chan_room(chan, gpfifo_nr, push_nr))
+		return 0;
+	nvxnu_kdebug(SWITCH_KDBG_GPU_ROOM, chan->chid, chan_ring_position(chan),
+		     (u64)chan->submitted << 32 | chan_done(chan));
 	for (;;) {
 		u32 seq = nvxnu_wake_seq();
 
@@ -61,6 +75,8 @@ int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 			break;
 		}
 	}
+	nvxnu_kdebug(SWITCH_KDBG_GPU_ROOM_DONE, chan->chid, chan_ring_position(chan),
+		     (u64)chan->submitted << 32 | (u32)ret);
 	return ret;
 }
 

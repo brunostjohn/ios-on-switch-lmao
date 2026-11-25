@@ -18,6 +18,11 @@
  * waiting channel | the dependency's engine (SwitchGpuBacking.h) << 16 | its GM20B channel << 32 (0 for another
  * engine), arg2 the value it waits for, arg3 the waiting channel's last submitted seqno. */
 #define SWITCH_KDBG_GPU_WAIT 0x3e9
+/* A submission waiting for room in its channel's ring (tgm_chan_wait_ready), at its start and its end: arg1 the
+ * channel, arg2 the ring's GET << 32 | its PUT, arg3 the channel's last submitted seqno << 32 | its last done (at the
+ * end: the wait's result in the low word instead). */
+#define SWITCH_KDBG_GPU_ROOM 0x3ea
+#define SWITCH_KDBG_GPU_ROOM_DONE 0x3eb
 
 static inline void switch_gpu_job_ring(const struct tgm_chan *chan, u32 seqno, u64 start, u64 end)
 {
