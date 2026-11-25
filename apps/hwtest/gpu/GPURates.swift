@@ -1,0 +1,284 @@
+import Foundation
+import HWTestCore
+import Metal
+
+/// The GPU's rates, one unit at a time (shaders/GPURates.metal): FMA issue, copy and read bandwidth by storage and by
+/// page spread, colour, blend, 4x MSAA and depth fill, bilinear texels, triangles drawn and clipped, and what a
+/// depth-hidden layer of an expensive program costs against a shaded one. Each arm is the fastest of `repeats` runs after
+/// a warm one, so a run a compositor frame preempted does not count.
+///
+/// `lane_mhz` is the FMA rate over GM20B's 256 lanes (2 SMMs of 128): the clock the lanes ran at if every cycle issued an
+/// FMA. The other arms' `_per_clk` rates divide by it. The kernel's stats line reports the programmed clock.
+public final class GPURates {
+    public struct Sizes: Sendable {
+        public var width = 1280, height = 720, layers = 16
+        public var aluThreads = 1 << 18, aluIterations: UInt32 = 256
+        public var bytes = 64 << 20, readThreads = 1 << 16
+        public var triangles = 1 << 20, heavyIterations: UInt32 = 64
+        public var repeats = 5
+
+        public init() {}
+
+        public static let host: Sizes = {
+            var s = Sizes()
+            s.width = 256
+            s.height = 128
+            s.layers = 2
+            s.aluThreads = 1 << 12
+            s.aluIterations = 16
+            s.bytes = 1 << 20
+            s.readThreads = 1 << 10
+            s.triangles = 1 << 12
+            s.heavyIterations = 4
+            s.repeats = 2
+            return s
+        }()
+    }
+
+    static let lanes = 256.0
+    static let pageBytes = 4096
+
+    let gpu: GPU
+    let s: Sizes
+    var metrics = Metrics()
+    var problems: [String] = []
+    var laneMhz = 0.0
+
+    init(_ gpu: GPU, _ s: Sizes) {
+        self.gpu = gpu
+        self.s = s
+    }
+
+    public static func run(_ gpu: GPU, _ s: Sizes = Sizes()) async throws -> SceneResult {
+        let b = GPURates(gpu, s)
+        try await b.alu()
+        try await b.bandwidth()
+        try await b.fill()
+        try await b.texels()
+        try await b.triangles()
+        try await b.hidden()
+        var r = SceneResult()
+        r.metrics = b.metrics
+        for p in b.problems { r.expect(false, p) }
+        return r
+    }
+
+    static func rate(_ count: Double, _ ms: Double) -> Double { ms > 0 ? count / (ms / 1000) : 0 }
+
+    func perClock(_ count: Double, _ ms: Double) -> Double {
+        laneMhz > 0 ? Self.rate(count, ms) / (laneMhz * 1e6) : 0
+    }
+
+    static func group(_ p: MTLComputePipelineState) -> MTLSize {
+        MTLSize(width: min(256, p.maxTotalThreadsPerThreadgroup), height: 1, depth: 1)
+    }
+
+    /// The warm run, then the fastest of `repeats` GPU times; 0 where a run had no GPU timestamps
+    func fastest(_ arm: String, _ encode: (MTLCommandBuffer) throws -> Void) async throws -> Double {
+        try await gpu.run(encode)
+        var best = Double.infinity
+        for _ in 0 ..< s.repeats {
+            let t = try await gpu.run(encode)
+            guard t.gpuTimed else {
+                problems.append("\(arm): no GPU timestamps")
+                return 0
+            }
+            best = min(best, t.gpuMilliseconds)
+        }
+        return best
+    }
+
+    func alu() async throws {
+        let fma = try gpu.compute("rates_fma")
+        let data = try gpu.buffer([Float](repeating: 0.25, count: s.aluThreads * 4))
+        let t = try await fastest("alu") { c in
+            var n = self.s.aluIterations
+            let e = c.makeComputeCommandEncoder()!
+            e.setComputePipelineState(fma)
+            e.setBuffer(data, offset: 0, index: 0)
+            e.setBytes(&n, length: 4, index: 1)
+            e.dispatchThreads(
+                MTLSize(width: self.s.aluThreads, height: 1, depth: 1),
+                threadsPerThreadgroup: Self.group(fma)
+            )
+            e.endEncoding()
+        }
+        let fmas = Double(s.aluThreads) * Double(s.aluIterations) * 8
+        laneMhz = Self.rate(fmas, t) / Self.lanes / 1e6
+        metrics.set("alu_gflops", Self.rate(2 * fmas, t) / 1e9, digits: 1)
+        metrics.set("lane_mhz", laneMhz, digits: 1)
+    }
+
+    /// A blit copy between private buffers, and every float4 of a private and of a shared buffer read once, lanes side by
+    /// side and lanes a page apart
+    func bandwidth() async throws {
+        guard let a = gpu.device.makeBuffer(length: s.bytes, options: .storageModePrivate),
+              let b = gpu.device.makeBuffer(length: s.bytes, options: .storageModePrivate)
+        else { throw TestFailure("no private buffers of \(s.bytes) bytes") }
+        let shared = try gpu.buffer(s.bytes)
+        let copy = try await fastest("copy") { c in
+            let e = c.makeBlitCommandEncoder()!
+            e.copy(from: a, sourceOffset: 0, to: b, destinationOffset: 0, size: self.s.bytes)
+            e.endEncoding()
+        }
+        metrics.set("copy_gbps", Self.rate(Double(2 * s.bytes), copy) / 1e9, digits: 2)
+        let read = try gpu.compute("rates_read")
+        let out = try gpu.buffer(s.readThreads * 16)
+        let elements = UInt32(s.bytes / 16), pages = UInt32(s.bytes / Self.pageBytes)
+        for (storage, buffer) in [("private", a), ("shared", shared)] {
+            for (spread, pageCount) in [("", UInt32(0)), ("_pages", pages)] {
+                let arm = "read_gbps_" + storage + spread
+                let t = try await fastest(arm) { c in
+                    var shape = SIMD2<UInt32>(elements, pageCount)
+                    let e = c.makeComputeCommandEncoder()!
+                    e.setComputePipelineState(read)
+                    e.setBuffer(buffer, offset: 0, index: 0)
+                    e.setBuffer(out, offset: 0, index: 1)
+                    e.setBytes(&shape, length: 8, index: 2)
+                    e.dispatchThreads(
+                        MTLSize(width: self.s.readThreads, height: 1, depth: 1), threadsPerThreadgroup: Self.group(read)
+                    )
+                    e.endEncoding()
+                }
+                metrics.set(arm, Self.rate(Double(s.bytes), t) / 1e9, digits: 2)
+            }
+        }
+    }
+
+    func pass(_ colour: MTLTexture?, _ depth: MTLTexture?, _ c: MTLCommandBuffer) -> MTLRenderCommandEncoder {
+        let pass = MTLRenderPassDescriptor()
+        if let colour {
+            pass.colorAttachments[0].texture = colour
+            pass.colorAttachments[0].loadAction = .clear
+            pass.colorAttachments[0].storeAction = .store
+        }
+        if let depth {
+            pass.depthAttachment.texture = depth
+            pass.depthAttachment.loadAction = .clear
+            pass.depthAttachment.clearDepth = 1
+            pass.depthAttachment.storeAction = .store
+        }
+        return c.makeRenderCommandEncoder(descriptor: pass)!
+    }
+
+    func depthState(_ compare: MTLCompareFunction) throws -> MTLDepthStencilState {
+        let d = MTLDepthStencilDescriptor()
+        d.depthCompareFunction = compare
+        d.isDepthWriteEnabled = true
+        guard let state = gpu.device.makeDepthStencilState(descriptor: d) else {
+            throw TestFailure("makeDepthStencilState returned nil")
+        }
+        return state
+    }
+
+    /// `layers` full-screen quads a pass, each nearer than the one before: opaque colour, alpha-blended colour, opaque
+    /// colour into a shared target, 4x MSAA colour (rated in samples), and depth alone under LESS
+    func fill() async throws {
+        let solid = try gpu.render(fragment: "solid_fragment", format: .bgra8Unorm)
+        let blended = try gpu.render(fragment: "solid_fragment", format: .bgra8Unorm) { d in
+            let c = d.colorAttachments[0]!
+            c.isBlendingEnabled = true
+            c.sourceRGBBlendFactor = .sourceAlpha
+            c.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        }
+        let msaa = try gpu.render(fragment: "solid_fragment", format: .bgra8Unorm, samples: 4)
+        let depthOnly = try gpu.render(fragment: "solid_fragment", format: .invalid, depth: .depth32Float) { d in
+            d.fragmentFunction = nil
+        }
+        let less = try depthState(.less)
+        let arms: [(String, Int, MTLTexture?, MTLTexture?, MTLRenderPipelineState)] = [
+            ("fill", 1, try gpu.texture(.bgra8Unorm, s.width, s.height), nil, solid),
+            ("blend", 1, try gpu.texture(.bgra8Unorm, s.width, s.height), nil, blended),
+            ("fill_shared", 1, try gpu.texture(.bgra8Unorm, s.width, s.height, storage: .shared), nil, solid),
+            (
+                "fill4x",
+                4,
+                try gpu.texture(.bgra8Unorm, s.width, s.height, usage: [.renderTarget], samples: 4),
+                nil,
+                msaa
+            ),
+            ("depth", 1, nil, try gpu.texture(.depth32Float, s.width, s.height, usage: [.renderTarget]), depthOnly),
+        ]
+        let units = Double(s.width * s.height * s.layers)
+        for (name, samples, colour, depth, pipeline) in arms {
+            let t = try await fastest(name) { c in
+                let e = self.pass(colour, depth, c)
+                e.setRenderPipelineState(pipeline)
+                if depth != nil { e.setDepthStencilState(less) }
+                for i in 0 ..< self.s.layers {
+                    let z = 1 - Float(i + 1) / Float(self.s.layers + 1)
+                    GPU.draw(e, corners: GPU.quad(x0: -1, y0: -1, x1: 1, y1: 1, z: z), color: SIMD4(0.2, 0.4, 0.6, 0.5))
+                }
+                e.endEncoding()
+            }
+            metrics.set(name + "_gpix_s", Self.rate(units * Double(samples), t) / 1e9, digits: 2)
+            metrics.set(name + "_per_clk", perClock(units * Double(samples), t), digits: 2)
+        }
+    }
+
+    func texels() async throws {
+        let pipeline = try gpu.render(fragment: "rates_texel_fragment", format: .bgra8Unorm)
+        let image = try gpu.texture(.rgba8Unorm, 256, 256, usage: [.shaderRead])
+        let bytes = (0 ..< 256 * 256 * 4).map { UInt8(truncatingIfNeeded: ($0 &* 40503) >> 7) }
+        try await gpu.upload(bytes, to: image, bytesPerRow: 256 * 4)
+        let target = try gpu.texture(.bgra8Unorm, s.width, s.height)
+        let t = try await fastest("texel") { c in
+            let e = self.pass(target, nil, c)
+            e.setRenderPipelineState(pipeline)
+            e.setFragmentTexture(image, index: 0)
+            var corners = GPU.fullScreen
+            e.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
+            e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            e.endEncoding()
+        }
+        let samples = Double(s.width * s.height * 8)
+        metrics.set("texel_gtexel_s", Self.rate(samples, t) / 1e9, digits: 2)
+        metrics.set("texel_per_clk", perClock(samples, t), digits: 2)
+    }
+
+    /// One-pixel triangles, one draw of `triangles`, and the same moved past the target's edge
+    func triangles() async throws {
+        let pipeline = try gpu.render(vertex: "rates_triangle_vertex", fragment: "solid_fragment", format: .bgra8Unorm)
+        let target = try gpu.texture(.bgra8Unorm, s.width, s.height)
+        for (name, clipped) in [("tri", UInt32(0)), ("clipped", 1)] {
+            let t = try await fastest(name) { c in
+                let e = self.pass(target, nil, c)
+                e.setRenderPipelineState(pipeline)
+                var grid = SIMD4<UInt32>(UInt32(self.s.width), UInt32(self.s.height), clipped, 0)
+                var colour = SIMD4<Float>(0.5, 0.5, 0.5, 1)
+                e.setVertexBytes(&grid, length: 16, index: 0)
+                e.setFragmentBytes(&colour, length: 16, index: 0)
+                e.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: self.s.triangles * 3)
+                e.endEncoding()
+            }
+            metrics.set(name + "_mtri_s", Self.rate(Double(s.triangles), t) / 1e6, digits: 1)
+            metrics.set(name + "_per_clk", perClock(Double(s.triangles), t), digits: 3)
+        }
+    }
+
+    /// A full-screen quad, then `layers` quads of rates_heavy_fragment under LEQUAL: behind it (hidden), which zcull or
+    /// early depth should reject whole, and in front of it (shaded)
+    func hidden() async throws {
+        let heavy = try gpu.render(fragment: "rates_heavy_fragment", format: .bgra8Unorm, depth: .depth32Float)
+        let flat = try gpu.render(fragment: "solid_fragment", format: .bgra8Unorm, depth: .depth32Float)
+        let colour = try gpu.texture(.bgra8Unorm, s.width, s.height)
+        let depth = try gpu.texture(.depth32Float, s.width, s.height, usage: [.renderTarget])
+        let lequal = try depthState(.lessEqual)
+        for (name, front) in [("hidden", Float(0.1)), ("shaded", Float(0.9))] {
+            let t = try await fastest(name) { c in
+                let e = self.pass(colour, depth, c)
+                e.setDepthStencilState(lequal)
+                e.setRenderPipelineState(flat)
+                GPU.draw(e, corners: GPU.quad(x0: -1, y0: -1, x1: 1, y1: 1, z: front), color: SIMD4(0, 0, 0, 1))
+                e.setRenderPipelineState(heavy)
+                var corners = GPU.quad(x0: -1, y0: -1, x1: 1, y1: 1, z: 0.5)
+                var n = self.s.heavyIterations
+                e.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
+                e.setFragmentBytes(&n, length: 4, index: 0)
+                for _ in 0 ..< self.s.layers { e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4) }
+                e.endEncoding()
+            }
+            metrics.set(name + "_us_per_layer", t * 1000 / Double(s.layers), digits: 1)
+        }
+    }
+}
