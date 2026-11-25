@@ -533,6 +533,11 @@ TEST(GM20BPresentSource, TiledSourceIsCopiedBlockLinear)
 	EXPECT_TRUE(scanout.has("tgm_readback_take(copy, source, blockLog2, target, reads)"));
 	EXPECT_FALSE(Block(SourceText("../TegraGM20BReadback.cpp"), "uint32_t tgm_readback_take(")
 			     .has("TEGRA_SCANOUT_TILED"));
+	const CodeText compKind = Block(client(), "uint32_t presentCompressedKind(");
+	EXPECT_TRUE(compKind.before("memory->prepare(kIODirectionOut)",
+				    "memory->getPhysicalSegment(0, &len, kIOMemoryMapperNone)"));
+	EXPECT_TRUE(compKind.before("memory->getPhysicalSegment(0, &len, kIOMemoryMapperNone)",
+				    "memory->complete(kIODirectionOut);"));
 	const CodeText surface = Block(client(), "uint64_t presentSurface(");
 	EXPECT_TRUE(surface.has("uint32_t kind = compressed ? compKind : "
 				"(blockLinear ? TGM_LAYOUT_KIND : 0);"));

@@ -127,8 +127,11 @@ uint64_t presentTarget(uint64_t pa, uint64_t bytes)
 
 uint32_t presentCompressedKind(IOMemoryDescriptor *memory)
 {
+	if (!memory || memory->prepare(kIODirectionOut) != kIOReturnSuccess)
+		return 0;
 	IOByteCount len = 0;
 	const addr64_t first = memory->getPhysicalSegment(0, &len, kIOMemoryMapperNone);
+	memory->complete(kIODirectionOut);
 	if (!first)
 		return 0;
 	const uint32_t kind = tegra_gm20b_surface_kind(first & ~0xfffULL);

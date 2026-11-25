@@ -132,18 +132,26 @@ static bool holdLayout(DirectSlot &slot, bool tiled)
 
 // The GPU driver's word on the surface's pixels (by its first page): the block height of its block-linear layout, -1
 // when they are rows.
-static int surfaceBlockLog2(IOMemoryDescriptor *memory)
+static addr64_t surfaceFirstPa(IOMemoryDescriptor *memory)
 {
+    if (!memory || memory->prepare(kIODirectionOut) != kIOReturnSuccess)
+        return 0;
     IOByteCount length = 0;
     const addr64_t pa = memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
+    memory->complete(kIODirectionOut);
+    return pa;
+}
+
+static int surfaceBlockLog2(IOMemoryDescriptor *memory)
+{
+    const addr64_t pa = surfaceFirstPa(memory);
     tgm_layout layout = {};
     return (pa != 0u) && tegra_gm20b_surface_layout(pa & ~0xfffULL, &layout) == 1 ? layout.y_log2 : -1;
 }
 
 static bool surfaceCompressed(IOMemoryDescriptor *memory)
 {
-    IOByteCount length = 0;
-    const addr64_t pa = memory->getPhysicalSegment(0, &length, kIOMemoryMapperNone);
+    const addr64_t pa = surfaceFirstPa(memory);
     return (pa != 0u) && tegra_gm20b_surface_compressed(pa & ~0xfffULL) != 0;
 }
 

@@ -600,7 +600,7 @@ bool SwitchExternalScreen::validateSwap(const OriginalLegacySwapRequest *request
 
     bool hasSurface[switch_external::kLayers] = {};
     switch_external::LayerDesc layers[switch_external::kLayers] = {};
-    bool badObject = false, compressedSurface = false;
+    bool badObject = false, compressedSurface = false, wireFailed = false;
 #if DEVELOPMENT || DEBUG
     int firstLayer = -1;
 #endif
@@ -617,10 +617,16 @@ bool SwitchExternalScreen::validateSwap(const OriginalLegacySwapRequest *request
             continue;
         }
         auto &layer = layers[i];
-        auto *memory = native_legacy_surface_descriptor(surfaces[i]);
+        auto *rawMemory = native_legacy_surface_descriptor(surfaces[i]);
+        auto *memory = rawMemory && rawMemory->metaCast("IOMemoryDescriptor") ? rawMemory : nullptr;
         if (memory) {
+            if (memory->prepare(kIODirectionOut) != kIOReturnSuccess) {
+                wireFailed = true;
+                continue;
+            }
             IOByteCount segLen = 0;
             const addr64_t firstPa = memory->getPhysicalSegment(0, &segLen, kIOMemoryMapperNone);
+            memory->complete(kIODirectionOut);
             if (firstPa && tegra_gm20b_surface_compressed(firstPa & ~0xfffULL)) {
                 compressedSurface = true;
                 continue;
@@ -637,12 +643,13 @@ bool SwitchExternalScreen::validateSwap(const OriginalLegacySwapRequest *request
         layer.src = sources[i];
         layer.dst = destinations[i];
     }
-    if (badObject || compressedSurface) {
+    if (badObject || compressedSurface || wireFailed) {
 #if DEVELOPMENT || DEBUG
         if (__atomic_fetch_add(&diagValidateRejects, 1u, __ATOMIC_RELAXED) < 8u) {
-            IOLog("SwitchDisplayPort: validateSwap rejected (%s) updated=%#x disabled=%#x bg=%#x mode=%ux%u\n",
-                  badObject ? "non-IOSurface" : "compressed", updated, disabled, background,
-                  static_cast<uint32_t>(geometry >> 32), static_cast<uint32_t>(geometry));
+            const char *why = badObject ? "non-IOSurface" : compressedSurface ? "compressed" : "unwired";
+            IOLog("SwitchDisplayPort: validateSwap rejected (%s) updated=%#x disabled=%#x bg=%#x mode=%ux%u\n", why,
+                  updated, disabled, background, static_cast<uint32_t>(geometry >> 32),
+                  static_cast<uint32_t>(geometry));
         }
 #endif
         return false;

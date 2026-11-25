@@ -139,6 +139,10 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
 
     EXPECT_TRUE(publish.before("tegra_gm20b_set_external_scanout(1);", "IOMobileFramebufferLegacy::hotPlugNotify(1);"));
     EXPECT_TRUE(detach.has("tegra_gm20b_set_external_scanout(0);"));
+    EXPECT_TRUE(validate.before("memory->prepare(kIODirectionOut)",
+                                "memory->getPhysicalSegment(0, &segLen, kIOMemoryMapperNone)"));
+    EXPECT_TRUE(validate.before("memory->getPhysicalSegment(0, &segLen, kIOMemoryMapperNone)",
+                                "memory->complete(kIODirectionOut);"));
     EXPECT_TRUE(validate.has("tegra_gm20b_surface_compressed(firstPa & ~0xfffULL)"));
     const auto tiledLayout = Block(source, "bool SwitchExternalScreen::applyTiledLayout(");
     EXPECT_TRUE(tiledLayout.before("tegra_gm20b_surface_hold(firstPage, &tiled)", "__atomic_thread_fence(__ATOMIC_SEQ_CST);"));
