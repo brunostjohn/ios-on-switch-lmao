@@ -320,3 +320,19 @@ TEST(SwitchAudioSource, SleepWaitsForTheExternalPresenceTransactionBeforeReturni
 }
 
 }  // namespace
+
+// APE's ADMA reaches its rings through the SMMU: the rings held and APE attached before the ADMA is reset and started.
+TEST(SwitchAudioSource, ApeIsConfinedToItsRingsBeforeTheAdmaRuns)
+{
+    const std::string source = SourceText("../SwitchAudioClocks.cpp");
+    const std::string init = Between(source, "void SwitchAudio::tegraInit()", "\n}\n");
+    const size_t rings = init.find("ringPA[type] = static_cast<uint32_t>(pa);"), confine = init.find("confineApe(ringPA);"),
+                 dma = init.find("tegraAhubAndDma();");
+    ASSERT_NE(confine, std::string::npos);
+    EXPECT_LT(rings, confine);
+    EXPECT_LT(confine, dma);
+    const std::string hook = Between(source, "void confineApe(const uint32_t *ringPA)", "\n}\n");
+    EXPECT_THAT(hook, HasSubstr("gApeView.hold(ringPA[SwitchAudioMemoryOutput], kOutBytes)"));
+    EXPECT_THAT(hook, HasSubstr("gApeView.hold(ringPA[SwitchAudioMemoryInput], kInBytes)"));
+    EXPECT_THAT(hook, HasSubstr("attachNarrow(TEGRA_SMMU_APE_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_3, kApeClients"));
+}
