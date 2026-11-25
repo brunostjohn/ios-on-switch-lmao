@@ -9,7 +9,8 @@
 #   xnu_kernel_classes_source_test  both trees' OSKext.cpp register our drivers' classes under sKextLock, as OSKext::start
 #                            does, and no driver calls OSMetaClass::preModLoad/postModLoad itself
 #   switch_icon_cache_<xnu>_test  kernel/switch/boot/icon_cache.c over a host Data tree in that XNU's cache layout:
-#                            __cache_info__ alone goes, once per GPU build the deploy names
+#                            __cache_info__ alone goes, once per GPU build the deploy names; _release_test as a
+#                            release kernel builds it (no restore record)
 #   xnu_icon_cache_source_test  both trees' boot setup runs it once before launchd, with one error line
 #   xnu_stall_test           kernel/switch/diag/stall.h's decisions: which samples of a UI main thread are a stall,
 #                            one report and one end per episode, wait names by block_hint.h value (both trees), the
@@ -1128,26 +1129,28 @@ copy_file(
     out = "switch/icon_cache.h",
 )
 
-# One build per XNU, each in its iOS's cache layout: 24B119's salt folders, 21H461's top.
+# One build per XNU, each in its iOS's cache layout: 24B119's salt folders, 21H461's top. Each as a debug kernel builds
+# it (DEVELOPMENT), and 24B119's also as a release kernel does (no restore record).
 [
     host_library(
-        name = "icon_cache_" + xnu,
+        name = "icon_cache_%s%s" % (xnu, "_release" if release else ""),
         srcs = ["//kernel/switch:boot/icon_cache.c"],
         hdrs = ["switch/icon_cache.h"],
-        defines = ["XNU_%s=1" % xnu],
+        copts = ["-UDEVELOPMENT", "-DDEVELOPMENT=0", "-UDEBUG", "-DDEBUG=0"] if release else [],
+        defines = ["XNU_%s=1" % xnu] + ([] if release else ["DEVELOPMENT=1"]),
         includes = ["."],
     )
-    for xnu in ("12377_121_6", "10063_141_1")
+    for xnu, release in (("12377_121_6", False), ("10063_141_1", False), ("12377_121_6", True))
 ]
 
 [
     host_test(
-        name = "switch_icon_cache_%s_test" % xnu,
+        name = "switch_icon_cache_%s%s_test" % (xnu, "_release" if release else ""),
         srcs = ["switch_icon_cache_test.cpp"],
-        defines = ["XNU_%s=1" % xnu],
-        deps = [":icon_cache_" + xnu],
+        defines = ["XNU_%s=1" % xnu] + (["SWITCH_TEST_RELEASE=1"] if release else []),
+        deps = [":icon_cache_%s%s" % (xnu, "_release" if release else "")],
     )
-    for xnu in ("12377_121_6", "10063_141_1")
+    for xnu, release in (("12377_121_6", False), ("10063_141_1", False), ("12377_121_6", True))
 ]
 
 # Both kernels' setup runs it once before launchd, with one error line, and reads the record the deploy writes.

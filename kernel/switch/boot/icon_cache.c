@@ -33,9 +33,11 @@ static const char switch_icon_cache_folder[] =
 
 static const char switch_icon_cache_request[] = "Switch/icon-cache-gpu";
 static const char switch_icon_cache_marker[] = "Switch/icon-cache-reset";
+#if DEVELOPMENT || DEBUG
 /* Written, with the named build, on a boot that moved that build's kept folders back (HW Test system.icon_cache_reset:
- * such a drop is not followed by the agent's reset). */
+ * such a drop is not followed by the agent's reset). HW Test ships in debug packages only. */
 static const char switch_icon_cache_restored[] = "Switch/icon-cache-restored";
+#endif
 
 enum {
     kPath = 256,
@@ -305,9 +307,11 @@ void switch_icon_cache_drop(const struct switch_icon_cache_ops *ops, struct swit
             error =
                 switch_icon_cache_clear(ops, result, known ? kept_for : NULL, result->build[0] ? result->build : NULL);
         }
+#if DEVELOPMENT || DEBUG
         if (!error && result->restored) {
             error = ops->write(ops->context, switch_icon_cache_restored, build, length);
         }
+#endif
         if (!error) {
             error = ops->write(ops->context, switch_icon_cache_marker, build, length);
         }

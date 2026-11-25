@@ -298,7 +298,11 @@ TEST_F(SwitchIconCache, Xnu12377AReturningBuildGetsItsFoldersBack)
     EXPECT_FALSE(fs::exists(data.root / kKeep / kKeyA));
     EXPECT_TRUE(fs::is_empty(data.root / kTrash / (std::string(kSession) + "-keep-" + kKeyA)));
     EXPECT_EQ(Contents(data.root / "Switch/icon-cache-reset"), kBuildA);
+#if SWITCH_TEST_RELEASE
+    EXPECT_FALSE(fs::exists(data.root / "Switch/icon-cache-restored")) << "a release kernel keeps no diagnostic record";
+#else
     EXPECT_EQ(Contents(data.root / "Switch/icon-cache-restored"), kBuildA);
+#endif
 }
 
 TEST_F(SwitchIconCache, Xnu12377TheKeepHoldsOneBuild)
