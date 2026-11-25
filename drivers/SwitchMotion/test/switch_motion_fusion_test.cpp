@@ -4,6 +4,7 @@
 // lengths.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <random>
@@ -228,6 +229,41 @@ TEST(SwitchMotionFusion, ASteadyTurnIsNotTakenForBias)
     const int32_t turn[3] = {0, 0, 200000};  // 0.2 rad/s about the vertical, past any plausible offset
     Feed(fusion, down, turn, 10.0);
     EXPECT_EQ(fusion.biasNanoRad[2], 0);
+}
+
+// The longest gap a sample can stand for (four periods at 12.5 Hz) at full scale, about one axis and about all three:
+// the attitude stays a unit quaternion and turns by the closed-form angle.
+TEST(SwitchMotionFusion, ALongGapAtFullScaleTurnsByTheClosedFormAngle)
+{
+    struct Case {
+        int32_t rate[3];
+        uint32_t micros;
+    };
+
+    const int32_t full = 34906585;  // 2000 dps
+    for (const Case c :
+         {Case{{0, 0, full}, 160000}, Case{{0, 0, full}, switchGyroGapMicros(1000000, 80000)},
+          Case{{full, full, full}, switchGyroGapMicros(1000000, 80000)}, Case{{-full, full, -full}, 320000}}) {
+        SwitchMotionFusion fusion;
+        const int32_t shaken[3] = {0, 0, -2000000};  // 2 g: no gravity correction
+        fusion.addAccel(shaken);
+        fusion.addGyro(c.rate, c.micros);
+        double norm = 0;
+        for (const int64_t v : fusion.q)
+            norm += static_cast<double>(v) * static_cast<double>(v);
+        EXPECT_NEAR(std::sqrt(norm) / static_cast<double>(kSwitchOne), 1, 1e-6);
+        double rate = 0;
+        for (const int32_t v : c.rate)
+            rate += static_cast<double>(v) * v;
+        rate = std::sqrt(rate) / 1e6;
+        const double half = rate * c.micros / 1e6 / 2;
+        const double want[4] = {std::cos(half), std::sin(half) * c.rate[0] / 1e6 / rate,
+                                std::sin(half) * c.rate[1] / 1e6 / rate, std::sin(half) * c.rate[2] / 1e6 / rate};
+        double error = 0;
+        for (unsigned i = 0; i < 4; ++i)
+            error = std::max(error, std::fabs(static_cast<double>(fusion.q[i]) / kSwitchOne - want[i]));
+        EXPECT_LT(error, 2e-3) << c.micros << " us at " << rate << " rad/s: turned " << 2 * half << " rad";
+    }
 }
 
 // A conjugated quaternion convention reads as the mirrored tilt: (0, +1, 0) instead of (0, -1, 0) here.

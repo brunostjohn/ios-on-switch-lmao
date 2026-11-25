@@ -77,6 +77,7 @@ struct SwitchMotionFusion {
     static constexpr int64_t kNearOneG = 150000;                  // correct only within 0.15 g of 1 g
     static constexpr int64_t kMaxIntegralNanoRad = 100000000;     // 0.1 rad/s: the largest bias, at least
     static constexpr int64_t kDefaultZeroRateNanoRad = 34906585;  // 2 dps
+    static constexpr int64_t kStepPicoRad = 500000000000;         // the largest turn one rotate() takes, 0.5 rad
 
     int64_t q[4] = {kSwitchOne, 0, 0, 0};  // w, x, y, z
     int64_t biasNanoRad[3] = {};
@@ -156,13 +157,21 @@ struct SwitchMotionFusion {
                 omega[i] += (kKpMicroRad * error[i]) >> kSwitchQ;
             }
         }
-        int64_t half[3];
+        int64_t turn = 0;  // 1e-12 rad: omega (urad/s) * dt (us)
         for (unsigned i = 0; i < 3; ++i) {
             omega[i] -= biasNanoRad[i] / 1000;
-            // Half the rotation angle, Q30: omega (urad/s) * dt (us) / 2 is in 1e-12 rad.
-            half[i] = (omega[i] * static_cast<int64_t>(dtMicros) / 2000) * kSwitchOne / 1000000000;
+            turn += (omega[i] < 0 ? -omega[i] : omega[i]) * static_cast<int64_t>(dtMicros);
         }
-        rotate(half);
+        // rotate() is third order in the half angle: steps of at most 0.5 rad keep it exact to 1e-4, where one step over
+        // a gap of four periods at full scale (up to 12 rad) would diverge.
+        const int64_t steps = turn / kStepPicoRad + 1;
+        for (int64_t step = 0; step < steps; ++step) {
+            const int64_t micros = dtMicros * (step + 1) / steps - dtMicros * step / steps;
+            int64_t half[3];
+            for (unsigned i = 0; i < 3; ++i)
+                half[i] = (omega[i] * micros / 2000) * kSwitchOne / 1000000000;
+            rotate(half);
+        }
     }
 
     // The latest sample's rotation rate without the estimated bias, micro-rad/s.
