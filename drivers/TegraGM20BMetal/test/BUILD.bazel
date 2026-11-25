@@ -1262,6 +1262,38 @@ host_test(
     cxx_std = "c++17",
 )
 
+# Under ARC, as the plugin builds it: the executor's autorelease pools are what the test checks
+objc_library(
+    name = "ordered_executor_test_unit",
+    testonly = True,
+    srcs = [
+        "ordered_executor_test.mm",
+        "//drivers/TegraGM20BMetal:follow.h",
+        "//drivers/TegraGM20BMetal:handoff_queue.h",
+        "//drivers/TegraGM20BMetal:lock.h",
+        "//drivers/TegraGM20BMetal:ordered_executor.h",
+    ],
+    copts = WARNINGS + SANITIZERS + [
+        "-std=c++17",
+        "-g",
+    ],
+    features = [
+        "asan",
+        "ubsan",
+        "external_include_paths",
+    ],
+    sdk_frameworks = ["Foundation"],
+    deps = ["@googletest//:gtest"],
+    alwayslink = True,
+)
+
+host_test(
+    name = "ordered_executor_test",
+    srcs = [],
+    linkopts = ["-lobjc"],
+    deps = [":ordered_executor_test_unit"],
+)
+
 host_test(
     name = "cpu_completion_test",
     srcs = [

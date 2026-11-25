@@ -803,10 +803,17 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 
 @implementation SwitchMetalQueue
 
+// nil where its handler thread cannot be made, as Metal's newCommandQueue answers nil where it makes no queue
 - (instancetype)init
 {
     if ((self = [super init])) {
         queuePriorityAdd(self);
+        int err = 0;
+        if (!_handlerExec.start(err)) {
+            os_log_error(gm20bLog(), "SwitchMetal: %{public}s: no command queue made: its handler thread: %{public}s",
+                         getprogname(), strerror(err));
+            return nil;
+        }
     }
     return self;
 }
