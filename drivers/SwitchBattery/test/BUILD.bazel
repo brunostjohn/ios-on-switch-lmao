@@ -25,6 +25,7 @@ host_shims(
         "IOKit/pwr_mgt/IOPM.h",
         "IOKit/pwr_mgt/IOPMPowerSource.h",
         "IOKit/pwr_mgt/RootDomain.h",
+        "kern/clock.h",
         "libkern/c++/OSBoolean.h",
         "libkern/c++/OSDictionary.h",
         "libkern/c++/OSNumber.h",

@@ -2085,27 +2085,49 @@ static void policy()
     check(chargerSetting(Zone::Cool).reg02 == 0x10 && chargerSetting(Zone::Hot).reg02 == 0x00, "zone ICHG");
 }
 
-// iPadOS 27 reads the battery through an AppleSmartBatteryPack beside the power source (SwitchBatteryPack.h); 21H461
-// reads none, so its kernel publishes none.
+// iPadOS 27 reads the battery as an AppleSmartBattery with an AppleSmartBatteryPack under it and an
+// AppleSmartBatteryBank under that (SwitchBatteryPack.h); 21H461 reads none of it, so its kernel publishes none.
 static void batteryPack()
 {
+    gGauge.reg[0x4d] = static_cast<uint16_t>(-512);  // QH: -256 mAh
     bootWithNintendoCharger();
     advance(2300);
     AppleSmartBatteryPack *pack = nullptr;
-    for (IOService *s : IOService::published())
-        if (auto *p = dynamic_cast<AppleSmartBatteryPack *>(s))
+    AppleSmartBatteryBank *bank = nullptr;
+    size_t packAt = 0, bankAt = 0, batteryAt = 0;
+    const auto &published = IOService::published();
+    for (size_t i = 0; i < published.size(); ++i) {
+        if (auto *p = dynamic_cast<AppleSmartBatteryPack *>(published[i])) {
             pack = p;
+            packAt = i;
+        }
+        if (auto *b = dynamic_cast<AppleSmartBatteryBank *>(published[i])) {
+            bank = b;
+            bankAt = i;
+        }
+        if (published[i] == battery())
+            batteryAt = i;
+    }
 #if SWITCH_IPSW_KIND_24B119
+    check(dynamic_cast<AppleSmartBattery *>(battery()) != nullptr, "the battery is an AppleSmartBattery");
+    check(battery()->ps["BatteryPackCount"] == 1, "BatteryPackCount 1");
     check(pack && pack->provider == battery(), "pack published under the battery");
-    if (!pack)
+    check(bank && pack && bank->provider == pack, "bank published under the pack");
+    check(bank && pack && bankAt < packAt && packAt < batteryAt, "bank, then pack, then the battery registered");
+    if (!pack || !bank)
         return;
-    auto *id = dynamic_cast<OSNumber *>(pack->getProperty("ID"));
-    check(id && id->value == 0, "pack ID 0, the one powerd looks for");
-    auto data = [pack] {
-        auto *d = dynamic_cast<OSDictionary *>(pack->getProperty("BatteryData"));
+    auto number = [](const IOService *s, const char *key) {
+        auto *n = dynamic_cast<OSNumber *>(s->getProperty(key));
+        return n ? static_cast<long long>(static_cast<int32_t>(n->value)) : -1ll;
+    };
+    check(number(pack, "ID") == 0, "pack ID 0, the one powerd looks for");
+    check(number(pack, "BankCount") == 1, "one bank");
+    check(number(bank, "PackID") == 0, "the bank names its pack");
+    auto data = [](const IOService *s) {
+        auto *d = dynamic_cast<OSDictionary *>(s->getProperty("BatteryData"));
         return d ? *d : OSDictionary();
     };
-    OSDictionary d = data();
+    OSDictionary d = data(pack);
     check(d.numbers["VirtualTemperature"] == 3000,
           "VirtualTemperature 30.00 C: " + std::to_string(d.numbers["VirtualTemperature"]));
     check(d.numbers["RemainingCapacity"] == 2586 && d.numbers["MaxCapacity"] == 4310 &&
@@ -2113,16 +2135,30 @@ static void batteryPack()
           "capacities in mAh");
     check(d.numbers["Voltage"] == 3900 && d.numbers["AverageCurrent"] == 1800 && d.numbers["StateOfCharge"] == 60,
           "voltage, average current, state of charge");
+    check(d.numbers.count("InstantAmperage") && d.numbers["InstantAmperage"] == 1800, "InstantAmperage");
+    check(d.numbers.count("ChargeAccum") && d.numbers["ChargeAccum"] == -256,
+          "ChargeAccum from the coulomb counter: " + std::to_string(d.numbers["ChargeAccum"]));
     check(d.numbers.count("FullyCharged") && d.numbers["FullyCharged"] == 0 && !d.booleans.count("FullyCharged"),
           "FullyCharged is a number: powerd reads it as SInt32");
     check(d.strings["Serial"] == battery()->strings[kIOPMPSSerialKey] && d.strings["Serial"].size() == 17,
           "the battery's serial");
+    OSDictionary b = data(bank);
+    check(b.numbers == d.numbers && b.strings == d.strings, "the bank's BatteryData is the pack's");
+    const long long updated = battery()->ps["UpdateTime"];
+    check(updated >= 1795564800ll, "UpdateTime in calendar seconds: " + std::to_string(updated));
     gGauge.setTemp(4600);
     advance(300);
-    check(data().numbers["VirtualTemperature"] == 4600,
-          "VirtualTemperature follows the gauge's alert: " + std::to_string(data().numbers["VirtualTemperature"]));
+    check(data(pack).numbers["VirtualTemperature"] == 4600 && data(bank).numbers["VirtualTemperature"] == 4600,
+          "VirtualTemperature follows the gauge's alert: " + std::to_string(data(pack).numbers["VirtualTemperature"]));
+    check(battery()->ps["UpdateTime"] > updated, "UpdateTime moves with every reading");
 #else
-    check(!pack, "no pack on 21H461");
+    check(dynamic_cast<AppleSmartBattery *>(battery()) == nullptr, "no AppleSmartBattery on 21H461");
+    check(!pack && !bank, "no pack or bank on 21H461");
+    check(!battery()->ps.count("BatteryPackCount") && !battery()->ps.count("UpdateTime"),
+          "no BatteryPackCount or UpdateTime on 21H461");
+    (void)packAt;
+    (void)bankAt;
+    (void)batteryAt;
 #endif
 }
 

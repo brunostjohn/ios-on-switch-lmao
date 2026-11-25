@@ -35,6 +35,16 @@ inline void absolutetime_to_nanoseconds(uint64_t abs, uint64_t *ns)
     *ns = abs;
 }
 
+// Wall-clock seconds, as clock_get_calendar_microtime gives them: the fake clock from 2026-11-25 00:00 UTC.
+using clock_sec_t = unsigned long;
+using clock_usec_t = unsigned int;
+
+inline void clock_get_calendar_microtime(clock_sec_t *secs, clock_usec_t *microsecs)
+{
+    *secs = 1795564800ul + static_cast<clock_sec_t>(gNow / 1000000000ull);
+    *microsecs = static_cast<clock_usec_t>(gNow / 1000ull % 1000000ull);
+}
+
 inline void IODelay(unsigned us)
 {
     gNow += us * 1000ull;
