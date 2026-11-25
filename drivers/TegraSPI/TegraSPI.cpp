@@ -16,6 +16,9 @@
 #include "TegraSPIWords.h"
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../../kits/SwitchMMIO/SwitchMMIOKernel.h"
+#if DEVELOPMENT || DEBUG
+#include <os/log.h>
+#endif
 
 namespace {
 constexpr vm_offset_t kSpiPA = 0x7000D000, kSpiSize = 0x1000;        // SPI1 +0x400 .. SPI4 +0xa00
@@ -311,6 +314,45 @@ void recover(Bus &b, const BusInfo &info)
     b.irq->enable();
 }
 
+#if DEVELOPMENT || DEBUG
+// Each bus's line, from its own transfers (no timer): every 10 s of traffic, its blocks (one RDY interrupt each) and
+// the FIFO words they cost the CPU each way. A 2 s pause starts a new window.
+struct BusStats {
+    uint64_t start, last;
+    uint32_t blocks, packed, bytes, words, failed;
+};
+
+BusStats gStats[kBuses];
+
+// Under the bus's transfer lock.
+void noteBlock(unsigned bus, size_t len, int result)
+{
+    BusStats &s = gStats[bus - 1];
+    const bool packed = tegra_spi_packed(len);
+    const uint64_t now = mach_absolute_time();
+    uint64_t window = 0, pause = 0, ns = 0;
+    nanoseconds_to_absolutetime(10 * NSEC_PER_SEC, &window);
+    nanoseconds_to_absolutetime(2 * NSEC_PER_SEC, &pause);
+    if (s.start == 0 || now - s.last >= pause)
+        s = {now, now, 0, 0, 0, 0, 0};
+    s.last = now;
+    ++s.blocks;
+    s.packed += packed ? 1 : 0;
+    s.bytes += static_cast<uint32_t>(len);
+    s.words += static_cast<uint32_t>(tegra_spi_words(len, packed));
+    s.failed += result != TEGRA_SPI_OK ? 1 : 0;
+    if (now - s.start < window)
+        return;
+    absolutetime_to_nanoseconds(now - s.start, &ns);
+    const uint64_t ms = ns / NSEC_PER_MSEC;
+    os_log(OS_LOG_DEFAULT,
+           "TegraSPI stats: SPI%u %llu ms: %u blocks (%llu/s), %u packed, %u bytes in %u FIFO words each way, %u "
+           "failed",
+           bus, ms, s.blocks, ms ? uint64_t{s.blocks} * 1000 / ms : 0, s.packed, s.bytes, s.words, s.failed);
+    s = {now, now, 0, 0, 0, 0, 0};
+}
+#endif
+
 IOLock *setupLock()
 {
     if (!gSetupLock) {
@@ -395,6 +437,10 @@ extern "C" int tegra_spi_transfer(unsigned bus, unsigned cs, const void *tx, voi
     const int result = b.ready ? block(bus, b, cs, (const uint8_t *)tx, (uint8_t *)rx, len) : TEGRA_SPI_ENOTREADY;
     if (result != TEGRA_SPI_OK && result != TEGRA_SPI_ENOTREADY)
         recover(b, kBus[bus - 1]);
+#if DEVELOPMENT || DEBUG
+    if (result != TEGRA_SPI_ENOTREADY)
+        noteBlock(bus, len, result);
+#endif
     IOLockUnlock(b.lock);
     return result;
 }
