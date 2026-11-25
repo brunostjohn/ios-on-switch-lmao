@@ -60,19 +60,55 @@ enum StandInResolveCases {
         )
     }
 
-    static func samplesOff(_ gpu: GPU, _ f: WordMipFormat, _ drawn: Drawn) async throws -> Int {
+    /// Each stored sample against a one-sample draw of its value, that texture read by a compute kernel
+    /// (`computeOff`) and by a fragment pass (`fragmentOff`), and the texels where the two reads of it differ
+    /// (`routesDiffer`). A compute read that fails ends the compute side (`computeError`); the fragment side reads
+    /// every sample regardless.
+    struct SampleReadings {
+        var computeOff = 0, fragmentOff = 0, routesDiffer = 0
+        var computeError: Error?
+
+        func record(_ key: String, _ metrics: inout Metrics) {
+            metrics.set(key + "_samples_off_fragment", fragmentOff)
+            guard computeError == nil else { return }
+            metrics.set(key + "_samples_off", computeOff)
+            metrics.set(key + "_routes_differ", routesDiffer)
+        }
+
+        func checks(_ key: String) -> [(String, Bool)] {
+            let fragment = (
+                "\(key): every sample stores its one-sample code, as a fragment pass reads it", fragmentOff == 0
+            )
+            if let computeError {
+                return [fragment, ("\(key) samples through a compute kernel: \(GPU.describe(computeError))", false)]
+            }
+            return [
+                ("\(key): every sample stores its one-sample code", computeOff == 0), fragment,
+                ("\(key): a compute kernel and a fragment pass read each one-sample texture alike", routesDiffer == 0),
+            ]
+        }
+    }
+
+    static func samplesOff(_ gpu: GPU, _ f: WordMipFormat, _ drawn: Drawn) async throws -> SampleReadings {
         let samples = drawn.texture.sampleCount
         let stored = try await sampleReads(gpu, drawn.texture)
-        var off = 0
+        let reader = try gpu.render(fragment: "texel_read", format: .rgba32Float)
+        let texels = 0 ..< side * side
+        var readings = SampleReadings()
         for sample in 0 ..< samples {
-            let alone = try await oneSampleReads(
-                gpu,
-                f,
-                (0 ..< side * side).map { drawn.values[$0 * samples + sample] }
-            )
-            off += (0 ..< side * side).filter { stored[$0 * samples + sample] != alone[$0] }.count
+            let alone = try await oneSampleTexture(gpu, f, texels.map { drawn.values[$0 * samples + sample] })
+            let fragment = try await YcbcrPackedTargetTest.read(gpu, reader, alone)
+            readings.fragmentOff += texels.filter { stored[$0 * samples + sample] != fragment[$0] }.count
+            guard readings.computeError == nil else { continue }
+            do {
+                let compute = try await gpu.texels(alone)
+                readings.computeOff += texels.filter { stored[$0 * samples + sample] != compute[$0] }.count
+                readings.routesDiffer += texels.filter { compute[$0] != fragment[$0] }.count
+            } catch {
+                readings.computeError = error
+            }
         }
-        return off
+        return readings
     }
 
     static func drawSamples(
@@ -126,8 +162,7 @@ enum StandInResolveCases {
         return (0 ..< width * height * samples).map { bytes.loaded(as: SIMD4<Float>.self, at: $0) }
     }
 
-    static func oneSampleReads(_ gpu: GPU, _ f: WordMipFormat, _ values: [SIMD4<Float>]) async throws -> [SIMD4<Float>]
-    {
+    static func oneSampleTexture(_ gpu: GPU, _ f: WordMipFormat, _ values: [SIMD4<Float>]) async throws -> MTLTexture {
         let texture = try gpu.texture(f.format, side, side)
         let state = try gpu.render(fragment: "texel_values", format: f.format)
         let data = try gpu.buffer(values)
@@ -146,9 +181,7 @@ enum StandInResolveCases {
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             encoder.endEncoding()
         }
-        return try await YcbcrPackedTargetTest.read(
-            gpu, try gpu.render(fragment: "texel_read", format: .rgba32Float), texture
-        )
+        return texture
     }
 
     static func judged(_ f: WordMipFormat, _ got: [UInt8], apple: [UInt8]) -> (off: Int, far: Int, worst: Int) {

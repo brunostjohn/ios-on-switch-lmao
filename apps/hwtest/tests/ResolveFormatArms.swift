@@ -7,8 +7,12 @@ import Metal
 /// gpu.gm20b.resolve_twod's format arms (resolve_rule.h twodResolveFit): per format and sample count the codes the
 /// format stores for each sample (one-sample draws of its colour, resolve_twod_sample_fragment), the resolve the rule
 /// picks for a private target only passes sample, and the pack's pass where the format has a resolve state, each held
-/// to Metal's rule computed from the stored codes (unorm nearest, sRGB averaged as linear light, floats ties to even)
-/// on every third texel each way. `<cell>=<route>:<grade>:<texels off Metal>:<channels beyond one>`, `<cell>_pass=` the
+/// to Metal's rule computed from the stored codes on every third texel each way. An M4 Max's resolve of this scene
+/// sets the rule (25 Nov, every channel of the 720x1280 target): unorm nearest, sRGB averaged as linear light,
+/// RG11B10Float's mean to nearest with ties to even at 2x and 4x, and RGBA16Float's to nearest with ties up (this
+/// scene has no negative value), every channel at 2x and all but 71 of 3,686,400 at 4x, where ties to even misses
+/// 614,218 and 190,766.
+/// `<cell>=<route>:<grade>:<texels off Metal>:<channels beyond one>`, `<cell>_pass=` the
 /// same of the pass (the reference's control), `<cell>_ms=<picked>/<pass>` GPU ms. FAIL: a cell off resolve.twod, a
 /// channel beyond one code, or an exact cell (RGBA16Float at 2x) off Metal, where its read arm
 /// (`rgba16f_2x_read=<route>:<off>`) must take resolve.twod too; `<cell>_error`: the cell could not run.

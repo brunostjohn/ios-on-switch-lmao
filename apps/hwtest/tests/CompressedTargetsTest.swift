@@ -15,7 +15,10 @@ import Metal
 /// memory, add the entries and hit them. Then the shadow cases (CompressedShadowCases: the copy engine through
 /// compressed memory), the ZBC arms of the other formats (CompressedZbcArms: sRGB8, RGB10A2, RGBA16Unorm, RGBA32Float,
 /// Depth16), and a 4x BGRA8 target cleared to a value the table holds and to 0.5 (a ROP tie, never added): the GPU time
-/// of each.
+/// of each. An entry the kernel refused fails (`zbc_table_full`, the arms' `zbc_<arm>_table_full`): its clears were
+/// ordinary ones. The GPU's table keeps 15 colour entries for the whole boot and its boot entries take 6; these cases
+/// ask for 4 more and the arms for 5, so the test runs right after the first GPU scene (Registry.gpuScenes), before
+/// gpu.clear.formats clears to more values than the table holds.
 struct CompressedTargetsTest: HWTest {
     let id = "gpu.gm20b.compressed_targets"
     let name = "Multisampled and depth memoryless targets compress; repeated clears become zero-bandwidth"
@@ -166,6 +169,7 @@ struct CompressedTargetsTest: HWTest {
         metrics.set("views", after["views"] ?? 0)
         if delta("made") == 0 && (after["views"] ?? 0) == 0 { wrong.append("no_compressed_memory") }
         if delta("zbc_added") + delta("zbc_full") == 0 { wrong.append("no_zbc_entry_asked") }
+        if delta("zbc_full") > 0 { wrong.append("zbc_table_full") }
         if delta("zbc_added") > 0 && delta("zbc_hits") == 0 { wrong.append("no_zbc_hit") }
         try await CompressedShadowCases.run(gpu, &metrics, &wrong)
         await CompressedZbcArms.run(gpu, &metrics, &wrong)

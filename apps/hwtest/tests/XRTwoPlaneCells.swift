@@ -68,64 +68,10 @@ final class XRTwoPlaneCells {
         return (wrong, offByOne, interlocked)
     }
 
-    /// Core Animation's untextured source-over fill into 'b3a8' beside its memoryless 550 and R32Float, verbatim from the
-    /// corpus: the pack's record fetches the 550 colour's stand-in and blends over it in the program (its storage form,
-    /// and its barrier twin)
-    static let fetchLine21H461 =
-        "R ok=1 label=com.apple.coreanimation.Pb3a8BsovXmw_A3Xhfx samples=1 topo=0 ds=0/0"
-            + " c0=550:15:1:1:5:0:1:5:0 c1=550:0:0:1:0:0:1:0:0 c2=55:0:0:1:0:0:1:0:0"
-            + " a0=31:0:1:48:1:1 a1=29:16:1:48:1:1 a2=29:24:1:48:1:1 a3=27:32:1:48:1:1"
-            + " | v fixed_vert_lph_spc lib=/System/Library/Frameworks/QuartzCore.framework/default.metallib"
-            + " fc_generic:53:00 fc_texcoord_count0:49:00 fc_texcoord_count1:49:00 fc_vertex_layout:49:00"
-            + " | f fixed_frag_lph_cph lib=/System/Library/Frameworks/QuartzCore.framework/default.metallib"
-            + " fc_attachment_count:49:03 fc_blend_function:49:3a fc_clamp_color:53:00 fc_color_inputs0:49:00"
-            + " fc_color_inputs1:49:00 fc_color_opaque0:53:00 fc_color_opaque1:53:00 fc_color_opcodes0:52:00000000"
-            + " fc_color_opcodes1:52:00000000 fc_coord_function0:49:00 fc_coord_function1:49:00 fc_debug_xr:53:00"
-            + " fc_dest_count:49:00 fc_dest_index:49:00 fc_destination_function:49:00 fc_extended_range:53:01"
-            + " fc_filter0:49:00 fc_filter1:49:00 fc_framebuffer_fetch:53:01 fc_generic:53:00"
-            + " fc_has_asg_77_weights:53:00 fc_has_attachment_0:53:00 fc_has_attachment_1:53:00"
-            + " fc_has_attachment_2:53:00 fc_has_color_cube0:53:00 fc_has_color_cube1:53:00 fc_has_color_params:53:00"
-            + " fc_has_color_trc0:53:00 fc_has_color_trc1:53:00 fc_has_edr_factor:53:00 fc_has_gamma_luts:53:00"
-            + " fc_has_hdr_scale:53:00 fc_has_image_0A:53:00 fc_has_image_0B:53:00 fc_has_image_0C:53:00"
-            + " fc_has_image_1A:53:00 fc_has_image_1B:53:00 fc_has_image_1C:53:00 fc_has_lod_bias:53:00"
-            + " fc_has_lut_tex:53:00 fc_has_noise_scale:53:00 fc_has_noise_tex:53:00 fc_has_premultiply:53:00"
-            + " fc_has_ycbcr_matrix:53:00 fc_image_count:49:00 fc_image_function0:49:00 fc_image_function1:49:00"
-            + " fc_memoryless_index0:49:00 fc_memoryless_index1:49:00 fc_noise_width:49:00 fc_plane_count0:49:00"
-            + " fc_plane_count1:49:00 fc_texcoord_count0:49:00 fc_texcoord_count1:49:00 fc_texture_function:49:00"
-            + " fc_unbounded_range:53:00 fc_vertex_layout:49:00 | "
-
-    static let fetchLine24B119 =
-        "R ok=1 label=com.apple.coreanimation.Pb3a8BsovXmw_A3Xhfx samples=1 topo=0 ds=0/0"
-            + " c0=550:15:1:1:5:0:1:5:0 c1=115:0:0:1:0:0:1:0:0 c2=55:0:0:1:0:0:1:0:0"
-            + " a0=31:0:1:48:1:1 a1=29:16:1:48:1:1 a2=29:24:1:48:1:1 a3=27:32:1:48:1:1"
-            + " | v fixed_vert_lph_spc lib=/System/Library/Frameworks/QuartzCore.framework/default.metallib"
-            + " fc_generic:53:00 fc_perspective:53:00 fc_texcoord_count0:49:00 fc_texcoord_count1:49:00"
-            + " fc_vertex_layout:49:00"
-            + " | f fixed_frag_lph_cph lib=/System/Library/Frameworks/QuartzCore.framework/default.metallib"
-            + " fc_attachment_count:49:03 fc_blend_function:49:3f fc_clamp_color:53:00 fc_color_inputs0:49:00"
-            + " fc_color_inputs1:49:00 fc_color_opaque0:53:00 fc_color_opaque1:53:00 fc_color_opcodes0:52:00000000"
-            + " fc_color_opcodes1:52:00000000 fc_color_opcodes_ext0:50:0000 fc_color_opcodes_ext1:50:0000"
-            + " fc_coord_function0:49:00 fc_coord_function1:49:00 fc_debug_xr:53:00"
-            + " fc_dest_count:49:00 fc_dest_index:49:00 fc_destination_function:49:00 fc_extended_range:53:01"
-            + " fc_filter0:49:00 fc_filter1:49:00 fc_framebuffer_fetch:53:01 fc_generic:53:00"
-            + " fc_has_asg_77_weights:53:00 fc_has_attachment_0:53:00 fc_has_attachment_1:53:00"
-            + " fc_has_attachment_2:53:00 fc_has_color_cube0:53:00 fc_has_color_cube1:53:00 fc_has_color_params:53:00"
-            + " fc_has_color_trc0:53:00 fc_has_color_trc1:53:00 fc_has_edr_factor:53:00 fc_has_gamma_luts:53:00"
-            + " fc_has_hdr_scale:53:00 fc_has_image_0A:53:00 fc_has_image_0B:53:00 fc_has_image_0C:53:00"
-            + " fc_has_image_1A:53:00 fc_has_image_1B:53:00 fc_has_image_1C:53:00 fc_has_lod_bias:53:00"
-            + " fc_has_lut_tex:53:00 fc_has_noise_scale:53:00 fc_has_noise_tex:53:00 fc_has_premultiply:53:00"
-            + " fc_has_ycbcr_matrix:53:00 fc_image_count:49:00 fc_image_function0:49:00 fc_image_function1:49:00"
-            + " fc_memoryless_index0:49:00 fc_memoryless_index1:49:00 fc_noise_width:49:00 fc_perspective:53:00"
-            + " fc_plane_count0:49:00 fc_plane_count1:49:00 fc_texcoord_count0:49:00 fc_texcoord_count1:49:00"
-            + " fc_texture_function:49:00 fc_unbounded_range:53:00 fc_vertex_layout:49:00 | "
-
-    static var is24B119OrLater: Bool {
-        ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27
-    }
-
-    static var fetchLine: String {
-        is24B119OrLater ? fetchLine24B119 : fetchLine21H461
-    }
+    /// Core Animation's untextured source-over fill into 'b3a8' beside its memoryless colours 1 and 2, as this OS's
+    /// QuartzCore makes it (CACorpus): the pack's record fetches the 550 colour's stand-in and blends over it in the
+    /// program (its storage form, and its barrier twin)
+    static let fetchLabel = "Pb3a8BsovXmw_A3Xhfx"
 
     static let fetches: [(x0: Float, y0: Float, x1: Float, y1: Float, color: SIMD4<Float16>)] = [
         (-0.9, -0.8, 0.3, 0.5, SIMD4(0.25, 0.5, -0.125, 0.5)),
@@ -138,21 +84,20 @@ final class XRTwoPlaneCells {
     /// a triangle run at a time).
     func fetchWrong(barrier: Bool) async throws -> (wrong: Int, offByOne: Int, interlocked: Int, fetched: Int) {
         let (width, height) = (XRTwoPlaneTest.width, XRTwoPlaneTest.height)
+        guard let line = CACorpus.state(Self.fetchLabel) else {
+            throw TestFailure("CACorpus has no \(Self.fetchLabel)")
+        }
         let pipeline: MTLRenderPipelineState
         if let cached = cachedFetchPipeline {
             pipeline = cached
         } else {
-            guard let line = PipelineLine(Self.fetchLine) else {
-                throw TestFailure("the fetch state's line does not parse")
-            }
             let library = try gpu.device.makeLibrary(URL: CAState.library)
             pipeline = try CAState.pipeline(line, library: library, device: gpu.device)
             cachedFetchPipeline = pipeline
         }
         let (buffer, texture) = try XRTwoPlaneTest.surfaceTexture(gpu)
-        let scratchFormats: [MTLPixelFormat] = [Self.is24B119OrLater ? .rgba16Float : XRTwoPlaneTest.format, .r32Float]
-        let scratch = try scratchFormats.map {
-            try gpu.texture($0, width, height, usage: [.renderTarget], storage: .memoryless)
+        let scratch = try [1, 2].map {
+            try gpu.texture(CACorpus.colorFormat(line, $0), width, height, usage: [.renderTarget], storage: .memoryless)
         }
         let before = GM20BFacade.counters(of: gpu.device)
         try await gpu.run { commands in

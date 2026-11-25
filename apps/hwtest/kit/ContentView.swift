@@ -15,42 +15,41 @@ public struct ContentView: View {
     }
 
     public var body: some View {
-        Group {
-            if stage.visible && stage.fullScreen {
-                StageView(stage: stage).ignoresSafeArea()
-            } else {
-                NavigationStack {
-                    VStack(spacing: 0) {
-                        if stage.visible && !stage.fullScreen {
-                            StageView(stage: stage).frame(height: 240)
-                        }
-                        List {
-                            RunHeader(suite: suite, list: suite.list)
-                            GlassWatchRow()
-                            if suite.running {
-                                RunSections(list: suite.list)
-                            } else {
-                                bySubsystem
-                            }
-                        }
-                        .listStyle(.insetGrouped)
-                    }
-                    .navigationTitle("Hardware tests")
-                    .toolbar {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Button("Interactive") { suite.runInteractive() }
-                                .disabled(suite.running || suite.pendingRun != nil)
-                        }
-                        ToolbarItem(placement: .topBarLeading) {
-                            Button("Bench") { benchShown = true }
-                                .disabled(suite.running || suite.pendingRun != nil)
-                        }
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button("Run All") { suite.runAll() }
-                                .disabled(suite.running || suite.pendingRun != nil).bold()
-                        }
+        NavigationStack {
+            VStack(spacing: 0) {
+                if stage.visible && !stage.fullScreen {
+                    StageView(stage: stage).frame(height: 240)
+                }
+                List {
+                    RunHeader(suite: suite, list: suite.list)
+                    GlassWatchRow()
+                    if suite.running {
+                        RunSections(list: suite.list)
+                    } else {
+                        bySubsystem
                     }
                 }
+                .listStyle(.insetGrouped)
+            }
+            .navigationTitle("Hardware tests")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Interactive") { suite.runInteractive() }
+                        .disabled(suite.running || suite.pendingRun != nil)
+                }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Bench") { benchShown = true }
+                        .disabled(suite.running || suite.pendingRun != nil)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Run All") { suite.runAll() }
+                        .disabled(suite.running || suite.pendingRun != nil).bold()
+                }
+            }
+        }
+        .overlay {
+            if stage.visible && stage.fullScreen {
+                StageView(stage: stage).ignoresSafeArea()
             }
         }
         .overlay(alignment: .bottom) {
