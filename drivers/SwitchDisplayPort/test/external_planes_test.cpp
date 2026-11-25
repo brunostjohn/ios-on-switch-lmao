@@ -557,6 +557,37 @@ TEST(ExternalPlanes, BlockLinearRgb)
     }
 }
 
+// A single plane the backing describes as block-linear (what VIC reads before the GPU's own layout) is scanned so; a
+// backing that describes its plane as rows is scanned as rows whatever the GPU says.
+TEST(ExternalPlanes, BlockLinearRgbFromTheBacking)
+{
+    Layer l = wholeLayer(kUi, {440, 0, 2560, 1440});
+    switch_gpu_backing_layout backing = {};
+    backing.plane_count = 1;
+    auto &plane = backing.planes[0];
+    plane.width = 2560;
+    plane.height = 1440;
+    plane.bytes_per_element = 4;
+    plane.pitch = 2560 * 4;
+    plane.block_height_log2 = 4;
+    plane.bytes = uint64_t(plane.pitch) * 1536;
+    plane.layout = SWITCH_GPU_BACKING_BLOCK_LINEAR;
+    l.surface.allocation = std::max<uint64_t>(l.surface.allocation, plane.bytes);
+    l.surface.descriptorBytes = roundUp(l.surface.allocation, 16384);
+    const Layout layout = layoutOf(nullptr, backing);
+    ASSERT_EQ(layout.kind, Layout::kBlock);
+    Image m;
+    ASSERT_TRUE(imageFor(l, layout, kUltraW, kUltraH, m));
+    EXPECT_EQ(m.surfaceKind, native_planes::kSurfaceKindBlock | (4u << 4));
+    EXPECT_EQ(m.lineStride, 2560u * 4u);
+
+    tgm_layout gpu = {};
+    ASSERT_EQ(tgm_layout_tiled(2560, 1440, 4, &gpu), 1);
+    EXPECT_EQ(layoutOf(&gpu, switch_gpu_backing_layout{}).kind, Layout::kBlock);
+    plane.layout = SWITCH_GPU_BACKING_PITCH;
+    EXPECT_EQ(layoutOf(&gpu, backing).kind, Layout::kRows);
+}
+
 namespace {
 // A two-plane picture a producer laid out block-linear in 16-GOB blocks, chroma after luma.
 switch_gpu_backing_layout blockPlanes(const Surface &s, bool nv12)

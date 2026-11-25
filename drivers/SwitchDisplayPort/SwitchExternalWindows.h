@@ -40,7 +40,6 @@ struct WindowState {
     int matrix = -1, fullRange = -1;
 };
 
-// The memory plan for a frame on the head whose timing `timing` holds.
 inline switch_display_memory_head memoryOf(const switch_display_memory_head &timing, const Frame &frame)
 {
     switch_display_memory_head head = timing;

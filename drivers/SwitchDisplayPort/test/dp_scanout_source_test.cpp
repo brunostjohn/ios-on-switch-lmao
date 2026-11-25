@@ -53,7 +53,7 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_TRUE(request.has("switch_external::frameOf(plan, images, iova, dcb->pixelClockHz())"));
     EXPECT_TRUE(
         request.has("drawing[w] = plan.window[w].on ? slotOf[plan.window[w].layer] : -1; releaseUnshown(building);"));
-    EXPECT_FALSE(request.has("dropFrame"));
+    EXPECT_TRUE(request.before("if (prepared < 0)", "releaseUnshown(building); dropFrame(request); return;"));
 
     const auto complete = Block(present, "void SwitchExternalScreen::completionFired(");
     EXPECT_TRUE(complete.has("if (!self->connected || self->selectedMode < 0 || self->device != 2)"));

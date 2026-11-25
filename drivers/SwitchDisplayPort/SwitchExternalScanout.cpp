@@ -288,7 +288,6 @@ void SwitchExternalScreen::takeLayers(const uint8_t *request, bool present[], na
     }
 }
 
-// The reads of slots this frame took that no window shows.
 void SwitchExternalScreen::releaseUnshown(uint32_t building)
 {
     for (unsigned i = 0; i < kSlots; ++i)
@@ -318,14 +317,20 @@ void SwitchExternalScreen::requestFrame()
             retryWhenReady();
             return;
         }
-        if (prepared >= 0) {
-            building |= 1u << prepared;
-            if (switch_external::imageFor(layers[i], slotLayout(slots[prepared]), mode.hactive, mode.vactive,
-                                          images[i])) {
-                slotOf[i] = prepared;
-                continue;
-            }
+        if (prepared < 0) {
+#if DEVELOPMENT || DEBUG
+            noteUnshown(i, prepared);
+#endif
+            releaseUnshown(building);
+            dropFrame(request);
+            return;
         }
+        building |= 1u << prepared;
+        if (switch_external::imageFor(layers[i], slotLayout(slots[prepared]), mode.hactive, mode.vactive, images[i])) {
+            slotOf[i] = prepared;
+            continue;
+        }
+        // No window reads the layer as it lies: the other layers show without it.
         present[i] = false;
 #if DEVELOPMENT || DEBUG
         noteUnshown(i, prepared);

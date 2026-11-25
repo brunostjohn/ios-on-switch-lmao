@@ -100,8 +100,9 @@ inline unsigned checkSwap(uint32_t updated, uint32_t background, const bool hasS
     return surfaces > kMaxLayers ? kTwoUi : kAccepted;
 }
 
-// How a surface's pixels lie: its own rows, the GPU's block-linear layout of a single plane (TegraGM20BLayout.h), or two
-// planes a producer laid out block-linear (the backing's layout, as VIC reads a destination's).
+// How a surface's pixels lie: its own rows, one block-linear plane (the GPU's layout, TegraGM20BLayout.h, or the
+// backing's), or two planes a producer laid out block-linear. The backing's layout first and the GPU's after it is the
+// order VIC reads a destination's in.
 struct Layout {
     enum Kind {
         kRows,
@@ -116,13 +117,26 @@ struct Layout {
 inline Layout layoutOf(const tgm_layout *gpu, const switch_gpu_backing_layout &backing)
 {
     Layout layout;
-    if (gpu) {
+    const switch_gpu_backing_plane &first = backing.planes[0];
+    if (backing.plane_count == 1 && first.layout == SWITCH_GPU_BACKING_BLOCK_LINEAR && !first.offset &&
+        first.block_height_log2 <= 5) {
+        const uint32_t blockRows = 8u << first.block_height_log2;
         layout.kind = Layout::kBlock;
-        layout.block = *gpu;
-    } else if (backing.plane_count == 2 && backing.planes[0].layout == SWITCH_GPU_BACKING_BLOCK_LINEAR &&
+        layout.block = {first.width,
+                        first.height,
+                        first.bytes_per_element,
+                        first.pitch,
+                        (first.height + blockRows - 1) / blockRows * blockRows,
+                        uint8_t(first.block_height_log2),
+                        4096,
+                        first.bytes};
+    } else if (backing.plane_count == 2 && first.layout == SWITCH_GPU_BACKING_BLOCK_LINEAR &&
                backing.planes[1].layout == SWITCH_GPU_BACKING_BLOCK_LINEAR) {
         layout.kind = Layout::kBlockPlanes;
         layout.planes = backing;
+    } else if (!backing.plane_count && gpu) {
+        layout.kind = Layout::kBlock;
+        layout.block = *gpu;
     }
     return layout;
 }
