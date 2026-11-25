@@ -4,7 +4,7 @@ import unittest
 
 from tools.devicerun import devicerun
 from tools.devicerun.motion import MOTION
-from tools.devicerun.rules import FAIL, INFO, NA, PASS
+from tools.devicerun.rules import FAIL, INFO, NA, NO_DATA, PASS
 
 LOCATIOND = '/usr/libexec/locationd'
 BACKBOARDD = '/usr/libexec/backboardd'
@@ -13,10 +13,10 @@ HWTEST = '/private/var/containers/Bundle/Application/X/SwitchHWTest.app/SwitchHW
 KERNEL = '/System/Library/Kernels/kernel.development'
 
 
-def record(message: str, process: str, second: int = 0) -> dict:
+def record(message: str, process: str, second: int = 0, boot: str = 'B2') -> dict:
     return {
         'timestamp': f'2026-11-22 23:53:{second:02d}.000000+0000',
-        'bootUUID': 'B2',
+        'bootUUID': boot,
         'processImagePath': process,
         'subsystem': 'com.apple.locationd.Motion',
         'category': 'Motion',
@@ -30,8 +30,10 @@ def results(*records: dict) -> dict:
     return {r.check.name: r for r in found}
 
 
-def darwin(major: int) -> dict:
-    return record(f'Darwin Kernel Version {major}.5.0: Thu  1 Jan 1970 00:00:00 UTC; switch-ios:ios-obj/X', KERNEL)
+def darwin(major: int, boot: str = 'B2') -> dict:
+    return record(
+        f'Darwin Kernel Version {major}.5.0: Thu  1 Jan 1970 00:00:00 UTC; switch-ios:ios-obj/X', KERNEL, 0, boot
+    )
 
 
 def at(second: float, message: str, process: str) -> dict:
@@ -80,10 +82,24 @@ class Motion(unittest.TestCase):
             self.assertEqual(got[name].verdict, FAIL, name)
         self.assertEqual(got['motion.spu-added'].verdict, PASS, "the cache's copy is judged apart")
         self.assertEqual(got['motion.spu-not-ready'].verdict, PASS)
-        for kernel in ((IOS17,), ()):
-            got = results(*kernel, *locationd)
-            for name in names:
-                self.assertEqual(got[name].verdict, NA, name)
+        got = results(IOS17, *locationd)
+        for name in names:
+            self.assertEqual(got[name].verdict, NA, name)
+        got = results(*locationd)
+        for name in names:
+            self.assertEqual(got[name].verdict, NO_DATA, f'{name}: an archive that starts after the boot')
+
+    def test_an_archive_of_two_boots_judges_each_its_way(self):
+        failing = record(
+            '[CLIoHidInterface] Service for device with usage pair {65292, 5} is not ready', LOCATIOND, 9, 'A'
+        )
+        got = results(darwin(23, 'A'), failing, darwin(25, 'B'))
+        self.assertEqual(got['motion.locationd-spu-not-ready'].verdict, PASS, "the iOS 17 boot's line is not judged")
+        on_27 = record(
+            '[CLIoHidInterface] Service for device with usage pair {65292, 5} is not ready', LOCATIOND, 9, 'B'
+        )
+        got = results(darwin(23, 'A'), darwin(25, 'B'), on_27)
+        self.assertEqual(got['motion.locationd-spu-not-ready'].verdict, FAIL)
 
     def test_locationds_device_motion_is_switchmotions(self):
         got = results(IOS27, record('[CLIoHidInterface] Adding new Device with usage pair {65292, 5}', LOCATIOND))
@@ -140,6 +156,7 @@ class Motion(unittest.TestCase):
         for name, result in got.items():
             if name not in (
                 'motion.kernel',
+                'motion.ios27-boot',
                 'motion.spu-added-ungated',
                 'motion.device-motion-interval',
                 'motion.fastpath-open.backboardd',

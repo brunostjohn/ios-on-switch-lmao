@@ -63,6 +63,8 @@ class Check:
     check's lines in the same boot against `per_count`, that line's field or a number (FAIL where any differs, NO_DATA
     with no run), and `rule` is not read. `preceded` names a check: only this check's lines that one of its lines came
     within `within` seconds before, in the same boot (with the same `key` value, when `key` is set), are judged.
+    `boots` names a check: only this check's lines in a boot where one of its lines came are judged (an iPadOS 27
+    boot's, in an archive of several).
     """
 
     name: str
@@ -98,6 +100,7 @@ class Check:
     per: str = ''
     per_count: str = ''
     preceded: str = ''
+    boots: str = ''
 
     def literals(self) -> tuple[str, ...]:
         return (self.contains,) if isinstance(self.contains, str) else self.contains
@@ -444,6 +447,9 @@ def evaluate(
 ) -> Result:
     """Return the check's verdict over the events it matched (`log_end`: the last line's time, for `followed`)."""
     matches = filtered(check, matches)
+    if check.boots:
+        boots = {fields['boot'] for fields in by_name.get(check.boots, [])}
+        matches = [fields for fields in matches if fields['boot'] in boots]
     if check.unless:
         matches = excused(check, matches, by_name)
     if check.after:

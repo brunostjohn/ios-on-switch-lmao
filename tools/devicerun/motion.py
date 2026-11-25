@@ -34,6 +34,8 @@ FASTPATH_OPEN = '[FastPath] openFastPathPrivate() failed'
 FASTPATH_COPY = '[FastPath] copyEventPrivate() Failed'
 CACHE_COPY = '!locationd'
 IOS27 = 'motion.kernel darwin=25'
+# An iPadOS 27 boot: one whose kernel version line says Darwin 25, so an archive of several boots judges each its way.
+IOS27_BOOT = 'motion.ios27-boot'
 FASTPATH = 'drivers/SwitchTouch/SwitchHIDFastPath.cpp'
 EDITS = 'translate/arm64e/pretranslate/edits_24B119.json'
 
@@ -48,6 +50,15 @@ MOTION = [
         show=('darwin',),
         source=SOURCE,
         note="the boot's Darwin major: 25 is iPadOS 27, where locationd and the fast path's copies are judged",
+    ),
+    Check(
+        IOS27_BOOT,
+        OWNER,
+        'Darwin Kernel Version 25.',
+        REPORT,
+        process='kernel',
+        source=SOURCE,
+        note='an iPadOS 27 boot began',
     ),
     Check(
         'motion.spu-added',
@@ -92,6 +103,8 @@ MOTION = [
         regex=CLEARED,
         show=('usage',),
         applies=IOS27,
+        needs='motion.kernel',
+        boots=IOS27_BOOT,
         source=EDITS,
         note="a coprocessor service locationd's own table no longer asks for; boot 2, before 15032ab57: 7",
     ),
@@ -104,6 +117,8 @@ MOTION = [
         regex=USAGE,
         show=('usage',),
         applies=IOS27,
+        needs='motion.kernel',
+        boots=IOS27_BOOT,
         source=EDITS,
         note="boot 2, before 15032ab57: 24; usage 5 here is every app's device motion",
     ),
@@ -114,6 +129,8 @@ MOTION = [
         process='locationd',
         subsystem=SUBSYSTEM,
         applies=IOS27,
+        needs='motion.kernel',
+        boots=IOS27_BOOT,
         source=EDITS,
         note='boot 2, before 15032ab57: 2',
     ),
@@ -157,6 +174,8 @@ MOTION = [
             process=process,
             subsystem=SUBSYSTEM,
             applies=applies,
+            needs='motion.kernel' if applies else '',
+            boots=IOS27_BOOT if applies else '',
             source=FASTPATH,
             note='CoreMotion could not open the device motion fast path: the plug-in type, openForClient or the slots',
         )
@@ -183,6 +202,8 @@ MOTION = [
             unless_within=1.0,
             key='process',
             applies=IOS27,
+            needs='motion.kernel',
+            boots=IOS27_BOOT,
             source=FASTPATH,
             note='a fast path copy that found no report, more than 1 s from its process setting a ReportInterval',
         )
