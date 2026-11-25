@@ -1676,7 +1676,8 @@ static void __attribute__((noinline))
 thread_call_invoke(thread_call_func_t func,
     thread_call_param_t param0,
     thread_call_param_t param1,
-    __unused thread_call_t call)
+    __unused thread_call_t call,
+    __unused thread_call_group_t group)
 {
 #if DEVELOPMENT || DEBUG
 	KERNEL_DEBUG_CONSTANT(
@@ -1696,7 +1697,7 @@ thread_call_invoke(thread_call_func_t func,
 #endif
 	(*func)(param0, param1);
 #if DEVELOPMENT || DEBUG
-	switch_callout_end((const void *)func, thread_call_get_group(call)->tcg_name, switch_begin);
+	switch_callout_end((const void *)func, group->tcg_name, switch_begin);
 #endif
 
 #if CONFIG_DTRACE
@@ -1812,7 +1813,7 @@ thread_call_thread(
 
 		thc_state.thc_call_start = mach_absolute_time();
 
-		thread_call_invoke(func, param0, param1, call);
+		thread_call_invoke(func, param0, param1, call, group);
 
 		thc_state.thc_call = NULL;
 
@@ -2053,7 +2054,7 @@ thread_call_delayed_timer(timer_call_param_t p0, timer_call_param_t p1)
 				call->tc_flags |= THREAD_CALL_RUNNING;
 
 				thread_call_unlock(group);
-				thread_call_invoke(func, param0, param1, call);
+				thread_call_invoke(func, param0, param1, call, group);
 				thread_call_lock_spin(group);
 
 				/* finish may detect that the call has been re-pended */

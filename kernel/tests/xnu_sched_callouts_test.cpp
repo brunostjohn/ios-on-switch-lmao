@@ -98,7 +98,7 @@ TEST_P(XnuSchedCalloutsSource, ThreadCallFunctionsAndTimerActionsAreBracketed)
     EXPECT_THAT(switch_ios::test::Body(calls, "\nthread_call_invoke(thread_call_func_t func"),
                 HasSubstr("#if DEVELOPMENT || DEBUG\n\tconst uint64_t switch_begin = switch_callout_begin();\n#endif\n"
                           "\t(*func)(param0, param1);\n#if DEVELOPMENT || DEBUG\n\tswitch_callout_end((const void "
-                          "*)func, thread_call_get_group(call)->tcg_name, switch_begin);\n#endif\n"));
+                          "*)func, group->tcg_name, switch_begin);\n#endif\n"));
     const std::string timer = switch_ios::test::SourceText("../" + tree + "/iokit/Kernel/IOTimerEventSource.cpp");
     const std::string bracketed =
         "const uint64_t switch_begin = switch_callout_begin();\n\t\t\t\tme->invokeAction(doit, "
