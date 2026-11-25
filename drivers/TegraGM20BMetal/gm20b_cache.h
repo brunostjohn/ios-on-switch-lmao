@@ -4,8 +4,8 @@
 //
 // An entry is a state's record or the reason it has none, under <the process's own shader cache directory>/raw-<stack key>/: the
 // directory the plugin chose for m2v's own pipeline binaries, owner-only and kept across reboots. Not a directory other processes
-// share: a record is GPU code the render server uploads and runs. Entries are whole files (written apart, renamed in), checked
-// against their full key and a checksum when read; a directory of another build's stack is removed when the cache opens.
+// share: a record is GPU code the render server uploads and runs. Entries are whole files (written apart, synced, renamed in),
+// checked against their full key when read; a directory of another build's stack is removed when the cache opens.
 #pragma once
 #include <cstdint>
 #include <map>
