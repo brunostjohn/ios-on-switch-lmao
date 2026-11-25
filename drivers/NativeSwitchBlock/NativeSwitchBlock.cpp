@@ -1986,12 +1986,13 @@ void NativeSwitchBlock::prepareDirect(PipeSlot &slot, bool write)
 #endif
 }
 
-// Before the first DMA (setup's GPT read through the bounce buffer). Without it the card's DMA reaches all of RAM, as
-// before 26 Nov: one line says so and why.
+// Before the first DMA (setup's GPT read through the bounce buffer). Every page table is made here: the worker's holds
+// must never wait for memory, since writing pages out may be what frees it. Without the SMMU the card's DMA reaches all
+// of RAM: one line says so and why.
 void NativeSwitchBlock::setupSmmu()
 {
-    char line[160] = "no memory for its directories";
-    if (smmu.init(TEGRA_SMMU_ASID_SDMMC1_LOW, TEGRA_SMMU_ASID_SDMMC1_HIGH)) {
+    char line[160] = "no memory for its directories or page tables";
+    if (smmu.init(TEGRA_SMMU_ASID_SDMMC1_LOW, TEGRA_SMMU_ASID_SDMMC1_HIGH) && smmu.reserveTables()) {
         smmuOn = true;
         if (!holdOwned(bouncePA, kBounceBytes, true)) {
             snprintf(line, sizeof(line), "no page table for the bounce buffer");
