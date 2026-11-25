@@ -20,7 +20,8 @@ using testing::Not;
 TEST(SwitchMotionSource, SamplePathsNeverWait)
 {
     const std::string source = SourceText("../SwitchMotion.cpp");
-    for (const char *signature : {"void SwitchMotion::sample(", "void SwitchMotion::drainFifo("}) {
+    for (const char *signature :
+         {"void SwitchMotion::sample(", "void SwitchMotion::drainFifo(", "void SwitchMotion::fuse("}) {
         const std::string body = Body(source, signature);
         ASSERT_FALSE(body.empty()) << signature;
         for (const char *wait : {"IOSleep", "IODelay", "while (", "for (;;)"})
@@ -37,6 +38,21 @@ TEST(SwitchMotionSource, SensorPropertyUsages)
     EXPECT_THAT(motion, HasSubstr("0x0a, 0x0e, 0x03,"));
     EXPECT_THAT(motion, HasSubstr("0x0a, 0x1b, 0x03,"));
     EXPECT_THAT(motion, Not(HasSubstr("0x0a, 0x16, 0x03")));
+}
+
+// CoreMotion's 6-axis device motion: AppleVendorMotion 0xff0c / 5, the payload as one element of the build's length
+// inside an AppleVendor Message collection, then the same Report Interval and Report Latency features.
+TEST(SwitchMotionSource, DeviceMotionDescriptor)
+{
+    const std::string hid = SourceText("../../SwitchTouch/SwitchHIDDevice.cpp");
+    const std::string descriptor = Between(hid, "const uint8_t kDeviceMotionDescriptor[] = {", "};");
+    EXPECT_THAT(descriptor, HasSubstr("0x06, 0x0c, 0xff, 0x09, 0x05, 0xa1, 0x01, 0x85, 0x01,"));
+    EXPECT_THAT(descriptor, HasSubstr("0x06, 0x00, 0xff, 0x09, 0x23, 0xa1, 0x00,"));
+    EXPECT_THAT(descriptor, HasSubstr("0x95, kDeviceMotionBytes, 0x81, 0x02, 0xc0,"));
+    EXPECT_THAT(descriptor, HasSubstr("0x0a, 0x0e, 0x03,"));
+    EXPECT_THAT(descriptor, HasSubstr("0x0a, 0x1b, 0x03,"));
+    EXPECT_THAT(
+        hid, HasSubstr("{kDeviceMotionDescriptor, sizeof(kDeviceMotionDescriptor), sizeof(SwitchDeviceMotionReport),"));
 }
 
 // orientation_pipeline_test checks kSwitchOrientationDescriptor against the report; the device must serve that one.

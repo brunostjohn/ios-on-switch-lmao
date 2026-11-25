@@ -147,6 +147,27 @@ const uint8_t kAccelerometerDescriptor[] = {
 const uint8_t kGyroDescriptor[] = {MOTION_DESCRIPTOR(0x09, 0x57)};  // Gyro; Angular Velocity X 0x0457
 #undef MOTION_DESCRIPTOR
 
+// Device motion (SwitchHID.h): AppleVendorMotion 0xff0c / 5, the payload as one element of the build's length in an
+// AppleVendor Message collection (IOHIDElementPrivate makes a single-usage element with a count above 1 one element of
+// all its bits; IOHIDEventDriver::handleVendorMessageReport turns it into a vendor-defined event), then the motion
+// sensors' Report Interval and Report Latency features.
+constexpr uint8_t kDeviceMotionBytes = static_cast<uint8_t>(kSwitchDeviceMotionPayload);
+// clang-format off: one line per descriptor item group, as the other descriptors read
+const uint8_t kDeviceMotionDescriptor[] = {
+    0x06, 0x0c, 0xff, 0x09, 0x05, 0xa1, 0x01, 0x85, 0x01,  // AppleVendorMotion: 5, Collection (Application), ID 1
+    0x06, 0x00, 0xff, 0x09, 0x23, 0xa1, 0x00,              // AppleVendor: Message, Collection (Physical)
+    0x06, 0x0c, 0xff, 0x09, 0x05,                          // AppleVendorMotion 5: the payload
+    0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08,              // 0..255, 8 bits
+    0x95, kDeviceMotionBytes, 0x81, 0x02, 0xc0,            // the build's payload length, Input (Data, Var, Abs)
+    0x05, 0x20, 0x0a, 0x0e, 0x03,                          // Sensor: Property Report Interval
+    0x15, 0x00, 0x27, 0xff, 0xff, 0xff, 0x7f,              // 0..2^31-1
+    0x75, 0x20, 0x95, 0x01, 0xb1, 0x02,                    // 32 bits, Feature
+    0x0a, 0x1b, 0x03, 0xb1, 0x02,                          // Report Latency: the same
+    0xc0,
+};
+// clang-format on
+static_assert(kSwitchDeviceMotionPayload < 0x80, "one-byte Report Count");
+
 struct Profile {
     const uint8_t *descriptor;
     size_t descriptorSize, reportSize;
@@ -170,8 +191,10 @@ const Profile kProfiles[] = {
     // One profile for every temperature sensor; each instance has its own Product (thermalmonitord's matchName).
     {kTemperatureDescriptor, sizeof(kTemperatureDescriptor), 5, 0x5108, 0xff00, 0x05, "Switch Temperature Sensor",
      "I2C"},
+    {kDeviceMotionDescriptor, sizeof(kDeviceMotionDescriptor), sizeof(SwitchDeviceMotionReport), 0x5109, 0xff0c, 0x05,
+     "Switch Device Motion", "SPI"},
 };
-static_assert(sizeof(kProfiles) / sizeof(kProfiles[0]) == kSwitchHIDTemperature + 1, "one profile per SwitchHIDKind");
+static_assert(sizeof(kProfiles) / sizeof(kProfiles[0]) == kSwitchHIDDeviceMotion + 1, "one profile per SwitchHIDKind");
 static_assert(sizeof(SwitchMotionReport) == 13 && sizeof(SwitchOrientationReport) == 11, "motion report layouts");
 
 namespace edge {
@@ -834,8 +857,8 @@ static IOLock *createLock()
 IOService *switch_hid_create(SwitchHIDKind kind)
 {
     IOLock *lock = createLock();
-    if (!lock || kind > kSwitchHIDOrientation)
-        panic("SwitchHID: bad device kind %u or no memory", kind);  // not temperature
+    if (!lock || kind == kSwitchHIDTemperature || kind > kSwitchHIDDeviceMotion)
+        panic("SwitchHID: bad device kind %u or no memory", kind);
     IOLockLock(lock);
     prepare();
     IOLockUnlock(lock);

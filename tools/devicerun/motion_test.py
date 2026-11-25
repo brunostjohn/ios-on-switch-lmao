@@ -64,6 +64,19 @@ class Motion(unittest.TestCase):
         self.assertEqual(got['motion.locationd-spu'].verdict, INFO)
         self.assertEqual(len(got['motion.locationd-spu'].matches), 3)
 
+    def test_switchmotions_device_motion_service_passes(self):
+        got = results(
+            record('[CLIoHidInterface] Adding new Device with usage pair {65292, 5}', SPRINGBOARD),
+            record(
+                '[CLIoHidInterface] Property for usage pair {65292, 5}: {ReportInterval = 10000} was set successfully',
+                SPRINGBOARD,
+                1,
+            ),
+        )
+        self.assertEqual(got['motion.spu-added'].verdict, PASS)
+        self.assertEqual(got['motion.spu-not-ready'].verdict, PASS)
+        self.assertEqual(got['motion.device-motion-interval'].verdict, INFO)
+
     def test_the_accelerometer_and_gyroscope_alone_pass(self):
         got = results(
             record('[CLIoHidInterface] Adding new Device with usage pair {65280, 3}', SPRINGBOARD),
@@ -72,7 +85,12 @@ class Motion(unittest.TestCase):
             ),
         )
         for name, result in got.items():
-            if name not in ('motion.spu-added-ungated', 'motion.locationd-spu'):
+            if name not in (
+                'motion.spu-added-ungated',
+                'motion.locationd-spu',
+                'motion.device-motion-interval',
+                'motion.fastpath-open',
+            ):
                 self.assertEqual(result.verdict, PASS, name)
 
 

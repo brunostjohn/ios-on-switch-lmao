@@ -27,6 +27,7 @@ enum SwitchHIDKind : unsigned {
     kSwitchHIDGyro = 4,
     kSwitchHIDOrientation = 5,
     kSwitchHIDTemperature = 6,  // switch_hid_create_temperature only
+    kSwitchHIDDeviceMotion = 7,
 };
 
 // Touch screen, report ID 1: ten finger slots, slot n always carries contact n. Coordinates are panel pixels in
@@ -130,6 +131,24 @@ struct __attribute__((packed)) SwitchOrientationReport {
     uint8_t id;              // 1
     uint8_t orientation[2];  // 1u << UIDeviceOrientation in one set, 0 in the other
     uint64_t timestamp;      // strictly increasing from report to report
+};
+
+// Device motion, AppleVendorMotion 0xff0c / 5: the 6-axis device motion a real iPad's motion coprocessor fuses, which
+// CoreMotion's CLSensorFusionService6AxisSPU opens (21H461 on J120 as shipped; 24B119 once its J181 capability word
+// keeps the 6-axis bit, switch_ui_scale_sites_24B119.h). Input report 1 is one payload element, inside an AppleVendor
+// Message collection, so IOHIDEventDriver dispatches each report as one vendor-defined event carrying the payload's
+// bytes at the report's time (../SwitchMotion/SwitchMotionFusion.h has the payload); feature report 1 is the motion
+// sensors' Report Interval and Report Latency. CoreMotion sets only ReportInterval, its update interval.
+// The payload's length is the build's: CoreMotion drops a report of any other (21H461 52 bytes, 24B119 60).
+#if SWITCH_IPSW_KIND_24B119
+constexpr size_t kSwitchDeviceMotionPayload = 60;
+#else
+constexpr size_t kSwitchDeviceMotionPayload = 52;
+#endif
+
+struct __attribute__((packed)) SwitchDeviceMotionReport {
+    uint8_t id;  // 1
+    uint8_t payload[kSwitchDeviceMotionPayload];
 };
 
 // Temperature sensors (../SwitchPower/SwitchSensors.cpp): thermalmonitord's HID sensors, Apple vendor 0xff00 /

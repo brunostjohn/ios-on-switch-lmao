@@ -15,6 +15,7 @@
 //   * ICM-40607 and LSM6DS3H: enough of their maps for identification, reset, set-up and one sample each (their reset
 //     values as the driver's read-modify-writes expect them: inv_icm42600 and st_lsm6dsx).
 #include <cinttypes>
+#include <cmath>
 #include <deque>
 #include <array>
 #include <gtest/gtest.h>
@@ -509,6 +510,7 @@ struct HidDevice : IOService {
     std::vector<uint64_t> orientationTimes;
     std::vector<uint8_t> orientations;
     unsigned refuse = 0, refused = 0;
+    std::vector<SwitchDeviceMotionReport> motionReports;  // the device motion service's
 };
 
 static bool gTimedPosts = true;  // switch_hid_supports_timestamps
@@ -542,10 +544,23 @@ static IOReturn postOrientation(HidDevice *device, const void *report, size_t le
     return kIOReturnSuccess;
 }
 
+static IOReturn postMotion(HidDevice *device, const void *report, size_t length, uint64_t time)
+{
+    REQUIRE(length == sizeof(SwitchDeviceMotionReport));
+    SwitchDeviceMotionReport copy;
+    memcpy(&copy, report, sizeof(copy));
+    REQUIRE(copy.id == 1);
+    device->motionReports.push_back(copy);
+    device->times.push_back(time);
+    return kIOReturnSuccess;
+}
+
 IOReturn switch_hid_post(IOService *device, const void *report, size_t length)
 {
     if (static_cast<HidDevice *>(device)->kind == kSwitchHIDOrientation)
         return postOrientation(static_cast<HidDevice *>(device), report, length, mach_absolute_time());
+    if (static_cast<HidDevice *>(device)->kind == kSwitchHIDDeviceMotion)
+        return postMotion(static_cast<HidDevice *>(device), report, length, 0);
     REQUIRE(length == sizeof(SwitchMotionReport));
     SwitchMotionReport copy;
     memcpy(&copy, report, sizeof(copy));
@@ -559,6 +574,8 @@ IOReturn switch_hid_post_at(IOService *device, const void *report, size_t length
     REQUIRE(gTimedPosts);
     if (static_cast<HidDevice *>(device)->kind == kSwitchHIDOrientation)
         return postOrientation(static_cast<HidDevice *>(device), report, length, timestamp);
+    if (static_cast<HidDevice *>(device)->kind == kSwitchHIDDeviceMotion)
+        return postMotion(static_cast<HidDevice *>(device), report, length, timestamp);
     REQUIRE(length == sizeof(SwitchMotionReport));
     SwitchMotionReport copy;
     memcpy(&copy, report, sizeof(copy));
@@ -722,6 +739,69 @@ static const std::vector<std::string> k42607Start = {
 };
 
 // --- Scenarios ------------------------------------------------------------------------------------------------------
+
+static float payloadFloat(const SwitchDeviceMotionReport &report, size_t at)
+{
+    uint32_t bits = 0;
+    for (unsigned i = 0; i < 4; ++i)
+        bits |= static_cast<uint32_t>(report.payload[at + i]) << (8 * i);
+    float value = 0;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+// CoreMotion's 6-axis device motion (SwitchHID.h): the service's ReportInterval alone runs both sensors at twice its
+// rate with one FIFO interrupt per report, every sample goes through the filter, each report carries its last sample's
+// time, and nothing streams to the raw services nobody asked for.
+static void icm42607DeviceMotion()
+{
+    const int16_t accel[3] = {100, -200, 4096}, gyro[3] = {0, 0, 0};
+    Icm42607 chip;
+    check(start(chip), "device motion: started");
+    expectOps(k42607Start, "device motion start");
+    setFeature(kSwitchHIDDeviceMotion, 10000, 0);
+    expectLog("os_log: SwitchMotion: 200000 mHz, accel 1 (0 us), gyro 1 (0 us), batch 10000 us, FIFO watermark 2",
+              "device motion: 200 Hz, a report's two samples per FIFO interrupt");
+    gNow += 80000000;  // past both sensors' settle times
+    std::vector<uint64_t> sampleTimes;
+    for (unsigned i = 0; i < 8; ++i) {
+        gNow += 5000000;
+        chip.produce(accel, gyro);
+        sampleTimes.push_back(gNow);
+        if (i % 2)
+            check(deliver() == 1, "device motion: one interrupt per two samples");
+        else
+            check(!chip.line(), "device motion: no interrupt below the watermark");
+    }
+    HidDevice *motion = hid(kSwitchHIDDeviceMotion);
+    check(motion->motionReports.size() == 4, "device motion: one report per 10 ms");
+    const std::vector<uint64_t> wantTimes = {sampleTimes[1], sampleTimes[3], sampleTimes[5], sampleTimes[7]};
+    check(motion->times == wantTimes, "device motion: each report at its last sample's time");
+    check(hid(kSwitchHIDAccelerometer)->reports.empty() && hid(kSwitchHIDGyro)->reports.empty(),
+          "device motion: the raw services stay quiet");
+    const SwitchDeviceMotionReport &last = motion->motionReports.back();
+    check(last.payload[0] == 3 && last.payload[1] == 0x00 && last.payload[2] == 0x01,
+          "device motion: 6-axis report, initialized");
+    const float x = payloadFloat(last, 12), y = payloadFloat(last, 16), z = payloadFloat(last, 20),
+                w = payloadFloat(last, 24);
+    const double gravity[3] = {-2.0 * (x * z - w * y), -2.0 * (y * z + w * x), -(w * w - x * x - y * y + z * z)};
+    const double measured[3] = {0.024414, -0.048828, -1.0};
+    const double norm = std::sqrt(measured[0] * measured[0] + measured[1] * measured[1] + 1.0);
+    bool aligned = true;
+    for (unsigned i = 0; i < 3; ++i)
+        aligned = aligned && std::fabs(gravity[i] - measured[i] / norm) < 1e-4;
+    check(aligned, "device motion: the attitude's gravity is the accelerometer's at rest");
+    bool still = true;
+    for (unsigned i = 0; i < 3; ++i)
+        still = still && std::fabs(payloadFloat(last, 28 + 4 * i)) < 1e-4 &&
+                std::fabs(payloadFloat(last, 40 + 4 * i)) < 0.002;
+    check(still, "device motion: no rotation rate, user acceleration within the gravity norm's rounding");
+    setFeature(kSwitchHIDDeviceMotion, 0, 0);
+    expectLog("os_log: SwitchMotion: off", "device motion: off with its client");
+    expectClean("device motion");
+    teardown();
+}
+
 static void decodeAndMapping()
 {
     // ICM: big-endian accelerometer then gyroscope; -32768 marks a sensor that is off.
@@ -1381,6 +1461,11 @@ TEST(SwitchMotion, Icm42607Faults)
 TEST(SwitchMotion, Icm42607Fifo)
 {
     icm42607Fifo();
+}
+
+TEST(SwitchMotion, Icm42607DeviceMotion)
+{
+    icm42607DeviceMotion();
 }
 
 TEST(SwitchMotion, Icm42607Orientation)

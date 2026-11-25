@@ -1,7 +1,8 @@
 """iPadOS 27's motion capabilities: switch_ui_scale_sites_24B119.h's CoreMotion site.
 
-CoreMotion takes J181's word without its motion coprocessor's bits, so it no longer opens the coprocessor's page-0xff0c
-services and fuses device motion on the CPU from SwitchMotion's accelerometer and gyroscope.
+CoreMotion takes J181's word without the motion coprocessor bits whose services nothing here provides. It keeps bit 4:
+6-axis device motion comes from SwitchMotion's own fusion on {0xff0c, 5}, as from J181's coprocessor, so usage 5 is
+asked for and must be ready; the other page-0xff0c services are never opened.
 
 Boot 2 (22-23 Nov, iOS 27) is the baseline: 90 "not ready" lines for usages 1, 5 and 26 and 24 give-ups (locationd 2,
 SpringBoard 15, backboardd 6, SwitchHWTest 1); locationd also added usages 4, 7, 8 and 24 without setting a property.
@@ -21,7 +22,9 @@ NOT_READY = (
 )
 GIVE_UP = '[CLIoHidInterface] Could not set all properties after too many retries. Giving up.'
 USAGE = r'\{65292, (?P<usage>\d+)\}'
-CLEARED = r'\{65292, (?P<usage>1|5|7|26)\}'
+CLEARED = r'\{65292, (?P<usage>1|7|26)\}'
+DEVICE_MOTION = '[CLIoHidInterface] Property for usage pair {65292, 5}: {ReportInterval = '
+FASTPATH_OPEN = '[FastPath] openFastPathPrivate() failed'
 CACHE_COPY = '!locationd'
 
 MOTION = [
@@ -34,7 +37,7 @@ MOTION = [
         regex=CLEARED,
         show=('usage',),
         source=SOURCE,
-        note='a coprocessor service CoreMotion no longer asks for; boot 2: 5 x2, 26 x2',
+        note='a coprocessor service CoreMotion no longer asks for; boot 2: 26 x2',
     ),
     Check(
         'motion.spu-not-ready',
@@ -66,6 +69,26 @@ MOTION = [
         subsystem=SUBSYSTEM,
         source=SOURCE,
         note='the 6-axis coprocessor service opened in process; boot 2: SpringBoard 2, SwitchHWTest 1',
+    ),
+    Check(
+        'motion.device-motion-interval',
+        OWNER,
+        DEVICE_MOTION,
+        REPORT,
+        subsystem=SUBSYSTEM,
+        regex=r'ReportInterval = (?P<us>\d+)',
+        show=('us',),
+        source='drivers/SwitchMotion/SwitchMotion.cpp',
+        note="SwitchMotion's device motion service taking a client's interval",
+    ),
+    Check(
+        'motion.fastpath-open',
+        OWNER,
+        FASTPATH_OPEN,
+        REPORT,
+        subsystem=SUBSYSTEM,
+        source='drivers/SwitchTouch/SwitchHIDDevice.cpp',
+        note='the device motion service has no IOHIDEventService openForClient yet; CoreMotion uses the pushed sample',
     ),
     Check(
         'motion.spu-added-ungated',

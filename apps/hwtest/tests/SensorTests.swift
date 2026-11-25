@@ -99,28 +99,96 @@ struct GyroscopeTest: HWTest {
     }
 }
 
-/// Sensor fusion (CMDeviceMotion) and the orientation UIKit derives from it.
+/// How many device motion reports SwitchMotion has fused and sent since boot (debug kernels: its DeviceMotionReports
+/// property, drivers/SwitchMotion/SwitchMotion.cpp); nil without the driver or the property.
+enum MotionDriver {
+    typealias Matching = @convention(c) (UnsafePointer<CChar>) -> CFMutableDictionary?
+    typealias Service = @convention(c) (mach_port_t, CFDictionary?) -> mach_port_t
+    typealias Properties =
+        @convention(c) (mach_port_t, UnsafeMutablePointer<Unmanaged<CFMutableDictionary>?>, CFAllocator?, UInt32)
+        -> kern_return_t
+    typealias Release = @convention(c) (mach_port_t) -> kern_return_t
+
+    static func reports() -> UInt64? {
+        guard let iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW),
+              let matching = dlsym(iokit, "IOServiceMatching"),
+              let service = dlsym(iokit, "IOServiceGetMatchingService"),
+              let properties = dlsym(iokit, "IORegistryEntryCreateCFProperties"),
+              let release = dlsym(iokit, "IOObjectRelease")
+        else { return nil }
+        let motion = unsafeBitCast(service, to: Service.self)(
+            0, unsafeBitCast(matching, to: Matching.self)("SwitchMotion")
+        )
+        guard motion != 0 else { return nil }
+        defer { _ = unsafeBitCast(release, to: Release.self)(motion) }
+        var table: Unmanaged<CFMutableDictionary>?
+        guard unsafeBitCast(properties, to: Properties.self)(motion, &table, kCFAllocatorDefault, 0) == KERN_SUCCESS,
+              let dictionary = table?.takeRetainedValue() as NSDictionary?
+        else { return nil }
+        return (dictionary["DeviceMotionReports"] as? NSNumber)?.uint64Value
+    }
+}
+
+/// Sensor fusion (CMDeviceMotion) and the orientation UIKit derives from it. Device motion is fused in SwitchMotion as
+/// a motion coprocessor fuses it: the driver's report count has to grow with the samples received (it stays put when
+/// CoreMotion fuses the raw accelerometer and gyroscope itself), each sample arrives soon after its sample time, and
+/// at rest its gravity is the accelerometer's.
 struct DeviceMotionTest: HWTest {
     let id = "sensor.device_motion"
     let name = "Device motion and orientation"
     let subsystem = Subsystem.sensors
 
+    struct Sample {
+        let motion: CMDeviceMotion
+        let latency: Double
+    }
+
     func run(_ context: TestContext) async throws -> Outcome {
         let manager = Motion.manager
         guard manager.isDeviceMotionAvailable else { return .fail("isDeviceMotionAvailable is false") }
         manager.deviceMotionUpdateInterval = Motion.interval
+        manager.accelerometerUpdateInterval = Motion.interval
+        let accelerations = MotionSamples<CMAcceleration>()
+        let before = MotionDriver.reports()
         let (samples, rate) = try await Motion.collect(
-            start: { (sink: MotionSamples<CMDeviceMotion>) in
-                manager.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: Motion.queue) { data, _ in
-                    if let data { sink.add(data) }
+            start: { (sink: MotionSamples<Sample>) in
+                manager.startAccelerometerUpdates(to: Motion.queue) { data, _ in
+                    if let data { accelerations.add(data.acceleration) }
                 }
-            }, stop: { manager.stopDeviceMotionUpdates() }
-        )
-        let gravity = Stats.mean(
-            samples.map {
-                sqrt($0.gravity.x * $0.gravity.x + $0.gravity.y * $0.gravity.y + $0.gravity.z * $0.gravity.z)
+                manager.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: Motion.queue) { data, _ in
+                    if let data {
+                        sink.add(Sample(motion: data, latency: ProcessInfo.processInfo.systemUptime - data.timestamp))
+                    }
+                }
+            }, stop: {
+                manager.stopDeviceMotionUpdates()
+                manager.stopAccelerometerUpdates()
             }
         )
+        let after = MotionDriver.reports()
+        let motions = samples.map(\.motion)
+        let gravity = Stats.mean(
+            motions.map { sqrt($0.gravity.x * $0.gravity.x + $0.gravity.y * $0.gravity.y + $0.gravity.z * $0.gravity.z) }
+        )
+        let meanGravity = [
+            Stats.mean(motions.map(\.gravity.x)), Stats.mean(motions.map(\.gravity.y)), Stats.mean(motions.map(\.gravity.z))
+        ]
+        let accel = accelerations.all
+        let meanAccel = [Stats.mean(accel.map(\.x)), Stats.mean(accel.map(\.y)), Stats.mean(accel.map(\.z))]
+        let dot = zip(meanGravity, meanAccel).map { $0 * $1 }.reduce(0, +)
+        let norms = sqrt(meanGravity.map { $0 * $0 }.reduce(0, +)) * sqrt(meanAccel.map { $0 * $0 }.reduce(0, +))
+        let angle = norms > 0 ? acos(max(-1, min(1, dot / norms))) * 180 / .pi : 180
+        let user = Stats.mean(
+            motions.map {
+                sqrt(
+                    $0.userAcceleration.x * $0.userAcceleration.x + $0.userAcceleration.y * $0.userAcceleration.y
+                        + $0.userAcceleration.z * $0.userAcceleration.z
+                )
+            }
+        )
+        let latencies = samples.map(\.latency)
+        let latency = Stats.mean(latencies)
+        let fused = (before != nil && after != nil) ? Double(after! &- before!) : 0
         let orientation = await MainActor.run { () -> Int in
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             defer { UIDevice.current.endGeneratingDeviceOrientationNotifications() }
@@ -129,9 +197,23 @@ struct DeviceMotionTest: HWTest {
         var metrics = Metrics()
         metrics.set("rate_hz", rate, digits: 1)
         metrics.set("gravity_g", gravity, digits: 3)
+        metrics.set("gravity_vs_accel_deg", angle, digits: 2)
+        metrics.set("user_accel_g", user, digits: 3)
+        metrics.set("latency_ms", latency * 1000, digits: 1)
+        metrics.set("driver_reports", fused, digits: 0)
         metrics.set("orientation", orientation)
         return .judged(
-            [("at least 80 Hz of the 100 asked", rate >= 80), ("unit gravity vector", abs(gravity - 1) < 0.05)], metrics
+            [
+                ("at least 80 Hz of the 100 asked", rate >= 80),
+                ("unit gravity vector", abs(gravity - 1) < 0.05),
+                (
+                    "fused in SwitchMotion (its reports grew with the samples; debug kernel)",
+                    fused >= 0.8 * Double(samples.count)
+                ),
+                ("each sample within 25 ms of its sample time", latency < 0.025 && (latencies.min() ?? -1) > -0.001),
+                ("gravity within 5 degrees of the accelerometer's", angle < 5),
+                ("little user acceleration while still (< 0.1 g)", user < 0.1),
+            ], metrics
         )
     }
 }

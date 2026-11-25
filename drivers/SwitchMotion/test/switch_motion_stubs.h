@@ -10,6 +10,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 using IOReturn = int;
@@ -119,6 +120,37 @@ public:
     }
 };
 
+// SwitchMotion's debug-kernel registry counter (serializeProperties): just enough to compile and call.
+class OSSerialize : public OSObject {};
+
+class OSNumber : public OSObject {
+public:
+    uint64_t value = 0;
+
+    static OSNumber *withNumber(uint64_t number, unsigned)
+    {
+        auto *n = new OSNumber;
+        n->value = number;
+        return n;
+    }
+};
+
+class OSDictionary : public OSObject {
+public:
+    std::vector<std::pair<std::string, uint64_t>> numbers;
+
+    bool setObject(const char *key, const OSNumber *number)
+    {
+        numbers.emplace_back(key, number->value);
+        return true;
+    }
+
+    bool serialize(OSSerialize *) const
+    {
+        return true;
+    }
+};
+
 class IOService : public OSObject {
 public:
     IOService *provider = nullptr;
@@ -156,6 +188,16 @@ public:
     void registerService()
     {
         registered = true;
+    }
+
+    virtual bool serializeProperties(OSSerialize *) const
+    {
+        return true;
+    }
+
+    OSDictionary *dictionaryWithProperties() const
+    {
+        return new OSDictionary;
     }
 
     bool setProperty(const char *key, const char *value)

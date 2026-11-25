@@ -3,7 +3,8 @@
 # traffic for identify, reset, set-up, rate changes, sleep and wake; the sample path's decode, mount matrix, device
 # frame and scale; the off-with-one-line and lost-interrupt-panic paths; FIFO batching (watermark from the batch
 # interval, one status/count burst and whole-record data bursts per drain, per-sample times) and its fall-backs; the
-# orientation detector and its reports through 21H461's IOHIDEventDriver and CoreMotion (orientation_pipeline_model.h).
+# orientation detector and its reports through 21H461's IOHIDEventDriver and CoreMotion (orientation_pipeline_model.h);
+# device motion fused in the driver (switch_motion_fusion_test has the filter's maths and the report layout).
 # Plus guards on what the models cannot see (switch_motion_source_test), and the 10 s line's window
 # (switch_motion_stats_test).
 #
@@ -22,6 +23,9 @@ host_shims(
         "IOKit/IOService.h",
         "IOKit/IOTimerEventSource.h",
         "IOKit/IOWorkLoop.h",
+        "libkern/c++/OSDictionary.h",
+        "libkern/c++/OSNumber.h",
+        "libkern/c++/OSSerialize.h",
         "os/log.h",
     ],
     stubs = "switch_motion_stubs.h",
@@ -34,6 +38,7 @@ host_library(
         "//drivers/ArmGIC:SwitchInterrupts.h",
         "//drivers/NativeMobileDisplay:SwitchPortrait.h",
         "//drivers/SwitchMotion:SwitchMotion.h",
+        "//drivers/SwitchMotion:SwitchMotionFusion.h",
         "//drivers/SwitchMotion:SwitchMotionStats.h",
         "//drivers/SwitchTouch:SwitchHID.h",
         "//drivers/TegraGPIO:TegraGPIO.h",
@@ -53,6 +58,14 @@ host_test(
     deps = [
         ":headers",
         ":kernel",
+    ],
+)
+
+host_test(
+    name = "switch_motion_fusion_test",
+    srcs = [
+        "switch_motion_fusion_test.cpp",
+        "//drivers/SwitchMotion:SwitchMotionFusion.h",
     ],
 )
 
