@@ -6,11 +6,10 @@
 // own.
 #import "TegraGM20BMetalInternal.h"
 
-#include <CommonCrypto/CommonDigest.h>
 #include <cstdlib>
 #include <list>
+#include <map>
 #include <os/log.h>
-#include <unordered_map>
 #include "ImageFilterLink.h"
 #include "codegen_request.h"
 #include "library_entry.h"
@@ -120,17 +119,8 @@ namespace {
 constexpr size_t kMaxSpecializedLibraries = 128;
 constexpr size_t kMaxSpecializedBytes = 8u << 20;
 
-struct DigestHash {
-    size_t operator()(const gm20b::Digest &d) const noexcept
-    {
-        size_t h = 0;
-        memcpy(&h, d.data(), sizeof h);
-        return h;
-    }
-};
-
 struct SpecializedEntry {
-    gm20b::Digest key;
+    std::string key;
     SwitchMetalLibrary *library;
     size_t bytes;
 };
@@ -138,10 +128,10 @@ struct SpecializedEntry {
 struct SpecializedCache {
     gm20b::Mutex lock;
     std::list<SpecializedEntry> lru;
-    std::unordered_map<gm20b::Digest, std::list<SpecializedEntry>::iterator, DigestHash> index;
+    std::map<std::string, std::list<SpecializedEntry>::iterator, std::less<>> index;
     size_t totalBytes = 0;
 
-    SwitchMetalLibrary *find(const gm20b::Digest &key)
+    SwitchMetalLibrary *find(const std::string &key)
     {
         std::lock_guard<gm20b::Mutex> guard(lock);
         const auto it = index.find(key);
@@ -151,7 +141,7 @@ struct SpecializedCache {
         return it->second->library;
     }
 
-    void put(const gm20b::Digest &key, SwitchMetalLibrary *library, size_t bytes)
+    void put(const std::string &key, SwitchMetalLibrary *library, size_t bytes)
     {
         if (!library || bytes > kMaxSpecializedBytes)
             return;
@@ -191,24 +181,17 @@ SpecializedCache &specializedCache()
     return *cache;
 }
 
-gm20b::Digest specializationCacheKey(const gm20b::AirHash &air, const std::string &name, const std::string &called,
-                                     const std::string &constants)
+// The specialization's inputs themselves, each length-prefixed: a few hundred bytes, compared whole by the map
+std::string specializationCacheKey(const gm20b::AirHash &air, const std::string &name, const std::string &called,
+                                   const std::string &constants)
 {
-    CC_SHA256_CTX ctx;
-    CC_SHA256_Init(&ctx);
-    CC_SHA256_Update(&ctx, air.data(), CC_LONG(air.size()));
-    const auto feed = [&](const std::string &s) {
-        const uint64_t len = s.size();
-        CC_SHA256_Update(&ctx, &len, sizeof len);
-        if (!s.empty())
-            CC_SHA256_Update(&ctx, s.data(), CC_LONG(s.size()));
-    };
-    feed(name);
-    feed(called);
-    feed(constants);
-    gm20b::Digest digest;
-    CC_SHA256_Final(digest.data(), &ctx);
-    return digest;
+    std::string key(reinterpret_cast<const char *>(air.data()), air.size());
+    for (const std::string *part : {&name, &called, &constants}) {
+        const uint64_t length = part->size();
+        key.append(reinterpret_cast<const char *>(&length), sizeof length);
+        key += *part;
+    }
+    return key;
 }
 }  // namespace
 
@@ -241,7 +224,7 @@ static bool frontEndBitcode(id device, id function, gm20b::codegen::Bitcode &out
                        error);
     const std::string constants(static_cast<const char *>(data), size);
     free(data);
-    const gm20b::Digest cacheKey = specializationCacheKey(*f->_air, name, called, constants);
+    const std::string cacheKey = specializationCacheKey(*f->_air, name, called, constants);
     id<MTLLibrary> library = (id<MTLLibrary>)specializedCache().find(cacheKey);
     if (!library) {
         const std::string request =
