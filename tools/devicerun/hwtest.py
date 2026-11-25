@@ -328,6 +328,7 @@ TESTS: dict[str, bool] = {
             'gpu.heap.border_table_full',
             'gpu.gm20b.xr_srgb',
             'gpu.gm20b.xr_srgb_alpha',
+            'gpu.gm20b.xr_beside_native',
             'gpu.gm20b.compute_invalid',
             'gpu.gm20b.fill_shapes',
             'gpu.gm20b.word_mipmaps',

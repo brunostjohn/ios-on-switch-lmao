@@ -415,6 +415,7 @@ TESTS_FORMS_SRCS = [
     "tests/XrBlendRoutesGoldens.swift",
     "tests/XrBlendRoutesTest.swift",
     "tests/XrCopyClampTest.swift",
+    "tests/XrBesideNativeTest.swift",
     "tests/XrDescriptorCopiesTests.swift",
     "tests/XrImagesManyTest.swift",
     "tests/XrOverlapRowsTest.swift",

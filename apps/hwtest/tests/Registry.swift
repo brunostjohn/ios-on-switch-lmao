@@ -84,8 +84,9 @@ public enum Registry {
     static let gm20bRoutes: [any HWTest] =
         FetchShapeTest.all + [
             DepthFormatMismatchTest.attached, DepthFormatMismatchTest.unattached, HiddenDepthTest(),
-            BorderTableFullTest(), XrSrgbTest.bgr, XrSrgbTest.bgra, ComputeInvalidTest(), FillShapesTest(),
-            WordMipmapsTest(), StencilByteCopiesTest(), KernelYcbcrOnePlaneTest(), KernelConvertedWriteTest(),
+            BorderTableFullTest(), XrSrgbTest.bgr, XrSrgbTest.bgra, XrBesideNativeTest(), ComputeInvalidTest(),
+            FillShapesTest(), WordMipmapsTest(), StencilByteCopiesTest(), KernelYcbcrOnePlaneTest(),
+            KernelConvertedWriteTest(),
             DynamicStridesTest(), ReachShapesTest(), ResolveCodesTest(), ResolveOneSampleSwapTest(),
             SeparateStencilResolveTest(), P3YcbcrStoreTest(), Depth16ShaderTestsTest(), PlanesBlitsTest(),
             IcbComputeFormsTest(), StandInResolveTest(), StandInLayeredTest(), ResolveOtherCountTest(),
