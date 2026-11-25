@@ -60,10 +60,11 @@ extern "C" int switch_gpu_smmu_init(void)
 		gEngine.release();
 		return ret;
 	}
-	IOLog("tegra-gm20b: GPU DMA through the SMMU (GPUB ASIDs %u, %u and window %u): the GPU "
-	      "reaches its pool and the "
-	      "pages of its memory objects\n",
-	      TEGRA_SMMU_ASID_GPU_LOW, TEGRA_SMMU_ASID_GPU_HIGH, TEGRA_SMMU_ASID_GPU);
+	IOLog("tegra-gm20b: GPU DMA through the SMMU (GPUB ASIDs %u, %u and window %u; MC %#x = %#x, "
+	      "MC %#x = %#x): the GPU reaches its pool and the pages of its memory objects\n",
+	      TEGRA_SMMU_ASID_GPU_LOW, TEGRA_SMMU_ASID_GPU_HIGH, TEGRA_SMMU_ASID_GPU,
+	      TEGRA_SMMU_TRANSLATION_ENABLE_2, tegra_smmu_read(TEGRA_SMMU_TRANSLATION_ENABLE_2),
+	      TEGRA_SMMU_TRANSLATION_ENABLE_4, tegra_smmu_read(TEGRA_SMMU_TRANSLATION_ENABLE_4));
 	__atomic_store_n(&gReady, 1, __ATOMIC_RELEASE);
 	return 0;
 }
