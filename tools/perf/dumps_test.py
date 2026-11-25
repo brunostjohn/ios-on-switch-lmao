@@ -167,6 +167,27 @@ class DumpTest(unittest.TestCase):
         self.assertEqual((sub.channel, sub.first, sub.last, sub.tid), (12, 143, 210, SUBMITTER))
         self.assertAlmostEqual(sub.ms, 50.2, places=3)
 
+    def test_the_compositors_waits_name_the_process_and_a_stale_start_is_bounded(self):
+        maps = 400
+        job, wait = ktrace.GPU_JOB, ktrace.GPU_WAIT
+        events = [
+            event(1, ktrace.SUBMIT, (21, 1, 0), maps),
+            event(2, ktrace.SUBMIT, (21, 2, 0), maps),
+            event(3, ktrace.SUBMIT, (2, 7, 1), SUBMITTER),
+            event(10, wait, (2 | (1 << 16) | (21 << 32), 2, 7), SUBMITTER),
+            event(11, wait, (2 | (3 << 16), 9, 7), SUBMITTER),
+            event(100, job, ((1 << 32) | 21, 1_000_000, 2_000_000), 0),
+            event(200, job, ((2 << 32) | 21, 5, 2_000_000 + int(10e6 * ktrace.PTIMER_PER_NS)), 0),
+            event(300, ktrace.TRIGGER, (4, 0, 0), 0),
+        ]
+        ring = ktrace.parse(pack_ring(events))
+        second = ktrace.submissions(ring.events)[1]
+        self.assertTrue(second.bounded)
+        self.assertAlmostEqual(second.ms, 10.0, places=3)
+        text = '\n'.join(dumps.gpu(ring, dumps.Names(), 0, tick(300)))
+        self.assertIn('GPU waits behind unsettled work: channel 2 on channel 21 (?[0]) 1, channel 2 on VIC 1', text)
+        self.assertIn("GPU: from their channel's previous end, a stale start stamp: channel 21 1", text)
+
     def test_a_submission_older_than_the_ring_is_left_out(self):
         """Maps' channel 21 on 25 Nov: start stamps about 1188 s before their end, in a ring of a second or two."""
         job = ktrace.GPU_JOB

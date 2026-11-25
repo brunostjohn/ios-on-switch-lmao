@@ -270,6 +270,7 @@ def gpu(ring: ktrace.Ring, n: Names, lo: int, hi: int) -> list[str]:
         if impossible
         else []
     )
+    note += wait_lines(ring, n, lo, hi)
     if not inside:
         return ['GPU: no submission ended in the window', *note]
     by: Counter[str] = Counter()
@@ -277,6 +278,11 @@ def gpu(ring: ktrace.Ring, n: Names, lo: int, hi: int) -> list[str]:
         by[n.who(s.tid).split(' (')[0]] += s.ms
     longest = max(inside, key=lambda s: s.ms)
     shares = ', '.join(f'{k} {v:.1f} ms' for k, v in by.most_common(TOP))
+    if bounded := Counter(s.channel for s in inside if s.bounded):
+        note.append(
+            "GPU: from their channel's previous end, a stale start stamp: "
+            + ', '.join(f'channel {c} {k}' for c, k in bounded.items())
+        )
     kind = ' (compositor)' if longest.compositor else ''
     seqnos = f'{longest.first}-{longest.last}' if longest.last != longest.first else f'{longest.last}'
     return [
@@ -285,6 +291,19 @@ def gpu(ring: ktrace.Ring, n: Names, lo: int, hi: int) -> list[str]:
         + n.who(longest.tid),
         *note,
     ]
+
+
+def wait_lines(ring: ktrace.Ring, n: Names, lo: int, hi: int) -> list[str]:
+    """Return the compositor's waits in [lo, hi] on another process's GPU work or another engine, by whom."""
+    waits = [w for w in ktrace.gpu_waits(ring.events) if lo <= w.ts <= hi]
+    if not waits:
+        return []
+    owner = {e.args[0]: e.tid for e in ring.events if e.id == ktrace.SUBMIT}
+    by: Counter[str] = Counter()
+    for w in waits:
+        on = f'channel {w.source} ({n.who(owner.get(w.source, 0)).split(" (")[0]})' if w.source else w.engine
+        by[f'channel {w.channel} on {on}'] += 1
+    return ['GPU waits behind unsettled work: ' + ', '.join(f'{k} {v}' for k, v in by.most_common(TOP))]
 
 
 def pagein_lines(ring: ktrace.Ring, n: Names, lo: int, hi: int) -> list[str]:

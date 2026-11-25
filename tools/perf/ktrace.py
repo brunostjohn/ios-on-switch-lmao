@@ -61,7 +61,8 @@ FAULT_KINDS = {
 PERF_TI_DATA = code(37, 1, 1)
 PERF_CS_KDATA, PERF_CS_UDATA = code(37, 2, 3), code(37, 2, 4)
 PERF_CS_KHDR, PERF_CS_UHDR = code(37, 2, 5), code(37, 2, 6)
-TRIGGER, DUMP, GPU_JOB = code(6, 18, 0x3E0), code(6, 18, 0x3E1), code(6, 18, 0x3E8)
+TRIGGER, DUMP, GPU_JOB, GPU_WAIT = code(6, 18, 0x3E0), code(6, 18, 0x3E1), code(6, 18, 0x3E8), code(6, 18, 0x3E9)
+ENGINES = {1: 'GM20B', 2: 'copy engine', 3: 'VIC', 4: 'NVDEC', 5: 'display', 6: 'NVENC', 7: 'promise', 8: 'NVJPG'}
 SUBMIT = code(6, 18, 0x3F1)
 FRAME_POINTS = {
     code(6, 18, 0x3F0 + i): name
@@ -143,10 +144,22 @@ class Submission:
     ts: int  # when the interrupt pass saw its last seqno done
     tid: int  # the thread that kicked it
     compositor: bool
+    bounded: bool = False  # its start stamp was stale: it runs from its channel's previous end, an upper bound
 
     @property
     def ms(self) -> float:
         return (self.end - self.start) / PTIMER_PER_NS / 1e6
+
+
+@dataclass(frozen=True)
+class GpuWait:
+    """A compositor job kicked behind an unsettled dependency (drivers/TegraGM20B/SwitchGpuJobRing.h)."""
+
+    ts: int
+    channel: int
+    engine: str
+    source: int  # the GM20B channel it waits on, 0 for another engine
+    value: int
 
 
 @dataclass(frozen=True)
@@ -322,6 +335,7 @@ def submissions(events: list[Event]) -> list[Submission]:
     """
     kicked = {(e.args[0], e.args[1]): e.tid for e in events if e.id == SUBMIT}
     started: dict[int, Job] = {}
+    ended: dict[int, int] = {}  # channel: its last submission's end
     out = []
     for j in jobs(events)[0]:
         if j.start_ns:
@@ -329,9 +343,24 @@ def submissions(events: list[Event]) -> list[Submission]:
         if (j.channel, j.seqno) not in kicked:
             continue
         first = started.pop(j.channel, None)
+        before = ended.get(j.channel, 0)
         if first and j.end_ns >= first.start_ns:
             tid = kicked[(j.channel, j.seqno)]
-            out.append(Submission(j.channel, first.seqno, j.seqno, first.start_ns, j.end_ns, j.ts, tid, j.compositor))
+            # A channel's jobs run in order, each after the one before it ended: a start before that is a stale stamp.
+            stale = before and first.start_ns < before <= j.end_ns
+            start = before if stale else first.start_ns
+            out.append(Submission(j.channel, first.seqno, j.seqno, start, j.end_ns, j.ts, tid, j.compositor, stale))
+        if j.end_ns:
+            ended[j.channel] = j.end_ns
+    return out
+
+
+def gpu_waits(events: list[Event]) -> list[GpuWait]:
+    out = []
+    for e in events:
+        if e.id == GPU_WAIT:
+            a = e.args[0]
+            out.append(GpuWait(e.ts, a & 0xFFFF, ENGINES.get((a >> 16) & 0xFFFF, '?'), a >> 32, e.args[1]))
     return out
 
 
