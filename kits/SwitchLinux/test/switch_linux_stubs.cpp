@@ -11,6 +11,7 @@ std::vector<std::string> gSwitchLinuxCalls;
 boolean_t switch_linux_stub_interrupts = TRUE;
 int switch_linux_stub_preemption;
 uint64_t switch_linux_stub_now = 5000;
+uint64_t switch_linux_stub_tick = 0;
 wait_result_t switch_linux_stub_wait_result = THREAD_AWAKENED;
 
 namespace {
@@ -78,7 +79,9 @@ void IOFree(void *address, vm_size_t size)
 
 uint64_t mach_absolute_time(void)
 {
-    return switch_linux_stub_now;
+    const uint64_t now = switch_linux_stub_now;
+    switch_linux_stub_now += switch_linux_stub_tick;
+    return now;
 }
 
 void absolutetime_to_nanoseconds(uint64_t abs, uint64_t *ns)
