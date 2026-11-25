@@ -72,6 +72,7 @@ host_library(
     name = "mc_owner",
     srcs = [
         "//drivers/SwitchDisplayPort:SwitchDPModes.h",
+        "//drivers/SwitchDisplayPort:SwitchExternalWindows.h",
         "//drivers/SwitchDisplayPort:TegraDisplayB.cpp",
         "//drivers/SwitchDisplayPort:TegraDisplayB.h",
         "//drivers/SwitchPower:SwitchDisplayMemory.h",
@@ -102,6 +103,7 @@ host_test(
     srcs = [
         "mc_hot_reset_owner_test.cpp",
         "//drivers/SwitchDisplayPort:SwitchDPModes.h",
+        "//drivers/SwitchDisplayPort:SwitchExternalWindows.h",
         "//drivers/SwitchDisplayPort:TegraDisplayB.h",
         "//drivers/SwitchPower:SwitchDisplayMemory.h",
         "//drivers/TegraGM20B:shim/include/nvxnu.h",

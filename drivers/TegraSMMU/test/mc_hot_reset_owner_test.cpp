@@ -261,6 +261,15 @@ void switch_mmio_model_write8(uintptr_t address, uint8_t value)
 void IOLog(const char *, ...)
 {}
 
+void panic(const char *format, ...)
+{
+    va_list ap;  // NOLINT(cppcoreguidelines-init-variables): va_start initializes it
+    va_start(ap, format);
+    vfprintf(stderr, format, ap);
+    va_end(ap);
+    abort();
+}
+
 void switch_mc_errors_resume(void)
 {}
 
