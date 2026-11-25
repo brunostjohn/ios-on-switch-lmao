@@ -8,7 +8,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from tools.perf import cpu, dumps, gpu, ips, ktrace, pacing, recfile, session, symbols, vm, work
+from tools.perf import cpu, dumps, gpu, host1x, ips, ktrace, pacing, recfile, session, symbols, vm, work
 from tools.perf.session import Session, dossier, families, lost, pacing_row, slows_in
 from tools.perf.windows import BOOTSTRAPPED, Window
 
@@ -371,6 +371,7 @@ def render(s: Session, pulled: Pulled) -> str:
     out += slow_section(s, pulled.syms)
     out += cpu_section(s, pulled.syms)
     out += ['', '## GPU', *gpu.lines(gpu.read(s.recs))]
+    out += ['', '## host1x channels', *host1x.lines(host1x.read(s.recs))]
     out += work_section(s)
     out += vm_section(s, pulled.syms)
     out += hang_section(s, pulled)

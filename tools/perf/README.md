@@ -33,6 +33,10 @@ for a server rather than recording.
 
 A cycle line means the late presents of a window keep to a timer's period, so something periodic is behind them.
 
+The host1x section gives each channel's share of host1x's clocked time spent waiting on a syncpoint, from the channel's
+own stall counter. A channel runs its jobs in order, so one wait sits inside the time of every job queued behind it
+while the counter counts it once. The share is never subtracted from an engine's job time.
+
 ## Symbols
 
 Shared-cache addresses in dumps, stackshots, `SwitchKprof` and `SwitchUnnest` are unslid, so one table per IPSW build
@@ -52,18 +56,18 @@ core's kernel and user stack sampled every 4 ms. It also runs kprof for the firs
 the render thread an estimated 0.04 to 0.2 ms a frame, so measure frame times on a build without it.
 
 Four things ask for a capture: Capture on the left Joy-Con or a Bluetooth controller, a busy stretch of 250 ms on the
-main thread of SpringBoard, backboardd or a focal app, a present six periods or more late, and slow work an app
-reports. Every press is captured, ahead of anything else waiting. Automatic captures are at least 2 s apart, and 10 s
-for the same reason and thread; each refusal is logged with its cause. A capture copies the ring and a stackshot into memory within
-tens of milliseconds; the stackshot stops every CPU for about 3 ms. A low-priority thread compresses and writes the
-capture later, when nothing else wants a core. When it falls behind, as at boot, the capture thread compresses new
+main thread of SpringBoard, backboardd or a focal app, a present six periods or more late, and slow work an app reports.
+Every press is captured, ahead of anything else waiting. Automatic captures are at least 2 s apart, and 10 s for the
+same reason and thread; each refusal is logged with its cause. A capture copies the ring and a stackshot into memory
+within tens of milliseconds; the stackshot stops every CPU for about 3 ms. A low-priority thread compresses and writes
+the capture later, when nothing else wants a core. When it falls behind, as at boot, the capture thread compresses new
 captures itself so that more fit in memory.
 
-A capture is one `Switch-recorder-<n>.rec` in the crash folder, which `pull` copies. Its text header names the boot,
-the trigger and how soon each step ended. The store keeps as many files as a tenth of the free space holds. When it is
-full, a new capture replaces another boot's file first, then one of this boot's automatic captures after its first
-eight. An automatic capture never replaces a press. A file with no header was pulled while it was being written. Older kernels wrote
-`Switch-recorder-<n>.ktrace` and `.kcdata`, which the report still reads.
+A capture is one `Switch-recorder-<n>.rec` in the crash folder, which `pull` copies. Its text header names the boot, the
+trigger and how soon each step ended. The store keeps as many files as a tenth of the free space holds. When it is full,
+a new capture replaces another boot's file first, then one of this boot's automatic captures after its first eight. An
+automatic capture never replaces a press. A file with no header was pulled while it was being written. Older kernels
+wrote `Switch-recorder-<n>.ktrace` and `.kcdata`, which the report still reads.
 
 The report names the thread that triggered a capture, what ran in the second before, its stacks, who woke it and what
 it waited on. For a hang it gives the stretch's split (on a core, blocked, waiting for a core), the thread's faults

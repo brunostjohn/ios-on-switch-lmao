@@ -45,6 +45,18 @@ class Checks(unittest.TestCase):
         self.assertEqual(got['sched.backboardd-main'].verdict, PASS)
         self.assertEqual(got['sched.backboardd-main-longest'].verdict, FAIL)
 
+    def test_host1x_channel_counters_that_never_started_fail(self):
+        media = {c.name: c for c in checks.GROUPS['media']}
+        head = 'TegraHost1x: 5s NVDEC/VIC/NVENC/NVJPG/DC gathered=0/40/0/0/60 copied=0/0/0/0/0 arena_high=0/3/0/0/1KB '
+        running = head + 'room_waits=0/0/0/0/0 clocked=0/5000000/0/0/5000000us stalled=0/1000000/0/0/4500000us'
+        stopped = head + 'room_waits=0/0/0/0/0 clocked=0/0/0/0/0us stalled=0/0/0/0/0us'
+        check = media['media.host1x-channel-counters']
+        self.assertEqual(judged([record(1.0, running)], check)[check.name].verdict, PASS)
+        self.assertEqual(judged([record(1.0, running), record(6.0, stopped)], check)[check.name].verdict, FAIL)
+        self.assertEqual(
+            judged([record(1.0, head + 'room_waits=0/0/0/0/0 counters=off')], check)[check.name].verdict, NO_DATA
+        )
+
     def test_every_check_is_well_formed(self):
         names = [c.name for group in checks.GROUPS.values() for c in group]
         self.assertEqual(len(names), len(set(names)))

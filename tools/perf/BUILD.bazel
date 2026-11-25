@@ -11,6 +11,7 @@ py_library(
         "cpu.py",
         "dumps.py",
         "gpu.py",
+        "host1x.py",
         "ips.py",
         "ktrace.py",
         "pacing.py",
@@ -45,6 +46,13 @@ py_test(
     size = "small",
     srcs = ["perf_test.py"],
     data = glob(["testdata/*"]),
+    deps = [":lib"],
+)
+
+py_test(
+    name = "host1x_test",
+    size = "small",
+    srcs = ["host1x_test.py"],
     deps = [":lib"],
 )
 

@@ -594,6 +594,18 @@ GROUPS: dict[str, list[Check]] = {
             source='drivers/TegraVIC/SwitchVICStats.h',
         ),
         Check(
+            'media.host1x-channel-counters',
+            'measure',
+            'TegraHost1x: ',
+            'min(vic) > 0',
+            process=KERNEL,
+            regex=r'^TegraHost1x: \d+s NVDEC/VIC/NVENC/NVJPG/DC .*? clocked=\d+/(?P<vic>\d+)/\d+/\d+/\d+us '
+            r'stalled=\d+/(?P<vic_stalled>\d+)/',
+            source='drivers/TegraHost1x/SwitchHost1xGatherStats.h',
+            note="a channel's tick counter counts every host1x clock (TRM 14.4.4); VIC clocked 0 in a window means "
+            'the counters never started, and then its stalled share means nothing',
+        ),
+        Check(
             'media.idle-power',
             'r32-media',
             ': idle power off: ',

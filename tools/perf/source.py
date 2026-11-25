@@ -27,6 +27,7 @@ KERNEL_PREFIXES = (
     'tegra-gm20b: jobs ',
     'tegra-gm20b: slow import',
     'tegra-gm20b: compositor frame missed',
+    'TegraHost1x: ',
 )
 METAL_PARTS = (
     'SwitchFrameUser',
