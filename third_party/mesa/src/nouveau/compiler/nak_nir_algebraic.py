@@ -186,6 +186,40 @@ for ma, mb in itertools.product(half_mods, repeat=2):
             (('f2f16_rtne', ('bcsel', c, widened_half('a', ma), widened_half('b', mb))),
                 ('bcsel', c, half_of(a, ma), half_of(b, mb)), half_denorms_kept),
         ]
+
+# ios-on-switch-lmao: metal2vulkan takes a half's min and max in f32 (SM53 has
+# no HMNMX2) and narrows the result where a half operation reads it: three F2F
+# around an FMNMX, five around a clamp's two. The halves' own min and max are a
+# compare and a select on SM53 (nak/from_nir.rs), exact but for which zero a
+# tie of +0 and -0 gives (FMNMX's max gave +0; NIR may swap fmax's operands, so
+# no order is promised either way). An operand is a widened half, maybe under
+# fabs or fneg, or a constant that is a half.
+half_minmax = 'nak->sm >= 53 && nak->sm < 70 && ' + half_denorms_kept
+
+def half_operand(v, m):
+    if m == 'const':
+        return ('#' + v + '@32(is_representable_as_f16)', ('f2f16_rtne', v))
+    return (widened_half(v, m), half_of(v, m))
+
+operand_kinds = half_mods + ['const']
+for op in ['fmax', 'fmin']:
+    for ma, mb in itertools.product(operand_kinds, repeat=2):
+        if ma == mb == 'const':
+            continue
+        (x, x16), (y, y16) = half_operand('a', ma), half_operand('b', mb)
+        algebraic_lowering += [(('f2f16_rtne', (op, x, y)), (op, x16, y16), half_minmax)]
+# A clamp: the inner min or max read only by the outer, narrowed once
+for outer, inner in [('fmin', 'fmax'), ('fmax', 'fmin')]:
+    for mc in operand_kinds:
+        (z, z16) = half_operand('c', mc)
+        for ma, mb in itertools.product(operand_kinds, repeat=2):
+            if ma == mb == 'const':
+                continue
+            (x, x16), (y, y16) = half_operand('a', ma), half_operand('b', mb)
+            algebraic_lowering += [
+                (('f2f16_rtne', (outer, (inner + '(is_used_once)', x, y), z)),
+                    (outer, (inner, x16, y16), z16), half_minmax),
+            ]
 algebraic_lowering += [
     (('f2f16_rtne', ('bcsel', c, ('f2f32', 'a@16'), ('f2f32', 'b@16'))), ('bcsel', c, a, b)),
     (('f2f16_rtne', ('bcsel', c, ('f2f32', 'a@16'), '#b@32(is_representable_as_f16)')),
