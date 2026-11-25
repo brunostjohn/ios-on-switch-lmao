@@ -2,7 +2,8 @@
 // models' clock does not run while code spins), the motion services' HID descriptor (SwitchHIDDevice.cpp, a stand-in in
 // the scenarios) carries the Sensor-page usages 21H461's IOHIDEventDriver knows, the orientation device serves the
 // descriptor orientation_pipeline_test checks, SwitchBacklight follows the panel's power into the orientation
-// detector, and the device motion service's event driver takes CoreMotion's fast path (SwitchHIDFastPath.cpp).
+// detector, the device motion service's event driver takes CoreMotion's fast path (SwitchHIDFastPath.cpp), and the
+// motion services carry J181's Motion & Fitness gate (SwitchHIDMotionAccess.cpp).
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -105,7 +106,7 @@ TEST(SwitchMotionSource, DeviceMotionTakesTheFastPath)
 
 // The event system has the event before a copy can answer it; an open asking for the AOP's always-on history, which
 // J181's provider gates on FastPathHasEntitlement, is refused, since nothing here keeps one; and a motion event driver
-// published again is hooked again.
+// published again is hooked again, answering nothing its predecessor dispatched.
 TEST(SwitchMotionSource, TheFastPathAnswersOnlyWhatWasDispatched)
 {
     const std::string fast = SourceText("../../SwitchTouch/SwitchHIDFastPath.cpp");
@@ -113,6 +114,28 @@ TEST(SwitchMotionSource, TheFastPathAnswersOnlyWhatWasDispatched)
     EXPECT_LT(dispatch.find("(originalDispatch)(driver, event, options)"), dispatch.find("keep(event)"));
     EXPECT_THAT(Body(fast, "bool openForClient("), HasSubstr("getObject(\"aonBuffer\")"));
     EXPECT_THAT(Body(fast, "bool published("), Not(HasSubstr("installed")));
+    const std::string install = Body(fast, "bool install(");
+    ASSERT_NE(install.find("keep(nullptr)"), std::string::npos);
+    EXPECT_LT(install.find("keep(nullptr)"), install.find("= table;"));
+}
+
+// J181's Motion & Fitness gate (SwitchHIDMotionAccess.cpp), on 24B119 only: the accelerometer, gyroscope and device
+// motion event drivers carry it from their first publish, so IOKit's event system reads it when it adds them.
+TEST(SwitchMotionSource, TheMotionServicesCarryJ181sMotionAndFitnessGate)
+{
+    const std::string access = SourceText("../../SwitchTouch/SwitchHIDMotionAccess.cpp");
+    EXPECT_THAT(access, HasSubstr("#if SWITCH_IPSW_KIND_24B119\nnamespace {"));
+    EXPECT_THAT(access, HasSubstr("gIOFirstPublishNotification"));
+    const std::string published = Body(access, "bool published(");
+    EXPECT_THAT(published, HasSubstr("setProperty(\"TCCService\", \"kTCCServiceMotionSensors\")"));
+    EXPECT_THAT(published, HasSubstr("setProperty(\"motionRestrictedService\", true)"));
+    const std::string create =
+        Body(SourceText("../../SwitchTouch/SwitchHIDDevice.cpp"), "IOService *switch_hid_create(");
+    const std::string gated = Between(create, "#if SWITCH_IPSW_KIND_24B119", "#endif");
+    for (const char *kind : {"kSwitchHIDAccelerometer", "kSwitchHIDGyro", "kSwitchHIDDeviceMotion"})
+        EXPECT_THAT(gated, HasSubstr(kind));
+    EXPECT_THAT(gated, Not(HasSubstr("kSwitchHIDOrientation")));
+    EXPECT_LT(create.find("switch_hid_motion_restrict(device)"), create.find("device->start(resources)"));
 }
 
 // HW Test's sensor.device_motion reads these three sysctls (apps/hwtest/tests/SensorTests.swift, its entitlements'

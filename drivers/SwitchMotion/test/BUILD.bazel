@@ -139,5 +139,6 @@ host_test(
         "//drivers/SwitchMotion:SwitchOrientationClient.cpp",
         "//drivers/SwitchTouch:SwitchHIDDevice.cpp",
         "//drivers/SwitchTouch:SwitchHIDFastPath.cpp",
+        "//drivers/SwitchTouch:SwitchHIDMotionAccess.cpp",
     ],
 )

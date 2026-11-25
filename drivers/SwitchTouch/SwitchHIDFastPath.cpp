@@ -177,6 +177,7 @@ bool install(IOService *driver)
     }
     if (!table && !makeTable(vtable))
         return false;
+    keep(nullptr);
     publishPlugIn(driver);
     __asm__ volatile("dmb ish" ::: "memory");
     *reinterpret_cast<uintptr_t **>(driver) = table;
