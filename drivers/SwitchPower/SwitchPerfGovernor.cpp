@@ -135,8 +135,8 @@ uint32_t windowBusy(const switchperf::Config &config, uint64_t now, uint64_t *cp
 }
 
 // One window: the limits and boosts the other sides posted, folded in; the step; the decision published. Returns
-// whether the owner must be woken (the clock moves, or the periodic line is due); `boot` whether the boot window runs,
-// `cpuTime` the window's busy time.
+// whether the owner must be woken (the clock moves, the boot window's fallback passed, or the periodic line is due);
+// `boot` whether the boot window runs, `cpuTime` the window's busy time.
 bool step(const switchperf::Config &config, uint64_t now, bool *boot, uint64_t *cpuTime)
 {
     uint32_t busy = windowBusy(config, now, cpuTime);
@@ -151,20 +151,23 @@ bool step(const switchperf::Config &config, uint64_t now, bool *boot, uint64_t *
 #if DEVELOPMENT || DEBUG
     switchperf::lineWindow(&gTick.stats, busy);
 #endif
-    *boot = now < __atomic_load_n(&switchperf::gBootUntil, __ATOMIC_RELAXED);
+    const uint64_t bootUntil = __atomic_load_n(&switchperf::gBootUntil, __ATOMIC_RELAXED);
+    *boot = now < bootUntil;
     if (*boot)
         busy = 1000;  // the boot runs at the top point (the ceiling: thermal limits still apply)
     switch_gov_step(&gTick.gov, now, busy);
     __atomic_store_n(&switchperf::gDecided, gTick.gov.cur | gTick.generation << 8, __ATOMIC_RELEASE);
-    bool line = false;
 #if DEVELOPMENT || DEBUG
     if (now >= gTick.logDue) {
-        line = true;
         gTick.logDue = now + config.logWindow;
         switchperf::linePublish(&gTick.stats, &gTick.gov, now);
+        return true;
     }
 #endif
-    return line || gTick.gov.cur != __atomic_load_n(&switchperf::gApplied, __ATOMIC_RELAXED);
+    // gBootUntil stays set past its end until the owner's take() (closeBootWindow) zeroes it: each tick until then
+    // wakes the owner, whose clock may never move otherwise.
+    const bool bootEnded = bootUntil != 0 && !*boot;
+    return bootEnded || gTick.gov.cur != __atomic_load_n(&switchperf::gApplied, __ATOMIC_RELAXED);
 }
 
 // XNU's perfcontrol deadline: the window's tick (interrupts masked; context-switch, quantum or idle-wake context).

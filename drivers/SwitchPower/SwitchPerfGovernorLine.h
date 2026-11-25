@@ -2,7 +2,7 @@
 // The CPU governor's periodic line (SwitchPerfGovernorLine.cpp). The tick accumulates its windows and, every
 // kLogWindowUs, publishes them with the governor's residency and steps under a sequence count only it writes; the
 // owner's take() copies the published set, which also tells it a line is due, and makes the line. Release builds
-// publish the due line alone.
+// have no line.
 #ifndef SWITCH_PERF_GOVERNOR_LINE_H
 #define SWITCH_PERF_GOVERNOR_LINE_H
 

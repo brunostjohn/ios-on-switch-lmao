@@ -19,9 +19,16 @@ static inline SwitchGpuThreadRef switch_gpu_current_thread()
 	return current_thread();
 }
 
+// A turnstile sleep needs a thread to push: stackshot's kdp_sleep_with_inheritor_find_owner asserts one (MACH_ASSERT,
+// on in DEVELOPMENT kernels), and a null inheritor replaces an earlier sleeper's push on the same event. With no owner
+// the sleep is a plain one on the event's global wait queue, so every wake reaches both queues.
 static inline void switch_gpu_sleep_inheritor(IOLock *lock, void *event,
 					      SwitchGpuThreadRef inheritor)
 {
+	if (!inheritor) {
+		IOLockSleep(lock, event, THREAD_UNINT);
+		return;
+	}
 	(void)lck_mtx_sleep_with_inheritor(IOLockGetMachLock(lock), LCK_SLEEP_DEFAULT,
 					   reinterpret_cast<event_t>(event), inheritor,
 					   THREAD_UNINT, TIMEOUT_WAIT_FOREVER);
@@ -29,8 +36,8 @@ static inline void switch_gpu_sleep_inheritor(IOLock *lock, void *event,
 
 static inline void switch_gpu_wakeup_inheritor(IOLock *lock, void *event)
 {
-	(void)lock;
 	(void)wakeup_all_with_inheritor(reinterpret_cast<event_t>(event), THREAD_AWAKENED);
+	IOLockWakeup(lock, event, false);
 }
 #else
 using SwitchGpuThreadRef = void *;

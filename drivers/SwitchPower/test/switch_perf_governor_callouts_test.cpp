@@ -8,6 +8,8 @@
 #include "drivers/SwitchPower/SwitchPower.h"
 #include "drivers/SwitchPower/test/switch_perf_governor_kernel_stubs.h"
 
+#include "bazel/testing/fresh_process.h"
+
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -453,4 +455,29 @@ TEST_F(SwitchPerfCallouts, TheTenSecondLineCountsTheOwnersWakes)
     EXPECT_NE(text.find("boosts touch 1 frame 0 launch 0 (0 foreground)"), std::string::npos) << text;
     EXPECT_NE(text.find("; owner wakes: tick "), std::string::npos) << text;
     EXPECT_NE(text.find(", touch 1, frame 0, launch 0"), std::string::npos) << text;
+}
+
+// No System Boot Complete: the first tick past the fallback wakes the owner, which closes the boot window, though the
+// clock stays at the top. Release builds have no periodic line to wake it (switch_perf_governor_release_test).
+TEST(SwitchPerfBootWindow, TheFallbackWakesTheOwnerWhenTheClockStays)
+{
+    switch_ios::test::ExpectPassesInFreshProcess([] {
+        char why[256] = "";
+        REQUIRE(switchperf::start(kKhz, kMv, kCount, kTop, &signalOwner, nullptr, why, sizeof(why)));
+        switch_perf_cltm_ceiling(0x10000);
+        switchperf::limits(0, 0);
+        for (uint32_t cpu = 0; cpu < 4; ++cpu)
+            contextSwitch(cpu, false, gNow);
+        gNow += 8 * kMs;
+        tick(gNow);
+        REQUIRE(own() == kTop);
+        REQUIRE(!switch_perf_boot_done());
+        gNow = uint64_t{switchperf::kBootFallbackSeconds} * 1000 * kMs + 8 * kMs;
+        const unsigned signals = gSignals.load();
+        tick(gNow);
+        EXPECT_GT(gSignals.load(), signals) << "the tick past the fallback woke the owner";
+        EXPECT_EQ(own(), kTop);
+        EXPECT_TRUE(switch_perf_boot_done());
+        switchperf::stop();
+    });
 }

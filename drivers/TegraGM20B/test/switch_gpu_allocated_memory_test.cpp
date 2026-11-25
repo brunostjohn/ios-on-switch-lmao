@@ -6,11 +6,13 @@
 struct tgm_mem {
 	bool smmu;
 	bool compressible;
+	tgm_mem *later = nullptr;
 };
 
 namespace
 {
 std::atomic<unsigned> directNewCount, exclusiveNewCount, smmuNewCount, bigSmmuNewCount, delCount;
+std::atomic<unsigned> laterCount, finishCount, ownerReleases, ownerReleasesAtFinish;
 std::atomic<bool> bigSmmuFallbackToDirect{false};
 std::mutex hookMutex;
 std::function<void()> smmuHook;
@@ -77,6 +79,32 @@ extern "C" void tgm_mem_del(tgm_mem **pmem)
 	*pmem = nullptr;
 }
 
+extern "C" void tgm_mem_del_later(tgm_mem **pmem, tgm_mem **later)
+{
+	if (!*pmem || !(*pmem)->smmu) {
+		tgm_mem_del(pmem);
+		return;
+	}
+	++laterCount;
+	(*pmem)->later = *later;
+	*later = *pmem;
+	*pmem = nullptr;
+}
+
+extern "C" void tgm_mem_del_finish(tgm_mem *later)
+{
+	if (!later)
+		return;
+	++finishCount;
+	ownerReleasesAtFinish = ownerReleases.load();
+	while (later) {
+		tgm_mem *next = later->later;
+		++delCount;
+		delete later;
+		later = next;
+	}
+}
+
 namespace
 {
 class AllocatedMemoryCrossTu : public Backing
@@ -86,6 +114,7 @@ protected:
 	{
 		Backing::SetUp();
 		directNewCount = exclusiveNewCount = smmuNewCount = bigSmmuNewCount = delCount = 0;
+		laterCount = finishCount = ownerReleases = ownerReleasesAtFinish = 0;
 		bigSmmuFallbackToDirect.store(false, std::memory_order_release);
 		std::lock_guard<std::mutex> guard(hookMutex);
 		smmuHook = {};
@@ -103,6 +132,43 @@ protected:
 			  delCount.load());
 	}
 };
+
+// Backings retired together release their SMMU memories after one L2 invalidate (gpu_mem.c tgm_mem_del_finish), not
+// one per backing, and their owners' pinned pages only after it: its flush and the SMMU unmaps must not reach a page
+// back with the VM. A canonical memory released outside retirement goes at once.
+TEST_F(AllocatedMemoryCrossTu, OneRetirementBatchSharesOneL2Invalidate)
+{
+	int owners[3] = {};
+	switch_gpu_backing *made[3] = {};
+	for (uint32_t i = 0; i < 3; ++i) {
+		std::vector<uint64_t> pages;
+		for (uint32_t p = 0; p < 16; ++p)
+			pages.push_back(next_page += 4096);
+		made[i] = switch_gpu_backing_register(pages.data(), 16, 0, &owners[i], [](void *) {
+			++ownerReleases;
+		});
+		switch_gpu_backing *b = made[i];
+		ASSERT_NE(b, nullptr);
+		tgm_mem *mem = nullptr;
+		ASSERT_EQ(allocatedMemorySmmu(b, 16, &mem), 0);
+		ASSERT_TRUE(tgm_mem_is_smmu(mem));
+	}
+	for (switch_gpu_backing *b : made)
+		switch_gpu_backing_release(b);
+	switch_gpu_backing_retire();
+	EXPECT_EQ(laterCount.load(), 3u);
+	EXPECT_EQ(finishCount.load(), 1u);
+	EXPECT_EQ(delCount.load(), 3u);
+	EXPECT_EQ(ownerReleasesAtFinish.load(), 0u)
+		<< "a pinned page went back before the batch's flush and unmaps";
+	EXPECT_EQ(ownerReleases.load(), 3u);
+
+	tgm_mem *alone = nullptr;
+	ASSERT_EQ(tgm_mem_new_exclusive_smmu(nullptr, nullptr, 16, &alone), 0);
+	switch_gpu_allocated_memory_destroy(alone);
+	EXPECT_EQ(laterCount.load(), 3u);
+	EXPECT_EQ(delCount.load(), 4u);
+}
 
 TEST_F(AllocatedMemoryCrossTu, CrossTuCanonicalLookupReturnsSameObjectNeverEopnotsupp)
 {

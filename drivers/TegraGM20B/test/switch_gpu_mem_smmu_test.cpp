@@ -42,6 +42,7 @@ struct tgm_mem {
 	u64 smmu_iova;
 	u32 smmu_npages;
 	u64 *smmu_pages;
+	tgm_mem *later;
 };
 
 struct FakeLtc {
@@ -62,8 +63,8 @@ struct FakeGpu {
 	int lock = 0;
 } tgm_gpu;
 
-unsigned gSmmuMaps, gSmmuUnmaps, gCtorCalls, gDtorCalls, gLtcFlushes, gLtcInvalidates;
-unsigned gLtcFlushesBeforeLastUnmap, gLtcInvalidatesBeforeLastUnmap;
+unsigned gSmmuMaps, gSmmuUnmaps, gCtorCalls, gDtorCalls, gLtcInvalidates;
+unsigned gLtcInvalidatesBeforeFirstUnmap, gLtcInvalidatesBeforeLastUnmap, gDtorsBeforeInvalidate;
 uint64_t gNextIova = 0x10000000ULL;
 uint64_t gSmmuFreeBytes = SWITCH_GPU_SMMU_MAX_WINDOW_BYTES;
 uint64_t gLastReserveBytes;
@@ -137,14 +138,11 @@ int l2_on()
 	return 1;
 }
 
-void nvkm_ltc_flush(FakeLtc *)
-{
-	++gLtcFlushes;
-}
-
+// nvkm_ltc_invalidate (nouveau/nvkm/subdev/ltc/base.c) flushes before it invalidates
 void nvkm_ltc_invalidate(FakeLtc *)
 {
-	++gLtcInvalidates;
+	if (!gLtcInvalidates++)
+		gDtorsBeforeInvalidate = gDtorCalls;
 }
 
 void nvif_mem_dtor(nvif_mem *)
@@ -183,7 +181,8 @@ extern "C" uint64_t switch_gpu_smmu_map(const uint64_t *pas, uint32_t npages)
 
 extern "C" void switch_gpu_smmu_unmap(uint64_t, uint32_t npages)
 {
-	gLtcFlushesBeforeLastUnmap = gLtcFlushes;
+	if (!gSmmuUnmaps)
+		gLtcInvalidatesBeforeFirstUnmap = gLtcInvalidates;
 	gLtcInvalidatesBeforeLastUnmap = gLtcInvalidates;
 	++gSmmuUnmaps;
 	gLastUnmappedPages = npages;
@@ -204,9 +203,9 @@ protected:
 		tgm_gpu = {};
 		tgm_gpu.device = &tgm_gpu.deviceStorage;
 		tgm_gpu.deviceStorage.ltc = &tgm_gpu.deviceStorage.ltcStorage;
-		gSmmuMaps = gSmmuUnmaps = gCtorCalls = gDtorCalls = gLtcFlushes = gLtcInvalidates =
-			0;
-		gLtcFlushesBeforeLastUnmap = gLtcInvalidatesBeforeLastUnmap = 0;
+		gSmmuMaps = gSmmuUnmaps = gCtorCalls = gDtorCalls = gLtcInvalidates = 0;
+		gLtcInvalidatesBeforeFirstUnmap = gLtcInvalidatesBeforeLastUnmap =
+			gDtorsBeforeInvalidate = 0;
 		gNextIova = 0x10000000ULL;
 		gSmmuFreeBytes = SWITCH_GPU_SMMU_MAX_WINDOW_BYTES;
 		gLastReserveBytes = 0;
@@ -305,8 +304,37 @@ TEST_F(GpuMemSmmuTest, ExclusiveSmmuCompactsOnly64KMultipleScatteredAndCleansUp)
 	EXPECT_EQ(compMem->pages[16] - compMem->pages[0], 0x10000ULL);
 	tgm_mem_del(&compMem);
 	EXPECT_EQ(gSmmuUnmaps, 1u);
-	EXPECT_EQ(gLtcFlushesBeforeLastUnmap, 1u);
 	EXPECT_EQ(gLtcInvalidatesBeforeLastUnmap, 1u);
+}
+
+// A retirement batch's memories: every GMMU mapping goes, one L2 invalidate, then every IOVA goes back. Memory without
+// an IOVA is deleted at once.
+TEST_F(GpuMemSmmuTest, ABatchSharesOneL2InvalidateBeforeItsIovasGoBack)
+{
+	const auto pages = scattered(32);
+	tgm_mem *batch[3] = {};
+	for (tgm_mem *&mem : batch)
+		ASSERT_EQ(tgm_mem_new_exclusive_smmu(&vm, pages.data(), 32, &mem), 0);
+	tgm_mem *direct = nullptr;
+	ASSERT_EQ(tgm_mem_new(&vm, pages.data(), 32, &direct), 0);
+	ASSERT_FALSE(tgm_mem_is_smmu(direct));
+	tgm_mem *later = nullptr;
+	tgm_mem_del_later(&direct, &later);
+	EXPECT_EQ(direct, nullptr);
+	EXPECT_EQ(later, nullptr);
+	EXPECT_EQ(gDtorCalls, 1u);
+	for (tgm_mem *&mem : batch)
+		tgm_mem_del_later(&mem, &later);
+	EXPECT_EQ(gDtorCalls, 4u);
+	EXPECT_EQ(gSmmuUnmaps, 0u);
+	EXPECT_EQ(gLtcInvalidates, 0u);
+	tgm_mem_del_finish(later);
+	EXPECT_EQ(gLtcInvalidates, 1u);
+	EXPECT_EQ(gDtorsBeforeInvalidate, 4u);
+	EXPECT_EQ(gSmmuUnmaps, 3u);
+	EXPECT_EQ(gLtcInvalidatesBeforeFirstUnmap, 1u);
+	tgm_mem_del_finish(nullptr);
+	EXPECT_EQ(gLtcInvalidates, 1u);
 }
 
 TEST_F(GpuMemSmmuTest, ExclusiveSmmuUnmapsOnCtorFailureAndSkipsWhenCompDisabled)

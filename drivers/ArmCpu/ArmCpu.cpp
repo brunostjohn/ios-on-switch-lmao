@@ -693,7 +693,6 @@ bool ArmCpu::start(IOService *provider)
     info.log_id = logicalId;
     info.cluster_id = static_cast<uint32_t>(ml_get_cluster_number(physical));
     info.cluster_type = ml_get_boot_cluster_type();
-    info.powergate_latency = 50000;
     const kern_return_t status = ml_processor_register(&info, &machProcessor, &ipi_handler, &pmiHandler);
     if (status != KERN_SUCCESS) {
         panic("ArmCpu: CPU %u registration failed: %d", logicalId, status);
@@ -754,7 +753,6 @@ bool ArmCpu::finishSecondary()
     info.log_id = logicalId;
     info.cluster_id = static_cast<uint32_t>(ml_get_cluster_number(static_cast<uint32_t>(affinity)));
     info.cluster_type = ml_get_boot_cluster_type();
-    info.powergate_latency = 50000;
     const kern_return_t status = ml_processor_register(&info, &machProcessor, &ipi_handler, &pmiHandler);
     if (status != KERN_SUCCESS) {
         armcpu_smp_fail[logicalId] = 4;

@@ -125,7 +125,7 @@ TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 	const CodeText alloc = Block(client(), "IOReturn AGXDeviceUserClient::boAlloc(");
 	EXPECT_TRUE(alloc.has("if (!ret && !bo->pool_va && !compressible && !system && "
 			      "!(in->flags & TegraGM20BBoContiguous)) spare = spareTake(in->bytes, "
-			      "critical_);"));
+			      "charge.critical);"));
 	EXPECT_TRUE(alloc.has("(in->flags & TegraGM20BBoContiguous) || system ? kClasses : "
 			      "classUp(in->bytes);"));
 	EXPECT_TRUE(alloc.has("cleanZeros(va, backing);"));
@@ -1825,6 +1825,72 @@ TEST(GM20BParkedBoSource, LockOrderAndOffLockVmCalls)
 
 	const CodeText stats = Block(client(), "extern \"C\" unsigned long tgm_owner_stats(");
 	EXPECT_TRUE(stats.before("parkedStatsTake(", "IOLockLock(p->lock);"));
+}
+
+// Every refill decision counts a class's spares on the dirty list (SwitchGpuSpares.h switch_gpu_spare_short), and every
+// push onto or pop off that list keeps the count.
+TEST(GM20BSparesSource, TheRefillCountsDirtySpares)
+{
+	EXPECT_FALSE(CodeText(client()).has("p->count[c] + p->zeroing[c]"));
+	for (const char *fn : {"void spareZeroed(void *context, int result)",
+			       "void spareWork(thread_call_param_t param, thread_call_param_t)",
+			       "Spare *spareTake(uint64_t bytes, bool critical)"})
+		EXPECT_TRUE(Block(client(), fn)
+				    .has("switch_gpu_spare_short(p->count[c], p->zeroing[c], "
+					 "p->dirtyCount[c],"))
+			<< fn;
+	for (const char *fn :
+	     {"void spareRecycleWork(thread_call_param_t param, thread_call_param_t)",
+	      "void spareWork(thread_call_param_t param, thread_call_param_t)",
+	      "bool spareKeep(const SwitchGpuCachedBuffer &buffer"}) {
+		const CodeText body = Block(client(), fn);
+		EXPECT_EQ(body.count("p->dirtyBytes += ") + body.count("p->dirtyBytes -= "),
+			  body.count("++p->dirtyCount[") + body.count("--p->dirtyCount["))
+			<< fn;
+	}
+}
+
+// The compositor's classes keep their last spare for it and may learn a second (SwitchGpuSpares.h); BoAlloc passes the
+// connection's role as chargeBo read it under lock_.
+TEST(GM20BSparesSource, TheCompositorsClassesKeepTheirLastSpareForIt)
+{
+	const CodeText take = Block(client(), "Spare *spareTake(uint64_t bytes, bool critical)");
+	EXPECT_TRUE(take.before("if (critical) p->compositorClass[c] = true;",
+				"switch_gpu_spare_kept_for_compositor(critical, "
+				"p->compositorClass[d], p->count[d])"));
+	EXPECT_TRUE(take.has("switch_gpu_spare_depth_cap(classBytes(c), kSpareCapBytes, "
+			     "p->compositorClass[c]);"));
+	EXPECT_FALSE(take.has("p->target[d] >= 2"));
+}
+
+// The spare workers allocate, wire, free and sometimes memset memory: never above user priority.
+TEST(GM20BSparesSource, TheWorkersRunAtUserPriority)
+{
+	const CodeText make = Block(client(), "SparePool *spares()");
+	EXPECT_EQ(make.count("THREAD_CALL_PRIORITY_USER"), 3u);
+	EXPECT_FALSE(make.has("THREAD_CALL_PRIORITY_KERNEL"));
+	EXPECT_FALSE(make.has("thread_call_allocate_with_qos("));
+}
+
+// A waiter on a parking, unparking or reclaiming BO pushes that BO's own mover, on that BO's own event: one owner per
+// connection was overwritten and cleared by unrelated BOs, and the reaper never named itself.
+TEST(GM20BParkedBoSource, ParkWaitersPushTheirBosOwnMover)
+{
+	EXPECT_FALSE(CodeText(client()).has("parkWait_"));
+	EXPECT_FALSE(CodeText(client()).has("parkOwner_"));
+	EXPECT_TRUE(
+		Block(client(), "bool AGXDeviceUserClient::parkWaitStableLocked(")
+			.has("switch_gpu_sleep_inheritor(lock_, &bo->parkOwner, bo->parkOwner);"));
+	const CodeText reclaim = Block(client(), "bool AGXDeviceUserClient::reclaimParkedBo(");
+	EXPECT_TRUE(reclaim.before("bo->parkOwner = switch_gpu_current_thread();",
+				   "parkUnlinkLocked(bo, true);"));
+	EXPECT_TRUE(Block(client(), "void AGXDeviceUserClient::parkFinishReclaimLocked(")
+			    .has("parkSettledLocked(bo);"));
+	EXPECT_TRUE(Block(client(), "ReclaimedBacking *AGXDeviceUserClient::detachReclaimedLocked(")
+			    .has("parkSettledLocked(bo);"));
+	const CodeText settled = Block(client(), "void AGXDeviceUserClient::parkSettledLocked(");
+	EXPECT_TRUE(settled.before("bo->parkOwner = nullptr;",
+				   "switch_gpu_wakeup_inheritor(lock_, &bo->parkOwner);"));
 }
 
 TEST(GM20BParkedBoSource, OverwriteMappingsAndXnuHelpersPreserveVmSafety)

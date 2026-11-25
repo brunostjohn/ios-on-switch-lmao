@@ -34,6 +34,15 @@ extern "C" __attribute__((weak)) void switch_gpu_path_taken(int, unsigned)
 {
 }
 
+// Retirement's memory batch (SwitchGpuAllocatedMemory.cpp), for tests that do not build it.
+extern "C" __attribute__((weak)) void switch_gpu_memory_retire_begin(void)
+{
+}
+
+extern "C" __attribute__((weak)) void switch_gpu_memory_retire_end(void)
+{
+}
+
 // No writer promise is given up on unless a test says so.
 extern "C" __attribute__((weak)) int tgm_promise_abandoned(unsigned, unsigned)
 {

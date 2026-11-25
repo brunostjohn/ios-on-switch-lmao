@@ -195,6 +195,7 @@ struct tgm_mem {
 	u64 smmu_iova;
 	u32 smmu_npages;
 	u64 *smmu_pages;
+	struct tgm_mem *later; /* tgm_mem_del_later's batch */
 };
 
 int tgm_vm_kmap_raw(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_only,

@@ -208,7 +208,9 @@ struct SparePool {
 	PoolZero *poolDirty;  // freed pool BOs, not yet zeroed
 	Spare *ready
 		[kClasses];  // zeroed and clean, by class (classUp(bytes) <= class of a spare's bytes)
-	uint16_t count[kClasses], target[kClasses], zeroing[kClasses];
+	// by class: ready, the depth kept, on the copy engine, on the dirty list
+	uint16_t count[kClasses], target[kClasses], zeroing[kClasses], dirtyCount[kClasses];
+	bool compositorClass[kClasses];  // the compositor has asked for a spare of the class
 	uint64_t clean, dirtyBytes, cleaningBytes,
 		poolZeroing;  // bytes ready, freed and waiting, pool bytes waiting
 	// a copy-engine fill failed: no spare is made until the next BoAlloc asks
@@ -372,6 +374,9 @@ class AGXDeviceUserClient : public IOUserClient
 		bool parkedReadOnly;
 		bool reclaimDeferred;
 		SwitchGpuParkState parkState;
+		// The thread moving it through Parking, Unparking or Reclaiming, which its waiters push; &parkOwner is
+		// their event (parkWaitStableLocked, parkSettledLocked)
+		SwitchGpuThreadRef parkOwner;
 		uint64_t parkedVa;
 		uint64_t reclaimSeq;
 		switch_gpu_backing *parkedBacking;
@@ -516,8 +521,6 @@ class AGXDeviceUserClient : public IOUserClient
 	Left left_ = {};  // lock_: for releaseCall_
 	uint32_t reclaimDeferredCount_ = 0;
 	uint64_t reclaimSeq_ = 0;
-	uint32_t parkWait_ = 0;
-	SwitchGpuThreadRef parkOwner_ = nullptr;
 	thread_call_t releaseCall_ = nullptr;
 	RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
 	// a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
@@ -682,6 +685,7 @@ class AGXDeviceUserClient : public IOUserClient
 	void drainDeferredReclaims(uint64_t upToSeq);
 	void releaseReclaimedList(ReclaimedBacking *list);
 	void parkUnlinkAllLocked();
+	void parkSettledLocked(Bo *bo);
 	void drainParkedRanges();
 	Bo **findLink(uint64_t handle);
 	IOReturn freeBo(Bo **p);

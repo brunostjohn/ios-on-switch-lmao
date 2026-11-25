@@ -359,7 +359,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	}
 	if (!ret && !bo->pool_va && !compressible && !system &&
 	    !(in->flags & TegraGM20BBoContiguous))
-		spare = spareTake(in->bytes, critical_);
+		spare = spareTake(in->bytes, charge.critical);
 	else if (TGM_STATS && !ret && !bo->pool_va && !compressible)
 		spareIneligible();
 	if (!ret && bo->pool_va) {
