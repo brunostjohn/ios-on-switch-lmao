@@ -115,6 +115,13 @@ Layer randomDetached()
         dh = dh > 4000 ? 4000 : dh;
     }
     l.dst = {(int32_t)rnd(W + 200) - 100, (int32_t)rnd(H + 200) - 100, dw, dh};
+    // Every transform word Core Animation may set; a quarter turn's destination takes the source's other side.
+    l.transform = rnd(2) ? rnd(8) : 0;
+    if (turnOf(l.transform).transpose) {
+        const int32_t t = l.dst.w;
+        l.dst.w = l.dst.h;
+        l.dst.h = t;
+    }
     return l;
 }
 
@@ -127,8 +134,9 @@ void testAcceptance()
         bool has[kLayers] = {};
         Layer d = randomDetached();
         // Within the published limits: CA's own check (scale by integer quotient on A10X; here the exact ratio).
-        if ((uint64_t)d.dst.w * 4 < (uint64_t)d.src.w || (uint64_t)d.dst.h * 4 < (uint64_t)d.src.h ||
-            (uint64_t)d.dst.w > 4ull * d.src.w || (uint64_t)d.dst.h > 4ull * d.src.h)
+        const bool turned = turnOf(d.transform).transpose;
+        const uint64_t ow = turned ? d.dst.h : d.dst.w, oh = turned ? d.dst.w : d.dst.h;
+        if (ow * 4 < (uint64_t)d.src.w || oh * 4 < (uint64_t)d.src.h || ow > 4ull * d.src.w || oh > 4ull * d.src.h)
             continue;
         const unsigned slot = isYuv(d.kind) ? 2 : 0;  // YUV in layer 2, RGB in layer 0 (QuartzCore [V])
         layers[slot] = d;
@@ -161,6 +169,8 @@ void testAcceptance()
               image.prescaled);
         CHECK((image.dda & 0xffff) <= (image.yuv ? 8u : 4u) << 12 && (image.dda >> 16) <= 15u << 12, "dda %#x",
               image.dda);
+        CHECK(!d.transform || image.convert || (image.options & 0x15u) == turnOptions(d.transform),
+              "a transformed layer the window scans has the wrong direction bits");
         CHECK(image.readHigh <= ((d.surface.allocation + 4095) & ~4095ull) && image.readLow < image.readHigh,
               "read range %#llx-%#llx outside %#llx", (unsigned long long)image.readLow,
               (unsigned long long)image.readHigh, (unsigned long long)d.surface.allocation);
@@ -189,7 +199,7 @@ void testRefusals()
     CHECK(checkUpdated(7u | kBackgroundBit, kOpaqueBlack, has, layers, W, H) == kAccepted, "the reference swap");
     Layer keep = d;
     d.transform = 4;
-    CHECK(checkUpdated(6, 0, has, layers, W, H) == kTransformed, "a transform");
+    CHECK(checkUpdated(6, 0, has, layers, W, H) == kAccepted, "a turned video: the conversion job turns it");
     d = keep;
     d.surface.format = fourcc('x', '4', '2', '0');
     d.kind = kindOf(d.surface.format, d.surface.planes);
@@ -432,6 +442,87 @@ void testLatch()
 }  // namespace
 
 // One process, in this order: the scenarios draw from one random stream (rng), as the harness always did.
+// turnedRect agrees pixel for pixel with the turned whole surface's own mapping (TegraVICConfig.h vicFlips).
+TEST(DisplayPlanesTurn, TurnedRectMatchesThePixelMapping)
+{
+    const uint32_t sw = 13, sh = 7;
+    const Rect r = {3, 2, 6, 4};
+    for (uint32_t t = 0; t < 8; ++t) {
+        const Turn turn = turnOf(t);
+        const uint32_t ow = turn.transpose ? sh : sw, oh = turn.transpose ? sw : sh;
+        const Rect o = turnedRect(r, sw, sh, t);
+        unsigned inside = 0;
+        for (uint32_t oy = 0; oy < oh; ++oy)
+            for (uint32_t ox = 0; ox < ow; ++ox) {
+                uint32_t a = turn.transpose ? oy : ox, b = turn.transpose ? ox : oy;
+                if (turn.flipX)
+                    a = sw - 1 - a;
+                if (turn.flipY)
+                    b = sh - 1 - b;
+                const bool inR =
+                    (int32_t)a >= r.x && (int32_t)a < r.x + r.w && (int32_t)b >= r.y && (int32_t)b < r.y + r.h;
+                const bool inO =
+                    (int32_t)ox >= o.x && (int32_t)ox < o.x + o.w && (int32_t)oy >= o.y && (int32_t)oy < o.y + o.h;
+                EXPECT_EQ(inR, inO) << "transform " << t << " at " << ox << "," << oy;
+                inside += inO;
+            }
+        EXPECT_EQ(inside, (unsigned)(r.w * r.h)) << t;
+    }
+}
+
+// The words window B gets for each transform (the orchestrator's table, VIC's vicFlips and V3's proven pair).
+TEST(DisplayPlanesTurn, TransformWordsToWindowBits)
+{
+    const uint32_t expected[8] = {0, 0x1, 0x4, 0x5, 0x14, 0x15, 0x10, 0x11};
+    for (uint32_t t = 0; t < 8; ++t)
+        EXPECT_EQ(turnOptions(t), expected[t]) << t;
+}
+
+// Maps' detached Metal layer: 1280x720 BGRA in the GPU's 16-GOB blocks, turned by 7 onto the whole 720x1280 panel at
+// 1:1, is scanned by the window itself: SCAN_COLUMN | H_DIRECTION from the last column's last byte, 1280 columns of
+// 720 pixels, no filter, whole block rows read.
+TEST(DisplayPlanesTurn, AFullScreenTurnedMetalLayerIsScannedByTheWindow)
+{
+    Layer l;
+    l.kind = kKindBgra;
+    l.surface = makeSurface(kKindBgra, 1280, 720);
+    tgm_layout block = {};
+    ASSERT_EQ(tgm_layout_tiled(1280, 720, 4, &block), 1);
+    l.surface.stride[0] = block.row_bytes;
+    l.surface.allocation = block.bytes;
+    l.surface.descriptorBytes = (block.bytes + 16383) & ~16383ull;
+    l.src = {0, 0, 1280, 720};
+    l.dst = {0, 0, 720, 1280};
+    l.transform = 7;
+    EXPECT_EQ(checkDetached(l, W, H), (unsigned)kAccepted);
+    Image image;
+    ASSERT_TRUE(imageOf(l, W, H, image, &block));
+    EXPECT_FALSE(image.convert);
+    EXPECT_TRUE(image.visible);
+    EXPECT_EQ(image.options & 0x515u, 0x11u);  // SCAN_COLUMN | H_DIRECTION, no filters
+    EXPECT_EQ(image.size, 1280u << 16 | 720u);
+    EXPECT_EQ(image.prescaled, 1280u << 16 | 720u * 4);
+    EXPECT_EQ(image.dda, 0x10001000u);
+    EXPECT_EQ(image.hOffset, 1279u * 4 + 3);
+    EXPECT_EQ(image.vOffset, 0u);
+    EXPECT_EQ(image.start[0], 0u);
+    EXPECT_EQ(image.surfaceKind & 3u, (unsigned)kSurfaceKindBlock);
+    EXPECT_EQ(image.lineStride, block.row_bytes);
+    // Transform 4 goes the other way down the rows instead: V_DIRECTION from the last row.
+    l.transform = 4;
+    ASSERT_TRUE(imageOf(l, W, H, image, &block));
+    EXPECT_EQ(image.options & 0x515u, 0x14u);
+    EXPECT_EQ(image.hOffset, 0u);
+    EXPECT_EQ(image.vOffset, 719u);
+    // Pitch-linear, or scaled, the conversion job turns it instead: accepted, never refused.
+    ASSERT_TRUE(imageOf(l, W, H, image));
+    EXPECT_TRUE(image.convert);
+    l.dst = {0, 0, 360, 640};
+    EXPECT_EQ(checkDetached(l, W, H), (unsigned)kAccepted);
+    ASSERT_TRUE(imageOf(l, W, H, image, &block));
+    EXPECT_TRUE(image.convert);
+}
+
 TEST(DisplayPlanes, AcceptanceWithinThePublishedLimits)
 {
     testAcceptance();

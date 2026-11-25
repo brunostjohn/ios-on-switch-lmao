@@ -225,7 +225,7 @@ enum Reason : unsigned {
     kSurface = 4,      // the IOSurface or its memory is not what its own fields say
     kBlank = 5,        // accepted: everything off over black
     kTwoUi = 6,        // more layers with surfaces than published (IOMFBNumLayers)
-    kTransformed = 7,  // a transform (the display publishes no rotation and, on 24B119, IOMFBDisableFlip)
+    kTransformed = 7,  // no longer given: a transformed layer is turned by a window or the conversion job
     kScale = 8,        // a scale outside 1/4 .. 4x, or a source wider than published
     kFormat = 9,       // a format no window reads
     kAlignment = 10,   // a plane base or row not aligned as published
@@ -439,11 +439,14 @@ inline bool blockReads(const tgm_layout &b, const Surface &f, const Axis &y, Ima
 }
 
 #include "SwitchWindowFormatImage.h"
+#include "NativePlanesTurn.h"
 
 // The image of a layer checkDetached accepted: the destination clipped to the display with the source cut exactly where
 // the clipped edge samples it. block: the surface's layout when the GPU renders it block-linear.
 inline bool imageOf(const Layer &l, uint32_t width, uint32_t height, Image &image, const tgm_layout *block = nullptr)
 {
+    if (l.transform)
+        return turnImageOf(l, width, height, image, block);
     if (l.kind == kKindExtraYuv)
         return extraImageOf(l, width, height, image, block);
     image = Image();
@@ -492,10 +495,9 @@ inline unsigned checkDetached(const Layer &l, uint32_t width, uint32_t height, c
 {
     if (l.kind == kKindNone)
         return kFormat;
-    if (l.transform)
-        return kTransformed;
     const Rect s = l.src;
-    const Rect d = l.dst;
+    // A quarter turn's destination width is its source height: the scale limits hold per output axis.
+    const Rect d = turnOf(l.transform).transpose ? Rect{l.dst.x, l.dst.y, l.dst.h, l.dst.w} : l.dst;
     if (s.x < 0 || s.y < 0 || s.w <= 0 || s.h <= 0 || d.w <= 0 || d.h <= 0 ||
         static_cast<uint64_t>(s.x) + static_cast<uint64_t>(s.w) > l.surface.width ||
         static_cast<uint64_t>(s.y) + static_cast<uint64_t>(s.h) > l.surface.height ||
@@ -513,8 +515,12 @@ inline unsigned checkDetached(const Layer &l, uint32_t width, uint32_t height, c
         static_cast<uint32_t>(s.w) > limits.maxSrcRectWidth ||
         static_cast<uint64_t>(s.w) * static_cast<uint64_t>(s.h) > limits.maxSrcRectTotal)
         return kScale;
-    if (l.kind == kKindExtraYuv)
-        return extraCheck(l, width, height, limits);
+    if (l.kind == kKindExtraYuv) {
+        Layer untransformed = l;
+        untransformed.transform = 0;
+        untransformed.dst = d;
+        return extraCheck(untransformed, width, height, limits);
+    }
     const unsigned planes = isYuv(l.kind) ? 2 : 1;
     for (unsigned p = 0; p < planes; ++p) {
         const uint64_t base = planes == 1 ? 0 : l.surface.offset[p];

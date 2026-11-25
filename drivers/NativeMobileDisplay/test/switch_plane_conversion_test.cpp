@@ -118,6 +118,12 @@ void switch_native_scanout_release(SwitchNativeScanout *scanout)
     *scanout = {};
 }
 
+// A pitch surface, as the GPU's layout query answers for anything it did not render block-linear.
+extern "C" int tegra_gm20b_surface_layout(uint64_t, tgm_layout *)
+{
+    return 0;
+}
+
 int switch_vic_scanout_convert(const SwitchNativeScanout *source, const TegraVICImage *input,
                                switch_gpu_backing *target, uint32_t width, uint32_t height, uint32_t pitch,
                                const TegraVICOp *operation, SwitchNativeScanout *output)
@@ -366,6 +372,52 @@ TEST_F(PlaneConversion, ConvertsOnceAndReusesTheSameContentWithoutAllocatingOrSu
     EXPECT_EQ(conversions, 1u);
     EXPECT_EQ(display->mappings, 1u);
     EXPECT_GT(display->snapshots[slot].view.producer.value, UINT32_MAX);
+}
+
+// A turned layer (a landscape video Core Animation now hands the display) is turned by the job itself: VIC gets the word
+// and the turned size, and the window shows the turned plane untransformed where the layer goes.
+TEST_F(PlaneConversion, ATurnedVideoBecomesAnUntransformedTurnedPlane)
+{
+    layer.transform = 4;
+    layer.dst = {100, 200, 128, 256};
+    const int slot = convert();
+    ASSERT_GE(slot, 0);
+    EXPECT_EQ(lastOperation.transform, 4u);
+    EXPECT_EQ(lastOperation.dstW, 64u);
+    EXPECT_EQ(lastOperation.dstH, 128u);
+    EXPECT_FALSE(image.convert);
+    EXPECT_EQ(image.options & 0x15u, 0u);  // no direction bits: the plane is already turned
+    EXPECT_EQ(image.position, (200u << 16) | 100u);
+    EXPECT_EQ(image.size, (256u << 16) | 128u);
+    // The same content under another word is another plane.
+    layer.transform = 7;
+    advance();
+    EXPECT_GE(convert(), 0);
+    EXPECT_EQ(lastOperation.transform, 7u);
+    EXPECT_EQ(conversions, 2u);
+}
+
+// A packed RGB layer the windows cannot scan turned (scaled, or pitch-linear with a quarter turn) converts the same way.
+TEST_F(PlaneConversion, APackedLayerTheWindowCannotTurnConvertsToo)
+{
+    layer = {};
+    layer.kind = native_planes::kKindBgra;
+    layer.surface.format = native_planes::fourcc('B', 'G', 'R', 'A');
+    layer.surface.width = 64;
+    layer.surface.height = 32;
+    layer.surface.stride[0] = 256;
+    layer.surface.planeHeight[0] = 32;
+    layer.surface.allocation = layer.surface.descriptorBytes = 256 * 32;
+    layer.src = {0, 0, 64, 32};
+    layer.dst = {0, 0, 64, 128};
+    layer.transform = 7;
+    const int slot = convert();
+    ASSERT_GE(slot, 0);
+    EXPECT_EQ(lastInput.blockLinear, 0u);
+    EXPECT_EQ(lastOperation.transform, 7u);
+    EXPECT_EQ(lastOperation.dstW, 32u);
+    EXPECT_EQ(lastOperation.dstH, 64u);
+    EXPECT_EQ(image.size, (128u << 16) | 64u);
 }
 
 TEST_F(PlaneConversion, NewContentCannotOverwriteLiveConvertedScanout)

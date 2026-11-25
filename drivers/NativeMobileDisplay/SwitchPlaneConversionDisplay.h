@@ -6,6 +6,7 @@ struct ConvertedPlane {
     uint64_t offset = 0, planeOffset[2] = {};
     uint32_t transfer = 0, primaries = 0, chromaTop = 0, chromaBottom = 0;
     uint32_t stride[2] = {}, rows[2] = {};
+    uint32_t transform = 0;
     bool valid = false;
 };
 
@@ -72,11 +73,11 @@ void planeConversionWork()
             work.value.backing = switch_display_scanout_buffer(size_t(work.bytes));
             work.value.bytes = work.value.backing ? work.bytes : 0;
         }
-        work.status = work.value.backing
-                          ? switch_vic_scanout_convert(planeSlots[work.sourceSlot].native, &work.input,
-                                                       work.value.backing, work.value.width, work.value.height,
-                                                       work.pitch, &work.operation, &work.output)
-                          : -12;
+        work.status = work.value.backing ? switch_vic_scanout_convert(planeSlots[work.sourceSlot].native, &work.input,
+                                                                      work.value.backing, uint32_t(work.operation.dstW),
+                                                                      uint32_t(work.operation.dstH), work.pitch,
+                                                                      &work.operation, &work.output)
+                                         : -12;
     }
     getWorkLoop()->runAction(
         [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
@@ -127,14 +128,50 @@ void convertedStop()
     convertedPlanes = nullptr;
 }
 
+// VIC's input for a packed RGB layer the conversion job turns: its rows where the surface keeps them, or the GPU's blocks
+// read in place (TegraVIC's blockLinearRgbIn).
+static const char *packedConversionInput(const native_planes::Layer &layer, const SwitchNativeScanout *source,
+                                         TegraVICImage *input)
+{
+    TegraVICSurfaceDesc desc = {};
+    desc.fourcc = layer.surface.format;
+    desc.width = layer.surface.width;
+    desc.height = layer.surface.height;
+    desc.planes = 1;
+    desc.length = layer.surface.descriptorBytes;
+    desc.planeBytesPerRow[0] = layer.surface.stride[0];
+    desc.planeHeight[0] = layer.surface.height;
+    const char *why = tegra_vic_image_from(&desc, source->pitchOffset, input);
+    if (why)
+        return why;
+    tgm_layout block = {};
+    const auto &allocation = source->allocation;
+    if (!allocation.page_count || !allocation.pages ||
+        tegra_gm20b_surface_layout(allocation.pages[0] & ~0xfffULL, &block) != 1)
+        return nullptr;
+    if (block.bpp != 4 || block.width < layer.surface.width || block.height < layer.surface.height || block.y_log2 > 5)
+        return "packed conversion source block layout";
+    input->blockLinear = 1;
+    input->blockHeightLog2 = block.y_log2;
+    input->pitch[0] = block.row_bytes;
+    input->rows[0] = block.rows;
+    input->span[0] = block.bytes;
+    return nullptr;
+}
+
 int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t width, uint32_t height,
                      native_planes::Image &image, const OriginalLegacySwapRequest *request = nullptr)
 {
     const auto *source = planeSlots[sourceSlot].native;
-    if (!source || !source->lease || !native_planes::isYuv(layer.kind))
+    const bool packed = layer.kind == native_planes::kKindBgra || layer.kind == native_planes::kKindRgba;
+    if (!source || !source->lease || (!native_planes::isYuv(layer.kind) && !packed))
         return -95;
-    const uint32_t pitch = (layer.surface.width * 4 + 255) & ~255u;
-    const uint64_t bytes = uint64_t(pitch) * layer.surface.height;
+    // A transformed layer's plane is the whole surface turned (NativePlanesTurn.h): the window shows it untransformed.
+    const bool transpose = native_planes::turnOf(layer.transform).transpose;
+    const uint32_t outWidth = transpose ? layer.surface.height : layer.surface.width;
+    const uint32_t outHeight = transpose ? layer.surface.width : layer.surface.height;
+    const uint32_t pitch = (outWidth * 4 + 255) & ~255u;
+    const uint64_t bytes = uint64_t(pitch) * outHeight;
     if (!bytes || bytes > kPlaneSlotSpan)
         return -95;
     if (!convertedPlanes)
@@ -164,7 +201,8 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
             buffer.content == allocation.content_generation && buffer.width == layer.surface.width &&
             buffer.height == layer.surface.height && buffer.cropX == view.crop.x && buffer.cropY == view.crop.y &&
             buffer.format == layer.surface.format && buffer.matrix == matrix && buffer.transfer == transfer &&
-            buffer.primaries == primaries && buffer.chromaTop == chromaTop && buffer.chromaBottom == chromaBottom) {
+            buffer.primaries == primaries && buffer.chromaTop == chromaTop && buffer.chromaBottom == chromaBottom &&
+            buffer.transform == layer.transform) {
             selected = &buffer;
             cached = true;
             break;
@@ -187,10 +225,13 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
         TegraVICOp operation = {};
         operation.srcW = uint64_t(layer.surface.width) << 16;
         operation.srcH = uint64_t(layer.surface.height) << 16;
-        operation.dstW = layer.surface.width;
-        operation.dstH = layer.surface.height;
+        operation.dstW = outWidth;
+        operation.dstH = outHeight;
+        operation.transform = layer.transform & 7;
         const char *why = nullptr;
-        if (view.layout.plane_count) {
+        if (packed) {
+            why = packedConversionInput(layer, source, &input);
+        } else if (view.layout.plane_count) {
             auto shown = view;
             shown.layout.color_matrix = shownMatrix;
             why = switch_native_vic_image(shown, 0, &input);
@@ -254,6 +295,7 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
         value->primaries = primaries;
         value->chromaTop = chromaTop;
         value->chromaBottom = chromaBottom;
+        value->transform = layer.transform;
         value->offset = source->pitchOffset;
         for (unsigned p = 0; p < 2; ++p) {
             value->stride[p] = layer.surface.stride[p];
@@ -266,12 +308,14 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
     }
     native_planes::Layer rgb = layer;
     rgb.kind = native_planes::kKindBgra;
+    rgb.transform = 0;
+    rgb.src = native_planes::turnedRect(layer.src, layer.surface.width, layer.surface.height, layer.transform);
     rgb.surface = {};
     rgb.surface.format = native_planes::fourcc('B', 'G', 'R', 'A');
-    rgb.surface.width = layer.surface.width;
-    rgb.surface.height = layer.surface.height;
+    rgb.surface.width = outWidth;
+    rgb.surface.height = outHeight;
     rgb.surface.stride[0] = pitch;
-    rgb.surface.planeHeight[0] = layer.surface.height;
+    rgb.surface.planeHeight[0] = outHeight;
     rgb.surface.allocation = rgb.surface.descriptorBytes = bytes;
     if (!native_planes::imageOf(rgb, width, height, image)) {
         switch_native_scanout_release(&result);
