@@ -227,7 +227,13 @@ def cpu_section(s: Session, syms: symbols.Symbols) -> list[str]:
         w = waits[name]
         out.append(
             f'runnable to running: {name} {w.runs} runs, worst p99 {w.worst_p99} us, max {w.worst_us} us'
-            + (f' (window ending {w.when:%H:%M:%S}{", still booting" if w.booting else ""})' if w.when else '')
+            + (
+                f' (window ending {w.when:%H:%M:%S}'
+                + (f', began {w.began_before_ms / 1000:.1f} s before it' if w.began_before_ms else '')
+                + f'{", still booting" if w.booting else ""})'
+                if w.when
+                else ''
+            )
         )
     state, lines = cpu.kprof(s.recs)
     out.append(f'kprof: {state}')
