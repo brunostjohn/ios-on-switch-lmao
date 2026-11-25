@@ -9,7 +9,7 @@ import Metal
 /// the numbers are for comparing runs (//tools/hwtest), not judged here.
 struct GPURatesTest: HWTest {
     let id = "gpu.perf.rates"
-    let name = "GPU unit rates: FMA, bandwidth by storage and page spread, fill, texels, triangles, hidden layers"
+    let name = "GPU unit rates: FMA, bandwidth, fill, texels, triangles, hidden layers, shared buffers cached and not"
     let subsystem = Subsystem.metal
 
     func run(_ context: TestContext) async throws -> Outcome {
@@ -21,6 +21,9 @@ struct GPURatesTest: HWTest {
         metrics.set("dev", GM20BFacade.kind(of: gpu.device))
         metrics.set("bands_off", production != nil)
         if !result.passed { return .fail(result.reasons(limit: 4).joined(separator: "; "), metrics) }
+        if GM20BFacade.kind(of: gpu.device) == "gm20b" && !result.notes.isEmpty {
+            return .fail(result.notes.joined(separator: "; "), metrics)
+        }
         return .pass(metrics, proof: gpu.proof).onRawPath(gpu)
     }
 }

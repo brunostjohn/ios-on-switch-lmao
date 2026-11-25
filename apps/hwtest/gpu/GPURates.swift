@@ -3,9 +3,10 @@ import HWTestCore
 import Metal
 
 /// The GPU's rates, one unit at a time (shaders/GPURates.metal): FMA issue, copy and read bandwidth by storage and by
-/// page spread, colour, blend, 4x MSAA and depth fill, bilinear texels, triangles drawn and clipped, and what a
-/// depth-hidden layer of an expensive program costs against a shaded one. Each arm is the fastest of `repeats` runs after
-/// a warm one, so a run a compositor frame preempted does not count.
+/// page spread, colour, blend, 4x MSAA and depth fill, bilinear texels, triangles drawn and clipped, what a depth-hidden
+/// layer of an expensive program costs against a shaded one, and a same-address atomic, a vertex fetch and a table read
+/// from shared buffers bound L2-cached against L2-bypassing. Each arm is the fastest of `repeats` runs after a warm one,
+/// so a run a compositor frame preempted does not count.
 ///
 /// `lane_mhz` is the FMA rate over GM20B's 256 lanes (2 SMMs of 128): the clock the lanes ran at if every cycle issued an
 /// FMA. The other arms' `_per_clk` rates divide by it. The kernel's stats line reports the programmed clock.
@@ -15,9 +16,10 @@ public final class GPURates {
         public var aluThreads = 1 << 18, aluIterations: UInt32 = 256
         public var bytes = 64 << 20, readThreads = 1 << 16
         public var triangles = 1 << 20, heavyIterations: UInt32 = 64
+        public var atomics = 921_600, fetchTriangles = 1 << 18
         public var repeats = 5
 
-        public init() {}
+        public static let device = Sizes()
 
         public static let host: Sizes = {
             var s = Sizes()
@@ -30,6 +32,8 @@ public final class GPURates {
             s.readThreads = 1 << 10
             s.triangles = 1 << 12
             s.heavyIterations = 4
+            s.atomics = 4096
+            s.fetchTriangles = 4096
             s.repeats = 2
             return s
         }()
@@ -49,15 +53,24 @@ public final class GPURates {
         self.s = s
     }
 
-    public static func run(_ gpu: GPU, _ s: Sizes = Sizes()) async throws -> SceneResult {
+    public static func run(_ gpu: GPU, _ s: Sizes = .device) async throws -> SceneResult {
         let b = GPURates(gpu, s)
+        var notes: [String] = []
         try await b.alu()
         try await b.bandwidth()
         try await b.fill()
         try await b.texels()
         try await b.triangles()
         try await b.hidden()
+        for (mode, bypass) in [("cached", false), ("volatile", true)] {
+            guard let made = try b.sharedBuffers(bypass) else {
+                notes.append("no \(mode) shared arm: the device has no switchMetalSharedBypassesL2: probe")
+                continue
+            }
+            try await b.sharedArms(mode, made)
+        }
         var r = SceneResult()
+        r.notes = notes
         r.metrics = b.metrics
         for p in b.problems { r.expect(false, p) }
         return r
@@ -280,5 +293,80 @@ public final class GPURates {
             }
             metrics.set(name + "_us_per_layer", t * 1000 / Double(s.layers), digits: 1)
         }
+    }
+
+    /// Shared buffers made while `on`: the facade binds them L2-bypassing; nil where it has no such probe and `on`
+    static func bypassL2(_ device: MTLDevice, _ on: Bool) -> Bool {
+        let selector = NSSelectorFromString("switchMetalSharedBypassesL2:")
+        guard let object = device as? NSObject, object.responds(to: selector) else { return !on }
+        _ = object.perform(selector, with: NSNumber(value: on))
+        return true
+    }
+
+    struct SharedBuffers {
+        let counter: MTLBuffer, corners: MTLBuffer, table: MTLBuffer
+    }
+
+    /// The shared arms' buffers, made L2-bypassing where `bypass`; nil where the device cannot make them so
+    func sharedBuffers(_ bypass: Bool) throws -> SharedBuffers? {
+        guard Self.bypassL2(gpu.device, bypass) else { return nil }
+        defer { if bypass { _ = Self.bypassL2(gpu.device, false) } }
+        var corners: [SIMD4<Float>] = []
+        corners.reserveCapacity(s.fetchTriangles * 3)
+        for t in 0 ..< s.fetchTriangles {
+            let pixel = t % (s.width * s.height)
+            let x = Float(pixel % s.width), y = Float(pixel / s.width)
+            for (dx, dy) in [(Float(0), Float(0)), (1.5, 0), (0, 1.5)] {
+                corners.append(
+                    SIMD4((x + dx) / Float(s.width) * 2 - 1, 1 - (y + dy) / Float(s.height) * 2, 0.5, 1)
+                )
+            }
+        }
+        let table = (0 ..< 256).map { SIMD4<Float>(Float($0) / 255, 0.5, 0.25, 1) }
+        return SharedBuffers(
+            counter: try gpu.buffer([UInt32(0)]), corners: try gpu.buffer(corners), table: try gpu.buffer(table)
+        )
+    }
+
+    /// One counter every thread adds to, one-pixel triangles whose corners a draw reads, and a fragment program reading a
+    /// 4 KiB table sixteen times a pixel, all from shared buffers `mode` (cached or volatile)
+    func sharedArms(_ mode: String, _ b: SharedBuffers) async throws {
+        let atomic = try gpu.compute("rates_atomic")
+        let tAtomic = try await fastest("atomic_" + mode) { c in
+            let e = c.makeComputeCommandEncoder()!
+            e.setComputePipelineState(atomic)
+            e.setBuffer(b.counter, offset: 0, index: 0)
+            e.dispatchThreads(
+                MTLSize(width: self.s.atomics, height: 1, depth: 1),
+                threadsPerThreadgroup: Self.group(atomic)
+            )
+            e.endEncoding()
+        }
+        let counted = b.counter.contents().load(as: UInt32.self), want = UInt32(s.atomics * (s.repeats + 1))
+        if counted != want { problems.append("atomic_\(mode): the counter read \(counted), not \(want)") }
+        metrics.set("atomic_ns_" + mode, tAtomic * 1e6 / Double(s.atomics), digits: 2)
+        let target = try gpu.texture(.bgra8Unorm, s.width, s.height)
+        let fetch = try gpu.render(vertex: "rates_fetch_vertex", fragment: "solid_fragment", format: .bgra8Unorm)
+        let tFetch = try await fastest("fetch_" + mode) { c in
+            let e = self.pass(target, nil, c)
+            e.setRenderPipelineState(fetch)
+            var colour = SIMD4<Float>(0.5, 0.5, 0.5, 1)
+            e.setVertexBuffer(b.corners, offset: 0, index: 0)
+            e.setFragmentBytes(&colour, length: 16, index: 0)
+            e.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: self.s.fetchTriangles * 3)
+            e.endEncoding()
+        }
+        metrics.set("fetch_mtri_s_" + mode, Self.rate(Double(s.fetchTriangles), tFetch) / 1e6, digits: 1)
+        let table = try gpu.render(fragment: "rates_table_fragment", format: .bgra8Unorm)
+        let tTable = try await fastest("table_" + mode) { c in
+            let e = self.pass(target, nil, c)
+            e.setRenderPipelineState(table)
+            var corners = GPU.fullScreen
+            e.setVertexBytes(&corners, length: MemoryLayout<SIMD4<Float>>.stride * 4, index: 0)
+            e.setFragmentBuffer(b.table, offset: 0, index: 0)
+            e.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            e.endEncoding()
+        }
+        metrics.set("table_us_" + mode, tTable * 1000, digits: 1)
     }
 }

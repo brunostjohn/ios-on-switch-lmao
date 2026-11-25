@@ -60,3 +60,27 @@ fragment float4 rates_texel_fragment(float4 at [[position]], texture2d<float> im
         sum += image.sample(bilinear, uv + float2(i & 3, i >> 2) * (0.5f / 256.0f));
     return sum * 0.125f;
 }
+
+// Every thread adds one to the same counter: the L2 resolves it when the buffer is cached, DRAM when it is not.
+kernel void rates_atomic(device atomic_uint *counter [[buffer(0)]], uint id [[thread_position_in_grid]])
+{
+    atomic_fetch_add_explicit(counter, 1u, memory_order_relaxed);
+}
+
+// rates_triangle_vertex's triangles with their corners read from a buffer, three float4 a triangle.
+vertex RatesVertex rates_fetch_vertex(uint vid [[vertex_id]], device const float4 *corners [[buffer(0)]])
+{
+    return {corners[vid]};
+}
+
+// Sixteen reads a pixel of a 4 KiB table, chosen by the pixel's position.
+fragment float4 rates_table_fragment(float4 at [[position]], device const float4 *table [[buffer(0)]])
+{
+    uint h = uint(at.x) * 73856093u ^ uint(at.y) * 19349663u;
+    float4 sum = float4(0);
+    for (uint i = 0; i < 16u; i++) {
+        h = h * 1664525u + 1013904223u;
+        sum += table[h >> 24];
+    }
+    return sum * (1.0f / 16.0f);
+}
