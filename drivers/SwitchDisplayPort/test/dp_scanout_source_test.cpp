@@ -67,6 +67,7 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     // could ever read panics.
     EXPECT_TRUE(request.before("if (prepared < 0)", "unshownFrame(prepared, i, building, request); return;"));
     EXPECT_TRUE(request.has("unscannable(i);"));
+    EXPECT_TRUE(request.has("if (plan.unshown) unscannable(static_cast<unsigned>(__builtin_ctz(plan.unshown)));"));
     EXPECT_FALSE(request.has("present[i] = false"));
     EXPECT_TRUE(
         request.has("convert ? prepareConversion(surfaces[i], i, building) : prepareSlot(surfaces[i], building)"));

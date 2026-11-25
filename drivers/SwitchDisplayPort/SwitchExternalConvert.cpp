@@ -194,6 +194,8 @@ void SwitchExternalScreen::unshownFrame(int error, unsigned layer, uint32_t buil
 
 // A layer validateSwap accepted that no window reads, as it is or converted: checkSwap holds every layer to what imageOf
 // scans in rows, the GPU lays out only RGB block-linear, and a conversion's BGRA keeps the DDA within an RGB window's.
+// A fourth visible layer is one checkSwap did not count (an earlier swap left it on), and clone_update shows at most
+// layers 0 or 1 and 2 (SwitchExternalPlanes.h).
 void SwitchExternalScreen::unscannable(unsigned layer) const
 {
     const auto &l = layerRecords[layer].layer;

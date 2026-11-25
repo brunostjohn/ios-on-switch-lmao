@@ -363,6 +363,8 @@ void SwitchExternalScreen::requestFrame()
     switch_external::Plan plan;
     if (!switch_external::planSwap(present, layers, images, states, width, height, plan))
         unscannable(static_cast<unsigned>(__builtin_ctz(plan.convert)));
+    if (plan.unshown)
+        unscannable(static_cast<unsigned>(__builtin_ctz(plan.unshown)));
     for (const auto &placement : plan.window) {
         const unsigned i = static_cast<unsigned>(placement.layer);
         if (!placement.on || !native_planes::isYuv(layers[i].kind))

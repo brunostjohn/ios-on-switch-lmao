@@ -340,6 +340,13 @@ TEST(ExternalPlanes, ThreeSurfacesPlannedFourRefused)
     plan = planWindows(s.present, s.images, kIdle);
     EXPECT_EQ(plan.unshown, 1u << 2);
     EXPECT_EQ(plan.window[kA].layer, 3);
+
+    // checkSwap counts the layers a swap updates; a fourth that an earlier swap left on is the screen's to catch
+    // (requestFrame panics on plan.unshown: clone_update never sends layer 3).
+    s.updated = kBackgroundBit | 1u << 3;
+    EXPECT_EQ(s.check(kUltraW, kUltraH), native_planes::kAccepted);
+    ASSERT_TRUE(planSwap(s.present, s.layers, s.images, kIdle, kUltraW, kUltraH, plan));
+    EXPECT_EQ(plan.unshown, 1u << 2);
 }
 
 TEST(ExternalPlanes, TransformedLayerRefused)
