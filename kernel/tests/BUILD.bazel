@@ -1164,7 +1164,7 @@ host_test(
         "//kernel/xnu-10063.141.1/iokit:Kernel/IOPMrootDomain.cpp",
         "//kernel/xnu-12377.121.6/bsd:kern/kern_exec.c",
         "//kernel/xnu-12377.121.6/iokit:Kernel/IOPMrootDomain.cpp",
-        "//tools/deploy:icon_cache.py",
+        "//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py",
     ],
 )
 

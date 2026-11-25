@@ -10,7 +10,6 @@ lint_files()
 
 exports_files([
     "deploy.py",
-    "icon_cache.py",
     "pull_logs.py",
     "system_update.py",
 ])
@@ -21,7 +20,6 @@ py_library(
         "app_journal.py",
         "deployed.py",
         "fileprovider_bookmark.py",
-        "icon_cache.py",
         "joycon_pairing.py",
         "mkarchive.py",
         "poster_snapshots.py",
@@ -78,16 +76,6 @@ py_test(
     size = "small",
     srcs = ["deploy_tail_test.py"],
     deps = [":deploy"],
-)
-
-py_test(
-    name = "icon_cache_test",
-    size = "small",
-    srcs = ["icon_cache_test.py"],
-    deps = [
-        ":deploy",
-        ":lib",
-    ],
 )
 
 py_test(

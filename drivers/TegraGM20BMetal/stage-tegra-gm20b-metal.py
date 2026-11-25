@@ -25,6 +25,9 @@ Only files whose sha256 differs from what the card holds are copied, and files t
 <Data>/ngpu/stage.tsv.gz lists what is staged (its first line the whole list's digest, so an unchanged build reads
 nothing else), and <Data>/ngpu/stage.pending the files a stage was writing, which the next one copies again if it was
 cut short. A card without the list has the three directories replaced whole.
+<Data>/Switch/icon-cache-gpu names the staged build (the list's digest, empty once removed), on every path that stages:
+iconservicesagent keeps the icons it drew while __cache_info__ names the system's ProductBuildVersion, which a GPU build
+does not change, so the next boot's kernel lets them go once per build it names (kernel/switch/boot/icon_cache.c).
 --remove deletes the three directories and the list (the preferences stay; without a Metal device they change nothing).
 --progress prints 'progress DONE/TOTAL bytes' as the files land and 'progress WHAT' before a long wait, for the deploy
 and the image builder to show.
@@ -53,6 +56,7 @@ OWNED = (BUNDLE, SEED, RAW)
 RENAMED_FROM = (ADDONS + '/TegraGM20BMetal.m2v-seed', ADDONS + '/TegraGM20BMetal.raw')
 STATE = 'ngpu/stage.tsv.gz'
 PENDING = 'ngpu/stage.pending'
+ICON_CACHE_RECORD = 'Switch/icon-cache-gpu'
 MANIFEST_HEADER = '# gpu stage 1 '
 EXECUTABLES = ('TegraGM20BMetal',)
 PREFS = {
@@ -190,6 +194,15 @@ def _copy_all(data: Path, wanted: Wanted, changed: list[str], report: Callable[[
                 pending.cancel()
 
 
+def name_for_icon_cache(data: Path, build: str) -> None:
+    """Name the staged build in ICON_CACHE_RECORD, writing nothing when it already does."""
+    record = data / ICON_CACHE_RECORD
+    if record.is_file() and record.read_text() == build + '\n':
+        return
+    record.parent.mkdir(parents=True, exist_ok=True)
+    _write_atomically(record, lambda f: f.write_text(build + '\n'))
+
+
 def sync(data: Path, wanted: Wanted, report: Callable[[str], None]) -> str:
     """Make the card hold `wanted` under the three staged directories; return what was done."""
     for directory in (data / 'ngpu', data / ADDONS):
@@ -199,6 +212,7 @@ def sync(data: Path, wanted: Wanted, report: Callable[[str], None]) -> str:
     known = read_state(data, whole)
     renamed = ''.join(f'; removed {old}, which the rename replaced' for old in _remove_renamed(data))
     if known is True:
+        name_for_icon_cache(data, whole)
         return f'unchanged ({len(wanted)} files){renamed}'
     if known is None:
         for top in OWNED:
@@ -221,6 +235,7 @@ def sync(data: Path, wanted: Wanted, report: Callable[[str], None]) -> str:
 
     _write_atomically(data / STATE, write_state)
     (data / PENDING).unlink()
+    name_for_icon_cache(data, whole)
     copied = sum(wanted[p][2] for p in changed)
     return (
         f'{len(changed)} copied ({copied >> 20} MiB), {len(stale)} removed, {len(wanted) - len(changed)} unchanged'
@@ -265,6 +280,7 @@ def main() -> None:
             print('removed', data / old)
         for name in (STATE, PENDING):
             (data / name).unlink(missing_ok=True)
+        name_for_icon_cache(data, '')
         print('removed', data / BUNDLE)
         return
     if not build.is_file():

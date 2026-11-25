@@ -3,7 +3,8 @@
  * <switch/icon_cache.h>. iconservicesagent keeps the icons it rendered while their __cache_info__ names the system's
  * ProductBuildVersion, the folder is owned by _iconservices, and no ACL is present (-[ISMutableIconCache initWithURL:],
  * 21H461 and 24B119). Our GPU build does not change ProductBuildVersion, so icons a GPU build drew outlive it. The
- * deploy names the GPU build it staged in Switch/icon-cache-gpu (tools/deploy/icon_cache.py). When that name differs
+ * GPU stager names the build it staged in Switch/icon-cache-gpu (stage-tegra-gm20b-metal.py, which the deploy and the
+ * image builder both run). When that name differs
  * from the marker Switch/icon-cache-reset, 21H461 unlinks top-level __cache_info__. 24B119 renames each salt folder
  * aside, off SpringBoard's critical path: into Switch/icon-cache-keep/<marker's build> when the marker names one, else
  * into Switch/icon-cache-trash/<boot-session>-<salt>; and when the keep holds the named build's folders (the card went

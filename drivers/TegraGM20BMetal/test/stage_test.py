@@ -119,3 +119,38 @@ class StageTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class IconCacheRecordTest(StageTest):
+    """The stager names what it staged for the kernel's icon cache drop (kernel/switch/boot/icon_cache.c)."""
+
+    def record(self) -> str:
+        return (self.data / stage.ICON_CACHE_RECORD).read_text()
+
+    def test_a_stage_names_the_lists_digest(self):
+        self.sync()
+        with gzip.open(self.data / stage.STATE, 'rt') as handle:
+            first = handle.readline().strip()
+        self.assertEqual(self.record(), first[2:] + '\n')
+
+    def test_an_unchanged_stage_leaves_the_record_as_it_is_and_names_a_card_that_lacked_it(self):
+        self.sync()
+        record = self.data / stage.ICON_CACHE_RECORD
+        before = record.stat().st_mtime_ns
+        self.sync()
+        self.assertEqual(record.stat().st_mtime_ns, before)
+        record.unlink()
+        self.assertTrue(self.sync().startswith('unchanged'))
+        self.assertTrue(record.is_file())
+
+    def test_a_new_build_is_named(self):
+        self.sync()
+        first = self.record()
+        self.files[stage.BUNDLE + '/Info.plist'] = b'another plist'
+        self.sync()
+        self.assertNotEqual(self.record(), first)
+
+    def test_a_removed_build_is_named_as_none(self):
+        self.sync()
+        stage.name_for_icon_cache(self.data, '')
+        self.assertEqual(self.record(), '\n')

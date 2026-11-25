@@ -44,9 +44,6 @@ class DeployTailTest(unittest.TestCase):
             for name in steps:
                 stack.enter_context(mock.patch.object(deploy, name, self.step(name, failing.get(name))))
             stack.enter_context(
-                mock.patch.object(deploy.icon_cache, 'present', self.step('icon_cache', failing.get('icon_cache')))
-            )
-            stack.enter_context(
                 mock.patch.object(deploy, '_checked', return_value=(card, spec, fat, mock.MagicMock(), 'disk10s2'))
             )
             stack.enter_context(
@@ -66,19 +63,10 @@ class DeployTailTest(unittest.TestCase):
             status = deploy.main(argv)
         return status, [line.split(' ', 1)[1] for line in log.read_text().splitlines()]
 
-    def test_a_refused_icon_cache_still_ejects_and_fails_the_deploy(self):
-        error = denied('containers/Shared/SystemGroup/systemgroup.com.apple.lsd.iconscache/Library')
-        status, lines = self.deploy(icon_cache=error)
-        self.assertEqual(status, 1)
-        self.assertEqual(self.order, ['remove_stale_logging_profiles', '_stage_gpu', 'icon_cache', '_eject'])
-        self.assertIn(f'icon cache: NOT done: {error}', lines)
-        self.assertEqual(lines[-1], 'FAILED: not done: icon cache')
-        self.assertNotIn('deployed', lines)
-
     def test_a_refused_probe_before_the_gpu_bundle_does_not_keep_it_off_the_card(self):
         status, lines = self.deploy(remove_stale_logging_profiles=denied('preferences/Logging'))
         self.assertEqual(status, 1)
-        self.assertEqual(self.order, ['remove_stale_logging_profiles', '_stage_gpu', 'icon_cache', '_eject'])
+        self.assertEqual(self.order, ['remove_stale_logging_profiles', '_stage_gpu', '_eject'])
         self.assertEqual(lines[-1], 'FAILED: not done: stale logging profiles')
 
     def test_a_deploy_with_every_step_done_says_so(self):
