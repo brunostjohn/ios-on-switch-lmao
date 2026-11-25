@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
-#include <deque>
 #include <random>
 #include <vector>
 
@@ -86,6 +85,7 @@ struct Result {
     uint64_t lowerWorstNs = 0;  // one request of the background, queued to done
     uint64_t worstByClass[4] = {};
     uint64_t endNs = 0;
+    size_t maxDepth = 0;
     bool ordered = true;  // no read started while an older overlapping write was still queued, and the reverse
 };
 
@@ -132,6 +132,7 @@ private:
     Request *head = nullptr, *tail = nullptr;
     uint32_t queuedReads[4] = {};
     SwitchSdPickState state = {};
+    size_t depth = 0;
     std::vector<Request *> active, prepared;
     uint64_t activeEnd = 0, now = 0;
     std::mt19937_64 random{7};
@@ -150,6 +151,7 @@ private:
         Request *r = &storage.back();
         (tail ? tail->next : head) = r;
         tail = r;
+        result.maxDepth = std::max(result.maxDepth, ++depth);
         if (!r->write)
             ++queuedReads[r->klass];
     }
@@ -236,6 +238,7 @@ private:
                          : switchGatherReads(head, first, kMaxSectors, kMaxChain, kMaxChain, &start, &sectors);
         checkOrder();
         Request *chain = switchUnlinkChain(head, tail, count);
+        depth -= count;
         std::vector<Request *> out;
         out.reserve(count);
         for (Request *r = chain; r; r = r->next) {
@@ -364,7 +367,8 @@ TEST(SdPick, OtherTierZeroPageInsKeepTheirOrder)
 }
 
 // Tier-0 reads arriving faster than the card serves them (every 0.5 ms, 16 KiB each) never let the queue empty. A
-// tier-3 read still finishes: one passed-over chain every kSwitchSdShareNs once the head is kSwitchSdStarveNs old.
+// tier-3 read still finishes: once the head is kSwitchSdStarveNs old it goes first after kSwitchSdShareNs or
+// kSwitchSdShareChains passes.
 TEST(SdPick, BackgroundIsNeverStarved)
 {
     std::vector<Arrival> background = scattered(20, kMs, 64, 3, false, 7);
@@ -381,15 +385,36 @@ TEST(SdPick, BackgroundIsNeverStarved)
     EXPECT_LT(after.worstByClass[3], kSwitchSdStarveNs + 20 * kSwitchSdShareNs + 50 * kMs);
 }
 
-// A synchronize waiting for writes makes them rank as reads of their class: its writes are not passed.
+// A synchronize waiting for writes makes them rank with tier-0 reads: its writes are not passed, at tier 0 or at
+// IOSCHED's tier 1.
 TEST(SdPick, WritesASynchronizeWaitsForAreNotPassed)
 {
-    const auto background = scattered(40, kMs, 8, 0, true, 8);
-    const Result waiting = run(Rule::kNew, background, true);
-    const Result free = run(Rule::kNew, background, false);
-    std::printf("writes with a synchronize waiting: worst write %.1f ms, without %.1f ms\n", waiting.lowerWorstNs / 1e6,
-                free.lowerWorstNs / 1e6);
-    EXPECT_LT(waiting.lowerWorstNs, free.lowerWorstNs);
+    for (uint8_t klass : {uint8_t{0}, uint8_t{1}}) {
+        const auto background = scattered(40, kMs, 8, klass, true, 8);
+        const Result waiting = run(Rule::kNew, background, true);
+        const Result free = run(Rule::kNew, background, false);
+        std::printf("tier-%u writes with a synchronize waiting: worst write %.1f ms, without %.1f ms\n", klass,
+                    waiting.lowerWorstNs / 1e6, free.lowerWorstNs / 1e6);
+        EXPECT_LT(waiting.lowerWorstNs, free.lowerWorstNs);
+    }
+}
+
+// APFS writing steadily (200 scattered 4 KiB writes a second, tier 1) beside tier-0 reads that keep the card ~75% busy
+// on their own: the writes keep up and the queue stays far below the request pool (1024).
+TEST(SdPick, SteadyWritesKeepUpUnderATierZeroFlood)
+{
+    std::vector<Arrival> background = scattered(400, 2000 * kMs, 8, 1, true, 9);
+    background.reserve(background.size() + 2000);
+    for (int i = 0; i < 2000; ++i)
+        background.push_back({static_cast<uint64_t>(i) * kMs, 30000000 + static_cast<uint64_t>(i) * 977, 32, 0, false});
+    const Result before = run(Rule::kOld, background, false, 0);
+    const Result after = run(Rule::kNew, background, false, 0);
+    std::printf("steady writes under a flood: worst write %.1f -> %.1f ms, worst tier-0 read %.1f -> %.1f ms, deepest "
+                "queue %zu -> %zu\n",
+                before.worstByClass[1] / 1e6, after.worstByClass[1] / 1e6, before.worstByClass[0] / 1e6,
+                after.worstByClass[0] / 1e6, before.maxDepth, after.maxDepth);
+    EXPECT_LT(after.maxDepth, 256u);
+    EXPECT_LT(after.worstByClass[1], 1000 * kMs);
 }
 
 TEST(SdPick, RankAndPass)
