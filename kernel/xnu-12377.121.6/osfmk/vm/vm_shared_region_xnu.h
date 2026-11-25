@@ -208,6 +208,7 @@ struct vm_shared_region {
 	bool                    sr_uuid_copied;
 	bool                    sr_stale;              /* This region should never be used again. */
 	bool                    sr_driverkit;
+	const struct switch_fvariant_cache *sr_switch_fvariant; /* its pinned slots, set before its mappings slide */
 
 #if __has_feature(ptrauth_calls)
 	bool                    sr_reslide;            /* Special shared region for suspected attacked processes */

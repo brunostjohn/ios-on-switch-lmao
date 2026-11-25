@@ -2024,6 +2024,7 @@ host_test(
     srcs = ["xnu_fvariant_source_test.cpp"],
     data = [
         "//kernel/switch:objects.bzl",
+        "//kernel/switch:vm/fvariant.c",
         "//kernel/xnu-10063.141.1/osfmk:vm/vm_shared_region.c",
         "//kernel/xnu-10063.141.1/osfmk:vm/vm_shared_region_pager.c",
         "//kernel/xnu-12377.121.6/osfmk:vm/vm_shared_region.c",

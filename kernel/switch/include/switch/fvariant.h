@@ -2,14 +2,12 @@
 /*
  * dyld shared cache function-variant slots that the shared region pager fills (osfmk/vm/vm_shared_region_pager.c).
  *
- * iOS 27's cache keeps some function-variant pointers in __TPRO_CONST and ships them as 0: dyld selects and stores
+ * iOS 27's caches keep some function-variant pointers in __TPRO_CONST and ship them as 0: dyld selects and stores
  * each one in every process (Loader::adjustFunctionVariantsInDyldCache). Apple's kernel tells a TPRO-capable process
  * dyld_hw_tpro_pagers=1, and the store goes straight to the TPRO page. The A57 has no TPRO, so dyld's lazy cache
  * writer instead remaps every __DATA_CONST and __AUTH_CONST region of the cache VM_PROT_COPY to store those words,
  * which takes about 356 MB of read-only cache out of the shared nested pmap in each process. The pager delivers the
  * page with the value dyld selects on this system already stored, dyld's compare matches, and it writes nothing.
- *
- * A wrong value is harmless: dyld then stores its own, as it would without this.
  */
 #ifndef SWITCH_FVARIANT_H
 #define SWITCH_FVARIANT_H
@@ -17,21 +15,53 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "fvariant_24B119.h"
 #include "fvariant_types.h"
 
-static const struct switch_fvariant_cache *const switch_fvariant_caches[] = {
-    &switch_fvariant_24B119,
+/* The kind the kernel is built for (the owner header's SWITCH_IPSW_KIND_<build>); host tests take a kind's table. */
+#if defined(SWITCH_IPSW_KIND_24B119)
+#include "fvariant_24B119.h"
+#define SWITCH_FVARIANT_CACHES switch_fvariant_24B119
+#elif defined(SWITCH_IPSW_BUILD)
+#error "no dyld function-variant slots for this IPSW kind: add switch/fvariant_<build>.h"
+#endif
+
+/* dyld_cache_header (dyld's dyld_cache_format.h): the fields read, and the prefix that holds them. */
+#define SWITCH_FVARIANT_HEADER_MAPPING_OFFSET 0x10
+#define SWITCH_FVARIANT_HEADER_UUID           0x58
+#define SWITCH_FVARIANT_HEADER_INFO_SIZE      0x210
+#define SWITCH_FVARIANT_HEADER_SIZE           0x218
+
+enum switch_fvariant_header {
+    SWITCH_FVARIANT_NO_SLOTS, /* a cache without function-variant patch locations */
+    SWITCH_FVARIANT_PINNED,   /* one of `caches` */
+    SWITCH_FVARIANT_UNPINNED, /* a cache with patch locations none of `caches` pins */
 };
 
-static inline const struct switch_fvariant_cache *switch_fvariant_lookup(const uint8_t uuid[16])
+/*
+ * What a main cache file's header (its first SWITCH_FVARIANT_HEADER_SIZE bytes) says about its function-variant
+ * slots, and which of `caches` it is. A header whose mappings start before functionVariantInfoSize predates the field,
+ * as dyld reads it; a table of one 8-byte header and no entries lists no slots.
+ */
+static inline enum switch_fvariant_header switch_fvariant_classify(const uint8_t *header,
+                                                                   const struct switch_fvariant_cache *caches,
+                                                                   size_t count,
+                                                                   const struct switch_fvariant_cache **cache)
 {
-    for (size_t i = 0; i < sizeof(switch_fvariant_caches) / sizeof(switch_fvariant_caches[0]); ++i) {
-        if (__builtin_memcmp(switch_fvariant_caches[i]->uuid, uuid, 16) == 0) {
-            return switch_fvariant_caches[i];
+    uint32_t mapping_offset = 0;
+    uint64_t info_size = 0;
+    __builtin_memcpy(&mapping_offset, header + SWITCH_FVARIANT_HEADER_MAPPING_OFFSET, sizeof(mapping_offset));
+    __builtin_memcpy(&info_size, header + SWITCH_FVARIANT_HEADER_INFO_SIZE, sizeof(info_size));
+    *cache = NULL;
+    if (mapping_offset < SWITCH_FVARIANT_HEADER_SIZE || info_size <= 8) {
+        return SWITCH_FVARIANT_NO_SLOTS;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (__builtin_memcmp(caches[i].uuid, header + SWITCH_FVARIANT_HEADER_UUID, sizeof(caches[i].uuid)) == 0) {
+            *cache = &caches[i];
+            return SWITCH_FVARIANT_PINNED;
         }
     }
-    return NULL;
+    return SWITCH_FVARIANT_UNPINNED;
 }
 
 /*
@@ -63,17 +93,5 @@ static inline uint32_t switch_fvariant_fill(const struct switch_fvariant_cache *
     }
     return filled;
 }
-
-#ifdef XNU_KERNEL_PRIVATE
-struct vm_shared_region;
-struct vm_shared_region_slide_info;
-
-/* The pinned slots of the cache `sr` maps, read from its header in the mapping task; NULL for any other cache. */
-const struct switch_fvariant_cache *switch_fvariant_for_region(struct vm_shared_region *sr);
-
-/* Fills the slots of si's cache in [uaddr, uaddr + size), a just-slid part of a page at kernel address `page`. */
-void switch_fvariant_fill_page(const struct vm_shared_region_slide_info *si, uint8_t *page, uint64_t uaddr,
-                               uint64_t size);
-#endif
 
 #endif

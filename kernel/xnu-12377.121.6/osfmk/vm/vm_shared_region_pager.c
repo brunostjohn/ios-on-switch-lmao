@@ -57,7 +57,7 @@
 #include <vm/vm_page_internal.h>
 #include <vm/vm_object_internal.h>
 #include <switch/prefetch_vm.h>
-#include <switch/fvariant.h>
+#include <switch/fvariant_hooks.h>
 
 #include <sys/kdebug_triage.h>
 #include <sys/random.h>

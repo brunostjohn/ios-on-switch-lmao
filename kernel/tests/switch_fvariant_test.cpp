@@ -1,5 +1,6 @@
 // <switch/fvariant.h>: the dyld cache function-variant slots the shared region pager fills, checked against 24B119's
-// own bytes with dyld's selection rule, and what dyld does with the page before and after the fill.
+// own bytes with dyld's selection rule; which cache a mapped header is; and what dyld does with the page before and
+// after the fill.
 #include <gtest/gtest.h>
 
 #include <array>
@@ -8,10 +9,11 @@
 #include <vector>
 
 #include "../switch/include/switch/fvariant.h"
+#include "../switch/include/switch/fvariant_24B119.h"
 
 namespace {
 
-// 24B119's cache: the header's functionVariantInfo (unslid 0x2e5043190, 0xe8 bytes) and the FunctionVariants blobs
+// 24B119's main cache: the header's functionVariantInfo (unslid 0x2e5043190, 0xe8 bytes) and the FunctionVariants blobs
 // its entries point at (unslid 0x2f50df0a0..0x2f50df170), both in dyld_shared_cache_arm64e.79.dyldlinkedit.
 const std::array<uint8_t, 0xe8> kVariantInfo = {
     0x01, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x80, 0x9e, 0xed, 0x01, 0x00, 0x00, 0x00, 0xa0, 0xf0,
@@ -42,6 +44,32 @@ const std::array<uint8_t, 0xd0> kVariantTables = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00,
     0x00, 0x00, 0x0c, 0xdb, 0x5a, 0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0xdb, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
+
+// 24B119's DriverKit cache (System/DriverKit/System/Library/dyld/dyld_shared_cache_arm64e, one file): its
+// functionVariantInfo (unslid 0x1858b7158, 0x28 bytes) and the FunctionVariants blob it points at (0x185b8acb0).
+const std::array<uint8_t, 0x28> kDriverKitVariantInfo = {
+    0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x83, 0x01, 0x00,
+    0x00, 0x00, 0xb0, 0xac, 0xb8, 0x85, 0x01, 0x00, 0x00, 0x00, 0x00, 0xb0, 0x4d, 0x81,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x30, 0x00, 0x00, 0x35, 0x00, 0x08, 0x00,
+};
+constexpr uint64_t kDriverKitTablesAddress = 0x185b8acb0;
+const std::array<uint8_t, 0x20> kDriverKitVariantTables = {
+    0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+    0x38, 0x55, 0x03, 0x00, 0x02, 0x00, 0x00, 0x00, 0x40, 0x55, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// The header fields switch_fvariant_classify reads, as each 24B119 cache's main file ships them: mappingOffset, the
+// UUID and functionVariantInfoSize.
+struct Header {
+    uint32_t mappingOffset;
+    std::array<uint8_t, 16> uuid;
+    uint64_t infoSize;
+};
+
+const Header kMainHeader = {
+    0x238, {0xa2, 0xdc, 0xa9, 0x08, 0x96, 0x84, 0x35, 0x07, 0xb8, 0x7f, 0xfe, 0x22, 0xb8, 0x86, 0x69, 0x7a}, 0xe8};
+const Header kDriverKitHeader = {
+    0x238, {0x7f, 0x89, 0xcb, 0xd0, 0x21, 0x10, 0x3d, 0x8c, 0xb6, 0x3a, 0x37, 0xa6, 0x9d, 0x1b, 0xc7, 0xce}, 0x28};
 
 // dyld's per-process flags (ProcessConfig::Process::evaluateFunctionVariantFlags in 24B119's dyld): bit 0 always,
 // bit 2 when apple[] has has_sec_transition.
@@ -96,30 +124,37 @@ struct Location {
     uint64_t target;
 };
 
-// DyldSharedCache::forEachFunctionVariantPatchLocation over kVariantInfo, with the implementation dyld selects.
-std::vector<Location> DyldLocations(uint64_t perProcessFlags)
+// DyldSharedCache::forEachFunctionVariantPatchLocation over a cache's functionVariantInfo, with the implementation
+// dyld selects.
+template <size_t I, size_t T>
+std::vector<Location> DyldLocations(const std::array<uint8_t, I> &info, const std::array<uint8_t, T> &tables,
+                                    uint64_t tablesAddress, uint64_t perProcessFlags)
 {
     std::vector<Location> out;
-    const uint32_t count = U32(kVariantInfo.data() + 4);
-    EXPECT_EQ(8 + 32 * size_t{count}, kVariantInfo.size());
+    const uint32_t count = U32(info.data() + 4);
+    EXPECT_EQ(8 + 32 * size_t{count}, info.size());
     for (uint32_t i = 0; i < count; ++i) {
-        const uint8_t *entry = kVariantInfo.data() + 8 + 32 * size_t{i};
-        const uint64_t blobAt = U64(entry + 8) - kTablesAddress;
+        const uint8_t *entry = info.data() + 8 + 32 * size_t{i};
+        const uint64_t blobAt = U64(entry + 8) - tablesAddress;
         const uint32_t bits = U32(entry + 24);
-        EXPECT_LT(blobAt, kVariantTables.size());
+        EXPECT_LT(blobAt, tables.size());
         EXPECT_EQ((bits >> 12) & 1, 1U) << "authenticated: plain on this kernel";
-        out.push_back(
-            {U64(entry), U64(entry + 16) + Select(kVariantTables.data() + blobAt, bits & 0xfff, perProcessFlags)});
+        out.push_back({U64(entry), U64(entry + 16) + Select(tables.data() + blobAt, bits & 0xfff, perProcessFlags)});
     }
     return out;
 }
 
+std::vector<Location> MainLocations(uint64_t flags)
+{
+    return DyldLocations(kVariantInfo, kVariantTables, kTablesAddress, flags);
+}
+
 // Loader::adjustFunctionVariantsInDyldCache: does dyld have to store into this page (and so take the lazy cache
 // writer, which remaps every DATA_CONST region of the cache when the kernel passes no dyld_hw_tpro_pagers)?
-bool DyldStores(const std::vector<uint8_t> &page, uint64_t uaddr, uint64_t perProcessFlags)
+bool DyldStores(const std::vector<Location> &locations, const std::vector<uint8_t> &page, uint64_t uaddr)
 {
     bool stores = false;
-    for (const Location &l : DyldLocations(perProcessFlags)) {
+    for (const Location &l : locations) {
         const uint64_t at = l.slot + kSlide;
         if (at >= uaddr && at + 8 <= uaddr + page.size()) {
             stores = stores || U64(page.data() + (at - uaddr)) != l.target + kSlide;
@@ -128,45 +163,101 @@ bool DyldStores(const std::vector<uint8_t> &page, uint64_t uaddr, uint64_t perPr
     return stores;
 }
 
-const struct switch_fvariant_cache *Cache24B119()
+std::array<uint8_t, SWITCH_FVARIANT_HEADER_SIZE> HeaderBytes(const Header &h)
 {
-    const uint8_t uuid[16] = {0xa2, 0xdc, 0xa9, 0x08, 0x96, 0x84, 0x35, 0x07,
-                              0xb8, 0x7f, 0xfe, 0x22, 0xb8, 0x86, 0x69, 0x7a};
-    return switch_fvariant_lookup(uuid);
+    std::array<uint8_t, SWITCH_FVARIANT_HEADER_SIZE> bytes{};
+    std::memcpy(bytes.data() + 0x10, &h.mappingOffset, sizeof(h.mappingOffset));
+    std::memcpy(bytes.data() + 0x58, h.uuid.data(), h.uuid.size());
+    std::memcpy(bytes.data() + 0x210, &h.infoSize, sizeof(h.infoSize));
+    return bytes;
+}
+
+enum switch_fvariant_header Classify(const Header &h, const struct switch_fvariant_cache **cache)
+{
+    const auto bytes = HeaderBytes(h);
+    return switch_fvariant_classify(bytes.data(), switch_fvariant_24B119, std::size(switch_fvariant_24B119), cache);
+}
+
+void ExpectPins(const struct switch_fvariant_cache &cache, const std::vector<Location> &dyld)
+{
+    ASSERT_EQ(cache.count, dyld.size());
+    for (size_t i = 0; i < dyld.size(); ++i) {
+        EXPECT_EQ(cache.slots[i].slot, dyld[i].slot) << i;
+        EXPECT_EQ(cache.slots[i].target, dyld[i].target) << i;
+    }
 }
 
 TEST(SwitchFvariant, PinsAreWhatDyldSelectsWithoutSecTransition)
 {
-    const struct switch_fvariant_cache *cache = Cache24B119();
-    ASSERT_NE(cache, nullptr);
-    const std::vector<Location> dyld = DyldLocations(kDefaultProcess);
-    ASSERT_EQ(cache->count, dyld.size());
-    for (size_t i = 0; i < dyld.size(); ++i) {
-        EXPECT_EQ(cache->slots[i].slot, dyld[i].slot) << i;
-        EXPECT_EQ(cache->slots[i].target, dyld[i].target) << i;
-    }
+    ASSERT_EQ(std::size(switch_fvariant_24B119), 2U);
+    ExpectPins(switch_fvariant_24B119[0], MainLocations(kDefaultProcess));
+    ExpectPins(switch_fvariant_24B119[1],
+               DyldLocations(kDriverKitVariantInfo, kDriverKitVariantTables, kDriverKitTablesAddress, kDefaultProcess));
+}
+
+TEST(SwitchFvariant, EachShippedHeaderIsItsPinnedCache)
+{
+    const struct switch_fvariant_cache *cache = nullptr;
+    EXPECT_EQ(Classify(kMainHeader, &cache), SWITCH_FVARIANT_PINNED);
+    EXPECT_EQ(cache, &switch_fvariant_24B119[0]);
+    EXPECT_EQ(Classify(kDriverKitHeader, &cache), SWITCH_FVARIANT_PINNED);
+    EXPECT_EQ(cache, &switch_fvariant_24B119[1]);
+    // The headers' slot counts are the pinned ones: (functionVariantInfoSize - 8) / 32.
+    EXPECT_EQ((kMainHeader.infoSize - 8) / 32, switch_fvariant_24B119[0].count);
+    EXPECT_EQ((kDriverKitHeader.infoSize - 8) / 32, switch_fvariant_24B119[1].count);
+}
+
+TEST(SwitchFvariant, OtherCachesAreUnpinnedOrHaveNoSlots)
+{
+    const struct switch_fvariant_cache *cache = &switch_fvariant_24B119[0];
+    Header other = kMainHeader;
+    other.uuid[15] ^= 1;
+    EXPECT_EQ(Classify(other, &cache), SWITCH_FVARIANT_UNPINNED);
+    EXPECT_EQ(cache, nullptr);
+
+    Header empty = other;
+    empty.infoSize = 8;
+    EXPECT_EQ(Classify(empty, &cache), SWITCH_FVARIANT_NO_SLOTS);
+    Header old = other;
+    old.mappingOffset = 0x210;
+    EXPECT_EQ(Classify(old, &cache), SWITCH_FVARIANT_NO_SLOTS);
+    EXPECT_EQ(cache, nullptr);
 }
 
 TEST(SwitchFvariant, ShippedPageMakesDyldStoreAndFilledPageDoesNot)
 {
-    const struct switch_fvariant_cache *cache = Cache24B119();
-    ASSERT_NE(cache, nullptr);
-    // .25.dylddata's and .54.dylddata's first __TPRO_CONST pages as the pager slides them: all 0, no rebases.
-    for (const uint64_t unslid : {UINT64_C(0x1ed9e8000), UINT64_C(0x2758d0000)}) {
+    const std::vector<Location> dyld = MainLocations(kDefaultProcess);
+    const std::vector<Location> mte = MainLocations(kSecTransitionProcess);
+    const std::vector<Location> driverkit =
+        DyldLocations(kDriverKitVariantInfo, kDriverKitVariantTables, kDriverKitTablesAddress, kDefaultProcess);
+
+    // The first __TPRO_CONST pages as the pager slides them: all 0, no rebases.
+    const struct {
+        const struct switch_fvariant_cache *cache;
+        uint64_t page;
+        const std::vector<Location> *locations;
+    } pages[] = {
+        {&switch_fvariant_24B119[0], 0x1ed9e8000, &dyld},
+        {&switch_fvariant_24B119[0], 0x2758d0000, &dyld},
+        {&switch_fvariant_24B119[1], 0x183800000, &driverkit},
+    };
+
+    for (const auto &p : pages) {
         std::vector<uint8_t> page(0x4000, 0);
-        const uint64_t uaddr = unslid + kSlide;
-        EXPECT_TRUE(DyldStores(page, uaddr, kDefaultProcess));
-        EXPECT_GT(switch_fvariant_fill(cache, kSlide, page.data(), uaddr, page.size()), 0U);
-        EXPECT_FALSE(DyldStores(page, uaddr, kDefaultProcess));
-        // A process dyld picks the other implementation for still stores its own.
-        EXPECT_TRUE(DyldStores(page, uaddr, kSecTransitionProcess));
+        const uint64_t uaddr = p.page + kSlide;
+        EXPECT_TRUE(DyldStores(*p.locations, page, uaddr));
+        EXPECT_GT(switch_fvariant_fill(p.cache, kSlide, page.data(), uaddr, page.size()), 0U);
+        EXPECT_FALSE(DyldStores(*p.locations, page, uaddr));
+        if (p.locations == &dyld) {
+            // A process dyld picks the other implementation for still stores its own.
+            EXPECT_TRUE(DyldStores(mte, page, uaddr));
+        }
     }
 }
 
 TEST(SwitchFvariant, FillsOnlyShippedZeroSlotsInsideThePart)
 {
-    const struct switch_fvariant_cache *cache = Cache24B119();
-    ASSERT_NE(cache, nullptr);
+    const struct switch_fvariant_cache *cache = &switch_fvariant_24B119[0];
     const uint64_t page = 0x1ed9e8000 + kSlide;
 
     std::vector<uint8_t> part(0x1000, 0);
@@ -188,14 +279,6 @@ TEST(SwitchFvariant, FillsOnlyShippedZeroSlotsInsideThePart)
     EXPECT_EQ(switch_fvariant_fill(cache, kSlide, tail.data(), page + 0x8, tail.size()), 5U);
     EXPECT_EQ(switch_fvariant_fill(cache, kSlide, tail.data(), page, 7), 0U);
     EXPECT_EQ(switch_fvariant_fill(nullptr, kSlide, tail.data(), page, tail.size()), 0U);
-}
-
-TEST(SwitchFvariant, OtherCachesHaveNoSlots)
-{
-    uint8_t uuid[16] = {0xa2, 0xdc, 0xa9, 0x08, 0x96, 0x84, 0x35, 0x07, 0xb8, 0x7f, 0xfe, 0x22, 0xb8, 0x86, 0x69, 0x7b};
-    EXPECT_EQ(switch_fvariant_lookup(uuid), nullptr);
-    std::memset(uuid, 0, sizeof(uuid));
-    EXPECT_EQ(switch_fvariant_lookup(uuid), nullptr);
 }
 
 }  // namespace
