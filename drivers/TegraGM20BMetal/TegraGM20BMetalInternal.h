@@ -277,7 +277,7 @@ std::string libraryName(SwitchMetalFunction *f);
 - (NSUInteger)requiredLinearTextureBytesPerRowForDescriptor:(MTLTextureDescriptor *)descriptor;
 @end
 
-// A packed state's variants placed with its own record at creation (TegraGM20BMetalCubic.mm)
+// A packed state's run kept for its variants, each placed when a draw first selects its name (TegraGM20BMetalCubic.mm)
 void packedVariants(SwitchMetalPipeline *p, const gm20b::PackRun &run);
 // A state this process made: the variants its creation already names (its test classes), made and waited for before
 // the creation returns, as the pack builder makes a packed state's
