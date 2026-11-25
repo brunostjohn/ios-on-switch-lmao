@@ -102,7 +102,20 @@ host_test(
 host_test(
     name = "sd_pick_test",
     srcs = [
+        "sd_card_model.h",
         "sd_pick_test.cpp",
+        "//drivers/NativeSwitchBlock:SwitchQueue.h",
+        "//drivers/NativeSwitchBlock:SwitchSdPick.h",
+    ],
+    copts = ["-O1"],
+)
+
+# The write fence end to end in the same model: synchronizes beginning mid-run, on both windows, both merge paths.
+host_test(
+    name = "sd_fence_test",
+    srcs = [
+        "sd_card_model.h",
+        "sd_fence_test.cpp",
         "//drivers/NativeSwitchBlock:SwitchQueue.h",
         "//drivers/NativeSwitchBlock:SwitchSdPick.h",
     ],
