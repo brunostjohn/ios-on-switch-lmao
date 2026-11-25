@@ -38,6 +38,7 @@
 #include <mutex>
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
+#include <mach/mach_time.h>
 #include <notify.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -527,6 +528,41 @@ void observeRf16Request()
                              });
 }
 
+// SpringBoard's Home Screen labels arrive 50-80 s after its icons at boot (perf1/icon-labels, 25 Nov) and no Apple line
+// says when a label's image is set: one line for each of the first kLabelLines images set on an icon label's
+// legibility view, with its mach time, for tools/perf's labels row. It logs and calls through, nothing else.
+using SetLabelImage = void (*)(id, SEL, id);
+SetLabelImage gSetLabelImage;
+Class gIconLabelView;
+std::atomic<uint32_t> gLabelImages{0};
+constexpr uint32_t kLabelLines = 64;
+
+void observedSetLabelImage(id view, SEL cmd, id image)
+{
+    if (image && [view isKindOfClass:gIconLabelView]) {
+        const uint32_t n = gLabelImages.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= kLabelLines)
+            os_log(logger(), "SwitchLabels: icon label image %u set at %llu", n, mach_absolute_time());
+    }
+    gSetLabelImage(view, cmd, image);
+}
+
+void observeLabelImages()
+{
+    static std::atomic<bool> done;
+    if (strcmp(getprogname(), "SpringBoard") || done.exchange(true))
+        return;
+    gIconLabelView = objc_getClass("SBIconPLKLegibilityView");
+    Method m = gIconLabelView ? class_getInstanceMethod(gIconLabelView, sel_registerName("setImage:")) : nullptr;
+    if (!m) {
+        os_log(logger(), "SwitchLabels: no -[SBIconPLKLegibilityView setImage:] in this SpringBoard: no label times");
+        return;
+    }
+    // The original first: a call may land as soon as the method is swapped.
+    gSetLabelImage = (SetLabelImage)method_getImplementation(m);
+    method_setImplementation(m, (IMP)observedSetLabelImage);
+}
+
 // This process's name as one word for the rates lines (an app's executable may have spaces), which tools/devicerun reads per
 // process
 const char *processWord()
@@ -550,6 +586,7 @@ void startRates()
     observeDisplayLinkRates();
     observeRedrawCauses();
     observeRf16Request();
+    observeLabelImages();
     // kprof keys a user PC as main+<offset from the process's main header> within 256 MiB of it, else as "other": the
     // plugin's base beside its main header turns a main+ sample into an offset in this bundle's binary
     if (Dl_info self = {}; dladdr(reinterpret_cast<const void *>(&startRates), &self) && self.dli_fbase)
