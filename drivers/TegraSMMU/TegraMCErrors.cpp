@@ -56,6 +56,8 @@ constexpr Swgroup kSwgroups[] = {
     {TEGRA_SMMU_NVENC_ASID, {0x1c, 0x2b}, 2},
     {TEGRA_SMMU_GPUB_ASID, {0x58, 0x59, 0x88, 0x89}, 4},
     {TEGRA_SMMU_SDMMC1A_ASID, {0x60, 0x64}, 2},
+    {TEGRA_SMMU_HC_ASID, {0x16, 0x17, 0x36}, 3},
+    {TEGRA_SMMU_APE_ASID, {0x7a, 0x7b}, 2},
 };
 
 Io gIo;

@@ -75,6 +75,26 @@ int TegraSMMURamView::attach(uint32_t asidReg, uint32_t translationReg, uint32_t
     return tegra_smmu_attach_split(asids, ptbs, asidReg, translationReg, translationBits, alwaysTranslated, line, size);
 }
 
+int TegraSMMURamView::attachNarrow(uint32_t asidReg, uint32_t translationReg, uint32_t translationBits, char *line,
+                                   size_t size)
+{
+    if (!lock_) {
+        snprintf(line, size, "no memory for the view's directories");
+        return -1;
+    }
+    return tegra_smmu_attach(core_.halves[0].asid, core_.ptb(0), asidReg, translationReg, translationBits, line,
+                             size);
+}
+
+bool TegraSMMURamView::reserveTables()
+{
+    IOLockLock(lock_);
+    const bool made = core_.makeTables();
+    core_.commit();
+    IOLockUnlock(lock_);
+    return made;
+}
+
 bool TegraSMMURamView::hold(uint64_t pa, uint64_t bytes)
 {
     IOLockLock(lock_);

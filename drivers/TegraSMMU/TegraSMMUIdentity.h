@@ -75,6 +75,16 @@ template <class Env> struct TegraSMMUIdentityCore {
         return bytes != 0 && pa >= kRamBase && pa < kRamEnd && bytes <= kRamEnd - pa;
     }
 
+    // Every table of RAM, made now, so no hold allocates: for a storage driver, whose I/O path must not wait for memory.
+    bool makeTables()
+    {
+        for (uint32_t i = 0; i < kTables; ++i) {
+            if (!table(kRamBase + static_cast<uint64_t>(i) * kSpan, true))
+                return false;
+        }
+        return true;
+    }
+
     // Users of [pa, pa + bytes) (rounded out to pages) each hold it once more. All or nothing: false when a page is
     // outside RAM, a table cannot be had, or a page already has kMaxUsers holders.
     bool hold(uint64_t pa, uint64_t bytes)

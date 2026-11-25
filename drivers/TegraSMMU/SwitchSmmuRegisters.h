@@ -93,11 +93,12 @@ int program(Registers &io, const tegra_smmu_attachment &a, char *line, size_t si
         flush(io, asid);
     }
     // The per-client translation enables are secure-only (T210 TRM 18.11.1.66-69, p.886-887): reset and bl31 set them,
-    // a write from here is dropped, and what reads back here is checked.
+    // a write from here is dropped, and what reads back here is checked. An always-translated swgroup's are read-only
+    // and the swgroup translates by its software ID whatever they read (GPUB's gpusrd/gpuswr, 18.11.1.68): not checked.
     const uint32_t count = attachments ? attachments->count : 1;
     for (uint32_t i = 0; i < count; ++i) {
         const auto &client = attachments ? attachments->entry[i] : a;
-        if (client.asidReg != a.asidReg)
+        if (client.asidReg != a.asidReg || client.alwaysTranslated)
             continue;
         const uint32_t enabled = io.read(client.translationReg);
         if ((enabled & client.translationBits) != client.translationBits) {

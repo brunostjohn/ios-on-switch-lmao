@@ -173,4 +173,18 @@ TEST_F(SmmuIdentity, TheHighHalfFlushesItsOwnAsidAndIovas)
     EXPECT_EQ(take(),
               (std::vector<std::string>{"clean 4", "sync", "flush asid 112 table 0x90000000+4 iova 0x400000+0x1000"}));
 }
+// The SD card's view: every table made at setup, so a hold on the I/O path never allocates.
+TEST_F(SmmuIdentity, MadeTablesLetEveryHoldInRamGoWithoutAnAllocation)
+{
+    ASSERT_TRUE(core.makeTables());
+    core.commit();
+    take();
+    env.outOfMemory = true;
+    EXPECT_TRUE(core.hold(0x80000000ULL, 0x1000));
+    EXPECT_TRUE(core.hold(0x17ffff000ULL, 0x1000));
+    core.commit();
+    for (const std::string &event : take())
+        EXPECT_NE(event, "table");
+    EXPECT_EQ(env.tables.size(), 1024u) << "4 GiB of RAM in 4 MiB tables";
+}
 }  // namespace

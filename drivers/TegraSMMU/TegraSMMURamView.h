@@ -24,6 +24,10 @@ public:
     // the fault ASID, for each translation register the swgroup's clients are in. 0, or -1 with one line.
     int attach(uint32_t asidReg, uint32_t translationReg, uint32_t translationBits, bool alwaysTranslated,
                uint32_t asid2, uint32_t ptb2, char *line, size_t size);
+    // Every page table of RAM made and installed now (4 KiB + 2 KiB per 4 MiB of RAM), so holds never allocate.
+    bool reserveTables();
+    // A 32-bit client's swgroup (one ASID field) to the view's directory for RAM below 4 GiB. 0, or -1 with one line.
+    int attachNarrow(uint32_t asidReg, uint32_t translationReg, uint32_t translationBits, char *line, size_t size);
     // The device may use [pa, pa + bytes) once a commit follows; false (nothing held) as TegraSMMUIdentityCore::hold.
     bool hold(uint64_t pa, uint64_t bytes);
     // A hold ends; the page may go back to the VM once a commit follows. A release with no hold panics.

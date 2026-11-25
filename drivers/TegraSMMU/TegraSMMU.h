@@ -36,7 +36,9 @@ enum tegra_smmu_asid {
     TEGRA_SMMU_ASID_GPU_LOW = 115,   // GM20B's RAM below 4 GiB at its own address, field 0 of GPUB
     TEGRA_SMMU_ASID_GPU_HIGH = 114,  // GM20B's RAM above 4 GiB at its own address less 4 GiB, field 1 of GPUB
     TEGRA_SMMU_ASID_SDMMC1_LOW = 113,
-    TEGRA_SMMU_ASID_SDMMC1_HIGH = 112
+    TEGRA_SMMU_ASID_SDMMC1_HIGH = 112,
+    TEGRA_SMMU_ASID_HOST1X = 111,
+    TEGRA_SMMU_ASID_APE = 110
 };
 
 enum tegra_smmu_register {
@@ -57,6 +59,8 @@ enum tegra_smmu_register {
     // Swgroup GPU (0xaa8, a[34] = 0) never does.
     TEGRA_SMMU_GPUB_ASID = 0xaac,
     TEGRA_SMMU_SDMMC1A_ASID = 0xa94,  // swgroup "sdmmc1a" (sdmmcra/sdmmcwa: TRANSLATION_ENABLE_3 bits 0/4)
+    TEGRA_SMMU_HC_ASID = 0x250,       // swgroup "hc" (host1xdmar/host1xr: _0 bits 22/23; host1xw: _1 bit 22)
+    TEGRA_SMMU_APE_ASID = 0xab8,      // swgroup "ape" (aper/apew: TRANSLATION_ENABLE_3 bits 26/27)
     TEGRA_SMMU_NVJPG_ASID = 0xac0,    // swgroup "nvjpg" (clients nvjpgsrd/nvjpgswr: TRANSLATION_ENABLE_3 bits 30/31)
     TEGRA_SMMU_NVDEC_ASID = 0xab4,    // swgroup "nvdec" (clients nvdecsrd/nvdecswr: TRANSLATION_ENABLE_3 bits 24/25)
     TEGRA_SMMU_NVENC_ASID = 0x264,    // swgroup "nvenc" (nvencsrd: TRANSLATION_ENABLE_0 bit 28, nvencswr: _1 bit 11)
@@ -83,6 +87,8 @@ static inline void tegra_smmu_ids_distinct(enum tegra_smmu_asid asid, enum tegra
     case TEGRA_SMMU_ASID_GPU_HIGH:
     case TEGRA_SMMU_ASID_SDMMC1_LOW:
     case TEGRA_SMMU_ASID_SDMMC1_HIGH:
+    case TEGRA_SMMU_ASID_HOST1X:
+    case TEGRA_SMMU_ASID_APE:
         break;
     }
     switch (reg) {
@@ -100,6 +106,8 @@ static inline void tegra_smmu_ids_distinct(enum tegra_smmu_asid asid, enum tegra
     case TEGRA_SMMU_XUSB_DEV_ASID:
     case TEGRA_SMMU_GPUB_ASID:
     case TEGRA_SMMU_SDMMC1A_ASID:
+    case TEGRA_SMMU_HC_ASID:
+    case TEGRA_SMMU_APE_ASID:
     case TEGRA_SMMU_NVJPG_ASID:
     case TEGRA_SMMU_NVDEC_ASID:
     case TEGRA_SMMU_NVENC_ASID:

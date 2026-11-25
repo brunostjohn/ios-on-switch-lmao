@@ -174,6 +174,16 @@ TEST_F(SmmuEngineTest, GpubsResetValueRefusesAPlainAttachButNotAnAlwaysTranslate
     tegra_smmu_detach(TEGRA_SMMU_ASID_GPU_LOW, TEGRA_SMMU_GPUB_ASID);
 }
 
+// GPUB's client bits are read-only, "GPU translation is handled by swid" (TRM 18.11.1.68): whatever they read, the
+// swgroup translates, so they cannot keep it unattached (and the GPU unconfined) as its enable bit once did.
+TEST_F(SmmuEngineTest, GpubsReadOnlyClientBitsDoNotGateItsAttach)
+{
+    ASSERT_EQ(attachGpub(TEGRA_SMMU_TRANSLATION_ENABLE_2, kGpubBits2), 0);
+    ASSERT_EQ(attachGpub(TEGRA_SMMU_TRANSLATION_ENABLE_4, kGpubBits4), 0);
+    EXPECT_EQ(gRegisters[TEGRA_SMMU_GPUB_ASID], kGpubSelected);
+    tegra_smmu_detach(TEGRA_SMMU_ASID_GPU_LOW, TEGRA_SMMU_GPUB_ASID);
+}
+
 // The emulator's MC keeps what is written to 0xaac; its GPU never sends a[34] = 1 through a directory.
 TEST_F(SmmuEngineTest, AGpubWhoseEnableReadsZeroIsNotTegraX1sAndIsNotAttached)
 {
