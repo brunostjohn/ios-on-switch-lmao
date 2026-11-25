@@ -22,7 +22,6 @@
 #include "SwitchDPModes.h"
 #include "SwitchExternalWindows.h"
 #include "../NativeMobileDisplay/NativePlanes.h"
-#include "../NativeMobileDisplay/SwitchNativePlane.h"
 #include "../SwitchPower/SwitchDisplayBandwidth.h"
 
 namespace switch_external {
@@ -31,10 +30,10 @@ using native_planes::Image;
 using native_planes::kLayers;
 using native_planes::Layer;
 
-// Scaling as published. DC B's windows scale RGB down to 1/4 across and 1/2 down, YUV to 1/4 both ways (TRM 24.1.3), and
-// up without a bound; the fraction published is the largest at which the UI and two more windows, all full screen,
-// stay inside the EMC's isochronous ceiling at SWITCH_DP_MAX_PIXEL_KHZ (external_planes_test WorstCaseMemoryFits). 1/2
-// is over it already at 4K60. The clone path never reads these, so they hold back no clone swap.
+// Scaling as published: the largest fraction at which the UI and two more windows, all full screen, stay inside the
+// EMC's isochronous ceiling at SWITCH_DP_MAX_PIXEL_KHZ (external_planes_test WorstCaseMemoryFits); 1/2 is over it
+// already at 4K60. The clone path never reads these, so they hold back no clone swap, and a swap is accepted down to
+// kScan's DDA limits, past the TRM's line-buffer figures (24.1.3), because a refusal freezes the display.
 constexpr uint32_t kMaxLayers = 3, kMinScaleFraction = 1, kMaxScale = 4;
 constexpr uint32_t kStrideAlignment = 64;
 constexpr uint64_t kBaseAlignment = 4096;
@@ -104,83 +103,13 @@ inline unsigned checkSwap(uint32_t updated, uint32_t background, const bool hasS
     return surfaces > kMaxLayers ? kTwoUi : kAccepted;
 }
 
-// How a surface's pixels lie: its own rows, one block-linear plane (the GPU's layout, TegraGM20BLayout.h, or the
-// backing's), or two planes a producer laid out block-linear. The backing's layout first and the GPU's after it is the
-// order VIC reads a destination's in.
-struct Layout {
-    enum Kind {
-        kRows,
-        kBlock,
-        kBlockPlanes
-    } kind = kRows;
-
-    tgm_layout block = {};
-    switch_gpu_backing_layout planes = {};
-};
-
-inline Layout layoutOf(const tgm_layout *gpu, const switch_gpu_backing_layout &backing)
-{
-    Layout layout;
-    const switch_gpu_backing_plane &first = backing.planes[0];
-    if (backing.plane_count == 1 && first.layout == SWITCH_GPU_BACKING_BLOCK_LINEAR && !first.offset &&
-        first.block_height_log2 <= 5) {
-        const uint32_t blockRows = 8u << first.block_height_log2;
-        layout.kind = Layout::kBlock;
-        layout.block = {first.width,
-                        first.height,
-                        first.bytes_per_element,
-                        first.pitch,
-                        (first.height + blockRows - 1) / blockRows * blockRows,
-                        uint8_t(first.block_height_log2),
-                        4096,
-                        first.bytes};
-    } else if (backing.plane_count == 2 && first.layout == SWITCH_GPU_BACKING_BLOCK_LINEAR &&
-               backing.planes[1].layout == SWITCH_GPU_BACKING_BLOCK_LINEAR) {
-        layout.kind = Layout::kBlockPlanes;
-        layout.planes = backing;
-    } else if (!backing.plane_count && gpu) {
-        layout.kind = Layout::kBlock;
-        layout.block = *gpu;
-    }
-    return layout;
-}
-
-// A two-plane YUV layer laid out block-linear: each plane from its base, as windows scan a decoder's own picture
-// (SwitchNativePlane.h): the whole picture as imageOf places it, or for 4:2:0 any source rectangle through H and V_OFFSET.
-inline bool blockPlanesImage(const Layer &l, uint32_t width, uint32_t height, const switch_gpu_backing_layout &planes,
-                             Image &image)
-{
-    if (!native_planes::isNv12(l.kind) && !native_planes::isNv16(l.kind))
-        return false;
-    if (!native_planes::imageOf(l, width, height, image))
-        return false;
-    if (!image.visible)
-        return true;
-    const bool whole = !image.hOffset && image.start[0] == l.surface.offset[0] && image.start[1] == l.surface.offset[1];
-    if (!whole &&
-        (!native_planes::isNv12(l.kind) || !switch_native_plane_offset_image(l, width, height, planes, 0, 0, image)))
-        return false;
-    return switch_native_plane_planes(l, planes, image);
-}
-
 constexpr uint32_t kPaletteEnable = 1u << 16;  // WIN_OPTIONS CP_ENABLE
 
-// The image a window scans of l as it lies, or false when no window reads it so. Every byte it reads is in the surface's
-// allocation, which is what a slot maps.
-inline bool imageFor(const Layer &l, const Layout &layout, uint32_t width, uint32_t height, Image &image)
+// The image a window scans of l, in rows or (block, the GPU's layout: TegraGM20BLayout.h) block-linear, or false when no
+// window reads it so. Every byte it reads is in the surface's allocation, which is what a slot maps.
+inline bool imageFor(const Layer &l, const tgm_layout *block, uint32_t width, uint32_t height, Image &image)
 {
-    bool ok = false;
-    switch (layout.kind) {
-    case Layout::kRows:
-        ok = native_planes::imageOf(l, width, height, image);
-        break;
-    case Layout::kBlock:
-        ok = native_planes::imageOf(l, width, height, image, &layout.block);
-        break;
-    case Layout::kBlockPlanes:
-        ok = blockPlanesImage(l, width, height, layout.planes, image);
-        break;
-    }
+    const bool ok = native_planes::imageOf(l, width, height, image, block);
     // imageOf adds DC A's palette (the panel's gamma table); DC B's palettes hold nothing.
     image.options &= ~kPaletteEnable;
     return ok && (!image.visible || image.readHigh <= ((l.surface.allocation + 4095) & ~4095ULL));

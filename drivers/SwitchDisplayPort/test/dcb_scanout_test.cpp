@@ -236,7 +236,7 @@ TEST(DisplayB, SetModeTurnsEveryWindowOffAndWritesItsFilters)
 TEST(DisplayB, PresentWritesEveryWindowInOneRequest)
 {
     Display d;
-    ASSERT_TRUE(d.dcb.present(clone(0x10000000, 0x14400000, true)));
+    d.dcb.present(clone(0x10000000, 0x14400000, true));
     EXPECT_EQ(xusbWritesTo(control), (std::vector<uint32_t>{(kActA | kActB) << 8, kActA | kActB}));
     EXPECT_EQ(d.banks.to(0, kStart), std::vector<uint32_t>{0x10000000u});
     EXPECT_EQ(d.banks.to(0, kPosition), std::vector<uint32_t>{440u});
@@ -274,40 +274,37 @@ TEST(DisplayB, PresentWritesEveryWindowInOneRequest)
 TEST(DisplayB, LatchWaitsForEveryWindowThenChecksEach)
 {
     Display d;
-    using Latch = TegraDisplayB::Latch;
-    ASSERT_TRUE(d.dcb.present(clone(0x10000000, 0x14400000, true)));
-    EXPECT_EQ(d.dcb.latch(), Latch::Pending);
+    d.dcb.present(clone(0x10000000, 0x14400000, true));
+    EXPECT_FALSE(d.dcb.latch());
     xusbModel().registers[control] = kActB;
-    EXPECT_EQ(d.dcb.latch(), Latch::Pending);
+    EXPECT_FALSE(d.dcb.latch());
     xusbModel().registers[control] = kActA | kActB;
     d.banks.boundary();
     d.clear();
-    EXPECT_EQ(d.dcb.latch(), Latch::Active);
+    EXPECT_TRUE(d.dcb.latch());
     EXPECT_EQ(xusbWritesTo(header), (std::vector<uint32_t>{1u << 4, 1u << 5}));
 
-    ASSERT_TRUE(d.dcb.present(clone(0x10000000, 0x18800000, false)));
+    d.dcb.present(clone(0x10000000, 0x18800000, false));
     EXPECT_TRUE(d.banks.to(1, kCscYof).empty());
     xusbModel().registers[control] = kActA | kActB;
     d.banks.boundary();
     d.banks.active[1][0] = 0x14400000;
-    EXPECT_EQ(d.dcb.latch(), Latch::Missed);
-    EXPECT_TRUE(d.dcb.windowState(1).live);
+    EXPECT_ANY_THROW(d.dcb.latch());
 }
 
 // A window the next frame leaves goes off in the same request, and its latch is that it is off.
 TEST(DisplayB, UnusedWindowsTurnOffInTheSameRequest)
 {
     Display d;
-    using Latch = TegraDisplayB::Latch;
-    ASSERT_TRUE(d.dcb.present(clone(0x10000000, 0x14400000, true)));
+    d.dcb.present(clone(0x10000000, 0x14400000, true));
     d.banks.boundary();
-    ASSERT_EQ(d.dcb.latch(), Latch::Active);
+    ASSERT_TRUE(d.dcb.latch());
     d.clear();
     switch_external::Frame ui;
     ui.window[0] = rgb(0x10000000, 440, 2560, 1440, 0);
     ui.memory[0] = {319750000ULL * 4, 0, 0, 1};
     ui.peakBytes = 319750000ULL * 4;
-    ASSERT_TRUE(d.dcb.present(ui));
+    d.dcb.present(ui);
     EXPECT_EQ(xusbWritesTo(control), (std::vector<uint32_t>{(kActA | kActB) << 8, kActA | kActB}));
     EXPECT_EQ(d.banks.to(1, kOptions), std::vector<uint32_t>{0u});
     EXPECT_EQ(d.banks.to(0, kStart), std::vector<uint32_t>{0x10000000u});
@@ -317,37 +314,37 @@ TEST(DisplayB, UnusedWindowsTurnOffInTheSameRequest)
     d.banks.active[1][1] = kEnable;
     d.banks.expose();
     xusbModel().registers[control] = 0;
-    EXPECT_EQ(d.dcb.latch(), Latch::Missed);
+    EXPECT_ANY_THROW(d.dcb.latch());
 
-    ASSERT_TRUE(d.dcb.present(ui));
+    d.dcb.present(ui);
     d.banks.boundary();
-    EXPECT_EQ(d.dcb.latch(), Latch::Active);
+    EXPECT_TRUE(d.dcb.latch());
     EXPECT_FALSE(d.dcb.windowState(1).live);
     EXPECT_EQ(plans.back().peak_bytes_per_second, 319750000ULL * 4);
     EXPECT_FALSE(plans.back().windows[1].active);
 }
 
-// The CSC is not shadowed: a frame that writes a scanning window's CSC is refused whole.
+// The CSC is not shadowed: a frame that writes a scanning window's CSC panics before writing anything.
 TEST(DisplayB, CscOfAScanningWindowIsNeverWritten)
 {
     Display d;
-    ASSERT_TRUE(d.dcb.present(clone(0x10000000, 0x14400000, true)));
+    d.dcb.present(clone(0x10000000, 0x14400000, true));
     d.banks.boundary();
-    ASSERT_EQ(d.dcb.latch(), TegraDisplayB::Latch::Active);
+    ASSERT_TRUE(d.dcb.latch());
     d.clear();
-    EXPECT_FALSE(d.dcb.present(clone(0x10000000, 0x14400000, true, 2)));
+    EXPECT_ANY_THROW(d.dcb.present(clone(0x10000000, 0x14400000, true, 2)));
     EXPECT_TRUE(d.banks.writes.empty());
     EXPECT_TRUE(xusbWritesTo(control).empty());
 
     switch_external::Frame moved = clone(0x10000000, 0x14400000, false);
     moved.window[2] = yuv(0x18800000, (480u << 16) | 1336u, 768, 480, 1, true, 2);
     moved.window[1] = {};
-    ASSERT_TRUE(d.dcb.present(moved));
+    d.dcb.present(moved);
     EXPECT_EQ(d.banks.to(2, kCscYof), std::vector<uint32_t>{0x120u});
     EXPECT_EQ(d.banks.to(1, kOptions), std::vector<uint32_t>{0u});
     EXPECT_EQ(xusbWritesTo(control), (std::vector<uint32_t>{(kActA | kActB | kActC) << 8, kActA | kActB | kActC}));
     d.banks.boundary();
-    ASSERT_EQ(d.dcb.latch(), TegraDisplayB::Latch::Active);
+    ASSERT_TRUE(d.dcb.latch());
     EXPECT_FALSE(d.dcb.windowState(1).live);
     EXPECT_EQ(d.dcb.windowState(1).matrix, 1);
     EXPECT_EQ(d.dcb.windowState(2).matrix, 2);
@@ -367,7 +364,7 @@ TEST(DisplayB, ProgramsScalingAndWritesOnlyWhatChanged)
     frame.window[0].vOffset = 22;
     frame.window[0].kind = 2u | (4u << 4);
     frame.window[0].options = kEnable | (1u << 8) | (1u << 10);
-    ASSERT_TRUE(d.dcb.present(frame));
+    d.dcb.present(frame);
     EXPECT_EQ(d.banks.to(0, kDda), std::vector<uint32_t>{(0x0800u << 16) | 0x0800u});
     EXPECT_EQ(d.banks.to(0, kHInit), std::vector<uint32_t>{0x400u});
     EXPECT_EQ(d.banks.to(0, kVInit), std::vector<uint32_t>{0x400u});
@@ -378,21 +375,13 @@ TEST(DisplayB, ProgramsScalingAndWritesOnlyWhatChanged)
     EXPECT_EQ(d.banks.to(0, kOptions), std::vector<uint32_t>{kEnable | (1u << 8) | (1u << 10)});
     EXPECT_EQ(d.banks.to(0, kSize), std::vector<uint32_t>{(1440u << 16) | 2560u});
     d.banks.boundary();
-    ASSERT_EQ(d.dcb.latch(), TegraDisplayB::Latch::Active);
+    ASSERT_TRUE(d.dcb.latch());
 
     d.clear();
     frame.window[0].start = 0x14400000;
-    ASSERT_TRUE(d.dcb.present(frame));
+    d.dcb.present(frame);
     ASSERT_EQ(d.banks.writes.size(), 1u);
     EXPECT_EQ(d.banks.to(0, kStart), std::vector<uint32_t>{0x14400000u});
-
-    d.banks.boundary();
-    ASSERT_EQ(d.dcb.latch(), TegraDisplayB::Latch::Active);
-    d.dcb.resetWindowCache();
-    d.clear();
-    ASSERT_TRUE(d.dcb.present(frame));
-    EXPECT_EQ(d.banks.to(0, kDda), std::vector<uint32_t>{(0x0800u << 16) | 0x0800u});
-    EXPECT_EQ(d.banks.to(0, kOptions), std::vector<uint32_t>{kEnable | (1u << 8) | (1u << 10)});
 }
 
 // The EMC is asked for what the windows scan during a change (the frame leaving and the one coming, each window's worst)
@@ -401,18 +390,18 @@ TEST(DisplayB, MemoryFollowsTheLatchedWindows)
 {
     Display d;
     admit = false;
-    ASSERT_TRUE(d.dcb.present(clone(0x10000000, 0x14400000, true)));
+    d.dcb.present(clone(0x10000000, 0x14400000, true));
     ASSERT_EQ(plans.size(), 1u);
     d.banks.boundary();
-    ASSERT_EQ(d.dcb.latch(), TegraDisplayB::Latch::Active);
+    ASSERT_TRUE(d.dcb.latch());
     EXPECT_EQ(plans.size(), 1u);
     admit = true;
 
     switch_external::Frame off;
-    ASSERT_TRUE(d.dcb.present(off));
+    d.dcb.present(off);
     EXPECT_EQ(plans.size(), 1u);
     d.banks.boundary();
-    ASSERT_EQ(d.dcb.latch(), TegraDisplayB::Latch::Active);
+    ASSERT_TRUE(d.dcb.latch());
     ASSERT_EQ(plans.size(), 2u);
     EXPECT_EQ(plans.back().peak_bytes_per_second, 0u);
     EXPECT_FALSE(plans.back().windows[0].active);

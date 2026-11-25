@@ -217,9 +217,9 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface, uint32_t building)
     return victim;
 }
 
-switch_external::Layout SwitchExternalScreen::slotLayout(const Slot &slot) const
+const tgm_layout *SwitchExternalScreen::slotBlock(const Slot &slot)
 {
-    return switch_external::layoutOf(slot.block.bpp ? &slot.block : nullptr, slot.read.allocation.layout);
+    return slot.block.bpp ? &slot.block : nullptr;
 }
 
 native_planes::Layer SwitchExternalScreen::layerOf(const uint8_t *request, unsigned layer, OSObject *surface)
@@ -326,7 +326,7 @@ void SwitchExternalScreen::requestFrame()
             return;
         }
         building |= 1u << prepared;
-        if (switch_external::imageFor(layers[i], slotLayout(slots[prepared]), mode.hactive, mode.vactive, images[i])) {
+        if (switch_external::imageFor(layers[i], slotBlock(slots[prepared]), mode.hactive, mode.vactive, images[i])) {
             slotOf[i] = prepared;
             continue;
         }

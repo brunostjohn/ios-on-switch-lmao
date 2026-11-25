@@ -93,7 +93,7 @@ struct Swap {
     bool image(uint32_t width, uint32_t height)
     {
         for (unsigned i = 0; i < kLayers; ++i)
-            if (present[i] && !imageFor(layers[i], Layout{}, width, height, images[i]))
+            if (present[i] && !imageFor(layers[i], nullptr, width, height, images[i]))
                 return false;
         return true;
     }
@@ -435,7 +435,8 @@ namespace {
 Frame fullScreen(const switch_dp_mode &mode, uint32_t fraction, Kind lower)
 {
     Swap s;
-    Layout layouts[kLayers];
+    tgm_layout blocks[kLayers] = {};
+    const tgm_layout *block[kLayers] = {};
     const Rect screen = {0, 0, mode.hactive, mode.vactive};
     const uint32_t sw = std::min<uint32_t>(mode.hactive * fraction, SWITCH_DP_MAX_WIDTH);
     const uint32_t sh = std::min<uint32_t>(mode.vactive * fraction, SWITCH_DP_MAX_HEIGHT);
@@ -446,14 +447,14 @@ Frame fullScreen(const switch_dp_mode &mode, uint32_t fraction, Kind lower)
         if (!s.present[i] || native_planes::isYuv(s.layers[i].kind))
             continue;
         Surface &f = s.layers[i].surface;
-        layouts[i].kind = Layout::kBlock;
-        EXPECT_EQ(tgm_layout_tiled(f.width, f.height, 4, &layouts[i].block), 1);
-        f.allocation = std::max<uint64_t>(f.allocation, layouts[i].block.bytes);
+        EXPECT_EQ(tgm_layout_tiled(f.width, f.height, 4, &blocks[i]), 1);
+        block[i] = &blocks[i];
+        f.allocation = std::max<uint64_t>(f.allocation, blocks[i].bytes);
         f.descriptorBytes = roundUp(f.allocation, 16384);
     }
     for (unsigned i = 0; i < kLayers; ++i)
         if (s.present[i])
-            EXPECT_TRUE(imageFor(s.layers[i], layouts[i], mode.hactive, mode.vactive, s.images[i]));
+            EXPECT_TRUE(imageFor(s.layers[i], block[i], mode.hactive, mode.vactive, s.images[i]));
     const Plan plan = planWindows(s.present, s.images, kIdle);
     EXPECT_EQ(plan.unshown, 0u);
     const uint32_t iova[kLayers] = {0x10000000, 0x14400000, 0x18800000, 0};
@@ -543,120 +544,24 @@ TEST(ExternalPlanes, BlockLinearRgb)
 
     for (const auto &c : cases) {
         Layer l = wholeLayer(kUi, {int32_t((c.modeW - c.w) / 2), 0, int32_t(c.w), int32_t(c.h)});
-        Layout layout;
-        layout.kind = Layout::kBlock;
-        ASSERT_EQ(tgm_layout_tiled(c.w, c.h, 4, &layout.block), 1);
-        l.surface.allocation = std::max<uint64_t>(l.surface.allocation, layout.block.bytes);
+        tgm_layout block = {};
+        ASSERT_EQ(tgm_layout_tiled(c.w, c.h, 4, &block), 1);
+        l.surface.allocation = std::max<uint64_t>(l.surface.allocation, block.bytes);
         l.surface.descriptorBytes = roundUp(l.surface.allocation, 16384);
         Image m;
-        ASSERT_TRUE(imageFor(l, layout, c.modeW, c.modeH, m)) << c.w;
-        EXPECT_EQ(m.surfaceKind, native_planes::kSurfaceKindBlock | (uint32_t(layout.block.y_log2) << 4));
-        EXPECT_EQ(m.lineStride, layout.block.row_bytes);
+        ASSERT_TRUE(imageFor(l, &block, c.modeW, c.modeH, m)) << c.w;
+        EXPECT_EQ(m.surfaceKind, native_planes::kSurfaceKindBlock | (uint32_t(block.y_log2) << 4));
+        EXPECT_EQ(m.lineStride, block.row_bytes);
         EXPECT_EQ(m.start[0], 0u);
         EXPECT_EQ(m.size, (c.h << 16) | c.w);
     }
-}
-
-// A single plane the backing describes as block-linear (what VIC reads before the GPU's own layout) is scanned so; a
-// backing that describes its plane as rows is scanned as rows whatever the GPU says.
-TEST(ExternalPlanes, BlockLinearRgbFromTheBacking)
-{
-    Layer l = wholeLayer(kUi, {440, 0, 2560, 1440});
-    switch_gpu_backing_layout backing = {};
-    backing.plane_count = 1;
-    auto &plane = backing.planes[0];
-    plane.width = 2560;
-    plane.height = 1440;
-    plane.bytes_per_element = 4;
-    plane.pitch = 2560 * 4;
-    plane.block_height_log2 = 4;
-    plane.bytes = uint64_t(plane.pitch) * 1536;
-    plane.layout = SWITCH_GPU_BACKING_BLOCK_LINEAR;
-    l.surface.allocation = std::max<uint64_t>(l.surface.allocation, plane.bytes);
-    l.surface.descriptorBytes = roundUp(l.surface.allocation, 16384);
-    const Layout layout = layoutOf(nullptr, backing);
-    ASSERT_EQ(layout.kind, Layout::kBlock);
-    Image m;
-    ASSERT_TRUE(imageFor(l, layout, kUltraW, kUltraH, m));
-    EXPECT_EQ(m.surfaceKind, native_planes::kSurfaceKindBlock | (4u << 4));
-    EXPECT_EQ(m.lineStride, 2560u * 4u);
-
-    tgm_layout gpu = {};
-    ASSERT_EQ(tgm_layout_tiled(2560, 1440, 4, &gpu), 1);
-    EXPECT_EQ(layoutOf(&gpu, switch_gpu_backing_layout{}).kind, Layout::kBlock);
-    plane.layout = SWITCH_GPU_BACKING_PITCH;
-    EXPECT_EQ(layoutOf(&gpu, backing).kind, Layout::kRows);
-}
-
-namespace {
-// A two-plane picture a producer laid out block-linear in 16-GOB blocks, chroma after luma.
-switch_gpu_backing_layout blockPlanes(const Surface &s, bool nv12)
-{
-    switch_gpu_backing_layout layout = {};
-    layout.format = s.format;
-    layout.plane_count = 2;
-    const uint32_t chromaHeight = nv12 ? (s.height + 1) / 2 : s.height;
-    const uint32_t heights[2] = {uint32_t(roundUp(s.height, 128)), uint32_t(roundUp(chromaHeight, 128))};
-    uint64_t offset = 0;
-    for (unsigned p = 0; p < 2; ++p) {
-        auto &plane = layout.planes[p];
-        plane.offset = offset;
-        plane.width = p ? (s.width + 1) / 2 : s.width;
-        plane.height = heights[p];
-        plane.bytes_per_element = p ? 2 : 1;
-        plane.pitch = uint32_t(roundUp(uint64_t(plane.width) * plane.bytes_per_element, 64));
-        plane.bytes = uint64_t(plane.pitch) * plane.height;
-        plane.layout = SWITCH_GPU_BACKING_BLOCK_LINEAR;
-        plane.block_height_log2 = 4;
-        offset = roundUp(offset + plane.bytes, 4096);
-    }
-    return layout;
-}
-}  // namespace
-
-// A clone video VIC laid out block-linear: both planes from their bases, whole or (4:2:0) cropped through the offsets.
-TEST(ExternalPlanes, BlockLinearYuvPlanes)
-{
-    Layer l = wholeLayer(kVideo, {1336, 480, 768, 480});
-    const switch_gpu_backing_layout planes = blockPlanes(l.surface, true);
-    l.surface.allocation = std::max<uint64_t>(l.surface.allocation, planes.planes[1].offset + planes.planes[1].bytes);
-    l.surface.descriptorBytes = roundUp(l.surface.allocation, 16384);
-    const Layout layout = layoutOf(nullptr, planes);
-    ASSERT_EQ(layout.kind, Layout::kBlockPlanes);
-    Image m;
-    ASSERT_TRUE(imageFor(l, layout, kUltraW, kUltraH, m));
-    EXPECT_EQ(m.surfaceKind, native_planes::kSurfaceKindBlock | (4u << 4));
-    EXPECT_EQ(m.start[0], planes.planes[0].offset);
-    EXPECT_EQ(m.start[1], planes.planes[1].offset);
-    EXPECT_EQ(m.lineStride, (planes.planes[1].pitch << 16) | planes.planes[0].pitch);
-    EXPECT_EQ(m.hOffset, 0u);
-    EXPECT_EQ(m.vOffset, 0u);
-
-    l.src = {64, 32, 704, 448};
-    l.dst = {1336, 480, 704, 448};
-    ASSERT_TRUE(imageFor(l, layout, kUltraW, kUltraH, m));
-    EXPECT_EQ(m.hOffset, 64u);
-    EXPECT_EQ(m.vOffset, 32u);
-    EXPECT_EQ(m.start[0], planes.planes[0].offset);
-
-    Layer nv16 = wholeLayer(native_planes::kKindNv16Video, {1336, 480, 768, 480});
-    const switch_gpu_backing_layout planes16 = blockPlanes(nv16.surface, false);
-    nv16.surface.allocation = planes16.planes[1].offset + planes16.planes[1].bytes;
-    nv16.surface.descriptorBytes = roundUp(nv16.surface.allocation, 16384);
-    ASSERT_TRUE(imageFor(nv16, layoutOf(nullptr, planes16), kUltraW, kUltraH, m));
-    EXPECT_EQ(m.colorDepth, native_planes::kDepthYCbCr422SP);
-    nv16.src = {64, 32, 704, 448};
-    nv16.dst = {1336, 480, 704, 448};
-    EXPECT_FALSE(imageFor(nv16, layoutOf(nullptr, planes16), kUltraW, kUltraH, m));
-
-    EXPECT_EQ(layoutOf(nullptr, switch_gpu_backing_layout{}).kind, Layout::kRows);
 }
 
 TEST(ExternalPlanes, PanelPaletteNeverReachesDisplayB)
 {
     switch_window_palette::setOptions(kPaletteEnable);
     Image m;
-    EXPECT_TRUE(imageFor(wholeLayer(kUi, {0, 0, 1920, 1080}), Layout{}, 1920, 1080, m));
+    EXPECT_TRUE(imageFor(wholeLayer(kUi, {0, 0, 1920, 1080}), nullptr, 1920, 1080, m));
     switch_window_palette::setOptions(0);
     EXPECT_EQ(m.options, native_planes::kWinEnable);
 }

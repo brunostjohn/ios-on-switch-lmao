@@ -46,6 +46,10 @@ uint64_t periodTicks(uint64_t period)
 
 void SwitchExternalScreen::releaseEventSources()
 {
+    if (fenceLoop && fenceSource)
+        fenceLoop->removeEventSource(fenceSource);
+    OSSafeReleaseNULL(fenceSource);
+    OSSafeReleaseNULL(fenceLoop);
     if (loop) {
         if (readySource)
             loop->removeEventSource(readySource);
@@ -54,10 +58,6 @@ void SwitchExternalScreen::releaseEventSources()
     }
     OSSafeReleaseNULL(readySource);
     OSSafeReleaseNULL(completion);
-    if (fenceLoop && fenceSource)
-        fenceLoop->removeEventSource(fenceSource);
-    OSSafeReleaseNULL(fenceSource);
-    OSSafeReleaseNULL(fenceLoop);
     loop = nullptr;
 }
 

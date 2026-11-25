@@ -145,20 +145,8 @@ void SwitchExternalScreen::completionFired(OSObject *owner, IOInterruptEventSour
 
 void SwitchExternalScreen::latchFrame()
 {
-    if (dcb->present(pendingFrame)) {
-        latched = true;
-        return;
-    }
-#if DEVELOPMENT || DEBUG
-    if (diagScanoutFailures < 8u) {
-        ++diagScanoutFailures;
-        IOLog("SwitchDisplayPort: DCB refused a frame that writes the CSC of a window still scanning\n");
-    }
-#endif
-    abandonDrawing();
-    const auto *request = pending;
-    pending = nullptr;
-    dropFrame(request);
+    dcb->present(pendingFrame);
+    latched = true;
 }
 
 // The next frame is not shown: its reads go back, the frame on the screen stays.
@@ -206,30 +194,14 @@ bool SwitchExternalScreen::frameEnd()
 {
     if (!dcb)
         return true;
-    if (latched) {
-        const auto receipt = dcb->latch();
-        if (receipt == TegraDisplayB::Latch::Missed) {
-#if DEVELOPMENT || DEBUG
-            if (diagScanoutFailures < 8u) {
-                ++diagScanoutFailures;
-                IOLog("SwitchDisplayPort: DCB windows missed a latch (front %d/%d/%d, next %d/%d/%d)\n", front[0],
-                      front[1], front[2], drawing[0], drawing[1], drawing[2]);
-            }
-#endif
-            dcb->resetWindowCache();
-            latched = false;
-            abandonDrawing();
-            retire(pending, false);
-            pending = nullptr;
-        } else if (receipt == TegraDisplayB::Latch::Active) {
-            latched = false;
-            promoteDrawing();
-            retire(pending, true);
-            pending = nullptr;
-            for (const int k : front)
-                if (k >= 0)
-                    switch_native_scanout_deliver(&slots[k].read);
-        }
+    if (latched && dcb->latch()) {
+        latched = false;
+        promoteDrawing();
+        retire(pending, true);
+        pending = nullptr;
+        for (const int k : front)
+            if (k >= 0)
+                switch_native_scanout_deliver(&slots[k].read);
     }
     const auto *clients = switch_abi_load<const void *>(this, vsyncClientList);
     if (clients)
@@ -249,16 +221,17 @@ void SwitchExternalScreen::noteShape(uint32_t updated, const native_planes::Laye
     const auto mix = [&key](uint64_t value) {
         key = (key ^ value) * 1099511628211ULL;
     };
-    switch_external::Layout layouts[kLayers] = {};
+    int blockLog2[kLayers] = {-1, -1, -1, -1};
     for (unsigned i = 0; i < kLayers; ++i) {
         if (!present[i])
             continue;
         const auto &l = layers[i];
-        layouts[i] = slotLayout(slots[slotOf[i]]);
+        if (const tgm_layout *block = slotBlock(slots[slotOf[i]]))
+            blockLog2[i] = block->y_log2;
         mix(i);
         mix(l.surface.format);
         mix(static_cast<uint64_t>(l.surface.width) << 32 | l.surface.height);
-        mix(static_cast<uint64_t>(layouts[i].kind) << 8 | layouts[i].block.y_log2);
+        mix(uint64_t(blockLog2[i] + 1));
         mix(static_cast<uint64_t>(uint32_t(l.src.x)) << 32 | uint32_t(l.src.y));
         mix(static_cast<uint64_t>(uint32_t(l.src.w)) << 32 | uint32_t(l.src.h));
         mix(static_cast<uint64_t>(uint32_t(l.dst.x)) << 32 | uint32_t(l.dst.y));
@@ -271,7 +244,6 @@ void SwitchExternalScreen::noteShape(uint32_t updated, const native_planes::Laye
         return;
     diagShape = key;
     ++diagShapeLogs;
-    static const char *const kLayoutNames[] = {"rows", "block", "block planes"};
     char line[640];
     int at = snprintf(line, sizeof(line), "updated %#x, windows A:%d B:%d C:%d, unshown %#x", updated,
                       plan.window[0].on ? plan.window[0].layer : -1, plan.window[1].on ? plan.window[1].layer : -1,
@@ -282,10 +254,10 @@ void SwitchExternalScreen::noteShape(uint32_t updated, const native_planes::Laye
         const auto &l = layers[i];
         const uint32_t f = l.surface.format;
         at += snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
-                       "; layer %u '%c%c%c%c' %ux%u %s src (%d,%d %dx%d) dst (%d,%d %dx%d)", i,
+                       "; layer %u '%c%c%c%c' %ux%u %s %d src (%d,%d %dx%d) dst (%d,%d %dx%d)", i,
                        static_cast<char>(f >> 24), static_cast<char>(f >> 16), static_cast<char>(f >> 8),
-                       static_cast<char>(f), l.surface.width, l.surface.height, kLayoutNames[layouts[i].kind], l.src.x,
-                       l.src.y, l.src.w, l.src.h, l.dst.x, l.dst.y, l.dst.w, l.dst.h);
+                       static_cast<char>(f), l.surface.width, l.surface.height, blockLog2[i] < 0 ? "rows" : "block",
+                       blockLog2[i], l.src.x, l.src.y, l.src.w, l.src.h, l.dst.x, l.dst.y, l.dst.w, l.dst.h);
     }
     IOLog("SwitchDisplayPort: clone swap %s\n", line);
 }

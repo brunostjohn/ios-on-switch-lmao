@@ -9,7 +9,7 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     const auto source = SourceText("../SwitchExternalScanout.cpp");
     const auto present = SourceText("../SwitchExternalPresent.cpp");
     const auto latch = Block(present, "bool SwitchExternalScreen::frameEnd()");
-    EXPECT_TRUE(latch.has("dcb->latch()"));
+    EXPECT_TRUE(latch.has("if (latched && dcb->latch())"));
     EXPECT_TRUE(latch.before("promoteDrawing();", "retire(pending, true);"));
     EXPECT_TRUE(latch.has("switch_native_scanout_deliver(&slots[k].read);"));
     EXPECT_FALSE(latch.has("switch_native_scanout_release"));
@@ -48,7 +48,7 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_TRUE(prepare.has("!slotShown(static_cast<int>(i)) && !(building & (1u << i))"));
 
     const auto request = Block(source, "void SwitchExternalScreen::requestFrame()");
-    EXPECT_TRUE(request.has("switch_external::imageFor(layers[i], slotLayout(slots[prepared])"));
+    EXPECT_TRUE(request.has("switch_external::imageFor(layers[i], slotBlock(slots[prepared])"));
     EXPECT_TRUE(request.has("switch_external::planWindows(present, images, states)"));
     EXPECT_TRUE(request.has("switch_external::frameOf(plan, images, iova, dcb->pixelClockHz())"));
     EXPECT_TRUE(
@@ -120,9 +120,9 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_TRUE(prepare.has("allocation.pages[offset / 4096]"));
     EXPECT_FALSE(prepare.has("allocation.pages[0]"));
 
-    EXPECT_TRUE(latch.has("if (receipt == TegraDisplayB::Latch::Missed)"));
-    EXPECT_TRUE(latch.has("dcb->resetWindowCache();"));
     EXPECT_FALSE(latch.has("return false;"));
+    EXPECT_FALSE(latch.has("abandonDrawing"));
+    EXPECT_FALSE(Block(present, "void SwitchExternalScreen::latchFrame()").has("dropFrame"));
     EXPECT_TRUE(latch.has("dcb->frameInterrupt(true);"));
 
     const auto dcIrq = Block(service, "void SwitchDisplayPort::dcInterrupt(");

@@ -20,17 +20,12 @@ public:
     bool powerUp(char *why, size_t size);
     void setMode(const struct switch_dp_mode &mode);
     void enableSor(bool on);
-    // Every window's registers for the next frame boundary, in one request. False, with nothing written, when a window
-    // that may be scanning would have its CSC written.
-    bool present(const Frame &frame);
-    enum class Latch {
-        Pending,
-        Active,
-        Missed
-    };
-    // At a frame end after present: Pending while the request is out, then whether every window it named scans what it
-    // was given (its START_ADDR, or off).
-    Latch latch();
+    // Every window's registers for the next frame boundary, in one request; a CSC written under a window that may be
+    // scanning panics.
+    void present(const Frame &frame);
+    // At a frame end after present: false while the request is out, then true with every window it named scanning what it
+    // was given (its START_ADDR, or off); anything else panics.
+    bool latch();
     switch_external::WindowState windowState(unsigned window) const;
 
     uint32_t pixelClockHz() const
@@ -38,7 +33,6 @@ public:
         return memory.pixel_clock_hz;
     }
 
-    void resetWindowCache();
     void windowsOff();
     void frameInterrupt(bool enable);
     uint32_t takeInterrupt();

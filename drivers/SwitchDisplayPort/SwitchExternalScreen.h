@@ -125,7 +125,7 @@ private:
     void releaseRead(unsigned slot);
     bool slotShown(int slot) const;
     int prepareSlot(OSObject *surface, uint32_t building);
-    switch_external::Layout slotLayout(const Slot &slot) const;
+    static const tgm_layout *slotBlock(const Slot &slot);
     void takeLayers(const uint8_t *request, bool present[], native_planes::Layer layers[], OSObject *surfaces[]);
     void releaseUnshown(uint32_t building);
     void abandonDrawing();

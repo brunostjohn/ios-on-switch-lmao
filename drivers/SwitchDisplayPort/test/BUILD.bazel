@@ -95,8 +95,6 @@ host_test(
 
 PLANES = [
     "//drivers/NativeMobileDisplay:NativePlanes.h",
-    "//drivers/NativeMobileDisplay:SwitchDisplayTraits.h",
-    "//drivers/NativeMobileDisplay:SwitchNativePlane.h",
     "//drivers/NativeMobileDisplay:SwitchWindowCaps.h",
     "//drivers/NativeMobileDisplay:SwitchWindowFormatImage.h",
     "//drivers/SwitchDisplayPort:SwitchDPModes.h",
@@ -105,7 +103,6 @@ PLANES = [
     "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
     "//drivers/SwitchPower:SwitchDisplayMemory.h",
     "//drivers/SwitchPower:SwitchDisplayMemoryMath.h",
-    "//drivers/TegraGM20B:SwitchGpuBacking.h",
     "//drivers/TegraGM20B:TegraGM20BLayout.h",
     "//drivers/TegraVIC:SwitchSurfaceColor.h",
 ]

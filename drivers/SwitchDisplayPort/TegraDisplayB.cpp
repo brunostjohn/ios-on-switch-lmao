@@ -344,11 +344,12 @@ void TegraDisplayB::writeWindow(unsigned window, const switch_external::WindowRe
     cache.valid = true;
 }
 
-bool TegraDisplayB::present(const Frame &frame)
+void TegraDisplayB::present(const Frame &frame)
 {
     for (unsigned w = 0; w < kWindows; ++w)
         if (frame.window[w].csc && windowState(w).live)
-            return false;
+            panic("SwitchDisplayPort: DCB window %c's CSC written while it may be scanning (matrix %d range %d)",
+                  'A' + w, csc[w][0], csc[w][1]);
     reserve(switch_external::memoryOf(memory, spanning(latched, frame)));
     uint32_t request = 0;
     for (unsigned w = 0; w < kWindows; ++w) {
@@ -367,33 +368,33 @@ bool TegraDisplayB::present(const Frame &frame)
     if (request)
         commit(request);
     frameInterrupt(true);
-    return true;
 }
 
-TegraDisplayB::Latch TegraDisplayB::latch()
+// Nothing writes a window while its request is out, so a boundary that took the request shows what it named.
+bool TegraDisplayB::latch()
 {
     if (requested & read(DC_CMD_STATE_CONTROL))
-        return Latch::Pending;
-    bool missed = false;
+        return false;
     for (unsigned w = 0; w < kWindows; ++w) {
         if (!(requested & actRequest(w)))
             continue;
         select(w);
-        const WindowCache &cache = windows[w];
-        if (cache.expectOn)
-            missed = missed || read(DC_WINBUF_START_ADDR) != cache.expectStart;
-        else
-            missed = missed || (read(DC_WIN_WIN_OPTIONS) & kWinEnable) != 0;
+        WindowCache &cache = windows[w];
+        if (cache.expectOn) {
+            const uint32_t start = read(DC_WINBUF_START_ADDR);
+            if (start != cache.expectStart)
+                panic("SwitchDisplayPort: DCB window %c scans %#x after its request latched, not %#x", 'A' + w, start,
+                      cache.expectStart);
+        } else if (const uint32_t options = read(DC_WIN_WIN_OPTIONS); options & kWinEnable) {
+            panic("SwitchDisplayPort: DCB window %c still on (options %#x) after its request to turn off latched",
+                  'A' + w, options);
+        }
+        cache.live = cache.expectOn;
     }
-    for (unsigned w = 0; w < kWindows; ++w)
-        if (requested & actRequest(w))
-            windows[w].live = missed ? windows[w].live || windows[w].expectOn : windows[w].expectOn;
     requested = 0;
-    if (missed)
-        return Latch::Missed;
     latched = requestedFrame;
     reserve(switch_external::memoryOf(memory, latched));
-    return Latch::Active;
+    return true;
 }
 
 switch_external::WindowState TegraDisplayB::windowState(unsigned window) const
@@ -401,12 +402,6 @@ switch_external::WindowState TegraDisplayB::windowState(unsigned window) const
     const WindowCache &cache = windows[window];
     const bool requestedOn = (requested & actRequest(window)) && cache.expectOn;
     return {cache.live || requestedOn, csc[window][0], csc[window][1]};
-}
-
-void TegraDisplayB::resetWindowCache()
-{
-    for (auto &cache : windows)
-        cache.valid = false;
 }
 
 void TegraDisplayB::windowsOff()
