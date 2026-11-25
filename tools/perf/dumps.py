@@ -29,6 +29,24 @@ IMAGE_SPAN = 256 << 20
 TOP = 8
 # kcdata.h's ts_ss_flags: which shared region a task is attached to
 REGION_NONE, REGION_SYSTEM, REGION_OTHER = 0x20000000, 0x40000000, 0x80000000
+# osfmk/kern/block_hint.h's kThreadWait*, and kcdata.h's waitinfo and turnstile flags
+WAIT_TYPES = {
+    1: 'a kernel mutex',
+    2: 'a port receive',
+    3: 'a port set receive',
+    4: 'a port send',
+    6: 'a semaphore',
+    10: 'a user lock',
+    11: 'a pthread mutex',
+    14: 'a condition variable',
+    16: 'a workloop sync wait',
+    18: 'a sleep with inheritor',
+    20: 'the compressor',
+    22: 'a busy page',
+    25: 'paging activity',
+}
+WAIT_SPECIAL_REPLY = 0x1
+TURNSTILE_THREAD, TURNSTILE_TASK, TURNSTILE_WORKQUEUE = 0x08, 0x10, 0x04
 
 
 @dataclass
@@ -38,6 +56,25 @@ class Names:
     thread: dict[int, tuple[int, str, str]] = field(default_factory=dict)  # tid: (pid, process, thread name)
     images: dict[int, list[tuple[int, str]]] = field(default_factory=dict)  # pid: [(load address, uuid)], sorted
     dsc: dict[int, tuple[int, int]] = field(default_factory=dict)  # pid: (slid base, slide)
+    waits: dict[int, tuple[int, int]] = field(default_factory=dict)  # tid: (wait type, waitinfo flags)
+    turnstiles: dict[int, tuple[int, int, int]] = field(default_factory=dict)  # tid: (inheritor, flags, hops)
+    procs: dict[int, str] = field(default_factory=dict)  # pid: process
+
+    def waited(self, tid: int) -> str:
+        """Return what the thread waited on at the stackshot, and behind whom its turnstile ended."""
+        if tid not in self.waits:
+            return ''
+        kind, flags = self.waits[tid]
+        text = WAIT_TYPES.get(kind, f'wait type {kind}') + (' (its reply port)' if flags & WAIT_SPECIAL_REPLY else '')
+        if tid in self.turnstiles:
+            ctx, tflags, hops = self.turnstiles[tid]
+            if tflags & TURNSTILE_THREAD and ctx:
+                text += f', behind {self.who(ctx)} ({hops} hops)'
+            elif tflags & TURNSTILE_TASK and ctx:
+                text += f', behind {self.procs.get(ctx, "?")}[{ctx}] ({hops} hops)'
+            elif tflags & TURNSTILE_WORKQUEUE:
+                text += f', behind a workqueue ({hops} hops)'
+        return text
 
     def who(self, tid: int) -> str:
         pid, proc, name = self.thread.get(tid, (0, '?', ''))
@@ -118,6 +155,15 @@ def names(kcdata: dict) -> Names:
         for thread in (task.get('thread_snapshots') or {}).values():
             tid = int((thread.get('thread_snapshot') or {}).get('ths_thread_id', 0))
             out.thread[tid] = (pid, snap.get('ts_p_comm', '?'), thread.get('pth_name', ''))
+        out.procs[pid] = snap.get('ts_p_comm', '?')
+        for w in task.get('thread_waitinfo') or []:
+            out.waits[int(w.get('waiter', 0))] = (int(w.get('wait_type', 0)), int(w.get('wait_flags', 0)))
+        for t in task.get('thread_turnstileinfo') or []:
+            out.turnstiles[int(t.get('waiter', 0))] = (
+                int(t.get('turnstile_context', 0)),
+                int(t.get('turnstile_flags', 0)),
+                int(t.get('number_of_hops', 0)),
+            )
         loads = task.get('dyld_load_info') or []
         out.images[pid] = sorted((int(i['imageLoadAddress']), uuid_text(i.get('imageUUID'))) for i in loads)
         if cache := task_cache(task, system, others):
@@ -388,6 +434,8 @@ def summary(
             f'  its thread: on a core {ms(held):.0f} ms of the last {ms(at - lo):.0f}; woken by '
             + (', '.join(f'{n.who(w)} {c}' for w, c in sorted(woken.items(), key=lambda kv: -kv[1])[:4]) or 'nobody')
         )
+        if waited := n.waited(tid):
+            out.append(f'  at the stackshot it waited on {waited}')
         out += ['  ' + line for line in stacks(ring, n, tid, uuid_paths, syms)]
         out += ['  ' + line for line in fault_lines(ring, n, tid, lo, at)]
     out += ['  ' + line for line in pagein_lines(ring, n, lo, at)]

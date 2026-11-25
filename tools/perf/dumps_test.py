@@ -314,6 +314,32 @@ class RealDumpTest(unittest.TestCase):
         self.assertEqual(stack.split(' < ')[:3], ['dsc 0x189ad0398', 'dsc 0x189acfdf0', 'dsc 0x189acfbf8'])
         self.assertTrue(all(frame.startswith('dsc 0x') for frame in stack.split(' < ')))
 
+    def test_a_wait_names_the_thread_or_task_its_turnstile_ends_at(self):
+        shot = {
+            'task_snapshots': {
+                '1': {
+                    'task_snapshot': {'ts_pid': 30, 'ts_p_comm': 'SpringBoard'},
+                    'thread_snapshots': {'514': {'thread_snapshot': {'ths_thread_id': 514}}},
+                    'thread_waitinfo': [{'waiter': 514, 'wait_type': 2, 'wait_flags': 1, 'owner': 6451}],
+                    'thread_turnstileinfo': [
+                        {'waiter': 514, 'turnstile_context': 1787, 'turnstile_flags': 8, 'number_of_hops': 2}
+                    ],
+                },
+                '2': {
+                    'task_snapshot': {'ts_pid': 69, 'ts_p_comm': 'backboardd'},
+                    'thread_snapshots': {'1787': {'thread_snapshot': {'ths_thread_id': 1787}, 'pth_name': 'hid'}},
+                    'thread_waitinfo': [{'waiter': 606, 'wait_type': 6}],
+                    'thread_turnstileinfo': [
+                        {'waiter': 606, 'turnstile_context': 30, 'turnstile_flags': 16, 'number_of_hops': 1}
+                    ],
+                },
+            }
+        }
+        n = dumps.names({'kcdata_stackshot': shot})
+        self.assertEqual(n.waited(514), 'a port receive (its reply port), behind backboardd[69] hid (1787) (2 hops)')
+        self.assertEqual(n.waited(606), 'a semaphore, behind SpringBoard[30] (1 hops)')
+        self.assertEqual(n.waited(1), '')
+
     def test_a_task_on_another_cache_or_none_is_resolved_by_its_flags(self):
         shot = {
             'shared_cache_dyld_load_info': {'imageSlidBaseAddress': 0x190000000, 'imageLoadAddress': 0x10000000},
