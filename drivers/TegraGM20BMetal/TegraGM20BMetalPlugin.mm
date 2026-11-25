@@ -476,9 +476,10 @@ void checkRf16Rounding()
     td.storageMode = MTLStorageModePrivate;
     id<MTLTexture> target = [device newTextureWithDescriptor:td];
     id<MTLBuffer> out = [device newBufferWithLength:32 options:MTLResourceStorageModeShared];
-    if (!state || !target || !out) {
-        os_log_error(log, "TegraGM20BMetal: %{public}s rf16 rounding: no state or target (%{public}@)", getprogname(),
-                     error.localizedDescription);
+    id<MTLCommandQueue> queue = [device newCommandQueue];
+    if (!state || !target || !out || !queue) {
+        os_log_error(log, "TegraGM20BMetal: %{public}s rf16 rounding: no state, target or queue (%{public}@)",
+                     getprogname(), error.localizedDescription);
         return;
     }
     const uint32_t bits[4] = {0x3efff001u, 0x3efff000u, 0x3effefffu, 0x3f001000u};
@@ -486,7 +487,6 @@ void checkRf16Rounding()
     for (int i = 0; i < 4; i++)
         for (int c = 0; c < 4; c++)
             memcpy(&values[4 * i + c], &bits[i], 4);
-    id<MTLCommandQueue> queue = [device newCommandQueue];
     id<MTLCommandBuffer> cb = [queue commandBuffer];
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = target;

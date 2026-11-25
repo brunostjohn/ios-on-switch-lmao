@@ -264,6 +264,8 @@
 - (id<MTLCommandQueue>)newCommandQueue
 {
     SwitchMetalQueue *q = [SwitchMetalQueue new];
+    if (!q)
+        return nil;
     q->_device = self;
     return (id<MTLCommandQueue>)q;
 }
