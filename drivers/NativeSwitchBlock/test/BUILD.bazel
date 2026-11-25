@@ -147,6 +147,25 @@ host_test(
     copts = ["-O1"],
 )
 
+# The same cache as a release kernel compiles it (its stats compiled out), less the two cases that count those stats.
+host_test(
+    name = "cryptex_cache_release_test",
+    srcs = [
+        "cryptex_cache_test.cpp",
+        "//drivers/NativeSwitchBlock:SwitchCryptexCache.h",
+    ],
+    args = ["--gtest_filter=-CryptexCache.AColdMissReadsItsWholeWindowOnceAndNeighboursWaitForIt:" +
+            "CryptexCache.ReadAheadReadsExactlyItsBlocksAndRequestsFindThem"],
+    copts = [
+        "-O1",
+        "-UDEVELOPMENT",
+        "-DDEVELOPMENT=0",
+        "-UDEBUG",
+        "-DDEBUG=0",
+    ],
+    defines = ["KERNEL"],
+)
+
 # --- Source guards: what the drivers (not built for the host) do with the engines above --------------------------------
 # (At -O1: std::regex over a 5000-line source is slow at -O0 with ASan.)
 cc_library(
