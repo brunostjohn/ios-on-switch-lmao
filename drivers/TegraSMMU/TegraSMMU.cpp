@@ -265,7 +265,8 @@ extern "C" int tegra_smmu_resume(void)
         return 0;
     // SC7's wake runs this once, on one thread: the lines need not be on its stack.
     static char failed[TEGRA_SMMU_ATTACHMENTS][96];
-    bzero(failed, sizeof(failed));
+    for (char *line : failed)
+        line[0] = 0;
     IOSimpleLockLock(gLock);
     const uint32_t count = gAttached.count;
     for (uint32_t i = 0; i < count; ++i) {
