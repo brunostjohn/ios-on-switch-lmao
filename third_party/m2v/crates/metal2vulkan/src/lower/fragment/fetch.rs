@@ -7,8 +7,9 @@
 //! the ordered pixel interlock, the mechanism of raster order groups and imageblocks: each color
 //! attachment the function reads becomes a storage image of the attachment
 //! (`ResourceKind::TileAttachment(n)`), read at the fragment's pixel (the integer part of
-//! `FragCoord.xy`) at each use, and, when the function writes that attachment through its first
-//! (index 0) output, written there at the return in place of the output
+//! `FragCoord.xy`) once, in the function's first block ([`emit_entry`]), and, when the function
+//! writes that attachment through its first (index 0) output, written there at the return in
+//! place of the output
 //! (`GraphicsState::storage_attachments`; colors it writes but does not read stay ordinary outputs,
 //! but those the pipeline's state names: a color its draw's render pass instance keeps out of its
 //! subpass for other draws' storage form, `VariantKey::interlocked_colors`). The whole body runs
@@ -117,7 +118,7 @@ use std::collections::BTreeSet;
 
 use crate::air::abi::{AbiInt, OutputRole, ParamRole};
 use crate::air::intrinsics::{AirIntrinsic, Fragment, PackDir, PackFormat};
-use crate::air::ir::{Callee, InstKind, Type as AirType, TypeId as AirTypeId, Value};
+use crate::air::ir::{ArgIdx, Callee, InstKind, Type as AirType, TypeId as AirTypeId, Value};
 use crate::device::profile::{DriverWorkaround, FramebufferFetchPolicy};
 use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::device::DeviceProfile;
@@ -1474,6 +1475,29 @@ fn as_held(fb: &mut FunctionBuilder<'_>, texel: SValue, numeric: SampledType) ->
     })?;
     let uvec4 = fb.module().ty(SType::Vector { elem: u32_, len: 4 })?;
     fb.convert(ConvOp::Bitcast, texel, uvec4)
+}
+
+/// Read each storage-form color input once, in the function's first block, and hold it for the
+/// whole function: the body runs inside the interlock, where no other fragment of the pixel writes
+/// the texel and the invocation's own write comes at its return, so every use would read the same
+/// value. The read and its decode are then one per invocation, not one per use (Hillshade's
+/// `Blending::blend` reads `dst` in 19 modes).
+pub(super) fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
+    let fragment = &cx.plan.families.fragment;
+    let held: Vec<ColorInput> = fragment
+        .colors
+        .iter()
+        .filter(|c| fragment.fetch.contains_key(&c.color))
+        .copied()
+        .collect();
+    for c in held {
+        let Some(v) = cx.plan.values.id(Value::Arg(ArgIdx::new(c.param))) else {
+            return Err(cx.fail(format!("color input parameter {} is out of range", c.param)));
+        };
+        let x = value(cx, fb, c)?;
+        cx.hold(v, x);
+    }
+    Ok(())
 }
 
 /// The value of storage-form color input `c` in its lowered representation, read at its pixel
