@@ -26,7 +26,9 @@ import Metal
 /// 2's entry follows job 1's end on the GPU, not seconds later. rule names no entry form: production's (rule_entries=
 /// the jobs it opened relaxed). Where entry_none never differs the hazard is unobservable at a job's entry and the line
 /// says so (observable=0): the end of each job (RELEASE_WFI, the kernel's WAIT_FOR_IDLE and L2 flush) leaves the entry
-/// nothing to find.
+/// nothing to find. Run All runs `quick` trials an arm a cell: bare's rop_tex race showed in 28 of 1,504 (24 Nov), and
+/// 376 catch a race that rare 99.9% of the time. HWTEST_LONG=1 runs 1,504. entry_none_cells= each cell's entry_none
+/// trials and how many differed.
 enum X1JobBoundaryProbe {
     static let probe = X1Probe(
         id: "gpu.x1.job_boundary_idle", name: "A job after the last one's fence needs no drain at its entry",
@@ -39,6 +41,7 @@ enum X1JobBoundaryProbe {
         ("rule", "pass=none switch=today"), ("injob_none", "pass=none switch=none"),
     ]
     static let batch = 8
+    static let quick = 376
     static let side = 16
     static let words = 256
 
@@ -70,7 +73,7 @@ enum X1JobBoundaryProbe {
             let cellArms = gpuWritten ? arms : arms.filter { $0.0 != "injob_none" }
             journal.starting("\(name) arms=\(cellArms.map(\.0).joined(separator: "/"))")
             let started = Date()
-            let plan = IterationPlan(cells: cellArms.count, target: 1504, batch: batch)
+            let plan = IterationPlan(cells: cellArms.count, target: LongRuns.on ? 1504 : quick, batch: batch)
             var trial = [Int](repeating: 0, count: cellArms.count)
             for step in plan.order {
                 if Date().timeIntervalSince(started) > 6 && step.cell == 0 { break }
@@ -106,6 +109,10 @@ enum X1JobBoundaryProbe {
         )
         let observable = judged.cells.contains { !(judged.tallies[$0]?["entry_none"]?.clean ?? true) }
         finding.metrics.set("observable", observable ? 1 : 0)
+        let unguarded = judged.cells.compactMap { cell in
+            judged.tallies[cell]?["entry_none"].map { "\(cell):\($0.trials):\($0.mismatchedTrials)" }
+        }
+        finding.metrics.set("entry_none_cells", unguarded.joined(separator: ","))
         if !observable {
             finding.note = "unobservable: entry_none never differed, so no entry form can be judged here"
         }

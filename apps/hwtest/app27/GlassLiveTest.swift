@@ -11,9 +11,10 @@ import UIKit
 /// Variants: still (only a dot far from the glass changes, the control), appear (the glass shows at the first display
 /// frame read, the dot toggling on: the frames ui.glass_first's unchanged-tree snapshot reuses the backdrop of), server
 /// (Core Animation animates the stripes in the render server), scroll (the app scrolls the stripes every display
-/// frame), glass (the glass moves over still stripes), slow (scroll every fourth frame) and plain (scroll without the
-/// read-back: the frame rate it costs). After each variant `<variant>_rest=<last>/<after>`: the glass left on screen
-/// when the motion stopped against the glass once the backdrop under it is captured again.
+/// frame), glass (the glass moves over still stripes), slow (scroll every fourth frame) and, with HWTEST_LONG=1, plain
+/// (scroll without the read-back: the frame rate it costs, reported only). After each variant
+/// `<variant>_rest=<last>/<after>`: the glass left on screen when the motion stopped against the glass once the
+/// backdrop under it is captured again.
 ///
 /// Each frame is black (R, G, B <= 2 over 90% of the band), partial (over 2%), dark or good, at its present and, with a
 /// live kernel, at the end of its time on screen (the next present reads it again); changed= counts frames whose pixels
@@ -40,7 +41,7 @@ struct UIGlassLiveTest: HWTest {
         var summaries: [LiveSummary] = []
         var pngs: [String] = []
         var stopped: String?
-        let variants = LiveVariant.allCases
+        let variants = LiveVariant.allCases.filter { $0.readsBack || LongRuns.on }
         for variant in variants where stopped == nil {
             let scene = await context.onStage(fullScreen: true) { stage in LiveScene(stage, hidden: variant.appears)
             }

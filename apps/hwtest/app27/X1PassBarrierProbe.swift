@@ -8,14 +8,17 @@ import Metal
 /// invalidate (0x0f74) order B's reads after A's writes, with no WAIT_FOR_IDLE or shader-cache flush. Each trial is A
 /// then B in one command buffer, eight a batch; the targets rotate between two, so a read too early, or through a
 /// texture cache still holding the last trial's lines, copies another seed's texels. Arms: control (today's
-/// switch_gm20b_pass_barrier, run until every seed has its reference; nothing judges its later trials), pixel (the
+/// switch_gm20b_pass_barrier, run until every seed the cell's trials use has its reference; nothing judges its later
+/// trials), pixel (the
 /// planner's form), none (no barrier: the arm that shows a cell can see the
 /// hazard), each with today's engine changes and job entry; rule forces nothing, so production's rules pick every barrier
 /// (pass_hazard.h: the pixel barrier only where every dependency is a cell this line held), rule_passes= the passes
 /// it opened with the pixel barrier, and a cell where rule read other texels than control fails the line. Cells: format x
 /// layout x read shape x size. 0x1288 in place of 0x0f74 after the barrier is never sent: F-v1
-/// read it wrong in every 64 x 64 cell (bgra8_bl_same_s 623 of 1,008 trials). The 64 x 64 cells run four times as long
-/// as T-v2's (the F-v1 count).
+/// read it wrong in every 64 x 64 cell (bgra8_bl_same_s 623 of 1,008 trials). Run All runs `quick` trials an arm a
+/// cell, and a cell whose none arm never differed in them reads blind, never held; HWTEST_LONG=1 runs each cell's
+/// `trials` within its `seconds` (the 64 x 64 cells' four times T-v2's, the F-v1 count). none_cells= each cell's none
+/// trials and how many differed.
 enum X1PassBarrierProbe {
     static let probe = X1Probe(
         id: "gpu.x1.pass_pixel_barrier",
@@ -29,6 +32,7 @@ enum X1PassBarrierProbe {
     ]
     static let batch = 8
     static let seeds = 16
+    static let quick = ["s": 64, "m": 32, "f": 8]
 
     enum Shape: String {
         case same, stride, flip, pyramid, waw
@@ -43,6 +47,7 @@ enum X1PassBarrierProbe {
         let seconds: Double
 
         var size: String { width == 1280 ? "f" : width == 64 ? "s" : "m" }
+        var target: Int { LongRuns.on ? trials : X1PassBarrierProbe.quick[size] ?? trials }
     }
 
     static var cells: [Cell] {
@@ -149,7 +154,7 @@ enum X1PassBarrierProbe {
             journal.starting("\(name) arms=\(arms.map(\.0).joined(separator: "/"))")
             var references: [Int: [UInt8]] = [:]
             let started = Date()
-            let plan = IterationPlan(cells: arms.count, target: cell.trials, batch: batch)
+            let plan = IterationPlan(cells: arms.count, target: cell.target, batch: batch)
             var trial = [Int](repeating: 0, count: arms.count)
             for step in plan.order {
                 if Date().timeIntervalSince(started) > cell.seconds && step.cell == 0 { break }
@@ -193,6 +198,10 @@ enum X1PassBarrierProbe {
             finding.verdict = .fail
             finding.note = "production's pass barriers read other texels than today's"
         }
+        let none = ledger.cells.compactMap { cell in
+            ledger.tallies[cell]?["none"].map { "\(cell):\($0.trials):\($0.mismatchedTrials)" }
+        }
+        finding.metrics.set("none_cells", none.joined(separator: ","))
         finding.metrics.set("control_vs_cpu", controlVsCpu)
         finding.metrics.set("skipped", skipped.isEmpty ? "-" : skipped.joined(separator: ","))
         if controlVsCpu > 0 {
