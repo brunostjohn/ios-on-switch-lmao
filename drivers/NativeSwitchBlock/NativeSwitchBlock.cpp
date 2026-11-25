@@ -2280,7 +2280,7 @@ Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCo
         bool fits = false;
         if (first->write) {
             count = switchGatherWrites(head, first, limit, kMaxChain, kMergeScan, &start, &sectors, inFlight,
-                                       inFlightCount);
+                                       inFlightCount, writes(windowOf(first->shared)).waiters != nullptr);
             fits = switchWriteChainTiles(head, start, sectors, count);
         } else {
             const uint32_t maxGap = gapsOn ? kGapSectors : 0;

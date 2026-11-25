@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../SwitchQueue.h"
+#include "../SwitchSdWriteFence.h"
 #include "bazel/testing/require.h"
 
 struct Request {
@@ -432,6 +433,38 @@ static Picked pickWrites(Queue &q, int first, uint32_t limit = 2048, uint32_t ma
     return p;
 }
 
+// A synchronize's barrier counts write completions (SwitchSdWriteFence.h). While it waits, a write submitted after it
+// must not complete in the place of an older write it waits for: W1 at 100 and W2 at 500 are queued, the barrier begins,
+// then W3 at 108 arrives. Joined to W1's chain, W3 completed beside W1 and the barrier read done with W2 still queued.
+static void writeFenceOrder()
+{
+    for (bool waiting : {true, false}) {
+        Queue q({{100, 8, true}, {500, 8, true}, {108, 8, true}});
+        SwitchSdWriteFence fence;
+        fence.submitted = 2;
+        SwitchSdWriteFence::Barrier barrier;
+        if (waiting)
+            fence.begin(barrier);
+        ++fence.submitted;
+        Picked p{};
+        const uint32_t count = switchGatherWrites(q.head, q.at(0), 2048, 256, 128, &p.start, &p.sectors, nullptr, 0,
+                                                  fence.waiters != nullptr);
+        REQUIRE(switchWriteChainTiles(q.head, p.start, p.sectors, count));
+        Request *chain = switchUnlinkChain(q.head, q.tail, count);
+        for (Request *r = chain; r; r = r->next)
+            p.chain.push_back(r->id);
+        fence.finish(count, false);
+        if (waiting) {
+            REQUIRE(p.chain == std::vector<int>{0});
+            REQUIRE(fence.completed < barrier.target);
+            fence.end(barrier, false);
+        } else {
+            REQUIRE((p.chain == std::vector<int>{0, 2}));
+        }
+        REQUIRE(!fence.waiters);
+    }
+}
+
 static void writeTiling()
 {
     Queue q({{100, 8, true}, {108, 8, true}, {104, 8, true}, {116, 8, false}, {124, 8, true}});
@@ -713,6 +746,11 @@ TEST(SdQueue, Gaps)
 TEST(SdQueue, RandomGaps)
 {
     randomGaps();
+}
+
+TEST(SdQueue, WriteFenceOrder)
+{
+    writeFenceOrder();
 }
 
 TEST(SdQueue, WriteTiling)
