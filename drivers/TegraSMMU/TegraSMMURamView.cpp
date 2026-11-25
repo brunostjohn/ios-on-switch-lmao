@@ -98,8 +98,8 @@ bool TegraSMMURamView::reserveTables(uint64_t limit)
 {
     using Core = TegraSMMUIdentityCore<TegraSMMURamViewEnv>;
     IOLockLock(lock_);
-    env_.chunkTables = static_cast<uint32_t>(((limit < Core::kRamEnd ? limit : Core::kRamEnd) - Core::kRamBase) /
-                                             Core::kSpan);
+    env_.chunkTables =
+        static_cast<uint32_t>(((limit < Core::kRamEnd ? limit : Core::kRamEnd) - Core::kRamBase) / Core::kSpan);
     const bool made = core_.makeTables(limit);
     env_.chunkTables = TegraSMMURamViewEnv::kChunkTables;
     core_.commit();

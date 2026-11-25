@@ -64,7 +64,7 @@ enum tegra_smmu_register {
     TEGRA_SMMU_HC_ASID = 0x250,       // swgroup "hc" (host1xdmar/host1xr: _0 bits 22/23; host1xw: _1 bit 22)
     // host1xdmar's in-band SWID "hc1" (TRM 18.5.3 client table, 18.11.1.142): one ASID field, disabled at reset.
     TEGRA_SMMU_HC1_ASID = 0xac4,
-    TEGRA_SMMU_APE_ASID = 0xab8,      // swgroup "ape" (aper/apew: TRANSLATION_ENABLE_3 bits 26/27)
+    TEGRA_SMMU_APE_ASID = 0xab8,  // swgroup "ape" (aper/apew: TRANSLATION_ENABLE_3 bits 26/27)
     // The Security Engines' swgroups (L4T tegra210b01-soc-base.dtsi iommus; tegra_smmu_se_swgroups): SE1 in SE and SE1
     // (TRM 18.11.1.140, .143), SE2 in ISP2B (18.11.1.134) and ISP2B1. ISP2B1 is T210B01's: L4T's tegra-swgroup.h
     // "TEGRA_SWGROUP_ISP2B1 53 /* 0x808, SE2 on t210b01 */". The T210 TRM has no MC register at 0x808.
@@ -166,6 +166,7 @@ void tegra_smmu_flush(uint32_t asid);
 // tablesPa + tableBytes), then the ASID's TLB entries in the 4 MiB sections of [iova, iova + iovaBytes). Other ASIDs,
 // the display's isochronous fetches among them, keep their cached translations. TegraSMMUPublish.h calls it.
 void switch_smmu_flush_range(uint32_t asid, uint64_t tablesPa, uint64_t tableBytes, uint64_t iova, uint64_t iovaBytes);
+
 // One page table's part of switch_smmu_flush_tables: the table's 64-byte groups of 16 entries in `groups` (bit g:
 // entries 16g to 16g + 15) and the 4 MiB section at `iova`, the one the table maps.
 struct switch_smmu_table_flush {
@@ -173,6 +174,7 @@ struct switch_smmu_table_flush {
     uint64_t groups;
     uint32_t iova;
 };
+
 // As switch_smmu_flush_range for each table's groups and section, under one hold of the MC lock and with one read-back
 // at the end.
 void switch_smmu_flush_tables(uint32_t asid, const struct switch_smmu_table_flush *tables, uint32_t count);
@@ -220,6 +222,7 @@ struct switch_mc_expected {
     uint32_t taken;                       // the expected errors the interrupt delivered
     uint32_t intstatus, status, address;  // the first of them
 };
+
 void switch_mc_errors_expect(uint32_t client, uint32_t low, uint32_t high);
 // Once the faulting DMA is over: waits up to `ms` for the interrupt to have delivered one and for INTSTATUS to hold no
 // SMMU fault, then ends the expectation. An SMMU fault still latched then panics: the interrupt was lost. Thread

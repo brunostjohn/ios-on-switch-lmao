@@ -503,7 +503,8 @@ void tgm_mem_del_finish(struct tgm_mem *later)
 		nvkm_ltc_invalidate(tgm_gpu.device->ltc);
 		if (TGM_STATS) {
 			__atomic_fetch_add(&tgm_retire_invalidates, 1, __ATOMIC_RELAXED);
-			__atomic_fetch_add(&tgm_retire_invalidate_ns, nvxnu_nanotime() - began, __ATOMIC_RELAXED);
+			__atomic_fetch_add(&tgm_retire_invalidate_ns, nvxnu_nanotime() - began,
+					   __ATOMIC_RELAXED);
 		}
 	}
 	mutex_unlock(&tgm_gpu.lock);

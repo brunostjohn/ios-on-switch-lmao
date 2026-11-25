@@ -44,6 +44,7 @@ public:
     bool holdPages(const uint64_t *pages, uint32_t count);
     // release of each page of `pages` and a commit.
     void releasePages(const uint64_t *pages, uint32_t count);
+
     // body(core) under the view's lock: a batch of TegraSMMUIdentityCore holds and releases and their commit take the
     // lock once.
     template <class Body> void locked(Body &&body)

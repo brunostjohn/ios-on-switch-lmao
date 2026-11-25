@@ -542,7 +542,8 @@ TEST_F(GpuMemSmmuTest, ALargeObjectsDeletionReleasesEveryHoldInOneCommit)
 	ASSERT_EQ(tgm_mem_new(&vm, pages.data(), 2048, &mem), 0);
 	EXPECT_EQ(gHeld.size(), 2048u);
 	tgm_mem_del(&mem);
-	EXPECT_EQ(gReleaseCalls, 1u) << "one view lock and one MC flush for the object, not one per 64 pages";
+	EXPECT_EQ(gReleaseCalls, 1u)
+		<< "one view lock and one MC flush for the object, not one per 64 pages";
 	EXPECT_TRUE(gHeld.empty());
 }
 

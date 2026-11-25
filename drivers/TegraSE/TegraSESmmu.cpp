@@ -12,9 +12,8 @@ constexpr uint32_t kAsid[kEngines] = {TEGRA_SMMU_ASID_SE1, TEGRA_SMMU_ASID_SE2};
 // SE1's clients in the SE swgroup, sesrd and seswr (TRANSLATION_ENABLE_4 bits 0/1, T210 TRM 18.11.1.153). No document
 // on hand names the clients of SE1's second swgroup or of SE2's (T210B01's): their bits are not checked.
 constexpr uint32_t kClients[kEngines][2] = {{1u << 0 | 1u << 1, 0}, {0, 0}};
-constexpr uint32_t kTranslationReg[kEngines][2] = {
-    {TEGRA_SMMU_TRANSLATION_ENABLE_4, TEGRA_SMMU_TRANSLATION_ENABLE_4},
-    {TEGRA_SMMU_TRANSLATION_ENABLE_4, TEGRA_SMMU_TRANSLATION_ENABLE_4}};
+constexpr uint32_t kTranslationReg[kEngines][2] = {{TEGRA_SMMU_TRANSLATION_ENABLE_4, TEGRA_SMMU_TRANSLATION_ENABLE_4},
+                                                   {TEGRA_SMMU_TRANSLATION_ENABLE_4, TEGRA_SMMU_TRANSLATION_ENABLE_4}};
 constexpr uint64_t k4GiB = 1ULL << 32;
 
 struct Owned {

@@ -268,8 +268,9 @@ TEST_F(McErrors, ASecCarveoutViolationPanicsWithItsOwnCapture)
     mc(0x0) = 1u << 13;
     mc(0x67c) = 0x00000080 | 0x16;
     mc(0x680) = 0x80123000;
-    EXPECT_EQ(panicked(), "TegraSMMU: MC error SECERR_SEC: SECERR_SEC: a read by csr_host1xdmar (host1x) (client 0x16) at "
-                          "0x80123000; INTSTATUS 0x2000 ERR_SEC_STATUS 0x96 ERR_SEC_ADR 0x80123000");
+    EXPECT_EQ(panicked(),
+              "TegraSMMU: MC error SECERR_SEC: SECERR_SEC: a read by csr_host1xdmar (host1x) (client 0x16) at "
+              "0x80123000; INTSTATUS 0x2000 ERR_SEC_STATUS 0x96 ERR_SEC_ADR 0x80123000");
     EXPECT_EQ(gReads, (std::vector<uint32_t>{0x0, 0x8, 0xc, 0x67c, 0x680}));
     ASSERT_EQ(gWrites.size(), 1u);
     EXPECT_EQ(gWrites[0], std::make_pair(0x0u, 1u << 13)) << "cleared after every capture was read";
@@ -282,10 +283,11 @@ TEST_F(McErrors, AnSmmuFaultAndAnMtsViolationTogetherNameBoth)
     mc(0xc) = 0x4001d400;
     mc(0x9b0) = 0x00010064;
     mc(0x9b4) = 0x90000000;
-    EXPECT_EQ(panicked(), "TegraSMMU: MC error INVALID_SMMU_PAGE+DECERR_MTS: INVALID_SMMU_PAGE (page readable 1 "
-                          "writable 0 nonsecure 1), a read by csr_vicsrd (VIC) (client 0x6c) at 0x4001d400; DECERR_MTS: "
-                          "a write by csw_sdmmcwa (SDMMC1) (client 0x64) at 0x90000000; INTSTATUS 0x10400 ERR_STATUS "
-                          "0x6a00006c ERR_ADR 0x4001d400 ERR_MTS_STATUS 0x10064 ERR_MTS_ADR 0x90000000");
+    EXPECT_EQ(panicked(),
+              "TegraSMMU: MC error INVALID_SMMU_PAGE+DECERR_MTS: INVALID_SMMU_PAGE (page readable 1 "
+              "writable 0 nonsecure 1), a read by csr_vicsrd (VIC) (client 0x6c) at 0x4001d400; DECERR_MTS: "
+              "a write by csw_sdmmcwa (SDMMC1) (client 0x64) at 0x90000000; INTSTATUS 0x10400 ERR_STATUS "
+              "0x6a00006c ERR_ADR 0x4001d400 ERR_MTS_STATUS 0x10064 ERR_MTS_ADR 0x90000000");
 }
 
 // A write to INTMASK that does not take leaves every confined client's faults unreported: that panics.
@@ -362,7 +364,9 @@ TEST_F(McExpectedFault, TheEndWaitsForTheInterruptOnItsWay)
 {
     switch_mc_errors_expect(kVicRead, kFaultLow, kFaultHigh);
     vicFaultLatched();
-    switch_test_while_blocked = [] { (void)started()->fire(); };
+    switch_test_while_blocked = [] {
+        (void)started()->fire();
+    };
     switch_mc_expected out;
     switch_mc_errors_expect_end(100, &out);
     EXPECT_EQ(switch_test_blocks, 1u);
@@ -375,7 +379,9 @@ TEST_F(McExpectedFault, ASecondFaultLatchedBehindTheFirstIsWaitedForToo)
     vicFaultLatched();
     EXPECT_EQ(panicked(), "");
     vicFaultLatched(kVicRead, kFaultLow + 0x1000);
-    switch_test_while_blocked = [] { (void)started()->fire(); };
+    switch_test_while_blocked = [] {
+        (void)started()->fire();
+    };
     switch_mc_expected out;
     switch_mc_errors_expect_end(100, &out);
     EXPECT_EQ(out.taken, 2u);
@@ -391,8 +397,9 @@ TEST_F(McExpectedFault, ALatchedFaultTheInterruptNeverDeliveredPanicsAsLost)
         switch_mc_errors_expect_end(100, &out);
         ADD_FAILURE() << "no panic";
     } catch (const switch_test_panic &p) {
-        EXPECT_EQ(std::string(p.what()), "TegraSMMU: MC error interrupt (INTID 109) lost: INTSTATUS 0x400 still latched "
-                                         "100 ms after a deliberate SMMU fault, 0 expected errors delivered");
+        EXPECT_EQ(std::string(p.what()),
+                  "TegraSMMU: MC error interrupt (INTID 109) lost: INTSTATUS 0x400 still latched "
+                  "100 ms after a deliberate SMMU fault, 0 expected errors delivered");
     }
     gRegisters.clear();
     switch_mc_errors_expect_end(0, &out);

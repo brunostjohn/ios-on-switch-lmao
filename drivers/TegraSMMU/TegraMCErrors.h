@@ -34,6 +34,7 @@ struct OwnCapture {
     uint32_t bit, status, address, clientMask;
     const char *registers;
 };
+
 constexpr OwnCapture kOwnCaptures[] = {
     {1u << 13, 0x67c, 0x680, 0x7f, "ERR_SEC"},
     {1u << 12, 0x654, 0x658, 0xff, "ERR_VPR"},
@@ -86,7 +87,8 @@ inline bool expected(const Error &e, uint32_t client, uint32_t low, uint32_t hig
            e.address >= low && e.address < high;
 }
 
-inline void append(char *text, size_t size, size_t &used, const char *format, ...) __attribute__((format(printf, 4, 5)));
+inline void append(char *text, size_t size, size_t &used, const char *format, ...)
+    __attribute__((format(printf, 4, 5)));
 
 inline void append(char *text, size_t size, size_t &used, const char *format, ...)
 {
@@ -147,22 +149,23 @@ inline const char *describe(const Error &e, char *text, size_t size)
             snprintf(page, sizeof(page), " (page readable %u writable %u nonsecure %u)", (s >> 27) & 1, (s >> 26) & 1,
                      (s >> 25) & 1);
         }
-        append(text, size, used, "%s%s, a %s by %s (client %#x) at %#llx; ", errorType(s), page, (s >> 16) & 1 ? "write" : "read",
-            client(s & 0xff), s & 0xff, static_cast<unsigned long long>(address));
+        append(text, size, used, "%s%s, a %s by %s (client %#x) at %#llx; ", errorType(s), page,
+               (s >> 16) & 1 ? "write" : "read", client(s & 0xff), s & 0xff, static_cast<unsigned long long>(address));
     }
     if (own) {
         char ownKind[48];
         const uint32_t s = e.ownStatus;
         const uint64_t address = static_cast<uint64_t>((s >> 20) & 3) << 32 | e.ownAddress;
         append(text, size, used, "%s: a %s by %s (client %#x) at %#llx; ", bitNames(own->bit, ownKind, sizeof(ownKind)),
-            (s >> 16) & 1 ? "write" : "read", client(s & own->clientMask), s & own->clientMask,
-            static_cast<unsigned long long>(address));
+               (s >> 16) & 1 ? "write" : "read", client(s & own->clientMask), s & own->clientMask,
+               static_cast<unsigned long long>(address));
     }
     append(text, size, used, "INTSTATUS %#x", e.intstatus);
     if (e.intstatus & kCaptured)
         append(text, size, used, " ERR_STATUS %#x ERR_ADR %#x", e.status, e.address);
     if (own)
-        append(text, size, used, " %s_STATUS %#x %s_ADR %#x", own->registers, e.ownStatus, own->registers, e.ownAddress);
+        append(text, size, used, " %s_STATUS %#x %s_ADR %#x", own->registers, e.ownStatus, own->registers,
+               e.ownAddress);
     return text;
 }
 

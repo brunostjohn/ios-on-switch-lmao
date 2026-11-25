@@ -160,9 +160,9 @@ TEST_F(SmmuIdentity, ANewTableFlushesItsAsidWholeAndAPageChangeOnlyItsEntriesAnd
     ASSERT_TRUE(core.hold(0x91010000ULL, 0x1000));
     ASSERT_TRUE(core.release(0x91001000ULL, 0x1000));
     core.commit();
-    EXPECT_EQ(take(), (std::vector<std::string>{"clean 64", "sync",
-                                                "flush asid 113 table 0x90000000 groups 0x1 section 0x91000000",
-                                                "read back"}))
+    EXPECT_EQ(take(),
+              (std::vector<std::string>{"clean 64", "sync",
+                                        "flush asid 113 table 0x90000000 groups 0x1 section 0x91000000", "read back"}))
         << "the release's group, its atom and its section; the hold in an untouched group needs none";
     ASSERT_TRUE(core.hold(0x91000000ULL, 0x1000));
     core.commit();
@@ -176,9 +176,9 @@ TEST_F(SmmuIdentity, TheHighHalfFlushesItsOwnAsidAndIovas)
     take();
     ASSERT_TRUE(core.release(0x100400000ULL, 0x1000));
     core.commit();
-    EXPECT_EQ(take(), (std::vector<std::string>{"clean 4", "sync",
-                                                "flush asid 112 table 0x90000000 groups 0x1 section 0x400000",
-                                                "read back"}));
+    EXPECT_EQ(take(),
+              (std::vector<std::string>{"clean 4", "sync",
+                                        "flush asid 112 table 0x90000000 groups 0x1 section 0x400000", "read back"}));
 }
 
 // The SD card's view: every table made at setup, so a hold on the I/O path never allocates.
@@ -195,6 +195,7 @@ TEST_F(SmmuIdentity, MadeTablesLetEveryHoldInRamGoWithoutAnAllocation)
         EXPECT_NE(event, "table");
     EXPECT_EQ(env.tables.size(), 1024u) << "4 GiB of RAM in 4 MiB tables";
 }
+
 TEST_F(SmmuIdentity, TablesMadeBelow4GiBLeaveTheHighHalfToBeMadeOnDemand)
 {
     ASSERT_TRUE(core.makeTables(1ULL << 32));
@@ -203,6 +204,7 @@ TEST_F(SmmuIdentity, TablesMadeBelow4GiBLeaveTheHighHalfToBeMadeOnDemand)
     EXPECT_TRUE(core.hold(0xfffff000ULL, 0x1000));
     EXPECT_FALSE(core.hold(0x100000000ULL, 0x1000)) << "above 4 GiB a table is still made on demand";
 }
+
 // A page held in a group with no held page at the last commit is in neither the PTC nor the TLB: its commit is a cache
 // clean alone. A hold next to a held page, which the SMMU may have fetched with its group, flushes that group.
 TEST_F(SmmuIdentity, AHoldInAnUntouchedGroupFlushesNothingAndOneNextToAHeldPageFlushesItsGroup)
@@ -215,9 +217,9 @@ TEST_F(SmmuIdentity, AHoldInAnUntouchedGroupFlushesNothingAndOneNextToAHeldPageF
     EXPECT_EQ(take(), (std::vector<std::string>{"clean 4", "sync"}));
     ASSERT_TRUE(core.hold(0x9000f000ULL, 0x1000));
     core.commit();
-    EXPECT_EQ(take(), (std::vector<std::string>{"clean 4", "sync",
-                                                "flush asid 113 table 0x90040000 groups 0x1 section 0x90000000",
-                                                "read back"}))
+    EXPECT_EQ(take(),
+              (std::vector<std::string>{"clean 4", "sync",
+                                        "flush asid 113 table 0x90040000 groups 0x1 section 0x90000000", "read back"}))
         << "the same 16-page group";
     ASSERT_TRUE(core.hold(0x90010000ULL, 0x1000));
     core.commit();
@@ -255,9 +257,9 @@ TEST_F(SmmuIdentity, ReleasesInTwoGroupsOfATableFlushBothWithOneSectionWrite)
     ASSERT_TRUE(core.release(0x90000000ULL, 0x1000));
     ASSERT_TRUE(core.release(0x90030000ULL, 0x1000));
     core.commit();
-    EXPECT_EQ(take(), (std::vector<std::string>{"clean 196", "sync",
-                                                "flush asid 113 table 0x90040000 groups 0x9 section 0x90000000",
-                                                "read back"}));
+    EXPECT_EQ(take(),
+              (std::vector<std::string>{"clean 196", "sync",
+                                        "flush asid 113 table 0x90040000 groups 0x9 section 0x90000000", "read back"}));
 }
 
 TEST_F(SmmuIdentity, OneCommitsReleasesAcrossTablesShareOneReadBack)
@@ -273,7 +275,9 @@ TEST_F(SmmuIdentity, OneCommitsReleasesAcrossTablesShareOneReadBack)
     const auto events = take();
     EXPECT_EQ(std::count(events.begin(), events.end(), std::string("read back")), 1);
     EXPECT_EQ(std::count_if(events.begin(), events.end(),
-                            [](const std::string &e) { return e.rfind("flush asid 113 table", 0) == 0; }),
+                            [](const std::string &e) {
+                                return e.rfind("flush asid 113 table", 0) == 0;
+                            }),
               3);
 }
 }  // namespace

@@ -1333,7 +1333,8 @@ bool confine(Engine &e, unsigned which)
     case TEGRA_SE_SMMU_ATTACHED:
         IOLog("TegraSE: %s DMA through the SMMU (MC %#x and %#x)%s\n", e.name, tegra_smmu_se_swgroups[which][0],
               tegra_smmu_se_swgroups[which][1],
-              kMemif[which] ? ": it reaches its buffers and each operation's pages" : "; its AHB DMA is not translatable");
+              kMemif[which] ? ": it reaches its buffers and each operation's pages"
+                            : "; its AHB DMA is not translatable");
         return true;
     case TEGRA_SE_SMMU_UNTRANSLATED:
         IOLog("TegraSE: %s DMA not behind the SMMU (%s): it can reach all of RAM below 4 GiB\n", e.name, why);

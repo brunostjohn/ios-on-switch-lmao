@@ -20,6 +20,7 @@ constexpr uint32_t kHostReads = 1u << 22 | 1u << 23, kHostWrites = 1u << 22, kCh
 struct Swgroup {
     uint32_t asidReg, translationReg, bits;
 };
+
 constexpr Swgroup kSwgroups[] = {
     {TEGRA_SMMU_HC_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_0, kHostReads},
     {TEGRA_SMMU_HC_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_1, kHostWrites},

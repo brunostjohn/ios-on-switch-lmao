@@ -92,10 +92,16 @@ def frame(template: str, at: float, origin_ticks: int, **kw: int) -> Rec:
 class GpuTest(unittest.TestCase):
     def test_the_smmu_line_gives_each_windows_hit_rates_and_retirement_invalidates(self):
         recs = [
-            rec('tegra-gm20b: smmu counters on from here (TLB_CONFIG 0xb0000030 PTC_CONFIG 0xa8000f3f); retirement L2 '
-                'invalidates 0 for 0 objects, 0 us CPU', 1.0),
-            rec('tegra-gm20b: smmu tlb 900 hits 100 misses (90.0% hit), ptc 95 hits 5 misses (95.0% hit); '
-                'retirement L2 invalidates 12 for 30 objects, 2400 us CPU', 6.0),
+            rec(
+                'tegra-gm20b: smmu counters on from here (TLB_CONFIG 0xb0000030 PTC_CONFIG 0xa8000f3f); retirement L2 '
+                'invalidates 0 for 0 objects, 0 us CPU',
+                1.0,
+            ),
+            rec(
+                'tegra-gm20b: smmu tlb 900 hits 100 misses (90.0% hit), ptc 95 hits 5 misses (95.0% hit); '
+                'retirement L2 invalidates 12 for 30 objects, 2400 us CPU',
+                6.0,
+            ),
         ]
         g = gpu.read(recs)
         self.assertEqual(g.smmu, [(900, 100, 95, 5)])

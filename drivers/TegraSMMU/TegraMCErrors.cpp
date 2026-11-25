@@ -85,6 +85,7 @@ struct Expected {
     uint32_t taken;
     switch_mc::Error first;
 };
+
 Expected gExpected;
 bool gTakenExpected;  // the filter's, for the action: gTaken was expected
 

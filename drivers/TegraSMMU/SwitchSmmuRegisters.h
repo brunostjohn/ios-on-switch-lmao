@@ -74,8 +74,8 @@ void flushTables(Registers &io, uint32_t asid, const Table *tables, uint32_t cou
     io.write(kPtcFlushHi, static_cast<uint32_t>(tables[0].pa >> 32) & 3);
     for (uint32_t i = 0; i < count; ++i) {
         for (uint64_t groups = tables[i].groups; groups; groups &= groups - 1) {
-            const uint32_t at =
-                static_cast<uint32_t>(tables[i].pa) + static_cast<uint32_t>(__builtin_ctzll(groups)) * kPtcSixteenEntries;
+            const uint32_t at = static_cast<uint32_t>(tables[i].pa) +
+                                static_cast<uint32_t>(__builtin_ctzll(groups)) * kPtcSixteenEntries;
             io.write(kPtcFlush, at | kPtcNoWaitIdle | kPtcFlushAddress);
             io.write(kPtcFlush, (at + kPtcGroup) | kPtcNoWaitIdle | kPtcFlushAddress);
         }
