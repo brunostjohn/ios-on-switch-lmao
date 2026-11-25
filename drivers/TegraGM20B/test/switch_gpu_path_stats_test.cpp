@@ -151,7 +151,25 @@ TEST(PathStats, AbiReplyLineHoldsEveryCounterWithoutTruncation)
 	EXPECT_LT(text.size(), sizeof(reply.line) - 1);
 	EXPECT_NE(text.find(" internal_jobs="), std::string::npos) << text;
 	EXPECT_NE(text.find(" external_jobs="), std::string::npos) << text;
+	EXPECT_NE(text.find(" volatile_jobs="), std::string::npos) << text;
 	EXPECT_NE(text.find(" ranged_uses="), std::string::npos) << text;
 	EXPECT_NE(text.find(" promise_waits="), std::string::npos) << text;
 	EXPECT_NE(text.find(" preempt_ge4000_us="), std::string::npos) << text;
+}
+
+// HW Test's gpu.path.job_visibility reads a Shared buffer back through a Volatile job and a no-copy one through an
+// External job: each kind of job has its own count
+TEST(PathStats, EachJobCountsUnderItsVisibility)
+{
+	pid = 5151;
+	switch_gpu_path_job(SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT, 0, 0, 0);
+	switch_gpu_path_job(SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT | SWITCH_GPU_SUBMIT_VOLATILE_VISIBILITY, 0, 0, 0);
+	switch_gpu_path_job(SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT | SWITCH_GPU_SUBMIT_VOLATILE_VISIBILITY, 0, 0, 0);
+	switch_gpu_path_job(SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT | SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY |
+				    SWITCH_GPU_SUBMIT_VOLATILE_VISIBILITY,
+			    0, 0, 0);
+	const std::string counts = line();
+	EXPECT_NE(counts.find(" internal_jobs=1 "), std::string::npos) << counts;
+	EXPECT_NE(counts.find(" volatile_jobs=2"), std::string::npos) << counts;
+	EXPECT_NE(counts.find(" external_jobs=1 "), std::string::npos) << counts;
 }
