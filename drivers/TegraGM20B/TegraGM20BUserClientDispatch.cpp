@@ -434,6 +434,8 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 #if TGM_STATS
 		else if (op == TegraGM20BPathsOpTargetPeaks)
 			tgm_target_peaks_line(reply->line, sizeof(reply->line));
+		else if (op == TegraGM20BPathsOpZbc)
+			tgm_zbc_line(reply->line, sizeof(reply->line));
 		else if (op == TegraGM20BPathsOpForeignWaits) {
 			struct tgm_foreign_waits totals = {};
 			tgm_foreign_waits_totals(&totals);

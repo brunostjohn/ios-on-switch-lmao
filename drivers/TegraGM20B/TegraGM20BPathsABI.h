@@ -29,6 +29,9 @@ enum {
 	/* "foreign_jobs=N foreign_fences=N foreign_promises=N foreign_events=N foreign_host1x=N": monotonic compositor
 	 * foreign-wait totals since boot (TGM_STATS) */
 	TegraGM20BPathsOpForeignWaits = 6,
+	/* "colour=U/N depth=U/N c=FF:DS0,DS1,DS2,DS3;... d=FF:DS;...": the GPU's ZBC tables, every process's: entries held of
+	 * the slots, then each held entry's NV9097 format and SET_*_CLEAR_VALUE words in hex (TegraGM20BABI.h method 19) */
+	TegraGM20BPathsOpZbc = 7,
 };
 
 struct TegraGM20BAbiPaths {

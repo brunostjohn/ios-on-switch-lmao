@@ -188,6 +188,8 @@ void switch_gpu_mapping_describe(const struct switch_gpu_mapping *mapping, char 
 /* A zero-bandwidth-clear entry (ds, l2 as TegraGM20BAbiZbc has them): its table index, or -EINVAL (format), -ENOSPC
  * (table full), -ENODEV (no compression). */
 int tgm_zbc_add(int depth, uint32_t format, const uint32_t ds[4], const uint32_t l2[4]);
+/* The ZBC tables' occupancy and entries as TegraGM20BPathsOpZbc's line (debug kernels). */
+void tgm_zbc_line(char *line, size_t size);
 /* Zcull's layout (TegraGM20BZcullABI.h method 'ZC'), or -EOPNOTSUPP where the GPU reported no zcull RAM. */
 struct TegraGM20BAbiZcullInfo;
 int tgm_zcull_info(struct TegraGM20BAbiZcullInfo *out);
