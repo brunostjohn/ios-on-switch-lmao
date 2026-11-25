@@ -255,6 +255,18 @@ class DumpTest(unittest.TestCase):
             text = '\n'.join(dumps.summary(p, p[:-7] + '.kcdata', None, {}))
         self.assertIn('fileproviderd[31] com.apple.fp.sync (777) 47 ms', text)
 
+    def test_the_sd_queues_picks_say_who_went_first_and_how_long_the_head_waited(self):
+        pick = ktrace.SD_PICK
+        events = [
+            event(10, pick, (100, 64 | (2 << 32), 3 | (40 << 16), 900), 0),
+            event(20, pick, (900, 8 | (1 << 32), 0x100 | (39 << 16), 12_500), 0),
+            event(30, pick, (500, 16 | (1 << 32), 1 | 0x200 | (3 << 16), 40), 0),
+        ]
+        ring = ktrace.parse(pack_ring(events))
+        (line,) = dumps.sd_lines(ring, 0, tick(100))
+        self.assertIn('SD queue: 3 picks (read background 1, read high 1, write default 1), 1 passed older', line)
+        self.assertIn('up to 40 queued, the head waiting up to 12.5 ms', line)
+
     def test_a_stack_handoff_is_a_context_switch(self):
         """thread_invoke's handoff path logs MACH_STACK_HANDOFF, not MACH_SCHED (hitch-shots-codex, 25 Nov)."""
         events = [

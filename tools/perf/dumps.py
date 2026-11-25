@@ -306,6 +306,19 @@ def wait_lines(ring: ktrace.Ring, n: Names, lo: int, hi: int) -> list[str]:
     return ['GPU waits behind unsettled work: ' + ', '.join(f'{k} {v}' for k, v in by.most_common(TOP))]
 
 
+def sd_lines(ring: ktrace.Ring, lo: int, hi: int) -> list[str]:
+    """Return the SD queue's picks in [lo, hi]: by class and kind, how many passed older requests, how deep it ran."""
+    picks = [p for p in ktrace.sd_picks(ring.events) if lo <= p.ts <= hi]
+    if not picks:
+        return []
+    by = Counter(f'{"write" if p.write else "read"} {ktrace.SD_CLASSES[p.klass & 3]}' for p in picks)
+    return [
+        f'SD queue: {len(picks)} picks (' + ', '.join(f'{k} {v}' for k, v in sorted(by.items())) + '), '
+        f'{sum(p.passed for p in picks)} passed older requests; up to {max(p.queued for p in picks)} queued, the head '
+        f'waiting up to {max(p.head_waited_us for p in picks) / 1000:.1f} ms'
+    ]
+
+
 def pagein_lines(ring: ktrace.Ring, n: Names, lo: int, hi: int) -> list[str]:
     disk_ios, fs_pageins = ktrace.pageins(ring.events)
     dk_in = [io for io in disk_ios if lo <= io.ts <= hi and (io.paging or io.read)]
@@ -458,6 +471,7 @@ def summary(
         out += ['  ' + line for line in stacks(ring, n, tid, uuid_paths, syms)]
         out += ['  ' + line for line in fault_lines(ring, n, tid, lo, at)]
     out += ['  ' + line for line in pagein_lines(ring, n, lo, at)]
+    out += ['  ' + line for line in sd_lines(ring, lo, at)]
     out += ['  ' + line for line in unnest_lines(ring, n, lo, at)]
     out += ['  ' + line for line in gpu(ring, n, at - int(GPU_BEFORE_S * TICK_HZ), at)]
     out.append('  ' + frame_points(ring, at - int(FRAME_BEFORE_S * TICK_HZ), at))

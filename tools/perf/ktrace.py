@@ -62,6 +62,8 @@ PERF_TI_DATA = code(37, 1, 1)
 PERF_CS_KDATA, PERF_CS_UDATA = code(37, 2, 3), code(37, 2, 4)
 PERF_CS_KHDR, PERF_CS_UHDR = code(37, 2, 5), code(37, 2, 6)
 TRIGGER, DUMP, GPU_JOB, GPU_WAIT = code(6, 18, 0x3E0), code(6, 18, 0x3E1), code(6, 18, 0x3E8), code(6, 18, 0x3E9)
+SD_PICK = code(6, 18, 0x3D8)  # NativeSwitchBlock's queue picks
+SD_CLASSES = ('high', 'default', 'low', 'background')
 ENGINES = {1: 'GM20B', 2: 'copy engine', 3: 'VIC', 4: 'NVDEC', 5: 'display', 6: 'NVENC', 7: 'promise', 8: 'NVJPG'}
 SUBMIT = code(6, 18, 0x3F1)
 FRAME_POINTS = {
@@ -352,6 +354,40 @@ def submissions(events: list[Event]) -> list[Submission]:
             out.append(Submission(j.channel, first.seqno, j.seqno, start, j.end_ns, j.ts, tid, j.compositor, stale))
         if j.end_ns:
             ended[j.channel] = j.end_ns
+    return out
+
+
+@dataclass(frozen=True)
+class SdPick:
+    ts: int
+    lba: int
+    sectors: int
+    requests: int
+    klass: int
+    passed: bool
+    write: bool
+    queued: int
+    head_waited_us: int
+
+
+def sd_picks(events: list[Event]) -> list[SdPick]:
+    out = []
+    for e in events:
+        if e.id == SD_PICK:
+            a2, a3 = e.args[1], e.args[2]
+            out.append(
+                SdPick(
+                    e.ts,
+                    e.args[0],
+                    a2 & 0xFFFFFFFF,
+                    a2 >> 32,
+                    a3 & 0xFF,
+                    bool(a3 & 0x100),
+                    bool(a3 & 0x200),
+                    a3 >> 16,
+                    e.args[3],
+                )
+            )
     return out
 
 
