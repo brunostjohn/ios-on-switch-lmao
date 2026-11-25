@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.deploy import system_update
 from tools.install import card as cards
@@ -65,6 +66,7 @@ class SystemUpdateTest(unittest.TestCase):
         system_update.write(self.preboot, update, self.built, Log())
         after = tree(self.preboot)
         self.assertEqual(after.pop('Switch-Staging/141-10410-227.dmg'), self.image.read_bytes())
+        self.assertEqual(after.pop('Switch-Staging/141-10410-227.dmg.sha256').decode().strip(), self.built.sha256)
         before.pop('Switch-Staging/141-10410-227.dmg')
         self.assertEqual(after, before)
         self.assertEqual((self.preboot / update.relative).stat().st_mode & 0o777, 0o644)
@@ -72,6 +74,26 @@ class SystemUpdateTest(unittest.TestCase):
     def test_the_same_image_is_not_written(self) -> None:
         (self.preboot / 'Switch-Staging/141-10410-227.dmg').write_bytes(self.image.read_bytes())
         self.assertTrue(system_update.plan(self.preboot, SPEC, self.built, ROOM, Log()).same)
+
+    def test_a_recorded_image_is_known_without_reading_it_back(self) -> None:
+        staged = self.preboot / 'Switch-Staging/141-10410-227.dmg'
+        staged.write_bytes(self.image.read_bytes())
+        (staged.parent / (staged.name + '.sha256')).write_text(self.built.sha256 + '\n')
+        with mock.patch.object(system_update.hashing, 'sha256_file', side_effect=AssertionError('read back')):
+            update = system_update.plan(self.preboot, SPEC, self.built, ROOM, Log())
+        self.assertTrue(update.same and update.recorded)
+
+    def test_update_writes_only_a_different_image_and_records_one_it_had_to_compare(self) -> None:
+        staged = self.preboot / 'Switch-Staging/141-10410-227.dmg'
+        record = staged.parent / (staged.name + '.sha256')
+        staged.write_bytes(self.image.read_bytes())
+        system_update.update(self.preboot, SPEC, self.built, ROOM, Log())
+        self.assertEqual(record.read_text().strip(), self.built.sha256)
+        record.write_text('0' * 64 + '\n')
+        staged.write_bytes(b'o' * 12288)
+        system_update.update(self.preboot, SPEC, self.built, ROOM, Log())
+        self.assertEqual(staged.read_bytes(), self.image.read_bytes())
+        self.assertEqual(record.read_text().strip(), self.built.sha256)
 
     def test_a_same_sized_other_image_is_replaced(self) -> None:
         (self.preboot / 'Switch-Staging/141-10410-227.dmg').write_bytes(b'o' * 12288)

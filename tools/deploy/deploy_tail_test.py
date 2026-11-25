@@ -33,13 +33,13 @@ class DeployTailTest(unittest.TestCase):
 
         return mock.MagicMock(side_effect=run)
 
-    def deploy(self, **failing: Exception) -> tuple[int, list[str]]:
+    def deploy(self, *extra: str, **failing: Exception) -> tuple[int, list[str]]:
         """Run main() against a card of mocks; `failing` names the steps that raise. Return its status and log lines."""
         card, fat = mock.MagicMock(disk='disk9'), mock.MagicMock(identifier='disk9s1')
         spec = {'volumes': {'preboot': {'uuid': 'P'}, 'system': {'uuid': 'S'}, 'data': {'uuid': 'D'}}}
         log = self.root / 'deploy.log'
-        argv = ['disk9', '--yes', '--confirm', 'disk9', '--boot-package', 'p', '--spec', 's', '--log', str(log)]
-        steps = ('remove_stale_logging_profiles', '_stage_gpu', '_eject')
+        argv = ['disk9', '--yes', '--confirm', 'disk9', '--boot-package', 'p', '--spec', 's', '--log', str(log), *extra]
+        steps = ('remove_stale_logging_profiles', '_stage_gpu', '_update_system_cryptex', '_eject')
         with contextlib.ExitStack() as stack:
             for name in steps:
                 stack.enter_context(mock.patch.object(deploy, name, self.step(name, failing.get(name))))
@@ -65,6 +65,21 @@ class DeployTailTest(unittest.TestCase):
             stack.enter_context(mock.patch.object(deploy.system_apps, 'register'))
             status = deploy.main(argv)
         return status, [line.split(' ', 1)[1] for line in log.read_text().splitlines()]
+
+    def test_ios_27s_system_cryptex_follows_the_boot_entry_and_a_failure_stops_the_deploy(self):
+        status, _ = self.deploy('--system-image', 'image')
+        self.assertEqual(status, 0)
+        self.assertEqual(self.order[-2:], ['_update_system_cryptex', '_eject'])
+        self.order.clear()
+        status, lines = self.deploy('--system-image', 'image', _update_system_cryptex=deploy.host.HostError('no room'))
+        self.assertEqual(status, 1)
+        self.assertEqual(lines[-1], 'FAILED: no room')
+        self.assertNotIn('_eject', self.order)
+
+    def test_ios_17_never_touches_the_system_cryptex(self):
+        status, _ = self.deploy()
+        self.assertEqual(status, 0)
+        self.assertNotIn('_update_system_cryptex', self.order)
 
     def test_a_refused_icon_cache_still_ejects_and_fails_the_deploy(self):
         error = denied('containers/Shared/SystemGroup/systemgroup.com.apple.lsd.iconscache/Library')

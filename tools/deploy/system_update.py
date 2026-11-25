@@ -13,6 +13,11 @@ The kernel trusts the image's translated binaries through the boot package's tru
 pinned (ipsw/pretranslated/<kind>). So the tool refuses unless the translation matches those pins and the card's
 boot entry (what //deploy:sd writes on the FAT: switchroot/ios/bl31.bin, bl33.bin, bootloader/ini/ios.ini) is this
 build's, byte for byte. It also refuses iOS 17, whose cryptexes are Apple's own images, unchanged since the install.
+//deploy:sd runs the same plan and write (`update`) after it writes the boot entry, so a deploy never leaves the card's
+cryptex behind its boot package; this tool is for the cryptex alone.
+
+Beside the image goes <image>.sha256, the image's sha256 as written, so the next run knows the card's image without
+reading its gigabytes back. Without it the image is hashed once, when its size matches this build's.
 """
 
 import argparse
@@ -33,6 +38,7 @@ ROLE = 'system_cryptex'
 TRUSTED = (ROLE + '.trustcache', 'a64x-cache-pretranslated.bin')
 # The old image stays until the new one is renamed over it: room for both, and some to spare.
 SPARE_BYTES = 1 << 30
+RECORD = '.sha256'
 
 
 @dataclass
@@ -45,12 +51,17 @@ class Image:
 
 @dataclass
 class Update:
-    """The one write: the staged image on Preboot, and what the card holds there now."""
+    """The one write: the staged image on Preboot, what the card holds there now, and whether its record says so."""
 
     relative: str
     size: int
     card_size: int
     same: bool
+    recorded: bool = False
+
+
+def _record(target: Path) -> Path:
+    return target.with_name(target.name + RECORD)
 
 
 def check_translation(trusted: list[Path], pins: dict[str, str]) -> None:
@@ -85,8 +96,10 @@ def plan(preboot_root: Path, spec: dict, image: Image, free_bytes: int, log: hos
     if not target.is_file():
         raise cards.RefusedError(f'Preboot has no {path}: install the image first')
     size, card_size = image.path.stat().st_size, target.stat().st_size
-    same = size == card_size
-    if same:
+    record = _record(target)
+    recorded = size == card_size and record.is_file() and record.read_text().strip() == image.sha256
+    same = recorded or size == card_size
+    if same and not recorded:
         with progress.step(f'preboot: comparing {relative} with this build', size):
             same = hashing.sha256_file(target, progress.advance) == image.sha256
     needed = size + SPARE_BYTES
@@ -97,7 +110,12 @@ def plan(preboot_root: Path, spec: dict, image: Image, free_bytes: int, log: hos
         )
     state = 'unchanged' if same else 'to replace'
     log(f'preboot: {relative} {state} (this build {size} bytes, the card {card_size} bytes)')
-    return Update(relative, size, card_size, same)
+    return Update(relative, size, card_size, same, recorded)
+
+
+def remember(preboot_root: Path, update: Update, image: Image) -> None:
+    """Record the image the card holds, once a comparison or a write has shown it to be this build's."""
+    files.write_text(_record(Path(preboot_root) / update.relative), image.sha256 + '\n', sync=True)
 
 
 def write(preboot_root: Path, update: Update, image: Image, log: host.Log) -> None:
@@ -109,7 +127,17 @@ def write(preboot_root: Path, update: Update, image: Image, log: host.Log) -> No
     ):
         host.copy_file_parallel(image.path, partial)
         partial.chmod(0o644)
+    remember(preboot_root, update, image)
     log(f'preboot: {update.relative} replaced ({update.size} bytes)')
+
+
+def update(preboot_root: Path, spec: dict, image: Image, free_bytes: int, log: host.Log) -> None:
+    """Make the card's System cryptex this build's (Preboot mounted writable), writing only when it differs."""
+    planned = plan(preboot_root, spec, image, free_bytes, log)
+    if not planned.same:
+        write(preboot_root, planned, image, log)
+    elif not planned.recorded:
+        remember(preboot_root, planned, image)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -152,7 +180,7 @@ def _checked_card(args: argparse.Namespace, spec: dict) -> tuple[cards.Card, obj
     return card, fat, target, preboot
 
 
-def _free_bytes(target: object) -> int:
+def free_bytes(target: object) -> int:
     container = host.container_on(target.identifier) or {}
     return int(container.get('CapacityFree', 0))
 
@@ -180,9 +208,11 @@ def main(argv: list[str] | None = None) -> int:
         with cards.mounted(fat.identifier, log, read_only=True) as fat_root:
             check_boot_entry(fat_root, Path(args.boot_package), log)
         with cards.mounted(preboot, log, read_only=not args.yes) as preboot_root:
-            update = plan(preboot_root, spec, image, _free_bytes(target), log)
+            update = plan(preboot_root, spec, image, free_bytes(target), log)
             if update.same:
                 log("nothing to write: the card holds this build's System cryptex")
+                if args.yes and not update.recorded:
+                    remember(preboot_root, update, image)
             elif not args.yes:
                 log(f'dry run: would write {update.size} bytes to Preboot {preboot} (add --yes)')
                 return 0

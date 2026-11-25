@@ -58,6 +58,10 @@ py_binary(
         "//ipsw:ios27": [
             "--pretranslated-trust=$(rlocationpath //ipsw:pretranslated_os_trust)",
             "--pretranslated-updates=$(rlocationpath //install:pretranslated_updates)",
+            "--pretranslated-pins=$(rlocationpath //install:pretranslated_pins)",
+            "--system-image=$(rlocationpath //install:translated_system_cryptex)",
+            "--system-trusted=$(rlocationpath :system_cryptex_trusted/system_cryptex.trustcache)",
+            "--system-trusted=$(rlocationpath :system_cryptex_trusted/a64x-cache-pretranslated.bin)",
         ],
         "//conditions:default": [],
     }),
@@ -71,7 +75,11 @@ py_binary(
         "@xnu_base//:tools/lldbmacros/kcdata.py",
     ] + select({
         "//ipsw:ios27": [
+            ":system_cryptex_trusted/a64x-cache-pretranslated.bin",
+            ":system_cryptex_trusted/system_cryptex.trustcache",
+            "//install:pretranslated_pins",
             "//install:pretranslated_updates",
+            "//install:translated_system_cryptex",
             "//ipsw:pretranslated_os_trust",
         ],
         "//conditions:default": [],
@@ -79,7 +87,7 @@ py_binary(
     main = "//tools/deploy:deploy.py",
     tags = ["manual"],
     deps = [
-        "//tools/deploy:lib",
+        "//tools/deploy",
         "@rules_python//python/runfiles",
     ],
 )
@@ -154,7 +162,7 @@ py_binary(
     main = "//tools/deploy:system_update.py",
     tags = ["manual"],
     deps = [
-        "//tools/deploy:system_update",
+        "//tools/deploy",
         "@rules_python//python/runfiles",
     ],
 )

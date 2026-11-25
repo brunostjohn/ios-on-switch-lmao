@@ -29,6 +29,9 @@ Steps:
                    if a card still has it; and stages hekate's "Dump Joy-Con BT" (the FAT's switchroot/joycon_mac.ini,
                    only read) as <Data>/Switch/bluetooth/{host-address, joycon-pairing.plist}, removed when the FAT has
                    none (joycon_pairing.py; --no-joycon-pairing skips it)
+  3a cryptex       iOS 27: the System cryptex on Preboot := this build's translation (system_update.py, as
+                   //deploy:system), after the boot entry whose trust modules cover it; written only when the card's
+                   differs, which <image>.sha256 beside it says without reading the image back
   4 GPU bundle     <Data>/ngpu/addons/TegraGM20BMetal.{bundle,seed,pack} from --//deploy:gpu_bundle, via the
                    plugin's stager, which copies only the files whose sha256 the card does not already hold and
                    reads nothing more when the card's list matches the build (its CDHashes must be in the same
@@ -71,6 +74,7 @@ from tools.deploy import (
     poster_snapshots,
     pull_logs,
     system_apps,
+    system_update,
 )
 from tools.install import (
     bootstrap,
@@ -170,6 +174,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         '--pretranslated-updates', help="iOS 27: this build's translated updates (//install:pretranslated_updates)"
     )
+    parser.add_argument('--pretranslated-pins', help='iOS 27: {file name: sha256} the boot package carries')
+    parser.add_argument(
+        '--system-image', help="iOS 27: this build's System cryptex (//install:translated_system_cryptex)"
+    )
+    parser.add_argument('--system-trusted', action='append', default=[], help=' and '.join(system_update.TRUSTED))
     parser.add_argument('--gpu-bundle')
     parser.add_argument('--stager')
     parser.add_argument('--kcdata')
@@ -193,6 +202,9 @@ def _checked(args: argparse.Namespace, log: host.Log) -> tuple[cards.Card, dict,
     if not data:
         raise cards.RefusedError(f'{card.disk}: no iPad Data volume {data_uuid}')
     check_kind(card, args.ipsw)
+    if args.system_image:
+        pins = json.loads(Path(args.pretranslated_pins).read_text())
+        system_update.check_translation([Path(path) for path in args.system_trusted], pins)
     args.pretranslated_wanted = None
     if args.pretranslated_trust:
         with cards.mounted(data, log, read_only=True) as data_root:
@@ -218,6 +230,8 @@ def _plan(args: argparse.Namespace, changes: list, removed: list, pairing: dict 
     if not args.no_joycon_pairing:
         controllers = f'stage {len(pairing["controllers"])} controller(s) for host {pairing["host"]}' if pairing else ''
         steps.append('Joy-Con pairing: ' + (controllers or 'remove any staged dump'))
+    if args.system_image:
+        steps.append("System cryptex: this build's, written only where the card's differs")
     steps.append('remove the GPU bundle' if args.remove_gpu else 'GPU bundle: stage what changed')
     steps.append('icon cache: name the GPU build, so the next boot lets IconServices re-render where it changed')
     steps += [f'AWDL {args.awdl} (<Data>/Switch/awdl-enable)'] if args.awdl else []
@@ -370,6 +384,17 @@ def _write(
     return steps.not_done
 
 
+def _update_system_cryptex(
+    args: argparse.Namespace, spec: dict, target: object, preboot: str | None, log: host.Log
+) -> None:
+    """After the boot entry: the card's System cryptex as this build translated it, or the deploy fails."""
+    if not preboot:
+        raise host.HostError("no Preboot volume: the card's System cryptex was not brought to this build")
+    image = system_update.Image(Path(args.system_image), Path(args.system_image + '.sha256').read_text().strip())
+    with cards.mounted(preboot, log) as preboot_root:
+        system_update.update(preboot_root, spec, image, system_update.free_bytes(target), log)
+
+
 def _eject(card: cards.Card, target: object, log: host.Log) -> None:
     container = host.container_on(target.identifier)
     if container:
@@ -386,11 +411,14 @@ def main(argv: list[str] | None = None) -> int:
         'ipsw',
         'pretranslated_trust',
         'pretranslated_updates',
+        'pretranslated_pins',
+        'system_image',
         'gpu_bundle',
         'stager',
         'kcdata',
     ):
         setattr(args, name, paths.located(getattr(args, name)))
+    args.system_trusted = [paths.located(path) for path in args.system_trusted]
     log = host.Log(args.log or paths.run_log('deploy', 'switch-ios-install'))
     try:
         with progress.step(f'deploy: checking {args.disk}', unit=None):
@@ -415,6 +443,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.rerun_migration = True
             with cards.mounted(data, log) as data_root:
                 not_done = _write(args, data_root, Volumes(fat.identifier, system), pairing, log)
+            if args.system_image:
+                _update_system_cryptex(args, spec, target, preboot, log)
             if not args.no_eject:
                 _eject(card, target, log)
         if not_done:
