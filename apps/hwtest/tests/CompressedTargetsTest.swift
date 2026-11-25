@@ -42,6 +42,8 @@ struct CompressedTargetsTest: HWTest {
     }
 
     static let exactCodes = MTLClearColor(red: 51.0 / 255, green: 102.0 / 255, blue: 204.0 / 255, alpha: 1)
+    /// The RGBA16Float entry the cases and the shadow cases share; its words are an R32 clear's (CompressedR32Arms)
+    static let halfClear = MTLClearColor(red: 0.75, green: 0, blue: 0, alpha: 0)
 
     static let cases = [
         Case(
@@ -53,8 +55,8 @@ struct CompressedTargetsTest: HWTest {
             clearDepth: 0.75
         ),
         Case(
-            label: "ms4_f16", colour: .rgba16Float, depth: .depth16Unorm, samples: 4,
-            clear: MTLClearColor(red: 0.75, green: 0, blue: 0, alpha: 0), clearDepth: 0.75
+            label: "ms4_f16", colour: .rgba16Float, depth: .depth16Unorm, samples: 4, clear: halfClear,
+            clearDepth: 0.75
         ),
         Case(
             label: "ms4_f16_bgra8_floats", colour: .rgba16Float, depth: .depth16Unorm, samples: 4, clear: exactCodes,
