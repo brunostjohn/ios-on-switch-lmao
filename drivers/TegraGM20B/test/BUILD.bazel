@@ -1941,6 +1941,27 @@ host_shims(
     stubs = "switch_gpu_submit_gate_stubs.h",
 )
 
+host_shims(
+    name = "submit_gate_push_kernel",
+    headers = [
+        "IOKit/IOLib.h",
+        "IOKit/IOLocks.h",
+        "kern/thread.h",
+    ],
+    stubs = "switch_gpu_submit_gate_push_stubs.h",
+)
+
+host_test(
+    name = "switch_gpu_submit_gate_push_test",
+    srcs = [
+        "switch_gpu_submit_gate_push_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuInheritorSleep.h",
+        "//drivers/TegraGM20B:SwitchGpuSubmitGate.h",
+    ],
+    defines = ["KERNEL"],
+    deps = [":submit_gate_push_kernel"],
+)
+
 host_test(
     name = "switch_gpu_submit_gate_test",
     srcs = [
