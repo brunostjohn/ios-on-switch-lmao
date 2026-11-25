@@ -19,9 +19,9 @@
 //     no interrupt of its own; TegraSecurityEngine.cpp does the same.
 //   - AES-128/192/256 ECB, CBC, CTR, OFB (both directions), AES-CMAC, SHA-1/224/256/384/512 one-shot, and SHA-1/256/
 //     384/512 compress from any state (the state loaded into HASH_RESULT, SHA_CONFIG continue, MSG_LEFT past the end
-//     so the engine does not pad): that is what corecrypto's digest compress does, so XNU's own hashing (the
-//     code-signing page hashes included) runs here through switch_digest_compress_hook (libkern/crypto/
-//     register_crypto.c). Every check is still corecrypto's; only the block arithmetic moves.
+//     so the engine does not pad): that is what corecrypto's digest compress does, so XNU's own hashing can run here
+//     through switch_digest_compress_hook (libkern/crypto/register_crypto.c), from each algorithm's cutover up. Every
+//     check is still corecrypto's; only the block arithmetic moves.
 //   - The DRBG: 64 bytes into the kernel PRNG (write_random) at start.
 //   - Work stays on the A57s' AES/SHA instructions below each algorithm's cutover (gCutover), code-signing's page
 //     hashes included. A debug kernel's timing run 90 s after start (1 KiB to 1 MiB, every algorithm, each engine
@@ -125,9 +125,13 @@ constexpr uint32_t kDstHash = 1u << 2;
 // LNR_CTR 3), VCTRAM_SEL << 5 (AHB 0, AESOUT 2, PREVAHB 3), IV_SEL << 7 (original 0), CORE_SEL << 8 (encrypt 1),
 // CTR_CNTN << 11, KEY_INDEX << 24, MEMIF << 31 (AHB 0, MCCIF 1).
 constexpr uint32_t kCryptoEncrypt = 1u << 8, kCryptoMccif = 1u << 31;
-// MC_SMMU_SE_ASID: SE_SMMU_ENABLE (bit 31) would translate the engines' MCCIF addresses, which are physical here.
+// The MC_SMMU_<swgroup>_ASID registers of each engine's memory clients, whose bit 31 would translate the MCCIF
+// addresses (physical here): the Switch device tree's iommus, SE1 swgroups 35 (SE, 0xabc) and 38 (SE1, 0xac8), SE2
+// swgroups 29 (0xaa4, ISP2B's register in the T210 manual) and 53, which neither the manual nor L4T's swgroup table
+// gives a register for.
 constexpr uint64_t kMcPA = 0x70019000;
-constexpr uint32_t kMcSmmuSeAsid = 0xabc, kSmmuTranslates = 1u << 31;
+constexpr uint32_t kSmmuAsid[2][2] = {{0xabc, 0xac8}, {0xaa4, 0}};
+constexpr uint32_t kSmmuTranslates = 1u << 31;
 constexpr uint32_t kCarSuperSe = 0x704;
 
 constexpr unsigned kEngines = 2, kFirstSlot = 1, kLastSlot = 13;
@@ -311,6 +315,15 @@ bool filter(OSObject *, IOFilterInterruptEventSource *sender)
 }
 
 void wipeSlots(Engine &e);
+
+// Until now every operation wrote only the driver's own buffers (bring-up, and a debug kernel's timing run, with every
+// cutover still never). From here a lost end interrupt or an output that never drains may have DMA in flight into a
+// caller's pages, so it panics instead of turning the engine off.
+void prove()
+{
+    for (Engine &e : gEngines)
+        e.proven = e.up;
+}
 
 void engineOff(Engine &e, const char *what)
 {
@@ -1404,6 +1417,9 @@ void timing()
     for (uint32_t i = 0; i < sizes[4]; ++i)
         in.va[i] = static_cast<uint8_t>(i * 2654435761u >> 13);
     gForced[0] = current_thread();
+    unsigned upAtStart = 0;
+    for (const Engine &e : gEngines)
+        upAtStart += e.up ? 1u : 0u;
     size_t cutover[ALGS] = {};
     for (const Row &row : kRows) {
         if (!gAlg[row.alg].on)
@@ -1454,6 +1470,7 @@ void timing()
         if (rowCut > cutover[row.alg])
             cutover[row.alg] = rowCut;  // the slowest variant of the algorithm decides
     }
+    prove();
     char line[256];
     int at = snprintf(line, sizeof line, "TegraSE: cutover (bytes; CPU below):");
     for (unsigned alg = 0; alg < ALGS; ++alg) {
@@ -1494,6 +1511,11 @@ void timing()
         }
     }
     gForced[0] = nullptr;
+    unsigned upAtEnd = 0;
+    for (const Engine &e : gEngines)
+        upAtEnd += e.up ? 1u : 0u;
+    if (upAtEnd < upAtStart)
+        return;  // an engine turned off mid-operation may still write these: they stay allocated
     bzero(in.va, sizes[4]);
     release(&in);
     release(&out);
@@ -1533,12 +1555,6 @@ void seThread(void *, wait_result_t)
               switch_car_read(kCarClkV), switch_car_read(kCarRstV));
         return;
     }
-    const uint32_t seAsid = switch_mmio_read32(gMc, kMcSmmuSeAsid);
-    if (seAsid & kSmmuTranslates) {
-        IOLog("TegraSE: off for this boot: the SMMU translates the engines' memory clients (MC_SMMU_SE_ASID %#x)\n",
-              seAsid);
-        return;
-    }
     uint32_t answered = 0;
     unsigned up = 0;
     char line[256];
@@ -1546,6 +1562,14 @@ void seThread(void *, wait_result_t)
                       switch_car_read(kCarSuperSe));
     for (unsigned which = 0; which < kEngines; ++which) {
         Engine &e = gEngines[which];
+        uint32_t translated = 0;
+        for (const uint32_t asid : kSmmuAsid[which])
+            translated = !translated && asid && (switch_mmio_read32(gMc, asid) & kSmmuTranslates) ? asid : translated;
+        if (translated) {
+            IOLog("TegraSE: %s off for this boot: the SMMU translates its memory clients (MC %#x = %#x)\n", e.name,
+                  translated, switch_mmio_read32(gMc, translated));
+            continue;
+        }
         if (!tegra_se_claim(which + 1, TEGRA_SE_OWNER_DRIVER, 10000)) {
             IOLog("TegraSE: %s still held by the AppleKeyStore probe after 10 s, off\n", e.name);
             continue;
@@ -1616,10 +1640,9 @@ void seThread(void *, wait_result_t)
     if (reseeded)
         write_random(seed, sizeof seed);
     bzero(seed, sizeof seed);
-    // Every kind of operation has now ended on each engine that is still up: from here a lost end interrupt or an
-    // output that never drains may have DMA in flight into a caller's pages, so it panics instead of turning it off.
-    for (Engine &e : gEngines)
-        e.proven = e.up;
+#if !(DEVELOPMENT || DEBUG)
+    prove();
+#endif
     gReady = true;
     if (gStateLoad)
         switch_digest_compress_hook = compressHook;
@@ -1634,6 +1657,7 @@ void seThread(void *, wait_result_t)
     IOSleep(90000);  // the timing run waits for the boot to be over
     if (clockOn())
         timing();
+    prove();
     for (;;) {
         stats(gStateLoad ? "traffic" : "traffic (hook off)");
         IOSleep(300000);

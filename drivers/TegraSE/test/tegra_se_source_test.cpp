@@ -35,13 +35,19 @@ TEST(TegraSESource, NothingGoesToAnEngineUntilItIsMeasuredNoSlower)
     EXPECT_THAT(timing, Not(HasSubstr("2 * static_cast<size_t>(sizes[4])")));
 }
 
-TEST(TegraSESource, OnlyBringUpsEndProvesAnEngine)
+// An engine is proven once everything it ran wrote only the driver's own buffers: after bring-up in a release kernel,
+// and in a debug kernel after the timing run's own transfers, before its cutovers let callers in.
+TEST(TegraSESource, AnEngineIsProvenOnlyBeforeCallersPagesReachIt)
 {
     const std::string source = SourceText("../TegraSE.cpp");
     EXPECT_THAT(Body(source, "bool run(Engine &e, uint32_t in, uint32_t out)\n"), Not(HasSubstr("e.proven = true")));
     const std::string bringUp = Body(source, "void seThread(void *, wait_result_t)\n");
-    const size_t proven = bringUp.find("e.proven = e.up;");
-    ASSERT_NE(proven, std::string::npos);
-    EXPECT_LT(bringUp.find("rng(*got, seed)"), proven);
-    EXPECT_LT(proven, bringUp.find("gReady = true;"));
+    const size_t release = bringUp.find("#if !(DEVELOPMENT || DEBUG)\n    prove();\n#endif\n    gReady = true;");
+    ASSERT_NE(release, std::string::npos);
+    EXPECT_LT(bringUp.find("rng(*got, seed)"), release);
+    const std::string timing = Body(source, "void timing()\n");
+    const size_t debug = timing.find("prove();");
+    ASSERT_NE(debug, std::string::npos);
+    EXPECT_LT(timing.find("engineCall(row, in.va, out.va, n)"), debug);
+    EXPECT_LT(debug, timing.find("gCutover[alg] = cutover[alg] ? cutover[alg] : kNever;"));
 }
