@@ -223,14 +223,20 @@ struct DeviceMotionTest: HWTest {
             ("little user acceleration while still (< 0.1 g)", user < 0.1),
         ]
         var detail = ""
+        // 24B119 opens {0xff0c, 5} for this frame (CLDeviceMotion::enableSensorFusionWithMode, mode 3, caps bit 4);
+        // which 21H461 mode .xArbitraryZVertical takes was not read, and there SpringBoard's parallax streams the raw
+        // gyroscope itself, so the driver rows are 24B119's only.
+        let judgesDriver = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27
         if let before, let during {
             let fused = Double(during.reports &- before.reports)
             metrics.set("driver_reports", fused, digits: 0)
             metrics.set("raw_gyro_us", Int(during.gyroUS))
-            checks += [
-                ("fused in SwitchMotion: its reports grew with the samples", fused >= 0.8 * Double(samples.count)),
-                ("nobody streamed the raw gyroscope (CPU fusion needs it)", during.gyroUS == 0),
-            ]
+            if judgesDriver {
+                checks += [
+                    ("fused in SwitchMotion: its reports grew with the samples", fused >= 0.8 * Double(samples.count)),
+                    ("nobody streamed the raw gyroscope (CPU fusion needs it)", during.gyroUS == 0),
+                ]
+            }
         } else {
             detail = "SwitchMotion's counters are not published (release kernel): where it was fused is not checked"
         }
