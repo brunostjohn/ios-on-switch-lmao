@@ -930,6 +930,7 @@ void SwitchMotion::apply()
         fusion.restart();
         motionCount = 0;
         lastGyro = 0;
+        switch_hid_forget_latest(motionHid);
     }
     const bool want[2] = {interval[Accel] != 0 || detector || fusing, interval[Gyro] != 0 || fusing};
     uint32_t need = detector ? kOrientationMilliHz : 0;
@@ -992,6 +993,7 @@ void SwitchMotion::apply()
             samples = empty = 0;
             fusion.restart();  // after sleep or the panel off, the console may lie any way up
             lastGyro = 0;
+            switch_hid_forget_latest(motionHid);
             irq->enable();
             switch_check_after_ms(watchdog, kWatchdogMS);
         }

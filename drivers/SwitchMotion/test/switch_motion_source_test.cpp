@@ -1,8 +1,8 @@
 // Guards for what switch_motion_test's models cannot see: the sample and FIFO drain paths never wait or poll (the
 // models' clock does not run while code spins), the motion services' HID descriptor (SwitchHIDDevice.cpp, a stand-in in
 // the scenarios) carries the Sensor-page usages 21H461's IOHIDEventDriver knows, the orientation device serves the
-// descriptor orientation_pipeline_test checks, and SwitchBacklight follows the panel's power into the orientation
-// detector.
+// descriptor orientation_pipeline_test checks, SwitchBacklight follows the panel's power into the orientation
+// detector, and the device motion service's event driver takes CoreMotion's fast path (SwitchHIDFastPath.cpp).
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -83,4 +83,21 @@ TEST(SwitchMotionSource, OrientationDeviceAnswersTheAopPlugIn)
     EXPECT_THAT(client, HasSubstr("switch_motion_last_orientation(&orientation, &stamp);"));
     const std::string motion = SourceText("../SwitchMotion.cpp");
     EXPECT_THAT(Body(motion, "void SwitchMotion::announce("), HasSubstr("__atomic_store_n(&gLastOrientation,"));
+}
+
+// The slots both builds' IOHIDEventServiceFastPathUserClient calls (SwitchHIDFastPath.cpp's file comment), only for the
+// builds they were read from, the plug-in type IOHIDServiceClientFastPathInit asks for, and the hook installed from the
+// first publish of the device motion device's driver, before it starts.
+TEST(SwitchMotionSource, DeviceMotionTakesTheFastPath)
+{
+    const std::string fast = SourceText("../../SwitchTouch/SwitchHIDFastPath.cpp");
+    for (const char *slot : {"kDispatch = 198,", "kPrimaryUsagePage = 199,", "kPrimaryUsage = 200,",
+                             "kCopyEventForClient = 205,", "kOpenForClient = 208,", "kCloseForClient = 209,"})
+        EXPECT_THAT(fast, HasSubstr(slot));
+    EXPECT_THAT(fast, HasSubstr("\"0B842ADD-C395-4352-95F6-6585EB515623\""));
+    EXPECT_THAT(fast, HasSubstr("\"IOHIDFamily.kext/PlugIns/IOHIDLib.plugin\""));
+    EXPECT_THAT(fast, HasSubstr("#if SWITCH_IPSW_KIND_24B119 || SWITCH_IPSW_KIND_21H461"));
+    EXPECT_THAT(fast, HasSubstr("gIOFirstPublishNotification"));
+    const std::string create = Body(SourceText("../../SwitchTouch/SwitchHIDDevice.cpp"), "IOService *switch_hid_create(");
+    EXPECT_LT(create.find("switch_hid_fastpath_watch(device)"), create.find("device->start(resources)"));
 }

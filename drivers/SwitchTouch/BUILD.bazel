@@ -36,6 +36,7 @@ kernel_driver(
     copts = IPSW_KIND_FLAGS,
     srcs = [
         "SwitchHIDDevice.cpp",
+        "SwitchHIDFastPath.cpp",
         "SwitchTouch.cpp",
     ],
     abi = ["IOHIDDevice"],

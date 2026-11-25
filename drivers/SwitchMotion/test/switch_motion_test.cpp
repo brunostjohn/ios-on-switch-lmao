@@ -503,6 +503,7 @@ struct HidDevice : IOService {
     void *context = nullptr;
     std::vector<SwitchMotionReport> reports;
     std::vector<uint64_t> times;  // switch_hid_post_at's sample times (0: switch_hid_post)
+    unsigned forgotten = 0;       // switch_hid_forget_latest calls
     // The device orientation service: the reports IOHIDFamily took, their report times (IOHIDDevice::handleReport's
     // clock_get_uptime, or switch_hid_post_at's time) and their bit masks; `refuse` reports are refused first, as
     // IOHIDDevice refuses them until it is ready for input reports.
@@ -587,6 +588,12 @@ IOReturn switch_hid_post_at(IOService *device, const void *report, size_t length
 bool switch_hid_supports_timestamps(IOService *)
 {
     return gTimedPosts;
+}
+
+void switch_hid_forget_latest(IOService *device)
+{
+    if (device)
+        ++static_cast<HidDevice *>(device)->forgotten;
 }
 
 void switch_hid_set_feature_handler(IOService *device, SwitchHIDFeatureHandler handler, void *context)
@@ -803,7 +810,9 @@ static void icm42607DeviceMotion()
         still = still && std::fabs(payloadFloat(last, 28 + 4 * i)) < 1e-4 &&
                 std::fabs(payloadFloat(last, 40 + 4 * i)) < 0.002;
     check(still, "device motion: no rotation rate, user acceleration within the gravity norm's rounding");
+    const unsigned forgotten = motion->forgotten;
     setFeature(kSwitchHIDDeviceMotion, 0, 0);
+    check(motion->forgotten > forgotten, "device motion: the fast path's kept sample dropped with the session");
     expectLog("os_log: SwitchMotion: off", "device motion: off with its client");
     expectClean("device motion");
     teardown();

@@ -25,6 +25,7 @@ USAGE = r'\{65292, (?P<usage>\d+)\}'
 CLEARED = r'\{65292, (?P<usage>1|7|26)\}'
 DEVICE_MOTION = '[CLIoHidInterface] Property for usage pair {65292, 5}: {ReportInterval = '
 FASTPATH_OPEN = '[FastPath] openFastPathPrivate() failed'
+FASTPATH_COPY = '[FastPath] copyEventPrivate() Failed'
 CACHE_COPY = '!locationd'
 
 MOTION = [
@@ -94,14 +95,26 @@ MOTION = [
         source='drivers/SwitchMotion/SwitchMotion.cpp',
         note="SwitchMotion's device motion service taking a client's interval",
     ),
+    *(
+        Check(
+            f'motion.fastpath-open.{process}',
+            OWNER,
+            FASTPATH_OPEN,
+            process=process,
+            subsystem=SUBSYSTEM,
+            source='drivers/SwitchTouch/SwitchHIDFastPath.cpp',
+            note='CoreMotion could not open the device motion fast path: the plug-in type, openForClient or the slots',
+        )
+        for process in ('SpringBoard', 'backboardd', 'locationd')
+    ),
     Check(
-        'motion.fastpath-open',
+        'motion.fastpath-copy',
         OWNER,
-        FASTPATH_OPEN,
+        FASTPATH_COPY,
         REPORT,
         subsystem=SUBSYSTEM,
-        source='drivers/SwitchTouch/SwitchHIDDevice.cpp',
-        note='the device motion service has no IOHIDEventService openForClient yet; CoreMotion uses the pushed sample',
+        source='drivers/SwitchTouch/SwitchHIDFastPath.cpp',
+        note='a fast path copy with no sample yet: expected only as a session starts, before its first report',
     ),
     Check(
         'motion.spu-added-ungated',

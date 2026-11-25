@@ -41,6 +41,7 @@
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSString.h>
 #include "SwitchHID.h"
+#include "SwitchHIDFastPath.h"
 #include "../SwitchPower/SwitchPower.h"
 #include "../../kits/SwitchRefusal/SwitchRefusal.h"
 
@@ -869,6 +870,8 @@ IOService *switch_hid_create(SwitchHIDKind kind)
     if (!resources || !device || !device->initWithProfile(&profile) || !device->attach(resources)) {
         panic("SwitchHID: %s: attach failed", profile.product);
     }
+    if (kind == kSwitchHIDDeviceMotion)
+        switch_hid_fastpath_watch(device);
     if (!device->start(resources))
         panic("SwitchHID: %s: IOHIDDevice::start failed", profile.product);
     device->release();  // the attachment keeps it

@@ -221,6 +221,10 @@ IOReturn switch_hid_dispatch_event(IOService *device, OSObject *event);
 typedef void (*SwitchHIDFeatureHandler)(void *context, const uint8_t *report, size_t length);
 void switch_hid_set_feature_handler(IOService *device, SwitchHIDFeatureHandler handler, void *context);
 
+// Device motion only: drops the event its fast path answers (SwitchHIDFastPath.cpp), when a session ends, so the next
+// session's first copy is never the last one's sample.
+void switch_hid_forget_latest(IOService *device);
+
 // Touch only: bit n set = contact n began within the edge band. Its finger events then carry
 // kIOHIDDigitizerEventFromEdgeTip, which UIKit needs for the home and app-switcher edge gestures.
 void switch_hid_set_edge_contacts(IOService *device, uint32_t contacts);
