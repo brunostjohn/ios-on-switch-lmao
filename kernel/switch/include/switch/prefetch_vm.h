@@ -89,6 +89,8 @@ extern void switch_vm_prefetch_wait_inflight_drain(void);
 extern void switch_vm_prefetch_finish(void);
 extern bool switch_vm_prefetch_can_issue_now(void);
 extern bool switch_vm_prefetch_wait_can_issue(void);
+/* Blocks the replay thread until deadline_abs (mach time); false when replay stopped first. */
+extern bool switch_vm_prefetch_wait_until(uint64_t deadline_abs);
 extern uint32_t switch_vm_prefetch_wait_stop(void);
 extern uint32_t switch_vm_prefetch_stop(uint32_t reason);
 extern uint32_t switch_vm_prefetch_replay_stop_reason(void);

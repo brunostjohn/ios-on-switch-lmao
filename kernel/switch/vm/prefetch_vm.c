@@ -3,6 +3,7 @@
 #include <switch/prefetch_vm.h>
 #include "prefetch_pace.h"
 
+#include <kern/clock.h>
 #include <kern/sched.h>
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
@@ -153,6 +154,27 @@ bool switch_vm_prefetch_wait_can_issue(void)
         assert_wait((event_t)&g_pace_event, THREAD_UNINT);
         __atomic_store_n(&g_pace.waiting, 1u, __ATOMIC_SEQ_CST);
         if (switch_pace_replay_stop_reason(&g_pace) != SWITCH_PREFETCH_STOP_NONE || switch_pace_can_issue(&g_pace)) {
+            __atomic_store_n(&g_pace.waiting, 0u, __ATOMIC_RELAXED);
+            clear_wait(current_thread(), THREAD_AWAKENED);
+            continue;
+        }
+        thread_block(THREAD_CONTINUE_NULL);
+        __atomic_store_n(&g_pace.waiting, 0u, __ATOMIC_RELAXED);
+    }
+}
+
+bool switch_vm_prefetch_wait_until(uint64_t deadline_abs)
+{
+    for (;;) {
+        if (switch_pace_replay_stop_reason(&g_pace) != SWITCH_PREFETCH_STOP_NONE) {
+            return false;
+        }
+        if (mach_absolute_time() >= deadline_abs) {
+            return true;
+        }
+        assert_wait_deadline((event_t)&g_pace_event, THREAD_UNINT, deadline_abs);
+        __atomic_store_n(&g_pace.waiting, 1u, __ATOMIC_SEQ_CST);
+        if (switch_pace_replay_stop_reason(&g_pace) != SWITCH_PREFETCH_STOP_NONE) {
             __atomic_store_n(&g_pace.waiting, 0u, __ATOMIC_RELAXED);
             clear_wait(current_thread(), THREAD_AWAKENED);
             continue;

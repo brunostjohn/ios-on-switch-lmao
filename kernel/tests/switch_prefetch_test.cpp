@@ -473,6 +473,39 @@ TEST(SwitchPrefetchPace, EnforcesInflightAndLeadBoundsAndFirstReclaimClamp)
     EXPECT_EQ(switch_pace_inflight_bytes(&drain), 0u);
 }
 
+// A run waits until this boot is within SWITCH_PREFETCH_LOOKAHEAD_S of its recorded first use; unknown and early runs go
+// at once.
+TEST(SwitchPrefetchPace, RunsWaitUntilTheirRecordedUseIsNear)
+{
+    EXPECT_EQ(switch_pace_run_due_s(0, 15), 0u);
+    EXPECT_EQ(switch_pace_run_due_s(1, 15), 0u);
+    EXPECT_EQ(switch_pace_run_due_s(16, 15), 0u);
+    EXPECT_EQ(switch_pace_run_due_s(17, 15), 1u);
+    EXPECT_EQ(switch_pace_run_due_s(60, 15), 44u);
+    EXPECT_EQ(switch_pace_run_due_s(255, 15), 239u);
+}
+
+// The replay waits for each run's due time before it reads it, releasing its vnode first, and a stop ends the wait.
+TEST(SwitchPrefetchSource, ReplayWaitsForEachRunsDueTime)
+{
+    const std::string prefetch = SourceText("../switch/vm/prefetch.c");
+    const size_t due = prefetch.find("switch_pace_run_due_s(runs[i].when, SWITCH_PREFETCH_LOOKAHEAD_S)");
+    const size_t wait = prefetch.find("switch_vm_prefetch_wait_until(due_abs)");
+    const size_t put = prefetch.find("vnode_put(vp);", due);
+    const size_t pagein = prefetch.find("vnode_pagein(vp, NULL, 0, in.offset");
+    ASSERT_NE(due, std::string::npos);
+    ASSERT_NE(wait, std::string::npos);
+    EXPECT_LT(due, put);
+    EXPECT_LT(put, wait);
+    EXPECT_LT(wait, pagein);
+    const std::string vm = SourceText("../switch/vm/prefetch_vm.c");
+    const size_t until = vm.find("bool switch_vm_prefetch_wait_until(uint64_t deadline_abs)");
+    ASSERT_NE(until, std::string::npos);
+    const std::string body = vm.substr(until, vm.find("\n}\n", until) - until);
+    EXPECT_NE(body.find("switch_pace_replay_stop_reason(&g_pace) != SWITCH_PREFETCH_STOP_NONE"), std::string::npos);
+    EXPECT_NE(body.find("assert_wait_deadline((event_t)&g_pace_event, THREAD_UNINT, deadline_abs)"), std::string::npos);
+}
+
 TEST(SwitchPrefetchPace, StopEventsReleaseWaitingReplayAndFirstWins)
 {
     // Pressure stops replay immediately without ending boot recording, so Boot Complete can still save a trimmed list.

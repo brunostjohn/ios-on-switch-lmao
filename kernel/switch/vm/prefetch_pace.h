@@ -19,6 +19,19 @@ extern "C" {
  * fed across APFS hash-check completions. */
 #define SWITCH_PREFETCH_INFLIGHT_LIMIT (3u * (uint64_t)SWITCH_PREFETCH_MAX_RUN_PAGES * SWITCH_PREFETCH_LIST_PAGE)
 
+/* The replay reads a run once this boot is within this many seconds of the run's first use in the boot that recorded
+ * it. Read further ahead, runs arrive long before they are used: boot 2693043C replayed 1,663 MiB by 43 s, 546 MiB of
+ * it used, with the card 94-97% busy and its tier-0 page-ins waiting 33-93 ms at p90, and memory pressure reclaimed
+ * pages before use so they were read twice (853 in its 33-43 s window). */
+#define SWITCH_PREFETCH_LOOKAHEAD_S 15u
+
+/* Seconds after the replay began at which a run may be read; `when` is the recording's 1-based second of first use (0:
+ * unknown, read at once). */
+static inline uint64_t switch_pace_run_due_s(uint16_t when, uint32_t lookahead_s)
+{
+    return when > lookahead_s + 1u ? (uint64_t)when - 1u - lookahead_s : 0u;
+}
+
 /* Shared lock-free pacing state for the single replay thread and its VM / UPL / pressure / shutdown wakers.
  * All counters are updated atomically so VM hooks under pmap_lock_phys_page, vm_page_queues_lock or
  * vm_object_lock take no locks and never block. */

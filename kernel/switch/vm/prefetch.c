@@ -303,8 +303,24 @@ static uint32_t switch_prefetch_replay_runs(const struct switch_prefetch_run *ru
     struct switch_prefetch_file_meta vp_meta = {0};
     bool vp_valid = false;
     uint32_t replayed = 0;
+    uint64_t second_abs = 0;
+    nanoseconds_to_absolutetime(NSEC_PER_SEC, &second_abs);
+    const uint64_t start_abs = mach_absolute_time();
 
     for (uint32_t i = 0; i < run_count; ++i) {
+        const uint64_t due_abs =
+            start_abs + switch_pace_run_due_s(runs[i].when, SWITCH_PREFETCH_LOOKAHEAD_S) * second_abs;
+        if (mach_absolute_time() < due_abs) {
+            if (vp != NULLVP) {
+                vnode_put(vp);
+                vp = NULLVP;
+            }
+            vp_volume = 0xffu;
+            vp_valid = false;
+            if (!switch_vm_prefetch_wait_until(due_abs)) {
+                break;
+            }
+        }
         if (!switch_vm_prefetch_can_issue_now()) {
             /* Release any vnode iocount before blocking so unmount never waits on the replay thread. */
             if (vp != NULLVP) {
