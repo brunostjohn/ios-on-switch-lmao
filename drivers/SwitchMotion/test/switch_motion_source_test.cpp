@@ -102,3 +102,15 @@ TEST(SwitchMotionSource, DeviceMotionTakesTheFastPath)
         Body(SourceText("../../SwitchTouch/SwitchHIDDevice.cpp"), "IOService *switch_hid_create(");
     EXPECT_LT(create.find("switch_hid_fastpath_watch(device)"), create.find("device->start(resources)"));
 }
+
+// The event system has the event before a copy can answer it; an open asking for the AOP's always-on history, which
+// J181's provider gates on FastPathHasEntitlement, is refused, since nothing here keeps one; and a motion event driver
+// published again is hooked again.
+TEST(SwitchMotionSource, TheFastPathAnswersOnlyWhatWasDispatched)
+{
+    const std::string fast = SourceText("../../SwitchTouch/SwitchHIDFastPath.cpp");
+    const std::string dispatch = Body(fast, "void dispatch(");
+    EXPECT_LT(dispatch.find("(originalDispatch)(driver, event, options)"), dispatch.find("keep(event)"));
+    EXPECT_THAT(Body(fast, "bool openForClient("), HasSubstr("getObject(\"aonBuffer\")"));
+    EXPECT_THAT(Body(fast, "bool published("), Not(HasSubstr("installed")));
+}

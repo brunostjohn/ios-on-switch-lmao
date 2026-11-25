@@ -6,16 +6,21 @@
 // IOCreatePlugInInterfaceForService reads IOCFPlugInTypes from the service itself (IORegistryEntryCreateCFProperty), and
 // IOHIDEventService's defaults refuse the user client (openForClient false, copyEventForClient NULL), so the service's
 // event driver gets the plug-in type and its own vtable copy:
-//  * openForClient (reserved 18) admits the client. The user client puts FastPathHasEntitlement and
-//    FastPathMotionEventEntitlement in the open properties (21H461 0xfffffff005ad1d14, 0xfffffff005ad1d40); SpringBoard
-//    holds neither com.apple.hid.system.user-access-fast-path nor ...fast-path-motion-event-privileged, only the
-//    sandbox's IOHIDEventServiceFastPathUserClient class, so the class is the gate here, and with no restricted motion
-//    state nothing else differs between clients;
+//  * openForClient (reserved 18) admits the client as J181's provider does (AppleSPUHIDDriver, 24B119
+//    0xfffffff0090b0c1c). The user client puts FastPathHasEntitlement and FastPathMotionEventEntitlement in the open
+//    properties (21H461 0xfffffff005ad1d14, 0xfffffff005ad1d40). The provider reads the first only when the open asks
+//    for "aonBuffer", the AOP's always-on sample history, and refuses that open without it. There is no such history
+//    here, so every aonBuffer open is refused. It records the second for its MotionEventRestricted state, in which
+//    copies to a client without it return NULL (0xfffffff0090d704c). Nothing in 24B119's user space sets that state: no
+//    binary in the System cryptex's caches or under /usr and /System/Library/CoreServices names it, nor aonBuffer.
+//    21H461's kernelcache carries the same keys; its branches were not read. Which processes reach the user client is
+//    the sandbox's call (tools/devicerun/motion.py);
 //  * copyEventForClient (reserved 15) answers the latest report's event, retained; the user client copies it into the
 //    shared memory its client reads. None between sessions (switch_hid_forget_latest): CoreMotion then logs a failed
 //    copy and takes the pushed sample (21H461's getter, locationd 0x100528874), which beats one from the session before;
 //  * closeForClient (reserved 19) has nothing to undo;
-//  * dispatchEvent (reserved 8, as the touch edge wrapper's) keeps that latest event, then dispatches it.
+//  * dispatchEvent (reserved 8, as the touch edge wrapper's) dispatches the event, then keeps it as the latest, so a
+//    copy never answers an event the event system has not had yet.
 // Both builds' user clients call the three through these slots, with the provider at +0xe0 and the context at +0xe8:
 // 21H461 IOHIDFamily open 0xfffffff005ad1d64, copy 0xfffffff005ad1ef4, close 0xfffffff005ad1e8c; 24B119 open
 // 0xfffffff0099265d0, copy 0xfffffff0098cc338, close 0xfffffff0098cc294 (their PAC diversifiers are the vtable's
@@ -25,6 +30,7 @@
 #include <string.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
+#include <libkern/c++/OSBoolean.h>
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSString.h>
 #include "SwitchHID.h"
@@ -54,7 +60,8 @@ constexpr const char *kPlugIn = "IOHIDFamily.kext/PlugIns/IOHIDLib.plugin";
 
 IOService *motionDevice;
 IONotifier *notifier;
-bool installed;  // the notification thread's
+uintptr_t *original;  // the event driver class's vtable, and the copy every motion event driver of the boot gets
+uintptr_t *table;
 uintptr_t originalDispatch;
 // copyEventForClient runs on the user client's thread, not the event driver's work loop (IOHIDEventService.h), while
 // dispatchEvent replaces the event on the work loop: taking a reference and dropping the slot's must not interleave.
@@ -81,8 +88,8 @@ void keep(OSObject *event)
 // NOLINTBEGIN(misc-const-correctness): IOHIDEventService's slots, their parameters as declared
 void dispatch(IOService *driver, OSObject *event, IOOptionBits options)
 {
-    keep(event);
     reinterpret_cast<void (*)(IOService *, OSObject *, IOOptionBits)>(originalDispatch)(driver, event, options);
+    keep(event);
 }
 
 OSObject *copyEventForClient(IOService *, OSObject *, IOOptionBits, void *)
@@ -95,11 +102,12 @@ OSObject *copyEventForClient(IOService *, OSObject *, IOOptionBits, void *)
     return event;
 }
 
-bool openForClient(IOService *, IOService *, IOOptionBits, OSDictionary *, void **context)
+bool openForClient(IOService *, IOService *, IOOptionBits, OSDictionary *properties, void **context)
 {
     if (context)
         *context = nullptr;
-    return true;
+    const auto *history = properties ? OSDynamicCast(OSBoolean, properties->getObject("aonBuffer")) : nullptr;
+    return !(history && history->isTrue());
 }
 
 void closeForClient(IOService *, IOService *, void *, IOOptionBits)
@@ -119,6 +127,31 @@ void publishPlugIn(IOService *driver)
     OSSafeReleaseNULL(merged);
 }
 
+// The lock and the vtable copy, once a boot: the copy outlives every driver that uses it.
+bool makeTable(uintptr_t *vtable)
+{
+    IOSimpleLock *created = IOSimpleLockAlloc();
+    auto *copy = static_cast<uintptr_t *>(IOMalloc(kSlots * sizeof(uintptr_t)));
+    if (!created || !copy) {
+        if (created)
+            IOSimpleLockFree(created);
+        if (copy)
+            IOFree(copy, kSlots * sizeof(uintptr_t));
+        IOLog("SwitchHID: device motion fast path off: no memory\n");
+        return false;
+    }
+    memcpy(copy, vtable, kSlots * sizeof(uintptr_t));
+    originalDispatch = copy[kDispatch];
+    copy[kDispatch] = reinterpret_cast<uintptr_t>(&dispatch);
+    copy[kCopyEventForClient] = reinterpret_cast<uintptr_t>(&copyEventForClient);
+    copy[kOpenForClient] = reinterpret_cast<uintptr_t>(&openForClient);
+    copy[kCloseForClient] = reinterpret_cast<uintptr_t>(&closeForClient);
+    __atomic_store_n(&lock, created, __ATOMIC_RELEASE);
+    original = vtable;
+    table = copy;
+    return true;
+}
+
 bool install(IOService *driver)
 {
     const uint32_t page = call<uint32_t>(driver, kPrimaryUsagePage);
@@ -129,20 +162,14 @@ bool install(IOService *driver)
               page, usage);
         return false;
     }
-    IOSimpleLock *created = IOSimpleLockAlloc();
-    auto *table = static_cast<uintptr_t *>(IOMalloc(kSlots * sizeof(uintptr_t)));
-    if (!created || !table) {
-        IOLog("SwitchHID: device motion fast path off: no memory\n");
+    uintptr_t *const vtable = *reinterpret_cast<uintptr_t **>(driver);
+    if (table && vtable != original) {
+        IOLog("SwitchHID: device motion fast path off: a new event driver of another class\n");
         return false;
     }
-    memcpy(table, *reinterpret_cast<uintptr_t **>(driver), kSlots * sizeof(uintptr_t));
-    originalDispatch = table[kDispatch];
-    table[kDispatch] = reinterpret_cast<uintptr_t>(&dispatch);
-    table[kCopyEventForClient] = reinterpret_cast<uintptr_t>(&copyEventForClient);
-    table[kOpenForClient] = reinterpret_cast<uintptr_t>(&openForClient);
-    table[kCloseForClient] = reinterpret_cast<uintptr_t>(&closeForClient);
+    if (!table && !makeTable(vtable))
+        return false;
     publishPlugIn(driver);
-    __atomic_store_n(&lock, created, __ATOMIC_RELEASE);
     __asm__ volatile("dmb ish" ::: "memory");
     *reinterpret_cast<uintptr_t **>(driver) = table;
 #if DEVELOPMENT || DEBUG
@@ -152,12 +179,13 @@ bool install(IOService *driver)
 }
 
 // IOKit's first publish of each IOHIDEventDriver, on the matching thread before the event system learns of the
-// service, so CoreMotion never sees the service without the plug-in type.
+// service, so CoreMotion never sees the service without the plug-in type. A motion event driver published again (a
+// re-match) is hooked again.
 bool published(void *, void *, IOService *driver, IONotifier *)
 {
     const IOService *interface = driver ? driver->getProvider() : nullptr;
-    if (!installed && interface && interface->getProvider() == motionDevice)
-        installed = install(driver);
+    if (interface && interface->getProvider() == motionDevice && *reinterpret_cast<uintptr_t **>(driver) != table)
+        (void)install(driver);
     return true;
 }
 }  // namespace
