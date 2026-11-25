@@ -2085,6 +2085,19 @@ py_test(
 )
 
 py_test(
+    name = "resolve_srgb_test",
+    srcs = ["resolve_srgb_test.py"],
+    args = [
+        "$(rootpath //drivers/TegraGM20BMetal:pack/resolve_srgb.h)",
+        "$(rootpath //third_party/m2v/crates/metal2vulkan:src/bind/color_resolve.rs)",
+    ],
+    data = [
+        "//drivers/TegraGM20BMetal:pack/resolve_srgb.h",
+        "//third_party/m2v/crates/metal2vulkan:src/bind/color_resolve.rs",
+    ],
+)
+
+py_test(
     name = "inventory_test",
     srcs = ["inventory_test.py"],
     data = [

@@ -28,12 +28,36 @@ enum class ResolveEnd : uint8_t {
     DrawRefused,
 };
 
+// The samples a resolve state reads: `from`, or an 8-bit sRGB attachment through a header of its UNORM twin, whose codes
+// the state reads (samples.h resolveSampleFormat); null where no header is left
+static const gm20b::Texture *resolveSamples(gm20b::Device &d, const gm20b::Texture &from,
+                                            std::deque<gm20b::Texture> &targets)
+{
+    const uint32_t codes = gm20b::resolveSampleFormat(from.format);
+    if (codes == from.format)
+        return &from;
+    if (!d.sampleable(const_cast<gm20b::Texture &>(from)))
+        return nullptr;
+    targets.push_back(from);
+    gm20b::Texture &view = targets.back();
+    view.format = codes;
+    view.sampled = nullptr;
+    view.standIn = nullptr;
+    view.tic = d.viewTic(from, gm20b::formatInfo(codes)->tic0);
+    return view.tic ? &view : nullptr;
+}
+
 // A pass of the pack's resolve state `state` sampling `from` into `into` over the render area (an 8-bit sRGB one as its
 // UNORM twin, whose codes the state writes); the resolve pass's prologue barrier orders its reads after the pass's writes
-static ResolveEnd resolveByState([[maybe_unused]] gm20b::Device &d, gm20b::CommandBuffer &rc, gm20b::Pipeline *state,
+static ResolveEnd resolveByState(gm20b::Device &d, gm20b::CommandBuffer &rc, gm20b::Pipeline *state,
                                  const gm20b::Texture &from, const gm20b::Texture &into, uint32_t width,
                                  uint32_t height, std::deque<gm20b::Texture> &targets, const char **why)
 {
+    const gm20b::Texture *read = resolveSamples(d, from, targets);
+    if (!read) {
+        *why = "no texture header left for an sRGB resolve's codes";
+        return ResolveEnd::Internal;
+    }
     targets.push_back(into);
     targets.back().format = gm20b::resolveTargetFormat(into.format);
     gm20b::PassDesc p;
@@ -48,7 +72,7 @@ static ResolveEnd resolveByState([[maybe_unused]] gm20b::Device &d, gm20b::Comma
         return ResolveEnd::NoMemory;
     const uint32_t samples = from.samples;
     e->setPipeline(state);
-    e->setTexture(0, &from);
+    e->setTexture(0, read);
     e->setBytes(2, 0, &samples, sizeof samples);
     if (!e->draw(4 /* MTLPrimitiveTypeTriangleStrip */, 0, 4, 1, 0, why))
         return ResolveEnd::DrawRefused;

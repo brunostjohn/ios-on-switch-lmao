@@ -3,11 +3,14 @@
 // textures (MTLStoreActionMultisampleResolve) of random samples, every format the pack resolves at 2 and 4 samples. A format and
 // count whose rule is closed must be Metal's in every byte; four halves (and RG11B10Float's channels, rounded from them) follow
 // the nearest form measured, whose differing texels are counted only. An 8-bit sRGB resolve writes its codes into the format's
-// UNORM twin, as the driver renders it. 32-bit float channels compare any NaN equal (Metal names no NaN's payload).
+// UNORM twin, as the driver renders it, and reads the samples' codes through the attachment's UNORM twin, as the driver binds
+// it; its states with the count built in (resolve_*_srgb_<n>x_frag) run beside the counted one. 32-bit float channels
+// compare any NaN equal (Metal names no NaN's payload).
 // usage: resolveoracle <pack/resolve.metal>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace {
@@ -159,56 +162,69 @@ int main(int argc, char **argv)
         unsigned failed = 0;
         for (const Case &c : kCases)
             for (NSUInteger n : {2u, 4u}) {
-                id<MTLTexture> ms = texture(dev, c.format, n, MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead);
-                id<MTLTexture> metal = texture(dev, c.format, 1, MTLTextureUsageRenderTarget);
-                id<MTLTexture> ours = texture(dev, c.written, 1, MTLTextureUsageRenderTarget);
-                id<MTLRenderPipelineState> fill = state(dev, samples, "cover", c.samples, c.format, n);
-                id<MTLRenderPipelineState> resolve = state(dev, resolves, "resolve_vert", c.function, c.written, 1);
-                if (!ms || !metal || !ours || !fill || !resolve)
-                    return 2;
-                id<MTLCommandBuffer> cb = [queue commandBuffer];
-                MTLRenderPassDescriptor *p = [MTLRenderPassDescriptor renderPassDescriptor];
-                p.colorAttachments[0].texture = ms;
-                p.colorAttachments[0].resolveTexture = metal;
-                p.colorAttachments[0].loadAction = MTLLoadActionDontCare;
-                p.colorAttachments[0].storeAction = MTLStoreActionStoreAndMultisampleResolve;
-                id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:p];
-                [enc setRenderPipelineState:fill];
-                [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
-                [enc endEncoding];
-                MTLRenderPassDescriptor *r = [MTLRenderPassDescriptor renderPassDescriptor];
-                r.colorAttachments[0].texture = ours;
-                r.colorAttachments[0].loadAction = MTLLoadActionDontCare;
-                r.colorAttachments[0].storeAction = MTLStoreActionStore;
-                enc = [cb renderCommandEncoderWithDescriptor:r];
-                const uint32_t count = uint32_t(n);
-                [enc setRenderPipelineState:resolve];
-                [enc setFragmentTexture:ms atIndex:0];
-                [enc setFragmentBytes:&count length:sizeof count atIndex:0];
-                [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
-                [enc endEncoding];
-                [cb commit];
-                [cb waitUntilCompleted];
-                const std::vector<uint8_t> want = bytesOf(metal, c.texel), got = bytesOf(ours, c.texel);
-                const size_t texel = c.texel;
-                size_t differ = 0;
-                for (size_t i = 0; i < want.size(); i += texel) {
-                    bool same = true;
-                    for (size_t w = 0; w < texel; w += c.floats ? 4 : texel) {
-                        float x = 0, y = 0;
-                        if (c.floats) {
-                            memcpy(&x, &want[i + w], 4);
-                            memcpy(&y, &got[i + w], 4);
+                for (bool counted : {false, true}) {
+                    const bool codes = c.format != c.written;
+                    if (counted && !codes)
+                        continue;
+                    std::string function = c.function;
+                    if (counted)
+                        function.insert(function.size() - sizeof "frag" + 1, std::to_string(n) + "x_");
+                    id<MTLTexture> ms = texture(dev, c.format, n,
+                                                MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead |
+                                                    (codes ? MTLTextureUsagePixelFormatView : 0));
+                    id<MTLTexture> read = codes ? [ms newTextureViewWithPixelFormat:c.written] : ms;
+                    id<MTLTexture> metal = texture(dev, c.format, 1, MTLTextureUsageRenderTarget);
+                    id<MTLTexture> ours = texture(dev, c.written, 1, MTLTextureUsageRenderTarget);
+                    id<MTLRenderPipelineState> fill = state(dev, samples, "cover", c.samples, c.format, n);
+                    id<MTLRenderPipelineState> resolve =
+                        state(dev, resolves, "resolve_vert", function.c_str(), c.written, 1);
+                    if (!ms || !read || !metal || !ours || !fill || !resolve)
+                        return 2;
+                    id<MTLCommandBuffer> cb = [queue commandBuffer];
+                    MTLRenderPassDescriptor *p = [MTLRenderPassDescriptor renderPassDescriptor];
+                    p.colorAttachments[0].texture = ms;
+                    p.colorAttachments[0].resolveTexture = metal;
+                    p.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+                    p.colorAttachments[0].storeAction = MTLStoreActionStoreAndMultisampleResolve;
+                    id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:p];
+                    [enc setRenderPipelineState:fill];
+                    [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+                    [enc endEncoding];
+                    MTLRenderPassDescriptor *r = [MTLRenderPassDescriptor renderPassDescriptor];
+                    r.colorAttachments[0].texture = ours;
+                    r.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+                    r.colorAttachments[0].storeAction = MTLStoreActionStore;
+                    enc = [cb renderCommandEncoderWithDescriptor:r];
+                    const uint32_t count = uint32_t(n);
+                    [enc setRenderPipelineState:resolve];
+                    [enc setFragmentTexture:read atIndex:0];
+                    [enc setFragmentBytes:&count length:sizeof count atIndex:0];
+                    [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+                    [enc endEncoding];
+                    [cb commit];
+                    [cb waitUntilCompleted];
+                    const std::vector<uint8_t> want = bytesOf(metal, c.texel), got = bytesOf(ours, c.texel);
+                    const size_t texel = c.texel;
+                    size_t differ = 0;
+                    for (size_t i = 0; i < want.size(); i += texel) {
+                        bool same = true;
+                        for (size_t w = 0; w < texel; w += c.floats ? 4 : texel) {
+                            float x = 0, y = 0;
+                            if (c.floats) {
+                                memcpy(&x, &want[i + w], 4);
+                                memcpy(&y, &got[i + w], 4);
+                            }
+                            same &= (c.floats && x != x && y != y) ||
+                                    !memcmp(&want[i + w], &got[i + w], c.floats ? 4 : texel);
                         }
-                        same &=
-                            (c.floats && x != x && y != y) || !memcmp(&want[i + w], &got[i + w], c.floats ? 4 : texel);
+                        differ += !same;
                     }
-                    differ += !same;
+                    const bool rule = n == 2 ? c.closed2 : c.closed4;
+                    printf("%-28s x%lu: %zu of %lu texels differ from Metal's resolve%s\n", function.c_str(),
+                           (unsigned long)n, differ, (unsigned long)(kWidth * kHeight),
+                           rule ? "" : " (not closed: counted only)");
+                    failed += rule && differ;
                 }
-                const bool rule = n == 2 ? c.closed2 : c.closed4;
-                printf("%-24s x%lu: %zu of %lu texels differ from Metal's resolve%s\n", c.function, (unsigned long)n,
-                       differ, (unsigned long)(kWidth * kHeight), rule ? "" : " (not closed: counted only)");
-                failed += rule && differ;
             }
         printf("resolveoracle: %u case(s) failed\n", failed);
         return failed ? 1 : 0;
