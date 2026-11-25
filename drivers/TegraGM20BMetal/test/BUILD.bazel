@@ -5123,6 +5123,17 @@ facade_test(
     ],
 )
 
+# What a compositor frame costs the recording thread and the submit worker as the render server records it, and where
+# its waitUntilScheduled goes (outputs/compositor_frame_cost.txt)
+facade_test(
+    name = "compositor_frame_cost_test",
+    srcs = [
+        "compositor_frame_cost_test.cpp",
+        "scale_frames.h",
+        "timed_gpu.h",
+    ],
+)
+
 # Core Animation's catch-all state named by its label and its draws counted in the rates line (ca_catch_all.h)
 facade_test(
     name = "facade_ca_catch_all_test",
