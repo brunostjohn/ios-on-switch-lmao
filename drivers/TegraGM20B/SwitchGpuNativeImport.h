@@ -22,9 +22,9 @@ static SwitchGpuNativeRefusal switch_gpu_native_reply(const switch_gpu_native_su
 	    view.representation.backing != view.logical || !view.representation.expected ||
 	    (view.payload.generation &&
 	     (view.payload.backing != view.logical || !view.payload.expected)))
-		return {"backings", "its backings or generations are missing"};
+		return {"backings", "its backings or generations are missing", 0};
 	if (!view.layout.plane_count || view.layout.plane_count > 3)
-		return {"planes", "it has no planes, or more than 3"};
+		return {"planes", "it has no planes, or more than 3", 0};
 	out.bytes = uint64_t(allocation.page_count) << 12;
 	out.representation_generation = view.representation.expected;
 	out.allocation_generation = allocation.allocation_generation;
@@ -65,7 +65,7 @@ static SwitchGpuNativeRefusal switch_gpu_native_reply(const switch_gpu_native_su
 	if (!view.crop_width || !view.crop_height || view.crop_x > first.width ||
 	    view.crop_width > first.width - view.crop_x || view.crop_y > first.height ||
 	    view.crop_height > first.height - view.crop_y)
-		return {"crop", "its crop is empty or outside the first plane"};
+		return {"crop", "its crop is empty or outside the first plane", 0};
 	return {};
 }
 
