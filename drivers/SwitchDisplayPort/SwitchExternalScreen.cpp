@@ -97,6 +97,8 @@ void SwitchExternalScreen::free()
         IODelete(slots, Slot, kSlots);
         slots = nullptr;
     }
+    if (!mapped)
+        switch_dma_free(&tables);
     IOMobileFramebufferLegacy::free();
 }
 
@@ -107,6 +109,14 @@ bool SwitchExternalScreen::begin(SwitchDisplayPort *port, IOWorkLoop *workLoop)
     slots = IONewZero(Slot, kSlots);
     if (!slots)
         return false;
+    // DC B's page tables are one physically contiguous run, taken at boot: hours in, a dock finds memory too fragmented
+    // for a run this long, and every swap would then search for it again.
+    if (!switch_dma_alloc(&tables, kTablePages * 4096u) || !domain.init(tables.va, tables.pa, kTablePages) ||
+        !domain.reserve(kSlotBase, kSlots * kSlotSpan)) {
+        IOLog("SwitchDisplayPort: external scanout: no %u KiB contiguous below 4 GiB for DC B's SMMU tables\n",
+              kTablePages * 4u);
+        return false;
+    }
     transport = port;
     loop = workLoop;
     setIdentityMatrix(harmonyMatrix);

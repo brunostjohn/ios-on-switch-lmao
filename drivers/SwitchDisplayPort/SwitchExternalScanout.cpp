@@ -22,11 +22,6 @@ bool SwitchExternalScreen::mapDomain()
 {
     if (mapped)
         return true;
-    if (!tables.memory && !switch_dma_alloc(&tables, kTablePages * 4096u))
-        return false;
-    if (!domain.va &&
-        (!domain.init(tables.va, tables.pa, kTablePages) || !domain.reserve(kSlotBase, kSlots * kSlotSpan)))
-        return false;
     cleanDomain();
     char why[128];
     mapped =

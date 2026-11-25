@@ -146,6 +146,13 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
 
     const auto mapDom = Block(source, "bool SwitchExternalScreen::mapDomain()");
     EXPECT_TRUE(mapDom.has("(1u << 2) | (1u << 4) | (1u << 6)"));
+    // The tables' 548 KiB contiguous run is taken at boot; a dock hours in found none and every swap searched again.
+    EXPECT_TRUE(beginScreen.before("switch_dma_alloc(&tables, kTablePages * 4096u)",
+                                   "domain.reserve(kSlotBase, kSlots * kSlotSpan)"));
+    EXPECT_TRUE(
+        beginScreen.before("domain.reserve(kSlotBase, kSlots * kSlotSpan)", "IOMobileFramebufferLegacy::start(nub)"));
+    EXPECT_FALSE(mapDom.has("switch_dma_alloc"));
+    EXPECT_FALSE(mapDom.has("domain.init"));
     EXPECT_FALSE(mapDom.has("1u << 17"));
     EXPECT_TRUE(prepare.has("allocation.pages[offset / 4096]"));
     EXPECT_FALSE(prepare.has("allocation.pages[0]"));
