@@ -108,7 +108,9 @@ inline uint32_t switchGatherReads(Request *head, Request *first, uint32_t limit,
 
 // `inOrder`: a synchronize waits on this window's writes. Its barrier counts completions (SwitchSdWriteFence.h), so
 // while it waits no write may join past an older write still queued: one submitted after the barrier would complete in
-// the place of one it waits for. With no barrier waiting, any barrier that begins later counts both writes.
+// the place of one it waits for. With no barrier waiting, any barrier that begins later counts both writes. This keeps
+// the chain a prefix of the window's queued writes only because the pick starts a write chain with the window's oldest
+// queued write; a pick that let `first` pass an older write would break the fence with or without this rule.
 template <typename Request>
 inline uint32_t switchGatherWrites(Request *head, Request *first, uint32_t limit, uint32_t maxCount, unsigned scan,
                                    uint64_t *start, uint32_t *sectors, const SwitchLbaRange *inFlight = nullptr,
