@@ -59,6 +59,7 @@ host_library(
     hdrs = [
         "//drivers/SwitchBattery:SwitchBattery.h",
         "//drivers/SwitchBattery:SwitchBatteryPack.h",
+        "//drivers/SwitchBattery:SwitchBatteryStore.h",
         "//drivers/SwitchBattery:SwitchChargePolicy.h",
         "//drivers/SwitchPower:SwitchPower.h",
         "//drivers/SwitchPower:SwitchSensorModels.h",
@@ -82,6 +83,7 @@ host_library(
     srcs = [
         "//drivers/SwitchBattery:SwitchBattery.cpp",
         "//drivers/SwitchBattery:SwitchBatteryPack.cpp",
+        "//drivers/SwitchBattery:SwitchBatteryStore.cpp",
     ],
     additional_compiler_inputs = [":kind_21H461"],
     copts = KIND_21H461 + ["-Wno-unused-parameter"],
@@ -97,6 +99,7 @@ host_library(
     srcs = [
         "//drivers/SwitchBattery:SwitchBattery.cpp",
         "//drivers/SwitchBattery:SwitchBatteryPack.cpp",
+        "//drivers/SwitchBattery:SwitchBatteryStore.cpp",
     ],
     additional_compiler_inputs = [":kind_24B119"],
     copts = KIND_24B119 + ["-Wno-unused-parameter"],

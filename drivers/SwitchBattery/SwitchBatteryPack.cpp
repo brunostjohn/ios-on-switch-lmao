@@ -51,6 +51,12 @@ OSDictionary *switch_battery_pack_data(const SwitchPackReading &r, const OSStrin
     setNumber(data, "StateOfCharge", r.percent);
     setNumber(data, "FullyCharged", r.full ? 1 : 0);
     setNumber(data, "VirtualTemperature", r.centiCelsius);
+    if (r.dateOfFirstUse) {
+        if (OSNumber *n = OSNumber::withNumber(r.dateOfFirstUse, 64)) {
+            data->setObject("DateOfFirstUse", n);
+            n->release();
+        }
+    }
     return data;
 }
 

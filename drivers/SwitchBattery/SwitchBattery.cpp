@@ -64,6 +64,7 @@
 #include "SwitchBattery.h"
 #include "SwitchChargePolicy.h"
 #include "SwitchBatteryPack.h"
+#include "SwitchBatteryStore.h"
 #include "../SwitchPower/SwitchPower.h"
 #include "../SwitchPower/SwitchSensors.h"
 #include "../SwitchSuspend/SwitchWake.h"
@@ -602,6 +603,8 @@ class SwitchBattery : public SWITCH_BATTERY_SUPER {
     AppleSmartBatteryPack *pack = nullptr;  // published with the battery (SwitchBatteryPack.h)
     SwitchPackReading packReading = {};
     uint64_t updateTime = 0;
+    uint64_t dateOfFirstUse = 0;              // powerd's, kept in NVRAM (SwitchBatteryStore.h)
+    OSDictionary *shipChargeLimit = nullptr;  // the same
 #endif
 
     static void timerFired(OSObject *owner, IOTimerEventSource *sender);
@@ -618,6 +621,10 @@ class SwitchBattery : public SWITCH_BATTERY_SUPER {
     void followZone(const Reading &r);
     static IOReturn requestAction(OSObject *owner, void *dict, void *, void *, void *);
     IOReturn request(const OSDictionary *dict);
+#if SWITCH_IPSW_KIND_24B119
+    bool takeStored(const OSDictionary *dict);
+    void publishStored();
+#endif
     int disableInput(bool preparePd);
     void releasePdInput(bool resetInput);
     void endPdInput(const SwitchPDState &current);
@@ -630,6 +637,9 @@ public:
     bool start(IOService *provider) override;
     void free() override;
     IOReturn setProperties(OSObject *properties) override;
+#if SWITCH_IPSW_KIND_24B119
+    void restoreStored();
+#endif
 
     IOWorkLoop *getWorkLoop() const override
     {
@@ -692,6 +702,14 @@ bool SwitchBattery::start(IOService *provider)
     attachAlerts();
     timer->setTimeoutMS(1);
     __atomic_store_n(&gBatteryService, this, __ATOMIC_RELEASE);
+#if SWITCH_IPSW_KIND_24B119
+    loop->runAction(
+        [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
+            static_cast<SwitchBattery *>(owner)->restoreStored();
+            return kIOReturnSuccess;
+        },
+        this);
+#endif
     // The PD controller's events (a plug, a contract): settle and re-read, as for the other two lines.
     if (switch_pd_add_listener(&SwitchBattery::pdChanged, this))
         IOLog("SwitchBattery: no PD controller events\n");
@@ -720,6 +738,7 @@ void SwitchBattery::free()
         pack->unpublish(this);
         OSSafeReleaseNULL(pack);
     }
+    OSSafeReleaseNULL(shipChargeLimit);
 #endif
     OSSafeReleaseNULL(serialString);
     SWITCH_BATTERY_SUPER::free();
@@ -905,17 +924,9 @@ bool SwitchBattery::refresh()
         adapter->release();
     }
 #if SWITCH_IPSW_KIND_24B119
-    packReading = {r.rawCapacity,
-                   r.fullCapacity,
-                   r.designCapacity,
-                   static_cast<int>(r.millivolts),
-                   r.avgMilliamps,
-                   r.milliamps,
-                   r.chargeAccum,
-                   r.centiCelsius,
-                   r.cycles,
-                   r.percent,
-                   r.full};
+    packReading = {r.rawCapacity,  r.fullCapacity, r.designCapacity, static_cast<int>(r.millivolts),
+                   r.avgMilliamps, r.milliamps,    r.chargeAccum,    r.centiCelsius,
+                   r.cycles,       r.percent,      r.full,           dateOfFirstUse};
     if (pack)
         pack->update(packReading, serialString);
     // batteryintelligenced reads UpdateTime around the pack and bank: it goes to the registry with updateStatus, after
@@ -1254,8 +1265,14 @@ IOReturn SwitchBattery::request(const OSDictionary *dict)
         next.thermalLimitIndex = n->unsigned32BitValue();
         known = true;
     }
+#if SWITCH_IPSW_KIND_24B119
+    const bool stored = takeStored(dict);
+    if (!known)
+        return stored ? kIOReturnSuccess : kIOReturnUnsupported;
+#else
     if (!known)
         return kIOReturnUnsupported;
+#endif
     if (next.osInhibit != requests.osInhibit) {
         IOLog("SwitchBattery: powerd's ChargeInhibit assertion %s\n",
               next.osInhibit ? "held: charging off" : "released");
@@ -1383,6 +1400,73 @@ void SwitchBattery::pdChanged(void *context, const SwitchPDState *state)
         self->timer->setTimeoutMS(kSettleMS);
 }
 
+#if SWITCH_IPSW_KIND_24B119
+// powerd's DateOfFirstUse and ShipChargeLimitData (SwitchBatteryStore.h), on the work loop: kept in NVRAM, then
+// published where powerd reads them. A ShipChargeLimitData the store cannot hold is refused, and logged.
+bool SwitchBattery::takeStored(const OSDictionary *dict)
+{
+    const OSNumber *date = OSDynamicCast(OSNumber, dict->getObject("DateOfFirstUse"));
+    const OSDictionary *limit = OSDynamicCast(OSDictionary, dict->getObject("ShipChargeLimitData"));
+    OSDictionary *copy = nullptr;
+    if (limit) {
+        uint8_t bytes[SWITCH_BATTERY_SHIP_LIMIT_MAX];
+        const size_t length = switch_battery_store_encode(limit, bytes, sizeof(bytes));
+        copy = length ? switch_battery_store_decode(bytes, length) : nullptr;
+        if (!copy)
+            IOLog("SwitchBattery: powerd's ShipChargeLimitData not kept: over %u bytes stored\n",
+                  SWITCH_BATTERY_SHIP_LIMIT_MAX);
+    }
+    if (!date && !copy)
+        return false;
+    if (date)
+        dateOfFirstUse = date->unsigned64BitValue();
+    if (copy) {
+        OSSafeReleaseNULL(shipChargeLimit);
+        shipChargeLimit = copy;
+    }
+    if (!switch_battery_store_save(date ? dateOfFirstUse : 0, copy))
+        IOLog("SwitchBattery: powerd's battery data not saved to NVRAM: it lasts until the next boot\n");
+    publishStored();
+    return true;
+}
+
+void SwitchBattery::publishStored()
+{
+    if (dateOfFirstUse) {
+        if (OSNumber *n = OSNumber::withNumber(dateOfFirstUse, 64)) {
+            setKey("DateOfFirstUse", n);
+            n->release();
+        }
+        packReading.dateOfFirstUse = dateOfFirstUse;
+        if (pack)
+            pack->update(packReading, serialString);
+    }
+    if (shipChargeLimit)
+        setKey("ShipChargeLimitData", shipChargeLimit);
+    if (published)
+        updateStatus();
+}
+
+// Once at start and once Data is mounted (switch_battery_data_mounted): what NVRAM holds by then.
+void SwitchBattery::restoreStored()
+{
+    uint64_t date = 0;
+    OSDictionary *limit = nullptr;
+    switch_battery_store_load(&date, &limit);
+    if (!date && !limit)
+        return;
+    if (date)
+        dateOfFirstUse = date;
+    if (limit) {
+        OSSafeReleaseNULL(shipChargeLimit);
+        shipChargeLimit = limit;
+    }
+    IOLog("SwitchBattery: powerd's battery data from NVRAM: DateOfFirstUse %llu%s\n",
+          static_cast<unsigned long long>(dateOfFirstUse), shipChargeLimit ? ", ShipChargeLimitData" : "");
+    publishStored();
+}
+#endif
+
 void SwitchBattery::timerFired(OSObject *owner, IOTimerEventSource *sender)
 {
     auto *self = OSDynamicCast(SwitchBattery, owner);
@@ -1432,6 +1516,23 @@ extern "C" int switch_battery_start(void)
     battery = candidate;
     return 0;
 }
+
+#if SWITCH_IPSW_KIND_24B119
+// SwitchNVRAM, once NVRAM is restored from Data and before launchd (SwitchBatteryStore.h): powerd's first read finds
+// what it wrote at an earlier boot.
+extern "C" void switch_battery_data_mounted(void)
+{
+    SwitchBattery *battery = __atomic_load_n(&gBatteryService, __ATOMIC_ACQUIRE);
+    if (!battery)
+        return;
+    battery->getWorkLoop()->runAction(
+        [](OSObject *owner, void *, void *, void *, void *) -> IOReturn {
+            static_cast<SwitchBattery *>(owner)->restoreStored();
+            return kIOReturnSuccess;
+        },
+        battery);
+}
+#endif
 
 extern "C" int switch_battery_prepare_pd_input(const SwitchPDState *current)
 {

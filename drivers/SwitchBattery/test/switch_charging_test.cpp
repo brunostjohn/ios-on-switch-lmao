@@ -26,6 +26,7 @@
 #include "bazel/testing/fresh_process.h"
 #include "../SwitchBattery.h"
 #include "../SwitchBatteryPack.h"
+#include "../SwitchBatteryStore.h"
 #include "../SwitchChargePolicy.h"
 #include "../../SwitchDisplayPort/SwitchDisplayPort.h"
 #include "../../SwitchSuspend/SwitchWakeSources.h"
@@ -2161,6 +2162,130 @@ static void batteryPack()
 #endif
 }
 
+// SwitchBatteryStore.h's NVRAM: what IODTNVRAM holds, by variable.
+static std::map<std::string, std::vector<uint8_t>> gNvram;
+
+bool switch_battery_nvram_read(const char *key, uint8_t *bytes, size_t *length)
+{
+    auto it = gNvram.find(key);
+    if (it == gNvram.end() || it->second.size() > *length)
+        return false;
+    *length = it->second.size();
+    std::copy(it->second.begin(), it->second.end(), bytes);
+    return true;
+}
+
+bool switch_battery_nvram_write(const char *key, const uint8_t *bytes, size_t length)
+{
+    gNvram[key] = std::vector<uint8_t>(bytes, bytes + length);
+    return true;
+}
+
+extern "C" void switch_battery_data_mounted(void);
+
+#if SWITCH_IPSW_KIND_24B119
+static AppleSmartBatteryPack *publishedPack()
+{
+    for (IOService *s : IOService::published()) {
+        if (auto *p = dynamic_cast<AppleSmartBatteryPack *>(s))
+            return p;
+    }
+    return nullptr;
+}
+
+static OSDictionary packData()
+{
+    AppleSmartBatteryPack *pack = publishedPack();
+    auto *d = pack ? dynamic_cast<OSDictionary *>(pack->getProperty("BatteryData")) : nullptr;
+    return d ? *d : OSDictionary();
+}
+#endif
+
+// What powerd writes into the battery on 24B119 (SwitchBatteryStore.h): kept in NVRAM, never in the gauge, and shown
+// where powerd reads it back: DateOfFirstUse on the pack's BatteryData and the battery, ShipChargeLimitData on the
+// battery. 21H461's powerd writes neither, and its kernel refuses both as before.
+static void batteryStore()
+{
+    bootWithNintendoCharger();
+    advance(2300);
+    const auto gaugeBefore = gGauge.reg;
+    OSDictionary limit;
+    limit.setObject("ShipChargeLimitEnabled", kOSBooleanFalse);
+    OSNumber *date = OSNumber::withNumber(1795564800, 64);
+    OSDictionary dict;
+    dict.setObject("DateOfFirstUse", date);
+    dict.setObject("ShipChargeLimitData", &limit);
+    const IOReturn r = battery()->setProperties(&dict);
+#if SWITCH_IPSW_KIND_24B119
+    check(r == kIOReturnSuccess, "powerd's writes taken: " + std::to_string(r));
+    check(gNvram.count(SWITCH_BATTERY_NVRAM_DATE_OF_FIRST_USE) && gNvram.count(SWITCH_BATTERY_NVRAM_SHIP_CHARGE_LIMIT),
+          "both kept in NVRAM");
+    check(gGauge.reg == gaugeBefore, "the gauge is not written");
+    check(packData().numbers["DateOfFirstUse"] == 1795564800, "DateOfFirstUse on the pack, where powerd looks first");
+    check(battery()->ps["DateOfFirstUse"] == 1795564800, "DateOfFirstUse on the battery");
+    check(battery()->dicts.count("ShipChargeLimitData") &&
+              battery()->dicts["ShipChargeLimitData"].booleans.count("ShipChargeLimitEnabled") &&
+              !battery()->dicts["ShipChargeLimitData"].booleans["ShipChargeLimitEnabled"],
+          "ShipChargeLimitData on the battery as powerd wrote it");
+    advance(5000);
+    check(packData().numbers["DateOfFirstUse"] == 1795564800, "DateOfFirstUse kept across readings");
+#else
+    check(r == kIOReturnUnsupported, "21H461 refuses them as before");
+    check(gNvram.empty(), "nothing in NVRAM on 21H461");
+    (void)gaugeBefore;
+#endif
+    date->release();
+}
+
+#if SWITCH_IPSW_KIND_24B119
+// A later boot: NVRAM holds what powerd wrote, so the pack has DateOfFirstUse and powerd, finding every pack dated,
+// writes no new one (24B119 powerd 0x10004cc4c-0x10004cc80).
+static void batteryStoreRestored()
+{
+    OSDictionary limit;
+    limit.setObject("ShipChargeLimitEnabled", kOSBooleanTrue);
+    OSString *note = OSString::withCString("from an earlier boot");
+    limit.setObject("Note", note);
+    uint8_t bytes[SWITCH_BATTERY_SHIP_LIMIT_MAX];
+    const size_t length = switch_battery_store_encode(&limit, bytes, sizeof(bytes));
+    check(length > 0, "the dictionary encodes");
+    gNvram[SWITCH_BATTERY_NVRAM_SHIP_CHARGE_LIMIT] = std::vector<uint8_t>(bytes, bytes + length);
+    gNvram[SWITCH_BATTERY_NVRAM_DATE_OF_FIRST_USE] = {0x00, 0xe1, 0x06, 0x6b, 0, 0, 0, 0};  // 0x6b06e100
+    bootWithNintendoCharger();
+    advance(2300);
+    switch_battery_data_mounted();
+    check(packData().numbers["DateOfFirstUse"] == 0x6b06e100,
+          "restored to the pack before powerd: " + std::to_string(packData().numbers["DateOfFirstUse"]));
+    check(battery()->dicts.count("ShipChargeLimitData") &&
+              battery()->dicts["ShipChargeLimitData"].booleans["ShipChargeLimitEnabled"] &&
+              battery()->dicts["ShipChargeLimitData"].strings["Note"] == "from an earlier boot",
+          "ShipChargeLimitData restored to the battery");
+    note->release();
+}
+
+// The store's encoding: what it holds comes back as it went in; what it cannot hold is refused, never cut.
+static void batteryStoreEncoding()
+{
+    OSDictionary d;
+    OSNumber *n = OSNumber::withNumber(0x123456789abcull, 64);
+    OSString *t = OSString::withCString("eighty");
+    d.setObject("Supported", kOSBooleanTrue);
+    d.setObject("Level", n);
+    d.setObject("Name", t);
+    uint8_t bytes[SWITCH_BATTERY_SHIP_LIMIT_MAX];
+    const size_t length = switch_battery_store_encode(&d, bytes, sizeof(bytes));
+    OSDictionary *back = switch_battery_store_decode(bytes, length);
+    check(back && back->booleans["Supported"] && back->strings["Name"] == "eighty", "booleans and strings round trip");
+    auto *level = back ? dynamic_cast<OSNumber *>(back->getObject("Level")) : nullptr;
+    check(level && level->unsigned64BitValue() == 0x123456789abcull, "64-bit numbers round trip");
+    check(switch_battery_store_encode(&d, bytes, 10) == 0, "a dictionary that does not fit is refused");
+    check(switch_battery_store_decode(bytes, length - 1) == nullptr, "a cut encoding does not parse");
+    OSSafeReleaseNULL(back);
+    n->release();
+    t->release();
+}
+#endif
+
 // One process per scenario: the drivers keep globals.
 static void run(void (*scenario)())
 {
@@ -2224,6 +2349,23 @@ TEST(SwitchCharging, BatteryPack)
 {
     run(batteryPack);
 }
+
+TEST(SwitchCharging, BatteryStore)
+{
+    run(batteryStore);
+}
+
+#if SWITCH_IPSW_KIND_24B119
+TEST(SwitchCharging, BatteryStoreRestored)
+{
+    run(batteryStoreRestored);
+}
+
+TEST(SwitchCharging, BatteryStoreEncoding)
+{
+    run(batteryStoreEncoding);
+}
+#endif
 
 TEST(SwitchCharging, SettingsLost)
 {

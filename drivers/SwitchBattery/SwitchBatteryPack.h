@@ -29,10 +29,12 @@
 
 // Capacities and charge in mAh, voltage in mV, currents in mA (positive = charging), temperature in centi-C.
 // chargeAccum: the gauge's coulomb counter (MAX17050 QH, 0.5 mAh a count), wrapping at 16 bits.
+// dateOfFirstUse: powerd's, as SwitchBatteryStore.h keeps it, 0 until it has written one.
 struct SwitchPackReading {
     int remainingMah, fullMah, designMah, millivolts, avgMilliamps, instantMilliamps, chargeAccumMah, centiCelsius;
     unsigned cycles, percent;
     bool full;
+    uint64_t dateOfFirstUse;
 };
 
 OSDictionary *switch_battery_pack_data(const SwitchPackReading &r, const OSString *serial);

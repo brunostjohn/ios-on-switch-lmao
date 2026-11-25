@@ -187,6 +187,11 @@ public:
     {
         return (uint32_t)value;
     }
+
+    unsigned long long unsigned64BitValue() const
+    {
+        return value;
+    }
 };
 
 class OSString : public OSObject {
@@ -198,6 +203,11 @@ public:
         auto *o = new OSString;
         o->text = s;
         return o;
+    }
+
+    const char *getCStringNoCopy() const
+    {
+        return text.c_str();
     }
 };
 
@@ -232,7 +242,7 @@ class OSDictionary : public OSObject {
 public:
     std::map<std::string, long long> numbers;
     std::map<std::string, std::string> strings;
-    std::map<std::string, OSObject *> objects;  // as given (not retained: the tests keep them alive)
+    std::map<std::string, OSObject *> objects;  // retained, as libkern's: never released (the tests' objects live on)
     std::map<std::string, bool> booleans;       // the keys whose value is an OSBoolean (also in `numbers`)
 
     static OSDictionary *withCapacity(unsigned)
@@ -250,6 +260,7 @@ public:
             numbers[key] = b->value;
             booleans[key] = b->value;
         }
+        value->retain();
         objects[key] = const_cast<OSObject *>(value);
         return true;
     }
@@ -259,7 +270,22 @@ public:
         auto it = objects.find(key);
         return it == objects.end() ? nullptr : it->second;
     }
+
+    bool iterateObjects(void *refcon, bool (*callback)(void *refcon, const OSSymbol *key, OSObject *object));
 };
+
+inline bool OSDictionary::iterateObjects(void *refcon,
+                                         bool (*callback)(void *refcon, const OSSymbol *key, OSObject *object))
+{
+    for (const auto &[name, object] : objects) {
+        const OSSymbol *key = OSSymbol::withCString(name.c_str());
+        const bool done = callback(refcon, key, object);
+        key->release();
+        if (done)
+            break;
+    }
+    return true;
+}
 
 class IOWorkLoop;
 class IOService;
