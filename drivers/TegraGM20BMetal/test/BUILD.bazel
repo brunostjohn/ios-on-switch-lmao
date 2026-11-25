@@ -3685,6 +3685,26 @@ host_test(
     cxx_std = "c++17",
 )
 
+# The build's own pack as the render server wires it: every table a creation reads, all fast keys, the segments' words
+host_test(
+    name = "real_pack_window_test",
+    srcs = [
+        "real_pack_window_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20BMetal:pack.cpp",
+        "//drivers/TegraGM20BMetal:pack.h",
+        "//drivers/TegraGM20BMetal:pack_window.h",
+        "//drivers/TegraGM20BMetal:program_pages.h",
+        "//drivers/TegraGM20BMetal:set_entries.h",
+    ],
+    args = ["$(rootpath //gpu/seed:pack)/pack.bin"],
+    copts = ["-Idrivers/TegraGM20B"],
+    cxx_std = "c++17",
+    data = ["//gpu/seed:pack"],
+    gtest_main = False,
+    tags = ["pack"],
+)
+
 host_test(
     name = "pack_window_test",
     srcs = [
