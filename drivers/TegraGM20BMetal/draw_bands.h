@@ -3,15 +3,13 @@
 // bands. GM20B leaves a graphics context only at a wait-for-idle, so a draw in flight always finishes before the
 // compositor's kick gets GR. Each band ends in a wait-for-idle semaphore release: into the channel's progress stamp
 // where it has one (every app channel does, device_channel.cpp), else a batch end's seqno release
-// (TegraGM20BPushFence). On the device a kick's preempt lands at the second band end after it, not the first, under
-// either ending (gpu.sched.long_draw_bands: 2 x 1444 + ~250 us on 25 Nov, two bands of 3895 us on 22 Nov), so a band's
-// budget bounds half that wait. The bands are disjoint rows of the draw's scissor area and cover it exactly once, so
-// every pixel the draw can write is shaded by exactly one band, in the draw's own primitive order: blending, a
-// framebuffer fetch (a pixel reads only itself) and the pixel interlock (a ticket is taken by a fragment that is
-// shaded, after the scissor test, and released before the band's end) give what the whole draw gives. A visibility
-// report is written between draws, never between a draw's bands, so the sample counter sums the bands as it sums the
-// whole draw. A vertex program's side effects would repeat per band: such a draw is drawn whole. Per band the CPU
-// writes a scissor and the draw's words.
+// (TegraGM20BPushFence). GR is idle there, so a kick's preempt can land between bands. The bands are disjoint rows of
+// the draw's scissor area and cover it exactly once, so every pixel the draw can write is shaded by exactly one band,
+// in the draw's own primitive order: blending, a framebuffer fetch (a pixel reads only itself) and the pixel interlock
+// (a ticket is taken by a fragment that is shaded, after the scissor test, and released before the band's end) give
+// what the whole draw gives. A visibility report is written between draws, never between a draw's bands, so the sample
+// counter sums the bands as it sums the whole draw. A vertex program's side effects would repeat per band: such a draw
+// is drawn whole. Per band the CPU writes a scissor and the draw's words.
 #pragma once
 #include <algorithm>
 #include <cstdint>
