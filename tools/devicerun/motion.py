@@ -7,13 +7,13 @@ asked for and must be ready; the other page-0xff0c services are never opened.
 Boot 2 (22-23 Nov, iOS 27) is the baseline: 90 "not ready" lines for usages 1, 5 and 26 and 24 give-ups (locationd 2,
 SpringBoard 15, backboardd 6, SwitchHWTest 1); locationd also added usages 4, 7, 8 and 24 without setting a property.
 Usages 4, 8 and 24 are reported, not judged: their creation gates were not read. locationd has its own copy of the
-table, outside the cache, which edits_24B119.json gives the same word (15032ab57's trust cache trusts the result), so it
-is judged with the rest.
+table, outside the cache, which edits_24B119.json edits (15032ab57's trust cache trusts the result): it is judged on its
+own, on iPadOS 27 boots only (motion.kernel), so iOS 17's verdicts stay as they were.
 
 The fast path (SwitchHIDFastPath.cpp): 24B119's sandbox profiles let SpringBoard (by its user-client-class entitlement)
-and locationd open IOHIDEventServiceFastPathUserClient, so their opens must succeed. backboardd's profile admits the
-class only by that entitlement, which backboardd lacks, so J181 refuses its open as well and its CoreMotion takes the
-pushed sample. A copy that finds no report yet is expected only as a session starts.
+and locationd open IOHIDEventServiceFastPathUserClient, so their opens must succeed and their copies find a report
+once a session has started. backboardd's profile admits the class only by that entitlement, which backboardd lacks, so
+J181 refuses its open as well and its CoreMotion takes the pushed sample: reported, not judged.
 """
 
 from tools.devicerun.rules import REPORT, Check
@@ -32,27 +32,44 @@ CLEARED = r'\{65292, (?P<usage>1|7|26)\}'
 DEVICE_MOTION = '[CLIoHidInterface] Property for usage pair {65292, 5}: {ReportInterval = '
 FASTPATH_OPEN = '[FastPath] openFastPathPrivate() failed'
 FASTPATH_COPY = '[FastPath] copyEventPrivate() Failed'
+CACHE_COPY = '!locationd'
+IOS27 = 'motion.kernel darwin=25'
+FASTPATH = 'drivers/SwitchTouch/SwitchHIDFastPath.cpp'
+EDITS = 'translate/arm64e/pretranslate/edits_24B119.json'
 
 MOTION = [
+    Check(
+        'motion.kernel',
+        OWNER,
+        'Darwin Kernel Version ',
+        REPORT,
+        process='kernel',
+        regex=r'^Darwin Kernel Version (?P<darwin>\d+)\.',
+        show=('darwin',),
+        source=SOURCE,
+        note="the boot's Darwin major: 25 is iPadOS 27, where locationd and the fast path's copies are judged",
+    ),
     Check(
         'motion.spu-added',
         OWNER,
         ADDED,
+        process=CACHE_COPY,
         subsystem=SUBSYSTEM,
         regex=CLEARED,
         show=('usage',),
         source=SOURCE,
-        note='a coprocessor service CoreMotion no longer asks for; boot 2: 26 x2, and 7 in locationd',
+        note='a coprocessor service CoreMotion no longer asks for; boot 2: 26 x2',
     ),
     Check(
         'motion.spu-not-ready',
         OWNER,
         NOT_READY,
+        process=CACHE_COPY,
         subsystem=SUBSYSTEM,
         regex=USAGE,
-        show=('process', 'usage'),
+        show=('usage',),
         source=SOURCE,
-        note='boot 2: usage 5 x25, 26 x41, locationd 24',
+        note='boot 2: usage 5 x25, 26 x41',
     ),
     *(
         Check(
@@ -64,7 +81,41 @@ MOTION = [
             source=SOURCE,
             note=f'boot 2: {count}',
         )
-        for process, count in (('SpringBoard', 15), ('backboardd', 6), ('SwitchHWTest', 1), ('locationd', 2))
+        for process, count in (('SpringBoard', 15), ('backboardd', 6), ('SwitchHWTest', 1))
+    ),
+    Check(
+        'motion.locationd-spu-added',
+        OWNER,
+        ADDED,
+        process='locationd',
+        subsystem=SUBSYSTEM,
+        regex=CLEARED,
+        show=('usage',),
+        applies=IOS27,
+        source=EDITS,
+        note="a coprocessor service locationd's own table no longer asks for; boot 2, before 15032ab57: 7",
+    ),
+    Check(
+        'motion.locationd-spu-not-ready',
+        OWNER,
+        NOT_READY,
+        process='locationd',
+        subsystem=SUBSYSTEM,
+        regex=USAGE,
+        show=('usage',),
+        applies=IOS27,
+        source=EDITS,
+        note="boot 2, before 15032ab57: 24; usage 5 here is every app's device motion",
+    ),
+    Check(
+        'motion.give-up.locationd',
+        OWNER,
+        GIVE_UP,
+        process='locationd',
+        subsystem=SUBSYSTEM,
+        applies=IOS27,
+        source=EDITS,
+        note='boot 2, before 15032ab57: 2',
     ),
     Check(
         'motion.fastpath-null',
@@ -105,10 +156,11 @@ MOTION = [
             FASTPATH_OPEN,
             process=process,
             subsystem=SUBSYSTEM,
-            source='drivers/SwitchTouch/SwitchHIDFastPath.cpp',
+            applies=applies,
+            source=FASTPATH,
             note='CoreMotion could not open the device motion fast path: the plug-in type, openForClient or the slots',
         )
-        for process in ('SpringBoard', 'locationd')
+        for process, applies in (('SpringBoard', ''), ('locationd', IOS27))
     ),
     Check(
         'motion.fastpath-open.backboardd',
@@ -117,19 +169,34 @@ MOTION = [
         REPORT,
         process='backboardd',
         subsystem=SUBSYSTEM,
-        source='drivers/SwitchTouch/SwitchHIDFastPath.cpp',
+        source=FASTPATH,
         note="expected: backboardd's 24B119 sandbox profile denies it IOHIDEventServiceFastPathUserClient, as on J181",
+    ),
+    *(
+        Check(
+            f'motion.fastpath-copy.{process}',
+            OWNER,
+            FASTPATH_COPY,
+            process=process,
+            subsystem=SUBSYSTEM,
+            unless='motion.device-motion-interval',
+            unless_within=1.0,
+            key='process',
+            applies=IOS27,
+            source=FASTPATH,
+            note='a fast path copy that found no report, more than 1 s from its process setting a ReportInterval',
+        )
+        for process in ('SpringBoard', 'locationd')
     ),
     Check(
         'motion.fastpath-copy',
         OWNER,
         FASTPATH_COPY,
+        REPORT,
         subsystem=SUBSYSTEM,
-        unless='motion.device-motion-interval',
-        unless_within=1.0,
-        key='process',
-        source='drivers/SwitchTouch/SwitchHIDFastPath.cpp',
-        note='a fast path copy that found no report, more than 1 s from its process setting a ReportInterval',
+        show=('process',),
+        source=FASTPATH,
+        note="every process's failed copies; SpringBoard's and locationd's are judged on iPadOS 27",
     ),
     Check(
         'motion.spu-added-ungated',

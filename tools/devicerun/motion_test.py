@@ -4,12 +4,13 @@ import unittest
 
 from tools.devicerun import devicerun
 from tools.devicerun.motion import MOTION
-from tools.devicerun.rules import FAIL, INFO, PASS
+from tools.devicerun.rules import FAIL, INFO, NA, PASS
 
 LOCATIOND = '/usr/libexec/locationd'
 BACKBOARDD = '/usr/libexec/backboardd'
 SPRINGBOARD = '/System/Library/CoreServices/SpringBoard.app/SpringBoard'
 HWTEST = '/private/var/containers/Bundle/Application/X/SwitchHWTest.app/SwitchHWTest'
+KERNEL = '/System/Library/Kernels/kernel.development'
 
 
 def record(message: str, process: str, second: int = 0) -> dict:
@@ -27,6 +28,20 @@ def record(message: str, process: str, second: int = 0) -> dict:
 def results(*records: dict) -> dict:
     found, _ = devicerun.run_checks(list(records), MOTION)
     return {r.check.name: r for r in found}
+
+
+def darwin(major: int) -> dict:
+    return record(f'Darwin Kernel Version {major}.5.0: Thu  1 Jan 1970 00:00:00 UTC; switch-ios:ios-obj/X', KERNEL)
+
+
+def at(second: float, message: str, process: str) -> dict:
+    return {**record(message, process), 'timestamp': f'2026-11-22 23:53:{second:09.6f}+0000'}
+
+
+IOS27, IOS17 = darwin(25), darwin(23)
+START = '[CLIoHidInterface] Property for usage pair {65292, 5}: {ReportInterval = 10000} was set successfully'
+COPY = '[FastPath] copyEventPrivate() Failed (e00002c0)'
+OPEN = '[FastPath] openFastPathPrivate() failed,serviceRef,<IOHIDServiceClient>'
 
 
 BOOT_2 = (
@@ -53,20 +68,27 @@ class Motion(unittest.TestCase):
             self.assertEqual(got[name].verdict, FAIL, name)
         self.assertEqual(got['motion.spu-added-ungated'].verdict, INFO)
 
-    def test_locationd_is_judged_like_the_rest(self):
-        got = results(
+    def test_locationds_own_table_is_judged_on_ios_27_only(self):
+        locationd = (
             record('[CLIoHidInterface] Adding new Device with usage pair {65292, 1}', LOCATIOND),
             record('[CLIoHidInterface] Service for device with usage pair {65292, 5} is not ready', LOCATIOND, 1),
             record('[CLIoHidInterface] Could not set all properties after too many retries. Giving up.', LOCATIOND, 2),
         )
-        self.assertEqual(got['motion.spu-added'].verdict, FAIL)
-        self.assertEqual(got['motion.spu-not-ready'].verdict, FAIL)
-        self.assertEqual(got['motion.give-up.locationd'].verdict, FAIL)
+        names = ('motion.locationd-spu-added', 'motion.locationd-spu-not-ready', 'motion.give-up.locationd')
+        got = results(IOS27, *locationd)
+        for name in names:
+            self.assertEqual(got[name].verdict, FAIL, name)
+        self.assertEqual(got['motion.spu-added'].verdict, PASS, "the cache's copy is judged apart")
+        self.assertEqual(got['motion.spu-not-ready'].verdict, PASS)
+        for kernel in ((IOS17,), ()):
+            got = results(*kernel, *locationd)
+            for name in names:
+                self.assertEqual(got[name].verdict, NA, name)
 
     def test_locationds_device_motion_is_switchmotions(self):
-        got = results(record('[CLIoHidInterface] Adding new Device with usage pair {65292, 5}', LOCATIOND))
-        self.assertEqual(got['motion.spu-added'].verdict, PASS)
-        self.assertEqual(got['motion.spu-not-ready'].verdict, PASS)
+        got = results(IOS27, record('[CLIoHidInterface] Adding new Device with usage pair {65292, 5}', LOCATIOND))
+        self.assertEqual(got['motion.locationd-spu-added'].verdict, PASS)
+        self.assertEqual(got['motion.locationd-spu-not-ready'].verdict, PASS)
 
     def test_switchmotions_device_motion_service_passes(self):
         got = results(
@@ -83,24 +105,25 @@ class Motion(unittest.TestCase):
         self.assertEqual(got['motion.device-motion-rejected'].verdict, PASS)
 
     def test_a_fast_path_coremotion_cannot_open_fails_where_the_sandbox_admits_it(self):
-        failed = '[FastPath] openFastPathPrivate() failed,serviceRef,<IOHIDServiceClient>'
         for process, name in ((SPRINGBOARD, 'SpringBoard'), (LOCATIOND, 'locationd')):
-            self.assertEqual(results(record(failed, process))[f'motion.fastpath-open.{name}'].verdict, FAIL, name)
-        self.assertEqual(results(record(failed, BACKBOARDD))['motion.fastpath-open.backboardd'].verdict, INFO)
+            self.assertEqual(results(IOS27, record(OPEN, process))[f'motion.fastpath-open.{name}'].verdict, FAIL, name)
+        self.assertEqual(results(IOS17, record(OPEN, LOCATIOND))['motion.fastpath-open.locationd'].verdict, NA)
+        self.assertEqual(results(IOS27, record(OPEN, BACKBOARDD))['motion.fastpath-open.backboardd'].verdict, INFO)
 
     def test_a_copy_without_a_report_is_expected_only_as_its_process_starts_a_session(self):
-        start = '[CLIoHidInterface] Property for usage pair {65292, 5}: {ReportInterval = 10000} was set successfully'
-        copy = '[FastPath] copyEventPrivate() Failed (e00002c0)'
-        got = results(
-            record(start, SPRINGBOARD), {**record(copy, SPRINGBOARD), 'timestamp': '2026-11-22 23:53:00.500000+0000'}
-        )
-        self.assertEqual(got['motion.fastpath-copy'].verdict, PASS)
-        got = results(record(start, SPRINGBOARD), record(copy, SPRINGBOARD, 5))
-        self.assertEqual(got['motion.fastpath-copy'].verdict, FAIL)
-        got = results(
-            record(start, SPRINGBOARD), {**record(copy, LOCATIOND), 'timestamp': '2026-11-22 23:53:00.500000+0000'}
-        )
-        self.assertEqual(got['motion.fastpath-copy'].verdict, FAIL)
+        got = results(IOS27, record(START, SPRINGBOARD), at(0.5, COPY, SPRINGBOARD))
+        self.assertEqual(got['motion.fastpath-copy.SpringBoard'].verdict, PASS)
+        got = results(IOS27, record(START, SPRINGBOARD), record(COPY, SPRINGBOARD, 5))
+        self.assertEqual(got['motion.fastpath-copy.SpringBoard'].verdict, FAIL)
+        got = results(IOS27, record(START, SPRINGBOARD), at(0.5, COPY, LOCATIOND))
+        self.assertEqual(got['motion.fastpath-copy.locationd'].verdict, FAIL, "another process's start excuses nothing")
+        self.assertEqual(got['motion.fastpath-copy'].verdict, INFO)
+
+    def test_backboardds_refused_fast_path_and_its_failed_copies_are_reported_only(self):
+        got = results(IOS27, record(START, BACKBOARDD), record(OPEN, BACKBOARDD, 1), record(COPY, BACKBOARDD, 9))
+        self.assertEqual(got['motion.fastpath-open.backboardd'].verdict, INFO)
+        self.assertEqual(got['motion.fastpath-copy'].verdict, INFO)
+        self.assertNotIn(FAIL, {r.verdict for r in got.values()})
 
     def test_a_report_coremotion_refuses_fails(self):
         got = results(record('Bad device motion report,type,3,size,52', SPRINGBOARD))
@@ -108,6 +131,7 @@ class Motion(unittest.TestCase):
 
     def test_the_accelerometer_and_gyroscope_alone_pass(self):
         got = results(
+            IOS27,
             record('[CLIoHidInterface] Adding new Device with usage pair {65280, 3}', SPRINGBOARD),
             record(
                 '[CLIoHidInterface] Property for usage pair {65280, 9}: {ReportInterval = 10000} was set', HWTEST, 1
@@ -115,9 +139,11 @@ class Motion(unittest.TestCase):
         )
         for name, result in got.items():
             if name not in (
+                'motion.kernel',
                 'motion.spu-added-ungated',
                 'motion.device-motion-interval',
                 'motion.fastpath-open.backboardd',
+                'motion.fastpath-copy',
             ):
                 self.assertEqual(result.verdict, PASS, name)
 
