@@ -188,6 +188,19 @@ class DumpTest(unittest.TestCase):
         self.assertIn('GPU waits behind unsettled work: channel 2 on channel 21 (?[0]) 1, channel 2 on VIC 1', text)
         self.assertIn("GPU: from their channel's previous end, a stale start stamp: channel 21 1", text)
 
+    def test_a_submission_waiting_for_ring_room_says_how_long_and_how_full(self):
+        room, done = ktrace.GPU_ROOM, ktrace.GPU_ROOM_DONE
+        events = [
+            event(10, room, (21, (5 << 32) | 4, (90 << 32) | 82), SUBMITTER),
+            event(310, done, (21, (6 << 32) | 4, 90 << 32), SUBMITTER),
+        ]
+        (line,) = dumps.room_lines(ktrace.parse(pack_ring(events)), dumps.Names(), 0, tick(400))
+        self.assertEqual(
+            line,
+            f'GPU ring full: 1 submissions waited for room, ?[0] ({SUBMITTER}) channel 21 300.0 ms (GET 5 PUT 4, '
+            '8 jobs unfinished)',
+        )
+
     def test_a_submission_older_than_the_ring_is_left_out(self):
         """Maps' channel 21 on 25 Nov: start stamps about 1188 s before their end, in a ring of a second or two."""
         job = ktrace.GPU_JOB

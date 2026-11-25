@@ -63,6 +63,7 @@ PERF_CS_KDATA, PERF_CS_UDATA = code(37, 2, 3), code(37, 2, 4)
 PERF_CS_KHDR, PERF_CS_UHDR = code(37, 2, 5), code(37, 2, 6)
 TRIGGER, DUMP, GPU_JOB, GPU_WAIT = code(6, 18, 0x3E0), code(6, 18, 0x3E1), code(6, 18, 0x3E8), code(6, 18, 0x3E9)
 SD_PICK = code(6, 18, 0x3D8)  # NativeSwitchBlock's queue picks
+GPU_ROOM, GPU_ROOM_DONE = code(6, 18, 0x3EA), code(6, 18, 0x3EB)  # a submission waiting for room in its channel
 SD_CLASSES = ('high', 'default', 'low', 'background')
 ENGINES = {1: 'GM20B', 2: 'copy engine', 3: 'VIC', 4: 'NVDEC', 5: 'display', 6: 'NVENC', 7: 'promise', 8: 'NVJPG'}
 SUBMIT = code(6, 18, 0x3F1)
@@ -386,6 +387,42 @@ def sd_picks(events: list[Event]) -> list[SdPick]:
                     bool(a3 & 0x200),
                     a3 >> 16,
                     e.args[3],
+                )
+            )
+    return out
+
+
+@dataclass(frozen=True)
+class RoomWait:
+    tid: int
+    channel: int
+    start: int
+    end: int
+    get: int
+    put: int
+    unfinished: int  # the channel's jobs submitted and not done when the wait began
+    timed_out: bool
+
+
+def room_waits(events: list[Event]) -> list[RoomWait]:
+    """Return each submission's wait for room in its channel's ring, from its start to its end on the same thread."""
+    began: dict[int, Event] = {}
+    out = []
+    for e in events:
+        if e.id == GPU_ROOM:
+            began[e.tid] = e
+        elif e.id == GPU_ROOM_DONE and (b := began.pop(e.tid, None)) is not None:
+            submitted, done = b.args[2] >> 32, b.args[2] & 0xFFFFFFFF
+            out.append(
+                RoomWait(
+                    e.tid,
+                    b.args[0],
+                    b.ts,
+                    e.ts,
+                    b.args[1] >> 32,
+                    b.args[1] & 0xFFFFFFFF,
+                    (submitted - done) & 0xFFFFFFFF,
+                    (e.args[2] & 0xFFFFFFFF) != 0,
                 )
             )
     return out

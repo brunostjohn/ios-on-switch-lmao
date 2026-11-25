@@ -270,7 +270,7 @@ def gpu(ring: ktrace.Ring, n: Names, lo: int, hi: int) -> list[str]:
         if impossible
         else []
     )
-    note += wait_lines(ring, n, lo, hi)
+    note += wait_lines(ring, n, lo, hi) + room_lines(ring, n, lo, hi)
     if not inside:
         return ['GPU: no submission ended in the window', *note]
     by: Counter[str] = Counter()
@@ -316,6 +316,23 @@ def sd_lines(ring: ktrace.Ring, lo: int, hi: int) -> list[str]:
         f'SD queue: {len(picks)} picks (' + ', '.join(f'{k} {v}' for k, v in sorted(by.items())) + '), '
         f'{sum(p.passed for p in picks)} passed older requests; up to {max(p.queued for p in picks)} queued, the head '
         f'waiting up to {max(p.head_waited_us for p in picks) / 1000:.1f} ms'
+    ]
+
+
+def room_lines(ring: ktrace.Ring, n: Names, lo: int, hi: int) -> list[str]:
+    """Return the submissions that waited for room in their channel's ring in [lo, hi], the longest first."""
+    waits = sorted(
+        (w for w in ktrace.room_waits(ring.events) if w.end >= lo and w.start <= hi), key=lambda w: w.start - w.end
+    )
+    if not waits:
+        return []
+    return [
+        f'GPU ring full: {len(waits)} submissions waited for room, '
+        + ', '.join(
+            f'{n.who(w.tid)} channel {w.channel} {ms(w.end - w.start):.1f} ms (GET {w.get} PUT {w.put}, '
+            f'{w.unfinished} jobs unfinished{", timed out" if w.timed_out else ""})'
+            for w in waits[:4]
+        )
     ]
 
 
