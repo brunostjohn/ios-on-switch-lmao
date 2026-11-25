@@ -1827,6 +1827,26 @@ TEST(GM20BParkedBoSource, LockOrderAndOffLockVmCalls)
 	EXPECT_TRUE(stats.before("parkedStatsTake(", "IOLockLock(p->lock);"));
 }
 
+// A waiter on a parking, unparking or reclaiming BO pushes that BO's own mover, on that BO's own event: one owner per
+// connection was overwritten and cleared by unrelated BOs, and the reaper never named itself.
+TEST(GM20BParkedBoSource, ParkWaitersPushTheirBosOwnMover)
+{
+	EXPECT_FALSE(CodeText(client()).has("parkWait_"));
+	EXPECT_FALSE(CodeText(client()).has("parkOwner_"));
+	EXPECT_TRUE(Block(client(), "bool AGXDeviceUserClient::parkWaitStableLocked(")
+			    .has("switch_gpu_sleep_inheritor(lock_, &bo->parkOwner, bo->parkOwner);"));
+	const CodeText reclaim = Block(client(), "bool AGXDeviceUserClient::reclaimParkedBo(");
+	EXPECT_TRUE(reclaim.before("bo->parkOwner = switch_gpu_current_thread();",
+				   "parkUnlinkLocked(bo, true);"));
+	EXPECT_TRUE(Block(client(), "void AGXDeviceUserClient::parkFinishReclaimLocked(")
+			    .has("parkSettledLocked(bo);"));
+	EXPECT_TRUE(Block(client(), "ReclaimedBacking *AGXDeviceUserClient::detachReclaimedLocked(")
+			    .has("parkSettledLocked(bo);"));
+	const CodeText settled = Block(client(), "void AGXDeviceUserClient::parkSettledLocked(");
+	EXPECT_TRUE(settled.before("bo->parkOwner = nullptr;",
+				   "switch_gpu_wakeup_inheritor(lock_, &bo->parkOwner);"));
+}
+
 TEST(GM20BParkedBoSource, OverwriteMappingsAndXnuHelpersPreserveVmSafety)
 {
 	const CodeText map = Block(client(), "IOReturn AGXDeviceUserClient::mapToken(");
