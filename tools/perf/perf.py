@@ -88,9 +88,25 @@ def _detect_build(reports: list[ips.Report], boots: set[str]) -> str:
     return next((r.build for r in reports if r.build), '')
 
 
+def dumps_only(crashes: str, kcdata: str | None, syms: symbols.Symbols) -> str:
+    """Return the recorder dumps of a crash folder pulled without its log archive, each summarised."""
+    found = dumps.find(crashes)
+    out = [f'# Flight recorder dumps in {crashes}: {len(found)}, no log archive (pull one for the rest of the report)']
+    for ring, shot in found:
+        try:
+            out += ['', *dumps.summary(ring, shot, kcdata, {}, syms)]
+        except (ValueError, OSError) as exc:
+            out += ['', f'{Path(ring).name}: unreadable dump ({exc})']
+    return '\n'.join(out) + '\n'
+
+
 def write_reports(paths: list[str], crashes: str | None, args: argparse.Namespace) -> list[str]:
-    recs, images = source.read(paths, args.start, args.end)
     kcdata = args.kcdata or (str(KCDATA) if KCDATA.is_file() else None)
+    if not paths:
+        if not crashes:
+            raise SystemExit('report needs a log archive, a crash folder (--crashes), or both')
+        return [dumps_only(crashes, kcdata, symbols.load(args.dsc, args.kernel, args.symbols, args.build))]
+    recs, images = source.read(paths, args.start, args.end)
     scanned = ips.scan(crashes)
     boots = {b.upper() for b in source.by_boot(recs) if b}
     build = args.build or _detect_build(scanned, boots)
@@ -141,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--kcdata', help="XNU's tools/lldbmacros/kcdata.py, which reads a dump's stackshot")
     sub = parser.add_subparsers(dest='command', required=True)
     rep = sub.add_parser('report', help='report on archives already pulled')
-    rep.add_argument('logs', nargs='+', help='.logarchive folders (absolute under bazel run) or ndjson files')
+    rep.add_argument('logs', nargs='*', help='.logarchive folders (absolute under bazel run) or ndjson files')
     rep.add_argument('--crashes', help='the pulled crash folder (idevicecrashreport -e)')
     pul = sub.add_parser('pull', help='pull a session from the device over USB, then report on it')
     pul.add_argument('folder', help='where the session folder is made (absolute under bazel run)')

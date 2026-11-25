@@ -468,6 +468,19 @@ class SessionTest(unittest.TestCase):
 
 
 class PullTest(unittest.TestCase):
+    def test_a_crash_folder_alone_reports_its_dumps(self):
+        testdata = Path(__file__).resolve().parent / 'testdata'
+        with tempfile.TemporaryDirectory() as d:
+            for name in ('Switch-recorder-3.kcdata', 'Switch-recorder-3.ktrace'):
+                (Path(d) / name).write_bytes((testdata / name).read_bytes())
+            out = Path(d) / 'report.txt'
+            self.assertEqual(perf.main(['report', '--crashes', d, '--out', str(out)]), 0)
+            text = out.read_text()
+        self.assertIn('Flight recorder dumps in', text)
+        self.assertIn('Switch-recorder-3.ktrace: hang', text)
+        with self.assertRaises(SystemExit):
+            perf.main(['report'])
+
     def test_a_pull_reaches_back_to_the_last_pull_and_the_report_names_a_hole(self):
         with tempfile.TemporaryDirectory() as d:
             now = datetime(2026, 11, 25, 20, 13, 23, tzinfo=UTC)
