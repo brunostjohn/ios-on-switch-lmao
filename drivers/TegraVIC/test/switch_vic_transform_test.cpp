@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include <gtest/gtest.h>
+#include <string>
 #include <vector>
 #include "switch_vic_backing_stubs.h"
 #include "../SwitchNativePicture.h"
@@ -26,6 +27,12 @@ std::vector<switch_gpu_backing_guard> declaredGuards;
 std::vector<switch_gpu_cpu_lease *> declaredLeases;
 unsigned writeReleases = 0;
 int gateRefusals = 0;  // destination accesses that would not wait refused (a publisher holds the gate)
+std::vector<std::string> refusals;
+}
+
+extern "C" void switch_refusal(const char *, const char *reason, const char *, ...)
+{
+    refusals.emplace_back(reason);
 }
 
 extern "C" const TegraVICTraits *tegra_vic_traits()
@@ -185,9 +192,11 @@ unsigned publishedTurns = 0;
 
 SwitchVICEvents *publishedEvents = nullptr;
 const SwitchVICWriteReservation *publishedHeld = nullptr;
+int publishError = 0;
+const char *publishWhy = nullptr;
 
 int switch_native_surface_publish_turned(const TegraVICSurface *, const SwitchNativeSurfaceView &source,
-                                         const TegraVICOp &op, uint32_t, const char **, SwitchVICEvents *events,
+                                         const TegraVICOp &op, uint32_t, const char **why, SwitchVICEvents *events,
                                          const SwitchVICWriteReservation *held)
 {
     EXPECT_EQ(source.native, &inputNative);
@@ -195,7 +204,9 @@ int switch_native_surface_publish_turned(const TegraVICSurface *, const SwitchNa
     ++publishedTurns;
     publishedEvents = events;
     publishedHeld = held;
-    return 0;
+    if (why)
+        *why = publishWhy;
+    return publishError;
 }
 
 switch_gpu_backing *switch_vic_surface_backing(const TegraVICSurface *)
@@ -239,6 +250,7 @@ protected:
         declaredLeases.clear();
         writeReleases = 0;
         gateRefusals = 0;
+        refusals.clear();
         source.surface = &inputObject;
         source.memory = &inputMemory;
         source.desc.fourcc = TEGRA_VIC_FOURCC('4', '2', '0', 'v');
@@ -505,6 +517,8 @@ protected:
         publishedTurns = 0;
         publishedEvents = nullptr;
         publishedHeld = nullptr;
+        publishError = 0;
+        publishWhy = nullptr;
         auto &d = destination.desc;
         d.fourcc = TEGRA_VIC_FOURCC('4', '2', '0', 'v');
         d.width = 720;
@@ -534,6 +548,19 @@ TEST_F(TurnDefer, TheJobsReservationGoesWithTheRecord)
     SwitchVICWriteReservation held = {};
     EXPECT_EQ(defer(nullptr, kProven, &held), 1);
     EXPECT_EQ(publishedHeld, &held);
+}
+
+// A turn the record refuses is copied by VIC, once a boot per reason the record gave; one copied before it was offered
+// to the record (the display cannot scan it) names none.
+TEST_F(TurnDefer, ATurnTheRecordRefusesIsCopiedAndSaysWhy)
+{
+    publishError = -16;
+    publishWhy = "native export into a surface a CPU user or another publication holds";
+    EXPECT_EQ(defer(nullptr), 0);
+    EXPECT_EQ(refusals, std::vector<std::string>{publishWhy});
+    refusals.clear();
+    EXPECT_EQ(defer(nullptr, {}), 0);
+    EXPECT_TRUE(refusals.empty());
 }
 
 TEST_F(TurnDefer, AProvenTurnIsRecordedAndNothingIsSubmitted)

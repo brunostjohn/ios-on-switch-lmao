@@ -556,6 +556,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//kits/SwitchDMA:SwitchDcache.h",
+        "//kits/SwitchRefusal:SwitchRefusal.h",
     ],
     additional_compiler_inputs = [
         "//drivers/TegraVIC:SwitchVICTransform.cpp",
