@@ -760,7 +760,8 @@ static void icm42607DeviceMotion()
     check(start(chip), "device motion: started");
     expectOps(k42607Start, "device motion start");
     setFeature(kSwitchHIDDeviceMotion, 10000, 0);
-    expectLog("os_log: SwitchMotion: 200000 mHz, accel 1 (0 us), gyro 1 (0 us), batch 10000 us, FIFO watermark 2",
+    expectLog("os_log: SwitchMotion: 200000 mHz, accel 1 (0 us), gyro 1 (0 us), motion 10000 us, batch 10000 us, "
+              "FIFO watermark 2",
               "device motion: 200 Hz, a report's two samples per FIFO interrupt");
     gNow += 80000000;  // past both sensors' settle times
     std::vector<uint64_t> sampleTimes;
@@ -892,7 +893,8 @@ static void icm42607Session()
     // UIAccelerometer-style client at 100 Hz: ODR code 9 (not the ICM-40607's 8), 25 Hz filter, accelerometer LN.
     setInterval(kSwitchHIDAccelerometer, 10000);
     expectOps({"W 20 09", "W 21 29", "W 23 36", "W 24 46", "W 1f 03", "W 2d 08"}, "42607 accel 100 Hz");
-    expectLog("os_log: SwitchMotion: 100000 mHz, accel 1 (10000 us), gyro 0 (0 us), batch 0 us, FIFO watermark 1",
+    expectLog("os_log: SwitchMotion: 100000 mHz, accel 1 (10000 us), gyro 0 (0 us), motion 0 us, batch 0 us, "
+              "FIFO watermark 1",
               "42607 accel 100 Hz");
     check(dataReady()->enabled && IOTimerEventSource::last->armed && IOTimerEventSource::last->ms == 1000,
           "42607: data-ready and the 1 s watchdog armed");
@@ -924,7 +926,8 @@ static void icm42607Session()
     // CoreMotion's gyroscope at 200 Hz joins: both at ODR 8 with the 53 Hz filter; the accelerometer is decimated 2:1.
     setInterval(kSwitchHIDGyro, 5000);
     expectOps({"W 20 08", "W 21 28", "W 23 34", "W 24 44", "W 1f 0f", "W 2d 08"}, "42607 gyro 200 Hz");
-    expectLog("os_log: SwitchMotion: 200000 mHz, accel 1 (10000 us), gyro 1 (5000 us), batch 0 us, FIFO watermark 1",
+    expectLog("os_log: SwitchMotion: 200000 mHz, accel 1 (10000 us), gyro 1 (5000 us), motion 0 us, batch 0 us, "
+              "FIFO watermark 1",
               "42607 gyro 200 Hz");
     gNow += 30000000;  // inside the gyroscope's 60 ms
     chip.produce(accel, gyro);
@@ -1099,9 +1102,9 @@ static void icm42607Fifo()
         std::vector<std::string> want = {"W 2d 00", "W 20 08", "W 21 28", "W 23 34", "W 24 44", "W 1f 0c"};
         want.insert(want.end(), fifo3.begin(), fifo3.end());
         expectOps(want, "FIFO gyro 200 Hz, 15 ms batches: sensors, then the FIFO from empty, then FIFO_THS on INT2");
-        expectLog(
-            "os_log: SwitchMotion: 200000 mHz, accel 0 (0 us), gyro 1 (5000 us), batch 15000 us, FIFO watermark 3",
-            "FIFO gyro");
+        expectLog("os_log: SwitchMotion: 200000 mHz, accel 0 (0 us), gyro 1 (5000 us), motion 0 us, batch 15000 us, "
+                  "FIFO watermark 3",
+                  "FIFO gyro");
         gNow += 80000000;  // past the gyroscope's settle time
         chip.produce(accel, gyro);
         gNow += 5000000;
@@ -1301,7 +1304,8 @@ static void icm42607Orientation()
         want.push_back(op);
     want.insert(want.end(), fifo5.begin(), fifo5.end());
     expectOps(want, "orientation: the accelerometer alone at 25 Hz, 5-record FIFO batches, FIFO_THS on INT2");
-    expectLog("os_log: SwitchMotion: 25000 mHz, accel 1 (0 us), gyro 0 (0 us), batch 200000 us, FIFO watermark 5",
+    expectLog("os_log: SwitchMotion: 25000 mHz, accel 1 (0 us), gyro 0 (0 us), motion 0 us, batch 200000 us, "
+              "FIFO watermark 5",
               "orientation start");
     const std::vector<uint8_t> &announced = hid(kSwitchHIDOrientation)->orientations;
     const int16_t none[3] = {};
@@ -1339,7 +1343,8 @@ static void icm42607Orientation()
     // A client at 200 Hz (gyroscope, 15 ms batches): one rate for both, the detector decimated 8:1 to 25 Hz.
     setFeature(kSwitchHIDGyro, 5000, 15000);
     gChip->ops.clear();
-    expectLog("os_log: SwitchMotion: 200000 mHz, accel 1 (0 us), gyro 1 (5000 us), batch 15000 us, FIFO watermark 3",
+    expectLog("os_log: SwitchMotion: 200000 mHz, accel 1 (0 us), gyro 1 (5000 us), motion 0 us, batch 15000 us, "
+              "FIFO watermark 3",
               "orientation with a gyroscope client");
     const int16_t spin[3] = {0, 0, 0};
     const auto fast = [&](const int16_t raw[3], unsigned ticks) {

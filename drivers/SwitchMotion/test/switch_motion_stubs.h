@@ -29,6 +29,11 @@ inline void nanoseconds_to_absolutetime(uint64_t ns, uint64_t *abs)
     *abs = ns;
 }
 
+inline void absolutetime_to_nanoseconds(uint64_t abs, uint64_t *ns)
+{
+    *ns = abs;
+}
+
 inline void IODelay(unsigned us)
 {
     gNow += us * 1000ull;

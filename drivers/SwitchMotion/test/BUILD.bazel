@@ -4,7 +4,8 @@
 # frame and scale; the off-with-one-line and lost-interrupt-panic paths; FIFO batching (watermark from the batch
 # interval, one status/count burst and whole-record data bursts per drain, per-sample times) and its fall-backs; the
 # orientation detector and its reports through 21H461's IOHIDEventDriver and CoreMotion (orientation_pipeline_model.h);
-# device motion fused in the driver (switch_motion_fusion_test has the filter's maths and the report layout).
+# device motion fused in the driver (switch_motion_fusion_test has the filter's maths and the report layout,
+# switch_motion_bias_test its gyroscope offset learning).
 # Plus guards on what the models cannot see (switch_motion_source_test), and the 10 s line's window
 # (switch_motion_stats_test).
 #
@@ -82,7 +83,17 @@ host_test(
 host_test(
     name = "switch_motion_fusion_test",
     srcs = [
+        "fusion_sim.h",
         "switch_motion_fusion_test.cpp",
+        "//drivers/SwitchMotion:SwitchMotionFusion.h",
+    ],
+)
+
+host_test(
+    name = "switch_motion_bias_test",
+    srcs = [
+        "fusion_sim.h",
+        "switch_motion_bias_test.cpp",
         "//drivers/SwitchMotion:SwitchMotionFusion.h",
     ],
 )

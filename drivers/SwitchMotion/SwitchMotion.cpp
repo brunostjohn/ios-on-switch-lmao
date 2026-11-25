@@ -149,16 +149,21 @@ struct Part {
     const char *name;
     Family family;
     uint8_t whoAmI;
+    uint32_t zeroRateMilliDps;  // the gyroscope's zero-rate offset bound: SwitchMotionFusion's zeroRateNanoRad
 };
 
 // The ICM parts first: their WHO_AM_I at 0x75 decides before the ST one at 0x0f, which on an ICM-42607 is
 // ACCEL_DATA_Z1 and holds live data if an earlier OS left the accelerometer on. On the ST parts 0x75 is not WHO_AM_I
 // (not checked against their datasheets: reserved or a user register). WHO_AM_I 0x67 is the ICM-42607 and also the
 // ICM-42670-P (DS-000451): one map.
+// Zero-rate bounds: typical initial offset plus its drift over 40 degrees C. ICM-42670-P (DS-000451) and LSM6DSO:
+// 1 dps and 0.015 / 0.010 dps/C, so 2 dps. LSM6DS3H: 10 dps and 0.05 dps/C, so 12 dps. No ICM-40607 or LSM6DSE
+// figure was found: the ICM-40607 takes its family's (ICM-42605/42688-P 0.5 dps, ICM-40609-D 1 dps; 0.03 dps/C) and the
+// LSM6DSE the LSM6DS3H's, the looser bound costing only how slow a first-rest turn may be learned.
 const Part kParts[] = {
-    {"ICM-42607-P", Family::ICM42607, 0x60}, {"ICM-42607", Family::ICM42607, 0x67},
-    {"ICM-40607", Family::ICM40607, 0x38},   {"LSM6DS3H", Family::ST, 0x69},
-    {"LSM6DSE", Family::ST, 0x6a},           {"LSM6DSO", Family::ST, 0x6c},
+    {"ICM-42607-P", Family::ICM42607, 0x60, 2000}, {"ICM-42607", Family::ICM42607, 0x67, 2000},
+    {"ICM-40607", Family::ICM40607, 0x38, 2200},   {"LSM6DS3H", Family::ST, 0x69, 12000},
+    {"LSM6DSE", Family::ST, 0x6a, 12000},          {"LSM6DSO", Family::ST, 0x6c, 2000},
 };
 
 // Per family: the DT mount matrix (rows: console X, Y, Z), data rates, LSB scale to micro-g and micro-rad/s, and how
@@ -517,7 +522,7 @@ class SwitchMotion : public IOService {
     bool fusing = false;
     unsigned motionEvery = 1, motionCount = 0;
     uint32_t periodUS = 0;
-    uint64_t lastMotion = 0;
+    uint64_t lastMotion = 0, lastGyro = 0;  // 0: the session's first
 #if DEVELOPMENT || DEBUG
     SwitchMotionStats stats;  // the 10 s line's window (SwitchMotionStats.h)
     void statsInterrupt();
@@ -646,6 +651,7 @@ bool SwitchMotion::identify()
             continue;
         part = &p;
         info = familyInfo(p.family);
+        fusion.zeroRateNanoRad = static_cast<int64_t>(p.zeroRateMilliDps) * 17453293 / 1000;
         return true;
     }
     char sck[256];
@@ -919,6 +925,7 @@ void SwitchMotion::apply()
         fusing = motionUS != 0;
         fusion.restart();
         motionCount = 0;
+        lastGyro = 0;
     }
     const bool want[2] = {interval[Accel] != 0 || detector || fusing, interval[Gyro] != 0 || fusing};
     uint32_t need = detector ? kOrientationMilliHz : 0;
@@ -980,13 +987,15 @@ void SwitchMotion::apply()
             converting = true;
             samples = empty = 0;
             fusion.restart();  // after sleep or the panel off, the console may lie any way up
+            lastGyro = 0;
             irq->enable();
             switch_check_after_ms(watchdog, kWatchdogMS);
         }
         // Log only (not the console): one line per change of what the part converts.
         os_log(OS_LOG_DEFAULT,
-               "SwitchMotion: %u mHz, accel %d (%u us), gyro %d (%u us), batch %u us, FIFO watermark %u",
-               info->rates[rate].milliHz, on[Accel], interval[Accel], on[Gyro], interval[Gyro], batch, watermark);
+               "SwitchMotion: %u mHz, accel %d (%u us), gyro %d (%u us), motion %u us, batch %u us, FIFO watermark %u",
+               info->rates[rate].milliHz, on[Accel], interval[Accel], on[Gyro], interval[Gyro], motionUS, batch,
+               watermark);
     } else if (part->family == Family::ICM42607 && fifoWatermark != watermark) {
         // Only the batch interval changed: the FIFO again from empty (route), the sensors untouched.
         writeRegister(icm42607::IntSource3, 0);
@@ -1054,7 +1063,11 @@ void SwitchMotion::fuse(Sensor sensor, const SwitchMotionReport &report, uint64_
         fusion.addAccel(sample);
         return;
     }
-    fusion.addGyro(sample, periodUS);
+    uint64_t gapNS = 0;
+    if (lastGyro && now > lastGyro)
+        absolutetime_to_nanoseconds(now - lastGyro, &gapNS);
+    lastGyro = now;
+    fusion.addGyro(sample, switchGyroGapMicros(gapNS / 1000, periodUS));
     if (++motionCount < motionEvery)
         return;
     motionCount = 0;
@@ -1221,10 +1234,11 @@ void SwitchMotion::sample()
     }
     empty = 0;
     ++samples;
-    if (fresh[Gyro])
-        post(Gyro, gyro, now);
+    // The accelerometer first: device motion fuses each gyroscope sample with its own record's acceleration.
     if (fresh[Accel])
         post(Accel, accel, now);
+    if (fresh[Gyro])
+        post(Gyro, gyro, now);
 }
 
 // Work loop, PX2 masked until return, FIFO batching: INT_STATUS through FIFO_COUNTL in one burst (the read clears
@@ -1298,10 +1312,10 @@ void SwitchMotion::drainFifo(uint64_t now)
             }
             const uint64_t at = newest - static_cast<uint64_t>(n - 1 - (done + i)) * periodAbs;
             ++taken;
-            if (fresh[Gyro] && on[Gyro])
-                post(Gyro, gyro, at);
             if (fresh[Accel] && on[Accel])
                 post(Accel, accel, at);
+            if (fresh[Gyro] && on[Gyro])
+                post(Gyro, gyro, at);
         }
         if (done < n)
             done += chunk;
