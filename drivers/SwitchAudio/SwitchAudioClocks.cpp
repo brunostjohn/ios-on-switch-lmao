@@ -1,11 +1,38 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // SwitchAudio: APE power-gating, CAR/PMC clocks and pads, AHUB/ADMA/AGIC setup, and multi-rate switching.
 #include "SwitchAudioDriver.h"
+#include "../TegraSMMU/TegraSMMU.h"
+#include "../TegraSMMU/TegraSMMURamView.h"
 
 using namespace switch_audio_hw;
 
 namespace {
 constexpr unsigned kApeClocks[] = {kClkIdApe, kClkIdDAudio, kClkIdApb2Ape, kClkIdExtern1, kClkIdI2s0};
+
+// APE's ADMA through the SMMU (swgroup APE: aper and apew, one ASID field): it reaches the playback and capture rings,
+// held for good, and nothing else. Made once; SC7's tegra_smmu_resume programs it again.
+TegraSMMURamView gApeView;
+constexpr uint32_t kApeClients = 1u << 26 | 1u << 27;
+
+void confineApe(const uint32_t *ringPA)
+{
+    static bool attached;
+    if (attached)
+        return;
+    char line[160] = "no memory for its directories";
+    attached = gApeView.init(TEGRA_SMMU_ASID_APE, TEGRA_SMMU_ASID_APE) &&
+               gApeView.hold(ringPA[SwitchAudioMemoryOutput], kOutBytes) &&
+               gApeView.hold(ringPA[SwitchAudioMemoryInput], kInBytes);
+    if (attached) {
+        gApeView.commit();
+        attached = !gApeView.attachNarrow(TEGRA_SMMU_APE_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_3, kApeClients, line,
+                                          sizeof(line));
+    }
+    if (attached)
+        IOLog("SwitchAudio: APE DMA through the SMMU (ASID %u): it reaches its two rings\n", TEGRA_SMMU_ASID_APE);
+    else
+        IOLog("SwitchAudio: APE DMA not behind the SMMU (%s): it can reach all of RAM below 4 GiB\n", line);
+}
 
 bool waitPmcClear(uint32_t offset, uint32_t mask, uint32_t timeoutUs)
 {
@@ -167,6 +194,7 @@ void SwitchAudio::tegraInit()
             panic("SwitchAudio: ring %u at %#llx is not DMA-able", type, pa);
         ringPA[type] = static_cast<uint32_t>(pa);
     }
+    confineApe(ringPA);
     tegraClocksAndPads();
     tegraAhubAndDma();
     tegraAgic();
