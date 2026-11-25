@@ -9,6 +9,8 @@
 #include <sys/proc.h>
 #include <sys/uio_internal.h>
 #include <sys/vnode_internal.h>
+#include <sys/stat.h>
+#include <sys/sysctl.h>
 #include <sys/systm.h>
 #include <sys/xattr.h>
 
@@ -22,6 +24,37 @@
 #define FSCTL_DIAG_PATH 96
 
 static uint32_t fsctl_diag_marks, fsctl_diag_others;
+static uint32_t fsctl_mark_counts[SWITCH_FSCTL_MARK_KINDS];
+
+static int fsctl_marks_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2,
+                              struct sysctl_req *req)
+{
+    char line[96];
+
+    snprintf(line, sizeof(line), "ok=%u unsupported=%u compressed=%u other=%u",
+             os_atomic_load(&fsctl_mark_counts[SWITCH_FSCTL_MARK_OK], relaxed),
+             os_atomic_load(&fsctl_mark_counts[SWITCH_FSCTL_MARK_UNSUPPORTED], relaxed),
+             os_atomic_load(&fsctl_mark_counts[SWITCH_FSCTL_MARK_COMPRESSED], relaxed),
+             os_atomic_load(&fsctl_mark_counts[SWITCH_FSCTL_MARK_OTHER], relaxed));
+    return SYSCTL_OUT(req, line, strlen(line) + 1);
+}
+
+/* Every purgeable mark any process asked APFS for since boot: what HW Test's sandbox never lets it ask itself. */
+SYSCTL_PROC(_kern, OID_AUTO, switch_fsctl_marks, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED, NULL, 0,
+            fsctl_marks_sysctl, "A", "APFS purgeable marks since boot by outcome");
+
+static void fsctl_mark_count(vnode_t vp, int error, vfs_context_t ctx)
+{
+    struct vnode_attr va;
+    int compressed = 0;
+
+    if (error != 0) {
+        VATTR_INIT(&va);
+        VATTR_WANTED(&va, va_flags);
+        compressed = vnode_getattr(vp, &va, ctx) == 0 && (va.va_flags & UF_COMPRESSED) != 0;
+    }
+    os_atomic_inc(&fsctl_mark_counts[switch_fsctl_mark_for(error, compressed)], relaxed);
+}
 
 static int fsctl_diag_xattr(vnode_t vp, const char *name, void *buf, size_t len, size_t *size, vfs_context_t ctx)
 {
@@ -49,7 +82,13 @@ void switch_fsctl_failed(vnode_t vp, unsigned long cmd, const void *data, int er
     void *xattr = NULL;
     enum switch_fsctl_line line;
 
-    if (error == 0 || IOCGROUP(cmd) != 'J') {
+    if (IOCGROUP(cmd) != 'J') {
+        return;
+    }
+    if ((cmd & 0xff) == SWITCH_FSCTL_MARK_PURGEABLE) {
+        fsctl_mark_count(vp, error, ctx);
+    }
+    if (error == 0) {
         return;
     }
     line = switch_fsctl_line_for(

@@ -103,4 +103,15 @@ TEST(SwitchFsctlDiagSource, ReleaseKernelsCompileItToNothing)
     EXPECT_THAT(source, HasSubstr("\n#endif /* DEVELOPMENT || DEBUG */\n"));
 }
 
+// 25 Nov 19:18: APFS refused SpringBoard's marks with 45 on a card imaged before the Data volume had the purgeable
+// feature bits, and refused SplashBoard's compressed snapshots.
+TEST(SwitchFsctlMark, ARefusalIsCountedByItsCause)
+{
+    EXPECT_EQ(switch_fsctl_mark_for(0, 0), SWITCH_FSCTL_MARK_OK);
+    EXPECT_EQ(switch_fsctl_mark_for(0, 1), SWITCH_FSCTL_MARK_OK);
+    EXPECT_EQ(switch_fsctl_mark_for(45, 1), SWITCH_FSCTL_MARK_UNSUPPORTED);
+    EXPECT_EQ(switch_fsctl_mark_for(22, 1), SWITCH_FSCTL_MARK_COMPRESSED);
+    EXPECT_EQ(switch_fsctl_mark_for(22, 0), SWITCH_FSCTL_MARK_OTHER);
+}
+
 }  // namespace
