@@ -562,6 +562,11 @@ OSDefineMetaClassAndStructors(SwitchCryptexDevice, IOBlockStorageDevice)
         setProperty(kIOPropertyDeviceCharacteristicsKey, device);
         device->release();
     }
+    if (OSDictionary *features = OSDictionary::withCapacity(1)) {
+        features->setObject(kIOStorageFeaturePriority, kOSBooleanTrue);
+        setProperty(kIOStorageFeaturesKey, features);
+        features->release();
+    }
     setProperty("SwitchImage", paths[image]);
     setProperty("SwitchImage extents", count, 32);
     setName(image ? "SwitchAppCryptex" : "SwitchSystemCryptex");

@@ -974,12 +974,15 @@ bool NativeSwitchBlockDevice::configure(NativeSwitchBlock *provider, const Switc
         device->release();
     }
     // Force Unit Access only when the card's volatile write cache is off; with it on, durability goes through
-    // doSynchronize / doSynchronizeCache (CMD49 Flush Cache). Unmap: SD discard or idle erase.
-    if (OSDictionary *features = OSDictionary::withCapacity(2)) {
+    // doSynchronize / doSynchronizeCache (CMD49 Flush Cache). Unmap: SD discard or idle erase. Priority: the queue
+    // orders by tier (SwitchSdPick.h) and doSetPriority raises queued requests, which makes XNU's mounts on it
+    // IOSCHED_SUPPORTED (vfs_init_io_attributes).
+    if (OSDictionary *features = OSDictionary::withCapacity(3)) {
         if (!provider->writeCacheEnabled())
             features->setObject(kIOStorageFeatureForceUnitAccess, kOSBooleanTrue);
         if (!shared && provider->canUnmap())
             features->setObject(kIOStorageFeatureUnmap, kOSBooleanTrue);
+        features->setObject(kIOStorageFeaturePriority, kOSBooleanTrue);
         setProperty(kIOStorageFeaturesKey, features);
         features->release();
     }
