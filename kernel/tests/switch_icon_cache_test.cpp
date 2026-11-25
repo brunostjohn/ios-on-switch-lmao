@@ -45,6 +45,7 @@ struct Data {
     int renameCalls = 0;
     int mkdirError = 0;
     int existsCalls = 0;
+    const char *writeFailAt = nullptr;  // a path whose write fails with EIO
     const char *session = kSession;
 };
 
@@ -81,7 +82,10 @@ bool Holds(void *context, const char *path, const char *bytes, size_t length)
 
 int Write(void *context, const char *path, const char *bytes, size_t length)
 {
-    Put(static_cast<Data *>(context)->root / path, std::string(bytes, length));
+    auto *data = static_cast<Data *>(context);
+    if (data->writeFailAt && std::string(path) == data->writeFailAt)
+        return EIO;
+    Put(data->root / path, std::string(bytes, length));
     return 0;
 }
 
@@ -390,9 +394,40 @@ TEST_F(SwitchIconCache, FailedRenameFailsClosedWithoutAdvancingMarker)
     data.renameError = 0;
     const switch_icon_cache_result again = Drop();
     EXPECT_EQ(again.error, 0);
-    EXPECT_EQ(again.kept, 1) << "the folder left in the cache is kept; the half-kept one goes to the sweep";
+    EXPECT_EQ(again.kept, 0) << "a drop began and stopped: whatever the cache holds now is not kept as A's";
+    EXPECT_EQ(again.dropped, 1);
     EXPECT_TRUE(again.trash_pending);
+    EXPECT_FALSE(fs::exists(data.root / kKeep / kKeyA));
     EXPECT_EQ(Contents(data.root / "Switch/icon-cache-reset"), kBuildB);
+}
+
+// Review S4 (a): a drop for A moves A's kept folders back, then stops before the marker is written (here, its write
+// fails). The agent then draws into the cache on that boot, and the next deploy names C. The marker still names B, but
+// the cache is not B's: it goes to the trash, and keep/B is not given anything.
+TEST_F(SwitchIconCache, ADropThatStoppedKeepsNothingUnderTheMarkersBuild)
+{
+    Put(data.root / "Switch/icon-cache-gpu", kBuildB);
+    Put(data.root / "Switch/icon-cache-reset", kBuildA);
+    ASSERT_EQ(Drop().kept, 2);
+    for (const char *salt : kSalts)
+        Put(data.root / kCache / salt / "__cache_info__", std::string("drawn by B ") + salt);
+    Put(data.root / "Switch/icon-cache-gpu", kBuildA);
+    data.writeFailAt = "Switch/icon-cache-reset";
+    const switch_icon_cache_result stopped = Drop();
+    EXPECT_NE(stopped.error, 0);
+    EXPECT_EQ(stopped.restored, 2);
+    EXPECT_EQ(Contents(data.root / "Switch/icon-cache-reset"), kBuildB);
+    data.writeFailAt = nullptr;
+
+    for (const char *salt : kSalts)
+        Put(data.root / kCache / salt / "store.index", "drawn by A's agent, under A's folders");
+    Put(data.root / "Switch/icon-cache-gpu", kBuildC);
+    const switch_icon_cache_result next = Drop();
+    EXPECT_EQ(next.error, 0);
+    EXPECT_EQ(next.kept, 0);
+    EXPECT_EQ(next.dropped, 2);
+    EXPECT_FALSE(fs::exists(data.root / kKeep / kKeyB)) << "B's keep was B's folders before they were given to A";
+    EXPECT_EQ(Contents(data.root / "Switch/icon-cache-reset"), kBuildC);
 }
 
 TEST_F(SwitchIconCache, FailedMkdirFailsClosedWithoutRenamingOrAdvancingMarker)

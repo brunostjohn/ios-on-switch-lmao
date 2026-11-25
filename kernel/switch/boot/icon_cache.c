@@ -34,6 +34,13 @@ static const char switch_icon_cache_folder[] =
 
 static const char switch_icon_cache_request[] = "Switch/icon-cache-gpu";
 static const char switch_icon_cache_marker[] = "Switch/icon-cache-reset";
+#if SWITCH_ICON_CACHE_SALTED
+/* The request a drop began for, written before its first rename. Unlike the marker it is written whether or not the drop
+ * finishes, so a marker that does not hold it means a drop began and stopped: the cache may then hold folders of any
+ * build (moved back for the request, or drawn by the agent on the boot after), and none of it can be kept as the
+ * marker's. */
+static const char switch_icon_cache_attempt[] = "Switch/icon-cache-attempt";
+#endif
 #if DEVELOPMENT || DEBUG
 /* Written, with the named build, on a boot that moved that build's kept folders back (HW Test system.icon_cache_reset:
  * such a drop is not followed by the agent's reset). HW Test ships in debug packages only. */
@@ -301,9 +308,20 @@ void switch_icon_cache_drop(const struct switch_icon_cache_ops *ops, struct swit
         if (!error) {
             switch_icon_cache_key(build, length, result->build);
         }
-        const bool known = SWITCH_ICON_CACHE_SALTED && !error &&
-                           !ops->read(ops->context, switch_icon_cache_marker, marker, sizeof(marker), &marker_length) &&
-                           switch_icon_cache_key(marker, marker_length, kept_for);
+        bool known = SWITCH_ICON_CACHE_SALTED && !error &&
+                     !ops->read(ops->context, switch_icon_cache_marker, marker, sizeof(marker), &marker_length) &&
+                     switch_icon_cache_key(marker, marker_length, kept_for);
+#if SWITCH_ICON_CACHE_SALTED
+        if (!error) {
+            char attempt[kBuild];
+            size_t attempt_length = 0;
+            if (!ops->read(ops->context, switch_icon_cache_attempt, attempt, sizeof(attempt), &attempt_length) &&
+                !ops->holds(ops->context, switch_icon_cache_marker, attempt, attempt_length)) {
+                known = false;
+            }
+            error = ops->write(ops->context, switch_icon_cache_attempt, build, length);
+        }
+#endif
         if (!error) {
             error =
                 switch_icon_cache_clear(ops, result, known ? kept_for : NULL, result->build[0] ? result->build : NULL);
