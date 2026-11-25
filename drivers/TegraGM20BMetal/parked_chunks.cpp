@@ -3,6 +3,8 @@
 #include "gpu.h"
 
 #include <algorithm>
+#include <os/log.h>
+#include <time.h>
 
 #include "gm20b_gpu_internal.h"
 
@@ -197,9 +199,15 @@ bool Device::tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uin
     SWITCH_METAL_DIAGNOSTIC(stats.parkedChunkBytes -= chBytes);
     l.unlock();
 
+#if SWITCH_METAL_DIAGNOSTICS
+    const uint64_t began = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#endif
     uint64_t addr = 0, mappedBytes = 0;
     uint32_t status = 0;
     const int kr = k_.unpark(bo.handle, addr, mappedBytes, status);
+#if SWITCH_METAL_DIAGNOSTICS
+    const uint64_t unparked = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+#endif
     if (kr == KERN_SUCCESS && status == TegraGM20BUnparkResident && addr != 0) {
         bo.parked = false;
         bo.cpu = reinterpret_cast<uint8_t *>(uintptr_t(addr));
@@ -222,6 +230,15 @@ bool Device::tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uin
         if (pitchVa)
             k_.releaseVa(pitchVa, chBytes);
     }
+#if SWITCH_METAL_DIAGNOSTICS
+    // HW Test gpu.path.parked_bo's ceiling is 200 us for the whole create: which call on this thread took it
+    if (const uint64_t ended = clock_gettime_nsec_np(CLOCK_UPTIME_RAW); ended - began > 150000)
+        os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+               "SwitchMetal: chunk unpark %llu us for %llu KiB: BoUnpark %llu us (status %u), resource set %llu us",
+               (unsigned long long)((ended - began) / 1000), (unsigned long long)(chBytes >> 10),
+               (unsigned long long)((unparked - began) / 1000), status,
+               (unsigned long long)((ended - unparked) / 1000));
+#endif
 
     l.lock();
     if (gotResident && !closing_) {
