@@ -19,3 +19,6 @@ std::string gm20bLinkedText(NSArray *vertex, NSArray *vertexPrivate, NSArray *fr
 const std::string &gm20bStateKey(SwitchMetalPipeline *p);
 // A completable state's descriptor of its functions and of the fields its key names, nil for another
 MTLRenderPipelineDescriptor *gm20bMadeFrom(SwitchMetalPipeline *p);
+// A state the pack lacks (`kind`: "render", "render variant", "compute"), named once a process with its key: the set the OS
+// draws with is closed at the pack's build, so each one is a hole in its coverage, made on the device at a compile's cost
+void gm20bNoteMiss(const char *kind, uint64_t keyHash, const std::string &key, NSString *label);
