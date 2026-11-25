@@ -1174,6 +1174,8 @@ public:
     // hw_test_app's gpu.sched.long_draw_bands: the band budget its unbanded arm sets to 0 (TegraGM20BMetalProbe.mm)
     std::atomic<uint64_t> bandBudgetNs_{TGM_APP_BAND_NS};
     std::atomic<bool> probeMacroBands{false};
+    // Shared buffers made while set are bound L2-bypassing (volatileWcChunks_), for gpu.perf.rates' cached-against-volatile arms
+    std::atomic<bool> probeSharedBypassesL2{false};
     gm20b::Mutex probeLock;
     std::shared_ptr<const ProbeWords> probeWords;
 

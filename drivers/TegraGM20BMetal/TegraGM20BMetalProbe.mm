@@ -203,6 +203,12 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
     return [NSString stringWithFormat:@"old=%u readback=%u", reply.old_mode, reply.readback];
 }
 
+// Shared buffers made while `on` is true are bound L2-bypassing (VOL=1); answers whether they were before
+- (NSString *)switchMetalSharedBypassesL2:(NSNumber *)on
+{
+    return gRM->raw->probeSharedBypassesL2.exchange(on.boolValue, std::memory_order_acq_rel) ? @"1" : @"0";
+}
+
 - (NSString *)switchMetalProbeMacroBands:(NSNumber *)on
 {
     gRM->raw->probeMacroBands.store(on.boolValue, std::memory_order_release);

@@ -10,10 +10,10 @@ import IOSurface
 import Metal
 import VideoToolbox
 
-/// JobVisibility (bit 18): a pass that writes only a private texture ends Internal, with no L2 flush. Shared buffers
-/// are volatile write-combined memory (8f6e44c20), so the blit into one that reads the texture back ends Volatile: a
-/// wait for idle and a frame-buffer flush, no L2 flush. A blit into a no-copy buffer over the process's own cached
-/// pages ends External. The CPU reads the pass's colour from both.
+/// JobVisibility (bit 18): a pass that writes only a private texture ends Internal, with no L2 flush. A shared buffer
+/// is L2-cached, so the blit into one that reads the texture back ends External, as does a blit into a no-copy buffer
+/// over the process's own cached pages. One made L2-bypassing (the facade's switchMetalSharedBypassesL2: probe) ends
+/// Volatile: a wait for idle and a frame-buffer flush, no L2 flush. The CPU reads the pass's colour from all three.
 struct JobVisibilityPathTest: GPUPathTest {
     let id = "gpu.path.job_visibility"
     let name = "Internal jobs skip the L2 flush; Volatile and External ones put CPU-read bytes in DRAM"
@@ -31,13 +31,29 @@ struct JobVisibilityPathTest: GPUPathTest {
         }
         let want = Array([UInt8]([51, 102, 153, 255]).repeated(64 * 64))
         let shared = Self.wrong(try await gpu.read(target, bytesPerPixel: 4), want)
+        guard Self.bypassL2(gpu.device, true) != nil else {
+            return ["the facade has no switchMetalSharedBypassesL2: probe"]
+        }
+        let bypassing = try await gpu.read(target, bytesPerPixel: 4)
+        _ = Self.bypassL2(gpu.device, false)
+        let volatile = Self.wrong(bypassing, want)
         let noCopy = Self.wrong(try await Self.noCopyRead(gpu, target), want)
         metrics.set("wrong_bytes_shared", shared)
+        metrics.set("wrong_bytes_volatile", volatile)
         metrics.set("wrong_bytes_no_copy", noCopy)
         var failures: [String] = []
         if shared != 0 { failures.append("\(shared) bytes read back wrong through a shared buffer") }
+        if volatile != 0 { failures.append("\(volatile) bytes read back wrong through an L2-bypassing shared buffer") }
         if noCopy != 0 { failures.append("\(noCopy) bytes read back wrong through a no-copy buffer") }
         return failures
+    }
+
+    /// Shared buffers made from now on bypass the GPU's L2 (`on`) or not; nil where the facade has no such probe
+    @discardableResult
+    static func bypassL2(_ device: MTLDevice, _ on: Bool) -> String? {
+        let selector = NSSelectorFromString("switchMetalSharedBypassesL2:")
+        guard let object = device as? NSObject, object.responds(to: selector) else { return nil }
+        return object.perform(selector, with: NSNumber(value: on))?.takeUnretainedValue() as? String
     }
 
     /// The 64x64 RGBA8 texture blitted into a shared buffer over page-aligned memory this process allocated
