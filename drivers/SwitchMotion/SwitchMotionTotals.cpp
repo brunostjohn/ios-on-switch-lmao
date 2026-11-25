@@ -39,8 +39,8 @@ void switch_motion_totals_register()
     for (int i = 0; i < kTotals; ++i) {
         if (gOids[i].oid_name)
             continue;
-        switch_sysctl_oid(&gOids[i], &sysctl__kern_children, names[i], CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED,
-                          readTotal, "Q",
+        switch_sysctl_oid(&gOids[i], &sysctl__kern_children, names[i],
+                          static_cast<int>(CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_LOCKED), readTotal, "Q",
                           "since boot: device motion reports sent, fast path copies answered; the raw gyroscope's "
                           "client interval (us)");
         gOids[i].oid_arg2 = i;

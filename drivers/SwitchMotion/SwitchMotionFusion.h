@@ -240,7 +240,9 @@ private:
             (w * r[3] + x * r[2] - y * r[1] + z * r[0]) >> kSwitchQ,
         };
         const int64_t n2 = (next[0] * next[0] + next[1] * next[1] + next[2] * next[2] + next[3] * next[3]) >> kSwitchQ;
-        const int64_t k = (3 * kSwitchOne - n2) / 2;  // one Newton step of 1/sqrt(n2): n2 stays within 1e-6 of 1
+        // One Newton step of 1/sqrt(n2). The series leaves n2 short of 1 by |h|^4/12, about 3e-4 at a 0.25 rad half
+        // step, and the step brings |q| back within about 4e-8 of 1.
+        const int64_t k = (3 * kSwitchOne - n2) / 2;
         for (unsigned i = 0; i < 4; ++i)
             q[i] = (next[i] * k) >> kSwitchQ;
     }

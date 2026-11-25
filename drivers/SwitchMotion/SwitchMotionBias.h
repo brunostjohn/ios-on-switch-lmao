@@ -20,6 +20,11 @@
 // (which the tilt estimate takes for a tilt) moves it little. A window that turns about the vertical faster than any
 // offset the part can have is a turn, and is skipped: its centripetal acceleration tilts the measured gravity and leaks
 // the turn into the perpendicular part.
+//
+// A known limit: a slower steady turn under a steady sideways acceleration, such as a car's curve, is still by these
+// rules. The acceleration tilts the measured gravity by a/g, and ω·sin(a/g) is learned as offset: about 9 mrad/s in 20 s
+// on a 0.06 rad/s curve at 25 m/s. The gravity correction's integral (SwitchMotionFusion.h) settles on the same offset
+// more slowly, and the next real rest pulls both back. Nothing a 6-axis part reads tells that curve from a rest.
 #pragma once
 #include <stdint.h>
 #include <string.h>
