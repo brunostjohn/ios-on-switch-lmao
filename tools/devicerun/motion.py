@@ -121,7 +121,7 @@ MOTION = [
         REPORT,
         process='locationd',
         subsystem=SUBSYSTEM,
-        regex=r'(?:\{65292, (?P<usage>1|5|7|26)\}|Giving up\.)',
+        regex=r'(?:\{65292, (?P<usage>1|7|26)\}|Giving up\.)',
         show=('usage',),
         source='translate/arm64e/pretranslate/edits_24B119.json',
         note=(

@@ -64,6 +64,11 @@ class Motion(unittest.TestCase):
         self.assertEqual(got['motion.locationd-spu'].verdict, INFO)
         self.assertEqual(len(got['motion.locationd-spu'].matches), 3)
 
+    def test_locationds_device_motion_is_switchmotions(self):
+        got = results(record('[CLIoHidInterface] Adding new Device with usage pair {65292, 5}', LOCATIOND))
+        self.assertEqual(got['motion.locationd-spu'].matches, [])
+        self.assertEqual(got['motion.spu-added'].verdict, PASS)
+
     def test_switchmotions_device_motion_service_passes(self):
         got = results(
             record('[CLIoHidInterface] Adding new Device with usage pair {65292, 5}', SPRINGBOARD),
