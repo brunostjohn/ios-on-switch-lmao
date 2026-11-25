@@ -36,6 +36,8 @@
 #   gm20b_target_peaks_test  SwitchGpuTargetPeaks.h: each process's largest target image since boot, and its line
 #   gm20b_span_notes_test    SwitchGpuSpanNotes.h: the render server's long spans and the compositor's longest job
 #   gm20b_preempt_landing_test SwitchGpuPreemptLanding.h: where a kick's preempt landed (a band's release, a job's end)
+#   gm20b_inheritor_sleep_test SwitchGpuInheritorSleep.h's kernel branch: an owner is pushed, no owner is a plain sleep,
+#                            and a wake reaches both
 #   gm20b_compositor_sync_test SwitchGpuCompositorSync.h: the compositor's sync pushes, kicks behind an app apart
 #   gm20b_cost_hist_test     TegraGM20BCostHist.h: the debug lines' buckets, and a p95 a single slow frame leaves alone
 #   switch_gpu_owner_memory_test SwitchGpuOwnerMemory.h: a connection's BO counts, the debug line summing them by process
@@ -423,6 +425,25 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuCompositorSync.h",
     ],
     cxx_std = "c++17",
+)
+
+host_shims(
+    name = "inheritor_sleep_kernel",
+    headers = [
+        "IOKit/IOLocks.h",
+        "kern/thread.h",
+    ],
+    stubs = "gm20b_inheritor_sleep_stubs.h",
+)
+
+host_test(
+    name = "gm20b_inheritor_sleep_test",
+    srcs = [
+        "gm20b_inheritor_sleep_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuInheritorSleep.h",
+    ],
+    defines = ["KERNEL"],
+    deps = [":inheritor_sleep_kernel"],
 )
 
 host_test(
