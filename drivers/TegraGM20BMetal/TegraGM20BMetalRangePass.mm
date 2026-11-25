@@ -274,7 +274,9 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
             if (!depth16Zeta(pass, p))
                 return false;
         } else if (((z->_raw.format == MTLPixelFormatDepth16Unorm && (shaderTestsDepth || testsStencil)) ||
-                    (z->_raw.format == MTLPixelFormatDepth32Float && testsStencil)) &&
+                    (z->_raw.format == MTLPixelFormatDepth32Float && testsStencil) ||
+                    (z->_raw.format == MTLPixelFormatDepth32Float_Stencil8 && testsStencil &&
+                     !(pass.zetaAspects & 2))) &&
                    !depth16Tested(pass, p)) {
             return false;
         }

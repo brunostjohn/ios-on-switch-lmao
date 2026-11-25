@@ -114,6 +114,8 @@ struct DepthStencilDesc {
 
     // whether a draw under it tests or writes depth or stencil (a pass without the attachment cannot take it as Metal does)
     bool active() const;
+    // whether a draw under it can write depth (`depth`: the pass renders one) or stencil (`stencil`: likewise)
+    bool writes(bool depth, bool stencil) const;
 };
 
 // The depth/stencil registers' values (kDepthStencilMethods order)

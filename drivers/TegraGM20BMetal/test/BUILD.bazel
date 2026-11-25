@@ -663,6 +663,38 @@ device_test(
     ],
 )
 
+# A mixed pass's four-sample draws (mixed_samples.h MixedDraw): sample 0 and samples 1-3 apart on every draw path, and a
+# fragment program's memory writes never run twice
+device_test(
+    name = "device_mixed_draws_test",
+    srcs = [
+        "device_mixed_draws_test.cpp",
+        "device_forms.h",
+        "//drivers/TegraGM20BMetal:area_load.cpp",
+        "//drivers/TegraGM20BMetal:reach.cpp",
+        "//drivers/TegraGM20BMetal:stencil_bits.cpp",
+        "//drivers/TegraGM20BMetal:turn_copy.cpp",
+        "//drivers/TegraGM20BMetal:turned_pass.cpp",
+        "//drivers/TegraGM20BMetal:zeta_colour.cpp",
+    ],
+)
+
+# A clear-only pass's Clear of a stored depth past its render area: the texture's own layers, a four-sample zeta's sample
+# layout, a turned pass's plane, and the zcull region the in-area clear initialises
+device_test(
+    name = "device_clear_only_zeta_test",
+    srcs = [
+        "device_clear_only_zeta_test.cpp",
+        "device_forms.h",
+        "//drivers/TegraGM20BMetal:area_load.cpp",
+        "//drivers/TegraGM20BMetal:reach.cpp",
+        "//drivers/TegraGM20BMetal:stencil_bits.cpp",
+        "//drivers/TegraGM20BMetal:turn_copy.cpp",
+        "//drivers/TegraGM20BMetal:turned_pass.cpp",
+        "//drivers/TegraGM20BMetal:zeta_colour.cpp",
+    ],
+)
+
 device_test(
     name = "device_pass_layers_test",
     srcs = [

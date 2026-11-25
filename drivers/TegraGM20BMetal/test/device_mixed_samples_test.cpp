@@ -92,46 +92,6 @@ TEST_F(DevicePassForms, AMixedPassClearsItsColourBeforeTheModeWithTheZetaDeselec
     }
 }
 
-// Each state's colour rule in a mixed pass (mixed_samples.h): a state of one sample merges the pixel's raster samples, a
-// state of four keeps sample 0's; the depth is written at every covered sample under both (SET_SAMPLE_MASK all)
-TEST_F(DevicePassForms, AMixedPassSetsEachStatesCoverageRule)
-{
-    gm20b::Pipeline *one = state(0xb1, "samples=1 c0=70 ds=252/0 "), *four = state(0xb4, "samples=4 c0=70 ds=252/0 ");
-    ASSERT_NE(one, nullptr);
-    ASSERT_NE(four, nullptr);
-    gm20b::Texture colour, zeta;
-    ASSERT_TRUE(dev.createTexture(32, 32, kRGBA8, colour, false, true));
-    ASSERT_TRUE(dev.createOwnedZeta(32, 32, kDepth32Float, 4, true, zeta));
-    gm20b::PassDesc p;
-    p.color[0] = kept(colour, gm20b::ColorAttachment::Clear);
-    p.count = 1;
-    p.depthStencil = {&zeta, true, false, 1.0f, 0};
-    std::string why;
-    const auto ms = pass(
-        p,
-        [&](gm20b::RenderEncoder &e, const char **refused) {
-            e.setPipeline(four);
-            if (!e.draw(kTriangleStrip, 0, 4, 1, 0, refused))
-                return false;
-            e.setPipeline(one);
-            return e.draw(kTriangleStrip, 0, 4, 1, 0, refused);
-        },
-        &why);
-    ASSERT_FALSE(ms.empty()) << why;
-    const std::vector<uint32_t> controls = values(ms, NVB197_SET_TIR_CONTROL);
-    ASSERT_GE(controls.size(), 1u);
-    for (const uint32_t c : controls)
-        EXPECT_EQ(c, uint32_t(NVB197_SET_TIR_CONTROL_REDUCE_COVERAGE_ENABLE << 1));
-    const std::vector<uint32_t> masks = values(ms, NVB197_SET_SAMPLE_MASK_X0_Y0);
-    ASSERT_GE(masks.size(), 3u);
-    EXPECT_NE(std::find(masks.begin(), masks.end(), 0x1111u), masks.end());
-    EXPECT_NE(std::find(masks.begin(), masks.end(), 0xeeeeu), masks.end());
-    EXPECT_EQ(masks.back(), 0xffffu);
-    const std::vector<uint32_t> ctWrites = values(ms, NVB197_SET_CT_WRITE(0));
-    EXPECT_NE(std::find(ctWrites.begin(), ctWrites.end(), 0u), ctWrites.end());
-    EXPECT_EQ(ctWrites.back(), 0x1111u);
-}
-
 constexpr uint32_t kSetActiveZcullRegion = 0x1590;  // 0: the pass's region; 0x3f: none (zcull.h)
 // The X1's zcull layout (one GPC, 2048 aliquots), as zcull_test.cpp holds it
 constexpr TegraGM20BAbiZcullInfo kX1Zcull = {32, 32, 1024, 2048, 32, 32, 192, 16, 32, 64, 0x1500, 0x1000};
