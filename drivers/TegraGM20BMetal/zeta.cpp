@@ -89,6 +89,14 @@ bool DepthStencilDesc::active() const
     return depthCompare != 7 || depthWrite || !stencilNoop(front) || !stencilNoop(back);
 }
 
+bool DepthStencilDesc::writes(bool depth, bool stencil) const
+{
+    const auto faceWrites = [](const StencilFace &s) {
+        return (s.writeMask & 0xff) && (s.fail || s.depthFail || s.pass);
+    };
+    return (depth && depthWrite) || (stencil && (faceWrites(front) || faceWrites(back)));
+}
+
 bool DepthStencilRegs::operator==(const DepthStencilRegs &o) const
 {
     return !memcmp(v, o.v, sizeof v);

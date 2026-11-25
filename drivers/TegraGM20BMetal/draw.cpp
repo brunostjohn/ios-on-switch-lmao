@@ -4,6 +4,7 @@
 #include "icb.h"
 #include "gpu.h"
 #include "kit.h"
+#include "mixed_samples.h"
 #include "mme.h"
 #include "tiled_cache.h"
 #include "view.h"
@@ -18,6 +19,22 @@ namespace gm20b {
 namespace {
 // An instance of a draw: BEGIN with INSTANCE_ID SUBSEQUENT (two words), the first vertex or index and the count (three), END
 constexpr uint32_t kInstanceWords = 6;
+
+// A split draw's samples 1-3 (mixed_samples.h MixedDraw::Split): `again` drawn under their sample mask, colour writes off.
+// `p` is the encoder's body, which `reserve` replaces when it runs short.
+template <typename Reserve, typename Again>
+void drawLaterSamples(Push &p, Reserve reserve, uint32_t &maskHeld, uint32_t rasterMask, const uint32_t (&ctWrite)[8],
+                      uint32_t targets, Again again)
+{
+    if (p.room() < kLaterSamplesWords)
+        reserve();
+    laterSamplesOn(p, rasterMask, targets);
+    maskHeld = rasterMask & kLaterSamplesMask;
+    again();
+    if (p.room() < kLaterSamplesWords)
+        reserve();
+    laterSamplesOff(p, ctWrite, targets);
+}
 }  // namespace
 
 static_assert(kFetchPatch == icb::kPatchPrimitive);
@@ -129,6 +146,16 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     }
     if (!prepare(pl, primitive, first, first, count, false, why))
         return skippedDraw();
+    const bool split = mixedDraw(*pl, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split;
+    const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
+    // samples 1-3 write no colour: no fetch of a colour they wrote to order, so the plain draw
+    const auto laterSamples = [&] {
+        drawLaterSamples(p_, [this] { reserve(); }, cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite,
+                         std::min(pass_.count, 8u), [&] {
+                             wholeDraw(*pl, false, first, count, instances, first, baseInstance);
+                             finishDraw(count, drawnInstances);
+                         });
+    };
     bool wholeQuad = instances == 1 && written_.lastNonOverlappingQuad();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (dev_->probeFetchRung.load(std::memory_order_relaxed) == kProbeBlendTwinTriangles)
@@ -136,11 +163,12 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
 #endif
     if (ordered && !wholeQuad) {
         fetchDraw(primitive, false, first, count, instances, first, baseInstance);
+        if (split)
+            laterSamples();
         cb_->draws++;
         return true;
     }
     cb_->draws += amplifies() ? amplifications_ : 1;
-    const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (const auto probe = instances == 1 ? dev_->armedProbe() : nullptr) {
         if (p_.room() < kInstanceWords + probe->before.size() + probe->after.size())
@@ -155,33 +183,14 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
         return true;
     }
 #endif
-    const auto emit = [&] {
-        if (drawnWhole(*pl)) {
-            wholeDraw(*pl, false, first, count, instances, first, baseInstance);
-            finishDraw(count, drawnInstances);
-        } else {
-            emitDraw(false, first, count, instances, first, baseInstance);
-        }
-    };
-    emit();
-    if (rasterSamples_ > samples_ && pl->samples > samples_ && pass_.depthStencil.texture &&
-        (compatibleRasterMask_ & 0xeeeeu)) {
-        const uint32_t m = compatibleRasterMask_ & 0xeeeeu;
-        const uint32_t targets = std::min(pass_.count, 8u);
-        const uint32_t zeros[8] = {};
-        if (p_.room() < 32)
-            reserve();
-        p_.inc(NVB197_SET_SAMPLE_MASK_X0_Y0, {m, m, m, m});
-        cb_->sampleMaskHeld_ = m;
-        if (targets)
-            p_.incArray(CT_WRITE, zeros, targets);
-        emit();
-        if (targets) {
-            if (p_.room() < 16)
-                reserve();
-            p_.incArray(CT_WRITE, pl->ctWrite, targets);
-        }
+    if (drawnWhole(*pl)) {
+        wholeDraw(*pl, false, first, count, instances, first, baseInstance);
+        finishDraw(count, drawnInstances);
+    } else {
+        emitDraw(false, first, count, instances, first, baseInstance);
     }
+    if (split)
+        laterSamples();
     return true;
 }
 
@@ -401,6 +410,15 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         ibEnd_ = last;
         ibSize_ = indexSize;
     }
+    const bool split = mixedDraw(*pl, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split;
+    const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
+    const auto laterSamples = [&] {
+        drawLaterSamples(p_, [this] { reserve(); }, cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite,
+                         std::min(pass_.count, 8u), [&] {
+                             wholeDraw(*pl, true, 0, count, instances, uint32_t(baseVertex), baseInstance);
+                             finishDraw(count, drawnInstances);
+                         });
+    };
     bool wholeQuad = instances == 1 && written_.lastNonOverlappingQuad();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (dev_->probeFetchRung.load(std::memory_order_relaxed) == kProbeBlendTwinTriangles)
@@ -408,36 +426,19 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
 #endif
     if (ordered && !wholeQuad) {
         fetchDraw(primitive, true, 0, count, instances, uint32_t(baseVertex), baseInstance);
+        if (split)
+            laterSamples();
         cb_->draws++;
         return true;
     }
-    const auto emit = [&] {
-        if (drawnWhole(*pl)) {
-            wholeDraw(*pl, true, 0, count, instances, uint32_t(baseVertex), baseInstance);
-            finishDraw(count, amplifies() ? instances * amplifications_ : instances);
-        } else {
-            emitDraw(true, 0, count, instances, uint32_t(baseVertex), baseInstance);
-        }
-    };
-    emit();
-    if (rasterSamples_ > samples_ && pl->samples > samples_ && pass_.depthStencil.texture &&
-        (compatibleRasterMask_ & 0xeeeeu)) {
-        const uint32_t m = compatibleRasterMask_ & 0xeeeeu;
-        const uint32_t targets = std::min(pass_.count, 8u);
-        const uint32_t zeros[8] = {};
-        if (p_.room() < 32)
-            reserve();
-        p_.inc(NVB197_SET_SAMPLE_MASK_X0_Y0, {m, m, m, m});
-        cb_->sampleMaskHeld_ = m;
-        if (targets)
-            p_.incArray(CT_WRITE, zeros, targets);
-        emit();
-        if (targets) {
-            if (p_.room() < 16)
-                reserve();
-            p_.incArray(CT_WRITE, pl->ctWrite, targets);
-        }
+    if (drawnWhole(*pl)) {
+        wholeDraw(*pl, true, 0, count, instances, uint32_t(baseVertex), baseInstance);
+        finishDraw(count, drawnInstances);
+    } else {
+        emitDraw(true, 0, count, instances, uint32_t(baseVertex), baseInstance);
     }
+    if (split)
+        laterSamples();
     cb_->draws += amplifies() ? amplifications_ : 1;
     return true;
 }
@@ -486,6 +487,17 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     p_.m(WAIT_FOR_IDLE, 0);
     p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateConstant);
     p_.m(0x0050, 0);  // NV906F_SET_REFERENCE: pre-Turing MME command-fetch visibility (NVK indirect-read barrier)
+    const auto argumentWords = [&] {
+        if (inside) {
+            bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
+            bodies_.push_back(PushBody::resident(arguments->va + offset, inside, TegraGM20BPushNoPrefetch));
+            dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
+            bodyStart_ = nullptr;
+            reserve();
+        }
+        for (uint32_t k = inside; k < bytes / 4; k++)
+            *p_.at++ = 0;
+    };
     if (ordered) {
         mme::fetchShape(p_, primitive);
         mme::fetchHeader(p_, indexed);
@@ -497,15 +509,18 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     } else {
         mme::indirectHeader(p_, indexed);
     }
-    if (inside) {
-        bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
-        bodies_.push_back(PushBody::resident(arguments->va + offset, inside, TegraGM20BPushNoPrefetch));
-        dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
-        bodyStart_ = nullptr;
-        reserve();
-    }
-    for (uint32_t k = inside; k < bytes / 4; k++)
-        *p_.at++ = 0;
+    argumentWords();
+    if (mixedDraw(pl, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split)
+        drawLaterSamples(p_, [this] { reserve(); }, cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite,
+                         std::min(pass_.count, 8u), [&] {
+                             if (p_.room() < 1 + bytes / 4)
+                                 reserve();
+                             if (amplifies())
+                                 mme::amplifyHeader(p_, indexed);
+                             else
+                                 mme::indirectHeader(p_, indexed);
+                             argumentWords();
+                         });
     params_.unknown = true;
     cb_->draws += amplifies() ? amplifications_ : 1;
     finishDraw(0, 0, true);
@@ -622,20 +637,27 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
         mme::fetchCommands(p_, true);
         SWITCH_METAL_DIAGNOSTIC(dev_->stats.fetch.sequential++);
     }
-    for (uint32_t a = 0; a < amplifications_; a++) {
-        if (amplifications_ > 1)
-            icbAmplification(a);
-        if (p_.at > bodyStart_)
-            bodies_.push_back({bodyStart_, p_.at});
-        bodies_.push_back(PushBody::resident(x.slots->va + offset, uint32_t(bytes / 4), TegraGM20BPushNoPrefetch));
-        dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
-        bodyStart_ = nullptr;
-        reserve();
-    }
-    if (patches)
-        icbPatchesDone();
+    const auto commands = [&] {
+        for (uint32_t a = 0; a < amplifications_; a++) {
+            if (amplifications_ > 1)
+                icbAmplification(a);
+            if (p_.at > bodyStart_)
+                bodies_.push_back({bodyStart_, p_.at});
+            bodies_.push_back(PushBody::resident(x.slots->va + offset, uint32_t(bytes / 4), TegraGM20BPushNoPrefetch));
+            dev_->push_.head = uint64_t(reinterpret_cast<uint8_t *>(p_.at) - dev_->push_.bo.cpu);
+            bodyStart_ = nullptr;
+            reserve();
+        }
+    };
+    commands();
     if (ordered)
         mme::fetchCommands(p_, false);
+    // the commands again for samples 1-3, which write no colour: drawn whole, not a primitive at a time
+    if (mixedDraw(pl, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split)
+        drawLaterSamples(p_, [this] { reserve(); }, cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite,
+                         std::min(pass_.count, 8u), commands);
+    if (patches)
+        icbPatchesDone();
     // the commands set the polygon offset of their own kinds (icb::polygonOffset)
     p_.m(NVB197_SET_POLY_OFFSET_POINT, rasterHeld_.bias);
     p_.m(NVB197_SET_POLY_OFFSET_LINE, rasterHeld_.bias);
