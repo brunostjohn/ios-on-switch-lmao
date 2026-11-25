@@ -59,8 +59,11 @@ void switch_sched_limit_shadow(uint8_t percentage, uint64_t interval_ns)
 {
     thread_t thread = current_thread();
     const uint64_t tid = thread->thread_id;
+    const int32_t pid = task_pid(get_threadtask(thread));
+    char name[sizeof(shadows[0].name)];
     uint64_t interval = 0;
 
+    switch_task_name(get_threadtask(thread), name, sizeof(name));
     nanoseconds_to_absolutetime(interval_ns, &interval);
     disable_preemption();
     struct shadow_slot *slot = shadow_of(tid);
@@ -76,8 +79,8 @@ void switch_sched_limit_shadow(uint8_t percentage, uint64_t interval_ns)
             enable_preemption();
             return;
         }
-        slot->pid = task_pid(get_threadtask(thread));
-        switch_task_name(get_threadtask(thread), slot->name, sizeof(slot->name));
+        slot->pid = pid;
+        __builtin_memcpy(slot->name, name, sizeof(slot->name));
     }
     if (slot->percentage != percentage || slot->s.interval != interval) {
         slot->percentage = percentage;
