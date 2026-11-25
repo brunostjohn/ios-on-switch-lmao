@@ -1827,6 +1827,26 @@ TEST(GM20BParkedBoSource, LockOrderAndOffLockVmCalls)
 	EXPECT_TRUE(stats.before("parkedStatsTake(", "IOLockLock(p->lock);"));
 }
 
+// Every refill decision counts a class's spares on the dirty list (SwitchGpuSpares.h switch_gpu_spare_short), and every
+// push onto or pop off that list keeps the count.
+TEST(GM20BSparesSource, TheRefillCountsDirtySpares)
+{
+	EXPECT_FALSE(CodeText(client()).has("p->count[c] + p->zeroing[c]"));
+	for (const char *fn : {"void spareZeroed(void *context, int result)",
+			       "void spareWork(thread_call_param_t param, thread_call_param_t)",
+			       "Spare *spareTake(uint64_t bytes, bool critical)"})
+		EXPECT_TRUE(Block(client(), fn).has("switch_gpu_spare_short(p->count[c], p->zeroing[c], p->dirtyCount[c],"))
+			<< fn;
+	for (const char *fn : {"void spareRecycleWork(thread_call_param_t param, thread_call_param_t)",
+			       "void spareWork(thread_call_param_t param, thread_call_param_t)",
+			       "bool spareKeep(const SwitchGpuCachedBuffer &buffer"}) {
+		const CodeText body = Block(client(), fn);
+		EXPECT_EQ(body.count("p->dirtyBytes += ") + body.count("p->dirtyBytes -= "),
+			  body.count("++p->dirtyCount[") + body.count("--p->dirtyCount["))
+			<< fn;
+	}
+}
+
 // A waiter on a parking, unparking or reclaiming BO pushes that BO's own mover, on that BO's own event: one owner per
 // connection was overwritten and cleared by unrelated BOs, and the reaper never named itself.
 TEST(GM20BParkedBoSource, ParkWaitersPushTheirBosOwnMover)

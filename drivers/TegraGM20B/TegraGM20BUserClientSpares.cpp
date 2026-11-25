@@ -155,8 +155,9 @@ void spareZeroed(void *context, int result)
 	const bool firstFailure = result && !p->fillFailed;
 	p->fillFailed = p->fillFailed || result;
 	const bool hasDirty = p->dirty != nullptr || p->poolDirty != nullptr;
-	const bool needFill =
-		!p->fillFailed && spareRoom() && p->count[c] + p->zeroing[c] < p->target[c];
+	const bool needFill = !p->fillFailed && spareRoom() &&
+			      switch_gpu_spare_short(p->count[c], p->zeroing[c], p->dirtyCount[c],
+						     p->target[c]);
 	IOLockUnlock(p->lock);
 	if (firstFailure)
 		IOLog("tegra-gm20b: the copy engine's zero-fill of a %llu KiB spare "
@@ -189,6 +190,7 @@ void spareRecycleWork(thread_call_param_t param, thread_call_param_t)
 		if (Spare *s = p->dirty) {
 			p->dirty = s->next;
 			p->dirtyBytes -= s->bytes;
+			--p->dirtyCount[spareClass(s->bytes)];
 			const bool keep =
 				!pressure && spareRoom() && p->clean + s->bytes <= kSpareCapBytes;
 			if (keep) {
@@ -215,6 +217,7 @@ void spareRecycleWork(thread_call_param_t param, thread_call_param_t)
 				s->next = p->dirty;
 				p->dirty = s;
 				p->dirtyBytes += s->bytes;
+				++p->dirtyCount[spareClass(s->bytes)];
 				IOLockUnlock(p->lock);
 				return;
 			}
@@ -272,7 +275,8 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 		Spare *evicted = nullptr;
 		uint32_t c = p->fillFailed || !spareRoom() ? kClasses : 0;
 		for (; c < kClasses; c++) {
-			if (p->count[c] + p->zeroing[c] >= p->target[c])
+			if (!switch_gpu_spare_short(p->count[c], p->zeroing[c], p->dirtyCount[c],
+						    p->target[c]))
 				continue;
 			uint64_t over = 0;
 			for (uint32_t d = 0; d < kClasses; d++)
@@ -320,6 +324,7 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 		s->next = p->dirty;
 		p->dirty = s;
 		p->dirtyBytes += s->bytes;
+		++p->dirtyCount[c];
 		IOLockUnlock(p->lock);
 		thread_call_enter(p->recycleCall);
 	}
@@ -394,7 +399,9 @@ Spare *spareTake(uint64_t bytes, bool critical)
 	}
 	if (!s) {
 		const switch_gpu_spare_miss why =
-			switch_gpu_spare_miss_of(p->target[c], p->zeroing[c], memoryPressure());
+			switch_gpu_spare_miss_of(p->target[c],
+						 uint16_t(p->zeroing[c] + p->dirtyCount[c]),
+						 memoryPressure());
 		const uint16_t learnt = switch_gpu_spare_depth_after_miss(
 			p->target[c], classBytes(c) <= kLearnMaxBytes, why);
 		const uint16_t most = switch_gpu_spare_depth_cap(classBytes(c), kSpareCapBytes);
@@ -406,7 +413,9 @@ Spare *spareTake(uint64_t bytes, bool critical)
 	const bool pressure = memoryPressure();
 	const bool room = spareRoom();
 	const bool kickRecycle = pressure && p->clean != 0;
-	const bool kickFill = !pressure && room && p->count[c] + p->zeroing[c] < p->target[c];
+	const bool kickFill =
+		!pressure && room &&
+		switch_gpu_spare_short(p->count[c], p->zeroing[c], p->dirtyCount[c], p->target[c]);
 	if (kickFill || kickRecycle)
 		p->fillFailed = false;
 	IOLockUnlock(p->lock);
@@ -470,6 +479,7 @@ bool spareKeep(const SwitchGpuCachedBuffer &buffer, uint64_t *pas, uint64_t byte
 	s->next = p->dirty;
 	p->dirty = s;
 	p->dirtyBytes += bytes;
+	++p->dirtyCount[spareClass(bytes)];
 	IOLockUnlock(p->lock);
 	thread_call_enter(p->recycleCall);
 	return true;
