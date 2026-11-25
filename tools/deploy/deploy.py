@@ -61,6 +61,7 @@ if __package__ in (None, ''):
 from tools.common import paths
 from tools.deploy import (
     app_journal,
+    compiler_inputs,
     deployed,
     icon_cache,
     joycon_pairing,
@@ -143,6 +144,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument('disk')
     parser.add_argument('--yes', action='store_true')
     parser.add_argument('--confirm')
+    parser.add_argument(
+        '--compiler-inputs', type=Path, metavar='DIR', help='stage the matching development HW Test shader fixtures'
+    )
     parser.add_argument('--remove-gpu', action='store_true')
     parser.add_argument('--pull-logs', action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument('--harvest', action=argparse.BooleanOptionalAction, default=False)
@@ -180,6 +184,10 @@ def _checked(args: argparse.Namespace, log: host.Log) -> tuple[cards.Card, dict,
     """Check the card and the build; return the card, the spec, its FAT and APFS partitions and its Data volume."""
     host.check_tools(log)
     spec = pull_logs.load_spec(args.spec)
+    if args.compiler_inputs:
+        args.shader_fixtures = compiler_inputs.load(
+            args.compiler_inputs, Path(args.boot_package), _ios_build(args.ipsw)
+        )
     source = deployed.provenance(Path(args.boot_package))
     if source and source.get('build') and source['build'] != _ios_build(args.ipsw):
         raise cards.RefusedError(f'{args.boot_package}: snapshot is for {source["build"]}, not {_ios_build(args.ipsw)}')
@@ -214,6 +222,8 @@ def _plan(
     if not args.no_joycon_pairing:
         controllers = f'stage {len(pairing["controllers"])} controller(s) for host {pairing["host"]}' if pairing else ''
         steps.append('Joy-Con pairing: ' + (controllers or 'remove any staged dump'))
+    if args.compiler_inputs:
+        steps.append(f'stage five compiler comparisons from {args.compiler_inputs}')
     steps.append('remove the GPU bundle' if args.remove_gpu else 'GPU bundle: stage what changed')
     steps.append('icon cache: name the GPU build, so the next boot lets IconServices re-render where it changed')
     steps += [f'AWDL {args.awdl} (<Data>/Switch/awdl-enable)'] if args.awdl else []
@@ -360,6 +370,8 @@ def _write(
     if not args.no_joycon_pairing:
         steps.run('Joy-Con pairing', joycon_pairing.stage, data_root, pairing, log)
     _stage_gpu(args, data_root, log)
+    if args.compiler_inputs:
+        steps.run('compiler inputs', compiler_inputs.stage, data_root, args.shader_fixtures)
     steps.run('icon cache', icon_cache.present, data_root, log)
     if args.awdl:
         steps.run('AWDL', set_awdl, data_root, args.awdl == 'on', log)
