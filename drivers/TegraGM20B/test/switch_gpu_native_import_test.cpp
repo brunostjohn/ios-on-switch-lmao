@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
+#include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <string>
 #include <vector>
 #include <gtest/gtest.h>
 #include "drivers/TegraGM20B/TegraGM20BABI.h"
@@ -9,6 +12,7 @@
 #include "drivers/TegraGM20B/SwitchGpuNativeSurface.h"
 #include "drivers/TegraGM20B/SwitchGpuPathStats.h"
 #include "gm20b_gpu_memory.h"
+#include "kits/SwitchRefusal/SwitchRefusal.h"
 
 using IOReturn = int;
 constexpr int kIOReturnSuccess = 0, kIOReturnBadArgument = -22, kIOReturnUnsupported = -95,
@@ -209,6 +213,21 @@ extern "C" void switch_gpu_path_taken(enum switch_gpu_path, uint32_t)
 }
 #endif
 
+namespace
+{
+std::vector<std::string> refusals;
+}
+
+extern "C" void switch_refusal(const char *domain, const char *reason_key, const char *format, ...)
+{
+	char text[256];
+	va_list args;
+	va_start(args, format);
+	vsnprintf(text, sizeof text, format, args);
+	va_end(args);
+	refusals.push_back(std::string(domain) + " " + reason_key + ": " + text);
+}
+
 #define switch_native_surface_gpu_acquire acquireFn
 #define switch_native_surface_gpu_acquire_write acquireWriteFn
 #define switch_native_surface_gpu_release releaseFn
@@ -260,6 +279,7 @@ protected:
 		source.handle = 1;
 		source.surface = &surface;
 		client.bos_ = &source;
+		refusals.clear();
 	}
 
 	void TearDown() override
@@ -360,6 +380,32 @@ TEST_F(NativeImport, InvalidPlaneExtentFailsBeforeGpuMemoryConstruction)
 	EXPECT_EQ(client.nativeSurfaceView(&request, &reply), kIOReturnBadArgument);
 	EXPECT_EQ(constructed, 0u);
 	EXPECT_EQ(reply.handle, 0u);
+	ASSERT_EQ(refusals.size(), 1u);
+	EXPECT_NE(refusals[0].find("native-view plane-extent: "), std::string::npos) << refusals[0];
+	EXPECT_NE(refusals[0].find("do not fit"), std::string::npos) << refusals[0];
+}
+
+// HW Test gpu.gm20b.ycbcr_texel_buffer_wide: a '420v' 20000 wide (pitch planes 20000x2 and 10000x1) read through a
+// texel buffer's 16384x2 rows. The planes are memory; the textures over them are shaped by the client.
+TEST_F(NativeImport, PitchPlanesWiderThanATextureAreAView)
+{
+	answer.native = &logical;
+	answer.payload = {};
+	answer.layout.planes[0] = {0, 40960, 20000, 2, 20480, 1, SWITCH_GPU_BACKING_PITCH, 0};
+	answer.layout.planes[1] = {40960, 20480, 10000, 1, 20480, 2, SWITCH_GPU_BACKING_PITCH, 0};
+	answer.crop_width = 20000;
+	answer.crop_height = 2;
+	uint64_t wide[15];
+	for (uint32_t i = 0; i < 15; ++i)
+		wide[i] = 0x200000 + uint64_t(i) * 0x1000;
+	allocation.pages = wide;
+	allocation.page_count = 15;
+	ASSERT_EQ(client.nativeSurfaceView(&request, &reply), 0);
+	ASSERT_NE(reply.handle, 0u);
+	EXPECT_EQ(reply.kind, 0u);
+	EXPECT_EQ(reply.planes[0].width, 20000u);
+	EXPECT_EQ(reply.planes[1].width, 10000u);
+	EXPECT_TRUE(refusals.empty());
 }
 
 TEST_F(NativeImport, AllocationFailureDropsBothRetainedBackingReferences)

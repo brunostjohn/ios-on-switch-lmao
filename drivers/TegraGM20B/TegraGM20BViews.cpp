@@ -110,6 +110,31 @@ void noteReused(const tgm_coh *c, bool same)
 #endif
 }
 
+// Debug kernels: a first lock's fill past 2 ms, split into getting its scratch (one the pool lacks is made, wired and
+// pinned) and its move, so a slow CPU lock of a block-linear surface names where it waited
+void noteSlowFill(const tgm_coh *c, uint64_t began, uint64_t got, uint64_t moved, bool reused)
+{
+#if TGM_STATS
+	if (moved - began < 2000000)
+		return;
+	char name[32];
+	proc_selfname(name, sizeof(name));
+	os_log(OS_LOG_DEFAULT,
+	       "tegra-gm20b: IOSurface %u: a CPU lock's rows took %llu us (%s[%d]): scratch %llu "
+	       "us (%s), "
+	       "move %llu us",
+	       tgm_coh_surface_id(c), (moved - began) / 1000, name, proc_selfpid(),
+	       (got - began) / 1000, reused ? "its last lock's" : "the pool's",
+	       (moved - got) / 1000);
+#else
+	(void)c;
+	(void)began;
+	(void)got;
+	(void)moved;
+	(void)reused;
+#endif
+}
+
 int move(tgm_coh *c, const tgm_tiled &t, const tgm_relayout_pages &rows, int op)
 {
 	const tgm_relayout_pages pages = tgm_coh_pages(c);
@@ -158,6 +183,7 @@ int fill(tgm_coh *c, tgm_tiled &t, uint32_t options)
 	tgm_relayout_writer writers[TGM_RELAYOUT_MAX_WAITS];
 	if ((options & kLockAvoidSync) && tgm_coh_writers(c, writers, TGM_RELAYOUT_MAX_WAITS))
 		return 1;
+	const uint64_t began = TGM_STATS ? tgm_timestamp_ns() : 0;
 	const uint64_t written = tgm_coh_written(c);
 	tgm_relayout_pages rows;
 	bool same = false;
@@ -167,9 +193,11 @@ int fill(tgm_coh *c, tgm_tiled &t, uint32_t options)
 		t.scratch = scratch;
 		return 0;
 	}
+	const bool reused = scratch != nullptr;
 	if (!scratch)
 		scratch = tgm_scratch_get(static_cast<uint64_t>(tgm_coh_pages(c).npages) << 12, 1,
 					  &rows);
+	const uint64_t got = TGM_STATS ? tgm_timestamp_ns() : 0;
 	if (!scratch) {
 		switch_refusal("iosurface-layout", "no-scratch",
 			       "IOSurface %u: no memory for a CPU lock's rows: the lock is refused",
@@ -182,6 +210,8 @@ int fill(tgm_coh *c, tgm_tiled &t, uint32_t options)
 		return 1;
 	}
 	tgm_cpu_clean_pages(rows.pas, rows.npages);
+	if (TGM_STATS)
+		noteSlowFill(c, began, got, tgm_timestamp_ns(), reused);
 	t.scratch = scratch;
 	return 0;
 }

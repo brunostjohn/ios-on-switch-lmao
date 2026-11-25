@@ -570,4 +570,19 @@ TEST(GM20BNativePlane, QualifiesHardwareStrideCropBlockHeightAndBounds)
     view.planes[0].pitch += 16;
     EXPECT_FALSE(gm20b::nativePlaneFits(view, 0, 1200, 720, 1));
 }
+
+// HW Test gpu.gm20b.ycbcr_texel_buffer_wide: a 500 texel buffer of 20000 over a '420v' 20000x2 (rows of 20224) reads
+// its luma as a 16384x2 image, rows 20224 apart: a texture narrower than its pitch plane
+TEST(GM20BNativePlane, QualifiesATextureNarrowerThanItsPitchPlane)
+{
+    auto view = layout(0);
+    view.crop_width = 20000;
+    view.crop_height = 2;
+    view.planes[0] = {0, 20224 * 2, 20000, 2, 20224, 1, 0, 0};
+    view.planes[1] = {20224 * 2, 20224, 10000, 1, 20224, 2, 0, 0};
+    view.bytes = view.planes[0].bytes + view.planes[1].bytes;
+    EXPECT_TRUE(gm20b::nativePlaneFits(view, 0, 16384, 2, 1));
+    EXPECT_TRUE(gm20b::nativePlaneFits(view, 1, 8192, 1, 2));
+    EXPECT_FALSE(gm20b::nativePlaneFits(view, 0, 16384, 3, 1));
+}
 }  // namespace
