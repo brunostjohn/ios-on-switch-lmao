@@ -63,39 +63,89 @@ long long counter(NSString *name)
     return [harness::counters(openedWithZcull().device)[name] longLongValue];
 }
 
-// Core Animation shaped passes enough for the worker to be handed the command buffer, then a pass that clears and stores a
-// depth, a blit that writes another buffer and more of those passes, and once the worker has encoded all that ahead, a
-// pass that loads the depth: the commit's range is not cut where the encode ahead ended, before the loading pass
-TEST(GM20BFacadeZcullAhead, APassAfterABlitLoadsTheRegionAPassEncodedAheadStored)
+struct Moved {
+    long long passes, loads, fused;
+    int pipelined;
+};
+
+// Core Animation shaped passes enough for the worker to be handed the command buffer, a pass that clears and stores a
+// depth, what `between` records, more of those passes once the depth pass is not the last recorded, and once the worker
+// has encoded all that ahead, a pass that loads the depth: the zcull counters it moved
+Moved aheadPair(void (^between)(id<MTLCommandBuffer>, id<MTLTexture>), bool apart)
 {
-    ASSERT_TRUE(openedWithZcull().device != nil);
     id<MTLCommandQueue> queue = [openedWithZcull().device newCommandQueue];
     const auto into = scale_frames::targets(openedWithZcull().device, kShape);
     id<MTLTexture> depth = depthTexture();
-    id<MTLBuffer> between = [openedWithZcull().device newBufferWithLength:256 options:MTLResourceStorageModeShared];
-    ASSERT_TRUE(depth != nil && between != nil);
-    const long long passes = counter(@"zcull_passes"), loads = counter(@"zcull_loads");
+    EXPECT_TRUE(depth != nil);
+    const long long passes = counter(@"zcull_passes"), loads = counter(@"zcull_loads"), fused = counter(@"fused_passes");
     id<MTLCommandBuffer> cb = [queue commandBuffer];
     for (int p = 0; p < kShape.passes; p++) {
         scale_frames::pass(cb, openedWithZcull().state, into, kShape, p, 0);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     depthPass(cb, into[0], depth, true);
-    id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
-    [blit fillBuffer:between range:NSMakeRange(0, 256) value:0];
-    [blit endEncoding];
-    for (int p = 0; p < kShape.passes; p++)
-        scale_frames::pass(cb, openedWithZcull().state, into, kShape, p, 1);
+    if (between)
+        between(cb, depth);
+    if (apart)
+        for (int p = 0; p < kShape.passes; p++)
+            scale_frames::pass(cb, openedWithZcull().state, into, kShape, p, 1);
+    else
+        depthPass(cb, into[0], depth, false);
     EXPECT_EQ(scale_frames::waitAhead(cb), 0u);
-    depthPass(cb, into[0], depth, false);
+    if (apart)
+        depthPass(cb, into[0], depth, false);
+    else
+        for (int p = 0; p < kShape.passes; p++)
+            scale_frames::pass(cb, openedWithZcull().state, into, kShape, p, 1);
     [cb commit];
     [cb waitUntilCompleted];
-    ASSERT_EQ(cb.status, MTLCommandBufferStatusCompleted);
+    EXPECT_EQ(cb.status, MTLCommandBufferStatusCompleted);
     NSDictionary *p = ((NSDictionary * (*)(id, SEL)) objc_msgSend)((id)cb, sel_registerName("switchMetalPipelined"));
-    ASSERT_NE(p, nil);
-    EXPECT_GE([p[@"pipelined"] intValue], kShape.passes + 2) << [[p description] UTF8String];
-    EXPECT_EQ(counter(@"zcull_passes") - passes, 2);
-    EXPECT_EQ(counter(@"zcull_loads") - loads, 1);
+    return {counter(@"zcull_passes") - passes, counter(@"zcull_loads") - loads, counter(@"fused_passes") - fused,
+            [p[@"pipelined"] intValue]};
+}
+
+// The pass after a blit that writes another buffer loads the region the pass encoded ahead before it stored: the commit's
+// range is not cut where the encode ahead ended, before the loading pass
+TEST(GM20BFacadeZcullAhead, APassAfterABlitLoadsTheRegionAPassEncodedAheadStored)
+{
+    ASSERT_TRUE(openedWithZcull().device != nil);
+    id<MTLBuffer> other = [openedWithZcull().device newBufferWithLength:256 options:MTLResourceStorageModeShared];
+    const Moved m = aheadPair(^(id<MTLCommandBuffer> cb, id<MTLTexture>) {
+        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+        [blit fillBuffer:other range:NSMakeRange(0, 256) value:0];
+        [blit endEncoding];
+    }, true);
+    EXPECT_GE(m.pipelined, kShape.passes + 2);
+    EXPECT_EQ(m.passes, 2);
+    EXPECT_EQ(m.loads, 1);
+}
+
+// A blit that copies into the depth between the store and the load leaves the stored region stale: the loading pass takes
+// none, whatever was encoded ahead
+TEST(GM20BFacadeZcullAhead, ACopyIntoTheDepthBetweenLeavesTheLoadingPassNoRegion)
+{
+    ASSERT_TRUE(openedWithZcull().device != nil);
+    id<MTLTexture> source = depthTexture();
+    ASSERT_TRUE(source != nil);
+    const Moved m = aheadPair(^(id<MTLCommandBuffer> cb, id<MTLTexture> depth) {
+        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+        [blit copyFromTexture:source toTexture:depth];
+        [blit endEncoding];
+    }, true);
+    EXPECT_EQ(m.passes, 1);
+    EXPECT_EQ(m.loads, 0);
+}
+
+// The loading pass right after the storing one, both encoded ahead: fused into one pass that keeps its region (HW Test
+// gpu.gm20b.zcull's `fused` arm), or two of which the second loads it
+TEST(GM20BFacadeZcullAhead, AnAdjacentLoadingPassEncodedAheadKeepsTheRegion)
+{
+    ASSERT_TRUE(openedWithZcull().device != nil);
+    const Moved m = aheadPair(nil, false);
+    EXPECT_GE(m.pipelined, kShape.passes + 2);
+    EXPECT_TRUE((m.fused >= 1 && m.passes >= 1) || (m.passes == 2 && m.loads == 1))
+        << "passes " << m.passes << " loads " << m.loads << " fused " << m.fused;
 }
 
 }  // namespace
