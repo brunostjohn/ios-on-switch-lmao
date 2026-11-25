@@ -159,7 +159,7 @@ struct Part {
 // Zero-rate bounds: typical initial offset plus its drift over 40 degrees C. ICM-42670-P (DS-000451) and LSM6DSO:
 // 1 dps and 0.015 / 0.010 dps/C, so 2 dps. LSM6DS3H: 10 dps and 0.05 dps/C, so 12 dps. No ICM-40607 or LSM6DSE
 // figure was found: the ICM-40607 takes its family's (ICM-42605/42688-P 0.5 dps, ICM-40609-D 1 dps; 0.03 dps/C) and the
-// LSM6DSE the LSM6DS3H's, the looser bound costing only how slow a first-rest turn may be learned.
+// LSM6DSE the LSM6DS3H's. The bound only caps the offset the fusion holds (SwitchMotionFusion's biasLimit).
 const Part kParts[] = {
     {"ICM-42607-P", Family::ICM42607, 0x60, 2000}, {"ICM-42607", Family::ICM42607, 0x67, 2000},
     {"ICM-40607", Family::ICM40607, 0x38, 2200},   {"LSM6DS3H", Family::ST, 0x69, 12000},

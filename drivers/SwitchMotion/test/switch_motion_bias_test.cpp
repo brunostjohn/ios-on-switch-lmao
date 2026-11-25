@@ -1,8 +1,10 @@
-// SwitchMotionFusion.h's gyroscope bias learning on the host: offsets at rest are learned, and slow steady turns and
-// tilts, which pass any stillness test a 6-axis part can make, are not.
+// SwitchMotionBias.h's gyroscope offset learning through SwitchMotionFusion on the host: an offset at rest is learned
+// perpendicular to gravity at once and along it from a second attitude; turns about the vertical, at any rate, for any
+// time, before or after a rest, and slow tilts are not.
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <random>
 
 #include "drivers/SwitchMotion/test/fusion_sim.h"
 
@@ -13,24 +15,103 @@ double Bias(const SwitchMotionFusion &fusion, unsigned axis)
 }
 
 constexpr double kSt = 12 * M_PI / 180;  // LSM6DS3H: 10 dps typical, plus drift
+constexpr double kTip = M_PI / 4;
+
+void UseStBound(SwitchMotionFusion &fusion)
+{
+    fusion.zeroRateNanoRad = static_cast<int64_t>(kSt * 1e9);
+}
+
+// Turned about the device's X axis by `angle` at 1 rad/s.
+void Tip(SwitchMotionFusion &fusion, double down[3], const double offset[3], double angle)
+{
+    const double rate[3] = {angle > 0 ? 1.0 : -1.0, 0, 0};
+    SimTurn(fusion, down, rate, offset, std::fabs(angle));
+}
+
+// Rests flat, propped up 45 degrees, and flat again: every component of `offset` seen perpendicular to gravity.
+void LearnAll(SwitchMotionFusion &fusion, double down[3], const double offset[3])
+{
+    SimRest(fusion, down, offset, 1.5);
+    Tip(fusion, down, offset, kTip);
+    SimRest(fusion, down, offset, 1.5);
+    Tip(fusion, down, offset, -kTip);
+    SimRest(fusion, down, offset, 1.0);
+}
+
+void ExpectBias(const SwitchMotionFusion &fusion, const double offset[3], double tolerance, const char *what)
+{
+    for (unsigned i = 0; i < 3; ++i)
+        EXPECT_NEAR(Bias(fusion, i), offset[i], tolerance) << what << ", axis " << i;
+}
+
+// The parts at rest: white noise at the datasheet's floor, quantised to the LSB, at the sample rate given.
+struct Floor {
+    double gyroSigma, accelSigma;  // rad/s, g
+    double gyroLsb, accelLsb;
+    uint32_t periodMicros;
+};
+
+constexpr Floor kIcm200 = {0.0009, 0.0005, 1064.225e-6, 1.0 / 4096, 5000};
+constexpr Floor kIcm12 = {0.0005, 0.0003, 1064.225e-6, 1.0 / 4096, 80000};
+constexpr Floor kSt208 = {0.0011, 0.0006, 1221.73e-6, 0.000244, 4808};
+
+void NoisyRest(SwitchMotionFusion &fusion, const double down[3], const double offset[3], double seconds,
+               const Floor &floor, std::mt19937 &random)
+{
+    std::normal_distribution<double> unit(0.0, 1.0);
+    const auto quantise = [](double value, double lsb) {
+        return std::lround(value / lsb) * lsb;
+    };
+    const auto samples = static_cast<unsigned>(seconds * 1e6 / floor.periodMicros);
+    for (unsigned n = 0; n < samples; ++n) {
+        int32_t accel[3];
+        int32_t gyro[3];
+        for (unsigned i = 0; i < 3; ++i) {
+            accel[i] = static_cast<int32_t>(
+                std::lround(quantise(down[i] + floor.accelSigma * unit(random), floor.accelLsb) * 1e6));
+            gyro[i] = static_cast<int32_t>(
+                std::lround(quantise(offset[i] + floor.gyroSigma * unit(random), floor.gyroLsb) * 1e6));
+        }
+        fusion.addAccel(accel);
+        fusion.addGyro(gyro, floor.periodMicros);
+    }
+}
 }  // namespace
 
 TEST(SwitchMotionBias, ASlowSteadyTurnAboutTheVerticalIsNotLearned)
 {
-    for (const double seconds : {2.0, 10.0}) {
-        SwitchMotionFusion fusion;
-        double down[3] = {0, 0, -1};
-        const double turn[3] = {0, 0, 0.05};
-        const double none[3] = {};
-        SimTurn(fusion, down, turn, none, seconds);
-        EXPECT_LT(std::fabs(Bias(fusion, 2)), 0.002) << seconds << " s at 0.05 rad/s";
+    for (const bool st : {false, true}) {
+        for (const double seconds : {2.0, 10.0}) {
+            SwitchMotionFusion fusion;
+            if (st)
+                UseStBound(fusion);
+            double down[3] = {0, 0, -1};
+            const double turn[3] = {0, 0, 0.05};
+            const double none[3] = {};
+            SimTurn(fusion, down, turn, none, seconds);
+            EXPECT_LT(std::fabs(Bias(fusion, 2)), 0.002) << seconds << " s at 0.05 rad/s, ST bound " << st;
+        }
     }
+}
+
+// The turn that came before the first rest is not the offset either, even at the largest offset the part can have.
+TEST(SwitchMotionBias, ATurnBeforeTheFirstRestIsNotLearned)
+{
+    SwitchMotionFusion fusion;
+    UseStBound(fusion);
+    double down[3] = {0, 0, -1};
+    const double offset[3] = {0.002, -0.001, 0};
+    const double turn[3] = {0, 0, 0.15};
+    SimTurn(fusion, down, turn, offset, 2.0);
+    SimRest(fusion, down, offset, 10.0);
+    ExpectBias(fusion, offset, 0.0005, "after the turn and 10 s of rest");
 }
 
 TEST(SwitchMotionBias, ASlowTiltIsNotLearned)
 {
     SwitchMotionFusion fusion;
-    fusion.zeroRateNanoRad = static_cast<int64_t>(kSt * 1e9);
+    UseStBound(fusion);
     double down[3] = {0, 0, -1};
     const double tilt[3] = {0.05, 0, 0};
     const double none[3] = {};
@@ -39,55 +120,136 @@ TEST(SwitchMotionBias, ASlowTiltIsNotLearned)
         EXPECT_LT(std::fabs(Bias(fusion, i)), 0.002) << i;
 }
 
-// Once the console has rested, a steady turn is told apart from the offset even on a part whose offset bound is far
-// above the turn's rate.
-TEST(SwitchMotionBias, ASlowTurnAfterRestingLeavesTheLearnedOffset)
+// A tilt slow enough to pass the stillness test is what the accelerometer saw, not the offset: in either direction
+// about either tilt axis.
+TEST(SwitchMotionBias, ATiltTheAccelerometerSeesIsTakenOffTheWindow)
 {
-    for (const unsigned axis : {0u, 2u}) {
-        SwitchMotionFusion fusion;
-        fusion.zeroRateNanoRad = static_cast<int64_t>(kSt * 1e9);
-        double down[3] = {0, 0, -1};
-        const double offset[3] = {0.002, -0.001, 0.003};
-        SimRest(fusion, down, offset, 3.0);
-        ASSERT_TRUE(fusion.biasKnown);
-        double turn[3] = {};
-        turn[axis] = 0.05;
-        SimTurn(fusion, down, turn, offset, 10.0);
-        for (unsigned i = 0; i < 3; ++i)
-            EXPECT_NEAR(Bias(fusion, i), offset[i], 0.0005) << "turn about " << axis << ", axis " << i;
+    for (const unsigned axis : {0u, 1u}) {
+        for (const double rate : {0.01, -0.01}) {
+            SwitchMotionFusion fusion;
+            UseStBound(fusion);
+            double down[3] = {0, 0, -1};
+            const double offset[3] = {0.002, -0.001, 0};
+            double tilt[3] = {};
+            tilt[axis] = rate;
+            SimTurn(fusion, down, tilt, offset, 3.0);
+            for (unsigned i = 0; i < 2; ++i)
+                EXPECT_NEAR(Bias(fusion, i), offset[i], 0.0005)
+                    << "tilt about " << axis << " at " << rate << ", axis " << i;
+        }
     }
 }
 
-TEST(SwitchMotionBias, AnOffsetAtRestIsLearnedWithinTheFirstSecond)
+// Once the console has rested, a steady turn about the vertical is told apart from the offset however long it lasts,
+// and a turn about a tilt axis breaks the stillness.
+TEST(SwitchMotionBias, ASlowTurnAfterRestingLeavesTheLearnedOffset)
+{
+    struct Case {
+        unsigned axis;
+        double rate, seconds;
+        bool st;
+    };
+
+    for (const Case c :
+         {Case{0, 0.05, 10, true}, Case{2, 0.05, 10, true}, Case{2, 0.03, 21, false}, Case{2, 0.10, 21, true}}) {
+        SwitchMotionFusion fusion;
+        if (c.st)
+            UseStBound(fusion);
+        double down[3] = {0, 0, -1};
+        const double offset[3] = {0.002, -0.001, 0.003};
+        LearnAll(fusion, down, offset);
+        double turn[3] = {};
+        turn[c.axis] = c.rate;
+        SimTurn(fusion, down, turn, offset, c.seconds);
+        SimRest(fusion, down, offset, 15.0);
+        ExpectBias(fusion, offset, 0.0005, "after the turn");
+    }
+}
+
+TEST(SwitchMotionBias, ASlowRampAboutTheVerticalIsNotFollowed)
+{
+    SwitchMotionFusion fusion;
+    double down[3] = {0, 0, -1};
+    const double offset[3] = {0.002, -0.001, 0.003};
+    LearnAll(fusion, down, offset);
+    for (int step = 0; step < 600; ++step) {
+        const double turn[3] = {0, 0, 0.0025 * step * 0.1};
+        SimTurn(fusion, down, turn, offset, 0.1);
+    }
+    ExpectBias(fusion, offset, 0.0005, "after 60 s ramping to 0.15 rad/s");
+}
+
+// On a stand panned or a turntable the console turns about the true vertical whatever way up it rests.
+TEST(SwitchMotionBias, ATurnAboutTheVerticalWhileProppedUpIsNotLearned)
+{
+    SwitchMotionFusion fusion;
+    UseStBound(fusion);
+    double down[3] = {0, 0, -1};
+    const double offset[3] = {0.002, -0.001, 0.003};
+    LearnAll(fusion, down, offset);
+    Tip(fusion, down, offset, kTip);
+    double turn[3];
+    for (unsigned i = 0; i < 3; ++i)
+        turn[i] = -0.05 * down[i];
+    SimTurn(fusion, down, turn, offset, 30.0);
+    ExpectBias(fusion, offset, 0.0005, "after 30 s turning about the vertical at 45 degrees");
+}
+
+TEST(SwitchMotionBias, AnOffsetAtRestIsLearnedWithinTheFirstSecondAndAlongGravityFromASecondAttitude)
 {
     SwitchMotionFusion fusion;
     double down[3] = {0, 0, -1};
     const double offset[3] = {0.01, -0.005, 0.02};
     SimRest(fusion, down, offset, 1.1);
-    ASSERT_TRUE(fusion.biasKnown);
-    for (unsigned i = 0; i < 3; ++i)
-        EXPECT_NEAR(Bias(fusion, i), offset[i], 0.0002) << i;
+    EXPECT_EQ(fusion.learner.learned, SwitchGyroBias::Learned::AllButGravity);
+    EXPECT_NEAR(Bias(fusion, 0), offset[0], 0.0002);
+    EXPECT_NEAR(Bias(fusion, 1), offset[1], 0.0002);
+    EXPECT_EQ(fusion.biasNanoRad[2], 0) << "lying flat, the vertical offset is a turn as far as anyone can tell";
+    Tip(fusion, down, offset, kTip);
+    SimRest(fusion, down, offset, 1.1);
+    EXPECT_EQ(fusion.learner.learned, SwitchGyroBias::Learned::All);
+    ExpectBias(fusion, offset, 0.0002, "propped up");
 }
 
-TEST(SwitchMotionBias, AnOffsetAsLargeAsThePartsBoundIsLearned)
+// An offset as large as the part's bound passes for a turn while the console lies flat: it is learned only once the
+// console has rested another way up.
+TEST(SwitchMotionBias, AnOffsetAsLargeAsThePartsBoundIsLearnedOnlyFromASecondAttitude)
 {
     SwitchMotionFusion fusion;
-    fusion.zeroRateNanoRad = static_cast<int64_t>(kSt * 1e9);
+    UseStBound(fusion);
     double down[3] = {0, 0, -1};
     const double offset[3] = {0, 0, 0.15};  // 8.6 dps
     SimRest(fusion, down, offset, 3.0);
-    EXPECT_NEAR(Bias(fusion, 2), 0.15, 0.0002);
+    EXPECT_EQ(fusion.biasNanoRad[2], 0);
+    Tip(fusion, down, offset, kTip);
+    SimRest(fusion, down, offset, 3.0);
+    EXPECT_NEAR(Bias(fusion, 2), 0.15, 0.001);
 }
 
-// About the vertical nothing else can see it: past the part's bound it is not learned at all.
-TEST(SwitchMotionBias, AnOffsetPastThePartsBoundIsNotLearnedFromStillness)
+// The datasheet's figure is typical: a part past it still has its offset learned, up to 0.1 rad/s.
+TEST(SwitchMotionBias, AnOffsetPastThePartsTypicalBoundIsLearned)
 {
     SwitchMotionFusion fusion;
     double down[3] = {0, 0, -1};
-    const double offset[3] = {0, 0, 0.05};
-    SimRest(fusion, down, offset, 5.0);
-    EXPECT_FALSE(fusion.biasKnown);
-    EXPECT_EQ(fusion.biasNanoRad[2], 0);
+    const double offset[3] = {0.05, 0, 0.05};  // 2.9 dps, past the ICM parts' 2
+    LearnAll(fusion, down, offset);
+    ExpectBias(fusion, offset, 0.0005, "learned");
+}
+
+// One tilt axis past the largest offset is held there, and does not keep the vertical axis from being learned.
+TEST(SwitchMotionBias, ATiltAxisPastTheBoundDoesNotBlockTheVertical)
+{
+    for (const bool st : {false, true}) {
+        SwitchMotionFusion fusion;
+        if (st)
+            UseStBound(fusion);
+        const double limit = static_cast<double>(fusion.biasLimit()) / 1e9;
+        double down[3] = {0, 0, -1};
+        const double offset[3] = {limit + 0.04, 0, 0.01};
+        LearnAll(fusion, down, offset);
+        EXPECT_NEAR(Bias(fusion, 0), limit, 1e-9) << "ST bound " << st;
+        EXPECT_NEAR(Bias(fusion, 2), 0.01, 0.0005) << "ST bound " << st;
+    }
 }
 
 // About a tilt axis gravity sees an offset of any size: the correction's integral absorbs one past the part's bound.
@@ -103,36 +265,51 @@ TEST(SwitchMotionBias, ATiltAxisOffsetPastThePartsBoundIsAbsorbedByTheGravityCor
     EXPECT_NEAR(static_cast<double>(g[1]) / kSwitchOne, 0, 0.005) << "no standing tilt";
 }
 
-TEST(SwitchMotionBias, ADriftingOffsetIsFollowed)
+TEST(SwitchMotionBias, ADriftingOffsetIsFollowedWhereGravitySeesIt)
 {
     SwitchMotionFusion fusion;
     double down[3] = {0, 0, -1};
-    const double cold[3] = {0, 0, 0.003};
-    SimRest(fusion, down, cold, 2.0);
-    const double warm[3] = {0, 0, 0.007};
+    const double cold[3] = {0.003, 0.002, 0.003};
+    LearnAll(fusion, down, cold);
+    const double warm[3] = {0.007, 0.002, 0.007};
     SimRest(fusion, down, warm, 6.0);
-    EXPECT_NEAR(Bias(fusion, 2), 0.007, 0.0002);
+    EXPECT_NEAR(Bias(fusion, 0), 0.007, 0.0002) << "perpendicular to gravity: followed";
+    EXPECT_NEAR(Bias(fusion, 2), 0.003, 0.0002) << "along gravity: a turn could read the same";
+    for (int cycle = 0; cycle < 4; ++cycle) {
+        Tip(fusion, down, warm, kTip);
+        SimRest(fusion, down, warm, 10.0);
+        Tip(fusion, down, warm, -kTip);
+        SimRest(fusion, down, warm, 10.0);
+    }
+    ExpectBias(fusion, warm, 0.0005, "after resting both ways up");
 }
 
-TEST(SwitchMotionBias, AChangedOffsetReplacesTheLearnedOneOnlyAfterLongStillness)
+// After the offset is known, a vertical turn while flat, for longer than any stillness, leaves it; resting another way
+// up afterwards still finds the true offset.
+TEST(SwitchMotionBias, AChangedOffsetIsFollowedOnlyWhereGravitySeesIt)
 {
     SwitchMotionFusion fusion;
     double down[3] = {0, 0, -1};
     const double before[3] = {0, 0, 0.003};
-    SimRest(fusion, down, before, 2.0);
+    LearnAll(fusion, down, before);
     const double after[3] = {0, 0, 0.02};
-    SimRest(fusion, down, after, 10.0);
-    EXPECT_NEAR(Bias(fusion, 2), 0.003, 0.0002) << "10 s that disagree: kept";
-    SimRest(fusion, down, after, 15.0);
-    EXPECT_NEAR(Bias(fusion, 2), 0.02, 0.0002) << "past 20 s in a row: replaced";
+    SimRest(fusion, down, after, 25.0);
+    EXPECT_NEAR(Bias(fusion, 2), 0.003, 0.0002) << "flat: a 0.017 rad/s turn reads the same";
+    for (int cycle = 0; cycle < 4; ++cycle) {
+        Tip(fusion, down, after, kTip);
+        SimRest(fusion, down, after, 10.0);
+        Tip(fusion, down, after, -kTip);
+        SimRest(fusion, down, after, 10.0);
+    }
+    ExpectBias(fusion, after, 0.0015, "after resting both ways up");
 }
 
-TEST(SwitchMotionBias, MovementBetweenRestsDoesNotAddUpToAReplacement)
+TEST(SwitchMotionBias, MovementBetweenFlatRestsDoesNotTeachTheVertical)
 {
     SwitchMotionFusion fusion;
     double down[3] = {0, 0, -1};
     const double before[3] = {0, 0, 0.003};
-    SimRest(fusion, down, before, 2.0);
+    LearnAll(fusion, down, before);
     const double after[3] = {0, 0, 0.02};
     const double shake[3] = {0.5, 0, 0};
     const double back[3] = {-0.5, 0, 0};
@@ -142,6 +319,31 @@ TEST(SwitchMotionBias, MovementBetweenRestsDoesNotAddUpToAReplacement)
         SimTurn(fusion, down, back, after, 0.1);  // face up again: the gravity correction still cannot see Z
     }
     EXPECT_NEAR(Bias(fusion, 2), 0.003, 0.0002);
+}
+
+// At the parts' noise floors, quantised, the windows still agree and the offset is learned within 1 mrad/s, at the
+// fastest and the slowest rate.
+TEST(SwitchMotionBias, ANoisyRestIsLearned)
+{
+    struct Case {
+        const Floor *floor;
+        bool st;
+    };
+
+    for (const Case c : {Case{&kIcm200, false}, Case{&kIcm12, false}, Case{&kSt208, true}}) {
+        SwitchMotionFusion fusion;
+        if (c.st)
+            UseStBound(fusion);
+        std::mt19937 random(7);
+        double down[3] = {0, 0, -1};
+        const double offset[3] = {0.01, -0.005, 0.02};
+        NoisyRest(fusion, down, offset, 3.0, *c.floor, random);
+        EXPECT_EQ(fusion.learner.learned, SwitchGyroBias::Learned::AllButGravity) << c.floor->periodMicros;
+        Tip(fusion, down, offset, kTip);
+        NoisyRest(fusion, down, offset, 3.0, *c.floor, random);
+        EXPECT_EQ(fusion.learner.learned, SwitchGyroBias::Learned::All) << c.floor->periodMicros;
+        ExpectBias(fusion, offset, 0.001, c.st ? "ST at 208 Hz" : "ICM");
+    }
 }
 
 TEST(SwitchMotionBias, GapsBetweenGyroscopeSamples)

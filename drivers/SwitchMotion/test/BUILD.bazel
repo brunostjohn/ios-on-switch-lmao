@@ -39,7 +39,9 @@ host_library(
         "//drivers/ArmGIC:SwitchInterrupts.h",
         "//drivers/NativeMobileDisplay:SwitchPortrait.h",
         "//drivers/SwitchMotion:SwitchMotion.h",
+        "//drivers/SwitchMotion:SwitchMotionBias.h",
         "//drivers/SwitchMotion:SwitchMotionFusion.h",
+        "//drivers/SwitchMotion:SwitchMotionMath.h",
         "//drivers/SwitchMotion:SwitchMotionStats.h",
         "//drivers/SwitchTouch:SwitchHID.h",
         "//drivers/TegraGPIO:TegraGPIO.h",
@@ -88,7 +90,9 @@ host_test(
     srcs = [
         "fusion_sim.h",
         "switch_motion_fusion_test.cpp",
+        "//drivers/SwitchMotion:SwitchMotionBias.h",
         "//drivers/SwitchMotion:SwitchMotionFusion.h",
+        "//drivers/SwitchMotion:SwitchMotionMath.h",
     ],
 )
 
@@ -97,7 +101,9 @@ host_test(
     srcs = [
         "fusion_sim.h",
         "switch_motion_bias_test.cpp",
+        "//drivers/SwitchMotion:SwitchMotionBias.h",
         "//drivers/SwitchMotion:SwitchMotionFusion.h",
+        "//drivers/SwitchMotion:SwitchMotionMath.h",
     ],
 )
 

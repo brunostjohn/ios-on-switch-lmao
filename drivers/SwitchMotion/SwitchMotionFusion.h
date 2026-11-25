@@ -12,34 +12,15 @@
 // predicts the attitude forward as q * dq(rotation rate * dt), the increment in the device frame on the right.
 // The filter is Mahony's: the measured gravity direction pulls the attitude through a proportional gain and a
 // gyroscope bias integral, only while the acceleration is close to 1 g. Gravity says nothing about rotation about the
-// vertical, so the bias is also learned from stillness (learnWhileStill), and it outlives a session: restart() resets
+// vertical, so the bias is also learned from stillness (SwitchMotionBias.h), and it outlives a session: restart() resets
 // only the attitude. The first accelerometer sample of a session seeds the tilt (yaw 0), as CoreMotion's
 // xArbitraryZVertical frame allows.
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-
-constexpr int kSwitchQ = 30;
-constexpr int64_t kSwitchOne = int64_t{1} << kSwitchQ;
-
-inline uint64_t switchIsqrt(uint64_t n)
-{
-    uint64_t root = 0;
-    uint64_t bit = uint64_t{1} << 62;
-    while (bit > n)
-        bit >>= 2;
-    while (bit) {
-        if (n >= root + bit) {
-            n -= root + bit;
-            root = (root >> 1) + bit;
-        } else {
-            root >>= 1;
-        }
-        bit >>= 2;
-    }
-    return root;
-}
+#include "SwitchMotionBias.h"
+#include "SwitchMotionMath.h"
 
 // value / 2^fraction as an IEEE-754 single, rounded to nearest (ties to even).
 inline uint32_t switchFloatBits(int64_t value, int fraction)
@@ -93,31 +74,15 @@ struct SwitchMotionFusion {
     // second and a gyroscope bias in tens of seconds at rest.
     static constexpr int64_t kKpMicroRad = 1000000;
     static constexpr int64_t kKiMilli = 20;
-    static constexpr int64_t kNearOneG = 150000;               // correct only within 0.15 g of 1 g
-    static constexpr int64_t kMaxIntegralNanoRad = 100000000;  // 0.1 rad/s: the correction's integral, at least
-    // Stillness (learnWhileStill): half-second windows in which no gyroscope sample strays 0.01 rad/s from the window's
-    // mean (about ten times the parts' noise) and no accelerometer axis moves 10 mg from the window's first sample, at
-    // 1 g within 0.05 g. A tilt at 0.02 rad/s moves gravity 10 mg in half a second, so a still window is at most a slow
-    // tilt or a turn about the vertical, the one rotation a 6-axis part cannot tell from a gyroscope offset. Learning
-    // therefore rests on two bounds rather than on the stillness test: the first estimate (two windows in a row that
-    // agree) must lie within the part's zero-rate bound, and once there is one, only a window within 0.005 rad/s of it
-    // moves it (a quarter of the way: temperature drift). A different value replaces it only after 20 s of windows
-    // that agree with each other. So a steady turn faster than 0.005 rad/s is never learned once the console has
-    // rested, and before that never past the part's own offset, no worse than not learning at all.
-    static constexpr int64_t kStillNanoRad = 10000000;
-    static constexpr int32_t kStillMicroG = 10000;
-    static constexpr int64_t kStillNearOneG = 50000;
-    static constexpr uint32_t kWindowMicros = 500000;
-    static constexpr int64_t kTrackNanoRad = 5000000;
-    static constexpr unsigned kAcquireWindows = 2;
-    static constexpr unsigned kReplaceWindows = 40;
+    static constexpr int64_t kNearOneG = 150000;                  // correct only within 0.15 g of 1 g
+    static constexpr int64_t kMaxIntegralNanoRad = 100000000;     // 0.1 rad/s: the largest bias, at least
     static constexpr int64_t kDefaultZeroRateNanoRad = 34906585;  // 2 dps
 
     int64_t q[4] = {kSwitchOne, 0, 0, 0};  // w, x, y, z
     int64_t biasNanoRad[3] = {};
-    bool biasKnown = false;
-    // The bound of the part's zero-rate offset (initial tolerance and its drift over temperature): the largest bias
-    // stillness may learn. Gravity sees a tilt axis's offset whatever its size, so its integral is not held to it.
+    SwitchGyroBias learner;
+    // The bound of the part's zero-rate offset (initial tolerance and its drift over temperature). Each axis of the
+    // bias is held to it, or to 0.1 rad/s if that is more: a part may exceed its typical figure.
     int64_t zeroRateNanoRad = kDefaultZeroRateNanoRad;
     int32_t accel[3] = {};  // the latest accelerometer sample, micro-g
     int64_t accelNorm = 0;  // its magnitude
@@ -130,8 +95,12 @@ struct SwitchMotionFusion {
         q[0] = kSwitchOne;
         q[1] = q[2] = q[3] = 0;
         haveAccel = seeded = false;
-        window = {};
-        agreeing = 0;
+        learner.restart();
+    }
+
+    int64_t biasLimit() const
+    {
+        return zeroRateNanoRad > kMaxIntegralNanoRad ? zeroRateNanoRad : kMaxIntegralNanoRad;
     }
 
     // The gravity the attitude implies, device frame, Q30.
@@ -159,7 +128,10 @@ struct SwitchMotionFusion {
     // One gyroscope sample standing for `dtMicros` (switchGyroGapMicros).
     void addGyro(const int32_t sample[3], uint32_t dtMicros)
     {
-        learnWhileStill(sample, dtMicros);
+        if (haveAccel)
+            learner.add(sample, dtMicros, accel, accelNorm, biasNanoRad, biasLimit());
+        else
+            learner.restart();
         if (!seeded)
             return;
         int64_t omega[3] = {sample[0], sample[1], sample[2]};
@@ -175,7 +147,7 @@ struct SwitchMotionFusion {
             for (unsigned i = 0; i < 3; ++i) {
                 // Mahony adds the error's integral to the rate; the bias is that integral's negative.
                 int64_t bias = biasNanoRad[i] - ((kKiMilli * error[i] * dtMicros) >> kSwitchQ);
-                const int64_t clamp = zeroRateNanoRad > kMaxIntegralNanoRad ? zeroRateNanoRad : kMaxIntegralNanoRad;
+                const int64_t clamp = biasLimit();
                 if (bias > clamp)
                     bias = clamp;
                 if (bias < -clamp)
@@ -210,101 +182,6 @@ struct SwitchMotionFusion {
     }
 
 private:
-    struct Window {
-        int64_t sumNanoRad[3];
-        int32_t firstAccel[3];
-        uint32_t samples, micros;
-    };
-
-    Window window = {};
-    int64_t candidateNanoRad[3] = {};
-    unsigned agreeing = 0;  // still windows in a row that agree with the candidate
-
-    static bool within(const int64_t a[3], const int64_t b[3], int64_t bound)
-    {
-        for (unsigned i = 0; i < 3; ++i) {
-            if (a[i] - b[i] > bound || b[i] - a[i] > bound)
-                return false;
-        }
-        return true;
-    }
-
-    bool steadyAccel() const
-    {
-        if (accelNorm < 1000000 - kStillNearOneG || accelNorm > 1000000 + kStillNearOneG)
-            return false;
-        for (unsigned i = 0; i < 3; ++i) {
-            const int32_t moved = accel[i] - window.firstAccel[i];
-            if (moved > kStillMicroG || moved < -kStillMicroG)
-                return false;
-        }
-        return true;
-    }
-
-    // See kStillNanoRad. Motion ends the window and the run of agreeing windows.
-    void learnWhileStill(const int32_t sample[3], uint32_t dtMicros)
-    {
-        int64_t nano[3];
-        for (unsigned i = 0; i < 3; ++i)
-            nano[i] = int64_t{sample[i]} * 1000;
-        if (!haveAccel) {
-            window = {};
-            agreeing = 0;
-            return;
-        }
-        if (window.samples) {
-            int64_t mean[3];
-            for (unsigned i = 0; i < 3; ++i)
-                mean[i] = window.sumNanoRad[i] / window.samples;
-            if (!steadyAccel() || !within(nano, mean, kStillNanoRad)) {
-                window = {};
-                agreeing = 0;
-            }
-        }
-        if (!window.samples) {
-            memcpy(window.firstAccel, accel, sizeof(accel));
-            if (!steadyAccel())
-                return;
-        }
-        for (unsigned i = 0; i < 3; ++i)
-            window.sumNanoRad[i] += nano[i];
-        ++window.samples;
-        window.micros += dtMicros;
-        if (window.micros < kWindowMicros)
-            return;
-        int64_t mean[3];
-        for (unsigned i = 0; i < 3; ++i)
-            mean[i] = window.sumNanoRad[i] / window.samples;
-        window = {};
-        stillWindow(mean);
-    }
-
-    void stillWindow(const int64_t mean[3])
-    {
-        if (biasKnown && within(mean, biasNanoRad, kTrackNanoRad)) {
-            for (unsigned i = 0; i < 3; ++i)
-                biasNanoRad[i] += (mean[i] - biasNanoRad[i]) / 4;
-            agreeing = 0;
-            return;
-        }
-        const int64_t zero[3] = {};
-        if (!within(mean, zero, zeroRateNanoRad)) {
-            agreeing = 0;
-            return;
-        }
-        if (agreeing && within(mean, candidateNanoRad, kTrackNanoRad)) {
-            ++agreeing;
-        } else {
-            agreeing = 1;
-            memcpy(candidateNanoRad, mean, sizeof(candidateNanoRad));
-        }
-        if (agreeing < (biasKnown ? kReplaceWindows : kAcquireWindows))
-            return;
-        memcpy(biasNanoRad, mean, sizeof(biasNanoRad));
-        biasKnown = true;
-        agreeing = 0;
-    }
-
     // The measured gravity direction, Q30, when the acceleration is close enough to 1 g to be gravity alone.
     bool unitAccel(int64_t out[3]) const
     {

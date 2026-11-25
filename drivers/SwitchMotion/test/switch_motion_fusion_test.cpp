@@ -182,30 +182,43 @@ TEST(SwitchMotionFusion, EstimatesAConstantGyroscopeBias)
     EXPECT_LT(std::abs(rate[0]), 200) << "rotation rate reported without the bias";
 }
 
-// Gravity cannot see rotation about the vertical: lying face up, a Z offset is learned only from stillness.
-TEST(SwitchMotionFusion, LearnsTheVerticalBiasWhileStill)
+// Gravity cannot see rotation about the vertical, and lying face up neither can stillness: a Z offset reads as a turn.
+// Rested propped up as well, the offset is learned and the yaw holds.
+TEST(SwitchMotionFusion, LearnsTheVerticalBiasFromASecondAttitude)
 {
     SwitchMotionFusion fusion;
-    const int32_t down[3] = {0, 0, -1000000};
+    double down[3] = {0, 0, -1};
+    const double offset[3] = {0, 0, 0.01};
+    SimRest(fusion, down, offset, 5.0);
+    EXPECT_EQ(fusion.biasNanoRad[2], 0);
+    const double tip[3] = {1, 0, 0};
+    SimTurn(fusion, down, tip, offset, M_PI / 4);
+    SimRest(fusion, down, offset, 2.0);
+    const double back[3] = {-1, 0, 0};
+    SimTurn(fusion, down, back, offset, M_PI / 4);
+    EXPECT_NEAR(fusion.biasNanoRad[2] / 1e9, 0.01, 0.0002);
+    const int32_t faceUp[3] = {0, 0, -1000000};
+    fusion.restart();
+    fusion.addAccel(faceUp);
     const int32_t biased[3] = {0, 0, 10000};
-    Feed(fusion, down, biased, 60.0);
+    Feed(fusion, faceUp, biased, 60.0);
     const double yaw = 2 * std::atan2(static_cast<double>(fusion.q[3]), static_cast<double>(fusion.q[0]));
     EXPECT_LT(std::fabs(yaw), 0.02) << "yaw drift in a minute, radians";
-    EXPECT_NEAR(fusion.biasNanoRad[2] / 1e9, 0.01, 0.0002);
 }
 
 TEST(SwitchMotionFusion, ABiasLearnedOnceOutlivesTheSession)
 {
     SwitchMotionFusion fusion;
     const int32_t down[3] = {0, 0, -1000000};
-    const int32_t biased[3] = {0, 0, 10000};
+    const int32_t biased[3] = {10000, 0, 0};
     Feed(fusion, down, biased, 5.0);
     fusion.restart();
     EXPECT_FALSE(fusion.seeded);
-    EXPECT_NEAR(fusion.biasNanoRad[2] / 1e9, 0.01, 0.0002);
+    EXPECT_NEAR(fusion.biasNanoRad[0] / 1e9, 0.01, 0.0002);
     Feed(fusion, down, biased, 0.4);  // shorter than the stillness the learning needs
-    const double yaw = 2 * std::atan2(static_cast<double>(fusion.q[3]), static_cast<double>(fusion.q[0]));
-    EXPECT_LT(std::fabs(yaw), 1e-3);
+    double g[3];
+    Gravity(fusion, g);
+    EXPECT_NEAR(g[1], 0, 1e-3) << "no tilt from the offset";
 }
 
 TEST(SwitchMotionFusion, ASteadyTurnIsNotTakenForBias)
