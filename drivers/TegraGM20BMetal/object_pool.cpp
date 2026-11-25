@@ -118,7 +118,7 @@ void pooledDealloc(id self, SEL)
         pool->dropped(self);
     objc_destructInstance(self);
     pool->alive.fetch_sub(1, std::memory_order_relaxed);
-    uint32_t node;
+    uint32_t node = 0;
     void **slot = kKeepsBlocks && pool->blocks.kept() < pool->most.load(std::memory_order_relaxed)
                       ? pool->blocks.room(node)
                       : nullptr;
