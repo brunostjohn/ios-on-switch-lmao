@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "../TegraNVJPGRequest.h"
+#include "../TegraNVJPGRoute.h"
 #include "../../TegraGM20B/TegraGM20BLayoutFit.h"
 
 static int failures;
@@ -411,6 +412,90 @@ int main(void)
         expect("420f", &r420, &i420, &nv, &kAll, TEGRA_NVJPG_PLAN_OK, NULL, &p);
         why = tegra_nvjpg_plan_block_linear(&r420, nv.length, kSink, 256, 4, &p, &st);
         CHECK(why && strstr(why, "more than one plane"), "420f block linear: %s", why ? why : "ok");
+    }
+
+    // The route once GM20B has answered for the destination: its rows when it holds no block-linear layout, its blocks
+    // when it does, the copy engine into its blocks when NVJPG cannot place them there. Refused, never written as rows,
+    // when GM20B holds it block-linear and describes no layout, holds a compressed one, or a copy would write part of it.
+    {
+        const uint64_t repack = 256ull << 20;
+        TegraNVJPGSurface dt = surface(bgra, 256, 256);
+        TegraNVJPGDecodeRequest rt = request(256, 256, TEGRA_NVJPG_SUB_420, 0);
+        TegraNVJPGImage tile = image(256, 256, TEGRA_NVJPG_CHROMA_420);
+        TegraNVJPGDestinationLayout none, held;
+        memset(&none, 0, sizeof(none));
+        memset(&held, 0, sizeof(held));
+        held.held = held.described = true;
+        CHECK(tgm_layout_tiled_within(256, 256, 4, dt.length, &held.layout), "route: 256 BGRA tiles");
+        nvjpg_dec_drv_pic_setup_s st;
+        TegraNVJPGExtent et;
+        uint32_t route = TEGRA_NVJPG_ROUTE_COUNT;
+#define PLANNED(req, img)                                                                    \
+    do {                                                                                     \
+        expect("route", req, img, &dt, &kAll, TEGRA_NVJPG_PLAN_OK, NULL, &p);                \
+        memset(&st, 0, sizeof(st));                                                          \
+        CHECK(!tegra_nvjpg_setup_output(img, &p.target, true, &st, &et), "route: setup");    \
+        route = TEGRA_NVJPG_ROUTE_COUNT;                                                     \
+    } while (0)
+        PLANNED(&rt, &tile);
+        const char *why = tegra_nvjpg_route(&rt, &dt, dt.length, kSink, repack, true, &none, &p, &st, &route);
+        CHECK(!why && route == TEGRA_NVJPG_ROUTE_ROWS && !p.target.blockLinear && st.tile_mode == 0,
+              "route: rows when GM20B holds no layout (%s)", why ? why : "ok");
+
+        PLANNED(&rt, &tile);
+        why = tegra_nvjpg_route(&rt, &dt, dt.length, kSink, repack, true, &held, &p, &st, &route);
+        CHECK(!why && route == TEGRA_NVJPG_ROUTE_BLOCKS && st.tile_mode == TEGRA_NVJPG_TILE_TEGRA_BLOCK_LINEAR &&
+                  st.block_linear_height == (int)held.layout.y_log2 && st.output_stride_luma == 1024,
+              "route: blocks (%s, tile_mode %d)", why ? why : "ok", st.tile_mode);
+
+        TegraNVJPGDestinationLayout undescribed = held;
+        undescribed.described = false;
+        PLANNED(&rt, &tile);
+        why = tegra_nvjpg_route(&rt, &dt, dt.length, kSink, repack, true, &undescribed, &p, &st, &route);
+        CHECK(why && strstr(why, "describes no layout") && st.tile_mode == 0, "route: undescribed: %s",
+              why ? why : "written");
+
+        TegraNVJPGDestinationLayout compressed = held;
+        compressed.compressed = true;
+        PLANNED(&rt, &tile);
+        why = tegra_nvjpg_route(&rt, &dt, dt.length, kSink, repack, true, &compressed, &p, &st, &route);
+        CHECK(why && strstr(why, "compressed"), "route: compressed: %s", why ? why : "written");
+
+        const uint64_t tight = dt.length - 1024ull * 128;
+        PLANNED(&rt, &tile);
+        why = tegra_nvjpg_route(&rt, &dt, tight, kSink, repack, true, &held, &p, &st, &route);
+        CHECK(!why && route == TEGRA_NVJPG_ROUTE_COPY_BLOCKS && p.repack == TEGRA_NVJPG_REPACK_CE &&
+                  !p.target.blockLinear && st.tile_mode == TEGRA_NVJPG_TILE_PITCH && p.copyDstStart[0] == 0 &&
+                  p.copyRowBytes[0] == 1024 && p.copyRows[0] == 256,
+              "route: blocks NVJPG cannot reach go through the copy engine (%s)", why ? why : "ok");
+        PLANNED(&rt, &tile);
+        why = tegra_nvjpg_route(&rt, &dt, tight, kSink, repack, false, &held, &p, &st, &route);
+        CHECK(why && strstr(why, "runs past"), "route: no copy engine: %s", why ? why : "written");
+
+        TegraNVJPGDecodeRequest placed = request(64, 64, TEGRA_NVJPG_SUB_420, 0);
+        TegraNVJPGImage small = image(64, 64, TEGRA_NVJPG_CHROMA_420);
+        placed.x_offset = 64, placed.y_offset = 8;
+        PLANNED(&placed, &small);
+        why = tegra_nvjpg_route(&placed, &dt, dt.length, kSink, repack, true, &held, &p, &st, &route);
+        CHECK(why && strstr(why, "off the destination's blocks"), "route: a placement off the blocks: %s",
+              why ? why : "written");
+
+        PLANNED(&rt, &tile);
+        p.repack = TEGRA_NVJPG_REPACK_CE;
+        p.copyDstStart[0] = 0, p.copyRowBytes[0] = 1024, p.copyRows[0] = 256;
+        why = tegra_nvjpg_route(&rt, &dt, dt.length, kSink, repack, true, &held, &p, &st, &route);
+        CHECK(!why && route == TEGRA_NVJPG_ROUTE_COPY_BLOCKS, "route: a staged copy of the whole surface: %s",
+              why ? why : "ok");
+        why = tegra_nvjpg_route(&rt, &dt, dt.length, kSink, repack, true, &none, &p, &st, &route);
+        CHECK(!why && route == TEGRA_NVJPG_ROUTE_COPY_ROWS, "route: a staged copy into rows: %s", why ? why : "ok");
+        p.copyDstStart[0] = 64;
+        why = tegra_nvjpg_route(&rt, &dt, dt.length, kSink, repack, true, &held, &p, &st, &route);
+        CHECK(why && strstr(why, "part of a block-linear"), "route: a staged copy into part: %s",
+              why ? why : "written");
+        p.repack = TEGRA_NVJPG_REPACK_VIC;
+        why = tegra_nvjpg_route(&rt, &dt, dt.length, kSink, repack, true, &none, &p, &st, &route);
+        CHECK(why != NULL, "route: VIC's re-pack is not routed");
+#undef PLANNED
     }
 
     if (failures) {

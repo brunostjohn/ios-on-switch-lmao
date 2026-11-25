@@ -23,6 +23,11 @@ void tegra_nvjpg_count_job(int pid, uint32_t format, bool failed, uint64_t engin
 void tegra_nvjpg_counts_of(int pid, TegraNVJPGRouteCounts *out);
 // The window's line once 5 s have passed with work in them.
 void tegra_nvjpg_stats_line(void);
+// One line the first time a decode takes each route (TEGRA_NVJPG_ROUTE_*) at each block height: what GM20B answered
+// for the destination (`held` block-linear, its row bytes and y_log2), its backing pages, and what NVJPG was told.
+// Engine thread only.
+void tegra_nvjpg_note_route(uint32_t route, bool held, uint32_t rowBytes, uint32_t yLog2, uint32_t pages,
+                            const nvjpg_dec_drv_pic_setup_s *setup, uint32_t width, uint32_t height);
 // TegraNVJPG.cpp's, taken and zeroed: the jobs whose engine wait ran with gStateLock free, and the longest a
 // cancellation or an idle gate call waited to take gStateLock. Takes no lock: a client's refused decode calls it too.
 void tegra_nvjpg_lock_counts(uint64_t *waitsUnlocked, uint64_t *stateWaitMaxUs);
