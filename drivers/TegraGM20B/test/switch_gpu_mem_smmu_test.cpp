@@ -575,6 +575,29 @@ TEST_F(GpuMemSmmuTest, AWindowPrefixAndAHeldTailBothGoBackAtDeletionAndInABatch)
 	EXPECT_EQ(gSmmuUnmaps, 1u);
 }
 
+// A retirement batch's memory with RAM-view holds and no window IOVA waits for the batch's L2 invalidate too: before it
+// went at once, so its holds went before the flush that writes its dirty lines back, and with no window memory in the
+// batch no flush ran at all.
+TEST_F(GpuMemSmmuTest, ABatchKeepsRamViewHoldsUntilItsL2InvalidateHasRun)
+{
+	gRamReady = true;
+	const auto pages = scattered(8);
+	tgm_mem *mem = nullptr;
+	ASSERT_EQ(tgm_mem_new(&vm, pages.data(), 8, &mem), 0);
+	ASSERT_FALSE(tgm_mem_is_smmu(mem));
+	tgm_mem *later = nullptr;
+	tgm_mem_del_later(&mem, &later);
+	EXPECT_EQ(mem, nullptr);
+	ASSERT_NE(later, nullptr) << "deferred to the batch";
+	EXPECT_EQ(gDtorCalls, 1u) << "its GMMU memory object goes now";
+	EXPECT_EQ(gHeld.size(), 8u);
+	EXPECT_EQ(gLtcInvalidates, 0u);
+	tgm_mem_del_finish(later);
+	EXPECT_EQ(gLtcInvalidates, 1u);
+	EXPECT_TRUE(gHeld.empty());
+	EXPECT_EQ(gSmmuUnmaps, 0u) << "no window IOVA to give back";
+}
+
 TEST_F(GpuMemSmmuTest, AFailedCtorOrAFailedHoldLeavesNothingHeldOrMapped)
 {
 	gRamReady = true;

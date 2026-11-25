@@ -316,6 +316,16 @@ static void mem_release_ram(const u64 *pages, u32 npages)
 		switch_gpu_smmu_release(batch, n);
 }
 
+static int mem_holds_ram(const struct tgm_mem *mem)
+{
+	u32 i = 0;
+	for (i = 0; mem->smmu_pages && i < mem->npages; ++i) {
+		if (switch_gpu_smmu_is_ram_pa(mem->smmu_pages[i]))
+			return 1;
+	}
+	return 0;
+}
+
 static int mem_new(const uint64_t *pas, uint32_t npages, u8 page, int compute_comp, int smmu_mode,
 		   struct tgm_mem **pmem, uint64_t *lock_wait_ns)
 {
@@ -475,10 +485,13 @@ void tgm_mem_del(struct tgm_mem **pmem)
 	*pmem = NULL;
 }
 
+/* A retirement batch's memory whose pages the GPU reaches through the SMMU (a window IOVA, or holds in GPUB's view of RAM)
+ * keeps them mapped until the batch's L2 invalidate, which flushes first: a dirty line it writes back must find its page
+ * still mapped. The backing's pages go back to the VM only after that (switch_gpu_memory_retire_end). */
 void tgm_mem_del_later(struct tgm_mem **pmem, struct tgm_mem **later)
 {
 	struct tgm_mem *mem = *pmem;
-	if (!mem || !mem->smmu_iova) {
+	if (!mem || (!mem->smmu_iova && !mem_holds_ram(mem))) {
 		tgm_mem_del(pmem);
 		return;
 	}
@@ -502,7 +515,8 @@ void tgm_mem_del_finish(struct tgm_mem *later)
 	while (later) {
 		struct tgm_mem *next = later->later;
 		mem_release_ram(later->smmu_pages, later->npages);
-		switch_gpu_smmu_unmap(later->smmu_iova, later->smmu_npages);
+		if (later->smmu_iova)
+			switch_gpu_smmu_unmap(later->smmu_iova, later->smmu_npages);
 		kfree(later->smmu_pages);
 		kfree(later);
 		later = next;
