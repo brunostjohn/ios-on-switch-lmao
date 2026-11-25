@@ -56,3 +56,21 @@ TEST(TegraSESource, KnownAnswersWriteBuffersThatOutliveTheirEngine)
     EXPECT_THAT(answers, Not(HasSubstr("uint8_t out[64]")));
     EXPECT_THAT(answers, HasSubstr("gAnswers[&only - gEngines].out"));
 }
+
+// SE1's MCCIF addresses reach only held pages (TegraSESmmu.h): each operation's lists held before the start and released
+// after it, on every path; the engine attached before its first DMA (the known answers).
+TEST(TegraSESource, AnMccifOperationsPagesAreHeldOnlyWhileItRuns)
+{
+    const std::string source = SourceText("../TegraSE.cpp");
+    const std::string run = Body(source, "bool run(Engine &e, uint32_t in, uint32_t out)\n");
+    const size_t hold = run.find("tegra_se_smmu_hold(which, inList)");
+    const size_t start = run.find("start(e, in, out)");
+    const size_t release = run.rfind("tegra_se_smmu_release(which, inList)");
+    ASSERT_NE(hold, std::string::npos);
+    ASSERT_NE(start, std::string::npos);
+    EXPECT_LT(hold, start);
+    EXPECT_LT(start, release);
+    EXPECT_EQ(Count(source, "start(e, "), 1u) << "every operation starts through run()";
+    EXPECT_THAT(source, HasSubstr("if (!engineUp(e) || !confine(e, which)) {"));
+    EXPECT_THAT(source, Not(HasSubstr("kSmmuAsid")));
+}

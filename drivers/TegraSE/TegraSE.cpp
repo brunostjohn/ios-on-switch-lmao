@@ -58,6 +58,8 @@
 #include <corecrypto/ccmode_impl.h>
 #pragma clang diagnostic pop
 #include "TegraSE.h"
+#include "TegraSESmmu.h"
+#include "../TegraSMMU/TegraSMMU.h"
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
@@ -124,15 +126,11 @@ constexpr uint32_t kDstHash = 1u << 2;
 // LNR_CTR 3), VCTRAM_SEL << 5 (AHB 0, AESOUT 2, PREVAHB 3), IV_SEL << 7 (original 0), CORE_SEL << 8 (encrypt 1),
 // CTR_CNTN << 11, KEY_INDEX << 24, MEMIF << 31 (AHB 0, MCCIF 1).
 constexpr uint32_t kCryptoEncrypt = 1u << 8, kCryptoMccif = 1u << 31;
-// Each engine's MEMIF, and the MC_SMMU_<swgroup>_ASID registers of the memory clients an MCCIF engine uses, whose
-// bit 31 would translate its addresses (physical here). The Switch device tree's iommus put SE1 in swgroups 35 (SE,
-// 0xabc) and 38 (SE1, 0xac8), SE2 in 29 (ISP2B, 0xaa4) and 53. L4T's tegra210b01-soc-base.dtsi names SE2's ISP2B and
-// ISP2B1; neither the T210 manual nor L4T's swgroup table gives 53 a register, so whether it translates is unknown and
-// SE2 stays on the AHB, the path it ran on 25 Nov.
+// Each engine's MEMIF. An MCCIF engine's addresses go through the SMMU at their own value (TegraSESmmu.h): each
+// operation's list entries are held while it runs. SE2 stays on the AHB, the path it ran on 25 Nov, whose PPCS client
+// the SMMU cannot translate (T210 TRM 18.5.3 note 3).
 constexpr uint32_t kMemif[2] = {kCryptoMccif, 0};
 constexpr uint64_t kMcPA = 0x70019000;
-constexpr uint32_t kSmmuAsid[2][2] = {{0xabc, 0xac8}, {}};
-constexpr uint32_t kSmmuTranslates = 1u << 31;
 constexpr uint32_t kCarSuperSe = 0x704;
 
 constexpr unsigned kEngines = 2, kFirstSlot = 1, kLastSlot = 13;
@@ -338,7 +336,7 @@ void engineOff(Engine &e, const char *what)
 }
 
 // Starts what the caller programmed (lists in the list page) and sleeps until the end interrupt.
-bool run(Engine &e, uint32_t in, uint32_t out)
+bool start(Engine &e, uint32_t in, uint32_t out)
 {
     wr(e, IN_LL, in);
     wr(e, OUT_LL, out);
@@ -397,6 +395,34 @@ bool run(Engine &e, uint32_t in, uint32_t out)
     e.ops++;
 #endif
     return true;
+}
+
+// An MCCIF engine reaches the pages its lists name only while the operation runs (TegraSESmmu.h): held before the start,
+// released once it ended, completed with an error, or timed out (a timed-out engine still writing faults at the MC).
+bool run(Engine &e, uint32_t in, uint32_t out)
+{
+    const unsigned which = static_cast<unsigned>(&e - gEngines);
+    const auto listAt = [&e](uint32_t pa) {
+        return pa ? reinterpret_cast<const uint32_t *>(e.list.va + (pa - e.list.pa)) : nullptr;
+    };
+    const uint32_t *inList = listAt(in), *outList = listAt(out);
+    const bool translated = kMemif[which] != 0u;
+    if (translated && inList && !tegra_se_smmu_hold(which, inList)) {
+        snprintf(gWhy, sizeof gWhy, "an input page could not be held in the SMMU");
+        return false;
+    }
+    if (translated && outList && !tegra_se_smmu_hold(which, outList)) {
+        if (inList)
+            tegra_se_smmu_release(which, inList);
+        snprintf(gWhy, sizeof gWhy, "an output page could not be held in the SMMU");
+        return false;
+    }
+    const bool ran = start(e, in, out);
+    if (translated && outList)
+        tegra_se_smmu_release(which, outList);
+    if (translated && inList)
+        tegra_se_smmu_release(which, inList);
+    return ran;
 }
 
 bool claim(Engine &e, uint32_t owner)
@@ -1297,6 +1323,31 @@ bool engineUp(Engine &e)
     return true;
 }
 
+// Before the engine's first DMA: its swgroups attached to its view of RAM, its own buffers held (TegraSESmmu.h). An
+// MCCIF engine whose clients another owner translates stays off: its addresses are physical.
+bool confine(Engine &e, unsigned which)
+{
+    char why[160] = "";
+    const switch_dma_buffer *own[3] = {&e.list.buffer, &e.bounceIn.buffer, &e.bounceOut.buffer};
+    switch (tegra_se_smmu_attach(which, own, 3, why, sizeof why)) {
+    case TEGRA_SE_SMMU_ATTACHED:
+        IOLog("TegraSE: %s DMA through the SMMU (MC %#x and %#x)%s\n", e.name, tegra_smmu_se_swgroups[which][0],
+              tegra_smmu_se_swgroups[which][1],
+              kMemif[which] ? ": it reaches its buffers and each operation's pages" : "; its AHB DMA is not translatable");
+        return true;
+    case TEGRA_SE_SMMU_UNTRANSLATED:
+        IOLog("TegraSE: %s DMA not behind the SMMU (%s): it can reach all of RAM below 4 GiB\n", e.name, why);
+        return true;
+    case TEGRA_SE_SMMU_TRANSLATED:
+        break;
+    }
+    if (!kMemif[which])
+        return true;
+    snprintf(gWhy, sizeof gWhy, "the SMMU translates its memory clients and they could not be attached (%s)", why);
+    engineOff(e, gWhy);
+    return false;
+}
+
 bool rng(Engine &e, uint8_t out[64])
 {
     if (!switch_car_clock_enabled(kClockEntropy) || switch_car_reset_asserted(kClockEntropy))
@@ -1607,19 +1658,11 @@ void seThread(void *, wait_result_t)
                       switch_car_read(kCarSuperSe));
     for (unsigned which = 0; which < kEngines; ++which) {
         Engine &e = gEngines[which];
-        uint32_t translated = 0;
-        for (const uint32_t asid : kSmmuAsid[which])
-            translated = !translated && asid && (switch_mmio_read32(gMc, asid) & kSmmuTranslates) ? asid : translated;
-        if (translated) {
-            IOLog("TegraSE: %s off for this boot: the SMMU translates its memory clients (MC %#x = %#x)\n", e.name,
-                  translated, switch_mmio_read32(gMc, translated));
-            continue;
-        }
         if (!tegra_se_claim(which + 1, TEGRA_SE_OWNER_DRIVER, 10000)) {
             IOLog("TegraSE: %s still held by the AppleKeyStore probe after 10 s, off\n", e.name);
             continue;
         }
-        if (!engineUp(e)) {
+        if (!engineUp(e) || !confine(e, which)) {
             tegra_se_release(which + 1, TEGRA_SE_OWNER_DRIVER);
             continue;
         }

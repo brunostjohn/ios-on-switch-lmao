@@ -14,6 +14,22 @@
 
 #include "../TegraSE.cpp"
 
+// TegraSESmmu.cpp's, which the model does not build: the engines' memory clients untranslated, as at reset.
+tegra_se_smmu_attach_result tegra_se_smmu_attach(unsigned, const switch_dma_buffer *const *, unsigned, char *line,
+                                                 size_t size)
+{
+    snprintf(line, size, "no SMMU in the register model");
+    return TEGRA_SE_SMMU_UNTRANSLATED;
+}
+
+bool tegra_se_smmu_hold(unsigned, const uint32_t *)
+{
+    return true;
+}
+
+void tegra_se_smmu_release(unsigned, const uint32_t *)
+{}
+
 namespace se_model {
 constexpr uintptr_t kBase[kEngines] = {0x70012000, 0x70412000};
 
