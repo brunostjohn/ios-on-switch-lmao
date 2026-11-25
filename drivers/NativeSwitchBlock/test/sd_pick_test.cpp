@@ -399,6 +399,25 @@ TEST(SdPick, WritesASynchronizeWaitsForAreNotPassed)
     }
 }
 
+// A synchronize waits for writes queued behind older tier-2 reads while tier-0 reads keep arriving: the oldest write
+// passes the reads, so the synchronize is not held to the one-in-eight share of a passed-over head.
+TEST(SdPick, AwaitedWritesPassOlderLowerReads)
+{
+    std::vector<Arrival> background = scattered(60, kMs, 128, 2, false, 10);
+    const auto writes = scattered(20, kMs, 8, 1, true, 11);
+    background.insert(background.end(), writes.begin(), writes.end());
+    for (Arrival &write : background) {
+        if (write.write)
+            write.at += kMs;
+    }
+    const Result before = run(Rule::kOld, background, true, 40);
+    const Result after = run(Rule::kNew, background, true, 40);
+    std::printf("awaited writes behind tier-2 reads: worst write %.1f -> %.1f ms, UI %.1f -> %.1f ms\n",
+                before.worstByClass[1] / 1e6, after.worstByClass[1] / 1e6, before.uiTotalNs / 1e6,
+                after.uiTotalNs / 1e6);
+    EXPECT_LE(after.worstByClass[1], before.worstByClass[1]);
+}
+
 // APFS writing steadily (200 scattered 4 KiB writes a second, tier 1) beside tier-0 reads that keep the card ~75% busy
 // on their own: the writes keep up and the queue stays far below the request pool (1024).
 TEST(SdPick, SteadyWritesKeepUpUnderATierZeroFlood)

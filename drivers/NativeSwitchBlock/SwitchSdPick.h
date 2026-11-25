@@ -6,8 +6,8 @@
 // A request's rank is its IOStoragePriority class (0 = I/O tier 0, the UI's page-ins) doubled, plus one for a write:
 // a read goes before a write of its own class, because a write's completion blocks no thread unless a synchronize
 // waits for it. While one does, every write ranks with tier-0 reads (IOSCHED puts metadata writes at tier 1, and the
-// waiter may be the UI). The oldest read of the best class queued goes before a head of worse rank, past every older
-// request it does not overlap a write of (reads may overlap reads).
+// waiter may be the UI), and the oldest write may pass older reads. The oldest request of the best rank goes before a
+// head of worse rank, past every older request it is allowed to pass.
 //
 // Nothing ages back into FIFO order: a head passed over for kSwitchSdStarveNs goes first once, then again after
 // kSwitchSdShareNs or kSwitchSdShareChains passes, whichever comes first, so lower classes keep at least one chain in
@@ -47,10 +47,12 @@ template <typename Request>
 inline SwitchSdPicked<Request> switchSdPick(Request *head, const uint32_t queuedReads[kSwitchSdPickClasses],
                                             bool syncWaiting, uint64_t now, SwitchSdPickState *state)
 {
+    const unsigned headRank = switchSdRank(head, syncWaiting);
     unsigned best = 0;
     while (best < kSwitchSdPickClasses && !queuedReads[best])
         ++best;
-    if (best == kSwitchSdPickClasses || 2u * best >= switchSdRank(head, syncWaiting))
+    const bool readPasses = best < kSwitchSdPickClasses && 2u * best < headRank;
+    if (!readPasses && !(syncWaiting && headRank))
         return {head, nullptr, false, false};
     if (now - head->queuedNs >= kSwitchSdStarveNs &&
         (now >= state->lowerDueNs || state->passes >= kSwitchSdShareChains)) {
@@ -58,18 +60,29 @@ inline SwitchSdPicked<Request> switchSdPick(Request *head, const uint32_t queued
         state->passes = 0;
         return {head, nullptr, false, true};
     }
-    for (Request *before = head, *candidate = head->next; candidate; before = candidate, candidate = candidate->next) {
-        if (candidate->write || candidate->klass != best)
-            continue;
-        bool blocked = false;
+    // The oldest request of the best rank that may pass. A read may not pass a write it overlaps; a write passes no
+    // request it overlaps and no older write, because the write fence counts completions in submission order.
+    Request *first = nullptr;
+    Request *prev = nullptr;
+    unsigned firstRank = headRank;
+    bool olderWrite = head->write;
+    for (Request *before = head, *candidate = head->next; candidate && firstRank;
+         before = candidate, candidate = candidate->next) {
+        const unsigned rank = switchSdRank(candidate, syncWaiting);
+        bool blocked = rank >= firstRank || (candidate->write && olderWrite);
         for (const Request *older = head; older != candidate && !blocked; older = older->next)
-            blocked = older->write && switchOverlaps(older, candidate);
+            blocked = (older->write || candidate->write) && switchOverlaps(older, candidate);
         if (!blocked) {
-            ++state->passes;
-            return {candidate, before, true, false};
+            first = candidate;
+            prev = before;
+            firstRank = rank;
         }
+        olderWrite = olderWrite || candidate->write;
     }
-    return {head, nullptr, false, false};
+    if (!first)
+        return {head, nullptr, false, false};
+    ++state->passes;
+    return {first, prev, true, false};
 }
 
 // Raises every queued request overlapping [lba, lba + sectors) to `klass` (never lowers one), keeping queuedReads in

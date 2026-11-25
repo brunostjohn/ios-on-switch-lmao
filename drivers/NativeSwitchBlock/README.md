@@ -17,6 +17,12 @@ into a 32 KiB sink buffer; writes carry no gaps). The driver keeps two prepared 
 filter rotates a clean completion and issues the next prepared command directly from the ISR while the worker thread
 finishes cache invalidation, staged copies, and client completions.
 
+Requests leave the queue in I/O tier order (`SwitchSdPick.h`). A read goes ahead of older requests of a worse tier
+unless it overlaps an older write. While a synchronize waits, writes rank with tier 0 and the oldest write can pass
+older reads. A request passed over for 100 ms goes first once, and again after every 50 ms or 8 chains. Both block
+devices publish IOStorage's Priority feature and implement `doSetPriority`, so XNU raises a lower-tier page-in that a
+foreground thread is waiting on. Both XNU trees keep the software throttle on for them (`bsd/vfs/vfs_subr.c`).
+
 When the card exposes the SD 6.00 Performance Enhancement extension with cache support, `setup()` enables the card's
 volatile write cache and `doSynchronize` / `doSynchronizeCache` flush it with CMD49. At suspend, shutdown, and restart,
 the driver quiesces the worker, flushes any dirty writes, and sends Power Off Notification (`POFN=1`, waiting for busy
@@ -24,8 +30,9 @@ by interrupt and polling `POFR` up to 1.5 s) when the card supports it. On cards
 units are erased in small runs during idle periods after boot completes.
 
 `SwitchCryptex` maps cryptex image extents onto the block device below DiskImages and the image files' page cache. Small
-reads (up to 16 KiB) go through an 8 MiB cache of 32 KiB windows, larger misses go straight to the card by ADMA2, and
-cache reads keep `kIOStoragePriorityHigh` only for callers that requested it.
+reads (up to 16 KiB) go through an 8 MiB cache of 32 KiB windows, and larger misses go straight to the card by ADMA2.
+Window fills read at `kIOStoragePriorityHigh` for tier-0 callers and at Default for everyone else; a tier-0 read that
+waits on a fill raises it.
 
 ## Tests
 
