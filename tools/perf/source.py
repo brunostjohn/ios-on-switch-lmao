@@ -56,6 +56,10 @@ LOG_PREDICATE = ' OR '.join(
         ),
         '(subsystem == "com.apple.FrontBoard" AND ' + _any('eventMessage', 'CONTAINS', FRONTBOARD_PARTS) + ')',
         (
+            '(subsystem == "com.apple.SpringBoard" AND category == "HIDKeyboardEvents" AND eventMessage BEGINSWITH '
+            '"Snapshot button pressed down")'
+        ),
+        (
             '(subsystem == "com.apple.tailspin" OR eventMessage CONTAINS "TailspinStatus" OR eventMessage '
             'CONTAINS "microstackshot")'
         ),

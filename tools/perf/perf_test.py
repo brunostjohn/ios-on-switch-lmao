@@ -5,10 +5,11 @@ import os
 import struct
 import tempfile
 import unittest
+import zlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from tools.perf import ips, pacing, perf, report, session, source, symbols, vm, windows, work
+from tools.perf import dumps, ips, pacing, perf, recfile, report, session, source, symbols, vm, windows, work
 from tools.perf.source import TICK_HZ, Rec
 
 T0 = datetime(2026, 11, 23, 0, 13, 20, tzinfo=UTC)
@@ -175,7 +176,112 @@ class PacingTest(unittest.TestCase):
         self.assertTrue(pacing.distribution(brief, stats)[3])
 
 
+# kernel/tests/xnu_recorder_test.cpp's TheHeaderIsTheLineToolsPerfReads writes this same line.
+REC_HEADER = (
+    'SwitchRecorder 2 boot=2693043C-01C2-4E03-9DA5-FDBCF1DD9490 kernel=724459E3-00EE-E993-E2A1-D165FC9289'
+    '3A seq=3 ask=41 reason=hang tid=514 value=320 at=4340000000 shot_at=4340057600 frozen_at=4340096000 '
+    'done_at=4340672000 shot_us=3000 ring_us=30000 tod=1795548000.250000 shot=19536 ring=23552 deflate=90'
+    '00 ring_lost=0'
+)
+TESTDATA = Path(__file__).resolve().parent / 'testdata'
+
+
+def rec_file(folder: Path, header: str, shot: bytes, ring: bytes, cut: int = 0) -> Path:
+    """Write a dump as store.c does: the stackshot and the ring as one raw deflate stream after a 512-byte header."""
+    packer = zlib.compressobj(1, zlib.DEFLATED, -zlib.MAX_WBITS)
+    body = packer.compress(shot + ring) + packer.flush()
+    fields = dict(f.split('=', 1) for f in header.split()[2:])
+    fields.update(shot=str(len(shot)), ring=str(len(ring)), deflate=str(len(body)))
+    text = 'SwitchRecorder 2 ' + ' '.join(f'{k}={v}' for k, v in fields.items())
+    path = folder / 'Switch-recorder-0.rec'
+    path.write_bytes((text.ljust(511) + '\n').encode() + body[: len(body) - cut])
+    return path
+
+
+class RecFileTest(unittest.TestCase):
+    def test_the_kernels_header_reads_back(self):
+        h = recfile.fields(REC_HEADER)
+        self.assertEqual(
+            (h['boot'][:8], h['seq'], h['reason'], h['tid'], h['ring_lost']), ('2693043C', '3', 'hang', '514', '0')
+        )
+        d = recfile.Dump('x', h)
+        self.assertAlmostEqual(d.after_trigger_ms('shot_at'), 3.0)
+        self.assertAlmostEqual(d.after_trigger_ms('done_at'), 35.0)
+        self.assertIn('stackshot +3.0 ms, ring frozen +5.0 ms, both in memory +35.0 ms', d.describe())
+
+    def test_a_dump_file_inflates_to_its_stackshot_and_ring_and_a_partial_one_says_so(self):
+        shot = (TESTDATA / 'Switch-recorder-3.kcdata').read_bytes()
+        ring = (TESTDATA / 'Switch-recorder-3.ktrace').read_bytes()
+        with tempfile.TemporaryDirectory() as d:
+            path = rec_file(Path(d), REC_HEADER, shot, ring)
+            dump = recfile.read(str(path))
+            self.assertEqual((dump.problem, dump.shot, dump.ring), ('', shot, ring))
+            self.assertEqual(dumps.find(d), [(str(path), str(path))])
+            self.assertEqual(
+                recfile.read(str(rec_file(Path(d), REC_HEADER, shot, ring, cut=100))).problem[:12], 'the body is '
+            )
+            path.write_bytes(bytes(512) + b'x')
+            self.assertTrue(recfile.read(str(path)).problem.startswith('no header'))
+
+    def test_the_recorders_lines_add_up(self):
+        capture = (
+            'SwitchRecorder: capture {seq} ({reason} ask 9, thread 514, value 320) at 4340000000: stackshot 1007 KiB '
+            'in 3000 us (+3000 us), ring 17969 KiB in 30000 us (+5000 us), in memory +{done} us{lost}'
+        )
+        recs = [
+            rec(capture.format(seq=1, reason='hang', done=35000, lost=''), 1.0),
+            rec(capture.format(seq=2, reason='mark', done=41000, lost='; no ring: no memory for it'), 2.0),
+            rec('SwitchRecorder: refused hang ask 12 (thread 606, value 9283) at 4440000000: gap', 3.0),
+            rec(
+                'SwitchRecorder: dump 1 (hang ask 9, thread 514, value 320) in slot 4: stackshot 1007 KiB and ring '
+                '17969 KiB as 3700 KiB, deflate 400000 us, write 90000 us, 2100 ms after its trigger',
+                4.0,
+            ),
+        ]
+        text = '\n'.join(recfile.recorder_lines(recs))
+        self.assertIn('captures: 2 (hang 1, mark 1); in memory p50 +41.0 ms, max +41.0 ms after the trigger', text)
+        self.assertIn('captures without a ring: no memory for it 1', text)
+        self.assertIn('refused (one line a second per reason and thread): hang gap 1', text)
+        self.assertIn('written: 1, 2.1 s after their trigger at the median', text)
+
+
 class WindowsTest(unittest.TestCase):
+    def test_a_press_is_springboards_line_with_the_recorders_answer(self):
+        sb = {'subsystem': 'com.apple.SpringBoard', 'category': 'HIDKeyboardEvents'}
+        recs = [
+            rec('Snapshot button pressed down', 10.0, 'SpringBoard', **sb),
+            rec(
+                'SwitchRecorder: capture 4 (mark ask 30, thread 0, value 0) at 1: stackshot 1 KiB in 1 us (+1 us), '
+                'ring 1 KiB in 1 us (+1 us), in memory +1 us',
+                10.4,
+            ),
+            rec('Snapshot button pressed down', 20.0, 'SpringBoard', **sb),
+            rec('SwitchRecorder: refused mark ask 31 (thread 0, value 0) at 2: full', 20.1),
+            rec('Snapshot button pressed down', 30.0, 'SpringBoard', **sb),
+            rec(
+                'SwitchRecorder: capture 5 (mark ask 32, thread 0, value 0) at 3: stackshot 1 KiB in 1 us (+1 us), '
+                'ring 1 KiB in 1 us (+1 us), in memory +1 us',
+                40.0,
+            ),
+            rec(
+                'SwitchMark: ui.title_scroll.back.1 500 ms',
+                41.0,
+                'SwitchHWTest27',
+                subsystem='com.brunostjohn.switch.hwtest',
+            ),
+        ]
+        got = [(w.name, w.note, w.end) for w in windows.presses(recs)]
+        self.assertEqual(
+            got,
+            [
+                ('capture', 'capture 4', recs[0].time),
+                ('capture', 'refused (full)', recs[2].time),
+                ('capture', 'no recorder line', recs[4].time),
+                ('mark', 'capture 5', recs[5].time),
+            ],
+        )
+        self.assertEqual([w.name for w in windows.marks(recs)], ['ui.title_scroll.back.1'])
+
     def test_a_test_window_ends_at_its_line_and_lasts_its_ms(self):
         line = rec('HWTEST display.snapshot PASS frames=12 ms=17210.4', 20.0, 'SwitchHWTest', pid=560)
         (w,) = windows.tests([line])

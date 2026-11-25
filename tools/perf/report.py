@@ -7,7 +7,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from tools.perf import cpu, dumps, gpu, ips, ktrace, pacing, symbols, vm, work
+from tools.perf import cpu, dumps, gpu, ips, ktrace, pacing, recfile, symbols, vm, work
 from tools.perf.session import Session, dossier, families, lost, pacing_row, slows_in
 from tools.perf.windows import BOOTSTRAPPED, Window
 
@@ -88,25 +88,44 @@ def head(s: Session, pulled: Pulled) -> list[str]:
         ),
         'lines read: ' + ', '.join(f'{k} {n}' for k, n in fam.most_common()),
         (
-            f'kprof: {state}; probes-kernel tasks lines: {fam["SwitchSched tasks"]}; '
-            f'marks: {len(s.windows["mark"])}; symbols: {sym_state}'
+            f'kprof: {state}; probes-kernel tasks lines: {fam["SwitchSched tasks"]}; owner presses: '
+            f'{len(s.windows["press"])}; HW Test marks: {len(s.windows["mark"])}; recorder captures: '
+            f'{sum(1 for r in s.recs if recfile.CAPTURE.search(r.msg))}; symbols: {sym_state}'
         ),
         'windows: ' + ', '.join(f'{k} {len(v)}' for k, v in s.windows.items()),
     ]
 
 
+PRESS_AFTER_S = 6  # a hang starting this soon after a press may be the press's own cost
+
+
 def window_rows(s: Session, kind: str, ws: list[Window]) -> list[str]:
     out = []
     for w in ws:
-        out.append(f'{kind} {w.name} {w.start:%H:%M:%S} ({w.ms / 1000:.1f} s): {pacing_row(s, w)}')
+        note = f' [{w.note}]' if kind == 'press' and w.note else ''
+        out.append(
+            f'{kind} {w.name} {w.end:%H:%M:%S}{note} ({w.ms / 1000:.1f} s before): {pacing_row(s, w)}'
+            if kind == 'press'
+            else f'{kind} {w.name} {w.start:%H:%M:%S} ({w.ms / 1000:.1f} s): {pacing_row(s, w)}'
+        )
+        if kind == 'press' and (after := hangs_after(s, w)):
+            out.append('    hangs starting within 6 s after it: ' + after)
         if cycle := pacing.periodic(slows_in(s, w)):
             out.append('    ' + cycle)
     return out
 
 
+def hangs_after(s: Session, w: Window) -> str:
+    return ', '.join(
+        f'{h.proc} {h.name} at +{(h.start - w.end).total_seconds():.1f} s'
+        for h in s.windows['hang']
+        if 0 <= (h.start - w.end).total_seconds() <= PRESS_AFTER_S
+    )
+
+
 def pacing_section(s: Session) -> list[str]:
     out = ['', '## Frame pacing by scenario', 'whole boot: ' + pacing_row(s, whole(s))]
-    for kind in ('mark', 'launch', 'touch'):
+    for kind in ('press', 'mark', 'launch', 'touch'):
         out += window_rows(s, kind, s.windows[kind])
     tests = s.windows['test']
     by_lost = sorted(tests, key=lambda w: -sum(x.frame.frames - 1 for x in lost(slows_in(s, w))))
@@ -276,14 +295,22 @@ def launch_section(s: Session, syms: symbols.Symbols) -> list[str]:
     return out
 
 
-def dump_section(s: Session, pulled: Pulled) -> list[str]:
+def of_boot(s: Session, ring: str) -> bool:
+    """Whether a dump is this boot's: a .rec file's header names its boot; an older pair is placed by its write time."""
+    if ring.endswith('.rec'):
+        return recfile.read_head(ring).get('boot', '').upper() == s.boot.upper()
     first, last = s.recs[0].time.timestamp(), s.recs[-1].time.timestamp()
-    mine = [(r, k) for r, k in pulled.dumps if first - DUMP_SLACK_S <= ktrace.tod(r) <= last + DUMP_SLACK_S]
+    return first - DUMP_SLACK_S <= ktrace.tod(ring) <= last + DUMP_SLACK_S
+
+
+def dump_section(s: Session, pulled: Pulled) -> list[str]:
+    mine = [(r, k) for r, k in pulled.dumps if of_boot(s, r)]
     lines = [r for r in s.recs if r.msg.startswith('SwitchRecorder')]
     out = [
         '',
         '## Flight recorder dumps',
         f'{len(lines)} recorder lines in the log, {len(mine)} dumps of this boot pulled',
+        *recfile.recorder_lines(s.recs),
     ]
     out += [f'  {r.time:%H:%M:%S} {r.msg[:200]}' for r in lines[-8:]]
     for ring, shot in mine:

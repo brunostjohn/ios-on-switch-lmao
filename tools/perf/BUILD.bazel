@@ -15,6 +15,7 @@ py_library(
         "ktrace.py",
         "pacing.py",
         "perf.py",
+        "recfile.py",
         "report.py",
         "session.py",
         "source.py",
@@ -43,6 +44,7 @@ py_test(
     name = "perf_test",
     size = "small",
     srcs = ["perf_test.py"],
+    data = glob(["testdata/*"]),
     deps = [":lib"],
 )
 

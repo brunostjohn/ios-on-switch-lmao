@@ -52,6 +52,7 @@ class Session:
 def build(boot: str, recs: list[Rec]) -> Session:
     s = Session(boot, recs)
     s.windows = {
+        'press': windows.presses(recs),
         'mark': windows.marks(recs),
         'launch': windows.launches(recs),
         'touch': windows.touches(recs),

@@ -1,6 +1,7 @@
 """The flight recorder's dumps in a pulled crash folder: each ring read with the stackshot taken beside it, as text.
 
-A dump is Switch-recorder-<slot>.ktrace and .kcdata (kernel/switch/recorder/recorder.c). The stackshot names the
+A dump is one Switch-recorder-<slot>.rec (recfile.py), or from kernels before 26 Nov a Switch-recorder-<slot>.ktrace
+and .kcdata pair, which a later dump in the same slot could leave mismatched. The stackshot names the
 ring's threads (process, thread name) and holds every process's loaded images, which turn kperf's user addresses into
 `dsc 0x<unslid>` for the shared cache and `<image>+0x<offset>` for the rest (or symbols when a table is supplied);
 kcdata.py, XNU's own decoder (tools/lldbmacros), reads it.
@@ -13,10 +14,11 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from dataclasses import dataclass, field
 
-from tools.perf import ktrace, symbols
+from tools.perf import ktrace, recfile, symbols
 from tools.perf.source import TICK_HZ
 
 BEFORE_S = 1.0  # what the summary looks back over from the trigger
@@ -133,17 +135,38 @@ def decode_kcdata(path: str, kcdata_py: str | None) -> dict:
         return {}
 
 
+def decode_shot(shot: bytes, kcdata_py: str | None) -> dict:
+    with tempfile.NamedTemporaryFile(suffix='.kcdata') as f:
+        f.write(shot)
+        f.flush()
+        return decode_kcdata(f.name, kcdata_py)
+
+
 def find(crashes: str | None) -> list[tuple[str, str]]:
-    """Return each dump's (ring, stackshot) paths, the newest last."""
+    """Return each dump's (ring, stackshot) paths, the newest last: a .rec file names itself twice."""
     if not crashes:
         return []
     found = []
     for parent, _, files in os.walk(crashes):
         for f in files:
+            path = os.path.join(parent, f)
             if f.startswith('Switch-recorder-') and f.endswith('.ktrace'):
-                ring = os.path.join(parent, f)
-                found.append((os.path.getmtime(ring), ring, ring[: -len('.ktrace')] + '.kcdata'))
+                found.append((os.path.getmtime(path), path, path[: -len('.ktrace')] + '.kcdata'))
+            elif f.startswith('Switch-recorder-') and f.endswith('.rec'):
+                found.append((os.path.getmtime(path), path, path))
     return [(ring, shot) for _, ring, shot in sorted(found)]
+
+
+def load(ring_path: str, shot_path: str, kcdata_py: str | None) -> tuple[ktrace.Ring, Names, recfile.Dump | None]:
+    """Return a dump's ring, its stackshot's names, and its .rec file's header (None for a .ktrace pair)."""
+    if ring_path.endswith('.rec'):
+        dump = recfile.read(ring_path)
+        if dump.problem:
+            raise ValueError(dump.problem)
+        n = names(decode_shot(dump.shot, kcdata_py)) if dump.shot else Names()
+        return ktrace.parse(dump.ring) if dump.ring else ktrace.Ring(0, []), n, dump
+    n = names(decode_kcdata(shot_path, kcdata_py)) if os.path.isfile(shot_path) else Names()
+    return ktrace.read(ring_path), n, None
 
 
 def ms(ticks: int) -> float:
@@ -265,20 +288,29 @@ def summary(
     uuid_paths: dict[str, str],
     syms: symbols.Symbols | None = None,
 ) -> list[str]:
-    ring = ktrace.read(ring_path)
-    n = names(decode_kcdata(shot_path, kcdata_py)) if os.path.isfile(shot_path) else Names()
+    ring, n, dump = load(ring_path, shot_path, kcdata_py)
+    base = os.path.basename(ring_path)
     if not ring.events:
-        return [f'{os.path.basename(ring_path)}: an empty ring']
+        return [f'{base}: ' + (dump.describe() + '; ' if dump else '') + 'an empty ring']
     first, last = ring.events[0].ts, ring.events[-1].ts
-    found = ktrace.trigger(ring.events)
-    at, reason, tid, value = found or (last, 'none', 0, 0)
+    if dump:
+        at, reason, tid, value = (
+            dump.number('at'),
+            dump.head.get('reason', '?'),
+            dump.number('tid'),
+            dump.number('value'),
+        )
+    else:
+        at, reason, tid, value = ktrace.trigger(ring.events) or (last, 'none', 0, 0)
     lo = at - int(BEFORE_S * TICK_HZ)
     out = [
-        f'{os.path.basename(ring_path)}: {reason}, thread {n.who(tid) if tid else "-"}, value {value}; ring '
+        f'{base}: {reason}, thread {n.who(tid) if tid else "-"}, value {value}; ring '
         f'{ms(last - first) / 1000:.2f} s, {len(ring.events)} events, trigger at {ms(at - first) / 1000:.2f} s'
         + ('' if n.thread else '; no stackshot read (pass --kcdata, XNU tools/lldbmacros/kcdata.py)'),
-        '  threads by time on a core in the second before it: ' + ', '.join(busiest(ring, n, lo, at)),
     ]
+    if dump:
+        out.append('  ' + dump.describe())
+    out.append('  threads by time on a core in the second before it: ' + ', '.join(busiest(ring, n, lo, at)))
     if tid:
         held = ktrace.on_core(ktrace.runs(ring.events).get(tid, []), lo, at)
         woken = ktrace.wakers(ring.events, tid, lo, at)
