@@ -55,6 +55,35 @@ uint32_t roundUp(uint32_t v, uint32_t a)
     return (v + a - 1) / a * a;
 }
 
+// Why an accepted turned layer would not be shown, or empty: the window's own scan, or the conversion job's plane, its
+// VIC job within the unit's 16x either way (TegraVICConfig.h) and the window showing the plane 1:1 where the layer goes.
+std::string turnedUnshown(const Layer &l)
+{
+    Image image;
+    if (!imageOf(l, W, H, image))
+        return "no window image";
+    if (!image.convert || !image.visible)
+        return "";
+    TurnedConversion c;
+    if (!turnedConversionOf(l, W, H, c))
+        return "no conversion of a visible layer";
+    const bool transpose = turnOf(l.transform).transpose;
+    const uint64_t sw = transpose ? c.srcH : c.srcW, sh = transpose ? c.srcW : c.srcH;
+    const uint64_t dw = static_cast<uint64_t>(c.screen.w) << 16, dh = static_cast<uint64_t>(c.screen.h) << 16;
+    if (sw > dw * 16 || sh > dh * 16 || dw > sw * 16 || dh > sh * 16)
+        return "VIC scale past 16x";
+    if (c.srcW < (1u << 16) || c.srcH < (1u << 16) || c.srcX + c.srcW > static_cast<uint64_t>(l.surface.width) << 16 ||
+        c.srcY + c.srcH > static_cast<uint64_t>(l.surface.height) << 16)
+        return "VIC source outside the surface";
+    Image shown;
+    const Layer plane = turnedConversionLayer(c, roundUp(static_cast<uint32_t>(c.screen.w) * 4, 256));
+    if (!imageOf(plane, W, H, shown) || !shown.visible)
+        return "the plane has no window image";
+    if (shown.dda != 0x10001000u || shown.position != image.position || shown.size != image.size)
+        return format("the plane is not shown 1:1 where the layer goes: dda %#x", shown.dda);
+    return "";
+}
+
 Surface makeSurface(Kind kind, uint32_t width, uint32_t height)
 {
     Surface s;
@@ -173,6 +202,11 @@ void testAcceptance()
               image.dda);
         CHECK(!d.transform || image.convert || (image.options & 0x15u) == turnOptions(d.transform),
               "a transformed layer the window scans has the wrong direction bits");
+        if (d.transform) {
+            const std::string why = turnedUnshown(d);
+            CHECK(why.empty(), "transform %u kind %d src %dx%d dst %dx%d: %s", d.transform, d.kind, d.src.w, d.src.h,
+                  d.dst.w, d.dst.h, why.c_str());
+        }
         CHECK(image.readHigh <= ((d.surface.allocation + 4095) & ~4095ull) && image.readLow < image.readHigh,
               "read range %#llx-%#llx outside %#llx", (unsigned long long)image.readLow,
               (unsigned long long)image.readHigh, (unsigned long long)d.surface.allocation);
@@ -474,6 +508,48 @@ TEST(DisplayPlanesTurn, TurnedRectMatchesThePixelMapping)
     }
 }
 
+// The conversion job reads exactly the source pixels that land on the screen, by the turned surface's own mapping.
+TEST(DisplayPlanesTurn, TurnedConversionReadsThePixelsOnTheScreen)
+{
+    const uint32_t sw = 13, sh = 7;
+    const int32_t screenW = 4, screenH = 3;
+    Layer l;
+    l.kind = kKindBgra;
+    l.surface.width = sw;
+    l.surface.height = sh;
+    l.src = {3, 2, 6, 4};
+    for (uint32_t t = 0; t < 8; ++t) {
+        l.transform = t;
+        const Turn turn = turnOf(t);
+        const Rect o = turnedRect(l.src, sw, sh, t);
+        l.dst = {-1, -1, o.w, o.h};
+        TurnedConversion c;
+        ASSERT_TRUE(turnedConversionOf(l, uint32_t(screenW), uint32_t(screenH), c)) << t;
+        uint32_t lowA = sw, lowB = sh, highA = 0, highB = 0;
+        for (int32_t y = 0; y < screenH; ++y)
+            for (int32_t x = 0; x < screenW; ++x) {
+                const int32_t ox = o.x + x - l.dst.x, oy = o.y + y - l.dst.y;
+                if (x >= l.dst.x + l.dst.w || y >= l.dst.y + l.dst.h)
+                    continue;
+                uint32_t a = uint32_t(turn.transpose ? oy : ox), b = uint32_t(turn.transpose ? ox : oy);
+                if (turn.flipX)
+                    a = sw - 1 - a;
+                if (turn.flipY)
+                    b = sh - 1 - b;
+                lowA = a < lowA ? a : lowA;
+                lowB = b < lowB ? b : lowB;
+                highA = a + 1 > highA ? a + 1 : highA;
+                highB = b + 1 > highB ? b + 1 : highB;
+            }
+        EXPECT_EQ(c.srcX, uint64_t(lowA) << 16) << t;
+        EXPECT_EQ(c.srcY, uint64_t(lowB) << 16) << t;
+        EXPECT_EQ(c.srcW, uint64_t(highA - lowA) << 16) << t;
+        EXPECT_EQ(c.srcH, uint64_t(highB - lowB) << 16) << t;
+        EXPECT_EQ(c.screen.x, 0);
+        EXPECT_EQ(c.screen.y, 0);
+    }
+}
+
 // The words window B gets for each transform (the orchestrator's table, VIC's vicFlips and V3's proven pair).
 TEST(DisplayPlanesTurn, TransformWordsToWindowBits)
 {
@@ -555,14 +631,17 @@ TEST(DisplayPlanesTurn, EveryShapeCoreAnimationSendsTurnedIsAccepted)
                         continue;
                     l.src = {0, 0, (int32_t)sw, (int32_t)sh};
                     const bool turned = turnOf(t).transpose;
-                    for (const uint32_t scale : {1u, 2u}) {  // 1:1 and half size, both within 1/4..4x
-                        const int32_t ow = (int32_t)(sw / scale), oh = (int32_t)(sh / scale);
+                    // 1:1, half size, and down to the published 1/4 (RGB) or 1/6 (YUV), rounded up to stay within it.
+                    for (const uint32_t scale : {1u, 2u, 4u, 6u}) {
+                        if (scale == 6 && !isYuv(kind))
+                            continue;
+                        const int32_t ow = (int32_t)((sw + scale - 1) / scale),
+                                      oh = (int32_t)((sh + scale - 1) / scale);
                         l.dst = turned ? Rect{0, 0, oh, ow} : Rect{0, 0, ow, oh};
                         ++sent;
                         EXPECT_EQ(checkDetached(l, W, H, limits), (unsigned)kAccepted)
                             << "kind " << kind << " " << sw << "x" << sh << " transform " << t << " scale " << scale;
-                        Image image;
-                        EXPECT_TRUE(imageOf(l, W, H, image)) << kind << " " << t;
+                        EXPECT_EQ(turnedUnshown(l), "") << kind << " " << sw << "x" << sh << " " << t << " 1/" << scale;
                     }
                 }
     EXPECT_GT(sent, 1000u);

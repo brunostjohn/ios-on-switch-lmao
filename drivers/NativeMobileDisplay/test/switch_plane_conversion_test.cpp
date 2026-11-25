@@ -383,8 +383,11 @@ TEST_F(PlaneConversion, ATurnedVideoBecomesAnUntransformedTurnedPlane)
     const int slot = convert();
     ASSERT_GE(slot, 0);
     EXPECT_EQ(lastOperation.transform, 4u);
-    EXPECT_EQ(lastOperation.dstW, 64u);
-    EXPECT_EQ(lastOperation.dstH, 128u);
+    EXPECT_EQ(lastOperation.srcW, 128u << 16);
+    EXPECT_EQ(lastOperation.srcH, 64u << 16);
+    EXPECT_EQ(lastOperation.dstW, 128u);  // VIC turns and scales to the size on the screen
+    EXPECT_EQ(lastOperation.dstH, 256u);
+    EXPECT_EQ(image.dda, 0x10001000u);
     EXPECT_FALSE(image.convert);
     EXPECT_EQ(image.options & 0x15u, 0u);  // no direction bits: the plane is already turned
     EXPECT_EQ(image.position, (200u << 16) | 100u);
@@ -416,8 +419,37 @@ TEST_F(PlaneConversion, ATurnedDecoderPictureIsReadFromItsBlocks)
     EXPECT_EQ(lastOperation.srcX, uint64_t(16) << 16);
     EXPECT_EQ(lastOperation.srcW, uint64_t(128) << 16);
     EXPECT_EQ(lastOperation.transform, 7u);
-    EXPECT_EQ(lastOperation.dstW, 64u);
-    EXPECT_EQ(lastOperation.dstH, 128u);
+    EXPECT_EQ(lastOperation.dstW, 128u);
+    EXPECT_EQ(lastOperation.dstH, 256u);
+}
+
+// A turned video shown small (a picture in picture at 1/5.8 across) is scaled by VIC: an RGB window stops at 1/4.
+TEST_F(PlaneConversion, ASmallTurnedVideoIsScaledByVICAndShownOneToOne)
+{
+    layer.transform = 4;
+    layer.dst = {100, 200, 11, 22};
+    ASSERT_GE(convert(), 0);
+    EXPECT_EQ(lastOperation.dstW, 11u);
+    EXPECT_EQ(lastOperation.dstH, 22u);
+    EXPECT_EQ(image.size, (22u << 16) | 11u);
+    EXPECT_EQ(image.dda, 0x10001000u);
+}
+
+// Only the part on the screen is converted: for word 4 (transpose, flip Y) the columns cut on the left are the source's
+// bottom rows.
+TEST_F(PlaneConversion, AClippedTurnedLayerConvertsOnlyItsPartOnTheScreen)
+{
+    layer.transform = 4;
+    layer.dst = {-50, 200, 128, 256};
+    ASSERT_GE(convert(), 0);
+    EXPECT_EQ(lastOperation.srcX, 0u);
+    EXPECT_EQ(lastOperation.srcY, 0u);
+    EXPECT_EQ(lastOperation.srcW, 128u << 16);
+    EXPECT_EQ(lastOperation.srcH, 39u << 16);
+    EXPECT_EQ(lastOperation.dstW, 78u);
+    EXPECT_EQ(lastOperation.dstH, 256u);
+    EXPECT_EQ(image.position, 200u << 16);
+    EXPECT_EQ(image.size, (256u << 16) | 78u);
 }
 
 // A packed RGB layer the windows cannot scan turned (scaled, or pitch-linear with a quarter turn) converts the same way.
@@ -438,8 +470,8 @@ TEST_F(PlaneConversion, APackedLayerTheWindowCannotTurnConvertsToo)
     ASSERT_GE(slot, 0);
     EXPECT_EQ(lastInput.blockLinear, 0u);
     EXPECT_EQ(lastOperation.transform, 7u);
-    EXPECT_EQ(lastOperation.dstW, 32u);
-    EXPECT_EQ(lastOperation.dstH, 64u);
+    EXPECT_EQ(lastOperation.dstW, 64u);
+    EXPECT_EQ(lastOperation.dstH, 128u);
     EXPECT_EQ(image.size, (128u << 16) | 64u);
 }
 

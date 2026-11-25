@@ -7,6 +7,7 @@ struct ConvertedPlane {
     uint32_t transfer = 0, primaries = 0, chromaTop = 0, chromaBottom = 0;
     uint32_t stride[2] = {}, rows[2] = {};
     uint32_t transform = 0;
+    native_planes::TurnedConversion turned = {};
     bool valid = false;
 };
 
@@ -166,10 +167,13 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
     const bool packed = layer.kind == native_planes::kKindBgra || layer.kind == native_planes::kKindRgba;
     if (!source || !source->lease || (!native_planes::isYuv(layer.kind) && !packed))
         return -95;
-    // A transformed layer's plane is the whole surface turned (NativePlanesTurn.h): the window shows it untransformed.
-    const bool transpose = native_planes::turnOf(layer.transform).transpose;
-    const uint32_t outWidth = transpose ? layer.surface.height : layer.surface.width;
-    const uint32_t outHeight = transpose ? layer.surface.width : layer.surface.height;
+    // A turned layer's plane is its part on the screen, turned and scaled (NativePlanesTurn.h); any other layer's is the
+    // whole surface.
+    native_planes::TurnedConversion turned = {};
+    if (layer.transform && !native_planes::turnedConversionOf(layer, width, height, turned))
+        return -2;
+    const uint32_t outWidth = layer.transform ? uint32_t(turned.screen.w) : layer.surface.width;
+    const uint32_t outHeight = layer.transform ? uint32_t(turned.screen.h) : layer.surface.height;
     const uint32_t pitch = (outWidth * 4 + 255) & ~255u;
     const uint64_t bytes = uint64_t(pitch) * outHeight;
     if (!bytes || bytes > kPlaneSlotSpan)
@@ -202,7 +206,10 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
             buffer.height == layer.surface.height && buffer.cropX == view.crop.x && buffer.cropY == view.crop.y &&
             buffer.format == layer.surface.format && buffer.matrix == matrix && buffer.transfer == transfer &&
             buffer.primaries == primaries && buffer.chromaTop == chromaTop && buffer.chromaBottom == chromaBottom &&
-            buffer.transform == layer.transform) {
+            buffer.transform == layer.transform && buffer.turned.srcX == turned.srcX &&
+            buffer.turned.srcY == turned.srcY && buffer.turned.srcW == turned.srcW &&
+            buffer.turned.srcH == turned.srcH && buffer.turned.screen.w == turned.screen.w &&
+            buffer.turned.screen.h == turned.screen.h) {
             selected = &buffer;
             cached = true;
             break;
@@ -225,6 +232,12 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
         TegraVICOp operation = {};
         operation.srcW = uint64_t(layer.surface.width) << 16;
         operation.srcH = uint64_t(layer.surface.height) << 16;
+        if (layer.transform) {
+            operation.srcX = turned.srcX;
+            operation.srcY = turned.srcY;
+            operation.srcW = turned.srcW;
+            operation.srcH = turned.srcH;
+        }
         operation.dstW = outWidth;
         operation.dstH = outHeight;
         operation.transform = layer.transform & 7;
@@ -296,6 +309,7 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
         value->chromaTop = chromaTop;
         value->chromaBottom = chromaBottom;
         value->transform = layer.transform;
+        value->turned = turned;
         value->offset = source->pitchOffset;
         for (unsigned p = 0; p < 2; ++p) {
             value->stride[p] = layer.surface.stride[p];
@@ -307,16 +321,18 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
         return -115;
     }
     native_planes::Layer rgb = layer;
-    rgb.kind = native_planes::kKindBgra;
-    rgb.transform = 0;
-    rgb.src = native_planes::turnedRect(layer.src, layer.surface.width, layer.surface.height, layer.transform);
-    rgb.surface = {};
-    rgb.surface.format = native_planes::fourcc('B', 'G', 'R', 'A');
-    rgb.surface.width = outWidth;
-    rgb.surface.height = outHeight;
-    rgb.surface.stride[0] = pitch;
-    rgb.surface.planeHeight[0] = outHeight;
-    rgb.surface.allocation = rgb.surface.descriptorBytes = bytes;
+    if (layer.transform) {
+        rgb = native_planes::turnedConversionLayer(turned, pitch);
+    } else {
+        rgb.kind = native_planes::kKindBgra;
+        rgb.surface = {};
+        rgb.surface.format = native_planes::fourcc('B', 'G', 'R', 'A');
+        rgb.surface.width = outWidth;
+        rgb.surface.height = outHeight;
+        rgb.surface.stride[0] = pitch;
+        rgb.surface.planeHeight[0] = outHeight;
+        rgb.surface.allocation = rgb.surface.descriptorBytes = bytes;
+    }
     if (!native_planes::imageOf(rgb, width, height, image)) {
         switch_native_scanout_release(&result);
         return -95;

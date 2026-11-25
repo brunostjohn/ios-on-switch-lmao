@@ -64,6 +64,66 @@ inline bool clipped(const Rect &d, uint32_t width, uint32_t height, int64_t &x0,
     return x1 > x0 && y1 > y0;
 }
 
+// What the conversion job makes of a turned layer: its part on the screen, turned and scaled by VIC to the size it is
+// shown at, so the window scans the plane 1:1 (an RGB window stops at 1/4 across, where a YUV layer may come at 1/6).
+// srcX..srcH: VIC's source rectangle in the untransformed surface, 16.16.
+struct TurnedConversion {
+    Rect screen;
+    uint64_t srcX, srcY, srcW, srcH;
+};
+
+inline void turnedConversionAxis(int32_t s, int32_t sn, int32_t d, int32_t dn, int64_t d0, int64_t d1, uint64_t &start,
+                                 uint64_t &length)
+{
+    const uint64_t first = static_cast<uint64_t>(s) << 16, whole = static_cast<uint64_t>(sn) << 16;
+    start = first + static_cast<uint64_t>(d0 - d) * whole / static_cast<uint64_t>(dn);
+    length = static_cast<uint64_t>(d1 - d0) * whole / static_cast<uint64_t>(dn);
+    if (length < (1u << 16))
+        length = 1u << 16;
+    if (start + length > first + whole)
+        start = first + whole - length;
+}
+
+inline bool turnedConversionOf(const Layer &l, uint32_t width, uint32_t height, TurnedConversion &c)
+{
+    int64_t x0, y0, x1, y1;
+    if (l.src.w <= 0 || l.src.h <= 0 || l.dst.w <= 0 || l.dst.h <= 0 || !clipped(l.dst, width, height, x0, y0, x1, y1))
+        return false;
+    const Turn t = turnOf(l.transform);
+    const Rect o = turnedRect(l.src, l.surface.width, l.surface.height, l.transform);
+    uint64_t a, aw, b, bh;
+    turnedConversionAxis(o.x, o.w, l.dst.x, l.dst.w, x0, x1, a, aw);
+    turnedConversionAxis(o.y, o.h, l.dst.y, l.dst.h, y0, y1, b, bh);
+    // turnedRect backwards: the transpose, then the flips.
+    c.srcX = t.transpose ? b : a;
+    c.srcY = t.transpose ? a : b;
+    c.srcW = t.transpose ? bh : aw;
+    c.srcH = t.transpose ? aw : bh;
+    if (t.flipX)
+        c.srcX = (static_cast<uint64_t>(l.surface.width) << 16) - c.srcX - c.srcW;
+    if (t.flipY)
+        c.srcY = (static_cast<uint64_t>(l.surface.height) << 16) - c.srcY - c.srcH;
+    c.screen = {static_cast<int32_t>(x0), static_cast<int32_t>(y0), static_cast<int32_t>(x1 - x0),
+                static_cast<int32_t>(y1 - y0)};
+    return true;
+}
+
+// The plane turnedConversionOf describes, as the layer the window shows.
+inline Layer turnedConversionLayer(const TurnedConversion &c, uint32_t pitch)
+{
+    Layer rgb;
+    rgb.kind = kKindBgra;
+    rgb.surface.format = fourcc('B', 'G', 'R', 'A');
+    rgb.surface.width = static_cast<uint32_t>(c.screen.w);
+    rgb.surface.height = static_cast<uint32_t>(c.screen.h);
+    rgb.surface.stride[0] = pitch;
+    rgb.surface.planeHeight[0] = rgb.surface.height;
+    rgb.surface.allocation = rgb.surface.descriptorBytes = static_cast<uint64_t>(pitch) * rgb.surface.height;
+    rgb.src = {0, 0, c.screen.w, c.screen.h};
+    rgb.dst = c.screen;
+    return rgb;
+}
+
 // A layer the conversion job turns: where its plane will be shown, and the whole source VIC reads.
 inline bool convertedTurnImageOf(const Layer &l, uint32_t width, uint32_t height, Image &image)
 {
