@@ -500,8 +500,19 @@ bool TegraSor1::audioFormat(uint32_t rate, uint32_t channels, uint32_t bits)
 
 void TegraSor1::audioEnable(bool enable)
 {
-    if (base && lanes)
-        write(DP_AUDIO_CTRL, (1u << 31) | (0x1fu << 16) | (enable ? 1u : 0u));
+    if (!base || !lanes)
+        return;
+#if DEVELOPMENT || DEBUG
+    if (!enable)
+        logAudioState("at stop");
+#endif
+    write(DP_AUDIO_CTRL, (1u << 31) | (0x1fu << 16) | (enable ? 1u : 0u));
+#if DEVELOPMENT || DEBUG
+    if (enable) {
+        IODelay(1);
+        logAudioState("at start");
+    }
+#endif
 }
 
 void TegraSor1::audioPresence(const uint8_t *eld, uint32_t bytes, bool present)
@@ -514,4 +525,16 @@ void TegraSor1::audioPresence(const uint8_t *eld, uint32_t bytes, bool present)
             write(AUDIO_HDA_ELD_BUFWR, (i << 8) | (i < bytes ? eld[i] : 0));
         write(AUDIO_HDA_PRESENSE, 3);
     }
+#if DEVELOPMENT || DEBUG
+    IOLog("SwitchDisplayPort: SOR audio presence: ELD %u bytes, HDA_PRESENSE %#x\n", present ? bytes : 0,
+          read(AUDIO_HDA_PRESENSE));
+#endif
 }
+
+#if DEVELOPMENT || DEBUG
+void TegraSor1::logAudioState(const char *when)
+{
+    IOLog("SwitchDisplayPort: SOR audio %s: DP_AUDIO_CTRL %#x, AUDIO_CNTRL0 %#x, timestamp %#x, N %#x\n", when,
+          read(DP_AUDIO_CTRL), read(AUDIO_CNTRL0), read(DP_AUDIO_TIMESTAMP_0480), read(AUDIO_NVAL_0480));
+}
+#endif

@@ -55,6 +55,18 @@ static inline uint16_t switch_hda_stream_format(uint32_t bits)
     return (uint16_t)((bits == 24 ? 3u : 1u) << 4 | 1u);
 }
 
+// Stereo at 48 kHz across GCAP's SDO lines. Tegra's legacy SDO design drops streams whose
+// (channels * container bits) / lines falls under 16 (Linux hda_tegra sdo_limit).
+static inline uint32_t switch_hda_stripe(uint32_t gcap, uint32_t sample_bits)
+{
+    const uint32_t container = sample_bits == 16 ? 16u : 32u;
+    for (uint32_t lines = gcap & 6u; lines; lines >>= 1) {
+        if (2u * container / lines >= 16u)
+            return lines >> 1;
+    }
+    return 0;
+}
+
 static inline uint32_t switch_hda_verb(uint32_t codec, uint32_t node, uint32_t verb, uint32_t value)
 {
     return codec << 28 | node << 20 | verb << 8 | value;

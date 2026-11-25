@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include "SwitchHDA.h"
+#include <IOKit/IOLib.h>
 
 namespace {
 constexpr uint32_t GCAP = 0x00, STATESTS = 0x0e;
@@ -26,7 +27,7 @@ constexpr uint32_t kParamStreamFormats = 0x0bu;
 
 constexpr uint32_t kFuncTypeAudio = 0x01u;
 constexpr uint32_t kWidgetTypeAudioOut = 0x0u, kWidgetTypePin = 0x4u;
-constexpr uint32_t kCapStereo = 0x001u, kCapFormatOverride = 0x010u, kCapDigital = 0x200u;
+constexpr uint32_t kCapStereo = 0x001u, kCapFormatOverride = 0x010u, kCapStripe = 0x020u, kCapDigital = 0x200u;
 constexpr uint32_t kPinSensePresentEldValid = 0xc0000000u;
 constexpr uint32_t kFormatPcm = 1u << 0, kPcmRate48k = 1u << 6;
 constexpr uint32_t kStreamTag1 = 0x10u, kPinOutEnable = 0x40u;
@@ -91,11 +92,17 @@ bool SwitchHDA::discover(uint32_t formats)
     control->sample_bits = switch_hda_sample_bits(formats, value);
     if (!control->sample_bits)
         return false;
-    const uint32_t stripe = (core(GCAP) >> 1) & 3;
+    const uint32_t gcap = core(GCAP) & 0xffff;
+    stripe = converterCaps & kCapStripe ? switch_hda_stripe(gcap, control->sample_bits) : 0;
     if (!verb(converter, kVerbSetStreamFormat, switch_hda_stream_format(control->sample_bits)) ||
         !verb(converter, kVerbSetChannelStreamId, kStreamTag1) || !verb(converter, kVerbSetDigiConvert1, 1) ||
         !verb(converter, kVerbSetDigiConvert2, 0) || !verb(converter, kVerbSetChannelCount, 1) ||
-        !verb(converter, kVerbSetStripeControl, stripe ? 1 : 0) || !verb(pin, kVerbSetPinWidgetControl, kPinOutEnable))
+        ((converterCaps & kCapStripe) && !verb(converter, kVerbSetStripeControl, stripe)) ||
+        !verb(pin, kVerbSetPinWidgetControl, kPinOutEnable))
         return false;
+#if DEVELOPMENT || DEBUG
+    IOLog("SwitchAudio: HDA display codec %u: AFG %u, pin %u, converter %u (caps %#x), GCAP %#x, stripe %u, %u-bit\n",
+          codec, afg, pin, converter, converterCaps, gcap, stripe, control->sample_bits);
+#endif
     return attached;
 }

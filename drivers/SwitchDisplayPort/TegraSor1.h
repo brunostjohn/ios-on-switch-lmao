@@ -54,6 +54,9 @@ private:
     void update();
     bool lanesPower(uint8_t count, bool up);
     bool terminationCalibrate(char *why, size_t size);
+#if DEVELOPMENT || DEBUG
+    void logAudioState(const char *when);
+#endif
 };
 
 #endif

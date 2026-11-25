@@ -39,7 +39,7 @@ constexpr uint32_t kCorbStsError = 1u << 0, kRirbStsInt = 1u << 0, kRirbStsOverf
 constexpr uint32_t kRirbResponseUnsol = 1u << 4;
 constexpr uint32_t kCorbCtlEnable = 0x03u, kRirbCtlEnable = 0x07u;
 constexpr uint32_t kStreamReset = 1u << 0, kRun = 1u << 1, kStreamInterrupts = 0x1cu, kStreamErrors = 0x18u;
-constexpr uint32_t kStreamStripe = 1u << 16, kStreamTag1 = 1u << 20;
+constexpr uint32_t kStreamStripeShift = 16, kStreamTag1 = 1u << 20;
 constexpr uint32_t kPeriods = SWITCH_AUDIO_RING_FRAMES / SWITCH_HDA_PERIOD_FRAMES;
 static_assert(kPeriods * 16 <= 1024);
 
@@ -283,8 +283,14 @@ void SwitchHDA::interrupt()
         return;
     const uint32_t frameBytes = control->sample_bits == 16 ? 4 : 8;
     const uint32_t periodBytes = SWITCH_HDA_PERIOD_FRAMES * frameBytes;
-    const uint32_t at = core(stream + SD_LPIB) / periodBytes;
+    const uint32_t position = core(stream + SD_LPIB);
+    const uint32_t at = position / periodBytes;
     const uint32_t done = (at - lastPeriod) & (kPeriods - 1);
+#if DEVELOPMENT || DEBUG
+    if (!periodsRun)
+        IOLog("SwitchAudio: HDA display stream running: first period done, LPIB %u, SD %#x\n", position, core(stream));
+    periodsRun += done;
+#endif
     auto *samples = static_cast<uint8_t *>(output->getBytesNoCopy());
     for (uint32_t n = 0; n < done; ++n) {
         uint8_t *period = samples + lastPeriod * periodBytes;
@@ -299,6 +305,11 @@ bool SwitchHDA::stop()
 {
     bool stopped = true;
     if (stream && powered) {
+#if DEVELOPMENT || DEBUG
+        if (control && control->state)
+            IOLog("SwitchAudio: HDA display stream stopped after %u periods, LPIB %u, SD %#x\n", periodsRun,
+                  core(stream + SD_LPIB), core(stream));
+#endif
         coreWrite(stream, core(stream) & 0xffffe1u);
         // SD RUN clears after pending DMA is idle, within 40 us (Intel HD Audio 1.0a 4.5.4).
         if (!switch_mmio_wait32(registers, kBar + stream, kRun, 0, 40)) {
@@ -406,9 +417,11 @@ IOReturn SwitchHDA::start()
     control->anchor_host = mach_absolute_time();
     control->state = SwitchAudioOutputRunning;
     coreWrite(INTCTL, core(INTCTL) | streamBit);
-    const uint32_t stripe = (core(GCAP) >> 1) & 3;
     ringEmpty = false;
-    coreWrite(stream, kStreamTag1 | (stripe ? kStreamStripe : 0) | kStreamInterrupts | kRun);
+#if DEVELOPMENT || DEBUG
+    periodsRun = 0;
+#endif
+    coreWrite(stream, kStreamTag1 | stripe << kStreamStripeShift | kStreamInterrupts | kRun);
     return kIOReturnSuccess;
 }
 

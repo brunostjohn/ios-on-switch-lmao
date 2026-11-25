@@ -4,6 +4,7 @@
 #include "SwitchAudioConvert.h"
 #include "../../../kits/SwitchDMA/SwitchDcache.h"
 #include <mach/mach_time.h>
+#include <os/log.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -240,9 +241,15 @@ OSStatus switch_audio_display_start(io_connect_t connection)
         gOutput = (void *)(uintptr_t)address;
     }
     if (!(gControl->state & SwitchAudioOutputRunning)) {
-        if (IOConnectCallScalarMethod(connection, SwitchAudioStartDisplayOutput, NULL, 0, NULL, NULL))
+        const kern_return_t result =
+            IOConnectCallScalarMethod(connection, SwitchAudioStartDisplayOutput, NULL, 0, NULL, NULL);
+        if (result != KERN_SUCCESS) {
+            os_log_error(OS_LOG_DEFAULT, "SwitchAudio: display IO not started: the kernel service refused (%#x)",
+                         result);
             return kAudioHardwareNotRunningError;
+        }
         ++gSeed;
+        os_log(OS_LOG_DEFAULT, "SwitchAudio: display IO started (%u-bit)", gControl->sample_bits);
     }
     ++gUsers;
     return 0;
@@ -250,8 +257,10 @@ OSStatus switch_audio_display_start(io_connect_t connection)
 
 OSStatus switch_audio_display_stop(io_connect_t connection)
 {
-    if (gUsers && --gUsers == 0)
+    if (gUsers && --gUsers == 0) {
         (void)IOConnectCallScalarMethod(connection, SwitchAudioStopDisplayOutput, NULL, 0, NULL, NULL);
+        os_log(OS_LOG_DEFAULT, "SwitchAudio: display IO stopped");
+    }
     return 0;
 }
 

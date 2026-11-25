@@ -125,6 +125,15 @@ TEST(HdaProtocol, Encodes48kStereoAnd16BitVerbPayloads)
     EXPECT_EQ(switch_hda_verb(1, 4, 0xf09, 0), 0x104f0900u);
 }
 
+TEST(HdaProtocol, StripesStereoOnlyWhileEachLineCarriesSixteenBits)
+{
+    EXPECT_EQ(switch_hda_stripe(0x4401, 24), 0u);
+    EXPECT_EQ(switch_hda_stripe(0x4403, 16), 1u);
+    EXPECT_EQ(switch_hda_stripe(0x4403, 24), 1u);
+    EXPECT_EQ(switch_hda_stripe(0x4405, 24), 2u);
+    EXPECT_EQ(switch_hda_stripe(0x4405, 16), 1u);
+}
+
 TEST(HdaProtocol, RequiresMatchingSinkAndCodecPcmWidth)
 {
     EXPECT_EQ(switch_hda_sample_bits(SWITCH_HDA_S16, 1u << 16), 0u);

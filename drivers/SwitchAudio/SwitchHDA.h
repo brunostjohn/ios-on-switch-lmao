@@ -16,7 +16,10 @@ class SwitchHDA {
     switch_dma_buffer commands = {}, tables = {};
     TegraSMMUDomain domain;
     uint32_t codec = 0, converter = 0, pin = 0, afg = 0;
-    uint32_t stream = 0, streamBit = 0, lastPeriod = 0;
+    uint32_t stream = 0, streamBit = 0, lastPeriod = 0, stripe = 0;
+#if DEVELOPMENT || DEBUG
+    uint32_t periodsRun = 0;
+#endif
     uint32_t corbMask = 0, rirbMask = 0, corbWrite = 0, rirbRead = 0;
     uint32_t response = 0;
     bool pending = false, responseValid = false, ready = false, attached = false, mapped = false, prepared = false,
