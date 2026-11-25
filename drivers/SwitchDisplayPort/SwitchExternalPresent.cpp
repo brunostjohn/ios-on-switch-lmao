@@ -19,19 +19,24 @@ void SwitchExternalScreen::kickSwapQueue()
     kicking = false;
 }
 
-// The windows are written once every producer of every surface they will scan has finished: at once when none is
-// pending, on the media engines' syncpoints when only VIC and NVDEC write them (switch_host1x_token_fence), otherwise
-// through a GPU fence, which may sleep for a slot and so goes to the fence thread.
-void SwitchExternalScreen::fenceFrame()
+namespace {
+void fenced(void *context, int status)
 {
-    switch_gpu_backing_token tokens[kFenceTokens] = {};
+    static_cast<SwitchExternalScreen *>(context)->gpuComplete(status);
+}
+}  // namespace
+
+// The producers still writing what the next frame's slots (fenceSlots) scan, into fenceTokens; media: VIC's and NVDEC's
+// alone.
+uint32_t SwitchExternalScreen::gatherFence(bool &media)
+{
     uint32_t count = 0;
-    bool media = true;
+    media = true;
     for (unsigned w = 0; w < kWindows; ++w) {
-        const int k = drawing[w];
+        const int k = fenceSlots[w];
         bool seen = false;
         for (unsigned v = 0; v < w; ++v)
-            seen = seen || drawing[v] == k;
+            seen = seen || fenceSlots[v] == k;
         if (k < 0 || seen)
             continue;
         const SwitchNativeScanout &read = slots[k].read;
@@ -45,54 +50,86 @@ void SwitchExternalScreen::fenceFrame()
             if (!own[t].engine || switch_gpu_backing_token_external_status(&own[t]) == 1)
                 continue;
             media = media && (own[t].engine == SWITCH_GPU_ENGINE_VIC || own[t].engine == SWITCH_GPU_ENGINE_NVDEC);
-            tokens[count++] = own[t];
+            fenceTokens[count++] = own[t];
         }
     }
-    if (!count) {
-        latchFrame();
-        return;
+    fenceCount = count;
+    return count;
+}
+
+// The windows are written once every producer of every surface they will scan has finished: at once when none is
+// pending, on the media engines' syncpoints when only VIC and NVDEC write them (switch_host1x_token_fence), otherwise
+// through a GPU fence. The GPU fence may sleep for a slot and a VIC conversion submits a job, so both go to the fence
+// thread; the work loop leaves the frame's slots alone until its completion.
+void SwitchExternalScreen::fenceFrame()
+{
+    fenceConverts = false;
+    for (unsigned w = 0; w < kWindows; ++w) {
+        fenceSlots[w] = drawing[w];
+        fenceConverts = fenceConverts || (drawing[w] >= 0 && slots[drawing[w]].convertPending);
     }
     gpuPending = true;
-    if (media && count <= SWITCH_HOST1X_TOKEN_FENCE_MAX) {
-        const int result = switch_host1x_token_fence(
-            tokens, count,
-            [](void *context, int status) {
-                static_cast<SwitchExternalScreen *>(context)->gpuComplete(status);
-            },
-            this);
-        if (!result)
-            return;
-        if (result != -16 && result != -22) {
+    if (!fenceConverts) {
+        bool media = false;
+        const uint32_t count = gatherFence(media);
+        if (!count) {
             gpuPending = false;
-#if DEVELOPMENT || DEBUG
-            if (diagScanoutFailures < 8u) {
-                ++diagScanoutFailures;
-                IOLog("SwitchDisplayPort: switch_host1x_token_fence failed err=%d tokens=%u\n", result, count);
-            }
-#endif
-            abandonDrawing();
-            const auto *request = pending;
-            pending = nullptr;
-            dropFrame(request);
+            latchFrame();
             return;
         }
+        if (media && count <= SWITCH_HOST1X_TOKEN_FENCE_MAX) {
+            const int result = switch_host1x_token_fence(fenceTokens, count, fenced, this);
+            if (!result)
+                return;
+            if (result != -16 && result != -22) {
+                gpuPending = false;
+#if DEVELOPMENT || DEBUG
+                if (diagScanoutFailures < 8u) {
+                    ++diagScanoutFailures;
+                    IOLog("SwitchDisplayPort: switch_host1x_token_fence failed err=%d tokens=%u\n", result, count);
+                }
+#endif
+                abandonDrawing();
+                const auto *request = pending;
+                pending = nullptr;
+                dropFrame(request);
+                return;
+            }
+        }
     }
-    memcpy(fenceTokens, tokens, count * sizeof(tokens[0]));
-    fenceCount = count;
     fenceSource->interruptOccurred(nullptr, nullptr, 0);
 }
 
+// A conversion VIC refuses retires the swap unshown with this line, the screen keeping its frame.
 void SwitchExternalScreen::fenceFired(OSObject *owner, IOInterruptEventSource *, int)
 {
     auto *self = static_cast<SwitchExternalScreen *>(owner);
+    if (self->fenceConverts) {
+        if (const int error = self->runConversions()) {
+            if (self->conversionFailures++ < 8u)
+                IOLog("SwitchDisplayPort: VIC refused a layer's conversion (%d); the swap is not shown\n", error);
+            self->gpuComplete(error);
+            return;
+        }
+        bool media = false;
+        const uint32_t count = self->gatherFence(media);
+        if (!count) {
+            self->gpuComplete(0);
+            return;
+        }
+        if (media && count <= SWITCH_HOST1X_TOKEN_FENCE_MAX) {
+            const int result = switch_host1x_token_fence(self->fenceTokens, count, fenced, self);
+            if (!result)
+                return;
+            if (result != -16 && result != -22) {
+                self->gpuComplete(result);
+                return;
+            }
+        }
+    }
     int error = 0;
     for (;;) {
-        error = switch_gpu_bridge_fence(
-            self->fenceTokens, self->fenceCount,
-            [](void *context, int status) {
-                static_cast<SwitchExternalScreen *>(context)->gpuComplete(status);
-            },
-            self);
+        error = switch_gpu_bridge_fence(self->fenceTokens, self->fenceCount, fenced, self);
         if (error != -16)
             break;
         error = switch_gpu_bridge_wait_room();
@@ -174,6 +211,11 @@ void SwitchExternalScreen::promoteDrawing()
     for (const int k : replaced)
         if (k >= 0 && !slotShown(k))
             releaseRead(static_cast<unsigned>(k));
+    for (const int k : front)
+        if (k >= 0 && slots[k].nextKey.valid) {
+            slots[k].key = slots[k].nextKey;
+            slots[k].nextKey = {};
+        }
 }
 
 void SwitchExternalScreen::dropFrame(const OriginalLegacySwapRequest *request)
@@ -226,7 +268,7 @@ void SwitchExternalScreen::noteShape(uint32_t updated, const native_planes::Laye
         if (!present[i])
             continue;
         const auto &l = layers[i];
-        if (const tgm_layout *block = slotBlock(slots[slotOf[i]]))
+        if (const tgm_layout *block = slotOf[i] >= 0 ? slotBlock(slots[slotOf[i]]) : nullptr)
             blockLog2[i] = block->y_log2;
         mix(i);
         mix(l.surface.format);
@@ -240,14 +282,15 @@ void SwitchExternalScreen::noteShape(uint32_t updated, const native_planes::Laye
     for (const auto &p : plan.window)
         mix(p.on ? static_cast<uint64_t>(p.layer) << 8 | p.depth : 0xffu);
     mix(plan.unshown);
+    mix(plan.convert);
     if (key == diagShape || diagShapeLogs >= 32u)
         return;
     diagShape = key;
     ++diagShapeLogs;
     char line[640];
-    int at = snprintf(line, sizeof(line), "updated %#x, windows A:%d B:%d C:%d, unshown %#x", updated,
+    int at = snprintf(line, sizeof(line), "updated %#x, windows A:%d B:%d C:%d, converted %#x, unshown %#x", updated,
                       plan.window[0].on ? plan.window[0].layer : -1, plan.window[1].on ? plan.window[1].layer : -1,
-                      plan.window[2].on ? plan.window[2].layer : -1, plan.unshown);
+                      plan.window[2].on ? plan.window[2].layer : -1, plan.convert, plan.unshown);
     for (unsigned i = 0; i < kLayers && at > 0 && static_cast<size_t>(at) < sizeof(line); ++i) {
         if (!present[i])
             continue;

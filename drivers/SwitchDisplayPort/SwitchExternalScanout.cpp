@@ -48,8 +48,11 @@ void SwitchExternalScreen::releaseRead(unsigned index)
     if (slot.counted)
         switch_surface_use_decrement(slot.surface, 0);
     slot.counted = false;
+    slot.convertPending = false;
+    slot.nextKey = {};
     switch_native_scanout_deliver(&slot.read);
     switch_native_scanout_release(&slot.read);
+    switch_native_scanout_release(&slot.source);
 }
 
 void SwitchExternalScreen::releaseSlot(unsigned index)
@@ -57,7 +60,8 @@ void SwitchExternalScreen::releaseSlot(unsigned index)
     auto &slot = slots[index];
     releaseRead(index);
     if (slot.backing) {
-        switch_gpu_backing_scanout(slot.backing, 0);
+        if (!slot.conversion)
+            switch_gpu_backing_scanout(slot.backing, 0);
         switch_gpu_backing_release(slot.backing);
     }
     if (slot.hold)
@@ -329,41 +333,51 @@ void SwitchExternalScreen::requestFrame()
         dropFrame(request);
         return;
     }
+    // RGB layers are mapped first: their image depends on the layout the GPU gave them. A YUV layer is in rows (the GPU
+    // lays out no planar or packed YUV block-linear) and is mapped, or converted, once the plan says which.
     native_planes::Image images[kLayers];
     int slotOf[kLayers] = {-1, -1, -1, -1};
     uint32_t building = 0;
+    const uint32_t width = mode.hactive, height = mode.vactive;
     for (unsigned i = 0; i < kLayers; ++i) {
         if (!present[i])
             continue;
-        const int prepared = prepareSlot(surfaces[i], building);
-        if (prepared == -16 || prepared == SWITCH_GPU_BACKING_STALE) {
-            releaseUnshown(building);
-            retryWhenReady();
-            return;
+        if (native_planes::isYuv(layers[i].kind)) {
+            if (!switch_external::imageFor(layers[i], nullptr, width, height, images[i]))
+                unscannable(i);
+            continue;
         }
+        const int prepared = prepareSlot(surfaces[i], building);
         if (prepared < 0) {
-#if DEVELOPMENT || DEBUG
-            noteUnshown(i, prepared);
-#endif
-            releaseUnshown(building);
-            dropFrame(request);
+            unshownFrame(prepared, i, building, request);
             return;
         }
         building |= 1u << prepared;
-        if (switch_external::imageFor(layers[i], slotBlock(slots[prepared]), mode.hactive, mode.vactive, images[i])) {
-            slotOf[i] = prepared;
-            continue;
-        }
-        // No window reads the layer as it lies: the other layers show without it.
-        present[i] = false;
-#if DEVELOPMENT || DEBUG
-        noteUnshown(i, prepared);
-#endif
+        slotOf[i] = prepared;
+        if (!switch_external::imageFor(layers[i], slotBlock(slots[prepared]), width, height, images[i]))
+            unscannable(i);
     }
     switch_external::WindowState states[kWindows];
     for (unsigned w = 0; w < kWindows; ++w)
         states[w] = dcb->windowState(w);
-    const switch_external::Plan plan = switch_external::planWindows(present, images, states);
+    switch_external::Plan plan;
+    if (!switch_external::planSwap(present, layers, images, states, width, height, plan))
+        unscannable(static_cast<unsigned>(__builtin_ctz(plan.convert)));
+    for (const auto &placement : plan.window) {
+        const unsigned i = static_cast<unsigned>(placement.layer);
+        if (!placement.on || !native_planes::isYuv(layers[i].kind))
+            continue;
+        const bool convert = (plan.convert & (1u << i)) != 0;
+        const int prepared = convert ? prepareConversion(surfaces[i], i, building) : prepareSlot(surfaces[i], building);
+        if (prepared < 0) {
+            unshownFrame(prepared, i, building, request);
+            return;
+        }
+        building |= 1u << prepared;
+        slotOf[i] = prepared;
+        if (!convert && slotBlock(slots[prepared]))
+            unscannable(i);
+    }
     for (unsigned w = 0; w < kWindows; ++w)
         drawing[w] = plan.window[w].on ? slotOf[plan.window[w].layer] : -1;
     releaseUnshown(building);

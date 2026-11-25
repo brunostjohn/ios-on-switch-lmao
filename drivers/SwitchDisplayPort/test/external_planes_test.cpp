@@ -233,7 +233,7 @@ TEST(ExternalPlanes, RgbUnderUi)
 }
 
 // The CSC is not shadowed: a video whose matrix changes moves to a window that is not scanning and is written there; with
-// none free it waits a frame, and the window it would have replaced turns off meanwhile.
+// none free VIC converts it, and it shows as BGRA.
 TEST(ExternalPlanes, CscChangeMovesWindows)
 {
     Swap s = cloneSwap();
@@ -259,13 +259,65 @@ TEST(ExternalPlanes, CscChangeMovesWindows)
     EXPECT_EQ(plan.window[kB].layer, 0);
     EXPECT_FALSE(plan.window[kB].csc);
     EXPECT_FALSE(plan.window[kC].on);
-    EXPECT_EQ(plan.unshown, 1u << 2);
+    EXPECT_EQ(plan.convert, 1u << 2);
+    EXPECT_EQ(plan.unshown, 0u);
+
+    ASSERT_TRUE(planSwap(three.present, three.layers, three.images, busy, kUltraW, kUltraH, plan));
+    EXPECT_EQ(plan.convert, 1u << 2);
+    EXPECT_EQ(plan.window[kC].layer, 2);
+    EXPECT_FALSE(plan.window[kC].csc);
+    EXPECT_FALSE(three.images[2].yuv);
+    const Frame frame = frameOf(plan, three.images, iovas, 148500000);
+    EXPECT_EQ(frame.window[kC].colorDepth, native_planes::kDepthB8G8R8A8);
+    EXPECT_EQ(frame.window[kC].matrix, -1);
+    EXPECT_EQ(frame.window[kC].lineStride, conversionOf(three.layers[2]).pitch);
 
     const WindowState settled[kWindows] = {busy[kA], busy[kB], {}};
+    ASSERT_TRUE(three.image(kUltraW, kUltraH));
     plan = planWindows(three.present, three.images, settled);
     EXPECT_EQ(plan.window[kC].layer, 2);
     EXPECT_TRUE(plan.window[kC].csc);
-    EXPECT_EQ(plan.unshown, 0u);
+    EXPECT_EQ(plan.convert, 0u);
+}
+
+// Chroma sited where no window samples it (Center, code 2) is resampled by VIC, as the panel's windows have it; Left
+// (code 1) and unspecified are scanned as they are.
+TEST(ExternalPlanes, MisSitedChromaIsConverted)
+{
+    Swap s = cloneSwap();
+    s.layers[2].surface.chromaTop = s.layers[2].surface.chromaBottom = 2;
+    ASSERT_TRUE(s.image(kUltraW, kUltraH));
+    EXPECT_TRUE(s.images[2].convert);
+    Plan plan;
+    ASSERT_TRUE(planSwap(s.present, s.layers, s.images, kIdle, kUltraW, kUltraH, plan));
+    EXPECT_EQ(plan.convert, 1u << 2);
+    EXPECT_EQ(plan.window[kA].layer, 1);
+    EXPECT_EQ(plan.window[kB].layer, 2);
+    EXPECT_EQ(plan.window[kB].depth, 1u);
+    EXPECT_EQ(frameOf(plan, s.images, iovas, 148500000).window[kB].blend, native_planes::kBlendPremultiplied | 1u);
+
+    s.layers[2].surface.chromaTop = s.layers[2].surface.chromaBottom = 1;
+    ASSERT_TRUE(s.image(kUltraW, kUltraH));
+    ASSERT_TRUE(planSwap(s.present, s.layers, s.images, kIdle, kUltraW, kUltraH, plan));
+    EXPECT_EQ(plan.convert, 0u);
+}
+
+// A YUV layer narrowed between 4x and 8x (a YUV window's H DDA takes it, an RGB one's does not) converts to a quarter of
+// its width, so its BGRA still has a window.
+TEST(ExternalPlanes, NarrowedConversionKeepsAWindow)
+{
+    Swap s;
+    s.put(2, makeLayer(kVideo, 3840, 1080, {0, 0, 3840, 1080}, {0, 0, 500, 1080}));
+    s.layers[2].surface.chromaTop = 2;
+    ASSERT_EQ(s.check(1920, 1080), native_planes::kAccepted);
+    ASSERT_TRUE(s.image(1920, 1080));
+    const Conversion c = conversionOf(s.layers[2]);
+    EXPECT_EQ(c.divisor, 4u);
+    EXPECT_EQ(c.width, 960u);
+    Plan plan;
+    ASSERT_TRUE(planSwap(s.present, s.layers, s.images, kIdle, 1920, 1080, plan));
+    EXPECT_EQ(plan.convert, 1u << 2);
+    EXPECT_EQ(s.images[2].dda & 0xffffu, (960u << 12) / 500u);
 }
 
 TEST(ExternalPlanes, ThreeSurfacesPlannedFourRefused)
@@ -360,6 +412,8 @@ Layer randomLayer(const Mode &mode)
     l.surface = makeSurface(shape, width, height, rowAligns[rnd(4)], baseAligns[rnd(3)]);
     if (l.kind == native_planes::kKindNone)
         l.surface.format = fourcc('x', '4', '2', '0');
+    l.surface.chromaTop = rnd(8);
+    l.surface.chromaBottom = rnd(4) ? l.surface.chromaTop : rnd(8);
     l.src.x = int32_t(rnd(width / 4));
     l.src.y = int32_t(rnd(height / 4));
     l.src.w = int32_t(1 + rnd(width - uint32_t(l.src.x)));
@@ -380,11 +434,11 @@ Layer randomLayer(const Mode &mode)
 }
 }  // namespace
 
-// Every swap the published limits allow is accepted, and every accepted one has a window for each layer on the screen
-// and registers that read only the surfaces' own bytes.
+// Every swap the published limits allow is accepted, and every accepted one, whatever DC B's windows hold, has a window
+// for each layer on the screen, directly or through VIC's BGRA, with registers that read only that buffer's own bytes.
 TEST(ExternalPlanes, SweepAcceptsThePublishedAndPlansTheAccepted)
 {
-    unsigned accepted = 0, inside = 0;
+    unsigned accepted = 0, inside = 0, converted = 0;
     for (unsigned n = 0; n < 200000; ++n) {
         const Mode &mode = kModes[rnd(6)];
         Swap s;
@@ -405,14 +459,35 @@ TEST(ExternalPlanes, SweepAcceptsThePublishedAndPlansTheAccepted)
             continue;
         ++accepted;
         ASSERT_TRUE(s.image(mode.width, mode.height)) << "swap " << n;
-        const Plan plan = planWindows(s.present, s.images, kIdle);
+        for (unsigned i = 0; i < kLayers; ++i) {
+            if (!s.present[i] || native_planes::isYuv(s.layers[i].kind))
+                continue;
+            Layer tiled = s.layers[i];
+            tgm_layout block = {};
+            ASSERT_EQ(tgm_layout_tiled(tiled.surface.width, tiled.surface.height, 4, &block), 1);
+            tiled.surface.allocation = std::max<uint64_t>(tiled.surface.allocation, block.bytes);
+            tiled.surface.descriptorBytes = roundUp(tiled.surface.allocation, 16384);
+            Image m;
+            ASSERT_TRUE(imageFor(tiled, &block, mode.width, mode.height, m)) << "swap " << n << " layer " << i;
+        }
+        WindowState state[kWindows];
+        for (auto &w : state)
+            w = {rnd(2) == 0, int(rnd(4)) - 1, int(rnd(3)) - 1};
+        Plan plan;
+        ASSERT_TRUE(planSwap(s.present, s.layers, s.images, state, mode.width, mode.height, plan)) << "swap " << n;
         ASSERT_EQ(plan.unshown, 0u) << "swap " << n;
         unsigned visible = 0, placed = 0;
         for (unsigned i = 0; i < kLayers; ++i)
             visible += s.present[i] && s.images[i].visible;
-        for (const Placement &p : plan.window)
+        for (const Placement &p : plan.window) {
             placed += p.on;
+            if (p.on && s.images[p.layer].yuv && p.csc)
+                ASSERT_FALSE(state[&p - plan.window].live) << "swap " << n;
+            if (p.on && s.images[p.layer].yuv && !p.csc)
+                ASSERT_EQ(state[&p - plan.window].matrix, int(s.images[p.layer].matrix)) << "swap " << n;
+        }
         ASSERT_EQ(placed, visible) << "swap " << n;
+        converted += __builtin_popcount(plan.convert);
         const uint32_t iova[kLayers] = {0x10000000, 0x14400000, 0x18800000, 0x1cc00000};
         const Frame frame = frameOf(plan, s.images, iova, 148500000);
         for (unsigned w = 0; w < kWindows; ++w) {
@@ -420,13 +495,18 @@ TEST(ExternalPlanes, SweepAcceptsThePublishedAndPlansTheAccepted)
             if (!p.on)
                 continue;
             const Image &m = s.images[p.layer];
-            ASSERT_LE(m.readHigh, roundUp(s.layers[p.layer].surface.allocation, 4096)) << "swap " << n;
+            const bool viaVic = plan.convert & (1u << p.layer);
+            const uint64_t bytes =
+                viaVic ? conversionOf(s.layers[p.layer]).bytes : s.layers[p.layer].surface.allocation;
+            ASSERT_LE(m.readHigh, roundUp(bytes, 4096)) << "swap " << n;
+            ASSERT_EQ(m.yuv, !viaVic && native_planes::isYuv(s.layers[p.layer].kind)) << "swap " << n;
             ASSERT_EQ(frame.window[w].options & kPaletteEnable, 0u);
             ASSERT_EQ(frame.window[w].start, iova[p.layer] + uint32_t(m.start[0]));
         }
     }
     EXPECT_GT(inside, 10000u);
     EXPECT_GT(accepted, inside);
+    EXPECT_GT(converted, 1000u);
 }
 
 namespace {

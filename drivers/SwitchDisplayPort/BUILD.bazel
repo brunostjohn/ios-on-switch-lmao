@@ -42,11 +42,15 @@ kernel_driver(
         "SwitchExternalScreen.cpp",
         "SwitchExternalScanout.cpp",
         "SwitchExternalPresent.cpp",
+        "SwitchExternalConvert.cpp",
         "TegraDisplayB.cpp",
         "TegraDpaux1.cpp",
         "TegraSor1.cpp",
     ],
-    abi = ["IOMobileFramebufferLegacy", "IOSurface"],
+    abi = [
+        "IOMobileFramebufferLegacy",
+        "IOSurface",
+    ],
     # The IPSW kind (SWITCH_IPSW_KIND_*): the limits SwitchExternalPlanes.h publishes.
     copts = IPSW_KIND_FLAGS,
     hdr_deps = [

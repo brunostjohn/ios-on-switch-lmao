@@ -16,6 +16,7 @@ class TegraDisplayB;
 
 class SwitchExternalScreen : public IOMobileFramebufferLegacy {
     OSDeclareDefaultStructors(SwitchExternalScreen);
+
 public:
     void stop(IOService *provider) override;
     void free() override;
@@ -27,10 +28,24 @@ public:
     void detach();
     bool frameEnd();
     void gpuComplete(int status);
-    bool requested() const { return device == 2; }
+
+    bool requested() const
+    {
+        return device == 2;
+    }
+
     IOReturn setPowerState(unsigned long ordinal, IOService *whatDevice) override;
-    bool isMainDisplay() override { return false; }
-    bool startHardware() override { return true; }
+
+    bool isMainDisplay() override
+    {
+        return false;
+    }
+
+    bool startHardware() override
+    {
+        return true;
+    }
+
     bool getRefreshAttributes(uint64_t *periods, uint32_t internal) override;
     IOReturn getDotPitch(uint32_t *pitch) override;
     IOReturn setDisplayDevice(uint32_t requested) override;
@@ -42,43 +57,86 @@ public:
     IOReturn setAccessibilityScale(uint32_t scale) override;
     void kickSwapQueue() override;
     bool validateSwap(const OriginalLegacySwapRequest *request) override;
-    bool areTimingsEnabled() const override { return dcb != nullptr; }
+
+    bool areTimingsEnabled() const override
+    {
+        return dcb != nullptr;
+    }
+
     IOReturn collectCompletionReports(uint32_t, void *, uint32_t *count, uint32_t) override;
     IOReturn supportedFrameInfo(uint32_t, uint32_t *count, char *, uint32_t *) override;
-    IOReturn changeFrameInfo(uint32_t, void *, uint32_t) override { return kIOReturnUnsupported; }
-    void platformFrameInfoNotify(void *, bool) override {}
-    IOReturn sendFrameInfo(void *, const void *) override { return kIOReturnUnsupported; }
-    IOReturn platformInternalPlug() override { return kIOReturnUnsupported; }
-    IOReturn platformInternalUnplug() override { return kIOReturnUnsupported; }
-    void platformRefreshRates() override {}
+
+    IOReturn changeFrameInfo(uint32_t, void *, uint32_t) override
+    {
+        return kIOReturnUnsupported;
+    }
+
+    void platformFrameInfoNotify(void *, bool) override
+    {}
+
+    IOReturn sendFrameInfo(void *, const void *) override
+    {
+        return kIOReturnUnsupported;
+    }
+
+    IOReturn platformInternalPlug() override
+    {
+        return kIOReturnUnsupported;
+    }
+
+    IOReturn platformInternalUnplug() override
+    {
+        return kIOReturnUnsupported;
+    }
+
+    void platformRefreshRates() override
+    {}
+
 private:
     static constexpr unsigned kLayers = native_planes::kLayers, kWindows = switch_external::kWindows;
     // Every window's surface on the screen and the next frame's, and a spare for each layer to stay mapped across frames.
+    // A converted layer takes one slot for VIC's output and none for its source, which VIC maps itself.
     static constexpr unsigned kSlots = 8;
+    static_assert(kSlots >= 2 * kWindows);
     static constexpr uint64_t kSlotBase = 0x10000000, kSlotSpan = 68ULL << 20;
     static constexpr uint32_t kTablePages = 1 + kSlots * (kSlotSpan >> 22);
     static_assert(kTablePages == 137);
     static_assert(kTablePages == 1 + TegraSMMUDomain::tablesFor(kSlotBase, uint64_t{kSlots} * kSlotSpan));
     static_assert(kSlotBase + uint64_t{kSlots} * kSlotSpan <= (1ULL << 32));
     static constexpr unsigned kFenceTokens = kWindows * (3 + SWITCH_GPU_BACKING_PROMISES);
+
+    // What a converted slot holds: the source picture and how VIC converted it. A slot's key is set at the latch that
+    // shows its frame, so a buffer whose job failed or never ran is never taken for a picture.
+    struct ConversionKey {
+        uint64_t allocation, generation, content, offset;
+        uint32_t format, width, height, divisor, matrix, chromaTop, chromaBottom, valid;
+    };
+
     struct Slot {
         SwitchNativeScanout read;
-        OSObject *surface;
+        SwitchNativeScanout source;  // a conversion's: what VIC reads, kept with the read of its output
+        OSObject *surface;           // the IOSurface scanned; none for a conversion's output
         IOMemoryDescriptor *memory;
-        switch_gpu_backing *backing;
+        switch_gpu_backing *backing;  // the surface's, or the conversion's own buffer
         void *hold;
         tgm_layout block;  // bpp 0: the surface is in rows
+        TegraVICImage convertInput;
+        TegraVICOp convertOp;
+        ConversionKey key, nextKey;
         uint64_t allocationId, generation, offset, used, allocationBytes;
-        uint32_t pages;
-        bool counted;
+        uint32_t pages, convertWidth, convertHeight, convertPitch;
+        bool counted, conversion, convertPending;
     };
+
     Slot *slots = nullptr;  // kSlots of them, allocated at begin: the object stays within the kernel's 16 KiB
+
     // Each layer as the swaps handed over so far gave it (a layer a swap does not update keeps its surface, retained, and
     // geometry); kept across a link drop, cleared at a detach or a change of geometry.
     struct LayerRecord {
         OSObject *surface;
         native_planes::Layer layer;
     } layerRecords[kLayers] = {};
+
     SwitchDisplayPort *transport = nullptr;
     IOWorkLoop *loop = nullptr, *fenceLoop = nullptr;
     IOLock *colorLock = nullptr;
@@ -90,8 +148,12 @@ private:
     struct switch_dp_mode_list modes = {};
     struct switch_dp_mode mode = {};
     switch_external::Frame pendingFrame = {};
+    // The fence thread's work, fixed on the work loop before it is signalled: the next frame's slots, whether VIC converts
+    // into some of them first, and the producers a GPU fence waits for.
     switch_gpu_backing_token fenceTokens[kFenceTokens] = {};
-    uint32_t fenceCount = 0;
+    uint32_t fenceCount = 0, conversionFailures = 0;
+    int fenceSlots[kWindows] = {-1, -1, -1};
+    bool fenceConverts = false;
     int front[kWindows] = {-1, -1, -1}, drawing[kWindows] = {-1, -1, -1};
     int64_t harmonyMatrix[9] = {};
     int64_t accessibilityMatrix[9] = {};
@@ -130,6 +192,11 @@ private:
     void recordLayers(const uint8_t *request);
     bool takeLayers(const uint8_t *request, bool present[], native_planes::Layer layers[], OSObject *surfaces[]);
     void releaseUnshown(uint32_t building);
+    int prepareConversion(OSObject *surface, unsigned layer, uint32_t building);
+    int runConversions();
+    void unshownFrame(int error, unsigned layer, uint32_t building, const OriginalLegacySwapRequest *request);
+    [[noreturn]] void unscannable(unsigned layer) const;
+    uint32_t gatherFence(bool &media);
     void abandonDrawing();
     void promoteDrawing();
     void fenceFrame();

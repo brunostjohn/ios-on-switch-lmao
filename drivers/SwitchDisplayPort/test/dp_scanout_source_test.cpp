@@ -59,11 +59,21 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
 
     const auto request = Block(source, "void SwitchExternalScreen::requestFrame()");
     EXPECT_TRUE(request.has("switch_external::imageFor(layers[i], slotBlock(slots[prepared])"));
-    EXPECT_TRUE(request.has("switch_external::planWindows(present, images, states)"));
+    EXPECT_TRUE(request.has("switch_external::planSwap(present, layers, images, states, width, height, plan)"));
     EXPECT_TRUE(request.has("switch_external::frameOf(plan, images, iova, dcb->pixelClockHz())"));
     EXPECT_TRUE(
         request.has("drawing[w] = plan.window[w].on ? slotOf[plan.window[w].layer] : -1; releaseUnshown(building);"));
-    EXPECT_TRUE(request.before("if (prepared < 0)", "releaseUnshown(building); dropFrame(request); return;"));
+    // An accepted swap is shown whole or not at all: a layer it cannot place now retires it unshown, and one no window
+    // could ever read panics.
+    EXPECT_TRUE(request.before("if (prepared < 0)", "unshownFrame(prepared, i, building, request); return;"));
+    EXPECT_TRUE(request.has("unscannable(i);"));
+    EXPECT_FALSE(request.has("present[i] = false"));
+    EXPECT_TRUE(
+        request.has("convert ? prepareConversion(surfaces[i], i, building) : prepareSlot(surfaces[i], building)"));
+    const auto convert = SourceText("../SwitchExternalConvert.cpp");
+    EXPECT_TRUE(Block(convert, "void SwitchExternalScreen::unshownFrame(").has("dropFrame(request);"));
+    EXPECT_TRUE(Block(convert, "void SwitchExternalScreen::unscannable(").has("panic("));
+    EXPECT_TRUE(Block(convert, "int SwitchExternalScreen::runConversions()").has("switch_vic_scanout_convert("));
 
     const auto complete = Block(present, "void SwitchExternalScreen::completionFired(");
     EXPECT_TRUE(complete.has("if (!self->connected || self->selectedMode < 0 || self->device != 2)"));
@@ -181,15 +191,19 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
 TEST(ExternalOwnership, OneFenceOverEveryWindow)
 {
     const auto present = SourceText("../SwitchExternalPresent.cpp");
+    const auto gather = Block(present, "uint32_t SwitchExternalScreen::gatherFence(");
+    EXPECT_TRUE(gather.has("switch_native_scanout_dependencies(read, own, 3)"));
+    EXPECT_TRUE(gather.has("switch_gpu_backing_promise_tokens(read.view.native, 0, 0, own + n,"));
+    EXPECT_TRUE(gather.has("switch_gpu_backing_token_external_status(&own[t]) == 1"));
     const auto fence = Block(present, "void SwitchExternalScreen::fenceFrame()");
-    EXPECT_TRUE(fence.has("switch_native_scanout_dependencies(read, own, 3)"));
-    EXPECT_TRUE(fence.has("switch_gpu_backing_promise_tokens(read.view.native, 0, 0, own + n,"));
-    EXPECT_TRUE(fence.has("switch_gpu_backing_token_external_status(&own[t]) == 1"));
-    EXPECT_TRUE(fence.before("if (!count) { latchFrame(); return; }", "switch_host1x_token_fence("));
+    EXPECT_TRUE(
+        fence.before("if (!count) { gpuPending = false; latchFrame(); return; }", "switch_host1x_token_fence("));
     EXPECT_TRUE(fence.has("media && count <= SWITCH_HOST1X_TOKEN_FENCE_MAX"));
     EXPECT_TRUE(fence.has("if (result != -16 && result != -22)"));
-    EXPECT_TRUE(fence.before("fenceCount = count;", "fenceSource->interruptOccurred(nullptr, nullptr, 0);"));
+    EXPECT_TRUE(fence.has("fenceSource->interruptOccurred(nullptr, nullptr, 0);"));
     const auto bridge = Block(present, "void SwitchExternalScreen::fenceFired(");
+    // VIC's jobs run on the fence thread, and the frame's producers are gathered after them: theirs are among them.
+    EXPECT_TRUE(bridge.before("self->runConversions()", "self->gatherFence(media)"));
     EXPECT_TRUE(bridge.has("switch_gpu_bridge_fence("));
     EXPECT_TRUE(bridge.before("if (error != -16) break;", "error = switch_gpu_bridge_wait_room();"));
     EXPECT_TRUE(bridge.has("if (error) self->gpuComplete(error);"));

@@ -124,15 +124,16 @@ struct Placement {
 
 struct Plan {
     Placement window[kWindows];
-    // Layers with an image on the screen that no window shows: below the third, or a YUV layer that no window it may
-    // take can scan with its matrix and range now.
-    uint32_t unshown = 0;
+    uint32_t unshown = 0;  // layers with an image below the third: more than the display publishes
+    // YUV layers VIC converts to BGRA for a window: chroma sited where no window samples it (Image::convert, as the
+    // panel's windows), or no window free that holds the layer's matrix and range or may have its CSC written now.
+    uint32_t convert = 0;
 };
 
 // Which window shows which layer. Depth follows the swap's stack order (NativePlanes.h stackPosition), 0 in front. The
 // topmost RGB layer (the UI) takes window A and the others B and C first. A YUV layer takes a window whose CSC holds its
-// matrix and range already, else one that is not scanning, whose CSC is written with the frame. With neither it is not
-// shown this frame; the window it would have replaced turns off at this latch, so the next frame finds one idle.
+// matrix and range already, else one that is not scanning, whose CSC is written with the frame; with neither it is
+// converted (planSwap).
 inline Plan planWindows(const bool present[kLayers], const Image images[kLayers], const WindowState state[kWindows])
 {
     Plan plan;
@@ -161,6 +162,10 @@ inline Plan planWindows(const bool present[kLayers], const Image images[kLayers]
         const Image &m = images[order[k]];
         if (!m.yuv)
             continue;
+        if (m.convert) {
+            plan.convert |= 1u << order[k];
+            continue;
+        }
         int chosen = -1;
         for (const Window w : kPreference)
             if (chosen < 0 && !plan.window[w].on && state[w].matrix == int(m.matrix) &&
@@ -171,7 +176,7 @@ inline Plan planWindows(const bool present[kLayers], const Image images[kLayers]
             if (chosen < 0 && !plan.window[w].on && !state[w].live)
                 chosen = int(w);
         if (chosen < 0)
-            plan.unshown |= 1u << order[k];
+            plan.convert |= 1u << order[k];
         else
             place(Window(chosen), k, csc);
     }
@@ -183,6 +188,60 @@ inline Plan planWindows(const bool present[kLayers], const Image images[kLayers]
                 place(w, k, false);
     }
     return plan;
+}
+
+// The BGRA rows VIC converts a YUV layer's whole surface into: as wide as the surface, or a quarter of it when the layer
+// is narrowed more than 4x (a YUV window's H DDA takes 8.0, an RGB one's 4.0), at VIC's 256-byte pitch.
+struct Conversion {
+    uint32_t width, height, pitch, divisor;
+    uint64_t bytes;
+};
+
+inline Conversion conversionOf(const Layer &l)
+{
+    const uint32_t divisor = uint64_t(l.src.w) > uint64_t(l.dst.w) * 4 ? 4 : 1;
+    const uint32_t width = (l.surface.width + divisor - 1) / divisor;
+    const uint32_t pitch = (width * 4 + 255) & ~255u;
+    return {width, l.surface.height, pitch, divisor, uint64_t(pitch) * l.surface.height};
+}
+
+// The image a window scans of l once VIC has converted it: the same rectangles on the BGRA, the source across divided
+// as the conversion divided the surface (rounded out). Opaque, as VIC writes alpha 1 from a source without alpha.
+inline bool convertedImage(const Layer &l, uint32_t width, uint32_t height, Image &image)
+{
+    const Conversion c = conversionOf(l);
+    Layer rgb = l;
+    rgb.kind = native_planes::kKindBgra;
+    rgb.surface = {};
+    rgb.surface.format = native_planes::fourcc('B', 'G', 'R', 'A');
+    rgb.surface.width = c.width;
+    rgb.surface.height = c.height;
+    rgb.surface.stride[0] = c.pitch;
+    rgb.surface.planeHeight[0] = c.height;
+    rgb.surface.allocation = rgb.surface.descriptorBytes = c.bytes;
+    const int32_t d = int32_t(c.divisor);
+    rgb.src.x = l.src.x / d;
+    rgb.src.w = (l.src.x + l.src.w + d - 1) / d - rgb.src.x;
+    return imageFor(rgb, nullptr, width, height, image);
+}
+
+// planWindows, again with each layer it sends to VIC as its converted image, until none more is sent. False when a
+// converted image has no window (convertedImage fails), which no accepted layer reaches.
+inline bool planSwap(const bool present[kLayers], const Layer layers[kLayers], Image images[kLayers],
+                     const WindowState state[kWindows], uint32_t width, uint32_t height, Plan &plan)
+{
+    uint32_t converted = 0;
+    for (;;) {
+        plan = planWindows(present, images, state);
+        if (!plan.convert) {
+            plan.convert = converted;
+            return true;
+        }
+        for (unsigned i = 0; i < kLayers; ++i)
+            if ((plan.convert & (1u << i)) && !convertedImage(layers[i], width, height, images[i]))
+                return false;
+        converted |= plan.convert;
+    }
 }
 
 // A window's registers for image m at `depth`, its surface mapped from `iova`. RGB is premultiplied over what lies
