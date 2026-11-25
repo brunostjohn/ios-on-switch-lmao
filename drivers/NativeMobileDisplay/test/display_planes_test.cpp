@@ -550,7 +550,7 @@ TEST(DisplayPlanesTurn, TurnedConversionReadsThePixelsOnTheScreen)
     }
 }
 
-// The words window B gets for each transform (the orchestrator's table, VIC's vicFlips and V3's proven pair).
+// The words window B gets for each transform (VIC's vicFlips and V3's proven pair).
 TEST(DisplayPlanesTurn, TransformWordsToWindowBits)
 {
     const uint32_t expected[8] = {0, 0x1, 0x4, 0x5, 0x14, 0x15, 0x10, 0x11};
@@ -701,8 +701,8 @@ TEST(DisplayPlanes, PublishedAlignmentSuitsEveryReader)
 
 // iOS 27 publishes iOS 17's limits and, where QuartzCore 24B119 no longer goes by J120's chip id, packed 10-bit YUV and
 // compressed surfaces ruled out, and rotation published.
-// 21H461 is not told the display rotates, so a transform word it sends anyway is refused as before the turn model;
-// 24B119 is told, and every word is shown.
+// 21H461 is not told the display rotates, so a transform word it sends anyway is refused; 24B119 is told, and every
+// word is shown.
 TEST(DisplayPlanes, ATransformIsAcceptedOnlyWhereRotationIsPublished)
 {
     for (const Kind kind : {kKindBgra, kKindNv12Video}) {

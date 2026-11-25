@@ -207,7 +207,7 @@ struct Limits {
 // layer through turned when its surface's max_src_rect_width >= height, its format is not already a compressed one and
 // align32(w) * align32(h) & ~0x3ff < MaxSrcRotRectTotal: any format, video included. Every transformed layer checkDetached
 // accepts is shown, by window B or C or by the plane conversion job (NativePlanesTurn.h), so 24B119 publishes both and
-// Core Animation stops turning detached layers through VIC itself. 21H461's reading of the keys is unverified: iOS 17
+// Core Animation leaves detached layers' turns to the display. 21H461's reading of the keys is unverified: iOS 17
 // publishes neither and keeps Core Animation's own turns.
 constexpr Limits kLimits24B119 = {.packedYuvUnsupported = true, .compressionUnsupported = true, .rotation = true};
 

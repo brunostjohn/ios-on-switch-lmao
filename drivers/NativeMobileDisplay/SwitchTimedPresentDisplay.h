@@ -6,7 +6,7 @@
 
 static constexpr uint64_t kTimedPresentHorizonNs = 1000000000ULL;
 #if SWITCH_IPSW_KIND_24B119
-static constexpr bool kPhasedOrdinary = false;  // 24B119's render server stamps the frame end it wants (D1)
+static constexpr bool kPhasedOrdinary = false;  // 24B119's render server stamps the frame end it wants
 #else
 static constexpr bool kPhasedOrdinary = true;
 #endif

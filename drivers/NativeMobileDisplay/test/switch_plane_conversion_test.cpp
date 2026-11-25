@@ -374,8 +374,8 @@ TEST_F(PlaneConversion, ConvertsOnceAndReusesTheSameContentWithoutAllocatingOrSu
     EXPECT_GT(display->snapshots[slot].view.producer.value, UINT32_MAX);
 }
 
-// A turned layer (a landscape video Core Animation now hands the display) is turned by the job itself: VIC gets the word
-// and the turned size, and the window shows the turned plane untransformed where the layer goes.
+// A turned layer (a landscape video Core Animation hands the display once rotation is published) is turned by the job:
+// VIC gets the word and the size on the screen, and the window shows the turned plane untransformed where the layer goes.
 TEST_F(PlaneConversion, ATurnedVideoBecomesAnUntransformedTurnedPlane)
 {
     layer.transform = 4;
