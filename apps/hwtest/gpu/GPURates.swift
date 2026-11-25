@@ -295,8 +295,9 @@ public final class GPURates {
         }
     }
 
-    /// Shared buffers made while `on`: the facade binds them L2-bypassing; nil where it has no such probe and `on`
-    static func bypassL2(_ device: MTLDevice, _ on: Bool) -> Bool {
+    /// Shared buffers made from now on bypass the GPU's L2 (`on`) or not; false where `on` and the facade has no probe
+    @discardableResult
+    public static func bypassL2(_ device: MTLDevice, _ on: Bool) -> Bool {
         let selector = NSSelectorFromString("switchMetalSharedBypassesL2:")
         guard let object = device as? NSObject, object.responds(to: selector) else { return !on }
         _ = object.perform(selector, with: NSNumber(value: on))
