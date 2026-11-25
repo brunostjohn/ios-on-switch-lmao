@@ -29,6 +29,8 @@
 #                            to its swap into running, blocked and waiting for a core
 #   xnu_sched_cpu_test       kernel/switch/sched/cpu.h: each process's CPU in a window, counted once across its exit and
 #                            an exec, a full table's misses counted; the cores and tasks lines
+#   xnu_sched_limit_shadow_test  kernel/switch/sched/limit_shadow.h: Apple's blocking CPU limit replayed beside a lifted
+#                            one, its blocks and the time run past each budget
 #   xnu_sched_callouts_test  kernel/switch/sched/callouts.h: thread call functions and timer actions by CPU, each window's
 #                            top four; both trees bracket thread_call_invoke's function and IOTimerEventSource's actions
 #   xnu_diag_deployed_test   kernel/switch/diag/deployed.h: the commit, branch, build and dirty flag deployed.json gives
@@ -572,6 +574,22 @@ host_test(
         "//kernel/xnu-10063.141.1/osfmk:kern/thread_call.c",
         "//kernel/xnu-12377.121.6/iokit:Kernel/IOTimerEventSource.cpp",
         "//kernel/xnu-12377.121.6/osfmk:kern/thread_call.c",
+    ],
+    includes = ["."],
+)
+
+# --- kernel/switch/sched/limit_shadow.h -----------------------------------------------------------------------------------
+copy_file(
+    name = "switch_sched_limit_shadow",
+    src = "//kernel/switch:sched/limit_shadow.h",
+    out = "sched/limit_shadow.h",
+)
+
+host_test(
+    name = "xnu_sched_limit_shadow_test",
+    srcs = [
+        "sched/limit_shadow.h",
+        "xnu_sched_limit_shadow_test.cpp",
     ],
     includes = ["."],
 )

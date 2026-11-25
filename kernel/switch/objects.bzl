@@ -83,6 +83,7 @@ SWITCH_OBJECTS = {
         ("osfmk/kern/timer_call.c", "sched/cpu.c", []),
         ("osfmk/kern/timer_call.c", "sched/systime.c", []),
         ("osfmk/kern/timer_call.c", "sched/callouts.c", []),
+        ("osfmk/kern/timer_call.c", "sched/limit_shadow.c", []),
         ("osfmk/kern/timer_call.c", "sched/watch.c", []),
         ("osfmk/kern/timer_call.c", "sched/watch_write.c", []),
         ("osfmk/kern/timer_call.c", "sched/commit.c", []),

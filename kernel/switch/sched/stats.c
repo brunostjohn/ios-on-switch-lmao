@@ -321,6 +321,9 @@ void switch_sched_limit_asked(uint8_t percentage, uint64_t interval_ns, bool lif
     }
     asked_requests++;
     simple_unlock(&asked_lock);
+    if (lifted) {
+        switch_sched_limit_shadow(percentage, interval_ns);
+    }
 }
 
 /* The requests so far, when there were new ones since the last report. */
@@ -537,6 +540,7 @@ static void switch_sched_report(__unused thread_call_param_t p0, __unused thread
     switch_sched_watch_report(line, LINE, window_ns);
     switch_diag_pagein_report(line, LINE, window_ns);
     report_asked(line);
+    switch_sched_limit_report(line, LINE, window_ns);
 }
 
 #endif /* DEVELOPMENT || DEBUG */

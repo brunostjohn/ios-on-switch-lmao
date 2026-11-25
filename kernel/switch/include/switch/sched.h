@@ -86,7 +86,16 @@ void switch_sched_systime_report(char *line, size_t size, uint64_t window_ns);
 /* callouts.c: thread call functions and timer actions by CPU (<switch/callouts.h>). */
 void switch_sched_callout_report(char *line, size_t size, uint64_t window_ns);
 
-/* thread_invoke, under the incoming thread's lock: the scheduler's hot path, so three loads while nothing is watched. */
+/* limit_shadow.c: Apple's blocking CPU limits replayed beside the ones switch_cpulimit_lift lifts (sched/limit_shadow.h);
+ * the dispatch hooks below feed it once a thread has one. */
+extern uint32_t switch_sched_limit_watching;
+
+void switch_sched_limit_shadow(uint8_t percentage, uint64_t interval_ns);
+void switch_sched_limit_dispatched(thread_t thread, uint64_t now);
+void switch_sched_limit_departed(thread_t thread, uint64_t now);
+void switch_sched_limit_report(char *line, size_t size, uint64_t window_ns);
+
+/* thread_invoke, under the incoming thread's lock: the scheduler's hot path, so four loads while nothing is watched. */
 static inline void switch_sched_on_core(thread_t thread, uint64_t now)
 {
     if (__improbable(os_atomic_load(&switch_sched_watching, relaxed) != 0)) {
@@ -98,6 +107,9 @@ static inline void switch_sched_on_core(thread_t thread, uint64_t now)
     if (__improbable(os_atomic_load(&switch_sched_watch_on, relaxed) != 0)) {
         switch_sched_watch_dispatched(thread, now);
     }
+    if (__improbable(os_atomic_load(&switch_sched_limit_watching, relaxed) != 0)) {
+        switch_sched_limit_dispatched(thread, now);
+    }
 }
 
 /* thread_dispatch, under the departing thread's lock, before its wait or requeue is applied. */
@@ -108,6 +120,9 @@ static inline void switch_sched_off_core(thread_t thread, uint64_t now)
     }
     if (__improbable(os_atomic_load(&switch_sched_watch_on, relaxed) != 0)) {
         switch_sched_watch_departed(thread, now);
+    }
+    if (__improbable(os_atomic_load(&switch_sched_limit_watching, relaxed) != 0)) {
+        switch_sched_limit_departed(thread, now);
     }
 }
 
