@@ -202,11 +202,21 @@ bool Service::publish(const gm20b::Digest *name, const gm20b::CacheKey &key, con
 
 void Service::persist()
 {
+#if SWITCH_DEBUG
+    const uint64_t began = uptimeNs();
+#endif
     if (!store_.persist())
-        os_log_error(logger(), "SwitchShaderCompiler: the store not synced (%d): a crash before the next sync drops its newest "
-                               "entries", errno);
+        os_log_error(logger(),
+                     "SwitchShaderCompiler: the store not synced (%d): a crash before the next sync drops its newest "
+                     "entries",
+                     errno);
     if (!log_.persist())
         os_log_error(logger(), "SwitchShaderCompiler: the request log not synced (%d)", errno);
+#if SWITCH_DEBUG
+    static uint32_t syncs = 0;  // the persister's serial queue alone runs this
+    os_log(logger(), "SwitchShaderCompiler: store and request log synced in %llu us (sync %u)",
+           (unsigned long long)((uptimeNs() - began) / 1000), ++syncs);
+#endif
 }
 
 int32_t Service::run(Work &work)

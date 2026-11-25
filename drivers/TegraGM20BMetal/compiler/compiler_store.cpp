@@ -64,10 +64,11 @@ bool Store::open(const std::string &root, uint64_t stack, const gm20b::Digest &r
         return error = "cannot make " + dir + ": " + strerror(errno), false;
     removeOthers(root, ours);
     identityOf(stack, rules, identity_);
+    switch_seed_pack::currentBoot(boot_);
     const uint8_t *identity = identity_;
     path_ = dir + "/store";
     std::lock_guard<std::mutex> l(lock_);
-    if (!writer_.open(path_, identity, kSlots, kDataBytes, error))
+    if (!writer_.open(path_, identity, kSlots, kDataBytes, error, boot_))
         return false;
     // Retired entries are reclaimed here, before this compiler registers the file
     const bool crowded = writer_.retired() * 4 > kSlots || writer_.dataUsed() > kDataBytes / 4 * 3 ||
@@ -76,9 +77,9 @@ bool Store::open(const std::string &root, uint64_t stack, const gm20b::Digest &r
         return true;
     writer_.close();
     std::string compacted;
-    if (!switch_seed_pack::compactStore(path_, identity, kSlots, kDataBytes, compacted))
+    if (!switch_seed_pack::compactStore(path_, identity, kSlots, kDataBytes, compacted, UINT64_MAX, UINT32_MAX, boot_))
         unlink(path_.c_str());
-    return writer_.open(path_, identity, kSlots, kDataBytes, error);
+    return writer_.open(path_, identity, kSlots, kDataBytes, error, boot_);
 }
 
 bool Store::find(const gm20b::Digest &name, std::string &bytes) const
@@ -151,11 +152,12 @@ bool Store::makeRoom(std::string &error)
     std::lock_guard<std::mutex> p(persistLock_);
     std::lock_guard<std::mutex> l(lock_);
     writer_.close();
-    if (!switch_seed_pack::compactStore(path_, identity_, kSlots, kDataBytes, error, kDataBytes / 2, kSlots / 4)) {
+    if (!switch_seed_pack::compactStore(path_, identity_, kSlots, kDataBytes, error, kDataBytes / 2, kSlots / 4,
+                                        boot_)) {
         unlink(path_.c_str());
         error = "the full store could not be written again (" + error + "): made anew";
     }
-    return writer_.open(path_, identity_, kSlots, kDataBytes, error);
+    return writer_.open(path_, identity_, kSlots, kDataBytes, error, boot_);
 }
 
 bool Store::persist()

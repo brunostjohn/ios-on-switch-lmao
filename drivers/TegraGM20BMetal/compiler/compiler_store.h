@@ -69,12 +69,16 @@ public:
     }
 
 private:
-    // persistLock_ then lock_: a persist syncs the file outside lock_, so the file it syncs must stay open meanwhile
+    // persistLock_ then lock_: a persist syncs the file outside lock_, so the file it syncs must stay open meanwhile.
+    // makeRoom (a full store, on a compile's publish) waits for at most one persist's msync and two barrier fsyncs,
+    // a fraction of the half-store rewrite it then does itself.
     std::mutex persistLock_;
     mutable std::mutex lock_;
     switch_seed_pack::StoreWriter writer_;
     std::string path_;
     uint8_t identity_[switch_seed_pack::kIdentityBytes] = {};
+    // This boot's id, read once at open (before the compiler's sandbox), for every later open of the file
+    char boot_[switch_seed_pack::kStoreBootBytes] = {};
 };
 
 // The store's directory name under its root for a stack and pack rules

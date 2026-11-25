@@ -484,14 +484,16 @@ private:
 // The store at `path` written again with only its live entries (made fresh at `slots` and `dataBytes`), renamed over
 // it: a reader still mapping the old file keeps reading it whole. With `keepBytes` and `keepEntries`, only the newest
 // entries within both are kept (the oldest dropped first: entries are appended in the order they were made), so a full
-// store has room again. No writer may hold `path`.
+// store has room again. No writer may hold `path`. `boot`: as StoreWriter::open takes it.
 inline bool compactStore(const std::string &path, const uint8_t *identity, uint32_t slots, uint64_t dataBytes,
-                         std::string &error, uint64_t keepBytes = UINT64_MAX, uint32_t keepEntries = UINT32_MAX)
+                         std::string &error, uint64_t keepBytes = UINT64_MAX, uint32_t keepEntries = UINT32_MAX,
+                         const char *boot = nullptr)
 {
     const std::string fresh = path + ".new";
     unlink(fresh.c_str());
     StoreWriter old, made;
-    if (!old.open(path, identity, slots, dataBytes, error) || !made.open(fresh, identity, slots, dataBytes, error))
+    if (!old.open(path, identity, slots, dataBytes, error, boot) ||
+        !made.open(fresh, identity, slots, dataBytes, error, boot))
         return false;
     const StoreLayout &layout = old.layout();
     std::vector<std::pair<uint64_t, const uint8_t *>> live;  // offset, slot
