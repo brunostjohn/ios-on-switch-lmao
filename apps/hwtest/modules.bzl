@@ -273,6 +273,7 @@ TESTS_DEPTH_SRCS = [
     "tests/LayersPastDepthCases.swift",
     "tests/LayersPastDepthTest.swift",
     "tests/LayersPastTest.swift",
+    "tests/MapsFetchTest.swift",
     "tests/MixedSamplesCases.swift",
     "tests/MixedSamplesTest.swift",
     "tests/MsaaFirstUseTest.swift",
