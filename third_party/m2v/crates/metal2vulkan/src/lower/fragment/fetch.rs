@@ -7,9 +7,9 @@
 //! the ordered pixel interlock, the mechanism of raster order groups and imageblocks: each color
 //! attachment the function reads becomes a storage image of the attachment
 //! (`ResourceKind::TileAttachment(n)`), read at the fragment's pixel (the integer part of
-//! `FragCoord.xy`) once, in the function's first block ([`emit_entry`]), and, when the function
-//! writes that attachment through its first (index 0) output, written there at the return in
-//! place of the output
+//! `FragCoord.xy`), at each use or, where the function decodes it itself, once in its first
+//! block ([`emit_entry`]), and, when the function writes that attachment through
+//! its first (index 0) output, written there at the return in place of the output
 //! (`GraphicsState::storage_attachments`; colors it writes but does not read stay ordinary outputs,
 //! but those the pipeline's state names: a color its draw's render pass instance keeps out of its
 //! subpass for other draws' storage form, `VariantKey::interlocked_colors`). The whole body runs
@@ -1477,17 +1477,32 @@ fn as_held(fb: &mut FunctionBuilder<'_>, texel: SValue, numeric: SampledType) ->
     fb.convert(ConvOp::Bitcast, texel, uvec4)
 }
 
-/// Read each storage-form color input once, in the function's first block, and hold it for the
-/// whole function: the body runs inside the interlock, where no other fragment of the pixel writes
-/// the texel and the invocation's own write comes at its return, so every use would read the same
-/// value. The read and its decode are then one per invocation, not one per use (Hillshade's
-/// `Blending::blend` reads `dst` in 19 modes).
+/// Read once, in the function's first block, each storage-form color input the function decodes
+/// itself (an sRGB or packed format's word, through its integer view) and uses more than once. The
+/// body runs inside the interlock, where no other fragment of the pixel writes the texel and the
+/// invocation's own write comes at its return, so every use reads the same value: Hillshade's
+/// `Blending::blend` reads `dst` and decodes its sRGB bytes in each of 19 modes. A color the image
+/// unit converts is read at its uses: a repeated read there is one surface load, which the stage
+/// compile merges within a block, and holding it from the first block lengthens its live range
+/// over paths that never read it (RenderBox's gradients: 32 registers to 40).
 pub(super) fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
     let fragment = &cx.plan.families.fragment;
+    let uses = |param: u32| {
+        let mut n = 0usize;
+        for inst in cx.body.insts.values() {
+            inst.kind.for_each_value(|v| n += usize::from(v == Value::Arg(ArgIdx::new(param))));
+        }
+        n
+    };
     let held: Vec<ColorInput> = fragment
         .colors
         .iter()
-        .filter(|c| fragment.fetch.contains_key(&c.color))
+        .filter(|c| {
+            fragment
+                .fetch
+                .get(&c.color)
+                .is_some_and(|sc| sc.view.uint_view.is_some() && uses(c.param) > 1)
+        })
         .copied()
         .collect();
     for c in held {

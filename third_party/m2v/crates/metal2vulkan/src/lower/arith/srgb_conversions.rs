@@ -62,7 +62,8 @@ fn words() -> impl Iterator<Item = u32> {
     let own = steps.map(|(step, first)| u32::from(*step) | (u32::from(first) << 16));
     let decoded = SRGB_DECODE_STEPS.iter().map(|k| quotient_bits(u32::from(*k), 4095));
     let quotient = (0..256).map(|c| quotient_bits(c, 255));
-    let encoded = (0..1024).map(|w| (0..4).fold(0, |word, b| word | encoded_byte(4 * w + b) << (8 * b)));
+    let encoded =
+        (0..1024).map(|w| (0..4).fold(0, |word, b| word | encoded_byte(4 * w + b) << (8 * b)));
     own.chain(decoded).chain(quotient).chain(encoded)
 }
 
