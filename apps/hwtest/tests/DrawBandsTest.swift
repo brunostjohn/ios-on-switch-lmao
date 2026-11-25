@@ -12,7 +12,9 @@ import UIKit
 /// preempts these draws. Per case (blended, framebuffer fetch inside the pixel interlock, 4x MSAA resolved) the same
 /// two full-screen draws of a ~15 ms fragment program are made banded and with the facade's band budget at 0: the bytes
 /// must be identical and only the first arm banded (banded_draws, bands); the fetch case must have drawn interlocked
-/// (interlock_draws), so its identity covers interlock tickets across bands and preempts. Then banded draws run back to
+/// (interlock_draws), so its identity covers interlock tickets across bands and preempts. It forces fetch rung 4: by
+/// default rule fetch.twin draws its quad as the barrier twin (gpu.gm20b.interlock_spin's default arm asserts that
+/// route). Then banded draws run back to
 /// back: the kernel's preemption latencies sampled for this process (debug kernels, TegraGM20BPathsABI.h `preempts`,
 /// `preempt_max_us`, buckets `preempt_lt250_us`..`preempt_ge4000_us`) must stay within the budget plus a context
 /// switch, and where each preempt landed (SwitchGpuPreemptLanding.h): `preempt_mid_job` at a band's release inside a
