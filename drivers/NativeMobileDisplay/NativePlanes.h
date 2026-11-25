@@ -171,7 +171,12 @@ struct Limits {
     uint32_t maxLayers = 3;
     bool packedYuvUnsupported = false;    // published as IOMFBYUVPackedUnSupported (24B119 only, see kLimits24B119)
     bool compressionUnsupported = false;  // published as IOMFBMaxSrcPixels' IOMFBCompressionSupport 0 (24B119 only)
-    bool flipUnsupported = false;         // published as IOMFBDisableFlip (24B119 only, see kLimits24B119)
+    bool flipUnsupported = false;         // published as IOMFBDisableFlip
+    bool rotation = false;                // published as IOMFBSupportsRotation and MaxSrcRotRectTotal (24B119 only)
+    // A turned surface Core Animation hands over has fewer whole-1024 pixels than this (display_supports_rotation_p):
+    // one past the largest buffer, so every surface the other limits allow may come turned.
+    uint64_t maxSrcRotRectTotal =
+        static_cast<uint64_t>(switch_window_caps::kSourceWidth) * switch_window_caps::kSourceHeight + 1;
 };
 
 // QuartzCore 24B119 [V] reads every key above the same way (update_display_limits 0x1844e82f0; MaxSrcRectWidthForPipe and
@@ -196,17 +201,15 @@ struct Limits {
 // OGLDisplay::detach_layer adds bit 22, detach_layer keeps bits 31-27, 7 and 3-0 of the layer's earlier flags and
 // detachable_layer_impl adds bits 7 and 23-27).
 //
-// Flips: 24B119's AppleDisplay starts with capability bit 15 at display+0x77c8 set (update_display_limits
-// 0x1844e8428-0x1844e8438) and clears it only for IOMFBDisableFlip (0x1844e922c-0x1844e9258).
-// AppleInternalDisplay::display_supports_rotation_p (0x1844401a4) answers a layer with transform bit 1 and no quarter
-// turn (IOMFB transforms 2 and 3, the swap's transform word as fb_swap_set_layer passes it) by that bit alone, so Core
-// Animation detached half-turned layers untouched and checkDetached refused them (kTransformed): boot 2693043C refused
-// 48 swaps so in anim.timing's rotate180 phases (19:30:58-19:31:13). With the key it turns them through the
-// IOSurfaceAccelerator (TegraVIC takes all 8 transforms) as it does a quarter turn, which it only hands the display for
-// IOMFBSupportsRotation (bit 14) or a display of type 2. Transform 1 alone is answered yes whatever the bit: such a
-// layer still reaches the display, and is refused.
-constexpr Limits kLimits24B119 = {
-    .packedYuvUnsupported = true, .compressionUnsupported = true, .flipUnsupported = true};
+// Flips and turns: 24B119's update_display_limits (0x1844e82f0) fills AppleDisplay's capability halfword at
+// display+0x77c8: bit 15 (flips) set unless IOMFBDisableFlip, bit 14 from IOMFBSupportsRotation, and MaxSrcRotRectTotal
+// from IOMFBMaxSrcPixels into display+0x7718. AppleInternalDisplay::display_supports_rotation_p (0x1844401a4) then lets a
+// layer through turned when its surface's max_src_rect_width >= height, its format is not already a compressed one and
+// align32(w) * align32(h) & ~0x3ff < MaxSrcRotRectTotal: any format, video included. Every transformed layer checkDetached
+// accepts is shown, by window B or C or by the plane conversion job (NativePlanesTurn.h), so 24B119 publishes both and
+// Core Animation stops turning detached layers through VIC itself. 21H461's reading of the keys is unverified: iOS 17
+// publishes neither and keeps Core Animation's own turns.
+constexpr Limits kLimits24B119 = {.packedYuvUnsupported = true, .compressionUnsupported = true, .rotation = true};
 
 // The row and plane-base alignment published for every surface iPadOS sizes for this display (Core Animation's
 // framebuffers through update_display_limits, VideoToolbox's and MediaToolbox's outputs through

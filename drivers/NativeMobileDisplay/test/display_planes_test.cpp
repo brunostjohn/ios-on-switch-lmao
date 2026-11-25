@@ -523,6 +523,47 @@ TEST(DisplayPlanesTurn, AFullScreenTurnedMetalLayerIsScannedByTheWindow)
     EXPECT_TRUE(image.convert);
 }
 
+// QuartzCore 24B119's AppleInternalDisplay::display_supports_rotation_p with IOMFBSupportsRotation published (bit 14),
+// IOMFBDisableFlip not (bit 15 set): every transformed layer it lets through, in every format the display takes, at
+// every scale within the limits, is accepted. Core Animation has no answer to a refused swap.
+bool caSendsTurned(const Surface &s, uint32_t transform, const Limits &limits)
+{
+    if (!(transform & 4))
+        return true;  // flips: bit 15
+    const uint64_t area = static_cast<uint64_t>(roundUp(s.width, 32)) * roundUp(s.height, 32) & ~0x3ffull;
+    return limits.maxSrcRectWidth >= s.height && area < limits.maxSrcRotRectTotal;
+}
+
+TEST(DisplayPlanesTurn, EveryShapeCoreAnimationSendsTurnedIsAccepted)
+{
+    const Limits &limits = kLimits24B119;
+    static const Kind kinds[] = {kKindNv12Video, kKindNv12Full, kKindNv16Video, kKindNv16Full, kKindBgra, kKindRgba};
+    unsigned sent = 0;
+    for (const Kind kind : kinds)
+        for (const uint32_t sw : {64u, 720u, 1280u, 1920u, 4096u})
+            for (const uint32_t sh : {64u, 720u, 1080u, 2304u})
+                for (uint32_t t = 1; t < 8; ++t) {
+                    Layer l;
+                    l.kind = kind;
+                    l.surface = makeSurface(kind, sw, sh);
+                    l.transform = t;
+                    if (!caSendsTurned(l.surface, t, limits))
+                        continue;
+                    l.src = {0, 0, (int32_t)sw, (int32_t)sh};
+                    const bool turned = turnOf(t).transpose;
+                    for (const uint32_t scale : {1u, 2u}) {  // 1:1 and half size, both within 1/4..4x
+                        const int32_t ow = (int32_t)(sw / scale), oh = (int32_t)(sh / scale);
+                        l.dst = turned ? Rect{0, 0, oh, ow} : Rect{0, 0, ow, oh};
+                        ++sent;
+                        EXPECT_EQ(checkDetached(l, W, H, limits), (unsigned)kAccepted)
+                            << "kind " << kind << " " << sw << "x" << sh << " transform " << t << " scale " << scale;
+                        Image image;
+                        EXPECT_TRUE(imageOf(l, W, H, image)) << kind << " " << t;
+                    }
+                }
+    EXPECT_GT(sent, 1000u);
+}
+
 TEST(DisplayPlanes, AcceptanceWithinThePublishedLimits)
 {
     testAcceptance();
@@ -576,7 +617,7 @@ TEST(DisplayPlanes, PublishedAlignmentSuitsEveryReader)
 }
 
 // iOS 27 publishes iOS 17's limits and, where QuartzCore 24B119 no longer goes by J120's chip id, packed 10-bit YUV and
-// compressed surfaces ruled out, and flips, which 24B119 assumes a display scans unless told otherwise.
+// compressed surfaces ruled out, and rotation published.
 TEST(DisplayPlanes, Limits24B119AreIos17sWithoutPackedOrCompressed)
 {
     const Limits ios17;
@@ -586,7 +627,9 @@ TEST(DisplayPlanes, Limits24B119AreIos17sWithoutPackedOrCompressed)
     EXPECT_FALSE(ios17.compressionUnsupported);
     EXPECT_TRUE(ios27.compressionUnsupported);
     EXPECT_FALSE(ios17.flipUnsupported);
-    EXPECT_TRUE(ios27.flipUnsupported);
+    EXPECT_FALSE(ios27.flipUnsupported);  // flips and turns are shown: Core Animation hands them over
+    EXPECT_FALSE(ios17.rotation);
+    EXPECT_TRUE(ios27.rotation);
     EXPECT_EQ(ios27.minScaleFraction, ios17.minScaleFraction);
     EXPECT_EQ(ios27.maxScale, ios17.maxScale);
     EXPECT_EQ(ios27.maxSrcRectWidth, ios17.maxSrcRectWidth);

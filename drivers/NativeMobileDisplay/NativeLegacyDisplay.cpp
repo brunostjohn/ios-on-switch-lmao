@@ -5318,15 +5318,19 @@ public:
         publish("IOMFBScalingLimits", scaling, 4, 32);
         // The panel's pixel clock (TegraDisplayPower.cpp: PLLD 468 MHz, 78 MHz for 60 Hz) as both clocks [I: what
         // valid_clocking_p compares them with is not reversed; A10X computes MaxVideoSrcDownscalingWidth from its own].
-        const Entry source[] = {{"MaxSrcRectWidth", limits.maxSrcRectWidth},
-                                {"MaxSrcRectTotal", limits.maxSrcRectTotal},
-                                {"MaxSrcBufferWidth", limits.maxSrcBuffer},
-                                {"MaxSrcBufferHeight", limits.maxSrcBufferHeight},
-                                {"MaxVideoSrcDownscalingWidth", limits.maxSrcRectWidth},
-                                {"VideoClock", 78000000},
-                                {"PixelClock", 78000000},
-                                {"IOMFBCompressionSupport", 0}};
-        publish("IOMFBMaxSrcPixels", source, limits.compressionUnsupported ? 8 : 7, 64);
+        Entry source[9] = {{"MaxSrcRectWidth", limits.maxSrcRectWidth},
+                           {"MaxSrcRectTotal", limits.maxSrcRectTotal},
+                           {"MaxSrcBufferWidth", limits.maxSrcBuffer},
+                           {"MaxSrcBufferHeight", limits.maxSrcBufferHeight},
+                           {"MaxVideoSrcDownscalingWidth", limits.maxSrcRectWidth},
+                           {"VideoClock", 78000000},
+                           {"PixelClock", 78000000}};
+        unsigned sourceKeys = 7;
+        if (limits.compressionUnsupported)
+            source[sourceKeys++] = {"IOMFBCompressionSupport", 0};
+        if (limits.rotation)
+            source[sourceKeys++] = {"MaxSrcRotRectTotal", limits.maxSrcRotRectTotal};
+        publish("IOMFBMaxSrcPixels", source, sourceKeys, 64);
         const Entry base[] = {{"PlaneBaseAlignmentLinear", native_planes::kPublishedBaseAlignment}};
         publish("DisplayPipePlaneBaseAlignment", base, 1, 64);
         const Entry layers[] = {{"MaxNumLayers", limits.maxLayers}};
@@ -5335,6 +5339,8 @@ public:
             setProperty("IOMFBYUVPackedUnSupported", true);
         if (limits.flipUnsupported)
             setProperty("IOMFBDisableFlip", true);
+        if (limits.rotation)
+            setProperty("IOMFBSupportsRotation", true);
     }
 
     IOReturn getGammaTable(void *table) override

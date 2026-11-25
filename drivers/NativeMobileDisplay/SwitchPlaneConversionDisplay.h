@@ -242,14 +242,14 @@ int planeConvertSlot(int sourceSlot, const native_planes::Layer &layer, uint32_t
             desc.fourcc = layer.surface.format;
             desc.width = layer.surface.width;
             desc.height = layer.surface.height;
-            desc.planes = 2;
+            desc.planes = layer.surface.planes > 1 ? layer.surface.planes : 1;  // NV12 and NV16 2, a packed 4:2:2 1
             desc.length = layer.surface.descriptorBytes;
             desc.colorMatrix = shownMatrix;
             desc.transfer = transfer;
             desc.primaries = primaries;
             desc.chromaTop = chromaTop;
             desc.chromaBottom = chromaBottom;
-            for (unsigned p = 0; p < 2; ++p) {
+            for (unsigned p = 0; p < desc.planes && p < 2; ++p) {
                 desc.planeOffset[p] = layer.surface.offset[p];
                 desc.planeBytesPerRow[p] = layer.surface.stride[p];
                 desc.planeHeight[p] = layer.surface.planeHeight[p];

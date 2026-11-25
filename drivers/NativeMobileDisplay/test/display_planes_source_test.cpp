@@ -127,7 +127,10 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     const CodeText limits = Block(source, "void publishPlaneLimits()");
     EXPECT_TRUE(limits.has("{\"PlaneBaseAlignmentLinear\", native_planes::kPublishedBaseAlignment}"));
     // iOS 27's own limits; iOS 17's dictionary has no key they add.
-    EXPECT_TRUE(limits.has("publish(\"IOMFBMaxSrcPixels\", source, limits.compressionUnsupported ? 8 : 7, 64);"));
+    EXPECT_TRUE(limits.has("publish(\"IOMFBMaxSrcPixels\", source, sourceKeys, 64);"));
+    EXPECT_TRUE(limits.before("if (limits.compressionUnsupported) source[sourceKeys++]",
+                              "if (limits.rotation) source[sourceKeys++] = {\"MaxSrcRotRectTotal\""));
+    EXPECT_TRUE(limits.has("if (limits.rotation) setProperty(\"IOMFBSupportsRotation\", true);"));
     EXPECT_TRUE(limits.before("#if SWITCH_IPSW_KIND_24B119", "native_planes::kLimits24B119;"));
     EXPECT_TRUE(limits.has("if (limits.packedYuvUnsupported) setProperty(\"IOMFBYUVPackedUnSupported\", true);"));
     EXPECT_TRUE(limits.has("if (limits.flipUnsupported) setProperty(\"IOMFBDisableFlip\", true);"));
