@@ -83,25 +83,38 @@ struct RecorderRing {
     var error: String?
 
     init(dump path: String) {
-        guard let file = FileManager.default.contents(atPath: path), file.count > Self.header else {
-            error = "unreadable"
-            return
+        switch Self.ring(dump: path) {
+        case .success(let data): self.init(ring: data)
+        case .failure(let why): self.init(error: why.text)
         }
-        let text = String(decoding: file.prefix(Self.header), as: UTF8.self)
+    }
+
+    private init(error: String) {
+        self.error = error
+    }
+
+    struct Unreadable: Error {
+        let text: String
+    }
+
+    /// The ring inside a dump file: the body inflated and split at the stackshot's size.
+    static func ring(dump path: String) -> Result<Data, Unreadable> {
+        guard let file = FileManager.default.contents(atPath: path), file.count > header else {
+            return .failure(Unreadable(text: "unreadable"))
+        }
+        let text = String(decoding: file.prefix(header), as: UTF8.self)
         let fields = KernelLine.fields(text)
         guard text.hasPrefix("SwitchRecorder 2 "), let shot = Int(fields["shot"] ?? ""),
             let ring = Int(fields["ring"] ?? ""), let packed = Int(fields["deflate"] ?? ""),
-            file.count >= Self.header + packed
+            file.count >= header + packed
         else {
-            error = "no complete SwitchRecorder 2 header"
-            return
+            return .failure(Unreadable(text: "no complete SwitchRecorder 2 header"))
         }
-        let body = file.subdata(in: Self.header..<(Self.header + packed)) as NSData
+        let body = file.subdata(in: header..<(header + packed)) as NSData
         guard let whole = try? body.decompressed(using: .zlib) as Data, whole.count == shot + ring else {
-            error = "the body does not inflate to shot=\(shot) ring=\(ring)"
-            return
+            return .failure(Unreadable(text: "the body does not inflate to shot=\(shot) ring=\(ring)"))
         }
-        self.init(ring: whole.subdata(in: shot..<(shot + ring)))
+        return .success(whole.subdata(in: shot..<(shot + ring)))
     }
 
     init(ring data: Data) {
