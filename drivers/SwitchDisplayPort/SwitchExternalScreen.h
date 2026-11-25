@@ -5,7 +5,7 @@
 #include <IOKit/IOWorkLoop.h>
 #include "OriginalLegacyFramebufferABI.h"
 #include "SwitchDPModes.h"
-#include "SwitchExternalGeometry.h"
+#include "SwitchExternalPlanes.h"
 #include "../TegraSMMU/TegraSMMUDomain.h"
 #include "../TegraGM20B/SwitchGpuReady.h"
 #include "../TegraVIC/SwitchNativeScanout.h"
@@ -52,43 +52,52 @@ public:
     IOReturn platformInternalUnplug() override { return kIOReturnUnsupported; }
     void platformRefreshRates() override {}
 private:
-    static constexpr unsigned kSlots = 3;
+    static constexpr unsigned kLayers = native_planes::kLayers, kWindows = switch_external::kWindows;
+    // Every window's surface on the screen and the next frame's, and a spare for each layer to stay mapped across frames.
+    static constexpr unsigned kSlots = 8;
     static constexpr uint64_t kSlotBase = 0x10000000, kSlotSpan = 68ULL << 20;
     static constexpr uint32_t kTablePages = 1 + kSlots * (kSlotSpan >> 22);
-    static_assert(kTablePages == 52);
-    static_assert(kTablePages == 1 + TegraSMMUDomain::tablesFor(kSlotBase, kSlots * kSlotSpan));
+    static_assert(kTablePages == 137);
+    static_assert(kTablePages == 1 + TegraSMMUDomain::tablesFor(kSlotBase, uint64_t{kSlots} * kSlotSpan));
+    static_assert(kSlotBase + uint64_t{kSlots} * kSlotSpan <= (1ULL << 32));
+    static constexpr unsigned kFenceTokens = kWindows * (3 + SWITCH_GPU_BACKING_PROMISES);
     struct Slot {
         SwitchNativeScanout read;
         OSObject *surface;
         IOMemoryDescriptor *memory;
         switch_gpu_backing *backing;
-        void *layout;
-        uint64_t allocationId, generation, offset, used, allocationBytes, blockBytes;
-        uint32_t pages, stride, kind, width, height, colorDepth;
-        bool counted, presented;
-    } slots[kSlots] = {};
-    struct LayerRect {
-        switch_external::Rect src, dst;
-        bool valid;
-    } layerRects[switch_external::kLayers] = {};
+        void *hold;
+        tgm_layout block;  // bpp 0: the surface is in rows
+        uint64_t allocationId, generation, offset, used, allocationBytes;
+        uint32_t pages;
+        bool counted;
+    };
+    Slot *slots = nullptr;  // kSlots of them, allocated at begin: the object stays within the kernel's 16 KiB
+    // Each layer as the swaps kicked so far gave it (a layer a swap does not update keeps its surface and geometry).
+    struct LayerRecord {
+        OSObject *surface;
+        native_planes::Layer layer;
+    } layerRecords[kLayers] = {};
     SwitchDisplayPort *transport = nullptr;
-    IOWorkLoop *loop = nullptr;
+    IOWorkLoop *loop = nullptr, *fenceLoop = nullptr;
     IOLock *colorLock = nullptr;
-    IOInterruptEventSource *completion = nullptr, *readySource = nullptr;
+    IOInterruptEventSource *completion = nullptr, *readySource = nullptr, *fenceSource = nullptr;
     switch_gpu_ready_watch *ready = nullptr;
     TegraDisplayB *dcb = nullptr;
     switch_dma_buffer tables = {};
     TegraSMMUDomain domain;
     struct switch_dp_mode_list modes = {};
     struct switch_dp_mode mode = {};
-    switch_external::ExternalFrame pendingFrame = {};
+    switch_external::Frame pendingFrame = {};
+    switch_gpu_backing_token fenceTokens[kFenceTokens] = {};
+    uint32_t fenceCount = 0;
+    int front[kWindows] = {-1, -1, -1}, drawing[kWindows] = {-1, -1, -1};
     int64_t harmonyMatrix[9] = {};
     int64_t accessibilityMatrix[9] = {};
     uint32_t accessibilityScale = 0x10000u;
-    uint32_t latchedAddr = 0;
-    uint64_t sequence = 0, slotUses = 0, refreshPeriod = 0, interval = 0, linkGeneration = 0, gpuGeneration = 0;
+    uint64_t slotUses = 0, refreshPeriod = 0, interval = 0, linkGeneration = 0, gpuGeneration = 0;
     uint64_t activeGeometry = 0, selectionGeneration = 0;
-    int selectedMode = -1, front = -1, drawing = -1;
+    int selectedMode = -1;
     uint32_t device = 0;
     bool logicalPM = false, connected = false, mapped = false, gpuPending = false, latched = false, kicking = false;
     const OriginalLegacySwapRequest *pending = nullptr;
@@ -96,20 +105,32 @@ private:
 #if DEVELOPMENT || DEBUG
     uint32_t diagValidateRejects = 0;
     uint32_t diagScanoutFailures = 0;
-    uint32_t diagFrameLogs = 0;
-    uint32_t diagLastPos = ~0u, diagLastSize = ~0u, diagLastSurfW = 0, diagLastSurfH = 0, diagLastKind = ~0u;
+    uint32_t diagShapeLogs = 0;
+    uint64_t diagShape = 0;
+    void noteShape(uint32_t updated, const native_planes::Layer layers[], const bool present[],
+                   const switch_external::Plan &plan, const int slotOf[]);
+    void noteUnshown(unsigned layer, int why);
 #endif
     static void completionFired(OSObject *owner, IOInterruptEventSource *, int);
+    static void fenceFired(OSObject *owner, IOInterruptEventSource *, int);
+    static native_planes::Layer layerOf(const uint8_t *request, unsigned layer, OSObject *surface);
     void releaseEventSources();
     void publishActiveGeometry();
     void drainSwapQueue();
     void clearLayerState();
-    bool applyTiledLayout(Slot &slot, uint64_t firstPage, uint64_t bytes);
+    bool applyLayout(Slot &slot, uint64_t firstPage, uint64_t bytes);
     bool mapDomain();
     void cleanDomain();
     void releaseSlot(unsigned slot);
     void releaseRead(unsigned slot);
-    int prepareSlot(OSObject *surface);
+    bool slotShown(int slot) const;
+    int prepareSlot(OSObject *surface, uint32_t building);
+    switch_external::Layout slotLayout(const Slot &slot) const;
+    void takeLayers(const uint8_t *request, bool present[], native_planes::Layer layers[], OSObject *surfaces[]);
+    void releaseUnshown(uint32_t building);
+    void abandonDrawing();
+    void promoteDrawing();
+    void fenceFrame();
     void latchFrame();
     bool retire(const OriginalLegacySwapRequest *request, bool shown);
     void dropFrame(const OriginalLegacySwapRequest *request);

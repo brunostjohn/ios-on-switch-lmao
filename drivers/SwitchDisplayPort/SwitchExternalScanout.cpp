@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 #include "SwitchExternalScreen.h"
-#include <mach/mach_time.h>
 #include "TegraDisplayB.h"
 #include "../NativeMobileDisplay/NativeLegacyRequest.h"
 #include "../NativeMobileDisplay/SwitchSurfaceUse.h"
 #include "../TegraDisplayFlip/TegraScanoutCopy.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
-#include "../TegraHost1x/SwitchHost1xTokenFence.h"
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUPublish.h"
+#include "../TegraVIC/TegraVICSurface.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 
 extern "C" IOMemoryDescriptor *native_legacy_surface_descriptor(OSObject *);
 extern "C" uint64_t native_legacy_surface_width(OSObject *), native_legacy_surface_height(OSObject *);
 extern "C" uint64_t native_legacy_surface_stride(OSObject *), native_legacy_surface_allocation(OSObject *);
 extern "C" uint32_t native_legacy_surface_format(OSObject *), native_legacy_surface_planes(OSObject *);
+extern "C" uint64_t native_planes_surface_plane_offset(OSObject *, uint32_t),
+    native_planes_surface_plane_bytes_per_row(OSObject *, uint32_t),
+    native_planes_surface_plane_height(OSObject *, uint32_t);
 
 bool SwitchExternalScreen::mapDomain()
 {
@@ -22,14 +24,14 @@ bool SwitchExternalScreen::mapDomain()
         return true;
     if (!tables.memory && !switch_dma_alloc(&tables, kTablePages * 4096u))
         return false;
-    if (!domain.va && (!domain.init(tables.va, tables.pa, kTablePages) ||
-                      !domain.reserve(kSlotBase, kSlots * kSlotSpan)))
+    if (!domain.va &&
+        (!domain.init(tables.va, tables.pa, kTablePages) || !domain.reserve(kSlotBase, kSlots * kSlotSpan)))
         return false;
     cleanDomain();
     char why[128];
-    mapped = tegra_smmu_attach(TEGRA_SMMU_ASID_DISPLAY_B, domain.ptb(), TEGRA_SMMU_DCB_ASID,
-                              TEGRA_SMMU_TRANSLATION_ENABLE_0, (1u << 2) | (1u << 4) | (1u << 6),
-                              why, sizeof(why)) == 0;
+    mapped =
+        tegra_smmu_attach(TEGRA_SMMU_ASID_DISPLAY_B, domain.ptb(), TEGRA_SMMU_DCB_ASID, TEGRA_SMMU_TRANSLATION_ENABLE_0,
+                          (1u << 2) | (1u << 4) | (1u << 6), why, sizeof(why)) == 0;
     if (!mapped)
         IOLog("SwitchDisplayPort: external scanout: %s\n", why);
     return mapped;
@@ -58,8 +60,8 @@ void SwitchExternalScreen::releaseSlot(unsigned index)
         switch_gpu_backing_scanout(slot.backing, 0);
         switch_gpu_backing_release(slot.backing);
     }
-    if (slot.layout)
-        tegra_gm20b_surface_unhold(slot.layout);
+    if (slot.hold)
+        tegra_gm20b_surface_unhold(slot.hold);
     if (slot.pages) {
         domain.unmap(kSlotBase + index * kSlotSpan, slot.pages);
         cleanDomain();
@@ -72,44 +74,42 @@ void SwitchExternalScreen::releaseSlot(unsigned index)
     slot = {};
 }
 
-bool SwitchExternalScreen::applyTiledLayout(Slot &slot, uint64_t firstPage, uint64_t bytes)
+bool SwitchExternalScreen::slotShown(int index) const
+{
+    for (unsigned w = 0; w < kWindows; ++w)
+        if (index >= 0 && (front[w] == index || drawing[w] == index))
+            return true;
+    return false;
+}
+
+// The GPU's layout of the surface, held while the slot maps it so it is not laid out again under the windows.
+bool SwitchExternalScreen::applyLayout(Slot &slot, uint64_t firstPage, uint64_t bytes)
 {
     int tiled = 0;
     void *held = tegra_gm20b_surface_hold(firstPage, &tiled);
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
-    if (tegra_gm20b_surface_compressed(firstPage)) {
+    slot.block = {};
+    if (tegra_gm20b_surface_compressed(firstPage) ||
+        (tiled && (tegra_gm20b_surface_layout(firstPage, &slot.block) != 1 || slot.block.bytes > bytes))) {
+        slot.block = {};
         if (held)
             tegra_gm20b_surface_unhold(held);
         return false;
     }
-    if (!tiled) {
-        slot.layout = held;
-        return true;
-    }
-    tgm_layout layout = {};
-    if (tegra_gm20b_surface_layout(firstPage, &layout) != 1 || layout.bytes > bytes ||
-        layout.width < slot.width || layout.height < slot.height ||
-        layout.row_bytes < slot.width * 4u || (layout.row_bytes & 63u) != 0u ||
-        layout.row_bytes > 0xffffu || layout.y_log2 > 5u) {
-        if (held)
-            tegra_gm20b_surface_unhold(held);
-        return false;
-    }
-    slot.layout = held;
-    slot.kind = 2u | (static_cast<uint32_t>(layout.y_log2) << 4);
-    slot.stride = layout.row_bytes;
-    slot.blockBytes = layout.bytes;
+    slot.hold = held;
     return true;
 }
 
-int SwitchExternalScreen::prepareSlot(OSObject *surface)
+// The slot mapping `surface` with a read of it taken, or -16 / SWITCH_GPU_BACKING_STALE to retry when the GPU is ready,
+// or -1 when it cannot be scanned. `building`: slots this frame already took.
+int SwitchExternalScreen::prepareSlot(OSObject *surface, uint32_t building)
 {
     auto *memory = native_legacy_surface_descriptor(surface);
     SwitchNativeScanout snapshot = {};
     switch_gpu_backing *held = nullptr;
-    for (const auto &slot : slots)
-        if (slot.surface == surface && slot.memory == memory)
-            held = slot.backing;
+    for (unsigned i = 0; i < kSlots; ++i)
+        if (slots[i].surface == surface && slots[i].memory == memory)
+            held = slots[i].backing;
     if (held) {
         const int heldError = switch_native_scanout_pitch_held(surface, held, &snapshot);
         if (heldError == -16)
@@ -128,7 +128,7 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
     const uint64_t offset = snapshot.pitchOffset;
     const uint64_t bytes = native_legacy_surface_allocation(surface);
     const uint32_t pages = static_cast<uint32_t>((bytes + 4095) / 4096);
-    if (!memory || !allocation.pages || !bytes || (offset & 4095) || bytes > kSlotSpan ||
+    if (!memory || !allocation.pages || !bytes || (offset & 4095) || bytes > kSlotSpan || bytes > memory->getLength() ||
         offset / 4096 > allocation.page_count || pages > allocation.page_count - offset / 4096 || !mapDomain()) {
         switch_native_scanout_release(&snapshot);
         return -1;
@@ -136,20 +136,20 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
     int victim = -1;
     for (unsigned i = 0; i < kSlots; ++i) {
         auto &slot = slots[i];
+        const bool free = !slotShown(static_cast<int>(i)) && !(building & (1u << i));
         if (slot.memory == memory && slot.surface == surface && slot.pages == pages && slot.offset == offset &&
             slot.allocationId == allocation.allocation_id && slot.generation == allocation.allocation_generation) {
             const uint64_t firstPage = allocation.pages[offset / 4096] & ~0xfffULL;
             __atomic_thread_fence(__ATOMIC_SEQ_CST);
             if (tegra_gm20b_surface_compressed(firstPage)) {
                 switch_native_scanout_release(&snapshot);
-                if (static_cast<int>(i) != front && static_cast<int>(i) != drawing)
+                if (free)
                     releaseSlot(i);
                 return -1;
             }
-            if (!slot.layout && !applyTiledLayout(slot, firstPage, bytes)) {
+            if (!slot.hold && !applyLayout(slot, firstPage, bytes)) {
                 switch_native_scanout_release(&snapshot);
-                if (static_cast<int>(i) != front && static_cast<int>(i) != drawing &&
-                    tegra_gm20b_surface_compressed(firstPage))
+                if (free && tegra_gm20b_surface_compressed(firstPage))
                     releaseSlot(i);
                 return -1;
             }
@@ -169,19 +169,12 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
             }
             return static_cast<int>(i);
         }
-        if (static_cast<int>(i) != front && static_cast<int>(i) != drawing &&
-            (victim < 0 || slot.used < slots[victim].used))
+        if (free && (victim < 0 || slot.used < slots[victim].used))
             victim = static_cast<int>(i);
     }
     const uint64_t surfW = native_legacy_surface_width(surface);
     const uint64_t surfH = native_legacy_surface_height(surface);
-    const uint64_t pitch = native_legacy_surface_stride(surface);
-    const uint32_t colorDepth = switch_external::colorDepthOf(native_legacy_surface_format(surface),
-                                                              native_legacy_surface_planes(surface));
-    if (victim < 0 || !colorDepth || !surfW || !surfH || surfW > SWITCH_DP_MAX_WIDTH || surfH > SWITCH_DP_MAX_HEIGHT ||
-        pitch > 0xffff || (pitch & 63u) ||
-        !native_legacy_surface_bounds(static_cast<uint32_t>(surfW), static_cast<uint32_t>(surfH), pitch, bytes,
-                                      memory->getLength())) {
+    if (victim < 0 || !surfW || !surfH || surfW > SWITCH_DP_MAX_WIDTH || surfH > SWITCH_DP_MAX_HEIGHT) {
         switch_native_scanout_release(&snapshot);
         return -1;
     }
@@ -209,10 +202,6 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
     slot.allocationId = allocation.allocation_id;
     slot.generation = allocation.allocation_generation;
     slot.allocationBytes = bytes;
-    slot.blockBytes = 0;
-    slot.width = static_cast<uint32_t>(surfW);
-    slot.height = static_cast<uint32_t>(surfH);
-    slot.colorDepth = colorDepth;
     slot.used = ++slotUses;
     slot.backing = snapshot.view.native;
     switch_gpu_backing_retain(slot.backing);
@@ -220,8 +209,7 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
     slot.counted = switch_display::surfaceUseCounted(surface);
     if (slot.counted)
         switch_surface_use_increment(surface, 0);
-    slot.stride = static_cast<uint32_t>(pitch);
-    if (!applyTiledLayout(slot, allocation.pages[offset / 4096] & ~0xfffULL, bytes)) {
+    if (!applyLayout(slot, allocation.pages[offset / 4096] & ~0xfffULL, bytes)) {
         releaseSlot(index);
         return -1;
     }
@@ -229,15 +217,83 @@ int SwitchExternalScreen::prepareSlot(OSObject *surface)
     return victim;
 }
 
-void SwitchExternalScreen::kickSwapQueue()
+switch_external::Layout SwitchExternalScreen::slotLayout(const Slot &slot) const
 {
-    if (dcb && switch_abi_load<const void *>(this, vsyncClientList))
-        dcb->frameInterrupt(true);
-    if (kicking || !dcb || drawing >= 0 || pending || device != 2)
-        return;
-    kicking = true;
-    requestFrame();
-    kicking = false;
+    return switch_external::layoutOf(slot.block.bpp ? &slot.block : nullptr, slot.read.allocation.layout);
+}
+
+native_planes::Layer SwitchExternalScreen::layerOf(const uint8_t *request, unsigned layer, OSObject *surface)
+{
+    const auto narrow = [](uint64_t v) {
+        return v > 0xffffffffULL ? 0xffffffffu : static_cast<uint32_t>(v);
+    };
+    native_planes::Layer l;
+    native_planes::Surface &f = l.surface;
+    f.format = native_legacy_surface_format(surface);
+    f.planes = native_legacy_surface_planes(surface);
+    f.width = narrow(native_legacy_surface_width(surface));
+    f.height = narrow(native_legacy_surface_height(surface));
+    f.allocation = native_legacy_surface_allocation(surface);
+    const IOMemoryDescriptor *memory = native_legacy_surface_descriptor(surface);
+    f.descriptorBytes = memory && memory->metaCast("IOMemoryDescriptor") ? memory->getLength() : 0;
+    TegraVICSurfaceDesc color = {};
+    switch_vic_surface_color(surface, &color);
+    f.colorMatrix = color.colorMatrix;
+    f.transfer = color.transfer;
+    f.primaries = color.primaries;
+    f.chromaTop = color.chromaTop;
+    f.chromaBottom = color.chromaBottom;
+    if (f.planes >= 2) {
+        for (uint32_t p = 0; p < 2; ++p) {
+            f.offset[p] = native_planes_surface_plane_offset(surface, p);
+            f.stride[p] = narrow(native_planes_surface_plane_bytes_per_row(surface, p));
+            f.planeHeight[p] = narrow(native_planes_surface_plane_height(surface, p));
+        }
+    } else {
+        f.stride[0] = narrow(native_legacy_surface_stride(surface));
+        f.planeHeight[0] = f.height;
+    }
+    l.kind = native_planes::kindOf(f.format, f.planes);
+    l.src = native_planes::rectAt(request, swapSourceRects, layer);
+    l.dst = native_planes::rectAt(request, swapDestinationRects, layer);
+    l.transform = native_planes::wordAt(request, swapTransforms + 4u * layer) & 7u;
+    return l;
+}
+
+// The layers a kicked swap shows: an updated layer as the swap gives it, any other as an earlier kick took it. A layer
+// whose inherited surface is not the one taken (a swap retired unkicked set it) has no known geometry and is not shown.
+void SwitchExternalScreen::takeLayers(const uint8_t *request, bool present[], native_planes::Layer layers[],
+                                      OSObject *surfaces[])
+{
+    const uint32_t updated = native_planes::wordAt(request, swapUpdated);
+    OSObject *effective[kLayers] = {};
+    memcpy(effective, request + swapEffectiveSurfaces, sizeof(effective));
+    for (unsigned i = 0; i < kLayers; ++i) {
+        OSObject *surface = effective[i] && effective[i]->metaCast("IOSurface") ? effective[i] : nullptr;
+        LayerRecord &record = layerRecords[i];
+        if (updated & (1u << i)) {
+            record.surface = surface;
+            if (surface)
+                record.layer = layerOf(request, i, surface);
+        } else if (surface != record.surface) {
+#if DEVELOPMENT || DEBUG
+            if (surface)
+                noteUnshown(i, -2);
+#endif
+            record.surface = nullptr;
+        }
+        present[i] = record.surface != nullptr;
+        layers[i] = record.layer;
+        surfaces[i] = record.surface;
+    }
+}
+
+// The reads of slots this frame took that no window shows.
+void SwitchExternalScreen::releaseUnshown(uint32_t building)
+{
+    for (unsigned i = 0; i < kSlots; ++i)
+        if ((building & (1u << i)) && !slotShown(static_cast<int>(i)))
+            releaseRead(i);
 }
 
 void SwitchExternalScreen::requestFrame()
@@ -246,358 +302,51 @@ void SwitchExternalScreen::requestFrame()
     if (!request)
         return;
     const auto *bytes = reinterpret_cast<const uint8_t *>(request);
-    uint32_t updated = 0;
-    OSObject *effectiveSurfaces[switch_external::kLayers] = {};
-    memcpy(&updated, bytes + swapUpdated, sizeof(updated));
-    memcpy(effectiveSurfaces, bytes + swapEffectiveSurfaces, sizeof(effectiveSurfaces));
-
-    int activeLayer = -1;
-    unsigned activeCount = 0;
-    for (unsigned i = 0; i < switch_external::kLayers; ++i) {
-        if ((updated & (1u << i)) != 0u) {
-            if (effectiveSurfaces[i]) {
-                switch_external::Rect src = {}, dst = {};
-                memcpy(&src, bytes + swapSourceRects + i * sizeof(src), sizeof(src));
-                memcpy(&dst, bytes + swapDestinationRects + i * sizeof(dst), sizeof(dst));
-                layerRects[i] = {src, dst, true};
-            } else {
-                layerRects[i] = {};
-            }
-        }
-        if (effectiveSurfaces[i]) {
-            activeLayer = static_cast<int>(i);
-            ++activeCount;
-        }
-    }
-    if (activeCount == 0u) {
-        dcb->windowOff();
-        pending = request;
-        latched = true;
-        latchedAddr = 0;
-        dcb->frameInterrupt(true);
-        return;
-    }
-    if (activeCount > 1u || !layerRects[activeLayer].valid) {
-#if DEVELOPMENT || DEBUG
-        if (diagScanoutFailures < 8u) {
-            ++diagScanoutFailures;
-            IOLog("SwitchDisplayPort: requestFrame dropped activeCount=%u activeLayer=%d rectValid=%u\n",
-                  activeCount, activeLayer, activeLayer >= 0 ? static_cast<unsigned>(layerRects[activeLayer].valid) : 0u);
-        }
-#endif
-        dropFrame(request);
-        return;
-    }
-    OSObject *surface = effectiveSurfaces[activeLayer];
-    const int prepared = prepareSlot(surface);
-    if (prepared < 0) {
+    bool present[kLayers] = {};
+    native_planes::Layer layers[kLayers];
+    OSObject *surfaces[kLayers] = {};
+    takeLayers(bytes, present, layers, surfaces);
+    native_planes::Image images[kLayers];
+    int slotOf[kLayers] = {-1, -1, -1, -1};
+    uint32_t building = 0;
+    for (unsigned i = 0; i < kLayers; ++i) {
+        if (!present[i])
+            continue;
+        const int prepared = prepareSlot(surfaces[i], building);
         if (prepared == -16 || prepared == SWITCH_GPU_BACKING_STALE) {
+            releaseUnshown(building);
             retryWhenReady();
-        } else {
-#if DEVELOPMENT || DEBUG
-            if (diagScanoutFailures < 8u) {
-                ++diagScanoutFailures;
-                IOLog("SwitchDisplayPort: prepareSlot failed err=%d surf=%llux%llu stride=%llu alloc=%llu\n",
-                      prepared, static_cast<unsigned long long>(native_legacy_surface_width(surface)),
-                      static_cast<unsigned long long>(native_legacy_surface_height(surface)),
-                      static_cast<unsigned long long>(native_legacy_surface_stride(surface)),
-                      static_cast<unsigned long long>(native_legacy_surface_allocation(surface)));
+            return;
+        }
+        if (prepared >= 0) {
+            building |= 1u << prepared;
+            if (switch_external::imageFor(layers[i], slotLayout(slots[prepared]), mode.hactive, mode.vactive,
+                                          images[i])) {
+                slotOf[i] = prepared;
+                continue;
             }
-#endif
-            dropFrame(request);
         }
-        return;
-    }
-    const unsigned index = static_cast<unsigned>(prepared);
-    const auto &slot = slots[index];
-    const bool tiled = slot.kind != 0;
-    switch_external::SurfaceLayout layout = {};
-    layout.surfW = slot.width;
-    layout.surfH = slot.height;
-    layout.stride = slot.stride;
-    layout.colorDepth = slot.colorDepth;
-    layout.mappedBytes = slot.allocationBytes;
-    layout.blockLinear = tiled;
-    layout.yLog2 = tiled ? static_cast<uint8_t>((slot.kind >> 4) & 7u) : 0u;
-    layout.rowBytes = tiled ? slot.stride : 0u;
-    layout.blockBytes = tiled ? slot.blockBytes : 0u;
-    const auto frame = switch_external::switch_external_frame(
-        layout, layerRects[activeLayer].src, layerRects[activeLayer].dst, mode.hactive, mode.vactive);
-    if (!frame.valid) {
+        present[i] = false;
 #if DEVELOPMENT || DEBUG
-        if (diagScanoutFailures < 8u) {
-            ++diagScanoutFailures;
-            const auto &rect = layerRects[activeLayer];
-            IOLog("SwitchDisplayPort: frame geometry invalid surf=%ux%u stride=%u kind=%#x src=(%d,%d,%d,%d) "
-                  "dst=(%d,%d,%d,%d) mode=%ux%u\n",
-                  slot.width, slot.height, slot.stride, slot.kind, rect.src.x, rect.src.y, rect.src.w, rect.src.h,
-                  rect.dst.x, rect.dst.y, rect.dst.w, rect.dst.h, mode.hactive, mode.vactive);
-        }
+        noteUnshown(i, prepared);
 #endif
-        if (front != prepared)
-            releaseRead(index);
-        dropFrame(request);
-        return;
     }
-    if (!frame.visible) {
-        if (front != prepared)
-            releaseRead(index);
-        dcb->windowOff();
-        pending = request;
-        latched = true;
-        latchedAddr = 0;
-        dcb->frameInterrupt(true);
-        return;
-    }
-    pendingFrame = frame;
-    drawing = prepared;
+    switch_external::WindowState states[kWindows];
+    for (unsigned w = 0; w < kWindows; ++w)
+        states[w] = dcb->windowState(w);
+    const switch_external::Plan plan = switch_external::planWindows(present, images, states);
+    for (unsigned w = 0; w < kWindows; ++w)
+        drawing[w] = plan.window[w].on ? slotOf[plan.window[w].layer] : -1;
+    releaseUnshown(building);
+    uint32_t iova[kLayers] = {};
+    for (unsigned i = 0; i < kLayers; ++i)
+        if (slotOf[i] >= 0)
+            iova[i] = static_cast<uint32_t>(kSlotBase + static_cast<uint64_t>(slotOf[i]) * kSlotSpan);
+    pendingFrame = switch_external::frameOf(plan, images, iova, dcb->pixelClockHz());
     pending = request;
     gpuGeneration = linkGeneration;
-    const auto &producer = slots[index].read.view.producer;
-    const bool promised = switch_gpu_backing_promised(slots[index].backing) != 0;
-    switch_gpu_backing_token hostTokens[SWITCH_HOST1X_TOKEN_FENCE_MAX] = {};
-    uint32_t hostCount = 0;
-    bool hostOnly = !promised;
-    bool readyNow = !promised;
-    const auto inspectToken = [&](const switch_gpu_backing_token &token) {
-        if (!token.engine || switch_gpu_backing_token_external_status(&token) == 1)
-            return;
-        readyNow = false;
-        if (hostOnly && (token.engine == SWITCH_GPU_ENGINE_VIC || token.engine == SWITCH_GPU_ENGINE_NVDEC) &&
-            hostCount < SWITCH_HOST1X_TOKEN_FENCE_MAX) {
-            hostTokens[hostCount++] = token;
-        } else {
-            hostOnly = false;
-        }
-    };
-    inspectToken(producer);
-    for (uint32_t i = 0; i < slots[index].read.view.waitCount; ++i)
-        inspectToken(slots[index].read.view.waits[i]);
-    if (readyNow) {
-        latchFrame();
-        return;
-    }
-    if (hostOnly && hostCount) {
-        gpuPending = true;
-        const int fenceResult = switch_host1x_token_fence(
-            hostTokens, hostCount,
-            [](void *context, int status) {
-                static_cast<SwitchExternalScreen *>(context)->gpuComplete(status);
-            },
-            this);
-        if (!fenceResult) {
-            ++sequence;
-            return;
-        }
-        gpuPending = false;
-        if (fenceResult != -16) {
-            pending = nullptr;
-            drawing = -1;
-            if (front != prepared)
-                releaseRead(index);
 #if DEVELOPMENT || DEBUG
-            if (diagScanoutFailures < 8u) {
-                ++diagScanoutFailures;
-                IOLog("SwitchDisplayPort: switch_host1x_token_fence failed err=%d surf=%ux%u count=%u\n",
-                      fenceResult, slots[index].width, slots[index].height, hostCount);
-            }
+    noteShape(native_planes::wordAt(bytes, swapUpdated), layers, present, plan, slotOf);
 #endif
-            dropFrame(request);
-            return;
-        }
-    }
-    switch_gpu_backing_token tokens[SWITCH_SCANOUT_MAX_DEPENDENCIES] = {};
-    TegraScanoutCopy offer = {};
-    offer.version = TEGRA_SCANOUT_COPY_VERSION;
-    offer.width = slots[index].width;
-    offer.height = slots[index].height;
-    offer.sequence = sequence + 1;
-    offer.display = this;
-    offer.source = native_legacy_surface_descriptor(surface);
-    offer.sourceStride = slots[index].stride;
-    offer.sourceBytes = native_legacy_surface_allocation(surface);
-    offer.flags = TEGRA_SCANOUT_COPY_FENCE_ONLY |
-                  (slots[index].presented ? TEGRA_SCANOUT_COPY_PRODUCER_WATCH : 0u) |
-                  (tiled ? TEGRA_SCANOUT_COPY_SOURCE_BLOCK : 0u);
-    offer.sourceBlockHeightLog2 = tiled ? ((slots[index].kind >> 4) & 7u) : 0u;
-    uint32_t depCount = 0;
-    for (uint32_t i = 0; i < slots[index].read.view.waitCount && depCount < SWITCH_SCANOUT_MAX_DEPENDENCIES; ++i)
-        if (slots[index].read.view.waits[i].engine)
-            tokens[depCount++] = slots[index].read.view.waits[i];
-    offer.dependencies = depCount ? tokens : nullptr;
-    offer.dependencyCount = depCount;
-    gpuPending = true;
-    const int result = tegra_gm20b_scanout_copy(&offer);
-    if (result) {
-        gpuPending = false;
-        pending = nullptr;
-        drawing = -1;
-        if (front != prepared)
-            releaseRead(index);
-        if (result == kIOReturnCannotLock || result == kIOReturnBusy) {
-            retryWhenReady();
-        } else {
-#if DEVELOPMENT || DEBUG
-            if (diagScanoutFailures < 8u) {
-                ++diagScanoutFailures;
-                IOLog("SwitchDisplayPort: tegra_gm20b_scanout_copy failed ret=%#x surf=%ux%u stride=%u bytes=%llu kind=%#x\n",
-                      result, slots[index].width, slots[index].height, slots[index].stride,
-                      static_cast<unsigned long long>(offer.sourceBytes), slots[index].kind);
-            }
-#endif
-            dropFrame(request);
-        }
-        return;
-    }
-    ++sequence;
-}
-
-void SwitchExternalScreen::gpuComplete(int status)
-{
-    __atomic_store_n(&gpuStatus, status, __ATOMIC_RELEASE);
-    completion->interruptOccurred(nullptr, nullptr, 0);
-}
-
-void SwitchExternalScreen::completionFired(OSObject *owner, IOInterruptEventSource *, int)
-{
-    auto *self = static_cast<SwitchExternalScreen *>(owner);
-    self->gpuPending = false;
-    const int status = __atomic_load_n(&self->gpuStatus, __ATOMIC_ACQUIRE);
-    if (!self->dcb || self->gpuGeneration != self->linkGeneration || status != 0) {
-#if DEVELOPMENT || DEBUG
-        if (status != 0 && self->diagScanoutFailures < 8u) {
-            ++self->diagScanoutFailures;
-            IOLog("SwitchDisplayPort: gpuComplete failed status=%d\n", status);
-        }
-#endif
-        if (self->drawing >= 0 && self->drawing != self->front) {
-            if (!self->connected || self->gpuGeneration != self->linkGeneration)
-                self->releaseSlot(static_cast<unsigned>(self->drawing));
-            else
-                self->releaseRead(static_cast<unsigned>(self->drawing));
-        }
-        self->drawing = -1;
-        self->retire(self->pending, false);
-        self->pending = nullptr;
-        if (!self->connected || self->selectedMode < 0 || self->device != 2)
-            self->drainSwapQueue();
-        else
-            self->kickSwapQueue();
-        return;
-    }
-    self->latchFrame();
-}
-
-void SwitchExternalScreen::latchFrame()
-{
-    const unsigned index = static_cast<unsigned>(drawing);
-    const uint32_t iova = static_cast<uint32_t>(kSlotBase + index * kSlotSpan + pendingFrame.startOffset);
-    const TegraDisplayB::Frame frame = {
-        iova,
-        pendingFrame.stride,
-        pendingFrame.kind,
-        pendingFrame.colorDepth,
-        pendingFrame.position,
-        pendingFrame.size,
-        pendingFrame.prescaled,
-        pendingFrame.hOffset,
-        pendingFrame.vOffset,
-        pendingFrame.dda,
-        pendingFrame.hInitial,
-        pendingFrame.vInitial,
-        pendingFrame.options,
-    };
-    if (dcb->scanout(frame)) {
-        latched = true;
-        latchedAddr = iova;
-#if DEVELOPMENT || DEBUG
-        const auto &slot = slots[index];
-        if (diagFrameLogs < 16u &&
-            (diagLastPos != frame.position || diagLastSize != frame.size || diagLastSurfW != slot.width ||
-             diagLastSurfH != slot.height || diagLastKind != frame.kind)) {
-            ++diagFrameLogs;
-            diagLastPos = frame.position;
-            diagLastSize = frame.size;
-            diagLastSurfW = slot.width;
-            diagLastSurfH = slot.height;
-            diagLastKind = frame.kind;
-            IOLog("SwitchDisplayPort: scanout iova=%#x surf=%ux%u pos=(%u,%u) size=%ux%u dda=%#x stride=%u kind=%#x depth=%u\n",
-                  iova, slot.width, slot.height, frame.position & 0xffffu, frame.position >> 16,
-                  frame.size & 0xffffu, frame.size >> 16, frame.dda, frame.stride, frame.kind, frame.colorDepth);
-        }
-#endif
-        return;
-    }
-#if DEVELOPMENT || DEBUG
-    if (diagScanoutFailures < 8u) {
-        ++diagScanoutFailures;
-        IOLog("SwitchDisplayPort: dcb->scanout failed iova=%#x pos=%#x size=%#x stride=%u kind=%#x\n",
-              iova, frame.position, frame.size, frame.stride, frame.kind);
-    }
-#endif
-    if (drawing != front)
-        releaseRead(index);
-    drawing = -1;
-    const auto *request = pending;
-    pending = nullptr;
-    dropFrame(request);
-}
-
-void SwitchExternalScreen::dropFrame(const OriginalLegacySwapRequest *request)
-{
-    if (retire(request, false) && pendingSwapRequest())
-        readySource->interruptOccurred(nullptr, nullptr, 0);
-}
-
-bool SwitchExternalScreen::retire(const OriginalLegacySwapRequest *request, bool shown)
-{
-    if (!activateOnlyPendingSwap(request))
-        return false;
-    switch_external_complete_current(this, shown);
-    return true;
-}
-
-bool SwitchExternalScreen::frameEnd()
-{
-    if (!dcb)
-        return true;
-    if (latched) {
-        const auto receipt = dcb->windowLatch(latchedAddr);
-        if (receipt == TegraDisplayB::Latch::Missed) {
-#if DEVELOPMENT || DEBUG
-            if (diagScanoutFailures < 8u) {
-                ++diagScanoutFailures;
-                IOLog("SwitchDisplayPort: window A missed latch for iova=%#x\n", latchedAddr);
-            }
-#endif
-            dcb->resetWindowCache();
-            latched = false;
-            latchedAddr = 0;
-            if (drawing >= 0 && drawing != front)
-                releaseRead(static_cast<unsigned>(drawing));
-            drawing = -1;
-            retire(pending, false);
-            pending = nullptr;
-        } else if (receipt == TegraDisplayB::Latch::Active) {
-            latched = false;
-            latchedAddr = 0;
-            if (front >= 0 && front != drawing)
-                releaseRead(static_cast<unsigned>(front));
-            front = drawing;
-            drawing = -1;
-            retire(pending, true);
-            pending = nullptr;
-            if (front >= 0) {
-                slots[front].presented = true;
-                switch_native_scanout_deliver(&slots[front].read);
-            }
-        }
-    }
-    const auto *clients = switch_abi_load<const void *>(this, vsyncClientList);
-    if (clients)
-        native_legacy_vsync_notify(this, mach_absolute_time(), mach_continuous_time(), interval);
-    kickSwapQueue();
-    if (dcb)
-        dcb->frameInterrupt(true);
-    return true;
+    fenceFrame();
 }

@@ -54,6 +54,10 @@ void SwitchExternalScreen::releaseEventSources()
     }
     OSSafeReleaseNULL(readySource);
     OSSafeReleaseNULL(completion);
+    if (fenceLoop && fenceSource)
+        fenceLoop->removeEventSource(fenceSource);
+    OSSafeReleaseNULL(fenceSource);
+    OSSafeReleaseNULL(fenceLoop);
     loop = nullptr;
 }
 
@@ -86,12 +90,21 @@ void SwitchExternalScreen::free()
         IOLockFree(colorLock);
         colorLock = nullptr;
     }
+    if (slots) {
+        for (unsigned i = 0; i < kSlots; ++i)
+            releaseSlot(i);
+        IODelete(slots, Slot, kSlots);
+        slots = nullptr;
+    }
     IOMobileFramebufferLegacy::free();
 }
 
 bool SwitchExternalScreen::begin(SwitchDisplayPort *port, IOWorkLoop *workLoop)
 {
     if (!workLoop || workLoop != getWorkLoop())
+        return false;
+    slots = IONewZero(Slot, kSlots);
+    if (!slots)
         return false;
     transport = port;
     loop = workLoop;
@@ -101,8 +114,11 @@ bool SwitchExternalScreen::begin(SwitchDisplayPort *port, IOWorkLoop *workLoop)
     colorLock = IOLockAlloc();
     completion = IOInterruptEventSource::interruptEventSource(this, &completionFired);
     readySource = IOInterruptEventSource::interruptEventSource(this, &readyFired);
-    if (!colorLock || !completion || !readySource || loop->addEventSource(completion) != kIOReturnSuccess ||
-        loop->addEventSource(readySource) != kIOReturnSuccess) {
+    fenceLoop = IOWorkLoop::workLoop();
+    fenceSource = fenceLoop ? IOInterruptEventSource::interruptEventSource(this, &fenceFired) : nullptr;
+    if (!colorLock || !completion || !readySource || !fenceSource ||
+        loop->addEventSource(completion) != kIOReturnSuccess || loop->addEventSource(readySource) != kIOReturnSuccess ||
+        fenceLoop->addEventSource(fenceSource) != kIOReturnSuccess) {
         releaseEventSources();
         return false;
     }
@@ -201,18 +217,26 @@ bool publishLimits(IOService *screen, const char *name, const Limit *limits, uns
 
 void SwitchExternalScreen::publishScanoutLimits()
 {
-    const Limit stride[] = {{"StrideLinearHorizontal", 64}};
-    publishLimits(this, "DisplayPipeStrideRequirements", stride, 1, 32);
-    const Limit base[] = {{"PlaneBaseAlignmentLinear", 4096}};
-    publishLimits(this, "DisplayPipePlaneBaseAlignment", base, 1, 64);
-    const Limit layers[] = {{"MaxNumLayers", 1}};
-    publishLimits(this, "IOMFBNumLayers", layers, 1, 32);
-    const Limit scaling[] = {{"RGBLayer_MinScaleFraction", switch_external::kMinScaleFraction},
-                             {"RGBLayer_MaxScale", switch_external::kMaxScale},
-                             {"YUVLayer_MinScaleFraction", 1}, {"YUVLayer_MaxScale", 1}};
-    publishLimits(this, "IOMFBScalingLimits", scaling, 4, 32);
-    setProperty("IOMFBYUVPackedUnSupported", true);
-    setProperty("IOMFBYUV420UnSupported", true);
+    const auto &published = switch_external::kPublished;
+    constexpr unsigned count = sizeof(published) / sizeof(published[0]);
+    for (unsigned first = 0; first < count;) {
+        unsigned end = first + 1;
+        while (end < count && !strcmp(published[end].dictionary, published[first].dictionary))
+            ++end;
+        auto *dictionary = OSDictionary::withCapacity(end - first);
+        bool ok = dictionary != nullptr;
+        for (unsigned i = first; ok && i < end; ++i) {
+            auto *number = OSNumber::withNumber(published[i].value, published[i].bits);
+            ok = number && dictionary->setObject(published[i].key, number);
+            OSSafeReleaseNULL(number);
+        }
+        if (ok)
+            setProperty(published[first].dictionary, dictionary);
+        OSSafeReleaseNULL(dictionary);
+        first = end;
+    }
+    if (switch_external::kPackedYuvUnsupported)
+        setProperty("IOMFBYUVPackedUnSupported", true);
     setProperty("IOMFBDisableFlip", true);
     publishSourceLimits(SWITCH_DP_MAX_PIXEL_KHZ * 1000u);
 }
@@ -320,28 +344,24 @@ bool SwitchExternalScreen::publish(const struct switch_dp_mode_list &list, const
 
 void SwitchExternalScreen::clearLayerState()
 {
-    memset(layerRects, 0, sizeof(layerRects));
+    for (auto &record : layerRecords)
+        record = {};
     pendingFrame = {};
-    latchedAddr = 0;
 }
 
 void SwitchExternalScreen::linkUp(const struct switch_dp_mode &timing, TegraDisplayB *controller)
 {
     if (mode.hactive != timing.hactive || mode.vactive != timing.vactive) {
         for (unsigned i = 0; i < kSlots; ++i)
-            if (slots[i].surface && static_cast<int>(i) != drawing)
+            if (slots[i].surface && !slotShown(static_cast<int>(i)))
                 releaseSlot(i);
     }
     clearLayerState();
 #if DEVELOPMENT || DEBUG
     __atomic_store_n(&diagValidateRejects, 0u, __ATOMIC_RELAXED);
     diagScanoutFailures = 0;
-    diagFrameLogs = 0;
-    diagLastPos = ~0u;
-    diagLastSize = ~0u;
-    diagLastSurfW = 0;
-    diagLastSurfH = 0;
-    diagLastKind = ~0u;
+    diagShapeLogs = 0;
+    diagShape = 0;
 #endif
     mode = timing;
     dcb = controller;
@@ -367,14 +387,14 @@ void SwitchExternalScreen::linkDown()
     switch_gpu_ready_cancel(&ready);
     latched = false;
     clearLayerState();
-    if (front >= 0) {
-        releaseRead(static_cast<unsigned>(front));
-        front = -1;
+    for (auto &shown : front) {
+        const int k = shown;
+        shown = -1;
+        if (k >= 0 && !slotShown(k))
+            releaseRead(static_cast<unsigned>(k));
     }
     if (!gpuPending) {
-        if (drawing >= 0)
-            releaseRead(static_cast<unsigned>(drawing));
-        drawing = -1;
+        abandonDrawing();
         retire(pending, false);
         pending = nullptr;
     }
@@ -385,8 +405,10 @@ void SwitchExternalScreen::linkDown()
 
 void SwitchExternalScreen::detach()
 {
+    for (auto &shown : front)
+        shown = -1;
     for (unsigned i = 0; i < kSlots; ++i)
-        if (!gpuPending || static_cast<int>(i) != drawing)
+        if (!gpuPending || !slotShown(static_cast<int>(i)))
             releaseSlot(i);
     clearLayerState();
     const bool wasConnected = connected;
@@ -578,99 +600,70 @@ IOReturn SwitchExternalScreen::selectOutput(bool timing, uint32_t value)
     }, this, &selection);
 }
 
+// Refuses only what the published limits keep out (Core Animation sends a refused swap again every frame): a layer no
+// window takes (SwitchExternalPlanes.h checkSwap) and a compressed surface (IOMFBMaxSrcPixels' IOMFBCompressionSupport
+// is 0). A surface whose memory cannot be wired here is left to the frame, which does not show it.
 bool SwitchExternalScreen::validateSwap(const OriginalLegacySwapRequest *request)
 {
     const uint64_t geometry = __atomic_load_n(&activeGeometry, __ATOMIC_ACQUIRE);
     if (!request || !geometry)
         return false;
     const auto *bytes = reinterpret_cast<const uint8_t *>(request);
-    uint32_t updated = 0, disabled = 0, background = 0;
-    memcpy(&updated, bytes + swapUpdated, sizeof(updated));
-    memcpy(&disabled, bytes + swapReady, sizeof(disabled));
-    memcpy(&background, bytes + swapBackground, sizeof(background));
-
-    OSObject *surfaces[switch_external::kLayers] = {};
-    uint32_t transforms[switch_external::kLayers] = {};
-    switch_external::Rect sources[switch_external::kLayers] = {};
-    switch_external::Rect destinations[switch_external::kLayers] = {};
+    const uint32_t updated = native_planes::wordAt(bytes, swapUpdated);
+    const uint32_t background = native_planes::wordAt(bytes, swapBackground);
+    OSObject *surfaces[kLayers] = {};
     memcpy(surfaces, bytes + swapSurfaces, sizeof(surfaces));
-    memcpy(transforms, bytes + swapTransforms, sizeof(transforms));
-    memcpy(sources, bytes + swapSourceRects, sizeof(sources));
-    memcpy(destinations, bytes + swapDestinationRects, sizeof(destinations));
-
-    bool hasSurface[switch_external::kLayers] = {};
-    switch_external::LayerDesc layers[switch_external::kLayers] = {};
-    bool badObject = false, compressedSurface = false, wireFailed = false;
-#if DEVELOPMENT || DEBUG
-    int firstLayer = -1;
-#endif
-    for (unsigned i = 0; i < switch_external::kLayers; ++i) {
+    bool hasSurface[kLayers] = {};
+    native_planes::Layer layers[kLayers];
+    bool badObject = false, compressedSurface = false;
+    for (unsigned i = 0; i < kLayers; ++i) {
         if ((updated & (1u << i)) == 0u || !surfaces[i])
             continue;
         hasSurface[i] = true;
-#if DEVELOPMENT || DEBUG
-        if (firstLayer < 0)
-            firstLayer = static_cast<int>(i);
-#endif
         if (!surfaces[i]->metaCast("IOSurface")) {
             badObject = true;
             continue;
         }
-        auto &layer = layers[i];
         auto *rawMemory = native_legacy_surface_descriptor(surfaces[i]);
         auto *memory = rawMemory && rawMemory->metaCast("IOMemoryDescriptor") ? rawMemory : nullptr;
-        if (memory) {
-            if (memory->prepare(kIODirectionOut) != kIOReturnSuccess) {
-                wireFailed = true;
-                continue;
-            }
+        if (memory && memory->prepare(kIODirectionOut) == kIOReturnSuccess) {
             IOByteCount segLen = 0;
             const addr64_t firstPa = memory->getPhysicalSegment(0, &segLen, kIOMemoryMapperNone);
             memory->complete(kIODirectionOut);
-            if (firstPa && tegra_gm20b_surface_compressed(firstPa & ~0xfffULL)) {
-                compressedSurface = true;
+            compressedSurface = compressedSurface || (firstPa && tegra_gm20b_surface_compressed(firstPa & ~0xfffULL));
+        }
+        layers[i] = layerOf(bytes, i, surfaces[i]);
+    }
+    const uint32_t width = static_cast<uint32_t>(geometry >> 32), height = static_cast<uint32_t>(geometry);
+    const unsigned reason = badObject || compressedSurface
+                                ? native_planes::kSurface
+                                : switch_external::checkSwap(updated, background, hasSurface, layers, width, height);
+    if (reason == native_planes::kAccepted)
+        return true;
+#if DEVELOPMENT || DEBUG
+    if (__atomic_fetch_add(&diagValidateRejects, 1u, __ATOMIC_RELAXED) < 8u) {
+        char line[512];
+        int at = snprintf(line, sizeof(line), "reason %u%s updated %#x bg %#x mode %ux%u", reason,
+                          badObject           ? " (non-IOSurface)"
+                          : compressedSurface ? " (compressed)"
+                                              : "",
+                          updated, background, width, height);
+        for (unsigned i = 0; i < kLayers && at > 0 && static_cast<size_t>(at) < sizeof(line); ++i) {
+            if (!hasSurface[i])
                 continue;
-            }
+            const auto &l = layers[i];
+            at +=
+                snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
+                         "; layer %u fmt %#x planes %u xform %u %ux%u strides %u/%u src (%d,%d %dx%d) dst "
+                         "(%d,%d %dx%d) check %u",
+                         i, l.surface.format, l.surface.planes, l.transform, l.surface.width, l.surface.height,
+                         l.surface.stride[0], l.surface.stride[1], l.src.x, l.src.y, l.src.w, l.src.h, l.dst.x, l.dst.y,
+                         l.dst.w, l.dst.h, native_planes::checkDetached(l, width, height, switch_external::kScan));
         }
-        layer.format = native_legacy_surface_format(surfaces[i]);
-        layer.planes = native_legacy_surface_planes(surfaces[i]);
-        layer.transform = transforms[i] & 7u;
-        layer.surfW = static_cast<uint32_t>(native_legacy_surface_width(surfaces[i]));
-        layer.surfH = static_cast<uint32_t>(native_legacy_surface_height(surfaces[i]));
-        layer.stride = native_legacy_surface_stride(surfaces[i]);
-        layer.allocation = native_legacy_surface_allocation(surfaces[i]);
-        layer.descriptorBytes = memory ? memory->getLength() : 0u;
-        layer.src = sources[i];
-        layer.dst = destinations[i];
+        IOLog("SwitchDisplayPort: validateSwap rejected %s\n", line);
     }
-    if (badObject || compressedSurface || wireFailed) {
-#if DEVELOPMENT || DEBUG
-        if (__atomic_fetch_add(&diagValidateRejects, 1u, __ATOMIC_RELAXED) < 8u) {
-            const char *why = badObject ? "non-IOSurface" : compressedSurface ? "compressed" : "unwired";
-            IOLog("SwitchDisplayPort: validateSwap rejected (%s) updated=%#x disabled=%#x bg=%#x mode=%ux%u\n", why,
-                  updated, disabled, background, static_cast<uint32_t>(geometry >> 32),
-                  static_cast<uint32_t>(geometry));
-        }
 #endif
-        return false;
-    }
-    const auto check = switch_external::validateSwap(updated, disabled, background, hasSurface, layers);
-    if (!check.valid) {
-#if DEVELOPMENT || DEBUG
-        if (__atomic_fetch_add(&diagValidateRejects, 1u, __ATOMIC_RELAXED) < 8u) {
-            const int idx = check.activeLayer >= 0 ? check.activeLayer : firstLayer;
-            const auto l = idx >= 0 ? layers[idx] : switch_external::LayerDesc{};
-            IOLog("SwitchDisplayPort: validateSwap rejected reason=%u updated=%#x disabled=%#x bg=%#x fmt=%#x "
-                  "planes=%u xform=%u surf=%ux%u src=(%d,%d,%d,%d) dst=(%d,%d,%d,%d) stride=%llu mode=%ux%u\n",
-                  static_cast<unsigned>(check.reason), updated, disabled, background, l.format, l.planes, l.transform,
-                  l.surfW, l.surfH, l.src.x, l.src.y, l.src.w, l.src.h, l.dst.x, l.dst.y, l.dst.w, l.dst.h,
-                  static_cast<unsigned long long>(l.stride), static_cast<uint32_t>(geometry >> 32),
-                  static_cast<uint32_t>(geometry));
-        }
-#endif
-        return false;
-    }
-    return true;
+    return false;
 }
 
 IOReturn SwitchExternalScreen::collectCompletionReports(uint32_t, void *, uint32_t *count, uint32_t)

@@ -12,7 +12,11 @@ adapters can enter alternate mode when the Switch has the host data role.
 The driver publishes progressive RGB8 timings within the link, PLL and display
 controller limits. Display controller B scans the compositor's shared IOSurfaces
 through its own SMMU domain. Cached mappings survive recurring frames; completed
-producer fences allow a direct flip. AUX completion, frame retirement and blocked
+producer fences allow a direct flip. The external display is always the panel's
+clone, and it publishes three layers so Core Animation keeps detaching video
+while docked: windows A, B and C show the clone's UI over its video, and a refused
+swap would be sent again every frame, so `validateSwap` refuses only what the
+published limits rule out. AUX completion, frame retirement and blocked
 GPU admission use interrupts or completion notifications. Suspend tears down the
 link and resume probes the sink again.
 

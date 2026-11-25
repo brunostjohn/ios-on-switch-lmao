@@ -379,7 +379,7 @@ void SwitchDisplayPort::teardownLink()
     }
     if (dcbUp) {
         dcSource->disable();
-        dcb.windowOff();
+        dcb.windowsOff();
     }
     if (sorUp)
         sor.detachHead();

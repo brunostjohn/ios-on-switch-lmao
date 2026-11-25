@@ -7,12 +7,14 @@ using switch_ios::test::SourceText;
 TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuseReuse)
 {
     const auto source = SourceText("../SwitchExternalScanout.cpp");
-    const auto latch = Block(source, "bool SwitchExternalScreen::frameEnd()");
-    EXPECT_TRUE(latch.has("dcb->windowLatch(latchedAddr)"));
-    EXPECT_TRUE(latch.has("front != drawing"));
-    EXPECT_TRUE(latch.has("releaseRead(static_cast<unsigned>(front));"));
-    EXPECT_TRUE(latch.has("switch_native_scanout_deliver(&slots[front].read);"));
+    const auto present = SourceText("../SwitchExternalPresent.cpp");
+    const auto latch = Block(present, "bool SwitchExternalScreen::frameEnd()");
+    EXPECT_TRUE(latch.has("dcb->latch()"));
+    EXPECT_TRUE(latch.before("promoteDrawing();", "retire(pending, true);"));
+    EXPECT_TRUE(latch.has("switch_native_scanout_deliver(&slots[k].read);"));
     EXPECT_FALSE(latch.has("switch_native_scanout_release"));
+    const auto promote = Block(present, "void SwitchExternalScreen::promoteDrawing()");
+    EXPECT_TRUE(promote.has("if (k >= 0 && !slotShown(k)) releaseRead(static_cast<unsigned>(k));"));
 
     const auto reuse = Block(source, "if (slot.read.lease)");
     EXPECT_TRUE(reuse.has("slot.read.allocation.content_generation != snapshot.allocation.content_generation"));
@@ -22,7 +24,8 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
 
     const auto lifecycle = SourceText("../SwitchExternalScreen.cpp");
     const auto off = Block(lifecycle, "void SwitchExternalScreen::linkDown()");
-    EXPECT_TRUE(off.has("releaseRead(static_cast<unsigned>(front));"));
+    EXPECT_TRUE(off.has("releaseRead(static_cast<unsigned>(k));"));
+    EXPECT_TRUE(off.has("abandonDrawing();"));
     const auto detach = Block(lifecycle, "void SwitchExternalScreen::detach()");
     EXPECT_TRUE(detach.has("releaseSlot(i);"));
     EXPECT_TRUE(detach.has("drainSwapQueue();"));
@@ -36,28 +39,32 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     const auto validate = Block(lifecycle, "bool SwitchExternalScreen::validateSwap(");
     EXPECT_TRUE(validate.has("__atomic_load_n(&activeGeometry, __ATOMIC_ACQUIRE)"));
     EXPECT_FALSE(validate.has("modes.modes[selectedMode]"));
+    EXPECT_TRUE(validate.has("switch_external::checkSwap(updated, background, hasSurface, layers, width, height)"));
+    EXPECT_FALSE(validate.has("swapReady"));
 
     const auto prepare = Block(source, "int SwitchExternalScreen::prepareSlot(");
-    EXPECT_TRUE(prepare.has("native_legacy_surface_bounds("));
-    EXPECT_TRUE(prepare.has("if (!slot.layout && !applyTiledLayout("));
+    EXPECT_TRUE(prepare.has("bytes > memory->getLength()"));
+    EXPECT_TRUE(prepare.has("if (!slot.hold && !applyLayout("));
+    EXPECT_TRUE(prepare.has("!slotShown(static_cast<int>(i)) && !(building & (1u << i))"));
 
     const auto request = Block(source, "void SwitchExternalScreen::requestFrame()");
-    EXPECT_TRUE(request.has("offer.width = slots[index].width;"));
-    EXPECT_TRUE(request.has("offer.height = slots[index].height;"));
-    EXPECT_FALSE(request.has("offer.width = mode.hactive;"));
-    EXPECT_FALSE(request.has("offer.height = mode.vactive;"));
-    EXPECT_TRUE(request.has("TEGRA_SCANOUT_COPY_SOURCE_BLOCK"));
-    EXPECT_TRUE(request.has("offer.sourceBlockHeightLog2 = tiled ? ((slots[index].kind >> 4) & 7u) : 0u;"));
+    EXPECT_TRUE(request.has("switch_external::imageFor(layers[i], slotLayout(slots[prepared])"));
+    EXPECT_TRUE(request.has("switch_external::planWindows(present, images, states)"));
+    EXPECT_TRUE(request.has("switch_external::frameOf(plan, images, iova, dcb->pixelClockHz())"));
+    EXPECT_TRUE(
+        request.has("drawing[w] = plan.window[w].on ? slotOf[plan.window[w].layer] : -1; releaseUnshown(building);"));
+    EXPECT_FALSE(request.has("dropFrame"));
 
-    const auto complete = Block(source, "void SwitchExternalScreen::completionFired(");
+    const auto complete = Block(present, "void SwitchExternalScreen::completionFired(");
     EXPECT_TRUE(complete.has("if (!self->connected || self->selectedMode < 0 || self->device != 2)"));
     EXPECT_TRUE(complete.has("self->drainSwapQueue();"));
 
     const auto limits = Block(lifecycle, "void SwitchExternalScreen::publishScanoutLimits()");
-    EXPECT_TRUE(limits.has("IOMFBYUV420UnSupported"));
+    EXPECT_FALSE(limits.has("IOMFBYUV420UnSupported"));
     EXPECT_TRUE(limits.has("IOMFBDisableFlip"));
-    EXPECT_TRUE(limits.has("switch_external::kMinScaleFraction"));
-    EXPECT_TRUE(limits.has("switch_external::kMaxScale"));
+    EXPECT_TRUE(limits.has("switch_external::kPublished"));
+    EXPECT_TRUE(
+        limits.has("if (switch_external::kPackedYuvUnsupported) setProperty(\"IOMFBYUVPackedUnSupported\", true);"));
     EXPECT_TRUE(limits.has("publishSourceLimits(SWITCH_DP_MAX_PIXEL_KHZ * 1000u)"));
     EXPECT_NE(lifecycle.find("SwitchExternalScreen::getMatrix("), std::string::npos);
     EXPECT_NE(lifecycle.find("SwitchExternalScreen::setMatrix("), std::string::npos);
@@ -66,7 +73,7 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
 
     const auto header = SourceText("../SwitchExternalScreen.h");
     EXPECT_NE(header.find("kSlotSpan = 68ULL << 20"), std::string::npos);
-    EXPECT_NE(header.find("static_assert(kTablePages == 52);"), std::string::npos);
+    EXPECT_NE(header.find("static_assert(kTablePages == 137);"), std::string::npos);
     EXPECT_EQ(header.find("getWorkLoop()"), std::string::npos);
     EXPECT_NE(header.find("setPowerState(unsigned long ordinal, IOService *whatDevice) override"), std::string::npos);
     EXPECT_NE(header.find("void stop(IOService *provider) override"), std::string::npos);
@@ -84,6 +91,7 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_TRUE(beginScreen.before("PMinit();", "nub->joinPMtree(this);"));
     EXPECT_TRUE(beginScreen.before("nub->joinPMtree(this);", "registerPowerDriver(this, states, 2)"));
     EXPECT_TRUE(beginScreen.before("registerPowerDriver(this, states, 2)", "changePowerStateToPriv(1)"));
+    EXPECT_TRUE(beginScreen.has("fenceLoop->addEventSource(fenceSource)"));
 
     const auto power = Block(lifecycle, "IOReturn SwitchExternalScreen::setPowerState(");
     EXPECT_TRUE(power.has("if (ordinal > 1) return kIOReturnUnsupported;"));
@@ -103,7 +111,8 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_TRUE(detach.has("setDisplayHeight(0);"));
     EXPECT_TRUE(Block(lifecycle, "void SwitchExternalScreen::linkUp(").has("dcb->frameInterrupt(true);"));
     EXPECT_TRUE(select.before("self->device = device;", "self->transport->selectMode(index, device == 2)"));
-    EXPECT_TRUE(validate.has("layer.transform = transforms[i] & 7u;"));
+    EXPECT_TRUE(Block(source, "native_planes::Layer SwitchExternalScreen::layerOf(")
+                    .has("l.transform = native_planes::wordAt(request, swapTransforms + 4u * layer) & 7u;"));
 
     const auto mapDom = Block(source, "bool SwitchExternalScreen::mapDomain()");
     EXPECT_TRUE(mapDom.has("(1u << 2) | (1u << 4) | (1u << 6)"));
@@ -131,6 +140,7 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
 
     const auto teardown = Block(service, "void SwitchDisplayPort::teardownLink()");
     EXPECT_TRUE(teardown.before("dcb.powerDown();", "sor.powerDown();"));
+    EXPECT_TRUE(teardown.before("dcb.windowsOff();", "dcb.powerDown();"));
     const auto auxTimer = Block(service, "void SwitchDisplayPort::auxTimerFired(");
     EXPECT_FALSE(auxTimer.has("panic("));
     EXPECT_TRUE(auxTimer.has("self->aux.resetAux();"));
@@ -144,15 +154,35 @@ TEST(ExternalOwnership, FrontReadLivesUntilReplacementAndGenerationChangesRefuse
     EXPECT_TRUE(validate.before("memory->getPhysicalSegment(0, &segLen, kIOMemoryMapperNone)",
                                 "memory->complete(kIODirectionOut);"));
     EXPECT_TRUE(validate.has("tegra_gm20b_surface_compressed(firstPa & ~0xfffULL)"));
-    const auto tiledLayout = Block(source, "bool SwitchExternalScreen::applyTiledLayout(");
-    EXPECT_TRUE(tiledLayout.before("tegra_gm20b_surface_hold(firstPage, &tiled)", "__atomic_thread_fence(__ATOMIC_SEQ_CST);"));
-    EXPECT_TRUE(tiledLayout.before("__atomic_thread_fence(__ATOMIC_SEQ_CST);", "tegra_gm20b_surface_compressed(firstPage)"));
-    EXPECT_TRUE(prepare.before("__atomic_thread_fence(__ATOMIC_SEQ_CST);", "tegra_gm20b_surface_compressed(firstPage)"));
+    const auto layout = Block(source, "bool SwitchExternalScreen::applyLayout(");
+    EXPECT_TRUE(
+        layout.before("tegra_gm20b_surface_hold(firstPage, &tiled)", "__atomic_thread_fence(__ATOMIC_SEQ_CST);"));
+    EXPECT_TRUE(layout.before("__atomic_thread_fence(__ATOMIC_SEQ_CST);", "tegra_gm20b_surface_compressed(firstPage)"));
+    EXPECT_TRUE(
+        prepare.before("__atomic_thread_fence(__ATOMIC_SEQ_CST);", "tegra_gm20b_surface_compressed(firstPage)"));
     EXPECT_TRUE(prepare.has("if (heldError == -16) return -16;"));
-    EXPECT_TRUE(request.has("slots[index].read.view.waits[i]"));
-    EXPECT_TRUE(request.has("switch_host1x_token_fence("));
-    EXPECT_FALSE(request.has("switch_native_scanout_dependencies("));
+    EXPECT_TRUE(Block(lifecycle, "bool SwitchExternalScreen::getRefreshAttributes(").has("if (!refreshPeriod)"));
     EXPECT_TRUE(publish.before("native_legacy_set_display_refresh_properties(this)",
                                "IOMobileFramebufferLegacy::hotPlugNotify(1);"));
-    EXPECT_TRUE(Block(lifecycle, "bool SwitchExternalScreen::getRefreshAttributes(").has("if (!refreshPeriod)"));
+}
+
+// One fence over every window's producers: the media engines' syncpoints when only VIC and NVDEC write the surfaces,
+// otherwise a GPU fence on its own thread (it may sleep for a slot), never the panel's single present.
+TEST(ExternalOwnership, OneFenceOverEveryWindow)
+{
+    const auto present = SourceText("../SwitchExternalPresent.cpp");
+    const auto fence = Block(present, "void SwitchExternalScreen::fenceFrame()");
+    EXPECT_TRUE(fence.has("switch_native_scanout_dependencies(read, own, 3)"));
+    EXPECT_TRUE(fence.has("switch_gpu_backing_promise_tokens(read.view.native, 0, 0, own + n,"));
+    EXPECT_TRUE(fence.has("switch_gpu_backing_token_external_status(&own[t]) == 1"));
+    EXPECT_TRUE(fence.before("if (!count) { latchFrame(); return; }", "switch_host1x_token_fence("));
+    EXPECT_TRUE(fence.has("media && count <= SWITCH_HOST1X_TOKEN_FENCE_MAX"));
+    EXPECT_TRUE(fence.has("if (result != -16 && result != -22)"));
+    EXPECT_TRUE(fence.before("fenceCount = count;", "fenceSource->interruptOccurred(nullptr, nullptr, 0);"));
+    const auto bridge = Block(present, "void SwitchExternalScreen::fenceFired(");
+    EXPECT_TRUE(bridge.has("switch_gpu_bridge_fence("));
+    EXPECT_TRUE(bridge.before("if (error != -16) break;", "error = switch_gpu_bridge_wait_room();"));
+    EXPECT_TRUE(bridge.has("if (error) self->gpuComplete(error);"));
+    EXPECT_EQ(present.find("tegra_gm20b_scanout_copy"), std::string::npos);
+    EXPECT_EQ(SourceText("../SwitchExternalScanout.cpp").find("tegra_gm20b_scanout_copy"), std::string::npos);
 }

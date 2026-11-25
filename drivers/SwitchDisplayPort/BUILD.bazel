@@ -40,6 +40,7 @@ kernel_driver(
         "SwitchDPProperties.cpp",
         "SwitchExternalScreen.cpp",
         "SwitchExternalScanout.cpp",
+        "SwitchExternalPresent.cpp",
         "TegraDisplayB.cpp",
         "TegraDpaux1.cpp",
         "TegraSor1.cpp",

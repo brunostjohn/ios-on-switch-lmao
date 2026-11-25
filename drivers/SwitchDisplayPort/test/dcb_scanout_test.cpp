@@ -4,33 +4,171 @@
 #include "../TegraSor1.h"
 #include "drivers/SwitchUSB/test/xusb_register_model.h"
 #include <gtest/gtest.h>
+#include <tuple>
 
 namespace {
 constexpr uintptr_t dc = 0x54240000, kSor = 0x54580000, kDpaux = 0x54040000;
 constexpr uintptr_t kCar = 0x60006000, kPmc = 0x7000e400;
-constexpr uintptr_t control = dc + 4 * 0x41, header = dc + 4 * 0x42, options = dc + 4 * 0x700,
-                    address = dc + 4 * 0x800;
+constexpr uintptr_t control = dc + 4 * 0x41, header = dc + 4 * 0x42;
 constexpr uintptr_t kStateAccess = dc + 4 * 0x40, kDispWinOptions = dc + 4 * 0x402;
 constexpr uintptr_t kDisplayCmd = dc + 4 * 0x32, kDisplayPwr = dc + 4 * 0x36;
-constexpr uintptr_t kWinBufCtrl = dc + 4 * 0x702, kWinColorDepth = dc + 4 * 0x703, kWinPos = dc + 4 * 0x704;
-constexpr uintptr_t kWinSize = dc + 4 * 0x705, kWinPrescaled = dc + 4 * 0x706;
-constexpr uintptr_t kWinHInit = dc + 4 * 0x707, kWinVInit = dc + 4 * 0x708, kWinDda = dc + 4 * 0x709;
-constexpr uintptr_t kWinLineStride = dc + 4 * 0x70a, kWinBufStride = dc + 4 * 0x70b, kWinUvBufStride = dc + 4 * 0x70c,
-                    kWinBlend = dc + 4 * 0x716;
-constexpr uintptr_t kWinHFilter0 = dc + 4 * 0x601, kWinVFilter0 = dc + 4 * 0x619;
-constexpr uintptr_t kWinHOffset = dc + 4 * 0x806, kWinVOffset = dc + 4 * 0x808, kWinKind = dc + 4 * 0x80b,
-                    kWinStartAddrHi = dc + 4 * 0x80d, kWinCdeCtrl = dc + 4 * 0x82f;
+constexpr uint32_t kOptions = 0x700, kColorDepth = 0x703, kPosition = 0x704, kSize = 0x705, kPrescaled = 0x706;
+constexpr uint32_t kHInit = 0x707, kVInit = 0x708, kDda = 0x709, kLineStride = 0x70a, kBlend = 0x716;
+constexpr uint32_t kBlendMatch = 0x717, kBlendNomatch = 0x718, kBufferControl = 0x702, kStartAddrHiU = 0x80f;
+constexpr uint32_t kStart = 0x800, kStartU = 0x802, kHOffset = 0x806, kVOffset = 0x808, kKind = 0x80b;
+constexpr uint32_t kHFilter0 = 0x601, kCscYof = 0x611, kVFilter0 = 0x619;
 constexpr uint32_t kMcHotResetCtrl = 0x200, kMcHotResetStatus = 0x204, kMcHotResetDcb = 1u << 3;
+constexpr uint32_t kEnable = 1u << 30, kActA = 1u << 1, kActB = 1u << 2, kActC = 1u << 3;
 std::vector<switch_display_memory_head> plans;
-bool admit;
+bool admit = true;
 uint32_t mcCtrl, mcStatusReads;
 std::vector<bool> mcHotResetEvents;
 
-TegraDisplayB::Frame fullFrame(uint32_t iova, uint32_t stride = 7680, uint32_t kind = 0)
+// DC B's window registers as banks behind DISPLAY_WINDOW_HEADER: a write goes to the selected window's assembly copy,
+// a read of START_ADDR or WIN_OPTIONS returns its active copy, and a frame boundary latches what the request names.
+struct Banks {
+    unsigned selected = 0;
+    std::vector<std::tuple<unsigned, uint32_t, uint32_t>> writes;
+    std::map<uint32_t, uint32_t> assembly[3];
+    uint32_t active[3][2] = {};
+
+    void attach()
+    {
+        xusbModel().afterWrite = [this](uintptr_t address, uint32_t value) {
+            wrote(address, value);
+        };
+    }
+
+    ~Banks()
+    {
+        xusbModel().afterWrite = nullptr;
+    }
+
+    void wrote(uintptr_t address, uint32_t value)
+    {
+        if (address == header) {
+            selected = (value >> 4) & 1 ? 0 : (value >> 5) & 1 ? 1 : 2;
+        } else if (address >= dc + 4 * 0x500 && address < dc + 4 * 0x900) {
+            const uint32_t word = uint32_t((address - dc) / 4);
+            assembly[selected][word] = value;
+            writes.emplace_back(selected, word, value);
+        }
+        expose();
+    }
+
+    void expose()
+    {
+        xusbModel().registers[dc + 4 * kStart] = active[selected][0];
+        xusbModel().registers[dc + 4 * kOptions] = active[selected][1];
+    }
+
+    void boundary()
+    {
+        const uint32_t requests = xusbModel().registers[control] & 0xeu;
+        for (unsigned w = 0; w < 3; ++w)
+            if (requests & (1u << (1 + w))) {
+                active[w][0] = assembly[w][kStart];
+                active[w][1] = assembly[w][kOptions];
+            }
+        xusbModel().registers[control] = 0;
+        expose();
+    }
+
+    std::vector<uint32_t> to(unsigned window, uint32_t word) const
+    {
+        std::vector<uint32_t> values;
+        for (const auto &[w, at, value] : writes)
+            if (w == window && at == word)
+                values.push_back(value);
+        return values;
+    }
+
+    long first(unsigned window, uint32_t word) const
+    {
+        for (size_t i = 0; i < writes.size(); ++i)
+            if (std::get<0>(writes[i]) == window && std::get<1>(writes[i]) == word)
+                return long(i);
+        return -1;
+    }
+};
+
+switch_external::WindowRegisters rgb(uint32_t start, uint32_t position, uint32_t width, uint32_t height, unsigned depth)
 {
-    return {iova, stride, kind, 12u, 0u, (1080u << 16) | 1920u, (1080u << 16) | (1920u * 4u), 0u, 0u};
+    switch_external::WindowRegisters r;
+    r.on = true;
+    r.options = kEnable;
+    r.colorDepth = 12;
+    r.position = position;
+    r.size = (height << 16) | width;
+    r.prescaled = (height << 16) | (width * 4);
+    r.dda = 0x10001000;
+    r.lineStride = width * 4;
+    r.blend = 0x00ffff00u | depth;
+    r.blendSelect = 0x262;
+    r.start = start;
+    return r;
 }
+
+switch_external::WindowRegisters yuv(uint32_t start, uint32_t position, uint32_t width, uint32_t height, unsigned depth,
+                                     bool csc, int matrix)
+{
+    switch_external::WindowRegisters r;
+    r.on = true;
+    r.csc = csc;
+    r.matrix = matrix;
+    r.fullRange = 0;
+    r.options = kEnable | (1u << 18);
+    r.colorDepth = 43;
+    r.position = position;
+    r.size = (height << 16) | width;
+    r.prescaled = (height << 16) | width;
+    r.dda = 0x10001000;
+    r.lineStride = (width << 16) | width;
+    r.blend = (1u << 24) | depth;
+    r.start = start;
+    r.startU = start + width * height;
+    for (uint32_t i = 0; i < 8; ++i)
+        r.cscWords[i] = 0x100u + uint32_t(matrix) * 16u + i;
+    return r;
 }
+
+switch_external::Frame clone(uint32_t ui, uint32_t video, bool csc, int matrix = 1)
+{
+    switch_external::Frame frame;
+    frame.window[0] = rgb(ui, 440, 2560, 1440, 0);
+    frame.window[1] = yuv(video, (480u << 16) | 1336u, 768, 480, 1, csc, matrix);
+    frame.memory[0] = {319750000ULL * 4, 0, 0, 1};
+    frame.memory[1] = {319750000ULL * 2, 0, 0, 1};
+    frame.peakBytes = 319750000ULL * 6;
+    return frame;
+}
+
+const switch_dp_mode kUltrawide = {319750, 3440, 48, 32, 80, 1440, 3, 10, 28, true, true, true};
+
+struct Display {
+    TegraDisplayB dcb;
+    Banks banks;
+
+    Display()
+    {
+        xusbModelReset();
+        plans.clear();
+        admit = true;
+        banks.attach();
+        char why[96] = {};
+        EXPECT_TRUE(dcb.powerUp(why, sizeof(why))) << why;
+        dcb.setMode(kUltrawide);
+        banks.boundary();
+        clear();
+    }
+
+    void clear()
+    {
+        xusbModel().log.clear();
+        banks.writes.clear();
+    }
+};
+}  // namespace
 
 extern "C" int tegra_i2c_write(unsigned, uint8_t, uint8_t, const void *, size_t)
 {
@@ -65,197 +203,221 @@ extern "C" int switch_emc_display_memory_reserve(const switch_display_memory_hea
     return admit ? 0 : -1;
 }
 
-TEST(DisplayB, OnlyAnActivatedWindowCanRetireOrReleaseItsBandwidth)
+TEST(DisplayB, SetModeTurnsEveryWindowOffAndWritesItsFilters)
 {
     xusbModelReset();
-    plans.clear();
+    Banks banks;
+    banks.attach();
     TegraDisplayB display;
     char why[96] = {};
     ASSERT_TRUE(display.powerUp(why, sizeof(why))) << why;
-    switch_dp_mode mode = {};
-    ASSERT_TRUE(switch_dp_cta_vic(16, &mode));
     xusbModel().log.clear();
-    display.setMode(mode);
-    EXPECT_EQ(xusbWritesTo(control), (std::vector<uint32_t>{0x300u, 0x3u}));
+    banks.writes.clear();
+    display.setMode(kUltrawide);
+    EXPECT_EQ(xusbWritesTo(control), (std::vector<uint32_t>{0xf00u, 0xfu}));
     EXPECT_EQ(xusbModel().registers.at(dc + 4 * 0x405), 1u);
     EXPECT_EQ(xusbModel().registers.at(dc + 4 * 0x40), 1u);
-    EXPECT_EQ(xusbModel().registers.at(dc + 4 * 0x43) & 4u, 0u);
-    EXPECT_EQ(xusbModel().registers.at(kWinBufCtrl), 0u);
-    EXPECT_EQ(xusbModel().registers.at(kWinBufStride), 0u);
-    EXPECT_EQ(xusbModel().registers.at(kWinUvBufStride), 0u);
-    EXPECT_EQ(xusbModel().registers.at(kWinStartAddrHi), 0u);
-    EXPECT_EQ(xusbModel().registers.at(kWinCdeCtrl), 0u);
-    EXPECT_EQ(xusbModel().registers.at(kWinHFilter0), 0x00008000u);
-    EXPECT_EQ(xusbModel().registers.at(kWinHFilter0 + 4 * 15), 0x3c7c08f1u);
-    EXPECT_EQ(xusbModel().registers.at(kWinVFilter0), 128u);
-    EXPECT_EQ(xusbModel().registers.at(kWinVFilter0 + 4 * 15), 8u);
-    EXPECT_LT(xusbFirstWrite(options, 0u), xusbFirstWrite(kWinHFilter0));
-    xusbModel().log.clear();
-    admit = false;
-    ASSERT_TRUE(display.scanout(fullFrame(0x10000000)));
-    EXPECT_EQ(xusbWritesTo(options), std::vector<uint32_t>{1u << 30});
-    EXPECT_EQ(xusbWritesTo(address), std::vector<uint32_t>{0x10000000});
-    ASSERT_EQ(plans.size(), 1u);
-    EXPECT_EQ(plans.back().windows[0].required_buffering_bytes, 0u);
-    display.windowOff();
-    xusbModel().registers[control] = 0;
-    xusbModel().registers[options] = 0;
-    EXPECT_EQ(display.windowLatch(0), TegraDisplayB::Latch::Active);
-    EXPECT_EQ(plans.size(), 1u);
+    for (unsigned w = 0; w < 3; ++w) {
+        EXPECT_EQ(banks.to(w, kOptions), std::vector<uint32_t>{0u}) << w;
+        EXPECT_LT(banks.first(w, kOptions), banks.first(w, kHFilter0)) << w;
+        EXPECT_EQ(banks.assembly[w][kHFilter0], 0x00008000u);
+        EXPECT_EQ(banks.assembly[w][kHFilter0 + 15], 0x3c7c08f1u);
+        EXPECT_EQ(banks.assembly[w][kVFilter0], 128u);
+        EXPECT_EQ(banks.assembly[w][kVFilter0 + 15], 8u);
+        EXPECT_EQ(banks.assembly[w][kBufferControl], 0u);
+        EXPECT_EQ(banks.assembly[w][kStartAddrHiU], 0u);
+        EXPECT_FALSE(display.windowState(w).live);
+        EXPECT_EQ(display.windowState(w).matrix, -1);
+    }
+}
 
-    xusbModel().log.clear();
-    admit = true;
-    ASSERT_TRUE(display.scanout(fullFrame(0x10000000, 7680, 0x42u)));
-    ASSERT_EQ(plans.size(), 2u);
+// The UI and a video in one request: each window's registers through its header, the video's CSC while its window is
+// off, one UPDATE write and one ACT_REQ write naming both windows.
+TEST(DisplayB, PresentWritesEveryWindowInOneRequest)
+{
+    Display d;
+    ASSERT_TRUE(d.dcb.present(clone(0x10000000, 0x14400000, true)));
+    EXPECT_EQ(xusbWritesTo(control), (std::vector<uint32_t>{(kActA | kActB) << 8, kActA | kActB}));
+    EXPECT_EQ(d.banks.to(0, kStart), std::vector<uint32_t>{0x10000000u});
+    EXPECT_EQ(d.banks.to(0, kPosition), std::vector<uint32_t>{440u});
+    EXPECT_EQ(d.banks.to(0, kBlend), std::vector<uint32_t>{0x00ffff00u});
+    EXPECT_EQ(d.banks.to(0, kBlendMatch), std::vector<uint32_t>{0x262u});
+    EXPECT_EQ(d.banks.to(0, kBlendNomatch), std::vector<uint32_t>{0x262u});
+    EXPECT_TRUE(d.banks.to(0, kCscYof).empty());
+    EXPECT_EQ(d.banks.to(1, kColorDepth), std::vector<uint32_t>{43u});
+    EXPECT_EQ(d.banks.to(1, kStart), std::vector<uint32_t>{0x14400000u});
+    EXPECT_EQ(d.banks.to(1, kStartU), std::vector<uint32_t>{0x14400000u + 768u * 480u});
+    EXPECT_EQ(d.banks.to(1, kLineStride), std::vector<uint32_t>{(768u << 16) | 768u});
+    EXPECT_EQ(d.banks.to(1, kBlend), std::vector<uint32_t>{(1u << 24) | 1u});
+    for (uint32_t i = 0; i < 8; ++i)
+        EXPECT_EQ(d.banks.to(1, kCscYof + i), std::vector<uint32_t>{0x110u + i});
+    EXPECT_LT(d.banks.first(1, kCscYof), d.banks.first(1, kOptions));
+    EXPECT_EQ(d.banks.to(1, kOptions), std::vector<uint32_t>{kEnable | (1u << 18)});
+    EXPECT_TRUE(d.banks.to(2, kOptions).empty());
+    for (unsigned w = 0; w < 2; ++w)
+        EXPECT_GT(d.banks.first(w, kOptions), d.banks.first(w, kStart)) << w;
+    const long update = xusbFirstWrite(control, (kActA | kActB) << 8);
+    ASSERT_GE(update, 0);
+    for (const auto &event : xusbModel().log)
+        if (event.kind == XusbEvent::Write && event.address >= dc + 4 * 0x500 && event.address < dc + 4 * 0x900)
+            EXPECT_LT(&event - &xusbModel().log[0], update);
+    ASSERT_EQ(plans.size(), 1u);
     EXPECT_EQ(plans.back().head, 1u);
-    EXPECT_EQ(plans.back().peak_bytes_per_second, 594000000u);
-    EXPECT_GT(plans.back().windows[0].required_buffering_bytes, 0u);
+    EXPECT_EQ(plans.back().peak_bytes_per_second, 319750000ULL * 6);
+    EXPECT_EQ(plans.back().windows[0].peak_bytes_per_second, 319750000ULL * 4);
+    EXPECT_EQ(plans.back().windows[1].peak_bytes_per_second, 319750000ULL * 2);
+    EXPECT_FALSE(plans.back().windows[2].active);
+    EXPECT_TRUE(d.dcb.windowState(1).live);
+    EXPECT_EQ(d.dcb.windowState(1).matrix, 1);
+}
+
+TEST(DisplayB, LatchWaitsForEveryWindowThenChecksEach)
+{
+    Display d;
     using Latch = TegraDisplayB::Latch;
-    EXPECT_EQ(display.windowLatch(0x10000000), Latch::Pending);
-    xusbModel().registers[control] = 0;
-    EXPECT_EQ(display.windowLatch(0x20000000), Latch::Missed);
-    EXPECT_EQ(display.windowLatch(0x10000000), Latch::Active);
-    xusbModel().log.clear();
-    ASSERT_TRUE(display.scanout(fullFrame(0x20000000, 7680, 0x42u)));
-    xusbModel().registers[dc + 4 * 0x37] = 2;
-    const unsigned statusReadsBefore = xusbModel().reads[dc + 4 * 0x37];
-    EXPECT_EQ(display.takeInterrupt(), 2u);
-    EXPECT_EQ(xusbModel().reads[dc + 4 * 0x37], statusReadsBefore + 2u);
-    EXPECT_EQ(display.windowLatch(0x20000000), Latch::Pending);
-    display.frameInterrupt(true);
-    EXPECT_TRUE(xusbWritesTo(dc + 4 * 0x39).empty());
-    display.frameInterrupt(false);
-    EXPECT_EQ(xusbWritesTo(dc + 4 * 0x39), std::vector<uint32_t>{0});
-    EXPECT_EQ(xusbWritesTo(address), std::vector<uint32_t>{0x20000000});
-    EXPECT_EQ(xusbWritesTo(header), std::vector<uint32_t>{1u << 4});
-    EXPECT_LT(xusbFirstWrite(header), xusbFirstWrite(address));
-    EXPECT_TRUE(xusbWritesTo(kWinSize).empty());
-    EXPECT_TRUE(xusbWritesTo(kWinLineStride).empty());
-    EXPECT_EQ(plans.size(), 2u);
+    ASSERT_TRUE(d.dcb.present(clone(0x10000000, 0x14400000, true)));
+    EXPECT_EQ(d.dcb.latch(), Latch::Pending);
+    xusbModel().registers[control] = kActB;
+    EXPECT_EQ(d.dcb.latch(), Latch::Pending);
+    xusbModel().registers[control] = kActA | kActB;
+    d.banks.boundary();
+    d.clear();
+    EXPECT_EQ(d.dcb.latch(), Latch::Active);
+    EXPECT_EQ(xusbWritesTo(header), (std::vector<uint32_t>{1u << 4, 1u << 5}));
 
-    xusbModel().log.clear();
-    display.resetWindowCache();
-    ASSERT_TRUE(display.scanout(fullFrame(0x20000000, 7680, 0x42u)));
-    EXPECT_EQ(xusbWritesTo(options), std::vector<uint32_t>{1u << 30});
-    EXPECT_EQ(xusbWritesTo(kWinSize), std::vector<uint32_t>{(1080u << 16) | 1920u});
-    EXPECT_EQ(xusbWritesTo(kWinLineStride), std::vector<uint32_t>{7680u});
-    EXPECT_EQ(plans.size(), 3u);
-    xusbModel().log.clear();
-    display.windowOff();
-    EXPECT_EQ(xusbWritesTo(header), std::vector<uint32_t>{1u << 4});
-    EXPECT_LT(xusbFirstWrite(header), xusbFirstWrite(options));
-    EXPECT_EQ(display.windowLatch(0), Latch::Pending);
-    EXPECT_EQ(plans.size(), 3u);
-    xusbModel().registers[control] = 0;
-    xusbModel().registers[options] = 1u << 30;
-    EXPECT_EQ(display.windowLatch(0), Latch::Missed);
-    EXPECT_EQ(plans.size(), 3u);
-    xusbModel().registers[options] = 0;
-    EXPECT_EQ(display.windowLatch(0), Latch::Active);
-    ASSERT_EQ(plans.size(), 4u);
-    EXPECT_EQ(plans.back().head, 1u);
-    EXPECT_EQ(plans.back().peak_bytes_per_second, 0u);
+    ASSERT_TRUE(d.dcb.present(clone(0x10000000, 0x18800000, false)));
+    EXPECT_TRUE(d.banks.to(1, kCscYof).empty());
+    xusbModel().registers[control] = kActA | kActB;
+    d.banks.boundary();
+    d.banks.active[1][0] = 0x14400000;
+    EXPECT_EQ(d.dcb.latch(), Latch::Missed);
+    EXPECT_TRUE(d.dcb.windowState(1).live);
 }
 
-TEST(DisplayB, ProgramsWindowGeometryForPillarboxedAndSubRectFrames)
+// A window the next frame leaves goes off in the same request, and its latch is that it is off.
+TEST(DisplayB, UnusedWindowsTurnOffInTheSameRequest)
 {
-    xusbModelReset();
-    plans.clear();
-    admit = true;
-    TegraDisplayB display;
-    char why[96] = {};
-    ASSERT_TRUE(display.powerUp(why, sizeof(why))) << why;
-    switch_dp_mode mode = {};
-    ASSERT_TRUE(switch_dp_cta_vic(16, &mode));
-    display.setMode(mode);
-
-    xusbModel().log.clear();
-    const TegraDisplayB::Frame pillar = {
-        0x10000000u, 2432u, 0u, 12u, 656u, (1080u << 16) | 608u, (1080u << 16) | (608u * 4u), 0u, 0u,
-    };
-    ASSERT_TRUE(display.scanout(pillar));
-    EXPECT_EQ(xusbWritesTo(kWinBlend), std::vector<uint32_t>{(1u << 24) | 255u});
-    EXPECT_EQ(xusbWritesTo(kWinColorDepth), std::vector<uint32_t>{12u});
-    EXPECT_EQ(xusbWritesTo(kWinPos), std::vector<uint32_t>{656u});
-    EXPECT_EQ(xusbWritesTo(kWinSize), std::vector<uint32_t>{(1080u << 16) | 608u});
-    EXPECT_EQ(xusbWritesTo(kWinPrescaled), std::vector<uint32_t>{(1080u << 16) | (608u * 4u)});
-    EXPECT_EQ(xusbWritesTo(kWinLineStride), std::vector<uint32_t>{2432u});
-    EXPECT_EQ(xusbWritesTo(kWinHOffset), std::vector<uint32_t>{0u});
-    EXPECT_EQ(xusbWritesTo(kWinVOffset), std::vector<uint32_t>{0u});
-    EXPECT_EQ(xusbWritesTo(kWinKind), std::vector<uint32_t>{0u});
-    EXPECT_EQ(xusbWritesTo(address), std::vector<uint32_t>{0x10000000u});
-    EXPECT_EQ(plans.back().peak_bytes_per_second, 594000000u);
-
+    Display d;
+    using Latch = TegraDisplayB::Latch;
+    ASSERT_TRUE(d.dcb.present(clone(0x10000000, 0x14400000, true)));
+    d.banks.boundary();
+    ASSERT_EQ(d.dcb.latch(), Latch::Active);
+    d.clear();
+    switch_external::Frame ui;
+    ui.window[0] = rgb(0x10000000, 440, 2560, 1440, 0);
+    ui.memory[0] = {319750000ULL * 4, 0, 0, 1};
+    ui.peakBytes = 319750000ULL * 4;
+    ASSERT_TRUE(d.dcb.present(ui));
+    EXPECT_EQ(xusbWritesTo(control), (std::vector<uint32_t>{(kActA | kActB) << 8, kActA | kActB}));
+    EXPECT_EQ(d.banks.to(1, kOptions), std::vector<uint32_t>{0u});
+    EXPECT_EQ(d.banks.to(0, kStart), std::vector<uint32_t>{0x10000000u});
+    EXPECT_TRUE(d.banks.to(0, kPosition).empty());
+    EXPECT_EQ(plans.back().peak_bytes_per_second, 319750000ULL * 6);
+    xusbModel().registers[control] = kActA | kActB;
+    d.banks.active[1][1] = kEnable;
+    d.banks.expose();
     xusbModel().registers[control] = 0;
-    EXPECT_EQ(display.windowLatch(0x10000000u), TegraDisplayB::Latch::Active);
+    EXPECT_EQ(d.dcb.latch(), Latch::Missed);
 
-    xusbModel().log.clear();
-    const TegraDisplayB::Frame subRect = {
-        0x1004c000u, 2560u, 0x42u, 13u, (40u << 16) | 656u, (1000u << 16) | 608u, (1000u << 16) | (608u * 4u),
-        64u, 22u,
-    };
-    ASSERT_TRUE(display.scanout(subRect));
-    EXPECT_EQ(xusbWritesTo(kWinColorDepth), std::vector<uint32_t>{13u});
-    EXPECT_EQ(xusbWritesTo(kWinPos), std::vector<uint32_t>{(40u << 16) | 656u});
-    EXPECT_EQ(xusbWritesTo(kWinSize), std::vector<uint32_t>{(1000u << 16) | 608u});
-    EXPECT_EQ(xusbWritesTo(kWinPrescaled), std::vector<uint32_t>{(1000u << 16) | (608u * 4u)});
-    EXPECT_EQ(xusbWritesTo(kWinLineStride), std::vector<uint32_t>{2560u});
-    EXPECT_EQ(xusbWritesTo(kWinHOffset), std::vector<uint32_t>{64u});
-    EXPECT_EQ(xusbWritesTo(kWinVOffset), std::vector<uint32_t>{22u});
-    EXPECT_EQ(xusbWritesTo(kWinKind), std::vector<uint32_t>{0x42u});
-    EXPECT_EQ(xusbWritesTo(address), std::vector<uint32_t>{0x1004c000u});
-    ASSERT_EQ(plans.size(), 2u);
-    EXPECT_EQ(plans.back().windows[0].required_buffering_bytes, 608u * 4u);
-
-    xusbModel().registers[control] = 0;
-    EXPECT_EQ(display.windowLatch(0x1004c000u), TegraDisplayB::Latch::Active);
+    ASSERT_TRUE(d.dcb.present(ui));
+    d.banks.boundary();
+    EXPECT_EQ(d.dcb.latch(), Latch::Active);
+    EXPECT_FALSE(d.dcb.windowState(1).live);
+    EXPECT_EQ(plans.back().peak_bytes_per_second, 319750000ULL * 4);
+    EXPECT_FALSE(plans.back().windows[1].active);
 }
 
-TEST(DisplayB, ProgramsHardwareScalingDdaFiltersAndMemoryWindow)
+// The CSC is not shadowed: a frame that writes a scanning window's CSC is refused whole.
+TEST(DisplayB, CscOfAScanningWindowIsNeverWritten)
 {
-    xusbModelReset();
-    plans.clear();
-    admit = true;
-    TegraDisplayB display;
-    char why[96] = {};
-    ASSERT_TRUE(display.powerUp(why, sizeof(why))) << why;
-    const switch_dp_mode ultrawide = {319750, 3440, 48, 32, 80, 1440, 3, 10, 28, true, true, true};
-    display.setMode(ultrawide);
+    Display d;
+    ASSERT_TRUE(d.dcb.present(clone(0x10000000, 0x14400000, true)));
+    d.banks.boundary();
+    ASSERT_EQ(d.dcb.latch(), TegraDisplayB::Latch::Active);
+    d.clear();
+    EXPECT_FALSE(d.dcb.present(clone(0x10000000, 0x14400000, true, 2)));
+    EXPECT_TRUE(d.banks.writes.empty());
+    EXPECT_TRUE(xusbWritesTo(control).empty());
 
-    xusbModel().log.clear();
-    const TegraDisplayB::Frame upscaled = {
-        0x10000000u, 5120u, 0x42u, 12u, 440u, (1440u << 16) | 2560u, (720u << 16) | (1280u * 4u),
-        0u, 0u, (0x0800u << 16) | 0x0800u, 0u, 0u, (1u << 30) | (1u << 8) | (1u << 10),
-    };
-    ASSERT_TRUE(display.scanout(upscaled));
-    EXPECT_EQ(xusbWritesTo(options), std::vector<uint32_t>{(1u << 30) | (1u << 8) | (1u << 10)});
-    EXPECT_EQ(xusbWritesTo(kWinDda), std::vector<uint32_t>{(0x0800u << 16) | 0x0800u});
-    EXPECT_EQ(xusbWritesTo(kWinHInit), std::vector<uint32_t>{0u});
-    EXPECT_EQ(xusbWritesTo(kWinVInit), std::vector<uint32_t>{0u});
+    switch_external::Frame moved = clone(0x10000000, 0x14400000, false);
+    moved.window[2] = yuv(0x18800000, (480u << 16) | 1336u, 768, 480, 1, true, 2);
+    moved.window[1] = {};
+    ASSERT_TRUE(d.dcb.present(moved));
+    EXPECT_EQ(d.banks.to(2, kCscYof), std::vector<uint32_t>{0x120u});
+    EXPECT_EQ(d.banks.to(1, kOptions), std::vector<uint32_t>{0u});
+    EXPECT_EQ(xusbWritesTo(control), (std::vector<uint32_t>{(kActA | kActB | kActC) << 8, kActA | kActB | kActC}));
+    d.banks.boundary();
+    ASSERT_EQ(d.dcb.latch(), TegraDisplayB::Latch::Active);
+    EXPECT_FALSE(d.dcb.windowState(1).live);
+    EXPECT_EQ(d.dcb.windowState(1).matrix, 1);
+    EXPECT_EQ(d.dcb.windowState(2).matrix, 2);
+}
+
+// Scaling and a source offset land in the window's registers; only what changed is written again.
+TEST(DisplayB, ProgramsScalingAndWritesOnlyWhatChanged)
+{
+    Display d;
+    switch_external::Frame frame;
+    frame.window[0] = rgb(0x10000000, 440, 2560, 1440, 0);
+    frame.window[0].prescaled = (720u << 16) | (1280u * 4u);
+    frame.window[0].dda = (0x0800u << 16) | 0x0800u;
+    frame.window[0].hInitial = 0x400;
+    frame.window[0].vInitial = 0x400;
+    frame.window[0].hOffset = 64;
+    frame.window[0].vOffset = 22;
+    frame.window[0].kind = 2u | (4u << 4);
+    frame.window[0].options = kEnable | (1u << 8) | (1u << 10);
+    ASSERT_TRUE(d.dcb.present(frame));
+    EXPECT_EQ(d.banks.to(0, kDda), std::vector<uint32_t>{(0x0800u << 16) | 0x0800u});
+    EXPECT_EQ(d.banks.to(0, kHInit), std::vector<uint32_t>{0x400u});
+    EXPECT_EQ(d.banks.to(0, kVInit), std::vector<uint32_t>{0x400u});
+    EXPECT_EQ(d.banks.to(0, kPrescaled), std::vector<uint32_t>{(720u << 16) | (1280u * 4u)});
+    EXPECT_EQ(d.banks.to(0, kHOffset), std::vector<uint32_t>{64u});
+    EXPECT_EQ(d.banks.to(0, kVOffset), std::vector<uint32_t>{22u});
+    EXPECT_EQ(d.banks.to(0, kKind), std::vector<uint32_t>{2u | (4u << 4)});
+    EXPECT_EQ(d.banks.to(0, kOptions), std::vector<uint32_t>{kEnable | (1u << 8) | (1u << 10)});
+    EXPECT_EQ(d.banks.to(0, kSize), std::vector<uint32_t>{(1440u << 16) | 2560u});
+    d.banks.boundary();
+    ASSERT_EQ(d.dcb.latch(), TegraDisplayB::Latch::Active);
+
+    d.clear();
+    frame.window[0].start = 0x14400000;
+    ASSERT_TRUE(d.dcb.present(frame));
+    ASSERT_EQ(d.banks.writes.size(), 1u);
+    EXPECT_EQ(d.banks.to(0, kStart), std::vector<uint32_t>{0x14400000u});
+
+    d.banks.boundary();
+    ASSERT_EQ(d.dcb.latch(), TegraDisplayB::Latch::Active);
+    d.dcb.resetWindowCache();
+    d.clear();
+    ASSERT_TRUE(d.dcb.present(frame));
+    EXPECT_EQ(d.banks.to(0, kDda), std::vector<uint32_t>{(0x0800u << 16) | 0x0800u});
+    EXPECT_EQ(d.banks.to(0, kOptions), std::vector<uint32_t>{kEnable | (1u << 8) | (1u << 10)});
+}
+
+// The EMC is asked for what the windows scan during a change (the frame leaving and the one coming, each window's worst)
+// and then for what is latched; a refusal leaves the frame on the screen and is not asked again.
+TEST(DisplayB, MemoryFollowsTheLatchedWindows)
+{
+    Display d;
+    admit = false;
+    ASSERT_TRUE(d.dcb.present(clone(0x10000000, 0x14400000, true)));
     ASSERT_EQ(plans.size(), 1u);
-    EXPECT_EQ(plans.back().peak_bytes_per_second, 319750000ULL * 4u);
-    EXPECT_EQ(plans.back().windows[0].required_buffering_bytes, 1280u * 3u * 4u);
-
-    xusbModel().log.clear();
-    auto nextAddr = upscaled;
-    nextAddr.iova = 0x14400000u;
-    ASSERT_TRUE(display.scanout(nextAddr));
-    EXPECT_TRUE(xusbWritesTo(options).empty());
-    EXPECT_TRUE(xusbWritesTo(kWinDda).empty());
+    d.banks.boundary();
+    ASSERT_EQ(d.dcb.latch(), TegraDisplayB::Latch::Active);
     EXPECT_EQ(plans.size(), 1u);
+    admit = true;
 
-    xusbModel().log.clear();
-    const TegraDisplayB::Frame downscaled = {
-        0x18800000u, 10240u, 0x42u, 12u, 0u, (720u << 16) | 1280u, (1440u << 16) | (2560u * 4u),
-        0u, 0u, (0x2000u << 16) | 0x2000u, 0x0800u, 0x0800u, (1u << 30) | (1u << 8) | (1u << 10),
-    };
-    ASSERT_TRUE(display.scanout(downscaled));
-    EXPECT_EQ(xusbWritesTo(kWinDda), std::vector<uint32_t>{(0x2000u << 16) | 0x2000u});
-    EXPECT_EQ(xusbWritesTo(kWinHInit), std::vector<uint32_t>{0x0800u});
-    EXPECT_EQ(xusbWritesTo(kWinVInit), std::vector<uint32_t>{0x0800u});
+    switch_external::Frame off;
+    ASSERT_TRUE(d.dcb.present(off));
+    EXPECT_EQ(plans.size(), 1u);
+    d.banks.boundary();
+    ASSERT_EQ(d.dcb.latch(), TegraDisplayB::Latch::Active);
     ASSERT_EQ(plans.size(), 2u);
-    EXPECT_EQ(plans.back().peak_bytes_per_second, 319750000ULL * 4u * 4u);
-    EXPECT_EQ(plans.back().windows[0].required_buffering_bytes, 2560u * 3u * 4u);
+    EXPECT_EQ(plans.back().peak_bytes_per_second, 0u);
+    EXPECT_FALSE(plans.back().windows[0].active);
+    EXPECT_FALSE(plans.back().windows[1].active);
+    EXPECT_FALSE(d.dcb.windowState(0).live);
 }
 
 TEST(DisplayB, TeardownUsesActiveWriteMuxAndFlushesMcHotResetBeforeReset)
@@ -411,8 +573,8 @@ TEST(DisplayB, CombinedTeardownKeepsPllD2RunningThroughDcbPowerDown)
     ASSERT_TRUE(switch_dp_cta_vic(16, &mode));
     const switch_dp_link link = {SWITCH_DP_RATE_HBR, 2};
     switch_dp_tu tu = {};
-    ASSERT_TRUE(switch_dp_tu_config(mode.pixel_khz, mode.hactive, switch_dp_mode_htotal(&mode),
-                                    link.rate, link.lanes, true, &tu));
+    ASSERT_TRUE(switch_dp_tu_config(mode.pixel_khz, mode.hactive, switch_dp_mode_htotal(&mode), link.rate, link.lanes,
+                                    true, &tu));
     ASSERT_TRUE(sor.powerUp(why, sizeof(why))) << why;
     ASSERT_TRUE(sor.pixelClock(mode.pixel_khz, why, sizeof(why))) << why;
     ASSERT_TRUE(dcb.powerUp(why, sizeof(why))) << why;
@@ -436,7 +598,7 @@ TEST(DisplayB, CombinedTeardownKeepsPllD2RunningThroughDcbPowerDown)
     const unsigned testReadsAtStart = model.reads[kSorTest];
     dcbWriteAfterPllD2Off = false;
 
-    dcb.windowOff();
+    dcb.windowsOff();
     sor.detachHead();
     dcb.enableSor(false);
     dcb.powerDown();
@@ -469,27 +631,4 @@ TEST(DisplayB, CombinedTeardownKeepsPllD2RunningThroughDcbPowerDown)
     aux.powerDown();
     EXPECT_TRUE(model.log.empty());
     EXPECT_EQ(xusbWritesTo(kDpaux + 0x138).size(), 0u);
-}
-
-TEST(DisplayB, WindowLatchSelectsWindowABeforeReadingWindowRegisters)
-{
-    xusbModelReset();
-    plans.clear();
-    admit = true;
-    TegraDisplayB display;
-    char why[96] = {};
-    ASSERT_TRUE(display.powerUp(why, sizeof(why))) << why;
-    switch_dp_mode mode = {};
-    ASSERT_TRUE(switch_dp_cta_vic(16, &mode));
-    display.setMode(mode);
-    ASSERT_TRUE(display.scanout(fullFrame(0x10000000u)));
-
-    xusbModel().log.clear();
-    EXPECT_EQ(display.windowLatch(0x10000000u), TegraDisplayB::Latch::Pending);
-    EXPECT_TRUE(xusbWritesTo(header).empty());
-
-    xusbModel().registers[control] = 0;
-    xusbModel().log.clear();
-    EXPECT_EQ(display.windowLatch(0x10000000u), TegraDisplayB::Latch::Active);
-    EXPECT_EQ(xusbWritesTo(header), std::vector<uint32_t>{1u << 4});
 }
