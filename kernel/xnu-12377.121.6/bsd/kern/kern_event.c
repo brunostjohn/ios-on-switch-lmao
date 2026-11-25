@@ -2198,6 +2198,11 @@ again:
 	if (kev->fflags & NOTE_WL_OWNER_HINT) {
 		if (cur_owner != THREAD_NULL || kqr_thread(kqr) != THREAD_NULL ||
 		    new_owner == THREAD_NULL) {
+			/*
+			 * kqwl_owner stays, and so does its reference: out drops
+			 * cur_owner's whenever new_owner differs from it.
+			 */
+			new_owner = cur_owner;
 			goto out;
 		}
 	}
