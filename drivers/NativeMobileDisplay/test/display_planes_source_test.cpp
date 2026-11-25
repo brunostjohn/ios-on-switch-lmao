@@ -130,6 +130,7 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     EXPECT_TRUE(limits.has("publish(\"IOMFBMaxSrcPixels\", source, limits.compressionUnsupported ? 8 : 7, 64);"));
     EXPECT_TRUE(limits.before("#if SWITCH_IPSW_KIND_24B119", "native_planes::kLimits24B119;"));
     EXPECT_TRUE(limits.has("if (limits.packedYuvUnsupported) setProperty(\"IOMFBYUVPackedUnSupported\", true);"));
+    EXPECT_TRUE(limits.has("if (limits.flipUnsupported) setProperty(\"IOMFBDisableFlip\", true);"));
     // The service is found as J120's: IOServiceMatching("AppleCLCD").
     EXPECT_TRUE(code.has(": OSMetaClass(\"AppleCLCD\", NativeLegacyDisplay::superClass, sizeof(NativeLegacyDisplay))"));
 }
@@ -141,7 +142,8 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
 TEST(DisplayPlanesSource, TheConsoleHoldKeepsTheScreen)
 {
     const std::string source = Display(), planes = Planes();
-    const CodeText release(Configured(source, "(defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)", false));
+    const CodeText release(
+        Configured(source, "(defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)", false));
     EXPECT_FALSE(release.has("extern \"C\" __attribute__((weak)) volatile int switch_console_hold"));
     EXPECT_FALSE(release.has("if (consoleHolds())"));
     EXPECT_FALSE(release.has("void kickHeld("));

@@ -485,7 +485,7 @@ TEST(DisplayPlanes, PublishedAlignmentSuitsEveryReader)
 }
 
 // iOS 27 publishes iOS 17's limits and, where QuartzCore 24B119 no longer goes by J120's chip id, packed 10-bit YUV and
-// compressed surfaces ruled out.
+// compressed surfaces ruled out, and flips, which 24B119 assumes a display scans unless told otherwise.
 TEST(DisplayPlanes, Limits24B119AreIos17sWithoutPackedOrCompressed)
 {
     const Limits ios17;
@@ -494,6 +494,8 @@ TEST(DisplayPlanes, Limits24B119AreIos17sWithoutPackedOrCompressed)
     EXPECT_TRUE(ios27.packedYuvUnsupported);
     EXPECT_FALSE(ios17.compressionUnsupported);
     EXPECT_TRUE(ios27.compressionUnsupported);
+    EXPECT_FALSE(ios17.flipUnsupported);
+    EXPECT_TRUE(ios27.flipUnsupported);
     EXPECT_EQ(ios27.minScaleFraction, ios17.minScaleFraction);
     EXPECT_EQ(ios27.maxScale, ios17.maxScale);
     EXPECT_EQ(ios27.maxSrcRectWidth, ios17.maxSrcRectWidth);

@@ -171,6 +171,7 @@ struct Limits {
     uint32_t maxLayers = 3;
     bool packedYuvUnsupported = false;    // published as IOMFBYUVPackedUnSupported (24B119 only, see kLimits24B119)
     bool compressionUnsupported = false;  // published as IOMFBMaxSrcPixels' IOMFBCompressionSupport 0 (24B119 only)
+    bool flipUnsupported = false;         // published as IOMFBDisableFlip (24B119 only, see kLimits24B119)
 };
 
 // QuartzCore 24B119 [V] reads every key above the same way (update_display_limits 0x1844e82f0; MaxSrcRectWidthForPipe and
@@ -194,7 +195,18 @@ struct Limits {
 // sets the flag bit 29 that 0x18443c378 tests (render_contents_background builds the flags at 0x18437cc6c-0x18437ce98,
 // OGLDisplay::detach_layer adds bit 22, detach_layer keeps bits 31-27, 7 and 3-0 of the layer's earlier flags and
 // detachable_layer_impl adds bits 7 and 23-27).
-constexpr Limits kLimits24B119 = {.packedYuvUnsupported = true, .compressionUnsupported = true};
+//
+// Flips: 24B119's AppleDisplay starts with capability bit 15 at display+0x77c8 set (update_display_limits
+// 0x1844e8428-0x1844e8438) and clears it only for IOMFBDisableFlip (0x1844e922c-0x1844e9258).
+// AppleInternalDisplay::display_supports_rotation_p (0x1844401a4) answers a layer with transform bit 1 and no quarter
+// turn (IOMFB transforms 2 and 3, the swap's transform word as fb_swap_set_layer passes it) by that bit alone, so Core
+// Animation detached half-turned layers untouched and checkDetached refused them (kTransformed): boot 2693043C refused
+// 48 swaps so in anim.timing's rotate180 phases (19:30:58-19:31:13). With the key it turns them through the
+// IOSurfaceAccelerator (TegraVIC takes all 8 transforms) as it does a quarter turn, which it only hands the display for
+// IOMFBSupportsRotation (bit 14) or a display of type 2. Transform 1 alone is answered yes whatever the bit: such a
+// layer still reaches the display, and is refused.
+constexpr Limits kLimits24B119 = {
+    .packedYuvUnsupported = true, .compressionUnsupported = true, .flipUnsupported = true};
 
 // The row and plane-base alignment published for every surface iPadOS sizes for this display (Core Animation's
 // framebuffers through update_display_limits, VideoToolbox's and MediaToolbox's outputs through
@@ -213,7 +225,7 @@ enum Reason : unsigned {
     kSurface = 4,      // the IOSurface or its memory is not what its own fields say
     kBlank = 5,        // accepted: everything off over black
     kTwoUi = 6,        // more layers with surfaces than published (IOMFBNumLayers)
-    kTransformed = 7,  // a transform (the display publishes no flips or rotation: Core Animation copies those)
+    kTransformed = 7,  // a transform (the display publishes no rotation and, on 24B119, IOMFBDisableFlip)
     kScale = 8,        // a scale outside 1/4 .. 4x, or a source wider than published
     kFormat = 9,       // a format no window reads
     kAlignment = 10,   // a plane base or row not aligned as published

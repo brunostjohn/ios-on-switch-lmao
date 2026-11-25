@@ -5315,6 +5315,8 @@ public:
         publish("IOMFBNumLayers", layers, 1, 32);
         if (limits.packedYuvUnsupported)
             setProperty("IOMFBYUVPackedUnSupported", true);
+        if (limits.flipUnsupported)
+            setProperty("IOMFBDisableFlip", true);
     }
 
     IOReturn getGammaTable(void *table) override
