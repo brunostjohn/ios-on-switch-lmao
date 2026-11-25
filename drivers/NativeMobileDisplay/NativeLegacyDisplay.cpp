@@ -4928,8 +4928,9 @@ public:
                 reason = native_legacy_blank_state(updated, word(swapReady), background) ? 5 : 2;
                 accepted = reason == 5;
             } else {
-                reason = native_planes::checkUpdated(updated, background, hasSurface, layers, width, height);
-                planeNoteRefused(reason, updated, hasSurface, layers, width, height);
+                reason =
+                    native_planes::checkUpdated(updated, background, hasSurface, layers, width, height, kPlaneLimits);
+                planeNoteRefused(reason, updated, hasSurface, layers, width, height, kPlaneLimits);
                 // The UI's own memory: its rows within the descriptor (a surface larger than the display, rows or lines
                 // padded to the GPU's alignment, is accepted: only the visible rectangle is read).
                 for (unsigned i = 0; !reason && i < native_planes::kLayers; ++i) {
@@ -5289,13 +5290,15 @@ public:
     // r18-planes: the limits Core Animation detaches a layer within (AppleDisplay::update_display_limits reads them once, at
     // the display's creation; native_planes::Limits has the values and why). With backboardd still under CA_DISABLE_DETACHED
     // (native_legacy_detach_ready false) nothing is detached and these change nothing.
+#if SWITCH_IPSW_KIND_24B119
+    static constexpr native_planes::Limits kPlaneLimits = native_planes::kLimits24B119;
+#else
+    static constexpr native_planes::Limits kPlaneLimits = {};
+#endif
+
     void publishPlaneLimits()
     {
-#if SWITCH_IPSW_KIND_24B119
-        constexpr native_planes::Limits limits = native_planes::kLimits24B119;
-#else
-        constexpr native_planes::Limits limits;
-#endif
+        constexpr native_planes::Limits limits = kPlaneLimits;
 
         struct Entry {
             const char *key;

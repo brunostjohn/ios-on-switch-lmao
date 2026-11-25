@@ -488,6 +488,18 @@ GROUPS: dict[str, list[Check]] = {
             'clause skips frame ends there too: drop it for 21H461; all in the 0 bin means its stamps name the next frame end',
         ),
         Check(
+            'display.transform-refused',
+            'big-display',
+            'SwitchDisplay: swap refused: layer ',
+            REPORT,
+            process=KERNEL,
+            regex=r'has transform (?P<transform>\d+) \(format (?P<format>0x[0-9a-f]+), (?P<size>\d+x\d+)\)',
+            show=('transform', 'format', 'size'),
+            source='drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp (noteTransformRefused)',
+            note='24B119 publishes rotation and shows every transform: no line. 21H461 publishes none and refuses a '
+            'transformed layer as before: each line is a transform word its render server sent anyway, once per word',
+        ),
+        Check(
             'display.vblank-phase-gone',
             'lost-work-3',
             (

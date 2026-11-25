@@ -127,7 +127,7 @@ Layer randomDetached()
 
 void testAcceptance()
 {
-    const Limits limits;
+    const Limits &limits = kLimits24B119;
     unsigned accepted = 0, total = 0, visible = 0;
     for (int n = 0; n < 200000; ++n) {
         Layer layers[kLayers];
@@ -149,6 +149,8 @@ void testAcceptance()
         const uint32_t updated = (has[0] ? 1u : 0) | (has[1] ? 2u : 0) | (has[2] ? 4u : 0) | kBackgroundBit;
         ++total;
         const unsigned why = checkUpdated(updated, kOpaqueBlack, has, layers, W, H, limits);
+        CHECK(checkUpdated(updated, kOpaqueBlack, has, layers, W, H, Limits()) == (d.transform ? kTransformed : why),
+              "iOS 17's limits (no rotation published) answer transform %u differently", d.transform);
         CHECK(why == kAccepted,
               "swap within the limits refused (reason %u): kind %d src %d,%d %dx%d of %ux%u dst %d,%d %dx%d", why,
               d.kind, d.src.x, d.src.y, d.src.w, d.src.h, d.surface.width, d.surface.height, d.dst.x, d.dst.y, d.dst.w,
@@ -199,7 +201,9 @@ void testRefusals()
     CHECK(checkUpdated(7u | kBackgroundBit, kOpaqueBlack, has, layers, W, H) == kAccepted, "the reference swap");
     Layer keep = d;
     d.transform = 4;
-    CHECK(checkUpdated(6, 0, has, layers, W, H) == kAccepted, "a turned video: the conversion job turns it");
+    CHECK(checkUpdated(6, 0, has, layers, W, H, kLimits24B119) == kAccepted,
+          "a turned video: the conversion job turns it");
+    CHECK(checkUpdated(6, 0, has, layers, W, H) == kTransformed, "a turned video where no rotation is published");
     d = keep;
     d.surface.format = fourcc('x', '4', '2', '0');
     d.kind = kindOf(d.surface.format, d.surface.planes);
@@ -494,7 +498,7 @@ TEST(DisplayPlanesTurn, AFullScreenTurnedMetalLayerIsScannedByTheWindow)
     l.src = {0, 0, 1280, 720};
     l.dst = {0, 0, 720, 1280};
     l.transform = 7;
-    EXPECT_EQ(checkDetached(l, W, H), (unsigned)kAccepted);
+    EXPECT_EQ(checkDetached(l, W, H, kLimits24B119), (unsigned)kAccepted);
     Image image;
     ASSERT_TRUE(imageOf(l, W, H, image, &block));
     EXPECT_FALSE(image.convert);
@@ -518,7 +522,7 @@ TEST(DisplayPlanesTurn, AFullScreenTurnedMetalLayerIsScannedByTheWindow)
     ASSERT_TRUE(imageOf(l, W, H, image));
     EXPECT_TRUE(image.convert);
     l.dst = {0, 0, 360, 640};
-    EXPECT_EQ(checkDetached(l, W, H), (unsigned)kAccepted);
+    EXPECT_EQ(checkDetached(l, W, H, kLimits24B119), (unsigned)kAccepted);
     ASSERT_TRUE(imageOf(l, W, H, image, &block));
     EXPECT_TRUE(image.convert);
 }
@@ -618,6 +622,24 @@ TEST(DisplayPlanes, PublishedAlignmentSuitsEveryReader)
 
 // iOS 27 publishes iOS 17's limits and, where QuartzCore 24B119 no longer goes by J120's chip id, packed 10-bit YUV and
 // compressed surfaces ruled out, and rotation published.
+// 21H461 is not told the display rotates, so a transform word it sends anyway is refused as before the turn model;
+// 24B119 is told, and every word is shown.
+TEST(DisplayPlanes, ATransformIsAcceptedOnlyWhereRotationIsPublished)
+{
+    for (const Kind kind : {kKindBgra, kKindNv12Video}) {
+        Layer l;
+        l.kind = kind;
+        l.surface = makeSurface(kind, 1280, 720);
+        l.src = {0, 0, 1280, 720};
+        for (uint32_t t = 1; t < 8; ++t) {
+            l.transform = t;
+            l.dst = turnOf(t).transpose ? Rect{0, 0, 720, 1280} : Rect{0, 0, 1280, 720};
+            EXPECT_EQ(checkDetached(l, W, H), (unsigned)kTransformed) << kind << " " << t;
+            EXPECT_EQ(checkDetached(l, W, H, kLimits24B119), (unsigned)kAccepted) << kind << " " << t;
+        }
+    }
+}
+
 TEST(DisplayPlanes, Limits24B119AreIos17sWithoutPackedOrCompressed)
 {
     const Limits ios17;

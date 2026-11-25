@@ -228,7 +228,7 @@ enum Reason : unsigned {
     kSurface = 4,      // the IOSurface or its memory is not what its own fields say
     kBlank = 5,        // accepted: everything off over black
     kTwoUi = 6,        // more layers with surfaces than published (IOMFBNumLayers)
-    kTransformed = 7,  // no longer given: a transformed layer is turned by a window or the conversion job
+    kTransformed = 7,  // a transform where the display publishes no rotation (Limits::rotation)
     kScale = 8,        // a scale outside 1/4 .. 4x, or a source wider than published
     kFormat = 9,       // a format no window reads
     kAlignment = 10,   // a plane base or row not aligned as published
@@ -498,6 +498,8 @@ inline unsigned checkDetached(const Layer &l, uint32_t width, uint32_t height, c
 {
     if (l.kind == kKindNone)
         return kFormat;
+    if (l.transform && !limits.rotation)
+        return kTransformed;
     const Rect s = l.src;
     // A quarter turn's destination width is its source height: the scale limits hold per output axis.
     const Rect d = turnOf(l.transform).transpose ? Rect{l.dst.x, l.dst.y, l.dst.h, l.dst.w} : l.dst;

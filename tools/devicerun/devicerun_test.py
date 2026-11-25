@@ -163,6 +163,13 @@ class Rules(unittest.TestCase):
         self.assertEqual(verdict(debug, busy), PASS)
         self.assertEqual(verdict(debug, leak), FAIL)
 
+    def test_transform_refused_names_the_word(self):
+        check = next(c for c in checks.GROUPS['display'] if c.name == 'display.transform-refused')
+        line = 'SwitchDisplay: swap refused: layer 2 has transform 1 (format 0x42475241, 1280x720)'
+        result = devicerun.run_checks([record(0, line)], [check])[0][0]
+        self.assertEqual(result.verdict, INFO)
+        self.assertIn('1/0x42475241/1280x720', result.observed)
+
     def test_against_and_grouping(self):
         by_name = {c.name: c for c in checks.GROUPS['gpu'] + checks.GROUPS['refusals']}
         got = run(by_name['gpu.surface-locks'], by_name['gpu.rainbow'], by_name['refusal.user'])

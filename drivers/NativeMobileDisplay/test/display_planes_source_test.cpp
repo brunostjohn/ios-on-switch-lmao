@@ -131,7 +131,10 @@ TEST(DisplayPlanesSource, DriverFollowsTheRules)
     EXPECT_TRUE(limits.before("if (limits.compressionUnsupported) source[sourceKeys++]",
                               "if (limits.rotation) source[sourceKeys++] = {\"MaxSrcRotRectTotal\""));
     EXPECT_TRUE(limits.has("if (limits.rotation) setProperty(\"IOMFBSupportsRotation\", true);"));
-    EXPECT_TRUE(limits.before("#if SWITCH_IPSW_KIND_24B119", "native_planes::kLimits24B119;"));
+    // One per-kind limits value is both what is published and what a swap is checked against.
+    EXPECT_TRUE(code.before("#if SWITCH_IPSW_KIND_24B119",
+                            "static constexpr native_planes::Limits kPlaneLimits = native_planes::kLimits24B119;"));
+    EXPECT_TRUE(limits.has("constexpr native_planes::Limits limits = kPlaneLimits;"));
     EXPECT_TRUE(limits.has("if (limits.packedYuvUnsupported) setProperty(\"IOMFBYUVPackedUnSupported\", true);"));
     EXPECT_TRUE(limits.has("if (limits.flipUnsupported) setProperty(\"IOMFBDisableFlip\", true);"));
     // A swap refused for a transform names the transform word once per value (the line a device check reads).
@@ -242,8 +245,8 @@ TEST(DisplayPlanesSource, Ios27CoreVideoMakesNoCompressedSurfaces)
 TEST(DisplayPlanesSource, RefusedLayoutsLoggedOnlyByDebugKernels)
 {
     EXPECT_TRUE(CodeText(Display()).before(
-        "reason = native_planes::checkUpdated(updated, background, hasSurface, layers, width, height);",
-        "planeNoteRefused(reason, updated, hasSurface, layers, width, height);"));
+        "reason = native_planes::checkUpdated(updated, background, hasSurface, layers, width, height, kPlaneLimits);",
+        "planeNoteRefused(reason, updated, hasSurface, layers, width, height, kPlaneLimits);"));
     const std::string totals = SourceText("../NativePlanesTotals.h");
     const CodeText debug(Configured(totals, "SWITCH_FRAME_TIMELINE", true));
     const CodeText release(Configured(totals, "SWITCH_FRAME_TIMELINE", false));
@@ -251,7 +254,7 @@ TEST(DisplayPlanesSource, RefusedLayoutsLoggedOnlyByDebugKernels)
     EXPECT_FALSE(release.has("switch_refusal_k(key, \"display\", \"plane-layout\","));
     EXPECT_TRUE(
         release.has("static void planeNoteRefused(unsigned, uint32_t, const bool *, const native_planes::Layer *, "
-                    "uint32_t, uint32_t) {}"));
+                    "uint32_t, uint32_t, const native_planes::Limits &) {}"));
 }
 
 // Window B changes whose surface the GPU renders follow NativePlaneFence.h: they ride on the window A frame's present,
