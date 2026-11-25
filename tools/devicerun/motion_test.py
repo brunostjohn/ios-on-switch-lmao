@@ -141,6 +141,25 @@ class Motion(unittest.TestCase):
         self.assertEqual(got['motion.fastpath-copy'].verdict, INFO)
         self.assertNotIn(FAIL, {r.verdict for r in got.values()})
 
+    def test_a_motion_client_iokit_refuses_by_tcc_fails_on_ios_27(self):
+        denied = {
+            **record(
+                'Connection: <IOHIDEventSystemConnection: 0x1 type:Passive uuid:U client:locationd> denied match of '
+                'service <IOHIDService 0x2 primaryUsagePage:0xff0c primaryUsage:0x5>: TCC kTCCServiceMotionSensors '
+                'right:0',
+                BACKBOARDD,
+                3,
+            ),
+            'subsystem': 'com.apple.iohid',
+        }
+        got = results(IOS27, denied)
+        self.assertEqual(got['motion.tcc-denied'].verdict, FAIL)
+        self.assertEqual(results(IOS27)['motion.tcc-denied'].verdict, PASS)
+        self.assertEqual(results(IOS17, denied)['motion.tcc-denied'].verdict, NA)
+        self.assertEqual(results(denied)['motion.tcc-denied'].verdict, NO_DATA)
+        other = {**denied, 'eventMessage': denied['eventMessage'].replace('MotionSensors', 'Camera')}
+        self.assertEqual(results(IOS27, other)['motion.tcc-denied'].verdict, PASS, 'another TCC service')
+
     def test_a_report_coremotion_refuses_fails(self):
         got = results(record('Bad device motion report,type,3,size,52', SPRINGBOARD))
         self.assertEqual(got['motion.device-motion-rejected'].verdict, FAIL)

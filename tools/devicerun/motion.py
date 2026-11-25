@@ -14,6 +14,10 @@ The fast path (SwitchHIDFastPath.cpp): 24B119's sandbox profiles let SpringBoard
 and locationd open IOHIDEventServiceFastPathUserClient, so their opens must succeed and their copies find a report
 once a session has started. backboardd's profile admits the class only by that entitlement, which backboardd lacks, so
 J181 refuses its open as well and its CoreMotion takes the pushed sample: reported, not judged.
+
+On iPadOS 27 the accelerometer, gyroscope and device motion services carry J181's TCCService kTCCServiceMotionSensors
+(drivers/SwitchTouch/SwitchHIDMotionAccess.cpp). IOKit's event system then matches them only for platform binaries or
+connections TCC allows, and logs each connection it refuses. A refusal there means a motion client lost the services.
 """
 
 from tools.devicerun.rules import REPORT, Check
@@ -37,6 +41,7 @@ IOS27 = 'motion.kernel darwin=25'
 # An iPadOS 27 boot: one whose kernel version line says Darwin 25, so an archive of several boots judges each its way.
 IOS27_BOOT = 'motion.ios27-boot'
 FASTPATH = 'drivers/SwitchTouch/SwitchHIDFastPath.cpp'
+MOTION_ACCESS = 'drivers/SwitchTouch/SwitchHIDMotionAccess.cpp'
 EDITS = 'translate/arm64e/pretranslate/edits_24B119.json'
 
 MOTION = [
@@ -218,6 +223,22 @@ MOTION = [
         show=('process',),
         source=FASTPATH,
         note="every process's failed copies; SpringBoard's and locationd's are judged on iPadOS 27",
+    ),
+    Check(
+        'motion.tcc-denied',
+        OWNER,
+        ' denied match of service ',
+        regex=(
+            r'^Connection: (?P<connection>.*?) denied match of service .*: '
+            r'TCC kTCCServiceMotionSensors right:(?P<right>\d+)'
+        ),
+        show=('connection', 'right'),
+        applies=IOS27,
+        needs='motion.kernel',
+        boots=IOS27_BOOT,
+        source=MOTION_ACCESS,
+        note="IOKit's event system refused a connection the Motion & Fitness gated services: not a platform binary, and "
+        'TCC did not allow it',
     ),
     Check(
         'motion.spu-added-ungated',
