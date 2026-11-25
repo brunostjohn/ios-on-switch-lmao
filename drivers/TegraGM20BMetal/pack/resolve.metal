@@ -3,8 +3,8 @@
 // the pass's render area into the resolve texture, by Metal's measured rules (metal2vulkan bind/color_resolve.rs; RG11B10Float
 // and four halves measured on an M1, harness/resolveoracle.mm):
 //  - an 8-bit unorm channel: its codes summed with half the count, over the count;
-//  - an 8-bit sRGB channel: its code (the nearest to its decoded value) as a 12-bit linear value (resolve_srgb.h), those averaged
-//    so and encoded by Metal's thresholds, written as the code through the target's UNORM twin;
+//  - an 8-bit sRGB channel: its code, read through the format's UNORM twin, as a 12-bit linear value (resolve_srgb.h), those
+//    averaged so and encoded by Metal's thresholds, written as the code through the target's UNORM twin;
 //  - a half channel: the mean rounded to a half with a tie toward +infinity (halfMean);
 //  - an RG11B10Float channel: that half mean rounded to the channel's float, ties to even.
 //  - a wider or narrower unorm channel (8 to 16 bits, 10-bit colour and 2-bit alpha): its codes summed with half the count, over
@@ -38,17 +38,8 @@ vertex Out resolve_vert(uint vid [[vertex_id]])
 
 typedef texture2d_ms<float, access::read> Samples;
 
-// The code of a decoded 8-bit sRGB value (the midpoints at or below it), and the code Metal encodes a 12-bit linear value as (the
-// thresholds it reaches): each the count of a table's 255 ascending entries x reaches, by eight steps of a binary search. Each
-// reads its table by name, so m2v keeps the tables as the program's own constants.
-static uint codeOfDecoded(float x)
-{
-    uint lo = 0;
-    for (uint step = 128; step; step >>= 1)
-        lo = x >= kSrgbMidpoints[lo + step - 1] ? lo + step : lo;
-    return lo;
-}
-
+// The code Metal encodes a 12-bit linear value as: the count of the 255 ascending thresholds it reaches, by eight steps of a
+// binary search. It reads the table by name, so m2v keeps it as the program's own constants.
 static uint codeOfLinear(uint x)
 {
     uint lo = 0;
@@ -91,10 +82,10 @@ static float4 srgb8(Samples s, uint n, uint2 at)
 {
     uint4 sum = uint4(n / 2);
     for (uint k = 0; k < n; k++) {
-        const float4 x = s.read(at, k);
+        const uint4 code = uint4(s.read(at, k) * 255.0 + 0.5);
         for (uint c = 0; c < 3; c++)
-            sum[c] += kSrgbLinear[codeOfDecoded(x[c])];
-        sum.w += uint(x.w * 255.0 + 0.5);
+            sum[c] += kSrgbLinear[code[c]];
+        sum.w += code.w;
     }
     sum /= n;
     return float4(codeOfLinear(sum.x), codeOfLinear(sum.y), codeOfLinear(sum.z), sum.w) * as_type<float>(0x3b808081u);
