@@ -92,35 +92,11 @@ struct FramebufferFetchScene: GPUScene {
                 for interlocked in [true, false] {
                     let label = interlocked ? key : "default_\(key)"
                     let before = GM20BFacade.counters(of: gpu.device)
-                    let timing: GPU.Timing
-                    if interlocked, let forced = try await GM20BFacade.forcingFetchRung(4, on: gpu.device, {
-                        try await gpu.run(encode)
-                    }) {
-                        timing = forced
-                    } else {
-                        timing = try await gpu.run(encode)
-                    }
-                    let after = GM20BFacade.counters(of: gpu.device)
-                    result.metrics.set("path_\(label)", timing.path)
-                    result.metrics.set("gpu_ms_\(label)", timing.gpuMilliseconds, digits: 3)
-                    result.metrics.set("cpu_encode_ms_\(label)", timing.encodeMilliseconds, digits: 3)
-                    result.metrics.set("cpu_commit_ms_\(label)", timing.commitMilliseconds, digits: 3)
-                    if GM20BFacade.kind(of: gpu.device) == "gm20b" {
-                        result.expect(timing.path == "gm20b", "\(label) did not execute entirely raw: \(timing.path)")
-                        let moved = after.merging(before) { $0 - $1 }
-                        if interlocked {
-                            Self.expectInterlocked(label, moved, &result)
-                        } else {
-                            result.metrics.set("twin_\(label)", moved["fetch_twin_rule"] ?? 0)
-                            result.metrics.set("interlock_\(label)", moved["interlock_draws"] ?? 0)
-                            let twinTaken = Self.twinModes.contains(mode)
-                            for (why, held) in FetchRoute.ruleChecks(
-                                label, twins: twinTaken ? 2 : 1, interlocked: twinTaken ? 0 : 1, moved: moved
-                            ) {
-                                result.expect(held, why)
-                            }
-                        }
-                    }
+                    let timing = try await Self.timed(gpu, interlocked: interlocked, encode)
+                    let moved = GM20BFacade.counters(of: gpu.device).merging(before) { $0 - $1 }
+                    let route: Route = interlocked ? .interlock : Self.twinModes.contains(mode) ? .twin : .lastTwin
+                    let facade = GM20BFacade.kind(of: gpu.device) == "gm20b"
+                    Self.judged(label, timing, facade ? moved : nil, route, &result)
                     let bytes = try await gpu.read(copy, bytesPerPixel: format.bytesPerTexel)
                     result.compare(
                         label, bytes: bytes, expected: expected, format: format, width: Self.size, height: Self.size,
@@ -148,13 +124,47 @@ struct FramebufferFetchScene: GPUScene {
         return result
     }
 
-    private static func expectInterlocked(_ label: String, _ moved: [String: Int], _ result: inout SceneResult) {
+    /// The route a run's fetching draws must take: all inside the interlock (fetch rung 4 forced), all through the twin
+    /// rule, or only the last one-triangle draw through it
+    private enum Route {
+        case interlock, twin, lastTwin
+    }
+
+    private static func timed(
+        _ gpu: GPU, interlocked: Bool, _ encode: (MTLCommandBuffer) -> Void
+    ) async throws -> GPU.Timing {
+        if interlocked, let forced = try await GM20BFacade.forcingFetchRung(4, on: gpu.device, {
+            try await gpu.run(encode)
+        }) {
+            return forced
+        }
+        return try await gpu.run(encode)
+    }
+
+    /// A run's times, and on the facade (`moved`: its counters' moves) its path and route
+    private static func judged(
+        _ label: String, _ timing: GPU.Timing, _ moved: [String: Int]?, _ route: Route, _ result: inout SceneResult
+    ) {
+        result.metrics.set("path_\(label)", timing.path)
+        result.metrics.set("gpu_ms_\(label)", timing.gpuMilliseconds, digits: 3)
+        result.metrics.set("cpu_encode_ms_\(label)", timing.encodeMilliseconds, digits: 3)
+        result.metrics.set("cpu_commit_ms_\(label)", timing.commitMilliseconds, digits: 3)
+        guard let moved else { return }
+        result.expect(timing.path == "gm20b", "\(label) did not execute entirely raw: \(timing.path)")
         let draws = moved["interlock_draws"] ?? 0
         result.metrics.set("interlock_\(label)", draws)
-        result.expect(draws >= 2, "\(label) has no confirmed native interlock draws; diagnostic counters required")
-        let ilk = moved["fetch_interlocked"] ?? 0
-        result.metrics.set("ilk_\(label)", ilk)
-        result.expect(ilk >= 2, "\(label): the fetch line's ilk counted no interlocked fetching draw")
+        guard route != .interlock else {
+            result.expect(draws >= 2, "\(label) has no confirmed native interlock draws; diagnostic counters required")
+            let ilk = moved["fetch_interlocked"] ?? 0
+            result.metrics.set("ilk_\(label)", ilk)
+            result.expect(ilk >= 2, "\(label): the fetch line's ilk counted no interlocked fetching draw")
+            return
+        }
+        result.metrics.set("twin_\(label)", moved["fetch_twin_rule"] ?? 0)
+        let (twins, interlocked) = route == .twin ? (2, 0) : (1, 1)
+        for (why, held) in FetchRoute.ruleChecks(label, twins: twins, interlocked: interlocked, moved: moved) {
+            result.expect(held, why)
+        }
     }
 
     private static func halves(left: [UInt8], right: [UInt8]) -> [UInt8] {

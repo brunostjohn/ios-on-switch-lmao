@@ -76,8 +76,11 @@ struct StandInResolveTest: HWTest {
         metrics.merge(PathTally.counterMetrics(before: before, after: counted))
         checks.append(("every command buffer on the driver", gpu.paths.offRaw.isEmpty))
         checks.append(FailedCounts.judged(before: before, after: counted, own: gpu.paths, &metrics))
-        let totals = ["far_total", "samples_off_total", "samples_off_fragment_total", "routes_differ_total"]
-        metrics.fitLog(within: 720, keeping: totals + ["paths", "failed_cbs"])
+        let kept: Set = [
+            "far_total", "samples_off_total", "samples_off_fragment_total", "routes_differ_total", "paths",
+            "failed_cbs",
+        ]
+        metrics.fitLog(within: 720, keeping: kept)
         return .judged(checks, metrics, proof: gpu.proof)
     }
 }

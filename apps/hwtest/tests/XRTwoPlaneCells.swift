@@ -84,7 +84,9 @@ final class XRTwoPlaneCells {
     /// a triangle run at a time).
     func fetchWrong(barrier: Bool) async throws -> (wrong: Int, offByOne: Int, interlocked: Int, fetched: Int) {
         let (width, height) = (XRTwoPlaneTest.width, XRTwoPlaneTest.height)
-        guard let line = CACorpus.state(Self.fetchLabel) else { throw TestFailure("CACorpus has no \(Self.fetchLabel)") }
+        guard let line = CACorpus.state(Self.fetchLabel) else {
+            throw TestFailure("CACorpus has no \(Self.fetchLabel)")
+        }
         let pipeline: MTLRenderPipelineState
         if let cached = cachedFetchPipeline {
             pipeline = cached

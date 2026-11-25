@@ -13,7 +13,7 @@ import caspec
 
 
 def block(swift: str, name: str) -> list[str]:
-    match = re.search(rf'static let {name} = """\n(.*?)\n\s*"""', swift, re.S)
+    match = re.search(rf'static let {name} = """\n(.*?)\n\s*"""', swift, re.DOTALL)
     assert match, name
     return [line.strip() for line in match.group(1).split('\n') if line.strip()]
 
