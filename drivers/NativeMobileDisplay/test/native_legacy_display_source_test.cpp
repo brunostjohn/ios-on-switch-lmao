@@ -256,7 +256,8 @@ TEST(FrameEndSource, MaskedWhileNothingWaits)
     EXPECT_TRUE(method("void kickSwapQueue() override").startsWith("if (primary) kickUnmaskFrameEnd();"));
     EXPECT_TRUE(method("void vblankTick()")
                     .endsWith("if ((status & kFrameEndInt) && !frameEndNeeded() && tegra_panel_holds_frame_end()) { "
-                              "maskIdleFrameEnd(); idleFlipDeadline(); }"));
+                              "maskIdleFrameEnd(); idleFlipDeadline(); } if ((status & kFrameEndInt) && stats) "
+                              "noteFrameEndRouted();"));
     EXPECT_TRUE(method("void maskIdleFrameEnd()").has("if (!__atomic_load_n(&gFrameEndHolds"));
     // The kick's shadow: set with the lock held, cleared only by the gate.
     EXPECT_TRUE(method("void kickUnmaskFrameEnd()")
@@ -419,7 +420,7 @@ TEST(FrameEndSource, ConsoleTapeRearmsBeforePublishingItsWaitCallback)
     const CodeText start = method("void startConsoleTape()");
     EXPECT_TRUE(start.has("tapeAttached = true; unmaskFrameEnd();"));
     EXPECT_TRUE(start.before("unmaskFrameEnd();", "vc_tape_attach("));
-    EXPECT_TRUE(method("bool frameEndNeeded()").has("tapeAttached"));
+    EXPECT_TRUE(method("switch_frame_end::Holder frameEndHolder()").has("tapeAttached"));
     EXPECT_TRUE(method("int waitTapeFrame()").has("panic(\"SwitchDisplay: the console waited"));
 }
 
@@ -436,7 +437,7 @@ TEST(FrameEndSource, OnePassAndOneDeadlineAPeriod)
     EXPECT_TRUE(method("void armDeadlineTimer()").startsWith("if (flipDeadlineArmed || !flipTimer) return;"));
     EXPECT_TRUE(method("void checkFlipDeadline()")
                     .has("if (frameEnds != flipDeadlineFrames || frameEndPending(kFrameEndInt))"));
-    EXPECT_TRUE(method("bool frameEndNeeded()").has("(offerAged && gpuScanout)"));
+    EXPECT_TRUE(method("switch_frame_end::Holder frameEndHolder()").has("(offerAged && gpuScanout)"));
     EXPECT_FALSE(code().has("__atomic_store_n(&gpuScanout"));
     EXPECT_FALSE(code().has("__atomic_exchange_n(&gpuDonePending"));
     EXPECT_FALSE(code().has("__atomic_exchange_n(&self->gpuDonePending"));
@@ -461,13 +462,14 @@ TEST(FrameEndSource, VerdictsReachTheTableThroughTheGate)
 // release kernel counts nothing (stats is SWITCH_FRAME_TIMELINE: DEVELOPMENT || DEBUG).
 TEST(DisplayStatsSource, LocksPerFrameEndLine)
 {
-    const CodeText window = method("void noteLocksWindow()");
+    const CodeText window = method("void noteLocksWindow(uint64_t us, uint32_t swaps)");
     EXPECT_TRUE(window.startsWith("if (!stats) return;"));
     EXPECT_TRUE(window.has("os_log(OS_LOG_DEFAULT, \"SwitchDisplay locks: %s\", line);"));
     for (const char *count : {"color->lockTakes()", "intMaskTakes", "switch_vic_surface_cache_locks()", "flipClaims()"})
         EXPECT_TRUE(window.has(count)) << count;
-    EXPECT_TRUE(method("void noteStatsWindow()").has("noteLocksWindow();"));
+    EXPECT_TRUE(method("void noteStatsWindow()").has("noteLocksWindow(us, swaps);"));
     EXPECT_TRUE(method("void notePass()").startsWith("if (stats) ++stPasses;"));
+    EXPECT_TRUE(window.has("routedLine(line + used, sizeof(line) - used, us, swaps);"));
 }
 
 // validateSwap runs on the client's thread: it decides and observes, and everything the gate owns (the overlay's

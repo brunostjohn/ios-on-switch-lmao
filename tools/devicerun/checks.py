@@ -467,13 +467,14 @@ GROUPS: dict[str, list[Check]] = {
         Check(
             'display.frame-end-idle',
             'r32-color',
-            'SwitchDisplay stats: ',
-            'max(irqs/ms*1000) < 5',
+            'SwitchDisplay locks: ',
+            'max(routed/ms*1000) < 5',
             process=KERNEL,
-            regex=r'(?P<ms>\d+) ms: (?P<irqs>\d+) DC A interrupts, (?P<swaps>\d+) swaps',
+            regex=r'; (?P<ms>\d+) ms, (?P<swaps>\d+) swaps, routed for release holders (?P<routed>\d+)',
             where='swaps == 0',
-            source='drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp',
-            note='DC A interrupts/s in windows with no presents; was ~60; debug kernels',
+            source='drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp (noteFrameEndRouted, SwitchFrameEndHolder.h)',
+            note='frame ends/s after which FRAME_END stayed routed in windows with no swaps, leaving out the debug-only '
+            'holders (console tape, probes, display experiments); the line names each holder; was ~60; debug kernels',
         ),
         Check(
             'display.vblank-phase-gone',

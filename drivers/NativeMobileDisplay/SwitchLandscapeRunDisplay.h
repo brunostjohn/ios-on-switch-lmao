@@ -184,6 +184,11 @@ void landscapeRunCharge(uint64_t since)
         landscapeRun.displayTicks += mach_absolute_time() - since;
 }
 #else
+static bool landscapeRunSampling()
+{
+    return false;
+}
+
 static bool landscapeRunFailsEnter()
 {
     return false;

@@ -164,7 +164,7 @@ TEST(TimedPresentSource, TheKickAsksFirstAndAFrameEndKicksAgain)
     EXPECT_TRUE(kick.before("if (presentNotDue(request))", "planeDecide(request, pd);"));
     EXPECT_TRUE(kick.before("if (!request || !isValidated(request))", "if (presentNotDue(request))"));
     EXPECT_TRUE(CodeText(SourceText("../SwitchTimedPresentDisplay.h")).has("kickDeferred = true;"));
-    EXPECT_TRUE(Block(display, "bool frameEndNeeded()").has("kickDeferred"));
+    EXPECT_TRUE(Block(display, "switch_frame_end::Holder frameEndHolder()").has("kickDeferred"));
     EXPECT_TRUE(CodeText(SourceText("../SwitchRetireDisplay.h")).has("kickDeferred = false; kickSwapQueue();"));
 }
 }  // namespace

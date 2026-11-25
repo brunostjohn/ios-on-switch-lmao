@@ -149,6 +149,20 @@ class Rules(unittest.TestCase):
         self.assertIn('0.30', got['idle'].observed)
         self.assertEqual(got['none'].verdict, NO_DATA)
 
+    def test_frame_end_idle_leaves_out_debug_only_holders(self):
+        check = next(c for c in checks.GROUPS['display'] if c.name == 'display.frame-end-idle')
+        locks = 'SwitchDisplay locks: 300 frame ends; per 100: colour 0, INT_MASK 0, VIC surface cache 0, completion '
+        debug = locks + 'flip 0 (claims 0); work-loop passes 100; 5011 ms, 0 swaps, routed for release holders 2 first 2 tape 300'
+        busy = locks + 'flip 0 (claims 0); work-loop passes 100; 5000 ms, 300 swaps, routed for release holders 300 ring 300'
+        leak = locks + 'flip 0 (claims 0); work-loop passes 101; 5000 ms, 0 swaps, routed for release holders 295 hold 295'
+
+        def verdict(*messages: str) -> str:
+            records = [record(i, m) for i, m in enumerate(messages)]
+            return devicerun.run_checks(records, [check])[0][0].verdict
+
+        self.assertEqual(verdict(debug, busy), PASS)
+        self.assertEqual(verdict(debug, leak), FAIL)
+
     def test_against_and_grouping(self):
         by_name = {c.name: c for c in checks.GROUPS['gpu'] + checks.GROUPS['refusals']}
         got = run(by_name['gpu.surface-locks'], by_name['gpu.rainbow'], by_name['refusal.user'])

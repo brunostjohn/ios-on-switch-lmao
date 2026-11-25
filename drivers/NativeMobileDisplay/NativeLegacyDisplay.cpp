@@ -53,6 +53,7 @@
 #include "../TegraVIC/SwitchVICScanoutConvert.h"
 #include "SwitchPlaneComposite.h"
 #include "SwitchFrameInfo.h"
+#include "SwitchFrameEndHolder.h"
 #include "SwitchFrameStall.h"
 #include "SwitchInteraction.h"
 #include "SwitchSlowPresent.h"
@@ -1567,16 +1568,47 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
             switch_perf_hint(SWITCH_PERF_HINT_FRAME_MISS);
     }
 
-    // Under the gate, at a frame end: whether a later frame end has work. The first frame ends prove the interrupt alive.
+    // Under the gate, at a frame end: the first reason a later frame end has work (kNone: none). The first frame ends
+    // prove the interrupt alive.
+    switch_frame_end::Holder frameEndHolder()
+    {
+        using namespace switch_frame_end;
+        if (frameEnds < 2)
+            return kFirst;
+        if (vsyncArmed)
+            return kVsync;
+        if (tapeAttached || tapeSettle)
+            return kTape;
+        if (kickDeferred)
+            return kKick;
+        if (presentDeferred)
+            return kPresent;
+        if (ring.pending != kNoBuffer || ring.superseded != kNoBuffer || ring.drawing != kNoBuffer ||
+            ring.held != kNoBuffer)
+            return kRing;
+        if (rotated && !rotationLatched)
+            return kRotation;
+        if (probeRequest || probe.active() || (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) ||
+            planeProbe.active())
+            return kProbe;
+        if ((planesOn && planeLatch.requested()) || planeHeldSet || planeRecoveryWaits())
+            return kPlanes;
+        if (landscapeState.wanted)
+            return kLandscape;
+        if (completionFlipOut())
+            return kCompletion;
+        if (offerAged && gpuScanout)
+            return kOffer;
+        if (scanoutAttachHoldsFrameEnds())
+            return kAttach;
+        if (colourBlankSwap.waiting())
+            return kBlank;
+        return kNone;
+    }
+
     bool frameEndNeeded()
     {
-        return frameEnds < 2 || vsyncArmed || tapeAttached || tapeSettle || kickDeferred || presentDeferred ||
-               ring.pending != kNoBuffer || ring.superseded != kNoBuffer || ring.drawing != kNoBuffer ||
-               ring.held != kNoBuffer || (rotated && !rotationLatched) || probeRequest || probe.active() ||
-               (!probeRan && (probeTables.memory != nullptr) && doubleBuffer) || (planesOn && planeLatch.requested()) ||
-               planeProbe.active() || planeHeldSet || planeRecoveryWaits() || landscapeState.wanted ||
-               completionFlipOut() || (offerAged && gpuScanout) || scanoutAttachHoldsFrameEnds() ||
-               colourBlankSwap.waiting();
+        return frameEndHolder() != switch_frame_end::kNone;
     }
 
 public:
@@ -1752,6 +1784,8 @@ private:
             maskIdleFrameEnd();
             idleFlipDeadline();
         }
+        if ((status & kFrameEndInt) && stats)
+            noteFrameEndRouted();
     }
 
     // At a frame end, under the gate: after 5 s, the one stats line for the window, then a new window. The line is formatted here and
@@ -1778,6 +1812,7 @@ private:
         // lit, still screen then writes no display lines at all (it wrote two every 5 s).
         const switch_display::UnderflowAccounting::Totals counted[kUnderflowWindows] = {
             underflows.take(0), underflows.take(1), underflows.take(2)};
+        const uint32_t swaps = stSwaps;
         const bool quiet = (stSwaps == 0u) && (stPresents == 0u) && (stUnderflows == 0u) && (stGpuTimeouts == 0u) &&
                            (stNewMaps == 0u) && (stFallbacks == 0u) && (stVsyncIdle == 0u) &&
                            ((counted[0].frames | counted[1].frames | counted[2].frames) == 0u) && (stRejected == 0u);
@@ -1959,7 +1994,7 @@ private:
         statsStart = now;
         stReadDue = true;
         stRead = 0;
-        noteLocksWindow();
+        noteLocksWindow(us, swaps);
     }
 
     // Debug kernels: how far from Core Animation's requested presentation the frames this window were shown
@@ -2013,8 +2048,44 @@ private:
     // display's work-loop passes per 100 frame ends (frame-end actions, completion passes, deadlines).
     static inline uint64_t stLockFrameEnds = 0, stLockVic = 0;
     static inline uint32_t stLockColour = 0, stLockIntMask = 0, stLockClaims = 0, stPasses = 0;
+    static inline switch_frame_end::RoutedCounts stRouted = {};
 
-    void noteLocksWindow()
+    // Debug kernels, at the end of the frame-end action: what keeps FRAME_END routed to the next frame end.
+    void noteFrameEndRouted()
+    {
+        using namespace switch_frame_end;
+        if (!__atomic_load_n(&frameEndUnmasked, __ATOMIC_RELAXED))
+            return;
+        Holder holder = frameEndHolder();
+        if (holder == kNone && (columnScanBusy() || windowProbeHolds() || host1xFlipBusy() || landscapeRunSampling()))
+            holder = kExperiment;
+        if (holder == kNone && __atomic_load_n(&gFrameEndHolds, __ATOMIC_ACQUIRE))
+            holder = kHold;
+        if (holder == kNone && !tegra_panel_holds_frame_end())
+            holder = kPanel;
+        stRouted.add(holder);
+    }
+
+    // "routed": the frame ends after which FRAME_END stayed unmasked, by what held it (SwitchFrameEndHolder.h), and how
+    // many of them a release kernel would have taken too, with the window's swaps: display.frame-end-idle reads it.
+    size_t routedLine(char *line, size_t size, uint64_t us, uint32_t swaps)
+    {
+        using namespace switch_frame_end;
+        size_t at = 0;
+        const auto add = [&](const char *format, auto... values) {
+            if (at < size)
+                at += static_cast<size_t>(snprintf(line + at, size - at, format, values...));
+        };
+        add("; %llu ms, %u swaps, routed for release holders %u", static_cast<unsigned long long>(us / 1000), swaps,
+            stRouted.release());
+        for (unsigned h = kNone; h < kHolders; ++h)
+            if (stRouted.by[h])
+                add(" %s %u", kHolderNames[h], stRouted.by[h]);
+        stRouted = {};
+        return at < size ? at : size - 1;
+    }
+
+    void noteLocksWindow(uint64_t us, uint32_t swaps)
     {
         if (!stats)
             return;
@@ -2031,12 +2102,16 @@ private:
         const auto per = [ends](uint64_t n) {
             return static_cast<unsigned long long>(ends ? n * 100 / ends : 0);
         };
-        char line[256];
-        snprintf(line, sizeof(line),
-                 "%llu frame ends; per 100: colour %llu, INT_MASK %llu, VIC surface cache %llu, completion flip 0 "
-                 "(claims %llu); work-loop passes %llu",
-                 static_cast<unsigned long long>(ends), per(colour), per(mask), per(vic), per(claims), per(stPasses));
+        char line[448];
+        const int written = snprintf(
+            line, sizeof(line),
+            "%llu frame ends; per 100: colour %llu, INT_MASK %llu, VIC surface cache %llu, completion flip 0 "
+            "(claims %llu); work-loop passes %llu",
+            static_cast<unsigned long long>(ends), per(colour), per(mask), per(vic), per(claims), per(stPasses));
         stPasses = 0;
+        const size_t used = written > 0 ? static_cast<size_t>(written) : 0;
+        if (used < sizeof(line))
+            routedLine(line + used, sizeof(line) - used, us, swaps);
         os_log(OS_LOG_DEFAULT, "SwitchDisplay locks: %s", line);
     }
 
