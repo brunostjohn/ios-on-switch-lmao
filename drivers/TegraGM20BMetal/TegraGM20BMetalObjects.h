@@ -521,7 +521,7 @@ static inline void gm20bRunDeferredPresent(const SwitchMetalDeferredPresent &p)
     gm20b::PointerMap<bool> _ownerKeys;  // everything the tape names, retained until completion
     NSMutableArray *_scheduledHandlers, *_completedHandlers;
     std::atomic<bool>
-        _handlersQueued;  // scheduled handlers went to its queue's _handlers: its completed ones go behind them
+        _handlersQueued;  // scheduled handlers went to its queue's _handlerExec: its completed ones go behind them
     SwitchMetalCommandBuffer
         *_before;  // enqueued before it on its queue, until its own completed handlers were handed on
     std::vector<SwitchMetalSubCommand>
