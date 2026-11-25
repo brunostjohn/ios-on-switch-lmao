@@ -1131,29 +1131,42 @@ copy_file(
 
 # One build per XNU, each in its iOS's cache layout: 24B119's salt folders, 21H461's top. Each as a debug kernel builds
 # it (DEVELOPMENT), and 24B119's also as a release kernel does (no restore record).
+ICON_CACHE_BUILDS = [
+    ("12377_121_6", ""),
+    ("10063_141_1", ""),
+    ("12377_121_6", "_release"),
+]
+
+RELEASE_COPTS = [
+    "-UDEVELOPMENT",
+    "-DDEVELOPMENT=0",
+    "-UDEBUG",
+    "-DDEBUG=0",
+]
+
 [
     host_library(
-        name = "icon_cache_%s%s" % (xnu, "_release" if release else ""),
+        name = "icon_cache_" + xnu + suffix,
         srcs = ["//kernel/switch:boot/icon_cache.c"],
         hdrs = ["switch/icon_cache.h"],
-        copts = ["-UDEVELOPMENT", "-DDEVELOPMENT=0", "-UDEBUG", "-DDEBUG=0"] if release else [],
-        defines = ["XNU_%s=1" % xnu] + ([] if release else ["DEVELOPMENT=1"]),
+        copts = RELEASE_COPTS if suffix else [],
+        defines = ["XNU_%s=1" % xnu] + ([] if suffix else ["DEVELOPMENT=1"]),
         includes = ["."],
     )
-    for xnu, release in (("12377_121_6", False), ("10063_141_1", False), ("12377_121_6", True))
+    for xnu, suffix in ICON_CACHE_BUILDS
 ]
 
 [
     host_test(
-        name = "switch_icon_cache_%s%s_test" % (xnu, "_release" if release else ""),
+        name = "switch_icon_cache_%s%s_test" % (xnu, suffix),
         srcs = ["switch_icon_cache_test.cpp"],
-        defines = ["XNU_%s=1" % xnu] + (["SWITCH_TEST_RELEASE=1"] if release else []),
-        deps = [":icon_cache_%s%s" % (xnu, "_release" if release else "")],
+        defines = ["XNU_%s=1" % xnu] + (["SWITCH_TEST_RELEASE=1"] if suffix else []),
+        deps = [":icon_cache_" + xnu + suffix],
     )
-    for xnu, release in (("12377_121_6", False), ("10063_141_1", False), ("12377_121_6", True))
+    for xnu, suffix in ICON_CACHE_BUILDS
 ]
 
-# Both kernels' setup runs it once before launchd, with one error line, and reads the record the deploy writes.
+# Both kernels' setup runs it once before launchd, with one error line, and reads the record the GPU stager writes.
 host_test(
     name = "xnu_icon_cache_source_test",
     srcs = ["xnu_icon_cache_source_test.cpp"],

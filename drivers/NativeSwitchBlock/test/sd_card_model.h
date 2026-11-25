@@ -245,8 +245,8 @@ private:
 
     void enqueue(const Arrival &a, bool ui)
     {
-        storage.push_back(
-            {nullptr, a.lba, a.sectors, a.klass, a.write, false, now, static_cast<int>(storage.size()), ui, 0, a.shared});
+        storage.push_back({nullptr, a.lba, a.sectors, a.klass, a.write, false, now, static_cast<int>(storage.size()),
+                           ui, 0, a.shared});
         Request *r = &storage.back();
         (tail ? tail->next : head) = r;
         tail = r;
@@ -360,8 +360,7 @@ private:
         uint32_t count = 1;
         uint32_t sectors = first->sectors;
         for (Request *last = first; count < kMaxChain && last->next && last->next->shared == first->shared &&
-                                    last->next->write == first->write &&
-                                    last->next->lba == last->lba + last->sectors &&
+                                    last->next->write == first->write && last->next->lba == last->lba + last->sectors &&
                                     sectors + last->next->sectors <= kMaxSectors && !overlapsOlder(last->next);
              last = last->next) {
             last->next->chained = true;

@@ -118,7 +118,8 @@ TEST(CryptexSource, AFillPlannedButNotYetQueuedIsRaisedByItsIssuer)
     ASSERT_NE(checked, std::string::npos);
     EXPECT_LT(queued, checked);
     EXPECT_LT(checked, released);
-    EXPECT_THAT(issue, HasSubstr("raiseQueuedReads(read.window->tag + read.first, read.count, kIOStoragePriorityHigh);"));
+    EXPECT_THAT(issue,
+                HasSubstr("raiseQueuedReads(read.window->tag + read.first, read.count, kIOStoragePriorityHigh);"));
     EXPECT_EQ(Count(cryptex(), "issueRead(p->reads[i], priority)"), 1u) << "cacheRead is its only caller";
     EXPECT_EQ(Count(cryptex(), "issueRead("), 3u) << "the declaration, the definition and cacheRead";
 }

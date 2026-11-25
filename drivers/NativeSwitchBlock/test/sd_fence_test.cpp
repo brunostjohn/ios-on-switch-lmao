@@ -26,7 +26,8 @@ std::vector<Arrival> interleavedWrites(uint64_t seed)
         const bool shared = random() % 2 == 1;
         for (int i = 0; i < 4; ++i) {
             const uint64_t at = random() % (40 * kMs);
-            out.push_back({at, base + static_cast<uint64_t>(i) * 8, 8, static_cast<uint8_t>(random() % 3), true, shared});
+            out.push_back(
+                {at, base + static_cast<uint64_t>(i) * 8, 8, static_cast<uint8_t>(random() % 3), true, shared});
         }
     }
     for (int i = 0; i < 120; ++i) {

@@ -23,10 +23,11 @@ TEST(SdPrioritySource, BothDevicesPublishPriorityAndTakeRaises)
 
 TEST(SdPrioritySource, BothTreesKeepTheThrottleOnAPriorityDevice)
 {
-    for (const char *path : {"../../../kernel/xnu-10063.141.1/bsd/vfs/vfs_subr.c",
-                             "../../../kernel/xnu-12377.121.6/bsd/vfs/vfs_subr.c"}) {
-        const std::string branch = Between(SourceText(path), "if (iosched_enabled && (features & DK_FEATURE_PRIORITY)) {",
-                                           "#endif /* CONFIG_IOSCHED */");
+    for (const char *path :
+         {"../../../kernel/xnu-10063.141.1/bsd/vfs/vfs_subr.c", "../../../kernel/xnu-12377.121.6/bsd/vfs/vfs_subr.c"}) {
+        const std::string branch =
+            Between(SourceText(path), "if (iosched_enabled && (features & DK_FEATURE_PRIORITY)) {",
+                    "#endif /* CONFIG_IOSCHED */");
         ASSERT_FALSE(branch.empty()) << path;
         EXPECT_THAT(branch, HasSubstr("mp->mnt_ioflags |= MNT_IOFLAGS_IOSCHED_SUPPORTED;")) << path;
         EXPECT_THAT(branch, Not(HasSubstr("throttle_info_disable_throttle"))) << path;
