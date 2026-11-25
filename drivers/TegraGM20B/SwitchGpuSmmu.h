@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -159,6 +160,10 @@ uint64_t switch_gpu_smmu_map(const uint64_t *pas, uint32_t npages);
 uint64_t switch_gpu_smmu_map_reserved(const uint64_t *pas, uint32_t npages, uint64_t reserve_bytes);
 void switch_gpu_smmu_unmap(uint64_t iova, uint32_t npages);
 void switch_gpu_smmu_usage(uint64_t *total, uint64_t *free_bytes);
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+/* The SMMU's TLB and PTC hits and misses since the previous call (switch_smmu_stats_window), for the stats window. */
+void switch_gpu_smmu_stats(char *line, size_t size);
+#endif
 
 #ifdef __cplusplus
 }

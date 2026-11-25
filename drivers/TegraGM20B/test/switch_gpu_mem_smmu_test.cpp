@@ -239,6 +239,9 @@ extern "C" void switch_gpu_smmu_release_ram(const uint64_t *pages, uint32_t npag
 	}
 }
 
+#define TGM_STATS 1
+u64 tgm_retire_invalidates, tgm_retire_objects, tgm_retire_invalidate_ns;
+
 #include "drivers/TegraGM20B/test/switch_gpu_mem_smmu_source.h"
 
 class GpuMemSmmuTest : public testing::Test
@@ -607,8 +610,11 @@ TEST_F(GpuMemSmmuTest, ABatchKeepsRamViewHoldsUntilItsL2InvalidateHasRun)
 	EXPECT_EQ(gDtorCalls, 1u) << "its GMMU memory object goes now";
 	EXPECT_EQ(gHeld.size(), 8u);
 	EXPECT_EQ(gLtcInvalidates, 0u);
+	const u64 invalidates = tgm_retire_invalidates, objects = tgm_retire_objects;
 	tgm_mem_del_finish(later);
 	EXPECT_EQ(gLtcInvalidates, 1u);
+	EXPECT_EQ(tgm_retire_invalidates - invalidates, 1u) << "counted for the stats window's smmu line";
+	EXPECT_EQ(tgm_retire_objects - objects, 1u);
 	EXPECT_TRUE(gHeld.empty());
 	EXPECT_EQ(gSmmuUnmaps, 0u) << "no window IOVA to give back";
 }

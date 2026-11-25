@@ -112,6 +112,13 @@ extern "C" void switch_gpu_smmu_usage(uint64_t *total, uint64_t *free_bytes)
 	gEngine.usage(total, free_bytes);
 }
 
+#if DEVELOPMENT || DEBUG
+extern "C" void switch_gpu_smmu_stats(char *line, size_t size)
+{
+	switch_smmu_stats_window(line, size);
+}
+#endif
+
 extern "C" int switch_gpu_smmu_hold(const uint64_t *pas, uint32_t npages)
 {
 	if (!npages)

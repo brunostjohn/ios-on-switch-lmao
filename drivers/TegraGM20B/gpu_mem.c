@@ -31,6 +31,9 @@ void *tgm_pool_alloc_ready(uint64_t bytes, uint64_t align, uint64_t reserve, uin
 #if TGM_STATS
 /* stats: freed pool BOs the CPU zeroed for the copy engine (tgm_pool_free_zeroed) */
 u64 tgm_cpu_zeroes, tgm_cpu_zero_bytes;
+/* stats: retirement batches that took tgm_mem_del_finish's CPU-waited L2 flush and invalidate, the memory objects
+ * they covered, and the CPU time the invalidates took */
+u64 tgm_retire_invalidates, tgm_retire_objects, tgm_retire_invalidate_ns;
 
 #endif
 void tgm_pool_free_zeroed(void *va, uint64_t bytes, uint64_t pa)
@@ -495,11 +498,19 @@ void tgm_mem_del_finish(struct tgm_mem *later)
 	if (!later)
 		return;
 	tgm_gpu_lock();
-	if (l2_on())
+	if (l2_on()) {
+		const u64 began = TGM_STATS ? nvxnu_nanotime() : 0;
 		nvkm_ltc_invalidate(tgm_gpu.device->ltc);
+		if (TGM_STATS) {
+			__atomic_fetch_add(&tgm_retire_invalidates, 1, __ATOMIC_RELAXED);
+			__atomic_fetch_add(&tgm_retire_invalidate_ns, nvxnu_nanotime() - began, __ATOMIC_RELAXED);
+		}
+	}
 	mutex_unlock(&tgm_gpu.lock);
 	while (later) {
 		struct tgm_mem *next = later->later;
+		if (TGM_STATS)
+			__atomic_fetch_add(&tgm_retire_objects, 1, __ATOMIC_RELAXED);
 		mem_release_ram(later->smmu_pages, later->npages);
 		if (later->smmu_iova)
 			switch_gpu_smmu_unmap(later->smmu_iova, later->smmu_npages);
