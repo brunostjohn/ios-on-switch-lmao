@@ -143,6 +143,14 @@ struct DeviceMotionTest: HWTest {
         let latency: Double
     }
 
+    static func length(_ v: [Double]) -> Double { sqrt(v.map { $0 * $0 }.reduce(0, +)) }
+
+    static func degrees(between a: [Double], _ b: [Double]) -> Double {
+        let norms = length(a) * length(b)
+        guard norms > 0 else { return 180 }
+        return acos(max(-1, min(1, zip(a, b).map { $0 * $1 }.reduce(0, +) / norms))) * 180 / .pi
+    }
+
     func run(_ context: TestContext) async throws -> Outcome {
         let manager = Motion.manager
         guard manager.isDeviceMotionAvailable else { return .fail("isDeviceMotionAvailable is false") }
@@ -167,32 +175,24 @@ struct DeviceMotionTest: HWTest {
         )
         let after = MotionDriver.reports()
         let motions = samples.map(\.motion)
-        let gravity = Stats.mean(
-            motions.map { sqrt($0.gravity.x * $0.gravity.x + $0.gravity.y * $0.gravity.y + $0.gravity.z * $0.gravity.z) }
-        )
+        let gravity = Stats.mean(motions.map { Self.length([$0.gravity.x, $0.gravity.y, $0.gravity.z]) })
         let meanGravity = [
-            Stats.mean(motions.map(\.gravity.x)), Stats.mean(motions.map(\.gravity.y)), Stats.mean(motions.map(\.gravity.z))
+            Stats.mean(motions.map(\.gravity.x)),
+            Stats.mean(motions.map(\.gravity.y)),
+            Stats.mean(motions.map(\.gravity.z)),
         ]
         let accel = accelerations.all
         let meanAccel = [Stats.mean(accel.map(\.x)), Stats.mean(accel.map(\.y)), Stats.mean(accel.map(\.z))]
-        let dot = zip(meanGravity, meanAccel).map { $0 * $1 }.reduce(0, +)
-        let norms = sqrt(meanGravity.map { $0 * $0 }.reduce(0, +)) * sqrt(meanAccel.map { $0 * $0 }.reduce(0, +))
-        let angle = norms > 0 ? acos(max(-1, min(1, dot / norms))) * 180 / .pi : 180
+        let angle = Self.degrees(between: meanGravity, meanAccel)
         let user = Stats.mean(
-            motions.map {
-                sqrt(
-                    $0.userAcceleration.x * $0.userAcceleration.x + $0.userAcceleration.y * $0.userAcceleration.y
-                        + $0.userAcceleration.z * $0.userAcceleration.z
-                )
-            }
+            motions.map { Self.length([$0.userAcceleration.x, $0.userAcceleration.y, $0.userAcceleration.z]) }
         )
         let latencies = samples.map(\.latency)
         let latency = Stats.mean(latencies)
         let readable = before != nil && after != nil
         let fused = readable ? Double(after! &- before!) : 0
         // Lying flat, a wrongly conjugated attitude still matches the accelerometer: only a tilted console tells.
-        let accelNorm = sqrt(meanAccel.map { $0 * $0 }.reduce(0, +))
-        let tilt = accelNorm > 0 ? acos(max(-1, min(1, -meanAccel[2] / accelNorm))) * 180 / .pi : 0
+        let tilt = Self.degrees(between: meanAccel, [0, 0, -1])
         let orientation = await MainActor.run { () -> Int in
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
             defer { UIDevice.current.endGeneratingDeviceOrientationNotifications() }

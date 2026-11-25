@@ -576,9 +576,9 @@ public:
     bool serializeProperties(OSSerialize *serializer) const override
     {
         OSDictionary *properties = dictionaryWithProperties();
-        OSNumber *reports = OSNumber::withNumber(__atomic_load_n(&motionReports, __ATOMIC_RELAXED), 64);
-        const bool ok = properties && reports && properties->setObject("DeviceMotionReports", reports) &&
-                        properties->serialize(serializer);
+        const OSNumber *reports = OSNumber::withNumber(__atomic_load_n(&motionReports, __ATOMIC_RELAXED), 64);
+        const bool ok = (properties != nullptr) && (reports != nullptr) &&
+                        properties->setObject("DeviceMotionReports", reports) && properties->serialize(serializer);
         OSSafeReleaseNULL(reports);
         OSSafeReleaseNULL(properties);
         return ok;

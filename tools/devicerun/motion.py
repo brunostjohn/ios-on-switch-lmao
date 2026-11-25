@@ -124,6 +124,8 @@ MOTION = [
         regex=r'(?:\{65292, (?P<usage>1|5|7|26)\}|Giving up\.)',
         show=('usage',),
         source='translate/arm64e/pretranslate/edits_24B119.json',
-        note='report until 24B119 os.trustcache is regenerated with edits_24B119.json; boot 2: 24 not-ready, 2 give-ups',
+        note=(
+            'report until 24B119 os.trustcache is regenerated with edits_24B119.json; boot 2: 24 not-ready, 2 give-ups'
+        ),
     ),
 ]
