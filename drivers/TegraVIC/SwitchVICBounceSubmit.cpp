@@ -147,7 +147,7 @@ int switch_vic_bounce_submit(const TegraVICSurface *source, const TegraVICSurfac
     const bool sharedDescriptor = plan->readsSource && source->memory == destination->memory;
     const bool alias = sharedDescriptor && source->baseOffset == destination->baseOffset &&
                        source->desc.length <= destination->desc.length;
-    int error = switch_vic_surface_access(destination, true, &work->access[1]);
+    int error = switch_vic_surface_access_destination(destination, &work->access[1], dstReserve);
     if (!error && plan->readsSource && !alias) {
         const int native = switch_native_surface_acquire(source, &work->native, false);
         if (native == -2 || native == -95 || native == SWITCH_GPU_BACKING_STALE)
