@@ -345,6 +345,7 @@ extern "C" void switch_gpu_path_line(char *line, size_t size)
 			snprintf(line + used, size - used, " preempt_%s_us=%u", kBuckets[b],
 				 landed.bucket[b]);
 	}
+	tgm_spare_seeds_line(line, size);
 }
 
 extern "C" void switch_gpu_path_register(void)
