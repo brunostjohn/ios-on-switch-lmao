@@ -515,6 +515,49 @@ TEST(CompileRequest, OneInputApartIsAnotherStoreEntry)
     }
 }
 
+// Core Image's, CoreUI's and Vision's libraries state one HASH for many functions: a stage's function is in its key
+TEST(CompileRequest, TwoFunctionsOfOneStatedHashAreTwoEntries)
+{
+    switch_compiler::SystemLibraries system;
+    std::string bytes = made_metallib::universal({"vertex_fn", "fragment_fn", "fragment_two"});
+    const std::string own(32, char(0xA2)), shared(32, char(0xA1));
+    const size_t at = bytes.find(own);
+    ASSERT_NE(at, std::string::npos);
+    bytes.replace(at, own.size(), shared);
+    const std::string &library = bytes;
+    gm20b::CompileRequest one = renderRequest(), two = one;
+    one.libraries[0] = two.libraries[0] = data(library);
+    two.stages[1].function = "fragment_two";
+    const switch_compiler::Prepared a = prepared(one, system), b = prepared(two, system);
+    EXPECT_NE(a.name, b.name);
+    gm20b::RuntimeRecord record, taken;
+    std::string why;
+    const std::string entry = gm20b::encodeEntry(a.content, &record, "");
+    EXPECT_EQ(gm20b::decodeEntry(entry, b.content, taken, why), gm20b::RecordCache::Found::None);
+}
+
+// The compiler applies the fields as the key names them: two requests apart only in what the key does not name (an
+// unused attachment's blend factors, rounding mode 1 against 0) are one content and give the compiler one descriptor,
+// and a literal stride the key would name as the dynamic one is refused
+TEST(CompileRequest, TheCompilerAppliesOnlyFieldsTheKeyNames)
+{
+    switch_compiler::SystemLibraries system;
+    gm20b::CompileRequest r = renderRequest(), loose = r;
+    loose.fields.color[5].sourceRGB = MTLBlendFactorOne;
+    loose.fields.color[5].writeMask = MTLColorWriteMaskAll;
+    loose.fields.textureWriteRounding = 1;
+    const switch_compiler::Prepared a = prepared(r, system), b = prepared(loose, system);
+    EXPECT_EQ(b.content.key, a.content.key);
+    EXPECT_EQ(memcmp(&b.request.fields, &a.request.fields, sizeof a.request.fields), 0);
+    gm20b::CompileRequest literal = r;
+    literal.fields.attributes[0].stride = UINT32_MAX;
+    literal.key = runtimeKey(literal).key;
+    switch_compiler::Prepared p;
+    std::string why;
+    EXPECT_FALSE(switch_compiler::prepare(gm20b::encodeRequest(literal), kStack, system, p, why));
+    EXPECT_NE(why.find("stride"), std::string::npos) << why;
+}
+
 // A storage form's barrier twin is asked as its state's request in RequestForm::Barrier: keyed as the state, so the
 // compiler checks it the same, and filed apart from the state's own record; no compute request takes the form
 TEST(CompileRequest, ABarrierTwinIsItsStatesKeyInAStoreEntryOfItsOwn)

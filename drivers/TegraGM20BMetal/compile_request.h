@@ -108,6 +108,11 @@ size_t fragmentStage(const CompileRequest &r);
 size_t firstLinked(const CompileRequest &r);
 
 std::string encodeRequest(const CompileRequest &r);
+// `f` as the key names it (keyFieldWords): a colour or attribute of no format zeroed, the tessellator's defaults without
+// a patch, an amplification below 1 as 1, rounding mode 1 as 0 (both round toward zero), booleans 0 or 1. The compiler
+// applies these, so nothing the store name does not fold reaches code generation. False: a stride no descriptor holds
+// (2^32 - 1 or more, other than MTLBufferLayoutStrideDynamic, which the key names as 2^32 - 1).
+bool canonicalize(PipelineFields &f);
 // False: not a request this build reads (a bound passed, a stage naming no library, a system library given bytes)
 bool decodeRequest(const std::string &bytes, CompileRequest &out);
 

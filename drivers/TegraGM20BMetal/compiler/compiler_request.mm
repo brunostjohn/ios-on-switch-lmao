@@ -242,6 +242,8 @@ bool prepare(const std::string &bytes, uint64_t stack, SystemLibraries &system, 
         out = std::move(p);
         return true;
     }
+    if (!gm20b::canonicalize(p.request.fields))
+        return why = "a vertex stride no descriptor holds", false;
     std::vector<std::map<std::string, gm20b::AirHash>> air(p.request.libraries.size());
     p.clientLibraries.resize(p.request.libraries.size());
     for (size_t i = 0; i < p.request.libraries.size(); ++i) {

@@ -16,7 +16,7 @@ namespace {
 
 // Each key's own magic; any change to what goes into a content takes the next one, so no reader takes an entry of the
 // layout before
-constexpr char kContentMagic[8] = {'S', 'W', 'C', 'O', 'N', 'T', '0', '2'};
+constexpr char kContentMagic[8] = {'S', 'W', 'C', 'O', 'N', 'T', '0', '3'};
 
 constexpr uint64_t rotl(uint64_t x, int r)
 {
@@ -99,11 +99,13 @@ bool renderKind(const CompileRequest &r)
            (r.kind == RequestKind::Reflection && !computeReflection(r) && !functionAttributes(r) && !bufferEncoders(r));
 }
 
-// A stage's part: its tag, AIR, facts and constants; a linked function's name, which its caller links by, and a function's
-// attributes' name, which their key holds (function_attributes.h)
+// A stage's part: its tag, its library function's name (a library may state one HASH for many functions: Core Image's,
+// CoreUI's and Vision's, a dynamic library's), AIR, facts and constants; a linked function's name, which its caller
+// links by, and a function's attributes' name, which their key holds (function_attributes.h)
 void addStage(Builder &b, const RequestStage &s, const StageContent &f, bool named)
 {
     b.text(s.tag);
+    b.text(s.function);
     b.bytes(f.air.data(), f.air.size());
     b.text(f.facts);
     b.value(uint8_t(s.specialized));

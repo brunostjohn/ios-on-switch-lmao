@@ -201,6 +201,30 @@ size_t firstLinked(const CompileRequest &r)
     return fragmentStage(r) == kNoStage ? 1 : 2;
 }
 
+bool canonicalize(PipelineFields &f)
+{
+    for (ColorFields &c : f.color) {
+        if (!c.format)
+            c = {};
+        c.blending = c.blending != 0;
+    }
+    for (AttributeFields &a : f.attributes) {
+        if (!a.format)
+            a = {};
+        if (a.stride != UINT64_MAX && a.stride >= UINT32_MAX)
+            return false;
+    }
+    if (!f.patchType)
+        f.tessellation = {};
+    f.tessellation.factorScale = f.tessellation.factorScale != 0;
+    f.amplification = std::max<uint64_t>(f.amplification, 1);
+    if (f.textureWriteRounding == 1)
+        f.textureWriteRounding = 0;
+    f.rasterization = f.rasterization != 0;
+    f.alphaToCoverage = f.alphaToCoverage != 0;
+    return true;
+}
+
 std::string encodeRequest(const CompileRequest &r)
 {
     Writer w;

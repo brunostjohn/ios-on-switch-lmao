@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // A request's key in the system shader compiler's store (compiler/compiler_store.h): what its record is made from and
-// nothing that says where the request came from. Each stage's function is its AIR (the HASH tag Apple's compiler wrote
-// into the metallib's function list), what the list and the public metadata say of the function outside its bitcode, and
-// the constants it was made with; the main stages' names and every library's path or bytes are left out. A system
+// nothing that says where the request came from. Each stage's function is its name, its AIR (the HASH tag Apple's compiler
+// wrote into the metallib's function list), what the list and the public metadata say of the function outside its
+// bitcode, and the constants it was made with; every library's path or bytes are left out. A system
 // library's records are every process's: one shader of a framework is one entry. Tags of any other library are the
 // client's word, unchecked, so its records are filed under the asking process's scope (StoreScope) and reach no other.
 // A linked function keeps the name it was made under, which its caller links by. A render state adds the descriptor's fields as its key names them and its variant; a
