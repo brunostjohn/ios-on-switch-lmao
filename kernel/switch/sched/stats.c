@@ -147,7 +147,7 @@ void switch_sched_dispatched(thread_t thread, uint64_t now)
      * never pairs one wait's length with another's start. A dispatch racing the exchange can skip the next window's
      * max for that one sample: the load filters, os_atomic_max decides. */
     if (us > os_atomic_load(&s->window_longest, relaxed) >> 32) {
-        os_atomic_max(&s->window_longest, switch_sched_longest(us, abs_to_us(made) / 1000), relaxed);
+        os_atomic_max(&s->window_longest, switch_sched_longest_since(us, abs_to_us(made)), relaxed);
     }
     if (thread->sched_flags & TH_SFLAG_FAILSAFE) {
         os_atomic_inc(&s->failsafe_runs, relaxed);
@@ -391,8 +391,8 @@ static struct switch_sched_window take_window(struct slot *s)
     w.failsafe_runs = now.failsafe_runs - s->reported.failsafe_runs;
     w.limit_blocks = now.limit_blocks - s->reported.limit_blocks;
     w.limit_us = now.limit_us - s->reported.limit_us;
-    switch_sched_take_longest(&w, os_atomic_xchg(&s->window_longest, 0, relaxed), s->window_start_ms);
-    s->window_start_ms = abs_to_us(mach_absolute_time()) / 1000;
+    s->window_start_ms = switch_sched_take_longest(&w, os_atomic_xchg(&s->window_longest, 0, relaxed),
+                                                   s->window_start_ms, abs_to_us(mach_absolute_time()));
     s->reported = now;
     return w;
 }

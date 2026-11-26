@@ -53,12 +53,24 @@ static inline uint64_t switch_sched_longest(uint64_t us, uint64_t began_ms)
     return high << 32 | low;
 }
 
-static inline void switch_sched_take_longest(struct switch_sched_window *w, uint64_t longest, uint64_t start_ms)
+/* A dispatch's word: its wait, `us`, and the uptime it was made runnable at, `made_us`. */
+static inline uint64_t switch_sched_longest_since(uint64_t us, uint64_t made_us)
+{
+    return switch_sched_longest(us, made_us / 1000);
+}
+
+/*
+ * A window's take: its longest wait, and how long before the window's start (uptime ms, the last take's) that wait
+ * began. Returns the next window's start, from `now_us`: every take advances it, a window with no run too.
+ */
+static inline uint64_t switch_sched_take_longest(struct switch_sched_window *w, uint64_t longest, uint64_t start_ms,
+                                                 uint64_t now_us)
 {
     const uint64_t began_ms = longest & UINT32_MAX;
 
     w->max_us = longest >> 32;
     w->max_before_ms = w->max_us != 0 && began_ms < start_ms ? start_ms - began_ms : 0;
+    return now_us / 1000;
 }
 
 static inline void switch_sched_note(struct switch_sched_window *w, uint64_t us)

@@ -91,6 +91,29 @@ TEST(XnuSchedStats, ALongestWaitThatBeganBeforeTheWindowSaysSo)
                 HasSubstr("1 runs 32555950/32555950/32555950 us, longest began 22555 ms before the window"));
 }
 
+// The 25 Nov sequence through stats.c's own helpers, in uptime: ten runs in the first window, two windows with no run,
+// then the dispatch that ends a 32.556 s wait. Its entry names the window start two empty takes moved forward.
+TEST(XnuSchedStats, AWaitAcrossTwoEmptyWindowsIsPlacedAgainstTheWindowItEndsIn)
+{
+    constexpr uint64_t kSecond = 1000000;
+    const auto take = [](uint64_t at) {
+        std::string out(256, '\0');
+        out.resize(xnu_sched_timeline_take(at, out.data(), out.size()));
+        return out;
+    };
+    xnu_sched_timeline_reset();
+    (void)take(1000 * kSecond);
+    for (uint64_t i = 0; i < 10; i++) {
+        xnu_sched_timeline_dispatch((1000 * kSecond) + (100000 * i), (1000 * kSecond) + (100000 * i) + 64);
+    }
+    EXPECT_EQ(take(1010 * kSecond), "backboardd.main[69] 53/53 TS IN FG: 10 runs 64/64/64 us");
+    EXPECT_EQ(take(1020 * kSecond), "backboardd.main[69] 53/53 TS IN FG: 0 runs 0/0/0 us");
+    EXPECT_EQ(take(1030 * kSecond), "backboardd.main[69] 53/53 TS IN FG: 0 runs 0/0/0 us");
+    xnu_sched_timeline_dispatch(1007 * kSecond, (1007 * kSecond) + 32556000);
+    EXPECT_EQ(take(1040 * kSecond), "backboardd.main[69] 53/53 TS IN FG: 1 runs 32556000/32556000/32556000 us, "
+                                    "longest began 23000 ms before the window");
+}
+
 TEST(XnuSchedStats, ALongestWaitInsideTheWindowSaysNothingMore)
 {
     xnu_sched_reset();
