@@ -231,7 +231,7 @@ class Libraries:
 
     def of(self, kernel: Kernel) -> tuple[str, str]:
         """Give the kernel's library, or '' and why there is none."""
-        if kernel.lib:
+        if kernel.lib and kernel.lib != 'data':
             return kernel.lib, ''
         held = self.by_air.get((kernel.function, kernel.air))
         if held:

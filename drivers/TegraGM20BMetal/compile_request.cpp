@@ -250,8 +250,6 @@ std::string encodeRequest(const CompileRequest &r)
         w.value(uint8_t(l.system));
         w.text(l.bytes);
         w.value(l.libraryId);
-        if (l.libraryId)
-            w.bytes(l.digest.data(), l.digest.size());
     }
     writeVariant(w, r.variant);
     writeKernel(w, r.kernel);
@@ -299,8 +297,6 @@ bool decodeRequest(const std::string &bytes, CompileRequest &out)
         l.system = r.value<uint8_t>() != 0;
         l.bytes = r.text();
         l.libraryId = r.value<uint64_t>();
-        if (l.libraryId)
-            r.bytes(l.digest.data(), l.digest.size());
     }
     if (!readVariant(r, q.variant))
         return false;

@@ -394,12 +394,12 @@ bool Remote::waitAsync(uint64_t cookie)
     }
 }
 
-uint64_t Remote::registerLibrary(const void *bytes, size_t size, const Digest &digest)
+uint64_t Remote::registerLibrary(const void *bytes, size_t size, uint64_t source)
 {
     if (!bytes || !size || size > TegraGM20BCompileRequestLimit || !capable() ||
         !librariesSupported_.load(std::memory_order_acquire))
         return 0;
-    const RegisteredLibrary key{bytes, size, digest};
+    const RegisteredLibrary key{bytes, size, source};
     std::lock_guard<gm20b::Mutex> l(libraryLock_);
     if (const auto found = registeredLibraries_.find(key); found != registeredLibraries_.end())
         return found->second;

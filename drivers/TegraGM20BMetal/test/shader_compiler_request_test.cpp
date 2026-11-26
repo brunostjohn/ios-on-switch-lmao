@@ -1098,23 +1098,20 @@ TEST(CompileRequest, ConstantsReadBackAsTheirText)
     EXPECT_EQ(gm20b::constantValuesOf("#0:9999:00"), nil);
 }
 
-TEST(CompileRequest, ClientLibraryHandleRoundTripsMatchesInlineAndChecksDigest)
+TEST(CompileRequest, ClientLibraryHandleRoundTripsAndMatchesInline)
 {
     gm20b::CompileRequest inlineReq = renderRequest();
     const gm20b::CacheKey k = runtimeKey(inlineReq);
     inlineReq.key = k.key;
     const std::string libBytes = inlineReq.libraries[0].bytes;
-    const gm20b::Digest digest = gm20b::sha256(libBytes.data(), libBytes.size());
 
     gm20b::CompileRequest handleReq = inlineReq;
     handleReq.libraries[0].bytes.clear();
     handleReq.libraries[0].libraryId = 7;
-    handleReq.libraries[0].digest = digest;
 
     gm20b::CompileRequest back;
     ASSERT_TRUE(gm20b::decodeRequest(gm20b::encodeRequest(handleReq), back));
     EXPECT_EQ(back.libraries[0].libraryId, 7u);
-    EXPECT_EQ(back.libraries[0].digest, digest);
     EXPECT_TRUE(back.libraries[0].bytes.empty());
 
     gm20b::CompileRequest both = handleReq;
@@ -1136,7 +1133,6 @@ TEST(CompileRequest, ClientLibraryHandleRoundTripsMatchesInlineAndChecksDigest)
     }
 
     const std::string libBytes2 = made_metallib::universal({"vertex_fn", "fragment_fn"}, 0xA0, 0x22);
-    const gm20b::Digest digest2 = gm20b::sha256(libBytes2.data(), libBytes2.size());
     int mapCalls = 0, unmapCalls = 0;
     std::map<std::pair<uint64_t, uint64_t>, const std::string *> backing = {
         {{10, 7}, &libBytes},
@@ -1179,7 +1175,6 @@ TEST(CompileRequest, ClientLibraryHandleRoundTripsMatchesInlineAndChecksDigest)
 
     gm20b::CompileRequest otherReq = handleReq;
     otherReq.libraries[0].libraryId = 8;
-    otherReq.libraries[0].digest = digest2;
     switch_compiler::Prepared otherPrepared;
     ASSERT_TRUE(
         switch_compiler::prepare(gm20b::encodeRequest(otherReq), kStack, system, otherPrepared, why, 10, &clientLibs))

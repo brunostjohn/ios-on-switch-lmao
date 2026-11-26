@@ -255,7 +255,7 @@ bool prepare(const std::string &bytes, uint64_t stack, SystemLibraries &system, 
             if (!client || !clientLibraries)
                 return why = "a library handle with no client mapping", false;
             std::shared_ptr<const MappedClientLibrary> mapped;
-            if (!clientLibraries->resolve(client, library.libraryId, library.digest, mapped, why))
+            if (!clientLibraries->resolve(client, library.libraryId, {}, mapped, why))
                 return false;
             air[i] = mapped->air;
             p.clientLibraries[i] = std::move(mapped);

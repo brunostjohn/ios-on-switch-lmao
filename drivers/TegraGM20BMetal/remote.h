@@ -105,15 +105,15 @@ public:
     // donating the calling thread's priority to the compiler worker. Returns true if the caller should retry.
     bool waitAsync(uint64_t cookie);
     // Register a client library slice via TegraGM20BMethodCompilerRegisterLibrary (CoW snapshot), caching the
-    // handle per (address, size, digest) for this connection. Returns 0 when unsupported or refused (caller
+    // handle per (address, size, source) for this connection (library_source.h LibrarySource::id). Returns 0 when unsupported or refused (caller
     // falls back to inline bytes).
-    uint64_t registerLibrary(const void *bytes, size_t size, const Digest &digest);
+    uint64_t registerLibrary(const void *bytes, size_t size, uint64_t source);
 
 private:
     struct RegisteredLibrary {
         const void *address = nullptr;
         size_t size = 0;
-        Digest digest{};
+        uint64_t source = 0;
 
         bool operator<(const RegisteredLibrary &o) const
         {
@@ -121,7 +121,7 @@ private:
                 return address < o.address;
             if (size != o.size)
                 return size < o.size;
-            return digest < o.digest;
+            return source < o.source;
         }
     };
 

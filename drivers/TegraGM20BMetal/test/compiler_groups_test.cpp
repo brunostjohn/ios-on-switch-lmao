@@ -161,7 +161,6 @@ TEST(CompilerGroups, ClientLibraryHandleCompilesIdenticallyToInlineBytes)
     request.kind = gm20b::RequestKind::Facts;
     gm20b::RequestLibrary handleLib;
     handleLib.libraryId = 42;
-    handleLib.digest = gm20b::sha256(bytes.data(), bytes.size());
     request.libraries.push_back(handleLib);
     gm20b::RequestStage entry;
     entry.tag = "k";
@@ -209,7 +208,6 @@ TEST(CompilerGroups, ClientLibraryHandleCompilesIdenticallyToInlineBytes)
     EXPECT_EQ(mapCalls, 1);
 
     request.libraries[0].libraryId = 0;
-    request.libraries[0].digest = {};
     request.libraries[0].bytes = bytes;
     std::string inlineResult;
     {

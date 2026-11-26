@@ -58,7 +58,6 @@ struct RequestLibrary {
     bool system = false;     // systemLibraryPath(path): the compiler reads it there, and `bytes` is empty
     std::string bytes;       // inline bytes when !system && libraryId == 0
     uint64_t libraryId = 0;  // connection-scoped CoW handle (TegraGM20BMethodCompilerRegisterLibrary)
-    Digest digest{};         // expected SHA-256 of the registered library when libraryId != 0
 };
 
 // A stage's function: for a render state the vertex function, the fragment function, then the linked ones (tags "vl",
@@ -115,13 +114,6 @@ std::string encodeRequest(const CompileRequest &r);
 bool canonicalize(PipelineFields &f);
 // False: not a request this build reads (a bound passed, a stage naming no library, a system library given bytes)
 bool decodeRequest(const std::string &bytes, CompileRequest &out);
-
-// A library's digest as a client registers it with the compiler (remote.h registerLibrary), which checks the bytes it
-// maps against it
-struct LibraryIdentity {
-    bool system = false;
-    Digest digest{};
-};
 
 Digest sha256(const void *bytes, size_t size);
 

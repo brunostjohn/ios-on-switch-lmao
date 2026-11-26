@@ -37,21 +37,15 @@ const char *classText(uint32_t qos)
 }
 
 // A kernel or compute-state facts the shader compiler answered at run time, whole, for tools/gpu/kernelharvest.py:
-// the function its library names, that library (a system library's path, else data:<SHA-256 of its bytes>), " spec"
+// the function its library names, that library (a system library's path, else "data": the tool finds it by the AIR the
+// key names), " spec"
 // where the function was made with constant values, and its cache key, in parts of 700 characters
 void logComputeHarvest(const char *kind, const CacheKey &k, const CompileRequest &r, const RequestSources &sources)
 {
     const RequestStage &s = r.stages[0];
     std::string lib = r.libraries[s.library].path;
-    if (!systemLibraryPath(lib)) {
-        lib = "data:";
-        char b[3];
-        LibrarySource *source = sources.libraries[s.library];
-        for (uint8_t x : source->identity(source->bytes, source->size).digest) {
-            snprintf(b, sizeof b, "%02x", x);
-            lib += b;
-        }
-    }
+    if (!systemLibraryPath(lib))
+        lib = "data";
     const std::string text = "lib=" + lib + " function=" + s.function + (s.specialized ? " spec " : " ") + k.key;
     constexpr size_t kPart = 700;
     const size_t parts = (text.size() + kPart - 1) / kPart;
@@ -83,12 +77,9 @@ bool addStage(CompileRequest &r, RequestSources &sources, const char *tag, id fu
         library.path = f->_source->path;
         library.system = f->_source->system && !every;
         if ((bytes || every) && !library.system) {
-            const LibraryIdentity identity =
-                every ? LibraryIdentity{false, sha256(data, length)} : f->_source->identity(data, length);
-            const uint64_t handle = remote ? remote->registerLibrary(data, length, identity.digest) : 0;
+            const uint64_t handle = remote ? remote->registerLibrary(data, length, f->_source->id) : 0;
             if (handle) {
                 library.libraryId = handle;
-                library.digest = identity.digest;
             } else {
                 library.bytes.assign(static_cast<const char *>(data), length);
             }
