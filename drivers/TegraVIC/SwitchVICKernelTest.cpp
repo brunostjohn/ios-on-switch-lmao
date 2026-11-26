@@ -11,6 +11,7 @@
 #include "SwitchVICFractionProbe.h"
 #include "SwitchVICLargeProbe.h"
 #include "SwitchVICLayoutProbe.h"
+#include "SwitchVICMcFaultProbe.h"
 #include "SwitchVICOddProbe.h"
 #include "SwitchVICPackedProbe.h"
 #include "SwitchVICPitchProbe.h"
@@ -31,6 +32,7 @@ constexpr Probe kProbes[] = {
     {SWITCH_VIC_LARGE_PROBE_MAGIC, sizeof(SwitchVICLargeProbeReply), switch_vic_large_probe_run},
     {SWITCH_VIC_COMPOSE_PROBE_MAGIC, sizeof(SwitchVICComposeProbeReply), switch_vic_compose_probe_run},
     {SWITCH_VIC_ODD_PROBE_MAGIC, sizeof(SwitchVICOddProbeReply), switch_vic_odd_probe_run},
+    {SWITCH_VIC_MC_FAULT_PROBE_MAGIC, sizeof(SwitchVICMcFaultProbeReply), switch_vic_mc_fault_probe_run},
     {SWITCH_VIC_COMPOSITE_ARM_MAGIC, SWITCH_VIC_COMPOSITE_REPLY_BYTES, switch_vic_composite_arm_run},
     {SWITCH_VIC_COMPOSITE_REPORT_MAGIC, SWITCH_VIC_COMPOSITE_REPLY_BYTES, switch_vic_composite_report_run},
 };
@@ -112,6 +114,15 @@ int switch_vic_probe_submit(const SwitchVICProbeBuffers &buffers, const TegraVIC
 const char *switch_vic_probe_running()
 {
     return gRunning;
+}
+
+bool switch_vic_probes_entitled(struct task *task)
+{
+    OSObject *value = IOUserClient::copyClientEntitlement(task, SWITCH_VIC_PROBES_ENTITLEMENT);
+    const bool entitled = value == kOSBooleanTrue;
+    if (value)
+        value->release();
+    return entitled;
 }
 
 int switch_vic_kernel_test_call(const IOExternalMethodArguments *a)

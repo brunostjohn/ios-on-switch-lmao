@@ -685,6 +685,8 @@ static IOReturn kernelTest(const Conn *conn, const IOExternalMethodArguments *a)
         return switch_vic_gate_call(conn, a);
     if (magic == SWITCH_DISPLAY_WINDOW_PROBE_MAGIC)
         return switch_display_window_probe_call ? switch_display_window_probe_call(a) : kIOReturnUnsupported;
+    if (!switch_vic_probes_entitled(conn->task))
+        return kIOReturnNotPrivileged;
     return switch_vic_kernel_test_call(a);
 }
 #endif

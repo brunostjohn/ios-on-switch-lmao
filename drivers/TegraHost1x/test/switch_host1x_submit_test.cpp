@@ -175,6 +175,13 @@ extern "C" void switch_car_clock_enable(unsigned)
 extern "C" void switch_car_reset_deassert(unsigned)
 {}
 
+// SwitchHost1xSmmu.cpp's: the register file has no SMMU behind it.
+bool switch_host1x_channels_confine(char *line, size_t size)
+{
+    snprintf(line, size, "no SMMU in the host test");
+    return false;
+}
+
 extern "C" void tegra_mc_hot_reset(uint32_t, uint32_t, bool)
 {}
 
@@ -216,6 +223,11 @@ void switch_host1x_intr_stop()
 
 void switch_host1x_intr_handle()
 {}
+
+bool switch_host1x_fence_names(uint32_t)
+{
+    return false;
+}
 
 void switch_host1x_intr_filter()
 {}

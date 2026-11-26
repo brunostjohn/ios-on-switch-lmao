@@ -31,6 +31,7 @@ void bringUpWithSe2LostOnItsSecondOperation()
     EXPECT_FALSE(gEngines[1].up);
     EXPECT_EQ(se_model::engines[1].started, 2u) << "an operation reached SE2 after it was off";
     EXPECT_TRUE(gEngines[0].proven) << "callers reach SE1 from here";
+    EXPECT_EQ(gSmmuHolds[0], 0) << "every operation SE1 ended gave its holds back";
     EXPECT_NE(se_model::log().find("SE2 off for this boot: operation never ended"), std::string::npos)
         << se_model::log();
     ASSERT_FALSE(se_model::engines[0].crypto.empty());
@@ -39,6 +40,9 @@ void bringUpWithSe2LostOnItsSecondOperation()
         EXPECT_NE(config & kCryptoMccif, 0u) << "SE1 moves its data through its memory clients";
     for (const uint32_t config : se_model::engines[1].crypto)
         EXPECT_EQ(config & kCryptoMccif, 0u) << "SE2 stays on the AHB";
+    EXPECT_EQ(gSmmuAttached[0], 1u);
+    EXPECT_EQ(gSmmuAttached[1], 0u) << "SE2's swgroups are not written: its AHB traffic is PPCS";
+    EXPECT_NE(se_model::log().find("SE2 DMA over the AHB (PPCS)"), std::string::npos) << se_model::log();
 }
 
 void stateLoadAfterItsEngineWentOff()
@@ -63,6 +67,46 @@ void stateLoadAfterItsEngineWentOff()
     EXPECT_TRUE(gEngines[1].up);
     EXPECT_EQ(se_model::engines[0].started, 1u);
     EXPECT_EQ(se_model::engines[1].started, 0u) << "SE2 was not the engine under test";
+    EXPECT_GT(gSmmuHolds[0], 0) << "the operation SE1 never ended keeps its pages held: SE1 may still write them";
+}
+
+void engineUpOnly(unsigned index)
+{
+    gAhb = switch_mmio_map(kAhbArbPA, 0x1000);
+    gMc = switch_mmio_map(kMcPA, 0x1000);
+    gLoop = IOWorkLoop::workLoop();
+    gQueue = IOLockAlloc();
+    ASSERT_TRUE(engineUp(gEngines[index]));
+}
+
+// An error interrupt can end an operation with its writes still queued: its pages are let go only once they drained.
+void anErrorWithWritesStillQueued()
+{
+    engineUpOnly(0);
+    se_model::engines[0].errorAt = 1;
+    se_model::engines[0].busyAfterError = 3;
+    const bool ended = se_model::finishes([] {
+        (void)stateLoadWorks(gEngines[0], SHA256, &se_model::kSha256);
+    });
+    EXPECT_TRUE(ended) << se_model::log();
+    EXPECT_EQ(se_model::engines[0].started, 1u);
+    EXPECT_EQ(gReleasedBusy, 0u) << "a list released while SE1 still showed busy";
+    EXPECT_EQ(gSmmuHolds[0], 0) << "the operation ended: its holds went back";
+    EXPECT_TRUE(gEngines[0].up) << "an operation error is the operation's, not the engine's";
+}
+
+// An engine turned off before its start reached nothing: the operation's holds go back.
+void listsThatDoNotTake()
+{
+    engineUpOnly(0);
+    se_model::engines[0].listsDoNotTake = true;
+    const bool ended = se_model::finishes([] {
+        (void)stateLoadWorks(gEngines[0], SHA256, &se_model::kSha256);
+    });
+    EXPECT_TRUE(ended) << se_model::log();
+    EXPECT_FALSE(gEngines[0].up);
+    EXPECT_EQ(se_model::engines[0].started, 0u);
+    EXPECT_EQ(gSmmuHolds[0], 0) << "nothing started, so nothing stays held";
 }
 
 // A caller's operation on a proven engine may have DMA in flight into the caller's pages: never an engine turned off.
@@ -91,6 +135,16 @@ TEST(TegraSEBringUp, AnEngineThatNeverEndsAnOperationIsOffAndBringUpFinishesWith
 TEST(TegraSEBringUp, AStateLoadCheckOfAnEngineThatWentOffEndsAtOnce)
 {
     switch_ios::test::ExpectPassesInFreshProcess(stateLoadAfterItsEngineWentOff);
+}
+
+TEST(TegraSEBringUp, AnOperationErrorDrainsTheEngineBeforeItsPagesAreLetGo)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(anErrorWithWritesStillQueued);
+}
+
+TEST(TegraSEBringUp, AnEngineOffBeforeItsStartKeepsNothingHeld)
+{
+    switch_ios::test::ExpectPassesInFreshProcess(listsThatDoNotTake);
 }
 
 TEST(TegraSEBringUp, ACallersOperationThatNeverEndsOnAProvenEngineIsAPanic)

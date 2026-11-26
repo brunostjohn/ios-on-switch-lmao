@@ -111,7 +111,7 @@ int tegra_host1x_start(void)
     return 0;
 }
 
-int tegra_host1x_syncpt_alloc(uint32_t *id)
+int tegra_host1x_syncpt_alloc_named(uint32_t *id, const char *)
 {
     *id = kSyncpt;
     return 0;

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <vector>
 #include "drivers/TegraGM20B/SwitchGpuSmmu.h"
 #include "drivers/TegraGM20B/TegraGM20BComp.h"
@@ -191,6 +192,56 @@ extern "C" void switch_gpu_smmu_unmap(uint64_t, uint32_t npages)
 	gSmmuFreeBytes += bytes;
 }
 
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
+
+// The GPU's pool at 0xe4000000 + 64 MiB; every other page is the VM's and goes through GPUB's view of RAM while held.
+u64 nvxnu_pool_base_pa()
+{
+	return 0xe4000000ULL;
+}
+
+u64 nvxnu_pool_size()
+{
+	return 64ULL << 20;
+}
+
+bool gRamReady, gHoldFail;
+std::map<uint64_t, int> gHeld;
+unsigned gHoldCalls, gReleaseCalls;
+
+extern "C" int switch_gpu_smmu_ram_ready(void)
+{
+	return gRamReady;
+}
+
+extern "C" int switch_gpu_smmu_hold(const uint64_t *pas, uint32_t npages)
+{
+	++gHoldCalls;
+	if (gHoldFail)
+		return -12;
+	for (uint32_t i = 0; i < npages; ++i) {
+		EXPECT_EQ(pas[i] & ~0x1ffffff000ULL, 0u) << "a raw 4 KiB page";
+		++gHeld[pas[i]];
+	}
+	return 0;
+}
+
+extern "C" void switch_gpu_smmu_release_ram(const uint64_t *pages, uint32_t npages)
+{
+	++gReleaseCalls;
+	for (uint32_t i = 0; i < npages; ++i) {
+		if (!switch_gpu_smmu_is_ram_pa(pages[i]))
+			continue;
+		const uint64_t pa = pages[i] & ~SWITCH_GPU_SMMU_BIT;
+		EXPECT_GT(gHeld[pa], 0) << "a release with no hold";
+		if (--gHeld[pa] <= 0)
+			gHeld.erase(pa);
+	}
+}
+
+#define TGM_STATS 1
+u64 tgm_retire_invalidates, tgm_retire_objects, tgm_retire_invalidate_ns;
+
 #include "drivers/TegraGM20B/test/switch_gpu_mem_smmu_source.h"
 
 class GpuMemSmmuTest : public testing::Test
@@ -214,6 +265,9 @@ protected:
 		gSmmuFail = false;
 		gLastCtorPage = 0;
 		gLastCtorDma = nullptr;
+		gRamReady = gHoldFail = false;
+		gHeld.clear();
+		gHoldCalls = gReleaseCalls = 0;
 	}
 
 	static std::vector<uint64_t> scattered(uint32_t npages)
@@ -456,6 +510,131 @@ TEST_F(GpuMemSmmuTest, SmmuRejectsDuplicatePhysicalPagesAndUnmapsPrefixOnCtorFai
 	EXPECT_EQ(gSmmuUnmaps, 1u);
 	EXPECT_EQ(gLastMappedPages, 896u);
 	EXPECT_EQ(gLastUnmappedPages, 896u);
+	EXPECT_EQ(gSmmuFreeBytes, SWITCH_GPU_SMMU_MAX_WINDOW_BYTES);
+}
+
+// GPUB attached: every page that is not the pool's reaches the GPU as BIT(34) | PA, held while the memory object lives;
+// pool pages stay raw (a[34] = 0, the one memory the SMMU cannot confine).
+TEST_F(GpuMemSmmuTest, PagesThatAreNotThePoolsReachTheGpuThroughGpubsViewWhileTheMemoryLives)
+{
+	gRamReady = true;
+	auto pages = scattered(8);
+	pages[3] = 0xe4001000ULL;
+	tgm_mem *mem = nullptr;
+	ASSERT_EQ(tgm_mem_new(&vm, pages.data(), 8, &mem), 0);
+	EXPECT_NE(mem->pages, pages.data()) << "the caller's array keeps its raw addresses";
+	EXPECT_EQ(gLastCtorDma, mem->pages) << "nvkm gets the encoded ones";
+	for (uint32_t i = 0; i < 8; ++i) {
+		const uint64_t expected = i == 3 ? pages[i] : switch_gpu_smmu_ram_pa(pages[i]);
+		EXPECT_EQ(mem->pages[i], expected) << i;
+		EXPECT_EQ(gHeld.count(pages[i]), i == 3 ? 0u : 1u) << i;
+	}
+	EXPECT_EQ(gHoldCalls, 1u) << "one hold, so one publish, for the whole object";
+	tgm_mem_del(&mem);
+	EXPECT_TRUE(gHeld.empty());
+}
+
+TEST_F(GpuMemSmmuTest, ALargeObjectsDeletionReleasesEveryHoldInOneCommit)
+{
+	gRamReady = true;
+	const auto pages = scattered(2048);
+	tgm_mem *mem = nullptr;
+	ASSERT_EQ(tgm_mem_new(&vm, pages.data(), 2048, &mem), 0);
+	EXPECT_EQ(gHeld.size(), 2048u);
+	tgm_mem_del(&mem);
+	EXPECT_EQ(gReleaseCalls, 1u)
+		<< "one view lock and one MC flush for the object, not one per 64 pages";
+	EXPECT_TRUE(gHeld.empty());
+}
+
+TEST_F(GpuMemSmmuTest, AllPoolMemoryKeepsTheCallersArrayAndHoldsNothing)
+{
+	gRamReady = true;
+	const auto pool = contiguousAligned(0xe4000000ULL, 32);
+	tgm_mem *mem = nullptr;
+	ASSERT_EQ(tgm_mem_new(&vm, pool.data(), 32, &mem), 0);
+	EXPECT_EQ(mem->pages, pool.data());
+	EXPECT_EQ(gHoldCalls, 0u);
+	tgm_mem_del(&mem);
+	EXPECT_EQ(gReleaseCalls, 0u);
+}
+
+TEST_F(GpuMemSmmuTest, TwoObjectsOverOnePageHoldItTwiceAndTheFirstDeletionLeavesItHeld)
+{
+	gRamReady = true;
+	const auto pages = scattered(4);
+	tgm_mem *a = nullptr;
+	tgm_mem *b = nullptr;
+	ASSERT_EQ(tgm_mem_new(&vm, pages.data(), 4, &a), 0);
+	ASSERT_EQ(tgm_mem_new(&vm, pages.data() + 2, 2, &b), 0);
+	EXPECT_EQ(gHeld[pages[2]], 2);
+	tgm_mem_del(&a);
+	EXPECT_EQ(gHeld.count(pages[0]), 0u);
+	EXPECT_EQ(gHeld[pages[2]], 1) << "b's GMMU mappings may still reach it";
+	tgm_mem_del(&b);
+	EXPECT_TRUE(gHeld.empty());
+}
+
+TEST_F(GpuMemSmmuTest, AWindowPrefixAndAHeldTailBothGoBackAtDeletionAndInABatch)
+{
+	gRamReady = true;
+	const auto pages = scattered(900);
+	tgm_mem *mem = nullptr;
+	ASSERT_EQ(tgm_mem_new_smmu_big(&vm, pages.data(), 900, &mem), 0);
+	ASSERT_TRUE(tgm_mem_is_smmu(mem));
+	EXPECT_TRUE(switch_gpu_smmu_is_iova(mem->pages[0]));
+	EXPECT_FALSE(switch_gpu_smmu_is_ram_pa(mem->pages[0]));
+	EXPECT_EQ(mem->pages[896], switch_gpu_smmu_ram_pa(pages[896]));
+	EXPECT_EQ(gHeld.size(), 4u) << "only the tail past the window's 896 pages";
+	tgm_mem *later = nullptr;
+	tgm_mem_del_later(&mem, &later);
+	EXPECT_EQ(gHeld.size(), 4u) << "held until the batch's L2 invalidate";
+	tgm_mem_del_finish(later);
+	EXPECT_TRUE(gHeld.empty());
+	EXPECT_EQ(gSmmuUnmaps, 1u);
+}
+
+// A retirement batch's memory with RAM-view holds and no window IOVA waits for the batch's L2 invalidate too: before it
+// went at once, so its holds went before the flush that writes its dirty lines back, and with no window memory in the
+// batch no flush ran at all.
+TEST_F(GpuMemSmmuTest, ABatchKeepsRamViewHoldsUntilItsL2InvalidateHasRun)
+{
+	gRamReady = true;
+	const auto pages = scattered(8);
+	tgm_mem *mem = nullptr;
+	ASSERT_EQ(tgm_mem_new(&vm, pages.data(), 8, &mem), 0);
+	ASSERT_FALSE(tgm_mem_is_smmu(mem));
+	tgm_mem *later = nullptr;
+	tgm_mem_del_later(&mem, &later);
+	EXPECT_EQ(mem, nullptr);
+	ASSERT_NE(later, nullptr) << "deferred to the batch";
+	EXPECT_EQ(gDtorCalls, 1u) << "its GMMU memory object goes now";
+	EXPECT_EQ(gHeld.size(), 8u);
+	EXPECT_EQ(gLtcInvalidates, 0u);
+	const u64 invalidates = tgm_retire_invalidates, objects = tgm_retire_objects;
+	tgm_mem_del_finish(later);
+	EXPECT_EQ(gLtcInvalidates, 1u);
+	EXPECT_EQ(tgm_retire_invalidates - invalidates, 1u) << "counted for the stats window's smmu line";
+	EXPECT_EQ(tgm_retire_objects - objects, 1u);
+	EXPECT_TRUE(gHeld.empty());
+	EXPECT_EQ(gSmmuUnmaps, 0u) << "no window IOVA to give back";
+}
+
+TEST_F(GpuMemSmmuTest, AFailedCtorOrAFailedHoldLeavesNothingHeldOrMapped)
+{
+	gRamReady = true;
+	const auto pages = scattered(900);
+	tgm_mem *mem = nullptr;
+	gCtorError = -ENOMEM;
+	EXPECT_EQ(tgm_mem_new_smmu_big(&vm, pages.data(), 900, &mem), -ENOMEM);
+	EXPECT_TRUE(gHeld.empty());
+	EXPECT_EQ(gSmmuUnmaps, 1u);
+	gCtorError = 0;
+	gHoldFail = true;
+	EXPECT_EQ(tgm_mem_new_smmu_big(&vm, pages.data(), 900, &mem), -12);
+	EXPECT_EQ(mem, nullptr);
+	EXPECT_EQ(gSmmuUnmaps, 2u) << "the window prefix goes back too";
+	EXPECT_EQ(gCtorCalls, 1u) << "nvkm never saw the memory";
 	EXPECT_EQ(gSmmuFreeBytes, SWITCH_GPU_SMMU_MAX_WINDOW_BYTES);
 }
 }  // namespace

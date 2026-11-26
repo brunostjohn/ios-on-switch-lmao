@@ -132,8 +132,9 @@ public:
 
 // DEBUG builds of SwitchHost1xChannels.cpp write their stats line here.
 inline std::string switch_test_log;
-#define OS_LOG_DEFAULT   nullptr
-#define os_log(log, ...) switch_test_os_log(__VA_ARGS__)
+#define OS_LOG_DEFAULT         nullptr
+#define os_log(log, ...)       switch_test_os_log(__VA_ARGS__)
+#define os_log_error(log, ...) switch_test_os_log(__VA_ARGS__)
 
 inline void switch_test_os_log(const char *format, ...)
 {

@@ -641,6 +641,7 @@ TESTS_SYSTEM_SRCS = [
     "tests/InputTests.swift",
     "tests/JoyConIdleTest.swift",
     "tests/JoyConProbeTest.swift",
+    "tests/MCFaultInterruptTest.swift",
     "tests/MemoryTests.swift",
     "tests/OverlayAppRecordsTest.swift",
     "tests/OverlayAppsTest.swift",

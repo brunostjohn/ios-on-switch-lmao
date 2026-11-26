@@ -10,7 +10,7 @@ import zlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from tools.perf import cpu, dumps, ips, pacing, perf, recfile, report, session, source, symbols, vm, windows, work
+from tools.perf import cpu, dumps, gpu, ips, pacing, perf, recfile, report, session, source, symbols, vm, windows, work
 from tools.perf.source import TICK_HZ, Rec
 
 T0 = datetime(2026, 11, 23, 0, 13, 20, tzinfo=UTC)
@@ -89,6 +89,28 @@ def rec(msg: str, at: float, proc: str = 'kernel', **kw: object) -> Rec:
 
 def frame(template: str, at: float, origin_ticks: int, **kw: int) -> Rec:
     return rec(template.format(latch=origin_ticks + 2 * PERIOD_TICKS, origin=origin_ticks, **kw), at)
+
+
+class GpuTest(unittest.TestCase):
+    def test_the_smmu_line_gives_each_windows_hit_rates_and_retirement_invalidates(self):
+        recs = [
+            rec(
+                'tegra-gm20b: smmu counters on from here (TLB_CONFIG 0xb0000030 PTC_CONFIG 0xa8000f3f); retirement L2 '
+                'invalidates 0 for 0 objects, 0 us CPU',
+                1.0,
+            ),
+            rec(
+                'tegra-gm20b: smmu tlb 900 hits 100 misses (90.0% hit), ptc 95 hits 5 misses (95.0% hit); '
+                'retirement L2 invalidates 12 for 30 objects, 2400 us CPU',
+                6.0,
+            ),
+        ]
+        g = gpu.read(recs)
+        self.assertEqual(g.smmu, [(900, 100, 95, 5)])
+        self.assertEqual(g.retire, [(0, 0), (12, 2400)])
+        text = '\n'.join(gpu.lines(g))
+        self.assertIn('SMMU TLB hits per stats window: p50 90.0%, worst 90.0%; 100 misses over 1 windows', text)
+        self.assertIn('retirement L2 invalidates per stats window: p50 12, max 12; 2.4 ms of CPU over 2 windows', text)
 
 
 class PacingTest(unittest.TestCase):

@@ -25,6 +25,10 @@ struct Engine {
     unsigned hung = 0;           // the operation that never ended
     unsigned startedAtHang[kEngines] = {};  // every engine's count when it did
     std::vector<uint32_t> crypto;
+    unsigned errorAt = 0;         // the operation (counted from 1) that ends with an error interrupt
+    unsigned busyAfterError = 0;  // STATUS reads that still show it busy after that error: writes still queued
+    unsigned busyLeft = 0;
+    bool listsDoNotTake = false;  // IN_LL reads back 0
 };
 
 struct Mapping {
@@ -93,9 +97,16 @@ uint32_t read(Engine &engine, uint32_t offset)
     switch (offset) {
     case SECURITY:
         return kSoftNonsecure;
+    case IN_LL:
+        return engine.listsDoNotTake ? 0 : engine.regs[offset];
     case PERKEY:
         return 0x3ffe;
     case STATUS:
+        if (engine.busyLeft) {
+            --engine.busyLeft;
+            return kStatusBusy;
+        }
+        return 0;
     case ERR_STATUS:
         return 0;
     default:
@@ -126,7 +137,12 @@ void start(unsigned index)
         given.insert(given.end(), lists.begin(), lists.end());
         return;
     }
-    engine.regs[INT_STATUS] |= kIntDone;
+    if (engine.started == engine.errorAt) {
+        engine.regs[INT_STATUS] |= kIntError;
+        engine.busyLeft = engine.busyAfterError;
+    } else {
+        engine.regs[INT_STATUS] |= kIntDone;
+    }
     gEngines[index].source->fire();
 }
 
@@ -178,6 +194,34 @@ size_t count(const std::string &text)
     return n;
 }
 }  // namespace se_model
+
+// TegraSESmmu.cpp's, which the model does not build: the engines' memory clients untranslated, as at reset.
+unsigned gSmmuAttached[kEngines];  // attaches asked for, per engine
+
+tegra_se_smmu_attach_result tegra_se_smmu_attach(unsigned engine, const switch_dma_buffer *const *, unsigned,
+                                                 char *line, size_t size)
+{
+    ++gSmmuAttached[engine];
+    snprintf(line, size, "no SMMU in the register model");
+    return TEGRA_SE_SMMU_UNTRANSLATED;
+}
+
+// Holds taken less holds released, per engine (an operation's lists are counted once each way), and releases made
+// while the engine still showed busy.
+int gSmmuHolds[kEngines];
+unsigned gReleasedBusy;
+
+bool tegra_se_smmu_hold(unsigned engine, const uint32_t *)
+{
+    ++gSmmuHolds[engine];
+    return true;
+}
+
+void tegra_se_smmu_release(unsigned engine, const uint32_t *)
+{
+    --gSmmuHolds[engine];
+    gReleasedBusy += se_model::engines[engine].busyLeft != 0 ? 1u : 0u;
+}
 
 extern "C" {
 uint32_t switch_mmio_model_read32(uintptr_t address)

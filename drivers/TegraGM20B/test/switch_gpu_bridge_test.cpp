@@ -278,7 +278,7 @@ extern "C" uint64_t tgm_chan_check_progress(tgm_chan *chan, const char *, uint32
 	return nextCheckNs;
 }
 
-extern "C" int tegra_host1x_syncpt_alloc(uint32_t *id)
+extern "C" int tegra_host1x_syncpt_alloc_named(uint32_t *id, const char *)
 {
 	*id = syncpointCount++;
 	return 0;

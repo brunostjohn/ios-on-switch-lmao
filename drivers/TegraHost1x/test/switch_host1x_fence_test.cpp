@@ -131,6 +131,13 @@ extern "C" void switch_car_clock_enable(unsigned)
 extern "C" void switch_car_reset_deassert(unsigned)
 {}
 
+// SwitchHost1xSmmu.cpp's: the register file has no SMMU behind it.
+bool switch_host1x_channels_confine(char *line, size_t size)
+{
+    snprintf(line, size, "no SMMU in the host test");
+    return false;
+}
+
 extern "C" void tegra_mc_hot_reset(uint32_t, uint32_t, bool)
 {}
 
@@ -507,3 +514,94 @@ TEST_F(Host1xFence, TheFilterRunsWithPreemptionOffAndNothingThatBlocks)
     interrupt(184);
 }
 }  // namespace
+
+// tegra_host1x_syncpt_free: an id goes back only when no fence names it and it was handed out; either mistake panics.
+TEST_F(Host1xFence, AFreedSyncpointNamedByAFenceOrNotHandedOutPanics)
+{
+    uint32_t id = 0;
+    ASSERT_EQ(tegra_host1x_syncpt_alloc(&id), TEGRA_HOST1X_OK);
+    value(id) = 0;
+    switch_host1x_fence fence;
+    switch_host1x_fence_init(&fence, id, 5, signaled);
+    ASSERT_EQ(switch_host1x_fence_add(&fence, 0), TEGRA_HOST1X_OK);
+    try {
+        tegra_host1x_syncpt_free(id);
+        ADD_FAILURE() << "no panic";
+    } catch (const std::runtime_error &e) {
+        EXPECT_EQ(std::string(e.what()),
+                  "TegraHost1x: syncpoint " + std::to_string(id) + " freed while a fence or waiter still waits on it");
+    }
+    EXPECT_TRUE(switch_host1x_fence_remove(&fence));
+    tegra_host1x_syncpt_free(id);
+    try {
+        tegra_host1x_syncpt_free(id);
+        ADD_FAILURE() << "no panic";
+    } catch (const std::runtime_error &e) {
+        EXPECT_NE(std::string(e.what()).find("not handed out"), std::string::npos) << e.what();
+    }
+}
+
+// Once the 32 ids every boot used before (160-191) are out, the pool hands out low ones. They wait, survive SC7 and
+// release after a failure as those did.
+TEST_F(Host1xFence, ALowSyncpointPastTheOldRangeWaitsSleepsAndReleasesAsAnyOther)
+{
+    std::vector<uint32_t> held;
+    uint32_t low = 0;
+    do {
+        ASSERT_EQ(tegra_host1x_syncpt_alloc(&low), TEGRA_HOST1X_OK);
+        held.push_back(low);
+    } while (low >= 160);
+    EXPECT_NE(low, 0u);
+    EXPECT_NE(low, 9u);
+    value(low) = 0;
+    switch_host1x_fence fence;
+    switch_host1x_fence_init(&fence, low, 1, signaled);
+    ASSERT_EQ(switch_host1x_fence_add(&fence, 0), TEGRA_HOST1X_OK);
+    EXPECT_EQ(threshold(low), 1u);
+    value(low) = 5;
+    tegra_host1x_suspend();
+    value(low) = 0;
+    threshold(low) = 0;
+    tegra_host1x_resume();
+    EXPECT_EQ(value(low), 5u) << "SC7 restores its value";
+    interrupt(low);
+    EXPECT_EQ(gSignals[1].calls, 1);
+    EXPECT_EQ(tegra_host1x_syncpt_release_failed(low, 9, 2), TEGRA_HOST1X_EINVAL) << "farther than the jobs allowed";
+    for (const uint32_t id : held)
+        tegra_host1x_syncpt_free(id);
+    EXPECT_EQ(tegra_host1x_syncpt_release_failed(low, 6, 1), TEGRA_HOST1X_EINVAL) << "freed: not ours any more";
+}
+
+// Review-dma2 D7, debug kernels: a free before the syncpoint reached a threshold a channel's fenced job was given would
+// let the job's late increment reach the next owner.
+TEST_F(Host1xFence, AFreeWhileAChannelsJobStillOwesAnIncrementPanics)
+{
+    uint32_t id = 0;
+    ASSERT_EQ(tegra_host1x_syncpt_alloc(&id), TEGRA_HOST1X_OK);
+    value(id) = 4;
+    const uint32_t job[2] = {tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 0, 0),
+                             tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, id)};
+    ASSERT_EQ(switch_host1x_job_copy(TEGRA_HOST1X_CHANNEL_NVJPG, job, 2, id, 6), TEGRA_HOST1X_OK);
+    try {
+        tegra_host1x_syncpt_free(id);
+        ADD_FAILURE() << "no panic";
+    } catch (const std::runtime_error &e) {
+        EXPECT_EQ(std::string(e.what()), "TegraHost1x: syncpoint " + std::to_string(id) +
+                                             " freed at 4 while a job a channel ran still takes it to 6");
+    }
+    value(id) = 6;
+    tegra_host1x_syncpt_free(id);
+}
+
+TEST_F(Host1xFence, AFreeAfterARestartDroppedTheOwingJobIsNoPanic)
+{
+    uint32_t id = 0;
+    ASSERT_EQ(tegra_host1x_syncpt_alloc(&id), TEGRA_HOST1X_OK);
+    value(id) = 4;
+    const uint32_t job[2] = {tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 0, 0),
+                             tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, id)};
+    ASSERT_EQ(switch_host1x_job_copy(TEGRA_HOST1X_CHANNEL_NVJPG, job, 2, id, 6), TEGRA_HOST1X_OK);
+    tegra_host1x_channel_teardown(TEGRA_HOST1X_CHANNEL_NVJPG);
+    tegra_host1x_channel_restart(TEGRA_HOST1X_CHANNEL_NVJPG);
+    tegra_host1x_syncpt_free(id);
+}

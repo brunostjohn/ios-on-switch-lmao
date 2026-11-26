@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -13,14 +14,31 @@ extern "C" {
 #define SWITCH_GPU_SMMU_MAX_WINDOW_BYTES (1ULL << 30)
 #define SWITCH_GPU_SMMU_UNCOMPRESSED_RESERVE (128ULL << 20)
 
+/* GM20B's a[34] = 0 accesses are never translated (swgroup GPU); a[34] = 1 accesses always are (swgroup GPUB), through
+ * the ASID of field va[33:32] (T210 TRM 18.5.3 note 2, 18.11.1.136). Fields 0 and 1 are RAM at its own address
+ * (TegraSMMUIdentity.h): a page translates while a memory object holds it. Field 2 is the compaction window. */
+#define SWITCH_GPU_SMMU_WINDOW_FIELD (2ULL << 32)
+
 static inline uint64_t switch_gpu_smmu_pa(uint64_t iova)
 {
-	return SWITCH_GPU_SMMU_BIT | (iova & 0xffffffffULL);
+	return SWITCH_GPU_SMMU_BIT | SWITCH_GPU_SMMU_WINDOW_FIELD | (iova & 0xffffffffULL);
 }
 
 static inline int switch_gpu_smmu_is_iova(uint64_t pa)
 {
-	return (pa & SWITCH_GPU_SMMU_BIT) != 0u;
+	return (pa & (SWITCH_GPU_SMMU_BIT | (3ULL << 32))) ==
+	       (SWITCH_GPU_SMMU_BIT | SWITCH_GPU_SMMU_WINDOW_FIELD);
+}
+
+/* A RAM page (below 6 GiB) through GPUB's view of RAM. */
+static inline uint64_t switch_gpu_smmu_ram_pa(uint64_t pa)
+{
+	return SWITCH_GPU_SMMU_BIT | pa;
+}
+
+static inline int switch_gpu_smmu_is_ram_pa(uint64_t pa)
+{
+	return (pa & SWITCH_GPU_SMMU_BIT) != 0u && ((pa >> 32) & 3u) < 2u;
 }
 
 static inline uint32_t switch_gpu_smmu_prefix_pages(uint32_t npages)
@@ -127,11 +145,25 @@ static inline int switch_gpu_smmu_pages_unique(const uint64_t *pas, uint32_t npa
 }
 
 int switch_gpu_smmu_init(void);
+/* The compaction window may be used: gpu_mem.c's modes 1 and 2, the compressible and big-page imports. */
 int switch_gpu_smmu_ready(void);
+/* GPUB attached: memory objects reach RAM through its view (switch_gpu_smmu_hold). */
+int switch_gpu_smmu_ram_ready(void);
+/* Holds of 4 KiB RAM pages (raw physical addresses) in GPUB's view, published before return; all or nothing. 0, or -12
+ * when a page table could not be had. Thread context. */
+int switch_gpu_smmu_hold(const uint64_t *pas, uint32_t npages);
+/* Ends the holds of the RAM-view entries of `pages` (addresses as switch_gpu_smmu_ram_pa made them; other entries are
+ * skipped), under one lock of the view and one commit, published before return: a page no other holder holds faults
+ * from then on. A page with no hold panics. Thread context. */
+void switch_gpu_smmu_release_ram(const uint64_t *pages, uint32_t npages);
 uint64_t switch_gpu_smmu_map(const uint64_t *pas, uint32_t npages);
 uint64_t switch_gpu_smmu_map_reserved(const uint64_t *pas, uint32_t npages, uint64_t reserve_bytes);
 void switch_gpu_smmu_unmap(uint64_t iova, uint32_t npages);
 void switch_gpu_smmu_usage(uint64_t *total, uint64_t *free_bytes);
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+/* The SMMU's TLB and PTC hits and misses since the previous call (switch_smmu_stats_window), for the stats window. */
+void switch_gpu_smmu_stats(char *line, size_t size);
+#endif
 
 #ifdef __cplusplus
 }

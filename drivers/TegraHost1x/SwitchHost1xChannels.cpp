@@ -11,9 +11,9 @@
 // host1x04/05's gather filter (channel_hw.c host1x_enable_gather_filter: CHANNELCTRL KERNEL_FILTER_GBUFFER) and keeps
 // its waits in the push buffer instead, so here the filter is cleared on every channel: it exists to keep a user's
 // gathers from host1x's own methods, and every stream here is the kernel's.
-// host1x fetches the push buffer and the gathers by physical address with the SMMU bypassed (TegraHost1x.cpp), so both
-// are contiguous, below 4 GiB (DMASTART and the GATHER address are 32-bit on host1x05) and cleaned to the point of
-// coherency before DMAPUT.
+// host1x fetches the push buffer and the gathers by physical address (held at those addresses in the SMMU,
+// SwitchHost1xSmmu.cpp), so both are contiguous, below 4 GiB (DMASTART and the GATHER address are 32-bit on host1x05)
+// and cleaned to the point of coherency before DMAPUT.
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <string.h>
@@ -153,6 +153,11 @@ void roomSignaled(switch_host1x_fence *fence, int)
 // Lock held. A fence its callback is already on the way for is left to it.
 void dropJobs(Channel &c)
 {
+#if SWITCH_HOST1X_STATS
+    c.arena.forEachFenced([](uint32_t syncpt, uint32_t) {
+        switch_host1x_syncpt_dropped(syncpt);
+    });
+#endif
     c.arena.drop();
     if (c.roomArmed && switch_host1x_fence_remove(&c.room))
         c.roomArmed = false;
@@ -180,6 +185,10 @@ int gatherLocked(uint32_t channel, const uint32_t *first, uint32_t count, bool f
         endReservation(c);
         return gRunning ? TEGRA_HOST1X_EINVAL : TEGRA_HOST1X_ENODEV;
     }
+#if SWITCH_HOST1X_STATS
+    if (fenced)
+        switch_host1x_syncpt_owed(syncpt, threshold);
+#endif
     switch_dcache_clean_lines(first, count * 4);
     const uint32_t slot = c.push.push(pushRing(c), count, static_cast<uint32_t>(c.arenaMemory.pa + at * 4));
     switch_dcache_clean(pushRing(c) + slot / 4, 8);  // its DSB also completes the stream's clean
@@ -292,6 +301,18 @@ bool switch_host1x_channels_alloc(volatile uint8_t *host, volatile uint8_t *sync
     gChannelSync = sync;
     gChannelLock = lock;
     return true;
+}
+
+uint32_t switch_host1x_channels_buffers(const switch_dma_buffer **out, uint32_t room)
+{
+    uint32_t count = 0;
+    for (const Channel &c : gChannels) {
+        if (count + 2 > room)
+            break;
+        out[count++] = &c.pushMemory;
+        out[count++] = &c.arenaMemory;
+    }
+    return count;
 }
 
 void switch_host1x_channels_program(uint32_t clockKHz)

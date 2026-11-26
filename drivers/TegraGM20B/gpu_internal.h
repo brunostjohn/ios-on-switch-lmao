@@ -160,6 +160,7 @@ int tgm_clk_raise(char *line, unsigned int len);
 void tgm_clk_suspend(struct nvkm_device *device);
 int tgm_m2_device_init(struct nvkm_device *device, const char **at);
 extern u64 tgm_cpu_zeroes, tgm_cpu_zero_bytes;
+extern u64 tgm_retire_invalidates, tgm_retire_objects, tgm_retire_invalidate_ns;
 
 static void scrub_kick(void);
 
