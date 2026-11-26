@@ -687,7 +687,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                 want[word - 1] = uint32_t(table);
                 want[word] = uint32_t(table >> 32);
             }
-        const uint32_t pushMask = pl->pushMask | guestBaseWords(*pl, want);
+        const uint32_t pushMask = pl->pushMask | (pl->guestBases[0].word ? guestBaseWords(*pl, want) : 0u);
         for (int i = 0; i < 32;) {
             if (!(pushMask >> i & 1) || root[i] == want[i]) {
                 i++;
