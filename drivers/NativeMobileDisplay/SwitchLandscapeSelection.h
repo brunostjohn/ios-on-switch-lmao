@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // planeDecide's landscape composition (SwitchLandscape.h), in the class body after SwitchNativePlaneDisplay.h: a lone
 // detached layer whose destination TegraVIC recorded as the decoder's picture turned (SwitchVICTurn.h), or the
-// decoder's picture with a quarter turn in the swap itself, is scanned by window A turned, behind the UI on B (V3 passed: SwitchDisplayTraits columnScanYuv). Window A reads through
-// the display's SMMU domain, so direct scanout's attach is required. A failed change is one line; the next candidate
+// decoder's picture with a quarter turn in the swap itself, is scanned by window A turned, behind the UI on B (V3
+// passed: SwitchDisplayTraits columnScanYuv). Window A reads through the display's SMMU domain, so direct scanout's
+// attach is required. A failed change is one line; the next candidate
 // tries again.
 
 bool planeLandscapeCandidate(const native_planes::Roles &roles) const

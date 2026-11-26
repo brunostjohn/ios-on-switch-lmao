@@ -27,8 +27,9 @@ inline Turn turnOf(uint32_t transform)
 
 constexpr uint32_t kHDirection = 1u << 0, kVDirection = 1u << 2, kScanColumn = 1u << 4;
 
-// L4T window.c starts a decrementing line at its last byte, (x + w) * Bpp - 1; V3 proved the window takes that for
-// 1-byte NV12, where it is also the last pixel's first byte. Display window probe V6 reports both for 4-byte BGRA.
+// A decrementing line starts at its last valid byte: the TRM's rule for ADDR_H_OFFSET under H_DIRECTION=DECREMENT
+// (24.11, "it should point to last valid byte"), and L4T window.c's (x + w) * Bpp - 1, which V3 ran for NV12. For
+// 32-bpp formats the offset's two low bits are unused (24.11.4), so this and the pixel's first byte name one pixel.
 constexpr bool kHDirectionStartsAtLastByte = true;
 
 inline uint32_t turnOptions(uint32_t transform)
@@ -46,12 +47,14 @@ inline Rect turnedRect(const Rect &r, uint32_t width, uint32_t height, uint32_t 
     return t.transpose ? Rect{b, a, r.h, r.w} : Rect{a, b, r.w, r.h};
 }
 
+// A quarter turn needs the GPU's blocks at 16 GOBs, the TRM's only performant block height for rotated display (p.1221);
+// the GPU gives a shorter surface fewer, and the conversion job turns those.
 inline bool windowTurns(const Layer &l, const tgm_layout *block)
 {
     const Turn t = turnOf(l.transform);
     const int32_t outW = t.transpose ? l.src.h : l.src.w, outH = t.transpose ? l.src.w : l.src.h;
     return (l.kind == kKindBgra || l.kind == kKindRgba) && l.dst.w == outW && l.dst.h == outH &&
-           (!t.transpose || block != nullptr);
+           (!t.transpose || (block != nullptr && block->y_log2 == 4));
 }
 
 // The destination clipped to the screen: [x0, x1) x [y0, y1); false when nothing of it is on the screen.
@@ -208,8 +211,10 @@ inline bool windowTurnImageOf(const Layer &l, uint32_t width, uint32_t height, I
     return image.readHigh <= ((l.surface.descriptorBytes + 4095) & ~4095ULL);
 }
 
+// A layer the window would scan but cannot after all (its read range or block layout) is the conversion job's too.
 inline bool turnImageOf(const Layer &l, uint32_t width, uint32_t height, Image &image, const tgm_layout *block)
 {
-    return windowTurns(l, block) ? windowTurnImageOf(l, width, height, image, block)
-                                 : convertedTurnImageOf(l, width, height, image);
+    if (windowTurns(l, block) && windowTurnImageOf(l, width, height, image, block))
+        return true;
+    return convertedTurnImageOf(l, width, height, image);
 }

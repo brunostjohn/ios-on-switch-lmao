@@ -150,6 +150,10 @@ static const char *packedConversionInput(const native_planes::Layer &layer, cons
     if (!allocation.page_count || !allocation.pages ||
         tegra_gm20b_surface_layout(allocation.pages[0] & ~0xfffULL, &block) != 1)
         return nullptr;
+    // The layout describes the backing's first page: a surface placed further in has its blocks elsewhere, as
+    // switch_vic_tiled_layout refuses too.
+    if (source->pitchOffset)
+        return "a tiled packed conversion source at an offset";
     if (block.bpp != 4 || block.width < layer.surface.width || block.height < layer.surface.height || block.y_log2 > 5)
         return "packed conversion source block layout";
     input->blockLinear = 1;

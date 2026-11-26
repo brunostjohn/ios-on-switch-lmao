@@ -557,6 +557,37 @@ TEST(DisplayPlanesTurn, ScreenConversionReadsThePixelsOnTheScreen)
     }
 }
 
+// A quarter turn under 16-GOB blocks (a surface under 86 rows) is the conversion job's, and so is one the window
+// would scan but whose read the surface's bytes don't cover.
+TEST(DisplayPlanesTurn, AShortOrUnreadableTurnIsTheConversionJobs)
+{
+    Layer l;
+    l.kind = kKindBgra;
+    l.surface = makeSurface(kKindBgra, 128, 64);
+    tgm_layout block = {};
+    ASSERT_EQ(tgm_layout_tiled(128, 64, 4, &block), 1);
+    ASSERT_LT(block.y_log2, 4u);
+    l.surface.stride[0] = block.row_bytes;
+    l.surface.allocation = block.bytes;
+    l.surface.descriptorBytes = (block.bytes + 16383) & ~16383ull;
+    l.src = {0, 0, 128, 64};
+    l.dst = {0, 0, 64, 128};
+    l.transform = 7;
+    Image image;
+    ASSERT_TRUE(imageOf(l, W, H, image, &block));
+    EXPECT_TRUE(image.convert);
+
+    l.surface = makeSurface(kKindBgra, 1280, 720);
+    ASSERT_EQ(tgm_layout_tiled(1280, 720, 4, &block), 1);
+    ASSERT_EQ(block.y_log2, 4u);
+    l.surface.stride[0] = block.row_bytes;
+    l.surface.allocation = l.surface.descriptorBytes = 4096;
+    l.src = {0, 0, 1280, 720};
+    l.dst = {0, 0, 720, 1280};
+    ASSERT_TRUE(imageOf(l, W, H, image, &block));
+    EXPECT_TRUE(image.convert);
+}
+
 // The words window B gets for each transform (VIC's vicFlips and V3's proven pair).
 TEST(DisplayPlanesTurn, TransformWordsToWindowBits)
 {

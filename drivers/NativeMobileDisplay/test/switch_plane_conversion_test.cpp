@@ -119,9 +119,14 @@ void switch_native_scanout_release(SwitchNativeScanout *scanout)
 }
 
 // A pitch surface, as the GPU's layout query answers for anything it did not render block-linear.
-extern "C" int tegra_gm20b_surface_layout(uint64_t, tgm_layout *)
+int layoutAnswer;  // 1: the source's first page is a GPU render target in tiledLayout
+tgm_layout tiledLayout;
+
+extern "C" int tegra_gm20b_surface_layout(uint64_t, tgm_layout *layout)
 {
-    return 0;
+    if (layoutAnswer == 1)
+        *layout = tiledLayout;
+    return layoutAnswer;
 }
 
 int switch_vic_scanout_convert(const SwitchNativeScanout *source, const TegraVICImage *input,
@@ -476,6 +481,39 @@ TEST_F(PlaneConversion, ASmallVideoIsScaledByVICAndShownOneToOne)
     EXPECT_EQ(lastOperation.dstH, 12u);
     EXPECT_EQ(image.size, (12u << 16) | 25u);
     EXPECT_EQ(image.dda, 0x10001000u);
+}
+
+// A GPU-tiled packed source is read in place in its blocks; one placed at an offset inside its backing is refused, as
+// the layout describes the backing's first page.
+TEST_F(PlaneConversion, ATiledPackedSourceIsReadInItsBlocksUnlessItIsAtAnOffset)
+{
+    layer = {};
+    layer.kind = native_planes::kKindBgra;
+    layer.surface.format = native_planes::fourcc('B', 'G', 'R', 'A');
+    layer.surface.width = 64;
+    layer.surface.height = 32;
+    layer.surface.stride[0] = 256;
+    layer.surface.planeHeight[0] = 32;
+    layer.surface.allocation = layer.surface.descriptorBytes = 256 * 32;
+    layer.src = {0, 0, 64, 32};
+    layer.dst = {0, 0, 32, 64};
+    layer.transform = 7;
+    layoutAnswer = 1;
+    tiledLayout = {};
+    tiledLayout.width = 64;
+    tiledLayout.height = 32;
+    tiledLayout.bpp = 4;
+    tiledLayout.row_bytes = 256;
+    tiledLayout.rows = 32;
+    tiledLayout.y_log2 = 2;
+    tiledLayout.bytes = 256 * 32;
+    ASSERT_GE(convert(), 0);
+    EXPECT_EQ(lastInput.blockLinear, 1u);
+    EXPECT_EQ(lastInput.blockHeightLog2, 2u);
+    display->snapshots[0].pitchOffset = 4096;
+    advance();
+    EXPECT_EQ(convert(), -95);
+    layoutAnswer = 0;
 }
 
 // A packed RGB layer the windows cannot scan turned (scaled, or pitch-linear with a quarter turn) converts the same way.
