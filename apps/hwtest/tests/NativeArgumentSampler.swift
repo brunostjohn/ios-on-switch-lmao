@@ -9,7 +9,8 @@ import Metal
 /// its header made as a clamp whatever its address mode.
 extension NativeArgumentEncoderTest {
     func drawOneSamplerThroughArguments(_ gpu: GPU) async throws -> String {
-        guard let function = gpu.library.makeFunction(name: "argument_one_sampler_fragment") else { return "no_function" }
+        guard let function = gpu.library.makeFunction(name: "argument_one_sampler_fragment")
+        else { return "no_function" }
         let descriptor = MTLSamplerDescriptor()
         descriptor.sAddressMode = .repeat
         descriptor.supportArgumentBuffers = true

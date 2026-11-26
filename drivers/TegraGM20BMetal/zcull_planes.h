@@ -21,7 +21,7 @@
 
 namespace gm20b {
 
-constexpr uint32_t kZcullStorageAlign = 0x400;  // nil_zcull_new's align_B
+constexpr uint32_t kZcullStorageAlign = 0x400;                                        // nil_zcull_new's align_B
 constexpr uint32_t kLoadZcull = 0x1500, kStoreZcull = 0x1464, kNoOperation = 0x0100;  // NVB197_NO_OPERATION
 constexpr uint32_t kZcullStoreWord = Push::hdr(4, SUBC_3D, kStoreZcull, 0);
 constexpr uint32_t kZcullUnstoredWord = Push::hdr(4, SUBC_3D, kNoOperation, 0);

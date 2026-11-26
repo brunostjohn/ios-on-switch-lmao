@@ -135,8 +135,7 @@ TEST_F(DeviceGuestBase, AnOffsetOnlyRebindRewritesTheHole)
     e->end();
     uint32_t seqno = 0;
     ASSERT_TRUE(cb->commit(seqno));
-    const uint64_t va =
-        uint64_t(gm20b::DeviceHarness::rootPush(dev, 3)) << 32 | gm20b::DeviceHarness::rootPush(dev, 2);
+    const uint64_t va = uint64_t(gm20b::DeviceHarness::rootPush(dev, 3)) << 32 | gm20b::DeviceHarness::rootPush(dev, 2);
     EXPECT_EQ(va, buffer.va + 128);
     EXPECT_EQ(dev.stats.guestHoleWrites.load(), 2u);
     dev.destroyBuffer(buffer);
@@ -159,7 +158,8 @@ TEST_F(DeviceGuestBase, AnIndirectCommandBuffersDrawOfAHoleStateIsRefused)
     ASSERT_NE(e, nullptr);
     e->setPipeline(pl);
     const char *why = nullptr;
-    EXPECT_FALSE(e->executeSlots({&slots, 0, 1, gm20b::icb::kSlotWords, nullptr, 0, 3, false, false, nullptr, 0}, &why));
+    EXPECT_FALSE(
+        e->executeSlots({&slots, 0, 1, gm20b::icb::kSlotWords, nullptr, 0, 3, false, false, nullptr, 0}, &why));
     EXPECT_EQ(cb->refusal.id, gm20b::RefGuestBaseIcb) << (why ? why : "");
     e->end();
     cb->abandon();

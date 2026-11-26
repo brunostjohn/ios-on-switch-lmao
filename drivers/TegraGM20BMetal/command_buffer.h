@@ -388,6 +388,7 @@ private:
     // passes it opened with PIXEL_SHADER_BARRIER, added to Stats::passPixelOpenings at its commit (an abandoned encode
     // ahead counts none)
     uint64_t pixelOpenings_ = 0;
+
     // its passes with a zcull region, those that loaded one, and those whose region an earlier job stored, likewise
     struct ZcullCounts {
         uint64_t passes = 0, loads = 0, carried = 0;

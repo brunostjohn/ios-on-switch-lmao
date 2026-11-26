@@ -179,12 +179,16 @@ extension BlendKillTest {
     }
 
     /// Each arm into `metrics`; an arm that throws is `<arm>_error`, and the others still run
-    static func reachArms(_ gpu: GPU, _ metrics: inout Metrics, _ wrong: inout [String], _ paths: inout [String]) async {
+    static func reachArms(_ gpu: GPU, _ metrics: inout Metrics, _ wrong: inout [String],
+                          _ paths: inout [String]) async {
         func failed(_ arm: String, _ error: Error) -> [String] {
             metrics.set("\(arm)_error", String(describing: error).prefix(80).description)
             return ["\(arm)_error"]
         }
-        for (label, fragment) in [("late_depth", "blend_kill_depth_fragment"), ("late_discard", "blend_kill_discard_fragment")] {
+        for (label, fragment) in [
+            ("late_depth", "blend_kill_depth_fragment"),
+            ("late_discard", "blend_kill_discard_fragment"),
+        ] {
             do {
                 let arm = try await lateArm(gpu, fragment: fragment)
                 metrics.set("\(label)_wrong", arm.wrong)

@@ -1122,8 +1122,8 @@ public:
         std::atomic<uint64_t> bandedDraws{0}, bands{0};  // draw_bands.h
         // mixed passes' draws of MixedDraw::Covering, and of MixedDraw::Split (samples 1-3 with the pixel stage off)
         std::atomic<uint64_t> mixedCovering{0}, mixedStageOff{0};
-        std::atomic<uint64_t> learnedDraws{0};           // band_rates.h
-        std::atomic<uint64_t> bandedDispatches{0};       // dispatch_bands.h
+        std::atomic<uint64_t> learnedDraws{0};      // band_rates.h
+        std::atomic<uint64_t> bandedDispatches{0};  // dispatch_bands.h
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         // draws large enough to measure, priced by the static estimate or a learned rate, and those drawn whole
         // without a band decision (fetchDraw, wholeDraw)

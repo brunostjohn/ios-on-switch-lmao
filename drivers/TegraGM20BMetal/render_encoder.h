@@ -398,12 +398,13 @@ private:
     uint32_t guestBaseWords(const Pipeline &pl, uint32_t (&want)[32]);
     // Whether a hole's slot was bound again since the last draw's push words (moved_)
     bool guestSlotMoved(const Pipeline &pl) const;
+
     // How a draw of `pl` keeps a mixed pass's sample rule (mixed_samples.h), whole where HW Test's probe row asks
     // (kTirProbeWhole)
     MixedDraw mixedForm(const Pipeline &pl) const
     {
-        const MixedDraw form = mixedDraw(pl, ds_, pass_.depthStencil, samples_, rasterSamples_,
-                                         (alphaWanted_ & kAlphaToCoverage) != 0);
+        const MixedDraw form =
+            mixedDraw(pl, ds_, pass_.depthStencil, samples_, rasterSamples_, (alphaWanted_ & kAlphaToCoverage) != 0);
 #if SWITCH_METAL_DIAGNOSTICS
         if (splitsSamples(form) && (tirProbe_ & kTirProbeWhole))
             return MixedDraw::Whole;

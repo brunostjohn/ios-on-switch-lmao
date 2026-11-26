@@ -109,14 +109,10 @@ Moved aheadPair(void (^between)(id<MTLCommandBuffer>, id<MTLTexture>), bool apar
                 testing::UnitTest::GetInstance()->current_test_info()->name(), counter(@"zcull_passes") - passes,
                 counter(@"zcull_loads") - loads, counter(@"zcull_carried") - carried, [p[@"pipelined"] intValue],
                 [p[@"stopped"] unsignedIntValue], [p[@"given_back"] unsignedIntValue]);
-    return {counter(@"zcull_passes") - passes,
-            counter(@"zcull_loads") - loads,
-            counter(@"fused_passes") - fused,
-            counter(@"zcull_carried") - carried,
-            [p[@"pipelined"] intValue],
-            [p[@"stopped"] unsignedIntValue],
-            [p[@"given_back"] unsignedIntValue],
-            cb.status};
+    return {counter(@"zcull_passes") - passes,   counter(@"zcull_loads") - loads,
+            counter(@"fused_passes") - fused,    counter(@"zcull_carried") - carried,
+            [p[@"pipelined"] intValue],          [p[@"stopped"] unsignedIntValue],
+            [p[@"given_back"] unsignedIntValue], cb.status};
 }
 
 // The pass after a blit that writes another buffer loads the region the pass encoded ahead before it stored, in the

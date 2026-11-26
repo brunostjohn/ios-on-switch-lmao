@@ -343,8 +343,8 @@ TEST(GM20BPackHitStage3, APrebuiltStatesKillIsTheWordItsSegmentPushes)
     ASSERT_GE(segments.bytes, sizeof(gm20b::PackSegmentTable));
     gm20b::PackSegmentTable table = {};
     std::memcpy(&table, bytes.data() + segments.offset, sizeof table);
-    constexpr uint32_t kKillWord = gm20b::Push::hdr(4, gm20b::SUBC_3D, gm20b::kIteratedBlendOptimization,
-                                                    gm20b::kNoopSourceRgba0000);
+    constexpr uint32_t kKillWord =
+        gm20b::Push::hdr(4, gm20b::SUBC_3D, gm20b::kIteratedBlendOptimization, gm20b::kNoopSourceRgba0000);
     uint32_t patched = 0;
     for (uint32_t i = 0; i < table.pipelineCount; i++) {
         gm20b::PackSegment segment = {};

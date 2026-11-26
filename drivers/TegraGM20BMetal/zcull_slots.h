@@ -20,8 +20,8 @@ public:
     // The largest one-layer region's storage (zcullStorageBytes over every aliquot)
     static uint64_t slotBytes(const TegraGM20BAbiZcullInfo &dev)
     {
-        const uint64_t bytes =
-            uint64_t(dev.aliquot_total) * dev.region_byte_multiplier + dev.region_header_size + dev.subregion_header_size;
+        const uint64_t bytes = uint64_t(dev.aliquot_total) * dev.region_byte_multiplier + dev.region_header_size +
+                               dev.subregion_header_size;
         return (bytes + kZcullStorageAlign - 1) & ~uint64_t(kZcullStorageAlign - 1);
     }
 
