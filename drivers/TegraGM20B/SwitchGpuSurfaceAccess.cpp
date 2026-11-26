@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
+#include <IOKit/IOKitKeys.h>
 #include <IOKit/IOUserClient.h>
 #ifdef KERNEL
 #include <IOKit/IOMessage.h>
@@ -537,3 +538,72 @@ extern "C" void switch_gpu_surface_unlock_did(void *client, uint32_t id, uint32_
 {
 	release_one(client, id, options, false);
 }
+
+#if TGM_STATS
+namespace
+{
+// Debug kernels (K18): the surfaces a submission cleaned whole while a CPU writer still held them, which their release
+// cannot have cleaned. Lock-free: begin() notes them under the backing locks. The first eight surfaces keep a slot.
+struct ConcurrentClean {
+	uint32_t surface, cleans;
+	uint64_t bytes;
+};
+
+ConcurrentClean concurrentCleans[8];
+}  // namespace
+
+extern "C" void switch_gpu_concurrent_clean_note(uint32_t surface, uint64_t bytes)
+{
+	for (ConcurrentClean &c : concurrentCleans) {
+		uint32_t seen = __atomic_load_n(&c.surface, __ATOMIC_RELAXED);
+		if (!seen && __atomic_compare_exchange_n(&c.surface, &seen, surface, false,
+							 __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+			seen = surface;
+		if (seen != surface)
+			continue;
+		__atomic_add_fetch(&c.cleans, 1, __ATOMIC_RELAXED);
+		__atomic_add_fetch(&c.bytes, bytes, __ATOMIC_RELAXED);
+		return;
+	}
+}
+
+#ifdef KERNEL
+// The window's notes, each surface with the processes that hold it locked now and how ("pid N, name": the user client's
+// creator), then cleared; 0 when there were none
+extern "C" unsigned long switch_gpu_concurrent_clean_line(char *out, unsigned long size)
+{
+	unsigned long at = 0;
+	const auto advance = [&](int n) {
+		if (n > 0)
+			at = at + unsigned(n) < size ? at + unsigned(n) : size - 1;
+	};
+	out[0] = 0;
+	for (ConcurrentClean &c : concurrentCleans) {
+		const uint32_t surface = __atomic_load_n(&c.surface, __ATOMIC_RELAXED);
+		const uint32_t cleans = __atomic_exchange_n(&c.cleans, 0u, __ATOMIC_RELAXED);
+		const uint64_t bytes = __atomic_exchange_n(&c.bytes, 0ull, __ATOMIC_RELAXED);
+		if (!surface || !cleans)
+			continue;
+		advance(snprintf(out + at, size - at,
+				 "%sIOSurface %u: %u cleans, %llu KiB, locked by", at ? "; " : "",
+				 surface, cleans, static_cast<unsigned long long>(bytes >> 10)));
+		IOLockLock(lock);
+		for (Lease *l = leases; l; l = l->next) {
+			if (l->id != surface ||
+			    !(l->held[0] + l->held[1] + l->pending[0] + l->pending[1]))
+				continue;
+			OSObject *creator =
+				l->client ? l->client->copyProperty(kIOUserClientCreatorKey)
+					  : nullptr;
+			const OSString *name = OSDynamicCast(OSString, creator);
+			advance(snprintf(out + at, size - at, " [%s: %u writing, %u reading]",
+					 name ? name->getCStringNoCopy() : "?",
+					 l->held[1] + l->pending[1], l->held[0] + l->pending[0]));
+			OSSafeReleaseNULL(creator);
+		}
+		IOLockUnlock(lock);
+	}
+	return at;
+}
+#endif
+#endif

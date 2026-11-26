@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "SwitchGpuOwnershipInternal.h"
+#include "TegraGM20BGpu.h"
 
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 void switch_gpu_backing_assert_held(const switch_gpu_backing *backing)
@@ -72,6 +73,11 @@ void hold_ordered(switch_gpu_backing_transaction *transaction)
 		    backing->clean_start < (uint64_t(backing->pages->count) << 12)) {
 			uses[i].reserved |= kUseCleaned;
 			const uint64_t size = uint64_t(backing->pages->count) << 12;
+#if TGM_STATS
+			if (backing->cpu_writers)
+				switch_gpu_concurrent_clean_note(backing->surface_id,
+								 size - backing->clean_start);
+#endif
 			switch_gpu_backing_cache(backing->pages->addresses, backing->pages->count,
 						 backing->clean_start, size - backing->clean_start,
 						 0);
