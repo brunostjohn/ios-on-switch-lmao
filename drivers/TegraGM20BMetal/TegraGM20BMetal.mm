@@ -266,6 +266,29 @@ gm20b::OpenFailure metal_open_failure(void)
     return gOpenFailure;
 }
 
+// A client's memory goes back when its app goes to the background, as well as on memory pressure. By name: UIKit's and
+// Foundation's extension notifications post only in the processes that link them, and this driver links neither.
+static void observeBackground()
+{
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    for (NSString *name in
+         @[ @"UIApplicationDidEnterBackgroundNotification", @"NSExtensionHostDidEnterBackgroundNotification" ])
+        [center addObserverForName:name
+                            object:nil
+                             queue:nil
+                        usingBlock:^(NSNotification *) {
+                            gRawRelease.backgrounded();
+                        }];
+    for (NSString *name in
+         @[ @"UIApplicationWillEnterForegroundNotification", @"NSExtensionHostWillEnterForegroundNotification" ])
+        [center addObserverForName:name
+                            object:nil
+                             queue:nil
+                        usingBlock:^(NSNotification *) {
+                            gRawRelease.foregrounded();
+                        }];
+}
+
 id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t registryID, NSString **error)
 {
     static gm20b::Mutex once;
@@ -347,7 +370,7 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
     fillDeviceLimits(r->device);
     r->handlers = followingSerialQueue("com.brunostjohn.switch.gm20b.handlers");
     r->listener = [[MTLSharedEventListener alloc] initWithDispatchQueue:r->handlers];
-    gRawRelease.startOnPressure(
+    gRawRelease.start(
         [](void *) {
             gm20bReleaseAhead(gRM->raw->hasBoundVolatileArena());
             const SwitchMetalPassTrim passes = gm20bPassTrim();
@@ -381,11 +404,8 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
         },
         nullptr);
     const bool renderServer = dev->role() == gm20b::Device::Role::RenderServer;
-    // A client that opens the device and draws nothing gives back the room its first queue kept.
-    if (renderServer)
-        r->idle.pressureOnly();
-    else
-        r->idle.drained(clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
+    if (!renderServer)
+        observeBackground();
     if (renderServer)
         os_log(gm20bLog(), "SwitchMetal: shader heap %llu KB, each program placed at its state's first use",
                (unsigned long long)(dev->heapBytes() >> 10));

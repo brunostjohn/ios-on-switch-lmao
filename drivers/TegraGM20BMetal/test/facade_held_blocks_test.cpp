@@ -296,21 +296,26 @@ TEST(GM20BFacadeHeldBlocks, ACommandBuffersAllocationsDoNotGrowWithItsDraws)
                                    std::to_string(kDraws[1]) + " draws", kBuffers, "command buffer");
 }
 
-// Once nothing is in flight, the completion thread gives back at the last drain's deadline, never before it. Last: the
-// release it starts runs on while a later test would count allocations.
-TEST(GM20BFacadeHeldBlocks, TheCompletionThreadGivesBackAtTheLastDrainsDeadline)
+// A client gives back what no resource holds when its app goes to the background, before that call returns, and
+// nothing at a pause (owner, 25 Nov: no idle timer). Last: the release it starts runs on while a later test would count
+// allocations.
+TEST(GM20BFacadeHeldBlocks, ATripToTheBackgroundGivesBackAndAPauseDoesNot)
 {
     ASSERT_NE(scale_frames::opened().device, nil);
     timed_gpu::Gpu gpu;
     @autoreleasepool {
         [encode_cost::commitOne(kDraws[0]) waitUntilCompleted];
     }
-    const uint64_t due = gRM->idle.due(0);
-    ASSERT_NE(due, 0u) << "no deadline after a drain";
-    const uint64_t until = due + 2 * uint64_t(GpuMemoryRelease::kIdleNs);
-    while (gRM->idle.due(0) && clock_gettime_nsec_np(CLOCK_UPTIME_RAW) < until)
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    const uint64_t seen = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-    ASSERT_EQ(gRM->idle.due(0), 0u) << "nothing given back two seconds past the deadline";
-    EXPECT_GE(seen, due);
+    gm20b::Device::Held before = {}, paused = {}, after = {};
+    ASSERT_TRUE(gRM->raw->held(before, true));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    ASSERT_TRUE(gRM->raw->held(paused, true));
+    EXPECT_EQ(paused.chunks, before.chunks) << "a pause gave chunks back";
+    EXPECT_EQ(paused.parkedChunks, before.parkedChunks) << "a pause parked chunks";
+    gRawRelease.backgrounded();
+    ASSERT_TRUE(gRM->raw->held(after, true));
+    EXPECT_TRUE(after.chunks < paused.chunks || after.parkedChunks > paused.parkedChunks ||
+                after.writeCombined < paused.writeCombined)
+        << "the trip to the background gave nothing back before it returned";
+    gRawRelease.foregrounded();
 }

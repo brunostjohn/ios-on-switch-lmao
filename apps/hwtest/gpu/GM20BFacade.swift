@@ -56,6 +56,23 @@ public enum GM20BFacade {
         return profile.mapValues(\.doubleValue)
     }
 
+    /// The app's trip to the background as the driver hears it (GpuMemoryRelease.h): UIKit's did-enter-background
+    /// notification, which gives the device's idle GPU memory back before the post returns, then its will-enter-
+    /// foreground one. The driver keeps no idle timer, so a test of the give-back makes this trip.
+    public static func tripToBackground() async {
+        // on the main thread, as UIKit posts them: the app's other observers expect it
+        await MainActor.run {
+            NotificationCenter.default.post(
+                name: Notification.Name("UIApplicationDidEnterBackgroundNotification"),
+                object: nil
+            )
+            NotificationCenter.default.post(
+                name: Notification.Name("UIApplicationWillEnterForegroundNotification"),
+                object: nil
+            )
+        }
+    }
+
     /// The bytes the facade's raw device holds now (empty off the facade): "pool" (its pool, block-linear and depth
     /// chunks), "wc" (write-combined chunks), "heap" (the shader heap's bound parts) and "headers_left" (texture
     /// headers not held).

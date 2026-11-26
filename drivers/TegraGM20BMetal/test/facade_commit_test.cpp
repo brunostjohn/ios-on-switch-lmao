@@ -414,9 +414,6 @@ TEST(GM20BFacadeCommit, EncodersEndedBeforeTheCommitAreEncodedAhead)
 TEST(GM20BFacadeCommit, AWaitForTheEncodeAheadWakesASleepingWorker)
 {
     ASSERT_TRUE(opened().device != nil);
-    // Let any pending 1 s idle release (which calls schedule.wake()) finish before recording so nothing else wakes it.
-    for (int i = 0; i < 400 && gRM->idle.due(0); i++)
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     id<MTLCommandQueue> queue = [opened().device newCommandQueue];
     const scale_frames::Shape shape{15, 90, 4};
