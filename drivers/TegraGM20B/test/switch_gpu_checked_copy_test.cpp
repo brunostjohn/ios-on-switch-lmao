@@ -852,7 +852,7 @@ TEST_F(CheckedCopy, ARewrittenSlotIsFetchedAsWritten)
 	auto a = allocation(), b = allocation();
 	ASSERT_EQ(copy(a, b), 0);
 	finish();
-	const tegra_gm20b_ce_wait afterVic = {7, 3};
+	const tegra_gm20b_ce_wait afterVic = {7, 3, 0, 0};
 	ASSERT_EQ(copy(a, b, 0, nullptr, &afterVic), 0);
 	ASSERT_EQ(syncpts.size(), 1u);
 	EXPECT_FALSE(syncpts[0].incr);
