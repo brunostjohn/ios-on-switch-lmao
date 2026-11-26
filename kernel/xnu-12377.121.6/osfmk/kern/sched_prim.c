@@ -4421,6 +4421,11 @@ sched_ipi_deferred_policy(processor_set_t pset, processor_t dst,
 	return SCHED_IPI_NONE;
 }
 
+#if (DEVELOPMENT || DEBUG) && !SCHED_TEST_HARNESS
+#define SWITCH_SCHED_IPI_EVENTS 7
+uint64_t switch_sched_ipis[SWITCH_SCHED_IPI_EVENTS][2];
+#endif
+
 /* Requires the destination pset lock to be held */
 sched_ipi_type_t
 sched_ipi_action(processor_t dst, thread_t thread, sched_ipi_event_t event)
@@ -4452,6 +4457,9 @@ sched_ipi_action(processor_t dst, thread_t thread, sched_ipi_event_t event)
 		atomic_bit_set(&pset->pending_AST_PREEMPT_cpu_mask, dst->cpu_id, memory_order_relaxed);
 		break;
 	}
+#if (DEVELOPMENT || DEBUG) && !SCHED_TEST_HARNESS
+	os_atomic_inc(&switch_sched_ipis[(unsigned int)event < SWITCH_SCHED_IPI_EVENTS ? (unsigned int)event : 0][dst_idle], relaxed);
+#endif
 	return ipi_type;
 }
 

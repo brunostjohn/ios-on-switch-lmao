@@ -1668,6 +1668,43 @@ kprof_zero_cost_line(void)
 	    ns[1], ns[2], ns[3], kprof_probe_mhz(kprof_cpus[cpu].probe_ticks), cpu);
 }
 
+#if DEVELOPMENT || DEBUG
+extern uint64_t switch_ipis_received[][6];   /* cpu_common.c */
+extern uint64_t switch_sched_ipis[7][2];     /* sched_prim.c, by sched_ipi_event_t */
+
+static void
+kprof_ipis(uint64_t window)
+{
+	static const char *const events[7] = { "?", "bound", "preempt", "smt", "spill", "rebalance", "rt" };
+	static uint64_t last_received[KPROF_MAX_CPUS][6], last_sched[7][2];
+
+	if (window == 0) {
+		return;
+	}
+	kprof_put("SwitchKprof ipis per s, taken (ast/xcall/timer/wake/maint/other):");
+	for (unsigned int c = 0; c < kprof_ncpus; c++) {
+		kprof_put("%s", c ? "," : "");
+		for (unsigned int k = 0; k < 6; k++) {
+			const uint64_t n = os_atomic_load(&switch_ipis_received[c][k], relaxed);
+			kprof_put("%s%llu", k ? "/" : " ", (n - last_received[c][k]) * NSEC_PER_SEC / window);
+			last_received[c][k] = n;
+		}
+	}
+	kprof_put("; scheduler sent to running/idle CPUs:");
+	for (unsigned int e = 0; e < 7; e++) {
+		const uint64_t running = os_atomic_load(&switch_sched_ipis[e][0], relaxed);
+		const uint64_t idle = os_atomic_load(&switch_sched_ipis[e][1], relaxed);
+		if (running != last_sched[e][0] || idle != last_sched[e][1]) {
+			kprof_put(" %s %llu/%llu", events[e], (running - last_sched[e][0]) * NSEC_PER_SEC / window,
+			    (idle - last_sched[e][1]) * NSEC_PER_SEC / window);
+		}
+		last_sched[e][0] = running;
+		last_sched[e][1] = idle;
+	}
+	kprof_flush();
+}
+#endif
+
 static void
 kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 {
@@ -1872,6 +1909,9 @@ kprof_summary(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 		}
 	}
 	kprof_flush();
+#if DEVELOPMENT || DEBUG
+	kprof_ipis(window);
+#endif
 
 	for (unsigned int i = 0; i < KPROF_TASKS; i++) {
 		kprof_vals[i] = kprof_tasks[i].used ? (uint64_t)kprof_tasks[i].user + kprof_tasks[i].kernel : 0;
