@@ -148,8 +148,8 @@ TEST(XnuUiScaleSites24B119, MainScreenScaleIsTheScalesFloat)
     const switch_us_edit &read = site->edit[0], &convert = site->edit[1];
     EXPECT_EQ(Word(read.stock), switch_a64_movz_w(4, 1));
     EXPECT_EQ(Word(read.stock + 4) >> 26, 0x25u);
-    EXPECT_EQ(Word(read.stock + 8), 0xaa0003f3u);      // mov x19, x0
-    EXPECT_EQ(Word(convert.stock + 12), 0x1e220260u);  // scvtf s0, w19
+    EXPECT_EQ(Word(read.stock + 8), 0xaa0003f3u);        // mov x19, x0
+    EXPECT_EQ(Word(convert.stock + 12), 0x1e220260u);    // scvtf s0, w19
     EXPECT_EQ(Word(convert.patched + 12), 0x1e270260u);  // fmov s0, w19
     uint8_t out[8] = {};
     ASSERT_TRUE(switch_ui_scale_edit_bytes(read.kind, switch_ui_scale_named("1.6"), out, read.size));

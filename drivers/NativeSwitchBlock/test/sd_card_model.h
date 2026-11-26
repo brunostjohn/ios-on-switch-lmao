@@ -410,8 +410,8 @@ private:
             chain = first;
         } else {
             if (first->write) {
-                count = switchGatherWrites(head, first, kMaxSectors, kMaxChain, kMaxChain, &start, &sectors, nullptr,
-                                           0, rule == Rule::kNew && waiting(first->shared));
+                count = switchGatherWrites(head, first, kMaxSectors, kMaxChain, kMaxChain, &start, &sectors, nullptr, 0,
+                                           rule == Rule::kNew && waiting(first->shared));
             } else {
                 count = switchGatherReads(head, first, kMaxSectors, kMaxChain, kMaxChain, &start, &sectors);
             }

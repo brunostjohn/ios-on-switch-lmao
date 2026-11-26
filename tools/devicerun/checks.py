@@ -180,7 +180,7 @@ GROUPS: dict[str, list[Check]] = {
             'Unsupported screen class',
             show=('process',),
             source='ProgressUI (24B119), boot 2693043C',
-            note='was once per boot (backboardd) and once per data migration (com.apple.datamigrator, with a stackshot)',
+            note='was once per boot (backboardd) and once per data migration (datamigrator, with a stackshot)',
         ),
     ],
     'metal': [

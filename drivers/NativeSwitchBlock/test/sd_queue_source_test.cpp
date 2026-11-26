@@ -67,8 +67,7 @@ TEST(SdQueueSource, MergeChains)
         worker,
         HasSubstr("self->pickLocked(&cand->batch.sectors, &cand->batch.count, &activeRange, hwActive ? 1u : 0u)"));
     // Every request starts unchained.
-    EXPECT_TRUE(
-        Search(source, R"(klass,\s*direction == kIODirectionOut,\s*false,\s*false,)"));
+    EXPECT_TRUE(Search(source, R"(klass,\s*direction == kIODirectionOut,\s*false,\s*false,)"));
 }
 
 // The chain's first request comes from SwitchSdPick.h (sd_pick_test.cpp), with a synchronize's writes ranked as reads;
