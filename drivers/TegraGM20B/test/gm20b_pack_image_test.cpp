@@ -3,8 +3,6 @@
 
 TEST_F(PackImageTest, PackHeaderAndAbiLayoutMatchMetalPackH)
 {
-	static_assert(sizeof(SwitchGpuPackHeader) == offsetof(gm20b::PackHeader, rules),
-		      "the kernel reads the header up to the rules' identity (v37)");
 	static_assert(sizeof(SwitchGpuPackSection) == sizeof(gm20b::PackSection));
 	static_assert(kSwitchGpuPackVersion == gm20b::kPackVersion);
 	static_assert(uint32_t(kSwitchGpuPackSectionCount) == uint32_t(gm20b::PackSectionCount));
@@ -31,6 +29,7 @@ TEST_F(PackImageTest, PackHeaderAndAbiLayoutMatchMetalPackH)
 	static_assert(offsetof(SwitchGpuPackHeader, tier0SlmPerWarp) ==
 		      offsetof(gm20b::PackHeader, tier0SlmPerWarp));
 	static_assert(offsetof(SwitchGpuPackHeader, tier0) == offsetof(gm20b::PackHeader, tier0));
+	static_assert(offsetof(SwitchGpuPackHeader, rules) == offsetof(gm20b::PackHeader, rules));
 
 	EXPECT_EQ(TGM_PACK_WINDOW_VA, (1ULL << 39) - (4ULL << 30));
 	EXPECT_EQ(TGM_PACK_WINDOW_BYTES, 4ULL << 30);

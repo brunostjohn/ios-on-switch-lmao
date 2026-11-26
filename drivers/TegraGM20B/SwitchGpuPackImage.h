@@ -60,10 +60,10 @@ struct __attribute__((packed)) SwitchGpuPackHeader {
 	uint32_t chipFacts;
 	uint32_t tier0SlmPerWarp;
 	uint64_t tier0[kSwitchGpuPackSectionCount];
+	uint8_t rules[16];
 };
 
-// PackHeader up to its rules' identity (v37), which the kernel does not read
-static_assert(sizeof(SwitchGpuPackHeader) == 448, "PackHeader's prefix since v34");
+static_assert(sizeof(SwitchGpuPackHeader) == 464, "v37 PackHeader size");
 
 enum class SwitchGpuPackState : uint32_t {
 	None = 0,
