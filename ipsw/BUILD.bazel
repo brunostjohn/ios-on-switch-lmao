@@ -5,8 +5,16 @@
 load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_python//python:py_library.bzl", "py_library")
 load("//bazel/lint:defs.bzl", "lint_files")
-load(":defs.bzl", "ipsw_apple_trust", "ipsw_device_tree", "ipsw_kernelcache", "ipsw_pretranslated")
-load(":ipsw.bzl", "ipsw_kinds", "pinned_kinds")
+load(
+    ":defs.bzl",
+    "APPLE_TRUST",
+    "im4p_pinned_kinds",
+    "ipsw_apple_trust",
+    "ipsw_device_tree",
+    "ipsw_kernelcache",
+    "ipsw_pretranslated",
+)
+load(":ipsw.bzl", "ipsw_kinds")
 load(":pins.bzl", "IPSWS")
 
 package(default_visibility = ["//visibility:public"])
@@ -27,12 +35,6 @@ ipsw_device_tree(
     out = "device_tree.adt",
 )
 
-_APPLE_TRUST = (
-    ("static_trust", "static_trust_cache", "trst"),
-    ("system_cryptex_trust", "system_cryptex_trust_cache", "trcs"),
-    ("app_cryptex_trust", "app_cryptex_trust_cache", "trca"),
-)
-
 # Apple's trust caches for the root and the two cryptexes, as the boot package's static module takes them, each checked
 # against the BuildManifest's Digest of it.
 [
@@ -43,12 +45,13 @@ _APPLE_TRUST = (
         fourcc = fourcc,
         role = role,
     )
-    for name, role, fourcc in _APPLE_TRUST
+    for role, (name, fourcc) in APPLE_TRUST.items()
 ]
 
-# Every pinned kind's kernelcache, device tree and trust caches under every kind (<target>_<kind>, in <kind>/): the
-# iPadOS 27 prelink names Apple kernel addresses by the GOT names kexts imported in iOS 17's kernelcache, and
-# //install/img4's tests compare its decoder with these for each kind.
+# Each kind's kernelcache, device tree and trust caches under every kind (<target>_<kind>, in <kind>/), once its pins
+# carry what they are checked against (im4p_pinned_kinds): the iPadOS 27 prelink names Apple kernel addresses by the
+# GOT names kexts imported in iOS 17's kernelcache, and //install/img4's tests compare its decoder with these for each
+# kind.
 [
     ipsw_kernelcache(
         name = "kernelcache_" + kind,
@@ -56,7 +59,7 @@ _APPLE_TRUST = (
         out = kind + "/kernelcache.decompressed",
         kind = kind,
     )
-    for kind in pinned_kinds()
+    for kind in im4p_pinned_kinds()
 ]
 
 [
@@ -66,7 +69,7 @@ _APPLE_TRUST = (
         out = kind + "/device_tree.adt",
         kind = kind,
     )
-    for kind in pinned_kinds()
+    for kind in im4p_pinned_kinds()
 ]
 
 [
@@ -78,8 +81,8 @@ _APPLE_TRUST = (
         kind = kind,
         role = role,
     )
-    for kind in pinned_kinds()
-    for name, role, fourcc in _APPLE_TRUST
+    for kind in im4p_pinned_kinds()
+    for role, (name, fourcc) in APPLE_TRUST.items()
 ]
 
 # iOS 27: what the boot package carries of the pretranslate run (pretranslated/<kind>/, made offline from the decrypted
@@ -88,7 +91,10 @@ _APPLE_TRUST = (
 ipsw_pretranslated(
     name = "pretranslated",
     srcs = select({
-        ":" + kind: glob(["pretranslated/{}/*".format(kind)])
+        ":" + kind: glob(
+            ["pretranslated/{}/*".format(kind)],
+            allow_empty = True,
+        )
         for kind, ipsw in IPSWS.items()
         if ipsw.get("derived", {}).get("pretranslated")
     } | {"//conditions:default": []}),
