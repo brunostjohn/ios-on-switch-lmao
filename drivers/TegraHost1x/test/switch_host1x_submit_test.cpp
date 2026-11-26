@@ -732,6 +732,67 @@ TEST_F(Host1xSubmit, EveryCpuReleaseIncrementIsAPublishingWrite)
     EXPECT_EQ(done.status, SwitchHost1xDisplayStream::kCancelled);
 }
 
+TEST_F(Host1xSubmit, AReleaseClosesTheGpuBridgesGateAfterTransitiveCancelAndBeforeItsFirstIncrement)
+{
+    ASSERT_EQ(tegra_host1x_syncpt_alloc(&gFailedProducer), 0);
+    const uint32_t from = syncpoint(gFailedProducer);
+    gCpuIncrements = true;
+    int physicalAtClose = 0;
+    gOnGateClose = [&] {
+        physicalAtClose = gProducerPhysical;
+    };
+    ASSERT_EQ(tegra_host1x_syncpt_release_failed(gFailedProducer, from + 2, 2), 0);
+    EXPECT_EQ(physicalAtClose, -5) << "transitive cancellations ran before closing the gate";
+    EXPECT_EQ(gGateCloses, std::vector<uint32_t>{from});
+    EXPECT_EQ(syncpoint(gFailedProducer), from + 2);
+}
+
+TEST_F(Host1xSubmit, CancellingWaitersCancelsTheDisplayStreamAndMakesNoIncrement)
+{
+    SwitchHost1xDisplayStream stream;
+    ASSERT_EQ(tegra_host1x_syncpt_alloc(&gFailedProducer), 0);
+    ASSERT_EQ(switch_host1x_display_start(&stream), 0);
+    const uint32_t from = syncpoint(gFailedProducer);
+    const switch_gpu_backing_token token = {from + 1, 1, SWITCH_GPU_ENGINE_VIC, gFailedProducer};
+    const uint32_t word = 0xdc0, address = 0x20000000;
+    DisplayCompletion done;
+    ASSERT_EQ(
+        switch_host1x_display_submit(&stream, &token, 1, &word, &address, 1, 0x500, 5, DisplayCompletion::heard, &done),
+        0);
+    gCpuIncrements = true;
+    ASSERT_EQ(tegra_host1x_syncpt_cancel_waiters(gFailedProducer, from + 2), 0);
+    EXPECT_EQ(syncpoint(gFailedProducer), from) << "the producer makes its own increments";
+    EXPECT_TRUE(gGateCloses.empty());
+    stream.fence.signaled(&stream.fence, 0);
+    EXPECT_EQ(done.status, SwitchHost1xDisplayStream::kCancelled);
+    EXPECT_EQ(tegra_host1x_syncpt_cancel_waiters(gFailedProducer, from), TEGRA_HOST1X_OK) << "nothing short of it";
+    EXPECT_EQ(tegra_host1x_syncpt_cancel_waiters(9, 2), TEGRA_HOST1X_EINVAL) << "the boot chain's";
+}
+
+TEST_F(Host1xSubmit, CancellingWaitersCancelsABridgedDisplayStreamWithoutIncrementingTheBridgeSyncpt)
+{
+    auto &shared = Bridged::get();
+    auto &stream = shared.stream;
+    const uint32_t from = syncpoint(shared.bridgeSyncpt);
+    switch_gpu_bridge bridge = {shared.bridgeSyncpt, from + 2, -5, 0, false};
+    bridge.why = SWITCH_GPU_BACKING_WRITER_GONE;
+    const uint32_t word = 0xdc0, address = 0x20000000;
+    DisplayCompletion done;
+    ASSERT_EQ(switch_host1x_display_submit(&stream, nullptr, 0, &word, &address, 1, 0x500, 5, DisplayCompletion::heard,
+                                           &done, &bridge),
+              0);
+    gCpuIncrements = true;
+    __atomic_store_n(&bridge.failed, -5, __ATOMIC_RELEASE);
+    ASSERT_EQ(tegra_host1x_syncpt_cancel_waiters(bridge.syncpoint, bridge.threshold), 0);
+    EXPECT_EQ(syncpoint(bridge.syncpoint), from);
+    EXPECT_TRUE(gGateCloses.empty());
+    EXPECT_EQ(stream.status, SwitchHost1xDisplayStream::kCancelled);
+    stream.fence.signaled(&stream.fence, 0);
+    EXPECT_EQ(done.calls, 1u);
+    EXPECT_EQ(done.status, SWITCH_GPU_BACKING_WRITER_GONE);
+    EXPECT_EQ(bridge.releases, 1u);
+}
+
 // A CPU increment that does not take is a hardware fact, whichever syncpoint it was: one line naming it, never a
 // cancelled display stream that leaves the failed producer's waiters stuck behind an error code.
 TEST_F(Host1xSubmit, ACpuIncrementThatDoesNotTakePanics)

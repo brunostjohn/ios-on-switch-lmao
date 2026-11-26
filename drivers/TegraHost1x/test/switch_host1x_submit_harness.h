@@ -43,6 +43,9 @@ struct FailedNode {
 
 std::vector<FailedNode> gFailedNodes;
 uint32_t gFailurePasses;
+std::mutex gGateCloseMutex;
+std::vector<uint32_t> gGateCloses;  // failed producer's syncpoint at each close of the GPU bridge's gate
+std::function<void()> gOnGateClose;
 
 constexpr uint64_t kPushPA = 0x80000000u, kArenaPA = 0x90000000u;
 
@@ -198,6 +201,17 @@ extern "C" bool switch_nvdec_host1x_cancelled(uint32_t syncpt, uint32_t reached)
 {
     ++gFailurePasses;
     return failNodes(SWITCH_GPU_ENGINE_NVDEC, syncpt, reached);
+}
+
+extern "C" void switch_gpu_bridge_gate_close(void)
+{
+    EXPECT_FALSE(gSubmitLock->held);
+    {
+        std::lock_guard<std::mutex> guard(gGateCloseMutex);
+        gGateCloses.push_back(syncpoint(gFailedProducer));
+    }
+    if (gOnGateClose)
+        gOnGateClose();
 }
 
 extern "C" bool switch_vic_host1x_cancelled(uint32_t syncpt, uint32_t reached)
@@ -380,6 +394,11 @@ struct Host1xSubmit : testing::Test {
         gProducerPhysical = 0;
         gFailedNodes.clear();
         gFailurePasses = 0;
+        {
+            std::lock_guard<std::mutex> guard(gGateCloseMutex);
+            gGateCloses.clear();
+        }
+        gOnGateClose = nullptr;
         switch_test_sleep = nullptr;
     }
 

@@ -318,30 +318,60 @@ extern "C" uint32_t tegra_host1x_syncpt_read(uint32_t id)
 
 extern "C" bool switch_nvdec_host1x_cancelled(uint32_t syncpt, uint32_t reached) __attribute__((weak));
 extern "C" bool switch_vic_host1x_cancelled(uint32_t syncpt, uint32_t reached) __attribute__((weak));
+extern "C" void switch_gpu_bridge_gate_close(void) __attribute__((weak));
 
-extern "C" int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshold, uint32_t max_increments)
+namespace {
+int ownSyncpt(uint32_t id)
 {
     if (!gHost || !gSubmitLock || gState != 1)
         return TEGRA_HOST1X_ENODEV;
     if (!gPool.owns(id))
         return TEGRA_HOST1X_EINVAL;
-    const uint32_t reached = tegra_host1x_syncpt_read(id);
-    const int32_t distance = static_cast<int32_t>(threshold - reached);
-    if (distance <= 0)
-        return TEGRA_HOST1X_OK;
-    if (static_cast<uint32_t>(distance) > max_increments)
-        return TEGRA_HOST1X_EINVAL;
+    return TEGRA_HOST1X_OK;
+}
+
+// Cancel NVDEC/VIC jobs waiting on `id` short of `reached`, then (for a failed release, before any CPU increment)
+// close the GPU bridge gate so bridges waiting on `id` or those newly cancelled jobs see them failed, then cancel the
+// display stream and increment to `threshold`.
+int cancelThenRelease(uint32_t id, uint32_t reached, uint32_t threshold, bool closeGate)
+{
     bool changed = false;
     do {
         changed = switch_nvdec_host1x_cancelled != nullptr && switch_nvdec_host1x_cancelled(id, reached);
         changed |= switch_vic_host1x_cancelled != nullptr && switch_vic_host1x_cancelled(id, reached);
     } while (changed);
+    if (closeGate && switch_gpu_bridge_gate_close != nullptr)
+        switch_gpu_bridge_gate_close();
     IOLockLock(gSubmitLock);
     const int result = gState == 1 ? TEGRA_HOST1X_OK : TEGRA_HOST1X_ENODEV;
     if (!result)
         switch_host1x_channels_release_failed(id, threshold);
     IOLockUnlock(gSubmitLock);
     return result;
+}
+}  // namespace
+
+extern "C" int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshold, uint32_t max_increments)
+{
+    if (const int own = ownSyncpt(id))
+        return own;
+    const uint32_t reached = tegra_host1x_syncpt_read(id);
+    const int32_t distance = static_cast<int32_t>(threshold - reached);
+    if (distance <= 0)
+        return TEGRA_HOST1X_OK;
+    if (static_cast<uint32_t>(distance) > max_increments)
+        return TEGRA_HOST1X_EINVAL;
+    return cancelThenRelease(id, reached, threshold, true);
+}
+
+extern "C" int tegra_host1x_syncpt_cancel_waiters(uint32_t id, uint32_t threshold)
+{
+    if (const int own = ownSyncpt(id))
+        return own;
+    const uint32_t reached = tegra_host1x_syncpt_read(id);
+    if (static_cast<int32_t>(threshold - reached) <= 0)
+        return TEGRA_HOST1X_OK;
+    return cancelThenRelease(id, reached, reached, false);
 }
 
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)

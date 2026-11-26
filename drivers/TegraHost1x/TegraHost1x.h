@@ -125,6 +125,10 @@ uint32_t tegra_host1x_syncpt_read(uint32_t id);
 // waiting on the cancelled ones fail first, then the display stream waiting on any of them is cancelled, then the CPU
 // increments the syncpoint to `threshold`; an increment that does not take panics.
 int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshold, uint32_t max_increments);
+// A producer that failed but will still make its own increments (a GPU bridge job held at its gate, SwitchGpuBridge.h):
+// the jobs and the display stream waiting on syncpoint `id` short of `threshold` are cancelled as release_failed cancels
+// them, and the CPU makes no increment, so the producer's own pass a syncpoint nothing waits on any more.
+int tegra_host1x_syncpt_cancel_waiters(uint32_t id, uint32_t threshold);
 
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 // One CPU increment of a syncpoint no engine increments (SwitchHost1xCpuIncrement.h), so the stream waiting on it goes

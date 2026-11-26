@@ -407,6 +407,44 @@ TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 			    .has("if (dst_va) tgm_present_push_copy(push);"));
 }
 
+// Every path that raises a producer's word over writes that never came closes the GPU bridge's gate first, once that
+// producer reads failed, so a bridge job waiting on the word stops at the gate until its host1x consumers are cancelled
+// (SwitchGpuBridgeGate.cpp): the kill's forward store (chan_abandon gets there through the kill), a promise's abandon
+// ahead of either raise (the give-up's step, the connection's release), host1x's release of a failed syncpoint.
+TEST(GM20BBridgeSource, EveryFailurePathClosesTheBridgesGateBeforeItRaisesAProducersWord)
+{
+	const CodeText killed = Block(SourceText("../gpu_hang.c"), "int tgm_chan_killed(");
+	EXPECT_TRUE(
+		killed.before("switch_gpu_timeline_failed(", "switch_gpu_bridge_gate_close();"));
+	EXPECT_TRUE(killed.before(
+		"switch_gpu_bridge_gate_close();",
+		"__atomic_store_n(chan->fence_cpu, chan->submitted, __ATOMIC_RELEASE);"));
+	EXPECT_EQ(CodeText(gpu()).count("__atomic_store_n(chan->fence_cpu,"), 1u)
+		<< "the kill's alone";
+	EXPECT_FALSE(
+		Block(SourceText("../gpu_chan.c"), "static void chan_abandon(").has("fence_cpu"));
+	const CodeText abandon = Block(SourceText("../gpu_promise.c"), "void tgm_promise_abandon(");
+	EXPECT_TRUE(abandon.before("switch_gpu_promise_abandoned_add(",
+				   "switch_gpu_bridge_gate_close();"));
+	EXPECT_TRUE(Block(SourceText("../TegraGM20BUserClientPromise.cpp"),
+			  "void AGXDeviceUserClient::releasePromise(")
+			    .before("tgm_promise_abandon(offset, value);",
+				    "switch_gpu_promise_release("));
+	EXPECT_TRUE(Block(SourceText("../SwitchGpuWriterPromise.h"),
+			  "static inline int switch_gpu_promise_give_up(")
+			    .before("SWITCH_GPU_PROMISE_RAISING", "fence->raise("));
+	EXPECT_TRUE(Block(SourceText("../gpu_promise_giveup.c"), "static void giveup_stepped(")
+			    .has("tgm_promise_abandon(offset, value);"));
+	const std::string host1x = SourceText("../../TegraHost1x/TegraHost1x.cpp");
+	const CodeText cancelRelease = Block(host1x, "int cancelThenRelease(");
+	EXPECT_TRUE(cancelRelease.before("switch_vic_host1x_cancelled(",
+					 "switch_gpu_bridge_gate_close();"));
+	EXPECT_TRUE(cancelRelease.before("switch_gpu_bridge_gate_close();",
+					 "switch_host1x_channels_release_failed("));
+	EXPECT_TRUE(Block(host1x, "extern \"C\" int tegra_host1x_syncpt_release_failed(")
+			    .has("cancelThenRelease(id, reached, threshold, true)"));
+}
+
 // A jobless bridge (SwitchGpuBridgeRetire.cpp settleJobless) reads its tokens before its producer's channel, and the
 // channel's status before its end (`stopped`): a kill stores the end before any status reads failed, so a failure seen
 // comes with `stopped`, and the CPU makes the increments a channel that stopped short owes, after every slot of the pass

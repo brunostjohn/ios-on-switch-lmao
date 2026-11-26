@@ -29,10 +29,21 @@ int producers(const switch_gpu_bridge &job)
 {
 	bool pending = false;
 	for (uint32_t i = 0; i < job.count; ++i) {
-		const int result = switch_gpu_backing_token_status(&job.tokens[i]);
+		const auto &token = job.tokens[i];
+		const int result = switch_gpu_backing_token_status(&token);
 		if (result < 0)
 			return result;
-		pending |= result == 0;
+		if (!result) {
+			// VIC and NVDEC publish physical cancellation before retirement sets status.
+			if (token.engine == SWITCH_GPU_ENGINE_VIC ||
+			    token.engine == SWITCH_GPU_ENGINE_NVDEC) {
+				const int physical =
+					switch_gpu_backing_token_physical_status(&token, 0);
+				if (physical < 0)
+					return physical;
+			}
+			pending = true;
+		}
 	}
 	return pending ? 0 : 1;
 }
@@ -92,7 +103,7 @@ bool openSpace()
 	for (auto &job : queue.jobs)
 		if (!job.syncpoint && tegra_host1x_syncpt_alloc(&job.syncpoint))
 			return false;
-	return queue.space.openSpace(kShape, &queue);
+	return queue.space.openSpace(kShape, &queue) && gateOpen();
 }
 
 int channel()
@@ -173,6 +184,7 @@ static int submitBridge(const switch_gpu_backing_token *tokens, uint32_t count,
 		if (source < 0)
 			error = source;
 	}
+	bool abandoned = false;
 	if (!error && jobless) {
 		job.threshold = wait.threshold;
 		job.covering = wait.covering;
@@ -180,13 +192,7 @@ static int submitBridge(const switch_gpu_backing_token *tokens, uint32_t count,
 		producerDone = switch_gpu_producer_covered(job.covering, &stopped) != 0;
 	} else if (!error) {
 		job.threshold = tegra_host1x_syncpt_read(job.syncpoint) + TGM_SYNCPT_INCRS;
-		const tgm_push push = {
-			kPushVa + slot * kPage,
-			tgm_syncpt_incr(queue.space.words + slot * (kPage / 4), job.syncpoint),
-			0,
-			0,
-			0,
-			0};
+		const tgm_push push = {kPushVa + slot * kPage, slotPush(job, slot), 0, 0, 0, 0};
 		tgm_chan *const chan = queue.space.channel;
 		switch_gpu_chan_submit_enter(chan);
 		for (;;) {
@@ -207,13 +213,33 @@ static int submitBridge(const switch_gpu_backing_token *tokens, uint32_t count,
 			});
 			if (error)
 				break;
+			// waitForRoom dropped queue.lock; gatePass may have already reopened the gate for a producer
+			// that failed meanwhile.
+			const int source = producers(job);
+			if (source < 0) {
+				error = source;
+				break;
+			}
 		}
 		switch_gpu_chan_submit_leave();
+		// If a producer failed while exec_visibility ran, backing_unsettled may have skipped its acquire before
+		// gate_close closed the gate. Keep the slot until the kicked GPU job retires, and hand no bridge out.
+		if (!error) {
+			const int source = producers(job);
+			if (source < 0) {
+				error = source;
+				abandoned = true;
+			}
+		}
 	}
 #if TGM_STATS
 	const bool consumerJobless = !error && jobless && assigns;
 #endif
-	if (error) {
+	if (abandoned) {
+		__atomic_store_n(&job.result, error, __ATOMIC_RELEASE);
+		job.active = true;
+		thread_call_enter(queue.retirement);
+	} else if (error) {
 		releaseLocked(job);
 	} else {
 		job.active = true;
