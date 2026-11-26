@@ -768,6 +768,7 @@ APP27_TESTS_SRCS = [
     "app27/X1CompressedMSCases.swift",
     "app27/X1ConstantColourProbe.swift",
     "app27/X1FillBoxProbe.swift",
+    "app27/X1Host1xMlockProbe.swift",
     "app27/X1IAdd3FormsProbe.swift",
     "app27/X1IndexLimitProbe.swift",
     "app27/X1IteratedBlendProbe.swift",

@@ -215,3 +215,12 @@ host_test(
     additional_compiler_inputs = ["//drivers/TegraHost1x:SwitchHost1xTokenFence.cpp"],
     deps = [":token_fence_kernel"],
 )
+
+host_test(
+    name = "switch_host1x_mlock_probe_test",
+    srcs = [
+        "switch_host1x_mlock_probe_test.cpp",
+        "//drivers/TegraHost1x:SwitchHost1xMlockProbe.h",
+        "//drivers/TegraHost1x:TegraHost1x.h",
+    ],
+)

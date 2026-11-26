@@ -751,6 +751,7 @@ BY_IOS: dict[str, dict[str, bool]] = {
         'gpu.x1.vic_4k': False,
         'gpu.x1.vic_compose': False,
         'gpu.x1.vic_odd_size': False,
+        'gpu.x1.host1x_mlock': False,
         'gpu.x1.index_past_limit': False,
         'gpu.x1.iadd3_forms': False,
         'gpu.x1.layer_past_count': False,
