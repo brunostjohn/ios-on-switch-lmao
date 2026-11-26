@@ -19,6 +19,9 @@ std::string gm20bLinkedText(NSArray *vertex, NSArray *vertexPrivate, NSArray *fr
 const std::string &gm20bStateKey(SwitchMetalPipeline *p);
 // A completable state's descriptor of its functions and of the fields its key names, nil for another
 MTLRenderPipelineDescriptor *gm20bMadeFrom(SwitchMetalPipeline *p);
-// A state the pack lacks (`kind`: "render", "render variant", "compute"), named once a process with its key: the set the OS
-// draws with is closed at the pack's build, so each one is a hole in its coverage, made on the device at a compile's cost
+// Debug builds: a state the pack lacks (`kind`: "render", "render variant", "compute"), named once a process by its key's
+// hash and label, its key in harvest parts under that hash (logHarvestParts): the set the OS draws with is closed at the
+// pack's build, so each one is a hole in its coverage, made on the device at a compile's cost
 void gm20bNoteMiss(const char *kind, uint64_t keyHash, const std::string &key, NSString *label);
+// Whether line `line` (each caller its own) is the first of the process for the key of hash `keyHash`
+bool gm20bFirstNaming(uint64_t keyHash, uint32_t line);

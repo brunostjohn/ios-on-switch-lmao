@@ -16,8 +16,9 @@ TegraGM20BMetalStatesCost.mm):
     <name>
         <key>
         (one line) <name>: the runtime's 16-hex-digit cache name of the state; <key>: its first 400 characters
-    SwitchMetal: <process>: a render [variant ]state the pack lacks <hash> (<label>): <key>
-        every build's line for a state or variant the pack lacks, once a process, its key whole
+    SwitchMetal: <process>: a render [variant ]state the pack lacks <hash> (<label>)
+        a state or variant the pack lacks, once a process; its key arrives in its harvest parts under <hash>, and one
+        whose parts are not all there gives no line
     SwitchMetal: tier-1 pack state <fast> <name> in <process>: <n> pieces, card=<pages>
         a tier-1 pack state used for the first time in a process; its key arrives in its harvest parts
     SwitchMetal: harvest <name> <i>/<n> <part>
@@ -98,10 +99,8 @@ CUT = 400  # TegraGM20BMetalComplete.mm's made line: %.400s
 # A harvest part's characters but the last part's; the log drops a part's trailing spaces, which pads them back
 PART_CHARS = 700
 PART = re.compile(r'SwitchMetal: harvest ([0-9a-f]{16}) (\d+)/(\d+) (.*)$', re.DOTALL)
-# every build's line for a render state or variant the pack lacks (TegraGM20BMetalStatesMiss.mm), with its whole key
-MISS = re.compile(
-    r'SwitchMetal: \S+: a render (?:variant )?state the pack lacks ([0-9a-f]{16}) \(([^)]*)\): (.*)$', re.DOTALL
-)
+# a render state or variant the pack lacks (TegraGM20BMetalStatesMiss.mm): its hash and label, its key in its parts
+MISS = re.compile(r'SwitchMetal: \S+: a render (?:variant )?state the pack lacks ([0-9a-f]{16}) \(([^)]*)\)$')
 TIER1 = re.compile(r'SwitchMetal: tier-1 pack state [0-9a-f]{16} ([0-9a-f]{16}) in \S+: \d+ pieces, card=\d+')
 VARIANT = re.compile(r'state\.variant_unpacked: .*?refused:( \| .*?) of ([0-9a-f]{16}) ')
 VARIANT_ANY = 'state.variant_unpacked: '
@@ -186,9 +185,7 @@ def read_boots(stream: Iterable[dict]) -> dict[str, Boot]:
         elif m := TIER1.search(message):
             boot.made.setdefault((process, m[1]), ('used from tier 1', ''))
         elif m := MISS.search(message):
-            boot.made.setdefault((process, m[1]), ('made', m[3]))
-            boot.parts[process, m[1]].setdefault(1, f'label={m[2].replace(" ", "_")} {m[3]}')
-            boot.totals.setdefault((process, m[1]), 1)
+            boot.made.setdefault((process, m[1]), ('missed', ''))
         elif m := PART.search(message):
             boot.parts[process, m[1]][int(m[2])] = m[4]
             boot.totals[process, m[1]] = int(m[3])
@@ -395,9 +392,9 @@ def states(boot: Boot, held: set[str]) -> Iterator[tuple[str, str, str, str | No
     """
     for (process, name), (outcome, key) in sorted(boot.made.items()):
         parts = whole(boot, process, name)
-        if outcome == 'used from tier 1':
+        if outcome in ('used from tier 1', 'missed'):
             if not parts:
-                yield process, outcome, '-', None, 'tier-1 pack state has no whole harvest parts'
+                yield process, outcome, '-', None, f'{"tier-1 pack" if outcome != "missed" else "a missed"} state has no whole harvest parts'
                 continue
             yield process, outcome, parts[0], untested(parts[1]), ''
             continue

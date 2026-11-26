@@ -3766,6 +3766,19 @@ host_test(
     cxx_std = "c++17",
 )
 
+py_test(
+    name = "miss_lines_source_test",
+    srcs = ["miss_lines_source_test.py"],
+    args = [
+        "$(rootpath //drivers/TegraGM20BMetal:TegraGM20BMetalStatesMiss.mm)",
+        "$(rootpath //drivers/TegraGM20BMetal:TegraGM20BMetalComputeState.mm)",
+    ],
+    data = [
+        "//drivers/TegraGM20BMetal:TegraGM20BMetalComputeState.mm",
+        "//drivers/TegraGM20BMetal:TegraGM20BMetalStatesMiss.mm",
+    ],
+)
+
 host_test(
     name = "direct_guest_base_test",
     srcs = [
