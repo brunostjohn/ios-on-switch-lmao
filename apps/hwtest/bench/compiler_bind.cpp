@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "apps/hwtest/bench/compiler_draw.h"
+#include "apps/hwtest/bench/compiler_handles.h"
 #include "drivers/TegraGM20BMetal/gm20b_gpu_internal.h"
 #include "drivers/TegraGM20BMetal/cbuf.h"
 
@@ -30,8 +31,9 @@ struct DeviceHarness {
         }
         // R32 assigns bound samples first. RenderBox follows these with vertex SSBOs, storage images, then pixel SSBOs.
         const auto &words = e.descriptors_.last().words;
-        uint32_t sampled = 0, image = 0, vsStorage = 0, fsStorage = 0, uniform = 2;
+        uint32_t vsStorage = 0, fsStorage = 0, uniform = 2;
         const bool renderbox = in.key == "17d6ade58fef2152";
+        bench::compiler::HandleWriter handles(root + 0x5700 / 4, in.kinds, renderbox);
         for (uint32_t i = 0; i < pl.entries.size(); ++i) {
             const auto &entry = pl.entries[i];
             const uint32_t *descriptor = words.data() + entry.offset / 4;
@@ -46,12 +48,12 @@ struct DeviceHarness {
             case 2:
                 if (entry.kind != EntryTexture || !descriptor[0])
                     return false;
-                root[0x5700 / 4 + sampled++] = descriptor[0];
+                handles.sampled(descriptor[0]);
                 break;
             case 3:
                 if (!descriptor[0] || descriptor[0] >= kPackHeapElements)
                     return false;
-                root[0x5700 / 4 + (renderbox ? 16 : sampled) + image++] = descriptor[0];
+                handles.image(descriptor[0]);
                 break;
             case 7:
                 if (!bufferStorage(entry))

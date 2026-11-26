@@ -865,6 +865,7 @@ cc_library(
             "bench/compiler_bind.cpp",
             "bench/compiler_compare.cpp",
             "bench/compiler_draw.h",
+            "bench/compiler_handles.h",
             "bench/compiler_run.cpp",
             "//drivers/TegraGM20BMetal:cache_io.h",
             "//drivers/TegraGM20BMetal:gm20b_cache.cpp",
@@ -915,6 +916,15 @@ cc_library(
 )
 
 # The bench's records on the host, over a pack with the template state the Switch's pack gave it
+host_test(
+    name = "compiler_handles_test",
+    srcs = [
+        "bench/compiler_handles.h",
+        "bench/compiler_handles_test.cpp",
+    ],
+    cxx_std = "c++17",
+)
+
 host_test(
     name = "bench_records_test",
     srcs = [
