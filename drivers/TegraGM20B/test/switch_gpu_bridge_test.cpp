@@ -37,7 +37,8 @@ struct switch_gpu_mapping {
 namespace
 {
 using Key = std::tuple<uint32_t, uint64_t, uint64_t>;
-std::map<Key, int> statuses, refs, external;
+std::mutex stateMutex;
+std::map<Key, int> statuses, physicalStatuses, refs, external;
 std::function<void(const switch_gpu_backing_token &)>
 	onTokenRead;  // at a token's status read, before it answers
 std::array<uint32_t, 256> syncpoints;
@@ -46,11 +47,20 @@ tgm_vm space;
 tgm_mem memories[2];
 tgm_chan gpu;
 uint32_t memoryCount, syncpointCount = 160, maps, execs, roomWaits, failureReleases, poolFrees;
-int vmFailures, releaseFailures;
+int vmFailures, gateVaFailures, releaseFailures;
 volatile uint32_t fence;
 std::vector<switch_gpu_backing_token> submittedTokens;
 std::vector<uint64_t> execOrder;
-uint32_t submittedWords[TGM_SYNCPT_INCR_DWORDS];
+// A slot's push: the gate's acquire (SwitchGpuBridgeGate.cpp), then the drain and the increments
+constexpr uint32_t kGateDwords = 5, kSlotDwords = kGateDwords + TGM_SYNCPT_INCR_DWORDS;
+constexpr uint64_t kGateVa = 0x300000100ull;
+uint32_t submittedWords[kSlotDwords];
+volatile uint32_t gateWord;
+std::vector<std::pair<uint32_t, uint32_t>>
+	cancelledWaiters;  // tegra_host1x_syncpt_cancel_waiters's (id, threshold)
+std::function<void(uint32_t, uint32_t)> onCancelWaiters;
+std::function<void()> onExec;
+uint32_t physicalStatusNonGpuCalls;
 int nextExecError;
 bool pushVolatile;
 uint32_t submittedFlags;
@@ -78,12 +88,32 @@ thread_call_t hangCheck()
 	return switch_bridge_calls.at(1);
 }
 
+// Allocated with the space, after the two above
+thread_call_t gatePass()
+{
+	return switch_bridge_calls.at(2);
+}
+
+uint32_t loadGate()
+{
+	return __atomic_load_n(&gateWord, __ATOMIC_ACQUIRE);
+}
+
+bool runGatePass()
+{
+	if (switch_bridge_calls.size() > 2 &&
+	    gatePass()->pending.exchange(false, std::memory_order_acq_rel)) {
+		gatePass()->fn(gatePass()->arg, nullptr);
+		return true;
+	}
+	return false;
+}
+
 void pump()
 {
-	if (!switch_bridge_calls.empty() && retirement()->pending) {
-		retirement()->pending = false;
+	if (!switch_bridge_calls.empty() &&
+	    retirement()->pending.exchange(false, std::memory_order_acq_rel))
 		retirement()->fn(retirement()->arg, nullptr);
-	}
 }
 
 void finish(bool failed = false)
@@ -109,9 +139,18 @@ protected:
 
 	void TearDown() override
 	{
-		for (auto &[k, status] : statuses)
-			if (!status)
-				status = 1;
+		onCancelWaiters = nullptr;
+		onExec = nullptr;
+		gateVaFailures = 0;
+		{
+			std::lock_guard<std::mutex> guard(stateMutex);
+			physicalStatuses.clear();
+			for (auto &[k, status] : statuses)
+				if (!status)
+					status = 1;
+		}
+		while (runGatePass())
+			;
 		finish();
 		for (auto *value : held)
 			switch_gpu_bridge_release(&value);
@@ -167,9 +206,10 @@ extern "C" void *tgm_pool_alloc(uint64_t, uint64_t, uint64_t *pa)
 	return pushWords.data();
 }
 
-extern "C" int tgm_fence_kernel(unsigned, volatile uint32_t **cpu, uint64_t *page, uint32_t *offset)
+extern "C" int tgm_fence_kernel(unsigned which, volatile uint32_t **cpu, uint64_t *page,
+				uint32_t *offset)
 {
-	*cpu = &fence;
+	*cpu = which == TGM_FENCE_KERNEL_BRIDGE_GATE ? &gateWord : &fence;
 	*page = 0x200000;
 	*offset = 128;
 	return 0;
@@ -389,6 +429,26 @@ extern "C" uint64_t tgm_writer_check_progress(uint32_t uid, uint32_t seqno, cons
 
 std::function<void()> onReleaseFailed;  // runs at a release, before its increments
 
+extern "C" uint64_t tgm_fence_kernel_va(const tgm_vm *, unsigned which)
+{
+	if (which == TGM_FENCE_KERNEL_BRIDGE_GATE && gateVaFailures) {
+		--gateVaFailures;
+		return 0;
+	}
+	return which == TGM_FENCE_KERNEL_BRIDGE_GATE ? kGateVa : 0x300000000ull + which * 64;
+}
+
+extern "C" int tegra_host1x_syncpt_cancel_waiters(uint32_t id, uint32_t threshold)
+{
+	{
+		std::lock_guard<std::mutex> guard(stateMutex);
+		cancelledWaiters.emplace_back(id, threshold);
+	}
+	if (onCancelWaiters)
+		onCancelWaiters(id, threshold);
+	return 0;
+}
+
 extern "C" int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshold, uint32_t maximum)
 {
 	if (onReleaseFailed)
@@ -439,12 +499,13 @@ extern "C" int switch_gpu_chan_exec_visibility(tgm_chan *chan, const tgm_push *p
 		return error;
 	}
 	EXPECT_EQ(count, 1u);
-	EXPECT_EQ(push->dwords, TGM_SYNCPT_INCR_DWORDS);
-	std::copy_n(pushWords.data() + (push->va - (1ULL << 20)) / 4, TGM_SYNCPT_INCR_DWORDS,
-		    submittedWords);
+	EXPECT_EQ(push->dwords, kSlotDwords);
+	std::copy_n(pushWords.data() + (push->va - (1ULL << 20)) / 4, kSlotDwords, submittedWords);
 	submittedTokens.assign(dependencies, dependencies + dependencyCount);
 	execOrder.push_back(dependencies[0].value);
 	*sequence = ++chan->submitted;
+	if (onExec)
+		onExec();
 	return 0;
 }
 
@@ -472,6 +533,7 @@ extern "C" int switch_gpu_backing_token_status(const switch_gpu_backing_token *t
 {
 	if (onTokenRead)
 		onTokenRead(*token);
+	std::lock_guard<std::mutex> guard(stateMutex);
 	return statuses[key(*token)];
 }
 
@@ -479,8 +541,15 @@ extern "C" int switch_gpu_backing_token_physical_status(const switch_gpu_backing
 							int externalVisibility)
 {
 	EXPECT_EQ(externalVisibility, 0);
-	EXPECT_TRUE(token->engine == SWITCH_GPU_ENGINE_GM20B ||
-		    token->engine == SWITCH_GPU_ENGINE_PROMISE);
+	{
+		std::lock_guard<std::mutex> guard(stateMutex);
+		if (token->engine != SWITCH_GPU_ENGINE_GM20B &&
+		    token->engine != SWITCH_GPU_ENGINE_PROMISE)
+			++physicalStatusNonGpuCalls;
+		if (const auto at = physicalStatuses.find(key(*token));
+		    at != physicalStatuses.end())
+			return at->second;
+	}
 	return switch_gpu_backing_token_status(token);
 }
 
@@ -498,13 +567,19 @@ extern "C" int switch_gpu_backing_tokens_failure(const switch_gpu_backing_token 
 
 extern "C" int switch_gpu_backing_token_external_status(const switch_gpu_backing_token *token)
 {
+	std::lock_guard<std::mutex> guard(stateMutex);
 	const auto at = external.find(key(*token));
-	return at == external.end() ? statuses[key(*token)] : at->second;
+	if (at != external.end())
+		return at->second;
+	const auto st = statuses.find(key(*token));
+	return st == statuses.end() ? 0 : st->second;
 }
 
 extern "C" int switch_gpu_timeline_promote(const switch_gpu_backing_token *token)
 {
-	const int ready = statuses[key(*token)];
+	std::lock_guard<std::mutex> guard(stateMutex);
+	const auto st = statuses.find(key(*token));
+	const int ready = st == statuses.end() ? 0 : st->second;
 	if (ready == 1)
 		external[key(*token)] = 1;
 	return ready;
@@ -521,7 +596,17 @@ TEST_F(Bridge, FailedFirstOpenIsUndoneAndTheNextSubmitOpensAgain)
 	EXPECT_EQ(bridge, nullptr);
 	EXPECT_EQ(poolFrees, 1u);
 	EXPECT_EQ(memoryCount, 0u);
+	// A failed gateOpen() also discards the space and leaves no published gate; reopening initializes the gate open.
+	gateVaFailures = 1;
+	gateWord = 0xdeadbeefu;
+	EXPECT_EQ(switch_gpu_bridge_submit(&source, 1, &bridge), -12);
+	EXPECT_EQ(bridge, nullptr);
+	EXPECT_EQ(poolFrees, 2u);
+	EXPECT_EQ(memoryCount, 0u);
+	switch_gpu_bridge_gate_close();
+	EXPECT_EQ(loadGate(), 0xdeadbeefu) << "gate not published yet";
 	ASSERT_NE(submit({source}), nullptr);
+	EXPECT_EQ(loadGate(), 0u) << "initialised open";
 	EXPECT_EQ(syncpointCount, 160u + 8u);
 }
 
@@ -536,8 +621,14 @@ TEST_F(Bridge, PendingProducerPublishesHardwareAcquireWithoutCpuWait)
 	EXPECT_EQ(refs[key(source)], 1);
 	EXPECT_EQ(switch_gpu_bridge_status(bridge), 0);
 	EXPECT_EQ(roomWaits, 0u);
-	EXPECT_EQ(submittedWords[0], tgm_syncpt_header(0x78));
-	EXPECT_EQ(submittedWords[14], tgm_syncpt_header(0x74));
+	EXPECT_EQ(submittedWords[0], (1u << 29) | (4u << 16) | (0x10u >> 2))
+		<< "SEMAPHOREA..D: the gate";
+	EXPECT_EQ(submittedWords[1], uint32_t(kGateVa >> 32));
+	EXPECT_EQ(submittedWords[2], uint32_t(kGateVa));
+	EXPECT_EQ(submittedWords[3], 0u) << "open";
+	EXPECT_EQ(submittedWords[4], 1u | (1u << 12)) << "ACQUIRE, switching away while it waits";
+	EXPECT_EQ(submittedWords[kGateDwords], tgm_syncpt_header(0x78));
+	EXPECT_EQ(submittedWords[kGateDwords + 14], tgm_syncpt_header(0x74));
 }
 
 TEST_F(Bridge, SuccessRequiresProducerAndHardwareThreshold)
@@ -953,7 +1044,7 @@ TEST_F(Bridge, AJobNeedsNoL2InvalidateAndItsPushFlushesTheProducers)
 	EXPECT_TRUE(submittedFlags & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT);
 	EXPECT_TRUE(submittedFlags & SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY);
 	EXPECT_FALSE(submittedFlags & SWITCH_GPU_SUBMIT_HOST_WRITTEN);
-	const uint32_t *begin = submittedWords, *end = begin + TGM_SYNCPT_INCR_DWORDS;
+	const uint32_t *begin = submittedWords, *end = begin + kSlotDwords;
 	const auto *flush = std::find(begin, end, 0x10u << 27);
 	const auto *increment = std::find(begin, end, tgm_syncpt_header(0x0074));
 	ASSERT_NE(flush, end);
@@ -1116,7 +1207,9 @@ TEST_F(Bridge, SourceInspectionDoesNotEnterAnotherHostEngine)
 	auto *bridge = submit({source});
 	ASSERT_NE(bridge, nullptr);
 	statuses[key(source)] = -5;
+	const uint32_t before = physicalStatusNonGpuCalls;
 	EXPECT_EQ(switch_gpu_bridge_source_failure(bridge), 0);
+	EXPECT_EQ(physicalStatusNonGpuCalls, before);
 	EXPECT_EQ(refs[key(source)], 1);
 }
 
@@ -1785,4 +1878,271 @@ TEST_F(Bridge, OnlyAHost1xConsumersFirstAskGivesAChannelASyncpointWithinTheGpusS
 	EXPECT_EQ(adopted.back().first, handedBack);
 	EXPECT_EQ(adopted.back().second, promised)
 		<< "its base, after the increments its last channel never ran";
+}
+
+TEST_F(Bridge, AFailedProducersBridgeJobHasItsConsumersCancelledAtTheGateWithNoIncrement)
+{
+	const auto source = token(360, 19);
+	const auto healthy = token(361, 20);
+	statuses[key(source)] = 0;
+	statuses[key(healthy)] = 0;
+	auto *failing = submit({source});
+	auto *fine = submit({healthy});
+	ASSERT_NE(failing, nullptr);
+	ASSERT_NE(fine, nullptr);
+	ASSERT_EQ(switch_gpu_bridge_jobless(failing), 0);
+	uint32_t id = 0;
+	uint32_t threshold = 0;
+	switch_gpu_bridge_syncpoint(failing, &id, &threshold);
+	const uint32_t before = syncpoints[id];
+	const uint32_t releasesBefore = failureReleases;
+	cancelledWaiters.clear();
+	statuses[key(source)] = -5;
+	switch_gpu_bridge_gate_close();
+	EXPECT_EQ(loadGate(), 1u) << "closed before the producer's word is raised";
+	runGatePass();
+	EXPECT_EQ(cancelledWaiters, (std::vector<std::pair<uint32_t, uint32_t>>{{id, threshold}}));
+	EXPECT_EQ(switch_gpu_bridge_failed(failing), -5);
+	EXPECT_EQ(switch_gpu_bridge_failed(fine), 0);
+	EXPECT_EQ(failureReleases, releasesBefore);
+	EXPECT_EQ(syncpoints[id], before) << "no CPU increment";
+	EXPECT_EQ(loadGate(), 0u) << "reopened";
+	statuses[key(healthy)] = 1;
+	finish();
+	EXPECT_EQ(switch_gpu_bridge_status(failing), -5);
+	release(failing);
+	release(fine);
+}
+
+TEST_F(Bridge, ACloseDuringTheGatesPassKeepsItClosedForAnotherPass)
+{
+	const auto first = token(362, 21);
+	const auto second = token(363, 22);
+	statuses[key(first)] = 0;
+	statuses[key(second)] = 0;
+	auto *a = submit({first});
+	auto *b = submit({second});
+	ASSERT_NE(a, nullptr);
+	ASSERT_NE(b, nullptr);
+	cancelledWaiters.clear();
+	statuses[key(first)] = -5;
+	switch_gpu_bridge_gate_close();
+	onCancelWaiters = [&](uint32_t, uint32_t) {
+		onCancelWaiters = nullptr;
+		statuses[key(second)] = -5;
+		switch_gpu_bridge_gate_close();
+	};
+	runGatePass();
+	EXPECT_EQ(loadGate(), 1u) << "a close the pass did not see";
+	EXPECT_TRUE(gatePass()->pending.load());
+	runGatePass();
+	EXPECT_EQ(loadGate(), 0u);
+	EXPECT_EQ(cancelledWaiters.size(), 2u);
+	EXPECT_EQ(switch_gpu_bridge_failed(a), -5);
+	EXPECT_EQ(switch_gpu_bridge_failed(b), -5);
+	finish();
+	release(a);
+	release(b);
+}
+
+// VIC and NVDEC publish physical cancellation before retirement sets status: gatePass and submit must both see it.
+TEST_F(Bridge, ACancelledHost1xProducerIsDetectedPhysicallyAtTheGateAndRefusedOnSubmit)
+{
+	auto vic = token(364, 165);
+	vic.engine = SWITCH_GPU_ENGINE_VIC;
+	statuses[key(vic)] = 0;
+	physicalStatuses[key(vic)] = 0;
+	auto *bridge = submit({vic});
+	ASSERT_NE(bridge, nullptr);
+	uint32_t id = 0, threshold = 0;
+	switch_gpu_bridge_syncpoint(bridge, &id, &threshold);
+	cancelledWaiters.clear();
+	physicalStatuses[key(vic)] = -5;
+	switch_gpu_bridge_gate_close();
+	runGatePass();
+	EXPECT_EQ(cancelledWaiters, (std::vector<std::pair<uint32_t, uint32_t>>{{id, threshold}}));
+	EXPECT_EQ(switch_gpu_bridge_failed(bridge), -5);
+	EXPECT_EQ(loadGate(), 0u);
+	switch_gpu_bridge *refused = nullptr;
+	EXPECT_EQ(switch_gpu_bridge_submit(&vic, 1, &refused), -5);
+	EXPECT_EQ(refused, nullptr);
+	finish();
+	EXPECT_EQ(switch_gpu_bridge_status(bridge), -5);
+	release(bridge);
+}
+
+// Cancelling bridge A's waiters can physically fail a VIC/NVDEC job that active bridge B waits on: gatePass cancels
+// bridge B too before reopening the gate.
+TEST_F(Bridge, TransitiveHost1xCancellationAtTheGateCancelsChainedBridgeBeforeReopening)
+{
+	const auto gpuSource = token(365, 23);
+	auto vic = token(366, 166);
+	vic.engine = SWITCH_GPU_ENGINE_VIC;
+	statuses[key(gpuSource)] = 0;
+	statuses[key(vic)] = 0;
+	physicalStatuses[key(vic)] = 0;
+	auto *a = submit({gpuSource});
+	auto *b = submit({vic});
+	ASSERT_NE(a, nullptr);
+	ASSERT_NE(b, nullptr);
+	uint32_t idA = 0, thrA = 0, idB = 0, thrB = 0;
+	switch_gpu_bridge_syncpoint(a, &idA, &thrA);
+	switch_gpu_bridge_syncpoint(b, &idB, &thrB);
+	cancelledWaiters.clear();
+	onCancelWaiters = [&](uint32_t id, uint32_t) {
+		EXPECT_EQ(loadGate(), 1u) << "gate stays closed across transitive cancels";
+		if (id == idA)
+			physicalStatuses[key(vic)] = -5;
+	};
+	statuses[key(gpuSource)] = -5;
+	switch_gpu_bridge_gate_close();
+	runGatePass();
+	EXPECT_EQ(cancelledWaiters,
+		  (std::vector<std::pair<uint32_t, uint32_t>>{{idA, thrA}, {idB, thrB}}));
+	EXPECT_EQ(switch_gpu_bridge_failed(a), -5);
+	EXPECT_EQ(switch_gpu_bridge_failed(b), -5);
+	EXPECT_EQ(loadGate(), 0u);
+	finish();
+	release(a);
+	release(b);
+}
+
+TEST_F(BridgeRoom, AProducerFailingDuringRoomWaitIsRefusedWithoutSubmitting)
+{
+	const auto source = token(367, 24);
+	statuses[key(source)] = 0;
+	nextExecError = -11;
+	const uint32_t execsBefore = execs;
+	roomWait = [this] {
+		waiting.set_value();
+		room.get_future().wait();
+		return 0;
+	};
+	switch_gpu_bridge *bridge = nullptr;
+	auto submitted = std::async(std::launch::async, [&] {
+		return switch_gpu_bridge_submit(&source, 1, &bridge);
+	});
+	waiting.get_future().wait();
+	{
+		std::lock_guard<std::mutex> guard(stateMutex);
+		statuses[key(source)] = -5;
+	}
+	switch_gpu_bridge_gate_close();
+	runGatePass();
+	EXPECT_EQ(loadGate(), 0u);
+	room.set_value();
+	EXPECT_EQ(submitted.get(), -5);
+	EXPECT_EQ(bridge, nullptr);
+	EXPECT_EQ(execs, execsBefore + 1u) << "no retry after producer failed during room wait";
+	EXPECT_EQ(refs[key(source)], 0);
+}
+
+TEST_F(Bridge, AProducerFailingDuringExecAbandonsTheSlotWithoutHandingOutABridge)
+{
+	const auto source = token(368, 25);
+	statuses[key(source)] = 0;
+	onExec = [&] {
+		onExec = nullptr;
+		statuses[key(source)] = -5;
+	};
+	switch_gpu_bridge *bridge = nullptr;
+	EXPECT_EQ(switch_gpu_bridge_submit(&source, 1, &bridge), -5);
+	EXPECT_EQ(bridge, nullptr);
+	EXPECT_EQ(refs[key(source)], 1) << "retained until the kicked GPU job retires";
+	finish();
+	EXPECT_EQ(refs[key(source)], 0);
+}
+
+// A promise temporarily marked abandoned during RAISING (or later evicted from the abandoned ring) may read 1 by the
+// time retire() runs: the failure already recorded by gatePass must stay failed.
+TEST_F(Bridge, RetirementPreservesAFailureRecordedAtTheGateEvenIfTheProducerLaterReadsComplete)
+{
+	const switch_gpu_backing_token promise = {9, 0, SWITCH_GPU_ENGINE_PROMISE, 2056};
+	statuses[key(promise)] = 0;
+	auto *bridge = submit({promise});
+	ASSERT_NE(bridge, nullptr);
+	std::vector<int> heard;
+	ASSERT_EQ(switch_gpu_bridge_notify(bridge, recordStatus, &heard), 0);
+	statuses[key(promise)] = -5;
+	switch_gpu_bridge_gate_close();
+	runGatePass();
+	ASSERT_EQ(switch_gpu_bridge_failed(bridge), -5);
+	statuses[key(promise)] = 1;
+	releaseSyncpoint(bridge);
+	finish();
+	EXPECT_EQ(switch_gpu_bridge_status(bridge), -5);
+	EXPECT_EQ(heard, std::vector<int>{-5});
+	release(bridge);
+}
+
+TEST_F(Bridge, ReallocatedSlotSyncpointRewritesItsGateAndIncrementPush)
+{
+	const auto source = token(369, 26);
+	statuses[key(source)] = 1;
+	auto *bridge = submit({source});
+	ASSERT_NE(bridge, nullptr);
+	uint32_t oldId = 0, unused = 0;
+	switch_gpu_bridge_syncpoint(bridge, &oldId, &unused);
+	releaseFailures = 1;
+	finish(true);
+	release(bridge);
+	auto *reused = submit({source});
+	ASSERT_NE(reused, nullptr);
+	uint32_t newId = 0;
+	switch_gpu_bridge_syncpoint(reused, &newId, &unused);
+	EXPECT_NE(newId, oldId);
+	EXPECT_EQ(submittedWords[0], (1u << 29) | (4u << 16) | (0x10u >> 2));
+	EXPECT_EQ(submittedWords[1], uint32_t(kGateVa >> 32));
+	EXPECT_EQ(submittedWords[2], uint32_t(kGateVa));
+	EXPECT_EQ(submittedWords[3], 0u);
+	EXPECT_EQ(submittedWords[4], 1u | (1u << 12));
+	EXPECT_EQ(submittedWords[kGateDwords + 13], ((newId & 0xffu) << 8) | 1u)
+		<< "SYNCPOINTB carries the reallocated syncpoint";
+	EXPECT_EQ(submittedWords[kGateDwords + 15], ((newId & 0xffu) << 8) | 1u);
+	finish();
+	release(reused);
+}
+
+TEST_F(Bridge, ConcurrentGateClosesPassesAndSubmitsAreRaceFree)
+{
+	std::atomic<bool> stop{false};
+	std::thread passer([&] {
+		while (!stop.load(std::memory_order_acquire)) {
+			if (!runGatePass())
+				std::this_thread::yield();
+		}
+		while (runGatePass())
+			;
+	});
+	std::thread closer([&] {
+		while (!stop.load(std::memory_order_acquire)) {
+			switch_gpu_bridge_gate_close();
+			std::this_thread::yield();
+		}
+	});
+	for (uint32_t round = 0; round < 120; ++round) {
+		const auto src = token(700 + round, 40);
+		{
+			std::lock_guard<std::mutex> guard(stateMutex);
+			statuses[key(src)] = 0;
+		}
+		switch_gpu_bridge *bridge = nullptr;
+		ASSERT_EQ(switch_gpu_bridge_submit(&src, 1, &bridge), 0);
+		ASSERT_NE(bridge, nullptr);
+		{
+			std::lock_guard<std::mutex> guard(stateMutex);
+			statuses[key(src)] = -5;
+		}
+		switch_gpu_bridge_gate_close();
+		while (switch_gpu_bridge_failed(bridge) == 0)
+			std::this_thread::yield();
+		EXPECT_EQ(switch_gpu_bridge_failed(bridge), -5);
+		finish();
+		EXPECT_EQ(switch_gpu_bridge_status(bridge), -5);
+		switch_gpu_bridge_release(&bridge);
+	}
+	stop.store(true, std::memory_order_release);
+	closer.join();
+	passer.join();
+	EXPECT_EQ(loadGate(), 0u);
 }

@@ -132,3 +132,6 @@ extern "C" bool switch_nvdec_host1x_cancelled(uint32_t, uint32_t)
 {
     return false;
 }
+
+extern "C" void switch_gpu_bridge_gate_close(void)
+{}

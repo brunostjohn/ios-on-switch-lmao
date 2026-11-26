@@ -171,6 +171,7 @@ kernel_driver(
         "SwitchGpuPresentFilter.cpp",
         "SwitchGpuBridge.cpp",
         "SwitchGpuBridgeProducer.cpp",
+        "SwitchGpuBridgeGate.cpp",
         "SwitchGpuBridgeRetire.cpp",
         "SwitchGpuPin.cpp",
         "SwitchGpuSurfaceAccess.cpp",

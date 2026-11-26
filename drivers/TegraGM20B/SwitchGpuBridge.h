@@ -49,14 +49,19 @@ int switch_gpu_bridge_submit_watched(const struct switch_gpu_backing_token *toke
 				     struct switch_gpu_bridge **bridge);
 int switch_gpu_bridge_watch(const struct switch_gpu_bridge *bridge);
 /* 1 when the bridge has no GPU job of its own: its syncpoint is its producer channel's, passed only by increments that
- * follow that channel's drain, and a channel that stops short of them has the host1x consumers queued on it cancelled
- * before the CPU makes the rest (switch_gpu_producer_release, tegra_host1x_syncpt_release_failed). A consumer queued
- * after that release is not cancelled: it must read switch_gpu_bridge_failed under host1x's channel lock before it
- * queues. 0 for a bridge with its own GPU job: a recovered producer's fence or a given-up promise word lets that job
- * pass and raise the syncpoint over unfinished writes, so only switch_gpu_bridge_status or a notify can report the
- * failure, after the fact. A failure dated after the writes reached DRAM (a kill between the increments and the fence)
- * leaves a jobless syncpoint passed over complete writes, and status reports it. Fixed for the bridge's life; no lock. */
+ * follow that channel's drain. Either kind cancels the host1x consumers queued on its syncpoint before a failed
+ * producer's unfinished writes can pass it: a jobless bridge when its channel stopped short of the increments
+ * (switch_gpu_producer_release, tegra_host1x_syncpt_release_failed), one with its own job at its gate
+ * (switch_gpu_bridge_gate_close). A consumer queued after that cancel must find it through switch_gpu_bridge_failed,
+ * read under host1x's channel lock before it queues. A failure dated after the writes reached DRAM (a kill between a
+ * jobless bridge's increments and its fence) leaves the syncpoint passed over complete writes, and status reports it.
+ * Fixed for the bridge's life; no lock. */
 int switch_gpu_bridge_jobless(const struct switch_gpu_bridge *bridge);
+/* Before a producer's word is raised over writes that never came (a kill's forward store, a promise given up or
+ * abandoned, host1x's release of a failed engine's syncpoint), once that producer reads failed: every bridge job with
+ * its own GPU job stops at its gate until the bridge has cancelled the host1x consumers of each one whose producer
+ * failed (SwitchGpuBridgeGate.cpp). Any context, interrupts off included; takes no sleeping lock. */
+void switch_gpu_bridge_gate_close(void);
 /* The bridge's stored failure (<0), else 0. Stored before any release of its syncpoint, so a consumer that reads it under
  * host1x's channel lock (gChannelLock, where queue.lock can't be taken) and queues only on 0 is either queued before a
  * release, which cancels it, or reads the failure. No lock. */

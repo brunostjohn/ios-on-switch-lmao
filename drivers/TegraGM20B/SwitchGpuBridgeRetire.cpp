@@ -175,17 +175,21 @@ void retire(thread_call_param_t, thread_call_param_t)
 		if (!job.producer) {
 			if (!failed && int32_t(completed - job.sequence) < 0)
 				continue;
-			const int source = producers(job);
-			if (!failed && !source) {
-				pendingSources = true;
-				continue;
+			// Preserve a failure already recorded by gatePass (or an abandoned submit), even if a promise
+			// entry later leaves the abandoned ring.
+			if (__atomic_load_n(&job.result, __ATOMIC_ACQUIRE) >= 0) {
+				const int source = producers(job);
+				if (!failed && !source) {
+					pendingSources = true;
+					continue;
+				}
+				__atomic_store_n(&job.result,
+						 failed        ? -5
+						 : source == 1 ? 1
+						 : source < 0  ? source
+							       : -5,
+						 __ATOMIC_RELEASE);
 			}
-			__atomic_store_n(&job.result,
-					 failed        ? -5
-					 : source == 1 ? 1
-					 : source < 0  ? source
-						       : -5,
-					 __ATOMIC_RELEASE);
 		}
 		if (channelFailed) {
 			const int released = tegra_host1x_syncpt_release_failed(

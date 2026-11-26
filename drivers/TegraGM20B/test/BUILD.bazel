@@ -1263,9 +1263,12 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuCachedZero.cpp",
         "//drivers/TegraGM20B:SwitchGpuBacking.cpp",
         "//drivers/TegraGM20B:SwitchGpuBridge.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBridgeGate.cpp",
         "//drivers/TegraGM20B:SwitchGpuBridgeRetire.cpp",
         "//drivers/TegraGM20B:SwitchGpuTimelineSyncpt.cpp",
+        "//drivers/TegraGM20B:SwitchGpuWriterPromise.h",
         "//drivers/TegraGM20B:TegraGM20BDeviceClient.cpp",
+        "//drivers/TegraHost1x:TegraHost1x.cpp",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BReadback.cpp",
         "//drivers/TegraGM20B:TegraGM20BRelayout.cpp",
@@ -2150,6 +2153,7 @@ host_library(
     srcs = [
         "//drivers/TegraGM20B:SwitchGpuBridge.cpp",
         "//drivers/TegraGM20B:SwitchGpuBridgeProducer.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBridgeGate.cpp",
         "//drivers/TegraGM20B:SwitchGpuBridgeRetire.cpp",
     ],
     hdrs = [
@@ -2183,6 +2187,7 @@ host_library(
     srcs = [
         "//drivers/TegraGM20B:SwitchGpuBridge.cpp",
         "//drivers/TegraGM20B:SwitchGpuBridgeProducer.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBridgeGate.cpp",
         "//drivers/TegraGM20B:SwitchGpuBridgeRetire.cpp",
     ],
     hdrs = [

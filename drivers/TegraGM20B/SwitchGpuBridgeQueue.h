@@ -19,6 +19,8 @@ struct switch_gpu_bridge {
 	uint32_t producer;
 	switch_gpu_backing_token covering;
 	bool active, notified, watched;
+	uint32_t pushSyncpoint;  // syncpoint and gate VA the slot's push was written for (slotPush)
+	uint64_t pushGate;
 	int result;
 	void (*completed)(void *, int);
 	void *context;
@@ -50,6 +52,10 @@ int producers(const switch_gpu_bridge &job);
 bool coveringDrained(const switch_gpu_bridge &job, int source, int cover);
 bool anyWaited();
 void armHangCheck(uint64_t ns);
+
+// SwitchGpuBridgeGate.cpp, queue.lock held
+bool gateOpen();
+uint32_t slotPush(switch_gpu_bridge &job, uint32_t slot);
 
 void checkHang(thread_call_param_t, thread_call_param_t);
 void retire(thread_call_param_t, thread_call_param_t);

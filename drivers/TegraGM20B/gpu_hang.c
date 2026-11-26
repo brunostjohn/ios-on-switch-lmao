@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Channel progress, hang detection, client fault isolation and recovery.
 #include "gpu_internal.h"
+#include "SwitchGpuBridge.h"
 #include "../../kits/SwitchLinux/SwitchLinux.h"
 
 /* The rule's bookkeeping at a check, every TGM_HANG_NS: the next check's interval, and in *stalled the time the channel
@@ -149,6 +150,8 @@ int tgm_chan_killed(struct nvif_event *event, void *repv, u32 repc)
 	first = tgm_kill_first(chan->faulted, chan->fault_seqno, READ_ONCE(*chan->fence_cpu));
 	switch_gpu_timeline_failed(chan->timeline, first - 1, chan->critical);
 	tgm_fence_kill_record(chan->fence_cpu, first, chan->submitted, chan->error);
+	/* Timeline reads failed: close the bridge gate before raising fence_cpu so no bridge job passes over the cut writes. */
+	switch_gpu_bridge_gate_close();
 	__atomic_store_n(chan->fence_cpu, chan->submitted, __ATOMIC_RELEASE);
 	__asm__ volatile("dsb sy" ::: "memory");
 	present_watch_fenced(chan, 1);

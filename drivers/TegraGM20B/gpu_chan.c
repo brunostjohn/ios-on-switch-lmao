@@ -591,6 +591,14 @@ int tgm_fence_kernel(unsigned int which, volatile uint32_t **va, uint64_t *page_
 	return 0;
 }
 
+uint64_t tgm_fence_kernel_va(const struct tgm_vm *vm, unsigned int which)
+{
+	if (!vm || !vm->fences_va || which >= TGM_FENCE_KERNEL_CHANNELS)
+		return 0;
+	return vm->fences_va + TGM_FENCE_USER_PAGES * TGM_FENCE_SLOT +
+	       which * sizeof(struct TegraGM20BAbiFence);
+}
+
 /* Every address space maps the whole fence pool read-only (tgm_fences_map, from tgm_vm_new), as the present's does, so a
  * job's semaphore acquires on other channels' fence words need no CPU wait. */
 static DEFINE_MUTEX(fences_mem_lock);

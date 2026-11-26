@@ -492,6 +492,8 @@ enum tgm_fence_kernel_channel {
 	TGM_FENCE_KERNEL_CACHED_ZERO,
 	/* no channel: the pack image's stream raises its word to the chunks landed (SwitchGpuPackImage.cpp) */
 	TGM_FENCE_KERNEL_PACK,
+	/* no channel: the word the GPU bridge's jobs acquire (SwitchGpuBridgeGate.cpp) */
+	TGM_FENCE_KERNEL_BRIDGE_GATE,
 	TGM_FENCE_KERNEL_CHANNELS,
 };
 
@@ -504,6 +506,9 @@ void tgm_acquire_recover_failed(const char *why);
 
 int tgm_fence_kernel(unsigned int which, volatile uint32_t **va, uint64_t *page_pa,
 		     uint32_t *offset);
+/* That fence's GPU address in `vm`'s view of the fence range (every address space maps it read-only); 0 when `vm` maps
+ * none. */
+uint64_t tgm_fence_kernel_va(const struct tgm_vm *vm, unsigned int which);
 /* A channel's fence word is a TegraGM20BAbiFence: its kill record zeroed, for a channel about to be made on it. */
 void tgm_fence_kill_clear(volatile uint32_t *fence);
 
