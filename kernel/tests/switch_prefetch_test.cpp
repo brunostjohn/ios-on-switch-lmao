@@ -1036,6 +1036,8 @@ TEST(SwitchPrefetchSource, ATierZeroWaiterRaisesTheReplaysBusyPages)
         EXPECT_THAT(below, HasSubstr("cur_tier == THROTTLE_LEVEL_TIER0"));
         EXPECT_THAT(below, HasSubstr("upl->upl_creator != current_thread()"));
         EXPECT_THAT(below, HasSubstr("switch_vm_prefetch_is_replay_thread(upl->upl_creator)"));
+        EXPECT_THAT(below, HasSubstr("(upl->flags & UPL_DECMP_REQ) == 0"));
+        EXPECT_LT(below.find("UPL_DECMP_REQ"), below.find("switch_vm_prefetch_is_replay_thread(upl->upl_creator)"));
         const std::string inversion = bodyOf(object, "vm_page_handle_prio_inversion(vm_object_t o, vm_page_t m)");
         EXPECT_THAT(inversion, HasSubstr("(upl->upl_priority <= cur_tier && !switch_upl_below_waiter(upl, cur_tier))"));
         EXPECT_THAT(object, Not(HasSubstr("upl->upl_priority = THROTTLE_LEVEL")));

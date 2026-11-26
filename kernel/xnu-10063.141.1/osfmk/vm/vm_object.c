@@ -8001,12 +8001,15 @@ out:
  * (NativeSwitchBlock SwitchSdPick.h switchSdClassOf), so a tier-0 thread sleeping on one of its busy pages raises it as
  * it would a lower tier's. The UPL keeps priority 0: spec_strategy issues a cluster I/O at its UPL's priority, and tier
  * 1 would hold the replay in throttle_lowpri_io. Compares thread pointers only, under the object lock the caller holds.
+ * A decmpfs UPL is left out: its raise (vm_decmp_upl_reprioritize) allocates with Z_WAITOK under that object lock, and
+ * most of the replay's files are compressed. The card's 20 ms replay age bounds those waits instead.
  */
 static bool
 switch_upl_below_waiter(upl_t upl, int cur_tier)
 {
-	return cur_tier == THROTTLE_LEVEL_TIER0 && upl->upl_creator != current_thread() &&
-	       switch_vm_prefetch_is_replay_thread != NULL && switch_vm_prefetch_is_replay_thread(upl->upl_creator);
+	return cur_tier == THROTTLE_LEVEL_TIER0 && (upl->flags & UPL_DECMP_REQ) == 0 &&
+	       upl->upl_creator != current_thread() && switch_vm_prefetch_is_replay_thread != NULL &&
+	       switch_vm_prefetch_is_replay_thread(upl->upl_creator);
 }
 
 void
