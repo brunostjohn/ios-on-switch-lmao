@@ -251,15 +251,54 @@ bool ResourceSet::registerLocked(Kernel &k, const char *when)
 bool ResourceSet::add(Kernel &k, std::initializer_list<Candidate> candidates, bool always)
 {
     std::lock_guard<gm20b::Mutex> l(lock_);
+    return addLocked(k, candidates.begin(), candidates.end(), always, "for a new member");
+}
+
+void ResourceSet::addLater(std::initializer_list<Candidate> candidates)
+{
+    std::lock_guard<gm20b::Mutex> l(lock_);
+    for (const Candidate &c : candidates)
+        pending_.push_back({*c.bo, c.access});
+    hasPending_.store(true, std::memory_order_release);
+}
+
+void ResourceSet::addPending(Kernel &k)
+{
+    if (!hasPending_.load(std::memory_order_acquire))
+        return;
+    std::lock_guard<gm20b::Mutex> l(lock_);
+    hasPending_.store(false, std::memory_order_relaxed);
+    if (pending_.empty())
+        return;
+    std::vector<Candidate> candidates;
+    candidates.reserve(pending_.size());
+    for (const auto &[bo, access] : pending_)
+        candidates.push_back({&bo, access});
+    addLocked(k, candidates.data(), candidates.data() + candidates.size(), false, "for an unparked member");
+    pending_.clear();
+}
+
+// A BO that leaves before the next begin is not added then
+void ResourceSet::dropPendingLocked(uint64_t handle)
+{
+    pending_.erase(std::remove_if(pending_.begin(), pending_.end(),
+                                  [handle](const std::pair<Bo, uint32_t> &p) {
+                                      return p.first.handle == handle;
+                                  }),
+                   pending_.end());
+}
+
+bool ResourceSet::addLocked(Kernel &k, const Candidate *first, const Candidate *last, bool always, const char *when)
+{
     std::vector<uint64_t> joining;
-    for (const Candidate &c : candidates)
+    for (const Candidate *c = first; c != last; ++c)
         if (std::none_of(members_.begin(), members_.end(), [&](const SetMember &m) {
-                return m.handle == c.bo->handle;
+                return m.handle == c->bo->handle;
             }))
-            joining.push_back(c.bo->handle);
-    for (const Candidate &c : candidates)
-        insertLocked(*c.bo, c.access, always);
-    if (!registerLocked(k, "for a new member")) {
+            joining.push_back(c->bo->handle);
+    for (const Candidate *c = first; c != last; ++c)
+        insertLocked(*c->bo, c->access, always);
+    if (!registerLocked(k, when)) {
         // Only the BOs this add brought take their members out. A candidate of a BO that was a member already (an arena's
         // view alias) stays: the kernel's set still holds that BO, at every VA, until a free or a refusal takes it out.
         members_.erase(std::remove_if(members_.begin(), members_.end(),
@@ -270,9 +309,9 @@ bool ResourceSet::add(Kernel &k, std::initializer_list<Candidate> candidates, bo
         version_.fetch_add(1, std::memory_order_release);
         return false;
     }
-    for (const Candidate &c : candidates)
+    for (const Candidate *c = first; c != last; ++c)
         if (std::none_of(members_.begin(), members_.end(), [&](const SetMember &m) {
-                return m.handle == c.bo->handle;
+                return m.handle == c->bo->handle;
             }))
             return false;
     return true;
@@ -298,6 +337,7 @@ void ResourceSet::remove(Kernel &k, const std::vector<uint64_t> &handles)
     std::lock_guard<gm20b::Mutex> l(lock_);
     bool changed = false;
     for (uint64_t handle : handles) {
+        dropPendingLocked(handle);
         if (eraseLocked(handle)) {
             ++removals_;
             changed = true;
@@ -321,6 +361,7 @@ void ResourceSet::remove(Kernel &k, const std::vector<uint64_t> &handles)
 bool ResourceSet::leaving(uint64_t handle)
 {
     std::lock_guard<gm20b::Mutex> l(lock_);
+    dropPendingLocked(handle);
     if (!eraseLocked(handle))
         return false;
     ++removals_;
