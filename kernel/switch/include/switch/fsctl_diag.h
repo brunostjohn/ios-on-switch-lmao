@@ -32,7 +32,10 @@ static inline void switch_fsctl_failed(__unused struct vnode *vp, __unused unsig
 #endif
 
 #define SWITCH_FSCTL_MARK_PURGEABLE 111u /* APFS's 'J' 111: mark a file or directory purgeable */
-#define SWITCH_FSCTL_SET_PURGEABLE  68u  /* APFS's 'J' 68: SplashBoard's snapshot marks (refused 22 on 25 Nov) */
+/* APFS's 'J' 68 (0xc0084a44, 8 bytes in and out): no header in the tree names it. On 24B119 SplashBoard sends it on its
+ * snapshot files (refused 22), and OTACrashCopier on the DiagnosticReports/Retired directory (refused 1). What it does
+ * on 21H461 is unseen. */
+#define SWITCH_FSCTL_SET_PURGEABLE  68u
 #define SWITCH_FSCTL_MARK_LINES     128u /* boot 21 refused 106 marks */
 #define SWITCH_FSCTL_OTHER_LINES    32u
 
@@ -46,9 +49,11 @@ enum switch_fsctl_mark {
     SWITCH_FSCTL_MARK_KINDS,
 };
 
-static inline int switch_fsctl_is_mark(unsigned long cmd)
+/* A purgeable mark counted for kern.switch_fsctl_marks: every 'J' 111, and 'J' 68 on a regular file only, where it
+ * marks a snapshot; on a directory it is another caller's (OTACrashCopier's) */
+static inline int switch_fsctl_is_mark(unsigned long cmd, int regular)
 {
-    return (cmd & 0xff) == SWITCH_FSCTL_MARK_PURGEABLE || (cmd & 0xff) == SWITCH_FSCTL_SET_PURGEABLE;
+    return (cmd & 0xff) == SWITCH_FSCTL_MARK_PURGEABLE || ((cmd & 0xff) == SWITCH_FSCTL_SET_PURGEABLE && regular);
 }
 
 static inline enum switch_fsctl_mark switch_fsctl_mark_for(int error, int compressed)
