@@ -146,6 +146,11 @@ void roomSignaled(switch_host1x_fence *fence, int)
 // Lock held. A fence its callback is already on the way for is left to it.
 void dropJobs(Channel &c)
 {
+#if SWITCH_HOST1X_STATS
+    c.arena.forEachFenced([](uint32_t syncpt, uint32_t) {
+        switch_host1x_syncpt_dropped(syncpt);
+    });
+#endif
     c.arena.drop();
     if (c.roomArmed && switch_host1x_fence_remove(&c.room))
         c.roomArmed = false;

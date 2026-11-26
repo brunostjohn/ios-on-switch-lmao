@@ -101,9 +101,10 @@ int tegra_host1x_syncpt_alloc_named(uint32_t *id, const char *caller);
 #define tegra_host1x_syncpt_alloc(id) tegra_host1x_syncpt_alloc_named((id), __func__)
 // Back to the pool; the pool hands it out again only after every other free one. Thread context. The caller's contract,
 // which the driver cannot check, since the value is never reset and a new owner's increments would satisfy an old WAIT:
-// every job that named `id` has retired first: a host1x stream's INCR_SYNCPT or WAIT_SYNCPT, and a GPU channel's
-// SYNCPOINTB increment or wait. An id not handed out now, or one a CPU fence or waiter still names, panics; so does, on
-// debug kernels, one whose value is short of a threshold a host1x channel's fenced job was given.
+// every job that named `id` has retired first (or was dropped by its channel's teardown and restart): a host1x
+// stream's INCR_SYNCPT or WAIT_SYNCPT, and a GPU channel's SYNCPOINTB increment or wait. An id not handed out now, or one
+// a CPU fence or waiter still names, panics; so does, on debug kernels, one whose value is short of a threshold a host1x
+// channel's fenced job was given and still holds.
 void tegra_host1x_syncpt_free(uint32_t id);
 uint32_t tegra_host1x_syncpt_read(uint32_t id);
 // Only after the exclusive producer stopped and retained completion records say failed; this never publishes success.

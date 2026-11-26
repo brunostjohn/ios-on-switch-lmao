@@ -25,6 +25,8 @@ void switch_host1x_channels_stop();
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 // A fenced job takes syncpoint `id` to `threshold` (TegraHost1x.cpp's free check). Submit lock held.
 void switch_host1x_syncpt_owed(uint32_t id, uint32_t threshold);
+// A reset or teardown dropped a fenced job on `id`: no channel will take it further. Submit lock held.
+void switch_host1x_syncpt_dropped(uint32_t id);
 #endif
 
 // Under the submit lock, host1x up, once a failed producer's cancellation is stored: the display stream that waits on

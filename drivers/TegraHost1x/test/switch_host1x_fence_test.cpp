@@ -592,3 +592,16 @@ TEST_F(Host1xFence, AFreeWhileAChannelsJobStillOwesAnIncrementPanics)
     value(id) = 6;
     tegra_host1x_syncpt_free(id);
 }
+
+TEST_F(Host1xFence, AFreeAfterARestartDroppedTheOwingJobIsNoPanic)
+{
+    uint32_t id = 0;
+    ASSERT_EQ(tegra_host1x_syncpt_alloc(&id), TEGRA_HOST1X_OK);
+    value(id) = 4;
+    const uint32_t job[2] = {tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 0, 0),
+                             tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, id)};
+    ASSERT_EQ(switch_host1x_job_copy(TEGRA_HOST1X_CHANNEL_NVJPG, job, 2, id, 6), TEGRA_HOST1X_OK);
+    tegra_host1x_channel_teardown(TEGRA_HOST1X_CHANNEL_NVJPG);
+    tegra_host1x_channel_restart(TEGRA_HOST1X_CHANNEL_NVJPG);
+    tegra_host1x_syncpt_free(id);
+}

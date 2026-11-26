@@ -253,6 +253,13 @@ void switch_host1x_syncpt_owed(uint32_t id, uint32_t threshold)
     if (id < kSyncpts && static_cast<int32_t>(threshold - gOwed[id]) > 0)
         gOwed[id] = threshold;
 }
+
+// Another channel's job on the same id is forgotten with it: a check missed, never a false panic.
+void switch_host1x_syncpt_dropped(uint32_t id)
+{
+    if (id < kSyncpts)
+        gOwed[id] = tegra_host1x_syncpt_read(id);
+}
 #endif
 
 extern "C" void tegra_host1x_syncpt_free(uint32_t id)
