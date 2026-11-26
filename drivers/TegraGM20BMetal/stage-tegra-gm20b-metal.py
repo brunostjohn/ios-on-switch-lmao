@@ -195,8 +195,8 @@ def _copy_all(data: Path, wanted: Wanted, changed: list[str], report: Callable[[
 
 
 def _data_folder(data: Path) -> Path:
-    """The Data volume's own folder: Switch, or while only it exists the former one (tools/install/renamed.py)."""
-    folder = data / ICON_CACHE_RECORD.split('/')[0]
+    """Return the Data volume's own folder: Switch, or the former one while only it exists (tools/install/renamed.py)."""
+    folder = data / ICON_CACHE_RECORD.split('/', 1)[0]
     if folder.exists():
         return folder
 
