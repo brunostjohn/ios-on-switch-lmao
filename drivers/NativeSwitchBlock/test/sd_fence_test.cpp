@@ -67,6 +67,7 @@ TEST(SdFence, SynchronizesEndOnlyAfterEveryEarlierWrite)
             EXPECT_TRUE(result.fenced) << "seed " << seed << (anywhere ? " gathered" : " merged behind");
             EXPECT_TRUE(result.ordered) << "seed " << seed;
             EXPECT_TRUE(result.writesFirst) << "seed " << seed;
+            EXPECT_TRUE(result.intact) << "seed " << seed;
             EXPECT_EQ(result.syncsEnded, 30u) << "seed " << seed;
             ended += result.syncsEnded;
             outOfOrder += result.outOfOrderWrites;

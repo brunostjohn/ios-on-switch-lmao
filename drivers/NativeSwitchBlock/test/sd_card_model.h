@@ -104,6 +104,7 @@ struct Result {
     bool ordered = true;      // no read started while an older overlapping write was still queued, and the reverse
     bool writesFirst = true;  // no write chain started while an older write of either window was still queued
     bool fenced = true;       // no synchronize ended before a write submitted ahead of it completed
+    bool intact = true;       // after every pick the queue runs head to tail, depth requests, none of them chained
     unsigned syncsEnded = 0;
     unsigned outOfOrderWrites = 0;  // write chains that joined a write past an older one of its window still queued
 };
@@ -346,27 +347,40 @@ private:
     }
 
     // pickLocked's fallback: `first` and the requests right behind it that continue it on the card, in its window and
-    // direction; a passing read's chain must not overlap anything it passes either.
-    uint32_t markBehind(Request *first) const
+    // direction (a passing read's chain must not overlap anything it passes either), unlinked by `prev`, first's
+    // predecessor, as the driver does. Returns the chain's count; `first` heads it.
+    uint32_t unlinkBehind(Request *first, Request *prev)
     {
         const auto overlapsOlder = [&](const Request *later) {
-            for (const Request *older = head; first != head && older != first; older = older->next) {
+            for (const Request *older = head; prev && older != first; older = older->next) {
                 if (switchOverlaps(older, later))
                     return true;
             }
             return false;
         };
-        first->chained = true;
+        Request *last = first;
         uint32_t count = 1;
         uint32_t sectors = first->sectors;
-        for (Request *last = first; count < kMaxChain && last->next && last->next->shared == first->shared &&
-                                    last->next->write == first->write && last->next->lba == last->lba + last->sectors &&
-                                    sectors + last->next->sectors <= kMaxSectors && !overlapsOlder(last->next);
-             last = last->next) {
-            last->next->chained = true;
-            sectors += last->next->sectors;
+        while (count < kMaxChain && last->next && last->next->shared == first->shared &&
+               last->next->write == first->write && last->next->lba == last->lba + last->sectors &&
+               sectors + last->next->sectors <= kMaxSectors && !overlapsOlder(last->next)) {
+            last = last->next;
+            sectors += last->sectors;
             ++count;
         }
+        for (const Request *r = first; r != last->next; r = r->next) {
+            for (const Request *older = head; older != first; older = older->next) {
+                if ((older->write || r->write) && switchOverlaps(older, r))
+                    result.ordered = false;
+            }
+        }
+        if (prev)
+            prev->next = last->next;
+        else
+            head = last->next;
+        if (tail == last)
+            tail = prev;
+        last->next = nullptr;
         return count;
     }
 
@@ -381,27 +395,33 @@ private:
         } else {
             uint64_t awaitedBeforeNs[2];
             awaited(awaitedBeforeNs);
-            first = switchSdPick(head, awaitedBeforeNs, now, &state).first;
+            const SwitchSdPicked<Request> picked = switchSdPick(head, awaitedBeforeNs, now, &state);
+            first = picked.first;
+            prev = picked.prev;
         }
-        (void)prev;
         for (const Request *older = head; first->write && older != first; older = older->next)
             result.writesFirst = result.writesFirst && !older->write;
         uint64_t start = 0;
         uint32_t sectors = 0;
         uint32_t count = 0;
+        Request *chain = nullptr;
         if (!anywhere) {
-            count = markBehind(first);
-        } else if (first->write) {
-            count = switchGatherWrites(head, first, kMaxSectors, kMaxChain, kMaxChain, &start, &sectors, nullptr, 0,
-                                       rule == Rule::kNew && waiting(first->shared));
+            count = unlinkBehind(first, prev);
+            chain = first;
         } else {
-            count = switchGatherReads(head, first, kMaxSectors, kMaxChain, kMaxChain, &start, &sectors);
+            if (first->write) {
+                count = switchGatherWrites(head, first, kMaxSectors, kMaxChain, kMaxChain, &start, &sectors, nullptr,
+                                           0, rule == Rule::kNew && waiting(first->shared));
+            } else {
+                count = switchGatherReads(head, first, kMaxSectors, kMaxChain, kMaxChain, &start, &sectors);
+            }
+            checkOrder();
+            if (first->write)
+                countOutOfOrder(first);
+            chain = switchUnlinkChain(head, tail, count);
         }
-        checkOrder();
-        if (first->write)
-            countOutOfOrder(first);
-        Request *chain = switchUnlinkChain(head, tail, count);
         depth -= count;
+        checkQueue();
         std::vector<Request *> out;
         out.reserve(count);
         for (Request *r = chain; r; r = r->next) {
@@ -425,6 +445,19 @@ private:
                 return;
             }
         }
+    }
+
+    void checkQueue()
+    {
+        size_t n = 0;
+        const Request *last = nullptr;
+        for (const Request *r = head; r; r = r->next, ++n) {
+            if (r->chained)
+                result.intact = false;
+            last = r;
+        }
+        if (n != depth || last != tail)
+            result.intact = false;
     }
 
     // Every marked member: no older unmarked request still queued that it must not pass.

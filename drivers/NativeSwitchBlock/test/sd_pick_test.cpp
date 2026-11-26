@@ -20,6 +20,7 @@ Result run(Rule rule, const std::vector<Arrival> &background, bool syncWaiting =
     const Result result = card.run();
     EXPECT_TRUE(result.ordered);
     EXPECT_TRUE(result.writesFirst);
+    EXPECT_TRUE(result.intact);
     return result;
 }
 
