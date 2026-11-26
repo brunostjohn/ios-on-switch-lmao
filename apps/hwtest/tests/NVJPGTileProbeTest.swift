@@ -11,7 +11,8 @@ import Metal
 /// debug kernel. route: the decode takes the copy engine into the blocks (TegraNVJPGRoute.h: the T210's NVJPG writes
 /// rows), route_taken= the route counts' change, and the CPU read is the picture (route_wrong= bytes past
 /// JPEGSurfaceDecode.tolerance). The tile probes, reported and not judged: NVJPG told tile_mode 1 or 2 and block height
-/// codes 3 to 5 writes the destination's blocks itself; m<mode>_g<code>= the layout its bytes match
+/// codes 2 to 4 (16-GOB blocks are code 4, or code 3 if the decoder codes as the encoder does) writes the
+/// destination's blocks itself; m<mode>_g<code>= the layout its bytes match
 /// (JPEGSurfaceDecode.explained: rows, y<n> GM20B's Tegra GOBs, fermi_y<n> NIL's Fermi GOBs, - none, exact when
 /// m<mode>_g<code>_wrong=0), which settles whether any tiling setup writes GM20B's layout natively.
 struct NVJPGTileProbeTest: HWTest {
@@ -21,7 +22,7 @@ struct NVJPGTileProbeTest: HWTest {
     var timeout: TimeInterval { 60 }
 
     static let size = 256
-    static let probes: [(mode: UInt32, gob: UInt32)] = [(1, 3), (1, 4), (1, 5), (2, 3), (2, 4), (2, 5)]
+    static let probes: [(mode: UInt32, gob: UInt32)] = [(1, 2), (1, 3), (1, 4), (2, 2), (2, 3), (2, 4)]
 
     func run(_ context: TestContext) async throws -> Outcome {
         guard case .success(let first) = JPEGRoute.decodes() else {

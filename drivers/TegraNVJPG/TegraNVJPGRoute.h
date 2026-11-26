@@ -70,7 +70,9 @@ static inline const char *tegra_nvjpg_route(const TegraNVJPGDecodeRequest *r, co
 // HW Test image.nvjpg_tile_probe's decode (debug kernels): the picture whole into the blocks GM20B laid the destination
 // out in, from its first byte, with `tileMode` and `gob` written to the setup's tile_mode and block_linear_height
 // unchanged, which the T210's firmware passes to PDMA_PIC_INFO1. Told tile_mode 2 the engine wrote rows
-// (TegraNVJPGJpeg.h); this settles every mode and block height on the device. NULL with *route, or why not.
+// (TegraNVJPGJpeg.h); this settles every mode and block height on the device. The code's GOBs a block are 2^gob, or
+// 2^(gob + 1) if the decoder takes the encoder's gobHeight coding (nvjpg_drv.h): the block rows the larger reaches lie
+// inside the destination. NULL with *route, or why not.
 static inline const char *tegra_nvjpg_route_tile_probe(const TegraNVJPGDecodeRequest *r, uint64_t length,
                                                        const TegraNVJPGDestinationLayout *l, uint32_t tileMode,
                                                        uint32_t gob, TegraNVJPGPlan *p, nvjpg_dec_drv_pic_setup_s *s,
@@ -81,7 +83,8 @@ static inline const char *tegra_nvjpg_route_tile_probe(const TegraNVJPGDecodeReq
     if (p->repack != TEGRA_NVJPG_REPACK_NONE || p->planes != 1 || p->fillChroma || r->x_offset || r->y_offset ||
         tileMode > 3 || gob > 7)
         return "a tile probe of more than one plane, placed, or of a tiling the setup has no field for";
-    const uint64_t blockRows = 8ull << l->layout.y_log2;
+    const uint32_t told = gob + 1 > l->layout.y_log2 ? gob + 1 : l->layout.y_log2;
+    const uint64_t blockRows = 8ull << told;
     const uint64_t end = (p->extent.rows[0] + blockRows - 1) / blockRows * blockRows * l->layout.row_bytes;
     if (p->extent.rowBytes[0] > l->layout.row_bytes || end > length)
         return "a tile probe whose block rows run past the destination";
