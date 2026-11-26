@@ -264,7 +264,8 @@ TEST(SdPick, ABlockedRequestLendsItsRankToWhatHoldsItBack)
     q[4].klass = 2;
     EXPECT_EQ(switchSdPick(q.data(), kNoSync, kMs, &state).first, q.data());
     uint32_t reads[4] = {0, 3, 1, 0};
-    EXPECT_EQ(switchSdPromote(q.data(), 164, 4, 0, reads), 1u);  // the page-in's part past the write
+    uint32_t replay = 0;
+    EXPECT_EQ(switchSdPromote(q.data(), 164, 4, 0, reads, replay), 1u);  // the page-in's part past the write
     EXPECT_EQ(switchSdPick(q.data(), kNoSync, kMs, &state).first, &q[1]);
 
     std::vector<Request> w(3);
@@ -339,14 +340,49 @@ TEST(SdPick, OnlyReplayReadsAge)
     q[1].write = true;
     q[2].queuedNs = kSwitchSdReplayAgeNs;
     uint32_t reads[kSwitchSdPickClasses] = {0, 2, 0, 0};
-    EXPECT_EQ(switchSdAgeReplay(&q[0], kSwitchSdReplayAgeNs, reads), 1u);
+    uint32_t replay = 2;
+    EXPECT_EQ(switchSdAgeReplay(&q[0], kSwitchSdReplayAgeNs, reads, replay), 1u);
     EXPECT_EQ(q[0].klass, 0u);
     EXPECT_EQ(q[1].klass, kSwitchSdReplayClass);
     EXPECT_EQ(q[2].klass, kSwitchSdReplayClass);
     EXPECT_EQ(reads[0], 1u);
     EXPECT_EQ(reads[1], 1u);
-    uint32_t none[kSwitchSdPickClasses] = {};
-    EXPECT_EQ(switchSdAgeReplay(&q[2], 10 * kSwitchSdReplayAgeNs, none), 0u);  // no class-1 read: no walk
+    EXPECT_EQ(replay, 1u);
+}
+
+// After the boot, class 1 still holds tier-1 and cryptex reads, and queuedReads[1] counts them. The ager's walk is
+// gated on the replay count alone: the queued read here is flagged so that a walk would show by moving it.
+TEST(SdPick, TheAgerWalksOnlyWhileAReplayReadIsCounted)
+{
+    Request queued = {};
+    queued.klass = kSwitchSdReplayClass;
+    queued.replay = true;
+    uint32_t reads[kSwitchSdPickClasses] = {0, 1, 0, 0};
+    uint32_t replay = 0;
+    EXPECT_EQ(switchSdAgeReplay(&queued, 10 * kSwitchSdReplayAgeNs, reads, replay), 0u);
+    EXPECT_EQ(queued.klass, kSwitchSdReplayClass);
+}
+
+// A raise to class 0 takes a replay read out of the ager's count; a raise to class 1 leaves it there.
+TEST(SdPick, PromotingAReplayReadToClassZeroLeavesTheAgerNothingToCount)
+{
+    std::vector<Request> q(2);
+    for (size_t i = 0; i < q.size(); ++i) {
+        q[i] = {};
+        q[i].next = i + 1 < q.size() ? &q[i + 1] : nullptr;
+        q[i].lba = 100 * i;
+        q[i].sectors = 8;
+        q[i].replay = true;
+    }
+    q[0].klass = 2;
+    q[1].klass = kSwitchSdReplayClass;
+    uint32_t reads[kSwitchSdPickClasses] = {0, 1, 1, 0};
+    uint32_t replay = 2;
+    EXPECT_EQ(switchSdPromote(q.data(), 0, 8, 1, reads, replay), 1u);
+    EXPECT_EQ(replay, 2u);
+    EXPECT_EQ(switchSdPromote(q.data(), 0, 200, 0, reads, replay), 2u);
+    EXPECT_EQ(replay, 0u);
+    EXPECT_EQ(reads[0], 2u);
 }
 
 TEST(SdPick, PromoteRaisesOnly)
@@ -356,14 +392,15 @@ TEST(SdPick, PromoteRaisesOnly)
     q[1] = {&q[2], 64, 64, 1, true, false, 0, 1, false, 0};
     q[2] = {nullptr, 200, 8, 0, false, false, 0, 2, false, 0};
     uint32_t reads[4] = {1, 0, 0, 1};
-    EXPECT_EQ(switchSdPromote(q.data(), 32, 300, 1, reads), 1u);
+    uint32_t replay = 0;
+    EXPECT_EQ(switchSdPromote(q.data(), 32, 300, 1, reads, replay), 1u);
     EXPECT_EQ(q[0].klass, 1);
     EXPECT_EQ(q[1].klass, 1);
     EXPECT_EQ(q[2].klass, 0);
     EXPECT_EQ(reads[0], 1u);
     EXPECT_EQ(reads[1], 1u);
     EXPECT_EQ(reads[3], 0u);
-    EXPECT_EQ(switchSdPromote(q.data(), 0, 1000, 0, reads), 2u);
+    EXPECT_EQ(switchSdPromote(q.data(), 0, 1000, 0, reads, replay), 2u);
     EXPECT_EQ(reads[0], 2u);
     EXPECT_EQ(reads[1], 0u);
 }
@@ -374,6 +411,7 @@ TEST(SdPick, AnEmptyExtentRaisesNothing)
     std::vector<Request> q(1);
     q[0] = {nullptr, 100, 64, 3, false, false, 0, 0, false, 0};
     uint32_t reads[4] = {0, 0, 0, 1};
-    EXPECT_EQ(switchSdPromote(q.data(), 120, 0, 0, reads), 0u);
+    uint32_t replay = 0;
+    EXPECT_EQ(switchSdPromote(q.data(), 120, 0, 0, reads, replay), 0u);
     EXPECT_EQ(q[0].klass, 3);
 }

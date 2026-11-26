@@ -620,6 +620,7 @@ class NativeSwitchBlock : public IOService {
     unsigned chainsSinceUnmap = 0;         // under queueLock: chains picked while a discard waited
     uint32_t queued = 0;                   // requests waiting, under queueLock
     uint32_t queuedReads[kClasses] = {};   // r6-lows: reads waiting per class, under queueLock
+    uint32_t queuedReplay = 0;             // queued replay reads the ager may move (switchSdAgeable), under queueLock
     ClassWait waits[kClasses] = {};        // r6-lows: per class since the last throughput line, under queueLock
     uint64_t passed = 0, passedTotal = 0;  // r6-lows: reads taken before older requests (this line, since boot)
     SwitchSdPickState pickState = {};      // under queueLock
@@ -1555,6 +1556,8 @@ void NativeSwitchBlock::enqueueLocked(Request *request)
         stats.maxQueued = queued;
     if (!request->write)
         ++queuedReads[request->klass];
+    if (switchSdAgeable(request))
+        ++queuedReplay;
     if (!stats.firstNs)
         stats.firstNs = statsLastNs = request->queuedNs;
     __atomic_fetch_add(&submitted, 1, __ATOMIC_RELAXED);
@@ -1654,7 +1657,8 @@ void NativeSwitchBlock::promote(const SwitchSdWindow *window, const IOBlockStora
     uint32_t raised = 0;
     for (uint32_t i = 0; i < count; ++i)
         raised +=
-            switchSdPromote(head, window->first + extents[i].blockStart, extents[i].blockCount, klass, queuedReads);
+            switchSdPromote(head, window->first + extents[i].blockStart, extents[i].blockCount, klass, queuedReads,
+                            queuedReplay);
 #if DEVELOPMENT || DEBUG
     ++(cryptex ? cryptexRaiseCalls : xnuRaiseCalls);
     (cryptex ? cryptexRaised : xnuRaised) += raised;
@@ -2613,7 +2617,7 @@ Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCo
     const uint64_t pickNs = switch_now_ns();
     const uint64_t awaitedBeforeNs[2] = {writes(windowOf(false)).awaitedBeforeNs(),
                                          writes(windowOf(true)).awaitedBeforeNs()};
-    switchSdAgeReplay(head, pickNs, queuedReads);
+    switchSdAgeReplay(head, pickNs, queuedReads, queuedReplay);
     const SwitchSdPicked<Request> picked = switchSdPick(head, awaitedBeforeNs, pickNs, &pickState);
     Request *const prev = picked.prev;
     Request *first = picked.first;
@@ -2706,6 +2710,8 @@ void NativeSwitchBlock::takenLocked(Request *first, uint32_t count, uint64_t pic
     for (const Request *r = first; r; r = r->next) {
         if (!r->write)
             --queuedReads[r->klass];
+        if (switchSdAgeable(r))
+            --queuedReplay;
         ClassWait &wait = waits[r->klass];
         const uint64_t waited = pickNs > r->queuedNs ? pickNs - r->queuedNs : 0;
 #if DEVELOPMENT || DEBUG
@@ -4191,6 +4197,7 @@ Request *NativeSwitchBlock::drainQueueLocked()
         queued = 0;
         for (unsigned c = 0; c < kClasses; ++c)
             queuedReads[c] = 0;
+        queuedReplay = 0;
         uint32_t rootAbandoned = 0, filesAbandoned = 0;
         for (const Request *r = abandoned; r; r = r->next) {
             if (r->write)

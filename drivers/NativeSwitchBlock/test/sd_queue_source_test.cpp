@@ -100,8 +100,12 @@ TEST(SdQueueSource, ReplayReadsAreKnownByTheKernelsReplayThread)
     EXPECT_LT(Index(io, "switchSdClassOf("), Index(io, "owner->submit(spec)"));
     EXPECT_TRUE(Search(io, R"(shared,\s*replay,\s*\*completion,)"));
     const std::string pick = body("Request *NativeSwitchBlock::pickLocked(");
-    EXPECT_LT(Index(pick, "switchSdAgeReplay(head, pickNs, queuedReads);"), Index(pick, "switchSdPick("));
+    EXPECT_LT(Index(pick, "switchSdAgeReplay(head, pickNs, queuedReads, queuedReplay);"), Index(pick, "switchSdPick("));
     EXPECT_THAT(driver(), Not(HasSubstr("gPrefetchThread")));
+
+    EXPECT_THAT(body("void NativeSwitchBlock::enqueueLocked("), HasSubstr("if (switchSdAgeable(request))\n        ++queuedReplay;"));
+    EXPECT_THAT(body("void NativeSwitchBlock::takenLocked("), HasSubstr("if (switchSdAgeable(r))\n            --queuedReplay;"));
+    EXPECT_THAT(body("Request *NativeSwitchBlock::drainQueueLocked("), HasSubstr("queuedReplay = 0;"));
 }
 
 // r14-sdcq: a read chain's gaps go to the sink and nowhere else; a write chain never has one.

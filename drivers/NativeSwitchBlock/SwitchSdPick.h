@@ -123,28 +123,39 @@ inline uint8_t switchSdClassOf(uint8_t asked, bool replay)
     return replay && asked < kSwitchSdReplayClass ? kSwitchSdReplayClass : asked;
 }
 
-// Puts each replay read queued for kSwitchSdReplayAgeNs or more back in class 0, keeping queuedReads (reads only) in
-// step. Returns how many it moved. No walk while the replay class holds no read, which is every pick after the boot.
+// A queued request the ager may still move: a replay read above class 0. Its count (queuedReplay) gates the ager's
+// walk, so tier-1 and cryptex reads in class 1 after the boot cost a pick nothing.
 template <typename Request>
-inline uint32_t switchSdAgeReplay(Request *head, uint64_t now, uint32_t queuedReads[kSwitchSdPickClasses])
+inline bool switchSdAgeable(const Request *r)
+{
+    return r->replay && !r->write && r->klass;
+}
+
+// Puts each replay read queued for kSwitchSdReplayAgeNs or more back in class 0, keeping queuedReads (reads only) and
+// queuedReplay in step. Returns how many it moved.
+template <typename Request>
+inline uint32_t switchSdAgeReplay(Request *head, uint64_t now, uint32_t queuedReads[kSwitchSdPickClasses],
+                                  uint32_t &queuedReplay)
 {
     uint32_t aged = 0;
-    for (Request *r = queuedReads[kSwitchSdReplayClass] ? head : nullptr; r; r = r->next) {
-        if (!r->replay || r->write || !r->klass || now - r->queuedNs < kSwitchSdReplayAgeNs)
+    for (Request *r = queuedReplay ? head : nullptr; r; r = r->next) {
+        if (!switchSdAgeable(r) || now - r->queuedNs < kSwitchSdReplayAgeNs)
             continue;
         --queuedReads[r->klass];
         ++queuedReads[0];
+        --queuedReplay;
         r->klass = 0;
         ++aged;
     }
     return aged;
 }
 
-// Raises every queued request overlapping [lba, lba + sectors) to `klass` (never lowers one), keeping queuedReads in
-// step. Returns how many it raised. Requests already taken into a chain are not in the queue and keep their class.
+// Raises every queued request overlapping [lba, lba + sectors) to `klass` (never lowers one), keeping queuedReads and
+// queuedReplay in step. Returns how many it raised. Requests already taken into a chain are not in the queue and keep
+// their class.
 template <typename Request>
 inline uint32_t switchSdPromote(Request *head, uint64_t lba, uint64_t sectors, uint8_t klass,
-                                uint32_t queuedReads[kSwitchSdPickClasses])
+                                uint32_t queuedReads[kSwitchSdPickClasses], uint32_t &queuedReplay)
 {
     uint32_t raised = 0;
     for (Request *r = sectors ? head : nullptr; r; r = r->next) {
@@ -154,6 +165,8 @@ inline uint32_t switchSdPromote(Request *head, uint64_t lba, uint64_t sectors, u
             --queuedReads[r->klass];
             ++queuedReads[klass];
         }
+        if (!klass && switchSdAgeable(r))
+            --queuedReplay;
         r->klass = klass;
         ++raised;
     }

@@ -107,7 +107,8 @@ struct Result {
     bool ordered = true;      // no read started while an older overlapping write was still queued, and the reverse
     bool writesFirst = true;  // no write chain started while an older write of either window was still queued
     bool fenced = true;       // no synchronize ended before a write submitted ahead of it completed
-    bool intact = true;       // after every pick the queue runs head to tail, depth requests, none of them chained
+    bool intact = true;       // after every pick the queue runs head to tail, depth requests, none of them chained,
+                              // and queuedReplay counts its ageable replay reads
     unsigned syncsEnded = 0;
     unsigned outOfOrderWrites = 0;  // write chains that joined a write past an older one of its window still queued
 };
@@ -202,6 +203,7 @@ private:
     std::vector<Request> storage;
     Request *head = nullptr, *tail = nullptr;
     uint32_t queuedReads[4] = {};
+    uint32_t queuedReplay = 0;
     SwitchSdPickState state = {};
     size_t depth = 0;
     std::vector<Request *> active, prepared;
@@ -261,6 +263,8 @@ private:
         } else {
             ++queuedReads[r->klass];
         }
+        if (switchSdAgeable(r))
+            ++queuedReplay;
     }
 
     void admit(uint64_t at)
@@ -400,7 +404,7 @@ private:
         } else {
             uint64_t awaitedBeforeNs[2];
             awaited(awaitedBeforeNs);
-            switchSdAgeReplay(head, now, queuedReads);
+            switchSdAgeReplay(head, now, queuedReads, queuedReplay);
             const SwitchSdPicked<Request> picked = switchSdPick(head, awaitedBeforeNs, now, &state);
             first = picked.first;
             prev = picked.prev;
@@ -433,8 +437,11 @@ private:
         for (Request *r = chain; r; r = r->next) {
             if (!r->write)
                 --queuedReads[r->klass];
+            if (switchSdAgeable(r))
+                --queuedReplay;
             out.push_back(r);
         }
+        checkReplayCount();
         return out;
     }
 
@@ -463,6 +470,15 @@ private:
             last = r;
         }
         if (n != depth || last != tail)
+            result.intact = false;
+    }
+
+    void checkReplayCount()
+    {
+        uint32_t ageable = 0;
+        for (const Request *r = head; r; r = r->next)
+            ageable += switchSdAgeable(r);
+        if (ageable != queuedReplay)
             result.intact = false;
     }
 
