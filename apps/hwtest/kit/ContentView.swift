@@ -109,17 +109,19 @@ public struct ContentView: View {
 
 struct TestRowView: View {
     @ObservedObject var row: RowState
-    /// One line of metrics and detail: a row a run redraws at each test boundary, whose full metrics (hundreds for
-    /// some tests) would hold the main thread laying them out.
+    /// A row of the list while a run goes: one line each, at a fixed height, so neither a test boundary nor a scene turn
+    /// lays out its full metrics (hundreds for some tests) or self-sizes it. On 25 Nov anim.timing's 90° turn spent
+    /// 536 ms of this app's main thread in trait propagation and list cell sizing.
     var compact = false
+    static let compactHeight: CGFloat = 76
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             badge.frame(width: 52)
             VStack(alignment: .leading, spacing: 3) {
-                Text(row.test.name).font(.body)
+                Text(row.test.name).font(.body).lineLimit(compact ? 1 : nil)
                 Text(row.test.id + (row.test.interactive ? " · interactive" : ""))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(compact ? 1 : nil)
                 if let outcome = row.record?.outcome {
                     if !outcome.metrics.keys.isEmpty {
                         Text(
@@ -128,17 +130,18 @@ struct TestRowView: View {
                         )
                         .font(.caption.monospaced()).lineLimit(compact ? 1 : nil)
                     }
-                    if !outcome.proof.isEmpty {
+                    if !outcome.proof.isEmpty && !compact {
                         Text("hw: " + outcome.proof).font(.caption).foregroundStyle(.teal)
                     }
                     if !outcome.detail.isEmpty {
-                        Text(outcome.detail).font(.caption).lineLimit(compact ? 2 : nil).foregroundStyle(
+                        Text(outcome.detail).font(.caption).lineLimit(compact ? 1 : nil).foregroundStyle(
                             outcome.verdict == .fail ? .red : .secondary
                         )
                     }
                 }
             }
         }
+        .frame(height: compact ? Self.compactHeight : nil, alignment: .topLeading)
         .padding(.vertical, 2)
     }
 

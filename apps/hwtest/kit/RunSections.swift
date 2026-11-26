@@ -34,11 +34,12 @@ struct RunningRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 52)
             VStack(alignment: .leading, spacing: 3) {
-                Text(row.test.name).font(.headline)
+                Text(row.test.name).font(.headline).lineLimit(1)
                 Text("\(row.test.id) · \(row.test.subsystem.rawValue) · since \(started)")
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
             }
         }
+        .frame(height: 44, alignment: .leading)
         .padding(.vertical, 4)
     }
 
