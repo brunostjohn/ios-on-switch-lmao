@@ -5,7 +5,7 @@
 #   request_host_test   the AppleJPEGDriver decode request's translation, refusals and route onto the destination's
 #                       layout (request_host.c)
 #   tegra_nvjpg_vendored_test  the vendored firmware and NVIDIA headers are the files their SOURCE files name
-#   tegra_nvjpg_layout_source_test  a decode's order around GM20B's layout of its destination (TegraNVJPGUserClient.cpp)
+#   tegra_nvjpg_layout_source_test  a decode's order around GM20B's layout of its destination (TegraNVJPGJobs.cpp)
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
 
@@ -58,8 +58,8 @@ host_test(
     srcs = ["tegra_nvjpg_layout_source_test.cpp"],
     data = [
         "//drivers/TegraNVJPG:TegraNVJPG.cpp",
+        "//drivers/TegraNVJPG:TegraNVJPGJobs.cpp",
         "//drivers/TegraNVJPG:TegraNVJPGRepack.cpp",
-        "//drivers/TegraNVJPG:TegraNVJPGUserClient.cpp",
     ],
 )
 
@@ -210,6 +210,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
         "//drivers/TegraGM20B:TegraGM20BCopy.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraNVJPG:TegraNVJPGJobs.h",
         "//drivers/TegraNVJPG:TegraNVJPGMapping.h",
         "//drivers/TegraNVJPG:TegraNVJPGRepack.h",
         "//drivers/TegraNVJPG:TegraNVJPGRoute.h",
@@ -227,6 +228,7 @@ host_test(
     ] + ENGINE_MODEL,
     additional_compiler_inputs = ENGINE_SOURCES + [
         "//drivers/TegraNVJPG:TegraNVJPGMapping.cpp",
+        "//drivers/TegraNVJPG:TegraNVJPGJobs.cpp",
         "//drivers/TegraNVJPG:TegraNVJPGRepack.cpp",
         "//drivers/TegraNVJPG:TegraNVJPGUserClient.cpp",
     ],

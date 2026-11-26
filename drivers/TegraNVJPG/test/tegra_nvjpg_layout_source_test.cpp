@@ -15,7 +15,7 @@ using testing::Not;
 // texels unmoved, until the decode and any copy-engine re-pack have ended. Every route but VIC's asks.
 TEST(NVJPGLayoutWiring, TheSeedMovesBeforeTheLayoutIsReadAndTheHoldOutlastsTheDecodeAndItsCopy)
 {
-    const std::string source = SourceText("../TegraNVJPGUserClient.cpp");
+    const std::string source = SourceText("../TegraNVJPGJobs.cpp");
     const std::string begin = Body(source, "bool beginJob(Job *job)\n{");
     const auto vic = begin.find("if (job->plan.repack == TEGRA_NVJPG_REPACK_VIC)\n        return beginRepack(job);");
     const auto seed = begin.find("tegra_vic_surface_written(&job->dst);");
@@ -46,7 +46,7 @@ TEST(NVJPGLayoutWiring, TheSeedMovesBeforeTheLayoutIsReadAndTheHoldOutlastsTheDe
 // its start to its finish.
 TEST(NVJPGLayoutWiring, TheDestinationIsMappedForThePlanTheRouteLeavesAndOnlyTheEngineJobHoldsTheJobLock)
 {
-    const std::string source = SourceText("../TegraNVJPGUserClient.cpp");
+    const std::string source = SourceText("../TegraNVJPGJobs.cpp");
     const std::string direct =
         Body(source, "bool beginDirect(Job *job, const SwitchNVJPGBacking &target, uint32_t extent)\n{");
     const auto map = direct.find("switch_nvjpg_mapping(target, extent, p.writeEnd, &why, job->pid)");
@@ -87,7 +87,7 @@ TEST(NVJPGLayoutWiring, TheRepackWaitsOnTheHardwareAndNoThreadWaitsOnAnEngine)
     EXPECT_THAT(repack, HasSubstr("const TegraVICAcquire after = {syncpt, fence};"));
     EXPECT_THAT(repack, HasSubstr("const int ret = tegra_nvjpg_start(engine, ended, &follow);"));
     EXPECT_THAT(repack, Not(HasSubstr("IOLockSleep")));
-    const std::string thread = Body(SourceText("../TegraNVJPGUserClient.cpp"), "void engineThread(void *, wait_result_t)\n{");
+    const std::string thread = Body(SourceText("../TegraNVJPGJobs.cpp"), "void engineThread(void *, wait_result_t)\n{");
     EXPECT_THAT(thread, HasSubstr("IOLockSleep(gQueueLock, &gHead, THREAD_UNINT);"));
 }
 }  // namespace

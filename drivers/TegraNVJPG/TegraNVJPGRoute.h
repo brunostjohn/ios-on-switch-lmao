@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
 // How a planned decode reaches its destination once GM20B has said how it laid the destination out. Plain C, header
-// only: TegraNVJPGUserClient.cpp and the host test (test/request_host.c) compile the same code.
+// only: TegraNVJPGJobs.cpp and the host test (test/request_host.c) compile the same code.
 #ifndef TEGRA_NVJPG_ROUTE_H
 #define TEGRA_NVJPG_ROUTE_H
 #include <stdbool.h>

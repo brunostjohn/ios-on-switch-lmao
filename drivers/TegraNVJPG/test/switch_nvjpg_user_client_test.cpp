@@ -216,6 +216,7 @@ public:
 #include "../TegraNVJPGRepack.cpp"
 #include "../TegraNVJPGRoute.h"
 #include "../TegraNVJPGUserClient.cpp"
+#include "../TegraNVJPGJobs.cpp"
 
 bool tegra_nvjpg_stats_start(void)
 {
