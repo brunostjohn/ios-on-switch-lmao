@@ -499,3 +499,26 @@ rust_test(
     },
     deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
 )
+
+rust_test(
+    name = "fragment_read_inputs_test",
+    args = [
+        "pipeline::compile::tests::read_inputs::",
+        "pipeline::link::tests::render::color_writes_are_the_pipelines",
+    ],
+    compile_data = glob(["tests/**"]),
+    crate = ":metal2vulkan",
+    data = [
+        "//third_party/m2v:fetch_test_inputs",
+        "//third_party/m2v:translation_test_inputs",
+        "@gpu_llvm_as//:bin/llvm-as",
+        "@spirv_tools//:spirv-dis",
+        "@spirv_tools//:spirv-val",
+    ],
+    env = {
+        "METAL2VULKAN_LLVM_AS": "$(rootpath @gpu_llvm_as//:bin/llvm-as)",
+        "METAL2VULKAN_SPIRV_DIS": "$(rootpath @spirv_tools//:spirv-dis)",
+        "METAL2VULKAN_SPIRV_VAL": "$(rootpath @spirv_tools//:spirv-val)",
+    },
+    deps = ["//third_party/m2v/crates/metal2vulkan-devtools"],
+)

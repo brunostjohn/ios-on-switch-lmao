@@ -103,6 +103,9 @@ pub fn canonical_inputs(inputs: &LowerInputs) -> LowerInputs {
     // Only a tile function's threadgroup is the tile.
     out.threadgroup_size_matches_tile_size =
         inputs.threadgroup_size_matches_tile_size && inputs.tile_attachments.is_some();
+    for rules in out.color_writes.values_mut() {
+        *rules = crate::pipeline::color_writes::read_rules(*rules);
+    }
     out
 }
 
