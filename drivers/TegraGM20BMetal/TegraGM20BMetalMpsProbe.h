@@ -17,7 +17,7 @@ void gm20bMpsProbeBind(const void *cb, const void *encoder, NSString *function);
 void gm20bMpsProbeCall(const void *cb, const void *encoder, const char *call, NSString *detail);
 #define SWITCH_MPS_PROBE(cb, encoder, call, detail)             \
     do {                                                        \
-        if (gMpsProbed.load(std::memory_order_relaxed) == (cb)) \
+        if ((cb) && gMpsProbed.load(std::memory_order_relaxed) == (cb)) \
             gm20bMpsProbeCall(cb, encoder, call, detail);       \
     } while (0)
 #else
