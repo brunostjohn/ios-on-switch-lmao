@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-use crate::info::{Value, serialize, unserialize};
+use crate::info::{Value, serialize, unserialize, unserialize_plist};
 use crate::macho::backed_offset;
 use crate::v17::pc_relative_target;
 use crate::{Error, load_sites};
@@ -112,4 +112,28 @@ fn backed_offsets_need_exactly_one_segment() {
     assert!(backed_offset(segments, 0x10f8, 16, 0x200).is_err());
     assert!(backed_offset([(0x0, 0x100, 0x0), (0x0, 0x100, 0x0)], 0x10, 8, 0x200).is_err());
     assert!(backed_offset(segments, 0x2010, 8, 0x110).is_err());
+}
+
+#[test]
+fn fileset_prelink_info_is_a_plist() {
+    let document = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+        \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict><key>A</key>\
+        <integer>-1</integer></dict>\n</plist>\n\0";
+    assert_eq!(
+        write(&unserialize_plist(document.as_bytes()).unwrap()),
+        "<dict><key>A</key><integer size=\"64\">0xffffffffffffffff</integer></dict>"
+    );
+    assert!(refused(unserialize(document.as_bytes())).contains("not one element"));
+    let cases = [
+        (
+            "<!DOCTYPE plist [<!ENTITY a \"b\">]><plist><dict/></plist>",
+            "internal subset",
+        ),
+        ("<plist><dict/><dict/></plist>", "not one element"),
+        ("<plist/>", "not one element"),
+    ];
+    for (document, message) in cases {
+        let found = refused(unserialize_plist(document.as_bytes()));
+        assert!(found.contains(message), "{document}: {found}");
+    }
 }

@@ -52,10 +52,13 @@ pub(crate) fn prepare(cache: &Kernelcache, original: &Original) -> Result<Plan> 
         .iter()
         .filter(|(id, _)| original.new.contains(id))
         .map(|(_, m)| m);
-    inline_data.extend(inventory::inline_data(new_modules, |va, size| {
+    let code = |va, size| {
         let at = cache.image.offset_of(va, size, cache.data.len())?;
         Ok(&cache.data[at..at + size as usize])
-    })?);
+    };
+    let known = original.inherited.known_inline_data.iter();
+    let pools = inventory::pools(known.map(|d| (d.va, d.size, d.sha256.as_str())), code)?;
+    inline_data.extend(inventory::inline_data(new_modules, &pools, code)?);
     check_early_security_init(cache, &closure, original)?;
     let mut image = coalesced::copy_segments(cache, &closure, original.slide)?;
     write_sites(&mut image, &closure, original, &inline_data)?;

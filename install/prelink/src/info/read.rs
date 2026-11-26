@@ -25,23 +25,39 @@ const BASE64: GeneralPurpose = GeneralPurpose::new(
 /// IDs may name scalars only, as in 21H461's kernelcache: a shared container would make Python's in-place edits of one
 /// entry reach the others, which a copied value can't reproduce, so a container's ID is refused.
 pub(crate) fn unserialize(blob: &[u8]) -> Result<Value> {
-    let xml = blob.split(|&b| b == 0).next().unwrap_or_default();
-    let Ok(xml) = std::str::from_utf8(xml) else {
-        return refused("Prelink info XML is not UTF-8");
-    };
-    let mut parser = Parser {
-        reader: Reader::from_str(xml),
-        refs: HashMap::new(),
-    };
-    parser.document()
+    Parser::new(blob, false)?.document()
+}
+
+/// A fileset kernelcache's prelink info, as `prelink26/kcinfo.unserialize` reads it: `unserialize`, with a DOCTYPE
+/// and a `<plist>` wrapper allowed, whose one element is the value.
+///
+/// A DOCTYPE's internal subset is refused: Python's expat would apply its entities and attribute defaults.
+pub(crate) fn unserialize_plist(blob: &[u8]) -> Result<Value> {
+    Parser::new(blob, true)?.document()
 }
 
 struct Parser<'a> {
     reader: Reader<&'a [u8]>,
     refs: HashMap<String, Value>,
+    plist: bool,
 }
 
 impl<'a> Parser<'a> {
+    fn new(blob: &'a [u8], plist: bool) -> Result<Self> {
+        let xml = blob.split(|&b| b == 0).next().unwrap_or_default();
+        let Ok(xml) = std::str::from_utf8(xml) else {
+            return refused("Prelink info XML is not UTF-8");
+        };
+        if plist && doctype_subset(xml) {
+            return refused("Prelink info XML with a DOCTYPE internal subset");
+        }
+        Ok(Parser {
+            reader: Reader::from_str(xml),
+            refs: HashMap::new(),
+            plist,
+        })
+    }
+
     fn next(&mut self) -> Result<Event<'a>> {
         match self.reader.read_event() {
             Ok(event) => Ok(event),
@@ -53,16 +69,27 @@ impl<'a> Parser<'a> {
         let mut root = None;
         loop {
             match self.next()? {
-                Event::Start(e) if root.is_none() => root = Some(self.element(&e, false)?),
-                Event::Empty(e) if root.is_none() => root = Some(self.element(&e, true)?),
+                Event::Start(e) if root.is_none() => root = Some(self.root(&e, false)?),
+                Event::Empty(e) if root.is_none() => root = Some(self.root(&e, true)?),
                 Event::Text(t) if t.xml10_content().trim_ascii().is_empty() => {}
                 Event::Comment(_) | Event::PI(_) => {}
                 Event::Decl(_) if root.is_none() => {}
+                Event::DocType(_) if self.plist && root.is_none() => {}
                 Event::Eof => break,
                 _ => return refused("Prelink info XML is not one element"),
             }
         }
         root.map_or_else(|| refused("Prelink info XML is empty"), Ok)
+    }
+
+    fn root(&mut self, start: &BytesStart<'a>, empty: bool) -> Result<Value> {
+        if !self.plist || start.name().as_ref() != "plist" {
+            return self.element(start, empty);
+        }
+        match <[Value; 1]>::try_from(self.children(empty)?) {
+            Ok([value]) => Ok(value),
+            Err(_) => refused("A prelink info plist that is not one element"),
+        }
     }
 
     fn element(&mut self, start: &BytesStart<'a>, empty: bool) -> Result<Value> {
@@ -147,6 +174,12 @@ impl<'a> Parser<'a> {
             }
         }
     }
+}
+
+fn doctype_subset(xml: &str) -> bool {
+    xml.find("<!DOCTYPE")
+        .and_then(|at| xml[at..].find('>').map(|end| xml[at..at + end].contains('[')))
+        .unwrap_or(false)
 }
 
 fn attributes(start: &BytesStart) -> Result<(Option<String>, Option<String>)> {

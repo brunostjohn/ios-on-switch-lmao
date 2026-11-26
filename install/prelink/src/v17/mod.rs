@@ -60,6 +60,7 @@ struct InheritedReport {
 struct InheritedInline {
     va: u64,
     size: u64,
+    sha256: String,
 }
 
 /// What iOS 17's prelink takes besides the two kernels.

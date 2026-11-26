@@ -5,7 +5,7 @@
 mod read;
 mod write;
 
-pub(crate) use read::unserialize;
+pub(crate) use read::{unserialize, unserialize_plist};
 pub(crate) use write::serialize;
 
 use crate::error::{Result, refused};

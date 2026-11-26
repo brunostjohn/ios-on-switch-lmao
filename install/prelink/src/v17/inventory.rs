@@ -7,10 +7,10 @@ use sha2::{Digest, Sha256};
 use crate::error::{Result, refused};
 use crate::macho::Image;
 
-/// Constant pools some assemblers put in executable sections, which must never be read as code. Each is recognised
-/// only by its whole content: (prefix, size, SHA-256, offset of the prefix in the pool).
-const INLINE_LITERALS: [(&str, usize, &str, usize); 9] = [
-    // SHA-256's round constants.
+/// Algorithm tables some assemblers put in executable sections, which must never be read as code, in any build: the
+/// SHA-256 round constants, the vector-repeat pool and the adler32 vector. Each is recognised only by its whole
+/// content: (prefix, size, SHA-256, offset of the prefix in the pool).
+const ALGORITHM_POOLS: [(&str, usize, &str, usize); 3] = [
     (
         "982f8a42",
         256,
@@ -29,43 +29,52 @@ const INLINE_LITERALS: [(&str, usize, &str, usize); 9] = [
         "48bdf8e57f8647f2ef3cfda5b500209c4be9b5742632db0ff3614aca8d7ee63d",
         0,
     ),
-    (
-        "00000000004a87c0f039fafe422e8640",
-        2160,
-        "1a5eb119b57d453a6123eb839b259b96f2ff4f687fc8aabfdcf965ded106df81",
-        0,
-    ),
-    (
-        "0000807f0000f042db0f493f00008039",
-        1248,
-        "92c7b2f87685a1e7a92cad6e7d408fdbc03bd67d1207b6579214040f413b2161",
-        0,
-    ),
-    (
-        "1f2003d500000000001018c00ee52615",
-        2188,
-        "c103ce1f2e204bbbfcc2069de79758b0ea399e5e7b39b2b8337cbf3d3f7f960a",
-        0,
-    ),
-    (
-        "0000c1c00000807fff799f501344d33f",
-        1088,
-        "22b9e038ad1cbdef1265a71f9213354287637a561eaa52f9ec25f90d10bd0a7c",
-        0,
-    ),
-    (
-        "0000c1c00000807f0000000084aec68f",
-        212,
-        "43ef8598a507444b21d8a2abbe4065554baaa3b6a29dbe390465cc0ba0dfbe28",
-        0,
-    ),
-    (
-        "9b1a86a049faa8bd053f4e7b9dee213e",
-        56,
-        "e874aeba59eebdebdf68d18b1196d1ca6aeee12b110985a856f8fe404e0c76ee",
-        0,
-    ),
 ];
+/// A build's own pools are matched by their first bytes, as `emit_prelink.MATH_LITERAL_POOLS` lists them.
+const BUILD_POOL_PREFIX: usize = 16;
+
+/// An inline-data pool, recognised by its whole content.
+pub(crate) struct Pool {
+    prefix: Vec<u8>,
+    size: usize,
+    sha256: String,
+    prefix_offset: usize,
+}
+
+/// The pools to look for: the algorithm tables, then the build's own pools, which the inherited report found in
+/// Apple's code (21H461's Libm), each read back at its address with `code(va, size)` and checked against its hash.
+pub(crate) fn pools<'k, 'a>(
+    known: impl Iterator<Item = (u64, u64, &'k str)>,
+    code: impl Fn(u64, u64) -> Result<&'a [u8]>,
+) -> Result<Vec<Pool>> {
+    let mut pools: Vec<Pool> = ALGORITHM_POOLS
+        .iter()
+        .map(|&(prefix, size, sha256, prefix_offset)| Pool {
+            prefix: hex::decode(prefix).unwrap(),
+            size,
+            sha256: sha256.to_owned(),
+            prefix_offset,
+        })
+        .collect();
+    for (va, size, sha256) in known {
+        if pools.iter().any(|p| p.sha256 == sha256) {
+            continue;
+        }
+        let bytes = code(va, size)?;
+        if hex::encode(Sha256::digest(bytes)) != sha256 {
+            return refused(format!(
+                "Inherited inline data at {va:#x} differs from the kernelcache's"
+            ));
+        }
+        pools.push(Pool {
+            prefix: bytes[..bytes.len().min(BUILD_POOL_PREFIX)].to_vec(),
+            size: bytes.len(),
+            sha256: sha256.to_owned(),
+            prefix_offset: 0,
+        });
+    }
+    Ok(pools)
+}
 
 /// Known inline data at its original address.
 pub(crate) struct InlineData {
@@ -104,10 +113,10 @@ pub(crate) fn pc_relative_target(word: u32, pc: u64) -> Option<(i128, bool)> {
     None
 }
 
-/// The known inline data of `modules`' code, read at `code(va, filesize)`; refuses a PC-relative encoding that leaves
-/// them.
+/// The `pools` in `modules`' code, read at `code(va, filesize)`; refuses a PC-relative encoding that leaves them.
 pub(crate) fn inline_data<'a>(
     modules: impl Iterator<Item = &'a Image> + Clone,
+    pools: &[Pool],
     code: impl Fn(u64, u64) -> Result<&'a [u8]>,
 ) -> Result<Vec<InlineData>> {
     let mut exact = Intervals::default();
@@ -127,7 +136,7 @@ pub(crate) fn inline_data<'a>(
         }
         let blob = code(segment.va, segment.filesize)?;
         let mut literals = Intervals::default();
-        for (start, size) in known_inline_literals(blob) {
+        for (start, size) in known_inline_literals(blob, pools) {
             literals.push(start as i128, (start + size) as i128);
             found.push(InlineData {
                 va: segment.va + start as u64,
@@ -154,16 +163,15 @@ pub(crate) fn inline_data<'a>(
     Ok(found)
 }
 
-fn known_inline_literals(blob: &[u8]) -> Vec<(usize, usize)> {
+fn known_inline_literals(blob: &[u8], pools: &[Pool]) -> Vec<(usize, usize)> {
     let mut literals = Vec::new();
-    for (prefix, size, digest, prefix_offset) in INLINE_LITERALS {
-        let prefix = hex::decode(prefix).unwrap();
+    for pool in pools {
         let mut search = 0;
-        while let Some(found) = find(blob, &prefix, search) {
-            if let Some(start) = found.checked_sub(prefix_offset).filter(|s| s % 4 == 0) {
-                let pool = &blob[start..blob.len().min(start + size)];
-                if hex::encode(Sha256::digest(pool)) == digest {
-                    literals.push((start, size));
+        while let Some(found) = find(blob, &pool.prefix, search) {
+            if let Some(start) = found.checked_sub(pool.prefix_offset).filter(|s| s % 4 == 0) {
+                let bytes = &blob[start..blob.len().min(start + pool.size)];
+                if hex::encode(Sha256::digest(bytes)) == pool.sha256 {
+                    literals.push((start, pool.size));
                 }
             }
             search = found + 4;
@@ -203,5 +211,52 @@ impl Intervals {
     fn contains(&self, x: i128) -> bool {
         let index = self.0.partition_point(|&(start, _)| start <= x);
         index > 0 && x < self.0[index - 1].1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::macho::Segment;
+
+    fn module(va: u64, size: u64) -> Image {
+        let segment = Segment {
+            name: "__TEXT_EXEC".into(),
+            va,
+            size,
+            fileoff: 0,
+            filesize: size,
+            command_offset: 0,
+            maxprot: 5,
+            initprot: 5,
+            sections: Vec::new(),
+        };
+        Image {
+            kind: 0,
+            commands: Vec::new(),
+            segments: vec![segment],
+        }
+    }
+
+    #[test]
+    fn a_build_pool_hides_its_words_from_the_pc_relative_scan() {
+        let va = 0xffff_fff0_0700_0000_u64;
+        let mut pool: Vec<u8> = (0..64).collect();
+        // B +0x20000, far past the module.
+        pool[16..20].copy_from_slice(&0x1400_8000_u32.to_le_bytes());
+        let mut code = 0xd503_201f_u32.to_le_bytes().repeat(4);
+        code.extend_from_slice(&pool);
+        let image = module(va, code.len() as u64);
+        let read = |at: u64, size: u64| -> Result<&[u8]> { Ok(&code[(at - va) as usize..(at - va + size) as usize]) };
+        let digest = hex::encode(Sha256::digest(&pool));
+        let algorithms = pools(std::iter::empty(), read).unwrap();
+        assert!(inline_data(std::iter::once(&image), &algorithms, read).is_err());
+        let build = pools(std::iter::once((va + 16, 64, digest.as_str())), read).unwrap();
+        let found = inline_data(std::iter::once(&image), &build, read).unwrap();
+        assert_eq!(
+            found.iter().map(|d| (d.va, d.size)).collect::<Vec<_>>(),
+            [(va + 16, 64)]
+        );
+        assert!(pools(std::iter::once((va + 16, 64, "00")), read).is_err());
     }
 }

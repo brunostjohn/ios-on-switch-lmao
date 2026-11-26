@@ -2,9 +2,13 @@
 //! 64-bit little-endian ARM64 Mach-O, read with the checks of `tools/common/macho.py`: every offset and size is
 //! checked against the image, so nothing past this reader indexes outside it.
 
+mod append;
+mod fileset;
 mod symbols;
 
-pub(crate) use symbols::exports;
+pub(crate) use append::NativeImage;
+pub(crate) use fileset::{fileset_entries, linkedit_data};
+pub(crate) use symbols::{export_addresses, exports};
 
 use object::macho::{self, LoadCommand, MachHeader64, Section64, SegmentCommand64};
 use object::{BigEndian, LittleEndian as LE, Pod, ReadRef};
@@ -13,7 +17,10 @@ use crate::error::{Result, refused};
 
 pub(crate) const MH_EXECUTE: u32 = macho::MH_EXECUTE.0;
 pub(crate) const MH_KEXT_BUNDLE: u32 = macho::MH_KEXT_BUNDLE.0;
+pub(crate) const MH_FILESET: u32 = macho::MH_FILESET.0;
 pub(crate) const LC_SEGMENT_64: u32 = macho::LC_SEGMENT_64.0;
+pub(crate) const LC_FUNCTION_STARTS: u32 = macho::LC_FUNCTION_STARTS.0;
+pub(crate) const LC_DYLD_CHAINED_FIXUPS: u32 = macho::LC_DYLD_CHAINED_FIXUPS.0;
 pub(crate) const HEADER_SIZE: usize = size_of::<MachHeader64<LE>>();
 pub(crate) const SEGMENT_SIZE: usize = size_of::<SegmentCommand64<LE>>();
 pub(crate) const SECTION_SIZE: usize = size_of::<Section64<LE>>();
@@ -32,6 +39,7 @@ pub(crate) struct Section {
     pub size: u64,
     pub fileoff: u32,
     pub command_offset: usize,
+    pub flags: u32,
 }
 
 pub(crate) struct Segment {
@@ -151,6 +159,7 @@ fn segment(data: &[u8], offset: usize, size: usize) -> Result<Segment> {
             size: extent,
             fileoff: section.offset.get(LE),
             command_offset: at,
+            flags: section.flags.get(LE).0,
         });
     }
     Ok(Segment {
@@ -207,9 +216,36 @@ pub(crate) fn u32_at(data: &[u8], at: usize) -> Result<u32> {
     }
 }
 
+pub(crate) fn u16_at(data: &[u8], at: usize) -> Result<u16> {
+    match data.get(at..at + 2) {
+        Some(b) => Ok(u16::from_le_bytes(b.try_into().unwrap())),
+        None => refused(format!("Read at {at:#x} outside image")),
+    }
+}
+
 pub(crate) fn u64_at(data: &[u8], at: usize) -> Result<u64> {
     match data.get(at..at + 8) {
         Some(b) => Ok(u64::from_le_bytes(b.try_into().unwrap())),
         None => refused(format!("Read at {at:#x} outside image")),
+    }
+}
+
+pub(crate) fn put_u32(data: &mut [u8], at: usize, value: u32) -> Result<()> {
+    match data.get_mut(at..at + 4) {
+        Some(b) => {
+            b.copy_from_slice(&value.to_le_bytes());
+            Ok(())
+        }
+        None => refused(format!("Write at {at:#x} outside image")),
+    }
+}
+
+pub(crate) fn put_u64(data: &mut [u8], at: usize, value: u64) -> Result<()> {
+    match data.get_mut(at..at + 8) {
+        Some(b) => {
+            b.copy_from_slice(&value.to_le_bytes());
+            Ok(())
+        }
+        None => refused(format!("Write at {at:#x} outside image")),
     }
 }
