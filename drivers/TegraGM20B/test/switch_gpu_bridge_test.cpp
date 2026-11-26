@@ -368,8 +368,12 @@ extern "C" uint64_t tgm_writer_check_progress(uint32_t uid, uint32_t seqno, cons
 	return nextCheckNs;
 }
 
+std::function<void()> onReleaseFailed;  // runs at a release, before its increments
+
 extern "C" int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshold, uint32_t maximum)
 {
+	if (onReleaseFailed)
+		onReleaseFailed();
 	EXPECT_TRUE(gpu.failed || id >= kProducerSyncpoint || producerIds.count(id));
 	EXPECT_LE(uint32_t(threshold - syncpoints[id]), maximum);
 	++failureReleases;
@@ -1191,6 +1195,71 @@ TEST_F(Bridge, OnlyAHost1xConsumersJoblessBridgeIsCountedOnItsProducingChannel)
 	finish();
 	release(bridge);
 	release(job);
+}
+
+// The display takes its stream route only for a jobless bridge, whose every failure short of DRAM cancels the stream
+// first; a bridge with its own GPU job goes through the notify fence.
+TEST_F(Bridge, OnlyAJoblessBridgeAnswersJobless)
+{
+	const auto source = token(340, 16);
+	statuses[key(source)] = 0;
+	covered[key(source)] = {kProducerSyncpoint + 14, 80, 340};
+	const auto plain = token(341, 17);
+	statuses[key(plain)] = 0;
+	auto *jobless = submit({source});
+	auto *job = submit({plain});
+	ASSERT_NE(jobless, nullptr);
+	ASSERT_NE(job, nullptr);
+	EXPECT_EQ(switch_gpu_bridge_jobless(jobless), 1);
+	EXPECT_EQ(switch_gpu_bridge_jobless(job), 0);
+	EXPECT_EQ(switch_gpu_bridge_jobless(nullptr), 0);
+	statuses[key(source)] = 1;
+	statuses[key(plain)] = 1;
+	coveringStatus[{16, 1, 340}] = 1;
+	finish();
+	release(jobless);
+	release(job);
+}
+
+// Two jobless bridges on one producer that stopped short: every failure of the pass is stored before either release,
+// since a release cancels the streams of both and a stream queued after it must find its own bridge failed. Before
+// that, a bridge reads not failed.
+TEST_F(Bridge, AStoppedProducersBridgesAllReadFailedBeforeAnyRelease)
+{
+	const auto first = token(350, 18);
+	const auto second = token(351, 18);
+	statuses[key(first)] = 0;
+	statuses[key(second)] = 0;
+	covered[key(first)] = {kProducerSyncpoint + 15, 90, 350};
+	covered[key(second)] = {kProducerSyncpoint + 15, 92, 351};
+	syncpoints[kProducerSyncpoint + 15] = 88;
+	auto *a = submit({first});
+	auto *b = submit({second});
+	ASSERT_NE(a, nullptr);
+	ASSERT_NE(b, nullptr);
+	EXPECT_EQ(switch_gpu_bridge_failed(a), 0);
+	EXPECT_EQ(switch_gpu_bridge_failed(b), 0);
+	std::vector<std::pair<int, int>> seen;
+	onReleaseFailed = [&] {
+		seen.emplace_back(switch_gpu_bridge_failed(a), switch_gpu_bridge_failed(b));
+	};
+	statuses[key(first)] = -5;
+	statuses[key(second)] = -5;
+	coveringStatus[{18, 1, 350}] = -5;
+	coveringStatus[{18, 1, 351}] = -5;
+	stoppedChannels.insert(18);
+	switch_gpu_bridge_completed();
+	pump();
+	onReleaseFailed = nullptr;
+	stoppedChannels.erase(18);
+	ASSERT_FALSE(seen.empty());
+	for (const auto &[x, y] : seen) {
+		EXPECT_LT(x, 0);
+		EXPECT_LT(y, 0);
+	}
+	EXPECT_EQ(syncpoints[kProducerSyncpoint + 15], 92u);
+	release(a);
+	release(b);
 }
 
 // A host1x stream that waits on a bridge in hardware with no completion callback (the display's plane stream, NVENC's

@@ -38,6 +38,19 @@ int switch_gpu_bridge_notify(const struct switch_gpu_bridge *bridge, void (*comp
  * NVENC's direct input): the hang check covers its producers as it does a waiter's, from this call until the bridge
  * retires. A second call does nothing. */
 int switch_gpu_bridge_watch(const struct switch_gpu_bridge *bridge);
+/* 1 when the bridge has no GPU job of its own: its syncpoint is its producer channel's, passed only by increments that
+ * follow that channel's drain, and a channel that stops short of them has the host1x consumers queued on it cancelled
+ * before the CPU makes the rest (switch_gpu_producer_release, tegra_host1x_syncpt_release_failed). A consumer queued
+ * after that release is not cancelled: it must read switch_gpu_bridge_failed under host1x's channel lock before it
+ * queues. 0 for a bridge with its own GPU job: a recovered producer's fence or a given-up promise word lets that job
+ * pass and raise the syncpoint over unfinished writes, so only switch_gpu_bridge_status or a notify can report the
+ * failure, after the fact. A failure dated after the writes reached DRAM (a kill between the increments and the fence)
+ * leaves a jobless syncpoint passed over complete writes, and status reports it. Fixed for the bridge's life; no lock. */
+int switch_gpu_bridge_jobless(const struct switch_gpu_bridge *bridge);
+/* The bridge's stored failure (<0), else 0. Stored before any release of its syncpoint, so a consumer that reads it under
+ * host1x's channel lock (gChannelLock, where queue.lock can't be taken) and queues only on 0 is either queued before a
+ * release, which cancels it, or reads the failure. No lock. */
+int switch_gpu_bridge_failed(const struct switch_gpu_bridge *bridge);
 void switch_gpu_bridge_release(struct switch_gpu_bridge **bridge);
 int switch_gpu_bridge_wait_room(void);
 /* Explicit CPU acquisition only; waits on the bridge interrupt, never polls a producer. */

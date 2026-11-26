@@ -387,8 +387,8 @@ TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 // runs without the connection lock.
 // A jobless bridge (SwitchGpuBridgeRetire.cpp settleJobless) reads its tokens before its producer's channel, and the
 // channel's status before its end (`stopped`): a kill stores the end before any status reads failed, so a failure seen
-// comes with `stopped`, and the CPU makes the increments a channel that stopped short owes. A covering fence that landed
-// owes none (gpu_exec.c pushes the increments ahead of it). gpu.x1.bridge_jobless counts only a host1x consumer's
+// comes with `stopped`, and the CPU makes the increments a channel that stopped short owes, after every slot of the pass
+// stored its result. A covering fence that landed owes none (gpu_exec.c pushes the increments ahead of it). gpu.x1.bridge_jobless counts only a host1x consumer's
 // jobless bridges, on the producing channel, after the queue's lock (never tgm_live_lock under it).
 TEST(GM20BBridgeSource, AJoblessSlotReadsItsTokensThenItsChannelThenItsEnd)
 {
@@ -399,7 +399,13 @@ TEST(GM20BBridgeSource, AJoblessSlotReadsItsTokensThenItsChannelThenItsEnd)
 	const CodeText settle =
 		Block(SourceText("../SwitchGpuBridgeRetire.cpp"), "bool settleJobless(");
 	EXPECT_TRUE(settle.before("producers(job);", "switch_gpu_producer_covered("));
-	EXPECT_TRUE(settle.has("if (stopped && cover != 1) switch_gpu_producer_release("));
+	EXPECT_TRUE(settle.has("owed = stopped && cover != 1;"));
+	EXPECT_FALSE(settle.has("switch_gpu_producer_release("));
+	const CodeText retire = Block(SourceText("../SwitchGpuBridgeRetire.cpp"), "void retire(");
+	EXPECT_TRUE(retire.before(
+		"settleJobless(job, owes)",
+		"for (uint32_t i = 0; i < owing; ++i) "
+		"switch_gpu_producer_release(owed[i].syncpoint, owed[i].threshold);"));
 	const std::string bridge = SourceText("../SwitchGpuBridge.cpp");
 	EXPECT_TRUE(CodeText(Configured(bridge, "TGM_STATS", true))
 			    .has("IOLockUnlock(queue.lock); if (consumerJobless) "

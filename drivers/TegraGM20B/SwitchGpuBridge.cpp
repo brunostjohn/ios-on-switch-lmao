@@ -147,7 +147,7 @@ static int submitBridge(const switch_gpu_backing_token *tokens, uint32_t count,
 	}
 	auto &job = queue.jobs[slot];
 	job.refs = 1;
-	job.result = 0;
+	__atomic_store_n(&job.result, 0, __ATOMIC_RELAXED);
 	job.producer = jobless ? wait.syncpoint : 0;
 	bool producerDone = false;
 	for (uint32_t i = 0; i < count; ++i) {
@@ -234,6 +234,17 @@ extern "C" void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *bridge, uin
 {
 	*syncpoint = bridge->producer ? bridge->producer : bridge->syncpoint;
 	*threshold = bridge->threshold;
+}
+
+extern "C" int switch_gpu_bridge_jobless(const switch_gpu_bridge *bridge)
+{
+	return bridge && bridge->producer;
+}
+
+extern "C" int switch_gpu_bridge_failed(const switch_gpu_bridge *bridge)
+{
+	const int result = bridge ? __atomic_load_n(&bridge->result, __ATOMIC_ACQUIRE) : -22;
+	return result < 0 ? result : 0;
 }
 
 extern "C" int switch_gpu_bridge_covers(const switch_gpu_bridge *bridge,

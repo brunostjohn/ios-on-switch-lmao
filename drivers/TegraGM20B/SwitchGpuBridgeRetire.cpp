@@ -23,19 +23,18 @@ switch_gpu_bridge *oldestWaitedJob()
 }
 
 // A jobless slot by its covering job's channel: done once that job drained or the channel stopped short of it. Only a
-// channel that stopped short of it owes increments: one whose covering fence landed issued them first (gpu_exec.c
-// chan_fence_job), and a token that failed elsewhere leaves a running producer's syncpoint alone. The tokens are read
-// before the channel, so a kill that failed one of them is already in `stopped`.
-bool settleJobless(switch_gpu_bridge &job)
+// channel that stopped short of it owes increments (`owed`): one whose covering fence landed issued them first
+// (gpu_exec.c chan_fence_job), and a token that failed elsewhere leaves a running producer's syncpoint alone. The tokens
+// are read before the channel, so a kill that failed one of them is already in `stopped`.
+bool settleJobless(switch_gpu_bridge &job, bool &owed)
 {
 	const int source = producers(job);
 	int stopped = 0;
 	const int cover = switch_gpu_producer_covered(job.covering, &stopped);
 	if (source >= 0 && (cover == 0 || source == 0))
 		return false;
-	job.result = source < 0 ? source : cover == 1 ? 1 : -5;
-	if (stopped && cover != 1)
-		switch_gpu_producer_release(job.producer, job.threshold);
+	__atomic_store_n(&job.result, source < 0 ? source : cover == 1 ? 1 : -5, __ATOMIC_RELEASE);
+	owed = stopped && cover != 1;
 	return true;
 }
 }  // namespace
@@ -106,8 +105,14 @@ void retire(thread_call_param_t, thread_call_param_t)
 		int result;
 	};
 
+	struct Owed {
+		uint32_t syncpoint, threshold;
+	};
+
 	Completion callbacks[kSlots];
 	uint32_t count = 0;
+	Owed owed[kSlots];
+	uint32_t owing = 0;
 	IOLockLock(queue.lock);
 	__atomic_store_n(&queue.waitingSources, 1u, __ATOMIC_RELEASE);
 	bool pendingSources = false;
@@ -117,10 +122,13 @@ void retire(thread_call_param_t, thread_call_param_t)
 	for (auto &job : queue.jobs) {
 		if (!job.active)
 			continue;
-		if (job.producer && !settleJobless(job)) {
+		bool owes = false;
+		if (job.producer && !settleJobless(job, owes)) {
 			pendingSources = true;
 			continue;
 		}
+		if (owes)
+			owed[owing++] = {job.producer, job.threshold};
 		const bool channelFailed = failed && !job.producer;
 		if (!job.producer) {
 			if (!failed && int32_t(completed - job.sequence) < 0)
@@ -130,7 +138,12 @@ void retire(thread_call_param_t, thread_call_param_t)
 				pendingSources = true;
 				continue;
 			}
-			job.result = failed ? -5 : source == 1 ? 1 : source < 0 ? source : -5;
+			__atomic_store_n(&job.result,
+					 failed        ? -5
+					 : source == 1 ? 1
+					 : source < 0  ? source
+						       : -5,
+					 __ATOMIC_RELEASE);
 		}
 		if (channelFailed) {
 			const int released = tegra_host1x_syncpt_release_failed(
@@ -161,6 +174,10 @@ void retire(thread_call_param_t, thread_call_param_t)
 		IOLockWakeup(queue.lock, &job, false);
 		releaseLocked(job);
 	}
+	// After every slot of the pass stored its failure: a release cancels each stream waiting on that producer syncpoint,
+	// whichever slot it came through, and a stream queued after it finds its own slot's failure (switch_gpu_bridge_failed)
+	for (uint32_t i = 0; i < owing; ++i)
+		switch_gpu_producer_release(owed[i].syncpoint, owed[i].threshold);
 	for (auto &job : queue.jobs) {
 		if (!job.active && job.completed) {
 			callbacks[count++] = {&job, job.completed, job.context, job.result};
