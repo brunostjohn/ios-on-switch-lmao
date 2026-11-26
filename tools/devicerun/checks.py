@@ -850,8 +850,7 @@ GROUPS: dict[str, list[Check]] = {
                 r'com\.apple\.coreanimation\.(?P<ca>[^\s)]+)'
             ),
             show=('process', 'ca'),
-            source='drivers/TegraGM20BMetal/TegraGM20BMetalStatesMiss.mm (every build), '
-            'TegraGM20BMetalComplete{,Remote}.mm (debug builds)',
+            source='drivers/TegraGM20BMetal/TegraGM20BMetalStatesMiss.mm, TegraGM20BMetalComplete{,Remote}.mm (debug builds)',
             note='a Core Animation state a process made that the pack lacks: with the catch-all off everywhere, '
             "each one is made at its first draw; `logharvest` adds them to the corpus. SwitchHWTest's are its own "
             'descriptors (CACorpus.swift), left out',

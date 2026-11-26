@@ -753,8 +753,9 @@ class Rules(unittest.TestCase):
             rec(
                 '/kernel.development',
                 '',
-                'tegra-gm20b: pack image: tier 0 124 MiB built in 900 ms for cameracaptured '
-                '(pagein requests 125, copy 14 ms, big-page bytes 130023424)',
+                'tegra-gm20b: pack image: tier 0 124 MiB for cameracaptured, open 600 ms after the build began '
+                '(tables read), streamed 300 ms after that (pagein requests 125, copy 14 ms, big-page bytes '
+                '130023424); 0 jobs waited on it on the GPU, the first submitted 0 ms before its end',
                 1,
             ),
             rec(

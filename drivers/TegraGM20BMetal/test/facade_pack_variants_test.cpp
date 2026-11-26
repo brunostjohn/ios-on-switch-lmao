@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
-// A packed state's variant (pack.h PipelineVariantRecord) is placed when a draw first selects its name, on the placer's
-// thread (TegraGM20BMetalPipelineVariants.mm): its state's creation places none, and the selecting thread places nothing.
+// A packed state's variant (pack.h PipelineVariantRecord) past the pack's tier 0 is placed when a draw first selects its
+// name, on the placer's thread (TegraGM20BMetalPipelineVariants.mm): its state's creation places none, and the selecting
+// thread places nothing. writePack sizes no tier 0, so every record here is past it; device_pack_variants_inline_test has
+// the tier-0 case.
 #include "facade_harness.h"
 #include "../TegraGM20BMetalPipelineVariants.h"
 #include "../creation_cost.h"
