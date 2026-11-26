@@ -31,7 +31,10 @@ FRAME = [
         REPORT,
         process='backboardd',
         subsystem=METAL,
-        regex=r"refused the render server's early writer promise for (?P<surfaces>\d+) surfaces \((?P<code>0x[0-9a-f]+)\)",
+        regex=(
+            r"refused the render server's early writer promise for (?P<surfaces>\d+) surfaces "
+            r'\((?P<code>0x[0-9a-f]+)\)'
+        ),
         show=('code',),
         source='drivers/TegraGM20BMetal/TegraGM20BMetalSchedule.mm (big/frame d1eac1c1c)',
         note='once a boot when the kernel refuses: its result code',
@@ -476,7 +479,10 @@ MEASURE = [
         'host1x-stalled',
         'TegraHost1x: ',
         'max(vic_stalled) > 0',
-        regex=r' clocked=\d+/(?P<vic>\d+)/\d+/\d+/(?P<dc>\d+)us stalled=\d+/(?P<vic_stalled>\d+)/\d+/\d+/(?P<dc_s>\d+)us',
+        regex=(
+            r' clocked=\d+/(?P<vic>\d+)/\d+/\d+/(?P<dc>\d+)us '
+            r'stalled=\d+/(?P<vic_stalled>\d+)/\d+/\d+/(?P<dc_s>\d+)us'
+        ),
         source='drivers/TegraHost1x/SwitchHost1xGatherStats.h',
         note='VIC waits on its producer during gpu.x1.gpu_vic_sync; DC during display.x1.host1x_flip',
     ),

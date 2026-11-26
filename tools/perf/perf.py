@@ -1,8 +1,9 @@
 """One session on the device, one report: pull the log archive and the reports over USB, then attribute what was slow.
 
 `pull` copies the running Switch's log archive (`idevicesyslog archive`) and its crash reports (`idevicecrashreport`)
-into a new folder and writes the report there, with every device check (tools/devicerun) in checks.txt; `report` reads an archive (or ndjson files) already on disk; `symbols`
-extracts reusable unslid symbol tables under ~/Library/Application Support/switch-ios/symbols/<build>/.
+into a new folder and writes the report there, with every device check (tools/devicerun) in checks.txt; `report`
+reads an archive (or ndjson files) already on disk; `symbols` extracts reusable unslid symbol tables under
+~/Library/Application Support/switch-ios/symbols/<build>/.
 """
 
 from __future__ import annotations

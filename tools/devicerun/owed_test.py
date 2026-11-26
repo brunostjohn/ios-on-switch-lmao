@@ -4,7 +4,7 @@ import re
 import unittest
 
 from tools.devicerun import checks, owed, owed_all
-from tools.devicerun.rules import FAIL, INFO, NO_DATA, PASS, REPORT, Check, Result
+from tools.devicerun.rules import FAIL, INFO, NA, NO_DATA, PASS, REPORT, Check, Result
 
 SD = (
     'SwitchSD: 12 rq 3 MiB avg 256K | busy 0.1s copy 1ms sync 0ms 30.1 MB/s (rd 30.1 wr 0.0) 5% of 10s | dma 12 '
@@ -144,8 +144,12 @@ SAMPLES = {
     ),
 }
 ZERO_SAMPLES = {
-    'owed.gpuformats.gpu.gm20b.planes_blits.zero': 'HWTEST gpu.gm20b.planes_blits FAIL c_504_exact_rgba16u_changed=3 ms=1.0',
-    'owed.gpuformats.gpu.iosurface.cross_process.zero': 'HWTEST gpu.iosurface.cross_process FAIL nvjpg256_y_wrong=2 ms=1.0',
+    'owed.gpuformats.gpu.gm20b.planes_blits.zero': (
+        'HWTEST gpu.gm20b.planes_blits FAIL c_504_exact_rgba16u_changed=3 ms=1.0'
+    ),
+    'owed.gpuformats.gpu.iosurface.cross_process.zero': (
+        'HWTEST gpu.iosurface.cross_process FAIL nvjpg256_y_wrong=2 ms=1.0'
+    ),
     'owed.gpuformats.gpu.packed_plane_target.zero': 'HWTEST gpu.packed_plane_target FAIL wrong_words_588_a=1 ms=1.0',
     'owed.gpuformats.gpu.gm20b.ycbcr_target_shapes.zero': (
         'HWTEST gpu.gm20b.ycbcr_target_shapes FAIL plane_one_bytes_off=8 ms=1.0'
@@ -220,6 +224,8 @@ class OwedTest(unittest.TestCase):
         self.assertEqual(
             [r.check.name for r in rows[1:]], [f'owed.{lane}' for lane in owed_all.LANES] + ['owed.motion']
         )
+        self.assertEqual(rows[-1].verdict, NA)
+        self.assertTrue(rows[-1].observed.startswith('not in this image'))
 
 
 if __name__ == '__main__':

@@ -1,5 +1,7 @@
-"""The device checks owed by the GPU lanes: state, memory, gputhroughput, gpuformats, gpurender, fetchmsaa, shadergen,
-devicegates, nohash and nvcompiler (owed.py). `source` names the branch tip a format was read at (25-26 Nov).
+"""The device checks owed by the GPU lanes (owed.py).
+
+The lanes are state, memory, gputhroughput, gpuformats, gpurender, fetchmsaa, shadergen, devicegates, nohash and
+nvcompiler. `source` names the branch tip a format was read at (25-26 Nov).
 """
 
 from tools.devicerun.owed import METAL, Ref, line, none_of, row

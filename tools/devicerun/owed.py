@@ -25,7 +25,7 @@ class Ref:
 
 
 def line(lane: str, name: str, contains: str | tuple[str, ...], rule: str = TIMELINE, **kw: object) -> Check:
-    """A kernel line by default; `process`, `subsystem` and the rest as Check's."""
+    """Return a check of one line, the kernel's by default; `process`, `subsystem` and the rest as Check's."""
     kw.setdefault('process', KERNEL)
     return Check(f'owed.{lane}.{name}', f'big-{lane}', contains, rule, **kw)
 
@@ -91,6 +91,6 @@ def lane_row(lane: str, entries: list[Check | Ref], by_check: dict[str, Result])
 
 
 def archive_row(boots: list[str]) -> Result:
-    """The boots the pull holds: a line logged once at boot reads NO-DATA when its boot started before the archive."""
+    """Return the boots the pull holds: a line logged once at boot reads NO-DATA when its boot started before it."""
     observed = f'{len(boots)} boot{"" if len(boots) == 1 else "s"}: ' + '; '.join(boots) if boots else 'no boot'
     return Result(Check('owed.archive', 'big-measure', '', REPORT), INFO, observed)
