@@ -58,8 +58,8 @@ void packedVariants(SwitchMetalPipeline *p, const gm20b::PackRun &run)
     }
 }
 
-// A draw's first select of a name queues it to the placer (TegraGM20BMetalPipelineVariants.mm). Sampled variants can use
-// stand-ins while pending; other variants hold the queue head until they publish or fail (TegraGM20BMetalSchedule.mm
+// A draw's first select of a name places a tier-0 record there and queues any other to the placer
+// (TegraGM20BMetalPipelineVariants.mm). Sampled variants can use stand-ins while pending; other variants hold the queue head until they publish or fail (TegraGM20BMetalSchedule.mm
 // variantReadiness). A variant failed for want of a compiler is asked again by the next pass that needs it (reopen).
 static gm20b::Variant<gm20b::Pipeline> *renderVariant(SwitchMetalPipeline *p, const gm20b::RenderVariant &forms)
 {

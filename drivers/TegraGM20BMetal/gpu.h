@@ -225,6 +225,9 @@ public:
     std::vector<std::pair<std::string, Pipeline *>> variantPipelines(uint64_t keyHash, bool caTransform);
     std::vector<std::pair<std::string, Pipeline *>> variantPipelines(const PackRun &run, bool caTransform);
     Pipeline *variantPipeline(const PackRun &run, const std::string &name, bool caTransform);
+    // The same of a tier-0 state, placed as a tier-0 hit is (no lock, no page read), or nullptr: its record is not in tier
+    // 0, takes the device lock to place, or has a storage form's twin (variantPipeline places those)
+    Pipeline *variantPipelineLockFree(const PackRun &run, const std::string &name, bool caTransform);
     // A state the runtime made a record of (record.h), drawn from then on as the pack's are; null: its programs find no room
     // in the heap or its samplers none in the header pool (`why`)
     Pipeline *addRecord(const RuntimeRecord &r, bool caTransform, std::string &why, bool *retry = nullptr);
@@ -1113,8 +1116,8 @@ public:
         std::atomic<uint64_t> bandedDraws{0}, bands{0};  // draw_bands.h
         // mixed passes' draws of MixedDraw::Covering, and of MixedDraw::Split (samples 1-3 with the pixel stage off)
         std::atomic<uint64_t> mixedCovering{0}, mixedStageOff{0};
-        std::atomic<uint64_t> learnedDraws{0};           // band_rates.h
-        std::atomic<uint64_t> bandedDispatches{0};       // dispatch_bands.h
+        std::atomic<uint64_t> learnedDraws{0};      // band_rates.h
+        std::atomic<uint64_t> bandedDispatches{0};  // dispatch_bands.h
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         // draws large enough to measure, priced by the static estimate or a learned rate, and those drawn whole
         // without a band decision (fetchDraw, wholeDraw)
@@ -1644,6 +1647,8 @@ private:
     // lock_ + placeRecord otherwise.
     Pipeline *placePackedRecord(const PackPipeline &pp, bool caTransform);
     std::unique_ptr<Pipeline> tryBuildTier0LockFree(const PackPipeline &pp, uint32_t recIndex, bool caTransform);
+    // Tier-0 record `idx`'s pipeline: the slot's, or `built` published in it
+    Pipeline *publishTier0(uint32_t idx, std::unique_ptr<Pipeline> built);
     // lock_ held: pack record `pp` placed (its programs in the heap) and built, once; null where the heap has no room
     Pipeline *placeRecord(const PackPipeline &pp, bool caTransform);
     // `pl`'s split offered, its twin made when a draw first takes it (makeSplit)

@@ -77,12 +77,18 @@ dispatch_queue_t gm20bVariantPlacer()
     return placer;
 }
 
-// Placing a pack record can take the device lock, grow the program heap (a kernel call) and read a tier-1 record from the
-// card; asking the compiler makes the state's key as text. None of it is the drawing thread's. A record that found no room
-// in the heap goes to the compiler, as a name the pack lacks does.
+// A tier-0 record is placed where the draw selects its name, as a tier-0 hit is: no lock, no page read. Placing any other
+// record can take the device lock, grow the program heap (a kernel call) and read a tier-1 record from the card; asking
+// the compiler makes the state's key as text. None of that is the drawing thread's, and a cheap name never queues behind
+// it. A record that found no room in the heap goes to the compiler, as a name the pack lacks does.
 void gm20bPlaceVariant(SwitchMetalPipeline *p, const std::shared_ptr<RenderVariant> &variant,
                        const gm20b::RenderVariant &forms)
 {
+    if (p->_hasPackVariants)
+        if (gm20b::Pipeline *pl = gRM->raw->variantPipelineLockFree(p->_packRun, forms.name(), p->_caTransform)) {
+            variant->publish(pl);
+            return;
+        }
     const gm20b::RenderVariant asked = forms;
     const std::shared_ptr<RenderVariant> placing = variant;
     // the placer's threads take the committers' fixed priority and no QoS class: the compiler is asked at the class of

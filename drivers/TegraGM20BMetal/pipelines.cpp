@@ -455,24 +455,46 @@ std::unique_ptr<Pipeline> Device::tryBuildTier0LockFree(const PackPipeline &pp, 
     return built;
 }
 
+Pipeline *Device::publishTier0(uint32_t idx, std::unique_ptr<Pipeline> built)
+{
+    std::atomic<Pipeline *> &slot = tier0Pipelines_.slots[idx];
+    Pipeline *expected = nullptr;
+    Pipeline *raw = built.get();
+    if (!slot.compare_exchange_strong(expected, raw, std::memory_order_acq_rel, std::memory_order_acquire))
+        return expected;
+    built.release();
+    SWITCH_METAL_DIAGNOSTIC(stats.blendKillStates += raw->blendKill);
+    SWITCH_METAL_DIAGNOSTIC(for (const auto &v : raw->ownedVariants) stats.blendKillStates += v->blendKill);
+    return raw;
+}
+
+Pipeline *Device::variantPipelineLockFree(const PackRun &run, const std::string &name, bool caTransform)
+{
+    const PackPipeline *pipelines = pack_.section<PackPipeline>(PackPipelines);
+    if (!run.records || uint64_t(run.first - pipelines) >= tier0Pipelines_.count)
+        return nullptr;
+    const PackPipeline *rec = pack_.variantRecord(run, name, PackForm::Default);
+    const uint32_t idx = rec ? uint32_t(rec - pipelines) : UINT32_MAX;
+    if (idx >= tier0Pipelines_.count)
+        return nullptr;
+    Pipeline *pl = tier0Pipelines_.slots[idx].load(std::memory_order_acquire);
+    if (!pl) {
+        std::unique_ptr<Pipeline> built = tryBuildTier0LockFree(*rec, idx, caTransform);
+        if (!built)
+            return nullptr;
+        pl = publishTier0(idx, std::move(built));
+    }
+    return pl->storageBits ? nullptr : pl;
+}
+
 Pipeline *Device::placePackedRecord(const PackPipeline &pp, bool caTransform)
 {
     const uint32_t idx = uint32_t(&pp - pack_.section<PackPipeline>(PackPipelines));
     if (idx < tier0Pipelines_.count) {
-        std::atomic<Pipeline *> &slot = tier0Pipelines_.slots[idx];
-        if (Pipeline *existing = slot.load(std::memory_order_acquire))
+        if (Pipeline *existing = tier0Pipelines_.slots[idx].load(std::memory_order_acquire))
             return existing;
-        if (std::unique_ptr<Pipeline> built = tryBuildTier0LockFree(pp, idx, caTransform)) {
-            Pipeline *expected = nullptr;
-            Pipeline *raw = built.get();
-            if (slot.compare_exchange_strong(expected, raw, std::memory_order_acq_rel, std::memory_order_acquire)) {
-                built.release();
-                SWITCH_METAL_DIAGNOSTIC(stats.blendKillStates += raw->blendKill);
-                SWITCH_METAL_DIAGNOSTIC(for (const auto &v : raw->ownedVariants) stats.blendKillStates += v->blendKill);
-                return raw;
-            }
-            return expected;
-        }
+        if (std::unique_ptr<Pipeline> built = tryBuildTier0LockFree(pp, idx, caTransform))
+            return publishTier0(idx, std::move(built));
     } else {
         prereadPackRecord(pack_, pp, uint64_t(vm_page_size));
     }

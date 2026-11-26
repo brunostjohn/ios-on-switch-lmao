@@ -354,6 +354,19 @@ def build_fixture() -> packfile.Pack:
             guest_base_word=[9],
             guest_base_slot=[1],
         ),
+        # A tier-1 state's variant record, which its draws' first select of " | tests=2" places on the placer.
+        base_record(
+            TIER1_KEY + ' | tests=2',
+            t1_vs,
+            t1_fs,
+            [
+                (0x1A00, 0x1111),
+                (0x1364, 0x00000083),
+                (0x1368, 0x00000084),
+                (0x136C, 0x00000085),
+            ],
+            tier=1,
+        ),
         # Tier-1 cold record past tier0_heap.
         base_record(
             TIER1_KEY,
