@@ -251,6 +251,9 @@ void switch_exec_chan_count_wfis(struct switch_exec_chan *chan, uint32_t from_dw
 			} else if (cur == NVB06F_MEM_OP_D &&
 				   data == NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY) {
 				out->l2_flushes++;
+			} else if (cur == NVB06F_MEM_OP_D &&
+				   data == NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE) {
+				out->l2_invalidates++;
 			} else if (cur == NV906F_SEMAPHOREA) {
 				sema_hi = data & 0xffu;
 			} else if (cur == NV906F_SEMAPHOREB) {

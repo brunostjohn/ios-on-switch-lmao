@@ -62,6 +62,7 @@ struct switch_exec_wfi_counts {
 	uint32_t method_wfis;
 	uint32_t fb_flushes;
 	uint32_t l2_flushes;
+	uint32_t l2_invalidates; /* L2_SYSMEM_INVALIDATE: the L2's clean lines dropped */
 	uint32_t release_wfi_en;
 	uint32_t release_wfi_dis;
 	uint32_t start_stamps_en;

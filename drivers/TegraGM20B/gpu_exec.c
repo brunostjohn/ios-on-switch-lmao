@@ -830,11 +830,16 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 		tgm_stats_l2_inval(chan, l2_on() && host_written, tlb);
 		/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
 		/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
-		PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_WFI, 0);
-		PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_FB_FLUSH, 0);
+		/* Host-written input alone needs no drain: dropping the L2's clean lines leaves work in flight its dirty ones
+		 * (deko3d's submit acquire on this GPU has no WFI or FB_FLUSH). A TLB change drains first. */
+		if (tlb) {
+			PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_WFI, 0);
+			PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_FB_FLUSH, 0);
+		}
 		PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
 			  NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY);
-		PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_FB_FLUSH, 0);
+		if (tlb)
+			PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_FB_FLUSH, 0);
 		PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
 			  NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);
 		if (tlb) {

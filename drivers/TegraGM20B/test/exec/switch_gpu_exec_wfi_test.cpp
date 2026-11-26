@@ -221,4 +221,23 @@ TEST_F(ExecWfi, OnlyAJobThatFlushesTheL2IncrementsAndOnlyOnAChannelWithASyncpoin
 	EXPECT_EQ(unasked.l2_flushes, 1u);
 	EXPECT_EQ(unasked.syncpt_incrs, 0u);
 }
+
+// Host-written input drops the L2's clean lines after its dirty ones are written back, with no drain first: work in
+// flight keeps its dirty lines (deko3d's submit acquire). A TLB change still drains the GPU before it.
+TEST_F(ExecWfi, AHostWrittenAcquireInvalidatesTheL2WithoutDrainingTheGpu)
+{
+	const auto hostWritten = submit(
+		SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT | SWITCH_GPU_SUBMIT_HOST_WRITTEN, nullptr, 0);
+	EXPECT_EQ(hostWritten.l2_invalidates, 1u);
+	EXPECT_EQ(hostWritten.l2_flushes, 1u);
+	EXPECT_EQ(hostWritten.method_wfis, 0u);
+	EXPECT_EQ(hostWritten.fb_flushes, 0u);
+
+	switch_exec_chan_dirty_tlb(chan);
+	const auto tlb = submit(SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT, nullptr, 0);
+	EXPECT_EQ(tlb.l2_invalidates, 1u);
+	EXPECT_EQ(tlb.l2_flushes, 1u);
+	EXPECT_EQ(tlb.method_wfis, 1u);
+	EXPECT_EQ(tlb.fb_flushes, 2u);
+}
 }  // namespace
