@@ -27,7 +27,10 @@
 #include "../SwitchDisplayMemoryEnvelope.h"
 #include "../SwitchLandscapeWindows.h"
 
-constexpr int kIOReturnAborted = static_cast<int>(0xe00002eb);
+constexpr int kIOReturnAborted = static_cast<int>(0xe00002eb), kIOReturnSuccess = 0;
+using IOReturn = int;
+
+struct OSObject {};
 
 namespace media_flip_test {
 extern int gFenceResult;
@@ -45,7 +48,51 @@ struct HostStream {
 
 inline HostStream gHost;
 inline std::function<void(void *, int)> gDelivered;
+
+// The GPU-to-host1x bridge a GPU-rendered set's stream waits on (SwitchGpuPlaneStream.h).
+struct BridgeModel {
+    unsigned submits = 0, notifies = 0, releases = 0;
+    std::vector<switch_gpu_backing_token> tokens;
+    void (*completed)(void *, int) = nullptr;
+    void *context = nullptr;
+};
+
+inline BridgeModel gBridge;
 inline int gTokensWhy = SWITCH_GPU_BACKING_WRITER_GONE;
+}
+
+struct switch_gpu_bridge {
+    int unused;
+};
+
+inline switch_gpu_bridge gTheBridge;
+
+extern "C" inline int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, uint32_t count,
+                                               switch_gpu_bridge **bridge)
+{
+    ++media_flip_test::gBridge.submits;
+    media_flip_test::gBridge.tokens.assign(tokens, tokens + count);
+    *bridge = &gTheBridge;
+    return 0;
+}
+
+extern "C" inline int switch_gpu_bridge_wait_room()
+{
+    return 0;
+}
+
+extern "C" inline int switch_gpu_bridge_notify(const switch_gpu_bridge *, void (*completed)(void *, int), void *context)
+{
+    ++media_flip_test::gBridge.notifies;
+    media_flip_test::gBridge.completed = completed;
+    media_flip_test::gBridge.context = context;
+    return 0;
+}
+
+extern "C" inline void switch_gpu_bridge_release(switch_gpu_bridge **bridge)
+{
+    ++media_flip_test::gBridge.releases;
+    *bridge = nullptr;
 }
 
 inline int switch_host1x_display_start(SwitchHost1xDisplayStream *stream)
@@ -292,7 +339,7 @@ struct Words {
 
 using SwitchMMIOWords = Words;
 
-struct Display {
+struct Display : OSObject {
     using PlaneSet = switch_display::Composition;
     using Window = switch_landscape::Window;
     using PlaneCommits = switch_display::Compositions<PlaneSet>;
@@ -699,6 +746,55 @@ struct Display {
 #include "../SwitchOverlayRecovery.h"
 #include "../SwitchPlanesResume.h"
 #include "../SwitchMediaCompletionFlipDisplay.h"
+    // A GPU-rendered set's producers, the copy thread's runAction back under the gate, and its counters.
+    static constexpr unsigned kPlaneDependencies = 3;
+    switch_gpu_backing_token gpuProducers[3] = {};
+    unsigned gpuProducerCount = 0;
+    bool copyStopping = false;
+    uint32_t stPlaneGpuStreamed = 0, stPlaneGpuByCpu = 0, stPlaneGpuStreamRefused = 0;
+
+    unsigned planeDependencies(const PlaneSet &, switch_gpu_backing_token tokens[3]) const
+    {
+        for (unsigned i = 0; i < gpuProducerCount; ++i)
+            tokens[i] = gpuProducers[i];
+        return gpuProducerCount;
+    }
+
+    struct WorkLoop {
+        IOReturn runAction(IOReturn (*action)(OSObject *, void *, void *, void *, void *), OSObject *target, void *arg0,
+                           void *arg1)
+        {
+            return action(target, arg0, arg1, nullptr, nullptr);
+        }
+    } loop;
+
+    WorkLoop *getWorkLoop()
+    {
+        return &loop;
+    }
+
+    // planeFence for a set the GPU renders: armed for its stream (SwitchGpuPlaneStream.h) when its layout is the
+    // newest requested one; the copy thread's half is copyThread.
+    bool offerGpu(PlaneSet p, uint64_t seq)
+    {
+        p.seq = seq;
+        swaps.push_back(seq);
+        planeFencing = p;
+        planeFencePending = gpuScanout = transferred = true;
+        planeTarget = p;
+        gpuProducers[0] = {seq, 1, SWITCH_GPU_ENGINE_GM20B, 3};
+        gpuProducerCount = 1;
+        planeBridgeArm(p);
+        return planeBridgeArmed != 0;
+    }
+
+    void copyThread()
+    {
+        switch_gpu_backing_token tokens[3] = {};
+        planeBridgeWork(tokens, planeDependencies(planeFencing, tokens));
+    }
+
+#include "../SwitchGpuPlaneStream.h"
 #include "../SwitchSuspendRetire.h"
 #undef SWITCH_FRAME_TIMELINE
 };

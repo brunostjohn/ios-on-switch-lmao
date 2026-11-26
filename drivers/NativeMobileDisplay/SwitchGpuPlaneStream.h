@@ -64,13 +64,16 @@ void planeBridgeWork(const switch_gpu_backing_token *producers, unsigned count)
             break;
         error = kIOReturnAborted;
     }
-    getWorkLoop()->runAction(
-        [](OSObject *owner, void *handle, void *status, void *, void *) -> IOReturn {
-            static_cast<NativeLegacyDisplay *>(owner)->planeBridgeSubmitted(
-                static_cast<switch_gpu_bridge *>(handle), static_cast<int>(reinterpret_cast<intptr_t>(status)));
-            return kIOReturnSuccess;
-        },
-        this, bridge, reinterpret_cast<void *>(static_cast<intptr_t>(error)));
+    getWorkLoop()->runAction(&planeBridgeSubmittedAction<decltype(this)>, this, bridge,
+                             reinterpret_cast<void *>(static_cast<intptr_t>(error)));
+}
+
+template <class Self>
+static IOReturn planeBridgeSubmittedAction(OSObject *owner, void *handle, void *status, void *, void *)
+{
+    static_cast<Self>(owner)->planeBridgeSubmitted(static_cast<switch_gpu_bridge *>(handle),
+                                                   static_cast<int>(reinterpret_cast<intptr_t>(status)));
+    return kIOReturnSuccess;
 }
 
 // Under the gate: the stream over the bridge while the set's flip is still the one armed; else the bridge's own
