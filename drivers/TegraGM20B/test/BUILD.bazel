@@ -987,6 +987,7 @@ host_test(
     srcs = [
         "switch_gpu_spare_books_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuSpareBooks.h",
+        "//drivers/TegraGM20B:SwitchGpuSpareRecord.h",
         "//drivers/TegraGM20B:SwitchGpuSpares.h",
     ],
 )

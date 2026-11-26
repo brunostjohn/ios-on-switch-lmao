@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
-// One boot's spare demand, kept for the next boot to seed its depths from: each slot that boot asked, by kind and class
-// size, with the depth its asks left it. The pool keeps it in NVRAM (TegraGM20BUserClientSpareRecord.cpp), so it reaches
+// One boot's spare demand, kept for the next boot to seed its depths from: each slot that boot asked (or that served an
+// ask), by kind and class size, with its target then (its warm count or what its misses taught). A warm class that
+// served the boot is recorded too, so the next boot's seeded classes do not take its room as if nobody had asked. The pool keeps it in NVRAM (TegraGM20BUserClientSpareRecord.cpp), so it reaches
 // the card when SwitchNVRAM writes the bank at sleep or shutdown.
 #pragma once
 #include "SwitchGpuSpareBooks.h"
@@ -21,13 +22,14 @@ inline uint32_t switch_gpu_spare_record_encode(const switch_gpu_spare_books &b, 
 	uint32_t n = 0;
 	for (uint32_t s = 0; s < SWITCH_GPU_SPARE_SLOTS && n < SWITCH_GPU_SPARE_RECORD_ENTRIES;
 	     s++) {
-		if (b.used[s] <= SWITCH_GPU_SPARE_SEEDED || !b.depth[s])
+		const uint16_t target = switch_gpu_spare_books_target(b, s);
+		if (b.used[s] <= SWITCH_GPU_SPARE_SEEDED || !target)
 			continue;
 		uint8_t *e =
 			out + SWITCH_GPU_SPARE_RECORD_HEADER + n * SWITCH_GPU_SPARE_RECORD_ENTRY;
 		const uint32_t kib = uint32_t(switch_gpu_spare_slot_bytes(s) >> 10);
 		e[0] = uint8_t(switch_gpu_spare_slot_kind(s));
-		e[1] = uint8_t(b.depth[s]);
+		e[1] = uint8_t(target);
 		for (uint32_t i = 0; i < 4; i++)
 			e[2 + i] = uint8_t(kib >> (8 * i));
 		n++;

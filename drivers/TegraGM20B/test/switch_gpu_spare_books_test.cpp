@@ -8,7 +8,7 @@
 #include <cstdio>
 #include <vector>
 
-#include "drivers/TegraGM20B/SwitchGpuSpareBooks.h"
+#include "drivers/TegraGM20B/SwitchGpuSpareRecord.h"
 
 namespace
 {
@@ -523,6 +523,30 @@ TEST(SpareBooks, TheReplayedDemandPerClass)
 	EXPECT_EQ(p.served[slotOf(24 * kMiB, SWITCH_GPU_SPARE_WC)], 0u)
 		<< "a class's first ask of a boot misses without a record";
 	EXPECT_EQ(p.served[slotOf(20 * kMiB, SWITCH_GPU_SPARE_CACHED)], 10u);
+}
+
+// The next boot, seeded from this one's record: fresh_spare's write-combined class is ready from boot, and the warm
+// 24 MiB pair an app's launch target and the compositor share stays, since this boot asked it (a seed of the
+// write-combined class alone left the pair one short and the launch target's first ask hit the compositor's reserve)
+TEST(SpareBooks, ASeededBootServesFreshSpareAndKeepsTheLaunchTargetsPair)
+{
+	Pool first;
+	first.refill();
+	replayDemand(first);
+	std::vector<uint8_t> record(SWITCH_GPU_SPARE_RECORD_BYTES);
+	record.resize(switch_gpu_spare_record_encode(first.b, record.data()));
+	Pool next;
+	ASSERT_GT(
+		switch_gpu_spare_record_seed(next.b, record.data(), uint32_t(record.size()), kCap),
+		0u);
+	next.refill();
+	EXPECT_EQ(next.b.ready[slotOf(24 * kMiB, SWITCH_GPU_SPARE_WC)], 1);
+	EXPECT_EQ(next.b.ready[slotOf(24 * kMiB, SWITCH_GPU_SPARE_CACHED)], 2);
+	EXPECT_LE(next.peak, kCap);
+	replayDemand(next);
+	printDemand("replayed demand, the boot after (seeded):", next);
+	EXPECT_EQ(next.served[slotOf(24 * kMiB, SWITCH_GPU_SPARE_WC)], 1u);
+	EXPECT_EQ(next.misses, 0u);
 }
 
 }  // namespace
