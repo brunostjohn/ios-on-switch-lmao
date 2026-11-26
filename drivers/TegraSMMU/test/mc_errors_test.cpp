@@ -307,8 +307,9 @@ TEST_F(McErrors, ACarveoutBitThatDoesNotStickIsOneLineNotAPanic)
         switch_mc_errors_resume();
         ADD_FAILURE() << "no panic";
     } catch (const switch_test_panic &p) {
-        EXPECT_EQ(std::string(p.what()), "TegraSMMU: MC error interrupt (INTID 109) masked: INTMASK reads 0x31d40 after "
-                                         "0x33d40 was written");
+        EXPECT_EQ(std::string(p.what()),
+                  "TegraSMMU: MC error interrupt (INTID 109) masked: INTMASK reads 0x31d40 after "
+                  "0x33d40 was written");
     }
     gIntmaskDrops = 0;
 }

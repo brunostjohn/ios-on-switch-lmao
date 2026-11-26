@@ -14,7 +14,6 @@
 
 #include "../TegraSE.cpp"
 
-
 namespace se_model {
 constexpr uintptr_t kBase[kEngines] = {0x70012000, 0x70412000};
 

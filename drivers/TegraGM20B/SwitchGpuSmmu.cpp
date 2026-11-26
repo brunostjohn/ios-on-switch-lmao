@@ -134,13 +134,14 @@ extern "C" void switch_gpu_smmu_release_ram(const uint64_t *pages, uint32_t npag
 	gRam.locked([&](auto &core) {
 		for (uint32_t i = 0; i < npages; ++i) {
 			const uint64_t pa = pages[i] & ~SWITCH_GPU_SMMU_BIT;
-			if (switch_gpu_smmu_is_ram_pa(pages[i]) && !core.release(pa, TegraSMMUDomain::kPage) &&
-			    !unheld)
+			if (switch_gpu_smmu_is_ram_pa(pages[i]) &&
+			    !core.release(pa, TegraSMMUDomain::kPage) && !unheld)
 				unheld = pa;
 		}
 		core.commit();
 	});
 	if (unheld)
-		panic("tegra-gm20b: a release of %u pages found page %#llx not held in GPUB's RAM view", npages,
-		      static_cast<unsigned long long>(unheld));
+		panic("tegra-gm20b: a release of %u pages found page %#llx not held in GPUB's RAM "
+		      "view",
+		      npages, static_cast<unsigned long long>(unheld));
 }

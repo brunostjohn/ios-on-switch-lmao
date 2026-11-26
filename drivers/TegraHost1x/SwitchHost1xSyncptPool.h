@@ -13,9 +13,9 @@
 struct SwitchHost1xSyncptPool {
     static constexpr uint32_t kSyncpts = 192, kWords = kSyncpts / 64, kFirstHandedOut = 160;
 
-    uint64_t taken[kWords] = {};  // handed out now, or never to be (reserved)
-    uint64_t owned[kWords] = {};  // handed out now
-    uint64_t ever[kWords] = {};   // handed out since boot: SC7 saves and restores these
+    uint64_t taken[kWords] = {};      // handed out now, or never to be (reserved)
+    uint64_t owned[kWords] = {};      // handed out now
+    uint64_t ever[kWords] = {};       // handed out since boot: SC7 saves and restores these
     uint64_t freedAt[kSyncpts] = {};  // when a free id was last freed (freeCount then); 0: never handed out
     uint64_t freeCount = 0;
     uint32_t inUse = 0, reserved = 0;
@@ -56,8 +56,8 @@ struct SwitchHost1xSyncptPool {
             if (best == kSyncpts)
                 return false;
             uint64_t word = __atomic_load_n(&taken[best / 64], __ATOMIC_ACQUIRE);
-            if ((word & bit(best)) != 0 || !__atomic_compare_exchange_n(&taken[best / 64], &word, word | bit(best), false,
-                                                                       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            if ((word & bit(best)) != 0 || !__atomic_compare_exchange_n(&taken[best / 64], &word, word | bit(best),
+                                                                        false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
                 continue;
             __atomic_fetch_or(&owned[best / 64], bit(best), __ATOMIC_RELEASE);
             __atomic_fetch_or(&ever[best / 64], bit(best), __ATOMIC_RELEASE);
