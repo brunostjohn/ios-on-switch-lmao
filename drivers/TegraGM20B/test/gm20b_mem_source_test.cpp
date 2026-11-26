@@ -51,6 +51,33 @@ TEST(GM20BMemSource, AUnitIsOneAlignedContiguousRun)
 
 // K17: a BoImport wire blocked past 50 ms (25 Nov: 658 ms at 0% CPU) names its VM wait through the kernel's stall
 // watch, debug kernels only, armed for the wire alone
+// S5's comment names the order the GPU runs (review-memory3 should-fix 4): a host-written job's acquire writes the L2
+// back and invalidates it with no drain unless the TLB changed, and the external fence drains and writes back again
+TEST(GM20BMemSource, TheRetirementFlushIsDocumentedInTheOrderItIsEmitted)
+{
+	const std::string header = SourceText("../TegraGM20BGpu.h");
+	EXPECT_NE(
+		header.find(
+			"acquire runs L2_FLUSH_DIRTY then L2_SYSMEM_INVALIDATE\n * with no drain"),
+		std::string::npos);
+	EXPECT_EQ(
+		header.find("WFI, FB_FLUSH, L2_FLUSH_DIRTY, FB_FLUSH\n * and L2_SYSMEM_INVALIDATE"),
+		std::string::npos);
+	const std::string exec = SourceText("../gpu_exec.c");
+	const size_t acquire = exec.find("if ((l2_on() && host_written) || tlb) {");
+	ASSERT_NE(acquire, std::string::npos);
+	const size_t flush = exec.find("NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY", acquire);
+	const size_t invalidate =
+		exec.find("NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE", acquire);
+	const size_t drain = exec.find("if (tlb) {", acquire);
+	ASSERT_NE(invalidate, std::string::npos);
+	EXPECT_LT(flush, invalidate);
+	EXPECT_LT(drain, flush)
+		<< "the WFI and FB_FLUSH ahead of the flush are the TLB change's alone";
+	EXPECT_NE(exec.find("PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_WFI, 0);", drain),
+		  std::string::npos);
+}
+
 TEST(GM20BMemSource, ABlockedImportWireNamesItsWait)
 {
 	const CodeText import = Block(unit("TegraGM20BUserClientImport.cpp"),

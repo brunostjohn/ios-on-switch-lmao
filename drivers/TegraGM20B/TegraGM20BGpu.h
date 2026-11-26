@@ -130,11 +130,14 @@ void tgm_mem_del_finish(struct tgm_mem *later);
  * its SMMU windows go back, then the memory objects */
 void tgm_mem_del_release(struct tgm_mem *later);
 /* The retirement work's ordered L2 write-back and invalidate (SwitchGpuAllocatedMemory.cpp, TegraGM20BCopy.cpp): an
- * empty job on the kernel copy queue's channel whose host-written acquire runs WFI, FB_FLUSH, L2_FLUSH_DIRTY, FB_FLUSH
- * and L2_SYSMEM_INVALIDATE ahead of its external fence, then fn(arg, 0 or the channel's error) on the retirement work
- * once that fence passed. That work never waits for the queue: -16 when the lock, a waiting submitter's turn, every job
- * slot or the channel is taken, -11 when the ring has no room, and nothing is queued; a later retirement pass asks
- * again (a holder's unlock or a job's fence schedules one). */
+ * empty job on the kernel copy queue's channel. Its host-written acquire runs L2_FLUSH_DIRTY then L2_SYSMEM_INVALIDATE
+ * with no drain ahead of them (gpu_exec.c chan_exec_body; nvkm_ltc_invalidate's order over MMIO, 0x70010 then 0x70004),
+ * and its external fence then WFI, FB_FLUSH, L2_FLUSH_DIRTY and FB_FLUSH before the release (chan_fence_job). Sound for
+ * retired memory, whose writers' fences all passed: a write still posted at the invalidate would be written back by the
+ * fence's flush but not dropped. Then fn(arg, 0 or the channel's error) on the retirement work once that fence passed.
+ * That work never waits for the queue: -16 when the lock, a waiting submitter's turn, every job slot or the channel is
+ * taken, -11 when the ring has no room, and nothing is queued; a later retirement pass asks again (a holder's unlock or
+ * a job's fence schedules one). */
 int switch_gpu_copy_l2_flush(void (*fn)(void *arg, int status), void *arg);
 /* User range [TGM_USER_VA_START, TGM_KERNEL_VA): raw binds. read_only: the GPU may only read the range (a write is an
  * MMU fault). tgm_vm_map and tgm_vm_unmap invalidate the L2 and the TLB before they return; tgm_vm_map_ordered (a
