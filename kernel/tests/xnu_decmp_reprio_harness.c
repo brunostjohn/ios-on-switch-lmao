@@ -11,12 +11,12 @@
 #define DEVELOPMENT 0
 #define DEBUG       0
 
-#define PAGE_SIZE           16384u
-#define atop(x)             ((uint64_t)(x) / PAGE_SIZE)
-#define page_aligned(x)     (((x) % PAGE_SIZE) == 0)
-#define assert(e)           ((void)0)
-#define assertf(e, ...)     ((void)0)
-#define KERN_SUCCESS        0
+#define PAGE_SIZE              16384u
+#define atop(x)                ((uint64_t)(x) / PAGE_SIZE)
+#define page_aligned(x)        (((x) % PAGE_SIZE) == 0)
+#define assert(e)              ((void)0)
+#define assertf(e, ...)        ((void)0)
+#define KERN_SUCCESS           0
 #define UPL_TRACKED_BY_OBJECT  0x1
 #define UPL_EXPEDITE_SUPPORTED 0x2
 #define UPL_DECMP_REAL_IO      0x4
@@ -30,6 +30,7 @@ typedef uint32_t zalloc_flags_t;
 #define Z_NOFAIL 0x8000u
 
 struct vnode;
+
 struct vm_object {
     struct vm_object *shadow;
     void *pager;
@@ -49,6 +50,7 @@ typedef struct upl *upl_t;
 struct switch_test_link {
     void *next;
 };
+
 struct io_reprioritize_req {
     uint64_t blkno;
     uint32_t len;
@@ -118,13 +120,13 @@ static void mpsc_daemon_enqueue(int *queue, struct switch_test_link *elm, int op
     switch_test_enqueue((io_reprioritize_req_t)(void *)((char *)elm - offsetof(struct io_reprioritize_req, iorr_elm)));
 }
 
-#define kalloc_data(size, flags)                    switch_test_kalloc((size), (flags))
-#define kfree_data(p, size)                         free(p)
-#define MPSC_QUEUE_DISABLE_PREEMPTION               0
-#define IO_REPRIORITIZE_LIST_LOCK()                 ((void)0)
-#define IO_REPRIORITIZE_LIST_UNLOCK()               ((void)0)
-#define IO_REPRIO_THREAD_WAKEUP()                   ((void)0)
-#define queue_enter(head, elt, type, field)         switch_test_enqueue(elt)
+#define kalloc_data(size, flags)            switch_test_kalloc((size), (flags))
+#define kfree_data(p, size)                 free(p)
+#define MPSC_QUEUE_DISABLE_PREEMPTION       0
+#define IO_REPRIORITIZE_LIST_LOCK()         ((void)0)
+#define IO_REPRIORITIZE_LIST_UNLOCK()       ((void)0)
+#define IO_REPRIO_THREAD_WAKEUP()           ((void)0)
+#define queue_enter(head, elt, type, field) switch_test_enqueue(elt)
 
 #define vm_decmp_upl_reprioritize vm_decmp_upl_reprioritize_10063
 #include "decmp_reprioritize_10063.h"

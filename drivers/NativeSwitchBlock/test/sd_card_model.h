@@ -391,8 +391,7 @@ private:
         while (count < kMaxChain && last->next && last->next->shared == first->shared &&
                last->next->write == first->write && last->next->lba == last->lba + last->sectors &&
                sectors + last->next->sectors <= (first->write ? maxWriteSectors : kMaxSectors) &&
-               !overlapsOlder(last->next) &&
-               !overlapsInFlight(last->next)) {
+               !overlapsOlder(last->next) && !overlapsInFlight(last->next)) {
             last = last->next;
             sectors += last->sectors;
             ++count;
