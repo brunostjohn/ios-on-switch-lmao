@@ -277,8 +277,15 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
             }
             break;
         }
+#if SWITCH_METAL_DIAGNOSTICS
+        const auto bindStart = std::chrono::steady_clock::now();
+#endif
         if (made)
             kr = k_.bindCompressed(bo, w.kind);
+#if SWITCH_METAL_DIAGNOSTICS
+        long long bindUs =
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - bindStart).count();
+#endif
         uint64_t evictedBytes = 0;
         if (kr != KERN_SUCCESS && compShortage(kr) && !comp_.ready.empty()) {
             if (made) {
@@ -319,8 +326,16 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
                     }
                     break;
                 }
+#if SWITCH_METAL_DIAGNOSTICS
+                const auto rebindStart = std::chrono::steady_clock::now();
+#endif
                 if (made)
                     kr = k_.bindCompressed(bo, w.kind);
+#if SWITCH_METAL_DIAGNOSTICS
+                bindUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() -
+                                                                               rebindStart)
+                             .count();
+#endif
             }
         }
         if (auto it = std::find(comp_.wanted.begin(), comp_.wanted.end(), w); it != comp_.wanted.end())
@@ -335,9 +350,12 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
             SWITCH_METAL_DIAGNOSTIC(stats.compHeld++);
             SWITCH_METAL_DIAGNOSTIC(stats.compHeldBytes += bo.bytes);
             SWITCH_METAL_DIAGNOSTIC(glassMemEvent("compressed memory made", bo.bytes));
-            SWITCH_METAL_DIAGNOSTIC(os_log_debug(compLog(),
-                                                 "SwitchMetal: compressed memory %llu KiB kind 0x%x made in %lld us",
-                                                 (unsigned long long)(w.bytes >> 10), w.kind, (long long)us));
+            // at the default level, which a pulled log archive keeps (25 Nov's lost these at debug): the two kernel calls a
+            // texture born compressed would make on its creating thread
+            SWITCH_METAL_DIAGNOSTIC(os_log(compLog(),
+                                           "SwitchMetal: compressed memory %llu KiB kind 0x%x made in %lld us, "
+                                           "bound in %lld us",
+                                           (unsigned long long)(w.bytes >> 10), w.kind, (long long)us, bindUs));
             continue;
         }
         if (made) {
