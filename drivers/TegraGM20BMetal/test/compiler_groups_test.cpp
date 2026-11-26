@@ -104,7 +104,8 @@ TEST(CompilerGroups, TheNativeAdaptersPreserveGroupedFunctionsAndTheUngroupedPro
             ASSERT_EQ(engine.compile(prepared, result, why), TegraGM20BCompileMade) << why;
             if (kind == gm20b::RequestKind::Facts) {
                 gm20b::PackComputeFacts facts = {};
-                ASSERT_EQ(gm20b::decodeFactsEntry(result, prepared.key, facts, why), gm20b::RecordCache::Found::Record)
+                ASSERT_EQ(gm20b::decodeFactsEntry(result, prepared.content, facts, why),
+                          gm20b::RecordCache::Found::Record)
                     << why;
                 EXPECT_GT(facts.maxThreads, 0u);
                 EXPECT_GT(facts.executionWidth, 0u);
@@ -118,7 +119,7 @@ TEST(CompilerGroups, TheNativeAdaptersPreserveGroupedFunctionsAndTheUngroupedPro
             } else if (kind == gm20b::RequestKind::Reflection) {
                 bool made = false;
                 std::string reflection;
-                ASSERT_TRUE(gm20b::decodeReflectionEntry(result, prepared.key, made, reflection) && made);
+                ASSERT_TRUE(gm20b::decodeReflectionEntry(result, prepared.content, made, reflection) && made);
                 ASSERT_FALSE(reflection.empty());
                 if (grouped)
                     EXPECT_EQ(reflection, plainReflection);
@@ -126,7 +127,7 @@ TEST(CompilerGroups, TheNativeAdaptersPreserveGroupedFunctionsAndTheUngroupedPro
                     plainReflection = std::move(reflection);
             } else {
                 gm20b::ComputeRecord kernel;
-                ASSERT_EQ(gm20b::decodeKernelEntry(result, prepared.key, kernel, why),
+                ASSERT_EQ(gm20b::decodeKernelEntry(result, prepared.content, kernel, why),
                           gm20b::RecordCache::Found::Record)
                     << why;
                 ASSERT_FALSE(kernel.code.empty());
@@ -160,7 +161,6 @@ TEST(CompilerGroups, ClientLibraryHandleCompilesIdenticallyToInlineBytes)
     request.kind = gm20b::RequestKind::Facts;
     gm20b::RequestLibrary handleLib;
     handleLib.libraryId = 42;
-    handleLib.digest = gm20b::sha256(bytes.data(), bytes.size());
     request.libraries.push_back(handleLib);
     gm20b::RequestStage entry;
     entry.tag = "k";
@@ -208,7 +208,6 @@ TEST(CompilerGroups, ClientLibraryHandleCompilesIdenticallyToInlineBytes)
     EXPECT_EQ(mapCalls, 1);
 
     request.libraries[0].libraryId = 0;
-    request.libraries[0].digest = {};
     request.libraries[0].bytes = bytes;
     std::string inlineResult;
     {

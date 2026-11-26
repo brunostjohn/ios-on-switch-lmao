@@ -291,6 +291,7 @@ PLUGIN_CC_SRCS = [
     GM20B_METAL + ":semantic_resources.cpp",
     GM20B_METAL + ":semantic_setters.cpp",
     GM20B_METAL + ":compile_request.cpp",
+    GM20B_METAL + ":store_key.cpp",
     GM20B_METAL + ":remote.cpp",
     GM20B_METAL + ":compiler_cc_srcs",
 ]

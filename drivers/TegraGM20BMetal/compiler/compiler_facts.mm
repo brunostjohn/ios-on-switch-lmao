@@ -188,7 +188,7 @@ int32_t makeBufferEncoders(const Prepared &p, const Libraries &libraries, std::s
         if (!made)
             why = "the translator does not decode " + p.request.stages[0].function + ": " + nmb_last_error();
         const std::string blob = gm20b::encodeBufferEncoders(encoders);
-        entry = gm20b::encodeReflectionEntry(p.key, made ? &blob : nullptr, why);
+        entry = gm20b::encodeReflectionEntry(p.content, made ? &blob : nullptr, why);
         return made ? TegraGM20BCompileMade : TegraGM20BCompileRefused;
     }
 }
@@ -203,7 +203,7 @@ int32_t makeAttributes(const Prepared &p, const Libraries &libraries, std::strin
         gm20b::AttributeList vertex, stageInput;
         const bool made = attributesOf(function, false, vertex, why) && attributesOf(function, true, stageInput, why);
         const std::string blob = gm20b::encodeAttributeLists(vertex, stageInput);
-        entry = gm20b::encodeReflectionEntry(p.key, made ? &blob : nullptr, why);
+        entry = gm20b::encodeReflectionEntry(p.content, made ? &blob : nullptr, why);
         return made ? TegraGM20BCompileMade : TegraGM20BCompileRefused;
     }
 }
@@ -249,7 +249,7 @@ int32_t makeFacts(const Prepared &p, const Libraries &libraries, std::string &en
         const bool made = nmb_offline_compute_pipeline_facts(&d, facts);
         if (!made)
             why = std::string("no compute prepare: ") + nmb_last_error();
-        entry = gm20b::encodeFactsEntry(p.key, made ? facts : nullptr, why);
+        entry = gm20b::encodeFactsEntry(p.content, made ? facts : nullptr, why);
         return made ? TegraGM20BCompileMade : TegraGM20BCompileRefused;
     }
 }

@@ -3,8 +3,10 @@
 // (TegraGM20BMetalOffline.h). A system library is read once per process: its file is mapped and read in place, its
 // functions' HASH tags taken as the sealed volume states them, so a request reads its function list and the bitcode
 // it compiles, and nothing of it is copied or hashed (an MPS library is 84 MB). A library of a client's data is kept
-// while compiles come, so a burst of one library's states reads it once, and let go once none ran for a while: its
-// bytes are a heap copy of the request's, which a compiler at rest has no use for.
+// while compiles come, so a burst of one library's states reads it once, and let go once none ran for a while. One a
+// client registered is found by its handle; one a request carries is found by its bytes, compared, never hashed, and
+// its kept bytes are one heap copy of the request's, which a compiler at rest has no use for. Each read of a data
+// library is a translator library of its own scope, whose kept stages no other library's compile takes.
 //
 // The pool's workers share it by one rule: an asker finds or adds its library's slot under `lock_`, then holds that
 // slot's `making` while it reads the library, so the first asker reads it and a concurrent or later asker of the same
@@ -17,7 +19,9 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <cstring>
 #include <string>
+#include <string_view>
 #include "../compile_request.h"
 #include "compiler_client_libraries.h"
 
@@ -46,13 +50,48 @@ private:
         id<MTLLibrary> made = nil;
     };
 
+    // A data library: a registered one by its client's handle (no bytes), a request's own by its bytes
+    struct DataKey {
+        uint64_t client = 0, id = 0;
+        std::shared_ptr<const std::string> bytes;
+    };
+
+    struct DataView {
+        uint64_t client = 0, id = 0;
+        std::string_view bytes;
+    };
+
+    struct DataOrder {
+        using is_transparent = void;
+
+        static DataView view(const DataKey &k)
+        {
+            return {k.client, k.id, k.bytes ? std::string_view(*k.bytes) : std::string_view()};
+        }
+
+        static DataView view(const DataView &v)
+        {
+            return v;
+        }
+
+        template <class A, class B> bool operator()(const A &a, const B &b) const
+        {
+            const DataView x = view(a), y = view(b);
+            if (x.client != y.client || x.id != y.id)
+                return x.client != y.client ? x.client < y.client : x.id < y.id;
+            if (x.bytes.size() != y.bytes.size())
+                return x.bytes.size() < y.bytes.size();
+            return !x.bytes.empty() && memcmp(x.bytes.data(), y.bytes.data(), x.bytes.size()) < 0;
+        }
+    };
+
     const std::string root_;
     std::mutex lock_;
     uint32_t running_ = 0;
     uint64_t generation_ = 0;  // compiles begun, which a pending release checks
     std::map<std::string, std::shared_ptr<Slot>> system_;
-    std::map<gm20b::Digest, std::shared_ptr<Slot>> data_;
-    std::deque<gm20b::Digest> dataOrder_;
+    std::map<DataKey, std::shared_ptr<Slot>, DataOrder> data_;
+    std::deque<DataKey> dataOrder_;
 
     void release(uint64_t generation);
 };

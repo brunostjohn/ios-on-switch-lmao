@@ -30,7 +30,7 @@ void LibraryCache::ended()
 
 void LibraryCache::release(uint64_t generation)
 {
-    std::map<gm20b::Digest, std::shared_ptr<Slot>> data;
+    std::map<DataKey, std::shared_ptr<Slot>, DataOrder> data;
     {
         std::lock_guard<std::mutex> l(lock_);
         if (running_ || generation != generation_)
@@ -48,24 +48,30 @@ id<MTLLibrary> LibraryCache::library(const gm20b::RequestLibrary &l, std::string
         return nil;
     if (!l.system && l.libraryId && !mapped)
         return why = "a library handle with no mapping", nil;
-    const gm20b::Digest digest = l.system ? gm20b::Digest{}
-                                 : mapped ? mapped->digest
-                                          : gm20b::sha256(l.bytes.data(), l.bytes.size());
+    const DataView view = mapped ? DataView{mapped->client, mapped->id, {}} : DataView{0, 0, l.bytes};
     std::shared_ptr<Slot> slot;
+    std::shared_ptr<const std::string> bytes;
     {
         std::lock_guard<std::mutex> g(lock_);
-        std::shared_ptr<Slot> &kept = l.system ? system_[real] : data_[digest];
-        if (!kept) {
-            kept = std::make_shared<Slot>();
-            if (!l.system) {
-                dataOrder_.push_back(digest);
-                if (dataOrder_.size() > kDataLibraries) {
-                    data_.erase(dataOrder_.front());
-                    dataOrder_.pop_front();
-                }
+        std::shared_ptr<Slot> *kept = nullptr;
+        if (l.system) {
+            kept = &system_[real];
+        } else if (const auto found = data_.find(view); found != data_.end()) {
+            kept = &found->second;
+            bytes = found->first.bytes;
+        } else {
+            DataKey key{view.client, view.id, mapped ? nullptr : std::make_shared<const std::string>(l.bytes)};
+            bytes = key.bytes;
+            kept = &data_[key];
+            dataOrder_.push_back(std::move(key));
+            if (dataOrder_.size() > kDataLibraries) {
+                data_.erase(dataOrder_.front());
+                dataOrder_.pop_front();
             }
         }
-        slot = kept;
+        if (!*kept)
+            *kept = std::make_shared<Slot>();
+        slot = *kept;
     }
     std::lock_guard<std::mutex> making(slot->making);
     if (slot->made)
@@ -82,9 +88,12 @@ id<MTLLibrary> LibraryCache::library(const gm20b::RequestLibrary &l, std::string
             });
         slot->made = [device newLibraryWithData:bytes error:&error];
     } else {
-        dispatch_data_t bytes =
-            dispatch_data_create(l.bytes.data(), l.bytes.size(), nullptr, DISPATCH_DATA_DESTRUCTOR_DEFAULT);
-        slot->made = [device newLibraryWithData:bytes error:&error];
+        std::shared_ptr<const std::string> keep = bytes;
+        dispatch_data_t data =
+            dispatch_data_create(keep->data(), keep->size(), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                (void)keep;
+            });
+        slot->made = [device newLibraryWithData:data error:&error];
     }
     if (!slot->made)
         why = std::string("the translator refused the library ") + (l.path.empty() ? "of its data" : l.path) +

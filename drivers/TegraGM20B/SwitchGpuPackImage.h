@@ -16,7 +16,7 @@ struct tgm_vm;
 struct switch_gpu_mapping;
 
 inline constexpr char kSwitchGpuPackMagic[8] = {'G', 'M', '2', '0', 'B', 'P', 'K', '1'};
-inline constexpr uint32_t kSwitchGpuPackVersion = 34u;
+inline constexpr uint32_t kSwitchGpuPackVersion = 35u;
 inline constexpr uint64_t kSwitchGpuPackTierAlign = 128ULL << 10;
 inline constexpr uint32_t kSwitchGpuPackChunkPages = uint32_t(kSwitchGpuPackTierAlign >> 12);
 inline constexpr uint64_t kSwitchGpuPackTransferBytes = 1ULL << 20;
@@ -60,9 +60,10 @@ struct __attribute__((packed)) SwitchGpuPackHeader {
 	uint32_t chipFacts;
 	uint32_t tier0SlmPerWarp;
 	uint64_t tier0[kSwitchGpuPackSectionCount];
+	uint8_t rules[16];
 };
 
-static_assert(sizeof(SwitchGpuPackHeader) == 448, "v34 PackHeader size");
+static_assert(sizeof(SwitchGpuPackHeader) == 464, "v35 PackHeader size");
 
 enum class SwitchGpuPackState : uint32_t {
 	None = 0,

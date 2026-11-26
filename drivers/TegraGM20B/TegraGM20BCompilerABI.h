@@ -84,9 +84,28 @@ enum {
 	TegraGM20BCompilerLibraryBytesTotal = 512u << 20,
 };
 
+/* The process a request is made for, as the kernel reads it in that process's own context: the compiler files a record
+ * made from any library off the sealed system volume under it (drivers/TegraGM20BMetal/store_key.h), so a library one
+ * process hands the compiler reaches no other process's records. Kind File: its main executable's volume UUID (16 bytes)
+ * and file ID (8), which the filesystem assigned at install and no code signature states (an imported app's is made from
+ * its IPA's own declarations, a bootstrap image's platform bit from its own). Kind Process, where no executable is known:
+ * its pid, pid version and a number drawn once per boot. */
+enum {
+	TegraGM20BCompilerScopeFile = 1,
+	TegraGM20BCompilerScopeProcess = 2,
+	TegraGM20BCompilerScopeBytes = 256,
+};
+
+struct TegraGM20BAbiCompilerScope {
+	uint32_t kind, bytes;
+	uint8_t identity[TegraGM20BCompilerScopeBytes];
+};
+
+/* scope: the calling process's own */
 struct TegraGM20BAbiCompilerInfoReply {
 	uint64_t store_bytes, stack;
 	uint32_t flags, generation;
+	struct TegraGM20BAbiCompilerScope scope;
 };
 
 /* qos: the asking thread's qos_class_t (QOS_CLASS_UNSPECIFIED for a fixed-priority thread) */
@@ -137,6 +156,7 @@ struct TegraGM20BAbiCompilerTakeReply {
 	uint32_t qos, flags;
 	int32_t pid;
 	uint32_t reserved;
+	struct TegraGM20BAbiCompilerScope scope; /* the asking process's, read when it asked */
 };
 
 struct TegraGM20BAbiCompilerComplete {

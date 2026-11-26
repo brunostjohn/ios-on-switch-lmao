@@ -2175,6 +2175,17 @@ py_test(
 )
 
 py_test(
+    name = "pack_rules_identity_test",
+    srcs = ["pack_rules_identity_test.py"],
+    data = [
+        "//drivers/TegraGM20BMetal:chip_facts.h",  # packfile.py stamps its chip facts
+        "//drivers/TegraGM20BMetal:own_states.h",
+        "//drivers/TegraGM20BMetal:owned.h",
+    ],
+    deps = ["//drivers/TegraGM20BMetal:pack"],
+)
+
+py_test(
     name = "pack_reflections_test",
     srcs = ["pack_reflections_test.py"],
     data = [
@@ -4353,6 +4364,7 @@ host_test(
         "//drivers/TegraGM20BMetal:direct_abi.h",
         "compiler_request_layout03.h",
         "made_metallib.h",
+        "request_store_key.h",
         "shader_compiler_request_test.cpp",
         "//drivers/TegraGM20BMetal:plugin/ImageFilterLink.h",
         "//drivers/TegraGM20BMetal:plugin/MetallibEntries.h",
@@ -4381,6 +4393,8 @@ host_test(
         "//drivers/TegraGM20BMetal:cache_io.h",
         "//drivers/TegraGM20BMetal:capture.h",
         "//drivers/TegraGM20BMetal:compile_request.cpp",
+        "//drivers/TegraGM20BMetal:store_key.cpp",
+        "//drivers/TegraGM20BMetal:store_key.h",
         "//drivers/TegraGM20BMetal:compile_request.h",
         "//drivers/TegraGM20BMetal:compute_record.h",
         "//drivers/TegraGM20BMetal:cubic.h",
@@ -4451,6 +4465,8 @@ host_test(
         "//drivers/TegraGM20BMetal:cache_io.h",
         "//drivers/TegraGM20BMetal:capture.h",
         "//drivers/TegraGM20BMetal:compile_request.cpp",
+        "//drivers/TegraGM20BMetal:store_key.cpp",
+        "//drivers/TegraGM20BMetal:store_key.h",
         "//drivers/TegraGM20BMetal:compile_request.h",
         "//drivers/TegraGM20BMetal:compute_record.h",
         "//drivers/TegraGM20BMetal:cubic.h",
@@ -4521,6 +4537,8 @@ host_test(
         "//drivers/TegraGM20BMetal:cache_io.h",
         "//drivers/TegraGM20BMetal:capture.h",
         "//drivers/TegraGM20BMetal:compile_request.cpp",
+        "//drivers/TegraGM20BMetal:store_key.cpp",
+        "//drivers/TegraGM20BMetal:store_key.h",
         "//drivers/TegraGM20BMetal:compile_request.h",
         "//drivers/TegraGM20BMetal:compute_record.h",
         "//drivers/TegraGM20BMetal:cubic.h",
@@ -4592,6 +4610,8 @@ host_test(
         "//drivers/TegraGM20BMetal:cache_io.h",
         "//drivers/TegraGM20BMetal:capture.h",
         "//drivers/TegraGM20BMetal:compile_request.cpp",
+        "//drivers/TegraGM20BMetal:store_key.cpp",
+        "//drivers/TegraGM20BMetal:store_key.h",
         "//drivers/TegraGM20BMetal:compile_request.h",
         "//drivers/TegraGM20BMetal:compute_record.h",
         "//drivers/TegraGM20BMetal:cubic.h",
@@ -4652,6 +4672,9 @@ host_test(
         "//drivers/TegraGM20BMetal:cache_io.h",
         "//drivers/TegraGM20BMetal:capture.h",
         "//drivers/TegraGM20BMetal:compile_request.cpp",
+        "//drivers/TegraGM20BMetal:store_key.cpp",
+        "//drivers/TegraGM20BMetal:store_key.h",
+        "//drivers/TegraGM20BMetal:function_tags.h",
         "//drivers/TegraGM20BMetal:compile_request.h",
         "//drivers/TegraGM20BMetal:compute_record.h",
         "//drivers/TegraGM20BMetal:compute_slot.h",
@@ -4711,6 +4734,9 @@ host_test(
         "//drivers/TegraGM20BMetal:cache_io.h",
         "//drivers/TegraGM20BMetal:capture.h",
         "//drivers/TegraGM20BMetal:compile_request.cpp",
+        "//drivers/TegraGM20BMetal:store_key.cpp",
+        "//drivers/TegraGM20BMetal:store_key.h",
+        "//drivers/TegraGM20BMetal:function_tags.h",
         "//drivers/TegraGM20BMetal:compile_request.h",
         "//drivers/TegraGM20BMetal:compute_record.h",
         "//drivers/TegraGM20BMetal:cubic.h",
@@ -4823,6 +4849,7 @@ METAL_HOST_UNITS = ["//drivers/TegraGM20BMetal:fx/" + f for f in [
     "split",
     "state_segment",
     "stencil_bits",
+    "store_key",
     "surface_image",
     "surface_textures",
     "tessellation",
@@ -5609,6 +5636,7 @@ host_test(
         "made_metallib.h",
         "facade_harness.h",
         "facade_variant_compiler.h",
+        "request_store_key.h",
         "job_methods.h",
         "facade_cubic_test.cpp",
         "translate_absent.cpp",
@@ -5640,6 +5668,7 @@ host_test(
         "made_metallib.h",
         "facade_harness.h",
         "facade_variant_compiler.h",
+        "request_store_key.h",
         "job_methods.h",
         "facade_variant_test.cpp",
         "translate_absent.cpp",
@@ -5662,6 +5691,51 @@ host_test(
     ] + METAL_HOST_DEPS,
 )
 
+# A storage form the shader compiler made gets its barrier twin, asked in the background and attached to its pipeline
+host_test(
+    name = "facade_made_twin_test",
+    srcs = [
+        "empty_pack.h",
+        "made_metallib.h",
+        "facade_harness.h",
+        "facade_variant_compiler.h",
+        "request_store_key.h",
+        "job_methods.h",
+        "facade_made_twin_test.cpp",
+        "translate_absent.cpp",
+        "kernel_model.h",
+        ":librecord_count.dylib",
+    ] + METAL_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + METAL_HOST_COPTS,
+    cxx_std = "c++17",
+    linkopts = FACADE_LINKOPTS,
+    sanitize = False,
+    deps = [
+        ":facade_plugin_host",
+        ":runtime_plugin_host",
+        "//kits/SwitchRefusal:switch_refusal",
+        "//kits/SwitchGM20BEmit/test:method_checks",
+    ] + METAL_HOST_DEPS,
+)
+
+# facade_made_twin_test thread-sanitized: the twin is asked and attached off the creating thread
+facade_test(
+    name = "facade_made_twin_tsan_test",
+    srcs = [
+        "facade_made_twin_test.cpp",
+        "facade_variant_compiler.h",
+        ":librecord_count.dylib",
+    ],
+    copts = ["-fsanitize=thread"],
+    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
+    linkopts = ["-fsanitize=thread"],
+    plugin = "_tsan",
+)
+
 # A shader-tested Depth16Unorm beside a turned plane, converted and moved into the plane, a turned pass's depth slice
 # read through its texture's own header, a shader-tested Depth16Unorm slice converted through it: each raw
 host_test(
@@ -5672,6 +5746,7 @@ host_test(
         "facade_harness.h",
         "facade_pass_scene.h",
         "facade_variant_compiler.h",
+        "request_store_key.h",
         "job_methods.h",
         "facade_turned_depth_test.cpp",
         "translate_absent.cpp",
@@ -5704,6 +5779,7 @@ host_test(
         "facade_harness.h",
         "facade_pass_scene.h",
         "facade_variant_compiler.h",
+        "request_store_key.h",
         "job_methods.h",
         "facade_pass_failures_test.cpp",
         "translate_absent.cpp",
@@ -5736,6 +5812,7 @@ host_test(
         "facade_harness.h",
         "facade_pass_scene.h",
         "facade_variant_compiler.h",
+        "request_store_key.h",
         "job_methods.h",
         "facade_xr_images_test.cpp",
         "translate_absent.cpp",
@@ -5768,6 +5845,7 @@ host_test(
         "facade_pass_scene.h",
         "facade_surface_forms_test.cpp",
         "facade_variant_compiler.h",
+        "request_store_key.h",
         "translate_absent.cpp",
         "job_methods.h",
         "kernel_model.h",
@@ -5801,6 +5879,7 @@ host_test(
         "facade_harness.h",
         "facade_pass_scene.h",
         "facade_variant_compiler.h",
+        "request_store_key.h",
         "job_methods.h",
         "facade_copy_clamp_test.cpp",
         "translate_absent.cpp",
@@ -5831,6 +5910,7 @@ host_test(
         "facade_harness.h",
         "facade_pass_scene.h",
         "facade_variant_compiler.h",
+        "request_store_key.h",
         "job_methods.h",
         "facade_planar_targets_test.cpp",
         "translate_absent.cpp",
@@ -5863,6 +5943,7 @@ host_test(
         "facade_harness.h",
         "facade_pass_scene.h",
         "facade_variant_compiler.h",
+        "request_store_key.h",
         "job_methods.h",
         "facade_format_targets_test.cpp",
         "translate_absent.cpp",
@@ -5895,6 +5976,7 @@ host_test(
         "facade_harness.h",
         "facade_storage_compressed_test.cpp",
         "facade_variant_compiler.h",
+        "request_store_key.h",
         "translate_absent.cpp",
         "job_methods.h",
         "kernel_model.h",
@@ -5926,6 +6008,7 @@ host_test(
         "facade_harness.h",
         "facade_pending_variant_test.cpp",
         "facade_variant_compiler.h",
+        "request_store_key.h",
         "translate_absent.cpp",
         "job_methods.h",
         "kernel_model.h",
@@ -5956,6 +6039,7 @@ host_test(
         "made_metallib.h",
         "facade_harness.h",
         "facade_variant_compiler.h",
+        "request_store_key.h",
         "facade_pass_scene.h",
         "job_methods.h",
         "facade_fused_storage_test.cpp",
@@ -5989,6 +6073,7 @@ host_test(
         "made_metallib.h",
         "facade_harness.h",
         "facade_variant_compiler.h",
+        "request_store_key.h",
         "job_methods.h",
         "facade_draw_ends_test.cpp",
         "translate_absent.cpp",
@@ -6931,6 +7016,7 @@ genrule(
     outs = ["pack_v34_fixture.bin"],
     cmd = "$(execpath :pack_v34_fixture_bin) $@",
     tools = [":pack_v34_fixture_bin"],
+    visibility = ["//drivers/TegraGM20B/test:__pkg__"],
 )
 
 [host_test(

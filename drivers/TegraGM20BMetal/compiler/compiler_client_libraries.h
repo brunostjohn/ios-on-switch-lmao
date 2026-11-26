@@ -24,13 +24,13 @@ struct MappedClientLibrary {
     uint64_t id = 0;
     const uint8_t *data = nullptr;
     size_t size = 0;
-    gm20b::Digest digest{};
     std::map<std::string, gm20b::AirHash> air;
 };
 
-// Maps each client-registered library handle read-only once, verifies its SHA-256 and parses its AIR
-// function hashes once, and keeps mappings LRU-bounded while safely deferring UnmapLibrary until every
-// in-flight compile and cached MTLLibrary holding the mapping drops its reference.
+// Maps each client-registered library handle read-only once and parses its AIR function hashes once, and keeps
+// mappings LRU-bounded while safely deferring UnmapLibrary until every in-flight compile and cached MTLLibrary
+// holding the mapping drops its reference. A mapping is the client's own (client, handle), and nothing made from it is
+// shared beyond it, so its bytes are never hashed to check what the client says of them.
 class ClientLibraries {
 public:
     static constexpr size_t kDefaultMaxEntries = 64;
@@ -53,7 +53,8 @@ public:
     ClientLibraries(const ClientLibraries &) = delete;
     ClientLibraries &operator=(const ClientLibraries &) = delete;
 
-    bool resolve(uint64_t client, uint64_t id, const gm20b::Digest &expectedDigest,
+    // The digest a request names its library by goes unread
+    bool resolve(uint64_t client, uint64_t id, const gm20b::Digest & /*named*/,
                  std::shared_ptr<const MappedClientLibrary> &out, std::string &why)
     {
         if (!client || !id) {
@@ -90,11 +91,6 @@ public:
         }
 
         if (hit) {
-            if (hit->digest != expectedDigest) {
-                logDigestMismatch(client, id, expectedDigest, hit->digest);
-                why = "client library digest mismatch";
-                return false;
-            }
             std::vector<std::shared_ptr<const MappedClientLibrary>> evicted;
             {
                 std::lock_guard<std::mutex> l(state_->lock);
@@ -119,15 +115,6 @@ public:
             return false;
         }
 
-        const gm20b::Digest actual = gm20b::sha256(data, size);
-        if (actual != expectedDigest) {
-            logDigestMismatch(client, id, expectedDigest, actual);
-            state_->unmap(client, id);
-            cancelInflight();
-            why = "client library digest mismatch";
-            return false;
-        }
-
         std::map<std::string, gm20b::AirHash> air;
         if (!gm20b::metallibAirHashes(data, size, air)) {
             state_->unmap(client, id);
@@ -136,7 +123,7 @@ public:
             return false;
         }
 
-        auto *raw = new MappedClientLibrary{client, id, data, size, actual, std::move(air)};
+        auto *raw = new MappedClientLibrary{client, id, data, size, std::move(air)};
         std::shared_ptr<State> state = state_;
         std::shared_ptr<const MappedClientLibrary> made(raw, [state, key](const MappedClientLibrary *p) {
             delete p;
@@ -220,28 +207,6 @@ private:
         }
     }
 
-    static std::string hexDigest(const gm20b::Digest &d)
-    {
-        std::string out;
-        out.reserve(64);
-        char b[3];
-        for (uint8_t x : d) {
-            snprintf(b, sizeof b, "%02x", x);
-            out += b;
-        }
-        return out;
-    }
-
-    static void logDigestMismatch(uint64_t client, uint64_t id, const gm20b::Digest &expected,
-                                  const gm20b::Digest &actual)
-    {
-        const std::string expHex = hexDigest(expected);
-        const std::string actHex = hexDigest(actual);
-        os_log_error(OS_LOG_DEFAULT,
-                     "SwitchShaderCompiler: client %llu library %llu digest mismatch: expected %{public}s, actual "
-                     "%{public}s",
-                     (unsigned long long)client, (unsigned long long)id, expHex.c_str(), actHex.c_str());
-    }
 };
 
 }  // namespace switch_compiler

@@ -109,6 +109,7 @@ def facade_test(name, srcs, plugin = "_host", copts = [], linkopts = [], data = 
             "made_metallib.h",
             "facade_harness.h",
             "job_methods.h",
+            "request_store_key.h",
             "translate_absent.cpp",
             "kernel_model.h",
         ] + METAL_HOST_HEADERS,

@@ -64,6 +64,10 @@ public:
         std::function<void(void *token)> lower;
         // Called once on each worker thread with its 1-based slot (1..kWorkers) before taking jobs
         std::function<void(uint32_t worker)> registerWorker;
+        // Whether two works compile one record: a request joins a job of its name only then. Names are what any client
+        // can steer (store_key.h), so a job of another content under the same name runs apart, under the next free key.
+        // None: every job of a name is the same.
+        std::function<bool(const Work &a, const Work &b)> same;
         // Bind kernel request `id` to the worker registered in `worker` (1..kWorkers)
         std::function<void(uint64_t id, uint32_t worker)> serve;
         // On the worker whose job was the last one queued or running, after its waiters were answered, at the background

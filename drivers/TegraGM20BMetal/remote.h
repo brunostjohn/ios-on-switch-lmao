@@ -20,6 +20,7 @@
 #include <vector>
 #include "../../kits/SwitchSeedPack/SwitchSeedStore.h"
 #include "compile_request.h"
+#include "store_key.h"
 #include "TegraGM20BCompilerABI.h"
 #include "kernel_transport.h"
 #include "word_wait.h"
@@ -89,6 +90,9 @@ public:
     const uint8_t *findSlot(const uint8_t *slot, size_t size, const uint8_t *&mapping, uint64_t &bytes) const;
     // The mapped store's identity (its stack and the pack rules' digest) in hex, "" with none mapped
     std::string storeIdentity() const;
+    // This process's compile scope as the kernel reads it (TegraGM20BAbiCompilerScope): asked until the kernel answers,
+    // then kept (kind 0 meanwhile, which no record is filed under)
+    StoreScope scope();
     // The mapped store's first byte and size; null with none mapped
     const uint8_t *storeMapping(uint64_t &bytes) const;
     // Asked of the compiler at the calling thread's class; the thread sleeps until it answers
@@ -101,15 +105,15 @@ public:
     // donating the calling thread's priority to the compiler worker. Returns true if the caller should retry.
     bool waitAsync(uint64_t cookie);
     // Register a client library slice via TegraGM20BMethodCompilerRegisterLibrary (CoW snapshot), caching the
-    // handle per (address, size, digest) for this connection. Returns 0 when unsupported or refused (caller
+    // handle per (address, size, source) for this connection (library_source.h LibrarySource::id). Returns 0 when unsupported or refused (caller
     // falls back to inline bytes).
-    uint64_t registerLibrary(const void *bytes, size_t size, const Digest &digest);
+    uint64_t registerLibrary(const void *bytes, size_t size, uint64_t source);
 
 private:
     struct RegisteredLibrary {
         const void *address = nullptr;
         size_t size = 0;
-        Digest digest{};
+        uint64_t source = 0;
 
         bool operator<(const RegisteredLibrary &o) const
         {
@@ -117,7 +121,7 @@ private:
                 return address < o.address;
             if (size != o.size)
                 return size < o.size;
-            return digest < o.digest;
+            return source < o.source;
         }
     };
 
@@ -139,6 +143,11 @@ private:
 
     const Call call_;
     const uint64_t stack_;
+    // scope_ is written once under scopeLock_, before scopeKnown_ is set with release; after that it is read with no lock.
+    // The lock only orders the first lookups of a process, which may ask the kernel at once.
+    gm20b::Mutex scopeLock_;
+    std::atomic<bool> scopeKnown_{false};
+    StoreScope scope_;
     std::atomic<CompilerMethods> methods_{CompilerMethods::Unknown};
     std::atomic<bool> expected_{false}, declined_{false};
     std::atomic<bool> absent_{false};

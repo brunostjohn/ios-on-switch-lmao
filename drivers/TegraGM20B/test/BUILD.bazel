@@ -3207,6 +3207,7 @@ host_library(
     ],
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuAsyncReference.h",
+        "//drivers/TegraGM20B:SwitchGpuCompilerScope.h",
         "//drivers/TegraGM20B:SwitchGpuShaderCompiler.h",
         "//drivers/TegraGM20B:SwitchGpuShaderCompilerPolicy.h",
         "//drivers/TegraGM20B:SwitchGpuShaderCompilerQueue.h",
@@ -3687,6 +3688,7 @@ host_test(
     copts = ["-DSWITCH_GPU_PACK_IMAGE_HOST_TEST=1"],
     data = [
         "//drivers/TegraGM20B:TegraGM20BUserClient.cpp",
+        "//drivers/TegraGM20BMetal/test:pack_v34_fixture",
         "//kernel/switch:shutdown/shutdown.c",
         "//kernel/xnu-10063.141.1/iokit:Kernel/IOPMrootDomain.cpp",
         "//kernel/xnu-12377.121.6/iokit:Kernel/IOPMrootDomain.cpp",

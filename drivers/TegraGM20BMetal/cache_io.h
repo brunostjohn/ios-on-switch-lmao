@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The record cache's entry bytes (gm20b_cache.h): little-endian values, counted texts and lists, and every entry's head (its kind
-// and full key) and FNV-1a tail, read back with a bounds check on each part.
+// and full key), read back with a bounds check on each part. An entry ends where its last part does: its writer published
+// it whole (a file renamed in, or a store entry below its durable end), so nothing checks its bytes again.
 #pragma once
 #include <cstdint>
 #include <cstring>
@@ -11,7 +12,7 @@
 namespace gm20b {
 
 constexpr char kEntryMagic[8] = {'S', 'W', 'R', 'A', 'W', 'R', 'E', 'C'};
-constexpr uint32_t kEntryFormat = 19;
+constexpr uint32_t kEntryFormat = 20;
 constexpr uint32_t kKindRecord = 1, kKindRefusal = 2, kKindKernel = 3, kKindKernelRefusal = 4;
 
 class Writer {
@@ -99,7 +100,7 @@ private:
 };
 
 void writeEntryHead(Writer &w, const CacheKey &k, uint32_t kind);
-// False: not an entry of `k` (its tail's sum, its head or its key differ)
+// False: not an entry of `k` (its head or its key differ)
 bool readEntryHead(const std::string &bytes, Reader &r, const CacheKey &k, uint32_t &kind);
 
 }  // namespace gm20b

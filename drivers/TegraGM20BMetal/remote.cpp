@@ -4,6 +4,7 @@
 #include "lock.h"
 #include "remote.h"
 #include "stats.h"
+#include "store_key.h"
 
 #include <IOKit/IOKitLib.h>
 #include <dispatch/dispatch.h>
@@ -53,10 +54,32 @@ bool Remote::capable()
         refresh(info);
     if (methods != CompilerMethods::Unknown)
         methods_.store(methods, std::memory_order_release);
+    else if (called == kIOReturnBadArgument)
+        os_log_error(
+            OS_LOG_DEFAULT,
+            "SwitchMetal: the kernel's CompilerInfo refused this build's reply size: the GPU kext is of another "
+            "build than this process's Metal driver, so no state the pack lacks is compiled");
     else
         os_log_error(OS_LOG_DEFAULT,
                      "SwitchMetal: the kernel's CompilerInfo failed (0x%x): this ask has no shader compiler", called);
     return methods == CompilerMethods::Present;
+}
+
+StoreScope Remote::scope()
+{
+    if (scopeKnown_.load(std::memory_order_acquire))
+        return scope_;
+    std::lock_guard<gm20b::Mutex> l(scopeLock_);
+    if (scopeKnown_.load(std::memory_order_relaxed))
+        return scope_;
+    TegraGM20BAbiCompilerInfoReply info = {};
+    if (call(TegraGM20BMethodCompilerInfo, nullptr, 0, &info, sizeof info) == kIOReturnSuccess && info.scope.kind) {
+        scope_.kind = info.scope.kind;
+        scope_.identity.assign(reinterpret_cast<const char *>(info.scope.identity),
+                               std::min<size_t>(info.scope.bytes, sizeof info.scope.identity));
+        scopeKnown_.store(true, std::memory_order_release);
+    }
+    return scope_;
 }
 
 void Remote::refresh(const TegraGM20BAbiCompilerInfoReply &info)
@@ -371,12 +394,12 @@ bool Remote::waitAsync(uint64_t cookie)
     }
 }
 
-uint64_t Remote::registerLibrary(const void *bytes, size_t size, const Digest &digest)
+uint64_t Remote::registerLibrary(const void *bytes, size_t size, uint64_t source)
 {
     if (!bytes || !size || size > TegraGM20BCompileRequestLimit || !capable() ||
         !librariesSupported_.load(std::memory_order_acquire))
         return 0;
-    const RegisteredLibrary key{bytes, size, digest};
+    const RegisteredLibrary key{bytes, size, source};
     std::lock_guard<gm20b::Mutex> l(libraryLock_);
     if (const auto found = registeredLibraries_.find(key); found != registeredLibraries_.end())
         return found->second;

@@ -219,7 +219,7 @@ TEST(GM20BPackHitStage3, PackScanAcceptsGeneratedV34PackAndHeaderMetadata)
     EXPECT_TRUE(problems.empty()) << (problems.empty() ? "" : problems[0]);
 
     const gm20b::PackHeader &h = *pack.header();
-    EXPECT_EQ(h.version, 34u);
+    EXPECT_EQ(h.version, gm20b::kPackVersion);
     EXPECT_EQ(h.tier0SlmPerWarp, 64u * 32u + 512u);
     const uint64_t tier0Pipes = pack.tier0Entries(gm20b::PackPipelines, sizeof(gm20b::PackPipeline));
     ASSERT_GT(tier0Pipes, 0u);

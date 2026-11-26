@@ -42,8 +42,8 @@ pub struct LinkedKey<'a> {
 }
 
 /// What a compile key records of the dynamic libraries a stage links: each library its imports are
-/// searched in, in order, by install name and content hash, and the first install name no library
-/// was loaded for.
+/// searched in, in order, by install name and code identity (`Library::code_identity`), and the first
+/// install name no library was loaded for.
 #[derive(Clone, Debug, Default)]
 pub struct DynamicKey<'a> {
     pub libraries: Vec<(&'a str, &'a Hash256)>,

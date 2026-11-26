@@ -158,11 +158,7 @@ void writeEntryHead(Writer &w, const CacheKey &k, uint32_t kind)
 
 bool readEntryHead(const std::string &bytes, Reader &r, const CacheKey &k, uint32_t &kind)
 {
-    if (bytes.size() < sizeof kEntryMagic + 8)
-        return false;
-    uint64_t sum;
-    memcpy(&sum, bytes.data() + bytes.size() - 8, 8);
-    if (sum != Pack::fnv(bytes.data(), bytes.size() - 8))
+    if (bytes.size() < sizeof kEntryMagic)
         return false;
     char magic[sizeof kEntryMagic];
     uint8_t vertexAir[32], fragmentAir[32];
@@ -273,7 +269,6 @@ std::string encodeEntry(const CacheKey &k, const RuntimeRecord *record, const st
         writeRecord(w, record);
     else
         w.text(refusal);
-    w.value(Pack::fnv(w.out.data(), w.out.size()));
     return w.out;
 }
 
@@ -285,12 +280,12 @@ RecordCache::Found decodeEntry(const std::string &bytes, const CacheKey &k, Runt
         return RecordCache::Found::None;
     if (kind == kKindRefusal) {
         refusal = r.text();
-        return r.ok() && r.at() == bytes.size() - 8 ? RecordCache::Found::Refusal : RecordCache::Found::None;
+        return r.ok() && r.at() == bytes.size() ? RecordCache::Found::Refusal : RecordCache::Found::None;
     }
     if (kind != kKindRecord)
         return RecordCache::Found::None;
     RuntimeRecord rec;
-    if (!readRecord(r, rec, true) || r.at() != bytes.size() - 8)
+    if (!readRecord(r, rec, true) || r.at() != bytes.size())
         return RecordCache::Found::None;
     record = std::move(rec);
     return RecordCache::Found::Record;
@@ -434,7 +429,8 @@ bool RecordCache::storeBytes(const CacheKey &k, const std::string &bytes)
     const int fd = ::open(temporary.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
     if (fd < 0)
         return false;
-    const bool written = writeAll(fd, bytes);
+    // synced before it is renamed in: nothing reads an entry's bytes again to find it whole after a crash
+    const bool written = writeAll(fd, bytes) && fsync(fd) == 0;
     close(fd);
     struct stat old;
     const uint64_t replaced = stat(final.c_str(), &old) == 0 ? uint64_t(old.st_size) : 0;

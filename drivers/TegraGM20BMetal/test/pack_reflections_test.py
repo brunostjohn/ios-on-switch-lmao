@@ -53,7 +53,7 @@ class SectionTest(unittest.TestCase):
 
     def test_a_pack_carries_it_as_its_last_section(self) -> None:
         self.assertEqual(packfile.SECTIONS, 17)
-        self.assertEqual(packfile.VERSION, 34)
+        self.assertEqual(packfile.VERSION, 35)
         pack = packfile.Pack([], [], [], {}, [], bytearray(), [], reflections={(False, 7): b'SWRF'})
         data, _ = packfile.pack_bytes(pack)
         offset, size = struct.unpack_from('<QQ', data, 24 + 16 * 14)

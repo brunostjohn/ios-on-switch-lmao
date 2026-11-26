@@ -5,6 +5,7 @@
 #import <Foundation/Foundation.h>
 #include <CommonCrypto/CommonDigest.h>
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <mach-o/loader.h>
 #include <os/log.h>
 #include <pthread.h>
@@ -36,7 +37,8 @@ os_log_t logger()
 }
 
 // A kept reply (m2v's frontend NBCompileReplyHeader, which the seed ships and tools/gpu/shaders/replies.py reads): "NSC1",
-// the warnings' and the metallib's sizes and the SHA-256 of both, then both
+// the warnings' and the metallib's sizes and the SHA-256 of both, then both. The device leaves the digest zero and reads
+// none: a reply it reads came from its own writer (synced, renamed in) or the seed's.
 struct ReplyHeader {
     uint32_t magic, warningBytes;
     uint64_t metallibBytes;
@@ -90,10 +92,6 @@ bool readReply(const std::string &dir, const std::string &name, gm20b::MadeLibra
         sizeof h + uint64_t(h.warningBytes) + h.metallibBytes != file.length)
         return false;
     const auto *payload = static_cast<const char *>(file.bytes) + sizeof h;
-    uint8_t digest[CC_SHA256_DIGEST_LENGTH];
-    CC_SHA256(payload, CC_LONG(h.warningBytes + h.metallibBytes), digest);
-    if (memcmp(digest, h.digest, sizeof digest))
-        return false;
     out.warnings.assign(payload, h.warningBytes);
     out.metallib.assign(payload + h.warningBytes, size_t(h.metallibBytes));
     return true;
@@ -109,7 +107,27 @@ std::string osBuild()
                : std::string();
 }
 
-// Written beside its name and renamed in, then its request and provenance (SwitchCompileReply.h) as the harvest reads them
+bool writeSynced(const std::string &path, NSData *bytes)
+{
+    const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0644);
+    if (fd < 0)
+        return false;
+    const auto *at = static_cast<const uint8_t *>(bytes.bytes);
+    size_t left = bytes.length;
+    while (left) {
+        const ssize_t wrote = write(fd, at, left);
+        if (wrote <= 0)
+            break;
+        at += wrote;
+        left -= size_t(wrote);
+    }
+    const bool written = left == 0 && fsync(fd) == 0;
+    close(fd);
+    return written;
+}
+
+// Written beside its name, synced and renamed in, then its request and provenance (SwitchCompileReply.h) as the harvest
+// reads them
 void keepReply(const std::string &dir, const std::string &name, const uint8_t uuid[16], uint32_t type,
                const std::string &request, const gm20b::MadeLibrary &made)
 {
@@ -118,14 +136,11 @@ void keepReply(const std::string &dir, const std::string &name, const uint8_t uu
     [file appendBytes:&h length:sizeof h];
     [file appendBytes:made.warnings.data() length:made.warnings.size()];
     [file appendBytes:made.metallib.data() length:made.metallib.size()];
-    auto *bytes = static_cast<uint8_t *>(file.mutableBytes);
-    CC_SHA256(bytes + sizeof h, CC_LONG(made.warnings.size() + made.metallib.size()),
-              reinterpret_cast<ReplyHeader *>(bytes)->digest);
     static std::atomic<uint64_t> tempSeq{0};
     const std::string path = dir + "/" + name,
                       temporary = path + "." + std::to_string(getpid()) + "." +
                                   std::to_string(tempSeq.fetch_add(1, std::memory_order_relaxed)) + ".tmp";
-    if (![file writeToFile:@(temporary.c_str()) atomically:NO] || rename(temporary.c_str(), path.c_str())) {
+    if (!writeSynced(temporary, file) || rename(temporary.c_str(), path.c_str())) {
         unlink(temporary.c_str());
         return;
     }
@@ -256,7 +271,7 @@ int32_t CodeGen::make(const Prepared &p, std::string &entry, std::string &why)
     const std::string name = replyName(s.uuid, r.codeGenType, request);
     gm20b::MadeLibrary kept;
     if (readReply(s.paths.replies, name, kept) || readReply(s.paths.seed, name, kept)) {
-        entry = gm20b::encodeLibraryEntry(p.key, &kept, "");
+        entry = gm20b::encodeLibraryEntry(p.content, &kept, "");
         return TegraGM20BCompileMade;
     }
     Answer a;
@@ -280,11 +295,11 @@ int32_t CodeGen::make(const Prepared &p, std::string &entry, std::string &why)
         return why = "the system's Metal compiler did not answer", TegraGM20BCompileFailed;
     if (a.refused) {
         why = a.log;
-        entry = gm20b::encodeLibraryEntry(p.key, nullptr, a.log);
+        entry = gm20b::encodeLibraryEntry(p.content, nullptr, a.log);
         return TegraGM20BCompileRefused;
     }
     keepReply(s.paths.replies, name, s.uuid, r.codeGenType, request, a.made);
-    entry = gm20b::encodeLibraryEntry(p.key, &a.made, "");
+    entry = gm20b::encodeLibraryEntry(p.content, &a.made, "");
     return TegraGM20BCompileMade;
 }
 

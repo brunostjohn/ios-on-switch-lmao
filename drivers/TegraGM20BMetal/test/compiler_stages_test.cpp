@@ -69,7 +69,7 @@ public:
             ADD_FAILURE() << "not prepared: " << out.why;
             return out;
         }
-        out.key = p.key;
+        out.key = p.content;
         recording_.asked.clear();
         const uint64_t stages = kept_.kept().entries;
         uint64_t before[2] = {}, after[2] = {};

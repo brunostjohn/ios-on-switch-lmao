@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "SwitchGpuCompilerScope.h"
 #include "SwitchGpuShaderCompiler.h"
 #include "SwitchGpuShaderCompilerQueue.h"
 #include "TegraGM20BCompilerABI.h"
@@ -18,6 +19,14 @@
 extern "C" int proc_selfpid(void)
 {
 	return 448;
+}
+
+// The asking process's scope as a test sets it: what the kernel reads in the caller's context
+TegraGM20BAbiCompilerScope gAskingScope = {TegraGM20BCompilerScopeFile, 24, {0xc5}};
+
+void switch_gpu_compiler_scope(TegraGM20BAbiCompilerScope &out)
+{
+	out = gAskingScope;
 }
 
 namespace
@@ -254,6 +263,38 @@ TEST_F(CompilerRights, AnAnswerCarriesTheCompilersTimesToItsAsker)
 	EXPECT_EQ(words[4], 33u);
 	EXPECT_EQ(words[5], 37u);
 	EXPECT_EQ(gRights.rights[kPortA], 0);
+}
+
+// The compiler is told the scope of the process that asked, as the kernel read it when it asked (a later caller's is not
+// the request's), and any caller its own through CompilerInfo
+TEST_F(CompilerRights, ARequestCarriesItsAskersScope)
+{
+	registerCompiler();
+	gAskingScope = {TegraGM20BCompilerScopeFile, 14, {}};
+	memcpy(gAskingScope.identity, "volume-file-01", 14);
+	ASSERT_EQ(compile(kClientA, kPortA, 5), kIOReturnSuccess);
+	TegraGM20BAbiCompilerInfoReply info = {};
+	ASSERT_EQ(syncCall(kClientA, &gClientTask, TegraGM20BMethodCompilerInfo, nullptr, 0, &info,
+			   sizeof info),
+		  kIOReturnSuccess);
+	EXPECT_EQ(info.scope.kind, uint32_t(TegraGM20BCompilerScopeFile));
+	EXPECT_EQ(memcmp(info.scope.identity, "volume-file-01", 14), 0);
+	gAskingScope = {TegraGM20BCompilerScopeProcess, 16, {0x77}};
+	std::string buffer(request_.size(), 0);
+	const TegraGM20BAbiCompilerTake take = {uint64_t(uintptr_t(buffer.data())), buffer.size()};
+	TegraGM20BAbiCompilerTakeReply taken = {};
+	ASSERT_EQ(syncCall(kCompiler, &gCompilerTask, TegraGM20BMethodCompilerTake, &take,
+			   sizeof take, &taken, sizeof taken),
+		  kIOReturnSuccess);
+	ASSERT_NE(taken.id, 0u);
+	EXPECT_EQ(taken.scope.kind, uint32_t(TegraGM20BCompilerScopeFile));
+	EXPECT_EQ(taken.scope.bytes, 14u);
+	EXPECT_EQ(memcmp(taken.scope.identity, "volume-file-01", 14), 0);
+	const TegraGM20BAbiCompilerComplete done = {
+		taken.id, TegraGM20BCompileMade, TegraGM20BCompileCompiled, {}};
+	EXPECT_EQ(syncCall(kCompiler, &gCompilerTask, TegraGM20BMethodCompilerComplete, &done,
+			   sizeof done, nullptr, 0),
+		  kIOReturnSuccess);
 }
 
 TEST_F(CompilerRights, LibraryRegisterMapUnmapIsCowAndCompilerOnly)

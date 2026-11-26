@@ -78,8 +78,6 @@ std::vector<uint8_t> serializeList(struct switch_prefetch_header header,
                                    const std::vector<struct switch_prefetch_run> &runs)
 {
     header.runs = static_cast<uint32_t>(runs.size());
-    header.checksum =
-        switch_prefetch_fnv(reinterpret_cast<const uint8_t *>(runs.data()), runs.size() * sizeof(runs[0]));
     std::vector<uint8_t> bytes(sizeof(header) + runs.size() * sizeof(runs[0]));
     memcpy(bytes.data(), &header, sizeof(header));
     if (!runs.empty()) {
@@ -191,13 +189,9 @@ TEST(SwitchPrefetchList, ValidatesV3AndRefusesV2AndMismatches)
     EXPECT_STREQ(switch_prefetch_validate_file(badData.data(), badData.size(), &expected, 1u << 18, nullptr),
                  "saved for another Data volume");
 
-    // Torn short list and checksum mismatch.
+    // Torn short list.
     EXPECT_STREQ(switch_prefetch_validate_file(valid.data(), valid.size() - 4u, &expected, 1u << 18, nullptr),
                  "torn (short list)");
-    auto badCsum = valid;
-    badCsum.back() ^= 0xffu;
-    EXPECT_STREQ(switch_prefetch_validate_file(badCsum.data(), badCsum.size(), &expected, 1u << 18, nullptr),
-                 "torn (its runs do not match its checksum)");
 
     // Invalid run fields: bad volume, zero pages, over max run limit.
     auto badRuns = runs;
@@ -366,7 +360,6 @@ TEST(SwitchPrefetchList, SavesAtomicallyByTempThenRename)
     auto hdr = expected;
     hdr.runs = 1u;
     hdr.files = 1u;
-    hdr.checksum = switch_prefetch_fnv(reinterpret_cast<const uint8_t *>(runs.data()), sizeof(runs[0]));
     const struct switch_prefetch_file_ops ops = {fakeWrite, fakeRename, fakeUnlink};
     const char *path = "/private/preboot/Switch-Staging/sys.img.boot-prefetch";
     const char *uuid = "11223344-5566-7788-99AA-BBCCDDEEFF00";

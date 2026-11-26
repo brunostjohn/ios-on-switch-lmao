@@ -10,6 +10,7 @@
 #include "../cache_io.h"
 #include "../obtained.h"
 #include "../program_pages.h"
+#include "../store_key.h"
 #include "TegraGM20BABI.h"
 #include "TegraGM20BCompilerABI.h"
 
@@ -131,7 +132,8 @@ public:
                 infos++;
                 if (infoCalled != kIOReturnSuccess)
                     return infoCalled;
-                *static_cast<TegraGM20BAbiCompilerInfoReply *>(out) = {store.mappedBytes(), kStack, flags, generation};
+                *static_cast<TegraGM20BAbiCompilerInfoReply *>(out) = {
+                    store.mappedBytes(), kStack, flags, generation, {}};
                 return kIOReturnSuccess;
             case TegraGM20BMethodMap:
                 maps++;
@@ -709,35 +711,33 @@ TEST_F(RemoteCompile, WaitAsyncHeldCookieSurvivesNotFoundRaceAndFollowsPromotion
 TEST_F(RemoteCompile, RegisterLibraryCachesPerSliceAndFallsBackCleanly)
 {
     std::string lib = "metallib-payload";
-    const gm20b::Digest digest = gm20b::sha256(lib.data(), lib.size());
-    gm20b::Digest otherDigest = digest;
-    otherDigest[0] ^= 0x55;
+    constexpr uint64_t kSource = 1, kOtherSource = 2;
 
     {
         gm20b::Remote remote(kernel.call(), kStack);
-        EXPECT_EQ(remote.registerLibrary(lib.data(), lib.size(), digest), 0u);
+        EXPECT_EQ(remote.registerLibrary(lib.data(), lib.size(), kSource), 0u);
         EXPECT_EQ(kernel.registerLibraries, 0u);
     }
 
     kernel.flags |= TegraGM20BCompilerLibraries;
     gm20b::Remote remote(kernel.call(), kStack);
-    const uint64_t id = remote.registerLibrary(lib.data(), lib.size(), digest);
+    const uint64_t id = remote.registerLibrary(lib.data(), lib.size(), kSource);
     EXPECT_EQ(id, 1u);
     EXPECT_EQ(kernel.registerLibraries, 1u);
-    EXPECT_EQ(remote.registerLibrary(lib.data(), lib.size(), digest), 1u);
+    EXPECT_EQ(remote.registerLibrary(lib.data(), lib.size(), kSource), 1u);
     EXPECT_EQ(kernel.registerLibraries, 1u);
-    EXPECT_EQ(remote.registerLibrary(lib.data(), lib.size(), otherDigest), 2u);
+    EXPECT_EQ(remote.registerLibrary(lib.data(), lib.size(), kOtherSource), 2u);
     EXPECT_EQ(kernel.registerLibraries, 2u);
 
     std::string lib2 = "another-library";
-    const gm20b::Digest d2 = gm20b::sha256(lib2.data(), lib2.size());
+    constexpr uint64_t d2 = 3;
     kernel.registerLibraryCalled = kIOReturnNoResources;
     EXPECT_EQ(remote.registerLibrary(lib2.data(), lib2.size(), d2), 0u);
     kernel.registerLibraryCalled = kIOReturnSuccess;
     EXPECT_EQ(remote.registerLibrary(lib2.data(), lib2.size(), d2), 3u);
 
     std::string lib3 = "third-library";
-    const gm20b::Digest d3 = gm20b::sha256(lib3.data(), lib3.size());
+    constexpr uint64_t d3 = 4;
     kernel.registerLibraryCalled = kIOReturnUnsupported;
     EXPECT_EQ(remote.registerLibrary(lib3.data(), lib3.size(), d3), 0u);
     const unsigned callsAfterUnsupported = kernel.registerLibraries;
