@@ -15,10 +15,10 @@ inline std::atomic<const void *> gMpsProbed{nullptr};
 void gm20bMpsProbeBind(const void *cb, const void *encoder, NSString *function);
 // One call on an encoder of a probed command buffer, with what the driver answered
 void gm20bMpsProbeCall(const void *cb, const void *encoder, const char *call, NSString *detail);
-#define SWITCH_MPS_PROBE(cb, encoder, call, detail)             \
-    do {                                                        \
+#define SWITCH_MPS_PROBE(cb, encoder, call, detail)                     \
+    do {                                                                \
         if ((cb) && gMpsProbed.load(std::memory_order_relaxed) == (cb)) \
-            gm20bMpsProbeCall(cb, encoder, call, detail);       \
+            gm20bMpsProbeCall(cb, encoder, call, detail);               \
     } while (0)
 #else
 #define SWITCH_MPS_PROBE(cb, encoder, call, detail) static_cast<void>(0)

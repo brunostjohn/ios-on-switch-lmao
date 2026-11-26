@@ -59,9 +59,7 @@ FACTS_ONLY = 'D ok=1 tg=0,0,0 edge=0,0,0 threads=0 '
 
 def native_lines(lines: list[str]) -> list[str]:
     return [
-        line
-        for line in lines
-        if line.startswith(('R ', 'D ')) and ' ok=1 ' in line and not line.startswith(FACTS_ONLY)
+        line for line in lines if line.startswith(('R ', 'D ')) and ' ok=1 ' in line and not line.startswith(FACTS_ONLY)
     ]
 
 
