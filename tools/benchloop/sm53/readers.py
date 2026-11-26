@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from tools.benchloop.sm53 import encode as e, latency, program
 from tools.benchloop.sm53.encode import PT, f32, half2
 from tools.benchloop.sm53.halfops import hsetp2
+from tools.benchloop.sm53.intops import xmad
 from tools.benchloop.sm53.ops import K1, K2, Recipe
 from tools.benchloop.sm53.program import SEPARATOR
 
@@ -147,12 +148,76 @@ def _experiment(p: Pair, delay: int, family: str, rect: list[int]) -> dict:
     return x | {'draws': [1], 'repeats': 1, 'warmup': 0}
 
 
-def reader() -> list[dict]:
-    return [_experiment(p, d, 'reader', latency.ONE_WARP) for p in PAIRS_READ for d in DELAYS]
+def _xmad(d: int, a: int) -> e.Instr:
+    return xmad(d, a, K1, K2)
 
 
-def reader_wide() -> list[dict]:
-    return [_experiment(p, d, 'reader-wide', latency.WHOLE) for p in PAIRS_READ for d in WIDE_DELAYS]
+def _halves(_: dict[int, int]) -> list[int]:
+    return [half2(j + 0.25, j + 0.5) for j in range(LINKS)]
+
+
+def _widen(d: int, s: int) -> e.Instr:
+    return e.f2f(d, s, 'src=f16 dst=f32')
+
+
+# The writers NAK's reader rule must hold for before it covers them: XMAD (kept at 6 until these pass) and the half ALU,
+# whose results B, C and E feed to F2F on every frame. XMAD's product is a 16-bit operand times K1's low half, plus K2.
+PAIRS_WRITERS = (
+    Pair(
+        'XMAD>LDC', _xmad, lambda d, s: e.ldc(d, s, 1), _ldc_offsets, lambda i: 4 * _rank(i, K2), (1, 0), integer=True
+    ),
+    Pair('XMAD>I2F', _xmad, e.i2f, _ints, lambda _: 0x7000, (1, 0)),
+    Pair(
+        'XMAD>FLO',
+        _xmad,
+        e.flo,
+        lambda _: [1 << (j + 3) for j in range(LINKS)],
+        lambda _: 1 << 14,
+        (1, 0),
+        integer=True,
+    ),
+    Pair(
+        'XMAD>F2F',
+        _xmad,
+        lambda d, s: e.f2f(d, s, 'round'),
+        lambda _: [0x100 * (j + 1) for j in range(LINKS)],
+        lambda _: f32(1000.25),
+        (1, f32(1.0)),
+    ),
+    Pair(
+        'XMAD>MUFU.RCP',
+        _xmad,
+        lambda d, s: e.mufu(d, s, 'rcp'),
+        lambda _: [0x100 * (j + 1) for j in range(LINKS)],
+        lambda _: f32(1000.25),
+        (1, f32(1.0)),
+        exact=False,
+    ),
+    Pair(
+        'HFMA2>F2F',
+        lambda d, a: e.hfma2(d, a, K1, K2),
+        _widen,
+        _halves,
+        lambda _: half2(-1000.0, -1000.0),
+        (half2(2.0, 2.0), half2(1.0, 1.0)),
+    ),
+    Pair(
+        'HADD2>F2F',
+        lambda d, a: e.hadd2(d, a, K1),
+        _widen,
+        _halves,
+        lambda _: half2(-1000.0, -1000.0),
+        (half2(1.0, 1.0), 0),
+    ),
+)
+
+
+def reader(pairs: tuple[Pair, ...] = PAIRS_READ) -> list[dict]:
+    return [_experiment(p, d, 'reader', latency.ONE_WARP) for p in pairs for d in DELAYS]
+
+
+def reader_wide(pairs: tuple[Pair, ...] = PAIRS_READ) -> list[dict]:
+    return [_experiment(p, d, 'reader-wide', latency.WHOLE) for p in pairs for d in WIDE_DELAYS]
 
 
 HSETP2 = Recipe(
@@ -167,6 +232,16 @@ HSETP2 = Recipe(
 
 def generate() -> list[dict]:
     return [latency.warm_up('readers.warm'), *latency.ladder(), *reader(), *reader_wide(), *latency.stall((HSETP2,))]
+
+
+def generate_writers() -> list[dict]:
+    """Give the reader rows for XMAD and half writers, one warp and wide."""
+    return [
+        latency.warm_up('writers.warm'),
+        *latency.ladder(),
+        *reader(PAIRS_WRITERS),
+        *reader_wide(PAIRS_WRITERS),
+    ]
 
 
 def generate_yield() -> list[dict]:

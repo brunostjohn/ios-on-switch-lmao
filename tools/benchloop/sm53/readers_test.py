@@ -10,7 +10,7 @@ def texel(body: list[e.Instr], init: dict[int, int]) -> list[int]:
 
 class ReadersTest(unittest.TestCase):
     def test_a_stale_read_in_any_link_changes_the_texel(self):
-        for pair in readers.PAIRS_READ:
+        for pair in readers.PAIRS_READ + readers.PAIRS_WRITERS:
             body, init = readers.reads(pair, 15)
             right = texel(body, init)
             for j in range(readers.LINKS):

@@ -11,10 +11,10 @@ disagree.
 Install a HW Test at benchloop/6, open its Bench screen, then from the repo root run all of them in order:
 
 ```sh
-bazel run //tools/benchloop -- run "$PWD"/tools/benchloop/batches/{sr_affinity,int3_xmad,overlap,icache,store2fma,hsetp2,interlock_spin,icache_128k,powr_native,nak_latency,nak_yield,nak_dual}.json
+bazel run //tools/benchloop -- run "$PWD"/tools/benchloop/batches/{sr_affinity,int3_xmad,overlap,icache,store2fma,hsetp2,interlock_spin,icache_128k,powr_native,nak_latency,nak_writers,nak_yield,nak_dual}.json
 ```
 
-That is 958 experiments, sent as 4 batches. One batch alone is
+That is 1,116 experiments, sent as 5 batches. One batch alone is
 `bazel run //tools/benchloop -- run "$PWD"/tools/benchloop/batches/<name>.json`. Each file opens with a warm-up draw
 that lifts the GPU off its 76.8 MHz idle clock. After the usual status line the run prints one line per answer, and
 `report.json` in the result folder keeps the detail under each family's key.
@@ -231,6 +231,14 @@ those waits until these lines say so on the device.
   gets it right under contention.
 - `stall HSETP2` is the FSETP predicate chain with HSETP2. NAK gives HSETP2's predicate 14 cycles and every other
   compare 13. Expected: `latency 13`.
+
+### nak_writers
+
+158 experiments, 284 KB. The same reader rows with the writers `nak_latency` leaves out. XMAD read by LDC, I2F, FLO,
+F2F and MUFU.RCP: NAK keeps an XMAD's readers at 6 cycles until these come back right from 2 (LDC from 4). HFMA2 and
+HADD2 read by F2F's widening to f32: the half ALU feeds F2F on every frame of the compositor and the blurs, and NAK
+already lets that F2F issue 2 cycles after the write, so `reader HFMA2>F2F` and `reader HADD2>F2F` must read right
+from 2.
 
 ### nak_yield
 

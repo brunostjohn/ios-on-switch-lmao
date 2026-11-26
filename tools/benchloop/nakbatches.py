@@ -33,6 +33,7 @@ BATCHES = {
     'icache_128k': ('icache-128k', icache.generate_large),
     'powr_native': ('powr-native', powr_native.generate),
     'nak_latency': ('nak-latency', readers.generate),
+    'nak_writers': ('nak-writers', readers.generate_writers),
     'nak_yield': ('nak-yield', readers.generate_yield),
     'nak_dual': ('nak-dual', dualclock.generate),
 }
