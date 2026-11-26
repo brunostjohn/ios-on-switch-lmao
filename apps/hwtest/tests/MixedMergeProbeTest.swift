@@ -10,7 +10,8 @@ import Metal
 /// RASTER_N_TARGET_M, so each row is MERGE plus sample masks: the raster masks SET_SAMPLE_MASK_X0_Y0..X1_Y1 (0x0fbc..),
 /// the colour target's mask SET_COLOR_TARGET_SAMPLE_MASK (0x0fa8), and which of them apply, SET_SAMPLE_MASK (0x0fa4:
 /// bit 0 raster out, bit 4 colour target). The draw is MixedSamplesCases' at raster 4, drawn whole (the facade's TIR
-/// probe bit 5), over depths whose sample s is 1 where bit s of the mask is set, for masks 0..15.
+/// probe bit 5), over depths whose sample s is 1 where bit s of the mask is set, for masks 0..15. The driver sets the
+/// golden context's sample masks back after each such draw, so the probe leaves none behind.
 /// `<row>_white`: masks 0..15, 1 where the colour turned white (Apple: 0101010101010101); `<row>_depth_wrong_samples`:
 /// bit s where sample s's depth after is not Metal's; `<row>_apple`: both as Apple's; `<row>=killed`: the class refused
 /// it. `one_draw_route`: the first row with Apple's result, `none` where no row has it. It decides, not judges: FAIL
@@ -24,10 +25,6 @@ struct MixedMergeProbeTest: HWTest {
     static let armedWhole: UInt32 = 1 | 1 << 5
     static let apple = "0101010101010101"
     static let rasterMasks: UInt32 = 0x0fbc, sampleMask: UInt32 = 0x0fa4, colourTargetMask: UInt32 = 0x0fa8
-    static let restore: [(UInt32, UInt32)] = [
-        (sampleMask, 1), (colourTargetMask, 0xffff), (rasterMasks, 0xffff), (rasterMasks + 4, 0xffff),
-        (rasterMasks + 8, 0xffff), (rasterMasks + 12, 0xffff),
-    ]
 
     static func raster(_ mask: UInt32) -> [(UInt32, UInt32)] {
         (0 ..< 4).map { (rasterMasks + 4 * UInt32($0), mask) }
@@ -62,7 +59,7 @@ struct MixedMergeProbeTest: HWTest {
                         if words.isEmpty {
                             _ = try await gpu.run { Self.encode($0, scene, colour, depth) }
                         } else {
-                            _ = try await GM20BMethods.draw(gpu, before: words, after: Self.restore) {
+                            _ = try await GM20BMethods.draw(gpu, before: words, after: []) {
                                 Self.encode($0, scene, colour, depth)
                             }
                         }

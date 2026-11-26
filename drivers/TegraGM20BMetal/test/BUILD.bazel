@@ -3661,6 +3661,15 @@ device_test(
 # Device::compressedFromPlain)
 # A state's written colour targets are the ones its key names, whatever SET_CT_WRITE the pack's baseline leaves the others
 # (device_write_bits_test.cpp)
+# A probe draw that writes the sample-mask registers sets the golden context's values back after it
+device_test(
+    name = "device_probe_masks_test",
+    srcs = [
+        "device_forms.h",
+        "device_probe_masks_test.cpp",
+    ],
+)
+
 # A state's SlotGuestBase holes filled at each draw: a set*Bytes slot's upload copy, a buffer's address and offset
 device_test(
     name = "device_guest_base_test",

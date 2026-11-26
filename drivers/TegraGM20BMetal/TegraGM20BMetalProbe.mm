@@ -29,7 +29,7 @@ static NSString *const kProbesUnentitled = @"raw methods need the " SWITCH_GPU_P
 // (method, value) uint32 pairs of the 3D class. Every draw of one instance this process encodes emits `before` after
 // its state and `after` once it ended, until a call with `before` nil disarms them and answers how many draws emitted
 // them. The probe's command buffers must complete before it disarms: their encoding may run after commit returns.
-static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words)
+static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words, bool &sampleMasks)
 {
     if (!pairs)
         return true;
@@ -39,6 +39,7 @@ static bool appendMethods(NSData *pairs, std::vector<uint32_t> &words)
     for (NSUInteger i = 0; i < pairs.length / 4; i += 2) {
         if (v[i] >= 0x8000 || v[i] % 4)
             return false;
+        sampleMasks |= v[i] >= NVB197_SET_SAMPLE_MASK && v[i] <= NVB197_SET_SAMPLE_MASK_X1_Y1;
         words.push_back(gm20b::Push::hdr(1, gm20b::SUBC_3D, v[i], 1));
         words.push_back(v[i + 1]);
     }
@@ -87,7 +88,8 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
     if (!probesEntitled())
         return kProbesUnentitled;
     auto words = std::make_shared<gm20b::Device::ProbeWords>();
-    if (!appendMethods(before, words->before) || !appendMethods(after, words->after))
+    if (!appendMethods(before, words->before, words->sampleMasks) ||
+        !appendMethods(after, words->after, words->sampleMasks))
         return @"methods are (method, value) uint32 pairs of 3D-class methods below 0x8000";
     if (words->before.size() + words->after.size() > 1024)
         return @"more than 512 methods";

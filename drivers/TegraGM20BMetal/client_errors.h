@@ -35,6 +35,9 @@ inline bool samplesDrawn(uint32_t stateSamples, uint32_t passSamples, uint32_t s
 
 // SET_SAMPLE_MASK_X0_Y0..X1_Y1's word for every pixel of a quad: sample 0 alone for a one-sample state in a pass of more
 constexpr uint32_t kSampleMaskUnknown = ~0u, kSampleMaskAll = 0xffff, kSampleMaskFirst = 1;
+// SET_SAMPLE_MASK (raster out on, colour target off) and SET_COLOR_TARGET_SAMPLE_MASK as the GM20B's golden context sets
+// them (nvidia/gm20b/gr/sw_method_init.bin) and nothing of the driver writes them after
+constexpr uint32_t kContextSampleMask = 1, kContextColorTargetSampleMask = 0xffff;
 
 inline uint32_t sampleMaskFor(uint32_t stateSamples, uint32_t passSamples)
 {
