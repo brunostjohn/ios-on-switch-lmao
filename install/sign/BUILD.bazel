@@ -2,8 +2,6 @@
 #
 #   bazel build //install/sign:desktop                                 the six desktop builds of switch_sign_tool
 #   bazel test //install/sign:darwin_test                              against codesign itself, on generated files
-#   bazel test --config=ios17 //install/sign:installd_test             against the build's installd (and --config=ios27)
-load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("//bazel/desktop:defs.bzl", "desktop_binaries")
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -66,41 +64,5 @@ rust_test(
         "@installer_crates//:hex",
         "@installer_crates//:sha2",
         "@installer_crates//:tempfile",
-    ],
-)
-
-py_binary(
-    name = "installd_patch",
-    srcs = ["installd_patch.py"],
-    deps = ["//tools/install_policy:installd"],
-)
-
-genrule(
-    name = "installd_patched",
-    srcs = ["@ipsw//:os_installd"],
-    outs = ["installd_patched.macho"],
-    cmd = "$(execpath :installd_patch) $< $@",
-    tools = [":installd_patch"],
-)
-
-rust_test(
-    name = "installd_test",
-    srcs = ["tests/installd_test.rs"],
-    data = [
-        ":installd_patched",
-        "//drivers/SwitchInstallPolicy:installd",
-        "@ipsw//:os_installd",
-    ],
-    env = {
-        "INSTALLD": "$(rootpath @ipsw//:os_installd)",
-        "INSTALLD_BUILT": "$(rootpath //drivers/SwitchInstallPolicy:installd)",
-        "INSTALLD_PATCHED": "$(rootpath :installd_patched)",
-    },
-    deps = [
-        ":switch_sign",
-        "//install/plistlib:switch_plistlib",
-        "@installer_crates//:hex",
-        "@installer_crates//:plist",
-        "@installer_crates//:sha2",
     ],
 )

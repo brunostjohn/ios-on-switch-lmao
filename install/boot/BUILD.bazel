@@ -1,0 +1,167 @@
+# switch_boot: the boot entry //boot:package makes, made on the user's computer from the release's boot assets for a
+# build (//boot:boot_assets) and the IPSW's members.
+#
+#   bazel test --config=ios17 //install/boot:all          from @ipsw's members and the boot assets to every file of
+#                                                         //boot:package's tree, and the refusals
+#   bazel test --config=ios27 //install/boot:all          the same for iOS 27
+#   bazel build --config=ios17 --config=release --keep_going --nobuild //install/boot:assets_ipsw_free
+#                                                         every boot asset made from Apple's bytes (and ios27)
+#   bazel build //install/boot:desktop                    switch_boot_tool for the six desktop platforms
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//install/window:defs.bzl", "opt_test")
+load("//ipsw:pins.bzl", "IPSWS")
+load("//release:ipsw_free.bzl", "ipsw_free")
+load(":defs.bzl", "boot_case")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_library(
+    name = "switch_boot",
+    srcs = [
+        "assets.rs",
+        "lib.rs",
+        "record.rs",
+        "steps.rs",
+        "tests.rs",
+    ],
+    crate_root = "lib.rs",
+    deps = [
+        "//install/adt:switch_adt",
+        "//install/img4:switch_img4",
+        "//install/installd:switch_installd",
+        "//install/launchd:switch_launchd",
+        "//install/prelink:switch_prelink",
+        "//install/window:switch_window",
+        "@installer_crates//:hex",
+        "@installer_crates//:rayon",
+        "@installer_crates//:serde",
+        "@installer_crates//:serde_json",
+        "@installer_crates//:tar",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "switch_boot_test",
+    crate = ":switch_boot",
+)
+
+rust_binary(
+    name = "switch_boot_tool",
+    srcs = ["main.rs"],
+    deps = [
+        ":switch_boot",
+        "@installer_crates//:clap",
+        "@installer_crates//:hex",
+    ],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_boot_tool",
+)
+
+_CATALOG_KINDS = [kind for kind, ipsw in IPSWS.items() if ipsw.get("derived", {}).get("launchd_catalog_sha256")]
+
+boot_case(
+    name = "case",
+    assets = "//boot:boot_assets",
+    members = {
+        "kernelcache": "@ipsw//:kernelcache",
+        "device_tree": "@ipsw//:device_tree",
+        "static_trust_cache": "@ipsw//:static_trust_cache",
+        "system_cryptex_trust_cache": "@ipsw//:system_cryptex_trust_cache",
+        "app_cryptex_trust_cache": "@ipsw//:app_cryptex_trust_cache",
+        "installd": "@ipsw//:os_installd",
+        "system_version": "@ipsw//:os_system_version",
+    } | select({
+        "//ipsw:" + kind: {
+            "launchd_catalog": "@ipsw//:os_launchd_catalog",
+            "launchd_catalog_signature": "@ipsw//:os_launchd_catalog_signature",
+        }
+        for kind in _CATALOG_KINDS
+    } | {"//conditions:default": {}}),
+    package = "//boot:package",
+)
+
+_CASE_ENV = {"SWITCH_BOOT_CASE": "$(rootpath :case)"}
+
+_CHAIN_DEPS = [
+    ":switch_boot",
+    "@installer_crates//:hex",
+    "@installer_crates//:libc",
+    "@installer_crates//:serde_json",
+    "@installer_crates//:sha2",
+]
+
+_CHAIN_SRCS = [
+    "tests/case.rs",
+    "tests/chain_test.rs",
+]
+
+rust_test(
+    name = "chain_test",
+    size = "medium",
+    srcs = _CHAIN_SRCS,
+    crate_root = "tests/chain_test.rs",
+    data = [":case"],
+    env = _CASE_ENV,
+    deps = _CHAIN_DEPS,
+)
+
+# The same at -c opt, for its time and peak RSS: built without the case, which the wrapper gives it from this
+# configuration, so the package is built once.
+rust_test(
+    name = "chain_opt_build",
+    srcs = _CHAIN_SRCS,
+    crate_root = "tests/chain_test.rs",
+    tags = ["manual"],
+    deps = _CHAIN_DEPS,
+)
+
+opt_test(
+    name = "chain_opt_test",
+    size = "medium",
+    data = [":case"],
+    env = _CASE_ENV,
+    test = ":chain_opt_build",
+)
+
+rust_test(
+    name = "refusal_test",
+    size = "medium",
+    srcs = [
+        "tests/case.rs",
+        "tests/refusal_test.rs",
+    ],
+    # Each case that gets as far as the window runs a whole prelink beside the other steps.
+    args = ["--test-threads=2"],
+    crate_root = "tests/refusal_test.rs",
+    data = [":case"],
+    env = _CASE_ENV,
+    deps = [
+        ":switch_boot",
+        "//install/img4:switch_img4",
+        "//install/installd:switch_installd",
+        "//install/window:switch_window",
+        "@installer_crates//:plist",
+        "@installer_crates//:serde_json",
+    ],
+)
+
+# Each boot asset made from Apple's bytes, with how (one chain per file), and then the tar the release would ship.
+ipsw_free(
+    name = "assets_ipsw_free",
+    src = "//boot:boot_asset_files",
+    tags = ["manual"],
+)
+
+ipsw_free(
+    name = "assets_tar_ipsw_free",
+    src = "//boot:boot_assets",
+    tags = ["manual"],
+)

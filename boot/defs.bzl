@@ -473,6 +473,7 @@ def _boot_package_impl(ctx):
             adt_base = depset([adt_base]),
             bl33 = depset([bl33]),
             boot_script = depset([script_text]),
+            bootstrap_manifest = depset([bootstrap_manifest]),
             constants = depset([constants]),
             kernel_window = depset([window, layout_h, runs_h, constants, window_plan]),
             installer_seed = depset([seed_pin] if seed_pin else []),

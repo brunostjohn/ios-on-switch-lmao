@@ -17,10 +17,8 @@ These details come from measuring `codesign` on macOS 27, and it refuses inputs 
 
 ```sh
 bazel test //install/sign:darwin_test                     # against codesign itself (needs a Darwin worker)
-bazel test --config=ios17 //install/sign:installd_test    # against //drivers/SwitchInstallPolicy:installd
-bazel test --config=ios27 //install/sign:installd_test
 bazel build //install/sign:desktop                        # switch_sign_tool for the six desktop platforms
 ```
 
-`installd_test` feeds the build's own `tools/install_policy/installd.py` patch through `installd_patch.py`, so it
-checks the re-signing step on its own.
+`//install/installd:installd_test` checks the `installd` signature against `//drivers/SwitchInstallPolicy:installd`
+for each kind, together with the `LC_LOAD_DYLIB` patch that comes before it.
