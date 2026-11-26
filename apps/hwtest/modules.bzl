@@ -13,6 +13,8 @@ GPU_SRCS = [
     "gpu/GPURates.swift",
     "gpu/GPURatesKnobs.swift",
     "gpu/GPURatesNvn.swift",
+    "gpu/GPURatesNvnTargets.swift",
+    "gpu/GPURatesProbes.swift",
     "gpu/RasterImage.swift",
     "gpu/RegDump.swift",
     "gpu/SM53Reference.swift",

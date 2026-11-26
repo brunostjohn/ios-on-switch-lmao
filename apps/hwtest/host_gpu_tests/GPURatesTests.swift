@@ -78,7 +78,7 @@ final class GPURatesTests: XCTestCase {
         for key in [
             "zcull_bounds_hidden_off_wrong", "zcull_bounds_hidden_on_wrong", "stencil_zcull_off_wrong",
             "zcull_4x2_off_wrong", "zcull_fp_off_wrong", "zcull_bounds_seen_culled_px", "cbr_bgra8_differ_bytes",
-            "cbr_rgba16f_differ_bytes", "tiled_flush_wrong",
+            "cbr_rgba16f_differ_bytes", "tiled_flush_off_wrong", "tiled_flush_on_wrong",
         ] {
             guard case .integer(let value) = result.metrics[key] else {
                 XCTFail("\(key) missing")

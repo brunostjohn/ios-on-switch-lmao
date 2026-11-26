@@ -3,42 +3,42 @@ import HWTestCore
 import Metal
 
 /// gpu.perf.nvn: state NVN writes and the driver does not, A/B'd through the facade's probes (nvn_probes.h,
-/// learn/deko3d.md). Each arm times the same work with the probe off (`_off`) and on (`_on`). Where the state could
-/// change pixels, it also counts the pixels that differ from the expected ones (`_wrong`).
+/// learn/deko3d.md). Each arm times the same work with the probe off (`_off`) and on (`_on`) and reports, per run, how
+/// far the counters its probe moves grew (`_<counter>`). An on arm whose probe exists and moved nothing is a problem:
+/// its time would be the off arm's. Where the state could change pixels, it also counts the pixels that differ from the
+/// expected ones (`_wrong`). An arm that throws records `<arm>_error`, every probe goes off and the next arm runs; the
+/// arms likeliest to upset the channel (Z_4X2, discard) run last.
 /// - zcull_bounds: a program writes a depth farther than its triangle's, then 16 layers of a 64-FMA program sit between
-///   the two depths and must be drawn. A second form has the written depth nearer, which hides the layers. The probe
-///   opens zcull's bounds for that program in place of invalidating the region.
+///   the two depths and must be drawn. A second form has the written depth nearer, which hides the layers. Off, the
+///   program invalidates the region (`_zcull_invalidations`); on, it opens zcull's bounds instead
+///   (`_nvn_bounds_opened`).
 /// - stencil_zcull: 16 layers whose stencil test fails everywhere, under SET_ZCULL with stencil on and NVN's NOTEQUAL
-///   criterion.
-/// - zcull_4x2, zcull_fp: the hidden-layer pass of gpu.perf.rates under the Z_4X2 region format, and under ZFORMAT FP for
-///   its clear of 1.0.
-/// - discard: a loaded target stored DontCare, redrawn whole. `discard_kept_px` counts pixels that still hold the
-///   texels from before the pass. More than 0 means the write-back was skipped.
-/// - cbr: a 4x BGRA8 and a 4x RGBA16F target on NVN's 2CBR kinds against 2CRA, filled and resolved. The resolved
-///   pixels must be equal.
-/// - tiled_flush: a pass whose target the next pass reads, with and without the tiled-cache flush at its end
-///   (switchMetalProbeForms: switch=nowfi_noflush).
+///   criterion, the criterion set for the on arm only.
+/// - zcull_fp, zcull_4x2: the hidden-layer pass of gpu.perf.rates under ZFORMAT FP for its clear of 1.0, and under the
+///   Z_4X2 region format. The region's subregion aliquots stay sized as NIL sizes them for Z_4X4 (zcull.h zcullRegion),
+///   so a change under Z_4X2 may be that sizing rather than the format.
+/// - discard: a loaded target stored DontCare, redrawn whole, the fastest of several runs that each follow a fill of
+///   their own. `discard_<state>_kept_px` counts pixels that still hold the texels from before the pass. More than 0
+///   means the write-back was skipped.
+/// - cbr: a 4x BGRA8 and a 4x RGBA16F target on NVN's 2CBR kinds against 2CRA, filled and resolved, the probe held
+///   through the arm. The resolved pixels must be equal; `_kind` and `_comptags` are the target's.
+/// - tiled_flush: a pass whose target the next pass reads, both arms under pass=pixel switch=nowfi, the on arm without
+///   the tiled-cache flush at a pass end (switch=nowfi_noflush). `_flushes` counts the passes that ended without it;
+///   `_wrong` counts pixels against today's barriers.
 extension GPURates {
     public static func nvn(_ gpu: GPU, _ s: Sizes = .device) async throws -> SceneResult {
         let b = GPURates(gpu, s)
         var notes: [String] = []
-        // without the probes (off the facade) every arm still runs, its on form the same as its off one
-        if b.probe("switchMetalProbeNvn:", 0) == nil {
+        if !b.has("switchMetalProbeNvn:") {
             notes.append("the device has no switchMetalProbeNvn: probe: each arm's on form is its off form")
         }
-        do {
-            try await b.zcullBounds()
-            try await b.stencilZcull()
-            try await b.zcullFormats()
-            try await b.discard()
-            try await b.cbr()
-            try await b.tiledFlush()
-        } catch {
-            b.probe("switchMetalProbeNvn:", 0)
-            b.probe("switchMetalProbeZcullCriterion:", 0)
-            b.probe("switchMetalProbeMs4Cbr:", 0)
-            throw error
-        }
+        await b.isolated("zcull_bounds") { try await b.zcullBounds() }
+        await b.isolated("stencil_zcull") { try await b.stencilZcull() }
+        await b.isolated("zcull_fp") { try await b.zcullFormat("zcull_fp", Self.nvnZcullFp) }
+        await b.isolated("cbr") { try await b.cbr() }
+        await b.isolated("tiled_flush") { try await b.tiledFlush() }
+        await b.isolated("zcull_4x2") { try await b.zcullFormat("zcull_4x2", Self.nvnZcull4x2) }
+        await b.isolated("discard") { try await b.discard() }
         var r = SceneResult()
         r.metrics = b.metrics
         r.notes = notes
@@ -50,18 +50,35 @@ extension GPURates {
     static let nvnZcullFp: UInt32 = 8, nvnDiscard: UInt32 = 16
     static let notEqualCriterion: UInt32 = 5 | 0xff << 16
 
-    /// `encode` timed with the probe off and on, each its fastest run, the target read back after the last
-    func ab(_ arm: String, bits: UInt32, read: MTLTexture? = nil, want: [UInt8]? = nil,
-            _ encode: (MTLCommandBuffer) throws -> Void) async throws {
+    var runs: Int { 1 + s.repeats }
+
+    /// `encode` timed with the probe off and on, each its fastest run; the target read back after the last
+    func ab(
+        _ arm: String, bits: UInt32, proof: String, also: [String] = [], criterion: UInt32 = 0,
+        read: MTLTexture? = nil, want: [UInt8]? = nil, _ encode: (MTLCommandBuffer) throws -> Void
+    ) async throws {
+        let probed = has("switchMetalProbeNvn:")
         for (state, on) in [("off", false), ("on", true)] {
             probe("switchMetalProbeNvn:", on ? bits : 0)
-            let t = try await fastest("\(arm)_\(state)", encode)
+            if criterion != 0 { probe("switchMetalProbeZcullCriterion:", on ? criterion : 0) }
+            var t = 0.0
+            let grew = try await grown([proof] + also) { t = try await fastest("\(arm)_\(state)", encode) }
             probe("switchMetalProbeNvn:", 0)
+            probe("switchMetalProbeZcullCriterion:", 0)
             metrics.set("\(arm)_\(state)_us", t * 1000, digits: 1)
+            proved("\(arm)_\(state)", grew, proof, checked: on && probed)
             if let read, let want {
                 let got = try await gpu.read(read, bytesPerPixel: 4)
                 metrics.set("\(arm)_\(state)_wrong", zip(got, want).filter { $0 != $1 }.count / 4)
             }
+        }
+    }
+
+    /// Each counter's growth per run as `<arm>_<counter>`; a problem where `checked` and `proof` did not grow
+    func proved(_ arm: String, _ grew: [String: Int], _ proof: String, checked: Bool) {
+        for (key, n) in grew { metrics.set("\(arm)_\(key)", Double(n) / Double(runs), digits: 2) }
+        if checked && (grew[proof] ?? 0) <= 0 {
+            problems.append("\(arm): its probe never fired (\(proof) did not grow)")
         }
     }
 
@@ -89,7 +106,10 @@ extension GPURates {
             var want: [UInt8]?
             if form == "hidden" { want = expected(SIMD4(0, 0, 1, 1)) }
             let checked = want == nil ? nil : colour
-            try await ab("zcull_bounds_\(form)", bits: Self.nvnZcullBounds, read: checked, want: want) { c in
+            try await ab(
+                "zcull_bounds_\(form)", bits: Self.nvnZcullBounds, proof: "nvn_bounds_opened",
+                also: ["zcull_invalidations"], read: checked, want: want
+            ) { c in
                 let e = self.pass(colour, depth, c)
                 e.setDepthStencilState(less)
                 e.setRenderPipelineState(writes)
@@ -132,10 +152,11 @@ extension GPURates {
         guard let marks = gpu.device.makeDepthStencilState(descriptor: mark),
               let tests = gpu.device.makeDepthStencilState(descriptor: test)
         else { throw TestFailure("makeDepthStencilState returned nil") }
-        probe("switchMetalProbeZcullCriterion:", Self.notEqualCriterion)
-        defer { probe("switchMetalProbeZcullCriterion:", 0) }
         let flatColour = SIMD4<Float>(0, 1, 0, 1)
-        try await ab("stencil_zcull", bits: Self.nvnStencilZcull, read: colour, want: expected(flatColour)) { c in
+        try await ab(
+            "stencil_zcull", bits: Self.nvnStencilZcull, proof: "nvn_stencil_passes", criterion: Self.notEqualCriterion,
+            read: colour, want: expected(flatColour)
+        ) { c in
             let pass = MTLRenderPassDescriptor()
             pass.colorAttachments[0].texture = colour
             pass.colorAttachments[0].loadAction = .clear
@@ -162,137 +183,26 @@ extension GPURates {
         }
     }
 
-    /// gpu.perf.rates' hidden layers under each zcull format probe
-    func zcullFormats() async throws {
+    /// gpu.perf.rates' hidden layers under one zcull format probe
+    func zcullFormat(_ arm: String, _ bits: UInt32) async throws {
         let heavy = try gpu.render(fragment: "rates_heavy_fragment", format: .bgra8Unorm, depth: .depth32Float)
         let flat = try gpu.render(fragment: "solid_fragment", format: .bgra8Unorm, depth: .depth32Float)
         let colour = try gpu.texture(.bgra8Unorm, s.width, s.height)
         let depth = try gpu.texture(.depth32Float, s.width, s.height, usage: [.renderTarget])
         let lequal = try depthState(.lessEqual)
         let front = SIMD4<Float>(1, 0, 0, 1)
-        for (arm, bits) in [("zcull_4x2", Self.nvnZcull4x2), ("zcull_fp", Self.nvnZcullFp)] {
-            try await ab(arm, bits: bits, read: colour, want: expected(front)) { c in
-                let e = self.pass(colour, depth, c)
-                e.setDepthStencilState(lequal)
-                e.setRenderPipelineState(flat)
-                var k = front
-                e.setFragmentBytes(&k, length: 16, index: 0)
-                self.quad(e, z: 0.1)
-                e.setRenderPipelineState(heavy)
-                var n = self.s.heavyIterations
-                e.setFragmentBytes(&n, length: 4, index: 0)
-                for _ in 0 ..< self.s.layers { self.quad(e, z: 0.5) }
-                e.endEncoding()
-            }
-        }
-    }
-
-    /// A target filled with one colour, then a pass that loads it, draws another over all of it and stores DontCare
-    func discard() async throws {
-        let solid = try gpu.render(fragment: "solid_fragment", format: .bgra8Unorm)
-        let target = try gpu.texture(.bgra8Unorm, s.width, s.height)
-        let before = SIMD4<Float>(1, 1, 0, 1), drawn = SIMD4<Float>(0, 1, 1, 1)
-        let fill = { (c: MTLCommandBuffer) in
-            let pass = MTLRenderPassDescriptor()
-            pass.colorAttachments[0].texture = target
-            pass.colorAttachments[0].loadAction = .clear
-            pass.colorAttachments[0].clearColor = MTLClearColor(red: 1, green: 1, blue: 0, alpha: 1)
-            pass.colorAttachments[0].storeAction = .store
-            c.makeRenderCommandEncoder(descriptor: pass)!.endEncoding()
-        }
-        let redraw = { (c: MTLCommandBuffer) in
-            let pass = MTLRenderPassDescriptor()
-            pass.colorAttachments[0].texture = target
-            pass.colorAttachments[0].loadAction = .load
-            pass.colorAttachments[0].storeAction = .dontCare
-            let e = c.makeRenderCommandEncoder(descriptor: pass)!
-            e.setRenderPipelineState(solid)
-            var k = drawn
+        try await ab(arm, bits: bits, proof: "nvn_format_passes", read: colour, want: expected(front)) { c in
+            let e = self.pass(colour, depth, c)
+            e.setDepthStencilState(lequal)
+            e.setRenderPipelineState(flat)
+            var k = front
             e.setFragmentBytes(&k, length: 16, index: 0)
+            self.quad(e, z: 0.1)
+            e.setRenderPipelineState(heavy)
+            var n = self.s.heavyIterations
+            e.setFragmentBytes(&n, length: 4, index: 0)
             for _ in 0 ..< self.s.layers { self.quad(e, z: 0.5) }
             e.endEncoding()
-        }
-        let kept = expected(before)
-        for (state, on) in [("off", false), ("on", true)] {
-            try await gpu.run(fill)
-            probe("switchMetalProbeNvn:", on ? Self.nvnDiscard : 0)
-            let t = try await gpu.run(redraw)
-            probe("switchMetalProbeNvn:", 0)
-            metrics.set("discard_\(state)_us", t.gpuMilliseconds * 1000, digits: 1)
-            let got = try await gpu.read(target, bytesPerPixel: 4)
-            metrics.set("discard_\(state)_kept_px", zip(got, kept).filter { $0 == $1 }.count / 4)
-        }
-    }
-
-    /// 4x targets on 2CRA and on 2CBR: 16 layers of fill, resolved into a one-sample texture, the resolves compared
-    func cbr() async throws {
-        for (name, format, bytes) in [("bgra8", MTLPixelFormat.bgra8Unorm, 4), ("rgba16f", .rgba16Float, 8)] {
-            let solid = try gpu.render(fragment: "solid_fragment", format: format, samples: 4)
-            var resolved: [[UInt8]] = []
-            for (state, on) in [("off", false), ("on", true)] {
-                probe("switchMetalProbeMs4Cbr:", on ? 1 : 0)
-                let ms = try gpu.texture(format, s.width, s.height, usage: [.renderTarget], samples: 4)
-                probe("switchMetalProbeMs4Cbr:", 0)
-                let into = try gpu.texture(format, s.width, s.height)
-                let t = try await fastest("cbr_\(name)_\(state)") { c in
-                    let pass = MTLRenderPassDescriptor()
-                    pass.colorAttachments[0].texture = ms
-                    pass.colorAttachments[0].resolveTexture = into
-                    pass.colorAttachments[0].loadAction = .clear
-                    pass.colorAttachments[0].storeAction = .multisampleResolve
-                    let e = c.makeRenderCommandEncoder(descriptor: pass)!
-                    e.setRenderPipelineState(solid)
-                    for i in 0 ..< self.s.layers {
-                        var k = SIMD4<Float>(Float(i) / Float(self.s.layers), 0.5, 0.25, 1)
-                        e.setFragmentBytes(&k, length: 16, index: 0)
-                        self.quad(e, z: 0.5)
-                    }
-                    e.endEncoding()
-                }
-                metrics.set("cbr_\(name)_\(state)_us", t * 1000, digits: 1)
-                resolved.append(try await gpu.read(into, bytesPerPixel: bytes))
-            }
-            metrics.set("cbr_\(name)_differ_bytes", zip(resolved[0], resolved[1]).filter { $0 != $1 }.count)
-        }
-    }
-
-    /// Pass 1 draws 16 heavy layers into a target; pass 2, in the same command buffer, copies it into another
-    func tiledFlush() async throws {
-        let heavy = try gpu.render(fragment: "rates_heavy_fragment", format: .bgra8Unorm)
-        let copy = try gpu.render(fragment: "rates_copy_fragment", format: .bgra8Unorm)
-        let first = try gpu.texture(.bgra8Unorm, s.width, s.height)
-        let second = try gpu.texture(.bgra8Unorm, s.width, s.height)
-        var outputs: [[UInt8]] = []
-        let probed = (gpu.device.makeCommandQueue()?.makeCommandBuffer() as? NSObject)?
-            .responds(to: NSSelectorFromString("switchMetalProbeForms:")) ?? false
-        for (state, forms) in [("off", ""), ("on", probed ? "switch=nowfi_noflush" : "")] {
-            let t = try await fastest("tiled_flush_\(state)") { c in
-                if !forms.isEmpty { try self.forms(c, forms) }
-                let e = self.pass(first, nil, c)
-                e.setRenderPipelineState(heavy)
-                var n = self.s.heavyIterations
-                e.setFragmentBytes(&n, length: 4, index: 0)
-                for _ in 0 ..< self.s.layers { self.quad(e, z: 0.5) }
-                e.endEncoding()
-                let f = self.pass(second, nil, c)
-                f.setRenderPipelineState(copy)
-                f.setFragmentTexture(first, index: 0)
-                self.quad(f, z: 0.5)
-                f.endEncoding()
-            }
-            metrics.set("tiled_flush_\(state)_us", t * 1000, digits: 1)
-            outputs.append(try await gpu.read(second, bytesPerPixel: 4))
-        }
-        metrics.set("tiled_flush_wrong", zip(outputs[0], outputs[1]).filter { $0 != $1 }.count / 4)
-    }
-
-    func forms(_ c: MTLCommandBuffer, _ forms: String) throws {
-        let selector = NSSelectorFromString("switchMetalProbeForms:")
-        guard let object = c as? NSObject, object.responds(to: selector) else {
-            throw TestFailure("the facade has no switchMetalProbeForms:")
-        }
-        if let refusal = object.perform(selector, with: forms)?.takeUnretainedValue() as? String {
-            throw TestFailure(refusal)
         }
     }
 }
