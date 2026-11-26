@@ -40,6 +40,7 @@ void fillDeviceLimits(id device)
 API_AVAILABLE(ios(18.0), macos(15.0))
 @interface SwitchMetalResidencySet : SwitchMetalObject <MTLResidencySet>
 - (instancetype)initWithDescriptor:(MTLResidencySetDescriptor *)descriptor device:(id)device;
+- (NSArray *)gm20bHostVisible;
 @end
 
 @interface SwitchMetalDevice (Base)
@@ -154,6 +155,10 @@ API_AVAILABLE(ios(18.0), macos(15.0))
     gm20b::Mutex _lock;
     NSMutableArray<id<MTLAllocation>> *_pending;
     NSArray<id<MTLAllocation>> *_committed;
+    // the committed allocations the CPU reaches (any storage mode but Private and Memoryless), taken at commit: what a
+    // job that uses the set names (gm20bNameResidencySets). Every allocation is resident in the one GPU VM, so the rest
+    // ask nothing of a job.
+    NSArray *_hostVisible;
 }
 
 @dynamic device, label;
@@ -229,8 +234,23 @@ API_AVAILABLE(ios(18.0), macos(15.0))
 
 - (void)commit
 {
+    NSMutableArray *hostVisible = [NSMutableArray array];
     std::lock_guard<gm20b::Mutex> hold(_lock);
     _committed = [_pending copy];
+    for (id allocation in _committed) {
+        if (![allocation respondsToSelector:@selector(storageMode)])
+            continue;
+        const MTLStorageMode mode = [(id<MTLResource>)allocation storageMode];
+        if (mode != MTLStorageModePrivate && mode != MTLStorageModeMemoryless)
+            [hostVisible addObject:allocation];
+    }
+    _hostVisible = hostVisible;
+}
+
+- (NSArray *)gm20bHostVisible
+{
+    std::lock_guard<gm20b::Mutex> hold(_lock);
+    return _hostVisible ?: @[];
 }
 
 - (void)requestResidency
@@ -240,3 +260,42 @@ API_AVAILABLE(ios(18.0), macos(15.0))
 {}
 
 @end
+
+void gm20bUseResidencySet(SwitchMetalCommandBuffer *cb, id set)
+{
+    if (![set isKindOfClass:[SwitchMetalResidencySet class]])
+        return;
+    SWITCH_METAL_DIAGNOSTIC(gRM->raw->stats.residencySetUses++);
+    if (!cb->_residencySets)
+        cb->_residencySets = [NSMutableArray array];
+    if (![cb->_residencySets containsObject:set])
+        [cb->_residencySets addObject:set];
+}
+
+// A program reaches a set's allocations by GPU address alone, with no use the encoder could name, so a job that uses the
+// set names each one the CPU reaches as written: a CPU write before it is then dropped from the L2 at its start, and its
+// GPU writes reach DRAM at its fence (CommandBuffer::use)
+void gm20bNameResidencySets(SwitchMetalCommandBuffer *cb, gm20b::CommandBuffer *rc)
+{
+    NSArray *queued = nil;
+    if (SwitchMetalQueue *queue = cb->_queue) {
+        std::lock_guard<gm20b::Mutex> hold(queue->_residencyLock);
+        queued = [queue->_residencySets copy];
+    }
+    for (NSArray *sets in @[ cb->_residencySets ?: @[], queued ?: @[] ])
+        for (SwitchMetalResidencySet *set in sets)
+            for (id allocation in [set gm20bHostVisible]) {
+                SWITCH_METAL_DIAGNOSTIC(gRM->raw->stats.residencyNamed++);
+                if ([allocation isKindOfClass:[SwitchMetalBuffer class]]) {
+                    SwitchMetalBuffer *b = allocation;
+                    if (b->_raw.hostVisible && !b->_raw.wc)
+                        rc->clean(b->_raw.cpu, b->_raw.length, true);
+                    useBuffer(rc, b, true);
+                } else if ([allocation isKindOfClass:[SwitchMetalTexture class]]) {
+                    useTexture(rc, (SwitchMetalTexture *)allocation, true);
+                } else if ([allocation isKindOfClass:[SwitchMetalHeap class]]) {
+                    if (const auto &members = ((SwitchMetalHeap *)allocation)->_members)
+                        rc->useHeap(*members);
+                }
+            }
+}

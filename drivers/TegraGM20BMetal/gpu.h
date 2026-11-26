@@ -1108,6 +1108,9 @@ public:
         // what gpu.perf.knobs' and gpu.perf.nvn's probes wrote (nvn_probes.h): passes or draws, discards
         std::atomic<uint64_t> nvnBoundsOpened{0}, nvnStencilPasses{0}, nvnFormatPasses{0}, nvnDiscards{0},
             subtileWrites{0}, zcullRulesKept{0};
+        // useResidencySet: calls, and the host-visible allocations of used sets a range's seal named
+        // (gm20bNameResidencySets)
+        std::atomic<uint64_t> residencySetUses{0}, residencyNamed{0};
         // stencil plane draws encoded: the eight-draw route's (stencil_bits.h) and the one-draw route's
         // (zeta_colour.h)
         std::atomic<uint64_t> stencilBitDraws{0}, zetaColourDraws{0};

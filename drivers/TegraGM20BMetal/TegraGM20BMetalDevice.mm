@@ -91,6 +91,8 @@
     d[@"nvn_discards"] = @(gRM->raw->stats.nvnDiscards.load());
     d[@"subtile_writes"] = @(gRM->raw->stats.subtileWrites.load());
     d[@"zcull_rules_kept"] = @(gRM->raw->stats.zcullRulesKept.load());
+    d[@"residency_set_uses"] = @(gRM->raw->stats.residencySetUses.load());
+    d[@"residency_named"] = @(gRM->raw->stats.residencyNamed.load());
     d[@"state_segment_binds"] = @(gRM->raw->stats.segmentBinds.load());
     d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
     d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());
