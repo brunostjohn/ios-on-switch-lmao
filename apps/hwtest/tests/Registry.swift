@@ -45,7 +45,7 @@ public enum Registry {
         IconCornersTest(), TextureBufferTest(), IconSmallSizesTest(), IconPasscodeTest(), IconCalendarTest(),
         CompileSharedTest(), CompileFirstDrawTest(), CompileStageLibraryTest(), CompileAnswerLatencyTest(),
         CompileSharedStagesTest(),
-        DrawBandsTest(), GPURatesTest(), GPUKnobsTest(), BandsPlanarInstancedTest(), DispatchPiecesTest(),
+        DrawBandsTest(), GPURatesTest(), GPUKnobsTest(), GPUNvnTest(), BandsPlanarInstancedTest(), DispatchPiecesTest(),
         ProbeCtaTest(), ProbeMacroWfiTest(), ForeignWaitIsolationTest(),
         PosterTargetsTest(),
         PushScanTargetsTest(), ResolveCostTest(), JobRefusalLinesTest(),

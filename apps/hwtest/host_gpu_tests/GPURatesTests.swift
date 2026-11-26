@@ -60,4 +60,31 @@ final class GPURatesTests: XCTestCase {
             XCTAssertTrue(value.isFinite && value > 0, "\(key)=\(value)")
         }
     }
+
+    /// gpu.perf.nvn on this Mac: no probes, so each arm's on form is its off form; the pixel checks must find nothing
+    /// wrong, which proves their expected pictures
+    func testTheNvnArmsNoteTheMissingProbe() async throws {
+        let directory =
+            (ProcessInfo.processInfo.environment["TEST_SRCDIR"].map { $0 + "/_main/" } ?? "") + "apps/hwtest/shaders"
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let sources = try ["HWTest.metal", "GPURates.metal"].map {
+            try String(contentsOfFile: directory + "/" + $0, encoding: .utf8)
+        }
+        let library = try await device.makeLibrary(source: sources.joined(separator: "\n"), options: nil)
+        let result = try await GPURates.nvn(GPU(device: device, queue: queue, library: library), .host)
+        XCTAssertTrue(result.passed, result.reasons(limit: 8).joined(separator: "; "))
+        XCTAssertEqual(result.notes.count, 1)
+        for key in [
+            "zcull_bounds_hidden_off_wrong", "zcull_bounds_hidden_on_wrong", "stencil_zcull_off_wrong",
+            "zcull_4x2_off_wrong", "zcull_fp_off_wrong", "zcull_bounds_seen_culled_px", "cbr_bgra8_differ_bytes",
+            "cbr_rgba16f_differ_bytes", "tiled_flush_wrong",
+        ] {
+            guard case .integer(let value) = result.metrics[key] else {
+                XCTFail("\(key) missing")
+                continue
+            }
+            XCTAssertEqual(value, 0, key)
+        }
+    }
 }

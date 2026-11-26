@@ -133,3 +133,15 @@ fragment float4 rates_scatter_fragment(float4 at [[position]], texture2d<float, 
     }
     return sum * 0.125f;
 }
+
+// gpu.perf.nvn: a program that writes the depth its buffer gives, whatever its triangle's, in a constant colour.
+fragment RatesDepthWritten rates_set_depth_fragment(constant float4 &colourDepth [[buffer(0)]])
+{
+    return {float4(colourDepth.rgb, 1), colourDepth.w};
+}
+
+// The texel under the pixel, for a pass that reads the one before it.
+fragment float4 rates_copy_fragment(float4 at [[position]], texture2d<float, access::read> image [[texture(0)]])
+{
+    return image.read(uint2(at.xy));
+}

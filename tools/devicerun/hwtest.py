@@ -202,6 +202,7 @@ TESTS: dict[str, bool] = {
             'gpu.sched.long_draw_bands',
             'gpu.perf.rates',
             'gpu.perf.knobs',
+            'gpu.perf.nvn',
             'gpu.sched.band_planar_instanced',
             'gpu.sched.long_dispatch_pieces',
             'gpu.sched.probe_cta',
