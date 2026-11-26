@@ -81,4 +81,17 @@ TEST(BackboarddEnvironment, EveryOtherProcessDisablesGenericShaders)
     }
 }
 
+// A process that passes its own environment on keeps one copy of each variable the kernel adds, whatever its value
+TEST(BackboarddEnvironment, TheKernelAddsNoVariableTheProcessAlreadyNames)
+{
+    const char strings[] = "HOME=/var/mobile\0CA_DISABLE_GENERIC_SHADERS=0\0CA_DISABLE_DETACHEDX=1";
+    const char *end = strings + sizeof strings;
+    for (const auto holds : {xnu17::native_switch_environment_holds, xnu27::native_switch_environment_holds}) {
+        EXPECT_TRUE(holds(strings, end, "CA_DISABLE_GENERIC_SHADERS=1"));
+        EXPECT_FALSE(holds(strings, end, "CA_DISABLE_DETACHED=1")) << "a longer name is another variable";
+        EXPECT_FALSE(holds(strings, end, "BT_HCI_TRANSPORT=H4BC"));
+        EXPECT_FALSE(holds(strings, strings, "HOME=/"));
+    }
+}
+
 }  // namespace
