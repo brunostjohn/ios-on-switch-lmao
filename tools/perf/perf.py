@@ -1,13 +1,14 @@
 """One session on the device, one report: pull the log archive and the reports over USB, then attribute what was slow.
 
 `pull` copies the running Switch's log archive (`idevicesyslog archive`) and its crash reports (`idevicecrashreport`)
-into a new folder and writes the report there; `report` reads an archive (or ndjson files) already on disk; `symbols`
+into a new folder and writes the report there, with every device check (tools/devicerun) in checks.txt; `report` reads an archive (or ndjson files) already on disk; `symbols`
 extracts reusable unslid symbol tables under ~/Library/Application Support/switch-ios/symbols/<build>/.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,7 @@ import tarfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+from tools.devicerun import devicerun
 from tools.perf import dumps, ips, report, session, source, symbols
 
 KCDATA = Path(__file__).resolve().parents[2] / 'kernel/xnu-12377.121.6/tools/lldbmacros/kcdata.py'
@@ -69,6 +71,15 @@ def pull(out: Path, udid: str | None, age_s: int) -> Path:
     if staging.exists():
         staging.rmdir()
     return archive
+
+
+def write_checks(logs: str, crashes: str | None, folder: Path, ndjson: bool = False) -> Path:
+    """Every devicerun check over the pulled logs into folder/checks.txt (and .tsv), the owed checks' rows last."""
+    out = folder / 'checks.txt'
+    argv = [logs, '--tsv', str(folder / 'checks.tsv'), *(['--crashes', crashes] if crashes else [])]
+    with out.open('w') as text, contextlib.redirect_stdout(text):
+        devicerun.main(argv + (['--ndjson'] if ndjson else []))
+    return out
 
 
 def archive_root(folder: Path) -> Path:
@@ -186,6 +197,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f'wrote {args.out}', file=sys.stderr)
     else:
         sys.stdout.write(text)
+    if args.command == 'pull':
+        print(f'wrote {write_checks(logs[0], crashes, Path(logs[0]).parent)}', file=sys.stderr)
     return 0
 
 

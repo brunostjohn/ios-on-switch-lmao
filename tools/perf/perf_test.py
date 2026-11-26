@@ -519,6 +519,24 @@ class PullTest(unittest.TestCase):
         recs = [rec('SwitchSched cores (10000 ms)', 0.0), rec('SwitchSched cores (10000 ms)', 519.0)]
         self.assertIn('log holes (no record at all', '\n'.join(report.head(session.build('B', recs), report.Pulled())))
 
+    def test_a_pull_judges_every_device_check_with_the_owed_lanes_last(self):
+        with tempfile.TemporaryDirectory() as d:
+            logs = Path(d) / 'logs.ndjson'
+            record = {
+                'eventType': 'logEvent',
+                'timestamp': '2026-11-26 09:00:01.000000+0000',
+                'bootUUID': 'B1',
+                'processImagePath': '/kernel.development',
+                'messageType': 'Default',
+                'eventMessage': 'TegraSPI stats: SPI4 5000 ms: 100 blocks (20/s), 50 packed, 4000 bytes in 1000 FIFO '
+                'words each way, 2 failed',
+            }
+            logs.write_text(json.dumps(record) + '\n')
+            text = perf.write_checks(str(logs), None, Path(d), ndjson=True).read_text()
+        self.assertIn('owed.power.spi4-failed', text)
+        self.assertIn('owed-summary', text)
+        self.assertRegex(text, r'owed\.power\s+big-power\s+FAIL')
+
     def test_a_pull_takes_the_log_archive_and_the_crash_folder(self):
         cmds = perf.pull_commands(perf.Path('/s'), 'abc', 600)
         self.assertEqual(cmds[0], ['idevicesyslog', '-u', 'abc', 'archive', '/s/archive.tar', '--age-limit', '600'])
