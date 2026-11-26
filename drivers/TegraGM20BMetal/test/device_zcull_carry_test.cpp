@@ -150,4 +150,69 @@ TEST_F(DeviceZcullCarry, AnAbandonedJobInBetweenTakesNotTheCarriedSlot)
     EXPECT_EQ(addressOf(loaded, kStorageA), storage);
 }
 
+// A range that resumed the carry and is then abandoned (an event producer pending, its commit's admission blocked) is
+// encoded again later with no carry: the loss is counted
+TEST_F(DeviceZcullCarry, AnAbandonedResumeCountsTheCarryLost)
+{
+    ASSERT_FALSE(job({true}, nullptr, &commandBuffer, 1).empty());
+    gm20b::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    cb->resumeZcull(&commandBuffer, kRange);
+    cb->abandon();
+    EXPECT_EQ(dev.stats.zcullCarriesLost.load(), 1u);
+}
+
+// A pass whose draws invalidate its region (a depth write under Always) records none and gives its slot back: after five
+// such depths, a sixth still stores its region and the pass that loads it loads it
+TEST_F(DeviceZcullCarry, APassThatRecordsNoRegionGivesItsSlotBack)
+{
+    gm20b::RuntimeRecord r;
+    r.keyString = "samples=1 c0=70:15:0 ds=252/0 ";
+    for (gm20b::CapturedProgram &p : r.programs) {
+        p.image.assign(80 + 64, 0);
+        p.gprs = 8;
+    }
+    r.programs[0].id = "vs-zcull";
+    r.programs[1].id = "fs-zcull";
+    r.pipeline.keyHash = 0x6b07;
+    r.blob = {0x1a00, 0x1111};
+    std::string why;
+    gm20b::Pipeline *pl = dev.addRecord(r, false, why);
+    ASSERT_NE(pl, nullptr) << why;
+    gm20b::DepthStencilDesc always;
+    always.depthCompare = 7;  // MTLCompareFunctionAlways
+    always.depthWrite = true;
+    const gm20b::DepthStencilState invalidating(always);
+    gm20b::Texture zetas[6];
+    for (gm20b::Texture &z : zetas)
+        ASSERT_TRUE(dev.createOwnedZeta(32, 32, kDepth32Float, 1, true, z));
+    gm20b::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    const size_t first = kernel_model::model.jobs.size();
+    const auto pass = [&](gm20b::Texture &z, bool clears, bool draws) {
+        gm20b::PassDesc p;
+        p.color[0] = kept(colour, gm20b::ColorAttachment::Load);
+        p.count = 1;
+        p.depthStencil = {&z, clears, false, 1.0f, 0};
+        const char *rule = nullptr;
+        gm20b::RenderEncoder *e = cb->render(p, &rule);
+        ASSERT_NE(e, nullptr) << (rule ? rule : "");
+        if (draws) {
+            e->setPipeline(pl);
+            e->setDepthStencil(&invalidating);
+            ASSERT_TRUE(e->draw(3, 0, 3, 1, 0, &rule)) << (rule ? rule : "");
+        }
+        e->end();
+    };
+    for (int k = 0; k < 5; k++)
+        pass(zetas[k], true, true);
+    pass(zetas[5], true, false);
+    pass(zetas[5], false, false);
+    uint32_t seqno = 0;
+    ASSERT_TRUE(cb->commit(seqno));
+    const auto ms = submitted(first);
+    EXPECT_EQ(values(ms, kLoadZcullMethod).size(), 1u) << "the sixth depth found a slot";
+    EXPECT_EQ(values(ms, kStoreZcullMethod).size(), 1u);
+}
+
 }  // namespace

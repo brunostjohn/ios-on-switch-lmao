@@ -673,6 +673,13 @@ void CommandBuffer::abandon()
 {
     releaseNativeReads();
     Device &d = *dev_;
+#if SWITCH_METAL_DIAGNOSTICS
+    for (const ZcullStored &r : zcullPlanes_.regions())
+        if (r.carried) {
+            d.stats.zcullCarriesLost++;
+            break;
+        }
+#endif
     d.closedCount_.store(d.closedCount_.load(std::memory_order_relaxed) + 1, std::memory_order_release);
     d.overflowing_ = false;
     d.overflow_.clear();

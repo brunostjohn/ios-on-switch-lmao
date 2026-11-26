@@ -96,8 +96,6 @@ __attribute__((objc_externally_retained)) bool SwitchMetalRangeEncode::open(Swit
         return false;
     }
     generation_ = d.channelGeneration();
-    if (whole && from)
-        rc_->resumeZcull((__bridge const void *)cb, from);
     rc_->internalCompletion();
     beginInlineSignals(cb);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
@@ -106,6 +104,9 @@ __attribute__((objc_externally_retained)) bool SwitchMetalRangeEncode::open(Swit
 #endif
     if (whole && !producersOrdered())
         return false;
+    // before any write the encode makes (first contents, conversions), which must mark a carried region stale
+    if (whole && from)
+        rc_->resumeZcull((__bridge const void *)cb, from);
     if (whole)
         firstContents_.emplace(cb, from, to, *rc_);
     else

@@ -143,6 +143,10 @@ void RenderEncoder::end()
         const auto memory = zeta.storageRange();
         cb_->zcullPlanes_.stored(zcullStoredBy(zcull_, zeta.va, memory.va, memory.bytes, store));
     }
+    // a slot taken for a region the pass ended without (invalidated, or a depth whose memory no write could be matched
+    // against) goes back: the job's owner could never take it again
+    if (zcull_.slot >= 0 && !cb_->zcullPlanes_.holdsSlot(zcull_.slot))
+        d.zcullSlots_.release(zcull_.slot);
     writeRaster(p_, Raster());
     unclampDepthRange(p_);
     if (rot_.turned()) {

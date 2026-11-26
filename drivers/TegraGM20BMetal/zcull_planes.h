@@ -79,6 +79,14 @@ public:
         return {};
     }
 
+    bool holdsSlot(int slot) const
+    {
+        for (const ZcullStored &s : stored_)
+            if (s.slot == slot)
+                return true;
+        return false;
+    }
+
     // The slot the depth at `zetaVa` stored its region in, -1: none. Its next store takes it again, after every load of
     // the region in the channel's order.
     int slotOf(uint64_t zetaVa) const
