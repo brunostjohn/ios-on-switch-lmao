@@ -159,9 +159,9 @@ int main(int argc, char **argv)
         unsigned failed = 0;
         for (const Case &c : kCases)
             for (NSUInteger n : {2u, 4u}) {
-                id<MTLTexture> ms = texture(dev, c.format, n,
-                                            MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead |
-                                                MTLTextureUsagePixelFormatView);
+                id<MTLTexture> ms =
+                    texture(dev, c.format, n,
+                            MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView);
                 id<MTLTexture> metal = texture(dev, c.format, 1, MTLTextureUsageRenderTarget);
                 id<MTLTexture> ours = texture(dev, c.written, 1, MTLTextureUsageRenderTarget);
                 id<MTLRenderPipelineState> fill = state(dev, samples, "cover", c.samples, c.format, n);

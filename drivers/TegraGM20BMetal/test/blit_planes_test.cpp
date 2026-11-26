@@ -118,8 +118,9 @@ struct Piece {
 std::vector<Piece> pieces(const gm20b::Texture &plane, uint32_t x, uint32_t y, uint32_t w, uint32_t h, bool &fits)
 {
     std::vector<Piece> out;
-    fits = gm20b::planeRunPieces(plane, x, y, w, h,
-                                 [&](const gm20b::PlaneRunPiece &p) { out.push_back({p.x, p.row, p.w, p.at}); });
+    fits = gm20b::planeRunPieces(plane, x, y, w, h, [&](const gm20b::PlaneRunPiece &p) {
+        out.push_back({p.x, p.row, p.w, p.at});
+    });
     return out;
 }
 

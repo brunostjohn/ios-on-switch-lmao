@@ -136,10 +136,8 @@ id<MTLDevice> bgr10XrSrgbDevice()
 
 id<MTLTexture> target(id<MTLDevice> device, MTLPixelFormat format)
 {
-    MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
-                                                                                 width:64
-                                                                                height:64
-                                                                             mipmapped:NO];
+    MTLTextureDescriptor *d =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format width:64 height:64 mipmapped:NO];
     d.storageMode = MTLStorageModeShared;
     d.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
     return [device newTextureWithDescriptor:d];
