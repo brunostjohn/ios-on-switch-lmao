@@ -40,7 +40,7 @@ const char *classText(uint32_t qos)
 // the function its library names, that library (a system library's path, else "data": the tool finds it by the AIR the
 // key names), " spec"
 // where the function was made with constant values, and its cache key, in parts of 700 characters
-void logComputeHarvest(const char *kind, const CacheKey &k, const CompileRequest &r, const RequestSources &sources)
+void logComputeHarvest(const char *kind, const CacheKey &k, const CompileRequest &r)
 {
     const RequestStage &s = r.stages[0];
     std::string lib = r.libraries[s.library].path;
@@ -57,8 +57,8 @@ void logComputeHarvest(const char *kind, const CacheKey &k, const CompileRequest
 
 // A function of this facade as a request's stage, its library added to `r` once (`sources` beside it); false: one no
 // request can name (another device's, or one whose library lists no AIR for it). The bytes are the AIR slice the facade
-// read; `every` sends a system library's too, as a data library. Only a library sent to the compiler is digested, for its
-// registration (remote.h registerLibrary).
+// read; `every` sends a system library's too, as a data library. A library sent to the compiler is registered by its
+// source's id (remote.h registerLibrary), with no digest.
 bool addStage(CompileRequest &r, RequestSources &sources, const char *tag, id function, bool bytes, bool every = false,
               Remote *remote = nullptr)
 {
@@ -519,7 +519,7 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
     }
     taken = true;
 #if SWITCH_METAL_DIAGNOSTICS
-    logComputeHarvest("kernel harvest", k, r, sources);
+    logComputeHarvest("kernel harvest", k, r);
 #endif
     return found == RecordCache::Found::Record ? Compiler::Outcome::Made : Compiler::Outcome::Refused;
 }
@@ -690,7 +690,7 @@ bool Completion::facts(id facadeFunction, MTLComputePipelineDescriptor *descript
            fromStore ? "from the shader compiler's store" : "by the shader compiler",
            (unsigned long long)((nowUs() - began) / 1000), out.maxThreads, out.executionWidth, out.staticMemory,
            stateKey.c_str());
-    logComputeHarvest("facts harvest", k, r, sources);
+    logComputeHarvest("facts harvest", k, r);
 #endif
     return true;
 }
