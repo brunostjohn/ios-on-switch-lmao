@@ -1,0 +1,87 @@
+# switch_img4: the payloads of an IPSW's IM4P members (kernelcache, device tree, trust caches) as //ipsw makes them.
+#
+#   bazel test //install/img4:all       unit tests, and each pinned kind's members against //ipsw's <target>_<kind>
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//ipsw:ipsw.bzl", "pinned_kinds")
+load("//ipsw:pins.bzl", "IPSWS")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_library(
+    name = "switch_img4",
+    srcs = glob(["src/*.rs"]),
+    deps = [
+        "@installer_crates//:hex",
+        "@installer_crates//:image4",
+        "@installer_crates//:lzfse_rust",
+        "@installer_crates//:object",
+        "@installer_crates//:sha2",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "switch_img4_test",
+    crate = ":switch_img4",
+)
+
+_TRUST = {
+    "app_cryptex_trust_cache": ("app_cryptex_trust", "trca"),
+    "static_trust_cache": ("static_trust", "trst"),
+    "system_cryptex_trust_cache": ("system_cryptex_trust", "trcs"),
+}
+
+[
+    rust_test(
+        name = "ipsw_test_" + kind,
+        srcs = ["tests/ipsw.rs"],
+        data = [
+            "//ipsw:{}_device_tree".format(kind),
+            "//ipsw:{}_kernelcache".format(kind),
+            "//ipsw:device_tree_" + kind,
+            "//ipsw:kernelcache_" + kind,
+        ] + [
+            "//ipsw:{}_{}".format(kind, role)
+            for role in _TRUST
+        ] + [
+            "//ipsw:{}_{}".format(name, kind)
+            for name, _ in _TRUST.values()
+        ],
+        env = {
+            "SWITCH_IMG4_DEVICE_TREE": "$(rootpath //ipsw:device_tree_{})".format(kind),
+            "SWITCH_IMG4_DEVICE_TREE_IM4P": "$(rootpath //ipsw:{}_device_tree)".format(kind),
+            "SWITCH_IMG4_KERNELCACHE": "$(rootpath //ipsw:kernelcache_{})".format(kind),
+            "SWITCH_IMG4_KERNELCACHE_IM4P": "$(rootpath //ipsw:{}_kernelcache)".format(kind),
+            "SWITCH_IMG4_KERNELCACHE_SHA256": IPSWS[kind]["derived"]["kernelcache_sha256"],
+        } | {
+            "SWITCH_IMG4_{}{}".format(
+                role.upper(),
+                suffix,
+            ): value
+            for role, (name, fourcc) in _TRUST.items()
+            for suffix, value in (
+                (
+                    "",
+                    "$(rootpath //ipsw:{}_{})".format(name, kind),
+                ),
+                (
+                    "_DIGEST",
+                    IPSWS[kind]["members"][role]["manifest_digest"],
+                ),
+                ("_FOURCC", fourcc),
+                (
+                    "_IM4P",
+                    "$(rootpath //ipsw:{}_{})".format(kind, role),
+                ),
+            )
+        },
+        deps = [
+            ":switch_img4",
+            "@installer_crates//:hex",
+        ],
+    )
+    for kind in pinned_kinds()
+]

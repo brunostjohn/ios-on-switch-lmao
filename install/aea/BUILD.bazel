@@ -1,0 +1,61 @@
+# switch_aea: an IPSW's Apple Encrypted Archive members (profile 1), decrypted with their pinned key.
+#
+#   bazel test //install/aea:switch_aea_test                 archives /usr/bin/aea makes at test time (a Darwin worker)
+#   bazel test //install/aea:member_test_<kind>_<role>       a pinned member against its content_sha256 (manual: GBs)
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//ipsw:pins.bzl", "IPSWS")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_library(
+    name = "switch_aea",
+    srcs = glob(["src/*.rs"]),
+    deps = [
+        "@installer_crates//:aea-tools",
+        "@installer_crates//:aes",
+        "@installer_crates//:base64",
+        "@installer_crates//:ctr",
+        "@installer_crates//:hex",
+        "@installer_crates//:hkdf",
+        "@installer_crates//:hmac",
+        "@installer_crates//:lzfse_rust",
+        "@installer_crates//:rayon",
+        "@installer_crates//:sha2",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "switch_aea_test",
+    crate = ":switch_aea",
+    tags = ["requires-darwin"],
+    deps = ["@installer_crates//:tempfile"],
+)
+
+[
+    rust_test(
+        name = "member_test_{}_{}".format(kind, role),
+        size = "large",
+        srcs = ["tests/member.rs"],
+        data = ["@ipsw//:stored_{}_{}".format(kind, role)],
+        env = {
+            "SWITCH_AEA_ARCHIVE": "$(rootpath @ipsw//:stored_{}_{})".format(kind, role),
+            "SWITCH_AEA_CONTENT_SHA256": pin["content_sha256"],
+            "SWITCH_AEA_KEY": pin["aea_key"],
+        },
+        tags = [
+            "large",
+            "manual",
+        ],
+        deps = [
+            ":switch_aea",
+            "@installer_crates//:hex",
+        ],
+    )
+    for kind, ipsw in IPSWS.items()
+    for role, pin in ipsw.get("members", {}).items()
+    if pin.get("aea_key")
+]
