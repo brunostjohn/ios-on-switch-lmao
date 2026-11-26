@@ -12,7 +12,7 @@
 namespace {
 constexpr uintptr_t kSync = 0x50002100;
 std::map<uint32_t, uint32_t> gRegs;
-bool gIntmaskStuck, gIntc0Stuck, gNoNub;
+bool gIntmaskStuck, gIntc0Stuck, gHintmaskExtStuck, gNoNub;
 std::vector<uint32_t> gFailedChannels;
 
 uint32_t &reg(uint32_t offset)
@@ -55,7 +55,7 @@ struct Host1xErrors : testing::Test {
     void SetUp() override
     {
         gRegs = {{kIntMask, 0x10}};
-        gIntmaskStuck = gIntc0Stuck = gNoNub = false;
+        gIntmaskStuck = gIntc0Stuck = gHintmaskExtStuck = gNoNub = false;
         gFailedChannels.clear();
         switch_test_iolog.clear();
         switch_test_sleep = nullptr;
@@ -93,6 +93,8 @@ void switch_mmio_model_write32(uintptr_t address, uint32_t value)
         gRegs[offset] &= ~value;
     else if (offset == kIntC0Mask)
         gRegs[offset] = gIntc0Stuck ? 0 : value;
+    else if (offset == kHintMaskExt)
+        gRegs[offset] = gHintmaskExtStuck ? value & 0xff : value;
     else if (offset != kIntMask || !gIntmaskStuck)
         gRegs[offset] = value;
 }
@@ -143,6 +145,14 @@ TEST_F(Host1xErrors, AnIntc0maskThatDoesNotTakeHostIntPanics)
     EXPECT_EQ(panicOf(&start),
               "TegraHost1x: general interrupt (INTID 99) not enabled: INTC0MASK reads 0 after HOST_INT "
               "was written");
+}
+
+// A channel whose bit does not stick would stop without a word: as loud as the other masks.
+TEST_F(Host1xErrors, AnIllegalOpcodeMaskThatDoesNotStickPanics)
+{
+    gHintmaskExtStuck = true;
+    EXPECT_EQ(panicOf(&start), "TegraHost1x: general interrupt (INTID 99) not enabled: HINTMASK_EXT reads 0xff after "
+                               "0x3fff was written");
 }
 
 TEST_F(Host1xErrors, NoInterruptNubPanics)

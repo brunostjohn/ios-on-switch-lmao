@@ -128,16 +128,18 @@ void errorsConfigure()
     if (!(c.intc0 & kHostInt))
         panic("TegraHost1x: general interrupt (INTID %u) not enabled: INTC0MASK reads %#x after HOST_INT was written",
               kGeneralIntid, c.intc0);
+    if (c.hintmask != kExtEnable)
+        panic("TegraHost1x: general interrupt (INTID %u) not enabled: HINTMASK reads %#x after %#x was written",
+              kGeneralIntid, c.hintmask, kExtEnable);
+    if (c.hintmaskExt != kIllegalAll)
+        panic("TegraHost1x: general interrupt (INTID %u) not enabled: HINTMASK_EXT reads %#x after %#x was written",
+              kGeneralIntid, c.hintmaskExt, kIllegalAll);
     if (c.intc0Was & ~kHostInt)
         IOLog("TegraHost1x: INTC0MASK read %#x: the engines' bits cleared (each has its own line), HOST_INT kept\n",
               c.intc0Was);
     if (c.latched)
         IOLog("TegraHost1x: illegal opcodes latched before the general interrupt was on: channels %#x (cleared)\n",
               c.latched);
-    // The emulator's host1x model does not store HINTMASK_EXT, so this one stays a line.
-    if (c.hintmaskExt != kIllegalAll)
-        IOLog("TegraHost1x: general interrupt: HINTMASK_EXT reads %#x after %#x was written\n", c.hintmaskExt,
-              kIllegalAll);
 }
 }  // namespace
 

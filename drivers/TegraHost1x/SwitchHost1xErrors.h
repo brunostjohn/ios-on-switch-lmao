@@ -32,6 +32,7 @@ struct Configured {
     uint32_t intc0Was;     // INTC0MASK as the boot chain or SC7 left it
     uint32_t intc0;        // read back after HOST_INT alone was written
     uint32_t intmask;      // read back after CPU0's master enable was set
+    uint32_t hintmask;     // read back after the EXT enable alone was written
     uint32_t hintmaskExt;  // read back after every channel's illegal opcode was unmasked
 };
 
@@ -54,6 +55,7 @@ template <class Registers> struct Unit {
         c.intc0Was = r.read(kIntC0Mask);
         r.write(kIntC0Mask, kHostInt);
         r.write(kIntMask, r.read(kIntMask) | kCpu0All);
+        c.hintmask = r.read(kHintMask);
         c.hintmaskExt = r.read(kHintMaskExt);
         c.intc0 = r.read(kIntC0Mask);
         c.intmask = r.read(kIntMask);
@@ -95,7 +97,7 @@ template <class Registers> struct Unit {
 }  // namespace switch_host1x_errors
 
 // Thread context, once the channels are programmed: the interrupt attached on host1x's work loop and unmasked. One that
-// cannot be attached, or an INTMASK or INTC0MASK that does not take its enable, panics (here and at the SC7 resume).
+// cannot be attached, or a mask among the four that does not read back as written, panics (here and at the SC7 resume).
 void switch_host1x_errors_start(IOWorkLoop *loop, volatile uint8_t *sync);
 // SC7: off before the sync unit powers down, configured and on again once it is back and the channels programmed.
 void switch_host1x_errors_stop();
