@@ -25,7 +25,7 @@ struct Model {
     uint32_t control = 0;
     uint32_t producerSyncpt = 40, displaySyncpt = 900, vblank = 70, windowSyncpts[2] = {500, 600};
     uint32_t windowPending[2] = {}, windowSettles = 0;  // window A's conditions waiting for the next latch
-    bool windowRaisesEarly = false, windowLate = false;
+    bool windowRaisesEarly = false, windowLate = false, windowNever = false;
     uint32_t windowDeferred[2] = {};
     uint32_t words[64] = {}, wordCount = 0;
     bool queued = false, stuck = false, freeze = false, refuseNext = false, quietNow = true, underflowNext = false;
@@ -239,7 +239,8 @@ struct Model {
             for (uint32_t i = 0; i < 2; ++i) {
                 windowSyncpts[i] += windowDeferred[i];
                 windowDeferred[i] = 0;
-                (windowLate ? windowDeferred[i] : windowSyncpts[i]) += windowPending[i];
+                if (!windowNever)
+                    (windowLate ? windowDeferred[i] : windowSyncpts[i]) += windowPending[i];
                 windowPending[i] = 0;
             }
         }
@@ -581,5 +582,24 @@ TEST(Host1xFlipRun, AStreamHeldForTheVblankIsSeenLatchedTheFrameAfterIt)
     EXPECT_EQ(m.run.totals.host1x, 4u);
     EXPECT_EQ(m.run.totals.unwritten, 0u) << "a stream waiting for its vblank is not taken back";
     EXPECT_EQ(m.run.totals.vblank[2], 4u);
+}
+
+// Conditions window A never raises are dropped at the run's end, before the display channel is the display's again.
+TEST(Host1xFlipRun, ConditionsNeverRaisedAreDroppedAtTheEnd)
+{
+    Model m;
+    m.windowNever = true;
+    m.run.begin(4, switch_host1x_flip::kWindowIncrements);
+    m.runToEnd();
+    ASSERT_TRUE(m.done);
+    EXPECT_EQ(m.windowSettles, 1u);
+    EXPECT_EQ(m.calls.end()[-2], "teardown");
+    EXPECT_EQ(m.calls.end()[-1], "restart");
+    EXPECT_EQ(m.run.totals.window[1][switch_host1x_flip::kNever], 4u);
+
+    Model clean;
+    clean.run.begin(4, switch_host1x_flip::kWindowIncrements);
+    clean.runToEnd();
+    EXPECT_EQ(clean.windowSettles, 0u) << "every condition raised: nothing to drop";
 }
 }  // namespace

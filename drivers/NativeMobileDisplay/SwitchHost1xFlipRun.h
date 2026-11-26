@@ -419,6 +419,14 @@ private:
                 ++totals.window[i][kNever];
                 marks[i].pending = false;
             }
+        // A condition still in window A's syncpoint client would wait there for good: the client stalls, so the
+        // display channel's next window A increment would too. Drop it before the channel is the display's again.
+        if ((modes & kWindowIncrements) && stage != kWaiting &&
+            (!reached(io.windowValue(0), windowNext[0]) || !reached(io.windowValue(1), windowNext[1]))) {
+            io.teardown();
+            io.restart();
+            io.settleWindow(windowNext[0], windowNext[1]);
+        }
         stage = kDone;
         io.finished();
     }
