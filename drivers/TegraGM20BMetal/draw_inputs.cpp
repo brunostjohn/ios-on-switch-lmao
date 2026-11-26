@@ -63,9 +63,23 @@ uint64_t RenderEncoder::rootTable(const PackPipeline &r, uint32_t k, bool writes
     return va;
 }
 
+bool RenderEncoder::guestSlotMoved(const Pipeline &pl) const
+{
+    if (moved_.all)
+        return true;
+    for (const Pipeline::GuestBase &g : pl.guestBases) {
+        if (!g.word)
+            break;
+        if (g.stage <= 1 && g.slot < 31 && (moved_.buffers[g.stage + 1] >> g.slot & 1))
+            return true;
+    }
+    return false;
+}
+
 uint32_t RenderEncoder::guestBaseWords(const Pipeline &pl, uint32_t (&want)[32])
 {
     uint32_t written = 0;
+    SWITCH_METAL_DIAGNOSTIC(cb_->counts_.guestHoleWrites += pl.guestBases[0].word != 0);
     for (const Pipeline::GuestBase &g : pl.guestBases) {
         if (!g.word)
             break;

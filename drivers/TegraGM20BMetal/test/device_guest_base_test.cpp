@@ -87,4 +87,82 @@ TEST_F(DeviceGuestBase, ADrawWritesABuffersAddressAndOffsetIntoItsHole)
     dev.destroyBuffer(buffer);
 }
 
+// A draw rewrites the holes only on the state's bind or when a hole's slot was bound again, not on every draw
+TEST_F(DeviceGuestBase, OnlyADrawWhoseHoleSlotMovedRewritesTheHoles)
+{
+    const uint32_t bytes[4] = {1, 2, 3, 4};
+    gm20b::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    gm20b::PassDesc desc;
+    desc.color[0].texture = &target;
+    desc.color[0].load = gm20b::ColorAttachment::Clear;
+    desc.count = 1;
+    gm20b::RenderEncoder *e = cb->render(desc);
+    ASSERT_NE(e, nullptr);
+    e->setPipeline(pl);
+    e->setBytes(1, 5, bytes, 16);
+    const char *why = nullptr;
+    ASSERT_TRUE(e->draw(3, 0, 3, 1, 0, &why)) << (why ? why : "");
+    ASSERT_TRUE(e->draw(3, 0, 3, 1, 0, &why)) << (why ? why : "");
+    e->setBytes(1, 5, bytes, 16);
+    ASSERT_TRUE(e->draw(3, 0, 3, 1, 0, &why)) << (why ? why : "");
+    e->end();
+    uint32_t seqno = 0;
+    ASSERT_TRUE(cb->commit(seqno));
+    EXPECT_EQ(dev.stats.guestHoleWrites.load(), 2u) << "the first draw's bind and the third's new bytes";
+}
+
+// A buffer bound again at another offset only (setVertexBufferOffset) moves the hole's address with it
+TEST_F(DeviceGuestBase, AnOffsetOnlyRebindRewritesTheHole)
+{
+    gm20b::Buffer buffer;
+    ASSERT_TRUE(dev.createBuffer(256, buffer, true));
+    gm20b::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    gm20b::PassDesc desc;
+    desc.color[0].texture = &target;
+    desc.color[0].load = gm20b::ColorAttachment::Clear;
+    desc.count = 1;
+    gm20b::RenderEncoder *e = cb->render(desc);
+    ASSERT_NE(e, nullptr);
+    e->setPipeline(pl);
+    e->setBuffer(1, 5, &buffer, 64);
+    const char *why = nullptr;
+    ASSERT_TRUE(e->draw(3, 0, 3, 1, 0, &why)) << (why ? why : "");
+    e->setBufferOffset(1, 5, 128);
+    ASSERT_TRUE(e->draw(3, 0, 3, 1, 0, &why)) << (why ? why : "");
+    e->end();
+    uint32_t seqno = 0;
+    ASSERT_TRUE(cb->commit(seqno));
+    const uint64_t va =
+        uint64_t(gm20b::DeviceHarness::rootPush(dev, 3)) << 32 | gm20b::DeviceHarness::rootPush(dev, 2);
+    EXPECT_EQ(va, buffer.va + 128);
+    EXPECT_EQ(dev.stats.guestHoleWrites.load(), 2u);
+    dev.destroyBuffer(buffer);
+}
+
+// An indirect command buffer's commands bind their own buffers, which never reach a hole: their draw of such a state is
+// refused with its reason, never drawn with the record's static word as an address
+TEST_F(DeviceGuestBase, AnIndirectCommandBuffersDrawOfAHoleStateIsRefused)
+{
+    gm20b::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    gm20b::PassDesc desc;
+    desc.color[0].texture = &target;
+    desc.color[0].load = gm20b::ColorAttachment::Clear;
+    desc.count = 1;
+    gm20b::RenderEncoder *e = cb->render(desc);
+    ASSERT_NE(e, nullptr);
+    e->setPipeline(pl);
+    gm20b::RenderEncoder::IcbExecute x = {};
+    x.count = 1;
+    x.slotWords = 16;
+    x.primitive = 3;
+    const char *why = nullptr;
+    EXPECT_FALSE(e->executeSlots(x, &why));
+    EXPECT_EQ(cb->refusal.id, gm20b::RefGuestBaseIcb) << (why ? why : "");
+    e->end();
+    cb->abandon();
+}
+
 }  // namespace

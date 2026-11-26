@@ -612,6 +612,11 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
         return true;
     Pipeline *form = formFor(pipeline_, {x.primitive, 0, 1, true, true});
     const Pipeline &pl = *form;
+    if (const Pipeline::GuestBase &g = pl.guestBases[0]; g.word) {
+        *why = "an indirect command buffer's draw of a state that reads a buffer slot's Metal address";
+        cb_->refusal = {RefGuestBaseIcb, g.slot, g.stage};
+        return false;
+    }
     const bool ordered = orderedFetch(pl, {x.primitive, 0, 1, true, x.indexed});
     if (ordered && x.primitive == icb::kPatchPrimitive) {
         refuseFetch(pl, FetchRefusal::Geometry, x.primitive, 0, 0, why);

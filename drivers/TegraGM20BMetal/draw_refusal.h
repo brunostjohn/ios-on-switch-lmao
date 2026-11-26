@@ -47,7 +47,10 @@ enum RefusalId : uint8_t {
     RefStorageSamples,
     RefSamplerHeader,  // no header the range makes: a: the sampler, b: the address map, c: 1 compare, 2 constexpr
     RefMatrixUniform,  // a colour matrix form's uniform not bound whole: a: its buffer index, b: offset, c: bytes bound
-    RefNoStandIn  // a client's draw sampling a texture of no stand-in that a draw reads through one: a: slot, b: format
+    RefNoStandIn,  // a client's draw sampling a texture of no stand-in that a draw reads through one: a: slot, b: format
+    // an indirect command buffer's draw of a state whose program reads a buffer slot's Metal address (SlotGuestBase): the
+    // commands' binds never reach the hole. a: the first hole's slot, b: its stage
+    RefGuestBaseIcb
 };
 
 struct Refusal {

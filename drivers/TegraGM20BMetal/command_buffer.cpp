@@ -293,6 +293,7 @@ void CommandBuffer::foldCounts()
     stats.interlockDraws += counts_.interlockDraws;
     stats.rasterOrderedDraws += counts_.rasterOrderedDraws;
     stats.amplifiedDraws += counts_.amplifiedDraws;
+    stats.guestHoleWrites += counts_.guestHoleWrites;
     stats.fetch.interlocked += counts_.interlocked;
     stats.fetch.interlockedBlends += counts_.interlockedBlends;
     stats.fetch.twinRule += counts_.twinRule;

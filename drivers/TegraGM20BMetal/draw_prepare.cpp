@@ -620,6 +620,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     SWITCH_METAL_ENCODE_END(descriptorSpan);
     if (!set)
         return false;
+    const bool holesMoved = pl->guestBases[0].word && guestSlotMoved(*pl);
     moved_ = MovedBindings{{}, {}, {}, false};
     spillDirty_ = false;
     const auto &residuals = built->residuals;
@@ -637,10 +638,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                                   amplificationDirty_) ||
                                  r.pulledStride[0][1] || r.arrayLengthWord || r.viewportCountWord;
     const bool rebinds = pl != emitted_;
-    const bool guestBases = pl->guestBases[0].word != 0;
     if (pl != emitted_ || residualMask || residualsPushed_ || (dynamicBlend && blendColorDirty_) ||
         r.shaderTests.flags || shadowStencil(r.shaderTests) || slotRoots || (patches && tessWordsDirty_) ||
-        drawnWordsDirty || guestBases) {
+        drawnWordsDirty || holesMoved) {
         if (pl != emitted_) {
             blendColorDirty_ |= pl->constantBlend || dynamicBlend;
             if (cb_->extrasLive_ && cb_->extrasLive_ != pl) {
