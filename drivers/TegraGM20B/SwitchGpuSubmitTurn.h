@@ -11,6 +11,12 @@
 class SwitchGpuSubmitTurn
 {
 public:
+	// `lock` held: whether a submission holds the turn, waiting for room
+	bool waiting() const
+	{
+		return waiting_;
+	}
+
 	// `lock` held: returns once no submission of the queue is waiting for room
 	void enter(IOLock *lock)
 	{

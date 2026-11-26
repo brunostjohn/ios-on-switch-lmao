@@ -2,6 +2,8 @@
 #include <cstddef>
 #include <cstdio>
 
+struct switch_gpu_backing;
+
 extern "C" void switch_gpu_bridge_completed()
 {
 }
@@ -39,7 +41,12 @@ extern "C" __attribute__((weak)) void switch_gpu_memory_retire_begin(void)
 {
 }
 
-extern "C" __attribute__((weak)) void switch_gpu_memory_retire_end(void)
+extern "C" __attribute__((weak)) bool switch_gpu_memory_retire_end(switch_gpu_backing *)
+{
+	return false;
+}
+
+extern "C" __attribute__((weak)) void switch_gpu_memory_retire_parked(void)
 {
 }
 

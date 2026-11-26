@@ -319,6 +319,7 @@ ios_binary(
         "draw_inputs.cpp",
         "draw_shader_tests.cpp",
         "memory.cpp",
+        "scrubs.cpp",
         "parked_arena.cpp",
         "parked_chunks.cpp",
         "pass_backings.cpp",

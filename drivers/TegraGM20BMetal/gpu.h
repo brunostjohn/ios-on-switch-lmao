@@ -60,6 +60,7 @@
 #include <unordered_map>
 #include <map>
 #include <memory>
+#include "word_wait.h"
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -575,6 +576,30 @@ public:
         return privateMoveDue_.load(std::memory_order_relaxed);
     }
 
+    // Every Shared span freed since is zeroed at the front of the next command buffer begin() opens (scrubs.cpp). With
+    // no command buffer coming (the idle give-back, before trim), the submitting thread makes one for them: true with
+    // its job in `seqno` and `generation` (0: none was due); then scrubWait, on the caller's own thread, waits for it and
+    // puts its spans back in their chunks.
+    bool scrubFreed(uint32_t &seqno, uint64_t &generation);
+    void scrubWait(uint32_t seqno, uint64_t generation);
+
+    bool scrubDue() const
+    {
+        return scrubDue_.load(std::memory_order_relaxed);
+    }
+
+    // The idle give-back's (memory pressure, the app gone to the background): the kernel's spares too
+    void kernelSparesGiveBack()
+    {
+        k_.sparesGiveBack();
+    }
+
+#if SWITCH_METAL_DIAGNOSTICS
+    // HW Test's ui.glass_sidebar (the idle-reclaim switch): the compressed-memory thread's next trim runs as it would
+    // once the process had committed nothing for kCompIdleNs, so a test need not wait the idle reclaim out
+    void reclaimIdleNow();
+#endif
+
     // The submit worker's look, where privateMoveDue: the flag cleared, and `take(owner)` for each texture ready memory
     // serves now, called under lock_, where an owner whose want is there is not freed yet (destroyTexture erases it)
     void privateMoves(void (*take)(void *owner));
@@ -600,6 +625,17 @@ public:
     uint64_t wcChunkBytesHeld();
     // The free bytes of the block-linear chunks (test/poolcheck.cpp: a chunk's worth kept ahead)
     uint64_t blChunkFreeBytes();
+    // The thread importing surface `id` at `base` (its mach port name), 0 when none is (test/device_import_test.cpp)
+    uint32_t surfaceImporter(uint64_t id, void *base, uint64_t bytes);
+    // This process's footprint and its bytes to its memorystatus limit, for a client's grow-ahead (grow_ahead.h); a test
+    // gives its own
+    std::function<bool(uint64_t &footprint, uint64_t &available)> footprintProbe = readFootprint;
+
+    bool growerRunning()
+    {
+        std::lock_guard<gm20b::Mutex> l(lock_);
+        return grower_.joinable();
+    }
 
     // the shader heap's bound bytes of host memory (the programs copied so far, in steps)
     uint64_t heapBytes() const
@@ -785,7 +821,8 @@ public:
     // The channel an encode began on (channelGeneration() then) is the one begin() would hand out now
     bool channelCurrent(uint64_t generation) const
     {
-        return channelGeneration() == generation && !contextless_ && !k_.lost(channel_.load(std::memory_order_acquire));
+        return channelGeneration() == generation && !contextless_.load(std::memory_order_relaxed) &&
+               !k_.lost(channel_.load(std::memory_order_acquire));
     }
 
     uint32_t completed() const
@@ -1048,6 +1085,11 @@ public:
             heapUnparksReclaimed{0};
         // the memory live textures took of their own and their kept blocks' (Texture::heldBytes, Buffer::keptBytes)
         std::atomic<uint64_t> textureBytes{0};
+        // Shared spans zeroed at the front of a command buffer, and the command buffers that carried them (scrubs.cpp)
+        std::atomic<uint64_t> scrubbedBytes{0}, scrubbedRuns{0};
+        // private textures made in plain memory and moved into compressed memory later (a copy-engine job on the
+        // submit worker each), and their bytes
+        std::atomic<uint64_t> compressedMoves{0}, compressedMoveBytes{0};
         // diagnostics: color targets the driver rendered whose address or pitch is not a multiple of 128 (NVK renders
         // those through a tiled shadow: nvk_cmd_draw.c nvk_image_plane_aligned_for_linear_attachment), and the last one's pitch
         std::atomic<uint64_t> rtUnaligned{0};
@@ -1120,8 +1162,8 @@ public:
         std::atomic<uint64_t> bandedDraws{0}, bands{0};  // draw_bands.h
         // mixed passes' draws of MixedDraw::Covering, and of MixedDraw::Split (samples 1-3 with the pixel stage off)
         std::atomic<uint64_t> mixedCovering{0}, mixedStageOff{0};
-        std::atomic<uint64_t> learnedDraws{0};           // band_rates.h
-        std::atomic<uint64_t> bandedDispatches{0};       // dispatch_bands.h
+        std::atomic<uint64_t> learnedDraws{0};      // band_rates.h
+        std::atomic<uint64_t> bandedDispatches{0};  // dispatch_bands.h
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
         // draws large enough to measure, priced by the static estimate or a learned rate, and those drawn whole
         // without a band decision (fetchDraw, wholeDraw)
@@ -1552,7 +1594,7 @@ private:
     std::string channelError_;
     // The channel died and the one made since has no context yet (reopen gave up before the context's Exec): begin() makes it
     // again before it gives out a command buffer. channel_ is 0 while the kernel holds none of this device's.
-    bool contextless_ = false;
+    std::atomic<bool> contextless_{false};
     std::vector<uint32_t> freeTic_, freeTsc_, freeTicPairs_;
 
     struct SharedHeader {
@@ -1731,15 +1773,15 @@ private:
     DepthStencilRegs ds_;            // and its depth/stencil registers
     uint32_t tiledCacheSize_ = kTiledCacheDefaultSize;
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, Import *> surfaces_;
-    // The surfaces being imported with lock_ released (importSurface), each with the threads that wait for its import,
-    // which imported_ wakes once it is published or failed
-    std::map<std::tuple<uint64_t, uint64_t, uint64_t>, uint32_t> importing_;
-    gm20b::CondVar imported_;
+    // The surfaces being imported with lock_ released (importSurface), each owned by its importing thread until it is
+    // published or failed: a thread that waits for one sleeps on it with lock_ let go and lends the importer its priority
+    std::map<std::tuple<uint64_t, uint64_t, uint64_t>, std::shared_ptr<gm20b::OwnedWord>> importing_;
+    void waitImport(std::unique_lock<gm20b::Mutex> &l, std::shared_ptr<gm20b::OwnedWord> import);
     // Surface imports no texture holds, kept for the surface's next texture: Core Animation makes a texture over its
     // pooled surface every frame after it drops the last, and an import made again is bound, untiled, cleaned and laid
     // out again (boot 21: 3.4-4 ms of each app-close frame). Oldest first, at most kKeptImports and kKeptImportBytes;
     // trim (idle, memory pressure) gives them all back. Each holds its surface (Import::owner) until then.
-    static constexpr size_t kKeptImports = 8;
+    static constexpr size_t kKeptImports = 32;
     static constexpr uint64_t kKeptImportBytes = 64ull << 20;
     std::vector<Import *> keptImports_;
     uint64_t keptImportBytes_ = 0;
@@ -1845,9 +1887,23 @@ private:
     std::vector<Chunk> wcChunks_;
     // separate VOL=1 WC chunks for streaming shared buffers so shared textures in wcChunks_ stay L2-cached
     std::vector<Chunk> volatileWcChunks_;
+
+    // lock_ (scrub.h)
+    std::vector<Scrub> scrubWanted_, scrubbing_;
+    // begin()'s, a successful commit()'s (with its closing job, whose end flushes the zeros) and abandon()'s, on the
+    // submitting thread: the spans a command buffer fills at its front
+    void scrubInto(CommandBuffer &cb);
+    void scrubsSubmitted(CommandBuffer &cb, uint32_t seqno);
+    void scrubsReturned(CommandBuffer &cb);
+    std::atomic<bool> scrubDue_{false};
+    // lock_ held. Null `deferred`: an emptied chunk is kept (the allocation that asked will use it)
+    void retireScrubs(DeferredFrees *deferred);
+    void scrubbedFree(const Scrub &s, DeferredFrees *deferred);
     bool wcPoolAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &pool, uint64_t bytes, bool gpuVolatile,
                      Span &s, bool *dirty = nullptr);
     void wcPoolFree(std::vector<Chunk> &pool, Span &s, DeferredFrees &deferred);
+    // An empty live shared chunk of `pool` besides `ch`: the one an emptied chunk leaves for the next burst
+    static bool otherEmptyChunk(const std::vector<Chunk> &pool, const Chunk &ch);
     bool wcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s, bool *dirty = nullptr);
     void wcFree(Span &s, DeferredFrees &deferred);
     bool volatileWcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s, bool *dirty = nullptr);
@@ -2079,8 +2135,14 @@ private:
     uint32_t offLockChunkOps_ = 0;
     gm20b::CondVar grow_, grown_, chunkReady_;
     std::thread grower_;
+    uint32_t clientStalls_ = 0;
     bool newChunk(uint64_t size, bool dedicated, std::unique_lock<gm20b::Mutex> &l, uint32_t &index);
     void growLoop();
+    void startGrower();
+    void clientStalled();
+    uint64_t growChunk(const std::vector<Chunk> &chunks, uint64_t cap, uint64_t align) const;
+    bool growAheadRoom(uint64_t chunk);
+    static bool readFootprint(uint64_t &footprint, uint64_t &available);
     // Written by the submitting thread alone (the submit worker, which runs every move too), each a load and a store; a
     // command buffer's backings are marked used before closedCount_ moves
     std::atomic<uint64_t> commitCount_{0};
@@ -2248,6 +2310,9 @@ private:
     // compThread_ started where it is not: it trims what an idle process holds when it turns stale (compDeadline)
     void compStart();
     bool compRearm_ = false;  // shared plain memory was made: compThread_ takes its deadline (lock_)
+#if SWITCH_METAL_DIAGNOSTICS
+    uint64_t reclaimAhead_ = 0;  // lock_: how far ahead of the clock the next trimBackings judges (reclaimIdleNow)
+#endif
 #if SWITCH_METAL_DIAGNOSTICS
     std::vector<std::function<void()>> compSettled_;  // lock_
     bool compUnsettled();                             // lock_

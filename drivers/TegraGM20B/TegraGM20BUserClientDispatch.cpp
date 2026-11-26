@@ -128,6 +128,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	case TegraGM20BMethodBoPark:
 		wantIn = sizeof(TegraGM20BAbiBoPark);
 		break;
+	case TegraGM20BMethodSparesGiveBack:
+		wantIn = sizeof(TegraGM20BAbiSparesGiveBack);
+		break;
 	case TegraGM20BMethodBoUnpark:
 		wantIn = sizeof(TegraGM20BAbiBoUnpark);
 		wantOut = sizeof(TegraGM20BAbiBoUnparkReply);
@@ -286,6 +289,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		    static_cast<const TegraGM20BAbiBoUnpark *>(in)->flags)
 			return kIOReturnBadArgument;
 		break;
+	case TegraGM20BMethodSparesGiveBack:
+		if (!reservedZero(static_cast<const TegraGM20BAbiSparesGiveBack *>(in)->reserved))
+			return kIOReturnBadArgument;
+		break;
 	case TegraGM20BMethodSurfaceWrites:
 		if (!reservedZero(static_cast<const TegraGM20BAbiSurfaceWrites *>(in)->reserved))
 			return kIOReturnBadArgument;
@@ -386,6 +393,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 	if (method == TegraGM20BMethodBoImport)
 		return boImport(static_cast<const TegraGM20BAbiBoImport *>(in),
 				static_cast<TegraGM20BAbiBoAllocReply *>(out));
+	if (method == TegraGM20BMethodSparesGiveBack) {
+		sparesPressureLook();
+		return kIOReturnSuccess;
+	}
 	if (method == TegraGM20BMethodBoPark)
 		return boPark(static_cast<const TegraGM20BAbiBoPark *>(in));
 	if (method == TegraGM20BMethodBoUnpark)

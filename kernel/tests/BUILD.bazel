@@ -1287,6 +1287,28 @@ copy_file(
     for xnu in ("12377_121_6", "10063_141_1")
 ]
 
+# A daemon going clean above 80% of its inactive limit is warned once per growth, in both trees
+copy_file(
+    name = "switch_memstat_warn_header",
+    src = "//kernel/switch:include/switch/memstat_warn.h",
+    out = "switch/memstat_warn.h",
+)
+
+host_test(
+    name = "xnu_memstat_warn_test",
+    srcs = [
+        "switch/memstat_warn.h",
+        "xnu_memstat_warn_test.cpp",
+    ],
+    data = [
+        "//kernel/xnu-10063.141.1/bsd:kern/kern_memorystatus.c",
+        "//kernel/xnu-10063.141.1/bsd:sys/proc_internal.h",
+        "//kernel/xnu-12377.121.6/bsd:kern/kern_memorystatus.c",
+        "//kernel/xnu-12377.121.6/bsd:sys/proc_internal.h",
+    ],
+    includes = ["."],
+)
+
 # Both kernels' setup runs it once before launchd, with one error line, and reads the record the deploy writes.
 host_test(
     name = "xnu_icon_cache_source_test",

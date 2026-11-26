@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "SwitchGpuOwnershipInternal.h"
+#include "TegraGM20BGpu.h"
 #include "SwitchGpuPathStats.h"
 
 using namespace switch_gpu_ownership;
@@ -309,10 +310,16 @@ int begin(switch_gpu_backing_use *uses, uint32_t count, switch_gpu_cpu_lease *co
 		if (backing->dirty & SWITCH_GPU_BACKING_CPU_DIRTY) {
 			transaction->host_written = 1;
 			const uint64_t size = uint64_t(backing->pages->count) << 12;
-			if (!(uses[i].reserved & kUseCleaned) && backing->clean_start < size)
+			if (!(uses[i].reserved & kUseCleaned) && backing->clean_start < size) {
+#if TGM_STATS
+				if (backing->cpu_writers)
+					switch_gpu_concurrent_clean_note(
+						backing->surface_id, size - backing->clean_start);
+#endif
 				switch_gpu_backing_cache(
 					backing->pages->addresses, backing->pages->count,
 					backing->clean_start, size - backing->clean_start, 0);
+			}
 			backing->clean_start = 0;
 			// A CPU writer still holding the backing (a submission proceeds beside it) may write more before the
 			// next job reads it: that job cleans again.

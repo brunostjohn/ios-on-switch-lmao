@@ -206,11 +206,6 @@ struct GM20BState {
     // then (gm20bPublishEncoder; with its _published, a store then a load on each side, both sequentially consistent)
     std::atomic<bool> submitAsleep{false};
     std::atomic<uint32_t> submitThread{0};  // mach thread port name of submitLoop, for OwnedWord priority inheritance
-    // ranges handed to the kernel and not completed (gm20bRangeHandedOff): the idle deadline's drain and its
-    // in-flight count, which a command buffer parked on an event the CPU has not signalled holds no part of
-    std::atomic<uint32_t> rangesInFlight{0};
-    // gRawRelease's idle release: the completion thread's wait for its next range carries it (completionLoop)
-    IdleDeadline idle;
     Stats stats;
     std::unique_ptr<gm20b::Completion> completion;  // the states the pack lacks (metal_complete_states)
 };

@@ -6,6 +6,8 @@
 //   glass-record                the record alone (no lines to slow a moving scene)
 //   split-capture[-off]         the next kSplitCaptureDraws split draws logged for the bench (split_capture.h) as
 //                               `SwitchMetal: splitcap` lines, for kSplitCaptureMs at most
+//   idle-reclaim                the idle reclaim of backings and compressed memory now, as after kCompIdleNs with no
+//                               commit (Device::reclaimIdleNow)
 // glass-probe and glass-record also arm the blur-texture probe (glass_mem.h) with every command buffer's line, and
 // glass-probe-off disarms it; glass-mem-watch[-off] arms it (or not) for kGlassMemWatchMs of normal use, with only the
 // lines that found something. While armed this file publishes its counts and the pool's shape (glass-mem,
@@ -167,6 +169,10 @@ void watchGlassProbe(gm20b::Device *dev)
     watchSplitCapture(dev);
     const bool renderServer = dev->role() == gm20b::Device::Role::RenderServer;
     int token;
+    notify_register_dispatch("com.brunostjohn.switch.debug.idle-reclaim", &token,
+                             dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
+                                 dev->reclaimIdleNow();
+                             });
     notify_register_dispatch("com.brunostjohn.switch.debug.glass-probe", &token,
                              dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(int) {
                                  gm20b::armGlassProbe();

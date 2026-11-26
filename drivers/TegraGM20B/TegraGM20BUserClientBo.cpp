@@ -66,11 +66,24 @@ const char *poolRefusal(uint64_t bytes, uint64_t held, bool compositor)
 		compositor);
 }
 
-const char *compressibleRefusal(uint64_t bytes)
+// The compositor's largest compressible BoAlloc refused since its last one this check passed (tgm_pool::
+// compositorReserve): every connection's charge reads it, the compositor's moves it, with no lock (a policy input)
+uint64_t gCompositorCompressedWant;
+
+const char *compressibleRefusal(uint64_t bytes, bool compositor)
 {
 	const tgm_pool::Limits limits = {kPoolSmallBytes, kPoolFloorBytes, poolReserveBytes(),
 					 clientPoolBytes()};
-	return tgm_pool::compressibleRefusal(bytes, tgm_pool_avail(), limits);
+	uint64_t want = __atomic_load_n(&gCompositorCompressedWant, __ATOMIC_RELAXED);
+	const char *refused = tgm_pool::compressibleRefusal(bytes, tgm_pool_avail(), limits, compositor,
+							    tgm_pool::compositorReserve(want));
+	if (compositor && !refused)
+		__atomic_store_n(&gCompositorCompressedWant, 0, __ATOMIC_RELAXED);
+	while (compositor && refused && want < bytes &&
+	       !__atomic_compare_exchange_n(&gCompositorCompressedWant, &want, bytes, true,
+					    __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+	}
+	return refused;
 }
 
 IOReturn takeChunks(uint64_t bytes, uint64_t *pas)
@@ -162,7 +175,7 @@ AGXDeviceUserClient::BoCharge AGXDeviceUserClient::chargeBo(const TegraGM20BAbiB
 	BoCharge c = {nullptr, nullptr, 0, 0, 0, 0, critical_};
 	const bool systemOnly = (in->flags & TegraGM20BBoSystem) != 0u;
 	if (in->flags & TegraGM20BBoCompressible) {
-		c.refused = compressibleRefusal(in->bytes);
+		c.refused = compressibleRefusal(in->bytes, critical_);
 		if (switch_gpu_smmu_ready() &&
 		    reserveSmmuCompressible(in->bytes, smmu_compressible_bytes_, critical_,
 					    &c.smmuRefused)) {
@@ -357,9 +370,9 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 				 tgm_pool::FromSystem;
 		}
 	}
-	if (!ret && !bo->pool_va && !compressible && !system &&
-	    !(in->flags & TegraGM20BBoContiguous))
-		spare = spareTake(in->bytes, critical_);
+	const switch_gpu_spare_kind spareKind = system ? SWITCH_GPU_SPARE_WC : SWITCH_GPU_SPARE_CACHED;
+	if (!ret && !bo->pool_va && !compressible && !(in->flags & TegraGM20BBoContiguous))
+		spare = spareTake(in->bytes, spareKind, charge.critical);
 	else if (TGM_STATS && !ret && !bo->pool_va && !compressible)
 		spareIneligible();
 	if (!ret && bo->pool_va) {
@@ -390,14 +403,14 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		// goes. Not by a physical view: a device pager's private pages set a managed page's cache attribute, and reset
 		// it to cacheable when they are freed, whenever that is (a dying task's mapping outlives the BO), under the
 		// next owner's write-combined mapping, whose CPU writes then stay in the cache while the GPU reads DRAM (the
-		// GPU fetched zeros from a raw push ring: PBENTRY). Nor from the spares, which are cacheable.
+		// GPU fetched zeros from a raw push ring: PBENTRY). Nor from a cacheable spare: a system BO takes and gives back
+		// only write-combined spares, each a buffer of its own write-combined VM object.
 		// (kIOMemoryMapperNone shares a bit with kIOMapCacheMask; IOBMD keeps the cache mode's low three bits, so this
 		// stays write-combined and the cached BOs stay default)
 		if (system)
 			options |= kIOMapWriteCombineCache;
-		const uint32_t c = (in->flags & TegraGM20BBoContiguous) || system
-					   ? kClasses
-					   : classUp(in->bytes);
+		const uint32_t c =
+			(in->flags & TegraGM20BBoContiguous) ? kClasses : classUp(in->bytes);
 		const uint64_t backing = c < kClasses ? classBytes(c) : in->bytes;
 		if (backing != in->bytes) {
 			IODelete(bo->pas, uint64_t, bo->npages);
@@ -456,10 +469,10 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 			bo->backing = switch_gpu_pin_chunks(bo->pas, bo->npages);
 		else if (smmuDesc)
 			bo->backing = switch_gpu_pin_memory(bo->pas, bo->npages, 0, smmuDesc, true);
-		else if (bo->buffer.memory && !system && !(in->flags & TegraGM20BBoContiguous)) {
+		else if (bo->buffer.memory && !(in->flags & TegraGM20BBoContiguous)) {
 			bo->bufferKernelMap = bo->buffer.map != nullptr;
 			bo->backing = switch_gpu_pin_cached(bo->pas, bo->backing_pages, bo->npages,
-							    bo->buffer, bo->cachedMapping);
+							    bo->buffer, spareKind, bo->cachedMapping);
 			if (bo->backing) {
 				bo->cachedMapping = nullptr;
 				bo->buffer.map = nullptr;

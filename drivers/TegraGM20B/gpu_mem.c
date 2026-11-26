@@ -493,6 +493,21 @@ void tgm_mem_del_later(struct tgm_mem **pmem, struct tgm_mem **later)
 	*pmem = NULL;
 }
 
+void tgm_mem_del_release(struct tgm_mem *later)
+{
+	while (later) {
+		struct tgm_mem *next = later->later;
+		if (TGM_STATS)
+			__atomic_fetch_add(&tgm_retire_objects, 1, __ATOMIC_RELAXED);
+		mem_release_ram(later->smmu_pages, later->npages);
+		if (later->smmu_iova)
+			switch_gpu_smmu_unmap(later->smmu_iova, later->smmu_npages);
+		kfree(later->smmu_pages);
+		kfree(later);
+		later = next;
+	}
+}
+
 void tgm_mem_del_finish(struct tgm_mem *later)
 {
 	if (!later)
@@ -508,17 +523,7 @@ void tgm_mem_del_finish(struct tgm_mem *later)
 		}
 	}
 	mutex_unlock(&tgm_gpu.lock);
-	while (later) {
-		struct tgm_mem *next = later->later;
-		if (TGM_STATS)
-			__atomic_fetch_add(&tgm_retire_objects, 1, __ATOMIC_RELAXED);
-		mem_release_ram(later->smmu_pages, later->npages);
-		if (later->smmu_iova)
-			switch_gpu_smmu_unmap(later->smmu_iova, later->smmu_npages);
-		kfree(later->smmu_pages);
-		kfree(later);
-		later = next;
-	}
+	tgm_mem_del_release(later);
 }
 
 #include "SwitchGpuVmMap.h"

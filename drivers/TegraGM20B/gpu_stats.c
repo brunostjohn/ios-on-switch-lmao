@@ -511,6 +511,11 @@ void tgm_stats_mem(u64 ms)
 #endif
 	if (tgm_owner_stats(line, sizeof(line)))
 		nvxnu_stats("tegra-gm20b: mem3 BoAllocs by process: %s", line);
+#if TGM_STATS
+	if (switch_gpu_concurrent_clean_line(line, sizeof(line)))
+		nvxnu_stats("tegra-gm20b: submits cleaned CPU-written surfaces a writer held: %s",
+			    line);
+#endif
 	last = f;
 #undef MS
 #undef US

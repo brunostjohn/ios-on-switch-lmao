@@ -7,8 +7,9 @@ import UIKit
 /// Settings' Liquid Glass sidebar blinking black for single frames while its list or the detail beside it scrolls,
 /// judged on what the display was handed: the sidebar split view of SidebarScene, dark, with every presented frame of
 /// each moving phase read back (ScanoutSession) and the sidebar's band judged as ui.glass_live judges its glass.
-/// Phases: idle1 (12 s with no commit, past the driver's 10 s idle reclaim), sidebar (the list scrolls every display
-/// frame), idle2, detail (the detail scrolls, so the blur behind the sidebar is rebuilt every frame), both.
+/// Phases: idle1 (1.5 s with no commit: the driver's 10 s idle reclaim is forced after its first second, once the last
+/// frame's uses have completed, by GlassProbe.reclaimIdle), sidebar (the list scrolls every display frame), idle2,
+/// detail (the detail scrolls, so the blur behind the sidebar is rebuilt every frame), both.
 ///
 /// The render server's glass memory probe (GlassMemWords, DEVELOPMENT builds) is read at each phase boundary and its
 /// record armed before each moving phase. The result line: frames=, black=, partial=, probe= (- without the probe),
@@ -34,7 +35,7 @@ struct UIGlassSidebarTest: HWTest {
     }
 
     static let settle: TimeInterval = 1
-    static let idle: TimeInterval = 12
+    static let idle: TimeInterval = 1
     static let steps = [
         Step(name: "idle1", seconds: idle, sidebar: false, detail: false),
         Step(name: "sidebar", seconds: 4, sidebar: true, detail: false),
@@ -105,6 +106,8 @@ struct SidebarRun {
     {
         guard !scrolls.isEmpty || appearing != nil else {
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1e9))
+            GlassProbe.reclaimIdle()
+            try? await Task.sleep(nanoseconds: 500_000_000)
             phases.append(.init(name: name, moving: false))
             reads.append(.read())
             return

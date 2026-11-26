@@ -24,9 +24,9 @@ public:
 	bool enterSlow(IOLock *lock)
 	{
 		// enterFast's refused count was undone with no wake: a mutation that saw it as the last one is woken here
-		switch_gpu_wakeup_inheritor(lock, this);
+		wake(lock);
 		while (!closed_ && (mutations_ || mutating_))
-			switch_gpu_sleep_inheritor(lock, this, mutator_);
+			sleep(lock);
 		if (closed_)
 			return false;
 		__atomic_add_fetch(&fast_, 1u, __ATOMIC_SEQ_CST);
@@ -39,7 +39,7 @@ public:
 		    !__atomic_load_n(&blocked_, __ATOMIC_SEQ_CST))
 			return;
 		IOLockLock(lock);
-		switch_gpu_wakeup_inheritor(lock, this);
+		wake(lock);
 		IOLockUnlock(lock);
 	}
 
@@ -48,14 +48,17 @@ public:
 		++mutations_;
 		block();
 		while (!closed_ && (mutating_ || fast()))
-			switch_gpu_sleep_inheritor(lock, this, mutator_);
+			sleep(lock);
 		--mutations_;
 		if (closed_) {
-			switch_gpu_wakeup_inheritor(lock, this);
+			wake(lock);
 			return false;
 		}
 		mutating_ = true;
 		mutator_ = switch_gpu_current_thread();
+		// Whoever went to sleep while this mutation was only queued slept with no owner to push: woken, each sleeps
+		// again pushing the mutator
+		wake(lock);
 		return true;
 	}
 
@@ -64,21 +67,29 @@ public:
 		mutating_ = false;
 		mutator_ = nullptr;
 		block();
-		switch_gpu_wakeup_inheritor(lock, this);
+		wake(lock);
 	}
 
 	void close(IOLock *lock)
 	{
 		closed_ = true;
 		block();
-		switch_gpu_wakeup_inheritor(lock, this);
+		wake(lock);
 		while (mutating_ || fast())
-			switch_gpu_sleep_inheritor(lock, this, mutator_);
+			sleep(lock);
 	}
 
 	bool closed() const
 	{
 		return closed_;
+	}
+
+	// Until the running mutation ends (it may drop the lock meanwhile), pushing its thread. Every sleep on the gate goes
+	// through the gate: its sleeper count decides whether endMutation wakes anyone.
+	void waitMutationEnd(IOLock *lock)
+	{
+		while (mutating_)
+			sleep(lock);
 	}
 
 	// A method that closed the gate is running (it may have dropped the lock); its end wakes sleepers on this gate
@@ -93,6 +104,20 @@ public:
 	}
 
 private:
+	// lock held, as every sleep and wake on the gate: the count is exact, so a gate no one sleeps on pays no wake
+	void sleep(IOLock *lock)
+	{
+		++sleepers_;
+		switch_gpu_sleep_inheritor(lock, this, mutator_);
+		--sleepers_;
+	}
+
+	void wake(IOLock *lock)
+	{
+		if (sleepers_)
+			switch_gpu_wakeup_inheritor(lock, this);
+	}
+
 	void block()
 	{
 		__atomic_store_n(&blocked_, closed_ || mutations_ || mutating_, __ATOMIC_SEQ_CST);
@@ -103,7 +128,7 @@ private:
 		return __atomic_load_n(&fast_, __ATOMIC_SEQ_CST);
 	}
 
-	unsigned mutations_ = 0;
+	unsigned mutations_ = 0, sleepers_ = 0;
 	bool closed_ = false, mutating_ = false;
 	SwitchGpuThreadRef mutator_ = nullptr;
 	// enterFast's submissions: at most one per channel slot, so a byte

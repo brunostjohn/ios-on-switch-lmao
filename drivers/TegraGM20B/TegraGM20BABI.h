@@ -44,6 +44,7 @@ enum {
 	TegraGM20BMethodBoPark = 35,
 	TegraGM20BMethodBoUnpark = 36,
 	TegraGM20BMethodPackImageMap = 41,
+	TegraGM20BMethodSparesGiveBack = 43,
 
 	TegraGM20BMaxBindOps = 100,
 	TegraGM20BMaxPushes = 255,
@@ -340,6 +341,12 @@ struct TegraGM20BAbiBoPark {
 enum {
 	TegraGM20BUnparkResident = 0,  /* original BO remapped at its parked VA; GPU binds intact */
 	TegraGM20BUnparkReclaimed = 1, /* kernel reclaimed pages; parked VA reservation kept */
+};
+
+/* Method 43. The process heard memory pressure or went to the background: under the VM's pressure the kernel gives its
+ * zeroed spares back and reclaims parked BOs at once, where it would otherwise wait for the next BoAlloc to look. */
+struct TegraGM20BAbiSparesGiveBack {
+	uint32_t reserved[2];
 };
 
 /* Method 36. Remaps a parked BO at its parked VA, or reports TegraGM20BUnparkReclaimed. */

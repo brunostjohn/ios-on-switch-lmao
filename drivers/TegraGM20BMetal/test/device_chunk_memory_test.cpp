@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 #include "device_harness.h"
+#include "../grow_ahead.h"
 #include <mach/mach.h>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include <thread>
 
 namespace {
 
@@ -140,6 +142,58 @@ TEST(ClientChunkMemory, TheHeldSplitNamesAPinnedChunkAndEachHeapApart)
     dev.destroyArena(shared);
     for (gm20b::Buffer &b : buffers)
         dev.destroyBuffer(b);
+}
+
+TEST(GrowAhead, AChunkAheadKeepsAProcessBelowEightyPercentOfItsLimit)
+{
+    constexpr uint64_t kMiB = 1ull << 20;
+    EXPECT_TRUE(gm20b::clientGrowAhead(10 * kMiB, 90 * kMiB, 4 * kMiB));
+    EXPECT_TRUE(gm20b::clientGrowAhead(75 * kMiB, 25 * kMiB, 4 * kMiB)) << "79 of 100 MiB";
+    EXPECT_FALSE(gm20b::clientGrowAhead(76 * kMiB, 24 * kMiB, 4 * kMiB)) << "80 of 100 MiB";
+    EXPECT_FALSE(gm20b::clientGrowAhead(9 * kMiB, 6 * kMiB, 4 * kMiB)) << "a daemon's 15 MB: 13 MB";
+    EXPECT_FALSE(gm20b::clientGrowAhead(10 * kMiB, 0, 4 * kMiB)) << "at its limit, or none reported";
+}
+
+// M28: a client's grower starts at its second stall, not its first, and makes a chunk ahead of need only while that
+// chunk keeps the process below 80% of its footprint limit
+TEST(ClientChunkMemory, AClientGrowsAheadFromItsSecondStallOnlyBelowEightyPercentOfItsLimit)
+{
+    for (const bool room : {true, false}) {
+        kernel_model::model = {};
+        gm20b::Device dev;
+        std::string err;
+        ASSERT_TRUE(dev.open(harness::emptyPack().c_str(), 0, err, gm20b::Device::Role::Client)) << err;
+        dev.footprintProbe = [room](uint64_t &footprint, uint64_t &available) {
+            footprint = room ? 10ull << 20 : 80ull << 20;
+            available = room ? 990ull << 20 : 20ull << 20;
+            return true;
+        };
+        constexpr uint64_t kSmall = 64 << 10;
+        std::vector<gm20b::Buffer> buffers;
+        gm20b::Device::Held h;
+        do {
+            buffers.emplace_back();
+            ASSERT_TRUE(dev.createBuffer(kSmall, buffers.back()));
+            ASSERT_TRUE(dev.held(h, true));
+            if (h.chunkCount < 2)
+                EXPECT_FALSE(dev.growerRunning()) << "the first stall leaves the client as it was";
+        } while (h.chunkCount < 2 && buffers.size() < 4096);
+        EXPECT_TRUE(dev.growerRunning()) << "the second stall starts it";
+        // the allocation that stalled the second time, served from the chunk it made, finds less free than the next
+        // chunk: with room the grower makes that one ahead, once
+        buffers.emplace_back();
+        ASSERT_TRUE(dev.createBuffer(kSmall, buffers.back()));
+        for (int waited = 0; waited < 200 && (!room || h.chunkCount < 3); ++waited) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(room ? 10 : 1));
+            ASSERT_TRUE(dev.held(h, true));
+            if (!room && waited == 50)
+                break;
+        }
+        EXPECT_EQ(h.chunkCount, room ? 3u : 2u)
+            << (room ? "one chunk ahead of need" : "no chunk ahead at 80% of its limit");
+        for (gm20b::Buffer &b : buffers)
+            dev.destroyBuffer(b);
+    }
 }
 
 namespace {

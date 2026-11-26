@@ -197,6 +197,9 @@ public:
 
     int park(uint64_t handle, bool guardNone);
     int unpark(uint64_t handle, uint64_t &address, uint64_t &bytes, uint32_t &status);
+    // Memory pressure or the app gone to the background: the kernel's zeroed spares go back if the VM is short (method 43;
+    // a kernel without it ignores the call)
+    void sparesGiveBack();
     bool mapAt(uint32_t token, uint64_t bytes, uint64_t fixedVa, bool readOnly = false);
     void unmap(uint32_t token, uint64_t address);
 

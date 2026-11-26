@@ -273,7 +273,7 @@ TEST(SwitchGpuUseCacheSource, SubmitJobChecksGenerationsAndRecomputesScanoutWrit
 	EXPECT_TRUE(job.has("SwitchGpuRefusal::StaleUses, kIOReturnNotReady"));
 	EXPECT_TRUE(job.has("scanoutWrites |= switch_gpu_backing_scanned(job.writes[i].backing) "
 			    "!= 0;"));
-	EXPECT_TRUE(job.has("if (!sameUses && !nativeReads) job.useCache.save("));
+	EXPECT_TRUE(job.has("if (!sameUses && !nativeReads) { job.useCache.save("));
 
 	EXPECT_TRUE(
 		Block(SourceText("../SwitchGpuClientRetirement.h"),

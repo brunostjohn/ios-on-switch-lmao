@@ -12,7 +12,8 @@
 #include <kern/thread.h>
 #include <kern/thread_call.h>
 #include <mach/vm_region.h>
-#include "SwitchGpuSpares.h"
+#include "SwitchGpuSpareBooks.h"
+#include "SwitchGpuSpareRecord.h"
 #include "SwitchGpuParked.h"
 #include "SwitchGpuCachedBuffer.h"
 #include "SwitchGpuMethodGate.h"
@@ -172,6 +173,7 @@ struct Spare {
 	SwitchGpuCachedBuffer buffer;  // ours alone (no view, no task mapping)
 	uint64_t *pas;
 	uint64_t bytes;
+	switch_gpu_spare_kind kind;
 	switch_gpu_cached_mapping *mapping;
 };
 
@@ -204,29 +206,36 @@ struct SparePool {
 	thread_call_t call;
 	thread_call_t recycleCall;
 	thread_call_t reclaimCall;
-	Spare *dirty;         // freed, not yet zeroed
-	PoolZero *poolDirty;  // freed pool BOs, not yet zeroed
-	Spare *ready
-		[kClasses];  // zeroed and clean, by class (classUp(bytes) <= class of a spare's bytes)
-	// by class: ready, the depth kept, on the copy engine, on the dirty list
-	uint16_t count[kClasses], target[kClasses], zeroing[kClasses], dirtyCount[kClasses];
-	uint64_t clean, dirtyBytes, cleaningBytes,
-		poolZeroing;  // bytes ready, freed and waiting, pool bytes waiting
+	thread_call_t recordCall;
+	Spare *dirty;                          // freed, not yet zeroed
+	PoolZero *poolDirty;                   // freed pool BOs, not yet zeroed
+	Spare *ready[SWITCH_GPU_SPARE_SLOTS];  // zeroed and clean, by slot (SwitchGpuSpareBooks.h)
+	switch_gpu_spare_books
+		books;  // the lists' counts and bytes, and the depths (SwitchGpuSpareBooks.h)
+	uint64_t poolZeroing;  // pool bytes waiting for the scrub
 	// a copy-engine fill failed: no spare is made until the next BoAlloc asks
 	bool fillFailed;
+	bool recordRead;                                // spareWork's alone
+	uint8_t record[SWITCH_GPU_SPARE_RECORD_BYTES];  // the record last read or set
+	uint32_t recordLength;
 #if TGM_STATS
 	OwnerStat owners[kOwners];
 	uint32_t misses[SWITCH_GPU_SPARE_MISSES], zeroBusy, zeroFailed, refillRefused, notUnits;
+	uint16_t seeded[SWITCH_GPU_SPARE_SLOTS];  // the depths this boot's record seeded
 #endif
 };
 
 void cleanZeros(void *va, uint64_t bytes);
 SparePool *spares();
-Spare *spareTake(uint64_t bytes, bool critical = false);
+SparePool *sparesExisting();
+void sparesSeed(SparePool *p);
+void spareRecordWork(thread_call_param_t param, thread_call_param_t);
+Spare *spareTake(uint64_t bytes, switch_gpu_spare_kind kind, bool critical);
 void spareIneligible();
 bool spareKeep(const SwitchGpuCachedBuffer &buffer, uint64_t *pas, uint64_t bytes,
-	       switch_gpu_cached_mapping *mapping = nullptr);
+	       switch_gpu_spare_kind kind, switch_gpu_cached_mapping *mapping);
 bool sparesPressure();
+void sparesPressureLook();
 bool sparesHasRoom();
 void kickSpareWork();
 bool reclaimParkedStep(bool pressure, bool room);

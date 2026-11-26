@@ -360,6 +360,8 @@ bool Device::compressedFromPlain(Texture &t)
         privateComp_[&t] = {bo, kind};
     }
     movedPlain_.push_back(std::move(moved));
+    SWITCH_METAL_DIAGNOSTIC(stats.compressedMoves++);
+    SWITCH_METAL_DIAGNOSTIC(stats.compressedMoveBytes += bytes);
     const uint64_t from = t.va;
     t.va = bo.va;
     t.cpu = nullptr;

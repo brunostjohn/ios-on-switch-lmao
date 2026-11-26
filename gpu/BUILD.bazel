@@ -216,6 +216,7 @@ PLUGIN_CC_SRCS = [
     GM20B_METAL + ":draw_inputs.cpp",
     GM20B_METAL + ":draw_shader_tests.cpp",
     GM20B_METAL + ":memory.cpp",
+    GM20B_METAL + ":scrubs.cpp",
     GM20B_METAL + ":parked_arena.cpp",
     GM20B_METAL + ":parked_chunks.cpp",
     GM20B_METAL + ":pass_backings.cpp",

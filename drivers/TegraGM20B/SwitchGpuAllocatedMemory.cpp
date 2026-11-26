@@ -1,14 +1,57 @@
 // SPDX-License-Identifier: MIT
 #include "SwitchGpuAllocatedMemory.h"
 
+#include <IOKit/IOLib.h>
 #include <kern/thread.h>
 
 namespace
 {
 // The backings' retirement work while it destroys one batch (switch_gpu_backing_retire): the canonical memories it
-// releases share one L2 invalidate (tgm_mem_del_later). Only that work item's thread defers; others release at once.
+// releases share one L2 write-back and invalidate (tgm_mem_del_later). Only that work item's thread defers; others
+// release at once. Everything here is that work's alone, the copy queue's completions included (they run on it).
 decltype(current_thread()) gRetireThread;
 tgm_mem *gRetired;
+
+// A retirement batch whose memories wait for their L2 write-back and invalidate: the memories (a tgm_mem_del_later
+// list) and the batch's retired backings, whose pages go back to the VM only once the GPU's flush has completed. A
+// batch the copy queue could not take yet is parked, and the next submission takes every parked batch: each one's
+// flush is queued after its own GMMU unmaps, so no batch rides a flush submitted before them.
+struct RetiredBatch {
+	tgm_mem *memories;
+	switch_gpu_backing *backings;
+	RetiredBatch *next;
+};
+
+RetiredBatch *gParked;
+
+void flushed(void *arg, int status)
+{
+	for (auto *batch = static_cast<RetiredBatch *>(arg); batch;) {
+		auto *next = batch->next;
+		// a failed copy channel leaves its flush unproven, so the CPU writes back and invalidates (nvgpu's registers)
+		if (status < 0)
+			tgm_mem_del_finish(batch->memories);
+		else
+			tgm_mem_del_release(batch->memories);
+		switch_gpu_backing_release_retired(batch->backings);
+		IODelete(batch, RetiredBatch, 1);
+		batch = next;
+	}
+}
+
+void submitParked()
+{
+	if (!gParked)
+		return;
+	const int result = switch_gpu_copy_l2_flush(flushed, gParked);
+	// -16 and -11 pass (a later retirement pass asks again); any other refusal is the CPU path now
+	if (result == -16 || result == -11)
+		return;
+	RetiredBatch *batches = gParked;
+	gParked = nullptr;
+	if (result)
+		flushed(batches, result);
+}
 
 int allocatedMemoryCreate(const uint64_t *pages, uint32_t count, void **out, uint32_t *flags)
 {
@@ -63,12 +106,27 @@ extern "C" void switch_gpu_memory_retire_begin(void)
 	__atomic_store_n(&gRetireThread, current_thread(), __ATOMIC_RELAXED);
 }
 
-extern "C" void switch_gpu_memory_retire_end(void)
+extern "C" bool switch_gpu_memory_retire_end(switch_gpu_backing *retired)
 {
 	__atomic_store_n(&gRetireThread, nullptr, __ATOMIC_RELAXED);
 	tgm_mem *later = gRetired;
 	gRetired = nullptr;
-	tgm_mem_del_finish(later);
+	if (!later)
+		return false;
+	auto *batch = IONew(RetiredBatch, 1);
+	if (!batch) {
+		tgm_mem_del_finish(later);
+		return false;
+	}
+	*batch = {later, retired, gParked};
+	gParked = batch;
+	submitParked();
+	return true;
+}
+
+extern "C" void switch_gpu_memory_retire_parked(void)
+{
+	submitParked();
 }
 
 extern "C" int switch_gpu_backing_tgm_mem_direct(struct switch_gpu_backing *backing, uint32_t count,

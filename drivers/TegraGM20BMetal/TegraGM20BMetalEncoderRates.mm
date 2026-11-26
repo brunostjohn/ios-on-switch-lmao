@@ -298,6 +298,14 @@ size_t metal_frame_rates(char *out, size_t size)
     put(line, " ind=%llu/%llu", (unsigned long long)take(c.indirectDrained), (unsigned long long)take(c.indirectFree));
     put(line, " split=%llu kick=%llu/%lluus", (unsigned long long)take(c.splits),
         (unsigned long long)(kicks ? kickUs / kicks : 0), (unsigned long long)take(c.kickMaxUs));
+    // the Shared spans zeroed at the front of a command buffer since the last line (scrubs.cpp), against buffers
+    static uint64_t lastScrubRuns, lastScrubBytes;
+    const uint64_t scrubRuns = gRM->raw->stats.scrubbedRuns.load(std::memory_order_relaxed),
+                   scrubBytes = gRM->raw->stats.scrubbedBytes.load(std::memory_order_relaxed);
+    put(line, " scrub=%llu/%lluKiB", (unsigned long long)(scrubRuns - lastScrubRuns),
+        (unsigned long long)((scrubBytes - lastScrubBytes) >> 10));
+    lastScrubRuns = scrubRuns;
+    lastScrubBytes = scrubBytes;
     put(line, " ahead=%llu/%llu enc=%llu/%llu why=", (unsigned long long)take(c.ahead), (unsigned long long)buffers,
         (unsigned long long)(pipelined - lastPipelined), (unsigned long long)(sealed - lastSealed));
     lastPipelined = pipelined;

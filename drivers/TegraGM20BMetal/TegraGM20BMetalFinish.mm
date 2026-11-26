@@ -87,7 +87,6 @@ const gm20b::RetirementWrites *captureWrittenRange(SwitchMetalCommandBuffer *cb,
 void gm20bRangeHandedOff(SwitchMetalCommandBuffer *cb)
 {
     cb->_finishState.submitted();
-    gRM->rangesInFlight.fetch_add(1, std::memory_order_relaxed);
 }
 
 void retireRawRange(SwitchMetalCommandBuffer *cb, size_t from, size_t to)
@@ -273,8 +272,6 @@ void segmentCompleted(SwitchMetalCommandBuffer *cb, NSError *error, const gm20b:
             cb->_segError = error;
     }
     const bool last = cb->_finishState.completed();
-    if (gRM->rangesInFlight.fetch_sub(1, std::memory_order_acq_rel) == 1)
-        gRM->idle.drained(clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
     if (gRM->progress.progressed())  // a queue head is parked: it is judged again (progress_gate.h)
         wakeSubmit((__bridge void *)cb->_queue, dependencies);
     if (last)
@@ -629,23 +626,18 @@ void completionLoop()
             std::optional<size_t> target;
             for (;;) {
                 gm20b::CompletionLook look;
-                uint64_t idleDue = 0;
                 r.inflight.waitFor([&](const auto &taken) {
                     look = gm20b::completionLook(taken, r.submitPromised.load(std::memory_order_acquire),
                                                  r.completionWaiters.load(std::memory_order_acquire) != 0,
                                                  clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
-                    idleDue = r.idle.due(r.rangesInFlight.load(std::memory_order_acquire));
-                    return look.target.has_value() || look.heldUntil || idleDue;
+                    return look.target.has_value() || look.heldUntil;
                 });
                 target = look.target;
                 if (target)
                     break;
                 const uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-                const uint64_t until = look.heldUntil ? look.heldUntil : idleDue;
-                if (until > now)
-                    r.inflight.sleep(dispatch_time(DISPATCH_TIME_NOW, int64_t(until - now)));
-                else if (!look.heldUntil && r.idle.claim(idleDue))
-                    gRawRelease.releaseSoon();
+                if (look.heldUntil > now)
+                    r.inflight.sleep(dispatch_time(DISPATCH_TIME_NOW, int64_t(look.heldUntil - now)));
             }
             if (*target) {
                 const SwitchMetalRawRetirement &cover = r.inflight.at(*target);

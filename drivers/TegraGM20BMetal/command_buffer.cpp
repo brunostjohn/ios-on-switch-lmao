@@ -215,6 +215,7 @@ CommandBuffer *Device::begin()
     cb.textureWrites_.clear();
     cb.geometryBudget_ = {};
     cb.geometryPool_.clear();
+    scrubInto(cb);
     return &cb;
 }
 
@@ -556,6 +557,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
         signaled += signalCount;
     }
     seqno = d.lastSubmitted();
+    d.scrubsSubmitted(*this, seqno);
 #if SWITCH_METAL_DIAGNOSTICS
     if (glassMemSlot_ >= 0) {
         d.glassMemCbs_[glassMemSlot_].seqno = seqno;
@@ -620,6 +622,7 @@ void CommandBuffer::abandon()
 {
     releaseNativeReads();
     Device &d = *dev_;
+    d.scrubsReturned(*this);
     d.closedCount_.store(d.closedCount_.load(std::memory_order_relaxed) + 1, std::memory_order_release);
     d.overflowing_ = false;
     d.overflow_.clear();

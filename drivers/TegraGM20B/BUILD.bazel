@@ -129,6 +129,8 @@ kernel_driver(
         "TegraGM20BUserClient.cpp",
         "TegraGM20BUserClientPool.cpp",
         "TegraGM20BUserClientSpares.cpp",
+        "TegraGM20BUserClientSpareStats.cpp",
+        "TegraGM20BUserClientSpareRecord.cpp",
         "TegraGM20BUserClientBo.cpp",
         "TegraGM20BUserClientPark.cpp",
         "SwitchGpuParkedPool.cpp",
@@ -212,6 +214,7 @@ kernel_driver(
         "//kernel/switch:include/switch/fresh_memory.h",
         "//kernel/switch:include/switch/memory_attachment.h",
         "//kernel/switch:include/switch/park_mapping.h",
+        "//kernel/switch:include/switch/stall.h",
         "//kernel/switch:include/switch/user_turnstile.h",
     ],
     abi = [

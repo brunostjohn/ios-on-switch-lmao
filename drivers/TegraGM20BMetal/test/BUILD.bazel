@@ -239,6 +239,7 @@ host_library(
         "pack",
         "parked_arena",
         "parked_chunks",
+        "scrubs",
         "pass_backings",
         "pass_begin",
         "pass_clears",
@@ -1012,6 +1013,14 @@ device_test(
 )
 
 device_test(
+    name = "device_scrub_test",
+    srcs = [
+        "device_scrub_test.cpp",
+    ],
+    deps = [":mme_simulator"],
+)
+
+device_test(
     name = "device_indirect_dispatch_test",
     srcs = [
         "device_indirect_dispatch_test.cpp",
@@ -1249,6 +1258,16 @@ host_test(
     srcs = [
         "word_wait_test.cpp",
         "//drivers/TegraGM20BMetal:word_wait.h",
+    ],
+    cxx_std = "c++17",
+)
+
+# scrub.h scrubFate: a scrub's retire reads the fence before the channel, so a reopen between the reads refills the span
+host_test(
+    name = "scrub_fate_test",
+    srcs = [
+        "scrub_fate_test.cpp",
+        "//drivers/TegraGM20BMetal:scrub.h",
     ],
     cxx_std = "c++17",
 )
@@ -4781,6 +4800,7 @@ METAL_HOST_UNITS = ["//drivers/TegraGM20BMetal:fx/" + f for f in [
     "pack",
     "parked_arena",
     "parked_chunks",
+    "scrubs",
     "pass_backings",
     "pass_begin",
     "pass_clears",
@@ -5315,6 +5335,17 @@ cc_binary(
 )
 
 # What a committed command buffer of gpu.path.encode_cost's shape holds allocated and what a batch allocates, by
+# gpu.path.use_ranges' arms: Shared buffers named by the set, a Shared heap's listed by their own bytes
+# (facade_use_ranges_test.cpp)
+facade_test(
+    name = "facade_use_ranges_test",
+    srcs = [
+        "scale_frames.h",
+        "encode_cost_shape.h",
+        "facade_use_ranges_test.cpp",
+    ],
+)
+
 # allocation site (facade_held_blocks_test.cpp)
 facade_test(
     name = "facade_held_blocks_test",

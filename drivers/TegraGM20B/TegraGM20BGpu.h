@@ -126,6 +126,19 @@ void tgm_mem_del(struct tgm_mem **pmem);
  * whose one L2 flush and invalidate covers the whole batch before any of its IOVAs goes back. */
 void tgm_mem_del_later(struct tgm_mem **pmem, struct tgm_mem **later);
 void tgm_mem_del_finish(struct tgm_mem *later);
+/* tgm_mem_del_finish's end, for a batch whose L2 the GPU already wrote back and invalidated (switch_gpu_copy_l2_flush):
+ * its SMMU windows go back, then the memory objects */
+void tgm_mem_del_release(struct tgm_mem *later);
+/* The retirement work's ordered L2 write-back and invalidate (SwitchGpuAllocatedMemory.cpp, TegraGM20BCopy.cpp): an
+ * empty job on the kernel copy queue's channel. Its host-written acquire runs L2_FLUSH_DIRTY then L2_SYSMEM_INVALIDATE
+ * with no drain ahead of them (gpu_exec.c chan_exec_body; nvkm_ltc_invalidate's order over MMIO, 0x70010 then 0x70004),
+ * and its external fence then WFI, FB_FLUSH, L2_FLUSH_DIRTY and FB_FLUSH before the release (chan_fence_job). Sound for
+ * retired memory, whose writers' fences all passed: a write still posted at the invalidate would be written back by the
+ * fence's flush but not dropped. Then fn(arg, 0 or the channel's error) on the retirement work once that fence passed.
+ * That work never waits for the queue: -16 when the lock, a waiting submitter's turn, every job slot or the channel is
+ * taken, -11 when the ring has no room, and nothing is queued; a later retirement pass asks again (a holder's unlock or
+ * a job's fence schedules one). */
+int switch_gpu_copy_l2_flush(void (*fn)(void *arg, int status), void *arg);
 /* User range [TGM_USER_VA_START, TGM_KERNEL_VA): raw binds. read_only: the GPU may only read the range (a write is an
  * MMU fault). tgm_vm_map and tgm_vm_unmap invalidate the L2 and the TLB before they return; tgm_vm_map_ordered (a
  * claimed space's) leaves both to the next submission of each of its channels (TegraGM20BTlb.h). A compressible kind
@@ -786,6 +799,12 @@ void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns, const uint64_t ph
 			const char *owner);
 void tgm_stats_compositor_pool(int64_t bytes);
 void tgm_spare_counts(uint64_t *kept_bytes, uint64_t *ready, uint64_t *pool_zeroing_bytes);
+/* debug kernels (SwitchGpuSurfaceAccess.cpp): a submission cleaned IOSurface `surface`'s `bytes` while a CPU writer held
+ * it, and the window's such cleans with their lock holders */
+void switch_gpu_concurrent_clean_note(uint32_t surface, uint64_t bytes);
+unsigned long switch_gpu_concurrent_clean_line(char *out, unsigned long size);
+/* debug kernels: the classes this boot's spare demand record seeded, appended to `line` */
+void tgm_spare_seeds_line(char *line, unsigned long size);
 /* Where the pool is (TegraGM20BUserClient.cpp, for the stats2 line): pool BOs of clients other than the compositor, pool
  * pages freed but still behind their view's release (orphans: a task still maps the view, or an import of it is live),
  * every client's compressible BOs with their count, and coherent BOs served from system memory instead
