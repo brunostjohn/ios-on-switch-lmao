@@ -68,7 +68,7 @@ static bool region_list_push(struct region_list *list, const struct switch_vm_re
 
 // With vm.self_region_footprint set, each region's dirtied and swapped-out pages are the ones charged to the target's
 // phys_footprint, and the walk ends with the owned-memory region. The kernel counts pages in the size pinned by
-// vm.self_region_page_size. Both settings belong to the calling thread.
+// vm.self_region_page_size. The footprint switch is this task's; the page size is this thread's.
 bool switch_memory_footprint_mode(uint64_t *page_size)
 {
     int on = 1;

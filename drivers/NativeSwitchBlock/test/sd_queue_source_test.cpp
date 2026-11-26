@@ -103,8 +103,10 @@ TEST(SdQueueSource, ReplayReadsAreKnownByTheKernelsReplayThread)
     EXPECT_LT(Index(pick, "switchSdAgeReplay(head, pickNs, queuedReads, queuedReplay);"), Index(pick, "switchSdPick("));
     EXPECT_THAT(driver(), Not(HasSubstr("gPrefetchThread")));
 
-    EXPECT_THAT(body("void NativeSwitchBlock::enqueueLocked("), HasSubstr("if (switchSdAgeable(request))\n        ++queuedReplay;"));
-    EXPECT_THAT(body("void NativeSwitchBlock::takenLocked("), HasSubstr("if (switchSdAgeable(r))\n            --queuedReplay;"));
+    EXPECT_THAT(body("void NativeSwitchBlock::enqueueLocked("),
+                HasSubstr("if (switchSdAgeable(request))\n        ++queuedReplay;"));
+    EXPECT_THAT(body("void NativeSwitchBlock::takenLocked("),
+                HasSubstr("if (switchSdAgeable(r))\n            --queuedReplay;"));
     EXPECT_THAT(body("Request *NativeSwitchBlock::drainQueueLocked("), HasSubstr("queuedReplay = 0;"));
 }
 

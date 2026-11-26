@@ -85,7 +85,7 @@ def main() -> None:
     parser.add_argument('--out', required=True)
     parser.add_argument('--part', action='store_true')
     parser.add_argument('--from-part')
-    parser.add_argument('--kext-digest', help='a file holding the GPU kext\'s build identity')
+    parser.add_argument('--kext-digest', help="a file holding the GPU kext's build identity")
     args = parser.parse_args()
     if args.part:
         Path(args.out).write_text(''.join(entry + '\n' for entry in sorted(lines_of(seed_files(args)))))

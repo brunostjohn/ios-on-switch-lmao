@@ -1656,9 +1656,8 @@ void NativeSwitchBlock::promote(const SwitchSdWindow *window, const IOBlockStora
     IOLockLock(queueLock);
     uint32_t raised = 0;
     for (uint32_t i = 0; i < count; ++i)
-        raised +=
-            switchSdPromote(head, window->first + extents[i].blockStart, extents[i].blockCount, klass, queuedReads,
-                            queuedReplay);
+        raised += switchSdPromote(head, window->first + extents[i].blockStart, extents[i].blockCount, klass,
+                                  queuedReads, queuedReplay);
 #if DEVELOPMENT || DEBUG
     ++(cryptex ? cryptexRaiseCalls : xnuRaiseCalls);
     (cryptex ? cryptexRaised : xnuRaised) += raised;

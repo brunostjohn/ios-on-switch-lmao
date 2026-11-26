@@ -32,8 +32,9 @@ std::string Format(const switch_vm_snapshot &snap, const switch_vm_tag_row *rows
 TEST(SwitchMemoryTest, SumsByTagAndRanksByFootprint)
 {
     const switch_vm_region regions[] = {
-        Region(1, 10, 8, 2, 64 * kPage),     Region(21, 300, 300, 0, 300 * kPage), Region(1, 5, 5, 1, 16 * kPage),
-        Region(11, 40, 30, 60, 32768 * kPage), Region(0, 0, 0, 0, 1024 * kPage), Region(kOwnedTag, 4, 4, 1, 5 * kPage),
+        Region(1, 10, 8, 2, 64 * kPage),  Region(21, 300, 300, 0, 300 * kPage),
+        Region(1, 5, 5, 1, 16 * kPage),   Region(11, 40, 30, 60, 32768 * kPage),
+        Region(0, 0, 0, 0, 1024 * kPage), Region(kOwnedTag, 4, 4, 1, 5 * kPage),
     };
     switch_vm_tag_row rows[SWITCH_VM_TAG_SLOTS];
     switch_vm_tag_row total;
@@ -80,4 +81,4 @@ TEST(SwitchMemoryTest, PrintsTheFootprintBesideTheWalkedTotal)
     EXPECT_EQ(text.find("owned (ledger)"), std::string::npos);
 }
 
-} // namespace
+}  // namespace

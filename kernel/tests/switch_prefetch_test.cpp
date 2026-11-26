@@ -1037,8 +1037,7 @@ TEST(SwitchPrefetchSource, ATierZeroWaiterRaisesTheReplaysBusyPages)
         EXPECT_THAT(below, HasSubstr("upl->upl_creator != current_thread()"));
         EXPECT_THAT(below, HasSubstr("switch_vm_prefetch_is_replay_thread(upl->upl_creator)"));
         const std::string inversion = bodyOf(object, "vm_page_handle_prio_inversion(vm_object_t o, vm_page_t m)");
-        EXPECT_THAT(inversion,
-                    HasSubstr("(upl->upl_priority <= cur_tier && !switch_upl_below_waiter(upl, cur_tier))"));
+        EXPECT_THAT(inversion, HasSubstr("(upl->upl_priority <= cur_tier && !switch_upl_below_waiter(upl, cur_tier))"));
         EXPECT_THAT(object, Not(HasSubstr("upl->upl_priority = THROTTLE_LEVEL")));
     }
 }

@@ -7,7 +7,6 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include <cstdio>
 #include <cstring>
 
 namespace {
@@ -54,12 +53,9 @@ TEST(SwitchMemoryWalkTest, TheWalkAddsUpToTheFootprintLessPageTables)
     ASSERT_TRUE(switch_memory_walk(getpid(), page, &tags, &snap));
 
     const uint64_t walked = tags.total.dirty_bytes + tags.total.swapped_bytes;
-    std::printf("page %llu footprint %llu KB walked %llu KB regions %u\n", (unsigned long long)page,
-                (unsigned long long)(snap.footprint_bytes / 1024), (unsigned long long)(walked / 1024),
-                tags.total.regions);
     ASSERT_GT(snap.footprint_bytes, 0u);
     EXPECT_LE(walked, snap.footprint_bytes + 2 * kMiB);
     EXPECT_LE(snap.footprint_bytes, walked + 16 * kMiB);
 }
 
-} // namespace
+}  // namespace

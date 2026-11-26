@@ -125,8 +125,7 @@ inline uint8_t switchSdClassOf(uint8_t asked, bool replay)
 
 // A queued request the ager may still move: a replay read above class 0. Its count (queuedReplay) gates the ager's
 // walk, so tier-1 and cryptex reads in class 1 after the boot cost a pick nothing.
-template <typename Request>
-inline bool switchSdAgeable(const Request *r)
+template <typename Request> inline bool switchSdAgeable(const Request *r)
 {
     return r->replay && !r->write && r->klass;
 }

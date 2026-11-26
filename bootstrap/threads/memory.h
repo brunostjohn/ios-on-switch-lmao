@@ -147,6 +147,7 @@ static inline const char *switch_vm_tag_name(uint32_t tag)
         {107, "COMPOSITOR_SERVICES"},
         {SWITCH_VM_TAG_OWNED, "owned (ledger)"},
     };
+
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
         if (names[i].tag == tag)
             return names[i].name;
@@ -219,8 +220,8 @@ static inline void switch_vm_tags_format(FILE *stream, const struct switch_vm_sn
             (unsigned long long)(snap->peak_bytes / 1024), (unsigned long long)(total->dirty_bytes / 1024),
             (unsigned long long)(total->swapped_bytes / 1024), (unsigned long long)(walked / 1024),
             ((long long)snap->footprint_bytes - (long long)walked) / 1024);
-    fprintf(stream, "%-4s %-36s %9s %9s %9s %10s %7s\n", "TAG", "NAME", "DIRTY_KB", "COMPR_KB", "RESID_KB",
-            "VIRT_KB", "REGIONS");
+    fprintf(stream, "%-4s %-36s %9s %9s %9s %10s %7s\n", "TAG", "NAME", "DIRTY_KB", "COMPR_KB", "RESID_KB", "VIRT_KB",
+            "REGIONS");
     for (size_t i = 0; i < shown; ++i) {
         const struct switch_vm_tag_row *r = &rows[i];
         char tag[8] = "-1";

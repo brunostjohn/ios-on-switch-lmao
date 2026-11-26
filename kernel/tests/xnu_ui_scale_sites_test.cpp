@@ -315,14 +315,17 @@ TEST(XnuUiScaleSites, MainScreenClassMissIsJ120s)
 TEST(XnuUiScaleSites, TheScreenClassIsThePinnedIdentitys)
 {
     const std::string pins = switch_ios::test::SourceText("../../ipsw/pins.bzl");
+
     const struct {
         const switch_us_cache &cache;
         const char *identity;
         int screen_class;
     } builds[] = {{switch_us_cache_21H461, "j120ap", 11}, {switch_us_cache_24B119, "j181ap", 21}};
+
     for (const auto &build : builds) {
         SCOPED_TRACE(build.cache.build);
-        const std::string kind = switch_ios::test::Between(pins, std::string("\"") + build.cache.build + "\": {", "\n    },");
+        const std::string kind =
+            switch_ios::test::Between(pins, std::string("\"") + build.cache.build + "\": {", "\n    },");
         EXPECT_EQ(switch_ios::test::Between(kind, "\"device_class\": \"", "\""), build.identity);
         EXPECT_EQ(build.cache.main_screen_class, build.screen_class);
     }
