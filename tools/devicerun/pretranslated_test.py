@@ -4,7 +4,7 @@ import unittest
 
 from tools.devicerun import devicerun
 from tools.devicerun.pretranslated import PRETRANSLATED
-from tools.devicerun.rules import FAIL, PASS
+from tools.devicerun.rules import FAIL, INFO, NO_DATA, PASS
 
 KERNEL = '/System/Library/Kernels/kernel.development'
 
@@ -21,8 +21,11 @@ def kernel(message: str, second: int = 0) -> dict:
     }
 
 
-def results(*records: dict) -> dict:
-    found, _ = devicerun.run_checks(list(records), PRETRANSLATED)
+CAPTURED = 'SwitchPretranslated: 1830 files from /private/var/Switch/pretranslated (fsid 1:2)'
+
+
+def results(*records: dict, captured: bool = True) -> dict:
+    found, _ = devicerun.run_checks([kernel(CAPTURED)] * captured + list(records), PRETRANSLATED)
     return {r.check.name: r for r in found}
 
 
@@ -30,19 +33,26 @@ class Pretranslated(unittest.TestCase):
     def test_an_update_taken_passes(self):
         got = results(kernel("SwitchPretranslated: /usr/libexec/locationd from the deploy's update"))
         for name, result in got.items():
-            self.assertEqual(result.verdict, PASS, name)
+            self.assertEqual(result.verdict, INFO if name == 'pretranslated.capture' else PASS, name)
 
     def test_any_other_line_for_a_file_fails(self):
         for line in (
-            'SwitchPretranslated: /usr/libexec/locationd not updated (not signed as its CDHash); it runs translated '
-            'at load time',
+            (
+                'SwitchPretranslated: /usr/libexec/locationd not updated (not signed as its CDHash); it runs '
+                'translated at load time'
+            ),
             'SwitchPretranslated: /usr/libexec/locationd not updated (not in the tree)',
             "SwitchPretranslated: /usr/libexec/locationd from the deploy's update, eventually",
         ):
             with self.subTest(line=line):
                 self.assertEqual(results(kernel(line))['pretranslated.update'].verdict, FAIL)
-        got = results(kernel('SwitchPretranslated: 1830 files from /private/var/Switch/pretranslated (fsid 1:2)'))
-        self.assertEqual(got['pretranslated.update'].verdict, PASS, "the tree's own line names no update")
+        self.assertEqual(results()['pretranslated.update'].verdict, PASS, "the tree's own line names no update")
+
+    def test_a_log_without_the_capture_line_is_no_data(self):
+        line = kernel('SwitchPretranslated: /usr/libexec/locationd not updated (not in the tree)')
+        got = results(line, captured=False)
+        for name in ('pretranslated.update', 'pretranslated.update-folder', 'pretranslated.update-list'):
+            self.assertEqual(got[name].verdict, NO_DATA, name)
 
     def test_an_unusable_update_folder_fails_unless_it_is_only_missing(self):
         missing = (

@@ -31,11 +31,11 @@ void Tip(SwitchMotionFusion &fusion, double down[3], const double offset[3], dou
     SimTurn(fusion, down, rate, offset, std::fabs(angle));
 }
 
-// Rests flat, propped up 45 degrees, and flat again: every component of `offset` seen perpendicular to gravity. The second
-// rest holds the four windows the vertical component needs. The last is long because the gravity correction, while the
-// vertical component was unknown, built an attitude error whose correction its integral puts into the bias: 0.57 mrad/s
-// just after the tip back for a 0.05 rad/s offset (AnOffsetPastThePartsTypicalBoundIsLearned), which tracking at a
-// sixteenth per window brings to 0.16 mrad/s in 10 s.
+// Rests flat, propped up 45 degrees, and flat again: every component of `offset` seen perpendicular to gravity. The
+// second rest holds the four windows the vertical component needs. The last is long because the gravity correction,
+// while the vertical component was unknown, built an attitude error whose correction its integral puts into the bias:
+// 0.57 mrad/s just after the tip back for a 0.05 rad/s offset (AnOffsetPastThePartsTypicalBoundIsLearned), which
+// tracking at a sixteenth per window brings to 0.16 mrad/s in 10 s.
 void LearnAll(SwitchMotionFusion &fusion, double down[3], const double offset[3])
 {
     SimRest(fusion, down, offset, 1.5);
@@ -61,7 +61,7 @@ struct Floor {
 constexpr Floor kIcm200 = {0.0009, 0.0005, 1064.225e-6, 1.0 / 4096, 5000};
 constexpr Floor kIcm12 = {0.0005, 0.0003, 1064.225e-6, 1.0 / 4096, 80000};
 constexpr Floor kSt208 = {0.0011, 0.0006, 1221.73e-6, 0.000244, 4808};
-constexpr double kNoisyWorst = 0.00075;  // rad/s over every seed, axis and case (0.33-0.53 measured)
+constexpr double kNoisyWorst = 0.00075;  // rad/s over every seed, axis and case (0.26-0.60 measured)
 
 // `seconds` of a console turning at `rate` (rad/s; none: at rest) as the parts read it at `floor`.
 void NoisyTurn(SwitchMotionFusion &fusion, double down[3], const double rate[3], const double offset[3], double seconds,

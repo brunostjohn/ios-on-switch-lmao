@@ -1,10 +1,11 @@
-"""iOS 27: Data's Switch/ as the kernel requires it before it takes a deploy's updates: root:wheel, no group or other write.
+"""iOS 27: Data's Switch/ as the kernel needs it to take a deploy's updates: root:wheel, no group or other write.
 
 kernel/switch/vfs/pretranslated_updates.c uses Switch/pretranslated-updates only under a Switch/ that nobody but root
 can change, and otherwise gives each updated file no redirect (it then runs translated at load time). The install
 leaves Switch/ so; a Data volume rebuilt without it, or a Switch/ a Mac made, has another owner. The deploy reads the
-owner in its check, with Data mounted read-only with owners, and once its Data writes are done sets it under sudo
-(the only step of a deploy that asks for it, and only when the owner is wrong), then reads it again.
+owner in its check, with Data mounted read-only with owners (as tools/install/owners_apfs_test.py mounts its images,
+without root). When it is wrong the deploy asks for sudo before it writes anything, so a run that cannot have it stops
+with the card untouched; once its Data writes are done it sets the owner, then reads it again.
 """
 
 import os
@@ -55,6 +56,14 @@ def planned(owner: Owner | None) -> str:
         return f'Data Switch/: {owner}, as the kernel requires'
     found = str(owner) if owner else 'made by this deploy'
     return f'Data Switch/: {found}; set to root:wheel without group or other write (sudo)'
+
+
+def authorize(owner: Owner | None, log: host.Log) -> None:
+    """Before the first write: sudo's credentials, when Switch/ will need them."""
+    if owner and owner.kernel_takes_updates:
+        return
+    log('Data Switch/ will need sudo (root:wheel without group or other write): asking now, before writing')
+    host.run(SUDO, '-v', log=log)
 
 
 def ensure(data: str, log: host.Log) -> None:

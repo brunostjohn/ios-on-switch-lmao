@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deploy a new build to an installed card. No sudo needed.
+"""Deploy a new build to an installed card. Sudo only on iOS 27, to make Data's Switch/ root's when it is not.
 
     bazel run //deploy:sd -- <diskN>                       dry run: check the card, show what would change
     bazel run //deploy:sd -- <diskN> --yes                 deploy (type the disk identifier to confirm)
@@ -434,6 +434,41 @@ def _located(args: argparse.Namespace) -> None:
     args.system_trusted = [paths.located(path) for path in args.system_trusted]
 
 
+class Checked(NamedTuple):
+    """What the check found: the card, its spec, FAT, APFS partition and Data volume, and the FAT's pairing and
+    boot-args."""
+
+    card: cards.Card
+    spec: dict
+    fat: object
+    target: object
+    data: str
+    pairing: dict | None
+    boot_args: str
+
+
+def _write_card(args: argparse.Namespace, checked: Checked, log: host.Log) -> list[str]:
+    """Write the card, the boot entry last; return the steps not done."""
+    card, spec = checked.card, checked.spec
+    preboot = pull_logs.data_volume(card, spec['volumes']['preboot']['uuid'])
+    if preboot:
+        with cards.mounted(preboot, log) as preboot_root:
+            renamed.migrate_preboot(preboot_root, spec, log)
+    system = pull_logs.data_volume(card, spec['volumes'].get('system', {}).get('uuid', '').upper())
+    if staged_apps.stage_on_card(checked.data, Path(args.boot_package), log):
+        args.rerun_migration = True
+    with cards.mounted(checked.data, log) as data_root:
+        not_done = _write(args, data_root, Volumes(system, checked.boot_args), checked.pairing, log)
+    if args.pretranslated_trust:
+        data_owner.ensure(checked.data, log)
+    if args.system_image:
+        _update_system_cryptex(args, preboot, log)
+    _write_boot_entry(args, checked.fat.identifier, log)
+    if not args.no_eject:
+        _eject(card, checked.target, log)
+    return not_done
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     _located(args)
@@ -444,7 +479,7 @@ def main(argv: list[str] | None = None) -> int:
             with cards.mounted(fat.identifier, log) as fat_root:
                 changes, removed = cards.sync_boot_entry(fat_root, args.boot_package, log, dry_run=True)
                 pairing = None if args.no_joycon_pairing else joycon_pairing.read(fat_root, log)
-                boot_args = _boot_args(fat_root)
+                checked = Checked(card, spec, fat, target, data, pairing, _boot_args(fat_root))
         log(f'card {card.disk}: FAT {fat.identifier}, iPad Data {data}')
         for step in _plan(args, changes, removed, pairing):
             log('  plan:', step)
@@ -452,23 +487,10 @@ def main(argv: list[str] | None = None) -> int:
             log('dry run: nothing written (add --yes)')
             return 0
         _confirmed(args, card)
+        if args.pretranslated_trust:
+            data_owner.authorize(getattr(args, 'data_owner', None), log)
         with progress.step(f'deploy: writing to {card.disk}', unit=None):
-            preboot = pull_logs.data_volume(card, spec['volumes']['preboot']['uuid'])
-            if preboot:
-                with cards.mounted(preboot, log) as preboot_root:
-                    renamed.migrate_preboot(preboot_root, spec, log)
-            system = pull_logs.data_volume(card, spec['volumes'].get('system', {}).get('uuid', '').upper())
-            if staged_apps.stage_on_card(data, Path(args.boot_package), log):
-                args.rerun_migration = True
-            with cards.mounted(data, log) as data_root:
-                not_done = _write(args, data_root, Volumes(system, boot_args), pairing, log)
-            if args.pretranslated_trust:
-                data_owner.ensure(data, log)
-            if args.system_image:
-                _update_system_cryptex(args, preboot, log)
-            _write_boot_entry(args, fat.identifier, log)
-            if not args.no_eject:
-                _eject(card, target, log)
+            not_done = _write_card(args, checked, log)
         if not_done:
             log('FAILED: not done:', ', '.join(not_done))
             return 1

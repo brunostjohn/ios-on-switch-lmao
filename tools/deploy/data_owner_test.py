@@ -78,6 +78,14 @@ class DataOwnerTest(unittest.TestCase):
         ):
             data_owner.ensure('disk9s5', Log())
 
+    def test_sudo_is_asked_for_before_writing_only_when_switch_will_need_it(self):
+        data_owner.authorize(ROOT_OWNED, Log())
+        self.run.assert_not_called()
+        for owner in (MOBILE_OWNED, None):
+            self.run.reset_mock()
+            data_owner.authorize(owner, Log())
+            self.run.assert_called_once_with(data_owner.SUDO, '-v', log=mock.ANY)
+
     def test_the_plan_says_whether_sudo_is_needed(self):
         self.assertNotIn('sudo', data_owner.planned(ROOT_OWNED))
         self.assertIn('sudo', data_owner.planned(MOBILE_OWNED))

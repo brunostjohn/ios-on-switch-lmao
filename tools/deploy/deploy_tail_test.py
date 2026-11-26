@@ -1,5 +1,7 @@
-"""deploy.main's tail: a step that fails once the card is being written leaves the rest, the boot entry and the eject to
-run; the boot entry comes last, so a deploy stopped before it leaves the card booting its last build."""
+"""deploy.main's tail: a step that fails once the card is being written leaves the rest, the boot entry and the eject.
+
+The boot entry comes last, so a deploy stopped before it leaves the card booting its last build.
+"""
 
 import contextlib
 import errno
@@ -51,6 +53,9 @@ class DeployTailTest(unittest.TestCase):
                 mock.patch.object(deploy.data_owner, 'ensure', self.step('Switch/ owner', failing.get('owner')))
             )
             stack.enter_context(
+                mock.patch.object(deploy.data_owner, 'authorize', self.step('sudo', failing.get('sudo')))
+            )
+            stack.enter_context(
                 mock.patch.object(deploy, '_checked', return_value=(card, spec, fat, mock.MagicMock(), 'disk10s2'))
             )
             stack.enter_context(
@@ -74,7 +79,12 @@ class DeployTailTest(unittest.TestCase):
         ios27 = ('--system-image', 'image', '--pretranslated-trust', 'trust')
         status, _ = self.deploy(*ios27)
         self.assertEqual(status, 0)
+        self.assertEqual(self.order[0], 'sudo', 'asked before anything is written')
         self.assertEqual(self.order[-4:], ['Switch/ owner', '_update_system_cryptex', '_write_boot_entry', '_eject'])
+        self.order.clear()
+        status, lines = self.deploy(*ios27, sudo=deploy.host.HostError('sudo: a password is required'))
+        self.assertEqual((status, self.order), (1, ['sudo']))
+        self.assertEqual(lines[-1], 'FAILED: sudo: a password is required')
         for failing in ('owner', '_update_system_cryptex'):
             with self.subTest(failing=failing):
                 self.order.clear()

@@ -19,8 +19,11 @@ On iPadOS 27 the accelerometer, gyroscope and device motion services carry J181'
 (drivers/SwitchTouch/SwitchHIDMotionAccess.cpp). IOKit's event system then matches them only for platform binaries or
 connections TCC allows, and logs each connection it refuses. A refusal there means a motion client lost the services.
 The log redacts the line's arguments as <private>; only these services carry a TCCService here, so a redacted one is
-judged as theirs. A refusal of another shape would go unseen there, so each iPadOS 27 boot must also show locationd,
-backboardd and SpringBoard adding the gated services (motion.services.*).
+judged as theirs. A refusal of another shape would go unseen there, so a client that asks for a gated service and finds
+none fails as well: CoreMotion then logs the usage pair "not ready", as boot 2 did for the services nothing provided
+(motion.gated-not-ready for the accelerometer and gyroscope, motion.spu-not-ready and motion.locationd-spu-not-ready
+for device motion). Clients add these services on demand, not every boot (24 Nov: backboardd added the accelerometer in
+15 of 22 iPadOS 27 boots, SpringBoard in 19), so their adds alone prove nothing.
 """
 
 from tools.devicerun.rules import REPORT, Check
@@ -28,11 +31,14 @@ from tools.devicerun.rules import REPORT, Check
 OWNER = 'perf1-daemons'
 SOURCE = 'kernel/xnu-12377.121.6/bsd/vm/switch_ui_scale_sites_24B119.h'
 SUBSYSTEM = 'com.apple.locationd.Motion'
-ADDED_PAIR = '[CLIoHidInterface] Adding new Device with usage pair '
-ADDED = ADDED_PAIR + '{65292, '
+ADDED = '[CLIoHidInterface] Adding new Device with usage pair {65292, '
 NOT_READY = (
     '[CLIoHidInterface] Service for device with usage pair {65292, ',
     '[CLIoHidInterface] Service for usage pair {65292, ',
+)
+GATED_NOT_READY = (
+    '[CLIoHidInterface] Service for device with usage pair {65280, ',
+    '[CLIoHidInterface] Service for usage pair {65280, ',
 )
 GIVE_UP = '[CLIoHidInterface] Could not set all properties after too many retries. Giving up.'
 USAGE = r'\{65292, (?P<usage>\d+)\}'
@@ -249,27 +255,18 @@ MOTION = [
         note="IOKit's event system refused a connection the Motion & Fitness gated services: not a platform "
         'binary, and TCC did not allow it',
     ),
-    *(
-        Check(
-            f'motion.services.{process}',
-            OWNER,
-            ADDED_PAIR + pair,
-            rule='count >= 1',
-            process=process,
-            subsystem=SUBSYSTEM,
-            applies=IOS27,
-            needs='motion.kernel',
-            boots=IOS27_BOOT,
-            each_boot=True,
-            source=MOTION_ACCESS,
-            note=f"{process}'s CoreMotion found {what} in each iPadOS 27 boot: the event system matched it the "
-            'Motion & Fitness gated service',
-        )
-        for process, pair, what in (
-            ('locationd', '{65292, 5}', 'the device motion service {0xff0c, 5}'),
-            ('backboardd', '{65280, 3}', 'the accelerometer {0xff00, 3}'),
-            ('SpringBoard', '{65280, 3}', 'the accelerometer {0xff00, 3}'),
-        )
+    Check(
+        'motion.gated-not-ready',
+        OWNER,
+        GATED_NOT_READY,
+        regex=r'\{65280, (?P<usage>3|9)\}',
+        show=('process', 'usage'),
+        applies=IOS27,
+        needs='motion.kernel',
+        boots=IOS27_BOOT,
+        source=MOTION_ACCESS,
+        note='a CoreMotion client asked for the accelerometer or gyroscope and found no service, as a refusal of the '
+        "gated service leaves it (the device motion service's are motion.spu-not-ready's)",
     ),
     Check(
         'motion.spu-added-ungated',

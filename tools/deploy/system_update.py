@@ -81,9 +81,7 @@ def check_boot_entry(fat_root: Path, package: Path, log: host.Log) -> None:
         )
 
 
-def plan(
-    preboot_root: Path, spec: dict, image: Image, free_bytes: int, log: host.Log, folder: str | None = None
-) -> Update:
+def plan(preboot_root: Path, spec: dict, image: Image, free_bytes: int, folder: str | None = None) -> Update:
     """Decide the write: the System cryptex's staged path, and whether the card's record names this image.
 
     `folder` is the image's folder on the card while a rename to the spec's is still to come (renamed.migrate_preboot).
@@ -106,9 +104,12 @@ def plan(
             f'the card has {progress.size(free_bytes + reclaimable)} free, the new image needs '
             f'{progress.size(needed)} beside the old one until it replaces it'
         )
-    state = 'unchanged' if same else 'to replace'
-    log(f'preboot: {relative} {state} (this build {size} bytes, the card {card_size} bytes)')
     return Update(relative, size, card_size, same)
+
+
+def described(update: Update) -> str:
+    state = 'unchanged' if update.same else 'to replace'
+    return f'preboot: {update.relative} {state} (this build {update.size} bytes, the card {update.card_size} bytes)'
 
 
 def write(preboot_root: Path, update: Update, image: Image, log: host.Log) -> None:
@@ -131,7 +132,9 @@ def planned_on_card(card: cards.Card, spec: dict, image: Image, target: object, 
         raise cards.RefusedError(f'{card.disk}: no iPad Preboot volume, so the System cryptex cannot follow this build')
     with cards.mounted(preboot, log, read_only=True) as preboot_root:
         moved = renamed.migrate_preboot(preboot_root, spec, log, dry_run=True)
-        return plan(preboot_root, spec, image, free_bytes(target), log, folder=moved[0] if moved else None)
+        update = plan(preboot_root, spec, image, free_bytes(target), folder=moved[0] if moved else None)
+    log(described(update))
+    return update
 
 
 def write_on_card(preboot: str, update: Update, image: Image, log: host.Log) -> None:
@@ -210,7 +213,8 @@ def main(argv: list[str] | None = None) -> int:
         with cards.mounted(fat.identifier, log, read_only=True) as fat_root:
             check_boot_entry(fat_root, Path(args.boot_package), log)
         with cards.mounted(preboot, log, read_only=not args.yes) as preboot_root:
-            update = plan(preboot_root, spec, image, free_bytes(target), log)
+            update = plan(preboot_root, spec, image, free_bytes(target))
+            log(described(update))
             if update.same:
                 log("nothing to write: the card holds this build's System cryptex")
             elif not args.yes:
