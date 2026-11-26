@@ -229,6 +229,31 @@ bool switch_host1x_fence_names(uint32_t)
     return false;
 }
 
+// SwitchHost1xFence.cpp's and SwitchHost1xErrors.cpp's, which this test does not build: what was failed and rearmed.
+std::vector<std::pair<uint32_t, int>> gFencesFailed;
+std::vector<uint32_t> gRearmed;
+
+void switch_host1x_fences_fail(uint32_t id, int status)
+{
+    gFencesFailed.emplace_back(id, status);
+}
+
+bool switch_host1x_errors_start(IOWorkLoop *, volatile uint8_t *)
+{
+    return true;
+}
+
+void switch_host1x_errors_stop()
+{}
+
+void switch_host1x_errors_resume()
+{}
+
+extern "C" void switch_host1x_errors_rearm(uint32_t channel)
+{
+    gRearmed.push_back(channel);
+}
+
 void switch_host1x_intr_filter()
 {}
 
@@ -852,3 +877,51 @@ TEST_F(Host1xSubmit, AReleaseOfASyncpointNotHandedOutOrFartherThanAskedIsRefused
 }
 
 }  // namespace
+
+// A channel stopped on an illegal opcode (SwitchHost1xErrors.cpp): its jobs' bounded fences fail at once, through
+// each queue's own cancellation; the display's stream is cancelled as its own cancel does.
+TEST_F(Host1xSubmit, AStoppedEnginesChannelFailsItsJobsSyncpointOnceAndNoOtherChannels)
+{
+    constexpr uint32_t channel = TEGRA_HOST1X_CHANNEL_NVENC;
+    syncpoint(171) = 10;
+    uint32_t *words = nullptr;
+    for (const uint32_t threshold : {11u, 12u}) {
+        ASSERT_EQ(switch_host1x_job_reserve(channel, 4, &words), TEGRA_HOST1X_OK);
+        words[0] = tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_NVENC, 0, 0);
+        ASSERT_EQ(switch_host1x_job_submit(channel, words, 4, 171, threshold), TEGRA_HOST1X_OK);
+    }
+    gFencesFailed.clear();
+    char line[64];
+    switch_host1x_channels_failed(channel, line, sizeof(line));
+    EXPECT_EQ(gFencesFailed, (std::vector<std::pair<uint32_t, int>>{{171, TEGRA_HOST1X_ETIMEDOUT}}));
+    EXPECT_STREQ(line, "171");
+    gFencesFailed.clear();
+    switch_host1x_channels_failed(TEGRA_HOST1X_CHANNEL_NVJPG, line, sizeof(line));
+    EXPECT_TRUE(gFencesFailed.empty());
+    EXPECT_STREQ(line, "");
+    gRearmed.clear();
+    tegra_host1x_channel_teardown(channel);
+    tegra_host1x_channel_restart(channel);
+    EXPECT_EQ(gRearmed, std::vector<uint32_t>{channel}) << "a restart unmasks the channel's illegal opcode again";
+}
+
+TEST_F(Host1xSubmit, AStoppedDisplayChannelCancelsItsStream)
+{
+    SwitchHost1xDisplayStream stream;
+    uint32_t producer = 0;
+    ASSERT_EQ(tegra_host1x_syncpt_alloc(&producer), 0);
+    ASSERT_EQ(switch_host1x_display_start(&stream), 0);
+    const switch_gpu_backing_token token = {1, 1, SWITCH_GPU_ENGINE_NVDEC, producer};
+    const uint32_t word = 0xdc0, address = 0x20000000;
+    DisplayCompletion done;
+    ASSERT_EQ(
+        switch_host1x_display_submit(&stream, &token, 1, &word, &address, 1, 0x500, 5, DisplayCompletion::heard, &done),
+        0);
+    gCpuIncrements = true;
+    char line[64];
+    switch_host1x_channels_failed(TEGRA_HOST1X_CHANNEL_DISPLAY, line, sizeof(line));
+    EXPECT_EQ(stream.status, SwitchHost1xDisplayStream::kCancelled);
+    stream.fence.signaled(&stream.fence, 0);
+    EXPECT_EQ(done.calls, 1u);
+    EXPECT_EQ(done.status, SwitchHost1xDisplayStream::kCancelled);
+}

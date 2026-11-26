@@ -19,6 +19,7 @@
 #include "TegraHost1x.h"
 #include "SwitchHost1xChannels.h"
 #include "SwitchHost1xCpuIncrement.h"
+#include "SwitchHost1xErrors.h"
 #include "SwitchHost1xIntr.h"
 #include "SwitchHost1xSyncptPool.h"
 #include "../ArmGIC/SwitchInterrupts.h"
@@ -207,6 +208,7 @@ int bringUp()
     keepBootChainSyncpts();
     gState = 1;
     switch_host1x_intr_start();
+    switch_host1x_errors_start(gLoop, gHost + kSyncOffset);
     const uint32_t filtered = switch_host1x_channels_filter_stuck();
     IOLog("TegraHost1x: H1 ok channel 0, host1x %u MHz%s, gather filter %s, %u syncpoints to hand out\n", gClockMHz,
           enabled ? ", enabled here" : "", filtered ? "on" : "off", gPool.capacity());
@@ -351,6 +353,7 @@ extern "C" void tegra_host1x_suspend(void)
 {
     if (gState != 1)
         return;
+    switch_host1x_errors_stop();
     switch_host1x_intr_stop();
     IOLockLock(gSubmitLock);
     for (uint32_t id = 0; id < kSyncpts; id++) {
@@ -391,6 +394,7 @@ extern "C" void tegra_host1x_resume(void)
     switch_host1x_channels_program();
     gState = 1;
     switch_host1x_intr_start();
+    switch_host1x_errors_resume();
     IOLockUnlock(gSubmitLock);
 }
 

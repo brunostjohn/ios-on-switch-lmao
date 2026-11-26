@@ -3,6 +3,28 @@ load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
 
 lint_files()
 
+# host1x's general interrupt on a sync-unit model: attach and masks, a stopped channel taken once and masked until its
+# restart, its jobs failed, and the illegal-opcode probe's error delivered or lost.
+host_test(
+    name = "switch_host1x_errors_test",
+    srcs = [
+        "switch_host1x_errors_test.cpp",
+        "//drivers/ArmGIC:SwitchInterrupts.h",
+        "//drivers/TegraHost1x:SwitchHost1xChannels.h",
+        "//drivers/TegraHost1x:SwitchHost1xErrorProbe.h",
+        "//drivers/TegraHost1x:SwitchHost1xErrors.h",
+        "//drivers/TegraHost1x:TegraHost1x.h",
+        "//kits/SwitchMMIO:SwitchMMIO.h",
+        "//kits/SwitchMMIO:SwitchMMIOKernel.h",
+    ],
+    additional_compiler_inputs = ["//drivers/TegraHost1x:SwitchHost1xErrors.cpp"],
+    defines = [
+        "DEVELOPMENT=1",
+        "SWITCH_MMIO_HOST_MODEL=1",
+    ],
+    deps = [":fence_kernel"],
+)
+
 host_test(
     name = "switch_host1x_syncpt_pool_test",
     srcs = [
@@ -111,6 +133,8 @@ host_test(
         "//drivers/TegraHost1x:SwitchHost1xChannels.h",
         "//drivers/TegraHost1x:SwitchHost1xDisplay.h",
         "//drivers/TegraHost1x:SwitchHost1xDisplayChannel.h",
+        "//drivers/TegraHost1x:SwitchHost1xErrorProbe.h",
+        "//drivers/TegraHost1x:SwitchHost1xErrors.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraHost1x:SwitchHost1xGatherStats.h",
         "//drivers/TegraHost1x:SwitchHost1xCpuIncrement.h",
@@ -179,6 +203,8 @@ host_test(
         "//drivers/TegraHost1x:SwitchHost1xChannels.h",
         "//drivers/TegraHost1x:SwitchHost1xDisplay.h",
         "//drivers/TegraHost1x:SwitchHost1xDisplayChannel.h",
+        "//drivers/TegraHost1x:SwitchHost1xErrorProbe.h",
+        "//drivers/TegraHost1x:SwitchHost1xErrors.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraHost1x:SwitchHost1xGatherStats.h",
         "//drivers/TegraHost1x:SwitchHost1xCpuIncrement.h",
@@ -199,6 +225,7 @@ host_test(
     ],
     additional_compiler_inputs = [
         "//drivers/TegraHost1x:SwitchHost1xChannels.cpp",
+        "//drivers/TegraHost1x:SwitchHost1xErrors.cpp",
         "//drivers/TegraHost1x:SwitchHost1xFence.cpp",
         "//drivers/TegraHost1x:TegraHost1x.cpp",
     ],

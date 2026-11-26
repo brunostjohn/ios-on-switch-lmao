@@ -214,6 +214,18 @@ void switch_host1x_intr_handle()
     }
 }
 
+void switch_host1x_fences_fail(uint32_t id, int status)
+{
+    if (!gLock || id >= SwitchHost1xFenceList<Registers>::kSyncpts)
+        return;
+    SwitchHost1xExpired done;
+    IOLockLock(gLock);
+    if (gUp)
+        gList.fail(gRegisters, id, status, done);
+    settleLocked(done);
+    IOLockUnlock(gLock);
+}
+
 bool switch_host1x_fence_names(uint32_t id)
 {
     if (!gLock || id >= SwitchHost1xFenceList<Registers>::kSyncpts)
@@ -435,7 +447,7 @@ extern "C" int tegra_host1x_syncpt_wait_unless(uint32_t id, uint32_t threshold, 
     gList.remove(gRegisters, &waiter, done);
     settleLocked(done);
     IOLockUnlock(gLock);
-    return ret;
+    return ret ? ret : waiter.status;
 }
 
 extern "C" void tegra_host1x_set_strict(void)

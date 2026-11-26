@@ -9,6 +9,7 @@
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using IOReturn = int;
 using IOOptionBits = uint32_t;
@@ -121,9 +122,18 @@ inline int IOLockSleep(IOLock *lock, void *event, int interruptible)
     return IOLockSleepDeadline(lock, event, 0, interruptible);
 }
 
-inline void IOLog(const char *, ...)
+// Every IOLog line, for the tests that read them.
+inline std::vector<std::string> switch_test_iolog;
+
+inline void IOLog(const char *format, ...)
 {
     switch_test_may_block("IOLog");
+    char text[512];
+    va_list arguments;
+    va_start(arguments, format);
+    vsnprintf(text, sizeof(text), format, arguments);
+    va_end(arguments);
+    switch_test_iolog.emplace_back(text);
 }
 
 inline void IODelay(unsigned)
@@ -174,22 +184,46 @@ public:
     }
 
     void enable()
-    {}
+    {
+        enabled = true;
+    }
+
+    void disable()
+    {
+        enabled = false;
+    }
 
     void interruptOccurred(void *, IOService *, int)
     {
         ++switch_test_kicks;
     }
+
+    Action action = nullptr;
+    bool enabled = false;
 };
 
 class IOFilterInterruptEventSource : public IOInterruptEventSource {
 public:
     using Filter = bool (*)(OSObject *, IOFilterInterruptEventSource *);
 
-    static IOFilterInterruptEventSource *filterInterruptEventSource(OSObject *, Action, Filter, IOService *, int)
+    static IOFilterInterruptEventSource *filterInterruptEventSource(OSObject *, Action action, Filter filter,
+                                                                    IOService *, int)
     {
-        return new IOFilterInterruptEventSource;
+        auto *source = new IOFilterInterruptEventSource;
+        source->action = action;
+        source->filter = filter;
+        made().push_back(source);
+        return source;
     }
+
+    // Every source made, in order: the syncpoint line's first, then the general interrupt's.
+    static std::vector<IOFilterInterruptEventSource *> &made()
+    {
+        static std::vector<IOFilterInterruptEventSource *> sources;
+        return sources;
+    }
+
+    Filter filter = nullptr;
 };
 
 class IOWorkLoop : public OSObject {

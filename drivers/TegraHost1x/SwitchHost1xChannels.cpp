@@ -21,7 +21,9 @@
 #include "SwitchHost1xChannels.h"
 #include "SwitchHost1xFence.h"
 #include "SwitchHost1xDisplay.h"
+#include "SwitchHost1xErrors.h"
 #include "SwitchHost1xFailureRelease.h"
+#include "SwitchHost1xIntr.h"
 #include "TegraHost1x.h"
 #include "../../kits/SwitchDMA/SwitchDMABuffer.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
@@ -209,6 +211,7 @@ void restartLocked(uint32_t channel)
     syncSet(SYNC_CMDPROC_STOP, syncRead(SYNC_CMDPROC_STOP) & ~(1u << channel));
     channelWrite(channel, CH_DMACTRL, 0);
     dropJobs(gChannels[channel]);
+    switch_host1x_errors_rearm(channel);
 }
 
 // A filter waiter on another CPU that sees the syncpoint move reads the failure stored before it
@@ -502,3 +505,31 @@ extern "C" void tegra_host1x_channel_restart(uint32_t channel)
 }
 
 #include "SwitchHost1xDisplayChannel.h"
+
+void switch_host1x_channels_failed(uint32_t channel, char *line, size_t size)
+{
+    constexpr uint32_t kMost = 4;  // an engine's jobs share one syncpoint; the display's stream adds one
+    uint32_t syncpts[kMost] = {}, count = 0;
+    if (line && size)
+        line[0] = 0;
+    if (!validChannel(channel))
+        return;
+    IOLockLock(gChannelLock);
+    gChannels[channel].arena.forEachFenced([&](uint32_t syncpt, uint32_t) {
+        bool seen = false;
+        for (uint32_t i = 0; i < count; ++i)
+            seen |= syncpts[i] == syncpt;
+        if (!seen && count < kMost)
+            syncpts[count++] = syncpt;
+    });
+    if (gRunning && channel == TEGRA_HOST1X_CHANNEL_DISPLAY)
+        displayCancelLocked(true);
+    IOLockUnlock(gChannelLock);
+    size_t used = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        switch_host1x_fences_fail(syncpts[i], TEGRA_HOST1X_ETIMEDOUT);
+        const int n =
+            line && used < size ? snprintf(line + used, size - used, "%s%u", used ? ", " : "", syncpts[i]) : 0;
+        used += n > 0 ? static_cast<size_t>(n) : 0;
+    }
+}
