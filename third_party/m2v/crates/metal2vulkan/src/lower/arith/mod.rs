@@ -923,6 +923,9 @@ pub struct ArithPlan {
     /// recorded at selection: the module then requires `VkProperty::MetalHalfArithmetic`.
     pub f16_arith: bool,
     pub sm53_half: bool,
+    /// Whether a `half` `fast::powr` takes the device's `exp2(y · log2(x))` with no selects around it
+    /// (`NativeShaderTarget::ieee_half_powr`).
+    pub ieee_half_powr: bool,
     /// The precision notes the plan's operations record unless their entry's quotient and
     /// functions are Metal's own ([`ArithPlan::device_quotient`]), recorded at selection
     /// ([`OpNotes::unless_metal_fast`]); [`finish`] records them where they are not.
@@ -1058,6 +1061,7 @@ pub const FOLDED: &str = "arith.float.folded";
 pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     cx.families.arith.sm53_half =
         cx.profile.fields().native_target == crate::device::NativeShaderTarget::Sm53;
+    cx.families.arith.ieee_half_powr = cx.profile.fields().native_target.ieee_half_powr();
     cx.families.arith.wide = legal::holds_wide(cx.profile);
     cx.families.arith.quantize = narrow::quantize_form(cx.profile);
     cx.families.arith.native_half =

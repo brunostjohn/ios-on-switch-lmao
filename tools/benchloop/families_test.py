@@ -11,7 +11,16 @@ class FamiliesTest(unittest.TestCase):
         found = families.analyse(planned, {})
         self.assertEqual(found['clock_hz'], families.MEASURED_CLOCK_HZ)
         heads = {line.split()[0] for line in found['summary']}
-        for head in ('clock', 'stall', 'stall-wide', 'xmad-mul', 'icache', 'store2fma'):
+        for head in (
+            'clock',
+            'stall',
+            'stall-wide',
+            'xmad-mul',
+            'icache',
+            'store2fma',
+            'reader',
+            'reader-wide',
+        ):
             self.assertIn(head, heads)
         self.assertTrue(all(v['missing'] for v in found['store2fma'].values()))
 
