@@ -41,9 +41,7 @@ bool settleJobless(switch_gpu_bridge &job, bool &owed)
 	}
 	if (cover == 1 && source == 0)
 		return false;
-	const bool drained = cover == 1 ||
-			     (source == 1 &&
-			      int32_t(tegra_host1x_syncpt_read(job.producer) - job.threshold) >= 0);
+	const bool drained = coveringDrained(job, source, cover);
 	__atomic_store_n(&job.result, source < 0 ? source : drained ? 1 : -5, __ATOMIC_RELEASE);
 	owed = stopped && !drained;
 	return true;

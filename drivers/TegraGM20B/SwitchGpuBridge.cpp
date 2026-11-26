@@ -36,6 +36,14 @@ int producers(const switch_gpu_bridge &job)
 	}
 	return pending ? 0 : 1;
 }
+
+// Read after the caller's read of `cover`, so a covering job seen dead is judged by the increments it made before it
+// died (settleJobless has why they decide it)
+bool coveringDrained(const switch_gpu_bridge &job, int source, int cover)
+{
+	return cover == 1 || (source == 1 &&
+			      int32_t(tegra_host1x_syncpt_read(job.producer) - job.threshold) >= 0);
+}
 }  // namespace switch_gpu_bridge_queue
 
 using namespace switch_gpu_bridge_queue;
@@ -319,15 +327,17 @@ extern "C" int switch_gpu_bridge_status(const switch_gpu_bridge *bridge)
 	int result = bridge->result;
 	if (!result) {
 		result = producers(*bridge);
-		const uint32_t syncpoint = bridge->producer ? bridge->producer : bridge->syncpoint;
-		const bool reached =
-			int32_t(tegra_host1x_syncpt_read(syncpoint) - bridge->threshold) >= 0;
 		if (bridge->producer && result >= 0) {
 			int stopped = 0;
 			const int cover = switch_gpu_producer_covered(bridge->covering, &stopped);
-			result = cover < 0 ? cover : cover == 0 ? 0 : result;
+			if (cover == 0)
+				result = 0;
+			else if (!coveringDrained(*bridge, result, cover))
+				result = cover;
 		}
-		if (result == 1 && !reached)
+		const uint32_t syncpoint = bridge->producer ? bridge->producer : bridge->syncpoint;
+		if (result == 1 &&
+		    int32_t(tegra_host1x_syncpt_read(syncpoint) - bridge->threshold) < 0)
 			result = 0;
 	}
 	IOLockUnlock(queue.lock);

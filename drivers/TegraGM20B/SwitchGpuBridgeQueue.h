@@ -46,6 +46,8 @@ extern BridgeQueue queue;
 // queue.lock held
 void releaseLocked(switch_gpu_bridge &job);
 int producers(const switch_gpu_bridge &job);
+// A jobless slot whose covering job resolved (cover 1 or <0): true once its tokens' writes are in DRAM
+bool coveringDrained(const switch_gpu_bridge &job, int source, int cover);
 bool anyWaited();
 void armHangCheck(uint64_t ns);
 

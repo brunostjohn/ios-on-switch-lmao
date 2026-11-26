@@ -319,6 +319,7 @@ struct Covering {
 std::map<Key, Covering> covered;
 std::map<Key, int> coveringStatus;  // by the covering job's (queue, generation, last): 1, 0 or -5
 std::set<uint32_t> stoppedChannels, unassigned, producerIds;
+std::function<void()> onCoveredRead;  // at the covering job's read, before it answers
 std::vector<std::pair<uint32_t, uint32_t>> adopted;
 std::vector<std::pair<uint32_t, uint32_t>> returned;  // (syncpoint, promised)
 std::vector<std::pair<uint32_t, uint32_t>> producerChecks;
@@ -341,6 +342,8 @@ extern "C" int switch_gpu_timeline_syncpoint(const switch_gpu_backing_token *tok
 extern "C" int switch_gpu_timeline_covered(const switch_gpu_backing_token *token, uint32_t last,
 					   int *stopped)
 {
+	if (onCoveredRead)
+		onCoveredRead();
 	*stopped = stoppedChannels.count(token->queue) != 0;
 	const auto at = coveringStatus.find({token->queue, token->reset_generation, last});
 	return at == coveringStatus.end() ? 0 : at->second;
@@ -1472,6 +1475,47 @@ TEST_F(Bridge, AFenceOnACoveringJobKilledBeforeItsIncrementsHearsItsCause)
 	causes.clear();
 	EXPECT_EQ(failureReleases, releasesBefore + 1) << "the fence's slot was jobless";
 	EXPECT_EQ(heard, std::vector<int>{SWITCH_GPU_BACKING_WRITER_GONE});
+}
+
+// A stream that passed its WAIT on the covering job's increments reads its bridge before retirement stores a result.
+// The writes are in DRAM, so status answers 1 as retirement will, not the covering job's -5.
+TEST_F(Bridge, ACoveringJobKilledAfterItsIncrementsReadsCompleteBeforeRetirement)
+{
+	const auto source = token(616, 33);
+	statuses[key(source)] = 0;
+	covered[key(source)] = {kProducerSyncpoint + 23, 180, 617};
+	syncpoints[kProducerSyncpoint + 23] = 178;
+	auto *bridge = submit({source});
+	ASSERT_NE(bridge, nullptr);
+	syncpoints[kProducerSyncpoint + 23] = 180;
+	killCoveringJob(source, 617);
+	EXPECT_EQ(switch_gpu_bridge_status(bridge), 1);
+	EXPECT_EQ(switch_gpu_bridge_failed(bridge), 0);
+	stoppedChannels.erase(33);
+	causes.clear();
+	release(bridge);
+}
+
+// The increments and the kill can both land between status's reads. The syncpoint is read after the covering job, as
+// settleJobless reads it, so a job seen dead is judged by the increments it made before it died.
+TEST_F(Bridge, StatusReadsTheProducerSyncpointAfterTheCoveringJob)
+{
+	const auto source = token(618, 34);
+	statuses[key(source)] = 0;
+	covered[key(source)] = {kProducerSyncpoint + 24, 190, 619};
+	syncpoints[kProducerSyncpoint + 24] = 188;
+	auto *bridge = submit({source});
+	ASSERT_NE(bridge, nullptr);
+	statuses[key(source)] = 1;
+	onCoveredRead = [&] {
+		syncpoints[kProducerSyncpoint + 24] = 190;
+		killCoveringJob(source, 619);
+	};
+	EXPECT_EQ(switch_gpu_bridge_status(bridge), 1);
+	onCoveredRead = nullptr;
+	stoppedChannels.erase(34);
+	causes.clear();
+	release(bridge);
 }
 
 // A kill landing between the slot's reads fails the token and stops the channel at once. The tokens are read first, so
