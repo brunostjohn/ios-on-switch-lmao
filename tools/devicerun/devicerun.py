@@ -20,7 +20,7 @@ from tools.devicerun.hwtest import joined
 from tools.devicerun.launch import launch_rows
 from tools.devicerun.memory import memory_rows
 from tools.devicerun.morning import CHECKLIST
-from tools.devicerun.reports import crash_rows, frame_rows, headline, rolled_up
+from tools.devicerun.reports import blocking, crash_rows, frame_rows, headline, rolled_up
 from tools.devicerun.rules import FAIL, INFO, REPORT, Check, Event, Result, evaluate, match
 from tools.devicerun.springboard import springboard_rows
 
@@ -247,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     print(checklist(args.boot_label))
     groups = evaluate_all(records, args.crashes, args.boot_label, args.boot)
     print(headline(groups))
+    print(blocking(groups))
     judged = [r for group, results in groups if group == 'usb-layers' for r in results if r.check.name == 'usb.boot']
     print(*(f'The usb group judges {r.observed}\n' for r in judged), sep='')
     print(table(groups))

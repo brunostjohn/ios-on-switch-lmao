@@ -64,7 +64,8 @@ class Check:
     with no run), and `rule` is not read. `preceded` names a check: only this check's lines that one of its lines came
     within `within` seconds before, in the same boot (with the same `key` value, when `key` is set), are judged.
     `boots` names a check: only this check's lines in a boot where one of its lines came are judged (an iPadOS 27
-    boot's, in an archive of several).
+    boot's, in an archive of several). `blocks`: a FAIL of this check keeps the build from counting as good, and the
+    table's top names it.
     """
 
     name: str
@@ -101,6 +102,7 @@ class Check:
     per_count: str = ''
     preceded: str = ''
     boots: str = ''
+    blocks: bool = False
 
     def literals(self) -> tuple[str, ...]:
         return (self.contains,) if isinstance(self.contains, str) else self.contains
