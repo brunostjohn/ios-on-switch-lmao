@@ -335,9 +335,9 @@ static void chan_abandon(struct tgm_chan *chan)
 	mutex_unlock(&tgm_live_lock);
 	for (;;) {
 		u32 seq = nvxnu_wake_seq();
-		if (READ_ONCE(chan->error))
+		if (__atomic_load_n(&chan->error, __ATOMIC_ACQUIRE))
 			return;
-		if (!nvxnu_idle(seq, end) && !READ_ONCE(chan->error)) {
+		if (!nvxnu_idle(seq, end) && !__atomic_load_n(&chan->error, __ATOMIC_ACQUIRE)) {
 			tgm_chan_hung(chan, "channel destroy: kill", chan->submitted,
 				      nvxnu_nanotime() - now);
 		}
@@ -416,7 +416,8 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	for (;;) {
 		u32 seq = tgm_waiter_seq(waiter);
 		switch_gpu_waiter_want(&chan->wanted, chan->submitted);
-		if (chan->error || (s32)(tgm_chan_completed(chan) - chan->submitted) >= 0 ||
+		if (__atomic_load_n(&chan->error, __ATOMIC_ACQUIRE) ||
+		    (s32)(tgm_chan_completed(chan) - chan->submitted) >= 0 ||
 		    nvxnu_nanotime() >= end)
 			break;
 		if (!tgm_waiter_idle(waiter, seq, end) && tgm_chan_announced(chan, chan->submitted))
@@ -424,7 +425,7 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	}
 	/* tearing down a channel that still runs would free pages the GPU is using: its owner is gone, so it is killed
 	 * as a hung client's is, and the teardown waits for that */
-	if (tgm_gpu.stage >= 3 && !chan->error &&
+	if (tgm_gpu.stage >= 3 && !__atomic_load_n(&chan->error, __ATOMIC_ACQUIRE) &&
 	    (s32)(tgm_chan_completed(chan) - chan->submitted) < 0)
 		chan_abandon(chan);
 	/* A watched producer whose fence passed with its pass still to come (an asked wake entry not taken yet) gets no

@@ -146,9 +146,9 @@ int tgm_chan_killed(struct nvif_event *event, void *repv, u32 repc)
 #endif
 	if (fault_code(report) == 1)
 		WRITE_ONCE(chan->fault_va, tgm_fault_va(report, (int)chan->chid));
-	WRITE_ONCE(chan->error, fault_code(report));
 	first = tgm_kill_first(chan->faulted, chan->fault_seqno, READ_ONCE(*chan->fence_cpu));
 	switch_gpu_timeline_failed(chan->timeline, first - 1, chan->critical);
+	__atomic_store_n(&chan->error, fault_code(report), __ATOMIC_RELEASE);
 	tgm_fence_kill_record(chan->fence_cpu, first, chan->submitted, chan->error);
 	/* Timeline reads failed: close the bridge gate before raising fence_cpu so no bridge job passes over the cut writes. */
 	switch_gpu_bridge_gate_close();

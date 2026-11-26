@@ -755,6 +755,23 @@ TEST(GM20BKillSource, AKilledChannelLeavesItsConnectionWorking)
 			    .has("!tgm_chan_error(chans_[slot])"));
 }
 
+TEST(GM20BKillSource, KillPublishesTimelineFailureBeforeChannelError)
+{
+	const CodeText killed =
+		Block(gpu(), "int tgm_chan_killed(struct nvif_event *event, void *repv, u32 repc)");
+	EXPECT_TRUE(killed.before(
+		"switch_gpu_timeline_failed(",
+		"__atomic_store_n(&chan->error, fault_code(report), __ATOMIC_RELEASE);"));
+	EXPECT_TRUE(Block(gpu(), "int tgm_writer_done(")
+			    .has("__atomic_load_n(&chan->error, __ATOMIC_ACQUIRE)"));
+	EXPECT_TRUE(Block(gpu(), "static void chan_abandon(")
+			    .has("__atomic_load_n(&chan->error, __ATOMIC_ACQUIRE)"));
+	EXPECT_TRUE(Block(gpu(), "void tgm_chan_del(")
+			    .has("__atomic_load_n(&chan->error, __ATOMIC_ACQUIRE)"));
+	EXPECT_TRUE(Block(gpu(), "static void present_watch_flush(")
+			    .before("present_deliver(done, arg, ret);", "nvxnu_panic("));
+}
+
 // The driver's reopen after its channel is killed: the shader heap's BO and VA outlive the channel, so every program
 // placed in it (Device::place) keeps its slot and every state that baked its offset stays drawable; the new channel gets
 // what lives in a channel's context again, the program region at the heap, the texture and sampler pools and the root

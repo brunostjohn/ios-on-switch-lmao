@@ -108,9 +108,9 @@ static void present_watch_complete(int status, int from_pass)
 }
 
 /* The producer ended with its writes possibly still in the GPU L2: the fence-only present job after all, on the same
- * producer, whose fence flushes them, inside the gate the watch holds. Its own completion delivers the present. The
- * job's every refusal is the kernel's own state gone wrong (the present channel's ring full for 1 s, its fence page
- * unmapped), never the frame's. */
+ * producer, whose fence flushes them, inside the gate the watch holds. Its own completion delivers the present. A
+ * producer that failed since the claim is delivered unshown; any other refusal is the kernel's own state gone wrong
+ * (the present channel's ring full for 1 s, its fence page unmapped), never the frame's. */
 static void present_watch_flush(void)
 {
 	struct switch_gpu_present_tokens held;
@@ -125,6 +125,13 @@ static void present_watch_flush(void)
 	switch_gpu_present_watch_reset(&tgm_present.watch);
 	mutex_unlock(&tgm_present.lock);
 	ret = present_copy(0, 0, -1, 1, 1, 0, 0, 0, done, arg, NULL, 0, held.tokens, held.count);
+	if (ret == SWITCH_GPU_BACKING_WRITER_GONE || ret == SWITCH_GPU_BACKING_WRITE_REFUSED ||
+	    ret == SWITCH_GPU_BACKING_WRITER_FAILED) {
+		nvxnu_work_cancel(tgm_present.deadline_work);
+		switch_gpu_present_tokens_drop(&held);
+		present_deliver(done, arg, ret);
+		return;
+	}
 	if (ret)
 		nvxnu_panic("tegra-gm20b: present: the fence-only job that puts a direct "
 			    "present's producer (uid %u fence %llu) in DRAM was refused (%d)",

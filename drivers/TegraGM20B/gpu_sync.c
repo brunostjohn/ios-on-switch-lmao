@@ -167,7 +167,8 @@ int tgm_writer_done(uint32_t uid, uint32_t seqno)
 
 	mutex_lock(&tgm_live_lock);
 	chan = live_by_uid(uid);
-	done = !chan || chan->error || (s32)(tgm_chan_completed(chan) - seqno) >= 0;
+	done = !chan || __atomic_load_n(&chan->error, __ATOMIC_ACQUIRE) ||
+	       (s32)(tgm_chan_completed(chan) - seqno) >= 0;
 	mutex_unlock(&tgm_live_lock);
 	return done;
 }

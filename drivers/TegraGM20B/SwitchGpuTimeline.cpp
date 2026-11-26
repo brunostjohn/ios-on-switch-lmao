@@ -123,7 +123,7 @@ int status_locked(const switch_gpu_timeline *timeline, uint32_t value, bool exte
 		const int semantic = switch_gpu_event_waits_cached_status(node->authority);
 		if (semantic == 0)
 			return 0;
-		if (semantic < 0 && node->seqno == value)
+		if (semantic < 0 && semantic != -125 && node->seqno == value)
 			return -5;
 	}
 	return physical;
@@ -204,22 +204,30 @@ int external_wait(const switch_gpu_backing_token *token)
 int wait(const switch_gpu_backing_token *token)
 {
 	SwitchGpuDependencyTrace dependency;
-	int result = status(token);
-	if (!result) {
-		tgm_writer_wait(token->queue, uint32_t(token->value));
-		result = status(token);
-	}
-	if (!result) {
+	for (;;) {
+		const int result = status(token);
+		if (result != 0)
+			return result;
+		const int physical = switch_gpu_timeline_physical_status(token, 0);
+		if (physical < 0)
+			return physical;
+		if (physical == 0) {
+			tgm_writer_wait(token->queue, uint32_t(token->value));
+			if (switch_gpu_timeline_physical_status(token, 0) == 0)
+				return 0;
+			continue;
+		}
 		switch_gpu_event_waits *authority = nullptr;
 		const int semantic = switch_gpu_timeline_semantic_snapshot(token, &authority);
 		if (semantic < 0)
 			return semantic;
-		if (authority) {
-			result = switch_gpu_event_waits_wait(authority, 0);
-			switch_gpu_event_waits_release(&authority);
-		}
+		if (!authority)
+			continue;
+		const int waited = switch_gpu_event_waits_wait(authority, 0);
+		switch_gpu_event_waits_release(&authority);
+		if (waited == 0)
+			return 0;
 	}
-	return result;
 }
 
 int retain(const switch_gpu_backing_token *token)
@@ -313,9 +321,10 @@ extern "C" void switch_gpu_timeline_failed(switch_gpu_timeline *timeline, uint32
 	if (!timeline)
 		return;
 	uint64_t expected = 0;
-	const uint32_t visible = timeline->visible == timeline->fence
-					 ? completed
-					 : __atomic_load_n(timeline->visible, __ATOMIC_ACQUIRE);
+	const volatile uint32_t *fence = __atomic_load_n(&timeline->fence, __ATOMIC_ACQUIRE);
+	const volatile uint32_t *vis = __atomic_load_n(&timeline->visible, __ATOMIC_ACQUIRE);
+	const uint32_t visible = !vis || vis == fence ? completed
+						      : __atomic_load_n(vis, __ATOMIC_ACQUIRE);
 	__atomic_store_n(&timeline->terminal_visible, visible, __ATOMIC_RELEASE);
 	__atomic_compare_exchange_n(&timeline->terminal, &expected,
 				    ((compositor ? kCompositorKilled : kKilled) << 32) | completed,
@@ -356,8 +365,9 @@ extern "C" void switch_gpu_timeline_visibility(switch_gpu_timeline *timeline,
 					       const volatile uint32_t *visible)
 {
 	IOLockLock(lock);
-	timeline->visible = visible;
-	timeline->promoted = __atomic_load_n(visible, __ATOMIC_ACQUIRE);
+	__atomic_store_n(&timeline->visible, visible, __ATOMIC_RELEASE);
+	__atomic_store_n(&timeline->promoted, __atomic_load_n(visible, __ATOMIC_ACQUIRE),
+			 __ATOMIC_RELEASE);
 	IOLockUnlock(lock);
 }
 
@@ -367,7 +377,7 @@ extern "C" int switch_gpu_timeline_promote(const switch_gpu_backing_token *token
 	auto *timeline = find(token);
 	const int result = timeline ? status_locked(timeline, uint32_t(token->value), false) : -19;
 	if (result == 1 && int32_t(uint32_t(token->value) - timeline->promoted) > 0)
-		timeline->promoted = uint32_t(token->value);
+		__atomic_store_n(&timeline->promoted, uint32_t(token->value), __ATOMIC_RELEASE);
 	IOLockUnlock(lock);
 	return result;
 }
@@ -406,7 +416,7 @@ extern "C" int switch_gpu_timeline_semantic_snapshot(const switch_gpu_backing_to
 			if (int32_t(uint32_t(token->value) - node->seqno) >= 0) {
 				const int semantic =
 					switch_gpu_event_waits_cached_status(node->authority);
-				if (semantic == 1 ||
+				if (semantic > 0 || semantic == -125 ||
 				    (semantic < 0 && node->seqno != uint32_t(token->value)))
 					continue;
 				if (semantic < 0) {
@@ -478,14 +488,15 @@ extern "C" void switch_gpu_timeline_semantic_finish(switch_gpu_timeline_semantic
 		return;
 	}
 	IOLockLock(lock);
+	// Publish failed_count before unlinking so lock-free readers never see both empty.
+	if (result < 0 && result != -125)
+		fail_locked(timeline, node->seqno);
 	auto **at = &timeline->semantics;
 	while (*at && *at != node)
 		at = &(*at)->next;
 	if (*at)
 		__atomic_store_n(at, node->next, __ATOMIC_RELEASE);
 	__atomic_sub_fetch(&semantic_count, 1u, __ATOMIC_RELEASE);
-	if (result < 0 && result != -125)
-		fail_locked(timeline, node->seqno);
 	publish_semantic_locked(timeline);
 	put_locked(timeline);
 	IOLockUnlock(lock);
