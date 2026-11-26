@@ -214,6 +214,7 @@ kernel_driver(
         "//kernel/switch:include/switch/fresh_memory.h",
         "//kernel/switch:include/switch/memory_attachment.h",
         "//kernel/switch:include/switch/park_mapping.h",
+        "//kernel/switch:include/switch/stall.h",
         "//kernel/switch:include/switch/user_turnstile.h",
     ],
     abi = [

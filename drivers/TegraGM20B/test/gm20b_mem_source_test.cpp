@@ -49,6 +49,20 @@ TEST(GM20BMemSource, AUnitIsOneAlignedContiguousRun)
 			    .has("getRetainCount() == (buffer.map ? 2 : 1)"));
 }
 
+// K17: a BoImport wire blocked past 50 ms (25 Nov: 658 ms at 0% CPU) names its VM wait through the kernel's stall
+// watch, debug kernels only, armed for the wire alone
+TEST(GM20BMemSource, ABlockedImportWireNamesItsWait)
+{
+	const CodeText import = Block(unit("TegraGM20BUserClientImport.cpp"),
+				      "IOReturn AGXDeviceUserClient::boImport(");
+	EXPECT_TRUE(
+		import.before("switch_stall_watch_begin(current_thread(), 50000000ULL,",
+			      "wire[i] = bo->wired ? bo->wired->prepare() : kIOReturnNoMemory;"));
+	EXPECT_TRUE(import.before("wire[i] = bo->wired ? bo->wired->prepare() : kIOReturnNoMemory;",
+				  "switch_stall_watch_end(watch);"));
+	EXPECT_TRUE(import.before("switch_stall_watch_end(watch);", "lap(0);"));
+}
+
 TEST(GM20BMemSource, BoAllocAndBoImportBuildOutsideTheConnectionLock)
 {
 	const CodeText run = Block(unit("TegraGM20BUserClientDispatch.cpp"),

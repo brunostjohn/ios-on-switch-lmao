@@ -22,6 +22,14 @@ void switch_stall_frame(uint64_t last_present);
  * render-server thread. */
 void switch_stall_frame_role(task_t task, int role);
 void switch_stall_frame_render_server(thread_t thread);
+
+/* diag/watch.c: a kernel path that can block on something its caller cannot see (the GPU driver's BoImport wire). If
+ * `thread` is still blocked `ns` after _begin, one "SwitchStall: <what>: ..." line names its wait and whom that wait is
+ * for, as the UI stall lines do. _end before the path returns (it waits for a line being written); NULL is a watch that
+ * could not be armed. */
+struct switch_stall_watch;
+struct switch_stall_watch *switch_stall_watch_begin(thread_t thread, uint64_t ns, const char *what);
+void switch_stall_watch_end(struct switch_stall_watch *watch);
 #endif
 
 __END_DECLS
