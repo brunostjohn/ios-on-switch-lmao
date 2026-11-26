@@ -96,9 +96,16 @@ int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch
     IOLockLock(gChannelLock);
     int error = !gRunning ? TEGRA_HOST1X_ENODEV : gDisplayStream ? TEGRA_HOST1X_EAGAIN : produced < 0 ? produced : 0;
     // In the hold that publishes the stream: a failure is stored before the release that would cancel the stream, and
-    // that release takes this lock, so it either finds the stream published or its failure is read here.
+    // that release takes this lock, so it either finds the stream published or its failure is read here. The stored
+    // failure trails a producer's own by up to one retire pass, so the producers are read too (their timeline's lock is
+    // a leaf, as VIC's and NVDEC's are below).
     if (!error && bridge)
         error = switch_gpu_bridge_failed(bridge);
+    if (!error && bridge) {
+        const int source = switch_gpu_bridge_source_failure(bridge);
+        if (source < 0)
+            error = source;
+    }
     for (uint32_t i = 0; i < count && !error; ++i) {
         const auto &token = producers[i];
         if (token.engine != SWITCH_GPU_ENGINE_VIC && token.engine != SWITCH_GPU_ENGINE_NVDEC) {

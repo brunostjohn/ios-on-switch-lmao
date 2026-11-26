@@ -113,7 +113,8 @@ struct switch_gpu_bridge {
     int status;
     uint32_t releases;
     bool lockedWhenAsked;
-    int failed = 0, why = 0;
+    int failed = 0, why = 0, sourceFailure = 0;
+    bool sourceReadLocked = false;
     bool failedReadUnlocked = false, whyReadAfterRelease = false;
     void (*afterStatus)(switch_gpu_bridge *) = nullptr;
 };
@@ -140,6 +141,12 @@ extern "C" int switch_gpu_bridge_failed(const switch_gpu_bridge *bridge)
 {
     const_cast<switch_gpu_bridge *>(bridge)->failedReadUnlocked |= !gSubmitLock->held;
     return __atomic_load_n(&bridge->failed, __ATOMIC_ACQUIRE);
+}
+
+extern "C" int switch_gpu_bridge_source_failure(const switch_gpu_bridge *bridge)
+{
+    const_cast<switch_gpu_bridge *>(bridge)->sourceReadLocked |= static_cast<bool>(gSubmitLock->held);
+    return bridge->sourceFailure;
 }
 
 extern "C" int switch_gpu_bridge_why(const switch_gpu_bridge *bridge)

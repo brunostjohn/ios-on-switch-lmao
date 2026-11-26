@@ -469,6 +469,26 @@ TEST_F(Host1xSubmit, AFailureReleasedJustBeforeThePublicationRefusesTheStream)
     EXPECT_EQ(done.calls, 0u);
 }
 
+// A producer failed and the bridge has not stored it yet (its retire pass is still to come): the producers' own status,
+// read in the publishing hold, refuses the stream.
+TEST_F(Host1xSubmit, AProducerFailureTheBridgeHasNotStoredYetRefusesTheStream)
+{
+    auto &stream = Bridged::get().stream;
+    switch_gpu_bridge bridge = {Bridged::get().bridgeSyncpt, syncpoint(Bridged::get().bridgeSyncpt) + 2, 0, 0, false};
+    bridge.afterStatus = [](switch_gpu_bridge *b) {
+        b->sourceFailure = SWITCH_GPU_BACKING_WRITER_GONE;
+    };
+    const uint32_t word = 0xdc0, address = 0x20000000, put = doorbell(TEGRA_HOST1X_CHANNEL_DISPLAY);
+    DisplayCompletion done;
+    EXPECT_EQ(switch_host1x_display_submit(&stream, nullptr, 0, &word, &address, 1, 0x500, 5, DisplayCompletion::heard,
+                                           &done, &bridge),
+              SWITCH_GPU_BACKING_WRITER_GONE);
+    EXPECT_TRUE(bridge.sourceReadLocked);
+    EXPECT_EQ(doorbell(TEGRA_HOST1X_CHANNEL_DISPLAY), put);
+    EXPECT_EQ(gDisplayStream, nullptr);
+    EXPECT_EQ(bridge.releases, 0u);
+}
+
 // A failure dated after the writes reached DRAM fails a stream that already wrote its set: its completion carries the
 // bridge's reason, read before the bridge goes.
 TEST_F(Host1xSubmit, AWrittenSetsLateFailureCarriesItsReason)
