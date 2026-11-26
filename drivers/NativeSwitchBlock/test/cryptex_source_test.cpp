@@ -91,9 +91,10 @@ TEST(CryptexSource, JoinedFillsAreRaised)
                                 "kIOStoragePriorityDefault"));
     const std::string plan = body("bool SwitchCryptexDevice::cacheRead(");
     EXPECT_LT(plan.find("joined = p->cache.joined;"), plan.find("IOLockUnlock(gCache.lock);"));
-    EXPECT_LT(plan.find("IOLockUnlock(gCache.lock);"), plan.find("raiseQueuedReads(block, count, priority);"));
+    EXPECT_LT(plan.find("IOLockUnlock(gCache.lock);"), plan.find("raiseQueuedReads(tag,"));
     EXPECT_THAT(plan, HasSubstr("if (joined && priority == kIOStoragePriorityHigh) {"));
-    EXPECT_LT(plan.find("raiseQueuedReads(block, count, priority);"), plan.find("pieceDone(this, p,"));
+    EXPECT_LT(plan.find("raiseQueuedReads(tag,"), plan.find("pieceDone(this, p,"));
+    EXPECT_THAT(plan, HasSubstr("for (uint32_t i = 0; i < p->cache.windows; ++i)"));  // review N7: whole windows
     const std::string raise = body("void SwitchCryptexDevice::raiseQueuedReads(");
     EXPECT_THAT(raise, HasSubstr("switch_block_raise(pieces, n, priority);"));
     EXPECT_THAT(raise, Not(HasSubstr("gCache.lock")));

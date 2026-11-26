@@ -686,8 +686,13 @@ bool SwitchCryptexDevice::cacheRead(Pending *p, IOMemoryDescriptor *buffer, uint
         cardReads += issueRead(p->reads[i], priority);
     reportDirect(p->length, cardReads);
     // After gCache.lock is dropped: the SD driver's queueLock is never taken under gCache.lock.
+    // The whole of each window it joined: the fill it waits for may be pieces its own blocks do not cover (an extent
+    // boundary or a hole inside the window). The request's pin keeps each window's tag until it releases them.
     if (joined && priority == kIOStoragePriorityHigh) {
-        raiseQueuedReads(block, count, priority);
+        for (uint32_t i = 0; i < p->cache.windows; ++i) {
+            const uint64_t tag = p->cache.window[i]->tag;
+            raiseQueuedReads(tag, blocks - tag < kSwitchWindowBlocks ? blocks - tag : kSwitchWindowBlocks, priority);
+        }
 #if DEVELOPMENT || DEBUG
         switch_cryptex_stats::count(&switch_cryptex_stats::Counters::joinedRaises);
 #endif
