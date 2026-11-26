@@ -8,6 +8,7 @@
 #include "../TegraGM20B/SwitchGpuSharedEvent.h"
 #include "../TegraGM20B/TegraGM20BCopy.h"
 #include "../TegraVIC/SwitchVICDecodeOutput.h"
+#include "../TegraVIC/SwitchVICJobs.h"
 #include "../TegraVIC/SwitchVICSurfaceAccess.h"
 #include "../../kits/SwitchDMA/SwitchDMAPages.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
@@ -109,6 +110,7 @@ void queueRepack(void *context, uint32_t syncpt, uint32_t fence)
     output.x = run->request->x_offset;
     output.y = run->request->y_offset;
     output.after = &after;
+    output.fence = &run->vicFence;
     const char *why = nullptr;
     run->queued = switch_vic_decode_output(run->destination, &output, repacked, run, &why) == 0;
     run->why = why;
@@ -158,6 +160,14 @@ void ceCancelled(void *)
 {
     setGuard(0);
 }
+
+// The decode was cancelled: VIC's job queued behind its fence renders its background, not the buffer
+void vicCancelled(void *context)
+{
+    auto *run = static_cast<TegraNVJPGRepackRun *>(context);
+    if (run->queued)
+        (void)switch_vic_job_background(run->vicFence);
+}
 }  // namespace
 
 int tegra_nvjpg_repack_start(TegraNVJPGRepackRun *run, TegraNVJPGJob *engine, const TegraNVJPGPlan *plan,
@@ -202,7 +212,7 @@ int tegra_nvjpg_repack_start(TegraNVJPGRepackRun *run, TegraNVJPGJob *engine, co
     engine->bitstream = bitstream;
     for (uint32_t i = 0; i < plan->planes; ++i)
         engine->plane[i] = mapping->address + plan->planeStart[i];
-    const TegraNVJPGFollow follow = {run->ce ? queueCeRepack : queueRepack, run, run->ce ? ceCancelled : nullptr};
+    const TegraNVJPGFollow follow = {run->ce ? queueCeRepack : queueRepack, run, run->ce ? ceCancelled : vicCancelled};
     tegra_nvjpg_lock();
     const int ret = tegra_nvjpg_start(engine, ended, &follow);
     if (ret)

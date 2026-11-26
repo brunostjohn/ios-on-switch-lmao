@@ -495,13 +495,24 @@ bool switch_vic_decode_output_ready(void)
     return true;
 }
 
-// VIC's re-pack: the test reads which fence it was queued behind.
+constexpr uint32_t kVicFence = 9001;
+std::vector<uint32_t> gVicBackgrounds;
+
+// VIC's re-pack: the test reads which fence it was queued behind, and VIC's own fence for it is kVicFence.
 int switch_vic_decode_output(const TegraVICSurface *, const SwitchVICDecodeOutput *output,
                              void (*completion)(void *, int), void *context, const char **)
 {
     gVicAfter = *output->after;
+    if (output->fence)
+        *output->fence = kVicFence;
     gHeldRepacks.push_back({output->after->threshold, completion, context});
     return 0;
+}
+
+bool switch_vic_job_background(uint32_t fence)
+{
+    gVicBackgrounds.push_back(fence);
+    return true;
 }
 
 extern "C" bool tegra_vic_surface_start(void)
@@ -866,7 +877,6 @@ TEST_F(NVJPGUserClient, ACancelledDecodeLetsTheCopyEngineQueuedBehindItEnd)
     EXPECT_EQ(gSurfaceAccessReleased, 2);
 }
 
-// The same for VIC's re-pack of a '444f' decode.
 // HW Test's tile probe (image.nvjpg_tile_probe) tells NVJPG a tiling no driver uses. One the engine never finishes is
 // bounded by its picture (50 ms and a microsecond per 16 pixels), cancelled once with its tiling named and counted for
 // its process, and never run again; its destination's mapping runs the sink past every byte the worst reading of its
@@ -915,13 +925,17 @@ TEST_F(NVJPGUserClient, AHungTileProbeIsCancelledOnceAndTheNextDecodeRuns)
     retire(&next.backing);
 }
 
+// The same for VIC's re-pack of a '444f' decode, whose job renders its background before the release lets it run: the
+// buffer may hold another process's picture
 TEST_F(NVJPGUserClient, ACancelledDecodeLetsVICsRepackQueuedBehindItEnd)
 {
+    gVicBackgrounds.clear();
     gEngine.stallDecodes = true;
     EXPECT_EQ(engineRuns(repackOf(64 << 10)), kIOReturnIOError);
     gEngine.stallDecodes = false;
     EXPECT_EQ(gEngine.decodeEndedBy, "fence");
     EXPECT_EQ(gEngine.released, std::vector<uint32_t>{gVicAfter.threshold});
+    EXPECT_EQ(gVicBackgrounds, std::vector<uint32_t>{kVicFence}) << "VIC's job writes none of the buffer";
     EXPECT_TRUE(logged("engine reset: running again"));
 }
 

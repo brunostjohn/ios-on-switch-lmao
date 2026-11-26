@@ -23,6 +23,7 @@ struct TegraNVJPGRepackRun {
     SwitchVICSurfaceAccess access;
     TegraNVJPGSignal signal;  // given when the re-pack ends
     const char *why;
+    uint32_t vicFence;  // VIC's job behind the decode, when the re-pack is VIC's (switch_vic_job_background)
     uint32_t pending;
     int status;
     bool ce, queued;
