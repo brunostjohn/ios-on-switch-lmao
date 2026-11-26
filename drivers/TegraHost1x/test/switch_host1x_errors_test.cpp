@@ -13,8 +13,8 @@ namespace {
 constexpr uintptr_t kSync = 0x50002100;
 std::map<uint32_t, uint32_t> gRegs;
 bool gIntmaskStuck, gIntc0Stuck, gHintmaskExtStuck, gNoNub;
-// A CPU_TZ_ILLEGAL_TZ_ACCESS: INTMASK bit 4 (reset 1, kept) lets it on the line, and no host1x status reports it.
-bool gTzIllegal;
+// A source on the line that no register here describes.
+bool gUnknownSource;
 // TRM 14.9.7 does not say whether HINTMASK_EXT gates HINTSTATUS bit 31 (review-dma3 O7): both are modelled.
 bool gExtGatesSummary;
 std::vector<uint32_t> gFailedChannels;
@@ -38,12 +38,12 @@ IOFilterInterruptEventSource *source()
 }
 
 // CPU0's line (TRM 14.9.2-14.9.8): INTMASK's CPU0 master, and either host1x's own interrupt (an unmasked
-// HINTSTATUS_EXT bit, HINTMASK's EXT enable, INTC0MASK's HOST_INT) or a TrustZone violation behind INTMASK bit 4.
+// HINTSTATUS_EXT bit, HINTMASK's EXT enable, INTC0MASK's HOST_INT) or a source this model does not know.
 bool lineAsserted()
 {
     const uint32_t ext = reg(kHintStatusExt) & (gExtGatesSummary ? reg(kHintMaskExt) : kIllegalAll);
     const bool host = ext && (reg(kHintMask) & kExtEnable) && (reg(kIntC0Mask) & kHostInt);
-    return (reg(kIntMask) & kCpu0All) && (host || (gTzIllegal && (reg(kIntMask) & (1u << 4))));
+    return (reg(kIntMask) & kCpu0All) && (host || gUnknownSource);
 }
 
 // True when the line was asserted and its filter took it, then the action ran.
@@ -66,7 +66,7 @@ struct Host1xErrors : testing::Test {
     void SetUp() override
     {
         gRegs = {{kIntMask, 0x10}};
-        gIntmaskStuck = gIntc0Stuck = gHintmaskExtStuck = gNoNub = gTzIllegal = false;
+        gIntmaskStuck = gIntc0Stuck = gHintmaskExtStuck = gNoNub = gUnknownSource = false;
         gExtGatesSummary = true;
         switch_test_preemption_off = 0;
         gFailedChannels.clear();
@@ -130,12 +130,12 @@ void switch_host1x_channels_failed(uint32_t channel, char *line, size_t size)
     snprintf(line, size, "syncpoint %u: 1 failed", 160 + channel);
 }
 
-TEST_F(Host1xErrors, TheAttachUnmasksEveryChannelKeepsIntmaskBit4AndClearsWhatLatched)
+TEST_F(Host1xErrors, TheAttachUnmasksEveryChannelSetsIntmaskToCpu0AloneAndClearsWhatLatched)
 {
     reg(kHintStatusExt) = 1u << 2;
     ASSERT_TRUE(start());
     EXPECT_TRUE(source()->enabled);
-    EXPECT_EQ(reg(kIntMask), 0x11u) << "CPU0's master enable, bit 4 kept";
+    EXPECT_EQ(reg(kIntMask), 1u) << "CPU0's master enable alone: bit 4 (TrustZone violations, reset 1) off, as L4T";
     EXPECT_EQ(reg(kIntC0Mask), 1u) << "HOST_INT reaches CPU0";
     EXPECT_EQ(reg(kHintMask), 1u << 31);
     EXPECT_EQ(reg(kHintMaskExt), 0x3fffu);
@@ -237,9 +237,9 @@ TEST_F(Host1xErrors, ALineThatFiresWithNothingOfOursPanics)
     ASSERT_TRUE(start());
     reg(kHintStatus) = 1u << 16;
     EXPECT_FALSE(deliver()) << "HINTMASK keeps host1x's other sources off the line";
-    gTzIllegal = true;
+    gUnknownSource = true;
     EXPECT_EQ(panicOf(&deliver), "TegraHost1x: general interrupt (INTID 99) fired with no illegal opcode of ours pending "
-                                 "(INTSTATUS 0 HINTSTATUS 0x10000 HINTSTATUS_EXT 0 HINTMASK_EXT 0x3fff INTMASK 0x11)");
+                                 "(INTSTATUS 0 HINTSTATUS 0x10000 HINTSTATUS_EXT 0 HINTMASK_EXT 0x3fff INTMASK 0x1)");
     EXPECT_EQ(reg(kIntMask) & 1u, 1u) << "the master enable is never turned off";
     gErrorsLock->held = false;
 }
@@ -277,7 +277,7 @@ TEST_F(Host1xErrors, SleepTurnsItOffAndTheResumeConfiguresItAgain)
     EXPECT_TRUE(source()->enabled);
     EXPECT_EQ(reg(kHintMaskExt), 0x3fffu);
     EXPECT_EQ(reg(kIntC0Mask), 1u);
-    EXPECT_EQ(reg(kIntMask), 0x11u);
+    EXPECT_EQ(reg(kIntMask), 1u);
     EXPECT_TRUE(fire(5)) << "delivered after the resume";
 }
 

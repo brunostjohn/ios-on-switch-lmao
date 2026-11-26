@@ -43,7 +43,8 @@ template <class Registers> struct Unit {
 
     // After the sync unit came out of reset (boot, SC7), every channel freshly programmed: what latched before is
     // cleared, every channel's illegal opcode unmasked, HINTMASK set to the EXT enable alone and INTC0MASK to HOST_INT
-    // alone, then the master enable set (INTMASK's other bits kept: bit 4 resets to 1).
+    // alone, then INTMASK set to CPU0's master enable alone, as L4T's t20_intr_resume writes it: bit 4 (CPU TrustZone
+    // violations, reset 1) goes off, since no host1x register reports one for the filter to take.
     Configured configure(Registers &r)
     {
         Configured c = {};
@@ -54,7 +55,7 @@ template <class Registers> struct Unit {
         r.write(kHintMask, kExtEnable);
         c.intc0Was = r.read(kIntC0Mask);
         r.write(kIntC0Mask, kHostInt);
-        r.write(kIntMask, r.read(kIntMask) | kCpu0All);
+        r.write(kIntMask, kCpu0All);
         c.hintmask = r.read(kHintMask);
         c.hintmaskExt = r.read(kHintMaskExt);
         c.intc0 = r.read(kIntC0Mask);

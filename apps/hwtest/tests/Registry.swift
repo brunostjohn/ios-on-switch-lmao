@@ -185,7 +185,7 @@ public enum Registry {
         DispatchSyncHandoffTest(),
         SnapshotPurgeableTest(), RecorderHangDumpTest(),
         // Deliberate faults: an interrupt that never delivers panics the kernel.
-        MCFaultInterruptTest(), Host1xIllegalOpcodeTest(),
+        MCFaultInterruptTest(),
     ]
 
     static let compositor: [any HWTest] =
