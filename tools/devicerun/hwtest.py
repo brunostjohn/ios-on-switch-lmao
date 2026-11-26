@@ -689,6 +689,9 @@ TESTS: dict[str, bool] = {
     'gpu.x1.shadow_ram': False,
     'gpu.gm20b.iterated_blend_passes': False,
     'gpu.gm20b.fetch_rung3': False,
+    'gpu.gm20b.aegir_moon': False,
+    'gpu.gm20b.mixed_merge_probe': False,
+    'gpu.gm20b.bytes_address': False,
 }
 
 # The tests only one iOS version's app runs (apps/hwtest/app<version>), by that version.
