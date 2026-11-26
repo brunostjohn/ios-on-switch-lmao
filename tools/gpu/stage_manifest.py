@@ -13,6 +13,7 @@ hashes only the bundle and reads none of the seed's files.
 The manifest names files where Bazel left them, in //deploy:sd's runfiles, so nothing is copied to make it:
 
     # gpu stage 1 <its own rlocation path>
+    # kext <the GPU kext's build identity>       (with --kext-digest: //kernel:gpu_kext_digest)
     <path below the Data volume>\t<sha256>\t<size>\t<mode, octal>\t<rlocation path of the file>
 
 The stager (drivers/TegraGM20BMetal/stage-tegra-gm20b-metal.py) finds the runfiles root by taking the manifest's own
@@ -26,6 +27,7 @@ from tools.common import hashing
 from tools.gpu import seed_pack
 
 HEADER = '# gpu stage 1 '
+KEXT = '# kext '
 SEED = 'ngpu/addons/TegraGM20BMetal.seed/shared'
 RAW = 'ngpu/addons/TegraGM20BMetal.pack'
 EXECUTABLES = ('TegraGM20BMetal',)
@@ -83,13 +85,15 @@ def main() -> None:
     parser.add_argument('--out', required=True)
     parser.add_argument('--part', action='store_true')
     parser.add_argument('--from-part')
+    parser.add_argument('--kext-digest', help="a file holding the GPU kext's build identity")
     args = parser.parse_args()
     if args.part:
         Path(args.out).write_text(''.join(entry + '\n' for entry in sorted(lines_of(seed_files(args)))))
         return
     lines = lines_of(tree(Path(args.base) / 'ngpu', args.base_rlocation + '/ngpu', 'ngpu/'))
     lines += Path(args.from_part).read_text().splitlines() if args.from_part else lines_of(seed_files(args))
-    Path(args.out).write_text(HEADER + args.self + '\n' + ''.join(entry + '\n' for entry in sorted(lines)))
+    kext = KEXT + Path(args.kext_digest).read_text().strip() + '\n' if args.kext_digest else ''
+    Path(args.out).write_text(HEADER + args.self + '\n' + kext + ''.join(entry + '\n' for entry in sorted(lines)))
 
 
 if __name__ == '__main__':

@@ -115,7 +115,10 @@ py_binary(
     srcs = ["inflate.py"],
 )
 
-exports_files(["os_files.py"])
+exports_files([
+    "os_files.py",
+    "pins.bzl",
+])
 
 # //tools/install:translated_tree_test reads the pinned trust modules and update lists.
 exports_files(glob([

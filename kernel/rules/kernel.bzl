@@ -528,6 +528,33 @@ kernel_archive = rule(
     }),
 )
 
+def _kernel_objects_digest_impl(ctx):
+    out = ctx.actions.declare_file(ctx.attr.name + ".txt")
+    objects = []
+    for m in ctx.attr.members:
+        objects += m[KernelObjectsInfo].objects if KernelObjectsInfo in m else m.files.to_list()
+    args = ctx.actions.args()
+    args.add(out)
+    args.add_all(objects)
+    ctx.actions.run_shell(
+        arguments = [args],
+        command = 'out="$1"; shift; /usr/bin/shasum -a 256 "$@" | /usr/bin/cut -d" " -f1 | /usr/bin/shasum -a 256 | ' +
+                  '/usr/bin/cut -d" " -f1 > "$out"',
+        inputs = objects,
+        outputs = [out],
+        env = {"LC_ALL": "C"},
+        mnemonic = "KernelObjectsDigest",
+        progress_message = "Naming " + str(ctx.label) + "'s objects",
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+kernel_objects_digest = rule(
+    implementation = _kernel_objects_digest_impl,
+    doc = "One sha256 over the objects the kernel links for `members`, in order: a driver's build identity, made on " +
+          "the build host from the same configured objects the kernel archives.",
+    attrs = {"members": attr.label_list(mandatory = True, allow_files = [".o"])},
+)
+
 def _stage_files_impl(ctx):
     outs = []
     for target, path in ctx.attr.files.items():

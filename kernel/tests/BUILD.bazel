@@ -9,7 +9,8 @@
 #   xnu_kernel_classes_source_test  both trees' OSKext.cpp register our drivers' classes under sKextLock, as OSKext::start
 #                            does, and no driver calls OSMetaClass::preModLoad/postModLoad itself
 #   switch_icon_cache_<xnu>_test  kernel/switch/boot/icon_cache.c over a host Data tree in that XNU's cache layout:
-#                            __cache_info__ alone goes, once per GPU build the deploy names
+#                            __cache_info__ alone goes, once per GPU build the deploy names; _release_test as a
+#                            release kernel builds it (no restore record)
 #   xnu_icon_cache_source_test  both trees' boot setup runs it once before launchd, with one error line
 #   xnu_stall_test           kernel/switch/diag/stall.h's decisions: which samples of a UI main thread are a stall,
 #                            one report and one end per episode, wait names by block_hint.h value (both trees), the
@@ -885,6 +886,10 @@ host_test(
             "switch_ui_scale_sites_24B119.h",
             "vm_unix.c",
         ]
+    ] + [
+        "//ipsw:pins.bzl",
+        "//kernel/xnu-10063.141.1/bsd:kern/kern_exec.c",
+        "//kernel/xnu-12377.121.6/bsd:kern/kern_exec.c",
     ],
     includes = ["."],
 )
@@ -1265,26 +1270,41 @@ copy_file(
     out = "switch/icon_cache.h",
 )
 
-# One build per XNU, each in its iOS's cache layout: 24B119's salt folders, 21H461's top.
+# One build per XNU, each in its iOS's cache layout: 24B119's salt folders, 21H461's top. Each as a debug kernel builds
+# it (DEVELOPMENT), and 24B119's also as a release kernel does (no restore record).
+ICON_CACHE_BUILDS = [
+    ("12377_121_6", ""),
+    ("10063_141_1", ""),
+    ("12377_121_6", "_release"),
+]
+
+RELEASE_COPTS = [
+    "-UDEVELOPMENT",
+    "-DDEVELOPMENT=0",
+    "-UDEBUG",
+    "-DDEBUG=0",
+]
+
 [
     host_library(
-        name = "icon_cache_" + xnu,
+        name = "icon_cache_" + xnu + suffix,
         srcs = ["//kernel/switch:boot/icon_cache.c"],
         hdrs = ["switch/icon_cache.h"],
-        defines = ["XNU_%s=1" % xnu],
+        copts = RELEASE_COPTS if suffix else [],
+        defines = ["XNU_%s=1" % xnu] + ([] if suffix else ["DEVELOPMENT=1"]),
         includes = ["."],
     )
-    for xnu in ("12377_121_6", "10063_141_1")
+    for xnu, suffix in ICON_CACHE_BUILDS
 ]
 
 [
     host_test(
-        name = "switch_icon_cache_%s_test" % xnu,
+        name = "switch_icon_cache_%s%s_test" % (xnu, suffix),
         srcs = ["switch_icon_cache_test.cpp"],
-        defines = ["XNU_%s=1" % xnu],
-        deps = [":icon_cache_" + xnu],
+        defines = ["XNU_%s=1" % xnu] + (["SWITCH_TEST_RELEASE=1"] if suffix else []),
+        deps = [":icon_cache_" + xnu + suffix],
     )
-    for xnu in ("12377_121_6", "10063_141_1")
+    for xnu, suffix in ICON_CACHE_BUILDS
 ]
 
 # A daemon going clean above 80% of its inactive limit is warned once per growth, in both trees
@@ -1309,7 +1329,7 @@ host_test(
     includes = ["."],
 )
 
-# Both kernels' setup runs it once before launchd, with one error line, and reads the record the deploy writes.
+# Both kernels' setup runs it once before launchd, with one error line, and reads the record the GPU stager writes.
 host_test(
     name = "xnu_icon_cache_source_test",
     srcs = ["xnu_icon_cache_source_test.cpp"],
@@ -1320,7 +1340,7 @@ host_test(
         "//kernel/xnu-10063.141.1/iokit:Kernel/IOPMrootDomain.cpp",
         "//kernel/xnu-12377.121.6/bsd:kern/kern_exec.c",
         "//kernel/xnu-12377.121.6/iokit:Kernel/IOPMrootDomain.cpp",
-        "//tools/deploy:icon_cache.py",
+        "//drivers/TegraGM20BMetal:stage-tegra-gm20b-metal.py",
     ],
 )
 
@@ -1406,6 +1426,43 @@ copy_file(
     out = "switch/prefetch_quiesce.h",
 )
 
+copy_file(
+    name = "switch_prefetch_naming_hdr",
+    src = "//kernel/switch:vm/prefetch_naming.h",
+    out = "switch/prefetch_naming.h",
+)
+
+copy_file(
+    name = "switch_prefetch_vm_hdr",
+    src = "//kernel/switch:include/switch/prefetch_vm.h",
+    out = "switch/prefetch_vm.h",
+)
+
+host_test(
+    name = "switch_prefetch_record_test",
+    srcs = [
+        "switch/prefetch_list.h",
+        "switch/prefetch_naming.h",
+        "switch/prefetch_pace.h",
+        "switch/prefetch_vm.h",
+        "switch_prefetch_record_test.cpp",
+    ],
+    data = [
+        "//kernel/switch:vm/prefetch.c",
+        "//kernel/switch:vm/prefetch_save.c",
+        "//kernel/switch:vm/prefetch_vm.c",
+        "//kernel/xnu-10063.141.1/bsd:kern/decmpfs.c",
+        "//kernel/xnu-10063.141.1/bsd:vfs/vfs_cluster.c",
+        "//kernel/xnu-10063.141.1/osfmk:vm/vm_page.h",
+        "//kernel/xnu-10063.141.1/osfmk:vm/vm_pageout.c",
+        "//kernel/xnu-12377.121.6/bsd:kern/decmpfs.c",
+        "//kernel/xnu-12377.121.6/bsd:vfs/vfs_cluster.c",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_page_internal.h",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_pageout.c",
+    ],
+    includes = ["."],
+)
+
 host_test(
     name = "switch_prefetch_test",
     srcs = [
@@ -1418,19 +1475,24 @@ host_test(
         "//kernel/switch:shutdown/shutdown.c",
         "//kernel/switch:vm/prefetch.c",
         "//kernel/switch:vm/prefetch_save.c",
+        "//kernel/switch:vm/prefetch_vnode.c",
         "//kernel/switch:vm/prefetch_vm.c",
         "//kernel/xnu-10063.141.1/bsd:kern/kern_exec.c",
+        "//kernel/xnu-10063.141.1/bsd:kern/kern_shutdown.c",
         "//kernel/xnu-10063.141.1/bsd:vfs/vfs_cluster.c",
         "//kernel/xnu-10063.141.1/osfmk:vm/memory_object.c",
         "//kernel/xnu-10063.141.1/osfmk:vm/vm_fault.c",
+        "//kernel/xnu-10063.141.1/osfmk:vm/vm_object.c",
         "//kernel/xnu-10063.141.1/osfmk:vm/vm_object.h",
         "//kernel/xnu-10063.141.1/osfmk:vm/vm_page.h",
         "//kernel/xnu-10063.141.1/osfmk:vm/vm_pageout.c",
         "//kernel/xnu-10063.141.1/osfmk:vm/vm_resident.c",
         "//kernel/xnu-12377.121.6/bsd:kern/kern_exec.c",
+        "//kernel/xnu-12377.121.6/bsd:kern/kern_shutdown.c",
         "//kernel/xnu-12377.121.6/bsd:vfs/vfs_cluster.c",
         "//kernel/xnu-12377.121.6/osfmk:vm/memory_object.c",
         "//kernel/xnu-12377.121.6/osfmk:vm/vm_fault.c",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_object.c",
         "//kernel/xnu-12377.121.6/osfmk:vm/vm_object_xnu.h",
         "//kernel/xnu-12377.121.6/osfmk:vm/vm_page.h",
         "//kernel/xnu-12377.121.6/osfmk:vm/vm_page_internal.h",
@@ -2190,4 +2252,41 @@ host_test(
         "//kernel/xnu-12377.121.6/osfmk:vm/vm_shared_region_pager.c",
         "//kernel/xnu-12377.121.6/osfmk:vm/vm_shared_region_xnu.h",
     ],
+)
+
+# decmp_reprioritize_<tree>.h: vm_object.c from "void\nvm_decmp_upl_reprioritize(" through its closing brace.
+[
+    genrule(
+        name = "decmp_reprioritize_" + tree,
+        srcs = ["//kernel/xnu-{}/osfmk:vm/vm_object.c".format(version)],
+        outs = ["decmp_reprioritize_{}.h".format(tree)],
+        cmd = """awk '
+            prev == "void" && $$0 ~ /^vm_decmp_upl_reprioritize\\(/ { on = 1; print prev }
+            on { print }
+            on && $$0 == "}" { done = 1; exit }
+            { prev = $$0 }
+            END { if (!done) exit 1 }
+        ' $< > $@""",
+    )
+    for tree, version in [
+        ("10063", "10063.141.1"),
+        ("12377", "12377.121.6"),
+    ]
+]
+
+host_library(
+    name = "decmp_reprio",
+    srcs = [
+        "decmp_reprioritize_10063.h",
+        "decmp_reprioritize_12377.h",
+        "xnu_decmp_reprio_harness.c",
+    ],
+    hdrs = ["xnu_decmp_reprio_harness.h"],
+    includes = ["."],
+)
+
+host_test(
+    name = "xnu_decmp_reprio_test",
+    srcs = ["xnu_decmp_reprio_test.cpp"],
+    deps = [":decmp_reprio"],
 )

@@ -213,6 +213,7 @@ void switch_gpu_pack_client_unmap_gpu(tgm_vm *vm, SwitchGpuPackClient *client);
 
 extern "C" {
 void switch_gpu_boot_complete(void);
+void switch_gpu_pack_shutdown_request(void);
 void switch_gpu_pack_shutdown(void);
 }
 #endif

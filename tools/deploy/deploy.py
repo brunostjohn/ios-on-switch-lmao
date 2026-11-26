@@ -30,13 +30,11 @@ Steps:
   3 GPU bundle     <Data>/ngpu/addons/TegraGM20BMetal.{bundle,seed,pack} from --//deploy:gpu_bundle, via the
                    plugin's stager, which copies only the files whose sha256 the card does not already hold and
                    reads nothing more when the card's list matches the build (its CDHashes must be in the same
-                   build's kernel window: deploy the boot package built with that bundle); --remove-gpu removes it
-  3a icon cache    names the staged GPU build (the stager's list digest) in <Data>/Switch/icon-cache-gpu; at the next
-                   boot the kernel removes IconServices' __cache_info__ when it last did so for another build, and
-                   iconservicesagent empties its rendered icons at launch as after an OS update (icon_cache.py)
-  3b AWDL          --awdl on|off: creates or removes <Data>/Switch/awdl-enable, the empty file SwitchWLAN's AWDL
+                   build's kernel window: deploy the boot package built with that bundle); --remove-gpu removes it.
+                   The stager names what it staged in <Data>/Switch/icon-cache-gpu for the kernel's icon cache drop
+  3a AWDL          --awdl on|off: creates or removes <Data>/Switch/awdl-enable, the empty file SwitchWLAN's AWDL
                    (AirDrop's Wi-Fi link) is off without (read once per boot, after Data mounts)
-  3c gallery tiles --reset-gallery-snapshots BUNDLE...: removes those poster extensions' gallery tiles from
+  3b gallery tiles --reset-gallery-snapshots BUNDLE...: removes those poster extensions' gallery tiles from
                    PosterBoard's data store (poster_snapshots.py), so the next "Add New Wallpaper" renders them again
   4 launchd check  --launchd-check LABEL...: read-only, the jobs Data's launchd database disables (exit 1 if a label
                    is not among them; the kernel rewrites that database at every boot)
@@ -77,7 +75,6 @@ from tools.deploy import (
     compiler_inputs,
     data_owner,
     deployed,
-    icon_cache,
     joycon_pairing,
     poster_snapshots,
     pull_logs,
@@ -275,7 +272,6 @@ def _plan(
         else 'remove any staged compiler comparisons'
     )
     steps.append('remove the GPU bundle' if args.remove_gpu else 'GPU bundle: stage what changed')
-    steps.append('icon cache: name the GPU build, so the next boot lets IconServices re-render where it changed')
     steps += [f'AWDL {args.awdl} (<Data>/Switch/awdl-enable)'] if args.awdl else []
     steps += ['run the data migration again on the next boot'] if args.rerun_migration else []
     gallery = args.reset_gallery_snapshots
@@ -429,7 +425,6 @@ def _write(
     if not args.no_joycon_pairing:
         steps.run('Joy-Con pairing', joycon_pairing.stage, data_root, pairing, log)
     _stage_gpu(args, data_root, log)
-    steps.run('icon cache', icon_cache.present, data_root, log)
     if args.awdl:
         steps.run('AWDL', set_awdl, data_root, args.awdl == 'on', log)
     if args.reset_gallery_snapshots:

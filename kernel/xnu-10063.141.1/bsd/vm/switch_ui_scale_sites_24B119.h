@@ -9,7 +9,9 @@
  * - FrontBoardServices (.11), -[FBSDisplayConfiguration _initWithImmutableDisplay:originalDisplay:isMainDisplay:
  *   assertIfInvalid:] + 0x180: 21H461's site, the same seven instructions (movi v8.2d, #0 for fmov d8, xzr).
  * - libMobileGestalt (.13), MGIOMFBSupport.c's static screen info: 21H461's site. 27 still reads /chosen/display-scale
- *   as an integer and converts it (scvtf), so the ADT has no way to give a fractional answer.
+ *   as an integer and converts it (scvtf), so the ADT has no way to give a fractional answer. A main-screen-class miss
+ *   answers J181's class, 21 (264 ppi, 2x, 1620x2160), as 21H461's answers J120's. The class is this table's, not
+ *   /product artwork-device-subtype's (that function's switch only names subtypes for asset lookups).
  * - CoreUI (.15), the PDF and SVG vector rasterizers: 21H461's row bytes, unchanged in 27 (both now in d12/d11).
  * - ProgressUI (.65), -[PUIProgressWindow _layoutScreen]'s 239 x 4 point bar, the iPad (default) case: 21H461's site.
  * - CoverSheetKit (.13), +[CSDeviceDetermination categoryFromReferenceBounds:], the device row of every lock screen
@@ -97,12 +99,14 @@ static const struct switch_us_site switch_us_sites_24B119[] = {
 			/* 0x1b07bfa08: mov w4, #1; bl (the display-scale read); mov x19, x0 */
 			{ 0x3bfa08ULL, 12, 4, 8, SWITCH_US_MG_SCALE,
 			  { 0x24, 0x00, 0x80, 0x52, 0x1f, 0x5c, 0xff, 0x97, 0xf3, 0x03, 0x00, 0xaa }, { 0 } },
-			/* 0x1b07bfbec: str w20, [sp, #0x68]; scvtf s0, w19; stp s0, s8, [sp, #0x6c] -> fmov s0, w19 */
-			{ 0x3bfbecULL, 12, 4, 4, SWITCH_US_FIXED,
-			  { 0xf4, 0x6b, 0x00, 0xb9, 0x60, 0x02, 0x22, 0x1e, 0xe0, 0xa3, 0x0d, 0x2d },
-			  { 0x60, 0x02, 0x27, 0x1e } },
+			/* 0x1b07bfbe4: mov w8, #-1 (no class); stp w22, w21, [sp, #0x60]; str w20, [sp, #0x68];
+			 * scvtf s0, w19; stp s0, s8, [sp, #0x6c] -> mov w8, #21; fmov s0, w19 */
+			{ 0x3bfbe4ULL, 20, 0, 16, SWITCH_US_FIXED,
+			  { 0x08, 0x00, 0x80, 0x12, 0xf6, 0x57, 0x0c, 0x29, 0xf4, 0x6b, 0x00, 0xb9, 0x60, 0x02, 0x22, 0x1e,
+			    0xe0, 0xa3, 0x0d, 0x2d },
+			  { 0xa8, 0x02, 0x80, 0x52, 0xf6, 0x57, 0x0c, 0x29, 0xf4, 0x6b, 0x00, 0xb9, 0x60, 0x02, 0x27, 0x1e } },
 		},
-		"MobileGestalt", "main-screen-scale", false,
+		"MobileGestalt", "main-screen-scale and screen class", true,
 	},
 	{   /* .15 (text 0x1b8400000, file 0) */
 		{ 0x4f, 0x44, 0xc1, 0x4a, 0x9b, 0x0b, 0x35, 0x03, 0xaa, 0x96, 0x94, 0xef, 0xd6, 0x5b, 0xca, 0x4e },
@@ -320,7 +324,7 @@ static const struct switch_us_site switch_us_sites_24B119[] = {
 
 static const struct switch_us_cache switch_us_cache_24B119 = {
 	"24B119", "dyld_v1  arm64e", switch_us_sites_24B119,
-	sizeof(switch_us_sites_24B119) / sizeof(switch_us_sites_24B119[0]),
+	sizeof(switch_us_sites_24B119) / sizeof(switch_us_sites_24B119[0]), 21,
 };
 
 #endif /* _VM_SWITCH_UI_SCALE_SITES_24B119_H_ */

@@ -14,6 +14,7 @@
     "The audio HAL union (our plug-in) is hidden by switch-no-audio, like audiomxd itself.",
     "ProgressUI's boot logo (backboardd's Apple logo overlay) is boot/logo's, the same pixels hekate's bootlogo.bmp puts",
     "on the panel, under each name ProgressUI looks for at a truncated main-screen-scale of 1 or 2 (iPadOS 17 and 27).",
+    "On 17, J120's screen class (11) takes the j320 names instead when MobileGestalt says DeviceSupportsUSBTypeC.",
     "portrait (optional): staged only for a portrait-native kernel (drivers/NativeMobileDisplay/SwitchPortrait.h).",
     "debug (optional): staged only in debug boot packages (switch-fetchform, which the BlueTool stand-in runs on request;",
     "switch-texpeer, HW Test's second process for shared textures, which 21H461's stand-in and 24B119's launchd start).",
@@ -288,6 +289,21 @@
     {
       "path": "/System/Library/PrivateFrameworks/ProgressUI.framework/apple-logo~ipad.png",
       "source": "build/progressui/apple-logo~ipad.png"
+    },
+    {
+      "path": "/System/Library/PrivateFrameworks/ProgressUI.framework/apple-logo-j320@1x~ipad.png",
+      "source": "build/progressui/apple-logo~ipad.png",
+      "kind": "21H461"
+    },
+    {
+      "path": "/System/Library/PrivateFrameworks/ProgressUI.framework/apple-logo-j320@2x~ipad.png",
+      "source": "build/progressui/apple-logo~ipad.png",
+      "kind": "21H461"
+    },
+    {
+      "path": "/System/Library/PrivateFrameworks/ProgressUI.framework/apple-logo-j320~ipad.png",
+      "source": "build/progressui/apple-logo~ipad.png",
+      "kind": "21H461"
     },
     {
       "path": "/Library/Audio/Tunings/J120/VAD/j120_speaker_general.austrip",

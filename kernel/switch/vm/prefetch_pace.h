@@ -13,11 +13,24 @@ extern "C" {
 #define SWITCH_PREFETCH_MAX_RUN_PAGES 128u
 #define SWITCH_PREFETCH_MAX_GAP_PAGES 8u
 
-/* Until sd-io adds a lower card class, replay runs in tier 0 beside the foreground with no priority override.
- * At boot 2's measured 87.8 MB/s replay throughput (278 KiB commands), 3 x 512 KiB (1.5 MiB) bounds the worst
- * foreground wait behind queued replay I/O to ~17 ms (~33 ms at 45 MB/s storm throughput) while keeping the card
- * fed across APFS hash-check completions. */
+/* The replay's I/O is tier 0 (passive), and the SD driver queues it one class below tier-0 demand reads
+ * (NativeSwitchBlock SwitchSdPick.h switchSdClassOf), so a foreground read waits only for the replay chains already on
+ * the card or prepared behind it. 3 x 512 KiB (1.5 MiB) keeps the card fed across APFS hash-check completions at boot
+ * 2's measured 87.8 MB/s replay throughput (278 KiB commands). */
 #define SWITCH_PREFETCH_INFLIGHT_LIMIT (3u * (uint64_t)SWITCH_PREFETCH_MAX_RUN_PAGES * SWITCH_PREFETCH_LIST_PAGE)
+
+/* The replay reads a run once this boot is within this many seconds of the run's first use in the boot that recorded
+ * it. Read further ahead, runs arrive long before they are used: boot 2693043C replayed 1,663 MiB by 43 s, 546 MiB of
+ * it used, with the card 94-97% busy and its tier-0 page-ins waiting 33-93 ms at p90, and memory pressure reclaimed
+ * pages before use so they were read twice (853 in its 33-43 s window). */
+#define SWITCH_PREFETCH_LOOKAHEAD_S 15u
+
+/* Seconds after the replay began at which a run may be read; `when` is the recording's 1-based second of first use (0:
+ * unknown, read at once). */
+static inline uint64_t switch_pace_run_due_s(uint16_t when, uint32_t lookahead_s)
+{
+    return when > lookahead_s + 1u ? (uint64_t)when - 1u - lookahead_s : 0u;
+}
 
 /* Shared lock-free pacing state for the single replay thread and its VM / UPL / pressure / shutdown wakers.
  * All counters are updated atomically so VM hooks under pmap_lock_phys_page, vm_page_queues_lock or

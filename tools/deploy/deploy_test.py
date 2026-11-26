@@ -624,7 +624,6 @@ class InterruptedMigrationDeployTest(unittest.TestCase):
             mock.patch.object(deploy.cards, 'mounted', side_effect=lambda *_, **__: contextlib.nullcontext(fat)),
             mock.patch.object(deploy.deployed, 'record'),
             mock.patch.object(deploy, '_stage_gpu'),
-            mock.patch.object(deploy.icon_cache, 'present'),
         ):
             not_done = deploy._write(args, data, deploy.Volumes('disk9s1', None), None, Log())
         self.assertEqual(not_done, [])
@@ -661,7 +660,6 @@ class SshAuthorizedKeysDeployTest(unittest.TestCase):
             mock.patch.object(deploy.cards, 'mounted', side_effect=lambda *_, **__: contextlib.nullcontext(fat)),
             mock.patch.object(deploy.deployed, 'record'),
             mock.patch.object(deploy, '_stage_gpu'),
-            mock.patch.object(deploy.icon_cache, 'present'),
             mock.patch.object(deploy.bootstrap, 'stage'),
         ):
             return deploy._write(args, data, deploy.Volumes('disk9s1', None), None, Log())

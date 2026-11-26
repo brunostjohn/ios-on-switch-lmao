@@ -10,9 +10,17 @@ exports_files(["switch_threads.entitlements"])
 
 ios_binary(
     name = "switch-threads",
-    srcs = ["switch_threads.c"],
+    srcs = [
+        "switch_memory.c",
+        "switch_procs.c",
+        "switch_threads.c",
+    ],
     out = "switch-threads",
-    hdrs = ["threads.h"],
+    hdrs = [
+        "memory.h",
+        "procs.h",
+        "threads.h",
+    ],
     copts = [
         "-O2",
         "-Wall",
@@ -30,5 +38,24 @@ host_test(
     srcs = [
         "threads.h",
         "threads_test.cpp",
+    ],
+)
+
+host_test(
+    name = "memory_test",
+    srcs = [
+        "memory.h",
+        "memory_test.cpp",
+    ],
+)
+
+host_test(
+    name = "memory_walk_test",
+    srcs = [
+        "memory.h",
+        "memory_walk_test.cpp",
+        "procs.h",
+        "switch_memory.c",
+        "switch_procs.c",
     ],
 )

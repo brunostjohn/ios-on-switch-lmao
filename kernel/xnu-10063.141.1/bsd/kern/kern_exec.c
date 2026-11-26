@@ -8316,11 +8316,16 @@ native_switch_gamut_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 	printf("SwitchRawBoot: display gamut %s: MobileGestalt cache dropped (%d)\n", srgb ? "sRGB" : "not sRGB", error);
 }
 
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
+extern int switch_ui_scale_main_screen_class(void);
+#endif
+
 /* MobileGestalt answers what it reads of /product (GraphicsFeatureSetClass and its fallbacks, the memory class, the
  * artwork traits), of /product/audio (acoustic-id, its AcousticID), of /arm-io (soc-generation, which gates its codec
  * answers) and of the root (platform-name, its HardwarePlatform) from the same build-keyed cache, so an answer made
- * before a package changed one of them outlives the change. A digest of the four nodes' own properties is kept in a
- * marker, and the cache is dropped once whenever it differs. Failures are logged only; the next boot tries again. */
+ * before a package changed one of them outlives the change. A digest of the four nodes' own properties, and of the
+ * main-screen-class its patched cache text answers (vm_unix.c), is kept in a marker, and the cache is dropped once
+ * whenever it differs. Failures are logged only; the next boot tries again. */
 static void
 native_switch_identity_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 {
@@ -8345,6 +8350,13 @@ native_switch_identity_cache(proc_t p, user_addr_t scratch, mount_t data_mount)
 			}
 		}
 	}
+#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION
+	/* The class comes from the UI scale site pager's cache text, which only a code-decryption kernel patches. */
+	const int screen_class = switch_ui_scale_main_screen_class();
+	for (size_t i = 0; i < sizeof(screen_class); ++i) {
+		digest = (digest ^ ((const uint8_t *)&screen_class)[i]) * 0x100000001b3ULL;
+	}
+#endif
 	char text[24];
 	const int length = snprintf(text, sizeof(text), "%016llx\n", digest);
 	if (native_switch_file_unchanged(marker, text, length, data_mount, 0, 0, 0644)) return;

@@ -403,11 +403,12 @@ def _gpu_stage_impl(ctx):
     args.add("--base", base.path)
     args.add("--base-rlocation", _rlocation(ctx, base))
     args.add("--from-part", part)
+    args.add("--kext-digest", ctx.file.kext_digest)
     args.add("--out", manifest)
     ctx.actions.run(
         executable = ctx.executable._tool,
         arguments = [args],
-        inputs = [base, part],
+        inputs = [base, part, ctx.file.kext_digest],
         outputs = [manifest],
         mnemonic = "GpuStageManifest",
         progress_message = "Listing the GPU bundle, the shader seed and the pack for the Data volume",
@@ -422,6 +423,11 @@ gpu_stage = rule(
         "base": attr.label(mandatory = True, doc = "//gpu:base: the signed bundle"),
         "seed": attr.label(mandatory = True, providers = [SeedInfo]),
         "raw": attr.label(mandatory = True, allow_single_file = True, doc = "the pack's directory"),
+        "kext_digest": attr.label(
+            default = "//kernel:gpu_kext_digest",
+            allow_single_file = True,
+            doc = "the GPU kext's build identity, for the icon cache record (the stager's `# kext` line)",
+        ),
         "_tool": attr.label(default = "//tools/gpu:stage_manifest", executable = True, cfg = "exec"),
     },
 )
