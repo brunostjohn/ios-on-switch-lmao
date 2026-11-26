@@ -3664,6 +3664,7 @@ device_test(
 # Every pre-built state of the built pack pushes its rule's zero-source kill, both ways (Device::build, S7)
 device_test(
     name = "device_kill_pack_test",
+    size = "medium",  # about a minute: every tier-0 record of the pack is placed
     srcs = ["device_kill_pack_test.cpp"],
     data = ["//gpu/seed:pack"],
     env = {"SWITCH_METAL_KILL_PACK": "$(rootpath //gpu/seed:pack)/pack.bin"},

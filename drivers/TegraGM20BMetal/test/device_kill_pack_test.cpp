@@ -57,7 +57,8 @@ TEST(GM20BKillPack, EveryPrebuiltStatesSegmentPushesItsRulesKill)
         killed += pl->blendKill;
     }
     std::printf("%zu pre-built states, %zu of them killing zero-source pixels\n", prebuilt, killed);
-    EXPECT_GT(prebuilt, 0u);
+    EXPECT_GT(killed, 0u) << "no segment of the pack kills: the rule is checked one way only";
+    EXPECT_GT(prebuilt - killed, 0u) << "every segment of the pack kills: the rule is checked one way only";
     EXPECT_EQ(dev.stats.blendKillPackDisagreements.load(), 0u);
 }
 
