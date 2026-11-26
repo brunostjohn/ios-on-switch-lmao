@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // A GM20B channel's own host1x syncpoint (host1x.md A2). Once a host1x consumer has asked for one, every job whose end
-// drains the channel increments it after the job's fence release, so the consumer's stream waits on the producer itself
-// and the bridge makes no GPU job of its own. Only a token inside a draining job is answered: a token of a job that did
+// drains the channel increments it right after that drain and ahead of the job's fence release (gpu_exec.c
+// chan_fence_job), so the consumer's stream waits on the producer itself and the bridge makes no GPU job of its own. Only a token inside a draining job is answered: a token of a job that did
 // not drain would wait on a later job, which can itself wait on work that comes after the consumer.
 #include <IOKit/IOLib.h>
 #include "SwitchGpuTimelineInternal.h"

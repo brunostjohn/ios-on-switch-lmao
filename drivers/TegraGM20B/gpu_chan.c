@@ -66,8 +66,9 @@ static void chan_free(struct tgm_chan *chan)
 		nvif_object_dtor(&chan->obj[i]);
 	nvif_object_unmap(&chan->user);
 	nvif_object_dtor(&chan->user);
-	/* After the channel: its last job's syncpoint increments trail its fence release, and the timeline's close can hand
-	 * its syncpoint on (SwitchGpuTimelineInternal.h syncpt_return_locked) */
+	/* After the channel: until the teardown above took it off the runlist, the channel could still execute a job's
+	 * increments (one whose fence never landed). Only now can the timeline's close hand its syncpoint on
+	 * (SwitchGpuTimelineInternal.h syncpt_return_locked), so none of them lands on the next owner's. */
 	switch_gpu_timeline_close(chan->timeline);
 	chan->timeline = NULL;
 	/* the channel is gone: unmap its ring (TLB invalidated) before the ring's pages go back to the pool */
