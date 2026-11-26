@@ -1170,9 +1170,9 @@ TEST_F(Bridge, AProducerThatStoppedShortHasTheCpuMakeTheIncrementsItOwed)
 // display's fence and a CPU wait on the same covered token are not, nor is a consumer that took a GPU job.
 TEST_F(Bridge, OnlyAHost1xConsumersJoblessBridgeIsCountedOnItsProducingChannel)
 {
-	const auto source = token(312, 13);
+	const auto source = token(322, 13);
 	statuses[key(source)] = 0;
-	covered[key(source)] = {kProducerSyncpoint + 7, 60, 312};
+	covered[key(source)] = {kProducerSyncpoint + 12, 60, 322};
 	notedJobless.clear();
 	const auto fenced = [](void *, int) {};
 	ASSERT_EQ(switch_gpu_bridge_fence(&source, 1, fenced, nullptr), 0);
@@ -1180,33 +1180,68 @@ TEST_F(Bridge, OnlyAHost1xConsumersJoblessBridgeIsCountedOnItsProducingChannel)
 	auto *bridge = submit({source});
 	ASSERT_NE(bridge, nullptr);
 	EXPECT_EQ(notedJobless, std::vector<uint32_t>{13});
-	const auto plain = token(313, 14);
+	const auto plain = token(323, 14);
 	statuses[key(plain)] = 0;
 	auto *job = submit({plain});
 	ASSERT_NE(job, nullptr);
 	EXPECT_EQ(notedJobless, std::vector<uint32_t>{13}) << "a bridge with a GPU job of its own";
 	statuses[key(source)] = 1;
 	statuses[key(plain)] = 1;
-	coveringStatus[{13, 1, 312}] = 1;
+	coveringStatus[{13, 1, 322}] = 1;
 	finish();
 	release(bridge);
 	release(job);
+}
+
+// A host1x stream that waits on a bridge in hardware with no completion callback (the display's plane stream, NVENC's
+// direct input) watches it: from then until it retires the hang check covers its producer as a waiter's, the bridge
+// channel at a bridge job and the producer's channel at a jobless one's covering job. A submit alone arms nothing.
+TEST_F(Bridge, AWatchedBridgeIsHangCheckedWithNoCallback)
+{
+	const auto stalled = token(330, 3);
+	statuses[key(stalled)] = 0;
+	const auto source = token(331, 15);
+	statuses[key(source)] = 0;
+	covered[key(source)] = {kProducerSyncpoint + 13, 70, 331};
+	switch_bridge_now = 5000;
+	auto *job = submit({stalled});
+	auto *jobless = submit({source});
+	ASSERT_NE(job, nullptr);
+	ASSERT_NE(jobless, nullptr);
+	EXPECT_EQ(hangCheck()->deadline, 0u) << "a submit alone";
+	progressChecks = 0;
+	producerChecks.clear();
+	EXPECT_EQ(switch_gpu_bridge_watch(job), 0);
+	EXPECT_EQ(switch_gpu_bridge_watch(jobless), 0);
+	EXPECT_EQ(hangCheck()->deadline, 5000u + 1000000000u);
+	fireHangCheck(1000005000);
+	EXPECT_EQ(progressChecks.load(), 1u) << "the bridge channel, at the watched bridge job";
+	ASSERT_EQ(producerChecks.size(), 1u);
+	EXPECT_EQ(producerChecks[0], std::make_pair(15u, 331u))
+		<< "its channel, at the covering job";
+	statuses[key(stalled)] = 1;
+	statuses[key(source)] = 1;
+	coveringStatus[{15, 1, 331}] = 1;
+	finish();
+	EXPECT_EQ(hangCheck()->deadline, 0u) << "nothing watched is left";
+	release(job);
+	release(jobless);
 }
 
 // A kill landing between the slot's reads fails the token and stops the channel at once. The tokens are read first, so
 // a failure they show comes with the channel's end, and the CPU makes the increments the channel never will.
 TEST_F(Bridge, AKillBetweenTheTokenAndTheChannelReadsStillHasTheCpuMakeTheIncrements)
 {
-	const auto source = token(310, 7);
+	const auto source = token(320, 7);
 	statuses[key(source)] = 0;
-	covered[key(source)] = {kProducerSyncpoint + 5, 40, 310};
-	syncpoints[kProducerSyncpoint + 5] = 36;
+	covered[key(source)] = {kProducerSyncpoint + 10, 40, 320};
+	syncpoints[kProducerSyncpoint + 10] = 36;
 	const uint32_t releasesBefore = failureReleases;
 	auto *bridge = submit({source});
 	ASSERT_NE(bridge, nullptr);
 	onTokenRead = [&] {
 		statuses[key(source)] = -5;
-		coveringStatus[{7, 1, 310}] = -5;
+		coveringStatus[{7, 1, 320}] = -5;
 		stoppedChannels.insert(7);
 	};
 	switch_gpu_bridge_completed();
@@ -1215,7 +1250,7 @@ TEST_F(Bridge, AKillBetweenTheTokenAndTheChannelReadsStillHasTheCpuMakeTheIncrem
 	stoppedChannels.erase(7);
 	EXPECT_EQ(switch_gpu_bridge_status(bridge), -5);
 	EXPECT_EQ(failureReleases, releasesBefore + 1);
-	EXPECT_EQ(syncpoints[kProducerSyncpoint + 5], 40u);
+	EXPECT_EQ(syncpoints[kProducerSyncpoint + 10], 40u);
 	release(bridge);
 }
 
@@ -1223,22 +1258,22 @@ TEST_F(Bridge, AKillBetweenTheTokenAndTheChannelReadsStillHasTheCpuMakeTheIncrem
 // that then stopped owes none: making them on the CPU would cancel a consumer that reads good data.
 TEST_F(Bridge, AStoppedProducerWhoseCoveringFenceLandedOwesNoIncrements)
 {
-	const auto source = token(311, 7);
+	const auto source = token(321, 7);
 	statuses[key(source)] = 0;
-	covered[key(source)] = {kProducerSyncpoint + 6, 50, 311};
-	syncpoints[kProducerSyncpoint + 6] = 48;
+	covered[key(source)] = {kProducerSyncpoint + 11, 50, 321};
+	syncpoints[kProducerSyncpoint + 11] = 48;
 	const uint32_t releasesBefore = failureReleases;
 	auto *bridge = submit({source});
 	ASSERT_NE(bridge, nullptr);
 	statuses[key(source)] = 1;
-	coveringStatus[{7, 1, 311}] = 1;
+	coveringStatus[{7, 1, 321}] = 1;
 	stoppedChannels.insert(7);
 	switch_gpu_bridge_completed();
 	pump();
 	stoppedChannels.erase(7);
 	EXPECT_EQ(switch_gpu_bridge_status(bridge), 1);
 	EXPECT_EQ(failureReleases, releasesBefore);
-	EXPECT_EQ(syncpoints[kProducerSyncpoint + 6], 48u);
+	EXPECT_EQ(syncpoints[kProducerSyncpoint + 11], 48u);
 	release(bridge);
 }
 

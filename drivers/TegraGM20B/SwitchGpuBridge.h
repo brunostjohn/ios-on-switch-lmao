@@ -34,6 +34,10 @@ int switch_gpu_bridge_wait(const struct switch_gpu_bridge *bridge);
  * for switch_gpu_bridge_wait. One per bridge (-16 for a second); the caller keeps its own reference. */
 int switch_gpu_bridge_notify(const struct switch_gpu_bridge *bridge, void (*completed)(void *, int),
 			     void *context);
+/* A host1x stream waits on the bridge's syncpoint in hardware with no completion callback (the display's plane stream,
+ * NVENC's direct input): the hang check covers its producers as it does a waiter's, from this call until the bridge
+ * retires. A second call does nothing. */
+int switch_gpu_bridge_watch(const struct switch_gpu_bridge *bridge);
 void switch_gpu_bridge_release(struct switch_gpu_bridge **bridge);
 int switch_gpu_bridge_wait_room(void);
 /* Explicit CPU acquisition only; waits on the bridge interrupt, never polls a producer. */

@@ -16,7 +16,7 @@ struct switch_gpu_bridge {
 	// `covering` names (its channel, its last seqno) drained
 	uint32_t producer;
 	switch_gpu_backing_token covering;
-	bool active, notified;
+	bool active, notified, watched;
 	int result;
 	void (*completed)(void *, int);
 	void *context;

@@ -350,6 +350,22 @@ extern "C" int switch_gpu_bridge_notify(const switch_gpu_bridge *bridge,
 	return 0;
 }
 
+extern "C" int switch_gpu_bridge_watch(const switch_gpu_bridge *bridge)
+{
+	if (!bridge)
+		return -22;
+	auto *job = const_cast<switch_gpu_bridge *>(bridge);
+	IOLockLock(queue.lock);
+	if (job->active && !job->watched) {
+		++job->waiters;
+		job->watched = true;
+		if (!queue.checkAt)
+			armHangCheck(kHangCheckNs);
+	}
+	IOLockUnlock(queue.lock);
+	return 0;
+}
+
 extern "C" void switch_gpu_bridge_release(switch_gpu_bridge **bridge)
 {
 	if (!bridge || !*bridge)
