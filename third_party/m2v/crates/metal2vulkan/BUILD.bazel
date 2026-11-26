@@ -273,10 +273,14 @@ rust_test(
 )
 
 # A slice-choosing vertex function links with the layered storage form, and a slice-reading fragment function compiled
-# for another vertex function stays refused (pipeline/link/varyings.rs)
+# for another vertex function stays refused (pipeline/link/varyings.rs); an amplified draw takes the storage form one
+# amplification at a time (tests/engine_amplified_storage.rs)
 rust_test(
     name = "layered_storage_link_test",
-    args = ["tests::engine_layered_storage_link::"],
+    args = [
+        "tests::engine_amplified_storage::",
+        "tests::engine_layered_storage_link::",
+    ],
     compile_data = glob(["tests/**"]),
     crate = ":metal2vulkan",
     data = ["@gpu_llvm_as//:bin/llvm-as"],

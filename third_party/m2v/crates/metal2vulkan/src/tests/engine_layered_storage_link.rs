@@ -23,10 +23,11 @@ use crate::pipeline::testing::{llvm_assemble, AssembleError};
 use crate::pipeline::{FunctionDescriptor, RenderPipelineDescriptor, StageSource};
 use crate::Budget;
 
-/// `slice_vertex` writes its vertex id as `[[render_target_array_index]]`; `slice_reader` returns
-/// the slice it reads, `layered_fetch` adds its position to the color 0 it reads, and
-/// `layered_fetch_discard` does so where that color's red is not negative and discards elsewhere;
-/// `layered_stencil` returns its position and the stencil reference 7.
+/// `slice_vertex` writes its vertex id as `[[render_target_array_index]]` and `plain_vertex` its
+/// position alone; `slice_reader` returns the slice it reads, `plain_color` its position as color
+/// 0, `layered_fetch` adds its position to the color 0 it reads, and `layered_fetch_discard` does so
+/// where that color's red is not negative and discards elsewhere; `layered_stencil` returns its
+/// position and the stencil reference 7.
 const MODULE: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
 target triple = "air64_v28-apple-macosx26.0.0"
 
@@ -51,6 +52,11 @@ entry:
   %f = uitofp i32 %layer to float
   %v = insertelement <4 x float> %pos, float %f, i32 2
   ret <4 x float> %v
+}
+
+define <4 x float> @plain_color(<4 x float> %pos) {
+entry:
+  ret <4 x float> %pos
 }
 
 define <4 x float> @layered_fetch(<4 x float> %pos, <4 x float> %previous) {
@@ -82,7 +88,8 @@ keep:
 }
 
 !air.vertex = !{!0, !60}
-!air.fragment = !{!10, !20, !40, !50}
+!air.fragment = !{!10, !20, !40, !50, !62}
+!62 = !{ptr @plain_color, !11, !53}
 !60 = !{ptr @plain_vertex, !61, !4}
 !61 = !{!2}
 !0 = !{ptr @slice_vertex, !1, !4}
@@ -115,7 +122,7 @@ keep:
 
 /// [`MODULE`] assembled by `llvm-as` through a scratch file removed at once, or `None` (skipped
 /// visibly) without it
-fn module() -> Option<Vec<u8>> {
+pub(super) fn module() -> Option<Vec<u8>> {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     let path = std::env::temp_dir().join(format!(
         "m2v-layered-storage-link-{}-{}.ll",
@@ -138,7 +145,7 @@ fn module() -> Option<Vec<u8>> {
 /// A device of the raw GM20B path's shape (no committed profile is vendored): every format the
 /// translator asks about supports everything, framebuffer fetch is the pixel interlock, and a
 /// vertex function may write `Layer`
-fn device() -> Device {
+pub(super) fn device() -> Device {
     use crate::device::description::FormatProperties;
     use crate::device::profile::Limits;
     use crate::device::requirements::{ApiVersion, VkExtension, VkFeature};
@@ -213,7 +220,7 @@ fn render(lib: &Library, fragment: StageSource) -> RenderPipelineDescriptor {
     d
 }
 
-fn function(lib: &Library, name: &str) -> StageSource {
+pub(super) fn function(lib: &Library, name: &str) -> StageSource {
     StageSource::Function(FunctionDescriptor::new(
         lib.function(name).unwrap_or_else(|e| panic!("{name}: {e}")),
     ))
@@ -293,10 +300,10 @@ fn storage_images(words: &[u32], format: u32) -> Vec<bool> {
 }
 
 /// The SPIR-V image formats of the stand-ins: `R32f` (depth) and `R8ui` (stencil)
-const R32F: u32 = 3;
+pub(super) const R32F: u32 = 3;
 const R8UI: u32 = 39;
 
-fn stand_ins(stages: &[crate::pipeline::artifact::StageModule], format: u32) -> Vec<bool> {
+pub(super) fn stand_ins(stages: &[crate::pipeline::artifact::StageModule], format: u32) -> Vec<bool> {
     stages
         .iter()
         .flat_map(|m| storage_images(&m.spirv, format))
@@ -397,64 +404,4 @@ fn a_layered_pass_s_shader_side_stencil_reads_a_shadow_of_its_layers() {
     assert_eq!(stand_ins(&layered.stages, R8UI), vec![true], "one 2D-array shadow");
     let again = layered.plan(&dev, &shape(2)).expect("the layered variant's plan");
     assert_eq!(again.variant, two.variant, "a fixed point");
-}
-
-/// A fetching state of vertex amplification (`maxVertexAmplificationCount` 2) whose fragment
-/// function discards, beside a `Depth32Float` attachment, as Weather's VFX particles are: drawn one
-/// amplification at a time into a pass of two layers, a draw whose depth test writes runs the
-/// layered in-shader depth test variant, each amplification's fragments at its own layer, as the
-/// raw path draws every amplified state. Drawn as multiview views it is refused: one image of the
-/// pass's layers addressed at `Layer` does not model what each view reads and writes.
-#[test]
-fn an_amplified_fetching_state_takes_the_storage_form_drawn_one_amplification_at_a_time() {
-    use crate::bind::{VertexAmplification, ViewMapping};
-    use crate::error::{BindError, Feature, Needs};
-    let Some(bc) = module() else {
-        return;
-    };
-    let lib = Library::from_air(&bc).expect("library");
-    let dev = device();
-    let budget = Budget::standard();
-    let vertex = FunctionDescriptor::new(lib.function("plain_vertex").expect("plain_vertex"));
-    let mut d = RenderPipelineDescriptor::new(StageSource::Function(vertex));
-    d.fragment = Some(function(&lib, "layered_fetch_discard"));
-    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
-    d.depth_format = Some(PixelFormat::Depth32Float);
-    d.max_vertex_amplification_count = 2;
-    let p = dev.compile_render_pipeline(&d, &budget).expect("pipeline");
-    let shape = |one_at_a_time: bool| {
-        let mut amplification =
-            VertexAmplification::new(2, vec![ViewMapping::new(0, 0), ViewMapping::new(0, 1)]);
-        amplification.one_at_a_time = one_at_a_time;
-        BindState {
-            fragment_tests: FragmentTests::Depth { writes: true },
-            render_target_array_length: 2,
-            vertex_amplification: amplification,
-            ..Default::default()
-        }
-        .shape()
-    };
-    let drawn = p.plan(&dev, &shape(true)).expect("one amplification at a time");
-    assert!(
-        drawn.variant.shader_tests
-            && drawn.variant.layered_storage
-            && drawn.variant.amplification_draws.is_some(),
-        "{:?}",
-        drawn.variant
-    );
-    let variant = dev
-        .compile_render_variant(&d, &drawn.variant, &budget)
-        .expect("the amplified in-shader depth test");
-    let facts: Vec<RuntimeFact> = variant.dependencies.iter().map(|d| d.fact).collect();
-    assert!(facts.contains(&RuntimeFact::LayeredStorage), "{facts:?}");
-    assert_eq!(stand_ins(&variant.stages, R32F), vec![true], "one 2D-array stand-in");
-    let again = variant.plan(&dev, &shape(true)).expect("the variant's plan");
-    assert_eq!(again.variant, drawn.variant, "a fixed point");
-    match p.plan(&dev, &shape(false)) {
-        Err(BindError::Unsupported(u)) => assert_eq!(
-            (u.feature, u.needs),
-            (Feature::FramebufferFetch, Needs::NotImplemented)
-        ),
-        other => panic!("as views: {:?}", other.map(|_| ())),
-    }
 }
