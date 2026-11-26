@@ -247,7 +247,9 @@ void Service::remember(const Asked &asked, int32_t ran)
     const int32_t result = ran & 0xff;
     if (ran & kStoredBit)
         return;
-    if ((result == TegraGM20BCompileMade || result == TegraGM20BCompileRefused) && !asked.request.empty())
+    // a scoped request's scope is not logged with it, so a replay could file it under none: its app asks it again
+    if ((result == TegraGM20BCompileMade || result == TegraGM20BCompileRefused) && !asked.request.empty() &&
+        !gm20b::scoped(asked.prepared.request))
         log_.add(asked.prepared.name, asked.request);
     if (result == TegraGM20BCompileRefused)
         refusals_->confirm(asked.prepared.name);
@@ -305,7 +307,11 @@ void Service::take(uint64_t stack)
     const Waiter waiter = {reply.id, reply.client, bandOf(reply.qos, waited), false};
     Prepared prepared;
     std::string why;
-    if (!prepare(request, stack, system_, prepared, why, reply.client, clientLibraries_.get())) {
+    gm20b::StoreScope scope;
+    scope.kind = reply.scope.kind;
+    scope.identity.assign(reinterpret_cast<const char *>(reply.scope.identity),
+                          std::min<size_t>(reply.scope.bytes, sizeof reply.scope.identity));
+    if (!prepare(request, stack, system_, prepared, why, reply.client, clientLibraries_.get(), scope)) {
         os_log_error(logger(), "SwitchShaderCompiler: pid %d's request not taken: %{public}s", reply.pid, why.c_str());
         return complete(waiter, TegraGM20BCompileUnavailable, TegraGM20BCompileCompiled);
     }
@@ -427,7 +433,8 @@ void Service::warm(uint64_t stack)
     log_.replay([&](const std::string &request, gm20b::Digest &name) {
         Prepared prepared;
         std::string why;
-        if (!prepare(restacked(request, stack), stack, system_, prepared, why)) {
+        // a request naming a library off the system volume was filed under its asker's scope, which the log does not keep
+        if (!prepare(restacked(request, stack), stack, system_, prepared, why) || gm20b::scoped(prepared.request)) {
             dropped++;
             return false;
         }

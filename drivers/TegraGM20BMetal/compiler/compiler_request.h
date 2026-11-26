@@ -12,6 +12,7 @@
 #include <vector>
 #include "../compile_request.h"
 #include "../metallib.h"
+#include "../store_key.h"
 #include "compiler_client_libraries.h"
 
 namespace switch_compiler {
@@ -24,6 +25,8 @@ public:
     {}
 
     bool air(const std::string &path, std::map<std::string, gm20b::AirHash> &out, std::string &why);
+    // function_tags.h listedFacts of `function` in the system library at `path`, read now ("" for none)
+    std::string facts(const std::string &path, const std::string &function);
     // Where `path` is under `root`, once it is known to stay on the system volume: what the compiler opens
     static bool resolve(const std::string &root, const std::string &path, std::string &real, std::string &why);
 
@@ -42,8 +45,9 @@ struct Prepared {
     std::vector<std::shared_ptr<const MappedClientLibrary>> clientLibraries;
 };
 
+// `scope`: the asking process's (TegraGM20BAbiCompilerTakeReply scope), which a scoped request is filed under
 bool prepare(const std::string &bytes, uint64_t stack, SystemLibraries &system, Prepared &out, std::string &why,
-             uint64_t client = 0, ClientLibraries *clientLibraries = nullptr);
+             uint64_t client = 0, ClientLibraries *clientLibraries = nullptr, const gm20b::StoreScope &scope = {});
 
 // The request `bytes` as one of stack `stack`, which prepare then keys from its fields as this build keys a state: what
 // an earlier build logged, made again under this build's key. Bytes of another layout (its magic, compile_request.cpp)

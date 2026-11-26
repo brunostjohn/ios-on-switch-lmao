@@ -85,7 +85,7 @@ struct LibraryCompiler {
             const gm20b::CacheKey k = gm20b::libraryCacheKey(r.stack, r.codeGenType, r.codeGen);
             if (k.key != r.key || !gm20b::codegen::requestOk(r.codeGenType, r.codeGen))
                 return int32_t(TegraGM20BCompileUnavailable);
-            const gm20b::StoreKey key = gm20b::storeKeyOf(k, r, {});
+            const gm20b::StoreKey key = gm20b::storeKeyOf(k, r, {}, {});
             const std::string entry = gm20b::encodeLibraryEntry(key.content, log.empty() ? &made : nullptr, log);
             store.put(key.name.data(), reinterpret_cast<const uint8_t *>(entry.data()), uint32_t(entry.size()), true);
             return int32_t(log.empty() ? TegraGM20BCompileMade : TegraGM20BCompileRefused);

@@ -99,6 +99,9 @@ inline uint64_t gm20bNewIdentity()
     std::optional<gm20b::AirHash> _air;  // its library function's HASH tag; none where its library lists none
     uint64_t _stageHash;                 // its part of a state's fast key (TegraGM20BMetalPipelineKey.h stageHash)
     uint8_t _patchType;                  // its MTLPatchType, its TESS tag's
+    // function_tags.h listedFacts, read the first time a store request names it (functionFacts)
+    std::once_flag _factsOnce;
+    std::string _facts;
 }
 @property (nonatomic, copy) NSString *name;
 @end

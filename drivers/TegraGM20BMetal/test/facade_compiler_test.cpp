@@ -63,9 +63,9 @@ struct FactsCompiler {
             const gm20b::CacheKey k = facts ? gm20b::factsCacheKey(r.stack, r.key.substr(sizeof kFactsPrefix - 1))
                                             : gm20b::kernelCacheKey(r.stack, r.key.substr(sizeof kKernelPrefix - 1));
             const gm20b::StoreKey key = harness::requestStoreKey(k, r);
-            const std::string entry = facts ? gm20b::encodeFactsEntry(key.content, kFacts, "")
-                                            : gm20b::encodeKernelEntry(key.content, nullptr,
-                                                                       "a kernel this compiler refuses");
+            const std::string entry =
+                facts ? gm20b::encodeFactsEntry(key.content, kFacts, "")
+                      : gm20b::encodeKernelEntry(key.content, nullptr, "a kernel this compiler refuses");
             store.put(key.name.data(), reinterpret_cast<const uint8_t *>(entry.data()), uint32_t(entry.size()));
             return int32_t(facts ? TegraGM20BCompileMade : TegraGM20BCompileRefused);
         };

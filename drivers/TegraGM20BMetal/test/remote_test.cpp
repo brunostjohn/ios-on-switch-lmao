@@ -132,7 +132,8 @@ public:
                 infos++;
                 if (infoCalled != kIOReturnSuccess)
                     return infoCalled;
-                *static_cast<TegraGM20BAbiCompilerInfoReply *>(out) = {store.mappedBytes(), kStack, flags, generation};
+                *static_cast<TegraGM20BAbiCompilerInfoReply *>(out) = {
+                    store.mappedBytes(), kStack, flags, generation, {}};
                 return kIOReturnSuccess;
             case TegraGM20BMethodMap:
                 maps++;

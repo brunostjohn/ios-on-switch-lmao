@@ -60,6 +60,19 @@ bool Remote::capable()
     return methods == CompilerMethods::Present;
 }
 
+const StoreScope &Remote::scope()
+{
+    std::call_once(scopeOnce_, [this] {
+        TegraGM20BAbiCompilerInfoReply info = {};
+        if (call(TegraGM20BMethodCompilerInfo, nullptr, 0, &info, sizeof info) != kIOReturnSuccess)
+            return;
+        scope_.kind = info.scope.kind;
+        scope_.identity.assign(reinterpret_cast<const char *>(info.scope.identity),
+                               std::min<size_t>(info.scope.bytes, sizeof info.scope.identity));
+    });
+    return scope_;
+}
+
 void Remote::refresh(const TegraGM20BAbiCompilerInfoReply &info)
 {
     if (info.flags & (TegraGM20BCompilerExpected | TegraGM20BCompilerRegistered))

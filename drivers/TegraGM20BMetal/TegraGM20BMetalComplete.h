@@ -94,6 +94,9 @@ public:
     bool library(uint32_t type, const std::string &bytes, MadeLibrary &out, std::string &failure, bool &refused);
 
     void backgroundKernel(std::function<void()> work);
+    // Whether every barrier twin asked in the background (askTwin) was attached or dropped within `ns`: what a test waits
+    // for before it tears down the compiler and store it serves the device with
+    bool settleTwins(uint64_t ns);
     void trim();
 
     Compiler::Stats stats() const;
@@ -138,6 +141,7 @@ private:
     // own: from the store, else asked of the compiler at the background class, so no creation waits for it; attached to
     // `made` once placed (draws load the slot with acquire), and asked once per pipeline
     void askTwin(const Ask &a, const CacheKey &k, Pipeline *made);
+    void twinOf(const Ask &a, const CacheKey &k, Pipeline *made);
     void attachTwin(Pipeline *made, const RuntimeRecord &record, bool caTransform);
 
     struct Kernel {
@@ -151,6 +155,7 @@ private:
     uint64_t stack_;
     dispatch_queue_t queue_, persistenceQueue_;
     dispatch_group_t pending_;
+    dispatch_group_t twins_;  // the barrier twins asked in the background (askTwin), which ~Completion waits for too
     std::atomic<bool> stopping_{false};
     gm20b::Mutex kernelLock_;  // map membership only; each kernel owns its single-flight lock
     // the pipelines whose twins were asked: creation threads and the answer queue ask at once, each once per storage

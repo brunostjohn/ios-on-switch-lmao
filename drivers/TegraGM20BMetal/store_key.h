@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-// A request's key in the system shader compiler's store (compiler/compiler_store.h), shared by every process: what its
-// record is made from and nothing that says where the request came from. Each stage's function is its AIR (the HASH tag
-// Apple's compiler wrote into the metallib's function list: the SHA-256 of the function's bitcode, which the translator
-// checks against the bitcode before it compiles anything of a library it did not read off a sealed volume) with the
-// constants it was made with; the main stages' names and every library's path or bytes are left out, so one shader
-// in two apps' libraries, or in a framework and a copy of it, is one entry. A linked function keeps the name it was made
-// under, which its caller links by. A render state adds the descriptor's fields as its key names them and its variant; a
+// A request's key in the system shader compiler's store (compiler/compiler_store.h): what its record is made from and
+// nothing that says where the request came from. Each stage's function is its AIR (the HASH tag Apple's compiler wrote
+// into the metallib's function list), what the list and the public metadata say of the function outside its bitcode, and
+// the constants it was made with; the main stages' names and every library's path or bytes are left out. A system
+// library's records are every process's: one shader of a framework is one entry. Tags of any other library are the
+// client's word, unchecked, so its records are filed under the asking process's scope (StoreScope) and reach no other.
+// A linked function keeps the name it was made under, which its caller links by. A render state adds the descriptor's fields as its key names them and its variant; a
 // compute request its CacheKey's text (its AIR, constants, stage input, linked functions, limits and the client's
 // binding text, which its record is made by) and a kernel its dispatch.
 //
@@ -25,8 +25,32 @@ struct StoreKey {
     Digest name{};
 };
 
-// `k`: the request's CacheKey as the compiler makes it (compiler/compiler_request.h prepare); `air[i]`: r.stages[i]'s AIR
-StoreKey storeKeyOf(const CacheKey &k, const CompileRequest &r, const std::vector<AirHash> &air);
+// A request stage's function as the store keys it: its AIR, and what its library says of it outside the bitcode the AIR
+// names (function_tags.h listedFacts)
+struct StageContent {
+    AirHash air{};
+    std::string facts;
+};
+
+// The process a request is made for, as the kernel read it (TegraGM20BAbiCompilerScope): kind 0 is none
+struct StoreScope {
+    uint32_t kind = 0;
+    std::string identity;
+};
+
+// Whether `r`'s record is filed under its asker's scope: it names a library the compiler does not read off the sealed
+// system volume. Such a library's tags are the client's word alone, so its records reach no other process; a system
+// library's records are every process's.
+bool scoped(const CompileRequest &r);
+
+// function_tags.h listedFacts of `name` in the AIR slice Metal loads of a metallib file's bytes, or of one at `path`
+std::string metallibListedFacts(const uint8_t *file, size_t size, const std::string &name);
+std::string metallibListedFacts(const std::string &path, const std::string &name);
+
+// `k`: the request's CacheKey as the compiler makes it (compiler/compiler_request.h prepare); `stages[i]`: r.stages[i]'s
+// function; `scope`: the asker's, which a scoped request is filed under
+StoreKey storeKeyOf(const CacheKey &k, const CompileRequest &r, const std::vector<StageContent> &stages,
+                    const StoreScope &scope);
 
 // The store's name of a program slot's bytes (record.h programSlot), apart from every record's name: its size and a fixed
 // number of its words, its first 256 bytes (its header and first instructions) and words spread over the rest. Like a

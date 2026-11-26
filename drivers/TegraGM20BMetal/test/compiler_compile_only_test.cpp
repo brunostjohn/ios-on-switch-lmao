@@ -202,7 +202,7 @@ void reflectionsAsMetal()
         std::string entry, blob;
         ASSERT_EQ(engine.compile(p, entry, why), TegraGM20BCompileMade) << state << ": " << why;
         bool made = false;
-        ASSERT_TRUE(gm20b::decodeReflectionEntry(entry, p.key, made, blob) && made) << state << ": " << blob;
+        ASSERT_TRUE(gm20b::decodeReflectionEntry(entry, p.content, made, blob) && made) << state << ": " << blob;
         id raw = gm20bReflectionOf(reinterpret_cast<const uint8_t *>(blob.data()), blob.size(), true);
         ASSERT_TRUE(raw != nil) << state;
         reflection_compare::expectSameList(metal.bindings, [raw bindings], state);
@@ -272,7 +272,8 @@ void renderReflectionsAsMetal()
         std::string entry, blob;
         ASSERT_EQ(engine.compile(p, entry, why), TegraGM20BCompileMade) << state << ": " << why;
         bool reflected = false;
-        ASSERT_TRUE(gm20b::decodeReflectionEntry(entry, p.key, reflected, blob) && reflected) << state << ": " << blob;
+        ASSERT_TRUE(gm20b::decodeReflectionEntry(entry, p.content, reflected, blob) && reflected)
+            << state << ": " << blob;
         id raw = gm20bReflectionOf(reinterpret_cast<const uint8_t *>(blob.data()), blob.size(), false);
         ASSERT_TRUE(raw != nil) << state;
         differences.state = state;
@@ -327,7 +328,8 @@ TEST(CompilerCompileOnly, ItMakesARecordOfEveryKindTheSampleAsks)
             continue;
         }
         gm20b::RuntimeRecord record;
-        ASSERT_EQ(gm20b::decodeEntry(engine[i].entry, p.key, record, why), gm20b::RecordCache::Found::Record) << why;
+        ASSERT_EQ(gm20b::decodeEntry(engine[i].entry, p.content, record, why), gm20b::RecordCache::Found::Record)
+            << why;
         covered["render"]++;
         covered["constexpr samplers"] += !record.samplers.empty();
         covered["storage form"] += (record.pipeline.flags & gm20b::PipelineStorageMetadata) != 0;

@@ -364,15 +364,18 @@ TEST(CompileRequest, ALoggedRequestOfLayout05IsDroppedByTheReplay)
     EXPECT_EQ(switch_compiler::restacked("no request", kStack), "no request");
 }
 
-// The compiler's preparation of render request `r`, keyed as the runtime keys it
-switch_compiler::Prepared prepared(gm20b::CompileRequest r, switch_compiler::SystemLibraries &system)
+// The compiler's preparation of render request `r`, keyed as the runtime keys it, for an asker of `scope`
+switch_compiler::Prepared prepared(gm20b::CompileRequest r, switch_compiler::SystemLibraries &system,
+                                   const gm20b::StoreScope &scope = {})
 {
     r.key = runtimeKey(r).key;
     switch_compiler::Prepared p;
     std::string why;
-    EXPECT_TRUE(switch_compiler::prepare(gm20b::encodeRequest(r), kStack, system, p, why)) << why;
+    EXPECT_TRUE(switch_compiler::prepare(gm20b::encodeRequest(r), kStack, system, p, why, 0, nullptr, scope)) << why;
     return p;
 }
+
+const gm20b::StoreScope kMaps = {1, "com.apple.Maps"}, kOtherApp = {2, std::string(20, char(0x5a))};
 
 // A system volume under a test directory holding `bytes` as RenderBox's default library
 std::string systemRoot(const std::string &bytes)
@@ -386,34 +389,81 @@ std::string systemRoot(const std::string &bytes)
     return root;
 }
 
-// One shader in two apps' libraries, or in a framework and an app's copy of it, is one store entry: the compiler names
-// it and heads its entry by the functions' AIR, constants and the state's fields, whatever library bytes, path or
-// framework the functions came in, and an entry one made is the other's
-TEST(CompileRequest, OneShaderInTwoLibrariesIsOneStoreEntry)
+// A framework's shader is one store entry for every process: the compiler names it and heads its entry by the functions'
+// AIR, facts and constants and the state's fields, whoever asks. A shader of an app's own library is its app's: one entry
+// for the app whatever bytes surround it, and none another app reaches, as a library off the system volume could carry
+// any tags. An entry one process made is another's only where their contents are alike byte for byte.
+TEST(CompileRequest, AFrameworksShaderIsEveryProcesssAndAnAppsShaderItsOwn)
 {
     const gm20b::CompileRequest r = renderRequest();
-    gm20b::CompileRequest other = r;
-    other.libraries[0] = data(made_metallib::universal({"helper_fn", "vertex_fn", "fragment_fn"}, 0x9F, 0x11));
     gm20b::CompileRequest framework = r;
     framework.libraries[0] = systemLibrary("/System/Library/Frameworks/RenderBox.framework/default.metallib");
     switch_compiler::SystemLibraries none, volume(systemRoot(r.libraries[0].bytes));
-    const switch_compiler::Prepared a = prepared(r, none), b = prepared(other, none), c = prepared(framework, volume);
-    EXPECT_NE(a.request.libraries[0].bytes, b.request.libraries[0].bytes);
-    EXPECT_NE(a.key.key, c.key.key);
-    EXPECT_EQ(b.name, a.name);
-    EXPECT_EQ(c.name, a.name);
-    EXPECT_EQ(b.content.key, a.content.key);
-    EXPECT_EQ(c.content.key, a.content.key);
+    const switch_compiler::Prepared forMaps = prepared(framework, volume, kMaps),
+                                    forOther = prepared(framework, volume, kOtherApp);
+    EXPECT_EQ(forOther.name, forMaps.name);
+    EXPECT_EQ(forOther.content.key, forMaps.content.key);
+
+    gm20b::CompileRequest moved = r;
+    moved.libraries[0] = data(made_metallib::universal({"helper_fn", "vertex_fn", "fragment_fn"}, 0x9F, 0x11));
+    const switch_compiler::Prepared own = prepared(r, none, kMaps), ownMoved = prepared(moved, none, kMaps),
+                                    other = prepared(r, none, kOtherApp);
+    EXPECT_NE(own.request.libraries[0].bytes, ownMoved.request.libraries[0].bytes);
+    EXPECT_EQ(ownMoved.name, own.name);
+    EXPECT_EQ(ownMoved.content.key, own.content.key);
+    EXPECT_NE(other.name, own.name);
+    EXPECT_NE(own.name, forMaps.name);
 
     gm20b::RuntimeRecord made, taken;
-    made.pipeline.keyHash = gm20b::packKeyHash(a.packKey);
     made.keyString = "samples=4";
     std::string why;
-    const std::string entry = gm20b::encodeEntry(a.content, &made, "");
-    ASSERT_EQ(gm20b::decodeEntry(entry, c.content, taken, why), gm20b::RecordCache::Found::Record);
-    gm20b::rekeyRecord(taken, c.packKey);
-    EXPECT_EQ(taken.pipeline.keyHash, gm20b::packKeyHash(c.packKey));
-    EXPECT_NE(taken.pipeline.keyHash, made.pipeline.keyHash);
+    const std::string entry = gm20b::encodeEntry(own.content, &made, "");
+    ASSERT_EQ(gm20b::decodeEntry(entry, ownMoved.content, taken, why), gm20b::RecordCache::Found::Record);
+    EXPECT_EQ(gm20b::decodeEntry(entry, other.content, taken, why), gm20b::RecordCache::Found::None);
+    const std::string shared = gm20b::encodeEntry(forMaps.content, &made, "");
+    ASSERT_EQ(gm20b::decodeEntry(shared, forOther.content, taken, why), gm20b::RecordCache::Found::Record);
+}
+
+// What a library says of a function outside its bitcode (its public metadata: the vertex attributes, their types, the
+// constants it declares) is in the key beside the AIR: one bitcode paired with other attributes is another entry
+TEST(CompileRequest, AFunctionsPublicMetadataIsInItsKey)
+{
+    const auto attributes = [](uint8_t index) {
+        std::vector<uint8_t> v;
+        const uint8_t vatt[] = {1, 0, 'p', 0, index, 0x80};
+        made_metallib::tag(v, "VATT", vatt, sizeof vatt);
+        return v;
+    };
+    const auto library = [&](uint8_t index) {
+        return data(made_metallib::thin({"vertex_fn", "fragment_fn"}, {0, 1},
+                                        {made_metallib::wrappedBitcode(1), made_metallib::wrappedBitcode(2)},
+                                        {attributes(index), {}}));
+    };
+    const auto keyed = [](gm20b::CompileRequest q) {
+        gm20b::AirHash vertex, fragment;
+        vertex.fill(0xB0);
+        fragment.fill(0xB1);
+        bool own = false;
+        q.key = gm20b::renderCacheKey(q.stack, gm20b::requestPackKey(q, own), vertex, fragment, {}, own).key;
+        return q;
+    };
+    gm20b::CompileRequest a = renderRequest(), b = a, c = a;
+    a.libraries[0] = library(0);
+    b.libraries[0] = library(3);
+    c.libraries[0] = library(0);
+    switch_compiler::SystemLibraries system;
+    switch_compiler::Prepared pa, pb, pc;
+    std::string why;
+    ASSERT_TRUE(switch_compiler::prepare(gm20b::encodeRequest(keyed(a)), kStack, system, pa, why, 0, nullptr, kMaps))
+        << why;
+    ASSERT_TRUE(switch_compiler::prepare(gm20b::encodeRequest(keyed(b)), kStack, system, pb, why, 0, nullptr, kMaps))
+        << why;
+    ASSERT_TRUE(switch_compiler::prepare(gm20b::encodeRequest(keyed(c)), kStack, system, pc, why, 0, nullptr, kMaps))
+        << why;
+    EXPECT_EQ(memcmp(pa.key.vertexAir, pb.key.vertexAir, 32), 0);
+    EXPECT_NE(pb.name, pa.name);
+    EXPECT_NE(pb.content.key, pa.content.key);
+    EXPECT_EQ(pc.name, pa.name);
 }
 
 // Two requests share an entry only where everything that reaches the record is alike: one constant, one descriptor
@@ -472,6 +522,7 @@ TEST(CompileRequest, ABarrierTwinIsItsStatesKeyInAStoreEntryOfItsOwn)
     switch_compiler::SystemLibraries system;
     gm20b::CompileRequest twin = renderRequest();
     twin.form = gm20b::RequestForm::Barrier;
+    twin.key = runtimeKey(twin).key;
     gm20b::CompileRequest back;
     ASSERT_TRUE(gm20b::decodeRequest(gm20b::encodeRequest(twin), back));
     EXPECT_EQ(back.form, gm20b::RequestForm::Barrier);

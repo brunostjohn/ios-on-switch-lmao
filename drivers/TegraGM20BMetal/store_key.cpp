@@ -2,14 +2,21 @@
 // See store_key.h.
 #include "store_key.h"
 
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <algorithm>
 #include <cstring>
+#include "function_tags.h"
+#include "plugin/MetallibSlice.h"
 
 namespace gm20b {
 namespace {
 
 // Each key's own magic; any change to what goes into a content takes the next one, so no reader takes an entry of the
 // layout before
-constexpr char kContentMagic[8] = {'S', 'W', 'C', 'O', 'N', 'T', '0', '1'};
+constexpr char kContentMagic[8] = {'S', 'W', 'C', 'O', 'N', 'T', '0', '2'};
 
 constexpr uint64_t rotl(uint64_t x, int r)
 {
@@ -92,12 +99,13 @@ bool renderKind(const CompileRequest &r)
            (r.kind == RequestKind::Reflection && !computeReflection(r) && !functionAttributes(r) && !bufferEncoders(r));
 }
 
-// A stage's part: its tag, AIR and constants; a linked function's name, which its caller links by, and a function's
+// A stage's part: its tag, AIR, facts and constants; a linked function's name, which its caller links by, and a function's
 // attributes' name, which their key holds (function_attributes.h)
-void addStage(Builder &b, const RequestStage &s, const AirHash &air, bool named)
+void addStage(Builder &b, const RequestStage &s, const StageContent &f, bool named)
 {
     b.text(s.tag);
-    b.bytes(air.data(), air.size());
+    b.bytes(f.air.data(), f.air.size());
+    b.text(f.facts);
     b.value(uint8_t(s.specialized));
     b.text(s.constants);
     if (named)
@@ -158,7 +166,40 @@ Digest programSlotName(const void *slot, size_t size)
     return b.name();
 }
 
-StoreKey storeKeyOf(const CacheKey &k, const CompileRequest &r, const std::vector<AirHash> &air)
+std::string metallibListedFacts(const uint8_t *whole, size_t wholeBytes, const std::string &name)
+{
+    size_t sliceAt = 0, size = 0;
+    if (!switch_metal::airSlice(whole, wholeBytes, sliceAt, size))
+        return std::string();
+    return listedFacts(whole + sliceAt, size, name);
+}
+
+std::string metallibListedFacts(const std::string &path, const std::string &name)
+{
+    const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+        return std::string();
+    struct stat st;
+    void *mapped = fstat(fd, &st) == 0 && st.st_size > 0
+                       ? mmap(nullptr, size_t(st.st_size), PROT_READ, MAP_PRIVATE, fd, 0)
+                       : MAP_FAILED;
+    close(fd);
+    if (mapped == MAP_FAILED)
+        return std::string();
+    std::string facts = metallibListedFacts(static_cast<const uint8_t *>(mapped), size_t(st.st_size), name);
+    munmap(mapped, size_t(st.st_size));
+    return facts;
+}
+
+bool scoped(const CompileRequest &r)
+{
+    return std::any_of(r.libraries.begin(), r.libraries.end(), [](const RequestLibrary &l) {
+        return !l.system;
+    });
+}
+
+StoreKey storeKeyOf(const CacheKey &k, const CompileRequest &r, const std::vector<StageContent> &stages,
+                    const StoreScope &scope)
 {
     Builder b;
     b.bytes(kContentMagic, sizeof kContentMagic);
@@ -170,7 +211,8 @@ StoreKey storeKeyOf(const CacheKey &k, const CompileRequest &r, const std::vecto
         const size_t linkedFrom = render ? firstLinked(r) : 1;
         b.value(uint32_t(r.stages.size()));
         for (size_t i = 0; i < r.stages.size(); ++i)
-            addStage(b, r.stages[i], i < air.size() ? air[i] : AirHash{}, i >= linkedFrom || functionAttributes(r));
+            addStage(b, r.stages[i], i < stages.size() ? stages[i] : StageContent{},
+                     i >= linkedFrom || functionAttributes(r));
     }
     if (render) {
         keyFieldWords(r.fields, [&b](uint64_t w) {
@@ -184,6 +226,9 @@ StoreKey storeKeyOf(const CacheKey &k, const CompileRequest &r, const std::vecto
         if (r.kind == RequestKind::Kernel)
             addDispatch(b, r.kernel);
     }
+    const bool own = scoped(r);
+    b.value(own ? scope.kind : 0u);
+    b.text(own ? scope.identity : std::string());
     StoreKey out;
     out.content.stack = k.stack;
     memcpy(out.content.vertexAir, k.vertexAir, sizeof k.vertexAir);

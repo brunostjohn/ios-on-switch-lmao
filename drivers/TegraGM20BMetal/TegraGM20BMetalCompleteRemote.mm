@@ -6,21 +6,21 @@
 #include <os/log.h>
 #include <pthread/qos.h>
 #include "TegraGM20BMetalCompileRequest.h"
-#include "answer_class.h"
 #include "TegraGM20BMetalInternal.h"
 #include "compute_facts_entry.h"
 #include "compute_record.h"
 #include "reflection_blob.h"
 #include "library_entry.h"
+#include "function_tags.h"
 #include "remote_ask.h"
 
 namespace gm20b {
 namespace {
 
-// What a request's stages are beside it: each stage's AIR (its function's HASH tag, which the store key is made of), and
-// each library's source by its index in the request
+// What a request's stages are beside it: each stage's function as the store key names it, and each library's source by
+// its index in the request
 struct RequestSources {
-    std::vector<AirHash> air;
+    std::vector<StageContent> stages;
     std::vector<LibrarySource *> libraries;
     std::map<const LibrarySource *, uint32_t> seen;
 };
@@ -96,7 +96,10 @@ bool addStage(CompileRequest &r, RequestSources &sources, const char *tag, id fu
         sources.libraries.push_back(f->_source.get());
         r.libraries.push_back(std::move(library));
     }
-    sources.air.push_back(*f->_air);
+    std::call_once(f->_factsOnce, [f] {
+        f->_facts = listedFacts(f->_source->bytes, f->_source->size, f->_libraryName);
+    });
+    sources.stages.push_back({*f->_air, f->_facts});
     RequestStage s;
     s.tag = tag;
     s.function = libraryName(f);
@@ -178,7 +181,7 @@ bool Completion::renderRequest(const Ask &a, const CacheKey &k, bool bytes, Comp
     }
     if (r.stages.size() > kRequestStageLimit)
         return false;
-    store = storeKeyOf(k, r, sources.air);
+    store = storeKeyOf(k, r, sources.stages, remote_->scope());
     return true;
 }
 
@@ -227,6 +230,19 @@ void Completion::askTwin(const Ask &a, const CacheKey &k, Pipeline *made)
         if (!twinsAsked_.insert(made).second)
             return;
     }
+    // off the creating thread and the answer queue, whose blocks a twin's request would hold up
+    const Ask asked = a;
+    const CacheKey key = k;
+    dispatch_group_enter(twins_);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
+        if (!stopping_.load(std::memory_order_acquire))
+            twinOf(asked, key, made);
+        dispatch_group_leave(twins_);
+    });
+}
+
+void Completion::twinOf(const Ask &a, const CacheKey &k, Pipeline *made)
+{
     CompileRequest r;
     StoreKey store;
     if (!renderRequest(a, k, false, r, store, false, RequestKind::Render, RequestForm::Barrier))
@@ -242,7 +258,7 @@ void Completion::askTwin(const Ask &a, const CacheKey &k, Pipeline *made)
     if (!remote_->taking() || !renderRequest(a, k, true, r, store, false, RequestKind::Render, RequestForm::Barrier))
         return;
     const bool caTransform = a.caTransform;
-    dispatch_group_enter(pending_);
+    dispatch_group_enter(twins_);
     const bool sent = remote_->compileAsync(
         encodeRequest(r), false, uint32_t(QOS_CLASS_BACKGROUND),
         [this, made, store, packKey, caTransform](Remote::Answer answer, const Remote::Answered &) {
@@ -250,17 +266,17 @@ void Completion::askTwin(const Ask &a, const CacheKey &k, Pipeline *made)
             std::string refusal;
             if (stopping_.load(std::memory_order_acquire) || answer != Remote::Answer::Made ||
                 fromStore(store, packKey, *twin, refusal) != RecordCache::Found::Record) {
-                dispatch_group_leave(pending_);
+                dispatch_group_leave(twins_);
                 return;
             }
-            asyncAt(queue_, uint32_t(QOS_CLASS_BACKGROUND), ^{
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
                 if (!stopping_.load(std::memory_order_acquire))
                     attachTwin(made, *twin, caTransform);
-                dispatch_group_leave(pending_);
+                dispatch_group_leave(twins_);
             });
         });
     if (!sent)
-        dispatch_group_leave(pending_);
+        dispatch_group_leave(twins_);
 }
 
 // The wait split where it went (obtained.h; -1 for a part not measured): the request queued until its compile
@@ -399,7 +415,7 @@ bool Completion::remoteLater(const Ask &a, const CacheKey &k,
     const bool sent = remote_->compileAsync(
         request, a.waited, a.qos,
         [this, asked, k, packKey, store, began, settle, done, again](Remote::Answer answer,
-                                                                    const Remote::Answered &answered) {
+                                                                     const Remote::Answered &answered) {
             RuntimeRecord made;
             std::string refusal;
             const RecordCache::Found found = answer == Remote::Answer::Made || answer == Remote::Answer::Refused
@@ -460,7 +476,7 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
         if (q.textures.size() > kRequestBindLimit || q.samplers.size() > kRequestBindLimit ||
             !addKernelStages(r, sources, facadeFunction, descriptor, bytes, every, remote_.get()))
             return false;
-        store = storeKeyOf(k, r, sources.air);
+        store = storeKeyOf(k, r, sources.stages, remote_->scope());
         return true;
     };
     const auto stored = [&]() {
@@ -560,7 +576,7 @@ bool Completion::reflection(id function, MTLComputePipelineDescriptor *descripto
             RequestSources sources;
             if (!addKernelStages(r, sources, function, descriptor, bytes, every, remote_.get()))
                 return false;
-            store = storeKeyOf(k, r, sources.air);
+            store = storeKeyOf(k, r, sources.stages, remote_->scope());
             return true;
         },
         blob, why);
@@ -578,7 +594,7 @@ bool Completion::functionReflection(const char *tag, id function, const CacheKey
             RequestSources sources;
             if (!addStage(r, sources, tag, function, bytes, every, remote_.get()))
                 return false;
-            store = storeKeyOf(k, r, sources.air);
+            store = storeKeyOf(k, r, sources.stages, remote_->scope());
             return true;
         },
         blob, why);
@@ -612,7 +628,7 @@ bool Completion::facts(id facadeFunction, MTLComputePipelineDescriptor *descript
         sources = {};
         if (!addKernelStages(r, sources, facadeFunction, descriptor, bytes, every, remote_.get()))
             return false;
-        store = storeKeyOf(k, r, sources.air);
+        store = storeKeyOf(k, r, sources.stages, remote_->scope());
         return true;
     };
     std::string refusal;
@@ -678,7 +694,7 @@ bool Completion::library(uint32_t type, const std::string &bytes, MadeLibrary &o
     r.key = k.key;
     r.codeGenType = type;
     r.codeGen = bytes;
-    const StoreKey store = storeKeyOf(k, r, {});
+    const StoreKey store = storeKeyOf(k, r, {}, remote_->scope());
     std::string log;
     const auto stored = [&]() {
         std::string entry;

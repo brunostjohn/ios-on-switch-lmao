@@ -266,9 +266,9 @@ struct RenderCompiler {
                 shapes(request, record);
             const bool refused = refuses && refuses(request);
             const gm20b::StoreKey stored = requestStoreKey(cache, request);
-            const std::string entry = refused
-                                          ? gm20b::encodeEntry(stored.content, nullptr, "refused by the test's compiler")
-                                          : gm20b::encodeEntry(stored.content, &record, "");
+            const std::string entry =
+                refused ? gm20b::encodeEntry(stored.content, nullptr, "refused by the test's compiler")
+                        : gm20b::encodeEntry(stored.content, &record, "");
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 store.put(stored.name.data(), reinterpret_cast<const uint8_t *>(entry.data()), uint32_t(entry.size()));
@@ -278,6 +278,14 @@ struct RenderCompiler {
             return int32_t(refused ? TegraGM20BCompileRefused : TegraGM20BCompileMade);
         };
         return true;
+    }
+
+    // A twin the device asks in the background after a storage form (TegraGM20BMetalCompleteRemote.mm askTwin) reads this
+    // store once answered: nothing the device has in flight outlives it
+    ~RenderCompiler()
+    {
+        if (gRM && gRM->completion)
+            EXPECT_TRUE(gRM->completion->settleTwins(uint64_t(5) * NSEC_PER_SEC));
     }
 
     bool wait(size_t count)

@@ -66,7 +66,7 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, con
       persistenceQueue_(
           dispatch_queue_create("com.brunostjohn.switch.gm20b.kernel-cache",
                                 dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0))),
-      pending_(dispatch_group_create())
+      pending_(dispatch_group_create()), twins_(dispatch_group_create())
 {
     const bool writable = cacheDir && *cacheDir && cache_.attach(cacheDir, stack_, kCacheCap);
     if (seedDir && *seedDir)
@@ -106,6 +106,7 @@ Completion::~Completion()
     stopping_.store(true, std::memory_order_release);
     compiler_->drain();
     dispatch_group_wait(pending_, DISPATCH_TIME_FOREVER);
+    dispatch_group_wait(twins_, DISPATCH_TIME_FOREVER);
     dispatch_sync(persistenceQueue_, ^{
                   });
     compiler_.reset();
@@ -283,6 +284,11 @@ Pipeline *Completion::makeNow(Ask a, std::string &failure)
     if (!made)
         failure = why.empty() ? "the state's record could not be placed" : why;
     return made;
+}
+
+bool Completion::settleTwins(uint64_t ns)
+{
+    return !dispatch_group_wait(twins_, dispatch_time(DISPATCH_TIME_NOW, int64_t(ns)));
 }
 
 void Completion::backgroundKernel(std::function<void()> work)
