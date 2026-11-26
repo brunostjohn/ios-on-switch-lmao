@@ -4601,6 +4601,7 @@ host_test(
     data = [
         "//drivers/TegraGM20BMetal:compiler/compiler_record.mm",
         "//drivers/TegraGM20BMetal:TegraGM20BMetalComplete.mm",
+        "//drivers/TegraGM20BMetal:TegraGM20BMetalCompleteForms.mm",
         "//drivers/TegraGM20BMetal:TegraGM20BMetalCompleteRemote.mm",
         "//drivers/TegraGM20BMetal:TegraGM20BMetalCubic.mm",
     ],
@@ -5664,6 +5665,31 @@ facade_test(
     plugin = "_tsan",
 )
 
+# A state the shader compiler made gets its full form's split and program variants: asked in the background and attached
+# to its pipeline, or at its creation where the store's primary entry is that full record
+facade_test(
+    name = "facade_made_full_test",
+    srcs = [
+        "facade_made_full_test.cpp",
+        "facade_variant_compiler.h",
+        ":librecord_count.dylib",
+    ],
+)
+
+# facade_made_full_test thread-sanitized: the full form lands while the test thread reads what draws read of the pipeline
+facade_test(
+    name = "facade_made_full_tsan_test",
+    srcs = [
+        "facade_made_full_test.cpp",
+        "facade_variant_compiler.h",
+        ":librecord_count.dylib",
+    ],
+    copts = ["-fsanitize=thread"],
+    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
+    linkopts = ["-fsanitize=thread"],
+    plugin = "_tsan",
+)
+
 # A shader-tested Depth16Unorm beside a turned plane, converted and moved into the plane, a turned pass's depth slice
 # read through its texture's own header, a shader-tested Depth16Unorm slice converted through it: each raw
 host_test(
@@ -6131,6 +6157,7 @@ facade_test(
     data = [
         "//drivers/TegraGM20BMetal:TegraGM20BMetalComplete.h",
         "//drivers/TegraGM20BMetal:TegraGM20BMetalComplete.mm",
+        "//drivers/TegraGM20BMetal:TegraGM20BMetalCompleteForms.mm",
         "//drivers/TegraGM20BMetal:TegraGM20BMetalCompleteRemote.mm",
         "//drivers/TegraGM20BMetal:TegraGM20BMetalPlugin.mm",
         "//drivers/TegraGM20BMetal:facade_srcs",

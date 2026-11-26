@@ -184,9 +184,10 @@ extern "C" kern_return_t IOConnectCallAsyncStructMethod(mach_port_t connection, 
 
 namespace harness {
 
-// Each render request made into a record whose programs carry its forms, kept in the store; `refuses`: its refusal
-// stored instead; `fails`: nothing stored and the compile answered as one that could not run; `shapes`: the record
-// changed as the test's compiler makes it before it is stored
+// Each render request made into a record whose programs carry its forms, kept in the store, a full form's
+// (RequestForm::Full) under its primary content too, as compilerd files it; `refuses`: its refusal stored instead;
+// `fails`: nothing stored and the compile answered as one that could not run; `shapes`: the record changed as the test's
+// compiler makes it before it is stored
 struct RenderCompiler {
     switch_seed_pack::StoreWriter store;
     std::mutex mutex;
@@ -272,6 +273,14 @@ struct RenderCompiler {
             {
                 std::lock_guard<std::mutex> lock(mutex);
                 store.put(stored.name.data(), reinterpret_cast<const uint8_t *>(entry.data()), uint32_t(entry.size()));
+                if (!refused && request.form == gm20b::RequestForm::Full) {
+                    gm20b::CompileRequest primary = request;
+                    primary.form = gm20b::RequestForm::Primary;
+                    const gm20b::StoreKey filed = requestStoreKey(cache, primary);
+                    const std::string asPrimary = gm20b::encodeEntry(filed.content, &record, "");
+                    store.put(filed.name.data(), reinterpret_cast<const uint8_t *>(asPrimary.data()),
+                              uint32_t(asPrimary.size()), true);
+                }
                 requests.push_back(std::move(request));
             }
             answered.notify_all();
@@ -280,7 +289,7 @@ struct RenderCompiler {
         return true;
     }
 
-    // A twin the device asks in the background after a storage form (TegraGM20BMetalCompleteRemote.mm askTwin) reads this
+    // A form the device asks in the background after a placed state (TegraGM20BMetalCompleteForms.mm askForms) reads this
     // store once answered: nothing the device has in flight outlives it
     ~RenderCompiler()
     {

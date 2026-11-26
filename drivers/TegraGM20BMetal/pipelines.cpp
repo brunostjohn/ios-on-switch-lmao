@@ -30,6 +30,18 @@
 
 namespace gm20b {
 
+#if SWITCH_METAL_DIAGNOSTICS
+// The blend-kill pipelines among `pl`'s variant combinations, those of prebuilt words alone where `prebuilt`
+static uint32_t combinationBlendKills(const Pipeline &pl, bool prebuilt)
+{
+    uint32_t kills = 0;
+    if (const VariantTable *t = pl.ownedVariantTable.get())
+        for (const auto &v : t->pipelines)
+            kills += v->blendKill && (!prebuilt || v->prebuiltWords);
+    return kills;
+}
+#endif
+
 // The methods that bind program `prog`'s shader data at its slot of constant buffer group `group` (0 vertex, 4 pixel), leaving
 // the root table selected; and the slot it reads set 0 at (0: none)
 static uint8_t bindProgramCbufs(Push &w, const PackProgram &prog, uint32_t group, uint64_t data, uint64_t root,
@@ -365,7 +377,7 @@ Pipeline *Device::placePipeline(const PackRun &run, uint64_t keyHash, PackForm f
         return placePackedRecord(*rec, caTransform);
     std::lock_guard<gm20b::Mutex> l(lock_);
     const auto made = completed_.find(keyHash);
-    return form == PackForm::Default && made != completed_.end() ? made->second : nullptr;
+    return form == PackForm::Default && made != completed_.end() ? &made->second->pipeline : nullptr;
 }
 
 // A pack record is drawn as addRecord draws a runtime record of the same state: a tessellation state's control and
@@ -443,7 +455,7 @@ Pipeline *Device::placePackedRecord(const PackPipeline &pp, bool caTransform)
             if (slot.compare_exchange_strong(expected, raw, std::memory_order_acq_rel, std::memory_order_acquire)) {
                 built.release();
                 SWITCH_METAL_DIAGNOSTIC(stats.blendKillStates += raw->blendKill);
-                SWITCH_METAL_DIAGNOSTIC(for (const auto &v : raw->ownedVariants) stats.blendKillStates += v->blendKill);
+                SWITCH_METAL_DIAGNOSTIC(stats.blendKillStates += combinationBlendKills(*raw, false));
                 return raw;
             }
             return expected;
@@ -515,8 +527,7 @@ Pipeline *Device::placeRecord(const PackPipeline &pp, bool caTransform)
                                                                std::memory_order_acquire)) {
             owned.release();
             SWITCH_METAL_DIAGNOSTIC(if (prebuilt) stats.blendKillStates += raw->blendKill);
-            SWITCH_METAL_DIAGNOSTIC(for (const auto &v : raw->ownedVariants) if (v->prebuiltWords)
-                                        stats.blendKillStates += v->blendKill);
+            SWITCH_METAL_DIAGNOSTIC(stats.blendKillStates += combinationBlendKills(*raw, true));
             return raw;
         }
         return expected;

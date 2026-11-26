@@ -16,6 +16,7 @@ namespace gm20b {
 
 struct SplitState;
 struct TurnedSource;
+struct VariantTable;
 
 // A program in the heap: its record, its SET_PIPELINE_PROGRAM value, its shader data's GPU address (0: none) and its header
 struct PlacedProgram {
@@ -168,10 +169,9 @@ struct Pipeline {
     const char *uniformProbe = nullptr;
     bool uniformHalvesReported = false;
     bool genericState = false;  // DEVELOPMENT: Core Animation's generic merge state (..Xghfc), for the fetch keys line
-    // its stages' program variants (variants.cpp), and their prepared pipelines, vertex choice major (the last: this one)
-    const PackVariant *variants[2] = {};
-    uint8_t variantCount[2] = {};
-    std::vector<Pipeline *> chosen;
+    // its stages' program variants (variants.cpp; null: none): published once, whole, with release, and loaded by draws
+    // with acquire, as a device-made state's may come after its first draws (Device::attachFullForm)
+    const VariantTable *variantTable = nullptr;
 
     // DEVELOPMENT: a Core Animation state's name, whose draws log their form and quads (RenderEncoder::probeDraw): a solid
     // fill into its three-colour pass (..Xmw_A3Xhfc, the scroll edge keyline's state: fillState) its first draws and thin
@@ -183,7 +183,7 @@ struct Pipeline {
     uint32_t probeGeneration = 0;
     uint8_t probeLines = 0, probeThinLines = 0;
     // rotation.h: its fragment program has a turned variant (AssumeTurned), or reads a turned plane's axes with none; a
-    // runtime record's turned variant's pipeline (a pack record's is one of `chosen`)
+    // runtime record's turned variant's pipeline (a pack record's is one of its variant table's)
     bool turnedVariant = false, turnRefused = false;
     // the fragment slots its programs read two-plane RGB10A8_2P_XR10 textures at through their header pairs (PackPipeline)
     uint16_t xrSlots = 0;
@@ -201,9 +201,22 @@ struct Pipeline {
     bool heapMissing = false;
     // its argument tables' words (spill_table.h), vertex then fragment: the pack's or its runtime record's; null: none
     const uint32_t *spill[2] = {};
-    // Owned by this Pipeline so lock-free speculative builds free everything cleanly on CAS loss.
+    // Owned by this Pipeline so lock-free speculative builds free everything cleanly on CAS loss. Set once, under the
+    // device's lock or before the pipeline is published: draws read only splitSource and variantTable.
     std::unique_ptr<SplitSource> ownedSplitSource;
-    std::vector<std::unique_ptr<Pipeline>> ownedVariants;
+    std::unique_ptr<VariantTable> ownedVariantTable;
+};
+
+// A state's program variants (pack.h PackVariant) and the pipelines a draw's facts choose among, vertex choice major
+// (the last: the state's own). A pack state's variants are the pack's; a runtime record's are its own, without its turned
+// variant (TurnedSource takes a turned draw), so a turned draw of it draws the state's own pipeline.
+struct VariantTable {
+    const PackVariant *variants[2] = {};
+    uint8_t count[2] = {};
+    std::vector<Pipeline *> chosen;
+    std::vector<std::unique_ptr<Pipeline>> pipelines;
+    std::vector<PackVariant> runtimeVariants[2];  // a runtime record's: `variants` points at them
+    bool runtime = false;
 };
 
 // A state's fragment program split (pack.h PackSplit): the twin that draws of rec.thresholdPixels pixels or more take, and

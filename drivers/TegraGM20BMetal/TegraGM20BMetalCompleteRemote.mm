@@ -207,90 +207,11 @@ RecordCache::Found Completion::fromStore(const StoreKey &store, const std::strin
     return found;
 }
 
-// The pack key the compiler makes `r`'s record under (TegraGM20BMetalCompileRequest.mm), which is this process's own; a
-// barrier twin's its own beside it, so Device::addRecord files the twin apart from its state
-static std::string packKeyOf(const CompileRequest &r)
+std::string Completion::packKeyOf(const CompileRequest &r)
 {
     bool own = false;
     const std::string key = requestPackKey(r, own);
     return r.form == RequestForm::Barrier ? key + " | barrier form" : key;
-}
-
-void Completion::attachTwin(Pipeline *made, const RuntimeRecord &record, bool caTransform)
-{
-    std::string why;
-    bool full = false;
-    Pipeline *twin = device_.addRecord(record, caTransform, why, &full);
-    if (!twin || twin == made || twin->storageBits)
-        return;
-    Pipeline **slot = made->storageBlendBits ? &made->blendTwin : &made->barrierTwin;
-    Pipeline *none = nullptr;
-    __atomic_compare_exchange_n(slot, &none, twin, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
-}
-
-void Completion::askTwin(const Ask &a, const CacheKey &k, Pipeline *made)
-{
-    if (!made || !made->storageBits || !a.facade)
-        return;
-    Pipeline **slot = made->storageBlendBits ? &made->blendTwin : &made->barrierTwin;
-    if (__atomic_load_n(slot, __ATOMIC_ACQUIRE))
-        return;
-    {
-        std::lock_guard<gm20b::Mutex> l(twinLock_);
-        if (!twinsAsked_.insert(made).second)
-            return;
-    }
-    // off the creating thread and the answer queue, whose blocks a twin's request would hold up. The descriptors are
-    // copied here, on the creating thread: the synchronous creation hands over the app's own, which it may change for its
-    // next state while the twin is asked (and Apple's classes are not read safely across threads)
-    Ask asked = a;
-    asked.facade = [a.facade copy];
-    asked.descriptor = [a.descriptor copy];
-    const CacheKey key = k;
-    dispatch_group_enter(twins_);
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
-        if (!stopping_.load(std::memory_order_acquire))
-            twinOf(asked, key, made);
-        dispatch_group_leave(twins_);
-    });
-}
-
-void Completion::twinOf(const Ask &a, const CacheKey &k, Pipeline *made)
-{
-    CompileRequest r;
-    StoreKey store;
-    if (!renderRequest(a, k, false, r, store, false, RequestKind::Render, RequestForm::Barrier))
-        return;
-    const std::string packKey = packKeyOf(r);
-    RuntimeRecord twin;
-    std::string why;
-    if (const RecordCache::Found found = fromStore(store, packKey, twin, why); found != RecordCache::Found::None) {
-        if (found == RecordCache::Found::Record)
-            attachTwin(made, twin, a.caTransform);
-        return;
-    }
-    if (!remote_->taking() || !renderRequest(a, k, true, r, store, false, RequestKind::Render, RequestForm::Barrier))
-        return;
-    const bool caTransform = a.caTransform;
-    dispatch_group_enter(twins_);
-    const bool sent = remote_->compileAsync(
-        encodeRequest(r), false, uint32_t(QOS_CLASS_BACKGROUND),
-        [this, made, store, packKey, caTransform](Remote::Answer answer, const Remote::Answered &) {
-            auto twin = std::make_shared<RuntimeRecord>();
-            std::string refusal;
-            if (stopping_.load(std::memory_order_acquire) || answer != Remote::Answer::Made ||
-                fromStore(store, packKey, *twin, refusal) != RecordCache::Found::Record) {
-                dispatch_group_leave(twins_);
-                return;
-            }
-            dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
-                if (!stopping_.load(std::memory_order_acquire))
-                    attachTwin(made, *twin, caTransform);
-                dispatch_group_leave(twins_);
-            });
-        });
-    if (!sent)
-        dispatch_group_leave(twins_);
 }
 
 // The wait split where it went (obtained.h; -1 for a part not measured): the request queued until its compile

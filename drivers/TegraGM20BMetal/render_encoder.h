@@ -559,7 +559,7 @@ private:
     Pipeline *splitTwin(Pipeline *pl, WrittenRegion::Analysis &analysis) const;
     // the facts of a draw of `pl` its bindings decide, worked out where the bindings moved since the last draw, never as
     // one is bound
-    uint32_t bindingFacts(const Pipeline &pl);
+    uint32_t bindingFacts(const Pipeline &pl, const VariantTable *variants);
     const Pipeline *factsPipeline_ = nullptr;
     uint64_t factsRevision_ = 0;
     uint32_t facts_ = 0;
