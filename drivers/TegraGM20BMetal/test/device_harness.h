@@ -20,6 +20,12 @@ namespace gm20b {
 
 // The device's own state a harness reads (Device declares it a friend in the harness builds, SWITCH_METAL_HARNESS_MARKS)
 struct DeviceHarness {
+    // The pack's record `pp` made into a state, as a draw's lookup makes it
+    static Pipeline *placePacked(Device &d, const PackPipeline &pp)
+    {
+        return d.placePackedRecord(pp, false);
+    }
+
     // What the GPU's root table holds at push word `word` after everything submitted
     static uint32_t rootPush(const Device &d, uint32_t word)
     {
