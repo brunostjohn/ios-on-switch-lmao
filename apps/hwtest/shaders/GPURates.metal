@@ -84,3 +84,52 @@ fragment float4 rates_table_fragment(float4 at [[position]], device const float4
     }
     return sum * (1.0f / 16.0f);
 }
+
+// gpu.perf.knobs: rates_heavy_fragment's work into four colour targets, and with a depth the program writes.
+struct RatesFour {
+    float4 a [[color(0)]];
+    float4 b [[color(1)]];
+    float4 c [[color(2)]];
+    float4 d [[color(3)]];
+};
+
+fragment RatesFour rates_heavy_mrt_fragment(float4 at [[position]], constant uint &iterations [[buffer(0)]])
+{
+    float4 v = float4(at.xy * 0.001f, 0.25f, 0.5f);
+    for (uint i = 0; i < iterations; i++)
+        v = fma(v, float4(0.999f), float4(0.001f));
+    return {v, v.yzwx, v.zwxy, v.wxyz};
+}
+
+struct RatesDepthWritten {
+    float4 colour [[color(0)]];
+    float depth [[depth(any)]];
+};
+
+fragment RatesDepthWritten rates_heavy_depth_fragment(float4 at [[position]], constant uint &iterations [[buffer(0)]])
+{
+    float4 v = float4(at.xy * 0.001f, 0.25f, 0.5f);
+    for (uint i = 0; i < iterations; i++)
+        v = fma(v, float4(0.999f), float4(0.001f));
+    return {v, fract(v.x)};
+}
+
+// One bilinear sample a pixel at `scale` texture widths a pixel: 1/2048 magnifies nothing, larger steps minify.
+fragment float4 rates_sample_fragment(float4 at [[position]], texture2d<float> image [[texture(0)]],
+                                      constant float &scale [[buffer(0)]])
+{
+    constexpr sampler bilinear(filter::linear, address::repeat);
+    return image.sample(bilinear, at.xy * scale);
+}
+
+// Eight point reads a pixel at scattered texels of a 2048x2048 texture.
+fragment float4 rates_scatter_fragment(float4 at [[position]], texture2d<float, access::read> image [[texture(0)]])
+{
+    uint h = uint(at.x) * 73856093u ^ uint(at.y) * 19349663u;
+    float4 sum = float4(0);
+    for (uint i = 0; i < 8u; i++) {
+        h = h * 1664525u + 1013904223u;
+        sum += image.read(uint2(h & 2047u, (h >> 11) & 2047u));
+    }
+    return sum * 0.125f;
+}

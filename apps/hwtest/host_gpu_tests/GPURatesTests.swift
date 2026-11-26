@@ -35,4 +35,29 @@ final class GPURatesTests: XCTestCase {
             XCTAssertTrue(value.isFinite && value > 0, "\(key)=\(value)")
         }
     }
+
+    /// gpu.perf.knobs at small sizes: with no probes on this Mac, the default knob and no promotion, each arm timed
+    func testTheKnobArmsRunWithoutTheProbes() async throws {
+        let directory =
+            (ProcessInfo.processInfo.environment["TEST_SRCDIR"].map { $0 + "/_main/" } ?? "") + "apps/hwtest/shaders"
+        let device = try XCTUnwrap(MTLCreateSystemDefaultDevice())
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let sources = try ["HWTest.metal", "GPURates.metal"].map {
+            try String(contentsOfFile: directory + "/" + $0, encoding: .utf8)
+        }
+        let library = try await device.makeLibrary(source: sources.joined(separator: "\n"), options: nil)
+        let result = try await GPURates.knobs(GPU(device: device, queue: queue, library: library), .host)
+        XCTAssertTrue(result.passed, result.reasons(limit: 8).joined(separator: "; "))
+        XCTAssertEqual(result.notes.count, 2, "both probes are absent here")
+        for key in [
+            "subtile_one_default_us", "subtile_four_default_us", "subtile_depth_default_us", "subtile_fill_default_us",
+            "promo_minified_0_us", "promo_one_0_us", "promo_scatter_0_us",
+        ] {
+            guard case .number(let value, _) = result.metrics[key] else {
+                XCTFail("\(key) missing")
+                continue
+            }
+            XCTAssertTrue(value.isFinite && value > 0, "\(key)=\(value)")
+        }
+    }
 }
