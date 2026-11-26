@@ -231,7 +231,10 @@ bool SwitchMetalRangeEncode::seal(size_t to)
                                NSLocalizedDescriptionKey : @"Resource readiness notification could not be armed"
                            }];
             }
-            rc->abandon();
+            if (cb->_resourceReady)
+                rc->abandonForRetry();
+            else
+                rc->abandon();
             return false;
         }
         // its promises were given up at the holder's bound before this keep: it fails as one held past it
