@@ -7,6 +7,15 @@ SwitchFrameRender line for the same vsync and the GPU user side's SwitchFrameUse
 The stage that lost the period is the first point of the chain past the frame end the present was due at: the render
 thread's wake, its first GPU submission (recording), its swap (encoding), the GPU's completion, the flip. The longest
 stage is not that stage: a frame that missed waits most of a period for the next scanout.
+
+The display's first and last submit are the compositor's first and last since the previous swap, so a frame whose
+work began before its vsync shows a first submit before its origin, up to hundreds of milliseconds after a still
+screen. That says the recording did not start late; it does not say when this frame's recording began. The render
+thread's own first submission after the vsync does, from its tail on the SwitchFrame line or its SwitchFrameRender
+line.
+
+A present's periods are split at its origin: those from the frame end it was due at to its latch were lost in its own
+chain, and the rest of its interval passed before its vsync, with no frame on its way.
 """
 
 import bisect
@@ -26,6 +35,9 @@ STATS = re.compile(
     r'1:(?P<f1>\d+) 2:(?P<f2>\d+) 3:(?P<f3>\d+) 4\+:(?P<f4>\d+)'
 )
 WOKE = re.compile(r'woke (?P<woke>\d+) us after it')
+RENDER_FIRST = re.compile(r'first submit (?P<first>\d+) us')
+# The render thread's window on the SwitchFrame line (debug kernels from 26 Nov): its vsync, wake and first submission.
+FRAME_RENDER = re.compile(r'; render vsync (?P<vsync>\d+) woke (?P<woke>-?\d+) first (?P<first>-?\d+)')
 SPLIT = re.compile(
     r'swap (?P<swap>\d+) us \(cpu (?P<cpu>\d+), blocked (?P<blocked>\d+) us in \d+, waiting for a core (?P<runq>\d+) us'
 )
@@ -49,6 +61,7 @@ class Stats:
 @dataclass
 class Render:
     woke_us: int
+    first_us: int = -1
     swap_us: int = -1
     cpu_us: int = 0
     blocked_us: int = 0
@@ -64,6 +77,31 @@ class Slow:
     render: Render | None = None
     users: list[tuple[str, int, dict]] = field(default_factory=list)  # (process, cb, spans) committed before the swap
     stage: str = ''
+    window: tuple[int, int] | None = None  # the render thread's (wake, first submit) from the SwitchFrame line, us
+
+    @property
+    def woke_us(self) -> int | None:
+        if self.window:
+            return self.window[0]
+        return self.render.woke_us if self.render else None
+
+    @property
+    def first_us(self) -> int | None:
+        """Return when this frame's recording reached the GPU, in us after its vsync; None when no line says."""
+        if self.window and self.window[1] >= 0:
+            return self.window[1]
+        if self.render and self.render.first_us >= 0:
+            return self.render.first_us
+        first = self.frame.points['first']
+        return first if self.frame.submits and first >= 0 else None
+
+    @property
+    def chain_periods(self) -> int:
+        """Return the periods lost from the frame end it was due at to its latch."""
+        f = self.frame
+        if f.origin_kind != 'vsync' or f.points['at_latch'] < 0:
+            return f.frames - 1
+        return min(f.frames - 1, max(0, round(f.points['at_latch'] / PERIOD_US) - 1))
 
 
 def stats_windows(recs: list[Rec]) -> list[Stats]:
@@ -95,6 +133,8 @@ def parse_render(rest: str) -> Render | None:
     if not woke:
         return None
     out = Render(int(woke['woke']))
+    if m := RENDER_FIRST.search(rest):
+        out.first_us = int(m['first'])
     if m := SPLIT.search(rest):
         out.swap_us, out.cpu_us, out.blocked_us, out.runq_us = (int(m[k]) for k in ('swap', 'cpu', 'blocked', 'runq'))
     if m := LONGEST.search(rest):
@@ -117,7 +157,8 @@ def lost_stage(slow: Slow) -> str:  # noqa: PLR0911  one return per stage of the
     A present that latched one period after its origin kept its own chain: the frame before it never presented (it
     came late and was replaced, its content came late, or there was none; these lines cannot tell which). A render
     thread that spent half a period or more in one block before its swap was waiting, for the app's commit or for a
-    server, not recording; which one needs the commit probe.
+    server, not recording; which one needs the commit probe. A frame with no recording point (no compositor
+    submission, or one before its vsync with no render line) goes from its wake to its swap.
     """
     f, r = slow.frame, slow.render
     if f.cause in NOT_LOST:
@@ -127,13 +168,20 @@ def lost_stage(slow: Slow) -> str:  # noqa: PLR0911  one return per stage of the
     p = f.points
     if 0 <= p['at_latch'] <= PERIOD_US * 3 // 2:
         return GAP
-    if r is not None and r.woke_us > PERIOD_US:
+    if (woke := slow.woke_us) is not None and woke > PERIOD_US:
         return 'late wake'
-    if p['first'] < 0 or p['swap'] < 0:
+    if p['swap'] < 0:
         return 'unclassified'
-    stages = (('first', 'record'), ('swap', 'encode'), ('offer', 'display queue'), ('done', 'gpu'), ('flip', 'flip'))
-    for point, stage in stages:
-        if p[point] > PERIOD_US:
+    first = slow.first_us
+    chain = (
+        ('record', first if first is not None else -1),
+        ('encode', p['swap']),
+        ('display queue', p['offer']),
+        ('gpu', p['done']),
+        ('flip', p['flip']),
+    )
+    for stage, at in chain:
+        if at > PERIOD_US:
             if stage in {'record', 'encode'} and r and r.longest_us * 2 >= PERIOD_US:
                 return WAITED
             return f'{stage}, {split(r)}' if stage in {'record', 'encode'} and r else stage
@@ -155,7 +203,7 @@ def slow_presents(recs: list[Rec]) -> list[Slow]:
             if render := parse_render(m['rest']):
                 renders[int(m['vsync'])] = render
         elif r.msg.startswith('SwitchFrame: ') and (m := FRAME.search(r.msg)):
-            out.append(Slow(r.time, parse_frame(m)))
+            out.append(Slow(r.time, parse_frame(m), window=render_window(r.msg, int(m['origin']))))
     users.sort(key=lambda u: u[0])
     vsyncs = sorted(renders)
     commits = [u[0] for u in users]
@@ -169,6 +217,17 @@ def slow_presents(recs: list[Rec]) -> list[Slow]:
         ]
         s.stage = lost_stage(s)
     return out
+
+
+def render_window(msg: str, origin: int) -> tuple[int, int] | None:
+    """Return the render thread's (wake, first submit) on a SwitchFrame line, in us after the present's vsync.
+
+    None when the line has none or the render thread's window began at another vsync than the present's origin.
+    """
+    m = FRAME_RENDER.search(msg)
+    if not m or abs(int(m['vsync']) - origin) > JOIN_TICKS:
+        return None
+    return int(m['woke']), int(m['first'])
 
 
 def nearest(vsyncs: list[int], tick: int) -> int | None:
@@ -199,11 +258,16 @@ def timeline(s: Slow) -> list[str]:
     """Return the lines printed for one slow present: its chain, its render thread and the commits before it."""
     f, p = s.frame, s.frame.points
     marks = [f'{k} {p[k] / 1000:+.1f}' for k in ('first', 'last', 'swap', 'offer', 'done', 'flip') if p[k] >= 0]
+    before = f.frames - 1 - s.chain_periods
     out = [
         f'{s.time:%H:%M:%S.%f}'[:-3]
-        + f' {f.frames} periods ({f.interval_us / 1000:.1f} ms), kernel cause {f.cause}, lost in: {s.stage}',
+        + f' {f.frames} periods ({f.interval_us / 1000:.1f} ms), kernel cause {f.cause}, lost in: {s.stage}'
+        + (f' ({s.chain_periods} in its chain, {before} before its vsync)' if before else ''),
         f'    from {f.origin_kind}: ' + ', '.join(marks) + f', latch {p["at_latch"] / 1000:+.1f} ms',
     ]
+    if s.window:
+        first = f'{s.window[1] / 1000:+.1f} ms' if s.window[1] >= 0 else 'none'
+        out.append(f'    render thread window: woke {s.window[0] / 1000:+.1f} ms, first submit {first}')
     if r := s.render:
         out.append(
             f'    render thread: woke {r.woke_us} us after the vsync; swap {r.swap_us} us = on core {r.cpu_us} + '

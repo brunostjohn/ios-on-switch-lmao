@@ -2752,7 +2752,7 @@ _send_data(struct kd_dest *dest, const void *src, size_t size)
 		if (size > dest->kdd_user_size - dest->kdd_cur_offset) {
 			return ERANGE;
 		}
-		error = copyout(src, dest->kdd_user_buffer + dest->kdd_cur_offset, size);
+		error = SWITCH_RECORDER_COPYOUT(src, dest->kdd_user_buffer + dest->kdd_cur_offset, size);
 		break;
 	case KD_DEST_VFS:
 		error = _send_data_vfs(dest, src, size);
@@ -3513,9 +3513,9 @@ kdbg_dump_trace_to_file(const char *filename, bool reenable)
 	 * Wait to synchronize the file to capture the I/O in the
 	 * TRACE_WRITING_EVENTS interval.
 	 */
-	ret = SWITCH_RECORDER_FSYNC(VNOP_FSYNC(vp, MNT_WAIT, ctx));
+	ret = VNOP_FSYNC(vp, MNT_WAIT, ctx);
 	if (ret == KERN_SUCCESS) {
-		ret = SWITCH_RECORDER_FSYNC(VNOP_IOCTL(vp, F_FULLFSYNC, (caddr_t)NULL, 0, ctx));
+		ret = VNOP_IOCTL(vp, F_FULLFSYNC, (caddr_t)NULL, 0, ctx);
 	}
 
 	/*
@@ -3534,7 +3534,7 @@ kdbg_dump_trace_to_file(const char *filename, bool reenable)
 
 out_close:
 	vnode_close(vp, FWRITE, ctx);
-	SWITCH_RECORDER_SYNC(sync(current_proc(), (void *)NULL, (int *)NULL));
+	sync(current_proc(), (void *)NULL, (int *)NULL);
 
 out:
 	if (reenable_trace != 0) {
@@ -3545,6 +3545,38 @@ out:
 
 	ktrace_unlock();
 }
+
+#if SWITCH_RECORDER
+/*
+ * The flight recorder's capture (kernel/switch/recorder/capture.c), on its own thread: the ring's events merged oldest
+ * first into `buf`, a kernel buffer of `size` bytes, the way kdbg_dump_trace_to_file reads them into a file, with
+ * tracing off only while they are read. EBUSY when tracing is off or another process owns it.
+ */
+int
+switch_recorder_kdebug_read(void *buf, size_t size, size_t *events)
+{
+	int reenable = 0;
+	int error = 0;
+
+	*events = 0;
+	ktrace_lock();
+	if (!(kdebug_enable & KDEBUG_ENABLE_TRACE) || ktrace_get_owning_pid() != 0) {
+		ktrace_unlock();
+		return EBUSY;
+	}
+	reenable = kdebug_enable;
+	kdebug_enable = 0;
+	kd_control_trace.enabled = 0;
+	commpage_update_kdebug_state();
+	struct kd_dest dest = kd_dest_copyout(CAST_USER_ADDR_T(buf), size);
+	error = _read_merged_trace_events(&dest, size / sizeof(kd_buf), events);
+	kdebug_enable = reenable;
+	kd_control_trace.enabled = 1;
+	commpage_update_kdebug_state();
+	ktrace_unlock();
+	return error;
+}
+#endif /* SWITCH_RECORDER */
 
 SYSCTL_NODE(_kern, OID_AUTO, kdbg, CTLFLAG_RD | CTLFLAG_LOCKED, 0,
     "kdbg");

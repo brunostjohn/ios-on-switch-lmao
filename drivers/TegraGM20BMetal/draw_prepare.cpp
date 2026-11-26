@@ -402,7 +402,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         y[0] = std::min(y[0], yj[0]), y[1] = std::max(y[1], yj[1]);
     }
     const uint32_t facts = bindingFacts(*pl);
+    SWITCH_METAL_ENCODE_BEGIN(lookupSpan, VariantLookup);
     Pipeline *prepared = dev_->variant(*pl, facts | (rot_.turned() ? AssumeTurned : 0u));
+    SWITCH_METAL_ENCODE_END(lookupSpan);
     SWITCH_METAL_ENCODE_BEGIN(geometrySpan, Geometry);
     DrawGeometry g;
     if (firstDraw || pl->writeBits || (pl->fetchBits & ~pl->storageBits))

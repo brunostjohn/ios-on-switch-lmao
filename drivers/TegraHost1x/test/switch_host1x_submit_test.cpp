@@ -254,7 +254,7 @@ struct Host1xSubmit : testing::Test {
     {
         ASSERT_EQ(tegra_host1x_start(), TEGRA_HOST1X_OK);
         IOLockLock(gSubmitLock);
-        switch_host1x_channels_program();
+        switch_host1x_channels_program(163200);
         IOLockUnlock(gSubmitLock);
         gDemands.clear();
         gFencesAdded.clear();
@@ -356,7 +356,7 @@ TEST_F(Host1xSubmit, TheGatherFilterIsClearedOnEveryChannel)
     for (uint32_t channel = 0; channel < TEGRA_HOST1X_CHANNELS; ++channel)
         switch_mmio_write32(gHostRegisters, channel * kChannelStride + CH_CHANNELCTRL, 0x5);
     IOLockLock(gSubmitLock);
-    switch_host1x_channels_program();
+    switch_host1x_channels_program(163200);
     IOLockUnlock(gSubmitLock);
     for (uint32_t channel = 0; channel < TEGRA_HOST1X_CHANNELS; ++channel)
         EXPECT_EQ(switch_mmio_read32(gHostRegisters, channel * kChannelStride + CH_CHANNELCTRL), 0x1u) << channel;
@@ -838,5 +838,60 @@ TEST_F(Host1xSubmit, AReleaseOfASyncpointNotHandedOutOrFartherThanAskedIsRefused
     EXPECT_EQ(syncpoint(id), from);
     EXPECT_EQ(gDisplayTeardowns, 0u);
 }
+
+#if SWITCH_HOST1X_STATS
+uint32_t &channelRegister(uint32_t channel, uint32_t reg)
+{
+    return *reinterpret_cast<uint32_t *>(gHostRegisters + channel * kChannelStride + reg);
+}
+
+TEST_F(Host1xSubmit, ADebugProgramStartsEveryChannelsTickAndStallCountersFromZero)
+{
+    for (uint32_t channel = 0; channel < TEGRA_HOST1X_CHANNELS; ++channel) {
+        channelRegister(channel, CH_CHANNELCTRL) = 0x4;
+        for (const uint32_t reg : {CH_TICKCOUNT_HI, CH_TICKCOUNT_LO, CH_STALLCOUNT_HI, CH_STALLCOUNT_LO})
+            channelRegister(channel, reg) = 0x1234;
+        channelRegister(channel, CH_STALLCTRL) = 0;
+    }
+    IOLockLock(gSubmitLock);
+    switch_host1x_channels_program(163200);
+    IOLockUnlock(gSubmitLock);
+    for (uint32_t channel = 0; channel < TEGRA_HOST1X_CHANNELS; ++channel) {
+        EXPECT_EQ(channelRegister(channel, CH_CHANNELCTRL), 0x1u) << channel;
+        EXPECT_EQ(channelRegister(channel, CH_STALLCTRL), 0x1u) << channel;
+        for (const uint32_t reg : {CH_TICKCOUNT_HI, CH_TICKCOUNT_LO, CH_STALLCOUNT_HI, CH_STALLCOUNT_LO})
+            EXPECT_EQ(channelRegister(channel, reg), 0u) << channel << " " << reg;
+    }
+}
+
+TEST_F(Host1xSubmit, TheStatsLineReadsTheChannelCountersOnlyWhileHost1xRuns)
+{
+    constexpr uint32_t vic = TEGRA_HOST1X_CHANNEL_VIC;
+    gGatherStats = {};
+    IOLockLock(gSubmitLock);
+    switch_host1x_channels_program(163200);
+    IOLockUnlock(gSubmitLock);
+    switch_test_log.clear();
+    switch_test_now_abs = 1000000000;
+    job(vic, 1, 1);
+    EXPECT_EQ(switch_test_log, "");
+    channelRegister(vic, CH_TICKCOUNT_HI) = 1;
+    channelRegister(vic, CH_TICKCOUNT_LO) = 0x2930b80;
+    channelRegister(vic, CH_STALLCOUNT_LO) = 163200000;
+    switch_test_now_abs = 6000000000;
+    job(vic, 1, 2);
+    EXPECT_THAT(switch_test_log, testing::EndsWith(" clocked=0/26581853/0/0/0us stalled=0/1000000/0/0/0us"));
+    uint32_t *words = nullptr;
+    ASSERT_EQ(switch_host1x_job_reserve(vic, 2, &words), TEGRA_HOST1X_OK);
+    IOLockLock(gSubmitLock);
+    switch_host1x_channels_stop();
+    IOLockUnlock(gSubmitLock);
+    switch_test_now_abs = 12000000000;
+    EXPECT_EQ(switch_host1x_job_submit(vic, words, 2, 170, 3), TEGRA_HOST1X_ENODEV);
+    EXPECT_THAT(switch_test_log, testing::EndsWith(" counters=off"));
+    switch_test_now_abs = 0;
+    gGatherStats = {};
+}
+#endif
 
 }  // namespace

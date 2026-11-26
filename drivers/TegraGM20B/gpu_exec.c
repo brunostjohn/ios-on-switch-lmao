@@ -39,6 +39,19 @@ int tgm_chan_room(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 	return chan_room(chan, gpfifo_nr, push_nr);
 }
 
+#if TGM_STATS
+/* nvxnu_kdebug is a function, so its arguments (a GP_GET read over MMIO) are evaluated even where its body is empty. */
+static u64 chan_ring_position(struct tgm_chan *chan)
+{
+	return (u64)chan->chan.func->gpfifo.read_get(&chan->chan) << 32 | chan->chan.gpfifo.cur;
+}
+
+static u32 chan_done(const struct tgm_chan *chan)
+{
+	return chan->fence_cpu ? READ_ONCE(*chan->fence_cpu) : 0;
+}
+#endif
+
 /* Room for gpfifo_nr entries and push_nr dwords, waited for by interrupt: every submission's GET report comes before its
  * fence's nonstall interrupt (chan_fence), whose pass ends in nvxnu_wake(), so nvif's own wait then finds the room at
  * once and never spins. Not the channel's word: a pass between the fence's release and the GET report finds no room,
@@ -49,6 +62,12 @@ int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 	u64 end = nvxnu_nanotime() + NSEC_PER_SEC;
 	int ret = 0;
 
+	if (chan_room(chan, gpfifo_nr, push_nr))
+		return 0;
+#if TGM_STATS
+	nvxnu_kdebug(SWITCH_KDBG_GPU_ROOM, chan->chid, chan_ring_position(chan),
+		     (u64)chan->submitted << 32 | chan_done(chan));
+#endif
 	for (;;) {
 		u32 seq = nvxnu_wake_seq();
 
@@ -61,6 +80,10 @@ int tgm_chan_wait_ready(struct tgm_chan *chan, u32 gpfifo_nr, u32 push_nr)
 			break;
 		}
 	}
+#if TGM_STATS
+	nvxnu_kdebug(SWITCH_KDBG_GPU_ROOM_DONE, chan->chid, chan_ring_position(chan),
+		     (u64)chan->submitted << 32 | (u32)ret);
+#endif
 	return ret;
 }
 
@@ -106,6 +129,10 @@ static u8 chan_note_foreign(struct tgm_chan *chan,
 			    source.vm != chan->vm) {
 				flags |= TGM_STAT_FOREIGN_FENCE;
 				fences++;
+				nvxnu_kdebug(SWITCH_KDBG_GPU_WAIT,
+					     chan->chid | (u64)SWITCH_GPU_ENGINE_GM20B << 16 |
+						     (u64)source.chid << 32,
+					     dependencies[i].value, chan->submitted);
 			}
 		} else if (dependencies[i].engine == SWITCH_GPU_ENGINE_PROMISE) {
 			if (dependencies[i].queue / TGM_FENCE_SLOT != own_slot) {
@@ -117,6 +144,9 @@ static u8 chan_note_foreign(struct tgm_chan *chan,
 			   dependencies[i].engine == SWITCH_GPU_ENGINE_DISPLAY ||
 			   dependencies[i].engine == SWITCH_GPU_ENGINE_NVENC) {
 			host1x++;
+			nvxnu_kdebug(SWITCH_KDBG_GPU_WAIT,
+				     chan->chid | (u64)dependencies[i].engine << 16,
+				     dependencies[i].value, chan->submitted);
 		}
 	}
 	for (i = 0; i < word_wait_count; ++i) {
@@ -381,7 +411,9 @@ static void frame_submitted(struct tgm_chan *chan, u32 seqno, u64 start)
 	u64 now = nvxnu_nanotime();
 	u64 none = 0;
 
+#if TGM_STATS
 	nvxnu_kdebug(SWITCH_KDBG_SUBMIT, chan->chid, seqno, chan->critical);
+#endif
 	if (!chan->critical) {
 		__atomic_fetch_add(&tgm_frame_gpu.others, 1, __ATOMIC_RELAXED);
 		return;

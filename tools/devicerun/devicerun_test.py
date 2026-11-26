@@ -35,12 +35,36 @@ def judged(records: list[dict], *check_list: Check) -> dict[str, rules.Result]:
 
 
 class Checks(unittest.TestCase):
+    def test_a_sparse_window_with_a_long_wait_fails_the_longest_wait_check(self):
+        """Boot 2693043C (25 Nov): two runs in 10 s, one of them after 9.2 s on a run queue."""
+        sched = {c.name: c for c in checks.GROUPS['sched']}
+        sparse = 'backboardd.main[69] 31/31 TS DF DF: 2 runs 131072/9169075/9169075 us; render-server[69] 55/55 FX'
+        busy = 'backboardd.main[69] 31/31 TS DF DF: 400 runs 64/900/4000 us; render-server[69] 55/55 FX'
+        log = [record(t, f'SwitchSched 1/2 (10000 ms): {line}') for t, line in ((1.0, busy), (11.0, sparse))]
+        got = judged(log, sched['sched.backboardd-main'], sched['sched.backboardd-main-longest'])
+        self.assertEqual(got['sched.backboardd-main'].verdict, PASS)
+        self.assertEqual(got['sched.backboardd-main-longest'].verdict, FAIL)
+
+    def test_host1x_channel_counters_that_never_started_fail(self):
+        media = {c.name: c for c in checks.GROUPS['media']}
+        head = 'TegraHost1x: 5s NVDEC/VIC/NVENC/NVJPG/DC gathered=0/40/0/0/60 copied=0/0/0/0/0 arena_high=0/3/0/0/1KB '
+        running = head + 'room_waits=0/0/0/0/0 clocked=0/5000000/0/0/5000000us stalled=0/1000000/0/0/4500000us'
+        stopped = head + 'room_waits=0/0/0/0/0 clocked=0/0/0/0/0us stalled=0/0/0/0/0us'
+        check = media['media.host1x-channel-counters']
+        self.assertEqual(judged([record(1.0, running)], check)[check.name].verdict, PASS)
+        self.assertEqual(judged([record(1.0, running), record(6.0, stopped)], check)[check.name].verdict, FAIL)
+        self.assertEqual(
+            judged([record(1.0, head + 'room_waits=0/0/0/0/0 counters=off')], check)[check.name].verdict, NO_DATA
+        )
+
     def test_every_check_is_well_formed(self):
         names = [c.name for group in checks.GROUPS.values() for c in group]
         self.assertEqual(len(names), len(set(names)))
         for group in checks.GROUPS.values():
             for c in group:
-                self.assertTrue(c.rule in {rules.REPORT, rules.TIMELINE} or rules.RULE.match(c.rule), c.name)
+                self.assertTrue(
+                    c.rule in {rules.REPORT, rules.TIMELINE, rules.SUMS} or rules.RULE.match(c.rule), c.name
+                )
                 self.assertTrue(all(c.literals()), c.name)
                 if c.regex:
                     re.compile(c.regex)

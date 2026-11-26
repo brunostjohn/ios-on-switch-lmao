@@ -35,6 +35,7 @@
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
 #include <kern/thread_call.h>
+#include <sys/kdebug.h>
 #include <machine/machine_routines.h>
 #if DEVELOPMENT || DEBUG
 #include <machine/cpu_number.h>
@@ -324,6 +325,14 @@ constexpr unsigned kSpeedCount = sizeof(kSpeeds) / sizeof(kSpeeds[0]);
 // UHS DDR200 (hekate clock.c:793-799, sdmmc.c:1426-1464): PLLC4_OUT0 (998.4 MHz) / CAR 2.5 (3) = 399.36 MHz,
 // SDHCI /2 (divider 1) in UHS_DDR50 host mode -> 199.68 MHz DDR (~170-190 MB/s on non-DLL cards).
 constexpr uint32_t kDdr200CmdSys = 14, kDdr200CarDivider = 3, kDdr200SdhciDivider = 1, kDdr200KHz = 199680;
+
+#if DEVELOPMENT || DEBUG
+// Each pick of the queue in the flight recorder's ring (our tracepoint subclass, DBG_DRIVERS/18, which its filter keeps;
+// kernel/switch/include/switch/recorder.h's ranges): arg1 the chain's first LBA; arg2 its sectors | its requests << 32;
+// arg3 its IOStoragePriority class | 0x100 when it passed older requests | 0x200 for a write | the requests queued
+// before it was taken << 16; arg4 how long the queue's head had waited (us).
+static constexpr uint32_t kSdPickKdbg = (6u << 24) | (18u << 16) | (0x3d8u << 2);
+#endif
 
 struct Request {
     Request *next;
@@ -2546,6 +2555,10 @@ Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCo
     Request *prev = nullptr;
     Request *first = head;
     const uint64_t pickNs = switch_now_ns();
+#if DEVELOPMENT || DEBUG
+    const uint64_t headWaitedUs = (pickNs - head->queuedNs) / 1000;
+    const uint64_t queuedBefore = queued;
+#endif
     // r6-lows: a read of a higher IOStoragePriority class goes first (the UI's page-ins, I/O tier 0, behind up to ~100 queued
     // background requests at ~0.5 ms each otherwise): the oldest read of the best class queued, unless it overlaps an older
     // request or the head has waited kAgeNs.
@@ -2642,6 +2655,11 @@ Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCo
             tail = prev;
         last->next = nullptr;
     }
+#if DEVELOPMENT || DEBUG
+    KDBG(kSdPickKdbg, first->lba, uint64_t(sectors) | uint64_t(count) << 32,
+         uint64_t(first->klass) | (prev ? 0x100u : 0u) | (first->write ? 0x200u : 0u) | queuedBefore << 16,
+         headWaitedUs);
+#endif
     takenLocked(first, count, pickNs);
     *chainSectors = sectors;
     *chainCount = count;

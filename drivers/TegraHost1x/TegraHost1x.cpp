@@ -64,7 +64,7 @@ IOLock *gSubmitLock;  // every channel's push buffer and arena, and suspend/resu
 uint32_t gNextSyncpt = kFirstOwn;
 int gState;                 // 0 not started, 1 up, 2 suspended, < 0 failed
 uint32_t gSaved[kSyncpts];  // syncpoint values across SC7, which resets the sync unit
-unsigned gClockMHz;
+unsigned gClockKHz;
 
 inline uint32_t sync(uint32_t o)
 {
@@ -101,7 +101,7 @@ int fail(const char *why, uint32_t value)
 
 // Adopts the clock and reset the boot chain left for the display; enables them only if they are off. Never pulses
 // the reset: every engine and the display controller are reached through host1x.
-bool clockOn(unsigned *mhz, bool *enabled)
+bool clockOn(unsigned *khz, bool *enabled)
 {
     *enabled = false;
     if (!switch_car_clock_enabled(kClock)) {
@@ -116,7 +116,7 @@ bool clockOn(unsigned *mhz, bool *enabled)
         *enabled = true;
     }
     const uint32_t source = switch_car_read(CLK_SOURCE_HOST1X);
-    *mhz = (source >> 29) == 4 ? 408u * 2 / ((source & 0xff) + 2) : 0;  // only PLLP is known for certain
+    *khz = (source >> 29) == 4 ? 408000u * 2 / ((source & 0xff) + 2) : 0;  // only PLLP is known for certain
     return switch_car_clock_enabled(kClock) && !switch_car_reset_asserted(kClock);
 }
 
@@ -126,8 +126,8 @@ void syncConfigure()
 {
     syncWrite(SYNC_IP_BUSY_TIMEOUT, 0);
     syncWrite(SYNC_CTXSW_TIMEOUT_CFG, 0xff);
-    if (gClockMHz)
-        syncWrite(SYNC_USEC_CLK, gClockMHz);
+    if (gClockKHz)
+        syncWrite(SYNC_USEC_CLK, gClockKHz / 1000);
     for (uint32_t i = 0; i < kSyncpts / 32; i++) {
         syncWrite(SYNC_INT_DISABLE + 4 * i, 0xffffffffu);
         syncWrite(SYNC_INT_STATUS + 4 * i, 0xffffffffu);
@@ -158,7 +158,7 @@ int bringUp()
     if (!gHost || !gMc || !gSubmitLock)
         return fail("no mapping", 0);
     bool enabled = false;
-    if (!clockOn(&gClockMHz, &enabled))
+    if (!clockOn(&gClockKHz, &enabled))
         return fail("clock or reset stuck, CAR CLK_OUT_ENB_L", switch_car_read(CLK_OUT_ENB_L));
     if (switch_mmio_read32(gMc, MC_SMMU_HC_ASID) & SMMU_ENABLE)
         return fail("SMMU translation is on for HC, MC 0x250", switch_mmio_read32(gMc, MC_SMMU_HC_ASID));
@@ -168,11 +168,11 @@ int bringUp()
         return fail("cannot attach the syncpoint interrupt, INTID", kIntid);
     if (!switch_host1x_channels_alloc(gHost, gHost + kSyncOffset, gSubmitLock))
         return fail("no push buffer or command arena below 4 GiB", 0);
-    switch_host1x_channels_program();
+    switch_host1x_channels_program(gClockKHz);
     gState = 1;
     switch_host1x_intr_start();
     const uint32_t filtered = switch_host1x_channels_filter_stuck();
-    IOLog("TegraHost1x: H1 ok channel 0, host1x %u MHz%s, gather filter %s\n", gClockMHz,
+    IOLog("TegraHost1x: H1 ok channel 0, host1x %u MHz%s, gather filter %s\n", gClockKHz / 1000,
           enabled ? ", enabled here" : "", filtered ? "on" : "off");
     if (filtered)
         IOLog("TegraHost1x: H1 FAIL the gather filter stays on for channels %#x: their streams' waits do not run\n",
@@ -311,7 +311,7 @@ extern "C" void tegra_host1x_resume(void)
         IODelay(2);
     }
     bool enabled = false;
-    if (!clockOn(&gClockMHz, &enabled)) {
+    if (!clockOn(&gClockKHz, &enabled)) {
         IOLog("TegraHost1x: H1 FAIL resume: clock or reset stuck, CAR CLK_OUT_ENB_L %#x\n",
               switch_car_read(CLK_OUT_ENB_L));
         gState = TEGRA_HOST1X_ENODEV;
@@ -321,7 +321,7 @@ extern "C" void tegra_host1x_resume(void)
     syncConfigure();
     for (uint32_t id = kFirstOwn; id < kSyncpts && id < gNextSyncpt; id++)
         syncWrite(SYNC_SYNCPT + 4 * id, gSaved[id]);
-    switch_host1x_channels_program();
+    switch_host1x_channels_program(gClockKHz);
     gState = 1;
     switch_host1x_intr_start();
     IOLockUnlock(gSubmitLock);

@@ -27,6 +27,7 @@ from tools.devicerun.lockscreen import LOCKSCREEN
 from tools.devicerun.memory import MEMORY
 from tools.devicerun.morning import MORNING
 from tools.devicerun.motion import MOTION
+from tools.devicerun.owed_all import GROUPS as OWED
 from tools.devicerun.protection import PROTECTION
 from tools.devicerun.rules import REPORT, TIMELINE, Check
 from tools.devicerun.springboard import OBSERVATIONS, SPRINGBOARD
@@ -592,6 +593,18 @@ GROUPS: dict[str, list[Check]] = {
             regex=r'TegraVIC: \d+s jobs=(?P<jobs>\d+) ops=\d+ refused=(?P<refused>\d+)',
             show=('refused',),
             source='drivers/TegraVIC/SwitchVICStats.h',
+        ),
+        Check(
+            'media.host1x-channel-counters',
+            'measure',
+            'TegraHost1x: ',
+            'min(vic) > 0',
+            process=KERNEL,
+            regex=r'^TegraHost1x: \d+s NVDEC/VIC/NVENC/NVJPG/DC .*? clocked=\d+/(?P<vic>\d+)/\d+/\d+/\d+us '
+            r'stalled=\d+/(?P<vic_stalled>\d+)/',
+            source='drivers/TegraHost1x/SwitchHost1xGatherStats.h',
+            note="a channel's tick counter counts every host1x clock (TRM 14.4.4); VIC clocked 0 in a window means "
+            'the counters never started, and then its stalled share means nothing',
         ),
         Check(
             'media.idle-power',
@@ -1242,6 +1255,21 @@ GROUPS: dict[str, list[Check]] = {
             note="runnable-to-running p99 per 10 s; boot 15 up to 275359 us. TS DF after startup is backboardd's own",
         ),
         Check(
+            'sched.backboardd-main-longest',
+            'r116-sched',
+            'SwitchSched 1/2',
+            'max(max) < 250000',
+            process=KERNEL,
+            regex=r'backboardd\.main\[\d+\] \d+/\d+ (?P<mode>\S+) (?P<qos>\S+) \S+: (?P<runs>\d+) runs '
+            r'(?P<p50>\d+)/(?P<p99>\d+)/(?P<max>\d+) us',
+            show=('mode', 'qos', 'runs'),
+            source='kernel/switch/sched/stats.c',
+            note=(
+                'the longest runnable-to-running wait of any 10 s window, however few runs it had: on 25 Nov a window '
+                'of 2 runs held 9169075 us and one of 12 runs 32555950 us, which the p99 check skips'
+            ),
+        ),
+        Check(
             'sched.kernel-high-cpu',
             'r116-sched',
             'SwitchSched 1/2',
@@ -1434,6 +1462,7 @@ GROUPS: dict[str, list[Check]] = {
     'launch': LAUNCHES,
     'springboard': SPRINGBOARD,
     'boot-observations': OBSERVATIONS,
+    **OWED,
 }
 
 # The tools/frames lines, pulled with the checks' own query.

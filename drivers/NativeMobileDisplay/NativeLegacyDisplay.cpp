@@ -221,6 +221,11 @@ extern "C" __attribute__((weak)) int tegra_gm20b_gpu_load(uint64_t *, uint64_t *
 extern "C" __attribute__((weak)) void switch_sched_render_vsync(uint64_t, uint64_t)
 {}
 
+extern "C" __attribute__((weak)) bool switch_sched_render_window(uint64_t *, int64_t *, int64_t *)
+{
+    return false;
+}
+
 extern "C" __attribute__((weak)) void switch_sched_render_swapped(void)
 {}
 
@@ -783,20 +788,26 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     static constexpr int32_t kNotSeen = INT32_MIN;
 
     struct FrameTimeline {
+        uint64_t renderVsync = 0;  // the render thread's window: its vsync (mach; 0: none), wake and first submission
+        int32_t renderWokeUs = kNotSeen, renderFirstUs = kNotSeen;
         int32_t vsyncUs = kNotSeen, doneUs = kNotSeen, firstUs = kNotSeen, lastUs = kNotSeen;
         uint32_t execUs, importUs, bindUs, allocUs, cleanUs, cleanKiB;
         uint16_t submits, others, imports, binds, allocs, frees, mhzVsync, mhzSwap;
         int8_t basePri, schedPri, mode, qos;
     };
 
-    static int32_t usFrom(uint64_t fromNs, uint64_t toNs)
+    static int32_t clampUs(int64_t us)
     {
-        const int64_t us = (static_cast<int64_t>(toNs) - static_cast<int64_t>(fromNs)) / 1000;
         if (us > INT32_MAX)
             return INT32_MAX;
         if (us <= INT32_MIN)
             return INT32_MIN + 1;
         return static_cast<int32_t>(us);
+    }
+
+    static int32_t usFrom(uint64_t fromNs, uint64_t toNs)
+    {
+        return clampUs((static_cast<int64_t>(toNs) - static_cast<int64_t>(fromNs)) / 1000);
     }
 
     static uint32_t us32(uint64_t ns)
@@ -1537,10 +1548,15 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
         size_t used = written > 0 ? static_cast<size_t>(written) : 0;
         if (used >= sizeof(line))
             used = sizeof(line) - 1;
-        if (gpuBusy == UINT32_MAX)
-            snprintf(line + used, sizeof(line) - used, "; gpu busy -");
-        else
-            snprintf(line + used, sizeof(line) - used, "; gpu busy %u.%u%%", gpuBusy / 10, gpuBusy % 10);
+        const int busy = gpuBusy == UINT32_MAX ? snprintf(line + used, sizeof(line) - used, "; gpu busy -")
+                                               : snprintf(line + used, sizeof(line) - used, "; gpu busy %u.%u%%",
+                                                          gpuBusy / 10, gpuBusy % 10);
+        used += busy > 0 ? static_cast<size_t>(busy) : 0;
+        if (used >= sizeof(line))
+            used = sizeof(line) - 1;
+        if (tl.renderVsync)
+            snprintf(line + used, sizeof(line) - used, "; render vsync %llu woke %d first %d", tl.renderVsync,
+                     tl.renderWokeUs, tl.renderFirstUs);
         os_log(OS_LOG_DEFAULT, "SwitchFrame: %s", line);  // one string: os_log drops a record whose scalars outgrow it
     }
 
@@ -4995,6 +5011,14 @@ public:
         tl.schedPri = static_cast<int8_t>(sched);
         tl.mode = static_cast<int8_t>(mode);
         tl.qos = static_cast<int8_t>(qos);
+        uint64_t renderVsync = 0;
+        int64_t renderWoke = 0;
+        int64_t renderFirst = -1;
+        if (switch_sched_render_window(&renderVsync, &renderWoke, &renderFirst)) {
+            tl.renderVsync = renderVsync;
+            tl.renderWokeUs = clampUs(renderWoke);
+            tl.renderFirstUs = renderFirst < 0 ? -1 : clampUs(renderFirst);
+        }
         switch_sched_render_swapped();
         return tl;
     }

@@ -503,6 +503,19 @@ TEST(FrameTimelineSource, TheFrameEndStandsInForAnUnarmedVsync)
     EXPECT_TRUE(method("FrameTimeline swapTimeline(uint64_t at)").has("tl.vsyncUs = timelineVsyncUs(at);"));
 }
 
+// tools/perf's pacing.FRAME_RENDER reads the render thread's window off every slow present's line: its SwitchFrameRender
+// line is capped at 30/s and written only for a swap half a period late, and the display's first submit is the
+// compositor's first since the previous swap, which can come long before this frame's vsync. The window is read before
+// switch_sched_render_swapped closes it.
+TEST(FrameTimelineSource, EverySlowPresentCarriesTheRenderThreadsWindow)
+{
+    const CodeText swap = method("FrameTimeline swapTimeline(uint64_t at)");
+    EXPECT_TRUE(swap.has("switch_sched_render_window(&renderVsync, &renderWoke, &renderFirst)"));
+    const std::string display = SourceText("../NativeLegacyDisplay.cpp");
+    EXPECT_LT(display.find("switch_sched_render_window(&renderVsync"), display.find("switch_sched_render_swapped();"));
+    EXPECT_TRUE(method("static void noteSlowFrame(").has(R"("; render vsync %llu woke %d first %d")"));
+}
+
 TEST(SwapZeroLayerSource, SwapSubmitFilterMatchesBothIpswTables)
 {
     const std::string t24 = SourceText("../../../kits/SwitchABI/kinds/24B119/IOMobileFramebufferLegacy.json");
