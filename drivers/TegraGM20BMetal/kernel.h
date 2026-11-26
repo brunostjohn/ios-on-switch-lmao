@@ -349,6 +349,11 @@ public:
     }
 
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    // HW Test gpu.perf.fill: uncompressed BOs allocated while set ask for direct physical addresses
+    // (TegraGM20BBoProbeDirect); the BOs that asked, and those the kernel answered are reached through the SMMU
+    mutable std::atomic<bool> probeDirect{false};
+    std::atomic<uint64_t> probeDirectBos{0}, smmuBos{0};
+
     // A debug kernel's method outside TegraGM20BABI.h (TegraGM20BPathsABI.h), on this connection
     int debugCall(uint32_t method, const void *in, size_t inSize, void *out, size_t outSize)
     {

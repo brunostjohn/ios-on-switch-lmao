@@ -80,6 +80,8 @@
     d[@"fill_twod"] = @(gRM->raw->stats.fillTwod.load());
     d[@"resolve_exact"] = @(gRM->raw->stats.resolveExact.load());
     d[@"resolve_twod_compressed"] = @(gRM->raw->stats.resolveTwodCompressed.load());
+    d[@"bos_probe_direct"] = @(gRM->raw->kernel().probeDirectBos.load());
+    d[@"bos_smmu"] = @(gRM->raw->kernel().smmuBos.load());
     d[@"zcull_passes"] = @(gRM->raw->stats.zcullPasses.load());
     d[@"zcull_invalidations"] = @(gRM->raw->stats.zcullInvalidations.load());
     d[@"zcull_loads"] = @(gRM->raw->stats.zcullLoads.load());
@@ -88,6 +90,7 @@
     d[@"nvn_format_passes"] = @(gRM->raw->stats.nvnFormatPasses.load());
     d[@"nvn_discards"] = @(gRM->raw->stats.nvnDiscards.load());
     d[@"subtile_writes"] = @(gRM->raw->stats.subtileWrites.load());
+    d[@"zcull_rules_kept"] = @(gRM->raw->stats.zcullRulesKept.load());
     d[@"state_segment_binds"] = @(gRM->raw->stats.segmentBinds.load());
     d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
     d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());

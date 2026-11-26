@@ -1107,7 +1107,7 @@ public:
         std::atomic<uint64_t> zcullPasses{0}, zcullInvalidations{0}, zcullLoads{0};
         // what gpu.perf.knobs' and gpu.perf.nvn's probes wrote (nvn_probes.h): passes or draws, discards
         std::atomic<uint64_t> nvnBoundsOpened{0}, nvnStencilPasses{0}, nvnFormatPasses{0}, nvnDiscards{0},
-            subtileWrites{0};
+            subtileWrites{0}, zcullRulesKept{0};
         // stencil plane draws encoded: the eight-draw route's (stencil_bits.h) and the one-draw route's
         // (zeta_colour.h)
         std::atomic<uint64_t> stencilBitDraws{0}, zetaColourDraws{0};
@@ -1185,6 +1185,8 @@ public:
     std::atomic<uint32_t> probeSubtilingKnob{0};
     // nvn_probes.h's bits: the NVN state gpu.perf.nvn A/Bs, for passes encoded from now on
     std::atomic<uint32_t> probeNvn{0};
+    // zcull rules gpu.perf.nvn's zcull_rule arms skip (zcull.h kZcullKeep*)
+    std::atomic<uint32_t> probeZcullKeep{0};
     gm20b::Mutex probeLock;
     std::shared_ptr<const ProbeWords> probeWords;
 

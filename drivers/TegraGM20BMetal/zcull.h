@@ -239,19 +239,30 @@ inline bool zcullStencilWrites(const StencilFace &s)
     return (s.compare != 7 && s.fail != 0) || s.depthFail != 0;  // a test that can fail, Keep
 }
 
+// gpu.perf.nvn's zcull rule probes (Device::probeZcullKeep, debug builds): each bit keeps the region past one rule below.
+// Always and NotEqual are the rules under test; FragmentDepth is known to be needed, the probe's positive control.
+enum : uint32_t {
+    kZcullKeepAlways = 1u << 0,
+    kZcullKeepNotEqual = 1u << 1,
+    kZcullKeepFragmentDepth = 1u << 2,
+};
+
 // Whether INVALIDATE_ZCULL goes before a draw under depth/stencil state `ds` (the pass's targets have depth `depth` and
 // stencil `stencil`) of a program that writes depth (`fragmentDepth`) or memory (`fragmentStores`, unless
-// `earlyFragmentTests` mandates early depth/stencil tests), or under the shader's tests; once per pass
+// `earlyFragmentTests` mandates early depth/stencil tests), or under the shader's tests; once per pass. `keep`: the
+// rules a probe skips (kZcullKeep*)
 inline bool zcullInvalidates(ZcullPass &z, const DepthStencilDesc &ds, bool depth, bool stencil, bool fragmentDepth,
-                             bool shaderTests, bool fragmentStores, bool earlyFragmentTests = false)
+                             bool shaderTests, bool fragmentStores, bool earlyFragmentTests = false, uint32_t keep = 0)
 {
     if (!z.candidate || z.invalidated)
         return false;
-    bool unsafe = fragmentDepth || shaderTests || (fragmentStores && !earlyFragmentTests);
+    bool unsafe = (fragmentDepth && !(keep & kZcullKeepFragmentDepth)) || shaderTests ||
+                  (fragmentStores && !earlyFragmentTests);
     if (stencil)
         unsafe |= zcullStencilWrites(ds.front) || zcullStencilWrites(ds.back);
     if (depth) {
-        unsafe |= ds.depthWrite && (ds.depthCompare == 7 || ds.depthCompare == 5);  // Always, NotEqual
+        unsafe |= ds.depthWrite && ((ds.depthCompare == 7 && !(keep & kZcullKeepAlways)) ||
+                                    (ds.depthCompare == 5 && !(keep & kZcullKeepNotEqual)));
         if (const uint8_t dir = zcullDirection(ds.depthCompare)) {
             unsafe |= z.dir && z.dir != dir;
             z.dir = z.dir ? z.dir : dir;

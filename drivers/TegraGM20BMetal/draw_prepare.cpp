@@ -541,13 +541,22 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         zcullProgram_ = pl;
         const bool earlyTests = pl->writesMemory[1] && zcullEarlyFragmentTests(pl->methodWords(), pl->methodCount());
         bool openBounds = false;
+        uint32_t keep = 0;
+        const bool depthOn = zeta && zetaHasDepth(zeta->format) && pass_.depthStencil.depthEnabled,
+                   stencilOn = zeta && zetaHasStencil(zeta->format) && pass_.depthStencil.stencilEnabled;
 #if SWITCH_METAL_DIAGNOSTICS
         openBounds = pl->fragmentDepth && (d.probeNvn.load(std::memory_order_relaxed) & kNvnZcullBounds);
+        if ((keep = d.probeZcullKeep.load(std::memory_order_relaxed))) {
+            ZcullPass without = zcull_, with = zcull_;
+            const bool fragmentDepth = pl->fragmentDepth && !openBounds, shaderTests = shaderTestsActive_ != 0;
+            d.stats.zcullRulesKept += zcullInvalidates(without, ds_, depthOn, stencilOn, fragmentDepth, shaderTests,
+                                                       pl->writesMemory[1], earlyTests) &&
+                                      !zcullInvalidates(with, ds_, depthOn, stencilOn, fragmentDepth, shaderTests,
+                                                        pl->writesMemory[1], earlyTests, keep);
+        }
 #endif
-        if (zcullInvalidates(zcull_, ds_, zeta && zetaHasDepth(zeta->format) && pass_.depthStencil.depthEnabled,
-                             zeta && zetaHasStencil(zeta->format) && pass_.depthStencil.stencilEnabled,
-                             pl->fragmentDepth && !openBounds, shaderTestsActive_ != 0, pl->writesMemory[1],
-                             earlyTests)) {
+        if (zcullInvalidates(zcull_, ds_, depthOn, stencilOn, pl->fragmentDepth && !openBounds, shaderTestsActive_ != 0,
+                             pl->writesMemory[1], earlyTests, keep)) {
             p.m(kInvalidateZcull, 0);
             SWITCH_METAL_DIAGNOSTIC(d.stats.zcullInvalidations++);
         } else if (openBounds != zcull_.boundsOpen) {
