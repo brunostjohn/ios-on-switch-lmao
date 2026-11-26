@@ -100,6 +100,19 @@ TEST_F(PackImageTest, TheRenderServersTablesAreReadBeforeTheImageOpens)
 	}
 }
 
+// Before launchd, launchd's and its daemons' demand page-ins go first: the build reads in the boot replay's class
+TEST_F(PackImageTest, TheBuildReadsInTheBootReplaysClass)
+{
+	gModel.fileBytes = makePackFile(kChunks * kSwitchGpuPackTransferBytes, 0);
+	SwitchGpuPackImageView view = {};
+	ASSERT_EQ(switch_gpu_pack_image_acquire("boot", &view, nullptr), kIOReturnSuccess);
+	gModel.joinThreads();
+	EXPECT_GT(gModel.pageinCalls, 0u);
+	EXPECT_EQ(gModel.pageinsOutsideReplay, 0u) << "page-ins outside the replay's class";
+	EXPECT_EQ(gModel.replayMarks, 2u);
+	EXPECT_FALSE(gModel.replaying) << "the build left its thread in the replay's class";
+}
+
 TEST_F(PackImageTest, JobsOfAMappedConnectionWaitAndTheHangRuleFailsAStoppedWord)
 {
 	const std::string submit = SourceText("../TegraGM20BUserClientJobSubmit.cpp");

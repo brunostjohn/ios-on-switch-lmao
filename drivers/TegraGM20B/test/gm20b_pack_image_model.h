@@ -129,6 +129,10 @@ struct Model {
 	bool callPaused = false, releaseCall = false;
 	uint32_t fenceWords[64] = {};
 	std::vector<std::string> recovered;
+	// The boot replay's class (switch_vm_prefetch_replay_thread): whether a thread is in it, its marks, and the page-ins
+	// made outside it
+	bool replaying = false;
+	uint32_t replayMarks = 0, pageinsOutsideReplay = 0;
 
 	void reset()
 	{
@@ -171,6 +175,8 @@ struct Model {
 		callPaused = releaseCall = false;
 		std::memset(fenceWords, 0, sizeof(fenceWords));
 		recovered.clear();
+		replaying = false;
+		replayMarks = pageinsOutsideReplay = 0;
 		sleepers = 0;
 		unintSleepers = 0;
 		memorystatus_vm_pressure_level = 0;
@@ -494,6 +500,8 @@ int vnode_pagein(vnode_t, upl_t, upl_offset_t, uint64_t f_offset, upl_size_t siz
 	std::unique_lock<std::mutex> g(gModel.mu);
 	const int callIdx = int(gModel.pageinCalls++);
 	const bool heap = f_offset >= kSwitchGpuPackTierAlign;
+	if (!gModel.replaying)
+		++gModel.pageinsOutsideReplay;
 	if (heap)
 		++gModel.heapPageins;
 	if (gModel.pauseFirstPagein && callIdx == 0) {
@@ -666,6 +674,13 @@ uint32_t tgm_fence_offset(const volatile uint32_t *word)
 {
 	return 0x100000u + uint32_t(reinterpret_cast<uintptr_t>(word) -
 				    reinterpret_cast<uintptr_t>(&gModel.fenceWords[0]));
+}
+
+extern "C" void switch_vm_prefetch_replay_thread(void *, int on)
+{
+	std::lock_guard<std::mutex> g(gModel.mu);
+	gModel.replaying = on != 0;
+	++gModel.replayMarks;
 }
 
 void tgm_acquire_recover_failed(const char *why)

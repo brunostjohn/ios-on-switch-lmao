@@ -19,6 +19,10 @@
 #endif
 
 extern "C" {
+// The boot replay's class in the SD driver (big/boot: kernel/switch/vm/prefetch_vm.c switch_vm_prefetch_is_replay_thread,
+// SwitchSD's kSwitchSdReplayClass, one class below tier-0 demand reads): `thread`'s reads join it while `on`. Absent: the
+// reads keep their own class.
+void switch_vm_prefetch_replay_thread(void *thread, int on) __attribute__((weak));
 // NOLINTNEXTLINE(readability-redundant-declaration): not declared in every kernel config's headers
 kern_return_t thread_terminate(thread_t thread);
 // NOLINTNEXTLINE(readability-redundant-declaration)
@@ -176,10 +180,15 @@ void buildThread(void *, wait_result_t)
 		return;
 	}
 	switch_gpu_pack_raise(frontier, 0);
+	// ahead of use, before launchd: below launchd's and its daemons' demand page-ins, as the boot replay's reads are
+	if (switch_vm_prefetch_replay_thread)
+		switch_vm_prefetch_replay_thread(current_thread(), 1);
 	const bool tablesRead = switch_gpu_pack_prefetch_tables(vp, hdr, ctx);
 	IOLockLock(lock);
 	if (switch_gpu_pack_shutdown_requested()) {
 		IOLockUnlock(lock);
+		if (switch_vm_prefetch_replay_thread)
+			switch_vm_prefetch_replay_thread(current_thread(), 0);
 		vnode_close(vp, FREAD, ctx);
 		IODelete(chunkCpu, void *, chunkCount);
 		tgm_mem_del(&mem);
@@ -212,6 +221,8 @@ void buildThread(void *, wait_result_t)
 
 	const bool streamed = switch_gpu_pack_stream_tier0(vp, heapOff, tier0Bytes, pas, chunkCpu,
 							   &why, &err, &stats, frontier);
+	if (switch_vm_prefetch_replay_thread)
+		switch_vm_prefetch_replay_thread(current_thread(), 0);
 	vnode_close(vp, FREAD, ctx);
 	IODelete(chunkCpu, void *, chunkCount);
 	const bool shuttingDown = switch_gpu_pack_shutdown_requested();
