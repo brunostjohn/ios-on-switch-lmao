@@ -621,12 +621,15 @@ IOFilterInterruptEventSource *general()
     return made.size() >= 2 ? made[1] : nullptr;
 }
 
-// The interrupt as it arrives: its filter, then (taken) its action on the work loop.
+// The interrupt as it arrives, only when CPU0's line carries it (TRM 14.9.2-14.9.8: the channel's HINTMASK_EXT bit,
+// HINTMASK's EXT enable, INTC0MASK's HOST_INT, INTMASK's master): its filter, then (taken) its action on the work loop.
 bool illegalOpcode(uint32_t channel)
 {
     syncReg(0x028) |= 1u << channel;
+    const bool line = (syncReg(0x028) & syncReg(0x02c)) && (syncReg(0x024) & (1u << 31)) && (syncReg(0x008) & 1u) &&
+                      (syncReg(0x004) & 1u);
     IOFilterInterruptEventSource *source = general();
-    if (!source || !source->filter(nullptr, source))
+    if (!line || !source || !source->filter(nullptr, source))
         return false;
     source->action(nullptr, source, 1);
     return true;

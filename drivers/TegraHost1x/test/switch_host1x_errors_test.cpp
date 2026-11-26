@@ -13,6 +13,7 @@ namespace {
 constexpr uintptr_t kSync = 0x50002100;
 std::map<uint32_t, uint32_t> gRegs;
 bool gIntmaskStuck, gIntc0Stuck, gHintmaskExtStuck, gNoNub;
+bool gTzIllegal;  // a CPU_TZ_ILLEGAL_TZ_ACCESS: INTMASK bit 4 (reset 1, kept) lets it on the line; no host1x status says so
 std::vector<uint32_t> gFailedChannels;
 
 uint32_t &reg(uint32_t offset)
@@ -33,29 +34,36 @@ IOFilterInterruptEventSource *source()
     return IOFilterInterruptEventSource::made().empty() ? nullptr : IOFilterInterruptEventSource::made().back();
 }
 
-// CPU0's line (TRM 14.9.2-14.9.8): an unmasked HINTSTATUS_EXT bit, HINTMASK's EXT enable, INTC0MASK's HOST_INT and
-// INTMASK's CPU0 master, all four.
+// CPU0's line (TRM 14.9.2-14.9.8): INTMASK's CPU0 master, and either host1x's own interrupt (an unmasked
+// HINTSTATUS_EXT bit, HINTMASK's EXT enable, INTC0MASK's HOST_INT) or a TrustZone violation behind INTMASK bit 4.
 bool lineAsserted()
 {
-    return (reg(kHintStatusExt) & reg(kHintMaskExt)) && (reg(kHintMask) & kExtEnable) && (reg(kIntC0Mask) & kHostInt) &&
-           (reg(kIntMask) & kCpu0All);
+    const bool host = (reg(kHintStatusExt) & reg(kHintMaskExt)) && (reg(kHintMask) & kExtEnable) &&
+                      (reg(kIntC0Mask) & kHostInt);
+    return (reg(kIntMask) & kCpu0All) && (host || (gTzIllegal && (reg(kIntMask) & (1u << 4))));
 }
 
-// The channel's illegal opcode latches; true when the line delivered it to the filter and the action.
-bool fire(uint32_t channel)
+// True when the line was asserted and its filter took it, then the action ran.
+bool deliver()
 {
-    reg(kHintStatusExt) |= 1u << channel;
     if (!lineAsserted() || !source()->filter(nullptr, source()))
         return false;
     source()->action(nullptr, source(), 1);
     return true;
 }
 
+// The channel's illegal opcode latches and the line delivers it if the masks let it.
+bool fire(uint32_t channel)
+{
+    reg(kHintStatusExt) |= 1u << channel;
+    return deliver();
+}
+
 struct Host1xErrors : testing::Test {
     void SetUp() override
     {
         gRegs = {{kIntMask, 0x10}};
-        gIntmaskStuck = gIntc0Stuck = gHintmaskExtStuck = gNoNub = false;
+        gIntmaskStuck = gIntc0Stuck = gHintmaskExtStuck = gNoNub = gTzIllegal = false;
         gFailedChannels.clear();
         switch_test_iolog.clear();
         switch_test_sleep = nullptr;
@@ -222,17 +230,21 @@ TEST_F(Host1xErrors, ALineThatFiresWithNothingOfOursTurnsTheMasterOffWithOneLine
 {
     ASSERT_TRUE(start());
     reg(kHintStatus) = 1u << 16;
-    ASSERT_TRUE(source()->filter(nullptr, source())) << "taken, so the line is not left to fire again at once";
+    EXPECT_FALSE(deliver()) << "HINTMASK keeps host1x's other sources off the line";
+    gTzIllegal = true;
+    ASSERT_TRUE(deliver()) << "taken, so the line is not left to fire again at once";
     EXPECT_EQ(reg(kIntMask) & 1u, 0u);
-    source()->action(nullptr, source(), 1);
+    EXPECT_FALSE(lineAsserted()) << "the level line drops";
     EXPECT_TRUE(anyLine("fired with no illegal opcode of ours pending (INTSTATUS 0 HINTSTATUS 0x10000 HINTSTATUS_EXT "
                         "0): off until the next resume"));
     EXPECT_TRUE(gFailedChannels.empty());
     switch_test_iolog.clear();
-    source()->action(nullptr, source(), 1);
+    EXPECT_FALSE(deliver());
     EXPECT_TRUE(switch_test_iolog.empty()) << "one line";
+    gTzIllegal = false;
     switch_host1x_errors_resume();
     EXPECT_EQ(reg(kIntMask) & 1u, 1u);
+    EXPECT_TRUE(fire(3)) << "the resume puts the line back for our own errors";
 }
 
 TEST_F(Host1xErrors, ARestartOfAChannelThatDidNotStopChangesNothing)
