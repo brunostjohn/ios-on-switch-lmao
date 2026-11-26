@@ -5313,6 +5313,17 @@ cc_binary(
 )
 
 # What a committed command buffer of gpu.path.encode_cost's shape holds allocated and what a batch allocates, by
+# gpu.path.use_ranges' arms: Shared buffers named by the set, a Shared heap's listed by their own bytes
+# (facade_use_ranges_test.cpp)
+facade_test(
+    name = "facade_use_ranges_test",
+    srcs = [
+        "scale_frames.h",
+        "encode_cost_shape.h",
+        "facade_use_ranges_test.cpp",
+    ],
+)
+
 # allocation site (facade_held_blocks_test.cpp)
 facade_test(
     name = "facade_held_blocks_test",

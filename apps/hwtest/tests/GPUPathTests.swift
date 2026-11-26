@@ -186,16 +186,76 @@ struct CpuCompletePathTest: GPUPathTest {
     }
 }
 
-/// UseRanges (bit 25): small buffers share pool chunks, and each command buffer names only its buffer's bytes; the GPU
-/// writes each buffer while the CPU rewrites its neighbours, and no buffer loses either side's bytes.
+/// UseRanges (bit 25): small buffers share memory, and no job holds a use of a neighbour: the GPU writes each buffer
+/// while the CPU rewrites its neighbours, and no buffer loses either side's bytes. Two routes, one arm each:
+/// - Shared buffers. On the facade's VOL=1 route (shared_route "set": switchMetalBypassesL2) their write-combined
+///   chunks are resource-set members the CPU never leases, so a job lists no use of them at all (shared_use_adds 0,
+///   this process's facade count of uses that reached a job's own list). On the L2-cached route ("listed") their
+///   chunk's lease takes it out of the set and each job lists its buffer's bytes, as the heap's.
+/// - A Shared heap's buffers: its arena is CPU-cached and leased at each buffer's creation, which takes it out of the
+///   set, so each job lists its buffer by that buffer's bytes (heap_ranged_uses; ranged_uses is system-wide).
 struct UseRangesPathTest: GPUPathTest {
     let id = "gpu.path.use_ranges"
-    let name = "Uses name byte ranges, so buffers sharing a chunk keep their own writes"
+    let name = "Buffers sharing memory are named by their own bytes or by the set, so each keeps its own writes"
     let counters = ["ranged_uses"]
+    static let length = 768
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
-        let length = 768
-        let buffers = try (0 ..< 8).map { _ in try gpu.buffer(length) }
+        let connection = GPUConnection()
+        var failures: [String] = []
+        let shared = try (0 ..< 8).map { _ in try gpu.buffer(Self.length) }
+        let addsBefore = GM20BFacade.encodeProfile(of: gpu.device)["use_adds"]
+        let pathsBefore = GPUPaths.read(connection)
+        let sharedWrong = try Self.writeBeside(gpu, shared)
+        let addsBetween = GM20BFacade.encodeProfile(of: gpu.device)["use_adds"]
+        let pathsBetween = GPUPaths.read(connection)
+        let descriptor = MTLHeapDescriptor()
+        descriptor.size = 64 * 1024
+        descriptor.storageMode = .shared
+        guard let heap = gpu.device.makeHeap(descriptor: descriptor) else { throw TestFailure("makeHeap returned nil") }
+        let inHeap = try (0 ..< 8).map { _ -> MTLBuffer in
+            guard let buffer = heap.makeBuffer(length: Self.length, options: .storageModeShared) else {
+                throw TestFailure("the heap's makeBuffer(\(Self.length)) returned nil")
+            }
+            return buffer
+        }
+        let heapWrong = try Self.writeBeside(gpu, inHeap)
+        let addsAfter = GM20BFacade.encodeProfile(of: gpu.device)["use_adds"]
+        let pathsAfter = GPUPaths.read(connection)
+        metrics.set("wrong_bytes", sharedWrong + heapWrong)
+        metrics.set("heap_wrong_bytes", heapWrong)
+        if case .counts(let before) = pathsBefore, case .counts(let between) = pathsBetween,
+           case .counts(let after) = pathsAfter
+        {
+            metrics.set("shared_ranged_uses", between.taken("ranged_uses", since: before))
+            metrics.set("heap_ranged_uses", after.taken("ranged_uses", since: between))
+        }
+        let routes = shared.map { (GM20BFacade.ask($0, "switchMetalBypassesL2") as? NSNumber)?.boolValue }
+        let route = routes.allSatisfy { $0 == true } ? "set" : routes.allSatisfy { $0 == false } ? "listed" : "unread"
+        metrics.set("shared_route", route)
+        if let before = addsBefore, let between = addsBetween, let after = addsAfter {
+            let sharedAdds = Int(between - before)
+            metrics.set("shared_use_adds", sharedAdds)
+            metrics.set("heap_use_adds", Int(after - between))
+            if route == "set" && sharedAdds != 0 {
+                failures.append("Shared buffers in set-member chunks listed \(sharedAdds) uses of their own")
+            }
+            if route == "listed" && sharedAdds == 0 {
+                failures.append("Shared buffers out of the set: no job listed them")
+            }
+            if route == "unread" { failures.append("the facade did not say which route the Shared buffers took") }
+        } else {
+            metrics.set("shared_use_adds", "unread")
+            failures.append("the facade's encode profile has no use_adds (a release build)")
+        }
+        if sharedWrong > 0 { failures.append("\(sharedWrong) bytes wrong across Shared buffers that share chunks") }
+        if heapWrong > 0 { failures.append("\(heapWrong) bytes wrong across a Shared heap's buffers") }
+        return failures
+    }
+
+    // The GPU fills the even buffers while the CPU rewrites each odd one beside it: the bytes wrong after both
+    static func writeBeside(_ gpu: GPU, _ buffers: [MTLBuffer]) throws -> Int {
+        let length = Self.length
         for (index, buffer) in buffers.enumerated() {
             buffer.contents().initializeMemory(as: UInt8.self, repeating: UInt8(index), count: length)
         }
@@ -219,8 +279,7 @@ struct UseRangesPathTest: GPUPathTest {
             let bytes = UnsafeRawBufferPointer(start: buffer.contents(), count: length)
             wrong += bytes.filter { $0 != want }.count
         }
-        metrics.set("wrong_bytes", wrong)
-        return wrong == 0 ? [] : ["\(wrong) bytes wrong across buffers that share chunks"]
+        return wrong
     }
 }
 
