@@ -211,6 +211,7 @@ CommandBuffer *Device::begin()
     cb.splitRecords_.clear();
     cb.splitReuse_.clear();
     cb.bufferWrites_.clear();
+    cb.textureWrites_.clear();
     cb.geometryBudget_ = {};
     cb.geometryPool_.clear();
     return &cb;

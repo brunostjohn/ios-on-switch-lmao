@@ -392,6 +392,8 @@ private:
     SplitReuse splitReuse_;
     // GPU work encoded before may have written a buffer: a prologue, run ahead of it, reads only what the CPU wrote
     BufferWrites bufferWrites_;
+    BufferWrites
+        textureWrites_;  // the written textures' memory, which a buffer can share (an indirect draw's arguments)
     void segment(uint32_t *from, uint32_t *to);
     // An encoder's words from `start` as segments of the unit's open loops (loop_copies.h), or plain ones
     LoopStream loopStream(Push &p, uint32_t *&start);

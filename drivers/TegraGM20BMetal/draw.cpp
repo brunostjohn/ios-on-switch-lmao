@@ -8,6 +8,7 @@
 #include "mme.h"
 #include "tiled_cache.h"
 #include "view.h"
+#include "frame_cpu_counts.h"
 
 #include <algorithm>
 #include <cstring>
@@ -496,10 +497,18 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     }
     if (p_.room() < 8 + bytes / 4 + mme::kAmplificationScratchWords + mme::kAmplifyCallWords + mme::kFetchShapeWords)
         reserve();
-    // Prior shader writes must reach the command fetcher; NO_PREFETCH on the argument entry prevents early fetch.
-    p_.m(WAIT_FOR_IDLE, 0);
-    p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateConstant);
-    p_.m(0x0050, 0);  // NV906F_SET_REFERENCE: pre-Turing MME command-fetch visibility (NVK indirect-read barrier)
+    // Work earlier in this command buffer that wrote the arguments must be done and out of the shader caches before the
+    // command fetcher reads them; NO_PREFETCH on the argument entry prevents early fetch. Earlier command buffers' work
+    // ended in its job's wait-for-idle fence release, which the host passes before this job's entries.
+    const bool drain = cb_->bufferWrites_.meets(arguments->va + offset, bytes) ||
+                       cb_->textureWrites_.meets(arguments->va + offset, bytes);
+    if (drain) {
+        p_.m(WAIT_FOR_IDLE, 0);
+        p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateConstant);
+        p_.m(0x0050, 0);  // NV906F_SET_REFERENCE: pre-Turing MME command-fetch visibility (NVK indirect-read barrier)
+    }
+    SWITCH_METAL_DIAGNOSTIC((drain ? frameCpuCounts().indirectDrained : frameCpuCounts().indirectFree)
+                                .fetch_add(1, std::memory_order_relaxed));
     const auto argumentWords = [&] {
         if (inside) {
             bodies_.push_back({bodyStart_, p_.at, 0, 0, true});

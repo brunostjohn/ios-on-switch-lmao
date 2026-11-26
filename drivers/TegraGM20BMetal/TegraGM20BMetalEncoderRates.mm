@@ -295,6 +295,7 @@ size_t metal_frame_rates(char *out, size_t size)
     const uint64_t pipelined = gRM->stats.pipelinedEncoders.load(std::memory_order_relaxed),
                    sealed = gRM->stats.sealedEncoders.load(std::memory_order_relaxed);
     const uint64_t kicks = take(c.kicks), kickUs = take(c.kickUs);
+    put(line, " ind=%llu/%llu", (unsigned long long)take(c.indirectDrained), (unsigned long long)take(c.indirectFree));
     put(line, " split=%llu kick=%llu/%lluus", (unsigned long long)take(c.splits),
         (unsigned long long)(kicks ? kickUs / kicks : 0), (unsigned long long)take(c.kickMaxUs));
     put(line, " ahead=%llu/%llu enc=%llu/%llu why=", (unsigned long long)take(c.ahead), (unsigned long long)buffers,

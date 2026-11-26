@@ -703,4 +703,44 @@ TEST_F(DeviceFetch, FetchBarrierUsesSysmemBarOnlyForDirectVolatilePitchTargets)
     dev.destroyBuffer(volBuf);
 }
 
+// The command fetcher reads an indirect draw's arguments: when work earlier in the command buffer wrote them it waits for
+// that work first (WAIT_FOR_IDLE, the shader caches, SET_REFERENCE); arguments no work of the command buffer wrote are
+// read at once, since an earlier command buffer's work ended in its job's wait-for-idle release
+TEST_F(DeviceFetch, AnIndirectDrawWaitsOnlyForArgumentsItsCommandBufferWrote)
+{
+    gm20b::Pipeline *pl = pipeline(false);
+    ASSERT_NE(pl, nullptr);
+    const uint32_t setReference = gm20b::Push::hdr(4, gm20b::SUBC_3D, 0x0050, 0);
+    const auto references = [&](bool fillFirst) {
+        gm20b::CommandBuffer *cb = dev.begin();
+        EXPECT_NE(cb, nullptr);
+        if (!cb)
+            return -1L;
+        if (fillFirst) {
+            gm20b::BlitEncoder *b = cb->blit();
+            b->fillWords(arguments.va, 16, 1);
+            b->end();
+        }
+        gm20b::PassDesc pass;
+        pass.color[0].texture = &target;
+        pass.color[0].load = gm20b::ColorAttachment::Load;
+        pass.count = 1;
+        gm20b::RenderEncoder *e = cb->render(pass);
+        EXPECT_NE(e, nullptr);
+        if (!e)
+            return -1L;
+        e->setPipeline(pl);
+        const char *why = nullptr;
+        EXPECT_TRUE(e->drawIndirect(kTriangle, &arguments, 0, &why)) << (why ? why : "?");
+        e->end();
+        uint32_t seqno = 0;
+        EXPECT_TRUE(cb->commit(seqno));
+        const std::vector<uint32_t> &words = kernel_model::model.jobs.back().words;
+        return long(std::count(words.begin(), words.end(), setReference));
+    };
+    EXPECT_EQ(references(false), 0) << "arguments nothing in the command buffer wrote";
+    EXPECT_EQ(references(true), 1) << "arguments a fill before the draw wrote";
+    EXPECT_EQ(references(false), 0) << "an earlier command buffer's fill";
+}
+
 }  // namespace

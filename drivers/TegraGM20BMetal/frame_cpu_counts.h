@@ -112,6 +112,8 @@ struct FrameCpuCounts {
     std::atomic<uint64_t> longestParts[5] = {};
     std::atomic<uint64_t> recordPrepares{0};  // encoder ranges the recording thread prepared (gm20bPrepareEncoder)
     std::atomic<uint64_t> splits{0};          // ranges split where the encode ahead ended (gm20bPipelineSplit)
+    // indirect draws whose arguments work earlier in the command buffer wrote (drained before the fetch), and the rest
+    std::atomic<uint64_t> indirectDrained{0}, indirectFree{0};
     std::atomic<uint64_t> rangeSplits{0};
     // from a command buffer's commit to its first raw range's job: over the window and the longest
     std::atomic<uint64_t> kicks{0}, kickUs{0}, kickMaxUs{0};
