@@ -355,6 +355,21 @@ mod tests {
         assert_eq!(scope(&app, &own), a, "an app's function linking its own library");
         assert_eq!(scope(&system, &own), a, "a system function linking an app's");
         assert_eq!(scope(&other_app, &own), None, "two apps' libraries");
+
+        let app_scope = Library::new_scope();
+        let in_app = |b: &Vec<u8>| {
+            Library::from_held_metallib_in(Arc::new(Held(b.clone())), app_scope).expect("app library")
+        };
+        let (read, read_again) = (in_app(&bytes), in_app(&bytes));
+        assert_eq!(scope(&read, &none), Some(app_scope));
+        assert_eq!(scope(&read_again, &none), Some(app_scope), "the app's library read again");
+        let mut again = LinkedFunctions::default();
+        again
+            .functions
+            .push(LinkedFunction::new(read_again.function("v").expect("v")));
+        assert_eq!(scope(&read, &again), Some(app_scope), "two reads of one app's libraries");
+        assert_eq!(scope(&app, &again), None, "a library of another scope beside them");
+        assert!(Library::from_held_metallib_in(Arc::new(Held(bytes.clone())), 0).is_err());
     }
 
     #[test]

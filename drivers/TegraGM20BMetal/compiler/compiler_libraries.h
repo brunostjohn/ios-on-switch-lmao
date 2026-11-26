@@ -5,8 +5,10 @@
 // it compiles, and nothing of it is copied or hashed (an MPS library is 84 MB). A library of a client's data is kept
 // while compiles come, so a burst of one library's states reads it once, and let go once none ran for a while. One a
 // client registered is found by its handle; one a request carries is found by its bytes, compared, never hashed, and
-// its kept bytes are one heap copy of the request's, which a compiler at rest has no use for. Each read of a data
-// library is a translator library of its own scope, whose kept stages no other library's compile takes.
+// its kept bytes are one heap copy of the request's, which a compiler at rest has no use for. A registered library is
+// read in its client's translator scope, kept past idle releases so a library the client registers again or that was
+// let go finds its earlier translations; no other client's compile takes them. A library a request carries is read in a
+// scope of its own.
 //
 // The pool's workers share it by one rule: an asker finds or adds its library's slot under `lock_`, then holds that
 // slot's `making` while it reads the library, so the first asker reads it and a concurrent or later asker of the same
@@ -43,6 +45,7 @@ public:
 private:
     static constexpr int64_t kKeptForNs = 5 * int64_t(NSEC_PER_SEC);
     static constexpr size_t kDataLibraries = 16;
+    static constexpr size_t kClientScopes = 1024;
 
     // One library's read: `making` is held for it (a read of an MPS library's function list takes milliseconds)
     struct Slot {
@@ -92,7 +95,10 @@ private:
     std::map<std::string, std::shared_ptr<Slot>> system_;
     std::map<DataKey, std::shared_ptr<Slot>, DataOrder> data_;
     std::deque<DataKey> dataOrder_;
+    std::map<uint64_t, uint64_t> scopes_;
+    std::deque<uint64_t> scopeOrder_;
 
+    uint64_t clientScopeLocked(uint64_t client);
     void release(uint64_t generation);
 };
 
