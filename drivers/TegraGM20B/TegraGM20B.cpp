@@ -183,6 +183,18 @@ int clkgateSysctl SYSCTL_HANDLER_ARGS
 
 struct sysctl_oid gClkgateOid;
 
+int gpcKhzSysctl SYSCTL_HANDLER_ARGS
+{
+	if (req->newptr)
+		return EPERM;
+	if (!req->oldptr)
+		return SYSCTL_OUT(req, nullptr, sizeof(int));
+	const int khz = switch_gpu_gpc_khz();
+	return khz < 0 ? -khz : SYSCTL_OUT(req, &khz, sizeof(khz));
+}
+
+struct sysctl_oid gGpcKhzOid;
+
 // debug.switch_gpu_regdump (debug kernels, read-only): the registers L4T's capture.sh reads, as text for diff_regs.py
 // (TegraGM20BRegDump.h). Reading it wakes the GPU if it is rail-gated.
 int regdumpSysctl SYSCTL_HANDLER_ARGS
@@ -211,6 +223,11 @@ void registerClkgateSysctl()
 		static_cast<int>(CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED),
 		clkgateSysctl, "I", "GPU clock gating on (1) or off (0), debug A/B");
 	sysctl_register_oid(&gClkgateOid);
+	switch_sysctl_oid(
+		&gGpcKhzOid, &sysctl__debug_children, "switch_gpu_gpc_khz",
+		static_cast<int>(CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED),
+		gpcKhzSysctl, "I", "GPU core clock from the active GPC PLL dividers in kHz");
+	sysctl_register_oid(&gGpcKhzOid);
 	switch_sysctl_oid(
 		&gRegdumpOid, &sysctl__debug_children, "switch_gpu_regdump",
 		static_cast<int>(CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED),

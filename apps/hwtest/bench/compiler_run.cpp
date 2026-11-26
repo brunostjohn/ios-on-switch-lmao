@@ -4,10 +4,12 @@
 #include "drivers/TegraGM20BMetal/stamps.h"
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cstring>
 #include <deque>
 #include <map>
 #include <random>
+#include <sys/sysctl.h>
 
 namespace bench::compiler {
 using namespace gm20b;
@@ -18,6 +20,15 @@ enum class Readback {
     Warmup,
     Last
 };
+
+std::string gpcKhz()
+{
+    int khz = 0;
+    size_t size = sizeof(khz);
+    if (sysctlbyname("debug.switch_gpu_gpc_khz", &khz, &size, nullptr, 0) < 0)
+        return std::string("unavailable (") + strerror(errno) + ")";
+    return size == sizeof(khz) && khz > 0 ? std::to_string(khz) : "invalid clock read";
+}
 
 struct Surface {
     Texture tex;
@@ -346,12 +357,18 @@ bool Arm::execute(Result &out, std::string &why)
         if (!b_.device->hostAccess(resources_.reports, true, clear))
             break;
         memset(resources_.reports.cpu, 0, 80);
-        if (!clear.finish() || !s.record(
-                                   [&](CommandBuffer &cb) {
-                                       return pass(cb, i == 0, why);
-                                   },
-                                   gpu, wall))
+        if (!clear.finish())
             break;
+        if (i == 1)
+            out.clockBefore = gpcKhz();
+        if (!s.record(
+                [&](CommandBuffer &cb) {
+                    return pass(cb, i == 0, why);
+                },
+                gpu, wall))
+            break;
+        if (i == 100)
+            out.clockAfter = gpcKhz();
         if (!records(out, i == 0)) {
             why = "missing draw timestamps or visibility result";
             return false;

@@ -135,7 +135,7 @@ bool compare(const Input &in, std::ostringstream &s)
             s << "  " << backend[arm] << " visible " << arms[arm].visible << " changed color " << arms[arm].changed
               << " GPU ns min/median (100 draws) ";
             timing(s, arms[arm]);
-            s << "\n";
+            s << " GPC PLL kHz before/after " << arms[arm].clockBefore << "/" << arms[arm].clockAfter << "\n";
         }
     }
     return ok;

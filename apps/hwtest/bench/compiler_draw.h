@@ -39,6 +39,7 @@ struct Input {
 struct Result {
     std::vector<std::vector<uint8_t>> pixels;
     std::vector<uint64_t> times;
+    std::string clockBefore, clockAfter;
     uint64_t visible = 0;
     bool changed = false, varied = false;
 };

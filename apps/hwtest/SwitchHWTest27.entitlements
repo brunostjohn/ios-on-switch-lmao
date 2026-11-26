@@ -101,6 +101,7 @@
 		<string>kern.switch_media_flips_declined</string>
 		<string>debug.switch_display_dc_host1x_class</string>
 		<string>debug.switch_display_host1x_flip</string>
+		<string>debug.switch_gpu_gpc_khz</string>
 		<string>debug.switch_gpu_rail_cycle</string>
 		<string>debug.switch_gpu_ramfc</string>
 		<string>debug.switch_perf_dfll_landing</string>
