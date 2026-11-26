@@ -72,6 +72,7 @@ PIPELINE_V22 = struct.Struct(f'<{WRITTEN_SLOTS}HH2x')
 PIPELINE_V24 = struct.Struct('<2IQBBHI')
 # PackPipeline's record-v36 tail: guestBaseWord[4], guestBaseSlot[4] (m2v's SlotGuestBase fields)
 GUEST_BASES = 4  # runtime/pack.h kPackGuestBases
+GUEST_BASE_FRAGMENT = 0x80  # runtime/pack.h kGuestBaseFragment
 PIPELINE_V36 = struct.Struct(f'<{GUEST_BASES}s{GUEST_BASES}s')
 NO_UNIFORM = b'\xff\x00\x00\x00' * 8
 

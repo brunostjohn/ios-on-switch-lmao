@@ -20,6 +20,7 @@ VARIANTS_KEY = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v var_v  | f v
 STRIDE_TWIN_KEY = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v stride_twin_v  | f stride_twin_f'
 STRIDE_MAIN_KEY = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v stride_v  | f stride_f'
 PASS_WRITE_KEY = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v passw_v  | f passw_f'
+GUEST_BASE_KEY = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v guest_v  | f guest_f'
 TIER1_KEY = 'samples=1 topo=0 ds=0/0 c0=80:15:0:1:0:0:1:0:0  | v cold_v  | f cold_f'
 
 SET_PROGRAM_REGION_A = 0x1608
@@ -317,6 +318,20 @@ def build_fixture() -> packfile.Pack:
                 (0x1368, 0x00000071),
                 (0x136C, 0x00000072),
             ],
+        ),
+        # Its programs read vertex buffer 5's and fragment buffer 2's Metal addresses (push words 6-7 and 2-3).
+        base_record(
+            GUEST_BASE_KEY,
+            vs_data,
+            fs_plain,
+            [
+                (0x1A00, 0x1111),
+                (0x1364, 0x00000074),
+                (0x1368, 0x00000075),
+                (0x136C, 0x00000076),
+            ],
+            guest_base_word=[7, 3],
+            guest_base_slot=[5, packfile.GUEST_BASE_FRAGMENT | 2],
         ),
         # Tier-1 cold record past tier0_heap.
         base_record(

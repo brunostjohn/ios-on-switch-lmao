@@ -6976,6 +6976,35 @@ facade_test(
 )
 
 host_test(
+    name = "device_pack_guest_base_test",
+    size = "small",
+    srcs = [
+        "device_pack_guest_base_test.cpp",
+        "empty_pack.h",
+        "facade_harness.h",
+        "job_methods.h",
+        "kernel_model.h",
+        "made_metallib.h",
+        "pack_fixture_image.h",
+        "translate_absent.cpp",
+    ] + METAL_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + METAL_HOST_COPTS,
+    cxx_std = "c++17",
+    data = [":pack_v34_fixture"],
+    linkopts = FACADE_LINKOPTS,
+    deps = [
+        ":facade_plugin_host",
+        ":runtime_plugin_host",
+        "//kits/SwitchGM20BEmit/test:method_checks",
+        "//kits/SwitchRefusal:switch_refusal",
+    ] + METAL_HOST_DEPS,
+)
+
+host_test(
     name = "device_pack_heap_reads_test",
     size = "small",
     srcs = [
