@@ -15,8 +15,11 @@ _APPLE_REPOS = ["gpu_apple_libs", "gpu_device_data"]
 #  - The iOS 27 prelink's bindings: Apple's kernel addresses the kexts use, each with our kernel's address and its name,
 #    which the computer cannot derive without Xcode, the ipsw CLI and iOS 17's kernelcache. The kexts' bytes come from
 #    the user's own IPSW; the prelink refuses the bindings with any other kernelcache or kernel.
+#  - The iOS 27 prelink's pins: the SHA-256 of the prelinked kernel and of each site table, so the computer's prelink,
+#    whose translator another compiler builds, returns nothing unless its result is CI's.
 DECLASSIFIED = {
     Label("//boot:package"): ["boot/package_work/loader.uboot.bin", "boot/package_work/constants.json"],
+    Label("//install/prelink:fileset_pins"): ["install/prelink/fileset_pins/prelink-pins.json"],
     Label("//kernel:prelink_bindings_12377"): ["kernel/build/xnu-12377/prelink-bindings.json"],
 }
 
