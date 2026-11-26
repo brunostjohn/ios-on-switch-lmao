@@ -1,0 +1,86 @@
+# switch_disk: the raw device layer the installer writes a card through (list, exclusive open, uncached I/O, release).
+#
+#   bazel test //install/disk:switch_disk_test          alignment, the pickable-disk rules, the Linux and Windows parsers
+#   bazel test //install/disk:device_test               manual, macOS: attaches disk images and holds them
+#   bazel test //install/disk:bench_test                manual, macOS: write speed onto an attached 1 GiB raw image
+#   bazel build //install/disk:all_tool                 switch_disk_tool for the six desktop platforms
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_library(
+    name = "switch_disk",
+    srcs = glob(["src/**/*.rs"]),
+    crate_root = "src/lib.rs",
+    deps = [
+        "@installer_crates//:thiserror",
+    ] + select({
+        "@platforms//os:linux": [
+            "@installer_crates//:libc",
+            "@installer_crates//:udisks2",
+        ],
+        "@platforms//os:osx": [
+            "@installer_crates//:dispatch2",
+            "@installer_crates//:libc",
+            "@installer_crates//:objc2-core-foundation",
+            "@installer_crates//:objc2-disk-arbitration",
+            "@installer_crates//:objc2-io-kit",
+        ],
+        "@platforms//os:windows": [
+            "@installer_crates//:windows-sys",
+        ],
+    }),
+)
+
+rust_test(
+    name = "switch_disk_test",
+    crate = ":switch_disk",
+    deps = ["@installer_crates//:tempfile"],
+)
+
+rust_test(
+    name = "device_test",
+    size = "medium",
+    crate = ":switch_disk",
+    crate_features = ["device-tests"],
+    tags = [
+        "external",
+        "manual",
+    ],
+    deps = ["@installer_crates//:tempfile"],
+)
+
+rust_binary(
+    name = "switch_disk_tool",
+    srcs = [
+        "tool/check.rs",
+        "tool/main.rs",
+    ],
+    crate_root = "tool/main.rs",
+    deps = [
+        ":switch_disk",
+        "@installer_crates//:clap",
+    ],
+)
+
+desktop_binaries(
+    name = "all_tool",
+    binary = ":switch_disk_tool",
+)
+
+sh_test(
+    name = "bench_test",
+    size = "large",
+    srcs = ["bench_test.sh"],
+    args = ["$(rootpath :switch_disk_tool)"],
+    data = [":switch_disk_tool"],
+    tags = [
+        "external",
+        "manual",
+    ],
+)
