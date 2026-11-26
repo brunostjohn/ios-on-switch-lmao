@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Plans a write into Apple's container: which source blocks stay where they are, what the source's container layer
-//! gives back, and where every new object goes. Nothing is written here.
+//! gives back, where every new data block and object goes, and every new metadata block's bytes. Nothing is written
+//! here, and no file content is read: the plan holds the content sources, not their bytes.
 
 use std::ops::Range;
 
@@ -10,30 +11,34 @@ use switch_apfs_alloc::{Bitmap, Geometry};
 use switch_apfs_btree::{TreeShape, leaf_root};
 use switch_apfs_format::io::BlockSource;
 use switch_apfs_format::object::TYPE_OMAP;
-use switch_apfs_format::omap::{OmapKey, OmapPhys, OmapVal};
+use switch_apfs_format::omap::{OmapKey, OmapPhys};
 use switch_apfs_format::spaceman::{SFQ_IP, SFQ_MAIN};
 use switch_apfs_format::volume::{APFS_INCOMPAT_NORMALIZATION_INSENSITIVE, APFS_VOL_ROLE_SYSTEM};
-use switch_apfs_format::{BLOCK_SIZE, Block, get};
+use switch_apfs_format::{Block, get};
 use switch_apfs_read::Container;
-use zerocopy::IntoBytes;
 use zerocopy::little_endian::{U32, U64};
 
 use crate::WriteError;
 use crate::checkpoint::{self, CheckpointInput, Committed};
-use crate::records;
-use crate::spec::{CheckpointAreas, SourcePins, Tree, VolumeSpec, WriteOptions};
-use crate::volume::{self, METADATA_BLOCKS, VolumeAddrs, VolumeIds};
+use crate::place::{self, FreeRuns, NewData, Relocation};
+use crate::records::{self, RecordInput};
+use crate::spec::{CheckpointAreas, NewVolume, SourcePins, WriteOptions};
+use crate::volume::{self, VolumeIds, VolumeInput, VolumeStats, omap_block, omap_record};
 
 pub struct Plan {
     pub target_blocks: u64,
     pub xid: u64,
     pub desc_area: Range<u64>,
     pub data_area: Range<u64>,
+    /// Zeroed in phase B once block 0 is: the descriptor area, and the older container's areas `plan` was given.
+    pub invalidate: Vec<Range<u64>>,
     /// Source blocks that go to the same block number, verbatim.
     pub copy: Bitmap,
-    /// New file data, by first block.
-    pub data: Vec<(u64, Vec<u8>)>,
-    /// New metadata: the volume's objects, the container object map and the space manager's blocks.
+    /// Source blocks that also go to a new volume, in source order.
+    pub relocations: Vec<Relocation>,
+    /// New file data, in block order.
+    pub new_data: Vec<NewData>,
+    /// Every new volume's objects, the container object map and the space manager's blocks, in block order.
     pub metadata: Vec<(u64, Box<Block>)>,
     pub checkpoint: Committed,
     pub summary: Summary,
@@ -47,20 +52,29 @@ pub struct Summary {
     pub queued_already_free: u64,
     pub container_freed: u64,
     pub copied_blocks: u64,
+    pub relocated_blocks: u64,
+    pub new_data_blocks: u64,
     pub free_blocks: u64,
-    pub volume_oid: u64,
-    pub volume_superblock: u64,
-    pub volume_index: usize,
     pub pool: Range<u64>,
     pub pool_bitmap_ring: Range<u64>,
+    pub volumes: Vec<VolumeSummary>,
 }
 
+#[derive(Debug, Default)]
+pub struct VolumeSummary {
+    pub index: usize,
+    pub oid: u64,
+    pub stats: VolumeStats,
+}
+
+/// `stale` is what `target::stale_descriptor_area` read from the target before the first phase B; every rerun gives
+/// the same, so it writes the same blocks.
 pub fn plan(
     src: &dyn BlockSource,
     pins: &SourcePins,
-    spec: &VolumeSpec,
-    tree: &Tree,
+    volumes: &[NewVolume],
     options: &WriteOptions,
+    stale: &[Range<u64>],
 ) -> Result<Plan, WriteError> {
     let c = Container::open(src)?;
     let cp = &c.checkpoint;
@@ -104,7 +118,12 @@ pub fn plan(
     for &paddr in std::iter::once(&c.omap.paddr).chain(&c.omap.nodes) {
         used.clear_range(paddr..paddr + 1);
     }
-    if let CheckpointAreas::Sized { .. } = options.areas {
+    let areas = match options.areas {
+        CheckpointAreas::Rule => Some((g.checkpoint.desc_blocks, g.checkpoint.data_blocks)),
+        CheckpointAreas::Sized { desc, data } => Some((desc, data)),
+        CheckpointAreas::Keep => None,
+    };
+    if areas.is_some() {
         used.clear_range(cp.desc_area.clone());
         used.clear_range(cp.data_area.clone());
     }
@@ -124,9 +143,9 @@ pub fn plan(
         used.set_range(at..at + count);
         Ok(at)
     };
-    let (desc_area, data_area) = match options.areas {
-        CheckpointAreas::Keep => (cp.desc_area.clone(), cp.data_area.clone()),
-        CheckpointAreas::Sized { desc, data } => {
+    let (desc_area, data_area) = match areas {
+        None => (cp.desc_area.clone(), cp.data_area.clone()),
+        Some((desc, data)) => {
             let data_base = alloc(u64::from(data))?;
             let desc_base = alloc(u64::from(desc))?;
             (
@@ -138,46 +157,87 @@ pub fn plan(
     let ring = alloc(POOL_BITMAP_BLOCKS)?;
     let pool = alloc(g.pool_blocks)?;
     let omap_obj = alloc(2)?;
-    let numbered = records::number(tree);
-    let volume_first = alloc(METADATA_BLOCKS)?;
-    let mut extents = Vec::new();
-    for extent in numbered.extents() {
-        extents.push(alloc(extent.blocks)?);
+
+    let mut free = FreeRuns::from_bitmap(&used);
+    let trees: Vec<_> = volumes.iter().map(|v| v.tree).collect();
+    let placement = place::place(&trees, &mut free)?;
+    for r in &placement.relocations {
+        if !copy.all_set(r.src..r.src + r.blocks) {
+            return Err(WriteError::Source(
+                "a copied extent outside the blocks the source keeps",
+            ));
+        }
     }
-    let addrs = VolumeAddrs::from_metadata_run(volume_first, extents);
+    let mut taken = placement.taken;
+    summary.relocated_blocks = placement.relocations.iter().map(|r| r.blocks).sum();
+    summary.new_data_blocks = placement.new_data.iter().map(|d| d.blocks).sum();
 
     let xid = cp.nx.next_xid.get().max(cp.xid() + 1);
     let mut nx = cp.nx;
-    let volume_oid = nx.next_oid.get();
-    let root_tree_oid = volume_oid + 1;
-    nx.next_oid = U64::new(volume_oid + 2);
-    let slot = nx
-        .fs_oid
-        .iter()
-        .position(|o| o.get() == 0)
-        .filter(|&s| s < g.max_file_systems as usize);
-    let slot = slot.ok_or_else(|| WriteError::Refused("no free volume slot".into()))?;
-    nx.fs_oid[slot] = U64::new(volume_oid);
-    nx.block_count = U64::new(g.blocks);
-    nx.max_file_systems = U32::new(g.max_file_systems);
-    nx.omap_oid = U64::new(omap_obj);
-
-    let ids = VolumeIds {
-        fs_index: slot as u32,
-        superblock_oid: volume_oid,
-        root_tree_oid,
-        xid,
-    };
-    let built = volume::build(spec, tree, &numbered, &ids, &addrs, options, &system[..])?;
-
+    let mut next_oid = nx.next_oid.get();
+    let mut metadata = Vec::new();
     let mut omap_records = Vec::new();
     for v in &c.volumes {
         omap_records.push(omap_record(v.oid, v.xid, v.paddr));
     }
-    omap_records.push(omap_record(volume_oid, xid, addrs.superblock));
-    omap_records.sort_by(|a, b| key_of(&a.0).cmp(&key_of(&b.0)));
-    let omap_tree = leaf_root(&TreeShape::OMAP, omap_obj + 1, xid, &omap_records)?;
-    let omap = volume::omap_block(omap_obj, omap_obj + 1, xid, c.omap.phys.flags.get());
+    for (n, v) in volumes.iter().enumerate() {
+        let slot = nx
+            .fs_oid
+            .iter()
+            .position(|o| o.get() == 0)
+            .filter(|&s| s < g.max_file_systems as usize)
+            .ok_or_else(|| WriteError::Refused("no free volume slot".into()))?;
+        let ids = VolumeIds {
+            fs_index: slot as u32,
+            superblock_oid: next_oid,
+            xid,
+        };
+        next_oid += 1;
+        nx.fs_oid[slot] = U64::new(ids.superblock_oid);
+        let records = records::build(&RecordInput {
+            tree: v.tree,
+            extents: &placement.extents[n],
+            incompatible_features: APFS_INCOMPAT_NORMALIZATION_INSENSITIVE | v.spec.incompatible_features,
+            readonly_compatible_features: v.spec.readonly_compatible_features,
+            unicode: v.spec.unicode,
+            time_ns: options.time_ns,
+        })?;
+        let input = VolumeInput {
+            spec: v.spec,
+            records: &records,
+            ids: &ids,
+            options,
+            system: &system[..],
+        };
+        let built = volume::build(&input, &mut next_oid, &mut free, &mut taken)?;
+        omap_records.push(omap_record(ids.superblock_oid, xid, built.stats.superblock));
+        metadata.extend(built.blocks);
+        summary.volumes.push(VolumeSummary {
+            index: slot,
+            oid: ids.superblock_oid,
+            stats: built.stats,
+        });
+    }
+    for run in taken {
+        used.set_range(run);
+    }
+    nx.next_oid = U64::new(next_oid);
+    nx.block_count = U64::new(g.blocks);
+    nx.max_file_systems = U32::new(g.max_file_systems);
+    nx.omap_oid = U64::new(omap_obj);
+
+    omap_records.sort_by_key(|(k, _)| {
+        let k: OmapKey = get(k, 0).unwrap_or_default();
+        (k.oid.get(), k.xid.get())
+    });
+    metadata.push((
+        omap_obj + 1,
+        leaf_root(&TreeShape::OMAP, omap_obj + 1, xid, &omap_records)?,
+    ));
+    metadata.push((
+        omap_obj,
+        omap_block(omap_obj, omap_obj + 1, xid, c.omap.phys.flags.get()),
+    ));
 
     let sm = &c.space.spaceman;
     let free_queue_oids = [sm.fq[SFQ_IP].tree_oid.get(), sm.fq[SFQ_MAIN].tree_oid.get()];
@@ -202,24 +262,32 @@ pub fn plan(
         free_queue_oids,
         nx,
     })?;
-
-    let mut metadata = built.blocks;
-    metadata.push((omap_obj, omap));
-    metadata.push((omap_obj + 1, omap_tree));
     metadata.extend(space.blocks);
+    metadata.sort_by_key(|(paddr, _)| *paddr);
+    if metadata.windows(2).any(|w| w[0].0 == w[1].0) {
+        return Err(WriteError::Spec("two metadata objects planned at one block".into()));
+    }
+
     summary.free_blocks = space.free_blocks;
-    summary.volume_oid = volume_oid;
-    summary.volume_superblock = addrs.superblock;
-    summary.volume_index = slot;
     summary.pool = pool..pool + g.pool_blocks;
     summary.pool_bitmap_ring = ring..ring + POOL_BITMAP_BLOCKS;
+    let invalidate = std::iter::once(desc_area.clone())
+        .chain(
+            stale
+                .iter()
+                .map(|r| r.start.min(g.blocks)..r.end.min(g.blocks))
+                .filter(|r| !r.is_empty()),
+        )
+        .collect();
     Ok(Plan {
         target_blocks: g.blocks,
         xid,
+        invalidate,
         desc_area,
         data_area,
         copy,
-        data: built.data,
+        relocations: placement.relocations,
+        new_data: placement.new_data,
         metadata,
         checkpoint,
         summary,
@@ -257,22 +325,4 @@ fn check_source(src: &dyn BlockSource, c: &Container, pins: &SourcePins) -> Resu
         return Err(WriteError::Source("System's object map"));
     }
     Ok(system.block.clone())
-}
-
-fn omap_record(oid: u64, xid: u64, paddr: u64) -> (Vec<u8>, Option<Vec<u8>>) {
-    let key = OmapKey {
-        oid: U64::new(oid),
-        xid: U64::new(xid),
-    };
-    let value = OmapVal {
-        flags: U32::ZERO,
-        size: U32::new(BLOCK_SIZE as u32),
-        paddr: U64::new(paddr),
-    };
-    (key.as_bytes().to_vec(), Some(value.as_bytes().to_vec()))
-}
-
-fn key_of(key: &[u8]) -> (u64, u64) {
-    let k: OmapKey = get(key, 0).unwrap_or_default();
-    (k.oid.get(), k.xid.get())
 }

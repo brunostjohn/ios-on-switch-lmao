@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 use switch_apfs_names::UnicodeVersion;
 
+use crate::tree::Tree;
+
 /// What pins the source: the IPSW's System volume.
 #[derive(Clone, Debug)]
 pub struct SourcePins {
@@ -21,8 +23,17 @@ pub struct VolumeSpec {
     pub unicode: UnicodeVersion,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// A volume and what it holds, in the order the container lists them after System.
+pub struct NewVolume<'a> {
+    pub spec: &'a VolumeSpec,
+    pub tree: &'a Tree,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CheckpointAreas {
+    /// What newfs_apfs and `resizeContainer` give the target's size (`Geometry::for_blocks(..).checkpoint`).
+    #[default]
+    Rule,
     /// The source's descriptor and data areas, where they are.
     Keep,
     /// New areas of these sizes in free space; the source's are freed.
@@ -30,8 +41,9 @@ pub enum CheckpointAreas {
 }
 
 impl CheckpointAreas {
-    /// What `diskutil apfs resizeContainer` gave the Mac-built images, and newfs_apfs gives 1 TiB.
-    pub const RESIZED: CheckpointAreas = CheckpointAreas::Sized {
+    /// The areas every Mac-composed image carried: the rule at the 1 TiB it was composed at, which the fit kept.
+    /// The only areas the device has booted from.
+    pub const MAC_COMPOSED: CheckpointAreas = CheckpointAreas::Sized {
         desc: 280,
         data: 27_748,
     };
@@ -45,32 +57,4 @@ pub struct WriteOptions {
     pub time_ns: u64,
     /// `apfs_formatted_by.id`, at most 31 bytes.
     pub formatted_by: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct Owner {
-    pub uid: u32,
-    pub gid: u32,
-    /// Permission bits only; the file type comes from the entry.
-    pub mode: u16,
-}
-
-#[derive(Clone, Debug)]
-pub enum Content {
-    Dir(Vec<Entry>),
-    File(Vec<u8>),
-}
-
-#[derive(Clone, Debug)]
-pub struct Entry {
-    pub name: String,
-    pub owner: Owner,
-    pub content: Content,
-}
-
-/// What a new volume holds. Files carry their bytes in memory for now.
-#[derive(Clone, Debug)]
-pub struct Tree {
-    pub root: Owner,
-    pub entries: Vec<Entry>,
 }

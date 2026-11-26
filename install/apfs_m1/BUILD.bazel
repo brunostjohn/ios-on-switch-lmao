@@ -1,10 +1,13 @@
-# The APFS writer's first end-to-end check: a Data volume added to Apple's container.
+# The APFS writer's driver and its end-to-end checks on Apple's container, all on image files.
 #
-#   bazel test //install/apfs_m1:m1_fixture_test     on a macOS worker with passwordless sudo
+#   bazel test //install/apfs_m1:m1_fixture_test     M1: Data with /hello, on a macOS worker with passwordless sudo
+#   bazel test //install/apfs_m1:w4_fixture_test     W4: Data copied from /private/var, Preboot, power cuts (same)
+#   bazel test //install/apfs_m1:api_fixture_test    what W5-W8 make through the API, and what it refuses (same)
 #   bazel build //install/apfs_m1:all_m1             the driver for the six desktop platforms
 #
-# By hand on the IPSW's OS container (bazel-bin/install/apfs_m1/switch_apfs_m1):
-#   switch_apfs_m1 add-volume --source <os.img> [--source-offset N] --target <out.img> --target-bytes N ...
+# By hand on an IPSW's OS member (bazel-bin/install/apfs_m1/switch_apfs_m1):
+#   switch_apfs_m1 source --member <stored member> [--aea-key K --content-sha256 H] --out <os.img>
+#   switch_apfs_m1 build --source <os.img> --target <out.img> --target-bytes N ...
 load("@rules_rust//rust:defs.bzl", "rust_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//bazel/desktop:defs.bzl", "desktop_binaries")
@@ -17,16 +20,29 @@ lint_files()
 rust_binary(
     name = "switch_apfs_m1",
     srcs = [
+        "build.rs",
+        "cut_plan.rs",
+        "cuts.rs",
+        "fidelity.rs",
+        "file_cuts.rs",
         "mutate.rs",
+        "parse.rs",
+        "samples.rs",
+        "seeded.rs",
+        "sharing.rs",
+        "source.rs",
         "tool.rs",
     ],
     crate_root = "tool.rs",
     deps = [
+        "//install/aea:switch_aea",
         "//install/apfs_format:switch_apfs_format",
         "//install/apfs_names:switch_apfs_names",
         "//install/apfs_read:switch_apfs_read",
         "//install/apfs_write:switch_apfs_write",
+        "//install/ipsw:switch_ipsw",
         "@installer_crates//:clap",
+        "@installer_crates//:hex",
         "@installer_crates//:zerocopy",
     ],
 )
@@ -59,5 +75,53 @@ sh_test(
     tags = [
         "external",
         "manual",
+    ],
+)
+
+sh_test(
+    name = "w4_fixture_test",
+    size = "large",
+    srcs = ["w4_fixture_test.sh"],
+    args = [
+        "$(rootpath :switch_apfs_m1)",
+        "$(rootpath //install/apfs_read:switch_apfs_read_tool)",
+        "$(rootpath tree_list.py)",
+        "$(rootpath tree_compare.py)",
+        "$(rootpath //install/apfs_read:mount_list.py)",
+        "$(rootpath //install/apfs_read:read_compare.sh)",
+    ],
+    data = [
+        "images.sh",
+        "tree_compare.py",
+        "tree_list.py",
+        ":switch_apfs_m1",
+        "//install/apfs_read:mount_list.py",
+        "//install/apfs_read:read_compare.sh",
+        "//install/apfs_read:switch_apfs_read_tool",
+    ],
+    tags = [
+        "external",
+        "manual",
+        "requires-darwin",
+    ],
+)
+
+sh_test(
+    name = "api_fixture_test",
+    size = "large",
+    srcs = ["api_fixture_test.sh"],
+    args = [
+        "$(rootpath :switch_apfs_m1)",
+        "$(rootpath //install/apfs_read:switch_apfs_read_tool)",
+    ],
+    data = [
+        "images.sh",
+        ":switch_apfs_m1",
+        "//install/apfs_read:switch_apfs_read_tool",
+    ],
+    tags = [
+        "external",
+        "manual",
+        "requires-darwin",
     ],
 )

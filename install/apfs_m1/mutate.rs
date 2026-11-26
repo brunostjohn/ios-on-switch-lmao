@@ -19,11 +19,12 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 pub enum Mutation {
     /// The main free queue's node limit one past the size rule: the kernel attaches no volume.
     QueueLimit,
-    /// The root directory's child count off by one, checksum fixed: fsck_apfs checks directory valence.
+    /// The root directory's child count off by one, in the first fs-tree leaf, checksum fixed: fsck_apfs checks
+    /// directory valence.
     DataLeaf,
 }
 
-fn volume<'a>(c: &'a Container, uuid: [u8; 16]) -> Result<&'a Volume> {
+fn volume(c: &Container, uuid: [u8; 16]) -> Result<&Volume> {
     c.volumes
         .iter()
         .find(|v| v.sb.vol_uuid == uuid)
@@ -62,9 +63,17 @@ pub fn mutate(image: &Path, what: Mutation, uuid: Option<[u8; 16]>) -> Result<()
         Mutation::DataLeaf => {
             let v = volume(&c, uuid.ok_or("--uuid names the volume")?)?;
             let omap = Omap::read(&target, v.sb.omap_oid.get())?;
-            let (_, root) = omap.lookup(v.sb.root_tree_oid.get(), v.xid).ok_or("fs root unmapped")?;
-            let paddr = root.paddr.get();
-            let mut block = target.block(paddr)?;
+            let mut oid = v.sb.root_tree_oid.get();
+            let (paddr, mut block) = loop {
+                let (_, node) = omap.lookup(oid, v.xid).ok_or("fs node unmapped")?;
+                let paddr = node.paddr.get();
+                let block = target.block(paddr)?;
+                let node = Node::parse(&block[..], None)?;
+                if node.is_leaf() {
+                    break (paddr, block);
+                }
+                oid = node.child(0)?;
+            };
             let at = {
                 let node = Node::parse(&block[..], None)?;
                 let want = JKey::new(ROOT_DIR_INO_NUM, APFS_TYPE_INODE);

@@ -3,6 +3,7 @@
 //! share.
 
 pub mod btree;
+pub mod clone_mapping;
 pub mod container;
 pub mod fs;
 pub mod fs_records;

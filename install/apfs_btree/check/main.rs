@@ -8,7 +8,6 @@
 //! - `last-fs-leaf` names a block for the negative control.
 
 mod compare;
-mod fixture;
 mod nodes;
 mod standard;
 mod verify;
@@ -21,7 +20,7 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand};
 use switch_apfs_format::io::{FileSource, FileTarget};
 use switch_apfs_names::UnicodeVersion;
-use switch_apfs_write::{CheckpointAreas, Owner, SourcePins, Tree, VolumeSpec, WriteOptions, plan, write};
+use switch_apfs_write::{CheckpointAreas, NewVolume, SourcePins, VolumeSpec, WriteOptions, plan, write};
 
 use crate::standard::Spec;
 
@@ -145,38 +144,37 @@ fn add_volume(a: AddVolume) -> Result<(), Box<dyn Error>> {
     };
     let options = WriteOptions {
         target_blocks: a.target_bytes / switch_apfs_format::BLOCK_SIZE as u64,
-        areas: CheckpointAreas::RESIZED,
+        areas: CheckpointAreas::MAC_COMPOSED,
         time_ns: a.time_ns,
         formatted_by: "switch_apfs (w2)".into(),
-    };
-    let empty = Tree {
-        root: Owner {
-            uid: 0,
-            gid: 0,
-            mode: 0o755,
-        },
-        entries: Vec::new(),
     };
     let started = std::time::Instant::now();
     let pins = SourcePins {
         system_uuid: a.system_uuid,
     };
-    let mut plan = plan(&source, &pins, &spec, &empty, &options)?;
     let tree = standard::tree(&a.size.spec());
-    let placed = fixture::give_data_its_tree(&source, &mut plan, &spec, &tree, &options)?;
+    let plan = plan(
+        &source,
+        &pins,
+        &[NewVolume {
+            spec: &spec,
+            tree: &tree,
+        }],
+        &options,
+        &[],
+    )?;
     let planned = started.elapsed();
     let mut target = FileTarget::create(&a.target, a.target_bytes)?;
     write(&source, &mut target, &plan)?;
+    let data = &plan.summary.volumes[0].stats;
     println!(
-        "Data: fs tree {} nodes / {} levels, extent-reference tree {} / {}, object map {} / {}, {} data blocks; \
+        "Data: fs tree {} nodes / {} levels, extent-reference tree {}, object map {}, {} data blocks; \
          planned in {planned:?}, written in {:?}",
-        placed.fs.0,
-        placed.fs.1,
-        placed.extent_ref.0,
-        placed.extent_ref.1,
-        placed.omap.0,
-        placed.omap.1,
-        placed.data_blocks,
+        data.fs_nodes,
+        data.fs_levels,
+        data.extent_ref_nodes,
+        data.omap_nodes,
+        data.data_blocks,
         started.elapsed() - planned
     );
     Ok(())

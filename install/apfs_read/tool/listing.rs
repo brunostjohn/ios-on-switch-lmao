@@ -68,7 +68,9 @@ fn sha(src: &dyn BlockSource, s: &Stream) -> Result<String, ReadError> {
     Ok(hex::encode(h.finalize()))
 }
 
-pub fn line(src: &dyn BlockSource, e: &Entry, hash_every: u32) -> Result<String, ReadError> {
+/// `expanded`: the volume has `APFS_INCOMPAT_EXPANDED_RECORDS`, under which macOS counts a directory's links from its
+/// subdirectories (`uncompressed_size`) rather than from all its children.
+pub fn line(src: &dyn BlockSource, e: &Entry, hash_every: u32, expanded: bool) -> Result<String, ReadError> {
     let v = &e.inode.val;
     let compression = stream::compression(src, e)?;
     let symlink = match e.xattr(SYMLINK_XATTR_NAME) {
@@ -86,8 +88,13 @@ pub fn line(src: &dyn BlockSource, e: &Entry, hash_every: u32) -> Result<String,
     };
     let (kind, size, nlink, content) = if e.inode.is_dir() {
         // macOS's APFS reports a directory's size as 32 bytes per entry, `.` and `..` included; nothing stores it.
-        let links = i64::from(v.nchildren_or_nlink.get()) + 2;
-        ('d', (32 * links).to_string(), links.to_string(), "-".to_string())
+        let entries = i64::from(v.nchildren_or_nlink.get()) + 2;
+        let links = if expanded {
+            v.uncompressed_size.get() as i64 + 2
+        } else {
+            entries
+        };
+        ('d', (32 * entries).to_string(), links.to_string(), "-".to_string())
     } else if let Some(target) = &symlink {
         (
             'l',

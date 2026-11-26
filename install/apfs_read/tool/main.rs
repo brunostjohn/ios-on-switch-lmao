@@ -9,6 +9,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use switch_apfs_format::io::FileSource;
+use switch_apfs_format::volume::APFS_INCOMPAT_EXPANDED_RECORDS;
 use switch_apfs_read::{Container, Fs, Record, Step, Volume};
 
 #[derive(Parser)]
@@ -181,11 +182,12 @@ fn walk(image: &Image, volume: &str, path: &str, hash_every: u32, check: bool) -
     let src = FileSource::open(&image.image, image.offset)?;
     let c = Container::open(&src)?;
     let fs = Fs::open(&src, pick(&c, volume)?)?;
+    let expanded = fs.sb.incompatible_features.get() & APFS_INCOMPAT_EXPANDED_RECORDS != 0;
     let mut checked = 0usize;
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     let count = fs.walk(path, &mut |entry| {
-        let line =
-            listing::line(&src, entry, hash_every).map_err(|e| switch_apfs_read::ReadError::invalid(e.to_string()))?;
+        let line = listing::line(&src, entry, hash_every, expanded)
+            .map_err(|e| switch_apfs_read::ReadError::invalid(e.to_string()))?;
         use std::io::Write;
         writeln!(out, "{line}")?;
         if check {

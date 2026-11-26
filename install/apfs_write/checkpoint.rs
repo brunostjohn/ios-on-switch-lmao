@@ -12,7 +12,7 @@ use switch_apfs_format::object::{
     OBJ_PHYSICAL, OBJECT_TYPE_MASK, ObjPhys, TYPE_BTREE, TYPE_BTREE_NODE, TYPE_CHECKPOINT_MAP, TYPE_NX_REAP_LIST,
     TYPE_NX_REAPER, TYPE_SPACEMAN, TYPE_SPACEMAN_FREE_QUEUE,
 };
-use switch_apfs_format::{BLOCK_SIZE, Block, put, seal};
+use switch_apfs_format::{BLOCK_SIZE, Block, get, put, seal};
 use switch_apfs_read::Checkpoint;
 use zerocopy::little_endian::{U32, U64};
 
@@ -35,9 +35,12 @@ pub struct CheckpointInput<'a> {
     pub nx: NxSuperblock,
 }
 
+/// `nx_reap_list_phys_t.nrl_count`.
+const NRL_COUNT_AT: usize = 48;
+
 /// The source's ephemeral objects in its own order: a new space manager, empty free-queue roots (every queued block
-/// was freed into the bitmaps), and the reaper and reap list as Apple left them. Free-queue child nodes go with their
-/// entries; anything else is refused.
+/// was freed into the bitmaps), and the reaper and an empty reap list as Apple left them. Free-queue child nodes go
+/// with their entries; anything else, a reap list with work in it included, is refused.
 pub fn build(input: CheckpointInput) -> Result<Committed, WriteError> {
     let xid = input.xid;
     let mut ephemeral = Vec::new();
@@ -54,6 +57,12 @@ pub fn build(input: CheckpointInput) -> Result<Committed, WriteError> {
             TYPE_BTREE_NODE if subtype == TYPE_SPACEMAN_FREE_QUEUE => continue,
             TYPE_NX_REAPER | TYPE_NX_REAP_LIST => {
                 let (_, source) = input.source.ephemeral(oid)?;
+                let entries = get::<U32>(&source[..], NRL_COUNT_AT).map_or(0, |n| n.get());
+                if kind == TYPE_NX_REAP_LIST && entries != 0 {
+                    return Err(WriteError::Refused(format!(
+                        "the source's reap list holds {entries} entries of unfinished work"
+                    )));
+                }
                 let mut block = source.clone();
                 put(&mut block[..], 16, &U64::new(xid));
                 seal(&mut block[..]);

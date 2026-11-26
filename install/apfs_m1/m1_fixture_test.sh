@@ -1,6 +1,7 @@
 #!/bin/bash
 # The writer on a stand-in for Apple's container: a newfs_apfs System volume with real files, then the Data volume
-# added by switch_apfs_m1 at 16 GiB (the source's checkpoint areas kept, and resized) and at 1 TiB (kept).
+# added by switch_apfs_m1 at 16 GiB (the source's checkpoint areas kept, and the Mac-composed 280/27,748) and at
+# 1 TiB (kept).
 #
 # Each output is checked in userland first (our reader, dpp's reader, fsck_apfs -n on the file) and attached only
 # after those pass, so the kernel never probes an image fsck rejects. Then: both volumes attach, each mounts read-only
@@ -229,7 +230,7 @@ run() {
 }
 
 run keep-16g $((16 << 30)) keep
-run resized-16g $((16 << 30)) resized
+run mac-composed-16g $((16 << 30)) mac-composed
 run keep-1t $((1 << 40)) keep
 
 say "== negative controls, on keep-16g"

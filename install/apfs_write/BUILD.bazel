@@ -12,6 +12,7 @@ _DEPS = [
     "//install/apfs_names:switch_apfs_names",
     "//install/apfs_read:switch_apfs_read",
     "@installer_crates//:thiserror",
+    "@installer_crates//:unicode-normalization",
     "@installer_crates//:zerocopy",
 ]
 
@@ -19,7 +20,7 @@ rust_library(
     name = "switch_apfs_write",
     srcs = glob(
         ["*.rs"],
-        exclude = ["tests.rs"],
+        exclude = ["tests*.rs"],
     ),
     deps = _DEPS,
 )

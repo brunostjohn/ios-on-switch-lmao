@@ -2,7 +2,7 @@
 //! The tree both macOS and our writer build in the Mac checks: numbered directories of small files, one directory of
 //! long names, and one of names from every corner of Unicode that the 17.0 kernel accepts.
 
-use switch_apfs_write::{Content, Entry, Owner, Tree};
+use switch_apfs_write::{Attrs, Tree};
 
 const LONG_NAME: &str = "a-rather-long-file-name-that-makes-the-index-keys-much-bigger-than-the-numbered-ones-";
 
@@ -105,31 +105,17 @@ pub fn listing(spec: &Spec) -> (Vec<Dir>, Vec<File>) {
 
 pub fn tree(spec: &Spec) -> Tree {
     let (dirs, files) = listing(spec);
-    let entry = |name: &str, (uid, gid): (u32, u32), mode, content| Entry {
-        name: name.into(),
-        owner: Owner { uid, gid, mode },
-        content,
-    };
-    let mut entries: Vec<Entry> = dirs
-        .iter()
-        .map(|dir| entry(&dir.name, dir.owner, 0o755, Content::Dir(Vec::new())))
-        .collect();
+    let mut tree = Tree::new(Attrs::new(0, 0, 0o755));
+    let root = tree.root();
+    for dir in &dirs {
+        tree.add_dir(root, &dir.name, Attrs::new(dir.owner.0, dir.owner.1, 0o755))
+            .expect("directory names are unique");
+    }
     for file in files {
-        let parent = entries
-            .iter_mut()
-            .find(|e| e.name == file.dir)
-            .expect("parent listed first");
-        let Content::Dir(children) = &mut parent.content else {
-            unreachable!("only directories are listed as parents")
-        };
-        children.push(entry(&file.name, file.owner, 0o644, Content::File(file.data)));
+        let parent = tree.child(root, &file.dir).expect("parent listed first");
+        let data = (!file.data.is_empty()).then(|| tree.add_bytes(file.data));
+        tree.add_file(parent, &file.name, Attrs::new(file.owner.0, file.owner.1, 0o644), data)
+            .expect("file names are unique");
     }
-    Tree {
-        root: Owner {
-            uid: 0,
-            gid: 0,
-            mode: 0o755,
-        },
-        entries,
-    }
+    tree
 }

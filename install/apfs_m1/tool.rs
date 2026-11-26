@@ -1,19 +1,36 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Adds a Data volume holding `/hello` to Apple's container, written into an image file.
-//! `inspect` prints a container's layer; `set-role` and `mutate` make fixtures and negative controls.
+//! The APFS writer's driver, on image files:
+//! - `build` adds Data, a verbatim copy of System's `/private/var`, and Preboot with seeded images;
+//! - `power-cuts` cuts `build`'s write at every phase and checks what is left, in memory or on image files;
+//! - `fidelity` compares a copy with its source record for record, for what a mount can't show;
+//! - `add-volume` adds a Data volume holding only `/hello` (M1);
+//! - `source` turns an IPSW's OS member into the bare container the writer reads;
+//! - `gen` prints a seeded image's bytes; `inspect` prints a container's layer;
+//! - `set-role` and `mutate` make fixtures and negative controls.
 
+mod build;
+mod cut_plan;
+mod cuts;
+mod fidelity;
+mod file_cuts;
 mod mutate;
+mod parse;
+mod samples;
+mod seeded;
+mod sharing;
+mod source;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use switch_apfs_format::io::{FileSource, FileTarget};
+use switch_apfs_format::object::{OBJECT_TYPE_MASK, TYPE_NX_REAP_LIST, TYPE_NX_REAPER};
 use switch_apfs_names::UnicodeVersion;
 use switch_apfs_read::Container;
-use switch_apfs_write::{
-    CheckpointAreas, Content, Entry, Owner, SourcePins, Tree, VolumeSpec, WriteOptions, plan, write,
-};
+use switch_apfs_write::{Attrs, CheckpointAreas, NewVolume, SourcePins, Tree, VolumeSpec, WriteOptions, plan, write};
+
+use crate::parse::{parse_areas, parse_int, parse_uuid, uuid_string};
 
 #[derive(Parser)]
 struct Cli {
@@ -23,7 +40,22 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    Build {
+        #[command(flatten)]
+        args: build::BuildArgs,
+        #[arg(long)]
+        target: PathBuf,
+    },
+    PowerCuts(cuts::CutArgs),
+    Fidelity(fidelity::FidelityArgs),
     AddVolume(AddVolume),
+    Source(source::SourceArgs),
+    Gen {
+        #[arg(long, value_parser = parse_int::<u64>)]
+        bytes: u64,
+        #[arg(long, value_parser = parse_int::<u64>)]
+        seed: u64,
+    },
     Inspect {
         image: PathBuf,
         #[arg(long, default_value_t = 0)]
@@ -71,8 +103,8 @@ struct AddVolume {
     incompat: u64,
     #[arg(long)]
     unicode: UnicodeVersion,
-    /// `keep`, `resized` (280/27,748), or `DESC:DATA` blocks.
-    #[arg(long, value_parser = parse_areas)]
+    /// `rule` (the default), `keep`, `mac-composed` (280/27,748), or `DESC:DATA` blocks.
+    #[arg(long, value_parser = parse_areas, default_value = "rule")]
     areas: CheckpointAreas,
     #[arg(long)]
     time_ns: u64,
@@ -82,7 +114,8 @@ struct AddVolume {
 
 fn main() -> ExitCode {
     match run(Cli::parse()) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
         Err(e) => {
             eprintln!("switch_apfs_m1: {e}");
             ExitCode::FAILURE
@@ -90,12 +123,17 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+fn run(cli: Cli) -> Result<bool, Box<dyn std::error::Error>> {
     match cli.command {
-        Command::AddVolume(a) => add_volume(a),
-        Command::Inspect { image, offset } => inspect(&image, offset),
-        Command::SetRole { image, uuid, role } => mutate::set_role(&image, uuid, role),
-        Command::Mutate { image, what, uuid } => mutate::mutate(&image, what, uuid),
+        Command::Build { args, target } => build::build(&args, &target).map(|()| true),
+        Command::PowerCuts(args) => cuts::run(&args),
+        Command::Fidelity(args) => fidelity::run(&args),
+        Command::AddVolume(a) => add_volume(a).map(|()| true),
+        Command::Source(a) => source::run(&a).map(|()| true),
+        Command::Gen { bytes, seed } => seeded::to_stdout(seed, bytes).map(|()| true).map_err(Into::into),
+        Command::Inspect { image, offset } => inspect(&image, offset).map(|()| true),
+        Command::SetRole { image, uuid, role } => mutate::set_role(&image, uuid, role).map(|()| true),
+        Command::Mutate { image, what, uuid } => mutate::mutate(&image, what, uuid).map(|()| true),
     }
 }
 
@@ -110,22 +148,9 @@ fn add_volume(a: AddVolume) -> Result<(), Box<dyn std::error::Error>> {
         incompatible_features: a.incompat,
         unicode: a.unicode,
     };
-    let tree = Tree {
-        root: Owner {
-            uid: 0,
-            gid: 0,
-            mode: 0o755,
-        },
-        entries: vec![Entry {
-            name: "hello".into(),
-            owner: Owner {
-                uid: 0,
-                gid: 0,
-                mode: 0o644,
-            },
-            content: Content::File(a.hello.into_bytes()),
-        }],
-    };
+    let mut tree = Tree::new(Attrs::new(0, 0, 0o755));
+    let hello = tree.add_bytes(a.hello.into_bytes());
+    tree.add_file(tree.root(), "hello", Attrs::new(0, 0, 0o644), Some(hello))?;
     let options = WriteOptions {
         target_blocks: a.target_bytes / switch_apfs_format::BLOCK_SIZE as u64,
         areas: a.areas,
@@ -133,44 +158,29 @@ fn add_volume(a: AddVolume) -> Result<(), Box<dyn std::error::Error>> {
         formatted_by: "switch_apfs (m1)".into(),
     };
     let started = std::time::Instant::now();
+    let pins = SourcePins {
+        system_uuid: a.system_uuid,
+    };
     let plan = plan(
         &source,
-        &SourcePins {
-            system_uuid: a.system_uuid,
-        },
-        &spec,
-        &tree,
+        &pins,
+        &[NewVolume {
+            spec: &spec,
+            tree: &tree,
+        }],
         &options,
+        &[],
     )?;
     let planned = started.elapsed();
     let mut target = FileTarget::create(&a.target, a.target_bytes)?;
-    write(&source, &mut target, &plan)?;
-    let s = &plan.summary;
-    println!("source: xid {} blocks {}", s.source_xid, s.source_blocks);
-    println!(
-        "queued frees: {} blocks freed, {} already clear",
-        s.queued_freed, s.queued_already_free
-    );
-    println!("container layer freed: {} blocks", s.container_freed);
-    println!(
-        "target: {} blocks, xid {}, {} free",
-        plan.target_blocks, plan.xid, s.free_blocks
-    );
-    println!("checkpoint areas: desc {:?} data {:?}", plan.desc_area, plan.data_area);
-    println!("pool {:?} ring {:?}", s.pool, s.pool_bitmap_ring);
-    println!(
-        "volume: slot {} oid {} superblock at {}",
-        s.volume_index, s.volume_oid, s.volume_superblock
-    );
-    println!(
-        "copied {} blocks; planned in {planned:?}, done in {:?}",
-        s.copied_blocks,
-        started.elapsed()
-    );
+    let stats = write(&source, &mut target, &plan)?;
+    build::summary(&plan);
+    build::print_stats(&stats);
+    println!("planned in {planned:?}, done in {:?}", started.elapsed());
     Ok(())
 }
 
-fn inspect(image: &PathBuf, offset: u64) -> Result<(), Box<dyn std::error::Error>> {
+fn inspect(image: &Path, offset: u64) -> Result<(), Box<dyn std::error::Error>> {
     let c = Container::open(&FileSource::open(image, offset)?)?;
     let cp = &c.checkpoint;
     println!(
@@ -194,6 +204,41 @@ fn inspect(image: &PathBuf, offset: u64) -> Result<(), Box<dyn std::error::Error
         sm.fq[0].tree_node_limit.get(),
         sm.fq[1].tree_node_limit.get()
     );
+    for m in &cp.mappings {
+        let kind = m.type_and_flags.get() & OBJECT_TYPE_MASK;
+        if kind != TYPE_NX_REAPER && kind != TYPE_NX_REAP_LIST {
+            continue;
+        }
+        let (_, block) = cp.ephemeral(m.oid.get())?;
+        let u32_at = |at: usize| u32::from_le_bytes([block[at], block[at + 1], block[at + 2], block[at + 3]]);
+        let u64_at = |at: usize| u64::from(u32_at(at)) | u64::from(u32_at(at + 4)) << 32;
+        if kind == TYPE_NX_REAPER {
+            println!(
+                "reaper {}: next reap id {} completed {} lists {:#x}..{:#x} flags {:#x} count {} reaping fs {:#x} oid {:#x}",
+                m.oid.get(),
+                u64_at(32),
+                u64_at(40),
+                u64_at(48),
+                u64_at(56),
+                u32_at(64),
+                u32_at(68),
+                u64_at(80),
+                u64_at(88)
+            );
+        } else {
+            println!(
+                "reap list {}: next {:#x} flags {:#x} max {} count {} first {:#x} last {:#x} free {:#x}",
+                m.oid.get(),
+                u64_at(32),
+                u32_at(40),
+                u32_at(44),
+                u32_at(48),
+                u32_at(52),
+                u32_at(56),
+                u32_at(60)
+            );
+        }
+    }
     for (q, entries) in c.space.queues.iter().enumerate() {
         println!(
             "queue {q}: {} entries, {} blocks",
@@ -218,46 +263,4 @@ fn inspect(image: &PathBuf, offset: u64) -> Result<(), Box<dyn std::error::Error
         );
     }
     Ok(())
-}
-
-pub fn uuid_string(u: &[u8; 16]) -> String {
-    let h: String = u.iter().map(|b| format!("{b:02X}")).collect();
-    format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..])
-}
-
-fn parse_uuid(s: &str) -> Result<[u8; 16], String> {
-    let hex: String = s.chars().filter(|c| *c != '-').collect();
-    if hex.len() != 32 {
-        return Err(format!("not a UUID: {s}"));
-    }
-    let mut out = [0u8; 16];
-    for (i, b) in out.iter_mut().enumerate() {
-        *b = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).map_err(|_| format!("not a UUID: {s}"))?;
-    }
-    Ok(out)
-}
-
-fn parse_int<T: TryFrom<u64>>(s: &str) -> Result<T, String> {
-    let v = match s.strip_prefix("0x") {
-        Some(h) => u64::from_str_radix(h, 16),
-        None => s.parse(),
-    }
-    .map_err(|_| format!("not a number: {s}"))?;
-    T::try_from(v).map_err(|_| format!("out of range: {s}"))
-}
-
-fn parse_areas(s: &str) -> Result<CheckpointAreas, String> {
-    match s {
-        "keep" => Ok(CheckpointAreas::Keep),
-        "resized" => Ok(CheckpointAreas::RESIZED),
-        _ => {
-            let (desc, data) = s
-                .split_once(':')
-                .ok_or_else(|| format!("not keep, resized or DESC:DATA: {s}"))?;
-            Ok(CheckpointAreas::Sized {
-                desc: parse_int(desc)?,
-                data: parse_int(data)?,
-            })
-        }
-    }
 }
