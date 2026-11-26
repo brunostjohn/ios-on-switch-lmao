@@ -593,12 +593,10 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
                                      (pp.flags & PipelineStorageMetadata) ? pp.storageMask : 0, blendPerTarget_,
                                      blendPerTargetSeen_) == kNoopSourceRgba0000;
     if (prebuilt) {
-        // the GPU gets the word the pack's generator wrote into the segment (pack/segments.py), whatever this build's rule
-        // says: a card's pack may predate it
-        const auto *segment =
-            reinterpret_cast<const uint32_t *>(pack_.section<uint8_t>(PackHeap) + prebuilt->heapOffset);
-        const bool pushed =
-            lastWritten(segment, prebuilt->words, kIteratedBlendOptimization, kNoopNever) == kNoopSourceRgba0000;
+        // the GPU gets the word the pack's generator wrote into the segment, whatever this build's rule says: a card's pack
+        // may predate it. Its flag (pack/segments.py FLAG_BLEND_KILL) is in the segment table tier 0 wires; the segment's
+        // words are heap pages no process keeps resident, an SD read on the creating thread.
+        const bool pushed = prebuilt->flags & kPackSegmentBlendKill;
         SWITCH_METAL_DIAGNOSTIC(stats.blendKillPackDisagreements += pushed != pl.blendKill);
         pl.blendKill = pushed;
     }

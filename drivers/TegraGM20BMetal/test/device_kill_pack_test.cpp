@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Every pre-built state of the built pack (//gpu/seed:pack, of the configured IPSW kind) pushes the zero-source kill the
-// runtime's rule gives it, both ways: Device::build takes a pre-built state's kill from its segment's
-// SET_ITERATED_BLEND_OPTIMIZATION word and counts each state whose rule says otherwise
-// (Stats::blendKillPackDisagreements). An over-kill changes pixels; an under-kill costs the ROP work it saves.
+// runtime's rule gives it, both ways: Device::build takes a pre-built state's kill from its segment's flag
+// (kPackSegmentBlendKill) and counts each state whose rule says otherwise (Stats::blendKillPackDisagreements). An
+// over-kill changes pixels; an under-kill costs the ROP work it saves. Each flag is its segment's own last
+// SET_ITERATED_BLEND_OPTIMIZATION word, the GPU's, which no state's creation reads.
 #include "device_harness.h"
 #include "../pack.h"
+#include "../blend_kill.h"
+#include "../push.h"
 #include "../pack_window.h"
 #include <cstdio>
 #include <cstdlib>
@@ -24,6 +27,36 @@ std::vector<uint8_t> fileBytes(const char *path)
     in.seekg(0);
     in.read(reinterpret_cast<char *>(bytes.data()), std::streamsize(bytes.size()));
     return bytes;
+}
+
+TEST(GM20BKillPack, EverySegmentsFlagIsItsOwnLastKillWord)
+{
+    const char *path = getenv("SWITCH_METAL_KILL_PACK");
+    ASSERT_NE(path, nullptr);
+    const std::vector<uint8_t> file = fileBytes(path);
+    ASSERT_FALSE(file.empty()) << path;
+    gm20b::PackHeader h = {};
+    std::memcpy(&h, file.data(), sizeof h);
+    const gm20b::PackSection segments = h.section[gm20b::PackSegments];
+    ASSERT_GE(segments.bytes, sizeof(gm20b::PackSegmentTable));
+    gm20b::PackSegmentTable table = {};
+    std::memcpy(&table, file.data() + segments.offset, sizeof table);
+    uint32_t flagged = 0, unflagged = 0;
+    for (uint32_t i = 0; i < table.pipelineCount; i++) {
+        gm20b::PackSegment segment = {};
+        std::memcpy(&segment, file.data() + segments.offset + sizeof table + i * sizeof segment, sizeof segment);
+        if (!segment.words)
+            continue;
+        const auto *words =
+            reinterpret_cast<const uint32_t *>(file.data() + h.section[gm20b::PackHeap].offset + segment.heapOffset);
+        const bool kills = gm20b::lastWritten(words, segment.words, gm20b::kIteratedBlendOptimization,
+                                              gm20b::kNoopNever) == gm20b::kNoopSourceRgba0000;
+        const bool flag = segment.flags & gm20b::kPackSegmentBlendKill;
+        EXPECT_EQ(flag, kills) << "segment " << i;
+        (flag ? flagged : unflagged)++;
+    }
+    EXPECT_GT(flagged, 0u);
+    EXPECT_GT(unflagged, 0u);
 }
 
 TEST(GM20BKillPack, EveryPrebuiltStatesSegmentPushesItsRulesKill)
