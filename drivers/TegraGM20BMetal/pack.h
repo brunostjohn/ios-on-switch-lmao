@@ -221,6 +221,9 @@ struct PackFastKey {
 enum PackSegmentFlag : uint16_t {
     kPackSegmentKeptAcrossPasses = 1u << 0,
     kPackSegmentReselectRoot = 1u << 1,
+    // v37: the segment's last SET_ITERATED_BLEND_OPTIMIZATION is NOOP_SOURCE_RGBA_0000 (blend_kill.h), which a state's
+    // creation reads here, in the wired segment table, instead of in the segment's heap words
+    kPackSegmentBlendKill = 1u << 2,
 };
 
 struct PackSegment {

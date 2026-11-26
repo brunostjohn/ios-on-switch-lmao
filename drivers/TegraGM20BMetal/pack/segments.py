@@ -27,6 +27,9 @@ SEGMENT_MAX_WORDS = 0xFFFF
 
 FLAG_KEPT_ACROSS_PASSES = 1 << 0
 FLAG_RESELECT_ROOT = 1 << 1
+# The segment's last SET_ITERATED_BLEND_OPTIMIZATION is NOOP_SOURCE_RGBA_0000: what the GPU runs, which a runtime reads
+# from the wired segment table instead of the segment's heap words
+FLAG_BLEND_KILL = 1 << 2
 
 CBUF_SHADER_DATA = 2
 CBUF_UNIT = 256
@@ -156,6 +159,28 @@ def _push_inc(out: list[int], mthd: int, vals: tuple[int, ...] | list[int]) -> N
 def _push_0inc(out: list[int], mthd: int, vals: list[int]) -> None:
     out.append((3 << 29) | (len(vals) << 16) | (mthd >> 2))
     out.extend(vals)
+
+
+def _last_written(words: list[int], method: int, absent: int) -> int:
+    """The value the last write of 3D `method` in `words` leaves it, `absent` where none writes it (push.h lastWritten)."""
+    value = absent
+    i = 0
+    while i < len(words):
+        hdr = words[i]
+        op, arg, mthd, mine = hdr >> 29, hdr >> 16 & 0x1FFF, (hdr & 0xFFF) << 2, (hdr >> 13 & 7) == 0
+        if op == 4:
+            if mine and mthd == method:
+                value = arg
+            i += 1
+            continue
+        for k in range(arg):
+            if i + 1 + k >= len(words):
+                break
+            at = mthd + 4 * k if op == 1 else mthd + 4 if op == 5 and k else mthd
+            if mine and at == method and op in (1, 3, 5):
+                value = words[i + 1 + k]
+        i += 1 + arg if op in (1, 3, 5) else 1
+    return value
 
 
 def _cbuf_bind_bytes(size: int) -> int:
@@ -408,7 +433,12 @@ def build_pipeline_stream(
     if free_it is not None:
         colour, it = free_it
         _emit_iterated_blend(words, it, colour, _color_formats(key_string)[colour])
-    flags = (FLAG_KEPT_ACROSS_PASSES if kept else 0) | (FLAG_RESELECT_ROOT if reselect else 0)
+    kills = _last_written(words, ITERATED_BLEND_OPTIMIZATION, NOOP_NEVER) == NOOP_SOURCE_RGBA_0000
+    flags = (
+        (FLAG_KEPT_ACROSS_PASSES if kept else 0)
+        | (FLAG_RESELECT_ROOT if reselect else 0)
+        | (FLAG_BLEND_KILL if kills else 0)
+    )
     return words, flags
 
 
