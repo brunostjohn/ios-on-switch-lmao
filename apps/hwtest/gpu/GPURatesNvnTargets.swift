@@ -83,7 +83,9 @@ extension GPURates {
                 let kind = facts["kind"] ?? 0
                 metrics.set("cbr_\(name)_\(state)_kind", "0x" + String(kind, radix: 16))
                 metrics.set("cbr_\(name)_\(state)_comptags", facts["comptags"] ?? 0)
-                if on && probed && facts["compression"] == 1 && kind != Self.cbrKinds[name] {
+                if probed && facts["compression"] == 1 && facts["comptags"] != 1 {
+                    problems.append("cbr_\(name)_\(state): the target ran on plain memory, none compressed was made")
+                } else if on && probed && facts["compression"] == 1 && kind != Self.cbrKinds[name] {
                     problems.append("cbr_\(name)_on: the target's kind is 0x\(String(kind, radix: 16)), not 2CBR's")
                 }
                 resolved.append(try await gpu.read(into, bytesPerPixel: bytes))
