@@ -2521,6 +2521,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BTiled.h",
         "//drivers/TegraGM20B:SwitchGpuPin.h",
+        "//drivers/TegraGM20B:SwitchGpuSpares.h",
         "//drivers/TegraGM20B:SwitchGpuCachedBuffer.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:SwitchGpuCachedZero.h",
@@ -2552,6 +2553,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BABI.h",
         "//drivers/TegraGM20B:TegraGM20BTiled.h",
         "//drivers/TegraGM20B:SwitchGpuPin.h",
+        "//drivers/TegraGM20B:SwitchGpuSpares.h",
         "//drivers/TegraGM20B:SwitchGpuCachedBuffer.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
         "//drivers/TegraGM20B:SwitchGpuCachedZero.h",
@@ -2585,6 +2587,7 @@ host_library(
     srcs = ["//drivers/TegraGM20B:SwitchGpuPin.cpp"],
     hdrs = [
         "//drivers/TegraGM20B:SwitchGpuPin.h",
+        "//drivers/TegraGM20B:SwitchGpuSpares.h",
         "//drivers/TegraGM20B:SwitchGpuCachedBuffer.h",
         "//drivers/TegraGM20B:SwitchGpuCachedZero.h",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",

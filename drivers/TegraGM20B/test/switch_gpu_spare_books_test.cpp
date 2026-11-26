@@ -5,6 +5,7 @@
 // leaves on the allocating thread.
 #include <gtest/gtest.h>
 
+#include <cstdio>
 #include <vector>
 
 #include "drivers/TegraGM20B/SwitchGpuSpareBooks.h"
@@ -24,9 +25,14 @@ uint64_t bytesOf(uint32_t c)
 	return switch_gpu_spare_class_bytes(c);
 }
 
+uint32_t slotOf(uint64_t bytes, switch_gpu_spare_kind kind)
+{
+	return switch_gpu_spare_slot(kind, classOf(bytes));
+}
+
 struct Pool {
 	switch_gpu_spare_books b{};
-	std::vector<uint64_t> dirty;  // spare bytes, as the kernel's dirty list
+	std::vector<uint32_t> dirty;  // spare slots, as the kernel's dirty list
 	bool copyEngineBusy = false;  // switch_gpu_cached_zero answers -16
 	bool unitsRefused = false;    // the refill before the fix: no spare of 512 KiB or more
 	bool kicked = false;          // a worker's thread call entered and not run yet
@@ -34,6 +40,9 @@ struct Pool {
 		false;  // the take before the fix: the refill kicked only for the asked class
 	unsigned made = 0, refused = 0, misses = 0;
 	uint64_t peak = 0;
+	// per slot: BoAllocs asked, served by a spare, spares the refill made
+	unsigned asked[SWITCH_GPU_SPARE_SLOTS] = {}, served[SWITCH_GPU_SPARE_SLOTS] = {},
+		 refilled[SWITCH_GPU_SPARE_SLOTS] = {};
 
 	Pool()
 	{
@@ -52,27 +61,29 @@ struct Pool {
 			if (d == SWITCH_GPU_SPARE_NONE)
 				break;
 			--b.ready[d];
-			b.held -= bytesOf(d);
+			b.held -= switch_gpu_spare_slot_bytes(d);
 		}
 	}
 
 	void refill()
 	{
 		bool floors = false;
-		for (uint32_t c; (c = switch_gpu_spare_books_refill(b, kCap, &floors)) !=
+		for (uint32_t s; (s = switch_gpu_spare_books_refill(b, kCap, &floors)) !=
 				 SWITCH_GPU_SPARE_NONE;) {
-			giveBack(bytesOf(c), floors);
-			b.held += bytesOf(c);
-			++b.dirty[c];
+			const uint64_t bytes = switch_gpu_spare_slot_bytes(s);
+			giveBack(bytes, floors);
+			b.held += bytes;
+			++b.dirty[s];
 			track();
-			if (unitsRefused && bytesOf(c) >= SWITCH_GPU_SPARE_UNITS_FROM) {
-				--b.dirty[c];
-				b.held -= bytesOf(c);
+			if (unitsRefused && bytes >= SWITCH_GPU_SPARE_UNITS_FROM) {
+				--b.dirty[s];
+				b.held -= bytes;
 				++refused;
 				return;
 			}
 			++made;
-			dirty.push_back(bytesOf(c));
+			++refilled[s];
+			dirty.push_back(s);
 			recycle();
 		}
 	}
@@ -88,32 +99,34 @@ struct Pool {
 	void recycle()
 	{
 		while (!dirty.empty()) {
-			const uint64_t bytes = dirty.back();
-			const uint32_t c = switch_gpu_spare_class_of_spare(bytes);
+			const uint32_t s = dirty.back();
 			dirty.pop_back();
-			--b.dirty[c];
-			if (!switch_gpu_spare_books_keep(b, c, kCap)) {
-				b.held -= bytes;
+			--b.dirty[s];
+			if (!switch_gpu_spare_books_keep(b, s, kCap)) {
+				b.held -= switch_gpu_spare_slot_bytes(s);
 				continue;
 			}
-			giveBack(0, switch_gpu_spare_books_floor_short(b, c));
+			giveBack(0, switch_gpu_spare_books_floor_short(b, s));
 			if (copyEngineBusy) {
-				dirty.insert(dirty.begin(), bytes);
-				++b.dirty[c];
+				dirty.insert(dirty.begin(), s);
+				++b.dirty[s];
 				return;
 			}
-			++b.ready[c];
+			++b.ready[s];
 		}
 	}
 
 	// spareTake, then the refill only where it kicks it
-	bool take(uint64_t bytes, bool compositor)
+	bool take(uint64_t bytes, bool compositor,
+		  switch_gpu_spare_kind kind = SWITCH_GPU_SPARE_CACHED)
 	{
-		const uint32_t c = classOf(bytes);
+		const uint32_t c = slotOf(bytes, kind);
 		const uint32_t d = switch_gpu_spare_books_take(b, c, compositor);
+		++asked[c];
 		if (d != SWITCH_GPU_SPARE_NONE) {
+			++served[c];
 			--b.ready[d];
-			b.held -= bytesOf(d);
+			b.held -= switch_gpu_spare_slot_bytes(d);
 		} else {
 			++misses;
 			switch_gpu_spare_books_learn(
@@ -126,23 +139,30 @@ struct Pool {
 	}
 
 	// A freed BO of class `bytes` back to the spares (spareKeep), then the workers run
-	void free(uint64_t bytes)
+	void free(uint64_t bytes, switch_gpu_spare_kind kind = SWITCH_GPU_SPARE_CACHED)
 	{
 		const uint64_t backing = bytesOf(classOf(bytes));
+		const uint32_t s =
+			switch_gpu_spare_slot(kind, switch_gpu_spare_class_of_spare(backing));
 		b.held += backing;
-		++b.dirty[switch_gpu_spare_class_of_spare(backing)];
-		dirty.push_back(backing);
+		++b.dirty[s];
+		dirty.push_back(s);
 		recycle();
 		kicked |= switch_gpu_spare_books_wants_refill(b, kCap);
 		EXPECT_LE(b.held, kCap) << "once the freed BO has been kept or given back";
 	}
 
-	uint64_t readyBytes() const
+	uint64_t readyBytes(switch_gpu_spare_kind kind) const
 	{
 		uint64_t n = 0;
 		for (uint32_t c = 0; c < SWITCH_GPU_SPARE_CLASSES; c++)
-			n += uint64_t(b.ready[c]) * bytesOf(c);
+			n += uint64_t(b.ready[switch_gpu_spare_slot(kind, c)]) * bytesOf(c);
 		return n;
+	}
+
+	uint64_t readyBytes() const
+	{
+		return readyBytes(SWITCH_GPU_SPARE_CACHED) + readyBytes(SWITCH_GPU_SPARE_WC);
 	}
 };
 
@@ -153,6 +173,7 @@ TEST(SpareBooks, EveryWarmClassIsReadyFromBootUnderTheCap)
 	for (const switch_gpu_spare_warm &w : SWITCH_GPU_SPARE_WARM)
 		EXPECT_EQ(p.b.ready[classOf(w.bytes)], w.ready) << (w.bytes >> 10) << " KiB";
 	EXPECT_EQ(p.b.held, switch_gpu_spare_warm_bytes());
+	EXPECT_EQ(p.readyBytes(SWITCH_GPU_SPARE_WC), 0u) << "the warm table is all cached";
 	EXPECT_LE(p.peak, kCap);
 }
 
@@ -322,6 +343,154 @@ TEST(SpareBooks, ASpareServesItsOwnClassAndTheFourAboveIt)
 		  classOf(24 * kMiB));
 	EXPECT_EQ(switch_gpu_spare_books_take(p.b, classOf(300 * kKiB), false),
 		  SWITCH_GPU_SPARE_NONE);
+}
+
+
+// A system BO's write-combined buffer and a cached BO's cacheable one never serve each other (BoAlloc's PBENTRY note),
+// in either direction, though both kinds hold the same classes
+TEST(SpareBooks, TheTwoKindsNeverServeEachOther)
+{
+	Pool p;
+	p.refill();
+	const uint32_t cached = slotOf(4 * kMiB, SWITCH_GPU_SPARE_CACHED);
+	const uint32_t wc = slotOf(4 * kMiB, SWITCH_GPU_SPARE_WC);
+	EXPECT_FALSE(p.take(4 * kMiB, true, SWITCH_GPU_SPARE_WC));
+	EXPECT_EQ(p.b.ready[cached], 2);
+	p.free(4 * kMiB, SWITCH_GPU_SPARE_WC);
+	EXPECT_EQ(p.b.ready[wc], 1);
+	EXPECT_TRUE(p.take(4 * kMiB, true));
+	EXPECT_EQ(p.b.ready[wc], 1) << "a cached ask took the write-combined spare";
+	EXPECT_TRUE(p.take(4 * kMiB, true, SWITCH_GPU_SPARE_WC));
+	EXPECT_EQ(p.b.ready[wc], 0);
+	// the largest classes' asks look no further than their own kind's slots
+	EXPECT_EQ(switch_gpu_spare_books_take(p.b, slotOf(256 * kMiB, SWITCH_GPU_SPARE_WC), true),
+		  SWITCH_GPU_SPARE_NONE);
+	EXPECT_EQ(switch_gpu_spare_kind_end(slotOf(256 * kMiB, SWITCH_GPU_SPARE_WC)),
+		  SWITCH_GPU_SPARE_SLOTS);
+}
+
+// A write-combined miss teaches its own slot a depth, which the refill fills under the shared cap; the cached class of
+// the same size keeps its own
+TEST(SpareBooks, AWriteCombinedMissTeachesItsOwnDepth)
+{
+	Pool p;
+	p.refill();
+	const uint32_t cached = slotOf(4 * kMiB, SWITCH_GPU_SPARE_CACHED);
+	const uint32_t wc = slotOf(4 * kMiB, SWITCH_GPU_SPARE_WC);
+	const uint16_t cachedDepth = p.b.depth[cached];
+	EXPECT_EQ(switch_gpu_spare_books_why(p.b, wc, false, false), SWITCH_GPU_SPARE_FIRST);
+	EXPECT_FALSE(p.take(4 * kMiB, false, SWITCH_GPU_SPARE_WC));
+	EXPECT_EQ(p.b.depth[wc], 1);
+	EXPECT_EQ(p.b.depth[cached], cachedDepth);
+	p.settle();
+	EXPECT_EQ(p.b.ready[wc], 1);
+	EXPECT_TRUE(p.take(4 * kMiB, false, SWITCH_GPU_SPARE_WC));
+}
+
+// One budget: the learned depths of both kinds fill only the room the warm table leaves, never past the cap
+TEST(SpareBooks, BothKindsShareTheCap)
+{
+	Pool p;
+	p.refill();
+	EXPECT_FALSE(p.take(16 * kMiB, false, SWITCH_GPU_SPARE_WC));
+	EXPECT_FALSE(p.take(20 * kMiB, false, SWITCH_GPU_SPARE_WC));
+	p.settle();
+	EXPECT_LE(p.peak, kCap);
+	EXPECT_EQ(p.readyBytes(SWITCH_GPU_SPARE_CACHED), switch_gpu_spare_warm_bytes());
+	EXPECT_EQ(p.readyBytes(SWITCH_GPU_SPARE_WC), 16 * kMiB) << "20 MiB more is past the cap";
+}
+
+// The warm table refills first, taking its room back from write-combined spares as it does from learned cached ones
+TEST(SpareBooks, WarmFloorsTakeRoomBackFromWriteCombinedSpares)
+{
+	Pool p;
+	p.refill();
+	EXPECT_FALSE(p.take(20 * kMiB, false, SWITCH_GPU_SPARE_WC));
+	p.settle();
+	EXPECT_EQ(p.b.ready[slotOf(20 * kMiB, SWITCH_GPU_SPARE_WC)], 1);
+	EXPECT_TRUE(p.take(16 * kMiB, true));
+	EXPECT_TRUE(p.take(16 * kMiB, true));
+	p.free(24 * kMiB, SWITCH_GPU_SPARE_WC);
+	EXPECT_EQ(p.b.ready[slotOf(24 * kMiB, SWITCH_GPU_SPARE_WC)], 1) << "kept while it fits";
+	p.settle();
+	EXPECT_EQ(p.b.ready[slotOf(16 * kMiB, SWITCH_GPU_SPARE_CACHED)], 2);
+	EXPECT_EQ(p.b.ready[slotOf(24 * kMiB, SWITCH_GPU_SPARE_WC)], 0);
+	EXPECT_EQ(p.b.ready[slotOf(20 * kMiB, SWITCH_GPU_SPARE_WC)], 1);
+	EXPECT_LE(p.peak, kCap);
+}
+
+// gpu.path.fresh_spare: a 24 MiB Shared buffer, a system BO (the GPU pool refused it as past the client's share), made,
+// freed and made again. Beside the full warm table (96.5 MiB of the 120 MiB cap) a 24 MiB write-combined spare needs
+// 120.5 MiB: the freed one goes back to the VM and the refill never makes one, so the second ask misses as the first
+// did. 512 KiB less of warm floors (the 64 KiB class's eight) is room for it exactly.
+TEST(SpareBooks, FreshSpareHasNoRoomBesideTheFullWarmTable)
+{
+	const auto rounds = [](bool sixtyFourKiBFloor) {
+		Pool p;
+		if (!sixtyFourKiBFloor) {
+			const uint32_t s = slotOf(64 * kKiB, SWITCH_GPU_SPARE_CACHED);
+			p.b.depth[s] = p.b.floor[s] = 0;
+		}
+		p.refill();
+		for (int round = 0; round < 2; ++round) {
+			p.take(24 * kMiB, false, SWITCH_GPU_SPARE_WC);
+			p.settle();
+			p.free(24 * kMiB, SWITCH_GPU_SPARE_WC);
+			p.settle();
+		}
+		EXPECT_LE(p.peak, kCap);
+		return p.misses;
+	};
+	EXPECT_EQ(rounds(true), 2u);
+	EXPECT_EQ(rounds(false), 1u);
+}
+
+
+// The device's measured demand, replayed through the pool: a HW Test pass (idle_redraw's 8 MiB heap restore,
+// launch_target's two rounds, fresh_spare's held target and 24 MiB Shared buffer) and backboardd's churn of 17,280 KiB
+// targets (25 Nov 14:22-14:25), boot after boot. Prints each slot's asks, hits and refills (NOTES: "hit rates and
+// refills per class").
+void replayDemand(Pool &p)
+{
+	const auto round = [&p](uint64_t bytes, bool compositor, switch_gpu_spare_kind kind) {
+		p.take(bytes, compositor, kind);
+		p.settle();
+		p.free(bytes, kind);
+		p.settle();
+	};
+	round(8 * kMiB, false, SWITCH_GPU_SPARE_CACHED);
+	round(21504 * kKiB, false, SWITCH_GPU_SPARE_CACHED);
+	round(21504 * kKiB, false, SWITCH_GPU_SPARE_CACHED);
+	p.take(21504 * kKiB, false);
+	p.settle();
+	round(24 * kMiB, false, SWITCH_GPU_SPARE_WC);
+	p.free(21504 * kKiB);
+	p.settle();
+	for (int i = 0; i < 10; ++i)
+		round(17280 * kKiB, true, SWITCH_GPU_SPARE_CACHED);
+}
+
+void printDemand(const char *title, const Pool &p)
+{
+	std::printf("%s\n", title);
+	for (uint32_t s = 0; s < SWITCH_GPU_SPARE_SLOTS; ++s)
+		if (p.asked[s] || p.refilled[s])
+			std::printf("  %s %llu KiB: %u of %u asks served, %u refills\n",
+				    switch_gpu_spare_slot_kind(s) == SWITCH_GPU_SPARE_WC ? "write-combined"
+											 : "cached",
+				    (unsigned long long)(switch_gpu_spare_slot_bytes(s) >> 10),
+				    p.served[s], p.asked[s], p.refilled[s]);
+}
+
+TEST(SpareBooks, TheReplayedDemandPerClass)
+{
+	Pool p;
+	p.refill();
+	replayDemand(p);
+	printDemand("replayed demand, one boot:", p);
+	EXPECT_LE(p.peak, kCap);
+	EXPECT_EQ(p.served[slotOf(24 * kMiB, SWITCH_GPU_SPARE_WC)], 0u)
+		<< "fresh_spare's write-combined ask has no room beside the full warm table";
 }
 
 }  // namespace

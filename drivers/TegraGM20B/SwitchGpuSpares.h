@@ -10,9 +10,19 @@ enum switch_gpu_spare_miss : uint8_t {
 	SWITCH_GPU_SPARE_ZEROING,     // its spares were still on the copy engine
 	SWITCH_GPU_SPARE_DRAINED,     // warm, and every ready spare taken
 	SWITCH_GPU_SPARE_PRESSURE,    // memory pressure: no spares kept
-	SWITCH_GPU_SPARE_INELIGIBLE,  // contiguous or write-combined: never served by a spare
+	SWITCH_GPU_SPARE_INELIGIBLE,  // contiguous: never served by a spare
 	SWITCH_GPU_SPARE_RESERVED,    // its one ready spare is kept for the compositor
 	SWITCH_GPU_SPARE_MISSES
+};
+
+// A spare's kind. Cached spares are cacheable pages (the cached BOs), write-combined ones a system coherent BO's
+// buffer, whose own VM object holds the attribute (BoAlloc's PBENTRY note), so the two never serve each other. One
+// budget under the cap holds both kinds, each class's depth learned from its own misses, with no share fixed between
+// them; only the warm table's floors are fixed, all of them cached.
+enum switch_gpu_spare_kind : uint32_t {
+	SWITCH_GPU_SPARE_CACHED,
+	SWITCH_GPU_SPARE_WC,
+	SWITCH_GPU_SPARE_KINDS
 };
 
 constexpr uint64_t SWITCH_GPU_SPARE_UNIT_BYTES = 128ULL << 10;

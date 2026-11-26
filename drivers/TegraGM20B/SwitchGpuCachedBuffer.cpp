@@ -72,6 +72,25 @@ bool switch_gpu_cached_buffer_pages(uint64_t bytes, SwitchGpuCachedBuffer *out)
 	return true;
 }
 
+bool switch_gpu_cached_buffer_write_combined(uint64_t bytes, SwitchGpuCachedBuffer *out)
+{
+	// BoAlloc's options for a system BO (kIOMemoryMapperNone shares a bit with kIOMapCacheMask; IOBMD keeps the cache
+	// mode's low three bits)
+	const IOOptionBits options = static_cast<IOOptionBits>(kIODirectionInOut) |
+				     static_cast<IOOptionBits>(kIOMemoryMapperNone) |
+				     kIOMapWriteCombineCache;
+	IOBufferMemoryDescriptor *memory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+		kernel_task, options, bytes, 0x3ffffffffULL);
+	if (!memory)
+		return false;
+	if (memory->prepare() != kIOReturnSuccess) {
+		memory->release();
+		return false;
+	}
+	*out = switch_gpu_cached_buffer_of(memory);
+	return true;
+}
+
 SwitchGpuCachedBuffer switch_gpu_cached_buffer_of(IOMemoryDescriptor *memory)
 {
 	auto *buffer = OSDynamicCast(IOBufferMemoryDescriptor, memory);

@@ -172,6 +172,7 @@ struct Spare {
 	SwitchGpuCachedBuffer buffer;  // ours alone (no view, no task mapping)
 	uint64_t *pas;
 	uint64_t bytes;
+	switch_gpu_spare_kind kind;
 	switch_gpu_cached_mapping *mapping;
 };
 
@@ -206,8 +207,7 @@ struct SparePool {
 	thread_call_t reclaimCall;
 	Spare *dirty;         // freed, not yet zeroed
 	PoolZero *poolDirty;  // freed pool BOs, not yet zeroed
-	Spare *ready
-		[kClasses];  // zeroed and clean, by class (classUp(bytes) <= class of a spare's bytes)
+	Spare *ready[SWITCH_GPU_SPARE_SLOTS];  // zeroed and clean, by slot (SwitchGpuSpareBooks.h)
 	switch_gpu_spare_books
 		books;  // the lists' counts and bytes, and the depths (SwitchGpuSpareBooks.h)
 	uint64_t poolZeroing;  // pool bytes waiting for the scrub
@@ -221,10 +221,10 @@ struct SparePool {
 
 void cleanZeros(void *va, uint64_t bytes);
 SparePool *spares();
-Spare *spareTake(uint64_t bytes, bool critical = false);
+Spare *spareTake(uint64_t bytes, switch_gpu_spare_kind kind, bool critical);
 void spareIneligible();
 bool spareKeep(const SwitchGpuCachedBuffer &buffer, uint64_t *pas, uint64_t bytes,
-	       switch_gpu_cached_mapping *mapping = nullptr);
+	       switch_gpu_spare_kind kind, switch_gpu_cached_mapping *mapping);
 bool sparesPressure();
 void sparesPressureLook();
 bool sparesHasRoom();

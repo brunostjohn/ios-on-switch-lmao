@@ -24,12 +24,12 @@ std::string unit(const char *name)
 TEST(GM20BMemSource, OnlyTheRefillThreadMakesSparesOfUnits)
 {
 	const std::string pool = unit("TegraGM20BUserClientSpares.cpp");
-	const CodeText make = Block(pool, "Spare *spareMake(SparePool *p, uint64_t bytes)");
-	EXPECT_TRUE(make.before("switch_gpu_cached_buffer_units(bytes, &buffer)",
-				"switch_gpu_cached_buffer_pages(bytes, &buffer)"));
+	const CodeText make = Block(pool, "bool spareBuffer(SparePool *p, switch_gpu_spare_kind kind, uint64_t bytes,");
+	EXPECT_TRUE(make.before("switch_gpu_cached_buffer_units(bytes, buffer)",
+				"switch_gpu_cached_buffer_pages(bytes, buffer)"));
 	EXPECT_EQ(CodeText(pool).count("spareMake("), 2u) << "its definition and spareWork's call";
 	EXPECT_TRUE(Block(pool, "void spareWork(thread_call_param_t param, thread_call_param_t)")
-			    .has("spareMake(p, classBytes(c))"));
+			    .has("spareMake(p, slot)"));
 	const CodeText alloc =
 		Block(unit("TegraGM20BUserClientBo.cpp"), "IOReturn AGXDeviceUserClient::boAlloc(");
 	EXPECT_FALSE(alloc.has("switch_gpu_cached_buffer_units"));
@@ -71,7 +71,7 @@ TEST(GM20BMemSource, BoAllocAndBoImportBuildOutsideTheConnectionLock)
 	EXPECT_TRUE(alloc.between("IOLockLock(lock_);", "IOLockUnlock(lock_);")
 			    .has("const BoCharge charge = chargeBo(in);"));
 	EXPECT_TRUE(alloc.before("const BoCharge charge = chargeBo(in);",
-				 "spareTake(in->bytes, charge.critical)"));
+				 "spareTake(in->bytes, spareKind, charge.critical)"));
 	EXPECT_TRUE(alloc.before("cleanZeros(va, backing);",
 				 "ret = settleBo(in, charge, bo, ret, chunksRefused, system);"));
 	EXPECT_FALSE(alloc.has("beginMutation"));

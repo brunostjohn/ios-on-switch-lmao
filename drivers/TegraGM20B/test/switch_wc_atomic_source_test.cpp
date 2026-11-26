@@ -63,6 +63,8 @@ const Mapping kMappings[] = {
 	 "a client's coherent BOs and read-only fence view, mapped into its task"},
 	{"drivers/TegraGM20B/TegraGM20BUserClientBo.cpp", "kIOMapWriteCombineCache", 1, nullptr,
 	 "a coherent BO from system memory, mapped into its task"},
+	{"drivers/TegraGM20B/SwitchGpuCachedBuffer.cpp", "kIOMapWriteCombineCache", 1, nullptr,
+	 "a write-combined spare, a system BO's buffer once taken: the kernel only cleans its lines"},
 	{"drivers/TegraGM20B/nouveau/nvkm/subdev/instmem/gk20a.c", "DMA_ATTR_WRITE_COMBINE", 1,
 	 nullptr, "nvkm instance memory, through nvkm_wo32/ro32"},
 	{"drivers/TegraGM20B/nouveau/nvkm/engine/device/base.c", "ioremap", 1, nullptr,

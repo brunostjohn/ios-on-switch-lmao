@@ -370,9 +370,9 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 				 tgm_pool::FromSystem;
 		}
 	}
-	if (!ret && !bo->pool_va && !compressible && !system &&
-	    !(in->flags & TegraGM20BBoContiguous))
-		spare = spareTake(in->bytes, charge.critical);
+	const switch_gpu_spare_kind spareKind = system ? SWITCH_GPU_SPARE_WC : SWITCH_GPU_SPARE_CACHED;
+	if (!ret && !bo->pool_va && !compressible && !(in->flags & TegraGM20BBoContiguous))
+		spare = spareTake(in->bytes, spareKind, charge.critical);
 	else if (TGM_STATS && !ret && !bo->pool_va && !compressible)
 		spareIneligible();
 	if (!ret && bo->pool_va) {
@@ -403,14 +403,14 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		// goes. Not by a physical view: a device pager's private pages set a managed page's cache attribute, and reset
 		// it to cacheable when they are freed, whenever that is (a dying task's mapping outlives the BO), under the
 		// next owner's write-combined mapping, whose CPU writes then stay in the cache while the GPU reads DRAM (the
-		// GPU fetched zeros from a raw push ring: PBENTRY). Nor from the spares, which are cacheable.
+		// GPU fetched zeros from a raw push ring: PBENTRY). Nor from a cacheable spare: a system BO takes and gives back
+		// only write-combined spares, each a buffer of its own write-combined VM object.
 		// (kIOMemoryMapperNone shares a bit with kIOMapCacheMask; IOBMD keeps the cache mode's low three bits, so this
 		// stays write-combined and the cached BOs stay default)
 		if (system)
 			options |= kIOMapWriteCombineCache;
-		const uint32_t c = (in->flags & TegraGM20BBoContiguous) || system
-					   ? kClasses
-					   : classUp(in->bytes);
+		const uint32_t c =
+			(in->flags & TegraGM20BBoContiguous) ? kClasses : classUp(in->bytes);
 		const uint64_t backing = c < kClasses ? classBytes(c) : in->bytes;
 		if (backing != in->bytes) {
 			IODelete(bo->pas, uint64_t, bo->npages);
@@ -469,10 +469,10 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 			bo->backing = switch_gpu_pin_chunks(bo->pas, bo->npages);
 		else if (smmuDesc)
 			bo->backing = switch_gpu_pin_memory(bo->pas, bo->npages, 0, smmuDesc, true);
-		else if (bo->buffer.memory && !system && !(in->flags & TegraGM20BBoContiguous)) {
+		else if (bo->buffer.memory && !(in->flags & TegraGM20BBoContiguous)) {
 			bo->bufferKernelMap = bo->buffer.map != nullptr;
 			bo->backing = switch_gpu_pin_cached(bo->pas, bo->backing_pages, bo->npages,
-							    bo->buffer, bo->cachedMapping);
+							    bo->buffer, spareKind, bo->cachedMapping);
 			if (bo->backing) {
 				bo->cachedMapping = nullptr;
 				bo->buffer.map = nullptr;

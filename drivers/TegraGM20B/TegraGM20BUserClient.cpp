@@ -248,16 +248,15 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 	} else {
 		if (bo->view)
 			bo->view->release();
-		// a pool BO's pages are zeroed off this thread and go back clean; a cached BO no task maps any more goes to
-		// the spares as it is (CE-zeroed before reuse, or given back to the VM)
+		// a pool BO's pages are zeroed off this thread and go back clean; a cached or system BO no task maps any more
+		// goes to the spares of its kind as it is (CE-zeroed before reuse, or given back to the VM)
 		if (bo->pool_va &&
 		    !(bo->handle && poolZeroLater(bo->pool_va, bo->pool_pa, bo->bytes)))
 			tgm_pool_free(bo->pool_va, bo->bytes, bo->pool_pa);
 	}
-	if (bo->buffer.memory && bo->handle && !bo->system &&
-	    !(bo->flags & TegraGM20BBoContiguous) &&
+	if (bo->buffer.memory && bo->handle && !(bo->flags & TegraGM20BBoContiguous) &&
 	    spareKeep(bo->buffer, bo->pas, static_cast<uint64_t>(bo->backing_pages) << 12,
-		      bo->cachedMapping)) {
+		      bo->system ? SWITCH_GPU_SPARE_WC : SWITCH_GPU_SPARE_CACHED, bo->cachedMapping)) {
 		bo->buffer = {};
 		bo->pas = nullptr;
 		bo->cachedMapping = nullptr;
