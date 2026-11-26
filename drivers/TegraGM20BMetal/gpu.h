@@ -1176,6 +1176,8 @@ public:
     std::atomic<bool> probeMacroBands{false};
     // Shared buffers made while set are bound L2-bypassing (volatileWcChunks_), for gpu.perf.rates' cached-against-volatile arms
     std::atomic<bool> probeSharedBypassesL2{false};
+    // nonzero: each render pass's prologue writes it to SET_SUBTILING_PERF_KNOB_A (gpu.perf.knobs)
+    std::atomic<uint32_t> probeSubtilingKnob{0};
     gm20b::Mutex probeLock;
     std::shared_ptr<const ProbeWords> probeWords;
 

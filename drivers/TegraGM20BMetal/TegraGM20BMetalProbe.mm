@@ -212,6 +212,21 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
     return gRM->raw->probeSharedBypassesL2.exchange(on.boolValue, std::memory_order_acq_rel) ? @"1" : @"0";
 }
 
+// Render passes encoded from now on write `knob` to SET_SUBTILING_PERF_KNOB_A in their prologue; 0 stops. Answers the
+// knob it replaced, in hexadecimal.
+- (NSString *)switchMetalProbeSubtilingKnob:(NSNumber *)knob
+{
+    return [NSString stringWithFormat:@"%x", gRM->raw->probeSubtilingKnob.exchange(knob.unsignedIntValue)];
+}
+
+// Block-linear texture headers written from now on take SECTOR_PROMOTION `mode` (0 none, 1 to 2V, 2 to 2H, 3 to 4).
+// Answers the mode it replaced.
+- (NSString *)switchMetalProbeSectorPromotion:(NSNumber *)mode
+{
+    return [NSString
+        stringWithFormat:@"%u", unsigned(gm20b::fx::probeSectorPromotion.exchange(mode.unsignedCharValue & 3))];
+}
+
 - (NSString *)switchMetalProbeMacroBands:(NSNumber *)on
 {
     gRM->raw->probeMacroBands.store(on.boolValue, std::memory_order_release);

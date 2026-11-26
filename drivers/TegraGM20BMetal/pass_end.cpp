@@ -360,6 +360,11 @@ void RenderEncoder::end()
         }
         kit(p, switch_gm20b_pass_drain, false);
     }
+#if SWITCH_METAL_DIAGNOSTICS
+    // the channel keeps the knob after the probe is cleared: HW Test writes the golden value back through it last
+    if (const uint32_t knob = d.probeSubtilingKnob.load(std::memory_order_relaxed))
+        p.m(NVB197_SET_SUBTILING_PERF_KNOB_A, knob);
+#endif
     uint32_t count = 0;
     for (uint32_t j = 0; j < pass_.count && j < 8; j++)
         if (pass_.color[j].texture)

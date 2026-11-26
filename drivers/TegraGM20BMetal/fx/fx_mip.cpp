@@ -232,6 +232,10 @@ void readLevel(const MipChain &c, const uint8_t *chainCpu, uint32_t l, uint32_t 
     });
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+std::atomic<uint8_t> probeSectorPromotion{0};
+#endif
+
 void mipChainTic(const MipChain &c, uint64_t va, uint32_t tic0, bool srgb, uint32_t baseLevel, uint32_t levelCount,
                  uint32_t out[8], uint32_t textureType)
 {
@@ -255,7 +259,11 @@ void mipChainTic(const MipChain &c, uint64_t va, uint32_t tic0, bool srgb, uint3
     setField(out, 143, 128, c.width - 1);   // WIDTH_MINUS_ONE
     setField(out, 150, 150, srgb ? 1 : 0);  // S_R_G_B_CONVERSION
     setField(out, 154, 151, textureType);   // TEXTURE_TYPE
-    setField(out, 156, 155, 0);             // SECTOR_PROMOTION NO_PROMOTION
+    uint32_t promotion = 0;                 // SECTOR_PROMOTION NO_PROMOTION
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    promotion = probeSectorPromotion.load(std::memory_order_relaxed);
+#endif
+    setField(out, 156, 155, promotion);
     setField(out, 159, 157, 7);             // BORDER_SIZE BORDER_SAMPLER_COLOR
     setField(out, 175, 160, c.height - 1);  // HEIGHT_MINUS_ONE
     // DEPTH_MINUS_ONE: a 3D image's depth, an array's layers, a cube array's cubes
