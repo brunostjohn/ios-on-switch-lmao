@@ -21,6 +21,7 @@ Result run(Rule rule, const std::vector<Arrival> &background, bool syncWaiting =
     EXPECT_TRUE(result.ordered);
     EXPECT_TRUE(result.writesFirst);
     EXPECT_TRUE(result.intact);
+    EXPECT_EQ(result.unfitChains, 0u);
     return result;
 }
 

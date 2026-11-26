@@ -111,6 +111,7 @@ struct Result {
                               // and queuedReplay counts its ageable replay reads
     unsigned syncsEnded = 0;
     unsigned outOfOrderWrites = 0;  // write chains that joined a write past an older one of its window still queued
+    unsigned unfitChains = 0;       // gathered chains that did not fit, after which merges stay behind the first
 };
 
 class Card {
@@ -358,6 +359,14 @@ private:
     // pickLocked's fallback: `first` and the requests right behind it that continue it on the card, in its window and
     // direction (a passing read's chain must not overlap anything it passes either), unlinked by `prev`, first's
     // predecessor, as the driver does. Returns the chain's count; `first` heads it.
+    std::vector<SwitchLbaRange> inFlight() const
+    {
+        std::vector<SwitchLbaRange> ranges;
+        for (const Request *r : active)
+            ranges.push_back({r->lba, r->sectors});
+        return ranges;
+    }
+
     uint32_t unlinkBehind(Request *first, Request *prev)
     {
         const auto overlapsOlder = [&](const Request *later) {
@@ -367,12 +376,21 @@ private:
             }
             return false;
         };
+        const std::vector<SwitchLbaRange> flight = inFlight();
+        const auto overlapsInFlight = [&](const Request *later) {
+            for (const SwitchLbaRange &range : flight) {
+                if (first->write && switchOverlapsRange(later, range))
+                    return true;
+            }
+            return false;
+        };
         Request *last = first;
         uint32_t count = 1;
         uint32_t sectors = first->sectors;
         while (count < kMaxChain && last->next && last->next->shared == first->shared &&
                last->next->write == first->write && last->next->lba == last->lba + last->sectors &&
-               sectors + last->next->sectors <= kMaxSectors && !overlapsOlder(last->next)) {
+               sectors + last->next->sectors <= kMaxSectors && !overlapsOlder(last->next) &&
+               !overlapsInFlight(last->next)) {
             last = last->next;
             sectors += last->sectors;
             ++count;
@@ -415,20 +433,36 @@ private:
         uint32_t sectors = 0;
         uint32_t count = 0;
         Request *chain = nullptr;
-        if (!anywhere) {
-            count = unlinkBehind(first, prev);
-            chain = first;
-        } else {
+        // pickLocked's dequeue with gapsOn false (no gap sink): a gathered chain that does not fit turns merging
+        // anywhere off for good, and that pick takes the run behind its first request.
+        bool gathered = false;
+        if (anywhere) {
+            const std::vector<SwitchLbaRange> flight = inFlight();
+            bool fits = false;
             if (first->write) {
-                count = switchGatherWrites(head, first, kMaxSectors, kMaxChain, kMaxChain, &start, &sectors, nullptr, 0,
+                count = switchGatherWrites(head, first, kMaxSectors, kMaxChain, kMaxChain, &start, &sectors,
+                                           flight.data(), static_cast<unsigned>(flight.size()),
                                            rule == Rule::kNew && waiting(first->shared));
+                fits = switchWriteChainTiles(head, start, sectors, count);
             } else {
                 count = switchGatherReads(head, first, kMaxSectors, kMaxChain, kMaxChain, &start, &sectors);
+                fits = switchChainFits(head, start, sectors, count, 0, 0);
             }
-            checkOrder();
-            if (first->write)
-                countOutOfOrder(first);
-            chain = switchUnlinkChain(head, tail, count);
+            if (fits) {
+                checkOrder();
+                if (first->write)
+                    countOutOfOrder(first);
+                chain = switchUnlinkChain(head, tail, count);
+                gathered = true;
+            } else {
+                switchClearChain(head);
+                anywhere = false;
+                ++result.unfitChains;
+            }
+        }
+        if (!gathered) {
+            count = unlinkBehind(first, prev);
+            chain = first;
         }
         depth -= count;
         checkQueue();
