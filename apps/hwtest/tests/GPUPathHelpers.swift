@@ -15,8 +15,17 @@ public struct GPUPaths {
 
     public static let method: UInt32 = 0x5050
     public static let foreignWaitsOp: UInt32 = 6
+    public static let zbcOp: UInt32 = 7
 
     public static let replySize = 1024
+
+    /// The GPU's ZBC colour table (TegraGM20BPathsOpZbc); nil from a kernel that does not answer it.
+    public static func zbcTable(_ connection: GPUConnection?) -> ZbcTable? {
+        guard let connection else { return nil }
+        let (kr, reply) = connection.call(method, GPUConnection.words([zbcOp, 0]), outputSize: replySize)
+        guard kr == KERN_SUCCESS else { return nil }
+        return ZbcTable.parse(String(decoding: reply.prefix { $0 != 0 }, as: UTF8.self))
+    }
 
     public static func foreignWaits(_ connection: GPUConnection?) -> [String: Int]? {
         guard let connection else { return nil }

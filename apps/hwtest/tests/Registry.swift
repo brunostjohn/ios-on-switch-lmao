@@ -215,12 +215,15 @@ public enum Registry {
     /// process's compressed asks while each runs; then fills the GPU's ZBC colour table for the rest of the boot
     /// (gpu.gm20b.zbc_full: no test after it counts ZBC hits); then programs a unit no other driver here drives (across
     /// pass boundaries, then each program forced), which kills the channel when its setup is wrong: each app's last.
+    /// Then the bench's two probes, which may kill the bench's own channel: SR_VIRTID read in a pixel program, and
+    /// MEM_OP_B, a host method clb06f.h says gm20x no longer has.
     public static let last: [any HWTest] = [
         X1TextureExtentsTest(), CompressionGivebackTest(), CompressedFloorTest(), ZbcFullTest(),
         IteratedBlendPassesTest(), FetchRungTest(
             id: "gpu.gm20b.fetch_rung3",
             rung: 3
         ),
+        InterlockAffinityTest(), L2FlushWritebackTest(),
     ]
     /// Reset the copy engine under the present, then kill the app's raw channel: each app runs them after all its other
     /// tests, so a failed recovery spoils none of them.

@@ -36,6 +36,10 @@ extension Suite {
         let sampleMs = (CFAbsoluteTimeGetCurrent() - sampled) * 1000
         var outcome = record.outcome
         outcome.metrics.set(CPUSplit.key, cpu.split(since: earlier).field)
+        if TestBudget.over(record.milliseconds, interactive: test.interactive) { outcome.metrics.set(
+            TestBudget.key,
+            true
+        ) }
         record = Suite.record(test, outcome, record.milliseconds)
         log(LogLine.format(record))
         if GlassMemWatch.armsTheProbe(test.id) { GlassMemWatch.endGlassTest() }

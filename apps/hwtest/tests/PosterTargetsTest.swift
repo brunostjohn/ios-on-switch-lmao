@@ -35,9 +35,18 @@ struct PosterTargetsTest: HWTest {
         }
         let peaks = TargetPeak.parse(String(decoding: reply.prefix { $0 != 0 }, as: UTF8.self))
         if let largest = peaks.first { metrics.set("largest", largest.text) }
+        metrics.set("owners", peaks.count)
+        metrics.set("peaks", peaks.isEmpty ? "-" : peaks.map(\.text).joined(separator: ","))
         let posters = peaks.filter(\.isPoster)
-        metrics.set("posters", posters.map(\.text).joined(separator: ","))
-        guard !posters.isEmpty else { return .skip("no poster has drawn since boot", metrics) }
+        metrics.set("posters", posters.isEmpty ? "-" : posters.map(\.text).joined(separator: ","))
+        guard !posters.isEmpty else {
+            return .skip(
+                "no poster process among the kernel's \(peaks.count) target peaks; its push scan reads one submission "
+                    +
+                    "in four per connection (TegraGM20BPushScanRun.cpp), so a poster that drew with few may be missing",
+                metrics
+            )
+        }
         return .judged(
             posters.map {
                 (

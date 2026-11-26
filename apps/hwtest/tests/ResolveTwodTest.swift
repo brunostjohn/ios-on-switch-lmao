@@ -15,7 +15,9 @@ import Metal
 /// <n>x_read_differ=0`), and at 2x the box and its complement byte for byte the engine's reading the rule rests on
 /// (X1TwodResolveReading: `2x_twod_model_differ=0 2x_exact_model_differ=0`). The compressed-grid arm resolves a
 /// memoryless (compressed) grid the same way: `<n>x_compressed=twod:<compressed grids>:<bytes off the private grid's>`.
-/// Then the format arms (ResolveFormatArms.swift).
+/// A route or complement with a channel beyond one code adds `<n>x[_exact]_beyond_texels` against Metal's rule to
+/// the report (BeyondOneTexels). Then the format arms (ResolveFormatArms.swift) and the engine arms
+/// (ResolveEngineArms.swift).
 struct ResolveTwodTest: HWTest {
     let id = "gpu.gm20b.resolve_twod"
     let name = "MSAA resolves by the 2D engine, directly and through the complement, against the resolve pass"
@@ -73,6 +75,12 @@ struct ResolveTwodTest: HWTest {
             let (beyond, oneOff) = Self.compare(picked.bytes, pass.bytes)
             let (exactBeyond, exactOff) = Self.compare(exact.bytes, pass.bytes)
             let exactDiffer = exactOff.reduce(0, +) + exactBeyond
+            let beyondArms = [(tag, picked.bytes, beyond), (tag + "_exact", exact.bytes, exactBeyond)]
+            for (key, bytes, count) in beyondArms {
+                Self.noteBeyond(
+                    key, BeyondOneTexels.bgra8(bytes, reference, width: Self.width, samples: samples), count, &metrics
+                )
+            }
             let keptDiffer = ByteCompare.diffCount(kept, pass.bytes)
             let route = picked.exact > 0 ? "exact" : picked.twod > 0 ? "twod" : "pass"
             metrics.set("\(tag)_route", route)

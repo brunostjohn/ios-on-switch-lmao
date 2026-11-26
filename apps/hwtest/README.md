@@ -82,6 +82,15 @@ reference after a harvest adds states; until then a new state counts as `no_gold
 `Documents/gpu/gpu.ca.sweep/states.txt`, with PNGs or raw bytes of the wrong ones. Set `HWTEST_SWEEP_ALL=1` in the app's
 environment to draw every corpus state instead of one per class.
 
+Run All keeps each test to seconds. The Long runs switch on the main screen (or `HWTEST_LONG=1` in the app's
+environment) brings back the long forms, and suite.harness then reports `long_runs=1`:
+
+- the full trial targets of the barrier probes (pass_pixel_barrier, subchannel_switch_drain, job_boundary_idle);
+- storage_forms' timing sweep;
+- glass_live's plain variant.
+
+The GPU lanes use these as benchmarks.
+
 `bazel test --config=remote //apps/hwtest:gpu_test` runs every scene on the Mac's GPU against the same references. Run
 it after changing a scene or a reference, so a failure on the Switch can't come from a wrong reference. It's tagged
 manual because CI's runners may have no usable GPU.

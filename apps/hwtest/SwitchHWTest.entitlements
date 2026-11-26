@@ -14,6 +14,8 @@
 	<true/>
 	<key>com.apple.private.memorystatus</key>
 	<true/>
+	<key>com.brunostjohn.switch.kernel-tests</key>
+	<true/>
 	<key>com.apple.private.security.container-required</key>
 	<true/>
 	<key>com.apple.security.system-groups</key>
@@ -26,6 +28,7 @@
 	</array>
 	<key>com.apple.security.exception.files.absolute-path.read-only</key>
 	<array>
+		<string>/Applications/</string>
 		<string>/private/var/mobile/Library/Logs/CrashReporter/</string>
 		<string>/private/var/Switch/icon-cache-gpu</string>
 		<string>/private/var/Switch/icon-cache-reset</string>
@@ -117,6 +120,7 @@
 		<string>kern.memorystatus_level</string>
 		<string>kern.proc.all</string>
 		<string>kern.switch_shader_compiler</string>
+		<string>kern.switch_fsctl_marks</string>
 	</array>
 	<key>com.apple.security.exception.sysctl.read-write</key>
 	<array>

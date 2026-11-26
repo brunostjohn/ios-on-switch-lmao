@@ -10,7 +10,8 @@ import UIKit
 /// (debug kernels, drivers/TegraGM20B/TegraGM20BCopyResetABI.h): the kernel resets the copy engine while it copies the
 /// next frame the display presents through the GPU. That frame is copied again on the GPU and flipped (its completion
 /// carries status 0, so the display took no CPU copy), and the frame after it is copied whole: its scanout read-back
-/// equals its framebuffer.
+/// equals its framebuffer. Direct scanout copies nothing, so the test holds it off (GPUCopyHold); a kernel that cannot
+/// hold it skips.
 struct PresentCopyResetTest: HWTest {
     let id = "gpu.present.copy_reset"
     let name = "A copy engine reset under the present: the frame is copied again on the GPU and flipped"
@@ -32,18 +33,21 @@ struct PresentCopyResetTest: HWTest {
         }
         let nudge: @MainActor () -> Void = { dot.alpha = dot.alpha == 1 ? 0.9 : 1 }
         defer { _ = Self.call(gpu, Self.disarm) }
+        return try await GPUCopyHold.during { held in await Self.cut(gpu, nudge: nudge, held: held) }
+    }
 
+    static func cut(_ gpu: GPUConnection, nudge: @escaping @MainActor () -> Void, held: Bool) async -> Outcome {
         var reply: [UInt8] = []
         var tries = 0
         var missed = 0
-        while tries < Self.attempts {
+        while tries < attempts {
             tries += 1
-            let (kr, _) = Self.call(gpu, Self.arm)
+            let (kr, _) = call(gpu, arm)
             if kr == GPUConnection.kIOReturnUnsupported { return .skip("a release kernel has no copy reset") }
             guard kr == KERN_SUCCESS else { return .fail("arm: \(GPUConnection.hex(kr))") }
-            reply = await Self.settle(gpu, nudge)
+            reply = await settle(gpu, nudge)
             let state = GPUConnection.int32(reply, 0)
-            if state == Self.done || state == Self.armed { break }
+            if state == done || state == armed { break }
             missed += 1
         }
         let state = GPUConnection.int32(reply, 0)
@@ -56,7 +60,8 @@ struct PresentCopyResetTest: HWTest {
         metrics.set("engine_status", String(format: "%08x", GPUConnection.uint32(reply, 8)))
         metrics.set("tries", tries)
         metrics.set("missed", missed)
-        if state == Self.armed { return .skip("no frame came through a GPU copy (direct scanout)", metrics) }
+        metrics.set("copy_held", held)
+        if state == armed { return Self.uncut(held, metrics) }
 
         var nextWhole = false
         switch await ScanoutReadback.capture(includeRasters: false, nudge: nudge) {
@@ -69,12 +74,20 @@ struct PresentCopyResetTest: HWTest {
         }
         return .judged(
             [
-                ("the copy engine was reset under the present", state == Self.done),
+                ("the copy engine was reset under the present", state == done),
                 ("the cut frame was copied again on the GPU", redone >= 1),
-                ("the display flipped it: status 0, no CPU copy", state == Self.done && status == 0),
+                ("the display flipped it: status 0, no CPU copy", state == done && status == 0),
                 ("the next frame was copied whole", nextWhole),
             ], metrics
         )
+    }
+
+    /// A present the armed cut never met: a failure when direct scanout was held off, since every UI frame then took
+    /// the copy
+    static func uncut(_ held: Bool, _ metrics: Metrics) -> Outcome {
+        held
+            ? .fail("no frame came through a GPU copy though the display held direct scanout off", metrics)
+            : .skip("no frame came through a GPU copy (direct scanout) and this kernel cannot hold it off", metrics)
     }
 
     /// Nudges a frame every 25 ms until the armed present is done or missed, for up to 3 s.

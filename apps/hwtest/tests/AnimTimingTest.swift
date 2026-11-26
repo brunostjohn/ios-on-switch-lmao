@@ -36,10 +36,11 @@ struct AnimTimingTest: HWTest {
             }
             if let watcher {
                 for turn in AnimTurn.allCases {
-                    let (run, back) = await AnimTurns.run(
+                    let (run, back, cost) = await AnimTurns.run(
                         turn, watcher: watcher, stage: stage, scene: scene.name, block: scene.block
                     )
                     runs.append(run)
+                    if let cost { metrics.set("\(scene.name)_\(turn.rawValue)_cost", cost.metric) }
                     restored = restored && back
                 }
             }

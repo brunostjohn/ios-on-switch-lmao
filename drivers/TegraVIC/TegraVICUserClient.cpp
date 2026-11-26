@@ -37,6 +37,7 @@
 //
 // Present (TegraVICPresent.cpp): TegraNVDEC's decoders hand each decoded picture to VIC on their own thread, under the
 // same engine lock.
+#include <IOKit/IOBSD.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
 #include <IOKit/IOService.h>
@@ -668,8 +669,13 @@ IOReturn transform(Conn *conn, const void *in, uint32_t size)
 // The display's window probes come through here too: the app's sandbox admits this client, not the display's.
 extern "C" IOReturn switch_display_window_probe_call(const IOExternalMethodArguments *) __attribute__((weak));
 
+// They change kernel state (display routing, traits, VIC gates), so only HW Test, which carries this, may call them
+constexpr char kKernelTestEntitlement[] = "com.brunostjohn.switch.kernel-tests";
+
 static IOReturn kernelTest(const Conn *conn, const IOExternalMethodArguments *a)
 {
+    if (!IOTaskHasEntitlement(conn->task, kKernelTestEntitlement))
+        return kIOReturnNotPrivileged;
     uint32_t magic = 0;
     if (a->structureInput && a->structureInputSize >= sizeof(magic))
         memcpy(&magic, a->structureInput, sizeof(magic));
@@ -753,6 +759,7 @@ IOReturn tegra_vic_client_close(IOUserClient *self)
     if (Conn *conn = connOf(self)) {
 #if TEGRA_VIC_STATS
         switch_display_traits_release(conn);
+        switch_vic_landscape_release(conn);
         switch_vic_gate_close(conn);
 #endif
         __atomic_store_n(&conn->closing, true, __ATOMIC_RELEASE);

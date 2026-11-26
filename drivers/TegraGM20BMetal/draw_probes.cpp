@@ -172,7 +172,8 @@ void RenderEncoder::probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t p
 
 // The glass probe's line for a Core Animation draw (glass_probe.h): the form drawn as probeDraw names it, each
 // colour attachment as the pass bound it (format/bytes a texel/samples/layout[+comp][+ml]/size/load), the textures its
-// record samples and its uniform buffers
+// record samples and the window of each uniform buffer its program reads (Core Animation binds one ring of every draw's
+// uniforms: past the window it holds other draws')
 void RenderEncoder::probeGlassDraw(const Pipeline &bound, const Pipeline &drawn, const PixelBox &limit)
 {
     const PackPipeline &rec = *drawn.rec;
@@ -206,7 +207,9 @@ void RenderEncoder::probeGlassDraw(const Pipeline &bound, const Pipeline &drawn,
         if (const PackEntry &e = drawn.entries[k]; e.kind == EntryUbo && !bufferStorage(e)) {
             const Bound &b = bufs_[e.stage][e.slot];
             at += at ? size_t(snprintf(uniforms + at, sizeof uniforms - at, " ")) : 0;
-            const int n = glassProbeUniform(uniforms + at, sizeof uniforms - at, e.stage, e.slot, b.cpu, b.size);
+            const uint64_t window = (uint32_t(e.sampler) | uint32_t(e.pad) << 8) * 16;
+            const int n = glassProbeUniform(uniforms + at, sizeof uniforms - at, e.stage, e.slot, b.cpu,
+                                            window ? std::min<uint64_t>(window, b.size) : b.size);
             at += std::min(sizeof uniforms - at - 1, size_t(std::max(n, 0)));
         }
     char taps[160] = "";
@@ -219,7 +222,13 @@ void RenderEncoder::probeGlassDraw(const Pipeline &bound, const Pipeline &drawn,
     snprintf(line, sizeof line, "%s k%016llx %s att %s tex %s uni %s box %u,%u-%u,%u%s", caName ? caName : "-",
              (unsigned long long)rec.keyHash, form, attachments, sampled, uniforms, limit.x0, limit.y0, limit.x1,
              limit.y1, taps);
-    if (!glassProbeFirst(cb_, line) || gGlassProbeLines.fetch_sub(1, std::memory_order_relaxed) <= 0)
+    GlassProbeTally ended;
+    const bool first = glassProbeFirst(line, ended);
+    if (ended.distinct)
+        os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
+               "SwitchMetal: glass draws g%u: %u distinct lines, %u repeats left out", ended.generation, ended.distinct,
+               ended.repeats);
+    if (!first || gGlassProbeLines.fetch_sub(1, std::memory_order_relaxed) <= 0)
         return;
     os_log(os_log_create("com.brunostjohn.switch.TegraGM20BMetal", "gm20b"),
            "SwitchMetal: glass draw g%u cb %06llx %{public}s", gGlassProbeGeneration.load(std::memory_order_relaxed),

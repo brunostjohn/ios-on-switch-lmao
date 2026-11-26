@@ -15,7 +15,8 @@ import Metal
 /// probe saw corrupt at these sizes; a cell judges the switch arms only once hazard differed there. Every forced arm
 /// keeps today's pass barrier and job entry; rule forces nothing, so production's rules (barrier_forms.h) pick every barrier, and
 /// rule_switches= counts the engine changes they relaxed. Every arm draws pass A with the same spins, so the control's
-/// race is the arms' race.
+/// race is the arms' race. Run All runs `quick` trials an arm a cell, whose clean claim is PASS_QUICK, not proof; Long
+/// runs (LongRuns) run 1,504 (600 at 1280 x 720) within the cell's budget. hazard_cells_trials= each cell's hazard trials and how many differed.
 enum X1SwitchDrainProbe {
     static let probe = X1Probe(
         id: "gpu.x1.subchannel_switch_drain", name: "A subchannel change drains the engine left behind",
@@ -28,6 +29,7 @@ enum X1SwitchDrainProbe {
         ("none", "switch=none pass=today entry=today"), ("rule", ""),
     ]
     static let batch = 8
+    static let quick = ["s": 128, "m": 64, "f": 64]
 
     static func spins(from trial: Int, size: Int) -> [Int] {
         (0 ..< batch).map { [0, 3, 17, 40][(trial + $0) % 4] * (size == 1280 ? 1 : 2) }
@@ -41,6 +43,11 @@ enum X1SwitchDrainProbe {
         let engine: Engine
         let format: MTLPixelFormat
         let width: Int, height: Int
+
+        var size: String { width == 1280 ? "f" : width == 64 ? "s" : "m" }
+        var target: Int {
+            LongRuns.on ? (width == 1280 ? 600 : 1504) : X1SwitchDrainProbe.quick[size] ?? 1504
+        }
     }
 
     static var cells: [Cell] {
@@ -64,14 +71,13 @@ enum X1SwitchDrainProbe {
         for (index, cell) in cells.enumerated() {
             let kit = try kits[cell.format] ?? BarrierKit(gpu, cell.format)
             kits[cell.format] = kit
-            let size = cell.width == 1280 ? "f" : cell.width == 64 ? "s" : "m"
-            let name = "\(cell.engine.rawValue)_\(kit.name)_\(size)"
+            let name = "\(cell.engine.rawValue)_\(kit.name)_\(cell.size)"
             let work = try Work(kit, cell)
             journal.starting("\(name) arms=\(arms.map(\.0).joined(separator: "/"))")
             var expected: [Int: [UInt8]] = [:]
             var tapExpected: [Int: [UInt8]] = [:]
             let started = Date()
-            let plan = IterationPlan(cells: arms.count, target: cell.width == 1280 ? 600 : 1504, batch: batch)
+            let plan = IterationPlan(cells: arms.count, target: cell.target, batch: batch)
             var trial = [Int](repeating: 0, count: arms.count)
             for step in plan.order {
                 if Date().timeIntervalSince(started) > (cell.width == 1280 ? 9 : 5) && step.cell == 0 { break }
@@ -136,6 +142,10 @@ enum X1SwitchDrainProbe {
         }
         let fired = ledger.cells.filter { !(ledger.tallies[$0]?["hazard"]?.clean ?? true) }
         finding.metrics.set("hazard_cells", fired.count)
+        let hazard = ledger.cells.compactMap { cell in
+            ledger.tallies[cell]?["hazard"].map { "\(cell):\($0.trials):\($0.mismatchedTrials)" }
+        }
+        finding.metrics.set("hazard_cells_trials", hazard.joined(separator: ","))
         if fired.isEmpty {
             finding.verdict = .inconclusive
             finding.note = "the positive control never differed: no cell could see a race"
@@ -150,6 +160,7 @@ enum X1SwitchDrainProbe {
             finding.verdict = .inconclusive
             finding.note = "today's barriers gave texels other than the CPU's reading"
         }
+        finding.quick(unless: LongRuns.on)
         return finding
     }
 

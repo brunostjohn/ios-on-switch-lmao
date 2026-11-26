@@ -793,6 +793,7 @@ cc_library(
         "bench/bench_completed.cpp",
         "bench/bench_device.h",
         "bench/bench_known.h",
+        "bench/bench_l2_flush.cpp",
         "bench/bench_records.cpp",
         "bench/bench_records.h",
         "bench/bench_pack.cpp",
@@ -1058,6 +1059,7 @@ swift_library(
     module_name = "HWTestDisplay",
     target_compatible_with = ["@platforms//os:ios"],
     deps = [
+        ":cpu_clock",
         ":core",
         ":gpu",
         ":gpu_scenes",

@@ -284,18 +284,9 @@ public struct SurfaceCrossProcessTest: HWTest {
         return true
     }
 
-    public static func blockHeightLog2(_ height: Int) -> Int {
-        let y = height >= 86 ? 4 : height >= 43 ? 3 : height >= 22 ? 2 : height >= 11 ? 1 : 0
-        var clamp = 0
-        while (1 << clamp) < (height + 7) / 8 { clamp += 1 }
-        return min(y, clamp)
-    }
+    public static func blockHeightLog2(_ height: Int) -> Int { GobLayout.blockHeightLog2(height) }
 
     public static func gobOffset(_ rowBytes: Int, _ yLog2: Int, _ xB: Int, _ y: Int) -> Int {
-        let blockRows = 8 << yLog2
-        let block = (y / blockRows) * (rowBytes / 64) + xB / 64
-        let inGob =
-            ((xB % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((xB % 32) / 16) * 32 + (y % 2) * 16 + (xB % 16)
-        return block * (512 << yLog2) + ((y % blockRows) / 8) * 512 + inGob
+        GobLayout.offset(rowBytes, yLog2, xB, y)
     }
 }

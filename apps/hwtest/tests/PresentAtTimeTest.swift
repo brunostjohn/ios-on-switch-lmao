@@ -126,7 +126,8 @@ struct PresentAtTimeTest: HWTest {
         }
         await MainActor.run { run.start() }
         _ = await done.wait(timeout: seconds + 5)
-        try await Task.sleep(nanoseconds: 300_000_000)
+        let presented = await MainActor.run { run.everyPresented() }
+        _ = await presented.wait(timeout: 0.3)
         let flipsAfter = PlanesTest.totals(["flips"]).values["flips"]
         let (frames, size) = await MainActor.run { (run.results, run.drawableSize) }
         let flips = flipsBefore.flatMap { before in flipsAfter.map { $0 - before } } ?? -1

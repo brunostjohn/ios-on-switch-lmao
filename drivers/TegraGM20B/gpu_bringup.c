@@ -441,6 +441,46 @@ int tgm_zbc_add(int depth, uint32_t format, const uint32_t ds[4], const uint32_t
 	return ret;
 }
 
+#if TGM_STATS
+/* "colour=U/N depth=U/N c=FF:DS0,DS1,DS2,DS3;... d=FF:DS;...": the table's entries past the disabled slot 0, words in hex */
+void tgm_zbc_line(char *line, size_t size)
+{
+	struct nvkm_ltc *ltc = NULL;
+	struct gf100_gr *gr = NULL;
+	unsigned int colours = 0, depths = 0, at = 0;
+	int i = 0;
+
+	if (!size)
+		return;
+	line[0] = 0;
+	if (tgm_gpu.stage < 2 || !tgm_gpu.device->ltc->num_tags)
+		return;
+	ltc = tgm_gpu.device->ltc;
+	gr = gf100_gr(tgm_gpu.device->gr);
+	tgm_gpu_lock();
+	for (i = ltc->zbc_color_min; i <= ltc->zbc_color_max; i++)
+		colours += gr->zbc_color[i].format != 0;
+	for (i = ltc->zbc_depth_min; i <= ltc->zbc_depth_max; i++)
+		depths += gr->zbc_depth[i].format != 0;
+	at = scnprintf(line, size, "colour=%u/%d depth=%u/%d c=", colours,
+		       ltc->zbc_color_max - ltc->zbc_color_min + 1, depths,
+		       ltc->zbc_depth_max - ltc->zbc_depth_min + 1);
+	for (i = ltc->zbc_color_min; i <= ltc->zbc_color_max; i++) {
+		const struct gf100_gr_zbc_color *c = &gr->zbc_color[i];
+		if (c->format)
+			at += scnprintf(line + at, size - at, "%x:%x,%x,%x,%x;", c->format,
+					c->ds[0], c->ds[1], c->ds[2], c->ds[3]);
+	}
+	at += scnprintf(line + at, size - at, " d=");
+	for (i = ltc->zbc_depth_min; i <= ltc->zbc_depth_max; i++) {
+		if (gr->zbc_depth[i].format)
+			at += scnprintf(line + at, size - at, "%x:%x;", gr->zbc_depth[i].format,
+					gr->zbc_depth[i].ds);
+	}
+	mutex_unlock(&tgm_gpu.lock);
+}
+#endif
+
 uint64_t tgm_timestamp_ns(void)
 {
 	u64 t = 0;
