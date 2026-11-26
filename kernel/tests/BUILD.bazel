@@ -2030,3 +2030,40 @@ host_test(
     ],
     includes = ["."],
 )
+
+# decmp_reprioritize_<tree>.h: vm_object.c from "void\nvm_decmp_upl_reprioritize(" through its closing brace.
+[
+    genrule(
+        name = "decmp_reprioritize_" + tree,
+        srcs = ["//kernel/xnu-{}/osfmk:vm/vm_object.c".format(version)],
+        outs = ["decmp_reprioritize_{}.h".format(tree)],
+        cmd = """awk '
+            prev == "void" && $$0 ~ /^vm_decmp_upl_reprioritize\\(/ { on = 1; print prev }
+            on { print }
+            on && $$0 == "}" { done = 1; exit }
+            { prev = $$0 }
+            END { if (!done) exit 1 }
+        ' $< > $@""",
+    )
+    for tree, version in [
+        ("10063", "10063.141.1"),
+        ("12377", "12377.121.6"),
+    ]
+]
+
+host_library(
+    name = "decmp_reprio",
+    srcs = [
+        "decmp_reprioritize_10063.h",
+        "decmp_reprioritize_12377.h",
+        "xnu_decmp_reprio_harness.c",
+    ],
+    hdrs = ["xnu_decmp_reprio_harness.h"],
+    includes = ["."],
+)
+
+host_test(
+    name = "xnu_decmp_reprio_test",
+    srcs = ["xnu_decmp_reprio_test.cpp"],
+    deps = [":decmp_reprio"],
+)
