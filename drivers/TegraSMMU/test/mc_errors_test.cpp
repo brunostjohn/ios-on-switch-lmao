@@ -26,6 +26,7 @@ uint32_t &mc(uint32_t offset)
 
 unsigned gNubAsks;
 bool gIntmaskStuck;
+uint32_t gIntmaskDrops;  // INTMASK bits a write does not set
 bool gStartReturnedBeforeTheGic;
 std::vector<std::string> gLatchedLines;
 
@@ -291,6 +292,27 @@ TEST_F(McErrors, AnSmmuFaultAndAnMtsViolationTogetherNameBoth)
 }
 
 // A write to INTMASK that does not take leaves every confined client's faults unreported: that panics.
+// Linux's tegra210 mask leaves bit 17 out: a bit 17 that does not stick is one line, the rest of the mask is required.
+TEST_F(McErrors, ACarveoutBitThatDoesNotStickIsOneLineNotAPanic)
+{
+    gIntmaskDrops = 1u << 17;
+    switch_mc_errors_resume();
+    gIntmaskDrops = 0;
+    EXPECT_EQ(mc(0x4), 0x13d40u);
+    ASSERT_EQ(switch_test_lines.size(), 1u);
+    EXPECT_EQ(switch_test_lines[0], "TegraSMMU: MC INTMASK keeps 0x13d40 of 0x33d40: DECERR_GENERALIZED_CARVEOUT stays "
+                                    "masked\n");
+    gIntmaskDrops = 1u << 13;
+    try {
+        switch_mc_errors_resume();
+        ADD_FAILURE() << "no panic";
+    } catch (const switch_test_panic &p) {
+        EXPECT_EQ(std::string(p.what()), "TegraSMMU: MC error interrupt (INTID 109) masked: INTMASK reads 0x31d40 after "
+                                         "0x33d40 was written");
+    }
+    gIntmaskDrops = 0;
+}
+
 TEST_F(McErrors, AnIntmaskThatDoesNotTakePanics)
 {
     gIntmaskStuck = true;
@@ -428,6 +450,8 @@ void switch_mmio_model_write32(uintptr_t address, uint32_t value)
     gWrites.emplace_back(static_cast<uint32_t>(address - kMc), value);
     if (gIntmaskStuck && address == kMc + 0x4)
         return;
+    if (address == kMc + 0x4)
+        value &= ~gIntmaskDrops;
     gRegisters[address] = address == kMc ? gRegisters[address] & ~value : value;
 }
 

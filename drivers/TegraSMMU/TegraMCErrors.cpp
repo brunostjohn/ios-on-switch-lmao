@@ -194,9 +194,15 @@ void unmask()
 {
     gIo.write(switch_mc::kIntMask, switch_mc::kErrors);
     const uint32_t mask = gIo.read(switch_mc::kIntMask);
-    if ((mask & switch_mc::kErrors) != switch_mc::kErrors)
+    if ((mask & switch_mc::kRequired) != switch_mc::kRequired)
         panic("TegraSMMU: MC error interrupt (INTID %u) masked: INTMASK reads %#x after %#x was written", kIntid, mask,
               switch_mc::kErrors);
+    static bool told;
+    if ((mask & switch_mc::kErrors) != switch_mc::kErrors && !told) {
+        told = true;
+        IOLog("TegraSMMU: MC INTMASK keeps %#x of %#x: DECERR_GENERALIZED_CARVEOUT stays masked\n", mask,
+              switch_mc::kErrors);
+    }
 }
 
 [[noreturn]] void notAttached(const char *why)
@@ -323,6 +329,10 @@ extern "C" void switch_mc_errors_expect_end(uint32_t ms, switch_mc_expected *out
         panic("TegraSMMU: MC error interrupt (INTID %u) lost: INTSTATUS %#x still latched %u ms after a deliberate "
               "SMMU fault, %u expected errors delivered",
               kIntid, latched, ms, taken);
-    *out = {1, taken, gExpected.first.intstatus, gExpected.first.status, gExpected.first.address};
+    // `first` is written before `taken` moves (release); with none taken a late filter may still be writing it.
+    if (taken)
+        *out = {1, taken, gExpected.first.intstatus, gExpected.first.status, gExpected.first.address};
+    else
+        *out = {1, 0, 0, 0, 0};
 }
 #endif
