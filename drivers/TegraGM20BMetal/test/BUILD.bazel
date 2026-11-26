@@ -6526,11 +6526,21 @@ objcxx_units(
             "//ipsw:24B119": [
                 "-DSWITCH_LIBRARIES_LINK_PRIVATE_FUNCTIONS=1",
                 "'-DSWITCH_REFUSED_FRAGMENT_FUNCTION=\"sixChannelBlend_fragment\"'",
+                # Weather's VFX particle states, as the 24B119 device made them
+                "-DSWITCH_WEATHER_VFX_STATES=1",
             ],
             "//conditions:default": [],
         }),
-        ["//drivers/TegraGM20BMetal:precompile/corpus.log"],
-        {"SWITCH_CORPUS": "$(rootpath //drivers/TegraGM20BMetal:precompile/corpus.log)"},
+        [
+            ":rate_map_metallib",
+            "testdata/weather_vfx_24B119.corpus",
+            "//drivers/TegraGM20BMetal:precompile/corpus.log",
+        ],
+        {
+            "SWITCH_CORPUS": "$(rootpath //drivers/TegraGM20BMetal:precompile/corpus.log)",
+            "SWITCH_RATE_MAP_METALLIB": "$(rootpath :rate_map_metallib)",
+            "SWITCH_WEATHER_VFX": "$(rootpath testdata/weather_vfx_24B119.corpus)",
+        },
     ),
     (
         "compiler_repro_test",
@@ -6658,6 +6668,25 @@ work="$$(/usr/bin/mktemp -d)"
 export HOME="$$work" TMPDIR="$$work"
 /usr/bin/xcrun -sdk iphoneos metal -c $(execpath testdata/compiler_stages/stages.metal) -o "$$work/stages.air"
 /usr/bin/xcrun -sdk iphoneos metallib "$$work/stages.air" -o $@
+""",
+    tags = ["requires-darwin"],
+)
+
+# compiler_compile_only_test's rasterization rate map functions, compiled from source as an app's default library is
+genrule(
+    name = "rate_map_metallib",
+    testonly = True,
+    srcs = [
+        "testdata/rate_map/rate_map.metal",
+        "@xcode//:xcode.env",
+    ],
+    outs = ["rate_map.metallib"],
+    cmd = """
+export DEVELOPER_DIR="$$(/usr/bin/sed -n 's/^DEVELOPER_DIR=//p' $(execpath @xcode//:xcode.env))"
+work="$$(/usr/bin/mktemp -d)"
+export HOME="$$work" TMPDIR="$$work"
+/usr/bin/xcrun -sdk iphoneos metal -c $(execpath testdata/rate_map/rate_map.metal) -o "$$work/rate_map.air"
+/usr/bin/xcrun -sdk iphoneos metallib "$$work/rate_map.air" -o $@
 """,
     tags = ["requires-darwin"],
 )
