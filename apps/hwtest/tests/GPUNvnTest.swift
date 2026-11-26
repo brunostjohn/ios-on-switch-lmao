@@ -2,6 +2,7 @@ import Foundation
 import HWTestCore
 import HWTestGPU
 import HWTestKit
+import HWTestShared
 import Metal
 
 /// GPURates.nvn on the default device with the facade's band budget at 0 (gpu/GPURatesNvn.swift): NVN's zcull, discard,
