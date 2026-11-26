@@ -247,10 +247,13 @@ inline void switch_gpu_spare_books_learn(switch_gpu_spare_books &b, uint32_t ask
 	b.depth[asked] = learnt < most ? learnt : most;
 }
 
-// The previous boot's record of slot `s`: its depth from boot, asked before any slot this boot asks
+// The previous boot's record of slot `s`: its depth from boot, asked before any slot this boot asks. A slot this boot
+// has asked already keeps what it learned.
 inline void switch_gpu_spare_books_seed(switch_gpu_spare_books &b, uint32_t s, uint16_t depth,
 					uint64_t cap)
 {
+	if (b.used[s] != SWITCH_GPU_SPARE_NEVER)
+		return;
 	const uint16_t most =
 		switch_gpu_spare_depth_cap(switch_gpu_spare_slot_bytes(s), cap, b.floor[s]);
 	b.depth[s] = depth < most ? depth : most;

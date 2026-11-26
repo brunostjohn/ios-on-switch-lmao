@@ -28,8 +28,8 @@ const std::string &client()
 	static const std::string source = [] {
 		std::string units;
 		for (const char *unit :
-		     {"", "Pool", "Spares", "SpareStats", "Bo", "Park", "Import", "Channel",
-		      "Submit", "Dispatch", "Present", "Job", "JobSubmit"})
+		     {"", "Pool", "Spares", "SpareStats", "SpareRecord", "Bo", "Park", "Import",
+		      "Channel", "Submit", "Dispatch", "Present", "Job", "JobSubmit"})
 			units += SourceText(std::string("../TegraGM20BUserClient") + unit + ".cpp");
 		return units + SourceText("../SwitchGpuParkedPool.cpp") +
 		       SourceText("../TegraGM20BPushScanRun.cpp") +
@@ -1898,6 +1898,22 @@ TEST(GM20BParkedBoSource, LockOrderAndOffLockVmCalls)
 	EXPECT_TRUE(stats.before("parkedStatsTake(", "IOLockLock(p->lock);"));
 }
 
+// The demand record is read on the refill worker and set from its own thread call at the release (method 43), never
+// on the client's thread or under the pool's lock
+TEST(GM20BSparesSource, TheDemandRecordMovesOnWorkersAlone)
+{
+	const CodeText work =
+		Block(client(), "void spareWork(thread_call_param_t param, thread_call_param_t)");
+	EXPECT_TRUE(work.before("sparesSeed(p);", "IOLockLock(p->lock);"));
+	const CodeText look = Block(client(), "void sparesPressureLook()");
+	EXPECT_TRUE(look.before("thread_call_enter(p->recordCall);", "if (!memoryPressure())"));
+	const CodeText set = Block(
+		client(), "void spareRecordWork(thread_call_param_t param, thread_call_param_t)");
+	EXPECT_TRUE(set.before("IOLockUnlock(p->lock);", "options->setProperty(kRecordKey, data)"));
+	const CodeText seed = Block(client(), "void sparesSeed(SparePool *p)");
+	EXPECT_TRUE(seed.before("readRecord(record)", "IOLockLock(p->lock);"));
+}
+
 // Every refill, keep and take decision is the books' (SwitchGpuSpareBooks.h, replayed in switch_gpu_spare_books_test):
 // the kernel compares no byte count with the cap itself, and every push onto the dirty list is counted in the books.
 TEST(GM20BSparesSource, ThePoolDecidesThroughTheBooks)
@@ -1950,11 +1966,12 @@ TEST(GM20BSubmitGateSource, NobodySleepsOnTheGateOutsideIt)
 	EXPECT_EQ(CodeText(client()).count("submitGate_.waitMutationEnd(lock_);"), 2u);
 }
 
-// The spare workers allocate, wire, free and sometimes memset memory: never above user priority.
+// The spare workers allocate, wire, free and sometimes memset memory, and the record's sets NVRAM: never above user
+// priority.
 TEST(GM20BSparesSource, TheWorkersRunAtUserPriority)
 {
 	const CodeText make = Block(client(), "SparePool *spares()");
-	EXPECT_EQ(make.count("THREAD_CALL_PRIORITY_USER"), 3u);
+	EXPECT_EQ(make.count("THREAD_CALL_PRIORITY_USER"), 4u);
 	EXPECT_FALSE(make.has("THREAD_CALL_PRIORITY_KERNEL"));
 	EXPECT_FALSE(make.has("thread_call_allocate_with_qos("));
 }

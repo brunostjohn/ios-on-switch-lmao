@@ -793,6 +793,8 @@ void tgm_stats_bo_alloc(uint64_t bytes, int kind, uint64_t ns, const uint64_t ph
 			const char *owner);
 void tgm_stats_compositor_pool(int64_t bytes);
 void tgm_spare_counts(uint64_t *kept_bytes, uint64_t *ready, uint64_t *pool_zeroing_bytes);
+/* debug kernels: the classes this boot's spare demand record seeded, appended to `line` */
+void tgm_spare_seeds_line(char *line, unsigned long size);
 /* Where the pool is (TegraGM20BUserClient.cpp, for the stats2 line): pool BOs of clients other than the compositor, pool
  * pages freed but still behind their view's release (orphans: a task still maps the view, or an import of it is live),
  * every client's compressible BOs with their count, and coherent BOs served from system memory instead

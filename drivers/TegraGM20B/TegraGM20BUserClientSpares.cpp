@@ -295,6 +295,10 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 {
 	SparePool *p = static_cast<SparePool *>(param);
 	switch_gpu_spare_books &b = p->books;
+	if (!p->recordRead) {
+		p->recordRead = true;
+		sparesSeed(p);
+	}
 	for (;;) {
 		IOLockLock(p->lock);
 		if (memoryPressure()) {
@@ -369,8 +373,12 @@ SparePool *spares()
 			spareRecycleWork, n, THREAD_CALL_PRIORITY_USER, THREAD_CALL_OPTIONS_ONCE);
 		n->reclaimCall = thread_call_allocate_with_options(
 			spareReclaimWork, n, THREAD_CALL_PRIORITY_USER, THREAD_CALL_OPTIONS_ONCE);
+		n->recordCall = thread_call_allocate_with_options(
+			spareRecordWork, n, THREAD_CALL_PRIORITY_USER, THREAD_CALL_OPTIONS_ONCE);
 	}
-	if (!n->call || !n->recycleCall || !n->reclaimCall) {
+	if (!n->call || !n->recycleCall || !n->reclaimCall || !n->recordCall) {
+		if (n->recordCall)
+			thread_call_free(n->recordCall);
 		if (n->reclaimCall)
 			thread_call_free(n->reclaimCall);
 		if (n->recycleCall)
@@ -384,6 +392,7 @@ SparePool *spares()
 	}
 	if (!__atomic_compare_exchange_n(&gSpares, &p, n, false, __ATOMIC_ACQ_REL,
 					 __ATOMIC_ACQUIRE)) {
+		thread_call_free(n->recordCall);
 		thread_call_free(n->reclaimCall);
 		thread_call_free(n->recycleCall);
 		thread_call_free(n->call);
@@ -444,12 +453,16 @@ Spare *spareTake(uint64_t bytes, switch_gpu_spare_kind kind, bool critical)
 	return s;
 }
 
-// A process heard memory pressure (method 43): what a take does under pressure, without waiting for one. Nothing reads the
-// pressure level while the GPU allocates nothing, and the pool holds up to its cap wired.
+// A process released its idle memory (method 43: memory pressure, or gone to the background): what a take does under
+// pressure, without waiting for one, since nothing reads the pressure level while the GPU allocates nothing and the pool
+// holds up to its cap wired; and this boot's demand record set again for the next boot.
 void sparesPressureLook()
 {
 	SparePool *p = __atomic_load_n(&gSpares, __ATOMIC_ACQUIRE);
-	if (!p || !memoryPressure())
+	if (!p)
+		return;
+	thread_call_enter(p->recordCall);
+	if (!memoryPressure())
 		return;
 	thread_call_enter(p->recycleCall);
 	if (parkedHasAny())

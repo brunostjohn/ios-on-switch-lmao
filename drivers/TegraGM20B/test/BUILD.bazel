@@ -992,6 +992,16 @@ host_test(
 )
 
 host_test(
+    name = "switch_gpu_spare_record_test",
+    srcs = [
+        "switch_gpu_spare_record_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuSpareBooks.h",
+        "//drivers/TegraGM20B:SwitchGpuSpareRecord.h",
+        "//drivers/TegraGM20B:SwitchGpuSpares.h",
+    ],
+)
+
+host_test(
     name = "switch_gpu_parked_test",
     srcs = [
         "switch_gpu_parked_test.cpp",
@@ -1260,6 +1270,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BUserClientPool.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientSpares.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientSpareStats.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientSpareRecord.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientPresent.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientSubmit.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientJob.cpp",
@@ -1664,6 +1675,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BUserClientPool.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientSpares.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientSpareStats.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientSpareRecord.cpp",
         "//drivers/TegraGM20B:TegraGM20BRecord.cpp",
         "//drivers/TegraGM20B:TegraGM20BSurfacePrefault.cpp",
     ],
@@ -3616,6 +3628,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BUserClientImport.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientSpares.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientSpareStats.cpp",
+        "//drivers/TegraGM20B:TegraGM20BUserClientSpareRecord.cpp",
     ],
 )
 
