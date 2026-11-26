@@ -8392,6 +8392,19 @@ out:
 	kfree_data(io_upl_reprio_info, sizeof(uint64_t) * atop(io_upl_size));
 }
 
+/*
+ * Switch: the boot replay's I/O is tier 0 (passive) but the SD card queues it one class below tier-0 demand reads
+ * (NativeSwitchBlock SwitchSdPick.h switchSdClassOf), so a tier-0 thread sleeping on one of its busy pages raises it as
+ * it would a lower tier's. The UPL keeps priority 0: spec_strategy issues a cluster I/O at its UPL's priority, and tier
+ * 1 would hold the replay in throttle_lowpri_io. Compares thread pointers only, under the object lock the caller holds.
+ */
+static bool
+switch_upl_below_waiter(upl_t upl, int cur_tier)
+{
+	return cur_tier == THROTTLE_LEVEL_TIER0 && upl->upl_creator != current_thread() &&
+	       switch_vm_prefetch_is_replay_thread != NULL && switch_vm_prefetch_is_replay_thread(upl->upl_creator);
+}
+
 void
 vm_page_handle_prio_inversion(vm_object_t o, vm_page_t m)
 {
@@ -8407,7 +8420,8 @@ vm_page_handle_prio_inversion(vm_object_t o, vm_page_t m)
 	 *  UPL containing the contended page.
 	 */
 	queue_iterate(&o->uplq, upl, upl_t, uplq) {
-		if (((upl->flags & UPL_EXPEDITE_SUPPORTED) == 0) || upl->upl_priority <= cur_tier) {
+		if (((upl->flags & UPL_EXPEDITE_SUPPORTED) == 0) ||
+		    (upl->upl_priority <= cur_tier && !switch_upl_below_waiter(upl, cur_tier))) {
 			continue;
 		}
 		pl = UPL_GET_INTERNAL_PAGE_LIST(upl);

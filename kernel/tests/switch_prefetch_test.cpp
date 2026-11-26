@@ -1023,3 +1023,22 @@ TEST(SwitchPrefetchSource, RootAndDataVolumesWiredAcrossBothXnuTrees)
     EXPECT_THAT(bodyOf(prefetchSave, "collect_kept_replayed("), HasSubstr("switch_prefetch_bit_test("));
     EXPECT_THAT(bodyOf(prefetchSave, "collect_kept_replayed("), HasSubstr("switch_prefetch_vget_regular("));
 }
+
+// The SD card queues the replay's reads below tier-0 demand (SwitchSdPick.h), so XNU's busy-page raise must treat a UPL
+// the replay thread made as below a tier-0 waiter, without lowering the UPL's own priority (spec_strategy issues a
+// cluster I/O at it, and tier 1 would throttle the replay).
+TEST(SwitchPrefetchSource, ATierZeroWaiterRaisesTheReplaysBusyPages)
+{
+    for (const char *tree : {"xnu-10063.141.1", "xnu-12377.121.6"}) {
+        SCOPED_TRACE(tree);
+        const std::string object = SourceText(std::string("../") + tree + "/osfmk/vm/vm_object.c");
+        const std::string below = bodyOf(object, "switch_upl_below_waiter(upl_t upl, int cur_tier)");
+        EXPECT_THAT(below, HasSubstr("cur_tier == THROTTLE_LEVEL_TIER0"));
+        EXPECT_THAT(below, HasSubstr("upl->upl_creator != current_thread()"));
+        EXPECT_THAT(below, HasSubstr("switch_vm_prefetch_is_replay_thread(upl->upl_creator)"));
+        const std::string inversion = bodyOf(object, "vm_page_handle_prio_inversion(vm_object_t o, vm_page_t m)");
+        EXPECT_THAT(inversion,
+                    HasSubstr("(upl->upl_priority <= cur_tier && !switch_upl_below_waiter(upl, cur_tier))"));
+        EXPECT_THAT(object, Not(HasSubstr("upl->upl_priority = THROTTLE_LEVEL")));
+    }
+}
