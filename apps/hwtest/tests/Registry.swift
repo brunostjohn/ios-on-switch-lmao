@@ -45,9 +45,8 @@ public enum Registry {
         IconCornersTest(), TextureBufferTest(), IconSmallSizesTest(), IconPasscodeTest(), IconCalendarTest(),
         CompileSharedTest(), CompileFirstDrawTest(), CompileStageLibraryTest(), CompileAnswerLatencyTest(),
         CompileSharedStagesTest(),
-        DrawBandsTest(), GPURatesTest(), GPUFillTest(), GPUCaBindingTest(), GPUKnobsTest(), GPUNvnTest(),
-        BandsPlanarInstancedTest(), DispatchPiecesTest(), ProbeCtaTest(), ProbeMacroWfiTest(),
-        ForeignWaitIsolationTest(),
+        DrawBandsTest(), GPURatesTest(), GPUFillTest(), GPUCaBindingTest(), BandsPlanarInstancedTest(),
+        DispatchPiecesTest(), ProbeCtaTest(), ProbeMacroWfiTest(), ForeignWaitIsolationTest(),
         PosterTargetsTest(),
         PushScanTargetsTest(), ResolveCostTest(), JobRefusalLinesTest(),
         MsaaFirstUseTest(), StoredDepthTest(), ZetaMoveTest(), ZetaKeptTest(), ZcViewFormatsTest(),
@@ -225,10 +224,11 @@ public enum Registry {
             rung: 3
         ),
     ]
-    /// State no device run has pushed before (gpu.perf.first_touch): each app's very last, after the recovery tests
-    /// too, so a channel the GPU stops for it misleads no test after it (tools/devicerun hwtest_test holds both apps to
-    /// it).
-    public static let firstTouch: [any HWTest] = [GPUFirstTouchTest()]
+    /// State no device run has pushed before: each app's very last, after the recovery tests too, so a channel the GPU
+    /// stops for it misleads no test after it (tools/devicerun hwtest_test holds both apps to it). gpu.perf.knobs and
+    /// gpu.perf.nvn push new values of methods the driver pushes already (knobs, zcull formats and bounds) until their
+    /// first card run; gpu.perf.first_touch, last of all, pushes method 0x0f78 and knob 0x06164010.
+    public static let firstTouch: [any HWTest] = [GPUKnobsTest(), GPUNvnTest(), GPUFirstTouchTest()]
     /// Reset the copy engine under the present, then kill the app's raw channel: each app runs them after all its other
     /// tests, so a failed recovery spoils none of them.
     public static let recovery: [any HWTest] = [
