@@ -16,6 +16,8 @@ public enum JPEGRoute {
         public let outputMaps: UInt64
         /// Decodes per TEGRA_NVJPG_ROUTE_* (routeNames' order)
         public let routes: [UInt64]
+        /// Jobs the kernel cancelled at their bound or on a falcon error (TegraNVJPG.cpp cancelled())
+        public let cancelled: UInt64
     }
 
     /// TegraNVJPGRoute.h's TEGRA_NVJPG_ROUTE_* order.
@@ -106,7 +108,10 @@ public enum JPEGRoute {
                     outputMaps: words.load(fromByteOffset: 32 + 8 * formatNames.count, as: UInt64.self),
                     routes: routeNames.indices.map {
                         words.load(fromByteOffset: 40 + 8 * formatNames.count + 8 * $0, as: UInt64.self)
-                    }
+                    },
+                    cancelled: words.load(
+                        fromByteOffset: 40 + 8 * formatNames.count + 8 * routeNames.count, as: UInt64.self
+                    )
                 )
             }
         )

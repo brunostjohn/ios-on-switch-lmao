@@ -138,14 +138,15 @@ public enum Registry {
         + PlaybackTest.all + VideoEncodeTest.all + VideoEncodeIdleTest.all
         + [VideoEncodeBFramesTest(), NVENCInputLayoutTest(), VideoTranscodeTest(), VideoGPUSourceTest()]
 
+    /// The NVJPG tile probe last: it tells NVJPG tilings no driver uses, and a job the kernel cancels resets the engine
     static let images: [any HWTest] =
         ImageDecodeTest.all + [
-            JPEGAfterIdleTest(), JPEGMappingLifetimeTest(), NVJPGTileProbeTest(), HEICEncodeTest(), CoreImageTest(),
+            JPEGAfterIdleTest(), JPEGMappingLifetimeTest(), HEICEncodeTest(), CoreImageTest(),
             PixelTransferTest(),
             PixelTransfer422Test(),
             PixelTransferRouteTest(),
             VICLumaTest(),
-            VICGamutTest(), VICTagsTest(),
+            VICGamutTest(), VICTagsTest(), NVJPGTileProbeTest(),
         ]
 
     static let audio: [any HWTest] = [
