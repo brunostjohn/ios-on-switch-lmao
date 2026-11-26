@@ -82,6 +82,28 @@ bool SetView::named(uint64_t handle) const
     return false;
 }
 
+bool SetView::UseCache::matches(uint32_t ch, uint32_t setId, bool isAdmitted, const TegraGM20BAbiSurfaceUse *items,
+                                uint32_t count) const
+{
+    if (!valid || channel != ch || set != setId || admitted != isAdmitted || uses.size() != count)
+        return false;
+    for (uint32_t i = 0; i < count; ++i)
+        if (uses[i].handle != items[i].handle || uses[i].access != items[i].access ||
+            uses[i].reserved != items[i].reserved)
+            return false;
+    return true;
+}
+
+void SetView::UseCache::save(uint32_t ch, uint32_t setId, bool isAdmitted, const TegraGM20BAbiSurfaceUse *items,
+                             uint32_t count)
+{
+    channel = ch;
+    set = setId;
+    admitted = isAdmitted;
+    uses.assign(items, items + count);
+    valid = true;
+}
+
 void ResourceSet::insertLocked(const Bo &bo, uint32_t access, bool always)
 {
     const uint64_t va = bo.vaBase ? bo.vaBase : bo.va;
@@ -352,6 +374,9 @@ bool submitInSet(Kernel &k, ResourceSet &set, SetView &view, bool named, KernelJ
 {
     set.view(view);
     view.refused.clear();
+    const bool isCancel = (job.admissionFlags & TegraGM20BJobAdmissionCancel) != 0;
+    const bool admitted = (job.admissionFlags & (TegraGM20BJobAdmissionBegin | TegraGM20BJobAdmissionContinue)) != 0;
+    bool retriedSameUses = false;
     for (;;) {
         if (uses) {
             for (const SetMember &m : view.outside)
@@ -370,12 +395,49 @@ bool submitInSet(Kernel &k, ResourceSet &set, SetView &view, bool named, KernelJ
         }
         job.set = named ? view.set : 0;
         job.generation = job.set ? view.generation : 0;
+        const bool canSameUses = !isCancel && !retriedSameUses && k.supportsSameUses() && job.useCount > 0 &&
+                                 job.uses != nullptr &&
+                                 view.useCache.matches(job.channel, job.set, admitted, job.uses, job.useCount);
+        KernelJob attempt = job;
+        if (canSameUses) {
+            attempt.sameUses = true;
+            attempt.uses = nullptr;
+            attempt.useCount = 0;
+        }
         int kr = KERN_SUCCESS;
-        const bool submitted = k.submitJob(job, seqno, &kr);
+        const bool submitted = k.submitJob(attempt, seqno, &kr);
         if (result)
             *result = kr;
-        if (submitted)
+        if (submitted) {
+            if (!isCancel && !canSameUses) {
+                if (k.supportsSameUses() && job.useCount > 0 && job.uses != nullptr)
+                    view.useCache.save(job.channel, job.set, admitted, job.uses, job.useCount);
+                else
+                    view.useCache.clear();
+            }
             return true;
+        }
+        if (canSameUses && kr == kIOReturnNotReady) {
+            view.useCache.clear();
+            retriedSameUses = true;
+            if (job.set) {
+                switch (set.renew(k, job.generation)) {
+                case ResourceSet::Renewal::renewed:
+                    set.view(view);
+                    break;
+                case ResourceSet::Renewal::current:
+                    break;
+                case ResourceSet::Renewal::refused:
+                    view.refused = set.refusal();
+                    if (result)
+                        *result = kIOReturnBadArgument;
+                    return false;
+                }
+            }
+            continue;
+        }
+        if (!isCancel)
+            view.useCache.clear();
         if (kr != kIOReturnNotReady || !job.set)
             return false;
         switch (set.renew(k, job.generation)) {

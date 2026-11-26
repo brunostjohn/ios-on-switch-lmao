@@ -1,7 +1,10 @@
 import Darwin
 import Foundation
+import HWTestCommon
 import HWTestCore
 import HWTestGPU
+import HWTestKit
+import HWTestShared
 import Metal
 import QuartzCore
 import UIKit
@@ -98,7 +101,7 @@ struct ScalePacingTest: HWTest {
         }
         await probe.stop()
         let (kr, reply) = connection.call(
-            GPUPaths.method, GPUConnection.words([Self.targetPeaksOp, 0]), outputSize: 512
+            GPUPaths.method, GPUConnection.words([Self.targetPeaksOp, 0]), outputSize: GPUPaths.replySize
         )
         if kr == KERN_SUCCESS,
            let compositor = TargetPeak.parse(String(decoding: reply.prefix { $0 != 0 }, as: UTF8.self))

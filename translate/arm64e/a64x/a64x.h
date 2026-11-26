@@ -75,6 +75,8 @@ bool a64x_class_is_baseline(enum a64x_class c);
 
 /* One-word ARMv8.0 replacement (PAC identity, LDAPR->LDAR, LDLAR/STLLR, DC CVAP, encodable LDRA). */
 bool a64x_rewrite1(uint32_t w, uint32_t *out);
+void a64x_decode_ldra(uint32_t w, int32_t *out_imm, bool *out_wb);
+bool a64x_eval_jscvt(uint64_t bits, uint32_t *out_w);
 /* GPRs read/written by w (false if not decoded); and the X registers dead at a site given the words after it. */
 bool a64x_regs(uint32_t w, uint32_t *rd_mask, uint32_t *wr_mask);
 /*

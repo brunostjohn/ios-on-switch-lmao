@@ -76,8 +76,8 @@ void Device::offerSplit(Pipeline &pl, SplitSource &&source)
 {
     if (!usableSplitMetadata(source.rec) || spillEntryOf(*source.pp, 0) || spillEntryOf(*source.pp, 1))
         return;
-    splitSources_.push_back(std::move(source));
-    __atomic_store_n(&pl.splitSource, &splitSources_.back(), __ATOMIC_RELEASE);
+    pl.ownedSplitSource = std::make_unique<SplitSource>(std::move(source));
+    __atomic_store_n(&pl.splitSource, pl.ownedSplitSource.get(), __ATOMIC_RELEASE);
 }
 
 bool Device::placeSplitPrograms(const SplitSource &source, PlacedProgram &fs, uint32_t &prologue,

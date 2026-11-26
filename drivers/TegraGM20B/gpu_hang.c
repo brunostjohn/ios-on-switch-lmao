@@ -9,6 +9,7 @@
 static u64 progress_step(struct tgm_chan *chan, u64 *stalled)
 {
 	u32 done = tgm_chan_completed(chan);
+	u32 pword = chan->progress_cpu ? READ_ONCE(*chan->progress_cpu) : 0;
 	u64 now = nvxnu_nanotime();
 	u64 since = READ_ONCE(chan->stall_ns);
 	u64 held = tgm_hold_held_ns(chan->chid, now);
@@ -19,8 +20,10 @@ static u64 progress_step(struct tgm_chan *chan, u64 *stalled)
 		WRITE_ONCE(chan->stall_ns, 0);
 		return 0;
 	}
-	if (!since || READ_ONCE(chan->stall_done) != done) {
+	if (!since || READ_ONCE(chan->stall_done) != done ||
+	    READ_ONCE(chan->stall_progress_word) != pword) {
 		WRITE_ONCE(chan->stall_done, done);
+		WRITE_ONCE(chan->stall_progress_word, pword);
 		WRITE_ONCE(chan->stall_held, held);
 		WRITE_ONCE(chan->stall_ns, now);
 		return TGM_HANG_NS;
@@ -296,8 +299,12 @@ void tgm_iso_deadline(void *arg)
 static u64 chan_progress_ns(struct tgm_chan *chan, u64 now)
 {
 	const u32 done = tgm_chan_completed(chan);
+	int moved = tgm_progress_seen(done, READ_ONCE(chan->progress_done), &chan->seen_done);
 
-	if (tgm_progress_seen(done, READ_ONCE(chan->progress_done), &chan->seen_done)) {
+	if (chan->progress_cpu &&
+	    tgm_progress_word_seen(READ_ONCE(*chan->progress_cpu), &chan->progress_word_seen))
+		moved = 1;
+	if (moved) {
 		WRITE_ONCE(chan->progress_held, tgm_hold_held_ns(chan->chid, now));
 		WRITE_ONCE(chan->progress_ns, now);
 	}

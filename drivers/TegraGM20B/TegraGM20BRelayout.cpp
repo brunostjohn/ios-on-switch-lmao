@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "TegraGM20BFences.h"
+#include "SwitchGpuInheritorSleep.h"
 #include "SwitchGpuKqueue.h"
 #include "SwitchGpuPin.h"
 #include "SwitchGpuRelayoutCache.h"
@@ -33,6 +34,7 @@ struct Relayout {
 	bool unavailable;  // the last open failed (logged once until one succeeds)
 	// push pages a move still owns: a page is rewritten only once its move was waited for
 	uint32_t slots;
+	SwitchGpuThreadRef slotOwner[kSlots];
 	// moves and flushes waiting on the channel without the lock: a failed channel is replaced only at 0
 	uint32_t users;
 	SwitchGpuRelayoutCache mappings;
@@ -42,16 +44,18 @@ uint32_t claimSlot()
 {
 	Relayout &r = gRelayout;
 	while (r.slots == (1u << kSlots) - 1)
-		IOLockSleep(r.lock, &r.slots, THREAD_UNINT);
+		switch_gpu_sleep_inheritor(r.lock, &r.slots, r.slotOwner[0]);
 	const uint32_t slot = uint32_t(__builtin_ctz(~r.slots));
 	r.slots |= 1u << slot;
+	r.slotOwner[slot] = switch_gpu_current_thread();
 	return slot;
 }
 
 void releaseSlot(uint32_t slot)
 {
 	gRelayout.slots &= ~(1u << slot);
-	IOLockWakeup(gRelayout.lock, &gRelayout.slots, false);
+	gRelayout.slotOwner[slot] = nullptr;
+	switch_gpu_wakeup_inheritor(gRelayout.lock, &gRelayout.slots);
 }
 
 // gRelayout.lock held on entry and on return, not while `wait` runs; the channel stays until every waiter is back

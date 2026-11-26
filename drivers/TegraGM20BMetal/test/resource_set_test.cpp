@@ -371,4 +371,65 @@ TEST(SetView, HoldsOnlyRangesInsideOneMember)
     EXPECT_FALSE(view.holds(0x21000, 1));
 }
 
+TEST_F(ResourceSetTest, SameUsesReusesCachedUsesAndRetriesOnBindOrBoChange)
+{
+    ASSERT_TRUE(set.add(kernel, root, kWrite));
+    gm20b::Bo sharedA, sharedB;
+    ASSERT_TRUE(kernel.alloc(0x10000, true, sharedA));
+    ASSERT_TRUE(kernel.alloc(0x10000, true, sharedB));
+    const std::vector<TegraGM20BAbiSurfaceUse> uses = {{sharedA.handle, kRead, 0}, {sharedB.handle, kWrite, 0}};
+
+    ASSERT_TRUE(job(uses));
+    EXPECT_EQ(model.sameUseHits, 0u);
+    EXPECT_EQ(model.sameUseMisses, 0u);
+    EXPECT_EQ(lastJob().flags & TegraGM20BJobSameUses, 0u);
+    EXPECT_TRUE(used(sharedA.handle, kRead));
+    EXPECT_TRUE(used(sharedB.handle, kWrite));
+
+    ASSERT_TRUE(job(uses));
+    EXPECT_EQ(model.sameUseHits, 1u);
+    EXPECT_EQ(model.sameUseMisses, 0u);
+    EXPECT_NE(lastJob().flags & TegraGM20BJobSameUses, 0u);
+    EXPECT_TRUE(used(sharedA.handle, kRead));
+    EXPECT_TRUE(used(sharedB.handle, kWrite));
+
+    gm20b::Bo extra;
+    ASSERT_TRUE(kernel.alloc(0x10000, true, extra));
+    ASSERT_TRUE(job(uses));
+    EXPECT_EQ(model.sameUseMisses, 1u);
+    EXPECT_EQ(lastJob().flags & TegraGM20BJobSameUses, 0u);
+    EXPECT_TRUE(used(sharedA.handle, kRead));
+    EXPECT_TRUE(used(sharedB.handle, kWrite));
+
+    ASSERT_TRUE(job(uses));
+    EXPECT_EQ(model.sameUseHits, 2u);
+    EXPECT_EQ(model.sameUseMisses, 1u);
+    EXPECT_NE(lastJob().flags & TegraGM20BJobSameUses, 0u);
+}
+
+TEST_F(ResourceSetTest, SameUsesMissAndStaleSetBothRecoverTransparently)
+{
+    ASSERT_TRUE(set.add(kernel, {{&root, kWrite}, {&ring, kWrite}}));
+    gm20b::Bo shared;
+    ASSERT_TRUE(kernel.alloc(0x10000, true, shared));
+    const std::vector<TegraGM20BAbiSurfaceUse> uses = {{shared.handle, kWrite, 0}};
+
+    ASSERT_TRUE(job(uses));
+    ASSERT_TRUE(job(uses));
+    EXPECT_EQ(model.sameUseHits, 1u);
+
+    gm20b::Bo member;
+    ASSERT_TRUE(kernel.alloc(0x10000, true, member));
+    ASSERT_TRUE(set.add(kernel, member, kRead));
+    ASSERT_TRUE(job(uses));
+    model.freeBo(member.handle);
+
+    ASSERT_TRUE(job(uses));
+    EXPECT_EQ(model.staleSets, 1u);
+    EXPECT_TRUE(used(shared.handle, kWrite));
+    EXPECT_TRUE(used(root.handle, kWrite));
+    ASSERT_TRUE(job(uses));
+    EXPECT_EQ(model.sameUseHits, 2u);
+}
+
 }  // namespace

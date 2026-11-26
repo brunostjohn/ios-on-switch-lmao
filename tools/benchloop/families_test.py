@@ -1,6 +1,6 @@
 import unittest
 
-from tools.benchloop import families, nakbatches, protocol, texels
+from tools.benchloop import families, generators, nakbatches, protocol, report, texels
 from tools.benchloop.sm53 import interlock_spin
 
 
@@ -21,6 +21,15 @@ class FamiliesTest(unittest.TestCase):
         self.assertIn(
             'interlock.atom.64x64.check-compete missing lost - ns/draw - competitor None buffers', found['summary']
         )
+
+    def test_interlock_clock_probe_wiring(self):
+        planned = generators.GENERATORS['interlock_clock']()
+        self.assertTrue(families.asked(planned))
+        found = families.analyse(planned, {})
+        self.assertIn('interlock_clock', found)
+        self.assertIn('interlock_clock safety s2r_bar missing dt - monotonic False', found['summary'])
+        self.assertIn('interlock_clock safety cs2r_bar missing dt - monotonic False', found['summary'])
+        self.assertIn('interlock_clock', report.analysis('interlock_clock', planned, {}, []))
 
     def test_a_run_of_other_batches_is_not_theirs(self):
         planned = [{'id': 'plain', 'kind': 'noop'}, {'id': 'other', 'kind': 'noop', 'meta': {'family': 'twod'}}]

@@ -1,19 +1,26 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
+import HWTestShared
 import Metal
 
 /// Compression and zero-bandwidth clears for the targets no CPU or other engine reaches
-/// (drivers/TegraGM20BMetal/comp.h, zbc.h): 4x multisampled memoryless RGBA16Float, BGRA8 and RGBA8
-/// colour over 4x Depth16Unorm, and one-sample BGRA8 over a memoryless Depth32Float_Stencil8, each cleared again and
-/// again to a value the boot ZBC table lacks, a quad drawn over the left half and the colour resolved or stored. The
-/// pixels must be the quad's and the clear's exactly: each added entry's texel, in its format's channel order, read
-/// back through every later clear that hits it. The RGBA16Float target cleared to the BGRA8 one's floats must get its
-/// own halves, not the BGRA8 texel (the GPU matches an entry by format and value). The facade must make compressed
-/// memory, add the entries and hit them. Then the shadow cases (CompressedShadowCases: the copy engine through
-/// compressed memory), the ZBC arms of the other formats (CompressedZbcArms: sRGB8, RGB10A2, RGBA16Unorm, RGBA32Float,
-/// Depth16), and a 4x BGRA8 target cleared to a value the table holds and to 0.5 (a ROP tie, never added): the GPU time
-/// of each.
+/// (drivers/TegraGM20BMetal/comp.h, zbc.h): 4x multisampled memoryless RGBA16Float, BGRA8 and RGBA8 colour over 4x
+/// Depth16Unorm, and one-sample BGRA8 over a memoryless Depth32Float_Stencil8, each cleared again and again to a value
+/// the boot ZBC table lacks, a quad drawn over the left half and the colour resolved or stored. The pixels must be the
+/// quad's and the clear's exactly: each added entry's texel, in its format's channel order, read back through every
+/// later clear that hits it. The RGBA16Float target cleared to the BGRA8 one's floats must get its own halves, not the
+/// BGRA8 texel (the GPU matches an entry by format and value). The plain RGBA16Float case clears to (0.75, 0, 0, 0), an
+/// entry an R32 clear's words can match (CompressedR32Arms). The facade must make compressed memory, add the entries
+/// and hit them. Then the shadow cases (CompressedShadowCases: the copy engine through compressed memory), the ZBC arms
+/// of the other formats (CompressedZbcArms: sRGB8, RGB10A2, RGBA16Unorm, RGBA32Float, Depth16), the R32 arms
+/// (CompressedR32Arms: draws, clears and that collision on compressed R32Float, R32Uint and R32Sint, which add no
+/// entry), and a 4x BGRA8 target cleared to a value the table holds and to 0.5 (a ROP tie, never added): the GPU time
+/// of each. An entry the kernel refused fails (`zbc_table_full`, the arms' `zbc_<arm>_table_full`): its clears were
+/// ordinary ones. The GPU's table keeps 15 colour entries for the whole boot and its boot entries take 6; these cases
+/// ask for 4 more and the arms for 5, so the test runs right after the first GPU scene (Registry.gpuScenes), before
+/// gpu.clear.formats clears to more values than the table holds.
 struct CompressedTargetsTest: HWTest {
     let id = "gpu.gm20b.compressed_targets"
     let name = "Multisampled and depth memoryless targets compress; repeated clears become zero-bandwidth"
@@ -35,6 +42,8 @@ struct CompressedTargetsTest: HWTest {
     }
 
     static let exactCodes = MTLClearColor(red: 51.0 / 255, green: 102.0 / 255, blue: 204.0 / 255, alpha: 1)
+    /// The RGBA16Float entry the cases and the shadow cases share; its words are an R32 clear's (CompressedR32Arms)
+    static let halfClear = MTLClearColor(red: 0.75, green: 0, blue: 0, alpha: 0)
 
     static let cases = [
         Case(
@@ -46,8 +55,8 @@ struct CompressedTargetsTest: HWTest {
             clearDepth: 0.75
         ),
         Case(
-            label: "ms4_f16", colour: .rgba16Float, depth: .depth16Unorm, samples: 4,
-            clear: MTLClearColor(red: 0.25, green: 0.5, blue: 0.75, alpha: 1), clearDepth: 0.75
+            label: "ms4_f16", colour: .rgba16Float, depth: .depth16Unorm, samples: 4, clear: halfClear,
+            clearDepth: 0.75
         ),
         Case(
             label: "ms4_f16_bgra8_floats", colour: .rgba16Float, depth: .depth16Unorm, samples: 4, clear: exactCodes,
@@ -164,9 +173,11 @@ struct CompressedTargetsTest: HWTest {
         metrics.set("views", after["views"] ?? 0)
         if delta("made") == 0 && (after["views"] ?? 0) == 0 { wrong.append("no_compressed_memory") }
         if delta("zbc_added") + delta("zbc_full") == 0 { wrong.append("no_zbc_entry_asked") }
+        if delta("zbc_full") > 0 { wrong.append("zbc_table_full") }
         if delta("zbc_added") > 0 && delta("zbc_hits") == 0 { wrong.append("no_zbc_hit") }
         try await CompressedShadowCases.run(gpu, &metrics, &wrong)
         await CompressedZbcArms.run(gpu, &metrics, &wrong)
+        await CompressedR32Arms.run(gpu, &metrics, &wrong)
         let (heldMs, tieMs) = try await Self.clearTimes(gpu)
         metrics.set("zbc_clear_gpu_ms", heldMs, digits: 3)
         metrics.set("tie_clear_gpu_ms", tieMs, digits: 3)

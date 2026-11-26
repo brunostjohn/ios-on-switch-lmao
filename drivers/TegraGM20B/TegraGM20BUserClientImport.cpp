@@ -247,12 +247,17 @@ IOReturn AGXDeviceUserClient::boImport(const TegraGM20BAbiBoImport *in,
 		releaseBo(bo);
 		return ioreturn(refused);
 	}
-	const bool wantBackingMem = in->surface_id != 0 && (bo->npages % TGM_COMP_PAGES) == 0 &&
-				    switch_gpu_smmu_ready() && switch_gpu_compression_on();
+	const bool wantCompMem = in->surface_id != 0 && (bo->npages % TGM_COMP_PAGES) == 0 &&
+				 switch_gpu_smmu_ready() && switch_gpu_compression_on();
+	const bool wantBigMem = !wantCompMem && in->surface_id != 0 &&
+				bo->npages >= SWITCH_GPU_SMMU_GRANULE_PAGES &&
+				switch_gpu_smmu_ready();
 	tgm_mem *canonical = nullptr;
 	bool gotCanonical = false;
-	if (wantBackingMem && !bo->mem) {
-		gotCanonical = switch_gpu_backing_tgm_mem(bo->backing, bo->npages, &canonical) == 0;
+	if ((wantCompMem || wantBigMem) && !bo->mem) {
+		const auto acquire =
+			wantCompMem ? switch_gpu_backing_tgm_mem : switch_gpu_backing_tgm_mem_big;
+		gotCanonical = acquire(bo->backing, bo->npages, &canonical) == 0;
 		if (!gotCanonical)
 			gotCanonical = switch_gpu_backing_tgm_mem_existing_or_direct(
 					       bo->backing, bo->npages, &canonical) == 0;

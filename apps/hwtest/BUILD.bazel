@@ -12,6 +12,30 @@ load("//bazel/lint:defs.bzl", "lint_files")
 load("//bazel/testing:defs.bzl", "host_test")
 load("//kernel/rules:package.bzl", "ios_binary")
 load(":apps.bzl", "hwtest_app", "ios_arm64e", "metal_airs", "reproducible_apps")
+load(
+    ":modules.bzl",
+    "APP27_TESTS_SRCS",
+    "GPU_DECODE_SRCS",
+    "GPU_FORMS_SRCS",
+    "GPU_MODELS_SRCS",
+    "GPU_SCENES_SRCS",
+    "GPU_SRCS",
+    "GPU_X1_SRCS",
+    "KIT_COMMON_SRCS",
+    "KIT_SHARED_SRCS",
+    "KIT_SRCS",
+    "TESTS_DEPTH_SRCS",
+    "TESTS_DISPLAY_SRCS",
+    "TESTS_FORMS_SRCS",
+    "TESTS_METAL_SRCS",
+    "TESTS_NATIVE_SRCS",
+    "TESTS_PATHS_SRCS",
+    "TESTS_RECOVERY_SRCS",
+    "TESTS_SHADERS_SRCS",
+    "TESTS_SYSTEM_SRCS",
+    "TESTS_TEXTURES_SRCS",
+    "TESTS_VIDEO_SRCS",
+)
 
 package(default_visibility = ["//visibility:public"])
 
@@ -45,18 +69,70 @@ swift_library(
     deps = [":core"],
 )
 
-# The GPU scenes (Metal, MPS, Core Image, IOSurface; no UIKit), so the host test runs them on the Mac's GPU too.
+# The GPU harness, companions, scenes and X1 probes (Metal, MPS, Core Image, IOSurface; no UIKit),
+# split into bounded modules so host tests and iOS leaves rebuild only what they depend on.
 swift_library(
     name = "gpu",
-    srcs = glob([
-        "gpu/*.swift",
-        "gpu/scenes/*.swift",
-        "gpu/scenes27/*.swift",
-        "gpu/x1/*.swift",
-    ]),
+    srcs = GPU_SRCS,
     copts = SWIFT_COPTS,
     module_name = "HWTestGPU",
     deps = [":core"],
+)
+
+swift_library(
+    name = "gpu_decode",
+    srcs = GPU_DECODE_SRCS,
+    copts = SWIFT_COPTS,
+    module_name = "HWTestGPUDecode",
+    deps = [
+        ":core",
+        ":gpu",
+    ],
+)
+
+swift_library(
+    name = "gpu_forms",
+    srcs = GPU_FORMS_SRCS,
+    copts = SWIFT_COPTS,
+    module_name = "HWTestGPUForms",
+    deps = [
+        ":core",
+        ":gpu",
+    ],
+)
+
+swift_library(
+    name = "gpu_models",
+    srcs = GPU_MODELS_SRCS,
+    copts = SWIFT_COPTS,
+    module_name = "HWTestGPUModels",
+    deps = [
+        ":core",
+        ":gpu",
+    ],
+)
+
+swift_library(
+    name = "gpu_scenes",
+    srcs = GPU_SCENES_SRCS,
+    copts = SWIFT_COPTS,
+    module_name = "HWTestScenes",
+    deps = [
+        ":core",
+        ":gpu",
+    ],
+)
+
+swift_library(
+    name = "gpu_x1",
+    srcs = GPU_X1_SRCS,
+    copts = SWIFT_COPTS,
+    module_name = "HWTestX1",
+    deps = [
+        ":core",
+        ":gpu",
+        ":gpu_models",
+    ],
 )
 
 # Every GPU scene on this Mac's GPU against its CPU reference, the shaders compiled from source. Manual: it needs a Mac
@@ -71,6 +147,9 @@ swift_test(
     deps = [
         ":core",
         ":gpu",
+        ":gpu_models",
+        ":gpu_scenes",
+        ":gpu_x1",
     ],
 )
 
@@ -279,6 +358,24 @@ py_test(
     deps = ["//drivers/TegraGM20BMetal:pack"],
 )
 
+# gpu/CACorpus.swift's lines: 21H461's as corpus.log has them, iOS 27's as pack/ca/caspec.py makes them with its tables
+py_test(
+    name = "ca_corpus_test",
+    size = "small",
+    srcs = ["ca_corpus_test.py"],
+    data = [
+        "gpu/CACorpus.swift",
+        "//drivers/TegraGM20BMetal:pack/ca/qc-24B119.json",
+        "//drivers/TegraGM20BMetal:precompile/corpus.log",
+    ],
+    env = {
+        "CA_CORPUS": "$(rootpath //drivers/TegraGM20BMetal:precompile/corpus.log)",
+        "CA_CORPUS_SWIFT": "$(rootpath gpu/CACorpus.swift)",
+        "QC_24B119": "$(rootpath //drivers/TegraGM20BMetal:pack/ca/qc-24B119.json)",
+    },
+    deps = ["//drivers/TegraGM20BMetal:pack"],
+)
+
 py_test(
     name = "ca_states_test",
     size = "small",
@@ -374,6 +471,7 @@ swift_test(
     deps = [
         ":core",
         ":gpu",
+        ":gpu_scenes",
     ],
 )
 
@@ -671,6 +769,7 @@ cc_library(
         "//drivers/TegraGM20B:TegraGM20BHost.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedABI.h",
         "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",
         "//drivers/TegraGM20B:TegraGM20BVolatileABI.h",
         "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
@@ -804,37 +903,284 @@ host_test(
     cxx_std = "c++17",
 )
 
-# Every test every iOS version runs, the runner, the list, the log lines and the run reports. UIKit: built only under an
-# ios_application's transition, never for the host by `bazel build --config=remote //apps/hwtest/...`.
+# Test harness, UI, runner, log lines and bundled resources. UIKit: built only under an ios_application's transition,
+# never for the host by `bazel build --config=remote //apps/hwtest/...`.
 swift_library(
     name = "kit",
-    srcs = glob([
-        "kit/*.swift",
-        "tests/*.swift",
-    ]),
+    srcs = KIT_SRCS,
     copts = SWIFT_COPTS,
     data = [
         ":ca_states_resources",
-        ":scene_goldens_resources",
         ":compressed_assets",
         ":media_resources",
+        ":scene_goldens_resources",
     ],
     module_name = "HWTestKit",
     target_compatible_with = ["@platforms//os:ios"],
     deps = [
+        ":bench_api",
+        ":core",
+        ":gpu",
+    ],
+)
+
+swift_library(
+    name = "kit_shared",
+    srcs = KIT_SHARED_SRCS,
+    copts = SWIFT_COPTS,
+    features = ["swift.enable_testing"],
+    module_name = "HWTestShared",
+    target_compatible_with = ["@platforms//os:ios"],
+    deps = [
+        ":core",
+        ":gpu",
+        ":kit",
+        ":video",
+    ],
+)
+
+swift_library(
+    name = "kit_common",
+    srcs = KIT_COMMON_SRCS,
+    copts = SWIFT_COPTS,
+    features = ["swift.enable_testing"],
+    module_name = "HWTestCommon",
+    target_compatible_with = ["@platforms//os:ios"],
+    deps = [
+        ":core",
+        ":gpu",
+        ":gpu_models",
+        ":kit",
+        ":kit_shared",
+        ":texpeer_pattern",
+    ],
+)
+
+swift_library(
+    name = "tests_depth",
+    srcs = TESTS_DEPTH_SRCS,
+    copts = SWIFT_COPTS,
+    features = ["swift.enable_testing"],
+    module_name = "HWTestDepth",
+    target_compatible_with = ["@platforms//os:ios"],
+    deps = [
+        ":bench_api",
+        ":core",
+        ":gpu",
+        ":gpu_models",
+        ":gpu_scenes",
+        ":gpu_x1",
+        ":kit",
+        ":kit_common",
+        ":kit_shared",
+    ],
+)
+
+swift_library(
+    name = "tests_display",
+    srcs = TESTS_DISPLAY_SRCS,
+    copts = SWIFT_COPTS,
+    features = ["swift.enable_testing"],
+    module_name = "HWTestDisplay",
+    target_compatible_with = ["@platforms//os:ios"],
+    deps = [
+        ":core",
+        ":gpu",
+        ":gpu_scenes",
+        ":kit",
+        ":kit_common",
+        ":kit_shared",
+        ":video",
+    ],
+)
+
+swift_library(
+    name = "tests_forms",
+    srcs = TESTS_FORMS_SRCS,
+    copts = SWIFT_COPTS,
+    features = ["swift.enable_testing"],
+    module_name = "HWTestForms",
+    target_compatible_with = ["@platforms//os:ios"],
+    deps = [
+        ":bench_api",
+        ":core",
+        ":gpu",
+        ":gpu_forms",
+        ":gpu_models",
+        ":kit",
+        ":kit_common",
+    ],
+)
+
+swift_library(
+    name = "tests_metal",
+    srcs = TESTS_METAL_SRCS,
+    copts = SWIFT_COPTS,
+    features = ["swift.enable_testing"],
+    module_name = "HWTestMetal",
+    target_compatible_with = ["@platforms//os:ios"],
+    deps = [
+        ":core",
+        ":gpu",
+        ":gpu_forms",
+        ":kit",
+        ":kit_common",
+        ":kit_shared",
+        ":texpeer_pattern",
+        ":video",
+    ],
+)
+
+swift_library(
+    name = "tests_native",
+    srcs = TESTS_NATIVE_SRCS,
+    copts = SWIFT_COPTS,
+    features = ["swift.enable_testing"],
+    module_name = "HWTestNative",
+    target_compatible_with = ["@platforms//os:ios"],
+    deps = [
+        ":core",
+        ":gpu",
+        ":kit",
+        ":kit_common",
+        ":video",
+    ],
+)
+
+swift_library(
+    name = "tests_paths",
+    srcs = TESTS_PATHS_SRCS,
+    copts = SWIFT_COPTS,
+    features = ["swift.enable_testing"],
+    module_name = "HWTestPaths",
+    target_compatible_with = ["@platforms//os:ios"],
+    deps = [
+        ":core",
+        ":gpu",
+        ":gpu_models",
+        ":kit",
+        ":kit_common",
+        ":kit_shared",
+        ":video",
+    ],
+)
+
+swift_library(
+    name = "tests_recovery",
+    srcs = TESTS_RECOVERY_SRCS,
+    copts = SWIFT_COPTS,
+    features = ["swift.enable_testing"],
+    module_name = "HWTestRecovery",
+    target_compatible_with = ["@platforms//os:ios"],
+    deps = [
+        ":bench_api",
+        ":core",
+        ":gpu",
+        ":gpu_models",
+        ":kit",
+        ":kit_shared",
+    ],
+)
+
+swift_library(
+    name = "tests_shaders",
+    srcs = TESTS_SHADERS_SRCS,
+    copts = SWIFT_COPTS,
+    features = ["swift.enable_testing"],
+    module_name = "HWTestShaders",
+    target_compatible_with = ["@platforms//os:ios"],
+    deps = [
+        ":compiler_probe_api",
+        ":core",
+        ":gpu",
+        ":gpu_models",
+        ":kit",
+        ":kit_shared",
+    ],
+)
+
+swift_library(
+    name = "tests_system",
+    srcs = TESTS_SYSTEM_SRCS,
+    copts = SWIFT_COPTS,
+    features = ["swift.enable_testing"],
+    module_name = "HWTestSystem",
+    target_compatible_with = ["@platforms//os:ios"],
+    deps = [
         ":a64x_probe",
         ":atomics",
-        ":bench_api",
-        ":compiler_probe_api",
         ":core",
         ":cpu_clock",
         ":gpu",
         ":ipi_probe",
+        ":kit",
+        ":kit_common",
+        ":kit_shared",
         ":sched_probe",
-        ":texpeer_pattern",
-        ":video",
         ":workloop_probe",
         "//apps/hwtest/dispatch:sync_handoff",
+    ],
+)
+
+swift_library(
+    name = "tests_textures",
+    srcs = TESTS_TEXTURES_SRCS,
+    copts = SWIFT_COPTS,
+    features = ["swift.enable_testing"],
+    module_name = "HWTestTextures",
+    target_compatible_with = ["@platforms//os:ios"],
+    deps = [
+        ":core",
+        ":gpu",
+        ":gpu_decode",
+        ":gpu_models",
+        ":gpu_x1",
+        ":kit",
+        ":kit_common",
+        ":kit_shared",
+    ],
+)
+
+swift_library(
+    name = "tests_video",
+    srcs = TESTS_VIDEO_SRCS,
+    copts = SWIFT_COPTS,
+    features = ["swift.enable_testing"],
+    module_name = "HWTestVideoTests",
+    target_compatible_with = ["@platforms//os:ios"],
+    deps = [
+        ":core",
+        ":gpu",
+        ":kit",
+        ":kit_common",
+        ":kit_shared",
+        ":video",
+    ],
+)
+
+swift_library(
+    name = "kit_registry",
+    srcs = ["tests/Registry.swift"],
+    copts = SWIFT_COPTS,
+    module_name = "HWTestRegistry",
+    target_compatible_with = ["@platforms//os:ios"],
+    deps = [
+        ":core",
+        ":gpu_scenes",
+        ":kit",
+        ":kit_common",
+        ":kit_shared",
+        ":tests_depth",
+        ":tests_display",
+        ":tests_forms",
+        ":tests_metal",
+        ":tests_native",
+        ":tests_paths",
+        ":tests_recovery",
+        ":tests_shaders",
+        ":tests_system",
+        ":tests_textures",
+        ":tests_video",
     ],
 )
 
@@ -844,20 +1190,47 @@ swift_library(
     copts = SWIFT_COPTS,
     module_name = "SwitchHWTest17",
     target_compatible_with = ["@platforms//os:ios"],
-    deps = [":kit"],
+    deps = [
+        ":kit",
+        ":kit_registry",
+    ],
 )
 
 # iOS 27's own tests: Liquid Glass, QuartzCore 27's glass states, Metal 4, VideoToolbox's frame processors.
 swift_library(
-    name = "app27_lib",
-    srcs = glob(["app27/*.swift"]),
+    name = "app27_tests",
+    srcs = APP27_TESTS_SRCS,
     copts = SWIFT_COPTS,
-    module_name = "SwitchHWTest27",
+    features = ["swift.enable_testing"],
+    module_name = "SwitchHWTest27Tests",
     target_compatible_with = ["@platforms//os:ios"],
     deps = [
         ":core",
         ":gpu",
+        ":gpu_models",
+        ":gpu_scenes",
+        ":gpu_x1",
         ":kit",
+        ":kit_common",
+        ":kit_shared",
+    ],
+)
+
+swift_library(
+    name = "app27_lib",
+    srcs = [
+        "app27/SwitchHWTest27.swift",
+        "app27/Tests27.swift",
+    ],
+    copts = SWIFT_COPTS,
+    module_name = "SwitchHWTest27",
+    target_compatible_with = ["@platforms//os:ios"],
+    deps = [
+        ":app27_tests",
+        ":gpu_scenes",
+        ":kit",
+        ":kit_common",
+        ":kit_registry",
     ],
 )
 

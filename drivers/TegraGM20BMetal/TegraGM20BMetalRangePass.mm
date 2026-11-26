@@ -91,7 +91,7 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
         return true;
     }
     gm20b::PassDesc p;
-    bool shaderTestsDepth = false;
+    bool shaderTestsDepth = false, testsStencil = false;
     for (size_t sub = at; sub == at || (sub < to_ && gm20bContinuesPass(cb, sub)); sub = cb->_plan.encoderEnd(sub)) {
         if (sampledShadows_)
             refresh(sub);
@@ -102,6 +102,7 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
         passStorageMasks(cb, sub, p);
         p.hiddenZeta |= cb->_passes[cb->_plan.legacy(sub).x].testsHiddenZeta;
         shaderTestsDepth |= cb->_passes[cb->_plan.legacy(sub).x].shaderTestsDepth;
+        testsStencil |= cb->_passes[cb->_plan.legacy(sub).x].testsStencil;
     }
     for (unsigned j = 0; j < 8; j++) {
         const SwitchMetalPass::Color &a = pass.color[j];
@@ -174,6 +175,10 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
 #endif
         }
         p.color[j].texture = target != &t->_raw ? target : standIn ? standIn : &t->_raw;
+        if (p.color[j].texture == &t->_raw && t->_raw.nativePlane != ~0u) {
+            if (const gm20b::Texture *native = rc->writeTexture(&t->_raw); native != &t->_raw)
+                p.color[j].texture = const_cast<gm20b::Texture *>(native);
+        }
         if (standIn && t->_raw.rotation) {  // laid out as its planes (TegraGM20BMetalRotated.mm): drawn turned
             levelTargets_[j] = *standIn;
             levelTargets_[j].rotation = t->_raw.rotation;
@@ -244,6 +249,8 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
         p.depthStencil.loaded = pass.depthLoad == MTLLoadActionLoad || pass.stencilLoad == MTLLoadActionLoad;
         p.depthStencil.stored =
             pass.zeta[0].store != MTLStoreActionDontCare || pass.zeta[1].store != MTLStoreActionDontCare;
+        p.depthStencil.depthEnabled = (pass.zetaAspects & 1) != 0;
+        p.depthStencil.stencilEnabled = (pass.zetaAspects & 2) != 0;
         bool loadedLater = false;
         if (whole_) {
             for (size_t k = cb->_plan.encoderEnd(at); k < to_;) {
@@ -266,7 +273,11 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
             separateZeta(pass, z, s, p);
             if (!depth16Zeta(pass, p))
                 return false;
-        } else if (shaderTestsDepth && z->_raw.format == MTLPixelFormatDepth16Unorm && !depth16Tested(pass, p)) {
+        } else if (((z->_raw.format == MTLPixelFormatDepth16Unorm && (shaderTestsDepth || testsStencil)) ||
+                    (z->_raw.format == MTLPixelFormatDepth32Float && testsStencil) ||
+                    (z->_raw.format == MTLPixelFormatDepth32Float_Stencil8 && testsStencil &&
+                     !(pass.zetaAspects & 2))) &&
+                   !depth16Tested(pass, p)) {
             return false;
         }
     }

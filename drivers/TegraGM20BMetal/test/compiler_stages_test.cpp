@@ -5,12 +5,17 @@
 // is compiled once; and the table of which inputs each field reaches, per stage, is the one stated here.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+// ahead of the compiler's headers, which name a Sampler of their own
+#include "../resources.h"
 #include "compiler_stage_cases.h"
 #include "../compiler/compiler_facts.h"
 #include "../compiler/compiler_libraries.h"
 #include "../compiler/compiler_stages.h"
 #include "../TegraGM20BMetalOffline.h"
+#include "../gm20b_cache.h"
 #include "../pack.h"
+#include "../shader_tests.h"
+#include "../view.h"
 
 #include <gtest/gtest.h>
 #include <chrono>
@@ -28,6 +33,7 @@ size_t baseOf(size_t i)
 
 struct Made {
     int32_t result = -1;
+    gm20b::CacheKey key;
     std::string entry, why;
     std::vector<switch_compiler::StageInputs> stages;  // each stage compile asked, in order
     uint64_t stagesMade = 0, translationsMade = 0;
@@ -63,6 +69,7 @@ public:
             ADD_FAILURE() << "not prepared: " << out.why;
             return out;
         }
+        out.key = p.key;
         recording_.asked.clear();
         const uint64_t stages = kept_.kept().entries;
         uint64_t before[2] = {}, after[2] = {};
@@ -226,4 +233,184 @@ TEST_F(CompilerStages, ASystemLibraryIsReadOncePerProcess)
     std::this_thread::sleep_for(std::chrono::seconds(6));
     EXPECT_EQ(cache->library(system, why), first) << "a system library let go";
     EXPECT_NE(cache->library(data, why), firstData) << "a client's data library kept at rest";
+}
+
+TEST_F(CompilerStages, SpecializedComputeFactsPreserveConstants)
+{
+    const std::string bytes = fileBytes(library());
+    ASSERT_FALSE(bytes.empty());
+    std::map<std::string, gm20b::AirHash> hashes;
+    gm20b::metallibAirHashes(reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size(), hashes);
+    ASSERT_TRUE(hashes.count("stages_specialized_kernel"));
+
+    // Constant #0 = -1, #1 = 2, #2 = -1, #3 = 0, #4 = true, #5 = 1 (encoded as type:hex-le-bytes).
+    // Any UAF of newIndexedConstantArray's wrappers corrupts #0/#1 into a large index and trips SlotPastTable.
+    const std::string constants = "#0:29:ffffffff #1:29:02000000 #2:29:ffffffff #3:29:00000000 #4:53:01 #5:29:01000000";
+
+    nmb_keep_translations(0);
+    Compiler compiler(false);
+    gm20b::CompileRequest r;
+    r.kind = gm20b::RequestKind::Facts;
+    gm20b::RequestLibrary l;
+    l.path = kLibrary;
+    l.bytes = bytes;
+    r.libraries.push_back(l);
+    gm20b::RequestStage s;
+    s.tag = "k";
+    s.function = s.name = "stages_specialized_kernel";
+    s.specialized = true;
+    s.constants = constants;
+    r.stages.push_back(s);
+    r.key =
+        gm20b::factsCacheKey(0, gm20b::computeStateKey(hashes["stages_specialized_kernel"], constants, 0, false)).key;
+    for (int round = 0; round < 8; ++round) {
+        std::vector<std::vector<uint8_t>> churn(64, std::vector<uint8_t>(16, 0x22));
+        (void)churn;
+        const Made made = compiler.compile(r);
+        ASSERT_EQ(made.result, TegraGM20BCompileMade) << "round " << round << ": " << made.why;
+    }
+}
+
+namespace {
+
+gm20b::CompileRequest textureKernelRequest(const std::string &bytes, const char *fn, uint64_t format,
+                                           MTLTextureType type, MTLTextureUsage usage, uint8_t addressMap = 0)
+{
+    std::map<std::string, gm20b::AirHash> hashes;
+    gm20b::metallibAirHashes(reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size(), hashes);
+    gm20b::CompileRequest r;
+    r.kind = gm20b::RequestKind::Kernel;
+    gm20b::RequestLibrary l;
+    l.path = kLibrary;
+    l.bytes = bytes;
+    r.libraries.push_back(l);
+    gm20b::RequestStage s;
+    s.tag = "k";
+    s.function = s.name = fn;
+    r.stages.push_back(s);
+    const uint32_t threads[3] = {8, type == MTLTextureTypeTextureBuffer ? 1u : 8u, 1};
+    MTLTextureDescriptor *d = [MTLTextureDescriptor new];
+    d.pixelFormat = MTLPixelFormat(format);
+    d.textureType = type;
+    d.usage = usage;
+    gm20b::KernelDispatch dispatch(threads, {});
+    dispatch.texture(0, d);
+    const NmbDirectDispatch &nd = dispatch.dispatch();
+    memcpy(r.kernel.threads, nd.threads, sizeof r.kernel.threads);
+    r.kernel.textures.assign(nd.textures, nd.textures + nd.textureCount);
+    std::string tex = "0:" + std::to_string(format) + ":" + std::to_string(uint64_t(type)) + ":1:1:02030405";
+    if (addressMap)
+        tex += ":am" + std::to_string(unsigned(addressMap));
+    r.key = "kernel | " + gm20b::computeKey(hashes[fn], "", 0, false, threads, "", tex, "");
+    return r;
+}
+
+uint32_t slotTextureWindow(const Made &made, uint8_t slot)
+{
+    gm20b::ComputeRecord record;
+    std::string refusal;
+    EXPECT_EQ(gm20b::decodeKernelEntry(made.entry, made.key, record, refusal), gm20b::RecordCache::Found::Record)
+        << refusal;
+    for (uint32_t i = 0; i < record.kernel.entries; ++i)
+        if (record.kernel.entry[i].kind == gm20b::KernelTexture && record.kernel.entry[i].slot == slot)
+            return record.kernel.entry[i].window;
+    return 0;
+}
+
+}  // namespace
+
+// A kernel's float read of each stand-in format binds, by the window its record names, the header the dispatch takes
+// under the format's own row (compute.cpp, view.h slotView): BGRA4Unorm and ARGB8Unorm their own; R8Unorm_sRGB and
+// ARGB8Unorm_sRGB their own sRGB headers, which decode as a draw's fetch of them does; the extended-range sRGB twins their
+// codes, which the kernel reads at float precision, not the half stand-in a draw samples
+TEST_F(CompilerStages, StandInFormatKernelReadsBindTheirOwnHeadersOrCodes)
+{
+    const std::string bytes = fileBytes(library());
+    nmb_keep_translations(0);
+    Compiler compiler(false);
+
+    const struct {
+        uint64_t format;
+        uint32_t window;
+        gm20b::SlotView view;
+    } cases[] = {
+        {44, 0x54e24912u, gm20b::SlotView::Own},                             // BGRA4Unorm
+        {84, 0x2b1a4908u, gm20b::SlotView::Own},                             // ARGB8Unorm
+        {85, 0x2b1a4908u | gm20b::kKernelWindowSrgb, gm20b::SlotView::Own},  // ARGB8Unorm_sRGB
+        {11, 0x7012491du | gm20b::kKernelWindowSrgb, gm20b::SlotView::Own},  // R8Unorm_sRGB
+        {553, 0x58d49203u, gm20b::SlotView::Own},                            // BGRA10_XR_sRGB
+        {555, 0x6014920fu, gm20b::SlotView::Own},                            // BGR10_XR_sRGB
+    };
+
+    for (const auto &c : cases) {
+        const gm20b::FormatInfo *f = gm20b::formatInfo(uint32_t(c.format));
+        ASSERT_NE(f, nullptr) << c.format;
+        const Made made = compiler.compile(
+            textureKernelRequest(bytes, "stages_kernel", c.format, MTLTextureType2D, MTLTextureUsageShaderRead));
+        ASSERT_EQ(made.result, TegraGM20BCompileMade) << c.format << ": " << made.why;
+        const uint32_t window = slotTextureWindow(made, 0);
+        EXPECT_EQ(window, c.window) << c.format;
+        EXPECT_EQ(gm20b::slotView(window, f->tic0, f->tic0, f->bpp, false, f->srgb), c.view) << c.format;
+    }
+}
+
+TEST_F(CompilerStages, ExtendedRangeAndYcbcrTexelBuffersCompileDirect)
+{
+    const std::string bytes = fileBytes(library());
+    nmb_keep_translations(0);
+    Compiler compiler(false);
+
+    const struct {
+        const char *fn;
+        uint64_t format;
+        MTLTextureUsage usage;
+        uint8_t addressMap;
+        uint32_t tic0;
+        uint32_t bpp;
+    } cases[] = {
+        {"stages_texel_write", 552, MTLTextureUsageShaderWrite, 0, 0x58d49203u, 8},
+        {"stages_texel_write", 553, MTLTextureUsageShaderWrite, 0, 0x58d49203u, 8},
+        {"stages_texel_write", 554, MTLTextureUsageShaderWrite, 0, 0x6014920fu, 4},
+        {"stages_texel_write", 555, MTLTextureUsageShaderWrite, 0, 0x6014920fu, 4},
+        {"stages_texel_read", 552, MTLTextureUsageShaderRead, 0, 0x58d49203u, 8},
+        {"stages_texel_read", 553, MTLTextureUsageShaderRead, 0, 0x58d49203u, 8},
+        {"stages_texel_read", 554, MTLTextureUsageShaderRead, 0, 0x6014920fu, 4},
+        {"stages_texel_read", 555, MTLTextureUsageShaderRead, 0, 0x6014920fu, 4},
+        {"stages_texel_read", 500, MTLTextureUsageShaderRead, 1, 0x58d7ff83u, 8},
+        {"stages_texel_read", 500, MTLTextureUsageShaderRead, 3, 0x58d24908u, 4},
+        {"stages_texel_read", 503, MTLTextureUsageShaderRead, 0, 0x58d7ff83u, 8},
+        {"stages_texel_read", 540, MTLTextureUsageShaderRead, 3, 0x58d24908u, 4},
+        {"stages_texel_read", 588, MTLTextureUsageShaderRead, 0, 0x58d24909u, 4},
+        {"stages_texel_read", 589, MTLTextureUsageShaderRead, 0, 0x58d24909u, 4},
+    };
+
+    for (const auto &c : cases) {
+        const Made made = compiler.compile(
+            textureKernelRequest(bytes, c.fn, c.format, MTLTextureTypeTextureBuffer, c.usage, c.addressMap));
+        ASSERT_EQ(made.result, TegraGM20BCompileMade) << c.fn << " fmt " << c.format << ": " << made.why;
+        const uint32_t window = slotTextureWindow(made, 0);
+        EXPECT_EQ(window, c.tic0) << c.fn << " fmt " << c.format;
+        EXPECT_EQ(gm20b::slotView(window, c.tic0, c.tic0, c.bpp, false), gm20b::SlotView::Own)
+            << c.fn << " fmt " << c.format;
+    }
+}
+
+TEST_F(CompilerStages, FetchDepthOnlyStencilWriteCompilesWithShaderStencilTest)
+{
+    nmb_keep_translations(0);
+    Compiler compiler(false);
+    const std::string fetchDiscard = " | f stages_fetch_discard_fragment lib=" + std::string(kLibrary);
+    for (const char *ds : {"ds=252/0", "ds=250/0"}) {
+        const std::string line =
+            state(std::string("samples=1 topo=0 ") + ds, "c0=80:15:0:1:0:0:1:0:0", kAttributes, fetchDiscard) +
+            " | tests=4";
+        const Made made = compiler.render(line);
+        ASSERT_EQ(made.result, TegraGM20BCompileMade) << ds << ": " << made.why;
+        gm20b::RuntimeRecord record;
+        std::string refusal;
+        ASSERT_EQ(gm20b::decodeEntry(made.entry, made.key, record, refusal), gm20b::RecordCache::Found::Record)
+            << ds << ": " << refusal;
+        EXPECT_EQ(record.pipeline.shaderTests.flags, gm20b::kShaderTestDepth | gm20b::kShaderTestStencil) << ds;
+        EXPECT_EQ(record.pipeline.storageTests, 4u) << ds;
+    }
 }

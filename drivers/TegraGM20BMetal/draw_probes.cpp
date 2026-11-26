@@ -88,8 +88,10 @@ void RenderEncoder::probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t p
         drawn.probeGeneration = generation;
         drawn.probeLines = drawn.probeThinLines = 0;
     }
-    const uint8_t anyLines = bound.fillState ? 4 : 0, thinLines = bound.fillState ? 12 : 4;
-    if ((drawn.probeLines >= anyLines && drawn.probeThinLines >= thinLines) || (!bound.fillState && !keylineArmed()))
+    const bool fillState = __atomic_load_n(&bound.fillState, __ATOMIC_RELAXED);
+    const char *caName = __atomic_load_n(&bound.caName, __ATOMIC_ACQUIRE);
+    const uint8_t anyLines = fillState ? 4 : 0, thinLines = fillState ? 12 : 4;
+    if ((drawn.probeLines >= anyLines && drawn.probeThinLines >= thinLines) || (!fillState && !keylineArmed()))
         return;
     const Device &d = *dev_;
     const PackPipeline &rec = *drawn.rec;
@@ -122,11 +124,12 @@ void RenderEncoder::probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t p
         drawn.probeThinLines++;
     else
         return;
-    if (!bound.fillState && gKeylineLines.fetch_sub(1, std::memory_order_relaxed) <= 0)
+    if (!fillState && gKeylineLines.fetch_sub(1, std::memory_order_relaxed) <= 0)
         return;
+    const Pipeline *barrierTwin = __atomic_load_n(&bound.barrierTwin, __ATOMIC_ACQUIRE);
     const char *form = drawn.splitOf                     ? "split"
                        : drawn.storageBits               ? "storage"
-                       : &drawn == bound.barrierTwin     ? "barrier"
+                       : &drawn == barrierTwin           ? "barrier"
                        : rec.flags & PipelineBarrierForm ? "barrier-record"
                                                          : "whole";
     char attachments[8 * 48] = "-";
@@ -158,7 +161,7 @@ void RenderEncoder::probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t p
            "write %02x read %02x storage %02x storewrite %02x att %{public}s samples %{public}s left %{public}s box "
            "%u,%u-%u,%u draw %u/%u%{public}s quads %u thin %u first %.2f,%.2f-%.2f,%.2f thinquad %u "
            "%.2f,%.2f-%.2f,%.2f colour %{public}s",
-           bound.caName, (unsigned long long)rec.keyHash, int(bound.fillState), form,
+           caName ? caName : "-", (unsigned long long)rec.keyHash, int(fillState), form,
            kStorageFallbackNames[size_t(storageFallback(bound))],
            fetchesOwnColor(drawn.fetchBits, drawn.writeBits, drawn.storageBits), drawn.fetchBits, drawn.writeBits,
            drawn.readBits, drawn.storageBits, drawn.storageWriteBits, attachments, sampled, left, limit.x0, limit.y0,
@@ -173,9 +176,11 @@ void RenderEncoder::probeDraw(const Pipeline &bound, Pipeline &drawn, uint32_t p
 void RenderEncoder::probeGlassDraw(const Pipeline &bound, const Pipeline &drawn, const PixelBox &limit)
 {
     const PackPipeline &rec = *drawn.rec;
+    const Pipeline *barrierTwin = __atomic_load_n(&bound.barrierTwin, __ATOMIC_ACQUIRE);
+    const char *caName = __atomic_load_n(&bound.caName, __ATOMIC_ACQUIRE);
     const char *form = drawn.splitOf                     ? "split"
                        : drawn.storageBits               ? "storage"
-                       : &drawn == bound.barrierTwin     ? "barrier"
+                       : &drawn == barrierTwin           ? "barrier"
                        : rec.flags & PipelineBarrierForm ? "barrier-record"
                                                          : "whole";
     char attachments[8 * 48] = "-", sampled[16 * 56] = "-", uniforms[8 * 32] = "-";
@@ -205,13 +210,13 @@ void RenderEncoder::probeGlassDraw(const Pipeline &bound, const Pipeline &drawn,
             at += std::min(sizeof uniforms - at - 1, size_t(std::max(n, 0)));
         }
     char taps[160] = "";
-    if (glassProbeBlurState(bound.caName)) {
+    if (glassProbeBlurState(caName)) {
         const Bound &u = bufs_[2][1];
         taps[0] = ' ';
         glassProbeTaps(taps + 1, sizeof taps - 1, u.cpu, u.size);
     }
     char line[1000];
-    snprintf(line, sizeof line, "%s k%016llx %s att %s tex %s uni %s box %u,%u-%u,%u%s", bound.caName,
+    snprintf(line, sizeof line, "%s k%016llx %s att %s tex %s uni %s box %u,%u-%u,%u%s", caName ? caName : "-",
              (unsigned long long)rec.keyHash, form, attachments, sampled, uniforms, limit.x0, limit.y0, limit.x1,
              limit.y1, taps);
     if (!glassProbeFirst(cb_, line) || gGlassProbeLines.fetch_sub(1, std::memory_order_relaxed) <= 0)
@@ -269,7 +274,8 @@ void RenderEncoder::glassMemSample(const Pipeline &bound, const Pipeline &drawn)
                 uint8_t((t.arena ? kGlassMemHeap : 0) | (t.blockLinear ? 0 : kGlassMemPitch) |
                         (compressed ? kGlassMemCompressed : 0) | (unread || !image.height ? kGlassMemUnsampled : 0));
             it.unread = unread ? unread : image.height ? 0 : 'o';
-            const int index = dev_->glassMem->sampled(it, bound.caName, t.tic, header, dev_->commitCount_);
+            const int index = dev_->glassMem->sampled(it, __atomic_load_n(&bound.caName, __ATOMIC_ACQUIRE), t.tic,
+                                                      header, dev_->commitCount_);
             if (index >= 0) {
                 cb_->glassMemImages_[index] = image;
                 cb_->glassMemSources_[index] = &t;

@@ -16,7 +16,7 @@ struct tgm_vm;
 struct switch_gpu_mapping;
 
 inline constexpr char kSwitchGpuPackMagic[8] = {'G', 'M', '2', '0', 'B', 'P', 'K', '1'};
-inline constexpr uint32_t kSwitchGpuPackVersion = 33u;
+inline constexpr uint32_t kSwitchGpuPackVersion = 34u;
 inline constexpr uint64_t kSwitchGpuPackTierAlign = 128ULL << 10;
 inline constexpr uint32_t kSwitchGpuPackChunkPages = uint32_t(kSwitchGpuPackTierAlign >> 12);
 inline constexpr uint64_t kSwitchGpuPackTransferBytes = 1ULL << 20;
@@ -40,7 +40,8 @@ enum SwitchGpuPackSectionId : uint32_t {
 	kSwitchGpuPackComputeStates = 13,
 	kSwitchGpuPackReflections = 14,
 	kSwitchGpuPackFastKeys = 15,
-	kSwitchGpuPackSectionCount = 16,
+	kSwitchGpuPackSegments = 16,
+	kSwitchGpuPackSectionCount = 17,
 };
 
 struct __attribute__((packed)) SwitchGpuPackSection {
@@ -57,11 +58,11 @@ struct __attribute__((packed)) SwitchGpuPackHeader {
 	SwitchGpuPackSection section[kSwitchGpuPackSectionCount];
 	uint64_t stack;
 	uint32_t chipFacts;
-	uint32_t reserved;
+	uint32_t tier0SlmPerWarp;
 	uint64_t tier0[kSwitchGpuPackSectionCount];
 };
 
-static_assert(sizeof(SwitchGpuPackHeader) == 424, "v33 PackHeader size");
+static_assert(sizeof(SwitchGpuPackHeader) == 448, "v34 PackHeader size");
 
 enum class SwitchGpuPackState : uint32_t {
 	None = 0,
@@ -189,6 +190,7 @@ struct SwitchGpuPackClient {
 	uint64_t gpuBytes;
 	IOMemoryDescriptor *cpuWired[TegraGM20BMaxPackCpuRanges];
 	uint32_t cpuWiredCount;
+	uint64_t cpuWiredBytes;
 };
 
 struct SwitchGpuPackImageView {

@@ -38,6 +38,7 @@ int tgm_chan_announced(struct tgm_chan *chan, uint32_t seqno)
 }
 
 struct switch_gpu_chan_table tgm_chan_table;
+struct switch_gpu_live_dir tgm_live_dir;
 
 #include "SwitchGpuChannelCompletion.h"
 
@@ -267,8 +268,18 @@ static int chan_new(struct tgm_vm *vm, const void *vm_owner, volatile uint32_t *
 		goto fail;
 	}
 	list_add_tail(&chan->live, &tgm_live_chans);
+	{
+		const uintptr_t base = (uintptr_t)tgm_fence_pages.va;
+		const uintptr_t ptr = (uintptr_t)chan->fence_cpu;
+		const u32 fence_offset = base && ptr >= base && ptr - base < TGM_FENCE_BYTES
+						 ? (u32)(ptr - base)
+						 : SWITCH_GPU_LIVE_NO_FENCE;
+
+		switch_gpu_live_dir_set(&tgm_live_dir, chan->chid, chan->id, fence_offset,
+					chan->vm);
+	}
 	switch_gpu_busy_open(&tgm_busy, chan->chid, chan->submitted);
-	switch_gpu_busy_level(&tgm_busy, chan->chid, 1);
+	switch_gpu_busy_level(&tgm_busy, chan->chid, !chan->high);
 	switch_gpu_chan_table_set(&tgm_chan_table, chan->chid, chan);
 	tgm_fault_publish(chan);
 	mutex_unlock(&tgm_live_lock);
@@ -377,6 +388,7 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	switch_gpu_busy_close(&tgm_busy, chan->chid);
 	mutex_lock(&tgm_live_lock);
 	list_del(&chan->live);
+	switch_gpu_live_dir_clear(&tgm_live_dir, chan->chid);
 	mutex_unlock(&tgm_live_lock);
 	switch_gpu_chan_table_set(&tgm_chan_table, chan->chid, NULL);
 	nvxnu_pass_barrier();

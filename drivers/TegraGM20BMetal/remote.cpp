@@ -64,6 +64,8 @@ void Remote::refresh(const TegraGM20BAbiCompilerInfoReply &info)
     if (info.flags & (TegraGM20BCompilerExpected | TegraGM20BCompilerRegistered))
         expected_.store(true, std::memory_order_release);
     declined_.store(info.flags & TegraGM20BCompilerDeclined, std::memory_order_release);
+    if (info.flags & TegraGM20BCompilerLibraries)
+        librariesSupported_.store(true, std::memory_order_release);
     if ((info.flags & TegraGM20BCompilerStore) && info.stack == stack_)
         map(info.generation);
 }
@@ -367,6 +369,28 @@ bool Remote::waitAsync(uint64_t cookie)
             return pending_.upper_bound(skipThrough) != pending_.end() || pending_.begin()->first != snapshotHead;
         });
     }
+}
+
+uint64_t Remote::registerLibrary(const void *bytes, size_t size, const Digest &digest)
+{
+    if (!bytes || !size || size > TegraGM20BCompileRequestLimit || !capable() ||
+        !librariesSupported_.load(std::memory_order_acquire))
+        return 0;
+    const RegisteredLibrary key{bytes, size, digest};
+    std::lock_guard<gm20b::Mutex> l(libraryLock_);
+    if (const auto found = registeredLibraries_.find(key); found != registeredLibraries_.end())
+        return found->second;
+    const TegraGM20BAbiCompilerRegisterLibrary in = {uint64_t(uintptr_t(bytes)), size, 0, 0};
+    TegraGM20BAbiCompilerRegisterLibraryReply reply = {};
+    const int called = call(TegraGM20BMethodCompilerRegisterLibrary, &in, sizeof in, &reply, sizeof reply);
+    if (called == kIOReturnUnsupported) {
+        librariesSupported_.store(false, std::memory_order_release);
+        return 0;
+    }
+    if (called != kIOReturnSuccess || !reply.id)
+        return 0;
+    registeredLibraries_.emplace(key, reply.id);
+    return reply.id;
 }
 
 bool Remote::ask(Held &&held)

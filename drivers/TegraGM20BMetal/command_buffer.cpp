@@ -143,6 +143,7 @@ CommandBuffer *Device::begin()
     cb.notSubmitted = nullptr;
     cb.setRefused.clear();
     cb.nativeReads_.clear();
+    cb.nativeWrites_.clear();
     cb.nativeSurfaces_.clear();
     cb.pitchImports_.clear();
     overflowing_ = false;
@@ -301,6 +302,8 @@ void CommandBuffer::describeRefusal(char *line, size_t size) const
         snprintf(line, size, "%s", setRefused.c_str());
     else if (kernelResult)
         snprintf(line, size, "the kernel refused its job (0x%x)", unsigned(kernelResult));
+    else if (nativeError)
+        snprintf(line, size, "a view of a surface's own planes was not made (0x%x)", unsigned(nativeError));
     else
         snprintf(line, size, "%s", notSubmitted ? notSubmitted : "nothing named why");
 }

@@ -596,6 +596,59 @@ TEST_F(DeviceFetch, ConvexTwoTriangleQuadElidesIntraDrawBarrierAndDisjointQuadsE
     EXPECT_EQ(jobMethods().count(NVB197_PIXEL_SHADER_BARRIER), 1u);
 }
 
+TEST_F(DeviceFetch, CompressedTargetElidesInterDrawBarrierOnlyAcrossDisjointTiles)
+{
+    gm20b::RuntimeRecord r = fetchingRecord(0xca02, false);
+    r.keyString = "samples=1 c0=70:15:0 ds=0/0 a0=31:0:0:16:1:1 ";
+    r.pipeline.vertexSlot = 0;
+    r.pipeline.vertexStride = 16;
+    r.blob = {0x1a00, 0x1111, 0x1c00, (1u << 12) | 16};
+    std::string why;
+    gm20b::Pipeline *pl = dev.addRecord(r, true, why);
+    ASSERT_NE(pl, nullptr) << why;
+
+    const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    // 64x64 target: quadA [0, 16]^2 (tile 0,0), quadSameTile [20, 28]^2 (tile 0,0), quadFarTile [36, 48]^2 (tile 1,1).
+    const float quadA[16] = {-1.0f, 1.0f, 0, 1, -0.5f, 1.0f, 0, 1, -1.0f, 0.5f, 0, 1, -0.5f, 0.5f, 0, 1};
+    const float quadSameTile[16] = {-0.375f, 0.375f, 0, 1, -0.125f, 0.375f, 0, 1,
+                                    -0.375f, 0.125f, 0, 1, -0.125f, 0.125f, 0, 1};
+    const float quadFarTile[16] = {0.125f, -0.125f, 0, 1, 0.5f, -0.125f, 0, 1, 0.125f, -0.5f, 0, 1, 0.5f, -0.5f, 0, 1};
+
+    const auto drawPair = [&](gm20b::Texture &dest, const float second[16]) {
+        into = &dest;
+        const Drawn d = drawOnce(pl, [&](gm20b::RenderEncoder &e, const char **w) {
+            e.setBytes(1, 2, identity, sizeof identity);
+            e.setBytes(1, 0, quadA, sizeof quadA);
+            if (!e.draw(kStrip, 0, 4, 1, 0, w))
+                return false;
+            e.setBytes(1, 0, second, 16 * sizeof(float));
+            return e.draw(kStrip, 0, 4, 1, 0, w);
+        });
+        into = &target;
+        return d;
+    };
+
+    const Drawn plainSameTile = drawPair(target, quadSameTile);
+    EXPECT_TRUE(plainSameTile.ok) << plainSameTile.why;
+    EXPECT_EQ(plainSameTile.split, 0u);
+    EXPECT_EQ(jobMethods().count(NVB197_PIXEL_SHADER_BARRIER), 0u);
+
+    gm20b::Texture compressed = target;
+    compressed.comptags = true;
+
+    const Drawn compSameTile = drawPair(compressed, quadSameTile);
+    EXPECT_TRUE(compSameTile.ok) << compSameTile.why;
+    EXPECT_EQ(compSameTile.split, 2u);
+    EXPECT_EQ(jobMethods().count(NVB197_PIXEL_SHADER_BARRIER), 1u);
+
+    const uint64_t elidedBefore = dev.stats.fetchBarriersElided.load();
+    const Drawn compDisjointTile = drawPair(compressed, quadFarTile);
+    EXPECT_TRUE(compDisjointTile.ok) << compDisjointTile.why;
+    EXPECT_EQ(compDisjointTile.split, 2u);
+    EXPECT_EQ(jobMethods().count(NVB197_PIXEL_SHADER_BARRIER), 0u);
+    EXPECT_EQ(dev.stats.fetchBarriersElided.load(), elidedBefore + 1u);
+}
+
 TEST_F(DeviceFetch, FetchBarrierUsesSysmemBarOnlyForDirectVolatilePitchTargets)
 {
     gm20b::Pipeline *pl = pipeline(false);

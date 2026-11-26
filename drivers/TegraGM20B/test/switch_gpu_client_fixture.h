@@ -543,6 +543,18 @@ public:
 		 retirementStopped_ = 0;
 	uint64_t retirementEpoch_ = 0, retireScanEpoch_ = 0, pool_bytes_ = 0, control_bytes_ = 0,
 		 smmu_compressible_bytes_ = 0;
+	uint64_t bindGen_ = 1, boGen_ = 1;
+
+	void bumpBindGen()
+	{
+		__atomic_add_fetch(&bindGen_, 1u, __ATOMIC_RELEASE);
+	}
+
+	void bumpBoGen()
+	{
+		__atomic_add_fetch(&boGen_, 1u, __ATOMIC_RELEASE);
+	}
+
 	SwitchGpuOwnerMemory ownerMemory_ = {};
 	Binding binds_[256] = {};
 	uint32_t nbinds_ = 0;

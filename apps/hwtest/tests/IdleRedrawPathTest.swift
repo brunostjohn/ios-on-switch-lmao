@@ -1,6 +1,8 @@
 import Foundation
+import HWTestCommon
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// 22 Nov, boot B: an idle second gave the Metal driver's pooled memory back and the first frame after every pause

@@ -34,6 +34,7 @@
 #include "TegraGM20BReadback.h"
 #include "TegraGM20BRegDumpABI.h"
 #include "TegraGM20BCopyResetABI.h"
+#include "TegraGM20BSchedABI.h"
 #include "TegraGM20BSchedPolicy.h"
 #include "TegraGM20BSharedWiring.h"
 #include "SwitchGpuPin.h"
@@ -66,6 +67,7 @@
 #include "SwitchGpuFenceRecord.h"
 #include "SwitchGpuJobStats.h"
 #include "SwitchGpuPackImage.h"
+#include "SwitchGpuUseCache.h"
 
 #include "SwitchGpuSurfaceGeometry.h"
 #include "shim/include/switch_tiled_cache.h"
@@ -200,11 +202,14 @@ struct OwnerStat {
 struct SparePool {
 	IOLock *lock;
 	thread_call_t call;
+	thread_call_t recycleCall;
+	thread_call_t reclaimCall;
 	Spare *dirty;         // freed, not yet zeroed
 	PoolZero *poolDirty;  // freed pool BOs, not yet zeroed
 	Spare *ready
 		[kClasses];  // zeroed and clean, by class (classUp(bytes) <= class of a spare's bytes)
-	uint16_t count[kClasses], target[kClasses], zeroing[kClasses];
+	// by class: ready, the depth kept, on the copy engine, on the dirty list
+	uint16_t count[kClasses], target[kClasses], zeroing[kClasses], dirtyCount[kClasses];
 	uint64_t clean, dirtyBytes, cleaningBytes,
 		poolZeroing;  // bytes ready, freed and waiting, pool bytes waiting
 	// a copy-engine fill failed: no spare is made until the next BoAlloc asks
@@ -217,7 +222,7 @@ struct SparePool {
 
 void cleanZeros(void *va, uint64_t bytes);
 SparePool *spares();
-Spare *spareTake(uint64_t bytes);
+Spare *spareTake(uint64_t bytes, bool critical = false);
 void spareIneligible();
 bool spareKeep(const SwitchGpuCachedBuffer &buffer, uint64_t *pas, uint64_t bytes,
 	       switch_gpu_cached_mapping *mapping = nullptr);
@@ -301,8 +306,11 @@ struct SwitchGpuJobRecord;
 
 extern "C" int switch_native_surface_gpu_acquire(void *, switch_gpu_native_surface_view *)
 	__attribute__((weak));
+extern "C" int switch_native_surface_gpu_acquire_write(void *, switch_gpu_native_surface_view *)
+	__attribute__((weak));
 extern "C" void switch_native_surface_gpu_release(switch_gpu_native_surface_view *)
 	__attribute__((weak));
+extern "C" void switch_native_surface_gpu_written(void *) __attribute__((weak));
 
 // IOGPUFamily's marker of a UI-critical GPU client, which no GPU restart kills (the same string in 21H461's and
 // 24B119's): backboardd; on 24B119 SpringBoard and the WidgetRenderer apps too
@@ -365,6 +373,9 @@ class AGXDeviceUserClient : public IOUserClient
 		bool parkedReadOnly;
 		bool reclaimDeferred;
 		SwitchGpuParkState parkState;
+		// The thread moving it through Parking, Unparking or Reclaiming, which its waiters push; &parkOwner is
+		// their event (parkWaitStableLocked, parkSettledLocked)
+		SwitchGpuThreadRef parkOwner;
 		uint64_t parkedVa;
 		uint64_t reclaimSeq;
 		switch_gpu_backing *parkedBacking;
@@ -449,9 +460,11 @@ class AGXDeviceUserClient : public IOUserClient
 		switch_gpu_cpu_lease **leases;
 		tgm_coh **
 			written;  // the listed uses' imports a job writes, as its uses resolved them
+		void **nativeWritten;
 		uint32_t capacity;
 		SwitchGpuEventJob *events;
 		SubmitPhases phases;
+		SwitchGpuUseCache<KernelMemory> useCache;
 	};
 
 	SwitchGpuEventClient events_;
@@ -507,7 +520,6 @@ class AGXDeviceUserClient : public IOUserClient
 	Left left_ = {};  // lock_: for releaseCall_
 	uint32_t reclaimDeferredCount_ = 0;
 	uint64_t reclaimSeq_ = 0;
-	uint32_t parkWait_ = 0;
 	thread_call_t releaseCall_ = nullptr;
 	RetiredBinding *retired_ = nullptr, **retiredTail_ = &retired_, *unmapping_ = nullptr;
 	// a retired binding's PTEs go under it (retireBatch, takeRetiredOverlaps)
@@ -544,6 +556,7 @@ class AGXDeviceUserClient : public IOUserClient
 	uint32_t nbinds_ = 0, cap_binds_ = 0;
 	uint64_t next_handle_ = 1;
 	uint32_t next_token_ = 1;
+	uint64_t bindGen_ = 1, boGen_ = 1;
 	bool counted_ = false;
 	char owner_[17] = {};  // the opening process
 	int32_t ownerPid_ = 0;
@@ -608,6 +621,17 @@ class AGXDeviceUserClient : public IOUserClient
 	void pushWakes();
 	void unbindOverlaps(uint64_t va, uint64_t range, Bo *only);
 	void publishBindings(BindingTable::Snapshot *made);
+
+	void bumpBindGen()
+	{
+		__atomic_add_fetch(&bindGen_, 1u, __ATOMIC_RELEASE);
+	}
+
+	void bumpBoGen()
+	{
+		__atomic_add_fetch(&boGen_, 1u, __ATOMIC_RELEASE);
+	}
+
 	bool passSubmitters(bool wait);
 	void dropLeft(const Left &left);
 	void keepLeft(const Left &left);
@@ -660,6 +684,7 @@ class AGXDeviceUserClient : public IOUserClient
 	void drainDeferredReclaims(uint64_t upToSeq);
 	void releaseReclaimedList(ReclaimedBacking *list);
 	void parkUnlinkAllLocked();
+	void parkSettledLocked(Bo *bo);
 	void drainParkedRanges();
 	Bo **findLink(uint64_t handle);
 	IOReturn freeBo(Bo **p);
@@ -682,7 +707,7 @@ class AGXDeviceUserClient : public IOUserClient
 	IOReturn surfaceLayoutInfo(const TegraGM20BAbiSurfaceLayout *in,
 				   TegraGM20BAbiSurfaceLayoutInfo *out, bool canonical);
 	void applyLevel(bool allChannels = true);
-	IOReturn setPriority(const TegraGM20BAbiPriority &asked);
+	IOReturn setPriority(const TegraGM20BAbiPriority &asked, TegraGM20BAbiPriorityReply *reply);
 	IOReturn resourceSetCreate(const TegraGM20BAbiResourceSetCreate *in,
 				   TegraGM20BAbiResourceSetCreateReply *out);
 	IOReturn attachSet(const TegraGM20BAbiResourceSetCreate *in, TegraGM20BAbiSurfaceUse *uses,

@@ -29,14 +29,16 @@ static std::atomic<size_t> gRecordingBytes{0};
 
 static void swapRecording(SwitchMetalCommandBuffer *b, SwitchMetalRecording &r)
 {
-    std::swap(b->_plan, r.plan);
+    b->_plan.swapClean(r.plan);
     b->_passes.swap(r.passes);
-    std::swap(b->_bytes, r.bytes);
+    b->_bytes.chunks.swap(r.bytes.chunks);
+    std::swap(b->_bytes.at, r.bytes.at);
+    std::swap(b->_bytes.used, r.bytes.used);
     b->_retirements.swap(r.retirements);
     b->_shadow.swap(r.shadow);
     b->_extra.swap(r.extra);
     b->_owners.swap(r.owners);
-    std::swap(b->_ownerKeys, r.ownerKeys);
+    b->_ownerKeys.swap(r.ownerKeys);
     b->_passCache.swap(r.passCache);
 }
 
@@ -214,6 +216,7 @@ void gm20bRecordingDone(SwitchMetalCommandBuffer *b)
              gm20bPassCacheBytes(b->_passCache.get());
     if (bytes > kKeptBytes) {
         SWITCH_METAL_RECORDING_COUNT(gRecordingDropsLarge);
+        b->_plan.clear();
         SwitchMetalRecording dropped;
         swapRecording(b, dropped);
         dropBytes(dropped.bytes);
@@ -225,14 +228,15 @@ void gm20bRecordingDone(SwitchMetalCommandBuffer *b)
     if (!r) {
         SWITCH_METAL_RECORDING_COUNT(*(fits ? &gRecordingDropsSlots : &gRecordingDropsTotal));
         gRecordingBytes.fetch_sub(bytes, std::memory_order_relaxed);
+        b->_plan.clear();
         SwitchMetalRecording dropped;
         swapRecording(b, dropped);
         dropBytes(dropped.bytes);
         return;
     }
+    b->_plan.clear();
     swapRecording(b, *r);
     r->kept = bytes;
-    r->plan.clear();
     r->passes.clear();
     r->bytes.at = 0;
     r->bytes.used = 0;

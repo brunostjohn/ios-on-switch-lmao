@@ -135,6 +135,17 @@ host_test(
 )
 
 host_test(
+    name = "sd_pipeline_test",
+    srcs = [
+        "sd_pipeline_test.cpp",
+        "//drivers/NativeSwitchBlock:SwitchAdma.h",
+        "//drivers/NativeSwitchBlock:SwitchSdBus.h",
+        "//drivers/NativeSwitchBlock:SwitchSdCard.h",
+        "//drivers/NativeSwitchBlock:SwitchSdPipeline.h",
+    ],
+)
+
+host_test(
     name = "cryptex_map_test",
     size = "medium",
     srcs = [
@@ -152,6 +163,25 @@ host_test(
         "//drivers/NativeSwitchBlock:SwitchCryptexCache.h",
     ],
     copts = ["-O1"],
+)
+
+# The same cache as a release kernel compiles it (its stats compiled out), less the two cases that count those stats.
+host_test(
+    name = "cryptex_cache_release_test",
+    srcs = [
+        "cryptex_cache_test.cpp",
+        "//drivers/NativeSwitchBlock:SwitchCryptexCache.h",
+    ],
+    args = ["--gtest_filter=-CryptexCache.AColdMissReadsItsWholeWindowOnceAndNeighboursWaitForIt:" +
+            "CryptexCache.ReadAheadReadsExactlyItsBlocksAndRequestsFindThem"],
+    copts = [
+        "-O1",
+        "-UDEVELOPMENT",
+        "-DDEVELOPMENT=0",
+        "-UDEBUG",
+        "-DDEBUG=0",
+    ],
+    defines = ["KERNEL"],
 )
 
 # --- Source guards: what the drivers (not built for the host) do with the engines above --------------------------------

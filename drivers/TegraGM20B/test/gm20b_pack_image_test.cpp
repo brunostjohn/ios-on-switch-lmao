@@ -756,6 +756,7 @@ TEST_F(PackImageTest, PackHeaderAndAbiLayoutMatchMetalPackH)
 	static_assert(uint32_t(kSwitchGpuPackHeap) == uint32_t(gm20b::PackHeap));
 	static_assert(uint32_t(kSwitchGpuPackVariants) == uint32_t(gm20b::PackVariants));
 	static_assert(uint32_t(kSwitchGpuPackFastKeys) == uint32_t(gm20b::PackFastKeys));
+	static_assert(uint32_t(kSwitchGpuPackSegments) == uint32_t(gm20b::PackSegments));
 	static_assert(offsetof(SwitchGpuPackHeader, magic) == offsetof(gm20b::PackHeader, magic));
 	static_assert(offsetof(SwitchGpuPackHeader, version) ==
 		      offsetof(gm20b::PackHeader, version));
@@ -770,8 +771,8 @@ TEST_F(PackImageTest, PackHeaderAndAbiLayoutMatchMetalPackH)
 	static_assert(offsetof(SwitchGpuPackHeader, stack) == offsetof(gm20b::PackHeader, stack));
 	static_assert(offsetof(SwitchGpuPackHeader, chipFacts) ==
 		      offsetof(gm20b::PackHeader, chipFacts));
-	static_assert(offsetof(SwitchGpuPackHeader, reserved) ==
-		      offsetof(gm20b::PackHeader, reserved));
+	static_assert(offsetof(SwitchGpuPackHeader, tier0SlmPerWarp) ==
+		      offsetof(gm20b::PackHeader, tier0SlmPerWarp));
 	static_assert(offsetof(SwitchGpuPackHeader, tier0) == offsetof(gm20b::PackHeader, tier0));
 
 	EXPECT_EQ(TGM_PACK_WINDOW_VA, (1ULL << 39) - (4ULL << 30));
@@ -1142,4 +1143,26 @@ TEST_F(PackImageTest, PackImageMapDoesNotMapKernelMemoryIntoClientTasks)
 					 "\nvoid AGXDeviceUserClient::releaseMappings()");
 	EXPECT_THAT(body, Not(HasSubstr("createMappingInTask")));
 	EXPECT_THAT(body, HasSubstr("out->cpu_address = 0;"));
+}
+
+TEST_F(PackImageTest, CpuWireBudgetIsEnforcedSystemWideAcrossClients)
+{
+	TegraGM20BAbiPackCpuRange range = {0x10000000ULL, 40ULL << 20};
+	SwitchGpuPackClient a = {}, b = {};
+	uint64_t wiredA = 0, wiredB = 0;
+	ASSERT_EQ(switch_gpu_pack_client_wire_cpu(task_t(0x11), &range, 1, a.cpuWired, &wiredA),
+		  kIOReturnSuccess);
+	a.cpuWiredCount = 1;
+	a.cpuWiredBytes = wiredA;
+	EXPECT_EQ(wiredA, 40ULL << 20);
+
+	EXPECT_EQ(switch_gpu_pack_client_wire_cpu(task_t(0x22), &range, 1, b.cpuWired, &wiredB),
+		  kIOReturnNoResources);
+
+	switch_gpu_pack_client_release_cpu(&a);
+	ASSERT_EQ(switch_gpu_pack_client_wire_cpu(task_t(0x22), &range, 1, b.cpuWired, &wiredB),
+		  kIOReturnSuccess);
+	b.cpuWiredCount = 1;
+	b.cpuWiredBytes = wiredB;
+	switch_gpu_pack_client_release_cpu(&b);
 }

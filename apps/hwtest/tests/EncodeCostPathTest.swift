@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// The raw encode's CPU cost of a command buffer shaped as Core Animation's (encode_profile.h, debug builds):

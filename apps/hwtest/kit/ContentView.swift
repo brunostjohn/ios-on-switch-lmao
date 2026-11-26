@@ -138,7 +138,7 @@ struct TestRowView: View {
 
     @ViewBuilder var badge: some View {
         if row.running {
-            ProgressView()
+            Text("RUN").font(.caption2.bold().monospaced()).foregroundStyle(.secondary)
         } else if let verdict = row.record?.outcome.verdict {
             Text(verdict.rawValue)
                 .font(.caption.bold().monospaced())

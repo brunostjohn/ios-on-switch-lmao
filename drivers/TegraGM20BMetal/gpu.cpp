@@ -523,11 +523,26 @@ bool Device::init(std::string &err)
         }
     }
     constexprMappedCount_ = constexprCount_;
+    const uint32_t initCount = uint32_t(pack_.bytes(PackInit) / sizeof(PackInitMethod));
+    const PackInitMethod *im = pack_.section<PackInitMethod>(PackInit);
+    for (uint32_t i = 0; i < initCount; i++) {
+        if (im[i].subc == 0 && im[i].mthd >= 0x1e04 && im[i].mthd <= 0x1e18) {
+            const uint32_t idx = (im[i].mthd - 0x1e04) / 4;
+            blendPerTarget_[idx] = im[i].data;
+            blendPerTargetSeen_ |= uint8_t(1u << idx);
+        }
+    }
     // SET_CT_WRITE(i), as the baseline leaves it where a state's registers do not set it
     const uint32_t *base = pack_.section<uint32_t>(PackBaseline);
-    for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++)
+    for (uint64_t i = 0; i < pack_.bytes(PackBaseline) / 8; i++) {
         if (base[2 * i] >= CT_WRITE && base[2 * i] < CT_WRITE + 32)
             ctWrite_[(base[2 * i] - CT_WRITE) / 4] = base[2 * i + 1];
+        else if (base[2 * i] >= 0x1e04 && base[2 * i] <= 0x1e18) {
+            const uint32_t idx = (base[2 * i] - 0x1e04) / 4;
+            blendPerTarget_[idx] = base[2 * i + 1];
+            blendPerTargetSeen_ |= uint8_t(1u << idx);
+        }
+    }
     segmentHeap_.setGrow([this](uint64_t bytes, SegmentChunk &chunk) {
         Bo bo;
         if (!k_.allocControl(bytes, bo, ControlUse::StateSegments))
@@ -547,6 +562,9 @@ bool Device::init(std::string &err)
         const uint64_t packEnd = std::max(packWindowBytes_, packPages_.windowEnd());
         heapCopiesAt_ = heapBound_ = heapPlaced_ = (packEnd + kHeapStep - 1) & ~(kHeapStep - 1);
         heapStoresAt_ = heapCopiesAt_ + kHeapCopiesWindow;
+        tier0Pipelines_.reset(uint32_t(pack_.tier0Entries(PackPipelines, sizeof(PackPipeline))));
+        if (packWindowBytes_ && h.tier0SlmPerWarp)
+            (void)slmNeed(h.tier0SlmPerWarp);
     }
     if (role_ == Role::Client)
         return true;
@@ -601,6 +619,8 @@ bool Device::openChannel(std::string &err, bool &gaveBack)
         gaveBack = created;
         if (created)
             k_.closeChannel(ch);
+        progressVa_ = 0;
+        progressSeq_ = 0;
         k_.free(push_.bo);
         k_.free(upload_.bo);
         push_ = Ring();
@@ -625,6 +645,9 @@ bool Device::openChannel(std::string &err, bool &gaveBack)
         return undo(true);
     channel_.store(ch, std::memory_order_release);
     fence_.store(fence, std::memory_order_release);
+    progressVa_ = 0;
+    progressSeq_ = 0;
+    k_.channelProgress(ch, progressVa_);
     submittedThrough(seq);
     retire(push_, seq);
     return true;
@@ -757,7 +780,7 @@ bool Device::place(uint32_t prog, uint32_t &program, uint64_t &data)
 // (CommandBuffer::commit). False: no memory for it.
 bool Device::slmNeed(uint64_t perWarp)
 {
-    if (perWarp <= slmPerWarp_)
+    if (perWarp <= slmPerWarp_.load(std::memory_order_acquire))
         return true;
     const SlmArea a = slmArea(perWarp, k_.info().tpc_count);
     Bo area;

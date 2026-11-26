@@ -1,6 +1,8 @@
 import Foundation
+import HWTestCommon
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// The device's resource set (drivers/TegraGM20BMetal/resource_set.h) across boot 18's

@@ -279,6 +279,7 @@ IOReturn AGXDeviceUserClient::publishBo(Bo *bo, bool mapped)
 	bo->next = bos_;
 	bos_ = bo;
 	boIndex_.insert(bo->handle, bo);
+	bumpBoGen();
 	if (SWITCH_GPU_OWNER_COUNTS)
 		ownerMemory_.change(bo->ownerKind, bo->bytes, true);
 	return kIOReturnSuccess;
@@ -358,7 +359,7 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	}
 	if (!ret && !bo->pool_va && !compressible && !system &&
 	    !(in->flags & TegraGM20BBoContiguous))
-		spare = spareTake(in->bytes);
+		spare = spareTake(in->bytes, critical_);
 	else if (TGM_STATS && !ret && !bo->pool_va && !compressible)
 		spareIneligible();
 	if (!ret && bo->pool_va) {
@@ -479,7 +480,12 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 	if (!ret && !bo->chunked && !smmuComp && !(in->flags & TegraGM20BBoCoherent))
 		ret = ioreturn(switch_gpu_backing_cpu_track(bo->backing));
 	if (!ret) {
-		const auto acquire = compressible ? allocatedMemorySmmu : allocatedMemory;
+		const bool bigSmmu =
+			!compressible && !bo->pool_va && !(in->flags & TegraGM20BBoContiguous) &&
+			bo->npages >= SWITCH_GPU_SMMU_GRANULE_PAGES && switch_gpu_smmu_ready();
+		const auto acquire = compressible ? allocatedMemorySmmu
+				     : bigSmmu    ? allocatedMemoryBig
+						  : allocatedMemory;
 		ret = ioreturn(acquire(bo->backing, bo->npages, &bo->mem));
 		bo->backingMemory = ret == kIOReturnSuccess;
 		if (!ret && compressible && !tgm_mem_can_compress(bo->mem)) {

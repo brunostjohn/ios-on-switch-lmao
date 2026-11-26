@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestKit
+import HWTestShared
 import UIKit
 
 /// Settings' Liquid Glass sidebar blinking black for single frames while its list or the detail beside it scrolls,

@@ -106,6 +106,8 @@ int tgm_mem_new_exclusive(struct tgm_vm *vm, const uint64_t *pas, uint32_t npage
 			  struct tgm_mem **pmem);
 int tgm_mem_new_exclusive_smmu(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
 			       struct tgm_mem **pmem);
+int tgm_mem_new_smmu_big(struct tgm_vm *vm, const uint64_t *pas, uint32_t npages,
+			 struct tgm_mem **pmem);
 int tgm_mem_can_compress(const struct tgm_mem *mem);
 int tgm_mem_is_smmu(const struct tgm_mem *mem);
 struct switch_gpu_backing;
@@ -113,11 +115,17 @@ int switch_gpu_backing_tgm_mem_direct(struct switch_gpu_backing *backing, uint32
 				      struct tgm_mem **out);
 int switch_gpu_backing_tgm_mem(struct switch_gpu_backing *backing, uint32_t count,
 			       struct tgm_mem **out);
+int switch_gpu_backing_tgm_mem_big(struct switch_gpu_backing *backing, uint32_t count,
+				   struct tgm_mem **out);
 int switch_gpu_backing_tgm_mem_existing(struct switch_gpu_backing *backing, uint32_t count,
 					struct tgm_mem **out);
 int switch_gpu_backing_tgm_mem_existing_or_direct(struct switch_gpu_backing *backing,
 						  uint32_t count, struct tgm_mem **out);
 void tgm_mem_del(struct tgm_mem **pmem);
+/* tgm_mem_del for a batch: the GMMU mapping goes now, and SMMU-backed memory waits on `*later` for tgm_mem_del_finish,
+ * whose one L2 flush and invalidate covers the whole batch before any of its IOVAs goes back. */
+void tgm_mem_del_later(struct tgm_mem **pmem, struct tgm_mem **later);
+void tgm_mem_del_finish(struct tgm_mem *later);
 /* User range [TGM_USER_VA_START, TGM_KERNEL_VA): raw binds. read_only: the GPU may only read the range (a write is an
  * MMU fault). tgm_vm_map and tgm_vm_unmap invalidate the L2 and the TLB before they return; tgm_vm_map_ordered (a
  * claimed space's) leaves both to the next submission of each of its channels (TegraGM20BTlb.h). A compressible kind
@@ -319,6 +327,7 @@ void switch_gpu_chan_semantic_visibility(struct tgm_chan *,
 					 volatile struct TegraGM20BAbiFenceSemantic *);
 void switch_gpu_chan_visibility(struct tgm_chan *chan, volatile uint32_t *visible_cpu,
 				uint64_t visible_gpu);
+void switch_gpu_chan_progress(struct tgm_chan *chan, volatile uint32_t *progress_cpu);
 void switch_gpu_fence_hold(const volatile uint32_t *fence);
 void switch_gpu_fence_put(const volatile uint32_t *fence);
 /* A word of the user fence pages by its byte offset in the pool (what every address space's fence view adds to its
@@ -505,7 +514,8 @@ void tgm_present_pass(void);
 /* SwitchGpuPresentFilter.cpp: the armed watch's token, read by the nonstall interrupt's primary filter
  * (tgm_present_filter); attached once armed, detached at its claim before its tokens drop and before done runs. */
 void tgm_present_filter_attach(const struct switch_gpu_backing_token *token);
-void tgm_present_filter_attach_for(const void *display, const struct switch_gpu_backing_token *token);
+void tgm_present_filter_attach_for(const void *display,
+				   const struct switch_gpu_backing_token *token);
 void tgm_present_filter_detach(void);
 void tgm_present_filter_detach_for(const void *display);
 int tgm_present_filter_is_owner(const void *display);

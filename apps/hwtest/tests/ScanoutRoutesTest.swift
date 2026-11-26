@@ -1,4 +1,6 @@
 import HWTestCore
+import HWTestKit
+import HWTestShared
 
 /// The display copies a scanout frame on the CPU only while VIC is not up: the GPU's copy engine takes a frame window
 /// A cannot scan in place, VIC one the copy engine declines. kern.switch_scanout_* (debug kernels) count since boot the

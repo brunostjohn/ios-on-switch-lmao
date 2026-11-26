@@ -1,7 +1,9 @@
 import Darwin
 import Foundation
+import HWTestCommon
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// Kernel parked BOs (TegraGM20BInfoBoPark, bit 28) on the Metal facade and raw user client:

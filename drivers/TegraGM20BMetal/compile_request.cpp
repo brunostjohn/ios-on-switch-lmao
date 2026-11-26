@@ -13,7 +13,7 @@ namespace {
 
 // Any change to a field's bytes or meaning takes the next magic: the compiler's request log (compiler/compiler_log.h)
 // keeps requests across builds and replays them, so a request of another layout must be refused whole
-constexpr char kRequestMagic[8] = {'S', 'W', 'C', 'R', 'E', 'Q', '0', '7'};
+constexpr char kRequestMagic[8] = {'S', 'W', 'C', 'R', 'E', 'Q', '0', '8'};
 constexpr char kNameMagic[8] = {'S', 'W', 'R', 'A', 'W', 'N', 'M', '2'};
 // A cubic bind's sampler flag byte: bit 0 normalized, bit 1 the vertex stage, no other; its texture's slot byte's top
 // bit: the vertex stage. Each stage binds up to 16 samplers
@@ -163,9 +163,17 @@ bool sane(const CompileRequest &r)
         if (!knownTag(r, i) || r.stages[i].library >= r.libraries.size() || r.stages[i].function.empty() ||
             (r.stages[i].tag != "kg" && !r.stages[i].group.empty()))
             return false;
-    for (const RequestLibrary &l : r.libraries)
-        if (l.system ? !l.bytes.empty() || !systemLibraryPath(l.path) : l.bytes.empty())
+    for (const RequestLibrary &l : r.libraries) {
+        if (l.system) {
+            if (!l.bytes.empty() || l.libraryId != 0 || !systemLibraryPath(l.path))
+                return false;
+        } else if (l.libraryId != 0) {
+            if (!l.bytes.empty())
+                return false;
+        } else if (l.bytes.empty()) {
             return false;
+        }
+    }
     return true;
 }
 
@@ -230,6 +238,9 @@ std::string encodeRequest(const CompileRequest &r)
         w.text(l.path);
         w.value(uint8_t(l.system));
         w.text(l.bytes);
+        w.value(l.libraryId);
+        if (l.libraryId)
+            w.bytes(l.digest.data(), l.digest.size());
     }
     writeVariant(w, r.variant);
     writeKernel(w, r.kernel);
@@ -276,6 +287,9 @@ bool decodeRequest(const std::string &bytes, CompileRequest &out)
         l.path = r.text();
         l.system = r.value<uint8_t>() != 0;
         l.bytes = r.text();
+        l.libraryId = r.value<uint64_t>();
+        if (l.libraryId)
+            r.bytes(l.digest.data(), l.digest.size());
     }
     if (!readVariant(r, q.variant))
         return false;
@@ -324,8 +338,9 @@ LibraryIdentity identityOf(const RequestLibrary &library)
 {
     LibraryIdentity id;
     id.system = library.system;
-    id.digest = library.system ? sha256(library.path.data(), library.path.size())
-                               : sha256(library.bytes.data(), library.bytes.size());
+    id.digest = library.system      ? sha256(library.path.data(), library.path.size())
+                : library.libraryId ? library.digest
+                                    : sha256(library.bytes.data(), library.bytes.size());
     return id;
 }
 

@@ -9,6 +9,7 @@ namespace
 constexpr uint32_t kBuckets = 256;
 IOLock *registry;
 switch_gpu_backing *buckets[kBuckets];
+switch_gpu_backing *surface_buckets[kBuckets];
 switch_gpu_backing *retiring, **retiring_tail = &retiring;
 switch_gpu_backing *expiry_first, *expiry_last;
 uint32_t retirement_pending, retirement_count, scan_remaining;
@@ -43,6 +44,32 @@ IOLock *registry_lock()
 uint32_t bucket(uint64_t pa)
 {
 	return uint32_t((pa >> 12) ^ (pa >> 20)) & (kBuckets - 1);
+}
+
+uint32_t surface_bucket(uint32_t surface_id)
+{
+	return (surface_id ^ (surface_id >> 8) ^ (surface_id >> 16)) & (kBuckets - 1);
+}
+
+void surface_link_locked(switch_gpu_backing *backing)
+{
+	if (!backing->surface_id)
+		return;
+	const uint32_t b = surface_bucket(backing->surface_id);
+	backing->surface_next = surface_buckets[b];
+	surface_buckets[b] = backing;
+}
+
+void surface_unlink_locked(switch_gpu_backing *backing)
+{
+	if (!backing->surface_id)
+		return;
+	auto **entry = &surface_buckets[surface_bucket(backing->surface_id)];
+	while (*entry && *entry != backing)
+		entry = &(*entry)->surface_next;
+	if (*entry)
+		*entry = backing->surface_next;
+	backing->surface_next = nullptr;
 }
 
 switch_gpu_backing_pages *copy_pages(const uint64_t *pages, uint32_t count)
@@ -143,8 +170,6 @@ switch_gpu_backing_collision collision(const switch_gpu_backing *found, const ui
 		return SWITCH_GPU_BACKING_OTHER_PAGES;
 	if (grows && (found->gpu_memory_flags & SWITCH_GPU_BACKING_MEMORY_FIXED))
 		return SWITCH_GPU_BACKING_GROWS_FIXED;
-	if (grows && found->mapping_engines)
-		return SWITCH_GPU_BACKING_GROWS_MAPPED;
 	if (grows && found->owner && !owner)
 		return SWITCH_GPU_BACKING_GROWS_UNOWNED;
 	if (grows && (found->cpu_readers || found->cpu_writers || found->gpu_admission_readers ||
@@ -168,7 +193,10 @@ bool reached_locked(switch_gpu_backing *backing)
 	return member;
 }
 
-void destroy(switch_gpu_backing *backing)
+// A retired backing's GPU side, its memory included. Its owner (the pinned pages) goes in release_pages, only after the
+// batch's L2 flush and SMMU unmaps (switch_gpu_memory_retire_end): neither may write back into or map a page that went
+// back to the VM.
+void release_gpu_side(switch_gpu_backing *backing)
 {
 	switch_gpu_backing_forget_mapped(backing);
 	switch_gpu_backing_writer_free_locked(backing);
@@ -180,6 +208,10 @@ void destroy(switch_gpu_backing *backing)
 	IODelete(backing->cpu_current, uint64_t, backing->cpu_current_pages);
 	if (backing->gpu_memory)
 		backing->release_gpu_memory(backing->gpu_memory);
+}
+
+void release_pages(switch_gpu_backing *backing)
+{
 	if (backing->owner && backing->release_owner)
 		backing->release_owner(backing->owner);
 	free_pages(backing->pages);
@@ -196,7 +228,7 @@ extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *pages
 		return nullptr;
 	auto *copy = copy_pages(pages, count);
 	IOLock *lock = registry_lock();
-	if (!copy || !lock || !switch_gpu_backing_order()) {
+	if (!copy || !lock) {
 		free_pages(copy);
 		return nullptr;
 	}
@@ -260,8 +292,11 @@ extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *pages
 			found->release_owner = release_owner;
 			owner = nullptr;
 		}
-		if (surface_id)
+		if (surface_id && found->surface_id != surface_id) {
+			surface_unlink_locked(found);
 			found->surface_id = surface_id;
+			surface_link_locked(found);
+		}
 		// A retiring backing found again is its pages handed out anew, not shared.
 		if (!found->retiring)
 			__atomic_store_n(&found->shared, true, __ATOMIC_RELEASE);
@@ -291,6 +326,7 @@ extern "C" switch_gpu_backing *switch_gpu_backing_register(const uint64_t *pages
 	made->host_epoch = 1;
 	made->next = buckets[bucket(pages[0])];
 	buckets[bucket(pages[0])] = made;
+	surface_link_locked(made);
 	IOLockUnlock(lock);
 	return made;
 }
@@ -337,11 +373,10 @@ extern "C" switch_gpu_backing *switch_gpu_backing_find_pa(uint64_t first_page)
 	auto *found = buckets[bucket(first_page)];
 	while (found && found->pages->addresses[0] != first_page)
 		found = found->next;
-	const bool member = found && reached_locked(found);
 	if (found)
 		++found->refs;
 	IOLockUnlock(lock);
-	if (member)
+	if (found && reached_locked(found))
 		switch_gpu_set_reached(found, SWITCH_GPU_SET_CAUSE_SHARED);
 	return found;
 }
@@ -353,16 +388,14 @@ extern "C" switch_gpu_backing *switch_gpu_backing_find_surface(uint32_t surface_
 		return nullptr;
 	IOLockLock(lock);
 	switch_gpu_backing *found = nullptr;
-	for (uint32_t i = 0; i < kBuckets; ++i)
-		for (auto *at = buckets[i]; at; at = at->next)
-			if (at->surface_id == surface_id &&
-			    (!found || at->pages->count > found->pages->count))
-				found = at;
-	const bool member = found && reached_locked(found);
+	for (auto *at = surface_buckets[surface_bucket(surface_id)]; at; at = at->surface_next)
+		if (at->surface_id == surface_id &&
+		    (!found || at->pages->count > found->pages->count))
+			found = at;
 	if (found)
 		++found->refs;
 	IOLockUnlock(lock);
-	if (member)
+	if (found && reached_locked(found))
 		switch_gpu_set_reached(found, SWITCH_GPU_SET_CAUSE_SHARED);
 	return found;
 }
@@ -416,6 +449,8 @@ extern "C" void switch_gpu_bridge_completed(void) __attribute__((weak));
 extern "C" void switch_gpu_events_completed(void) __attribute__((weak));
 extern "C" void switch_gpu_copy_completed(void) __attribute__((weak));
 extern "C" void switch_gpu_copy_retire(void) __attribute__((weak));
+extern "C" void switch_gpu_memory_retire_begin(void) __attribute__((weak));
+extern "C" void switch_gpu_memory_retire_end(void) __attribute__((weak));
 
 extern "C" void switch_gpu_backing_completed(void)
 {
@@ -466,6 +501,7 @@ extern "C" void switch_gpu_backing_retire(void)
 				entry = &(*entry)->next;
 			if (*entry)
 				*entry = backing->next;
+			surface_unlink_locked(backing);
 			backing->retiring_next = ready;
 			ready = backing;
 		}
@@ -477,9 +513,16 @@ extern "C" void switch_gpu_backing_retire(void)
 									   __ATOMIC_ACQUIRE));
 	arm_expiry_locked();
 	IOLockUnlock(registry);
+	const bool batch = ready && switch_gpu_memory_retire_begin && switch_gpu_memory_retire_end;
+	if (batch)
+		switch_gpu_memory_retire_begin();
+	for (auto *backing = ready; backing; backing = backing->retiring_next)
+		release_gpu_side(backing);
+	if (batch)
+		switch_gpu_memory_retire_end();
 	while (ready) {
 		auto *next = ready->retiring_next;
-		destroy(ready);
+		release_pages(ready);
 		ready = next;
 	}
 	if (again)

@@ -1,5 +1,6 @@
 import Foundation
 import HWTestCore
+import HWTestKit
 
 /// Each overlay app's LaunchServices record against its bundle in /Applications: installed, with the entitlements its
 /// executable is signed with. A deploy that changes an app has switch-appregd (drivers/SwitchAppRegistration) register

@@ -127,7 +127,18 @@ public enum GM20BFacade {
         (ask(buffer, "switchMetalInlineStates") as? NSNumber)?.boolValue ?? false
     }
 
-    static func ask(_ object: Any, _ name: String) -> Any? {
+    /// Forces the facade's fetch rung for `body` on debug builds; nil where it has no probe channel.
+    public static func forcingFetchRung<T>(
+        _ rung: Int, on device: MTLDevice, _ body: () async throws -> T
+    ) async rethrows -> T? {
+        let force = NSSelectorFromString("switchMetalProbeFetchRung:")
+        guard let facade = device as? NSObject, facade.responds(to: force) else { return nil }
+        _ = facade.perform(force, with: NSNumber(value: rung))
+        defer { _ = facade.perform(force, with: NSNumber(value: 0)) }
+        return try await body()
+    }
+
+    public static func ask(_ object: Any, _ name: String) -> Any? {
         let selector = NSSelectorFromString(name)
         guard let object = object as? NSObject, object.responds(to: selector) else { return nil }
         return object.perform(selector)?.takeUnretainedValue()

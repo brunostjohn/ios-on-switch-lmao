@@ -79,6 +79,15 @@ inline switch_gpu_spare_units switch_gpu_spare_layout(uint64_t bytes)
 	return {uint32_t(bytes / SWITCH_GPU_SPARE_UNIT_BYTES), bytes % SWITCH_GPU_SPARE_UNIT_BYTES};
 }
 
+// Whether a class's spares, ready or on their way (zeroing on the copy engine, or on the dirty list waiting for it), fall
+// short of its depth. The refill makes one only then: a spare it made is counted from the moment it exists, so a copy
+// engine too busy to take the dirty list bounds the refill at the depth, not at memory pressure.
+constexpr bool switch_gpu_spare_short(uint16_t ready, uint16_t zeroing, uint16_t dirty,
+				      uint16_t target)
+{
+	return uint32_t(ready) + zeroing + dirty < target;
+}
+
 inline switch_gpu_spare_miss switch_gpu_spare_miss_of(uint16_t target, uint16_t zeroing,
 						      bool pressure)
 {

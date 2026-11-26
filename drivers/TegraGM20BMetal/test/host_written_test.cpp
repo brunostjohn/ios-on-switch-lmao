@@ -422,10 +422,111 @@ TEST(HostWrittenVolatileWc, NoCopyBufferRefusesBaseAndInteriorOfVolatileAndCache
     dev.destroyBuffer(volBuf);
 }
 
-TEST(HostWrittenVolatileWc, IdleVolatileWcChunksFreeDirectlyOnTrimEvenWithBoPark)
+TEST(HostWrittenVolatileWc, IdleVolatileWcChunksParkAndUnparkResidentWithoutAliasingCachedWc)
 {
     kernel_model::model = {};
     kernel_model::model.infoFlags |= TegraGM20BInfoBoPark;
+    kernel_model::model.coherentFromPool = false;
+    std::vector<TegraGM20BAbiBindOp> bindOps;
+    kernel_model::model.bound = [&](const TegraGM20BAbiBindOp &op) {
+        bindOps.push_back(op);
+    };
+    gm20b::Device dev;
+    std::string err;
+    ASSERT_TRUE(dev.open(harness::emptyPack().c_str(), 0, err, gm20b::Device::Role::Client)) << err;
+    {
+        gm20b::CommandBuffer *cb = dev.begin();
+        ASSERT_NE(cb, nullptr);
+        uint32_t seqno = 0;
+        ASSERT_TRUE(cb->commit(seqno));
+    }
+
+    gm20b::Buffer volBuf, privBuf;
+    ASSERT_TRUE(dev.createBuffer(64 << 10, volBuf, true, true, true));
+    ASSERT_TRUE(dev.createBuffer(4096, privBuf, false, false));
+    ASSERT_TRUE(volBuf.wc && volBuf.gpuVolatile);
+    const uint64_t volVa = volBuf.span.va - volBuf.span.offset;
+    const uint64_t volHandle = kernel_model::model.resolve({volBuf.va, TegraGM20BSurfaceGpuAddress, 0});
+    ASSERT_NE(volHandle, 0u);
+    const auto firstBind = std::find_if(bindOps.begin(), bindOps.end(), [&](const TegraGM20BAbiBindOp &op) {
+        return op.va == volVa;
+    });
+    ASSERT_NE(firstBind, bindOps.end());
+    EXPECT_EQ(firstBind->op, uint32_t(TegraGM20BBindMapVolatile));
+    EXPECT_EQ(dev.wcChunksHeld(), 1u);
+    EXPECT_GT(dev.wcChunkBytesHeld(), 0u);
+
+    dev.destroyBuffer(volBuf);
+    dev.trim();
+    EXPECT_EQ(kernel_model::model.parkCalls, 1u);
+    ASSERT_EQ(kernel_model::model.bos.count(volHandle), 1u);
+    EXPECT_EQ(kernel_model::model.bos[volHandle].parkState, kernel_model::ParkState::Parked);
+    EXPECT_EQ(dev.wcChunksHeld(), 0u);
+    EXPECT_EQ(dev.wcChunkBytesHeld(), 0u);
+    gm20b::Device::Held h = {};
+    ASSERT_TRUE(dev.held(h, false));
+    EXPECT_EQ(h.writeCombined, 0u);
+
+    // A non-volatile WC allocation must not unpark a parked volatile chunk.
+    gm20b::Buffer cachedWc;
+    ASSERT_TRUE(dev.createBuffer(64 << 10, cachedWc, true, true, false));
+    ASSERT_TRUE(cachedWc.wc && !cachedWc.gpuVolatile);
+    const uint64_t cachedHandle = kernel_model::model.resolve({cachedWc.va, TegraGM20BSurfaceGpuAddress, 0});
+    EXPECT_NE(cachedHandle, volHandle);
+    EXPECT_EQ(kernel_model::model.unparkResident, 0u);
+    EXPECT_EQ(kernel_model::model.bos[volHandle].parkState, kernel_model::ParkState::Parked);
+    dev.destroyBuffer(cachedWc);
+
+    // Reallocating a volatile WC buffer unparks the parked VOL=1 chunk resident with ResourceSet membership intact.
+    bindOps.clear();
+    ASSERT_TRUE(dev.createBuffer(64 << 10, volBuf, true, true, true));
+    ASSERT_TRUE(volBuf.wc && volBuf.gpuVolatile);
+    EXPECT_EQ(kernel_model::model.unparkResident, 1u);
+    EXPECT_EQ(kernel_model::model.resolve({volBuf.va, TegraGM20BSurfaceGpuAddress, 0}), volHandle);
+    EXPECT_TRUE(bindOps.empty());
+    EXPECT_TRUE(gm20b::DeviceHarness::setHolds(dev, volBuf.va, volBuf.length));
+
+    {
+        gm20b::CommandBuffer *cb = dev.begin();
+        ASSERT_NE(cb, nullptr);
+        cb->internalCompletion();
+        gm20b::BlitEncoder *e = cb->blit();
+        ASSERT_NE(e, nullptr);
+        cb->use(volBuf, false);
+        cb->use(privBuf, true, false);
+        e->copyBytes(volBuf.va, privBuf.va, 4096);
+        e->end();
+        uint32_t seqno = 0;
+        ASSERT_TRUE(cb->commit(seqno));
+        EXPECT_FALSE(kernel_model::model.jobs.back().hostWritten);
+        EXPECT_EQ(kernel_model::model.jobs.back().flags & TegraGM20BJobHostWritten, 0u);
+    }
+
+    // Reclaimed volatile WC chunks drop the dead BO and allocate a fresh VOL=1 chunk.
+    dev.destroyBuffer(volBuf);
+    dev.trim();
+    ASSERT_EQ(kernel_model::model.bos[volHandle].parkState, kernel_model::ParkState::Parked);
+    kernel_model::model.reclaimAllParked();
+    bindOps.clear();
+    ASSERT_TRUE(dev.createBuffer(64 << 10, volBuf, true, true, true));
+    ASSERT_TRUE(volBuf.wc && volBuf.gpuVolatile);
+    EXPECT_GE(kernel_model::model.unparkReclaimed, 1u);
+    EXPECT_EQ(kernel_model::model.bos.count(volHandle), 0u);
+    const uint64_t freshVa = volBuf.span.va - volBuf.span.offset;
+    const auto freshBind = std::find_if(bindOps.begin(), bindOps.end(), [&](const TegraGM20BAbiBindOp &op) {
+        return op.va == freshVa;
+    });
+    ASSERT_NE(freshBind, bindOps.end());
+    EXPECT_EQ(freshBind->op, uint32_t(TegraGM20BBindMapVolatile));
+
+    kernel_model::model.bound = nullptr;
+    dev.destroyBuffer(volBuf);
+    dev.destroyBuffer(privBuf);
+}
+
+TEST(HostWrittenVolatileWc, IdleVolatileWcChunksFreeDirectlyWithoutBoPark)
+{
+    kernel_model::model = {};
     kernel_model::model.coherentFromPool = false;
     gm20b::Device dev;
     std::string err;
@@ -436,8 +537,6 @@ TEST(HostWrittenVolatileWc, IdleVolatileWcChunksFreeDirectlyOnTrimEvenWithBoPark
     ASSERT_TRUE(volBuf.wc && volBuf.gpuVolatile);
     const uint64_t handle = kernel_model::model.resolve({volBuf.va, TegraGM20BSurfaceGpuAddress, 0});
     ASSERT_NE(handle, 0u);
-    EXPECT_EQ(dev.wcChunksHeld(), 1u);
-    EXPECT_GT(dev.wcChunkBytesHeld(), 0u);
 
     dev.destroyBuffer(volBuf);
     dev.trim();

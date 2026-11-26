@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // The display's present: scanout copies and fences on the GPU.
 #include "TegraGM20BUserClientInternal.h"
+#include "SwitchGpuSmmu.h"
 #include "SwitchGpuSurfaceComp.h"
 #include "TegraGM20BComp.h"
 
@@ -277,8 +278,18 @@ uint64_t presentSurface(IOMemoryDescriptor *memory, uint64_t bytes, bool blockLi
 		mapped = switch_gpu_vm_map(vm, va, mapBytes, s.mem, 0, static_cast<uint8_t>(kind),
 					   0, &s.mapping);
 	} else {
-		if (switch_gpu_backing_tgm_mem_existing_or_direct(s.backing, s.npages, &s.mem) ==
-		    0) {
+		bool gotCanonical =
+			switch_gpu_backing_tgm_mem_existing(s.backing, s.npages, &s.mem) == 0;
+		if (!gotCanonical && mapBytes == fullBytes &&
+		    s.npages >= SWITCH_GPU_SMMU_GRANULE_PAGES &&
+		    ((s.npages % TGM_COMP_PAGES) != 0u || !switch_gpu_compression_on()) &&
+		    switch_gpu_smmu_ready())
+			gotCanonical =
+				switch_gpu_backing_tgm_mem_big(s.backing, s.npages, &s.mem) == 0;
+		if (!gotCanonical)
+			gotCanonical = switch_gpu_backing_tgm_mem_existing_or_direct(
+					       s.backing, s.npages, &s.mem) == 0;
+		if (gotCanonical) {
 			s.ownsMemory = false;
 		} else {
 			s.ownsMemory = true;

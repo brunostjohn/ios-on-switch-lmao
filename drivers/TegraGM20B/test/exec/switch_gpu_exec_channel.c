@@ -300,8 +300,16 @@ void switch_exec_chan_live(struct switch_exec_chan *chan, int live)
 {
 	mutex_lock(&tgm_live_lock);
 	list_del_init(&chan->tgm.live);
-	if (live)
+	if (live) {
+		const u32 fence_offset =
+			(u32)((uintptr_t)chan->tgm.fence_cpu - (uintptr_t)tgm_fence_pages.va);
+
 		list_add_tail(&chan->tgm.live, &tgm_live_chans);
+		switch_gpu_live_dir_set(&tgm_live_dir, chan->tgm.chid, chan->tgm.id, fence_offset,
+					chan->tgm.vm);
+	} else {
+		switch_gpu_live_dir_clear(&tgm_live_dir, chan->tgm.chid);
+	}
 	mutex_unlock(&tgm_live_lock);
 }
 

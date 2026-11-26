@@ -14,6 +14,7 @@
 #include "depth_bias.h"
 #include "depth_stencil_state.h"
 #include "descriptors.h"
+#include "draw_bands.h"
 #include "draw_refusal.h"
 #include "draw_times.h"
 #include "fetch_order.h"
@@ -450,7 +451,7 @@ private:
     void emitDraw(bool indexed, uint32_t first, uint32_t count, uint32_t instances, uint32_t root,
                   uint32_t baseInstance);
     uint64_t drawUnits(uint32_t instances) const;
-    uint32_t drawBands(uint32_t vertices, uint32_t instances, uint64_t units) const;
+    BandGrid drawBands(uint32_t vertices, uint32_t instances, uint64_t units) const;
     void noteCandidate(uint64_t units, uint32_t bands);
 #if SWITCH_METAL_DIAGNOSTICS
     void notePrice(uint64_t units, uint32_t bands) const;

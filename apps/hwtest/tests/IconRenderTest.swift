@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import HWTestCore
+import HWTestKit
 import UIKit
 
 /// An icon render the way a helper asks for one: IconServices draws Settings' icon at the home screen's size in

@@ -187,6 +187,28 @@ TEST(SwitchEngineClockPlan, ProcessZeroAndUnfusedKeepPllp)
     EXPECT_EQ(p1.pll_base, base(1, 48));
 }
 
+TEST(SwitchEngineClockPlan, VicTakesC2InItsOwnMux)
+{
+    EXPECT_EQ(switch_engine_vic_source(SWITCH_ENGINE_SOURCE_PLLC2), 4u << 29) << "VIC03's PLLC2";
+    EXPECT_EQ(switch_engine_vic_source(SWITCH_ENGINE_SOURCE_PLLP), 2u << 29) << "VIC03's PLLP; 1 << 29 is its PLLC";
+    EXPECT_NE(switch_engine_vic_source(SWITCH_ENGINE_SOURCE_PLLC2), SWITCH_ENGINE_SOURCE_PLLC2)
+        << "NVJPG's mux code for PLLC2 is VIC's PLLC";
+}
+
+TEST(SwitchEngineClock, VicSharesNvjpgsPllc2)
+{
+    reset(1698);
+    uint32_t nvjpg = 0, vic = 0;
+    EXPECT_EQ(switch_engine_clock_source(SWITCH_ENGINE_BUS_C2, &nvjpg), SWITCH_ENGINE_SOURCE_PLLC2);
+    const size_t broughtUp = pllWrites(kC2Base, kC2Base + 0x10).size();
+    EXPECT_EQ(switch_engine_vic_source(switch_engine_clock_source(SWITCH_ENGINE_BUS_C2, &vic)),
+              SWITCH_ENGINE_VIC_SOURCE_PLLC2);
+    EXPECT_EQ(vic, 422400u);
+    EXPECT_EQ(vic, nvjpg);
+    EXPECT_EQ(pllWrites(kC2Base, kC2Base + 0x10).size(), broughtUp) << "the second engine finds the PLL up";
+    EXPECT_NE(lines().find("PLLC2 for NVJPG and VIC: 422400 kHz"), std::string::npos) << lines();
+}
+
 TEST(SwitchEngineClock, BringsPllc3UpInL4TsOrderOnce)
 {
     reset(1698);

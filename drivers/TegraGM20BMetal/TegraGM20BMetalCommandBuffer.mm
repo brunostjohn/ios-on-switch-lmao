@@ -22,7 +22,7 @@ void gm20bSetCompileWaits(SwitchMetalCommandBuffer *cb, std::vector<std::functio
         cb->_compileWaits = std::move(waits);
     }
     cb->_compileWaitGen.fetch_add(1, std::memory_order_acq_rel);
-    cb->_submitOwner.clear();
+    cb->_submitOwner.clearIf(gRM->submitThread.load(std::memory_order_relaxed));
     gm20bChanged(cb);
 }
 
@@ -457,8 +457,11 @@ static const gm20b::Pipeline *recordedPipeline(const gm20b::RasterState &raster)
             [_scheduledHandlers addObject:[block copy]];
         } else {
             _handlersQueued = true;
-            dispatch_async(_queue->_handlers, ^{
-                block((id<MTLCommandBuffer>)self);
+            MTLCommandBufferHandler copy = [block copy];
+            _queue->_handlerExec.enqueue([self, copy] {
+                @autoreleasepool {
+                    copy((id<MTLCommandBuffer>)self);
+                }
             });
         }
     }
@@ -800,17 +803,24 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 
 @implementation SwitchMetalQueue
 
+// nil where its handler thread cannot be made, as Metal's newCommandQueue answers nil where it makes no queue
 - (instancetype)init
 {
     if ((self = [super init])) {
         queuePriorityAdd(self);
-        _handlers = followingSerialQueue("com.brunostjohn.switch.gm20b.command.handlers");
+        int err = 0;
+        if (!_handlerExec.start(err)) {
+            os_log_error(gm20bLog(), "SwitchMetal: %{public}s: no command queue made: its handler thread: %{public}s",
+                         getprogname(), strerror(err));
+            return nil;
+        }
     }
     return self;
 }
 
 - (void)dealloc
 {
+    _handlerExec.stop();
     queuePriorityRemove(self);
 }
 

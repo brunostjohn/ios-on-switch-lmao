@@ -27,9 +27,11 @@ enum XRTwoPlaneModel {
 
     /// The largest difference between two texels' codes (the alpha byte as one code)
     static func codesApart(_ a: UInt64, _ b: UInt64) -> Int {
-        let field = { (t: UInt64, shift: UInt64, mask: UInt64) in Int(t >> shift & mask) }
-        let codes = [UInt64(0), 10, 20].map { abs(field(a, $0, 0x3ff) - field(b, $0, 0x3ff)) }
-        return max(codes.max()!, abs(field(a, 32, 0xff) - field(b, 32, 0xff)))
+        let d0 = abs(Int(a & 0x3ff) - Int(b & 0x3ff))
+        let d1 = abs(Int(a >> 10 & 0x3ff) - Int(b >> 10 & 0x3ff))
+        let d2 = abs(Int(a >> 20 & 0x3ff) - Int(b >> 20 & 0x3ff))
+        let d3 = abs(Int(a >> 32 & 0xff) - Int(b >> 32 & 0xff))
+        return max(max(d0, d1), max(d2, d3))
     }
 
     /// Whether the pixel's centre lies in a rectangle of clip space (x right, y up), as an identity transform draws it
@@ -54,13 +56,22 @@ enum XRTwoPlaneModel {
     /// texel, its four channels' values, with sub-texel weights of `weight`: Metal's 1/3, or the 8-bit fraction a
     /// texture unit computes
     static func bilinear(_ texels: [UInt64], width: Int, height: Int, weight: Double) -> [SIMD4<Double>] {
-        (0 ..< (width * height)).map { i in
-            let (x, y) = (i % width, i / width)
-            let (x1, y1) = (min(x + 1, width - 1), min(y + 1, height - 1))
-            let top = values(texels[y * width + x]) * (1 - weight) + values(texels[y * width + x1]) * weight
-            let bottom = values(texels[y1 * width + x]) * (1 - weight) + values(texels[y1 * width + x1]) * weight
-            return top * (1 - weight) + bottom * weight
+        var out = [SIMD4<Double>](repeating: .zero, count: width * height)
+        let inv = 1 - weight
+        out.withUnsafeMutableBufferPointer { dst in
+            let p = dst.baseAddress!
+            for y in 0 ..< height {
+                let y1 = min(y + 1, height - 1)
+                let row0 = y * width, row1 = y1 * width
+                for x in 0 ..< width {
+                    let x1 = min(x + 1, width - 1)
+                    let top = values(texels[row0 + x]) * inv + values(texels[row0 + x1]) * weight
+                    let bottom = values(texels[row1 + x]) * inv + values(texels[row1 + x1]) * weight
+                    p[row0 + x] = top * inv + bottom * weight
+                }
+            }
         }
+        return out
     }
 
     /// Lanes of `halves` (RGBA16Float, four per pixel) that are not their texel's values as the nearest half (a nearest

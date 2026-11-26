@@ -38,6 +38,11 @@ extern Signal gSignal;
 extern void *gCtx;
 
 extern switch_cpu_load gLoad[kCpus];
+#if DEVELOPMENT || DEBUG
+// Busy with a utility or background thread (XNU's perfcontrol classes: base priority at or below BASEPRI_UTILITY), the
+// work CLPC would keep off the performance cores: logged beside the busy share, not part of the decision.
+extern switch_cpu_load gLoadEfficiency[kCpus];
+#endif
 
 // A boost's deadline, one writer each: the touch filter, the display gate, exec and a foreground role in the slot of the
 // CPU they ran on.

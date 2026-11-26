@@ -75,6 +75,7 @@
 #include "SwitchGpuQuiet.h"
 #include "SwitchGpuWakeWord.h"
 #include "SwitchGpuChanTable.h"
+#include "SwitchGpuLiveDir.h"
 #include "SwitchGpuWriterPromise.h"
 #include "SwitchGpuPromiseGiveUp.h"
 #include "SwitchGpuJobTiming.h"
@@ -192,7 +193,9 @@ struct tgm_mem {
 	struct switch_gpu_memory_view *big_views;
 	bool big_views_ready;
 	u64 smmu_iova;
+	u32 smmu_npages;
 	u64 *smmu_pages;
+	struct tgm_mem *later; /* tgm_mem_del_later's batch */
 };
 
 int tgm_vm_kmap_raw(struct tgm_vm *vm, struct tgm_mem *mem, uint64_t bytes, int read_only,
@@ -256,6 +259,7 @@ struct tgm_chan {
 	struct nvif_vma ring_vma;
 	volatile u32 *fence_cpu;
 	volatile u32 *visible_cpu;
+	volatile u32 *progress_cpu;
 	u64 visible_gpu;
 	u64 fence_gpu;
 	u32 submitted;
@@ -280,7 +284,9 @@ struct tgm_chan {
 	u64 progress_held;
 	u32 progress_done;
 	u32 seen_done; /* a hang check's last look at the fence word (chan_progress_ns; tgm_live_lock) */
+	u32 progress_word_seen;
 	u32 stall_done; /* tgm_chan_check_progress: completed seqno first seen stalled, and when */
+	u32 stall_progress_word;
 	u64 stall_ns, stall_held;
 	int app;     /* a user channel: the hold may take it from its first submission */
 	int tracked; /* the hold may take it (tgm_hold_track) */
@@ -381,6 +387,7 @@ struct tgm_chan {
 #define CHAN_SCRUB 2 /* the pool scrubber's */
 extern struct list_head tgm_live_chans;
 extern struct switch_gpu_chan_table tgm_chan_table;
+extern struct switch_gpu_live_dir tgm_live_dir;
 /* The interrupt pass, after nvkm's handlers or the nonstall line's acknowledgement (shim/xnu_glue.cpp gpuInterrupt):
  * every channel with work in flight; how many of them progressed. */
 unsigned tgm_chans_completed(void);
@@ -403,7 +410,7 @@ void tgm_engine_state(char *buf, unsigned int len);
 #define TGM_ACQUIRE_NS (2 * TGM_STUCK_NS)
 #define RAMFC_TIMESLICE 0xf8
 #define RAMFC_TIMESLICE_DEFAULT 0x10003080
-#define RAMFC_TIMESLICE_HIGH 0x10005080
+#define RAMFC_TIMESLICE_HIGH 0x100080c3
 void tgm_ramfc_write(u32 chid, u32 offset, u32 value);
 #if TGM_STATS
 u32 tgm_ramfc_read(u32 chid, u32 offset);

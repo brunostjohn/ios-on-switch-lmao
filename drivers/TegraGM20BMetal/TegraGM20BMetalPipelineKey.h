@@ -9,6 +9,7 @@
 // framework where it is not QuartzCore; no trailing blank.
 #pragma once
 #import <Metal/Metal.h>
+#include <objc/message.h>
 #include <cstdio>
 #include <string>
 #include "pipeline_fields.h"
@@ -123,9 +124,8 @@ inline std::string linkedSegment(const char *tag, const StageKey &f, const std::
 // colour output to a half-float target rounded toward zero, 2 to nearest even
 inline uint64_t textureWriteRoundingOf(MTLRenderPipelineDescriptor *d)
 {
-    return [d respondsToSelector:NSSelectorFromString(@"textureWriteRoundingMode")]
-               ? [[d valueForKey:@"textureWriteRoundingMode"] unsignedLongLongValue]
-               : 0;
+    static const SEL sel = sel_registerName("textureWriteRoundingMode");
+    return [d respondsToSelector:sel] ? reinterpret_cast<NSUInteger (*)(id, SEL)>(objc_msgSend)(d, sel) : 0;
 }
 
 // The descriptor's fields a key names (pipeline_fields.h): what a compile request carries of it, so the shader compiler

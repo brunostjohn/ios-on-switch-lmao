@@ -657,7 +657,7 @@ class Rules(unittest.TestCase):
                 'subsystem': checks.GPU_METAL_SUBSYSTEM,
                 'category': 'plugin',
                 'messageType': 'Default',
-                'eventMessage': f'TegraGM20BMetal: {process} gm20b 5s c=120(24.0/s) pack=45/0 cag={cag} rtsync=12/345us',
+                'eventMessage': f'TegraGM20BMetal: {process} gm20b 5s c=120(24.0/s) pack=45/0/1/0 cag={cag} rtsync=12/345us',
             }
 
         hwtest = rates('SwitchHWTest', 7, 1)
@@ -669,6 +669,34 @@ class Rules(unittest.TestCase):
         results, _ = devicerun.run_checks([*clean, rates('backboardd', 3, 15)], rule)
         self.assertEqual(results[0].verdict, FAIL)
         self.assertIn('max(cag) 3', results[0].observed)
+
+    def test_pack_tier1_uses_reports_os_states_and_ignores_hwtest(self):
+        rule = [c for c in checks.GROUPS['boot'] if c.name == 'pack.tier1-uses']
+        self.assertEqual(len(rule), 1)
+        self.assertIn('logharvest', rule[0].note)
+
+        def line(process: str, name: str, pieces: int, card: int) -> dict:
+            return {
+                'timestamp': '2026-11-23 10:00:05.000000+0000',
+                'bootUUID': 'B00T',
+                'processImagePath': '/usr/libexec/' + process,
+                'subsystem': checks.GPU_METAL_SUBSYSTEM,
+                'category': '',
+                'messageType': 'Default',
+                'eventMessage': (
+                    f'SwitchMetal: tier-1 pack state 0123456789abcdef {name} in {process}: {pieces} pieces, card={card}'
+                ),
+            }
+
+        hwtest = line('SwitchHWTest', 'aaaa1111bbbb2222', 2, 1)
+        results, _ = devicerun.run_checks([hwtest], rule)
+        self.assertEqual(results[0].verdict, NO_DATA)
+        os_use = [line('backboardd', 'deadbeef00000001', 2, 3), line('SpringBoard', 'deadbeef00000002', 1, 0), hwtest]
+        results, _ = devicerun.run_checks(os_use, rule)
+        self.assertEqual(results[0].verdict, INFO)
+        self.assertEqual(len(results[0].matches), 2)
+        self.assertIn('backboardd/deadbeef00000001/2/3', results[0].observed)
+        self.assertIn('SpringBoard/deadbeef00000002/1/0', results[0].observed)
 
     def test_boot_pack_pieces_fails_on_refusal_slow_import_or_piece_import(self):
         rule = [c for c in checks.GROUPS['boot'] if c.name == 'boot.pack-pieces']

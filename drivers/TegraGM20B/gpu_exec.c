@@ -100,8 +100,10 @@ static u8 chan_note_foreign(struct tgm_chan *chan,
 		if (!(unsettled[i / 32] & (1u << (i % 32))))
 			continue;
 		if (dependencies[i].engine == SWITCH_GPU_ENGINE_GM20B) {
-			struct tgm_chan *source = live_by_uid(dependencies[i].queue);
-			if (source && source->vm != chan->vm) {
+			struct switch_gpu_live_info source;
+			if (switch_gpu_live_dir_find(&tgm_live_dir, dependencies[i].queue,
+						     &source) &&
+			    source.vm != chan->vm) {
 				flags |= TGM_STAT_FOREIGN_FENCE;
 				fences++;
 			}
@@ -118,10 +120,12 @@ static u8 chan_note_foreign(struct tgm_chan *chan,
 		}
 	}
 	for (i = 0; i < word_wait_count; ++i) {
-		struct tgm_chan *source =
-			word_waits[i].queue ? live_by_uid(word_waits[i].queue) : NULL;
-		if (source ? source->vm != chan->vm
-			   : (word_waits[i].pool / TGM_FENCE_SLOT) != own_slot) {
+		struct switch_gpu_live_info source;
+		const int found =
+			word_waits[i].queue &&
+			switch_gpu_live_dir_find(&tgm_live_dir, word_waits[i].queue, &source);
+		if (found ? source.vm != chan->vm
+			  : (word_waits[i].pool / TGM_FENCE_SLOT) != own_slot) {
 			flags |= TGM_STAT_FOREIGN_EVENT;
 			events++;
 		}
@@ -357,6 +361,17 @@ void switch_gpu_chan_visibility(struct tgm_chan *chan, volatile uint32_t *visibl
 	switch_gpu_timeline_visibility(chan->timeline, visible_cpu);
 }
 
+void switch_gpu_chan_progress(struct tgm_chan *chan, volatile uint32_t *progress_cpu)
+{
+	const u32 initial = progress_cpu ? READ_ONCE(*progress_cpu) : 0;
+
+	chan->progress_cpu = progress_cpu;
+	WRITE_ONCE(chan->progress_word_seen, initial);
+	WRITE_ONCE(chan->stall_progress_word, initial);
+	if (TGM_STATS)
+		tgm_hold_progress(chan->chid, progress_cpu);
+}
+
 __attribute__((weak)) void switch_sched_render_submitted(void)
 {
 }
@@ -405,25 +420,26 @@ void tegra_gm20b_frame_take(struct SwitchFrameGpu *out)
  * from its snapshot of the user channels to its kick, so every user submission is either in a present's snapshot (the
  * copy waits for it) or kicked after that present (it waits for the copy). */
 
-/* One unsettled dependency's acquire; tgm_live_lock held when it names a GM20B channel. A refusal leaves the acquires
- * already pushed for earlier tokens in the job's room, which the caller's rollback takes back with the rest. */
+/* One unsettled dependency's acquire. A refusal leaves the acquires already pushed for earlier
+ * tokens in the job's room, which the caller's rollback takes back with the rest. */
 static int backing_dependency(struct tgm_chan *chan, const struct switch_gpu_backing_token *token)
 {
 	if (token->engine == SWITCH_GPU_ENGINE_GM20B) {
-		struct tgm_chan *source = live_by_uid(token->queue);
+		struct switch_gpu_live_info source;
 		u64 va;
 
-		if (!chan->vm->fences_va || token->value > UINT32_MAX || !source ||
-		    token->reset_generation != (source->id >> 32) + 1)
+		if (!chan->vm->fences_va || token->value > UINT32_MAX ||
+		    !switch_gpu_live_dir_find(&tgm_live_dir, token->queue, &source) ||
+		    source.fence_offset >= TGM_FENCE_BYTES ||
+		    token->reset_generation != (source.id >> 32) + 1)
 			return -ENODEV;
-		va = chan->vm->fences_va +
-		     ((uintptr_t)source->fence_cpu - (uintptr_t)tgm_fence_pages.va);
+		va = chan->vm->fences_va + source.fence_offset;
 		PUSH_MTHD(&chan->chan.push, NV906F, SEMAPHOREA, upper_32_bits(va), SEMAPHOREB,
 			  lower_32_bits(va), SEMAPHOREC, (u32)token->value, SEMAPHORED,
 			  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
 				  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
 		if (chan->high)
-			tgm_hold_need(tgm_gpu.device, source->chid);
+			tgm_hold_need(tgm_gpu.device, source.chid);
 	} else if (token->engine == SWITCH_GPU_ENGINE_PROMISE) {
 		const u64 va = chan->vm->fences_va + token->queue;
 
@@ -454,16 +470,15 @@ static int backing_dependency(struct tgm_chan *chan, const struct switch_gpu_bac
 static u32 backing_unsettled(const struct switch_gpu_backing_token *tokens, u32 count,
 			     u32 *unsettled)
 {
-	u32 channels = 0;
+	u32 promises = 0;
 	u32 i;
 
 	for (i = 0; i < count; ++i)
 		if (!switch_gpu_backing_token_status(&tokens[i])) {
 			unsettled[i / 32] |= 1u << (i % 32);
-			channels += tokens[i].engine == SWITCH_GPU_ENGINE_GM20B ||
-				    tokens[i].engine == SWITCH_GPU_ENGINE_PROMISE;
+			promises += tokens[i].engine == SWITCH_GPU_ENGINE_PROMISE;
 		}
-	return channels;
+	return promises;
 }
 
 static int backing_waits(struct tgm_chan *chan, const struct switch_gpu_backing_token *tokens,
@@ -485,14 +500,10 @@ int tgm_backing_dependencies(struct tgm_chan *chan, const struct switch_gpu_back
 
 	if (count > TegraGM20BMaxJobDependencies)
 		return -E2BIG;
-	const u32 channels = backing_unsettled(tokens, count, unsettled);
-	if (channels)
-		mutex_lock(&tgm_live_lock);
+	const u32 promises = backing_unsettled(tokens, count, unsettled);
 	const int ret = backing_waits(chan, tokens, count, unsettled);
-	if (!ret)
+	if (!ret && promises)
 		switch_gpu_chan_park_promises_locked(chan, tokens, count, unsettled);
-	if (channels)
-		mutex_unlock(&tgm_live_lock);
 	return ret;
 }
 
@@ -613,11 +624,10 @@ chan_word_waits(struct tgm_chan *chan, const struct switch_gpu_word_wait *words,
 			  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
 				  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
 		/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
-		if (chan->high) {
-			struct tgm_chan *source;
-			source = live_by_uid(words[i].queue);
-			if (source)
-				tgm_hold_need(tgm_gpu.device, source->chid);
+		if (chan->high && words[i].queue) {
+			struct switch_gpu_live_info source;
+			if (switch_gpu_live_dir_find(&tgm_live_dir, words[i].queue, &source))
+				tgm_hold_need(tgm_gpu.device, source.chid);
 		}
 	}
 }
@@ -655,7 +665,7 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 	int ret = 0;
 	int tlb = 0;
 	u32 unsettled[(TegraGM20BMaxJobDependencies + 31) / 32] = {0};
-	u32 channels = 0;
+	u32 promises = 0;
 	u32 ring_cur;
 	int ring_free;
 	u32 *push_bgn, *push_cur, *push_end, *push_seg;
@@ -741,16 +751,10 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 	ret = nvif_chan_gpfifo_wait(&chan->chan, entries, words);
 	if (ret)
 		goto rollback;
-	channels = backing_unsettled(dependencies, dependency_count, unsettled);
-	channels += word_wait_count && chan->high;
-	if (channels)
-		mutex_lock(&tgm_live_lock);
+	promises = backing_unsettled(dependencies, dependency_count, unsettled);
 	ret = backing_waits(chan, dependencies, dependency_count, unsettled);
-	if (ret) {
-		if (channels)
-			mutex_unlock(&tgm_live_lock);
+	if (ret)
 		goto rollback;
-	}
 	chan_sibling_waits(chan, siblings, sibling_count);
 	chan_word_waits(chan, word_waits, word_wait_count);
 	/* a VA rebound over work still queued: nothing after the bind runs before retirement switched its PTEs; the TLB
@@ -762,13 +766,13 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 			  NVDEF(NV906F, SEMAPHORED, OPERATION, ACQ_GEQ) |
 				  NVDEF(NV906F, SEMAPHORED, ACQUIRE_SWITCH, ENABLED));
 	PUSH_KICK(&chan->chan.push);
-	switch_gpu_chan_park_promises_locked(chan, dependencies, dependency_count, unsettled);
+	if (promises)
+		switch_gpu_chan_park_promises_locked(chan, dependencies, dependency_count,
+						     unsettled);
 #if TGM_STATS
 	foreign = chan_note_foreign(chan, dependencies, dependency_count, unsettled, word_waits,
 				    word_wait_count);
 #endif
-	if (channels)
-		mutex_unlock(&tgm_live_lock);
 	if (owned)
 		switch_gpu_backing_publish(owned);
 	/* Release kernels stamp a high user channel with WFI only when a low channel is busy, so

@@ -1,15 +1,21 @@
 """Boot-entry and overlay sync, and the log pull, on plain directories (no card)."""
 
+import base64
+import contextlib
+import hashlib
+import io
 import json
 import os
 import plistlib
+import struct
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from tools.deploy import deploy, deployed, joycon_pairing, poster_snapshots, pull_logs
-from tools.install import card as cards, renamed
+from tools.deploy import deploy, deployed, joycon_pairing, poster_snapshots, pull_logs, ssh_keys, system_apps
+from tools.install import bootstrap, bootstrap_migration, card as cards, renamed
 
 
 class Log:
@@ -489,6 +495,147 @@ class PosterSnapshotsTest(unittest.TestCase):
         root = self.data / 'empty'
         root.mkdir()
         return root
+
+
+def _bootstrap_package(root: Path, generation: str) -> Path:
+    package(root)
+    directory = root / 'bootstrap'
+    directory.mkdir(parents=True, exist_ok=True)
+    status = (
+        'Package: org.coolstar.sileo\nStatus: install ok installed\nVersion: 2.5.1\n\n'
+        'Package: ellekit\nStatus: install ok installed\nVersion: 1.1\n\n'
+        'Package: uikittools\nStatus: install ok installed\nVersion: 2.1\n\n'
+        'Package: launchctl\nStatus: install ok installed\nVersion: 1:1.1.1\n'
+    ).encode()
+    with tarfile.open(directory / bootstrap.ARCHIVE, 'w') as archive:
+        for name, data in (
+            ('.procursus_strapped', b''),
+            ('.switch-bootstrap-ready', b''),
+            ('Library/dpkg/status', status),
+        ):
+            info = tarfile.TarInfo(name)
+            info.size, info.mode = len(data), 0o644
+            archive.addfile(info, io.BytesIO(data))
+    helper = root / 'overlay/usr/libexec' / bootstrap.HELPER
+    helper.parent.mkdir(parents=True, exist_ok=True)
+    helper.write_bytes(b'helper')
+    manifest = {
+        'schema_version': 1,
+        'archive_sha256': hashlib.sha256((directory / bootstrap.ARCHIVE).read_bytes()).hexdigest(),
+        'helper_sha256': hashlib.sha256(b'helper').hexdigest(),
+        'holds': list(bootstrap.HELD),
+        'managed_generation': generation,
+    }
+    (directory / bootstrap.MANIFEST).write_text(json.dumps(manifest))
+    return root
+
+
+class InterruptedMigrationDeployTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def _run_redeploy(self, build: str, version: str) -> tuple[Path, Path, Path, Path]:
+        generation = 'a' * 64
+        pkg = _bootstrap_package(self.root / f'pkg-{build}', generation)
+        data = self.root / f'data-{build}'
+        fat = self.root / f'fat-{build}'
+        data.mkdir()
+        fat.mkdir()
+        pins_file = self.root / f'pins-{build}.json'
+        pins = {'build': build, 'version': version}
+        pins_file.write_text(json.dumps(pins))
+        bootstrap.stage(data, pkg, pins, Log())
+        base = data / bootstrap.DIRECTORY / build
+        (base / bootstrap_migration.RECEIPT).write_text(f'working {generation} native-migration\n')
+        (base / bootstrap_migration.PENDING).unlink()
+        marker = data / system_apps.MARKER
+        marker.touch()
+        sentinel = data / system_apps.SENTINEL
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.touch()
+        store = data / 'mobile/Containers/Data/InternalDaemon/1/Library/Caches/com.apple.LaunchServices-1.csstore'
+        store.parent.mkdir(parents=True, exist_ok=True)
+        store.write_bytes(b'store')
+        args = deploy._parser().parse_args(
+            ['disk9', '--boot-package', str(pkg), '--ipsw', str(pins_file), '--spec', 'unused']
+        )
+        with (
+            mock.patch.object(deploy.cards, 'mounted', side_effect=lambda *_, **__: contextlib.nullcontext(fat)),
+            mock.patch.object(deploy.deployed, 'record'),
+            mock.patch.object(deploy, '_stage_gpu'),
+            mock.patch.object(deploy.icon_cache, 'present'),
+        ):
+            not_done = deploy._write(args, data, deploy.Volumes('disk9s1', None), None, Log())
+        self.assertEqual(not_done, [])
+        return marker, sentinel, store, base / bootstrap_migration.PENDING
+
+    def test_redeploy_rearms_bootstrap_and_rebuilds_launchservices_on_ios_27(self):
+        marker, sentinel, store, pending = self._run_redeploy('24B119', '27.2')
+        self.assertFalse(marker.exists())
+        self.assertTrue(sentinel.is_file())
+        self.assertFalse(store.exists())
+        self.assertEqual(pending.read_text(), 'a' * 64 + '\n')
+
+    def test_redeploy_rearms_bootstrap_and_keeps_launchservices_store_on_ios_17(self):
+        marker, sentinel, store, pending = self._run_redeploy('21H461', '17.7.11')
+        self.assertFalse(marker.exists())
+        self.assertTrue(sentinel.is_file())
+        self.assertTrue(store.is_file())
+        self.assertEqual(pending.read_text(), 'a' * 64 + '\n')
+
+
+class SshAuthorizedKeysDeployTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def _run_write(self, pkg: Path, data: Path, extra_args: list[str]) -> list[str]:
+        fat = self.root / 'fat'
+        fat.mkdir(exist_ok=True)
+        args = deploy._parser().parse_args(
+            ['disk9', '--boot-package', str(pkg), '--spec', 'unused', '--no-joycon-pairing', *extra_args]
+        )
+        with (
+            mock.patch.object(deploy.cards, 'mounted', side_effect=lambda *_, **__: contextlib.nullcontext(fat)),
+            mock.patch.object(deploy.deployed, 'record'),
+            mock.patch.object(deploy, '_stage_gpu'),
+            mock.patch.object(deploy.icon_cache, 'present'),
+            mock.patch.object(deploy.bootstrap, 'stage'),
+        ):
+            return deploy._write(args, data, deploy.Volumes('disk9s1', None), None, Log())
+
+    def test_deploy_stages_keys_for_dev_and_removes_them_for_release(self):
+        dev_pkg = self.root / 'dev-pkg'
+        package(dev_pkg)
+        deb = dev_pkg / ssh_keys.OVERLAY_DEB
+        deb.parent.mkdir(parents=True)
+        deb.write_bytes(b'switch-ssh')
+
+        rel_pkg = self.root / 'rel-pkg'
+        package(rel_pkg)
+
+        key_blob = base64.b64encode(struct.pack('>I', 11) + b'ssh-ed25519' + b'\x07' * 32).decode('ascii')
+        key_line = f'ssh-ed25519 {key_blob} dev@host'
+        keys_file = self.root / 'keys.pub'
+        keys_file.write_text(key_line + '\n')
+
+        data = self.root / 'data'
+        data.mkdir()
+
+        self.assertEqual(self._run_write(dev_pkg, data, ['--ssh-authorized-keys', str(keys_file)]), [])
+        staged = data / ssh_keys.STAGED
+        self.assertEqual(staged.read_text(), key_line + '\n')
+
+        self.assertEqual(self._run_write(rel_pkg, data, ['--ssh-authorized-keys', str(keys_file)]), [])
+        self.assertFalse(staged.exists())
+
+        self.assertEqual(self._run_write(dev_pkg, data, ['--ssh-authorized-keys', str(keys_file)]), [])
+        self.assertTrue(staged.is_file())
+        self.assertEqual(self._run_write(dev_pkg, data, ['--no-ssh-authorized-keys']), [])
+        self.assertFalse(staged.exists())
 
 
 if __name__ == '__main__':

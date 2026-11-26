@@ -179,6 +179,7 @@ bool gm20bPipelineStep()
         return false;
     return gm20bSubmission([&] {
         if (!a.open) {
+            gm20bMoveWanting();
             // counted as committed, no purge takes an arena it encodes (gpu.h purgeArenas)
             gRM->committed.fetch_add(1);
             if (gRM->raw->purgedArenas()) {
@@ -214,6 +215,17 @@ void gm20bPipelineYield(SwitchMetalCommandBuffer *cb, size_t from, bool nativeRa
     Ahead &a = ahead();
     if (a.cb && !(a.cb == cb && nativeRange && from == 0))
         giveBack(VetoOtherWork);
+}
+
+bool gm20bPipelineOpen()
+{
+    return ahead().open;
+}
+
+bool gm20bPipelineHasOpenAhead(SwitchMetalCommandBuffer *cb)
+{
+    const Ahead &a = ahead();
+    return a.cb == cb && a.open;
 }
 
 void gm20bPipelineFailed(SwitchMetalCommandBuffer *cb)

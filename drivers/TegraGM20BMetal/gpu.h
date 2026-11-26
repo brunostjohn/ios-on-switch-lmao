@@ -224,6 +224,7 @@ public:
     // cannot be (its programs find no room in the heap)
     std::vector<std::pair<std::string, Pipeline *>> variantPipelines(uint64_t keyHash, bool caTransform);
     std::vector<std::pair<std::string, Pipeline *>> variantPipelines(const PackRun &run, bool caTransform);
+    Pipeline *variantPipeline(const PackRun &run, const std::string &name, bool caTransform);
     // A state the runtime made a record of (record.h), drawn from then on as the pack's are; null: its programs find no room
     // in the heap or its samplers none in the header pool (`why`)
     Pipeline *addRecord(const RuntimeRecord &r, bool caTransform, std::string &why, bool *retry = nullptr);
@@ -247,18 +248,18 @@ public:
 
     bool gpuPriority(uint32_t priority, uint32_t background)
     {
-        if (!k_.priority(priority, background))
+        bool critical = false;
+        if (!k_.priority(priority, background, &critical))
             return false;
-        // 5, RealTime, is scheduled as 0 (TegraGM20BABI.h method 18)
-        highPriority_.store(priority == 0 || priority == 5, std::memory_order_relaxed);
+        criticalPriority_.store(critical, std::memory_order_relaxed);
         return true;
     }
 
-    // Its channel is the kernel's high level (TegraGM20BSchedPolicy.h tgm_priority_level): the render server's, or a
-    // process whose queues asked for GPU priority 0. Nothing preempts it, so its draws are never banded.
+    // Its channel is the kernel's critical level (TegraGM20BSchedPolicy.h tgm_compositor): the render server's, or a
+    // connection the kernel answered TegraGM20BPriorityCritical for. Nothing preempts it, so its draws are never banded.
     bool compositorClass() const
     {
-        return role_ == Role::RenderServer || highPriority_.load(std::memory_order_relaxed);
+        return role_ == Role::RenderServer || criticalPriority_.load(std::memory_order_relaxed);
     }
 
     uint64_t bandBudgetNs() const
@@ -268,6 +269,16 @@ public:
 #else
         return TGM_APP_BAND_NS;
 #endif
+    }
+
+    uint64_t channelProgressVa() const
+    {
+        return progressVa_;
+    }
+
+    uint32_t nextProgressSeq()
+    {
+        return ++progressSeq_ ? progressSeq_ : ++progressSeq_;
     }
 
     bool hasGpuPriority() const
@@ -488,7 +499,8 @@ public:
     // of the same texel size; a storage view of a multisampled texture spans its sample grid), made on first use and freed
     // with t's header; 0: no header slot left. The encoding thread's: what it answered is kept there and answered again
     // with no lock (view_cache.h, keyed as viewTics_)
-    uint32_t viewTic(const Texture &t, uint32_t word0, ViewAccess access = ViewAccess::Texture);
+    uint32_t viewTic(const Texture &t, uint32_t word0, ViewAccess access = ViewAccess::Texture, bool asArray = false);
+    uint32_t arrayViewTic(const Texture &t);
     // The header of view `v` of `owner`, an attachment's image (v.part) or the attachment itself (attachment_view.h),
     // made on first use and freed with owner's header; 0: none (`why`)
     uint32_t attachmentViewTic(const Texture &owner, const AttachmentView &v, const char **why);
@@ -580,7 +592,8 @@ public:
     // `wc`: from the write-combined GPU pool (Buffer::wc), else (or full) pool memory as before; `hostVisible`: the CPU
     // reads or writes it (Buffer::hostVisible), else it takes no CPU lease; `gpuVolatile`: bind WC memory VOL=1 in its own
     // chunk pool so CPU writes never trigger whole-L2 invalidates and GPU writes flush FB without L2_FLUSH_DIRTY
-    bool createBuffer(uint64_t length, Buffer &b, bool wc = false, bool hostVisible = true, bool gpuVolatile = false);
+    bool createBuffer(uint64_t length, Buffer &b, bool wc = false, bool hostVisible = true, bool gpuVolatile = false,
+                      bool zero = true);
 
     // The write-combined chunks held (non-dedicated) and their bytes (test/poolcheck.cpp: they follow what is in them)
     uint32_t wcChunksHeld();
@@ -1287,6 +1300,7 @@ private:
         Bl,
         Zeta,
         Wc,
+        VolatileWc,
     };
 
     struct Chunk {
@@ -1295,6 +1309,7 @@ private:
         uint64_t bytes = 0;
         std::map<uint64_t, uint64_t> free;  // offset -> bytes, coalesced
         uint64_t used = 0;
+        uint64_t highWater = 0;
         bool dedicated = false;
         uint64_t pitchVa = 0;  // a block-linear chunk's kind-0 view (blPitchVa), made at its first ask
         // a pool chunk a host-visible buffer was placed in: the CPU writes such a buffer outside any lease, so lines
@@ -1326,7 +1341,8 @@ private:
     void collectParkableChunksLocked(std::vector<ParkCandidate> &out);
     void finishParkChunks(std::vector<ParkCandidate> &candidates);
     bool tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uint32_t zetaIndex, uint64_t bytes,
-                        bool dedicated, uint64_t align, uint32_t setAccess, uint32_t &index, bool &resident);
+                        bool dedicated, uint64_t align, uint32_t setAccess, uint32_t &index, bool &resident,
+                        uint64_t maxBytes = 0);
     void releaseParkedChunksOnClose();
 
     // A role's memory steps: the shared pool chunk (a span over half of one gets its own), a chunk of block-linear images, a
@@ -1341,7 +1357,7 @@ private:
     static const Sizes kSizes[2];
     Role role_ = Role::RenderServer;
     OpenFailure openFailure_ = OpenFailure::Structural;
-    std::atomic<bool> highPriority_{false};
+    std::atomic<bool> criticalPriority_{false};
     Sizes sizes_ = kSizes[0];
     gm20b::Mutex lock_;
     Kernel k_;
@@ -1474,6 +1490,8 @@ private:
     // Written by openChannel (under channelLock_) and reopen (submit thread); read unlocked by waitFence, promise,
     // eventWord, channelCurrent and captureCpuCompletion on other threads.
     std::atomic<uint32_t> channel_{0};
+    uint64_t progressVa_ = 0;
+    uint32_t progressSeq_ = 0;
     // Stored only by whoever submits (the submit worker, or openChannel before channelReady_), one release store a job;
     // read by any thread, the memory release's purge among them, which holds lock_
     std::atomic<uint32_t> lastSeqno_{0};
@@ -1539,6 +1557,36 @@ private:
     // by header: its attachment parts' key and header (attachmentTic)
     std::unordered_multimap<uint32_t, std::pair<uint64_t, uint32_t>> partTics_;
     uint32_t nextTic_ = 1, nextTsc_ = 1, neutralTsc_ = 0, neutralCompareTsc_ = 0;
+
+    // Tier-0 pack pipelines published lock-free via atomic CAS on first hit; owned here for the device's lifetime.
+    struct Tier0PipelineSlots {
+        std::unique_ptr<std::atomic<Pipeline *>[]> slots;
+        uint32_t count = 0;
+
+        void reset(uint32_t n)
+        {
+            clear();
+            count = n;
+            if (n)
+                slots = std::make_unique<std::atomic<Pipeline *>[]>(n);
+        }
+
+        void clear()
+        {
+            if (slots)
+                for (uint32_t i = 0; i < count; ++i)
+                    delete slots[i].exchange(nullptr, std::memory_order_acq_rel);
+            slots.reset();
+            count = 0;
+        }
+
+        ~Tier0PipelineSlots()
+        {
+            clear();
+        }
+    };
+
+    Tier0PipelineSlots tier0Pipelines_;
     // the pack's, by record index, each made at its first lookup (a process uses a few of the pack's thousands); a node
     // container, so the pointers pipeline() hands out stay valid
     std::unordered_map<uint32_t, Pipeline> pipelines_;
@@ -1560,6 +1608,14 @@ private:
     // the per-warp size the channel was last given (commit; 0 on a new channel): the submitting thread's
     uint64_t slmChannel_ = 0;
     uint32_t ctWrite_[8] = {};  // SET_CT_WRITE(i) as the baseline leaves it
+    uint32_t blendPerTarget_[6] = {};
+    uint8_t blendPerTargetSeen_ = 0;
+
+    bool slmReady(uint64_t perWarp) const
+    {
+        return perWarp <= slmPerWarp_.load(std::memory_order_acquire);
+    }
+
     bool slmNeed(uint64_t perWarp);
     bool initPackWindow(std::string &err);
     bool place(uint32_t prog, uint32_t &program, uint64_t &data);
@@ -1572,19 +1628,27 @@ private:
     const uint8_t *heapCpu(uint64_t at) const;
     // `spills`: its argument tables' words (PackPipeline::spillWords), null where it has none. `far`: its far block
     // (set_entries.h), null where it has kPackEntries entries or fewer. `tess`: a tessellation state's control and
-    // evaluation programs (null: not one)
+    // evaluation programs (null: not one). `prebuilt`: PackSegments entry in tier 0 of PackHeap (null: build dynamically).
     void build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs, const PlacedProgram &fs,
                const uint32_t *blob, const char *keyString, bool caTransform, const uint32_t *spills,
-               const uint32_t *far, const PlacedProgram *tess = nullptr);
+               const uint32_t *far, const PlacedProgram *tess = nullptr, const PackSegment *prebuilt = nullptr);
+    const PackSegment *prebuiltPipelineSegment(uint32_t recIndex) const;
+    const PackSegment *prebuiltVariantSegment(uint32_t recIndex, uint32_t comboIndex) const;
+    // Lock-free tier-0 pack placement when all programs, SLM and prebuilt segments reside in the pack window; falls back to
+    // lock_ + placeRecord otherwise.
+    Pipeline *placePackedRecord(const PackPipeline &pp, bool caTransform);
+    std::unique_ptr<Pipeline> tryBuildTier0LockFree(const PackPipeline &pp, uint32_t recIndex, bool caTransform);
     // lock_ held: pack record `pp` placed (its programs in the heap) and built, once; null where the heap has no room
     Pipeline *placeRecord(const PackPipeline &pp, bool caTransform);
-    // lock_ held: `pl`'s split offered, its twin made when a draw first takes it (makeSplit)
+    // `pl`'s split offered, its twin made when a draw first takes it (makeSplit)
     void offerSplit(Pipeline &pl, SplitSource &&source);
-    void offerVariants(Pipeline &pl, const PackPipeline &pp);
+    void offerVariants(Pipeline &pl, const PackPipeline &pp, uint32_t recIndex);
+    bool offerVariantsLockFree(Pipeline &pl, const PackPipeline &pp, uint32_t recIndex);
     bool placeRequiredVariants(const PackPipeline &pp, uint64_t &slm);
-    Pipeline *placeVariant(Pipeline &pl, const std::array<uint32_t, 2> &programs);
+    Pipeline *placeVariant(Pipeline &pl, const std::array<uint32_t, 2> &programs, uint32_t recIndex,
+                           uint32_t comboIndex);
     bool placePackProgram(uint32_t index, PlacedProgram &out);
-    std::deque<Pipeline> variantPipelines_;
+    bool placePackWindowProgram(uint32_t index, PlacedProgram &out);
     std::deque<Pipeline> reachPipelines_;
     std::deque<PackPipeline> reachRecords_;
     std::deque<std::vector<uint32_t>> reachFar_;  // their far blocks, each its record's
@@ -1593,7 +1657,6 @@ private:
     SplitState *makeSplit(Pipeline &pl);
     bool placeSplitPrograms(const SplitSource &source, PlacedProgram &fs, uint32_t &prologue, uint64_t &prologueData,
                             uint32_t &prologueDataBytes);
-    std::deque<SplitSource> splitSources_;
     std::deque<SplitState> splitStates_;
     // The constexpr samplers' header indices, the pack's then the runtime records' (addRecord, under lock_). A slot is written
     // once, before the state that names it is published, and never moves: a draw reads it without lock_.
@@ -1671,6 +1734,7 @@ private:
     std::vector<std::unique_ptr<NativeSurface>> nativeSurfaces_;
     uint64_t nativeGeneration_ = 0;
     const Texture *nativeRead(const Texture &source, NativeSurface *&owner, int &error);
+    const Texture *nativeWrite(const Texture &source, NativeSurface *&owner, int &error);
     // What teardown, trim, purge or creation rollback detaches under lock_ and frees synchronously once lock_ is let go
     // (alias.cpp): BOs, VA reservations, arena host ranges and CF owner references, freed in FIFO order.
     enum class RetireKind : uint8_t {
@@ -1770,11 +1834,11 @@ private:
     // separate VOL=1 WC chunks for streaming shared buffers so shared textures in wcChunks_ stay L2-cached
     std::vector<Chunk> volatileWcChunks_;
     bool wcPoolAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &pool, uint64_t bytes, bool gpuVolatile,
-                     Span &s);
+                     Span &s, bool *dirty = nullptr);
     void wcPoolFree(std::vector<Chunk> &pool, Span &s, DeferredFrees &deferred);
-    bool wcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s);
+    bool wcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s, bool *dirty = nullptr);
     void wcFree(Span &s, DeferredFrees &deferred);
-    bool volatileWcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s);
+    bool volatileWcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s, bool *dirty = nullptr);
     void volatileWcFree(Span &s, DeferredFrees &deferred);
 
     bool blAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, uint64_t align, Span &s)
@@ -2092,7 +2156,7 @@ private:
     uint32_t allocTicPair();
     void freeTicPair(uint32_t first);
     void writeTic(const Texture &t);
-    bool poolAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s);
+    bool poolAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s, bool *dirty = nullptr);
     void poolFree(Span &s, DeferredFrees &deferred);
     bool tiledSurfaceTexture(uint64_t offset, uint32_t width, uint32_t height, uint32_t pitch, Texture &t,
                              Texture *sampled, DeferredFrees &deferred);

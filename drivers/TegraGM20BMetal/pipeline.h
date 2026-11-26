@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 #include "band_rates.h"
@@ -14,8 +15,39 @@
 namespace gm20b {
 
 struct SplitState;
-struct SplitSource;
 struct TurnedSource;
+
+// A program in the heap: its record, its SET_PIPELINE_PROGRAM value, its shader data's GPU address (0: none) and its header
+struct PlacedProgram {
+    const PackProgram *record = nullptr;
+    uint32_t program = 0;
+    uint64_t data = 0;
+    const uint8_t *header = nullptr;    // its shader header, as the CPU holds it
+    const uint16_t *farUbos = nullptr;  // its far uniform buffers (PackProgram::farUbos), null: none
+};
+
+// The pixel program of a state of none (stage_switches.h): it binds and reads nothing, its header all zeros
+PlacedProgram noPixelProgram();
+
+// What a state's split twin is made of: the pack's split (its programs by index) or a runtime record's programs, and the
+// state's own inputs to Device::build
+struct SplitSource {
+    PackSplit rec = {};
+    bool packed = false;
+    // a runtime record's programs as heap slots: the per-pixel one laid out as the pack lays one (its PackProgram at heap
+    // offset 0), the prologue's code with its shader data at prologueDataAt
+    std::vector<uint8_t> fsSlot, prologueSlot;
+    PackProgram fsInfo = {};
+    uint32_t prologueDataAt = 0, prologueDataBytes = 0;
+    const PackPipeline *pp = nullptr;
+    const uint32_t *blob = nullptr, *far = nullptr;
+    const char *keyString = nullptr;
+    PlacedProgram vs;
+    bool caTransform = false;
+    // a runtime record's slots once placed (heap offsets, ~0: not yet), so a twin asked again after no room places neither
+    // twice; under the device's lock
+    mutable uint64_t fsPlaced = ~0ull, prologuePlaced = ~0ull;
+};
 
 #if SWITCH_METAL_DIAGNOSTICS
 // The keyline probe (keyline_probe.h) for 30 s or 256 lines: its budgets start again, and every Core Animation state's
@@ -32,8 +64,22 @@ struct Pipeline {
     uint32_t vertexInstructions = 1, fragmentInstructions = 1;
     // vertex, fragment: its program can write memory a buffer binding names (program_stores.h)
     bool writesMemory[2] = {true, true};
-    std::vector<uint32_t> methods;  // the state's registers as ready push words (program offsets relocated)
-    uint32_t viewportClip = 0;      // its SET_VIEWPORT_CLIP_CONTROL
+    std::vector<uint32_t> methods;            // the state's registers as ready push words (program offsets relocated)
+    const uint32_t *prebuiltWords = nullptr;  // PackHeap words when bound from PackSegments (methods left empty)
+    uint32_t prebuiltWordCount = 0;
+    bool reselectRoot = false;  // prebuilt stream bound CbufShaderData without re-selecting per-process root_.va
+
+    const uint32_t *methodWords() const
+    {
+        return prebuiltWords ? prebuiltWords : methods.data();
+    }
+
+    uint32_t methodCount() const
+    {
+        return prebuiltWords ? prebuiltWordCount : uint32_t(methods.size());
+    }
+
+    uint32_t viewportClip = 0;  // its SET_VIEWPORT_CLIP_CONTROL
     bool namesViewportClip = false;
     bool namesViewportClipRange = false;   // it sets SET_VIEWPORT_CLIP_MIN_Z or MAX_Z
     StateSegment segment;                  // the same words in the device's segment heap; empty: they go inline
@@ -58,6 +104,7 @@ struct Pipeline {
     // variant's or a split twin's own programs read
     uint32_t memoryEntries = ~0u;
     uint8_t writeBits = 0;  // colors its draws write: SET_CT_WRITE(i) with a channel on
+    uint32_t ctWrite[8] = {};
     // colors its fragment shader reads, and may write, as storage images inside the pixel interlock (metal2vulkan's storage
     // form of a fetch: the state turns the interlock on with SET_PIXEL_SHADER_INTERLOCK_CONTROL); the ROP writes none of them
     uint8_t storageBits = 0;
@@ -154,6 +201,9 @@ struct Pipeline {
     bool heapMissing = false;
     // its argument tables' words (spill_table.h), vertex then fragment: the pack's or its runtime record's; null: none
     const uint32_t *spill[2] = {};
+    // Owned by this Pipeline so lock-free speculative builds free everything cleanly on CAS loss.
+    std::unique_ptr<SplitSource> ownedSplitSource;
+    std::vector<std::unique_ptr<Pipeline>> ownedVariants;
 };
 
 // A state's fragment program split (pack.h PackSplit): the twin that draws of rec.thresholdPixels pixels or more take, and
@@ -176,38 +226,6 @@ struct SplitLaunch {
 
 // Pipeline::restore's push words of `dwords` words of (method, value) pairs
 std::vector<uint32_t> restoreWords(const uint32_t *pairs, uint32_t dwords);
-
-// A program in the heap: its record, its SET_PIPELINE_PROGRAM value, its shader data's GPU address (0: none) and its header
-struct PlacedProgram {
-    const PackProgram *record = nullptr;
-    uint32_t program = 0;
-    uint64_t data = 0;
-    const uint8_t *header = nullptr;    // its shader header, as the CPU holds it
-    const uint16_t *farUbos = nullptr;  // its far uniform buffers (PackProgram::farUbos), null: none
-};
-
-// The pixel program of a state of none (stage_switches.h): it binds and reads nothing, its header all zeros
-PlacedProgram noPixelProgram();
-
-// What a state's split twin is made of: the pack's split (its programs by index) or a runtime record's programs, and the
-// state's own inputs to Device::build
-struct SplitSource {
-    PackSplit rec = {};
-    bool packed = false;
-    // a runtime record's programs as heap slots: the per-pixel one laid out as the pack lays one (its PackProgram at heap
-    // offset 0), the prologue's code with its shader data at prologueDataAt
-    std::vector<uint8_t> fsSlot, prologueSlot;
-    PackProgram fsInfo = {};
-    uint32_t prologueDataAt = 0, prologueDataBytes = 0;
-    const PackPipeline *pp = nullptr;
-    const uint32_t *blob = nullptr, *far = nullptr;
-    const char *keyString = nullptr;
-    PlacedProgram vs;
-    bool caTransform = false;
-    // a runtime record's slots once placed (heap offsets, ~0: not yet), so a twin asked again after no room places neither
-    // twice; under the device's lock
-    mutable uint64_t fsPlaced = ~0ull, prologuePlaced = ~0ull;
-};
 
 struct RuntimeRecord;
 struct CapturedProgram;

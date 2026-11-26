@@ -68,6 +68,13 @@ public:
         setOwner(0);
     }
 
+    // Cleared only while `expected` still owns it: an owner that handed the word on leaves the new owner in place
+    void clearIf(uint32_t expected)
+    {
+        if (expected && owner_.compare_exchange_strong(expected, 0) && waiters_.load())
+            __ulock_wake(kUnfairLock | kWakeAll | kWakeAllowNonOwner | kNoErrno, &owner_, 0);
+    }
+
     bool hasOwner() const
     {
         return owner_.load(std::memory_order_acquire) != 0;

@@ -243,7 +243,7 @@ void AGXDeviceUserClient::releaseLeft()
 #ifdef KERNEL
 	while ((left.bos || left.indexes || left.bindings || reclaimDeferredCount_) &&
 	       submitGate_.mutating())
-		IOLockSleep(lock_, &submitGate_, THREAD_UNINT);
+		switch_gpu_sleep_inheritor(lock_, &submitGate_, submitGate_.mutator());
 	const uint64_t reclaimSeq = reclaimDeferredCount_ ? reclaimSeq_ : 0u;
 	IOLockUnlock(lock_);
 	if (!left.bos && !left.indexes && !left.bindings && !reclaimSeq)
@@ -254,7 +254,7 @@ void AGXDeviceUserClient::releaseLeft()
 		drainDeferredReclaims(reclaimSeq);
 #else
 	while ((left.bos || left.indexes || left.bindings) && submitGate_.mutating())
-		IOLockSleep(lock_, &submitGate_, THREAD_UNINT);
+		switch_gpu_sleep_inheritor(lock_, &submitGate_, submitGate_.mutator());
 	IOLockUnlock(lock_);
 	if (!left.bos && !left.indexes && !left.bindings)
 		return;
@@ -272,6 +272,7 @@ void AGXDeviceUserClient::releaseWork(thread_call_param_t owner, thread_call_par
 void AGXDeviceUserClient::publishBindings(BindingTable::Snapshot *made)
 {
 	bindTable_.publish(made, binds_, nbinds_);
+	bumpBindGen();
 	__atomic_store_n(&retirementPending_, 1u, __ATOMIC_RELEASE);
 	scheduleRetirement();
 }
@@ -388,6 +389,8 @@ void AGXDeviceUserClient::drainResources()
 	while (nbinds_)
 		unbindOverlaps(binds_[0].va, binds_[0].range, nullptr);
 	boIndex_.clear();
+	bumpBoGen();
+	bumpBindGen();
 	while (bos_) {
 		auto *bo = bos_;
 		bos_ = bo->next;
@@ -448,6 +451,7 @@ IOReturn AGXDeviceUserClient::freeBo(Bo **p)
 #endif
 	switch_gpu_backing_member_freed(bo->backing);
 	boIndex_.erase(bo->handle);
+	bumpBoGen();
 	for (uint32_t i = 0; i < nbinds_;) {
 		if (binds_[i].bo == bo) {
 			unbindOverlaps(binds_[i].va, binds_[i].range, bo);

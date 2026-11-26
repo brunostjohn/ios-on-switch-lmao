@@ -40,6 +40,8 @@ constexpr uint32_t kInvalidateData = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, DAT
                    kFlushData = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, FLUSH_DATA, TRUE),
                    kInvalidateConstant = NVDEF(NVB1C0, INVALIDATE_SHADER_CACHES, CONSTANT, TRUE);
 constexpr uint32_t kEncoderWords = 1 << 12;
+static_assert(kSlotViewSrgb == kKernelWindowSrgb);
+
 // PackKernelEntry.slot of a constexpr sampler: its index in the pack's (pack/kernels.py CONSTEXPR)
 constexpr uint8_t kConstexprSampler = 0x80;
 
@@ -401,8 +403,9 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
     uint8_t map = 0;
     bool levelZero = false, other = false;
     for (uint32_t i = 0; i < r.entries; i++)
-        if (r.entry[i].kind == KernelTexture && r.entry[i].slot < 31 && textures_[r.entry[i].slot]) {
-            const Texture &t = *textures_[r.entry[i].slot];
+        if (r.entry[i].kind == KernelTexture && kernelTextureSlot(r.entry[i]) < 31 &&
+            textures_[kernelTextureSlot(r.entry[i])]) {
+            const Texture &t = *textures_[kernelTextureSlot(r.entry[i])];
             map = std::max(map, t.addressMap);
             if (!kernelEntryWrites(r, i)) {
                 levelZero |= t.levelZero;
@@ -436,7 +439,9 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
             at[2] = b.va ? desc.range : 0;
             at[3] = 0;
         } else if (e.kind == KernelTexture || e.kind == KernelTexturePlane) {
-            const Texture *t = writes ? textures_[e.slot] : cb_.readTexture(textures_[e.slot]);
+            const uint8_t slot = kernelTextureSlot(e);
+            const Texture *bound = slot < 31 ? textures_[slot] : nullptr;
+            const Texture *t = writes ? bound : cb_.readTexture(bound);
             if (t && !t->tic) {  // memoryless, or depth without ShaderRead: a load reads header 0's zeros
                 if (writes) {
                     *why = "a kernel stores a texture with no memory a shader can address";
@@ -447,7 +452,7 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
             if (t && !writes && t->standIn) {
                 const FormatInfo *s = formatInfo(t->standIn->format);
                 if (s && slotView(e.window, s->tic0, swizzledWord0(s->tic0, t->standIn->swizzle), s->bpp,
-                                  blockCompressed(s)) == SlotView::Own)
+                                  blockCompressed(s), s->srgb) == SlotView::Own)
                     t = t->standIn;
             }
             // a two-plane texture's color words at the slot's own entry, its alpha bytes at its plane entry
@@ -463,18 +468,32 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
                     cb_.use(*t->sampled, writes);
             }
             uint32_t tic = t ? t->tic : 0;
+            const bool cubeAsArray =
+                t && kernelTextureArray(e) && (t->type == fx::kTexCube || t->type == fx::kTexCubeArray);
             if (const FormatInfo *f = t ? formatInfo(t->format) : nullptr) {
-                const SlotView view =
-                    slotView(e.window, f->tic0, swizzledWord0(f->tic0, t->swizzle), f->bpp, blockCompressed(f));
+                const uint32_t own = swizzledWord0(f->tic0, t->swizzle);
+                const SlotView view = slotView(e.window, f->tic0, own, f->bpp, blockCompressed(f), f->srgb);
                 if (view == SlotView::None) {
                     *why = "a kernel m2v binds a view of another texel size at a texture slot";
                     return false;
                 }
-                if (view == SlotView::View && !(tic = dev_.viewTic(*t, e.window, ViewAccess::Texture))) {
-                    *why = "no texture header left for a kernel's view of another format";
+                if (view == SlotView::View) {
+                    const uint32_t word0 = kernelTextureWord0(e.window);
+                    const uint32_t targetWord0 = word0 == f->tic0 ? own : word0;
+                    if (!(tic = dev_.viewTic(*t, targetWord0, ViewAccess::Texture, cubeAsArray))) {
+                        *why = "no texture header left for a kernel's view of another format";
+                        failure_ = ComputeFailure::OutOfMemory;
+                        return false;
+                    }
+                } else if (cubeAsArray && !(tic = dev_.arrayViewTic(*t))) {
+                    *why = "no texture header left for a kernel's 2D array view of a cube";
                     failure_ = ComputeFailure::OutOfMemory;
                     return false;
                 }
+            } else if (cubeAsArray && !(tic = dev_.arrayViewTic(*t))) {
+                *why = "no texture header left for a kernel's 2D array view of a cube";
+                failure_ = ComputeFailure::OutOfMemory;
+                return false;
             }
             at[0] |= tic;
         } else if (e.kind == KernelSpillTable) {
@@ -510,8 +529,9 @@ bool ComputeEncoder::prepareDescriptors(const char **why)
             const Sampler *s = e.slot < 16 ? samplers_[e.slot] : nullptr;
             const Texture *sampled = nullptr;
             for (uint32_t j = 0; s && s->desc.border && j < r.entries; j++)
-                if (r.entry[j].kind == KernelTexture && r.entry[j].offset == e.offset && r.entry[j].slot < 31)
-                    sampled = textures_[r.entry[j].slot];
+                if (r.entry[j].kind == KernelTexture && r.entry[j].offset == e.offset &&
+                    kernelTextureSlot(r.entry[j]) < 31)
+                    sampled = textures_[kernelTextureSlot(r.entry[j])];
             const uint8_t sampledMap = levelZero ? kLevelZeroMap : map;
             const uint32_t mapped = s && sampledMap ? s->mapped[sampledMap] : 0;
             if (s && levelZero && !mapped) {
@@ -733,19 +753,44 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
     // A loop's body is laid down once and listed per copy (loop_copies.h): no band cuts a batch inside it, and its
     // copies end the batches between them
     const bool looping = cb_.loops_.open();
+    const uint64_t progressVa = dev_.channelProgressVa();
+    const bool unmeasured = units >= kMeasureUnits && state_->rate.psPerUnit.load(std::memory_order_relaxed) == 0;
+    const uint32_t maxPieces = progressVa ? kMaxTileBands : kMaxBands;
+    const uint32_t left =
+        progressVa ? kMaxTileBands : (cb_.bands < kBandsPerCommandBuffer ? kBandsPerCommandBuffer - cb_.bands : 0);
     const uint32_t pieces =
         dev_.compositorClass() || looping
             ? 1
             : pieceCount(estimatedNs(state_->rate, units, workNs(laneWork(units, state_->instructions))),
-                         dev_.bandBudgetNs(), grid[axis], kBandsPerCommandBuffer - cb_.bands);
+                         dev_.bandBudgetNs(), grid[axis], left, maxPieces, unmeasured);
     emitKindSwitch();
     if (serial_ && dispatched_ && first)
         barrier();
     dispatched_ = true;
-    if (pieces > 1 && cb_.batchWork_.operations)
-        cutBatch();
-    if (first)
+    if (pieces > 1 && cb_.batchWork_.operations) {
+        if (progressVa) {
+            room(kProgressReleaseWords);
+            emitProgressRelease(p_, progressVa, dev_.nextProgressSeq());
+            cb_.batchWork_ = {};
+        } else {
+            cutBatch();
+        }
+    }
+    bool selfMeasured = false;
+    DrawTiming selfTiming;
+    if (pieces > 1 && first && last && !looping && !dev_.compositorClass()) {
+        dispatches_++;
+        if (cb_.timings.size() < kMeasuredPerCommandBuffer && measure(state_->rate, units)) {
+            selfMeasured = true;
+            const uint32_t n = dev_.drawStamps_++;
+            selfTiming = {&state_->rate,        units, n % kDrawStampSlots, n + 1 ? n + 1 : 1, state_->rec->keyHash,
+                          state_->instructions, pieces};
+            room(kStampWords);
+            emitStamp(p_, dev_.stamps_.va + drawStampOffset(selfTiming.slot, false), selfTiming.payload);
+        }
+    } else if (first) {
         noteDispatch(units, looping, pieces);
+    }
     slotTableVa_ = 0;
     for (uint32_t i = 0; i < pieces; i++) {
         const DispatchPiece piece = dispatchPiece(grid, axis, i, pieces);
@@ -753,9 +798,22 @@ bool ComputeEncoder::dispatchRegion(const ComputeRegion &part, const std::array<
         for (uint64_t s = 0; s < slices; s++)
             if (!launch(grid, qmdSlice(piece, s), region, why))
                 return false;
-        if (pieces > 1)
-            cutBatch();
+        if (pieces > 1) {
+            if (selfMeasured && i + 1 == pieces) {
+                room(kStampWords + (progressVa ? kProgressReleaseWords : 0));
+                emitStamp(p_, dev_.stamps_.va + drawStampOffset(selfTiming.slot, true), selfTiming.payload);
+            }
+            if (progressVa) {
+                room(kProgressReleaseWords);
+                emitProgressRelease(p_, progressVa, dev_.nextProgressSeq());
+                cb_.batchWork_ = {};
+            } else {
+                cutBatch();
+            }
+        }
     }
+    if (selfMeasured)
+        cb_.timings.push_back(selfTiming);
     if (pieces > 1) {
         cb_.bands += pieces;
         SWITCH_METAL_DIAGNOSTIC(dev_.stats.bandedDispatches++; dev_.stats.bands += pieces);

@@ -57,6 +57,7 @@
 #include "SwitchInteraction.h"
 #include "SwitchSlowPresent.h"
 #include "SwitchSBIM.h"
+#include "SwitchSwapZeroLayer.h"
 #include "SwitchTimedPresent.h"
 #include "../SwitchSuspend/SwitchSleepSteps.h"
 #include "../TegraVIC/TegraVICConfig.h"
@@ -697,6 +698,77 @@ class NativeLegacyDisplay : public IOMobileFramebufferLegacy {
     switch_frame_info::State *frameInfo = nullptr;  // out of the object for the same reason
     bool blanked = false;  // a blank swap's black is the colour unit's until the next flip latches
     static inline switch_display::ColourBlank colourBlankSwap;  // static: the instance is at the kalloc_type limit
+#if SWITCH_IPSW_KIND_24B119
+    static constexpr unsigned kLegacyVtableSlots = 379, kSwapSubmitSlot = 180;
+#else
+    static constexpr unsigned kLegacyVtableSlots = 358, kSwapSubmitSlot = 178;
+#endif
+    typedef IOReturn (*SwapSubmitFn)(IOMobileFramebufferLegacy *, void *, IOUserClient *, uint32_t *);
+    static inline IOSimpleLock *swapZeroLock = nullptr;
+    static inline switch_display::SwapZeroLayerState swapZeroLayer;
+    static inline const uintptr_t *originalLegacyVtable = nullptr;
+    static inline uintptr_t *patchedLegacyVtable = nullptr;
+
+    static IOReturn swapSubmitFilter(IOMobileFramebufferLegacy *fb, void *swap, IOUserClient *client, uint32_t *out)
+    {
+        const auto original = reinterpret_cast<SwapSubmitFn>(originalLegacyVtable[kSwapSubmitSlot]);
+        if (!swap || !swapZeroLock)
+            return original(fb, swap, client, out);
+        auto *bytes = static_cast<unsigned char *>(swap);
+        IOSimpleLockLock(swapZeroLock);
+        const switch_display::SwapZeroLayerState::Call call = swapZeroLayer.begin(bytes);
+        IOSimpleLockUnlock(swapZeroLock);
+        const IOReturn status = original(fb, swap, client, out);
+        IOSimpleLockLock(swapZeroLock);
+        swapZeroLayer.finish(bytes, call, status == kIOReturnSuccess);
+        IOSimpleLockUnlock(swapZeroLock);
+        return status;
+    }
+
+    static void resetSwapZeroLayer()
+    {
+        if (!swapZeroLock)
+            return;
+        IOSimpleLockLock(swapZeroLock);
+        swapZeroLayer.reset();
+        IOSimpleLockUnlock(swapZeroLock);
+    }
+
+    void installSwapSubmitFilter()
+    {
+        if (patchedLegacyVtable)
+            return;
+        if (!swapZeroLock) {
+            swapZeroLock = IOSimpleLockAlloc();
+            if (!swapZeroLock)
+                return;
+        }
+        const uintptr_t *table = *reinterpret_cast<uintptr_t *const *>(this);
+        uintptr_t *raw = static_cast<uintptr_t *>(IOMalloc((kLegacyVtableSlots + 2) * sizeof(uintptr_t)));
+        if (!raw)
+            return;
+        memcpy(raw, table - 2, (kLegacyVtableSlots + 2) * sizeof(uintptr_t));
+        originalLegacyVtable = table;
+        patchedLegacyVtable = raw + 2;
+        patchedLegacyVtable[kSwapSubmitSlot] = reinterpret_cast<uintptr_t>(&swapSubmitFilter);
+        __asm__ volatile("dmb ish" ::: "memory");
+        *reinterpret_cast<uintptr_t **>(this) = patchedLegacyVtable;
+    }
+
+    void removeSwapSubmitFilter()
+    {
+        if (patchedLegacyVtable && *reinterpret_cast<uintptr_t **>(this) == patchedLegacyVtable) {
+            *reinterpret_cast<const uintptr_t **>(this) = originalLegacyVtable;
+            __asm__ volatile("dmb ish" ::: "memory");
+            IOFree(patchedLegacyVtable - 2, (kLegacyVtableSlots + 2) * sizeof(uintptr_t));
+            patchedLegacyVtable = nullptr;
+            originalLegacyVtable = nullptr;
+        }
+        if (swapZeroLock) {
+            IOSimpleLockFree(swapZeroLock);
+            swapZeroLock = nullptr;
+        }
+    }
 
     // Every request the validator accepted and the family has not retired yet. A client may submit swap N+1 while swap N is still on the GPU
     // (int-131: swap 3 was validated during swap 2's GPU copy and one remembered pointer lost swap 2, which then never retired and left
@@ -1724,7 +1796,7 @@ private:
         char line[960];
         size_t at = 0;
         auto add = [&](const char *format, auto... values) {
-            if (at < sizeof(line))
+            if (logged && at < sizeof(line))
                 at += static_cast<size_t>(snprintf(line + at, sizeof(line) - at, format, values...));
         };
         const auto span = [&](const char *name, const Span &value) {
@@ -3177,6 +3249,7 @@ public:
             IODelete(planeSpace.used, uint32_t, kPlaneSpaceWords);
         if (intMaskLock)
             IOSimpleLockFree(intMaskLock);
+        removeSwapSubmitFilter();
         IOMobileFramebufferLegacy::free();
     }
 
@@ -3187,6 +3260,7 @@ public:
         stopGpuCopy();
         stopPlaneComposite();
         stopVsync();
+        resetSwapZeroLayer();
         transferred = false;
         for (auto &entry : validated)
             entry = nullptr;
@@ -3278,6 +3352,7 @@ public:
                 this);
         }
         if (primary) {
+            installSwapSubmitFilter();
             __atomic_store_n(&primaryDisplay, this, __ATOMIC_RELEASE);
             columnScanRegister();
             dcClassRegister();
@@ -4337,6 +4412,7 @@ public:
     // NOLINTNEXTLINE(misc-no-recursion): kickSwapQueue's kicking flag stops re-entry; a nested kick only loops
     void retireSwapUnshown(const OriginalLegacySwapRequest *request, int directEntry)
     {
+        resetSwapZeroLayer();
         if (directEntry == kNoBuffer)
             ring.release();
         releaseIdleDirectReads();
@@ -4991,6 +5067,8 @@ public:
             switch_render_server_watch(task);  // the opener, in its own context
         const IOReturn status = IOMobileFramebufferLegacy::newUserClient(task, security, type, client);
         native_legacy_client_observed(status, status == kIOReturnSuccess && client ? *client : nullptr);
+        if (status == kIOReturnSuccess && client && *client && primary)
+            resetSwapZeroLayer();
         if (status == kIOReturnSuccess && client && *client && primary && displaySleepEnabled())
             answerPowerRequests(*client);
         return status;

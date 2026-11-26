@@ -208,7 +208,8 @@ class SwitchMetalCommandPlan {
     // The render use lists resolved last, by resource revision and pipeline: a revision moves with every bind of
     // another resource, so only draws close together share one (a state switched back to over the same resources)
     static constexpr uint32_t kRecentRenderUses = 4;
-    std::array<ResourceKey, kRecentRenderUses> recentRenderKeys_{};
+    std::array<ResourceKey, kRecentRenderUses> recentRenderKeys_{
+        {{UINT64_MAX, 0}, {UINT64_MAX, 0}, {UINT64_MAX, 0}, {UINT64_MAX, 0}}};
     std::array<uint32_t, kRecentRenderUses> recentRenderUses_{};
     uint32_t recentRenderAt_ = 0;
     uint32_t drawUses(uint32_t base, void *indices, void *arguments);
@@ -453,6 +454,7 @@ public:
 
     size_t storageBytes() const;
     void clear();
+    void swapClean(SwitchMetalCommandPlan &other) noexcept;
 
     template <typename F> void forEachOperationUse(size_t from, size_t to, F visit) const
     {

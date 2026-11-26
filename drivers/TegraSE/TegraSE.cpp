@@ -6,9 +6,12 @@
 //   - Both engines behind one queue: a caller takes whichever is free (TegraSE.h), so two callers run in parallel.
 //     The AppleKeyStore stand-in's boot probe shares them through tegra_se_claim.
 //   - DMA straight from the caller's pages: a linked list (one {address, size} entry per physically contiguous run)
-//     built from the kernel virtual range (ml_vtophys), cleaned/invalidated in place. The engine takes 32-bit
-//     addresses: a buffer with any byte above 4 GiB goes through the engine's bounce buffer (256 KiB, below 4 GiB) and
-//     is counted, as is anything bigger the engine cannot reach (then the CPU does it).
+//     built from the kernel virtual range (ml_vtophys), cleaned/invalidated in place. SE1 reads and writes through its
+//     own memory-controller clients (CRYPTO_CONFIG MEMIF = MCCIF, sesrd/seswr, as L4T's tegra210b01 chip data sets
+//     mccif_supported): over the AHB, which takes one outstanding read per master (TRM 19.4.1), both engines ran at
+//     about 120 MB/s for every algorithm, a tenth of the A57s' AES and SHA instructions. SE2 stays on the AHB (kMemif).
+//     The engine takes 32-bit addresses: a buffer with any byte above 4 GiB goes through the engine's bounce buffer
+//     (256 KiB, below 4 GiB) and is counted, as is anything bigger the engine cannot reach (then the CPU does it).
 //   - Keyslots 1..13 of each engine as a key cache (0 is L4T's SRK slot, 14/15 Mariko's boot keys and the
 //     AppleKeyStore stand-in's): a key already in a slot is not written again.
 //   - Completion by interrupt. After the end interrupt the only wait is the bounded drain T210B01 needs before the
@@ -16,20 +19,19 @@
 //     no interrupt of its own; TegraSecurityEngine.cpp does the same.
 //   - AES-128/192/256 ECB, CBC, CTR, OFB (both directions), AES-CMAC, SHA-1/224/256/384/512 one-shot, and SHA-1/256/
 //     384/512 compress from any state (the state loaded into HASH_RESULT, SHA_CONFIG continue, MSG_LEFT past the end
-//     so the engine does not pad): that is what corecrypto's digest compress does, so XNU's own hashing (the
-//     code-signing page hashes included) runs here through switch_digest_compress_hook (libkern/crypto/
-//     register_crypto.c). Every check is still corecrypto's; only the block arithmetic moves.
+//     so the engine does not pad): that is what corecrypto's digest compress does, so XNU's own hashing can run here
+//     through switch_digest_compress_hook (libkern/crypto/register_crypto.c), from each algorithm's cutover up. Every
+//     check is still corecrypto's; only the block arithmetic moves.
 //   - The DRBG: 64 bytes into the kernel PRNG (write_random) at start.
-//   - Small, one-off, latency-bound work stays on the A57s' AES/SHA instructions (code-signing's 16 KiB page hashes on
-//     page-in, short digests); from each algorithm's cutover up it goes to the engines. The cutover is 64 KiB; a debug
-//     kernel replaces it with the crossover its timing run measures 90 s after start (1 KiB to 1 MiB, every algorithm,
-//     each engine against the CPU): the smallest size at which every engine is no slower than the CPU.
+//   - Work stays on the A57s' AES/SHA instructions below each algorithm's cutover (gCutover), code-signing's page
+//     hashes included. A debug kernel's timing run 90 s after start (1 KiB to 1 MiB, every algorithm, each engine
+//     against the CPU) lowers each cutover to the smallest size at which every engine is no slower.
 //
-// Correctness: known answers per algorithm on each engine at start; then the first 32 operations of each algorithm and
-// one in 512 after are also done on the CPU and compared. A failed answer or a mismatch logs one line and moves that
-// algorithm (or that engine) back to the CPU for the boot; the caller still gets the CPU's result. An engine that
-// never ends an operation, or whose end interrupt does not arrive, is one line and off while it has never completed
-// one; after it has (the path proven, DMA possibly in flight into a caller's pages) it is a one-line panic.
+// Correctness: known answers per algorithm on each engine at start; a failed answer logs one line and keeps that
+// algorithm on the CPU for the boot. Callers' operations are not checked again on the CPU. An engine that
+// never ends an operation, or whose end interrupt does not arrive, is one line and off during bring-up, which runs
+// every kind of operation on it into the driver's own buffers, and in a debug kernel's timing run, which does the same
+// at every size; serving a caller (DMA possibly in flight into its pages) it is a one-line panic.
 //
 // Registers and sequences: Linux L4T drivers/crypto/tegra-se.c (NVIDIA; GPL-2.0) tegra_se_config_algo/config_crypto/
 // config_sha/start_operation/read_hash_result/write_key_table with the tegra210b01 chip data; hekate bdk/sec/se.c and
@@ -119,8 +121,18 @@ constexpr unsigned kClockSe = 127, kClockEntropy = 149;  // TEGRA210_CLK_SE (ban
 constexpr uint32_t kDstHash = 1u << 2;
 // CRYPTO_CONFIG: HASH_ENB 0, XOR_POS << 1 (bypass 0, top 2, bottom 3), INPUT_SEL << 3 (AHB 0, RANDOM 1, AESOUT 2,
 // LNR_CTR 3), VCTRAM_SEL << 5 (AHB 0, AESOUT 2, PREVAHB 3), IV_SEL << 7 (original 0), CORE_SEL << 8 (encrypt 1),
-// CTR_CNTN << 11, KEY_INDEX << 24, MEMIF << 31 (AHB 0).
-constexpr uint32_t kCryptoEncrypt = 1u << 8;
+// CTR_CNTN << 11, KEY_INDEX << 24, MEMIF << 31 (AHB 0, MCCIF 1).
+constexpr uint32_t kCryptoEncrypt = 1u << 8, kCryptoMccif = 1u << 31;
+// Each engine's MEMIF, and the MC_SMMU_<swgroup>_ASID registers of the memory clients an MCCIF engine uses, whose
+// bit 31 would translate its addresses (physical here). The Switch device tree's iommus put SE1 in swgroups 35 (SE,
+// 0xabc) and 38 (SE1, 0xac8), SE2 in 29 (ISP2B, 0xaa4) and 53. L4T's tegra210b01-soc-base.dtsi names SE2's ISP2B and
+// ISP2B1; neither the T210 manual nor L4T's swgroup table gives 53 a register, so whether it translates is unknown and
+// SE2 stays on the AHB, the path it ran on 25 Nov.
+constexpr uint32_t kMemif[2] = {kCryptoMccif, 0};
+constexpr uint64_t kMcPA = 0x70019000;
+constexpr uint32_t kSmmuAsid[2][2] = {{0xabc, 0xac8}, {}};
+constexpr uint32_t kSmmuTranslates = 1u << 31;
+constexpr uint32_t kCarSuperSe = 0x704;
 
 constexpr unsigned kEngines = 2, kFirstSlot = 1, kLastSlot = 13;
 constexpr uint32_t kBounceBytes = 256 * 1024;
@@ -128,7 +140,6 @@ constexpr uint32_t kListBytes = 0x1000, kInList = 0x000, kOutList = 0x800, kScra
 constexpr unsigned kMaxEntries = 220;
 constexpr uint32_t kOpTimeoutMs = 200;
 constexpr size_t kHookMinBytes = 1024;  // smaller compresses (finals, short updates) stay on the CPU
-constexpr uint32_t kCheckFirst = 32;
 
 struct Dma {
     switch_dma_buffer buffer;
@@ -162,7 +173,7 @@ Engine gEngines[kEngines] = {
     {"SE1", 0x70012000, 32 + 58, 1u << 14, nullptr, nullptr, 0, 0, 0, 0, false, false, false, 0, {}, 0, {}, {}, {}, 0},
     {"SE2", 0x70412000, 32 + 190, 1u << 13, nullptr, nullptr, 0, 0, 0, 0, false, false, false, 0, {}, 0, {}, {}, {}, 0},
 };
-volatile uint8_t *gAhb;
+volatile uint8_t *gAhb, *gMc;
 IOWorkLoop *gLoop;
 IOLock *gQueue;
 volatile bool gSleeping;  // tegra_se_suspend to tegra_se_resume: callers take the CPU path
@@ -189,15 +200,16 @@ const char *const kAlgName[ALGS] = {"sha1",    "sha224",  "sha256",  "sha384",  
 
 struct AlgState {
     volatile bool on;
-    volatile uint32_t ops;
     volatile uint64_t bytes, bounced;
 };
 
 AlgState gAlg[ALGS];
-// The CPU keeps what is small and one-off (the A57s' AES/SHA instructions answer sooner); from this many bytes an
-// algorithm goes to the engines. Compiled defaults (code-signing's 16 KiB page hashes and single TLS records stay on the
-// CPU), replaced at a debug kernel's 90 s timing run by each algorithm's measured crossover.
-volatile size_t gCutover[ALGS] = {65536, 65536, 65536, 65536, 65536, 65536, 65536, 65536, 65536, 65536};
+// From this many bytes an algorithm goes to the engines. 25 Nov's timing run (both engines over the AHB) had the CPU
+// answer sooner at every size to 1 MiB; past that the engines still free the CPU for the whole transfer, which is the
+// bulk route debug kernels ran then (2 MiB). Code-signing's page hashes (16 KiB at most) stay on the CPU. A debug
+// kernel's timing run lowers a cutover where it measures every engine no slower.
+constexpr size_t kBulk = 2u << 20;
+volatile size_t gCutover[ALGS] = {kBulk, kBulk, kBulk, kBulk, kBulk, kBulk, kBulk, kBulk, kBulk, kBulk};
 // The driver's own known-answer and timing threads: every size to the engines, whatever the cutover.
 thread_t volatile gForced[2];
 
@@ -208,6 +220,7 @@ bool forced()
 }
 
 volatile bool gReady;  // bring-up done: other callers may use the engines
+const Engine *gOnly;   // forceOnly's engine, under gQueue
 
 // Only `only` (or none) handed out by the queue, under its lock: the known answers and the timing run.
 void forceOnly(const Engine *only)
@@ -225,6 +238,7 @@ void forceOnly(const Engine *only)
     }
     for (Engine &e : gEngines)
         e.busy = (only != nullptr) && &e != only;
+    gOnly = only;
     IOLockUnlock(gQueue);
 }
 
@@ -239,7 +253,7 @@ void tally(volatile uint64_t &counter, uint64_t bytes)
     if (&counter == &gUnsleepable) {
         switch_refusal("TegraSE", "cannot sleep", "%llu bytes done on the CPU: the caller cannot wait for an engine",
                        bytes);
-    } else {
+    } else if (&counter == &gUnreachable) {
         switch_refusal("TegraSE", "unreachable buffer", "%llu bytes done on the CPU: a buffer the engines cannot map",
                        bytes);
     }
@@ -256,6 +270,11 @@ uint32_t rd(const Engine &e, uint32_t offset)
 void wr(const Engine &e, uint32_t offset, uint32_t value)
 {
     switch_mmio_write32(e.regs, offset, value);
+}
+
+void crypto(const Engine &e, uint32_t config)
+{
+    wr(e, CRYPTO_CONFIG, config | kMemif[&e - gEngines]);
 }
 
 bool clockOn()
@@ -298,6 +317,15 @@ bool filter(OSObject *, IOFilterInterruptEventSource *sender)
 
 void wipeSlots(Engine &e);
 
+// Until now every operation wrote only the driver's own buffers (bring-up). From here callers' pages reach the engines,
+// and a lost end interrupt or an output that never drains may have DMA in flight into them: a panic instead of the
+// engine turned off. The driver's own threads (forced) still write only buffers that outlive an engine turned off.
+void prove()
+{
+    for (Engine &e : gEngines)
+        e.proven = e.up;
+}
+
 void engineOff(Engine &e, const char *what)
 {
     if (clockOn())
@@ -335,7 +363,7 @@ bool run(Engine &e, uint32_t in, uint32_t out)
         char gic[160];
         switch_interrupt_describe(e.intid, gic, sizeof gic);
         const bool ended = (status & (kIntDone | kIntError)) != 0u;
-        if (e.proven) {
+        if (e.proven && !forced()) {
             panic("TegraSE: %s %s in %u ms (INT_STATUS %#x STATUS %#x ERR %#x; %s)", e.name,
                   ended ? "end interrupt lost" : "operation never ended", kOpTimeoutMs, status, rd(e, STATUS),
                   rd(e, ERR_STATUS), gic);
@@ -355,14 +383,13 @@ bool run(Engine &e, uint32_t in, uint32_t out)
     }
     for (unsigned i = 0; (rd(e, STATUS) & kStatusBusy) || (switch_mmio_read32(gAhb, kAhbWrque) & e.ahbMaster); ++i) {
         if (i > 100000) {
-            if (e.proven)
+            if (e.proven && !forced())
                 panic("TegraSE: %s output never drained (STATUS %#x)", e.name, rd(e, STATUS));
             snprintf(gWhy, sizeof gWhy, "output never drained (STATUS %#x)", rd(e, STATUS));
             engineOff(e, gWhy);
             return false;
         }
     }
-    e.proven = true;
 #if DEVELOPMENT || DEBUG
     e.ops++;
 #endif
@@ -374,12 +401,12 @@ bool claim(Engine &e, uint32_t owner)
     return __sync_bool_compare_and_swap(&e.owner, 0u, owner) || e.owner == owner;
 }
 
-// Any free engine (both run in parallel for two callers); null when none is up.
+// Any free engine (both run in parallel for two callers); null when none is up, or forceOnly's engine is down.
 Engine *acquire()
 {
     IOLockLock(gQueue);
     for (;;) {
-        if (gSleeping) {
+        if (gSleeping || (gOnly && !gOnly->up)) {
             IOLockUnlock(gQueue);
             return nullptr;
         }
@@ -560,22 +587,22 @@ bool aesRun(Engine &e, tegra_se_mode mode, bool encrypt, unsigned slot, unsigned
     const uint32_t km = keyMode(keyBytes);
     const bool decrypt = !encrypt && (mode == TEGRA_SE_ECB || mode == TEGRA_SE_CBC);
     wr(e, CONFIG, decrypt ? (1u << 8 | km << 16) : (1u << 12 | km << 24));
-    uint32_t crypto = slot << 24;
+    uint32_t config = slot << 24;
     switch (mode) {
     case TEGRA_SE_ECB:
-        crypto |= encrypt ? kCryptoEncrypt : 0;
+        config |= encrypt ? kCryptoEncrypt : 0;
         break;
     case TEGRA_SE_CBC:
-        crypto |= encrypt ? (2u << 1 | 2u << 5 | kCryptoEncrypt) : (3u << 1 | 3u << 5);
+        config |= encrypt ? (2u << 1 | 2u << 5 | kCryptoEncrypt) : (3u << 1 | 3u << 5);
         break;
     case TEGRA_SE_CTR:
-        crypto |= 3u << 1 | 3u << 3 | kCryptoEncrypt | 1u << 11;
+        config |= 3u << 1 | 3u << 3 | kCryptoEncrypt | 1u << 11;
         break;
     case TEGRA_SE_OFB:
-        crypto |= 3u << 1 | 2u << 3 | kCryptoEncrypt;
+        config |= 3u << 1 | 2u << 3 | kCryptoEncrypt;
         break;
     }
-    wr(e, CRYPTO_CONFIG, crypto);
+    crypto(e, config);
     if (mode == TEGRA_SE_CTR) {
         uint32_t w[4];
         memcpy(w, iv, 16);
@@ -624,7 +651,7 @@ void setLengths(const Engine &e, uint64_t lengthBits, uint64_t leftBits)
 bool shaRun(Engine &e, unsigned alg, size_t len, uint32_t *state, unsigned words)
 {
     wr(e, CONFIG, 3u << 12 | shaMode(alg) << 24 | kDstHash);
-    wr(e, CRYPTO_CONFIG, 0);
+    crypto(e, 0);
     if (!state) {
         setLengths(e, static_cast<uint64_t>(len) << 3, static_cast<uint64_t>(len) << 3);
         wr(e, SHA_CONFIG, 1);  // INIT_HASH
@@ -662,7 +689,8 @@ void shaDigest(const Engine &e, unsigned alg, uint8_t *out)
     memcpy(out, w, static_cast<size_t>(n) * 4);
 }
 
-// The CPU's answer (kernel corecrypto's AES modes, the A57s' AES instructions): the reference every check uses.
+// The CPU's AES (kernel corecrypto's AES modes, the A57s' AES instructions): a CTR/OFB tail block, CMAC's subkeys and
+// the timing run's CPU side.
 bool cpuAes(tegra_se_mode mode, bool encrypt, const uint8_t *key, unsigned keyBytes, const uint8_t *ivIn,
             const uint8_t *in, uint8_t *out, size_t len)
 {
@@ -720,26 +748,20 @@ bool cpuAes(tegra_se_mode mode, bool encrypt, const uint8_t *key, unsigned keyBy
     return ok;
 }
 
-bool shouldCheck(unsigned alg)
-{
-#if DEVELOPMENT || DEBUG
-    constexpr uint32_t kCheckEvery = 512;
-    const uint32_t n = __atomic_fetch_add(&gAlg[alg].ops, 1, __ATOMIC_RELAXED);
-    return n < kCheckFirst || n % kCheckEvery == 0;
-#else
-    // Boot known-answer and loaded-state qualification still run. Production requests use the qualified engine once;
-    // a second full CPU encryption/hash is development diagnostics, not completion or hardware-error handling.
-    (void)alg;
-    return false;
-#endif
-}
-
 void algOff(unsigned alg, const char *what)
 {
     if (!gAlg[alg].on)
         return;
     gAlg[alg].on = false;
     IOLog("TegraSE: %s back on the CPU for this boot: %s\n", kAlgName[alg], what);
+}
+
+// An operation that failed on an engine still up is the algorithm's (an error the engine reported); one that turned
+// its engine off leaves the algorithm on the other engine.
+void runFailed(const Engine &e, unsigned alg)
+{
+    if (e.up)
+        algOff(alg, gWhy);
 }
 
 bool canSleep()
@@ -774,7 +796,7 @@ int aesLocked(tegra_se_mode mode, bool encrypt, const uint8_t *key, unsigned key
             result = 0;
         } else {
             result = -2;  // the engine ran (or tried): the output buffer may hold anything
-            algOff(alg, gWhy);
+            runFailed(*e, alg);
         }
     } else {
         tally(gUnreachable, whole);
@@ -815,7 +837,6 @@ extern "C" int tegra_se_aes(tegra_se_mode mode, bool encrypt, const uint8_t *key
     // In place (or overlapping), a failed engine run would lose the input the CPU needs: keep it.
     const bool overlap = i8 < o8 + len && o8 < i8 + len;
     uint8_t *saved = nullptr;
-    uint8_t *reference = nullptr;
     if (overlap && whole) {
         saved = static_cast<uint8_t *>(IOMalloc(whole));
         if (!saved)
@@ -823,13 +844,6 @@ extern "C" int tegra_se_aes(tegra_se_mode mode, bool encrypt, const uint8_t *key
     }
     if (saved)
         memcpy(saved, i8, whole);
-    if (shouldCheck(alg)) {  // the CPU's answer first, from the untouched input
-        reference = static_cast<uint8_t *>(IOMalloc(len));
-        if (reference && !cpuAes(mode, encrypt, key, keyBytes, ivIn, i8, reference, len)) {
-            IOFree(reference, len);
-            reference = nullptr;
-        }
-    }
     int result = whole ? aesLocked(mode, encrypt, key, keyBytes, ivIn, in, out, whole) : 0;
     uint8_t next[16];  // the IV/counter after the whole blocks
     memcpy(next, ivIn, 16);
@@ -859,15 +873,6 @@ extern "C" int tegra_se_aes(tegra_se_mode mode, bool encrypt, const uint8_t *key
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): in place, the input is the caller's output buffer
         memcpy(const_cast<uint8_t *>(i8), saved, whole);  // the CPU redoes it from this
     }
-    if (!result && reference && memcmp(reference, o8, len)) {
-        algOff(alg, "result differs from the CPU's");
-        memcpy(o8, reference, len);  // the caller gets the CPU's
-        if (mode == TEGRA_SE_OFB) {  // the CPU's keystream state: the IV encrypted once per block
-            memcpy(next, ivIn, 16);
-            for (size_t at = 0; at < len; at += 16)
-                cpuAes(TEGRA_SE_ECB, true, key, keyBytes, nullptr, next, next, 16);
-        }
-    }
     if (!result) {
         switch (mode) {
         case TEGRA_SE_CBC:
@@ -880,10 +885,6 @@ extern "C" int tegra_se_aes(tegra_se_mode mode, bool encrypt, const uint8_t *key
         case TEGRA_SE_ECB:
             break;
         }
-    }
-    if (reference) {
-        bzero(reference, len);
-        IOFree(reference, len);
     }
     if (saved) {
         bzero(saved, whole);
@@ -950,7 +951,7 @@ extern "C" int tegra_se_cmac(const uint8_t *key, unsigned keyBytes, const void *
     if (mapped) {
         const uint32_t km = keyMode(keyBytes);
         wr(*e, CONFIG, 1u << 12 | km << 24 | kDstHash);
-        wr(*e, CRYPTO_CONFIG, slot << 24 | 2u << 1 | 2u << 5 | kCryptoEncrypt | 1u);  // CBC encrypt, HASH_ENB
+        crypto(*e, slot << 24 | 2u << 1 | 2u << 5 | kCryptoEncrypt | 1u);  // CBC encrypt, HASH_ENB
         writeQuad(*e, slot, 2, zero);
         wr(*e, LAST_BLOCK, (uint32_t)(head / 16));
         if (run(*e, e->list.pa + kInList, 0)) {
@@ -961,29 +962,13 @@ extern "C" int tegra_se_cmac(const uint8_t *key, unsigned keyBytes, const void *
             tally(gAlg[CMAC].bytes, len);
             result = 0;
         } else {
-            algOff(CMAC, gWhy);
+            runFailed(*e, CMAC);
         }
         bzero(e->list.va + kScratch, 16);
     } else {
         tally(gUnreachable, len);
     }
     giveBack(e);
-    if (!result && shouldCheck(CMAC)) {  // CBC-MAC of the same blocks on the CPU
-        uint8_t chain[16] = {};
-        uint8_t block[16];
-        for (size_t at = 0; at < head; at += 16) {
-            for (unsigned i = 0; i < 16; ++i)
-                block[i] = chain[i] ^ msg[at + i];
-            cpuAes(TEGRA_SE_ECB, true, key, keyBytes, nullptr, block, chain, 16);
-        }
-        for (unsigned i = 0; i < 16; ++i)
-            block[i] = chain[i] ^ last[i];
-        cpuAes(TEGRA_SE_ECB, true, key, keyBytes, nullptr, block, chain, 16);
-        if (memcmp(chain, mac, 16)) {
-            algOff(CMAC, "result differs from the CPU's");
-            memcpy(mac, chain, 16);
-        }
-    }
     bzero(l, sizeof l);
     bzero(k, sizeof k);
     bzero(last, sizeof last);
@@ -1026,7 +1011,7 @@ extern "C" int tegra_se_digest(unsigned which, const void *in, size_t len, uint8
             counted(alg, len, a, a);
             result = 0;
         } else {
-            algOff(alg, gWhy);
+            runFailed(*e, alg);
         }
     } else {
         tally(gUnreachable, len);
@@ -1072,7 +1057,7 @@ int compressHook(const struct ccdigest_info *original, ccdigest_state_t state, s
             counted(alg, len, a, a);
             result = 0;
         } else {
-            algOff(alg, gWhy);
+            runFailed(*e, alg);
         }
     } else {
         tally(gUnreachable, len);
@@ -1080,12 +1065,6 @@ int compressHook(const struct ccdigest_info *original, ccdigest_state_t state, s
     giveBack(e);
     if (result)
         return result;
-    if (shouldCheck(alg)) {
-        original->compress(state, nblocks, data);  // the CPU's answer, into the caller's state
-        if (memcmp(s, next, static_cast<size_t>(words) * 4))
-            algOff(alg, "compress differs from the CPU's");
-        return 0;
-    }
     memcpy(s, next, static_cast<size_t>(words) * 4);
     return 0;
 }
@@ -1128,54 +1107,62 @@ const uint8_t kAbc[5][16] = {
     {0xdd, 0xaf, 0x35, 0xa1, 0x93, 0x61, 0x7a, 0xba, 0xcc, 0x41, 0x73, 0x49, 0xae, 0x20, 0x41, 0x31},  // SHA-512
 };
 
-// Runs every known answer on one engine (forced onto it); returns the algorithms that answered right.
+// The known answers' outputs, which an engine writes straight into when they are whole cache lines. An engine turned
+// off with an operation in flight may still write them, so they outlive it, one pair per engine.
+struct alignas(64) AnswerBuffers {
+    uint8_t buf[64], out[64];
+};
+
+AnswerBuffers gAnswers[kEngines];
+
+// Runs every known answer on one engine (forced onto it) until it answers or goes off; returns the algorithms that
+// answered right.
 uint32_t knownAnswers(const Engine &only)
 {
     gForced[0] = current_thread();
     forceOnly(&only);  // the queue hands out only this engine meanwhile
     uint32_t good = 0;
-    uint8_t buf[64];
-    uint8_t out[64];
+    uint8_t *const buf = gAnswers[&only - gEngines].buf;
+    uint8_t *const out = gAnswers[&only - gEngines].out;
     uint8_t iv[16];
-    for (unsigned alg = SHA1; alg <= SHA512; ++alg) {
+    for (unsigned alg = SHA1; alg <= SHA512 && only.up; ++alg) {
         static const unsigned which[] = {1, 224, 256, 384, 512};
         gAlg[alg].on = true;
         if (!tegra_se_digest(which[alg], "abc", 3, out) && !memcmp(out, kAbc[alg], 16))
             good |= 1u << alg;
     }
     gAlg[ECB].on = true;
-    bool ecb = true;
-    for (unsigned k = 0; k < 3; ++k) {
-        ecb &= (tegra_se_aes(TEGRA_SE_ECB, true, kKey256, 16 + 8 * k, nullptr, kFipsPlain, out, 16) == 0) &&
-               (memcmp(out, kFips[k], 16) == 0);
-        ecb &= (tegra_se_aes(TEGRA_SE_ECB, false, kKey256, 16 + 8 * k, nullptr, kFips[k], out, 16) == 0) &&
-               (memcmp(out, kFipsPlain, 16) == 0);
+    bool ecb = only.up;
+    for (unsigned k = 0; k < 3 && ecb; ++k) {
+        ecb = (tegra_se_aes(TEGRA_SE_ECB, true, kKey256, 16 + 8 * k, nullptr, kFipsPlain, out, 16) == 0) &&
+              (memcmp(out, kFips[k], 16) == 0) &&
+              (tegra_se_aes(TEGRA_SE_ECB, false, kKey256, 16 + 8 * k, nullptr, kFips[k], out, 16) == 0) &&
+              (memcmp(out, kFipsPlain, 16) == 0);
     }
     if (ecb)
         good |= 1u << ECB;
     gAlg[CBC].on = true;
     memcpy(iv, kIv, 16);
-    bool cbc = (tegra_se_aes(TEGRA_SE_CBC, true, kKey, 16, iv, kPlain, buf, 64) == 0) && (memcmp(buf, kCbc1, 16) == 0);
+    bool cbc = only.up && (tegra_se_aes(TEGRA_SE_CBC, true, kKey, 16, iv, kPlain, buf, 64) == 0) &&
+               (memcmp(buf, kCbc1, 16) == 0);
     memcpy(iv, kIv, 16);
     cbc = cbc && (tegra_se_aes(TEGRA_SE_CBC, false, kKey, 16, iv, buf, out, 64) == 0) && (memcmp(out, kPlain, 64) == 0);
     if (cbc)
         good |= 1u << CBC;
     gAlg[CTR].on = true;
     memcpy(iv, kCtrIv, 16);
-    if (!tegra_se_aes(TEGRA_SE_CTR, true, kKey, 16, iv, kPlain, out, 64) && !memcmp(out + 48, kCtr4, 16))
+    if (only.up && !tegra_se_aes(TEGRA_SE_CTR, true, kKey, 16, iv, kPlain, out, 64) && !memcmp(out + 48, kCtr4, 16))
         good |= 1u << CTR;
     gAlg[OFB].on = true;
     memcpy(iv, kIv, 16);
-    if (!tegra_se_aes(TEGRA_SE_OFB, true, kKey, 16, iv, kPlain, out, 64) && !memcmp(out, kOfb1, 16))
+    if (only.up && !tegra_se_aes(TEGRA_SE_OFB, true, kKey, 16, iv, kPlain, out, 64) && !memcmp(out, kOfb1, 16))
         good |= 1u << OFB;
     gAlg[CMAC].on = true;
-    if (!tegra_se_cmac(kKey, 16, kPlain, 16, out) && !memcmp(out, kCmac16, 16) &&
+    if (only.up && !tegra_se_cmac(kKey, 16, kPlain, 16, out) && !memcmp(out, kCmac16, 16) && only.up &&
         !tegra_se_cmac(kKey, 16, kPlain, 40, out) && !memcmp(out, kCmac40, 16))
         good |= 1u << CMAC;
-    for (AlgState &state : gAlg) {
+    for (AlgState &state : gAlg)
         state.on = false;
-        state.ops = 0;
-    }
     forceOnly(nullptr);
     gForced[0] = nullptr;
     return good;
@@ -1185,7 +1172,7 @@ uint32_t knownAnswers(const Engine &only)
 // initial value: what the hook needs. Runs on one engine (forced) with gAlg on for the duration.
 bool stateLoadWorks(const Engine &only, unsigned alg, const struct ccdigest_info *di)
 {
-    if (!di)
+    if (!di || !only.up)
         return false;
     forceOnly(&only);
     static uint8_t data[4096];
@@ -1200,12 +1187,10 @@ bool stateLoadWorks(const Engine &only, unsigned alg, const struct ccdigest_info
     di->compress(reinterpret_cast<ccdigest_state_t>(cpu), blocks, data + di->block_size);
     gAlg[alg].on = true;
     gForced[0] = current_thread();
-    gAlg[alg].ops = kCheckFirst;  // no cross-check inside: this is the check
     const bool ok = (compressHook(di, reinterpret_cast<ccdigest_state_t>(se), blocks, data + di->block_size) == 0) &&
                     (memcmp(se, cpu, di->state_size) == 0);
     gAlg[alg].on = false;
     gForced[0] = nullptr;
-    gAlg[alg].ops = 0;
     forceOnly(nullptr);
     return ok;
 }
@@ -1260,7 +1245,7 @@ bool rng(Engine &e, uint8_t out[64])
     switch_dcache_clean_invalidate(list, 12);
     switch_dcache_clean_invalidate(e.bounceOut.va, 64);
     wr(e, CONFIG, 2u << 12 | 1u << 24);  // RNG, KEY192, memory
-    wr(e, CRYPTO_CONFIG, 1u << 3 | kCryptoEncrypt);
+    crypto(e, 1u << 3 | kCryptoEncrypt);
     wr(e, RNG_CONFIG, 1u << 2 | 2u);  // SRC_ENTROPY | FORCE_RESEED
     wr(e, RNG_SRC_CONFIG, rd(e, RNG_SRC_CONFIG) | 1u << 1);
     wr(e, LAST_BLOCK, 3);
@@ -1375,21 +1360,43 @@ void release(Dma *dma)
     dma->pa = 0;
 }
 
+constexpr size_t kNever = ~static_cast<size_t>(0);
+constexpr uint32_t kTimingSizes[5] = {1024, 4096, 16384, 65536, 1048576};
+
+unsigned enginesUp()
+{
+    unsigned up = 0;
+    for (const Engine &e : gEngines)
+        up += e.up ? 1u : 0u;
+    return up;
+}
+
+// The timing run's input and output. An engine turned off mid-operation may still write the pair it was given, so
+// that pair stays allocated for the boot and the run goes on with a new one.
+bool timingBuffers(Dma *in, Dma *out)
+{
+    *in = {};
+    *out = {};
+    if (!allocate(in, kTimingSizes[4]) || !allocate(out, kTimingSizes[4])) {
+        IOLog("TegraSE: timing run ended: no 1 MiB DMA buffers below 4 GiB\n");
+        release(in);
+        return false;
+    }
+    for (uint32_t i = 0; i < kTimingSizes[4]; ++i)
+        in->va[i] = static_cast<uint8_t>(i * 2654435761u >> 13);
+    return true;
+}
+
 // Per algorithm and size: microseconds of the whole call on each engine (lists, cache maintenance, interrupt, wake)
 // against the CPU (kernel corecrypto, input cold in the cache like the engine's), best of 5; then each algorithm's
 // cutover set to the smallest size at which every engine is no slower than the CPU; then both engines at once.
 void timing()
 {
-    static const uint32_t sizes[5] = {1024, 4096, 16384, 65536, 1048576};
-    Dma in = {};
-    Dma out = {};
-    if (!allocate(&in, sizes[4]) || !allocate(&out, sizes[4])) {
-        IOLog("TegraSE: timing run skipped: no 1 MiB DMA buffers below 4 GiB\n");
-        release(&in);
+    const uint32_t *const sizes = kTimingSizes;
+    Dma in;
+    Dma out;
+    if (!timingBuffers(&in, &out))
         return;
-    }
-    for (uint32_t i = 0; i < sizes[4]; ++i)
-        in.va[i] = static_cast<uint8_t>(i * 2654435761u >> 13);
     gForced[0] = current_thread();
     size_t cutover[ALGS] = {};
     for (const Row &row : kRows) {
@@ -1401,14 +1408,13 @@ void timing()
                 continue;
             char line[256];
             int at = snprintf(line, sizeof line, "TegraSE: %s %s us vs cpu:", row.name, e.name);
-            size_t engineCut = ~static_cast<size_t>(0);
+            size_t engineCut = kNever;
             for (unsigned s = 0; s < 5; ++s) {
                 const uint32_t n = sizes[s];
                 uint64_t seBest = ~0ULL;
                 uint64_t cpuBest = ~0ULL;
                 for (unsigned rep = 0; rep < 5; ++rep) {
                     forceOnly(&e);
-                    gAlg[row.alg].ops = kCheckFirst + 1;  // no cross-check inside the timed call
                     switch_dcache_clean_invalidate(in.va, n);
                     uint64_t t0 = mach_absolute_time();
                     const int r = engineCall(row, in.va, out.va, n);
@@ -1425,7 +1431,9 @@ void timing()
                     if (c1 < cpuBest)
                         cpuBest = c1;
                 }
-                if (seBest <= cpuBest && engineCut == ~static_cast<size_t>(0))
+                if (!e.up)
+                    break;
+                if (seBest != ~0ULL && seBest <= cpuBest && engineCut == kNever)
                     engineCut = n;
                 const uint64_t a = tenths(seBest);
                 const uint64_t c = tenths(cpuBest);
@@ -1433,6 +1441,13 @@ void timing()
                     at += snprintf(line + at, sizeof line - static_cast<size_t>(at), " %uK %llu.%llu vs %llu.%llu%s",
                                    n / 1024, a / 10, a % 10, c / 10, c % 10, s < 4 ? "," : "");
                 }
+            }
+            if (!e.up) {  // its off line says why; it no longer decides a cutover
+                if (!timingBuffers(&in, &out)) {
+                    gForced[0] = nullptr;
+                    return;
+                }
+                continue;
             }
             IOLog("%s\n", line);
             if (engineCut > rowCut)
@@ -1446,21 +1461,16 @@ void timing()
     for (unsigned alg = 0; alg < ALGS; ++alg) {
         if (!gAlg[alg].on)
             continue;
-        // Never faster at the sizes measured: only work past 1 MiB goes to the engines (bulk, not latency-bound).
-        if (cutover[alg] == ~static_cast<size_t>(0)) {
-            gCutover[alg] = 2 * static_cast<size_t>(sizes[4]);
-        } else {
-            gCutover[alg] = cutover[alg] ? cutover[alg] : sizes[4];
-        }
+        gCutover[alg] = cutover[alg] && cutover[alg] < kBulk ? cutover[alg] : kBulk;
         if (at > 0 && static_cast<size_t>(at) < sizeof line) {
             at += snprintf(line + at, sizeof line - static_cast<size_t>(at), " %s %zu%s", kAlgName[alg], gCutover[alg],
-                           cutover[alg] == ~static_cast<size_t>(0) ? " (slower at every size)" : "");
+                           cutover[alg] == kNever ? " (slower at every size)" : "");
         }
     }
     IOLog("%s\n", line);
     // Both engines at once: two threads hashing 1 MiB 16 times each, against one thread alone.
+    const unsigned upBeforeParallel = enginesUp();
     if (gEngines[0].up && gEngines[1].up && gAlg[SHA256].on) {
-        gAlg[SHA256].ops = kCheckFirst + 1;
         Parallel p = {1, 16, in.va, sizes[4], false};
         uint8_t digest[32];
         uint64_t t0 = mach_absolute_time();
@@ -1484,6 +1494,8 @@ void timing()
         }
     }
     gForced[0] = nullptr;
+    if (enginesUp() < upBeforeParallel)
+        return;  // see timingBuffers
     bzero(in.va, sizes[4]);
     release(&in);
     release(&out);
@@ -1503,17 +1515,18 @@ void stats(const char *when)
         snprintf(line + at, sizeof line - static_cast<size_t>(at),
                  "; to the CPU: unreachable %llu MiB, unsleepable %llu MiB", gUnreachable >> 20, gUnsleepable >> 20);
     }
-    os_log(OS_LOG_DEFAULT, "%{public}s", line);
+    os_log(OS_LOG_DEFAULT, "%s", line);
 }
 #endif
 
 void seThread(void *, wait_result_t)
 {
     gAhb = switch_mmio_map(kAhbArbPA, 0x1000);
+    gMc = switch_mmio_map(kMcPA, 0x1000);
     gLoop = IOWorkLoop::workLoop();
     gQueue = IOLockAlloc();
-    if (!gAhb || !gLoop || !gQueue) {
-        IOLog("TegraSE: off for this boot: cannot map CAR/AHB or allocate\n");
+    if (!gAhb || !gMc || !gLoop || !gQueue) {
+        IOLog("TegraSE: off for this boot: cannot map AHB/MC or allocate\n");
         return;
     }
     // A clock-gated or reset APB block can hang the bus: no engine register is read unless the clock runs.
@@ -1525,9 +1538,18 @@ void seThread(void *, wait_result_t)
     uint32_t answered = 0;
     unsigned up = 0;
     char line[256];
-    int at = snprintf(line, sizeof line, "TegraSE: clock source %#x;", switch_car_read(kCarSourceSe));
+    int at = snprintf(line, sizeof line, "TegraSE: clock source %#x super divider %#x;", switch_car_read(kCarSourceSe),
+                      switch_car_read(kCarSuperSe));
     for (unsigned which = 0; which < kEngines; ++which) {
         Engine &e = gEngines[which];
+        uint32_t translated = 0;
+        for (const uint32_t asid : kSmmuAsid[which])
+            translated = !translated && asid && (switch_mmio_read32(gMc, asid) & kSmmuTranslates) ? asid : translated;
+        if (translated) {
+            IOLog("TegraSE: %s off for this boot: the SMMU translates its memory clients (MC %#x = %#x)\n", e.name,
+                  translated, switch_mmio_read32(gMc, translated));
+            continue;
+        }
         if (!tegra_se_claim(which + 1, TEGRA_SE_OWNER_DRIVER, 10000)) {
             IOLog("TegraSE: %s still held by the AppleKeyStore probe after 10 s, off\n", e.name);
             continue;
@@ -1555,11 +1577,11 @@ void seThread(void *, wait_result_t)
         answered = up ? (answered & good) : good;  // an algorithm needs every engine that is up
         ++up;
         if (at > 0 && static_cast<size_t>(at) < sizeof line) {
-            at +=
-                snprintf(line + at, sizeof line - static_cast<size_t>(at),
-                         " %s up, %u keyslots, known answers %#x in %llu us, "
-                         "INTID %u (%u interrupts);",
-                         e.name, __builtin_popcount(e.slotsUsable), good, us, e.intid, switch_interrupt_count(e.intid));
+            at += snprintf(line + at, sizeof line - static_cast<size_t>(at),
+                           " %s up, data over its %s, %u keyslots, known answers %#x in %llu us, "
+                           "INTID %u (%u interrupts);",
+                           e.name, kMemif[which] ? "MCCIF clients" : "AHB", __builtin_popcount(e.slotsUsable), good, us,
+                           e.intid, switch_interrupt_count(e.intid));
         }
     }
     if (!up) {
@@ -1575,7 +1597,7 @@ void seThread(void *, wait_result_t)
             gStateLoad && ((answered & (1u << SHA256)) != 0u) && stateLoadWorks(e, SHA256, switch_digest_originals[1]);
         gStateLoad =
             gStateLoad && ((answered & (1u << SHA512)) != 0u) && stateLoadWorks(e, SHA512, switch_digest_originals[3]);
-        if ((answered & (1u << SHA1)) && !stateLoadWorks(e, SHA1, switch_digest_originals[0]))
+        if (e.up && (answered & (1u << SHA1)) && !stateLoadWorks(e, SHA1, switch_digest_originals[0]))
             answered &= ~(1u << SHA1);
     }
     for (unsigned alg = 0; alg < ALGS; ++alg)
@@ -1588,16 +1610,17 @@ void seThread(void *, wait_result_t)
             continue;
         forceOnly(&e);
         Engine *got = acquire();
-        forceOnly(nullptr);
         if (got) {  // held (busy and claimed) until giveBack
             reseeded = rng(*got, seed);
             giveBack(got);
         }
+        forceOnly(nullptr);
     }
     gForced[0] = nullptr;
     if (reseeded)
         write_random(seed, sizeof seed);
     bzero(seed, sizeof seed);
+    prove();
     gReady = true;
     if (gStateLoad)
         switch_digest_compress_hook = compressHook;
@@ -1605,7 +1628,7 @@ void seThread(void *, wait_result_t)
     IOLog("TegraSE: on the engines: %#x of %#x (sha1 sha224 sha256 sha384 sha512 ecb cbc ctr ofb cmac); XNU's SHA "
           "compress %s; kernel PRNG %s\n",
           answered, (1u << ALGS) - 1,
-          gStateLoad ? "routed here (code-signing hashes included)" : "left on the CPU: state load did not answer",
+          gStateLoad ? "hooked (from each algorithm's cutover up)" : "left on the CPU: state load did not answer",
           reseeded ? "reseeded from the DRBG" : "not reseeded (entropy clock off or DRBG output implausible)");
 
 #if DEVELOPMENT || DEBUG

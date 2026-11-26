@@ -90,7 +90,8 @@ inline uint32_t keyColorFormat(const char *keyString, uint32_t j)
 // SET_ITERATED_BLEND_OPTIMIZATION's value for a state: its blob's (method, value) pairs, its targets' SET_CT_WRITE values
 // after them, its key and the targets its program writes as storage images
 inline uint32_t iteratedBlendNoop(const uint32_t *blob, uint32_t dwords, const uint32_t writes[8],
-                                  const char *keyString, uint8_t storageBits)
+                                  const char *keyString, uint8_t storageBits,
+                                  const uint32_t *defaultPerTarget = nullptr, uint8_t defaultSeen = 0)
 {
     for (uint32_t j = 1; j < 8; j++)
         if (writes[j] & 0x1111)
@@ -100,6 +101,13 @@ inline uint32_t iteratedBlendNoop(const uint32_t *blob, uint32_t dwords, const u
     bool blends = false;
     uint32_t perTarget[6] = {};
     bool seen[6] = {};
+    if (defaultPerTarget) {
+        for (uint32_t i = 0; i < 6; i++)
+            if (defaultSeen >> i & 1) {
+                perTarget[i] = defaultPerTarget[i];
+                seen[i] = true;
+            }
+    }
     for (uint32_t k = 0; k + 1 < dwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
         if (m == 0x153c && (v & 0x11))  // SET_ANTI_ALIAS_ALPHA_CONTROL: ALPHA_TO_COVERAGE, ALPHA_TO_ONE

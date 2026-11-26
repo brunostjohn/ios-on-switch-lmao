@@ -60,6 +60,9 @@
 static uint64_t a64x_images, a64x_pages, a64x_stub_words, a64x_mismatch, a64x_traps, a64x_traps_unhandled;
 static uint64_t a64x_cache_pages, a64x_images_native, a64x_images_marked, a64x_island_words;
 static uint64_t a64x_images_installed;
+#if DEVELOPMENT || DEBUG
+static uint64_t a64x_jit_patches;
+#endif
 
 LCK_GRP_DECLARE(a64x_lck_grp, "a64x");
 static LCK_MTX_DECLARE(a64x_plan_lock, &a64x_lck_grp);
@@ -465,7 +468,7 @@ static int a64x_map_image(vm_map_t map, struct vnode *vp, off_t slice_off, const
         OSIncrementAtomic64((SInt64 *)&a64x_images_marked);
         return 0;
     }
-    if (kind == A64X_IMAGE_ARM64E) {
+    {
         int error = a64x_map_translation(map, vp, slice_off, lay, exec_va);
         if (error != ENOENT) {
             return error;
@@ -845,6 +848,9 @@ extern int a64x_copyio_rmw(user_addr_t uaddr, uint32_t size, uint32_t op, uint64
 extern int a64x_copyio_cas(user_addr_t uaddr, uint32_t size, uint64_t expected, uint64_t desired, uint64_t *old);
 extern int a64x_copyio_casp(user_addr_t uaddr, uint64_t e0, uint64_t e1, uint64_t d0, uint64_t d1, uint64_t *o0,
                             uint64_t *o1);
+extern bool a64x_pc_is_jit(user_addr_t pc);
+extern bool a64x_user_neon_d(uint32_t regno, uint64_t *out);
+extern int switch_user_cache_maintenance(user_addr_t va, vm_size_t len, uint32_t op);
 
 static uint64_t reg(arm_saved_state_t *s, uint32_t r)
 {
@@ -862,9 +868,57 @@ static void set_reg(arm_saved_state_t *s, uint32_t r, uint64_t v)
     }
 }
 
+static void set_pc(arm_saved_state_t *s, uint64_t pc)
+{
+#if XNU_12377_121_6
+    set_user_saved_state_pc(s, (register_t)pc);
+#else
+    set_saved_state_pc(s, (register_t)pc);
+#endif
+}
+
+static void set_lr(arm_saved_state_t *s, uint64_t lr)
+{
+#if XNU_12377_121_6
+    set_user_saved_state_lr(s, (register_t)lr);
+#else
+    set_saved_state_lr(s, (register_t)lr);
+#endif
+}
+
+static void set_nzcv_z(arm_saved_state_t *s, bool z)
+{
+#if XNU_12377_121_6
+    mask_user_saved_state_cpsr(s, z ? PSR64_Z : 0, PSR64_NZCV_MASK);
+#else
+    mask_saved_state_cpsr(s, z ? PSR64_Z : 0, PSR64_NZCV_MASK);
+#endif
+}
+
 int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
 {
     enum a64x_class c = a64x_classify(w);
+    user_addr_t pc = get_saved_state_pc(state);
+    uint32_t out = 0;
+    bool is_jit = false;
+
+    if (!(pc & 3) && a64x_rewrite1(w, &out)) {
+        is_jit = a64x_pc_is_jit(pc);
+        if (is_jit) {
+            uint64_t patched_old = 0;
+            if (a64x_copyio_cas(pc, 2, w, out, &patched_old) == 0 &&
+                switch_user_cache_maintenance(pc, sizeof(uint32_t), SWITCH_UCM_SYNC_I) == 0) {
+#if DEVELOPMENT || DEBUG
+                if ((uint32_t)patched_old == w) {
+                    OSIncrementAtomic64((SInt64 *)&a64x_jit_patches);
+                }
+#endif
+                switch_a64x_trap_noted(c, true);
+                return 1;
+            }
+        }
+    }
+
     uint32_t rs = (w >> 16) & 31, rn = (w >> 5) & 31, rt = w & 31, size = w >> 30;
     user_addr_t addr = rn == 31 ? get_saved_state_sp(state) : get_saved_state_reg(state, rn);
     uint64_t old = 0, old2 = 0;
@@ -908,22 +962,95 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
             }
         }
         break;
-    default: {
-        /*
-		 * Not emulated: pointer authentication (by design: it is rewritten, never trapped; JIT is refused so no
-		 * untranslated arm64e code exists), FP16/FCMA/FJCVTZS/RDM (the translators give them stubs; here only a
-		 * marked image breaking its promise or a form without a stub arrives), and A13+ features (code that uses
-		 * them checked hw.optional first). One line each for the first ones, then SIGILL as before.
-		 */
-        OSIncrementAtomic64((SInt64 *)&a64x_traps_unhandled);
-        static int logged;
-        if (logged < 32) {
-            logged++;
-            printf("a64x: %s[%d] pc 0x%llx: %08x (%s) not emulated\n", current_proc()->p_comm,
-                   proc_getpid(current_proc()), get_saved_state_pc(state), w, a64x_class_name(c));
+    case A64X_JSCVT: {
+        uint64_t bits = 0;
+        if (!a64x_user_neon_d(rn, &bits)) {
+            return 0;
         }
-        return 0;
+        uint32_t res = 0;
+        bool exact = a64x_eval_jscvt(bits, &res);
+        set_reg(state, rt, res);
+        set_nzcv_z(state, exact);
+        error = 0;
+        break;
     }
+    case A64X_PAC_LDRA: {
+        int32_t imm = 0;
+        bool wb = false;
+        uint64_t val = 0;
+        a64x_decode_ldra(w, &imm, &wb);
+        user_addr_t ea = addr + (int64_t)imm;
+        error = copyin(ea, &val, sizeof(val));
+        if (!error) {
+            if (wb) {
+                if (rn == 31) {
+                    set_saved_state_sp(state, (register_t)ea);
+                } else {
+                    set_reg(state, rn, ea);
+                }
+            }
+            set_reg(state, rt, val);
+        }
+        break;
+    }
+    case A64X_SB:
+        __builtin_arm_dsb(DSB_SY);
+        __builtin_arm_isb(ISB_SY);
+        error = 0;
+        break;
+    case A64X_PAC_DP:
+    case A64X_PAC_XPAC:
+        if (!is_jit) {
+            goto unhandled;
+        }
+        error = 0;
+        break;
+    case A64X_PAC_PACGA:
+        if (!is_jit) {
+            goto unhandled;
+        }
+        set_reg(state, rt, 0);
+        error = 0;
+        break;
+    case A64X_PAC_RET:
+        if (!is_jit) {
+            goto unhandled;
+        }
+        set_pc(state, get_saved_state_lr(state));
+        OSIncrementAtomic64((SInt64 *)&a64x_traps);
+        switch_a64x_trap_noted(c, false);
+        return 1;
+    case A64X_PAC_BR:
+        if (!is_jit) {
+            goto unhandled;
+        }
+        set_pc(state, reg(state, rn));
+        OSIncrementAtomic64((SInt64 *)&a64x_traps);
+        switch_a64x_trap_noted(c, false);
+        return 1;
+    case A64X_PAC_BLR: {
+        if (!is_jit) {
+            goto unhandled;
+        }
+        uint64_t target = reg(state, rn);
+        set_lr(state, pc + 4);
+        set_pc(state, target);
+        OSIncrementAtomic64((SInt64 *)&a64x_traps);
+        switch_a64x_trap_noted(c, false);
+        return 1;
+    }
+    default:
+    unhandled:
+        {
+            OSIncrementAtomic64((SInt64 *)&a64x_traps_unhandled);
+            static int logged;
+            if (logged < 32) {
+                logged++;
+                printf("a64x: %s[%d] pc 0x%llx: %08x (%s) not emulated\n", current_proc()->p_comm,
+                       proc_getpid(current_proc()), pc, w, a64x_class_name(c));
+            }
+            return 0;
+        }
     }
     if (error) {
         return 0; /* the fault is reported as the undefined instruction it was */
@@ -934,24 +1061,30 @@ int a64x_emulate_user(arm_saved_state_t *state, uint32_t w)
     add_saved_state_pc(state, 4);
 #endif
     OSIncrementAtomic64((SInt64 *)&a64x_traps);
+    switch_a64x_trap_noted(c, false);
     return 1;
 }
 
-SYSCTL_NODE(_kern, OID_AUTO, a64x, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "arm64e translation");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, images, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_images, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, text_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_pages, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, cache_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_cache_pages, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, stub_words, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_stub_words, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, stub_mismatch, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_mismatch, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, traps, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_traps, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, traps_unhandled, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_traps_unhandled, "");
+SYSCTL_NODE(_kern, OID_AUTO, a64x, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_KERN, 0, "arm64e translation");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, images, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, text_pages, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_pages, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, cache_pages, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_cache_pages, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, stub_words, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_stub_words, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, stub_mismatch, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_mismatch, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, traps, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_traps, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, traps_unhandled, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_traps_unhandled,
+            "");
+#if DEVELOPMENT || DEBUG
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, jit_patches, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_jit_patches, "");
+#endif
 /* arm64 images that needed nothing (mapped as is) and images marked as built for this core */
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_native, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_images_native, "");
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_marked, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_images_marked, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_native, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images_native, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_marked, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images_marked, "");
 /* images of installed staged system apps mapped from the pretranslated tree */
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_installed, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_images_installed, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, images_installed, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_images_installed,
+            "");
 /* words of __text found to be data (assembler tables) and left untranslated */
-SYSCTL_QUAD(_kern_a64x, OID_AUTO, island_words, CTLFLAG_RD | CTLFLAG_LOCKED, &a64x_island_words, "");
+SYSCTL_QUAD(_kern_a64x, OID_AUTO, island_words, CTLFLAG_RD | CTLFLAG_LOCKED | CTLFLAG_KERN, &a64x_island_words, "");
 
 bool switch_a64x_mmap_refused(vm_map_t map, struct vnode *vp, off_t file_pos, vm_map_offset_t addr, vm_map_size_t size)
 {

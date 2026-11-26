@@ -1210,7 +1210,7 @@ void SwitchThermal::governorFired(OSObject *owner, IOInterruptEventSource *, int
 
 void SwitchThermal::applyGovernor()
 {
-    char line[760];
+    char line[960];
     const unsigned index = switchperf::take(line, sizeof(line));
     const bool onDfll = perfRaised && dfllMode && governed;
 #if DEVELOPMENT || DEBUG

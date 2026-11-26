@@ -5,15 +5,19 @@ usage: bazel run //tools/gpu:logharvest -- <boot.logarchive>... [--build <IPSW b
                                             [--crawl <the build's crawl inventory.json>] [--dry-run | --check]
        bazel run //tools/gpu:logharvest -- --ndjson <file>...   (`log show --style ndjson --info` output instead)
 
---check fails (exit 1) where a pull's OS states would not all come from the pack: a state an OS process made at run time
-that the corpus lacks, or one it lacks and no line can hold (each listed, the corpus left as it was). Run it on every
-pull: every state the OS draws with must come from the pack, as the shader compiler's wait for one starves the boot.
+--check fails (exit 1) where a pull's OS states would not all come from tier 0 of the pack: a state an OS process made
+at run time or used from tier 1 that the corpus lacks, or one it lacks and no line can hold (each listed, the corpus
+left as it was). Run it on every pull: every state the OS draws with must come from tier 0 of the pack, as the shader
+compiler's wait for one starves the boot and tier-1 uses fault cold pieces.
 
-The lines it reads, os_log's (the runtime's in debug builds, TegraGM20BMetalComplete.mm and TegraGM20BMetalCubic.mm):
+The lines it reads, os_log's (the runtime's in debug builds, TegraGM20BMetalComplete.mm, TegraGM20BMetalCubic.mm and
+TegraGM20BMetalStatesCost.mm):
     SwitchMetal: a state the pack lacks <made|not made|refused> in <ms> ms (<QoS>) after <ms> ms for a compile slot:
     <name>
         <key>
         (one line) <name>: the runtime's 16-hex-digit cache name of the state; <key>: its first 400 characters
+    SwitchMetal: tier-1 pack state <fast> <name> in <process>: <n> pieces, card=<pages>
+        a tier-1 pack state used for the first time in a process; its key arrives in its harvest parts
     SwitchMetal: harvest <name> <i>/<n> <part>
         the n parts, 700 characters each, of "label=<descriptor label, spaces as _> <whole key>"
     <process>[<pid>] state.variant_unpacked: ...refused: | cubic <binds> of <state> <key>
@@ -92,6 +96,7 @@ CUT = 400  # TegraGM20BMetalComplete.mm's made line: %.400s
 # A harvest part's characters but the last part's; the log drops a part's trailing spaces, which pads them back
 PART_CHARS = 700
 PART = re.compile(r'SwitchMetal: harvest ([0-9a-f]{16}) (\d+)/(\d+) (.*)$', re.DOTALL)
+TIER1 = re.compile(r'SwitchMetal: tier-1 pack state [0-9a-f]{16} ([0-9a-f]{16}) in \S+: \d+ pieces, card=\d+')
 VARIANT = re.compile(r'state\.variant_unpacked: .*?refused:( \| .*?) of ([0-9a-f]{16}) ')
 VARIANT_ANY = 'state.variant_unpacked: '
 BUILD = r'([0-9]{2}[A-Z][0-9]{1,4}[a-z]?)'
@@ -120,6 +125,7 @@ PREDICATE = ' OR '.join(
     f'eventMessage CONTAINS "{text}"'
     for text in (
         'a state the pack lacks',
+        'SwitchMetal: tier-1 pack state ',
         'SwitchMetal: harvest ',
         VARIANT_ANY,
         'OS version: ',
@@ -171,6 +177,8 @@ def read_boots(stream: Iterable[dict]) -> dict[str, Boot]:
                 boot.builds.add(m[1])
         if m := MADE.search(message):
             boot.made.setdefault((process, m[2]), (m[1], m[3]))
+        elif m := TIER1.search(message):
+            boot.made.setdefault((process, m[1]), ('used from tier 1', ''))
         elif m := PART.search(message):
             boot.parts[process, m[1]][int(m[2])] = m[4]
             boot.totals[process, m[1]] = int(m[3])
@@ -369,6 +377,12 @@ def states(boot: Boot, held: set[str]) -> Iterator[tuple[str, str, str, str | No
     """
     for (process, name), (outcome, key) in sorted(boot.made.items()):
         parts = whole(boot, process, name)
+        if outcome == 'used from tier 1':
+            if not parts:
+                yield process, outcome, '-', None, 'tier-1 pack state has no whole harvest parts'
+                continue
+            yield process, outcome, parts[0], untested(parts[1]), ''
+            continue
         if parts and not (parts[1].startswith(key) if len(key) >= CUT else parts[1] == key):
             yield process, outcome, '-', None, 'its harvest parts disagree with its made line'
             continue

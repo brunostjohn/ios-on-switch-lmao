@@ -279,6 +279,8 @@ static void forget(void *arg)
 	WRITE_ONCE(hold.latency[chid], TGM_PREEMPT_MIN_NS);
 	__atomic_store_n(&hold.asked_pt[chid], 0, __ATOMIC_RELAXED);
 	__atomic_store_n(&hold.isolating[chid], 0, __ATOMIC_RELAXED);
+	if (TGM_STATS)
+		tgm_hold_progress(chid, NULL);
 	switch_gpu_chan_table_set(&hold.chans, chid, NULL);
 }
 

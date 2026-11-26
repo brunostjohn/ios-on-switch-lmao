@@ -133,16 +133,23 @@ static void dispatchScheduled(SwitchMetalCommandBuffer *cb, NSArray *handlers)
         return;
     }
     cb->_handlersQueued = true;
-    cb->_submitOwner.clear();
-    dispatch_async(cb->_queue->_handlers, ^{
-        for (MTLCommandBufferHandler h in handlers)
-            h((id<MTLCommandBuffer>)cb);
+    // Ownership goes straight from the submit worker to the queue's handler thread, so waitUntilScheduled donates
+    // priority across the handlers' queuing and run with no ownerless gap. The worker's own clears after this are
+    // clearIf(its port): they leave the handler thread owning it. A waiter asleep on _changes (no owner: held or parked)
+    // takes the new owner at the change.
+    cb->_submitOwner.setOwner(cb->_queue->_handlerExec.ownerPort());
+    gm20bChanged(cb);
+    cb->_queue->_handlerExec.enqueue([cb, handlers] {
+        @autoreleasepool {
+            for (MTLCommandBufferHandler h in handlers)
+                h((id<MTLCommandBuffer>)cb);
 #if SWITCH_FRAME_TIMELINE
-        cb->_frame.mark(switch_frame::Scheduled);
+            cb->_frame.mark(switch_frame::Scheduled);
 #endif
-        cb->_scheduledDone = true;
-        cb->_submitOwner.clear();
-        gm20bChanged(cb);
+            cb->_scheduledDone = true;
+            cb->_submitOwner.clear();
+            gm20bChanged(cb);
+        }
     });
 }
 
@@ -446,7 +453,9 @@ static void deliverCompletion(SwitchMetalCommandBuffer *cb)
     }
     void *context = (__bridge_retained void *)cb;
     if (cb->_doneBehindScheduled)
-        dispatch_async_f(cb->_queue->_handlers, context, completeOnTarget);
+        cb->_queue->_handlerExec.enqueue([context] {
+            completeOnTarget(context);
+        });
     else
         dispatch_async_f(q ?: followingRootQueue(), context, completeHeld);
 }
@@ -492,7 +501,7 @@ void finish(SwitchMetalCommandBuffer *cb, NSError *error)
     // A failed command buffer submits no more: its waitUntilScheduled returns now, not once its earlier work completes
     if (error) {
         gm20bClearCompileWaits(cb);
-        cb->_submitOwner.clear();
+        cb->_submitOwner.clearIf(gRM->submitThread.load(std::memory_order_relaxed));
         gm20bChanged(cb);
     }
 }
@@ -566,7 +575,7 @@ static void finished(SwitchMetalCommandBuffer *cb)
     }
     const bool behindScheduled = cb->_handlersQueued;
     gm20bClearCompileWaits(cb);
-    cb->_submitOwner.clear();
+    cb->_submitOwner.clearIf(gRM->submitThread.load(std::memory_order_relaxed));
     gm20bChanged(cb);
 #if SWITCH_METAL_DIAGNOSTICS
     if (cb->_gpuStamped)

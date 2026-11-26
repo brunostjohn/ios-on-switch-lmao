@@ -35,7 +35,8 @@ constexpr uint32_t kFragmentBit = 0x10;  // VK_SHADER_STAGE_FRAGMENT_BIT
 // pack/splits.py lay_out's limits: the constant buffers a split per-pixel program binds, and a QMD's
 constexpr uint32_t kSplitProgramCbufs = sizeof(PackProgram::cbufType), kQmdCbufs = 8;
 constexpr uint32_t kRootPush = 0x700;
-constexpr int32_t kViewType3D = 2;  // VK_IMAGE_VIEW_TYPE_3D
+constexpr int32_t kViewType3D = 2;       // VK_IMAGE_VIEW_TYPE_3D
+constexpr int32_t kViewType2DArray = 5;  // VK_IMAGE_VIEW_TYPE_2D_ARRAY
 
 std::string hex(uint64_t v)
 {
@@ -290,6 +291,7 @@ bool layout(const NmbDirectDraw &d, std::vector<LayoutEntry> &out, std::string &
                 // declared_slots)
                 e.tex = w.viewType == kViewType3D ? Tex::Texture3D : Tex::Slot;
                 e.texSlot = uint8_t(w.slot);
+                e.texArrayView = w.viewType == kViewType2DArray;
                 if ((w.type == StorageImage || w.type == StorageTexelBuffer) && w.stage == 2) {
                     if (!w.format) {
                         why = "a storage texture at fragment slot " + std::to_string(w.slot) + " of no format";

@@ -60,8 +60,11 @@ int hevcnvenc_configure(HEVCEncConfig *c)
     c->log2_min_cb = 3;
     c->log2_min_tb = 2;
     c->log2_max_tb = 5;
+    // App 3 writes these depths and the PPS transform-skip flag only into the stream's syntax; the engine picks TUs from
+    // the MD control's tusize enables (SOURCE-H265). The stream must allow every TU the MD control enables, in every
+    // preset: a 32x32 CU split to 4x4 TUs needs depth 3.
     c->max_tr_depth_inter = c->max_tr_depth_intra = 3;
-    c->amp = true;
+    c->amp = !c->fast;
     c->sao = c->temporal_mvp = c->strong_intra_smoothing = false;
     if (hevcenc_configure(c))
         return -1;
@@ -214,6 +217,29 @@ static void setup(const HEVCEncConfig *c, uint32_t layout, uint32_t chromaMode, 
     memcpy(bytes + ME_OFF, kMeControl, sizeof(kMeControl));
     memcpy(bytes + MD_OFF, kMdControl, sizeof(kMdControl));
     memcpy(bytes + Q_OFF, kQuantControl, sizeof(kQuantControl));
+    if (c->fast) {
+        nvenc_h264_me_control_s *me = (nvenc_h264_me_control_s *)(bytes + ME_OFF);
+        me->shape1.bitmask[0] = me->shape0.bitmask[0];
+        me->shape1.bitmask[1] = me->shape0.bitmask[1];
+
+        nvenc_h265_md_control_s *md = (nvenc_h265_md_control_s *)(bytes + MD_OFF);
+        md->cu16x16_part_NxN_enable = 0;
+        md->cu32x32_part_2NxnU_enable = 0;
+        md->cu32x32_part_2NxnD_enable = 0;
+        md->cu32x32_part_nLx2N_enable = 0;
+        md->cu32x32_part_nRx2N_enable = 0;
+        md->chroma_eval_mode = 1;
+        md->h265_intra_luma_mode_enable_leftbits = 0;
+        if (p->idr) {
+            md->h265_intra_luma8x8_mode_enable = 0x11111117u;
+            md->h265_intra_luma16x16_mode_enable = 0x11111117u;
+        } else {
+            md->intra_mode_8x8_enable = 0;
+            md->h265_intra_luma8x8_mode_enable = 0;
+            md->h265_intra_luma16x16_mode_enable = 0x04040403u;
+            md->h265_intra_luma32x32_mode_enable = 0x04040403u;
+        }
+    }
 }
 
 void hevcnvenc_fill_submit(const HEVCEncConfig *c, uint32_t inputLayout, uint32_t chromaMode, const H264EncLayout *l,
@@ -230,8 +256,9 @@ void hevcnvenc_fill_submit(const HEVCEncConfig *c, uint32_t inputLayout, uint32_
 #define VALUE(m, v)              e[n++] = (TegraNVENCEntry){(uint16_t)(m), TEGRA_NVENC_ENTRY_VALUE, (v), 0}
 #define RELOC(m, handle, offset) e[n++] = (TegraNVENCEntry){(uint16_t)(m), TEGRA_NVENC_ENTRY_RELOC, (handle), (offset)}
     VALUE(NVC5B7_SET_APPLICATION_ID, NVC5B7_SET_APPLICATION_ID_ID_NVENC_H265);
-    // The driver's control word (codec type 3, FORCE_OUTPIC, SLICE_STAT_ON, constant QP) with the GP timer on.
-    VALUE(NVC5B7_SET_CONTROL_PARAMS, NVC5B7_SET_CONTROL_PARAMS_CODEC_TYPE_H264 | (1u << 8) | (1u << 11) | (1u << 12));
+    const uint32_t control =
+        NVC5B7_SET_CONTROL_PARAMS_CODEC_TYPE_H264 | (1u << 8) | (c->fast ? 0u : (1u << 11)) | (1u << 12);
+    VALUE(NVC5B7_SET_CONTROL_PARAMS, control);
     VALUE(NVC5B7_SET_PICTURE_INDEX, p->picture_index);
     RELOC(NVC5B7_SET_IN_CUR_PIC, h->input, 0);
     RELOC(NVC5B7_SET_IN_CUR_PIC_CHROMA_U, h->input, method ? l->input.chroma_offset : 0);

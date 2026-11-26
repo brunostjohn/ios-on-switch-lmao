@@ -1,5 +1,7 @@
 import AVFoundation
 import HWTestCore
+import HWTestKit
+import HWTestShared
 import HWTestVideo
 import UIKit
 

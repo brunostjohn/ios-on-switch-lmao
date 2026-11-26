@@ -20,6 +20,7 @@
 #include <switch/xnu.h>
 
 #include "stats.h"
+#include "../diag/deployed.h"
 #include "SwitchPowerTrail.h"
 
 #include <kern/clock.h>
@@ -320,6 +321,9 @@ void switch_sched_limit_asked(uint8_t percentage, uint64_t interval_ns, bool lif
     }
     asked_requests++;
     simple_unlock(&asked_lock);
+    if (lifted) {
+        switch_sched_limit_shadow(percentage, interval_ns);
+    }
 }
 
 /* The requests so far, when there were new ones since the last report. */
@@ -493,6 +497,7 @@ static size_t append_kernel_top(char *line, size_t at)
 static void switch_sched_report(__unused thread_call_param_t p0, __unused thread_call_param_t p1)
 {
     static uint64_t last_ns;
+    static bool boot_totals_logged, deployed_logged;
     static char line[LINE];
     uint64_t now_ns = 0;
     uint64_t window_ns = 0;
@@ -523,9 +528,19 @@ static void switch_sched_report(__unused thread_call_param_t p0, __unused thread
     append_slots(line, MIN(at, LINE - 1), FIRST_GPU, SLOTS);
     os_log(OS_LOG_DEFAULT, "%s", line);
     switch_sched_cpu_report(line, window_ns);
+    if (boot_ns != 0 && !boot_totals_logged) {
+        boot_totals_logged = true;
+        switch_sched_cpu_boot_totals(line, boot_ns);
+    }
+    if (!deployed_logged) {
+        deployed_logged = switch_log_deployed();
+    }
+    switch_sched_systime_report(line, LINE, window_ns);
+    switch_sched_callout_report(line, LINE, window_ns);
     switch_sched_watch_report(line, LINE, window_ns);
     switch_diag_pagein_report(line, LINE, window_ns);
     report_asked(line);
+    switch_sched_limit_report(line, LINE, window_ns);
 }
 
 #endif /* DEVELOPMENT || DEBUG */

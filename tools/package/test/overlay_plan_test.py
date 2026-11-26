@@ -79,12 +79,15 @@ class KindTest(unittest.TestCase):
             self.assertEqual({f['path'] for f in files} - kinded, unkinded, kind)
 
     def test_managed_packages_are_readable_at_the_workers_paths_in_both_profiles(self):
-        names = {'sileo.deb', 'ellekit.deb', 'uikittools.deb', 'launchctl.deb'}
-        expected = {
-            f'/usr/share/Switch/bootstrap/packages/{name}': f'build/switch-bootstrap/packages/{name}' for name in names
-        }
+        base = {'sileo.deb', 'ellekit.deb', 'uikittools.deb', 'launchctl.deb'}
+        dev = {'openssh-client.deb', 'openssh-sftp-server.deb', 'openssh-server.deb', 'switch-ssh.deb', 'top.deb'}
         for kind in KINDS:
             for release in (False, True):
+                names = base if release else base | dev
+                expected = {
+                    f'/usr/share/Switch/bootstrap/packages/{name}': f'build/switch-bootstrap/packages/{name}'
+                    for name in names
+                }
                 with self.subTest(kind=kind, release=release):
                     plan = self.overlay.plan(self.manifest, False, kind, release=release)
                     packages = [

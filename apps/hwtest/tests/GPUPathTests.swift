@@ -1,177 +1,23 @@
 import CoreVideo
 import Darwin
 import Foundation
+import HWTestCommon
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import HWTestVideo
 import IOSurface
 import Metal
 import VideoToolbox
 
-/// The capability flags the GM20B kernel advertises and how often this process took each path behind them (debug
-/// kernels, drivers/TegraGM20B/SwitchGpuPathStats.h): asked on the test's own TegraGM20B connection
-/// (TegraGM20BPathsABI.h), which the app's sandbox admits where it denies the kern.switch_gpu_paths sysctl.
-struct GPUPaths {
-    let flags: UInt32
-    let counts: [String: Int]
-
-    static let method: UInt32 = 0x5050
-    static let foreignWaitsOp: UInt32 = 6
-
-    static func foreignWaits(_ connection: GPUConnection?) -> [String: Int]? {
-        guard let connection else { return nil }
-        let (kr, reply) = connection.call(method, GPUConnection.words([foreignWaitsOp, 0]), outputSize: 512)
-        guard kr == KERN_SUCCESS else { return nil }
-        return parse(String(decoding: reply.prefix { $0 != 0 }, as: UTF8.self)).counts
-    }
-
-    enum Reading {
-        case counts(GPUPaths)
-        /// Neither route answered: the connection's (no_connection, release_kernel or a kern_return_t) and the
-        /// sysctl's errno.
-        case unreadable(connection: String, sysctl: Int32)
-    }
-
-    static func read(_ connection: GPUConnection?) -> Reading {
-        var asked = "no_connection"
-        if let connection {
-            let (kr, reply) = connection.call(method, GPUConnection.words([0, 0]), outputSize: 512)
-            if kr == KERN_SUCCESS { return .counts(parse(String(decoding: reply.prefix { $0 != 0 }, as: UTF8.self))) }
-            asked = kr == GPUConnection.kIOReturnUnsupported ? "release_kernel" : GPUConnection.hex(kr)
-        }
-        switch KernelSysctl.string("kern.switch_gpu_paths") {
-        case .value(let line): return .counts(parse(line))
-        case .failed(let error): return .unreadable(connection: asked, sysctl: error)
-        }
-    }
-
-    static func parse(_ line: String) -> GPUPaths {
-        var flags: UInt32 = 0
-        var counts: [String: Int] = [:]
-        for field in line.split(separator: " ") {
-            let pair = field.split(separator: "=", maxSplits: 1).map(String.init)
-            guard pair.count == 2 else { continue }
-            if pair[0] == "flags" {
-                flags = UInt32(pair[1].dropFirst(2), radix: 16) ?? 0
-            } else if let count = Int(pair[1]) {
-                counts[pair[0]] = count
-            }
-        }
-        return GPUPaths(flags: flags, counts: counts)
-    }
-
-    func taken(_ name: String, since before: GPUPaths) -> Int { (counts[name] ?? 0) - (before.counts[name] ?? 0) }
-}
-
-/// The parts of a GPUPathTest's workload that could not run here, each with why and the counters only it would have
-/// taken: exercise() reports them through `current`, and run() leaves those counters out of its "no X while it ran".
-/// A part that could not run because of the driver's own failing fails the test.
-final class PathParts: @unchecked Sendable {
-    @TaskLocal static var current: PathParts?
-    private(set) var skipped: [(why: String, counters: [String])] = []
-    private(set) var failed: [String] = []
-
-    func skip(_ why: String, counters: [String]) { skipped.append((why, counters)) }
-    func fail(_ why: String, counters: [String]) {
-        skipped.append((why, counters))
-        failed.append(why)
-    }
-
-    /// The route HW Test's own command buffers take, from a blit fill through the test's queue that the path tally
-    /// leaves out: a promise test whose maker or reader is this process's own Metal work runs its part only on "gm20b".
-    static func ownRoute(_ gpu: GPU) -> String {
-        guard let buffer = gpu.device.makeBuffer(length: 256, options: .storageModeShared),
-              let commands = gpu.queue.makeCommandBuffer(), let blit = commands.makeBlitCommandEncoder()
-        else { return "none" }
-        blit.fill(buffer: buffer, range: 0 ..< 256, value: 0x5a)
-        blit.endEncoding()
-        commands.commit()
-        commands.waitUntilCompleted()
-        return GM20BFacade.path(of: commands)
-    }
-
-    /// Whether this process's own command buffers take the driver; when not, the part does not run and the test fails
-    /// with the route.
-    static func ownRouteRaw(_ gpu: GPU, part: String, counters: [String], _ metrics: inout Metrics) -> Bool {
-        let route = ownRoute(gpu)
-        metrics.set("own_route", route)
-        if route == "gm20b" { return true }
-        current?.fail("\(part): HW Test's own command buffers go \(route)", counters: counters)
-        return false
-    }
-}
-
-/// One GM20B kernel path behind a capability bit, on the facade: the kernel advertises the bit, a workload that
-/// needs the path gives the right bytes with every command buffer on the driver, and the kernel counted the path for
-/// this process while it ran.
-protocol GPUPathTest: HWTest {
-    /// The capability bit that still gates the path, if any
-    var bit: Int? { get }
-    var counters: [String] { get }
-    /// The workload's failures, none when it gave the right bytes.
-    func exercise(_ gpu: GPU, _ context: TestContext, _ metrics: inout Metrics) async throws -> [String]
-}
-
-extension GPUPathTest {
-    var subsystem: Subsystem { .metal }
-    var bit: Int? { nil }
-
-    func run(_ context: TestContext) async throws -> Outcome {
-        let gpu = try GPU.make()
-        guard GM20BFacade.kind(of: gpu.device) == "gm20b" else {
-            return .skip("the default device is not the facade (\(GM20BFacade.kind(of: gpu.device)))")
-        }
-        let connection = GPUConnection()
-        var metrics = Metrics()
-        let before: GPUPaths
-        switch GPUPaths.read(connection) {
-        case .counts(let paths):
-            before = paths
-        case .unreadable(let asked, let error):
-            metrics.set("connection", asked)
-            metrics.set("sysctl", KernelSysctl.code(error))
-            if asked == "release_kernel" && error == ENOENT {
-                return .skip("no path counters: a release kernel", metrics)
-            }
-            let why = "the path counters are unreadable: connection \(asked), sysctl \(KernelSysctl.code(error))"
-            return .fail(why, metrics)
-        }
-        metrics.set("flags", String(before.flags, radix: 16))
-        var failures: [String] = []
-        if let bit, before.flags & (1 << UInt32(bit)) == 0 {
-            failures.append("the kernel does not advertise bit \(bit)")
-        }
-        let parts = PathParts()
-        failures += try await PathParts.$current.withValue(parts) { try await exercise(gpu, context, &metrics) }
-        failures += parts.failed
-        let after: GPUPaths
-        if case .counts(let paths) = GPUPaths.read(connection) { after = paths } else { after = before }
-        let skippedCounters = Set(parts.skipped.flatMap(\.counters))
-        for counter in counters {
-            let taken = after.taken(counter, since: before)
-            metrics.set(counter, taken)
-            if taken <= 0 && !skippedCounters.contains(counter) { failures.append("no \(counter) while it ran") }
-        }
-        metrics.set("paths", gpu.paths.isEmpty ? "-" : gpu.paths.text)
-        if gpu.paths.paths.keys.contains(where: { $0 != "gm20b" }) {
-            failures.append("command buffers went \(gpu.paths.text)")
-        }
-        if !failures.isEmpty { return .fail(failures.joined(separator: "; "), metrics, proof: gpu.proof) }
-        if !parts.skipped.isEmpty { return .skip(parts.skipped.map(\.why).joined(separator: "; "), metrics) }
-        return .pass(metrics, proof: gpu.proof)
-    }
-
-    static func wrong(_ got: [UInt8], _ want: [UInt8]) -> Int {
-        zip(got, want).filter { $0 != $1 }.count + abs(got.count - want.count)
-    }
-}
-
-/// JobVisibility (bit 18): a pass that writes only a private texture ends Internal, with no L2 flush; the blit into a
-/// shared buffer that reads it back ends External, and the CPU reads the pass's colour from it.
+/// JobVisibility (bit 18): a pass that writes only a private texture ends Internal, with no L2 flush. Shared buffers
+/// are volatile write-combined memory (8f6e44c20), so the blit into one that reads the texture back ends Volatile: a
+/// wait for idle and a frame-buffer flush, no L2 flush. A blit into a no-copy buffer over the process's own cached
+/// pages ends External. The CPU reads the pass's colour from both.
 struct JobVisibilityPathTest: GPUPathTest {
     let id = "gpu.path.job_visibility"
-    let name = "Internal jobs skip the L2 flush, External ones put CPU-read bytes in DRAM"
-    let counters = ["internal_jobs", "external_jobs"]
+    let name = "Internal jobs skip the L2 flush; Volatile and External ones put CPU-read bytes in DRAM"
+    let counters = ["internal_jobs", "volatile_jobs", "external_jobs"]
 
     func exercise(_ gpu: GPU, _: TestContext, _ metrics: inout Metrics) async throws -> [String] {
         let target = try gpu.texture(.rgba8Unorm, 64, 64)
@@ -183,10 +29,46 @@ struct JobVisibilityPathTest: GPUPathTest {
             pass.colorAttachments[0].storeAction = .store
             commands.makeRenderCommandEncoder(descriptor: pass)!.endEncoding()
         }
-        let bytes = try await gpu.read(target, bytesPerPixel: 4)
-        let wrong = Self.wrong(bytes, Array([UInt8]([51, 102, 153, 255]).repeated(64 * 64)))
-        metrics.set("wrong_bytes", wrong)
-        return wrong == 0 ? [] : ["\(wrong) bytes of the cleared texture read back wrong"]
+        let want = Array([UInt8]([51, 102, 153, 255]).repeated(64 * 64))
+        let shared = Self.wrong(try await gpu.read(target, bytesPerPixel: 4), want)
+        let noCopy = Self.wrong(try await Self.noCopyRead(gpu, target), want)
+        metrics.set("wrong_bytes_shared", shared)
+        metrics.set("wrong_bytes_no_copy", noCopy)
+        var failures: [String] = []
+        if shared != 0 { failures.append("\(shared) bytes read back wrong through a shared buffer") }
+        if noCopy != 0 { failures.append("\(noCopy) bytes read back wrong through a no-copy buffer") }
+        return failures
+    }
+
+    /// The 64x64 RGBA8 texture blitted into a shared buffer over page-aligned memory this process allocated
+    static func noCopyRead(_ gpu: GPU, _ target: MTLTexture) async throws -> [UInt8] {
+        let length = 64 * 64 * 4
+        let page = Int(getpagesize())
+        let allocBytes = (length + page - 1) & ~(page - 1)
+        var allocation: UnsafeMutableRawPointer?
+        guard posix_memalign(&allocation, page, allocBytes) == 0, let memory = allocation else {
+            throw TestFailure("aligned readback allocation failed")
+        }
+        memory.initializeMemory(as: UInt8.self, repeating: 0, count: allocBytes)
+        guard
+            let readback = gpu.device.makeBuffer(
+                bytesNoCopy: memory, length: allocBytes, options: .storageModeShared,
+                deallocator: { pointer, _ in free(pointer) }
+            )
+        else {
+            free(memory)
+            throw TestFailure("no-copy readback buffer creation failed")
+        }
+        try await gpu.run { commands in
+            let blit = commands.makeBlitCommandEncoder()!
+            blit.copy(
+                from: target, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(),
+                sourceSize: MTLSize(width: 64, height: 64, depth: 1), to: readback, destinationOffset: 0,
+                destinationBytesPerRow: 64 * 4, destinationBytesPerImage: length
+            )
+            blit.endEncoding()
+        }
+        return Array(UnsafeRawBufferPointer(start: readback.contents(), count: length))
     }
 }
 
@@ -384,39 +266,76 @@ struct NativeSurfaceViewPathTest: GPUPathTest {
         return failures
     }
 
+    final class PlaneSampler {
+        let pipeline: MTLComputePipelineState
+        private var buffers: [MTLBuffer?] = [nil, nil]
+
+        init(_ gpu: GPU) throws { pipeline = try gpu.compute("read_float_texture") }
+
+        func buffer(_ gpu: GPU, plane: Int, bytes: Int) throws -> MTLBuffer {
+            if let existing = buffers[plane], existing.length >= bytes { return existing }
+            let made = try gpu.buffer(bytes)
+            buffers[plane] = made
+            return made
+        }
+    }
+
     /// Per plane, the bytes a compute kernel samples from `frame` through `cache` that differ from its CPU rows; the GPU
     /// reads both planes before the CPU's lock
     static func planesWrong(
-        _ frame: CVPixelBuffer, through cache: CVMetalTextureCache, _ gpu: GPU, bitDepth: Int
+        _ frame: CVPixelBuffer, through cache: CVMetalTextureCache, _ gpu: GPU, bitDepth: Int,
+        sampler: PlaneSampler? = nil
     ) async throws -> [Int] {
+        let sampler = try sampler ?? PlaneSampler(gpu)
         let sampleBytes = bitDepth > 8 ? 2 : 1
-        let scale = sampleBytes == 2 ? 65535.0 : 255.0
         let planes: [(format: MTLPixelFormat, channels: Int)] =
             sampleBytes == 2 ? [(.r16Unorm, 1), (.rg16Unorm, 2)] : [(.r8Unorm, 1), (.rg8Unorm, 2)]
-        var sampled: [[UInt8]] = []
         var held: [CVMetalTexture] = []
+        var outputs: [(buffer: MTLBuffer, width: Int, height: Int, channels: Int)] = []
+        var committed: [MTLCommandBuffer] = []
         for (plane, shape) in planes.enumerated() {
+            let width = CVPixelBufferGetWidthOfPlane(frame, plane)
+            let height = CVPixelBufferGetHeightOfPlane(frame, plane)
             var texture: CVMetalTexture?
             guard
                 CVMetalTextureCacheCreateTextureFromImage(
-                    nil, cache, frame, nil, shape.format, CVPixelBufferGetWidthOfPlane(frame, plane),
-                    CVPixelBufferGetHeightOfPlane(frame, plane), plane, &texture
+                    nil, cache, frame, nil, shape.format, width, height, plane, &texture
                 ) == kCVReturnSuccess,
                 let texture, let metal = CVMetalTextureGetTexture(texture)
             else { throw TestFailure("no Metal texture of plane \(plane)") }
             held.append(texture)
-            let texels = try await gpu.texels(metal)
-            sampled.append(
-                texels.flatMap { texel in
-                    (0 ..< shape.channels).flatMap { channel -> [UInt8] in
-                        let value = UInt16((Double(texel[channel]) * scale).rounded())
-                        return sampleBytes == 2 ? [UInt8(value & 0xff), UInt8(value >> 8)] : [UInt8(value)]
-                    }
+            let out = try sampler.buffer(gpu, plane: plane, bytes: width * height * 16)
+            outputs.append((out, width, height, shape.channels))
+            committed.append(
+                try gpu.commit { commands in
+                    let encoder = commands.makeComputeCommandEncoder()!
+                    encoder.setComputePipelineState(sampler.pipeline)
+                    encoder.setTexture(metal, index: 0)
+                    encoder.setBuffer(out, offset: 0, index: 0)
+                    encoder.dispatchThreads(
+                        MTLSize(width: width, height: height, depth: 1),
+                        threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1)
+                    )
+                    encoder.endEncoding()
                 }
             )
         }
-        return planes.enumerated().map { plane, shape in
-            wrong(sampled[plane], rows(frame, plane: plane, bytesPerPixel: shape.channels * sampleBytes))
+        try gpu.finish(committed)
+        withExtendedLifetime(held) {}
+        CVPixelBufferLockBaseAddress(frame, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(frame, .readOnly) }
+        return outputs.enumerated().map { plane, output in
+            guard let base = CVPixelBufferGetBaseAddressOfPlane(frame, plane) else {
+                return output.width * output.height * output.channels * sampleBytes
+            }
+            let sampled = output.buffer.contents().bindMemory(
+                to: SIMD4<Float>.self, capacity: output.width * output.height
+            )
+            return NativePlaneCompare.wrongBytes(
+                sampled: sampled, planeBase: base, width: output.width, height: output.height,
+                bytesPerRow: CVPixelBufferGetBytesPerRowOfPlane(frame, plane), channels: output.channels,
+                sampleBytes: sampleBytes
+            )
         }
     }
 

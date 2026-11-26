@@ -33,6 +33,9 @@ enum {
 	TegraGM20BMethodCompilerAnnounce = 0x5349,
 	TegraGM20BMethodCompilerServe = 0x534a,
 	TegraGM20BMethodCompileWait = 0x534b,
+	TegraGM20BMethodCompilerRegisterLibrary = 0x534c,
+	TegraGM20BMethodCompilerMapLibrary = 0x534d,
+	TegraGM20BMethodCompilerUnmapLibrary = 0x534e,
 
 	TegraGM20BCompilerStoreToken =
 		0x53430001, /* Map (method 12), read only: the registered store */
@@ -45,6 +48,8 @@ enum {
 	TegraGM20BCompilerExpected = 1u << 3,
 	/* none comes this boot though the boot has one: it declined, or its launcher stopped starting it */
 	TegraGM20BCompilerDeclined = 1u << 4,
+	/* client library handles (RegisterLibrary/MapLibrary/UnmapLibrary) are implemented */
+	TegraGM20BCompilerLibraries = 1u << 5,
 
 	/* TegraGM20BAbiCompilerRegister.flags */
 	TegraGM20BCompilerRestarts = 1u << 0,
@@ -74,6 +79,9 @@ enum {
 	TegraGM20BCompilePending = 256,
 	TegraGM20BCompileQueuedBytes = 512u << 20,
 	TegraGM20BCompilerMaxWorkers = 8,
+	TegraGM20BCompilerLibrariesPerClient = 64,
+	TegraGM20BCompilerLibraryBytesPerClient = 256u << 20,
+	TegraGM20BCompilerLibraryBytesTotal = 512u << 20,
 };
 
 struct TegraGM20BAbiCompilerInfoReply {
@@ -149,6 +157,33 @@ struct TegraGM20BAbiCompilerServe {
  * connection with `cookie`, donating this thread's turnstile priority to its serving thread. */
 struct TegraGM20BAbiCompileWait {
 	uint64_t cookie;
+	uint32_t flags, reserved;
+};
+
+/* RegisterLibrary (client): take a copy-on-write snapshot of [address, + bytes) in the calling
+ * task and return a connection-scoped handle id. Released when the client connection closes. */
+struct TegraGM20BAbiCompilerRegisterLibrary {
+	uint64_t address, bytes;
+	uint32_t flags, reserved;
+};
+
+struct TegraGM20BAbiCompilerRegisterLibraryReply {
+	uint64_t id;
+};
+
+/* MapLibrary / UnmapLibrary (compiler only): map or unmap client `client`'s registered library
+ * `id` read-only into the compiler task. */
+struct TegraGM20BAbiCompilerMapLibrary {
+	uint64_t id, client;
+	uint32_t flags, reserved;
+};
+
+struct TegraGM20BAbiCompilerMapLibraryReply {
+	uint64_t address, bytes;
+};
+
+struct TegraGM20BAbiCompilerUnmapLibrary {
+	uint64_t id, client;
 	uint32_t flags, reserved;
 };
 

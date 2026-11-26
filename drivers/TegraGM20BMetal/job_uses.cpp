@@ -184,7 +184,7 @@ void CommandBuffer::use(const Texture &texture, bool write)
     if (named_.named(&texture, texture.va, range.bytes, texture.import, write))
         return;
     SWITCH_METAL_ENCODE_SPAN(Use);
-    const Texture *view = write ? &texture : readTexture(&texture);
+    const Texture *view = write ? writeTexture(&texture) : readTexture(&texture);
     const auto storage = view->storageRange();
     const bool ranged = dev_->k_.exactJobs() && storage.bytes && storage.bytes <= UINT32_MAX;
     if (!ranged || !importContains(view->import, storage.va, storage.bytes))
@@ -193,7 +193,7 @@ void CommandBuffer::use(const Texture &texture, bool write)
     const bool gpuVolatile = storage.gpuVolatile && !(view->import && !view->import->id);
     const bool cachedHost = hostVisible && !gpuVolatile;
     // a write into a copied no-copy texture goes on to its caller's pages (TegraGM20BMetalEncodeBlit.mm copyToCallerPages)
-    externalWrites_ |= (cachedHost || texture.callerPages) && write;
+    externalWrites_ |= (cachedHost || texture.callerPages || view->nativeGeneration != 0) && write;
     volatileWrites_ |= write && hostVisible && gpuVolatile && !texture.callerPages;
 #if SWITCH_METAL_DIAGNOSTICS
     if (write && dev_->glassMemLive_)

@@ -13,6 +13,8 @@ use std::ops::Range;
 #[cfg(test)]
 mod alu_tests;
 #[cfg(test)]
+mod interlock_tests;
+#[cfg(test)]
 mod layout_tests;
 #[cfg(test)]
 mod ld_cache_tests;

@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// Destination-reading draws, each scene (FetchShapes.swift) drawn into each FetchTarget cleared to 0; its fragment adds

@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// A two-plane YCbCr texture written and sampled in one command buffer gives exactly the texels the same work split

@@ -196,9 +196,8 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
         std::string why;
         if (const RecordCache::Found found = compiler_->lookup(k, known, why); found != RecordCache::Found::None) {
             SWITCH_METAL_DIAGNOSTIC(logInProcessCa(a, k, found));
-            const RuntimeRecord *kept = nullptr;
-            if (compiler_->ask(k, nullptr, &kept) == Compiler::State::Ready && kept)
-                place(k, kept, caTransform, a.qos, pending);
+            if (found == RecordCache::Found::Record)
+                place(k, std::make_shared<const RuntimeRecord>(std::move(known)), caTransform, a.qos, pending);
             else
                 pending->ready(nullptr, failureOf(k, pending->creation));
             return;
@@ -207,16 +206,16 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
             pending->ready(nullptr, kNoCompilerComes);
             return;
         }
-        remoteLater(a, k, [this, k, caTransform, qos = a.qos, pending](const RuntimeRecord *record) {
+        remoteLater(a, k, [this, k, caTransform, qos = a.qos, pending](std::shared_ptr<const RuntimeRecord> record) {
             if (record)
-                place(k, record, caTransform, qos, pending);
+                place(k, std::move(record), caTransform, qos, pending);
             else
                 pending->ready(nullptr, failureOf(k, pending->creation));
         });
     });
 }
 
-void Completion::place(const CacheKey &key, const RuntimeRecord *record, bool caTransform, uint32_t qos,
+void Completion::place(const CacheKey &key, std::shared_ptr<const RuntimeRecord> record, bool caTransform, uint32_t qos,
                        std::shared_ptr<Pending> pending)
 {
     const CacheKey keptKey = key;
@@ -357,6 +356,12 @@ const ComputeState *Completion::kernel(MTLComputePipelineDescriptor *descriptor,
                                         dispatch.threads[1], dispatch.threads[2], why.c_str(),
                                         descriptor.computeFunction.name.UTF8String ?: "-", constantsLast(key).c_str()]);
     return result.state;
+}
+
+void Completion::trim()
+{
+    if (compiler_)
+        compiler_->trim();
 }
 
 Compiler::Stats Completion::stats() const

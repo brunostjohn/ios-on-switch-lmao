@@ -47,11 +47,14 @@ static void cubicBinds(__unsafe_unretained SwitchMetalRenderEncoder *encoder, co
 
 void packedVariants(SwitchMetalPipeline *p, const gm20b::PackRun &run)
 {
-    std::lock_guard<gm20b::Mutex> lock(p->_variantLock);
-    for (const auto &[name, pl] : gRM->raw->variantPipelines(run, p->_caTransform)) {
-        auto variant = std::make_shared<gm20b::Variant<gm20b::Pipeline>>();
-        variant->publish(pl);
-        p->_variants.emplace(name, std::move(variant));
+    // p is unshared until gm20bPipelineShell returns it; variants are placed on first draw selection.
+    p->_packRun = run;
+    p->_hasPackVariants = false;
+    for (uint32_t i = 0; i < run.records; ++i) {
+        if (run.first[i].flags & gm20b::PipelineVariantRecord) {
+            p->_hasPackVariants = true;
+            break;
+        }
     }
 }
 
@@ -86,6 +89,12 @@ static gm20b::Variant<gm20b::Pipeline> *renderVariant(SwitchMetalPipeline *p, co
         else if (!at->second->reopen())
             return at->second.get();
         variant = at->second;
+    }
+    if (p->_hasPackVariants) {
+        if (gm20b::Pipeline *pl = gRM->raw->variantPipeline(p->_packRun, name, p->_caTransform)) {
+            variant->publish(pl);
+            return variant.get();
+        }
     }
     const std::string key = gm20bStateKey(p) + name;
     gm20b::Completion *completion = gRM->completion.get();
@@ -292,6 +301,9 @@ static gm20b::Variant<gm20b::Pipeline> *preparedVariant(__unsafe_unretained Swit
     // a Depth16Unorm a draw tests in its shader renders converted (TegraGM20BMetalRangeForms.mm depth16Tested)
     if ((_forms.fragmentTests && gm20b::zetaHasDepth(zeta)) || (base->rec->shaderTests.flags & gm20b::kShaderTestDepth))
         _cb->_passes[_passAt].shaderTestsDepth = true;
+    if (_forms.fragmentTests == uint8_t(gm20b::FragmentTests::StencilWrite) ||
+        (base->rec->shaderTests.flags & gm20b::kShaderTestStencil))
+        _cb->_passes[_passAt].testsStencil = true;
     reboundTextures(*base, _tex[1], _forms.written);
     if (!_forms.cubic.empty() || _forms.fragmentTests || !_forms.written.empty())
         _formVariant = preparedVariant(self, _forms);

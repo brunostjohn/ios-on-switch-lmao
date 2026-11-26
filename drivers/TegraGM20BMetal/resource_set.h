@@ -44,6 +44,21 @@ struct SetView {
     // make it again (the member and the reason). Empty otherwise; each submitInSet sets it.
     std::string refused;
 
+    struct UseCache {
+        uint32_t channel = 0, set = 0;
+        bool admitted = false, valid = false;
+        std::vector<TegraGM20BAbiSurfaceUse> uses;
+
+        void clear()
+        {
+            valid = false;
+        }
+
+        bool matches(uint32_t ch, uint32_t setId, bool isAdmitted, const TegraGM20BAbiSurfaceUse *items,
+                     uint32_t count) const;
+        void save(uint32_t ch, uint32_t setId, bool isAdmitted, const TegraGM20BAbiSurfaceUse *items, uint32_t count);
+    } useCache;
+
     // The member [va, va + bytes) lies in, else null
     const SetMember *find(uint64_t va, uint64_t bytes) const;
 

@@ -34,6 +34,10 @@ uint32_t qosOf(Band band)
 
 Pool::Pool(Hooks hooks, unsigned workers) : hooks_(std::move(hooks))
 {
+    if (hooks_.idle)
+        idleWorker_ = std::thread([this] {
+            idleLoop();
+        });
     for (unsigned i = 0; i < workers; ++i)
         workers_.emplace_back([this, slot = i + 1] {
             workerLoop(slot);
@@ -47,8 +51,11 @@ Pool::~Pool()
         stopping_ = true;
     }
     work_.notify_all();
+    idleWork_.notify_all();
     for (std::thread &t : workers_)
         t.join();
+    if (idleWorker_.joinable())
+        idleWorker_.join();
 }
 
 bool Pool::submit(const Name &name, std::unique_ptr<Work> work, const Waiter &asked)
@@ -223,8 +230,30 @@ void Pool::finish(const std::shared_ptr<Job> &job, int32_t splitResult)
     for (void *token : raises)
         hooks_.lower(token);
     if (idle && hooks_.idle) {
+        {
+            std::lock_guard<std::mutex> l(lock_);
+            if (jobs_.empty())
+                ++idleEpoch_;
+        }
+        idleWork_.notify_one();
+    }
+}
+
+void Pool::idleLoop()
+{
+    hooks_.setBand(Band::Background);
+    std::unique_lock<std::mutex> l(lock_);
+    for (;;) {
+        idleWork_.wait(l, [&] {
+            return stopping_ || (idleEpoch_ != idleHandled_ && jobs_.empty());
+        });
+        if (stopping_)
+            return;
+        idleHandled_ = idleEpoch_;
+        l.unlock();
         hooks_.setBand(Band::Background);
         hooks_.idle();
+        l.lock();
     }
 }
 

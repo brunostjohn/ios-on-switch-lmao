@@ -214,6 +214,7 @@ public:
 
 #include "../TegraNVJPGMapping.cpp"
 #include "../TegraNVJPGRepack.cpp"
+#include "../TegraNVJPGRoute.h"
 #include "../TegraNVJPGUserClient.cpp"
 
 bool tegra_nvjpg_stats_start(void)
@@ -238,6 +239,14 @@ void tegra_nvjpg_counts_of(int, TegraNVJPGRouteCounts *out)
 void tegra_nvjpg_stats_line(void)
 {}
 
+std::vector<uint32_t> gRoutes;
+
+void tegra_nvjpg_note_route(uint32_t route, bool, uint32_t, uint32_t, uint32_t, const nvjpg_dec_drv_pic_setup_s *,
+                            uint32_t, uint32_t)
+{
+    gRoutes.push_back(route);
+}
+
 // A backing as the GPU driver keeps one: the engines' mapping contexts, and the owner its pages go back to once no
 // reference is left.
 struct switch_gpu_backing {
@@ -256,6 +265,26 @@ TegraVICAcquire gVicAfter;
 switch_gpu_backing *gRetiring;
 bool gRetiredDuringRun;
 int gMapsUnderTheJobLock;
+
+struct CeCopyCall {
+    tegra_gm20b_ce_plane src, dst;
+    uint32_t rowBytes, rows;
+    tegra_gm20b_ce_wait wait;
+    switch_gpu_backing *srcBacking, *dstBacking;
+    uint64_t srcBackingOffset, dstBackingOffset;
+};
+
+std::vector<CeCopyCall> gCeCopies;
+int gCeStatus = 0;
+int gSurfaceTiled = 0;
+int gSurfaceUndescribed = 0;
+int gHolds = 0;
+std::vector<int> gHoldsAtCopy;
+tgm_layout gSurfaceLayout = {};
+int gSurfaceCompressed = 0;
+int gSurfaceAccessUnreserved = 0;
+int gSurfaceAccessReleased = 0;
+volatile uint64_t gSurfaceGen = 1;
 
 // The GPU driver's retirement: every engine's mapping destroyed, then the pages given back.
 void retire(switch_gpu_backing *backing)
@@ -356,6 +385,7 @@ bool switch_dma_pages_alloc(switch_dma_pages *out, size_t size, IOOptionBits)
 {
     *out = {};
     const uint32_t count = static_cast<uint32_t>((size + 4095) / 4096);
+    out->memory = new IOBufferMemoryDescriptor;
     out->pages = new uint64_t[count];
     for (uint32_t i = 0; i < count; ++i)
         out->pages[i] = gNextBufferPa + i * 4096ULL;
@@ -368,9 +398,57 @@ bool switch_dma_pages_alloc(switch_dma_pages *out, size_t size, IOOptionBits)
 
 void switch_dma_pages_free(switch_dma_pages *buffer)
 {
+    delete buffer->memory;
     delete[] buffer->pages;
     delete[] buffer->va;
     *buffer = {};
+}
+
+int switch_vic_surface_access(const TegraVICSurface *surface, bool, SwitchVICSurfaceAccess *access, bool,
+                              switch_gpu_backing *held)
+{
+    *access = {};
+    access->descriptor = surface->memory;
+    access->backing = held;
+    if (held)
+        held->refs++;
+    access->guard = {held, &gSurfaceGen, 1};
+    return 0;
+}
+
+void switch_vic_surface_unreserve(SwitchVICSurfaceAccess *access)
+{
+    if (access->descriptor) {
+        gSurfaceAccessUnreserved++;
+        access->descriptor = nullptr;
+    }
+}
+
+void switch_vic_surface_release_access(SwitchVICSurfaceAccess *access)
+{
+    switch_vic_surface_unreserve(access);
+    if (access->backing) {
+        gSurfaceAccessReleased++;
+        switch_gpu_backing_release(access->backing);
+    }
+    *access = {};
+}
+
+extern "C" int tegra_gm20b_ce_copy_plane_checked(const tegra_gm20b_ce_plane *src, const tegra_gm20b_ce_plane *dst,
+                                                 uint32_t rowBytes, uint32_t rows, const tegra_gm20b_ce_wait *wait,
+                                                 const tegra_gm20b_ce_done *done, switch_gpu_backing *srcBacking,
+                                                 uint64_t srcBackingOffset, switch_gpu_backing *dstBacking,
+                                                 uint64_t dstBackingOffset, const switch_gpu_copy_ownership *,
+                                                 const switch_gpu_event_submission *)
+{
+    gCeCopies.push_back({*src, *dst, rowBytes, rows, wait ? *wait : tegra_gm20b_ce_wait{TEGRA_GM20B_CE_NO_SYNCPT, 0},
+                         srcBacking, dstBacking, srcBackingOffset, dstBackingOffset});
+    gHoldsAtCopy.push_back(gHolds);
+    if (gCeStatus)
+        return gCeStatus;
+    if (done && done->fn)
+        done->fn(done->arg, 0);
+    return 0;
 }
 
 bool switch_vic_decode_output_ready(void)
@@ -421,21 +499,27 @@ extern "C" void tegra_gm20b_surface_engine_rows(OSObject *)
 
 extern "C" void *tegra_gm20b_surface_hold(uint64_t, int *tiled)
 {
-    *tiled = 0;
-    return nullptr;
+    *tiled = gSurfaceTiled;
+    gHolds += gSurfaceTiled;
+    return gSurfaceTiled ? reinterpret_cast<void *>(0x1) : nullptr;
 }
 
 extern "C" void tegra_gm20b_surface_unhold(void *)
-{}
-
-extern "C" int tegra_gm20b_surface_layout(uint64_t, struct tgm_layout *)
 {
-    return 0;
+    --gHolds;
+}
+
+extern "C" int tegra_gm20b_surface_layout(uint64_t, struct tgm_layout *out)
+{
+    if (!gSurfaceTiled || gSurfaceUndescribed)
+        return 0;
+    *out = gSurfaceLayout;
+    return 1;
 }
 
 extern "C" int tegra_gm20b_surface_compressed(uint64_t)
 {
-    return 0;
+    return gSurfaceCompressed;
 }
 
 extern "C" void switch_refusal(const char *, const char *reason_key, const char *, ...)
@@ -537,6 +621,17 @@ protected:
             gQueueLock = IOLockAlloc();
         gRefusals.clear();
         gMapsUnderTheJobLock = 0;
+        gCeCopies.clear();
+        gCeStatus = 0;
+        gSurfaceTiled = 0;
+        gSurfaceUndescribed = 0;
+        gHolds = 0;
+        gHoldsAtCopy.clear();
+        gRoutes.clear();
+        gSurfaceLayout = {};
+        gSurfaceCompressed = 0;
+        gSurfaceAccessUnreserved = 0;
+        gSurfaceAccessReleased = 0;
     }
 
     void TearDown() override
@@ -636,4 +731,158 @@ TEST_F(NVJPGUserClient, ARepackMapsItsBufferOnceAndQueuesVICBehindTheDecode)
     EXPECT_EQ(gSmmuRangeFlushes.size(), before);
     EXPECT_EQ(gMapsUnderTheJobLock, 0);
     EXPECT_TRUE(gRefusals.empty());
+}
+
+// Unaligned destination strides (e.g. stride 2080) decode pitch-linear into the pooled 64B-aligned scratch buffer, then
+// Copy Engine DMA-repacks exact visible rows behind NVJPG's OP_DONE syncpoint with zero CPU pixel copies.
+TEST_F(NVJPGUserClient, UnalignedStrideExecutesViaCopyEngineRepackBehindNVJPGFence)
+{
+    Destination d(260, 0x96000000);
+    IOMemoryDescriptor dstMem;
+    Job *job = decodeInto(d, 260ULL * 4096, 2048ULL * 512);
+    job->dst.memory = &dstMem;
+    job->plan.repack = TEGRA_NVJPG_REPACK_CE;
+    job->plan.repackBytes = 2048ULL * 512;
+    job->plan.planes = job->engine.planes = 1;
+    job->plan.target.pitch[0] = 2048;
+    job->plan.planeStart[0] = 0;
+    job->plan.copyDstStart[0] = 0;
+    job->plan.copyDstPitch[0] = 2080;
+    job->plan.copyRowBytes[0] = 2048;
+    job->plan.copyRows[0] = 512;
+    EXPECT_EQ(engineRuns(job), kIOReturnIOError) << "the model's engine writes no status";
+    EXPECT_TRUE(gRefusals.empty());
+    ASSERT_EQ(gCeCopies.size(), 1u);
+    EXPECT_EQ(gCeCopies[0].wait.syncpt, kSyncpt);
+    EXPECT_EQ(gCeCopies[0].wait.threshold, gEngine.syncpt);
+    EXPECT_EQ(gCeCopies[0].src.pitch, 2048u);
+    EXPECT_EQ(gCeCopies[0].dst.pitch, 2080u);
+    EXPECT_EQ(gCeCopies[0].rowBytes, 2048u);
+    EXPECT_EQ(gCeCopies[0].rows, 512u);
+    EXPECT_EQ(gCeCopies[0].dstBacking, &d.backing);
+    EXPECT_EQ(gSurfaceAccessUnreserved, 1);
+    EXPECT_EQ(gSurfaceAccessReleased, 1);
+    EXPECT_EQ(gRoutes, std::vector<uint32_t>{TEGRA_NVJPG_ROUTE_COPY_ROWS});
+    EXPECT_EQ(d.backing.refs, 1);
+    retire(&d.backing);
+}
+
+// A GM20B block-linear destination whose unrounded IOSurface length is shorter than its block rows, while its
+// page-rounded backing pages hold the blocks, decodes directly into those backing pages without refusing.
+TEST_F(NVJPGUserClient, BlockLinearDestinationUsesBackingPageExtentDirectly)
+{
+    Destination d(72, 0x97000000);  // 294,912 bytes (16 KiB aligned); 260x260 BGRA alloc is 282,880, BL0 is 287,232
+    gSurfaceTiled = 1;
+    gSurfaceLayout = {260, 260, 4, 1088, 264, 0, 4096, 287232};
+    Job *job = decodeInto(d, 282880, 1088ULL * 272);
+    job->request.base.out_width = 260;
+    job->request.base.out_height = 260;
+    job->plan.extent.rowBytes[0] = 1088;
+    job->plan.extent.rows[0] = 272;
+    EXPECT_EQ(engineRuns(job), kIOReturnIOError);
+    EXPECT_TRUE(gRefusals.empty());
+    EXPECT_TRUE(gCeCopies.empty());
+    ASSERT_NE(d.mapping(), nullptr);
+    EXPECT_EQ(d.mapping()->count, 72u) << "maps all real backing pages, not truncated to unrounded alloc length";
+    EXPECT_EQ(gRoutes, std::vector<uint32_t>{TEGRA_NVJPG_ROUTE_BLOCKS});
+    EXPECT_EQ(gHolds, 0);
+    retire(&d.backing);
+}
+
+// A tight block-linear destination whose blocks exceed even the backing's pages falls back to Copy Engine DMA repack
+// instead of refusing to CPU decode.
+TEST_F(NVJPGUserClient, TightBlockLinearDestinationFallsBackToCopyEngineRepack)
+{
+    Destination d(70, 0x98000000);  // 286,720 bytes < 287,232 BL0 block rows, >= 282,880 pitch picture
+    IOMemoryDescriptor dstMem;
+    gSurfaceTiled = 1;
+    gSurfaceLayout = {260, 260, 4, 1088, 264, 0, 4096, 287232};
+    Job *job = decodeInto(d, 282880, 1088ULL * 272);
+    job->dst.memory = &dstMem;
+    job->dst.desc.fourcc = TEGRA_NVJPG_FOURCC('B', 'G', 'R', 'A');
+    job->dst.desc.width = 260;
+    job->dst.desc.height = 260;
+    job->dst.desc.planeBytesPerRow[0] = 1088;
+    job->dst.desc.planeHeight[0] = 260;
+    job->request.base.out_width = 260;
+    job->request.base.out_height = 260;
+    job->plan.extent.rowBytes[0] = 1088;
+    job->plan.extent.rows[0] = 272;
+    EXPECT_EQ(engineRuns(job), kIOReturnIOError);
+    EXPECT_TRUE(gRefusals.empty());
+    ASSERT_EQ(gCeCopies.size(), 1u);
+    EXPECT_EQ(gCeCopies[0].wait.syncpt, kSyncpt);
+    EXPECT_EQ(gCeCopies[0].wait.threshold, gEngine.syncpt);
+    EXPECT_EQ(gCeCopies[0].rowBytes, 1040u);
+    EXPECT_EQ(gCeCopies[0].rows, 260u);
+    EXPECT_EQ(gCeCopies[0].dstBacking, &d.backing);
+    EXPECT_EQ(gHoldsAtCopy, std::vector<int>{1})
+        << "the layout stays held until the copy engine has written its blocks";
+    EXPECT_EQ(gHolds, 0);
+    EXPECT_EQ(gRoutes, std::vector<uint32_t>{TEGRA_NVJPG_ROUTE_COPY_BLOCKS});
+    EXPECT_EQ(d.backing.refs, 1);
+    retire(&d.backing);
+}
+
+// GM20B holds the destination block-linear but describes no layout of it: refused, never written as rows.
+TEST_F(NVJPGUserClient, ADestinationDecidedBlockLinearWithNoLayoutDescribedIsRefused)
+{
+    Destination d(64, 0x99000000);
+    gSurfaceTiled = 1;
+    gSurfaceUndescribed = 1;
+    Job *job = decodeInto(d, 64 * 4096, 64 * 4096);
+    const size_t streams = gEngine.streams.size();
+    EXPECT_EQ(engineRuns(job), kIOReturnUnsupported);
+    EXPECT_EQ(gEngine.streams.size(), streams) << "NVJPG never ran";
+    ASSERT_EQ(gRefusals.size(), 1u);
+    EXPECT_EQ(gRefusals.back(), "destination decided block-linear, but GM20B describes no layout of it");
+    EXPECT_EQ(gHolds, 0);
+    EXPECT_EQ(d.mapping(), nullptr);
+}
+
+// A decode the planner staged for the copy engine (an IOSurface stride off 64 bytes) into a destination GM20B holds
+// block-linear: the layout is asked and held like a direct decode's, and the copy engine writes its blocks whole.
+static Job *stagedInto(Destination &d, IOMemoryDescriptor &memory, uint64_t copyDstStart)
+{
+    Job *job = decodeInto(d, 282880, 1088ULL * 264);
+    job->dst.memory = &memory;
+    job->plan.repack = TEGRA_NVJPG_REPACK_CE;
+    job->plan.repackBytes = 1088ULL * 264;
+    job->plan.target.pitch[0] = 1088;
+    job->plan.copyDstStart[0] = copyDstStart;
+    job->plan.copyDstPitch[0] = 1040;
+    job->plan.copyRowBytes[0] = 1040;
+    job->plan.copyRows[0] = 260;
+    return job;
+}
+
+TEST_F(NVJPGUserClient, AStagedCopyIntoAWholeBlockLinearDestinationWritesItsBlocksUnderTheHold)
+{
+    Destination d(72, 0x9a000000);
+    IOMemoryDescriptor memory;
+    gSurfaceTiled = 1;
+    gSurfaceLayout = {260, 260, 4, 1088, 264, 0, 4096, 287232};
+    EXPECT_EQ(engineRuns(stagedInto(d, memory, 0)), kIOReturnIOError) << "the model's engine writes no status";
+    EXPECT_TRUE(gRefusals.empty());
+    ASSERT_EQ(gCeCopies.size(), 1u);
+    EXPECT_EQ(gHoldsAtCopy, std::vector<int>{1});
+    EXPECT_EQ(gHolds, 0);
+    EXPECT_EQ(gRoutes, std::vector<uint32_t>{TEGRA_NVJPG_ROUTE_COPY_BLOCKS});
+    retire(&d.backing);
+}
+
+TEST_F(NVJPGUserClient, AStagedCopyIntoPartOfABlockLinearDestinationIsRefused)
+{
+    Destination d(72, 0x9b000000);
+    IOMemoryDescriptor memory;
+    gSurfaceTiled = 1;
+    gSurfaceLayout = {260, 260, 4, 1088, 264, 0, 4096, 287232};
+    const size_t streams = gEngine.streams.size();
+    EXPECT_EQ(engineRuns(stagedInto(d, memory, 64)), kIOReturnUnsupported);
+    EXPECT_EQ(gEngine.streams.size(), streams);
+    EXPECT_TRUE(gCeCopies.empty());
+    ASSERT_EQ(gRefusals.size(), 1u);
+    EXPECT_EQ(gRefusals.back(), "copy-engine re-pack into part of a block-linear destination");
+    EXPECT_EQ(gHolds, 0);
+    retire(&d.backing);
 }

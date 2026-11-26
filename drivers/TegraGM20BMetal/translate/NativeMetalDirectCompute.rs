@@ -280,7 +280,7 @@ pub fn direct(
         .iter()
         .map(|w| {
             let parts = (&plain.commands, &plain.pipeline.layout);
-            kernel_write(w, parts, compile, &plain.state, &mut samplers)
+            kernel_write(w, parts, compile, ask, &plain.state, &mut samplers)
         })
         .collect::<Result<Vec<_>, String>>()?;
     let first = plain.commands.regions.first();

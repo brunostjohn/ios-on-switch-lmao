@@ -162,7 +162,9 @@ void releaseStorage(const void *owner)
         return nil;
     }
     MTLFunctionConstantValues *snapshot = [values copy];
-    NSArray *indexed = [snapshot newIndexedConstantArray], *named = [snapshot newNamedConstantArray];
+    // Wrapper elements own and free `v.data` on dealloc; keep both arrays alive until the call below copies them.
+    __attribute__((objc_precise_lifetime)) NSArray *indexed = [snapshot newIndexedConstantArray];
+    __attribute__((objc_precise_lifetime)) NSArray *named = [snapshot newNamedConstantArray];
     std::vector<NmbConstant> constants;
     for (unsigned group = 0; group < 2; group++)
         for (id<SwitchMetalConstantValue> v in (group ? named : indexed)) {

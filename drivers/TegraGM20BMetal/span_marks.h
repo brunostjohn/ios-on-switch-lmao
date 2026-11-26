@@ -212,7 +212,9 @@ template <class Pipeline> SpanLabel drawSpanLabel(const Pipeline &pl, uint64_t k
     l.instructions = pl.fragmentInstructions;
     l.kpx = uint16_t(std::min<uint32_t>(kpx, 0xffff));
     l.samples = samples;
-    if (const char *name = pl.caName ? pl.caName : pl.spanName)
+    const char *ca = __atomic_load_n(&pl.caName, __ATOMIC_ACQUIRE);
+    const char *span = __atomic_load_n(&pl.spanName, __ATOMIC_ACQUIRE);
+    if (const char *name = ca ? ca : span)
         strlcpy(l.name, name, sizeof l.name);
     return l;
 }

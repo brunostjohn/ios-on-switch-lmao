@@ -338,8 +338,10 @@ void dropIdle(SwitchMetalPassCache &c)
 
 }  // namespace
 
-bool gm20bPassKey(MTLRenderPassDescriptor *d, std::vector<uint8_t> &key, uint64_t &hash)
+bool gm20bPassKey(MTLRenderPassDescriptor *d, std::vector<uint8_t> &key, uint64_t &hash, bool *hasCounters)
 {
+    if (hasCounters)
+        *hasCounters = false;
     const Layout &l = layout();
     if (!l.ok || object_getClass(d) != l.descriptor)
         return false;
@@ -361,8 +363,11 @@ bool gm20bPassKey(MTLRenderPassDescriptor *d, std::vector<uint8_t> &key, uint64_
             if (object_getClass((__bridge id)sample) != l.sample)
                 return false;
             memcpy(&buffer, static_cast<const uint8_t *>(sample) + l.sampleBufferAt, sizeof buffer);
-            if (buffer)
+            if (buffer) {
+                if (hasCounters)
+                    *hasCounters = true;
                 return false;
+            }
         }
     }
     // the mask of the attachments that have a texture, the descriptor's bytes, then each of those attachments' bytes:

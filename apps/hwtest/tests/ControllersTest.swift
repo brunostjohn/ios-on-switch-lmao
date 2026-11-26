@@ -1,6 +1,7 @@
 import Foundation
 import GameController
 import HWTestCore
+import HWTestKit
 
 /// The game controllers connected now, without asking anyone to press anything: how many, their names and profiles,
 /// and the lowest battery level among them.

@@ -107,7 +107,8 @@ void Device::growLoop()
         if (growing_) {
             bool resident = false;
             while (!stopping_ && !closing_ &&
-                   tryUnparkChunk(l, ChunkVec::Pool, 0, sizes_.chunk, false, 0, TegraGM20BSurfaceRead, c, resident) &&
+                   tryUnparkChunk(l, ChunkVec::Pool, 0, sizes_.chunk, false, 0, TegraGM20BSurfaceRead, c, resident,
+                                  sizes_.chunk) &&
                    !resident) {
             }
             if (!resident && !stopping_ && !closing_)
@@ -120,9 +121,10 @@ void Device::growLoop()
             const uint32_t zetaIndex = vec == ChunkVec::Zeta ? uint32_t(w.chunks - zChunks_) : 0;
             const uint64_t want = chunkSize(*w.chunks, sizes_.blChunk, 0, kBlAlign);
             bool resident = false;
-            while (!stopping_ && !closing_ &&
-                   tryUnparkChunk(l, vec, zetaIndex, want, false, kBlAlign, TegraGM20BSurfaceWrite, c, resident) &&
-                   !resident) {
+            while (
+                !stopping_ && !closing_ &&
+                tryUnparkChunk(l, vec, zetaIndex, want, false, kBlAlign, TegraGM20BSurfaceWrite, c, resident, want) &&
+                !resident) {
             }
             if (!resident && !stopping_ && !closing_)
                 newTiledChunk(*w.chunks, w.kind, want, false, l, c);
@@ -132,10 +134,12 @@ void Device::growLoop()
     }
 }
 
-bool Device::poolAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s)
+bool Device::poolAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s, bool *dirty)
 {
     bytes = (bytes + pageSize() - 1) & ~uint64_t(pageSize() - 1);
     s = {};
+    if (dirty)
+        *dirty = false;
     // over half a chunk: its own chunk, made now (in the render server rare: no Core Animation texture of the 720p screen is
     // that large)
     if (bytes > sizes_.chunk / 2) {
@@ -151,6 +155,8 @@ bool Device::poolAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &
                 }
             if (c != ~0u) {
                 chunks_[c].used = bytes;
+                if (dirty)
+                    *dirty = true;
                 s = {c, 0, bytes, chunks_[c].bo.va, static_cast<uint8_t *>(chunks_[c].memory)};
                 return true;
             }
@@ -159,12 +165,15 @@ bool Device::poolAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &
                 if (!resident)
                     continue;
                 chunks_[c].used = bytes;
+                if (dirty)
+                    *dirty = true;
                 s = {c, 0, bytes, chunks_[c].bo.va, static_cast<uint8_t *>(chunks_[c].memory)};
                 return true;
             }
             if (closing_ || !newChunk(bytes, true, l, c))
                 return false;
             chunks_[c].used = bytes;
+            chunks_[c].highWater = bytes;
             s = {c, 0, bytes, chunks_[c].bo.va, static_cast<uint8_t *>(chunks_[c].memory)};
             return true;
         }
@@ -183,6 +192,9 @@ bool Device::poolAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &
                 ch.free.erase(it);
                 if (left)
                     ch.free[offset + bytes] = left;
+                if (dirty)
+                    *dirty = offset < ch.highWater;
+                ch.highWater = std::max(ch.highWater, offset + bytes);
                 ch.used += bytes;
                 poolFree_ -= bytes;
                 s = {c, offset, bytes, ch.bo.va + offset, static_cast<uint8_t *>(ch.memory) + offset};
@@ -195,7 +207,8 @@ bool Device::poolAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &
         }
         uint32_t unparked = ~0u;
         bool resident = false;
-        if (tryUnparkChunk(l, ChunkVec::Pool, 0, bytes, false, 0, TegraGM20BSurfaceRead, unparked, resident))
+        if (tryUnparkChunk(l, ChunkVec::Pool, 0, bytes, false, 0, TegraGM20BSurfaceRead, unparked, resident,
+                           chunkSize(chunks_, sizes_.chunk, bytes, pageSize())))
             continue;
         if (closing_ || ++pass == 3)
             break;
@@ -337,9 +350,8 @@ Device::Trimmed Device::trim()
             for (std::vector<Chunk> &z : zChunks_)
                 freeUnused(z);
             freeUnusedWc(wcChunks_);
+            freeUnusedWc(volatileWcChunks_);
         }
-        // Volatile WC chunks stay unparked to return carveout RAM immediately and avoid VOL=1/VOL=0 unpark aliasing.
-        freeUnusedWc(volatileWcChunks_);
     }
     finishParkChunks(toPark);
     return trimmed;
@@ -609,7 +621,8 @@ bool Device::tiledAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &c
         }
         uint32_t unparked = ~0u;
         bool resident = false;
-        if (tryUnparkChunk(l, vec, zetaIndex, bytes, false, align, TegraGM20BSurfaceWrite, unparked, resident))
+        if (tryUnparkChunk(l, vec, zetaIndex, bytes, false, align, TegraGM20BSurfaceWrite, unparked, resident,
+                           chunkSize(chunks, sizes_.blChunk, bytes, kBlAlign)))
             continue;
         if (closing_ || ++pass == 3)
             break;
@@ -693,28 +706,29 @@ uint64_t Device::blPitchVa(const Span &s)
     return ch.pitchVa + s.offset;
 }
 
-bool Device::createBuffer(uint64_t length, Buffer &b, bool wc, bool hostVisible, bool gpuVolatile)
+bool Device::createBuffer(uint64_t length, Buffer &b, bool wc, bool hostVisible, bool gpuVolatile, bool zero)
 {
     b = {};
     if (!length)
         length = 16;
     bool cleaned = hostVisible;
+    bool dirty = false;
     {
         std::unique_lock<gm20b::Mutex> l(lock_);
-        if (wc && gpuVolatile && volatileWcAlloc(l, length, b.span)) {
+        if (wc && gpuVolatile && volatileWcAlloc(l, length, b.span, &dirty)) {
             b.wc = true;
             b.gpuVolatile = true;
             // VOL=1 WC chunks carry no dirty GPU L2 lines and no CPU D-cache lines; skipping hostAccess keeps the chunk
             // BO in ResourceSet and avoids host1x-bridge flushes and host_epoch whole-L2 invalidates.
             cleaned = false;
             SWITCH_METAL_DIAGNOSTIC(stats.wcBytes += b.span.bytes);
-        } else if (wc && wcAlloc(l, length, b.span)) {
+        } else if (wc && wcAlloc(l, length, b.span, &dirty)) {
             b.wc = true;
             SWITCH_METAL_DIAGNOSTIC(stats.wcBytes += b.span.bytes);
         } else {
             if (wc)
                 SWITCH_METAL_DIAGNOSTIC(stats.wcFallbacks++);
-            if (!poolAlloc(l, length, b.span))
+            if (!poolAlloc(l, length, b.span, &dirty))
                 return false;
             Chunk &chunk = chunks_[b.span.chunk];
             cleaned = hostVisible || chunk.hostTouched;
@@ -729,10 +743,23 @@ bool Device::createBuffer(uint64_t length, Buffer &b, bool wc, bool hostVisible,
     // CPU reads or writes exposes none: it takes the lease (whose release cleans the CPU's lines) only where a host-visible
     // buffer was in its chunk before it. A lease takes the whole chunk out of the resource set for good
     // (SwitchGpuResourceSet.cpp cpu_reached), every resource in it a job use of its own from then on
-    if (!cleaned)
+    if (!cleaned) {
+        if (zero && dirty && b.wc && b.cpu) {
+            memset(b.cpu, 0, length);
+#if defined(__aarch64__)
+            __asm__ volatile("dsb st" ::: "memory");
+#endif
+        }
         return true;
+    }
     HostAccess access;
-    if (!hostAccess(b, true, access) || !access.finish()) {
+    if (!hostAccess(b, true, access)) {
+        destroyBuffer(b);
+        return false;
+    }
+    if (zero && dirty && b.cpu)
+        memset(b.cpu, 0, length);
+    if (!access.finish()) {
         destroyBuffer(b);
         return false;
     }
@@ -774,10 +801,12 @@ bool Device::createControlBuffer(uint64_t length, Buffer &buffer)
 
 // lock_ held through `l`. First fit by page; a new chunk when none has room (a BoAlloc: tens of microseconds, the GPU pool's own)
 bool Device::wcPoolAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &pool, uint64_t bytes, bool gpuVolatile,
-                         Span &s)
+                         Span &s, bool *dirty)
 {
     bytes = (bytes + pageSize() - 1) & ~uint64_t(pageSize() - 1);
     s = {};
+    if (dirty)
+        *dirty = false;
     const bool dedicated = bytes > sizes_.wcChunk / 2;
     for (int pass = 0; pass < 2;) {
         if (closing_)
@@ -794,17 +823,20 @@ bool Device::wcPoolAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &
                     ch.free.erase(it);
                     if (left)
                         ch.free[at + bytes] = left;
+                    if (dirty)
+                        *dirty = at < ch.highWater;
+                    ch.highWater = std::max(ch.highWater, at + bytes);
                     ch.used += bytes;
                     s = {c, at, bytes, ch.bo.va + at, ch.bo.cpu + at};
                     return true;
                 }
             }
-            if (!gpuVolatile) {
-                uint32_t unparked = ~0u;
-                bool resident = false;
-                if (tryUnparkChunk(l, ChunkVec::Wc, 0, bytes, false, 0, TegraGM20BSurfaceRead, unparked, resident))
-                    continue;
-            }
+            uint32_t unparked = ~0u;
+            bool resident = false;
+            if (tryUnparkChunk(l, gpuVolatile ? ChunkVec::VolatileWc : ChunkVec::Wc, 0, bytes, false, 0,
+                               TegraGM20BSurfaceRead, unparked, resident,
+                               chunkSize(pool, sizes_.wcChunk, bytes, pageSize())))
+                continue;
         }
         if (closing_ || pass++)
             break;
@@ -841,6 +873,7 @@ bool Device::wcPoolAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &
             pool.emplace_back();
         if (dedicated) {
             ch.used = bytes;
+            ch.highWater = bytes;
             s = {c, 0, bytes, ch.bo.va, ch.bo.cpu};
             pool[c] = std::move(ch);
             return true;
@@ -895,9 +928,9 @@ void Device::wcPoolFree(std::vector<Chunk> &pool, Span &s, DeferredFrees &deferr
     }
 }
 
-bool Device::wcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s)
+bool Device::wcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s, bool *dirty)
 {
-    return wcPoolAlloc(l, wcChunks_, bytes, false, s);
+    return wcPoolAlloc(l, wcChunks_, bytes, false, s, dirty);
 }
 
 void Device::wcFree(Span &s, DeferredFrees &deferred)
@@ -905,11 +938,11 @@ void Device::wcFree(Span &s, DeferredFrees &deferred)
     wcPoolFree(wcChunks_, s, deferred);
 }
 
-bool Device::volatileWcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s)
+bool Device::volatileWcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s, bool *dirty)
 {
     if (!k_.volatileWrites() || !k_.exactJobs())
         return false;
-    return wcPoolAlloc(l, volatileWcChunks_, bytes, true, s);
+    return wcPoolAlloc(l, volatileWcChunks_, bytes, true, s, dirty);
 }
 
 void Device::volatileWcFree(Span &s, DeferredFrees &deferred)

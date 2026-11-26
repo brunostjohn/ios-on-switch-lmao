@@ -154,8 +154,13 @@ struct TegraGM20BAbiSubmitEvents {
 	uint64_t reserved;
 };
 
-/* Returns an immutable read-only representation of an attested IOSurface BO. handle=0 means this format has no representation view.
- * A native view's generation mismatch at SubmitJob returns kIOReturnNotReady before publication. */
+enum {
+	TegraGM20BNativeSurfaceWrite = 1u << 0,
+};
+
+/* Returns a representation of an attested IOSurface BO. handle=0 means this format has no representation view.
+ * Without TegraGM20BNativeSurfaceWrite the BO is read-only; with it, an unwritten 8-bit 4:2:0 surface may publish
+ * a writable block-linear native picture. A native view's generation mismatch at SubmitJob returns kIOReturnNotReady. */
 struct TegraGM20BAbiNativeSurfaceView {
 	uint64_t source_handle;
 	uint32_t flags, reserved;

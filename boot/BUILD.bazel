@@ -13,7 +13,7 @@ load("@rules_python//python:py_test.bzl", "py_test")
 load("//bazel/lint:defs.bzl", "lint_files")
 load("//kernel/rules:inputs.bzl", "tool_output")
 load(":defs.bzl", "boot_package")
-load(":overlay.bzl", "BOOTSTRAP_PACKAGES", "OVERLAY_BINARIES")
+load(":overlay.bzl", "BOOTSTRAP_DEVELOPMENT_PACKAGES", "BOOTSTRAP_PACKAGES", "OVERLAY_BINARIES")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -230,6 +230,9 @@ boot_package(
             "//bootstrap:managed_" + package: source
             for package, source in BOOTSTRAP_PACKAGES.items()
         },
+    }) | select({
+        ":local_debug": BOOTSTRAP_DEVELOPMENT_PACKAGES,
+        "//conditions:default": {},
     }) | select({
         "//ipsw:21H461": {
             "//bazel/pinned:overlay/wallpaper-1x/21H461/7570.iPadOS_17_Flat.plist": "build/wallpaper-1x/21H461/7570.iPadOS_17_Flat.plist",

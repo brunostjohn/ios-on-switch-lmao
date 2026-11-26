@@ -26,6 +26,7 @@ STEPS = {
     'store2fma': ('store2fma', lambda planned, results, _: store2fma.analyse(planned, results)),
     'hsetp2': ('hsetp2', lambda planned, results, _: hsetp2.analyse(planned, results)),
     'interlock': ('interlock', lambda planned, results, _: interlock_spin.analyse(planned, results)),
+    'interlock-clock': ('interlock_clock', interlock_spin.analyse_clock_probe),
     'powr-native': ('powr_native', lambda planned, results, _: powr_verdict.analyse(planned, results)),
 }
 
@@ -123,6 +124,19 @@ def _hsetp2(found: dict) -> list[str]:
     return lines
 
 
+def _interlock_clock(found: dict) -> list[str]:
+    lines = [
+        f'interlock_clock safety {arm} {r["status"]} dt {r.get("dt", "-")} monotonic {r["monotonic"]}'
+        for arm, r in found['safety'].items()
+    ]
+    lines += [
+        f'interlock_clock latency {arm} {r["status"]} {_f(r.get("cycles_per_op"))} cycles/op'
+        for arm, r in found['latency'].items()
+    ]
+    lines += _interlock(found['spin'])
+    return lines
+
+
 LINES = {
     'stall_wide': _wide,
     'xmad_mul': _mul,
@@ -131,6 +145,7 @@ LINES = {
     'affinity': _affinity,
     'store2fma': _store,
     'interlock': _interlock,
+    'interlock_clock': _interlock_clock,
     'hsetp2': _hsetp2,
     'powr_native': powr_verdict.lines,
 }

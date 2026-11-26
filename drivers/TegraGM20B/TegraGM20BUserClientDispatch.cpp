@@ -23,7 +23,8 @@ static constexpr char kRealTimeEntitlement[] = "com.apple.private.agx.rt-priorit
 
 // lock_ held. Method 18: the asked priority schedules the connection's channels as IOGPUFamily's setter would; the
 // compositor is the one at the top that also holds the UI-critical marker (applyLevel).
-IOReturn AGXDeviceUserClient::setPriority(const TegraGM20BAbiPriority &asked)
+IOReturn AGXDeviceUserClient::setPriority(const TegraGM20BAbiPriority &asked,
+					  TegraGM20BAbiPriorityReply *reply)
 {
 	const int granted = tgm_priority_granted(asked.priority);
 	if (granted < 0)
@@ -41,13 +42,17 @@ IOReturn AGXDeviceUserClient::setPriority(const TegraGM20BAbiPriority &asked)
 	}
 	if (granted == 0 && !restartNoKill_ && !highLogged_) {
 		highLogged_ = true;
-		IOLog("tegra-gm20b: %s[%d] asked for GPU priority 0: scheduled high, not the "
+		IOLog("tegra-gm20b: %s[%d] asked for GPU priority 0: scheduled app-high, not the "
 		      "compositor\n",
 		      owner_, ownerPid_);
 	}
 	priority_ = uint32_t(granted);
 	backgroundPriority_ = asked.background_priority;
 	applyLevel();
+	if (reply) {
+		reply->flags = critical_ ? TegraGM20BPriorityCritical : 0u;
+		reply->reserved = 0;
+	}
 	return kIOReturnSuccess;
 }
 
@@ -151,6 +156,10 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		wantIn = sizeof(TegraGM20BAbiChannel);
 		wantOut = sizeof(TegraGM20BAbiStatus);
 		break;
+	case TegraGM20BMethodChannelProgress:
+		wantIn = sizeof(TegraGM20BAbiChannel);
+		wantOut = sizeof(TegraGM20BAbiChannelProgressReply);
+		break;
 	case TegraGM20BMethodMap:
 		wantIn = sizeof(TegraGM20BAbiMap);
 		wantOut = sizeof(TegraGM20BAbiMapReply);
@@ -175,6 +184,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		break;
 	case TegraGM20BMethodPriority:
 		wantIn = sizeof(TegraGM20BAbiPriority);
+		wantOut = *outSize == sizeof(TegraGM20BAbiPriorityReply)
+				  ? sizeof(TegraGM20BAbiPriorityReply)
+				  : 0;
 		break;
 	case TegraGM20BMethodZbc:
 		wantIn = sizeof(TegraGM20BAbiZbc);
@@ -271,6 +283,7 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		break;
 	case TegraGM20BMethodChannelDestroy:
 	case TegraGM20BMethodGetStatus:
+	case TegraGM20BMethodChannelProgress:
 		if (!reservedZero(static_cast<const TegraGM20BAbiChannel *>(in)->reserved))
 			return kIOReturnBadArgument;
 		break;
@@ -474,6 +487,20 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		ret = getStatus(static_cast<const TegraGM20BAbiChannel *>(in),
 				static_cast<TegraGM20BAbiStatus *>(out));
 		break;
+	case TegraGM20BMethodChannelProgress: {
+		const auto *input = static_cast<const TegraGM20BAbiChannel *>(in);
+		if (!input->channel || input->channel > kMaxChannels ||
+		    !chans_[input->channel - 1]) {
+			ret = kIOReturnBadArgument;
+			break;
+		}
+		const uint32_t slot = input->channel - 1;
+		*static_cast<TegraGM20BAbiChannelProgressReply *>(out) = {
+			fence_gpu_ + static_cast<uint64_t>(slot) * TegraGM20BFencePageRecordBytes +
+			TegraGM20BFencePageChannelProgressOffset};
+		ret = kIOReturnSuccess;
+		break;
+	}
 	case TegraGM20BMethodSurfaceWrites:
 		tgm_coherency_gpu_writes(
 			static_cast<const TegraGM20BAbiSurfaceWrites *>(in)->surface_id);
@@ -491,7 +518,9 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 		ret = resourceSetRelease(static_cast<const TegraGM20BAbiResourceSetRelease *>(in));
 		break;
 	case TegraGM20BMethodPriority:
-		ret = setPriority(*static_cast<const TegraGM20BAbiPriority *>(in));
+		ret = setPriority(*static_cast<const TegraGM20BAbiPriority *>(in),
+				  wantOut ? static_cast<TegraGM20BAbiPriorityReply *>(out)
+					  : nullptr);
 		break;
 #if TGM_STATS
 	case TegraGM20BMethodGrPreempt: {

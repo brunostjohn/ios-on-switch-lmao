@@ -2,7 +2,8 @@
 #   nvjpg_host_test     TegraNVJPGJpeg.h's parser against libjpeg-turbo's own parse (BCR @libjpeg_turbo, pinned in
 #                       MODULE.bazel) over a matrix of files libjpeg-turbo writes, every refusal, the output targets and
 #                       the JFIF matrix (nvjpg_host.c)
-#   request_host_test   the AppleJPEGDriver decode request's translation and refusals (request_host.c)
+#   request_host_test   the AppleJPEGDriver decode request's translation, refusals and route onto the destination's
+#                       layout (request_host.c)
 #   tegra_nvjpg_vendored_test  the vendored firmware and NVIDIA headers are the files their SOURCE files name
 #   tegra_nvjpg_layout_source_test  a decode's order around GM20B's layout of its destination (TegraNVJPGUserClient.cpp)
 load("//bazel/lint:defs.bzl", "lint_files")
@@ -39,6 +40,7 @@ host_library(
         "//drivers/TegraGM20B:TegraGM20BLayoutFit.h",
         "//drivers/TegraNVJPG:TegraNVJPGJpeg.h",
         "//drivers/TegraNVJPG:TegraNVJPGRequest.h",
+        "//drivers/TegraNVJPG:TegraNVJPGRoute.h",
         "//drivers/TegraNVJPG:nvidia/nvjpg_drv.h",
     ],
     copts = ["-O1"],
@@ -204,11 +206,15 @@ host_test(
     srcs = [
         "switch_nvjpg_user_client_test.cpp",
         "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraGM20B:SwitchGpuSharedEvent.h",
+        "//drivers/TegraGM20B:TegraGM20BCopy.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraNVJPG:TegraNVJPGMapping.h",
         "//drivers/TegraNVJPG:TegraNVJPGRepack.h",
+        "//drivers/TegraNVJPG:TegraNVJPGRoute.h",
         "//drivers/TegraVIC:SwitchSurfaceColor.h",
         "//drivers/TegraVIC:SwitchVICDecodeOutput.h",
+        "//drivers/TegraVIC:SwitchVICSurfaceAccess.h",
         "//drivers/TegraVIC:TegraVIC.h",
         "//drivers/TegraVIC:TegraVICColor.h",
         "//drivers/TegraVIC:TegraVICConfig.h",

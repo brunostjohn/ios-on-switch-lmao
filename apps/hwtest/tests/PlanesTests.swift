@@ -1,6 +1,7 @@
 import AVFoundation
 import Darwin
 import HWTestCore
+import HWTestKit
 import HWTestVideo
 import UIKit
 
@@ -9,14 +10,16 @@ import UIKit
 /// AVPlayerLayer and reads the kernel's plane counters around it (kern.switch_planes_*, debug kernels): window B has
 /// to have flipped and latched, no layer Core Animation detached may have gone unshown, and no decoder buffer may have
 /// been mapped again after its slot was dropped for room (the pool stays mapped, one mapping a buffer).
-struct PlanesTest: HWTest {
-    let id = "display.planes"
-    let name = "Video on the display's hardware plane (window B)"
-    let subsystem = Subsystem.compositor
+public struct PlanesTest: HWTest {
+    public let id = "display.planes"
+    public let name = "Video on the display's hardware plane (window B)"
+    public let subsystem = Subsystem.compositor
 
-    static let counters = ["flips", "latched", "maps", "dropped", "remaps"]
+    public static let counters = ["flips", "latched", "maps", "dropped", "remaps"]
 
-    func run(_ context: TestContext) async throws -> Outcome {
+    public init() {}
+
+    public func run(_ context: TestContext) async throws -> Outcome {
         let (before, unread) = Self.totals()
         guard !before.isEmpty else {
             var metrics = Metrics()
@@ -69,7 +72,7 @@ struct PlanesTest: HWTest {
     }
 
     /// kern.switch_planes_* by name, and the errno of the first that could not be read.
-    static func totals(_ names: [String] = counters) -> (values: [String: Int], unread: Int32) {
+    public static func totals(_ names: [String] = counters) -> (values: [String: Int], unread: Int32) {
         var values: [String: Int] = [:]
         var unread: Int32 = 0
         for name in names {

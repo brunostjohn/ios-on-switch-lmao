@@ -383,7 +383,7 @@ struct NativeSurface {
     std::map<Key, Texture> textures;
     uint64_t channelGeneration = 0, generation = 0;
     uint32_t lastUse = 0, encodingReferences = 0, seed = 0;
-    bool cached = true;
+    bool cached = true, writable = false;
 };
 
 constexpr uint8_t kIdentitySwizzle[4] = {2, 3, 4, 5};

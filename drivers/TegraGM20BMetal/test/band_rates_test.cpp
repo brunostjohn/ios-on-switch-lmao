@@ -48,17 +48,19 @@ TEST(BandRates, AMemoryBoundDrawIsBandedOnceMeasured)
     EXPECT_EQ(bandsOf(rate, units / 4, 10), 2u);
 }
 
-TEST(BandRates, ANewSampleMovesAWarmRateByAQuarter)
+TEST(BandRates, LongerSamplesRaiseAtOnceAndShorterFallByAQuarter)
 {
     BandRate rate;
     gm20b::learn(rate, 4'000'000, 1'000'000);
     EXPECT_EQ(rate.psPerUnit.load(), 4000u);
     gm20b::learn(rate, 8'000'000, 1'000'000);
-    EXPECT_EQ(rate.psPerUnit.load(), 5000u);
+    EXPECT_EQ(rate.psPerUnit.load(), 8000u);
+    gm20b::learn(rate, 4'000'000, 1'000'000);
+    EXPECT_EQ(rate.psPerUnit.load(), 7000u);
     gm20b::learn(rate, 0, 1'000'000);
     gm20b::learn(rate, 1'000'000, 0);
-    EXPECT_EQ(rate.psPerUnit.load(), 5000u);
-    EXPECT_EQ(rate.samples.load(), 2u);
+    EXPECT_EQ(rate.psPerUnit.load(), 7000u);
+    EXPECT_EQ(rate.samples.load(), 3u);
     gm20b::learn(rate, 1, 1'000'000'000);
     EXPECT_GE(rate.psPerUnit.load(), 1u);
 }

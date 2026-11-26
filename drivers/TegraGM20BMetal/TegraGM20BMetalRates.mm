@@ -80,12 +80,11 @@ size_t metal_rates(char *out, size_t size)
         (unsigned long long)k.resolveRoute[gm20b::ResolveByPass][1].exchange(0),
         (unsigned long long)k.resolveRoute[gm20b::ResolveByPass][2].exchange(0));
     {
-        // render state creations the pack held and every other, since the device opened (TegraGM20BMetalStatesCost.mm)
-        uint64_t packHits = 0, packMisses = 0;
-        gm20bPackCreations(packHits, packMisses);
+        uint64_t packHits = 0, packMisses = 0, packCold = 0, packCard = 0;
+        gm20bPackCreations(packHits, packMisses, packCold, packCard);
         const size_t used = strlen(diag);
-        snprintf(diag + used, sizeof diag - used, " pack=%llu/%llu", (unsigned long long)packHits,
-                 (unsigned long long)packMisses);
+        snprintf(diag + used, sizeof diag - used, " pack=%llu/%llu/%llu/%llu", (unsigned long long)packHits,
+                 (unsigned long long)packMisses, (unsigned long long)packCold, (unsigned long long)packCard);
     }
     {
         const size_t used = strlen(diag);

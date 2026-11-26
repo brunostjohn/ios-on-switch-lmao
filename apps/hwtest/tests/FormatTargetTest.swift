@@ -1,6 +1,7 @@
 import Foundation
 import HWTestCore
 import HWTestGPU
+import HWTestKit
 import Metal
 
 /// Render passes into R8Unorm_sRGB, A1BGR5Unorm, ABGR4Unorm and RGB9E5Float targets, formats the GM20B renders none of

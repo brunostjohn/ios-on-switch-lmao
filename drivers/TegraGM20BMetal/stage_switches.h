@@ -52,4 +52,18 @@ inline void stageSwitches(const PackPipeline &pp, const char *keyString, Push &w
     restore.insert(restore.end(), back, r.at);
 }
 
+inline void stageSwitchesRestore(const PackPipeline &pp, const char *keyString, std::vector<uint32_t> &restore)
+{
+    const bool pixel = pixelStage(pp), raster = !rasterOff(keyString);
+    if (pixel && raster)
+        return;
+    uint32_t back[kStageSwitchWords];
+    Push r{back, back + kStageSwitchWords};
+    if (!pixel)
+        r.m(kPixelStageSwitch, kPixelStageOn);
+    if (!raster)
+        r.m(kRasterSwitch, 1);
+    restore.insert(restore.end(), back, r.at);
+}
+
 }  // namespace gm20b

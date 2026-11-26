@@ -64,6 +64,25 @@ public:
             pthread_setschedparam(t, policy_, &param_);
     }
 
+    bool isFixed()
+    {
+        std::lock_guard<gm20b::Mutex> l(lock_);
+        return policy_ != SCHED_OTHER;
+    }
+
+    void initAttr(pthread_attr_t *attr)
+    {
+        pthread_attr_init(attr);
+        std::lock_guard<gm20b::Mutex> l(lock_);
+        if (policy_ != SCHED_OTHER) {
+            pthread_attr_setinheritsched(attr, PTHREAD_EXPLICIT_SCHED);
+            pthread_attr_setschedpolicy(attr, policy_);
+            pthread_attr_setschedparam(attr, &param_);
+        } else {
+            pthread_attr_set_qos_class_np(attr, QOS_CLASS_USER_INTERACTIVE, 0);
+        }
+    }
+
 private:
     void leave(pthread_t self)
     {
@@ -91,12 +110,19 @@ inline Followers &followers()
 // render thread
 inline dispatch_queue_global_t followingRoot()
 {
-    static const dispatch_queue_global_t root =
-        dispatch_pthread_root_queue_create("com.brunostjohn.switch.gm20b.following", 0, nullptr, ^{
-            pthread_setname_np("com.brunostjohn.switch.gm20b.following");
-            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
-            followers().join();
-        });
+    static const dispatch_queue_global_t root = [] {
+        pthread_attr_t attr;
+        followers().initAttr(&attr);
+        const dispatch_queue_global_t q =
+            dispatch_pthread_root_queue_create("com.brunostjohn.switch.gm20b.following", 0, &attr, ^{
+                pthread_setname_np("com.brunostjohn.switch.gm20b.following");
+                if (!followers().isFixed())
+                    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+                followers().join();
+            });
+        pthread_attr_destroy(&attr);
+        return q;
+    }();
     return root;
 }
 

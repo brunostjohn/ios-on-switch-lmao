@@ -1,5 +1,8 @@
 import Foundation
+import HWTestCommon
 import HWTestCore
+import HWTestKit
+import HWTestShared
 
 /// Window A flipped by host1x instead of the CPU (drivers/NativeMobileDisplay/SwitchHost1xFlipDisplay.h, debug
 /// kernels): each flip is a class 0x70 stream on the display's own host1x channel, held behind its producer's syncpoint

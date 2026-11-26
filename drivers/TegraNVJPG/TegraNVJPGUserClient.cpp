@@ -51,6 +51,7 @@
 #include "../../kits/SwitchTime/SwitchTime.h"
 #include "TegraNVJPGRepack.h"
 #include "TegraNVJPGRequest.h"
+#include "TegraNVJPGRoute.h"
 #include "TegraNVJPGStats.h"
 #include "../TegraVIC/SwitchVICDecodeOutput.h"
 #include "../TegraGM20B/TegraGM20BLayout.h"
@@ -207,24 +208,48 @@ void fillChroma(const TegraNVJPGPlan &p, const uint64_t *addresses, uint32_t pag
     switch_dcache_sync();
 }
 
-// The destination as GM20B laid it out (TegraGM20BTiled.cpp decides once per surface), held until the decode has ended
-// so that no import moves its texels meanwhile: a block-linear one is written as its blocks. The caller has moved the
-// surface's seed first: a GPU sampler whose first ask comes after this read then finds a written surface and keeps it
-// pitch, instead of tiling in place the rows this decode is writing. NULL, or why its blocks cannot be written.
-const char *takeLayout(Job *job, uint64_t firstPage, void **hold)
+TegraNVJPGSurface surfaceDesc(const TegraVICSurfaceDesc &v)
+{
+    TegraNVJPGSurface d = {};
+    d.fourcc = v.fourcc, d.width = v.width, d.height = v.height, d.planes = v.planes;
+    for (uint32_t i = 0; i < 2; i++) {
+        d.planeOffset[i] = v.planeOffset[i];
+        d.planeBytesPerRow[i] = v.planeBytesPerRow[i];
+        d.planeHeight[i] = v.planeHeight[i];
+    }
+    d.length = v.length;
+    d.protection = v.protection;
+    return d;
+}
+
+// The destination as GM20B laid it out (TegraGM20BTiled.cpp decides once per surface), held until the decode and any
+// re-pack have ended so that no import moves its texels meanwhile. The caller has moved the surface's seed first: a GPU
+// sampler whose first ask comes after this read then finds a written surface and keeps it pitch, instead of tiling in
+// place the rows this decode is writing. NULL with the plan moved onto that layout (TegraNVJPGRoute.h), or why it
+// cannot be written.
+const char *routeJob(Job *job, const SwitchNVJPGBacking &target, void **hold, uint32_t *route)
 {
     *hold = nullptr;
-    if (!tegra_gm20b_surface_hold || !tegra_gm20b_surface_unhold || !tegra_gm20b_surface_layout)
-        return nullptr;
-    int tiled = 0;
-    *hold = tegra_gm20b_surface_hold(firstPage, &tiled);
-    tgm_layout layout = {};
-    if (!tiled || tegra_gm20b_surface_layout(firstPage, &layout) != 1)
-        return nullptr;
-    if (tegra_gm20b_surface_compressed && tegra_gm20b_surface_compressed(firstPage))
-        return "compressed";
-    return tegra_nvjpg_plan_block_linear(&job->request.base, job->dst.desc.length, kSinkBytes, layout.row_bytes,
-                                         layout.y_log2, &job->plan, &job->engine.setup);
+    TegraNVJPGDestinationLayout layout = {};
+    if (tegra_gm20b_surface_hold && tegra_gm20b_surface_unhold && tegra_gm20b_surface_layout) {
+        int tiled = 0;
+        *hold = tegra_gm20b_surface_hold(target.pages[0], &tiled);
+        layout.held = tiled != 0;
+        layout.described = layout.held && tegra_gm20b_surface_layout(target.pages[0], &layout.layout) == 1;
+        layout.compressed =
+            layout.described && tegra_gm20b_surface_compressed && tegra_gm20b_surface_compressed(target.pages[0]);
+    }
+    const TegraNVJPGSurface d = surfaceDesc(job->dst.desc);
+    const uint64_t backingBytes =
+        SWITCH_MAX(job->dst.desc.length, static_cast<uint64_t>(target.count) << SWITCH_HW_PAGE_SHIFT);
+    const char *why = tegra_nvjpg_route(&job->request.base, &d, backingBytes, kSinkBytes, kTegraNVJPGOutputBytes,
+                                        job->dst.memory != nullptr, &layout, &job->plan, &job->engine.setup, route);
+#if TEGRA_NVJPG_STATS
+    if (!why)
+        tegra_nvjpg_note_route(*route, layout.held, layout.layout.row_bytes, layout.layout.y_log2, target.count,
+                               &job->engine.setup, job->plan.extent.width, job->plan.extent.height);
+#endif
+    return why;
 }
 
 IOReturn ended(Job *job, int error, const nvjpg_dec_status &status, uint64_t busy)
@@ -247,41 +272,34 @@ IOReturn ended(Job *job, int error, const nvjpg_dec_status &status, uint64_t bus
     return ret;
 }
 
-// Engine thread: a '422f' or '444f' decode, its planes re-packed by VIC (TegraNVJPGRepack.h).
+// Engine thread: a VIC ('422f'/'444f') or Copy Engine (layout-staged) re-packed decode (TegraNVJPGRepack.h).
 IOReturn runRepack(Job *job)
 {
     nvjpg_dec_status status = {};
     uint64_t busy = 0;
     const char *why = nullptr;
-    const int error = tegra_nvjpg_repack(&job->engine, &job->plan, &job->request.base, &job->dst, job->scan->address,
-                                         &status, &busy, &why);
+    const int error = tegra_nvjpg_repack(&job->engine, &job->plan, &job->request.base, &job->dst, job->backing,
+                                         job->scan->address, &status, &busy, &why);
     if (why) {
         refused(why, job->plan.target.format);
         return kIOReturnUnsupported;
     }
+    if (!error && job->plan.fillChroma && !status.error_status && status.bytes_offset && job->backing) {
+        const SwitchNVJPGBacking target = switch_nvjpg_backing(job->backing);
+        fillChroma(job->plan, target.pages, target.count);
+    }
     return ended(job, error, status, busy);
 }
 
-// Engine thread: one decode.
-IOReturn runJob(Job *job)
+// Engine thread: NVJPG straight into the destination's pages.
+IOReturn runDirect(Job *job, const SwitchNVJPGBacking &target, uint32_t extent)
 {
     const TegraNVJPGPlan &p = job->plan;
-    if (p.repack)
-        return runRepack(job);
-    const uint32_t extent = static_cast<uint32_t>(switch_div_round_up(job->dst.desc.length, SWITCH_HW_PAGE_SIZE));
-    const SwitchNVJPGBacking target = switch_nvjpg_backing(job->backing);
-    if (target.count < extent) {
-        refused("destination longer than its backing", p.target.format);
-        return kIOReturnUnsupported;
-    }
-    tegra_vic_surface_written(&job->dst);
-    void *hold = nullptr;
-    const char *why = takeLayout(job, target.pages[0], &hold);
-    const SwitchNVJPGMapping *mapping =
-        why ? nullptr : switch_nvjpg_mapping(target, extent, p.writeEnd, &why, job->pid);
+    if (p.target.blockLinear)
+        extent = target.count;
+    const char *why = nullptr;
+    const SwitchNVJPGMapping *mapping = switch_nvjpg_mapping(target, extent, p.writeEnd, &why, job->pid);
     if (!mapping) {
-        if (hold)
-            tegra_gm20b_surface_unhold(hold);
         refused(why, p.target.format);
         return kIOReturnUnsupported;
     }
@@ -301,11 +319,35 @@ IOReturn runJob(Job *job)
     // The CPU may have pulled destination lines in while NVJPG wrote: readers must see DRAM.
     switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, addresses, pages);
     switch_dcache_sync();
-    if (hold)
-        tegra_gm20b_surface_unhold(hold);
     if (!error && p.fillChroma && !status.error_status && status.bytes_offset)
         fillChroma(p, addresses, pages);
     return ended(job, error, status, busy);
+}
+
+// Engine thread: one decode. VIC's re-pack writes planar YUV, which GM20B never lays out block-linear, through VIC's
+// own view of the destination.
+IOReturn runJob(Job *job)
+{
+    if (job->plan.repack == TEGRA_NVJPG_REPACK_VIC)
+        return runRepack(job);
+    uint32_t extent = static_cast<uint32_t>(switch_div_round_up(job->dst.desc.length, SWITCH_HW_PAGE_SIZE));
+    const SwitchNVJPGBacking target = switch_nvjpg_backing(job->backing);
+    if (target.count < extent) {
+        refused("destination longer than its backing", job->plan.target.format);
+        return kIOReturnUnsupported;
+    }
+    tegra_vic_surface_written(&job->dst);
+    void *hold = nullptr;
+    uint32_t route = TEGRA_NVJPG_ROUTE_ROWS;
+    const char *why = routeJob(job, target, &hold, &route);
+    IOReturn ret = kIOReturnUnsupported;
+    if (why)
+        refused(why, job->plan.target.format);
+    else
+        ret = job->plan.repack ? runRepack(job) : runDirect(job, target, extent);
+    if (hold)
+        tegra_gm20b_surface_unhold(hold);
+    return ret;
 }
 
 void finish(Job *job);
@@ -563,25 +605,16 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
         why = "destination larger than the 255 MiB output window";
     }
     if (!ret) {
-        TegraNVJPGSurface d = {};
-        const TegraVICSurfaceDesc &v = job->dst.desc;
-        d.fourcc = v.fourcc, d.width = v.width, d.height = v.height, d.planes = v.planes;
-        for (uint32_t i = 0; i < 2; i++) {
-            d.planeOffset[i] = v.planeOffset[i];
-            d.planeBytesPerRow[i] = v.planeBytesPerRow[i];
-            d.planeHeight[i] = v.planeHeight[i];
-        }
-        d.length = v.length;
-        d.protection = v.protection;
+        const TegraNVJPGSurface d = surfaceDesc(job->dst.desc);
         const TegraNVJPGAbility a = ability();
-        uint32_t kind = 0;
-        why = tegra_nvjpg_plan(&r, &img, &d, &a, kSinkBytes, &job->plan, &kind);
+        uint32_t planKind = 0;
+        why = tegra_nvjpg_plan(&r, &img, &d, &a, kSinkBytes, &job->plan, &planKind);
         if (why)
-            ret = kind == TEGRA_NVJPG_PLAN_UNSUPPORTED ? kIOReturnUnsupported : kIOReturnBadArgument;
+            ret = planKind == TEGRA_NVJPG_PLAN_UNSUPPORTED ? kIOReturnUnsupported : kIOReturnBadArgument;
     }
     if (!ret && job->plan.repack && job->plan.repackBytes > kTegraNVJPGOutputBytes) {
         ret = kIOReturnUnsupported;
-        why = "planes VIC re-packs larger than the 256 MiB output mapping";
+        why = "re-packed planes larger than the 256 MiB output mapping";
     }
     if (!ret) {
         const int bytes = job->engine.setup.bitstream_size;
@@ -597,7 +630,7 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
         job->engine.selector = kind == kSelector1 ? 1 : kind == kSelector5 ? 5 : 7;
         job->engine.target = job->plan.target.format;
     }
-    if (!ret && !job->plan.repack) {
+    if (!ret && job->plan.repack != TEGRA_NVJPG_REPACK_VIC) {
         job->backing = switch_vic_surface_backing(&job->dst);
         if (!job->backing) {
             ret = kIOReturnNoMemory;

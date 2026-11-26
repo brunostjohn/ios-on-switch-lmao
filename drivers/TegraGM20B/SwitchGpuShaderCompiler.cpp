@@ -34,7 +34,7 @@ IOReturn info(TegraGM20BAbiCompilerInfoReply *out)
 {
 	IOLockLock(gBroker.lock);
 	*out = {gBroker.store ? gBroker.storeBytes : 0, gBroker.stack,
-		TegraGM20BCompilerCapable |
+		TegraGM20BCompilerCapable | TegraGM20BCompilerLibraries |
 			(gBroker.compiler ? uint32_t(TegraGM20BCompilerRegistered) : 0u) |
 			(gBroker.store ? uint32_t(TegraGM20BCompilerStore) : 0u) |
 			(compilerMayCome() ? uint32_t(TegraGM20BCompilerExpected) : 0u) |
@@ -373,7 +373,8 @@ IOReturn decline(task_t task)
 
 bool switch_gpu_compiler_method(uint32_t method)
 {
-	return method >= TegraGM20BMethodCompilerInfo && method <= TegraGM20BMethodCompileWait;
+	return method >= TegraGM20BMethodCompilerInfo &&
+	       method <= TegraGM20BMethodCompilerUnmapLibrary;
 }
 
 IOReturn switch_gpu_compiler_call(const void *owner, task_t task, uint32_t method, const void *in,
@@ -431,6 +432,25 @@ IOReturn switch_gpu_compiler_call(const void *owner, task_t task, uint32_t metho
 		if (inSize != sizeof(TegraGM20BAbiCompileWait) || outSize)
 			return kIOReturnBadArgument;
 		return compileWait(owner, static_cast<const TegraGM20BAbiCompileWait *>(in));
+	case TegraGM20BMethodCompilerRegisterLibrary:
+		if (inSize != sizeof(TegraGM20BAbiCompilerRegisterLibrary) ||
+		    outSize != sizeof(TegraGM20BAbiCompilerRegisterLibraryReply))
+			return kIOReturnBadArgument;
+		return registerLibrary(
+			owner, task, static_cast<const TegraGM20BAbiCompilerRegisterLibrary *>(in),
+			static_cast<TegraGM20BAbiCompilerRegisterLibraryReply *>(out));
+	case TegraGM20BMethodCompilerMapLibrary:
+		if (inSize != sizeof(TegraGM20BAbiCompilerMapLibrary) ||
+		    outSize != sizeof(TegraGM20BAbiCompilerMapLibraryReply))
+			return kIOReturnBadArgument;
+		return mapLibrary(owner, task,
+				  static_cast<const TegraGM20BAbiCompilerMapLibrary *>(in),
+				  static_cast<TegraGM20BAbiCompilerMapLibraryReply *>(out));
+	case TegraGM20BMethodCompilerUnmapLibrary:
+		if (inSize != sizeof(TegraGM20BAbiCompilerUnmapLibrary) || outSize)
+			return kIOReturnBadArgument;
+		return unmapLibrary(owner,
+				    static_cast<const TegraGM20BAbiCompilerUnmapLibrary *>(in));
 	default:
 		return kIOReturnUnsupported;
 	}
@@ -523,11 +543,15 @@ void switch_gpu_compiler_close(const void *owner)
 	for (Client &c : gBroker.clients)
 		if (c.owner == owner)
 			c = {};
+	CompilerLibraryMap *droppedMaps = compiler ? takeLibraryMaps() : nullptr;
+	ClientLibrary *droppedLibraries = takeLibraries(owner);
 	if (compiler)
 		IOLockWakeup(gBroker.lock, &gBroker.requests, false);
 	const uint32_t generation = gBroker.generation;
 	const bool declined = gBroker.declined;
 	IOLockUnlock(gBroker.lock);
+	dropLibraryMaps(droppedMaps);
+	dropLibraries(droppedLibraries);
 	send(sends, generation);
 	if (lost)
 		IOLog("SwitchShaderCompiler: the compiler's connection closed; "

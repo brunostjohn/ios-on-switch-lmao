@@ -246,9 +246,11 @@ typedef struct NmbDirectBoundTexture {
     uint64_t pixelFormat, textureType, usage, levels, arrayLength, samples;
 } NmbDirectBoundTexture;
 
-#define NMB_DIRECT_BOUND_TWO_PLANES 1u
-#define NMB_DIRECT_BOUND_MAP_SHIFT  8u
-#define NMB_DIRECT_BOUND_MAP_STATED (1u << 15)
+#define NMB_DIRECT_BOUND_TWO_PLANES     1u
+#define NMB_DIRECT_BOUND_MAP_SHIFT      8u
+#define NMB_DIRECT_BOUND_MAP_STATED     (1u << 15)
+#define NMB_DIRECT_BOUND_SWIZZLE_SHIFT  16u
+#define NMB_DIRECT_BOUND_SWIZZLE_STATED (1u << 28)
 
 typedef struct NmbDirectBoundSampler {
     uint32_t slot;

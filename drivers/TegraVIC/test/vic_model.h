@@ -152,15 +152,17 @@ static inline int vic_model_read(VicModel *m, const VicModelSlot *s, uint32_t x,
         memcpy(&w, q, 4);
         const uint32_t r = s->format == TEGRA_VIC_T_A8R8G8B8 ? (w >> 16) & 0xff : w & 0xff;
         const uint32_t b = s->format == TEGRA_VIC_T_A8R8G8B8 ? w & 0xff : (w >> 16) & 0xff;
-        p->c[0] = r << 2;
-        p->c[1] = ((w >> 8) & 0xff) << 2;
-        p->c[2] = b << 2;
+        p->c[0] = vic_model_widen(r);
+        p->c[1] = vic_model_widen((w >> 8) & 0xff);
+        p->c[2] = vic_model_widen(b);
         p->a = vic_model_widen(w >> 24);
     } else if (s->format == TEGRA_VIC_T_L8) {
         const uint8_t *q = vic_model_at(m, s->luma + (uint64_t)y * s->lw + x, 1);
         if (!q)
             return 0;
-        p->c[0] = p->c[1] = p->c[2] = (uint32_t)q[0] << 2;
+        p->c[0] = vic_model_widen(q[0]);
+        p->c[1] = 512;
+        p->c[2] = 512;
         p->a = 1023;
     } else if (vic_model_semi_planar(s->format) || vic_model_planar(s->format)) {
         const int full = s->format == TEGRA_VIC_T_Y8___U8V8_N444 || s->format == TEGRA_VIC_T_Y8___U8___V8_N444;

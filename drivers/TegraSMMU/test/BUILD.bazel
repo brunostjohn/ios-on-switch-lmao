@@ -74,6 +74,7 @@ host_library(
         "//drivers/SwitchDisplayPort:SwitchDPModes.h",
         "//drivers/SwitchDisplayPort:TegraDisplayB.cpp",
         "//drivers/SwitchDisplayPort:TegraDisplayB.h",
+        "//drivers/SwitchPower:SwitchDisplayBandwidth.h",
         "//drivers/SwitchPower:SwitchDisplayMemory.h",
         "//drivers/TegraDisplayFlip:SwitchDisplayPriority.h",
         "//drivers/TegraGM20B:platform.c",

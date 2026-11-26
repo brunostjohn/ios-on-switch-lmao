@@ -41,6 +41,9 @@ if sys.argv[1] == 'pretranslate':
             sys.exit(2)
     src, out = Path(args[i]), Path(args[i + 1])
     raw = src.read_bytes()
+    if b'FALLBACK' in raw:
+        Path(report).write_text(json.dumps(dict(slices=[dict(status='fallback', why='synthetic fallback')])))
+        sys.exit(0)
     buf = bytearray(raw)
     for spec in edits:
         off_s, stock_h, at_s, patched_h = spec.split(':')
@@ -309,6 +312,15 @@ class WarmThenColdTest(unittest.TestCase):
             p.write_text(json.dumps({'files': {'/usr/bin/a': [bad_entry]}}))
             with self.assertRaises(ValueError):
                 translate_tree.load_edits(p)
+
+    def test_fallback_slices_are_reported_to_stderr(self):
+        (self.volume / 'usr/bin/fb').write_bytes(MACHO + b'FALLBACK')
+        out_dir = self.dir / 'fb_out'
+        command = [sys.executable, str(DRIVER), '--role', 'os', '--tool', str(self.tool), '--volume', str(self.volume)]
+        res = subprocess.run([*command, '--out', str(out_dir)], check=True, capture_output=True, text=True)
+        self.assertIn('os: fallback /usr/bin/fb: synthetic fallback', res.stderr)
+        self.assertIn('WARNING 1 slices fell back', res.stderr)
+        self.assertFalse((out_dir / 'files/usr/bin/fb').exists())
 
 
 class Locationd24B119EditTest(unittest.TestCase):

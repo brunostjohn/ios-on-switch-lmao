@@ -2,6 +2,7 @@ import Foundation
 import HWTestCore
 import HWTestGPU
 import HWTestKit
+import HWTestShared
 import UIKit
 
 /// Liquid Glass on screen while what is behind it moves, judged on what the display was handed rather than on a
@@ -108,8 +109,8 @@ struct UIGlassLiveTest: HWTest {
         metrics.set("pngs", pngs.isEmpty ? "-" : String(pngs.prefix(4).joined(separator: ",").prefix(160)))
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try? encoder.encode(summaries.map(LiveSummary.Detail.init)).write(
-            to: directory.appendingPathComponent("frames.json")
+        try? encoder.encode(summaries.map(LiveSummary.Detail.init)).place(
+            at: directory.appendingPathComponent("frames.json")
         )
         guard summaries.contains(where: { !$0.frames.isEmpty }) else {
             return .skip("the read-back caught no presented frame", metrics)

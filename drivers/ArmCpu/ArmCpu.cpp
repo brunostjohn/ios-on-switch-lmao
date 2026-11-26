@@ -12,6 +12,7 @@
 #include <arm64/switch_smp.h>
 #include "../ArmGIC/ArmGIC.h"
 #include "../ArmGIC/SwitchGicV2.h"
+#include "../ArmGIC/SwitchInterrupts.h"
 #include "../../kits/SwitchDMA/SwitchDcache.h"
 #include "../../kits/SwitchDMA/SwitchHwPage.h"
 #include "../../kits/SwitchDT/SwitchDTProperty.h"
@@ -124,6 +125,7 @@ class ArmCpu : public IOCPU {
     uint8_t gicV2Target = 0;
     bool secondary = false;
     uint32_t logicalId = 0;
+    perfmon_interrupt_handler_func pmiHandler = nullptr;
     bool mapGic();
     bool initDistributor() const;
     bool prepareGicV2();
@@ -134,6 +136,8 @@ class ArmCpu : public IOCPU {
     bool finishSecondary();
     static void drainPending();
     bool prepareGic();
+    void registerPmuInterrupt();
+    static void pmuInterrupt(OSObject *, void *refCon, IOService *, int);
     void startSecondary();
     static void startThread(void *argument, wait_result_t);
     static void observeThread(void *argument, wait_result_t);
@@ -220,6 +224,7 @@ static bool waitClear(uintptr_t base, unsigned offset, uint32_t mask)
 // only needs the virtual addresses and its own redistributor frame.
 static OSSharedPtr<IOMemoryMap> gDistMap, gRedistMap;
 static uintptr_t gDist = 0, gFrames = 0;
+static uint64_t gDistPhys = 0;
 static uintptr_t gV2CpuIf = 0;
 static uint8_t gV2BootTarget = 0;
 static uint64_t gFramesSize = 0;
@@ -373,9 +378,9 @@ bool ArmCpu::mapGic()
             return false;
         }
     }
+    const uint64_t distPhys = bus[1] + regions[0] - bus[0];
     const OSSharedPtr<IOMemoryDescriptor> distMemory(
-        IOMemoryDescriptor::withPhysicalAddress(bus[1] + regions[0] - bus[0], regions[1], kIODirectionInOut),
-        OSNoRetain);
+        IOMemoryDescriptor::withPhysicalAddress(distPhys, regions[1], kIODirectionInOut), OSNoRetain);
     const OSSharedPtr<IOMemoryDescriptor> rdMemory(
         IOMemoryDescriptor::withPhysicalAddress(bus[1] + regions[2] - bus[0], regions[3], kIODirectionInOut),
         OSNoRetain);
@@ -396,6 +401,7 @@ bool ArmCpu::mapGic()
     gDistMap = distributor;
     gRedistMap = redistributors;
     gDist = dist;
+    gDistPhys = distPhys;
     gFrames = redistBase;
     gFramesSize = redistSize;
     gV2CpuIf = gicV2 ? redistBase : 0;
@@ -687,8 +693,7 @@ bool ArmCpu::start(IOService *provider)
     info.log_id = logicalId;
     info.cluster_id = static_cast<uint32_t>(ml_get_cluster_number(physical));
     info.cluster_type = ml_get_boot_cluster_type();
-    perfmon_interrupt_handler_func pmi = nullptr;
-    const kern_return_t status = ml_processor_register(&info, &machProcessor, &ipi_handler, &pmi);
+    const kern_return_t status = ml_processor_register(&info, &machProcessor, &ipi_handler, &pmiHandler);
     if (status != KERN_SUCCESS) {
         panic("ArmCpu: CPU %u registration failed: %d", logicalId, status);
     }
@@ -708,6 +713,7 @@ bool ArmCpu::start(IOService *provider)
     gController = controller;
     initCPU(true);
     registerService();
+    registerPmuInterrupt();
     __atomic_store_n(&gBootRegistered, 1U, __ATOMIC_RELEASE);
     startAllObserver();
     drainPending();
@@ -747,8 +753,7 @@ bool ArmCpu::finishSecondary()
     info.log_id = logicalId;
     info.cluster_id = static_cast<uint32_t>(ml_get_cluster_number(static_cast<uint32_t>(affinity)));
     info.cluster_type = ml_get_boot_cluster_type();
-    perfmon_interrupt_handler_func pmi = nullptr;
-    const kern_return_t status = ml_processor_register(&info, &machProcessor, &ipi_handler, &pmi);
+    const kern_return_t status = ml_processor_register(&info, &machProcessor, &ipi_handler, &pmiHandler);
     if (status != KERN_SUCCESS) {
         armcpu_smp_fail[logicalId] = 4;
         return false;
@@ -757,6 +762,50 @@ bool ArmCpu::finishSecondary()
     registerService();
     startSecondary();
     return true;
+}
+
+// NOLINTNEXTLINE(misc-const-correctness): IOInterruptAction's signature
+void ArmCpu::pmuInterrupt(OSObject *, void *refCon, IOService *, int)
+{
+    ArmCpu *self = static_cast<ArmCpu *>(refCon);
+    if (self != nullptr && self->pmiHandler != nullptr) {
+        self->pmiHandler(self);
+    }
+}
+
+// Tegra210 Cortex-A57 per-core PMUv3 overflow SPIs (INT_CPU0..3_PMU_INTR = INTID 176..179, level-high).
+// Must only be enabled once this core's GIC target is published and verified in GICD_ITARGETSR so the
+// PMI always lands on the core whose PMOVSCLR_EL0 asserted the line.
+void ArmCpu::registerPmuInterrupt()
+{
+    constexpr uint64_t kTegra210DistPhys = 0x50041000ULL;
+    constexpr uint32_t kPmuIntidBase = 32U + 144U;
+    if (!gicV2 || pmiHandler == nullptr || logicalId >= SWITCH_SMP_CORE_COUNT || gDistPhys != kTegra210DistPhys) {
+        IOLog("ArmCpu: CPU%u PMU interrupt not registered (GICv2 %d, PMI handler %d, distributor %#llx)\n", logicalId,
+              gicV2, pmiHandler != nullptr, static_cast<unsigned long long>(gDistPhys));
+        return;
+    }
+    const uint32_t expectedTarget = __atomic_load_n(&armcpu_gic_targets[logicalId], __ATOMIC_ACQUIRE);
+    if (expectedTarget == 0U || dist == 0) {
+        IOLog("ArmCpu: CPU%u PMU interrupt not registered: no GIC target published\n", logicalId);
+        return;
+    }
+    const uint32_t intid = kPmuIntidBase + logicalId;
+    IOService *nub = switch_interrupt_nub(intid, false);
+    if (nub->registerInterrupt(0, nullptr, &ArmCpu::pmuInterrupt, this) != kIOReturnSuccess) {
+        // NOLINTNEXTLINE(clang-analyzer-osx.cocoa.RetainCount): ArmGIC owns its interrupt nubs
+        IOLog("ArmCpu: CPU%u PMU INTID %u registration failed\n", logicalId, intid);
+        return;
+    }
+    const uint8_t target = *reinterpret_cast<volatile uint8_t *>(dist + 0x800 + intid);
+    if (target != expectedTarget) {
+        IOLog("ArmCpu: CPU%u PMU INTID %u targets %#x, expected %#x; leaving masked\n", logicalId, intid, target,
+              expectedTarget);
+        return;
+    }
+    if (nub->enableInterrupt(0) != kIOReturnSuccess) {
+        IOLog("ArmCpu: CPU%u PMU INTID %u enable failed\n", logicalId, intid);
+    }
 }
 
 // PSCI conduit comes from the /psci node of the device tree ("smc" or "hvc"); no default is assumed.
@@ -925,7 +974,7 @@ void ArmCpu::startThread(void *argument, wait_result_t)
 
 void ArmCpu::observeThread(void *argument, wait_result_t)
 {
-    const ArmCpu *self = static_cast<ArmCpu *>(argument);
+    ArmCpu *self = static_cast<ArmCpu *>(argument);
     const uint64_t started = counter();
     bool requested = false;
     for (;;) {
@@ -947,6 +996,7 @@ void ArmCpu::observeThread(void *argument, wait_result_t)
             requested = true;
         }
         if (ready && __atomic_load_n(&armcpu_smp_cross_back[cpu], __ATOMIC_ACQUIRE)) {
+            self->registerPmuInterrupt();
             __atomic_store_n(&armcpu_smp_step[cpu], 8U, __ATOMIC_RELEASE);
             if (__atomic_add_fetch(&armcpu_smp_running, 1U, __ATOMIC_RELAXED) == SWITCH_SMP_CORE_COUNT - 1)
                 __atomic_store_n(&gIpiQualified, true, __ATOMIC_RELEASE);

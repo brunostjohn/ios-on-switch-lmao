@@ -3,12 +3,16 @@
 #include "nir_builder.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 const struct nak_constant_offset_info nak_const_offsets_base = {
    .interlock_ticket_buffer_cb = 0,
    .interlock_ticket_buffer_offset = 0x260,
 };
-const struct nak_constant_offset_info nak_const_offsets_turing_graphics = {0};
+const struct nak_constant_offset_info nak_const_offsets_turing_graphics = {
+   .interlock_ticket_buffer_cb = 0,
+   .interlock_ticket_buffer_offset = 0x260,
+};
 
 static void
 require(bool ok, const char *what)
@@ -21,6 +25,9 @@ require(bool ok, const char *what)
 
 struct section {
    unsigned ticket_reads, waits, releases;
+   unsigned clock_reads, ssa_bars;
+   unsigned clock_reads_before_wait_break;
+   bool saw_wait_break;
    nir_def *wait_addr, *release_addr;
 };
 
@@ -30,12 +37,26 @@ count(nir_shader *nir, struct section *s)
    nir_foreach_function_impl(impl, nir) {
       nir_foreach_block(block, impl) {
          nir_foreach_instr(instr, block) {
+            if (instr->type == nir_instr_type_jump &&
+                nir_instr_as_jump(instr)->type == nir_jump_break) {
+               s->saw_wait_break = true;
+               continue;
+            }
             if (instr->type != nir_instr_type_intrinsic)
                continue;
             nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
             switch (intr->intrinsic) {
             case nir_intrinsic_load_sysval_nv:
-               s->ticket_reads += nir_intrinsic_base(intr) == NAK_SV_ORDERING_TICKET;
+               s->ticket_reads +=
+                  nir_intrinsic_base(intr) == NAK_SV_ORDERING_TICKET;
+               if (nir_intrinsic_base(intr) == NAK_SV_CLOCK_LO) {
+                  s->clock_reads++;
+                  if (!s->saw_wait_break)
+                     s->clock_reads_before_wait_break++;
+               }
+               break;
+            case nir_intrinsic_ssa_bar_nv:
+               s->ssa_bars++;
                break;
             case nir_intrinsic_load_global:
                s->waits++;
@@ -53,31 +74,270 @@ count(nir_shader *nir, struct section *s)
    }
 }
 
-/* A storage form's section as GM20B's ticket protocol lowers it: the warp
- * reads its ticket and waits once, and releases the word it waited on
- */
-int
-main(void)
+static void
+test_nir_lowering_sm53(void)
 {
    const struct nir_shader_compiler_options options = {0};
-   nir_builder b = nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT, &options, "interlock");
+   nir_builder b =
+      nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT, &options, "interlock53");
    b.shader->info.fs.pixel_interlock_ordered = true;
    nir_begin_invocation_interlock(&b);
    nir_end_invocation_interlock(&b);
 
    const struct nak_compiler nak = {.sm = 53};
-   require(nak_nir_lower_fs_interlock(b.shader, &nak), "the section was not lowered");
+   require(nak_nir_lower_fs_interlock(b.shader, &nak),
+           "sm53 interlock section was not lowered");
    nir_lower_vars_to_ssa(b.shader);
    nir_opt_copy_prop(b.shader);
    nir_opt_dce(b.shader);
 
    struct section s = {0};
    count(b.shader, &s);
-   require(s.ticket_reads == 1, "the ticket read more than once");
-   require(s.waits == 1, "the release waited for the ticket again");
-   require(s.releases == 1, "not one release");
-   require(s.wait_addr == s.release_addr, "the release found its ticket word again");
+   require(s.ticket_reads == 1, "sm53 read ticket more than once");
+   require(s.waits == 1, "sm53 release waited for ticket again");
+   require(s.releases == 1, "sm53 did not emit one release");
+   require(s.wait_addr == s.release_addr,
+           "sm53 release did not reuse waited ticket word");
+   require(s.clock_reads == 2, "sm53 backoff should emit start and now clock reads");
+   require(s.ssa_bars == 2, "sm53 backoff should emit two ssa_bar_nv barriers");
+   require(s.clock_reads_before_wait_break == 0,
+           "sm53 fast path must read zero clocks before the wait break");
    ralloc_free(b.shader);
-   puts("the interlock section reads its ticket once, waits once and releases the word it waited on");
+}
+
+static void
+test_nir_lowering_sm75(void)
+{
+   const struct nir_shader_compiler_options options = {0};
+   nir_builder b =
+      nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT, &options, "interlock75");
+   b.shader->info.fs.pixel_interlock_ordered = true;
+   nir_begin_invocation_interlock(&b);
+   nir_end_invocation_interlock(&b);
+
+   const struct nak_compiler nak = {.sm = 75};
+   require(nak_nir_lower_fs_interlock(b.shader, &nak),
+           "sm75 interlock section was not lowered");
+   nir_lower_vars_to_ssa(b.shader);
+   nir_opt_copy_prop(b.shader);
+   nir_opt_dce(b.shader);
+
+   struct section s = {0};
+   count(b.shader, &s);
+   require(s.ticket_reads == 1, "sm75 read ticket more than once");
+   require(s.waits == 0, "sm75 should use atomic spin, not load_global");
+   require(s.releases == 2, "sm75 should emit atomic wait and atomic release");
+   require(s.clock_reads == 0, "sm75 should not emit Maxwell clock backoff");
+   require(s.ssa_bars == 0, "sm75 should not emit Maxwell clock barriers");
+   ralloc_free(b.shader);
+}
+
+static uint64_t
+sm50_word(const uint32_t *code, unsigned instr_idx)
+{
+   unsigned group = instr_idx / 3;
+   unsigned slot = instr_idx % 3;
+   unsigned base = group * 8 + (slot + 1) * 2;
+   return (uint64_t)code[base] | ((uint64_t)code[base + 1] << 32);
+}
+
+static uint32_t
+sm50_sched(const uint32_t *code, unsigned instr_idx)
+{
+   unsigned group = instr_idx / 3;
+   unsigned slot = instr_idx % 3;
+   uint64_t sw = (uint64_t)code[group * 8] | ((uint64_t)code[group * 8 + 1] << 32);
+   return (uint32_t)((sw >> (21 * slot)) & 0x1fffffu);
+}
+
+static nir_shader *
+make_interlocked_fs(const struct nak_compiler *nak)
+{
+   nir_builder b = nir_builder_init_simple_shader(
+      MESA_SHADER_FRAGMENT, nak_nir_options(nak), "interlock_compile");
+   b.shader->info.io_lowered = true;
+   b.shader->info.fs.pixel_interlock_ordered = true;
+
+   nir_def *addr = nir_ldc_nv(&b, 1, 64, nir_imm_int(&b, 1), nir_imm_int(&b, 0),
+                              .align_mul = 8, .align_offset = 0);
+   nir_begin_invocation_interlock(&b);
+   nir_def *val = nir_load_global(&b, 1, 32, addr, .align_mul = 4);
+   nir_store_global(&b, nir_iadd_imm(&b, val, 1), addr, .align_mul = 4);
+   nir_end_invocation_interlock(&b);
+   return b.shader;
+}
+
+static nir_shader *
+make_shader_clock_fs(const struct nak_compiler *nak)
+{
+   nir_builder b = nir_builder_init_simple_shader(
+      MESA_SHADER_FRAGMENT, nak_nir_options(nak), "clock_compile");
+   b.shader->info.io_lowered = true;
+
+   nir_def *addr = nir_ldc_nv(&b, 1, 64, nir_imm_int(&b, 1), nir_imm_int(&b, 0),
+                              .align_mul = 8, .align_offset = 0);
+   nir_def *clk = nir_shader_clock(&b, 64, .memory_scope = SCOPE_SUBGROUP);
+   nir_store_global(&b, clk, addr, .align_mul = 8);
+   return b.shader;
+}
+
+static void
+test_compile_sm53_interlock(void)
+{
+   struct nv_device_info dev = {.sm = 53, .max_warps_per_mp = 64};
+   struct nak_compiler *nak = nak_compiler_create(&dev);
+   require(nak != NULL, "nak_compiler_create(sm53) failed");
+
+   nir_shader *nir = make_interlocked_fs(nak);
+   struct nak_fs_key fs_key = {0};
+   struct nak_shader_bin *bin =
+      nak_compile_shader(nir, true, nak, 0, &fs_key, false);
+   require(bin != NULL, "sm53 interlock compile failed");
+   require(bin->code_size > 0 && (bin->code_size % 32) == 0,
+           "invalid sm53 code size");
+
+   const uint32_t *code = bin->code;
+   unsigned n = (bin->code_size / 32) * 3;
+   int first_ldg_cg = -1;
+   int first_fast_exit = -1;
+   unsigned clock_s2r_count = 0;
+   unsigned clock_s2r_before_exit = 0;
+   bool has_iadd_sub = false;
+   bool has_isetp_ge_u32 = false;
+   bool has_bra = false;
+
+   for (unsigned i = 0; i < n; i++) {
+      uint64_t w = sm50_word(code, i);
+      uint32_t sched = sm50_sched(code, i);
+      uint16_t op16 = (uint16_t)(w >> 48);
+
+      require(op16 != 0x50c8, "sm53 interlock emitted unverified CS2R");
+
+      if ((op16 & 0xfff8) == 0xeed0 && ((w >> 46) & 3) == 1 && first_ldg_cg < 0)
+         first_ldg_cg = (int)i;
+      if (first_ldg_cg >= 0 && first_fast_exit < 0 &&
+          (op16 == 0xe340 || op16 == 0xe240))
+         first_fast_exit = (int)i;
+
+      if (op16 == 0xf0c8 && ((w >> 20) & 0xff) == NAK_SV_CLOCK_LO) {
+         clock_s2r_count++;
+         if (first_fast_exit < 0)
+            clock_s2r_before_exit++;
+         uint32_t wr_bar = (sched >> 5) & 7;
+         uint32_t delay = sched & 0xf;
+         require(wr_bar < 6, "S2R SR_CLOCKLO must allocate wr_bar");
+         require(delay >= 2, "S2R SR_CLOCKLO must delay >= 2 before wait");
+         require(i + 1 < n, "S2R SR_CLOCKLO at end of shader");
+         uint64_t next_w = sm50_word(code, i + 1);
+         uint32_t next_sched = sm50_sched(code, i + 1);
+         uint32_t wt_mask = (next_sched >> 11) & 0x3f;
+         require((next_w >> 48) == 0x50b0,
+                 "Op::SrcBar must lower to NOP after S2R SR_CLOCKLO");
+         require((wt_mask & (1u << wr_bar)) != 0,
+                 "NOP from Op::SrcBar must wait on S2R SR_CLOCKLO wr_bar");
+      }
+
+      if ((op16 & 0xfffc) == 0x5c10 && ((w >> 48) & 3) != 0)
+         has_iadd_sub = true;
+      if (((op16 & 0xff00) == 0x5b00 || (op16 & 0xfe00) == 0x3600) &&
+          ((w >> 49) & 7) == 6 && ((w >> 48) & 1) == 0)
+         has_isetp_ge_u32 = true;
+      if (op16 == 0xe240)
+         has_bra = true;
+   }
+
+   require(first_ldg_cg >= 0, "sm53 interlock missing LDG.E.CG ticket poll");
+   require(first_fast_exit > first_ldg_cg,
+           "sm53 interlock missing fast-path break after LDG.E.CG");
+   require(clock_s2r_count == 2,
+           "sm53 interlock should emit start and now S2R SR_CLOCKLO");
+   require(clock_s2r_before_exit == 0,
+           "sm53 interlock must have zero clock reads on uncontended path");
+   require(has_iadd_sub, "sm53 backoff missing IADD subtraction");
+   require(has_isetp_ge_u32, "sm53 backoff missing ISETP.GE.U32");
+   require(has_bra, "sm53 backoff missing BRA");
+
+   nak_shader_bin_destroy(bin);
+   ralloc_free(nir);
+
+   /* 64-bit shader_clock on SM53 also uses S2R + SrcBar without CS2R */
+   nir_shader *clk_nir = make_shader_clock_fs(nak);
+   struct nak_shader_bin *clk_bin =
+      nak_compile_shader(clk_nir, true, nak, 0, &fs_key, false);
+   require(clk_bin != NULL, "sm53 64-bit shader_clock compile failed");
+   const uint32_t *clk_code = clk_bin->code;
+   unsigned clk_n = (clk_bin->code_size / 32) * 3;
+   unsigned lo_reads = 0, hi_reads = 0;
+   for (unsigned i = 0; i < clk_n; i++) {
+      uint64_t w = sm50_word(clk_code, i);
+      uint32_t sched = sm50_sched(clk_code, i);
+      uint16_t op16 = (uint16_t)(w >> 48);
+      require(op16 != 0x50c8, "sm53 shader_clock must not emit CS2R");
+      if (op16 == 0xf0c8) {
+         uint8_t sr = (uint8_t)((w >> 20) & 0xff);
+         if (sr == NAK_SV_CLOCK_LO || sr == NAK_SV_CLOCK_HI) {
+            lo_reads += sr == NAK_SV_CLOCK_LO;
+            hi_reads += sr == NAK_SV_CLOCK_HI;
+            uint32_t wr_bar = (sched >> 5) & 7;
+            require(wr_bar < 6, "shader_clock S2R must allocate wr_bar");
+            require(i + 1 < clk_n, "shader_clock S2R at end of shader");
+            uint64_t next_w = sm50_word(clk_code, i + 1);
+            uint32_t next_sched = sm50_sched(clk_code, i + 1);
+            require((next_w >> 48) == 0x50b0 &&
+                       (((next_sched >> 11) & 0x3f) & (1u << wr_bar)) != 0,
+                    "shader_clock S2R must be followed by NOP waiting on wr_bar");
+         }
+      }
+   }
+   require(lo_reads >= 1 && hi_reads >= 2,
+           "sm53 64-bit shader_clock must emit S2R for SR_CLOCKLO and SR_CLOCKHI");
+   nak_shader_bin_destroy(clk_bin);
+   ralloc_free(clk_nir);
+
+   nak_compiler_destroy(nak);
+}
+
+static void
+test_compile_sm75(void)
+{
+   struct nv_device_info dev = {.sm = 75, .max_warps_per_mp = 32};
+   struct nak_compiler *nak = nak_compiler_create(&dev);
+   require(nak != NULL, "nak_compiler_create(sm75) failed");
+
+   struct nak_fs_key fs_key = {0};
+
+   nir_shader *nir = make_interlocked_fs(nak);
+   struct nak_shader_bin *bin =
+      nak_compile_shader(nir, true, nak, 0, &fs_key, false);
+   require(bin != NULL && bin->asm_str != NULL, "sm75 interlock compile failed");
+   require(strstr(bin->asm_str, "cs2r") == NULL,
+           "sm75 interlock should not emit clock backoff");
+   require(strstr(bin->asm_str, "sr[0x50]") == NULL,
+           "sm75 interlock should not read SR_CLOCKLO");
+   nak_shader_bin_destroy(bin);
+   ralloc_free(nir);
+
+   nir_shader *clk_nir = make_shader_clock_fs(nak);
+   struct nak_shader_bin *clk_bin =
+      nak_compile_shader(clk_nir, true, nak, 0, &fs_key, false);
+   require(clk_bin != NULL && clk_bin->asm_str != NULL,
+           "sm75 64-bit shader_clock compile failed");
+   require(strstr(clk_bin->asm_str, "cs2r sr[0x50]") != NULL &&
+              strstr(clk_bin->asm_str, "cs2r sr[0x51]") != NULL,
+           "sm75 shader_clock must keep CS2R");
+   nak_shader_bin_destroy(clk_bin);
+   ralloc_free(clk_nir);
+
+   nak_compiler_destroy(nak);
+}
+
+int
+main(void)
+{
+   test_nir_lowering_sm53();
+   test_nir_lowering_sm75();
+   test_compile_sm53_interlock();
+   test_compile_sm75();
+   puts("interlock NIR and SM53/SM75 full-pipeline SASS checks passed");
    return 0;
 }

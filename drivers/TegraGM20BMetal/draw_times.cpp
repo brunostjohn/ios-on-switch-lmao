@@ -131,13 +131,17 @@ void RenderEncoder::timePassBegin()
 
 TimedState RenderEncoder::timedState(const Pipeline &drawn) const
 {
-    const Pipeline &named = drawn.caName || drawn.spanName || !pipeline_ ? drawn : *pipeline_;
+    const char *drawnCa = __atomic_load_n(&drawn.caName, __ATOMIC_ACQUIRE);
+    const char *drawnSpan = __atomic_load_n(&drawn.spanName, __ATOMIC_ACQUIRE);
+    const Pipeline &named = drawnCa || drawnSpan || !pipeline_ ? drawn : *pipeline_;
+    const char *namedCa = &named == &drawn ? drawnCa : __atomic_load_n(&named.caName, __ATOMIC_ACQUIRE);
+    const char *namedSpan = &named == &drawn ? drawnSpan : __atomic_load_n(&named.spanName, __ATOMIC_ACQUIRE);
     TimedState s;
     s.key = named.rec ? named.rec->keyHash : drawn.rec ? drawn.rec->keyHash : 0;
-    s.name = named.caName ? named.caName : named.spanName;
+    s.name = namedCa ? namedCa : namedSpan;
     s.fragmentWords = drawn.fragmentInstructions;
     s.vertexWords = drawn.vertexInstructions;
-    s.gprs = uint8_t(std::min<uint32_t>(pixelRegisters(drawn.methods.data(), drawn.methods.size()), 0xff));
+    s.gprs = uint8_t(std::min<uint32_t>(pixelRegisters(drawn.methodWords(), drawn.methodCount()), 0xff));
     s.samplePasses = drawn.samplePasses;
     s.form = uint8_t(drawn.splitOf                      ? SpanForm::Twin
                      : drawn.freeForm.rung != FetchNone ? SpanForm::FetchFree

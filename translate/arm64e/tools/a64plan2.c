@@ -1096,7 +1096,7 @@ static struct dsu d3, d5;
 static void dsu_build(struct dsu *d, int size)
 {
     d->n = 0;
-    d->idx = malloc(nholes * sizeof(int64_t));
+    d->idx = malloc((nholes ? nholes : 1) * sizeof(int64_t));
     for (size_t i = 0; i < nholes; i++)
         if (holes[i].size == size)
             d->idx[d->n++] = (int64_t)i;
@@ -1995,7 +1995,8 @@ int a64x_cmd_plan2(int argc, char **argv)
         }
     }
     free(walk_buf);
-    qsort(holes, nholes, sizeof(*holes), cmp_hole);
+    if (nholes > 0)
+        qsort(holes, nholes, sizeof(*holes), cmp_hole);
     {
         size_t dup = 0, o = 0;
         for (size_t i = 0; i < nholes; i++) {
@@ -2011,8 +2012,13 @@ int a64x_cmd_plan2(int argc, char **argv)
     }
     dsu_build(&d3, 3);
     dsu_build(&d5, 5);
-    bin_base = holes[0].va & ~((1ull << BIN_SHIFT) - 1);
-    nbins = (int64_t)((holes[nholes - 1].va - bin_base) >> BIN_SHIFT) + 1;
+    if (nholes > 0) {
+        bin_base = holes[0].va & ~((1ull << BIN_SHIFT) - 1);
+        nbins = (int64_t)((holes[nholes - 1].va - bin_base) >> BIN_SHIFT) + 1;
+    } else {
+        bin_base = 0;
+        nbins = 1;
+    }
     bin_room = calloc((size_t)nbins, sizeof(int64_t));
     bin_first = calloc((size_t)nbins, sizeof(int64_t));
     bin_end = calloc((size_t)nbins, sizeof(int64_t));

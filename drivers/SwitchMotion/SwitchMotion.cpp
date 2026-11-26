@@ -51,7 +51,8 @@
 // The orientation detector batches too (kOrientationBatchUS: 5 records at 25 Hz). With batching asked for, the part
 // fills its FIFO and raises FIFO_THS on INT2 once `watermark` records are in (as many sample periods as fit in the
 // shortest batch interval: 3 at 200 Hz for 15 ms), and one interrupt drains them with one status/count burst and
-// whole-record FIFO_DATA bursts (3 records a TegraSPI transfer) instead of two transfers and an interrupt per sample.
+// whole-record FIFO_DATA bursts (up to 15 records a TegraSPI transfer) instead of two transfers and an interrupt per
+// sample.
 // Every sample keeps its own time (switch_hid_post_at: the watermark's record at the interrupt's action, the others a
 // sample period apart), so CoreMotion integrates them as before; nothing waits longer than the batch interval the
 // client asked for. A batch interval of 0, another family, or a FIFO check that fails on hardware (MCLK, the count
@@ -319,8 +320,8 @@ enum : unsigned {
 };
 
 constexpr size_t kFifoRecord = 16;
-constexpr unsigned kFifoRecordsPerRead = 3;  // 3 x 16 bytes after the address byte: one TegraSPI transfer (64)
-constexpr unsigned kFifoRecords = 144;       // 2.25 KiB of 16-byte records
+constexpr unsigned kFifoRecordsPerRead = (TEGRA_SPI_MAX_TRANSFER - 1) / kFifoRecord;  // after the address byte
+constexpr unsigned kFifoRecords = 144;                                                // 2.25 KiB of 16-byte records
 
 enum : unsigned {
     Spi4Wire = 1u << 2,

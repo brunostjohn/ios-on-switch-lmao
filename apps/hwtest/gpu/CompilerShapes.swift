@@ -1,5 +1,6 @@
 import Foundation
 import HWTestCore
+import HWTestGPU
 import Metal
 
 /// The fragment programs of shaders/CompilerShapes.metal drawn over an RGBA32F target, against the same code run on

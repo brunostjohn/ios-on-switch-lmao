@@ -138,6 +138,7 @@
 #include <vm/vm_compressor_info.h>
 #endif /* DEVELOPMENT || DEBUG */
 #include <switch/prefetch_vm.h>
+#include <switch/vm_protect.h>
 #include <ptrcheck.h>
 #include <san/kasan.h>
 
@@ -5789,6 +5790,10 @@ vm_map_protect_preflight(
 			return KERN_PROTECTION_FAILURE;
 		}
 	}
+	if (switch_vm_protect_submap_noop(entry->is_sub_map, entry->use_pmap,
+	    entry->protection, entry->max_protection, new_prot, set_max)) {
+		return VMRL_ERR_SKIP_PREPARE;
+	}
 	return KERN_SUCCESS;
 }
 
@@ -5981,6 +5986,11 @@ vm_map_protect(
 			    entry->max_protection);
 		}
 #endif /* DEVELOPMENT || DEBUG */
+
+		if (switch_vm_protect_submap_noop(entry->is_sub_map, entry->use_pmap,
+		    entry->protection, entry->max_protection, new_prot, set_max)) {
+			continue;
+		}
 
 		if (entry->is_sub_map) {
 			/* range lock did unnest if needed */

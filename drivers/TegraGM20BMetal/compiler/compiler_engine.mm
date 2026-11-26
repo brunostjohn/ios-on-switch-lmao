@@ -145,14 +145,20 @@ int32_t Engine::compile(const Prepared &p, std::string &entry, std::string &why)
     if (p.request.kind == gm20b::RequestKind::Library)
         return s.codeGen->make(p, entry, why);
     LibraryCache &cache = *s.libraries;
-    const Libraries libraries = [&cache](const gm20b::RequestLibrary &l, std::string &failed) {
+    const Libraries libraries = [&cache, &p](const gm20b::RequestLibrary &l, std::string &failed) {
+        std::shared_ptr<const MappedClientLibrary> mapped;
+        if (l.libraryId && !p.request.libraries.empty()) {
+            const ptrdiff_t idx = &l - p.request.libraries.data();
+            if (idx >= 0 && size_t(idx) < p.clientLibraries.size())
+                mapped = p.clientLibraries[size_t(idx)];
+        }
 #if SWITCH_DEBUG
         const uint64_t began = uptimeNs();
-        id<MTLLibrary> library = cache.library(l, failed);
+        id<MTLLibrary> library = cache.library(l, failed, mapped);
         tJobSplit.libraryNs += uptimeNs() - began;
         return library;
 #else
-        return cache.library(l, failed);
+        return cache.library(l, failed, mapped);
 #endif
     };
 #if SWITCH_DEBUG

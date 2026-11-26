@@ -465,10 +465,15 @@ extern "C" __attribute__((weak)) void switch_wlan_data_mounted(void)
 {}
 #endif
 
+// SwitchBattery's on 24B119 (../SwitchBattery/SwitchBatteryStore.h): powerd's battery data, restored with the NVRAM.
+extern "C" __attribute__((weak)) void switch_battery_data_mounted(void)
+{}
+
 extern "C" uint32_t switch_nvram_data_mounted(void)
 {
     const uint32_t added = SwitchNVRAM::restoreFromData();
     switch_bluetooth_data_mounted();
+    switch_battery_data_mounted();
 #if DEVELOPMENT || DEBUG
     switch_wlan_data_mounted();
 #endif

@@ -123,20 +123,24 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsCachedBosDo)
 TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 {
 	const CodeText alloc = Block(client(), "IOReturn AGXDeviceUserClient::boAlloc(");
-	EXPECT_TRUE(
-		alloc.has("if (!ret && !bo->pool_va && !compressible && !system && "
-			  "!(in->flags & TegraGM20BBoContiguous)) spare = spareTake(in->bytes);"));
+	EXPECT_TRUE(alloc.has("if (!ret && !bo->pool_va && !compressible && !system && "
+			      "!(in->flags & TegraGM20BBoContiguous)) spare = spareTake(in->bytes, "
+			      "critical_);"));
 	EXPECT_TRUE(alloc.has("(in->flags & TegraGM20BBoContiguous) || system ? kClasses : "
 			      "classUp(in->bytes);"));
 	EXPECT_TRUE(alloc.has("cleanZeros(va, backing);"));
 	EXPECT_FALSE(Block(client(), "Spare *spareMake(SparePool *p, uint64_t bytes)")
 			     .has("cleanZeros"));
+	const CodeText recycle = Block(
+		client(), "void spareRecycleWork(thread_call_param_t param, thread_call_param_t)");
 	const CodeText work =
 		Block(client(), "void spareWork(thread_call_param_t param, thread_call_param_t)");
-	EXPECT_TRUE(work.has("switch_gpu_cached_zero(s->pas"));
+	EXPECT_TRUE(recycle.has("switch_gpu_cached_zero(s->pas"));
+	EXPECT_FALSE(recycle.has("cleanZeros(s->buffer"));
+	EXPECT_FALSE(recycle.has("p->ready[c] = s;"));
 	EXPECT_FALSE(work.has("cleanZeros(s->buffer"));
 	EXPECT_FALSE(work.has("p->ready[c] = s;"));
-	EXPECT_EQ(work.count("p->dirty = s;"), 2u)
+	EXPECT_EQ(recycle.count("p->dirty = s;") + work.count("p->dirty = s;"), 2u)
 		<< "a busy scrub's spare put back, and the refill's new one";
 	const CodeText completed = Block(client(), "void spareZeroed(void *context, int result)");
 	EXPECT_TRUE(
@@ -1810,16 +1814,70 @@ TEST(GM20BParkedBoSource, LockOrderAndOffLockVmCalls)
 	const CodeText freeMethod = Block(client(), "IOReturn AGXDeviceUserClient::boFreeMethod(");
 	EXPECT_TRUE(freeMethod.before("IOLockUnlock(lock_);", "switch_iokit_drop_parked_range("));
 
-	const CodeText work =
-		Block(client(), "void spareWork(thread_call_param_t param, thread_call_param_t)");
-	EXPECT_TRUE(work.before("reclaimParkedStep(", "IOLockLock(p->lock);"));
+	const CodeText reclaim =
+		Block(client(), "void spareReclaimWork(thread_call_param_t, thread_call_param_t)");
+	EXPECT_TRUE(reclaim.has("reclaimParkedStep("));
+	EXPECT_FALSE(reclaim.has("IOLockLock(p->lock);"));
 
-	const CodeText take = Block(client(), "Spare *spareTake(uint64_t bytes)");
+	const CodeText take = Block(client(), "Spare *spareTake(uint64_t bytes, bool critical)");
 	EXPECT_TRUE(take.before("IOLockUnlock(p->lock);", "parkedNotifyDemand("));
 	EXPECT_TRUE(take.before("IOLockUnlock(p->lock);", "parkedHasAny()"));
 
 	const CodeText stats = Block(client(), "extern \"C\" unsigned long tgm_owner_stats(");
 	EXPECT_TRUE(stats.before("parkedStatsTake(", "IOLockLock(p->lock);"));
+}
+
+// Every refill decision counts a class's spares on the dirty list (SwitchGpuSpares.h switch_gpu_spare_short), and every
+// push onto or pop off that list keeps the count.
+TEST(GM20BSparesSource, TheRefillCountsDirtySpares)
+{
+	EXPECT_FALSE(CodeText(client()).has("p->count[c] + p->zeroing[c]"));
+	for (const char *fn : {"void spareZeroed(void *context, int result)",
+			       "void spareWork(thread_call_param_t param, thread_call_param_t)",
+			       "Spare *spareTake(uint64_t bytes, bool critical)"})
+		EXPECT_TRUE(Block(client(), fn)
+				    .has("switch_gpu_spare_short(p->count[c], p->zeroing[c], "
+					 "p->dirtyCount[c],"))
+			<< fn;
+	for (const char *fn :
+	     {"void spareRecycleWork(thread_call_param_t param, thread_call_param_t)",
+	      "void spareWork(thread_call_param_t param, thread_call_param_t)",
+	      "bool spareKeep(const SwitchGpuCachedBuffer &buffer"}) {
+		const CodeText body = Block(client(), fn);
+		EXPECT_EQ(body.count("p->dirtyBytes += ") + body.count("p->dirtyBytes -= "),
+			  body.count("++p->dirtyCount[") + body.count("--p->dirtyCount["))
+			<< fn;
+	}
+}
+
+// The spare workers allocate, wire, free and sometimes memset memory: never above user priority.
+TEST(GM20BSparesSource, TheWorkersRunAtUserPriority)
+{
+	const CodeText make = Block(client(), "SparePool *spares()");
+	EXPECT_EQ(make.count("THREAD_CALL_PRIORITY_USER"), 3u);
+	EXPECT_FALSE(make.has("THREAD_CALL_PRIORITY_KERNEL"));
+	EXPECT_FALSE(make.has("thread_call_allocate_with_qos("));
+}
+
+// A waiter on a parking, unparking or reclaiming BO pushes that BO's own mover, on that BO's own event: one owner per
+// connection was overwritten and cleared by unrelated BOs, and the reaper never named itself.
+TEST(GM20BParkedBoSource, ParkWaitersPushTheirBosOwnMover)
+{
+	EXPECT_FALSE(CodeText(client()).has("parkWait_"));
+	EXPECT_FALSE(CodeText(client()).has("parkOwner_"));
+	EXPECT_TRUE(
+		Block(client(), "bool AGXDeviceUserClient::parkWaitStableLocked(")
+			.has("switch_gpu_sleep_inheritor(lock_, &bo->parkOwner, bo->parkOwner);"));
+	const CodeText reclaim = Block(client(), "bool AGXDeviceUserClient::reclaimParkedBo(");
+	EXPECT_TRUE(reclaim.before("bo->parkOwner = switch_gpu_current_thread();",
+				   "parkUnlinkLocked(bo, true);"));
+	EXPECT_TRUE(Block(client(), "void AGXDeviceUserClient::parkFinishReclaimLocked(")
+			    .has("parkSettledLocked(bo);"));
+	EXPECT_TRUE(Block(client(), "ReclaimedBacking *AGXDeviceUserClient::detachReclaimedLocked(")
+			    .has("parkSettledLocked(bo);"));
+	const CodeText settled = Block(client(), "void AGXDeviceUserClient::parkSettledLocked(");
+	EXPECT_TRUE(settled.before("bo->parkOwner = nullptr;",
+				   "switch_gpu_wakeup_inheritor(lock_, &bo->parkOwner);"));
 }
 
 TEST(GM20BParkedBoSource, OverwriteMappingsAndXnuHelpersPreserveVmSafety)

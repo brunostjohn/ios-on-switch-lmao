@@ -1,6 +1,8 @@
 import CoreFoundation
 import Darwin
 import HWTestCore
+import HWTestKit
+import HWTestShared
 import UIKit
 
 /// IOMFBDisplayRefresh, which QuartzCore's AppleDisplay::update_display_limits reads (24B119) and

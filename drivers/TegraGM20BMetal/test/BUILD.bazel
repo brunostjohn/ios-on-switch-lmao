@@ -100,6 +100,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BFencePageABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedABI.h",
         "//drivers/TegraGM20B:TegraGM20BVolatileABI.h",
     ],
     copts = ["-Idrivers/TegraGM20B"],
@@ -140,6 +141,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BFencePageABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedABI.h",
         "//drivers/TegraGM20B:TegraGM20BVolatileABI.h",
     ],
     copts = ["-Idrivers/TegraGM20B"],
@@ -181,6 +183,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BFencePageABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedABI.h",
         "//drivers/TegraGM20B:TegraGM20BVolatileABI.h",
     ],
     copts = ["-Idrivers/TegraGM20B"],
@@ -276,6 +279,7 @@ host_library(
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
         "//drivers/TegraGM20B:TegraGM20BSchedPolicy.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedABI.h",
         "//drivers/TegraGM20B:TegraGM20BVolatileABI.h",
         "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
         "//drivers/TegraGM20BMetal:gm20b_runtime_headers",
@@ -434,6 +438,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BFencePageABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedABI.h",
         "//drivers/TegraGM20B:TegraGM20BVolatileABI.h",
         "//drivers/TegraGM20BMetal:batch.h",
         "//drivers/TegraGM20BMetal:control_memory.h",
@@ -585,7 +590,10 @@ device_test(
 # no tiled-cache flush, only a draw alone in its pass is measured, an untaught state no more than its cap, any completer teaches
 device_test(
     name = "device_measure_test",
-    srcs = ["device_measure_test.cpp"],
+    srcs = [
+        "device_measure_test.cpp",
+        "timed_gpu.h",
+    ],
 )
 
 # The encode reads no buffer's contents on the CPU (gm20b::Device over the kernel model): a first draw over buffer vertices and
@@ -645,6 +653,38 @@ device_test(
     name = "device_mixed_samples_test",
     srcs = [
         "device_mixed_samples_test.cpp",
+        "device_forms.h",
+        "//drivers/TegraGM20BMetal:area_load.cpp",
+        "//drivers/TegraGM20BMetal:reach.cpp",
+        "//drivers/TegraGM20BMetal:stencil_bits.cpp",
+        "//drivers/TegraGM20BMetal:turn_copy.cpp",
+        "//drivers/TegraGM20BMetal:turned_pass.cpp",
+        "//drivers/TegraGM20BMetal:zeta_colour.cpp",
+    ],
+)
+
+# A mixed pass's four-sample draws (mixed_samples.h MixedDraw): sample 0 and samples 1-3 apart on every draw path, and a
+# fragment program's memory writes never run twice
+device_test(
+    name = "device_mixed_draws_test",
+    srcs = [
+        "device_mixed_draws_test.cpp",
+        "device_forms.h",
+        "//drivers/TegraGM20BMetal:area_load.cpp",
+        "//drivers/TegraGM20BMetal:reach.cpp",
+        "//drivers/TegraGM20BMetal:stencil_bits.cpp",
+        "//drivers/TegraGM20BMetal:turn_copy.cpp",
+        "//drivers/TegraGM20BMetal:turned_pass.cpp",
+        "//drivers/TegraGM20BMetal:zeta_colour.cpp",
+    ],
+)
+
+# A clear-only pass's Clear of a stored depth past its render area: the texture's own layers, a four-sample zeta's sample
+# layout, a turned pass's plane, and the zcull region the in-area clear initialises
+device_test(
+    name = "device_clear_only_zeta_test",
+    srcs = [
+        "device_clear_only_zeta_test.cpp",
         "device_forms.h",
         "//drivers/TegraGM20BMetal:area_load.cpp",
         "//drivers/TegraGM20BMetal:reach.cpp",
@@ -1024,6 +1064,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BFencePageABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedABI.h",
         "//drivers/TegraGM20B:TegraGM20BVolatileABI.h",
     ],
     copts = ["-Idrivers/TegraGM20B"],
@@ -1251,6 +1292,38 @@ host_test(
         "//drivers/TegraGM20BMetal:handoff_queue.h",
     ],
     cxx_std = "c++17",
+)
+
+# Under ARC, as the plugin builds it: the executor's autorelease pools are what the test checks
+objc_library(
+    name = "ordered_executor_test_unit",
+    testonly = True,
+    srcs = [
+        "ordered_executor_test.mm",
+        "//drivers/TegraGM20BMetal:follow.h",
+        "//drivers/TegraGM20BMetal:handoff_queue.h",
+        "//drivers/TegraGM20BMetal:lock.h",
+        "//drivers/TegraGM20BMetal:ordered_executor.h",
+    ],
+    copts = WARNINGS + SANITIZERS + [
+        "-std=c++17",
+        "-g",
+    ],
+    features = [
+        "asan",
+        "ubsan",
+        "external_include_paths",
+    ],
+    sdk_frameworks = ["Foundation"],
+    deps = ["@googletest//:gtest"],
+    alwayslink = True,
+)
+
+host_test(
+    name = "ordered_executor_test",
+    srcs = [],
+    linkopts = ["-lobjc"],
+    deps = [":ordered_executor_test_unit"],
 )
 
 host_test(
@@ -1897,6 +1970,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BFencePageABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedABI.h",
         "//drivers/TegraGM20B:TegraGM20BVolatileABI.h",
         "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
         "//drivers/TegraGM20BMetal:state_segment.cpp",
@@ -2892,6 +2966,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BFencePageABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedABI.h",
         "//drivers/TegraGM20B:TegraGM20BVolatileABI.h",
         "//drivers/TegraGM20BMetal:control_memory.h",
         "//drivers/TegraGM20BMetal:kernel.h",
@@ -2935,6 +3010,7 @@ host_test(
         "//drivers/TegraGM20B:TegraGM20BFencePageABI.h",
         "//drivers/TegraGM20B:TegraGM20BJobABI.h",
         "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BSchedABI.h",
         "//drivers/TegraGM20B:TegraGM20BVolatileABI.h",
         "//drivers/TegraGM20BMetal:control_memory.h",
         "//drivers/TegraGM20BMetal:kernel.h",
@@ -3910,9 +3986,11 @@ host_test(
         "//drivers/TegraGM20BMetal:pack_scan.h",
         "//drivers/TegraGM20BMetal:program_pages.h",
         "//drivers/TegraGM20BMetal:program_stores.h",
+        "//drivers/TegraGM20BMetal:push.h",
         "//drivers/TegraGM20BMetal:sample_shading.h",
         "//drivers/TegraGM20BMetal:set_entries.h",
         "//drivers/TegraGM20BMetal:set_reads.h",
+        "//drivers/TegraGM20BMetal:slm.h",
         "//drivers/TegraGM20BMetal:storage.h",
     ],
     cxx_std = "c++17",
@@ -4248,6 +4326,7 @@ host_test(
         "//drivers/TegraGM20BMetal:plugin/ImageFilterLink.h",
         "//drivers/TegraGM20BMetal:plugin/MetallibEntries.h",
         "//drivers/TegraGM20BMetal:compiler/compiler_key_difference.h",
+        "//drivers/TegraGM20BMetal:compiler/compiler_client_libraries.h",
         "//drivers/TegraGM20BMetal:compiler/compiler_request.h",
         "//drivers/TegraGM20BMetal:TegraGM20BMetalDirect.h",
         "//drivers/TegraGM20BMetal:direct.h",
@@ -4322,6 +4401,7 @@ host_test(
         "shader_compiler_buffer_encoders_test.cpp",
         "//drivers/TegraGM20BMetal:plugin/ImageFilterLink.h",
         "//drivers/TegraGM20BMetal:plugin/MetallibEntries.h",
+        "//drivers/TegraGM20BMetal:compiler/compiler_client_libraries.h",
         "//drivers/TegraGM20BMetal:compiler/compiler_request.h",
         "//drivers/TegraGM20BMetal:codegen_request.h",
         "//drivers/TegraGM20BMetal:TegraGM20BMetalCompileRequest.h",
@@ -4386,6 +4466,7 @@ host_test(
         "//drivers/TegraGM20BMetal:plugin/ImageFilterLink.h",
         "//drivers/TegraGM20BMetal:plugin/MetallibEntries.h",
         "//drivers/TegraGM20BMetal:compiler/compiler_key_difference.h",
+        "//drivers/TegraGM20BMetal:compiler/compiler_client_libraries.h",
         "//drivers/TegraGM20BMetal:compiler/compiler_request.h",
         "//drivers/TegraGM20BMetal:TegraGM20BMetalDirect.h",
         "//drivers/TegraGM20BMetal:direct.h",
@@ -4459,6 +4540,7 @@ host_test(
         "//drivers/TegraGM20BMetal:plugin/ImageFilterLink.h",
         "//drivers/TegraGM20BMetal:plugin/MetallibEntries.h",
         "//drivers/TegraGM20BMetal:compiler/compiler_key_difference.h",
+        "//drivers/TegraGM20BMetal:compiler/compiler_client_libraries.h",
         "//drivers/TegraGM20BMetal:compiler/compiler_request.h",
         "//drivers/TegraGM20BMetal:TegraGM20BMetalDirect.h",
         "//drivers/TegraGM20BMetal:direct.h",
@@ -6756,6 +6838,66 @@ host_test(
     sanitize = False,
     deps = [
         ":runtime_plugin" + plugin,
+        "//kits/SwitchRefusal:switch_refusal",
+    ] + METAL_HOST_DEPS,
+) for suffix, plugin, tsan in [
+    (
+        "",
+        "_host",
+        [],
+    ),
+    (
+        "_tsan",
+        "_tsan",
+        ["-fsanitize=thread"],
+    ),
+]]
+
+py_binary(
+    name = "pack_v34_fixture_bin",
+    srcs = ["pack_v34_fixture.py"],
+    data = [
+        "//drivers/TegraGM20BMetal:chip_facts.h",
+        "//drivers/TegraGM20BMetal:own_states.h",
+        "//drivers/TegraGM20BMetal:owned.h",
+    ],
+    main = "pack_v34_fixture.py",
+    deps = ["//drivers/TegraGM20BMetal:pack"],
+)
+
+genrule(
+    name = "pack_v34_fixture",
+    outs = ["pack_v34_fixture.bin"],
+    cmd = "$(execpath :pack_v34_fixture_bin) $@",
+    tools = [":pack_v34_fixture_bin"],
+)
+
+[host_test(
+    name = "device_pack_hit" + suffix + "_test",
+    size = "medium",
+    srcs = [
+        "device_pack_hit_test.cpp",
+        "empty_pack.h",
+        "facade_harness.h",
+        "job_methods.h",
+        "made_metallib.h",
+        "translate_absent.cpp",
+        "kernel_model.h",
+    ] + METAL_HOST_HEADERS,
+    copts = [
+        "-x",
+        "objective-c++",
+        "-fobjc-arc",
+    ] + METAL_HOST_COPTS + tsan,
+    cxx_std = "c++17",
+    data = [":pack_v34_fixture"],
+    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
+    linkopts = FACADE_LINKOPTS + tsan,
+    sanitize = False,
+    deps = [
+        ":facade_plugin" + plugin,
+        ":runtime_plugin" + plugin,
+        "//kits/SwitchGM20BEmit/test:method_checks",
         "//kits/SwitchRefusal:switch_refusal",
     ] + METAL_HOST_DEPS,
 ) for suffix, plugin, tsan in [

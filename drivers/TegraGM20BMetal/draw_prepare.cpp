@@ -102,7 +102,8 @@ uint32_t RenderEncoder::colorTargets() const
 }
 
 #if SWITCH_METAL_DIAGNOSTICS
-static void probeUniforms(Pipeline &pl, uint32_t stage, uint32_t slot, const uint8_t *bytes, uint64_t length)
+static void probeUniforms(Pipeline &pl, const char *probe, uint32_t stage, uint32_t slot, const uint8_t *bytes,
+                          uint64_t length)
 {
     const NonFiniteUniforms found = nonFiniteUniforms(bytes, length);
     if (!found.words && (!found.halves || pl.uniformHalvesReported))
@@ -116,10 +117,10 @@ static void probeUniforms(Pipeline &pl, uint32_t stage, uint32_t slot, const uin
            "first at "
            "+%llu; "
            "+%llu: %{public}s(mach %llu)",
-           pl.uniformProbe, stage, slot, found.words, found.halves, (unsigned long long)length,
-           (unsigned long long)found.first, (unsigned long long)from, hex, (unsigned long long)mach_absolute_time());
+           probe, stage, slot, found.words, found.halves, (unsigned long long)length, (unsigned long long)found.first,
+           (unsigned long long)from, hex, (unsigned long long)mach_absolute_time());
     if (found.words)
-        pl.uniformProbe = nullptr;
+        __atomic_store_n(&pl.uniformProbe, nullptr, __ATOMIC_RELEASE);
     else
         pl.uniformHalvesReported = true;
 }
@@ -176,8 +177,8 @@ __attribute__((always_inline)) inline bool RenderEncoder::writeSetEntry(Pipeline
         if (b.buffer && b.buffer->hostVisible && !b.buffer->wc)
             cb_->clean(b.buffer->cpu + b.offset, std::min<uint64_t>(desc.range - desc.residual, b.size));
 #if SWITCH_METAL_DIAGNOSTICS
-        if (pl->uniformProbe && b.cpu)
-            probeUniforms(*pl, e.stage, e.slot, b.cpu, std::min<uint64_t>(desc.range - desc.residual, b.size));
+        if (const char *probe = __atomic_load_n(&pl->uniformProbe, __ATOMIC_ACQUIRE); probe && b.cpu)
+            probeUniforms(*pl, probe, e.stage, e.slot, b.cpu, std::min<uint64_t>(desc.range - desc.residual, b.size));
 #endif
         // a slot bound to nothing reads the zero page: no buffer load is bounds-checked (nak_target.h)
         const uint64_t base = b.va ? desc.base : d.zero_.va;
@@ -261,7 +262,17 @@ __attribute__((always_inline)) inline bool RenderEncoder::writeSetEntry(Pipeline
         } else if (t) {
             cb_->use(t->standIn ? *t->standIn : t->sampled ? *t->sampled : *t, false);
         }
-        tic = !t ? 0 : image ? image->tic : pair ? t->tic : t->standIn && !written ? t->standIn->tic : t->tic;
+        const Texture *bound = !t ? nullptr : image ? image : pair ? t : t->standIn && !written ? t->standIn : t;
+        tic = bound ? bound->tic : 0;
+        if (bound && !image && !pair && entryArrayView(e) &&
+            (bound->type == fx::kTexCube || bound->type == fx::kTexCubeArray)) {
+            tic = dev_->arrayViewTic(*bound);
+            if (!tic) {
+                *why = "no texture header left for a cube's 2D array view";
+                cb_->refusal = {RefViewHeader, e.slot, bound->format, bound->width};
+                return false;
+            }
+        }
     } else if (e.kind == EntryFetch) {
         const ColorAttachment &a = pass_.color[e.slot];
         const Texture *t = a.texture;
@@ -302,8 +313,8 @@ __attribute__((always_inline)) inline bool RenderEncoder::writeSetEntry(Pipeline
             return false;
         }
         if (t)
-            cb_->use(*t, written);
-        tic = t ? t->tic : 0;
+            cb_->use(t->standIn && !written ? *t->standIn : *t, written);
+        tic = t ? (t->standIn && !written ? t->standIn->tic : t->tic) : 0;
     }
     const Texture *mapped = e.kind == EntryTexture ? boundTexture(e) : nullptr;
     const uint8_t map = !mapped ? 0 : mapped->levelZero ? kLevelZeroMap : mapped->addressMap;
@@ -486,9 +497,19 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
         compatible_ = pl;
     }
+    const MixedDraw mixed = mixedDraw(*pl, ds_, pass_.depthStencil, samples_, rasterSamples_);
+    if (mixed == MixedDraw::Refused) {
+        *why =
+            "a four-sample state writing colour, depth or stencil and memory in a pass of one-sample colour beside a "
+            "four-sample depth: no draw of its samples 1-3 runs its memory writes once: skipped";
+        cb_->skipped = {RefSamples, pl->samples, samples_, pl->samplePasses};
+        cb_->skips++;
+        skipDraw_ = true;
+        return false;
+    }
     if (!prepareShaderTests(*pl, why))
         return false;
-    if (p_.room() < 1024 + pl->methods.size() + (cb_->extrasLive_ ? cb_->extrasLive_->restore.size() : 0) +
+    if (p_.room() < 1024 + pl->methodCount() + (cb_->extrasLive_ ? cb_->extrasLive_->restore.size() : 0) +
                         (views_.dirtyViewports | views_.dirtyScissors ? 24 * kMaxViewports : 0))
         reserve();
     Device &d = *dev_;
@@ -506,7 +527,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     const bool dsChanged = dsDirty_;
     if (dsDirty_) {
         SWITCH_METAL_ENCODE_SPAN(Bind);
-        const bool depth = zeta && zetaHasDepth(zeta->format), stencil = zeta && zetaHasStencil(zeta->format);
+        const bool depth = zeta && zetaHasDepth(zeta->format) && pass_.depthStencil.depthEnabled,
+                   stencil = zeta && zetaHasStencil(zeta->format) && pass_.depthStencil.stencilEnabled;
         const bool fixedStencil = stencil && !shadowStencil_, shaderTests = shaderTestsActive_ && !shadowStencil_;
         SWITCH_METAL_DIAGNOSTIC(cb_->counts_.segmentCopies += !shaderTests && !measuringInline() && !bindsBySegment() &&
                                                               dsState_->segment(depth, fixedStencil));
@@ -522,8 +544,9 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     if (zcull_.candidate && !zcull_.invalidated && (dsChanged || pl != zcullProgram_)) {
         zcullProgram_ = pl;
-        const bool earlyTests = pl->writesMemory[1] && zcullEarlyFragmentTests(pl->methods.data(), pl->methods.size());
-        if (zcullInvalidates(zcull_, ds_, zeta && zetaHasDepth(zeta->format), zeta && zetaHasStencil(zeta->format),
+        const bool earlyTests = pl->writesMemory[1] && zcullEarlyFragmentTests(pl->methodWords(), pl->methodCount());
+        if (zcullInvalidates(zcull_, ds_, zeta && zetaHasDepth(zeta->format) && pass_.depthStencil.depthEnabled,
+                             zeta && zetaHasStencil(zeta->format) && pass_.depthStencil.stencilEnabled,
                              pl->fragmentDepth, shaderTestsActive_ != 0, pl->writesMemory[1], earlyTests)) {
             p.m(kInvalidateZcull, 0);
             SWITCH_METAL_DIAGNOSTIC(d.stats.zcullInvalidations++);
@@ -691,10 +714,11 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
                       pl->blendKill);
     if (rebinds && cb_->sampleMaskHeld_ != kSampleMaskAll)
         cb_->sampleMaskHeld_ = kSampleMaskUnknown;
-    if (compatibleRasterMask_ != cb_->sampleMaskHeld_) {
-        const uint32_t m = compatibleRasterMask_;
-        p.inc(NVB197_SET_SAMPLE_MASK_X0_Y0, {m, m, m, m});
-        cb_->sampleMaskHeld_ = m;
+    const uint32_t wantMask =
+        mixed == MixedDraw::Whole ? compatibleRasterMask_ : compatibleRasterMask_ & kFirstSampleMask;
+    if (wantMask != cb_->sampleMaskHeld_) {
+        p.inc(NVB197_SET_SAMPLE_MASK_X0_Y0, {wantMask, wantMask, wantMask, wantMask});
+        cb_->sampleMaskHeld_ = wantMask;
     }
     if (rasterSamples_ > samples_ && tirControl(pl->samples) != tirControlHeld_) {
         tirControlHeld_ = tirControl(pl->samples);
@@ -816,7 +840,8 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     }
     const AttachmentBarrier needed = access.after(attachmentWrites_.rop, attachmentWrites_.storage);
     if (needed != AttachmentBarrier::None) {
-        if (needed == AttachmentBarrier::Pixel && !fetchedCompressed && !written_.meets(geometryAnalysis)) {
+        if (needed == AttachmentBarrier::Pixel &&
+            !(fetchedCompressed ? written_.meetsTiles(geometryAnalysis) : written_.meets(geometryAnalysis))) {
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             SWITCH_METAL_DIAGNOSTIC(dev_->stats.fetchBarriersElided++);
 #endif
@@ -849,7 +874,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         WrittenRegion::nonOverlappingQuad(geometryAnalysis, primitive == 3));
     SWITCH_METAL_ENCODE_END(barrierSpan);
 #if SWITCH_METAL_DIAGNOSTICS
-    if (pipeline_ && pipeline_->caName)
+    if (pipeline_ && __atomic_load_n(&pipeline_->caName, __ATOMIC_ACQUIRE))
         probeDraw(*pipeline_, *pl, primitive, first, count, indexed, {x[0], y[0], x[1], y[1]});
 #endif
     SWITCH_METAL_DIAGNOSTIC(cb_->counts_.interlockDraws += pl->storageBits != 0);
@@ -857,7 +882,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
 #if SWITCH_METAL_DIAGNOSTICS
     if (pl->rec && pl->storageBits)
         dev_->stats.fetch.interlockKeys.note(pl->rec->keyHash);
-    if (pl->rec && pl->genericState)
+    if (pl->rec && __atomic_load_n(&pl->genericState, __ATOMIC_RELAXED))
         dev_->stats.fetch.genericKeys.note(pl->rec->keyHash);
 #endif
     SWITCH_METAL_DIAGNOSTIC(cb_->counts_.interlocked += (pl->fetchBits & pl->storageBits) != 0);

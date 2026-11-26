@@ -3,6 +3,7 @@
 #include <IOKit/IOLib.h>
 #include <kern/thread.h>
 #include <stdint.h>
+#include "SwitchGpuInheritorSleep.h"
 
 // Every operation but enterFast and leaveFast is called with the connection lock held. A queued mutation prevents new
 // submissions from extending its drain; sleeping releases that lock so other channels, status reads and CPU unlocks can
@@ -23,9 +24,9 @@ public:
 	bool enterSlow(IOLock *lock)
 	{
 		// enterFast's refused count was undone with no wake: a mutation that saw it as the last one is woken here
-		IOLockWakeup(lock, this, false);
+		switch_gpu_wakeup_inheritor(lock, this);
 		while (!closed_ && (mutations_ || mutating_))
-			IOLockSleep(lock, this, THREAD_UNINT);
+			switch_gpu_sleep_inheritor(lock, this, mutator_);
 		if (closed_)
 			return false;
 		__atomic_add_fetch(&fast_, 1u, __ATOMIC_SEQ_CST);
@@ -38,7 +39,7 @@ public:
 		    !__atomic_load_n(&blocked_, __ATOMIC_SEQ_CST))
 			return;
 		IOLockLock(lock);
-		IOLockWakeup(lock, this, false);
+		switch_gpu_wakeup_inheritor(lock, this);
 		IOLockUnlock(lock);
 	}
 
@@ -47,30 +48,32 @@ public:
 		++mutations_;
 		block();
 		while (!closed_ && (mutating_ || fast()))
-			IOLockSleep(lock, this, THREAD_UNINT);
+			switch_gpu_sleep_inheritor(lock, this, mutator_);
 		--mutations_;
 		if (closed_) {
-			IOLockWakeup(lock, this, false);
+			switch_gpu_wakeup_inheritor(lock, this);
 			return false;
 		}
 		mutating_ = true;
+		mutator_ = switch_gpu_current_thread();
 		return true;
 	}
 
 	void endMutation(IOLock *lock)
 	{
 		mutating_ = false;
+		mutator_ = nullptr;
 		block();
-		IOLockWakeup(lock, this, false);
+		switch_gpu_wakeup_inheritor(lock, this);
 	}
 
 	void close(IOLock *lock)
 	{
 		closed_ = true;
 		block();
-		IOLockWakeup(lock, this, false);
+		switch_gpu_wakeup_inheritor(lock, this);
 		while (mutating_ || fast())
-			IOLockSleep(lock, this, THREAD_UNINT);
+			switch_gpu_sleep_inheritor(lock, this, mutator_);
 	}
 
 	bool closed() const
@@ -82,6 +85,11 @@ public:
 	bool mutating() const
 	{
 		return mutating_;
+	}
+
+	SwitchGpuThreadRef mutator() const
+	{
+		return mutator_;
 	}
 
 private:
@@ -97,6 +105,7 @@ private:
 
 	unsigned mutations_ = 0;
 	bool closed_ = false, mutating_ = false;
+	SwitchGpuThreadRef mutator_ = nullptr;
 	// enterFast's submissions: at most one per channel slot, so a byte
 	uint8_t fast_ = 0;
 	bool blocked_ = false;

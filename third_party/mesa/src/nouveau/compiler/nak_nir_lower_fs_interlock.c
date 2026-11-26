@@ -221,6 +221,13 @@ nak_nir_lower_fs_interlock_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
           * the branch on its value. An atomic add of 0 would read the same
           * value but queue on L2's atomic unit beside every release.
           */
+         nir_variable *backoff_var = NULL;
+         if (tdata->load_spin) {
+            backoff_var = nir_local_variable_create(b->impl, glsl_uint_type(),
+                                                    "fsi_backoff");
+            nir_store_var(b, backoff_var, nir_imm_int(b, 32), 0x1);
+         }
+
          nir_loop *loop = nir_push_loop(b);
          {
             nir_def *current_gpc_ticket =
@@ -235,6 +242,26 @@ nak_nir_lower_fs_interlock_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
 
             nir_break_if(b, nir_ieq(b, nir_ushr_imm(b, current_gpc_ticket, 16),
                                     ticket_value));
+
+            if (tdata->load_spin) {
+               nir_def *delay = nir_load_var(b, backoff_var);
+               nir_def *start =
+                  nir_load_sysval_nv(b, 32, .base = NAK_SV_CLOCK_LO);
+               nir_ssa_bar_nv(b, start);
+
+               nir_loop *spin = nir_push_loop(b);
+               {
+                  nir_def *now =
+                     nir_load_sysval_nv(b, 32, .base = NAK_SV_CLOCK_LO);
+                  nir_ssa_bar_nv(b, now);
+                  nir_break_if(b, nir_uge(b, nir_isub(b, now, start), delay));
+               }
+               nir_pop_loop(b, spin);
+
+               nir_def *next_delay =
+                  nir_umin(b, nir_ishl_imm(b, delay, 1), nir_imm_int(b, 256));
+               nir_store_var(b, backoff_var, next_delay, 0x1);
+            }
          }
          nir_pop_loop(b, loop);
       }

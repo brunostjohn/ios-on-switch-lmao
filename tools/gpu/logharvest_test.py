@@ -67,6 +67,12 @@ def parts(boot: str, process: str, name: str, label: str, key: str) -> list[dict
     ]
 
 
+def tier1(boot: str, process: str, name: str, fast: str = '0000000000000001', pieces: int = 2, card: int = 1) -> dict:
+    return record(
+        boot, process, f'SwitchMetal: tier-1 pack state {fast} {name} in {process}: {pieces} pieces, card={card}'
+    )
+
+
 def interleaved(first: list[dict], second: list[dict]) -> list[dict]:
     out = []
     for i in range(max(len(first), len(second))):
@@ -314,6 +320,45 @@ class LogHarvestTest(unittest.TestCase):
         self.assertEqual(report.left['SwitchHWTest', 'our own app'], 1)
         self.assertEqual(report.left['cameracaptured', 'refused on the device'], 1)
         self.assertEqual(report.left['backboardd', 'key cut at 400 characters, no whole parts'], 1)
+
+    def test_a_tier1_pack_state_is_promoted_to_corpus_and_fails_check_until_added(self):
+        records = [
+            record(BOOT, 'x', 'OS version: 24B119'),
+            tier1(BOOT, 'backboardd', '0000000000000011', fast='fedcba9876543210', pieces=2, card=3),
+            *parts(BOOT, 'backboardd', '0000000000000011', CA_LABEL, CA),
+            tier1(BOOT, 'WidgetRenderer', '0000000000000012', fast='1111222233334444', pieces=1, card=0),
+            *parts(BOOT, 'WidgetRenderer', '0000000000000012', '-', COLOR),
+            tier1(BOOT, 'SwitchHWTest', '0000000000000013', fast='5555666677778888', pieces=2, card=2),
+            *parts(BOOT, 'SwitchHWTest', '0000000000000013', '-', COLOR.replace('4501', '4509')),
+        ]
+        with tempfile.TemporaryDirectory() as scratch:
+            corpus = Path(scratch) / 'corpus.log'
+            corpus.write_text(CORPUS)
+            ndjson = Path(scratch) / 'boot.ndjson'
+            ndjson.write_text(''.join(json.dumps(r) + '\n' for r in records))
+            check = ['--ndjson', str(ndjson), '--corpus', str(corpus), '--check']
+            self.assertEqual(logharvest.main(check), 1)
+            self.assertEqual(corpus.read_text(), CORPUS)
+            self.assertEqual(logharvest.main(['--ndjson', str(ndjson), '--corpus', str(corpus)]), 0)
+            added = corpus.read_text().splitlines()[2:]
+            self.assertEqual(sorted(logharvest.make_pack.state_key(line) for line in added), sorted([CA, COLOR]))
+            self.assertTrue(all(' os=24B119 ' in line for line in added))
+            self.assertEqual(logharvest.main(check), 0)
+
+    def test_a_tier1_pack_state_without_harvest_parts_fails_check(self):
+        records = [
+            record(BOOT, 'x', 'OS version: 24B119'),
+            tier1(BOOT, 'backboardd', '0000000000000014'),
+        ]
+        with tempfile.TemporaryDirectory() as scratch:
+            corpus = Path(scratch) / 'corpus.log'
+            corpus.write_text(CORPUS)
+            ndjson = Path(scratch) / 'boot.ndjson'
+            ndjson.write_text(''.join(json.dumps(r) + '\n' for r in records))
+            self.assertEqual(logharvest.main(['--ndjson', str(ndjson), '--corpus', str(corpus), '--check']), 1)
+            boots = logharvest.read_boots(records)
+            _, report = logharvest.harvest(boots, CORPUS.splitlines(), None, Path('/nonexistent'))
+            self.assertEqual(report.left['backboardd', 'tier-1 pack state has no whole harvest parts'], 1)
 
 
 IR = '/System/Library/PrivateFrameworks/IconRendering.framework/default.metallib'

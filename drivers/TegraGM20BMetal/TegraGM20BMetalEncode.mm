@@ -151,10 +151,20 @@ bool SwitchMetalRangeEncode::resources(size_t from, size_t to)
             rc->requirePitch(buffer->_raw.import, use.access & gm20b::ResourceUse::Write);
     };
     buffers(pitchBuffer);
+    bool hasNativePlaneWrite = false;
     textures([&](const SwitchMetalRangeResource &use) {
         pitchBuffer(use);
         __unsafe_unretained SwitchMetalTexture *texture = (__bridge SwitchMetalTexture *)use.object;
         const bool writes = use.access & gm20b::ResourceUse::Write;
+        const bool eligibleNativeWrite =
+            writes && !(use.access & gm20b::ResourceUse::Explicit) && !(use.access & gm20b::ResourceUse::Sample) &&
+            texture->_raw.nativePlane != ~0u && texture->_raw.import && !texture->_raw.planar && !texture->_raw.ycbcr &&
+            !texture->_raw.standIn && !texture->_raw.rotation && !texture->_raw.luma && !texture->_raw.chroma &&
+            texture->_raw.type == gm20b::fx::kTexTwoD;
+        if (eligibleNativeWrite) {
+            hasNativePlaneWrite = true;
+            return;
+        }
         if (writes || (use.access & gm20b::ResourceUse::Explicit) || !(use.access & gm20b::ResourceUse::Sample)) {
             rc->requirePitch(texture->_raw.import, writes);
             for (const gm20b::Texture *plane : {texture->_raw.luma, texture->_raw.chroma})
@@ -162,6 +172,39 @@ bool SwitchMetalRangeEncode::resources(size_t from, size_t to)
                     rc->requirePitch(plane->import, writes);
         }
     });
+    if (hasNativePlaneWrite) {
+        for (size_t at = from; at < to; ++at) {
+            const Cmd c = cb_->_plan.legacy(at);
+            if (c.op == OpBlit || c.op == OpCompute) {
+                const size_t end = std::min(cb_->_plan.encoderEnd(at), to);
+                cb_->_plan.forEachResource(
+                    at, end, SwitchMetalResourceKind::Texture, [&](const SwitchMetalRangeResource &use) {
+                        __unsafe_unretained SwitchMetalTexture *texture = (__bridge SwitchMetalTexture *)use.object;
+                        if (texture->_raw.nativePlane != ~0u)
+                            rc->requirePitch(texture->_raw.import, use.access & gm20b::ResourceUse::Write);
+                    });
+            } else if (c.op == OpRender) {
+                const SwitchMetalPass &pass = cb_->_passes[c.x];
+                for (const SwitchMetalPass::Color &a : pass.color) {
+                    if (__unsafe_unretained SwitchMetalTexture *t = (SwitchMetalTexture *)a.texture;
+                        t && t->_raw.nativePlane != ~0u &&
+                        (a.level || a.slice || pass.layers > 1 || a.resolve || t->_raw.planarStandIn ||
+                         t->_raw.planar || t->_raw.ycbcr || t->_raw.standIn || t->_raw.rotation))
+                        rc->requirePitch(t->_raw.import, true);
+                    if (__unsafe_unretained SwitchMetalTexture *r = (SwitchMetalTexture *)a.resolve;
+                        r && r->_raw.nativePlane != ~0u)
+                        rc->requirePitch(r->_raw.import, true);
+                }
+            }
+        }
+        textures([&](const SwitchMetalRangeResource &use) {
+            if (!(use.access & gm20b::ResourceUse::Write))
+                return;
+            __unsafe_unretained SwitchMetalTexture *texture = (__bridge SwitchMetalTexture *)use.object;
+            if (texture->_raw.nativePlane != ~0u && rc->writeTexture(&texture->_raw) == &texture->_raw)
+                rc->requirePitch(texture->_raw.import, true);
+        });
+    }
     textures([&](const SwitchMetalRangeResource &use) {
         if (!(use.access & gm20b::ResourceUse::Sample))
             return;

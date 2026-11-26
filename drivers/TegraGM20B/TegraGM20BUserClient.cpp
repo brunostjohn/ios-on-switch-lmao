@@ -12,6 +12,7 @@
 #include "SwitchGpuConnectionQuota.h"
 #include "SwitchGpuShaderCompiler.h"
 #include "TegraGM20BCompilerABI.h"
+#include "TegraGM20BSchedABI.h"
 #include "TegraGM20BVolatileABI.h"
 #include "TegraGM20BZcullABI.h"
 
@@ -549,7 +550,7 @@ IOReturn AGXDeviceUserClient::packImageMap(const TegraGM20BAbiPackImageMap *in,
 		IOLockUnlock(lock_);
 		return kIOReturnExclusiveAccess;
 	}
-	const bool knownCompositor = critical_ || restartNoKill_;
+	const bool knownCompositor = critical_;
 	const bool checkEntitlement = !knownCompositor && !entitlementsRead_ && in->cpu_range_count;
 	IOLockUnlock(lock_);
 
@@ -579,6 +580,7 @@ IOReturn AGXDeviceUserClient::packImageMap(const TegraGM20BAbiPackImageMap *in,
 			return wireRet;
 		}
 		staged.cpuWiredCount = in->cpu_range_count;
+		staged.cpuWiredBytes = wiredBytes;
 	}
 
 	IOLockLock(lock_);
@@ -610,6 +612,7 @@ IOReturn AGXDeviceUserClient::packImageMap(const TegraGM20BAbiPackImageMap *in,
 				packClient_.gpuMapping = gpuMapping;
 				packClient_.gpuBytes = view.tier0HeapBytes;
 				packClient_.cpuWiredCount = staged.cpuWiredCount;
+				packClient_.cpuWiredBytes = staged.cpuWiredBytes;
 				for (uint32_t i = 0; i < staged.cpuWiredCount; ++i)
 					packClient_.cpuWired[i] = staged.cpuWired[i];
 				staged = {};
@@ -644,11 +647,13 @@ void AGXDeviceUserClient::releaseMappings()
 	maps_ = nullptr;
 	SwitchGpuPackClient packCpu = {};
 	packCpu.cpuWiredCount = packClient_.cpuWiredCount;
+	packCpu.cpuWiredBytes = packClient_.cpuWiredBytes;
 	for (uint32_t i = 0; i < packCpu.cpuWiredCount; ++i) {
 		packCpu.cpuWired[i] = packClient_.cpuWired[i];
 		packClient_.cpuWired[i] = nullptr;
 	}
 	packClient_.cpuWiredCount = 0;
+	packClient_.cpuWiredBytes = 0;
 	IOLockUnlock(lock_);
 	switch_gpu_pack_client_release_cpu(&packCpu);
 	while (list) {
@@ -677,7 +682,9 @@ extern "C" uint32_t switch_gpu_info_flags(void)
 			 TegraGM20BInfoSubmitAddress | TegraGM20BInfoCpuPreserveDirty |
 			 TegraGM20BInfoCanonicalSurfaceLayout | TegraGM20BInfoChannelEpoch |
 			 TegraGM20BInfoPushFences;
-	flags |= TegraGM20BInfoPackImage | TegraGM20BInfoBoPark | TegraGM20BInfoVolatileWrites;
+	flags |= TegraGM20BInfoPackImage | TegraGM20BInfoBoPark | TegraGM20BInfoVolatileWrites |
+		 TegraGM20BInfoSameUses | TegraGM20BInfoPriorityReply |
+		 TegraGM20BInfoChannelProgress;
 	if (info.comptag_lines && switch_gpu_compression_on())
 		flags |= TegraGM20BInfoCompression;
 	if (switch_tiled_cache_on())

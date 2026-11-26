@@ -179,15 +179,15 @@ gm20b::CompileRequest layout03Request()
     return r;
 }
 
-TEST(CompileRequest, ItsLayoutIsSWCREQ07)
+TEST(CompileRequest, ItsLayoutIsSWCREQ08)
 {
-    EXPECT_EQ(gm20b::encodeRequest(layout03Request()).substr(0, 8), "SWCREQ07");
+    EXPECT_EQ(gm20b::encodeRequest(layout03Request()).substr(0, 8), "SWCREQ08");
 }
 
-// Layouts 04, 05 and 06 do not carry PipelineFields::alphaToCoverage (added in SWCREQ07)
+// Layouts 04-07 do not carry RequestLibrary::libraryId/digest (added in SWCREQ08)
 TEST(CompileRequest, ARequestOfAnOlderLayoutIsRefused)
 {
-    for (const char *magic : {"SWCREQ04", "SWCREQ05", "SWCREQ06"}) {
+    for (const char *magic : {"SWCREQ04", "SWCREQ05", "SWCREQ06", "SWCREQ07"}) {
         std::string bytes = layout03::encode(layout03Request(), true);
         bytes.replace(0, 8, magic);
         gm20b::CompileRequest back;
@@ -891,6 +891,120 @@ TEST(CompileRequest, ConstantsReadBackAsTheirText)
     ASSERT_FALSE(text.empty());
     EXPECT_EQ(gm20b::constantsText(gm20b::constantValuesOf(text)), text);
     EXPECT_EQ(gm20b::constantValuesOf("#0:9999:00"), nil);
+}
+
+TEST(CompileRequest, ClientLibraryHandleRoundTripsMatchesInlineAndChecksDigest)
+{
+    gm20b::CompileRequest inlineReq = renderRequest();
+    const gm20b::CacheKey k = runtimeKey(inlineReq);
+    inlineReq.key = k.key;
+    const std::string libBytes = inlineReq.libraries[0].bytes;
+    const gm20b::Digest digest = gm20b::sha256(libBytes.data(), libBytes.size());
+
+    gm20b::CompileRequest handleReq = inlineReq;
+    handleReq.libraries[0].bytes.clear();
+    handleReq.libraries[0].libraryId = 7;
+    handleReq.libraries[0].digest = digest;
+
+    gm20b::CompileRequest back;
+    ASSERT_TRUE(gm20b::decodeRequest(gm20b::encodeRequest(handleReq), back));
+    EXPECT_EQ(back.libraries[0].libraryId, 7u);
+    EXPECT_EQ(back.libraries[0].digest, digest);
+    EXPECT_TRUE(back.libraries[0].bytes.empty());
+
+    gm20b::CompileRequest both = handleReq;
+    both.libraries[0].bytes = libBytes;
+    EXPECT_FALSE(gm20b::decodeRequest(gm20b::encodeRequest(both), back));
+    gm20b::CompileRequest sysHandle = handleReq;
+    sysHandle.libraries[0].system = true;
+    sysHandle.libraries[0].path = "/System/Library/Frameworks/RenderBox.framework/default.metallib";
+    EXPECT_FALSE(gm20b::decodeRequest(gm20b::encodeRequest(sysHandle), back));
+
+    switch_compiler::SystemLibraries system;
+    switch_compiler::Prepared inlinePrepared;
+    std::string why;
+    ASSERT_TRUE(switch_compiler::prepare(gm20b::encodeRequest(inlineReq), kStack, system, inlinePrepared, why)) << why;
+
+    {
+        switch_compiler::Prepared rejected;
+        EXPECT_FALSE(switch_compiler::prepare(gm20b::encodeRequest(handleReq), kStack, system, rejected, why));
+    }
+
+    const std::string libBytes2 = made_metallib::universal({"vertex_fn", "fragment_fn"}, 0xA0, 0x22);
+    const gm20b::Digest digest2 = gm20b::sha256(libBytes2.data(), libBytes2.size());
+    int mapCalls = 0, unmapCalls = 0;
+    std::map<std::pair<uint64_t, uint64_t>, const std::string *> backing = {
+        {{10, 7}, &libBytes},
+        {{10, 8}, &libBytes2},
+    };
+    switch_compiler::ClientLibraries clientLibs(
+        [&](uint64_t client, uint64_t id, const uint8_t *&ptr, size_t &sz, std::string &err) {
+            mapCalls++;
+            const auto it = backing.find({client, id});
+            if (it == backing.end())
+                return err = "not found", false;
+            ptr = reinterpret_cast<const uint8_t *>(it->second->data());
+            sz = it->second->size();
+            return true;
+        },
+        [&](uint64_t, uint64_t) {
+            unmapCalls++;
+        },
+        1, 1u << 20);
+
+    switch_compiler::Prepared handlePrepared;
+    gm20b::CompileRequest badDigest = handleReq;
+    badDigest.libraries[0].digest[0] ^= 0xff;
+    EXPECT_FALSE(switch_compiler::prepare(gm20b::encodeRequest(badDigest), kStack, system, handlePrepared, why, 10,
+                                          &clientLibs));
+    EXPECT_NE(why.find("digest mismatch"), std::string::npos) << why;
+    EXPECT_EQ(mapCalls, 1);
+    EXPECT_EQ(unmapCalls, 1);
+
+    ASSERT_TRUE(
+        switch_compiler::prepare(gm20b::encodeRequest(handleReq), kStack, system, handlePrepared, why, 10, &clientLibs))
+        << why;
+    EXPECT_EQ(mapCalls, 2);
+    EXPECT_EQ(unmapCalls, 1);
+    EXPECT_EQ(handlePrepared.key.key, inlinePrepared.key.key);
+    EXPECT_EQ(handlePrepared.name, inlinePrepared.name);
+    ASSERT_EQ(handlePrepared.clientLibraries.size(), 1u);
+    ASSERT_NE(handlePrepared.clientLibraries[0], nullptr);
+
+    {
+        switch_compiler::Prepared secondPrepared;
+        ASSERT_TRUE(switch_compiler::prepare(gm20b::encodeRequest(handleReq), kStack, system, secondPrepared, why, 10,
+                                             &clientLibs))
+            << why;
+        EXPECT_EQ(mapCalls, 2);
+        EXPECT_EQ(secondPrepared.clientLibraries[0].get(), handlePrepared.clientLibraries[0].get());
+
+        EXPECT_FALSE(switch_compiler::prepare(gm20b::encodeRequest(badDigest), kStack, system, secondPrepared, why, 10,
+                                              &clientLibs));
+        EXPECT_NE(why.find("digest mismatch"), std::string::npos) << why;
+        EXPECT_EQ(mapCalls, 2);
+    }
+
+    gm20b::CompileRequest otherReq = handleReq;
+    otherReq.libraries[0].libraryId = 8;
+    otherReq.libraries[0].digest = digest2;
+    switch_compiler::Prepared otherPrepared;
+    ASSERT_TRUE(
+        switch_compiler::prepare(gm20b::encodeRequest(otherReq), kStack, system, otherPrepared, why, 10, &clientLibs))
+        << why;
+    EXPECT_EQ(mapCalls, 3);
+    EXPECT_EQ(unmapCalls, 1) << "entry 7 is still held by handlePrepared";
+    handlePrepared = {};
+    EXPECT_EQ(unmapCalls, 2) << "entry 7 unmaps as soon as the last Prepared releases it";
+
+    clientLibs.trim();
+    EXPECT_EQ(unmapCalls, 2);
+    otherPrepared = {};
+    EXPECT_EQ(unmapCalls, 3);
+    ASSERT_TRUE(
+        switch_compiler::prepare(gm20b::encodeRequest(handleReq), kStack, system, handlePrepared, why, 10, &clientLibs))
+        << why;
+    EXPECT_EQ(mapCalls, 4);
 }
 
 }  // namespace

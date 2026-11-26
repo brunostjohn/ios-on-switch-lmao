@@ -144,6 +144,15 @@ id<MTLTexture> gm20bFormView(SwitchMetalTexture *of, MTLPixelFormat format, MTLT
                              (unsigned long)format, (unsigned long)owner->_descriptor.pixelFormat, why);
         return nil;
     }
+    id<MTLCommandQueue> queue = gm20bDecodeQueue((id<MTLDevice>)of->_device);
+    if (!queue) {
+        SWITCH_REFUSE_DETAIL("gm20b", "tex.decoded_form_queue", uint32_t(format),
+                             "no view of format %lu of a format %lu texture: no command queue for the driver's own "
+                             "decode of its blocks (its handler thread could not be made): nil "
+                             "(MTLTexture.h newTextureViewWithPixelFormat:, nullable)",
+                             (unsigned long)format, (unsigned long)owner->_descriptor.pixelFormat);
+        return nil;
+    }
     const gm20b::shapes::Route route = gm20b::shapes::route(s);
     v->_gm20bOk = route != gm20b::shapes::Route::None && gm20b::shapes::create(*gRM->raw, s, route, true, 0, v->_raw);
     if (!v->_gm20bOk) {
@@ -159,7 +168,7 @@ id<MTLTexture> gm20bFormView(SwitchMetalTexture *of, MTLPixelFormat format, MTLT
         return true;
     });
     // its texels: the kept blocks blitted into it a level and a layer at a time, each decoded into it alone
-    id<MTLCommandBuffer> cb = [gm20bDecodeQueue((id<MTLDevice>)of->_device) commandBuffer];
+    id<MTLCommandBuffer> cb = [queue commandBuffer];
     id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
     const bool volume = type == MTLTextureType3D;
     const NSUInteger layers = volume ? 1 : gm20b::textureLayers(uint32_t(type), uint32_t(d.arrayLength));

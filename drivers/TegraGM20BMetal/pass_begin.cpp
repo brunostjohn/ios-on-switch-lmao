@@ -294,7 +294,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
     e.tirProbe_ = e.samples_ == 1 && e.rasterSamples_ == 4 ? dev_->probeTir.load(std::memory_order_relaxed) : 0;
     zask.on |= dev_->zcullOn_ && (e.tirProbe_ & kTirProbeZcull);
 #endif
-    zask.depth = zeta && !pass.separate.stencil && zetaHasDepth(zeta->format);
+    zask.depth = zeta && !pass.separate.stencil && zetaHasDepth(zeta->format) && pass.depthStencil.depthEnabled;
     zask.cleared = pass.depthStencil.clearDepth && !std::isnan(pass.depthStencil.depth);
     zask.layers = layers;
     zask.zetaLayers = zeta ? std::max(zeta->layers, 1u) : 1;

@@ -42,9 +42,10 @@ struct LayoutEntry {
     uint8_t texSlot = 0, smpSlot = 0;  // the probe's texture3d: kNoSlot (its Metal index is unknown)
     // a texture the programs access as a storage image: the MTLPixelFormat they were compiled for (PackPipeline::writtenFormat)
     uint16_t writtenFormat = 0;
-    bool smpCompare = false;   // a sampler slot the state samples by comparison
-    bool headerKnown = false;  // a constexpr sampler's header
-    int8_t tessBuffer = -1;    // a tessellation state's control-stage buffer (PackTessBuffer)
+    bool smpCompare = false;    // a sampler slot the state samples by comparison
+    bool texArrayView = false;  // VK_IMAGE_VIEW_TYPE_2D_ARRAY (m2v cube_as_array)
+    bool headerKnown = false;   // a constexpr sampler's header
+    int8_t tessBuffer = -1;     // a tessellation state's control-stage buffer (PackTessBuffer)
     std::array<uint32_t, 8> header = {};
 };
 
