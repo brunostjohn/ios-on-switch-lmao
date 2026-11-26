@@ -29,6 +29,7 @@
 
 #include <kern/sched_prim.h>
 #include <kern/kalloc.h>
+#include <switch/memstat_warn.h>
 #include <kern/assert.h>
 #include <kern/debug.h>
 #include <kern/locks.h>
@@ -193,6 +194,11 @@ memstat_update_memlimit_locked(proc_t p, bool use_active)
 {
 	bool ledger_needed = false;
 	LCK_MTX_ASSERT(&proc_list_mlock, LCK_MTX_ASSERT_OWNED);
+
+	/* Switch: the ledger warns on the inactive limit from here (switch/memstat_warn.h) */
+	if (!use_active) {
+		p->p_memstat_inactive_warned = 0;
+	}
 
 	/* Cache limit value */
 	if (use_active && p->p_memstat_memlimit != p->p_memstat_memlimit_active) {
@@ -3622,9 +3628,6 @@ exit:
 	return ret;
 }
 
-/* task.c's PHYS_FOOTPRINT_WARNING_LEVEL: the share of a limit the ledger warns a process at */
-#define MEMSTAT_INACTIVE_WARNING_LEVEL 80
-
 int
 memorystatus_dirty_set(proc_t p, boolean_t self, uint32_t pcontrol)
 {
@@ -3729,13 +3732,14 @@ memorystatus_dirty_set(proc_t p, boolean_t self, uint32_t pcontrol)
 	 * Switch: a clean process that ages before its idle exit keeps its active limit until its demotion, on another
 	 * thread, applies the inactive one, and its footprint meets that limit only at its next allocation, which a fatal
 	 * limit answers with a kill. Warn it now (PROC_LIMIT_WARN, as the ledger does at 80% of the limit it runs on), while
-	 * it can still give back what it holds: the GPU's driver releases its idle memory on this warning.
+	 * it can still give back what it holds: the GPU's driver releases its idle memory on this warning. Once per growth,
+	 * not per transaction (switch/memstat_warn.h).
 	 */
 	if (was_dirty && !now_dirty && p == current_proc() && p->p_memstat_memlimit_inactive > 0 &&
 	    memstat_proc_is_active_locked(p)) {
 		const uint64_t limit = (uint64_t)p->p_memstat_memlimit_inactive << 20;
 		const uint64_t footprint = get_task_phys_footprint(t);
-		if (footprint >= limit / 100 * MEMSTAT_INACTIVE_WARNING_LEVEL) {
+		if (switch_memstat_inactive_warn(footprint, limit, &p->p_memstat_inactive_warned)) {
 			warn_inactive = true;
 			warn_fatal = _memstat_proc_inactive_memlimit_is_fatal(p);
 		}
