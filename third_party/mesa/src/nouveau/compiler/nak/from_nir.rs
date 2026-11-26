@@ -3850,7 +3850,10 @@ impl<'a> ShaderFromNir<'a> {
                         SCOPE_QUEUE_FAMILY | SCOPE_DEVICE => MemScope::GPU,
                         _ => panic!("Unhandled memory scope"),
                     };
-                    b.push_op(OpMemBar { scope: mem_scope });
+                    b.push_op(OpMemBar {
+                        scope: mem_scope,
+                        vc: false,
+                    });
                 }
                 if (modes & nir_var_mem_global) != 0
                     && (semantics & NIR_MEMORY_ACQUIRE) != 0
@@ -4010,6 +4013,13 @@ impl<'a> ShaderFromNir<'a> {
                     mem_eviction_priority: MemEvictionPriority::Normal,
                 });
                 self.set_dst(&intrin.def, dst);
+            }
+            nir_intrinsic_membar_vc_nv => {
+                assert!(self.sm.sm() >= 50 && self.sm.sm() < 70);
+                b.push_op(OpMemBar {
+                    scope: MemScope::GPU,
+                    vc: true,
+                });
             }
             nir_intrinsic_ssa_bar_nv => {
                 let src = self.get_src(&srcs[0]);

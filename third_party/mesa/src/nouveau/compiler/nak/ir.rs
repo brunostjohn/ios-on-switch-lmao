@@ -7119,11 +7119,17 @@ impl_display_for_op!(OpCCtl);
 #[derive(SrcsAsSlice, DstsAsSlice)]
 pub struct OpMemBar {
     pub scope: MemScope,
+    /// SM50-SM6x MEMBAR.VC, which takes no scope
+    pub vc: bool,
 }
 
 impl DisplayOp for OpMemBar {
     fn fmt_op(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "membar.sc{}", self.scope)
+        if self.vc {
+            write!(f, "membar.vc")
+        } else {
+            write!(f, "membar.sc{}", self.scope)
+        }
     }
 }
 impl_display_for_op!(OpMemBar);

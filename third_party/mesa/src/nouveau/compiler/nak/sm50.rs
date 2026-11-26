@@ -3143,6 +3143,7 @@ impl SM50Op for OpMemBar {
         e.set_field(
             8..10,
             match self.scope {
+                _ if self.vc => 3_u8,
                 MemScope::CTA => 0_u8,
                 MemScope::GPU => 1_u8,
                 MemScope::System => 2_u8,

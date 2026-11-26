@@ -26,6 +26,7 @@ require(bool ok, const char *what)
 struct section {
    unsigned ticket_reads, waits, releases;
    unsigned clock_reads, ssa_bars;
+   unsigned vc_membars, device_releases;
    unsigned clock_reads_before_wait_break;
    bool saw_wait_break;
    nir_def *wait_addr, *release_addr;
@@ -57,6 +58,14 @@ count(nir_shader *nir, struct section *s)
                break;
             case nir_intrinsic_ssa_bar_nv:
                s->ssa_bars++;
+               break;
+            case nir_intrinsic_membar_vc_nv:
+               s->vc_membars++;
+               break;
+            case nir_intrinsic_barrier:
+               s->device_releases +=
+                  nir_intrinsic_memory_scope(intr) == SCOPE_DEVICE &&
+                  nir_intrinsic_memory_semantics(intr) == NIR_MEMORY_RELEASE;
                break;
             case nir_intrinsic_load_global:
                s->waits++;
@@ -205,6 +214,8 @@ test_compile_sm53_interlock(void)
    bool has_iadd_sub = false;
    bool has_isetp_ge_u32 = false;
    bool has_bra = false;
+   int last_membar = -1;
+   unsigned reds = 0;
 
    for (unsigned i = 0; i < n; i++) {
       uint64_t w = sm50_word(code, i);
@@ -212,6 +223,13 @@ test_compile_sm53_interlock(void)
       uint16_t op16 = (uint16_t)(w >> 48);
 
       require(op16 != 0x50c8, "sm53 interlock emitted unverified CS2R");
+
+      if (op16 == 0xef98)
+         last_membar = (int)((w >> 8) & 3);
+      if ((op16 & 0xfff8) == 0xebf8) {
+         reds++;
+         require(last_membar == 3, "sm53 release RED must follow MEMBAR.VC");
+      }
 
       if ((op16 & 0xfff8) == 0xeed0 && ((w >> 46) & 3) == 1 && first_ldg_cg < 0)
          first_ldg_cg = (int)i;
@@ -256,6 +274,7 @@ test_compile_sm53_interlock(void)
    require(has_iadd_sub, "sm53 backoff missing IADD subtraction");
    require(has_isetp_ge_u32, "sm53 backoff missing ISETP.GE.U32");
    require(has_bra, "sm53 backoff missing BRA");
+   require(reds == 1, "sm53 interlock should release with one RED");
 
    nak_shader_bin_destroy(bin);
    ralloc_free(nir);
@@ -331,9 +350,47 @@ test_compile_sm75(void)
    nak_compiler_destroy(nak);
 }
 
+/* A section as SPIR-V gives it (an acquire after the begin, a release before
+ * the end) with a demote inside: two releases, the bail-out's and the end's */
+static struct section
+lower_spirv_section(unsigned sm)
+{
+   const struct nir_shader_compiler_options options = {0};
+   nir_builder b =
+      nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT, &options, "release");
+   b.shader->info.fs.pixel_interlock_ordered = true;
+   const nir_variable_mode modes =
+      nir_var_image | nir_var_mem_ssbo | nir_var_mem_global;
+   nir_begin_invocation_interlock(&b);
+   nir_scoped_memory_barrier(&b, SCOPE_DEVICE, NIR_MEMORY_ACQUIRE, modes);
+   nir_demote_if(&b, nir_ieq_imm(&b, nir_load_subgroup_invocation(&b), 3));
+   nir_scoped_memory_barrier(&b, SCOPE_DEVICE, NIR_MEMORY_RELEASE, modes);
+   nir_end_invocation_interlock(&b);
+
+   const struct nak_compiler nak = {.sm = sm};
+   require(nak_nir_lower_fs_interlock(b.shader, &nak), "section not lowered");
+   nir_lower_vars_to_ssa(b.shader);
+   nir_opt_dce(b.shader);
+   struct section s = {0};
+   count(b.shader, &s);
+   ralloc_free(b.shader);
+   return s;
+}
+
+static void
+test_release_order(void)
+{
+   struct section s = lower_spirv_section(53);
+   require(s.releases == 2, "sm53: a release for the demote and the end");
+   require(s.vc_membars == s.releases, "sm53: a MEMBAR.VC before every release");
+   s = lower_spirv_section(75);
+   require(s.vc_membars == 0, "sm75 has no MEMBAR.VC");
+}
+
 int
 main(void)
 {
+   test_release_order();
    test_nir_lowering_sm53();
    test_nir_lowering_sm75();
    test_compile_sm53_interlock();

@@ -267,7 +267,14 @@ nak_nir_lower_fs_interlock_intrin(nir_builder *b, nir_intrinsic_instr *intrin,
       }
 
       if (ticket_update) {
-         nir_barrier(b, .execution_scope = SCOPE_INVOCATION);
+         /* GM20B: NVIDIA's compiler orders every release, a demote's
+          * included, with MEMBAR.VC: the section's writes reach L2 before
+          * the ticket's atomic add
+          */
+         if (tdata->nak->sm >= 50 && tdata->nak->sm < 70)
+            nir_membar_vc_nv(b);
+         else
+            nir_barrier(b, .execution_scope = SCOPE_INVOCATION);
          nir_global_atomic(b, 32, interlock_ticket_buffer_addr,
                            ticket_increment,
                            .atomic_op = nir_atomic_op_iadd);
