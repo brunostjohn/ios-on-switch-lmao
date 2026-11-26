@@ -123,8 +123,7 @@ TEST(GM20BMemSource, RetirementFreesWhatLeftTheTablesAfterEverySubmitLock)
 	const CodeText left = Block(retirement, "void AGXDeviceUserClient::releaseLeft()");
 	EXPECT_TRUE(left.before("left_ = {};", "IOLockUnlock(lock_);"));
 	EXPECT_TRUE(left.between("left_ = {};", "IOLockUnlock(lock_);")
-			    .has("submitGate_.mutating()) switch_gpu_sleep_inheritor(lock_, "
-				 "&submitGate_, submitGate_.mutator());"));
+			    .has("submitGate_.waitMutationEnd(lock_);"));
 	EXPECT_TRUE(left.before("passSubmitters(true);", "dropLeft(left);"));
 	EXPECT_FALSE(Block(retirement, "bool AGXDeviceUserClient::passSubmitters(bool wait)")
 			     .has("lock_"));

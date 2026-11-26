@@ -84,6 +84,14 @@ public:
 		return closed_;
 	}
 
+	// Until the running mutation ends (it may drop the lock meanwhile), pushing its thread. Every sleep on the gate goes
+	// through the gate: its sleeper count decides whether endMutation wakes anyone.
+	void waitMutationEnd(IOLock *lock)
+	{
+		while (mutating_)
+			sleep(lock);
+	}
+
 	// A method that closed the gate is running (it may have dropped the lock); its end wakes sleepers on this gate
 	bool mutating() const
 	{

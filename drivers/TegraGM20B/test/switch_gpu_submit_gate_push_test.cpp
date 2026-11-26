@@ -165,6 +165,48 @@ TEST(SubmitGatePush, ASubmissionQueuedBehindAMutationPushesItOnceItRuns)
 	EXPECT_TRUE(submit.get());
 }
 
+// Review of 5f634f298 (blocking): releaseLeft slept on the gate's event outside its sleeper count, so a mutation that ended
+// while only it slept woke no one and a client's close hung. A wait for a mutation's end is counted: endMutation wakes it,
+// and the wait pushes the mutator meanwhile.
+TEST(SubmitGatePush, AWaitForAMutationsEndIsWokenByIt)
+{
+	IOLock lock;
+	SwitchGpuSubmitGate gate;
+	std::promise<thread_t> mutatorThread;
+	std::promise<void> end;
+	auto mutation = std::async(std::launch::async, [&] {
+		IOLockLock(&lock);
+		const bool began = gate.beginMutation(&lock);
+		IOLockUnlock(&lock);
+		mutatorThread.set_value(current_thread());
+		end.get_future().wait();
+		IOLockLock(&lock);
+		if (began)
+			gate.endMutation(&lock);
+		IOLockUnlock(&lock);
+		return began;
+	});
+	const thread_t mutator = mutatorThread.get_future().get();
+	std::promise<thread_t> waiterThread;
+	auto waiter = std::async(std::launch::async, [&] {
+		waiterThread.set_value(current_thread());
+		IOLockLock(&lock);
+		gate.waitMutationEnd(&lock);
+		IOLockUnlock(&lock);
+	});
+	const thread_t waiting = waiterThread.get_future().get();
+	ASSERT_TRUE(waitFor([&](const std::vector<Sleep> &s) {
+		for (const Sleep &one : s)
+			if (one.sleeper == waiting && one.pushed == mutator)
+				return true;
+		return false;
+	})) << "the wait for the mutation's end pushes the mutator";
+	end.set_value();
+	EXPECT_EQ(waiter.wait_for(2s), std::future_status::ready)
+		<< "the mutation's end woke no one";
+	EXPECT_TRUE(mutation.get());
+}
+
 // Review nit 7: every bind cut and gated method ends a mutation; with no one asleep on the gate that is no wake call
 TEST(SubmitGatePush, AnUncontendedMutationWakesNoOne)
 {
