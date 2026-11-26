@@ -15,13 +15,17 @@ import Metal
 ///                     a barrier a triangle and one for the draw (fetch_rungs.h): routes with no pixel interlock
 ///   worst_<shape>     the largest code difference between the fetch arm's resolved image of one draw and the ROP
 ///                     arm's
+///   unwritten_<arm>   pixels of the arm's resolved image still holding what the test filled the target with first
+///   worst_clear, worst_plain  the largest code difference between the resolved image of a pass of no draw (of the
+///                     plain arm) and the CPU's image of it: four equal samples resolve to their own code
 ///   resolve_us        the 4x sRGB resolve (a pass of no draw resolved, less the same pass stored)
 ///   plain_us          a draw of a colour with no blend: the floor a draw of this target costs
 ///   lost_<n>x         pixels of a 64x64 BGRA8Unorm target at n samples that did not count all `overlaps` overlapping
 ///                     storage-form draws of fetch_add_fragment (one code each): an update lost between the interlocked
 ///                     read and write (learn/maxwell-ext.md's .CV against .CG); 0 required
-/// PASS where every arm ran on the driver with GPU stamps and each fetch arm's image is within `bound` codes of its
-/// ROP arm's (GlowAlpha exactly).
+/// PASS where every arm ran on the driver with GPU stamps, every resolve wrote every pixel, the clear and plain images
+/// are within a code of the CPU's and each fetch arm's image is within `bound` codes of its ROP arm's (GlowAlpha
+/// exactly).
 struct MapsFetchTest: HWTest {
     let id = "gpu.gm20b.maps_fetch"
     let name = "Maps' 4x sRGB framebuffer-fetch states and their resolve against the ROP"
@@ -54,6 +58,44 @@ struct MapsFetchTest: HWTest {
         try gpu.render(
             vertex: "maps_fetch_vertex", fragment: fragment, format: .bgra8Unorm_srgb, samples: Self.samples
         ) { blend($0.colorAttachments[0]) }
+    }
+
+    /// A BGRA pixel no pass here writes: only GlowAlpha leaves an alpha below 1, and it keeps the clear's colour
+    static let unwritten: [UInt8] = [7, 251, 3, 9]
+
+    static func srgbCode(_ linear: Float) -> UInt8 {
+        let v = min(max(linear, 0), 1)
+        return UInt8(((v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1 / 2.4) - 0.055) * 255).rounded())
+    }
+
+    static func clearImage() -> [UInt8] {
+        let pixel = [Float(clear.blue), Float(clear.green), Float(clear.red)].map(srgbCode) + [255]
+        return (0 ..< width * height * 4).map { pixel[$0 & 3] }
+    }
+
+    /// maps_plain_fragment's colour at each pixel's centre: the texcoord, as half, in red and green, and half in blue
+    static func plainImage() -> [UInt8] {
+        let red = (0 ..< width).map { srgbCode(Float(Float16((Float($0) + 0.5) / Float(width)))) }
+        let blue = srgbCode(0.5)
+        var bytes = [UInt8](repeating: 255, count: width * height * 4)
+        for y in 0 ..< height {
+            let green = srgbCode(Float(Float16(1 - (Float(y) + 0.5) / Float(height))))
+            for x in 0 ..< width {
+                bytes[(y * width + x) * 4] = blue
+                bytes[(y * width + x) * 4 + 1] = green
+                bytes[(y * width + x) * 4 + 2] = red[x]
+            }
+        }
+        return bytes
+    }
+
+    static func worst(_ a: [UInt8], _ b: [UInt8]) -> Int {
+        zip(a, b).map { abs(Int($0) - Int($1)) }.max() ?? 0
+    }
+
+    static func unwrittenPixels(_ image: [UInt8]) -> Int {
+        stride(from: 0, to: image.count, by: 4).filter { at in (0 ..< 4).allSatisfy { image[at + $0] == unwritten[$0] } }
+            .count
     }
 
     static let overlaps = 64
@@ -163,10 +205,23 @@ struct MapsFetchTest: HWTest {
             }
             return (Stats.percentile(times, 0.5), paths)
         }
+        let unwrittenImage = (0 ..< Self.width * Self.height * 4).map { Self.unwritten[$0 & 3] }
+        let resolvedImage = { (label: String, encode: (MTLCommandBuffer) -> Void) async throws -> [UInt8] in
+            try await gpu.upload(unwrittenImage, to: resolved, bytesPerRow: Self.width * 4)
+            _ = try await gpu.run(encode)
+            let image = try await gpu.read(resolved, bytesPerPixel: 4)
+            let unwritten = Self.unwrittenPixels(image)
+            metrics.set("unwritten_" + label, unwritten)
+            checks.append(("\(label): the resolve wrote every pixel", unwritten == 0))
+            return image
+        }
         let (bare, barePaths) = try await median(pass(nil, 0, false))
         let (bareResolved, _) = try await median(pass(nil, 0, true))
         metrics.set("resolve_us", max(0, bareResolved - bare) * 1000, digits: 1)
         metrics.set("bare_us", bare * 1000, digits: 1)
+        let worstClear = Self.worst(try await resolvedImage("clear", pass(nil, 0, true)), Self.clearImage())
+        metrics.set("worst_clear", worstClear)
+        checks.append(("the clear resolves to its own codes", worstClear <= 1))
         var images: [String: [UInt8]] = [:]
         var perDraw: [String: Double] = [:]
         for arm in arms {
@@ -182,8 +237,7 @@ struct MapsFetchTest: HWTest {
                 )
                 checks.append(("\(arm.label) on the driver", paths.union(barePaths) == ["gm20b"]))
             }
-            _ = try await gpu.run(pass(arm, 1, true))
-            images[arm.label] = try await gpu.read(resolved, bytesPerPixel: 4)
+            images[arm.label] = try await resolvedImage(arm.label, pass(arm, 1, true))
             guard facade, arm.label.hasSuffix("_fetch") else { continue }
             let shape = arm.label.dropLast("_fetch".count)
             for (rung, form) in [(5, "twin1"), (6, "twinw")] {
@@ -200,9 +254,14 @@ struct MapsFetchTest: HWTest {
             metrics.set("lost_\(samples)x", lost)
             checks.append(("\(samples)x: every overlapping fetch counted", lost == 0))
         }
+        if let plain = images["plain"] {
+            let worstPlain = Self.worst(plain, Self.plainImage())
+            metrics.set("worst_plain", worstPlain)
+            checks.append(("the plain arm resolves to the CPU's image", worstPlain <= 1))
+        }
         for (shape, bound) in [("hillshade", Self.bound), ("glow", 0)] {
             guard let fetched = images[shape + "_fetch"], let blended = images[shape + "_rop"] else { continue }
-            let worst = zip(fetched, blended).map { abs(Int($0) - Int($1)) }.max() ?? 0
+            let worst = Self.worst(fetched, blended)
             metrics.set("worst_" + shape, worst)
             checks.append(("\(shape): the fetch within \(bound) codes of the ROP", worst <= bound))
         }
