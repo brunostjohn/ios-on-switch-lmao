@@ -141,11 +141,12 @@ TEST_F(DeviceGuestBase, AnOffsetOnlyRebindRewritesTheHole)
     dev.destroyBuffer(buffer);
 }
 
-// An indirect command buffer's commands bind their own buffers, which never reach a hole: their draw of such a state is
-// refused with its reason, never drawn with the record's static word as an address
-TEST_F(DeviceGuestBase, AnIndirectCommandBuffersDrawOfAHoleStateIsRefused)
+// An indirect command buffer's commands inherit the encoder's buffers, so its draw of a hole state writes the bound
+// buffer's address into the hole as a direct draw does
+TEST_F(DeviceGuestBase, AnIndirectCommandBuffersDrawWritesTheInheritedBuffersAddress)
 {
-    gm20b::Buffer slots;
+    gm20b::Buffer buffer, slots;
+    ASSERT_TRUE(dev.createBuffer(256, buffer, true));
     ASSERT_TRUE(dev.createBuffer(gm20b::icb::kSlotWords * 4, slots));
     gm20b::icb::draw(reinterpret_cast<uint32_t *>(slots.cpu), 0, {3, 3, 1, 0, 0});
     gm20b::CommandBuffer *cb = dev.begin();
@@ -157,13 +158,18 @@ TEST_F(DeviceGuestBase, AnIndirectCommandBuffersDrawOfAHoleStateIsRefused)
     gm20b::RenderEncoder *e = cb->render(desc);
     ASSERT_NE(e, nullptr);
     e->setPipeline(pl);
+    e->setBuffer(1, 5, &buffer, 32);
     const char *why = nullptr;
-    EXPECT_FALSE(
-        e->executeSlots({&slots, 0, 1, gm20b::icb::kSlotWords, nullptr, 0, 3, false, false, nullptr, 0}, &why));
-    EXPECT_EQ(cb->refusal.id, gm20b::RefGuestBaseIcb) << (why ? why : "");
+    ASSERT_TRUE(e->executeSlots({&slots, 0, 1, gm20b::icb::kSlotWords, nullptr, 0, 3, false, false, nullptr, 0}, &why))
+        << (why ? why : "");
     e->end();
-    cb->abandon();
+    uint32_t seqno = 0;
+    ASSERT_TRUE(cb->commit(seqno));
+    const uint64_t va =
+        uint64_t(gm20b::DeviceHarness::rootPush(dev, 3)) << 32 | gm20b::DeviceHarness::rootPush(dev, 2);
+    EXPECT_EQ(va, buffer.va + 32);
     dev.destroyBuffer(slots);
+    dev.destroyBuffer(buffer);
 }
 
 }  // namespace

@@ -230,14 +230,6 @@ bool drawFailed(SwitchMetalCommandBuffer *cb, const gm20b::Refusal &f, const cha
                       "colour, and a texture sampled without MTLTextureUsageShaderRead is Metal's validation error",
                       why, f.a, f.b);
         break;
-    // the commands' binds never reach the program's SlotGuestBase hole (Pipeline::guestBases), so the program would read
-    // the record's static word as the buffer's address
-    case gm20b::RefGuestBaseIcb:
-        SWITCH_REFUSE("gm20b", "draw.icb_guest_base",
-                      "%s (slot %u, stage %u): MTLCommandBufferErrorInternal (MTLCommandBuffer.h); the driver fills a "
-                      "buffer's address only into a direct draw's push words",
-                      why, f.a, f.b);
-        break;
     // draws Metal takes that the driver has no form of yet: never handed to m2v either
     case gm20b::RefStrideTwin:
         SWITCH_REFUSE("gm20b", "draw.stride_twin", "%s: the driver has no form of it yet; the command buffer fails",
