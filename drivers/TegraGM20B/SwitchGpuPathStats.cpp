@@ -287,7 +287,8 @@ extern "C" void switch_gpu_path_job(uint32_t visibility, int unlocked_writes, in
 				    uint32_t ranged_uses)
 {
 	if (visibility & SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT)
-		switch_gpu_path_taken(visibility & SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY ? SWITCH_GPU_PATH_EXTERNAL_JOB
+		switch_gpu_path_taken(visibility & SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY
+					      ? SWITCH_GPU_PATH_EXTERNAL_JOB
 				      : visibility & SWITCH_GPU_SUBMIT_VOLATILE_VISIBILITY
 					      ? SWITCH_GPU_PATH_VOLATILE_JOB
 					      : SWITCH_GPU_PATH_INTERNAL_JOB,

@@ -134,10 +134,20 @@ Spare *spareMake(SparePool *p, uint64_t bytes)
 #endif
 	}
 	made = made || switch_gpu_cached_buffer_pages(bytes, &buffer);
-	if (s && pas && made && switch_gpu_cached_buffer_page_list(buffer, bytes, pas)) {
+	const bool listed =
+		s && pas && made && switch_gpu_cached_buffer_page_list(buffer, bytes, pas);
+	if (listed) {
 		*s = {nullptr, buffer, pas, bytes, nullptr};
 		return s;
 	}
+	static bool told;
+	if (!__atomic_exchange_n(&told, true, __ATOMIC_RELAXED))
+		IOLog("tegra-gm20b: the spare refill could not make a %llu KiB spare: %s; "
+		      "further ones not logged\n",
+		      bytes >> 10,
+		      !s || !pas ? "no memory for its records"
+		      : !made    ? "the VM gave no pages"
+				 : "its page list is not below the GPU's 34 bits");
 	switch_gpu_cached_buffer_free(&buffer);
 	if (pas)
 		IODelete(pas, uint64_t, bytes >> 12);
@@ -166,7 +176,7 @@ void spareZeroed(void *context, int result)
 	p->fillFailed = p->fillFailed || result;
 	const bool hasDirty = p->dirty != nullptr || p->poolDirty != nullptr;
 	const bool needFill = !p->fillFailed && spareRoom() &&
-			      switch_gpu_spare_books_refill(b, kSpareCapBytes) != SWITCH_GPU_SPARE_NONE;
+			      switch_gpu_spare_books_wants_refill(b, kSpareCapBytes);
 	IOLockUnlock(p->lock);
 	if (firstFailure)
 		IOLog("tegra-gm20b: the copy engine's zero-fill of a %llu KiB spare "
@@ -386,7 +396,8 @@ Spare *spareTake(uint64_t bytes, bool critical)
 	const bool pressure = memoryPressure();
 	const bool room = spareRoom();
 	const bool kickRecycle = pressure && b.held != 0;
-	const bool kickFill = !pressure && room && switch_gpu_spare_books_short(b, c);
+	const bool kickFill =
+		!pressure && room && switch_gpu_spare_books_wants_refill(b, kSpareCapBytes);
 	if (kickFill || kickRecycle)
 		p->fillFailed = false;
 	IOLockUnlock(p->lock);
@@ -512,17 +523,18 @@ extern "C" unsigned long tgm_owner_stats(char *out, unsigned long size)
 	for (const uint32_t m : p->misses)
 		missed += m;
 	const int n =
-		missed ? snprintf(out + at, size - at,
-				  "%sspare misses: first %u, zeroing %u, drained %u, pressure %u, "
-				  "ineligible %u, reserved %u; copy-engine zero busy %u, failed %u; "
-				  "refill refused %u, not in 128 KiB units %u",
-				  at ? "; " : "", p->misses[SWITCH_GPU_SPARE_FIRST],
-				  p->misses[SWITCH_GPU_SPARE_ZEROING],
-				  p->misses[SWITCH_GPU_SPARE_DRAINED],
-				  p->misses[SWITCH_GPU_SPARE_PRESSURE],
-				  p->misses[SWITCH_GPU_SPARE_INELIGIBLE],
-				  p->misses[SWITCH_GPU_SPARE_RESERVED], p->zeroBusy,
-				  p->zeroFailed, p->refillRefused, p->notUnits)
+		missed ? snprintf(
+				 out + at, size - at,
+				 "%sspare misses: first %u, zeroing %u, drained %u, pressure %u, "
+				 "ineligible %u, reserved %u; copy-engine zero busy %u, failed %u; "
+				 "refill refused %u, not in 128 KiB units %u",
+				 at ? "; " : "", p->misses[SWITCH_GPU_SPARE_FIRST],
+				 p->misses[SWITCH_GPU_SPARE_ZEROING],
+				 p->misses[SWITCH_GPU_SPARE_DRAINED],
+				 p->misses[SWITCH_GPU_SPARE_PRESSURE],
+				 p->misses[SWITCH_GPU_SPARE_INELIGIBLE],
+				 p->misses[SWITCH_GPU_SPARE_RESERVED], p->zeroBusy, p->zeroFailed,
+				 p->refillRefused, p->notUnits)
 		       : 0;
 	if (n > 0)
 		at = at + size_t(n) < size ? at + size_t(n) : size - 1;

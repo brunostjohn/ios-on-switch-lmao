@@ -208,8 +208,9 @@ struct SparePool {
 	PoolZero *poolDirty;  // freed pool BOs, not yet zeroed
 	Spare *ready
 		[kClasses];  // zeroed and clean, by class (classUp(bytes) <= class of a spare's bytes)
-	switch_gpu_spare_books books;  // the lists' counts and bytes, and the depths (SwitchGpuSpareBooks.h)
-	uint64_t poolZeroing;          // pool bytes waiting for the scrub
+	switch_gpu_spare_books
+		books;  // the lists' counts and bytes, and the depths (SwitchGpuSpareBooks.h)
+	uint64_t poolZeroing;  // pool bytes waiting for the scrub
 	// a copy-engine fill failed: no spare is made until the next BoAlloc asks
 	bool fillFailed;
 #if TGM_STATS

@@ -52,7 +52,9 @@ void sleepOn(IOLock *lock)
 bool waitFor(const std::function<bool(const std::vector<Sleep> &)> &seen)
 {
 	std::unique_lock<std::mutex> held(gRecord);
-	return gRecorded.wait_for(held, 2s, [&] { return seen(gSleeps); });
+	return gRecorded.wait_for(held, 2s, [&] {
+		return seen(gSleeps);
+	});
 }
 }  // namespace
 
@@ -85,8 +87,8 @@ void IOLockWakeup(IOLock *lock, void *, bool)
 	lock->woken.notify_all();
 }
 
-wait_result_t lck_mtx_sleep_with_inheritor(lck_mtx_t *lock, lck_sleep_action_t, event_t, thread_t inheritor,
-					   wait_interrupt_t, uint64_t)
+wait_result_t lck_mtx_sleep_with_inheritor(lck_mtx_t *lock, lck_sleep_action_t, event_t,
+					   thread_t inheritor, wait_interrupt_t, uint64_t)
 {
 	record(inheritor);
 	sleepOn(reinterpret_cast<IOLock *>(lock));

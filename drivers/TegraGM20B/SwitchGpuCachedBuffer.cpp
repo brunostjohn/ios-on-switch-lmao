@@ -75,7 +75,7 @@ SwitchGpuCachedBuffer switch_gpu_cached_buffer_of(IOMemoryDescriptor *memory)
 }
 
 bool switch_gpu_cached_buffer_page_list(const SwitchGpuCachedBuffer &buffer, uint64_t bytes,
-				       uint64_t *pas)
+					uint64_t *pas)
 {
 	for (uint64_t off = 0; off < bytes;) {
 		IOByteCount run = 0;

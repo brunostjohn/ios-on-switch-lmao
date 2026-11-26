@@ -8,9 +8,11 @@
 struct switch_gpu_spare_books {
 	uint16_t ready[SWITCH_GPU_SPARE_CLASSES];    // zeroed and clean
 	uint16_t zeroing[SWITCH_GPU_SPARE_CLASSES];  // on the copy engine
-	uint16_t dirty[SWITCH_GPU_SPARE_CLASSES];    // freed or newly made, waiting for the copy engine
-	uint16_t depth[SWITCH_GPU_SPARE_CLASSES];    // kept this deep
-	uint16_t floor[SWITCH_GPU_SPARE_CLASSES];    // the warm table's count: no miss lowers the depth below it
+	uint16_t dirty
+		[SWITCH_GPU_SPARE_CLASSES];  // freed or newly made, waiting for the copy engine
+	uint16_t depth[SWITCH_GPU_SPARE_CLASSES];  // kept this deep
+	uint16_t floor
+		[SWITCH_GPU_SPARE_CLASSES];  // the warm table's count: no miss lowers the depth below it
 	bool reserved[SWITCH_GPU_SPARE_CLASSES];
 	// Bytes of every spare above, in any state, plus one the refill is making: the cap bounds all of them, so a copy
 	// engine too busy to zero cannot let the refill wire past it
@@ -76,19 +78,29 @@ inline uint32_t switch_gpu_spare_books_refill(const switch_gpu_spare_books &b, u
 	return SWITCH_GPU_SPARE_NONE;
 }
 
+// Whether the refill has a spare to make: after a take, the class taken from may be short while the asked one has no
+// depth (backboardd's 17,280 KiB BOs, a 20 MiB class, are served by the 24 MiB class's spares)
+inline bool switch_gpu_spare_books_wants_refill(const switch_gpu_spare_books &b, uint64_t cap)
+{
+	return switch_gpu_spare_books_refill(b, cap) != SWITCH_GPU_SPARE_NONE;
+}
+
 // Whether the copy engine zeroes a dirty spare of class `c` (already off the dirty count, its bytes still held) rather
 // than it going back to the VM: under the cap as it is, or, for a class below its depth, once the spares past theirs
 // have gone back. Freed BOs of classes nobody keeps a depth of are kept only while they fit.
 inline bool switch_gpu_spare_books_keep(const switch_gpu_spare_books &b, uint32_t c, uint64_t cap)
 {
-	return b.held <= cap || (switch_gpu_spare_books_short(b, c) && switch_gpu_spare_books_fit(b, 0, cap));
+	return b.held <= cap ||
+	       (switch_gpu_spare_books_short(b, c) && switch_gpu_spare_books_fit(b, 0, cap));
 }
 
 // The class a BoAlloc of class `asked` takes a ready spare from, or SWITCH_GPU_SPARE_NONE. A client that is not the
 // compositor leaves a reserved class's last ready spare.
-inline uint32_t switch_gpu_spare_books_take(const switch_gpu_spare_books &b, uint32_t asked, bool compositor)
+inline uint32_t switch_gpu_spare_books_take(const switch_gpu_spare_books &b, uint32_t asked,
+					    bool compositor)
 {
-	for (uint32_t d = asked; d < SWITCH_GPU_SPARE_CLASSES && switch_gpu_spare_serves(asked, d); d++) {
+	for (uint32_t d = asked; d < SWITCH_GPU_SPARE_CLASSES && switch_gpu_spare_serves(asked, d);
+	     d++) {
 		if (!b.ready[d] || (!compositor && b.reserved[d] && b.ready[d] <= 1))
 			continue;
 		return d;
@@ -97,24 +109,29 @@ inline uint32_t switch_gpu_spare_books_take(const switch_gpu_spare_books &b, uin
 }
 
 // Why a BoAlloc of class `asked` found no spare to take
-inline switch_gpu_spare_miss switch_gpu_spare_books_why(const switch_gpu_spare_books &b, uint32_t asked,
-							bool compositor, bool pressure)
+inline switch_gpu_spare_miss switch_gpu_spare_books_why(const switch_gpu_spare_books &b,
+							uint32_t asked, bool compositor,
+							bool pressure)
 {
 	if (!pressure && !compositor) {
-		for (uint32_t d = asked; d < SWITCH_GPU_SPARE_CLASSES && switch_gpu_spare_serves(asked, d); d++) {
+		for (uint32_t d = asked;
+		     d < SWITCH_GPU_SPARE_CLASSES && switch_gpu_spare_serves(asked, d); d++) {
 			if (b.ready[d])
 				return SWITCH_GPU_SPARE_RESERVED;
 		}
 	}
-	return switch_gpu_spare_miss_of(b.depth[asked], uint16_t(b.zeroing[asked] + b.dirty[asked]), pressure);
+	return switch_gpu_spare_miss_of(b.depth[asked], uint16_t(b.zeroing[asked] + b.dirty[asked]),
+					pressure);
 }
 
 // A miss of class `asked` teaches it a deeper depth, within its cap and never below its warm count
-inline void switch_gpu_spare_books_learn(switch_gpu_spare_books &b, uint32_t asked, switch_gpu_spare_miss why,
-					 uint64_t learn_max_bytes, uint64_t cap)
+inline void switch_gpu_spare_books_learn(switch_gpu_spare_books &b, uint32_t asked,
+					 switch_gpu_spare_miss why, uint64_t learn_max_bytes,
+					 uint64_t cap)
 {
 	const uint64_t bytes = switch_gpu_spare_class_bytes(asked);
-	const uint16_t learnt = switch_gpu_spare_depth_after_miss(b.depth[asked], bytes <= learn_max_bytes, why);
+	const uint16_t learnt =
+		switch_gpu_spare_depth_after_miss(b.depth[asked], bytes <= learn_max_bytes, why);
 	const uint16_t most = switch_gpu_spare_depth_cap(bytes, cap, b.floor[asked]);
 	b.depth[asked] = learnt < most ? learnt : most;
 	if (b.depth[asked] < b.floor[asked])

@@ -125,7 +125,7 @@ TEST(GM20BPoolPolicySource, SystemBosNeverUseSpares)
 	const CodeText alloc = Block(client(), "IOReturn AGXDeviceUserClient::boAlloc(");
 	EXPECT_TRUE(alloc.has("if (!ret && !bo->pool_va && !compressible && !system && "
 			      "!(in->flags & TegraGM20BBoContiguous)) spare = spareTake(in->bytes, "
-			      "critical_);"));
+			      "charge.critical);"));
 	EXPECT_TRUE(alloc.has("(in->flags & TegraGM20BBoContiguous) || system ? kClasses : "
 			      "classUp(in->bytes);"));
 	EXPECT_TRUE(alloc.has("cleanZeros(va, backing);"));
@@ -1871,15 +1871,17 @@ TEST(GM20BParkedBoSource, LockOrderAndOffLockVmCalls)
 // the kernel compares no byte count with the cap itself, and every push onto the dirty list is counted in the books.
 TEST(GM20BSparesSource, ThePoolDecidesThroughTheBooks)
 {
-	const CodeText work = Block(client(), "void spareWork(thread_call_param_t param, thread_call_param_t)");
+	const CodeText work =
+		Block(client(), "void spareWork(thread_call_param_t param, thread_call_param_t)");
 	EXPECT_TRUE(work.has("switch_gpu_spare_books_refill(b, kSpareCapBytes)"));
 	EXPECT_TRUE(work.before("++b.dirty[c];", "spareMake(p, classBytes(c))"));
-	const CodeText recycle =
-		Block(client(), "void spareRecycleWork(thread_call_param_t param, thread_call_param_t)");
+	const CodeText recycle = Block(
+		client(), "void spareRecycleWork(thread_call_param_t param, thread_call_param_t)");
 	EXPECT_TRUE(recycle.has("switch_gpu_spare_books_keep(b, c, kSpareCapBytes)"));
 	const CodeText take = Block(client(), "Spare *spareTake(uint64_t bytes, bool critical)");
 	EXPECT_TRUE(take.has("switch_gpu_spare_books_take(b, c, critical)"));
-	EXPECT_TRUE(take.has("switch_gpu_spare_books_learn(b, c, why, kLearnMaxBytes, kSpareCapBytes);"));
+	EXPECT_TRUE(take.has(
+		"switch_gpu_spare_books_learn(b, c, why, kLearnMaxBytes, kSpareCapBytes);"));
 	for (const CodeText &body : {work, recycle, take})
 		EXPECT_FALSE(body.has("<= kSpareCapBytes") || body.has("> kSpareCapBytes"));
 	const CodeText keep = Block(client(), "bool spareKeep(const SwitchGpuCachedBuffer &buffer");
@@ -1895,9 +1897,11 @@ TEST(GM20BSparesSource, ARefilledSparesPagesComeFromItsDescriptor)
 	const CodeText make = Block(client(), "Spare *spareMake(SparePool *p, uint64_t bytes)");
 	EXPECT_TRUE(make.has("switch_gpu_cached_buffer_page_list(buffer, bytes, pas)"));
 	EXPECT_FALSE(make.has("kernelPages"));
-	const CodeText units = Block(SourceText("../SwitchGpuCachedBuffer.cpp"),
-				     "bool switch_gpu_cached_buffer_units(uint64_t bytes, SwitchGpuCachedBuffer *out)");
-	EXPECT_TRUE(units.has("createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapPrefault)"));
+	const CodeText units = Block(
+		SourceText("../SwitchGpuCachedBuffer.cpp"),
+		"bool switch_gpu_cached_buffer_units(uint64_t bytes, SwitchGpuCachedBuffer *out)");
+	EXPECT_TRUE(
+		units.has("createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapPrefault)"));
 }
 
 // The spare workers allocate, wire, free and sometimes memset memory: never above user priority.

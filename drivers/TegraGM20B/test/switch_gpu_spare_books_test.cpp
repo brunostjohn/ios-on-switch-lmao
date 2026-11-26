@@ -29,6 +29,9 @@ struct Pool {
 	std::vector<uint64_t> dirty;  // spare bytes, as the kernel's dirty list
 	bool copyEngineBusy = false;  // switch_gpu_cached_zero answers -16
 	bool unitsRefused = false;    // the refill before the fix: no spare of 512 KiB or more
+	bool kicked = false;          // a worker's thread call entered and not run yet
+	bool kickAskedOnly =
+		false;  // the take before the fix: the refill kicked only for the asked class
 	unsigned made = 0, refused = 0, misses = 0;
 	uint64_t peak = 0;
 
@@ -55,7 +58,8 @@ struct Pool {
 
 	void refill()
 	{
-		for (uint32_t c; (c = switch_gpu_spare_books_refill(b, kCap)) != SWITCH_GPU_SPARE_NONE;) {
+		for (uint32_t c;
+		     (c = switch_gpu_spare_books_refill(b, kCap)) != SWITCH_GPU_SPARE_NONE;) {
 			giveBack(bytesOf(c));
 			b.held += bytesOf(c);
 			++b.dirty[c];
@@ -70,6 +74,14 @@ struct Pool {
 			dirty.push_back(bytesOf(c));
 			recycle();
 		}
+	}
+
+	// the thread calls entered since the last settle run, as they would before the next BoAlloc comes
+	void settle()
+	{
+		if (kicked)
+			refill();
+		kicked = false;
 	}
 
 	void recycle()
@@ -93,6 +105,7 @@ struct Pool {
 		}
 	}
 
+	// spareTake, then the refill only where it kicks it
 	bool take(uint64_t bytes, bool compositor)
 	{
 		const uint32_t c = classOf(bytes);
@@ -100,12 +113,15 @@ struct Pool {
 		if (d != SWITCH_GPU_SPARE_NONE) {
 			--b.ready[d];
 			b.held -= bytesOf(d);
-			return true;
+		} else {
+			++misses;
+			switch_gpu_spare_books_learn(
+				b, c, switch_gpu_spare_books_why(b, c, compositor, false),
+				kLearnMax, kCap);
 		}
-		++misses;
-		switch_gpu_spare_books_learn(b, c, switch_gpu_spare_books_why(b, c, compositor, false), kLearnMax,
-					     kCap);
-		return false;
+		kicked |= kickAskedOnly ? switch_gpu_spare_books_short(b, c)
+					: switch_gpu_spare_books_wants_refill(b, kCap);
+		return d != SWITCH_GPU_SPARE_NONE;
 	}
 
 	// A freed BO of class `bytes` back to the spares (spareKeep), then the workers run
@@ -116,7 +132,7 @@ struct Pool {
 		++b.dirty[switch_gpu_spare_class_of_spare(backing)];
 		dirty.push_back(backing);
 		recycle();
-		refill();
+		kicked |= switch_gpu_spare_books_wants_refill(b, kCap);
 		EXPECT_LE(b.held, kCap) << "once the freed BO has been kept or given back";
 	}
 
@@ -151,7 +167,8 @@ TEST(SpareBooks, TheCompositorsClassHoldsItsReserveFromBoot)
 	const uint32_t sixteen = classOf(16 * kMiB);
 	p.b.ready[sixteen] = 0;
 	p.take(16 * kMiB, false);
-	EXPECT_GE(p.b.depth[sixteen], 2) << "a miss in a warm class kept two lowered it to the quarter-cap depth";
+	EXPECT_GE(p.b.depth[sixteen], 2)
+		<< "a miss in a warm class kept two lowered it to the quarter-cap depth";
 }
 
 // 25 Nov: gpu.path.launch_target's 1792x1472 RGBA16F target (21,504 KiB), made twice by an app: the first takes one of
@@ -164,7 +181,8 @@ TEST(SpareBooks, AnAppsLaunchTargetLeavesTheCompositorsSpare)
 	EXPECT_TRUE(p.take(target, false));
 	EXPECT_EQ(p.b.ready[classOf(24 * kMiB)], 1);
 	EXPECT_FALSE(p.take(target, false)) << "the last one is the compositor's";
-	EXPECT_EQ(switch_gpu_spare_books_why(p.b, classOf(target), false, false), SWITCH_GPU_SPARE_RESERVED);
+	EXPECT_EQ(switch_gpu_spare_books_why(p.b, classOf(target), false, false),
+		  SWITCH_GPU_SPARE_RESERVED);
 	EXPECT_TRUE(p.take(target, true));
 	p.refill();
 	EXPECT_EQ(p.b.ready[classOf(24 * kMiB)], 2);
@@ -182,6 +200,7 @@ TEST(SpareBooks, LaunchTargetReplayBeforeAndAfter)
 		for (int round = 0; round < 2; ++round) {
 			p.take(target, false);
 			p.free(target);
+			p.settle();
 		}
 		return p.misses;
 	};
@@ -211,9 +230,12 @@ TEST(SpareBooks, AFullPoolKeepsTheCompositorsChurnedTargets)
 {
 	const auto churn = [](bool roomForShortClasses) {
 		Pool p;
+		p.unitsRefused = p.kickAskedOnly = !roomForShortClasses;
 		p.refill();
-		EXPECT_TRUE(p.take(24 * kMiB, true));
-		EXPECT_TRUE(p.take(24 * kMiB, true));
+		// two of the compositor's targets live, which the pool before the fix had no spare for anyway
+		p.take(24 * kMiB, true);
+		p.take(24 * kMiB, true);
+		EXPECT_EQ(p.b.ready[classOf(24 * kMiB)], 0);
 		while (p.b.held + 4 * kMiB <= kCap) {
 			p.b.held += 4 * kMiB;
 			++p.b.ready[classOf(4 * kMiB)];
@@ -223,18 +245,38 @@ TEST(SpareBooks, AFullPoolKeepsTheCompositorsChurnedTargets)
 		for (int i = 0; i < 10; ++i) {
 			if (!p.take(bo, true))
 				++remade;
+			p.settle();
 			if (roomForShortClasses) {
 				p.free(bo);
 			} else if (p.b.held + bytesOf(classOf(bo)) <= kCap) {
 				p.b.held += bytesOf(classOf(bo));
 				++p.b.ready[classOf(bo)];
 			}
+			p.settle();
 		}
 		EXPECT_LE(p.peak, kCap);
 		return remade;
 	};
 	EXPECT_EQ(churn(false), 10u);
 	EXPECT_EQ(churn(true), 1u);
+}
+
+// backboardd's 17,280 KiB BOs ask the 20 MiB class, which has no depth until a miss; the 24 MiB class's spares serve
+// them. A take that kicked the refill only for the asked class left the class it took from short until a miss.
+TEST(SpareBooks, ATakeFromALargerClassRefillsThatClass)
+{
+	const auto burst = [](bool kickAskedOnly) {
+		Pool p;
+		p.kickAskedOnly = kickAskedOnly;
+		p.refill();
+		for (int i = 0; i < 3; ++i) {
+			p.take(17280 * kKiB, true);
+			p.settle();
+		}
+		return p.misses;
+	};
+	EXPECT_EQ(burst(true), 1u);
+	EXPECT_EQ(burst(false), 0u);
 }
 
 TEST(SpareBooks, AFreedBoOfAClassNobodyKeepsGoesBackWhenThePoolIsFull)
@@ -256,8 +298,10 @@ TEST(SpareBooks, ASpareServesItsOwnClassAndTheFourAboveIt)
 {
 	Pool p;
 	p.refill();
-	EXPECT_EQ(switch_gpu_spare_books_take(p.b, classOf(17280 * kKiB), true), classOf(24 * kMiB));
-	EXPECT_EQ(switch_gpu_spare_books_take(p.b, classOf(300 * kKiB), false), SWITCH_GPU_SPARE_NONE);
+	EXPECT_EQ(switch_gpu_spare_books_take(p.b, classOf(17280 * kKiB), true),
+		  classOf(24 * kMiB));
+	EXPECT_EQ(switch_gpu_spare_books_take(p.b, classOf(300 * kKiB), false),
+		  SWITCH_GPU_SPARE_NONE);
 }
 
 }  // namespace
