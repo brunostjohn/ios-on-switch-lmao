@@ -3767,6 +3767,34 @@ host_test(
 )
 
 host_test(
+    name = "direct_guest_base_test",
+    srcs = [
+        "direct_guest_base_test.cpp",
+        "//drivers/TegraGM20BMetal:descriptors.h",
+        "//drivers/TegraGM20BMetal:direct.h",
+        "//drivers/TegraGM20BMetal:direct_abi.h",
+        "//drivers/TegraGM20BMetal:direct_encode.h",
+        "//drivers/TegraGM20BMetal:direct_heap.h",
+        "//drivers/TegraGM20BMetal:direct_nvk.h",
+        "//drivers/TegraGM20BMetal:direct_push.h",
+        "//drivers/TegraGM20BMetal:dynamic_push.h",
+        "//drivers/TegraGM20BMetal:pack.h",
+        "//drivers/TegraGM20BMetal:pack/probe_bind.h",
+        "//drivers/TegraGM20BMetal:record.h",
+        "//drivers/TegraGM20BMetal:record_parts.h",
+        "//drivers/TegraGM20BMetal:set_entries.h",
+        "//drivers/TegraGM20BMetal:set_layout.h",
+        "//drivers/TegraGM20BMetal:spill_table.h",
+        "//kits/SwitchGM20B:class_headers",
+    ],
+    copts = [
+        "-Idrivers/TegraGM20BMetal/plugin",
+        "-Ithird_party/mesa/src/nouveau/headers",
+    ],
+    cxx_std = "c++17",
+)
+
+host_test(
     name = "direct_encode_test",
     srcs = [
         "direct_encode_test.cpp",
