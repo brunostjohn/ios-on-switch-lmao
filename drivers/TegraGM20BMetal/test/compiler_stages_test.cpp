@@ -446,3 +446,24 @@ TEST_F(CompilerStages, AnAmplifiedFetchStateTakesTheStorageForm)
         }
     }
 }
+
+// A multisampled fetching state of vertex amplification: its draws' layered form has no multisampled storage, so it
+// fetches through its input attachment, beside a depth and stencil attachment or none, and its record still draws each
+// amplification into its layer
+TEST_F(CompilerStages, AMultisampledAmplifiedFetchStateReadsItsInputAttachment)
+{
+    nmb_keep_translations(0);
+    Compiler compiler(false);
+    for (const char *head : {"samples=4 topo=3 ds=0/0 amp=2", "samples=4 topo=3 ds=260/260 amp=2"}) {
+        const Made made = compiler.render(state(head, "c0=70:15:1:1:5:0:1:5:0", kAttributes, kFetch));
+        ASSERT_EQ(made.result, TegraGM20BCompileMade) << head << ": " << made.why;
+        gm20b::RuntimeRecord record;
+        std::string refusal;
+        ASSERT_EQ(gm20b::decodeEntry(made.entry, made.key, record, refusal), gm20b::RecordCache::Found::Record)
+            << head << ": " << refusal;
+        EXPECT_TRUE(record.pipeline.flags & gm20b::PipelineFetches) << head;
+        EXPECT_EQ(record.pipeline.storageMask, 0u) << head;
+        EXPECT_EQ(record.pipeline.amplificationMax, 2u) << head;
+        EXPECT_TRUE(gm20b::layeredRecord(uint8_t(record.pipeline.arrayLengthWord))) << head;
+    }
+}

@@ -152,6 +152,11 @@ fn unmodelled_states_are_not_implemented() {
     amplified.amplified = true;
     assert_eq!(form(&amplified, false, READS, &p), form(&r32, false, READS, &p));
     assert!(form(&amplified, false, WRITES, &p).is_ok());
+    // A multisampled amplified pipeline's read is its input attachment's: its draws' layered form
+    // has no multisampled storage.
+    assert!(form(&r32, true, READS, &p).is_ok());
+    assert_eq!(form(&amplified, true, READS, &p), ni);
+    assert_eq!(form(&amplified, true, WRITES, &p), ni);
     for pf in [PixelFormat::R8UnormSRGB, PixelFormat::RG8UnormSRGB] {
         let srgb = state(pf, |_| {});
         assert_eq!(form(&srgb, false, READS, &p), ni, "{pf:?}");

@@ -30,7 +30,8 @@
 //!
 //! - one view at a time: an amplified pipeline's draws are drawn one amplification each, every
 //!   one into its layer of the pass (the binder refuses its storage form where they would be
-//!   multiview views, which one image of the pass's layers does not address);
+//!   multiview views, which one image of the pass's layers does not address), and so in the
+//!   layered form, which a multisampled function has none of ([`plan_layer`]);
 //! - for a written attachment whose write mask covers some of its format's channels (one that
 //!   covers none stores nothing, so none of this bears on it): no blending but one and zero, added,
 //!   for color and alpha, which stores the source as no blending does (a signed normalized format's
@@ -534,6 +535,7 @@ pub(crate) fn storage_form(
     let shader_blends = blend.is_some();
     let blends = attachment.blending_enabled && !(attachment.replaces && !snorm) && !shader_blends;
     let not_modelled = mapping.emulation != FormatEmulation::Direct
+        || (inputs.amplified && multisampled)
         || (srgb && uint_view.is_none())
         // Metal's blend into an sRGB attachment, a replacing one too, is not measured: the device's
         // is modelled.
