@@ -42,6 +42,72 @@ fn legalized_fadd(saturate: bool) -> OpFAdd {
     op
 }
 
+fn legalized<T: SM50Op>(mut op: T, alloc: &mut SSAValueAllocator) -> T {
+    let sm = ShaderModelInfo::new(53, 64);
+    let mut consts = ConstTracker::new();
+    let mut b = LegalizeBuilder::new(&sm, alloc, &mut consts);
+    op.legalize(&mut b);
+    op
+}
+
+/// IADD's immediate forms have no negation bit for the immediate, so none is
+/// left negated for the encoder, with a carry out or without
+#[test]
+fn iadd_keeps_no_negated_immediate() {
+    for value in [5_u32, 0x1234_5678] {
+        for carry in [false, true] {
+            let mut alloc = SSAValueAllocator::new();
+            let x = alloc.alloc(RegFile::GPR);
+            let d = alloc.alloc(RegFile::GPR);
+            let op = legalized(
+                OpIAdd2 {
+                    dst: d.into(),
+                    carry_out: if carry {
+                        RegRef::new(RegFile::Carry, 0, 1).into()
+                    } else {
+                        Dst::None
+                    },
+                    srcs: [x.into(), Src::from(value).ineg()],
+                },
+                &mut alloc,
+            );
+            let src1 = &op.srcs[1];
+            assert!(
+                !(matches!(src1.src_ref, SrcRef::Imm32(_))
+                    && src1.src_mod.is_ineg()),
+                "a negated immediate {value:#x} left for IADD (carry {carry})"
+            );
+            if !carry {
+                assert!(
+                    src1.src_ref == SrcRef::Imm32(value.wrapping_neg())
+                        && src1.src_mod.is_none()
+                );
+            }
+        }
+    }
+}
+
+/// LOP encodes only an inversion of a source: an integer or float negation or
+/// an absolute value on one goes before the encoder sees it
+#[test]
+fn lop_keeps_no_arithmetic_modifier() {
+    for modify in [Src::ineg, Src::fneg, Src::fabs] {
+        let mut alloc = SSAValueAllocator::new();
+        let [x, y, d] = std::array::from_fn(|_| alloc.alloc(RegFile::GPR));
+        let op = legalized(
+            OpLop2 {
+                dst: d.into(),
+                srcs: [x.into(), modify(Src::from(y))],
+                op: LogicOp2::And,
+            },
+            &mut alloc,
+        );
+        for src in &op.srcs {
+            assert!(src.src_mod.is_none() || src.src_mod.is_bnot(), "{src}");
+        }
+    }
+}
+
 #[test]
 fn saturated_fadd_takes_no_long_immediate() {
     assert!(legalized_fadd(true).srcs[1].as_ssa().is_some());
@@ -189,70 +255,4 @@ fn a_variable_latency_reader_collects_its_operand_after_issue() {
         sm.raw_latency(&m, 0, &mufu(MuFuOp::Rsq), 0),
         instr_latency(53, &m, 0)
     );
-}
-
-fn legalized<T: SM50Op>(mut op: T, alloc: &mut SSAValueAllocator) -> T {
-    let sm = ShaderModelInfo::new(53, 64);
-    let mut consts = ConstTracker::new();
-    let mut b = LegalizeBuilder::new(&sm, alloc, &mut consts);
-    op.legalize(&mut b);
-    op
-}
-
-/// IADD's immediate forms have no negation bit for the immediate, so none is
-/// left negated for the encoder, with a carry out or without
-#[test]
-fn iadd_keeps_no_negated_immediate() {
-    for value in [5_u32, 0x1234_5678] {
-        for carry in [false, true] {
-            let mut alloc = SSAValueAllocator::new();
-            let x = alloc.alloc(RegFile::GPR);
-            let d = alloc.alloc(RegFile::GPR);
-            let op = legalized(
-                OpIAdd2 {
-                    dst: d.into(),
-                    carry_out: if carry {
-                        RegRef::new(RegFile::Carry, 0, 1).into()
-                    } else {
-                        Dst::None
-                    },
-                    srcs: [x.into(), Src::from(value).ineg()],
-                },
-                &mut alloc,
-            );
-            let src1 = &op.srcs[1];
-            assert!(
-                !(matches!(src1.src_ref, SrcRef::Imm32(_))
-                    && src1.src_mod.is_ineg()),
-                "a negated immediate {value:#x} left for IADD (carry {carry})"
-            );
-            if !carry {
-                assert!(
-                    src1.src_ref == SrcRef::Imm32(value.wrapping_neg())
-                        && src1.src_mod.is_none()
-                );
-            }
-        }
-    }
-}
-
-/// LOP encodes only an inversion of a source: an integer or float negation or
-/// an absolute value on one goes before the encoder sees it
-#[test]
-fn lop_keeps_no_arithmetic_modifier() {
-    for modify in [Src::ineg, Src::fneg, Src::fabs] {
-        let mut alloc = SSAValueAllocator::new();
-        let [x, y, d] = std::array::from_fn(|_| alloc.alloc(RegFile::GPR));
-        let op = legalized(
-            OpLop2 {
-                dst: d.into(),
-                srcs: [x.into(), modify(Src::from(y))],
-                op: LogicOp2::And,
-            },
-            &mut alloc,
-        );
-        for src in &op.srcs {
-            assert!(src.src_mod.is_none() || src.src_mod.is_bnot(), "{src}");
-        }
-    }
 }

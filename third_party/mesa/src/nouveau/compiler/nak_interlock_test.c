@@ -316,6 +316,48 @@ test_compile_sm53_interlock(void)
    nak_compiler_destroy(nak);
 }
 
+static unsigned
+count_texop(nir_shader *nir, nir_texop op)
+{
+   unsigned n = 0;
+   nir_foreach_function_impl(impl, nir) {
+      nir_foreach_block(block, impl) {
+         nir_foreach_instr(instr, block)
+            n += instr->type == nir_instr_type_tex &&
+                 nir_instr_as_tex(instr)->op == op;
+      }
+   }
+   return n;
+}
+
+/* The storage form's multisampled image load on GM20B takes its sample's
+ * place in the pixel from the fixed layout, with no TXQ of the sample
+ * position; SM75 keeps the query */
+static void
+test_msaa_image_offsets(void)
+{
+   const struct nir_shader_compiler_options options = {0};
+   for (unsigned sm = 53; sm <= 75; sm += 22) {
+      nir_builder b =
+         nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT, &options, "ms");
+      nir_def *coord = nir_vec4(&b, nir_imm_int(&b, 3), nir_imm_int(&b, 7),
+                                nir_imm_int(&b, 0), nir_imm_int(&b, 0));
+      nir_def *texel = nir_bindless_image_load(
+         &b, 4, 32, nir_imm_int(&b, 5), coord, nir_imm_int(&b, 2),
+         nir_imm_int(&b, 0), .image_dim = GLSL_SAMPLER_DIM_MS,
+         .format = PIPE_FORMAT_R8G8B8A8_UNORM);
+      nir_store_output(&b, texel, nir_imm_int(&b, 0),
+                       .io_semantics.location = FRAG_RESULT_DATA0);
+      const struct nak_compiler nak = {.sm = sm};
+      require(nak_nir_lower_tex(b.shader, &nak), "MS image load not lowered");
+      unsigned queries = count_texop(b.shader, nir_texop_sample_pos_nv);
+      require(sm < 70 ? queries == 0 : queries == 1,
+              sm < 70 ? "sm53 queries a sample position"
+                      : "sm75 lost its sample position query");
+      ralloc_free(b.shader);
+   }
+}
+
 static void
 test_compile_sm75(void)
 {
@@ -390,57 +432,15 @@ test_release_order(void)
    require(s.device_releases == 1, "sm75 keeps the release barrier");
 }
 
-static unsigned
-count_texop(nir_shader *nir, nir_texop op)
-{
-   unsigned n = 0;
-   nir_foreach_function_impl(impl, nir) {
-      nir_foreach_block(block, impl) {
-         nir_foreach_instr(instr, block)
-            n += instr->type == nir_instr_type_tex &&
-                 nir_instr_as_tex(instr)->op == op;
-      }
-   }
-   return n;
-}
-
-/* The storage form's multisampled image load on GM20B takes its sample's
- * place in the pixel from the fixed layout, with no TXQ of the sample
- * position; SM75 keeps the query */
-static void
-test_msaa_image_offsets(void)
-{
-   const struct nir_shader_compiler_options options = {0};
-   for (unsigned sm = 53; sm <= 75; sm += 22) {
-      nir_builder b =
-         nir_builder_init_simple_shader(MESA_SHADER_FRAGMENT, &options, "ms");
-      nir_def *coord = nir_vec4(&b, nir_imm_int(&b, 3), nir_imm_int(&b, 7),
-                                nir_imm_int(&b, 0), nir_imm_int(&b, 0));
-      nir_def *texel = nir_bindless_image_load(
-         &b, 4, 32, nir_imm_int(&b, 5), coord, nir_imm_int(&b, 2),
-         nir_imm_int(&b, 0), .image_dim = GLSL_SAMPLER_DIM_MS,
-         .format = PIPE_FORMAT_R8G8B8A8_UNORM);
-      nir_store_output(&b, texel, nir_imm_int(&b, 0),
-                       .io_semantics.location = FRAG_RESULT_DATA0);
-      const struct nak_compiler nak = {.sm = sm};
-      require(nak_nir_lower_tex(b.shader, &nak), "MS image load not lowered");
-      unsigned queries = count_texop(b.shader, nir_texop_sample_pos_nv);
-      require(sm < 70 ? queries == 0 : queries == 1,
-              sm < 70 ? "sm53 queries a sample position"
-                      : "sm75 lost its sample position query");
-      ralloc_free(b.shader);
-   }
-}
-
 int
 main(void)
 {
-   test_msaa_image_offsets();
    test_release_order();
    test_nir_lowering_sm53();
    test_nir_lowering_sm75();
    test_compile_sm53_interlock();
    test_compile_sm75();
+   test_msaa_image_offsets();
    puts("interlock NIR and SM53/SM75 full-pipeline SASS checks passed");
    return 0;
 }
