@@ -32,8 +32,8 @@ struct switch_pt_applied {
 int switch_pt_owned_by_root(vnode_t vp, enum vtype type, vfs_context_t ctx, uint64_t *id, off_t *size);
 
 /* The boot package's updates, applied to the index's bytes (`raw`, which `index` was parsed from) before its tables are
- * built from it. */
-void switch_pt_apply_updates(vnode_t tree, uint8_t *raw, const struct switch_pt_index *index,
-                             const struct switch_pt_volumes *volumes, struct switch_pt_applied *applied,
-                             vfs_context_t ctx);
+ * built from it. Nonzero (the list's switch_pt_error): a list there that does not parse, and the tree must stay off. */
+int switch_pt_apply_updates(vnode_t tree, uint8_t *raw, const struct switch_pt_index *index,
+                            const struct switch_pt_volumes *volumes, struct switch_pt_applied *applied,
+                            vfs_context_t ctx);
 #endif

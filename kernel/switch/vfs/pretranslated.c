@@ -227,7 +227,9 @@ static const char *switch_pt_build(vnode_t tree, vfs_context_t ctx, int *error)
         return "index contents";
     }
     const struct switch_pt_volumes volumes = {switch_pt.system, switch_pt.data, &switch_pt.trusted};
-    switch_pt_apply_updates(tree, switch_pt.raw, &index, &volumes, &switch_pt.applied, ctx);
+    if ((*error = switch_pt_apply_updates(tree, switch_pt.raw, &index, &volumes, &switch_pt.applied, ctx))) {
+        return "/chosen update list";
+    }
     /* the index and .originals: protected files no record lists; the copies the updates replaced; their folders */
     const uint32_t extra = 2 + switch_pt.applied.updates + switch_pt.applied.dir_count;
     switch_pt.storage_size = switch_pt_tables_bytes(&index, extra);

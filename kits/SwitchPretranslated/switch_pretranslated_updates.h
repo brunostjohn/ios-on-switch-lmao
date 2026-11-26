@@ -1,12 +1,12 @@
 /* SPDX-License-Identifier: BSD-2-Clause-Patent */
 /*
- * Translated System files a deploy replaces without the install (kernel/switch/vfs/pretranslated.c). The tree on Data
- * is placed once, by the install, and nothing changes it afterwards. A boot package whose translation of a file differs
- * names that file in /chosen/switch-pretranslated-updates (tools/package/adt_edit.py), and //deploy:sd puts its bytes at
- * /private/var/Switch/pretranslated-updates/<System path>. At capture the kernel points the tree's entry for that file
- * at the update and its CDHash. Each update stands only if the boot package's CDHash list pins its CDHash and the file
- * is signed as it (its SHA-256 CodeDirectory hashes to it), so a deploy of another build's boot package never serves this
- * one's files and wrong bytes leave the tree's file in place.
+ * Translated System files a deploy replaces without the install (kernel/switch/vfs/pretranslated_updates.c). The tree
+ * on Data is placed once, by the install, and nothing changes it afterwards. A boot package whose translation of a file
+ * differs names that file in /chosen/switch-pretranslated-updates (tools/package/adt_edit.py), and //deploy:sd puts its
+ * bytes at /private/var/Switch/pretranslated-updates/<System path>. At capture the kernel points the tree's entry for
+ * that file at the update and its CDHash. An update stands only if the boot package's CDHash list pins its CDHash and
+ * the file is signed as it (its SHA-256 CodeDirectory hashes to it); one that does not takes its file out of the
+ * redirect, so a deploy of another build's boot package never serves this one's files, nor the tree's distrusted copy.
  *
  * Little-endian: "SWUP", u32 version (1), u32 entry count, u32 string bytes; then per entry, in path order, u32 the
  * offset of its path in the string table and 20 bytes the CDHash; then the string table, the entries' NUL-terminated
@@ -127,7 +127,19 @@ static inline int64_t switch_pt_index_find(const struct switch_pt_index *index, 
     return -1;
 }
 
-/* A System file id no file has, one per update (n): APFS file ids are 60-bit object ids, so the top bit is never set. */
+/* The first record of the System file `system_id`, or -1. */
+static inline int64_t switch_pt_index_find_id(const struct switch_pt_index *index, uint64_t system_id)
+{
+    for (uint32_t i = 0; i < index->count; ++i) {
+        if (switch_pt_file_at(index, i).system_id == system_id) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* A System file id no file has, one per update (n): APFS file ids are 60-bit object ids, so the top bit is never
+ * set. */
 #define SWITCH_PT_UNLISTED_ID(n) (((uint64_t)1 << 63) | (uint64_t)(n))
 
 /*

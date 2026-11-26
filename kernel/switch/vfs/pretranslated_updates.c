@@ -7,7 +7,11 @@
  * already has the named CDHash there is nothing to do. Otherwise the tree's copy is one no trust cache of this boot
  * package names, so it must never be served: an update that stands takes over the file's records, and one that does not
  * takes the file out of the redirect, so the System file runs translated at load time, as with the tree off. Either
- * way one kernel line names the file (tools/devicerun/pretranslated.py judges them).
+ * way one kernel line names the file (tools/devicerun/pretranslated.py judges them). The fallback is Apple's file, not
+ * this build's translation of it: every file the list names is there because the build edits it
+ * (translate/arm64e/pretranslate/edits_<build>.json), and load-time translation applies no edit, so for locationd the
+ * fallback asks for the coprocessor services the edit takes out of its capability word. A list that does not parse
+ * names no file, so then the tree is off: nothing here could tell which of its copies the boot package distrusts.
  *
  * An update stands if its CDHash is pinned, it is signed as that CDHash, its file has one link, and its ids are none
  * of the tree's. The kernel then makes it and every folder above it up to the update tree's root root's, as the install
@@ -288,28 +292,53 @@ static int switch_pt_open_updates(vnode_t tree, mount_t data, vnode_t *updates, 
     return error;
 }
 
-void switch_pt_apply_updates(vnode_t tree, uint8_t *raw, const struct switch_pt_index *index,
-                             const struct switch_pt_volumes *volumes, struct switch_pt_applied *applied,
-                             vfs_context_t ctx)
+/* The tree's record of the System file at `update`'s path: by the path the index spells, else by the file's id, so a
+ * hard link the index spells otherwise is found as well. */
+static int64_t switch_pt_listed(const struct switch_pt_index *index, const struct switch_pt_update *update,
+                                const struct switch_pt_volumes *volumes, vfs_context_t ctx)
+{
+    const int64_t record = switch_pt_index_find(index, update->path, update->length);
+    if (record >= 0) {
+        return record;
+    }
+    vnode_t system = NULLVP;
+    int64_t found = -1;
+    if (!vnode_lookup(update->path, VNODE_LOOKUP_NOFOLLOW_ANY, &system, ctx) &&
+        vnode_mount(system) == volumes->system) {
+        struct vnode_attr va;
+        VATTR_INIT(&va);
+        VATTR_WANTED(&va, va_fileid);
+        if (!vnode_getattr(system, &va, ctx) && VATTR_IS_SUPPORTED(&va, va_fileid)) {
+            found = switch_pt_index_find_id(index, va.va_fileid);
+        }
+    }
+    if (system) {
+        vnode_put(system);
+    }
+    return found;
+}
+
+int switch_pt_apply_updates(vnode_t tree, uint8_t *raw, const struct switch_pt_index *index,
+                            const struct switch_pt_volumes *volumes, struct switch_pt_applied *applied,
+                            vfs_context_t ctx)
 {
     DTEntry chosen;
     const void *bytes = NULL;
     unsigned int size = 0;
     if (SecureDTLookupEntry(NULL, "/chosen", &chosen) != kSuccess ||
         SecureDTGetProperty(chosen, SWITCH_PT_UPDATES_LIST, &bytes, &size) != kSuccess) {
-        return;
+        return 0;
     }
     struct switch_pt_updates list;
     const enum switch_pt_error parsed = switch_pt_updates_parse((const uint8_t *)bytes, size, &list);
     if (parsed != SWITCH_PT_OK) {
-        printf("SwitchPretranslated: no updates (/chosen/" SWITCH_PT_UPDATES_LIST ": %d)\n", (int)parsed);
-        return;
+        return (int)parsed;
     }
     int64_t records[SWITCH_PT_MAX_UPDATES];
     uint32_t needed = 0;
     for (uint32_t i = 0; i < list.count; ++i) {
         const struct switch_pt_update update = switch_pt_update_at(&list, i);
-        records[i] = switch_pt_index_find(index, update.path, update.length);
+        records[i] = switch_pt_listed(index, &update, volumes, ctx);
         if (records[i] < 0) {
             printf("SwitchPretranslated: %s not updated (not in the tree)\n", update.path);
         } else if (memcmp(switch_pt_file_at(index, (uint32_t)records[i]).cdhash, update.cdhash, SWITCH_PT_CDHASH) ==
@@ -320,7 +349,7 @@ void switch_pt_apply_updates(vnode_t tree, uint8_t *raw, const struct switch_pt_
         }
     }
     if (!needed) {
-        return;
+        return 0;
     }
     vnode_t updates = NULLVP;
     uint64_t root_id = 0;
@@ -346,10 +375,13 @@ void switch_pt_apply_updates(vnode_t tree, uint8_t *raw, const struct switch_pt_
             continue;
         }
         switch_pt_index_unlist(raw, index, listed.system_id, i);
-        printf("SwitchPretranslated: %s not updated (%s); it runs translated at load time\n", update.path, failed);
+        printf("SwitchPretranslated: %s not updated (%s); Apple's file runs translated at load time, without this "
+               "build's edit of it\n",
+               update.path, failed);
     }
     if (updates) {
         vnode_put(updates);
     }
+    return 0;
 }
 #endif

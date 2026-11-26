@@ -211,6 +211,19 @@ TEST(Updates, ATurnedDownUpdatesFileLeavesTheRedirect)
     EXPECT_GE(switch_pt_system_file(&tables, 40, fnv("b", 1), "b", 1), 0) << "other files untouched";
 }
 
+// A hard link the index spells otherwise is found by its System file's id.
+TEST(Updates, AFileIsFoundByItsIdWhereThePathMisses)
+{
+    const std::vector<File> files = {
+        {"/usr/a", 20, 200}, {"/usr/libexec/locationd-link", 30, 300}, {"/usr/z", 40, 400}};
+    std::vector<uint8_t> raw = encode(files, {1000});
+    struct switch_pt_index index;
+    ASSERT_EQ(switch_pt_index_parse(raw.data(), raw.size(), &index), SWITCH_PT_OK);
+    EXPECT_EQ(switch_pt_index_find(&index, "/usr/libexec/locationd", 22), -1);
+    EXPECT_EQ(switch_pt_index_find_id(&index, 30), 1);
+    EXPECT_EQ(switch_pt_index_find_id(&index, 77), -1);
+}
+
 // Two turned-down files keep ids of their own, so the tables still take every record.
 TEST(Updates, TurnedDownFilesKeepDistinctIds)
 {

@@ -10,10 +10,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <regex>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "kits/SwitchPretranslated/switch_pretranslated_updates.h"
 
@@ -68,7 +70,79 @@ void Sha256(const void *bytes, size_t size, uint8_t digest[SWITCH_PT_SHA256])
     CC_SHA256(bytes, static_cast<CC_LONG>(size), digest);
 }
 
+std::vector<uint8_t> FileBytes(const std::string &path)
+{
+    std::ifstream file(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+}
+
+uint32_t U32(const std::vector<uint8_t> &bytes, size_t at)
+{
+    uint32_t value = 0;
+    std::memcpy(&value, bytes.data() + at, sizeof(value));
+    return value;
+}
+
+// An Apple device tree node at `at`: its properties {name: value, as long as its length word says} and the offset
+// past it (properties padded to 4 bytes, then the children).
+size_t Node(const std::vector<uint8_t> &adt, size_t at, std::map<std::string, std::vector<uint8_t>> *properties,
+            std::vector<size_t> *children)
+{
+    const uint32_t count = U32(adt, at), nodes = U32(adt, at + 4);
+    at += 8;
+    for (uint32_t i = 0; i < count; ++i) {
+        const std::string name(reinterpret_cast<const char *>(adt.data() + at),
+                               strnlen(reinterpret_cast<const char *>(adt.data() + at), 32));
+        const uint32_t length = U32(adt, at + 32) & 0x7fffffffu;
+        if (properties)
+            (*properties)[name].assign(adt.begin() + static_cast<long>(at + 36),
+                                       adt.begin() + static_cast<long>(at + 36 + length));
+        at += 36 + length + (-length & 3u);
+    }
+    for (uint32_t i = 0; i < nodes; ++i) {
+        if (children)
+            children->push_back(at);
+        at = Node(adt, at, nullptr, nullptr);
+    }
+    return at;
+}
+
+// The root's child named `name`: its properties.
+std::map<std::string, std::vector<uint8_t>> Child(const std::vector<uint8_t> &adt, const char *name)
+{
+    std::vector<size_t> children;
+    Node(adt, 0, nullptr, &children);
+    for (const size_t at : children) {
+        std::map<std::string, std::vector<uint8_t>> properties;
+        Node(adt, at, &properties, nullptr);
+        const std::vector<uint8_t> &own = properties["name"];
+        if (std::string(own.begin(), own.end()).c_str() == std::string(name))
+            return properties;
+    }
+    return {};
+}
+
 }  // namespace
+
+TEST(RealUpdates, TheBootPackagesUpdateListParsesAsThePinsName)
+{
+    const std::vector<uint8_t> adt = FileBytes(Env("SWITCH_ADT"));
+    ASSERT_GT(adt.size(), 8u) << Env("SWITCH_ADT");
+    std::map<std::string, std::vector<uint8_t>> chosen = Child(adt, "chosen");
+    ASSERT_TRUE(chosen.count("switch-pretranslated-updates")) << "no /chosen/switch-pretranslated-updates";
+    const std::vector<uint8_t> &raw = chosen["switch-pretranslated-updates"];
+    struct switch_pt_updates list;
+    ASSERT_EQ(switch_pt_updates_parse(raw.data(), raw.size(), &list), SWITCH_PT_OK);
+    const std::map<std::string, std::string> pins = Pins(Env("SWITCH_UPDATES_PINS"));
+    ASSERT_EQ(list.count, pins.size());
+    for (uint32_t i = 0; i < list.count; ++i) {
+        const struct switch_pt_update update = switch_pt_update_at(&list, i);
+        const auto pin = pins.find(update.path);
+        ASSERT_NE(pin, pins.end()) << update.path;
+        const std::array<uint8_t, SWITCH_PT_CDHASH> cdhash = Bytes(pin->second);
+        EXPECT_EQ(std::memcmp(update.cdhash, cdhash.data(), SWITCH_PT_CDHASH), 0) << update.path;
+    }
+}
 
 TEST(RealUpdates, EveryPinnedUpdateIsSignedAsItsCDHashWithinTheHeadTheKernelReads)
 {
