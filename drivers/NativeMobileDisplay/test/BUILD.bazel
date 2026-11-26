@@ -952,6 +952,7 @@ host_test(
 host_test(
     name = "switch_plane_conversion_test",
     srcs = [
+        "switch_plane_conversion_harness.h",
         "switch_plane_conversion_test.cpp",
         "//drivers/NativeMobileDisplay:SwitchUnshownSource.h",
         "//drivers/TegraDisplayFlip:TegraScanoutCopy.h",
