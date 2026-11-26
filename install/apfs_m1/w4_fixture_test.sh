@@ -116,8 +116,8 @@ populate() {
 
 build() {
     "$tool" build --source "$src" --target "$1" --target-bytes "$TARGET_BYTES" --system-uuid "$system_uuid" \
-        --data-uuid "$DATA_UUID" --data-name SwitchDataTrial --data-features 0x2 --data-rocompat 0x0c \
-        --data-incompat 0x200 --preboot-uuid "$PREBOOT_UUID" --preboot-name SwitchPrebootTrial \
+        --data-uuid "$DATA_UUID" --data-name Switch-iOS-Data --data-features 0x2 --data-rocompat 0x0c \
+        --data-incompat 0x200 --preboot-uuid "$PREBOOT_UUID" --preboot-name Switch-iOS-Preboot \
         --preboot-features 0x2 --preboot-rocompat 0 --preboot-incompat 0 --unicode 17.0 --time-ns "$TIME_NS" \
         --preboot-file "$IMAGE:$IMAGE_BYTES:$IMAGE_SEED" "${@:2}"
 }
@@ -273,8 +273,8 @@ rm -f -- "$work/rw.img"
 
 say "== power cuts"
 "$tool" power-cuts --source "$src" --target-bytes "$TARGET_BYTES" --system-uuid "$system_uuid" \
-    --data-uuid "$DATA_UUID" --data-name SwitchDataTrial --data-features 0x2 --data-rocompat 0x0c \
-    --data-incompat 0x200 --preboot-uuid "$PREBOOT_UUID" --preboot-name SwitchPrebootTrial --preboot-features 0x2 \
+    --data-uuid "$DATA_UUID" --data-name Switch-iOS-Data --data-features 0x2 --data-rocompat 0x0c \
+    --data-incompat 0x200 --preboot-uuid "$PREBOOT_UUID" --preboot-name Switch-iOS-Preboot --preboot-features 0x2 \
     --preboot-rocompat 0 --preboot-incompat 0 --unicode 17.0 --time-ns "$TIME_NS" \
     --preboot-file "$IMAGE:$((4 << 20)):$IMAGE_SEED" --seed 2611 --per-phase 4 --save "$work/cuts" \
     --prior-areas 8192:27748 >"$work/cuts.txt" || fail "the power-cut suite"

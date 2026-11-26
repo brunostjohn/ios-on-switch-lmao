@@ -36,8 +36,8 @@ trap cleanup EXIT
 
 build() {
     "$tool" build --source "$src" --target "$1" --target-bytes $((4 << 30)) --system-uuid "$system_uuid" \
-        --data-uuid "$DATA_UUID" --data-name SwitchDataTrial --data-features 0x2 --data-rocompat 0x0c \
-        --data-incompat 0x200 --preboot-uuid "$PREBOOT_UUID" --preboot-name SwitchPrebootTrial \
+        --data-uuid "$DATA_UUID" --data-name Switch-iOS-Data --data-features 0x2 --data-rocompat 0x0c \
+        --data-incompat 0x200 --preboot-uuid "$PREBOOT_UUID" --preboot-name Switch-iOS-Preboot \
         --preboot-features 0x2 --preboot-rocompat 0 --preboot-incompat 0 --unicode 17.0 --time-ns "$TIME_NS" \
         --preboot-file "img:$((4 << 20)):7" "${@:2}"
 }
@@ -262,8 +262,8 @@ refused short-fill "fill"
 
 say "== a finished container whose block 0 lags"
 "$tool" power-cuts --source "$src" --target-bytes $((4 << 30)) --system-uuid "$system_uuid" \
-    --data-uuid "$DATA_UUID" --data-name SwitchDataTrial --data-features 0x2 --data-rocompat 0x0c \
-    --data-incompat 0x200 --preboot-uuid "$PREBOOT_UUID" --preboot-name SwitchPrebootTrial --preboot-features 0x2 \
+    --data-uuid "$DATA_UUID" --data-name Switch-iOS-Data --data-features 0x2 --data-rocompat 0x0c \
+    --data-incompat 0x200 --preboot-uuid "$PREBOOT_UUID" --preboot-name Switch-iOS-Preboot --preboot-features 0x2 \
     --preboot-rocompat 0 --preboot-incompat 0 --unicode 17.0 --time-ns "$TIME_NS" \
     --preboot-file "img:$((4 << 20)):7" --seed 2611 --per-phase 2 --save "$work/cuts" \
     --prior-areas 8192:27748 --prior-lag >"$work/cuts.txt" || fail "the power-cut suite"

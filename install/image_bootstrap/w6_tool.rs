@@ -28,7 +28,7 @@ struct Args {
     system_uuid: [u8; 16],
     #[arg(long, value_parser = parse_uuid)]
     data_uuid: [u8; 16],
-    #[arg(long, default_value = "SwitchDataTrial")]
+    #[arg(long, default_value = "Switch-iOS-Data")]
     data_name: String,
     #[arg(long)]
     overlay: PathBuf,

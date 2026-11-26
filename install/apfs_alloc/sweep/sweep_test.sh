@@ -172,7 +172,7 @@ check_size() {
     desc=$(printf '%s\n' "${want}" | sed -n 's/.* desc=\([0-9]*\) .*/\1/p')
     data=$(printf '%s\n' "${want}" | sed -n 's/.* data=\([0-9]*\) .*/\1/p')
     if ! "${tool}" add-volume --source "${src}" --target "${out}" --target-bytes $((blocks * 4096)) \
-        --system-uuid "${system_uuid}" --uuid "${DATA_UUID}" --name SwitchDataTrial --role 0x40 --features 0x2 \
+        --system-uuid "${system_uuid}" --uuid "${DATA_UUID}" --name Switch-iOS-Data --role 0x40 --features 0x2 \
         --rocompat 0x0c --incompat 0x200 --unicode 17.0 --areas "${desc}:${data}" --time-ns "${TIME_NS}" >/dev/null; then
         fail "${blocks}: add-volume"
         return

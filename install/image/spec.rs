@@ -11,8 +11,8 @@ pub const DEFAULT_VOLUME_FEATURES: u64 = APFS_FEATURE_HARDLINK_MAP_RECORDS;
 /// Clone mapping (0x04) and attribution tags (0x08), matching iOS `apfs_create_fs` (`tools/install/spec.py`).
 pub const DATA_ROCOMPAT_FEATURES: u64 = 0x0C;
 pub const DATA_INCOMPAT_FEATURES: u64 = APFS_INCOMPAT_EXPANDED_RECORDS;
-pub const DEFAULT_DATA_NAME: &str = "SwitchDataTrial";
-pub const DEFAULT_PREBOOT_NAME: &str = "SwitchPrebootTrial";
+pub const DEFAULT_DATA_NAME: &str = "Switch-iOS-Data";
+pub const DEFAULT_PREBOOT_NAME: &str = "Switch-iOS-Preboot";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DataVolumeParams {

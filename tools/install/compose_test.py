@@ -165,8 +165,8 @@ class ContainerOfAnAttach(unittest.TestCase):
 
                 vols = [
                     (system, 1, b'System'),
-                    (data, 0x40, b'SwitchDataTrial'),
-                    (preboot, 0x10, b'SwitchPrebootTrial'),
+                    (data, 0x40, b'Switch-iOS-Data'),
+                    (preboot, 0x10, b'Switch-iOS-Preboot'),
                 ]
                 fs_oids = [1026 + i for i in range(len(vols))]
                 leaf = bytearray(bs)
@@ -211,11 +211,11 @@ class ContainerOfAnAttach(unittest.TestCase):
                     'data': {
                         'uuid': str(want_data).upper(),
                         'role': 0x40,
-                        'name': 'SwitchDataTrial',
+                        'name': 'Switch-iOS-Data',
                         'rocompat_features': 0x0C,
                         'incompat_features': 0x200,
                     },
-                    'preboot': {'uuid': str(want_preboot).upper(), 'role': 0x10, 'name': 'SwitchPrebootTrial'},
+                    'preboot': {'uuid': str(want_preboot).upper(), 'role': 0x10, 'name': 'Switch-iOS-Preboot'},
                 }
             }
             offset = compose._set_uuids(image, part_bytes, spec, mock.Mock())
