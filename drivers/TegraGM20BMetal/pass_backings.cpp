@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <utility>
 
 #include "gm20b_gpu_internal.h"
 
@@ -240,6 +241,16 @@ Texture *Device::backing(std::unique_lock<gm20b::Mutex> &l, DeferredFrees &defer
     return asked(view);
 }
 
+#if SWITCH_METAL_DIAGNOSTICS
+void Device::reclaimIdleNow()
+{
+    std::lock_guard<gm20b::Mutex> l(lock_);
+    reclaimAhead_ = kCompIdleNs + 1;
+    compRearm_ = true;
+    compStart();
+}
+#endif
+
 // Backings no pass used for 600 command buffers (~10 s of frames) and whose last use completed go back to the pool; a retired
 // one (a compressed backing, or one on larger memory of its tag, replaced it) as soon as its last use completed, as no pass
 // takes it again; one on compressed or shared plain memory after 10 s unused too, also while the process commits nothing
@@ -248,7 +259,10 @@ void Device::trimBackings(DeferredFrees &deferred)
 {
     // the counts before the backings' stamps: a commit stores its stamps before it moves them
     const uint64_t committed = commits(), closedNow = closedCount_.load(std::memory_order_acquire);
-    const uint64_t now = compClock();
+    uint64_t now = compClock();
+#if SWITCH_METAL_DIAGNOSTICS
+    now += std::exchange(reclaimAhead_, 0);
+#endif
     const auto stale = [&](const Backing *b) {
         return backingStale(committed, b->lastCommit.load(std::memory_order_seq_cst), closedNow,
                             b->lastClosed.load(std::memory_order_seq_cst), now,

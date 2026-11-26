@@ -593,6 +593,12 @@ public:
         k_.sparesGiveBack();
     }
 
+#if SWITCH_METAL_DIAGNOSTICS
+    // HW Test's ui.glass_sidebar (the idle-reclaim switch): the compressed-memory thread's next trim runs as it would
+    // once the process had committed nothing for kCompIdleNs, so a test need not wait the idle reclaim out
+    void reclaimIdleNow();
+#endif
+
     // The submit worker's look, where privateMoveDue: the flag cleared, and `take(owner)` for each texture ready memory
     // serves now, called under lock_, where an owner whose want is there is not freed yet (destroyTexture erases it)
     void privateMoves(void (*take)(void *owner));
@@ -2278,6 +2284,9 @@ private:
     // compThread_ started where it is not: it trims what an idle process holds when it turns stale (compDeadline)
     void compStart();
     bool compRearm_ = false;  // shared plain memory was made: compThread_ takes its deadline (lock_)
+#if SWITCH_METAL_DIAGNOSTICS
+    uint64_t reclaimAhead_ = 0;  // lock_: how far ahead of the clock the next trimBackings judges (reclaimIdleNow)
+#endif
 #if SWITCH_METAL_DIAGNOSTICS
     std::vector<std::function<void()>> compSettled_;  // lock_
     bool compUnsettled();                             // lock_
