@@ -122,11 +122,19 @@ struct switch_recorder_recent {
     uint64_t gap, repeat;
 };
 
+static inline bool switch_recorder_recent_is(const struct switch_recorder_recent *r, uint32_t i,
+                                             const struct switch_recorder_ask *ask)
+{
+    return ask != NULL && r->e[i].at == ask->at && r->e[i].tid == ask->tid && r->e[i].reason == ask->reason;
+}
+
+/* `ask` against the recent asks, less `except` (NULL: none): a waiting ask that was never captured. */
 static inline unsigned switch_recorder_spacing(const struct switch_recorder_recent *r,
-                                               const struct switch_recorder_ask *ask)
+                                               const struct switch_recorder_ask *ask,
+                                               const struct switch_recorder_ask *except)
 {
     for (uint32_t i = 0; i < SWITCH_RECORDER_RECENT; i++) {
-        if (r->e[i].at == 0 || ask->at < r->e[i].at) {
+        if (r->e[i].at == 0 || ask->at < r->e[i].at || switch_recorder_recent_is(r, i, except)) {
             continue;
         }
         if (ask->at - r->e[i].at < r->gap) {
@@ -137,6 +145,15 @@ static inline unsigned switch_recorder_spacing(const struct switch_recorder_rece
         }
     }
     return SWITCH_RECORDER_ADMITTED;
+}
+
+static inline void switch_recorder_forget(struct switch_recorder_recent *r, const struct switch_recorder_ask *ask)
+{
+    for (uint32_t i = 0; i < SWITCH_RECORDER_RECENT; i++) {
+        if (switch_recorder_recent_is(r, i, ask)) {
+            r->e[i].at = 0;
+        }
+    }
 }
 
 static inline void switch_recorder_remember(struct switch_recorder_recent *r, const struct switch_recorder_ask *ask)
@@ -163,9 +180,10 @@ static inline uint32_t switch_recorder_queued_auto(const struct switch_recorder_
  * Whether an ask is taken, and if so into the queue. A mark is always taken while the queue has room, and takes the
  * waiting automatic ask's place when it has none. An automatic ask is turned away by the spacing of recent ones
  * (switch_recorder_spacing), while HW Test's hold (expect_tid until expect_until) names another thread, or while an
- * automatic ask of its rank or higher waits; one of a higher rank replaces the waiting one (a hang cannot wait behind
- * a late frame's tail). The held thread's own ask is never turned away by the spacing. A taken automatic ask is
- * remembered in `recent`.
+ * automatic ask of its rank or higher waits. One of a higher rank replaces the waiting one, spaced only from the
+ * captures before it: the waiting ask was never captured, so a hang in a late frame's tail is not refused for the gap
+ * that late frame opened. The held thread's own ask is never turned away by the spacing. A taken automatic ask is
+ * remembered in `recent`, and a replaced one forgotten.
  */
 static inline unsigned switch_recorder_admit(struct switch_recorder_asks *q, const struct switch_recorder_ask *ask,
                                              struct switch_recorder_recent *recent, uint64_t expect_tid,
@@ -189,13 +207,15 @@ static inline unsigned switch_recorder_admit(struct switch_recorder_asks *q, con
     if (held && ask->tid != expect_tid) {
         return SWITCH_RECORDER_REFUSED_HELD;
     }
-    if (!held && (spaced = switch_recorder_spacing(recent, ask)) != SWITCH_RECORDER_ADMITTED) {
+    if (waiting < q->n && switch_recorder_rank(ask->reason) <= switch_recorder_rank(q->a[waiting].reason)) {
+        return SWITCH_RECORDER_REFUSED_QUEUED;
+    }
+    if (!held && (spaced = switch_recorder_spacing(recent, ask, waiting < q->n ? &q->a[waiting] : NULL)) !=
+                     SWITCH_RECORDER_ADMITTED) {
         return spaced;
     }
     if (waiting < q->n) {
-        if (switch_recorder_rank(ask->reason) <= switch_recorder_rank(q->a[waiting].reason)) {
-            return SWITCH_RECORDER_REFUSED_QUEUED;
-        }
+        switch_recorder_forget(recent, &q->a[waiting]);
         q->a[waiting] = *ask;
     } else if (q->n == SWITCH_RECORDER_ASKS) {
         return SWITCH_RECORDER_REFUSED_FULL;

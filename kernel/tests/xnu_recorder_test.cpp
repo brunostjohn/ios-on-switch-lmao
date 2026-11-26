@@ -84,20 +84,33 @@ TEST(XnuRecorder, EveryMarkIsTakenWhileAnAutomaticCaptureWaits)
     EXPECT_EQ(q.n, 9u);
 }
 
+// With the real 2 s gap: a late frame waits out its 300 ms tail, and a hang inside that tail takes its place (it was never
+// captured, so its gap does not count). A hang 1 s after a capture that ran is still turned away.
 TEST(XnuRecorder, OneAutomaticAskWaitsAtATimeAndAHangReplacesALowerOne)
 {
     switch_recorder_asks q{};
     switch_recorder_recent r = Spacing();
-    r.gap = r.repeat = 0;
 
     EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_LATE_FRAME, 100)), &r, 0, 0), SWITCH_RECORDER_ADMITTED);
     EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_LATE_FRAME, 120)), &r, 0, 0),
               SWITCH_RECORDER_REFUSED_QUEUED);
-    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 150, 514)), &r, 0, 0), SWITCH_RECORDER_ADMITTED);
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 250, 514)), &r, 0, 0), SWITCH_RECORDER_ADMITTED);
     ASSERT_EQ(q.n, 1u);
     EXPECT_EQ(q.a[0].reason, SWITCH_RECORDER_HANG) << "the hang took the late frame's place";
-    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 160, 606)), &r, 0, 0),
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 260, 606)), &r, 0, 0),
               SWITCH_RECORDER_REFUSED_QUEUED);
+    q = {};
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_LATE_FRAME, 1250)), &r, 0, 0),
+              SWITCH_RECORDER_REFUSED_GAP)
+        << "the hang was captured: its gap counts, the replaced late frame's does not";
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_LATE_FRAME, 2250)), &r, 0, 0),
+              SWITCH_RECORDER_ADMITTED);
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 2300, 707)), &r, 0, 0), SWITCH_RECORDER_ADMITTED)
+        << "the hang replaces the waiting late frame before that late frame's gap";
+    q = {};
+    EXPECT_EQ(switch_recorder_admit(&q, ptr(Ask(SWITCH_RECORDER_HANG, 3300, 606)), &r, 0, 0),
+              SWITCH_RECORDER_REFUSED_GAP)
+        << "1 s after the captured hang";
 }
 
 // A capture stops every CPU for its stackshot and takes 16 MiB: another thread's waits 2 s after any automatic one,
