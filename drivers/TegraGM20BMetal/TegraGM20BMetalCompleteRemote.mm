@@ -185,13 +185,23 @@ bool Completion::renderRequest(const Ask &a, const CacheKey &k, bool bytes, Comp
     return true;
 }
 
+bool Completion::storedEntry(const StoreKey &store, const std::function<bool(const std::string &bytes)> &decoded)
+{
+    std::string bytes;
+    for (uint32_t k = 0; k < kStoreCandidates; ++k)
+        if (remote_->find(candidateName(store.name, k), bytes) && decoded(bytes))
+            return true;
+    return false;
+}
+
 RecordCache::Found Completion::fromStore(const StoreKey &store, const std::string &packKey, RuntimeRecord &record,
                                          std::string &why)
 {
-    std::string bytes;
-    if (!remote_->find(store.name, bytes))
-        return RecordCache::Found::None;
-    const RecordCache::Found found = decodeEntry(bytes, store.content, record, why);
+    RecordCache::Found found = RecordCache::Found::None;
+    storedEntry(store, [&](const std::string &bytes) {
+        found = decodeEntry(bytes, store.content, record, why);
+        return found != RecordCache::Found::None;
+    });
     if (found == RecordCache::Found::Record)
         rekeyRecord(record, packKey);
     return found;
@@ -484,10 +494,12 @@ Compiler::Outcome Completion::remoteKernel(id facadeFunction, MTLComputePipeline
         return true;
     };
     const auto stored = [&]() {
-        std::string bytes;
-        if (!remote_->find(store.name, bytes))
-            return RecordCache::Found::None;
-        return decodeKernelEntry(bytes, store.content, record, why);
+        RecordCache::Found found = RecordCache::Found::None;
+        storedEntry(store, [&](const std::string &bytes) {
+            found = decodeKernelEntry(bytes, store.content, record, why);
+            return found != RecordCache::Found::None;
+        });
+        return found;
     };
     if (!request(false, false))
         return Compiler::Outcome::Failed;
@@ -529,8 +541,9 @@ bool Completion::storedReflection(const std::function<bool(bool, bool, CompileRe
     std::string text;
     bool made = false;
     const auto stored = [&] {
-        std::string bytes;
-        return remote_->find(store.name, bytes) && decodeReflectionEntry(bytes, store.content, made, text);
+        return storedEntry(store, [&](const std::string &bytes) {
+            return decodeReflectionEntry(bytes, store.content, made, text);
+        });
     };
     if (!request(false, false, r, store))
         return why = kInexpressible, false;
@@ -637,9 +650,12 @@ bool Completion::facts(id facadeFunction, MTLComputePipelineDescriptor *descript
     };
     std::string refusal;
     const auto stored = [&]() {
-        std::string bytes;
-        return remote_->find(store.name, bytes) ? decodeFactsEntry(bytes, store.content, out, refusal)
-                                                : RecordCache::Found::None;
+        RecordCache::Found found = RecordCache::Found::None;
+        storedEntry(store, [&](const std::string &bytes) {
+            found = decodeFactsEntry(bytes, store.content, out, refusal);
+            return found != RecordCache::Found::None;
+        });
+        return found;
     };
     if (!request(false, false))
         return failure = kInexpressible, false;
@@ -701,9 +717,12 @@ bool Completion::library(uint32_t type, const std::string &bytes, MadeLibrary &o
     const StoreKey store = storeKeyOf(k, r, {}, remote_->scope());
     std::string log;
     const auto stored = [&]() {
-        std::string entry;
-        return remote_->find(store.name, entry) ? decodeLibraryEntry(entry, store.content, out, log)
-                                                : RecordCache::Found::None;
+        RecordCache::Found found = RecordCache::Found::None;
+        storedEntry(store, [&](const std::string &entry) {
+            found = decodeLibraryEntry(entry, store.content, out, log);
+            return found != RecordCache::Found::None;
+        });
+        return found;
     };
     // a refusal is only read after this process's own ask: the front end makes a refused library again at each
     RecordCache::Found found =

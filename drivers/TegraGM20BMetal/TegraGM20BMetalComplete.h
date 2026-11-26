@@ -178,6 +178,8 @@ private:
                           std::string &blob, std::string &why);
     // storedReflection of one function of this facade as a request's one stage tagged `tag`
     bool functionReflection(const char *tag, id function, const CacheKey &k, std::string &blob, std::string &why);
+    // Whether one of `store`'s candidate names (store_key.h kStoreCandidates) holds an entry `decoded` takes as its content's
+    bool storedEntry(const StoreKey &store, const std::function<bool(const std::string &bytes)> &decoded);
     // The render record the store holds under `store`, keyed by this process's pack key of it (store_key.h rekeyRecord)
     RecordCache::Found fromStore(const StoreKey &store, const std::string &packKey, RuntimeRecord &record,
                                  std::string &why);

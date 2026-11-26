@@ -145,9 +145,19 @@ private:
 
     std::mutex publishLock_;
 
+    // Where `p`'s entry is (Store::find over its candidate names): `bytes`, and `stored` its result, -1 for none or one to
+    // make again. A publish chooses again as it writes (Store::put), since another content may have taken the name
+    // meanwhile.
+    struct Placed {
+        gm20b::Digest name{};
+        int32_t stored = -1;
+        std::string bytes;
+    };
+
+    Placed placed(const Prepared &p) const;
     int32_t run(Work &work);
     void remember(const Asked &asked, int32_t ran);
-    bool publish(const gm20b::Digest *name, const gm20b::CacheKey &key, const std::string &entry, bool slots,
+    bool publish(gm20b::Digest *name, const gm20b::CacheKey &key, const std::string &entry, bool slots,
                  std::string &why);
     bool connect(std::string &why, StartFailure &failure);
     void decline();
@@ -170,16 +180,23 @@ int32_t packed(int32_t result, bool stored, qos_class_t ran)
     return result | (stored ? kStoredBit : 0) | int32_t(bandOf(uint32_t(ran), true)) << kClassShift;
 }
 
-// The entry under `name` (null: the store holds it already), and with `slots` its program slots ahead of it
+// The entry of `key` placed from `name` (Store::put; null: the store holds it already), `name` then the one it went
+// under, and with `slots` its program slots ahead of it
 // (Store::putProgramSlots): a full store is written again with its newest half and registered again, then takes both
-bool Service::publish(const gm20b::Digest *name, const gm20b::CacheKey &key, const std::string &entry, bool slots,
+bool Service::publish(gm20b::Digest *name, const gm20b::CacheKey &key, const std::string &entry, bool slots,
                       std::string &why)
 {
     std::lock_guard<std::mutex> l(publishLock_);
     const auto putAll = [&] {
         if (slots && store_.putProgramSlots(key, entry) == Store::Put::Full)
             return Store::Put::Full;
-        return name ? store_.put(*name, entry) : Store::Put::Added;
+        if (!name)
+            return Store::Put::Added;
+        gm20b::Digest at{};
+        const Store::Put put = store_.put(*name, key, entry, at);
+        if (put == Store::Put::Added)
+            *name = at;
+        return put;
     };
     Store::Put put = putAll();
     if (put == Store::Put::Full) {
@@ -195,24 +212,29 @@ bool Service::publish(const gm20b::Digest *name, const gm20b::CacheKey &key, con
     return put == Store::Put::Added;
 }
 
+Service::Placed Service::placed(const Prepared &p) const
+{
+    Placed out;
+    if (store_.find(p.name, p.content, out.bytes, out.name))
+        out.stored = storedResult(out.bytes, p.content);
+    return out;
+}
+
 int32_t Service::run(Work &work)
 {
     Asked &asked = static_cast<Asked &>(work);
-    const Prepared &p = asked.prepared;
+    Prepared &p = asked.prepared;
     const qos_class_t workerClass = qos_class_self();
 #if SWITCH_DEBUG
     tJobSplit = {};
 #endif
-    std::string entry, why;
-    if (store_.find(p.name, entry)) {
-        const int32_t stored = storedResult(entry, p.content);
-        if (stored >= 0) {
-            noCompile();
-            return packed(stored, true, workerClass);
-        }
-        store_.retire(p.name);
+    std::string why;
+    if (const Placed place = placed(p); place.stored >= 0) {
+        p.name = place.name;
+        noCompile();
+        return packed(place.stored, true, workerClass);
     }
-    entry.clear();
+    std::string entry;
     compileStarted();
     int32_t result = engine_.compile(p, entry, why);
 #if SWITCH_DEBUG
@@ -259,14 +281,9 @@ void Service::remember(const Asked &asked, int32_t ran)
 bool Service::submit(Prepared prepared, std::string request, const Waiter &waiter, int32_t pid,
                      dispatch_semaphore_t done)
 {
-    std::string bytes;
-    if (store_.find(prepared.name, bytes)) {
-        const int32_t stored = storedResult(bytes, prepared.content);
-        if (stored >= 0) {
-            complete(waiter, stored, TegraGM20BCompileStored);
-            return false;
-        }
-        store_.retire(prepared.name);
+    if (const Placed place = placed(prepared); place.stored >= 0) {
+        complete(waiter, place.stored, TegraGM20BCompileStored);
+        return false;
     }
     auto work = std::make_unique<Asked>();
     work->pid = pid;
@@ -438,14 +455,14 @@ void Service::warm(uint64_t stack)
             dropped++;
             return false;
         }
-        name = prepared.name;
-        const gm20b::CacheKey key = prepared.content;
-        std::string bytes;
-        const int32_t stored = store_.find(name, bytes) ? storedResult(bytes, key) : -1;
+        const Placed place = placed(prepared);
+        name = place.name;
+        const std::string &bytes = place.bytes;
+        const int32_t stored = place.stored;
         const bool unconfirmed = stored == TegraGM20BCompileRefused && !confirmed.confirmed(name);
         if (stored < 0 || unconfirmed) {
             if (unconfirmed)
-                store_.retire(name);
+                store_.retire(name, prepared.content);
             (unconfirmed ? refusals : again)++;
             if (submit(std::move(prepared), std::string(), {0, 0, Band::Background, false}, 0, ran))
                 dispatch_semaphore_wait(ran, DISPATCH_TIME_FOREVER);
@@ -500,6 +517,12 @@ void Service::serve()
         if (asked.done)
             dispatch_semaphore_signal(asked.done);
         return result;
+    };
+    hooks.same = [](const Work &a, const Work &b) {
+        const gm20b::CacheKey &x = static_cast<const Asked &>(a).prepared.content,
+                              &y = static_cast<const Asked &>(b).prepared.content;
+        return x.stack == y.stack && !memcmp(x.vertexAir, y.vertexAir, sizeof x.vertexAir) &&
+               !memcmp(x.fragmentAir, y.fragmentAir, sizeof x.fragmentAir) && x.key == y.key;
     };
     hooks.complete = [this](const Waiter &waiter, int32_t result) {
         const uint32_t how = result & kStoredBit ? TegraGM20BCompileStored

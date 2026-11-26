@@ -47,6 +47,15 @@ bool scoped(const CompileRequest &r);
 std::string metallibListedFacts(const uint8_t *file, size_t size, const std::string &name);
 std::string metallibListedFacts(const std::string &path, const std::string &name);
 
+// The name is a fold any client can steer onto another content's (each lane is invertible in one free word). So an
+// entry is filed under whichever of kStoreCandidates names holds its content, else the first free one, else the last,
+// and every reader probes them all, comparing heads. Steering costs compiles, never a wrong record. It can still evict:
+// four contents steered onto one name replace its last candidate, and because the candidates are a fixed XOR, another
+// name's last candidate can be this one's first.
+constexpr uint32_t kStoreCandidates = 4;
+// Candidate `k` of `name` (0: `name`)
+Digest candidateName(const Digest &name, uint32_t k);
+
 // `k`: the request's CacheKey as the compiler makes it (compiler/compiler_request.h prepare); `stages[i]`: r.stages[i]'s
 // function; `scope`: the asker's, which a scoped request is filed under
 StoreKey storeKeyOf(const CacheKey &k, const CompileRequest &r, const std::vector<StageContent> &stages,

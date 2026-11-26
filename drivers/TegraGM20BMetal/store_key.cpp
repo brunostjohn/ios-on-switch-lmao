@@ -149,6 +149,15 @@ void addDispatch(Builder &b, const KernelRequest &k)
 
 }  // namespace
 
+Digest candidateName(const Digest &name, uint32_t k)
+{
+    Digest out = name;
+    const uint64_t step = 0x9e3779b97f4a7c15ull * k;
+    for (size_t i = 0; i < sizeof step; ++i)
+        out[i] ^= uint8_t(step >> (8 * i));
+    return out;
+}
+
 Digest programSlotName(const void *slot, size_t size)
 {
     constexpr char kSlotMagic[8] = {'S', 'W', 'S', 'L', 'O', 'T', '0', '1'};

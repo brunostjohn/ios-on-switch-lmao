@@ -62,16 +62,23 @@ bool Pool::submit(const Name &name, std::unique_ptr<Work> work, const Waiter &as
 {
     Waiter waiter = asked;
     std::unique_lock<std::mutex> l(lock_);
-    const auto found = jobs_.find(name);
+    Name key = name;
+    auto found = jobs_.find(key);
+    for (uint64_t k = 1; found != jobs_.end() && hooks_.same && !hooks_.same(*found->second->work, *work); ++k) {
+        key = name;
+        for (size_t i = 0; i < sizeof k; ++i)
+            key[i] ^= uint8_t((k * 0x9e3779b97f4a7c15ull) >> (8 * i));
+        found = jobs_.find(key);
+    }
     if (found == jobs_.end()) {
         auto job = std::make_shared<Job>();
-        job->name = name;
+        job->name = key;
         job->work = std::move(work);
         job->waiters.push_back(waiter);
         job->band = waiter.split ? Band::Background : waiter.band;
         job->order = ++arrivals_;
         job->client = waiter.client;
-        jobs_.emplace(name, job);
+        jobs_.emplace(key, job);
         stats_.jobs++;
         l.unlock();
         work_.notify_one();

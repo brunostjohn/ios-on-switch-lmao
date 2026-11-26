@@ -25,6 +25,8 @@ struct LibraryCompiler {
     std::vector<gm20b::CompileRequest> consumers;
     gm20b::MadeLibrary made;
     std::string log;
+    // Another program's entry already holds each request's name, so the compiler stores at the next candidate
+    bool nameTaken = false;
 
     int32_t compute(const gm20b::CompileRequest &r)
     {
@@ -32,7 +34,24 @@ struct LibraryCompiler {
         made.stack = r.stack;
         made.key = r.key;
         const gm20b::StoreKey store = requestStoreKey(made, r);
-        const gm20b::CacheKey &key = store.content;
+        const std::string entry = entryOf(store.content, r);
+        if (entry.empty())
+            return TegraGM20BCompileUnavailable;
+        consumers.push_back(r);
+        gm20b::Digest name = store.name;
+        if (nameTaken) {
+            gm20b::CacheKey other = store.content;
+            other.key += " | another program";
+            const std::string foreign = entryOf(other, r);
+            this->store.put(name.data(), reinterpret_cast<const uint8_t *>(foreign.data()), uint32_t(foreign.size()));
+            name = gm20b::candidateName(name, 1);
+        }
+        this->store.put(name.data(), reinterpret_cast<const uint8_t *>(entry.data()), uint32_t(entry.size()));
+        return TegraGM20BCompileMade;
+    }
+
+    static std::string entryOf(const gm20b::CacheKey &key, const gm20b::CompileRequest &r)
+    {
         std::string entry;
         if (r.kind == gm20b::RequestKind::Facts) {
             const uint32_t facts[] = {256, 32, 0};
@@ -57,12 +76,8 @@ struct LibraryCompiler {
             record.cbufs = 1;
             record.cbufType[0] = gm20b::CbufRoot;
             entry = gm20b::encodeKernelEntry(key, &record, "");
-        } else {
-            return TegraGM20BCompileUnavailable;
         }
-        consumers.push_back(r);
-        this->store.put(store.name.data(), reinterpret_cast<const uint8_t *>(entry.data()), uint32_t(entry.size()));
-        return TegraGM20BCompileMade;
+        return entry;
     }
 
     bool serve()

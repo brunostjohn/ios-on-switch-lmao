@@ -138,6 +138,55 @@ TEST_F(SharedStore, AStoreIsKeyedByStackAndPackRulesAndAnOldOneStaysWholeForItsR
     EXPECT_NE(next.path(), store.path());
 }
 
+// Two contents compiled at once under one name (a name any client can steer, store_key.h): each found the name free
+// before its compile, and the second to publish takes the next candidate rather than replacing the first. A content's
+// entry is found and replaced wherever it sits, past a free candidate too; a content-checked retire leaves another's.
+TEST_F(SharedStore, AContentsEntryIsFoundAndReplacedUnderWhicheverCandidateHoldsIt)
+{
+    using switch_compiler::Store;
+    Store store;
+    open(store);
+    const gm20b::Digest name = digest(0x53);
+    const auto candidate = [&](uint32_t k) {
+        return gm20b::candidateName(name, k);
+    };
+    gm20b::Digest at{};
+    std::string bytes;
+    ASSERT_EQ(store.put(name, keyOf(1), entryOf(1), at), Store::Put::Added);
+    EXPECT_EQ(at, candidate(0));
+    ASSERT_EQ(store.put(name, keyOf(2), entryOf(2), at), Store::Put::Added);
+    EXPECT_EQ(at, candidate(1));
+    ASSERT_EQ(store.put(name, keyOf(2), entryOf(2), at), Store::Put::Added);
+    EXPECT_EQ(at, candidate(1));
+
+    store.retire(candidate(0));
+    ASSERT_TRUE(store.find(name, keyOf(2), bytes, at));
+    EXPECT_EQ(at, candidate(1));
+    EXPECT_TRUE(whole(bytes, 2));
+    ASSERT_EQ(store.put(name, keyOf(2), entryOf(2), at), Store::Put::Added);
+    EXPECT_EQ(at, candidate(1));
+    EXPECT_FALSE(store.find(name, keyOf(3), bytes, at));
+    EXPECT_EQ(at, candidate(0));
+
+    store.retire(candidate(1), keyOf(3));
+    EXPECT_TRUE(store.find(name, keyOf(2), bytes, at));
+    store.retire(candidate(1), keyOf(2));
+    EXPECT_FALSE(store.find(name, keyOf(2), bytes, at));
+
+    for (uint32_t n = 1; n <= gm20b::kStoreCandidates; ++n) {
+        ASSERT_EQ(store.put(name, keyOf(n), entryOf(n), at), Store::Put::Added);
+        EXPECT_EQ(at, candidate(n - 1));
+    }
+    ASSERT_EQ(store.put(name, keyOf(9), entryOf(9), at), Store::Put::Added);
+    EXPECT_EQ(at, candidate(gm20b::kStoreCandidates - 1));
+    for (uint32_t n = 1; n < gm20b::kStoreCandidates; ++n) {
+        ASSERT_TRUE(store.find(name, keyOf(n), bytes, at)) << n;
+        EXPECT_TRUE(whole(bytes, n)) << n;
+    }
+    EXPECT_FALSE(store.find(name, keyOf(gm20b::kStoreCandidates), bytes, at));
+    EXPECT_TRUE(store.find(name, keyOf(9), bytes, at));
+}
+
 // A made record's program slots of a page or more land on pages of their own, found by their bytes' name, ahead of the
 // record: what a client runs in place from its mapping
 TEST_F(SharedStore, ARecordsLargeSlotsArePublishedOnPagesOfTheirOwn)
