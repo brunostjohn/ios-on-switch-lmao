@@ -808,6 +808,7 @@ cc_library(
         "//drivers/TegraGM20BMetal:pass_begin.cpp",
         "//drivers/TegraGM20BMetal:pass_clears.cpp",
         "//drivers/TegraGM20BMetal:pass_end.cpp",
+        "//drivers/TegraGM20BMetal:nvn_probes.cpp",
         "//drivers/TegraGM20BMetal:pipelines.cpp",
         "//drivers/TegraGM20BMetal:samplers.cpp",
         "//drivers/TegraGM20BMetal:sparse_window.cpp",
