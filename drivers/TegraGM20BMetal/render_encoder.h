@@ -281,7 +281,7 @@ public:
     void timestampAtStart(uint64_t va, counters::Point point);
     void end();
 #if SWITCH_METAL_DIAGNOSTICS
-    void nvnPassEnd(Push &p);
+    void nvnPassEnd();
 #endif
 
     void continuePass(uint8_t stores);

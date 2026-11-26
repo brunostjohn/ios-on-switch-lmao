@@ -134,8 +134,11 @@ void RenderEncoder::timestampAtStart(uint64_t va, counters::Point point)
 // gpu.perf.nvn (nvn_probes.h), at the body's end, before the prologue is written: the discards of what nothing reads
 // after the pass, while its targets are bound and before the tiled cache's flush, and the zcull state a probe changed
 // put back for the channel's next pass (the prologue writes SET_ZCULL's stencil-on form where stencilOn is set here)
-void RenderEncoder::nvnPassEnd(Push &p)
+void RenderEncoder::nvnPassEnd()
 {
+    Push &p = p_;
+    if (p.room() < 2 * 11)
+        reserve();
     const uint32_t nvn = dev_->probeNvn.load(std::memory_order_relaxed);
     zcull_.stencilOn = zcull_.candidate && (nvn & kNvnStencilZcull);
     if (nvn & kNvnDiscard) {
@@ -218,7 +221,7 @@ void RenderEncoder::end()
         cb_->taken_.flushes++;
 #endif
 #if SWITCH_METAL_DIAGNOSTICS
-    nvnPassEnd(p_);
+    nvnPassEnd();
 #endif
     const bool measured = measurePass(drew_ && flush);
     if (drew_ && flush)
