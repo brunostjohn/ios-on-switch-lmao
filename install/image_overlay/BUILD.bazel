@@ -1,0 +1,80 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+_DEPS = [
+    "//install/apfs_format:switch_apfs_format",
+    "//install/apfs_write:switch_apfs_write",
+    "@installer_crates//:hex",
+    "@installer_crates//:plist",
+    "@installer_crates//:serde",
+    "@installer_crates//:serde_json",
+    "@installer_crates//:sha2",
+    "@installer_crates//:tar",
+    "@installer_crates//:thiserror",
+]
+
+rust_library(
+    name = "switch_image_overlay",
+    srcs = [
+        "cms.rs",
+        "lib.rs",
+        "merge.rs",
+        "overlay.rs",
+        "seed_manifest.rs",
+        "source.rs",
+        "staged_apps.rs",
+        "tree_inspect.rs",
+    ],
+    crate_root = "lib.rs",
+    deps = _DEPS,
+)
+
+rust_test(
+    name = "switch_image_overlay_test",
+    size = "small",
+    srcs = [
+        "cms.rs",
+        "lib.rs",
+        "merge.rs",
+        "overlay.rs",
+        "seed_manifest.rs",
+        "source.rs",
+        "staged_apps.rs",
+        "tests_cms.rs",
+        "tests_overlay.rs",
+        "tests_staged.rs",
+        "tree_inspect.rs",
+    ],
+    crate_root = "lib.rs",
+    deps = _DEPS + [
+        "@installer_crates//:tempfile",
+    ],
+)
+
+rust_binary(
+    name = "switch_image_overlay_tool",
+    srcs = ["main.rs"],
+    deps = [
+        ":switch_image_overlay",
+    ],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_image_overlay_tool",
+)
+
+sh_test(
+    name = "cms_darwin_test",
+    size = "small",
+    srcs = ["cms_darwin_test.sh"],
+    args = ["$(rootpath :switch_image_overlay_tool)"],
+    data = [":switch_image_overlay_tool"],
+    tags = ["requires-darwin"],
+)

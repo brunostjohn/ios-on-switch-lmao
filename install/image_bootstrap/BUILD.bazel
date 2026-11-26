@@ -1,0 +1,126 @@
+# switch_image_bootstrap: rootless bootstrap staging onto switch_apfs_write::Tree, plus W6 end-to-end APFS check.
+#
+#   bazel test //install/image_bootstrap:all                unit tests + Python byte-exact oracle
+#   bazel test //install/image_bootstrap:w6_fixture_test    Darwin worker APFS fsck + mount(owners) check
+#   bazel build //install/image_bootstrap:desktop           all 6 desktop platforms
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+_DEPS = [
+    "//install/apfs_format:switch_apfs_format",
+    "//install/apfs_write:switch_apfs_write",
+    "@installer_crates//:hex",
+    "@installer_crates//:serde",
+    "@installer_crates//:serde_json",
+    "@installer_crates//:sha2",
+    "@installer_crates//:tar",
+    "@installer_crates//:thiserror",
+]
+
+rust_library(
+    name = "switch_image_bootstrap",
+    srcs = [
+        "archive.rs",
+        "dpkg.rs",
+        "json_py.rs",
+        "lib.rs",
+        "manifest.rs",
+        "stage.rs",
+    ],
+    crate_root = "lib.rs",
+    deps = _DEPS,
+)
+
+rust_test(
+    name = "switch_image_bootstrap_test",
+    size = "small",
+    srcs = [
+        "archive.rs",
+        "dpkg.rs",
+        "json_py.rs",
+        "lib.rs",
+        "manifest.rs",
+        "stage.rs",
+        "tests.rs",
+        "tests_archive.rs",
+        "tests_dpkg.rs",
+    ],
+    crate_root = "lib.rs",
+    deps = _DEPS + [
+        "@installer_crates//:tempfile",
+    ],
+)
+
+py_binary(
+    name = "oracle",
+    srcs = ["oracle.py"],
+    deps = ["//tools/install:lib"],
+)
+
+genrule(
+    name = "oracle_cases",
+    outs = ["oracle_cases.json"],
+    cmd = "$(execpath :oracle) $@",
+    tools = [":oracle"],
+)
+
+rust_test(
+    name = "oracle_test",
+    size = "small",
+    srcs = ["oracle_test.rs"],
+    data = [":oracle_cases"],
+    env = {"ORACLE_CASES": "$(rootpath :oracle_cases)"},
+    deps = [
+        ":switch_image_bootstrap",
+        "//install/apfs_write:switch_apfs_write",
+        "//install/image_overlay:switch_image_overlay",
+        "@installer_crates//:base64",
+        "@installer_crates//:serde",
+        "@installer_crates//:serde_json",
+    ],
+)
+
+rust_binary(
+    name = "switch_image_w6_tool",
+    srcs = ["w6_tool.rs"],
+    deps = [
+        ":switch_image_bootstrap",
+        "//install/apfs_format:switch_apfs_format",
+        "//install/apfs_names:switch_apfs_names",
+        "//install/apfs_read:switch_apfs_read",
+        "//install/apfs_write:switch_apfs_write",
+        "//install/image_overlay:switch_image_overlay",
+        "@installer_crates//:clap",
+    ],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_image_w6_tool",
+)
+
+sh_test(
+    name = "w6_fixture_test",
+    size = "medium",
+    srcs = ["w6_fixture_test.sh"],
+    args = [
+        "$(rootpath :switch_image_w6_tool)",
+        "$(rootpath //install/apfs_m1:switch_apfs_m1)",
+    ],
+    data = [
+        ":switch_image_w6_tool",
+        "//install/apfs_m1:switch_apfs_m1",
+    ],
+    tags = [
+        "external",
+        "manual",
+        "requires-darwin",
+    ],
+)
