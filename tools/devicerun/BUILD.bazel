@@ -24,6 +24,10 @@ py_library(
         "memory.py",
         "morning.py",
         "motion.py",
+        "owed.py",
+        "owed_all.py",
+        "owed_gpu.py",
+        "owed_system.py",
         "protection.py",
         "reports.py",
         "rules.py",
@@ -70,6 +74,14 @@ py_test(
 py_binary(
     name = "devicerun",
     srcs = ["devicerun.py"],
+    deps = [":lib"],
+)
+
+# owed_*.py: every owed check against a line made from its format string, and the per-lane rows.
+py_test(
+    name = "owed_test",
+    size = "small",
+    srcs = ["owed_test.py"],
     deps = [":lib"],
 )
 
@@ -222,6 +234,7 @@ py_test(
     srcs = ["joycon_test.py"],
     deps = [":lib"],
 )
+
 # bazel run //tools/devicerun:frame_weights -- <absolute .logarchive> --pack <pack.bin>: the frame-weights capture's table
 # (drivers/TegraGM20BMetal/draw_times.h, tools/devicerun/README.md)
 py_library(

@@ -27,6 +27,7 @@ from tools.devicerun.lockscreen import LOCKSCREEN
 from tools.devicerun.memory import MEMORY
 from tools.devicerun.morning import MORNING
 from tools.devicerun.motion import MOTION
+from tools.devicerun.owed_all import GROUPS as OWED
 from tools.devicerun.protection import PROTECTION
 from tools.devicerun.rules import REPORT, TIMELINE, Check
 from tools.devicerun.springboard import OBSERVATIONS, SPRINGBOARD
@@ -1461,6 +1462,7 @@ GROUPS: dict[str, list[Check]] = {
     'launch': LAUNCHES,
     'springboard': SPRINGBOARD,
     'boot-observations': OBSERVATIONS,
+    **OWED,
 }
 
 # The tools/frames lines, pulled with the checks' own query.

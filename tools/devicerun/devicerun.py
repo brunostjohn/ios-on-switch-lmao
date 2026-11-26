@@ -20,6 +20,7 @@ from tools.devicerun.hwtest import joined
 from tools.devicerun.launch import launch_rows
 from tools.devicerun.memory import memory_rows
 from tools.devicerun.morning import CHECKLIST
+from tools.devicerun.owed_all import summary as owed_summary
 from tools.devicerun.reports import crash_rows, frame_rows, headline, rolled_up
 from tools.devicerun.rules import FAIL, INFO, REPORT, Check, Event, Result, evaluate, match
 from tools.devicerun.springboard import springboard_rows
@@ -216,6 +217,7 @@ def evaluate_all(
     groups.append(('usb-layers', [*head, *usb.rows(by_check, crashes, end)]))
     groups.append(('frames', frame_rows(frame_lines)))
     groups.append(('crashes', crash_rows(crashes)))
+    groups.append(('owed-summary', owed_summary(by_check, [boot_text(b, r) for b, r in by_boot.items()])))
     return groups
 
 
