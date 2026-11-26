@@ -184,16 +184,18 @@ extern "C" kern_return_t IOConnectCallAsyncStructMethod(mach_port_t connection, 
 
 namespace harness {
 
-// Each render request made into a record whose programs carry its forms, kept in the store, a full form's
-// (RequestForm::Full) under its primary content too, as compilerd files it; `refuses`: its refusal stored instead;
-// `fails`: nothing stored and the compile answered as one that could not run; `shapes`: the record changed as the test's
-// compiler makes it before it is stored
+// Each render request made into a record whose programs carry its forms, kept in the store as compilerd keeps it: a made
+// entry of its content already there stays, and a full form's record is filed under its plain content too. `refuses`: its
+// refusal stored instead; `fails`: nothing stored and the compile answered as one that could not run; `unavailable`:
+// answered as a request no compiler took; `misses`: answered made, but nothing stored, as a record retired before its
+// asker read it; `shapes`: the record changed as the test's compiler makes it before it is stored
 struct RenderCompiler {
     switch_seed_pack::StoreWriter store;
     std::mutex mutex;
     std::condition_variable answered;
     std::vector<gm20b::CompileRequest> requests;
-    std::function<bool(const gm20b::CompileRequest &)> refuses, fails;
+    std::vector<gm20b::Digest> fullNames;  // the entries full forms were made under, before their filing
+    std::function<bool(const gm20b::CompileRequest &)> refuses, fails, unavailable, misses;
     std::function<void(const gm20b::CompileRequest &, gm20b::RuntimeRecord &)> shapes;
 
     bool serve(const std::string &directory)
@@ -212,13 +214,13 @@ struct RenderCompiler {
             if (!gm20b::decodeRequest(bytes, request) || request.kind != gm20b::RequestKind::Render ||
                 request.stages.size() < 2)
                 return int32_t(TegraGM20BCompileUnavailable);
-            if (fails && fails(request)) {
+            if (const int32_t answer = unstoredAnswer(request); answer >= 0) {
                 {
                     std::lock_guard<std::mutex> lock(mutex);
                     requests.push_back(std::move(request));
                 }
                 answered.notify_all();
-                return int32_t(TegraGM20BCompileFailed);
+                return answer;
             }
             std::map<std::string, gm20b::AirHash> hashes;
             const std::string &library = request.libraries[request.stages[0].library].bytes;
@@ -272,14 +274,14 @@ struct RenderCompiler {
                         : gm20b::encodeEntry(stored.content, &record, "");
             {
                 std::lock_guard<std::mutex> lock(mutex);
-                store.put(stored.name.data(), reinterpret_cast<const uint8_t *>(entry.data()), uint32_t(entry.size()));
-                if (!refused && request.form == gm20b::RequestForm::Full) {
-                    gm20b::CompileRequest primary = request;
-                    primary.form = gm20b::RequestForm::Primary;
-                    const gm20b::StoreKey filed = requestStoreKey(cache, primary);
-                    const std::string asPrimary = gm20b::encodeEntry(filed.content, &record, "");
-                    store.put(filed.name.data(), reinterpret_cast<const uint8_t *>(asPrimary.data()),
-                              uint32_t(asPrimary.size()), true);
+                if (!madeEntry(stored))
+                    put(stored.name, entry);
+                if (!refused && gm20b::fullForm(request.form)) {
+                    fullNames.push_back(stored.name);
+                    gm20b::CompileRequest plain = request;
+                    plain.form = gm20b::withoutFull(request.form);
+                    const gm20b::StoreKey filed = requestStoreKey(cache, plain);
+                    put(filed.name, gm20b::encodeEntry(filed.content, &record, ""));
                 }
                 requests.push_back(std::move(request));
             }
@@ -287,6 +289,44 @@ struct RenderCompiler {
             return int32_t(refused ? TegraGM20BCompileRefused : TegraGM20BCompileMade);
         };
         return true;
+    }
+
+    // What a request answered with nothing stored is answered: -1 where the request's record is made
+    int32_t unstoredAnswer(const gm20b::CompileRequest &request) const
+    {
+        if (fails && fails(request))
+            return TegraGM20BCompileFailed;
+        if (unavailable && unavailable(request))
+            return TegraGM20BCompileUnavailable;
+        if (misses && misses(request))
+            return TegraGM20BCompileMade;
+        return -1;
+    }
+
+    void put(const gm20b::Digest &name, const std::string &entry)
+    {
+        store.put(name.data(), reinterpret_cast<const uint8_t *>(entry.data()), uint32_t(entry.size()), true);
+    }
+
+    // Whether the store holds a made record of `stored`'s content under its name
+    bool madeEntry(const gm20b::StoreKey &stored)
+    {
+        switch_seed_pack::Bytes held;
+        if (!store.reader().find(stored.name.data(), held))
+            return false;
+        gm20b::RuntimeRecord record;
+        std::string refusal;
+        return gm20b::decodeEntry(std::string(reinterpret_cast<const char *>(held.data), held.size), stored.content,
+                                  record, refusal) == gm20b::RecordCache::Found::Record;
+    }
+
+    // Each full form's own entry gone from the store, its filing under its plain content kept: a later ask of a full
+    // form reaches this compiler
+    void retireFullForms()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        for (const gm20b::Digest &name : fullNames)
+            store.retire(name.data());
     }
 
     // A form the device asks in the background after a placed state (TegraGM20BMetalCompleteForms.mm askForms) reads this

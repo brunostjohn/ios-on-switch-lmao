@@ -5,8 +5,10 @@
 
 #include <pthread/qos.h>
 #include <array>
+#include "TegraGM20BMetalInternal.h"
 #include "gpu.h"
 #include "record.h"
+#include "remote_ask.h"
 
 namespace gm20b {
 namespace {
@@ -45,93 +47,187 @@ Pipeline **twinSlot(Pipeline &made)
 
 }  // namespace
 
-void Completion::askForms(const Ask &a, const CacheKey &k, Pipeline *made, const RuntimeRecord &record)
+bool Completion::markForm(const Pipeline *made, RequestForm form)
 {
-    if (!made || !a.facade)
+    std::lock_guard<gm20b::Mutex> l(formLock_);
+    const auto [it, inserted] = formsAsked_.emplace(std::make_pair(made, form), FormState::Asked);
+    if (inserted)
+        return true;
+    if (it->second != FormState::Retry)
+        return false;
+    it->second = FormState::Asked;
+    formsRetrying_.fetch_sub(1, std::memory_order_release);
+    return true;
+}
+
+bool Completion::claimRetryForm(const Pipeline *made, RequestForm form)
+{
+    std::lock_guard<gm20b::Mutex> l(formLock_);
+    const auto it = formsAsked_.find({made, form});
+    if (it == formsAsked_.end() || it->second != FormState::Retry)
+        return false;
+    it->second = FormState::Asked;
+    formsRetrying_.fetch_sub(1, std::memory_order_release);
+    return true;
+}
+
+void Completion::unmarkForm(const Pipeline *made, RequestForm form)
+{
+    std::lock_guard<gm20b::Mutex> l(formLock_);
+    const auto it = formsAsked_.find({made, form});
+    if (it == formsAsked_.end() || it->second == FormState::Retry)
         return;
-    std::array<RequestForm, 2> forms{};
-    uint32_t count = 0;
-    if (made->storageBits && !__atomic_load_n(twinSlot(*made), __ATOMIC_ACQUIRE))
-        forms[count++] = RequestForm::Barrier;
-    if (fullFormAdds(record))
-        forms[count++] = RequestForm::Full;
-    {
-        std::lock_guard<gm20b::Mutex> l(formLock_);
-        uint32_t asking = 0;
-        for (uint32_t i = 0; i < count; i++)
-            if (formsAsked_.insert({made, forms[i]}).second)
-                forms[asking++] = forms[i];
-        count = asking;
-    }
-    if (!count)
-        return;
-    // off the creating thread and the answer queue, whose blocks a form's request would hold up. The descriptors are
+    it->second = FormState::Retry;
+    formsRetrying_.fetch_add(1, std::memory_order_release);
+}
+
+void Completion::enqueueForms(const Ask &a, const CacheKey &k, std::array<FormAsk, 2> forms, uint32_t count)
+{
+    // off the creating thread and the answer queue, whose blocks a form's request would hold up. The descriptor is
     // copied here, on the creating thread: the synchronous creation hands over the app's own, which it may change for its
     // next state while the forms are asked (and Apple's classes are not read safely across threads)
     Ask asked = a;
     asked.facade = [a.facade copy];
-    asked.descriptor = [a.descriptor copy];
+    asked.descriptor = nil;
+    asked.bindWait = nullptr;
     const CacheKey key = k;
     dispatch_group_enter(forms_);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
         for (uint32_t i = 0; i < count; i++)
             if (!stopping_.load(std::memory_order_acquire))
-                formOf(asked, key, made, forms[i]);
+                formOf(asked, key, forms[i].target, forms[i].form, false);
         dispatch_group_leave(forms_);
     });
 }
 
-void Completion::formOf(const Ask &a, const CacheKey &k, Pipeline *made, RequestForm form)
+void Completion::askForms(const Ask &a, const CacheKey &k, Pipeline *made, const RuntimeRecord &record)
+{
+    if (!made || !a.facade)
+        return;
+    std::array<FormAsk, 2> forms{};
+    uint32_t count = 0;
+    if (made->storageBits) {
+        if (Pipeline *twin = __atomic_load_n(twinSlot(*made), __ATOMIC_ACQUIRE)) {
+            if (hasFormsToRetry() && claimRetryForm(twin, RequestForm::BarrierFull))
+                forms[count++] = {twin, RequestForm::BarrierFull};
+        } else if (markForm(made, RequestForm::Barrier)) {
+            forms[count++] = {made, RequestForm::Barrier};
+        }
+    }
+    if (fullFormAdds(record) && markForm(made, RequestForm::Full))
+        forms[count++] = {made, RequestForm::Full};
+    if (count)
+        enqueueForms(a, k, forms, count);
+}
+
+void Completion::retryForms(Ask a, Pipeline *made)
+{
+    if (!made || !a.facade || !hasFormsToRetry())
+        return;
+    std::array<FormAsk, 2> forms{};
+    uint32_t count = 0;
+    if (made->storageBits) {
+        if (Pipeline *twin = __atomic_load_n(twinSlot(*made), __ATOMIC_ACQUIRE)) {
+            if (claimRetryForm(twin, RequestForm::BarrierFull))
+                forms[count++] = {twin, RequestForm::BarrierFull};
+        } else if (claimRetryForm(made, RequestForm::Barrier)) {
+            forms[count++] = {made, RequestForm::Barrier};
+        }
+    }
+    if (claimRetryForm(made, RequestForm::Full))
+        forms[count++] = {made, RequestForm::Full};
+    if (!count)
+        return;
+    CacheKey k;
+    if (!keyOf(a, k)) {
+        for (uint32_t i = 0; i < count; i++)
+            unmarkForm(forms[i].target, forms[i].form);
+        return;
+    }
+    enqueueForms(a, k, forms, count);
+}
+
+void Completion::formOf(const Ask &a, const CacheKey &k, Pipeline *made, RequestForm form, bool again)
 {
     CompileRequest r;
     StoreKey store;
-    if (!renderRequest(a, k, false, r, store, false, RequestKind::Render, form))
+    if (!again) {
+        if (!renderRequest(a, k, false, r, store, false, RequestKind::Render, form))
+            return;
+        RuntimeRecord stored;
+        std::string why;
+        if (const RecordCache::Found found = fromStore(store, packKeyOf(r), stored, why);
+            found != RecordCache::Found::None) {
+            if (found == RecordCache::Found::Record)
+                attachForm(a, k, made, stored, form);
+            return;
+        }
+    }
+    if (!remote_->serving() || !remote_->taking())
+        return unmarkForm(made, form);
+    if (!renderRequest(a, k, true, r, store, again, RequestKind::Render, form))
         return;
     const std::string packKey = packKeyOf(r);
-    RuntimeRecord stored;
-    std::string why;
-    if (const RecordCache::Found found = fromStore(store, packKey, stored, why); found != RecordCache::Found::None) {
-        if (found == RecordCache::Found::Record)
-            attachForm(made, stored, a.caTransform, form);
-        return;
-    }
-    if (!remote_->taking() || !renderRequest(a, k, true, r, store, false, RequestKind::Render, form))
-        return;
-    const bool caTransform = a.caTransform;
     dispatch_group_enter(forms_);
     const bool sent = remote_->compileAsync(
         encodeRequest(r), false, uint32_t(QOS_CLASS_BACKGROUND),
-        [this, made, store, packKey, caTransform, form](Remote::Answer answer, const Remote::Answered &) {
+        [this, a, k, made, store, packKey, form, again](Remote::Answer answer, const Remote::Answered &) {
             auto record = std::make_shared<RuntimeRecord>();
             std::string refusal;
-            if (stopping_.load(std::memory_order_acquire) || answer != Remote::Answer::Made ||
-                fromStore(store, packKey, *record, refusal) != RecordCache::Found::Record) {
+            const bool stopping = stopping_.load(std::memory_order_acquire);
+            const RecordCache::Found found =
+                !stopping && (answer == Remote::Answer::Made || answer == Remote::Answer::Refused)
+                    ? fromStore(store, packKey, *record, refusal)
+                    : RecordCache::Found::None;
+            const bool checkDeclined =
+                !stopping && found == RecordCache::Found::None && answer != Remote::Answer::Failed && !again;
+            const AskNext next = stopping ? AskNext::End
+                                          : askNext(answer, found != RecordCache::Found::None, again,
+                                                    checkDeclined && remote_->declined());
+            if (!stopping && next == AskNext::End && answer == Remote::Answer::Unavailable)
+                unmarkForm(made, form);
+            if (next == AskNext::End || found == RecordCache::Found::Refusal) {
                 dispatch_group_leave(forms_);
                 return;
             }
+            const Ask asked = a;
+            const CacheKey key = k;
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_BACKGROUND, 0), ^{
-                if (!stopping_.load(std::memory_order_acquire))
-                    attachForm(made, *record, caTransform, form);
+                if (!stopping_.load(std::memory_order_acquire)) {
+                    if (next == AskNext::Use)
+                        attachForm(asked, key, made, *record, form);
+                    else
+                        formOf(asked, key, made, form, true);
+                }
                 dispatch_group_leave(forms_);
             });
         });
-    if (!sent)
+    if (!sent) {
+        unmarkForm(made, form);
         dispatch_group_leave(forms_);
+    }
 }
 
-void Completion::attachForm(Pipeline *made, const RuntimeRecord &record, bool caTransform, RequestForm form)
+void Completion::attachForm(const Ask &a, const CacheKey &k, Pipeline *made, const RuntimeRecord &record,
+                            RequestForm form)
 {
-    if (form == RequestForm::Full) {
-        device_.attachFullForm(record);
+    if (fullForm(form)) {
+        std::string why;
+        if (!device_.attachFullForm(record, why))
+            once([NSString stringWithFormat:@"%s of state %016llx is not attached: %s",
+                                            form == RequestForm::Full ? "a full form" : "a barrier twin's full form",
+                                            (unsigned long long)k.name(), why.c_str()]);
         return;
     }
     std::string why;
     bool retry = false;
-    Pipeline *twin = device_.addRecord(record, caTransform, why, &retry);
+    Pipeline *twin = device_.addRecord(record, a.caTransform, why, &retry);
     if (!twin || twin == made || twin->storageBits)
         return;
     Pipeline *none = nullptr;
     __atomic_compare_exchange_n(twinSlot(*made), &none, twin, false, __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+    if (fullFormAdds(record) && markForm(twin, RequestForm::BarrierFull))
+        formOf(a, k, twin, RequestForm::BarrierFull, false);
 }
 
 }  // namespace gm20b
