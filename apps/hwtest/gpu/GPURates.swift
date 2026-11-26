@@ -312,7 +312,8 @@ public final class GPURates {
     }
 
     struct SharedBuffers {
-        let counter: MTLBuffer, corners: MTLBuffer, table: MTLBuffer, small: MTLBuffer, smallOut: MTLBuffer
+        let counter: MTLBuffer, corners: MTLBuffer, table: MTLBuffer, small: MTLBuffer, smallIn: MTLBuffer
+        let smallOut: MTLBuffer
     }
 
     /// The shared arms' buffers, made L2-bypassing where `bypass`; nil where the device cannot make them so
@@ -333,7 +334,7 @@ public final class GPURates {
         let table = (0 ..< 256).map { SIMD4<Float>(Float($0) / 255, 0.5, 0.25, 1) }
         return SharedBuffers(
             counter: try gpu.buffer([UInt32(0)]), corners: try gpu.buffer(corners), table: try gpu.buffer(table),
-            small: try gpu.buffer(256), smallOut: try gpu.buffer(256)
+            small: try gpu.buffer(256), smallIn: try gpu.buffer(256), smallOut: try gpu.buffer(256)
         )
     }
 
@@ -381,8 +382,10 @@ public final class GPURates {
     }
 
     /// `smallJobs` command buffers one after another, each after the CPU rewrote 256 bytes of a shared buffer: a blit
-    /// reads them into a private buffer and fills another shared one. The median commit-to-completed time is what a job's
-    /// L2 maintenance (the host-written invalidate, the External flush) costs on top of its tiny work.
+    /// reads them into a private buffer and on into a second shared one, and fills a third. The median
+    /// commit-to-completed time is what a job's L2 maintenance (the host-written invalidate, the External flush) costs on
+    /// top of its tiny work. Job i must read the CPU's byte i (a miss: it read an old L2 line) and leave its fill in
+    /// memory at its completion.
     func smallJobs(_ mode: String, _ b: SharedBuffers) async throws {
         guard let priv = gpu.device.makeBuffer(length: 256, options: .storageModePrivate) else {
             throw TestFailure("no private buffer of 256 bytes")
@@ -393,12 +396,17 @@ public final class GPURates {
             let t = try await gpu.run { c in
                 let e = c.makeBlitCommandEncoder()!
                 e.copy(from: b.small, sourceOffset: 0, to: priv, destinationOffset: 0, size: 256)
+                e.copy(from: priv, sourceOffset: 0, to: b.smallIn, destinationOffset: 0, size: 256)
                 e.fill(buffer: b.smallOut, range: 0 ..< 256, value: UInt8(truncatingIfNeeded: i))
                 e.endEncoding()
             }
             if i > 0 { walls.append(t.wallMilliseconds) }
             if b.smallOut.contents().load(as: UInt8.self) != UInt8(truncatingIfNeeded: i) {
                 problems.append("jobs_\(mode): job \(i)'s fill was not in memory at its completion")
+            }
+            let read = UnsafeBufferPointer(start: b.smallIn.contents().assumingMemoryBound(to: UInt8.self), count: 256)
+            if read.contains(where: { $0 != UInt8(truncatingIfNeeded: i) }) {
+                problems.append("jobs_\(mode): job \(i) read the shared buffer before the CPU's write of it")
             }
         }
         metrics.set("jobs_us_" + mode, Stats.percentile(walls, 0.5) * 1000, digits: 1)
