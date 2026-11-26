@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #define SWITCH_PREFETCH_IMPL 1
 #include "prefetch_internal.h"
+#include "prefetch_naming.h"
 #include "prefetch_pace.h"
 
 #include <kern/clock.h>
@@ -135,6 +136,12 @@ static void switch_prefetch_diag_tick(thread_call_param_t p0 __unused, thread_ca
         "demand %llu/%llu",
         r_mib, u_mib, x_mib, l_mib, b_mib, d_cx + d_root + d_data, d_cx, d_root, d_data, replay_ms, demand_ms,
         replay_gt64k, replay_reqs, demand_gt64k, demand_reqs);
+    os_log(OS_LOG_DEFAULT,
+           "SwitchBootPrefetch: recorded %llu reads, %llu MiB through cluster_io, %llu MiB through decmpfs, %llu MiB of "
+           "first uses; the replay's decmpfs page-ins %llu MiB, %llu MiB of them tagged",
+           io.record_entries, io.record_bytes[SWITCH_RECORD_CLUSTER] >> 20, io.record_bytes[SWITCH_RECORD_DECMPFS] >> 20,
+           io.record_bytes[SWITCH_RECORD_FIRST_USE] >> 20, pace.replay_decmp_bytes >> 20,
+           pace.replay_decmp_tagged_bytes >> 20);
 #if CONFIG_IOSCHED
     os_log(OS_LOG_DEFAULT, "SwitchBootPrefetch: busy-page raises requested %llu delivered %llu refused %llu",
            (unsigned long long)__atomic_load_n(&switch_reprio_requested, __ATOMIC_RELAXED),
@@ -294,8 +301,9 @@ static struct switch_prefetch_run *switch_prefetch_load_list(const struct switch
     return runs;
 }
 
+/* files: run_count slots for the files it opens, which the save names this boot's reads by. Returns how many. */
 static uint32_t switch_prefetch_replay_runs(const struct switch_prefetch_run *runs, uint32_t run_count,
-                                            uint8_t *replayed_bits)
+                                            struct switch_named_file *files)
 {
     uint64_t list_bytes = 0;
     for (uint32_t i = 0; i < run_count; ++i) {
@@ -316,7 +324,7 @@ static uint32_t switch_prefetch_replay_runs(const struct switch_prefetch_run *ru
     uint8_t vp_volume = 0xffu;
     struct switch_prefetch_file_meta vp_meta = {0};
     bool vp_valid = false;
-    uint32_t replayed = 0;
+    uint32_t file_count = 0;
     uint64_t second_abs = 0;
     nanoseconds_to_absolutetime(NSEC_PER_SEC, &second_abs);
     const uint64_t start_abs = mach_absolute_time();
@@ -361,6 +369,12 @@ static uint32_t switch_prefetch_replay_runs(const struct switch_prefetch_run *ru
             vp_volume = run->volume;
             vp_valid =
                 switch_prefetch_vget_regular(mp, g_prefetch.fsids[run->volume], run->file_id, ctx, &vp, &vp_meta);
+            if (vp_valid && files != NULL && file_count < run_count) {
+                const struct switch_named_file file = {vp,         vnode_vid(vp),        run->volume,
+                                                       run->file_id, vp_meta.file_size, vp_meta.mtime_sec,
+                                                       vp_meta.mtime_nsec};
+                files[file_count++] = file;
+            }
         } else if (vp_valid && (run->volume == SWITCH_PREFETCH_VOL_DATA || vnode_isrecycled(vp))) {
             /* Re-validate writable Data vnodes across consecutive runs so truncation or unlink skips cleanly. */
             if (!switch_prefetch_vnode_meta(vp, mp, run->file_id, ctx, NULL, &vp_meta)) {
@@ -378,13 +392,7 @@ static uint32_t switch_prefetch_replay_runs(const struct switch_prefetch_run *ru
             continue;
         }
         int err = 0;
-        const int rc = vnode_pagein(vp, NULL, 0, in.offset, (upl_size_t)in.length, 0, &err);
-        if (rc == PAGER_SUCCESS) {
-            if (replayed_bits != NULL) {
-                switch_prefetch_bit_set(replayed_bits, i);
-            }
-            replayed = i + 1u;
-        }
+        (void)vnode_pagein(vp, NULL, 0, in.offset, (upl_size_t)in.length, 0, &err);
     }
     if (vp != NULLVP) {
         vnode_put(vp);
@@ -393,7 +401,7 @@ static uint32_t switch_prefetch_replay_runs(const struct switch_prefetch_run *ru
     switch_vm_prefetch_end_replay();
     switch_vm_prefetch_wait_inflight_drain();
     switch_vm_prefetch_forget_replay_thread();
-    return replayed;
+    return file_count;
 }
 
 static void switch_prefetch_thread(void *parameter, wait_result_t w __unused)
@@ -406,11 +414,11 @@ static void switch_prefetch_thread(void *parameter, wait_result_t w __unused)
     throttle_set_thread_io_policy(IOPOL_PASSIVE);
     struct switch_prefetch_header key;
     struct switch_prefetch_run *runs = NULL;
-    uint8_t *replayed_bits = NULL;
-    size_t replayed_bits_bytes = 0;
+    struct switch_named_file *files = NULL;
+    size_t files_bytes = 0;
     uint32_t run_count = 0;
     size_t runs_bytes = 0;
-    uint32_t replayed = 0;
+    uint32_t file_count = 0;
     bool have_key = false;
 
     if (switch_vm_prefetch_boot_stop_reason() == SWITCH_PREFETCH_STOP_NONE) {
@@ -423,8 +431,8 @@ static void switch_prefetch_thread(void *parameter, wait_result_t w __unused)
             if (runs == NULL) {
                 os_log(OS_LOG_DEFAULT, "SwitchBootPrefetch: no list to replay (%s); this boot records one", why);
             } else if (run_count != 0u) {
-                replayed_bits_bytes = ((size_t)run_count + 7u) / 8u;
-                replayed_bits = (uint8_t *)kalloc_data(replayed_bits_bytes, Z_WAITOK | Z_ZERO);
+                files_bytes = (size_t)run_count * sizeof(*files);
+                files = (struct switch_named_file *)kalloc_data(files_bytes, Z_WAITOK);
             }
         }
     }
@@ -442,7 +450,7 @@ static void switch_prefetch_thread(void *parameter, wait_result_t w __unused)
 #endif
 
     if (runs != NULL && switch_vm_prefetch_replay_stop_reason() == SWITCH_PREFETCH_STOP_NONE) {
-        replayed = switch_prefetch_replay_runs(runs, run_count, replayed_bits);
+        file_count = switch_prefetch_replay_runs(runs, run_count, files);
     }
 
     const uint32_t stop_reason = switch_vm_prefetch_wait_stop();
@@ -466,15 +474,15 @@ static void switch_prefetch_thread(void *parameter, wait_result_t w __unused)
         for (unsigned v = 0; v < SWITCH_PREFETCH_VOLUME_COUNT; ++v) {
             mounts[v] = switch_prefetch_mount_at(v);
         }
-        switch_prefetch_save_next(log, appended, runs, replayed, replayed_bits, &key, mounts, g_prefetch.fsids,
+        switch_prefetch_save_next(log, appended, files, file_count, &key, mounts, g_prefetch.fsids,
                                   SWITCH_PREFETCH_VOLUME_COUNT);
     }
 
     if (log != NULL) {
         kfree_data(log, log_bytes);
     }
-    if (replayed_bits != NULL) {
-        kfree_data(replayed_bits, replayed_bits_bytes);
+    if (files != NULL) {
+        kfree_data(files, files_bytes);
     }
     if (runs != NULL) {
         kfree_data(runs, runs_bytes);

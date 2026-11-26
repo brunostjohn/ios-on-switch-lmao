@@ -203,7 +203,7 @@ static void cluster_read_upl_release(upl_t upl, int start_pg, int last_pg, int t
 static inline bool switch_cluster_is_image(vnode_t vp);
 static inline int switch_cluster_cryptex_index(mount_t mp);
 static inline int switch_cluster_volume_index(mount_t mp);
-static void switch_cluster_record(vnode_t vp, int index, off_t offset, uint64_t size);
+static void switch_cluster_record(vnode_t vp, int index, off_t offset, uint64_t size, unsigned int kind);
 static struct switch_quiesce switch_record_gate;
 static int switch_record_drain_event;
 static thread_t switch_record_skip_thread;
@@ -214,6 +214,7 @@ static uint64_t switch_prefetch_replay_gt64k;
 static uint64_t switch_prefetch_demand_reqs;
 static uint64_t switch_prefetch_demand_gt64k;
 static uint64_t switch_prefetch_demand_abs;
+static uint64_t switch_record_bytes[SWITCH_RECORD_KINDS];
 #endif
 /* Switch (r14-launch, r17-launch): the cryptex images' reads, for a debug kernel's kprof image line: through the image
  * files (DiskImages; cached-read calls, those that missed, windows read ahead and their bytes, card reads issued for an
@@ -1316,7 +1317,7 @@ cluster_io(vnode_t vp, upl_t upl, vm_offset_t upl_offset, off_t f_offset, int no
 			const bool switch_is_replay =
 			    os_atomic_load(&switch_record_skip_thread, relaxed) == current_thread();
 			if (!switch_is_replay && switch_quiesce_is_armed(&switch_record_gate)) {
-				switch_cluster_record(vp, switch_vol, f_offset, (uint64_t)non_rounded_size);
+				switch_cluster_record(vp, switch_vol, f_offset, (uint64_t)non_rounded_size, SWITCH_RECORD_CLUSTER);
 			}
 #if DEVELOPMENT || DEBUG
 			if (switch_is_replay) {
@@ -4194,7 +4195,7 @@ switch_cluster_record_stop(void)
 }
 
 static void
-switch_cluster_record(vnode_t vp, int index, off_t offset, uint64_t size)
+switch_cluster_record(vnode_t vp, int index, off_t offset, uint64_t size, unsigned int kind)
 {
 	if (offset < 0 || size == 0 || size > UINT32_MAX || vp->v_type != VREG ||
 	    (vp->v_flag & (VISNAMEDSTREAM | VSYSTEM | VSWAP)) != 0) {
@@ -4214,8 +4215,31 @@ switch_cluster_record(vnode_t vp, int index, off_t offset, uint64_t size)
 		log[slot].vid = (uint32_t)vp->v_id;
 		log[slot].index = (uint16_t)index;
 		os_atomic_store(&log[slot].when, (uint16_t)(elapsed < 65534 ? elapsed + 1 : 65535), release);
+#if DEVELOPMENT || DEBUG
+		os_atomic_add(&switch_record_bytes[kind], size, relaxed);
+#else
+		(void)kind;
+#endif
 	}
 	switch_quiesce_leave(&switch_record_gate, switch_record_quiesce_wake, NULL);
+}
+
+/*
+ * Switch: file reads that never reach cluster_io on the file's own vnode, recorded by that vnode's offsets so the
+ * replay's vnode_pagein of it reissues them: decmpfs decompresses a compressed file from its resource fork, and a page
+ * the replay brought in is used without any read at all. The replay's own page-ins are not recorded.
+ */
+void
+switch_cluster_record_file(struct vnode *vp, int64_t offset, uint64_t size, unsigned int kind)
+{
+	if (vp == NULLVP || kind >= SWITCH_RECORD_KINDS || !switch_quiesce_is_armed(&switch_record_gate) ||
+	    os_atomic_load(&switch_record_skip_thread, relaxed) == current_thread()) {
+		return;
+	}
+	const int vol = switch_cluster_volume_index(vnode_mount(vp));
+	if (vol >= 0) {
+		switch_cluster_record(vp, vol, (off_t)offset, size, kind);
+	}
 }
 
 #if DEVELOPMENT || DEBUG
@@ -4230,6 +4254,10 @@ switch_cluster_prefetch_snapshot(struct switch_cluster_io_snapshot *out)
 	out->demand_reqs = os_atomic_load(&switch_prefetch_demand_reqs, relaxed);
 	out->demand_gt64k = os_atomic_load(&switch_prefetch_demand_gt64k, relaxed);
 	out->demand_abs = os_atomic_load(&switch_prefetch_demand_abs, relaxed);
+	for (unsigned k = 0; k < SWITCH_RECORD_KINDS; ++k) {
+		out->record_bytes[k] = os_atomic_load(&switch_record_bytes[k], relaxed);
+	}
+	out->record_entries = os_atomic_load(&switch_record_next, relaxed);
 }
 #endif
 

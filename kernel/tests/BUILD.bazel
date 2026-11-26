@@ -1267,6 +1267,43 @@ copy_file(
     out = "switch/prefetch_quiesce.h",
 )
 
+copy_file(
+    name = "switch_prefetch_naming_hdr",
+    src = "//kernel/switch:vm/prefetch_naming.h",
+    out = "switch/prefetch_naming.h",
+)
+
+copy_file(
+    name = "switch_prefetch_vm_hdr",
+    src = "//kernel/switch:include/switch/prefetch_vm.h",
+    out = "switch/prefetch_vm.h",
+)
+
+host_test(
+    name = "switch_prefetch_record_test",
+    srcs = [
+        "switch/prefetch_list.h",
+        "switch/prefetch_naming.h",
+        "switch/prefetch_pace.h",
+        "switch/prefetch_vm.h",
+        "switch_prefetch_record_test.cpp",
+    ],
+    data = [
+        "//kernel/switch:vm/prefetch.c",
+        "//kernel/switch:vm/prefetch_save.c",
+        "//kernel/switch:vm/prefetch_vm.c",
+        "//kernel/xnu-10063.141.1/bsd:kern/decmpfs.c",
+        "//kernel/xnu-10063.141.1/bsd:vfs/vfs_cluster.c",
+        "//kernel/xnu-10063.141.1/osfmk:vm/vm_page.h",
+        "//kernel/xnu-10063.141.1/osfmk:vm/vm_pageout.c",
+        "//kernel/xnu-12377.121.6/bsd:kern/decmpfs.c",
+        "//kernel/xnu-12377.121.6/bsd:vfs/vfs_cluster.c",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_page_internal.h",
+        "//kernel/xnu-12377.121.6/osfmk:vm/vm_pageout.c",
+    ],
+    includes = ["."],
+)
+
 host_test(
     name = "switch_prefetch_test",
     srcs = [

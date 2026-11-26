@@ -77,6 +77,7 @@ UNUSED_SYMBOL(decmpfs_validate_compressed_file)
 #include <sys/kdebug_triage.h>
 
 #include <ptrauth.h>
+#include <switch/prefetch_vm.h>
 
 #pragma mark --- debugging ---
 
@@ -1424,6 +1425,8 @@ decmpfs_pagein_compressed(struct vnop_pagein_args *ap, int *is_compressed, decmp
 		}
 	}
 
+	switch_cluster_record_file(vp, f_offset, (uint64_t)MIN((off_t)size, cachedSize - f_offset), SWITCH_RECORD_DECMPFS);
+
 #if CONFIG_IOSCHED
 	/* Mark the UPL as the requesting UPL for decompression */
 	upl_mark_decmp(pl);
@@ -1815,6 +1818,8 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
 	uplSize = (uplSize + (alignment_size - 1)) & ~(alignment_size - 1);
 
 	VerboseLogWithPath("new uplPos %lld uplSize %lld\n", (uint64_t)uplPos, (uint64_t)uplSize);
+
+	switch_cluster_record_file(vp, uplPos, (uint64_t)uplSize, SWITCH_RECORD_DECMPFS);
 
 	uplRemaining = uplSize;
 	curUplPos = uplPos;

@@ -18,17 +18,35 @@
 #include <vm/vm_page.h>
 #endif
 
+extern struct vnode *vnode_pager_lookup_vnode(memory_object_t pager);
+
 static struct switch_prefetch_pace g_pace;
 static thread_t g_replay_thread;
 static int g_pace_event;
 #if DEVELOPMENT || DEBUG
 static uint64_t g_replay_abs;
 static uint64_t g_demand_upl_abs;
+static uint64_t g_replay_decmp_bytes;
+static uint64_t g_replay_decmp_tagged_bytes;
 #endif
 
 bool switch_vm_prefetch_used_locked(void)
 {
     return switch_pace_on_used(&g_pace);
+}
+
+/* The file's vnode outlives this call: every caller holds the page's object locked while a mapping, a read's iocount
+ * or the shared region holds the vnode, and a vnode object's pager names that vnode until the object terminates. */
+void switch_vm_prefetch_first_use(void *object_arg, uint64_t offset)
+{
+    vm_object_t object = (vm_object_t)object_arg;
+    if (object == VM_OBJECT_NULL || object->internal || object->pager == MEMORY_OBJECT_NULL) {
+        return;
+    }
+    struct vnode *vp = vnode_pager_lookup_vnode(object->pager);
+    if (vp != NULL) {
+        switch_cluster_record_file(vp, (int64_t)(offset + object->paging_offset), PAGE_SIZE, SWITCH_RECORD_FIRST_USE);
+    }
 }
 
 bool switch_vm_prefetch_reclaimed_locked(void)
@@ -69,6 +87,14 @@ void switch_vm_prefetch_inflight_done(uint32_t bytes, uint64_t elapsed_abs)
 }
 
 #if DEVELOPMENT || DEBUG
+void switch_vm_prefetch_count_replay_decmp(uint64_t bytes, bool tagged)
+{
+    __atomic_fetch_add(&g_replay_decmp_bytes, bytes, __ATOMIC_RELAXED);
+    if (tagged) {
+        __atomic_fetch_add(&g_replay_decmp_tagged_bytes, bytes, __ATOMIC_RELAXED);
+    }
+}
+
 void switch_vm_prefetch_demand_done(uint64_t elapsed_abs)
 {
     __atomic_fetch_add(&g_demand_upl_abs, elapsed_abs, __ATOMIC_RELAXED);
@@ -227,34 +253,6 @@ uint32_t switch_vm_prefetch_boot_stop_reason(void)
     return switch_pace_boot_stop_reason(&g_pace);
 }
 
-enum switch_prefetch_run_state switch_vm_prefetch_check_run(void *control, uint64_t offset, uint64_t length)
-{
-    if (control == NULL || length == 0u) {
-        return SWITCH_PREFETCH_RUN_EVICTED;
-    }
-    vm_object_t object = memory_object_control_to_vm_object((memory_object_control_t)control);
-    if (object == VM_OBJECT_NULL) {
-        return SWITCH_PREFETCH_RUN_EVICTED;
-    }
-    bool any_absent = false;
-    bool any_used = false;
-    vm_object_lock_shared(object);
-    for (vm_object_offset_t off = offset; off < offset + length; off += PAGE_SIZE) {
-        vm_page_t m = vm_page_lookup(object, off);
-        if (m == VM_PAGE_NULL || m->vmp_absent) {
-            any_absent = true;
-        } else if (!m->vmp_clustered) {
-            any_used = true;
-            break;
-        }
-    }
-    vm_object_unlock(object);
-    if (any_used) {
-        return SWITCH_PREFETCH_RUN_USED;
-    }
-    return any_absent ? SWITCH_PREFETCH_RUN_EVICTED : SWITCH_PREFETCH_RUN_UNUSED;
-}
-
 #if DEVELOPMENT || DEBUG
 void switch_vm_prefetch_pace_snapshot(struct switch_prefetch_pace_snapshot *out)
 {
@@ -265,5 +263,7 @@ void switch_vm_prefetch_pace_snapshot(struct switch_prefetch_pace_snapshot *out)
     out->lead_bound = __atomic_load_n(&g_pace.lead_bound, __ATOMIC_RELAXED);
     out->replay_abs = __atomic_load_n(&g_replay_abs, __ATOMIC_RELAXED);
     out->demand_upl_abs = __atomic_load_n(&g_demand_upl_abs, __ATOMIC_RELAXED);
+    out->replay_decmp_bytes = __atomic_load_n(&g_replay_decmp_bytes, __ATOMIC_RELAXED);
+    out->replay_decmp_tagged_bytes = __atomic_load_n(&g_replay_decmp_tagged_bytes, __ATOMIC_RELAXED);
 }
 #endif

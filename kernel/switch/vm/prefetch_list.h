@@ -207,16 +207,6 @@ static inline bool switch_prefetch_ready_add(struct switch_prefetch_ready *r, un
     return (prev & bit) == 0u && (prev | bit) == SWITCH_PREFETCH_READY_ALL;
 }
 
-static inline void switch_prefetch_bit_set(uint8_t *bits, uint32_t index)
-{
-    bits[index >> 3] |= (uint8_t)(1u << (index & 7u));
-}
-
-static inline bool switch_prefetch_bit_test(const uint8_t *bits, uint32_t index)
-{
-    return (bits[index >> 3] & (uint8_t)(1u << (index & 7u))) != 0u;
-}
-
 static inline bool switch_prefetch_vnode_eligible(bool is_reg, bool is_namedstream, bool is_system, bool is_swap,
                                                   bool is_recycled, bool mount_matches, uint64_t file_id,
                                                   uint64_t expected_file_id, uint64_t file_size, bool nlink_supported,
