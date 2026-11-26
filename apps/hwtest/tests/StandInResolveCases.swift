@@ -63,16 +63,20 @@ enum StandInResolveCases {
     /// Each stored sample against a one-sample draw of its value, that texture read by a compute kernel
     /// (`computeOff`) and by a fragment pass (`fragmentOff`), and the texels where the two reads of it differ
     /// (`routesDiffer`). A compute read that fails ends the compute side (`computeError`); the fragment side reads
-    /// every sample regardless.
+    /// every sample regardless. `firstDiffer`: the first texel the two read differently, its bytes in the texture
+    /// (hex, as the CPU reads them) and both reads' red, alpha and stored sample's red, so a Mac can tell which
+    /// route decodes the code as Metal does.
     struct SampleReadings {
         var computeOff = 0, fragmentOff = 0, routesDiffer = 0
         var computeError: Error?
+        var firstDiffer = "-"
 
         func record(_ key: String, _ metrics: inout Metrics) {
             metrics.set(key + "_samples_off_fragment", fragmentOff)
             guard computeError == nil else { return }
             metrics.set(key + "_samples_off", computeOff)
             metrics.set(key + "_routes_differ", routesDiffer)
+            metrics.set(key + "_first_differ", firstDiffer)
         }
 
         func checks(_ key: String) -> [(String, Bool)] {
@@ -104,6 +108,14 @@ enum StandInResolveCases {
                 let compute = try await gpu.texels(alone)
                 readings.computeOff += texels.filter { stored[$0 * samples + sample] != compute[$0] }.count
                 readings.routesDiffer += texels.filter { compute[$0] != fragment[$0] }.count
+                if readings.firstDiffer == "-", let at = texels.first(where: { compute[$0] != fragment[$0] }) {
+                    let bytes = try await gpu.read(alone, bytesPerPixel: f.bytes)
+                    let code = bytes[at * f.bytes ..< (at + 1) * f.bytes].map { String(format: "%02x", $0) }.joined()
+                    let sampleRead = stored[at * samples + sample]
+                    readings.firstDiffer =
+                        "t\(at) s\(sample) bytes \(code) compute \(compute[at].x),\(compute[at].w) fragment "
+                        + "\(fragment[at].x),\(fragment[at].w) stored \(sampleRead.x)"
+                }
             } catch {
                 readings.computeError = error
             }
