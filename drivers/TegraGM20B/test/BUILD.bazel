@@ -93,6 +93,8 @@
 #                            kernel log's lines carry every value once, in order, under a count and sum
 #   switch_gpu_async_rights_test     an asynchronous call's wake port right on every return of EventObserve and
 #                                    ResourceObserve: MIG releases it after an error, the notification after a success
+#   switch_gpu_probe_gate_test       HW Test's paths op 7 (host1x syncpoints) and the facade's raw 3D-class methods: debug
+#                                    builds alone, and only for a process holding SWITCH_GPU_PROBES_ENTITLEMENT
 #   switch_gpu_refusal_sites_test    SwitchGpuRefusalSites.h: a SubmitJob or ResourceSetCreate refusal's line (process,
 #                                    channel, site, values) from the call's one exit, silent only for an ended set and a
 #                                    held admission, four then every 256th per connection and site
@@ -1271,6 +1273,18 @@ host_test(
         "//drivers/TegraGM20B:shim/include/nvxnu.h",
         "//drivers/TegraGM20B:shim/linux.c",
         "//drivers/TegraGM20B:shim/xnu_glue.cpp",
+    ],
+)
+
+host_test(
+    name = "switch_gpu_probe_gate_test",
+    srcs = ["switch_gpu_probe_gate_test.cpp"],
+    data = [
+        "//apps/hwtest:SwitchHWTest.entitlements",
+        "//apps/hwtest:SwitchHWTest27.entitlements",
+        "//drivers/TegraGM20B:TegraGM20BPathsABI.h",
+        "//drivers/TegraGM20B:TegraGM20BUserClientDispatch.cpp",
+        "//drivers/TegraGM20BMetal:TegraGM20BMetalProbe.mm",
     ],
 )
 

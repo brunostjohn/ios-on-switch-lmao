@@ -685,6 +685,8 @@ TESTS: dict[str, bool] = {
     'ui.launch_hitch': False,
     'system.compiler_alive': False,
     'gpu.x1.texture_extents': False,
+    'gpu.x1.clean_l2_syncpoint': False,
+    'gpu.x1.shadow_ram': False,
     'gpu.gm20b.iterated_blend_passes': False,
     'gpu.gm20b.fetch_rung3': False,
 }

@@ -29,11 +29,19 @@ enum {
 	/* "foreign_jobs=N foreign_fences=N foreign_promises=N foreign_events=N foreign_host1x=N": monotonic compositor
 	 * foreign-wait totals since boot (TGM_STATS) */
 	TegraGM20BPathsOpForeignWaits = 6,
+	/* "ids=a,b,c values=x,y,z": three host1x syncpoints for HW Test probes' GPU increments (gpu.x1.clean_l2_syncpoint,
+	 * gpu.x1.shadow_ram), taken from host1x at the first ask and never waited on, and their values now. A process
+	 * without SWITCH_GPU_PROBES_ENTITLEMENT gets kIOReturnNotPrivileged. */
+	TegraGM20BPathsOpProbeSyncpts = 7,
 	/* "jobless=N status_lag=N": since boot, bridges whose consumer waits on the producer's own syncpoint, and consumer
 	 * status reads that found that syncpoint reached while the producer's fence read short (SwitchGpuBridge.h
 	 * switch_gpu_bridge_counts; HW Test gpu.x1.bridge_syncpt_order) */
 	TegraGM20BPathsOpBridge = 8,
 };
+
+/* HW Test's alone: TegraGM20BPathsOpProbeSyncpts, and the facade's raw 3D-class methods (TegraGM20BMetalProbe.mm), which
+ * pass none of the encoders' checks and can increment any host1x syncpoint */
+#define SWITCH_GPU_PROBES_ENTITLEMENT "com.brunostjohn.switch.gpu-probes"
 
 struct TegraGM20BAbiPaths {
 	uint32_t op;
