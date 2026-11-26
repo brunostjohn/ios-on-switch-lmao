@@ -834,6 +834,12 @@ public:
         return hdr_;
     }
 
+    // The mapping's bytes: the whole file
+    size_t size() const
+    {
+        return size_;
+    }
+
     template <class T> const T *section(PackSectionId s) const
     {
         return reinterpret_cast<const T *>(base_ + hdr_->section[s].offset);

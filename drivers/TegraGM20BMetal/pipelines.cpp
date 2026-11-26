@@ -6,6 +6,7 @@
 #include "dynamic_push.h"
 #include "blend_reads.h"
 #include "gpu.h"
+#include "pack_preread.h"
 #include "pack_window.h"
 #include "mme.h"
 #include "mip.h"
@@ -21,6 +22,7 @@
 #include "xr_pass.h"
 #include "written_textures.h"
 
+#include <mach/vm_page_size.h>
 #include <os/log.h>
 #include <algorithm>
 #include <cstdio>
@@ -471,6 +473,8 @@ Pipeline *Device::placePackedRecord(const PackPipeline &pp, bool caTransform)
             }
             return expected;
         }
+    } else {
+        prereadPackRecord(pack_, pp, uint64_t(vm_page_size));
     }
     std::lock_guard<gm20b::Mutex> l(lock_);
     return placeRecord(pp, caTransform);
