@@ -394,21 +394,27 @@ TEST(GM20BPushScanSource, EverySubmissionPathScansItsPushes)
 			       "count, prof, true);",
 			       "switch_gpu_chan_exec_events("));
 	EXPECT_TRUE(job.has("&seqno, profile, jobVisibility, releases, keptCount, &transaction);"));
-	EXPECT_EQ(clientCode().count("scanPushes(pushes, count,"), 1u);
-	EXPECT_TRUE(Block(client(), "const tgm_prof *AGXDeviceUserClient::scanSubmission(")
-			    .has("__atomic_fetch_add(&pushSubmits_, 1u, __ATOMIC_RELAXED) % "
-				 "kScanEvery"));
+	const CodeText submission =
+		Block(client(), "const tgm_prof *AGXDeviceUserClient::scanSubmission(");
+	EXPECT_EQ(clientCode().count("scanPushes(pushes, count,"), 2u);
+	EXPECT_EQ(submission.count("scanPushes(pushes, count,"), 2u);
+	EXPECT_TRUE(submission.startsWith("if (!TGM_STATS || !count) return nullptr;"));
+	EXPECT_TRUE(submission.has("tgm_scan::scanWeight(n, kScanFirst, kScanEvery);"));
 }
 
 // The render server waits for its submissions' thread (waitUntilScheduled), so only a profiled submission, whose kick
-// stamps what the read classed, is read on it; the others are read on a thread call, and only where their words lie in
-// the pool, whose kernel mapping outlives every BO (boot 21: 36-57 KiB of write-combined reads every 4th compositor job).
-TEST(GM20BPushScanSource, OnlyAProfiledSubmissionIsReadOnItsThread)
+// stamps what the read classed, is read on it, and an app connection's first kScanFirst; the others are read on a thread
+// call, and only where their words lie in the pool, whose kernel mapping outlives every BO (boot 21:
+// 36-57 KiB of write-combined reads every 4th compositor job).
+TEST(GM20BPushScanSource, OnlyAProfiledOrAFirstSubmissionIsReadOnItsThread)
 {
 	const CodeText submission =
 		Block(client(), "const tgm_prof *AGXDeviceUserClient::scanSubmission(");
-	EXPECT_TRUE(submission.before("deferScan(slot, fences, pushes, count, metalMacros);",
-				      "scanPushes(pushes, count, &prof, metalMacros);"));
+	EXPECT_TRUE(submission.before(
+		"scanPushes(pushes, count, &prof, metalMacros, submits); return &prof;",
+		"if (n < kScanFirst && !critical_ && count <= TGM_PROF_MAX) "
+		"scanPushes(pushes, count, nullptr, metalMacros, submits); "
+		"else deferScan(slot, fences, pushes, count, metalMacros, submits);"));
 	const CodeText defer = Block(client(), "void AGXDeviceUserClient::deferScan(");
 	EXPECT_TRUE(defer.has("hit->bo->pool_va"));
 	EXPECT_TRUE(defer.has("thread_call_enter(d->call);"));
