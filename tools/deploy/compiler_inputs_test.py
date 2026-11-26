@@ -1,6 +1,7 @@
 """The optional external inputs must match the app before deploy opens the card."""
 
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,41 @@ from tools.deploy import deploy
 
 
 class CompilerInputsTest(unittest.TestCase):
+    def test_unflagged_deploy_clears_only_compiler_payloads_and_updates_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / 'Data'
+            bench = data / 'mobile/Media/Switch/benchloop'
+            bench.mkdir(parents=True)
+            sibling = bench / 'other.bin'
+            sibling.write_bytes(b'keep')
+            inputs = {key + '.swab': b'payload' for key in deploy.compiler_inputs.STATES}
+            for fixtures in (inputs, None, None):
+                deploy.compiler_inputs.stage(data, fixtures)
+                deploy.deployed.record(data, root, '24B119', lambda *_: None)
+                record = json.loads((data / 'Switch/deployed.json').read_text())
+                self.assertIs(record['compiler_inputs_staged'], fixtures is not None)
+                self.assertEqual(
+                    record['compiler_input_states'], list(deploy.compiler_inputs.STATES) if fixtures else []
+                )
+                self.assertEqual((bench / 'compiler').exists(), fixtures is not None)
+                self.assertEqual(sibling.read_bytes(), b'keep')
+                self.assertFalse((bench / 'compiler.partial').exists())
+
+    def test_failed_stage_publishes_no_partial_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inputs = {key + '.swab': b'payload' for key in deploy.compiler_inputs.STATES}
+            deploy.compiler_inputs.stage(root, inputs)
+            with (
+                mock.patch.object(deploy.compiler_inputs.files, 'write_bytes', side_effect=OSError('write failed')),
+                self.assertRaisesRegex(OSError, 'write failed'),
+            ):
+                deploy.compiler_inputs.stage(root, inputs)
+            self.assertFalse((root / 'mobile/Media/Switch/benchloop/compiler').exists())
+            deploy.compiler_inputs.stage(root, None)
+            self.assertFalse((root / 'mobile/Media/Switch/benchloop/compiler.partial').exists())
+
     def test_changed_last_input_stops_deploy_before_opening_the_card(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

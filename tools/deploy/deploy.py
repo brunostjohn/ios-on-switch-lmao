@@ -222,8 +222,11 @@ def _plan(
     if not args.no_joycon_pairing:
         controllers = f'stage {len(pairing["controllers"])} controller(s) for host {pairing["host"]}' if pairing else ''
         steps.append('Joy-Con pairing: ' + (controllers or 'remove any staged dump'))
-    if args.compiler_inputs:
-        steps.append(f'stage five compiler comparisons from {args.compiler_inputs}')
+    steps.append(
+        f'stage five compiler comparisons from {args.compiler_inputs}'
+        if args.compiler_inputs
+        else 'remove any staged compiler comparisons'
+    )
     steps.append('remove the GPU bundle' if args.remove_gpu else 'GPU bundle: stage what changed')
     steps.append('icon cache: name the GPU build, so the next boot lets IconServices re-render where it changed')
     steps += [f'AWDL {args.awdl} (<Data>/Switch/awdl-enable)'] if args.awdl else []
@@ -352,6 +355,9 @@ def _write(
     interrupted = steps.run('interrupted migration', system_apps.interrupted_migration, data_root)
     steps.run('bootstrap migration', bootstrap.stage, data_root, args.boot_package, pins, log)
     steps.run(
+        'compiler inputs', compiler_inputs.stage, data_root, args.shader_fixtures if args.compiler_inputs else None
+    )
+    steps.run(
         'deployed.json',
         deployed.record,
         data_root,
@@ -370,8 +376,6 @@ def _write(
     if not args.no_joycon_pairing:
         steps.run('Joy-Con pairing', joycon_pairing.stage, data_root, pairing, log)
     _stage_gpu(args, data_root, log)
-    if args.compiler_inputs:
-        steps.run('compiler inputs', compiler_inputs.stage, data_root, args.shader_fixtures)
     steps.run('icon cache', icon_cache.present, data_root, log)
     if args.awdl:
         steps.run('AWDL', set_awdl, data_root, args.awdl == 'on', log)

@@ -2,6 +2,7 @@
 
 import hashlib
 import mmap
+import shutil
 from pathlib import Path
 
 from tools.common import files
@@ -28,8 +29,33 @@ def load(source: Path, package: Path, build: str) -> dict[str, bytes]:
     return result
 
 
-def stage(data_root: Path, inputs: dict[str, bytes]) -> None:
-    destination = data_root / 'mobile/Media/Switch/benchloop/compiler'
-    destination.mkdir(parents=True, exist_ok=True)
+DIRECTORY = Path('mobile/Media/Switch/benchloop/compiler')
+
+
+def staged_states(data_root: Path) -> list[str]:
+    return [key for key in STATES if (data_root / DIRECTORY / (key + '.swab')).is_file()]
+
+
+def _discard(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def stage(data_root: Path, inputs: dict[str, bytes] | None) -> None:
+    destination = data_root.resolve() / DIRECTORY
+    parent = destination.parent
+    if parent.resolve() != parent:
+        raise ValueError(f'compiler fixture directory has a symlinked parent: {parent}')
+    pending = files.partial(destination)
+    _discard(pending)
+    if destination.exists() or destination.is_symlink():
+        destination.rename(pending)
+        _discard(pending)
+    if inputs is None:
+        return
+    pending.mkdir(parents=True)
     for name, data in inputs.items():
-        files.write_bytes(destination / name, data, mode=0o644, sync=True)
+        files.write_bytes(pending / name, data, mode=0o644, sync=True)
+    pending.rename(destination)
