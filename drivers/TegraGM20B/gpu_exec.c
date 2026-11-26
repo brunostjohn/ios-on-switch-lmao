@@ -411,7 +411,9 @@ static void frame_submitted(struct tgm_chan *chan, u32 seqno, u64 start)
 	u64 now = nvxnu_nanotime();
 	u64 none = 0;
 
+#if TGM_STATS
 	nvxnu_kdebug(SWITCH_KDBG_SUBMIT, chan->chid, seqno, chan->critical);
+#endif
 	if (!chan->critical) {
 		__atomic_fetch_add(&tgm_frame_gpu.others, 1, __ATOMIC_RELAXED);
 		return;
