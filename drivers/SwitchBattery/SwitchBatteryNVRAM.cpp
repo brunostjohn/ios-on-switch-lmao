@@ -47,10 +47,13 @@ bool switch_battery_nvram_write(const char *key, const uint8_t *bytes, size_t le
     OSData *data = OSData::withBytes(bytes, static_cast<unsigned int>(length));
     const OSSymbol *name = OSSymbol::withCString(key);
     const bool ok = data && name && store->setProperty(name, data);
-    if (ok)
+    static bool logged;
+    if (ok) {
         store->sync();
-    else
-        IOLog("SwitchBattery: NVRAM %s not written (%zu bytes)\n", key, length);
+    } else if (!logged) {
+        logged = true;
+        IOLog("SwitchBattery: NVRAM %s not written (%zu bytes); later failures are not logged\n", key, length);
+    }
     OSSafeReleaseNULL(name);
     OSSafeReleaseNULL(data);
     store->release();

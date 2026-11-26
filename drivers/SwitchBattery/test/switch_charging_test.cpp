@@ -2231,6 +2231,11 @@ static void batteryStore()
           "ShipChargeLimitData on the battery as powerd wrote it");
     advance(5000);
     check(packData().numbers["DateOfFirstUse"] == 1795564800, "DateOfFirstUse kept across readings");
+    gNvram.clear();
+    const unsigned updates = battery()->updates;
+    check(battery()->setProperties(&dict) == kIOReturnSuccess, "an unchanged write is taken");
+    advance(10);
+    check(gNvram.empty() && battery()->updates == updates, "and changes nothing: no save, no status update for powerd");
 #else
     check(r == kIOReturnUnsupported, "21H461 refuses them as before");
     check(gNvram.empty(), "nothing in NVRAM on 21H461");

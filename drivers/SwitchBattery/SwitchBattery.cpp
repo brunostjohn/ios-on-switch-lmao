@@ -607,6 +607,7 @@ class SwitchBattery : public SWITCH_BATTERY_SUPER {
     OSDictionary *shipChargeLimit = nullptr;  // the same
     // Saves them from a kernel thread: setProperties runs on powerd's thread, where IODTNVRAM would judge powerd.
     IOTimerEventSource *storeSave = nullptr;
+    bool storeSaveFailed = false;
 #endif
 
     static void timerFired(OSObject *owner, IOTimerEventSource *sender);
@@ -1424,14 +1425,21 @@ bool SwitchBattery::takeStored(const OSDictionary *dict)
     const OSNumber *date = OSDynamicCast(OSNumber, dict->getObject("DateOfFirstUse"));
     const OSDictionary *limit = OSDynamicCast(OSDictionary, dict->getObject("ShipChargeLimitData"));
     OSDictionary *copy = nullptr;
+    bool sameLimit = !limit;
     if (limit) {
-        uint8_t bytes[SWITCH_BATTERY_SHIP_LIMIT_MAX];
+        uint8_t bytes[SWITCH_BATTERY_SHIP_LIMIT_MAX], held[SWITCH_BATTERY_SHIP_LIMIT_MAX];
         const size_t length = switch_battery_store_encode(limit, bytes, sizeof(bytes));
-        copy = length ? switch_battery_store_decode(bytes, length) : nullptr;
-        if (!copy)
+        sameLimit = length && shipChargeLimit &&
+                    switch_battery_store_encode(shipChargeLimit, held, sizeof(held)) == length &&
+                    memcmp(held, bytes, length) == 0;
+        copy = length && !sameLimit ? switch_battery_store_decode(bytes, length) : nullptr;
+        if (!length)
             IOLog("SwitchBattery: powerd's ShipChargeLimitData not kept: over %u bytes stored\n",
                   SWITCH_BATTERY_SHIP_LIMIT_MAX);
     }
+    // An unchanged write is taken as it is: publishing it again would have powerd read and write it again.
+    if ((!date || date->unsigned64BitValue() == dateOfFirstUse) && sameLimit)
+        return date || limit;
     if (!date && !copy)
         return false;
     if (date)
@@ -1450,8 +1458,10 @@ bool SwitchBattery::takeStored(const OSDictionary *dict)
 void SwitchBattery::saveStored(OSObject *owner, IOTimerEventSource *)
 {
     auto *self = OSDynamicCast(SwitchBattery, owner);
-    if (self && !switch_battery_store_save(self->dateOfFirstUse, self->shipChargeLimit))
-        IOLog("SwitchBattery: powerd's battery data not saved to NVRAM: it lasts until the next boot\n");
+    if (self && !switch_battery_store_save(self->dateOfFirstUse, self->shipChargeLimit) && !self->storeSaveFailed) {
+        self->storeSaveFailed = true;
+        IOLog("SwitchBattery: powerd's battery data not saved to NVRAM: it lasts until the next boot (logged once)\n");
+    }
 }
 
 void SwitchBattery::publishStored()
