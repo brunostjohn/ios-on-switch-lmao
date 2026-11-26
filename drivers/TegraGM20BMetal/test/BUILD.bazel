@@ -5307,23 +5307,6 @@ facade_test(
     plugin = "_tsan",
 )
 
-# A packed state's variant placed on the placer's thread at a draw's first select of its name
-# (TegraGM20BMetalPipelineVariants.mm), plain and thread-sanitized
-facade_test(
-    name = "facade_pack_variants_test",
-    srcs = ["facade_pack_variants_test.cpp"],
-)
-
-facade_test(
-    name = "facade_pack_variants_tsan_test",
-    size = "medium",
-    srcs = ["facade_pack_variants_test.cpp"],
-    copts = ["-fsanitize=thread"],
-    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
-    linkopts = ["-fsanitize=thread"],
-    plugin = "_tsan",
-)
-
 # A raw command buffer's scheduled and completed stages as its caller sees them (facade_handlers_test.cpp), plain and
 # thread-sanitized
 facade_test(
@@ -6945,6 +6928,23 @@ genrule(
     outs = ["pack_v34_fixture.bin"],
     cmd = "$(execpath :pack_v34_fixture_bin) $@",
     tools = [":pack_v34_fixture_bin"],
+)
+
+# A packed state's variant placed on the placer's thread at a draw's first select of its name
+# (TegraGM20BMetalPipelineVariants.mm), plain and thread-sanitized
+facade_test(
+    name = "facade_pack_variants_test",
+    srcs = ["facade_pack_variants_test.cpp"],
+)
+
+facade_test(
+    name = "facade_pack_variants_tsan_test",
+    size = "medium",
+    srcs = ["facade_pack_variants_test.cpp"],
+    copts = ["-fsanitize=thread"],
+    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
+    linkopts = ["-fsanitize=thread"],
+    plugin = "_tsan",
 )
 
 host_test(
