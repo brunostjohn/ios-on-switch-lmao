@@ -13,8 +13,9 @@ import Metal
 /// miporacle.mm: RGB9E5 exact, A1BGR5 and ABGR4 within one code at odd steps, R8Unorm_sRGB within one code at 1.8% of
 /// texels). off_<format>_<pass> counts texels past the pass's bound (0 to pass): none for clears, draws and
 /// loads, one code a channel for blends (for RGB9E5, which Metal truncates between draws, a mantissa unit a draw and one
-/// for the clear), one code for every R8Unorm_sRGB pass (the GM20B's own sRGB encoder); paths every command buffer's path
-/// (raw/N to pass).
+/// for the clear), one code for every R8Unorm_sRGB pass and one a draw for its blends (the GM20B's own sRGB encoder, within
+/// one code of Metal's and encoding after every draw: accepted 26 Nov over a fetch blend's frame time); max_<format>_<pass>
+/// the largest distance where any; paths every command buffer's path (raw/N to pass).
 struct FormatTargetTest: HWTest {
     let id = "gpu.gm20b.format_targets"
     let name = "Passes into R8Unorm_sRGB, A1BGR5Unorm, ABGR4Unorm and RGB9E5Float targets on the driver"
@@ -38,7 +39,7 @@ struct FormatTargetTest: HWTest {
                 do {
                     let (off, worst) = try await exercise(gpu, format, pass)
                     metrics.set("off_" + key, off)
-                    if off != 0 { metrics.set("max_" + key, worst) }
+                    if worst > 0 { metrics.set("max_" + key, worst) }
                     checks.append(("\(key): every texel within its bound of Metal's", off == 0))
                 } catch {
                     metrics.set("off_" + key, "failed")
@@ -119,7 +120,7 @@ struct FormatTargetTest: HWTest {
                 bound = format == 11 ? 1 : 0
             } else if format == 11 {
                 want = Self.srgbCode(drawn ? draws.map { $0[i] } : [], clear: clearHeld)
-                bound = 1
+                bound = Swift.max(1, drawn ? draws.count : 0)
             } else {
                 want = Self.word(format, draws.map { $0[i] }, clear: clearHeld, drawn: drawn)
                 bound = blended ? (format == 93 ? draws.count + 1 : 1) : 0
