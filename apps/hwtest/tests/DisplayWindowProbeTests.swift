@@ -76,6 +76,12 @@ struct DisplayWindowProbeTest: HWTest {
             number: 7
         ),
         DisplayWindowProbeTest(
+            id: "display.x1.column_scan_words",
+            name: "Window B column-scanning BGRA by words 6 and 5, a pitch-linear half turn, and a start one pixel in (CRC)",
+            probe: "V7",
+            number: 8
+        ),
+        DisplayWindowProbeTest(
             id: "display.x1.window_formats",
             name: "NV12 Cb first at depth 43, NV24 at 49, packed 4:2:2 at 16 and SWAP2, against BGRA (CRC)",
             probe: "L979/L955", number: 4
