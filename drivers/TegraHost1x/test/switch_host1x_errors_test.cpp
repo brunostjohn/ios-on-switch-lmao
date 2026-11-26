@@ -13,7 +13,10 @@ namespace {
 constexpr uintptr_t kSync = 0x50002100;
 std::map<uint32_t, uint32_t> gRegs;
 bool gIntmaskStuck, gIntc0Stuck, gHintmaskExtStuck, gNoNub;
-bool gTzIllegal;  // a CPU_TZ_ILLEGAL_TZ_ACCESS: INTMASK bit 4 (reset 1, kept) lets it on the line; no host1x status says so
+// A CPU_TZ_ILLEGAL_TZ_ACCESS: INTMASK bit 4 (reset 1, kept) lets it on the line, and no host1x status reports it.
+bool gTzIllegal;
+// TRM 14.9.7 does not say whether HINTMASK_EXT gates HINTSTATUS bit 31 (review-dma3 O7): both are modelled.
+bool gExtGatesSummary;
 std::vector<uint32_t> gFailedChannels;
 
 uint32_t &reg(uint32_t offset)
@@ -38,8 +41,8 @@ IOFilterInterruptEventSource *source()
 // HINTSTATUS_EXT bit, HINTMASK's EXT enable, INTC0MASK's HOST_INT) or a TrustZone violation behind INTMASK bit 4.
 bool lineAsserted()
 {
-    const bool host = (reg(kHintStatusExt) & reg(kHintMaskExt)) && (reg(kHintMask) & kExtEnable) &&
-                      (reg(kIntC0Mask) & kHostInt);
+    const uint32_t ext = reg(kHintStatusExt) & (gExtGatesSummary ? reg(kHintMaskExt) : kIllegalAll);
+    const bool host = ext && (reg(kHintMask) & kExtEnable) && (reg(kIntC0Mask) & kHostInt);
     return (reg(kIntMask) & kCpu0All) && (host || (gTzIllegal && (reg(kIntMask) & (1u << 4))));
 }
 
@@ -64,6 +67,8 @@ struct Host1xErrors : testing::Test {
     {
         gRegs = {{kIntMask, 0x10}};
         gIntmaskStuck = gIntc0Stuck = gHintmaskExtStuck = gNoNub = gTzIllegal = false;
+        gExtGatesSummary = true;
+        switch_test_preemption_off = 0;
         gFailedChannels.clear();
         switch_test_iolog.clear();
         switch_test_sleep = nullptr;
@@ -225,26 +230,33 @@ TEST_F(Host1xErrors, AnIntc0maskWithOnlyHostIntSaysNothing)
     EXPECT_FALSE(anyLine("INTC0MASK"));
 }
 
-// A level line that fires with none of ours pending would fire forever: the master enable goes off, with one line.
-TEST_F(Host1xErrors, ALineThatFiresWithNothingOfOursTurnsTheMasterOffWithOneLine)
+// A fire with none of ours pending is a source this driver set up wrong. Turning the line off would lose every later
+// stop, so it panics, naming every mask, and the master enable stays on.
+TEST_F(Host1xErrors, ALineThatFiresWithNothingOfOursPanics)
 {
     ASSERT_TRUE(start());
     reg(kHintStatus) = 1u << 16;
     EXPECT_FALSE(deliver()) << "HINTMASK keeps host1x's other sources off the line";
     gTzIllegal = true;
-    ASSERT_TRUE(deliver()) << "taken, so the line is not left to fire again at once";
-    EXPECT_EQ(reg(kIntMask) & 1u, 0u);
-    EXPECT_FALSE(lineAsserted()) << "the level line drops";
-    EXPECT_TRUE(anyLine("fired with no illegal opcode of ours pending (INTSTATUS 0 HINTSTATUS 0x10000 HINTSTATUS_EXT "
-                        "0): off until the next resume"));
-    EXPECT_TRUE(gFailedChannels.empty());
-    switch_test_iolog.clear();
-    EXPECT_FALSE(deliver());
-    EXPECT_TRUE(switch_test_iolog.empty()) << "one line";
-    gTzIllegal = false;
-    switch_host1x_errors_resume();
-    EXPECT_EQ(reg(kIntMask) & 1u, 1u);
-    EXPECT_TRUE(fire(3)) << "the resume puts the line back for our own errors";
+    EXPECT_EQ(panicOf(&deliver), "TegraHost1x: general interrupt (INTID 99) fired with no illegal opcode of ours pending "
+                                 "(INTSTATUS 0 HINTSTATUS 0x10000 HINTSTATUS_EXT 0 HINTMASK_EXT 0x3fff INTMASK 0x11)");
+    EXPECT_EQ(reg(kIntMask) & 1u, 1u) << "the master enable is never turned off";
+    gErrorsLock->held = false;
+}
+
+// O7's other answer: if HINTMASK_EXT does not gate the summary, a stopped channel that latches again fires the line
+// with only its masked bit pending, and the panic says which.
+TEST_F(Host1xErrors, AStoppedChannelThatFiresAnUngatedLineAgainPanicsNamingIt)
+{
+    gExtGatesSummary = false;
+    ASSERT_TRUE(start());
+    ASSERT_TRUE(fire(1));
+    EXPECT_EQ(gFailedChannels, std::vector<uint32_t>{1});
+    reg(kHintStatusExt) |= 1u << 1;
+    EXPECT_EQ(panicOf(&deliver), "TegraHost1x: general interrupt (INTID 99) fired for channels 0x2, masked since their "
+                                 "stop (HINTSTATUS_EXT 0x2 HINTMASK_EXT 0x3ffd HINTSTATUS 0): HINTMASK_EXT does not keep "
+                                 "a stopped channel off the line");
+    gErrorsLock->held = false;
 }
 
 TEST_F(Host1xErrors, ARestartOfAChannelThatDidNotStopChangesNothing)

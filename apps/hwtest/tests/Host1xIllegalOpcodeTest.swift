@@ -33,6 +33,11 @@ struct Host1xIllegalOpcodeTest: HWTest {
         metrics.set("stat_before", "0x" + String(reply.statBefore, radix: 16))
         metrics.set("stat_stopped", "0x" + String(reply.statStopped, radix: 16))
         metrics.set("stat_restarted", "0x" + String(reply.statRestarted, radix: 16))
+        // While stopped and masked: whether the channel latched again, and whether HINTSTATUS bit 31 shows it (O7).
+        metrics.set("hintstatus_stopped", "0x" + String(reply.stopped.hintstatus, radix: 16))
+        metrics.set("hintstatus_ext_stopped", "0x" + String(reply.stopped.hintstatusExt, radix: 16))
+        metrics.set("hintmask_ext_stopped", "0x" + String(reply.stopped.hintmaskExt, radix: 16))
+        metrics.set("intmask_after", "0x" + String(reply.after.intmask, radix: 16))
         if let failure = reply.failure { return .fail(failure, metrics) }
         return .pass(metrics)
     }

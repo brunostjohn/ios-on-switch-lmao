@@ -43,11 +43,6 @@ IOSimpleLock *gErrorsLock;  // gErrorsUnit and HINTMASK_EXT: the filter's take a
 IOFilterInterruptEventSource *gErrorsSource;
 uint32_t gErrorsPending;  // the filter's channels, for the action
 
-// The filter's snapshot when the line fired with nothing of ours (master turned off), for the action's one line.
-struct Unclaimed {
-    uint32_t seen, intstatus, hintstatus, hintstatusExt;
-} gUnclaimed;
-
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 IOLock *gExpectLock;
 uint32_t gExpectedChannel = kChannels;  // kChannels: none
@@ -66,19 +61,32 @@ bool takeExpected(uint32_t channel)
 }
 #endif
 
+// The line is level and only these masks are ours, so a fire with none of our opcodes pending is a source this driver
+// set up wrong: turning it off would lose every later stop as surely as a lost interrupt.
+[[noreturn]] void unclaimed()
+{
+    const uint32_t ext = gErrorRegisters.read(kHintStatusExt), maskExt = gErrorRegisters.read(kHintMaskExt),
+                   masked = gErrorsUnit.masked, latchedMasked = ext & masked & kIllegalAll;
+    if (latchedMasked && !(ext & ~masked & kIllegalAll))
+        panic("TegraHost1x: general interrupt (INTID %u) fired for channels %#x, masked since their stop "
+              "(HINTSTATUS_EXT %#x HINTMASK_EXT %#x HINTSTATUS %#x): HINTMASK_EXT does not keep a stopped channel off "
+              "the line",
+              kGeneralIntid, latchedMasked, ext, maskExt, gErrorRegisters.read(kHintStatus));
+    panic("TegraHost1x: general interrupt (INTID %u) fired with no illegal opcode of ours pending (INTSTATUS %#x "
+          "HINTSTATUS %#x HINTSTATUS_EXT %#x HINTMASK_EXT %#x INTMASK %#x)",
+          kGeneralIntid, gErrorRegisters.read(kIntStatus), gErrorRegisters.read(kHintStatus), ext, maskExt,
+          gErrorRegisters.read(kIntMask));
+}
+
 // NOLINTNEXTLINE(misc-const-correctness): IOFilterInterruptEventSource::Filter's signature
 bool errorsFilter(OSObject *, IOFilterInterruptEventSource *)
 {
     IOSimpleLockLock(gErrorsLock);
     const uint32_t taken = gErrorsUnit.take(gErrorRegisters);
-    if (!taken) {
-        gUnclaimed = {1, gErrorRegisters.read(kIntStatus), gErrorRegisters.read(kHintStatus),
-                      gErrorRegisters.read(kHintStatusExt)};
-        gErrorsUnit.masterOff(gErrorRegisters);
-    }
+    if (!taken)
+        unclaimed();
     IOSimpleLockUnlock(gErrorsLock);
-    if (taken)
-        __atomic_fetch_or(&gErrorsPending, taken, __ATOMIC_RELEASE);
+    __atomic_fetch_or(&gErrorsPending, taken, __ATOMIC_RELEASE);
     return true;
 }
 
@@ -98,14 +106,6 @@ void channelStopped(uint32_t channel)
 
 void errorsOccurred(OSObject *, IOInterruptEventSource *, int)
 {
-    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(gErrorsLock);
-    const Unclaimed unclaimed = gUnclaimed;
-    gUnclaimed.seen = 0;
-    IOSimpleLockUnlockEnableInterrupt(gErrorsLock, state);
-    if (unclaimed.seen)
-        IOLog("TegraHost1x: general interrupt (INTID %u) fired with no illegal opcode of ours pending (INTSTATUS %#x "
-              "HINTSTATUS %#x HINTSTATUS_EXT %#x): off until the next resume\n",
-              kGeneralIntid, unclaimed.intstatus, unclaimed.hintstatus, unclaimed.hintstatusExt);
     for (uint32_t channels = __atomic_exchange_n(&gErrorsPending, 0, __ATOMIC_ACQUIRE); channels;
          channels &= channels - 1)
         channelStopped(static_cast<uint32_t>(__builtin_ctz(channels)));
@@ -233,5 +233,11 @@ uint32_t switch_host1x_errors_expect_end(uint32_t ms)
 uint32_t switch_host1x_errors_stat()
 {
     return gErrorRegisters.read(kCmdprocStat);
+}
+
+SwitchHost1xErrorLine switch_host1x_errors_line()
+{
+    return {gErrorRegisters.read(kIntMask), gErrorRegisters.read(kHintStatus), gErrorRegisters.read(kHintStatusExt),
+            gErrorRegisters.read(kHintMaskExt)};
 }
 #endif

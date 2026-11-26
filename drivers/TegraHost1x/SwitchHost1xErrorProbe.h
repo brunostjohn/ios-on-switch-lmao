@@ -15,6 +15,11 @@
 #define SWITCH_HOST1X_ERROR_PROBE_CHANNEL 13u
 #define SWITCH_HOST1X_ERROR_PROBE_OPCODE  15u
 
+// The general interrupt's registers (TRM 14.9.2, 14.9.5, 14.9.7, 14.9.8).
+typedef struct {
+    uint32_t intmask, hintstatus, hintstatusExt, hintmaskExt;
+} SwitchHost1xErrorLine;
+
 typedef struct {
     uint32_t magic;
     int32_t status;     // 0, or the error of the step that could not run
@@ -23,6 +28,9 @@ typedef struct {
     uint32_t taken;  // illegal opcodes the interrupt delivered for the channel
     uint32_t statBefore, statStopped, statRestarted;
     uint32_t recovered;  // the increment-only stream ran after the restart
+    // While the channel is stopped, its bit masked: whether it latched again (HINTSTATUS_EXT) and whether HINTSTATUS
+    // bit 31 summarises it anyway. After the run: the master enable still on.
+    SwitchHost1xErrorLine stopped, after;
 } SwitchHost1xErrorProbeReply;
 
 #ifdef __cplusplus
@@ -31,5 +39,6 @@ void switch_host1x_errors_expect(uint32_t channel);
 // The expected channel's errors delivered within `ms`; a latched one not delivered panics.
 uint32_t switch_host1x_errors_expect_end(uint32_t ms);
 uint32_t switch_host1x_errors_stat();
+SwitchHost1xErrorLine switch_host1x_errors_line();
 extern "C" int switch_host1x_error_probe_run(void *reply);
 #endif

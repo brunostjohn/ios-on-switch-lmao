@@ -10,8 +10,8 @@
 // write timeouts never fire; configure sets HINTMASK to the EXT enable alone and INTC0MASK to HOST_INT alone, whatever
 // the boot chain left there. The other INTC0MASK bits are the engines' interrupts, which reach the GIC on lines of
 // their own (14.4.6.1) and can only be cleared in the engine (14.9.1). A line that still fires with none of ours
-// pending is a source this driver does not know: the filter turns the master enable off rather than let a level line
-// fire forever, and the action says so once.
+// pending panics: it is a source this driver set up wrong, and the level line could not be left on or turned off
+// without losing every later stop.
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
@@ -74,12 +74,6 @@ template <class Registers> struct Unit {
         r.write(kHintStatusExt, pending);
         (void)r.read(kHintStatusExt);  // the clear reaches host1x before the filter returns and the line is re-enabled
         return pending;
-    }
-
-    // The line fired with none of ours pending: off, so a source this driver does not know cannot fire it forever.
-    void masterOff(Registers &r)
-    {
-        r.write(kIntMask, r.read(kIntMask) & ~kCpu0All);
     }
 
     // The channel restarted on an empty stream: what its stopped command processor latched meanwhile is cleared, and

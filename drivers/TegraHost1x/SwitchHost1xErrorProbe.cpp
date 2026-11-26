@@ -42,10 +42,12 @@ extern "C" int switch_host1x_error_probe_run(void *out)
         reply->status = tegra_host1x_submit_on(kChannel, &illegal, 1);
         reply->taken = switch_host1x_errors_expect_end(kDeliveryMs);
         reply->statStopped = switch_host1x_errors_stat();
+        reply->stopped = switch_host1x_errors_line();
         tegra_host1x_channel_teardown(kChannel);
         tegra_host1x_channel_restart(kChannel);
         reply->statRestarted = switch_host1x_errors_stat();
         reply->recovered = !reply->status && runsAgain();
+        reply->after = switch_host1x_errors_line();
     }
     IOLog("TegraHost1x: illegal-opcode probe on channel %u: attached %u, opcode %u delivered %u times, CMDPROC_STAT "
           "%#x, %#x stopped, %#x restarted, %s after the restart (status %d)\n",
