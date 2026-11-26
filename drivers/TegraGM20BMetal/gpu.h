@@ -1864,7 +1864,8 @@ private:
 
     // lock_ (scrub.h)
     std::vector<Scrub> scrubWanted_, scrubbing_;
-    // begin()'s, commit()'s and abandon()'s, on the submitting thread: the spans a command buffer fills at its front
+    // begin()'s, a successful commit()'s (with its closing job, whose end flushes the zeros) and abandon()'s, on the
+    // submitting thread: the spans a command buffer fills at its front
     void scrubInto(CommandBuffer &cb);
     void scrubsSubmitted(CommandBuffer &cb, uint32_t seqno);
     void scrubsReturned(CommandBuffer &cb);

@@ -90,6 +90,8 @@ TEST_F(DeviceScrub, AFreedSharedBufferIsZeroedByTheCopyEngineBeforeItsSpanIsReus
     ASSERT_TRUE(cb->commit(seqno));
     EXPECT_EQ(kernel_model::model.jobs.size(), before + 1);
     EXPECT_TRUE(filledAt(fills(before), va)) << "no zero fill at the freed span's address";
+    EXPECT_TRUE(kernel_model::model.jobs.back().flags & (TegraGM20BJobVolatileWrites | TegraGM20BJobExternal))
+        << "the job that carries the fill ends without flushing its zeros to DRAM";
     dev.destroyBuffer(early);
 
     // the model completed the job as it was submitted: a look (trim, or an allocation that finds no room) retires it
@@ -119,6 +121,38 @@ TEST_F(DeviceScrub, TheScrubJobEndsVolatileSoItsZerosAreInDram)
     ASSERT_GT(kernel_model::model.jobs.size(), before);
     EXPECT_TRUE(kernel_model::model.jobs.back().flags & TegraGM20BJobVolatileWrites);
     EXPECT_FALSE(kernel_model::model.jobs.back().flags & TegraGM20BJobExternal);
+    dev.destroyBuffer(neighbour);
+}
+
+// A command buffer that splits into several jobs ends Volatile (or External) on its closing job alone: a scrub it carries
+// waits for the seqno commit() returns, never for the job that holds the fill
+TEST_F(DeviceScrub, ARideAlongScrubWaitsForItsCommandBuffersLastJob)
+{
+    constexpr uint64_t kBytes = 16 * 1024;
+    gm20b::Buffer neighbour, freed;
+    ASSERT_TRUE(dev.createBuffer(kBytes, neighbour, true, true, true));
+    ASSERT_TRUE(dev.createBuffer(kBytes, freed, true, true, true));
+    const uint64_t va = freed.va;
+    dev.destroyBuffer(freed);
+    kernel_model::model.inFlight = true;
+    gm20b::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    uint32_t seqno = 0;
+    ASSERT_TRUE(cb->commit(seqno));
+    kernel_model::model.inFlight = false;
+    TegraGM20BAbiFence &fence = kernel_model::model.fence(liveChannel() - 1);
+    __atomic_store_n(&fence.completed, seqno - 1, __ATOMIC_RELEASE);
+    dev.trim();
+    gm20b::Buffer early;
+    ASSERT_TRUE(dev.createBuffer(kBytes, early, true, true, true));
+    EXPECT_NE(early.va, va) << "the span came back before its command buffer's last job completed";
+    __atomic_store_n(&fence.completed, seqno, __ATOMIC_RELEASE);
+    dev.trim();
+    gm20b::Buffer later;
+    ASSERT_TRUE(dev.createBuffer(kBytes, later, true, true, true));
+    EXPECT_EQ(later.va, va) << "the zeroed span did not come back once the last job completed";
+    dev.destroyBuffer(later);
+    dev.destroyBuffer(early);
     dev.destroyBuffer(neighbour);
 }
 
