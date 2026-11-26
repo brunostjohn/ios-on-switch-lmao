@@ -53,6 +53,9 @@ void switch_gpu_bridge_release(switch_gpu_bridge **bridge)
     *bridge = nullptr;
 }
 
+void IOLog(const char *, ...)
+{}
+
 void native_legacy_gpu_complete(void *, int status)
 {
     ++completions;
@@ -192,16 +195,29 @@ TEST_F(GpuPlaneStream, AGpuSetIsArmedAndItsStreamTakesTheBridgeWithNoCpuCompleti
     EXPECT_EQ(display.stPlaneGpuStreamed, 1u);
 }
 
-// The bridge takes the GPU's producers; the stream WAITs on the bridge and on VIC's syncpoint itself.
-TEST_F(GpuPlaneStream, AMixedSetSplitsItsProducersBetweenTheBridgeAndTheStream)
+// The bridge takes every producer, VIC's too; the stream also WAITs on VIC's syncpoint itself.
+TEST_F(GpuPlaneStream, AMixedSetsBridgeCoversEveryProducerAndItsStreamWaitsOnVIC)
 {
     offer({kConvert, kRender, kPromise});
     copyThread();
-    ASSERT_EQ(bridged.size(), 2u);
-    EXPECT_EQ(bridged[0].engine, uint32_t(SWITCH_GPU_ENGINE_GM20B));
-    EXPECT_EQ(bridged[1].engine, uint32_t(SWITCH_GPU_ENGINE_PROMISE));
+    ASSERT_EQ(bridged.size(), 3u);
+    EXPECT_EQ(bridged[0].engine, uint32_t(SWITCH_GPU_ENGINE_VIC));
+    EXPECT_EQ(bridged[1].engine, uint32_t(SWITCH_GPU_ENGINE_GM20B));
+    EXPECT_EQ(bridged[2].engine, uint32_t(SWITCH_GPU_ENGINE_PROMISE));
     ASSERT_EQ(display.streamed.size(), 1u);
     EXPECT_EQ(display.streamed[0].value, kConvert.value);
+}
+
+// A mixed set whose arm went stale completes through a bridge that waited for VIC's producer too.
+TEST_F(GpuPlaneStream, AMixedSetsFallbackWaitsForEveryProducer)
+{
+    offer({kConvert, kRender});
+    display.mediaFlip.armed = SwitchCompletionFlip::kIdle;
+    copyThread();
+    ASSERT_EQ(bridged.size(), 2u);
+    EXPECT_EQ(bridged[0].value, kConvert.value);
+    EXPECT_EQ(theBridge.notifies, 1u);
+    EXPECT_EQ(display.streams, 0u);
 }
 
 TEST_F(GpuPlaneStream, ABridgeOutOfRoomIsWaitedForOnTheCopyThread)

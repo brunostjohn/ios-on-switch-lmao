@@ -49,18 +49,14 @@ void planeBridgeArm(const PlaneSet &p)
     planeBridgeArmed = mediaFlip.generation();
 }
 
-// The copy thread: the bridge over the set's GPU producers, then the gate's stream.
+// The copy thread: the bridge over every producer of the set (VIC and NVDEC ones too, as the bridge fence took them,
+// so a completion through the bridge waits for and sees them all), then the gate's stream.
 void planeBridgeWork(const switch_gpu_backing_token *producers, unsigned count)
 {
-    switch_gpu_backing_token gpu[kPlaneDependencies] = {};
-    unsigned n = 0;
-    for (unsigned i = 0; i < count; ++i)
-        if (gpuProducer(producers[i]))
-            gpu[n++] = producers[i];
     switch_gpu_bridge *bridge = nullptr;
     int error = kIOReturnAborted;
     while (!__atomic_load_n(&copyStopping, __ATOMIC_ACQUIRE)) {
-        error = switch_gpu_bridge_submit(gpu, n, &bridge);
+        error = switch_gpu_bridge_submit(producers, count, &bridge);
         if (error != -16)
             break;
         error = switch_gpu_bridge_wait_room();
@@ -104,6 +100,13 @@ void planeBridgeSubmitted(switch_gpu_bridge *bridge, int error)
     }
     if (stats)
         ++stPlaneGpuStreamRefused;
+    static bool told = false;
+    if (!told) {
+        told = true;
+        IOLog(
+            "SwitchDisplay: a GPU-rendered window B/C set completes through its bridge: its stream was refused or its "
+            "flip withdrawn while the bridge was submitted (once a boot)\n");
+    }
     const int notified = switch_gpu_bridge_notify(bridge, native_legacy_gpu_complete, this);
     switch_gpu_bridge_release(&bridge);
     if (notified)
