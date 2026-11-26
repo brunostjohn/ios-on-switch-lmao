@@ -8,15 +8,6 @@ TEST_F(Host1xSubmit, BringUpMakesTheEnginesAndTheDisplaysChannelsAlone)
     EXPECT_EQ(gAllocated, 2u * (TEGRA_HOST1X_CHANNEL_DISPLAY + 1));
 }
 
-// The display's (SwitchHost1xDisplayChannel.h on its branch): whether the submit lock was held, and how many fences had
-// failed, when each channel-4 error asked it.
-struct DisplayAsked {
-    bool locked;
-    size_t failedBefore;
-};
-
-std::vector<DisplayAsked> gDisplayAsked;
-
 TEST_F(Host1xSubmit, EveryEngineRaisesTheMemoryClockBeforeItsDoorbell)
 {
     const uint32_t words[] = {tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_NVDEC, 0, 0),
@@ -882,7 +873,9 @@ TEST_F(Host1xSubmit, AStoppedEnginesChannelFailsItsJobsSyncpointOnceAndNoOtherCh
 }
 
 // An error on the display's channel asks the display first, in the same hold of the submit lock and before any fence
-// fails (the display panics there if an accepted swap is out); nothing cancels the stream on host1x's side.
+// fails: with an accepted swap still out the display panics there (the harness's panic throws), so no fence has failed
+// and the lock is still held. Another channel's error never asks it. With the swap no longer out the display returns
+// and the channel's fenced jobs fail as usual; nothing cancels the stream on host1x's side.
 TEST_F(Host1xSubmit, AStoppedDisplayChannelAsksTheDisplayBeforeAnyFenceFails)
 {
     SwitchHost1xDisplayStream stream;
@@ -895,19 +888,24 @@ TEST_F(Host1xSubmit, AStoppedDisplayChannelAsksTheDisplayBeforeAnyFenceFails)
     ASSERT_EQ(
         switch_host1x_display_submit(&stream, &token, 1, &word, &address, 1, 0x500, 5, DisplayCompletion::heard, &done),
         0);
-    gDisplayAsked.clear();
     gFencesFailed.clear();
     char line[64];
-    switch_host1x_channels_failed(TEGRA_HOST1X_CHANNEL_DISPLAY, line, sizeof(line));
-    ASSERT_EQ(gDisplayAsked.size(), 1u);
-    EXPECT_TRUE(gDisplayAsked[0].locked) << "inside the submit lock";
-    EXPECT_EQ(gDisplayAsked[0].failedBefore, 0u) << "before any fence failed";
+    EXPECT_THROW(switch_host1x_channels_failed(TEGRA_HOST1X_CHANNEL_DISPLAY, line, sizeof(line)), std::runtime_error)
+        << "an accepted swap out: the display panics";
+    EXPECT_TRUE(gFencesFailed.empty()) << "before any fence failed";
+    ASSERT_TRUE(gChannelLock->held) << "inside the submit lock";
+    IOLockUnlock(gChannelLock);
+    EXPECT_NE(stream.status, SwitchHost1xDisplayStream::kCancelled) << "host1x no longer cancels the stream";
+
+    EXPECT_NO_THROW(switch_host1x_channels_failed(TEGRA_HOST1X_CHANNEL_VIC, line, sizeof(line)))
+        << "another channel's error does not ask the display";
+    EXPECT_FALSE(gChannelLock->held);
+
+    syncpoint(stream.syncpt) = stream.fence.threshold;
+    gFencesFailed.clear();
+    EXPECT_NO_THROW(switch_host1x_channels_failed(TEGRA_HOST1X_CHANNEL_DISPLAY, line, sizeof(line)))
+        << "the stream ran to its syncpoint: nothing out";
     EXPECT_FALSE(gFencesFailed.empty()) << "then the channel's fenced jobs fail as usual";
     EXPECT_FALSE(gChannelLock->held) << "one hold, released at the end";
-    EXPECT_NE(stream.status, SwitchHost1xDisplayStream::kCancelled) << "host1x no longer cancels the stream";
     EXPECT_EQ(done.calls, 0u);
-
-    gDisplayAsked.clear();
-    switch_host1x_channels_failed(TEGRA_HOST1X_CHANNEL_VIC, line, sizeof(line));
-    EXPECT_TRUE(gDisplayAsked.empty()) << "another channel's error does not ask the display";
 }
