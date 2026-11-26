@@ -215,6 +215,9 @@ class LogHarvestTest(unittest.TestCase):
         added, report = logharvest.harvest(boots, CORPUS.splitlines(), None, Path('/nonexistent'))
         self.assertEqual(added, [])
         self.assertEqual(report.left['backboardd', 'refused on the device'], 1)
+        added, report = logharvest.harvest(boots, CORPUS.splitlines(), None, Path('/nonexistent'), refused=True)
+        self.assertEqual([logharvest.make_pack.state_key(line) for line in added], [CA])
+        self.assertNotIn(('backboardd', 'refused on the device'), report.left)
 
     def test_a_harvested_ca_line_gives_caspec_the_fields_of_its_untagged_line(self):
         added, _ = self.run_tool(boot_records())

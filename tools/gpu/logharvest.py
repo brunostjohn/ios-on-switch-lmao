@@ -54,7 +54,7 @@ only where that library is the one the device loaded.
 Left out and counted: our own apps' states (SwitchHWTest*), a key the log cut with no whole parts (or parts that
 disagree with it), a function no one library is named for, an AIR-keyed state that links functions, a Core Animation
 state that links functions or has no label, a framework whose library path none of those name, a variant whose state the
-corpus lacks, and the states the device refused.
+corpus lacks, and the states the device refused (taken with --refused).
 """
 
 import argparse
@@ -330,7 +330,12 @@ class Report:
 
 
 def harvest(
-    boots: dict[str, Boot], corpus: list[str], forced: str | None, precompile: Path, crawl: Path | None = None
+    boots: dict[str, Boot],
+    corpus: list[str],
+    forced: str | None,
+    precompile: Path,
+    crawl: Path | None = None,
+    refused: bool = False,
 ) -> tuple[list[str], Report]:
     report, new = Report(), []
     for uuid, boot in sorted(boots.items()):
@@ -342,7 +347,7 @@ def harvest(
         for process, count in boot.unnamed.items():
             report.left[process, "a variant line that names no state hash (the runtime's older line)"] += count
         libraries = Libraries(build, corpus, precompile / 'archives' / f'{build}.tsv', crawl)
-        new += harvest_boot(boot, build, libraries, in_corpus(corpus + new, build), report)
+        new += harvest_boot(boot, build, libraries, in_corpus(corpus + new, build), report, refused)
     return new, report
 
 
@@ -354,13 +359,16 @@ def boot_build(uuid: str, boot: Boot, forced: str | None) -> str | None:
     return forced or next(iter(boot.builds), None)
 
 
-def harvest_boot(boot: Boot, build: str, libraries: Libraries, held: set[str], report: Report) -> list[str]:
-    """Give the lines of one boot's states `held` lacks (a variant's state first), adding their keys to it."""
+def harvest_boot(
+    boot: Boot, build: str, libraries: Libraries, held: set[str], report: Report, refused: bool = False
+) -> list[str]:
+    """Give the lines of one boot's states `held` lacks (a variant's state first), adding their keys to it; with
+    `refused`, the states the device refused too."""
     new = []
     for process, outcome, label, key, missing in states(boot, held):
         if process.startswith(OWN_APPS):
             report.left[process, 'our own app'] += 1
-        elif outcome == 'refused':
+        elif outcome == 'refused' and not refused:
             report.left[process, 'refused on the device'] += 1
         elif key is None:
             report.left[process, missing] += 1
@@ -438,10 +446,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--crawl', type=Path, help="the build's crawl inventory.json, for framework library paths")
     parser.add_argument('--dry-run', action='store_true', help='print the lines instead of adding them')
     parser.add_argument('--check', action='store_true', help="fail where an OS state is not the corpus's")
+    parser.add_argument(
+        '--refused',
+        action='store_true',
+        help="the states the device refused too: a later translator may make them, and the pack's report names any it "
+        'still refuses',
+    )
     args = parser.parse_args(argv)
     corpus = args.corpus.read_text().splitlines()
     new, report = harvest(
-        read_boots(records(args.archives, args.ndjson)), corpus, args.build, args.corpus.parent, args.crawl
+        read_boots(records(args.archives, args.ndjson)),
+        corpus,
+        args.build,
+        args.corpus.parent,
+        args.crawl,
+        args.refused,
     )
     for line in report.boots:
         print('boot', line)
