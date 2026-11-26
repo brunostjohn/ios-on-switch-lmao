@@ -218,6 +218,21 @@ host_test(
 )
 
 host_test(
+    name = "sd_card_detect_test",
+    srcs = [
+        "sd_card_detect_test.cpp",
+        "//drivers/NativeSwitchBlock:SwitchSdCardDetect.h",
+    ],
+    copts = ["-O1"],
+    data = [
+        "//drivers/NativeSwitchBlock:NativeSwitchBlock.cpp",
+        "//drivers/TegraGPIO:TegraGPIO.cpp",
+        "//drivers/TegraGPIO:TegraGPIO.h",
+    ],
+    deps = [":source_checks"],
+)
+
+host_test(
     name = "sd_root_source_test",
     srcs = ["sd_root_source_test.cpp"],
     copts = ["-O1"],

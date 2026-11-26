@@ -67,6 +67,7 @@
 #include "SwitchSdWriteFence.h"
 #include "SwitchSdBus.h"
 #include "SwitchSdCard.h"
+#include "SwitchSdCardDetect.h"
 #include "SwitchSdTrim.h"
 #if DEVELOPMENT || DEBUG
 #include <sys/sysctl.h>
@@ -613,6 +614,8 @@ class NativeSwitchBlock : public IOService {
     // waits for and sleeps on irqEvent; the filter disables them again (lowering the line) and wakes it.
     IOWorkLoop *irqLoop = nullptr;
     IOFilterInterruptEventSource *irqSource = nullptr;
+    IOFilterInterruptEventSource *cdSource = nullptr;
+    bool cardDetectArmed = false;
     int irqEvent = 0;
 #if DEVELOPMENT || DEBUG
     struct {
@@ -690,6 +693,10 @@ class NativeSwitchBlock : public IOService {
     int awaitRelease();
     void startInterrupt();
     static bool interruptFilter(OSObject *, IOFilterInterruptEventSource *);
+    void startCardDetect();
+    static bool cardDetectFilter(OSObject *, IOFilterInterruptEventSource *);
+    void checkCardPresent(const char *where);
+    [[noreturn]] void cardRemovedPanic(const char *where, int level);
     bool waitSignal(uint32_t signals, uint64_t timeoutNs);
     uint32_t awaitStatus(uint32_t awaited, uint64_t limitNs);
     [[noreturn]] void interruptLost(uint32_t awaited);
@@ -1169,6 +1176,46 @@ void NativeSwitchBlock::startInterrupt()
     irqSource->enable();
 }
 
+bool NativeSwitchBlock::cardDetectFilter(OSObject *owner, IOFilterInterruptEventSource *)
+{
+    static_cast<NativeSwitchBlock *>(owner)->checkCardPresent("interrupt");
+    return false;
+}
+
+void NativeSwitchBlock::cardRemovedPanic(const char *where, int level)
+{
+    panic("SwitchSD: SD card removed (%s, GPIO PZ1=%d)", where, level);
+}
+
+void NativeSwitchBlock::checkCardPresent(const char *where)
+{
+    const bool armed = __atomic_load_n(&cardDetectArmed, __ATOMIC_ACQUIRE);
+    if (!armed)
+        return;
+    const int level = tegra_gpio_read(TEGRA_GPIO_SD_CD);
+    if (switchSdShouldPanicOnRemoval(armed, panic_active() != 0, level))
+        cardRemovedPanic(where, level);
+}
+
+void NativeSwitchBlock::startCardDetect()
+{
+    // NOLINTNEXTLINE(clang-analyzer-osx.cocoa.RetainCount): TegraGPIO keeps its nubs; this reference is not ours
+    IOService *nub = tegra_gpio_interrupt_nub(TEGRA_GPIO_SD_CD, TEGRA_GPIO_EDGE_RISING);
+    if (!nub) {
+        char state[256];
+        tegra_gpio_describe(TEGRA_GPIO_SD_CD, state, sizeof(state));
+        panic("SwitchSD: no interrupt nub for SD card detect (PZ1): %s", state);
+    }
+    cdSource = irqLoop ? IOFilterInterruptEventSource::filterInterruptEventSource(
+                             this, nullptr, &NativeSwitchBlock::cardDetectFilter, nub, 0)
+                       : nullptr;
+    if (!cdSource || irqLoop->addEventSource(cdSource) != kIOReturnSuccess)
+        panic("SwitchSD: cannot attach SD card detect interrupt (GPIO %u, PZ1)", TEGRA_GPIO_SD_CD);
+    __atomic_store_n(&cardDetectArmed, true, __ATOMIC_RELEASE);
+    cdSource->enable();
+    checkCardPresent("boot");
+}
+
 // Software-reset the CMD and DAT state machines (hekate _sdmmc_reset_cmd_data); STATUS is left alone.
 void NativeSwitchBlock::resetLines()
 {
@@ -1354,6 +1401,7 @@ int NativeSwitchBlock::transfer(uint64_t lba, uint32_t sectors, bool write, uint
 bool NativeSwitchBlock::failed(int step, uint32_t status, uint64_t lba, uint32_t sectors, bool write,
                                unsigned descriptors, bool retry)
 {
+    checkCardPresent("io error");
     IOLog("SwitchSD: %s%s lba=%llu n=%u failed step=%d status=0x%08x present=0x%08x acmd=0x%04x\n",
           retry ? "retry " : "", write ? "write" : "read", lba, sectors, step, status, r32(PRESENT),
           r16(AUTO_CMD_ERROR));
@@ -3447,6 +3495,9 @@ void NativeSwitchBlock::suspend()
         IOLockSleep(queueLock, &working, THREAD_UNINT);
     IOLockUnlock(queueLock);
     dmaSuspend();
+    __atomic_store_n(&cardDetectArmed, false, __ATOMIC_RELEASE);
+    if (cdSource)
+        cdSource->disable();
     if (irqSource)
         irqSource->disable();
     powerOffCard();
@@ -3536,6 +3587,12 @@ void NativeSwitchBlock::releaseRequestPool()
 
 void NativeSwitchBlock::stop(IOService *provider)
 {
+    __atomic_store_n(&cardDetectArmed, false, __ATOMIC_RELEASE);
+    if (cdSource) {
+        cdSource->disable();
+        if (irqLoop)
+            irqLoop->removeEventSource(cdSource);
+    }
     if (queueLock) {
         IOLockLock(queueLock);
         suspended = true;
@@ -3559,6 +3616,7 @@ void NativeSwitchBlock::stop(IOService *provider)
 
 void NativeSwitchBlock::free()
 {
+    OSSafeReleaseNULL(cdSource);
     releaseRequestPool();
     IOService::free();
 }
@@ -3583,6 +3641,9 @@ void NativeSwitchBlock::shutdown()
         IOLockSleep(queueLock, &working, THREAD_UNINT);
     Request *const abandoned = drainQueueLocked();
     IOLockUnlock(queueLock);
+    __atomic_store_n(&cardDetectArmed, false, __ATOMIC_RELEASE);
+    if (cdSource)
+        cdSource->disable();
     if (abandoned) {
         Batch b = {};
         b.first = abandoned;
@@ -3628,6 +3689,11 @@ IOReturn NativeSwitchBlock::callPlatformFunction(const OSSymbol *function, bool 
 
 void NativeSwitchBlock::resume()
 {
+    if (cdSource) {
+        __atomic_store_n(&cardDetectArmed, true, __ATOMIC_RELEASE);
+        cdSource->enable();
+        checkCardPresent("resume");
+    }
     powerOnController();
     if (irqSource)
         irqSource->enable();
@@ -3816,6 +3882,7 @@ bool NativeSwitchBlock::setup()
         return false;
     }
     thread_deallocate(thread);
+    startCardDetect();
     return true;
 }
 
