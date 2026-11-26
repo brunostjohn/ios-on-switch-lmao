@@ -203,8 +203,10 @@ TEST(GM20BPoolPolicySource, CompressibleBosArePoolChunksNoTaskMaps)
 	EXPECT_TRUE(chunks.has("ret = charge.refused ? kIOReturnNoMemory : takeChunks("));
 	EXPECT_TRUE(Block(client(), "AGXDeviceUserClient::BoCharge AGXDeviceUserClient::chargeBo(")
 			    .has("c.refused = compressibleRefusal(in->bytes, critical_);"));
-	EXPECT_TRUE(Block(client(), "const char *compressibleRefusal(uint64_t bytes, bool compositor)")
-			    .has("tgm_pool::compressibleRefusal(bytes, tgm_pool_avail(), limits, compositor)"));
+	EXPECT_TRUE(
+		Block(client(), "const char *compressibleRefusal(uint64_t bytes, bool compositor)")
+			.has("tgm_pool::compressibleRefusal(bytes, tgm_pool_avail(), limits, "
+			     "compositor)"));
 	EXPECT_TRUE(chunks.has("takeChunks(in->bytes, bo->pas)"));
 	EXPECT_TRUE(alloc.has("} else if (!ret && !compressible) {"));
 	EXPECT_FALSE(Block(client(), "IOReturn takeChunks(uint64_t bytes, uint64_t *pas)")
@@ -1877,7 +1879,7 @@ TEST(GM20BSparesSource, ThePoolDecidesThroughTheBooks)
 {
 	const CodeText work =
 		Block(client(), "void spareWork(thread_call_param_t param, thread_call_param_t)");
-	EXPECT_TRUE(work.has("switch_gpu_spare_books_refill(b, kSpareCapBytes)"));
+	EXPECT_TRUE(work.has("switch_gpu_spare_books_refill(b, kSpareCapBytes, &floors)"));
 	EXPECT_TRUE(work.before("++b.dirty[c];", "spareMake(p, classBytes(c))"));
 	const CodeText recycle = Block(
 		client(), "void spareRecycleWork(thread_call_param_t param, thread_call_param_t)");
@@ -1904,8 +1906,16 @@ TEST(GM20BSparesSource, ARefilledSparesPagesComeFromItsDescriptor)
 	const CodeText units = Block(
 		SourceText("../SwitchGpuCachedBuffer.cpp"),
 		"bool switch_gpu_cached_buffer_units(uint64_t bytes, SwitchGpuCachedBuffer *out)");
-	EXPECT_TRUE(
-		units.has("createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapPrefault)"));
+	EXPECT_TRUE(units.has("createMappingInTask(kernel_task, 0, kIOMapAnywhere)"));
+	EXPECT_FALSE(units.has("kIOMapPrefault"));
+}
+
+// Every sleep on the submit gate's event goes through the gate, whose sleeper count decides whether a mutation's end
+// wakes anyone: releaseLeft slept on it directly and a close could hang (review of 5f634f298).
+TEST(GM20BSubmitGateSource, NobodySleepsOnTheGateOutsideIt)
+{
+	EXPECT_FALSE(CodeText(client()).has("switch_gpu_sleep_inheritor(lock_, &submitGate_"));
+	EXPECT_EQ(CodeText(client()).count("submitGate_.waitMutationEnd(lock_);"), 2u);
 }
 
 // The spare workers allocate, wire, free and sometimes memset memory: never above user priority.

@@ -43,37 +43,68 @@ inline bool switch_gpu_spare_books_short(const switch_gpu_spare_books &b, uint32
 	return switch_gpu_spare_short(b.ready[c], b.zeroing[c], b.dirty[c], b.depth[c]);
 }
 
-// Bytes of ready spares kept past their class's depth: what can go back to make room
-inline uint64_t switch_gpu_spare_books_over(const switch_gpu_spare_books &b)
+// A warm class below its warm count: its refill comes first, and may take room from spares any class keeps past its
+// own warm count (learned depths included), so learned depths cannot starve the warm table or the compositor's reserve
+inline bool switch_gpu_spare_books_floor_short(const switch_gpu_spare_books &b, uint32_t c)
+{
+	return switch_gpu_spare_short(b.ready[c], b.zeroing[c], b.dirty[c], b.floor[c]);
+}
+
+// The line a class's ready spares above can go back from: its depth, or for a warm class's refill its warm count
+inline uint16_t switch_gpu_spare_books_line(const switch_gpu_spare_books &b, uint32_t c,
+					    bool floors)
+{
+	return floors ? b.floor[c] : b.depth[c];
+}
+
+// Bytes of ready spares kept past their line: what can go back to make room
+inline uint64_t switch_gpu_spare_books_over(const switch_gpu_spare_books &b, bool floors = false)
 {
 	uint64_t over = 0;
 	for (uint32_t c = 0; c < SWITCH_GPU_SPARE_CLASSES; c++) {
-		if (b.ready[c] > b.depth[c])
-			over += uint64_t(b.ready[c] - b.depth[c]) * switch_gpu_spare_class_bytes(c);
+		const uint16_t line = switch_gpu_spare_books_line(b, c, floors);
+		if (b.ready[c] > line)
+			over += uint64_t(b.ready[c] - line) * switch_gpu_spare_class_bytes(c);
 	}
 	return over;
 }
 
-// The ready spare to give back next for room: the largest class past its depth, or SWITCH_GPU_SPARE_NONE
-inline uint32_t switch_gpu_spare_books_give_back(const switch_gpu_spare_books &b)
+// The ready spare to give back next for room: the largest class past its line, or SWITCH_GPU_SPARE_NONE
+inline uint32_t switch_gpu_spare_books_give_back(const switch_gpu_spare_books &b,
+						 bool floors = false)
 {
-	return switch_gpu_spare_over_depth(b.ready, b.depth, SWITCH_GPU_SPARE_CLASSES);
-}
-
-// Whether `need` more bytes fit under `cap` once every spare past its depth has gone back
-inline bool switch_gpu_spare_books_fit(const switch_gpu_spare_books &b, uint64_t need, uint64_t cap)
-{
-	return b.held - switch_gpu_spare_books_over(b) + need <= cap;
-}
-
-// The class the refill makes a spare of next: the smallest below its depth that fits under the cap, spares past their
-// depth given back first; SWITCH_GPU_SPARE_NONE when none does
-inline uint32_t switch_gpu_spare_books_refill(const switch_gpu_spare_books &b, uint64_t cap)
-{
-	for (uint32_t c = 0; c < SWITCH_GPU_SPARE_CLASSES; c++) {
-		if (switch_gpu_spare_books_short(b, c) &&
-		    switch_gpu_spare_books_fit(b, switch_gpu_spare_class_bytes(c), cap))
+	for (uint32_t c = SWITCH_GPU_SPARE_CLASSES; c-- > 0;) {
+		if (b.ready[c] > switch_gpu_spare_books_line(b, c, floors))
 			return c;
+	}
+	return SWITCH_GPU_SPARE_NONE;
+}
+
+// Whether `need` more bytes fit under `cap` once every spare past its line has gone back
+inline bool switch_gpu_spare_books_fit(const switch_gpu_spare_books &b, uint64_t need, uint64_t cap,
+				       bool floors = false)
+{
+	return b.held - switch_gpu_spare_books_over(b, floors) + need <= cap;
+}
+
+// The class the refill makes a spare of next, and in `floors` whether its room comes from past the warm counts: first
+// the smallest warm class below its warm count, then the smallest class below its learned depth, each only where it fits
+// under the cap; SWITCH_GPU_SPARE_NONE when none does
+inline uint32_t switch_gpu_spare_books_refill(const switch_gpu_spare_books &b, uint64_t cap,
+					      bool *floors = nullptr)
+{
+	for (int pass = 0; pass < 2; pass++) {
+		const bool warm = pass == 0;
+		for (uint32_t c = 0; c < SWITCH_GPU_SPARE_CLASSES; c++) {
+			const bool wanted = warm ? switch_gpu_spare_books_floor_short(b, c)
+						 : switch_gpu_spare_books_short(b, c);
+			if (wanted && switch_gpu_spare_books_fit(b, switch_gpu_spare_class_bytes(c),
+								 cap, warm)) {
+				if (floors)
+					*floors = warm;
+				return c;
+			}
+		}
 	}
 	return SWITCH_GPU_SPARE_NONE;
 }
@@ -91,6 +122,8 @@ inline bool switch_gpu_spare_books_wants_refill(const switch_gpu_spare_books &b,
 inline bool switch_gpu_spare_books_keep(const switch_gpu_spare_books &b, uint32_t c, uint64_t cap)
 {
 	return b.held <= cap ||
+	       (switch_gpu_spare_books_floor_short(b, c) &&
+		switch_gpu_spare_books_fit(b, 0, cap, true)) ||
 	       (switch_gpu_spare_books_short(b, c) && switch_gpu_spare_books_fit(b, 0, cap));
 }
 

@@ -226,6 +226,7 @@ void spareIneligible();
 bool spareKeep(const SwitchGpuCachedBuffer &buffer, uint64_t *pas, uint64_t bytes,
 	       switch_gpu_cached_mapping *mapping = nullptr);
 bool sparesPressure();
+void sparesPressureLook();
 bool sparesHasRoom();
 void kickSpareWork();
 bool reclaimParkedStep(bool pressure, bool room);

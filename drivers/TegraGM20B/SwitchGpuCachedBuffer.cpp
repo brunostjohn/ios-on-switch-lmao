@@ -41,10 +41,11 @@ bool switch_gpu_cached_buffer_units(uint64_t bytes, SwitchGpuCachedBuffer *out)
 		multi->release();
 		return false;
 	}
-	// Prefaulted: the scrub's cache maintenance and the BO's CPU leases go through this view, and a mapping of
-	// wired pages has no PTE until each page is touched
-	IOMemoryMap *map =
-		multi->createMappingInTask(kernel_task, 0, kIOMapAnywhere | kIOMapPrefault);
+	// Not prefaulted: its PTEs come at the first touch (the scrub's cache maintenance by VA, on the zeroing thread), as
+	// they did through 23 Nov. A kernel-map prefault asserts a VM page for every entry in DEVELOPMENT kernels
+	// (vm_map_enter_mem_object: "no VM page"), which this view's memory entries are not proven to give. Nothing reads
+	// the page list through it (switch_gpu_cached_buffer_page_list).
+	IOMemoryMap *map = multi->createMappingInTask(kernel_task, 0, kIOMapAnywhere);
 	if (!map) {
 		multi->complete();
 		multi->release();
@@ -74,22 +75,24 @@ SwitchGpuCachedBuffer switch_gpu_cached_buffer_of(IOMemoryDescriptor *memory)
 	return {memory, nullptr, buffer ? buffer->getBytesNoCopy() : nullptr};
 }
 
-bool switch_gpu_cached_buffer_page_list(const SwitchGpuCachedBuffer &buffer, uint64_t bytes,
-					uint64_t *pas)
+SwitchGpuPageList switch_gpu_cached_buffer_page_list(const SwitchGpuCachedBuffer &buffer,
+						     uint64_t bytes, uint64_t *pas)
 {
 	for (uint64_t off = 0; off < bytes;) {
 		IOByteCount run = 0;
 		const addr64_t pa =
 			buffer.memory->getPhysicalSegment(off, &run, kIOMemoryMapperNone);
-		if (!pa || (pa & 0xfff) || run < 4096)
-			return false;
+		if (!pa || run < 4096)
+			return SwitchGpuPageList::NoSegment;
+		if (pa & 0xfff)
+			return SwitchGpuPageList::Misaligned;
 		for (uint64_t at = 0; at + 4096 <= run && off < bytes; at += 4096, off += 4096) {
 			if (pa + at + 4096 > (1ULL << 34))
-				return false;
+				return SwitchGpuPageList::PastGpu;
 			pas[off >> 12] = pa + at;
 		}
 	}
-	return true;
+	return SwitchGpuPageList::Listed;
 }
 
 bool switch_gpu_cached_buffer_alone(const SwitchGpuCachedBuffer &buffer)

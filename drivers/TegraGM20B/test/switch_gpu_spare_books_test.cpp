@@ -45,10 +45,10 @@ struct Pool {
 		peak = b.held > peak ? b.held : peak;
 	}
 
-	void giveBack(uint64_t need)
+	void giveBack(uint64_t need, bool floors)
 	{
 		while (b.held + need > kCap) {
-			const uint32_t d = switch_gpu_spare_books_give_back(b);
+			const uint32_t d = switch_gpu_spare_books_give_back(b, floors);
 			if (d == SWITCH_GPU_SPARE_NONE)
 				break;
 			--b.ready[d];
@@ -58,9 +58,10 @@ struct Pool {
 
 	void refill()
 	{
-		for (uint32_t c;
-		     (c = switch_gpu_spare_books_refill(b, kCap)) != SWITCH_GPU_SPARE_NONE;) {
-			giveBack(bytesOf(c));
+		bool floors = false;
+		for (uint32_t c; (c = switch_gpu_spare_books_refill(b, kCap, &floors)) !=
+				 SWITCH_GPU_SPARE_NONE;) {
+			giveBack(bytesOf(c), floors);
 			b.held += bytesOf(c);
 			++b.dirty[c];
 			track();
@@ -95,7 +96,7 @@ struct Pool {
 				b.held -= bytes;
 				continue;
 			}
-			giveBack(0);
+			giveBack(0, switch_gpu_spare_books_floor_short(b, c));
 			if (copyEngineBusy) {
 				dirty.insert(dirty.begin(), bytes);
 				++b.dirty[c];
@@ -277,6 +278,25 @@ TEST(SpareBooks, ATakeFromALargerClassRefillsThatClass)
 	};
 	EXPECT_EQ(burst(true), 1u);
 	EXPECT_EQ(burst(false), 0u);
+}
+
+// Review of 7052373bb: learned depths have no total bound, so after warm-up nothing was "past its depth" and a taken
+// 24 MiB spare was never made again. The warm table refills first, taking its room from what learned depths keep.
+TEST(SpareBooks, LearnedDepthsCannotStarveTheWarmTable)
+{
+	Pool p;
+	p.refill();
+	for (const uint64_t bytes : {4 * kMiB, 8 * kMiB}) {
+		const uint32_t c = classOf(bytes);
+		p.b.depth[c] = switch_gpu_spare_depth_cap(bytes, kCap, p.b.floor[c]);
+	}
+	p.refill();
+	p.take(24 * kMiB, true);
+	p.take(24 * kMiB, true);
+	p.kicked = true;
+	p.settle();
+	EXPECT_EQ(p.b.ready[classOf(24 * kMiB)], 2);
+	EXPECT_LE(p.peak, kCap);
 }
 
 TEST(SpareBooks, AFreedBoOfAClassNobodyKeepsGoesBackWhenThePoolIsFull)

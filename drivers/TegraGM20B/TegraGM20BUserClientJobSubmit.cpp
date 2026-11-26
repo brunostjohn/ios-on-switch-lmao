@@ -340,7 +340,9 @@ IOReturn AGXDeviceUserClient::runJobUses(const SwitchGpuJobRecord &record, JobSc
 				  useTotal, job.writes, writeCount, job.surfaces, surfaceCount,
 				  job.written, writtenCount, rangedUses, unlockedWrites,
 				  usesHostWritten);
+#if TGM_STATS || defined(SWITCH_GPU_PATH_STATS)
 		job.useCache.named = head.shared_count;
+#endif
 	}
 	const uint32_t sharedNamed = sameUses ? job.useCache.named : head.shared_count;
 	tgm_views_job_writes(job.written, writtenCount);

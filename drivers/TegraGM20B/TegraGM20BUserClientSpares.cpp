@@ -86,14 +86,14 @@ void cleanZeros(void *va, uint64_t bytes)
 namespace
 {
 
-// lock held: ready spares past their class's depth, largest class first, off their lists until `need` more bytes fit under
-// the cap; the caller frees them once the lock is dropped
-Spare *giveBackLocked(SparePool *p, uint64_t need)
+// lock held: ready spares past their class's line (its depth, or with `floors` its warm count), largest class first, off
+// their lists until `need` more bytes fit under the cap; the caller frees them once the lock is dropped
+Spare *giveBackLocked(SparePool *p, uint64_t need, bool floors)
 {
 	switch_gpu_spare_books &b = p->books;
 	Spare *given = nullptr;
 	while (b.held + need > kSpareCapBytes) {
-		const uint32_t d = switch_gpu_spare_books_give_back(b);
+		const uint32_t d = switch_gpu_spare_books_give_back(b, floors);
 		if (d == SWITCH_GPU_SPARE_NONE || !p->ready[d])
 			break;
 		Spare *s = p->ready[d];
@@ -134,9 +134,10 @@ Spare *spareMake(SparePool *p, uint64_t bytes)
 #endif
 	}
 	made = made || switch_gpu_cached_buffer_pages(bytes, &buffer);
-	const bool listed =
-		s && pas && made && switch_gpu_cached_buffer_page_list(buffer, bytes, pas);
-	if (listed) {
+	const SwitchGpuPageList listed =
+		s && pas && made ? switch_gpu_cached_buffer_page_list(buffer, bytes, pas)
+				 : SwitchGpuPageList::NoSegment;
+	if (listed == SwitchGpuPageList::Listed) {
 		*s = {nullptr, buffer, pas, bytes, nullptr};
 		return s;
 	}
@@ -147,7 +148,11 @@ Spare *spareMake(SparePool *p, uint64_t bytes)
 		      bytes >> 10,
 		      !s || !pas ? "no memory for its records"
 		      : !made    ? "the VM gave no pages"
-				 : "its page list is not below the GPU's 34 bits");
+		      : listed == SwitchGpuPageList::NoSegment
+			      ? "its descriptor has no physical segment"
+		      : listed == SwitchGpuPageList::Misaligned
+			      ? "a physical segment is not page-aligned"
+			      : "a page is past the GPU's 34 bits");
 	switch_gpu_cached_buffer_free(&buffer);
 	if (pas)
 		IODelete(pas, uint64_t, bytes >> 12);
@@ -213,7 +218,10 @@ void spareRecycleWork(thread_call_param_t param, thread_call_param_t)
 			--b.dirty[c];
 			const bool keep = !pressure && spareRoom() &&
 					  switch_gpu_spare_books_keep(b, c, kSpareCapBytes);
-			Spare *given = keep ? giveBackLocked(p, 0) : nullptr;
+			Spare *given =
+				keep ? giveBackLocked(p, 0,
+						      switch_gpu_spare_books_floor_short(b, c))
+				     : nullptr;
 			if (keep)
 				++b.zeroing[c];
 			else
@@ -288,12 +296,14 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 				thread_call_enter(p->recycleCall);
 			return;
 		}
-		const uint32_t c = p->fillFailed || !spareRoom()
-					   ? SWITCH_GPU_SPARE_NONE
-					   : switch_gpu_spare_books_refill(b, kSpareCapBytes);
+		bool floors = false;
+		const uint32_t c =
+			p->fillFailed || !spareRoom()
+				? SWITCH_GPU_SPARE_NONE
+				: switch_gpu_spare_books_refill(b, kSpareCapBytes, &floors);
 		Spare *given = nullptr;
 		if (c != SWITCH_GPU_SPARE_NONE) {
-			given = giveBackLocked(p, classBytes(c));
+			given = giveBackLocked(p, classBytes(c), floors);
 			// counted from now, on the dirty list it goes to: neither this loop nor a take's kick makes it twice
 			b.held += classBytes(c);
 			++b.dirty[c];
@@ -413,6 +423,18 @@ Spare *spareTake(uint64_t bytes, bool critical)
 	if (kickReclaim)
 		thread_call_enter(p->reclaimCall);
 	return s;
+}
+
+// A process heard memory pressure (method 43): what a take does under pressure, without waiting for one. Nothing reads the
+// pressure level while the GPU allocates nothing, and the pool holds up to its cap wired.
+void sparesPressureLook()
+{
+	SparePool *p = __atomic_load_n(&gSpares, __ATOMIC_ACQUIRE);
+	if (!p || !memoryPressure())
+		return;
+	thread_call_enter(p->recycleCall);
+	if (parkedHasAny())
+		thread_call_enter(p->reclaimCall);
 }
 
 bool sparesPressure()
