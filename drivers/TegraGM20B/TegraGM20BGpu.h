@@ -680,6 +680,7 @@ struct tgm_present_read {
 #if TGM_STATS
 /* Debug kernels: clock gating on (1) or off (0), for the A/B (TegraGM20B.cpp's debug.switch_gpu_clkgate). 0 or -EBUSY. */
 int tgm_clkgate_switch(int on);
+int switch_gpu_gpc_khz(void);
 
 struct nvkm_device;
 int tgm_gpu_held(void (*fn)(struct nvkm_device *device, void *arg), void *arg);

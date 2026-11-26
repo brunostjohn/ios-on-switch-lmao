@@ -19,6 +19,7 @@ py_library(
     name = "lib",
     srcs = [
         "app_journal.py",
+        "compiler_inputs.py",
         "deployed.py",
         "fileprovider_bookmark.py",
         "icon_cache.py",
@@ -62,6 +63,13 @@ py_test(
     size = "small",
     srcs = ["app_journal_test.py"],
     deps = [":lib"],
+)
+
+py_test(
+    name = "compiler_inputs_test",
+    size = "small",
+    srcs = ["compiler_inputs_test.py"],
+    deps = [":deploy"],
 )
 
 py_test(
