@@ -24,7 +24,8 @@ mod texs;
 pub use texs::bound_texture_cbuf;
 pub mod xmad;
 
-// Measured on GM20B by the bench loop; the doubles, HSET2, HSETP2 and HMNMX2 were not timed and keep NAK's guess.
+// Measured on GM20B by the bench loop; the doubles and HMNMX2 were not timed and keep NAK's guess. HSET2 and HSETP2
+// take every other compare's: NVIDIA's GM20B code reads HSETP2's predicate 13 cycles after it.
 pub fn instr_latency(_sm: u8, op: &Op, dst_idx: usize) -> u32 {
     let file = match &op.dsts_as_slice()[dst_idx] {
         Dst::None => return 0,
@@ -38,8 +39,6 @@ pub fn instr_latency(_sm: u8, op: &Op, dst_idx: usize) -> u32 {
         | Op::DMnMx(_)
         | Op::DMul(_)
         | Op::DSetP(_)
-        | Op::HSet2(_)
-        | Op::HSetP2(_)
         | Op::HMnMx2(_) => (13, 14),
         _ => (6, 13),
     };
