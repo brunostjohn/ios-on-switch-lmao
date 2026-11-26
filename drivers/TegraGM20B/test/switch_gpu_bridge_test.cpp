@@ -1399,6 +1399,81 @@ TEST_F(Bridge, ACoveringJobKilledAfterItsIncrementsLeavesTheBridgeComplete)
 	release(bridge);
 }
 
+// `source` completed at its own fence inside the job ending at `last` on its channel, and that channel was then killed
+void killCoveringJob(const switch_gpu_backing_token &source, uint32_t last)
+{
+	statuses[key(source)] = 1;
+	coveringStatus[{source.queue, source.reset_generation, last}] = -5;
+	causes[key(token(last, source.queue))] = SWITCH_GPU_BACKING_WRITER_GONE;
+	stoppedChannels.insert(source.queue);
+}
+
+const auto recordStatus = [](void *context, int status) {
+	static_cast<std::vector<int> *>(context)->push_back(status);
+};
+
+// The display reads a bare -5 as its frame lost (TEGRA_SCANOUT_SOURCE_LOST) and panics. A notify or fence callback on a
+// slot whose tokens completed and whose covering job died short of its increments hears that job's cause.
+TEST_F(Bridge, ANotifiedConsumerOfACoveringJobKilledBeforeItsIncrementsHearsItsCause)
+{
+	const auto source = token(610, 30);
+	statuses[key(source)] = 0;
+	covered[key(source)] = {kProducerSyncpoint + 20, 150, 611};
+	syncpoints[kProducerSyncpoint + 20] = 148;
+	auto *bridge = submit({source});
+	ASSERT_NE(bridge, nullptr);
+	std::vector<int> heard;
+	ASSERT_EQ(switch_gpu_bridge_notify(bridge, recordStatus, &heard), 0);
+	killCoveringJob(source, 611);
+	switch_gpu_bridge_completed();
+	pump();
+	stoppedChannels.erase(30);
+	causes.clear();
+	EXPECT_EQ(heard, std::vector<int>{SWITCH_GPU_BACKING_WRITER_GONE});
+	EXPECT_EQ(switch_gpu_bridge_failed(bridge), -5);
+	release(bridge);
+}
+
+// A consumer that read the stored failure and refused the stream notifies after the slot retired
+TEST_F(Bridge, ANotifyAfterACoveringJobKilledBeforeItsIncrementsHearsItsCause)
+{
+	const auto source = token(612, 31);
+	statuses[key(source)] = 0;
+	covered[key(source)] = {kProducerSyncpoint + 21, 160, 613};
+	syncpoints[kProducerSyncpoint + 21] = 158;
+	auto *bridge = submit({source});
+	ASSERT_NE(bridge, nullptr);
+	killCoveringJob(source, 613);
+	switch_gpu_bridge_completed();
+	pump();
+	stoppedChannels.erase(31);
+	ASSERT_EQ(switch_gpu_bridge_failed(bridge), -5);
+	std::vector<int> heard;
+	ASSERT_EQ(switch_gpu_bridge_notify(bridge, recordStatus, &heard), 0);
+	pump();
+	causes.clear();
+	EXPECT_EQ(heard, std::vector<int>{SWITCH_GPU_BACKING_WRITER_GONE});
+	release(bridge);
+}
+
+TEST_F(Bridge, AFenceOnACoveringJobKilledBeforeItsIncrementsHearsItsCause)
+{
+	const auto source = token(614, 32);
+	statuses[key(source)] = 0;
+	covered[key(source)] = {kProducerSyncpoint + 22, 170, 615};
+	syncpoints[kProducerSyncpoint + 22] = 168;
+	const uint32_t releasesBefore = failureReleases;
+	std::vector<int> heard;
+	ASSERT_EQ(switch_gpu_bridge_fence(&source, 1, recordStatus, &heard), 0);
+	killCoveringJob(source, 615);
+	switch_gpu_bridge_completed();
+	pump();
+	stoppedChannels.erase(32);
+	causes.clear();
+	EXPECT_EQ(failureReleases, releasesBefore + 1) << "the fence's slot was jobless";
+	EXPECT_EQ(heard, std::vector<int>{SWITCH_GPU_BACKING_WRITER_GONE});
+}
+
 // A kill landing between the slot's reads fails the token and stops the channel at once. The tokens are read first, so
 // a failure they show comes with the channel's end, and the CPU makes the increments the channel never will.
 TEST_F(Bridge, AKillBetweenTheTokenAndTheChannelReadsStillHasTheCpuMakeTheIncrements)

@@ -27,13 +27,15 @@ void switch_gpu_bridge_completed(void);
 int switch_gpu_bridge_status(const struct switch_gpu_bridge *bridge);
 /* Exceptional inspection of retained original GM20B/promise producers; no bridge queue lock or retirement. */
 int switch_gpu_bridge_source_failure(const struct switch_gpu_bridge *bridge);
-/* Why the first of the bridge's producers that failed failed (switch_gpu_backing_tokens_failure); 0 when none did. */
+/* Why the first of the bridge's producers that failed failed (switch_gpu_backing_tokens_failure); for a jobless bridge
+ * whose tokens completed, its covering job's cause once retirement stored the failure; 0 when none did. */
 int switch_gpu_bridge_why(const struct switch_gpu_bridge *bridge);
 /* Retained consumer completion only; the handle remains owned by the caller. */
 int switch_gpu_bridge_wait(const struct switch_gpu_bridge *bridge);
-/* The same completion without a CPU wait: completed(context, 0 or the producers' failure) runs once, in retirement
- * thread context, never inside this call. It counts as a waiter, so the hang check covers a stalled producer as it does
- * for switch_gpu_bridge_wait. One per bridge (-16 for a second); the caller keeps its own reference. */
+/* The same completion without a CPU wait: completed(context, 0 or the failure) runs once, in retirement thread
+ * context, never inside this call. The failure is switch_gpu_bridge_why's cause in place of the bridge's own -5 when it
+ * has one. It counts as a waiter, so the hang check covers a stalled producer as it does for switch_gpu_bridge_wait.
+ * One per bridge (-16 for a second); the caller keeps its own reference. */
 int switch_gpu_bridge_notify(const struct switch_gpu_bridge *bridge, void (*completed)(void *, int),
 			     void *context);
 /* A host1x stream waits on the bridge's syncpoint in hardware with no completion callback (the display's plane stream,
@@ -62,7 +64,7 @@ int switch_gpu_bridge_wait_room(void);
 /* Explicit CPU acquisition only; waits on the bridge interrupt, never polls a producer. */
 int switch_gpu_bridge_wait_external(const struct switch_gpu_backing_token *token);
 /* Exact external completion for display/presentation. The callback runs in retirement thread context and receives
- * the retained producers' failure even if recovery released their abandoned hardware semaphores. */
+ * notify's status: the retained producers' failure even if recovery released their abandoned hardware semaphores. */
 int switch_gpu_bridge_fence(const struct switch_gpu_backing_token *tokens, uint32_t count,
 			    void (*completed)(void *, int), void *context);
 #ifdef __cplusplus

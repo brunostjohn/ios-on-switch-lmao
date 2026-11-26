@@ -68,6 +68,18 @@ void finish(switch_gpu_bridge &job)
 	IOLockWakeup(queue.lock, &job, false);
 	releaseLocked(job);
 }
+
+// A notify or fence callback's status: 0 complete, else the failure. The slot's own -5 (its bridge job failed, or its
+// covering job died short of its drain) reads as a lost frame to the display, so the producers' cause takes its place
+// when there is one. Thread context, the slot still referenced.
+int heard(const switch_gpu_bridge &job, int result)
+{
+	if (result == 1)
+		return 0;
+	const int why =
+		result == SWITCH_GPU_BACKING_WRITER_FAILED ? switch_gpu_bridge_why(&job) : 0;
+	return why ? why : result;
+}
 }  // namespace
 
 bool anyWaited()
@@ -218,7 +230,7 @@ void retire(thread_call_param_t, thread_call_param_t)
 	IOLockUnlock(queue.lock);
 	for (uint32_t i = 0; i < count; ++i) {
 		const auto &callback = callbacks[i];
-		callback.fn(callback.context, callback.result == 1 ? 0 : callback.result);
+		callback.fn(callback.context, heard(*callback.job, callback.result));
 		IOLockLock(queue.lock);
 		releaseLocked(*callback.job);
 		IOLockUnlock(queue.lock);
