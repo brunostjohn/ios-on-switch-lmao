@@ -15,7 +15,7 @@ public struct GPUPaths {
 
     public static let method: UInt32 = 0x5050
     public static let foreignWaitsOp: UInt32 = 6
-    public static let zbcOp: UInt32 = 7
+    public static let zbcOp: UInt32 = 9
 
     public static let replySize = 1024
 

@@ -125,9 +125,12 @@ struct Pipeline {
     // pack has none. On that form: the rung it draws on and the colour it blends
     Pipeline *fetchFree = nullptr;
     FetchFreeForm freeForm;
-    bool constantBlend = false;     // a blend factor of a blended color is the encoder's blend color
-    bool blendKill = false;         // its SET_ITERATED_BLEND_OPTIMIZATION drops zero-source pixels (blend_kill.h)
-    bool fragmentDepth = false;     // its fragment program writes depth (SPH OMAP_DEPTH)
+    bool constantBlend = false;  // a blend factor of a blended color is the encoder's blend color
+    bool blendKill = false;      // its SET_ITERATED_BLEND_OPTIMIZATION drops zero-source pixels (blend_kill.h)
+    bool fragmentDepth = false;  // its fragment program writes depth (SPH OMAP_DEPTH)
+    // its fragment program discards or writes the sample mask or depth, or its registers turn alpha to coverage on: what
+    // its draws write at a sample needs the program run (a mixed pass's samples 1-3, mixed_samples.h)
+    bool shapesCoverage = true;
     bool viewportIndex = false;     // its vertex program writes ViewportIndex (SPH OMAP, viewports.h)
     bool writesLayer = false;       // its last stage before the rasterizer writes Layer: SET_RT_LAYER takes it
     uint32_t colorFormats[8] = {};  // MTLPixelFormat of each color attachment the state was made for (0: none)

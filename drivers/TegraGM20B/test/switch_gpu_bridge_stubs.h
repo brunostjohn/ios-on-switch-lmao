@@ -91,9 +91,12 @@ inline bool thread_call_enter_delayed(thread_call_t call, uint64_t deadline)
 	return false;
 }
 
+inline unsigned switch_bridge_cancels;
+
 inline bool thread_call_cancel(thread_call_t call)
 {
 	call->deadline = 0;
+	++switch_bridge_cancels;
 	return true;
 }
 

@@ -75,7 +75,7 @@ int bridgeGpuWriters(TegraNVENCDirect *d)
     switch_gpu_backing_abort(&d->transaction);
     if (!pending)
         return 0;
-    if (held || writers.submitBridge())
+    if (held || writers.submitWatchedBridge())
         return -11;
     d->bridge = writers.takeBridge();
     return 0;

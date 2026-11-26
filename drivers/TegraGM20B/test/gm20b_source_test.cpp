@@ -382,6 +382,41 @@ TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 			    .has("if (dst_va) tgm_present_push_copy(push);"));
 }
 
+// A jobless bridge (SwitchGpuBridgeRetire.cpp settleJobless) reads its tokens before its producer's channel, and the
+// channel's status before its end (`stopped`): a kill stores the end before any status reads failed, so a failure seen
+// comes with `stopped`, and the CPU makes the increments a channel that stopped short owes, after every slot of the pass
+// stored its result. A covering fence that landed owes none (gpu_exec.c pushes the increments ahead of it).
+// gpu.x1.bridge_jobless counts only a host1x consumer's jobless bridges, on the producing channel, after the queue's lock
+// (never tgm_live_lock under it).
+TEST(GM20BBridgeSource, AJoblessSlotReadsItsTokensThenItsChannelThenItsEnd)
+{
+	const CodeText covered = Block(SourceText("../SwitchGpuTimelineSyncpt.cpp"),
+				       "extern \"C\" int switch_gpu_timeline_covered(");
+	EXPECT_TRUE(covered.before("result = physical_now(timeline, last, false);",
+				   "timeline->terminal"));
+	const CodeText settle =
+		Block(SourceText("../SwitchGpuBridgeRetire.cpp"), "bool settleJobless(");
+	EXPECT_TRUE(settle.before("producers(job);", "switch_gpu_producer_covered("));
+	EXPECT_TRUE(settle.has("owed = stopped && !drained;"));
+	EXPECT_FALSE(settle.has("switch_gpu_producer_release("));
+	const CodeText retire = Block(SourceText("../SwitchGpuBridgeRetire.cpp"), "void retire(");
+	EXPECT_TRUE(retire.before(
+		"settleJobless(job, owes)",
+		"for (uint32_t i = 0; i < owing; ++i) "
+		"switch_gpu_producer_release(owed[i].syncpoint, owed[i].threshold);"));
+	const std::string bridge = SourceText("../SwitchGpuBridge.cpp");
+	EXPECT_TRUE(CodeText(Configured(bridge, "TGM_STATS", true))
+			    .has("IOLockUnlock(queue.lock); if (consumerJobless) "
+				 "tgm_chan_note_jobless(wait.covering.queue); return error;"));
+	EXPECT_TRUE(
+		CodeText(bridge).has("const bool consumerJobless = !error && jobless && assigns;"));
+	EXPECT_EQ(CodeText(Configured(bridge, "TGM_STATS", false)).count("tgm_chan_note_jobless"),
+		  0u);
+	EXPECT_TRUE(CodeText(Configured(SourceText("../TegraGM20BUserClientDispatch.cpp"),
+					"TGM_STATS", true))
+			    .has("tgm_chan_jobless(owner_)"));
+}
+
 // gpu.poster_targets reads each process's largest colour target, which the stats' push scan records (debug kernels).
 // SubmitJob takes the scan before its kick and hands its profile to the kick; the scan's counts are atomic, as SubmitJob
 // runs without the connection lock.
@@ -394,21 +429,27 @@ TEST(GM20BPushScanSource, EverySubmissionPathScansItsPushes)
 			       "count, prof, true);",
 			       "switch_gpu_chan_exec_events("));
 	EXPECT_TRUE(job.has("&seqno, profile, jobVisibility, releases, keptCount, &transaction);"));
-	EXPECT_EQ(clientCode().count("scanPushes(pushes, count,"), 1u);
-	EXPECT_TRUE(Block(client(), "const tgm_prof *AGXDeviceUserClient::scanSubmission(")
-			    .has("__atomic_fetch_add(&pushSubmits_, 1u, __ATOMIC_RELAXED) % "
-				 "kScanEvery"));
+	const CodeText submission =
+		Block(client(), "const tgm_prof *AGXDeviceUserClient::scanSubmission(");
+	EXPECT_EQ(clientCode().count("scanPushes(pushes, count,"), 2u);
+	EXPECT_EQ(submission.count("scanPushes(pushes, count,"), 2u);
+	EXPECT_TRUE(submission.startsWith("if (!TGM_STATS || !count) return nullptr;"));
+	EXPECT_TRUE(submission.has("tgm_scan::scanWeight(n, kScanFirst, kScanEvery);"));
 }
 
 // The render server waits for its submissions' thread (waitUntilScheduled), so only a profiled submission, whose kick
-// stamps what the read classed, is read on it; the others are read on a thread call, and only where their words lie in
-// the pool, whose kernel mapping outlives every BO (boot 21: 36-57 KiB of write-combined reads every 4th compositor job).
-TEST(GM20BPushScanSource, OnlyAProfiledSubmissionIsReadOnItsThread)
+// stamps what the read classed, is read on it, and an app connection's first kScanFirst; the others are read on a thread
+// call, and only where their words lie in the pool, whose kernel mapping outlives every BO (boot 21:
+// 36-57 KiB of write-combined reads every 4th compositor job).
+TEST(GM20BPushScanSource, OnlyAProfiledOrAFirstSubmissionIsReadOnItsThread)
 {
 	const CodeText submission =
 		Block(client(), "const tgm_prof *AGXDeviceUserClient::scanSubmission(");
-	EXPECT_TRUE(submission.before("deferScan(slot, fences, pushes, count, metalMacros);",
-				      "scanPushes(pushes, count, &prof, metalMacros);"));
+	EXPECT_TRUE(submission.before(
+		"scanPushes(pushes, count, &prof, metalMacros, submits); return &prof;",
+		"if (n < kScanFirst && !critical_ && count <= TGM_PROF_MAX) "
+		"scanPushes(pushes, count, nullptr, metalMacros, submits); "
+		"else deferScan(slot, fences, pushes, count, metalMacros, submits);"));
 	const CodeText defer = Block(client(), "void AGXDeviceUserClient::deferScan(");
 	EXPECT_TRUE(defer.has("hit->bo->pool_va"));
 	EXPECT_TRUE(defer.has("thread_call_enter(d->call);"));

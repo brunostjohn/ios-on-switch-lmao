@@ -62,6 +62,8 @@
     d[@"pass_pixel_openings"] = @(gRM->raw->stats.passPixelOpenings.load());
     d[@"raster_ordered_draws"] = @(gRM->raw->stats.rasterOrderedDraws.load());
     d[@"banded_draws"] = @(gRM->raw->stats.bandedDraws.load());
+    d[@"mixed_covering_draws"] = @(gRM->raw->stats.mixedCovering.load());
+    d[@"mixed_stage_off_draws"] = @(gRM->raw->stats.mixedStageOff.load());
     d[@"bands"] = @(gRM->raw->stats.bands.load());
     d[@"learned_draws"] = @(gRM->raw->stats.learnedDraws.load());
     d[@"priced_static"] = @(gRM->raw->stats.pricedStatic.load());
@@ -300,6 +302,8 @@
                      (unsigned long)n);
         return nil;
     }
+    if (b->_raw.freshFill)
+        establishFreshBuffer(b);
     return (id<MTLBuffer>)b;
 }
 

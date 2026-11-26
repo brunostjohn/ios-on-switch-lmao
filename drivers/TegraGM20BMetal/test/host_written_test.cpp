@@ -477,18 +477,38 @@ TEST(HostWrittenVolatileWc, IdleVolatileWcChunksParkAndUnparkResidentWithoutAlia
     EXPECT_EQ(kernel_model::model.bos[volHandle].parkState, kernel_model::ParkState::Parked);
     dev.destroyBuffer(cachedWc);
 
-    // Reallocating a volatile WC buffer unparks the parked VOL=1 chunk resident with ResourceSet membership intact.
+    // Reallocating a volatile WC buffer unparks the parked VOL=1 chunk resident. It rejoins the ResourceSet at the next
+    // begin, not on the unparking thread; a command buffer already open names it per job by address until then.
     bindOps.clear();
+    gm20b::CommandBuffer *open = dev.begin();
+    ASSERT_NE(open, nullptr);
     ASSERT_TRUE(dev.createBuffer(64 << 10, volBuf, true, true, true));
     ASSERT_TRUE(volBuf.wc && volBuf.gpuVolatile);
     EXPECT_EQ(kernel_model::model.unparkResident, 1u);
     EXPECT_EQ(kernel_model::model.resolve({volBuf.va, TegraGM20BSurfaceGpuAddress, 0}), volHandle);
     EXPECT_TRUE(bindOps.empty());
-    EXPECT_TRUE(gm20b::DeviceHarness::setHolds(dev, volBuf.va, volBuf.length));
+    EXPECT_FALSE(gm20b::DeviceHarness::setHolds(dev, volBuf.va, volBuf.length));
+    {
+        open->internalCompletion();
+        gm20b::BlitEncoder *e = open->blit();
+        ASSERT_NE(e, nullptr);
+        open->use(volBuf, false);
+        open->use(privBuf, true, false);
+        e->copyBytes(volBuf.va, privBuf.va, 4096);
+        e->end();
+        uint32_t seqno = 0;
+        ASSERT_TRUE(open->commit(seqno));
+        // The model stores each use under the BO it resolved to (kernel_model.h run)
+        const auto &uses = kernel_model::model.jobs.back().uses;
+        EXPECT_TRUE(std::any_of(uses.begin(), uses.end(), [&](const TegraGM20BAbiSurfaceUse &use) {
+            return use.handle == volHandle && (use.access & TegraGM20BSurfaceGpuAddress);
+        })) << "the open command buffer's job names the unparked chunk by its address";
+    }
 
     {
         gm20b::CommandBuffer *cb = dev.begin();
         ASSERT_NE(cb, nullptr);
+        EXPECT_TRUE(gm20b::DeviceHarness::setHolds(dev, volBuf.va, volBuf.length));
         cb->internalCompletion();
         gm20b::BlitEncoder *e = cb->blit();
         ASSERT_NE(e, nullptr);

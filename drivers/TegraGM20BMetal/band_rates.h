@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <utility>
 
 namespace gm20b {
 
@@ -25,9 +26,14 @@ constexpr uint32_t kMeasuredPerCommandBuffer = 16;
 constexpr uint32_t kRateWeight = 4;  // a new sample moves a warm rate by a quarter of the difference
 
 struct BandRate {
-    std::atomic<uint32_t> psPerUnit{0};  // 0: not measured yet
+    std::atomic<uint32_t> psPerUnit{0};  // a unit's share of a draw's time, its pixels' (0: not measured yet)
+    // what each band of a banded draw repeats: its vertices and the drain at its end (0: not measured yet)
+    std::atomic<uint32_t> nsPerBand{0};
     std::atomic<uint32_t> samples{0};
     std::atomic<uint32_t> picks{0};
+    // learn()'s fit, written by the learning thread alone: moving averages of bands per unit (x) and picoseconds per unit
+    // (y) of its samples, a quarter a sample, and of x x x and x x y. Atomic for a copy made on another thread.
+    std::atomic<double> x{0}, y{0}, xx{0}, xy{0};
 
     BandRate() = default;
 
@@ -39,19 +45,31 @@ struct BandRate {
     BandRate &operator=(const BandRate &o)
     {
         psPerUnit.store(o.psPerUnit.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        nsPerBand.store(o.nsPerBand.load(std::memory_order_relaxed), std::memory_order_relaxed);
         samples.store(o.samples.load(std::memory_order_relaxed), std::memory_order_relaxed);
         picks.store(o.picks.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        for (auto [to, from] : {std::pair{&x, &o.x}, {&y, &o.y}, {&xx, &o.xx}, {&xy, &o.xy}})
+            to->store(from->load(std::memory_order_relaxed), std::memory_order_relaxed);
         return *this;
     }
 };
+
+inline uint64_t unitsNs(uint64_t units, uint64_t ps)
+{
+    return units > UINT64_MAX / ps ? UINT64_MAX / 1000 : units * ps / 1000;
+}
 
 // The work's GPU time: `units` at the learned rate, else the static estimate
 inline uint64_t estimatedNs(const BandRate &r, uint64_t units, uint64_t staticNs)
 {
     const uint64_t ps = r.psPerUnit.load(std::memory_order_relaxed);
-    if (!ps)
-        return staticNs;
-    return units > UINT64_MAX / ps ? UINT64_MAX / 1000 : units * ps / 1000;
+    return ps ? unitsNs(units, ps) : staticNs;
+}
+
+// Whether any of its draws was measured, whole or banded
+inline bool measuredOnce(const BandRate &r)
+{
+    return r.psPerUnit.load(std::memory_order_relaxed) || r.nsPerBand.load(std::memory_order_relaxed);
 }
 
 inline bool picked(uint32_t pick)
@@ -76,15 +94,33 @@ inline bool wouldMeasure(const BandRate &r, uint64_t units)
     return units >= kMeasureUnits && picked(r.picks.load(std::memory_order_relaxed));
 }
 
-// A measured draw: `ns` of GPU time over `units`
-inline void learn(BandRate &r, uint64_t ns, uint64_t units)
+// A measured draw: `ns` of GPU time over `units`, drawn in `bands` (1: whole). Each band repeats the draw's vertices and
+// drains at its end, so a draw takes units x a pixel rate plus bands x a band's cost: booked as pixel cost, the repeat
+// priced the state's next draw longer and banded it more (25 Nov: VectorKit's ground draws of 48-208 instructions took
+// 8-17 ms in Maps at 1.0-2.9 ms a band, their pixels 0.06-0.8 ms). The two come apart by a line fitted through the
+// samples in picoseconds per unit against bands per unit, each sample a quarter of the averages; samples of one band
+// count leave the band's cost as it was and move the pixel rate alone. A quarter either way: one sample up by the time
+// other channels ran between its stamps (the same draw read 6.0 and 25.3 ms in one second) sets nothing outright.
+inline void learn(BandRate &r, uint64_t ns, uint64_t units, uint32_t bands = 1)
 {
     if (!units || !ns)
         return;
-    const uint64_t sample = std::clamp<uint64_t>(ns * 1000 / units, 1, UINT32_MAX);
-    const uint64_t old = r.psPerUnit.load(std::memory_order_relaxed);
-    const uint64_t rate = !old || sample > old ? sample : (old * (kRateWeight - 1) + sample) / kRateWeight;
-    r.psPerUnit.store(uint32_t(std::max<uint64_t>(rate, 1)), std::memory_order_relaxed);
+    const double x = double(std::max<uint32_t>(bands, 1)) / double(units), y = double(ns) * 1000.0 / double(units);
+    const bool first = r.samples.load(std::memory_order_relaxed) == 0;
+    const double keep = first ? 0.0 : double(kRateWeight - 1) / kRateWeight, take = 1.0 - keep;
+    const auto average = [keep, take](std::atomic<double> &m, double sample) {
+        const double v = m.load(std::memory_order_relaxed) * keep + sample * take;
+        m.store(v, std::memory_order_relaxed);
+        return v;
+    };
+    const double mx = average(r.x, x), my = average(r.y, y), mxx = average(r.xx, x * x), mxy = average(r.xy, x * y);
+    const double spread = mxx - mx * mx;
+    double band = double(r.nsPerBand.load(std::memory_order_relaxed)) * 1000.0;  // picoseconds a band
+    if (spread > 1e-6 * mxx)
+        band = std::max(0.0, (mxy - mx * my) / spread);
+    const double pixel = my - band * mx;
+    r.psPerUnit.store(uint32_t(std::clamp(pixel, 1.0, double(UINT32_MAX))), std::memory_order_relaxed);
+    r.nsPerBand.store(uint32_t(std::min(band / 1000.0, double(UINT32_MAX))), std::memory_order_relaxed);
     r.samples.fetch_add(1, std::memory_order_relaxed);
 }
 

@@ -530,6 +530,7 @@ TESTS_NATIVE_SRCS = [
 
 TESTS_PATHS_SRCS = [
     "tests/AheadMovesTest.swift",
+    "tests/BandsPlanarInstancedTest.swift",
     "tests/CommitLatencyPathTest.swift",
     "tests/DispatchPiecesTest.swift",
     "tests/DrawBandsTest.swift",
@@ -567,6 +568,7 @@ TESTS_PATHS_SRCS = [
     "tests/TitleScrollTest.swift",
     "tests/TitleScroller.swift",
     "tests/TransferBesideReadbackTest.swift",
+    "tests/X1BridgeJoblessTest.swift",
     "tests/X1GpuVicSyncTest.swift",
 ]
 
@@ -765,6 +767,7 @@ APP27_TESTS_SRCS = [
     "app27/ScanoutSession.swift",
     "app27/TrueToneDefaultTest.swift",
     "app27/X1BarrierKit.swift",
+    "app27/X1CleanL2Probe.swift",
     "app27/X1CompressedCopyProbe.swift",
     "app27/X1CompressedDepthProbe.swift",
     "app27/X1CompressedMSCases.swift",
@@ -780,6 +783,7 @@ APP27_TESTS_SRCS = [
     "app27/X1Probe.swift",
     "app27/X1ProbeChannel.swift",
     "app27/X1RawProbes.swift",
+    "app27/X1ShadowRamProbe.swift",
     "app27/X1SwitchDrainProbe.swift",
     "app27/X1TwodClearProbe.swift",
     "app27/X1TwodConvertCells.swift",

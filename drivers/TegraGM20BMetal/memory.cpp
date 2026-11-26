@@ -750,6 +750,7 @@ bool Device::createBuffer(uint64_t length, Buffer &b, bool wc, bool hostVisible,
             __asm__ volatile("dsb st" ::: "memory");
 #endif
         }
+        b.freshFill = zero && dirty && !b.wc;
         return true;
     }
     HostAccess access;

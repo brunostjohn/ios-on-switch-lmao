@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
-// An app's draw estimated to keep GR longer than TGM_APP_BAND_NS, drawn as the same draw under successive scissor bands.
-// GM20B leaves a graphics context only at a wait-for-idle, so a draw in flight always finishes before the compositor's kick
-// gets GR. Each band ends a batch (its wait-for-idle seqno release, TegraGM20BPushFence), where the PBDMA stops before the
-// next band's methods, so a kick waits for one band at most. The bands are disjoint rows of the draw's scissor area and
-// cover it exactly once, so every pixel the draw can write is shaded by exactly one band, in the draw's own primitive
-// order: blending, a framebuffer fetch (a pixel reads only itself) and the pixel interlock (a ticket is taken by a
-// fragment that is shaded, after the scissor test, and released before the band's end) give what the whole draw gives.
-// A visibility report is written between draws, never between a draw's bands, so the sample counter sums the bands as it
-// sums the whole draw. A vertex program's side effects would repeat per band: such a draw is drawn whole. Per band the CPU
-// writes a scissor and the draw's words.
+// An app's draw estimated to keep GR longer than TGM_APP_BAND_NS, drawn as the same draw under successive scissor
+// bands. GM20B leaves a graphics context only at a wait-for-idle, so a draw in flight always finishes before the
+// compositor's kick gets GR. Each band ends in a wait-for-idle semaphore release: into the channel's progress stamp
+// where it has one (every app channel does, device_channel.cpp), else a batch end's seqno release
+// (TegraGM20BPushFence). GR is idle there, so a kick's preempt can land between bands. The bands are disjoint rows of
+// the draw's scissor area and cover it exactly once, so every pixel the draw can write is shaded by exactly one band,
+// in the draw's own primitive order: blending, a framebuffer fetch (a pixel reads only itself) and the pixel interlock
+// (a ticket is taken by a fragment that is shaded, after the scissor test, and released before the band's end) give
+// what the whole draw gives. A visibility report is written between draws, never between a draw's bands, so the sample
+// counter sums the bands as it sums the whole draw. A vertex program's side effects would repeat per band: such a draw
+// is drawn whole. Per band the CPU writes a scissor and the draw's words.
 #pragma once
 #include <algorithm>
 #include <cstdint>
@@ -63,14 +64,19 @@ inline bool writesMemory(const uint8_t *header)
     return (word0 >> 16 & 1) != 0;
 }
 
-// 16-byte host WFI semaphore release into the channel's progress stamp (no interrupt): gives the host a preempt point,
-// the kernel's hang rule visible progress, and hold_stats a PTIMER stamp for mid-job preempt landings.
+// Host WFI semaphore release into the channel's progress stamp (no interrupt): gives the host a preempt point and the
+// kernel's hang rule visible progress (the payload word). Only debug kernels read the PTIMER stamp a 16-byte release
+// adds (hold_stats.c, mid-job preempt landings), so builds without diagnostics write the payload alone.
 inline void emitProgressRelease(Push &p, uint64_t va, uint32_t payload)
 {
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    constexpr uint32_t kSize = NVDEF(NVB06F, SEMAPHORED, RELEASE_SIZE, 16BYTE);
+#else
+    constexpr uint32_t kSize = NVDEF(NVB06F, SEMAPHORED, RELEASE_SIZE, 4BYTE);
+#endif
     p.inc(NVB06F_SEMAPHOREA,
           {uint32_t(va >> 32) & 0xff, uint32_t(va), payload,
-           NVDEF(NVB06F, SEMAPHORED, OPERATION, RELEASE) | NVDEF(NVB06F, SEMAPHORED, RELEASE_WFI, EN) |
-               NVDEF(NVB06F, SEMAPHORED, RELEASE_SIZE, 16BYTE)});
+           NVDEF(NVB06F, SEMAPHORED, OPERATION, RELEASE) | NVDEF(NVB06F, SEMAPHORED, RELEASE_WFI, EN) | kSize});
 }
 
 // A draw's GPU time: its pixels' (band_rates.h: learned, else the static estimate), and its vertices', which every band

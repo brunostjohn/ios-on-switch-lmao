@@ -4,6 +4,7 @@
 #include "TegraGM20BClockABI.h"
 #include "TegraGM20BGrPreemptABI.h"
 #include "TegraGM20BZcullABI.h"
+#include "../TegraHost1x/TegraHost1x.h"
 
 static IOReturn zbcAdd(const TegraGM20BAbiZbc *in, TegraGM20BAbiZbcReply *out)
 {
@@ -17,6 +18,29 @@ static IOReturn zbcAdd(const TegraGM20BAbiZbc *in, TegraGM20BAbiZbcReply *out)
 	out->reserved = 0;
 	return kIOReturnSuccess;
 }
+
+#if TGM_STATS
+// HW Test probes' syncpoints (TegraGM20BPathsOpProbeSyncpts), taken from host1x's own once: the first ask takes all three,
+// and an ask while it does answers ids of 0 rather than take more
+static void probeSyncptsLine(char *line, size_t size)
+{
+	static uint32_t ids[3];
+	static uint32_t taking;
+	uint32_t none = 0;
+	if (__atomic_compare_exchange_n(&taking, &none, 1u, false, __ATOMIC_ACQ_REL,
+					__ATOMIC_ACQUIRE) &&
+	    tegra_host1x_start() == TEGRA_HOST1X_OK)
+		for (uint32_t &id : ids) {
+			uint32_t made = 0;
+			if (tegra_host1x_syncpt_alloc(&made) == TEGRA_HOST1X_OK)
+				__atomic_store_n(&id, made, __ATOMIC_RELEASE);
+		}
+	snprintf(line, size, "ids=%u,%u,%u values=%u,%u,%u", ids[0], ids[1], ids[2],
+		 ids[0] ? tegra_host1x_syncpt_read(ids[0]) : 0,
+		 ids[1] ? tegra_host1x_syncpt_read(ids[1]) : 0,
+		 ids[2] ? tegra_host1x_syncpt_read(ids[2]) : 0);
+}
+#endif
 
 // IOGPUFamily's for a queue's MTLGPUPriorityRealTime (the same string in 21H461's and 24B119's)
 static constexpr char kRealTimeEntitlement[] = "com.apple.private.agx.rt-priority-spi";
@@ -434,9 +458,16 @@ IOReturn AGXDeviceUserClient::run(uint32_t method, const void *in, uint32_t inSi
 #if TGM_STATS
 		else if (op == TegraGM20BPathsOpTargetPeaks)
 			tgm_target_peaks_line(reply->line, sizeof(reply->line));
-		else if (op == TegraGM20BPathsOpZbc)
+		else if (op == TegraGM20BPathsOpProbeSyncpts) {
+			if (!switch_gpu_task_entitled(task_, SWITCH_GPU_PROBES_ENTITLEMENT))
+				return kIOReturnNotPrivileged;
+			probeSyncptsLine(reply->line, sizeof(reply->line));
+		} else if (op == TegraGM20BPathsOpBridge) {
+			snprintf(reply->line, sizeof(reply->line), "jobless=%llu",
+				 static_cast<unsigned long long>(tgm_chan_jobless(owner_)));
+		} else if (op == TegraGM20BPathsOpZbc) {
 			tgm_zbc_line(reply->line, sizeof(reply->line));
-		else if (op == TegraGM20BPathsOpForeignWaits) {
+		} else if (op == TegraGM20BPathsOpForeignWaits) {
 			struct tgm_foreign_waits totals = {};
 			tgm_foreign_waits_totals(&totals);
 			snprintf(reply->line, sizeof(reply->line),

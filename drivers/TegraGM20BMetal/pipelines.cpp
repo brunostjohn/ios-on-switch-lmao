@@ -715,16 +715,20 @@ void Device::build(Pipeline &pl, const PackPipeline &pp, const PlacedProgram &vs
     pl.fragmentDepth = (sph[19] >> 1) & 1;  // OMAP_DEPTH, bit 609
     pl.viewportIndex = headerWritesViewportIndex((tess ? tess[1] : vs).header);
     pl.writesLayer = headerWritesLayer((tess ? tess[1] : vs).header);
-    bool tests = false;
+    bool tests = false, alphaToCoverage = false;
     for (uint32_t k = 0; k < pp.blobDwords; k += 2) {
         const uint32_t m = blob[k], v = blob[k + 1];
         tests |= (m == DEPTH_TEST || m == STENCIL_TEST || m == ANTI_ALIAS_ALPHA_CONTROL) && (v & 1);
+        alphaToCoverage |= m == ANTI_ALIAS_ALPHA_CONTROL && (v & 1);
         pl.namesAlphaControl |= m == ANTI_ALIAS_ALPHA_CONTROL;
         if (m == HYBRID_ANTI_ALIAS_CONTROL)
             pl.samplePasses = uint8_t(std::max(1u, v & 0xf));
     }
     pl.dropsPixels = (sph[0] >> 15 & 1) || (sph[19] & 1) || tests || strncmp(keyString, "samples=1 ", 10) ||
                      !strstr(keyString, " ds=0/0 ");
+    // KILLS_PIXELS, OMAP_SAMPLE_MASK or OMAP_DEPTH, or its registers' alpha to coverage; a Metal state's own alpha to
+    // coverage is the encoder's, per draw (alpha_control.h)
+    pl.shapesCoverage = (sph[0] >> 15 & 1) || (sph[19] & 3) || alphaToCoverage;
     for (uint32_t k = 0; k < pl.entries.size(); k++)
         if (pl.entries[k].kind == EntryFetch && pl.entries[k].slot < 8)
             pl.fetchBits |= uint8_t(1u << pl.entries[k].slot);

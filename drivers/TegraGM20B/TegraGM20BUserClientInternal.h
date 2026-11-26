@@ -241,8 +241,8 @@ void parkedStatsTake(uint64_t *parked, uint64_t *unparkResident, uint64_t *unpar
 		     uint64_t *reclaimedCached, uint64_t *reclaimedSystem);
 #endif
 
-// With the stats (also gpu_stats_tick.c's stats lines): the method stream of every kScanEvery-th submission of each
-// connection is read back and what it asks of the GPU is counted, one line per process every 5 s ("tegra-gm20b: push
+// With the stats (also gpu_stats_tick.c's stats lines): the method stream of each connection's first kScanFirst
+// submissions and every kScanEvery-th after them is read back and what it asks of the GPU is counted, one line per process every 5 s ("tegra-gm20b: push
 // <process>", the window's first kPushOwners - 1 processes by name, the rest as "(others)"), per submission: render passes
 // (and of those, the ones with a depth target and the multisampled ones), bound color targets (RTs) and the pitch-linear
 // ones, draws, clears; every 3D wait-for-idle (WFI), shader cache invalidate that waits for idle and flushes (INVALIDATE_SHADER_CACHES,
@@ -252,7 +252,7 @@ void parkedStatsTake(uint64_t *parked, uint64_t *unparkResident, uint64_t *unpar
 // compute dispatches and semaphore acquires; "bad" counts streams with an opcode NVK does not emit. Pushes in host
 // imports (no kernel mapping) are not read; the line says what share of the push bytes was. The reader:
 // TegraGM20BPushScan.h. Every kProfileEvery-th submission read is also profiled (gpu_fenced.h "push profile").
-constexpr uint32_t kScanEvery = 4, kPushOwners = 4,
+constexpr uint32_t kScanFirst = 16, kScanEvery = 4, kPushOwners = 4,
 		   kProfileEvery = 16;  // 1 submission in 64 profiled (its pushes WFI-stamped)
 
 static inline IOReturn ioreturn(int err)
@@ -562,7 +562,7 @@ class AGXDeviceUserClient : public IOUserClient
 	int32_t ownerPid_ = 0;
 	SwitchGpuOwnerMemory ownerMemory_ = {};  // debug kernels: what its BOs hold, under lock_
 	uint32_t pushSubmits_ =
-		0;  // the stats: its submissions, every kScanEvery-th read (scanPushes)
+		0;  // the stats: its submissions (tgm_scan::scanWeight picks those read)
 	uint32_t pushScans_ =
 		0;  // the ones read, every kProfileEvery-th also profiled (gpu_fenced.h "push profile")
 	// the compositor's (TegraGM20BSchedPolicy.h tgm_compositor): its channels are critical, it has no pool quota
@@ -641,9 +641,10 @@ class AGXDeviceUserClient : public IOUserClient
 	bool bindCuts(const TegraGM20BAbiVmBind *in, uint32_t count);
 	static bool bindingIs(const Binding &binding, const TegraGM20BAbiBindOp &op, const Bo *bo);
 	IOReturn bindOp(const TegraGM20BAbiBindOp &op, bool &changed);
-	void scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof, bool metalMacros);
+	void scanPushes(const tgm_push *pushes, uint32_t count, tgm_prof *prof, bool metalMacros,
+			uint32_t submits);
 	void deferScan(uint32_t slot, uint32_t fences, const tgm_push *pushes, uint32_t count,
-		       bool metalMacros);
+		       bool metalMacros, uint32_t submits);
 	const tgm_prof *scanSubmission(uint32_t slot, uint32_t fences, const tgm_push *pushes,
 				       uint32_t count, tgm_prof &prof, bool metalMacros);
 	const uint32_t *pushView(uint64_t va, uint64_t bytes,

@@ -14,6 +14,7 @@
 #include "pipeline.h"
 #include "push.h"
 #include "samples.h"
+#include "stage_switches.h"
 #include "zeta.h"
 
 namespace gm20b {
@@ -40,12 +41,18 @@ constexpr uint32_t kFirstSampleMask = 0x1111, kLaterSamplesMask = 0xeeee;
 enum class MixedDraw : uint8_t {
     Whole,        // every sample at once: not such a draw, or one writing no colour
     FirstSample,  // sample 0 alone: the state writes no depth or stencil, which samples 1-3 then keep
-    Split,        // sample 0, then samples 1-3 with colour writes off and the fragment program run again
-    Refused,      // a split's second run would repeat its fragment program's memory or storage-form colour writes
+    // sample 0, then samples 1-3 with colour writes and the pixel stage off: its program shapes no coverage, so what
+    // samples 1-3 test and write needs no program run, and its side effects run once
+    Split,
+    SplitShaded,  // sample 0, then samples 1-3 with colour writes off and the fragment program run again
+    // every sample at once: its program shapes coverage and writes memory, which a second run would repeat. Its colour
+    // lands where any covered sample passes (REDUCE_COVERAGE), not only where sample 0 does
+    Covering,
 };
 
+// `alphaToCoverage`: the bound Metal state turns it on (the encoder's, alpha_control.h)
 inline MixedDraw mixedDraw(const Pipeline &pl, const DepthStencilDesc &ds, const DepthStencilAttachment &zs,
-                           uint32_t passSamples, uint32_t rasterSamples)
+                           uint32_t passSamples, uint32_t rasterSamples, bool alphaToCoverage)
 {
     if (rasterSamples <= passSamples || pl.samples <= passSamples || !zs.texture || pl.stagesOff ||
         !(pl.writeBits | pl.storageWriteBits))
@@ -53,23 +60,37 @@ inline MixedDraw mixedDraw(const Pipeline &pl, const DepthStencilDesc &ds, const
     const uint32_t f = zs.texture->format;
     if (!ds.writes(zetaHasDepth(f) && zs.depthEnabled, zetaHasStencil(f) && zs.stencilEnabled))
         return MixedDraw::FirstSample;
-    return pl.writesMemory[1] || pl.storageWriteBits ? MixedDraw::Refused : MixedDraw::Split;
+    if (!pl.shapesCoverage && !alphaToCoverage)
+        return MixedDraw::Split;
+    return pl.writesMemory[1] || pl.storageWriteBits ? MixedDraw::Covering : MixedDraw::SplitShaded;
 }
 
-// SET_SAMPLE_MASK_X0_Y0..X1_Y1 and a CT_WRITE of every target, each way round a split's second draw
-constexpr uint32_t kLaterSamplesWords = 5 + 9;
+inline bool splitsSamples(MixedDraw d)
+{
+    return d == MixedDraw::Split || d == MixedDraw::SplitShaded;
+}
 
-inline void laterSamplesOn(Push &p, uint32_t rasterMask, uint32_t targets)
+// SET_SAMPLE_MASK_X0_Y0..X1_Y1, a CT_WRITE of every target and the pixel stage's switch, each way round a split's second
+// draw
+constexpr uint32_t kLaterSamplesWords = 5 + 9 + 2;
+
+// `stageOff`: the pixel stage off for the second draw (MixedDraw::Split), as a state of no fragment program draws
+// (stage_switches.h): depth and stencil through the ROP, no colour
+inline void laterSamplesOn(Push &p, uint32_t rasterMask, uint32_t targets, bool stageOff)
 {
     const uint32_t m = rasterMask & kLaterSamplesMask;
     const uint32_t off[8] = {};
     p.inc(NVB197_SET_SAMPLE_MASK_X0_Y0, {m, m, m, m});
     if (targets)
         p.incArray(NVB197_SET_CT_WRITE(0), off, targets);
+    if (stageOff)
+        p.m(kPixelStageSwitch, kPixelStageOff);
 }
 
-inline void laterSamplesOff(Push &p, const uint32_t (&ctWrite)[8], uint32_t targets)
+inline void laterSamplesOff(Push &p, const uint32_t (&ctWrite)[8], uint32_t targets, bool stageOff)
 {
+    if (stageOff)
+        p.m(kPixelStageSwitch, kPixelStageOn);
     if (targets)
         p.incArray(NVB197_SET_CT_WRITE(0), ctWrite, targets);
 }

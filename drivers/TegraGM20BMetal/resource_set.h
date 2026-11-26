@@ -17,6 +17,7 @@
 #include <initializer_list>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 #include "kernel.h"
 #include "surfaces.h"
@@ -96,6 +97,13 @@ public:
         return add(k, {{&bo, access}}, always);
     }
 
+    // As add, made at the encoding thread's next Device::begin (addPending) instead of on the caller: a set made again on
+    // another thread mid-frame ends its generation under an open command buffer, and the ResourceSetCreate is what an
+    // unpark paid on the caller. Until then each BO is named per job by address, as any BO outside the set is.
+    void addLater(std::initializer_list<Candidate> candidates);
+    // The adds addLater kept, as one add: the encoding thread's, between command buffers
+    void addPending(Kernel &k);
+
     // A read member a job is about to write becomes a written one (the set made again). Members start as read where the CPU
     // may lease them, so a CPU read lease of a member the GPU never wrote does not wait for the set's jobs.
     void promote(Kernel &k, uint64_t handle);
@@ -137,8 +145,13 @@ private:
     void insertLocked(const Bo &bo, uint32_t access, bool always);
     bool eraseLocked(uint64_t handle);
 
+    bool addLocked(Kernel &k, const Candidate *first, const Candidate *last, bool always, const char *when);
+    void dropPendingLocked(uint64_t handle);
+
     mutable gm20b::Mutex lock_;
-    std::vector<SetMember> members_;  // by va
+    std::vector<SetMember> members_;                // by va
+    std::vector<std::pair<Bo, uint32_t>> pending_;  // addLater's, under lock_
+    std::atomic<bool> hasPending_{false};
     std::vector<SetMember> outside_;
     uint32_t set_ = 0, generation_ = 0, removals_ = 0;
     const volatile uint32_t *mirror_ = nullptr;

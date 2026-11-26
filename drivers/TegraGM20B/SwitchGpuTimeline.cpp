@@ -140,6 +140,7 @@ void put_locked(switch_gpu_timeline *timeline)
 		*at = timeline->next;
 	if (timeline->failed_count)
 		__atomic_sub_fetch(&semantic_count, 1u, __ATOMIC_RELEASE);
+	syncpt_return_locked(timeline);
 	switch_gpu_fence_put(timeline->allocation);
 	IODelete(timeline, switch_gpu_timeline, 1);
 }
@@ -300,7 +301,7 @@ extern "C" switch_gpu_timeline *switch_gpu_timeline_create(uint64_t uid,
 	switch_gpu_fence_hold(fence);
 	const uint32_t completed = __atomic_load_n(fence, __ATOMIC_ACQUIRE);
 	*timeline = {timelines, uid, fence,   fence,   fence, completed, completed,
-		     0,         1,   nullptr, nullptr, {},    0};
+		     0,         1,   nullptr, nullptr, {},    0,         {}};
 	timelines = timeline;
 	IOLockUnlock(lock);
 	return timeline;
@@ -322,6 +323,7 @@ extern "C" void switch_gpu_timeline_failed(switch_gpu_timeline *timeline, uint32
 	switch_gpu_backing_completed();
 }
 
+// The channel's hardware is gone (chan_free): no increment it pushed can land after this
 extern "C" void switch_gpu_timeline_close(switch_gpu_timeline *timeline)
 {
 	if (!timeline)

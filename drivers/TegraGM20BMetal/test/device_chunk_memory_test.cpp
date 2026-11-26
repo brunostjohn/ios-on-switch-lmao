@@ -232,6 +232,7 @@ TEST(ClientChunkMemory, IdleChunksParkWithGuardOnTrimAndUnparkResidentSameVaOffL
 
     gm20b::Buffer pooled2, dedicated2;
     gm20b::Texture tiled2;
+    const uint32_t generationBefore = model.sets[0].generation;
     ASSERT_TRUE(dev.createBuffer(64 << 10, pooled2, false, false));
     ASSERT_TRUE(dev.createBuffer(4 << 20, dedicated2, false, false));
     ASSERT_TRUE(dev.createTexture(512, 512, kBgra8, tiled2, false, true));
@@ -246,6 +247,13 @@ TEST(ClientChunkMemory, IdleChunksParkWithGuardOnTrimAndUnparkResidentSameVaOffL
     EXPECT_EQ(dedicated2.va, dedicatedVa);
     EXPECT_EQ(dedicated2.cpu, dedicatedCpu);
     EXPECT_EQ(tiled2.va, tiledVa);
+    EXPECT_EQ(model.sets[0].generation, generationBefore) << "an unpark made a ResourceSetCreate on its caller";
+    EXPECT_FALSE(gm20b::DeviceHarness::setHolds(dev, pooled2.va, pooled2.length));
+    EXPECT_FALSE(gm20b::DeviceHarness::setHolds(dev, dedicated2.va, dedicated2.length));
+    EXPECT_FALSE(gm20b::DeviceHarness::setHolds(dev, tiled2.va, 4096));
+    gm20b::CommandBuffer *next = dev.begin();
+    ASSERT_NE(next, nullptr);
+    next->abandon();
     EXPECT_TRUE(gm20b::DeviceHarness::setHolds(dev, pooled2.va, pooled2.length));
     EXPECT_TRUE(gm20b::DeviceHarness::setHolds(dev, dedicated2.va, dedicated2.length));
     EXPECT_TRUE(gm20b::DeviceHarness::setHolds(dev, tiled2.va, 4096));

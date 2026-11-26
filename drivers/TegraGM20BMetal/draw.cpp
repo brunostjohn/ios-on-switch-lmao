@@ -8,6 +8,7 @@
 #include "mme.h"
 #include "tiled_cache.h"
 #include "view.h"
+#include "frame_cpu_counts.h"
 
 #include <algorithm>
 #include <cstring>
@@ -20,20 +21,21 @@ namespace {
 // An instance of a draw: BEGIN with INSTANCE_ID SUBSEQUENT (two words), the first vertex or index and the count (three), END
 constexpr uint32_t kInstanceWords = 6;
 
-// A split draw's samples 1-3 (mixed_samples.h MixedDraw::Split): `again` drawn under their sample mask, colour writes off.
-// `p` is the encoder's body, which `reserve` replaces when it runs short.
+// A split draw's samples 1-3 (mixed_samples.h splitsSamples): `again` drawn under their sample mask, colour writes off,
+// and the pixel stage off for MixedDraw::Split. `p` is the encoder's body, which `reserve` replaces when it runs short.
 template <typename Reserve, typename Again>
 void drawLaterSamples(Push &p, Reserve reserve, uint32_t &maskHeld, uint32_t rasterMask, const uint32_t (&ctWrite)[8],
-                      uint32_t targets, Again again)
+                      uint32_t targets, MixedDraw mixed, Again again)
 {
+    const bool stageOff = mixed == MixedDraw::Split;
     if (p.room() < kLaterSamplesWords)
         reserve();
-    laterSamplesOn(p, rasterMask, targets);
+    laterSamplesOn(p, rasterMask, targets, stageOff);
     maskHeld = rasterMask & kLaterSamplesMask;
     again();
     if (p.room() < kLaterSamplesWords)
         reserve();
-    laterSamplesOff(p, ctWrite, targets);
+    laterSamplesOff(p, ctWrite, targets, stageOff);
 }
 }  // namespace
 
@@ -146,7 +148,8 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     }
     if (!prepare(pl, primitive, first, first, count, false, why))
         return skippedDraw();
-    const bool split = mixedDraw(*emitted_, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split;
+    const MixedDraw mixed = mixedForm();
+    const bool split = splitsSamples(mixed);
     const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
     // samples 1-3 write no colour: no fetch of a colour they wrote to order, so the plain draw
     const auto laterSamples = [&] {
@@ -155,7 +158,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
             [this] {
                 reserve();
             },
-            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u),
+            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u), mixed,
             [&] {
                 wholeDraw(*pl, false, first, count, instances, first, baseInstance);
                 finishDraw(count, drawnInstances);
@@ -415,7 +418,8 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         ibEnd_ = last;
         ibSize_ = indexSize;
     }
-    const bool split = mixedDraw(*emitted_, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split;
+    const MixedDraw mixed = mixedForm();
+    const bool split = splitsSamples(mixed);
     const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
     const auto laterSamples = [&] {
         drawLaterSamples(
@@ -423,7 +427,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
             [this] {
                 reserve();
             },
-            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u),
+            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u), mixed,
             [&] {
                 wholeDraw(*pl, true, 0, count, instances, uint32_t(baseVertex), baseInstance);
                 finishDraw(count, drawnInstances);
@@ -493,10 +497,18 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
     }
     if (p_.room() < 8 + bytes / 4 + mme::kAmplificationScratchWords + mme::kAmplifyCallWords + mme::kFetchShapeWords)
         reserve();
-    // Prior shader writes must reach the command fetcher; NO_PREFETCH on the argument entry prevents early fetch.
-    p_.m(WAIT_FOR_IDLE, 0);
-    p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateConstant);
-    p_.m(0x0050, 0);  // NV906F_SET_REFERENCE: pre-Turing MME command-fetch visibility (NVK indirect-read barrier)
+    // Work earlier in this command buffer that wrote the arguments must be done and out of the shader caches before the
+    // command fetcher reads them; NO_PREFETCH on the argument entry prevents early fetch. Earlier command buffers' work
+    // ended in its job's wait-for-idle fence release, which the host passes before this job's entries.
+    const bool drain = cb_->bufferWrites_.meets(arguments->va + offset, bytes) ||
+                       cb_->textureWrites_.meets(arguments->va + offset, bytes);
+    if (drain) {
+        p_.m(WAIT_FOR_IDLE, 0);
+        p_.m(INVALIDATE_SHADER_CACHES, kFlushData | kInvalidateConstant);
+        p_.m(0x0050, 0);  // NV906F_SET_REFERENCE: pre-Turing MME command-fetch visibility (NVK indirect-read barrier)
+    }
+    SWITCH_METAL_DIAGNOSTIC((drain ? frameCpuCounts().indirectDrained : frameCpuCounts().indirectFree)
+                                .fetch_add(1, std::memory_order_relaxed));
     const auto argumentWords = [&] {
         if (inside) {
             bodies_.push_back({bodyStart_, p_.at, 0, 0, true});
@@ -520,13 +532,13 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
         mme::indirectHeader(p_, indexed);
     }
     argumentWords();
-    if (mixedDraw(*emitted_, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split)
+    if (const MixedDraw mixed = mixedForm(); splitsSamples(mixed))
         drawLaterSamples(
             p_,
             [this] {
                 reserve();
             },
-            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u),
+            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u), mixed,
             [&] {
                 if (p_.room() < 1 + bytes / 4)
                     reserve();
@@ -668,13 +680,13 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
     if (ordered)
         mme::fetchCommands(p_, false);
     // the commands again for samples 1-3, which write no colour: drawn whole, not a primitive at a time
-    if (mixedDraw(*emitted_, ds_, pass_.depthStencil, samples_, rasterSamples_) == MixedDraw::Split)
+    if (const MixedDraw mixed = mixedForm(); splitsSamples(mixed))
         drawLaterSamples(
             p_,
             [this] {
                 reserve();
             },
-            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u), commands);
+            cb_->sampleMaskHeld_, compatibleRasterMask_, emitted_->ctWrite, std::min(pass_.count, 8u), mixed, commands);
     if (patches)
         icbPatchesDone();
     // the commands set the polygon offset of their own kinds (icb::polygonOffset)

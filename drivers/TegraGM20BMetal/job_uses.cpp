@@ -179,6 +179,8 @@ void CommandBuffer::use(const Texture &texture, bool write)
     if (write) {
         publication_.wrote(range.hostVisible || (texture.import && !texture.import->id) || texture.callerPages);
         zcullPlanes_.wrote(range.va ? range.va : texture.va, range.bytes ? range.bytes : 1);
+        if (range.va || texture.va)
+            textureWrites_.note(range.va ? range.va : texture.va, range.bytes ? range.bytes : 1);
     }
     noteArenaKind(range.arena);
     if (named_.named(&texture, texture.va, range.bytes, texture.import, write))

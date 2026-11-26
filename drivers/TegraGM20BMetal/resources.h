@@ -427,6 +427,9 @@ struct Buffer {
     Lease *lease = nullptr;    // as Texture::lease
     bool arena = false;        // as Texture::arena
     bool hostVisible = true;
+    // made on a reused span no CPU zeroed (a Private buffer in a chunk no host-visible buffer reached): Metal's new buffer
+    // reads zeros, so the copy engine fills it ahead of its first use (TegraGM20BMetalFresh.h establishFreshBuffer)
+    bool freshFill = false;
 #if SWITCH_METAL_DIAGNOSTICS
     uint64_t keptBytes = 0;  // a decoded texture's kept blocks: in Stats::textureBytes until destroyBuffer
 #endif

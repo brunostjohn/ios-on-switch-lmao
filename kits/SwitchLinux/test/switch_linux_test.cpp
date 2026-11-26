@@ -23,6 +23,7 @@ protected:
         switch_linux_stub_interrupts = TRUE;
         switch_linux_stub_preemption = 0;
         switch_linux_stub_now = 5000;
+        switch_linux_stub_tick = 0;
         switch_linux_stub_wait_result = THREAD_AWAKENED;
     }
 };
@@ -100,6 +101,16 @@ TEST_F(SwitchLinux, DelaysAreXnusDelayWithTheRangeAsLeeway)
     switch_linux_cond_resched();
     EXPECT_THAT(gSwitchLinuxCalls, ElementsAre("delay 40 1000", "delay 1000 leeway 1000 1000", "delay 50 leeway 0 1000",
                                                "thread_yield_to_preemption"));
+}
+
+// A hardware settle of a few microseconds spins on the clock instead of sleeping on a timer, as Linux's udelay does
+TEST_F(SwitchLinux, ShortDelaysSpinOnTheClock)
+{
+    switch_linux_stub_tick = 100;
+    switch_linux_udelay(2);
+    switch_linux_udelay(20);
+    EXPECT_TRUE(gSwitchLinuxCalls.empty());
+    EXPECT_GE(switch_linux_stub_now, 5000u + 2 * (2000 + 20000));
 }
 
 TEST_F(SwitchLinux, EventSleepsAssertThenBlock)

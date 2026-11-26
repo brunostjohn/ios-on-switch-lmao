@@ -57,6 +57,48 @@ uint64_t tgm_chan_check_progress_locked(struct tgm_chan *chan, const char *who, 
 	return next;
 }
 
+uint64_t tgm_writer_check_progress(uint32_t uid, uint32_t seqno, const char *who)
+{
+	struct tgm_chan *chan = NULL;
+	u64 next = 0;
+
+	if (tgm_gpu.stage < 3)
+		return TGM_HANG_NS;
+	mutex_lock(&tgm_live_lock);
+	chan = live_by_uid(uid);
+	if (chan && !chan->error && (s32)(tgm_chan_completed(chan) - seqno) < 0)
+		next = tgm_chan_check_progress_locked(chan, who, seqno);
+	mutex_unlock(&tgm_live_lock);
+	return next;
+}
+
+#if TGM_STATS
+void tgm_chan_note_jobless(uint32_t uid)
+{
+	struct tgm_chan *chan = NULL;
+
+	mutex_lock(&tgm_live_lock);
+	chan = live_by_uid(uid);
+	if (chan)
+		chan->stat_jobless++;
+	mutex_unlock(&tgm_live_lock);
+}
+
+uint64_t tgm_chan_jobless(const char *owner)
+{
+	struct tgm_chan *chan = NULL;
+	u64 jobless = 0;
+
+	mutex_lock(&tgm_live_lock);
+	list_for_each_entry(chan, &tgm_live_chans,
+			    live) if (!strncmp(chan->owner, owner, sizeof(chan->owner) - 1))
+		jobless += chan->stat_jobless;
+	jobless += tgm_chan_jobless_gone_locked(owner);
+	mutex_unlock(&tgm_live_lock);
+	return jobless;
+}
+#endif
+
 int tgm_all_clients(void)
 {
 	return 1; /* every process that asks gets a device */

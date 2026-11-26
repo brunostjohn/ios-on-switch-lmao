@@ -62,12 +62,15 @@ static void chan_free(struct tgm_chan *chan)
 	if (chan->high || chan->tracked)
 		tgm_sched_forget(tgm_gpu.device, chan->chid);
 	nvif_event_dtor(&chan->kill);
-	switch_gpu_timeline_close(chan->timeline);
-	chan->timeline = NULL;
 	for (i = chan->nobj - 1; i >= 0; i--)
 		nvif_object_dtor(&chan->obj[i]);
 	nvif_object_unmap(&chan->user);
 	nvif_object_dtor(&chan->user);
+	/* After the channel: until the teardown above took it off the runlist, the channel could still execute a job's
+	 * increments (one whose fence never landed). Only now can the timeline's close hand its syncpoint on
+	 * (SwitchGpuTimelineInternal.h syncpt_return_locked), so none of them lands on the next owner's. */
+	switch_gpu_timeline_close(chan->timeline);
+	chan->timeline = NULL;
 	/* the channel is gone: unmap its ring (TLB invalidated) before the ring's pages go back to the pool */
 	nvif_vmm_put(&chan->vm->vmm, &chan->ring_vma);
 	if (chan->ring_mem) {
@@ -350,6 +353,49 @@ int tgm_chan_visible_at(struct tgm_chan *chan, uint32_t seqno)
 	return (s32)(__atomic_load_n(chan->visible_cpu, __ATOMIC_ACQUIRE) - seqno) >= 0;
 }
 
+#if TGM_STATS
+/* What closed channels counted, by process name (the last kept goes when a new name needs its place),
+ * tgm_live_lock's */
+#define TGM_JOBLESS_GONE 16
+
+static struct {
+	char owner[17];
+	u64 jobless;
+} jobless_gone[TGM_JOBLESS_GONE];
+
+static unsigned int jobless_gone_next;
+
+static void jobless_keep_locked(const struct tgm_chan *chan)
+{
+	unsigned int i = 0;
+
+	if (!chan->stat_jobless)
+		return;
+	for (i = 0; i < TGM_JOBLESS_GONE; i++) {
+		if (!strncmp(jobless_gone[i].owner, chan->owner, sizeof(chan->owner) - 1)) {
+			jobless_gone[i].jobless += chan->stat_jobless;
+			return;
+		}
+	}
+	i = jobless_gone_next++ % TGM_JOBLESS_GONE;
+	strscpy(jobless_gone[i].owner, chan->owner, sizeof(jobless_gone[i].owner));
+	jobless_gone[i].jobless = chan->stat_jobless;
+}
+
+u64 tgm_chan_jobless_gone_locked(const char *owner)
+{
+	unsigned int i = 0;
+	u64 jobless = 0;
+
+	for (i = 0; i < TGM_JOBLESS_GONE; i++) {
+		if (!strncmp(jobless_gone[i].owner, owner, sizeof(jobless_gone[i].owner) - 1))
+			jobless += jobless_gone[i].jobless;
+	}
+	return jobless;
+}
+
+#endif
+
 void tgm_chan_del(struct tgm_chan **pchan)
 {
 	struct tgm_chan *chan = *pchan;
@@ -388,6 +434,9 @@ void tgm_chan_del(struct tgm_chan **pchan)
 	switch_gpu_busy_close(&tgm_busy, chan->chid);
 	mutex_lock(&tgm_live_lock);
 	list_del(&chan->live);
+#if TGM_STATS
+	jobless_keep_locked(chan);
+#endif
 	switch_gpu_live_dir_clear(&tgm_live_dir, chan->chid);
 	mutex_unlock(&tgm_live_lock);
 	switch_gpu_chan_table_set(&tgm_chan_table, chan->chid, NULL);

@@ -236,6 +236,7 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 	struct nvif_push *push = &chan->chan.push;
 	struct switch_gpu_kicked_job *job = NULL;
 	const int announce = switch_gpu_quiet_announces(&chan->quiet, quiet);
+	int flushed = 0;
 	int drained = 0;
 	u32 s = 0;
 	if (external && (l2_on() || chan->kernel)) {
@@ -250,9 +251,19 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 			PUSH_NVSQ(push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
 				  NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY);
 			PUSH_NVSQ(push, NV906F, NVB06F_FB_FLUSH, 0);
+			flushed = 1;
 		}
 		/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
 		drained = 1;
+	}
+	/* After the drain, so host1x's engines read DRAM, and ahead of the fence: a fence that landed means the host issued
+	 * them, so a channel torn down once its fence completed (tgm_chan_del) never drops a finished job's increments, and
+	 * the CPU makes them only for a job whose fence never landed (SwitchGpuBridgeRetire.cpp settleJobless). Nothing
+	 * reads the syncpoint as a fence. */
+	if (flushed) {
+		const u32 syncpt = switch_gpu_timeline_syncpt_next(chan->timeline, first, next);
+		if (syncpt)
+			push->cur += tgm_syncpt_incr_only(push->cur, syncpt);
 	}
 	/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
 	/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
@@ -855,11 +866,16 @@ chan_exec_body(struct tgm_chan *chan, const struct tgm_push *pushes, uint32_t co
 		tgm_stats_l2_inval(chan, l2_on() && host_written, tlb);
 		/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
 		/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
-		PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_WFI, 0);
-		PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_FB_FLUSH, 0);
+		/* Host-written input alone needs no drain: dropping the L2's clean lines leaves work in flight its dirty ones
+		 * (deko3d's submit acquire on this GPU has no WFI or FB_FLUSH). A TLB change drains first. */
+		if (tlb) {
+			PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_WFI, 0);
+			PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_FB_FLUSH, 0);
+		}
 		PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
 			  NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY);
-		PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_FB_FLUSH, 0);
+		if (tlb)
+			PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_FB_FLUSH, 0);
 		PUSH_NVSQ(&chan->chan.push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
 			  NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE);
 		if (tlb) {
