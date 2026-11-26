@@ -1,6 +1,9 @@
 // kernel/switch/include/switch/focal.h on the host: the places the debug watchers keep for focal apps.
 #include <gtest/gtest.h>
 
+#include <string>
+
+#include "bazel/testing/source_text.h"
 #include "switch/focal.h"
 
 namespace {
@@ -48,6 +51,22 @@ TEST(XnuFocal, AFourthFocalAppTakesThePlaceFocalTheLongest)
     EXPECT_EQ(switch_focal_enter(&f, kMaps, 40, &evicted), oldest);
     EXPECT_EQ(evicted, kScreenshots);
     EXPECT_EQ(switch_focal_leave(&f, kScreenshots), SWITCH_FOCAL_PLACES);
+}
+
+// A focal app that exits with no role change frees its place in every watcher: the exit hook ends its role, and a
+// role other than focal leaves each watcher's place (stats.c's switch_sched_role, the one way into all three).
+TEST(XnuFocal, AnAppThatExitsWhileFocalLeavesEveryWatcher)
+{
+    const std::string exit = switch_ios::test::SourceText("../switch/diag/exit.c");
+    EXPECT_NE(exit.find("switch_sched_role(proc_task(p), TASK_UNSPECIFIED);"), std::string::npos);
+    const std::string stats = switch_ios::test::SourceText("../switch/sched/stats.c");
+    const size_t role = stats.find("void switch_sched_role(task_t task, int role)");
+    ASSERT_NE(role, std::string::npos);
+    const std::string body = stats.substr(role, stats.find("\n}\n", role) - role);
+    for (const char *watcher : {"switch_stall_frame_role(task, role);", "switch_sched_busy_focal(task, role, main);",
+                                "switch_recorder_role(task, role, main);"}) {
+        EXPECT_NE(body.find(watcher), std::string::npos) << watcher;
+    }
 }
 
 }  // namespace

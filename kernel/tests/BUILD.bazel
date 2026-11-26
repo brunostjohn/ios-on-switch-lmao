@@ -523,6 +523,10 @@ host_test(
         "switch/focal.h",
         "xnu_focal_test.cpp",
     ],
+    data = [
+        "//kernel/switch:diag/exit.c",
+        "//kernel/switch:sched/stats.c",
+    ],
     includes = ["."],
 )
 
