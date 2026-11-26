@@ -16,6 +16,8 @@ use crate::progress::EngineProgress;
 pub struct BootOutputs {
     pub sd_files: BTreeMap<String, Vec<u8>>,
     pub overlay_files: BTreeMap<String, Vec<u8>>,
+    pub builtin_installer_pin: Option<Vec<u8>>,
+    pub bootstrap_manifest: Option<Vec<u8>>,
     pub installd_cdhash: Option<[u8; 20]>,
 }
 
@@ -70,20 +72,20 @@ pub fn prepare_boot(
 
     progress.log(format!("Building boot package for {}", build.build()));
     let package = switch_boot::boot_files(build, &assets, &members)?;
-    let mut sd_files = BTreeMap::new();
-    let mut overlay_files = BTreeMap::new();
-    for (path, data) in package.files {
-        if let Some(rel) = path.strip_prefix("overlay/") {
-            overlay_files.insert(rel.to_owned(), data);
-        } else {
-            sd_files.insert(path, data);
-        }
-    }
-    Ok(BootOutputs {
-        sd_files,
-        overlay_files,
+    let mut out = BootOutputs {
+        sd_files: BTreeMap::new(),
+        overlay_files: BTreeMap::new(),
+        builtin_installer_pin: None,
+        bootstrap_manifest: None,
         installd_cdhash: Some(package.installd_cdhash),
-    })
+    };
+    for (path, data) in package.files {
+        classify_boot_file(&mut out, path, data)?;
+    }
+    if out.sd_files.is_empty() {
+        return Err(EngineError::Config("boot package contains no FAT boot files".into()));
+    }
+    Ok(out)
 }
 
 pub fn read_system_file(system_fs: &Fs<'_>, path: &str) -> Result<Vec<u8>> {
@@ -136,28 +138,24 @@ fn read_stream_vec(system_fs: &Fs<'_>, s: &Stream) -> Result<Vec<u8>> {
 }
 
 fn load_boot_dir(root: &Path) -> Result<BootOutputs> {
-    let mut sd_files = BTreeMap::new();
-    let mut overlay_files = BTreeMap::new();
-    walk_boot_dir(root, "", &mut sd_files, &mut overlay_files)?;
-    if sd_files.is_empty() {
+    let mut out = BootOutputs {
+        sd_files: BTreeMap::new(),
+        overlay_files: BTreeMap::new(),
+        builtin_installer_pin: None,
+        bootstrap_manifest: None,
+        installd_cdhash: None,
+    };
+    walk_boot_dir(root, "", &mut out)?;
+    if out.sd_files.is_empty() {
         return Err(EngineError::Config(format!(
             "boot files directory {} contains no FAT boot files",
             root.display()
         )));
     }
-    Ok(BootOutputs {
-        sd_files,
-        overlay_files,
-        installd_cdhash: None,
-    })
+    Ok(out)
 }
 
-fn walk_boot_dir(
-    dir: &Path,
-    prefix: &str,
-    sd_files: &mut BTreeMap<String, Vec<u8>>,
-    overlay_files: &mut BTreeMap<String, Vec<u8>>,
-) -> Result<()> {
+fn walk_boot_dir(dir: &Path, prefix: &str, out: &mut BootOutputs) -> Result<()> {
     let mut entries: Vec<_> = fs::read_dir(dir)
         .map_err(|e| EngineError::io_path(dir, e))?
         .collect::<std::result::Result<Vec<_>, _>>()
@@ -176,15 +174,41 @@ fn walk_boot_dir(
         let path = entry.path();
         let meta = fs::metadata(&path).map_err(|e| EngineError::io_path(&path, e))?;
         if meta.is_dir() {
-            walk_boot_dir(&path, &rel, sd_files, overlay_files)?;
+            walk_boot_dir(&path, &rel, out)?;
         } else if meta.is_file() {
             let bytes = fs::read(&path).map_err(|e| EngineError::io_path(&path, e))?;
-            if let Some(ov) = rel.strip_prefix("overlay/") {
-                overlay_files.insert(ov.to_owned(), bytes);
-            } else {
-                sd_files.insert(rel, bytes);
-            }
+            classify_boot_file(out, rel, bytes)?;
         }
     }
     Ok(())
+}
+
+fn classify_boot_file(out: &mut BootOutputs, path: String, data: Vec<u8>) -> Result<()> {
+    if let Some(rel) = path.strip_prefix("overlay/") {
+        out.overlay_files.insert(rel.to_owned(), data);
+    } else if path == switch_image_overlay::BUILTIN_MANIFEST {
+        out.builtin_installer_pin = Some(data);
+    } else if path == "bootstrap/manifest.json" {
+        out.bootstrap_manifest = Some(data);
+    } else if path.starts_with("bootstrap/") {
+        // Non-FAT bootstrap files in a //boot:package directory are staged via --bootstrap-dir.
+    } else if is_fat_boot_path(&path) {
+        out.sd_files.insert(path, data);
+    } else {
+        return Err(EngineError::Config(format!("unexpected file in boot package: {path}")));
+    }
+    Ok(())
+}
+
+fn is_fat_boot_path(path: &str) -> bool {
+    if path.eq_ignore_ascii_case(switch_sd::INI) || path.eq_ignore_ascii_case(switch_sd::ICON) {
+        return true;
+    }
+    matches!(
+        path.rsplit_once('/'),
+        Some((dir, name))
+            if dir.eq_ignore_ascii_case(switch_sd::BOOT_DIR)
+                && !name.is_empty()
+                && !switch_sd::user_owned(name)
+    )
 }

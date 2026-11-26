@@ -396,6 +396,11 @@ fn preboot_stages_single_extent_fills_and_verifies_sha256() {
         staging_name("/private/preboot/Switch-Staging/044-76034-038.dmg").unwrap(),
         "044-76034-038.dmg"
     );
+    assert_eq!(staging_name("044-76034-038.dmg").unwrap(), "044-76034-038.dmg");
+    assert!(staging_name("").is_err());
+    assert!(staging_name(".").is_err());
+    assert!(staging_name("..").is_err());
+    assert!(staging_name("sub/a.dmg").is_err());
     assert!(staging_name("/private/preboot/other/a.dmg").is_err());
     assert!(staging_name("/private/preboot/Switch-Staging/sub/a.dmg").is_err());
 }

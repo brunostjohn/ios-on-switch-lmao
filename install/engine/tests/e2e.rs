@@ -1,4 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+use std::fs;
+use std::io::{Cursor, Read};
+
+use flate2::read::GzDecoder;
+use plist::Value as PlistValue;
 use switch_apfs_format::BLOCK_SIZE;
 use switch_apfs_format::container::{NX_MAGIC, NxSuperblock};
 use switch_apfs_format::io::FileSource;
@@ -11,10 +16,12 @@ use switch_engine::{
     TargetSpec, partition_fingerprint, read_pending_journal, run,
 };
 use switch_image::{DEFAULT_DATA_NAME, DEFAULT_PREBOOT_NAME, parse_uuid};
+use switch_image_gpu::{GpuStage, ICON_CACHE_RECORD_PATH, REQUIRED_PLUGIN_PATH, STATE_PATH, TREE_MANIFEST};
 use tempfile::TempDir;
 use zerocopy::FromZeros;
 use zerocopy::little_endian::{U32, U64};
 
+use crate::synth_apfs::sha256;
 use crate::synth_cryptex::verify_sealed_cryptex_bytes;
 use crate::synth_fat::{
     FAT_FIRST_LBA, create_gpt_card_file, format_fat32_region, make_gpt_entry, read_fat_file, write_fat_file,
@@ -174,6 +181,8 @@ fn e2e_install_mode_sealed_cryptex_overlay_bootstrap_and_demotion() {
         Some(&b"keep-me=1\n"[..])
     );
     assert!(read_fat_file(&img, FAT_FIRST_LBA, fat_sectors, "switchroot/ios/stale.bin").is_none());
+    assert!(read_fat_file(&img, FAT_FIRST_LBA, fat_sectors, "bootstrap/manifest.json").is_none());
+    assert!(read_fat_file(&img, FAT_FIRST_LBA, fat_sectors, "installer-bundle.json").is_none());
 
     let part_offset = target_first * SECTOR as u64;
     let src = FileSource::open(&img, part_offset).unwrap();
@@ -192,6 +201,12 @@ fn e2e_install_mode_sealed_cryptex_overlay_bootstrap_and_demotion() {
     assert!(
         data_fs
             .lookup("/Switch/overlay/usr/libexec/installd")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        data_fs
+            .lookup("/Switch/overlay/Applications/SwitchInstaller.app/Info.plist")
             .unwrap()
             .is_some()
     );
@@ -285,4 +300,125 @@ fn e2e_partition_and_install_single_pass() {
     let audit = switch_apfs_read::audit(&container, &src).unwrap();
     assert!(audit.ok(), "partition+install APFS audit failed:\n{audit}");
     assert_eq!(container.volumes.len(), 3);
+}
+
+#[test]
+fn e2e_install_mode_stages_format2_gpu_bundle_and_merges_prefs() {
+    let fixture = build_synthetic_fixture(false);
+    let img = fixture.tmp.path().join("gpu-stage2-card.img");
+
+    let fat_sectors: u64 = 160_000;
+    let target_first = FAT_FIRST_LBA + fat_sectors;
+    let target_sectors: u64 = 4_194_304;
+    let total_sectors = target_first + target_sectors + 4096;
+
+    let fat_e = make_gpt_entry(BASIC_DATA_TYPE, 1, "hos_data", FAT_FIRST_LBA, fat_sectors);
+    let target_e = make_gpt_entry(LINUX_TYPE, 2, SETUP_NAME, target_first, target_sectors);
+    create_gpt_card_file(&img, total_sectors, &[(0, fat_e), (1, target_e)]);
+    format_fat32_region(&img, FAT_FIRST_LBA, fat_sectors, 1);
+
+    let gpu_dir = fixture.tmp.path().join("gpu_stage2");
+    fs::create_dir_all(gpu_dir.join("ngpu/addons/TegraGM20BMetal.bundle")).unwrap();
+    fs::create_dir_all(gpu_dir.join("ngpu/addons/TegraGM20BMetal.pack")).unwrap();
+    let plugin_bytes = b"\xcf\xfa\xed\xfe-tegra-gm20b-plugin";
+    let pack_bytes = b"tegra-pipeline-pack-payload";
+    let pack_rel = "ngpu/addons/TegraGM20BMetal.pack/pipelines.bin";
+    let kext_digest = "ab".repeat(32);
+
+    fs::write(gpu_dir.join(REQUIRED_PLUGIN_PATH), plugin_bytes).unwrap();
+    fs::write(gpu_dir.join(pack_rel), pack_bytes).unwrap();
+    let manifest = format!(
+        "# gpu stage 2 tree\n\
+         # kext {kext_digest}\n\
+         file\t{REQUIRED_PLUGIN_PATH}\t{}\t{}\t755\t{REQUIRED_PLUGIN_PATH}\n\
+         file\t{pack_rel}\t{}\t{}\t644\t{pack_rel}\n\
+         pref\tmobile/Library/Preferences/com.apple.backboardd.plist\t501\tCAEnableDeepFramebuffer\tfalse\n\
+         pref\tmobile/Library/Preferences/com.apple.backboardd.plist\t501\tCAEnableFramebufferCompression\tfalse\n\
+         pref\tmobile/Library/Preferences/com.apple.backboardd.plist\t501\tCAEnableIOSurfaceCompression\tfalse\n\
+         pref\troot/Library/Preferences/com.apple.backboardd.plist\t0\tCAEnableDeepFramebuffer\tfalse\n\
+         pref\troot/Library/Preferences/com.apple.backboardd.plist\t0\tCAEnableFramebufferCompression\tfalse\n\
+         pref\troot/Library/Preferences/com.apple.backboardd.plist\t0\tCAEnableIOSurfaceCompression\tfalse\n",
+        hex::encode(sha256(plugin_bytes)),
+        plugin_bytes.len(),
+        hex::encode(sha256(pack_bytes)),
+        pack_bytes.len(),
+    );
+    fs::write(gpu_dir.join(TREE_MANIFEST), &manifest).unwrap();
+    let expected_stage = GpuStage::from_path(&gpu_dir).unwrap();
+
+    let mut req = RunRequest::new(Mode::Install, TargetSpec::image_file(&img));
+    fixture.apply_to_request(&mut req, false);
+    req.local.gpu_dir = Some(gpu_dir);
+
+    let mut sink = NoopSink;
+    run(&req, None, &mut sink, CancelToken::new()).unwrap();
+
+    let part_offset = target_first * SECTOR as u64;
+    let src = FileSource::open(&img, part_offset).unwrap();
+    let container = Container::open(&src).unwrap();
+    let audit = switch_apfs_read::audit(&container, &src).unwrap();
+    assert!(audit.ok(), "APFS container audit failed:\n{audit}");
+
+    let data_vol = container.volume(parse_uuid(DATA_VOLUME_UUID_STR).unwrap()).unwrap();
+    let data_fs = Fs::open(&src, data_vol).unwrap();
+
+    let read_apfs_file = |path: &str| -> (u32, u32, u16, Vec<u8>) {
+        let oid = data_fs
+            .lookup(path)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{path} missing in Switch-iOS-Data"));
+        let (entry, _) = data_fs.entry(oid, path.to_owned(), None).unwrap();
+        let mut bytes = Vec::new();
+        if let Some(ds) = &entry.data {
+            stream::read(&src, ds, &mut |chunk| bytes.extend_from_slice(chunk)).unwrap();
+        }
+        (
+            entry.inode.val.owner.get(),
+            entry.inode.val.group.get(),
+            entry.inode.val.mode.get() & 0o7777,
+            bytes,
+        )
+    };
+
+    let (uid, gid, mode, got_plugin) = read_apfs_file(&format!("/{REQUIRED_PLUGIN_PATH}"));
+    assert_eq!((uid, gid, mode), (0, 0, 0o755));
+    assert_eq!(got_plugin, plugin_bytes);
+
+    let (uid, gid, mode, got_pack) = read_apfs_file(&format!("/{pack_rel}"));
+    assert_eq!((uid, gid, mode), (0, 0, 0o644));
+    assert_eq!(got_pack, pack_bytes);
+
+    let (uid, gid, mode, got_gz) = read_apfs_file(&format!("/{STATE_PATH}"));
+    assert_eq!((uid, gid, mode), (0, 0, 0o644));
+    let mut tsv = String::new();
+    GzDecoder::new(got_gz.as_slice()).read_to_string(&mut tsv).unwrap();
+    assert_eq!(tsv, expected_stage.stage_tsv());
+
+    let (uid, gid, mode, got_icon) = read_apfs_file(&format!("/{ICON_CACHE_RECORD_PATH}"));
+    assert_eq!((uid, gid, mode), (0, 0, 0o644));
+    assert_eq!(got_icon, format!("{}\n", expected_stage.icon_build()).as_bytes());
+
+    for (plist_path, want_uid) in [
+        ("/mobile/Library/Preferences/com.apple.backboardd.plist", 501u32),
+        ("/root/Library/Preferences/com.apple.backboardd.plist", 0u32),
+    ] {
+        let (uid, gid, mode, raw) = read_apfs_file(plist_path);
+        assert_eq!((uid, gid, mode), (want_uid, want_uid, 0o644), "{plist_path}");
+        assert!(raw.starts_with(b"bplist00"), "{plist_path} is not binary plist");
+        let dict = PlistValue::from_reader(Cursor::new(&raw))
+            .unwrap()
+            .into_dictionary()
+            .unwrap();
+        for key in [
+            "CAEnableDeepFramebuffer",
+            "CAEnableFramebufferCompression",
+            "CAEnableIOSurfaceCompression",
+        ] {
+            assert_eq!(
+                dict.get(key).and_then(PlistValue::as_boolean),
+                Some(false),
+                "{plist_path}[{key}]"
+            );
+        }
+    }
 }

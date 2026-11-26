@@ -47,6 +47,8 @@ pub enum EngineError {
     Overlay(#[from] switch_image_overlay::Error),
     #[error("bootstrap: {0}")]
     Bootstrap(#[from] switch_image_bootstrap::Error),
+    #[error("GPU stage: {0}")]
+    ImageGpu(#[from] switch_image_gpu::Error),
     #[error("disk: {0}")]
     Disk(#[from] switch_disk::Error),
     #[error("card tables: {0}")]

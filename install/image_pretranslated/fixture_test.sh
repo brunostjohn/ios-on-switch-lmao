@@ -290,7 +290,7 @@ assert (data_root / "staged_system_apps/App.app/App").read_bytes() == b"original
 check_stat(data_root / "Switch", 0, 0, 0o755, 0)
 pt_root = data_root / "Switch/pretranslated"
 manifest_bytes = (data_root / "Switch/pretranslated.json").read_bytes()
-check_stat(data_root / "Switch/pretranslated.json", 0, 0, 0o644, SF_IMMUTABLE)
+check_stat(data_root / "Switch/pretranslated.json", 0, 0, 0o644, 0)
 assert manifest_bytes == returned_manifest
 parsed_manifest = json.loads(manifest_bytes.decode())
 assert manifest_bytes == (json.dumps(parsed_manifest, indent=1) + "\n").encode()

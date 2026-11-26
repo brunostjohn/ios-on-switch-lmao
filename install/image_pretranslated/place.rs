@@ -172,7 +172,7 @@ pub fn place_pretranslated(
     data.add_file(
         switch_dir,
         "pretranslated.json",
-        immutable_file_attrs(),
+        Attrs::new(0, 0, 0o644),
         Some(manifest_stream),
     )?;
 

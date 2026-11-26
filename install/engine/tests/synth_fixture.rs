@@ -15,8 +15,8 @@ use crate::synth_cryptex::write_synthetic_sealed_cryptex;
 pub const SYSTEM_UUID_STR: &str = "11111111-2222-4333-8444-555555555555";
 pub const SYS_CRYPTEX_UUID_STR: &str = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE";
 pub const APP_CRYPTEX_UUID_STR: &str = "22222222-3333-4444-8555-666666666666";
-pub const SYS_CRYPTEX_STAGE: &str = "/private/preboot/Switch-Staging/sys-test.dmg";
-pub const APP_CRYPTEX_STAGE: &str = "/private/preboot/Switch-Staging/app-test.dmg";
+pub const SYS_CRYPTEX_STAGE: &str = "sys-test.dmg";
+pub const APP_CRYPTEX_STAGE: &str = "app-test.dmg";
 
 pub struct SyntheticFixture {
     pub tmp: TempDir,
@@ -67,14 +67,37 @@ pub fn build_synthetic_fixture(pretranslate: bool) -> SyntheticFixture {
     fs::create_dir_all(boot_files_dir.join("bootloader/ini")).unwrap();
     fs::create_dir_all(boot_files_dir.join("bootloader/res")).unwrap();
     fs::create_dir_all(boot_files_dir.join("overlay/usr/libexec")).unwrap();
+    fs::create_dir_all(boot_files_dir.join("bootstrap")).unwrap();
     fs::write(boot_files_dir.join("switchroot/ios/bl33.bin"), b"BL33-PAYLOAD").unwrap();
     fs::write(boot_files_dir.join("bootloader/ini/ios.ini"), b"[iOS]\npayload=1\n").unwrap();
     fs::write(boot_files_dir.join("bootloader/res/icon_ios_hue.bmp"), b"BMICON").unwrap();
     fs::write(boot_files_dir.join("overlay/usr/libexec/installd"), b"patched-installd").unwrap();
+    fs::write(boot_files_dir.join("bootstrap/manifest.json"), b"{}\n").unwrap();
+    fs::write(boot_files_dir.join("bootstrap/payload.tar"), b"bootstrap-tar").unwrap();
+
+    let installer_plist = b"synthetic-installer-plist";
+    let installer_pin = serde_json::json!({
+        "schema": 1,
+        "identifier": "com.brunostjohn.switch.installer",
+        "files": {
+            "Info.plist": hex::encode(sha256(installer_plist)),
+        },
+    });
+    fs::write(
+        boot_files_dir.join("installer-bundle.json"),
+        serde_json::to_vec_pretty(&installer_pin).unwrap(),
+    )
+    .unwrap();
 
     let overlay_dir = root.join("overlay");
     fs::create_dir_all(overlay_dir.join("etc")).unwrap();
     fs::write(overlay_dir.join("etc/switch.conf"), b"mode=test\n").unwrap();
+    fs::create_dir_all(overlay_dir.join("Applications/SwitchInstaller.app")).unwrap();
+    fs::write(
+        overlay_dir.join("Applications/SwitchInstaller.app/Info.plist"),
+        installer_plist,
+    )
+    .unwrap();
 
     let bootstrap_dir = root.join("bootstrap_pkg");
     write_synthetic_bootstrap_dir(&bootstrap_dir, &overlay_dir, "24B119", "27.2");

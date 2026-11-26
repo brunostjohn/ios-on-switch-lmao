@@ -32,9 +32,13 @@ pub struct CryptexImage {
 }
 
 pub fn staging_name(preboot_path: &str) -> Result<&str, Error> {
-    let name = preboot_path
-        .strip_prefix(PREBOOT_MOUNT_PREFIX)
-        .ok_or_else(|| Error::InvalidCryptex(format!("{preboot_path:?} is not under {PREBOOT_MOUNT_PREFIX}")))?;
+    let name = if preboot_path.contains('/') {
+        preboot_path
+            .strip_prefix(PREBOOT_MOUNT_PREFIX)
+            .ok_or_else(|| Error::InvalidCryptex(format!("{preboot_path:?} is not under {PREBOOT_MOUNT_PREFIX}")))?
+    } else {
+        preboot_path
+    };
     check_name(name)?;
     Ok(name)
 }

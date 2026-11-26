@@ -75,17 +75,26 @@ pub fn assemble_volumes(input: &AssembleInput<'_>, progress: &mut EngineProgress
     }
     progress.check_cancel()?;
 
-    apply_overlay_and_apps(&mut data_tree, local, &boot.overlay_files, progress)?;
+    apply_overlay_and_apps(&mut data_tree, local, boot, progress)?;
     progress.check_cancel()?;
 
     apply_bootstrap(&mut data_tree, build, local, progress)?;
     progress.check_cancel()?;
 
     if let Some(gpu_dir) = &local.gpu_dir {
-        progress.log(format!("Merging GPU bundle from {}", gpu_dir.display()));
-        let gpu_src = TreeSource::from_dir(gpu_dir)?;
-        let report = merge_tree(&mut data_tree, &gpu_src)?;
-        progress.log(format!("GPU bundle: {} files, {} dirs", report.files, report.dirs));
+        if gpu_dir.is_file() || gpu_dir.join(switch_image_gpu::TREE_MANIFEST).is_file() {
+            progress.log(format!("Staging GPU bundle from {}", gpu_dir.display()));
+            let report = switch_image_gpu::stage_gpu_from_path(&mut data_tree, Some(system_fs), gpu_dir)?;
+            progress.log(format!(
+                "GPU bundle: {} files, {} pref plists, icon build {}",
+                report.files, report.prefs, report.icon_build
+            ));
+        } else {
+            progress.log(format!("Merging GPU bundle from {}", gpu_dir.display()));
+            let gpu_src = TreeSource::from_dir(gpu_dir)?;
+            let report = merge_tree(&mut data_tree, &gpu_src)?;
+            progress.log(format!("GPU bundle: {} files, {} dirs", report.files, report.dirs));
+        }
     }
 
     if let Some(seed_dir) = &local.shader_seed_dir {
@@ -136,23 +145,30 @@ fn apply_os_pretranslation(
 fn apply_overlay_and_apps(
     data_tree: &mut Tree,
     local: &LocalInputs,
-    boot_overlay_files: &BTreeMap<String, Vec<u8>>,
+    boot: &BootOutputs,
     progress: &mut EngineProgress<'_>,
 ) -> Result<()> {
     let base = match &local.overlay_dir {
         Some(dir) => Some(TreeSource::from_dir(dir)?),
         None => None,
     };
-    let merged = merge_overlay_sources(base.as_ref(), boot_overlay_files)?;
+    let merged = merge_overlay_sources(base.as_ref(), &boot.overlay_files)?;
     if merged.is_empty() {
         return Ok(());
     }
 
-    let builtin_pin = local
-        .overlay_builtin_pin
-        .as_deref()
-        .map(|p| fs::read(p).map_err(|e| EngineError::io_path(p, e)))
-        .transpose()?;
+    let app_path = format!("Applications/{}", switch_image_overlay::INSTALLER_APP);
+    let app_prefix = format!("{app_path}/");
+    let has_full_overlay = local.overlay_dir.is_some()
+        || merged
+            .entries()
+            .keys()
+            .any(|p| p == &app_path || p.starts_with(&app_prefix));
+    let builtin_pin = match &local.overlay_builtin_pin {
+        Some(p) => Some(fs::read(p).map_err(|e| EngineError::io_path(p, e))?),
+        None if has_full_overlay => boot.builtin_installer_pin.clone(),
+        None => None,
+    };
     let report = place_overlay(data_tree, &merged, builtin_pin.as_deref())?;
     progress.log(format!(
         "Overlay: {} files, {} dirs, {} symlinks",

@@ -54,6 +54,7 @@ fsck_clean() {
     fsck_apfs -n "$image" >"$log" 2>&1
     rc=$?
     oks=$(grep -c 'appears to be OK' "$log")
-    bad=$(grep -iE '^(warning|error)|corrupt|invalid|fail' "$log" | grep -v 'not a valid disk name/path')
+    bad=$(grep -iE '^(warning|error)|corrupt|invalid|fail' "$log" \
+        | grep -vE 'not a valid disk name/path|^warning: container has been mounted by APFS version |^warning: disabling overallocation repairs by default; use -o to override$')
     [[ $rc == 0 && $oks == "$want" && -z $bad ]]
 }

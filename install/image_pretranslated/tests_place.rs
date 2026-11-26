@@ -259,7 +259,17 @@ fn place_pretranslated_hardlinks_staged_apps_flags_and_inodes() {
         (0, 0, 0o755, SF_IMMUTABLE)
     );
 
-    for meta in [OVERLAY_MANIFEST, OVERLAY_INDEX, OVERLAY_ORIGINALS] {
+    let manifest_node = data.inode(data.lookup(OVERLAY_MANIFEST).unwrap());
+    assert_eq!(
+        (
+            manifest_node.attrs.uid,
+            manifest_node.attrs.gid,
+            manifest_node.attrs.mode,
+            manifest_node.attrs.bsd_flags,
+        ),
+        (0, 0, 0o644, 0)
+    );
+    for meta in [OVERLAY_INDEX, OVERLAY_ORIGINALS] {
         let node = data.inode(data.lookup(meta).unwrap());
         assert_eq!(
             (node.attrs.uid, node.attrs.gid, node.attrs.mode, node.attrs.bsd_flags),

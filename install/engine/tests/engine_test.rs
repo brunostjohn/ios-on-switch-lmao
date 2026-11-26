@@ -295,3 +295,32 @@ fn http_client_and_unsupported_catalog_checks() {
     let err = switch_engine::select_build(&catalog, Some("99Z999")).unwrap_err();
     assert!(matches!(err, EngineError::UnsupportedBuild(_)));
 }
+
+#[test]
+fn boot_package_filters_metadata_without_overlay_and_refuses_unexpected_files() {
+    let fixture = build_synthetic_fixture(false);
+    let img = fixture.tmp.path().join("boot-only.img");
+    let fat_sectors: u64 = 160_000;
+    let target_first = FAT_FIRST_LBA + fat_sectors;
+    let target_sectors: u64 = 4_194_304;
+    let total_sectors = target_first + target_sectors + 4096;
+
+    let fat_e = make_gpt_entry(BASIC_DATA_TYPE, 1, "hos_data", FAT_FIRST_LBA, fat_sectors);
+    let target_e = make_gpt_entry(LINUX_TYPE, 2, SETUP_NAME, target_first, target_sectors);
+    create_gpt_card_file(&img, total_sectors, &[(0, fat_e), (1, target_e)]);
+    format_fat32_region(&img, FAT_FIRST_LBA, fat_sectors, 1);
+
+    let mut req = RunRequest::new(Mode::Install, TargetSpec::image_file(&img));
+    fixture.apply_to_request(&mut req, false);
+    req.local.overlay_dir = None;
+    let mut sink = NoopSink;
+    let summary = run(&req, None, &mut sink, CancelToken::new()).unwrap();
+    assert_eq!(summary.boot_files_written, 3);
+
+    fs::write(fixture.boot_files_dir.join("stray.txt"), b"unexpected").unwrap();
+    let err = run(&req, None, &mut sink, CancelToken::new()).unwrap_err();
+    assert!(
+        matches!(err, EngineError::Config(ref msg) if msg.contains("unexpected file in boot package")),
+        "expected unexpected-file refusal, got {err:?}"
+    );
+}
