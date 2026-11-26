@@ -76,8 +76,12 @@ void spareRecordWork(thread_call_param_t param, thread_call_param_t)
 	OSSafeReleaseNULL(options);
 	static bool told;
 	if (!set && !__atomic_exchange_n(&told, true, __ATOMIC_RELAXED))
-		IOLog("tegra-gm20b: the spare demand record was not set in NVRAM: the next boot's "
-		      "first asks miss; further ones not logged\n");
+		IOLog("tegra-gm20b: the spare demand record (%u bytes) was not set in NVRAM (a "
+		      "full "
+		      "partition refuses it; nothing else is removed): the next boot's first asks "
+		      "miss; "
+		      "further ones not logged\n",
+		      length);
 }
 }  // namespace tgm_uc
 
