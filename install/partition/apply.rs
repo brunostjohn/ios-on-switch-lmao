@@ -7,10 +7,11 @@ use switch_card::{Device, SECTOR};
 use crate::cache::Cache;
 use crate::error::{Error, Result};
 use crate::journal::{FieldKind, Record, Step};
+use crate::precheck::precheck;
 
-const FAT32_EOC: u32 = 0x0fff_fff8;
+pub(crate) const FAT32_EOC: u32 = 0x0fff_fff8;
 
-/// Where a volume's FAT and clusters sit, for turning records into sectors.
+/// Where a volume's FAT, clusters, and (for exFAT) allocation bitmap sit, for turning records into sectors.
 #[derive(Clone, Debug)]
 pub struct Geometry {
     pub fat_lbas: Vec<u64>,
@@ -19,11 +20,19 @@ pub struct Geometry {
     pub cluster_sectors: u64,
     /// One past the highest cluster number in use.
     pub cluster_end: u32,
+    /// exFAT allocation bitmap cluster chain (empty for FAT32).
+    pub bitmap: Vec<u32>,
 }
 
 impl Geometry {
     pub fn cluster_lba(&self, cluster: u32) -> u64 {
         self.heap_lba + u64::from(cluster - 2) * self.cluster_sectors
+    }
+
+    pub(crate) fn cluster_of_lba(&self, lba: u64) -> Option<u32> {
+        let rel = lba.checked_sub(self.heap_lba)?;
+        let cluster = 2u64.checked_add(rel / self.cluster_sectors)?;
+        (cluster < u64::from(self.cluster_end)).then_some(cluster as u32)
     }
 
     pub fn cluster_bytes(&self) -> u64 {
@@ -37,11 +46,59 @@ impl Geometry {
             (byte % SECTOR as u64) as usize,
         )
     }
+
+    pub(crate) fn bitmap_pos(&self, cluster: u32) -> Result<(u64, usize, u8)> {
+        if cluster < 2 || cluster >= self.cluster_end {
+            return Err(Error::Journal("bitmap record out of volume bounds"));
+        }
+        let bit = u64::from(cluster - 2);
+        let byte = bit / 8;
+        let mask = 1u8 << (bit % 8);
+        let cb = self.cluster_bytes();
+        let idx = (byte / cb) as usize;
+        let Some(&bm_cluster) = self.bitmap.get(idx) else {
+            return Err(Error::Journal("bitmap bit outside allocation bitmap"));
+        };
+        let within = byte % cb;
+        Ok((
+            self.cluster_lba(bm_cluster) + within / SECTOR as u64,
+            (within % SECTOR as u64) as usize,
+            mask,
+        ))
+    }
+
+    pub(crate) fn bitmap_ranges(&self, ranges: &mut Vec<(u64, u64)>, first: u32, len: u32) {
+        if len == 0 || self.bitmap.is_empty() || first < 2 {
+            return;
+        }
+        let Some(last) = first.checked_add(len - 1) else {
+            return;
+        };
+        let start_byte = u64::from(first - 2) / 8;
+        let end_byte = u64::from(last - 2) / 8;
+        let cb = self.cluster_bytes();
+        let c0 = (start_byte / cb) as usize;
+        let c1 = (end_byte / cb) as usize;
+        for ci in c0..=c1 {
+            let Some(&bm_cluster) = self.bitmap.get(ci) else {
+                break;
+            };
+            let b0 = if ci == c0 { start_byte % cb } else { 0 };
+            let b1 = if ci == c1 { end_byte % cb } else { cb - 1 };
+            let s0 = b0 / SECTOR as u64;
+            let s1 = b1 / SECTOR as u64;
+            ranges.push((self.cluster_lba(bm_cluster) + s0, s1 - s0 + 1));
+        }
+    }
 }
 
 /// Applies every group of `step` in order; the number of write requests made.
 pub fn apply<D: Device>(dev: &mut D, geo: &Geometry, step: &Step) -> Result<usize> {
-    precheck_fields(dev, step)?;
+    precheck(dev, geo, step)?;
+    apply_checked(dev, geo, step)
+}
+
+pub(crate) fn apply_checked<D: Device>(dev: &mut D, geo: &Geometry, step: &Step) -> Result<usize> {
     let mut writes = 0;
     for group in &step.groups {
         let mut cache = Cache::default();
@@ -58,47 +115,28 @@ pub fn apply<D: Device>(dev: &mut D, geo: &Geometry, step: &Step) -> Result<usiz
     Ok(writes)
 }
 
-fn precheck_fields<D: Device>(dev: &mut D, step: &Step) -> Result<()> {
-    let mut cache = Cache::default();
-    let ranges: Vec<(u64, u64)> = step
-        .groups
-        .iter()
-        .flatten()
-        .filter_map(|r| match *r {
-            Record::Field { lba, .. } => Some((lba, 1)),
-            _ => None,
-        })
-        .collect();
-    if ranges.is_empty() {
-        return Ok(());
-    }
-    cache.load(dev, ranges)?;
-    for r in step.groups.iter().flatten() {
-        if let Record::Field {
-            lba,
-            offset,
-            kind,
-            old,
-            new,
-        } = *r
-        {
-            let sector = cache.get(dev, lba)?;
-            let at = offset as usize;
-            if kind == FieldKind::Fat32Cluster && (sector[at] == 0x00 || sector[at] == 0xe5) {
-                return Err(changed(lba, "a deleted or free directory entry"));
-            }
-            let current = get_field(sector, at, kind);
-            if current != new && current != old {
-                return Err(changed(lba, "a directory entry or boot sector field"));
-            }
+pub(crate) fn check_field_liveness(sector: &[u8; SECTOR], at: usize, kind: FieldKind, lba: u64) -> Result<()> {
+    match kind {
+        FieldKind::Fat32Cluster if sector[at] == 0x00 || sector[at] == 0xe5 => {
+            Err(changed(lba, "a deleted or free directory entry"))
         }
+        FieldKind::ExfatChecksum if sector[at] != 0x85 => Err(changed(lba, "a deleted or replaced exFAT file entry")),
+        FieldKind::ExfatStreamFlags | FieldKind::ExfatStreamCluster if sector[at] != 0xc0 => {
+            Err(changed(lba, "a deleted or replaced exFAT stream entry"))
+        }
+        FieldKind::ExfatBitmapLen if sector[at] != 0x81 => {
+            Err(changed(lba, "a missing or replaced exFAT bitmap entry"))
+        }
+        _ => Ok(()),
     }
-    Ok(())
 }
 
-fn prefetch(geo: &Geometry, group: &[Record]) -> Vec<(u64, u64)> {
+pub(crate) fn prefetch(geo: &Geometry, group: &[Record]) -> Vec<(u64, u64)> {
     let mut ranges = Vec::new();
     let fat_range = |ranges: &mut Vec<(u64, u64)>, first: u32, len: u32| {
+        if first.checked_add(len - 1).is_none() {
+            return;
+        }
         for copy in 0..geo.fat_lbas.len() {
             let (a, _) = geo.fat_entry(copy, first);
             let (b, _) = geo.fat_entry(copy, first + len - 1);
@@ -113,13 +151,14 @@ fn prefetch(geo: &Geometry, group: &[Record]) -> Vec<(u64, u64)> {
             Record::Fat { index, .. } => fat_range(&mut ranges, index, 1),
             Record::Field { lba, .. } | Record::Sector { lba, .. } => ranges.push((lba, 1)),
             Record::Zero { lba, count } if count > 0 => ranges.push((lba, u64::from(count))),
+            Record::Bits { first, len, .. } if len > 0 => geo.bitmap_ranges(&mut ranges, first, len),
             _ => {}
         }
     }
     ranges
 }
 
-fn changed(lba: u64, what: &'static str) -> Error {
+pub(crate) fn changed(lba: u64, what: &'static str) -> Error {
     Error::Changed { lba, what }
 }
 
@@ -152,9 +191,7 @@ fn apply_record<D: Device>(dev: &mut D, geo: &Geometry, cache: &mut Cache, recor
         } => {
             let sector = cache.get(dev, lba)?;
             let at = offset as usize;
-            if kind == FieldKind::Fat32Cluster && (sector[at] == 0x00 || sector[at] == 0xe5) {
-                return Err(changed(lba, "a deleted or free directory entry"));
-            }
+            check_field_liveness(sector, at, kind, lba)?;
             let current = get_field(sector, at, kind);
             if current != new {
                 if current != old {
@@ -173,13 +210,37 @@ fn apply_record<D: Device>(dev: &mut D, geo: &Geometry, cache: &mut Cache, recor
             let sector = cache.get(dev, lba)?;
             if sector != &**new {
                 if crc32fast::hash(&sector[..]) != old {
-                    return Err(changed(lba, "a partition table sector"));
+                    return Err(changed(lba, "a partition table or boot sector"));
                 }
                 *sector = **new;
             }
         }
+        Record::Bits { first, len, set } => {
+            for i in 0..len {
+                let (lba, off, mask) = geo.bitmap_pos(first + i)?;
+                let sector = cache.get(dev, lba)?;
+                if set {
+                    sector[off] |= mask;
+                } else {
+                    sector[off] &= !mask;
+                }
+            }
+        }
     }
     Ok(())
+}
+
+pub(crate) fn fat_read<D: Device>(
+    dev: &mut D,
+    geo: &Geometry,
+    cache: &mut Cache,
+    copy: usize,
+    index: u32,
+) -> Result<(u64, u32)> {
+    let (lba, at) = geo.fat_entry(copy, index);
+    let sector = cache.get(dev, lba)?;
+    let raw = u32::from_le_bytes(sector[at..at + 4].try_into().unwrap());
+    Ok((lba, raw & geo.fat_mask))
 }
 
 fn set_fat<D: Device>(
@@ -208,26 +269,29 @@ fn set_fat<D: Device>(
 }
 
 fn fat_value<D: Device>(dev: &mut D, geo: &Geometry, cache: &mut Cache, index: u32) -> Result<u32> {
-    let (lba, at) = geo.fat_entry(0, index);
-    let sector = cache.get(dev, lba)?;
-    Ok(u32::from_le_bytes(sector[at..at + 4].try_into().unwrap()) & geo.fat_mask)
+    let (_, value) = fat_read(dev, geo, cache, 0, index)?;
+    Ok(value)
 }
 
 pub fn get_field(s: &[u8; SECTOR], at: usize, kind: FieldKind) -> u64 {
-    let le = |n: usize| {
+    let le = |pos: usize, n: usize| {
         let mut v = [0u8; 8];
-        v[..n].copy_from_slice(&s[at..at + n]);
+        v[..n].copy_from_slice(&s[pos..pos + n]);
         u64::from_le_bytes(v)
     };
     match kind {
-        FieldKind::Le8 => le(1),
-        FieldKind::Le16 => le(2),
-        FieldKind::Le32 => le(4),
-        FieldKind::Le64 => le(8),
+        FieldKind::Le8 => le(at, 1),
+        FieldKind::Le16 => le(at, 2),
+        FieldKind::Le32 => le(at, 4),
+        FieldKind::Le64 => le(at, 8),
         FieldKind::Fat32Cluster => {
             let half = |o: usize| u64::from(u16::from_le_bytes([s[at + o], s[at + o + 1]]));
             half(20) << 16 | half(26)
         }
+        FieldKind::ExfatChecksum => le(at + 2, 2),
+        FieldKind::ExfatStreamFlags => le(at + 1, 1),
+        FieldKind::ExfatStreamCluster => le(at + 20, 4),
+        FieldKind::ExfatBitmapLen => le(at + 24, 8),
     }
 }
 
@@ -242,11 +306,15 @@ pub fn set_field(s: &mut [u8; SECTOR], at: usize, kind: FieldKind, v: u64) {
             s[at + 20..at + 22].copy_from_slice(&((v >> 16) as u16).to_le_bytes());
             s[at + 26..at + 28].copy_from_slice(&(v as u16).to_le_bytes());
         }
+        FieldKind::ExfatChecksum => s[at + 2..at + 4].copy_from_slice(&bytes[..2]),
+        FieldKind::ExfatStreamFlags => s[at + 1] = bytes[0],
+        FieldKind::ExfatStreamCluster => s[at + 20..at + 24].copy_from_slice(&bytes[..4]),
+        FieldKind::ExfatBitmapLen => s[at + 24..at + 32].copy_from_slice(&bytes),
     }
 }
 
-const DOT: &[u8; 11] = b".          ";
-const DOT_DOT: &[u8; 11] = b"..         ";
+pub(crate) const DOT: &[u8; 11] = b".          ";
+pub(crate) const DOT_DOT: &[u8; 11] = b"..         ";
 
 /// The FAT32 directory now starting at `new`: its `.` and each subdirectory's `..`, `old` before.
 fn dot_dot<D: Device>(dev: &mut D, geo: &Geometry, cache: &mut Cache, old: u32, new: u32, root: bool) -> Result<()> {

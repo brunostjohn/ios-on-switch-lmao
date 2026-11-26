@@ -154,6 +154,7 @@ impl Fat32 {
     }
 
     /// The long name's entries, then a short one `short` (11 bytes) for `first` cluster, `size` bytes.
+    #[allow(clippy::too_many_arguments)]
     fn add(
         &self,
         image: &mut SparseImage,

@@ -122,6 +122,7 @@ pub fn geometry(first: u64, bpb: &Bpb) -> Geometry {
         heap_lba: first + bpb.data_start(),
         cluster_sectors: bpb.cluster_sectors,
         cluster_end: bpb.clusters() as u32 + 2,
+        bitmap: Vec::new(),
     }
 }
 

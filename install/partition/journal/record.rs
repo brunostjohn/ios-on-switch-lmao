@@ -14,6 +14,14 @@ pub enum FieldKind {
     Le64,
     /// A FAT32 directory entry's first cluster: its high half at +20, its low half at +26.
     Fat32Cluster,
+    /// An exFAT file entry (0x85): `offset` is the entry base, updates `SetChecksum` at +2.
+    ExfatChecksum,
+    /// An exFAT stream extension (0xC0): `offset` is the entry base, updates `GeneralSecondaryFlags` at +1.
+    ExfatStreamFlags,
+    /// An exFAT stream extension (0xC0): `offset` is the entry base, updates `FirstCluster` at +20.
+    ExfatStreamCluster,
+    /// An exFAT allocation bitmap entry (0x81): `offset` is the entry base, updates `DataLength` at +24.
+    ExfatBitmapLen,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,6 +70,12 @@ pub enum Record {
         old: u32,
         new: Box<[u8; 512]>,
     },
+    /// exFAT allocation bitmap bits for clusters `first..first+len`, set (`true`) or cleared (`false`).
+    Bits {
+        first: u32,
+        len: u32,
+        set: bool,
+    },
 }
 
 /// One step: its groups, in order.
@@ -78,7 +92,7 @@ impl Record {
             Record::Chain { .. } => 13,
             Record::Free { .. } | Record::Fat { .. } | Record::Zero { .. } => 12,
             Record::Field { .. } => 27,
-            Record::DotDot { .. } => 9,
+            Record::DotDot { .. } | Record::Bits { .. } => 9,
             Record::Sector { .. } => 12 + 512,
         }
     }
@@ -131,6 +145,10 @@ impl Record {
                 out.extend_from_slice(&old.to_le_bytes());
                 out.extend_from_slice(&new[..]);
             }
+            Record::Bits { first, len, set } => {
+                u32s(out, 8, &[*first, *len]);
+                out.push(u8::from(*set));
+            }
         }
     }
 }
@@ -143,6 +161,10 @@ impl FieldKind {
             FieldKind::Le32 => 4,
             FieldKind::Le64 => 8,
             FieldKind::Fat32Cluster => 0x20,
+            FieldKind::ExfatChecksum => 0x21,
+            FieldKind::ExfatStreamFlags => 0x22,
+            FieldKind::ExfatStreamCluster => 0x23,
+            FieldKind::ExfatBitmapLen => 0x24,
         }
     }
 
@@ -153,8 +175,27 @@ impl FieldKind {
             4 => FieldKind::Le32,
             8 => FieldKind::Le64,
             0x20 => FieldKind::Fat32Cluster,
+            0x21 => FieldKind::ExfatChecksum,
+            0x22 => FieldKind::ExfatStreamFlags,
+            0x23 => FieldKind::ExfatStreamCluster,
+            0x24 => FieldKind::ExfatBitmapLen,
             _ => return None,
         })
+    }
+
+    pub fn valid_offset(self, offset: u16) -> bool {
+        let at = offset as usize;
+        match self {
+            FieldKind::Le8 => at < 512,
+            FieldKind::Le16 => at + 2 <= 512,
+            FieldKind::Le32 => at + 4 <= 512,
+            FieldKind::Le64 => at + 8 <= 512,
+            FieldKind::Fat32Cluster
+            | FieldKind::ExfatChecksum
+            | FieldKind::ExfatStreamFlags
+            | FieldKind::ExfatStreamCluster
+            | FieldKind::ExfatBitmapLen => at.is_multiple_of(32) && at + 32 <= 512,
+        }
     }
 }
 
@@ -220,10 +261,15 @@ impl Step {
                 }
                 4 => {
                     let b = take(27)?;
+                    let offset = u16::from_le_bytes([b[8], b[9]]);
+                    let kind = FieldKind::from_code(b[10]).ok_or_else(bad)?;
+                    if !kind.valid_offset(offset) {
+                        return Err(bad());
+                    }
                     Record::Field {
                         lba: u64::from_le_bytes(b[..8].try_into().unwrap()),
-                        offset: u16::from_le_bytes([b[8], b[9]]),
-                        kind: FieldKind::from_code(b[10]).ok_or_else(bad)?,
+                        offset,
+                        kind,
                         old: u64::from_le_bytes(b[11..19].try_into().unwrap()),
                         new: u64::from_le_bytes(b[19..27].try_into().unwrap()),
                     }
@@ -249,6 +295,14 @@ impl Step {
                         lba: u64::from_le_bytes(b[..8].try_into().unwrap()),
                         old: u32_at(b, 2),
                         new: Box::new(b[12..].try_into().unwrap()),
+                    }
+                }
+                8 => {
+                    let b = take(9)?;
+                    Record::Bits {
+                        first: u32_at(b, 0),
+                        len: u32_at(b, 1),
+                        set: b[8] != 0,
                     }
                 }
                 _ => return Err(bad()),

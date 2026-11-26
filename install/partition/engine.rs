@@ -4,15 +4,18 @@
 
 use switch_card::{Card, Device, LINUX_TYPE, SECTOR, SETUP_NAME};
 
-use crate::apply::{Geometry, apply};
+use crate::apply::{Geometry, apply, apply_checked};
 use crate::copy::Copier;
 use crate::error::{Error, Result};
-use crate::fat32::boot::{self, Bpb};
-use crate::fat32::relocate;
-use crate::fat32::{self, Fat32, walk};
+use crate::exfat::boot::{self as exfat_boot, Vbr};
+use crate::exfat::{self, Exfat};
+use crate::fat32::boot::{self as fat32_boot, Bpb};
+use crate::fat32::{self, Fat32};
 use crate::journal::{self, FieldKind, FsKind, Phase, Plan, Record, State, Step};
 use crate::layout::{Layout, Tables, table_crc};
+use crate::precheck::precheck;
 use crate::tables;
+use crate::verify_pending::verify_pending;
 
 #[derive(Clone, Debug, Default)]
 pub struct Report {
@@ -62,7 +65,9 @@ pub fn resume<D: Device>(dev: &mut D) -> Result<Option<Report>> {
     let mut seq = header.seq + 1;
     if let Some(step) = step {
         let geo = geometry(dev, &header.plan)?;
-        apply(dev, &geo, &step)?;
+        precheck(dev, &geo, &step)?;
+        verify_pending(dev, &header.plan, header.phase, &geo, &step)?;
+        apply_checked(dev, &geo, &step)?;
         journal::finish(dev, seq, header.phase, &header.plan)?;
         seq += 1;
     }
@@ -93,9 +98,6 @@ fn check_card<D: Device>(dev: &mut D, plan: &Plan) -> Result<()> {
     if dev.sector_count() != plan.card_sectors {
         return Err(Error::WrongCard("its size differs"));
     }
-    if plan.fs != FsKind::Fat32 {
-        return Err(Error::Volume("exFAT shrinking is not built yet".into()));
-    }
     Ok(())
 }
 
@@ -104,18 +106,32 @@ fn verify_card<D: Device>(dev: &mut D, plan: &Plan, phase: Phase, step: Option<&
     let mut boot = [0u8; SECTOR];
     dev.read_sectors(plan.fat_first, &mut boot)?;
     let fp = &plan.fingerprint;
-    if boot[66] != fp.vol_boot_sig
-        || u32::from_le_bytes(boot[67..71].try_into().unwrap()) != fp.vol_serial
-        || boot::boot_crc(&boot) != fp.boot_crc
-    {
-        return Err(Error::WrongCard("the boot volume does not match the journal"));
-    }
-    let bpb = Bpb::parse(&boot, plan.fat_sectors)?;
+    let total = match plan.fs {
+        FsKind::Fat32 => {
+            if boot[66] != fp.vol_boot_sig
+                || u32::from_le_bytes(boot[67..71].try_into().unwrap()) != fp.vol_serial
+                || fat32_boot::boot_crc(&boot) != fp.boot_crc
+            {
+                return Err(Error::WrongCard("the boot volume does not match the journal"));
+            }
+            Bpb::parse(&boot, plan.fat_sectors)?.total
+        }
+        FsKind::Exfat => {
+            if &boot[3..11] != exfat_boot::FS_NAME
+                || boot[109] != fp.vol_boot_sig
+                || u32::from_le_bytes(boot[100..104].try_into().unwrap()) != fp.vol_serial
+                || exfat_boot::boot_crc(&boot) != fp.boot_crc
+            {
+                return Err(Error::WrongCard("the boot volume does not match the journal"));
+            }
+            Vbr::parse(&boot, plan.fat_sectors)?.volume_length
+        }
+    };
     let shrunk = fp.vol_total.min(plan.fat_new_sectors);
     let total_ok = match (phase, step.is_some()) {
-        (Phase::Relocate, _) => bpb.total == fp.vol_total,
-        (Phase::Shrink, true) => bpb.total == fp.vol_total || bpb.total == shrunk,
-        (Phase::Shrink, false) | (Phase::Tables, _) => bpb.total == shrunk,
+        (Phase::Relocate, _) => total == fp.vol_total,
+        (Phase::Shrink, true) => total == fp.vol_total || total == shrunk,
+        (Phase::Shrink, false) | (Phase::Tables, _) => total == shrunk,
     };
     if !total_ok {
         return Err(Error::WrongCard("the boot volume's length does not match the journal"));
@@ -176,7 +192,10 @@ fn verify_tables_done<D: Device>(dev: &mut D, plan: &Plan) -> Result<()> {
 }
 
 fn geometry<D: Device>(dev: &mut D, plan: &Plan) -> Result<Geometry> {
-    Ok(fat32::geometry(plan.fat_first, &read_bpb(dev, plan)?))
+    match plan.fs {
+        FsKind::Fat32 => Ok(fat32::geometry(plan.fat_first, &read_bpb(dev, plan)?)),
+        FsKind::Exfat => exfat::geometry(dev, plan.fat_first, plan.fat_sectors),
+    }
 }
 
 fn read_bpb<D: Device>(dev: &mut D, plan: &Plan) -> Result<Bpb> {
@@ -216,9 +235,16 @@ impl<'a> Run<'a> {
     }
 
     fn relocate<D: Device>(&mut self, dev: &mut D) -> Result<()> {
+        match self.plan.fs {
+            FsKind::Fat32 => self.relocate_fat32(dev),
+            FsKind::Exfat => self.relocate_exfat(dev),
+        }
+    }
+
+    fn relocate_fat32<D: Device>(&mut self, dev: &mut D) -> Result<()> {
         let mut fs = Fat32::load(dev, self.plan.fat_first, self.plan.fat_sectors)?;
         let cut = fs.cut(self.plan.fat_new_sectors);
-        let mut tree = walk::walk(dev, &fs)?;
+        let mut tree = fat32::walk::walk(dev, &fs)?;
         if tree.lost_end > 2 {
             return Err(Error::Damaged("the volume has lost clusters".into()));
         }
@@ -230,7 +256,7 @@ impl<'a> Run<'a> {
         let affected = tree.affected(cut);
         let mut cursor = 0;
         let geo = fs.geometry();
-        while let Some(batch) = relocate::plan(&fs, &tree, &affected, cut, &mut cursor)? {
+        while let Some(batch) = fat32::relocate::plan(&fs, &tree, &affected, cut, &mut cursor)? {
             self.copier.copy(dev, &batch.copies)?;
             journal::commit(dev, self.seq, Phase::Relocate, self.plan, &batch.step)?;
             self.seq += 1;
@@ -246,11 +272,74 @@ impl<'a> Run<'a> {
         Ok(())
     }
 
-    /// `TotSec32` in the backup boot sector, then the main one; FSInfo's free count and next free cluster unknown.
+    fn relocate_exfat<D: Device>(&mut self, dev: &mut D) -> Result<()> {
+        let mut fs = Exfat::load(dev, self.plan.fat_first, self.plan.fat_sectors)?;
+        let shrunk = fs.vbr.shrunk_total(self.plan.fat_new_sectors);
+        let cut = fs.cut(shrunk);
+        if fs.system_end() > cut {
+            return Err(Error::Volume(
+                "the allocation bitmap, up-case table, or root directory lies past the cut".into(),
+            ));
+        }
+        let mut tree = exfat::walk::walk(dev, &fs, Some(cut))?;
+        if tree.lost_end > 2 {
+            return Err(Error::Damaged("the volume has lost clusters".into()));
+        }
+        let need = tree.owned_from(cut, fs.cluster_end());
+        let have = (2..cut).filter(|&c| !fs.is_used(c)).count() as u64;
+        if need > have {
+            return Err(Error::NoRoom { need, have });
+        }
+        let affected = tree.affected(cut);
+        let geo = fs.geometry();
+        let mut convert_cursor = 0;
+        while let Some(batch) = exfat::relocate::plan_convert(&fs, &tree, &affected, &mut convert_cursor)? {
+            journal::commit(dev, self.seq, Phase::Relocate, self.plan, &batch.step)?;
+            self.seq += 1;
+            apply(dev, &geo, &batch.step)?;
+            journal::finish(dev, self.seq, Phase::Relocate, self.plan)?;
+            self.seq += 1;
+            batch.apply_to(&mut fs, &mut tree);
+            self.batches += 1;
+        }
+        let mut move_cursor = 0;
+        while let Some(batch) = exfat::relocate::plan_move(&fs, &tree, &affected, cut, &mut move_cursor)? {
+            self.copier.copy(dev, &batch.copies)?;
+            journal::commit(dev, self.seq, Phase::Relocate, self.plan, &batch.step)?;
+            self.seq += 1;
+            apply(dev, &geo, &batch.step)?;
+            journal::finish(dev, self.seq, Phase::Relocate, self.plan)?;
+            self.seq += 1;
+            batch.apply_to(&mut fs, &mut tree);
+            self.batches += 1;
+        }
+        if (cut..fs.cluster_end()).any(|c| fs.is_used(c)) {
+            return Err(Error::Damaged("clusters past the cut are still in use".into()));
+        }
+        Ok(())
+    }
+
     fn shrink<D: Device>(&mut self, dev: &mut D) -> Result<()> {
+        match self.plan.fs {
+            FsKind::Fat32 => self.shrink_fat32(dev),
+            FsKind::Exfat => {
+                let fs = Exfat::load(dev, self.plan.fat_first, self.plan.fat_sectors)?;
+                let step = exfat::shrink::step(
+                    dev,
+                    &fs,
+                    self.plan.fat_new_sectors,
+                    self.plan.entry_sectors * SECTOR as u64,
+                )?;
+                self.commit(dev, Phase::Shrink, &step)
+            }
+        }
+    }
+
+    /// `TotSec32` in the backup boot sector, then the main one; FSInfo's free count and next free cluster unknown.
+    fn shrink_fat32<D: Device>(&mut self, dev: &mut D) -> Result<()> {
         let bpb = read_bpb(dev, self.plan)?;
         let total = bpb.shrunk_total(self.plan.fat_new_sectors);
-        if bpb.clusters_in(total) < boot::MIN_CLUSTERS {
+        if bpb.clusters_in(total) < fat32_boot::MIN_CLUSTERS {
             return Err(Error::Size {
                 bytes: self.plan.entry_sectors * SECTOR as u64,
                 why: "the volume would keep too few clusters to stay FAT32".into(),
@@ -259,7 +348,7 @@ impl<'a> Run<'a> {
         let first = self.plan.fat_first;
         let tot_sec = |lba: u64| Record::Field {
             lba,
-            offset: boot::TOT_SEC32,
+            offset: fat32_boot::TOT_SEC32,
             kind: FieldKind::Le32,
             old: bpb.total,
             new: total,
@@ -272,10 +361,10 @@ impl<'a> Run<'a> {
             let lba = first + base + bpb.fs_info;
             let mut s = [0u8; SECTOR];
             dev.read_sectors(lba, &mut s)?;
-            if !boot::is_fs_info(&s) {
+            if !fat32_boot::is_fs_info(&s) {
                 continue;
             }
-            for offset in [boot::FSI_FREE_COUNT, boot::FSI_NXT_FREE] {
+            for offset in [fat32_boot::FSI_FREE_COUNT, fat32_boot::FSI_NXT_FREE] {
                 let at = offset as usize;
                 backup.push(Record::Field {
                     lba,

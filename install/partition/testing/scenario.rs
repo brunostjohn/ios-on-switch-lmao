@@ -3,9 +3,10 @@
 
 use switch_card::{Card, Device, LINUX_TYPE, SETUP_NAME};
 use switch_card_testing::{Event, Recorder, SparseImage};
-use switch_partition::{Error, Plan, Report};
+use switch_partition::{Error, FsKind, Plan, Report};
 
 use crate::cuts::{self, first_difference};
+use crate::exfat_reader;
 use crate::oracle::{self, Files};
 use crate::reader::{self, Listing};
 
@@ -81,23 +82,43 @@ pub fn check_done(image: &mut SparseImage, plan: &Plan, before: &Listing, roots_
     } else {
         (new.first(), new.sectors())
     };
+    let want_exfat = plan.fs == FsKind::Exfat;
     assert_eq!(
         oracle::files(image, first, count),
         Files::Volume {
             first: plan.fat_first,
             count: plan.fat_new_sectors,
-            exfat: false
+            exfat: want_exfat
         },
         "{name}: the kernel's Files volume"
     );
     let boot = image.sector(plan.fat_first);
-    let total = u64::from(u32::from_le_bytes(boot[32..36].try_into().unwrap()));
-    assert!(total <= plan.fat_new_sectors, "{name}: TotSec32 {total}");
-    for copy in [0, 1] {
-        assert!(
-            reader::list(image, plan.fat_first, copy) == *before,
-            "{name}: files through FAT {copy}"
-        );
+    match plan.fs {
+        FsKind::Fat32 => {
+            let total = u64::from(u32::from_le_bytes(boot[32..36].try_into().unwrap()));
+            assert!(total <= plan.fat_new_sectors, "{name}: TotSec32 {total}");
+            for copy in [0, 1] {
+                assert!(
+                    reader::list(image, plan.fat_first, copy) == *before,
+                    "{name}: files through FAT {copy}"
+                );
+            }
+        }
+        FsKind::Exfat => {
+            let vol_len = u64::from_le_bytes(boot[72..80].try_into().unwrap());
+            let heap = u64::from(u32::from_le_bytes(boot[88..92].try_into().unwrap()));
+            let clus = u32::from_le_bytes(boot[92..96].try_into().unwrap());
+            assert!(vol_len <= plan.fat_new_sectors, "{name}: VolumeLength {vol_len}");
+            assert_eq!(
+                u64::from(clus),
+                ((vol_len - heap) >> boot[109]).min(0xffff_fff5),
+                "{name}: ClusterCount"
+            );
+            assert!(
+                exfat_reader::list(image, plan.fat_first, true) == *before,
+                "{name}: exFAT files"
+            );
+        }
     }
 }
 
@@ -112,10 +133,20 @@ pub fn matrix(name: &str, base: &SparseImage, ios_bytes: u64, drops: bool, neste
         (plan, rec.events)
     };
     let mut start = base.clone();
-    let before = reader::list(&mut start, crate::cards::FAT_FIRST, 0);
+    let before = match plan.fs {
+        FsKind::Fat32 => reader::list(&mut start, crate::cards::FAT_FIRST, 0),
+        FsKind::Exfat => exfat_reader::list(&mut start, crate::cards::FAT_FIRST, true),
+    };
     let roots_before = roots(&mut start);
     check_done(&mut done, &plan, &before, roots_before, name);
-    crate::macos::fsck_fat32(&done, plan.fat_first, plan.fat_new_sectors, name);
+    match plan.fs {
+        FsKind::Fat32 => {
+            crate::macos::fsck_fat32(&done, plan.fat_first, plan.fat_new_sectors, name);
+        }
+        FsKind::Exfat => {
+            crate::macos::fsck_exfat(&done, plan.fat_first, plan.fat_new_sectors, name);
+        }
+    }
     let all = cuts::cuts(&events, drops);
     let check = |state: &SparseImage, label: &str| {
         let mut recovered = state.clone();
@@ -129,12 +160,23 @@ pub fn matrix(name: &str, base: &SparseImage, ios_bytes: u64, drops: bool, neste
         let mut state = cuts::state(base, &cut.landed);
         assert_eq!(roots(&mut state), roots_before, "{name}: {}: kernel roots", cut.label);
         let files = files_at_cut(&mut state, &plan, &cut.label, name);
-        for copy in [0, 1] {
-            assert!(
-                reader::list(&mut state, crate::cards::FAT_FIRST, copy) == before,
-                "{name}: {}: files through FAT {copy} before recovery",
-                cut.label
-            );
+        match plan.fs {
+            FsKind::Fat32 => {
+                for copy in [0, 1] {
+                    assert!(
+                        reader::list(&mut state, crate::cards::FAT_FIRST, copy) == before,
+                        "{name}: {}: files through FAT {copy} before recovery",
+                        cut.label
+                    );
+                }
+            }
+            FsKind::Exfat => {
+                assert!(
+                    exfat_reader::list(&mut state, crate::cards::FAT_FIRST, false) == before,
+                    "{name}: {}: exFAT files before recovery",
+                    cut.label
+                );
+            }
         }
         check(&state, &cut.label);
         (switch_partition::pending(&mut state).unwrap().is_some(), files)
@@ -167,9 +209,14 @@ pub fn matrix(name: &str, base: &SparseImage, ios_bytes: u64, drops: bool, neste
     })
     .into_iter()
     .sum();
+    let volume_kind = if plan.fs == FsKind::Exfat {
+        "exFAT"
+    } else {
+        "either FAT"
+    };
     let mut table = format!(
         "{name}: {} writes, {} barriers, {} cuts ({} leave a journal)\n  every cut: {roots_before} kernel root(s) as \
-         before, every file intact through either FAT, recovery ends byte-equal to the uncut run\n  {} of the cuts \
+         before, every file intact through {volume_kind}, recovery ends byte-equal to the uncut run\n  {} of the cuts \
          leaving a journal had their resume cut again (prefixes and half-tears): {inner} more cuts, the same checks\n",
         cuts::writes(&events).len(),
         events.iter().filter(|e| **e == Event::Barrier).count(),
@@ -192,22 +239,24 @@ pub fn matrix(name: &str, base: &SparseImage, ios_bytes: u64, drops: bool, neste
     table
 }
 
-/// The kernel's Files volume at a cut, beside its unique root: offline (with the word its log gives) or the FAT at
+/// The kernel's Files volume at a cut, beside its unique root: offline (with the word its log gives) or the volume at
 /// its old or its new length, nothing else.
 fn files_at_cut(state: &mut SparseImage, plan: &Plan, label: &str, name: &str) -> String {
     let Some(root) = oracle::root(state).filter(|r| r.unique) else {
         return "not looked for (no root to boot)".into();
     };
+    let want_exfat = plan.fs == FsKind::Exfat;
     match oracle::files(state, root.first, root.count) {
         Files::Offline(why) => format!("offline ({why})"),
         Files::Volume { first, count, exfat } => {
             let old_or_new = count == plan.fat_sectors || count == plan.fat_new_sectors;
             assert!(
-                first == plan.fat_first && !exfat && old_or_new,
-                "{name}: {label}: Files took {first}+{count}"
+                first == plan.fat_first && exfat == want_exfat && old_or_new,
+                "{name}: {label}: Files took {first}+{count} (exfat={exfat})"
             );
             let which = if count == plan.fat_new_sectors { "new" } else { "old" };
-            format!("the FAT at its {which} length")
+            let kind = if want_exfat { "exFAT" } else { "FAT" };
+            format!("the {kind} at its {which} length")
         }
     }
 }
