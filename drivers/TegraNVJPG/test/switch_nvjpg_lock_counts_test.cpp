@@ -34,7 +34,7 @@ protected:
         NVJPGGate::SetUp();
         TegraNVJPGJob job = decodeJob();
         nvjpg_dec_status status = {};
-        ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);  // the gate powered on, before any count is read
+        ASSERT_EQ(runDecode(&job, &status), 0);  // the gate powered on, before any count is read
         taken();
     }
 
@@ -49,8 +49,8 @@ TEST_F(NVJPGLockCounts, EachJobsEngineWaitIsCountedAndTakingTheCountsZeroesThem)
 {
     TegraNVJPGJob job = decodeJob();
     nvjpg_dec_status status = {};
-    ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
-    ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    ASSERT_EQ(runDecode(&job, &status), 0);
+    ASSERT_EQ(runDecode(&job, &status), 0);
     EXPECT_EQ(taken().waitsUnlocked, 2u);
     EXPECT_EQ(taken().waitsUnlocked, 0u);
 }
@@ -68,7 +68,7 @@ TEST_F(NVJPGLockCounts, CountsTakenOnAnotherThreadWhileJobsRunLoseNone)
     TegraNVJPGJob job = decodeJob();
     nvjpg_dec_status status = {};
     for (uint64_t i = 0; i < kJobs; i++)
-        ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+        ASSERT_EQ(runDecode(&job, &status), 0);
     running.store(false, std::memory_order_release);
     client.join();
     EXPECT_EQ(seen + taken().waitsUnlocked, kJobs);
@@ -82,7 +82,7 @@ TEST_F(NVJPGLockCounts, AnIdleGateCallsWaitForTheStateLockIsKeptAtItsLongest)
     gStateHeldUs = 200;
     TegraNVJPGJob job = decodeJob();
     nvjpg_dec_status status = {};
-    ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);  // powered on again: gateOn waited 200 us
+    ASSERT_EQ(runDecode(&job, &status), 0);  // powered on again: gateOn waited 200 us
     switch_test_lock_taken = nullptr;
     const LockCounts counts = taken();
     EXPECT_EQ(counts.stateWaitMaxUs, 700u);
@@ -97,7 +97,7 @@ TEST_F(NVJPGLockCounts, ACancellationsWaitForTheStateLockIsCounted)
     gEngine.stallDecodes = true;
     TegraNVJPGJob job = decodeJob();
     nvjpg_dec_status status = {};
-    EXPECT_EQ(tegra_nvjpg_run(&job, &status, nullptr), -5);
+    EXPECT_EQ(runDecode(&job, &status), -5);
     switch_test_lock_taken = nullptr;
     ASSERT_TRUE(logged("engine reset: running again"));
     // the job's own check of the engine's state moved the clock too, and is not a gate call's wait
@@ -110,7 +110,7 @@ TEST_F(NVJPGLockCounts, AJobsOwnStateCheckIsNotCountedAsAWait)
     switch_test_lock_taken = stateLockHeldElsewhere;
     TegraNVJPGJob job = decodeJob();
     nvjpg_dec_status status = {};
-    ASSERT_EQ(tegra_nvjpg_run(&job, &status, nullptr), 0);
+    ASSERT_EQ(runDecode(&job, &status), 0);
     switch_test_lock_taken = nullptr;
     EXPECT_EQ(taken().stateWaitMaxUs, 0u);
 }

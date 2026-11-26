@@ -58,6 +58,7 @@
 #include <kern/clock.h>
 #include <kern/thread.h>
 #include <string.h>
+#include "../TegraHost1x/SwitchHost1xFence.h"
 #include "../TegraHost1x/TegraHost1x.h"
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../TegraSMMU/TegraSMMUDomain.h"
@@ -167,8 +168,24 @@ inline uint32_t jobBoundUs(uint64_t pixels)
 }
 
 SwitchFalconInterrupt gErrors;
-IOLock *gJobLock;    // the job on the engine, across tegra_nvjpg_run: sleep waits for it
+IOLock *gJobLock;    // the job on the engine, from tegra_nvjpg_start to tegra_nvjpg_finish: sleep waits for it
 IOLock *gStateLock;  // power transitions against jobs
+
+// The job on the engine, owned by gJobLock's holder from tegra_nvjpg_start to tegra_nvjpg_finish. Its end is signalled
+// exactly once: by the fence's callback (host1x's work loop), or by falconFailed (the falcon line's work loop) when it
+// takes the fence back first; switch_host1x_fence_remove decides between them. Whichever signals writes `result`
+// first. gFlightLock orders falconFailed's look at `active` against start and finish, so it never takes back a fence
+// of a job that has ended; it is held only around those few lines and never across a callback.
+struct Flight {
+    switch_host1x_fence fence;
+    TegraNVJPGSignal signal;
+    uint32_t threshold;
+    uint64_t startUs;
+    int result;
+    bool active;
+};
+Flight gFlight;
+IOLock *gFlightLock;
 #if TEGRA_NVJPG_STATS
 // Written by jobs and under gStateLock, taken by the decode line's caller holding neither (relaxed).
 uint64_t gWaitsUnlocked, gStateWaitMaxUs;
@@ -472,11 +489,23 @@ void engineResume();
 int gateOn(void *);
 int gateOff(void *, bool);
 
-// The falcon's error interrupt: the decode in flight (one at a time) wakes from its wait and is cancelled with the
+void flightEnded(switch_host1x_fence *, int status)
+{
+    __atomic_store_n(&gFlight.result, status, __ATOMIC_RELEASE);
+    gFlight.signal.ended(gFlight.signal.context);
+}
+
+// The falcon's error interrupt: the decode in flight (one at a time) ends at once, and its finish cancels it with the
 // firmware's reason (cancelled()), the engine cleared and reset.
 void falconFailed(const switch_falcon_error &)
 {
-    tegra_host1x_syncpt_kick(gSyncpt);
+    IOLockLock(gFlightLock);
+    const bool taken = gFlight.active && switch_host1x_fence_remove(&gFlight.fence);
+    IOLockUnlock(gFlightLock);
+    if (!taken)
+        return;
+    __atomic_store_n(&gFlight.result, TEGRA_HOST1X_EFALCON, __ATOMIC_RELEASE);
+    gFlight.signal.ended(gFlight.signal.context);
 }
 
 bool allocate()
@@ -525,8 +554,9 @@ void bringUp(void *, wait_result_t)
     gJobLock = IOLockAlloc();
     gStateLock = IOLockAlloc();
     gMapLock = IOLockAlloc();
+    gFlightLock = IOLockAlloc();
     IOLock *power = tegra_nvdec_power_lock();
-    if (!gJpg || !gMc || !gJobLock || !gStateLock || !gMapLock || !power) {
+    if (!gJpg || !gMc || !gJobLock || !gStateLock || !gMapLock || !gFlightLock || !power) {
         IOLog("TegraNVJPG: J0 FAIL no mapping\n");
         return;
     }
@@ -660,9 +690,9 @@ extern "C" void tegra_nvjpg_pages_unmap(uint32_t window, uint64_t address, uint3
 // Job lock held. The setup and status slots are the kernel's (no client maps them); the stream is SETCLASS, the
 // decoder's methods through THI METHOD0/METHOD1 in averne's order (application, control with the GP timer on, picture
 // index, setup, bitstream, status, output planes, EXECUTE with AWAKEN), then an OP_DONE increment of NVJPG's
-// syncpoint, waited for by interrupt.
-extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *status, uint64_t *busyUs,
-                               const TegraNVJPGFollow *follow)
+// syncpoint, whose fence ends the job by interrupt (gFlight).
+extern "C" int tegra_nvjpg_start(const TegraNVJPGJob *job, const TegraNVJPGSignal *signal,
+                                 const TegraNVJPGFollow *follow)
 {
     if (!gUp || !job->planes || job->planes > 3)
         return -19;
@@ -671,7 +701,7 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
         return -22;
     if (const int error = gGate.use())
         return error;
-    // The job's use of the gate keeps the engine as this finds it until done(): no lock is held across its wait.
+    // The job's use of the gate keeps the engine as this finds it until finish: no lock is held across the job.
     IOLockLock(gStateLock);
     while (gSuspended)
         IOLockSleep(gStateLock, &gSuspended, THREAD_UNINT);
@@ -711,22 +741,51 @@ extern "C" int tegra_nvjpg_run(const TegraNVJPGJob *job, nvjpg_dec_status *statu
     method(NVE7D0_EXECUTE, 1u << 8);  // AWAKEN
     words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, gSyncpt);
     const uint32_t fence = gNext + 1;
-    const uint64_t start = switch_now_us();
-    int ret = switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_NVJPG, words, n, gSyncpt, fence);
-    if (!ret) {
-        gNext = fence;
-        if (follow)
-            follow->queue(follow->context, gSyncpt, fence);
-        ret = tegra_host1x_syncpt_wait_unless(gSyncpt, fence, jobBoundUs(job->pixels), gErrors.takenWord(),
-                                              gErrors.onAt());
-#if TEGRA_NVJPG_STATS
-        __atomic_fetch_add(&gWaitsUnlocked, 1, __ATOMIC_RELAXED);
-#endif
-        if (ret == TEGRA_HOST1X_ETIMEDOUT || ret == TEGRA_HOST1X_EFALCON)
-            ret = cancelled(job, fence, switch_now_us() - start);
+    gFlight.startUs = switch_now_us();
+    if (const int error = switch_host1x_job_submit(TEGRA_HOST1X_CHANNEL_NVJPG, words, n, gSyncpt, fence)) {
+        gGate.done();
+        return error;
     }
+    gNext = fence;
+    if (follow)
+        follow->queue(follow->context, gSyncpt, fence);
+    gFlight.signal = *signal;
+    gFlight.threshold = fence;
+    gFlight.result = 0;
+    switch_host1x_fence_init(&gFlight.fence, gSyncpt, fence, flightEnded);
+    IOLockLock(gFlightLock);
+    const int armed = switch_host1x_fence_add(&gFlight.fence, jobBoundUs(job->pixels));
+    gFlight.active = armed == TEGRA_HOST1X_OK;
+    // An error the falcon raised before the fence was armed found no job to fail: it fails this one now.
+    const bool failed = gFlight.active && __atomic_load_n(gErrors.takenWord(), __ATOMIC_ACQUIRE) != gErrors.onAt() &&
+                        switch_host1x_fence_remove(&gFlight.fence);
+    IOLockUnlock(gFlightLock);
+    if (armed == TEGRA_HOST1X_OK) {
+        if (failed) {
+            __atomic_store_n(&gFlight.result, TEGRA_HOST1X_EFALCON, __ATOMIC_RELEASE);
+            gFlight.signal.ended(gFlight.signal.context);
+        }
+        return 0;
+    }
+    // Nothing would end a job on the engine with no fence: it is cancelled now, as one past its bound is.
+    const int cancel = cancelled(job, fence, switch_now_us() - gFlight.startUs);
+    gGate.done();
+    return cancel ? cancel : armed;
+}
+
+extern "C" int tegra_nvjpg_finish(const TegraNVJPGJob *job, nvjpg_dec_status *status, uint64_t *busyUs)
+{
+    IOLockLock(gFlightLock);
+    gFlight.active = false;
+    IOLockUnlock(gFlightLock);
+    int ret = __atomic_load_n(&gFlight.result, __ATOMIC_ACQUIRE);
+#if TEGRA_NVJPG_STATS
+    __atomic_fetch_add(&gWaitsUnlocked, 1, __ATOMIC_RELAXED);
+#endif
+    if (ret == TEGRA_HOST1X_ETIMEDOUT || ret == TEGRA_HOST1X_EFALCON)
+        ret = cancelled(job, gFlight.threshold, switch_now_us() - gFlight.startUs);
     if (busyUs)
-        *busyUs = switch_now_us() - start;
+        *busyUs = switch_now_us() - gFlight.startUs;
     switch_dcache_clean_invalidate(gStatus.va, sizeof(nvjpg_dec_status));
     memcpy(status, gStatus.va, sizeof(*status));
     gGate.done();

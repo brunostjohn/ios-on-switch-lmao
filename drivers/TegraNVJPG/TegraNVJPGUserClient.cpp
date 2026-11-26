@@ -144,6 +144,17 @@ struct Job {
     uint64_t engineUs;
     int pid;
     bool done;
+    // The engine thread's decode of it (engineThread). NVJPG's part runs from its start (OnEngine) until its signal; a
+    // re-pack queued behind it (Repacking) until the re-pack's. `woken`, `engineEnded` and `repacked` are the signals',
+    // set and read under gQueueLock; the rest is the engine thread's alone.
+    enum class Phase : uint8_t { OnEngine, Repacking } phase;
+    bool woken, engineEnded, repacked;
+    void *hold;                         // the destination's layout, held until the decode has ended (routeJob)
+    const SwitchNVJPGMapping *mapping;  // a direct decode's destination pages, as NVJPG writes them
+    TegraNVJPGRepackRun repack;
+    int engineResult;
+    nvjpg_dec_status engineStatus;
+    uint64_t engineBusy;
 #if TEGRA_NVJPG_STATS
     bool tileProbe;  // HW Test's tile probe (kTileProbeMagic): tileMode and tileGob go to the setup unchanged
     uint32_t tileMode, tileGob;
@@ -289,118 +300,231 @@ IOReturn ended(Job *job, int error, const nvjpg_dec_status &status, uint64_t bus
     return ret;
 }
 
-// Engine thread: a VIC ('422f'/'444f') or Copy Engine (layout-staged) re-packed decode (TegraNVJPGRepack.h).
-IOReturn runRepack(Job *job)
+// NVJPG's end of the decode in flight, from its fence's work loop or the falcon line's: the engine thread finishes it.
+void jobEngineEnded(void *context)
 {
-    nvjpg_dec_status status = {};
-    uint64_t busy = 0;
-    const char *why = nullptr;
-    const int error = tegra_nvjpg_repack(&job->engine, &job->plan, &job->request.base, &job->dst, job->backing,
-                                         job->scan->address, &status, &busy, &why);
-    if (why) {
-        refused(why, job->plan.target.format);
-        return kIOReturnUnsupported;
-    }
+    auto *job = static_cast<Job *>(context);
+    IOLockLock(gQueueLock);
+    job->engineEnded = true;
+    job->woken = true;
+    IOLockWakeup(gQueueLock, &gHead, false);
+    IOLockUnlock(gQueueLock);
+}
+
+// The end of the re-pack queued behind it, from VIC's or the copy engine's completion.
+void jobRepackEnded(void *context)
+{
+    auto *job = static_cast<Job *>(context);
+    IOLockLock(gQueueLock);
+    job->repacked = true;
+    job->woken = true;
+    IOLockWakeup(gQueueLock, &gHead, false);
+    IOLockUnlock(gQueueLock);
+}
+
+// Engine thread: whether the re-pack queued behind NVJPG has yet to signal its end.
+bool repackPending(Job *job)
+{
+    if (!job->repack.queued)
+        return false;
+    IOLockLock(gQueueLock);
+    const bool repacked = job->repacked;
+    IOLockUnlock(gQueueLock);
+    return !repacked;
+}
+
+// Engine thread, once nothing is pending: a re-packed decode's result.
+IOReturn completeRepack(Job *job)
+{
+    const int error = tegra_nvjpg_repack_end(&job->repack, job->engineResult);
+    const nvjpg_dec_status &status = job->engineStatus;
     if (!error && job->plan.fillChroma && !status.error_status && status.bytes_offset && job->backing) {
         const SwitchNVJPGBacking target = switch_nvjpg_backing(job->backing);
         fillChroma(job->plan, target.pages, target.count);
     }
-    return ended(job, error, status, busy);
+    return ended(job, error, status, job->engineBusy);
 }
 
-// Engine thread: NVJPG straight into the destination's pages.
-IOReturn runDirect(Job *job, const SwitchNVJPGBacking &target, uint32_t extent)
+// Engine thread: a VIC ('422f'/'444f') or Copy Engine (layout-staged) re-packed decode (TegraNVJPGRepack.h) started.
+// True: it is in flight; false: it has ended, job->status its result.
+bool beginRepack(Job *job)
+{
+    const TegraNVJPGSignal ended = {jobEngineEnded, job}, repacked = {jobRepackEnded, job};
+    const char *why = nullptr;
+    const int error = tegra_nvjpg_repack_start(&job->repack, &job->engine, &job->plan, &job->request.base, &job->dst,
+                                               job->backing, job->scan->address, &ended, &repacked, &why);
+    if (!error) {
+        job->phase = Job::Phase::OnEngine;
+        return true;
+    }
+    if (why) {
+        refused(why, job->plan.target.format);
+        job->status = kIOReturnUnsupported;
+        return false;
+    }
+    job->engineResult = error;
+    job->phase = Job::Phase::Repacking;
+    if (repackPending(job))
+        return true;
+    job->status = completeRepack(job);
+    return false;
+}
+
+// Engine thread: NVJPG's direct decode has ended and is finished.
+IOReturn completeDirect(Job *job)
+{
+    const TegraNVJPGPlan &p = job->plan;
+    // The CPU may have pulled destination lines in while NVJPG wrote: readers must see DRAM.
+    switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, job->mapping->pages, job->mapping->count);
+    switch_dcache_sync();
+    const nvjpg_dec_status &status = job->engineStatus;
+    if (!job->engineResult && p.fillChroma && !status.error_status && status.bytes_offset)
+        fillChroma(p, job->mapping->pages, job->mapping->count);
+    return ended(job, job->engineResult, status, job->engineBusy);
+}
+
+// Engine thread: NVJPG straight into the destination's pages, started. True: in flight; false: ended (job->status).
+bool beginDirect(Job *job, const SwitchNVJPGBacking &target, uint32_t extent)
 {
     const TegraNVJPGPlan &p = job->plan;
     const char *why = nullptr;
-    const SwitchNVJPGMapping *mapping = switch_nvjpg_mapping(target, extent, p.writeEnd, &why, job->pid);
-    if (!mapping) {
+    job->mapping = switch_nvjpg_mapping(target, extent, p.writeEnd, &why, job->pid);
+    if (!job->mapping) {
         refused(why, p.target.format);
-        return kIOReturnUnsupported;
+        job->status = kIOReturnUnsupported;
+        return false;
     }
-    const uint64_t *addresses = mapping->pages;
-    const uint32_t pages = mapping->count;
     // NVJPG does not snoop the CPU's caches: no dirty line of the destination may be written back over the picture.
-    switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, addresses, pages);
+    switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, job->mapping->pages, job->mapping->count);
     switch_dcache_sync();
-    nvjpg_dec_status status = {};
-    uint64_t busy = 0;
     job->engine.bitstream = job->scan->address;
     for (uint32_t i = 0; i < p.planes; i++)
-        job->engine.plane[i] = mapping->address + p.planeStart[i];
+        job->engine.plane[i] = job->mapping->address + p.planeStart[i];
+    const TegraNVJPGSignal ended = {jobEngineEnded, job};
     tegra_nvjpg_lock();
-    const int error = tegra_nvjpg_run(&job->engine, &status, &busy);
+    const int error = tegra_nvjpg_start(&job->engine, &ended);
+    if (!error) {
+        job->phase = Job::Phase::OnEngine;
+        return true;
+    }
     tegra_nvjpg_unlock();
-    // The CPU may have pulled destination lines in while NVJPG wrote: readers must see DRAM.
-    switch_dcache_hw_pages(SWITCH_DCACHE_CLEAN_INVALIDATE, addresses, pages);
-    switch_dcache_sync();
-    if (!error && p.fillChroma && !status.error_status && status.bytes_offset)
-        fillChroma(p, addresses, pages);
-    return ended(job, error, status, busy);
+    job->engineResult = error;
+    job->status = completeDirect(job);
+    return false;
 }
 
-// Engine thread: one decode. VIC's re-pack writes planar YUV, which GM20B never lays out block-linear, through VIC's
-// own view of the destination.
-IOReturn runJob(Job *job)
+// Engine thread: one decode started. VIC's re-pack writes planar YUV, which GM20B never lays out block-linear, through
+// VIC's own view of the destination. True: in flight; false: ended, job->status its result.
+bool beginJob(Job *job)
 {
     if (job->plan.repack == TEGRA_NVJPG_REPACK_VIC)
-        return runRepack(job);
+        return beginRepack(job);
     uint32_t extent = static_cast<uint32_t>(switch_div_round_up(job->dst.desc.length, SWITCH_HW_PAGE_SIZE));
     const SwitchNVJPGBacking target = switch_nvjpg_backing(job->backing);
     if (target.count < extent) {
         refused("destination longer than its backing", job->plan.target.format);
-        return kIOReturnUnsupported;
+        job->status = kIOReturnUnsupported;
+        return false;
     }
     tegra_vic_surface_written(&job->dst);
-    void *hold = nullptr;
     uint32_t route = TEGRA_NVJPG_ROUTE_ROWS;
-    const char *why = routeJob(job, target, &hold, &route);
-    IOReturn ret = kIOReturnUnsupported;
-    if (why)
+    if (const char *why = routeJob(job, target, &job->hold, &route)) {
         refused(why, job->plan.target.format);
-    else
-        ret = job->plan.repack ? runRepack(job) : runDirect(job, target, extent);
-    if (hold)
-        tegra_gm20b_surface_unhold(hold);
-    return ret;
+        job->status = kIOReturnUnsupported;
+        return false;
+    }
+    return job->plan.repack ? beginRepack(job) : beginDirect(job, target, extent);
+}
+
+// Engine thread, after a signal: the decode in flight carried on. True: it has ended, job->status its result.
+bool advanceJob(Job *job)
+{
+    IOLockLock(gQueueLock);
+    const bool engineEnded = job->engineEnded;
+    IOLockUnlock(gQueueLock);
+    if (job->phase == Job::Phase::OnEngine) {
+        if (!engineEnded)
+            return false;
+        job->engineResult = tegra_nvjpg_finish(&job->engine, &job->engineStatus, &job->engineBusy);
+        tegra_nvjpg_unlock();
+        if (!job->plan.repack) {
+            job->status = completeDirect(job);
+            return true;
+        }
+        job->phase = Job::Phase::Repacking;
+    }
+    if (repackPending(job))
+        return false;
+    job->status = completeRepack(job);
+    return true;
 }
 
 void finish(Job *job);
 
+void giveHold(Job *job)
+{
+    if (job->hold) {
+        tegra_gm20b_surface_unhold(job->hold);
+        job->hold = nullptr;
+    }
+}
+
+// Engine thread: the ended decode's layout hold given back, its scan slot freed, its counts kept, its client told.
+void conclude(Job *job)
+{
+    giveHold(job);
+    giveScan(job);
+#if TEGRA_NVJPG_STATS
+    tegra_nvjpg_count_job(job->pid, job->plan.target.format, job->status != 0, job->engineUs, job->cpuUs,
+                          static_cast<uint64_t>(job->plan.extent.width) * job->plan.extent.height,
+                          static_cast<uint64_t>(job->engine.setup.bitstream_size));
+#endif
+    const uint32_t format = 1u << job->plan.target.format;
+    const bool first = (job->status == 0) && (gFirstLogged & format) == 0u;
+    if (first)
+        gFirstLogged |= format;
+    if (first) {
+        IOLog("TegraNVJPG: first hardware decode done: %ux%u to %ux%u (format %u, 1/%u) in %llu us engine (%u "
+              "cycles), %llu us CPU\n",
+              static_cast<unsigned>(job->engine.setup.frame_width),
+              static_cast<unsigned>(job->engine.setup.frame_height), job->plan.extent.width, job->plan.extent.height,
+              job->plan.target.format, 1u << job->plan.target.scale, job->engineUs, job->cycles, job->cpuUs);
+    }
+#if TEGRA_NVJPG_STATS
+    tegra_nvjpg_stats_line();
+#endif
+    finish(job);
+}
+
+// One decode at a time, NVJPG's part and its re-pack ending by signal (jobEngineEnded, jobRepackEnded): between its
+// start and its ends this thread sleeps on the queue's lock, not on the engine, and a signal only wakes it to carry the
+// decode on (advanceJob). A queued decode starts once the one before it has ended.
 void engineThread(void *, wait_result_t)
 {
+    Job *current = nullptr;
     for (;;) {
+        Job *next = nullptr;
         IOLockLock(gQueueLock);
-        while (!gHead)
+        while (current ? !current->woken : !gHead)
             IOLockSleep(gQueueLock, &gHead, THREAD_UNINT);
-        Job *job = gHead;
-        gHead = job->next;
-        if (!gHead)
-            gTail = nullptr;
-        IOLockUnlock(gQueueLock);
-        job->status = runJob(job);
-        giveScan(job);
-#if TEGRA_NVJPG_STATS
-        tegra_nvjpg_count_job(job->pid, job->plan.target.format, job->status != 0, job->engineUs, job->cpuUs,
-                              static_cast<uint64_t>(job->plan.extent.width) * job->plan.extent.height,
-                              static_cast<uint64_t>(job->engine.setup.bitstream_size));
-#endif
-        const uint32_t format = 1u << job->plan.target.format;
-        const bool first = (job->status == 0) && (gFirstLogged & format) == 0u;
-        if (first)
-            gFirstLogged |= format;
-        if (first) {
-            IOLog("TegraNVJPG: first hardware decode done: %ux%u to %ux%u (format %u, 1/%u) in %llu us engine (%u "
-                  "cycles), %llu us CPU\n",
-                  static_cast<unsigned>(job->engine.setup.frame_width),
-                  static_cast<unsigned>(job->engine.setup.frame_height), job->plan.extent.width,
-                  job->plan.extent.height, job->plan.target.format, 1u << job->plan.target.scale, job->engineUs,
-                  job->cycles, job->cpuUs);
+        if (current) {
+            current->woken = false;
+        } else {
+            next = gHead;
+            gHead = next->next;
+            if (!gHead)
+                gTail = nullptr;
         }
-#if TEGRA_NVJPG_STATS
-        tegra_nvjpg_stats_line();
-#endif
-        finish(job);
+        IOLockUnlock(gQueueLock);
+        if (next) {
+            current = next;
+            if (beginJob(current))
+                continue;
+        } else if (!advanceJob(current)) {
+            continue;
+        }
+        conclude(current);
+        current = nullptr;
     }
 }
 

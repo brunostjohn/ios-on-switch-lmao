@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
-// TegraNVJPGUserClient.cpp's engine-thread decode (runJob) and TegraNVJPGRepack.cpp against the engine model
-// (switch_nvjpg_engine_model.h), one translation unit with TegraNVJPGMapping.cpp. The model's kernel stand-ins declare
+// TegraNVJPGUserClient.cpp's engine-thread decode (beginJob, advanceJob) and TegraNVJPGRepack.cpp against the engine
+// model (switch_nvjpg_engine_model.h), one translation unit with TegraNVJPGMapping.cpp. The model's kernel stand-ins declare
 // OSObject, IOService and IOMemoryDescriptor as empty classes and define the service's publish as a no-op, so those
 // names are moved aside while the model compiles; the user client's own stand-ins follow it.
 #define SWITCH_DCACHE_PHYS_MODEL 1
@@ -279,6 +279,32 @@ struct CeCopyCall {
 
 std::vector<CeCopyCall> gCeCopies;
 int gCeStatus = 0;
+
+// A re-pack VIC or the copy engine took, held until NVJPG's syncpoint reaches the fence it was queued behind, as their
+// hardware waits hold it
+struct HeldRepack {
+    uint32_t after;
+    void (*completion)(void *, int);
+    void *context;
+};
+
+std::vector<HeldRepack> gHeldRepacks;
+
+// The re-pack engines run what NVJPG's syncpoint has released.
+void runRepacks()
+{
+    std::vector<HeldRepack> due;
+    for (auto it = gHeldRepacks.begin(); it != gHeldRepacks.end();) {
+        if (static_cast<int32_t>(gEngine.syncpt - it->after) >= 0) {
+            due.push_back(*it);
+            it = gHeldRepacks.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (const HeldRepack &repack : due)
+        repack.completion(repack.context, 0);
+}
 int gSurfaceTiled = 0;
 int gSurfaceUndescribed = 0;
 int gHolds = 0;
@@ -450,7 +476,7 @@ extern "C" int tegra_gm20b_ce_copy_plane_checked(const tegra_gm20b_ce_plane *src
     if (gCeStatus)
         return gCeStatus;
     if (done && done->fn)
-        done->fn(done->arg, 0);
+        gHeldRepacks.push_back({wait ? wait->threshold : gEngine.syncpt, done->fn, done->arg});
     return 0;
 }
 
@@ -459,12 +485,12 @@ bool switch_vic_decode_output_ready(void)
     return true;
 }
 
-// VIC's re-pack, completed at once: the test reads which fence it was queued behind.
+// VIC's re-pack: the test reads which fence it was queued behind.
 int switch_vic_decode_output(const TegraVICSurface *, const SwitchVICDecodeOutput *output,
                              void (*completion)(void *, int), void *context, const char **)
 {
     gVicAfter = *output->after;
-    completion(context, 0);
+    gHeldRepacks.push_back({output->after->threshold, completion, context});
     return 0;
 }
 
@@ -606,11 +632,28 @@ Job *repackOf(uint64_t bytes)
     return job;
 }
 
-// The engine thread's part of one queued job.
-IOReturn engineRuns(Job *job)
+// The engine thread's part of one queued job: begun, then carried on at each signal, with the model's engine, host1x
+// and re-pack engines run between as their hardware would; `repackFirst` delivers a re-pack's end before NVJPG's, as
+// two work loops may. A job no signal would ever carry on leaves the engine thread asleep for good: the test fails
+// there.
+IOReturn engineRuns(Job *job, bool repackFirst = false)
 {
-    const IOReturn status = runJob(job);
-    giveScan(job);
+    for (bool inFlight = beginJob(job); inFlight; inFlight = !advanceJob(job)) {
+        if (!job->woken && repackFirst)
+            runRepacks();
+        if (!job->woken) {
+            deliver();
+            runRepacks();
+        }
+        if (!job->woken) {
+            ADD_FAILURE() << "no signal would wake the engine thread";
+            return kIOReturnTimeout;
+        }
+        job->woken = false;
+    }
+    EXPECT_TRUE(gHeldRepacks.empty()) << "a re-pack outlived its decode";
+    const IOReturn status = job->status;
+    giveHold(job);
     dropJob(job);
     return status;
 }
@@ -626,6 +669,7 @@ protected:
         gMapsUnderTheJobLock = 0;
         gCeCopies.clear();
         gCeStatus = 0;
+        gHeldRepacks.clear();
         gSurfaceTiled = 0;
         gSurfaceUndescribed = 0;
         gHolds = 0;
@@ -673,7 +717,7 @@ TEST_F(NVJPGUserClient, AFirstUseDestinationMapsOnceAndSteadyStateDecodesMapNoth
 }
 
 // The GPU driver's one retirement worker, which every GPU, VIC and NVDEC backing free queues behind, unmaps another
-// destination while runJob's decode holds the job lock: it never waits for a decode.
+// destination while a decode holds the job lock: it never waits for a decode.
 TEST_F(NVJPGUserClient, RetirementCompletesWhileADecodeHoldsTheJobLock)
 {
     Destination other(1, 0x92000000);
@@ -736,14 +780,11 @@ TEST_F(NVJPGUserClient, ARepackMapsItsBufferOnceAndQueuesVICBehindTheDecode)
     EXPECT_TRUE(gRefusals.empty());
 }
 
-// Unaligned destination strides (e.g. stride 2080) decode pitch-linear into the pooled 64B-aligned scratch buffer, then
-// Copy Engine DMA-repacks exact visible rows behind NVJPG's OP_DONE syncpoint with zero CPU pixel copies.
-TEST_F(NVJPGUserClient, UnalignedStrideExecutesViaCopyEngineRepackBehindNVJPGFence)
+// A 2048-byte-row picture into a destination of 2080-byte rows: NVJPG's rows go through the copy engine.
+static Job *copyRowsInto(Destination &d, IOMemoryDescriptor &memory)
 {
-    Destination d(260, 0x96000000);
-    IOMemoryDescriptor dstMem;
     Job *job = decodeInto(d, 260ULL * 4096, 2048ULL * 512);
-    job->dst.memory = &dstMem;
+    job->dst.memory = &memory;
     job->plan.repack = TEGRA_NVJPG_REPACK_CE;
     job->plan.repackBytes = 2048ULL * 512;
     job->plan.planes = job->engine.planes = 1;
@@ -753,6 +794,16 @@ TEST_F(NVJPGUserClient, UnalignedStrideExecutesViaCopyEngineRepackBehindNVJPGFen
     job->plan.copyDstPitch[0] = 2080;
     job->plan.copyRowBytes[0] = 2048;
     job->plan.copyRows[0] = 512;
+    return job;
+}
+
+// Unaligned destination strides (e.g. stride 2080) decode pitch-linear into the pooled 64B-aligned scratch buffer, then
+// Copy Engine DMA-repacks exact visible rows behind NVJPG's OP_DONE syncpoint with zero CPU pixel copies.
+TEST_F(NVJPGUserClient, UnalignedStrideExecutesViaCopyEngineRepackBehindNVJPGFence)
+{
+    Destination d(260, 0x96000000);
+    IOMemoryDescriptor dstMem;
+    Job *job = copyRowsInto(d, dstMem);
     EXPECT_EQ(engineRuns(job), kIOReturnIOError) << "the model's engine writes no status";
     EXPECT_TRUE(gRefusals.empty());
     ASSERT_EQ(gCeCopies.size(), 1u);
@@ -767,6 +818,20 @@ TEST_F(NVJPGUserClient, UnalignedStrideExecutesViaCopyEngineRepackBehindNVJPGFen
     EXPECT_EQ(gSurfaceAccessReleased, 1);
     EXPECT_EQ(gRoutes, std::vector<uint32_t>{TEGRA_NVJPG_ROUTE_COPY_ROWS});
     EXPECT_EQ(d.backing.refs, 1);
+    retire(&d.backing);
+}
+
+// The copy engine's end can come before NVJPG's fence callback (each on its own work loop): the engine thread finishes
+// NVJPG's part at its own signal, then ends the decode, whichever signal came first.
+TEST_F(NVJPGUserClient, ARepackThatEndsBeforeNVJPGsSignalStillEndsTheDecodeOnce)
+{
+    Destination d(260, 0x9e000000);
+    IOMemoryDescriptor dstMem;
+    EXPECT_EQ(engineRuns(copyRowsInto(d, dstMem), true), kIOReturnIOError) << "the model's engine writes no status";
+    EXPECT_EQ(gEngine.decodeEndedBy, "fence");
+    ASSERT_EQ(gCeCopies.size(), 1u);
+    EXPECT_TRUE(gEngine.released.empty());
+    EXPECT_EQ(gSurfaceAccessReleased, 1);
     retire(&d.backing);
 }
 

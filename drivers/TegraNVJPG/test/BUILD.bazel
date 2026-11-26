@@ -97,6 +97,7 @@ host_shims(
 # TegraNVJPG.cpp's model of the engine (switch_nvjpg_engine_model.h) and every header it reaches
 ENGINE_MODEL = [
     "switch_nvjpg_engine_model.h",
+    "//drivers/TegraHost1x:SwitchHost1xFence.h",
     "//drivers/TegraHost1x:TegraHost1x.h",
     "//drivers/TegraNVJPG:TegraNVJPG.h",
     "//drivers/TegraNVJPG:TegraNVJPGJpeg.h",
