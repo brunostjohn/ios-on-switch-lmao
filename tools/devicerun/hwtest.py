@@ -680,7 +680,7 @@ TESTS: dict[str, bool] = {
     'ui.icon_render': False,
     'system.snapshot_purgeable': False,
     'recorder.hang_dump': False,
-    'system.mc_fault_interrupt': False,
+    'system.mc_fault_interrupt': True,
     'ui.launch_hitch': False,
     'system.compiler_alive': False,
     'gpu.x1.texture_extents': False,
