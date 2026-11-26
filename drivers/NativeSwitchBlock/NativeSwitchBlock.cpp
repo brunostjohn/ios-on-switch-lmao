@@ -359,6 +359,7 @@ struct Request {
     bool chained : 1;  // r12-sdio: taken into the chain being picked (SwitchQueue.h), under queueLock
     bool pooled : 1;   // owned by requestPool slab (SwitchSdPool.h); false for overflow IOMalloc nodes
     bool shared : 1;
+    bool replay : 1;  // read by the kernel's boot replay: queued in kSwitchSdReplayClass until it ages (SwitchSdPick.h)
     IOStorageCompletion completion;
     uint64_t queuedNs;
 };
@@ -918,10 +919,9 @@ OSDefineMetaClassAndStructors(NativeSwitchBlockDevice, IOBlockStorageDevice)
     int gPublishStatus = -1;
 }
 
-// The kernel's boot replay thread (kernel/switch/vm/prefetch_vm.c), set for the length of the replay. Its reads reach
-// doAsyncReadWrite on that thread: vnode_pagein -> cluster_io -> spec_strategy -> IOMediaBSDClient ->
-// IOBlockStorageDriver, and SwitchCryptex's window fills, which it issues on the requesting thread.
-extern "C" bool switch_vm_prefetch_is_replay_thread(void *thread) __attribute__((weak));
+// The boot replay's reads reach doAsyncReadWrite on its thread (switch_vm_prefetch_is_replay_thread): vnode_pagein ->
+// cluster_io -> spec_strategy -> IOMediaBSDClient -> IOBlockStorageDriver, and SwitchCryptex's window fills, which it
+// issues on the requesting thread.
 
 extern "C" bool switch_sd_trim_stats(uint64_t *erases, uint64_t *sectors, uint64_t *busy_ns)
 {
@@ -1042,6 +1042,7 @@ IOReturn NativeSwitchBlockDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, U
                           false,
                           false,
                           shared,
+                          replay,
                           *completion,
                           0};
     buffer->retain();
@@ -2611,6 +2612,7 @@ Request *NativeSwitchBlock::pickLocked(uint32_t *chainSectors, uint32_t *chainCo
     const uint64_t pickNs = switch_now_ns();
     const uint64_t awaitedBeforeNs[2] = {writes(windowOf(false)).awaitedBeforeNs(),
                                          writes(windowOf(true)).awaitedBeforeNs()};
+    switchSdAgeReplay(head, pickNs, queuedReads);
     const SwitchSdPicked<Request> picked = switchSdPick(head, awaitedBeforeNs, pickNs, &pickState);
     Request *const prev = picked.prev;
     Request *first = picked.first;

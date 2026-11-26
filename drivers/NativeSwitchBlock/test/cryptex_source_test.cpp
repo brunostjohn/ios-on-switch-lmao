@@ -81,14 +81,16 @@ TEST(CryptexSource, SmallReadsGoThroughTheCache)
     EXPECT_THAT(job, Not(HasSubstr("client.action")));
 }
 
-// A window fill reads at High for a tier-0 requester and Default for any other; a tier-0 requester that joins it
-// raises it through the SD device's doSetPriority, outside gCache.lock (the SD queueLock is never taken under it).
-// XNU's own busy-page reprioritisation reaches the same code through this device's doSetPriority.
+// A window fill reads at High for a tier-0 requester and Default for any other, the boot replay included; a tier-0
+// requester that joins it raises it through the SD device's doSetPriority, outside gCache.lock (the SD queueLock is
+// never taken under it). XNU's own busy-page reprioritisation reaches the same code through this device's
+// doSetPriority.
 TEST(CryptexSource, JoinedFillsAreRaised)
 {
     const std::string read = body("IOReturn SwitchCryptexDevice::doAsyncReadWrite(");
-    EXPECT_THAT(read, HasSubstr("attributes && (attributes->priority >> 6) == 0 ? kIOStoragePriorityHigh : "
-                                "kIOStoragePriorityDefault"));
+    EXPECT_THAT(read, HasSubstr("switch_vm_prefetch_is_replay_thread(current_thread())"));
+    EXPECT_THAT(read, HasSubstr("switchSdClassOf(static_cast<uint8_t>(attributes->priority >> 6), replay) == 0"));
+    EXPECT_LT(read.find("switchSdClassOf("), read.find("cacheRead(p, buffer, block, count, cachePriority)"));
     const std::string plan = body("bool SwitchCryptexDevice::cacheRead(");
     EXPECT_LT(plan.find("joined = p->cache.joined;"), plan.find("IOLockUnlock(gCache.lock);"));
     EXPECT_LT(plan.find("IOLockUnlock(gCache.lock);"), plan.find("raiseQueuedReads(tag,"));

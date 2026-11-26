@@ -18,6 +18,7 @@
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSString.h>
 #include <kern/clock.h>
+#include <kern/thread.h>
 #include <kern/thread_call.h>
 #include <mach/memory_object_types.h>
 #include <sys/disk.h>
@@ -33,6 +34,7 @@
 #include "SwitchCryptexCache.h"
 #include "SwitchCryptexMap.h"
 #include "SwitchCryptexStats.h"
+#include "SwitchSdPick.h"
 #include "../../kits/SwitchTime/SwitchTime.h"
 
 extern "C" {
@@ -595,12 +597,15 @@ IOReturn SwitchCryptexDevice::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt6
     p->status = kIOReturnSuccess;
     p->remaining = 1;
     p->cached = p->waited = false;
-    // A window fill reads at High for a tier-0 requester and at Default for any other: a thread that faults a page a
-    // fill has busy sleeps in vm_page_sleep and never reaches cacheRead, so only XNU's DKIOCSETTIER (doSetPriority)
-    // could raise a fill made at Low or Background, and the debug line counts whether it does. A tier-0 request that
-    // joins a fill raises it (cacheRead).
+    // A window fill reads at High for a tier-0 requester and at Default for any other, the boot replay included (the
+    // card's class for it, SwitchSdPick.h): a thread that faults a page a fill has busy sleeps in vm_page_sleep and
+    // never reaches cacheRead, so only XNU's DKIOCSETTIER (doSetPriority) could raise a fill made at Low or Background,
+    // and the debug line counts whether it does. A tier-0 request that joins a fill raises it (cacheRead).
+    const bool replay = &switch_vm_prefetch_is_replay_thread && switch_vm_prefetch_is_replay_thread(current_thread());
     const IOStoragePriority cachePriority =
-        attributes && (attributes->priority >> 6) == 0 ? kIOStoragePriorityHigh : kIOStoragePriorityDefault;
+        attributes && switchSdClassOf(static_cast<uint8_t>(attributes->priority >> 6), replay) == 0
+            ? kIOStoragePriorityHigh
+            : kIOStoragePriorityDefault;
     if (cacheRead(p, buffer, block, count, cachePriority))
         return kIOReturnSuccess;
     uint32_t pieces = 0;

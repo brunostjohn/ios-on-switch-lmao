@@ -41,6 +41,7 @@ struct Request {
     uint64_t doneNs;
     bool shared = false;  // the files window's, else the root window's
     bool done = false;
+    bool replay = false;  // the kernel's boot replay read it (switchSdClassOf, switchSdAgeReplay)
 };
 
 enum class Rule {
@@ -86,6 +87,7 @@ struct Arrival {
     uint8_t klass;
     bool write;
     bool shared = false;
+    bool replay = false;
 };
 
 // A synchronize of one window, beginning at `at`.
@@ -99,6 +101,7 @@ struct Result {
     uint64_t uiWorstNs = 0;     // one UI request, queued to done
     uint64_t lowerWorstNs = 0;  // one request of the background, queued to done
     uint64_t worstByClass[4] = {};
+    uint64_t replayWorstNs = 0;  // one boot replay read, queued to done
     uint64_t endNs = 0;
     size_t maxDepth = 0;
     bool ordered = true;      // no read started while an older overlapping write was still queued, and the reverse
@@ -247,7 +250,7 @@ private:
     void enqueue(const Arrival &a, bool ui)
     {
         storage.push_back({nullptr, a.lba, a.sectors, a.klass, a.write, false, now, static_cast<int>(storage.size()),
-                           ui, 0, a.shared});
+                           ui, 0, a.shared, false, a.replay});
         Request *r = &storage.back();
         (tail ? tail->next : head) = r;
         tail = r;
@@ -323,6 +326,8 @@ private:
         if (!r->ui) {
             result.lowerWorstNs = std::max(result.lowerWorstNs, latency);
             result.worstByClass[r->klass] = std::max(result.worstByClass[r->klass], latency);
+            if (r->replay)
+                result.replayWorstNs = std::max(result.replayWorstNs, latency);
             return;
         }
         result.uiWorstNs = std::max(result.uiWorstNs, latency);
@@ -395,6 +400,7 @@ private:
         } else {
             uint64_t awaitedBeforeNs[2];
             awaited(awaitedBeforeNs);
+            switchSdAgeReplay(head, now, queuedReads);
             const SwitchSdPicked<Request> picked = switchSdPick(head, awaitedBeforeNs, now, &state);
             first = picked.first;
             prev = picked.prev;

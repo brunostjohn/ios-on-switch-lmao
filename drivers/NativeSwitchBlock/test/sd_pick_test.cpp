@@ -115,7 +115,7 @@ TEST(SdPick, BootReplayRanksBelowTierZeroDemand)
         std::vector<Arrival> out;
         for (int i = 0; i < 300; ++i)
             out.push_back({i < 3 ? 0 : static_cast<uint64_t>(i - 2) * 5700 * kUs,
-                           80000000 + static_cast<uint64_t>(i) * stride, 1024, klass, false});
+                           80000000 + static_cast<uint64_t>(i) * stride, 1024, klass, false, false, true});
         return out;
     };
     EXPECT_EQ(switchSdClassOf(0, false), 0u);
@@ -130,6 +130,34 @@ TEST(SdPick, BootReplayRanksBelowTierZeroDemand)
     const Result mergedAfter = run(Rule::kNew, replay(switchSdClassOf(0, true), 1024));
     report("boot replay of one file, below tier 0", mergedBefore, mergedAfter);
     EXPECT_LE(mergedAfter.uiTotalNs, mergedBefore.uiTotalNs);  // 342.6 -> 336.9 ms
+}
+
+// Other processes' tier-0 page-ins keep the card about 87% busy (16 KiB every 0.85 ms) while the replay reads 512 KiB
+// every 40 ms (25.3 ms worst in class 0). One class lower,
+// a replay read waits for the share turn, and a UI thread sleeping on one of its busy pages waits with it: XNU's
+// busy-page raise is not yet seen reaching the card. After kSwitchSdReplayAgeNs it goes back to class 0, so it waits
+// at most about that much longer than it did in class 0.
+TEST(SdPick, AReplayReadWaitsNoLongerThanItsAgeBehindTierZero)
+{
+    const auto load = [](uint8_t klass, bool replay) {
+        std::vector<Arrival> out;
+        for (int i = 0; i < 12; ++i)
+            out.push_back({static_cast<uint64_t>(i) * 40 * kMs, 80000000 + static_cast<uint64_t>(i) * 8192, 1024, klass,
+                           false, false, replay});
+        for (int i = 0; i < 560; ++i)
+            out.push_back(
+                {static_cast<uint64_t>(i) * 850 * kUs, 30000000 + static_cast<uint64_t>(i) * 977, 32, 0, false});
+        return out;
+    };
+    const Result tierZero = run(Rule::kNew, load(0, true));
+    const Result aged = run(Rule::kNew, load(switchSdClassOf(0, true), true));
+    const Result unaged = run(Rule::kNew, load(switchSdClassOf(0, true), false));
+    std::printf("replay beside a near-full tier-0 load: worst replay read %.1f ms in class 0, %.1f ms one class lower "
+                "with the "
+                "age, %.1f ms without\n",
+                tierZero.replayWorstNs / 1e6, aged.replayWorstNs / 1e6, unaged.worstByClass[1] / 1e6);
+    EXPECT_LE(aged.replayWorstNs, tierZero.replayWorstNs + kSwitchSdReplayAgeNs + 12 * kMs);
+    EXPECT_GT(unaged.worstByClass[1], aged.replayWorstNs + kSwitchSdReplayAgeNs);
 }
 
 // A synchronize waiting for writes makes them rank with tier-0 reads: its writes are not passed, at tier 0 or at

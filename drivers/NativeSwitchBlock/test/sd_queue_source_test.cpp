@@ -96,6 +96,9 @@ TEST(SdQueueSource, ReplayReadsAreKnownByTheKernelsReplayThread)
     EXPECT_THAT(io, HasSubstr("switch_vm_prefetch_is_replay_thread(current_thread())"));
     EXPECT_THAT(io, HasSubstr("switchSdClassOf(static_cast<uint8_t>(priority >> 6), replay)"));
     EXPECT_LT(Index(io, "switchSdClassOf("), Index(io, "owner->submit(spec)"));
+    EXPECT_TRUE(Search(io, R"(shared,\s*replay,\s*\*completion,)"));
+    const std::string pick = body("Request *NativeSwitchBlock::pickLocked(");
+    EXPECT_LT(Index(pick, "switchSdAgeReplay(head, pickNs, queuedReads);"), Index(pick, "switchSdPick("));
     EXPECT_THAT(driver(), Not(HasSubstr("gPrefetchThread")));
 }
 

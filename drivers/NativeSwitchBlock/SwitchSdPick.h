@@ -107,13 +107,37 @@ inline SwitchSdPicked<Request> switchSdPick(Request *head, const uint64_t awaite
 }
 
 // The boot replay's reads (the kernel's prefetch thread, kernel/switch/vm/prefetch.c) are tier 0 by policy but read
-// ahead of use: they queue one class below the UI's demand reads. A demand fault on a page a queued replay read holds
-// busy raises that read back (XNU's busy-page raise, doSetPriority), and the share turn keeps the replay moving.
+// ahead of use: they queue one class below the UI's demand reads. A tier-0 thread can still sleep on a page a queued
+// replay read holds busy. XNU's busy-page raise (doSetPriority) is meant to lift that read, but no device or emulator
+// run has shown it reaching the card yet, so a replay read that has waited kSwitchSdReplayAgeNs goes back to tier 0's
+// class (switchSdAgeReplay): the UI waits at most that long behind its own page.
 constexpr uint8_t kSwitchSdReplayClass = 1;
+constexpr uint64_t kSwitchSdReplayAgeNs = 20000000;  // 20 ms
+
+// The kernel's boot replay thread (kernel/switch/vm/prefetch_vm.c), set for the length of the replay. The drivers are
+// linked into the kernel; host tests have no definition and never call it.
+extern "C" bool switch_vm_prefetch_is_replay_thread(void *thread) __attribute__((weak));
 
 inline uint8_t switchSdClassOf(uint8_t asked, bool replay)
 {
     return replay && asked < kSwitchSdReplayClass ? kSwitchSdReplayClass : asked;
+}
+
+// Puts each replay read queued for kSwitchSdReplayAgeNs or more back in class 0, keeping queuedReads in step. Returns
+// how many it moved.
+template <typename Request>
+inline uint32_t switchSdAgeReplay(Request *head, uint64_t now, uint32_t queuedReads[kSwitchSdPickClasses])
+{
+    uint32_t aged = 0;
+    for (Request *r = head; r; r = r->next) {
+        if (!r->replay || !r->klass || now - r->queuedNs < kSwitchSdReplayAgeNs)
+            continue;
+        --queuedReads[r->klass];
+        ++queuedReads[0];
+        r->klass = 0;
+        ++aged;
+    }
+    return aged;
 }
 
 // Raises every queued request overlapping [lba, lba + sectors) to `klass` (never lowers one), keeping queuedReads in
