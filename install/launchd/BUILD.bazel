@@ -1,0 +1,125 @@
+# switch_launchd: iOS 17's launchd catalogue, made on the user's computer byte-equal to the build's.
+#
+#   bazel test //install/launchd:all                    unit tests, the oracle (plistlib and launchd_catalog.py), and
+#                                                       //boot:package's launchd_catalog output group (iOS 17)
+#   bazel test --config=ios27 //install/launchd:all     the same less boot_test: 24B119 pins no launchd catalogue
+#   bazel build //install/launchd:desktop               switch_launchd_tool for the six desktop platforms
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+load("//ipsw:pins.bzl", "IPSWS")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_library(
+    name = "switch_launchd",
+    srcs = glob(["src/**/*.rs"]),
+    crate_root = "src/lib.rs",
+    deps = [
+        "//install/sign:switch_sign",
+        "//install/trustcache:switch_trustcache",
+        "@installer_crates//:hex",
+        "@installer_crates//:plist",
+        "@installer_crates//:sha2",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "switch_launchd_test",
+    crate = ":switch_launchd",
+)
+
+rust_binary(
+    name = "switch_launchd_tool",
+    srcs = ["main.rs"],
+    deps = [":switch_launchd"],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_launchd_tool",
+)
+
+# The jobs boot/defs.bzl's launchd step adds, in its order.
+_JOBS = [
+    "//drivers/SwitchBootstrap:com.brunostjohn.switch.bootstrap.plist",
+    "//drivers/SwitchAppRegistration:com.brunostjohn.switch.bootstrap-apps.plist",
+    "//drivers/NativeSwitchBlock:helper/com.brunostjohn.switch.sdwake.plist",
+]
+
+py_binary(
+    name = "oracle",
+    srcs = [
+        "edits.py",
+        "handmade.py",
+        "oracle.py",
+    ],
+    imports = ["../.."],
+    deps = ["//tools/package:launchd_catalog"],
+)
+
+genrule(
+    name = "oracle_cases",
+    srcs = _JOBS,
+    outs = ["oracle_cases.bin"],
+    cmd = "$(execpath :oracle) $@ $(SRCS)",
+    tools = [":oracle"],
+)
+
+rust_test(
+    name = "oracle_test",
+    srcs = ["tests/oracle_test.rs"],
+    data = [":oracle_cases"],
+    env = {"ORACLE_CASES": "$(rootpath :oracle_cases)"},
+    deps = [":switch_launchd"],
+)
+
+filegroup(
+    name = "boot_launchd_catalog",
+    srcs = ["//boot:package"],
+    output_group = "launchd_catalog",
+)
+
+_CATALOG_KINDS = [kind for kind, ipsw in IPSWS.items() if ipsw.get("derived", {}).get("launchd_catalog_sha256")]
+
+# Only a kind that pins a launchd catalogue has these inputs; @ipsw's alias fails analysis for any other.
+_CATALOG = "@ipsw//:os_launchd_catalog"
+
+_SIGNATURE = "@ipsw//:os_launchd_catalog_signature"
+
+rust_test(
+    name = "boot_test",
+    size = "small",
+    srcs = ["tests/boot_test.rs"],
+    data = _JOBS + [":boot_launchd_catalog"] + select({
+        "//ipsw:" + kind: [
+            _CATALOG,
+            _SIGNATURE,
+        ]
+        for kind in _CATALOG_KINDS
+    } | {"//conditions:default": []}),
+    env = select({
+        "//ipsw:" + kind: {
+            "SWITCH_LAUNCHD_CATALOG": "$(rootpath {})".format(_CATALOG),
+            "SWITCH_LAUNCHD_CATALOG_SHA256": IPSWS[kind]["derived"]["launchd_catalog_sha256"],
+            "SWITCH_LAUNCHD_SIGNATURE": "$(rootpath {})".format(_SIGNATURE),
+            "SWITCH_LAUNCHD_SIGNATURE_SHA256": IPSWS[kind]["derived"]["launchd_catalog_signature_sha256"],
+        }
+        for kind in _CATALOG_KINDS
+    } | {"//conditions:default": {}}) | {
+        "SWITCH_LAUNCHD_EXPECTED": "$(rootpaths :boot_launchd_catalog)",
+        "SWITCH_LAUNCHD_JOBS": " ".join(["$(rootpath {})".format(job) for job in _JOBS]),
+    },
+    target_compatible_with = select({
+        "//ipsw:" + kind: []
+        for kind in _CATALOG_KINDS
+    } | {"//conditions:default": ["@platforms//:incompatible"]}),
+    deps = [
+        ":switch_launchd",
+        "@installer_crates//:sha2",
+    ],
+)
