@@ -2328,6 +2328,7 @@ private:
     // `copied`: the copy engine fills or drains it (a shadow), so it compresses only where comp.h proves that safe.
     Texture *backing(std::unique_lock<gm20b::Mutex> &l, DeferredFrees &deferred, const Texture &memoryless,
                      uint32_t tag = 0, bool blockLinear = false, bool compression = true, bool copied = false);
+    Texture *copyScratch(std::unique_lock<gm20b::Mutex> &l, DeferredFrees &deferred, uint64_t bytes, uint32_t tag);
     // The backing backing() last answered the same ask with, taken with no lock while nothing that decides backings has
     // changed since (backingEpoch_); nullptr: ask backing() under lock_. The encoding thread's alone.
     Texture *lastBacking(const Texture &memoryless, uint32_t tag = 0, bool blockLinear = false, bool compression = true,

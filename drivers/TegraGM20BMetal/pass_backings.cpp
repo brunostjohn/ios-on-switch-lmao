@@ -241,6 +241,59 @@ Texture *Device::backing(std::unique_lock<gm20b::Mutex> &l, DeferredFrees &defer
     return asked(view);
 }
 
+Texture *Device::copyScratch(std::unique_lock<gm20b::Mutex> &l, DeferredFrees &deferred, uint64_t bytes, uint32_t tag)
+{
+    if (!bytes)
+        return nullptr;
+    const uint64_t want = sizeClassBytes(bytes, kBlAlign);
+    PlainMem *mem = largestPlain(tag, kPlainPool, false);
+    if (!mem || mem->span.bytes < bytes) {
+        auto made = std::make_unique<PlainMem>();
+        made->tag = tag;
+        made->memory = kPlainPool;
+        made->layered = false;
+        made->align = kBlAlign;
+        if (!poolAlloc(l, want, made->span))
+            return nullptr;
+        PlainMem *existing = largestPlain(tag, kPlainPool, false);
+        if (existing && existing->span.bytes >= bytes) {
+            freePlainSpan(*made, deferred);
+            mem = existing;
+        } else {
+            SWITCH_METAL_DIAGNOSTIC(stats.backingBytes += made->span.bytes);
+            SWITCH_METAL_DIAGNOSTIC(glassMemEvent("copy scratch plain memory made", made->span.bytes));
+            plainMems_.push_back(std::move(made));
+            mem = plainMems_.back().get();
+            for (Backing *b : backings_)
+                if (b->plain && b->plain != mem && b->plain->holds(tag, kPlainPool, false))
+                    b->retired = true;
+            backingsChanged();
+            compRearm_ = true;
+            compStart();
+        }
+    }
+    for (Backing *b : backings_) {
+        if (!b->retired && b->tag == tag && b->plain == mem) {
+            b->lastCommit.store(commitCount_, std::memory_order_relaxed);
+            b->lastClosed.store(closedCount_, std::memory_order_relaxed);
+            return &b->texture;
+        }
+    }
+    auto *b = new Backing;
+    b->texture.va = mem->span.va;
+    b->texture.storage = {mem->span.va, mem->span.bytes, false};
+    b->texture.cpu = mem->span.cpu;
+    b->tag = tag;
+    b->plain = mem;
+    b->usedNs = compClock();
+    b->lastCommit.store(commitCount_, std::memory_order_relaxed);
+    b->lastClosed.store(closedCount_, std::memory_order_relaxed);
+    mem->views++;
+    SWITCH_METAL_DIAGNOSTIC(stats.backings++);
+    backings_.push_back(b);
+    return &b->texture;
+}
+
 #if SWITCH_METAL_DIAGNOSTICS
 void Device::reclaimIdleNow()
 {

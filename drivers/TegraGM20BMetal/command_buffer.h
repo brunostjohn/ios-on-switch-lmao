@@ -81,6 +81,7 @@ public:
     // texels through, a format stand-in's target (format_standin.h); null where none can be had
     Texture *turnScratch(uint32_t format, uint32_t width, uint32_t height, uint32_t tag, uint32_t samples = 1,
                          uint32_t layers = 1);
+    Texture *copyScratch(uint64_t bytes);
     // stencil_bits.h: `src`'s stencil drawn into `e`'s zeta of `format` (its stencil cleared to 0 at the pass's start, or
     // `zeroFirst`: zeroed by a draw where `map`'s source rectangle reaches, the rest kept), each pixel's from `src`'s texel at
     // `map` or its `pick` sample; `view` the stencil header's texture, read until e's end()

@@ -282,6 +282,20 @@ uint64_t CommandBuffer::transient(uint32_t bytes)
     return va;
 }
 
+Texture *CommandBuffer::copyScratch(uint64_t bytes)
+{
+    Device::DeferredFrees deferred(*dev_);
+    std::unique_lock<gm20b::Mutex> l(dev_->lock_);
+    Texture *b = dev_->copyScratch(l, deferred, bytes, kCopyOverlapTag);
+    l.unlock();
+    if (!b)
+        return nullptr;
+    if (std::find(backings_.begin(), backings_.end(), b) == backings_.end())
+        backings_.push_back(b);
+    use(*b, true);
+    return b;
+}
+
 std::shared_ptr<ResourceReadyCompletion> CommandBuffer::resourceReadiness(std::function<void()> ready, int &result)
 {
     auto events = dev_->k_.sharedEvents();

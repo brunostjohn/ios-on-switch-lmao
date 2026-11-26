@@ -11,6 +11,7 @@
 #include "fx/fx_mip_probe.h"
 #include "fx/fx_mip_route.h"
 #include "attachment_target.h"
+#include "blit_overlap.h"
 #include "blit_planes.h"
 #include "fill_record.h"
 #include "mip.h"
@@ -37,6 +38,110 @@ static const void *memoryOf(SwitchMetalBuffer *b)
     return (__bridge const void *)b;
 }
 
+// A copy side's z (gm20b::BlitEncoder): an array's or cube's layer, else a 3D texture's plane
+static uint32_t layerOrPlane(const gm20b::Texture &t, uint32_t slice, uint32_t z)
+{
+    return t.layers > 1 ? slice : z;
+}
+
+// Single sentinel for kCopyOverlapTag's shared staging memory across all sizes so access() orders reuse.
+static const uint8_t kOverlapStageKey = 0;
+
+static bool failNoOverlapStage(const char **why)
+{
+    *why = "no staging memory for an overlapping texture copy";
+    return false;
+}
+
+static bool encodeTextureTexels(gm20b::CommandBuffer *rc, gm20b::BlitEncoder *be, const void *srcKey,
+                                const void *dstKey, const gm20b::Texture &fromLevel, const gm20b::Texture &toLevel,
+                                uint32_t ss, uint32_t ds, uint32_t ex, uint32_t ey, uint32_t sz, uint32_t fx,
+                                uint32_t fy, uint32_t dz, uint32_t ew, uint32_t eh, uint32_t planes, uint8_t aspect,
+                                bool anyOverlap, const gm20b::ArenaStorage *sArena, const gm20b::ArenaStorage *dArena,
+                                const char **why)
+{
+    const gm20b::VolumeOverlap volOverlap =
+        planes > 1 && fromLevel.layers <= 1 && toLevel.layers <= 1
+            ? gm20b::volumePlanesOverlap(fromLevel, ex, ey, sz, toLevel, fx, fy, dz, ew, eh, planes, sArena, dArena)
+            : gm20b::VolumeOverlap::None;
+    if (volOverlap == gm20b::VolumeOverlap::StageAll) {
+        uint32_t stagePitch = 0;
+        uint64_t planeBytes = 0, totalBytes = 0;
+        gm20b::Texture *scratch =
+            gm20b::overlapStageLayout(ew, eh, fromLevel.bpp, planes, stagePitch, planeBytes, totalBytes)
+                ? rc->copyScratch(totalBytes)
+                : nullptr;
+        if (!scratch)
+            return failNoOverlapStage(why);
+        be->access(srcKey, &kOverlapStageKey);
+        for (uint32_t k = 0; k < planes; k++) {
+            const gm20b::Texture stage =
+                gm20b::makeOverlapStage(*scratch, k * planeBytes, ew, eh, fromLevel.bpp, stagePitch);
+            if (!be->copyTexels(fromLevel, ex, ey, sz + k, stage, 0, 0, 0, ew, eh, gm20b::kAspectWhole))
+                return failNoOverlapStage(why);
+        }
+        be->access(&kOverlapStageKey, dstKey);
+        for (uint32_t k = 0; k < planes; k++) {
+            const gm20b::Texture stage =
+                gm20b::makeOverlapStage(*scratch, k * planeBytes, ew, eh, fromLevel.bpp, stagePitch);
+            if (!be->copyTexels(stage, 0, 0, 0, toLevel, fx, fy, dz + k, ew, eh, aspect))
+                return failNoOverlapStage(why);
+        }
+        return true;
+    }
+    if (volOverlap == gm20b::VolumeOverlap::Reverse || volOverlap == gm20b::VolumeOverlap::Forward) {
+        const bool reverse = volOverlap == gm20b::VolumeOverlap::Reverse;
+        be->access(srcKey, dstKey);
+        for (uint32_t i = 0; i < planes; i++) {
+            if (i)
+                be->barrier();
+            const uint32_t k = reverse ? planes - 1 - i : i;
+            if (!be->copyTexels(fromLevel, ex, ey, sz + k, toLevel, fx, fy, dz + k, ew, eh, aspect))
+                return failNoOverlapStage(why);
+        }
+        return true;
+    }
+    if (anyOverlap) {
+        uint32_t stagePitch = 0;
+        uint64_t planeBytes = 0, totalBytes = 0;
+        gm20b::Texture *scratch =
+            gm20b::overlapStageLayout(ew, eh, fromLevel.bpp, 1, stagePitch, planeBytes, totalBytes)
+                ? rc->copyScratch(totalBytes)
+                : nullptr;
+        if (!scratch)
+            return failNoOverlapStage(why);
+        const gm20b::Texture stage = gm20b::makeOverlapStage(*scratch, 0, ew, eh, fromLevel.bpp, stagePitch);
+        for (uint32_t k = 0; k < planes; k++) {
+            const uint32_t from = layerOrPlane(fromLevel, ss, sz + k), to = layerOrPlane(toLevel, ds, dz + k);
+            const gm20b::CopyOverlap ov = gm20b::copySideOverlap(gm20b::copySideOf(fromLevel, ex, ey, from),
+                                                                 gm20b::copySideOf(toLevel, fx, fy, to), ew, eh,
+                                                                 fromLevel.bpp, toLevel.bpp, true, sArena, dArena);
+            if (ov == gm20b::CopyOverlap::Identity)
+                continue;
+            if (ov == gm20b::CopyOverlap::Overlap) {
+                be->access(srcKey, &kOverlapStageKey);
+                if (!be->copyTexels(fromLevel, ex, ey, from, stage, 0, 0, 0, ew, eh, gm20b::kAspectWhole))
+                    return failNoOverlapStage(why);
+                be->access(&kOverlapStageKey, dstKey);
+                if (!be->copyTexels(stage, 0, 0, 0, toLevel, fx, fy, to, ew, eh, aspect))
+                    return failNoOverlapStage(why);
+            } else {
+                be->access(srcKey, dstKey);
+                if (!be->copyTexels(fromLevel, ex, ey, from, toLevel, fx, fy, to, ew, eh, aspect))
+                    return failNoOverlapStage(why);
+            }
+        }
+        return true;
+    }
+    be->access(srcKey, dstKey);
+    for (uint32_t k = 0; k < planes; k++) {
+        const uint32_t from = layerOrPlane(fromLevel, ss, sz + k), to = layerOrPlane(toLevel, ds, dz + k);
+        if (!be->copyTexels(fromLevel, ex, ey, from, toLevel, fx, fy, to, ew, eh, aspect))
+            return failNoOverlapStage(why);
+    }
+    return true;
+}
+
 // The copy engine's copies of those rows into or out of plane z: one copy of every row where they lie a pitch apart, else one
 // per row
 static void copyRows(gm20b::BlitEncoder *be, uint64_t bufferVa, const BufferRows &r, uint64_t offset,
@@ -50,12 +155,6 @@ static void copyRows(gm20b::BlitEncoder *be, uint64_t bufferVa, const BufferRows
     for (uint32_t k = 0; k < h; k++)
         be->copyBufferTexels(bufferVa + bufferRow(r, offset, bytesPerRow, k), w * gm20b::bufferUnit(t, aspect), t, x,
                              y + k, z, w, 1, intoTexture, aspect);
-}
-
-// A copy side's z (gm20b::BlitEncoder): an array's or cube's layer, else a 3D texture's plane
-static uint32_t layerOrPlane(const gm20b::Texture &t, uint32_t slice, uint32_t z)
-{
-    return t.layers > 1 ? slice : z;
 }
 
 // A buffer<->texture copy of `planes` planes from plane z, `image` bytes apart in the buffer (each plane's rows decided at
@@ -217,22 +316,28 @@ bool encodeBlit(SwitchMetalCommandBuffer *cb, const Cmd &c, gm20b::CommandBuffer
     switch (c.op) {
     case OpCopyTexture: {
         SwitchMetalTexture *s = (__bridge SwitchMetalTexture *)c.obj, *t = (__bridge SwitchMetalTexture *)c.obj2;
-        useTexture(rc, s, false);
-        useTexture(rc, t, true);
-        be->access(memoryOf(s), memoryOf(t));
-        if (!fresh.empty())
-            fresh.erase(t);
-        standInFresh.erase(t);
         const uint64_t x = c.x, o = extra(cb, x + 10), sl = extra(cb, x + 1), dl = extra(cb, x + 9);
         const uint32_t sx = uint32_t(extra(cb, x + 2)), sy = uint32_t(extra(cb, x + 3)),
                        sz = uint32_t(extra(cb, x + 4)), w = uint32_t(extra(cb, x + 5)), h = uint32_t(extra(cb, x + 6)),
                        d = uint32_t(extra(cb, x + 7)), dx = uint32_t(o), dy = uint32_t(o >> 32),
                        dz = uint32_t(extra(cb, x + 11)), ss = uint32_t(extra(cb, x)), ds = uint32_t(extra(cb, x + 8));
         if (c.a == kCopyXrPlanes) {
+            useTexture(rc, s, false);
+            useTexture(rc, t, true);
+            be->access(memoryOf(s), memoryOf(t));
+            if (!fresh.empty())
+                fresh.erase(t);
+            standInFresh.erase(t);
             copyXrPlanes(be, s, ss, sx, sy, t, ds, dx, dy, w, h);
             break;
         }
         if (gm20bFamilyOwner(t)) {
+            useTexture(rc, s, false);
+            useTexture(rc, t, true);
+            be->access(memoryOf(s), memoryOf(t));
+            if (!fresh.empty())
+                fresh.erase(t);
+            standInFresh.erase(t);
             const uint32_t from[3] = {sx, sy, sz}, to[3] = {dx, dy, dz}, size[3] = {w, h, d};
             if (!gm20bEncodeFamilyTextureCopy(rc, cb, be, s, ss, uint32_t(sl), from, t, ds, uint32_t(dl), to, size,
                                               why))
@@ -240,10 +345,22 @@ bool encodeBlit(SwitchMetalCommandBuffer *cb, const Cmd &c, gm20b::CommandBuffer
             break;
         }
         if (c.a == kCopyPlanes) {
+            useTexture(rc, s, false);
+            useTexture(rc, t, true);
+            be->access(memoryOf(s), memoryOf(t));
+            if (!fresh.empty())
+                fresh.erase(t);
+            standInFresh.erase(t);
             copyPlanePair(be, s->_raw, sx, sy, t->_raw, dx, dy, w, h);
             break;
         }
         if (c.a == kCopyPlaneBytes) {
+            useTexture(rc, s, false);
+            useTexture(rc, t, true);
+            be->access(memoryOf(s), memoryOf(t));
+            if (!fresh.empty())
+                fresh.erase(t);
+            standInFresh.erase(t);
             copyPlaneBytes(be, s, uint32_t(sl), ss, sx, sy, sz, t, uint32_t(dl), ds, dx, dy, dz, w, h);
             if (!gm20b::heldInPlanes(t->_raw))
                 copyToCallerPages(be, rc, t);
@@ -272,18 +389,57 @@ bool encodeBlit(SwitchMetalCommandBuffer *cb, const Cmd &c, gm20b::CommandBuffer
             fx <<= gx;
             fy <<= gy;
         }
+        const uint32_t planes = std::max(d, 1u);
         const bool out = c.a == kCopyStencilOut;
-        const gm20b::Texture &zeta = out ? fromLevel : toLevel, &bytes = out ? toLevel : fromLevel;
-        for (uint32_t k = 0; k < std::max(d, 1u); k++) {
-            const uint32_t from = layerOrPlane(fromLevel, ss, sz + k), to = layerOrPlane(t->_raw, ds, dz + k);
-            if (out || c.a == kCopyStencilIn)
+        if (out || c.a == kCopyStencilIn) {
+            useTexture(rc, s, false);
+            useTexture(rc, t, true);
+            be->access(memoryOf(s), memoryOf(t));
+            if (!fresh.empty())
+                fresh.erase(t);
+            standInFresh.erase(t);
+            const gm20b::Texture &zeta = out ? fromLevel : toLevel, &bytes = out ? toLevel : fromLevel;
+            for (uint32_t k = 0; k < planes; k++) {
+                const uint32_t from = layerOrPlane(fromLevel, ss, sz + k), to = layerOrPlane(toLevel, ds, dz + k);
                 be->copyStencilTexels(zeta, out ? ex : fx, out ? ey : fy, out ? from : to, bytes, out ? fx : ex,
                                       out ? fy : ey, out ? to : from, ew, eh, !out);
-            else
-                be->copyTexels(fromLevel, ex, ey, from, toLevel, fx, fy, to, ew, eh, uint8_t(c.a));
+            }
+            copyToCallerPages(be, rc, t);
+            break;
         }
-        if (gm20bCopyClamps(s, uint32_t(sl), t, uint32_t(dl)) &&
-            !gm20bClampCopiedTexture(rc, be, t, uint32_t(dl), ds, dz, d, dx, dy, w, h, why))
+        const gm20b::ArenaStorage *sArena = fromLevel.storageRange().arena, *dArena = toLevel.storageRange().arena;
+        const bool clamps = gm20bCopyClamps(s, uint32_t(sl), t, uint32_t(dl));
+        bool allIdentity = true, anyOverlap = false;
+        for (uint32_t k = 0; k < planes; k++) {
+            const uint32_t from = layerOrPlane(fromLevel, ss, sz + k), to = layerOrPlane(toLevel, ds, dz + k);
+            const gm20b::CopyOverlap ov = gm20b::copySideOverlap(gm20b::copySideOf(fromLevel, ex, ey, from),
+                                                                 gm20b::copySideOf(toLevel, fx, fy, to), ew, eh,
+                                                                 fromLevel.bpp, toLevel.bpp, true, sArena, dArena);
+            allIdentity &= ov == gm20b::CopyOverlap::Identity;
+            anyOverlap |= ov == gm20b::CopyOverlap::Overlap;
+        }
+        if (allIdentity) {
+            if (!clamps)
+                break;
+            useTexture(rc, t, true);
+            be->access(memoryOf(t), memoryOf(t));
+            if (!fresh.empty())
+                fresh.erase(t);
+            standInFresh.erase(t);
+            if (!gm20bClampCopiedTexture(rc, be, t, uint32_t(dl), ds, dz, d, dx, dy, w, h, why))
+                return false;
+            copyToCallerPages(be, rc, t);
+            break;
+        }
+        useTexture(rc, s, false);
+        useTexture(rc, t, true);
+        if (!fresh.empty())
+            fresh.erase(t);
+        standInFresh.erase(t);
+        if (!encodeTextureTexels(rc, be, memoryOf(s), memoryOf(t), fromLevel, toLevel, ss, ds, ex, ey, sz, fx, fy, dz,
+                                 ew, eh, planes, uint8_t(c.a), anyOverlap, sArena, dArena, why))
+            return false;
+        if (clamps && !gm20bClampCopiedTexture(rc, be, t, uint32_t(dl), ds, dz, d, dx, dy, w, h, why))
             return false;
         copyToCallerPages(be, rc, t);
         break;

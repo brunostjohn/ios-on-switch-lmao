@@ -6434,6 +6434,7 @@ host_test(
         "-Wno-nullability-completeness-on-arrays",
     ],
 ) for name in [
+    "facade_blit_overlap_test",
     "facade_blits_test",
     "facade_copies_test",
     "facade_fills_test",
