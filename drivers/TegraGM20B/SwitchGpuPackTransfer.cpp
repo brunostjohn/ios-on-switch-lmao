@@ -348,6 +348,8 @@ bool prefetchRange(vnode_t vp, uint64_t offset, uint64_t bytes, uint64_t fileSiz
 	uint64_t at = offset & ~uint64_t(PAGE_SIZE - 1);
 	const uint64_t end = (offset + bytes + PAGE_SIZE - 1) & ~uint64_t(PAGE_SIZE - 1);
 	for (; at < end && at < fileSize; at += kSwitchGpuPackTransferBytes) {
+		if (switch_gpu_pack_shutdown_requested())
+			return false;
 		const uint64_t length = end - at < kSwitchGpuPackTransferBytes
 						? end - at
 						: kSwitchGpuPackTransferBytes;
@@ -384,7 +386,7 @@ bool switch_gpu_pack_prefetch_tables(vnode_t vp, const SwitchGpuPackHeader &hdr,
 	// PackSegmentTable: pipelineCount, variantComboCount, wordsOffset, wordsBytes (the words in the heap's tier 0)
 	uint32_t table[4] = {};
 	const SwitchGpuPackSection &segments = hdr.section[kSwitchGpuPackSegments];
-	if (segments.bytes >= sizeof table &&
+	if (segments.bytes >= sizeof table && !switch_gpu_pack_shutdown_requested() &&
 	    switch_gpu_pack_read_exact(vp, table, sizeof table, off_t(segments.offset), ctx) == 0 &&
 	    table[3] && uint64_t(table[2]) + table[3] <= hdr.tier0[kSwitchGpuPackHeap])
 		ok = prefetchRange(vp, hdr.section[kSwitchGpuPackHeap].offset + table[2], table[3],

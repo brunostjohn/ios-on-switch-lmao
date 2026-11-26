@@ -5,6 +5,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -129,6 +130,9 @@ struct Model {
 	bool callPaused = false, releaseCall = false;
 	uint32_t fenceWords[64] = {};
 	std::vector<std::string> recovered;
+	// holdRecovery: recovery waits up to 200 ms for shutdownReturned, then notes whether it ran after
+	// switch_gpu_pack_shutdown returned
+	bool holdRecovery = false, shutdownReturned = false, recoveredAfterShutdown = false;
 	// The boot replay's class (switch_vm_prefetch_replay_thread): whether a thread is in it, its marks, and the page-ins
 	// made outside it
 	bool replaying = false;
@@ -175,6 +179,7 @@ struct Model {
 		callPaused = releaseCall = false;
 		std::memset(fenceWords, 0, sizeof(fenceWords));
 		recovered.clear();
+		holdRecovery = shutdownReturned = recoveredAfterShutdown = false;
 		replaying = false;
 		replayMarks = pageinsOutsideReplay = 0;
 		sleepers = 0;
@@ -685,7 +690,12 @@ extern "C" void switch_vm_prefetch_replay_thread(void *, int on)
 
 void tgm_acquire_recover_failed(const char *why)
 {
-	std::lock_guard<std::mutex> g(gModel.mu);
+	std::unique_lock<std::mutex> g(gModel.mu);
+	if (gModel.holdRecovery)
+		gModel.recoveredAfterShutdown =
+			gModel.cv.wait_for(g, std::chrono::milliseconds(200), [] {
+				return gModel.shutdownReturned;
+			});
 	gModel.recovered.push_back(why);
 }
 

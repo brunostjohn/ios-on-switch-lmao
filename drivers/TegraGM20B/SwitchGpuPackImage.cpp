@@ -236,9 +236,7 @@ void buildThread(void *, wait_result_t)
 			++gPack.refusedCount;
 #endif
 	}
-	gPack.buildActive = false;
 	IOLockWakeup(lock, &gPack.state, false);
-	IOLockWakeup(lock, &gPack.buildActive, false);
 	IOLockUnlock(lock);
 	if (!streamed) {
 		if (!shuttingDown)
@@ -246,8 +244,13 @@ void buildThread(void *, wait_result_t)
 			      "(%s, err %d): the work "
 			      "waiting on it fails\n",
 			      *frontier, gPack.chunks, why ? why : "stream failed", err);
+		// While buildActive holds shutdown's wait, so no channel is recovered after the GPU's power-off began
 		tgm_acquire_recover_failed("the pack image's stream stopped");
 	}
+	IOLockLock(lock);
+	gPack.buildActive = false;
+	IOLockWakeup(lock, &gPack.buildActive, false);
+	IOLockUnlock(lock);
 #if TGM_STATS
 	const uint64_t endNs = switch_gpu_pack_now_ns();
 	const uint64_t gatedNs = __atomic_load_n(&gGatedFirstNs, __ATOMIC_ACQUIRE);

@@ -4,6 +4,7 @@
 // stream raises. A stream that stops fails that work and refuses what follows: the GPU never runs a page it did not
 // write.
 #include "gm20b_pack_image_model.h"
+#include "drivers/TegraGM20B/SwitchGpuPackTransfer.h"
 
 namespace
 {
@@ -111,6 +112,77 @@ TEST_F(PackImageTest, TheBuildReadsInTheBootReplaysClass)
 	EXPECT_EQ(gModel.pageinsOutsideReplay, 0u) << "page-ins outside the replay's class";
 	EXPECT_EQ(gModel.replayMarks, 2u);
 	EXPECT_FALSE(gModel.replaying) << "the build left its thread in the replay's class";
+}
+
+// Shutdown's wait lasts one read: the table pre-read stops at the read after the flag, as the heap stream does
+TEST_F(PackImageTest, AShutdownDuringTheTableReadsStopsAtTheNextRead)
+{
+	gModel.fileBytes = makePackFile(kChunks * kSwitchGpuPackTransferBytes, 0);
+	gModel.pauseFirstPagein = true;
+	SwitchGpuPackImageView view = {};
+	auto open = std::async(std::launch::async, [&view] {
+		return switch_gpu_pack_image_acquire("boot", &view, nullptr);
+	});
+	{
+		std::unique_lock<std::mutex> g(gModel.mu);
+		gModel.cv.wait(g, [] {
+			return gModel.firstPageinEntered;
+		});
+	}
+	auto shutdown = std::async(std::launch::async, [] {
+		switch_gpu_pack_shutdown();
+	});
+	while (!switch_gpu_pack_shutdown_requested())
+		std::this_thread::yield();
+	{
+		std::lock_guard<std::mutex> g(gModel.mu);
+		gModel.releaseFirstPagein = true;
+		gModel.cv.notify_all();
+	}
+	shutdown.get();
+	ASSERT_EQ(open.get(), kIOReturnSuccess);
+	EXPECT_FALSE(view.ready);
+	gModel.joinThreads();
+	EXPECT_EQ(gModel.pageinCalls, 1u) << "table reads after the shutdown flag";
+	EXPECT_EQ(gModel.heapPageins, 0u);
+}
+
+// A stream that shutdown stops recovers its parked channels inside shutdown's wait, never after it returned
+TEST_F(PackImageTest, AShutdownMidStreamRecoversItsWaitersBeforeShutdownReturns)
+{
+	gModel.fileBytes = makePackFile(kChunks * kSwitchGpuPackTransferBytes, 0);
+	gModel.pauseHeapPagein = 2;
+	gModel.holdRecovery = true;
+	SwitchGpuPackImageView view = {};
+	ASSERT_EQ(switch_gpu_pack_image_acquire("backboardd", &view, nullptr), kIOReturnSuccess);
+	ASSERT_TRUE(view.ready);
+	{
+		std::unique_lock<std::mutex> g(gModel.mu);
+		gModel.cv.wait(g, [] {
+			return gModel.callPaused;
+		});
+	}
+	auto shutdown = std::async(std::launch::async, [] {
+		switch_gpu_pack_shutdown();
+	});
+	while (!switch_gpu_pack_shutdown_requested())
+		std::this_thread::yield();
+	{
+		std::lock_guard<std::mutex> g(gModel.mu);
+		gModel.releaseCall = true;
+		gModel.cv.notify_all();
+	}
+	shutdown.get();
+	{
+		std::lock_guard<std::mutex> g(gModel.mu);
+		gModel.shutdownReturned = true;
+		gModel.cv.notify_all();
+	}
+	gModel.joinThreads();
+	ASSERT_EQ(gModel.recovered.size(), 1u);
+	EXPECT_FALSE(gModel.recoveredAfterShutdown)
+		<< "channels recovered after shutdown's wait returned";
+	EXPECT_LT(frontier(), kChunks) << "the stream went on after the shutdown flag";
 }
 
 TEST_F(PackImageTest, JobsOfAMappedConnectionWaitAndTheHangRuleFailsAStoppedWord)
