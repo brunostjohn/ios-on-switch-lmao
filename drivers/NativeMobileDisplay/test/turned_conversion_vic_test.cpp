@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "../NativePlanes.h"
+#include "../../TegraVIC/SwitchNativeVICImage.h"
+#include "../../TegraVIC/TegraVICRequest.h"
 #include "../../TegraVIC/test/TegraVICProbe.h"
 #include "../../TegraVIC/test/vic_model.h"
 
@@ -135,5 +137,94 @@ TEST(ScreenConversionVic, ADownscaledTurnIsWithinVICsBounds)
                 if (HasFatalFailure())
                     return;
             }
+}
+
+// YUV sources through VIC's builder, as the conversion job builds them: NV12 and NV16 rows, and a decoder's NV12 in
+// its blocks from its crop. Every word, 1/6 to 4x, whole and cut by each screen edge. A refusal drops the overlay.
+TEST(TurnedConversionVic, EveryYuvShapeBuilds)
+{
+    constexpr uint32_t kWidth = 1920, kHeight = 1080, kRow = 2048, kScreenW = 720, kScreenH = 1280;
+
+    struct Source {
+        const char *name;
+        uint32_t fourcc;
+        bool decoder;
+    };
+
+    static constexpr Source kSources[] = {{"nv12", TEGRA_VIC_FOURCC('4', '2', '0', 'v'), false},
+                                          {"nv16", TEGRA_VIC_FOURCC('4', '2', '2', 'v'), false},
+                                          {"decoder", TEGRA_VIC_FOURCC('4', '2', '0', 'v'), true}};
+
+    struct Scale {
+        uint32_t num, den;
+    };
+
+    static constexpr Scale kScales[] = {{1, 6}, {1, 4}, {1, 2}, {1, 1}, {2, 1}, {4, 1}};
+    unsigned built = 0;
+    for (const Source &source : kSources) {
+        TegraVICImage input = {};
+        uint32_t cropX = 0, cropY = 0;
+        if (source.decoder) {
+            SwitchNativeSurfaceView view = {};
+            view.layout.format = source.fourcc;
+            view.layout.plane_count = 2;
+            view.layout.color_matrix = 2;
+            view.layout.planes[0] = {0, uint64_t(kRow) * 1152, 1936, 1152, kRow, 1, SWITCH_GPU_BACKING_BLOCK_LINEAR, 4};
+            view.layout.planes[1] = {
+                uint64_t(kRow) * 1152, uint64_t(kRow) * 640, 968, 640, kRow, 2, SWITCH_GPU_BACKING_BLOCK_LINEAR, 4};
+            view.crop = {16, 8, kWidth, kHeight};
+            ASSERT_EQ(switch_native_vic_image(view, 0x10000000, &input), nullptr);
+            cropX = 16;
+            cropY = 8;
+        } else {
+            TegraVICSurfaceDesc desc = {};
+            desc.fourcc = source.fourcc;
+            desc.width = kWidth;
+            desc.height = kHeight;
+            desc.planes = 2;
+            desc.planeBytesPerRow[0] = desc.planeBytesPerRow[1] = kRow;
+            desc.planeHeight[0] = kHeight;
+            desc.planeHeight[1] = source.fourcc == TEGRA_VIC_FOURCC('4', '2', '0', 'v') ? kHeight / 2 : kHeight;
+            desc.planeOffset[1] = uint64_t(kRow) * kHeight;
+            desc.length = desc.planeOffset[1] + uint64_t(kRow) * desc.planeHeight[1];
+            desc.colorMatrix = SWITCH_VIC_MATRIX_709;
+            ASSERT_EQ(tegra_vic_image_from(&desc, 0x10000000, &input), nullptr) << source.name;
+        }
+        for (uint32_t transform = 0; transform != 8; ++transform)
+            for (const Scale scale : kScales) {
+                Layer l;
+                l.kind = kKindNv12Video;
+                l.surface.width = kWidth;
+                l.surface.height = kHeight;
+                l.src = {0, 0, int32_t(kWidth), int32_t(kHeight)};
+                l.transform = transform;
+                const Rect o = turnedRect(l.src, kWidth, kHeight, transform);
+                const int32_t dw = int32_t((uint64_t(o.w) * scale.num + scale.den - 1) / scale.den);
+                const int32_t dh = int32_t((uint64_t(o.h) * scale.num + scale.den - 1) / scale.den);
+                const int32_t places[][2] = {
+                    {0, 0}, {-dw / 3, -dh / 3}, {int32_t(kScreenW) - dw / 2, 300}, {100, int32_t(kScreenH) - dh / 2}};
+                for (const auto &at : places) {
+                    l.dst = {at[0], at[1], dw, dh};
+                    ScreenConversion c;
+                    if (!screenConversionOf(l, kScreenW, kScreenH, c))
+                        continue;
+                    auto output = tegra_vic_probe_bgra(0x20000000, 64ull << 20, uint32_t(c.width), uint32_t(c.height));
+                    output.pitch[0] = (uint32_t(c.width) * 4 + 255) & ~255u;
+                    TegraVICOp op = tegra_vic_probe_op(1, 1, uint32_t(c.width), uint32_t(c.height), transform);
+                    op.nearest = 0;
+                    op.srcX = c.srcX + (uint64_t(cropX) << 16);
+                    op.srcY = c.srcY + (uint64_t(cropY) << 16);
+                    op.srcW = c.srcW;
+                    op.srcH = c.srcH;
+                    TegraVICJob job{};
+                    const char *why =
+                        tegra_vic_build(&input, &output, &op, &kTegraVICTraits, 0x80001000, 0x80002000, &job);
+                    EXPECT_EQ(why, nullptr) << source.name << " word " << transform << " " << scale.num << "/"
+                                            << scale.den << " at " << at[0] << "," << at[1] << ": " << why;
+                    ++built;
+                }
+            }
+    }
+    EXPECT_GT(built, 400u);
 }
 }  // namespace

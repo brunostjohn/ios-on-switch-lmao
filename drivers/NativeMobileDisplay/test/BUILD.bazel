@@ -333,6 +333,12 @@ host_test(
     name = "turned_conversion_vic_test",
     srcs = [
         "turned_conversion_vic_test.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBacking.h",
+        "//drivers/TegraVIC:SwitchNativeSurface.h",
+        "//drivers/TegraVIC:SwitchNativeVICImage.h",
+        "//drivers/TegraVIC:TegraVICRequest.h",
+        "//drivers/TegraVIC:SwitchVICPicture.h",
+        "//drivers/TegraVIC:TegraVICSurface.h",
         "//drivers/NativeMobileDisplay:NativePlanes.h",
         "//drivers/NativeMobileDisplay:NativePlanesTurn.h",
         "//drivers/NativeMobileDisplay:SwitchWindowCaps.h",
@@ -346,6 +352,7 @@ host_test(
         "//drivers/TegraVIC/test:vic_model.h",
         "//drivers/TegraVIC/test:vic_model_color.h",
     ],
+    deps = [":native_scanout_kernel"],
 )
 
 host_test(
