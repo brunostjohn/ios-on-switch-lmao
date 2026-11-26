@@ -16,6 +16,9 @@ final class MCFaultReplyTests: XCTestCase {
         XCTAssertNil(parsed.failure)
         XCTAssertEqual(parsed.taken, 3)
         XCTAssertEqual(MCFaultReply.request, [0x46, 0x43, 0x4D, 0x56, 0, 0, 0, 0])
+        let decerrBytes = reply(intstatus: 0x440, errStatus: 0x6000_006C, address: 0x0800_0000)
+        let withDecerr = try XCTUnwrap(MCFaultReply(decerrBytes))
+        XCTAssertNil(withDecerr.failure)
     }
 
     func testNothingDeliveredOrNotAttachedOrRefusedFails() throws {
@@ -26,7 +29,9 @@ final class MCFaultReplyTests: XCTestCase {
 
     func testAnotherClientKindOrAddressFails() throws {
         XCTAssertNotNil(try XCTUnwrap(MCFaultReply(reply(errStatus: 0x6A00_006D))).failure)
-        XCTAssertNotNil(try XCTUnwrap(MCFaultReply(reply(intstatus: 0x440))).failure)
+        XCTAssertNotNil(try XCTUnwrap(MCFaultReply(reply(intstatus: 0x40, errStatus: 0x6000_006C))).failure)
+        XCTAssertNotNil(try XCTUnwrap(MCFaultReply(reply(intstatus: 0x440, errStatus: 0x2000_006C))).failure)
+        XCTAssertNotNil(try XCTUnwrap(MCFaultReply(reply(intstatus: 0x500))).failure)
         XCTAssertNotNil(try XCTUnwrap(MCFaultReply(reply(address: 0x0801_0000))).failure)
     }
 

@@ -80,14 +80,16 @@ inline const OwnCapture *ownCapture(uint32_t bit)
     return nullptr;
 }
 
-constexpr uint32_t kInvalidSmmuPage = 1u << 10;
+constexpr uint32_t kDecerrEmem = 1u << 6, kInvalidSmmuPage = 1u << 10, kErrTypeInvalidSmmuPage = 6u;
 
-// A deliberate fault's error (TegraSMMU.h switch_mc_errors_expect): an SMMU fault alone, captured for `client` at an
-// address in [low, high) below 4 GiB.
+// A deliberate fault's error (TegraSMMU.h switch_mc_errors_expect): an SMMU fault captured for `client` at an address
+// in [low, high) below 4 GiB. On T210/T210B01 silicon, an unmapped IOVA below EMEM latches DECERR_EMEM alongside
+// INVALID_SMMU_PAGE while MC_ERR_STATUS captures INVALID_SMMU_PAGE (type 6).
 inline bool expected(const Error &e, uint32_t client, uint32_t low, uint32_t high)
 {
-    return e.intstatus == kInvalidSmmuPage && (e.status & 0xff) == client && !((e.status >> 20) & 3) &&
-           e.address >= low && e.address < high;
+    return (e.intstatus == kInvalidSmmuPage || e.intstatus == (kInvalidSmmuPage | kDecerrEmem)) &&
+           ((e.status >> 28) & 7u) == kErrTypeInvalidSmmuPage && (e.status & 0xff) == client &&
+           !((e.status >> 20) & 3) && e.address >= low && e.address < high;
 }
 
 inline void append(char *text, size_t size, size_t &used, const char *format, ...)

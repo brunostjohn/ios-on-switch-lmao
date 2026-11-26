@@ -5,7 +5,9 @@ import Foundation
 public struct MCFaultReply: Sendable, Equatable {
     public static let magic: UInt32 = 0x564D_4346 // 'VMCF'
     public static let size = 32
+    static let decerrEmem: UInt32 = 1 << 6
     static let smmuFault: UInt32 = 1 << 10
+    static let smmuErrType: UInt32 = 6
     static let vicRead: UInt32 = 0x6C
     static let expectedBytes: UInt32 = 0x10000
 
@@ -40,7 +42,9 @@ public struct MCFaultReply: Sendable, Equatable {
         if !attached { return "the MC error interrupt was never attached" }
         if taken == 0 { return "the copy raised no SMMU fault (nothing latched)" }
         let inRange = address >= iova && address - iova < Self.expectedBytes
-        guard intstatus == Self.smmuFault, errStatus & 0xFF == Self.vicRead, inRange else {
+        let kindOk = intstatus == Self.smmuFault || intstatus == (Self.smmuFault | Self.decerrEmem)
+        let errTypeOk = ((errStatus >> 28) & 7) == Self.smmuErrType
+        guard kindOk, errTypeOk, errStatus & 0xFF == Self.vicRead, inRange else {
             return "the first delivered error is not the copy's fault"
         }
         return nil

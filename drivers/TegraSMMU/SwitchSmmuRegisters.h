@@ -129,9 +129,12 @@ int program(Registers &io, const tegra_smmu_attachment &a, char *line, size_t si
             return -1;
         }
     }
+    const uint32_t previous = io.read(a.asidReg);
     io.write(a.asidReg, selection(a));
     const uint32_t selected = io.read(a.asidReg);
     if (selected != selection(a)) {
+        io.write(a.asidReg, previous);
+        (void)io.read(a.asidReg);
         snprintf(line, size, "swgroup ASID did not take (MC %#x = %#x)", a.asidReg, selected);
         return -1;
     }

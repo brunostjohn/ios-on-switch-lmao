@@ -10,6 +10,8 @@ struct Registers {
     std::array<uint32_t, 1024> words{};
     std::vector<std::pair<uint32_t, uint32_t>> writes;
     uint32_t refused = UINT32_MAX;
+    uint32_t maskedOffset = UINT32_MAX;
+    uint32_t writeMask = UINT32_MAX;
 
     uint32_t read(uint32_t offset)
     {
@@ -19,8 +21,11 @@ struct Registers {
     void write(uint32_t offset, uint32_t value)
     {
         writes.emplace_back(offset, value);
-        if (offset != refused)
-            words[offset / 4] = value;
+        if (offset == refused)
+            return;
+        if (offset == maskedOffset)
+            value &= writeMask;
+        words[offset / 4] = value;
     }
 };
 
@@ -212,5 +217,21 @@ TEST_F(SmmuRestore, ADetachParksAnAlwaysTranslatedSwgroupOnTheFaultAsid)
     gpub.alwaysTranslated = true;
     EXPECT_EQ(switch_smmu::parked(gpub, 116), 0xf4747474u);
     EXPECT_EQ(switch_smmu::parked(display, 116), 0u) << "a swgroup that can bypass goes back to bypass";
+}
+
+TEST_F(SmmuRestore, PartialSwgroupReadbackRollsBackToPreviousValue)
+{
+    tegra_smmu_attachment sd = tegra_smmu_attachment_of(113, 0x80002001, 0xa94, 0x234, (1u << 0) | (1u << 4), false);
+    const uint32_t upperAsid[3] = {112, 116, 116};
+    const uint32_t upperPtb[3] = {0x80002002, 0x80002003, 0x80002003};
+    for (uint32_t i = 0; i < 3; ++i) {
+        sd.upperAsid[i] = upperAsid[i];
+        sd.upperPtb[i] = upperPtb[i];
+    }
+    io.words[0x234 / 4] = sd.translationBits;
+    io.maskedOffset = 0xa94;
+    io.writeMask = 0x8000007fu;
+    EXPECT_LT(switch_smmu::program(io, sd, line, sizeof(line)), 0);
+    EXPECT_EQ(io.words[0xa94 / 4], 0u) << "must roll back to bypass rather than leaving translation on";
 }
 }

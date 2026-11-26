@@ -367,6 +367,23 @@ TEST_F(McExpectedFault, IsTakenWithoutAPanicOrALineAndCountedAtTheEnd)
     EXPECT_EQ(tegra_mc_error_latest(&intstatus, &status, &address), before) << "the expected one was not published";
 }
 
+TEST_F(McExpectedFault, DecerrEmemAlongsideSmmuCaptureIsTakenAsExpected)
+{
+    switch_mc_errors_expect(kVicRead, kFaultLow, kFaultHigh);
+    mc(0x0) = 1u << 10 | 1u << 6;
+    mc(0x8) = 0x60000000 | kVicRead;
+    mc(0xc) = kFaultLow;
+    EXPECT_EQ(panicked(), "");
+    EXPECT_EQ(mc(0x0), 0u) << "both INVALID_SMMU_PAGE and DECERR_EMEM are cleared";
+    EXPECT_TRUE(switch_test_lines.empty());
+    switch_mc_expected out;
+    switch_mc_errors_expect_end(100, &out);
+    EXPECT_EQ(out.taken, 1u);
+    EXPECT_EQ(out.intstatus, 1u << 10 | 1u << 6);
+    EXPECT_EQ(out.status, 0x6000006cu);
+    EXPECT_EQ(out.address, kFaultLow);
+}
+
 TEST_F(McExpectedFault, AnyOtherClientOrAddressStillPanics)
 {
     switch_mc_errors_expect(kVicRead, kFaultLow, kFaultHigh);
@@ -374,7 +391,15 @@ TEST_F(McExpectedFault, AnyOtherClientOrAddressStillPanics)
     EXPECT_NE(panicked(), "");
     vicFaultLatched(kVicRead, kFaultHigh);
     EXPECT_NE(panicked(), "");
+    mc(0x0) = 1u << 6;
+    mc(0x8) = 0x6000006c;
+    mc(0xc) = kFaultLow;
+    EXPECT_NE(panicked(), "") << "DECERR_EMEM alone without INVALID_SMMU_PAGE";
     mc(0x0) = 1u << 10 | 1u << 6;
+    mc(0x8) = 0x2000006c;
+    mc(0xc) = kFaultLow;
+    EXPECT_NE(panicked(), "") << "DECERR_EMEM captured instead of INVALID_SMMU_PAGE";
+    mc(0x0) = 1u << 10 | 1u << 8;
     mc(0x8) = 0x6a00006c;
     mc(0xc) = kFaultLow;
     EXPECT_NE(panicked(), "") << "an SMMU fault together with another kind";
