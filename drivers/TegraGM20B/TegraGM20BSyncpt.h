@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Host1x syncpoints from a GM20B channel's push: the host's SYNCPOINTA/SYNCPOINTB methods (cl906f.h; nvgpu
 // channel_sync_syncpt.c gk20a_channel_gen_syncpt_incr_cmd and add_wait_cmd), so the GPU and host1x's engines (VIC,
-// NVDEC, NVENC, NVJPG) order on hardware with no CPU between them. Not yet seen working on the device: the T210 GPU host
-// reaching host1x's syncpoints is what the first run that uses these must show.
+// NVDEC, NVENC, NVJPG) order on hardware with no CPU between them.
 #pragma once
 #include <stdint.h>
 
