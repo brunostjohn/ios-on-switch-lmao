@@ -252,8 +252,13 @@ bool beginRepack(Job *job)
 {
     const TegraNVJPGSignal ended = {jobEngineEnded, job}, repacked = {jobRepackEnded, job};
     const char *why = nullptr;
+#if TEGRA_NVJPG_STATS
+    const bool guardClosed = job->guardProbe;
+#else
+    const bool guardClosed = false;
+#endif
     const int error = tegra_nvjpg_repack_start(&job->repack, &job->engine, &job->plan, &job->request.base, &job->dst,
-                                               job->backing, job->scan->address, &ended, &repacked, &why);
+                                               job->backing, job->scan->address, &ended, &repacked, guardClosed, &why);
     if (!error) {
         job->phase = Job::Phase::OnEngine;
         return true;

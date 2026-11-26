@@ -125,7 +125,7 @@ void queueCeRepack(void *context, uint32_t syncpt, uint32_t fence)
     switch_gpu_cpu_lease *lease = run->access.owned;
     const switch_gpu_copy_ownership ownership = {lease ? &lease : nullptr, lease ? 1u : 0u, &run->access.guard, 1};
     const switch_gpu_event_submission none = {};
-    setGuard(1);
+    setGuard(run->guardClosed ? 0 : 1);
     // One count for the queueing itself, so no plane's completion ends the re-pack while later planes are queued
     __atomic_store_n(&run->pending, 1u, __ATOMIC_RELEASE);
     bool queued = false;
@@ -173,10 +173,11 @@ void vicCancelled(void *context)
 int tegra_nvjpg_repack_start(TegraNVJPGRepackRun *run, TegraNVJPGJob *engine, const TegraNVJPGPlan *plan,
                              const TegraNVJPGDecodeRequest *request, const TegraVICSurface *destination,
                              switch_gpu_backing *backing, uint64_t bitstream, const TegraNVJPGSignal *ended,
-                             const TegraNVJPGSignal *repacked, const char **why)
+                             const TegraNVJPGSignal *repacked, bool guardClosed, const char **why)
 {
     *why = nullptr;
     *run = {};
+    run->guardClosed = guardClosed;
     run->plan = plan;
     run->request = request;
     run->destination = destination;

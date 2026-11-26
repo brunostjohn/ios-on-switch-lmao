@@ -554,6 +554,7 @@ TESTS: dict[str, bool] = {
     'gpu.x1.vic_luma': False,
     'gpu.x1.vic_gamut': False,
     'gpu.x1.vic_tags': False,
+    'image.nvjpg_copy_guard': False,
     'image.nvjpg_tile_probe': False,
     'audio.playback_16k': False,
     'audio.playback_44k': False,

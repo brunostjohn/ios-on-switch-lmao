@@ -80,6 +80,9 @@ constexpr uint32_t kRouteMagic = 0x5050;  // 'PP', as TegraGM20BMethodPaths
 // A selector 7 decode with this at +0xcac, the tile mode at +0xcb0 and the block height code at +0xcb4: HW Test's
 // image.nvjpg_tile_probe (TegraNVJPGRoute.h tegra_nvjpg_route_tile_probe)
 constexpr uint32_t kTileProbeMagic = 0x5054;
+// A selector 7 decode with this at +0xcac: HW Test's image.nvjpg_copy_guard, whose copy-engine re-pack launches with its
+// guard 0 (TegraNVJPGRepack.cpp), as a cancelled decode's does: the destination must stay as it was
+constexpr uint32_t kGuardProbeMagic = 0x5047;
 static_assert(sizeof(TegraNVJPGRouteCounts::routes) / sizeof(uint64_t) == TEGRA_NVJPG_ROUTE_COUNT,
               "a route count for every route");
 #endif
@@ -258,6 +261,7 @@ IOReturn AppleJPEGDriverUserClient::decode(const void *in, uint32_t inSize, void
         memcpy(&job->tileMode, req->v2024.rsvd, sizeof(job->tileMode));
         memcpy(&job->tileGob, req->v2024.rsvd + 4, sizeof(job->tileGob));
     }
+    job->guardProbe = kind == kSelector7 && req->v2024.rsvdcac == kGuardProbeMagic;
 #endif
     const TegraNVJPGDecodeRequest &r = req->base;
     IOReturn ret = kIOReturnSuccess;

@@ -824,6 +824,25 @@ static Job *copyRowsInto(Destination &d, IOMemoryDescriptor &memory)
     return job;
 }
 
+// HW Test's copy-guard probe (image.nvjpg_copy_guard) queues its copy with the guard already 0, as a cancelled decode
+// leaves it; the next decode's guard is open again
+TEST_F(NVJPGUserClient, ACopyGuardProbeQueuesItsCopyClosedAndTheNextDecodeOpen)
+{
+    Destination d(260, 0x9f000000);
+    IOMemoryDescriptor dstMem;
+    Job *probe = copyRowsInto(d, dstMem);
+    probe->guardProbe = true;
+    EXPECT_EQ(engineRuns(probe), kIOReturnIOError) << "the model's engine writes no status";
+    ASSERT_EQ(gCeCopies.size(), 1u);
+    EXPECT_EQ(gCeCopies[0].wait.predicated, 1u);
+    EXPECT_EQ(guardOf(gCeCopies[0]), 0u) << "the probe's copy launches with its guard closed";
+    gCeCopies.clear();
+    EXPECT_EQ(engineRuns(copyRowsInto(d, dstMem)), kIOReturnIOError);
+    ASSERT_EQ(gCeCopies.size(), 1u);
+    EXPECT_EQ(guardOf(gCeCopies[0]), 1u) << "an ordinary decode's copy lands";
+    retire(&d.backing);
+}
+
 // Unaligned destination strides (e.g. stride 2080) decode pitch-linear into the pooled 64B-aligned scratch buffer, then
 // Copy Engine DMA-repacks exact visible rows behind NVJPG's OP_DONE syncpoint with zero CPU pixel copies.
 TEST_F(NVJPGUserClient, UnalignedStrideExecutesViaCopyEngineRepackBehindNVJPGFence)

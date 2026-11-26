@@ -147,7 +147,7 @@ public enum Registry {
             PixelTransfer422Test(),
             PixelTransferRouteTest(),
             VICLumaTest(),
-            VICGamutTest(), VICTagsTest(), NVJPGTileProbeTest(),
+            VICGamutTest(), VICTagsTest(), NVJPGCopyGuardTest(), NVJPGTileProbeTest(),
         ]
 
     static let audio: [any HWTest] = [
