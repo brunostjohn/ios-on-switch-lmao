@@ -92,7 +92,7 @@ public enum Registry {
             ResolveCodesPartsTest(), RtalPastLayersTest(), XrPlanesImagesTest(), Bgra10XrResolveTest(),
             ViewSliceTargetTest(), NoRenderUsageTest(), P3YcbcrStoreSubsampledTest(), PlaneInBlocksTest(),
             Rg8SrgbTargetTest(), TextureBufferTargetTest(), ZetaApartTest(), ZetaResolvePartsTest(),
-            YcbcrNoRenderUsageTest(), MixedSamplesTest(), MixedEndRowsTest(),
+            YcbcrNoRenderUsageTest(), MixedSamplesTest(), MixedMergeProbeTest(), MixedEndRowsTest(),
             SameBitsTest(), Depth16LayeredTestsTest(), LayersPastTest(), LayersPastDepthTest(), TexelBufferReachTest(),
             FetchTessellatedTest(), PlanarRenderThenSampleTest(), XrTexelBufferStoresTest(),
             XrTexelBufferSurfaceTest(), TurnedStandInTargetsTest(), Bgra10XrSrgbEmptyPassTest(), StorageFormsTest(),

@@ -117,9 +117,11 @@ inline void tirOff(Push &p)
 // passes with INVALID_TIR_COMBINATION05 at the first draw of one given a zcull region, and INVALID_VALUE at the pass end's
 // SET_ANTI_ALIAS_RASTER 1X1. A row's word: bit 0 armed; bit 1 a zcull region; bit 2 the region over the zeta's sample
 // grid (2x2 a pixel), not its pixels; bit 3 the region's words after the raster state, not before the clears; bit 4
-// SET_TIR left DISABLED; bits 8-11 the pass end's order (TirEnd); bits 12-15 the raster value TirEnd::Value writes.
+// SET_TIR left DISABLED; bit 5 a four-sample state's draw whole, never split (gpu.gm20b.mixed_merge_probe: whether a
+// sample mask under REDUCE_COVERAGE gives Apple's sample-0 rule in one draw); bits 8-11 the pass end's order (TirEnd);
+// bits 12-15 the raster value TirEnd::Value writes.
 constexpr uint32_t kTirProbeZcull = 1u << 1, kTirProbeSampleGrid = 1u << 2, kTirProbeZcullAfter = 1u << 3,
-                   kTirProbeModeOff = 1u << 4;
+                   kTirProbeModeOff = 1u << 4, kTirProbeWhole = 1u << 5;
 
 enum class TirEnd : uint32_t {
     Mode,            // tirOff: SET_TIR DISABLED, then SET_ANTI_ALIAS_RASTER 1X1

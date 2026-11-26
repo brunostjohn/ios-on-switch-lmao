@@ -393,11 +393,17 @@ private:
         return amplifications_ > 1 && !amplifying_;
     }
 
-    // How the bound state's draw keeps a mixed pass's sample rule (mixed_samples.h)
-    MixedDraw mixedForm() const
+    // How a draw of `pl` keeps a mixed pass's sample rule (mixed_samples.h), whole where HW Test's probe row asks
+    // (kTirProbeWhole)
+    MixedDraw mixedForm(const Pipeline &pl) const
     {
-        return mixedDraw(*emitted_, ds_, pass_.depthStencil, samples_, rasterSamples_,
-                         (alphaWanted_ & kAlphaToCoverage) != 0);
+        const MixedDraw form = mixedDraw(pl, ds_, pass_.depthStencil, samples_, rasterSamples_,
+                                         (alphaWanted_ & kAlphaToCoverage) != 0);
+#if SWITCH_METAL_DIAGNOSTICS
+        if (splitsSamples(form) && (tirProbe_ & kTirProbeWhole))
+            return MixedDraw::Whole;
+#endif
+        return form;
     }
 
     bool runsPerAmplification(uint32_t primitive, uint32_t count, uint32_t instances, bool indexed);

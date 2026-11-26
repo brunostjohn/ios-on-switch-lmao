@@ -148,7 +148,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
     }
     if (!prepare(pl, primitive, first, first, count, false, why))
         return skippedDraw();
-    const MixedDraw mixed = mixedForm();
+    const MixedDraw mixed = mixedForm(*emitted_);
     const bool split = splitsSamples(mixed);
     const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
     // samples 1-3 write no colour: no fetch of a colour they wrote to order, so the plain draw
@@ -418,7 +418,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
         ibEnd_ = last;
         ibSize_ = indexSize;
     }
-    const MixedDraw mixed = mixedForm();
+    const MixedDraw mixed = mixedForm(*emitted_);
     const bool split = splitsSamples(mixed);
     const uint32_t drawnInstances = amplifies() ? instances * amplifications_ : instances;
     const auto laterSamples = [&] {
@@ -532,7 +532,7 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
         mme::indirectHeader(p_, indexed);
     }
     argumentWords();
-    if (const MixedDraw mixed = mixedForm(); splitsSamples(mixed))
+    if (const MixedDraw mixed = mixedForm(*emitted_); splitsSamples(mixed))
         drawLaterSamples(
             p_,
             [this] {
@@ -680,7 +680,7 @@ bool RenderEncoder::executeSlots(const IcbExecute &x, const char **why)
     if (ordered)
         mme::fetchCommands(p_, false);
     // the commands again for samples 1-3, which write no colour: drawn whole, not a primitive at a time
-    if (const MixedDraw mixed = mixedForm(); splitsSamples(mixed))
+    if (const MixedDraw mixed = mixedForm(*emitted_); splitsSamples(mixed))
         drawLaterSamples(
             p_,
             [this] {

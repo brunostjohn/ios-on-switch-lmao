@@ -497,8 +497,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         }
         compatible_ = pl;
     }
-    const MixedDraw mixed =
-        mixedDraw(*pl, ds_, pass_.depthStencil, samples_, rasterSamples_, (alphaWanted_ & kAlphaToCoverage) != 0);
+    const MixedDraw mixed = mixedForm(*pl);
     SWITCH_METAL_DIAGNOSTIC(if (mixed == MixedDraw::Covering) dev_->stats.mixedCovering++;
                             if (mixed == MixedDraw::Split) dev_->stats.mixedStageOff++);
     if (!prepareShaderTests(*pl, why))

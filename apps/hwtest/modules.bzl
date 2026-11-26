@@ -276,6 +276,7 @@ TESTS_DEPTH_SRCS = [
     "tests/LayersPastDepthTest.swift",
     "tests/LayersPastTest.swift",
     "tests/MixedSamplesCases.swift",
+    "tests/MixedMergeProbeTest.swift",
     "tests/MixedSamplesTest.swift",
     "tests/MsaaFirstUseTest.swift",
     "tests/NanClearDepthTest.swift",
