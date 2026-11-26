@@ -13,6 +13,7 @@ load("@rules_rust//rust:toolchain.bzl", "rust_toolchain")
 load("@rules_rust//rust/platform:triple_mappings.bzl", "system_to_stdlib_linkflags")
 load("//bazel/lint:defs.bzl", "lint_files")
 load(":cc_config.bzl", "desktop_cc_toolchain_config")
+load(":defs.bzl", "MACOS_MINIMUM_OS")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -52,13 +53,23 @@ _EXT = {
     },
 }
 
-# lld-link stamps the link time into the PE header unless told to hash the output instead (/Brepro). The CRT's objects
-# name the PDBs of Microsoft's build machines, which are not redistributed (LNK4099 on every link).
+# lld-link stamps the link time into the PE header unless told to hash the output instead (/Brepro). With a PDB, that
+# hash covers the PDB, which names the execroot and rustc's randomly named temp directory, so no two links match. rustc
+# passes /DEBUG whatever -Cstrip says; the later /DEBUG:NONE wins, and the strip level keeps rules_rust from declaring
+# a PDB. The CRT's objects name the PDBs of Microsoft's build machines, which are not redistributed (LNK4099 on every
+# link).
 _MSVC_RUSTC_FLAGS = [
     "-Ctarget-feature=+crt-static",
     "-Clink-arg=/Brepro",
+    "-Clink-arg=/DEBUG:NONE",
     "-Clink-arg=/IGNORE:4099",
 ]
+
+_MSVC_STRIP_LEVEL = {
+    "dbg": "debuginfo",
+    "fastbuild": "debuginfo",
+    "opt": "debuginfo",
+}
 
 [rust_toolchain(
     name = "rust_" + triple,
@@ -87,6 +98,7 @@ _MSVC_RUSTC_FLAGS = [
         "darwin" if os == "osx" else os,
         "msvc" if os == "windows" else None,
     ),
+    strip_level = _MSVC_STRIP_LEVEL if os == "windows" else None,
     target_triple = triple,
     version = "1.98.0",
 ) for triple, os, _ in _RUST_TARGETS]
@@ -184,32 +196,30 @@ _CC_TARGETS = [
     toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
 ) for triple, os, cpu, _ in _CC_TARGETS]
 
-# Build scripts learn the target's features from `rustc --print=cfg --target=<triple>` (cargo_build_script's runner),
-# which ignores the toolchain's -Ctarget-feature=+crt-static, so cc-rs and aws-lc-sys would build Windows objects for the
-# DLL CRT. An env file is the one input the runner applies after its own CARGO_CFG_* values, so the installer's crates
-# take this one in build_script_env_files. The values are rustc 1.98.0's with +crt-static.
-config_setting(
-    name = "windows_x86_64",
-    constraint_values = [
-        "@platforms//os:windows",
-        "@platforms//cpu:x86_64",
-    ],
-)
-
-config_setting(
-    name = "windows_aarch64",
-    constraint_values = [
-        "@platforms//os:windows",
-        "@platforms//cpu:aarch64",
-    ],
-)
+# The env file every installer crate's build script reads (build_script_env_files, install/crates/crates.MODULE.bazel).
+# The runner applies it after its own CARGO_CFG_* values, which come from `rustc --print=cfg --target=<triple>` and
+# ignore the toolchain's -Ctarget-feature=+crt-static, so the Windows lines restore rustc 1.98.0's features with
+# crt-static for cc-rs and aws-lc-sys. aws-lc-sys maps its own source paths only at opt-level 3 and never for clang-cl,
+# so without CFLAGS_<triple> its __FILE__ strings and debug info name the worker's execroot. cc-rs adds CFLAGS_<triple>
+# to the toolchain's CFLAGS, and the runner replaces ${pwd} with the execroot. On macOS cc-rs also gets the binaries'
+# deployment target, which apple_support's CFLAGS carry too.
+_BUILD_SCRIPT_ENV = {
+    "aarch64-apple-darwin": ["MACOSX_DEPLOYMENT_TARGET=" + MACOS_MINIMUM_OS],
+    "aarch64-pc-windows-msvc": ["CARGO_CFG_TARGET_FEATURE=crt-static,neon"],
+    "aarch64-unknown-linux-musl": [],
+    "x86_64-apple-darwin": ["MACOSX_DEPLOYMENT_TARGET=" + MACOS_MINIMUM_OS],
+    "x86_64-pc-windows-msvc": ["CARGO_CFG_TARGET_FEATURE=cmpxchg16b,crt-static,fxsr,sse,sse2,sse3"],
+    "x86_64-unknown-linux-musl": [],
+}
 
 write_file(
     name = "build_script_env",
     out = "build_script.env",
     content = select({
-        ":windows_aarch64": ["CARGO_CFG_TARGET_FEATURE=crt-static,neon"],
-        ":windows_x86_64": ["CARGO_CFG_TARGET_FEATURE=cmpxchg16b,crt-static,fxsr,sse,sse2,sse3"],
-        "//conditions:default": [],
-    }),
+        "//bazel/desktop/triple:" + triple: env + ["CFLAGS_{}={}-ffile-prefix-map=${{pwd}}=.".format(
+            triple.replace("-", "_"),
+            "/clang:" if "windows" in triple else "",
+        )]
+        for triple, env in _BUILD_SCRIPT_ENV.items()
+    } | {"//conditions:default": []}),
 )

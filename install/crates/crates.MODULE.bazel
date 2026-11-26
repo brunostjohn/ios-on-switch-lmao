@@ -1,0 +1,47 @@
+# The installer's crates.io crates, @installer_crates//:<name>, from Cargo.toml here. Pinned by Cargo.lock and
+# crates.lock.json. To change one, edit Cargo.toml, then re-pin only this hub (network):
+#
+#   CARGO_BAZEL_REPIN=1 CARGO_BAZEL_REPIN_ONLY=installer_crates bazel mod deps
+
+crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
+crate.annotation(
+    build_script_env_files = ["@@//bazel/desktop:build_script_env"],
+    crate = "*",
+    repositories = ["installer_crates"],
+)
+crate.render_config(
+    platforms_template = "@@//bazel/desktop/triple:{triple}",
+    repositories = ["installer_crates"],
+)
+crate.from_cargo(
+    name = "installer_crates",
+    cargo_lockfile = "//install/crates:Cargo.lock",
+    lockfile = "//install/crates:crates.lock.json",
+    manifests = ["//install/crates:Cargo.toml"],
+    supported_platform_triples = [
+        "aarch64-apple-darwin",
+        "aarch64-pc-windows-msvc",
+        "aarch64-unknown-linux-musl",
+        "x86_64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+        "x86_64-unknown-linux-musl",
+    ],
+)
+use_repo(crate, "installer_crates")
+
+installer_vendor = use_repo_rule("//install/crates:vendor.bzl", "installer_vendor")
+
+installer_vendor(
+    name = "installer_vendor",
+    cargo_lockfile = "//install/crates:Cargo.lock",
+)
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "cargo_deny",
+    build_file_content = 'exports_files(["cargo-deny"])',
+    sha256 = "fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3",
+    strip_prefix = "cargo-deny-0.20.2-aarch64-apple-darwin",
+    url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-aarch64-apple-darwin.tar.gz",
+)

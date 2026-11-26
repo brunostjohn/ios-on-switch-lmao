@@ -1,6 +1,7 @@
-# The installer's toolchain check: Rust calling one C file, built for the six desktop platforms (bazel/desktop).
+# The installer's toolchain checks, built for the six desktop platforms (bazel/desktop): Rust calling one C file, and a
+# TLS fetch of the project's releases on the installer's crates.
 #
-#   bazel build //install/hello:all_ffi
+#   bazel build //install/hello:all_ffi //install/hello:all_tls
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library")
 load("//bazel/desktop:defs.bzl", "desktop_binaries")
@@ -30,4 +31,21 @@ rust_binary(
 desktop_binaries(
     name = "all_ffi",
     binary = ":switch_hello_ffi",
+)
+
+rust_binary(
+    name = "switch_hello",
+    srcs = ["main.rs"],
+    deps = [
+        "@installer_crates//:crossterm",
+        "@installer_crates//:ratatui",
+        "@installer_crates//:reqwest",
+        "@installer_crates//:serde_json",
+        "@installer_crates//:tokio",
+    ],
+)
+
+desktop_binaries(
+    name = "all_tls",
+    binary = ":switch_hello",
 )
