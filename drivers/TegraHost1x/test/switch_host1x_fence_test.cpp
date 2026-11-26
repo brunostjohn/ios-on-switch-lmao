@@ -540,3 +540,34 @@ TEST_F(Host1xFence, AFreedSyncpointNamedByAFenceOrNotHandedOutPanics)
         EXPECT_NE(std::string(e.what()).find("not handed out"), std::string::npos) << e.what();
     }
 }
+
+// Once the 32 ids every boot used before (160-191) are out, the pool hands out low ones. They wait, survive SC7 and
+// release after a failure as those did.
+TEST_F(Host1xFence, ALowSyncpointPastTheOldRangeWaitsSleepsAndReleasesAsAnyOther)
+{
+    std::vector<uint32_t> held;
+    uint32_t low = 0;
+    do {
+        ASSERT_EQ(tegra_host1x_syncpt_alloc(&low), TEGRA_HOST1X_OK);
+        held.push_back(low);
+    } while (low >= 160);
+    EXPECT_NE(low, 0u);
+    EXPECT_NE(low, 9u);
+    value(low) = 0;
+    switch_host1x_fence fence;
+    switch_host1x_fence_init(&fence, low, 1, signaled);
+    ASSERT_EQ(switch_host1x_fence_add(&fence, 0), TEGRA_HOST1X_OK);
+    EXPECT_EQ(threshold(low), 1u);
+    value(low) = 5;
+    tegra_host1x_suspend();
+    value(low) = 0;
+    threshold(low) = 0;
+    tegra_host1x_resume();
+    EXPECT_EQ(value(low), 5u) << "SC7 restores its value";
+    interrupt(low);
+    EXPECT_EQ(gSignals[1].calls, 1);
+    EXPECT_EQ(tegra_host1x_syncpt_release_failed(low, 9, 2), TEGRA_HOST1X_EINVAL) << "farther than the jobs allowed";
+    for (const uint32_t id : held)
+        tegra_host1x_syncpt_free(id);
+    EXPECT_EQ(tegra_host1x_syncpt_release_failed(low, 6, 1), TEGRA_HOST1X_EINVAL) << "freed: not ours any more";
+}
