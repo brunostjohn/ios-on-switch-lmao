@@ -2,10 +2,13 @@
 #
 #   bazel test //install/image_gpu:all          unit tests + Darwin APFS fixture check
 #   bazel build //install/image_gpu:desktop     fixture tool across all 6 desktop platforms
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_python//python:py_test.bzl", "py_test")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//bazel/desktop:defs.bzl", "desktop_binaries")
 load("//bazel/lint:defs.bzl", "lint_files")
+load(":assets.bzl", "gpu_assets")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -91,4 +94,24 @@ sh_test(
         "//install/apfs_m1:switch_apfs_m1",
     ],
     tags = ["requires-darwin"],
+)
+
+py_binary(
+    name = "pack_gpu_asset",
+    srcs = ["pack_gpu_asset.py"],
+)
+
+py_test(
+    name = "pack_gpu_asset_test",
+    size = "small",
+    srcs = [
+        "pack_gpu_asset.py",
+        "pack_gpu_asset_test.py",
+    ],
+)
+
+gpu_assets(
+    name = "gpu_assets",
+    base = "//gpu:base",
+    tags = ["manual"],
 )
