@@ -614,7 +614,8 @@ TEST_F(GpuMemSmmuTest, ABatchKeepsRamViewHoldsUntilItsL2InvalidateHasRun)
 	const u64 invalidates = tgm_retire_invalidates, objects = tgm_retire_objects;
 	tgm_mem_del_finish(later);
 	EXPECT_EQ(gLtcInvalidates, 1u);
-	EXPECT_EQ(tgm_retire_invalidates - invalidates, 1u) << "counted for the stats window's smmu line";
+	EXPECT_EQ(tgm_retire_invalidates - invalidates, 1u)
+		<< "counted for the stats window's smmu line";
 	EXPECT_EQ(tgm_retire_objects - objects, 1u);
 	EXPECT_TRUE(gHeld.empty());
 	EXPECT_EQ(gSmmuUnmaps, 0u) << "no window IOVA to give back";

@@ -18,6 +18,7 @@ void switch_nvn_golden(struct nvkm_device *device)
 		nvkm_mask(device, w->reg, w->mask, w->value & w->mask);
 		written |= 1u << i;
 	}
-	nvxnu_log("tegra-gm20b: NVN golden-context writes %#x of %#x (0x404468, 0x418800, 0x419a04)\n", written,
-		  (1u << TGM_NVN_GOLDEN_WRITES) - 1u);
+	nvxnu_log("tegra-gm20b: NVN golden-context writes %#x of %#x (0x404468, 0x418800, "
+		  "0x419a04)\n",
+		  written, (1u << TGM_NVN_GOLDEN_WRITES) - 1u);
 }

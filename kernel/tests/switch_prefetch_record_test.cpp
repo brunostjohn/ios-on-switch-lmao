@@ -76,20 +76,23 @@ std::vector<switch_prefetch_run> saveList(std::vector<switch_record_entry> log, 
     std::vector<switch_prefetch_range> ranges(log.size());
     uint64_t pages = 0;
     uint64_t unnamedBytes = 0;
-    const uint32_t n = switch_prefetch_log_ranges(log.data(), groups.data(), count, ranges.data(), &pages, &unnamedBytes);
+    const uint32_t n =
+        switch_prefetch_log_ranges(log.data(), groups.data(), count, ranges.data(), &pages, &unnamedBytes);
     if (unnamed != nullptr) {
         *unnamed = unnamedBytes;
     }
-    std::sort(ranges.begin(), ranges.begin() + n,
-              [](const auto &a, const auto &b) { return switch_prefetch_compare_ranges(&a, &b) < 0; });
+    std::sort(ranges.begin(), ranges.begin() + n, [](const auto &a, const auto &b) {
+        return switch_prefetch_compare_ranges(&a, &b) < 0;
+    });
     const uint64_t cap =
         switch_prefetch_run_capacity(n, pages, SWITCH_PREFETCH_MAX_RUN_PAGES, SWITCH_PREFETCH_MAX_GAP_PAGES);
     std::vector<switch_prefetch_run> runs(cap);
     uint32_t listFiles = 0;
     const uint32_t built = switch_prefetch_merge_runs(ranges.data(), n, runs.data(), cap, SWITCH_PREFETCH_MAX_RUN_PAGES,
                                                       SWITCH_PREFETCH_MAX_GAP_PAGES, &listFiles);
-    std::sort(runs.begin(), runs.begin() + built,
-              [](const auto &a, const auto &b) { return switch_prefetch_compare_runs(&a, &b) < 0; });
+    std::sort(runs.begin(), runs.begin() + built, [](const auto &a, const auto &b) {
+        return switch_prefetch_compare_runs(&a, &b) < 0;
+    });
     runs.resize(switch_prefetch_cap_runs(runs.data(), built, 1u << 20, 1u << 18));
     return runs;
 }
@@ -143,8 +146,8 @@ TEST(SwitchPrefetchRecord, ARecycledVnodeKeepsItsNameFromTheReplay)
     const File root = {(void *)0xa200, 7, SWITCH_PREFETCH_VOL_ROOT, kFileA};
     const File data = {(void *)0xb200, 7, SWITCH_PREFETCH_VOL_DATA, kFileB};
     uint64_t unnamed = 0;
-    const auto list = saveList({entry(root, 0, kVmPage, 1), entry(data, 0, kVmPage, 1)}, {named(root), named(data)},
-                               {}, &unnamed);
+    const auto list =
+        saveList({entry(root, 0, kVmPage, 1), entry(data, 0, kVmPage, 1)}, {named(root), named(data)}, {}, &unnamed);
     EXPECT_EQ(pagesOf(list, kFileA), 4u);
     EXPECT_EQ(pagesOf(list, kFileB), 4u);
     EXPECT_EQ(unnamed, 0u);
@@ -193,9 +196,9 @@ TEST(SwitchPrefetchRecordSource, DecmpfsRecordsBothReadPathsByTheFilesOffsets)
         SCOPED_TRACE(tree);
         const std::string decmpfs = SourceText(std::string("../") + tree + "/bsd/kern/decmpfs.c");
         const std::string pagein = between(decmpfs, "\ndecmpfs_pagein_compressed(", "\ndecmpfs_read_compressed(");
-        const size_t pageinRecord = pagein.find(
-            "switch_cluster_record_file(vp, f_offset, (uint64_t)MIN((off_t)size, cachedSize - f_offset), "
-            "SWITCH_RECORD_DECMPFS);");
+        const size_t pageinRecord =
+            pagein.find("switch_cluster_record_file(vp, f_offset, (uint64_t)MIN((off_t)size, cachedSize - f_offset), "
+                        "SWITCH_RECORD_DECMPFS);");
         ASSERT_NE(pageinRecord, std::string::npos);
         EXPECT_LT(pagein.find("VNOP_VERIFY("), pageinRecord);
         EXPECT_LT(pageinRecord, pagein.find("upl_mark_decmp(pl);"));
@@ -221,6 +224,7 @@ TEST(SwitchPrefetchRecordSource, AReplayedPagesFirstUseIsRecordedOutsideThePhysi
         const char *tree;
         const char *header;
     } trees[] = {{"xnu-10063.141.1", "vm/vm_page.h"}, {"xnu-12377.121.6", "vm/vm_page_internal.h"}};
+
     for (const auto &t : trees) {
         SCOPED_TRACE(t.tree);
         const std::string header = SourceText(std::string("../") + t.tree + "/osfmk/" + t.header);

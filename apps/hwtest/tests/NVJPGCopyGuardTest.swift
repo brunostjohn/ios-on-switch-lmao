@@ -21,7 +21,7 @@ struct NVJPGCopyGuardTest: HWTest {
     var timeout: TimeInterval { 30 }
 
     static let size = NVJPGTileProbeTest.size
-    static let clear: [UInt8] = [0x33, 0x66, 0x99, 0xff]  // BGRA bytes of MTLClearColor(0.6, 0.4, 0.2, 1)
+    static let clear: [UInt8] = [0x33, 0x66, 0x99, 0xff] // BGRA bytes of MTLClearColor(0.6, 0.4, 0.2, 1)
 
     func run(_ context: TestContext) async throws -> Outcome {
         guard case .success = JPEGRoute.decodes() else { return .skip("no route counts: a release kernel") }

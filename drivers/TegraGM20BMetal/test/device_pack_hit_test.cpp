@@ -335,7 +335,8 @@ std::string patchedKillPack(bool words, bool flag)
     }
     EXPECT_GT(killing, 0u) << "no segment of the fixture is flagged to kill";
     const std::string path = harness::dir() + (flag ? "/pack_v34_no_kill_flag.bin" : "/pack_v34_no_kill_words.bin");
-    std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char *>(bytes.data()), std::streamsize(bytes.size()));
+    std::ofstream(path, std::ios::binary)
+        .write(reinterpret_cast<const char *>(bytes.data()), std::streamsize(bytes.size()));
     configurePackImageFromBytes(bytes, true);
     return path;
 }

@@ -31,7 +31,7 @@ struct switch_named_file;
 /* The next list is this boot's record log alone: what it read and what it used of the replay, in first-need order.
  * files: the replay's, for naming; sorted here. */
 void switch_prefetch_save_next(struct switch_record_entry *log, uint32_t appended, struct switch_named_file *files,
-                               uint32_t file_count, const struct switch_prefetch_header *expected_key,
-                               mount_t *mounts, const fsid_t *fsids, uint32_t mount_count);
+                               uint32_t file_count, const struct switch_prefetch_header *expected_key, mount_t *mounts,
+                               const fsid_t *fsids, uint32_t mount_count);
 
 #endif

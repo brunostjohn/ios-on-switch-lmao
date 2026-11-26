@@ -15,7 +15,7 @@
 // producer that hangs is the bridge's hang check's from its submission (switch_gpu_bridge_submit_watched) on.
 
 static inline uint32_t planeBridgeArmed = 0;  // the flip generation armed for the bridged set; 0: the bridge fence
-static inline bool planeStreamTold[3] = {};    // the gate's: each case's line, once a boot
+static inline bool planeStreamTold[3] = {};   // the gate's: each case's line, once a boot
 
 enum PlaneStreamOutcome : uint8_t {
     kPlaneStreamed,

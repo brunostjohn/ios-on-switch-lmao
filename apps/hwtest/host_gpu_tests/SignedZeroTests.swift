@@ -8,19 +8,19 @@ import XCTest
 /// GPU Metal runs on gives, so the two can be compared.
 final class SignedZeroTests: XCTestCase {
     private static let source = """
-        #include <metal_stdlib>
-        using namespace metal;
-        kernel void ties(device const float2 *in [[buffer(0)]], device uint4 *out [[buffer(1)]],
-                         uint i [[thread_position_in_grid]])
-        {
-            const float x = in[i].x, y = in[i].y;
-            const half hx = half(x), hy = half(y);
-            out[2 * i] = uint4(as_type<uint>(fmax(x, y)), as_type<uint>(fmin(x, y)),
-                               as_type<uint>(clamp(x, y, 1.0f)), 0);
-            out[2 * i + 1] = uint4(as_type<ushort>(fmax(hx, hy)), as_type<ushort>(fmin(hx, hy)),
-                                   as_type<ushort>(clamp(hx, hy, half(1))), 0);
-        }
-        """
+    #include <metal_stdlib>
+    using namespace metal;
+    kernel void ties(device const float2 *in [[buffer(0)]], device uint4 *out [[buffer(1)]],
+                     uint i [[thread_position_in_grid]])
+    {
+        const float x = in[i].x, y = in[i].y;
+        const half hx = half(x), hy = half(y);
+        out[2 * i] = uint4(as_type<uint>(fmax(x, y)), as_type<uint>(fmin(x, y)),
+                           as_type<uint>(clamp(x, y, 1.0f)), 0);
+        out[2 * i + 1] = uint4(as_type<ushort>(fmax(hx, hy)), as_type<ushort>(fmin(hx, hy)),
+                               as_type<ushort>(clamp(hx, hy, half(1))), 0);
+    }
+    """
     private static let pairs: [(Float, Float)] = [(-0.0, 0.0), (0.0, -0.0), (-0.0, -0.0), (0.0, 0.0)]
 
     private func answers(fastMath: Bool) throws -> [[UInt32]] {

@@ -275,11 +275,11 @@ TEST(GM20BFacadeHeldBlocks, TheHwTestsSequenceHoldsAndAllocatesNoMoreWithItsDraw
         EXPECT_LE(s.held[a], kHeldMost) << kDraws[a] << " draws";
     EXPECT_LT(s.held[1] - s.held[0], 0.5);
     EXPECT_LT(s.allocations[1] - s.allocations[0], 0.5)
-        << kDraws[0] << " draws, " << submitTags(s.allocated[0], s.splits[0]) << "\n" << kDraws[1] << " draws, "
-        << submitTags(s.allocated[1], s.splits[1]) << "\n"
+        << kDraws[0] << " draws, " << submitTags(s.allocated[0], s.splits[0]) << "\n"
+        << kDraws[1] << " draws, " << submitTags(s.allocated[1], s.splits[1]) << "\n"
         << held_sites::differences(s.allocated[0], s.allocated[1], held_sites::Owner::Runtime,
-                                   std::to_string(kDraws[0]) + " draws", std::to_string(kDraws[1]) + " draws",
-                                   kBuffers, "command buffer");
+                                   std::to_string(kDraws[0]) + " draws", std::to_string(kDraws[1]) + " draws", kBuffers,
+                                   "command buffer");
 }
 
 // The GPU going idle at every command buffer (a frame's on a device) moves the idle release's deadline without a timer
@@ -371,8 +371,8 @@ TEST(GM20BFacadeHeldBlocks, ACommandBuffersAllocationsDoNotGrowWithItsDraws)
         }
     }
     EXPECT_LT(runtime[1] - runtime[0], 0.5)
-        << kDraws[0] << " draws, " << submitTags(w[0], splits[0]) << "\n" << kDraws[1] << " draws, "
-        << submitTags(w[1], splits[1]) << "\n"
+        << kDraws[0] << " draws, " << submitTags(w[0], splits[0]) << "\n"
+        << kDraws[1] << " draws, " << submitTags(w[1], splits[1]) << "\n"
         << held_sites::differences(w[0], w[1], held_sites::Owner::Runtime, std::to_string(kDraws[0]) + " draws",
                                    std::to_string(kDraws[1]) + " draws", kBuffers, "command buffer");
 }

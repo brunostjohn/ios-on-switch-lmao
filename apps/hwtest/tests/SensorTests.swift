@@ -2,6 +2,7 @@ import CoreMotion
 import Foundation
 import HWTestCore
 import HWTestKit
+import HWTestShared
 import UIKit
 
 /// Collects CoreMotion samples for a fixed time at a requested 100 Hz.

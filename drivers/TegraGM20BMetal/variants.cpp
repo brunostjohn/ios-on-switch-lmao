@@ -21,7 +21,8 @@ constexpr uint32_t kUniformAlignment = 256;  // residual.h bufferBaseAlignment(f
 // record's
 uint32_t variantSetReads(const VariantTable &t, uint32_t v, uint32_t f)
 {
-    return (v < t.count[0] ? t.variants[0][v].memoryEntries : 0u) | (f < t.count[1] ? t.variants[1][f].memoryEntries : 0u);
+    return (v < t.count[0] ? t.variants[0][v].memoryEntries : 0u) |
+           (f < t.count[1] ? t.variants[1][f].memoryEntries : 0u);
 }
 
 void attachVariantSplit(Device &dev, const Pack &pack, Pipeline &made, const PackPipeline &pp, const PlacedProgram &vs,
@@ -165,9 +166,9 @@ bool Device::offerVariantsLockFree(Pipeline &pl, const PackPipeline &pp, uint32_
         if (!slmReady(std::max(slmPerWarpOfHeader(placed[0].header), slmPerWarpOfHeader(placed[1].header))))
             return false;
         const bool variant[2] = {index[0] != pp.vs, index[1] != pp.fs};
-        Pipeline &made =
-            buildCombination(*t, pl, pp, placed, variant, variantSetReads(*t, v, f), pack_.section<uint32_t>(PackBlob) + pp.blob,
-                             pack_.string(pp.keyString), pack_.spills(pp), pack_.far(pp), prebuilt);
+        Pipeline &made = buildCombination(*t, pl, pp, placed, variant, variantSetReads(*t, v, f),
+                                          pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString),
+                                          pack_.spills(pp), pack_.far(pp), prebuilt);
         attachVariantSplit(*this, pack_, made, pp, placed[0], index[1], &Device::offerSplit);
         t->chosen[combo] = &made;
         return true;
@@ -193,7 +194,7 @@ void Device::offerCompletedVariants(Completed &c, const RuntimeRecord &r)
         std::vector<PackVariant> &stage = t->runtimeVariants[i < r.pipeline.variantCount[0] ? 0 : 1];
         if (!(v.assume & AssumeTurned) && v.program.image.size() >= sizeof CompletedProgram::header &&
             stage.size() < UINT8_MAX)
-            stage.push_back({v.assume, i});
+            stage.push_back({v.assume, i, 0});
     }
     if (t->runtimeVariants[0].empty() && t->runtimeVariants[1].empty())
         return;
@@ -245,8 +246,7 @@ Pipeline *Device::variant(Pipeline &pl, const VariantTable *t, uint32_t facts)
 }
 
 Pipeline *Device::placeVariant(Pipeline &pl, VariantTable &t, const std::array<uint32_t, 2> &index, uint32_t setReads,
-                               uint32_t recIndex,
-                               uint32_t comboIndex)
+                               uint32_t recIndex, uint32_t comboIndex)
 {
     const PackPipeline &pp = *pl.rec;
     PlacedProgram placed[2] = {{}, noPixelProgram()};

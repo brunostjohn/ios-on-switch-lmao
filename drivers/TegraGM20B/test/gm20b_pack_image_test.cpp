@@ -397,7 +397,8 @@ TEST_F(PackImageTest, AStopThatNeverEndsPanicsNamingTheThreadInsteadOfHangingThe
 		gModel.releaseFirstPagein = true;
 		gModel.cv.notify_all();
 	}
-	EXPECT_THAT(stopping.get(), HasSubstr("the build thread is still running 20 s into shutdown"));
+	EXPECT_THAT(stopping.get(),
+		    HasSubstr("the build thread is still running 20 s into shutdown"));
 	ASSERT_EQ(caller.get(), kIOReturnSuccess);
 	EXPECT_FALSE(view.ready);
 }

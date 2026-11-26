@@ -74,7 +74,8 @@ TEST(SwitchGpuBoLimits, TheDirectProbeFlagIsADebugKernelsAlone)
 	EXPECT_TRUE(switch_gpu_bo_alloc_args_ok(4096, 12, TegraGM20BBoProbeDirect, true));
 	EXPECT_FALSE(switch_gpu_bo_alloc_args_ok(4096, 12, TegraGM20BBoProbeDirect, false));
 	EXPECT_FALSE(switch_gpu_bo_alloc_args_ok(SWITCH_GPU_BO_CHUNK_BYTES, 12,
-						 TegraGM20BBoCompressible | TegraGM20BBoProbeDirect, true))
+						 TegraGM20BBoCompressible | TegraGM20BBoProbeDirect,
+						 true))
 		<< "compressible memory takes no other flag";
 	EXPECT_EQ(switch_gpu_bo_flags_mask(true) & ~switch_gpu_bo_flags_mask(false),
 		  uint32_t(TegraGM20BBoProbeDirect));
@@ -84,9 +85,12 @@ TEST(SwitchGpuBoLimits, AnUncompressedBoTakesTheSmmusBigPagesUnlessItAsksForDire
 {
 	constexpr uint32_t kGranule = 16;
 	EXPECT_TRUE(switch_gpu_bo_big_smmu(0u, false, kGranule, kGranule, true));
-	EXPECT_FALSE(switch_gpu_bo_big_smmu(TegraGM20BBoProbeDirect, false, kGranule, kGranule, true));
-	EXPECT_FALSE(switch_gpu_bo_big_smmu(TegraGM20BBoCompressible, false, kGranule, kGranule, true));
-	EXPECT_FALSE(switch_gpu_bo_big_smmu(TegraGM20BBoContiguous, false, kGranule, kGranule, true));
+	EXPECT_FALSE(
+		switch_gpu_bo_big_smmu(TegraGM20BBoProbeDirect, false, kGranule, kGranule, true));
+	EXPECT_FALSE(
+		switch_gpu_bo_big_smmu(TegraGM20BBoCompressible, false, kGranule, kGranule, true));
+	EXPECT_FALSE(
+		switch_gpu_bo_big_smmu(TegraGM20BBoContiguous, false, kGranule, kGranule, true));
 	EXPECT_FALSE(switch_gpu_bo_big_smmu(0u, true, kGranule, kGranule, true)) << "a pool chunk";
 	EXPECT_FALSE(switch_gpu_bo_big_smmu(0u, false, kGranule - 1, kGranule, true));
 	EXPECT_FALSE(switch_gpu_bo_big_smmu(0u, false, kGranule, kGranule, false));

@@ -68,8 +68,8 @@ static int name_logged_vnode(vnode_t vp, void *argument)
             hi = mid;
         }
     }
-    for (struct switch_log_group *hit = naming->groups + lo; hit < naming->groups + naming->count && hit->vp == (const void *)vp;
-         ++hit) {
+    for (struct switch_log_group *hit = naming->groups + lo;
+         hit < naming->groups + naming->count && hit->vp == (const void *)vp; ++hit) {
         if (hit->file_id != 0u || hit->volume != naming->volume || hit->vid != vnode_vid(vp)) {
             continue;
         }
@@ -179,8 +179,8 @@ static uint32_t switch_prefetch_name_groups(struct switch_log_group *groups, uin
 }
 
 void switch_prefetch_save_next(struct switch_record_entry *log, uint32_t appended, struct switch_named_file *files,
-                               uint32_t file_count, const struct switch_prefetch_header *expected_key,
-                               mount_t *mounts, const fsid_t *fsids, uint32_t mount_count)
+                               uint32_t file_count, const struct switch_prefetch_header *expected_key, mount_t *mounts,
+                               const fsid_t *fsids, uint32_t mount_count)
 {
 #if DEVELOPMENT || DEBUG
     const uint64_t start_abs = mach_absolute_time();
@@ -287,13 +287,14 @@ void switch_prefetch_save_next(struct switch_record_entry *log, uint32_t appende
                                 20;
         const uint64_t root_mib = (vol_pages[SWITCH_PREFETCH_VOL_ROOT] * SWITCH_PREFETCH_LIST_PAGE) >> 20;
         const uint64_t data_mib = (vol_pages[SWITCH_PREFETCH_VOL_DATA] * SWITCH_PREFETCH_LIST_PAGE) >> 20;
-        os_log(OS_LOG_DEFAULT,
-               "SwitchBootPrefetch: list saved: %u runs, %llu MiB (%llu/%llu/%llu MiB cx/root/Data; %u files named from "
-               "the replay, %llu MiB unnamed) in %llu ms (sort and naming %llu, runs %llu, write %llu)",
-               count, (saved_pages * SWITCH_PREFETCH_LIST_PAGE) >> 20, cx_mib, root_mib, data_mib, from_replay,
-               unnamed_bytes >> 20, switch_prefetch_save_ms(start_abs, end_abs),
-               switch_prefetch_save_ms(start_abs, named_abs), switch_prefetch_save_ms(named_abs, write_abs),
-               switch_prefetch_save_ms(write_abs, end_abs));
+        os_log(
+            OS_LOG_DEFAULT,
+            "SwitchBootPrefetch: list saved: %u runs, %llu MiB (%llu/%llu/%llu MiB cx/root/Data; %u files named from "
+            "the replay, %llu MiB unnamed) in %llu ms (sort and naming %llu, runs %llu, write %llu)",
+            count, (saved_pages * SWITCH_PREFETCH_LIST_PAGE) >> 20, cx_mib, root_mib, data_mib, from_replay,
+            unnamed_bytes >> 20, switch_prefetch_save_ms(start_abs, end_abs),
+            switch_prefetch_save_ms(start_abs, named_abs), switch_prefetch_save_ms(named_abs, write_abs),
+            switch_prefetch_save_ms(write_abs, end_abs));
     }
 #endif
 }

@@ -230,7 +230,9 @@ struct Destination {
     void reserve(const void *who)
     {
         std::unique_lock held(lock);
-        changed.wait(held, [&] { return !holder; });
+        changed.wait(held, [&] {
+            return !holder;
+        });
         holder = who;
     }
 
@@ -302,7 +304,9 @@ struct Engine {
         while (ran.size() < jobs) {
             std::unique_lock held(lock);
             Request *request = nullptr;
-            changed.wait(held, [&] { return (request = queue.pop()) != nullptr; });
+            changed.wait(held, [&] {
+                return (request = queue.pop()) != nullptr;
+            });
             held.unlock();
             run(*request);
             held.lock();
@@ -316,7 +320,9 @@ struct Engine {
 // the thread can end).
 bool served(Engine &engine, size_t jobs, const Request &stuck)
 {
-    auto done = std::async(std::launch::async, [&] { engine.serve(jobs); });
+    auto done = std::async(std::launch::async, [&] {
+        engine.serve(jobs);
+    });
     const bool ended = done.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
     if (!ended)
         engine.destination.release(&stuck);

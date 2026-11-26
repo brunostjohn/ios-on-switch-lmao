@@ -12,7 +12,8 @@ namespace switch_compiler {
 
 class Persister {
 public:
-    explicit Persister(std::function<void()> persist) : persist_(std::move(persist)) {}
+    explicit Persister(std::function<void()> persist) : persist_(std::move(persist))
+    {}
 
     Persister(const Persister &) = delete;
     Persister &operator=(const Persister &) = delete;

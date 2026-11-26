@@ -238,8 +238,9 @@ TEST_F(Host1xErrors, ALineThatFiresWithNothingOfOursPanics)
     reg(kHintStatus) = 1u << 16;
     EXPECT_FALSE(deliver()) << "HINTMASK keeps host1x's other sources off the line";
     gUnknownSource = true;
-    EXPECT_EQ(panicOf(&deliver), "TegraHost1x: general interrupt (INTID 99) fired with no illegal opcode of ours pending "
-                                 "(INTSTATUS 0 HINTSTATUS 0x10000 HINTSTATUS_EXT 0 HINTMASK_EXT 0x3fff INTMASK 0x1)");
+    EXPECT_EQ(panicOf(&deliver),
+              "TegraHost1x: general interrupt (INTID 99) fired with no illegal opcode of ours pending "
+              "(INTSTATUS 0 HINTSTATUS 0x10000 HINTSTATUS_EXT 0 HINTMASK_EXT 0x3fff INTMASK 0x1)");
     EXPECT_EQ(reg(kIntMask) & 1u, 1u) << "the master enable is never turned off";
     gErrorsLock->held = false;
 }
@@ -253,9 +254,10 @@ TEST_F(Host1xErrors, AStoppedChannelThatFiresAnUngatedLineAgainPanicsNamingIt)
     ASSERT_TRUE(fire(1));
     EXPECT_EQ(gFailedChannels, std::vector<uint32_t>{1});
     reg(kHintStatusExt) |= 1u << 1;
-    EXPECT_EQ(panicOf(&deliver), "TegraHost1x: general interrupt (INTID 99) fired for channels 0x2, masked since their "
-                                 "stop (HINTSTATUS_EXT 0x2 HINTMASK_EXT 0x3ffd HINTSTATUS 0): HINTMASK_EXT does not keep "
-                                 "a stopped channel off the line");
+    EXPECT_EQ(panicOf(&deliver),
+              "TegraHost1x: general interrupt (INTID 99) fired for channels 0x2, masked since their "
+              "stop (HINTSTATUS_EXT 0x2 HINTMASK_EXT 0x3ffd HINTSTATUS 0): HINTMASK_EXT does not keep "
+              "a stopped channel off the line");
     gErrorsLock->held = false;
 }
 

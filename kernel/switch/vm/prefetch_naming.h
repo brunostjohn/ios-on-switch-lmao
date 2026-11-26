@@ -125,8 +125,7 @@ static inline uint32_t switch_prefetch_log_ranges(const struct switch_record_ent
     for (uint32_t g = 0; g < count; ++g) {
         for (uint32_t i = groups[g].first; i < groups[g].end; ++i) {
             const struct switch_record_entry *e = &log[i];
-            if (e->when == 0u || e->length == 0u ||
-                e->offset > UINT64_MAX - e->length - SWITCH_PREFETCH_LIST_PAGE) {
+            if (e->when == 0u || e->length == 0u || e->offset > UINT64_MAX - e->length - SWITCH_PREFETCH_LIST_PAGE) {
                 continue;
             }
             if (groups[g].file_id == 0u) {
@@ -139,8 +138,14 @@ static inline uint32_t switch_prefetch_log_ranges(const struct switch_record_ent
                 continue;
             }
             const struct switch_prefetch_range range = {
-                groups[g].file_id,  groups[g].file_size, groups[g].mtime_sec, groups[g].mtime_nsec,
-                (uint32_t)first,    (uint32_t)end,       e->when,             groups[g].volume,
+                groups[g].file_id,
+                groups[g].file_size,
+                groups[g].mtime_sec,
+                groups[g].mtime_nsec,
+                (uint32_t)first,
+                (uint32_t)end,
+                e->when,
+                groups[g].volume,
             };
             out[n++] = range;
             *pages += end - first;

@@ -42,7 +42,9 @@ TEST(GM20BNvnGolden, TheGoldenContextTakesThemAfterSwCtxAndADebugKernelAloneLeav
 	EXPECT_TRUE(main.before("gf100_gr_mmio(gr, gr->sw_ctx);", "switch_nvn_golden(device);"));
 	EXPECT_TRUE(main.before("switch_nvn_golden(device);", "gf100_gr_wait_idle(gr);"));
 
-	const CodeText skipped = Block(SourceText("../TegraGM20B.cpp"), "uint32_t switch_nvn_golden_skipped(void)");
-	EXPECT_TRUE(skipped.before("#if DEVELOPMENT || DEBUG", "PE_parse_boot_argn(\"switch-no-nvn-golden\""));
+	const CodeText skipped =
+		Block(SourceText("../TegraGM20B.cpp"), "uint32_t switch_nvn_golden_skipped(void)");
+	EXPECT_TRUE(skipped.before("#if DEVELOPMENT || DEBUG",
+				   "PE_parse_boot_argn(\"switch-no-nvn-golden\""));
 }
 }  // namespace

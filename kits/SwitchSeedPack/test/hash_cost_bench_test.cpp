@@ -60,10 +60,11 @@ TEST(HashCost, TheRemovedChecksNsPerByte)
         std::vector<uint8_t> bytes(size);
         for (size_t i = 0; i < size; ++i)
             bytes[i] = uint8_t(i * 131 + (i >> 7));
-        printf("HASHCOST bytes=%zu fnv64=%.3f fnv32=%.3f sha256=%.3f ns/byte\n", size,
-               fastestNsPerByte(bytes, fnv64), fastestNsPerByte(bytes, [](const uint8_t *p, size_t n) {
-                   return uint64_t(fnv32(p, n));
-               }),
+        printf("HASHCOST bytes=%zu fnv64=%.3f fnv32=%.3f sha256=%.3f ns/byte\n", size, fastestNsPerByte(bytes, fnv64),
+               fastestNsPerByte(bytes,
+                                [](const uint8_t *p, size_t n) {
+                                    return uint64_t(fnv32(p, n));
+                                }),
                fastestNsPerByte(bytes, sha));
     }
 }

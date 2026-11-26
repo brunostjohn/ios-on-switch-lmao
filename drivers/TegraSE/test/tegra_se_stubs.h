@@ -181,11 +181,12 @@ public:
     }
 };
 
-#define OS_LOG_DEFAULT nullptr
+#define OS_LOG_DEFAULT   nullptr
 #define os_log(log, ...) IOLog(__VA_ARGS__)
 
 // corecrypto and libkern/crypto as TegraSE.cpp names them; g_crypto_funcs stays null.
 typedef struct ccdigest_state *ccdigest_state_t;
+
 struct ccdigest_info {
     size_t output_size, state_size, block_size, oid_size;
     const unsigned char *oid;
@@ -194,25 +195,30 @@ struct ccdigest_info {
 };
 struct ccctr_ctx;
 struct ccecb_ctx;
+
 struct ccmode_ctr {
     size_t size;
     int (*init)(const ccmode_ctr *mode, ccctr_ctx *ctx, size_t keyBytes, const void *key, const void *iv);
     int (*ctr)(ccctr_ctx *ctx, size_t bytes, const void *in, void *out);
 };
+
 struct ccmode_ecb {
     size_t size;
     int (*init)(const ccmode_ecb *mode, ccecb_ctx *ctx, size_t keyBytes, const void *key);
     int (*ecb)(const ccecb_ctx *ctx, size_t nblocks, const void *in, void *out);
 };
+
 struct crypto_functions {
     const ccmode_ctr *ccaes_ctr_crypt;
     const ccmode_ecb *ccaes_ecb_encrypt, *ccaes_ecb_decrypt;
 };
+
 inline const crypto_functions *g_crypto_funcs = nullptr;
 
 struct aes_encrypt_ctx {
     uint8_t opaque[256];
 };
+
 struct aes_decrypt_ctx {
     uint8_t opaque[256];
 };

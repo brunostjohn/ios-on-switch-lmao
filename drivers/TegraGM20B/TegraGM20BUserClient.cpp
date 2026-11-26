@@ -256,7 +256,8 @@ void AGXDeviceUserClient::releaseBo(Bo *bo)
 	}
 	if (bo->buffer.memory && bo->handle && !(bo->flags & TegraGM20BBoContiguous) &&
 	    spareKeep(bo->buffer, bo->pas, static_cast<uint64_t>(bo->backing_pages) << 12,
-		      bo->system ? SWITCH_GPU_SPARE_WC : SWITCH_GPU_SPARE_CACHED, bo->cachedMapping)) {
+		      bo->system ? SWITCH_GPU_SPARE_WC : SWITCH_GPU_SPARE_CACHED,
+		      bo->cachedMapping)) {
 		bo->buffer = {};
 		bo->pas = nullptr;
 		bo->cachedMapping = nullptr;

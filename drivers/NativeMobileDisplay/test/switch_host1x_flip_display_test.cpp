@@ -61,10 +61,12 @@ TEST(Host1xFlipDisplay, ItHoldsTheProbesSharedSyncpointsForItsRunAlone)
 
 TEST(Host1xFlipDisplay, OnlyTheProbesEntitlementStartsARun)
 {
-    const CodeText write = Block(SourceText("../SwitchHost1xFlipDisplay.h"),
-                                 "static int host1xFlipSysctl(struct sysctl_oid *, void *, int, struct sysctl_req *req)");
-    EXPECT_TRUE(write.has("if (req->newptr) { if (!switch_task_entitled(current_task(), SWITCH_GPU_PROBES_ENTITLEMENT)) "
-                          "return EPERM;"));
+    const CodeText write =
+        Block(SourceText("../SwitchHost1xFlipDisplay.h"),
+              "static int host1xFlipSysctl(struct sysctl_oid *, void *, int, struct sysctl_req *req)");
+    EXPECT_TRUE(
+        write.has("if (req->newptr) { if (!switch_task_entitled(current_task(), SWITCH_GPU_PROBES_ENTITLEMENT)) "
+                  "return EPERM;"));
     EXPECT_TRUE(write.before("SWITCH_GPU_PROBES_ENTITLEMENT", "SYSCTL_IN("));
 }
 

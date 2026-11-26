@@ -51,11 +51,12 @@ constexpr bool switch_gpu_bo_alloc_args_ok(uint64_t bytes, uint32_t align_log2, 
 
 /* An uncompressed BO of its own pages, 64 KiB or more and not physically contiguous, is compacted into the Tegra SMMU's
  * 64 KiB big pages where the SMMU is up (72a0e9b01), unless it asks for direct physical addresses */
-constexpr bool switch_gpu_bo_big_smmu(uint32_t flags, bool pool, uint32_t npages, uint32_t granule_pages,
-				      bool smmu_ready)
+constexpr bool switch_gpu_bo_big_smmu(uint32_t flags, bool pool, uint32_t npages,
+				      uint32_t granule_pages, bool smmu_ready)
 {
-	return !(flags & (TegraGM20BBoCompressible | TegraGM20BBoContiguous | TegraGM20BBoProbeDirect)) && !pool &&
-	       npages >= granule_pages && smmu_ready;
+	return !(flags &
+		 (TegraGM20BBoCompressible | TegraGM20BBoContiguous | TegraGM20BBoProbeDirect)) &&
+	       !pool && npages >= granule_pages && smmu_ready;
 }
 
 constexpr bool switch_gpu_bo_import_args_ok(uint64_t address, uint64_t bytes)

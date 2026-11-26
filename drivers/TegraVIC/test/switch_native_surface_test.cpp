@@ -660,7 +660,9 @@ TEST_F(NativeSurface, AJobsDestinationAccessGivesItsReservationToAPublisherWaiti
         if (!once.exchange(true))
             parked.set_value();
     };
-    auto published = std::async(std::launch::async, [&] { return switch_native_surface_publish(&surface, &picture); });
+    auto published = std::async(std::launch::async, [&] {
+        return switch_native_surface_publish(&surface, &picture);
+    });
     ASSERT_EQ(parked.get_future().wait_for(std::chrono::seconds(5)), std::future_status::ready);
     duringWaitingReserve = {};
     auto entered = std::async(std::launch::async, [&] {

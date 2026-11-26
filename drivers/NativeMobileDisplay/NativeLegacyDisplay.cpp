@@ -1954,7 +1954,8 @@ private:
             planesState = "off";
         }
         add("; planes %s: flips %u (b-only %u) latched %u, maps %u (native %u, remaps %u), dropped %u, underflow %u, "
-            "unready %u, composited %u; GPU sets streamed %u, by the CPU %u, stream refused %u, bridge with a GPU job %u",
+            "unready %u, composited %u; GPU sets streamed %u, by the CPU %u, stream refused %u, bridge with a GPU job "
+            "%u",
             planesState, stPlaneFlips, stPlaneOnly, stPlaneLatched, stPlaneMaps, stPlaneNative, stPlaneRemaps,
             stPlaneDropped, stPlaneUnderflows, stPlaneUnready, stPlaneComposited, stPlaneGpuStreamed, stPlaneGpuByCpu,
             stPlaneGpuStreamRefused, stPlaneGpuJobful);

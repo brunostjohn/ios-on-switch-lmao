@@ -151,7 +151,8 @@ inline void IOLockUnlock(IOLock *lock) __attribute__((no_thread_safety_analysis)
 }
 
 int switch_pack_test_sleep(IOLock *lock, void *event, int interruptible);
-int switch_pack_test_sleep_deadline(IOLock *lock, void *event, uint64_t deadline, int interruptible);
+int switch_pack_test_sleep_deadline(IOLock *lock, void *event, uint64_t deadline,
+				    int interruptible);
 
 inline int IOLockSleep(IOLock *lock, void *event, int interruptible)
 {

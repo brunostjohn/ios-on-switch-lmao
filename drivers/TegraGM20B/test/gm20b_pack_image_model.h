@@ -126,7 +126,8 @@ struct Model {
 	uint32_t sleepers = 0;
 	uint32_t unintSleepers = 0;
 	bool shutdownDeadlinePassed = false;
-	IOLock *panicLock = nullptr;  // the lock a timed-out sleep returned holding, which panic() lets go of
+	IOLock *panicLock =
+		nullptr;  // the lock a timed-out sleep returned holding, which panic() lets go of
 	// The pack image's stream: page-ins of its heap (past the header's pages), the heap page-in to hold at (1 its first,
 	// 0 none), the kernel fence page's words its frontier is one of, and the failed waits recovered
 	uint32_t heapPageins = 0;

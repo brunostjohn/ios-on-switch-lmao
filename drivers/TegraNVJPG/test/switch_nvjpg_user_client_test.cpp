@@ -286,11 +286,13 @@ struct CeCopyCall {
 };
 
 std::vector<CeCopyCall> gCeCopies;
+
 // A CPU write of the re-pack buffer published to the GPU: its range, the word at it, and the copies queued before it
 struct GuardPublish {
     uint64_t offset, bytes, value;
     size_t copiesBefore;
 };
+
 std::vector<GuardPublish> gGuardPublishes;
 uint32_t gCpuWriters;
 int gCeStatus = 0;
@@ -397,8 +399,8 @@ extern "C" void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_
 
 extern "C" int switch_gpu_backing_cpu_acquire(switch_gpu_backing *, uint64_t, uint64_t, uint32_t access)
 {
-    EXPECT_EQ(access, uint32_t(SWITCH_GPU_BACKING_WRITE | SWITCH_GPU_BACKING_CPU_NO_CACHE |
-                               SWITCH_GPU_BACKING_CPU_AVOID_SYNC));
+    EXPECT_EQ(access,
+              uint32_t(SWITCH_GPU_BACKING_WRITE | SWITCH_GPU_BACKING_CPU_NO_CACHE | SWITCH_GPU_BACKING_CPU_AVOID_SYNC));
     ++gCpuWriters;
     return 0;
 }

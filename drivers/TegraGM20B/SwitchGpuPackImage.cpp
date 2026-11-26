@@ -532,9 +532,11 @@ extern "C" void switch_gpu_pack_shutdown(void)
 	clock_interval_to_deadline(kShutdownWaitSeconds, NSEC_PER_SEC, &deadline);
 	IOLockLock(lock);
 	while (gPack.buildActive) {
-		if (IOLockSleepDeadline(lock, &gPack.buildActive, deadline, THREAD_UNINT) == THREAD_TIMED_OUT &&
+		if (IOLockSleepDeadline(lock, &gPack.buildActive, deadline, THREAD_UNINT) ==
+			    THREAD_TIMED_OUT &&
 		    gPack.buildActive)
-			panic("tegra-gm20b: pack image: the build thread is still running %u s into shutdown: a read or a "
+			panic("tegra-gm20b: pack image: the build thread is still running %u s "
+			      "into shutdown: a read or a "
 			      "copy never completed",
 			      kShutdownWaitSeconds);
 	}

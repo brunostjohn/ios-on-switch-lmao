@@ -136,12 +136,13 @@ static void switch_prefetch_diag_tick(thread_call_param_t p0 __unused, thread_ca
         "demand %llu/%llu",
         r_mib, u_mib, x_mib, l_mib, b_mib, d_cx + d_root + d_data, d_cx, d_root, d_data, replay_ms, demand_ms,
         replay_gt64k, replay_reqs, demand_gt64k, demand_reqs);
-    os_log(OS_LOG_DEFAULT,
-           "SwitchBootPrefetch: recorded %llu reads, %llu MiB through cluster_io, %llu MiB through decmpfs, %llu MiB of "
-           "first uses; the replay's decmpfs page-ins %llu MiB, %llu MiB of them tagged",
-           io.record_entries, io.record_bytes[SWITCH_RECORD_CLUSTER] >> 20, io.record_bytes[SWITCH_RECORD_DECMPFS] >> 20,
-           io.record_bytes[SWITCH_RECORD_FIRST_USE] >> 20, pace.replay_decmp_bytes >> 20,
-           pace.replay_decmp_tagged_bytes >> 20);
+    os_log(
+        OS_LOG_DEFAULT,
+        "SwitchBootPrefetch: recorded %llu reads, %llu MiB through cluster_io, %llu MiB through decmpfs, %llu MiB of "
+        "first uses; the replay's decmpfs page-ins %llu MiB, %llu MiB of them tagged",
+        io.record_entries, io.record_bytes[SWITCH_RECORD_CLUSTER] >> 20, io.record_bytes[SWITCH_RECORD_DECMPFS] >> 20,
+        io.record_bytes[SWITCH_RECORD_FIRST_USE] >> 20, pace.replay_decmp_bytes >> 20,
+        pace.replay_decmp_tagged_bytes >> 20);
 #if CONFIG_IOSCHED
     os_log(OS_LOG_DEFAULT, "SwitchBootPrefetch: busy-page raises requested %llu delivered %llu refused %llu",
            (unsigned long long)__atomic_load_n(&switch_reprio_requested, __ATOMIC_RELAXED),
@@ -370,8 +371,12 @@ static uint32_t switch_prefetch_replay_runs(const struct switch_prefetch_run *ru
             vp_valid =
                 switch_prefetch_vget_regular(mp, g_prefetch.fsids[run->volume], run->file_id, ctx, &vp, &vp_meta);
             if (vp_valid && files != NULL && file_count < run_count) {
-                const struct switch_named_file file = {vp,         vnode_vid(vp),        run->volume,
-                                                       run->file_id, vp_meta.file_size, vp_meta.mtime_sec,
+                const struct switch_named_file file = {vp,
+                                                       vnode_vid(vp),
+                                                       run->volume,
+                                                       run->file_id,
+                                                       vp_meta.file_size,
+                                                       vp_meta.mtime_sec,
                                                        vp_meta.mtime_nsec};
                 files[file_count++] = file;
             }

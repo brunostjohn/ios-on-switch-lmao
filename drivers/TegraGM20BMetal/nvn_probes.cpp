@@ -28,7 +28,7 @@ void RenderEncoder::nvnPassEnd()
                 stats.nvnDiscards++;
             }
         const DepthStencilAttachment &zs = pass_.depthStencil;
-        if (zs.texture && !zs.stored && !zs.loadedLater && !zcull_.store) {
+        if (zs.texture && !zs.stored && !zcull_.store) {
             p.m(kDiscardRenderTarget, kDiscardDepthStencil);
             stats.nvnDiscards++;
         }
@@ -52,7 +52,8 @@ void RenderEncoder::nvnKnob(Push &p)
 
 // The zcull region's format and Z format the probe asks of a pass with depth target `zs`, and SET_ZCULL's stencil-on form
 // where nvnPassEnd set stencilOn
-void RenderEncoder::nvnZcullFormats(Push &p, const DepthStencilAttachment &zs, uint32_t &regionFormat, uint32_t &zFormat)
+void RenderEncoder::nvnZcullFormats(Push &p, const DepthStencilAttachment &zs, uint32_t &regionFormat,
+                                    uint32_t &zFormat)
 {
     const uint32_t nvn = dev_->probeNvn.load(std::memory_order_relaxed);
     if (nvn & kNvnZcull4x2)

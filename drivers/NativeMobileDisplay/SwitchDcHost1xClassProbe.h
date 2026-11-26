@@ -90,7 +90,6 @@ bool dcClassScratchHolds(uint32_t before, uint32_t marker)
     return holds;
 }
 
-
 struct DcClassStream {
     uint32_t gateAt = 0, channelAt = 0;
     int error = 0;  // the submit's, or the gate increment's
@@ -137,10 +136,12 @@ static bool dcChannelProbed()
 bool dcClassStreamOut()
 {
     using Self = decltype(this);
+
     struct Ask {
         Self display;
         bool out;
     } ask = {this, false};
+
     getWorkLoop()->runAction(
         [](OSObject *, void *a, void *, void *, void *) -> IOReturn {
             auto &q = *static_cast<Ask *>(a);

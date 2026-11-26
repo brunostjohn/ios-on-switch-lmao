@@ -31,7 +31,8 @@ TEST(VICProbeGate, ReleaseKernelsRefuseSelectorSix)
 TEST(VICProbeGate, EveryExperimentAsksForTheProbesEntitlementFirst)
 {
     const std::string debug = Configured(client(), "TEGRA_VIC_STATS", true);
-    EXPECT_TRUE(CodeText(debug).has("case 6: // kernel tests (Apple's: release kernels refuse) return kernelTest(conn, a);"));
+    EXPECT_TRUE(
+        CodeText(debug).has("case 6: // kernel tests (Apple's: release kernels refuse) return kernelTest(conn, a);"));
     EXPECT_TRUE(Block(debug, "static IOReturn kernelTest(const Conn *conn, const IOExternalMethodArguments *a)")
                     .startsWith("if (!switch_task_entitled(conn->task, SWITCH_GPU_PROBES_ENTITLEMENT)) return "
                                 "kIOReturnNotPrivileged;"));

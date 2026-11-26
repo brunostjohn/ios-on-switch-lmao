@@ -7,7 +7,10 @@ final class ProbeQuickTests: XCTestCase {
         var finding = ProbeFinding(.pass)
         finding.quick(unless: false)
         XCTAssertEqual(finding.verdict, .passQuick)
-        XCTAssertEqual(finding.outcome(probe: "p", base: Metrics(), proof: "").metrics["claim_verdict"], .text("PASS_QUICK"))
+        XCTAssertEqual(
+            finding.outcome(probe: "p", base: Metrics(), proof: "").metrics["claim_verdict"],
+            .text("PASS_QUICK")
+        )
     }
 
     func testLongRunsKeepPassAndAFailStaysAFail() {

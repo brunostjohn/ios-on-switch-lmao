@@ -165,8 +165,7 @@ TEST_F(DeviceGuestBase, AnIndirectCommandBuffersDrawWritesTheInheritedBuffersAdd
     e->end();
     uint32_t seqno = 0;
     ASSERT_TRUE(cb->commit(seqno));
-    const uint64_t va =
-        uint64_t(gm20b::DeviceHarness::rootPush(dev, 3)) << 32 | gm20b::DeviceHarness::rootPush(dev, 2);
+    const uint64_t va = uint64_t(gm20b::DeviceHarness::rootPush(dev, 3)) << 32 | gm20b::DeviceHarness::rootPush(dev, 2);
     EXPECT_EQ(va, buffer.va + 32);
     dev.destroyBuffer(slots);
     dev.destroyBuffer(buffer);

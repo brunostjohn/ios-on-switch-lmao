@@ -93,7 +93,12 @@ struct CAGlassAxesScene: GPUScene {
                     for (index, texture) in attachments.enumerated() {
                         pass.colorAttachments[index].texture = texture
                         pass.colorAttachments[index].loadAction = .clear
-                        pass.colorAttachments[index].clearColor = MTLClearColor(red: 0.1, green: 0.2, blue: 0.3, alpha: 1)
+                        pass.colorAttachments[index].clearColor = MTLClearColor(
+                            red: 0.1,
+                            green: 0.2,
+                            blue: 0.3,
+                            alpha: 1
+                        )
                         pass.colorAttachments[index].storeAction = index == 0 ? .store : .dontCare
                     }
                     let encoder = commands.makeRenderCommandEncoder(descriptor: pass)!

@@ -37,7 +37,9 @@ class ResolveSrgbTables(unittest.TestCase):
         self.assertEqual(array(self.header, r'kSrgbLinear\[256\]'), rust_array(self.measured, 'SRGB_RESOLVE_LINEAR'))
 
     def test_thresholds_are_metals(self) -> None:
-        self.assertEqual(array(self.header, r'kSrgbThresholds\[255\]'), rust_array(self.measured, 'SRGB_RESOLVE_THRESHOLDS'))
+        self.assertEqual(
+            array(self.header, r'kSrgbThresholds\[255\]'), rust_array(self.measured, 'SRGB_RESOLVE_THRESHOLDS')
+        )
 
     def test_a_unorm8_read_gives_its_code_back(self) -> None:
         for code in range(256):

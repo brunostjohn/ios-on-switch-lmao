@@ -32,8 +32,16 @@ struct Channel {
 
     ScrubFate fate()
     {
-        return gm20b::scrubFate([&] { return read(standIn || passed); }, [&] { return read(live); },
-                                [&] { return killedRecord; });
+        return gm20b::scrubFate(
+            [&] {
+                return read(standIn || passed);
+            },
+            [&] {
+                return read(live);
+            },
+            [&] {
+                return killedRecord;
+            });
     }
 };
 

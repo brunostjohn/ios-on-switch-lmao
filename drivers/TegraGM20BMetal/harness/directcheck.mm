@@ -91,7 +91,8 @@ void dumpRecord(const char *dir, const std::string &key, const gm20b::RuntimeRec
                     hexOf(v.program.image) + "\"}";
     }
     fprintf(f,
-            "{\"key\": %s, \"vs\": \"%s\", \"fs\": \"%s\", \"vs_gprs\": %u, \"fs_gprs\": %u, \"fs_bound_textures\": %u, \"blob\": [%s], "
+            "{\"key\": %s, \"vs\": \"%s\", \"fs\": \"%s\", \"vs_gprs\": %u, \"fs_gprs\": %u, \"fs_bound_textures\": "
+            "%u, \"blob\": [%s], "
             "\"split_fs\": \"%s\", \"split_prologue\": \"%s\", \"residual_words\": [%s], \"variants\": [%s], "
             "\"storage_mask\": %u, \"storage_blend_mask\": %u, \"storage_blend_model\": %u, "
             "\"half_blend_color_word\": %u, \"free_rung\": %d, \"free_colour\": %u, \"free_program\": %s, "
@@ -197,7 +198,8 @@ int main(int argc, char **argv)
                 dumpRecord(dir, key, rec);
                 dumpFetchFree(direct, s, line, key, textures, dir);
             }
-            if (const char *dir = getenv("DIRECTCHECK_REPLAY_DIR"); dir && *dir && outcome == gm20b::CompileOutcome::Made) {
+            if (const char *dir = getenv("DIRECTCHECK_REPLAY_DIR");
+                dir && *dir && outcome == gm20b::CompileOutcome::Made) {
                 NSString *name = [NSString stringWithFormat:@"%016llx", (unsigned long long)gm20b::packKeyHash(key)];
                 gm20b::CacheKey identity = {};
                 identity.key = name.UTF8String;

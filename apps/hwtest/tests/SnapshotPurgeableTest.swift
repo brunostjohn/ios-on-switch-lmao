@@ -58,7 +58,10 @@ struct SnapshotPurgeableTest: HWTest {
         metrics.set("marks_unsupported", marks.unsupported)
         metrics.set("marks_compressed", marks.compressed)
         metrics.set("marks_other", marks.other)
-        for (cause, name) in marks.by.sorted(by: { $0.key < $1.key }) where name != "-" { metrics.set("marks_\(cause)_by", name) }
+        for (cause, name) in marks.by.sorted(by: { $0.key < $1.key }) where name != "-" { metrics.set(
+            "marks_\(cause)_by",
+            name
+        ) }
         guard marks.asked > 0 else {
             return .skip("no process asked APFS for a purgeable mark since boot", metrics)
         }

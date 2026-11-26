@@ -366,8 +366,10 @@ extern "C" int switch_gpu_copy_l2_flush(void (*fn)(void *arg, int status), void 
 		if (!result) {
 			result = switch_gpu_chan_exec_visibility(
 				chan, nullptr, 0, nullptr, 0, &sequence, nullptr,
-				SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT | SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY |
-					SWITCH_GPU_SUBMIT_HOST_WRITTEN | SWITCH_GPU_SUBMIT_FORCE_FENCE);
+				SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT |
+					SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY |
+					SWITCH_GPU_SUBMIT_HOST_WRITTEN |
+					SWITCH_GPU_SUBMIT_FORCE_FENCE);
 			if (result)
 				switch_gpu_backing_token_release(&job.completion);
 		}

@@ -27,8 +27,7 @@ unsigned roomWaits, completions;
 int completedStatus;
 bool watchedAtGate;
 
-int switch_gpu_bridge_submit_watched(const switch_gpu_backing_token *tokens, uint32_t count,
-                                     switch_gpu_bridge **bridge)
+int switch_gpu_bridge_submit_watched(const switch_gpu_backing_token *tokens, uint32_t count, switch_gpu_bridge **bridge)
 {
     if (busy-- > 0)
         return -16;

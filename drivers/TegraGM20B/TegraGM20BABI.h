@@ -247,7 +247,8 @@ enum {
 
 /* TegraGM20BAbiBoAllocReply.reserved, debug kernels only (0 in a release kernel) */
 enum {
-	TegraGM20BBoReplySmmu = 1u << 0, /* the GPU reaches the BO's memory through the Tegra SMMU */
+	TegraGM20BBoReplySmmu = 1u
+		<< 0, /* the GPU reaches the BO's memory through the Tegra SMMU */
 };
 
 /* Method 2. Zero-filled pages below 4 GiB. map_token is the clientMemoryForType type for IOConnectMapMemory64. */

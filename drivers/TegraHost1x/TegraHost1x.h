@@ -138,6 +138,7 @@ int tegra_host1x_syncpt_cpu_increment(uint32_t id);
 enum {
     SWITCH_HOST1X_PROBE_SYNCPTS = 4
 };
+
 int switch_host1x_probe_syncpts_claim(uint32_t ids[SWITCH_HOST1X_PROBE_SYNCPTS]);  // OK, EBUSY or ENOMEM
 void switch_host1x_probe_syncpts_release(void);
 #endif

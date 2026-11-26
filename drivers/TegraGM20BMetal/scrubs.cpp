@@ -49,8 +49,16 @@ void Device::scrubbedFree(const Scrub &s, DeferredFrees *deferred)
 void Device::retireScrubs(DeferredFrees *deferred)
 {
     for (auto it = scrubbing_.begin(); it != scrubbing_.end();) {
-        const ScrubFate fate = scrubFate([&] { return done(it->seqno); }, [&] { return channelCurrent(it->generation); },
-                                         [&] { return killed(it->seqno); });
+        const ScrubFate fate = scrubFate(
+            [&] {
+                return done(it->seqno);
+            },
+            [&] {
+                return channelCurrent(it->generation);
+            },
+            [&] {
+                return killed(it->seqno);
+            });
         if (fate == ScrubFate::Waiting) {
             ++it;
             continue;

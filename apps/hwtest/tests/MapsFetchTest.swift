@@ -94,7 +94,8 @@ struct MapsFetchTest: HWTest {
     }
 
     static func unwrittenPixels(_ image: [UInt8]) -> Int {
-        stride(from: 0, to: image.count, by: 4).filter { at in (0 ..< 4).allSatisfy { image[at + $0] == unwritten[$0] } }
+        stride(from: 0, to: image.count, by: 4)
+            .filter { at in (0 ..< 4).allSatisfy { image[at + $0] == unwritten[$0] } }
             .count
     }
 

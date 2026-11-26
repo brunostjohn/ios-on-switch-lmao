@@ -206,7 +206,6 @@ private:
             state_->lru.erase(back);
         }
     }
-
 };
 
 }  // namespace switch_compiler

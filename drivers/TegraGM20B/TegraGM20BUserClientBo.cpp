@@ -75,8 +75,8 @@ const char *compressibleRefusal(uint64_t bytes, bool compositor)
 	const tgm_pool::Limits limits = {kPoolSmallBytes, kPoolFloorBytes, poolReserveBytes(),
 					 clientPoolBytes()};
 	uint64_t want = __atomic_load_n(&gCompositorCompressedWant, __ATOMIC_RELAXED);
-	const char *refused = tgm_pool::compressibleRefusal(bytes, tgm_pool_avail(), limits, compositor,
-							    tgm_pool::compositorReserve(want));
+	const char *refused = tgm_pool::compressibleRefusal(
+		bytes, tgm_pool_avail(), limits, compositor, tgm_pool::compositorReserve(want));
 	if (compositor && !refused)
 		__atomic_store_n(&gCompositorCompressedWant, 0, __ATOMIC_RELAXED);
 	while (compositor && refused && want < bytes &&
@@ -370,7 +370,8 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 				 tgm_pool::FromSystem;
 		}
 	}
-	const switch_gpu_spare_kind spareKind = system ? SWITCH_GPU_SPARE_WC : SWITCH_GPU_SPARE_CACHED;
+	const switch_gpu_spare_kind spareKind =
+		system ? SWITCH_GPU_SPARE_WC : SWITCH_GPU_SPARE_CACHED;
 	if (!ret && !bo->pool_va && !compressible && !(in->flags & TegraGM20BBoContiguous))
 		spare = spareTake(in->bytes, spareKind, charge.critical);
 	else if (TGM_STATS && !ret && !bo->pool_va && !compressible)
@@ -471,8 +472,9 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 			bo->backing = switch_gpu_pin_memory(bo->pas, bo->npages, 0, smmuDesc, true);
 		else if (bo->buffer.memory && !(in->flags & TegraGM20BBoContiguous)) {
 			bo->bufferKernelMap = bo->buffer.map != nullptr;
-			bo->backing = switch_gpu_pin_cached(bo->pas, bo->backing_pages, bo->npages,
-							    bo->buffer, spareKind, bo->cachedMapping);
+			bo->backing =
+				switch_gpu_pin_cached(bo->pas, bo->backing_pages, bo->npages,
+						      bo->buffer, spareKind, bo->cachedMapping);
 			if (bo->backing) {
 				bo->cachedMapping = nullptr;
 				bo->buffer.map = nullptr;
@@ -507,7 +509,8 @@ IOReturn AGXDeviceUserClient::boAlloc(const TegraGM20BAbiBoAlloc *in,
 		}
 	}
 #if DEVELOPMENT || DEBUG
-	const uint32_t replied = !ret && bo->mem && tgm_mem_is_smmu(bo->mem) ? TegraGM20BBoReplySmmu : 0u;
+	const uint32_t replied =
+		!ret && bo->mem && tgm_mem_is_smmu(bo->mem) ? TegraGM20BBoReplySmmu : 0u;
 #else
 	const uint32_t replied = 0;
 #endif

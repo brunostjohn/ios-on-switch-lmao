@@ -18,10 +18,12 @@ std::atomic<unsigned> releaseCount, ownerReleasesAtRelease, flushAsks;
 // though the GPU had run it, unless a test captures it (its completion then runs when the test says) or refuses it
 std::atomic<bool> captureFlushes{false};
 std::atomic<int> refuseFlushes{0};
+
 struct Flush {
 	void (*fn)(void *, int);
 	void *arg;
 };
+
 std::vector<Flush> flushes;
 std::atomic<bool> bigSmmuFallbackToDirect{false};
 std::mutex hookMutex;
@@ -207,12 +209,14 @@ TEST_F(AllocatedMemoryCrossTu, OneRetirementBatchSharesOneL2Invalidate)
 	EXPECT_EQ(laterCount.load(), 3u);
 	ASSERT_EQ(flushes.size(), 1u);
 	EXPECT_EQ(delCount.load(), 0u);
-	EXPECT_EQ(ownerReleases.load(), 0u) << "a pinned page went back before the batch's flush completed";
+	EXPECT_EQ(ownerReleases.load(), 0u)
+		<< "a pinned page went back before the batch's flush completed";
 	flushes[0].fn(flushes[0].arg, 0);
 	EXPECT_EQ(finishCount.load(), 0u) << "the CPU waited for the L2";
 	EXPECT_EQ(releaseCount.load(), 1u);
 	EXPECT_EQ(delCount.load(), 3u);
-	EXPECT_EQ(ownerReleasesAtRelease.load(), 0u) << "a pinned page went back before the batch's SMMU unmaps";
+	EXPECT_EQ(ownerReleasesAtRelease.load(), 0u)
+		<< "a pinned page went back before the batch's SMMU unmaps";
 	EXPECT_EQ(ownerReleases.load(), 3u);
 
 	tgm_mem *alone = nullptr;
@@ -449,7 +453,9 @@ void retireSmmuBatch(uint64_t &next, uint32_t count)
 		for (uint32_t p = 0; p < 16; ++p)
 			pages.push_back(next += 4096);
 		switch_gpu_backing *b =
-			switch_gpu_backing_register(pages.data(), 16, 0, &batchOwner, [](void *) { ++ownerReleases; });
+			switch_gpu_backing_register(pages.data(), 16, 0, &batchOwner, [](void *) {
+				++ownerReleases;
+			});
 		ASSERT_NE(b, nullptr);
 		tgm_mem *mem = nullptr;
 		ASSERT_EQ(allocatedMemorySmmu(b, 16, &mem), 0);
@@ -466,7 +472,8 @@ TEST_F(AllocatedMemoryCrossTu, ABatchsPagesGoBackAtItsOwnFlushWhicheverCompletes
 	retireSmmuBatch(next_page, 2);
 	ASSERT_EQ(flushes.size(), 1u);
 	flushes[0].fn(flushes[0].arg, 0);
-	EXPECT_EQ(ownerReleases.load(), 2u) << "the first batch's flush completed before the second retired";
+	EXPECT_EQ(ownerReleases.load(), 2u)
+		<< "the first batch's flush completed before the second retired";
 	retireSmmuBatch(next_page, 3);
 	ASSERT_EQ(flushes.size(), 2u);
 	EXPECT_EQ(ownerReleases.load(), 2u);
@@ -477,7 +484,8 @@ TEST_F(AllocatedMemoryCrossTu, ABatchsPagesGoBackAtItsOwnFlushWhicheverCompletes
 	retireSmmuBatch(next_page, 1);
 	ASSERT_EQ(flushes.size(), 4u) << "a batch rode a flush queued before its own unmaps";
 	flushes[2].fn(flushes[2].arg, 0);
-	EXPECT_EQ(ownerReleases.load(), 7u) << "the earlier flush released the later batch, or not its own";
+	EXPECT_EQ(ownerReleases.load(), 7u)
+		<< "the earlier flush released the later batch, or not its own";
 	flushes[3].fn(flushes[3].arg, 0);
 	EXPECT_EQ(ownerReleases.load(), 8u);
 	EXPECT_EQ(finishCount.load(), 0u);
@@ -524,7 +532,9 @@ TEST_F(AllocatedMemoryCrossTu, ABatchWithNothingDeferredReleasesAtOnce)
 	for (uint32_t p = 0; p < 16; ++p)
 		pages.push_back(next_page += 4096);
 	switch_gpu_backing *b =
-		switch_gpu_backing_register(pages.data(), 16, 0, &batchOwner, [](void *) { ++ownerReleases; });
+		switch_gpu_backing_register(pages.data(), 16, 0, &batchOwner, [](void *) {
+			++ownerReleases;
+		});
 	ASSERT_NE(b, nullptr);
 	tgm_mem *mem = nullptr;
 	ASSERT_EQ(switch_gpu_backing_tgm_mem_direct(b, 16, &mem), 0);

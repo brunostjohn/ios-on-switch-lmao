@@ -33,8 +33,9 @@ TEST_F(PlaneConversion, StillContentMovedOrShrunkWhollyOnTheScreenKeepsItsPlane)
     const int slot = convert();
     ASSERT_GE(slot, 0);
     display->busy[slot] = true;
-    for (const native_planes::Rect dst : {native_planes::Rect{300, 400, 256, 128}, native_planes::Rect{100, 200, 192, 96},
-                                          native_planes::Rect{0, 0, 64, 32}, native_planes::Rect{10, 10, 80, 40}}) {
+    for (const native_planes::Rect dst :
+         {native_planes::Rect{300, 400, 256, 128}, native_planes::Rect{100, 200, 192, 96},
+          native_planes::Rect{0, 0, 64, 32}, native_planes::Rect{10, 10, 80, 40}}) {
         layer.dst = dst;
         SCOPED_TRACE(testing::Message() << dst.x << "," << dst.y << " " << dst.w << "x" << dst.h);
         EXPECT_EQ(offer(), slot);

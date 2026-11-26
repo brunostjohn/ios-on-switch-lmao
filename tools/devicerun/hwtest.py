@@ -711,6 +711,7 @@ TESTS: dict[str, bool] = {
     'gpu.gm20b.mixed_merge_probe': False,
     'gpu.gm20b.bytes_address': False,
     'gpu.gm20b.packed_fetch_read': False,
+    'gpu.gm20b.powr_specials': False,
 }
 
 # The tests only one iOS version's app runs (apps/hwtest/app<version>), by that version.
@@ -797,9 +798,9 @@ OPEN: dict[str, str] = {
         'encode ahead per pass and the per-draw constant buffer slots are built'
     ),
     'gpu.gm20b.storage_forms': (
-        "accepted 26 Nov (no frame time traded for a code): GM20B has no tile memory, so a fetching pass reads its "
+        'accepted 26 Nov (no frame time traded for a code): GM20B has no tile memory, so a fetching pass reads its '
         "target's codes where an M4 Max holds halves; 19:18: BGR5A1 blue 1 code off at 1 triangle and 3 at 2 (the "
-        "case triples what it reads), 4x BGRA8Unorm_sRGB 1 code at 2 triangles, every other case exact"
+        'case triples what it reads), 4x BGRA8Unorm_sRGB 1 code at 2 triangles, every other case exact'
     ),
     'gpu.gm20b.plain_rows_quarter_turns': (
         "an M4 Max stores a quarter-turned pass's frame tiles concurrently: no fixed order fits the rows it keeps "

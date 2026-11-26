@@ -151,6 +151,7 @@ private:
     std::mutex publishLock_;
 
     void persist();
+
     // Where `p`'s entry is (Store::find over its candidate names): `bytes`, and `stored` its result, -1 for none or one to
     // make again. A publish chooses again as it writes (Store::put), since another content may have taken the name
     // meanwhile.

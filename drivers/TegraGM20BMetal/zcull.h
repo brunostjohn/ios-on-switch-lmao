@@ -257,8 +257,8 @@ inline bool zcullInvalidates(ZcullPass &z, const DepthStencilDesc &ds, bool dept
 {
     if (!z.candidate || z.invalidated)
         return false;
-    bool unsafe = (fragmentDepth && !(keep & kZcullKeepFragmentDepth)) || shaderTests ||
-                  (fragmentStores && !earlyFragmentTests);
+    bool unsafe =
+        (fragmentDepth && !(keep & kZcullKeepFragmentDepth)) || shaderTests || (fragmentStores && !earlyFragmentTests);
     if (stencil)
         unsafe |= zcullStencilWrites(ds.front) || zcullStencilWrites(ds.back);
     if (depth) {

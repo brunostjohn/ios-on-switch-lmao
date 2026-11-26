@@ -35,9 +35,9 @@ static inline void switch_fsctl_failed(__unused struct vnode *vp, __unused unsig
 /* APFS's 'J' 68 (0xc0084a44, 8 bytes in and out): no header in the tree names it. On 24B119 SplashBoard sends it on its
  * snapshot files (refused 22), and OTACrashCopier on the DiagnosticReports/Retired directory (refused 1). What it does
  * on 21H461 is unseen. */
-#define SWITCH_FSCTL_SET_PURGEABLE  68u
-#define SWITCH_FSCTL_MARK_LINES     128u /* boot 21 refused 106 marks */
-#define SWITCH_FSCTL_OTHER_LINES    32u
+#define SWITCH_FSCTL_SET_PURGEABLE 68u
+#define SWITCH_FSCTL_MARK_LINES    128u /* boot 21 refused 106 marks */
+#define SWITCH_FSCTL_OTHER_LINES   32u
 
 /* What became of a purgeable mark (kern.switch_fsctl_marks, debug kernels): APFS answers ENOTSUP for a volume without
  * the purgeable feature bits (a card imaged before the image builder set them) and refuses a decmpfs-compressed file. */

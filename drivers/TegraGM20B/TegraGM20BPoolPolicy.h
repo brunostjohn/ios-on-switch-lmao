@@ -68,7 +68,8 @@ constexpr uint64_t CompositorCompressedBytes = 8ULL << 20, CompositorCompressedM
 // The reserve an app's compressed BO leaves, after the compositor's largest refused ask since its last made one
 inline uint64_t compositorReserve(uint64_t refusedWant)
 {
-	const uint64_t want = refusedWant < CompositorCompressedMost ? refusedWant : CompositorCompressedMost;
+	const uint64_t want =
+		refusedWant < CompositorCompressedMost ? refusedWant : CompositorCompressedMost;
 	return want > CompositorCompressedBytes ? want : CompositorCompressedBytes;
 }
 

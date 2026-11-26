@@ -40,7 +40,8 @@ static int fsctl_marks_sysctl(__unused struct sysctl_oid *oidp, __unused void *a
 {
     char line[192];
 
-    snprintf(line, sizeof(line), "ok=%u unsupported=%u compressed=%u other=%u unsupported_by=%s compressed_by=%s "
+    snprintf(line, sizeof(line),
+             "ok=%u unsupported=%u compressed=%u other=%u unsupported_by=%s compressed_by=%s "
              "other_by=%s",
              os_atomic_load(&fsctl_mark_counts[SWITCH_FSCTL_MARK_OK], relaxed),
              os_atomic_load(&fsctl_mark_counts[SWITCH_FSCTL_MARK_UNSUPPORTED], relaxed),

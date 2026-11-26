@@ -121,7 +121,8 @@ static bool compilerAnswers(SwitchMetalComputeState *s, SwitchMetalFunction *f, 
     gm20bNoteMiss("compute", keyHash, key, s->_direct.label);
     if (!gRM->completion || !gRM->completion->facts(f, s->_direct, key, made, failure)) {
         if (gm20bFirstNaming(keyHash, 2))
-            os_log_error(gm20bLog(), "SwitchMetal: %{public}s: no compute state %{public}s (%{public}s) %016llx: %{public}s",
+            os_log_error(gm20bLog(),
+                         "SwitchMetal: %{public}s: no compute state %{public}s (%{public}s) %016llx: %{public}s",
                          getprogname(), f.name.UTF8String ?: "-", s->_direct.label.UTF8String ?: "-",
                          (unsigned long long)keyHash, failure.c_str());
         if (error)
