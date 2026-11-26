@@ -95,8 +95,14 @@ static inline uint32_t tegra_host1x_op_incr_syncpt(uint32_t cond, uint32_t syncp
 // Idempotent; returns TEGRA_HOST1X_OK or the failure, after logging one line either way.
 int tegra_host1x_start(void);
 
-// Syncpoints this driver hands out (above the IDs the boot chain and Horizon use: hekate di.c waits on 9).
-int tegra_host1x_syncpt_alloc(uint32_t *id);
+// A syncpoint from this driver's pool (SwitchHost1xSyncptPool.h): never sleeps, any context. TEGRA_HOST1X_ENOMEM, with
+// one os_log_error naming `caller`, when every one is in use. The value is never reset: an owner reads its base fresh.
+int tegra_host1x_syncpt_alloc_named(uint32_t *id, const char *caller);
+#define tegra_host1x_syncpt_alloc(id) tegra_host1x_syncpt_alloc_named((id), __func__)
+// Back to the pool, once no increment can land any more and no stream, fence or waiter names `id`; the pool hands it
+// out again only after every other free one. Thread context. An id not handed out now, or one a fence or waiter
+// still names, panics.
+void tegra_host1x_syncpt_free(uint32_t id);
 uint32_t tegra_host1x_syncpt_read(uint32_t id);
 // Only after the exclusive producer stopped and retained completion records say failed; this never publishes success.
 // `max_increments`: the most the caller's cancelled jobs leave outstanding; a longer distance is refused. The jobs

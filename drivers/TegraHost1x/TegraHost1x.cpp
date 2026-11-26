@@ -15,10 +15,12 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOWorkLoop.h>
+#include <os/log.h>
 #include "TegraHost1x.h"
 #include "SwitchHost1xChannels.h"
 #include "SwitchHost1xCpuIncrement.h"
 #include "SwitchHost1xIntr.h"
+#include "SwitchHost1xSyncptPool.h"
 #include "../ArmGIC/SwitchInterrupts.h"
 #include "../TegraSMMU/TegraSMMU.h"
 #include "../../kits/SwitchCAR/SwitchCAR.h"
@@ -30,7 +32,7 @@ constexpr uint64_t kMcPA = 0x70019000;
 constexpr unsigned kClock = 28;  // TEGRA210_CLK_HOST1X: CAR bank L bit 28, also its reset
 constexpr uint32_t kSyncOffset = 0x2100;
 constexpr uint32_t kIntid = 32 + 65;  // "syncpt" (tegra210.dtsi host1x@50000000)
-constexpr uint32_t kSyncpts = 192, kFirstOwn = 160;
+constexpr uint32_t kSyncpts = SwitchHost1xSyncptPool::kSyncpts;
 
 enum : uint32_t {  // clock and reset controller (Linux clk.h, clk-tegra-periph.c)
     CLK_OUT_ENB_L = 0x010,
@@ -61,7 +63,9 @@ IOWorkLoop *gLoop;
 IOFilterInterruptEventSource *gIrq;
 IOLock *gSubmitLock;  // every channel's push buffer and arena, and suspend/resume
 
-uint32_t gNextSyncpt = kFirstOwn;
+// Never handed out: 0, mainline host1x's no-op syncpoint, and 9, which DC A's CONT_SYNCPT_VSYNC counts at every vblank
+// (TegraDisplayPower.cpp, as hekate's di.c and L4T's dc.c set it). bringUp adds the ones the boot chain left counting.
+SwitchHost1xSyncptPool gPool = {{1ULL << 0 | 1ULL << 9, 0, 0}, {}, {}, SwitchHost1xSyncptPool::kFirstHandedOut, 0, 2};
 int gState;                 // 0 not started, 1 up, 2 suspended, < 0 failed
 uint32_t gSaved[kSyncpts];  // syncpoint values across SC7, which resets the sync unit
 unsigned gClockMHz;
@@ -150,6 +154,22 @@ bool attachInterrupt()
     return true;
 }
 
+// A syncpoint the boot chain left counting may still be counted by what set it up: it stays out of the pool.
+void keepBootChainSyncpts()
+{
+    char kept[160] = "";
+    size_t used = 0;
+    for (uint32_t id = 1; id < kSyncpts; id++) {
+        const uint32_t value = sync(SYNC_SYNCPT + 4 * id);
+        if (!value || id == 9 || gPool.owns(id) || !gPool.reserve(id))
+            continue;
+        const int n = used < sizeof(kept) ? snprintf(kept + used, sizeof(kept) - used, " %u=%u", id, value) : 0;
+        used += n > 0 ? static_cast<size_t>(n) : 0;
+    }
+    if (kept[0])
+        IOLog("TegraHost1x: syncpoints the boot chain left counting, kept out of the pool (id=value):%s\n", kept);
+}
+
 int bringUp()
 {
     gHost = switch_mmio_map(kHost1xPA, kHost1xSize);
@@ -175,11 +195,12 @@ int bringUp()
     else
         IOLog("TegraHost1x: command DMA not behind the SMMU (%s): host1x can reach all of RAM below 4 GiB\n", why);
     switch_host1x_channels_program();
+    keepBootChainSyncpts();
     gState = 1;
     switch_host1x_intr_start();
     const uint32_t filtered = switch_host1x_channels_filter_stuck();
-    IOLog("TegraHost1x: H1 ok channel 0, host1x %u MHz%s, gather filter %s\n", gClockMHz,
-          enabled ? ", enabled here" : "", filtered ? "on" : "off");
+    IOLog("TegraHost1x: H1 ok channel 0, host1x %u MHz%s, gather filter %s, %u syncpoints to hand out\n", gClockMHz,
+          enabled ? ", enabled here" : "", filtered ? "on" : "off", gPool.capacity());
     if (filtered)
         IOLog("TegraHost1x: H1 FAIL the gather filter stays on for channels %#x: their streams' waits do not run\n",
               filtered);
@@ -208,13 +229,21 @@ extern "C" int tegra_host1x_start(void)
     return state == 1 ? TEGRA_HOST1X_OK : TEGRA_HOST1X_ENODEV;
 }
 
-extern "C" int tegra_host1x_syncpt_alloc(uint32_t *id)
+extern "C" int tegra_host1x_syncpt_alloc_named(uint32_t *id, const char *caller)
 {
-    const uint32_t next = __atomic_fetch_add(&gNextSyncpt, 1, __ATOMIC_RELAXED);
-    if (next >= kSyncpts)
-        return TEGRA_HOST1X_ENOMEM;
-    *id = next;
-    return TEGRA_HOST1X_OK;
+    if (gPool.alloc(id))
+        return TEGRA_HOST1X_OK;
+    os_log_error(OS_LOG_DEFAULT, "TegraHost1x: no syncpoint for %s: all %u the pool holds are in use", caller,
+                 gPool.capacity());
+    return TEGRA_HOST1X_ENOMEM;
+}
+
+extern "C" void tegra_host1x_syncpt_free(uint32_t id)
+{
+    if (switch_host1x_fence_names(id))
+        panic("TegraHost1x: syncpoint %u freed while a fence or waiter still waits on it", id);
+    if (!gPool.free(id))
+        panic("TegraHost1x: syncpoint %u freed, but it is not handed out (never, reserved, or freed already)", id);
 }
 
 extern "C" void tegra_host1x_module_teardown(uint32_t module)
@@ -235,7 +264,7 @@ extern "C" int tegra_host1x_syncpt_release_failed(uint32_t id, uint32_t threshol
 {
     if (!gHost || !gSubmitLock || gState != 1)
         return TEGRA_HOST1X_ENODEV;
-    if (id < kFirstOwn || id >= kSyncpts || id >= __atomic_load_n(&gNextSyncpt, __ATOMIC_ACQUIRE))
+    if (!gPool.owns(id))
         return TEGRA_HOST1X_EINVAL;
     const uint32_t reached = tegra_host1x_syncpt_read(id);
     const int32_t distance = static_cast<int32_t>(threshold - reached);
@@ -280,9 +309,7 @@ extern "C" int tegra_host1x_syncpt_cpu_increment(uint32_t id)
     } registers;
 
     IOLockLock(gSubmitLock);
-    const int result = gState == 1
-                           ? switch_host1x_cpu_increment(registers, id, __atomic_load_n(&gNextSyncpt, __ATOMIC_ACQUIRE))
-                           : TEGRA_HOST1X_ENODEV;
+    const int result = gState == 1 ? switch_host1x_cpu_increment(registers, id, gPool.owns(id)) : TEGRA_HOST1X_ENODEV;
     IOLockUnlock(gSubmitLock);
     return result;
 }
@@ -296,8 +323,10 @@ extern "C" void tegra_host1x_suspend(void)
         return;
     switch_host1x_intr_stop();
     IOLockLock(gSubmitLock);
-    for (uint32_t id = kFirstOwn; id < kSyncpts && id < gNextSyncpt; id++)
-        gSaved[id] = sync(SYNC_SYNCPT + 4 * id);
+    for (uint32_t id = 0; id < kSyncpts; id++) {
+        if (gPool.everOwned(id))
+            gSaved[id] = sync(SYNC_SYNCPT + 4 * id);
+    }
     switch_host1x_channels_stop();
     gState = 2;
     IOLockUnlock(gSubmitLock);
@@ -325,8 +354,10 @@ extern "C" void tegra_host1x_resume(void)
         return;
     }
     syncConfigure();
-    for (uint32_t id = kFirstOwn; id < kSyncpts && id < gNextSyncpt; id++)
-        syncWrite(SYNC_SYNCPT + 4 * id, gSaved[id]);
+    for (uint32_t id = 0; id < kSyncpts; id++) {
+        if (gPool.everOwned(id))
+            syncWrite(SYNC_SYNCPT + 4 * id, gSaved[id]);
+    }
     switch_host1x_channels_program();
     gState = 1;
     switch_host1x_intr_start();

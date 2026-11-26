@@ -214,6 +214,16 @@ void switch_host1x_intr_handle()
     }
 }
 
+bool switch_host1x_fence_names(uint32_t id)
+{
+    if (!gLock || id >= SwitchHost1xFenceList<Registers>::kSyncpts)
+        return false;
+    IOLockLock(gLock);
+    const bool named = gList.names(id);
+    IOLockUnlock(gLock);
+    return named;
+}
+
 void switch_host1x_intr_stop()
 {
     IOLockLock(gLock);

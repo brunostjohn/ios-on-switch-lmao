@@ -4,6 +4,14 @@ load("//bazel/testing:defs.bzl", "host_library", "host_shims", "host_test")
 lint_files()
 
 host_test(
+    name = "switch_host1x_syncpt_pool_test",
+    srcs = [
+        "switch_host1x_syncpt_pool_test.cpp",
+        "//drivers/TegraHost1x:SwitchHost1xSyncptPool.h",
+    ],
+)
+
+host_test(
     name = "switch_host1x_smmu_source_test",
     srcs = ["switch_host1x_smmu_source_test.cpp"],
     data = ["//drivers/TegraHost1x:SwitchHost1xSmmu.cpp"],
@@ -109,6 +117,7 @@ host_test(
         "//drivers/TegraHost1x:SwitchHost1xFailureRelease.h",
         "//drivers/TegraHost1x:SwitchHost1xFence.h",
         "//drivers/TegraHost1x:SwitchHost1xIntr.h",
+        "//drivers/TegraHost1x:SwitchHost1xSyncptPool.h",
         "//drivers/TegraHost1x:TegraHost1x.h",
         "//drivers/TegraSMMU:TegraSMMU.h",
         "//kits/SwitchCAR:SwitchCAR.h",
@@ -177,6 +186,7 @@ host_test(
         "//drivers/TegraHost1x:SwitchHost1xFence.h",
         "//drivers/TegraHost1x:SwitchHost1xFenceList.h",
         "//drivers/TegraHost1x:SwitchHost1xIntr.h",
+        "//drivers/TegraHost1x:SwitchHost1xSyncptPool.h",
         "//drivers/TegraHost1x:TegraHost1x.h",
         "//drivers/TegraSMMU:TegraSMMU.h",
         "//kits/SwitchCAR:SwitchCAR.h",

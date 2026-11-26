@@ -514,3 +514,29 @@ TEST_F(Host1xFence, TheFilterRunsWithPreemptionOffAndNothingThatBlocks)
     interrupt(184);
 }
 }  // namespace
+
+// tegra_host1x_syncpt_free: an id goes back only when no fence names it and it was handed out; either mistake panics.
+TEST_F(Host1xFence, AFreedSyncpointNamedByAFenceOrNotHandedOutPanics)
+{
+    uint32_t id = 0;
+    ASSERT_EQ(tegra_host1x_syncpt_alloc(&id), TEGRA_HOST1X_OK);
+    value(id) = 0;
+    switch_host1x_fence fence;
+    switch_host1x_fence_init(&fence, id, 5, signaled);
+    ASSERT_EQ(switch_host1x_fence_add(&fence, 0), TEGRA_HOST1X_OK);
+    try {
+        tegra_host1x_syncpt_free(id);
+        ADD_FAILURE() << "no panic";
+    } catch (const std::runtime_error &e) {
+        EXPECT_EQ(std::string(e.what()),
+                  "TegraHost1x: syncpoint " + std::to_string(id) + " freed while a fence or waiter still waits on it");
+    }
+    EXPECT_TRUE(switch_host1x_fence_remove(&fence));
+    tegra_host1x_syncpt_free(id);
+    try {
+        tegra_host1x_syncpt_free(id);
+        ADD_FAILURE() << "no panic";
+    } catch (const std::runtime_error &e) {
+        EXPECT_NE(std::string(e.what()).find("not handed out"), std::string::npos) << e.what();
+    }
+}

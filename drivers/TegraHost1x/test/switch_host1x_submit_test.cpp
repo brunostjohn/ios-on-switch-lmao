@@ -224,6 +224,11 @@ void switch_host1x_intr_stop()
 void switch_host1x_intr_handle()
 {}
 
+bool switch_host1x_fence_names(uint32_t)
+{
+    return false;
+}
+
 void switch_host1x_intr_filter()
 {}
 

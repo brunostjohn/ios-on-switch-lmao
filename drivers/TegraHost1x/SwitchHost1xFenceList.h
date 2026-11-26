@@ -98,6 +98,12 @@ public:
     // syncpt_thresh_isr: each armed syncpoint whose status is set has its interrupt disabled and cleared, then its
     // reached fences expire and the next one is armed. Status bits of syncpoints nobody armed are sticky but do not
     // drive the line, and are left alone.
+    // Whether a fence is queued on syncpoint `id`.
+    bool names(uint32_t id) const
+    {
+        return id < kSyncpts && head[id] != nullptr;
+    }
+
     void interrupt(Registers &r, SwitchHost1xExpired &done)
     {
         for (uint32_t word = 0; word < kSyncpts / 32; ++word) {
