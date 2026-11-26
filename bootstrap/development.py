@@ -3,7 +3,7 @@
 Packages Procursus OpenSSH 9.7p1 and Apple's top 125 (re-signed for the rootless bootstrap and versioned +switch1)
 together with switch-ssh: a launchd inetd job on loopback port 22, a locked-down sshd_config, the switch-sshd wrapper
 that generates the device's host key on Data once and syncs deploy-staged authorized_keys, and switch-threads for
-per-thread CPU snapshots. Zero SSH key bytes enter any package or manifest.
+per-thread CPU and per-VM-tag memory snapshots. Zero SSH key bytes enter any package or manifest.
 """
 
 import argparse
@@ -181,7 +181,7 @@ def switch_ssh(wrapper: bytes, threads: bytes) -> tuple[dict, dict, str]:
             'Architecture: iphoneos-arm64\n'
             'Maintainer: Switch\n'
             f'Depends: openssh-server (= {UPSTREAM}{SUFFIX}), openssh-sftp-server (= {UPSTREAM}{SUFFIX})\n'
-            'Description: Switch development images: loopback-only SSH over USB and per-thread CPU tool\n'
+            'Description: Switch development images: loopback-only SSH over USB and per-thread CPU and memory tool\n'
         ).encode(),
     )
     files = {}

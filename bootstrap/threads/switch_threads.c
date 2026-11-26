@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: BSD-2-Clause-Patent
+#include "bootstrap/threads/memory.h"
+#include "bootstrap/threads/procs.h"
 #include "bootstrap/threads/threads.h"
 
 #include <errno.h>
@@ -11,7 +13,6 @@
 #include <time.h>
 #include <unistd.h>
 
-extern int proc_listallpids(void *buffer, int buffersize);
 extern int proc_pidinfo(int pid, int flavor, uint64_t arg, void *buffer, int buffersize);
 
 enum {
@@ -136,25 +137,17 @@ static bool sample_pid(pid_t pid, struct sample_list *list)
     return true;
 }
 
-static bool collect_samples(int target_pid, struct sample_list *list)
+static bool collect_samples(int target_pid, const char *name, struct sample_list *list)
 {
     if (target_pid >= 0)
         return sample_pid(target_pid, list);
-    int estimate = proc_listallpids(NULL, 0);
-    if (estimate <= 0)
-        return false;
-    size_t capacity = (size_t)estimate + 64;
-    pid_t *pids = calloc(capacity, sizeof(*pids));
+    int count = 0;
+    int *pids = switch_all_pids(&count);
     if (!pids)
         return false;
-    int count = proc_listallpids(pids, (int)(capacity * sizeof(*pids)));
-    if (count < 0) {
-        free(pids);
-        return false;
-    }
     bool ok = true;
     for (int i = 0; i < count && ok; ++i) {
-        if (pids[i] > 0)
+        if (pids[i] > 0 && (!name || switch_pid_is_named(pids[i], name)))
             ok = sample_pid(pids[i], list);
     }
     free(pids);
@@ -176,8 +169,21 @@ int main(int argc, char **argv)
     unsigned long interval_ms = 1000;
     size_t limit = 200;
     int target_pid = -1;
+    const char *name = NULL;
+    bool memory = false;
+    unsigned snapshots = 1;
     int opt;
-    while ((opt = getopt(argc, argv, "s:n:p:")) != -1) {
+    while ((opt = getopt(argc, argv, "s:n:p:c:l:m")) != -1) {
+        if (opt == 'm') {
+            memory = true;
+            continue;
+        }
+        if (opt == 'c') {
+            name = optarg;
+            continue;
+        }
+        if (opt == '?')
+            return 2;
         char *end = NULL;
         errno = 0;
         const long value = strtol(optarg, &end, 10);
@@ -191,6 +197,16 @@ int main(int argc, char **argv)
             limit = (size_t)value;
         else if (opt == 'p')
             target_pid = (int)value;
+        else if (opt == 'l')
+            snapshots = (unsigned)value;
+    }
+
+    if (memory) {
+        if (!name && target_pid < 0) {
+            fprintf(stderr, "switch-threads: -m needs -c NAME or -p PID\n");
+            return 2;
+        }
+        return switch_memory_report(name, target_pid, snapshots, interval_ms, limit);
     }
 
     struct sample_list before = {NULL, 0, 0};
@@ -199,7 +215,7 @@ int main(int argc, char **argv)
 
     if (interval_ms > 0) {
         const uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-        if (!collect_samples(target_pid, &before)) {
+        if (!collect_samples(target_pid, name, &before)) {
             free(before.items);
             return 1;
         }
@@ -208,7 +224,7 @@ int main(int argc, char **argv)
         elapsed_ns = t1 > t0 ? t1 - t0 : 1;
     }
 
-    if (!collect_samples(target_pid, &after)) {
+    if (!collect_samples(target_pid, name, &after)) {
         free(before.items);
         free(after.items);
         return 1;
