@@ -27,8 +27,9 @@ const std::string &client()
 {
 	static const std::string source = [] {
 		std::string units;
-		for (const char *unit : {"", "Pool", "Spares", "Bo", "Park", "Import", "Channel",
-					 "Submit", "Dispatch", "Present", "Job", "JobSubmit"})
+		for (const char *unit :
+		     {"", "Pool", "Spares", "SpareStats", "Bo", "Park", "Import", "Channel",
+		      "Submit", "Dispatch", "Present", "Job", "JobSubmit"})
 			units += SourceText(std::string("../TegraGM20BUserClient") + unit + ".cpp");
 		return units + SourceText("../SwitchGpuParkedPool.cpp") +
 		       SourceText("../TegraGM20BPushScanRun.cpp") +
@@ -126,18 +127,21 @@ TEST(GM20BPoolPolicySource, SystemBosGoAsCachedBosDo)
 TEST(GM20BPoolPolicySource, SystemBosUseOnlyWriteCombinedSpares)
 {
 	const CodeText alloc = Block(client(), "IOReturn AGXDeviceUserClient::boAlloc(");
-	EXPECT_TRUE(alloc.has("const switch_gpu_spare_kind spareKind = system ? SWITCH_GPU_SPARE_WC "
-			      ": SWITCH_GPU_SPARE_CACHED;"));
+	EXPECT_TRUE(
+		alloc.has("const switch_gpu_spare_kind spareKind = system ? SWITCH_GPU_SPARE_WC "
+			  ": SWITCH_GPU_SPARE_CACHED;"));
 	EXPECT_TRUE(alloc.has("if (!ret && !bo->pool_va && !compressible && !(in->flags & "
 			      "TegraGM20BBoContiguous)) spare = spareTake(in->bytes, spareKind, "
 			      "charge.critical);"));
-	EXPECT_TRUE(alloc.has("(in->flags & TegraGM20BBoContiguous) ? kClasses : classUp(in->bytes);"));
-	EXPECT_TRUE(alloc.has("else if (bo->buffer.memory && !(in->flags & TegraGM20BBoContiguous)) {"));
+	EXPECT_TRUE(
+		alloc.has("(in->flags & TegraGM20BBoContiguous) ? kClasses : classUp(in->bytes);"));
+	EXPECT_TRUE(alloc.has(
+		"else if (bo->buffer.memory && !(in->flags & TegraGM20BBoContiguous)) {"));
 	EXPECT_TRUE(alloc.has("switch_gpu_pin_cached(bo->pas, bo->backing_pages, bo->npages, "
 			      "bo->buffer, spareKind, bo->cachedMapping);"));
 	EXPECT_TRUE(alloc.has("cleanZeros(va, backing);"));
-	EXPECT_FALSE(Block(client(), "Spare *spareMake(SparePool *p, uint32_t slot)")
-			     .has("cleanZeros"));
+	EXPECT_FALSE(
+		Block(client(), "Spare *spareMake(SparePool *p, uint32_t slot)").has("cleanZeros"));
 	EXPECT_TRUE(Block(client(), "bool spareBuffer(SparePool *p, switch_gpu_spare_kind kind, "
 				    "uint64_t bytes,")
 			    .has("if (kind == SWITCH_GPU_SPARE_WC) return "
@@ -158,8 +162,8 @@ TEST(GM20BPoolPolicySource, SystemBosUseOnlyWriteCombinedSpares)
 	EXPECT_EQ(recycle.count("p->dirty = s;") + work.count("p->dirty = s;"), 2u)
 		<< "a busy scrub's spare put back, and the refill's new one";
 	const CodeText completed = Block(client(), "void spareZeroed(void *context, int result)");
-	EXPECT_TRUE(
-		completed.before("const bool keep = !result && spareRoom();", "p->ready[slot] = s;"));
+	EXPECT_TRUE(completed.before("const bool keep = !result && spareRoom();",
+				     "p->ready[slot] = s;"));
 	const CodeText zeros = Block(client(), "void cleanZeros(void *va, uint64_t bytes)");
 	EXPECT_TRUE(zeros.has("switch_dcache_clean_invalidate(va, bytes);"));
 	EXPECT_FALSE(zeros.has("bzero"));
@@ -220,7 +224,8 @@ TEST(GM20BPoolPolicySource, CompressibleBosArePoolChunksNoTaskMaps)
 			    .has("c.refused = compressibleRefusal(in->bytes, critical_);"));
 	EXPECT_TRUE(
 		Block(client(), "const char *compressibleRefusal(uint64_t bytes, bool compositor)")
-			.has("tgm_pool::compressibleRefusal(bytes, tgm_pool_avail(), limits, compositor,"));
+			.has("tgm_pool::compressibleRefusal(bytes, tgm_pool_avail(), limits, "
+			     "compositor,"));
 	EXPECT_TRUE(chunks.has("takeChunks(in->bytes, bo->pas)"));
 	EXPECT_TRUE(alloc.has("} else if (!ret && !compressible) {"));
 	EXPECT_FALSE(Block(client(), "IOReturn takeChunks(uint64_t bytes, uint64_t *pas)")
@@ -1879,7 +1884,9 @@ TEST(GM20BParkedBoSource, LockOrderAndOffLockVmCalls)
 	EXPECT_TRUE(reclaim.has("reclaimParkedStep("));
 	EXPECT_FALSE(reclaim.has("IOLockLock(p->lock);"));
 
-	const CodeText take = Block(client(), "Spare *spareTake(uint64_t bytes, switch_gpu_spare_kind kind, bool critical)");
+	const CodeText take = Block(
+		client(),
+		"Spare *spareTake(uint64_t bytes, switch_gpu_spare_kind kind, bool critical)");
 	EXPECT_TRUE(take.before("IOLockUnlock(p->lock);", "parkedNotifyDemand("));
 	EXPECT_TRUE(take.before("IOLockUnlock(p->lock);", "parkedHasAny()"));
 
@@ -1898,7 +1905,9 @@ TEST(GM20BSparesSource, ThePoolDecidesThroughTheBooks)
 	const CodeText recycle = Block(
 		client(), "void spareRecycleWork(thread_call_param_t param, thread_call_param_t)");
 	EXPECT_TRUE(recycle.has("switch_gpu_spare_books_keep(b, slot, kSpareCapBytes)"));
-	const CodeText take = Block(client(), "Spare *spareTake(uint64_t bytes, switch_gpu_spare_kind kind, bool critical)");
+	const CodeText take = Block(
+		client(),
+		"Spare *spareTake(uint64_t bytes, switch_gpu_spare_kind kind, bool critical)");
 	EXPECT_TRUE(take.has("switch_gpu_spare_books_take(b, asked, critical)"));
 	EXPECT_TRUE(take.has(
 		"switch_gpu_spare_books_learn(b, asked, why, kLearnMaxBytes, kSpareCapBytes);"));

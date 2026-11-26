@@ -205,8 +205,8 @@ struct SparePool {
 	thread_call_t call;
 	thread_call_t recycleCall;
 	thread_call_t reclaimCall;
-	Spare *dirty;         // freed, not yet zeroed
-	PoolZero *poolDirty;  // freed pool BOs, not yet zeroed
+	Spare *dirty;                          // freed, not yet zeroed
+	PoolZero *poolDirty;                   // freed pool BOs, not yet zeroed
 	Spare *ready[SWITCH_GPU_SPARE_SLOTS];  // zeroed and clean, by slot (SwitchGpuSpareBooks.h)
 	switch_gpu_spare_books
 		books;  // the lists' counts and bytes, and the depths (SwitchGpuSpareBooks.h)
@@ -221,6 +221,7 @@ struct SparePool {
 
 void cleanZeros(void *va, uint64_t bytes);
 SparePool *spares();
+SparePool *sparesExisting();
 Spare *spareTake(uint64_t bytes, switch_gpu_spare_kind kind, bool critical);
 void spareIneligible();
 bool spareKeep(const SwitchGpuCachedBuffer &buffer, uint64_t *pas, uint64_t bytes,

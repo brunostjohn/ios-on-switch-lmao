@@ -129,6 +129,7 @@ kernel_driver(
         "TegraGM20BUserClient.cpp",
         "TegraGM20BUserClientPool.cpp",
         "TegraGM20BUserClientSpares.cpp",
+        "TegraGM20BUserClientSpareStats.cpp",
         "TegraGM20BUserClientBo.cpp",
         "TegraGM20BUserClientPark.cpp",
         "SwitchGpuParkedPool.cpp",
