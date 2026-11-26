@@ -110,7 +110,14 @@ class BlendKillPackTest(unittest.TestCase):
             f'{len(unkilled)} of {len(over)} one-target source-over segments push no kill; the baseline SET_CT_WRITE '
             f'of targets 0-7: {base_writes}',
         )
-        print(f'{len(over)} one-target source-over segments, all killed; {kills.count(NOOP_SOURCE_RGBA_0000)} killed')
+        one_target = [i for i in range(len(records)) if source_over_on_target_0_alone(records[i], 0, 0)]
+        unsegmented = sum(1 for i in one_target if i >= len(kills) or kills[i] is None)
+        excluded = sum(1 for i in one_target if i not in over) - unsegmented
+        print(
+            f'{len(one_target)} one-target source-over records: {len(over)} with a segment, all killed; '
+            f'{unsegmented} without one (tier 1: the runtime rule decides); {excluded} with a storage target 0; '
+            f'{kills.count(NOOP_SOURCE_RGBA_0000)} segments killed in all'
+        )
 
 
 if __name__ == '__main__':
