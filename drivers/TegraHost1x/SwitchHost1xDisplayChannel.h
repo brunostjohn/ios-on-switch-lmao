@@ -25,8 +25,13 @@ void displaySignaled(switch_host1x_fence *fence, int failure)
         gDisplayStream = nullptr;
     IOLockUnlock(gChannelLock);
     if (bridge) {
+        // The bridge may hold the producers' last reference: their reason is read before it goes.
         const int produced = switch_gpu_bridge_status(bridge);
-        if (!status && produced < 0)
+        const int why = status || produced < 0 ? switch_gpu_bridge_why(bridge) : 0;
+        stream->bridgeWhy = why;
+        if (why < 0)
+            status = why;
+        else if (!status && produced < 0)
             status = produced;
         switch_gpu_bridge_release(&bridge);
     }
@@ -90,6 +95,10 @@ int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch
     }
     IOLockLock(gChannelLock);
     int error = !gRunning ? TEGRA_HOST1X_ENODEV : gDisplayStream ? TEGRA_HOST1X_EAGAIN : produced < 0 ? produced : 0;
+    // In the hold that publishes the stream: a failure is stored before the release that would cancel the stream, and
+    // that release takes this lock, so it either finds the stream published or its failure is read here.
+    if (!error && bridge)
+        error = switch_gpu_bridge_failed(bridge);
     for (uint32_t i = 0; i < count && !error; ++i) {
         const auto &token = producers[i];
         if (token.engine != SWITCH_GPU_ENGINE_VIC && token.engine != SWITCH_GPU_ENGINE_NVDEC) {
@@ -133,6 +142,7 @@ int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch
             stream->producers[i] = producers[i];
         stream->bridge = bridge;
         stream->bridgeSyncpt = bridgeSyncpt;
+        stream->bridgeWhy = 0;
         stream->completed = completed;
         stream->context = context;
         switch_host1x_fence_init(&stream->fence, stream->syncpt, tegra_host1x_syncpt_read(stream->syncpt) + 1,

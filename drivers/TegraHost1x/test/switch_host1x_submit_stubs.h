@@ -2,13 +2,16 @@
 // The kernel as TegraHost1x.cpp and SwitchHost1xChannels.cpp see it, for their host test: locks that only track
 // ownership, a sleep that runs the test's hook in place of the scheduler, no interrupts.
 #pragma once
+#include <atomic>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <functional>
 #include <stdexcept>
+#include <mutex>
 #include <string>
+#include <thread>
 
 using IOReturn = int;
 using IOOptionBits = uint32_t;
@@ -18,8 +21,31 @@ constexpr uint32_t kMicrosecondScale = 1000, kMillisecondScale = 1000000;
 constexpr uint64_t NSEC_PER_USEC = 1000, NSEC_PER_MSEC = 1000000;
 constexpr size_t PAGE_SIZE = 16384;
 
+// A real lock, so a test may race two threads through the channels; held: the calling thread holds it.
 struct IOLock {
-    bool held;
+    std::mutex mutex;
+    std::atomic<std::thread::id> owner{};
+
+    struct Held {
+        const IOLock *lock;
+
+        operator bool() const  // NOLINT(google-explicit-constructor): reads as the plain flag it stands for
+        {
+            return lock->owner.load() == std::this_thread::get_id();
+        }
+    } held{this};
+
+    void take() __attribute__((no_thread_safety_analysis))
+    {
+        mutex.lock();
+        owner = std::this_thread::get_id();
+    }
+
+    void give() __attribute__((no_thread_safety_analysis))
+    {
+        owner = std::thread::id();
+        mutex.unlock();
+    }
 };
 
 inline IOLock *IOLockAlloc()
@@ -34,12 +60,12 @@ inline void IOLockFree(IOLock *lock)
 
 inline void IOLockLock(IOLock *lock)
 {
-    lock->held = true;
+    lock->take();
 }
 
 inline void IOLockUnlock(IOLock *lock)
 {
-    lock->held = false;
+    lock->give();
 }
 
 inline void IOLockWakeup(IOLock *, void *, bool)
@@ -56,9 +82,9 @@ inline int IOLockSleep(IOLock *lock, void *, int)
 {
     if (!switch_test_sleep)
         throw std::runtime_error("unexpected sleep");
-    lock->held = false;
+    lock->give();
     switch_test_sleep();
-    lock->held = true;
+    lock->take();
     return 0;
 }
 

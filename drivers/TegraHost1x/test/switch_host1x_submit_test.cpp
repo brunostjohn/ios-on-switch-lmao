@@ -281,19 +281,6 @@ struct DisplayExecution {
     }
 };
 
-struct DisplayCompletion {
-    uint32_t calls = 0;
-    int status = 1;
-
-    static void heard(void *context, int status)
-    {
-        auto &done = *static_cast<DisplayCompletion *>(context);
-        EXPECT_FALSE(gSubmitLock->held);
-        ++done.calls;
-        done.status = status;
-    }
-};
-
 TEST_F(Host1xSubmit, DisplayStreamWaitsThenWritesAndCompletesOnlyOnItsOwnSyncpoint)
 {
     SwitchHost1xDisplayStream stream;
@@ -447,10 +434,64 @@ TEST_F(Host1xSubmit, AFailedBridgeTearsDownItsStreamBeforeItsSyncpointRelease)
     ASSERT_NE(teardown, gRegisterWrites.end());
     ASSERT_NE(release, gRegisterWrites.end());
     EXPECT_LT(teardown, release);
+    bridge.why = SWITCH_GPU_BACKING_WRITER_GONE;
     stream.fence.signaled(&stream.fence, 0);
     EXPECT_EQ(done.calls, 1u);
-    EXPECT_EQ(done.status, SwitchHost1xDisplayStream::kCancelled);
+    EXPECT_EQ(done.status, SWITCH_GPU_BACKING_WRITER_GONE) << "the cancelled set's completion says why";
+    EXPECT_EQ(stream.bridgeWhy, SWITCH_GPU_BACKING_WRITER_GONE);
+    EXPECT_FALSE(bridge.whyReadAfterRelease);
     EXPECT_EQ(bridge.releases, 1u);
+}
+
+// A failure handled between the stream's status read and its publication: the release raised the syncpoint with no
+// stream to cancel, so a stream queued now would pass its WAIT over unfinished writes. Read under the channel lock in
+// the hold that publishes the stream, the failure refuses it.
+TEST_F(Host1xSubmit, AFailureReleasedJustBeforeThePublicationRefusesTheStream)
+{
+    auto &stream = Bridged::get().stream;
+    switch_gpu_bridge bridge = {Bridged::get().bridgeSyncpt, syncpoint(Bridged::get().bridgeSyncpt) + 2, 0, 0, false};
+    bridge.afterStatus = [](switch_gpu_bridge *b) {
+        b->failed = b->why = SWITCH_GPU_BACKING_WRITER_GONE;
+        gCpuIncrements = true;
+        EXPECT_EQ(tegra_host1x_syncpt_release_failed(b->syncpoint, b->threshold, 2), 0);
+    };
+    const uint32_t word = 0xdc0, address = 0x20000000, put = doorbell(TEGRA_HOST1X_CHANNEL_DISPLAY);
+    DisplayCompletion done;
+    EXPECT_EQ(switch_host1x_display_submit(&stream, nullptr, 0, &word, &address, 1, 0x500, 5, DisplayCompletion::heard,
+                                           &done, &bridge),
+              SWITCH_GPU_BACKING_WRITER_GONE);
+    EXPECT_EQ(syncpoint(bridge.syncpoint), bridge.threshold) << "the release ran inside the window";
+    EXPECT_EQ(doorbell(TEGRA_HOST1X_CHANNEL_DISPLAY), put) << "no stream gathered after its producer failed";
+    EXPECT_EQ(gDisplayStream, nullptr);
+    EXPECT_EQ(stream.bridge, nullptr);
+    EXPECT_EQ(bridge.releases, 0u) << "a refused bridge stays its caller's";
+    EXPECT_FALSE(bridge.failedReadUnlocked);
+    EXPECT_EQ(done.calls, 0u);
+}
+
+// A failure dated after the writes reached DRAM fails a stream that already wrote its set: its completion carries the
+// bridge's reason, read before the bridge goes.
+TEST_F(Host1xSubmit, AWrittenSetsLateFailureCarriesItsReason)
+{
+    auto &stream = Bridged::get().stream;
+    switch_gpu_bridge bridge = {Bridged::get().bridgeSyncpt, syncpoint(Bridged::get().bridgeSyncpt) + 2, 0, 0, false};
+    const uint32_t word = 0xdc0, address = 0x20000000;
+    DisplayCompletion done;
+    ASSERT_EQ(switch_host1x_display_submit(&stream, nullptr, 0, &word, &address, 1, 0x500, 5, DisplayCompletion::heard,
+                                           &done, &bridge),
+              0);
+    syncpoint(bridge.syncpoint) = bridge.threshold;
+    DisplayExecution execution;
+    execution.run();
+    EXPECT_FALSE(execution.controller.empty());
+    bridge.status = -5;
+    bridge.why = SWITCH_GPU_BACKING_WRITE_REFUSED;
+    stream.fence.signaled(&stream.fence, 0);
+    EXPECT_EQ(done.calls, 1u);
+    EXPECT_EQ(done.status, SWITCH_GPU_BACKING_WRITE_REFUSED);
+    EXPECT_EQ(stream.status, 0) << "the stream itself ran";
+    EXPECT_EQ(stream.bridgeWhy, SWITCH_GPU_BACKING_WRITE_REFUSED);
+    EXPECT_FALSE(bridge.whyReadAfterRelease);
 }
 
 // A bridge whose producers already failed is refused, and stays its caller's.

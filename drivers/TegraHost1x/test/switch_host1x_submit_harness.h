@@ -106,12 +106,16 @@ extern "C" int switch_gpu_backing_token_status(const switch_gpu_backing_token *)
     return 1;
 }
 
-// A GPU producer's bridge as the display stream sees it: its syncpoint, its status, and its owner's release.
+// A GPU producer's jobless bridge as the display stream sees it: its syncpoint, its status, its stored failure and
+// reason, and its owner's release. afterStatus runs once, inside the first status read, as a failure handled then would.
 struct switch_gpu_bridge {
     uint32_t syncpoint, threshold;
     int status;
     uint32_t releases;
     bool lockedWhenAsked;
+    int failed = 0, why = 0;
+    bool failedReadUnlocked = false, whyReadAfterRelease = false;
+    void (*afterStatus)(switch_gpu_bridge *) = nullptr;
 };
 
 extern "C" void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *bridge, uint32_t *syncpoint, uint32_t *threshold)
@@ -122,8 +126,27 @@ extern "C" void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *bridge, uin
 
 extern "C" int switch_gpu_bridge_status(const switch_gpu_bridge *bridge)
 {
-    const_cast<switch_gpu_bridge *>(bridge)->lockedWhenAsked |= gSubmitLock->held;
-    return bridge->status;
+    auto *b = const_cast<switch_gpu_bridge *>(bridge);
+    b->lockedWhenAsked |= gSubmitLock->held;
+    const int status = b->status;
+    if (auto *after = b->afterStatus) {
+        b->afterStatus = nullptr;
+        after(b);
+    }
+    return status;
+}
+
+extern "C" int switch_gpu_bridge_failed(const switch_gpu_bridge *bridge)
+{
+    const_cast<switch_gpu_bridge *>(bridge)->failedReadUnlocked |= !gSubmitLock->held;
+    return __atomic_load_n(&bridge->failed, __ATOMIC_ACQUIRE);
+}
+
+extern "C" int switch_gpu_bridge_why(const switch_gpu_bridge *bridge)
+{
+    EXPECT_FALSE(gSubmitLock->held);
+    const_cast<switch_gpu_bridge *>(bridge)->whyReadAfterRelease |= bridge->releases != 0;
+    return bridge->why;
 }
 
 extern "C" void switch_gpu_bridge_release(switch_gpu_bridge **bridge)
@@ -319,6 +342,20 @@ struct Host1xSubmit : testing::Test {
         words[n++] = tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_OP_DONE, 170);
         EXPECT_EQ(switch_host1x_job_submit(channel, words, n, 170, threshold), TEGRA_HOST1X_OK);
         return words;
+    }
+};
+
+// A display stream's completion, as the display hears it.
+struct DisplayCompletion {
+    uint32_t calls = 0;
+    int status = 1;
+
+    static void heard(void *context, int status)
+    {
+        auto &done = *static_cast<DisplayCompletion *>(context);
+        EXPECT_FALSE(gSubmitLock->held);
+        ++done.calls;
+        done.status = status;
     }
 };
 }  // namespace

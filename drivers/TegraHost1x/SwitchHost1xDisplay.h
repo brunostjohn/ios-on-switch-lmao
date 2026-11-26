@@ -14,6 +14,9 @@ struct SwitchHost1xDisplayStream {
     // completion has its status.
     switch_gpu_bridge *bridge = nullptr;
     uint32_t bridgeSyncpt = 0;
+    // Why the bridge's producers failed (switch_gpu_bridge_why), read before the completion lets the bridge go; 0 when
+    // none did. The completion's caller judges a set the stream already wrote by it.
+    int bridgeWhy = 0;
     int status = 0;
     bool restore = false;
     void (*completed)(void *, int) = nullptr;
@@ -21,8 +24,9 @@ struct SwitchHost1xDisplayStream {
 };
 
 int switch_host1x_display_start(SwitchHost1xDisplayStream *stream);
-// producers: VIC and NVDEC tokens the stream WAITs on. bridge, when not null, is a GPU producer's bridge: on success the
-// stream owns it; on failure the caller still does.
+// producers: VIC and NVDEC tokens the stream WAITs on. bridge, when not null, is a GPU producer's jobless bridge
+// (switch_gpu_bridge_jobless), whose failure cancels a stream queued on it: on success the stream owns it; on failure the
+// caller still does. A failed bridge's completion carries its producers' reason.
 int switch_host1x_display_submit(SwitchHost1xDisplayStream *stream, const switch_gpu_backing_token *producers,
                                  uint32_t count, const uint32_t *registers, const uint32_t *values, uint32_t stores,
                                  uint32_t update, uint32_t request, void (*completed)(void *, int), void *context,

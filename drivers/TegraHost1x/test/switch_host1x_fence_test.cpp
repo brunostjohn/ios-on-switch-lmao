@@ -38,6 +38,16 @@ extern "C" void switch_gpu_bridge_release(switch_gpu_bridge **bridge)
     *bridge = nullptr;
 }
 
+extern "C" int switch_gpu_bridge_failed(const switch_gpu_bridge *)
+{
+    return 0;
+}
+
+extern "C" int switch_gpu_bridge_why(const switch_gpu_bridge *)
+{
+    return 0;
+}
+
 extern "C" int switch_gpu_backing_token_status(const switch_gpu_backing_token *)
 {
     return 1;
