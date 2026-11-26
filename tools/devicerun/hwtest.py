@@ -692,6 +692,7 @@ TESTS: dict[str, bool] = {
     'gpu.gm20b.aegir_moon': False,
     'gpu.gm20b.mixed_merge_probe': False,
     'gpu.gm20b.bytes_address': False,
+    'gpu.gm20b.packed_fetch_read': False,
 }
 
 # The tests only one iOS version's app runs (apps/hwtest/app<version>), by that version.

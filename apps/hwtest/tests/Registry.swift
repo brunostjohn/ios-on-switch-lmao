@@ -33,7 +33,7 @@ public enum Registry {
         PackedPlaneTargetTest(), PackedSpareBitsTest(), XRTwoPlaneTest(),
         MPSBlurTest(), MPSMatrixTest(), MetalRuntimeCompileTest(), CoreImageLibraryTest(),
         MetalBenchmarkTest(), FetchBlendCostTest(), CompressionChurnTest(), RotatedTargetTest(), IntegerTargetTest(),
-        BlendKillTest(), WrittenTextureTest(), AegirMoonTest(), BytesAddressTest(),
+        BlendKillTest(), WrittenTextureTest(), AegirMoonTest(), BytesAddressTest(), PackedFetchReadTest(),
         Float32FilterTest(), CompareSamplerTest(), SurfaceBufferTest(), OwnAnswersTest(), ComputeFactsTest(),
         SourceLibraryTest(), StitchedLibraryTest(), SamplerTableTest(), FunctionTagsTest(),
         FunctionArgumentEncoderTest(), ArgumentGridsTest(), PlainStructEncoderTest(), BufferTexture16Test(),
