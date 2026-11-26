@@ -310,6 +310,9 @@ void Service::take(uint64_t stack)
     }
     if (error == kIOReturnAborted)
         return;
+    if (error == kIOReturnBadArgument)
+        notServing("the kernel refused this build's Take reply size: the GPU kext is of another build",
+                   StartFailure::Structural);
     if (error || !reply.id) {
         os_log_error(logger(), "SwitchShaderCompiler: no request taken (0x%x): the kernel let go of the compiler",
                      error);

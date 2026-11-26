@@ -54,22 +54,31 @@ bool Remote::capable()
         refresh(info);
     if (methods != CompilerMethods::Unknown)
         methods_.store(methods, std::memory_order_release);
+    else if (called == kIOReturnBadArgument)
+        os_log_error(
+            OS_LOG_DEFAULT,
+            "SwitchMetal: the kernel's CompilerInfo refused this build's reply size: the GPU kext is of another "
+            "build than this process's Metal driver, so no state the pack lacks is compiled");
     else
         os_log_error(OS_LOG_DEFAULT,
                      "SwitchMetal: the kernel's CompilerInfo failed (0x%x): this ask has no shader compiler", called);
     return methods == CompilerMethods::Present;
 }
 
-const StoreScope &Remote::scope()
+StoreScope Remote::scope()
 {
-    std::call_once(scopeOnce_, [this] {
-        TegraGM20BAbiCompilerInfoReply info = {};
-        if (call(TegraGM20BMethodCompilerInfo, nullptr, 0, &info, sizeof info) != kIOReturnSuccess)
-            return;
+    if (scopeKnown_.load(std::memory_order_acquire))
+        return scope_;
+    std::lock_guard<gm20b::Mutex> l(scopeLock_);
+    if (scopeKnown_.load(std::memory_order_relaxed))
+        return scope_;
+    TegraGM20BAbiCompilerInfoReply info = {};
+    if (call(TegraGM20BMethodCompilerInfo, nullptr, 0, &info, sizeof info) == kIOReturnSuccess && info.scope.kind) {
         scope_.kind = info.scope.kind;
         scope_.identity.assign(reinterpret_cast<const char *>(info.scope.identity),
                                std::min<size_t>(info.scope.bytes, sizeof info.scope.identity));
-    });
+        scopeKnown_.store(true, std::memory_order_release);
+    }
     return scope_;
 }
 
