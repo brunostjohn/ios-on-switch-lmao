@@ -18,7 +18,8 @@ namespace {
 
 std::string packPath()
 {
-    const char *path = getenv("SWITCH_SAMPLE_PACK");
+    // NOLINTNEXTLINE(concurrency-mt-unsafe): read once, before any test thread starts
+    const char *path = std::getenv("SWITCH_SAMPLE_PACK");
     return path ? path : "";
 }
 
@@ -27,13 +28,13 @@ std::vector<uint8_t> canonical(const gm20b::PackRules &r)
     std::vector<uint8_t> bytes;
     const auto word = [&](uint32_t v) {
         for (unsigned i = 0; i < 4; ++i)
-            bytes.push_back(uint8_t(v >> (8 * i)));
+            bytes.push_back(static_cast<uint8_t>(v >> (8 * i)));
     };
-    word(uint32_t(r.varying.size()));
+    word(static_cast<uint32_t>(r.varying.size()));
     for (const uint32_t v : r.varying)
         word(v);
     for (const auto *registers : {&r.baseline, &r.context}) {
-        word(uint32_t(registers->size()));
+        word(static_cast<uint32_t>(registers->size()));
         for (const auto &[method, value] : *registers) {
             word(method);
             word(value);
@@ -51,7 +52,7 @@ TEST(PackRulesIdentity, TheHeaderNamesTheRulesTheRuntimeDerives)
     ASSERT_FALSE(rules.varying.empty());
     const std::vector<uint8_t> bytes = canonical(rules);
     uint8_t digest[CC_SHA256_DIGEST_LENGTH];
-    CC_SHA256(bytes.data(), CC_LONG(bytes.size()), digest);
+    CC_SHA256(bytes.data(), static_cast<CC_LONG>(bytes.size()), digest);
     EXPECT_EQ(memcmp(pack.header()->rules, digest, sizeof pack.header()->rules), 0);
 }
 
