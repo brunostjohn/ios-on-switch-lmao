@@ -4,6 +4,7 @@
 // into the hole's push words, a set*Bytes binding's being its upload copy, which holds the bytes; a buffer's is its
 // address plus the bind's offset.
 #include "device_harness.h"
+#include "../icb.h"
 #include "../record.h"
 #include <cstring>
 #include <string>
@@ -145,6 +146,9 @@ TEST_F(DeviceGuestBase, AnOffsetOnlyRebindRewritesTheHole)
 // refused with its reason, never drawn with the record's static word as an address
 TEST_F(DeviceGuestBase, AnIndirectCommandBuffersDrawOfAHoleStateIsRefused)
 {
+    gm20b::Buffer slots;
+    ASSERT_TRUE(dev.createBuffer(gm20b::icb::kSlotWords * 4, slots));
+    gm20b::icb::draw(reinterpret_cast<uint32_t *>(slots.cpu), 0, {3, 3, 1, 0, 0});
     gm20b::CommandBuffer *cb = dev.begin();
     ASSERT_NE(cb, nullptr);
     gm20b::PassDesc desc;
@@ -154,15 +158,12 @@ TEST_F(DeviceGuestBase, AnIndirectCommandBuffersDrawOfAHoleStateIsRefused)
     gm20b::RenderEncoder *e = cb->render(desc);
     ASSERT_NE(e, nullptr);
     e->setPipeline(pl);
-    gm20b::RenderEncoder::IcbExecute x = {};
-    x.count = 1;
-    x.slotWords = 16;
-    x.primitive = 3;
     const char *why = nullptr;
-    EXPECT_FALSE(e->executeSlots(x, &why));
+    EXPECT_FALSE(e->executeSlots({&slots, 0, 1, gm20b::icb::kSlotWords, nullptr, 0, 3, false, false, nullptr, 0}, &why));
     EXPECT_EQ(cb->refusal.id, gm20b::RefGuestBaseIcb) << (why ? why : "");
     e->end();
     cb->abandon();
+    dev.destroyBuffer(slots);
 }
 
 }  // namespace
