@@ -143,6 +143,10 @@ void errorsConfigure()
 }
 }  // namespace
 
+// In this translation unit, so the display's definition (SwitchHost1xDisplayChannel.h) replaces it at the static link.
+__attribute__((weak)) void switch_host1x_display_channel_stopped_locked()
+{}
+
 void switch_host1x_errors_start(IOWorkLoop *loop, volatile uint8_t *sync)
 {
     gErrorRegisters.sync = sync;

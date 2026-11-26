@@ -520,6 +520,8 @@ void switch_host1x_channels_failed(uint32_t channel, char *line, size_t size)
     size_t used = 0;
     // Under the submit lock: a restart (which resumes these syncpoints) cannot come between the stop and the failures.
     IOLockLock(gChannelLock);
+    if (channel == TEGRA_HOST1X_CHANNEL_DISPLAY)
+        switch_host1x_display_channel_stopped_locked();
     Channel &c = gChannels[channel];
     c.arena.forEachFenced([&](uint32_t syncpt, uint32_t) {
         bool seen = false;
@@ -535,7 +537,5 @@ void switch_host1x_channels_failed(uint32_t channel, char *line, size_t size)
                                           : 0;
         used += n > 0 ? static_cast<size_t>(n) : 0;
     }
-    if (gRunning && channel == TEGRA_HOST1X_CHANNEL_DISPLAY)
-        displayCancelLocked(true);
     IOLockUnlock(gChannelLock);
 }
