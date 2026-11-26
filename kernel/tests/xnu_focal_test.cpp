@@ -22,8 +22,8 @@ TEST(XnuFocal, AnOverlayLeavingKeepsTheAppUnderItWatched)
     EXPECT_EQ(f.owner[hwtest], kHWTest) << "HW Test keeps its place";
     EXPECT_EQ(switch_focal_leave(&f, kScreenshots), SWITCH_FOCAL_PLACES) << "a second leave frees nothing";
     EXPECT_EQ(switch_focal_leave(&f, kHWTest), hwtest);
-    for (unsigned i = 0; i < SWITCH_FOCAL_PLACES; i++) {
-        EXPECT_EQ(f.owner[i], 0u);
+    for (const auto owner : f.owner) {
+        EXPECT_EQ(owner, 0u);
     }
 }
 

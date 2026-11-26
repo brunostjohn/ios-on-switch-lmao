@@ -197,8 +197,10 @@ TEST(XnuRecorder, ARefusalIsLoggedOnceASecondPerReasonAndThread)
 // a ring compressed 5.0x on 25 Nov).
 TEST(XnuRecorder, TheCaptureThreadCompressesOnceTheStoreIsBehind)
 {
-    const uint64_t raw = (16ull << 20) + (1ull << 20), deflating = raw / 3 + (64ull << 10);
-    const uint64_t packed = raw / 5, budget = 96ull << 20;
+    const uint64_t raw = (16ULL << 20) + (1ULL << 20);
+    const uint64_t deflating = raw / 3 + (64ULL << 10);
+    const uint64_t packed = raw / 5;
+    const uint64_t budget = 96ULL << 20;
     uint64_t held = 0;
     unsigned kept = 0;
 
@@ -243,8 +245,8 @@ TEST(XnuRecorder, ACaptureReplacesOtherBootsThenLaterAutomaticCapturesAndNeverAM
 TEST(XnuRecorder, TheStoreTakesATenthOfTheFreeSpaceWithinItsBounds)
 {
     EXPECT_EQ(switch_recorder_slots_for(0), SWITCH_RECORDER_SLOTS_MIN);
-    EXPECT_EQ(switch_recorder_slots_for(2ull << 30), 2048u / 10 / 6);
-    EXPECT_EQ(switch_recorder_slots_for(1ull << 40), SWITCH_RECORDER_SLOTS_MAX);
+    EXPECT_EQ(switch_recorder_slots_for(2ULL << 30), 2048u / 10 / 6);
+    EXPECT_EQ(switch_recorder_slots_for(1ULL << 40), SWITCH_RECORDER_SLOTS_MAX);
 }
 
 TEST(XnuRecorder, TheHeaderFitsItsPlaceAndReadsBackAsItsSlot)
