@@ -3622,6 +3622,9 @@ exit:
 	return ret;
 }
 
+/* task.c's PHYS_FOOTPRINT_WARNING_LEVEL: the share of a limit the ledger warns a process at */
+#define MEMSTAT_INACTIVE_WARNING_LEVEL 80
+
 int
 memorystatus_dirty_set(proc_t p, boolean_t self, uint32_t pcontrol)
 {
@@ -3631,6 +3634,8 @@ memorystatus_dirty_set(proc_t p, boolean_t self, uint32_t pcontrol)
 	bool now_dirty = false;
 	int priority;
 	task_t t = proc_task(p);
+	bool warn_inactive = false;
+	boolean_t warn_fatal = FALSE;
 
 	memorystatus_log_debug("memorystatus_dirty_set(): %d %d 0x%x 0x%x\n", self, proc_getpid(p), pcontrol, p->p_memstat_dirty);
 	KDBG(MEMSTAT_CODE(BSD_MEMSTAT_DIRTY_SET), proc_getpid(p), self, pcontrol);
@@ -3720,6 +3725,22 @@ memorystatus_dirty_set(proc_t p, boolean_t self, uint32_t pcontrol)
 
 	memstat_update_priority_locked(p, priority, MEMSTAT_PRIORITY_OPTIONS_NONE);
 
+	/*
+	 * Switch: a clean process that ages before its idle exit keeps its active limit until its demotion, on another
+	 * thread, applies the inactive one, and its footprint meets that limit only at its next allocation, which a fatal
+	 * limit answers with a kill. Warn it now (PROC_LIMIT_WARN, as the ledger does at 80% of the limit it runs on), while
+	 * it can still give back what it holds: the GPU's driver releases its idle memory on this warning.
+	 */
+	if (was_dirty && !now_dirty && p == current_proc() && p->p_memstat_memlimit_inactive > 0 &&
+	    memstat_proc_is_active_locked(p)) {
+		const uint64_t limit = (uint64_t)p->p_memstat_memlimit_inactive << 20;
+		const uint64_t footprint = get_task_phys_footprint(t);
+		if (footprint >= limit / 100 * MEMSTAT_INACTIVE_WARNING_LEVEL) {
+			warn_inactive = true;
+			warn_fatal = _memstat_proc_inactive_memlimit_is_fatal(p);
+		}
+	}
+
 exit:
 	if (kill && proc_ref(p, true) == p) {
 		proc_list_unlock();
@@ -3727,6 +3748,10 @@ exit:
 		proc_rele(p);
 	} else {
 		proc_list_unlock();
+		if (warn_inactive) {
+			/* a warning even past the limit: the critical note panics for a fatal one, and the demotion is still to come */
+			(void)memorystatus_warn_process(p, FALSE, warn_fatal, FALSE);
+		}
 	}
 
 	return ret;
