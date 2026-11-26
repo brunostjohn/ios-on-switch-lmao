@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -139,6 +140,10 @@ inline void IOLog(const char *format, ...)
 inline void IODelay(unsigned)
 {}
 
+#define IONew(type, count)             new (std::nothrow) type[count]
+#define IONewZero(type, count)         new (std::nothrow) type[count]()
+#define IODelete(pointer, type, count) delete[] (pointer)
+
 [[noreturn]] inline void panic(const char *format, ...)
 {
     char text[512];
@@ -242,20 +247,35 @@ public:
 
 using thread_call_param_t = void *;
 using thread_call_func_t = void (*)(thread_call_param_t, thread_call_param_t);
-using thread_call_t = thread_call_func_t *;
 constexpr int THREAD_CALL_PRIORITY_KERNEL = 0, THREAD_CALL_OPTIONS_ONCE = 1;
+
+// Each call made: host1x's bound timer, which is the one entered delayed, and an engine's cancellation, which the test
+// runs once it was entered.
+struct thread_call {
+    thread_call_func_t fire;
+    thread_call_param_t param;
+    uint32_t entered;
+};
+
+using thread_call_t = thread_call *;
 inline thread_call_func_t switch_test_bounds;
 inline uint64_t switch_test_bounds_at;
 
-inline thread_call_t thread_call_allocate_with_options(thread_call_func_t function, thread_call_param_t, int, int)
+inline thread_call_t thread_call_allocate_with_options(thread_call_func_t function, thread_call_param_t param, int, int)
 {
-    switch_test_bounds = function;
-    return &switch_test_bounds;
+    return new thread_call{function, param, 0};
 }
 
-inline bool thread_call_enter_delayed(thread_call_t, uint64_t deadline)
+inline bool thread_call_enter_delayed(thread_call_t call, uint64_t deadline)
 {
+    switch_test_bounds = call->fire;
     switch_test_bounds_at = deadline;
+    return false;
+}
+
+inline bool thread_call_enter(thread_call_t call)
+{
+    ++call->entered;
     return false;
 }
 
