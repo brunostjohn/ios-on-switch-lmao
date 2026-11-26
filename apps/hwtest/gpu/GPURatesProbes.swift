@@ -69,12 +69,13 @@ extension GPURates {
         return Dictionary(uniqueKeysWithValues: keys.map { ($0, (after[$0] ?? 0) - (before[$0] ?? 0)) })
     }
 
-    /// `body`, a failure in it recorded as `<arm>_error` and a problem, then every probe off, so the arms after it run
+    /// `body`, a failure in it flagged as `<arm>_error` and its text a problem (the test's why=), then every probe off,
+    /// so the arms after it run
     func isolated(_ arm: String, _ body: () async throws -> Void) async {
         do {
             try await body()
         } catch {
-            metrics.set("\(arm)_error", "\(error)")
+            metrics.set("\(arm)_error", true)
             problems.append("\(arm): \(error)")
         }
         for (name, value) in Self.probesOff { probe(name, value) }

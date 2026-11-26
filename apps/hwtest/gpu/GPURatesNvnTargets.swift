@@ -58,12 +58,14 @@ extension GPURates {
             let solid = try gpu.render(fragment: "solid_fragment", format: format, samples: 4)
             var resolved: [[UInt8]] = []
             for (state, on) in [("off", false), ("on", true)] {
+                let arm = "cbr_\(name)_\(state)"
                 // held through the arm: a target made plain takes its compressed memory, and its kind, at a later pass
                 probe("switchMetalProbeMs4Cbr:", on ? 1 : 0)
                 defer { probe("switchMetalProbeMs4Cbr:", 0) }
-                let ms = try gpu.texture(format, s.width, s.height, usage: [.renderTarget], samples: 4)
+                let ms = try await compressedTarget(format)
                 let into = try gpu.texture(format, s.width, s.height)
-                let t = try await fastest("cbr_\(name)_\(state)") { c in
+                let before = facts(ms)
+                let t = try await fastest(arm) { c in
                     let pass = MTLRenderPassDescriptor()
                     pass.colorAttachments[0].texture = ms
                     pass.colorAttachments[0].resolveTexture = into
@@ -78,20 +80,35 @@ extension GPURates {
                     }
                     e.endEncoding()
                 }
-                metrics.set("cbr_\(name)_\(state)_us", t * 1000, digits: 1)
-                let facts = facts(ms)
-                let kind = facts["kind"] ?? 0
-                metrics.set("cbr_\(name)_\(state)_kind", "0x" + String(kind, radix: 16))
-                metrics.set("cbr_\(name)_\(state)_comptags", facts["comptags"] ?? 0)
-                if probed && facts["compression"] == 1 && facts["comptags"] != 1 {
-                    problems.append("cbr_\(name)_\(state): the target ran on plain memory, none compressed was made")
-                } else if on && probed && facts["compression"] == 1 && kind != Self.cbrKinds[name] {
-                    problems.append("cbr_\(name)_on: the target's kind is 0x\(String(kind, radix: 16)), not 2CBR's")
+                metrics.set("\(arm)_us", t * 1000, digits: 1)
+                let after = facts(ms)
+                let kind = after["kind"] ?? 0
+                metrics.set("\(arm)_kind", "0x" + String(kind, radix: 16))
+                metrics.set("\(arm)_comptags", after["comptags"] ?? 0)
+                if probed && after["compression"] == 1 {
+                    if before["comptags"] != 1 || after["comptags"] != 1 {
+                        problems.append("\(arm): the target ran on plain memory for some of its runs")
+                    } else if before["kind"] != kind {
+                        problems.append("\(arm): the target's kind changed while it was timed")
+                    } else if on && kind != Self.cbrKinds[name] {
+                        problems.append("\(arm): the target's kind is 0x\(String(kind, radix: 16)), not 2CBR's")
+                    }
                 }
                 resolved.append(try await gpu.read(into, bytesPerPixel: bytes))
             }
             metrics.set("cbr_\(name)_differ_bytes", zip(resolved[0], resolved[1]).filter { $0 != $1 }.count)
         }
+    }
+
+    /// A 4x target on compressed memory where the facade can bind some: the first of a size wants memory the compression
+    /// thread then makes, so where it got none, a second is made once the thread settled (HWTestKit
+    /// CompressionSettled.remade)
+    func compressedTarget(_ format: MTLPixelFormat) async throws -> MTLTexture {
+        let make = { try self.gpu.texture(format, self.s.width, self.s.height, usage: [.renderTarget], samples: 4) }
+        let first = try make()
+        guard facts(first)["comptags"] == 0, let settleCompression else { return first }
+        try await settleCompression()
+        return try make()
     }
 
     /// Pass 1 draws 16 heavy layers into a target; pass 2, in the same command buffer, copies it into another

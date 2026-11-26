@@ -23,7 +23,7 @@ struct GPUNvnTest: HWTest {
         let gpu = try GPU.make()
         let production = DrawBandsTest.budget(gpu.device, 0)
         defer { production.map { _ = DrawBandsTest.budget(gpu.device, $0) } }
-        let result = try await GPURates.nvn(gpu)
+        let result = try await GPURates.nvn(gpu, settleCompression: { try await CompressionSettled.settle(gpu.device) })
         var metrics = result.metrics
         metrics.set("dev", GM20BFacade.kind(of: gpu.device))
         var failures = result.passed ? [] : result.reasons(limit: 4)

@@ -48,6 +48,8 @@ public final class GPURates {
     var metrics = Metrics()
     var problems: [String] = []
     var laneMhz = 0.0
+    /// Waits for the facade's compression thread (HWTestKit CompressionSettled.settle); nil off the device
+    var settleCompression: (() async throws -> Void)?
 
     init(_ gpu: GPU, _ s: Sizes) {
         self.gpu = gpu

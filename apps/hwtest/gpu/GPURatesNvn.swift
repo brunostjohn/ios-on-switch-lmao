@@ -26,8 +26,11 @@ import Metal
 ///   the tiled-cache flush at a pass end (switch=nowfi_noflush). `_flushes` counts the passes that ended without it;
 ///   `_wrong` counts pixels against today's barriers.
 extension GPURates {
-    public static func nvn(_ gpu: GPU, _ s: Sizes = .device) async throws -> SceneResult {
+    public static func nvn(
+        _ gpu: GPU, _ s: Sizes = .device, settleCompression: (() async throws -> Void)? = nil
+    ) async throws -> SceneResult {
         let b = GPURates(gpu, s)
+        b.settleCompression = settleCompression
         var notes: [String] = []
         if !b.has("switchMetalProbeNvn:") {
             notes.append("the device has no switchMetalProbeNvn: probe: each arm's on form is its off form")
@@ -52,9 +55,10 @@ extension GPURates {
 
     var runs: Int { 1 + s.repeats }
 
-    /// `encode` timed with the probe off and on, each its fastest run; the target read back after the last
+    /// `encode` timed with the probe off and on, each its fastest run; the target read back after the last. `held`:
+    /// counters that must not grow with the probe on, and with it off too where `heldOff`
     func ab(
-        _ arm: String, bits: UInt32, proof: String, also: [String] = [], criterion: UInt32 = 0,
+        _ arm: String, bits: UInt32, proof: String, held: [String] = [], heldOff: Bool = true, criterion: UInt32 = 0,
         read: MTLTexture? = nil, want: [UInt8]? = nil, _ encode: (MTLCommandBuffer) throws -> Void
     ) async throws {
         let probed = has("switchMetalProbeNvn:")
@@ -62,11 +66,14 @@ extension GPURates {
             probe("switchMetalProbeNvn:", on ? bits : 0)
             if criterion != 0 { probe("switchMetalProbeZcullCriterion:", on ? criterion : 0) }
             var t = 0.0
-            let grew = try await grown([proof] + also) { t = try await fastest("\(arm)_\(state)", encode) }
+            let grew = try await grown([proof] + held) { t = try await fastest("\(arm)_\(state)", encode) }
             probe("switchMetalProbeNvn:", 0)
             probe("switchMetalProbeZcullCriterion:", 0)
             metrics.set("\(arm)_\(state)_us", t * 1000, digits: 1)
             proved("\(arm)_\(state)", grew, proof, checked: on && probed)
+            for key in held where probed && (on || heldOff) && (grew[key] ?? 0) > 0 {
+                problems.append("\(arm)_\(state): \(key) grew, so zcull was off for some of its draws")
+            }
             if let read, let want {
                 let got = try await gpu.read(read, bytesPerPixel: 4)
                 metrics.set("\(arm)_\(state)_wrong", zip(got, want).filter { $0 != $1 }.count / 4)
@@ -108,7 +115,7 @@ extension GPURates {
             let checked = want == nil ? nil : colour
             try await ab(
                 "zcull_bounds_\(form)", bits: Self.nvnZcullBounds, proof: "nvn_bounds_opened",
-                also: ["zcull_invalidations"], read: checked, want: want
+                held: ["zcull_invalidations"], heldOff: false, read: checked, want: want
             ) { c in
                 let e = self.pass(colour, depth, c)
                 e.setDepthStencilState(less)
@@ -154,7 +161,8 @@ extension GPURates {
         else { throw TestFailure("makeDepthStencilState returned nil") }
         let flatColour = SIMD4<Float>(0, 1, 0, 1)
         try await ab(
-            "stencil_zcull", bits: Self.nvnStencilZcull, proof: "nvn_stencil_passes", criterion: Self.notEqualCriterion,
+            "stencil_zcull", bits: Self.nvnStencilZcull, proof: "nvn_stencil_passes", held: ["zcull_invalidations"],
+            criterion: Self.notEqualCriterion,
             read: colour, want: expected(flatColour)
         ) { c in
             let pass = MTLRenderPassDescriptor()
@@ -191,7 +199,10 @@ extension GPURates {
         let depth = try gpu.texture(.depth32Float, s.width, s.height, usage: [.renderTarget])
         let lequal = try depthState(.lessEqual)
         let front = SIMD4<Float>(1, 0, 0, 1)
-        try await ab(arm, bits: bits, proof: "nvn_format_passes", read: colour, want: expected(front)) { c in
+        try await ab(
+            arm, bits: bits, proof: "nvn_format_passes", held: ["zcull_invalidations"], read: colour,
+            want: expected(front)
+        ) { c in
             let e = self.pass(colour, depth, c)
             e.setDepthStencilState(lequal)
             e.setRenderPipelineState(flat)
