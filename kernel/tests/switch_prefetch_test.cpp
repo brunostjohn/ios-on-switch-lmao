@@ -509,6 +509,28 @@ TEST(SwitchPrefetchSource, ReplayWaitsForEachRunsDueTime)
     const std::string body = vm.substr(until, vm.find("\n}\n", until) - until);
     EXPECT_NE(body.find("switch_pace_replay_stop_reason(&g_pace) != SWITCH_PREFETCH_STOP_NONE"), std::string::npos);
     EXPECT_NE(body.find("assert_wait_deadline((event_t)&g_pace_event, THREAD_UNINT, deadline_abs)"), std::string::npos);
+    // Review F3: the deadline wait does not publish g_pace.waiting, so page use and reclaim do not wake it.
+    EXPECT_EQ(body.find("__atomic_store_n(&g_pace.waiting"), std::string::npos);
+    for (const char *stop : {"void switch_vm_pressure_changed(", "uint32_t switch_vm_prefetch_stop(uint32_t reason)"}) {
+        const size_t at = vm.find(stop);
+        ASSERT_NE(at, std::string::npos) << stop;
+        EXPECT_NE(vm.substr(at, vm.find("\n}\n", at) - at).find("thread_wakeup((event_t)&g_pace_event);"),
+                  std::string::npos)
+            << stop << " wakes the replay unconditionally";
+    }
+}
+
+// While the replay waits for a run's due time, nothing of its own is in flight: a page's first use or reclaim must not
+// wake it (g_pace.waiting is 0 in that wait).
+TEST(SwitchPrefetchPace, ADeadlineWaitIsNotWokenByPageUse)
+{
+    struct switch_prefetch_pace p = {};
+    switch_pace_init(&p, 500u, 100u, 3u * 512u * 1024u);
+    ASSERT_TRUE(switch_pace_can_issue(&p));
+    EXPECT_FALSE(switch_pace_on_used(&p));
+    EXPECT_FALSE(switch_pace_on_reclaimed(&p));
+    p.waiting = 1u;  // the wait for room to issue (switch_vm_prefetch_wait_can_issue) is the one page use wakes
+    EXPECT_TRUE(switch_pace_on_used(&p));
 }
 
 TEST(SwitchPrefetchPace, StopEventsReleaseWaitingReplayAndFirstWins)
