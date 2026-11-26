@@ -101,6 +101,8 @@ extern "C" void tgm_mem_del_later(tgm_mem **pmem, tgm_mem **later)
 	*pmem = nullptr;
 }
 
+extern "C" uint64_t tgm_retire_gpu_flushes = 0;
+
 extern "C" void tgm_mem_del_release(tgm_mem *later)
 {
 	if (!later)

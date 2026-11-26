@@ -127,8 +127,11 @@ void tgm_mem_del(struct tgm_mem **pmem);
 void tgm_mem_del_later(struct tgm_mem **pmem, struct tgm_mem **later);
 void tgm_mem_del_finish(struct tgm_mem *later);
 /* tgm_mem_del_finish's end, for a batch whose L2 the GPU already wrote back and invalidated (switch_gpu_copy_l2_flush):
- * its SMMU windows go back, then the memory objects */
+ * its RAM-view holds end and its SMMU windows go back, then the memory objects */
 void tgm_mem_del_release(struct tgm_mem *later);
+/* debug kernels: retirement batches whose L2 the GPU wrote back and invalidated (switch_gpu_copy_l2_flush), for the smmu
+ * stats line beside tgm_retire_invalidates' CPU-waited ones */
+extern uint64_t tgm_retire_gpu_flushes;
 /* The retirement work's ordered L2 write-back and invalidate (SwitchGpuAllocatedMemory.cpp, TegraGM20BCopy.cpp): an
  * empty job on the kernel copy queue's channel. Its host-written acquire runs L2_FLUSH_DIRTY then L2_SYSMEM_INVALIDATE
  * with no drain ahead of them (gpu_exec.c chan_exec_body; nvkm_ltc_invalidate's order over MMIO, 0x70010 then 0x70004),

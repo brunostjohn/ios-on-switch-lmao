@@ -422,11 +422,13 @@ void tgm_stats_tick(void)
 		const u64 objects = __atomic_exchange_n(&tgm_retire_objects, 0, __ATOMIC_RELAXED);
 		const u64 invalidate_ns =
 			__atomic_exchange_n(&tgm_retire_invalidate_ns, 0, __ATOMIC_RELAXED);
+		const u64 gpu_flushes =
+			__atomic_exchange_n(&tgm_retire_gpu_flushes, 0, __ATOMIC_RELAXED);
 
 		switch_gpu_smmu_stats(line, sizeof(line));
-		nvxnu_stats("tegra-gm20b: smmu %s; retirement L2 invalidates %llu for %llu "
-			    "objects, %llu us CPU",
-			    line, invalidates, objects, invalidate_ns / 1000);
+		nvxnu_stats("tegra-gm20b: smmu %s; retirement: %llu objects, %llu GPU-ordered flushes, "
+			    "%llu CPU-waited fallbacks (%llu us)",
+			    line, objects, gpu_flushes, invalidates, invalidate_ns / 1000);
 	}
 	{
 		uint64_t held = 0;

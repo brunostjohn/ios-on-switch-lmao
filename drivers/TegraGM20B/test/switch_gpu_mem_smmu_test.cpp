@@ -620,6 +620,28 @@ TEST_F(GpuMemSmmuTest, ABatchKeepsRamViewHoldsUntilItsL2InvalidateHasRun)
 	EXPECT_EQ(gSmmuUnmaps, 0u) << "no window IOVA to give back";
 }
 
+// The batch the GPU flushed (S5: the copy queue's ordered L2 write-back and invalidate) goes through tgm_mem_del_release,
+// never tgm_mem_del_finish: every RAM-view hold ends there too, with no MMIO invalidate. A hold left would keep a page
+// the VM has taken back reachable by the GPU.
+TEST_F(GpuMemSmmuTest, ABatchTheGpuFlushedReleasesEveryHoldWithoutAnMmioInvalidate)
+{
+	gRamReady = true;
+	const auto pages = scattered(8);
+	tgm_mem *mem = nullptr;
+	ASSERT_EQ(tgm_mem_new(&vm, pages.data(), 8, &mem), 0);
+	tgm_mem *later = nullptr;
+	tgm_mem_del_later(&mem, &later);
+	ASSERT_NE(later, nullptr);
+	EXPECT_EQ(gHeld.size(), 8u);
+	const u64 objects = tgm_retire_objects, invalidates = tgm_retire_invalidates;
+	tgm_mem_del_release(later);
+	EXPECT_TRUE(gHeld.empty());
+	EXPECT_EQ(gLtcInvalidates, 0u) << "the GPU wrote the L2 back and invalidated it";
+	EXPECT_EQ(tgm_retire_invalidates - invalidates, 0u);
+	EXPECT_EQ(tgm_retire_objects - objects, 1u);
+	EXPECT_EQ(gSmmuUnmaps, 0u) << "no window IOVA to give back";
+}
+
 TEST_F(GpuMemSmmuTest, AFailedCtorOrAFailedHoldLeavesNothingHeldOrMapped)
 {
 	gRamReady = true;

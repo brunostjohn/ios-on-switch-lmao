@@ -29,10 +29,13 @@ void flushed(void *arg, int status)
 	for (auto *batch = static_cast<RetiredBatch *>(arg); batch;) {
 		auto *next = batch->next;
 		// a failed copy channel leaves its flush unproven, so the CPU writes back and invalidates (nvgpu's registers)
-		if (status < 0)
+		if (status < 0) {
 			tgm_mem_del_finish(batch->memories);
-		else
+		} else {
+			if (TGM_STATS)
+				__atomic_fetch_add(&tgm_retire_gpu_flushes, 1, __ATOMIC_RELAXED);
 			tgm_mem_del_release(batch->memories);
+		}
 		switch_gpu_backing_release_retired(batch->backings);
 		IODelete(batch, RetiredBatch, 1);
 		batch = next;

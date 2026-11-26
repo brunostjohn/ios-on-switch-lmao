@@ -33,7 +33,7 @@ void *tgm_pool_alloc_ready(uint64_t bytes, uint64_t align, uint64_t reserve, uin
 u64 tgm_cpu_zeroes, tgm_cpu_zero_bytes;
 /* stats: retirement batches that took tgm_mem_del_finish's CPU-waited L2 flush and invalidate, the memory objects
  * they covered, and the CPU time the invalidates took */
-u64 tgm_retire_invalidates, tgm_retire_objects, tgm_retire_invalidate_ns;
+u64 tgm_retire_invalidates, tgm_retire_objects, tgm_retire_invalidate_ns, tgm_retire_gpu_flushes;
 
 #endif
 void tgm_pool_free_zeroed(void *va, uint64_t bytes, uint64_t pa)
@@ -476,7 +476,8 @@ void tgm_mem_del(struct tgm_mem **pmem)
 
 /* A retirement batch's memory whose pages the GPU reaches through the SMMU (a window IOVA, or holds in GPUB's view of RAM)
  * keeps them mapped until the batch's L2 invalidate, which flushes first: a dirty line it writes back must find its page
- * still mapped. The backing's pages go back to the VM only after that (switch_gpu_memory_retire_end). */
+ * still mapped. The backing's pages go back to the VM only after that (SwitchGpuAllocatedMemory.cpp flushed() /
+ * switch_gpu_backing_release_retired). */
 void tgm_mem_del_later(struct tgm_mem **pmem, struct tgm_mem **later)
 {
 	struct tgm_mem *mem = *pmem;
