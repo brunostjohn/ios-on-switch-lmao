@@ -3,6 +3,7 @@
 from tools.benchloop import store2fma
 from tools.benchloop.sm53 import (
     affinity,
+    dualclock,
     fit,
     hsetp2,
     icache,
@@ -40,6 +41,7 @@ STEPS = {
     'interlock-clock': ('interlock_clock', interlock_spin.analyse_clock_probe),
     'powr-native': ('powr_native', lambda planned, results, _: powr_verdict.analyse(planned, results)),
     'reader': ('readers', lambda planned, results, _: readers.analyse(planned, results)),
+    'dual-clock': ('dual_clock', lambda planned, results, _: dualclock.analyse(planned, results)),
 }
 
 
@@ -172,6 +174,7 @@ LINES = {
     'hsetp2': _hsetp2,
     'powr_native': powr_verdict.lines,
     'readers': _readers,
+    'dual_clock': lambda found: [f'dual {op} {d}' for op, d in found.items()],
 }
 
 

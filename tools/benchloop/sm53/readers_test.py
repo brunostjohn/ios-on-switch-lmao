@@ -36,7 +36,7 @@ class ReadersTest(unittest.TestCase):
     def test_bit_4_set_only_where_asked(self):
         found = {x['id']: x for x in readers.generate_yield()}
         for eid, x in found.items():
-            if x['meta']['family'] not in ('dual', 'reuse'):
+            if x['meta']['family'] != 'reuse':
                 continue
             code = program.protocol.unb64(x['program']['code'])
             yielding = sum(i.control.yld for i in e.unbundle(code))

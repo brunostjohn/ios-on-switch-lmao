@@ -2,7 +2,7 @@
 
 These batches put the questions NAK's SM50 backend has about GM20B to the Switch. The generators live in
 `tools/benchloop` (`sm53/affinity.py`, `sm53/int3.py`, `sm53/overlap.py`, `sm53/icache.py`, `store2fma.py`,
-`sm53/hsetp2.py`, `sm53/interlock_spin.py`, `sm53/powr_native.py`, `sm53/readers.py`). After changing one, rewrite the files with
+`sm53/hsetp2.py`, `sm53/interlock_spin.py`, `sm53/powr_native.py`, `sm53/readers.py`, `sm53/dualclock.py`). After changing one, rewrite the files with
 `python3 -m tools.benchloop.nakbatches` from the repo root. `families_test` fails while a file and its generator
 disagree.
 
@@ -11,10 +11,10 @@ disagree.
 Install a HW Test at benchloop/6, open its Bench screen, then from the repo root run all of them in order:
 
 ```sh
-bazel run //tools/benchloop -- run "$PWD"/tools/benchloop/batches/{sr_affinity,int3_xmad,overlap,icache,store2fma,hsetp2,interlock_spin,icache_128k,powr_native,nak_latency,nak_yield}.json
+bazel run //tools/benchloop -- run "$PWD"/tools/benchloop/batches/{sr_affinity,int3_xmad,overlap,icache,store2fma,hsetp2,interlock_spin,icache_128k,powr_native,nak_latency,nak_yield,nak_dual}.json
 ```
 
-That is 837 experiments, sent as four batches. One batch alone is
+That is 958 experiments, sent as 4 batches. One batch alone is
 `bazel run //tools/benchloop -- run "$PWD"/tools/benchloop/batches/<name>.json`. Each file opens with a warm-up draw
 that lifts the GPU off its 76.8 MHz idle clock. After the usual status line the run prints one line per answer, and
 `report.json` in the result folder keeps the detail under each family's key.
@@ -234,16 +234,22 @@ those waits until these lines say so on the device.
 
 ### nak_yield
 
-179 experiments, 803 KB. NVIDIA sets control bit 4 on nearly every instruction, and always on one with a reuse flag
-or a stall of 0. Every bench program until this one left it clear.
+47 experiments, 471 KB. NVIDIA sets control bit 4 on nearly every instruction, and always on one with a
+reuse flag. Every bench program before this one left it clear. `reuse` runs all nine reuse-flag variants with bit 4
+clear (11 Nov ran three) and set. If `reuse/y` comes in under `conflict/y`, the flags save the bank conflict and NAK
+should set them.
 
-- `reuse`: all nine reuse-flag variants with bit 4 clear (11 Nov ran three) and set. If `reuse/y` comes in under
-  `conflict/y`, the flags save the bank conflict and NAK should set them.
-- `dual`: the 16 pairs timed on 11 Nov, now with bit 4 set, and an ALU op followed by F2F or LDC, with the bit clear
-  and set. NVIDIA issues those pairs at stall 0. A pair faster at delay 0 than at delay 1 dual-issues.
+### nak_dual
 
-The 11 Nov dual fit gave 0.83 cycles a pair at delay 1, under one issue a cycle, so read the `dual` lines only against
-each other.
+253 experiments, 583 KB. Dual issue timed inside one warp. The warp reads SR_CLOCKLO before and after a
+looped body of independent pairs (X, Y) and writes the difference, so `dual X+Y {'d0': c0, 'd1': c1}` gives cycles a
+pair as the slope over the body's length, with X at delay 0 and at delay 1 (`/y`: bit 4 set). A pair whose d0 comes in
+near half its d1 dual-issues. The pairs are the 16 from 11 Nov plus an ALU op (FFMA, IADD, HFMA2, FSETP) followed by
+F2F and FFMA followed by LDC, NVIDIA's stall-0 pairs.
+
+The 11 Nov `dual` rows timed one-warp draws by the command buffer, but consecutive draws run side by side on both SMs
+and every scheduler. 8,192 stall-1 pairs (16,384 issue cycles at least) came in at 8.35 us at 768 MHz, so those rows
+measured the throughput of overlapping draws.
 
 ## What the app does for interlock_spin
 

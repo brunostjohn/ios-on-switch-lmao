@@ -8,8 +8,7 @@ reader       LINKS independent writes, each read `delay` cycles later (1..15, on
              reads it 2 cycles later).
 reader-wide  the same at a few delays over the whole target: right under every warp's contention, not merely alone.
 stall HSETP2 latency.stall's predicate chain of HSETP2: NAK gives its predicate 14 cycles, every other compare 13.
-yield        latency.reuse and latency.dual with bit 4 set and clear; the pairs add an ALU op then F2F, MUFU or LDC, the
-             pairs NVIDIA issues at stall 0, always with bit 4 set.
+yield        latency.reuse with bit 4 set and clear (dual issue is dualclock.py's, timed inside the warp).
 """
 
 from collections.abc import Callable
@@ -18,7 +17,7 @@ from dataclasses import dataclass
 from tools.benchloop.sm53 import encode as e, latency, program
 from tools.benchloop.sm53.encode import PT, f32, half2
 from tools.benchloop.sm53.halfops import hsetp2
-from tools.benchloop.sm53.ops import K1, K2, PAIRS, Recipe
+from tools.benchloop.sm53.ops import K1, K2, Recipe
 from tools.benchloop.sm53.program import SEPARATOR
 
 LINKS = 6
@@ -29,9 +28,6 @@ A0, W0, V0 = 16, 17, 18
 SUM, LAST = 40, V0 + 4 * (LINKS - 1)
 READER_DELAY = e.BARRIER_SET_CYCLES
 SUM_DELAY = 6
-# with PAIRS' FFMA+MUFU and FFMA+I2F; HFMA2+F2F and FSETP+F2F are NVIDIA's commonest stall-0 pairs in RenderBox and
-# the compositor
-MIO_PAIRS = (('FFMA', 'F2F'), ('FFMA', 'LDC'), ('IADD', 'F2F'), ('HFMA2', 'F2F'), ('FSETP', 'F2F'))
 
 
 @dataclass(frozen=True)
@@ -174,19 +170,8 @@ def generate() -> list[dict]:
 
 
 def generate_yield() -> list[dict]:
-    """Give the bit-4 questions: reuse and the dual-issue pairs with the bit set and clear.
-
-    Reuse runs every variant both ways (11 Nov ran three, clear); the pairs 11 Nov timed run with the bit set, and the
-    ALU-then-MIO pairs both ways.
-    """
-    return [
-        latency.warm_up('yield.warm'),
-        *latency.ladder(),
-        *latency.reuse(),
-        *latency.reuse(yld=True),
-        *latency.dual(MIO_PAIRS),
-        *latency.dual(PAIRS + MIO_PAIRS, yld=True),
-    ]
+    """Give reuse with bit 4 clear (every variant: 11 Nov ran three) and set."""
+    return [latency.warm_up('yield.warm'), *latency.ladder(), *latency.reuse(), *latency.reuse(yld=True)]
 
 
 def pattern(group: list[dict], results: dict[str, dict], delays: tuple[int, ...]) -> dict:

@@ -8,7 +8,17 @@ import sys
 from pathlib import Path
 
 from tools.benchloop import protocol, store2fma
-from tools.benchloop.sm53 import affinity, hsetp2, icache, int3, interlock_spin, overlap, powr_native, readers
+from tools.benchloop.sm53 import (
+    affinity,
+    dualclock,
+    hsetp2,
+    icache,
+    int3,
+    interlock_spin,
+    overlap,
+    powr_native,
+    readers,
+)
 
 FOLDER = Path(__file__).with_name('batches')
 # file: (batch name, generator), in the order a sitting runs them
@@ -24,6 +34,7 @@ BATCHES = {
     'powr_native': ('powr-native', powr_native.generate),
     'nak_latency': ('nak-latency', readers.generate),
     'nak_yield': ('nak-yield', readers.generate_yield),
+    'nak_dual': ('nak-dual', dualclock.generate),
 }
 
 
