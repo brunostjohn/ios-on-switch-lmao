@@ -212,9 +212,9 @@ bool Device::tryUnparkChunk(std::unique_lock<gm20b::Mutex> &l, ChunkVec vec, uin
             if (pitchVa) {
                 Bo view = bo;
                 view.va = view.vaBase = pitchVa;
-                set_.add(k_, {{&bo, setAccess}, {&view, TegraGM20BSurfaceWrite}});
+                set_.addLater({{&bo, setAccess}, {&view, TegraGM20BSurfaceWrite}});
             } else {
-                set_.add(k_, bo, setAccess);
+                set_.addLater({{&bo, setAccess}});
             }
         }
     } else {
