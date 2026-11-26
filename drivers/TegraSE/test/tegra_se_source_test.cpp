@@ -48,6 +48,16 @@ TEST(TegraSESource, AnEngineIsProvenBeforeCallersPagesReachIt)
 }
 
 // An engine turned off with an operation in flight may still write the outputs it was given.
+TEST(TegraSESource, CallersResultsAreNotDoneAgainOnTheCpu)
+{
+    const std::string se = SourceText("../TegraSE.cpp");
+    EXPECT_THAT(se, Not(HasSubstr("shouldCheck"))) << "no sampled CPU compare, in any build";
+    EXPECT_THAT(se, Not(HasSubstr("differs from the CPU's")));
+    EXPECT_THAT(Body(se, "\nint compressHook("), HasSubstr("memcpy(s, next, static_cast<size_t>(words) * 4);\n"
+                                                           "    return 0;"))
+        << "the engine's state goes to the caller as it is";
+}
+
 TEST(TegraSESource, KnownAnswersWriteBuffersThatOutliveTheirEngine)
 {
     const std::string source = SourceText("../TegraSE.cpp");

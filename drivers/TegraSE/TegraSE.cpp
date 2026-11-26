@@ -27,9 +27,8 @@
 //     hashes included. A debug kernel's timing run 90 s after start (1 KiB to 1 MiB, every algorithm, each engine
 //     against the CPU) lowers each cutover to the smallest size at which every engine is no slower.
 //
-// Correctness: known answers per algorithm on each engine at start; then the first 32 operations of each algorithm and
-// one in 512 after are also done on the CPU and compared. A failed answer or a mismatch logs one line and moves that
-// algorithm (or that engine) back to the CPU for the boot; the caller still gets the CPU's result. An engine that
+// Correctness: known answers per algorithm on each engine at start; a failed answer logs one line and keeps that
+// algorithm on the CPU for the boot. Callers' operations are not checked again on the CPU. An engine that
 // never ends an operation, or whose end interrupt does not arrive, is one line and off during bring-up, which runs
 // every kind of operation on it into the driver's own buffers, and in a debug kernel's timing run, which does the same
 // at every size; serving a caller (DMA possibly in flight into its pages) it is a one-line panic.
@@ -141,7 +140,6 @@ constexpr uint32_t kListBytes = 0x1000, kInList = 0x000, kOutList = 0x800, kScra
 constexpr unsigned kMaxEntries = 220;
 constexpr uint32_t kOpTimeoutMs = 200;
 constexpr size_t kHookMinBytes = 1024;  // smaller compresses (finals, short updates) stay on the CPU
-constexpr uint32_t kCheckFirst = 32;
 
 struct Dma {
     switch_dma_buffer buffer;
@@ -202,7 +200,6 @@ const char *const kAlgName[ALGS] = {"sha1",    "sha224",  "sha256",  "sha384",  
 
 struct AlgState {
     volatile bool on;
-    volatile uint32_t ops;
     volatile uint64_t bytes, bounced;
 };
 
@@ -692,7 +689,8 @@ void shaDigest(const Engine &e, unsigned alg, uint8_t *out)
     memcpy(out, w, static_cast<size_t>(n) * 4);
 }
 
-// The CPU's answer (kernel corecrypto's AES modes, the A57s' AES instructions): the reference every check uses.
+// The CPU's AES (kernel corecrypto's AES modes, the A57s' AES instructions): a CTR/OFB tail block, CMAC's subkeys and
+// the timing run's CPU side.
 bool cpuAes(tegra_se_mode mode, bool encrypt, const uint8_t *key, unsigned keyBytes, const uint8_t *ivIn,
             const uint8_t *in, uint8_t *out, size_t len)
 {
@@ -748,20 +746,6 @@ bool cpuAes(tegra_se_mode mode, bool encrypt, const uint8_t *key, unsigned keyBy
     bzero(ctx, m->size);
     IOFree(ctx, m->size);
     return ok;
-}
-
-bool shouldCheck(unsigned alg)
-{
-#if DEVELOPMENT || DEBUG
-    constexpr uint32_t kCheckEvery = 512;
-    const uint32_t n = __atomic_fetch_add(&gAlg[alg].ops, 1, __ATOMIC_RELAXED);
-    return n < kCheckFirst || n % kCheckEvery == 0;
-#else
-    // Boot known-answer and loaded-state qualification still run. Production requests use the qualified engine once;
-    // a second full CPU encryption/hash is development diagnostics, not completion or hardware-error handling.
-    (void)alg;
-    return false;
-#endif
 }
 
 void algOff(unsigned alg, const char *what)
@@ -853,7 +837,6 @@ extern "C" int tegra_se_aes(tegra_se_mode mode, bool encrypt, const uint8_t *key
     // In place (or overlapping), a failed engine run would lose the input the CPU needs: keep it.
     const bool overlap = i8 < o8 + len && o8 < i8 + len;
     uint8_t *saved = nullptr;
-    uint8_t *reference = nullptr;
     if (overlap && whole) {
         saved = static_cast<uint8_t *>(IOMalloc(whole));
         if (!saved)
@@ -861,13 +844,6 @@ extern "C" int tegra_se_aes(tegra_se_mode mode, bool encrypt, const uint8_t *key
     }
     if (saved)
         memcpy(saved, i8, whole);
-    if (shouldCheck(alg)) {  // the CPU's answer first, from the untouched input
-        reference = static_cast<uint8_t *>(IOMalloc(len));
-        if (reference && !cpuAes(mode, encrypt, key, keyBytes, ivIn, i8, reference, len)) {
-            IOFree(reference, len);
-            reference = nullptr;
-        }
-    }
     int result = whole ? aesLocked(mode, encrypt, key, keyBytes, ivIn, in, out, whole) : 0;
     uint8_t next[16];  // the IV/counter after the whole blocks
     memcpy(next, ivIn, 16);
@@ -897,15 +873,6 @@ extern "C" int tegra_se_aes(tegra_se_mode mode, bool encrypt, const uint8_t *key
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): in place, the input is the caller's output buffer
         memcpy(const_cast<uint8_t *>(i8), saved, whole);  // the CPU redoes it from this
     }
-    if (!result && reference && memcmp(reference, o8, len)) {
-        algOff(alg, "result differs from the CPU's");
-        memcpy(o8, reference, len);  // the caller gets the CPU's
-        if (mode == TEGRA_SE_OFB) {  // the CPU's keystream state: the IV encrypted once per block
-            memcpy(next, ivIn, 16);
-            for (size_t at = 0; at < len; at += 16)
-                cpuAes(TEGRA_SE_ECB, true, key, keyBytes, nullptr, next, next, 16);
-        }
-    }
     if (!result) {
         switch (mode) {
         case TEGRA_SE_CBC:
@@ -918,10 +885,6 @@ extern "C" int tegra_se_aes(tegra_se_mode mode, bool encrypt, const uint8_t *key
         case TEGRA_SE_ECB:
             break;
         }
-    }
-    if (reference) {
-        bzero(reference, len);
-        IOFree(reference, len);
     }
     if (saved) {
         bzero(saved, whole);
@@ -1006,22 +969,6 @@ extern "C" int tegra_se_cmac(const uint8_t *key, unsigned keyBytes, const void *
         tally(gUnreachable, len);
     }
     giveBack(e);
-    if (!result && shouldCheck(CMAC)) {  // CBC-MAC of the same blocks on the CPU
-        uint8_t chain[16] = {};
-        uint8_t block[16];
-        for (size_t at = 0; at < head; at += 16) {
-            for (unsigned i = 0; i < 16; ++i)
-                block[i] = chain[i] ^ msg[at + i];
-            cpuAes(TEGRA_SE_ECB, true, key, keyBytes, nullptr, block, chain, 16);
-        }
-        for (unsigned i = 0; i < 16; ++i)
-            block[i] = chain[i] ^ last[i];
-        cpuAes(TEGRA_SE_ECB, true, key, keyBytes, nullptr, block, chain, 16);
-        if (memcmp(chain, mac, 16)) {
-            algOff(CMAC, "result differs from the CPU's");
-            memcpy(mac, chain, 16);
-        }
-    }
     bzero(l, sizeof l);
     bzero(k, sizeof k);
     bzero(last, sizeof last);
@@ -1118,12 +1065,6 @@ int compressHook(const struct ccdigest_info *original, ccdigest_state_t state, s
     giveBack(e);
     if (result)
         return result;
-    if (shouldCheck(alg)) {
-        original->compress(state, nblocks, data);  // the CPU's answer, into the caller's state
-        if (memcmp(s, next, static_cast<size_t>(words) * 4))
-            algOff(alg, "compress differs from the CPU's");
-        return 0;
-    }
     memcpy(s, next, static_cast<size_t>(words) * 4);
     return 0;
 }
@@ -1220,10 +1161,8 @@ uint32_t knownAnswers(const Engine &only)
     if (only.up && !tegra_se_cmac(kKey, 16, kPlain, 16, out) && !memcmp(out, kCmac16, 16) && only.up &&
         !tegra_se_cmac(kKey, 16, kPlain, 40, out) && !memcmp(out, kCmac40, 16))
         good |= 1u << CMAC;
-    for (AlgState &state : gAlg) {
+    for (AlgState &state : gAlg)
         state.on = false;
-        state.ops = 0;
-    }
     forceOnly(nullptr);
     gForced[0] = nullptr;
     return good;
@@ -1248,12 +1187,10 @@ bool stateLoadWorks(const Engine &only, unsigned alg, const struct ccdigest_info
     di->compress(reinterpret_cast<ccdigest_state_t>(cpu), blocks, data + di->block_size);
     gAlg[alg].on = true;
     gForced[0] = current_thread();
-    gAlg[alg].ops = kCheckFirst;  // no cross-check inside: this is the check
     const bool ok = (compressHook(di, reinterpret_cast<ccdigest_state_t>(se), blocks, data + di->block_size) == 0) &&
                     (memcmp(se, cpu, di->state_size) == 0);
     gAlg[alg].on = false;
     gForced[0] = nullptr;
-    gAlg[alg].ops = 0;
     forceOnly(nullptr);
     return ok;
 }
@@ -1478,7 +1415,6 @@ void timing()
                 uint64_t cpuBest = ~0ULL;
                 for (unsigned rep = 0; rep < 5; ++rep) {
                     forceOnly(&e);
-                    gAlg[row.alg].ops = kCheckFirst + 1;  // no cross-check inside the timed call
                     switch_dcache_clean_invalidate(in.va, n);
                     uint64_t t0 = mach_absolute_time();
                     const int r = engineCall(row, in.va, out.va, n);
@@ -1535,7 +1471,6 @@ void timing()
     // Both engines at once: two threads hashing 1 MiB 16 times each, against one thread alone.
     const unsigned upBeforeParallel = enginesUp();
     if (gEngines[0].up && gEngines[1].up && gAlg[SHA256].on) {
-        gAlg[SHA256].ops = kCheckFirst + 1;
         Parallel p = {1, 16, in.va, sizes[4], false};
         uint8_t digest[32];
         uint64_t t0 = mach_absolute_time();
@@ -1642,11 +1577,11 @@ void seThread(void *, wait_result_t)
         answered = up ? (answered & good) : good;  // an algorithm needs every engine that is up
         ++up;
         if (at > 0 && static_cast<size_t>(at) < sizeof line) {
-            at +=
-                snprintf(line + at, sizeof line - static_cast<size_t>(at),
-                         " %s up, %u keyslots, known answers %#x in %llu us, "
-                         "INTID %u (%u interrupts);",
-                         e.name, __builtin_popcount(e.slotsUsable), good, us, e.intid, switch_interrupt_count(e.intid));
+            at += snprintf(line + at, sizeof line - static_cast<size_t>(at),
+                           " %s up, data over its %s, %u keyslots, known answers %#x in %llu us, "
+                           "INTID %u (%u interrupts);",
+                           e.name, kMemif[which] ? "MCCIF clients" : "AHB", __builtin_popcount(e.slotsUsable), good, us,
+                           e.intid, switch_interrupt_count(e.intid));
         }
     }
     if (!up) {
