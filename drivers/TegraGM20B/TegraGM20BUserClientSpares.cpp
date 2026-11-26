@@ -86,14 +86,15 @@ void cleanZeros(void *va, uint64_t bytes)
 namespace
 {
 
-// lock held: ready spares past their class's line (its depth, or with `floors` its warm count), largest class first, off
-// their lists until `need` more bytes fit under the cap; the caller frees them once the lock is dropped
-Spare *giveBackLocked(SparePool *p, uint64_t need, bool floors)
+// lock held: ready spares of slots asked before `slot`, the least recently asked first, off their lists until `need`
+// more bytes fit under the cap; the caller frees them once the lock is dropped
+Spare *evictLocked(SparePool *p, uint32_t slot, uint64_t need)
 {
 	switch_gpu_spare_books &b = p->books;
 	Spare *given = nullptr;
 	while (b.held + need > kSpareCapBytes) {
-		const uint32_t d = switch_gpu_spare_books_give_back(b, floors);
+		const uint32_t d =
+			switch_gpu_spare_books_evict(b, slot, b.held + need - kSpareCapBytes);
 		if (d == SWITCH_GPU_SPARE_NONE || !p->ready[d])
 			break;
 		Spare *s = p->ready[d];
@@ -230,10 +231,7 @@ void spareRecycleWork(thread_call_param_t param, thread_call_param_t)
 			--b.dirty[slot];
 			const bool keep = !pressure && spareRoom() &&
 					  switch_gpu_spare_books_keep(b, slot, kSpareCapBytes);
-			Spare *given =
-				keep ? giveBackLocked(p, 0,
-						      switch_gpu_spare_books_floor_short(b, slot))
-				     : nullptr;
+			Spare *given = keep ? evictLocked(p, slot, 0) : nullptr;
 			if (keep)
 				++b.zeroing[slot];
 			else
@@ -308,16 +306,14 @@ void spareWork(thread_call_param_t param, thread_call_param_t)
 				thread_call_enter(p->recycleCall);
 			return;
 		}
-		bool floors = false;
-		const uint32_t slot =
-			p->fillFailed || !spareRoom()
-				? SWITCH_GPU_SPARE_NONE
-				: switch_gpu_spare_books_refill(b, kSpareCapBytes, &floors);
+		const uint32_t slot = p->fillFailed || !spareRoom()
+					      ? SWITCH_GPU_SPARE_NONE
+					      : switch_gpu_spare_books_refill(b, kSpareCapBytes);
 		const uint64_t bytes =
 			slot != SWITCH_GPU_SPARE_NONE ? switch_gpu_spare_slot_bytes(slot) : 0;
 		Spare *given = nullptr;
 		if (slot != SWITCH_GPU_SPARE_NONE) {
-			given = giveBackLocked(p, bytes, floors);
+			given = evictLocked(p, slot, bytes);
 			// counted from now, on the dirty list it goes to: neither this loop nor a take's kick makes it twice
 			b.held += bytes;
 			++b.dirty[slot];
@@ -409,6 +405,7 @@ Spare *spareTake(uint64_t bytes, switch_gpu_spare_kind kind, bool critical)
 	switch_gpu_spare_books &b = p->books;
 	IOLockLock(p->lock);
 	const uint32_t d = switch_gpu_spare_books_take(b, asked, critical);
+	switch_gpu_spare_books_asked(b, asked, d);
 	Spare *s = nullptr;
 	if (d != SWITCH_GPU_SPARE_NONE) {
 		s = p->ready[d];

@@ -42,7 +42,7 @@ struct Pool {
 	uint64_t peak = 0;
 	// per slot: BoAllocs asked, served by a spare, spares the refill made
 	unsigned asked[SWITCH_GPU_SPARE_SLOTS] = {}, served[SWITCH_GPU_SPARE_SLOTS] = {},
-		 refilled[SWITCH_GPU_SPARE_SLOTS] = {};
+		 refilled[SWITCH_GPU_SPARE_SLOTS] = {}, evicted[SWITCH_GPU_SPARE_SLOTS] = {};
 
 	Pool()
 	{
@@ -54,33 +54,36 @@ struct Pool {
 		peak = b.held > peak ? b.held : peak;
 	}
 
-	void giveBack(uint64_t need, bool floors)
+	void evict(uint32_t s, uint64_t need)
 	{
 		while (b.held + need > kCap) {
-			const uint32_t d = switch_gpu_spare_books_give_back(b, floors);
+			const uint32_t d = switch_gpu_spare_books_evict(b, s, b.held + need - kCap);
 			if (d == SWITCH_GPU_SPARE_NONE)
 				break;
 			--b.ready[d];
 			b.held -= switch_gpu_spare_slot_bytes(d);
+			++evicted[d];
 		}
 	}
 
 	void refill()
 	{
-		bool floors = false;
-		for (uint32_t s; (s = switch_gpu_spare_books_refill(b, kCap, &floors)) !=
-				 SWITCH_GPU_SPARE_NONE;) {
+		unsigned steps = 0;
+		for (uint32_t s;
+		     (s = switch_gpu_spare_books_refill(b, kCap)) != SWITCH_GPU_SPARE_NONE;) {
+			if (++steps > 4096) {
+				ADD_FAILURE() << "the refill never stops";
+				return;
+			}
 			const uint64_t bytes = switch_gpu_spare_slot_bytes(s);
-			giveBack(bytes, floors);
-			b.held += bytes;
-			++b.dirty[s];
-			track();
 			if (unitsRefused && bytes >= SWITCH_GPU_SPARE_UNITS_FROM) {
-				--b.dirty[s];
-				b.held -= bytes;
 				++refused;
 				return;
 			}
+			evict(s, bytes);
+			b.held += bytes;
+			++b.dirty[s];
+			track();
 			++made;
 			++refilled[s];
 			dirty.push_back(s);
@@ -106,7 +109,7 @@ struct Pool {
 				b.held -= switch_gpu_spare_slot_bytes(s);
 				continue;
 			}
-			giveBack(0, switch_gpu_spare_books_floor_short(b, s));
+			evict(s, 0);
 			if (copyEngineBusy) {
 				dirty.insert(dirty.begin(), s);
 				++b.dirty[s];
@@ -122,6 +125,7 @@ struct Pool {
 	{
 		const uint32_t c = slotOf(bytes, kind);
 		const uint32_t d = switch_gpu_spare_books_take(b, c, compositor);
+		switch_gpu_spare_books_asked(b, c, d);
 		++asked[c];
 		if (d != SWITCH_GPU_SPARE_NONE) {
 			++served[c];
@@ -189,7 +193,7 @@ TEST(SpareBooks, TheCompositorsClassHoldsItsReserveFromBoot)
 	const uint32_t sixteen = classOf(16 * kMiB);
 	p.b.ready[sixteen] = 0;
 	p.take(16 * kMiB, false);
-	EXPECT_GE(p.b.depth[sixteen], 2)
+	EXPECT_GE(switch_gpu_spare_books_target(p.b, sixteen), 2)
 		<< "a miss in a warm class kept two lowered it to the quarter-cap depth";
 }
 
@@ -345,7 +349,6 @@ TEST(SpareBooks, ASpareServesItsOwnClassAndTheFourAboveIt)
 		  SWITCH_GPU_SPARE_NONE);
 }
 
-
 // A system BO's write-combined buffer and a cached BO's cacheable one never serve each other (BoAlloc's PBENTRY note),
 // in either direction, though both kinds hold the same classes
 TEST(SpareBooks, TheTwoKindsNeverServeEachOther)
@@ -387,7 +390,7 @@ TEST(SpareBooks, AWriteCombinedMissTeachesItsOwnDepth)
 	EXPECT_TRUE(p.take(4 * kMiB, false, SWITCH_GPU_SPARE_WC));
 }
 
-// One budget: the learned depths of both kinds fill only the room the warm table leaves, never past the cap
+// One budget: the demand of both kinds takes the room of warm classes nobody asked for, never past the cap
 TEST(SpareBooks, BothKindsShareTheCap)
 {
 	Pool p;
@@ -396,12 +399,15 @@ TEST(SpareBooks, BothKindsShareTheCap)
 	EXPECT_FALSE(p.take(20 * kMiB, false, SWITCH_GPU_SPARE_WC));
 	p.settle();
 	EXPECT_LE(p.peak, kCap);
-	EXPECT_EQ(p.readyBytes(SWITCH_GPU_SPARE_CACHED), switch_gpu_spare_warm_bytes());
-	EXPECT_EQ(p.readyBytes(SWITCH_GPU_SPARE_WC), 16 * kMiB) << "20 MiB more is past the cap";
+	EXPECT_EQ(p.readyBytes(SWITCH_GPU_SPARE_WC), 36 * kMiB);
+	EXPECT_EQ(p.readyBytes(SWITCH_GPU_SPARE_CACHED) + 36 * kMiB, p.b.held);
+	EXPECT_EQ(p.b.ready[slotOf(24 * kMiB, SWITCH_GPU_SPARE_CACHED)], 2)
+		<< "the compositor's reserve is not ours to give";
 }
 
-// The warm table refills first, taking its room back from write-combined spares as it does from learned cached ones
-TEST(SpareBooks, WarmFloorsTakeRoomBackFromWriteCombinedSpares)
+// A class asked since takes the room of the ones asked before it, the least recently asked first: here a
+// write-combined spare nobody asked for (a freed system BO's) before the 20 MiB one asked earlier
+TEST(SpareBooks, AClassAskedLaterTakesTheRoomOfTheLeastRecentlyAsked)
 {
 	Pool p;
 	p.refill();
@@ -421,30 +427,47 @@ TEST(SpareBooks, WarmFloorsTakeRoomBackFromWriteCombinedSpares)
 
 // gpu.path.fresh_spare: a 24 MiB Shared buffer, a system BO (the GPU pool refused it as past the client's share), made,
 // freed and made again. Beside the full warm table (96.5 MiB of the 120 MiB cap) a 24 MiB write-combined spare needs
-// 120.5 MiB: the freed one goes back to the VM and the refill never makes one, so the second ask misses as the first
-// did. 512 KiB less of warm floors (the 64 KiB class's eight) is room for it exactly.
-TEST(SpareBooks, FreshSpareHasNoRoomBesideTheFullWarmTable)
+// 120.5 MiB: its refill takes the room of one warm 4 MiB spare nobody asked for, the smallest that covers the 512 KiB,
+// so the second ask hits.
+TEST(SpareBooks, FreshSpareTakesTheRoomOfAWarmClassNobodyAsked)
 {
-	const auto rounds = [](bool sixtyFourKiBFloor) {
-		Pool p;
-		if (!sixtyFourKiBFloor) {
-			const uint32_t s = slotOf(64 * kKiB, SWITCH_GPU_SPARE_CACHED);
-			p.b.depth[s] = p.b.floor[s] = 0;
-		}
-		p.refill();
-		for (int round = 0; round < 2; ++round) {
-			p.take(24 * kMiB, false, SWITCH_GPU_SPARE_WC);
-			p.settle();
-			p.free(24 * kMiB, SWITCH_GPU_SPARE_WC);
-			p.settle();
-		}
-		EXPECT_LE(p.peak, kCap);
-		return p.misses;
-	};
-	EXPECT_EQ(rounds(true), 2u);
-	EXPECT_EQ(rounds(false), 1u);
+	Pool p;
+	p.refill();
+	for (int round = 0; round < 2; ++round) {
+		p.take(24 * kMiB, false, SWITCH_GPU_SPARE_WC);
+		p.settle();
+		p.free(24 * kMiB, SWITCH_GPU_SPARE_WC);
+		p.settle();
+	}
+	EXPECT_LE(p.peak, kCap);
+	EXPECT_EQ(p.misses, 1u);
+	EXPECT_EQ(p.evicted[slotOf(4 * kMiB, SWITCH_GPU_SPARE_CACHED)], 1u);
+	EXPECT_EQ(p.b.ready[slotOf(24 * kMiB, SWITCH_GPU_SPARE_CACHED)], 2);
 }
 
+// A slot short of its target takes no room from a slot asked as recently or later, so two slots that both want the
+// same room cannot take it from each other, and the refill stops
+TEST(SpareBooks, AnOlderAskNeverTakesTheRoomOfANewerOne)
+{
+	switch_gpu_spare_books b{};
+	switch_gpu_spare_books_init(b);
+	const uint32_t older = slotOf(20 * kMiB, SWITCH_GPU_SPARE_WC);
+	const uint32_t newer = slotOf(16 * kMiB, SWITCH_GPU_SPARE_WC);
+	b.used[older] = 5;
+	b.used[newer] = 9;
+	b.depth[older] = 1;
+	b.depth[newer] = b.ready[newer] = 7;
+	b.held = 7 * 16 * kMiB;
+	EXPECT_EQ(switch_gpu_spare_books_evictable(b, older, newer), 0);
+	EXPECT_EQ(switch_gpu_spare_books_evict(b, older, 12 * kMiB), SWITCH_GPU_SPARE_NONE);
+	EXPECT_FALSE(switch_gpu_spare_books_fit(b, older, 20 * kMiB, kCap));
+	EXPECT_NE(switch_gpu_spare_books_refill(b, kCap), older);
+	b.ready[newer] = 6;
+	b.ready[older] = 1;
+	b.held = 6 * 16 * kMiB + 20 * kMiB;
+	EXPECT_EQ(switch_gpu_spare_books_evict(b, newer, 12 * kMiB), older)
+		<< "the newer ask takes the older one's room";
+}
 
 // The device's measured demand, replayed through the pool: a HW Test pass (idle_redraw's 8 MiB heap restore,
 // launch_target's two rounds, fresh_spare's held target and 24 MiB Shared buffer) and backboardd's churn of 17,280 KiB
@@ -475,11 +498,12 @@ void printDemand(const char *title, const Pool &p)
 	std::printf("%s\n", title);
 	for (uint32_t s = 0; s < SWITCH_GPU_SPARE_SLOTS; ++s)
 		if (p.asked[s] || p.refilled[s])
-			std::printf("  %s %llu KiB: %u of %u asks served, %u refills\n",
-				    switch_gpu_spare_slot_kind(s) == SWITCH_GPU_SPARE_WC ? "write-combined"
-											 : "cached",
+			std::printf("  %s %llu KiB: %u of %u asks served, %u refills, %u evicted\n",
+				    switch_gpu_spare_slot_kind(s) == SWITCH_GPU_SPARE_WC
+					    ? "write-combined"
+					    : "cached",
 				    (unsigned long long)(switch_gpu_spare_slot_bytes(s) >> 10),
-				    p.served[s], p.asked[s], p.refilled[s]);
+				    p.served[s], p.asked[s], p.refilled[s], p.evicted[s]);
 }
 
 TEST(SpareBooks, TheReplayedDemandPerClass)
@@ -487,10 +511,18 @@ TEST(SpareBooks, TheReplayedDemandPerClass)
 	Pool p;
 	p.refill();
 	replayDemand(p);
-	printDemand("replayed demand, one boot:", p);
+	printDemand("replayed demand, one pass:", p);
+	Pool twice;
+	twice.refill();
+	replayDemand(twice);
+	replayDemand(twice);
+	printDemand("replayed demand, two passes in one boot:", twice);
+	EXPECT_EQ(twice.served[slotOf(24 * kMiB, SWITCH_GPU_SPARE_WC)], 1u)
+		<< "the second pass's write-combined ask finds the spare its first miss taught";
 	EXPECT_LE(p.peak, kCap);
 	EXPECT_EQ(p.served[slotOf(24 * kMiB, SWITCH_GPU_SPARE_WC)], 0u)
-		<< "fresh_spare's write-combined ask has no room beside the full warm table";
+		<< "a class's first ask of a boot misses without a record";
+	EXPECT_EQ(p.served[slotOf(20 * kMiB, SWITCH_GPU_SPARE_CACHED)], 10u);
 }
 
 }  // namespace

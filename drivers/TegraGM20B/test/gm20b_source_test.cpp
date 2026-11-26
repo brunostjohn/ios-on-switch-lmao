@@ -1904,7 +1904,8 @@ TEST(GM20BSparesSource, ThePoolDecidesThroughTheBooks)
 {
 	const CodeText work =
 		Block(client(), "void spareWork(thread_call_param_t param, thread_call_param_t)");
-	EXPECT_TRUE(work.has("switch_gpu_spare_books_refill(b, kSpareCapBytes, &floors)"));
+	EXPECT_TRUE(work.has("switch_gpu_spare_books_refill(b, kSpareCapBytes)"));
+	EXPECT_TRUE(work.has("given = evictLocked(p, slot, bytes);"));
 	EXPECT_TRUE(work.before("++b.dirty[slot];", "spareMake(p, slot)"));
 	const CodeText recycle = Block(
 		client(), "void spareRecycleWork(thread_call_param_t param, thread_call_param_t)");
@@ -1913,6 +1914,8 @@ TEST(GM20BSparesSource, ThePoolDecidesThroughTheBooks)
 		client(),
 		"Spare *spareTake(uint64_t bytes, switch_gpu_spare_kind kind, bool critical)");
 	EXPECT_TRUE(take.has("switch_gpu_spare_books_take(b, asked, critical)"));
+	EXPECT_TRUE(take.before("switch_gpu_spare_books_take(b, asked, critical)",
+				"switch_gpu_spare_books_asked(b, asked, d);"));
 	EXPECT_TRUE(take.has(
 		"switch_gpu_spare_books_learn(b, asked, why, kLearnMaxBytes, kSpareCapBytes);"));
 	for (const CodeText &body : {work, recycle, take})
