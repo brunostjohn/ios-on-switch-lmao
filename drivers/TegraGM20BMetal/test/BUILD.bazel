@@ -5431,6 +5431,16 @@ facade_test(
     srcs = ["facade_private_buffer_test.cpp"],
 )
 
+# What gpu.perf.knobs' and gpu.perf.nvn's arms read to prove their probes fired: the knob and discard counters, the
+# header's promotion field, the facts' kind and the forms' taken flushes
+facade_test(
+    name = "facade_nvn_probes_test",
+    srcs = [
+        "facade_nvn_probes_test.cpp",
+        "scale_frames.h",
+    ],
+)
+
 # Render passes the facade fails instead of drawing, nothing of them on m2v: attachments Metal's validation layer stops, a
 # stand-in target whose states the pack lacks, a YCbCr texture with no stand-in; a YCbCr state with no target is raw's
 facade_test(

@@ -105,6 +105,11 @@ void aSharedBufferIsReadAndWrittenThroughTheL2()
     });
     EXPECT_NE(filled.flags & TegraGM20BJobExternal, 0u)
         << "a job writing a shared buffer flushes the L2 for its reader";
+    const uint64_t va = ((SwitchMetalBuffer *)shared)->_raw.va;
+    size_t ranged = 0;
+    for (const TegraGM20BAbiSurfaceUse &u : filled.uses)
+        ranged += u.handle == va && (u.access & TegraGM20BSurfaceRange) && u.reserved == kLength;
+    EXPECT_EQ(ranged, 1u) << "out of the resource set, the fill lists the buffer by its own bytes";
     const kernel_model::Job copiedInto = blitted(device, ^(id<MTLBlitCommandEncoder> b) {
         [b copyFromBuffer:priv sourceOffset:0 toBuffer:shared destinationOffset:0 size:kLength];
     });
