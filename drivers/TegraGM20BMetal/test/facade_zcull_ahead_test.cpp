@@ -272,15 +272,16 @@ TEST(GM20BFacadeZcullAhead, TheCarriedArmsShapeCarriesTheRegion)
 }
 
 // The loading pass right after the storing one, both encoded ahead: fused into one pass that keeps its region (HW Test
-// gpu.gm20b.zcull's `fused` arm), or two of which the second loads it
+// gpu.gm20b.zcull's `fused` arm); a change to storing and loading it shows here
 TEST(GM20BFacadeZcullAhead, AnAdjacentLoadingPassEncodedAheadKeepsTheRegion)
 {
     ASSERT_TRUE(openedWithZcull().device != nil);
     const Moved m = aheadPair(nil, false);
     EXPECT_EQ(m.status, MTLCommandBufferStatusCompleted);
     EXPECT_GE(m.pipelined, kShape.passes + 2);
-    EXPECT_TRUE((m.fused >= 1 && m.passes >= 1) || (m.passes == 2 && m.loads == 1))
-        << "passes " << m.passes << " loads " << m.loads << " fused " << m.fused;
+    EXPECT_GE(m.fused, 1) << "the facade fuses the pair";
+    EXPECT_EQ(m.passes, 1) << "one pass, its region kept across the fused draws";
+    EXPECT_EQ(m.loads, 0);
 }
 
 }  // namespace
