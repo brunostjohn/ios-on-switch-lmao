@@ -553,6 +553,7 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
         } else if (openBounds != zcull_.boundsOpen) {
             p.m(NVB197_SET_ZCULL_BOUNDS, openBounds ? kZcullBoundsUnbounded : 0u);
             zcull_.boundsOpen = openBounds;
+            SWITCH_METAL_DIAGNOSTIC(d.stats.nvnBoundsOpened += openBounds);
         }
     }
     uint32_t *root = cb_->rootPush_;

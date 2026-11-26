@@ -83,6 +83,11 @@
     d[@"zcull_passes"] = @(gRM->raw->stats.zcullPasses.load());
     d[@"zcull_invalidations"] = @(gRM->raw->stats.zcullInvalidations.load());
     d[@"zcull_loads"] = @(gRM->raw->stats.zcullLoads.load());
+    d[@"nvn_bounds_opened"] = @(gRM->raw->stats.nvnBoundsOpened.load());
+    d[@"nvn_stencil_passes"] = @(gRM->raw->stats.nvnStencilPasses.load());
+    d[@"nvn_format_passes"] = @(gRM->raw->stats.nvnFormatPasses.load());
+    d[@"nvn_discards"] = @(gRM->raw->stats.nvnDiscards.load());
+    d[@"subtile_writes"] = @(gRM->raw->stats.subtileWrites.load());
     d[@"state_segment_binds"] = @(gRM->raw->stats.segmentBinds.load());
     d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
     d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());

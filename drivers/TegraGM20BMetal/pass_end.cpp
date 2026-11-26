@@ -136,18 +136,26 @@ void RenderEncoder::timestampAtStart(uint64_t va, counters::Point point)
 // put back for the channel's next pass (the prologue writes SET_ZCULL's stencil-on form where stencilOn is set here)
 void RenderEncoder::nvnPassEnd()
 {
+    const uint32_t nvn = dev_->probeNvn.load(std::memory_order_relaxed);
+    zcull_.stencilOn = zcull_.candidate && (nvn & kNvnStencilZcull);
+    if (!nvn && !zcull_.boundsOpen)
+        return;
     Push &p = p_;
     if (p.room() < 2 * 11)
         reserve();
-    const uint32_t nvn = dev_->probeNvn.load(std::memory_order_relaxed);
-    zcull_.stencilOn = zcull_.candidate && (nvn & kNvnStencilZcull);
+    Device::Stats &stats = dev_->stats;
+    stats.nvnStencilPasses += zcull_.stencilOn;
     if (nvn & kNvnDiscard) {
         for (uint32_t j = 0; j < pass_.count && j < 8; j++)
-            if (pass_.color[j].texture && pass_.color[j].discard)
+            if (pass_.color[j].texture && pass_.color[j].discard) {
                 p.m(kDiscardRenderTarget, discardColour(j));
+                stats.nvnDiscards++;
+            }
         const DepthStencilAttachment &zs = pass_.depthStencil;
-        if (zs.texture && !zs.stored && !zs.loadedLater && !zcull_.store)
+        if (zs.texture && !zs.stored && !zs.loadedLater && !zcull_.store) {
             p.m(kDiscardRenderTarget, kDiscardDepthStencil);
+            stats.nvnDiscards++;
+        }
     }
     if (zcull_.boundsOpen) {
         p.m(NVB197_SET_ZCULL_BOUNDS, 0);
@@ -394,8 +402,10 @@ void RenderEncoder::end()
     }
 #if SWITCH_METAL_DIAGNOSTICS
     // the channel keeps the knob after the probe is cleared: HW Test writes the golden value back through it last
-    if (const uint32_t knob = d.probeSubtilingKnob.load(std::memory_order_relaxed))
+    if (const uint32_t knob = d.probeSubtilingKnob.load(std::memory_order_relaxed)) {
         p.m(NVB197_SET_SUBTILING_PERF_KNOB_A, knob);
+        d.stats.subtileWrites++;
+    }
 #endif
     uint32_t count = 0;
     for (uint32_t j = 0; j < pass_.count && j < 8; j++)
@@ -435,6 +445,7 @@ void RenderEncoder::end()
         if ((nvn & kNvnZcullFp) && zs.clearDepth && (zs.depth == 0.0f || zs.depth == 1.0f) &&
             zs.texture->format != 250)  // Depth16Unorm is FP already
             zFormat = kZcullFormatFp;
+        d.stats.nvnFormatPasses += regionFormat != 0 || zFormat != ~0u;
         if (zcull_.stencilOn)
             p.m(NVB197_SET_ZCULL, kZcullDepthAndStencil);
 #endif

@@ -553,6 +553,8 @@ public:
     // createOwnedZeta's zeta of `bytes` on compressed memory of kind `kind` where some of its size is ready, lock_ held
     bool createCompressedZeta(uint64_t bytes, uint32_t kind, Texture &t);
     bool privateCompressed(const Texture &t);
+    // its compressed memory's kind; 0 where it has none (HW Test's probe facts)
+    uint32_t privateKind(const Texture &t);
     // t, made plain where createCompressedTexture found no memory of `kind` ready, wants that memory (private_comp.h);
     // `owner`, the facade's texture, is what the submit worker's look hands back; false: t takes none (its layout, a probe)
     bool wantCompressed(const Texture &t, uint32_t kind, void *owner);
@@ -1103,6 +1105,9 @@ public:
         std::atomic<uint64_t> resolveRoute[3][3] = {};
         // passes given a zcull region, and the regions a draw's state invalidated (zcull.h)
         std::atomic<uint64_t> zcullPasses{0}, zcullInvalidations{0}, zcullLoads{0};
+        // what gpu.perf.knobs' and gpu.perf.nvn's probes wrote (nvn_probes.h): passes or draws, discards
+        std::atomic<uint64_t> nvnBoundsOpened{0}, nvnStencilPasses{0}, nvnFormatPasses{0}, nvnDiscards{0},
+            subtileWrites{0};
         // stencil plane draws encoded: the eight-draw route's (stencil_bits.h) and the one-draw route's
         // (zeta_colour.h)
         std::atomic<uint64_t> stencilBitDraws{0}, zetaColourDraws{0};
