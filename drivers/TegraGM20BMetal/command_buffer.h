@@ -28,6 +28,7 @@
 #include "pipeline.h"
 #include "predication.h"
 #include "probe_forms.h"
+#include "scrub.h"
 #include "push.h"
 #include "reach.h"
 #include "render_encoder.h"
@@ -318,6 +319,8 @@ private:
     JobVisibility visibility_ = JobVisibility::Legacy;
     bool externalWrites_ = false;
     bool volatileWrites_ = false;
+    std::vector<Scrub> scrubs_;  // the Shared spans its front fills (Device::scrubInto)
+    size_t scrubSegment_ = 0;    // its first segment that holds them: the job that takes it submits them
     EventPublication publication_;
     BarrierEngine lastEngine_ = BarrierEngine::None;  // the engine of the work encoded last (barrier_forms.h)
     PassChain chain_;                                 // the passes since the last drain (pass_hazard.h)

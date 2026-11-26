@@ -575,14 +575,22 @@ public:
         return privateMoveDue_.load(std::memory_order_relaxed);
     }
 
-    // The submit worker's, between its submissions (or a caller excluding them): one job zeroing every Shared buffer
-    // span freed since the last (scrubs.cpp), the spans earlier jobs zeroed back in their chunks first; `wait`: until this
-    // job completed and its spans are back too (the idle give-back, before trim). False: a job was due and not made.
-    bool scrubFreed(bool wait);
+    // Every Shared span freed since is zeroed at the front of the next command buffer begin() opens (scrubs.cpp). With
+    // no command buffer coming (the idle give-back, before trim), the submitting thread makes one for them: true with
+    // its job in `seqno` and `generation` (0: none was due); then scrubWait, on the caller's own thread, waits for it and
+    // puts its spans back in their chunks.
+    bool scrubFreed(uint32_t &seqno, uint64_t &generation);
+    void scrubWait(uint32_t seqno, uint64_t generation);
 
     bool scrubDue() const
     {
         return scrubDue_.load(std::memory_order_relaxed);
+    }
+
+    // The idle give-back's (memory pressure, the app gone to the background): the kernel's spares too
+    void kernelSparesGiveBack()
+    {
+        k_.sparesGiveBack();
     }
 
     // The submit worker's look, where privateMoveDue: the flag cleared, and `take(owner)` for each texture ready memory
@@ -1051,6 +1059,8 @@ public:
             heapUnparksReclaimed{0};
         // the memory live textures took of their own and their kept blocks' (Texture::heldBytes, Buffer::keptBytes)
         std::atomic<uint64_t> textureBytes{0};
+        // Shared spans zeroed at the front of a command buffer, and the command buffers that carried them (scrubs.cpp)
+        std::atomic<uint64_t> scrubbedBytes{0}, scrubbedRuns{0};
         // diagnostics: color targets the driver rendered whose address or pitch is not a multiple of 128 (NVK renders
         // those through a tiled shadow: nvk_cmd_draw.c nvk_image_plane_aligned_for_linear_attachment), and the last one's pitch
         std::atomic<uint64_t> rtUnaligned{0};
@@ -1330,9 +1340,6 @@ private:
         // a pool chunk a host-visible buffer was placed in: the CPU writes such a buffer outside any lease, so lines
         // it left may be dirty under a later owner of its span (Device::createBuffer)
         bool hostTouched = false;
-        // a VOL=1 write-combined chunk a span went back to unzeroed (the free that emptied it, or a resident unpark): its
-        // spans below highWater may hold old bytes (scrubs.cpp zeroes the others when they are freed)
-        bool unscrubbed = false;
         ChunkPark park = ChunkPark::Live;
         uint64_t parkedVa = 0;
     };
@@ -1852,16 +1859,12 @@ private:
     // separate VOL=1 WC chunks for streaming shared buffers so shared textures in wcChunks_ stay L2-cached
     std::vector<Chunk> volatileWcChunks_;
 
-    // A freed span of a VOL=1 write-combined chunk (Shared buffers' alone), counted in its chunk's used bytes until the
-    // copy engine has zeroed it: wanted, then scrubbing in the job `seqno` on channel `generation`. lock_
-    struct Scrub {
-        uint32_t chunk = 0;
-        uint64_t offset = 0, bytes = 0, va = 0;
-        uint32_t seqno = 0;
-        uint64_t generation = 0;
-    };
-
+    // lock_ (scrub.h)
     std::vector<Scrub> scrubWanted_, scrubbing_;
+    // begin()'s, commit()'s and abandon()'s, on the submitting thread: the spans a command buffer fills at its front
+    void scrubInto(CommandBuffer &cb);
+    void scrubsSubmitted(CommandBuffer &cb, uint32_t seqno);
+    void scrubsReturned(CommandBuffer &cb);
     std::atomic<bool> scrubDue_{false};
     // lock_ held. Null `deferred`: an emptied chunk is kept (the allocation that asked will use it)
     void retireScrubs(DeferredFrees *deferred);
@@ -1869,6 +1872,8 @@ private:
     bool wcPoolAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &pool, uint64_t bytes, bool gpuVolatile,
                      Span &s, bool *dirty = nullptr);
     void wcPoolFree(std::vector<Chunk> &pool, Span &s, DeferredFrees &deferred);
+    // An empty live shared chunk of `pool` besides `ch`: the one an emptied chunk leaves for the next burst
+    static bool otherEmptyChunk(const std::vector<Chunk> &pool, const Chunk &ch);
     bool wcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s, bool *dirty = nullptr);
     void wcFree(Span &s, DeferredFrees &deferred);
     bool volatileWcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s, bool *dirty = nullptr);

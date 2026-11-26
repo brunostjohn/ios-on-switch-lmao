@@ -78,17 +78,15 @@ static void takeWanting(void *owner)
 void gm20bMoveWanting()
 {
     gm20b::Device &d = *gRM->raw;
-    const bool scrub = d.scrubDue();
-    if (d.privateMoveDue())
-        d.privateMoves(takeWanting);
-    if (gMoving.empty() && !scrub)
+    if (!d.privateMoveDue())
         return;
-    // a move's or a scrub's job is a command buffer of its own: an encode ahead holding the device's goes back first
+    d.privateMoves(takeWanting);
+    if (gMoving.empty())
+        return;
+    // a move's job is a command buffer of its own: an encode ahead holding the device's goes back first
     if (gm20bPipelineOpen())
         gm20bPipelineYield(nil, SIZE_MAX, false);
     for (SwitchMetalTexture *t : gMoving)
         d.compressedFromPlain(t->_raw);
     gMoving.clear();
-    if (scrub)
-        d.scrubFreed(false);
 }

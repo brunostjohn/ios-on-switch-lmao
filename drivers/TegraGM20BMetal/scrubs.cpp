@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
-// Zero-on-free of Shared buffers' memory (gpu.h Scrub): a span freed beside live buffers of a VOL=1 write-combined chunk
-// stays used until the copy engine has written zeros over it, so the create that takes it again does no CPU work (the
-// free that empties a chunk goes back at once: Chunk::unscrubbed). Metal clears every buffer newBufferWithLength: makes,
-// in every storage mode.
+// Zero-on-free of Shared buffers' memory (gpu.h Scrub): a freed span of a VOL=1 write-combined chunk stays used until the
+// copy engine has written zeros over it, so the create that takes it again does no CPU work, and a chunk that empties
+// parks or is kept clean (one that goes back to the kernel needs no zeroing). Metal clears every buffer
+// newBufferWithLength: makes, in every storage mode.
 #include "lock.h"
 #include "gpu.h"
 #include "blit_encoder.h"
@@ -40,85 +40,117 @@ void Device::scrubbedFree(const Scrub &s, DeferredFrees *deferred)
     }
     if (!merged)
         ch.free[offset] = bytes;
-    if (ch.used || !deferred)
+    if (ch.used || !deferred || !otherEmptyChunk(pool, ch))
         return;
-    for (const Chunk &other : pool)
-        if (&other != &ch && other.park == ChunkPark::Live && other.bo.handle && !other.dedicated && !other.used) {
-            deferred->add({ch.bo, 0, 0, nullptr, 0, nullptr, ch.bytes, ch.bo.mapped, RetireKind::WcShared});
-            ch = Chunk();
-            return;
-        }
+    deferred->add({ch.bo, 0, 0, nullptr, 0, nullptr, ch.bytes, ch.bo.mapped, RetireKind::WcShared});
+    ch = Chunk();
 }
 
 void Device::retireScrubs(DeferredFrees *deferred)
 {
-    if (scrubbing_.empty())
-        return;
     for (auto it = scrubbing_.begin(); it != scrubbing_.end();) {
-        if (!channelCurrent(it->generation) || killed(it->seqno)) {
-            // its job was on a channel since lost, which may have stopped before it: a kill moves the fence past every
-            // seqno given out before begin() opens the next channel, so done() alone would retire a fill that never ran
-            scrubWanted_.push_back(*it);
-            scrubDue_.store(true, std::memory_order_relaxed);
-        } else if (done(it->seqno)) {
-            scrubbedFree(*it, deferred);
-        } else {
+        // The fence before the kill record: a kill writes its range, then moves the fence past every seqno it gave out,
+        // so a fence read first and found past the seqno is followed by a record read that sees any kill covering it
+        const bool current = channelCurrent(it->generation);
+        if (current && !done(it->seqno)) {
             ++it;
             continue;
+        }
+        if (current && !killed(it->seqno)) {
+            scrubbedFree(*it, deferred);
+        } else {
+            // its job was on a channel since lost, or a kill covered it: it may never have run
+            scrubWanted_.push_back(*it);
+            scrubDue_.store(true, std::memory_order_relaxed);
         }
         it = scrubbing_.erase(it);
     }
 }
 
-bool Device::scrubFreed(bool wait)
+void Device::scrubInto(CommandBuffer &cb)
 {
-    std::vector<Scrub> batch;
+    scrubsReturned(cb);
+    if (!scrubDue_.load(std::memory_order_relaxed))
+        return;
     {
         DeferredFrees deferred(*this);
         std::lock_guard<gm20b::Mutex> l(lock_);
         retireScrubs(&deferred);
-        batch.swap(scrubWanted_);
+        cb.scrubs_.swap(scrubWanted_);
         scrubDue_.store(false, std::memory_order_relaxed);
     }
-    if (batch.empty())
-        return true;
-    uint32_t seqno = 0;
-    CommandBuffer *rc = begin();
-    bool submitted = rc != nullptr;
-    if (submitted) {
-        // VOL=1 memory: the job ends Volatile (WFI + FB_FLUSH), and the zeros are in DRAM for the CPU's
-        // write-combined view
-        rc->internalCompletion();
-        rc->volatileWrites_ = true;
-        for (const Scrub &s : batch)
-            rc->useAddress(s.va, s.bytes, true);
-        BlitEncoder *b = rc->blit();
-        for (const Scrub &s : batch)
-            b->fillWords(s.va, s.bytes, 0);
-        b->end();
-        submitted = rc->commit(seqno);
-        if (!submitted)
-            rc->abandon();
+    if (cb.scrubs_.empty())
+        return;
+    // VOL=1 memory: a job that ends Volatile (WFI + FB_FLUSH) or External leaves the zeros in DRAM for the CPU's
+    // write-combined view
+    cb.volatileWrites_ = true;
+    for (const Scrub &s : cb.scrubs_)
+        cb.useAddress(s.va, s.bytes, true);
+    BlitEncoder *b = cb.blit();
+    for (const Scrub &s : cb.scrubs_) {
+        b->fillWords(s.va, s.bytes, 0);
+        SWITCH_METAL_DIAGNOSTIC(stats.scrubbedBytes += s.bytes);
     }
+    b->end();
+    SWITCH_METAL_DIAGNOSTIC(stats.scrubbedRuns++);
+}
+
+void Device::scrubsSubmitted(CommandBuffer &cb, uint32_t seqno)
+{
+    if (cb.scrubs_.empty())
+        return;
     const uint64_t generation = channelGeneration();
-    {
-        std::lock_guard<gm20b::Mutex> l(lock_);
-        for (Scrub &s : batch) {
-            s.seqno = seqno;
-            s.generation = generation;
-        }
-        std::vector<Scrub> &to = submitted ? scrubbing_ : scrubWanted_;
-        to.insert(to.end(), batch.begin(), batch.end());
-        if (!submitted)
-            scrubDue_.store(true, std::memory_order_relaxed);
+    std::lock_guard<gm20b::Mutex> l(lock_);
+    for (Scrub &s : cb.scrubs_) {
+        s.seqno = seqno;
+        s.generation = generation;
+        scrubbing_.push_back(s);
     }
-    if (!submitted || !wait)
-        return submitted;
-    const bool waited = this->wait(seqno, generation);
+    cb.scrubs_.clear();
+}
+
+void Device::scrubsReturned(CommandBuffer &cb)
+{
+    if (cb.scrubs_.empty())
+        return;
+    std::lock_guard<gm20b::Mutex> l(lock_);
+    scrubWanted_.insert(scrubWanted_.end(), cb.scrubs_.begin(), cb.scrubs_.end());
+    scrubDue_.store(true, std::memory_order_relaxed);
+    cb.scrubs_.clear();
+}
+
+bool Device::scrubFreed(uint32_t &seqno, uint64_t &generation)
+{
+    seqno = 0;
+    generation = 0;
+    if (!scrubDue_.load(std::memory_order_relaxed))
+        return true;
+    CommandBuffer *rc = begin();
+    if (!rc)
+        return false;
+    if (rc->scrubs_.empty()) {
+        rc->abandon();
+        return true;
+    }
+    rc->internalCompletion();
+    uint32_t seq = 0;
+    if (!rc->commit(seq)) {
+        rc->abandon();
+        return false;
+    }
+    seqno = seq;
+    generation = channelGeneration();
+    return true;
+}
+
+void Device::scrubWait(uint32_t seqno, uint64_t generation)
+{
+    if (!seqno)
+        return;
+    (void)wait(seqno, generation);
     DeferredFrees deferred(*this);
     std::lock_guard<gm20b::Mutex> l(lock_);
     retireScrubs(&deferred);
-    return waited;
 }
 
 }  // namespace gm20b

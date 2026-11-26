@@ -485,6 +485,12 @@ int Kernel::park(uint64_t handle, bool guardNone)
     return call(TegraGM20BMethodBoPark, &in, sizeof in, nullptr, 0);
 }
 
+void Kernel::sparesGiveBack()
+{
+    const TegraGM20BAbiSparesGiveBack in = {};
+    (void)call(TegraGM20BMethodSparesGiveBack, &in, sizeof in, nullptr, 0);
+}
+
 int Kernel::unpark(uint64_t handle, uint64_t &address, uint64_t &bytes, uint32_t &status)
 {
     address = 0;

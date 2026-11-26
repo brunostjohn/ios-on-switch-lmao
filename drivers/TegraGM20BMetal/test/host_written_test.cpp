@@ -77,6 +77,17 @@ TEST_F(HostWritten, AReadLeaseIsNoWrite)
     EXPECT_FALSE(copy(target, other));
 }
 
+// The idle give-back's order (TegraGM20BMetal.mm): the freed Shared spans zeroed and back in their chunks, then trim, so
+// an emptied chunk parks or goes back
+void giveBack(gm20b::Device &dev)
+{
+    uint32_t seqno = 0;
+    uint64_t generation = 0;
+    ASSERT_TRUE(dev.scrubFreed(seqno, generation));
+    dev.scrubWait(seqno, generation);
+    dev.trim();
+}
+
 TEST(HostWrittenVolatileWc, VolatileWcBufferSkipsHostWrittenKeepsSetAndEmitsVolatileWrites)
 {
     kernel_model::model = {};
@@ -457,7 +468,7 @@ TEST(HostWrittenVolatileWc, IdleVolatileWcChunksParkAndUnparkResidentWithoutAlia
     EXPECT_GT(dev.wcChunkBytesHeld(), 0u);
 
     dev.destroyBuffer(volBuf);
-    dev.trim();
+    giveBack(dev);
     EXPECT_EQ(kernel_model::model.parkCalls, 1u);
     ASSERT_EQ(kernel_model::model.bos.count(volHandle), 1u);
     EXPECT_EQ(kernel_model::model.bos[volHandle].parkState, kernel_model::ParkState::Parked);
@@ -524,7 +535,7 @@ TEST(HostWrittenVolatileWc, IdleVolatileWcChunksParkAndUnparkResidentWithoutAlia
 
     // Reclaimed volatile WC chunks drop the dead BO and allocate a fresh VOL=1 chunk.
     dev.destroyBuffer(volBuf);
-    dev.trim();
+    giveBack(dev);
     ASSERT_EQ(kernel_model::model.bos[volHandle].parkState, kernel_model::ParkState::Parked);
     kernel_model::model.reclaimAllParked();
     bindOps.clear();
@@ -559,7 +570,7 @@ TEST(HostWrittenVolatileWc, IdleVolatileWcChunksFreeDirectlyWithoutBoPark)
     ASSERT_NE(handle, 0u);
 
     dev.destroyBuffer(volBuf);
-    dev.trim();
+    giveBack(dev);
     EXPECT_EQ(kernel_model::model.parkCalls, 0u);
     EXPECT_EQ(kernel_model::model.bos.count(handle), 0u);
     EXPECT_EQ(dev.wcChunksHeld(), 0u);

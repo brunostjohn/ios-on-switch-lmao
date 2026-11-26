@@ -374,12 +374,18 @@ id<MTLDevice> metal_device_open(const char *packPath, uint64_t stack, uint64_t r
         [](void *) {
             gm20bReleaseAhead(gRM->raw->hasBoundVolatileArena());
             const SwitchMetalPassTrim passes = gm20bPassTrim();
-            // freed Shared spans zeroed and back in their chunks first, so an idle chunk they were in can park
-            if (gRM->raw->scrubDue())
-                gm20bExcludingSubmissions([] {
-                    return gRM->raw->scrubFreed(true);
-                });
+            // freed Shared spans zeroed and back in their chunks first, so an idle chunk they were in can park: the
+            // submit worker submits their job, and this thread waits for it, not the worker
+            if (gRM->raw->scrubDue()) {
+                uint32_t seqno = 0;
+                uint64_t generation = 0;
+                if (gm20bExcludingSubmissions([&] {
+                        return gRM->raw->scrubFreed(seqno, generation);
+                    }))
+                    gRM->raw->scrubWait(seqno, generation);
+            }
             const gm20b::Device::Trimmed kept = gRM->raw->trim();
+            gRM->raw->kernelSparesGiveBack();
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
             gm20b::Device::PurgeStats purge;
             gRM->raw->purgeArenas(gRM->committed, &purge);

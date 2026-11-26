@@ -826,7 +826,7 @@ bool Device::wcPoolAlloc(std::unique_lock<gm20b::Mutex> &l, std::vector<Chunk> &
                     if (left)
                         ch.free[at + bytes] = left;
                     if (dirty)
-                        *dirty = at < ch.highWater && (!gpuVolatile || ch.unscrubbed);
+                        *dirty = at < ch.highWater && !gpuVolatile;
                     ch.highWater = std::max(ch.highWater, at + bytes);
                     ch.used += bytes;
                     s = {c, at, bytes, ch.bo.va + at, ch.bo.cpu + at};
@@ -899,16 +899,15 @@ void Device::wcPoolFree(std::vector<Chunk> &pool, Span &s, DeferredFrees &deferr
         return;
     Chunk &ch = pool[s.chunk];
     SWITCH_METAL_DIAGNOSTIC(stats.wcBytes -= s.bytes);
-    // The free that empties its chunk lets it go back or park at once, as before: that span stays unzeroed, and the
-    // chunk is marked so the next buffer over it is cleared at its create
-    if (&pool == &volatileWcChunks_ && !ch.dedicated && ch.used > s.bytes) {
+    // A Shared span is zeroed before it is free again (scrubs.cpp), unless its free empties the chunk and the chunk goes
+    // back to the kernel below, whose next BoAlloc of the pages comes zeroed
+    if (&pool == &volatileWcChunks_ && !ch.dedicated && (ch.used > s.bytes || !otherEmptyChunk(pool, ch))) {
         scrubWanted_.push_back({s.chunk, s.offset, s.bytes, s.va});
         scrubDue_.store(true, std::memory_order_relaxed);
         s = {};
         return;
     }
     ch.used -= s.bytes;
-    ch.unscrubbed |= &pool == &volatileWcChunks_;
     if (ch.dedicated) {
         deferred.add({ch.bo, 0, 0, nullptr, 0, nullptr, ch.bytes, ch.bo.mapped, RetireKind::WcDedicated});
         ch = Chunk();
@@ -935,14 +934,17 @@ void Device::wcPoolFree(std::vector<Chunk> &pool, Span &s, DeferredFrees &deferr
     // an empty chunk goes back to the GPU pool while another empty one stays for the next burst: the compositor's pool
     // share follows what Core Animation holds, not its peak (r8a: the compositor 107 MiB of the pool at 15:16, 63 after,
     // and Maps refused a 4 MiB BO with 33 MiB free)
-    if (!ch.used) {
-        for (const Chunk &other : pool)
-            if (&other != &ch && other.park == ChunkPark::Live && other.bo.handle && !other.dedicated && !other.used) {
-                deferred.add({ch.bo, 0, 0, nullptr, 0, nullptr, ch.bytes, ch.bo.mapped, RetireKind::WcShared});
-                ch = Chunk();
-                break;
-            }
+    if (!ch.used && otherEmptyChunk(pool, ch)) {
+        deferred.add({ch.bo, 0, 0, nullptr, 0, nullptr, ch.bytes, ch.bo.mapped, RetireKind::WcShared});
+        ch = Chunk();
     }
+}
+
+bool Device::otherEmptyChunk(const std::vector<Chunk> &pool, const Chunk &ch)
+{
+    return std::any_of(pool.begin(), pool.end(), [&](const Chunk &other) {
+        return &other != &ch && other.park == ChunkPark::Live && other.bo.handle && !other.dedicated && !other.used;
+    });
 }
 
 bool Device::wcAlloc(std::unique_lock<gm20b::Mutex> &l, uint64_t bytes, Span &s, bool *dirty)

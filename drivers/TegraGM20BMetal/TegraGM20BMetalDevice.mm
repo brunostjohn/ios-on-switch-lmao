@@ -191,7 +191,9 @@
         @"parked_heap_count" : @(d.stats.parkedHeaps.load()),
         @"heap_parks" : @(d.stats.heapParks.load()),
         @"heap_unparks_resident" : @(d.stats.heapUnparksResident.load()),
-        @"heap_unparks_reclaimed" : @(d.stats.heapUnparksReclaimed.load())
+        @"heap_unparks_reclaimed" : @(d.stats.heapUnparksReclaimed.load()),
+        @"scrubbed_bytes" : @(d.stats.scrubbedBytes.load()),
+        @"scrubbed_runs" : @(d.stats.scrubbedRuns.load())
     };
 }
 

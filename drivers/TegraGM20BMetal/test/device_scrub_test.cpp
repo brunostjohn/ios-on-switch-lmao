@@ -58,7 +58,14 @@ protected:
 TEST_F(DeviceScrub, AFreedSharedBufferIsZeroedByTheCopyEngineBeforeItsSpanIsReused)
 {
     constexpr uint64_t kBytes = 16 * 1024;
-    // a neighbour keeps the chunk live: the free that empties a chunk lets it go back at once, unzeroed
+    {
+        // the channel's own first job out of the way, so the count below is the command buffer's alone
+        gm20b::CommandBuffer *warm = dev.begin();
+        ASSERT_NE(warm, nullptr);
+        uint32_t seqno = 0;
+        ASSERT_TRUE(warm->commit(seqno));
+    }
+    // a neighbour keeps the chunk live
     gm20b::Buffer neighbour;
     ASSERT_TRUE(dev.createBuffer(kBytes, neighbour, true, true, true));
     gm20b::Buffer first;
@@ -75,13 +82,18 @@ TEST_F(DeviceScrub, AFreedSharedBufferIsZeroedByTheCopyEngineBeforeItsSpanIsReus
     ASSERT_TRUE(dev.createBuffer(kBytes, early, true, true, true));
     EXPECT_NE(early.va, va) << "a create before the span was zeroed got it back";
 
+    // the next command buffer carries the fill at its front, in its own job: no job of its own
     const size_t before = kernel_model::model.jobs.size();
-    ASSERT_TRUE(dev.scrubFreed(false));
+    gm20b::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    uint32_t seqno = 0;
+    ASSERT_TRUE(cb->commit(seqno));
+    EXPECT_EQ(kernel_model::model.jobs.size(), before + 1);
     EXPECT_TRUE(filledAt(fills(before), va)) << "no zero fill at the freed span's address";
     dev.destroyBuffer(early);
 
-    // the model completed the job as it was submitted: the next look retires it
-    ASSERT_TRUE(dev.scrubFreed(false));
+    // the model completed the job as it was submitted: a look (trim, or an allocation that finds no room) retires it
+    dev.trim();
     gm20b::Buffer later;
     ASSERT_TRUE(dev.createBuffer(kBytes, later, true, true, true));
     EXPECT_EQ(later.va, va) << "the zeroed span did not come back";
@@ -100,7 +112,10 @@ TEST_F(DeviceScrub, TheScrubJobEndsVolatileSoItsZerosAreInDram)
     ASSERT_TRUE(dev.createBuffer(16 * 1024, freed, true, true, true));
     dev.destroyBuffer(freed);
     const size_t before = kernel_model::model.jobs.size();
-    ASSERT_TRUE(dev.scrubFreed(false));
+    uint32_t seqno = 0;
+    uint64_t generation = 0;
+    ASSERT_TRUE(dev.scrubFreed(seqno, generation));
+    EXPECT_NE(seqno, 0u);
     ASSERT_GT(kernel_model::model.jobs.size(), before);
     EXPECT_TRUE(kernel_model::model.jobs.back().flags & TegraGM20BJobVolatileWrites);
     EXPECT_FALSE(kernel_model::model.jobs.back().flags & TegraGM20BJobExternal);
@@ -118,7 +133,9 @@ TEST_F(DeviceScrub, AKilledScrubIsFilledAgainNotRetired)
     const uint64_t va = freed.va;
     dev.destroyBuffer(freed);
     kernel_model::model.inFlight = true;
-    ASSERT_TRUE(dev.scrubFreed(false));
+    uint32_t seqno = 0;
+    uint64_t generation = 0;
+    ASSERT_TRUE(dev.scrubFreed(seqno, generation));
     kernel_model::model.kill(liveChannel(), 2);
     kernel_model::model.inFlight = false;
     dev.trim();  // retires what is finished, as an allocation that finds no room does
@@ -133,7 +150,10 @@ TEST_F(DeviceScrub, AKilledScrubIsFilledAgainNotRetired)
 TEST_F(DeviceScrub, NoFreedSpanNoScrubJob)
 {
     const size_t before = kernel_model::model.jobs.size();
-    ASSERT_TRUE(dev.scrubFreed(false));
+    uint32_t seqno = 1;
+    uint64_t generation = 1;
+    ASSERT_TRUE(dev.scrubFreed(seqno, generation));
+    EXPECT_EQ(seqno, 0u);
     EXPECT_EQ(kernel_model::model.jobs.size(), before);
     EXPECT_FALSE(dev.scrubDue());
 }
