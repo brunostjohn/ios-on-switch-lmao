@@ -685,6 +685,8 @@ TESTS: dict[str, bool] = {
     'gpu.x1.texture_extents': False,
     'gpu.gm20b.iterated_blend_passes': False,
     'gpu.gm20b.fetch_rung3': False,
+    'gpu.x1.interlock_affinity': False,
+    'gpu.x1.l2_flush_writeback': False,
 }
 
 # The tests only one iOS version's app runs (apps/hwtest/app<version>), by that version.
