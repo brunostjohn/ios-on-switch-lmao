@@ -29,10 +29,12 @@
 
 struct systime_cpu {
     struct switch_systime counts;
+    uint64_t returns; /* to EL0, from a trap or an interrupt */
 } __attribute__((aligned(64)));
 
 static struct systime_cpu systime_cpu[MAX_CPUS];
 static struct switch_systime systime_seen;
+static uint64_t returns_seen;
 
 static enum switch_systime_bucket bucket_of(thread_t thread)
 {
@@ -71,6 +73,7 @@ void switch_systime_absorb(thread_t thread, task_t task, uint64_t mach)
 void switch_systime_returned(thread_t thread)
 {
     thread->machine.switch_systime_trap = 0;
+    add(&systime_cpu[cpu_number()].returns, 1);
 }
 
 /*
@@ -135,7 +138,7 @@ static void report_pmu(char *line, size_t size, uint64_t window_ns, uint64_t tra
     absolutetime_to_nanoseconds(read_ticks, &ns);
     (void)snprintf(
         line + at, size - at,
-        "; precise transition reads %llu ns each beyond the timestamp, %llu transitions from traps (%llu us)", ns / 64,
+        "; precise transition reads %llu ns each beyond the timestamp, %llu user/kernel transitions (%llu us)", ns / 64,
         transitions, ns * transitions / 64 / NSEC_PER_USEC);
     os_log(OS_LOG_DEFAULT, "%s", line);
 }
@@ -166,11 +169,13 @@ void switch_sched_systime_report(char *line, size_t size, uint64_t window_ns)
                                      window_ns / NSEC_PER_MSEC));
     switch_systime_format(line + at, size - at, &window, tb.numer, tb.denom);
     os_log(OS_LOG_DEFAULT, "%s", line);
-    uint64_t entries = 0;
-    for (unsigned int b = 0; b < SWITCH_SYSTIME_OUTSIDE; b++) {
-        entries += window.entries[b];
+    uint64_t returns = 0;
+    for (unsigned int cpu = 0; cpu < MAX_CPUS; cpu++) {
+        returns += os_atomic_load(&systime_cpu[cpu].returns, relaxed);
     }
-    report_pmu(line, size, window_ns, 2 * entries);
+    const uint64_t window_returns = returns - MIN(returns, returns_seen);
+    returns_seen = returns;
+    report_pmu(line, size, window_ns, 2 * window_returns);
 }
 
 #endif /* DEVELOPMENT || DEBUG */

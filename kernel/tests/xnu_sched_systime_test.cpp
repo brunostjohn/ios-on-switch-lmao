@@ -94,12 +94,22 @@ TEST_P(XnuSchedSystimeSource, TheTrapIsKeptUntilItsLastSliceIsHandedOver)
         HasSubstr("recount_transition(RCT_LVL_KERNEL, RCT_LVL_USER);\n\tswitch_systime_returned(current_thread());"))
         << "sleh clears exception_trace_code before this transition hands over the trap's last kernel slice";
     EXPECT_THAT(switch_ios::test::SourceText("../" + tree + "/osfmk/arm/thread.h"),
-                HasSubstr("\tuint16_t                  exception_trace_code;\n\tuint8_t                   "
-                          "switch_systime_trap;"))
-        << "the reserved byte after the trace code, so machine_thread keeps its layout";
+                HasSubstr("\tuint16_t                  exception_trace_code;\n#if DEVELOPMENT || DEBUG\n\tuint8_t "
+                          "                  switch_systime_trap;"))
+        << "the reserved byte after the trace code, so machine_thread keeps its layout; release keeps reserved7";
 }
 
 INSTANTIATE_TEST_SUITE_P(BothTrees, XnuSchedSystimeSource, testing::Values("xnu-10063.141.1", "xnu-12377.121.6"));
+
+TEST(XnuSchedSystimeSource, ThePmuLinePricesEveryReturnToUserTwice)
+{
+    const std::string systime = switch_ios::test::SourceText("../switch/sched/systime.c");
+    EXPECT_THAT(switch_ios::test::Body(systime, "\nvoid switch_systime_returned(thread_t thread)"),
+                HasSubstr("add(&systime_cpu[cpu_number()].returns, 1);"))
+        << "recount_enter_user runs at every return to EL0, an interrupt's as well as a trap's";
+    EXPECT_THAT(systime, HasSubstr("report_pmu(line, size, window_ns, 2 * window_returns);"))
+        << "each return pairs with its recount_leave_user";
+}
 
 TEST(XnuSchedSystimeSource, ReleaseKernelsCompileTheHooksToNothing)
 {

@@ -79,8 +79,9 @@ void switch_sched_commit_report(char *line, size_t size, uint64_t window_ns);
 
 /* systime.c: user threads' kernel time by what entered the kernel (sched/systime.h). sleh_synchronous, once it has
  * marked a synchronous exception from EL0 and before it enables interrupts; recount, for each slice of kernel-level
- * time it gives a non-idle thread, interrupts masked; recount_enter_user, after it has handed over a trap's last slice.
- * Each writes only its own CPU's counts and the thread on (or leaving) that CPU. */
+ * time it gives a non-idle thread, interrupts masked; recount_enter_user, at every return to EL0 (from a trap or an
+ * interrupt), after it has handed over the last slice. Each writes only its own CPU's counts and the thread on (or
+ * leaving) that CPU. */
 void switch_systime_entered(thread_t thread);
 void switch_systime_absorb(thread_t thread, task_t task, uint64_t mach);
 void switch_systime_returned(thread_t thread);
