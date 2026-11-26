@@ -31,7 +31,11 @@ void Tip(SwitchMotionFusion &fusion, double down[3], const double offset[3], dou
     SimTurn(fusion, down, rate, offset, std::fabs(angle));
 }
 
-// Rests flat, propped up 45 degrees, and flat again: every component of `offset` seen perpendicular to gravity.
+// Rests flat, propped up 45 degrees, and flat again: every component of `offset` seen perpendicular to gravity. The second
+// rest holds the four windows the vertical component needs. The last is long because the gravity correction, while the
+// vertical component was unknown, built an attitude error whose correction its integral puts into the bias: 0.57 mrad/s
+// just after the tip back for a 0.05 rad/s offset (AnOffsetPastThePartsTypicalBoundIsLearned), which tracking at a
+// sixteenth per window brings to 0.16 mrad/s in 10 s.
 void LearnAll(SwitchMotionFusion &fusion, double down[3], const double offset[3])
 {
     SimRest(fusion, down, offset, 1.5);
@@ -59,26 +63,47 @@ constexpr Floor kIcm12 = {0.0005, 0.0003, 1064.225e-6, 1.0 / 4096, 80000};
 constexpr Floor kSt208 = {0.0011, 0.0006, 1221.73e-6, 0.000244, 4808};
 constexpr double kNoisyWorst = 0.00075;  // rad/s over every seed, axis and case (0.33-0.53 measured)
 
-void NoisyRest(SwitchMotionFusion &fusion, const double down[3], const double offset[3], double seconds,
+// `seconds` of a console turning at `rate` (rad/s; none: at rest) as the parts read it at `floor`.
+void NoisyTurn(SwitchMotionFusion &fusion, double down[3], const double rate[3], const double offset[3], double seconds,
                const Floor &floor, std::mt19937 &random)
 {
     std::normal_distribution<double> unit(0.0, 1.0);
     const auto quantise = [](double value, double lsb) {
         return std::lround(value / lsb) * lsb;
     };
-    const auto samples = static_cast<unsigned>(seconds * 1e6 / floor.periodMicros);
+    const double dt = floor.periodMicros * 1e-6;
+    const auto samples = static_cast<unsigned>(seconds / dt);
     for (unsigned n = 0; n < samples; ++n) {
+        const double moved[3] = {
+            rate[1] * down[2] - rate[2] * down[1],
+            rate[2] * down[0] - rate[0] * down[2],
+            rate[0] * down[1] - rate[1] * down[0],
+        };
+        double norm = 0;
+        for (unsigned i = 0; i < 3; ++i) {
+            down[i] -= moved[i] * dt;
+            norm += down[i] * down[i];
+        }
+        norm = std::sqrt(norm);
         int32_t accel[3];
         int32_t gyro[3];
         for (unsigned i = 0; i < 3; ++i) {
+            down[i] /= norm;
             accel[i] = static_cast<int32_t>(
                 std::lround(quantise(down[i] + floor.accelSigma * unit(random), floor.accelLsb) * 1e6));
             gyro[i] = static_cast<int32_t>(
-                std::lround(quantise(offset[i] + floor.gyroSigma * unit(random), floor.gyroLsb) * 1e6));
+                std::lround(quantise(rate[i] + offset[i] + floor.gyroSigma * unit(random), floor.gyroLsb) * 1e6));
         }
         fusion.addAccel(accel);
         fusion.addGyro(gyro, floor.periodMicros);
     }
+}
+
+void NoisyRest(SwitchMotionFusion &fusion, double down[3], const double offset[3], double seconds, const Floor &floor,
+               std::mt19937 &random)
+{
+    const double still[3] = {};
+    NoisyTurn(fusion, down, still, offset, seconds, floor, random);
 }
 }  // namespace
 
@@ -211,7 +236,7 @@ TEST(SwitchMotionBias, AnOffsetAtRestIsLearnedWithinTheFirstSecondAndAlongGravit
     Tip(fusion, down, offset, kTip);
     SimRest(fusion, down, offset, 2.1);
     EXPECT_EQ(fusion.learner.learned, SwitchGyroBias::Learned::All);
-    ExpectBias(fusion, offset, 0.0005, "propped up, two seconds after the tip");
+    ExpectBias(fusion, offset, 0.0002, "propped up, two seconds after the tip");
 }
 
 // An offset as large as the part's bound passes for a turn while the console lies flat: it is learned only once the
@@ -325,8 +350,8 @@ TEST(SwitchMotionBias, MovementBetweenFlatRestsDoesNotTeachTheVertical)
 }
 
 // At the parts' noise floors, quantised, the windows still agree and the offset is learned, at the fastest and the
-// slowest rate, propped up just past 30 degrees (where the second attitude's solve doubles the noise) and at 45, over
-// 20 seeds: rested flat, propped up and flat again, as a console set down on a table, a stand and the table again.
+// slowest rate, propped up at 30 degrees (where the second attitude's solve doubles the noise), 32 and 45, over 20
+// seeds: rested flat, propped up and flat again, as a console set down on a table, a stand and the table again.
 TEST(SwitchMotionBias, ANoisyRestIsLearned)
 {
     struct Case {
@@ -335,8 +360,9 @@ TEST(SwitchMotionBias, ANoisyRestIsLearned)
         double degrees;
     };
 
-    for (const Case c : {Case{&kIcm200, false, 32}, Case{&kIcm200, false, 45}, Case{&kIcm12, false, 32},
-                         Case{&kIcm12, false, 45}, Case{&kSt208, true, 32}}) {
+    for (const Case c :
+         {Case{&kIcm200, false, 30}, Case{&kIcm200, false, 32}, Case{&kIcm200, false, 45}, Case{&kIcm12, false, 30},
+          Case{&kIcm12, false, 32}, Case{&kIcm12, false, 45}, Case{&kSt208, true, 32}}) {
         double worst = 0;
         for (unsigned seed = 1; seed <= 20; ++seed) {
             SwitchMotionFusion fusion;
@@ -358,6 +384,54 @@ TEST(SwitchMotionBias, ANoisyRestIsLearned)
         std::printf("noisy rest, %u us, %.0f degrees: worst %.3f mrad/s over 20 seeds\n", c.floor->periodMicros,
                     c.degrees, worst * 1e3);
         EXPECT_LT(worst, kNoisyWorst) << c.floor->periodMicros << " us, " << c.degrees << " degrees";
+    }
+}
+
+// A console settling slowly as it rests (a soft surface, a stand) tilts too slowly for one window to tell from noise.
+// Learned as offset is what the gates let through, a fraction of a window's own threshold: the bounds below, over 20
+// seeds, for tilts from 0.5 to 8 mrad/s while the first offset is learned and tracked, and while the vertical component
+// is learned propped up.
+TEST(SwitchMotionBias, ASlowNoisyTiltLeaksLittle)
+{
+    struct Case {
+        const Floor *floor;
+        bool st;
+        double flat, propped;  // rad/s: the worst error allowed
+    };
+
+    for (const Case c : {Case{&kIcm200, false, 0.0007, 0.0005}, Case{&kIcm12, false, 0.0014, 0.0007},
+                         Case{&kSt208, true, 0.0007, 0.0005}}) {
+        for (const double rate : {0.0005, 0.001, 0.002, 0.005, 0.008}) {
+            double flat = 0;
+            double propped = 0;
+            for (unsigned seed = 1; seed <= 20; ++seed) {
+                std::mt19937 random(seed);
+                const double tilt[3] = {rate, 0, 0};
+                {
+                    SwitchMotionFusion fusion;
+                    if (c.st)
+                        UseStBound(fusion);
+                    double down[3] = {0, 0, -1};
+                    const double offset[3] = {0.002, -0.001, 0};
+                    NoisyTurn(fusion, down, tilt, offset, 3.0, *c.floor, random);
+                    flat = std::max(flat, std::fabs(Bias(fusion, 0) - offset[0]));
+                }
+                SwitchMotionFusion fusion;
+                if (c.st)
+                    UseStBound(fusion);
+                double down[3] = {0, 0, -1};
+                const double offset[3] = {0.002, -0.001, 0.003};
+                NoisyRest(fusion, down, offset, 3.0, *c.floor, random);
+                Tip(fusion, down, offset, kTip);
+                NoisyTurn(fusion, down, tilt, offset, 3.0, *c.floor, random);
+                for (unsigned i = 0; i < 3; ++i)
+                    propped = std::max(propped, std::fabs(Bias(fusion, i) - offset[i]));
+            }
+            std::printf("slow tilt, %u us, %.1f mrad/s: worst %.3f flat, %.3f propped (mrad/s)\n",
+                        c.floor->periodMicros, rate * 1e3, flat * 1e3, propped * 1e3);
+            EXPECT_LT(flat, c.flat) << c.floor->periodMicros << " us, " << rate << " rad/s";
+            EXPECT_LT(propped, c.propped) << c.floor->periodMicros << " us, " << rate << " rad/s";
+        }
     }
 }
 
