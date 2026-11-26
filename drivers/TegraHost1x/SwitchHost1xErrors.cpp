@@ -43,6 +43,11 @@ IOSimpleLock *gErrorsLock;  // gErrorsUnit and HINTMASK_EXT: the filter's take a
 IOFilterInterruptEventSource *gErrorsSource;
 uint32_t gErrorsPending;  // the filter's channels, for the action
 
+// The filter's snapshot when the line fired with nothing of ours (master turned off), for the action's one line.
+struct Unclaimed {
+    uint32_t seen, intstatus, hintstatus, hintstatusExt;
+} gUnclaimed;
+
 #if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
 IOLock *gExpectLock;
 uint32_t gExpectedChannel = kChannels;  // kChannels: none
@@ -66,10 +71,14 @@ bool errorsFilter(OSObject *, IOFilterInterruptEventSource *)
 {
     IOSimpleLockLock(gErrorsLock);
     const uint32_t taken = gErrorsUnit.take(gErrorRegisters);
+    if (!taken) {
+        gUnclaimed = {1, gErrorRegisters.read(kIntStatus), gErrorRegisters.read(kHintStatus),
+                      gErrorRegisters.read(kHintStatusExt)};
+        gErrorsUnit.masterOff(gErrorRegisters);
+    }
     IOSimpleLockUnlock(gErrorsLock);
-    if (!taken)
-        return false;
-    __atomic_fetch_or(&gErrorsPending, taken, __ATOMIC_RELEASE);
+    if (taken)
+        __atomic_fetch_or(&gErrorsPending, taken, __ATOMIC_RELEASE);
     return true;
 }
 
@@ -79,16 +88,24 @@ void channelStopped(uint32_t channel)
     if (takeExpected(channel))
         return;
 #endif
-    char host[200], syncpts[64];
+    char host[200], syncpts[160];
     const uint32_t stat = gErrorRegisters.read(kCmdprocStat);
     tegra_host1x_describe_channel(channel, host, sizeof(host));
     switch_host1x_channels_failed(channel, syncpts, sizeof(syncpts));
     IOLog("TegraHost1x: channel %u stopped on an illegal opcode (CMDPROC_STAT %#x): %s; its jobs fail now (%s%s)\n",
-          channel, stat, host, syncpts[0] ? "syncpoints " : "no fenced job in flight", syncpts);
+          channel, stat, host, syncpts[0] ? "" : "no fenced job in flight", syncpts);
 }
 
 void errorsOccurred(OSObject *, IOInterruptEventSource *, int)
 {
+    const IOInterruptState state = IOSimpleLockLockDisableInterrupt(gErrorsLock);
+    const Unclaimed unclaimed = gUnclaimed;
+    gUnclaimed.seen = 0;
+    IOSimpleLockUnlockEnableInterrupt(gErrorsLock, state);
+    if (unclaimed.seen)
+        IOLog("TegraHost1x: general interrupt (INTID %u) fired with no illegal opcode of ours pending (INTSTATUS %#x "
+              "HINTSTATUS %#x HINTSTATUS_EXT %#x): off until the next resume\n",
+              kGeneralIntid, unclaimed.intstatus, unclaimed.hintstatus, unclaimed.hintstatusExt);
     for (uint32_t channels = __atomic_exchange_n(&gErrorsPending, 0, __ATOMIC_ACQUIRE); channels;
          channels &= channels - 1)
         channelStopped(static_cast<uint32_t>(__builtin_ctz(channels)));
@@ -96,10 +113,14 @@ void errorsOccurred(OSObject *, IOInterruptEventSource *, int)
 
 bool errorsConfigure()
 {
-    uint32_t latched = 0, hintmaskExt = 0;
+    uint32_t latched = 0, intc0 = 0, hintmaskExt = 0;
     IOInterruptState state = IOSimpleLockLockDisableInterrupt(gErrorsLock);
-    const bool on = gErrorsUnit.configure(gErrorRegisters, &latched, &hintmaskExt);
+    const bool on = gErrorsUnit.configure(gErrorRegisters, &latched, &intc0, &hintmaskExt);
     IOSimpleLockUnlockEnableInterrupt(gErrorsLock, state);
+    if (intc0)
+        IOLog("TegraHost1x: the module interrupts' mask (INTC0MASK) read %#x: cleared, they do not reach host1x's "
+              "general interrupt\n",
+              intc0);
     if (latched)
         IOLog("TegraHost1x: illegal opcodes latched before the general interrupt was on: channels %#x (cleared)\n",
               latched);
@@ -133,8 +154,10 @@ bool switch_host1x_errors_start(IOWorkLoop *loop, volatile uint8_t *sync)
               kGeneralIntid);
         return false;
     }
-    if (!errorsConfigure())
+    if (!errorsConfigure()) {
+        made->disable();
         return false;
+    }
     made->enable();
     __atomic_store_n(&gErrorsSource, made, __ATOMIC_RELEASE);
     return true;

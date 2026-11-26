@@ -678,10 +678,49 @@ TEST_F(Host1xFence, AnIllegalOpcodeFailsTheChannelsBoundedFencesAndLeavesTheRest
     EXPECT_EQ(consumer.state, SWITCH_HOST1X_FENCE_QUEUED) << "a consumer ends by the cancellation's release";
     EXPECT_EQ(other.state, SWITCH_HOST1X_FENCE_QUEUED);
     EXPECT_EQ(syncReg(0x02c) & (1u << channel), 0u) << "masked until the channel restarts";
-    EXPECT_FALSE(illegalOpcode(channel)) << "latched again while stopped: masked, not taken twice";
     tegra_host1x_channel_teardown(channel);
     tegra_host1x_channel_restart(channel);
     EXPECT_EQ(syncReg(0x02c) & (1u << channel), 1u << channel) << "the restart unmasks it";
     EXPECT_TRUE(switch_host1x_fence_remove(&consumer));
     EXPECT_TRUE(switch_host1x_fence_remove(&other));
+}
+
+// A stopped channel's syncpoints stay stopped until it restarts: a job's bound that starts later (its inputs came in),
+// a new bounded fence and a CPU wait that comes after the interrupt fail at once too, not after their bound.
+TEST_F(Host1xFence, AWaitOrBoundThatStartsAfterTheStopFailsAtOnceUntilTheRestart)
+{
+    constexpr uint32_t channel = TEGRA_HOST1X_CHANNEL_NVENC;
+    value(178) = 0;
+    const uint32_t job[2] = {tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 0, 0),
+                             tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, 178)};
+    ASSERT_EQ(switch_host1x_job_copy(channel, job, 2, 178, 3), TEGRA_HOST1X_OK);
+    switch_host1x_fence later;
+    switch_host1x_fence_init(&later, 178, 2, signaled);
+    ASSERT_EQ(switch_host1x_fence_add(&later, 0), TEGRA_HOST1X_OK) << "inputs not in yet: unbounded";
+    ASSERT_TRUE(illegalOpcode(channel));
+    switch_host1x_intr_handle();
+    EXPECT_EQ(later.state, SWITCH_HOST1X_FENCE_QUEUED) << "unbounded: nothing a bound would have failed yet";
+    switch_host1x_fence_watch(&later, 2000000);
+    switch_host1x_intr_handle();
+    EXPECT_EQ(gSignals[2].calls, 1) << "its bound starts on a stopped syncpoint: failed at once";
+    EXPECT_EQ(gSignals[2].status, TEGRA_HOST1X_ETIMEDOUT);
+    switch_test_sleep = [](uint64_t) -> int {
+        ADD_FAILURE() << "a wait on a stopped syncpoint slept";
+        return THREAD_TIMED_OUT;
+    };
+    EXPECT_EQ(tegra_host1x_syncpt_wait(178, 3, 2000000), TEGRA_HOST1X_ETIMEDOUT);
+    switch_host1x_fence bounded;
+    switch_host1x_fence_init(&bounded, 178, 3, signaled);
+    ASSERT_EQ(switch_host1x_fence_add(&bounded, 2000000), TEGRA_HOST1X_OK);
+    switch_host1x_intr_handle();
+    EXPECT_EQ(gSignals[3].calls, 1);
+    EXPECT_EQ(gSignals[3].status, TEGRA_HOST1X_ETIMEDOUT);
+    switch_test_sleep = nullptr;
+    tegra_host1x_channel_teardown(channel);
+    tegra_host1x_channel_restart(channel);
+    switch_host1x_fence again;
+    switch_host1x_fence_init(&again, 178, 4, signaled);
+    ASSERT_EQ(switch_host1x_fence_add(&again, 2000000), TEGRA_HOST1X_OK);
+    EXPECT_EQ(again.state, SWITCH_HOST1X_FENCE_QUEUED) << "restarted: bounds run their course again";
+    EXPECT_TRUE(switch_host1x_fence_remove(&again));
 }

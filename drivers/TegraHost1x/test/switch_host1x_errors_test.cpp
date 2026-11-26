@@ -90,7 +90,7 @@ IOService *switch_interrupt_nub(uint32_t, bool)
 void switch_host1x_channels_failed(uint32_t channel, char *line, size_t size)
 {
     gFailedChannels.push_back(channel);
-    snprintf(line, size, "%u", 160 + channel);
+    snprintf(line, size, "syncpoint %u: 1 failed", 160 + channel);
 }
 
 TEST_F(Host1xErrors, TheAttachUnmasksEveryChannelKeepsIntmaskBit4AndClearsWhatLatched)
@@ -131,13 +131,45 @@ TEST_F(Host1xErrors, AStoppedChannelIsTakenOnceItsJobsFailAndItsRestartUnmasksIt
     EXPECT_EQ(reg(kHintMaskExt), 0x3fffu & ~(1u << 1));
     EXPECT_EQ(reg(kHintStatusExt), 0u);
     EXPECT_TRUE(anyLine("channel 1 stopped on an illegal opcode (CMDPROC_STAT 0x2): ch1 DMAGET 0x40; its jobs fail now "
-                        "(syncpoints 161)"));
-    EXPECT_FALSE(fire(1)) << "masked while stopped";
-    EXPECT_EQ(gFailedChannels.size(), 1u);
+                        "(syncpoint 161: 1 failed)"));
+    reg(kHintStatusExt) |= 1u << 1;  // latched again while stopped: masked, so it does not fire the line by itself
+    EXPECT_TRUE(fire(2)) << "another channel's stop";
+    EXPECT_EQ(gFailedChannels, (std::vector<uint32_t>{1, 2})) << "channel 1 is not taken twice";
     switch_host1x_errors_rearm(1);
+    switch_host1x_errors_rearm(2);
     EXPECT_EQ(reg(kHintMaskExt), 0x3fffu);
     EXPECT_EQ(reg(kHintStatusExt), 0u) << "what latched meanwhile is cleared";
     EXPECT_TRUE(fire(1)) << "a later stop is taken again";
+    EXPECT_EQ(gFailedChannels.size(), 3u);
+}
+
+// Whatever the boot chain left in the module interrupts' mask and HINTMASK, only the illegal opcodes reach the line.
+TEST_F(Host1xErrors, TheAttachLeavesOnlyTheIllegalOpcodesOnTheLine)
+{
+    reg(kHintMask) = 1u << 16 | 1u << 29;
+    reg(kIntC0Mask) = 0x5;
+    ASSERT_TRUE(start());
+    EXPECT_EQ(reg(kHintMask), 1u << 31);
+    EXPECT_EQ(reg(kIntC0Mask), 0u);
+    EXPECT_TRUE(anyLine("INTC0MASK) read 0x5: cleared"));
+}
+
+// A level line that fires with none of ours pending would fire forever: the master enable goes off, with one line.
+TEST_F(Host1xErrors, ALineThatFiresWithNothingOfOursTurnsTheMasterOffWithOneLine)
+{
+    ASSERT_TRUE(start());
+    reg(kHintStatus) = 1u << 16;
+    ASSERT_TRUE(source()->filter(nullptr, source())) << "taken, so the line is not left to fire again at once";
+    EXPECT_EQ(reg(kIntMask) & 1u, 0u);
+    source()->action(nullptr, source(), 1);
+    EXPECT_TRUE(anyLine("fired with no illegal opcode of ours pending (INTSTATUS 0 HINTSTATUS 0x10000 HINTSTATUS_EXT "
+                        "0): off until the next resume"));
+    EXPECT_TRUE(gFailedChannels.empty());
+    switch_test_iolog.clear();
+    source()->action(nullptr, source(), 1);
+    EXPECT_TRUE(switch_test_iolog.empty()) << "one line";
+    switch_host1x_errors_resume();
+    EXPECT_EQ(reg(kIntMask) & 1u, 1u);
 }
 
 TEST_F(Host1xErrors, ARestartOfAChannelThatDidNotStopChangesNothing)

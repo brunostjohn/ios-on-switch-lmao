@@ -71,6 +71,8 @@ struct Channel {
     switch_host1x_fence room = {};  // the oldest fenced job's, while a submitter waits for room
     bool roomArmed = false;
     uint32_t waiters = 0;
+    static constexpr uint32_t kStoppedMost = 4;  // an engine's jobs share one syncpoint; the display's stream adds one
+    uint32_t stopped[kStoppedMost] = {}, stoppedCount = 0;  // syncpoints failed at its stop, until its restart
 };
 
 volatile uint8_t *gChannelHost, *gChannelSync;
@@ -153,6 +155,9 @@ void dropJobs(Channel &c)
         switch_host1x_syncpt_dropped(syncpt);
     });
 #endif
+    for (uint32_t i = 0; i < c.stoppedCount; ++i)
+        switch_host1x_fences_resume(c.stopped[i]);
+    c.stoppedCount = 0;
     c.arena.drop();
     if (c.roomArmed && switch_host1x_fence_remove(&c.room))
         c.roomArmed = false;
@@ -508,28 +513,29 @@ extern "C" void tegra_host1x_channel_restart(uint32_t channel)
 
 void switch_host1x_channels_failed(uint32_t channel, char *line, size_t size)
 {
-    constexpr uint32_t kMost = 4;  // an engine's jobs share one syncpoint; the display's stream adds one
-    uint32_t syncpts[kMost] = {}, count = 0;
     if (line && size)
         line[0] = 0;
     if (!validChannel(channel))
         return;
+    size_t used = 0;
+    // Under the submit lock: a restart (which resumes these syncpoints) cannot come between the stop and the failures.
     IOLockLock(gChannelLock);
-    gChannels[channel].arena.forEachFenced([&](uint32_t syncpt, uint32_t) {
+    Channel &c = gChannels[channel];
+    c.arena.forEachFenced([&](uint32_t syncpt, uint32_t) {
         bool seen = false;
-        for (uint32_t i = 0; i < count; ++i)
-            seen |= syncpts[i] == syncpt;
-        if (!seen && count < kMost)
-            syncpts[count++] = syncpt;
+        for (uint32_t i = 0; i < c.stoppedCount; ++i)
+            seen |= c.stopped[i] == syncpt;
+        if (!seen && c.stoppedCount < Channel::kStoppedMost)
+            c.stopped[c.stoppedCount++] = syncpt;
     });
+    for (uint32_t i = 0; i < c.stoppedCount; ++i) {
+        const uint32_t failed = switch_host1x_fences_fail(c.stopped[i], TEGRA_HOST1X_ETIMEDOUT);
+        const int n = line && used < size ? snprintf(line + used, size - used, "%ssyncpoint %u: %u failed",
+                                                     used ? ", " : "", c.stopped[i], failed)
+                                          : 0;
+        used += n > 0 ? static_cast<size_t>(n) : 0;
+    }
     if (gRunning && channel == TEGRA_HOST1X_CHANNEL_DISPLAY)
         displayCancelLocked(true);
     IOLockUnlock(gChannelLock);
-    size_t used = 0;
-    for (uint32_t i = 0; i < count; ++i) {
-        switch_host1x_fences_fail(syncpts[i], TEGRA_HOST1X_ETIMEDOUT);
-        const int n =
-            line && used < size ? snprintf(line + used, size - used, "%s%u", used ? ", " : "", syncpts[i]) : 0;
-        used += n > 0 ? static_cast<size_t>(n) : 0;
-    }
 }
