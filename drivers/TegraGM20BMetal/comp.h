@@ -16,6 +16,7 @@
 // A full-target clear of a compressed target to a value the GPU's ZBC table holds writes comptags and no texels. The table
 // is the boot one (nvkm gf100_gr_zbc_init and the kernel's opaque black) and what processes added (zbc.h).
 #pragma once
+#include <atomic>
 #include <IOKit/IOReturn.h>
 #include <algorithm>
 #include <chrono>
@@ -77,6 +78,12 @@ constexpr bool copyEngineReadsCompressed(uint32_t kind)
     }
 }
 
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+// 4x colour textures made while set take NVN's C32_MS4_2CBR and C64_MS4_2CBR (deko3d image_formats.cpp) in place of
+// 2CRA: gpu.perf.nvn's A/B (TegraGM20BMetalProbe.mm)
+inline std::atomic<bool> probeMs4Cbr{false};
+#endif
+
 // The compressible kind of a block-linear colour target of `bpp`-byte texels at `samples` samples, or of the depth/stencil
 // target of Metal format `zeta` (0: colour); 0 when it has none
 inline uint32_t compressedKind(uint32_t bpp, uint32_t zeta, uint32_t samples = 1)
@@ -101,6 +108,10 @@ inline uint32_t compressedKind(uint32_t bpp, uint32_t zeta, uint32_t samples = 1
         {kCompKindC64, 0xcd, 0xf0},   // C64_2CRA, C64_MS2_2CRA, C64_MS4_2CRA
         {kCompKindC128, 0xf7, 0xf9},  // C128_2CR, C128_MS2_2CR, C128_MS4_2CR
     };
+#if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
+    if (ms == 2 && (bpp == 4 || bpp == 8) && probeMs4Cbr.load(std::memory_order_relaxed))
+        return bpp == 4 ? 0xe0 : 0xee;
+#endif
     switch (bpp) {
     case 4:
         return kColour[0][ms];

@@ -280,6 +280,9 @@ public:
     // A counter sample where the pass starts: in its prologue, after the barrier to the work before
     void timestampAtStart(uint64_t va, counters::Point point);
     void end();
+#if SWITCH_METAL_DIAGNOSTICS
+    void nvnPassEnd(Push &p);
+#endif
 
     void continuePass(uint8_t stores);
     // A pass whose draws bind colours `storage` as storage images, `arrayed` of them as 2D arrays, fused into this one:

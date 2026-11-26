@@ -22,6 +22,8 @@ struct ColorAttachment {
     } load = DontCare;
 
     bool store = true;  // Store or StoreAndMultisampleResolve
+    // nothing reads it after the pass: not stored and not resolved (gpu.perf.nvn's discard probe)
+    bool discard = false;
     float clear[4] = {};
 };
 

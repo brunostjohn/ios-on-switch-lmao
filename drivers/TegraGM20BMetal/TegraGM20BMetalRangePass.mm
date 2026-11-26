@@ -194,6 +194,7 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
         const bool copied = a.resolve && t->_raw.samples <= 1 && a.store == MTLStoreActionMultisampleResolve;
         p.color[j].store =
             a.store == MTLStoreActionStore || a.store == MTLStoreActionStoreAndMultisampleResolve || copied;
+        p.color[j].discard = !p.color[j].store && !a.resolve;
         if (a.store == MTLStoreActionMultisampleResolve || a.store == MTLStoreActionStoreAndMultisampleResolve)
             if (__unsafe_unretained SwitchMetalTexture *r = (SwitchMetalTexture *)a.resolve)
                 resolves_.push_back({j, r, a.store == MTLStoreActionStoreAndMultisampleResolve,

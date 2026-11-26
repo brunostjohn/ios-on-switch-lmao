@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // See render_encoder.h (RenderEncoder::end: the pass prologue, its targets and clears).
+#include "nvn_probes.h"
 #include "lock.h"
 #include "clear.h"
 #include "clear_box.h"
@@ -129,6 +130,31 @@ void RenderEncoder::timestampAtStart(uint64_t va, counters::Point point)
     cb_->useAddress(va, counters::kRecordBytes, true);
 }
 
+#if SWITCH_METAL_DIAGNOSTICS
+// gpu.perf.nvn (nvn_probes.h), at the body's end, before the prologue is written: the discards of what nothing reads
+// after the pass, while its targets are bound and before the tiled cache's flush, and the zcull state a probe changed
+// put back for the channel's next pass (the prologue writes SET_ZCULL's stencil-on form where stencilOn is set here)
+void RenderEncoder::nvnPassEnd(Push &p)
+{
+    const uint32_t nvn = dev_->probeNvn.load(std::memory_order_relaxed);
+    zcull_.stencilOn = zcull_.candidate && (nvn & kNvnStencilZcull);
+    if (nvn & kNvnDiscard) {
+        for (uint32_t j = 0; j < pass_.count && j < 8; j++)
+            if (pass_.color[j].texture && pass_.color[j].discard)
+                p.m(kDiscardRenderTarget, discardColour(j));
+        const DepthStencilAttachment &zs = pass_.depthStencil;
+        if (zs.texture && !zs.stored && !zs.loadedLater && !zcull_.store)
+            p.m(kDiscardRenderTarget, kDiscardDepthStencil);
+    }
+    if (zcull_.boundsOpen) {
+        p.m(NVB197_SET_ZCULL_BOUNDS, 0);
+        zcull_.boundsOpen = false;
+    }
+    if (zcull_.stencilOn)
+        p.m(NVB197_SET_ZCULL, kZcullDepth);
+}
+#endif
+
 void RenderEncoder::end()
 {
     SWITCH_METAL_ENCODE_SPAN(PassEnd);
@@ -190,6 +216,9 @@ void RenderEncoder::end()
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (drew_ && !flush && tiledCache(d.k_.info()))
         cb_->taken_.flushes++;
+#endif
+#if SWITCH_METAL_DIAGNOSTICS
+    nvnPassEnd(p_);
 #endif
     const bool measured = measurePass(drew_ && flush);
     if (drew_ && flush)
@@ -393,13 +422,21 @@ void RenderEncoder::end()
     zcullAfterTir = zcull_.candidate && (tirProbe_ & kTirProbeZcullAfter);
 #endif
     const auto zcullWords = [&] {
-        uint32_t criterion = 0;
+        uint32_t criterion = 0, regionFormat = 0, zFormat = ~0u;
 #if SWITCH_METAL_DIAGNOSTICS
         if (const uint32_t c = d.probeZcullCriterion.load(std::memory_order_relaxed))
             criterion = zcullCriterion(c & 0xff, c >> 8 & 0xff, c >> 16 & 0xff);
+        const uint32_t nvn = d.probeNvn.load(std::memory_order_relaxed);
+        if (nvn & kNvnZcull4x2)
+            regionFormat = kZcullRegionZ4x2;
+        if ((nvn & kNvnZcullFp) && zs.clearDepth && (zs.depth == 0.0f || zs.depth == 1.0f) &&
+            zs.texture->format != 250)  // Depth16Unorm is FP already
+            zFormat = kZcullFormatFp;
+        if (zcull_.stencilOn)
+            p.m(NVB197_SET_ZCULL, kZcullDepthAndStencil);
 #endif
         zcullRegionWords(p, zcull_.region, zs.texture->format, zcull_.dir, zcull_.storage, zcull_.storageBytes,
-                         criterion);
+                         criterion, regionFormat, zFormat);
         if (zcull_.load)
             p.m(kLoadZcull, 0);
         SWITCH_METAL_DIAGNOSTIC(d.stats.zcullPasses++; d.stats.zcullLoads += zcull_.load);

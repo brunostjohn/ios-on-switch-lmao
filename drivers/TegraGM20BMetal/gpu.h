@@ -1178,6 +1178,8 @@ public:
     std::atomic<bool> probeSharedBypassesL2{false};
     // nonzero: each render pass's prologue writes it to SET_SUBTILING_PERF_KNOB_A (gpu.perf.knobs)
     std::atomic<uint32_t> probeSubtilingKnob{0};
+    // nvn_probes.h's bits: the NVN state gpu.perf.nvn A/Bs, for passes encoded from now on
+    std::atomic<uint32_t> probeNvn{0};
     gm20b::Mutex probeLock;
     std::shared_ptr<const ProbeWords> probeWords;
 

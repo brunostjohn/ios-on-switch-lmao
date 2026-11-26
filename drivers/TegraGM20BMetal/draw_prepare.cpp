@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // See render_encoder.h (RenderEncoder::prepare: a draw's state, set 0 and barriers).
+#include "nvn_probes.h"
 #include "lock.h"
 #include "nonfinite.h"
 #include "clear_box.h"
@@ -539,11 +540,19 @@ bool RenderEncoder::prepare(Pipeline *pl, uint32_t primitive, int32_t first, uin
     if (zcull_.candidate && !zcull_.invalidated && (dsChanged || pl != zcullProgram_)) {
         zcullProgram_ = pl;
         const bool earlyTests = pl->writesMemory[1] && zcullEarlyFragmentTests(pl->methodWords(), pl->methodCount());
+        bool openBounds = false;
+#if SWITCH_METAL_DIAGNOSTICS
+        openBounds = pl->fragmentDepth && (d.probeNvn.load(std::memory_order_relaxed) & kNvnZcullBounds);
+#endif
         if (zcullInvalidates(zcull_, ds_, zeta && zetaHasDepth(zeta->format) && pass_.depthStencil.depthEnabled,
                              zeta && zetaHasStencil(zeta->format) && pass_.depthStencil.stencilEnabled,
-                             pl->fragmentDepth, shaderTestsActive_ != 0, pl->writesMemory[1], earlyTests)) {
+                             pl->fragmentDepth && !openBounds, shaderTestsActive_ != 0, pl->writesMemory[1],
+                             earlyTests)) {
             p.m(kInvalidateZcull, 0);
             SWITCH_METAL_DIAGNOSTIC(d.stats.zcullInvalidations++);
+        } else if (openBounds != zcull_.boundsOpen) {
+            p.m(NVB197_SET_ZCULL_BOUNDS, openBounds ? kZcullBoundsUnbounded : 0u);
+            zcull_.boundsOpen = openBounds;
         }
     }
     uint32_t *root = cb_->rootPush_;

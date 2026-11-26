@@ -227,6 +227,18 @@ static gm20b::ProbeSurface probeSurface(const gm20b::Texture &t, uint32_t fmt2d)
         stringWithFormat:@"%u", unsigned(gm20b::fx::probeSectorPromotion.exchange(mode.unsignedCharValue & 3))];
 }
 
+// nvn_probes.h's bits for render passes encoded from now on (0 off); answers the bits it replaced, in hexadecimal
+- (NSString *)switchMetalProbeNvn:(NSNumber *)bits
+{
+    return [NSString stringWithFormat:@"%x", gRM->raw->probeNvn.exchange(bits.unsignedIntValue)];
+}
+
+// 4x colour textures made while `on` take the 2CBR compression kinds (comp.h probeMs4Cbr); answers whether they did
+- (NSString *)switchMetalProbeMs4Cbr:(NSNumber *)on
+{
+    return gm20b::probeMs4Cbr.exchange(on.boolValue) ? @"1" : @"0";
+}
+
 - (NSString *)switchMetalProbeMacroBands:(NSNumber *)on
 {
     gRM->raw->probeMacroBands.store(on.boolValue, std::memory_order_release);
