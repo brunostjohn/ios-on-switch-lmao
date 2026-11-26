@@ -8352,7 +8352,9 @@ impl Op {
             // Integer ALU
             Op::BRev(_) | Op::Flo(_) | Op::PopC(_) => false,
             Op::IMad(_) | Op::IMul(_) => sm >= 70,
-            Op::Xmad(_) => false,
+            // ios-on-switch-lmao: GM20B's XMAD is fixed-latency 6: NVIDIA's
+            // code sets no barrier on it and its readers wait at least 6
+            Op::Xmad(_) => true,
             Op::BMsk(_)
             | Op::IAbs(_)
             | Op::IAdd2(_)
