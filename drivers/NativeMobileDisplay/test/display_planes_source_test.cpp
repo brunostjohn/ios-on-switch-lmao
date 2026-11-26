@@ -283,7 +283,8 @@ TEST(DisplayPlanesSource, WindowBWaitsForTheGpuOnSurfacesItRenders)
     EXPECT_TRUE(admission.before("planeFencePending = true;", "copySource->interruptOccurred"));
     EXPECT_TRUE(Block(source, "void copyWork()").has("planeFenceWork();"));
     const CodeText worker(SourceText("../SwitchPlaneFenceAdmission.h"));
-    EXPECT_TRUE(worker.has("switch_gpu_bridge_fence(producers, count"));
+    EXPECT_TRUE(worker.has("switch_gpu_bridge_submit(producers, count, &bridge)"));
+    EXPECT_TRUE(worker.has("error = switch_gpu_bridge_notify(bridge, native_legacy_gpu_complete, this);"));
     EXPECT_TRUE(worker.has("switch_gpu_bridge_wait_room()"));
     EXPECT_TRUE(Block(fence, "bool planeFenced(const PlaneSet &p) const").has("planeOverlayWaits(*native)"));
     EXPECT_TRUE(Block(SourceText("../SwitchNativePlaneDisplay.h"), "static bool planeOverlayWaits(")
