@@ -592,6 +592,23 @@ bool switch_vic_jobs_falcon_failed()
     return true;
 }
 
+bool switch_vic_job_background(uint32_t fence)
+{
+    IOLockLock(gLock);
+    bool found = false;
+    for (uint32_t i = 0; i < gQueue.count && !found; ++i) {
+        const uint32_t slot = (gQueue.head + i) % SwitchVICQueue::kSlots;
+        if (static_cast<uint32_t>(gQueue.jobs[slot].fence) != fence)
+            continue;
+        uint8_t *config = gConfigs.va + static_cast<uint64_t>(slot) * kSwitchVICConfigStride;
+        TEGRA_VIC_SET(config, TEGRA_VIC_SLOTS, SLOT_ENABLE, 0);
+        switch_dcache_clean(config, TEGRA_VIC_CONFIG_BYTES);
+        found = true;
+    }
+    IOLockUnlock(gLock);
+    return found;
+}
+
 extern "C" bool switch_vic_host1x_cancelled(uint32_t syncpt, uint32_t reached)
 {
     if (!gLock)
