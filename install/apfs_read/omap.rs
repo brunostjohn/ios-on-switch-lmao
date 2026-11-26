@@ -8,7 +8,7 @@ use switch_apfs_format::volume::{APFS_MAGIC, ApfsSuperblock};
 use switch_apfs_format::{BLOCK_SIZE, Block, checksum_ok, get};
 
 use crate::ReadError;
-use crate::walk::{NodeReader, walk};
+use crate::walk::{Physical, walk};
 
 pub struct Omap {
     pub paddr: u64,
@@ -16,14 +16,6 @@ pub struct Omap {
     /// In key order: by oid, then xid.
     pub entries: Vec<(OmapKey, OmapVal)>,
     pub nodes: Vec<u64>,
-}
-
-struct Physical<'a>(&'a dyn BlockSource);
-
-impl NodeReader for Physical<'_> {
-    fn node(&self, oid: u64) -> Result<(u64, Box<Block>), ReadError> {
-        Ok((oid, self.0.block(oid)?))
-    }
 }
 
 impl Omap {

@@ -1,5 +1,5 @@
-node.rs and walk.rs are forked from dpp's `apfs` crate 0.4.1 (src/btree.rs), https://github.com/Dil4rd/dpp, under
-this licence:
+node.rs and walk.rs are forked from dpp's `apfs` crate 0.4.1 (src/btree.rs), and catalog.rs from its src/catalog.rs,
+https://github.com/Dil4rd/dpp, under this licence:
 
 MIT License
 

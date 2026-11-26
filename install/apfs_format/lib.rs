@@ -5,6 +5,7 @@
 pub mod btree;
 pub mod container;
 pub mod fs;
+pub mod fs_records;
 pub mod io;
 pub mod object;
 pub mod omap;

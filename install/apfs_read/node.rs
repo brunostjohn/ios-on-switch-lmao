@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later AND MIT
 // Forked from dpp's apfs 0.4.1 src/btree.rs (BTreeNode), MIT, Copyright (c) 2026 Dil4rd; see LICENSE-dpp.
-// Changed: zerocopy layouts, the 56-byte node header, ghost values, and bounds checks that return errors.
+// Changed: zerocopy layouts, the 56-byte node header, ghost values, bounds checks that return errors, and hashed
+// (sealed) index entries.
 
 use switch_apfs_format::btree::{
-    BTNODE_FIXED_KV_SIZE, BTNODE_LEAF, BTNODE_NOHEADER, BTNODE_ROOT, BTOFF_INVALID, BTREE_INFO_SIZE,
+    BTNODE_FIXED_KV_SIZE, BTNODE_HASHED, BTNODE_LEAF, BTNODE_NOHEADER, BTNODE_ROOT, BTOFF_INVALID, BTREE_INFO_SIZE,
     BTREE_NODE_DATA_AT, BtreeInfo, BtreeNodePhys, INDEX_VALUE_SIZE, Kvloc, Kvoff,
 };
+use switch_apfs_format::fs_records::{APFS_HASH_SHA256_SIZE, HASHED_INDEX_VALUE_SIZE};
 use switch_apfs_format::get;
 
 use crate::ReadError;
@@ -32,9 +34,6 @@ impl<'a> Node<'a> {
     pub fn parse(block: &'a [u8], fixed: Option<Fixed>) -> Result<Self, ReadError> {
         let header: BtreeNodePhys = get(block, 0).ok_or_else(|| ReadError::invalid("short B-tree node"))?;
         let flags = header.flags.get();
-        if flags & BTNODE_NOHEADER != 0 {
-            return Err(ReadError::Unsupported("headerless (sealed) B-tree nodes".into()));
-        }
         let info = if flags & BTNODE_ROOT != 0 {
             get::<BtreeInfo>(block, block.len() - BTREE_INFO_SIZE)
         } else {
@@ -91,6 +90,22 @@ impl<'a> Node<'a> {
         self.fixed
     }
 
+    pub fn is_hashed(&self) -> bool {
+        self.header.flags.get() & BTNODE_HASHED != 0
+    }
+
+    pub fn is_headerless(&self) -> bool {
+        self.header.flags.get() & BTNODE_NOHEADER != 0
+    }
+
+    fn index_value_size(&self) -> usize {
+        if self.is_hashed() {
+            HASHED_INDEX_VALUE_SIZE
+        } else {
+            INDEX_VALUE_SIZE
+        }
+    }
+
     fn locate(&self, i: usize) -> Result<(usize, usize, u16, usize), ReadError> {
         if i >= self.len() {
             return Err(ReadError::invalid("B-tree entry past nkeys"));
@@ -98,7 +113,11 @@ impl<'a> Node<'a> {
         Ok(match self.fixed {
             Some(f) => {
                 let e: Kvoff = get(self.block, self.toc_at + i * size_of::<Kvoff>()).unwrap_or_default();
-                let value_len = if self.is_leaf() { f.value } else { INDEX_VALUE_SIZE };
+                let value_len = if self.is_leaf() {
+                    f.value
+                } else {
+                    self.index_value_size()
+                };
                 (usize::from(e.k.get()), f.key, e.v.get(), value_len)
             }
             None => {
@@ -135,14 +154,31 @@ impl<'a> Node<'a> {
         Ok(Some(&self.block[self.values_end - off..self.values_end - off + len]))
     }
 
+    /// The child's oid as stored. In a hashed tree it is relative to the root's oid.
     pub fn child(&self, i: usize) -> Result<u64, ReadError> {
+        let value = self.index_value(i)?;
+        Ok(u64::from_le_bytes(value[..8].try_into().unwrap_or_default()))
+    }
+
+    /// The SHA-256 of the child's whole node, in a hashed tree.
+    pub fn child_hash(&self, i: usize) -> Result<Option<&'a [u8]>, ReadError> {
+        if !self.is_hashed() {
+            return Ok(None);
+        }
+        Ok(Some(&self.index_value(i)?[8..8 + APFS_HASH_SHA256_SIZE]))
+    }
+
+    fn index_value(&self, i: usize) -> Result<&'a [u8], ReadError> {
         let value = self
             .value(i)?
             .ok_or_else(|| ReadError::invalid("index entry without a child"))?;
-        Ok(u64::from_le_bytes(
-            value[..8]
-                .try_into()
-                .map_err(|_| ReadError::invalid("short child oid"))?,
-        ))
+        if self.is_leaf() || value.len() != self.index_value_size() {
+            return Err(ReadError::invalid(format!(
+                "index entry {i}: {} bytes, {} expected",
+                value.len(),
+                self.index_value_size()
+            )));
+        }
+        Ok(value)
     }
 }

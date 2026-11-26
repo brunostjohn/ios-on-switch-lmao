@@ -1,18 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Reads an APFS container's newest checkpoint: the container layer (space manager, free queues, object map) and
-//! the volumes it names. Sealed (headerless) trees are refused for now.
+//! Reads an APFS container: its newest checkpoint and container layer (space manager, free queues, object map), the
+//! volumes it names, and each volume's file system, sealed or not. Records come raw or decoded, and as a path-level
+//! walk that carries what a verbatim copy needs. `audit` checks that every used block has exactly one owner.
 
+pub mod audit;
+pub mod catalog;
 pub mod checkpoint;
+pub mod fs;
 pub mod node;
 pub mod omap;
 pub mod space;
+pub mod stream;
+pub mod subtree;
 pub mod walk;
 
 use switch_apfs_format::io::BlockSource;
 
+pub use audit::{Audit, audit};
+pub use catalog::{DirRec, FileExtent, FileInfo, Inode, PhysExtent, Record, SiblingLink, XField, Xattr, XattrData};
 pub use checkpoint::Checkpoint;
+pub use fs::{Fs, RawRecord, Seal};
 pub use omap::{Omap, Volume};
 pub use space::{QueuedFree, Space};
+pub use stream::Compression;
+pub use subtree::{Entry, Step, Stream};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadError {
@@ -29,6 +40,13 @@ impl ReadError {
         ReadError::Invalid(what.into())
     }
 }
+
+macro_rules! invalid {
+    ($($arg:tt)*) => {
+        $crate::ReadError::Invalid(format!($($arg)*))
+    };
+}
+pub(crate) use invalid;
 
 pub struct Container {
     pub checkpoint: Checkpoint,
@@ -54,4 +72,14 @@ impl Container {
     pub fn blocks(&self) -> u64 {
         self.checkpoint.nx.block_count.get()
     }
+
+    /// A volume by its UUID.
+    pub fn volume(&self, uuid: [u8; 16]) -> Option<&Volume> {
+        self.volumes.iter().find(|v| v.sb.vol_uuid == uuid)
+    }
 }
+
+#[cfg(test)]
+mod tests_records;
+#[cfg(test)]
+mod tests_walk;

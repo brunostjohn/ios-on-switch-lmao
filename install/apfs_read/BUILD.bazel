@@ -1,17 +1,78 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+# The APFS reader, and `switch_apfs_read_tool`, which reads an image as the writer will.
+#
+#   bazel test //install/apfs_read:read_fixture_test     on a macOS worker with passwordless sudo
+#   bazel build //install/apfs_read:all_read             the tool for the six desktop platforms
+#
+# By hand on an IPSW member, compared with macOS's own read of it: read_compare.sh (in the test's runfiles).
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
 load("//bazel/lint:defs.bzl", "lint_files")
 
 package(default_visibility = ["//visibility:public"])
 
 lint_files()
 
-# node.rs and walk.rs are forked from dpp's apfs crate (MIT): LICENSE-dpp.
+_DEPS = [
+    "//install/apfs_alloc:switch_apfs_alloc",
+    "//install/apfs_format:switch_apfs_format",
+    "@installer_crates//:sha2",
+    "@installer_crates//:thiserror",
+    "@installer_crates//:zerocopy",
+]
+
+# catalog.rs, node.rs and walk.rs are forked from dpp's apfs crate (MIT): LICENSE-dpp.
 rust_library(
     name = "switch_apfs_read",
+    srcs = glob(
+        ["*.rs"],
+        exclude = ["tests*.rs"],
+    ),
+    deps = _DEPS,
+)
+
+rust_test(
+    name = "switch_apfs_read_test",
     srcs = glob(["*.rs"]),
+    compile_data = glob(["testdata/**"]),
+    crate_root = "lib.rs",
+    deps = _DEPS,
+)
+
+rust_binary(
+    name = "switch_apfs_read_tool",
+    srcs = glob(["tool/*.rs"]),
+    crate_root = "tool/main.rs",
     deps = [
-        "//install/apfs_alloc:switch_apfs_alloc",
+        ":switch_apfs_read",
         "//install/apfs_format:switch_apfs_format",
-        "@installer_crates//:thiserror",
+        "@installer_crates//:clap",
+        "@installer_crates//:hex",
+        "@installer_crates//:sha2",
+    ],
+)
+
+desktop_binaries(
+    name = "all_read",
+    binary = ":switch_apfs_read_tool",
+)
+
+sh_test(
+    name = "read_fixture_test",
+    size = "medium",
+    srcs = ["read_fixture_test.sh"],
+    args = [
+        "$(rootpath :switch_apfs_read_tool)",
+        "$(rootpath mount_list.py)",
+        "$(rootpath read_compare.sh)",
+    ],
+    data = [
+        "mount_list.py",
+        "read_compare.sh",
+        ":switch_apfs_read_tool",
+    ],
+    tags = [
+        "external",
+        "manual",
     ],
 )
