@@ -13,7 +13,8 @@ import QuartzCore
 /// is not); arm `surface` into a texture over a 'w30r' IOSurface. Green says the passes, their loads, clears and blends
 /// and the drawable's layout hold Metal's bytes; luna's program and Core Animation's composite are not covered.
 /// `<arm>_<check>_off`: texels unlike Metal's (AegirMoon.misses); `<arm>_<target>_centre`, `_corner`: what the centre
-/// and a corner texel hold; `<arm>_<target>_facts`: the driver's layout of each target; path.
+/// and a corner texel hold; `<arm>_<target>_facts`: the driver's layout of each target, red as `layer_drawable_facts`
+/// where the drawable has none; the 64-row expectation is 24B119's alone (`layer_block_rows_expected`); path.
 struct AegirMoonTest: HWTest {
     let id = "gpu.gm20b.aegir_moon"
     let name = "Weather's moon passes: mask, bloom and extended-range drawable hold Metal's bytes"
@@ -57,9 +58,17 @@ struct AegirMoonTest: HWTest {
             metrics.set("\(arm)_path", reading.path)
             if reading.path != "gm20b" { wrong.append("\(arm)_path") }
         }
-        let layout = drawable.map { SameBitsCases.facts(gpu, $0.texture) } ?? [:]
-        if !layout.isEmpty && (layout["block_linear"] != 1 || layout["block_rows"] != 64) {
-            wrong.append("layer_drawable_layout")
+        // 24B119 measured Weather's surface block-linear in 64-row blocks; another build's choice is recorded until a run
+        // there says
+        let weatherRows = DeviceInfo.sysctl("kern.osversion") == "24B119" ? 64 : nil
+        if let drawable {
+            let layout = SameBitsCases.facts(gpu, drawable.texture)
+            metrics.set("layer_block_rows_expected", weatherRows.map(String.init) ?? "recorded")
+            if layout["block_linear"] == nil || layout["block_rows"] == nil {
+                wrong.append("layer_drawable_facts")
+            } else if layout["block_linear"] != 1 || (weatherRows != nil && layout["block_rows"] != weatherRows) {
+                wrong.append("layer_drawable_layout")
+            }
         }
         return wrong.isEmpty ? .pass(metrics) : .fail(wrong.joined(separator: ","), metrics)
     }
