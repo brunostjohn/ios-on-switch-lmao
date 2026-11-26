@@ -20,9 +20,11 @@ rust_library(
     deps = _DEPS,
 )
 
+# testdata/ holds what macOS gave across sizes; //install/apfs_alloc/sweep remeasures it.
 rust_test(
     name = "switch_apfs_alloc_test",
     srcs = glob(["*.rs"]),
+    compile_data = glob(["testdata/*"]),
     crate_root = "lib.rs",
     deps = _DEPS,
 )

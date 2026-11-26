@@ -6,7 +6,7 @@ pub mod geometry;
 pub mod space;
 
 pub use bitmap::Bitmap;
-pub use geometry::{Geometry, GeometryError};
+pub use geometry::{CheckpointSizes, Geometry, GeometryError};
 
 #[cfg(test)]
 mod tests;
