@@ -1,0 +1,47 @@
+# plistlib-compatible property list writing.
+#
+#   bazel test //install/plistlib:all          the writer against the build's Python plistlib (oracle.py)
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//bazel/lint:defs.bzl", "lint_files")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+rust_library(
+    name = "switch_plistlib",
+    srcs = [
+        "lib.rs",
+        "real.rs",
+    ],
+    crate_root = "lib.rs",
+    deps = [
+        "@installer_crates//:base64",
+        "@installer_crates//:plist",
+        "@installer_crates//:thiserror",
+    ],
+)
+
+py_binary(
+    name = "oracle",
+    srcs = ["oracle.py"],
+)
+
+genrule(
+    name = "oracle_cases",
+    outs = ["oracle_cases.bin"],
+    cmd = "$(execpath :oracle) $@",
+    tools = [":oracle"],
+)
+
+rust_test(
+    name = "oracle_test",
+    srcs = ["oracle_test.rs"],
+    data = [":oracle_cases"],
+    env = {"ORACLE_CASES": "$(rootpath :oracle_cases)"},
+    deps = [
+        ":switch_plistlib",
+        "@installer_crates//:plist",
+    ],
+)
