@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use crate::bind::{BindState, VertexAmplification, WriteSource};
+use crate::bind::{BindState, VertexAmplification, ViewMapping, WriteSource};
 use crate::budget::Budget;
 use crate::device::profile::FramebufferFetchPolicy;
 use crate::device::requirements::VkFeature;
@@ -706,7 +706,8 @@ fn an_srgb_input_attachment_is_read_through_metals_decode() {
 /// writes a storage-form attachment to its fragment binding as the attachment's own storage view.
 /// In a pass of more than one layer the draw runs the layered storage variant, whose storage image
 /// is an array of the pass's layers addressed at the primitive's layer (its `LayeredStorage`
-/// fact); an amplified draw is refused.
+/// fact), which an amplified draw drawn one amplification at a time runs too; drawn as multiview
+/// views it is refused.
 #[test]
 fn the_binder_writes_storage_attachments_and_layers_them_in_layered_passes() {
     let (Some(io), Some(fetch)) = (fixture("stage_io"), fixture("fragment_fetch")) else {
@@ -775,9 +776,16 @@ fn the_binder_writes_storage_attachments_and_layers_them_in_layered_passes() {
         .graphics
         .as_ref()
         .is_some_and(|t| !t.other_layer_variant));
-    let amplified = BindState {
+    d.max_vertex_amplification_count = 2;
+    let p = dev
+        .compile_render_pipeline(&d, &Budget::standard())
+        .expect("amplified pipeline");
+    let mut amplified = BindState {
         render_target_array_length: 2,
-        vertex_amplification: VertexAmplification::new(2, Vec::new()),
+        vertex_amplification: VertexAmplification::new(
+            2,
+            vec![ViewMapping::new(0, 0), ViewMapping::new(0, 1)],
+        ),
         ..Default::default()
     };
     match p.plan(&dev, &amplified.shape()) {
@@ -787,6 +795,15 @@ fn the_binder_writes_storage_attachments_and_layers_them_in_layered_passes() {
         ),
         other => panic!("{:?}", other.map(|_| ())),
     }
+    amplified.vertex_amplification.one_at_a_time = true;
+    let drawn = p
+        .plan(&dev, &amplified.shape())
+        .expect("one amplification at a time");
+    assert!(
+        drawn.variant.layered_storage && drawn.variant.amplification_draws.is_some(),
+        "{:?}",
+        drawn.variant
+    );
 }
 
 /// A draw into a render pass instance that keeps a color out of its subpass for other draws'

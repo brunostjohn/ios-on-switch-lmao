@@ -707,8 +707,9 @@ impl BlendState {
 ///   the draws (a color attachment write of an earlier subpass or pass, a transfer, a load
 ///   operation), and the fragment shader's storage writes visible to later uses after them.
 ///
-/// A pass of more than one layer, and an amplified draw, are not implemented: the binder refuses
-/// them.
+/// In a layered pass the view is an array of its layers, which each primitive addresses at its
+/// layer, as an amplification drawn on its own does; a draw of multiview views is not implemented:
+/// the binder refuses it.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

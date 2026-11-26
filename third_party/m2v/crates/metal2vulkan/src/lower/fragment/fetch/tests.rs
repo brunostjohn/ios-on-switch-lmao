@@ -137,11 +137,12 @@ fn a_clean_state_takes_the_storage_form() {
     }
 }
 
-/// What the form does not model is `NotImplemented`: an amplified pipeline, a one- or two-channel
-/// sRGB format, and,
-/// for a written attachment only, blending (but one and zero, added), a signed normalized format under a write mask that
-/// keeps some of its channels, alpha to coverage, a returned sample mask at one sample, and a depth
-/// or stencil attachment without early fragment tests, but where each draw's plan checks its tests.
+/// What the form does not model is `NotImplemented`: a one- or two-channel sRGB format, and, for a
+/// written attachment only, blending (but one and zero, added), a signed normalized format under a
+/// write mask that keeps some of its channels, alpha to coverage, a returned sample mask at one
+/// sample, and a depth or stencil attachment without early fragment tests, but where each draw's
+/// plan checks its tests. An amplified pipeline takes the form, which the binder draws one
+/// amplification at a time.
 #[test]
 fn unmodelled_states_are_not_implemented() {
     let p = profile("moltenvk-m3", &[]);
@@ -149,7 +150,8 @@ fn unmodelled_states_are_not_implemented() {
     let r32 = state(PixelFormat::R32Float, |_| {});
     let mut amplified = r32.clone();
     amplified.amplified = true;
-    assert_eq!(form(&amplified, false, READS, &p), ni);
+    assert_eq!(form(&amplified, false, READS, &p), form(&r32, false, READS, &p));
+    assert!(form(&amplified, false, WRITES, &p).is_ok());
     for pf in [PixelFormat::R8UnormSRGB, PixelFormat::RG8UnormSRGB] {
         let srgb = state(pf, |_| {});
         assert_eq!(form(&srgb, false, READS, &p), ni, "{pf:?}");
