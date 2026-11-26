@@ -6,7 +6,9 @@ import Metal
 
 /// GPURates.nvn on the default device with the facade's band budget at 0 (gpu/GPURatesNvn.swift): NVN's zcull, discard,
 /// 4x compression kind and tiled-cache flush choices against ours. It fails where an arm drew wrong pixels with its probe
-/// off, and on the facade where a probe is missing. A probe's own wrong pixels are its verdict, reported, not judged.
+/// off, where an arm threw, where an on arm's probe moved nothing, and on the facade where a probe is missing. A probe's
+/// own wrong pixels are its verdict, reported, not judged. The log line keeps the judged fields, the on arms' wrong
+/// pixels and any arm's error; the report keeps every field.
 struct GPUNvnTest: HWTest {
     let id = "gpu.perf.nvn"
     let name = "NVN's zcull, discard, 4x compression kind and tiled-flush choices, A/B"
@@ -29,7 +31,8 @@ struct GPUNvnTest: HWTest {
             if case .integer(let wrong) = metrics[key], wrong > 0 { failures.append("\(key)=\(wrong)") }
         }
         if GM20BFacade.kind(of: gpu.device) == "gm20b" { failures += result.notes }
-        metrics.fitLog(within: 900, keeping: [])
+        let kept = metrics.keys.filter { $0.hasSuffix("_error") || $0.hasSuffix("_on_wrong") }
+        metrics.fitLog(within: 900, keeping: Set(Self.judged + kept))
         if !failures.isEmpty { return .fail(failures.joined(separator: "; "), metrics) }
         return .pass(metrics, proof: gpu.proof).onRawPath(gpu)
     }
