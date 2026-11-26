@@ -24,8 +24,14 @@ public:
 
     // The entry under `name`, copied
     bool find(const gm20b::Digest &name, std::string &bytes) const;
+    // The entry of content `key` under any of `name`'s candidates (store_key.h candidateName), copied, with `at` its
+    // name. False with `at` where a put of `key` would file it now: the first free candidate, else the last.
+    bool find(const gm20b::Digest &name, const gm20b::CacheKey &key, std::string &bytes, gm20b::Digest &at) const;
     // A damaged entry stepped over from now on, so it is made again
     void retire(const gm20b::Digest &name);
+    // The entry under `name` retired only if it is of content `key`, checked and retired under one lock: a worker may
+    // have filed another content there since the caller looked
+    void retire(const gm20b::Digest &name, const gm20b::CacheKey &key);
     enum class Put : uint8_t {
         Added,
         Full,  // makeRoom, then put again
@@ -34,6 +40,9 @@ public:
 
     // Published for every reader (an entry already under `name` retired once this one is in)
     Put put(const gm20b::Digest &name, const std::string &entry);
+    // `entry` of content `key` under the candidate of `name` that find(name, key) gives, `at` the one taken. Chosen and
+    // written under one lock, so two contents compiled at once under one name each keep an entry.
+    Put put(const gm20b::Digest &name, const gm20b::CacheKey &key, const std::string &entry, gm20b::Digest &at);
     // Each program slot of a page or more that the record or kernel `entry` of `key` holds (record.h programSlot,
     // compute_slot.h computeSlot), published ahead of the entry as an entry of its own pages (program_pages.h
     // programSlotEntryBytes) under its programSlotName: a client that takes the entry runs those slots in place from its
@@ -69,6 +78,9 @@ public:
     }
 
 private:
+    bool findLocked(const gm20b::Digest &name, const gm20b::CacheKey &key, std::string &bytes, gm20b::Digest &at) const;
+    bool holdsLocked(const gm20b::Digest &name, const gm20b::CacheKey &key, std::string &bytes) const;
+
     // persistLock_ then lock_: a persist syncs the file outside lock_, so the file it syncs must stay open meanwhile.
     // makeRoom (a full store, on a compile's publish) waits for at most one persist's msync and two barrier fsyncs,
     // a fraction of the half-store rewrite it then does itself.

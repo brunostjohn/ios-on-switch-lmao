@@ -10,6 +10,7 @@
 #include "../cache_io.h"
 #include "../obtained.h"
 #include "../program_pages.h"
+#include "../store_key.h"
 #include "TegraGM20BABI.h"
 #include "TegraGM20BCompilerABI.h"
 
@@ -131,7 +132,8 @@ public:
                 infos++;
                 if (infoCalled != kIOReturnSuccess)
                     return infoCalled;
-                *static_cast<TegraGM20BAbiCompilerInfoReply *>(out) = {store.mappedBytes(), kStack, flags, generation};
+                *static_cast<TegraGM20BAbiCompilerInfoReply *>(out) = {
+                    store.mappedBytes(), kStack, flags, generation, {}};
                 return kIOReturnSuccess;
             case TegraGM20BMethodMap:
                 maps++;

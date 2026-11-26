@@ -7,6 +7,7 @@
 #include "../compile_request.h"
 #include "../mme.h"
 #include "../render_key.h"
+#include "request_store_key.h"
 #include "../../../kits/SwitchSeedPack/SwitchSeedStore.h"
 #include "../../../kits/SwitchGM20B/SwitchGM20B3D.h"
 #include "../../../kits/SwitchGM20BEmit/SwitchGM20BPushDecode.h"
@@ -264,21 +265,27 @@ struct RenderCompiler {
             if (shapes)
                 shapes(request, record);
             const bool refused = refuses && refuses(request);
-            const std::string entry = refused ? gm20b::encodeEntry(cache, nullptr, "refused by the test's compiler")
-                                              : gm20b::encodeEntry(cache, &record, "");
-            std::vector<gm20b::LibraryIdentity> ids;
-            for (const auto &source : request.libraries)
-                ids.push_back(gm20b::identityOf(source));
+            const gm20b::StoreKey stored = requestStoreKey(cache, request);
+            const std::string entry =
+                refused ? gm20b::encodeEntry(stored.content, nullptr, "refused by the test's compiler")
+                        : gm20b::encodeEntry(stored.content, &record, "");
             {
                 std::lock_guard<std::mutex> lock(mutex);
-                store.put(gm20b::storeName(cache, request, ids).data(), reinterpret_cast<const uint8_t *>(entry.data()),
-                          uint32_t(entry.size()));
+                store.put(stored.name.data(), reinterpret_cast<const uint8_t *>(entry.data()), uint32_t(entry.size()));
                 requests.push_back(std::move(request));
             }
             answered.notify_all();
             return int32_t(refused ? TegraGM20BCompileRefused : TegraGM20BCompileMade);
         };
         return true;
+    }
+
+    // A twin the device asks in the background after a storage form (TegraGM20BMetalCompleteRemote.mm askTwin) reads this
+    // store once answered: nothing the device has in flight outlives it
+    ~RenderCompiler()
+    {
+        if (gRM && gRM->completion)
+            EXPECT_TRUE(gRM->completion->settleTwins(uint64_t(5) * NSEC_PER_SEC));
     }
 
     bool wait(size_t count)

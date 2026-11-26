@@ -61,7 +61,7 @@ TEST(CompilerRefusals, ARefusalIsThisBuildsAtItsCompileAndTheWarmUpMakesAnotherB
     const std::string service = switch_ios::test::SourceText("../compiler/compiler_service.mm");
     const std::string warm = switch_ios::test::Body(service, "void Service::warm(uint64_t stack)");
     EXPECT_THAT(warm, HasSubstr("stored == TegraGM20BCompileRefused && !confirmed.confirmed(name)"));
-    EXPECT_THAT(warm, HasSubstr("if (unconfirmed)\n                store_.retire(name);"));
+    EXPECT_THAT(warm, HasSubstr("if (unconfirmed)\n                store_.retire(name, prepared.content);"));
     EXPECT_THAT(warm, testing::Not(HasSubstr("confirm(name)")));
     const std::string kept = switch_ios::test::Body(service, "void Service::remember(const Asked &asked, int32_t ran)");
     EXPECT_THAT(kept,

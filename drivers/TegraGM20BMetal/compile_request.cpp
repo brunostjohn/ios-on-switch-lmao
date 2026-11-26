@@ -14,7 +14,6 @@ namespace {
 // Any change to a field's bytes or meaning takes the next magic: the compiler's request log (compiler/compiler_log.h)
 // keeps requests across builds and replays them, so a request of another layout must be refused whole
 constexpr char kRequestMagic[8] = {'S', 'W', 'C', 'R', 'E', 'Q', '0', '8'};
-constexpr char kNameMagic[8] = {'S', 'W', 'R', 'A', 'W', 'N', 'M', '2'};
 // A cubic bind's sampler flag byte: bit 0 normalized, bit 1 the vertex stage, no other; its texture's slot byte's top
 // bit: the vertex stage. Each stage binds up to 16 samplers
 constexpr uint8_t kCubicNormalizedBit = 1, kCubicVertexBit = 2, kCubicVertexSlot = 0x80;
@@ -177,18 +176,6 @@ bool sane(const CompileRequest &r)
     return true;
 }
 
-void hashText(CC_SHA256_CTX &c, const std::string &text)
-{
-    const uint32_t size = uint32_t(text.size());
-    CC_SHA256_Update(&c, &size, sizeof size);
-    CC_SHA256_Update(&c, text.data(), CC_LONG(text.size()));
-}
-
-template <class T> void hashValue(CC_SHA256_CTX &c, const T &value)
-{
-    CC_SHA256_Update(&c, &value, sizeof value);
-}
-
 }  // namespace
 
 NmbDirectDispatch KernelRequest::dispatch() const
@@ -212,6 +199,30 @@ size_t fragmentStage(const CompileRequest &r)
 size_t firstLinked(const CompileRequest &r)
 {
     return fragmentStage(r) == kNoStage ? 1 : 2;
+}
+
+bool canonicalize(PipelineFields &f)
+{
+    for (ColorFields &c : f.color) {
+        if (!c.format)
+            c = {};
+        c.blending = c.blending != 0;
+    }
+    for (AttributeFields &a : f.attributes) {
+        if (!a.format)
+            a = {};
+        if (a.stride != UINT64_MAX && a.stride >= UINT32_MAX)
+            return false;
+    }
+    if (!f.patchType)
+        f.tessellation = {};
+    f.tessellation.factorScale = f.tessellation.factorScale != 0;
+    f.amplification = std::max<uint64_t>(f.amplification, 1);
+    if (f.textureWriteRounding == 1)
+        f.textureWriteRounding = 0;
+    f.rasterization = f.rasterization != 0;
+    f.alphaToCoverage = f.alphaToCoverage != 0;
+    return true;
 }
 
 std::string encodeRequest(const CompileRequest &r)
@@ -262,12 +273,12 @@ bool decodeRequest(const std::string &bytes, CompileRequest &out)
     q.stack = r.value<uint64_t>();
     const uint8_t kind = r.value<uint8_t>(), form = r.value<uint8_t>();
     q.kind = RequestKind(kind);
-    q.form = form ? RequestForm::Split : RequestForm::Primary;
+    q.form = RequestForm(form);
     q.key = r.text();
     readWhole(r, q.fields);
     const uint32_t stages = r.value<uint32_t>();
-    if (!r.ok() || memcmp(magic, kRequestMagic, sizeof magic) || kind > uint8_t(RequestKind::Reflection) || form > 1 ||
-        stages > kRequestStageLimit)
+    if (!r.ok() || memcmp(magic, kRequestMagic, sizeof magic) || kind > uint8_t(RequestKind::Reflection) ||
+        form > uint8_t(RequestForm::Barrier) || stages > kRequestStageLimit)
         return false;
     q.stages.resize(stages);
     for (RequestStage &s : q.stages) {
@@ -314,70 +325,6 @@ Digest sha256(const void *bytes, size_t size)
         CC_SHA256_Update(&c, static_cast<const uint8_t *>(bytes) + at, CC_LONG(chunk));
         at += chunk;
     }
-    CC_SHA256_Final(out.data(), &c);
-    return out;
-}
-
-Digest programSlotName(const void *slot, size_t size)
-{
-    static constexpr char kDomain[] = "GM20B program slot";
-    Digest out{};
-    CC_SHA256_CTX c;
-    CC_SHA256_Init(&c);
-    CC_SHA256_Update(&c, kDomain, CC_LONG(sizeof kDomain));
-    for (size_t at = 0; at < size;) {
-        const size_t chunk = std::min<size_t>(size - at, 1u << 30);
-        CC_SHA256_Update(&c, static_cast<const uint8_t *>(slot) + at, CC_LONG(chunk));
-        at += chunk;
-    }
-    CC_SHA256_Final(out.data(), &c);
-    return out;
-}
-
-LibraryIdentity identityOf(const RequestLibrary &library)
-{
-    LibraryIdentity id;
-    id.system = library.system;
-    id.digest = library.system      ? sha256(library.path.data(), library.path.size())
-                : library.libraryId ? library.digest
-                                    : sha256(library.bytes.data(), library.bytes.size());
-    return id;
-}
-
-Digest storeName(const CacheKey &k, const CompileRequest &r, const std::vector<LibraryIdentity> &libraries)
-{
-    CC_SHA256_CTX c;
-    CC_SHA256_Init(&c);
-    CC_SHA256_Update(&c, kNameMagic, sizeof kNameMagic);
-    hashValue(c, k.stack);
-    CC_SHA256_Update(&c, k.vertexAir, sizeof k.vertexAir);
-    CC_SHA256_Update(&c, k.fragmentAir, sizeof k.fragmentAir);
-    hashText(c, k.key);
-    hashValue(c, uint8_t(r.kind));
-    hashValue(c, uint32_t(r.stages.size()));
-    for (const RequestStage &s : r.stages) {
-        hashText(c, s.tag);
-        hashText(c, s.function);
-        hashText(c, s.constants);
-        hashText(c, s.name);
-        hashValue(c, uint8_t(s.specialized));
-        if (s.tag == "kg")
-            hashText(c, s.group);
-        const LibraryIdentity none;
-        const LibraryIdentity &l = s.library < libraries.size() ? libraries[s.library] : none;
-        hashValue(c, uint8_t(l.system));
-        CC_SHA256_Update(&c, l.digest.data(), CC_LONG(l.digest.size()));
-    }
-    if (r.kind == RequestKind::Render) {
-        hashValue(c, r.fields.rasterization);
-    } else {
-        // the stage input is bound by the key already: a kernel keeps the name it was stored under before requests
-        // carried it
-        Writer w;
-        writeDispatch(w, r.kernel);
-        hashText(c, w.out);
-    }
-    Digest out{};
     CC_SHA256_Final(out.data(), &c);
     return out;
 }

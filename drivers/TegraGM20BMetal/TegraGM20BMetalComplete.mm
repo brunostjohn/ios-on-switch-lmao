@@ -66,7 +66,7 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, con
       persistenceQueue_(
           dispatch_queue_create("com.brunostjohn.switch.gm20b.kernel-cache",
                                 dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0))),
-      pending_(dispatch_group_create())
+      pending_(dispatch_group_create()), twins_(dispatch_group_create())
 {
     const bool writable = cacheDir && *cacheDir && cache_.attach(cacheDir, stack_, kCacheCap);
     if (seedDir && *seedDir)
@@ -106,6 +106,7 @@ Completion::~Completion()
     stopping_.store(true, std::memory_order_release);
     compiler_->drain();
     dispatch_group_wait(pending_, DISPATCH_TIME_FOREVER);
+    dispatch_group_wait(twins_, DISPATCH_TIME_FOREVER);
     dispatch_sync(persistenceQueue_, ^{
                   });
     compiler_.reset();
@@ -190,14 +191,13 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
             pending->ready(nullptr, pending->creation ? kInexpressible : "");
             return;
         }
-        const bool caTransform = a.caTransform;
         // the installed seed's, this process's or the disk's answer, kept in the process table
         RuntimeRecord known;
         std::string why;
         if (const RecordCache::Found found = compiler_->lookup(k, known, why); found != RecordCache::Found::None) {
             SWITCH_METAL_DIAGNOSTIC(logInProcessCa(a, k, found));
             if (found == RecordCache::Found::Record)
-                place(k, std::make_shared<const RuntimeRecord>(std::move(known)), caTransform, a.qos, pending);
+                place(a, k, std::make_shared<const RuntimeRecord>(std::move(known)), a.qos, pending);
             else
                 pending->ready(nullptr, failureOf(k, pending->creation));
             return;
@@ -206,19 +206,20 @@ void Completion::request(Ask asked, std::shared_ptr<Pending> pending)
             pending->ready(nullptr, kNoCompilerComes);
             return;
         }
-        remoteLater(a, k, [this, k, caTransform, qos = a.qos, pending](std::shared_ptr<const RuntimeRecord> record) {
+        remoteLater(a, k, [this, a, k, qos = a.qos, pending](std::shared_ptr<const RuntimeRecord> record) {
             if (record)
-                place(k, std::move(record), caTransform, qos, pending);
+                place(a, k, std::move(record), qos, pending);
             else
                 pending->ready(nullptr, failureOf(k, pending->creation));
         });
     });
 }
 
-void Completion::place(const CacheKey &key, std::shared_ptr<const RuntimeRecord> record, bool caTransform, uint32_t qos,
+void Completion::place(const Ask &a, const CacheKey &key, std::shared_ptr<const RuntimeRecord> record, uint32_t qos,
                        std::shared_ptr<Pending> pending)
 {
     const CacheKey keptKey = key;
+    const Ask asked = a;
     asyncAt(queue_, qos, ^{
         if (stopping_.load(std::memory_order_acquire)) {
             pending->ready(nullptr, pending->creation ? "the shader compiler's client is stopping" : "");
@@ -226,7 +227,8 @@ void Completion::place(const CacheKey &key, std::shared_ptr<const RuntimeRecord>
         }
         std::string why;
         bool full = false;
-        Pipeline *made = device_.addRecord(*record, caTransform, why, &full);
+        Pipeline *made = device_.addRecord(*record, asked.caTransform, why, &full);
+        askTwin(asked, keptKey, made);
         if (!made && full)
             os_log_error(gm20bLog(), "SwitchMetal: %{public}s: the state that needs %016llx fails", why.c_str(),
                          (unsigned long long)keptKey.name());
@@ -278,9 +280,15 @@ Pipeline *Completion::makeNow(Ask a, std::string &failure)
     }
     bool heapFull = false;
     Pipeline *made = device_.addRecord(record, a.caTransform, why, &heapFull);
+    askTwin(a, k, made);
     if (!made)
         failure = why.empty() ? "the state's record could not be placed" : why;
     return made;
+}
+
+bool Completion::settleTwins(uint64_t ns)
+{
+    return !dispatch_group_wait(twins_, dispatch_time(DISPATCH_TIME_NOW, int64_t(ns)));
 }
 
 void Completion::backgroundKernel(std::function<void()> work)

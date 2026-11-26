@@ -3,6 +3,8 @@
 #include "compiler_store.h"
 #include "../compute_slot.h"
 #include "../program_pages.h"
+#include "../cache_io.h"
+#include "../store_key.h"
 
 #include <dirent.h>
 #include <sys/stat.h>
@@ -98,12 +100,84 @@ void Store::retire(const gm20b::Digest &name)
     writer_.retire(name.data());
 }
 
+bool Store::holdsLocked(const gm20b::Digest &name, const gm20b::CacheKey &key, std::string &bytes) const
+{
+    switch_seed_pack::Bytes found;
+    if (!writer_.reader().find(name.data(), found))
+        return false;
+    bytes.assign(reinterpret_cast<const char *>(found.data), found.size);
+    gm20b::Reader r(bytes);
+    uint32_t kind = 0;
+    return gm20b::readEntryHead(bytes, r, key, kind);
+}
+
+// Every candidate is read before a free one is chosen: makeRoom keeps the newest entries and retire steps one over, so
+// a content's entry can sit past a free candidate, where clients still find it (Completion::storedEntry)
+bool Store::findLocked(const gm20b::Digest &name, const gm20b::CacheKey &key, std::string &bytes,
+                       gm20b::Digest &at) const
+{
+    bool free = false;
+    for (uint32_t k = 0; k < gm20b::kStoreCandidates; ++k) {
+        const gm20b::Digest candidate = gm20b::candidateName(name, k);
+        switch_seed_pack::Bytes found;
+        if (!writer_.reader().find(candidate.data(), found)) {
+            if (!free)
+                at = candidate;
+            free = true;
+            continue;
+        }
+        bytes.assign(reinterpret_cast<const char *>(found.data), found.size);
+        gm20b::Reader r(bytes);
+        uint32_t kind = 0;
+        if (gm20b::readEntryHead(bytes, r, key, kind)) {
+            at = candidate;
+            return true;
+        }
+        if (!free)
+            at = candidate;
+    }
+    bytes.clear();
+    return false;
+}
+
+bool Store::find(const gm20b::Digest &name, const gm20b::CacheKey &key, std::string &bytes, gm20b::Digest &at) const
+{
+    std::lock_guard<std::mutex> l(lock_);
+    return findLocked(name, key, bytes, at);
+}
+
+void Store::retire(const gm20b::Digest &name, const gm20b::CacheKey &key)
+{
+    std::lock_guard<std::mutex> l(lock_);
+    std::string bytes;
+    if (holdsLocked(name, key, bytes))
+        writer_.retire(name.data());
+}
+
 Store::Put Store::put(const gm20b::Digest &name, const std::string &entry)
 {
     std::lock_guard<std::mutex> l(lock_);
     if (entry.size() > UINT32_MAX)
         return Put::Failed;
     switch (writer_.put(name.data(), reinterpret_cast<const uint8_t *>(entry.data()), uint32_t(entry.size()), true)) {
+    case switch_seed_pack::StoreWriter::Put::Added:
+        return Put::Added;
+    case switch_seed_pack::StoreWriter::Put::Full:
+        return Put::Full;
+    default:
+        return Put::Failed;
+    }
+}
+
+Store::Put Store::put(const gm20b::Digest &name, const gm20b::CacheKey &key, const std::string &entry,
+                      gm20b::Digest &at)
+{
+    std::lock_guard<std::mutex> l(lock_);
+    if (entry.size() > UINT32_MAX)
+        return Put::Failed;
+    std::string held;
+    findLocked(name, key, held, at);
+    switch (writer_.put(at.data(), reinterpret_cast<const uint8_t *>(entry.data()), uint32_t(entry.size()), true)) {
     case switch_seed_pack::StoreWriter::Put::Added:
         return Put::Added;
     case switch_seed_pack::StoreWriter::Put::Full:
