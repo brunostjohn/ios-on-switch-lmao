@@ -97,6 +97,9 @@ CommandBuffer *Device::begin()
     cb.heaps_.clear();
     cb.surfaces_.clear();
     cb.zcullPlanes_.clear();
+    cb.zcullOwner_ = ++zcullOwners_;
+    cb.zcullTo_ = nullptr;
+    cb.zcullKept_ = 0;
     set_.view(setView_);
     cb.memberUses_.clear();
     cb.memberRemovals_ = setView_.removals;
@@ -190,6 +193,7 @@ CommandBuffer *Device::begin()
     nextForms = {};
     cb.taken_ = {};
     cb.pixelOpenings_ = 0;
+    cb.zcullCounts_ = {};
 #endif
     if (const EntryForm entry = entryFormFor(cb.barrierForms().entry); relaxed(entry)) {
         cb.shaderInvalidate_ = entryOpening(p, entry);
@@ -346,6 +350,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
 
     Device &d = *dev_;
     SWITCH_METAL_DIAGNOSTIC(foldCounts());
+    settleZcull();
     // a commit that fails after some of its jobs ran leaves the channel holding a segment the device cannot name
     d.heldSegment_.lose();
     launchPrologues();
@@ -558,6 +563,7 @@ bool CommandBuffer::commit(uint32_t &seqno)
         signaled += signalCount;
     }
     seqno = d.lastSubmitted();
+    parkZcull();
 #if SWITCH_METAL_DIAGNOSTICS
     if (glassMemSlot_ >= 0) {
         d.glassMemCbs_[glassMemSlot_].seqno = seqno;
@@ -616,6 +622,50 @@ bool CommandBuffer::commit(uint32_t &seqno)
     SWITCH_METAL_DIAGNOSTIC(d.stats.passPixelOpenings.fetch_add(pixelOpenings_, std::memory_order_relaxed));
     notSubmittedLine.submitted = true;
     return true;
+}
+
+// Before any of its words are submitted: each region carryZcull keeps is stored, each other one left unstored and its
+// slot given back
+void CommandBuffer::settleZcull()
+{
+    zcullPlanes_.settle(zcullTo_ ? zcullKept_ : 0, [this](int slot) {
+        dev_->zcullSlots_.release(slot);
+    });
+}
+
+// Once submitted: what settleZcull kept is parked for its command buffer's next range, in place of any earlier carry,
+// which this job's submission ended
+void CommandBuffer::parkZcull()
+{
+    Device &d = *dev_;
+    SWITCH_METAL_DIAGNOSTIC(d.stats.zcullPasses += zcullCounts_.passes; d.stats.zcullLoads += zcullCounts_.loads;
+                            d.stats.zcullCarried += zcullCounts_.carried; d.stats.zcullStores += zcullPlanes_.stores();
+                            d.stats.zcullUnstored += zcullPlanes_.unstored());
+    if (!zcullTo_ || zcullPlanes_.empty())
+        return;
+    ZcullCarry &carry = d.zcullCarry_;
+    carry.planes.carryFrom(zcullPlanes_);
+    carry.to = zcullTo_;
+    carry.from = zcullFrom_;
+    carry.owner = zcullOwner_;
+    carry.generation = d.channelGeneration();
+    carry.submitted = d.lastSubmitted();
+}
+
+void CommandBuffer::resumeZcull(const void *cb, uint64_t from)
+{
+    Device &d = *dev_;
+    ZcullCarry &carry = d.zcullCarry_;
+    if (!carry.to || carry.to != cb || carry.from != from)
+        return;
+    const bool live = carry.live(d.channelGeneration(), d.lastSubmitted());
+    carry.to = nullptr;
+    if (!live) {
+        SWITCH_METAL_DIAGNOSTIC(d.stats.zcullCarriesLost++);
+        return;
+    }
+    zcullPlanes_.carryFrom(carry.planes);
+    zcullOwner_ = carry.owner;
 }
 
 void CommandBuffer::abandon()

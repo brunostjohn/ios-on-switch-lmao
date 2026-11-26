@@ -137,10 +137,11 @@ void RenderEncoder::end()
     if (p_.room() < 64 + kSampleWords + kTirWords + 2 * kMaxViewports + kDrawStampWords)
         reserve();
     if (zcull_.store && !zcull_.invalidated) {
-        p_.m(kStoreZcull, 0);
+        uint32_t *store = p_.at;
+        *p_.at++ = kZcullUnstoredWord;
         const Texture &zeta = *pass_.depthStencil.texture;
         const auto memory = zeta.storageRange();
-        cb_->zcullPlanes_.stored(zcullStoredBy(zcull_, zeta.va, memory.va, memory.bytes));
+        cb_->zcullPlanes_.stored(zcullStoredBy(zcull_, zeta.va, memory.va, memory.bytes, store));
     }
     writeRaster(p_, Raster());
     unclampDepthRange(p_);
@@ -397,7 +398,7 @@ void RenderEncoder::end()
                          criterion);
         if (zcull_.load)
             p.m(kLoadZcull, 0);
-        SWITCH_METAL_DIAGNOSTIC(d.stats.zcullPasses++; d.stats.zcullLoads += zcull_.load);
+        SWITCH_METAL_DIAGNOSTIC(cb_->zcullCounts_.passes++; cb_->zcullCounts_.loads += zcull_.load);
     };
     if (zcull_.candidate && !zcullAfterTir)
         zcullWords();

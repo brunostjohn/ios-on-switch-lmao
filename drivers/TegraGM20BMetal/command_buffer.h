@@ -271,6 +271,24 @@ public:
         namingResources_ = on;
     }
 
+    // The depths' regions its passes stored so far (zcull_planes.h)
+    const std::vector<ZcullStored> &zcullRegions() const
+    {
+        return zcullPlanes_.regions();
+    }
+
+    // At its commit, the regions bit i of `kept` names (zcullRegions()' order) are stored and parked for the range of the
+    // Metal command buffer `to` that begins at `from` (nullptr: none); the rest are left unstored
+    void carryZcull(const void *to, uint64_t from, uint32_t kept)
+    {
+        zcullTo_ = to;
+        zcullFrom_ = from;
+        zcullKept_ = kept;
+    }
+
+    // After begin(): the regions parked for the range of `cb` that begins at `from`, where no job was submitted since
+    void resumeZcull(const void *cb, uint64_t from);
+
     uint32_t draws = 0, passes = 0, blits = 0, bands = 0;
     uint32_t stamp = 0;               // its GPU time's slot (stamps.h), for Device::gpuNanoseconds once it completed
     uint64_t serial = 0;              // its begin()'s, unique in the device's life
@@ -297,6 +315,14 @@ private:
     void nameHeaps(std::unique_lock<gm20b::Mutex> &l);  // lock_ held
     SurfaceList surfaces_;
     ZcullPlanes zcullPlanes_;  // the depths' regions this command buffer's passes stored (zcull_planes.h)
+    uint64_t zcullOwner_ = 0;  // the slots' owner (zcull_slots.h): its begin()'s, or the job whose regions it resumed
+    const void *zcullTo_ = nullptr;
+    uint64_t zcullFrom_ = 0;
+    uint32_t zcullKept_ = 0;
+    // A slot for the region of the depth at `zetaVa`, `bytes` long; 0: none
+    uint64_t zcullSlot(uint64_t zetaVa, uint64_t bytes, int &slot);
+    void settleZcull();
+    void parkZcull();
     bool namingResources_ = false;
     std::vector<SetUse> memberUses_;
     uint32_t memberRemovals_ = 0;
@@ -362,6 +388,10 @@ private:
     // passes it opened with PIXEL_SHADER_BARRIER, added to Stats::passPixelOpenings at its commit (an abandoned encode
     // ahead counts none)
     uint64_t pixelOpenings_ = 0;
+    // its passes with a zcull region, those that loaded one, and those whose region an earlier job stored, likewise
+    struct ZcullCounts {
+        uint64_t passes = 0, loads = 0, carried = 0;
+    } zcullCounts_;
 #endif
 #if SWITCH_METAL_DIAGNOSTICS
     Texture glassMemImages_[kGlassMemItems];               // the image each of the probe's rows is read from

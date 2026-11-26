@@ -695,6 +695,22 @@ device_test(
     ],
 )
 
+# A zcull region kept for a command buffer's next range: stored only where loaded, loaded by that range's job, lost to
+# a job submitted in between (zcull_planes.h ZcullCarry)
+device_test(
+    name = "device_zcull_carry_test",
+    srcs = [
+        "device_forms.h",
+        "device_zcull_carry_test.cpp",
+        "//drivers/TegraGM20BMetal:area_load.cpp",
+        "//drivers/TegraGM20BMetal:reach.cpp",
+        "//drivers/TegraGM20BMetal:stencil_bits.cpp",
+        "//drivers/TegraGM20BMetal:turn_copy.cpp",
+        "//drivers/TegraGM20BMetal:turned_pass.cpp",
+        "//drivers/TegraGM20BMetal:zeta_colour.cpp",
+    ],
+)
+
 device_test(
     name = "device_pass_layers_test",
     srcs = [
@@ -3172,6 +3188,37 @@ host_test(
         "//drivers/TegraGM20BMetal:surfaces.h",
         "//drivers/TegraGM20BMetal:zcull.h",
         "//drivers/TegraGM20BMetal:zcull_planes.h",
+        "//drivers/TegraGM20BMetal:zeta.h",
+    ],
+    copts = [
+        "-iquote",
+        "drivers/TegraGM20B",
+    ],
+    cxx_std = "c++17",
+    deps = ["//kits/SwitchGM20B:classes"],
+)
+
+# zcull_planes.h and zcull_slots.h: when a pass's STORE_ZCULL is a store, what a range carries to the next, and which
+# slot a job may take
+host_test(
+    name = "zcull_planes_test",
+    srcs = [
+        "zcull_planes_test.cpp",
+        "//drivers/TegraGM20B:TegraGM20BABI.h",
+        "//drivers/TegraGM20B:TegraGM20BClockABI.h",
+        "//drivers/TegraGM20B:TegraGM20BFencePageABI.h",
+        "//drivers/TegraGM20B:TegraGM20BLayout.h",
+        "//drivers/TegraGM20B:TegraGM20BZcullABI.h",
+        "//drivers/TegraGM20BMetal:control_memory.h",
+        "//drivers/TegraGM20BMetal:cpu_completion.h",
+        "//drivers/TegraGM20BMetal:kernel.h",
+        "//drivers/TegraGM20BMetal:lock.h",
+        "//drivers/TegraGM20BMetal:push.h",
+        "//drivers/TegraGM20BMetal:shared_events.h",
+        "//drivers/TegraGM20BMetal:surfaces.h",
+        "//drivers/TegraGM20BMetal:zcull.h",
+        "//drivers/TegraGM20BMetal:zcull_planes.h",
+        "//drivers/TegraGM20BMetal:zcull_slots.h",
         "//drivers/TegraGM20BMetal:zeta.h",
     ],
     copts = [
