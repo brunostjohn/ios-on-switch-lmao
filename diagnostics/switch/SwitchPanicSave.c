@@ -119,12 +119,17 @@ extern unsigned char iso_font[256 * 16];
 #define PMC_MAIN_RST      (1u << 4)
 #define PMC_SCRATCH0_MODES \
     ((1u << 0) | (1u << 1) | (1u << 29) | (1u << 30) | (1u << 31)) /* warmboot, RCM, payload, bootloader, recovery */
-#define TPAN        0x4e415054u                                    /* hekate PMC_SCRATCH37_KERNEL_PANIC_MAGIC */
-#define TMR_PA      UINT64_C(0x60005000)
-#define TMR5_PTV    0x060u
-#define WDT0_CFG    0x100u
-#define WDT0_CMD    0x108u
-#define WDT0_UNLOCK 0x10cu
+#define TPAN                   0x4e415054u                         /* hekate PMC_SCRATCH37_KERNEL_PANIC_MAGIC */
+#define TMR_PA                 UINT64_C(0x60005000)
+#define TMR5_PTV               0x060u
+#define WDT0_CFG               0x100u
+#define WDT0_CMD               0x108u
+#define WDT0_UNLOCK            0x10cu
+#define CAR_PA                 UINT64_C(0x60006000)
+#define CAR_SCLK_BURST_POLICY  0x028u
+#define CAR_SUPER_SCLK_DIVIDER 0x030u
+#define CAR_SCLK_POR           0x10000000u
+#define PSCI_SYSTEM_RESET      UINT64_C(0x84000009)
 
 struct switch_panic_record {
     uint64_t magic;
@@ -152,7 +157,7 @@ struct switch_panic_stackshot {
 static unsigned save_on, hekate_on, reboot_s; /* reboot_s: set by switch_panic_begin (or the early panic) */
 static const unsigned reboot_arg = 0;         /* a fixed reboot delay: it would decide for watchdog panics too */
 static volatile uint8_t *region;              /* write-combined */
-static volatile uint32_t *pmc, *tmr, *screen;
+static volatile uint32_t *pmc, *tmr, *car, *screen;
 static const char *save_off_reason = "not armed";
 static uint32_t last_reset = 0xffffffffu, last_reset_status;
 static int pending, pending_damaged;
@@ -536,13 +541,48 @@ void switch_panic_save_watchdog(unsigned seconds)
     arm_watchdog(seconds);
 }
 
+static uint64_t read_cntvct(void)
+{
+    uint64_t value = 0;
+    __asm__ volatile("isb\nmrs %0, cntvct_el0" : "=r"(value));
+    return value;
+}
+
+/* Architectural counter directly: early panics run before thread_bootstrap() and rtclock_early_init(). */
+static void wait_us(uint64_t us)
+{
+    uint64_t freq = 0;
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(freq));
+    if (!freq)
+        freq = 19200000ULL;
+    const uint64_t ticks = (us / 1000000ULL) * freq + ((us % 1000000ULL) * freq + 999999ULL) / 1000000ULL;
+    const uint64_t start = read_cntvct();
+    while (read_cntvct() - start < ticks)
+        __asm__ volatile("yield" ::: "memory");
+}
+
 static void __attribute__((noreturn)) pmc_reset(void)
 {
     pmc[PMC_SCRATCH0 / 4] = pmc[PMC_SCRATCH0 / 4] & ~PMC_SCRATCH0_MODES; /* no warmboot, RCM or hekate mode request */
     drain();
+    /* Switchroot ATF resets SCLK_BURST_POLICY to POR (CLKM) before PMC_MAIN_RST; resetting while SCLK runs on PLLP
+     * hangs Tegra210/T210B01. Fall back to the same CAR reset + PMC_MAIN_RST if the SMC returns. */
+    register uint64_t x0 __asm__("x0") = PSCI_SYSTEM_RESET;
+    __asm__ volatile("smc #0"
+                     : "+r"(x0)
+                     :
+                     : "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
+                       "x16", "x17", "memory");
+    if (car) {
+        car[CAR_SCLK_BURST_POLICY / 4] = CAR_SCLK_POR;
+        car[CAR_SUPER_SCLK_DIVIDER / 4] = 0;
+        drain();
+        wait_us(2);
+    }
     pmc[PMC_CNTRL / 4] = pmc[PMC_CNTRL / 4] | PMC_MAIN_RST;
+    drain();
     for (;;)
-        __asm__ volatile("wfe" ::: "memory");
+        __asm__ volatile("wfi" ::: "memory");
 }
 
 /* A record a panic sealed, at region. */
@@ -574,6 +614,7 @@ void switch_panic_save_init(void)
     }
     /* Always: a watchdog panic resets even with the panic screen held. */
     tmr = (volatile uint32_t *)ml_io_map((vm_offset_t)TMR_PA, 4096);
+    car = (volatile uint32_t *)ml_io_map((vm_offset_t)CAR_PA, 4096);
     region = (volatile uint8_t *)ml_io_map_wcomb((vm_offset_t)REGION_PA, REGION_BYTES);
     if (!pmc || !region || !tmr) {
         region = NULL;
@@ -746,6 +787,7 @@ void switch_panic_save_early(const char *line, unsigned long caller, volatile ui
     region = ramoops;
     screen = fb;
     pmc = pmc_page;
+    car = (volatile uint32_t *)(uintptr_t)CAR_PA;
     save_on = 1;
     begun = 1;
     screen_taken = fb != NULL;
@@ -779,11 +821,7 @@ void switch_panic_save_early(const char *line, unsigned long caller, volatile ui
         drawz(ROWS - 1, ROWS, status, SWITCH_GREEN);
         drain();
     }
-    uint64_t deadline = 0;
-    nanoseconds_to_absolutetime((uint64_t)reboot_s * 1000000000ULL, &deadline);
-    deadline += mach_absolute_time();
-    while (mach_absolute_time() < deadline)
-        __asm__ volatile("yield" ::: "memory");
+    wait_us((uint64_t)reboot_s * 1000000ULL);
     pmc_reset();
 }
 
@@ -862,7 +900,8 @@ const char *switch_panic_save_pending(uint32_t *bytes, char *path, size_t path_b
         os_log(OS_LOG_DEFAULT,
                "SwitchPanicSave: armed (%u MiB at %#llx, warm reset %u s after a panic), last reset %s, no saved "
                "panic",
-               REGION_BYTES >> 20, (unsigned long long)REGION_PA, reboot_s, last_reset < 8 ? resets[last_reset] : "?");
+               REGION_BYTES >> 20, (unsigned long long)REGION_PA, reboot_arg ? reboot_arg : SCREEN_REBOOT_S,
+               last_reset < 8 ? resets[last_reset] : "?");
         return NULL;
     }
     char when[32];
