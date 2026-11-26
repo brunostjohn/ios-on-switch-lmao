@@ -201,7 +201,9 @@ static int submitBridge(const switch_gpu_backing_token *tokens, uint32_t count,
 		}
 		switch_gpu_chan_submit_leave();
 	}
+#if TGM_STATS
 	const bool consumerJobless = !error && jobless && assigns;
+#endif
 	if (error) {
 		releaseLocked(job);
 	} else {
