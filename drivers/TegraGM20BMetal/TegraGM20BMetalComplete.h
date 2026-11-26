@@ -94,8 +94,8 @@ public:
     bool library(uint32_t type, const std::string &bytes, MadeLibrary &out, std::string &failure, bool &refused);
 
     void backgroundKernel(std::function<void()> work);
-    // Whether every barrier twin asked in the background (askTwin) was attached or dropped within `ns`: what a test waits
-    // for before it tears down the compiler and store it serves the device with
+    // Whether every form asked in the background (askForms: barrier twins, full forms) was attached or dropped within
+    // `ns`: what a test waits for before it tears down the compiler and store it serves the device with
     bool settleTwins(uint64_t ns);
     void trim();
 
@@ -137,12 +137,18 @@ private:
     // `qos`: the asker's class, which the record is placed at (answer_class.h)
     void place(const Ask &a, const CacheKey &key, std::shared_ptr<const RuntimeRecord> record, uint32_t qos,
                std::shared_ptr<Pending> pending);
-    // TegraGM20BMetalCompleteRemote.mm: storage form `made`'s barrier twin, as Device::pipeline gives a pack state its
-    // own: from the store, else asked of the compiler at the background class, so no creation waits for it; attached to
-    // `made` once placed (draws load the slot with acquire), and asked once per pipeline
-    void askTwin(const Ask &a, const CacheKey &k, Pipeline *made);
-    void twinOf(const Ask &a, const CacheKey &k, Pipeline *made);
-    void attachTwin(Pipeline *made, const RuntimeRecord &record, bool caTransform);
+    // TegraGM20BMetalCompleteForms.mm: what a pack would give `made`, placed of `record`, beside it: a storage form's
+    // barrier twin (RequestForm::Barrier, as Device::pipeline gives a pack state its own), and the split and program
+    // variants of its full form (RequestForm::Full) where record's facts say that form adds them. Each from the store,
+    // else asked of the compiler at the background class, so no creation waits for it; attached to `made` once made
+    // (draws load what they read of it with acquire), and asked once per pipeline and form
+    void askForms(const Ask &a, const CacheKey &k, Pipeline *made, const RuntimeRecord &record);
+    void formOf(const Ask &a, const CacheKey &k, Pipeline *made, RequestForm form);
+    void attachForm(Pipeline *made, const RuntimeRecord &record, bool caTransform, RequestForm form);
+    // The pack key the compiler makes `r`'s record under (TegraGM20BMetalCompileRequest.mm), which is this process's
+    // own; a barrier twin's its own beside it, so Device::addRecord files the twin apart from its state, and a full
+    // form's its state's, so Device::attachFullForm finds the state
+    static std::string packKeyOf(const CompileRequest &r);
 
     struct Kernel {
         gm20b::Mutex lock;
@@ -155,13 +161,13 @@ private:
     uint64_t stack_;
     dispatch_queue_t queue_, persistenceQueue_;
     dispatch_group_t pending_;
-    dispatch_group_t twins_;  // the barrier twins asked in the background (askTwin), which ~Completion waits for too
+    dispatch_group_t forms_;  // the forms asked in the background (askForms), which ~Completion waits for too
     std::atomic<bool> stopping_{false};
     gm20b::Mutex kernelLock_;  // map membership only; each kernel owns its single-flight lock
-    // the pipelines whose twins were asked: creation threads and the answer queue ask at once, each once per storage
-    // form's creation, never at a draw
-    gm20b::Mutex twinLock_;
-    std::set<const Pipeline *> twinsAsked_;
+    // the pipelines and forms asked: creation threads and the answer queue ask at once, each once per state's creation,
+    // never at a draw
+    gm20b::Mutex formLock_;
+    std::set<std::pair<const Pipeline *, RequestForm>> formsAsked_;
     std::map<uint64_t, std::shared_ptr<Kernel>> kernels_;
 
     std::shared_ptr<Remote> remote_;

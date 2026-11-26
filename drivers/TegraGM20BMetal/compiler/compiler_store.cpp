@@ -170,13 +170,14 @@ Store::Put Store::put(const gm20b::Digest &name, const std::string &entry)
 }
 
 Store::Put Store::put(const gm20b::Digest &name, const gm20b::CacheKey &key, const std::string &entry,
-                      gm20b::Digest &at)
+                      gm20b::Digest &at, const std::function<bool(const std::string &held)> &keep)
 {
     std::lock_guard<std::mutex> l(lock_);
     if (entry.size() > UINT32_MAX)
         return Put::Failed;
     std::string held;
-    findLocked(name, key, held, at);
+    if (findLocked(name, key, held, at) && keep && keep(held))
+        return Put::Kept;
     switch (writer_.put(at.data(), reinterpret_cast<const uint8_t *>(entry.data()), uint32_t(entry.size()), true)) {
     case switch_seed_pack::StoreWriter::Put::Added:
         return Put::Added;

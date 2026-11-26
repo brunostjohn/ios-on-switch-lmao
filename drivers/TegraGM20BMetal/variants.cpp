@@ -6,6 +6,7 @@
 #include "creation_cost.h"
 #include "gpu.h"
 #include "pack_window.h"
+#include "record.h"
 #include "set_reads.h"
 #include "slm.h"
 #include "variants.h"
@@ -30,6 +31,51 @@ void attachVariantSplit(Device &dev, const Pack &pack, Pipeline &made, const Pac
         source.caTransform = made.caTransform;
         (dev.*offer)(made, std::move(source));
     }
+}
+
+// Each combination of `t`'s variants some draw's facts select, but the state's own: `make(vertex, fragment, its index in
+// chosen)`, a variant's index or its stage's count for the stage's own program; false at the first `make` that fails
+template <typename Make> bool eachCombination(const VariantTable &t, uint32_t chipFacts, Make make)
+{
+    for (uint32_t v = 0; v <= t.count[0]; v++)
+        for (uint32_t f = 0; f <= t.count[1]; f++) {
+            if (v == t.count[0] && f == t.count[1])
+                continue;
+            const uint32_t facts = chipFacts | (v < t.count[0] ? t.variants[0][v].assume : 0u) |
+                                   (f < t.count[1] ? t.variants[1][f].assume : 0u);
+            if (chooseVariant(t.variants[0], t.count[0], facts) != v ||
+                chooseVariant(t.variants[1], t.count[1], facts) != f)
+                continue;
+            if (!make(v, f, v * (t.count[1] + 1u) + f))
+                return false;
+        }
+    return true;
+}
+
+// Pack pipeline `pl`'s table of record `pp`'s variants, every choice `pl` until its combinations are placed; null: none
+std::unique_ptr<VariantTable> packTable(const Pack &pack, Pipeline &pl, const PackPipeline &pp)
+{
+    uint32_t count[2] = {};
+    const PackVariant *variants[2] = {pack.variants(pp, 0, count[0]), pack.variants(pp, 1, count[1])};
+    if (!count[0] && !count[1])
+        return nullptr;
+    auto t = std::make_unique<VariantTable>();
+    for (uint32_t s = 0; s < 2; s++) {
+        t->variants[s] = variants[s];
+        t->count[s] = uint8_t(count[s]);
+    }
+    pl.turnedVariant = count[1] && (variants[1][0].assume & AssumeTurned);
+    t->chosen.assign((count[0] + 1) * (count[1] + 1), &pl);
+    return t;
+}
+
+// lock_ held, or `pl` not yet published. Once only: a draw may hold the table it loaded for as long as it draws.
+void publishVariants(Pipeline &pl, std::unique_ptr<VariantTable> t)
+{
+    if (pl.ownedVariantTable)
+        return;
+    pl.ownedVariantTable = std::move(t);
+    __atomic_store_n(&pl.variantTable, pl.ownedVariantTable.get(), __ATOMIC_RELEASE);
 }
 
 }  // namespace
@@ -60,96 +106,135 @@ bool Device::placeRequiredVariants(const PackPipeline &pp, uint64_t &slm)
     return true;
 }
 
+Pipeline &Device::buildCombination(VariantTable &t, const Pipeline &pl, const PackPipeline &pp,
+                                   const PlacedProgram (&placed)[2], const bool (&variant)[2], const uint32_t *blob,
+                                   const char *keyString, const uint32_t *spills, const uint32_t *far,
+                                   const PackSegment *prebuilt)
+{
+    Pipeline &made = *t.pipelines.emplace_back(std::make_unique<Pipeline>());
+    SWITCH_METAL_CREATION_COUNT(variants, 1);
+    build(made, pp, placed[0], placed[1], blob, keyString, pl.caTransform, spills, far, nullptr, prebuilt);
+    for (uint32_t s = 0; s < 2; s++)
+        if (variant[s])
+            made.memoryEntries |= placedSetReads(placed[s].header, *placed[s].record, made.entries);
+    made.restore = pl.restore;
+    made.strideTwin = pl.strideTwin;
+    return made;
+}
+
 // lock_ held: pack pipeline `pl` of record `pp`, just built, learns its stages' variants
 void Device::offerVariants(Pipeline &pl, const PackPipeline &pp, uint32_t recIndex)
 {
-    uint32_t count[2] = {};
-    for (uint32_t s = 0; s < 2; s++)
-        pl.variants[s] = pack_.variants(pp, s, count[s]);
-    if (!count[0] && !count[1])
+    std::unique_ptr<VariantTable> t = packTable(pack_, pl, pp);
+    if (!t)
         return;
-    pl.variantCount[0] = uint8_t(count[0]);
-    pl.variantCount[1] = uint8_t(count[1]);
-    pl.turnedVariant = count[1] && (pl.variants[1][0].assume & AssumeTurned);
-    pl.chosen.assign((count[0] + 1) * (count[1] + 1), &pl);
-    for (uint32_t v = 0; v <= count[0]; v++)
-        for (uint32_t f = 0; f <= count[1]; f++) {
-            if (v == count[0] && f == count[1])
-                continue;
-            const uint32_t facts = pack_.header()->chipFacts | (v < count[0] ? pl.variants[0][v].assume : 0u) |
-                                   (f < count[1] ? pl.variants[1][f].assume : 0u);
-            if (chooseVariant(pl.variants[0], count[0], facts) != v ||
-                chooseVariant(pl.variants[1], count[1], facts) != f)
-                continue;
-            const uint32_t comboIndex = v * (count[1] + 1u) + f;
-            pl.chosen[comboIndex] = placeVariant(
-                pl,
-                {v < count[0] ? pl.variants[0][v].program : pp.vs, f < count[1] ? pl.variants[1][f].program : pp.fs},
-                recIndex, comboIndex);
-        }
+    eachCombination(*t, pack_.header()->chipFacts, [&](uint32_t v, uint32_t f, uint32_t combo) {
+        t->chosen[combo] = placeVariant(
+            pl, *t,
+            {v < t->count[0] ? t->variants[0][v].program : pp.vs, f < t->count[1] ? t->variants[1][f].program : pp.fs},
+            recIndex, combo);
+        return true;
+    });
+    publishVariants(pl, std::move(t));
 }
 
 bool Device::offerVariantsLockFree(Pipeline &pl, const PackPipeline &pp, uint32_t recIndex)
 {
-    uint32_t count[2] = {};
-    for (uint32_t s = 0; s < 2; s++)
-        pl.variants[s] = pack_.variants(pp, s, count[s]);
-    if (!count[0] && !count[1])
+    std::unique_ptr<VariantTable> t = packTable(pack_, pl, pp);
+    if (!t)
         return true;
-    pl.variantCount[0] = uint8_t(count[0]);
-    pl.variantCount[1] = uint8_t(count[1]);
-    pl.turnedVariant = count[1] && (pl.variants[1][0].assume & AssumeTurned);
-    pl.chosen.assign((count[0] + 1) * (count[1] + 1), &pl);
-    for (uint32_t v = 0; v <= count[0]; v++)
-        for (uint32_t f = 0; f <= count[1]; f++) {
-            if (v == count[0] && f == count[1])
-                continue;
-            const uint32_t facts = pack_.header()->chipFacts | (v < count[0] ? pl.variants[0][v].assume : 0u) |
-                                   (f < count[1] ? pl.variants[1][f].assume : 0u);
-            if (chooseVariant(pl.variants[0], count[0], facts) != v ||
-                chooseVariant(pl.variants[1], count[1], facts) != f)
-                continue;
-            const uint32_t comboIndex = v * (count[1] + 1u) + f;
-            const PackSegment *prebuilt = prebuiltVariantSegment(recIndex, comboIndex);
-            if (!prebuilt)
-                return false;
-            const std::array<uint32_t, 2> index = {v < count[0] ? pl.variants[0][v].program : pp.vs,
-                                                   f < count[1] ? pl.variants[1][f].program : pp.fs};
-            PlacedProgram placed[2] = {{}, noPixelProgram()};
-            if (!placePackWindowProgram(index[0], placed[0]) ||
-                (pixelStage(pp) && !placePackWindowProgram(index[1], placed[1])))
-                return false;
-            if (!slmReady(std::max(slmPerWarpOfHeader(placed[0].header), slmPerWarpOfHeader(placed[1].header))))
-                return false;
-            auto owned = std::make_unique<Pipeline>();
-            Pipeline &made = *owned;
-            SWITCH_METAL_CREATION_COUNT(variants, 1);
-            build(made, pp, placed[0], placed[1], pack_.section<uint32_t>(PackBlob) + pp.blob,
-                  pack_.string(pp.keyString), pl.caTransform, pack_.spills(pp), pack_.far(pp), nullptr, prebuilt);
-            for (uint32_t s = 0; s < 2; s++)
-                if (index[s] != (s ? pp.fs : pp.vs))
-                    made.memoryEntries |= placedSetReads(placed[s].header, *placed[s].record, made.entries);
-            made.restore = pl.restore;
-            made.strideTwin = pl.strideTwin;
-            attachVariantSplit(*this, pack_, made, pp, placed[0], index[1], &Device::offerSplit);
-            pl.chosen[comboIndex] = owned.get();
-            pl.ownedVariants.push_back(std::move(owned));
-        }
+    const bool placedAll = eachCombination(*t, pack_.header()->chipFacts, [&](uint32_t v, uint32_t f, uint32_t combo) {
+        const PackSegment *prebuilt = prebuiltVariantSegment(recIndex, combo);
+        if (!prebuilt)
+            return false;
+        const std::array<uint32_t, 2> index = {v < t->count[0] ? t->variants[0][v].program : pp.vs,
+                                               f < t->count[1] ? t->variants[1][f].program : pp.fs};
+        PlacedProgram placed[2] = {{}, noPixelProgram()};
+        if (!placePackWindowProgram(index[0], placed[0]) ||
+            (pixelStage(pp) && !placePackWindowProgram(index[1], placed[1])))
+            return false;
+        if (!slmReady(std::max(slmPerWarpOfHeader(placed[0].header), slmPerWarpOfHeader(placed[1].header))))
+            return false;
+        const bool variant[2] = {index[0] != pp.vs, index[1] != pp.fs};
+        Pipeline &made = buildCombination(*t, pl, pp, placed, variant, pack_.section<uint32_t>(PackBlob) + pp.blob,
+                                          pack_.string(pp.keyString), pack_.spills(pp), pack_.far(pp), prebuilt);
+        attachVariantSplit(*this, pack_, made, pp, placed[0], index[1], &Device::offerSplit);
+        t->chosen[combo] = &made;
+        return true;
+    });
+    if (!placedAll)
+        return false;
+    publishVariants(pl, std::move(t));
     return true;
 }
 
-// The pipeline a draw of `pl` whose facts are `facts` draws with: `pl` itself, or the one made of the variants they select
-Pipeline *Device::variant(Pipeline &pl, uint32_t facts)
+// lock_ held: runtime record `r`'s program variants given to its state `c`, whose record is `r` or of its layout (its full
+// form, Device::attachFullForm): each combination a draw's facts select built over c's registers and entries. Its turned
+// variant is no choice of the table's (TurnedSource), and only a state of a vertex and a fragment stage is given any, as
+// direct.cpp programVariants makes them.
+void Device::offerCompletedVariants(Completed &c, const RuntimeRecord &r)
 {
-    if (pl.chosen.empty())
-        return &pl;
-    facts |= pack_.header()->chipFacts;
-    const uint32_t v = chooseVariant(pl.variants[0], pl.variantCount[0], facts);
-    const uint32_t f = chooseVariant(pl.variants[1], pl.variantCount[1], facts);
-    return pl.chosen[v * (pl.variantCount[1] + 1u) + f];
+    if (c.pipeline.ownedVariantTable || !pixelStage(c.record) || tessellates(c.record))
+        return;
+    auto t = std::make_unique<VariantTable>();
+    t->runtime = true;
+    for (uint32_t i = 0; i < r.variants.size(); i++) {
+        const RuntimeRecord::Variant &v = r.variants[i];
+        std::vector<PackVariant> &stage = t->runtimeVariants[i < r.pipeline.variantCount[0] ? 0 : 1];
+        if (!(v.assume & AssumeTurned) && v.program.image.size() >= sizeof CompletedProgram::header &&
+            stage.size() < UINT8_MAX)
+            stage.push_back({v.assume, i});
+    }
+    if (t->runtimeVariants[0].empty() && t->runtimeVariants[1].empty())
+        return;
+    for (uint32_t s = 0; s < 2; s++) {
+        t->variants[s] = t->runtimeVariants[s].data();
+        t->count[s] = uint8_t(t->runtimeVariants[s].size());
+    }
+    t->chosen.assign((t->count[0] + 1) * (t->count[1] + 1), &c.pipeline);
+    const uint32_t *spills =
+        c.spill.size() == c.record.spillWords[0] + c.record.spillWords[1] ? c.spill.data() : nullptr;
+    const uint32_t *far = c.far.empty() ? nullptr : c.far.data();
+    eachCombination(*t, pack_.header()->chipFacts, [&](uint32_t v, uint32_t f, uint32_t combo) {
+        const uint32_t choice[2] = {v, f};
+        PlacedProgram placed[2] = {c.vs, c.fs};
+        bool variant[2] = {};
+        for (uint32_t s = 0; s < 2; s++) {
+            if (choice[s] == t->count[s])
+                continue;
+            variant[s] = true;
+            if (!placeCompleted(r.variants[t->variants[s][choice[s]].program].program, placed[s])) {
+                stats.heapFull++;
+                return true;
+            }
+        }
+        if (!slmNeed(std::max(slmPerWarpOfHeader(placed[0].header), slmPerWarpOfHeader(placed[1].header)))) {
+            stats.heapFull++;
+            return true;
+        }
+        t->chosen[combo] = &buildCombination(*t, c.pipeline, c.record, placed, variant, c.blob.data(),
+                                             c.keyString.c_str(), spills, far, nullptr);
+        return true;
+    });
+    publishVariants(c.pipeline, std::move(t));
 }
 
-Pipeline *Device::placeVariant(Pipeline &pl, const std::array<uint32_t, 2> &index, uint32_t recIndex,
+Pipeline *Device::variant(Pipeline &pl, uint32_t facts)
+{
+    return variant(pl, __atomic_load_n(&pl.variantTable, __ATOMIC_ACQUIRE), facts);
+}
+
+Pipeline *Device::variant(Pipeline &pl, const VariantTable *t, uint32_t facts)
+{
+    if (!t || (t->runtime && (facts & AssumeTurned)))
+        return &pl;
+    facts |= pack_.header()->chipFacts;
+    const uint32_t v = chooseVariant(t->variants[0], t->count[0], facts);
+    const uint32_t f = chooseVariant(t->variants[1], t->count[1], facts);
+    return t->chosen[v * (t->count[1] + 1u) + f];
+}
+
+Pipeline *Device::placeVariant(Pipeline &pl, VariantTable &t, const std::array<uint32_t, 2> &index, uint32_t recIndex,
                                uint32_t comboIndex)
 {
     const PackPipeline &pp = *pl.rec;
@@ -162,21 +247,12 @@ Pipeline *Device::placeVariant(Pipeline &pl, const std::array<uint32_t, 2> &inde
     }
     if (!placedBoth)
         return &pl;
-    const PackSegment *prebuilt = prebuiltVariantSegment(recIndex, comboIndex);
-    auto owned = std::make_unique<Pipeline>();
-    Pipeline &made = *owned;
-    SWITCH_METAL_CREATION_COUNT(variants, 1);
-    build(made, pp, placed[0], placed[1], pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString),
-          pl.caTransform, pack_.spills(pp), pack_.far(pp), nullptr, prebuilt);
-    for (uint32_t s = 0; s < 2; s++)
-        if (index[s] != (s ? pp.fs : pp.vs))
-            made.memoryEntries |= placedSetReads(placed[s].header, *placed[s].record, made.entries);
-    made.restore = pl.restore;
-    made.strideTwin = pl.strideTwin;
+    const bool variant[2] = {index[0] != pp.vs, index[1] != pp.fs};
+    Pipeline &made = buildCombination(t, pl, pp, placed, variant, pack_.section<uint32_t>(PackBlob) + pp.blob,
+                                      pack_.string(pp.keyString), pack_.spills(pp), pack_.far(pp),
+                                      prebuiltVariantSegment(recIndex, comboIndex));
     attachVariantSplit(*this, pack_, made, pp, placed[0], index[1], &Device::offerSplit);
-    Pipeline *result = owned.get();
-    pl.ownedVariants.push_back(std::move(owned));
-    return result;
+    return &made;
 }
 
 bool Device::placePackWindowProgram(uint32_t index, PlacedProgram &out)
@@ -205,11 +281,11 @@ bool Device::placePackProgram(uint32_t index, PlacedProgram &out)
     return true;
 }
 
-// The facts of the draw's bindings that `pl`'s variants may assume (pack.h PackAssumption bits 0-15), worked out again only
-// when a binding changed
-uint32_t RenderEncoder::bindingFacts(const Pipeline &pl)
+// The facts of the draw's bindings that `pl`'s variants (`variants`, as the draw loaded them) may assume (pack.h
+// PackAssumption bits 0-15), worked out again only when a binding changed
+uint32_t RenderEncoder::bindingFacts(const Pipeline &pl, const VariantTable *variants)
 {
-    if (pl.chosen.empty())
+    if (!variants)
         return 0;
     if (factsPipeline_ == &pl && factsRevision_ == bindingRevision_)
         return facts_;

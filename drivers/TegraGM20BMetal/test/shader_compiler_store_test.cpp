@@ -189,6 +189,43 @@ TEST_F(SharedStore, AContentsEntryIsFoundAndReplacedUnderWhicheverCandidateHolds
     EXPECT_TRUE(store.find(name, keyOf(9), bytes, at));
 }
 
+// A put told to keep what is there leaves an entry of its content as it is, decided under the store's lock: a plain
+// compile racing a full form's filing (compiler_service.mm filedAsPlain) can't put the plain record back over the full
+// one. Another content at the name is not asked about; the put goes to the next candidate.
+TEST_F(SharedStore, AKeptEntryOfTheContentStaysWhereAPutIsToldToKeepIt)
+{
+    using switch_compiler::Store;
+    Store store;
+    open(store);
+    const gm20b::Digest name = digest(0x54);
+    gm20b::Digest at{};
+    std::string bytes;
+    const std::string full = entryOf(1), plain = gm20b::encodeEntry(keyOf(1), nullptr, "plain");
+    ASSERT_EQ(store.put(name, keyOf(1), full, at), Store::Put::Added);
+    std::vector<std::string> asked;
+    const auto keep = [&](const std::string &held) {
+        asked.push_back(held);
+        return true;
+    };
+    EXPECT_EQ(store.put(name, keyOf(1), plain, at, keep), Store::Put::Kept);
+    EXPECT_EQ(at, name);
+    ASSERT_TRUE(store.find(name, keyOf(1), bytes, at));
+    EXPECT_EQ(bytes, full);
+    ASSERT_EQ(asked.size(), 1u);
+    EXPECT_EQ(asked[0], full);
+    EXPECT_EQ(store.put(name, keyOf(1), plain, at,
+                        [](const std::string &) {
+                            return false;
+                        }),
+              Store::Put::Added);
+    ASSERT_TRUE(store.find(name, keyOf(1), bytes, at));
+    EXPECT_EQ(bytes, plain);
+    asked.clear();
+    ASSERT_EQ(store.put(name, keyOf(2), entryOf(2), at, keep), Store::Put::Added);
+    EXPECT_EQ(at, gm20b::candidateName(name, 1));
+    EXPECT_TRUE(asked.empty());
+}
+
 // A made record's program slots of a page or more land on pages of their own, found by their bytes' name, ahead of the
 // record: what a client runs in place from its mapping
 TEST_F(SharedStore, ARecordsLargeSlotsArePublishedOnPagesOfTheirOwn)

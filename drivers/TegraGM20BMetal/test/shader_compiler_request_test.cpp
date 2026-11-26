@@ -583,8 +583,35 @@ TEST(CompileRequest, ABarrierTwinIsItsStatesKeyInAStoreEntryOfItsOwn)
     kernel.stages = {stage("k", "kernel_fn")};
     EXPECT_FALSE(gm20b::decodeRequest(gm20b::encodeRequest(kernel), back));
     std::string bytes = gm20b::encodeRequest(twin);
-    bytes[8 + 8 + 1] = 3;
+    bytes[8 + 8 + 1] = uint8_t(gm20b::RequestForm::BarrierFull) + 1;
     EXPECT_FALSE(gm20b::decodeRequest(bytes, back));
+}
+
+// A full form (the state's, Full, or its twin's, BarrierFull) is an entry of its own, and is filed besides under the
+// content its plain form keys to, which is what the state's or twin's own lookup reads
+TEST(CompileRequest, AFullFormIsAnEntryOfItsOwnAndFiledUnderItsPlainFormsContent)
+{
+    switch_compiler::SystemLibraries system;
+    const std::pair<gm20b::RequestForm, gm20b::RequestForm> forms[] = {
+        {gm20b::RequestForm::Full, gm20b::RequestForm::Primary},
+        {gm20b::RequestForm::BarrierFull, gm20b::RequestForm::Barrier}};
+    for (const auto &[full, plain] : forms) {
+        gm20b::CompileRequest r = renderRequest(), q = r;
+        r.form = full;
+        q.form = plain;
+        gm20b::CompileRequest back;
+        r.key = runtimeKey(r).key;
+        ASSERT_TRUE(gm20b::decodeRequest(gm20b::encodeRequest(r), back));
+        EXPECT_EQ(back.form, full);
+        const switch_compiler::Prepared f = prepared(r, system), p = prepared(q, system);
+        EXPECT_NE(f.content.key, p.content.key);
+        EXPECT_EQ(f.primaryContent.key, p.content.key);
+        EXPECT_EQ(f.primaryName, p.name);
+        EXPECT_EQ(gm20b::withoutFull(full), plain);
+        EXPECT_TRUE(gm20b::fullForm(full));
+        EXPECT_FALSE(gm20b::fullForm(plain));
+        EXPECT_TRUE(p.primaryContent.key.empty());
+    }
 }
 
 // A state of no fragment function (RenderBox's path_edges) is asked by its vertex stage alone: the request round-trips, keys
@@ -670,9 +697,11 @@ TEST(CompileRequest, AReflectionIsKeyedAsItsStateAndNamedApart)
     gm20b::CompileRequest limits = compute;
     limits.kernel.maxThreads = 256;
     EXPECT_FALSE(switch_compiler::prepare(gm20b::encodeRequest(limits), kStack, system, p, why));
-    gm20b::CompileRequest split = compute;
-    split.form = gm20b::RequestForm::Split;
-    EXPECT_FALSE(gm20b::decodeRequest(gm20b::encodeRequest(split), back));
+    for (const gm20b::RequestForm form : {gm20b::RequestForm::Full, gm20b::RequestForm::BarrierFull}) {
+        gm20b::CompileRequest full = compute;
+        full.form = form;
+        EXPECT_FALSE(gm20b::decodeRequest(gm20b::encodeRequest(full), back));
+    }
 }
 
 TEST(CompileRequest, AKernelIsKeyedByItsFunctionAndNamedByItsDispatch)

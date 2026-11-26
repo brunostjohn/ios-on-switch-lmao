@@ -174,8 +174,10 @@ public:
         return channelError_;
     }
 
-    // the pipeline a draw of `pl` with binding facts `facts` (pack.h PackAssumption) draws with (variants.cpp)
+    // the pipeline a draw of `pl` with binding facts `facts` (pack.h PackAssumption) draws with (variants.cpp), of its
+    // variant table as loaded now, or as the draw loaded it (`table`)
     Pipeline *variant(Pipeline &pl, uint32_t facts);
+    Pipeline *variant(Pipeline &pl, const VariantTable *table, uint32_t facts);
 
     const Pack &pack() const
     {
@@ -229,6 +231,10 @@ public:
     // A state the runtime made a record of (record.h), drawn from then on as the pack's are; null: its programs find no room
     // in the heap or its samplers none in the header pool (`why`)
     Pipeline *addRecord(const RuntimeRecord &r, bool caTransform, std::string &why, bool *retry = nullptr);
+    // The full form (RequestForm::Full) of a state addRecord placed, by its keyHash: its split and program variants given
+    // to that state's pipeline, which may be drawing. False: no such state, or `full` is of another layout than its record
+    // (its registers, far block, argument tables or programs), and nothing is given.
+    bool attachFullForm(const RuntimeRecord &full);
     // `pl`'s turned variant (TurnedSource) at a turned draw, built at the first; null where the heap or local memory has no
     // room for it: that draw alone is refused (one error line), and the next turned draw places it afresh
     Pipeline *makeTurned(Pipeline &pl);
@@ -1699,8 +1705,14 @@ private:
     void offerVariants(Pipeline &pl, const PackPipeline &pp, uint32_t recIndex);
     bool offerVariantsLockFree(Pipeline &pl, const PackPipeline &pp, uint32_t recIndex);
     bool placeRequiredVariants(const PackPipeline &pp, uint64_t &slm);
-    Pipeline *placeVariant(Pipeline &pl, const std::array<uint32_t, 2> &programs, uint32_t recIndex,
+    Pipeline *placeVariant(Pipeline &pl, VariantTable &t, const std::array<uint32_t, 2> &programs, uint32_t recIndex,
                            uint32_t comboIndex);
+    // A pipeline of `t` (VariantTable::pipelines) of `pl`'s programs `placed`: the set reads of each stage `variant` names
+    // added, `pl`'s restore and stride twin
+    Pipeline &buildCombination(VariantTable &t, const Pipeline &pl, const PackPipeline &pp,
+                               const PlacedProgram (&placed)[2], const bool (&variant)[2], const uint32_t *blob,
+                               const char *keyString, const uint32_t *spills, const uint32_t *far,
+                               const PackSegment *prebuilt);
     bool placePackProgram(uint32_t index, PlacedProgram &out);
     bool placePackWindowProgram(uint32_t index, PlacedProgram &out);
     std::deque<Pipeline> reachPipelines_;
@@ -1725,7 +1737,8 @@ private:
     // constexprMapped_[index] from its header `words` (lock_ held, or the device not yet open); false: no room
     bool placeConstexprMaps(uint32_t index, const uint32_t words[8]);
 
-    // the states the runtime made (addRecord), never removed: Pipeline::rec points into them
+    // the states the runtime made (addRecord), never removed: Pipeline::rec points into them. What attachFullForm reads
+    // of them is written once, before the state is published.
     struct Completed {
         PackPipeline record;
         std::string keyString;
@@ -1733,10 +1746,16 @@ private:
         PackProgram programs[2];
         Pipeline pipeline, turned;
         TurnedSource turnedSource;
+        PlacedProgram vs, fs;
+        // its record's layout as given: its blob before the extras, its far block before its constexpr samplers were
+        // renumbered as the device's, its programs' heap slot keys (programSlotKey)
+        uint32_t recordBlobDwords = 0;
+        std::vector<uint32_t> recordFar;
+        std::string programKeys[2];
     };
 
     std::deque<Completed> completedStore_;
-    std::unordered_map<uint64_t, Pipeline *> completed_;
+    std::unordered_map<uint64_t, Completed *> completed_;
     std::map<std::array<uint32_t, 8>, uint8_t>
         completedSamplers_;  // their constexpr samplers' headers, by constexprTsc_ index
 
@@ -1756,6 +1775,7 @@ private:
     bool constexprSampler(const std::array<uint32_t, 8> &words, uint32_t &index);
 
     void offerCompletedSplit(Completed &c, const RuntimeRecord &r, const PlacedProgram &vs, bool caTransform);
+    void offerCompletedVariants(Completed &c, const RuntimeRecord &r);
     bool takeTsc(uint32_t &tsc);
     // A sampler header slot holding `words` (lock_): one slot for every sampler's compare form and address-map variant of
     // the same 32 bytes, given back when its last user drops it; false: the table is full

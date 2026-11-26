@@ -211,6 +211,43 @@ void reflectionsAsMetal()
     printf("%zu compute reflections compared\n", states.size());
 }
 
+// The sample's render states asked in their full form (RequestForm::Full), as a client asks once a state it made is
+// placed: what each adds over its primary record (a fragment program's split, a program variant), written as
+// `full.bin`. Each made record is also headed as its primary content, so the state's own lookup reads it.
+void fullForms()
+{
+    switch_compiler::Engine engine;
+    std::string why;
+    ASSERT_TRUE(engine.open(0, {compiler_test::emptyPack(dir()), root(), {}}, why)) << why;
+    switch_compiler::SystemLibraries system(root());
+    uint32_t made = 0, split = 0, variants = 0;
+    for (gm20b::CompileRequest r : requests()) {
+        if (r.kind != gm20b::RequestKind::Render)
+            continue;
+        r.form = gm20b::RequestForm::Full;
+        switch_compiler::Prepared p;
+        std::string entry;
+        if (!switch_compiler::prepare(gm20b::encodeRequest(r), 0, system, p, why) ||
+            engine.compile(p, entry, why) != TegraGM20BCompileMade)
+            continue;
+        gm20b::RuntimeRecord record, filed;
+        std::string refusal;
+        ASSERT_EQ(gm20b::decodeEntry(entry, p.content, record, refusal), gm20b::RecordCache::Found::Record);
+        const std::string primary = switch_compiler::asPrimary(p, entry);
+        ASSERT_EQ(gm20b::decodeEntry(primary, p.primaryContent, filed, refusal), gm20b::RecordCache::Found::Record);
+        EXPECT_EQ(filed.variants.size(), record.variants.size());
+        EXPECT_EQ(filed.split, record.split);
+        made++;
+        split += record.split;
+        for (uint32_t i = 0; i < record.variants.size(); ++i)
+            variants += !(record.variants[i].assume & gm20b::AssumeTurned);
+    }
+    printf("%u full forms made: %u split, %u program variants\n", made, split, variants);
+    EXPECT_GT(made, 0u);
+    EXPECT_GT(split, 0u) << "no state of the sample was split in its full form";
+    EXPECT_GT(variants, 0u) << "no state of the sample got a program variant in its full form";
+}
+
 // A render state as a difference names it: its functions and its key's hash
 std::string stateName(const gm20b::CompileRequest &r)
 {
@@ -300,6 +337,12 @@ TEST(CompilerCompileOnly, ARenderStatesReflectionIsMetalsSelectorForSelector)
 {
     ASSERT_FALSE(root().empty());
     switch_ios::test::ExpectPassesInFreshProcess(renderReflectionsAsMetal);
+}
+
+TEST(CompilerCompileOnly, AStatesFullFormHasTheSplitAndVariantsAPackBuildGivesIt)
+{
+    ASSERT_FALSE(root().empty());
+    switch_ios::test::ExpectPassesInFreshProcess(fullForms);
 }
 
 TEST(CompilerCompileOnly, ItMakesARecordOfEveryKindTheSampleAsks)

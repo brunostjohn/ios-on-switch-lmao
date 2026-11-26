@@ -71,10 +71,12 @@ bool bindsAsWhole(const Pipeline &twin, const Pipeline &whole)
 }  // namespace
 
 // A state with argument tables is never split: its twin is built without their words (makeSplit), and the pack keys a
-// split by its fragment program, which a state of other vertex tables may share
+// split by its fragment program, which a state of other vertex tables may share. A state is offered one split at most:
+// draws read its source without the device's lock, and makeSplit may have taken it back for good.
 void Device::offerSplit(Pipeline &pl, SplitSource &&source)
 {
-    if (!usableSplitMetadata(source.rec) || spillEntryOf(*source.pp, 0) || spillEntryOf(*source.pp, 1))
+    if (pl.ownedSplitSource || !usableSplitMetadata(source.rec) || spillEntryOf(*source.pp, 0) ||
+        spillEntryOf(*source.pp, 1))
         return;
     pl.ownedSplitSource = std::make_unique<SplitSource>(std::move(source));
     __atomic_store_n(&pl.splitSource, pl.ownedSplitSource.get(), __ATOMIC_RELEASE);

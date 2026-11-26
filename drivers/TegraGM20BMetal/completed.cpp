@@ -132,7 +132,7 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     std::lock_guard<std::mutex> l(lock_);
     const uint64_t key = r.pipeline.keyHash;
     if (const auto it = completed_.find(key); it != completed_.end())
-        return it->second;
+        return &it->second->pipeline;
     PlacedProgram vs, fs = noPixelProgram(), tessPlaced[2];
     if (!placeCompleted(r.programs[0], vs) || (pixel && !placeCompleted(r.programs[1], fs)) ||
         (tess &&
@@ -147,8 +147,13 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     c.record = r.pipeline;
     c.keyString = r.keyString;
     c.blob = r.blob;
+    c.recordBlobDwords = uint32_t(r.blob.size());
     c.spill = r.spill;
-    c.far = r.far;
+    c.far = c.recordFar = r.far;
+    c.vs = vs;
+    c.fs = fs;
+    for (uint32_t k = 0; k < 2; k++)
+        c.programKeys[k] = programSlotKey(r.programs[k]);
     if (c.far.size() != farWords(entryCount(c.record))) {
         why = "a record whose far entries are not its entries'";
         return nullptr;
@@ -214,8 +219,26 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
         break;
     }
     stored.pipeline.own = isOwnState(key);
-    completed_[key] = &stored.pipeline;
+    offerCompletedVariants(stored, r);
+    completed_[key] = &stored;
     return &stored.pipeline;
+}
+
+bool Device::attachFullForm(const RuntimeRecord &full)
+{
+    std::lock_guard<gm20b::Mutex> l(lock_);
+    const auto it = completed_.find(full.pipeline.keyHash);
+    if (it == completed_.end())
+        return false;
+    Completed &c = *it->second;
+    if (full.blob.size() != c.recordBlobDwords || !std::equal(full.blob.begin(), full.blob.end(), c.blob.begin()) ||
+        full.far != c.recordFar || full.spill != c.spill || programSlotKey(full.programs[0]) != c.programKeys[0] ||
+        programSlotKey(full.programs[1]) != c.programKeys[1])
+        return false;
+    if (full.split && !c.record.storageMask)
+        offerCompletedSplit(c, full, c.vs, c.pipeline.caTransform);
+    offerCompletedVariants(c, full);
+    return true;
 }
 
 Pipeline *Device::makeTurned(Pipeline &pl)

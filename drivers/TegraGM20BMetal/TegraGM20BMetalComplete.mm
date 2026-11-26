@@ -66,7 +66,7 @@ Completion::Completion(Device &device, const char *cacheDir, uint64_t stack, con
       persistenceQueue_(
           dispatch_queue_create("com.brunostjohn.switch.gm20b.kernel-cache",
                                 dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0))),
-      pending_(dispatch_group_create()), twins_(dispatch_group_create())
+      pending_(dispatch_group_create()), forms_(dispatch_group_create())
 {
     const bool writable = cacheDir && *cacheDir && cache_.attach(cacheDir, stack_, kCacheCap);
     if (seedDir && *seedDir)
@@ -106,7 +106,7 @@ Completion::~Completion()
     stopping_.store(true, std::memory_order_release);
     compiler_->drain();
     dispatch_group_wait(pending_, DISPATCH_TIME_FOREVER);
-    dispatch_group_wait(twins_, DISPATCH_TIME_FOREVER);
+    dispatch_group_wait(forms_, DISPATCH_TIME_FOREVER);
     dispatch_sync(persistenceQueue_, ^{
                   });
     compiler_.reset();
@@ -228,7 +228,7 @@ void Completion::place(const Ask &a, const CacheKey &key, std::shared_ptr<const 
         std::string why;
         bool full = false;
         Pipeline *made = device_.addRecord(*record, asked.caTransform, why, &full);
-        askTwin(asked, keptKey, made);
+        askForms(asked, keptKey, made, *record);
         if (!made && full)
             os_log_error(gm20bLog(), "SwitchMetal: %{public}s: the state that needs %016llx fails", why.c_str(),
                          (unsigned long long)keptKey.name());
@@ -280,7 +280,7 @@ Pipeline *Completion::makeNow(Ask a, std::string &failure)
     }
     bool heapFull = false;
     Pipeline *made = device_.addRecord(record, a.caTransform, why, &heapFull);
-    askTwin(a, k, made);
+    askForms(a, k, made, record);
     if (!made)
         failure = why.empty() ? "the state's record could not be placed" : why;
     return made;
@@ -288,7 +288,7 @@ Pipeline *Completion::makeNow(Ask a, std::string &failure)
 
 bool Completion::settleTwins(uint64_t ns)
 {
-    return !dispatch_group_wait(twins_, dispatch_time(DISPATCH_TIME_NOW, int64_t(ns)));
+    return !dispatch_group_wait(forms_, dispatch_time(DISPATCH_TIME_NOW, int64_t(ns)));
 }
 
 void Completion::backgroundKernel(std::function<void()> work)

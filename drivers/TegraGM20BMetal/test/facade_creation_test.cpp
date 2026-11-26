@@ -118,8 +118,8 @@ TEST(GM20BFacadeCreation, NoCompilerAtAllFailsTheCreationByNameWithNoCompileHere
 // Host tests build the release arm of anything under SWITCH_DEBUG (undefined here): the one behaviour above is both builds'
 TEST(GM20BFacadeCreation, DebugAndReleaseClientsCompleteStatesAlike)
 {
-    for (const char *file :
-         {"../TegraGM20BMetalComplete.h", "../TegraGM20BMetalComplete.mm", "../TegraGM20BMetalCompleteRemote.mm"}) {
+    for (const char *file : {"../TegraGM20BMetalComplete.h", "../TegraGM20BMetalComplete.mm",
+                             "../TegraGM20BMetalCompleteForms.mm", "../TegraGM20BMetalCompleteRemote.mm"}) {
         const std::string source = switch_ios::test::SourceText(file);
         EXPECT_EQ(switch_ios::test::Configured(source, "SWITCH_DEBUG", true),
                   switch_ios::test::Configured(source, "SWITCH_DEBUG", false))
