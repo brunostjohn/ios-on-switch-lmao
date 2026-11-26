@@ -24,8 +24,29 @@ static enum switch_exec_kick_kind test_sched_kick;
 static int test_deadline_later;
 static u64 test_ptimer;
 
+static uint32_t test_syncpt, test_syncpt_marked;
+
+void switch_exec_set_syncpt(uint32_t id)
+{
+	test_syncpt = id;
+	test_syncpt_marked = 0;
+}
+
+uint32_t switch_exec_syncpt_marked(void)
+{
+	return test_syncpt_marked;
+}
+
+uint32_t switch_gpu_timeline_syncpt_next(struct switch_gpu_timeline *timeline, uint32_t seqno)
+{
+	if (test_syncpt)
+		test_syncpt_marked = seqno;
+	return test_syncpt;
+}
+
 void switch_exec_reset_driver(void)
 {
+	switch_exec_set_syncpt(0);
 	memset(&tgm_stats, 0, sizeof(tgm_stats));
 	memset(&tgm_busy, 0, sizeof(tgm_busy));
 	memset(&tgm_live_dir, 0, sizeof(tgm_live_dir));

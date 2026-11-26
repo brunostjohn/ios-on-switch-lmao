@@ -212,6 +212,7 @@ void switch_exec_chan_count_wfis(struct switch_exec_chan *chan, uint32_t from_dw
 	const u64 stamps_end = stamps_base + (u64)CHAN_NSTAMPS * sizeof(struct tgm_stamps);
 	u32 sema_hi = 0;
 	u32 sema_lo = 0;
+	int fenced = 0;
 	u32 i = from_dword;
 
 	memset(out, 0, sizeof(*out));
@@ -239,7 +240,11 @@ void switch_exec_chan_count_wfis(struct switch_exec_chan *chan, uint32_t from_dw
 
 			if (subc != PUSH906F_SUBC_NV906F)
 				continue;
-			if (cur == NVB06F_WFI) {
+			if (cur == 0x0074 && (data & 0xfu) == 1u) { /* SYNCPOINTB, OPERATION INCR */
+				out->syncpt_incrs++;
+				out->syncpt_incrs_after_fence += fenced;
+				out->syncpt_id = (data >> 8) & 0xffu;
+			} else if (cur == NVB06F_WFI) {
 				out->method_wfis++;
 			} else if (cur == NVB06F_FB_FLUSH) {
 				out->fb_flushes++;
@@ -272,6 +277,7 @@ void switch_exec_chan_count_wfis(struct switch_exec_chan *chan, uint32_t from_dw
 				} else if (chan->tgm.visible_cpu && va == chan->tgm.visible_gpu) {
 					dis ? out->visible_wfi_dis++ : out->visible_wfi_en++;
 				} else if (va == chan->tgm.fence_gpu) {
+					fenced = 1;
 					dis ? out->fence_wfi_dis++ : out->fence_wfi_en++;
 				} else {
 					dis ? out->extra_wfi_dis++ : out->extra_wfi_en++;

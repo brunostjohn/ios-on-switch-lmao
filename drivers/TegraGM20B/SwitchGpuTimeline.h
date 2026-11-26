@@ -34,6 +34,23 @@ void switch_gpu_timeline_close(struct switch_gpu_timeline *timeline);
 void switch_gpu_timeline_token(struct switch_gpu_timeline *timeline, uint32_t value,
 			       struct switch_gpu_backing_token *token);
 
+/* A channel's own host1x syncpoint (SwitchGpuTimelineSyncpt.cpp), held by at most SWITCH_GPU_TIMELINE_SYNCPTS
+ * timelines at once. The channel's submitter, for each job whose end it drained (WFI, FB_FLUSH, L2_FLUSH_DIRTY,
+ * FB_FLUSH): the syncpoint to end the job with after its fence release, its threshold recorded for `seqno`; 0 when the
+ * timeline has none. */
+#define SWITCH_GPU_TIMELINE_SYNCPTS 8u
+uint32_t switch_gpu_timeline_syncpt_next(struct switch_gpu_timeline *timeline, uint32_t seqno);
+/* 1: once host1x syncpoint `id` reaches `threshold`, the token's job has completed with its writes in DRAM. 0: no
+ * drained job at or after it yet, a shared-event wait at or below it, or a failure. -61: the timeline has no syncpoint
+ * (switch_gpu_timeline_syncpt_adopt). -19: no such timeline. */
+int switch_gpu_timeline_syncpoint(const struct switch_gpu_backing_token *token, uint32_t *id,
+				  uint32_t *threshold);
+/* Gives the token's timeline syncpoint `id`, whose value is `base`: 0, or -16 when it has one (the caller keeps id). */
+int switch_gpu_timeline_syncpt_adopt(const struct switch_gpu_backing_token *token, uint32_t id,
+				     uint32_t base);
+/* Takes up to `max` syncpoints whose timelines have gone; returns how many. */
+uint32_t switch_gpu_timeline_syncpt_reclaim(uint32_t *ids, uint32_t max);
+
 /* A token's status read with no lock, valid while the token is retained. Open (thread context) succeeds only when the
  * status is the physical one for good: no semantic wait at or below the token, and not failed. Semantic nodes are
  * reserved before a job's token is committed to its writes, so none can come after. */

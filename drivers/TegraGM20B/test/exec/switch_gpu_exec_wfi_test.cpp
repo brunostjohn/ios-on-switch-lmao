@@ -184,4 +184,41 @@ TEST_F(ExecWfi, HighChannelStartStampUsesWfiOnlyWhenLowBusyAndSkipsWhenIdle)
 	EXPECT_EQ(kernel.start_stamps_en, 1u);
 #endif
 }
+
+// A channel a host1x consumer gave a syncpoint (SwitchGpuTimelineSyncpt.cpp) ends each job it drains with two
+// increments, after the job's fence release, so host1x reaching the threshold means the token reads complete.
+TEST_F(ExecWfi, ADrainedJobIncrementsItsChannelsSyncpointAfterItsFence)
+{
+	switch_exec_set_syncpt(170);
+	uint32_t seqno = 0;
+	const auto counts = submit(SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT |
+					   SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY,
+				   nullptr, 0, &seqno);
+	EXPECT_EQ(counts.l2_flushes, 1u);
+	EXPECT_EQ(counts.syncpt_incrs, 2u);
+	EXPECT_EQ(counts.syncpt_incrs_after_fence, 2u);
+	EXPECT_EQ(counts.syncpt_id, 170u);
+	EXPECT_EQ(switch_exec_syncpt_marked(), seqno);
+}
+
+// A job that leaves its writes in the L2 (internal) or flushes only the FB (volatile) would let host1x read stale data,
+// and a channel no consumer asked about has no syncpoint: none of these increments.
+TEST_F(ExecWfi, OnlyAJobThatFlushesTheL2IncrementsAndOnlyOnAChannelWithASyncpoint)
+{
+	switch_exec_set_syncpt(170);
+	const auto internal = submit(SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT, nullptr, 0);
+	EXPECT_EQ(internal.syncpt_incrs, 0u);
+	const auto volatileWrites = submit(SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT |
+						   SWITCH_GPU_SUBMIT_VOLATILE_VISIBILITY,
+					   nullptr, 0);
+	EXPECT_EQ(volatileWrites.syncpt_incrs, 0u);
+	EXPECT_EQ(switch_exec_syncpt_marked(), 0u);
+
+	switch_exec_set_syncpt(0);
+	const auto unasked = submit(SWITCH_GPU_SUBMIT_VISIBILITY_EXPLICIT |
+					    SWITCH_GPU_SUBMIT_EXTERNAL_VISIBILITY,
+				    nullptr, 0);
+	EXPECT_EQ(unasked.l2_flushes, 1u);
+	EXPECT_EQ(unasked.syncpt_incrs, 0u);
+}
 }  // namespace

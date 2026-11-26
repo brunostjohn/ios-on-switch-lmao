@@ -16,6 +16,16 @@ struct switch_gpu_timeline_semantic {
 // depend on its wait. An older failure pushed out by newer ones reads as its physical status.
 constexpr uint32_t kFailedKept = 8;
 
+// The host1x syncpoint the channel's draining jobs end with (SwitchGpuTimelineSyncpt.cpp). id is 0 until a consumer
+// asks, then set once under the lock with base before it. increments and marks belong to the channel's submitter alone;
+// a mark is one job's (seqno << 32 | threshold), the newest kSyncptMarks kept, read with no lock.
+constexpr uint32_t kSyncptMarks = 8;
+
+struct switch_gpu_timeline_syncpt {
+	uint32_t id, base, increments;
+	uint64_t marks[kSyncptMarks];
+};
+
 // semantics and failed_count change under the lock and are stored atomically: a read under a held reference finds the
 // status the physical one with neither (switch_gpu_timeline_held_status).
 struct switch_gpu_timeline {
@@ -31,6 +41,7 @@ struct switch_gpu_timeline {
 	volatile TegraGM20BAbiFenceSemantic *semantic_public;
 	uint32_t failed[kFailedKept];
 	uint32_t failed_count;
+	switch_gpu_timeline_syncpt syncpt;
 };
 
 namespace switch_gpu_timelines
@@ -42,6 +53,18 @@ switch_gpu_timeline *find(const switch_gpu_backing_token *token);
 bool failed_locked(const switch_gpu_timeline *timeline, uint32_t value);
 int status_locked(const switch_gpu_timeline *timeline, uint32_t value, bool external);
 void put_locked(switch_gpu_timeline *timeline);
+
+// Syncpoints of timelines whose last reference went (put_locked), for the bridge to hand to new ones
+// (switch_gpu_timeline_syncpt_reclaim). The channel was torn down first (tgm_chan_del waits for it or kills it), so none
+// of its increments can land afterwards, and the next owner reads its base afresh.
+inline uint32_t syncpt_returned[SWITCH_GPU_TIMELINE_SYNCPTS], syncpt_returned_count;
+
+inline void syncpt_return_locked(const switch_gpu_timeline *timeline)
+{
+	if (timeline->syncpt.id && syncpt_returned_count < SWITCH_GPU_TIMELINE_SYNCPTS)
+		syncpt_returned[syncpt_returned_count++] = timeline->syncpt.id;
+}
+
 int physical_now(const switch_gpu_timeline *timeline, uint32_t value, bool external);
 }  // namespace switch_gpu_timelines
 

@@ -165,6 +165,7 @@ kernel_driver(
         "SwitchGpuCpuLease.cpp",
         "SwitchGpuTimeline.cpp",
         "SwitchGpuTimelineRefs.cpp",
+        "SwitchGpuTimelineSyncpt.cpp",
         "SwitchGpuPresentFilter.cpp",
         "SwitchGpuBridge.cpp",
         "SwitchGpuPin.cpp",

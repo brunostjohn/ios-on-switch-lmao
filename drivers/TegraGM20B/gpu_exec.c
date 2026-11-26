@@ -206,6 +206,7 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 	struct nvif_push *push = &chan->chan.push;
 	struct switch_gpu_kicked_job *job = NULL;
 	const int announce = switch_gpu_quiet_announces(&chan->quiet, quiet);
+	const int flushed = external == 1 && (l2_on() || chan->kernel);
 	int drained = 0;
 	u32 s = 0;
 	if (external && (l2_on() || chan->kernel)) {
@@ -262,6 +263,12 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 				  NVDEF(NV906F, SEMAPHORED, RELEASE_SIZE, 4BYTE));
 	}
 	/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
+	/* After the releases: host1x reaching the threshold means the job's token already reads complete */
+	if (flushed) {
+		const u32 syncpt = switch_gpu_timeline_syncpt_next(chan->timeline, next);
+		if (syncpt)
+			push->cur += tgm_syncpt_incr_only(push->cur, syncpt);
+	}
 	nvif_chan_gpfifo_post(&chan->chan);
 	if (announce) {
 		/* NOLINTNEXTLINE(bugprone-signed-bitwise): nouveau's PUSH_MTHD computes in int */

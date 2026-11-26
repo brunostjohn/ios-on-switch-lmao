@@ -536,3 +536,55 @@ TEST_F(Timeline, SuccessfulAuthorityWakeDoesNotRequireItsDeferredCallbackToRunFi
 	EXPECT_EQ(operations.status(&current), 1);
 	switch_gpu_timeline_close(timeline);
 }
+
+// A channel's own host1x syncpoint (SwitchGpuTimelineSyncpt.cpp): a token waits for the first draining job at or after
+// it. A token past every draining job so far, a killed channel's, or a timeline with no syncpoint has no answer, and
+// its consumer keeps the bridge's GPU job.
+TEST_F(Timeline, ATokenWaitsForTheFirstDrainingJobAtOrAfterIt)
+{
+	volatile uint32_t fence = 0;
+	auto *timeline = switch_gpu_timeline_create(++nextId, &fence);
+	ASSERT_NE(timeline, nullptr);
+	const auto third = token(timeline, 3);
+	const auto fifth = token(timeline, 5);
+	const auto seventh = token(timeline, 7);
+	uint32_t id = 0;
+	uint32_t threshold = 0;
+	EXPECT_EQ(switch_gpu_timeline_syncpoint(&third, &id, &threshold), -61);
+	EXPECT_EQ(switch_gpu_timeline_syncpt_next(timeline, 2), 0u);
+	ASSERT_EQ(switch_gpu_timeline_syncpt_adopt(&third, 170, 40), 0);
+	EXPECT_EQ(switch_gpu_timeline_syncpt_adopt(&third, 171, 0), -16);
+	EXPECT_EQ(switch_gpu_timeline_syncpoint(&third, &id, &threshold), 0);
+
+	EXPECT_EQ(switch_gpu_timeline_syncpt_next(timeline, 4), 170u);
+	EXPECT_EQ(switch_gpu_timeline_syncpt_next(timeline, 6), 170u);
+	ASSERT_EQ(switch_gpu_timeline_syncpoint(&third, &id, &threshold), 1);
+	EXPECT_EQ(id, 170u);
+	EXPECT_EQ(threshold, 42u);
+	ASSERT_EQ(switch_gpu_timeline_syncpoint(&fifth, &id, &threshold), 1);
+	EXPECT_EQ(threshold, 44u);
+	EXPECT_EQ(switch_gpu_timeline_syncpoint(&seventh, &id, &threshold), 0);
+
+	switch_gpu_timeline_failed(timeline, 4, 0);
+	EXPECT_EQ(switch_gpu_timeline_syncpoint(&fifth, &id, &threshold), 0);
+	switch_gpu_timeline_close(timeline);
+}
+
+// The syncpoint goes back only with the timeline's last reference: a consumer holding a token may still have a stream
+// waiting on it, and by then the channel is torn down, so none of its increments can land on the next owner.
+TEST_F(Timeline, ASyncpointGoesBackOnlyWithItsTimelinesLastReference)
+{
+	uint32_t ids[SWITCH_GPU_TIMELINE_SYNCPTS] = {};
+	switch_gpu_timeline_syncpt_reclaim(ids, SWITCH_GPU_TIMELINE_SYNCPTS);
+	volatile uint32_t fence = 0;
+	auto *timeline = switch_gpu_timeline_create(++nextId, &fence);
+	ASSERT_NE(timeline, nullptr);
+	const auto held = token(timeline, 1);
+	ASSERT_EQ(switch_gpu_timeline_syncpt_adopt(&held, 172, 0), 0);
+	ASSERT_EQ(operations.retain_token(&held), 0);
+	switch_gpu_timeline_close(timeline);
+	EXPECT_EQ(switch_gpu_timeline_syncpt_reclaim(ids, SWITCH_GPU_TIMELINE_SYNCPTS), 0u);
+	operations.release_token(&held);
+	ASSERT_EQ(switch_gpu_timeline_syncpt_reclaim(ids, SWITCH_GPU_TIMELINE_SYNCPTS), 1u);
+	EXPECT_EQ(ids[0], 172u);
+}

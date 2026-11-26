@@ -74,6 +74,9 @@ struct switch_exec_wfi_counts {
 	uint32_t fence_wfi_dis;
 	uint32_t extra_wfi_en;
 	uint32_t extra_wfi_dis;
+	uint32_t syncpt_incrs;             /* SYNCPOINTB increments */
+	uint32_t syncpt_incrs_after_fence; /* of those, pushed after the fence word's release */
+	uint32_t syncpt_id;                /* the last increment's syncpoint */
 };
 
 void switch_exec_chan_count_wfis(struct switch_exec_chan *chan, uint32_t from_dword,
@@ -101,6 +104,9 @@ struct switch_exec_l2_inval_stats {
 };
 
 void switch_exec_reset_driver(void);
+/* The syncpoint switch_gpu_timeline_syncpt_next hands every channel (0: none), and the seqno it was last asked for */
+void switch_exec_set_syncpt(uint32_t id);
+uint32_t switch_exec_syncpt_marked(void);
 void switch_exec_set_kick(enum switch_exec_kick_kind sched_kick, int deadline_later);
 void switch_exec_set_ptimer(uint64_t pt);
 void switch_exec_chan_complete_stamp(struct switch_exec_chan *chan, uint32_t seqno,
