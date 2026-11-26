@@ -184,8 +184,8 @@ public enum Registry {
         DispatchSyncTest(), DispatchSyncWorkloopTest(), WorkloopSyncTest(), WidgetsRenderTest(), IconRenderTest(),
         DispatchSyncHandoffTest(),
         SnapshotPurgeableTest(), RecorderHangDumpTest(),
-        // A deliberate VIC fault: its interrupt never delivered panics the kernel.
-        MCFaultInterruptTest(),
+        // Deliberate faults: an interrupt that never delivers panics the kernel.
+        MCFaultInterruptTest(), Host1xIllegalOpcodeTest(),
     ]
 
     static let compositor: [any HWTest] =
