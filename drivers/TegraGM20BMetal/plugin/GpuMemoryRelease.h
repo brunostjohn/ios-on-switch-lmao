@@ -5,8 +5,8 @@
 // purge and jetsam act on: memory pressure (the system's level and the process's own limit, which our memorystatus also
 // warns a daemon of as it goes clean, before its demotion applies its inactive limit: kern_memorystatus.c
 // memorystatus_dirty_set), and the app going to the background, before RunningBoard suspends it and memorystatus moves
-// it to a band with a lower limit. A foreground app
-// that pauses keeps its memory and pays no unpark at its next frame (owner, 25 Nov: no idle timer).
+// it to a band with a lower limit. A foreground app that pauses keeps its memory and pays no unpark at its next frame
+// (owner, 25 Nov: no idle timer).
 #pragma once
 #include <dispatch/dispatch.h>
 #include <stdint.h>
