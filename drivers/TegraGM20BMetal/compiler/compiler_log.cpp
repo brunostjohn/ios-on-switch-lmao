@@ -77,7 +77,7 @@ bool RequestLog::open(const std::string &path, const char *boot)
     path_ = path;
     bool known = false;
     if (boot) {
-        memcpy(boot_, boot, sizeof boot_ - 1);
+        memcpy(boot_, boot, strnlen(boot, sizeof boot_ - 1));
         known = boot_[0] != 0;
     } else {
         known = switch_seed_pack::currentBoot(boot_);

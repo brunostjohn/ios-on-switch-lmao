@@ -184,7 +184,7 @@ public:
     }
 
     // The store at `path` taken for writing (made at `slots` and `dataBytes` if it is not there or is not a store of
-    // `identity`), the file locked against a second writer. `boot` (kStoreBootBytes, null: this boot's) names the boot
+    // `identity`), the file locked against a second writer. `boot` (a string, null: this boot's) names the boot
     // the writer runs in: a store last written in another boot keeps only the entries below its durable end. False with
     // `error`.
     bool open(const std::string &path, const uint8_t *identity, uint32_t slots, uint64_t dataBytes, std::string &error,
@@ -201,7 +201,7 @@ public:
         char current[kStoreBootBytes] = {};
         bool known = false;
         if (boot) {
-            memcpy(current, boot, kStoreBootBytes - 1);
+            memcpy(current, boot, strnlen(boot, kStoreBootBytes - 1));
             known = current[0] != 0;
         } else {
             known = currentBoot(current);
