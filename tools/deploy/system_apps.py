@@ -67,6 +67,9 @@ def request_migration(data_root: Path, log: host.Log, rebuild: bool = False) -> 
     sentinel.parent.mkdir(parents=True, exist_ok=True)
     sentinel.touch()
     (Path(data_root) / MARKER).unlink(missing_ok=True)
+    pending = Path(data_root) / (RESTAGED + '.pending')
+    if pending.is_file() and not pending.is_symlink():
+        pending.replace(Path(data_root) / RESTAGED)
     app_journal.clear(data_root)
     log(f'upgrade migration on the next boot (<Data>/{SENTINEL})')
     if rebuild:
@@ -155,7 +158,7 @@ def restage(system_root: Path, data_root: Path, log: host.Log) -> bool:
 
     True when any app is missing, staged already or not, unless a migration already tried this same set (RESTAGED): a
     migration cut short leaves them staged and uninstalled, and the kernel's one-try marker keeps it from running again
-    by itself.
+    by itself. The set counts as tried only once request_migration() has asked for it (RESTAGED.pending until then).
     """
     names = missing(system_root, data_root)
     record = Path(data_root) / RESTAGED
@@ -175,10 +178,12 @@ def restage(system_root: Path, data_root: Path, log: host.Log) -> bool:
             f'(--rerun-migration retries): {", ".join(names)}'
         )
         return False
+    pending = Path(data_root) / (RESTAGED + '.pending')
     if names:
         log(f'system apps: {len(names)} not installed, {len(copied)} restaged: {", ".join(names)}')
-        record.parent.mkdir(parents=True, exist_ok=True)
-        record.write_text(''.join(f'{name}\n' for name in names))
+        pending.parent.mkdir(parents=True, exist_ok=True)
+        pending.write_text(''.join(f'{name}\n' for name in names))
     else:
         record.unlink(missing_ok=True)
+        pending.unlink(missing_ok=True)
     return bool(names)

@@ -349,14 +349,21 @@ class RestageTest(unittest.TestCase):
 
     def test_restaging_the_same_apps_twice_asks_for_one_migration(self):
         self.assertTrue(system_apps.restage(self.system, self.data, Log()))
+        system_apps.request_migration(self.data, Log())
         stamp = (self.data / system_apps.STAGED / 'FaceTime.app/FaceTime').stat().st_ino
         log = Log()
         self.assertFalse(system_apps.restage(self.system, self.data, log))
         self.assertEqual((self.data / system_apps.STAGED / 'FaceTime.app/FaceTime').stat().st_ino, stamp)
         self.assertIn('not migrating again', log.lines[0])
 
+    def test_a_set_no_migration_was_asked_for_is_asked_for_again(self):
+        self.assertTrue(system_apps.restage(self.system, self.data, Log()))
+        self.assertTrue(system_apps.restage(self.system, self.data, Log()))
+        self.assertFalse((self.data / system_apps.RESTAGED).exists())
+
     def test_a_different_set_of_missing_apps_asks_again(self):
         self.assertTrue(system_apps.restage(self.system, self.data, Log()))
+        system_apps.request_migration(self.data, Log())
         self.install('Files.app', b'arm64e')
         self.assertTrue(system_apps.restage(self.system, self.data, Log()))
         self.install('FaceTime.app', b'arm64e')
