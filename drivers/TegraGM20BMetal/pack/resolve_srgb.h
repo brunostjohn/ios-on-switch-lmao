@@ -44,7 +44,7 @@ constant ushort kSrgbThresholds[255] = {
 static inline uint srgbCodeOfLinear(uint x)
 {
     const float l = float(x) * (1.0f / 4095.0f);
-    const float s = l <= 0.0031308f ? 12.92f * l : 1.055f * powr(l, 1.0f / 2.4f) - 0.055f;
-    const uint below = min(uint(s * 255.0f), 254u);
+    const float s = l <= 0.0031308f ? 12.92f * l : 1.055f * metal::powr(l, 1.0f / 2.4f) - 0.055f;
+    const uint below = metal::min(uint(s * 255.0f), 254u);
     return below + (x >= kSrgbThresholds[below] ? 1u : 0u);
 }

@@ -10,15 +10,21 @@
 namespace {
 using uint = uint32_t;
 using ushort = uint16_t;
-using std::min;
 
 float gPowScale = 1.0f;
+}  // namespace
 
+// The Metal standard library functions resolve_srgb.h names, the pow scaled by the test
+namespace metal {
 float powr(float x, float y)
 {
     return std::pow(x, y) * gPowScale;
 }
 
+using std::min;
+}  // namespace metal
+
+namespace {
 #define constant
 #include "../pack/resolve_srgb.h"
 #undef constant
