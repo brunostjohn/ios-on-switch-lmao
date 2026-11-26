@@ -477,6 +477,7 @@ TESTS_NATIVE_SRCS = [
     "tests/MetalResourceTests.swift",
     "tests/MipmapLayersTest.swift",
     "tests/NativeAmplificationCountTest.swift",
+    "tests/NativeAmplificationFetchTest.swift",
     "tests/NativeAmplificationMappingsTest.swift",
     "tests/NativeAmplificationTest.swift",
     "tests/NativeAnswerPathsTest.swift",
