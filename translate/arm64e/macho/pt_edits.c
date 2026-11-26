@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 #include "pt_edits.h"
 
 #include <stdarg.h>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * The host side of a64x: Mach-O images in, translated bytes out, decided and laid out exactly as the kernel's loader
  * does it (xnu/a64x_xnu.c: a64x_parse, a64x_find_islands, a64x_scan, a64x_text_page), so an offline translation is

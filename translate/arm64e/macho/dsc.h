@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * The dyld shared cache, translated offline: each cache file gets exactly the words the kernel's cache pager would
  * map (xnu/bsd/kern/a64x_xnu.c a64x_cache_page: one-word rewrites in the plan's code ranges, dead PAC checks to

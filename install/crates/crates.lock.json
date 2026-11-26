@@ -1,5 +1,5 @@
 {
-  "checksum": "8e4e790b71b3fa61ba4081954d0a706ad1e4c96af1d7ba2f0c1973d7e5a474a7",
+  "checksum": "cac6c768b89b67f5dead1fce2ddebd7b73ebfa0ba280bb81d131f999beeba5a5",
   "conditions": {
     "aarch64-apple-darwin": [
       "aarch64-apple-darwin"
@@ -15204,6 +15204,10 @@
               "target": "clap"
             },
             {
+              "id": "cmpfs 0.1.0",
+              "target": "cmpfs"
+            },
+            {
               "id": "crc32c 0.6.9",
               "target": "crc32c"
             },
@@ -15326,6 +15330,10 @@
             {
               "id": "unicode-normalization 0.1.26",
               "target": "unicode_normalization"
+            },
+            {
+              "id": "zbitmap 0.1.0",
+              "target": "zbitmap"
             },
             {
               "id": "zerocopy 0.8.66",
@@ -20140,6 +20148,34 @@
       ],
       "version": "0.8.4"
     },
+    "zbitmap 0.1.0": {
+      "common_attrs": {
+        "edition": "2021"
+      },
+      "library_target_name": "zbitmap",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "license_ids": [
+        "MIT"
+      ],
+      "name": "zbitmap",
+      "package_url": "https://github.com/valentinogrande/zbitmap",
+      "repository": {
+        "Http": {
+          "sha256": "bde9194267e17314ff9f9ec82b2670983e33f2f5fe2027c6de01354050be85b0",
+          "url": "https://static.crates.io/crates/zbitmap/0.1.0/download"
+        }
+      },
+      "targets": [
+        {
+          "Library": {
+            "crate_name": "zbitmap",
+            "crate_root": "src/lib.rs"
+          }
+        }
+      ],
+      "version": "0.1.0"
+    },
     "zbus 6.5.0": {
       "common_attrs": {
         "crate_features": [
@@ -20890,6 +20926,7 @@
     "aws-lc-rs 1.19.0",
     "base64 0.22.1",
     "clap 4.6.10",
+    "cmpfs 0.1.0",
     "crc32c 0.6.9",
     "crc32fast 1.5.6",
     "crossterm 0.29.0",
@@ -20927,6 +20964,7 @@
     "udisks2 0.4.0",
     "unicode-normalization 0.1.26",
     "windows-sys 0.61.2",
+    "zbitmap 0.1.0",
     "zerocopy 0.8.66"
   ],
   "direct_dev_deps": [

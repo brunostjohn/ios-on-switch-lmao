@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * a64x_refs.c: the code addresses code refers to, for the offline translators. Stub words go only into dead PAC checks
  * that nothing enters (a64x_dead_checks), and these are the entries code itself makes.

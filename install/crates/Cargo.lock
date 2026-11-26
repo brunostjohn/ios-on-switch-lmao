@@ -3164,6 +3164,7 @@ dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
  "clap",
+ "cmpfs",
  "crc32c",
  "crc32fast",
  "crossterm",
@@ -3202,6 +3203,7 @@ dependencies = [
  "udisks2",
  "unicode-normalization",
  "windows-sys 0.61.2",
+ "zbitmap",
  "zerocopy",
 ]
 
@@ -4202,6 +4204,12 @@ dependencies = [
  "syn 3.0.10",
  "synstructure",
 ]
+
+[[package]]
+name = "zbitmap"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bde9194267e17314ff9f9ec82b2670983e33f2f5fe2027c6de01354050be85b0"
 
 [[package]]
 name = "zbus"

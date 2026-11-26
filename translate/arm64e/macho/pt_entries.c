@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * The words of a slice's executable segment that something enters other than by falling into them. Offline stub
  * placement must stay off them: a dead PAC check is a hole only while nothing branches into its freed words.

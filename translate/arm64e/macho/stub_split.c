@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 #include "stub_split.h"
 
 #include "../a64x/a64x.h"

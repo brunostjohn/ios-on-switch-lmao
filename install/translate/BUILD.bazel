@@ -1,0 +1,239 @@
+# switch_translate: iOS 27's pretranslation in process, from the decoded IPSW members, byte for byte as
+# //install:delta_<role> makes it with translate_tree.py and the arm64e CLI.
+#
+#   bazel test //install/translate:switch_translate_test        unit tests
+#   bazel test --config=ios27 //install/translate:refusal_test  a wrong pin, a corrupted member, a different translator
+#   bazel test --config=ios27 //install/translate:delta_{app_cryptex,os,system_cryptex}_test
+#                                                              each role against //install:delta_<role> (manual: they
+#                                                              read the IPSW's 5.2 GB and 3.3 GB members)
+#   bazel build //install/translate:desktop                     switch_translate_tool for the six desktop platforms
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//bazel/desktop:defs.bzl", "desktop_binaries")
+load("//bazel/lint:defs.bzl", "lint_files")
+load(":defs.bzl", "IOS27_ONLY", "delta_test", "exec_file")
+
+package(default_visibility = ["//visibility:public"])
+
+lint_files()
+
+_COPTS = select({
+    "@platforms//os:windows": [
+        "/std:c11",
+        "/O2",
+        "/W4",
+        "/WX",
+        "/D_CRT_SECURE_NO_WARNINGS",
+    ],
+    "//conditions:default": [
+        "-std=c11",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+    ],
+})
+
+# translate/arm64e's Mach-O and dyld cache side, over //install/a64x's translator core, with this package's wrappers.
+cc_library(
+    name = "translator",
+    srcs = [
+        "c/sort.c",
+        "c/sort.h",
+        "c/translate.c",
+        "//translate/arm64e:a64x/a64x_refs.c",
+        "//translate/arm64e:macho/codesign.c",
+        "//translate/arm64e:macho/dsc.c",
+        "//translate/arm64e:macho/macho.c",
+        "//translate/arm64e:macho/pretranslate.c",
+        "//translate/arm64e:macho/pt_edits.c",
+        "//translate/arm64e:macho/pt_entries.c",
+        "//translate/arm64e:macho/pt_verify.c",
+        "//translate/arm64e:macho/stub_split.c",
+    ],
+    hdrs = [
+        "c/translate.h",
+        "//translate/arm64e:macho/codesign.h",
+        "//translate/arm64e:macho/dsc.h",
+        "//translate/arm64e:macho/macho.h",
+        "//translate/arm64e:macho/pretranslate.h",
+        "//translate/arm64e:macho/pt_edits.h",
+        "//translate/arm64e:macho/stub_split.h",
+    ],
+    copts = _COPTS,
+    deps = ["//install/a64x:translator"],
+)
+
+# tools/a64plan2.c compiled into c/plan.c, its system calls from c/plan_shim/ on every platform.
+cc_library(
+    name = "planner",
+    srcs = [
+        "c/plan.c",
+        "c/sort.h",
+    ],
+    hdrs = ["c/plan.h"],
+    # -I, not `includes`: the shims must come before the system's own headers of those names.
+    copts = _COPTS + select({
+        "@platforms//os:windows": ["/Iinstall/translate/c/plan_shim"],
+        "//conditions:default": ["-Iinstall/translate/c/plan_shim"],
+    }),
+    textual_hdrs = [
+        "c/plan_shim/fcntl.h",
+        "c/plan_shim/sys/mman.h",
+        "c/plan_shim/sys/stat.h",
+        "c/plan_shim/unistd.h",
+        "//translate/arm64e:tools/a64plan2.c",
+    ],
+    deps = [":translator"],
+)
+
+_SRCS = [
+    "buffer.rs",
+    "cache.rs",
+    "edits.rs",
+    "ffi.rs",
+    "lib.rs",
+    "macho.rs",
+    "manifest.rs",
+    "output.rs",
+    "plan.rs",
+    "role.rs",
+    "trust.rs",
+    "volume.rs",
+]
+
+_DEPS = [
+    "//install/apfs_format:switch_apfs_format",
+    "//install/apfs_read:switch_apfs_read",
+    "//install/decmpfs:switch_decmpfs",
+    "//install/trustcache:switch_trustcache",
+    "@installer_crates//:hex",
+    "@installer_crates//:rayon",
+    "@installer_crates//:serde_json",
+    "@installer_crates//:sha2",
+    "@installer_crates//:thiserror",
+]
+
+rust_library(
+    name = "switch_translate",
+    srcs = _SRCS,
+    crate_root = "lib.rs",
+    link_deps = [":planner"],
+    deps = _DEPS,
+)
+
+rust_test(
+    name = "switch_translate_test",
+    srcs = _SRCS + ["tests.rs"],
+    crate_root = "lib.rs",
+    link_deps = [":planner"],
+    deps = _DEPS,
+)
+
+_TOOL_SRCS = glob(["tool/*.rs"])
+
+_TOOL_DEPS = [
+    "//install/apfs_format:switch_apfs_format",
+    "//install/img4:switch_img4",
+    "@installer_crates//:clap",
+    "@installer_crates//:hex",
+    "@installer_crates//:image4",
+    "@installer_crates//:libc",
+    "@installer_crates//:rayon",
+    "@installer_crates//:serde_json",
+    "@installer_crates//:sha2",
+]
+
+rust_binary(
+    name = "switch_translate_tool",
+    srcs = _TOOL_SRCS,
+    crate_root = "tool/main.rs",
+    deps = _TOOL_DEPS + [":switch_translate"],
+)
+
+desktop_binaries(
+    name = "desktop",
+    binary = ":switch_translate_tool",
+)
+
+# refusal_test's translator whose result differs: perturb.rs flips and re-signs a byte of every thin file.
+rust_library(
+    name = "switch_translate_perturbed",
+    testonly = True,
+    srcs = _SRCS + ["perturb.rs"],
+    crate_name = "switch_translate",
+    crate_root = "lib.rs",
+    link_deps = [":planner"],
+    rustc_flags = ["--cfg=switch_translate_perturb"],
+    deps = _DEPS,
+)
+
+rust_binary(
+    name = "switch_translate_tool_perturbed",
+    testonly = True,
+    srcs = _TOOL_SRCS,
+    crate_root = "tool/main.rs",
+    deps = _TOOL_DEPS + [":switch_translate_perturbed"],
+)
+
+exec_file(
+    name = "arm64e_exec",
+    tool = "//translate/arm64e",
+)
+
+sh_test(
+    name = "refusal_test",
+    size = "medium",
+    srcs = ["refusal_test.sh"],
+    args = [
+        "$(rootpath :switch_translate_tool)",
+        "$(rootpath :switch_translate_tool_perturbed)",
+        "$(rootpath @ipsw//:app_cryptex)",
+        "$(rootpath @ipsw//:app_cryptex_trust_cache)",
+        "$(rootpath //ipsw:pretranslated_pins)",
+        "$(rootpath :arm64e_exec)",
+    ],
+    data = [
+        ":arm64e_exec",
+        ":switch_translate_tool",
+        ":switch_translate_tool_perturbed",
+        "//ipsw:pretranslated_pins",
+        "@ipsw//:app_cryptex",
+        "@ipsw//:app_cryptex_trust_cache",
+    ],
+    tags = [
+        "external",
+        "manual",
+    ],
+    target_compatible_with = IOS27_ONLY,
+)
+
+delta_test(
+    name = "delta_app_cryptex_test",
+    image = "@ipsw//:app_cryptex",
+    role = "app_cryptex",
+    trustcaches = ["@ipsw//:app_cryptex_trust_cache"],
+)
+
+delta_test(
+    name = "delta_os_test",
+    edits = "//translate/arm64e/pretranslate:edits_24B119.json",
+    image = "@ipsw//:os",
+    role = "os",
+    trustcaches = ["@ipsw//:static_trust_cache"],
+)
+
+delta_test(
+    name = "delta_system_cryptex_test",
+    image = "//install:system_cryptex",
+    pairs = [
+        "os",
+        "app_cryptex",
+    ],
+    role = "system_cryptex",
+    trustcaches = [
+        "@ipsw//:static_trust_cache",
+        "@ipsw//:system_cryptex_trust_cache",
+    ],
+)
