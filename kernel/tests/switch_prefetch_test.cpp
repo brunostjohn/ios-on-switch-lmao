@@ -1052,8 +1052,12 @@ TEST(SwitchPrefetchSource, TheRaiseCountersAreReadOnlyWhereTheyAreDefined)
     const size_t printed = prefetch.find("busy-page raises requested");
     ASSERT_NE(declared, std::string::npos);
     ASSERT_NE(printed, std::string::npos);
-    EXPECT_EQ(prefetch.rfind("#if CONFIG_IOSCHED", declared), prefetch.rfind("#if", declared));
-    EXPECT_EQ(prefetch.rfind("#if CONFIG_IOSCHED", printed), prefetch.rfind("#if", printed));
+    for (const size_t line : {declared, printed}) {
+        const size_t guard = prefetch.rfind("#if CONFIG_IOSCHED", line);
+        ASSERT_NE(guard, std::string::npos);
+        EXPECT_EQ(guard, prefetch.rfind("#if", line));
+        EXPECT_GT(prefetch.find("#endif", guard), line);
+    }
 }
 
 // The replay's last reads are still at the card after its loop ends; their UPLs stay the replay's until they complete.

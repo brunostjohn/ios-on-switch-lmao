@@ -343,7 +343,9 @@ TEST(XnuUiScaleSitesSource, TheIdentityDigestTakesTheScreenClass)
         ASSERT_NE(screen_class, std::string::npos);
         const std::string guard =
             "#if defined(XNU_SWITCH_VERIFIED_ROOT) && XNU_SWITCH_VERIFIED_ROOT && CONFIG_CODE_DECRYPTION";
-        EXPECT_NE(identity.rfind(guard, screen_class), std::string::npos);  // the accessor's own guard (vm_unix.c)
+        const size_t guarded = identity.rfind(guard, screen_class);  // the accessor's own guard (vm_unix.c)
+        ASSERT_NE(guarded, std::string::npos);
+        EXPECT_GT(identity.find("#endif", guarded), screen_class);
         EXPECT_LT(screen_class, identity.find("native_switch_file_unchanged(marker"));
         const std::string vm_unix = switch_ios::test::SourceText(std::string(tree) + "/bsd/vm/vm_unix.c");
         EXPECT_NE(switch_ios::test::Body(vm_unix, "\nswitch_ui_scale_main_screen_class(void)")
