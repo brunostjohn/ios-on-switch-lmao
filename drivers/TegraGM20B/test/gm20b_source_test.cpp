@@ -205,8 +205,7 @@ TEST(GM20BPoolPolicySource, CompressibleBosArePoolChunksNoTaskMaps)
 			    .has("c.refused = compressibleRefusal(in->bytes, critical_);"));
 	EXPECT_TRUE(
 		Block(client(), "const char *compressibleRefusal(uint64_t bytes, bool compositor)")
-			.has("tgm_pool::compressibleRefusal(bytes, tgm_pool_avail(), limits, "
-			     "compositor)"));
+			.has("tgm_pool::compressibleRefusal(bytes, tgm_pool_avail(), limits, compositor,"));
 	EXPECT_TRUE(chunks.has("takeChunks(in->bytes, bo->pas)"));
 	EXPECT_TRUE(alloc.has("} else if (!ret && !compressible) {"));
 	EXPECT_FALSE(Block(client(), "IOReturn takeChunks(uint64_t bytes, uint64_t *pas)")

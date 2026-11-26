@@ -320,6 +320,29 @@ TEST(GM20BPoolPolicy, AnAppLeavesTheCompositorsNextCompressedTarget)
 	while (!tgm_pool::compressibleRefusal(3840 * KiB, p.avail(), kLimits))
 		p.used += 3840 * KiB;
 	EXPECT_STREQ(tgm_pool::compressibleRefusal(3840 * KiB, p.avail(), kLimits),
-		     "the next 8 MiB stay for the compositor's compressed targets");
+		     "the compositor's compressed reserve stays free");
 	EXPECT_EQ(tgm_pool::compressibleRefusal(7488 * KiB, p.avail(), kLimits, true), nullptr);
+}
+
+// 25 Nov 19:59 (20261125-201323): the compositor's refused full-screen target (24576 KiB) grows the reserve apps leave
+// to its size, so the compositor's retry of it is made once the apps stop; its next made target puts it back at 8 MiB.
+// Beyond CompositorCompressedMost the reserve does not grow: that burst asked 272 MiB against a 256 MiB pool.
+TEST(GM20BPoolPolicy, ARefusedCompositorTargetGrowsTheReserveUntilItsNextIsMade)
+{
+	EXPECT_EQ(tgm_pool::compositorReserve(0), tgm_pool::CompositorCompressedBytes);
+	EXPECT_EQ(tgm_pool::compositorReserve(4928 * KiB), tgm_pool::CompositorCompressedBytes);
+	EXPECT_EQ(tgm_pool::compositorReserve(24576 * KiB), 24576 * KiB);
+	EXPECT_EQ(tgm_pool::compositorReserve(272 * MiB), tgm_pool::CompositorCompressedMost);
+
+	Pool p;
+	p.used = 120 * MiB;
+	const uint64_t grown = tgm_pool::compositorReserve(24576 * KiB);
+	while (!tgm_pool::compressibleRefusal(3840 * KiB, p.avail(), kLimits, false, grown))
+		p.used += 3840 * KiB;
+	EXPECT_STREQ(tgm_pool::compressibleRefusal(3840 * KiB, p.avail(), kLimits, false, grown),
+		     "the compositor's compressed reserve stays free");
+	EXPECT_EQ(tgm_pool::compressibleRefusal(24576 * KiB, p.avail(), kLimits, true), nullptr)
+		<< "the compositor's retry of its refused target";
+	EXPECT_EQ(tgm_pool::compressibleRefusal(3840 * KiB, p.avail(), kLimits), nullptr)
+		<< "back at 8 MiB once the compositor's target was made, an app's ask fits again";
 }

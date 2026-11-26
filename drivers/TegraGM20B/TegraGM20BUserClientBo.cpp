@@ -66,11 +66,24 @@ const char *poolRefusal(uint64_t bytes, uint64_t held, bool compositor)
 		compositor);
 }
 
+// The compositor's largest compressible BoAlloc refused since its last one this check passed (tgm_pool::
+// compositorReserve): every connection's charge reads it, the compositor's moves it, with no lock (a policy input)
+uint64_t gCompositorCompressedWant;
+
 const char *compressibleRefusal(uint64_t bytes, bool compositor)
 {
 	const tgm_pool::Limits limits = {kPoolSmallBytes, kPoolFloorBytes, poolReserveBytes(),
 					 clientPoolBytes()};
-	return tgm_pool::compressibleRefusal(bytes, tgm_pool_avail(), limits, compositor);
+	uint64_t want = __atomic_load_n(&gCompositorCompressedWant, __ATOMIC_RELAXED);
+	const char *refused = tgm_pool::compressibleRefusal(bytes, tgm_pool_avail(), limits, compositor,
+							    tgm_pool::compositorReserve(want));
+	if (compositor && !refused)
+		__atomic_store_n(&gCompositorCompressedWant, 0, __ATOMIC_RELAXED);
+	while (compositor && refused && want < bytes &&
+	       !__atomic_compare_exchange_n(&gCompositorCompressedWant, &want, bytes, true,
+					    __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+	}
+	return refused;
 }
 
 IOReturn takeChunks(uint64_t bytes, uint64_t *pas)
