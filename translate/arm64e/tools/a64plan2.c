@@ -118,6 +118,8 @@ static const char *const hot_images[] = {"/usr/lib/system/",
                                          "/libdyld",
                                          NULL};
 
+static bool has_function_start(uint64_t lo, uint64_t size);
+
 static void mark_code(const uint8_t *m)
 {
     uint32_t img_off = u32(m, 0x1C0), img_cnt = u32(m, 0x1C4);
@@ -141,12 +143,14 @@ static void mark_code(const uint8_t *m)
         uint32_t ncmds = u32(mh, 16);
         const uint8_t *lc = mh + 32;
         for (uint32_t c = 0; c < ncmds; c++) {
-            if (u32(lc, 0) == 0x19) {
+            if (u32(lc, 0) == 0x19 && (u32(lc, 60) & 4)) {
                 uint32_t ns = u32(lc, 64);
                 for (uint32_t k = 0; k < ns; k++) {
                     const uint8_t *sp = lc + 72 + 80 * k;
                     uint64_t sa = u64(sp, 32), ss = u64(sp, 40);
-                    if (!(u32(sp, 64) & 0x80000400u) || !ss)
+                    uint32_t flags = u32(sp, 64);
+                    enum a64x_sect_kind sk = a64x_classify_exec_section((const char *)sp, sa, ss, flags);
+                    if (sk == A64X_SECT_DATA || (sk == A64X_SECT_CANDIDATE && !has_function_start(sa, ss)))
                         continue;
                     if (nvr == capvr) {
                         capvr = capvr ? capvr * 2 : 65536;
@@ -286,6 +290,22 @@ static void load_function_starts(const uint8_t *m)
     }
     qsort(fstarts, nfstarts, sizeof(uint64_t), cmp_u64);
     printf("function starts: %zu\n", nfstarts);
+}
+
+static bool has_function_start(uint64_t lo, uint64_t size)
+{
+    size_t l = 0, r = nfstarts;
+    while (l < r) {
+        size_t mid = (l + r) / 2;
+        if (fstarts[mid] < lo)
+            l = mid + 1;
+        else
+            r = mid;
+    }
+    for (; l < nfstarts && fstarts[l] - lo < size; l++)
+        if ((fstarts[l] & 3u) == 0u)
+            return true;
+    return false;
 }
 
 /* [start, end) of the function holding va, or 0 if unknown */
@@ -1725,9 +1745,9 @@ int a64x_cmd_plan2(int argc, char **argv)
             fm[nfm++] = (struct fmap){u64(e, 0), u64(e, 8), u64(e, 16), (int)f, u32(e, 28)};
         }
     }
+    load_function_starts(m);
     mark_code(m);
     mark_stub_mappings((int)sub_cnt + 1);
-    load_function_starts(m);
     if (getenv("A64X_CMP"))
         cmp_out = fopen(getenv("A64X_CMP"), "w");
     qsort(secs, nsecs, sizeof(*secs), cmp_sec);

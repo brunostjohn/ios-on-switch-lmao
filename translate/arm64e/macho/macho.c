@@ -118,6 +118,7 @@ int a64x_macho_parse(const uint8_t *base, size_t size, struct a64x_macho *m, cha
     if (sizeofcmds > size - 32)
         return fail(err, errlen, "load commands (%u bytes) past the end", sizeofcmds);
     const uint8_t *p = base + 32, *end = p + sizeofcmds;
+    const uint8_t *exec_seg = NULL;
     for (uint32_t i = 0; i < m->ncmds; i++) {
         if (end - p < 8)
             return fail(err, errlen, "load command %u past the end", i);
@@ -169,24 +170,82 @@ int a64x_macho_parse(const uint8_t *base, size_t size, struct a64x_macho *m, cha
                     m->exec_fileoff = fileoff;
                     m->exec_filesize = filesize;
                     m->exec_vmaddr = vmaddr;
-                    sc = p + 72;
-                    for (uint32_t s = 0; s < nsects; s++, sc += 80) {
-                        uint64_t ssize = rd64(sc + 40);
-                        uint32_t soff = rd32(sc + 48), flags = rd32(sc + 64);
-                        if (!(flags & (A64X_S_ATTR_PURE_INSTRUCTIONS | A64X_S_ATTR_SOME_INSTRUCTIONS)) || !ssize)
-                            continue;
-                        if (m->nranges >= A64X_MAX_SECTIONS)
-                            return fail(err, errlen, "more than %d instruction sections", A64X_MAX_SECTIONS);
-                        if (soff > size || ssize > size - soff)
-                            return fail(err, errlen, "instruction section %u past the end", s);
-                        m->ranges[m->nranges].lo = soff;
-                        m->ranges[m->nranges].hi = soff + ssize;
-                        m->nranges++;
-                    }
+                    exec_seg = p;
                 }
             }
         }
         p += cmdsize;
+    }
+    if (exec_seg) {
+        struct {
+            uint64_t va, ssize;
+            uint32_t soff, idx;
+        } cand[A64X_MAX_SECTIONS];
+
+        uint32_t ncand = 0;
+        uint32_t nsects = rd32(exec_seg + 64);
+        const uint8_t *sc = exec_seg + 72;
+        for (uint32_t s = 0; s < nsects; s++, sc += 80) {
+            uint64_t saddr = rd64(sc + 32), ssize = rd64(sc + 40);
+            uint32_t soff = rd32(sc + 48), flags = rd32(sc + 64);
+            enum a64x_sect_kind sk = a64x_classify_exec_section((const char *)sc, saddr, ssize, flags);
+            if (sk == A64X_SECT_DATA)
+                continue;
+            if (sk == A64X_SECT_CODE) {
+                if (!(flags & (A64X_S_ATTR_PURE_INSTRUCTIONS | A64X_S_ATTR_SOME_INSTRUCTIONS)) && (soff & 3u) != 0u)
+                    continue;
+                if (m->nranges >= A64X_MAX_SECTIONS)
+                    return fail(err, errlen, "more than %d instruction sections", A64X_MAX_SECTIONS);
+                if (soff > size || ssize > size - soff)
+                    return fail(err, errlen, "instruction section %u past the end", s);
+                m->ranges[m->nranges].lo = soff;
+                m->ranges[m->nranges].hi = soff + ssize;
+                m->nranges++;
+            } else if ((soff & 3u) == 0u && ncand < A64X_MAX_SECTIONS) {
+                cand[ncand].va = saddr;
+                cand[ncand].ssize = ssize;
+                cand[ncand].soff = soff;
+                cand[ncand].idx = s;
+                ncand++;
+            }
+        }
+        if (ncand && m->fs_size && m->fs_size <= (1u << 24)) {
+            _Static_assert(A64X_MAX_SECTIONS <= 64, "cand_hit bitmask");
+            uint64_t cand_hit = 0;
+            const uint8_t *buf = base + m->fs_off;
+            uint64_t addr = m->text_vmaddr;
+            for (uint32_t q = 0; q < m->fs_size;) {
+                uint64_t v = 0;
+                int sh = 0;
+                while (q < m->fs_size && sh < 64) {
+                    uint8_t b = buf[q++];
+                    v |= (uint64_t)(b & 0x7F) << sh;
+                    sh += 7;
+                    if (!(b & 0x80))
+                        break;
+                }
+                if (!v || v > UINT64_MAX - addr)
+                    break;
+                addr += v;
+                if ((addr & 3u) == 0u) {
+                    for (uint32_t c = 0; c < ncand; c++) {
+                        if (!(cand_hit & (1ull << c)) && addr >= cand[c].va && addr - cand[c].va < cand[c].ssize)
+                            cand_hit |= 1ull << c;
+                    }
+                }
+            }
+            for (uint32_t c = 0; c < ncand; c++) {
+                if (!(cand_hit & (1ull << c)))
+                    continue;
+                if (m->nranges >= A64X_MAX_SECTIONS)
+                    return fail(err, errlen, "more than %d instruction sections", A64X_MAX_SECTIONS);
+                if (cand[c].soff > size || cand[c].ssize > size - cand[c].soff)
+                    return fail(err, errlen, "instruction section %u past the end", cand[c].idx);
+                m->ranges[m->nranges].lo = cand[c].soff;
+                m->ranges[m->nranges].hi = cand[c].soff + cand[c].ssize;
+                m->nranges++;
+            }
+        }
     }
     /* sorted for the binary search (they are in file order already, as the kernel assumes too) */
     for (uint32_t i = 1; i < m->nranges; i++) {

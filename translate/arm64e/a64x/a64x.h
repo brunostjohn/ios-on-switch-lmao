@@ -233,4 +233,62 @@ void a64x_islands_page(struct a64x_islands *is, const uint32_t *w, uint32_t n, u
                        const struct a64x_code_map *code);
 void a64x_islands_end(struct a64x_islands *is, uint64_t end);
 
+enum a64x_sect_kind {
+    A64X_SECT_DATA = 0,
+    A64X_SECT_CANDIDATE,
+    A64X_SECT_CODE,
+};
+
+static inline bool a64x_sectname_eq(const char sectname[16], const char *name)
+{
+    size_t i = 0;
+    for (; i < 16 && name[i] != '\0'; i++) {
+        if (sectname[i] != name[i]) {
+            return false;
+        }
+    }
+    return i == 16 ? name[i] == '\0' : sectname[i] == '\0';
+}
+
+static inline bool a64x_sectname_prefix(const char sectname[16], const char *prefix)
+{
+    for (size_t i = 0; i < 16 && prefix[i] != '\0'; i++) {
+        if (sectname[i] != prefix[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/*
+ * Classify a section inside a VM_PROT_EXECUTE segment. Some code sections (such as Metal's __TEXT,text_env) are
+ * emitted as plain S_REGULAR without S_ATTR_PURE_INSTRUCTIONS / S_ATTR_SOME_INSTRUCTIONS; other flagless S_REGULAR
+ * non-data sections return A64X_SECT_CANDIDATE and are treated as code only when LC_FUNCTION_STARTS enters them.
+ */
+static inline enum a64x_sect_kind a64x_classify_exec_section(const char sectname[16], uint64_t addr, uint64_t size,
+                                                             uint32_t flags)
+{
+    if (!size) {
+        return A64X_SECT_DATA;
+    }
+    if (flags & (0x80000000u | 0x00000400u)) {
+        return A64X_SECT_CODE;
+    }
+    if ((flags & 0xFFu) != 0u || (flags & 0x02000000u) != 0u || (addr & 3u) != 0u || size < 4u) {
+        return A64X_SECT_DATA;
+    }
+    if (a64x_sectname_eq(sectname, "__text") || a64x_sectname_eq(sectname, "text_env")) {
+        return A64X_SECT_CODE;
+    }
+    if (a64x_sectname_eq(sectname, "__const") || a64x_sectname_eq(sectname, "__cstring") ||
+        a64x_sectname_eq(sectname, "__unwind_info") || a64x_sectname_eq(sectname, "__eh_frame") ||
+        a64x_sectname_eq(sectname, "__gcc_except_tab") || a64x_sectname_eq(sectname, "__ustring") ||
+        a64x_sectname_eq(sectname, "__info_plist") || a64x_sectname_eq(sectname, "__fips_hmacs") ||
+        a64x_sectname_eq(sectname, "__a64x_target") || a64x_sectname_prefix(sectname, "__objc_") ||
+        a64x_sectname_prefix(sectname, "__swift5_") || a64x_sectname_prefix(sectname, "__swift_as_")) {
+        return A64X_SECT_DATA;
+    }
+    return A64X_SECT_CANDIDATE;
+}
+
 #endif /* A64X_H */
