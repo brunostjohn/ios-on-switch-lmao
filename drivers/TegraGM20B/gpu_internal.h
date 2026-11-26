@@ -328,6 +328,7 @@ struct tgm_chan {
 	u8 stat_kick[CHAN_NSTAMPS]; /* stats: what each high kick found (tgm_sched_kick) */
 #if TGM_STATS
 	u8 stat_foreign[CHAN_NSTAMPS]; /* TGM_STAT_* per-seqno marks */
+	u64 stat_jobless; /* host1x consumers' bridges that waited on this channel's own syncpoint (tgm_live_lock) */
 #endif
 	u64 stat_exec,
 		stat_exec_max; /* stats: this window's stamped exec time (PTIMER units), for its owner */

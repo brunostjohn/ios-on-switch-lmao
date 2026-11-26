@@ -186,8 +186,9 @@ TEST_F(ExecWfi, HighChannelStartStampUsesWfiOnlyWhenLowBusyAndSkipsWhenIdle)
 }
 
 // A channel a host1x consumer gave a syncpoint (SwitchGpuTimelineSyncpt.cpp) ends each job it drains with two
-// increments, after the job's fence release, so host1x reaching the threshold means the token reads complete.
-TEST_F(ExecWfi, ADrainedJobIncrementsItsChannelsSyncpointAfterItsFence)
+// increments, after the drain (host1x's engines read DRAM) and ahead of the fence release: a fence that landed means the
+// host issued them, so a channel torn down after it never drops them.
+TEST_F(ExecWfi, ADrainedJobIncrementsItsChannelsSyncpointAfterItsDrainAndAheadOfItsFence)
 {
 	switch_exec_set_syncpt(170);
 	uint32_t seqno = 0;
@@ -196,7 +197,8 @@ TEST_F(ExecWfi, ADrainedJobIncrementsItsChannelsSyncpointAfterItsFence)
 				   nullptr, 0, &seqno);
 	EXPECT_EQ(counts.l2_flushes, 1u);
 	EXPECT_EQ(counts.syncpt_incrs, 2u);
-	EXPECT_EQ(counts.syncpt_incrs_after_fence, 2u);
+	EXPECT_EQ(counts.syncpt_incrs_after_drain, 2u);
+	EXPECT_EQ(counts.syncpt_incrs_after_fence, 0u);
 	EXPECT_EQ(counts.syncpt_id, 170u);
 	EXPECT_EQ(switch_exec_syncpt_marked(), seqno);
 }

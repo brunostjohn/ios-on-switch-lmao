@@ -1227,6 +1227,8 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuCachedZero.cpp",
         "//drivers/TegraGM20B:SwitchGpuBacking.cpp",
         "//drivers/TegraGM20B:SwitchGpuBridge.cpp",
+        "//drivers/TegraGM20B:SwitchGpuBridgeRetire.cpp",
+        "//drivers/TegraGM20B:SwitchGpuTimelineSyncpt.cpp",
         "//drivers/TegraGM20B:TegraGM20BDeviceClient.cpp",
         "//drivers/TegraGM20B:TegraGM20BGpu.h",
         "//drivers/TegraGM20B:TegraGM20BReadback.cpp",

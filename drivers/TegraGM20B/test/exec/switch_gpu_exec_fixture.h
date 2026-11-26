@@ -77,7 +77,9 @@ struct switch_exec_wfi_counts {
 	uint32_t extra_wfi_dis;
 	uint32_t syncpt_incrs;             /* SYNCPOINTB increments */
 	uint32_t syncpt_incrs_after_fence; /* of those, pushed after the fence word's release */
-	uint32_t syncpt_id;                /* the last increment's syncpoint */
+	uint32_t
+		syncpt_incrs_after_drain; /* of those, pushed after an L2 flush and the FB flush behind it */
+	uint32_t syncpt_id;               /* the last increment's syncpoint */
 };
 
 void switch_exec_chan_count_wfis(struct switch_exec_chan *chan, uint32_t from_dword,

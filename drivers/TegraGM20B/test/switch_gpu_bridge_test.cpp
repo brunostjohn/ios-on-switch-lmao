@@ -38,6 +38,7 @@ namespace
 {
 using Key = std::tuple<uint32_t, uint64_t, uint64_t>;
 std::map<Key, int> statuses, refs, external;
+std::function<void()> onTokenRead;  // runs at a token's status read, before it answers
 std::array<uint32_t, 256> syncpoints;
 std::array<uint32_t, 8192> pushWords;
 tgm_vm space;
@@ -354,6 +355,13 @@ extern "C" void tgm_chan_need_tokens(const switch_gpu_backing_token *tokens, uin
 	needed.insert(needed.end(), tokens, tokens + count);
 }
 
+std::vector<uint32_t> notedJobless;  // tgm_chan_note_jobless's channels, in order
+
+extern "C" void tgm_chan_note_jobless(uint32_t uid)
+{
+	notedJobless.push_back(uid);
+}
+
 extern "C" uint64_t tgm_writer_check_progress(uint32_t uid, uint32_t seqno, const char *)
 {
 	producerChecks.emplace_back(uid, seqno);
@@ -439,6 +447,8 @@ extern "C" void switch_gpu_backing_token_release(const switch_gpu_backing_token 
 
 extern "C" int switch_gpu_backing_token_status(const switch_gpu_backing_token *token)
 {
+	if (onTokenRead)
+		onTokenRead();
 	return statuses[key(*token)];
 }
 
@@ -1153,6 +1163,82 @@ TEST_F(Bridge, AProducerThatStoppedShortHasTheCpuMakeTheIncrementsItOwed)
 	EXPECT_EQ(switch_gpu_bridge_status(bridge), -5);
 	EXPECT_EQ(failureReleases, releasesBefore + 1);
 	EXPECT_EQ(syncpoints[kProducerSyncpoint + 1], 20u);
+	release(bridge);
+}
+
+// gpu.x1.bridge_jobless counts its own chain: a host1x consumer's jobless bridge is noted on the producing channel; the
+// display's fence and a CPU wait on the same covered token are not, nor is a consumer that took a GPU job.
+TEST_F(Bridge, OnlyAHost1xConsumersJoblessBridgeIsCountedOnItsProducingChannel)
+{
+	const auto source = token(312, 13);
+	statuses[key(source)] = 0;
+	covered[key(source)] = {kProducerSyncpoint + 7, 60, 312};
+	notedJobless.clear();
+	const auto fenced = [](void *, int) {};
+	ASSERT_EQ(switch_gpu_bridge_fence(&source, 1, fenced, nullptr), 0);
+	EXPECT_TRUE(notedJobless.empty()) << "the display's fence";
+	auto *bridge = submit({source});
+	ASSERT_NE(bridge, nullptr);
+	EXPECT_EQ(notedJobless, std::vector<uint32_t>{13});
+	const auto plain = token(313, 14);
+	statuses[key(plain)] = 0;
+	auto *job = submit({plain});
+	ASSERT_NE(job, nullptr);
+	EXPECT_EQ(notedJobless, std::vector<uint32_t>{13}) << "a bridge with a GPU job of its own";
+	statuses[key(source)] = 1;
+	statuses[key(plain)] = 1;
+	coveringStatus[{13, 1, 312}] = 1;
+	finish();
+	release(bridge);
+	release(job);
+}
+
+// A kill landing between the slot's reads fails the token and stops the channel at once. The tokens are read first, so
+// a failure they show comes with the channel's end, and the CPU makes the increments the channel never will.
+TEST_F(Bridge, AKillBetweenTheTokenAndTheChannelReadsStillHasTheCpuMakeTheIncrements)
+{
+	const auto source = token(310, 7);
+	statuses[key(source)] = 0;
+	covered[key(source)] = {kProducerSyncpoint + 5, 40, 310};
+	syncpoints[kProducerSyncpoint + 5] = 36;
+	const uint32_t releasesBefore = failureReleases;
+	auto *bridge = submit({source});
+	ASSERT_NE(bridge, nullptr);
+	onTokenRead = [&] {
+		statuses[key(source)] = -5;
+		coveringStatus[{7, 1, 310}] = -5;
+		stoppedChannels.insert(7);
+	};
+	switch_gpu_bridge_completed();
+	pump();
+	onTokenRead = nullptr;
+	stoppedChannels.erase(7);
+	EXPECT_EQ(switch_gpu_bridge_status(bridge), -5);
+	EXPECT_EQ(failureReleases, releasesBefore + 1);
+	EXPECT_EQ(syncpoints[kProducerSyncpoint + 5], 40u);
+	release(bridge);
+}
+
+// A covering job's increments go ahead of its fence (gpu_exec.c chan_fence_job), so once that fence landed a channel
+// that then stopped owes none: making them on the CPU would cancel a consumer that reads good data.
+TEST_F(Bridge, AStoppedProducerWhoseCoveringFenceLandedOwesNoIncrements)
+{
+	const auto source = token(311, 7);
+	statuses[key(source)] = 0;
+	covered[key(source)] = {kProducerSyncpoint + 6, 50, 311};
+	syncpoints[kProducerSyncpoint + 6] = 48;
+	const uint32_t releasesBefore = failureReleases;
+	auto *bridge = submit({source});
+	ASSERT_NE(bridge, nullptr);
+	statuses[key(source)] = 1;
+	coveringStatus[{7, 1, 311}] = 1;
+	stoppedChannels.insert(7);
+	switch_gpu_bridge_completed();
+	pump();
+	stoppedChannels.erase(7);
+	EXPECT_EQ(switch_gpu_bridge_status(bridge), 1);
+	EXPECT_EQ(failureReleases, releasesBefore);
+	EXPECT_EQ(syncpoints[kProducerSyncpoint + 6], 48u);
 	release(bridge);
 }
 

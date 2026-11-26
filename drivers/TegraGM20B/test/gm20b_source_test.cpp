@@ -385,6 +385,34 @@ TEST(GM20BPresentSource, FenceOnlyPresentHasNoCopy)
 // gpu.poster_targets reads each process's largest colour target, which the stats' push scan records (debug kernels).
 // SubmitJob takes the scan before its kick and hands its profile to the kick; the scan's counts are atomic, as SubmitJob
 // runs without the connection lock.
+// A jobless bridge (SwitchGpuBridgeRetire.cpp settleJobless) reads its tokens before its producer's channel, and the
+// channel's status before its end (`stopped`): a kill stores the end before any status reads failed, so a failure seen
+// comes with `stopped`, and the CPU makes the increments a channel that stopped short owes. A covering fence that landed
+// owes none (gpu_exec.c pushes the increments ahead of it). gpu.x1.bridge_jobless counts only a host1x consumer's
+// jobless bridges, on the producing channel, after the queue's lock (never tgm_live_lock under it).
+TEST(GM20BBridgeSource, AJoblessSlotReadsItsTokensThenItsChannelThenItsEnd)
+{
+	const CodeText covered = Block(SourceText("../SwitchGpuTimelineSyncpt.cpp"),
+				       "extern \"C\" int switch_gpu_timeline_covered(");
+	EXPECT_TRUE(covered.before("result = physical_now(timeline, last, false);",
+				   "timeline->terminal"));
+	const CodeText settle =
+		Block(SourceText("../SwitchGpuBridgeRetire.cpp"), "bool settleJobless(");
+	EXPECT_TRUE(settle.before("producers(job);", "switch_gpu_producer_covered("));
+	EXPECT_TRUE(settle.has("if (stopped && cover != 1) switch_gpu_producer_release("));
+	const std::string bridge = SourceText("../SwitchGpuBridge.cpp");
+	EXPECT_TRUE(CodeText(Configured(bridge, "TGM_STATS", true))
+			    .has("IOLockUnlock(queue.lock); if (consumerJobless) "
+				 "tgm_chan_note_jobless(wait.covering.queue); return error;"));
+	EXPECT_TRUE(
+		CodeText(bridge).has("const bool consumerJobless = !error && jobless && assigns;"));
+	EXPECT_EQ(CodeText(Configured(bridge, "TGM_STATS", false)).count("tgm_chan_note_jobless"),
+		  0u);
+	EXPECT_TRUE(CodeText(Configured(SourceText("../TegraGM20BUserClientDispatch.cpp"),
+					"TGM_STATS", true))
+			    .has("tgm_chan_jobless(owner_)"));
+}
+
 TEST(GM20BPushScanSource, EverySubmissionPathScansItsPushes)
 {
 	const CodeText job =

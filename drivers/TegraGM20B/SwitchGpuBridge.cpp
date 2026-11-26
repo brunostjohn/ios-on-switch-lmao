@@ -42,12 +42,6 @@ using namespace switch_gpu_bridge_queue;
 
 namespace
 {
-#if TGM_STATS
-// Since boot: bridges with no GPU job, and consumer status reads that found the producer's syncpoint reached while its
-// covering job's fence still read short (the posted-write order gpu_exec.c chan_fence_job assumes)
-uint64_t joblessCount, statusLag;
-#endif
-
 void completed(void *)
 {
 	thread_call_enter(queue.retirement);
@@ -207,6 +201,7 @@ static int submitBridge(const switch_gpu_backing_token *tokens, uint32_t count,
 		}
 		switch_gpu_chan_submit_leave();
 	}
+	const bool consumerJobless = !error && jobless && assigns;
 	if (error) {
 		releaseLocked(job);
 	} else {
@@ -219,12 +214,12 @@ static int submitBridge(const switch_gpu_backing_token *tokens, uint32_t count,
 			armHangCheck(kHangCheckNs);
 		if (jobless && producerDone)
 			thread_call_enter(queue.retirement);
-#if TGM_STATS
-		if (jobless)
-			__atomic_fetch_add(&joblessCount, 1, __ATOMIC_RELAXED);
-#endif
 	}
 	IOLockUnlock(queue.lock);
+#if TGM_STATS
+	if (consumerJobless)
+		tgm_chan_note_jobless(wait.covering.queue);
+#endif
 	return error;
 }
 
@@ -233,14 +228,6 @@ extern "C" int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, 
 {
 	return submitBridge(tokens, count, out, true);
 }
-
-#if TGM_STATS
-extern "C" void switch_gpu_bridge_counts(uint64_t *jobless, uint64_t *status_lag)
-{
-	*jobless = __atomic_load_n(&joblessCount, __ATOMIC_RELAXED);
-	*status_lag = __atomic_load_n(&statusLag, __ATOMIC_RELAXED);
-}
-#endif
 
 extern "C" void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *bridge, uint32_t *syncpoint,
 					    uint32_t *threshold)
@@ -309,10 +296,6 @@ extern "C" int switch_gpu_bridge_status(const switch_gpu_bridge *bridge)
 		if (bridge->producer && result >= 0) {
 			int stopped = 0;
 			const int cover = switch_gpu_producer_covered(bridge->covering, &stopped);
-#if TGM_STATS
-			if (reached && cover == 0)
-				__atomic_fetch_add(&statusLag, 1, __ATOMIC_RELAXED);
-#endif
 			result = cover < 0 ? cover : cover == 0 ? 0 : result;
 		}
 		if (result == 1 && !reached)

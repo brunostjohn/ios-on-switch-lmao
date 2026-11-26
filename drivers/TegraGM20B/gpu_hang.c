@@ -72,6 +72,32 @@ uint64_t tgm_writer_check_progress(uint32_t uid, uint32_t seqno, const char *who
 	return next;
 }
 
+#if TGM_STATS
+void tgm_chan_note_jobless(uint32_t uid)
+{
+	struct tgm_chan *chan = NULL;
+
+	mutex_lock(&tgm_live_lock);
+	chan = live_by_uid(uid);
+	if (chan)
+		chan->stat_jobless++;
+	mutex_unlock(&tgm_live_lock);
+}
+
+uint64_t tgm_chan_jobless(const char *owner)
+{
+	struct tgm_chan *chan = NULL;
+	u64 jobless = 0;
+
+	mutex_lock(&tgm_live_lock);
+	list_for_each_entry(chan, &tgm_live_chans,
+			    live) if (!strncmp(chan->owner, owner, sizeof(chan->owner) - 1))
+		jobless += chan->stat_jobless;
+	mutex_unlock(&tgm_live_lock);
+	return jobless;
+}
+#endif
+
 int tgm_all_clients(void)
 {
 	return 1; /* every process that asks gets a device */

@@ -35,9 +35,6 @@ int switch_gpu_bridge_wait(const struct switch_gpu_bridge *bridge);
 int switch_gpu_bridge_notify(const struct switch_gpu_bridge *bridge, void (*completed)(void *, int),
 			     void *context);
 void switch_gpu_bridge_release(struct switch_gpu_bridge **bridge);
-/* Debug kernels (TGM_STATS): bridges with no GPU job of their own, and consumer status reads that found the producer's
- * syncpoint reached while its covering job's fence read short, since boot */
-void switch_gpu_bridge_counts(uint64_t *jobless, uint64_t *status_lag);
 int switch_gpu_bridge_wait_room(void);
 /* Explicit CPU acquisition only; waits on the bridge interrupt, never polls a producer. */
 int switch_gpu_bridge_wait_external(const struct switch_gpu_backing_token *token);

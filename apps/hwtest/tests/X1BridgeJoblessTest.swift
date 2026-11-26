@@ -7,17 +7,15 @@ import HWTestKit
 import Metal
 import VideoToolbox
 
-/// The order host1x.md A2's producer increments assume (review-host1x.md finding 8): a GPU job's fence release, posted
-/// by the host ahead of its SYNCPOINTB increments, is in memory by the time host1x sees the increment. gpu.x1.gpu_vic_sync's
-/// chain (a GPU draw into a pixel buffer, a VTPixelTransferSession scale by VIC, a GPU sample of its output) runs
-/// `rounds` times; from the second round on VIC waits on the drawing channel's own syncpoint (a bridge with no GPU job).
-/// A debug kernel counts, at each consumer's status read, the syncpoint reached while the covering job's fence still
-/// read short (TegraGM20BPathsOpBridge). jobless: consumer waits on a producer syncpoint; status_lag: those reads (0);
-/// stale, unwritten, torn: as gpu.x1.gpu_vic_sync's, over every round (0). A run with no jobless round fails: the chain
-/// is the path the producer increments are for.
-struct X1BridgeSyncptOrderTest: HWTest {
-    let id = "gpu.x1.bridge_syncpt_order"
-    let name = "A GPU job's fence is in memory when host1x sees its own syncpoint increment"
+/// host1x.md A2's producer increments: gpu.x1.gpu_vic_sync's chain (a GPU draw into a pixel buffer, a
+/// VTPixelTransferSession scale by VIC, a GPU sample of its output) runs `rounds` times; from the second round on VIC
+/// waits on the drawing channel's own syncpoint, with no GPU job of the bridge's. jobless: VIC bridges that waited on a
+/// syncpoint of this process's channels (debug kernels, TegraGM20BPathsOpBridge); stale, unwritten, torn: as
+/// gpu.x1.gpu_vic_sync's, over every round (0). A run with no jobless round fails: the drawing job did not end with the
+/// L2 drain (an Internal job, TegraGM20BJobExternal unset), so every bridge made its own job.
+struct X1BridgeJoblessTest: HWTest {
+    let id = "gpu.x1.bridge_jobless"
+    let name = "VIC reads a GPU drawing it waited for on the drawing channel's own syncpoint"
     let subsystem = Subsystem.metal
     var timeout: TimeInterval { 120 }
 
@@ -33,9 +31,7 @@ struct X1BridgeSyncptOrderTest: HWTest {
         defer { VTPixelTransferSessionInvalidate(session) }
         let state = try gpu.render(fragment: "x1_spun_colour", format: .bgra8Unorm)
         let connection = GPUConnection()
-        guard let before = Self.bridgeCounts(connection) else {
-            return .skip("no bridge counts (a release kernel)")
-        }
+        guard let before = Self.jobless(connection) else { return .skip("no bridge counts (a release kernel)") }
         var totals = (stale: 0, unwritten: 0, torn: 0)
         for _ in 0 ..< Self.rounds {
             let width = X1GpuVicSyncTest.width, height = X1GpuVicSyncTest.height
@@ -68,23 +64,22 @@ struct X1BridgeSyncptOrderTest: HWTest {
             totals.unwritten += reading.unwritten
             totals.torn += reading.torn
         }
-        let after = Self.bridgeCounts(connection) ?? before
-        let jobless = after.jobless - before.jobless
-        let lag = after.statusLag - before.statusLag
+        let jobless = max(0, (Self.jobless(connection) ?? before) - before)
         metrics.set("rounds", Self.rounds)
         metrics.set("jobless", jobless)
-        metrics.set("status_lag", lag)
         metrics.set("stale", totals.stale)
         metrics.set("unwritten", totals.unwritten)
         metrics.set("torn", totals.torn)
         metrics.set("paths", gpu.paths.isEmpty ? "-" : gpu.paths.text)
         if jobless == 0 {
-            return .fail("no round's VIC job waited on the drawing channel's own syncpoint", metrics)
+            return .fail(
+                "no round's VIC job waited on the drawing channel's own syncpoint: the drawing job did not end with "
+                    + "the L2 drain", metrics
+            )
         }
         let offRaw = GM20BFacade.kind(of: gpu.device) == "gm20b" ? gpu.paths.offRaw : PathTally()
         return Outcome.judged(
             [
-                ("no status read with the syncpoint ahead of the fence", lag == 0),
                 ("no sample of the source's CPU fill", totals.stale == 0),
                 ("no sample of the destination's CPU fill", totals.unwritten == 0),
                 ("no torn sample", totals.torn == 0),
@@ -92,15 +87,14 @@ struct X1BridgeSyncptOrderTest: HWTest {
         ).failing(offRaw: offRaw)
     }
 
-    /// "jobless=N status_lag=N", totals since boot (TegraGM20BPathsABI.h TegraGM20BPathsOpBridge)
-    static func bridgeCounts(_ connection: GPUConnection?) -> (jobless: Int, statusLag: Int)? {
+    /// "jobless=N": this process's channels' jobless VIC bridges (TegraGM20BPathsABI.h TegraGM20BPathsOpBridge)
+    static func jobless(_ connection: GPUConnection?) -> Int? {
         guard let connection else { return nil }
         let (kr, reply) = connection.call(
             GPUPaths.method, GPUConnection.words([bridgeOp, 0]), outputSize: GPUPaths.replySize
         )
         guard kr == KERN_SUCCESS else { return nil }
         let counts = GPUPaths.parse(String(decoding: reply.prefix { $0 != 0 }, as: UTF8.self)).counts
-        guard let jobless = counts["jobless"], let lag = counts["status_lag"] else { return nil }
-        return (jobless, lag)
+        return counts["jobless"]
     }
 }

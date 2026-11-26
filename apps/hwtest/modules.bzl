@@ -565,7 +565,7 @@ TESTS_PATHS_SRCS = [
     "tests/TitleScrollTest.swift",
     "tests/TitleScroller.swift",
     "tests/TransferBesideReadbackTest.swift",
-    "tests/X1BridgeSyncptOrderTest.swift",
+    "tests/X1BridgeJoblessTest.swift",
     "tests/X1GpuVicSyncTest.swift",
 ]
 

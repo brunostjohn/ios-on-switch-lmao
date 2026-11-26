@@ -206,7 +206,7 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 	struct nvif_push *push = &chan->chan.push;
 	struct switch_gpu_kicked_job *job = NULL;
 	const int announce = switch_gpu_quiet_announces(&chan->quiet, quiet);
-	const int flushed = external == 1 && (l2_on() || chan->kernel);
+	int flushed = 0;
 	int drained = 0;
 	u32 s = 0;
 	if (external && (l2_on() || chan->kernel)) {
@@ -221,9 +221,19 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 			PUSH_NVSQ(push, NV906F, NVB06F_MEM_OP_C, 0, NVB06F_MEM_OP_D,
 				  NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY);
 			PUSH_NVSQ(push, NV906F, NVB06F_FB_FLUSH, 0);
+			flushed = 1;
 		}
 		/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
 		drained = 1;
+	}
+	/* After the drain, so host1x's engines read DRAM, and ahead of the fence: a fence that landed means the host issued
+	 * them, so a channel torn down once its fence completed (tgm_chan_del) never drops a finished job's increments, and
+	 * the CPU makes them only for a job whose fence never landed (SwitchGpuBridgeRetire.cpp settleJobless). Nothing
+	 * reads the syncpoint as a fence. */
+	if (flushed) {
+		const u32 syncpt = switch_gpu_timeline_syncpt_next(chan->timeline, first, next);
+		if (syncpt)
+			push->cur += tgm_syncpt_incr_only(push->cur, syncpt);
 	}
 	/* nouveau's NVDEF/NVVAL/PUSH_* macros compute in int and repeat their branches. */
 	/* NOLINTBEGIN(bugprone-signed-bitwise,bugprone-branch-clone) */
@@ -263,14 +273,6 @@ static u32 chan_fence_job(struct tgm_chan *chan, int external, u32 first, u32 ne
 				  NVDEF(NV906F, SEMAPHORED, RELEASE_SIZE, 4BYTE));
 	}
 	/* NOLINTEND(bugprone-signed-bitwise,bugprone-branch-clone) */
-	/* After the releases: host1x reaching the threshold means the job's token already reads complete. Assumed until the
-	 * device answers: the host's posted semaphore writes land before host1x sees the increments that follow them
-	 * (HW Test gpu.x1.bridge_syncpt_order counts a consumer that saw otherwise, status_lag). */
-	if (flushed) {
-		const u32 syncpt = switch_gpu_timeline_syncpt_next(chan->timeline, first, next);
-		if (syncpt)
-			push->cur += tgm_syncpt_incr_only(push->cur, syncpt);
-	}
 	nvif_chan_gpfifo_post(&chan->chan);
 	if (announce) {
 		/* NOLINTNEXTLINE(bugprone-signed-bitwise): nouveau's PUSH_MTHD computes in int */

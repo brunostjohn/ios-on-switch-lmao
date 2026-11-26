@@ -213,6 +213,8 @@ void switch_exec_chan_count_wfis(struct switch_exec_chan *chan, uint32_t from_dw
 	u32 sema_hi = 0;
 	u32 sema_lo = 0;
 	int fenced = 0;
+	int l2_flushed = 0;
+	int drained = 0;
 	u32 i = from_dword;
 
 	memset(out, 0, sizeof(*out));
@@ -243,14 +245,17 @@ void switch_exec_chan_count_wfis(struct switch_exec_chan *chan, uint32_t from_dw
 			if (cur == 0x0074 && (data & 0xfu) == 1u) { /* SYNCPOINTB, OPERATION INCR */
 				out->syncpt_incrs++;
 				out->syncpt_incrs_after_fence += fenced;
+				out->syncpt_incrs_after_drain += drained;
 				out->syncpt_id = (data >> 8) & 0xffu;
 			} else if (cur == NVB06F_WFI) {
 				out->method_wfis++;
 			} else if (cur == NVB06F_FB_FLUSH) {
 				out->fb_flushes++;
+				drained |= l2_flushed;
 			} else if (cur == NVB06F_MEM_OP_D &&
 				   data == NVB06F_MEM_OP_D_OPERATION_L2_FLUSH_DIRTY) {
 				out->l2_flushes++;
+				l2_flushed = 1;
 			} else if (cur == NVB06F_MEM_OP_D &&
 				   data == NVB06F_MEM_OP_D_OPERATION_L2_SYSMEM_INVALIDATE) {
 				out->l2_invalidates++;

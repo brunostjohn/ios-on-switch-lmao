@@ -33,9 +33,8 @@ enum {
 	 * gpu.x1.shadow_ram), taken from host1x at the first ask and never waited on, and their values now. A process
 	 * without SWITCH_GPU_PROBES_ENTITLEMENT gets kIOReturnNotPrivileged. */
 	TegraGM20BPathsOpProbeSyncpts = 7,
-	/* "jobless=N status_lag=N": since boot, bridges whose consumer waits on the producer's own syncpoint, and consumer
-	 * status reads that found that syncpoint reached while the producer's fence read short (SwitchGpuBridge.h
-	 * switch_gpu_bridge_counts; HW Test gpu.x1.bridge_syncpt_order) */
+	/* "jobless=N": host1x consumers' bridges that waited on the syncpoint of a live channel of a process with the
+	 * caller's name, with no GPU job of their own (TegraGM20BGpu.h tgm_chan_jobless; HW Test gpu.x1.bridge_jobless) */
 	TegraGM20BPathsOpBridge = 8,
 };
 

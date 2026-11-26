@@ -98,8 +98,10 @@ extern "C" int switch_gpu_timeline_covered(const switch_gpu_backing_token *token
 	const auto *timeline = find(token);
 	int result = -19;
 	if (timeline) {
-		*stopped = __atomic_load_n(&timeline->terminal, __ATOMIC_ACQUIRE) != 0;
+		// After the status: a kill stores `terminal` (no lock) before anything reads its -5, so a -5 here comes with
+		// `stopped`
 		result = physical_now(timeline, last, false);
+		*stopped = __atomic_load_n(&timeline->terminal, __ATOMIC_ACQUIRE) != 0;
 	}
 	IOLockUnlock(lock);
 	return result;
