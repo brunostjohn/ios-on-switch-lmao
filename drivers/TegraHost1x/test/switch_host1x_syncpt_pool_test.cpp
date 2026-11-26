@@ -4,13 +4,14 @@
 #include <gtest/gtest.h>
 
 #include <set>
+#include <vector>
 
 #include "../SwitchHost1xSyncptPool.h"
 
 namespace {
 SwitchHost1xSyncptPool pool()
 {
-    return {{1ULL << 0 | 1ULL << 9, 0, 0}, {}, {}, SwitchHost1xSyncptPool::kFirstHandedOut, 0, 2};
+    return {{1ULL << 0 | 1ULL << 9, 0, 0}, {}, {}, {}, 0, 0, 2};
 }
 }  // namespace
 
@@ -62,4 +63,32 @@ TEST(Host1xSyncptPool, AFreeOfAnIdNotHandedOutChangesNothing)
     EXPECT_FALSE(p.free(id)) << "freed already";
     EXPECT_EQ(p.inUse, 0u);
     EXPECT_EQ(p.capacity(), 190u);
+}
+
+// Review-dma2 D6: freed ids come back in the order they were freed, and only after every id never handed out, wherever
+// they sit in the scan. The hard case: an id freed just past where the last allocation ended.
+TEST(Host1xSyncptPool, FreedIdsComeBackInTheOrderFreedAfterEveryUnusedOne)
+{
+    SwitchHost1xSyncptPool p = pool();
+    uint32_t id = 0;
+    std::vector<uint32_t> first;
+    for (uint32_t i = 0; i < 20; ++i) {
+        ASSERT_TRUE(p.alloc(&id));
+        first.push_back(id);
+    }
+    ASSERT_TRUE(p.free(first[19]));  // the last one handed out: next to where the scan goes on
+    ASSERT_TRUE(p.free(first[3]));
+    std::set<uint32_t> fresh;
+    for (uint32_t i = 0; i < 190 - 20; ++i) {
+        ASSERT_TRUE(p.alloc(&id));
+        EXPECT_NE(id, first[19]) << i;
+        EXPECT_NE(id, first[3]) << i;
+        fresh.insert(id);
+    }
+    EXPECT_EQ(fresh.size(), 170u);
+    ASSERT_TRUE(p.alloc(&id));
+    EXPECT_EQ(id, first[19]) << "freed first";
+    ASSERT_TRUE(p.alloc(&id));
+    EXPECT_EQ(id, first[3]);
+    EXPECT_FALSE(p.alloc(&id));
 }

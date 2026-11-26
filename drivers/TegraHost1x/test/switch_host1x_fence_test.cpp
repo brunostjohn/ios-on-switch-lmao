@@ -571,3 +571,24 @@ TEST_F(Host1xFence, ALowSyncpointPastTheOldRangeWaitsSleepsAndReleasesAsAnyOther
         tegra_host1x_syncpt_free(id);
     EXPECT_EQ(tegra_host1x_syncpt_release_failed(low, 6, 1), TEGRA_HOST1X_EINVAL) << "freed: not ours any more";
 }
+
+// Review-dma2 D7, debug kernels: a free before the syncpoint reached a threshold a channel's fenced job was given would
+// let the job's late increment reach the next owner.
+TEST_F(Host1xFence, AFreeWhileAChannelsJobStillOwesAnIncrementPanics)
+{
+    uint32_t id = 0;
+    ASSERT_EQ(tegra_host1x_syncpt_alloc(&id), TEGRA_HOST1X_OK);
+    value(id) = 4;
+    const uint32_t job[2] = {tegra_host1x_op_setclass(TEGRA_HOST1X_CLASS_HOST1X, 0, 0),
+                             tegra_host1x_op_incr_syncpt(TEGRA_HOST1X_COND_IMMEDIATE, id)};
+    ASSERT_EQ(switch_host1x_job_copy(TEGRA_HOST1X_CHANNEL_NVJPG, job, 2, id, 6), TEGRA_HOST1X_OK);
+    try {
+        tegra_host1x_syncpt_free(id);
+        ADD_FAILURE() << "no panic";
+    } catch (const std::runtime_error &e) {
+        EXPECT_EQ(std::string(e.what()), "TegraHost1x: syncpoint " + std::to_string(id) +
+                                             " freed at 4 while a job a channel ran still takes it to 6");
+    }
+    value(id) = 6;
+    tegra_host1x_syncpt_free(id);
+}

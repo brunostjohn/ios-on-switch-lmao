@@ -173,6 +173,10 @@ int gatherLocked(uint32_t channel, const uint32_t *first, uint32_t count, bool f
         endReservation(c);
         return gRunning ? TEGRA_HOST1X_EINVAL : TEGRA_HOST1X_ENODEV;
     }
+#if SWITCH_HOST1X_STATS
+    if (fenced)
+        switch_host1x_syncpt_owed(syncpt, threshold);
+#endif
     switch_dcache_clean_lines(first, count * 4);
     const uint32_t slot = c.push.push(pushRing(c), count, static_cast<uint32_t>(c.arenaMemory.pa + at * 4));
     switch_dcache_clean(pushRing(c) + slot / 4, 8);  // its DSB also completes the stream's clean

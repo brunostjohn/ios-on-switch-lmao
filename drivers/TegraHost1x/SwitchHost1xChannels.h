@@ -22,6 +22,11 @@ uint32_t switch_host1x_channels_filter_stuck();
 // Suspend: every channel stopped; submits fail until program.
 void switch_host1x_channels_stop();
 
+#if (defined(DEVELOPMENT) && DEVELOPMENT) || (defined(DEBUG) && DEBUG)
+// A fenced job takes syncpoint `id` to `threshold` (TegraHost1x.cpp's free check). Submit lock held.
+void switch_host1x_syncpt_owed(uint32_t id, uint32_t threshold);
+#endif
+
 // Under the submit lock, host1x up, once a failed producer's cancellation is stored: the display stream that waits on
 // it is cancelled, then the producer's syncpoint is released to `threshold`. An increment that does not take panics.
 void switch_host1x_channels_release_failed(uint32_t id, uint32_t threshold);
