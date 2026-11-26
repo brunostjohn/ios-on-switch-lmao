@@ -22,8 +22,10 @@ bool switch_gpu_cached_buffer_units(uint64_t bytes, SwitchGpuCachedBuffer *out)
 		void *cpu = nullptr;
 		parts[made] = made < layout.units
 				      ? switch_iokit_fresh_memory(SWITCH_GPU_SPARE_UNIT_BYTES,
-								  SWITCH_GPU_SPARE_UNIT_BYTES, &cpu)
-				      : switch_iokit_fresh_memory(layout.tail, 0, &cpu);
+								  SWITCH_GPU_SPARE_UNIT_BYTES,
+								  SWITCH_IOKIT_FRESH_CACHED, &cpu)
+				      : switch_iokit_fresh_memory(layout.tail, 0,
+								  SWITCH_IOKIT_FRESH_CACHED, &cpu);
 		if (!parts[made])
 			break;
 		++made;
@@ -51,17 +53,20 @@ bool switch_gpu_cached_buffer_units(uint64_t bytes, SwitchGpuCachedBuffer *out)
 		multi->release();
 		return false;
 	}
-	const volatile uint8_t *bytesOf = reinterpret_cast<const volatile uint8_t *>(map->getVirtualAddress());
+	const volatile uint8_t *bytesOf =
+		reinterpret_cast<const volatile uint8_t *>(map->getVirtualAddress());
 	for (uint64_t off = 0; off < bytes; off += PAGE_SIZE)
 		(void)bytesOf[off];
 	*out = {multi, map, reinterpret_cast<void *>(map->getVirtualAddress())};
 	return true;
 }
 
-bool switch_gpu_cached_buffer_pages(uint64_t bytes, SwitchGpuCachedBuffer *out)
+namespace
+{
+bool freshBuffer(uint64_t bytes, switch_iokit_fresh_cache cache, SwitchGpuCachedBuffer *out)
 {
 	void *cpu = nullptr;
-	IOMemoryDescriptor *memory = switch_iokit_fresh_memory(bytes, 0, &cpu);
+	IOMemoryDescriptor *memory = switch_iokit_fresh_memory(bytes, 0, cache, &cpu);
 	if (!memory)
 		return false;
 	if (memory->prepare() != kIOReturnSuccess) {
@@ -71,24 +76,16 @@ bool switch_gpu_cached_buffer_pages(uint64_t bytes, SwitchGpuCachedBuffer *out)
 	*out = {memory, nullptr, cpu};
 	return true;
 }
+}  // namespace
+
+bool switch_gpu_cached_buffer_pages(uint64_t bytes, SwitchGpuCachedBuffer *out)
+{
+	return freshBuffer(bytes, SWITCH_IOKIT_FRESH_CACHED, out);
+}
 
 bool switch_gpu_cached_buffer_write_combined(uint64_t bytes, SwitchGpuCachedBuffer *out)
 {
-	// BoAlloc's options for a system BO (kIOMemoryMapperNone shares a bit with kIOMapCacheMask; IOBMD keeps the cache
-	// mode's low three bits)
-	const IOOptionBits options = static_cast<IOOptionBits>(kIODirectionInOut) |
-				     static_cast<IOOptionBits>(kIOMemoryMapperNone) |
-				     kIOMapWriteCombineCache;
-	IOBufferMemoryDescriptor *memory = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-		kernel_task, options, bytes, 0x3ffffffffULL);
-	if (!memory)
-		return false;
-	if (memory->prepare() != kIOReturnSuccess) {
-		memory->release();
-		return false;
-	}
-	*out = switch_gpu_cached_buffer_of(memory);
-	return true;
+	return freshBuffer(bytes, SWITCH_IOKIT_FRESH_WRITE_COMBINED, out);
 }
 
 SwitchGpuCachedBuffer switch_gpu_cached_buffer_of(IOMemoryDescriptor *memory)

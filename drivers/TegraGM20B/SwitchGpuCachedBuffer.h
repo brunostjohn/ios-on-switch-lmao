@@ -17,7 +17,7 @@ struct SwitchGpuCachedBuffer {
 bool switch_gpu_cached_buffer_units(uint64_t bytes, SwitchGpuCachedBuffer *out);
 // One buffer of pages, under the GM20B's 34-bit physical limit
 bool switch_gpu_cached_buffer_pages(uint64_t bytes, SwitchGpuCachedBuffer *out);
-// One buffer of pages under the 34-bit limit whose VM object is write-combined, as a system BO's: zeroed by the VM
+// One buffer of pages whose VM object is write-combined, as a system BO's, its pages as their last owner left them
 bool switch_gpu_cached_buffer_write_combined(uint64_t bytes, SwitchGpuCachedBuffer *out);
 SwitchGpuCachedBuffer switch_gpu_cached_buffer_of(IOMemoryDescriptor *memory);
 enum class SwitchGpuPageList {

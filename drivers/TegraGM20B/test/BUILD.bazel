@@ -1250,6 +1250,7 @@ host_test(
         "//drivers/TegraGM20B:SwitchGpuParkedPool.cpp",
         "//drivers/TegraGM20B:TegraGM20BUserClientImport.cpp",
         "//kernel/switch:iokit/park_mapping.cpp",
+        "//kernel/switch:iokit/fresh_memory.cpp",
         "//kernel/switch:vm/park_vm.c",
         "//drivers/TegraGM20B:TegraGM20BPushScan.h",
         "//drivers/TegraGM20B:TegraGM20BPushScanRun.cpp",

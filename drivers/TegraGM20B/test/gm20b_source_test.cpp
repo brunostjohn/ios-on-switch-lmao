@@ -148,8 +148,12 @@ TEST(GM20BPoolPolicySource, SystemBosUseOnlyWriteCombinedSpares)
 				 "switch_gpu_cached_buffer_write_combined(bytes, buffer);"));
 	const CodeText wc = Block(SourceText("../SwitchGpuCachedBuffer.cpp"),
 				  "bool switch_gpu_cached_buffer_write_combined(");
-	EXPECT_TRUE(wc.has("kIOMapWriteCombineCache"));
-	EXPECT_TRUE(wc.has("0x3ffffffffULL"));
+	EXPECT_TRUE(wc.has("return freshBuffer(bytes, SWITCH_IOKIT_FRESH_WRITE_COMBINED, out);"));
+	const CodeText fresh = Block(SourceText("../../../kernel/switch/iokit/fresh_memory.cpp"),
+				     "IOMemoryDescriptor *switch_iokit_fresh_memory(");
+	EXPECT_TRUE(fresh.has("options |= kIOMemoryPersistent | (kIOWriteCombineCache << "
+			      "kIOMemoryBufferCacheShift);"));
+	EXPECT_FALSE(fresh.has("KMA_ZERO"));
 	const CodeText recycle = Block(
 		client(), "void spareRecycleWork(thread_call_param_t param, thread_call_param_t)");
 	const CodeText work =

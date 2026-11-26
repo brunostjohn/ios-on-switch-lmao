@@ -24,7 +24,8 @@ std::string unit(const char *name)
 TEST(GM20BMemSource, OnlyTheRefillThreadMakesSparesOfUnits)
 {
 	const std::string pool = unit("TegraGM20BUserClientSpares.cpp");
-	const CodeText make = Block(pool, "bool spareBuffer(SparePool *p, switch_gpu_spare_kind kind, uint64_t bytes,");
+	const CodeText make = Block(
+		pool, "bool spareBuffer(SparePool *p, switch_gpu_spare_kind kind, uint64_t bytes,");
 	EXPECT_TRUE(make.before("switch_gpu_cached_buffer_units(bytes, buffer)",
 				"switch_gpu_cached_buffer_pages(bytes, buffer)"));
 	EXPECT_EQ(CodeText(pool).count("spareMake("), 2u) << "its definition and spareWork's call";
@@ -43,7 +44,7 @@ TEST(GM20BMemSource, AUnitIsOneAlignedContiguousRun)
 	const std::string buffer = unit("SwitchGpuCachedBuffer.cpp");
 	EXPECT_TRUE(Block(buffer, "bool switch_gpu_cached_buffer_units(")
 			    .has("switch_iokit_fresh_memory(SWITCH_GPU_SPARE_UNIT_BYTES, "
-				 "SWITCH_GPU_SPARE_UNIT_BYTES, &cpu)"));
+				 "SWITCH_GPU_SPARE_UNIT_BYTES, SWITCH_IOKIT_FRESH_CACHED, &cpu)"));
 	EXPECT_TRUE(Block(buffer, "bool switch_gpu_cached_buffer_alone(")
 			    .has("getRetainCount() == (buffer.map ? 2 : 1)"));
 }
