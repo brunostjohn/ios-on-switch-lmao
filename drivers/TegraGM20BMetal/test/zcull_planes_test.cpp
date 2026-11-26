@@ -142,6 +142,30 @@ TEST(ZcullSlots, ASlotIsTakenFromNoJobThatMayStillLoadIt)
         << "no memory: no store, never a wait";
 }
 
+// Between jobs a slot is made ahead only where the next job could take none: never before a depth first needed one,
+// not while a made slot is free to the next job, and once where every made slot is a live carry's
+TEST(ZcullSlots, ASlotIsMadeAheadOnlyWhereTheNextJobCouldTakeNone)
+{
+    gm20b::ZcullSlots slots;
+    int made = 0;
+    const auto make = [&](gm20b::Bo &bo, uint64_t) {
+        bo.va = 0x800000 + 0x10400 * uint64_t(made++);
+        return true;
+    };
+    slots.makeAhead(0, 0x10400, make);
+    EXPECT_EQ(made, 0) << "a process that drew no depth keeps no slot";
+    ASSERT_EQ(slots.take(1, 0, 0x10400, make), 0);
+    slots.makeAhead(0, 0x10400, make);
+    EXPECT_EQ(made, 1) << "slot 0 is free to a job no carry names";
+    slots.makeAhead(1, 0x10400, make);
+    EXPECT_EQ(made, 2) << "slot 0 is the carry's";
+    EXPECT_EQ(slots.owner(1), 0u);
+    EXPECT_EQ(slots.take(2, 1, 0x10400, make), 1) << "the next job takes the one made ahead";
+    EXPECT_EQ(made, 2);
+    slots.makeAhead(1, 0x10400, make);
+    EXPECT_EQ(made, 2) << "slot 1 is free to the next job";
+}
+
 TEST(ZcullCarry, ACarryLivesWhileNoOtherJobWasSubmittedOnItsChannel)
 {
     gm20b::ZcullCarry carry;

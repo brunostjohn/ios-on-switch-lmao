@@ -31,6 +31,11 @@ struct DeviceHarness {
         return d.k_;
     }
 
+    static uint32_t zcullSlotsMade(const Device &d)
+    {
+        return d.zcullSlots_.made();
+    }
+
     // What the GPU's root table holds at push word `word` after everything submitted
     static uint32_t rootPush(const Device &d, uint32_t word)
     {

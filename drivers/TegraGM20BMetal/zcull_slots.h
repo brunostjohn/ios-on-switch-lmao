@@ -40,6 +40,20 @@ public:
         return int(made_++);
     }
 
+    // Between jobs: a slot made ahead where the next job could take none (every made one a live carry's, `reserved`),
+    // so it is not made mid-encode. The first is made where a depth first needs one: a process that draws no depth
+    // keeps no slot.
+    template <class Make> void makeAhead(uint64_t reserved, uint64_t bytes, Make make)
+    {
+        if (!made_)
+            return;
+        for (uint32_t i = 0; i < made_; i++)
+            if (!reserved || owner_[i] != reserved)
+                return;
+        if (made_ < kSlots && make(bo_[made_], bytes))
+            owner_[made_++] = 0;
+    }
+
     void release(int slot)
     {
         owner_[slot] = 0;

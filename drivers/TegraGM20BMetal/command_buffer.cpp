@@ -67,6 +67,12 @@ CommandBuffer *Device::begin()
         return nullptr;
     learnCompleted();
     set_.addPending(k_);
+    if (zcullOn_) {
+        const uint64_t reserved = zcullCarry_.live(channelGeneration(), lastSubmitted()) ? zcullCarry_.owner : 0;
+        zcullSlots_.makeAhead(reserved, ZcullSlots::slotBytes(zcullInfo_), [this](Bo &bo, uint64_t n) {
+            return makeZcullSlot(bo, n);
+        });
+    }
     Killed live = {};
     if ((contextless_ || k_.lost(channel_) || liveKill(live)) && !reopen())
         return nullptr;

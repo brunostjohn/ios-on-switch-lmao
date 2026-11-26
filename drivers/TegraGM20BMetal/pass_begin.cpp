@@ -17,6 +17,19 @@
 
 namespace gm20b {
 
+bool Device::makeZcullSlot(Bo &bo, uint64_t bytes)
+{
+    if (!k_.allocControl(bytes, bo, ControlUse::ZcullStorage))
+        return false;
+    // a slot the jobs would write unnamed is no slot
+    if (!set_.add(k_, bo, TegraGM20BSurfaceWrite)) {
+        k_.free(bo);
+        bo = {};
+        return false;
+    }
+    return true;
+}
+
 uint64_t CommandBuffer::zcullSlot(uint64_t zetaVa, uint64_t bytes, int &slot)
 {
     Device &d = *dev_;
@@ -28,15 +41,7 @@ uint64_t CommandBuffer::zcullSlot(uint64_t zetaVa, uint64_t bytes, int &slot)
         const ZcullCarry &carry = d.zcullCarry_;
         const uint64_t reserved = carry.live(d.channelGeneration(), d.lastSubmitted()) ? carry.owner : 0;
         slot = d.zcullSlots_.take(zcullOwner_, reserved, slotBytes, [&d](Bo &bo, uint64_t n) {
-            if (!d.k_.allocControl(n, bo, ControlUse::ZcullStorage))
-                return false;
-            // a slot the jobs would write unnamed is no slot
-            if (!d.set_.add(d.k_, bo, TegraGM20BSurfaceWrite)) {
-                d.k_.free(bo);
-                bo = {};
-                return false;
-            }
-            return true;
+            return d.makeZcullSlot(bo, n);
         });
     }
     if (slot < 0)

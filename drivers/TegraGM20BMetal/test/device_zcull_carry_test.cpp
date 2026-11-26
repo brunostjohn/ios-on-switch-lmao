@@ -223,6 +223,18 @@ TEST_F(DeviceZcullCarry, AnAdmissionBlockedCommitKeepsTheCarryForItsRetry)
     EXPECT_EQ(dev.stats.zcullCarriesLost.load(), 0u);
 }
 
+// A job the parked carry leaves no slot to (it holds the only one) finds one made at its begin(), not by its first
+// pass mid-encode
+TEST_F(DeviceZcullCarry, TheSlotACarryLeavesNoneOfIsMadeAtTheNextBegin)
+{
+    ASSERT_FALSE(job({true}, nullptr, &commandBuffer, 1).empty());
+    EXPECT_EQ(gm20b::DeviceHarness::zcullSlotsMade(dev), 1u);
+    gm20b::CommandBuffer *cb = dev.begin();
+    ASSERT_NE(cb, nullptr);
+    EXPECT_EQ(gm20b::DeviceHarness::zcullSlotsMade(dev), 2u) << "made between the jobs";
+    cb->abandon();
+}
+
 // A pass whose draws invalidate its region (a depth write under Always) records none and gives its slot back: after five
 // such depths, a sixth still stores its region and the pass that loads it loads it
 TEST_F(DeviceZcullCarry, APassThatRecordsNoRegionGivesItsSlotBack)

@@ -2336,6 +2336,8 @@ private:
     ZcullSlots zcullSlots_;
     ZcullCarry zcullCarry_;
     uint64_t zcullOwners_ = 0;
+    // A slot's storage, cached and in the resource set (ControlUse::ZcullStorage); false: none
+    bool makeZcullSlot(Bo &bo, uint64_t bytes);
     // Whether a full clear to `e` writes comptags only; one this process never asked for is asked for
     bool zbcHeld(const TegraGM20BAbiZbc &e);
     // compThread_ asks the kernel for the ZBC entries wanted, `l` dropped around each call
