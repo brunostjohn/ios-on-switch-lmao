@@ -151,7 +151,7 @@ protected:
         gm20b::PassDesc pass;
         pass.color[0].texture = &target;
         pass.count = 1;
-        pass.metalDepth = metal;
+        pass.metalDraws = metal;
         gm20b::RenderEncoder *e = cb ? cb->render(pass) : nullptr;
         if (!e)
             return "no pass";
@@ -293,7 +293,7 @@ TEST_F(DeviceDepthClamp, AMetalPassBoundsDepthWithoutBindingItsStateAgain)
             gm20b::PassDesc p;
             p.color[0].texture = &target;
             p.count = 1;
-            p.metalDepth = true;
+            p.metalDraws = true;
             gm20b::RenderEncoder *e = cb->render(p);
             ASSERT_NE(e, nullptr);
             e->setPipeline(pl);

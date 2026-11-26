@@ -175,7 +175,7 @@ RenderEncoder *CommandBuffer::render(const PassDesc &pass, const char **why)
                                                             shortOf(*t) || (blockLinear && !t->blockLinear)))
             scratchMask |= uint8_t(1u << j);
     const auto scratchTags =
-        transientColorTags(scratchMask, pass.readsBackings ? kBackingReaderColorTag : kTransientColorTag);
+        transientColorTags(scratchMask, pass.metalDraws ? kTransientColorTag : kDriverPassColorTag);
     for (uint32_t j = 0; j < pass.count && j < 8; j++) {
         const Texture *t = pass.color[j].texture;
         if (!t)

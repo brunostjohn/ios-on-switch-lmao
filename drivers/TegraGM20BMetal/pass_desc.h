@@ -72,12 +72,10 @@ struct PassDesc {
     // a pass of another one's clears alone: its Clear loads reach past the render area as that pass's do, which has a draw
     // call (turned_pass.cpp)
     bool drawn = false;
-    // a pass of Metal's draws: each depth they store is bounded as Metal bounds it (depth_bounds.h); the device's own
-    // passes store depth unbounded, as they copy it
-    bool metalDepth = false;
-    // its draws sample an earlier pass's memoryless backing (a YCbCr target's stand-in, TegraGM20BMetalYcbcrTargets.mm
-    // storeYcbcrPlanes): its own scratch colour targets take kBackingReaderColorTag's tags (attachment_lifetime.h)
-    bool readsBackings = false;
+    // the pass of Metal's draws: each depth they store is bounded as Metal bounds it (depth_bounds.h), and its scratch
+    // colour targets take kTransientColorTag's tags (attachment_lifetime.h); the device's own passes store depth unbounded,
+    // as they copy it, and take kDriverPassColorTag's
+    bool metalDraws = false;
 
     // RGB10A8_2P_XR10 textures held in their two planes that the pass's draws store into, each through an RG32Uint image of
     // its texels (pack/xr.metal xr_planes_merge_frag before the pass, xr_planes_split_frag after it)

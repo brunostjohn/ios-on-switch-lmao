@@ -19,9 +19,9 @@
 #include "ycbcr_meet.h"
 #include "ycbcr_store.h"
 
-static_assert(gm20b::kPackedLoadTag + 8 <= gm20b::kBackingReaderColorTag &&
-                  gm20b::kBackingReaderColorTag + 8 <= gm20b::kYcbcrLoadTag,
-              "a backing reader's colour tags between the loaded packed planes' and the loaded YCbCr textures'");
+static_assert(gm20b::kPackedLoadTag + 8 <= gm20b::kDriverPassColorTag &&
+                  gm20b::kDriverPassColorTag + 8 <= gm20b::kYcbcrLoadTag,
+              "the driver passes' colour tags between the loaded packed planes' and the loaded YCbCr textures'");
 
 static gm20b::Pipeline *packState(const char *name)
 {
@@ -120,7 +120,6 @@ int storeYcbcrPlanes(gm20b::CommandBuffer *rc, const gm20b::Texture &t, const gm
         p.color[0].load = masked ? gm20b::ColorAttachment::Load : gm20b::ColorAttachment::DontCare;
         p.color[0].store = true;
         p.count = 1;
-        p.readsBackings = true;
         gm20b::RenderEncoder *e = rc->render(p);
         if (!e) {
             *why = "a YCbCr texture's plane the driver cannot render";

@@ -163,7 +163,7 @@ protected:
         pass.separate = {depthFrom, stencilFrom, loadDepth, loadStencil, storeDepth, storeStencil};
         pass.layers = layers;
         pass.biasDepthBits = biasDepthBits;
-        pass.metalDepth = true;
+        pass.metalDraws = true;
         gm20b::RenderEncoder *e = cb->render(pass);
         if (!e) {
             cb->abandon();

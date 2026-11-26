@@ -303,7 +303,7 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
         gm20bReachFails(cb, ahead_, *why_, turned_.failedForMemory(), rc->refusal);
         return fail(PredPassRotated, *why_, 0, 0, *why_);
     }
-    p.metalDepth = true;
+    p.metalDraws = true;
     // the recording failed every pass Metal's validation stops (TegraGM20BMetalPassErrors.h): render() refuses the rest for
     // want of memory alone
     if (!(re_ = rc->render(p, why_))) {

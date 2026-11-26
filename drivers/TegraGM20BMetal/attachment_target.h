@@ -93,7 +93,7 @@ inline bool texelBufferTarget(const Texture &t, Texture &out)
 // The command buffer's scratch (CommandBuffer::turnScratch) of colour j's plane image (planeInBlocks): 24 + j, between the
 // device's backing tags and the turn copies' (gpu.h BackingTag, turned_pass.cpp kTurnTag)
 constexpr uint32_t kPlaneImageTag = 24;
-static_assert(kPlaneImageTag + 8 <= kBackingReaderColorTag, "the plane images' tags below a backing reader's");
+static_assert(kPlaneImageTag + 8 <= kDriverPassColorTag, "the plane images' tags below a driver pass's colour tags");
 
 // Plane `plane` of level 0 of a one-level 3D texture laid out several planes a block (texture_shape.cpp volumeView2d:
 // one made without render-target usage), which no colour target addresses alone: the pass renders a one-plane-a-block image

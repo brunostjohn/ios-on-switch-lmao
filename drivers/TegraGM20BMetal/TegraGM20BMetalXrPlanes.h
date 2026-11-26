@@ -56,10 +56,10 @@ constexpr uint32_t xrPlanesImageTag(uint32_t k)
     return k < 8 ? kXrPlanesImageTag + k : k < 24 ? 32 + (k - 8) : kXrPlanesOverflowTag + (k - 24);
 }
 // The images live until their split, after the pass's resolves and YCbCr stores, which read earlier passes' backings
-static_assert(kXrPlanesImageTag >= gm20b::kBackingReaderColorTag + 8 &&
-                  (xrPlanesImageTag(8) >= gm20b::kBackingReaderColorTag + 8 ||
-                   xrPlanesImageTag(23) < gm20b::kBackingReaderColorTag),
-              "an XR plane image's tag is a backing reader's");
+static_assert(kXrPlanesImageTag >= gm20b::kDriverPassColorTag + 8 &&
+                  (xrPlanesImageTag(8) >= gm20b::kDriverPassColorTag + 8 ||
+                   xrPlanesImageTag(23) < gm20b::kDriverPassColorTag),
+              "an XR plane image's tag is a driver pass's");
 
 int mergeXrPlanes(gm20b::CommandBuffer *rc, const gm20b::Texture &t, uint32_t k, gm20b::Texture *&image,
                   const char **why);
