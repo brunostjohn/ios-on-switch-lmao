@@ -169,6 +169,7 @@ private:
     bool endEncoder(size_t at);
     bool endEncoders();
     bool closeEncoders();
+    void carryZcull(size_t to);
     bool producersOrdered();
 
     __unsafe_unretained SwitchMetalCommandBuffer *cb_ = nil;

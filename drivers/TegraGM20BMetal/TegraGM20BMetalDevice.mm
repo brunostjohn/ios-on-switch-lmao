@@ -83,6 +83,10 @@
     d[@"zcull_passes"] = @(gRM->raw->stats.zcullPasses.load());
     d[@"zcull_invalidations"] = @(gRM->raw->stats.zcullInvalidations.load());
     d[@"zcull_loads"] = @(gRM->raw->stats.zcullLoads.load());
+    d[@"zcull_carried"] = @(gRM->raw->stats.zcullCarried.load());
+    d[@"zcull_stores"] = @(gRM->raw->stats.zcullStores.load());
+    d[@"zcull_unstored"] = @(gRM->raw->stats.zcullUnstored.load());
+    d[@"zcull_carries_lost"] = @(gRM->raw->stats.zcullCarriesLost.load());
     d[@"state_segment_binds"] = @(gRM->raw->stats.segmentBinds.load());
     d[@"state_segment_words"] = @(gRM->raw->stats.segmentWords.load());
     d[@"state_segment_skips"] = @(gRM->raw->stats.segmentSkips.load());

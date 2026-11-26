@@ -207,6 +207,7 @@ bool SwitchMetalRangeEncode::seal(size_t to)
         cb->_promisesTaken = true;
         rc->promises = cb->_promises;
     }
+    carryZcull(to);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     splitCaptureCommitted(*rc);
 #endif

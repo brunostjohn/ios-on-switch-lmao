@@ -293,50 +293,6 @@ static bool sharesRenderTarget(SwitchMetalCommandBuffer *cb, size_t first, size_
     return a.color[0].texture && a.color[0].texture == b.color[0].texture && b.color[0].load == MTLLoadActionLoad;
 }
 
-static size_t nextEncoder(const SwitchMetalCommandPlan &plan, size_t k)
-{
-    return std::max(SwitchMetalCommandPlan::isEncoderBegin(plan.operation(k).op) ? plan.encoderEnd(k) : k + 1, k + 1);
-}
-
-static const SwitchMetalPass *depthLoading(SwitchMetalCommandBuffer *cb, size_t k)
-{
-    if (cb->_plan.operation(k).op != OpRender)
-        return nullptr;
-    const SwitchMetalPass &pass = cb->_passes[cb->_plan.legacy(k).x];
-    return pass.depth && pass.depthLoad == MTLLoadActionLoad ? &pass : nullptr;
-}
-
-static bool loadsADepth(SwitchMetalCommandBuffer *cb, size_t from, size_t to)
-{
-    for (size_t k = from; k < to; k = nextEncoder(cb->_plan, k))
-        if (depthLoading(cb, k))
-            return true;
-    return false;
-}
-
-// Whether cutting [from, to) at `at` leaves every pass after the cut that loads a depth in the range of the pass before it
-// that stored the depth: a stored zcull region lives in its range's job alone (zcull_planes.h), so a cut between them
-// loses the region the loading pass would cull with. Its callers run from the commit on, when the submit worker owns
-// the command buffer's plan and passes.
-static bool cutKeepsZcull(SwitchMetalCommandBuffer *cb, size_t from, size_t at, size_t to)
-{
-    const SwitchMetalCommandPlan &plan = cb->_plan;
-    for (size_t k = at; k < to; k = nextEncoder(plan, k)) {
-        const SwitchMetalPass *loading = depthLoading(cb, k);
-        if (!loading)
-            continue;
-        for (size_t j = from; j < at; j = nextEncoder(plan, j)) {
-            if (plan.operation(j).op != OpRender)
-                continue;
-            const SwitchMetalPass &storing = cb->_passes[plan.legacy(j).x];
-            if (storing.depth == loading->depth &&
-                (storing.zeta[0].store != MTLStoreActionDontCare || storing.zeta[1].store != MTLStoreActionDontCare))
-                return false;
-        }
-    }
-    return true;
-}
-
 static void splitCommittedRange(SwitchMetalCommandBuffer *cb)
 {
     constexpr size_t kMaxKickRanges = 3, kMinSplitEncoders = 10, kTargetChunkMin = 5;
@@ -367,10 +323,8 @@ static void splitCommittedRange(SwitchMetalCommandBuffer *cb)
     const size_t low = kTargetChunkMin / 2, high = count - 2;
     size_t picked = 0, pickedDist = SIZE_MAX, anyCut = 0, anyDist = SIZE_MAX;
     size_t prev = 0, idx = 0;
-    const bool depthLoads = loadsADepth(cb, range.from, range.to);
     for (size_t at = range.from; at < range.to; ++idx) {
-        if (idx >= low && idx <= high && !gm20bContinuesPass(cb, at) &&
-            (!depthLoads || cutKeepsZcull(cb, range.from, at, range.to))) {
+        if (idx >= low && idx <= high && !gm20bContinuesPass(cb, at)) {
             const size_t dist = idx >= target ? idx - target : target - idx;
             if (dist <= anyDist) {
                 anyCut = at;
@@ -395,8 +349,7 @@ static void splitCommittedRange(SwitchMetalCommandBuffer *cb)
     SWITCH_METAL_DIAGNOSTIC(gm20b::frameCpuCounts().rangeSplits.fetch_add(1, std::memory_order_relaxed));
 }
 
-// Where the encode ahead ended within `range`, 0: nowhere a cut may go
-static size_t aheadEnd(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &range)
+static size_t aheadSplitPoint(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &range)
 {
     const Ahead &a = ahead();
     if (a.cb != cb || !a.open || range.from || range.event || range.held || range.from >= range.to)
@@ -407,12 +360,6 @@ static size_t aheadEnd(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &r
     const size_t stop = stopOf(a);
     const size_t at = stop != SIZE_MAX ? stop : encode.betweenEncoders() ? encode.position() : 0;
     return at > range.from && at < range.to ? at : 0;
-}
-
-static size_t aheadSplitPoint(SwitchMetalCommandBuffer *cb, const SwitchMetalSegment &range)
-{
-    const size_t at = aheadEnd(cb, range);
-    return at && cutKeepsZcull(cb, range.from, at, range.to) ? at : 0;
 }
 
 void gm20bPipelineSplit(SwitchMetalCommandBuffer *cb)
@@ -432,10 +379,6 @@ void gm20bPipelineSplit(SwitchMetalCommandBuffer *cb)
                 rest.gpuWait = false;
                 cb->_segs.insert(cb->_segs.begin() + ptrdiff_t(cb->_segNext) + 1, rest);
                 SWITCH_METAL_DIAGNOSTIC(gm20b::frameCpuCounts().splits.fetch_add(1, std::memory_order_relaxed));
-            } else if (aheadEnd(cb, range) && stopOf(a) != SIZE_MAX) {
-                // the encoders from the recording's stop on need the whole encode, which only a range of their own
-                // gives them past an encode ahead: with the cut refused, the whole range is encoded at its turn
-                giveBack(cb->_aheadStopped.load(std::memory_order_relaxed) ?: uint32_t(VetoOps));
             }
             return;
         }

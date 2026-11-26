@@ -303,6 +303,38 @@ bool SwitchMetalRangeEncode::beginPass(size_t at)
     return true;
 }
 
+// The zcull regions the job ending at `to` stored that a pass of the raw ranges straight after it loads (none past an
+// event's or a held range) are kept for those ranges (gm20b::CommandBuffer::carryZcull). Read at the seal, from the
+// commit on, when every pass of the command buffer is recorded.
+void SwitchMetalRangeEncode::carryZcull(size_t to)
+{
+    SwitchMetalCommandBuffer *cb = cb_;
+    const std::vector<gm20b::ZcullStored> &regions = rc_->zcullRegions();
+    if (regions.empty())
+        return;
+    size_t end = to;
+    for (size_t s = cb->_segNext + 1; s < cb->_segs.size(); ++s) {
+        const SwitchMetalSegment &next = cb->_segs[s];
+        if (next.event || next.held || next.from != end)
+            break;
+        end = next.to;
+    }
+    const SwitchMetalCommandPlan &plan = cb->_plan;
+    uint32_t kept = 0;
+    for (size_t k = to; k < end;) {
+        const Op op = plan.operation(k).op;
+        if (op == OpRender) {
+            const SwitchMetalPass &later = cb->_passes[plan.legacy(k).x];
+            if (later.depth && later.depthLoad == MTLLoadActionLoad)
+                for (size_t i = 0; i < regions.size(); i++)
+                    kept |= uint32_t(regions[i].zetaVa == ((SwitchMetalTexture *)later.depth)->_raw.va) << i;
+        }
+        k = std::max(SwitchMetalCommandPlan::isEncoderBegin(op) ? plan.encoderEnd(k) : k + 1, k + 1);
+    }
+    if (end > to)
+        rc_->carryZcull((__bridge const void *)cb, to, kept);
+}
+
 void SwitchMetalRangeEncode::overlappingPlanes(const SwitchMetalPass &pass, gm20b::PassDesc &p)
 {
     for (unsigned j = 0; j < 8; j++) {

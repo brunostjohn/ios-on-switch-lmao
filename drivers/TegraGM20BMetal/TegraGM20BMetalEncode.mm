@@ -96,6 +96,8 @@ __attribute__((objc_externally_retained)) bool SwitchMetalRangeEncode::open(Swit
         return false;
     }
     generation_ = d.channelGeneration();
+    if (whole && from)
+        rc_->resumeZcull((__bridge const void *)cb, from);
     rc_->internalCompletion();
     beginInlineSignals(cb);
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
