@@ -275,6 +275,25 @@ void tgm_acquire_unfired(struct tgm_chan *chan, u64 now)
 		  (unsigned long long)(TGM_ACQUIRE_NS / NSEC_PER_MSEC));
 }
 
+/* tgm_live_lock held: chan is parked on a failed producer word that will never advance */
+static void isolate_failed_waiter(struct tgm_chan *chan, const char *why, const char *what, u64 now)
+{
+	char state[256];
+	char report[sizeof(chan->fault)];
+	const u32 seqno = tgm_chan_completed(chan) + 1;
+	const u64 waited_ns = chan->submit_ns ? now - chan->submit_ns : 0;
+	const char *detail = what && what[0] ? what : "stopped producer";
+
+	tgm_chan_describe(chan, state, sizeof(state));
+	scnprintf(report, sizeof(report), HANG_REPORT "%s (%s) for %s fence %u; %s", why, detail,
+		  chan->owner, seqno, state);
+	nvxnu_log("tegra-gm20b: recovering %s (channel %u): %s (%s) waited %llu ms for fence %u; "
+		  "%s\n",
+		  chan->owner, chan->chid, why, detail, waited_ns / 1000000, seqno, state);
+	tgm_chan_isolate(chan, report, now);
+	tgm_recover_fault(tgm_gpu.device, (int)chan->chid);
+}
+
 #if TGM_STATS
 /* The ACQUIRE probe, under tgm_live_lock: the looks this window that found a channel parked on an acquire (a hang
  * check's candidates, the stats window's live channels) against the ACQUIRE interrupts that came. Boot 18 had two ~2 s
@@ -391,25 +410,6 @@ void tgm_acquire_probe_window(char *line, unsigned int len, u64 now)
 }
 
 #endif
-/* tgm_live_lock held: chan is parked on a failed producer word that will never advance */
-static void isolate_failed_waiter(struct tgm_chan *chan, const char *why, const char *what, u64 now)
-{
-	char state[256];
-	char report[sizeof(chan->fault)];
-	const u32 seqno = tgm_chan_completed(chan) + 1;
-	const u64 waited_ns = chan->submit_ns ? now - chan->submit_ns : 0;
-	const char *detail = what && what[0] ? what : "stopped producer";
-
-	tgm_chan_describe(chan, state, sizeof(state));
-	scnprintf(report, sizeof(report), HANG_REPORT "%s (%s) for %s fence %u; %s", why, detail,
-		  chan->owner, seqno, state);
-	nvxnu_log("tegra-gm20b: recovering %s (channel %u): %s (%s) waited %llu ms for fence %u; "
-		  "%s\n",
-		  chan->owner, chan->chid, why, detail, waited_ns / 1000000, seqno, state);
-	tgm_chan_isolate(chan, report, now);
-	tgm_recover_fault(tgm_gpu.device, (int)chan->chid);
-}
-
 /* tgm_live_lock held: the rule for a channel parked on an acquire past its timeout. While it waits on another channel and
  * the GPU progresses, a check is due again (the rule's second look at the producer); a wait on what the kernel or a
  * host1x engine releases is left to that releaser, with no check repeating. Returns the verdict; the caller panics on
