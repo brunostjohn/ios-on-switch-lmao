@@ -8,6 +8,7 @@
 #include <os/log.h>
 #include "gpu.h"
 #include "dynamic_push.h"
+#include "guest_bases.h"
 #include "record.h"
 #include "slm.h"
 #include "storage.h"
@@ -122,6 +123,10 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     }
     if (!usableDynamicPush(r.pipeline, r.keyString.c_str())) {
         why = "missing or invalid dynamic blend push metadata";
+        return nullptr;
+    }
+    if (!usableGuestBases(r.pipeline)) {
+        why = "its buffers' Metal address words are not this runtime's";
         return nullptr;
     }
     Pipeline *strideTwin = nullptr;
