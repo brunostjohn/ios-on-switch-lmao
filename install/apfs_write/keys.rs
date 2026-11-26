@@ -6,7 +6,7 @@ use std::cmp::Ordering;
 
 use switch_apfs_format::clone_mapping::APFS_TYPE_CLONE_MAPPING;
 use switch_apfs_format::fs::{APFS_TYPE_DIR_REC, APFS_TYPE_FILE_EXTENT, APFS_TYPE_XATTR, OBJ_ID_MASK, OBJ_TYPE_SHIFT};
-use switch_apfs_format::fs_records::APFS_TYPE_SIBLING_LINK;
+use switch_apfs_format::fs_records::{APFS_TYPE_FILE_INFO, APFS_TYPE_SIBLING_LINK};
 
 fn u32_at(k: &[u8], at: usize) -> u32 {
     k.get(at..at + 4)
@@ -20,6 +20,10 @@ fn u64_at(k: &[u8], at: usize) -> u64 {
         .map_or(0, u64::from_le_bytes)
 }
 
+fn tail(k: &[u8], at: usize) -> &[u8] {
+    k.get(at..).unwrap_or(&[])
+}
+
 fn head(k: &[u8]) -> (u64, u8) {
     let v = u64_at(k, 0);
     (v & OBJ_ID_MASK, (v >> OBJ_TYPE_SHIFT) as u8)
@@ -31,12 +35,12 @@ pub fn fs_key_order(a: &[u8], b: &[u8]) -> Ordering {
         // A hashed name: the hash, then the name (APFS compares the bytes of names whose hashes collide).
         APFS_TYPE_DIR_REC => (u32_at(a, 8) >> 10)
             .cmp(&(u32_at(b, 8) >> 10))
-            .then_with(|| a[12..].cmp(&b[12..])),
+            .then_with(|| tail(a, 12).cmp(tail(b, 12))),
         // The name after its 16-bit length; macOS stores com.apple.ResourceFork before com.apple.decmpfs.
-        APFS_TYPE_XATTR => a[10..].cmp(&b[10..]),
-        APFS_TYPE_FILE_EXTENT | APFS_TYPE_SIBLING_LINK => u64_at(a, 8).cmp(&u64_at(b, 8)),
+        APFS_TYPE_XATTR => tail(a, 10).cmp(tail(b, 10)),
+        APFS_TYPE_FILE_EXTENT | APFS_TYPE_SIBLING_LINK | APFS_TYPE_FILE_INFO => u64_at(a, 8).cmp(&u64_at(b, 8)),
         APFS_TYPE_CLONE_MAPPING => (u64_at(a, 12), u64_at(a, 20)).cmp(&(u64_at(b, 12), u64_at(b, 20))),
-        _ => a[8..].cmp(&b[8..]),
+        _ => tail(a, 8).cmp(tail(b, 8)),
     })
 }
 

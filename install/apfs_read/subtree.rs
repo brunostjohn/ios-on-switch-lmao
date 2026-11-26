@@ -116,7 +116,8 @@ impl Fs<'_> {
                 let have = (id == oid).then_some(own_stream.as_slice());
                 Some(self.stream(id, d.size.get(), have).map_err(at)?)
             }
-            None if own_stream.is_empty() => None,
+            // A truncated clone owner gets a new private_id while a kept clone's stream stays keyed at `oid`.
+            None if own_stream.is_empty() || inode.val.private_id.get() != oid => None,
             None => return Err(at(invalid!("stream records without a dstream"))),
         };
         let xattrs = xattrs

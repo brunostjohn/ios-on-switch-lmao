@@ -345,3 +345,46 @@ fn copied_compressed_clones_keep_one_private_id_and_their_mappings() {
     let flags = u64::from_le_bytes(inode(&r, words_clone)[48..56].try_into().unwrap());
     assert_eq!(flags & 0x10, 0, "a replaced clone is no longer marked cloned");
 }
+
+#[test]
+fn fs_key_order_handles_file_info_and_short_keys() {
+    use std::cmp::Ordering;
+    use switch_apfs_format::clone_mapping::APFS_TYPE_CLONE_MAPPING;
+    use switch_apfs_format::fs::{APFS_TYPE_DIR_REC, APFS_TYPE_XATTR, JKey};
+    use switch_apfs_format::fs_records::{
+        APFS_FILE_INFO_DATA_HASH, APFS_TYPE_FILE_INFO, FileInfoKey, J_FILE_INFO_TYPE_SHIFT,
+    };
+    use zerocopy::IntoBytes;
+    use zerocopy::little_endian::U64;
+
+    let offsets = [(1u64 << 32) + 16_384, 131_072, 0, 65_536, 16_384, 49_152, 1u64 << 32];
+    let mut keys: Vec<_> = offsets
+        .iter()
+        .map(|&off| {
+            let k = FileInfoKey {
+                hdr: JKey::new(42, APFS_TYPE_FILE_INFO),
+                info_and_lba: U64::new((u64::from(APFS_FILE_INFO_DATA_HASH) << J_FILE_INFO_TYPE_SHIFT) | off),
+            };
+            (k.as_bytes().to_vec(), None)
+        })
+        .collect();
+    crate::keys::sort(&mut keys);
+    let got: Vec<u64> = keys
+        .iter()
+        .map(|(k, _)| u64::from_le_bytes(k[8..16].try_into().unwrap()) & 0x00FF_FFFF_FFFF_FFFF)
+        .collect();
+    let mut want = offsets.to_vec();
+    want.sort();
+    assert_eq!(got, want);
+
+    for short in [
+        Vec::new(),
+        vec![1, 2, 3],
+        JKey::new(2, APFS_TYPE_DIR_REC).as_bytes().to_vec(),
+        JKey::new(2, APFS_TYPE_XATTR).as_bytes().to_vec(),
+        JKey::new(2, APFS_TYPE_FILE_INFO).as_bytes().to_vec(),
+        JKey::new(2, APFS_TYPE_CLONE_MAPPING).as_bytes().to_vec(),
+    ] {
+        assert_eq!(crate::keys::fs_key_order(&short, &short), Ordering::Equal);
+    }
+}
