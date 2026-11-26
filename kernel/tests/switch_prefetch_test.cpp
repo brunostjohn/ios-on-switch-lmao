@@ -1044,6 +1044,18 @@ TEST(SwitchPrefetchSource, ATierZeroWaiterRaisesTheReplaysBusyPages)
     }
 }
 
+// vm_object.c and vnode_pager.c define the raise counters under CONFIG_IOSCHED, so the line that prints them is too.
+TEST(SwitchPrefetchSource, TheRaiseCountersAreReadOnlyWhereTheyAreDefined)
+{
+    const std::string prefetch = SourceText("../switch/vm/prefetch.c");
+    const size_t declared = prefetch.find("extern uint64_t switch_reprio_requested");
+    const size_t printed = prefetch.find("busy-page raises requested");
+    ASSERT_NE(declared, std::string::npos);
+    ASSERT_NE(printed, std::string::npos);
+    EXPECT_EQ(prefetch.rfind("#if CONFIG_IOSCHED", declared), prefetch.rfind("#if", declared));
+    EXPECT_EQ(prefetch.rfind("#if CONFIG_IOSCHED", printed), prefetch.rfind("#if", printed));
+}
+
 // The replay's last reads are still at the card after its loop ends; their UPLs stay the replay's until they complete.
 TEST(SwitchPrefetchSource, TheReplayThreadIsForgottenOnlyAfterItsReadsDrain)
 {

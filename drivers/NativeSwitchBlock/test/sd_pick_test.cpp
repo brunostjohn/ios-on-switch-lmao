@@ -377,7 +377,7 @@ TEST(SdPick, PromotingAReplayReadToClassZeroLeavesTheAgerNothingToCount)
     q[0].klass = 2;
     q[1].klass = kSwitchSdReplayClass;
     uint32_t reads[kSwitchSdPickClasses] = {0, 1, 1, 0};
-    uint32_t replay = 2;
+    uint32_t replay = 1;
     EXPECT_EQ(switchSdPromote(q.data(), 0, 8, 1, reads, replay), 1u);
     EXPECT_EQ(replay, 2u);
     EXPECT_EQ(switchSdPromote(q.data(), 0, 200, 0, reads, replay), 2u);
