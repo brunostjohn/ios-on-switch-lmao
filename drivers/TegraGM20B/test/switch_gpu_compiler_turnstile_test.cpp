@@ -19,7 +19,7 @@ extern "C" int proc_selfpid(void)
 }
 
 // The asking process's scope as a test sets it: what the kernel reads in the caller's context
-TegraGM20BAbiCompilerScope gAskingScope = {TegraGM20BCompilerScopeCdhash, 20, {0xc5}};
+TegraGM20BAbiCompilerScope gAskingScope = {TegraGM20BCompilerScopeFile, 24, {0xc5}};
 
 void switch_gpu_compiler_scope(TegraGM20BAbiCompilerScope &out)
 {

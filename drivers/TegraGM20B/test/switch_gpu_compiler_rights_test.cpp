@@ -22,7 +22,7 @@ extern "C" int proc_selfpid(void)
 }
 
 // The asking process's scope as a test sets it: what the kernel reads in the caller's context
-TegraGM20BAbiCompilerScope gAskingScope = {TegraGM20BCompilerScopeCdhash, 20, {0xc5}};
+TegraGM20BAbiCompilerScope gAskingScope = {TegraGM20BCompilerScopeFile, 24, {0xc5}};
 
 void switch_gpu_compiler_scope(TegraGM20BAbiCompilerScope &out)
 {
@@ -270,16 +270,16 @@ TEST_F(CompilerRights, AnAnswerCarriesTheCompilersTimesToItsAsker)
 TEST_F(CompilerRights, ARequestCarriesItsAskersScope)
 {
 	registerCompiler();
-	gAskingScope = {TegraGM20BCompilerScopePlatform, 14, {}};
-	memcpy(gAskingScope.identity, "com.apple.Maps", 14);
+	gAskingScope = {TegraGM20BCompilerScopeFile, 14, {}};
+	memcpy(gAskingScope.identity, "volume-file-01", 14);
 	ASSERT_EQ(compile(kClientA, kPortA, 5), kIOReturnSuccess);
 	TegraGM20BAbiCompilerInfoReply info = {};
 	ASSERT_EQ(syncCall(kClientA, &gClientTask, TegraGM20BMethodCompilerInfo, nullptr, 0, &info,
 			   sizeof info),
 		  kIOReturnSuccess);
-	EXPECT_EQ(info.scope.kind, uint32_t(TegraGM20BCompilerScopePlatform));
-	EXPECT_EQ(memcmp(info.scope.identity, "com.apple.Maps", 14), 0);
-	gAskingScope = {TegraGM20BCompilerScopeCdhash, 20, {0x77}};
+	EXPECT_EQ(info.scope.kind, uint32_t(TegraGM20BCompilerScopeFile));
+	EXPECT_EQ(memcmp(info.scope.identity, "volume-file-01", 14), 0);
+	gAskingScope = {TegraGM20BCompilerScopeProcess, 16, {0x77}};
 	std::string buffer(request_.size(), 0);
 	const TegraGM20BAbiCompilerTake take = {uint64_t(uintptr_t(buffer.data())), buffer.size()};
 	TegraGM20BAbiCompilerTakeReply taken = {};
@@ -287,9 +287,9 @@ TEST_F(CompilerRights, ARequestCarriesItsAskersScope)
 			   sizeof take, &taken, sizeof taken),
 		  kIOReturnSuccess);
 	ASSERT_NE(taken.id, 0u);
-	EXPECT_EQ(taken.scope.kind, uint32_t(TegraGM20BCompilerScopePlatform));
+	EXPECT_EQ(taken.scope.kind, uint32_t(TegraGM20BCompilerScopeFile));
 	EXPECT_EQ(taken.scope.bytes, 14u);
-	EXPECT_EQ(memcmp(taken.scope.identity, "com.apple.Maps", 14), 0);
+	EXPECT_EQ(memcmp(taken.scope.identity, "volume-file-01", 14), 0);
 	const TegraGM20BAbiCompilerComplete done = {
 		taken.id, TegraGM20BCompileMade, TegraGM20BCompileCompiled, {}};
 	EXPECT_EQ(syncCall(kCompiler, &gCompilerTask, TegraGM20BMethodCompilerComplete, &done,

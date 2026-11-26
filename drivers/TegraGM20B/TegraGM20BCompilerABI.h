@@ -86,13 +86,13 @@ enum {
 
 /* The process a request is made for, as the kernel reads it in that process's own context: the compiler files a record
  * made from any library off the sealed system volume under it (drivers/TegraGM20BMetal/store_key.h), so a library one
- * process hands the compiler reaches no other process's records. A platform binary by its signing identifier; any other
- * signed process by its main executable's cdhash, which the kernel validated its pages against (a team ID is the signer's
- * word alone where no certificate chain is checked); an unsigned one by its pid and pid version, so only that process. */
+ * process hands the compiler reaches no other process's records. Kind File: its main executable's volume UUID (16 bytes)
+ * and file ID (8), which the filesystem assigned at install and no code signature states (an imported app's is made from
+ * its IPA's own declarations, a bootstrap image's platform bit from its own). Kind Process, where no executable is known:
+ * its pid, pid version and a number drawn once per boot. */
 enum {
-	TegraGM20BCompilerScopePlatform = 1,
-	TegraGM20BCompilerScopeCdhash = 2,
-	TegraGM20BCompilerScopeProcess = 3,
+	TegraGM20BCompilerScopeFile = 1,
+	TegraGM20BCompilerScopeProcess = 2,
 	TegraGM20BCompilerScopeBytes = 256,
 };
 

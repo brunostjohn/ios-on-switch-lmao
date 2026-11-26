@@ -382,6 +382,18 @@ bool switch_gpu_compiler_method(uint32_t method)
 	       method <= TegraGM20BMethodCompilerUnmapLibrary;
 }
 
+// A caller whose reply size is not this kext's is of another build (a fast deploy of one side): said once, and refused
+static IOReturn otherBuild(const char *method, uint32_t asked, size_t answered)
+{
+	static bool said = false;
+	if (!__atomic_exchange_n(&said, true, __ATOMIC_RELAXED))
+		IOLog("SwitchShaderCompiler: pid %d asked %s for a %u-byte reply where this kext "
+		      "answers %zu: that process and this kext are of different builds, and no "
+		      "state the pack lacks is compiled until both are one build\n",
+		      proc_selfpid(), method, asked, answered);
+	return kIOReturnBadArgument;
+}
+
 IOReturn switch_gpu_compiler_call(const void *owner, task_t task, uint32_t method, const void *in,
 				  uint32_t inSize, void *out, uint32_t outSize,
 				  const IOExternalMethodArguments *arguments,
@@ -395,7 +407,8 @@ IOReturn switch_gpu_compiler_call(const void *owner, task_t task, uint32_t metho
 	switch (method) {
 	case TegraGM20BMethodCompilerInfo:
 		if (inSize || outSize != sizeof(TegraGM20BAbiCompilerInfoReply))
-			return kIOReturnBadArgument;
+			return otherBuild("CompilerInfo", outSize,
+					  sizeof(TegraGM20BAbiCompilerInfoReply));
 		return info(static_cast<TegraGM20BAbiCompilerInfoReply *>(out));
 	case TegraGM20BMethodCompile:
 		if (inSize != sizeof(TegraGM20BAbiCompile))
@@ -412,7 +425,8 @@ IOReturn switch_gpu_compiler_call(const void *owner, task_t task, uint32_t metho
 	case TegraGM20BMethodCompilerTake:
 		if (inSize != sizeof(TegraGM20BAbiCompilerTake) ||
 		    outSize != sizeof(TegraGM20BAbiCompilerTakeReply))
-			return kIOReturnBadArgument;
+			return otherBuild("CompilerTake", outSize,
+					  sizeof(TegraGM20BAbiCompilerTakeReply));
 		return take(owner, task, static_cast<const TegraGM20BAbiCompilerTake *>(in),
 			    static_cast<TegraGM20BAbiCompilerTakeReply *>(out));
 	case TegraGM20BMethodCompilerComplete:
