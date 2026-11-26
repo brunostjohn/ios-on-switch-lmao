@@ -152,13 +152,11 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     c.record = r.pipeline;
     c.keyString = r.keyString;
     c.blob = r.blob;
-    c.recordBlobDwords = uint32_t(r.blob.size());
     c.spill = r.spill;
-    c.far = c.recordFar = r.far;
+    c.far = r.far;
     c.vs = vs;
     c.fs = fs;
-    for (uint32_t k = 0; k < 2; k++)
-        c.programKeys[k] = programSlotKey(r.programs[k]);
+    c.layout = layoutOf(r);
     if (c.far.size() != farWords(entryCount(c.record))) {
         why = "a record whose far entries are not its entries'";
         return nullptr;
@@ -195,7 +193,7 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     const std::vector<uint32_t> restored = restoreWords(pairs.data(), uint32_t(pairs.size()));
     stored.pipeline.restore.insert(stored.pipeline.restore.end(), restored.begin(), restored.end());
     stored.pipeline.strideTwin = strideTwin;
-    if (r.split && !c.record.storageMask)
+    if (r.split && !stored.record.storageMask && pixel && !tess)
         offerCompletedSplit(stored, r, vs, caTransform);
     for (uint32_t i = r.pipeline.variantCount[0]; i < r.variants.size(); i++) {
         if (!(r.variants[i].assume & AssumeTurned))
@@ -229,20 +227,34 @@ Pipeline *Device::addRecord(const RuntimeRecord &r, bool caTransform, std::strin
     return &stored.pipeline;
 }
 
-bool Device::attachFullForm(const RuntimeRecord &full)
+bool Device::attachFullForm(const RuntimeRecord &full, std::string &why)
 {
+    const RuntimeRecord *forms[2] = {&full, full.strideTwin.get()};
+    const RecordLayout layouts[2] = {layoutOf(full), forms[1] ? layoutOf(*forms[1]) : RecordLayout()};
     std::lock_guard<gm20b::Mutex> l(lock_);
-    const auto it = completed_.find(full.pipeline.keyHash);
-    if (it == completed_.end())
+    Completed *placed[2] = {};
+    for (uint32_t k = 0; k < 2 && forms[k]; k++) {
+        const auto it = completed_.find(forms[k]->pipeline.keyHash);
+        if (it == completed_.end() || (k && &it->second->pipeline != placed[0]->pipeline.strideTwin)) {
+            why = k ? "no stride twin of its key is placed" : "no state of its key is placed";
+            return false;
+        }
+        if (const char *part = layoutDifference(it->second->layout, layouts[k])) {
+            why = std::string(k ? "its stride twin is" : "it is") + " of another " + part + " than its placed record";
+            return false;
+        }
+        placed[k] = it->second;
+    }
+    if (placed[0]->pipeline.strideTwin && !forms[1]) {
+        why = "no stride twin in its full form";
         return false;
-    Completed &c = *it->second;
-    if (full.blob.size() != c.recordBlobDwords || !std::equal(full.blob.begin(), full.blob.end(), c.blob.begin()) ||
-        full.far != c.recordFar || full.spill != c.spill || programSlotKey(full.programs[0]) != c.programKeys[0] ||
-        programSlotKey(full.programs[1]) != c.programKeys[1])
-        return false;
-    if (full.split && !c.record.storageMask)
-        offerCompletedSplit(c, full, c.vs, c.pipeline.caTransform);
-    offerCompletedVariants(c, full);
+    }
+    for (uint32_t k = 0; k < 2 && placed[k]; k++) {
+        if (forms[k]->split && !placed[k]->record.storageMask && pixelStage(placed[k]->record) &&
+            !tessellates(placed[k]->record))
+            offerCompletedSplit(*placed[k], *forms[k], placed[k]->vs, placed[k]->pipeline.caTransform);
+        offerCompletedVariants(*placed[k], *forms[k]);
+    }
     return true;
 }
 

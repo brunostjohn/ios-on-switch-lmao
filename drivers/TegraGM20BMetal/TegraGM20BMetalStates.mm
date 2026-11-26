@@ -337,8 +337,11 @@ id<MTLRenderPipelineState> gm20bFinishState(SwitchMetalPipeline *p, MTLRenderPip
             *reflection = nil;
         return nil;
     }
-    if (!p->_packed && gRM->completion)
+    if (!p->_packed && gRM->completion) {
+        if (gRM->completion->hasFormsToRetry())
+            gRM->completion->retryForms(gm20bRecordAsk(p, d), p->_raw);
         gm20bMadeVariants(p, d);
+    }
     if (error)
         *error = nil;
     return (id<MTLRenderPipelineState>)p;

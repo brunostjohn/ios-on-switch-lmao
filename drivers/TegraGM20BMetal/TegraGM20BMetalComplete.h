@@ -10,6 +10,7 @@
 #include "lock.h"
 #import <Metal/Metal.h>
 #include <dispatch/dispatch.h>
+#include <array>
 #include <functional>
 #include <map>
 #include <memory>
@@ -97,6 +98,15 @@ public:
     // Whether every form asked in the background (askForms: barrier twins, full forms) was attached or dropped within
     // `ns`: what a test waits for before it tears down the compiler and store it serves the device with
     bool settleTwins(uint64_t ns);
+
+    // Background forms (Barrier, Full, BarrierFull) that previously failed to reach a compiler, retried on a state's
+    // later creation even when its pipeline was already placed in Device::completed_
+    bool hasFormsToRetry() const
+    {
+        return formsRetrying_.load(std::memory_order_acquire) != 0;
+    }
+
+    void retryForms(Ask a, Pipeline *made);
     void trim();
 
     Compiler::Stats stats() const;
@@ -137,17 +147,33 @@ private:
     // `qos`: the asker's class, which the record is placed at (answer_class.h)
     void place(const Ask &a, const CacheKey &key, std::shared_ptr<const RuntimeRecord> record, uint32_t qos,
                std::shared_ptr<Pending> pending);
+
     // TegraGM20BMetalCompleteForms.mm: what a pack would give `made`, placed of `record`, beside it: a storage form's
     // barrier twin (RequestForm::Barrier, as Device::pipeline gives a pack state its own), and the split and program
-    // variants of its full form (RequestForm::Full) where record's facts say that form adds them. Each from the store,
-    // else asked of the compiler at the background class, so no creation waits for it; attached to `made` once made
-    // (draws load what they read of it with acquire), and asked once per pipeline and form
+    // variants of its full form (Full, and BarrierFull for a twin once placed) where the placed record's facts say that
+    // form adds them. Each from the store, else asked of the compiler at the background class as the state's creation
+    // asks (remote_ask.h), so no creation waits for it; attached once made (draws load what they read of it with
+    // acquire). Asked once per pipeline and form, again where no ask of it reached a compiler.
+    struct FormAsk {
+        Pipeline *target = nullptr;
+        RequestForm form = RequestForm::Primary;
+    };
+
+    enum class FormState : uint8_t {
+        Asked,
+        Retry
+    };
+
     void askForms(const Ask &a, const CacheKey &k, Pipeline *made, const RuntimeRecord &record);
-    void formOf(const Ask &a, const CacheKey &k, Pipeline *made, RequestForm form);
-    void attachForm(Pipeline *made, const RuntimeRecord &record, bool caTransform, RequestForm form);
+    void enqueueForms(const Ask &a, const CacheKey &k, std::array<FormAsk, 2> forms, uint32_t count);
+    void formOf(const Ask &a, const CacheKey &k, Pipeline *made, RequestForm form, bool again);
+    void attachForm(const Ask &a, const CacheKey &k, Pipeline *made, const RuntimeRecord &record, RequestForm form);
+    bool markForm(const Pipeline *made, RequestForm form);
+    bool claimRetryForm(const Pipeline *made, RequestForm form);
+    void unmarkForm(const Pipeline *made, RequestForm form);
     // The pack key the compiler makes `r`'s record under (TegraGM20BMetalCompileRequest.mm), which is this process's
-    // own; a barrier twin's its own beside it, so Device::addRecord files the twin apart from its state, and a full
-    // form's its state's, so Device::attachFullForm finds the state
+    // own; a barrier twin's and its full form's their own beside it, so Device::addRecord files the twin apart from its
+    // state, and a full form's its state's, so Device::attachFullForm finds the state
     static std::string packKeyOf(const CompileRequest &r);
 
     struct Kernel {
@@ -164,10 +190,11 @@ private:
     dispatch_group_t forms_;  // the forms asked in the background (askForms), which ~Completion waits for too
     std::atomic<bool> stopping_{false};
     gm20b::Mutex kernelLock_;  // map membership only; each kernel owns its single-flight lock
-    // the pipelines and forms asked: creation threads and the answer queue ask at once, each once per state's creation,
+    // the pipelines and forms asked: creation threads, the answer queue and the forms' own background work ask at once,
     // never at a draw
     gm20b::Mutex formLock_;
-    std::set<std::pair<const Pipeline *, RequestForm>> formsAsked_;
+    std::map<std::pair<const Pipeline *, RequestForm>, FormState> formsAsked_;
+    std::atomic<uint32_t> formsRetrying_{0};
     std::map<uint64_t, std::shared_ptr<Kernel>> kernels_;
 
     std::shared_ptr<Remote> remote_;

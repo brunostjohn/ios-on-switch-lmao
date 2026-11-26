@@ -116,17 +116,14 @@ bool Device::placeRequiredVariants(const PackPipeline &pp, uint64_t &slm)
 }
 
 Pipeline &Device::buildCombination(VariantTable &t, const Pipeline &pl, const PackPipeline &pp,
-                                   const PlacedProgram (&placed)[2], const bool (&variant)[2], uint32_t setReads,
-                                   const uint32_t *blob, const char *keyString, const uint32_t *spills,
-                                   const uint32_t *far, const PackSegment *prebuilt)
+                                   const PlacedProgram (&placed)[2], uint32_t setReads, const uint32_t *blob,
+                                   const char *keyString, const uint32_t *spills, const uint32_t *far,
+                                   const PackSegment *prebuilt)
 {
     Pipeline &made = *t.pipelines.emplace_back(std::make_unique<Pipeline>());
     SWITCH_METAL_CREATION_COUNT(variants, 1);
     build(made, pp, placed[0], placed[1], blob, keyString, pl.caTransform, spills, far, nullptr, prebuilt);
     made.memoryEntries |= setReads;
-    for (uint32_t s = 0; t.runtime && s < 2; s++)
-        if (variant[s])
-            made.memoryEntries |= placedSetReads(placed[s].header, *placed[s].record, made.entries);
     made.restore = pl.restore;
     made.strideTwin = pl.strideTwin;
     return made;
@@ -165,10 +162,9 @@ bool Device::offerVariantsLockFree(Pipeline &pl, const PackPipeline &pp, uint32_
             return false;
         if (!slmReady(std::max(programSlm(placed[0]), programSlm(placed[1]))))
             return false;
-        const bool variant[2] = {index[0] != pp.vs, index[1] != pp.fs};
-        Pipeline &made = buildCombination(*t, pl, pp, placed, variant, variantSetReads(*t, v, f),
-                                          pack_.section<uint32_t>(PackBlob) + pp.blob, pack_.string(pp.keyString),
-                                          pack_.spills(pp), pack_.far(pp), prebuilt);
+        Pipeline &made =
+            buildCombination(*t, pl, pp, placed, variantSetReads(*t, v, f), pack_.section<uint32_t>(PackBlob) + pp.blob,
+                             pack_.string(pp.keyString), pack_.spills(pp), pack_.far(pp), prebuilt);
         attachVariantSplit(*this, pack_, made, pp, placed[0], index[1], &Device::offerSplit);
         t->chosen[combo] = &made;
         return true;
@@ -193,8 +189,15 @@ void Device::offerCompletedVariants(Completed &c, const RuntimeRecord &r)
         const RuntimeRecord::Variant &v = r.variants[i];
         std::vector<PackVariant> &stage = t->runtimeVariants[i < r.pipeline.variantCount[0] ? 0 : 1];
         if (!(v.assume & AssumeTurned) && v.program.image.size() >= sizeof CompletedProgram::header &&
-            stage.size() < UINT8_MAX)
-            stage.push_back({v.assume, i, 0});
+            stage.size() < UINT8_MAX) {
+            // CompletedProgram::header holds only the 80-byte SPH, so compute set reads from the variant image here
+            uint32_t reads[entryMaskWords(kSetEntriesMax)] = {};
+            programSetReads(v.program.image.data() + sizeof CompletedProgram::header,
+                            v.program.image.size() - sizeof CompletedProgram::header, v.program.cbufTypes.data(),
+                            uint32_t(std::min<size_t>(v.program.cbufTypes.size(), sizeof(PackProgram::cbufType))),
+                            v.program.boundTextures, c.pipeline.entries, reads);
+            stage.push_back({v.assume, i, reads[0]});
+        }
     }
     if (t->runtimeVariants[0].empty() && t->runtimeVariants[1].empty())
         return;
@@ -209,11 +212,9 @@ void Device::offerCompletedVariants(Completed &c, const RuntimeRecord &r)
     eachCombination(*t, pack_.header()->chipFacts, [&](uint32_t v, uint32_t f, uint32_t combo) {
         const uint32_t choice[2] = {v, f};
         PlacedProgram placed[2] = {c.vs, c.fs};
-        bool variant[2] = {};
         for (uint32_t s = 0; s < 2; s++) {
             if (choice[s] == t->count[s])
                 continue;
-            variant[s] = true;
             if (!placeCompleted(r.variants[t->variants[s][choice[s]].program].program, placed[s])) {
                 stats.heapFull++;
                 return true;
@@ -223,7 +224,7 @@ void Device::offerCompletedVariants(Completed &c, const RuntimeRecord &r)
             stats.heapFull++;
             return true;
         }
-        t->chosen[combo] = &buildCombination(*t, c.pipeline, c.record, placed, variant, 0, c.blob.data(),
+        t->chosen[combo] = &buildCombination(*t, c.pipeline, c.record, placed, variantSetReads(*t, v, f), c.blob.data(),
                                              c.keyString.c_str(), spills, far, nullptr);
         return true;
     });
@@ -258,8 +259,7 @@ Pipeline *Device::placeVariant(Pipeline &pl, VariantTable &t, const std::array<u
     }
     if (!placedBoth)
         return &pl;
-    const bool variant[2] = {index[0] != pp.vs, index[1] != pp.fs};
-    Pipeline &made = buildCombination(t, pl, pp, placed, variant, setReads, pack_.section<uint32_t>(PackBlob) + pp.blob,
+    Pipeline &made = buildCombination(t, pl, pp, placed, setReads, pack_.section<uint32_t>(PackBlob) + pp.blob,
                                       pack_.string(pp.keyString), pack_.spills(pp), pack_.far(pp),
                                       prebuiltVariantSegment(recIndex, comboIndex));
     attachVariantSplit(*this, pack_, made, pp, placed[0], index[1], &Device::offerSplit);

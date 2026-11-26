@@ -390,6 +390,15 @@ device_test(
     ],
 )
 
+# A device-made state's full form given to a placed state and its stride twin of its layout, refused with why for any
+# other, its turned variant placed at the first turned draw
+device_test(
+    name = "device_full_form_test",
+    srcs = [
+        "device_full_form_test.cpp",
+    ],
+)
+
 # A state whose stages spill push fields into m2v's argument tables on gm20b::Device (device_harness.h): each table its
 # record's words with the bound offsets' residuals and the dynamic words, uploaded again only where one moved
 device_test(
@@ -6001,17 +6010,45 @@ facade_test(
 facade_test(
     name = "facade_made_full_test",
     srcs = [
+        "facade_full_form.h",
         "facade_made_full_test.cpp",
         "facade_variant_compiler.h",
         ":librecord_count.dylib",
     ],
 )
 
-# facade_made_full_test thread-sanitized: the full form lands while the test thread reads what draws read of the pipeline
+# facade_made_full_test thread-sanitized: the full form lands while the test thread draws the pipeline
 facade_test(
     name = "facade_made_full_tsan_test",
     srcs = [
+        "facade_full_form.h",
         "facade_made_full_test.cpp",
+        "facade_variant_compiler.h",
+        ":librecord_count.dylib",
+    ],
+    copts = ["-fsanitize=thread"],
+    env = {"TSAN_OPTIONS": "halt_on_error=1:report_signal_unsafe=0"},
+    linkopts = ["-fsanitize=thread"],
+    plugin = "_tsan",
+)
+
+# A full form asked as its state's creation asks, again where no compiler took it, and for a barrier twin once placed;
+# a second creation reads the full record filed under the plain content
+facade_test(
+    name = "facade_full_asks_test",
+    srcs = [
+        "facade_full_asks_test.cpp",
+        "facade_full_form.h",
+        "facade_variant_compiler.h",
+        ":librecord_count.dylib",
+    ],
+)
+
+facade_test(
+    name = "facade_full_asks_tsan_test",
+    srcs = [
+        "facade_full_asks_test.cpp",
+        "facade_full_form.h",
         "facade_variant_compiler.h",
         ":librecord_count.dylib",
     ],

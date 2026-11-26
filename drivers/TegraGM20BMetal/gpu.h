@@ -123,6 +123,7 @@
 #include "surface_image.h"
 #include "resources.h"
 #include "pipeline.h"
+#include "record_layout.h"
 #include "pass_desc.h"
 #include "draw_refusal.h"
 #include "render_encoder.h"
@@ -235,10 +236,11 @@ public:
     // A state the runtime made a record of (record.h), drawn from then on as the pack's are; null: its programs find no room
     // in the heap or its samplers none in the header pool (`why`)
     Pipeline *addRecord(const RuntimeRecord &r, bool caTransform, std::string &why, bool *retry = nullptr);
-    // The full form (RequestForm::Full) of a state addRecord placed, by its keyHash: its split and program variants given
-    // to that state's pipeline, which may be drawing. False: no such state, or `full` is of another layout than its record
-    // (its registers, far block, argument tables or programs), and nothing is given.
-    bool attachFullForm(const RuntimeRecord &full);
+    // The full form (RequestForm::Full, BarrierFull) of a state addRecord placed, by its keyHash: its split and program
+    // variants given to that state's pipeline, which may be drawing, and its stride twin's to that state's stride twin.
+    // False with `why`: no such state or twin is placed, or one is of another layout than its placed record
+    // (record_layout.h), and nothing is given.
+    bool attachFullForm(const RuntimeRecord &full, std::string &why);
     // `pl`'s turned variant (TurnedSource) at a turned draw, built at the first; null where the heap or local memory has no
     // room for it: that draw alone is refused (one error line), and the next turned draw places it afresh
     Pipeline *makeTurned(Pipeline &pl);
@@ -1746,11 +1748,11 @@ private:
     bool placeRequiredVariants(const PackPipeline &pp, uint64_t &slm);
     Pipeline *placeVariant(Pipeline &pl, VariantTable &t, const std::array<uint32_t, 2> &programs, uint32_t setReads,
                            uint32_t recIndex, uint32_t comboIndex);
-    // A pipeline of `t` (VariantTable::pipelines) of `pl`'s programs `placed`: `setReads` (the pack's PackVariant reads)
-    // added, or for a runtime table the set reads of each stage `variant` names; `pl`'s restore and stride twin
+    // A pipeline of `t` (VariantTable::pipelines) of `pl`'s programs `placed`: `setReads` (its variants'
+    // PackVariant::memoryEntries) added; `pl`'s restore and stride twin
     Pipeline &buildCombination(VariantTable &t, const Pipeline &pl, const PackPipeline &pp,
-                               const PlacedProgram (&placed)[2], const bool (&variant)[2], uint32_t setReads,
-                               const uint32_t *blob, const char *keyString, const uint32_t *spills, const uint32_t *far,
+                               const PlacedProgram (&placed)[2], uint32_t setReads, const uint32_t *blob,
+                               const char *keyString, const uint32_t *spills, const uint32_t *far,
                                const PackSegment *prebuilt);
     bool placePackProgram(uint32_t index, PlacedProgram &out);
     bool placePackWindowProgram(uint32_t index, PlacedProgram &out);
@@ -1786,11 +1788,7 @@ private:
         Pipeline pipeline, turned;
         TurnedSource turnedSource;
         PlacedProgram vs, fs;
-        // its record's layout as given: its blob before the extras, its far block before its constexpr samplers were
-        // renumbered as the device's, its programs' heap slot keys (programSlotKey)
-        uint32_t recordBlobDwords = 0;
-        std::vector<uint32_t> recordFar;
-        std::string programKeys[2];
+        RecordLayout layout;  // its record's as given, before its constexpr samplers were renumbered as the device's
     };
 
     std::deque<Completed> completedStore_;
