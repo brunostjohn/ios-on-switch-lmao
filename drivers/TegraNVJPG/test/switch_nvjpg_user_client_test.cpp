@@ -286,6 +286,13 @@ struct CeCopyCall {
 };
 
 std::vector<CeCopyCall> gCeCopies;
+// A CPU write of the re-pack buffer published to the GPU: its range, the word at it, and the copies queued before it
+struct GuardPublish {
+    uint64_t offset, bytes, value;
+    size_t copiesBefore;
+};
+std::vector<GuardPublish> gGuardPublishes;
+uint32_t gCpuWriters;
 int gCeStatus = 0;
 
 // A re-pack VIC or the copy engine took, held until NVJPG's syncpoint reaches the fence it was queued behind, as their
@@ -386,6 +393,28 @@ extern "C" void *switch_gpu_backing_mapping_context(const switch_gpu_backing *ba
 extern "C" void switch_gpu_backing_describe(switch_gpu_backing *backing, switch_gpu_backing_info *info)
 {
     *info = backing->info;
+}
+
+extern "C" int switch_gpu_backing_cpu_acquire(switch_gpu_backing *, uint64_t, uint64_t, uint32_t access)
+{
+    EXPECT_EQ(access, uint32_t(SWITCH_GPU_BACKING_WRITE | SWITCH_GPU_BACKING_CPU_NO_CACHE |
+                               SWITCH_GPU_BACKING_CPU_AVOID_SYNC));
+    ++gCpuWriters;
+    return 0;
+}
+
+extern "C" int switch_gpu_backing_cpu_publish(switch_gpu_backing *, uint64_t offset, uint64_t bytes)
+{
+    EXPECT_EQ(gCpuWriters, 1u) << "a publish needs the CPU write held";
+    const uint64_t value = *reinterpret_cast<const uint64_t *>(gPages->va + offset);
+    gGuardPublishes.push_back({offset, bytes, value, gCeCopies.size()});
+    return 0;
+}
+
+extern "C" int switch_gpu_backing_cpu_release(switch_gpu_backing *, uint64_t, uint64_t, uint32_t)
+{
+    --gCpuWriters;
+    return 0;
 }
 
 extern "C" int switch_gpu_backing_mapping_install(switch_gpu_backing *backing, uint32_t, uint64_t generation,
@@ -695,6 +724,8 @@ protected:
         gRefusals.clear();
         gMapsUnderTheJobLock = 0;
         gCeCopies.clear();
+        gGuardPublishes.clear();
+        gCpuWriters = 0;
         gCeStatus = 0;
         gHeldRepacks.clear();
         gSurfaceTiled = 0;
@@ -840,6 +871,19 @@ TEST_F(NVJPGUserClient, ACopyGuardProbeQueuesItsCopyClosedAndTheNextDecodeOpen)
     EXPECT_EQ(engineRuns(copyRowsInto(d, dstMem)), kIOReturnIOError);
     ASSERT_EQ(gCeCopies.size(), 1u);
     EXPECT_EQ(guardOf(gCeCopies[0]), 1u) << "an ordinary decode's copy lands";
+    const uint64_t when = gCeCopies[0].wait.when;
+    EXPECT_EQ(when % 16, 0u) << "the predicate is proven on 16-byte-aligned words alone";
+    EXPECT_EQ(when + 16, gPages->size) << "the guard is the buffer's last 16 bytes";
+    // Each decode's guard is published as a CPU write before its copy is queued, so that copy's submission drops the
+    // GPU L2's line: the probe's 0 cached there would otherwise make this decode copy nothing and report success.
+    ASSERT_EQ(gGuardPublishes.size(), 2u);
+    for (size_t i = 0; i < 2; ++i) {
+        EXPECT_EQ(gGuardPublishes[i].offset, when) << i;
+        EXPECT_EQ(gGuardPublishes[i].bytes, 16u) << i;
+        EXPECT_EQ(gGuardPublishes[i].value, i) << "the probe's closed, then the decode's open";
+        EXPECT_EQ(gGuardPublishes[i].copiesBefore, 0u) << "published before the copy is queued";
+    }
+    EXPECT_EQ(gCpuWriters, 0u);
     retire(&d.backing);
 }
 
