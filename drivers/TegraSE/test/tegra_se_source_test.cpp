@@ -64,13 +64,13 @@ TEST(TegraSESource, AnMccifOperationsPagesAreHeldOnlyWhileItRuns)
     const std::string source = SourceText("../TegraSE.cpp");
     const std::string run = Body(source, "bool run(Engine &e, uint32_t in, uint32_t out)\n");
     const size_t hold = run.find("tegra_se_smmu_hold(which, inList)");
-    const size_t start = run.find("start(e, in, out)");
+    const size_t start = run.find("start(e, in, out, &started)");
     const size_t release = run.rfind("tegra_se_smmu_release(which, inList)");
     ASSERT_NE(hold, std::string::npos);
     ASSERT_NE(start, std::string::npos);
     EXPECT_LT(hold, start);
     EXPECT_LT(start, release);
-    const size_t engineOff = run.find("if (!e.up)\n        return ran;");
+    const size_t engineOff = run.find("if (!e.up && started)\n        return ran;");
     ASSERT_NE(engineOff, std::string::npos) << "an engine turned off mid-operation keeps its holds";
     EXPECT_LT(start, engineOff);
     EXPECT_LT(engineOff, run.find("tegra_se_smmu_release(which, outList)"));

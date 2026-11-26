@@ -42,12 +42,15 @@ uint32_t entries(const uint32_t *list)
 tegra_se_smmu_attach_result tegra_se_smmu_attach(unsigned engine, const switch_dma_buffer *const *buffers,
                                                  unsigned count, char *line, size_t size)
 {
+    if (engine >= kEngines) {
+        snprintf(line, size, "no engine %u", engine);
+        return TEGRA_SE_SMMU_UNTRANSLATED;
+    }
     const uint32_t *swgroups = tegra_smmu_se_swgroups[engine];
     bool translated = false;
     for (unsigned i = 0; i < 2; ++i)
         translated |= (tegra_smmu_read(swgroups[i]) & (1u << 31)) != 0u;
-    if (engine >= kEngines || count > kOwned || !gView[engine].init(kAsid[engine], kAsid[engine]) ||
-        !gView[engine].reserveTables(k4GiB)) {
+    if (count > kOwned || !gView[engine].init(kAsid[engine], kAsid[engine]) || !gView[engine].reserveTables(k4GiB)) {
         snprintf(line, size, "no memory for its view of RAM");
         return translated ? TEGRA_SE_SMMU_TRANSLATED : TEGRA_SE_SMMU_UNTRANSLATED;
     }
@@ -77,18 +80,20 @@ bool tegra_se_smmu_hold(unsigned engine, const uint32_t *list)
         return true;
     const uint32_t n = entries(list);
     uint32_t held = 0;
-    for (; held < n; ++held) {
-        const uint64_t pa = list[1 + 2 * held], bytes = list[2 + 2 * held];
-        if (!owned(engine, pa) && (pa + bytes > k4GiB || !gView[engine].hold(pa, bytes)))
-            break;
-    }
-    if (held < n) {
-        for (uint32_t i = 0; i < held; ++i) {
-            if (!owned(engine, list[1 + 2 * i]))
-                gView[engine].release(list[1 + 2 * i], list[2 + 2 * i]);
+    gView[engine].locked([&](auto &core) {
+        for (; held < n; ++held) {
+            const uint64_t pa = list[1 + 2 * held], bytes = list[2 + 2 * held];
+            if (!owned(engine, pa) && (pa + bytes > k4GiB || !core.hold(pa, bytes)))
+                break;
         }
-    }
-    gView[engine].commit();
+        if (held < n) {
+            for (uint32_t i = 0; i < held; ++i) {
+                if (!owned(engine, list[1 + 2 * i]))
+                    (void)core.release(list[1 + 2 * i], list[2 + 2 * i]);
+            }
+        }
+        core.commit();
+    });
     return held == n;
 }
 
@@ -97,9 +102,14 @@ void tegra_se_smmu_release(unsigned engine, const uint32_t *list)
     if (engine >= kEngines || !gAttached[engine])
         return;
     const uint32_t n = entries(list);
-    for (uint32_t i = 0; i < n; ++i) {
-        if (!owned(engine, list[1 + 2 * i]))
-            gView[engine].release(list[1 + 2 * i], list[2 + 2 * i]);
-    }
-    gView[engine].commit();
+    bool released = true;
+    gView[engine].locked([&](auto &core) {
+        for (uint32_t i = 0; i < n; ++i) {
+            if (!owned(engine, list[1 + 2 * i]))
+                released &= core.release(list[1 + 2 * i], list[2 + 2 * i]);
+        }
+        core.commit();
+    });
+    if (!released)
+        panic("TegraSE: SE%u released a list entry its SMMU view had no hold on", engine + 1);
 }

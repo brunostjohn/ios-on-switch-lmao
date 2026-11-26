@@ -335,9 +335,27 @@ void engineOff(Engine &e, const char *what)
     IOLog("TegraSE: %s off for this boot: %s\n", e.name, what);
 }
 
-// Starts what the caller programmed (lists in the list page) and sleeps until the end interrupt.
-bool start(Engine &e, uint32_t in, uint32_t out)
+// The engine's output in memory: STATUS not busy and, for an AHB master, its AHB write queue empty. False: the engine is
+// off (a proven one panics instead).
+bool drain(Engine &e)
 {
+    for (unsigned i = 0; (rd(e, STATUS) & kStatusBusy) || (switch_mmio_read32(gAhb, kAhbWrque) & e.ahbMaster); ++i) {
+        if (i > 100000) {
+            if (e.proven && !forced())
+                panic("TegraSE: %s output never drained (STATUS %#x)", e.name, rd(e, STATUS));
+            snprintf(gWhy, sizeof gWhy, "output never drained (STATUS %#x)", rd(e, STATUS));
+            engineOff(e, gWhy);
+            return false;
+        }
+    }
+    return true;
+}
+
+// Starts what the caller programmed (lists in the list page) and sleeps until the end interrupt. *started: OPERATION
+// was written, so the engine may have reached what the lists name.
+bool start(Engine &e, uint32_t in, uint32_t out, bool *started)
+{
+    *started = false;
     wr(e, IN_LL, in);
     wr(e, OUT_LL, out);
     wr(e, ERR_STATUS, rd(e, ERR_STATUS));
@@ -357,6 +375,7 @@ bool start(Engine &e, uint32_t in, uint32_t out)
     nanoseconds_to_absolutetime(static_cast<uint64_t>(kOpTimeoutMs) * 1000000, &interval);
     assert_wait_deadline(&e.event, THREAD_UNINT, mach_absolute_time() + interval);
     switch_dcache_sync();  // completes mapSide's and the callers' cache maintenance before the engine starts
+    *started = true;
     wr(e, OPERATION, 1);
     const wait_result_t result = thread_block(THREAD_CONTINUE_NULL);
     if (result == THREAD_TIMED_OUT || e.seen == seen) {
@@ -377,20 +396,15 @@ bool start(Engine &e, uint32_t in, uint32_t out)
         return false;
     }
     const uint32_t error = rd(e, ERR_STATUS);
+    // An error may end the operation with writes still queued: they land before the pages are let go.
     if ((e.status & kIntError) || error) {
         wr(e, ERR_STATUS, error);
-        snprintf(gWhy, sizeof gWhy, "operation error (INT_STATUS %#x ERR_STATUS %#x)", e.status, error);
+        if (drain(e))
+            snprintf(gWhy, sizeof gWhy, "operation error (INT_STATUS %#x ERR_STATUS %#x)", e.status, error);
         return false;  // the operation's algorithm decides (a programming problem, not the engine)
     }
-    for (unsigned i = 0; (rd(e, STATUS) & kStatusBusy) || (switch_mmio_read32(gAhb, kAhbWrque) & e.ahbMaster); ++i) {
-        if (i > 100000) {
-            if (e.proven && !forced())
-                panic("TegraSE: %s output never drained (STATUS %#x)", e.name, rd(e, STATUS));
-            snprintf(gWhy, sizeof gWhy, "output never drained (STATUS %#x)", rd(e, STATUS));
-            engineOff(e, gWhy);
-            return false;
-        }
-    }
+    if (!drain(e))
+        return false;
 #if DEVELOPMENT || DEBUG
     e.ops++;
 #endif
@@ -417,11 +431,12 @@ bool run(Engine &e, uint32_t in, uint32_t out)
         snprintf(gWhy, sizeof gWhy, "an output page could not be held in the SMMU");
         return false;
     }
-    const bool ran = start(e, in, out);
+    bool started = false;
+    const bool ran = start(e, in, out, &started);
     // An engine turned off mid-operation may still write what its lists name. Only the driver's own buffers reach an
     // engine that can go off without a panic (callers' pages reach proven engines only), and those outlive it, so their
-    // holds do too: a late write must land, not fault at the MC.
-    if (!e.up)
+    // holds do too: a late write must land, not fault at the MC. One turned off before its start reached nothing.
+    if (!e.up && started)
         return ran;
     if (translated && outList)
         tegra_se_smmu_release(which, outList);
@@ -1332,14 +1347,18 @@ bool engineUp(Engine &e)
 // MCCIF engine whose clients another owner translates stays off: its addresses are physical.
 bool confine(Engine &e, unsigned which)
 {
+    // SE2 moves its data over the AHB (kMemif): the MC sees it as PPCS, which no swgroup translates, so its own
+    // swgroups would confine traffic it never makes. Nothing is written for it, and no view is made.
+    if (!kMemif[which]) {
+        IOLog("TegraSE: %s DMA over the AHB (PPCS): no SMMU swgroup translates it, so none is attached\n", e.name);
+        return true;
+    }
     char why[160] = "";
     const switch_dma_buffer *own[3] = {&e.list.buffer, &e.bounceIn.buffer, &e.bounceOut.buffer};
     switch (tegra_se_smmu_attach(which, own, 3, why, sizeof why)) {
     case TEGRA_SE_SMMU_ATTACHED:
-        IOLog("TegraSE: %s DMA through the SMMU (MC %#x and %#x)%s\n", e.name, tegra_smmu_se_swgroups[which][0],
-              tegra_smmu_se_swgroups[which][1],
-              kMemif[which] ? ": it reaches its buffers and each operation's pages"
-                            : "; its AHB DMA is not translatable");
+        IOLog("TegraSE: %s DMA through the SMMU (MC %#x and %#x): it reaches its buffers and each operation's pages\n",
+              e.name, tegra_smmu_se_swgroups[which][0], tegra_smmu_se_swgroups[which][1]);
         return true;
     case TEGRA_SE_SMMU_UNTRANSLATED:
         IOLog("TegraSE: %s DMA not behind the SMMU (%s): it can reach all of RAM below 4 GiB\n", e.name, why);
@@ -1347,8 +1366,6 @@ bool confine(Engine &e, unsigned which)
     case TEGRA_SE_SMMU_TRANSLATED:
         break;
     }
-    if (!kMemif[which])
-        return true;
     snprintf(gWhy, sizeof gWhy, "the SMMU translates its memory clients and they could not be attached (%s)", why);
     engineOff(e, gWhy);
     return false;
