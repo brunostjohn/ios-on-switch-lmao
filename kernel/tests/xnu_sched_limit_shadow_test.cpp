@@ -52,10 +52,10 @@ TEST(XnuSchedLimitShadow, ARunAcrossIntervalsIsSplitAtEachRefill)
     EXPECT_EQ(s.start, 190 * kMs) << "intervals follow on whole from the first run";
 }
 
-switch_limit_key Key(int32_t pid, uint8_t percentage, uint64_t interval_ms)
+switch_limit_key Key(const std::string &name, uint8_t percentage, uint64_t interval_ms)
 {
     switch_limit_key key{};
-    key.pid = pid;
+    name.copy(key.name, sizeof(key.name) - 1);
     key.percentage = percentage;
     key.interval = interval_ms * kMs;
     key.interval_ms = static_cast<uint32_t>(interval_ms);
@@ -77,9 +77,9 @@ struct Table {
 };
 
 // A 90 %/30 ms limit asked at 1 ms while running, the thread leaving at `until`.
-void RunOnce(Table &table, uint64_t tid, uint64_t until_ms, int32_t pid = 30)
+void RunOnce(Table &table, uint64_t tid, uint64_t until_ms, const std::string &name = "SpringBoard")
 {
-    const switch_limit_key key = Key(pid, 90, 30);
+    const switch_limit_key key = Key(name, 90, 30);
     switch_limit_requested(table.t.get(), 0, tid, &key, 1 * kMs);
     switch_limit_departed(table.t.get(), 0, tid, until_ms * kMs);
 }
@@ -99,7 +99,7 @@ TEST(XnuSchedLimitShadowTable, ALiftedLimitCountsItsBlocksOnItsProcessRow)
 TEST(XnuSchedLimitShadowTable, AskingTheSameLimitAgainKeepsTheTimeRunSinceDispatch)
 {
     Table table;
-    const switch_limit_key key = Key(30, 90, 30);
+    const switch_limit_key key = Key("SpringBoard", 90, 30);
     switch_limit_requested(table.t.get(), 0, 7, &key, 1 * kMs);
     switch_limit_requested(table.t.get(), 0, 7, &key, 20 * kMs);  // the workqueue asks at each request change
     switch_limit_departed(table.t.get(), 0, 7, 30 * kMs);
@@ -111,8 +111,8 @@ TEST(XnuSchedLimitShadowTable, AskingTheSameLimitAgainKeepsTheTimeRunSinceDispat
 TEST(XnuSchedLimitShadowTable, ANewLimitReplaysTheRunSoFarUnderTheOldOne)
 {
     Table table;
-    const switch_limit_key old_key = Key(30, 90, 30);
-    const switch_limit_key new_key = Key(30, 90, 50);
+    const switch_limit_key old_key = Key("SpringBoard", 90, 30);
+    const switch_limit_key new_key = Key("SpringBoard", 90, 50);
     switch_limit_requested(table.t.get(), 0, 7, &old_key, 1 * kMs);
     switch_limit_requested(table.t.get(), 0, 7, &new_key, 30 * kMs);
     switch_limit_departed(table.t.get(), 0, 7, 35 * kMs);
@@ -123,7 +123,7 @@ TEST(XnuSchedLimitShadowTable, ANewLimitReplaysTheRunSoFarUnderTheOldOne)
 TEST(XnuSchedLimitShadowTable, EndingTheLimitCountsTheRunAndStopsCounting)
 {
     Table table;
-    const switch_limit_key key = Key(30, 90, 30);
+    const switch_limit_key key = Key("SpringBoard", 90, 30);
     switch_limit_requested(table.t.get(), 0, 7, &key, 1 * kMs);
     switch_limit_ended(table.t.get(), 0, 7, 30 * kMs);  // DISABLE, a limit Apple's ledger applies, or exit
     switch_limit_dispatched(table.t.get(), 7, 40 * kMs);
@@ -154,15 +154,32 @@ TEST(XnuSchedLimitShadowTable, FullTablesAreCountedNotOverwritten)
         RunOnce(table, tid, 2);
     EXPECT_EQ(table.t->slots_dropped, 2u);
     Table rows;
-    for (int32_t pid = 1; pid <= static_cast<int32_t>(SWITCH_LIMIT_ROWS) + 3; pid++)
-        RunOnce(rows, static_cast<uint64_t>(pid), 2, pid);
+    for (unsigned name = 1; name <= SWITCH_LIMIT_ROWS + 3; name++)
+        RunOnce(rows, name, 2, "daemon" + std::to_string(name));
     EXPECT_EQ(rows.t->rows_dropped, 3u);
+}
+
+TEST(XnuSchedLimitShadowTable, ARelaunchedProcessCountsOnItsRow)
+{
+    Table table;
+    for (uint64_t launch = 1; launch <= 5 * SWITCH_LIMIT_ROWS; launch++) {
+        RunOnce(table, launch, 30);  // a new pid and thread each launch, the same name and limit
+        switch_limit_ended(table.t.get(), 0, launch, 31 * kMs);
+    }
+    EXPECT_EQ(table.t->rows_dropped, 0u);
+    EXPECT_EQ(table.t->slots_dropped, 0u);
+    EXPECT_EQ(table.Window(0).blocks, 5 * SWITCH_LIMIT_ROWS);
+    const switch_limit_key other = Key("SpringBoard", 90, 50);
+    switch_limit_requested(table.t.get(), 0, 1000, &other, 1 * kMs);
+    unsigned threads = 0;
+    table.Window(1, &threads);
+    EXPECT_EQ(threads, 1u) << "the same name with another limit is its own row";
 }
 
 TEST(XnuSchedLimitShadowTable, EachCpuWritesItsOwnCountsAndTheWindowSumsThem)
 {
     Table table;
-    const switch_limit_key key = Key(30, 90, 30);
+    const switch_limit_key key = Key("SpringBoard", 90, 30);
     switch_limit_requested(table.t.get(), 0, 7, &key, 1 * kMs);
     switch_limit_requested(table.t.get(), 3, 8, &key, 1 * kMs);
     switch_limit_departed(table.t.get(), 0, 7, 30 * kMs);

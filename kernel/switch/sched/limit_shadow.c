@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Apple's blocking CPU limits, replayed beside the ones this port lifts (limit_shadow.h), debug kernels: one line with
- * each 10 s scheduling report naming, for each process and limit, how often it would have blocked and for how long.
+ * each 10 s scheduling report naming, for each process name and limit, how often it would have blocked and for how
+ * long.
  *
  * thread_set_cpulimit runs on the thread itself: a lifted limit claims or updates the thread's slot, any other call
  * (removing the limit, or one Apple's ledger applies) ends it, and so does thread_terminate_self. Each of those runs
@@ -34,7 +35,6 @@ void switch_sched_limit_shadow(uint8_t percentage, uint64_t interval_ns)
 {
     thread_t thread = current_thread();
     struct switch_limit_key key = {
-        .pid = task_pid(get_threadtask(thread)),
         .percentage = percentage,
         .interval_ms = (uint32_t)(interval_ns / NSEC_PER_MSEC),
     };
@@ -96,9 +96,8 @@ void switch_sched_limit_report(char *line, size_t size, uint64_t window_ns)
         }
         const struct switch_limit_key *key = &limits.rows[i].key;
         absolutetime_to_nanoseconds(window.over, &over_ns);
-        const int n =
-            snprintf(line + at, size - at, " %s[%d] %u%%/%u (%u threads now): %llu, %llu;", key->name, key->pid,
-                     key->percentage, key->interval_ms, threads, window.blocks, over_ns / NSEC_PER_MSEC);
+        const int n = snprintf(line + at, size - at, " %s %u%%/%u (%u threads now): %llu, %llu;", key->name,
+                               key->percentage, key->interval_ms, threads, window.blocks, over_ns / NSEC_PER_MSEC);
         at = n < 0 ? at : MIN(at + (size_t)n, size - 1);
     }
     (void)snprintf(line + at, size - at, " %u threads watched, %u threads and %u process limits not", watched,

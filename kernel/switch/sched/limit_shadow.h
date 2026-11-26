@@ -11,7 +11,9 @@
  * the counts the report reads. Every slot call comes from the thread itself with preemption off (a request, the end
  * of its lifted limit, its exit) or from its own dispatch hooks on the CPU it is going onto or leaving, so a slot has
  * one writer at a time; the CPU it runs on is the only writer of the row's counts for that CPU. A slot is freed when
- * its limit ends and claimed again by the next thread. Rows stay: a boot asks a handful of process and limit pairs.
+ * its limit ends and claimed again by the next thread. Rows are keyed by process name, not pid, so a relaunch counts
+ * on its old row, and they are never freed: a boot asks a handful of names and limits. Freeing one would race a thread
+ * between choosing its row and claiming its slot.
  */
 #ifndef SWITCH_SCHED_LIMIT_SHADOW_H
 #define SWITCH_SCHED_LIMIT_SHADOW_H
@@ -71,7 +73,6 @@ static inline void switch_limit_shadow_ran(struct switch_limit_shadow *s, uint64
 }
 
 struct switch_limit_key {
-    int32_t pid;
     uint8_t percentage;
     uint64_t interval;
     uint32_t interval_ms;
@@ -126,11 +127,22 @@ static inline struct switch_limit_slot *switch_limit_slot_of(struct switch_limit
 
 static inline bool switch_limit_same_key(const struct switch_limit_key *a, const struct switch_limit_key *b)
 {
-    return a->pid == b->pid && a->percentage == b->percentage && a->interval == b->interval;
+    if (a->percentage != b->percentage || a->interval != b->interval) {
+        return false;
+    }
+    for (unsigned int i = 0; i < SWITCH_LIMIT_NAME; i++) {
+        if (a->name[i] != b->name[i]) {
+            return false;
+        }
+        if (a->name[i] == 0) {
+            return true;
+        }
+    }
+    return true;
 }
 
-/* The row for a process and limit, claimed when new; SWITCH_LIMIT_ROWS when the table is full. Two threads of one
- * process asking the same new limit at once may each claim a row; the report prints both. */
+/* The row for a process name and limit, claimed when new; SWITCH_LIMIT_ROWS when the table is full. Two threads asking
+ * the same new name and limit at once may each claim a row; the report prints both. */
 static inline uint32_t switch_limit_row_for(struct switch_limit_table *t, const struct switch_limit_key *key)
 {
     for (uint32_t i = 0; i < SWITCH_LIMIT_ROWS; i++) {
@@ -205,7 +217,7 @@ static inline void switch_limit_requested(struct switch_limit_table *t, unsigned
     for (unsigned int i = 0; i < SWITCH_LIMIT_SLOTS; i++) {
         uint64_t expected = 0;
         if (__atomic_load_n(&t->tid[i], __ATOMIC_RELAXED) == 0 &&
-            __atomic_compare_exchange_n(&t->tid[i], &expected, SWITCH_LIMIT_SLOT_CLAIMING, false, __ATOMIC_RELAXED,
+            __atomic_compare_exchange_n(&t->tid[i], &expected, SWITCH_LIMIT_SLOT_CLAIMING, false, __ATOMIC_ACQUIRE,
                                         __ATOMIC_RELAXED)) {
             slot = &t->slots[i];
             slot->row = row;
