@@ -570,18 +570,30 @@ void switch_boot_io_complete(void)
     (void)switch_vm_prefetch_stop(SWITCH_PREFETCH_STOP_BOOT_COMPLETE);
 }
 
+/* The replay thread's exit after a stop waits only for its in-flight reads (at most 1.5 MiB at the card). One still
+ * running this long into shutdown means a read that never completed; shutdown would hang on it with nothing logged,
+ * and release kernels have no other shutdown watchdog. */
+#define SWITCH_PREFETCH_SHUTDOWN_S 20u
+
 void switch_prefetch_shutdown(void)
 {
     (void)switch_vm_prefetch_stop(SWITCH_PREFETCH_STOP_SHUTDOWN);
     if (__atomic_load_n(&g_prefetch.thread_active, __ATOMIC_SEQ_CST) == 0u) {
         return;
     }
+    uint64_t deadline = 0;
+    clock_interval_to_deadline(SWITCH_PREFETCH_SHUTDOWN_S, NSEC_PER_SEC, &deadline);
     while (__atomic_load_n(&g_prefetch.thread_done, __ATOMIC_SEQ_CST) == 0u) {
-        assert_wait((event_t)&g_prefetch.done_event, THREAD_UNINT);
+        assert_wait_deadline((event_t)&g_prefetch.done_event, THREAD_UNINT, deadline);
         if (__atomic_load_n(&g_prefetch.thread_done, __ATOMIC_SEQ_CST) != 0u) {
             clear_wait(current_thread(), THREAD_AWAKENED);
             break;
         }
-        thread_block(THREAD_CONTINUE_NULL);
+        if (thread_block(THREAD_CONTINUE_NULL) == THREAD_TIMED_OUT &&
+            __atomic_load_n(&g_prefetch.thread_done, __ATOMIC_SEQ_CST) == 0u) {
+            panic("SwitchBootPrefetch: the replay thread is still running %u s into shutdown: one of its reads never "
+                  "completed",
+                  SWITCH_PREFETCH_SHUTDOWN_S);
+        }
     }
 }

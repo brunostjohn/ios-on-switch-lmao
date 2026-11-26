@@ -815,6 +815,25 @@ TEST(SwitchPrefetchSource, ReplayReleasesVnodeDrainsInflightAndUsesLowPriority)
     EXPECT_GE(count, 2u);
 }
 
+// A replay read that never completes must not hang shutdown silently: debug kernels arm the trail, the SoC watchdog and
+// the deadline before they wait on the replay, and the wait itself panics at its own deadline in every build.
+TEST(SwitchPrefetchSource, ShutdownCannotHangSilentlyOnTheReplay)
+{
+    const std::string shutdown = SourceText("../switch/shutdown/shutdown.c");
+    const std::string begin = bodyOf(shutdown, "void switch_shutdown_begin(int howto)\n");
+    ASSERT_FALSE(begin.empty());
+    const size_t wait = begin.find("switch_prefetch_shutdown();");
+    ASSERT_NE(wait, std::string::npos);
+    EXPECT_LT(begin.find("switch_power_trail_watch(WATCHDOG_S"), wait);
+    EXPECT_LT(begin.find("switch_shutdown_arm_deadline();"), wait);
+
+    const std::string stop = bodyOf(SourceText("../switch/vm/prefetch.c"), "void switch_prefetch_shutdown(void)");
+    EXPECT_THAT(stop, HasSubstr("assert_wait_deadline((event_t)&g_prefetch.done_event, THREAD_UNINT, deadline)"));
+    EXPECT_THAT(stop, Not(HasSubstr("assert_wait((event_t)")));
+    EXPECT_THAT(stop, HasSubstr("THREAD_TIMED_OUT"));
+    EXPECT_THAT(stop, HasSubstr("panic("));
+}
+
 TEST(SwitchPrefetchList, RefusesZeroVolumeUuidsAndInvalidRunIdentity)
 {
     const auto expected = makeExpectedKey();
