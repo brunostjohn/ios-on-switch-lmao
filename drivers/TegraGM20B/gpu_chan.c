@@ -371,11 +371,12 @@ static void jobless_keep_locked(const struct tgm_chan *chan)
 
 	if (!chan->stat_jobless)
 		return;
-	for (i = 0; i < TGM_JOBLESS_GONE; i++)
+	for (i = 0; i < TGM_JOBLESS_GONE; i++) {
 		if (!strncmp(jobless_gone[i].owner, chan->owner, sizeof(chan->owner) - 1)) {
 			jobless_gone[i].jobless += chan->stat_jobless;
 			return;
 		}
+	}
 	i = jobless_gone_next++ % TGM_JOBLESS_GONE;
 	strscpy(jobless_gone[i].owner, chan->owner, sizeof(jobless_gone[i].owner));
 	jobless_gone[i].jobless = chan->stat_jobless;
@@ -386,9 +387,10 @@ u64 tgm_chan_jobless_gone_locked(const char *owner)
 	unsigned int i = 0;
 	u64 jobless = 0;
 
-	for (i = 0; i < TGM_JOBLESS_GONE; i++)
+	for (i = 0; i < TGM_JOBLESS_GONE; i++) {
 		if (!strncmp(jobless_gone[i].owner, owner, sizeof(jobless_gone[i].owner) - 1))
 			jobless += jobless_gone[i].jobless;
+	}
 	return jobless;
 }
 
