@@ -105,8 +105,9 @@ int channel()
 
 // `assigns`: a host1x consumer's submit, which gives a channel without a syncpoint one for its next jobs; a CPU wait
 // or the display's fence never waits on a syncpoint, so it takes none from them
+// `watched`: switch_gpu_bridge_submit_watched's, taken under this lock
 static int submitBridge(const switch_gpu_backing_token *tokens, uint32_t count,
-			switch_gpu_bridge **out, bool assigns)
+			switch_gpu_bridge **out, bool assigns, bool watched = false)
 {
 	if (!out || !tokens || !count || count > SWITCH_GPU_BRIDGE_MAX_TOKENS)
 		return -22;
@@ -209,6 +210,10 @@ static int submitBridge(const switch_gpu_backing_token *tokens, uint32_t count,
 	} else {
 		job.active = true;
 		++job.refs;
+		if (watched) {
+			job.watched = true;
+			++job.waiters;
+		}
 		*out = &job;
 		// A check that found the channel idle left the timer down, and a waiter may still be on a bridge whose GPU
 		// work is done: this job is new work on the channel that waiter's checks cover.
@@ -229,6 +234,12 @@ extern "C" int switch_gpu_bridge_submit(const switch_gpu_backing_token *tokens, 
 					switch_gpu_bridge **out)
 {
 	return submitBridge(tokens, count, out, true);
+}
+
+extern "C" int switch_gpu_bridge_submit_watched(const switch_gpu_backing_token *tokens,
+						uint32_t count, switch_gpu_bridge **out)
+{
+	return submitBridge(tokens, count, out, true, true);
 }
 
 extern "C" void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *bridge, uint32_t *syncpoint,

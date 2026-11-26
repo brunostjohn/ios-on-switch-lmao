@@ -175,10 +175,12 @@ void switch_gpu_bridge_syncpoint(const switch_gpu_bridge *bridge, uint32_t *sync
     *threshold = bridge->threshold;
 }
 
-int switch_gpu_bridge_watch(const switch_gpu_bridge *bridge)
+int switch_gpu_bridge_submit_watched(const switch_gpu_backing_token *tokens, uint32_t count, switch_gpu_bridge **bridge)
 {
-    gBridgesWatched.push_back(bridge);
-    return 0;
+    const int error = switch_gpu_bridge_submit(tokens, count, bridge);
+    if (!error)
+        gBridgesWatched.push_back(*bridge);
+    return error;
 }
 
 void switch_gpu_bridge_release(switch_gpu_bridge **bridge)

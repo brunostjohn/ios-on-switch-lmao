@@ -87,9 +87,10 @@ void armHangCheck(uint64_t ns)
 // The GPU's hang recovery runs only when something waits on a channel, and a wait on a bridge is that waiter. A wait on
 // a bridge job has recovery look at the bridge channel, at what its oldest waited job is stuck on, whose kill releases
 // the bridge's acquire; a wait on a jobless bridge waits on its producer's covering job, so each is checked on that
-// channel itself. One timer does it, armed when a wait, a notify or a watch begins, cancelled when no waited bridge is
-// left (retire), and re-armed for the soonest next step of tgm_chan_check_progress's rule. The references keep the slots
-// across the unlocked checks.
+// channel itself. One timer does it, armed when a wait, a notify or a watch begins with none armed, and re-armed for the
+// soonest next step of tgm_chan_check_progress's rule. It is never cancelled when the last waited bridge retires: a
+// steady frame stream would cancel and arm it every frame, where one run that finds nothing waited and stays down costs
+// once a second at most. The references keep the slots across the unlocked checks.
 void checkHang(thread_call_param_t, thread_call_param_t)
 {
 	IOLockLock(queue.lock);
@@ -212,10 +213,6 @@ void retire(thread_call_param_t, thread_call_param_t)
 			callbacks[count++] = {&job, job.completed, job.context, job.result};
 			job.completed = nullptr;
 		}
-	}
-	if (queue.checkAt && !anyWaited()) {
-		thread_call_cancel(queue.hangCheck);
-		queue.checkAt = 0;
 	}
 	__atomic_store_n(&queue.waitingSources, pendingSources, __ATOMIC_RELEASE);
 	IOLockUnlock(queue.lock);

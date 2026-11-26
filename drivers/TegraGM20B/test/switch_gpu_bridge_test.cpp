@@ -117,6 +117,21 @@ protected:
 			switch_gpu_bridge_release(&value);
 		for (const auto &[k, count] : refs)
 			EXPECT_EQ(count, 0);
+		// The hang timer is never cancelled at idle (SwitchGpuBridgeRetire.cpp checkHang): its one run finds nothing
+		// waited and stays down, so the next test starts with it down
+		if (switch_bridge_calls.size() > 1 && hangCheck()->deadline) {
+			hangCheck()->deadline = 0;
+			hangCheck()->fn(hangCheck()->arg, nullptr);
+		}
+	}
+
+	switch_gpu_bridge *submitWatched(switch_gpu_backing_token token)
+	{
+		switch_gpu_bridge *bridge = nullptr;
+		EXPECT_EQ(switch_gpu_bridge_submit_watched(&token, 1, &bridge), 0);
+		if (bridge)
+			held.push_back(bridge);
+		return bridge;
 	}
 
 	switch_gpu_bridge *submit(std::initializer_list<switch_gpu_backing_token> tokens)
@@ -869,7 +884,7 @@ TEST_F(Bridge, AStalledBridgeIsCheckedByOneTimerTheHangRuleReArmsUntilRecoveryCo
 	EXPECT_EQ(refs[key(source)], 0);
 }
 
-TEST_F(Bridge, AWaitThatCompletesBeforeItsCheckLeavesNoTimerAndNoCheck)
+TEST_F(Bridge, AWaitThatCompletesBeforeItsCheckLeavesOneRunThatChecksNothing)
 {
 	auto source = token(96);
 	statuses[key(source)] = 0;
@@ -883,7 +898,9 @@ TEST_F(Bridge, AWaitThatCompletesBeforeItsCheckLeavesNoTimerAndNoCheck)
 	releaseSyncpoint(bridge);
 	finish();
 	EXPECT_EQ(waiter.get(), 1);
-	EXPECT_EQ(hangCheck()->deadline, 0u);
+	EXPECT_NE(hangCheck()->deadline, 0u) << "not cancelled when the last waiter goes";
+	fireHangCheck(switch_bridge_now + 1000000000);
+	EXPECT_EQ(hangCheck()->deadline, 0u) << "its one run finds nothing waited";
 	EXPECT_EQ(progressChecks.load(), 0u);
 }
 
@@ -912,6 +929,7 @@ TEST_F(Bridge, ACheckThatFindsNothingPendingLeavesTheTimerDownUntilNewWorkComes)
 	pump();
 	EXPECT_EQ(waiter.get(), 1);
 	finish();
+	fireHangCheck(switch_bridge_now + 1000000000);
 	EXPECT_EQ(hangCheck()->deadline, 0u);
 }
 
@@ -959,7 +977,8 @@ TEST_F(Bridge, ANotifiedConsumerHearsFromRetirementOnceAndIsAWaiterForTheHangChe
 	releaseSyncpoint(bridge);
 	finish();
 	EXPECT_EQ(heard, std::vector<int>{0});
-	EXPECT_EQ(hangCheck()->deadline, 0u);
+	fireHangCheck(switch_bridge_now + 1000000000);
+	EXPECT_EQ(hangCheck()->deadline, 0u) << "its one run finds nothing waited";
 	finish();
 	EXPECT_EQ(heard.size(), 1u);
 	release(bridge);
@@ -1149,6 +1168,7 @@ TEST_F(Bridge, AJoblessBridgeRetiresOnItsCoveringJobNotItsToken)
 	pump();
 	EXPECT_EQ(heard, std::vector<int>{0});
 	EXPECT_EQ(external[key(source)], 1);
+	fireHangCheck(switch_bridge_now + 1000000000);
 	EXPECT_EQ(hangCheck()->deadline, 0u);
 	release(bridge);
 	EXPECT_EQ(refs[key(source)], 0);
@@ -1280,14 +1300,13 @@ TEST_F(Bridge, AWatchedBridgeIsHangCheckedWithNoCallback)
 	statuses[key(source)] = 0;
 	covered[key(source)] = {kProducerSyncpoint + 13, 70, 331};
 	switch_bridge_now = 5000;
-	auto *job = submit({stalled});
 	auto *jobless = submit({source});
-	ASSERT_NE(job, nullptr);
 	ASSERT_NE(jobless, nullptr);
 	EXPECT_EQ(hangCheck()->deadline, 0u) << "a submit alone";
 	progressChecks = 0;
 	producerChecks.clear();
-	EXPECT_EQ(switch_gpu_bridge_watch(job), 0);
+	auto *job = submitWatched(stalled);
+	ASSERT_NE(job, nullptr);
 	EXPECT_EQ(switch_gpu_bridge_watch(jobless), 0);
 	EXPECT_EQ(hangCheck()->deadline, 5000u + 1000000000u);
 	fireHangCheck(1000005000);
@@ -1299,9 +1318,31 @@ TEST_F(Bridge, AWatchedBridgeIsHangCheckedWithNoCallback)
 	statuses[key(source)] = 1;
 	coveringStatus[{15, 1, 331}] = 1;
 	finish();
+	const auto checks = progressChecks.load();
+	fireHangCheck(switch_bridge_now + 1000000000);
 	EXPECT_EQ(hangCheck()->deadline, 0u) << "nothing watched is left";
+	EXPECT_EQ(progressChecks.load(), checks);
 	release(job);
 	release(jobless);
+}
+
+// A stream of watched frames (one bridge each, retiring well inside the hang bound) pays no per-frame timer work: the
+// first watch arms the check, the frames after it find it armed, and no retirement cancels it.
+TEST_F(Bridge, AWatchedFrameStreamArmsTheHangCheckOnceAndNeverCancelsIt)
+{
+	const unsigned arms = switch_bridge_arms, cancels = switch_bridge_cancels;
+	for (uint32_t frame = 0; frame < 4; ++frame) {
+		const auto source = token(390 + frame, 29);
+		statuses[key(source)] = 0;
+		auto *bridge = submitWatched(source);
+		ASSERT_NE(bridge, nullptr);
+		statuses[key(source)] = 1;
+		releaseSyncpoint(bridge);
+		finish();
+		release(bridge);
+	}
+	EXPECT_EQ(switch_bridge_arms - arms, 1u);
+	EXPECT_EQ(switch_bridge_cancels, cancels);
 }
 
 // Every token completed at its own fence inside the covering job, and the channel was killed later in that job. A
