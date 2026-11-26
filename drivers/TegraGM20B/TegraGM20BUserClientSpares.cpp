@@ -242,9 +242,10 @@ void spareRecycleWork(thread_call_param_t param, thread_call_param_t)
 				spareFree(s);
 				continue;
 			}
-			const int result =
-				switch_gpu_cached_zero(s->pas, uint32_t(s->bytes >> 12),
-						       s->buffer.cpu, &s->mapping, spareZeroed, s);
+			const int result = switch_gpu_cached_zero(
+				s->pas, uint32_t(s->bytes >> 12),
+				s->kind == SWITCH_GPU_SPARE_WC ? nullptr : s->buffer.cpu,
+				&s->mapping, spareZeroed, s);
 			if (result == -16) {
 				IOLockLock(p->lock);
 #if TGM_STATS
