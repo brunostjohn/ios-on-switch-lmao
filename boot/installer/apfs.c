@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Layouts: Apple File System Reference (nx_superblock_t, checkpoint_map_phys_t, spaceman_phys_t, chunk_info_block_t,
 // btree_node_phys_t). The sizes a container's metadata must have for its block count are newfs_apfs's and the
 // kernel's, measured on macOS 27 (fresh containers from 4 GB to 1 TB, and containers it shrank):

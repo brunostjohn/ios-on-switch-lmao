@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later
 #ifndef SWITCH_INSTALL_APFS_H
 #define SWITCH_INSTALL_APFS_H
 
