@@ -51,6 +51,8 @@ static void splice(SwitchMetalCommandBuffer *cb, SwitchMetalSubRecorder *s)
 {
     for (id object : s->_owners)
         [cb retain:object];
+    for (id set in s->_residencySets)
+        gm20bUseResidencySet(cb, set);
     const size_t chunkBase = cb->_bytes.chunks.size(), passBase = cb->_passes.size(), shadowBase = cb->_shadow.size();
     cb->_shadow.append(s->_shadow.ownData(), s->_shadow.ownData() + s->_shadow.size());
     cb->_borderSamplers |= s->_borderSamplers;

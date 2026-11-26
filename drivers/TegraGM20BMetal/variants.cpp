@@ -163,7 +163,7 @@ bool Device::offerVariantsLockFree(Pipeline &pl, const PackPipeline &pp, uint32_
         if (!placePackWindowProgram(index[0], placed[0]) ||
             (pixelStage(pp) && !placePackWindowProgram(index[1], placed[1])))
             return false;
-        if (!slmReady(std::max(slmPerWarpOfHeader(placed[0].header), slmPerWarpOfHeader(placed[1].header))))
+        if (!slmReady(std::max(programSlm(placed[0]), programSlm(placed[1]))))
             return false;
         const bool variant[2] = {index[0] != pp.vs, index[1] != pp.fs};
         Pipeline &made = buildCombination(*t, pl, pp, placed, variant, variantSetReads(*t, v, f),

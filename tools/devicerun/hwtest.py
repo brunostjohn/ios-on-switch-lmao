@@ -712,6 +712,9 @@ TESTS: dict[str, bool] = {
     'gpu.gm20b.bytes_address': False,
     'gpu.gm20b.packed_fetch_read': False,
     'gpu.gm20b.powr_specials': False,
+    'gpu.gm20b.half_min_max': False,
+    'gpu.gm20b.maps_fetch': False,
+    'metal.native.amplification_fetch': False,
 }
 
 # The tests only one iOS version's app runs (apps/hwtest/app<version>), by that version.

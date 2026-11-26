@@ -332,6 +332,8 @@ static void completeBuffer(SwitchMetalCommandBuffer *cb)
         for (MTLCommandBufferHandler h in handlers)
             h((id<MTLCommandBuffer>)cur);
         cur->_owners.clear();  // the resources may die now: no submission uses them any more (its capacity is recycled)
+        cur->_residencySets = nil;
+        cur->_residencySnapshots.clear();
         gm20bBytesDone(cur);
         cur->_computeJobs.clear();
         cur->_sharedEventWaits.clear();

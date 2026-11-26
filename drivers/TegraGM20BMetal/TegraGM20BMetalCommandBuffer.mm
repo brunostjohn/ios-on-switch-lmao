@@ -120,6 +120,8 @@ static void commandBufferDropped(void *object)
 #endif
     if (!completed) {
         b->_deferredPresents.clear();
+        b->_residencySets = nil;
+        b->_residencySnapshots.clear();
         gm20bRecordingDone(b);
     }
 }
@@ -603,6 +605,7 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 #endif
     if (_active)
         [(SwitchMetalEncoder *)_active endEncoding];
+    gm20bSnapshotResidencySets(self);
 #if SWITCH_METAL_DIAGNOSTICS
     if (_lateWriteSampled)
         gm20bCheckLateWrites(self);
@@ -853,34 +856,27 @@ static void deferPresent(SwitchMetalCommandBuffer *cb, id<MTLDrawable> drawable,
 - (void)insertDebugCaptureBoundary
 {}
 
-// Every command buffer of the queue uses these sets (gm20bNameResidencySets)
+// Every command buffer of the queue uses these sets (gm20bSnapshotResidencySets, gm20bNameResidencySets)
 - (void)addResidencySet:(id)set
 {
-    if (!set)
-        return;
-    std::lock_guard<gm20b::Mutex> hold(_residencyLock);
-    if (!_residencySets)
-        _residencySets = [NSMutableArray array];
-    if (![_residencySets containsObject:set])
-        [_residencySets addObject:set];
+    gm20bQueueAddResidencySet(self, set);
 }
 
 - (void)addResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
 {
     for (NSUInteger k = 0; k < count; k++)
-        [self addResidencySet:sets[k]];
+        gm20bQueueAddResidencySet(self, sets[k]);
 }
 
 - (void)removeResidencySet:(id)set
 {
-    std::lock_guard<gm20b::Mutex> hold(_residencyLock);
-    [_residencySets removeObject:set];
+    gm20bQueueRemoveResidencySet(self, set);
 }
 
 - (void)removeResidencySets:(const __unsafe_unretained id *)sets count:(NSUInteger)count
 {
     for (NSUInteger k = 0; k < count; k++)
-        [self removeResidencySet:sets[k]];
+        gm20bQueueRemoveResidencySet(self, sets[k]);
 }
 
 - (void)setCompletionQueue:(dispatch_queue_t)queue

@@ -297,6 +297,7 @@ enum class SwitchMetalShareable : uint8_t {
     uint32_t _gpuPriority, _backgroundGpuPriority;  // what it asked for (TegraGM20BMetalQueuePriority.mm)
     // addResidencySet:'s sets, which every command buffer of it uses, under _residencyLock
     NSMutableArray *_residencySets;
+    std::atomic<uint32_t> _residencySetCount;
     gm20b::Mutex _residencyLock;
 }
 @end
@@ -447,6 +448,23 @@ static inline void gm20bRunDeferredPresent(const SwitchMetalDeferredPresent &p)
     }
 }
 
+struct SwitchMetalResidencyEntry {
+    enum class Kind : uint8_t {
+        Buffer,
+        Texture,
+        Heap
+    };
+
+    id allocation;
+    Kind kind;
+    bool write;
+};
+
+struct SwitchMetalResidencySnapshot {
+    NSArray *committed;
+    std::vector<SwitchMetalResidencyEntry> hostVisible;
+};
+
 @interface SwitchMetalCommandBuffer : SwitchMetalObject {
 @public
     uint64_t _protection;  // setProtectionOptions: (kept, no effect)
@@ -542,9 +560,10 @@ static inline void gm20bRunDeferredPresent(const SwitchMetalDeferredPresent &p)
     std::atomic<MTLCommandBufferStatus> _status;
     NSError *_error;
     SwitchMetalQueue *_queue;
-    // the residency sets it and its encoders used (useResidencySet:), named at each range's seal
-    // (gm20bNameResidencySets)
+    // the residency sets it and its encoders used (useResidencySet:), snapshotted at commit and named at each range's
+    // seal (gm20bSnapshotResidencySets, gm20bNameResidencySets)
     NSMutableArray *_residencySets;
+    std::vector<std::shared_ptr<const SwitchMetalResidencySnapshot>> _residencySnapshots;
     std::atomic<uint8_t> _enqueueState;  // 0: none, 1: commit claimed queue slot, 2: explicit enqueue pushed to worker
     gm20b::SubmitQueue<void *, SwitchMetalCommandBuffer *>::Reservation _reservation;
     bool _reserved;  // the submit worker's: its reservation made
