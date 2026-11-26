@@ -321,6 +321,12 @@ void Device::compMake(std::unique_lock<gm20b::Mutex> &l)
                 }
                 if (made)
                     kr = k_.bindCompressed(bo, w.kind);
+                SWITCH_METAL_DIAGNOSTIC(os_log(compLog(),
+                                               "SwitchMetal: compressed memory %llu KiB kind 0x%x: %zu idle buffers "
+                                               "(%llu KiB) given back for it, then %{public}s (0x%x)",
+                                               (unsigned long long)(w.bytes >> 10), w.kind, evict.size(),
+                                               (unsigned long long)(evictedBytes >> 10),
+                                               made && kr == KERN_SUCCESS ? "made" : "refused again", unsigned(kr)));
             }
         }
         if (auto it = std::find(comp_.wanted.begin(), comp_.wanted.end(), w); it != comp_.wanted.end())
