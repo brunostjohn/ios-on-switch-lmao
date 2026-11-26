@@ -77,6 +77,7 @@
     d[@"blend_kill_states"] = @(gRM->raw->stats.blendKillStates.load());
     d[@"blend_kill_binds"] = @(gRM->raw->stats.blendKillBinds.load());
     d[@"blend_kill_pack_disagreements"] = @(gRM->raw->stats.blendKillPackDisagreements.load());
+    d[@"amplified_draws"] = @(gRM->raw->stats.amplifiedDraws.load());
     d[@"resolve_twod"] = @(gRM->raw->stats.resolveTwod.load());
     d[@"fill_twod"] = @(gRM->raw->stats.fillTwod.load());
     d[@"resolve_exact"] = @(gRM->raw->stats.resolveExact.load());

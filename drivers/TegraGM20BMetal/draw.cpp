@@ -177,6 +177,7 @@ bool RenderEncoder::draw(uint32_t primitive, uint32_t first, uint32_t count, uin
         return true;
     }
     cb_->draws += amplifies() ? amplifications_ : 1;
+    SWITCH_METAL_DIAGNOSTIC(cb_->counts_.amplifiedDraws += amplifies());
 #if !defined(SWITCH_DEBUG) || SWITCH_DEBUG
     if (const auto probe = instances == 1 ? dev_->armedProbe() : nullptr) {
         if (p_.room() < kInstanceWords + probe->before.size() + probe->after.size())
@@ -454,6 +455,7 @@ bool RenderEncoder::drawIndexed(uint32_t primitive, uint32_t count, uint32_t ind
     if (split)
         laterSamples();
     cb_->draws += amplifies() ? amplifications_ : 1;
+    SWITCH_METAL_DIAGNOSTIC(cb_->counts_.amplifiedDraws += amplifies());
     return true;
 }
 
@@ -550,6 +552,7 @@ bool RenderEncoder::indirect(uint32_t primitive, bool indexed, const Buffer *arg
             });
     params_.unknown = true;
     cb_->draws += amplifies() ? amplifications_ : 1;
+    SWITCH_METAL_DIAGNOSTIC(cb_->counts_.amplifiedDraws += amplifies());
     finishDraw(0, 0, true);
     return true;
 }

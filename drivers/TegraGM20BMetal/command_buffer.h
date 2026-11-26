@@ -378,7 +378,7 @@ private:
     struct DrawCounts {
         uint64_t uploadBytes = 0, segmentBinds = 0, segmentWords = 0, segmentSkips = 0, segmentCopies = 0,
                  blendKillBinds = 0, interlockDraws = 0, interlocked = 0, interlockedBlends = 0, twinRule = 0,
-                 rasterOrderedDraws = 0;
+                 rasterOrderedDraws = 0, amplifiedDraws = 0;
         uint64_t splitTwins = 0, splitWhole[size_t(SplitWhole::Count)] = {};
     } counts_;
 
